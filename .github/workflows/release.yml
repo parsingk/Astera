@@ -340,9 +340,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Restricted to the release-* artifacts: the windows job also uploads the intermediate
+      # unsigned-binaries-${{ github.run_id }} and unsigned-installer-${{ github.run_id }} artifacts
+      # when SignPath signing is configured, and the latter contains an unsigned *-setup.exe under the
+      # SAME filename as the signed one inside release-windows. With merge-multiple flattening
+      # everything into one directory, an unpatterned download would let either file win the
+      # collision — if the unsigned one does, latest.yml (patched from the signed installer's sha512)
+      # no longer matches what ships, so every electron-updater client fails the checksum and auto-
+      # update breaks until the next release. unsigned-binaries.zip would also leak out as a public
+      # release asset. Restricting to release-* avoids the intermediates entirely.
       - uses: actions/download-artifact@v5
         with:
           path: assets
+          pattern: release-*
           merge-multiple: true
 
       - name: Create draft release and upload assets
