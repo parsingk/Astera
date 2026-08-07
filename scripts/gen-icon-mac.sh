@@ -37,9 +37,9 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 src="$root/resources/icon.png"
 build="$root/build"
 
-[ -f "$src" ] || { echo "원본을 찾을 수 없다: $src" >&2; exit 1; }
-command -v sips >/dev/null || { echo "sips 가 없다 (macOS 에서 실행할 것)" >&2; exit 1; }
-command -v iconutil >/dev/null || { echo "iconutil 이 없다 (macOS 에서 실행할 것)" >&2; exit 1; }
+[ -f "$src" ] || { echo "Source image not found: $src" >&2; exit 1; }
+command -v sips >/dev/null || { echo "sips not found (run this on macOS)" >&2; exit 1; }
+command -v iconutil >/dev/null || { echo "iconutil not found (run this on macOS)" >&2; exit 1; }
 
 mkdir -p "$build"
 
