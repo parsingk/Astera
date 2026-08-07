@@ -29,7 +29,7 @@ then update themselves through `electron-updater`.
 4. **Check** the `Release / validate`, `Release / windows`, `Release / macos`, and `Release / publish`
    runs under **Actions**, then confirm the release page has all seven assets attached:
    `latest.yml`, `astera-<version>-setup.exe`, its `.blockmap`, `latest-mac.yml`,
-   `astera-<version>-universal.dmg`, `astera-<version>-universal-mac.zip`, and `policy.json`. An older
+   `astera-<version>-universal.dmg`, `Astera-<version>-universal-mac.zip`, and `policy.json`. An older
    app picks the update up on its next check.
 
 ### How the workflow publishes
@@ -192,7 +192,7 @@ The first time you push a tag after this workflow change, check the following in
    for `macos` to take 5-20 minutes waiting on notarization.
 3. On the release page, confirm all 7 assets are attached —
    `astera-X.Y.Z-setup.exe`, its `.blockmap`, `latest.yml`,
-   `astera-X.Y.Z-universal.dmg`, `astera-X.Y.Z-universal-mac.zip`, `latest-mac.yml`, `policy.json`.
+   `astera-X.Y.Z-universal.dmg`, `Astera-X.Y.Z-universal-mac.zip`, `latest-mac.yml`, `policy.json`.
 4. **Actually verify auto-update.** With the previous version installed and running on macOS, launch
    it and an update notice should appear; accepting and restarting should land on the new version. If
    this step fails, the cause is almost always signing — Squirrel.Mac refuses unsigned updates.

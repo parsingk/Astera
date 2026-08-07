@@ -99,7 +99,7 @@ npm run dist:mac   # macOS universal dmg + zip
 `npm run dist` reads the committed icon assets (`build/icon.ico` on Windows, `build/icon.icns` and the
 tray templates on macOS) rather than generating them. If you change the logo, replace
 `resources/logo-source.png` and re-run the matching script on its own platform — `powershell -File
-scripts/gen-icon.ps1` (ico/png) on Windows, `sh scripts/gen-icon-mac.sh` (icns/tray templates) on
+scripts/gen-icon.ps1` (ico/png) on Windows, `sh scripts/gen-icon-mac.sh` (icns) on
 macOS — then commit the regenerated assets.
 
 Note on tests: this project has a Vitest suite colocated as `*.test.ts`, but the test sources are not
