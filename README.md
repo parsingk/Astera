@@ -23,9 +23,10 @@ git worktrees, and lets one agent hand tasks to another and wait for the results
 
 ## Install
 
-Download the latest `astera-<version>-setup.exe` from
-**[Releases](https://github.com/parsingk/Astera/releases/latest)** and run it. The app updates itself
-from there afterwards; it asks before downloading, since the payload is around 100 MB.
+Download the latest release from
+**[Releases](https://github.com/parsingk/Astera/releases/latest)** and run it — `astera-<version>-setup.exe`
+on Windows, `astera-<version>-universal.dmg` on macOS. The app updates itself from there afterwards;
+it asks before downloading, since the payload is around 100 MB.
 
 > Unsigned builds can have their first launch blocked by Windows SmartScreen or macOS Gatekeeper —
 > on Windows click **More info → Run anyway**, on macOS right-click the app and choose **Open** to
@@ -83,8 +84,9 @@ orchestration is off.
 
 ## Build from source
 
-Building needs **Node.js 22.12+** and the **Visual Studio Build Tools (C++)**, which `node-pty`
-requires for its native rebuild.
+Building needs **Node.js 22.12+**, and a C++ toolchain for `node-pty`'s native rebuild (via
+`electron-builder install-app-deps`): the **Visual Studio Build Tools (C++)** on Windows, or the
+**Xcode Command Line Tools** (`xcode-select --install`) on macOS.
 
 ```bash
 npm ci
