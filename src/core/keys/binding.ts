@@ -61,7 +61,12 @@ export function makeActions(platform: string): readonly ActionSpec[] {
   return [
     {
       id: 'explorer.toggleMode',
-      defaults: [`${M}+Tab`, `${M}+Shift+E`],
+      // Cmd+Tab is reserved by macOS itself (application switcher, intercepted by the window server
+      // before the app ever sees it), so on darwin the first default is Ctrl+Tab instead of `${M}+Tab`.
+      // Ctrl+Tab is safe to use here: macOS does not reserve it, and unlike explorer.closeFileTab this
+      // action does not need to yield to the terminal, so there is no competing xterm binding either.
+      // win32 is untouched — Ctrl+Tab there is both `${M}+Tab` and already what shipped.
+      defaults: [mac ? 'Ctrl+Tab' : `${M}+Tab`, `${M}+Shift+E`],
       descKey: 'shortcut.explorer.toggleMode',
       yieldsToTerminal: false
     },
