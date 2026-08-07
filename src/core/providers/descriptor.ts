@@ -59,7 +59,14 @@ export interface ProviderDescriptor extends ProviderMeta {
   syncSettings(srcConfigDir: string, targetConfigDir: string, homeDir: string): Promise<SyncResult>
   history: HistoryStrategy
   /** Can busy/idle be decided reliably from the window-title OSC (BusyScanner, core/terminal/busy.ts)
-   *  (measured on win32).
+   *  (measured on win32 and darwin).
+   *
+   *  The darwin measurement was done headlessly rather than through the packaged app: a script drove
+   *  a real claude session over node-pty, replicating the production BusyScanner algorithm exactly and
+   *  logging every busy/idle transition it produced. Over a 110s run it recorded exactly three
+   *  transitions — a braille spinner frame while the turn was in progress, ✳ once it went idle, and a
+   *  stable idle state afterwards — with no spurious flipping in between. That matches the win32
+   *  behaviour documented below, so the flag stays a platform-independent `true` for claude.
    *
    *  claude=true: the title transitions cleanly between a braille spinner (working) and ✳ (idle) — the
    *  BusyScanner verdict can be used as it is.
