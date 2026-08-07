@@ -461,10 +461,10 @@ export default function App(): React.JSX.Element {
       .catch(() => {})
     const offUpdate = window.api.update.onStatus((s) => {
       setUpdate({ ...s, checkedAt: isCheckResult(s.state) ? Date.now() : null })
-      // There are two notification points (autoDownload=false):
+      // There are two notification points:
       //  - available: only when this app is a campaign target, "a new version is out + [Download]".
       //    With no campaign, the title bar indicator saying so is enough
-      //  - downloaded: the user pressed download, so the install prompt appears regardless of campaigns
+      //  - downloaded: the install prompt appears regardless of campaigns
       const campaign = campaignRef.current
       if (s.state === 'available' && campaign?.mode === 'notify') {
         if (!shouldNotifyDownloaded(s.version, notifiedUpdateRef.current)) return
@@ -1995,8 +1995,18 @@ export default function App(): React.JSX.Element {
                                 {t('update.info.upToDateAt', { time: formatCheckedAt(update.checkedAt) })}
                               </span>
                             )}
+                            {/* autoDownload normally carries 'available' straight on to 'downloading',
+                                so this button covers the window before that starts and a download that
+                                failed. It is the only such trigger that does not depend on a campaign —
+                                the other two callers of update.download(), the toast and UpdateGate,
+                                open only when policy.json carries one. */}
                             {!updateChecking && update?.state === 'available' && (
-                              <span className="update-note">{t('update.info.available', { version: update.version ?? '' })}</span>
+                              <>
+                                <button onClick={() => void window.api.update.download()}>
+                                  {t('update.info.downloadVersion', { version: update.version ?? '' })}
+                                </button>
+                                <span className="update-note">{t('update.info.available', { version: update.version ?? '' })}</span>
+                              </>
                             )}
                             {!updateChecking && update?.state === 'error' && (
                               <span className="update-note update-err" title={update.message}>

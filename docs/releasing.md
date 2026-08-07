@@ -69,8 +69,10 @@ them from running the app at all.
 - **Checking:** once at startup, then every **24 hours**. On failure it backs off 1h → 2h → 4h → 6h
   (capped), and failures of automatic checks are not surfaced to the user. Only a check the user
   started themselves reports an error.
-- **Downloading:** never automatic (`autoDownload = false`). The user presses `Download`, then
-  `Install now` once it has arrived. The point is not to pull ~100 MB without consent.
+- **Downloading:** automatic (`autoDownload = true`). A version found by a check starts downloading
+  right away, and the user presses `Install now` once it has arrived. A `Download` button is still
+  there — in the settings row, the campaign toast and the block gate — for the window before the
+  automatic download starts and for one that failed.
 
 ### Emergency — changing the policy without a new release
 

@@ -159,7 +159,10 @@ export const ko = {
   'update.info.checking': '확인 중…',
   'update.info.checkButton': '업데이트 확인',
   'update.info.upToDateAt': '현재 최신 버전입니다 ({time} 확인)',
-  'update.info.available': '새 버전 {version} 다운로드 중…',
+  // 'available' means "found", not "downloading" — the download announces itself through the
+  // 'downloading' state, which has wording of its own.
+  'update.info.available': '새 버전 {version} 있음',
+  'update.info.downloadVersion': '{version} 다운로드',
   'update.info.checkFailed': '확인 실패',
   // App.tsx — the toast for a downloaded new version, and the session-kill confirmation when installing now
   'update.toast.available': '새 버전 v{version}이 나왔습니다',

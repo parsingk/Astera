@@ -459,9 +459,10 @@ app.whenReady().then(async () => {
           push({ state: 'error', message: t(core!.lang, 'update.tb.autoUpdaterMissing') })
           return
         }
-        // Auto-download stays off — we do not pull a ~100MB payload without the user's consent.
-        // The flow is two steps: "Download" on available, "Install now" on downloaded.
-        autoUpdater.autoDownload = false
+        // Auto-download is on: a found version starts downloading immediately, so the user only has
+        // to press "Install now" once it has arrived. The Download buttons stay in place as the
+        // fallback for the window before the download starts and for one that failed.
+        autoUpdater.autoDownload = true
         autoUpdater.logger = {
           info: (m) => flog(`INFO ${m}`),
           warn: (m) => flog(`WARN ${m}`),
@@ -564,8 +565,8 @@ app.whenReady().then(async () => {
           }
         })()
 
-        // Check once at startup, then arm the periodic check. With autoDownload=false nothing is
-        // downloaded — only the state is reported.
+        // Check once at startup, then arm the periodic check. With autoDownload=true a found version
+        // starts downloading as soon as a check reports it.
         void runAutomaticCheck()
       })
       .catch((e) => push({ state: 'error', message: `updater load failed: ${e?.message ?? String(e)}` }))

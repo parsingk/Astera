@@ -433,7 +433,7 @@ export interface UpdateApi {
   /** The user dismissed the notice — the same campaign is not shown again */
   dismissCampaign(id: string): Promise<void>
   check(): Promise<void>
-  /** autoDownload is off; downloads only happen on a user action */
+  /** autoDownload starts the download on its own — this is the manual fallback */
   download(): Promise<void>
   install(): Promise<void>
 }

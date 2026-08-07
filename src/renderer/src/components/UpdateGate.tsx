@@ -8,7 +8,8 @@ import type { UpdateStatus } from '../../../core/types'
  *
  * The titlebar is not covered, so moving and minimizing the window still work (it has to be possible to
  * get the window out of the way while waiting for the download).
- * autoDownload is off, so the user starts the download from this screen too.
+ * autoDownload normally starts the download by itself; the button here covers the case where it has
+ * not started yet or has failed.
  */
 export function UpdateGate({
   update,
