@@ -11,3 +11,4 @@
 # Binaries — never touched, and never shown as diffable text.
 *.png binary
 *.ico binary
+*.icns binary
