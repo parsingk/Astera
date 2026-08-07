@@ -5,6 +5,7 @@ import type { AppUpdater } from 'electron-updater'
 import iconAsset from '../../resources/icon.png?asset'
 import trayAsset from '../../resources/tray.png?asset'
 import { createCore, type Core } from './core'
+import { applyLoginPath } from './loginPath'
 import { registerIpc } from './ipc'
 import { RollingCoordinator } from './rolling'
 import { SchedulerCoordinator } from './scheduler'
@@ -112,6 +113,9 @@ app.on('second-instance', () => {
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return // second instance — waits for quit without initializing
   Menu.setApplicationMenu(null)
+  // macOS에서 Finder로 실행되면 로그인 셸의 PATH가 없다. claude/codex/git/node를 전부 PATH에서
+  // 찾으므로 createCore(=StatusLineManager.init, 계정 감지)보다 먼저 복구해야 한다.
+  await applyLoginPath((m) => console.log(m))
   core = await createCore(app.getPath('userData'), app.getLocale())
   const win = createWindow()
   mainWindow = win
