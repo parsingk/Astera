@@ -99,6 +99,14 @@ export function TerminalView({
     sendResize()
     term.focus() // so typing works immediately once the session opens
 
+    // macOS 는 터미널 복사·붙여넣기가 Cmd 다. Ctrl+C 는 언제나 인터럽트로 흘러야 한다 — 선택이
+    // 남아 있다고 삼키면 mac 사용자에게는 그냥 'Ctrl+C 가 안 먹는' 버그다.
+    const isMac = window.api.platform === 'darwin'
+    /** 이 플랫폼에서 복사·붙여넣기를 여는 수식어가 눌렸는가 */
+    const clipMod = (e: KeyboardEvent): boolean => (isMac ? e.metaKey : e.ctrlKey)
+    /** 그 반대쪽 수식어 — 함께 눌렸으면 다른 조합이므로 우리 것이 아니다 */
+    const otherMod = (e: KeyboardEvent): boolean => (isMac ? e.ctrlKey : e.metaKey)
+
     // Ctrl+Enter → newline. A terminal sends Ctrl+Enter as a plain Enter (submit) by default, so the
     // same sequence as Alt+Enter (ESC+CR) is sent directly to make claude treat it as a newline
     // (restores the behavior from the PowerShell days).
@@ -114,15 +122,14 @@ export function TerminalView({
         window.api.sessions.write(session.id, '\x1b\r')
         return false // prevents xterm's default handling (Enter = submit)
       }
-      // Ctrl+C: with a selection, copy it (then clear the selection); without one, let it through so
-      // xterm sends SIGINT (\x03).
-      // (In a terminal Ctrl+C is an interrupt by default, so with no selection it is never intercepted.)
+      // 복사: 선택이 있으면 복사하고 선택을 지운다. 없으면 통과시켜 xterm 이 처리하게 둔다
+      // (win32 의 Ctrl+C 는 그대로 SIGINT, mac 의 Cmd+C 는 아무 일도 일어나지 않는다).
       if (
         e.type === 'keydown' &&
         (e.key === 'c' || e.key === 'C') &&
-        e.ctrlKey &&
+        clipMod(e) &&
         !e.altKey &&
-        !e.metaKey &&
+        !otherMod(e) &&
         !e.shiftKey
       ) {
         const sel = term.getSelection()
@@ -133,11 +140,16 @@ export function TerminalView({
         }
         return true
       }
-      // Ctrl+V (and Ctrl+Shift+V) paste: read the clipboard directly and feed it in through term.paste
-      // (bracketed paste → onData → pty). e.preventDefault() blocks the browser's default paste (the
-      // native paste event) — without that, the native paste is written once more by xterm's built-in
-      // handler and the text gets pasted twice.
-      if (e.type === 'keydown' && (e.key === 'v' || e.key === 'V') && e.ctrlKey && !e.altKey && !e.metaKey) {
+      // 붙여넣기: 클립보드를 직접 읽어 term.paste 로 넣는다 (bracketed paste → onData → pty).
+      // e.preventDefault() 로 브라우저 기본 붙여넣기를 막지 않으면 xterm 내장 핸들러가 한 번 더
+      // 써서 두 번 붙는다.
+      if (
+        e.type === 'keydown' &&
+        (e.key === 'v' || e.key === 'V') &&
+        clipMod(e) &&
+        !e.altKey &&
+        !otherMod(e)
+      ) {
         e.preventDefault()
         const text = window.api.clipboard.readText()
         if (text) term.paste(text)
