@@ -163,18 +163,16 @@ export function registerIpc(
   core.terminal.onData = (e) => send('terminal:data', e)
   core.terminal.onExit = (e) => send('terminal:exit', e)
   core.history.onUpdated = () => send('history:updated', { total: 0 })
-  // isDefault is derived at serialisation time — the renderer uses it to hide the import button on the default account row
-  const withDefaultFlag = (a: Account): Account => ({
-    ...a,
-    isDefault: core.isDefaultAccountDir(a.configDir)
-  })
+  // Accounts go out exactly as stored. There is no default-account flag to decorate: the default is decided
+  // per provider from the list plus login state, and the renderer already holds both (useAccountStatus), so
+  // it derives that itself with core/accounts/defaultAccount.ts.
   core.accounts.onChanged = (accounts) => {
-    send('accounts:changed', { accounts: accounts.map(withDefaultFlag) })
+    send('accounts:changed', { accounts })
     void core.history.reload()
   }
 
   // accounts
-  ipcMain.handle('accounts.list', () => core.accounts.list().map(withDefaultFlag))
+  ipcMain.handle('accounts.list', () => core.accounts.list())
   ipcMain.handle('accounts.create', (_e, input) => core.accounts.create(input))
   ipcMain.handle('accounts.import', (_e, input) => core.accounts.import(input))
   ipcMain.handle('accounts.remove', (_e, id) => core.accounts.remove(id))

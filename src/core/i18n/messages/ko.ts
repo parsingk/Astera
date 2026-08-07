@@ -18,7 +18,7 @@ export const ko = {
     '오케스트레이터로 쓸 세션에서 astera help 를 실행하게 하면 전체 사용법을 얻습니다.',
   'settings.orchestration.saveFailed': '오케스트레이션 설정을 저장하지 못했습니다: {detail}',
   'settings.accounts.hint':
-    '⤓ 는 기본 계정의 설정·MCP를 가져옵니다. 기본 계정과 Codex 계정은 대상이 아닙니다.',
+    '⤓ 는 같은 CLI의 기본 계정에서 설정을 가져옵니다. 기본 계정은 로그인된 계정 중 가장 먼저 등록된 것으로, CLI마다 하나씩 있습니다.',
   'common.cancel': '취소',
   'common.confirm': '확인',
   'common.close': '닫기',
@@ -142,12 +142,8 @@ export const ko = {
   'settings.worktree.change': '변경…',
   'settings.worktree.hint':
     '새 worktree가 이 폴더 아래 <repo명>/<이름>으로 생성됩니다. 기존 worktree는 이동하지 않습니다.',
-  // This screen only shows when NEITHER CLI is present — one of the two is enough to open the app.
-  'settings.cliMissing.title': '실행할 CLI를 찾을 수 없습니다',
-  'settings.cliMissing.bodyPre': '이 앱은 설치된',
-  'settings.cliMissing.bodyPost':
-    'CLI를 실행하는 런처입니다. 둘 중 하나를 설치한 뒤 앱을 다시 시작하세요.',
-  'settings.cliMissing.install': '설치:',
+  // No settings.cliMissing.* here on purpose. That screen replaces the whole workbench, so the rail
+  // and the language switch on it are gone — it is hardcoded English in App.tsx instead.
   // App.tsx — update status (the title-bar UpdateIndicator / the settings Info tab)
   'update.tb.restartInstallVersion': '재시작하여 v{version} 설치',
   'update.tb.checking': '업데이트 확인 중…',
@@ -341,7 +337,7 @@ export const ko = {
   'account.add.button': '추가',
   'account.add.adding': '추가 중…',
   'account.add.labelPlaceholder': '예: 회사 계정',
-  'account.add.copySettingsLabel': '기본 계정 설정 가져오기 (플러그인·MCP·개인 스킬/커맨드/에이전트)',
+  'account.add.copySettingsLabel': '기본 계정에서 설정 가져오기',
   'account.add.loginHintClaude': '로그인은 세션 터미널에서 /login으로 진행합니다.',
   'account.add.loginHintCodex': '로그인은 세션 터미널에서 codex 로그인 안내에 따라 진행합니다.',
   'account.add.syncFailed': '계정은 추가됐지만 설정 가져오기에 실패했습니다: {detail}',
@@ -361,7 +357,7 @@ export const ko = {
   'account.remove.confirm': '‘{label}’ 계정 등록을 해제하시겠습니까?',
   'account.remove.logoutToo': '로그아웃까지 진행 (인증 제거)',
   'account.remove.logoutWarning':
-    '로그아웃하면 이 계정의 인증이 제거되어 다시 로그인해야 합니다. 기본(홈) 계정이면 다른 곳에서 쓰는 메인 로그인도 함께 해제됩니다.',
+    '로그아웃하면 이 계정의 인증이 제거되어 다시 로그인해야 합니다. 홈 디렉토리(~/.claude, ~/.codex)를 쓰는 계정이면 이 앱 밖에서 쓰던 로그인도 함께 해제됩니다.',
   'account.remove.processing': '처리 중…',
   'account.remove.confirmWithLogout': '해제 + 로그아웃',
   'account.logout.failed': '로그아웃 실패: {detail}\n\n등록 해제는 계속 진행합니다.',
@@ -372,17 +368,22 @@ export const ko = {
   'account.error.logoutFailed': '로그아웃 실패',
   // AccountPanel.tsx — default-account settings sync. A destructive action that overwrites the target account's settings.
   'account.sync.title': '기본 계정 설정 가져오기',
-  'account.sync.confirmBody':
-    '기본 계정의 설정(플러그인·MCP·개인 스킬/커맨드/에이전트 포함)을 ‘{label}’ 계정으로 가져옵니다. 같은 항목은 기본 계정 값으로 덮어씁니다.',
+  'account.sync.confirmBody': '‘{source}’ 계정의 설정을 ‘{label}’ 계정으로 가져옵니다.',
+  // The two CLIs copy differently and the wording has to say so — claude merges per key, codex has
+  // everything in one config.toml and there is no TOML parser here, so that file is replaced outright.
+  'account.sync.mergeNote':
+    '플러그인·MCP·개인 스킬/커맨드/에이전트를 항목 단위로 합칩니다. 같은 항목은 원본 값으로 덮어쓰고, 이 계정에만 있는 항목은 남습니다.',
+  'account.sync.replaceNote':
+    'config.toml 파일이 원본으로 통째 대체됩니다. 이 계정에만 있던 설정은 사라지며, 기존 파일은 .bak으로 백업합니다.',
   'account.sync.appliesNextSession': '실행 중인 세션에는 적용되지 않고 다음 세션부터 반영됩니다.',
   'account.sync.confirm': '가져오기',
   'account.sync.confirming': '가져오는 중…',
   'account.sync.done': '설정을 가져왔습니다.',
   'account.sync.failed': '가져오기 실패: {detail}',
   // The Message keys accountSyncSettings in core.ts returns
-  'account.sync.codexUnsupported': 'Codex 계정은 설정 가져오기를 지원하지 않습니다.',
-  'account.sync.isDefaultSource': '기본 계정은 설정의 원본이라 가져올 대상이 아닙니다.',
-  'account.sync.nothingToCopy': '가져올 설정이 없습니다 (기본 계정 설정 파일 없음).',
+  'account.sync.isDefaultSource': '이 계정이 기본 계정이라 설정의 원본입니다. 가져올 대상이 아닙니다.',
+  'account.sync.noDefault': '이 CLI에 로그인된 계정이 없어 가져올 원본이 없습니다.',
+  'account.sync.nothingToCopy': '가져올 설정이 없습니다 (원본 계정에 설정 파일 없음).',
   // AccountSelect.tsx
   'account.select.none': '(선택 안 됨)',
   // NewSessionDialog.tsx — the new-session modal
@@ -410,7 +411,9 @@ export const ko = {
   'session.new.rollPromptHint': '재개 시 이 문구를 전송 (비우면 기본값)',
   'session.new.slackNotify': 'Slack 진행상황 알림',
   'session.new.slackNeedsWebhook': '(설정에서 Webhook URL 등록 필요)',
-  'session.new.saveDefaultAccount': '이 프로젝트의 기본 계정으로 저장',
+  // Nothing to do with the default account above — this only remembers which account this project used,
+  // so the next new session preselects it. Named accordingly to stop the two reading as one feature.
+  'session.new.saveDefaultAccount': '이 프로젝트에서 이 계정을 기억',
   'session.new.bypassPermissions': '권한 확인 없이 실행 (bypass permissions)',
   'session.new.start': '시작',
   // Waiting text between pressing Start and the tab opening. Splitting off a worktree chains fetch, worktree add and

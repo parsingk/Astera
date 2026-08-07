@@ -12,8 +12,13 @@ export interface SyncResult {
 // win32 first: ignores differences in path case and separator (the same rule as normalizePath in sessions/manager.ts)
 const normalizePath = (p: string): string => path.resolve(p).toLowerCase()
 
-/** Whether configDir is the default (ambient, <home>/.claude) account — the same rule as isAmbientDir in providers/descriptor.ts */
-export function isDefaultConfigDir(homeDir: string, configDir: string): boolean {
+/** Whether configDir is the home (ambient, <home>/.claude) directory — the same rule as isAmbientDir in
+ *  providers/descriptor.ts. It is not imported from there because that module imports this one.
+ *
+ *  This used to decide which account was "the default". It no longer does — the default account is now
+ *  derived from registration order (accounts/defaultAccount.ts) and the home dir gets no special status.
+ *  The one thing still riding on it is where claude keeps user-scope MCP, which genuinely differs. */
+export function isHomeClaudeDir(homeDir: string, configDir: string): boolean {
   return normalizePath(configDir) === normalizePath(path.join(homeDir, '.claude'))
 }
 
@@ -61,18 +66,22 @@ async function mergeDirTree(srcDir: string, destDir: string): Promise<boolean> {
 }
 
 /**
- * Imports the default (home) account's settings into an isolated account.
- * settings.json merges by top-level key and mcpServers merges by server name — in both the default account
- * wins, and entries only the target has are kept.
+ * Copies one claude account's settings into another.
+ * settings.json merges by top-level key and mcpServers merges by server name — in both the source wins,
+ * and entries only the target has are kept.
  * .credentials.json is never touched.
+ *
+ * The source used to be hardcoded to the home directory. It is now whichever account is that provider's
+ * default (accounts/defaultAccount.ts), so the source can be an isolated account too.
  */
-export async function syncSettingsFromDefault(
-  homeDir: string,
-  targetConfigDir: string
+export async function syncClaudeSettings(
+  srcConfigDir: string,
+  targetConfigDir: string,
+  homeDir: string
 ): Promise<SyncResult> {
   const result: SyncResult = { settingsApplied: false, mcpApplied: false, contentApplied: [] }
 
-  const srcSettings = await readObjectOrNull(path.join(homeDir, '.claude', 'settings.json'))
+  const srcSettings = await readObjectOrNull(path.join(srcConfigDir, 'settings.json'))
   if (srcSettings) {
     const targetFile = path.join(targetConfigDir, 'settings.json')
     const target = (await readObjectOrNull(targetFile)) ?? {}
@@ -80,12 +89,18 @@ export async function syncSettingsFromDefault(
     result.settingsApplied = true
   }
 
-  // The default account's user-scope MCP lives in the home-root sidecar ~/.claude.json — an asymmetry in how
-  // claude stores it. In the target .claude.json only the mcpServers key is updated — the rest, oauthAccount
-  // and so on, is untouchable.
-  const srcRoot = await readObjectOrNull(path.join(homeDir, '.claude.json'))
+  // User-scope MCP sits in a different file depending on which kind of account holds it: the home account
+  // keeps it in the home-root sidecar ~/.claude.json, an isolated account inside its own configDir. That
+  // asymmetry is claude's, not ours. Reading the wrong one silently imports no MCP at all, so the source
+  // kind has to be checked — the old code could skip this because the source was always the home account.
+  const srcMcpFile = isHomeClaudeDir(homeDir, srcConfigDir)
+    ? path.join(homeDir, '.claude.json')
+    : path.join(srcConfigDir, '.claude.json')
+  const srcRoot = await readObjectOrNull(srcMcpFile)
   const srcMcp = srcRoot && isPlainObject(srcRoot.mcpServers) ? srcRoot.mcpServers : null
   if (srcMcp) {
+    // In the target .claude.json only the mcpServers key is updated — the rest, oauthAccount and so on,
+    // is untouchable. The target is always an isolated account, so no sidecar branch is needed here.
     const targetFile = path.join(targetConfigDir, '.claude.json')
     const target = (await readObjectOrNull(targetFile)) ?? {}
     const targetMcp = isPlainObject(target.mcpServers) ? target.mcpServers : {}
@@ -96,11 +111,45 @@ export async function syncSettingsFromDefault(
   // Recursive file-by-file merge of the personal content directories (skills/commands/agents).
   for (const dir of CONTENT_DIRS) {
     const copied = await mergeDirTree(
-      path.join(homeDir, '.claude', dir),
+      path.join(srcConfigDir, dir),
       path.join(targetConfigDir, dir)
     )
     if (copied) result.contentApplied.push(dir)
   }
+
+  return result
+}
+
+/**
+ * Copies one codex account's config into another.
+ *
+ * Unlike claude this **replaces** config.toml rather than merging it. Codex keeps settings and MCP servers
+ * together in one TOML file and this project has no TOML parser — adding a dependency to enable key-level
+ * merging was not worth it for one button. The existing file is backed up to .bak first, the same as the
+ * JSON path, and the write is tmp+rename so a failure cannot leave a half-written config.
+ *
+ * auth.json (credentials) and sessions/ (history) are never touched.
+ */
+export async function syncCodexSettings(
+  srcConfigDir: string,
+  targetConfigDir: string
+): Promise<SyncResult> {
+  const result: SyncResult = { settingsApplied: false, mcpApplied: false, contentApplied: [] }
+
+  let raw: string
+  try {
+    raw = await fs.readFile(path.join(srcConfigDir, 'config.toml'), 'utf8')
+  } catch {
+    return result // the source has no config.toml — nothing to copy, same as an absent settings.json
+  }
+
+  const targetFile = path.join(targetConfigDir, 'config.toml')
+  await fs.mkdir(targetConfigDir, { recursive: true })
+  await fs.copyFile(targetFile, targetFile + '.bak').catch(() => {}) // ignored when the target is absent
+  const tmp = targetFile + '.tmp'
+  await fs.writeFile(tmp, raw, 'utf8')
+  await fs.rename(tmp, targetFile)
+  result.settingsApplied = true
 
   return result
 }

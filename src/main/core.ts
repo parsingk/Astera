@@ -2,7 +2,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { AccountRegistry } from '../core/accounts/registry'
-import { PROVIDERS, metaOf } from '../core/providers/meta'
+import { PROVIDERS, providerOf } from '../core/providers/meta'
 import { makeDescriptors, descriptorOf, isAmbientDir, type ProviderDescriptor } from '../core/providers/descriptor'
 import { SessionManager } from '../core/sessions/manager'
 import { nodePtyFactory } from '../core/sessions/nodePtyFactory'
@@ -10,7 +10,7 @@ import { HistoryIndex } from '../core/history/index'
 import { ProjectSettings } from '../core/projects/settings'
 import { StatusLineManager } from './statusline'
 import { parseStatusLinePayload } from '../core/usage/statusline'
-import { isDefaultConfigDir, syncSettingsFromDefault } from '../core/accounts/settingsSync'
+import { defaultAccountIdOf } from '../core/accounts/defaultAccount'
 import { RollConfigStore } from '../core/rolling/config'
 import { SchedulerConfigStore } from '../core/scheduler/config'
 import { RunConfigStore } from './runConfigStore'
@@ -36,8 +36,10 @@ export interface Core {
   accountEmail: (id: string) => Promise<string | null>
   accountEmailOfDir: (configDir: string, provider?: Provider) => Promise<string | null>
   accountLogout: (id: string) => Promise<{ ok: boolean; message?: Message }>
-  isDefaultAccountDir: (configDir: string) => boolean // Default (ambient) account verdict — for the isDefault decoration
-  accountSyncSettings: (id: string) => Promise<{ ok: boolean; message?: Message }> // Import the default account's settings
+  // No isDefaultAccountDir here any more. Which account is the default is derived per provider from the
+  // account list plus login state, and the renderer computes it itself (core/accounts/defaultAccount.ts is
+  // pure and node-free), so nothing has to be decorated onto each account at serialisation time.
+  accountSyncSettings: (id: string) => Promise<{ ok: boolean; message?: Message }> // Import the provider's default account settings
   usageSession: (sessionId: string) => Promise<SessionUsage | null>
   statusLinePayload: (sessionId: string) => Promise<unknown | null> // Raw payload, for rolling
   hookEventsDir: string // Hook event file directory — watched by index.ts's HookEventWatcher
@@ -175,18 +177,33 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     const d = descriptorOf(descriptors, account)
     return runAccountLogout(d, os.homedir(), account.configDir)
   }
-  // Imports settings and MCP from the default account. Rejected when the target is the default (ambient) account — it would be its own source.
-  const isDefaultAccountDir = (configDir: string): boolean =>
-    isDefaultConfigDir(os.homedir(), configDir)
+  /** That provider's default account. Deriving it needs the login state of every account of that provider,
+   *  which is a file check each, so this fans out rather than reading a stored field. */
+  const defaultAccountIdFor = async (provider: Provider): Promise<string | null> => {
+    const list = accounts.list()
+    const loggedIn = await Promise.all(
+      list.map(async (a) => ((await accounts.loginStatus(a.id)) ? a.id : null))
+    )
+    return defaultAccountIdOf(
+      provider,
+      list,
+      new Set(loggedIn.filter((id): id is string => id !== null))
+    )
+  }
+  // Imports settings from the same provider's default account. Rejected when this account IS that default
+  // (it would be its own source), and when the provider has no default at all (nothing is logged in yet).
   const accountSyncSettings = async (id: string): Promise<{ ok: boolean; message?: Message }> => {
     const account = accounts.get(id)
-    // Settings sync only applies to the claude settings.json / MCP layout
-    if (!metaOf(account).supportsSettingsSync)
-      return { ok: false, message: { key: 'account.sync.codexUnsupported' } }
-    if (isDefaultAccountDir(account.configDir))
-      return { ok: false, message: { key: 'account.sync.isDefaultSource' } }
+    const srcId = await defaultAccountIdFor(providerOf(account))
+    if (srcId === null) return { ok: false, message: { key: 'account.sync.noDefault' } }
+    if (srcId === account.id) return { ok: false, message: { key: 'account.sync.isDefaultSource' } }
+    const src = accounts.get(srcId)
     try {
-      const r = await syncSettingsFromDefault(os.homedir(), account.configDir)
+      const r = await descriptorOf(descriptors, account).syncSettings(
+        src.configDir,
+        account.configDir,
+        os.homedir()
+      )
       if (!r.settingsApplied && !r.mcpApplied && r.contentApplied.length === 0)
         return { ok: true, message: { key: 'account.sync.nothingToCopy' } }
       return { ok: true }
@@ -210,7 +227,6 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     accountEmail,
     accountEmailOfDir,
     accountLogout,
-    isDefaultAccountDir,
     accountSyncSettings,
     usageSession,
     statusLinePayload: (sessionId: string) => statusLine.read(sessionId),

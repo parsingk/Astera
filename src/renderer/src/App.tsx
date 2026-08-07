@@ -1499,21 +1499,27 @@ export default function App(): React.JSX.Element {
 
   // Only when neither CLI is present is there nothing to launch. With one of the two installed the app
   // opens as usual, and the new-session dialog blocks the accounts whose CLI is missing.
+  //
+  // Deliberately English-only, and deliberately not routed through t(). This screen replaces the whole
+  // workbench, so the rail is never rendered — and the settings modal that holds the language switch
+  // lives on that rail. Someone stuck here cannot change the language, so the text stays in the one
+  // language every reader of an npm install command already has to read. Do not move these strings
+  // into the i18n catalog: following the stored language is exactly the behaviour being avoided.
   if (cli && !cli.claude.ok && !cli.codex.ok) {
     return (
       <div className="app">
         <Titlebar isMax={isMax} update={update} />
         <div className="cli-missing">
-          <h1>{t('settings.cliMissing.title')}</h1>
+          <h1>No CLI found to run</h1>
           <p>
-            {t('settings.cliMissing.bodyPre')} <code>claude</code> {t('common.or')} <code>codex</code>{' '}
-            {t('settings.cliMissing.bodyPost')}
+            This app is a launcher that runs the installed <code>claude</code> or <code>codex</code>{' '}
+            CLI. Install either one, then restart the app.
           </p>
           <p>
-            {t('settings.cliMissing.install')} <code>npm install -g @anthropic-ai/claude-code</code>
+            Install: <code>npm install -g @anthropic-ai/claude-code</code>
           </p>
           <p>
-            {t('settings.cliMissing.install')} <code>npm install -g @openai/codex</code>
+            Install: <code>npm install -g @openai/codex</code>
           </p>
         </div>
       </div>

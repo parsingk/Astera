@@ -26,22 +26,21 @@ export interface ProviderMeta {
   displayName: string
   /** Does it use the statusLine mechanism. The usage bar, the usage context and scheduler key learning all hang on this one fact */
   usesStatusLine: boolean
-  /** Whether importing settings.json and MCP from the default account is supported (that import is specific to claude's layout) */
-  supportsSettingsSync: boolean
 }
+// There is no supportsSettingsSync flag any more: both providers import settings now, they just do it
+// differently (claude merges per key, codex replaces config.toml). The how lives on ProviderDescriptor
+// .syncSettings; nothing left for the renderer to branch on.
 
 export const PROVIDER_META: Record<Provider, ProviderMeta> = {
   claude: {
     id: 'claude',
     displayName: 'Claude',
-    usesStatusLine: true,
-    supportsSettingsSync: true
+    usesStatusLine: true
   },
   codex: {
     id: 'codex',
     displayName: 'Codex',
-    usesStatusLine: false,
-    supportsSettingsSync: false
+    usesStatusLine: false
   }
 }
 

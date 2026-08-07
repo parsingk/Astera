@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Account, Provider } from '../../../core/types'
-import { PROVIDERS, PROVIDER_META } from '../../../core/providers/meta'
+import { PROVIDERS, PROVIDER_META, providerOf } from '../../../core/providers/meta'
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
 import { useAccountStatus } from '../hooks/useAccountStatus'
@@ -44,7 +44,7 @@ function ProviderPicker({
 
 export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.Element {
   const { t, tm } = useI18n()
-  const { loginMap, emailMap } = useAccountStatus(accounts)
+  const { loginMap, emailMap, defaultIdByProvider } = useAccountStatus(accounts)
   const [addOpen, setAddOpen] = useState(false)
   const [addLabel, setAddLabel] = useState('')
   const [addCopySettings, setAddCopySettings] = useState(true)
@@ -134,8 +134,10 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
     setAdding(true)
     try {
       const account = await window.api.accounts.create({ label, provider: addProvider })
-      // Importing settings is claude-only
-      if (addCopySettings && PROVIDER_META[addProvider].supportsSettingsSync) {
+      // Both providers import settings now. A brand-new account is never the default (it has no
+      // credentials yet), so this always copies from an existing account rather than onto itself. If that
+      // provider has nothing logged in there is no source, and syncSettings reports that.
+      if (addCopySettings) {
         const r = await window.api.accounts.syncSettings(account.id)
         if (!r.ok) toast.error(t('account.add.syncFailed', { detail: tm(r.message ?? null) ?? '' }))
       }
@@ -205,7 +207,13 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
       </header>
       <ul>
         {accounts.map((a) => (
-          <AccountRow key={a.id} account={a} loggedIn={loginMap[a.id]} email={emailMap[a.id]} />
+          <AccountRow
+            key={a.id}
+            account={a}
+            loggedIn={loginMap[a.id]}
+            email={emailMap[a.id]}
+            isDefault={defaultIdByProvider[providerOf(a)] === a.id}
+          />
         ))}
         {accounts.length === 0 && <li className="empty">{t('account.panel.empty')}</li>}
       </ul>
@@ -230,16 +238,15 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
                   onChange={(e) => setAddLabel(e.target.value)}
                 />
               </div>
-              {PROVIDER_META[addProvider].supportsSettingsSync && (
-                <label className="toggle-row">
-                  <input
-                    type="checkbox"
-                    checked={addCopySettings}
-                    onChange={(e) => setAddCopySettings(e.target.checked)}
-                  />
-                  <span>{t('account.add.copySettingsLabel')}</span>
-                </label>
-              )}
+              {/* Shown for both providers — claude and codex each import from their own default account */}
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={addCopySettings}
+                  onChange={(e) => setAddCopySettings(e.target.checked)}
+                />
+                <span>{t('account.add.copySettingsLabel')}</span>
+              </label>
               {/* The login-procedure hint is per-CLI prose, so it is not folded behind a capability flag.
                   Same category as ProviderBadge's icon choice — adding a provider means writing new text. */}
               <p className="modal-hint">

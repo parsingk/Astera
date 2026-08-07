@@ -16,7 +16,7 @@ export const en: Record<keyof typeof ko, string> = {
     'Ask the session you want to orchestrate with to run astera help for the full usage guide.',
   'settings.orchestration.saveFailed': 'Could not save the orchestration setting: {detail}',
   'settings.accounts.hint':
-    '⤓ imports settings and MCP from the default account. The default account and Codex accounts are not eligible.',
+    "⤓ imports settings from that CLI's default account. The default is the earliest registered account that is logged in — one per CLI.",
   'common.cancel': 'Cancel',
   'common.confirm': 'Confirm',
   'common.close': 'Close',
@@ -128,10 +128,6 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.worktree.change': 'Change…',
   'settings.worktree.hint':
     'New worktrees are created under this folder as <repo>/<name>. Existing worktrees are not moved.',
-  'settings.cliMissing.title': 'No CLI found to run',
-  'settings.cliMissing.bodyPre': 'This app is a launcher that runs the installed',
-  'settings.cliMissing.bodyPost': 'CLI. Install either one, then restart the app.',
-  'settings.cliMissing.install': 'Install:',
   'update.tb.restartInstallVersion': 'Restart to install v{version}',
   'update.tb.checking': 'Checking for updates…',
   'update.tb.available': 'New version {version} found',
@@ -300,8 +296,7 @@ export const en: Record<keyof typeof ko, string> = {
   'account.add.button': 'Add',
   'account.add.adding': 'Adding…',
   'account.add.labelPlaceholder': 'e.g. Work account',
-  'account.add.copySettingsLabel':
-    'Import default account settings (plugins, MCP, personal skills/commands/agents)',
+  'account.add.copySettingsLabel': 'Import settings from the default account',
   'account.add.loginHintClaude': 'Log in from the session terminal with /login.',
   'account.add.loginHintCodex':
     'Log in from the session terminal by following the codex sign-in prompts.',
@@ -321,7 +316,7 @@ export const en: Record<keyof typeof ko, string> = {
   'account.remove.confirm': 'Unregister the “{label}” account?',
   'account.remove.logoutToo': 'Also log out (removes authentication)',
   'account.remove.logoutWarning':
-    "Logging out removes this account's authentication, so you'll need to log in again. If this is the default (home) account, the main login used elsewhere will be logged out too.",
+    "Logging out removes this account's authentication, so you'll need to log in again. If this account uses a home directory (~/.claude, ~/.codex), the login you use outside this app is logged out with it.",
   'account.remove.processing': 'Working…',
   'account.remove.confirmWithLogout': 'Unregister + log out',
   'account.logout.failed': 'Logout failed: {detail}\n\nUnregistering will continue anyway.',
@@ -329,16 +324,23 @@ export const en: Record<keyof typeof ko, string> = {
   'account.error.logoutFailed': 'Logout failed',
   'account.sync.title': 'Import default account settings',
   'account.sync.confirmBody':
-    "Imports the default account's settings (including plugins, MCP, personal skills/commands/agents) into the “{label}” account. Matching items are overwritten with the default account's values.",
+    'Imports settings from the “{source}” account into the “{label}” account.',
+  'account.sync.mergeNote':
+    'Plugins, MCP and personal skills/commands/agents are merged item by item. Matching items take the source values, and items only this account has are kept.',
+  'account.sync.replaceNote':
+    'config.toml is replaced wholesale by the source file. Settings only this account had are lost; the existing file is backed up as .bak.',
   'account.sync.appliesNextSession':
     'This does not apply to running sessions — it takes effect starting with the next session.',
   'account.sync.confirm': 'Import',
   'account.sync.confirming': 'Importing…',
   'account.sync.done': 'Settings imported.',
   'account.sync.failed': 'Import failed: {detail}',
-  'account.sync.codexUnsupported': 'Codex accounts do not support importing settings.',
-  'account.sync.isDefaultSource': 'The default account is the source of settings, so it cannot be a target.',
-  'account.sync.nothingToCopy': 'There is nothing to import (the default account has no settings file).',
+  'account.sync.isDefaultSource':
+    'This account is the default, which makes it the source of settings — it cannot be a target.',
+  'account.sync.noDefault':
+    'No account of this CLI is logged in, so there is no source to import from.',
+  'account.sync.nothingToCopy':
+    'There is nothing to import (the source account has no settings file).',
   'account.select.none': '(Not selected)',
   'session.new.title': 'New session',
   'session.new.runningWarning': 'There are {count} running sessions. Performance may degrade.',
@@ -361,7 +363,7 @@ export const en: Record<keyof typeof ko, string> = {
   'session.new.rollPromptHint': 'Sent when resuming (default if left blank)',
   'session.new.slackNotify': 'Slack progress notifications',
   'session.new.slackNeedsWebhook': '(Set a webhook URL in Settings first)',
-  'session.new.saveDefaultAccount': 'Save as the default account for this project',
+  'session.new.saveDefaultAccount': 'Remember this account for this project',
   'session.new.bypassPermissions': 'Run without permission checks (bypass permissions)',
   'session.new.start': 'Start',
   'session.new.starting': 'Starting session…',

@@ -3,6 +3,7 @@ import type { DetectCandidate } from '../types'
 import { buildClaudeCommand, buildCodexCommand, type CommandBuilder } from '../sessions/commands'
 import { readAccountEmail, detectConfigDirs } from '../accounts/detect'
 import { readCodexEmail, detectCodexConfigDirs } from '../accounts/detectCodex'
+import { syncClaudeSettings, syncCodexSettings, type SyncResult } from '../accounts/settingsSync'
 import { PROVIDER_META, providerOf, type Provider, type ProviderMeta } from './meta'
 import type { HistoryStrategy } from '../history/strategies/types'
 import { claudeHistoryStrategy } from '../history/strategies/claude'
@@ -24,7 +25,7 @@ import { codexHistoryStrategy } from '../history/strategies/codex'
 // The consolidation merged only 2 of them: the private method in manager.ts and the inline normalizeDir in
 // core.ts.)
 // normalizePath in settingsSync.ts (:13) and normalize in detectCodex.ts (:7) are still alive and really
-// used, by isDefaultConfigDir and isAmbientCodexDir respectively — today they are exactly identical to this
+// used, by isHomeClaudeDir and isAmbientCodexDir respectively — today they are exactly identical to this
 // rule (all of them path.resolve(p).toLowerCase()) but they are separate definitions. toLowerCase is the
 // wrong rule on Linux, but changing the semantics was out of scope — whoever fixes that later has to look
 // at all three places together.
@@ -45,6 +46,13 @@ export interface ProviderDescriptor extends ProviderMeta {
   buildCommand: CommandBuilder
   readEmail(configDir: string, homeDir: string): Promise<string | null>
   detect(opts: { homeDir: string; excludeDirs: string[] }): Promise<DetectCandidate[]>
+  /** Copies this provider's settings from one of its accounts into another. The source is that provider's
+   *  default account (accounts/defaultAccount.ts), not the home directory — the two are usually the same
+   *  account but no longer the same concept.
+   *
+   *  The two providers behave differently and deliberately so: claude merges per key, codex replaces the
+   *  whole config.toml (no TOML parser here). The confirmation wording splits on the same line. */
+  syncSettings(srcConfigDir: string, targetConfigDir: string, homeDir: string): Promise<SyncResult>
   history: HistoryStrategy
   /** Can busy/idle be decided reliably from the window-title OSC (BusyScanner, core/terminal/busy.ts)
    *  (measured on win32).
@@ -83,6 +91,7 @@ export function makeDescriptors(
       buildCommand: buildClaudeCommand(platform),
       readEmail: readAccountEmail,
       detect: detectConfigDirs,
+      syncSettings: syncClaudeSettings,
       history: claudeHistoryStrategy,
       busyTitleReliable: true
     },
@@ -98,6 +107,9 @@ export function makeDescriptors(
       // readCodexEmail takes only configDir — this just wraps it to fit the descriptor shape (the original function is unchanged)
       readEmail: (configDir) => readCodexEmail(configDir),
       detect: detectCodexConfigDirs,
+      // homeDir is unused here — codex keeps everything inside configDir, with no home-root sidecar
+      syncSettings: (srcConfigDir, targetConfigDir) =>
+        syncCodexSettings(srcConfigDir, targetConfigDir),
       history: codexHistoryStrategy,
       busyTitleReliable: false
     }

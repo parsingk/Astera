@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Account } from '../../../core/types'
-import { metaOf } from '../../../core/providers/meta'
+import { providerOf } from '../../../core/providers/meta'
 import { useAccountStatus } from '../hooks/useAccountStatus'
 import { AccountRow } from './AccountRow'
 import { useI18n } from '../i18n/I18nProvider'
@@ -10,7 +10,7 @@ import { toast } from '../lib/toast'
  *  the sidebar. The sidebar (AccountPanel) is left with only listing and adding accounts. */
 export function AccountSettings({ accounts }: { accounts: Account[] }): React.JSX.Element {
   const { t, tm } = useI18n()
-  const { loginMap, emailMap } = useAccountStatus(accounts)
+  const { loginMap, emailMap, defaultIdByProvider } = useAccountStatus(accounts)
   const [removeTarget, setRemoveTarget] = useState<Account | null>(null)
   const [logoutToo, setLogoutToo] = useState(false)
   const [removing, setRemoving] = useState(false)
@@ -58,10 +58,20 @@ export function AccountSettings({ accounts }: { accounts: Account[] }): React.JS
     <div className="settings-accounts">
       <span className="settings-hint">{t('settings.accounts.hint')}</span>
       <ul>
-        {accounts.map((a) => (
-          <AccountRow key={a.id} account={a} loggedIn={loginMap[a.id]} email={emailMap[a.id]}>
-            {/* Importing settings is claude-only */}
-            {!a.isDefault && metaOf(a).supportsSettingsSync && (
+        {accounts.map((a) => {
+          const defaultId = defaultIdByProvider[providerOf(a)]
+          return (
+          <AccountRow
+            key={a.id}
+            account={a}
+            loggedIn={loginMap[a.id]}
+            email={emailMap[a.id]}
+            isDefault={defaultId === a.id}
+          >
+            {/* ⤓ needs a source, and that source is this provider's default account. Hidden on the default
+                itself (it would be copying onto itself) and when the provider has no default yet, which
+                means nothing of that CLI is logged in. */}
+            {defaultId !== null && defaultId !== a.id && (
               <button
                 className="ghost"
                 aria-label={t('account.sync.title')}
@@ -87,7 +97,8 @@ export function AccountSettings({ accounts }: { accounts: Account[] }): React.JS
               </svg>
             </button>
           </AccountRow>
-        ))}
+          )
+        })}
         {accounts.length === 0 && <li className="empty">{t('account.panel.empty')}</li>}
       </ul>
       {removeTarget && (
@@ -131,8 +142,20 @@ export function AccountSettings({ accounts }: { accounts: Account[] }): React.JS
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <h2>{t('account.sync.title')}</h2>
             <p className="confirm-text">
-              {t('account.sync.confirmBody', { label: syncTarget.label })}
+              {t('account.sync.confirmBody', {
+                source:
+                  accounts.find((a) => a.id === defaultIdByProvider[providerOf(syncTarget)])?.label ??
+                  '',
+                label: syncTarget.label
+              })}
             </p>
+            {/* The two CLIs differ in kind, not degree: claude merges, codex overwrites the file. The
+                codex case can lose settings, so it gets the warning style. */}
+            {providerOf(syncTarget) === 'codex' ? (
+              <p className="warn-text">{t('account.sync.replaceNote')}</p>
+            ) : (
+              <p className="confirm-text">{t('account.sync.mergeNote')}</p>
+            )}
             <p className="warn-text">{t('account.sync.appliesNextSession')}</p>
             <div className="row right">
               <button type="button" disabled={syncing} onClick={() => setSyncTarget(null)}>

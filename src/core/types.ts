@@ -26,7 +26,8 @@ export interface Account {
   configDir: string
   color: string
   createdAt: string // ISO 8601
-  isDefault?: boolean // whether this is the default (ambient) account — a derived field main computes at serialisation time, not stored in accounts.json
+  // There is no isDefault field. Which account is the default is derived per provider from this list plus
+  // the login state (accounts/defaultAccount.ts), so it cannot be decided one account at a time.
   provider?: Provider // which CLI — absent means 'claude' (kept for compatibility with existing accounts.json)
 }
 
