@@ -1,3 +1,4 @@
+/// <reference types="node" />
 import type { RunConfig, RunStatus } from './run/config'
 export type { RunConfig, RunStatus } from './run/config'
 import type { Jdk } from './run/jdk'
@@ -475,6 +476,9 @@ export type RendererApi = CoreApi & {
   clipboard: ClipboardApi
   update: UpdateApi
   rolling: RollingApi
+  /** 렌더러의 플랫폼 분기용. 동기 값이라 첫 렌더에서 바로 쓸 수 있다 — 타이틀바 신호등 여백과
+   *  단축키 기본값이 이 값에 달려 있어, 비동기로 오면 첫 프레임이 틀린 레이아웃으로 그려진다. */
+  platform: NodeJS.Platform
   win: WindowApi
   app: AppControlApi
   keys: KeysApi

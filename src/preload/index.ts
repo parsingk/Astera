@@ -174,6 +174,7 @@ const api = {
     set: invoke('keys.set'),
     reset: invoke('keys.reset')
   },
+  platform: process.platform,
   win: {
     minimize: () => ipcRenderer.send('win.minimize'),
     maximizeToggle: () => ipcRenderer.send('win.maximizeToggle'),
