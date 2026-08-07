@@ -129,14 +129,9 @@ export class AccountRegistry {
 
   async loginStatus(id: string): Promise<boolean> {
     const account = this.get(id)
-    // The credential marker differs per CLI — claude=.credentials.json, codex=auth.json
-    const marker = descriptorOf(this.descriptors, account).credentialMarker
-    try {
-      await fs.access(path.join(account.configDir, marker))
-      return true
-    } catch {
-      return false
-    }
+    // 판정 근거는 프로바이더와 플랫폼마다 다르다 — claude 는 .credentials.json 또는 macOS
+    // Keychain, codex 는 auth.json. accounts/loginStatus.ts 가 그 갈래를 쥔다.
+    return descriptorOf(this.descriptors, account).isLoggedIn(account.configDir)
   }
 
   private async add(

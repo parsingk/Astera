@@ -33,7 +33,7 @@ export interface Account {
 
 export interface DetectCandidate {
   configDir: string
-  loggedIn: boolean // existence of the credentials file only (claude=.credentials.json, codex=auth.json)
+  loggedIn: boolean // accounts/loginStatus.ts 의 판정 결과 (claude 는 macOS 에서 Keychain 도 본다)
   suggestedLabel: string // email, falling back to the folder name; ~/.claude is 'default account'
   provider: Provider // distinguishes the sources when detection results are merged
 }
@@ -232,7 +232,7 @@ export interface CoreApi {
     create(input: { label: string; color?: string; provider?: Provider }): Promise<Account>
     import(input: { label: string; configDir: string; provider?: Provider }): Promise<Account>
     remove(id: string): Promise<void> // deregisters only — the disk is not touched
-    loginStatus(id: string): Promise<boolean> // existence of .credentials.json only
+    loginStatus(id: string): Promise<boolean> // accounts/loginStatus.ts 의 판정 결과 (claude 는 macOS 에서 Keychain 도 본다)
     detect(): Promise<DetectCandidate[]> // detection candidates, excluding already-registered config dirs
     email(id: string): Promise<string | null> // the login email of a registered account (for the list)
     emailOfDir(configDir: string, provider?: Provider): Promise<string | null> // the email of an unregistered folder (to prefill the import dialog)

@@ -3,7 +3,7 @@ import path from 'node:path'
 
 export interface DetectCandidate {
   configDir: string
-  loggedIn: boolean // only whether the credential file exists (claude=.credentials.json, codex=auth.json)
+  loggedIn: boolean // accounts/loginStatus.ts 의 판정 결과 (claude 는 macOS 에서 Keychain 도 본다)
   suggestedLabel: string // the email, falling back to the folder name; ~/.claude gets 'Default account'
   provider: 'claude' | 'codex' // tells the two apart when detection results are merged
 }
@@ -121,8 +121,13 @@ async function collectCandidateDirs(homeDir: string): Promise<string[]> {
 export async function detectConfigDirs(opts: {
   homeDir: string // os.homedir() injected (easier to test)
   excludeDirs: string[] // the configDirs already registered
+  /** 로그인 판정. 넘기지 않으면 지금까지의 파일 마커 규칙 — 테스트를 위한 기본값이고, 실제 배선
+   *  (providers/descriptor.ts)은 항상 명시적으로 넘긴다. */
+  isLoggedIn?: (configDir: string) => Promise<boolean>
 }): Promise<DetectCandidate[]> {
   const { homeDir, excludeDirs } = opts
+  const isLoggedIn =
+    opts.isLoggedIn ?? ((dir: string) => exists(path.join(dir, '.credentials.json')))
   const excludeSet = new Set(excludeDirs.map(normalize))
   const homeClaudeNorm = normalize(path.join(homeDir, '.claude'))
 
@@ -139,7 +144,7 @@ export async function detectConfigDirs(opts: {
 
     results.push({
       configDir: dir,
-      loggedIn: await exists(path.join(dir, '.credentials.json')),
+      loggedIn: await isLoggedIn(dir),
       suggestedLabel: await suggestLabel(dir, homeDir),
       provider: 'claude'
     })

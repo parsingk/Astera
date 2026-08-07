@@ -1,4 +1,6 @@
 import path from 'node:path'
+import os from 'node:os'
+import { execFile } from 'node:child_process'
 import type { DetectCandidate } from '../types'
 import { buildClaudeCommand, buildCodexCommand, type CommandBuilder } from '../sessions/commands'
 import { readAccountEmail, detectConfigDirs } from '../accounts/detect'
@@ -8,6 +10,8 @@ import { PROVIDER_META, providerOf, type Provider, type ProviderMeta } from './m
 import type { HistoryStrategy } from '../history/strategies/types'
 import { claudeHistoryStrategy } from '../history/strategies/claude'
 import { codexHistoryStrategy } from '../history/strategies/codex'
+import { keychainAccount, makeSecurityKeychainHas } from '../accounts/keychain'
+import { claudeLoginProbe, fileMarkerProbe, type LoginProbe } from '../accounts/loginStatus'
 
 /**
  * A descriptor that gathers the values and functions differing per provider into one place.
@@ -39,8 +43,8 @@ export interface ProviderDescriptor extends ProviderMeta {
   configDirEnv: string
   /** The name of the home default (ambient) config dir */
   ambientDirName: string
-  /** The file the login verdict rests on */
-  credentialMarker: string
+  /** 이 계정이 로그인되어 있는가. 근거는 프로바이더와 플랫폼마다 다르다 — accounts/loginStatus.ts 참고 */
+  isLoggedIn: LoginProbe
   /** The accounts root directory name — the caller (core.ts) assembles the absolute path */
   accountsRootName: string
   buildCommand: CommandBuilder
@@ -76,9 +80,27 @@ export interface ProviderDescriptor extends ProviderMeta {
   busyTitleReliable: boolean
 }
 
+/** security(1) 를 돌려 종료 코드만 돌려준다. stdout/stderr 는 버린다 (존재 여부만 필요하다). */
+function runSecurity(file: string, args: string[]): Promise<number> {
+  return new Promise((resolve) => {
+    execFile(file, args, { timeout: 5_000 }, (err) => {
+      resolve(err ? ((err as NodeJS.ErrnoException & { code?: number }).code ?? 1) : 0)
+    })
+  })
+}
+
 export function makeDescriptors(
-  platform: NodeJS.Platform
+  platform: NodeJS.Platform,
+  /** 테스트에서 키체인 조회를 갈아끼우기 위한 자리. 실제 배선은 기본값을 그대로 쓴다. */
+  homeDir: string = os.homedir(),
+  keychainHas = makeSecurityKeychainHas(runSecurity)
 ): Record<Provider, ProviderDescriptor> {
+  const claudeIsLoggedIn = claudeLoginProbe({
+    platform,
+    homeDir,
+    account: keychainAccount({ USER: process.env.USER }, os.userInfo().username),
+    keychainHas
+  })
   return {
     claude: {
       ...PROVIDER_META.claude,
@@ -86,11 +108,11 @@ export function makeDescriptors(
       logoutArgs: ['auth', 'logout'],
       configDirEnv: 'CLAUDE_CONFIG_DIR',
       ambientDirName: '.claude',
-      credentialMarker: '.credentials.json',
+      isLoggedIn: claudeIsLoggedIn,
       accountsRootName: '.claude-accounts',
       buildCommand: buildClaudeCommand(platform),
       readEmail: readAccountEmail,
-      detect: detectConfigDirs,
+      detect: (o) => detectConfigDirs({ ...o, isLoggedIn: claudeIsLoggedIn }),
       syncSettings: syncClaudeSettings,
       history: claudeHistoryStrategy,
       busyTitleReliable: true
@@ -101,7 +123,7 @@ export function makeDescriptors(
       logoutArgs: ['logout'],
       configDirEnv: 'CODEX_HOME',
       ambientDirName: '.codex',
-      credentialMarker: 'auth.json',
+      isLoggedIn: fileMarkerProbe('auth.json'),
       accountsRootName: '.codex-accounts',
       buildCommand: buildCodexCommand(platform),
       // readCodexEmail takes only configDir — this just wraps it to fit the descriptor shape (the original function is unchanged)
