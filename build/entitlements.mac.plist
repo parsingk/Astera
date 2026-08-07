@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- V8 의 JIT. Electron 앱에는 예외 없이 필요하다. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <!-- node-pty 는 asar 밖(app.asar.unpacked)의 .node 와 spawn-helper 를 dlopen/exec 한다.
+       Hardened Runtime 의 라이브러리 검증은 이것을 '팀이 다른 코드'로 보고 막는다. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <!-- 셔틀 스크립트가 ELECTRON_RUN_AS_NODE 를 세워 앱 바이너리를 node 로 재실행한다
+       (main/orchestration/shuttle.ts). Hardened Runtime 은 기본적으로 이런 환경변수를 지운다. -->
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+</dict>
+</plist>
