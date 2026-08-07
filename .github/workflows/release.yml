@@ -317,6 +317,7 @@ jobs:
           if [ -z "$app" ]; then echo "Astera.app not found in dist-installer" >&2; exit 1; fi
           spctl -a -vvv -t install "$app"
           codesign --verify --deep --strict --verbose=2 "$app"
+          xcrun stapler validate "$app"
 
       - name: Upload release assets
         uses: actions/upload-artifact@v7
