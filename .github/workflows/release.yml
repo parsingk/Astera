@@ -2,17 +2,30 @@ name: Release
 
 # Push a vX.Y.Z tag to cut a release:
 #   bump version in package.json -> commit -> git tag vX.Y.Z && git push origin vX.Y.Z
-# This builds the Windows installer, optionally code-signs it through SignPath (see below), publishes
-# it to GitHub Releases, and installed apps pick it up through electron-updater.
+# Builds the Windows installer and the macOS (universal) dmg/zip, code-signs them where possible, and
+# publishes them to GitHub Releases. Installed apps pick up the new version through electron-updater.
 #
-# Code signing is FAIL-OPEN: when the SignPath secret/variables are not configured the signing steps
-# are skipped and the release ships unsigned, exactly as before. Once signing is attempted, however,
-# it is FAIL-CLOSED: a signing failure fails the build rather than shipping a half-signed release.
-# Setup (docs/releasing.md has the full walkthrough):
-#   secret SIGNPATH_API_TOKEN            - SignPath REST API token
-#   variable SIGNPATH_ORGANIZATION_ID    - from the SignPath organization page
-#   variable SIGNPATH_PROJECT_SLUG       - the SignPath project (e.g. astera)
-#   variable SIGNPATH_POLICY_SLUG        - optional, defaults to release-signing
+# The shape is validate -> {windows, macos} -> publish. Publish is a separate job because both
+# platforms' assets must land before the release goes public — latest.yml / latest-mac.yml are the
+# update feeds, so a release with only one platform's assets attached would advertise an installer
+# that does not exist yet.
+#
+# Code signing is FAIL-OPEN on both platforms: when the relevant secrets/variables are not configured
+# the signing steps are skipped and the release ships unsigned, exactly as before. Once signing is
+# attempted, however, it is FAIL-CLOSED: a signing or notarization failure fails the build rather than
+# shipping a half-signed release.
+#
+# Windows (SignPath, docs/releasing.md has the full walkthrough):
+#   secret   SIGNPATH_API_TOKEN            - SignPath REST API token
+#   variable SIGNPATH_ORGANIZATION_ID      - from the SignPath organization page
+#   variable SIGNPATH_PROJECT_SLUG         - the SignPath project (e.g. astera)
+#   variable SIGNPATH_POLICY_SLUG          - optional, defaults to release-signing
+# macOS (Apple Developer ID):
+#   secret   APPLE_CSC_LINK                - base64 of the Developer ID Application .p12
+#   secret   APPLE_CSC_KEY_PASSWORD        - password for that .p12
+#   secret   APPLE_ID                      - Apple account used for notarization
+#   secret   APPLE_APP_SPECIFIC_PASSWORD   - app-specific password for that account
+#   secret   APPLE_TEAM_ID                 - Developer Team ID
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+']
@@ -22,20 +35,14 @@ permissions:
   actions: read # the SignPath connector fetches the unsigned artifact through the Actions API
 
 jobs:
-  windows:
+  # Tag and policy validation only need to run once, regardless of which platforms get built. It must
+  # fail before any platform build starts, so we don't waste runner time on a build that was doomed
+  # anyway. This stays on a windows-latest runner because the two steps below are pwsh, unchanged from
+  # when they lived in the windows job.
+  validate:
     runs-on: windows-latest
-    env:
-      # Signing engages only when the token and the organization id are both present. Forks and local
-      # checkouts have neither, so their builds behave exactly like the pre-signing workflow.
-      SIGNING: ${{ secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' }}
     steps:
       - uses: actions/checkout@v4
-
-      # Must match ci.yml: @electron/rebuild and node-abi require >=22.12.0.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
 
       # electron-updater decides whether an update exists by comparing versions, so a tag that
       # disagrees with package.json would advertise the wrong version. Fail before building.
@@ -84,6 +91,22 @@ jobs:
             }
             Write-Host "Update campaign: notify (id=$($policy.id))"
           }
+
+  windows:
+    needs: validate
+    runs-on: windows-latest
+    env:
+      # Signing engages only when the token and the organization id are both present. Forks and local
+      # checkouts have neither, so their builds behave exactly like the pre-signing workflow.
+      SIGNING: ${{ secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Must match ci.yml: @electron/rebuild and node-abi require >=22.12.0.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
 
       - run: npm ci
 
@@ -229,24 +252,109 @@ jobs:
           Write-Host "Installer signed by: $($sig.SignerCertificate.Subject)"
           node scripts/patch-update-feed.cjs $target.FullName dist-installer/latest.yml
 
-      # The release is created as a draft and only flipped to public once every asset is attached.
-      # That ordering matters: latest.yml IS the update feed, and a half-finished release would
-      # advertise a version whose installer is not there yet. policy.json rides along because the app
-      # fetches it from releases/latest/download/policy.json.
+      # Publishing happens in the publish job, once it has both platforms' assets. This job only
+      # hands its assets off.
+      - name: Upload release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-windows
+          path: |
+            dist-installer/*-setup.exe
+            dist-installer/*-setup.exe.blockmap
+            dist-installer/latest.yml
+          retention-days: 1
+
+  macos:
+    needs: validate
+    runs-on: macos-latest
+    env:
+      # Fail-open like Windows's SignPath: forks without the secrets pass through unsigned. Once the
+      # secrets are present it flips to fail-closed — a signing or notarization failure kills the
+      # build.
+      SIGNING: ${{ secrets.APPLE_CSC_LINK != '' && secrets.APPLE_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # Signed path. electron-builder builds a temporary keychain from CSC_LINK to sign the app, then
+      # hands off to notarytool to notarize it. No need to split this into two stages like Windows —
+      # unlike SignPath there is no approval wait, so signing finishes during packaging.
+      - name: Build signed and notarized package
+        if: env.SIGNING == 'true'
+        env:
+          CSC_LINK: ${{ secrets.APPLE_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          npm run build
+          npx electron-builder --mac --publish never
+
+      # Unsigned path (forks, or secrets not configured). Turns off notarization and automatic
+      # certificate discovery — without the latter, electron-builder would grab some unrelated
+      # certificate from the runner's keychain and fail trying to sign with it.
+      - name: Build unsigned package
+        if: env.SIGNING != 'true'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          npm run build
+          npx electron-builder --mac --publish never -c.mac.notarize=false
+
+      # Fail-closed once signing was attempted: verify the notarization ticket is actually stapled,
+      # and die if not. A half-signed release shipping is worse than an unsigned one.
+      - name: Verify notarization
+        if: env.SIGNING == 'true'
+        run: |
+          app=$(find dist-installer -maxdepth 2 -name 'Astera.app' -print -quit)
+          if [ -z "$app" ]; then echo "Astera.app not found in dist-installer" >&2; exit 1; fi
+          spctl -a -vvv -t install "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-macos
+          path: |
+            dist-installer/*.dmg
+            dist-installer/*.dmg.blockmap
+            dist-installer/*-mac.zip
+            dist-installer/*-mac.zip.blockmap
+            dist-installer/latest-mac.yml
+          retention-days: 1
+
+  # The release is created as a draft and only made public once every asset is attached. That
+  # ordering is the whole point: latest.yml / latest-mac.yml ARE the update feeds, so a half-built
+  # release would advertise an installer that isn't there yet. policy.json rides along because the
+  # app fetches it from releases/latest/download/policy.json.
+  publish:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v5
+        with:
+          path: assets
+          merge-multiple: true
+
       - name: Create draft release and upload assets
-        shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = '${{ github.ref_name }}'
-          gh release view $tag 2>$null
-          if ($LASTEXITCODE -ne 0) { gh release create $tag --draft --title $tag --generate-notes }
-          $assets = @(Get-ChildItem dist-installer -File | Where-Object { $_.Name -match '-setup\.exe(\.blockmap)?$|^latest\.yml$' } | ForEach-Object { $_.FullName })
-          $assets += 'policy.json'
-          gh release upload $tag @assets --clobber
+          tag='${{ github.ref_name }}'
+          gh release view "$tag" >/dev/null 2>&1 || \
+            gh release create "$tag" --draft --title "$tag" --generate-notes
+          gh release upload "$tag" assets/* policy.json --clobber
 
       - name: Publish the release
-        shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit '${{ github.ref_name }}' --draft=false --latest

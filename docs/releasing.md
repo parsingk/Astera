@@ -144,6 +144,22 @@ be released, so this happens *after* the first public release. Note that the cer
 Known limitation: the uninstaller embedded inside the NSIS installer is generated during packaging
 and stays unsigned — signing it would require a certificate on the build machine itself.
 
+## macOS releases
+
+### Verifying the first macOS release
+
+The first time you push a tag after this workflow change, check the following in order.
+
+1. Bump `version` in `package.json`, commit, then `git tag vX.Y.Z && git push origin main --tags`
+2. In Actions, confirm all four jobs (`validate`, `windows`, `macos`, `publish`) go green. It's normal
+   for `macos` to take 5-20 minutes waiting on notarization.
+3. On the release page, confirm all 7 assets are attached —
+   `astera-X.Y.Z-setup.exe`, its `.blockmap`, `latest.yml`,
+   `astera-X.Y.Z-universal.dmg`, `astera-X.Y.Z-universal-mac.zip`, `latest-mac.yml`, `policy.json`.
+4. **Actually verify auto-update.** With the previous version installed and running on macOS, launch
+   it and an update notice should appear; accepting and restarting should land on the new version. If
+   this step fails, the cause is almost always signing — Squirrel.Mac refuses unsigned updates.
+
 ## Notes
 
 - Until SignPath is enabled, the installer is unsigned and Windows SmartScreen warns on first run
