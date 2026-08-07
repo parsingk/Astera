@@ -96,8 +96,8 @@ npm run dist:win   # Windows installer
 npm run dist:mac   # macOS universal dmg + zip
 ```
 
-`npm run dist` reads the committed icon assets (`build/icon.ico` on Windows, `build/icon.icns` and the
-tray templates on macOS) rather than generating them. If you change the logo, replace
+`npm run dist` reads the committed icon assets (`build/icon.ico` on Windows, `build/icon.icns` on
+macOS, and the shared `resources/tray.png` on both) rather than generating them. If you change the logo, replace
 `resources/logo-source.png` and re-run the matching script on its own platform — `powershell -File
 scripts/gen-icon.ps1` (ico/png) on Windows, `sh scripts/gen-icon-mac.sh` (icns) on
 macOS — then commit the regenerated assets.
