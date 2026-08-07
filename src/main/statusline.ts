@@ -58,6 +58,30 @@ process.stdin.on('end', finish)
 process.stdin.on('error', finish)
 `
 
+/**
+ * 캡처 스크립트를 돌릴 node의 절대경로.
+ *
+ * 왜 절대경로가 필요한가: statusLine/hook 설정의 command는 claude가 자기 셸로 실행한다. macOS에서
+ * node가 nvm·mise 하위에 있으면 그 셸이 rc를 안 읽어 `node`를 못 찾고, 실패가 조용하다(캡처
+ * 스크립트는 stdout으로만 말한다). 기동 시점에 한 번 풀어 박아두면 이 경로가 통째로 사라진다.
+ *
+ * 못 찾으면 'node'를 그대로 돌려준다 — 지금까지의 동작이고, PATH에 있으면 여전히 맞는다.
+ */
+export function resolveNodePath(
+  env: { PATH?: string },
+  exists: (p: string) => boolean,
+  platform: NodeJS.Platform
+): string {
+  const bin = platform === 'win32' ? 'node.exe' : 'node'
+  const delimiter = platform === 'win32' ? ';' : ':'
+  for (const dir of (env.PATH ?? '').split(delimiter)) {
+    if (dir === '') continue
+    const candidate = platform === 'win32' ? `${dir}\\${bin}` : `${dir}/${bin}`
+    if (exists(candidate)) return candidate
+  }
+  return 'node'
+}
+
 export class StatusLineManager {
   private readonly capturePath: string
   private readonly settingsFile: string
@@ -66,7 +90,11 @@ export class StatusLineManager {
   private readonly hooksSettingsFile: string
   readonly hookEventsDir: string // Watched by index.ts's HookEventWatcher
 
-  constructor(private userDataDir: string) {
+  constructor(
+    private userDataDir: string,
+    /** 캡처 스크립트를 돌릴 node. 기본값은 지금까지의 동작(PATH 조회)과 같다. */
+    private nodePath: string = 'node'
+  ) {
     this.capturePath = path.join(userDataDir, 'astera-statusline-capture.cjs')
     this.settingsFile = path.join(userDataDir, 'astera-statusline-settings.json')
     this.outDir = path.join(userDataDir, 'statusline')
@@ -81,13 +109,17 @@ export class StatusLineManager {
     await fs.writeFile(this.capturePath, CAPTURE_SCRIPT, 'utf8')
     const settings = {
       // It is a JSON string, so no shell escaping. Paths are normalised to forward slashes (fine on Windows too).
-      statusLine: { type: 'command', command: `node "${this.capturePath.replace(/\\/g, '/')}"`, padding: 0 }
+      statusLine: {
+        type: 'command',
+        command: `"${this.nodePath.replace(/\\/g, '/')}" "${this.capturePath.replace(/\\/g, '/')}"`,
+        padding: 0
+      }
     }
     await fs.writeFile(this.settingsFile, JSON.stringify(settings, null, 2), 'utf8')
     // For Slack notification sessions: statusLine plus the Stop, Notification and PreToolUse hooks. Hooks from
     // --settings merge with the account's global settings.json hooks and both run (measured). The global settings stay untouched.
     await fs.writeFile(this.hookCapturePath, HOOK_CAPTURE_SCRIPT, 'utf8')
-    const hookCmd = `node "${this.hookCapturePath.replace(/\\/g, '/')}"`
+    const hookCmd = `"${this.nodePath.replace(/\\/g, '/')}" "${this.hookCapturePath.replace(/\\/g, '/')}"`
     const hooksSettings = {
       ...settings,
       hooks: {

@@ -1,6 +1,7 @@
 import path from 'node:path'
 import os from 'node:os'
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { AccountRegistry } from '../core/accounts/registry'
 import { PROVIDERS, providerOf } from '../core/providers/meta'
 import { makeDescriptors, descriptorOf, isAmbientDir, type ProviderDescriptor } from '../core/providers/descriptor'
@@ -8,7 +9,7 @@ import { SessionManager } from '../core/sessions/manager'
 import { nodePtyFactory } from '../core/sessions/nodePtyFactory'
 import { HistoryIndex } from '../core/history/index'
 import { ProjectSettings } from '../core/projects/settings'
-import { StatusLineManager } from './statusline'
+import { StatusLineManager, resolveNodePath } from './statusline'
 import { parseStatusLinePayload } from '../core/usage/statusline'
 import { defaultAccountIdOf } from '../core/accounts/defaultAccount'
 import { RollConfigStore } from '../core/rolling/config'
@@ -122,7 +123,10 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   )
   // statusLine usage hook: prepares the capture script and settings file, and injects a session-scoped
   // statusLine via --settings on every session spawn. The global settings.json is never touched.
-  const statusLine = new StatusLineManager(userDataDir)
+  const statusLine = new StatusLineManager(
+    userDataDir,
+    resolveNodePath(process.env as { PATH?: string }, existsSync, process.platform)
+  )
   await statusLine.init()
   // descriptors is injected explicitly — left unspecified, each of them calls makeDescriptors(process.platform)
   // again, so every instance gets its own table (plus two command builders SessionManager never uses).
