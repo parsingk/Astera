@@ -65,6 +65,9 @@ function createWindow(): BrowserWindow {
     title: 'Astera',
     icon: APP_ICON, // window/taskbar icon (electron-builder win.icon only changes the installed exe icon)
     titleBarStyle: 'hidden',
+    // macOS: titleBarStyle:'hidden' 은 신호등 버튼을 남겨 좌상단에 띄운다. 기본 y 좌표는 32px
+    // 타이틀바보다 아래라 절반이 잘리므로 수직 중앙에 맞춘다. (버튼 높이 12px → (32-12)/2 = 10)
+    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : {}),
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false }
   })
   if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])

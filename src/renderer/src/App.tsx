@@ -146,53 +146,61 @@ function Titlebar({
   update: UpdateStatus | null
 }): React.JSX.Element {
   const { t } = useI18n()
+  // macOS 는 창 조작을 OS 신호등 버튼이 맡는다. 우리 버튼을 함께 그리면 같은 기능이 창 양끝에
+  // 두 벌 생긴다. .titlebar--mac 은 그 신호등이 앉을 좌측 여백을 만든다.
+  const isMac = window.api.platform === 'darwin'
   return (
-    <div className="titlebar" onDoubleClick={() => window.api.win.maximizeToggle()}>
+    <div
+      className={isMac ? 'titlebar titlebar--mac' : 'titlebar'}
+      onDoubleClick={() => window.api.win.maximizeToggle()}
+    >
       <div className="tb-brand" aria-hidden="true">
         <img className="tb-logo" src={logoUrl} alt="" />
         <span className="tb-name">Astera</span>
       </div>
       <UpdateIndicator update={update} />
-      <div className="tb-controls" onDoubleClick={(e) => e.stopPropagation()}>
-        <button
-          className="tb-btn"
-          aria-label={t('common.minimize')}
-          title={t('common.minimize')}
-          onClick={() => window.api.win.minimize()}
-        >
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
-            <line x1="1" y1="5" x2="9" y2="5" />
-          </svg>
-        </button>
-        <button
-          className="tb-btn"
-          aria-label={isMax ? t('common.restore') : t('common.maximize')}
-          title={isMax ? t('common.restore') : t('common.maximize')}
-          onClick={() => window.api.win.maximizeToggle()}
-        >
-          {isMax ? (
+      {!isMac && (
+        <div className="tb-controls" onDoubleClick={(e) => e.stopPropagation()}>
+          <button
+            className="tb-btn"
+            aria-label={t('common.minimize')}
+            title={t('common.minimize')}
+            onClick={() => window.api.win.minimize()}
+          >
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
-              <rect x="1" y="2.5" width="6" height="6" />
-              <rect x="2.5" y="1" width="6" height="6" />
+              <line x1="1" y1="5" x2="9" y2="5" />
             </svg>
-          ) : (
+          </button>
+          <button
+            className="tb-btn"
+            aria-label={isMax ? t('common.restore') : t('common.maximize')}
+            title={isMax ? t('common.restore') : t('common.maximize')}
+            onClick={() => window.api.win.maximizeToggle()}
+          >
+            {isMax ? (
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
+                <rect x="1" y="2.5" width="6" height="6" />
+                <rect x="2.5" y="1" width="6" height="6" />
+              </svg>
+            ) : (
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
+                <rect x="1" y="1" width="8" height="8" />
+              </svg>
+            )}
+          </button>
+          <button
+            className="tb-btn close"
+            aria-label={t('common.close')}
+            title={t('common.close')}
+            onClick={() => window.api.win.close()}
+          >
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
-              <rect x="1" y="1" width="8" height="8" />
+              <line x1="1" y1="1" x2="9" y2="9" />
+              <line x1="9" y1="1" x2="1" y2="9" />
             </svg>
-          )}
-        </button>
-        <button
-          className="tb-btn close"
-          aria-label={t('common.close')}
-          title={t('common.close')}
-          onClick={() => window.api.win.close()}
-        >
-          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
-            <line x1="1" y1="1" x2="9" y2="9" />
-            <line x1="9" y1="1" x2="1" y2="9" />
-          </svg>
-        </button>
-      </div>
+          </button>
+        </div>
+      )}
     </div>
   )
 }

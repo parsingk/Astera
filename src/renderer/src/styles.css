@@ -62,6 +62,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
   -webkit-app-region: drag;
   user-select: none;
 }
+/* macOS 신호등 버튼(닫기·최소화·최대화)이 앉을 자리. 3버튼 + 간격 + 좌우 여백 ≈ 78px.
+   main/index.ts 의 trafficLightPosition x=12 와 짝이다 — 한쪽만 바꾸면 겹치거나 뜬다. */
+.titlebar--mac .tb-brand { padding-left: 78px; }
 .tb-brand { display: flex; align-items: center; gap: 8px; padding-left: 10px; }
 .tb-logo {
   width: 20px;
