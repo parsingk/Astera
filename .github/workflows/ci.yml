@@ -5,14 +5,20 @@ on:
     branches: [main]
   pull_request:
 
-# Runs on Windows because that is the only target the app ships for, and because `npm ci` triggers
-# `electron-builder install-app-deps`, which rebuilds node-pty against the Electron ABI with MSVC.
+# Runs on both Windows and macOS because `npm ci` triggers `electron-builder install-app-deps`,
+# which compiles node-pty against the Electron ABI with a platform-specific toolchain (MSVC on
+# Windows, clang on macOS). A successful build on one platform proves nothing about the other.
+# If the build breaks here, it breaks in the release workflow too, so both platforms must be tested.
 #
 # There is no test job: test sources are not part of this repository (see .gitignore). Typecheck and
 # a full bundle build are what CI can verify here.
 jobs:
   build:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
