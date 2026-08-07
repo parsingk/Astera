@@ -20,6 +20,12 @@ extraResources:
   # Only the skill document that `astera help` reads is shipped as a resource.
   - from: resources/skills
     to: skills
+# Apache-2.0 section 4(a) requires recipients of the Work to be given a copy of the License, and the
+# installer is a distribution of it. extraFiles (not extraResources) puts this at the application root,
+# next to the LICENSE.electron.txt and LICENSES.chromium.html that electron-builder places there for the
+# bundled runtime — the same place a user would look for the rest of the licensing.
+extraFiles:
+  - LICENSE
 win:
   target: nsis
   icon: build/icon.ico
