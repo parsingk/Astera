@@ -2,7 +2,7 @@
 # macOS 앱 번들 아이콘을 브랜드 원본 하나에서 만든다.
 #   저장소 루트에서:  sh scripts/gen-icon-mac.sh
 #
-#   입력   resources/logo-source.png   (정사각. 어두운 타일 위 브랜드 마크)
+#   입력   resources/icon.png          (256x256 RGBA. gen-icon.ps1 이 라운드 마스크를 적용한 산출물)
 #   출력   build/icon.icns             16..1024 다해상도 (.app 번들 아이콘)
 #
 # gen-icon.ps1 의 macOS 짝이다. 그쪽은 System.Drawing 을 써서 Windows 에서만 돌고, 이쪽은
@@ -10,10 +10,19 @@
 # **원본을 공유하는 것이 요점이다**: 두 스크립트가 서로 다른 원본을 읽기 시작하면 두 플랫폼의
 # 아이콘이 시간이 지나며 조용히 어긋난다.
 #
-# 1024 슬롯은 확대 보간이다. 원본이 352x352 이기 때문인데, 이것이 브랜드 마크가 존재하는 최대
-# 해상도다 — 저장소 루트의 astera.png(1254x1254, gitignore) 는 브랜드 시트 전체이고 그 안의 앱
-# 아이콘 타일 자체가 약 370px 이다. Dock 과 Finder 가 실제로 쓰는 크기(<=512)에는 영향이 없고,
-# 나중에 더 큰 마크가 생기면 logo-source.png 를 갈아끼우고 이 스크립트를 다시 돌리면 된다.
+# **왜 logo-source.png 가 아니라 icon.png 를 읽는가 (실측):** logo-source.png 는 hasAlpha:no 이고
+# 타일의 둥근 테두리 **바깥**이 불투명한 남색으로 채워져 있다 (모서리 픽셀 [15,21,36]). 그대로
+# icns 를 만들면 Dock·Finder·Launchpad·앱 전환기가 임의 배경 위에 그릴 때 네 모서리가 어두운
+# 네모로 드러난다 — 커밋 dd6a006 "fix: cut the opaque corners off the app icon" 이 Windows 에서
+# 고친 바로 그 버그다. macOS 는 iOS 와 달리 앱 아이콘을 자동으로 둥글려주지 않으므로 더 눈에 띈다.
+# icon.png 는 gen-icon.ps1 이 이미 타일의 실루엣으로 클리핑해 둔 산출물이라 모서리가 투명하다
+# (모서리 픽셀 [0,0,0,0]).
+#
+# 대가는 해상도다: icon.png 는 256x256 이라 512 는 2배, 1024 는 4배 확대 보간이 된다. 마스크를
+# 여기서 직접 그려 352px 원본을 쓰는 편이 더 선명하겠지만, sips 에는 합성 기능이 없고 이 저장소는
+# ImageMagick 의존을 의도적으로 피한다 (gen-icon.ps1 헤더 참고). 모서리가 맞는 쪽이 선명한 쪽보다
+# 중요하다 — 확대는 조금 흐릴 뿐이지만 불투명 모서리는 명백한 결함이다. 더 선명하게 하려면
+# gen-icon.ps1 이 512 나 1024 짜리 마스크 적용본도 내보내게 하고 여기서 그걸 읽으면 된다.
 #
 # **트레이 아이콘은 여기서 만들지 않는다.** macOS 메뉴바의 템플릿 이미지는 알파만 읽어 시스템이
 # 색을 칠하는데, logo-source.png 는 hasAlpha:no 이고 마크가 불투명한 타일 위에 얹혀 있다. 그대로
@@ -23,7 +32,7 @@
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-src="$root/resources/logo-source.png"
+src="$root/resources/icon.png"
 build="$root/build"
 
 [ -f "$src" ] || { echo "원본을 찾을 수 없다: $src" >&2; exit 1; }
