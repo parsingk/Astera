@@ -72,6 +72,12 @@ sessionBus.init()
 // gestures rather than key combinations, though, and leaving them as-is would strand text in the
 // wrong language — those two clear keys and render a translated label from gestureKey (a MessageKey)
 // inside the <kbd> instead.
+// Most of the Ctrl-labelled entries below are actually platform-dependent: terminal copy/paste,
+// explorer save/select-all/cut/copy/paste/undo are all Cmd on macOS (see MOD below), so they are
+// built with MOD rather than a literal 'Ctrl'. The one deliberate exception is 'Ctrl+Enter' (terminal
+// newline) — TerminalView.tsx leaves that one alone on both platforms because Claude Code reads
+// Ctrl+Enter as a newline regardless of OS. F2 and Delete are also unchanged across platforms.
+const MOD = window.api.platform === 'darwin' ? 'Cmd' : 'Ctrl'
 const SHORTCUTS: Array<{
   group: MessageKey
   items: Array<{ keys: string[]; desc: MessageKey; gestureKey?: MessageKey }>
@@ -80,8 +86,8 @@ const SHORTCUTS: Array<{
     group: 'shortcut.group.terminal',
     items: [
       { keys: ['Ctrl+Enter'], desc: 'shortcut.terminal.newline' },
-      { keys: ['Ctrl+C'], desc: 'shortcut.terminal.copyOrInterrupt' },
-      { keys: ['Ctrl+V'], desc: 'shortcut.paste' }
+      { keys: [`${MOD}+C`], desc: 'shortcut.terminal.copyOrInterrupt' },
+      { keys: [`${MOD}+V`], desc: 'shortcut.paste' }
     ]
   },
   {
@@ -99,15 +105,15 @@ const SHORTCUTS: Array<{
   {
     group: 'shortcut.group.explorer',
     items: [
-      { keys: ['Ctrl+S'], desc: 'shortcut.explorer.saveFile' },
+      { keys: [`${MOD}+S`], desc: 'shortcut.explorer.saveFile' },
       { keys: ['F2'], desc: 'shortcut.explorer.rename' },
       { keys: ['Delete'], desc: 'shortcut.explorer.delete' },
-      { keys: ['Ctrl+A'], desc: 'shortcut.explorer.selectAll' },
-      { keys: ['Ctrl+X'], desc: 'shortcut.explorer.cut' },
-      { keys: ['Ctrl+C'], desc: 'shortcut.explorer.copy' },
-      { keys: ['Ctrl+V'], desc: 'shortcut.paste' },
+      { keys: [`${MOD}+A`], desc: 'shortcut.explorer.selectAll' },
+      { keys: [`${MOD}+X`], desc: 'shortcut.explorer.cut' },
+      { keys: [`${MOD}+C`], desc: 'shortcut.explorer.copy' },
+      { keys: [`${MOD}+V`], desc: 'shortcut.paste' },
       { keys: [], gestureKey: 'shortcut.gesture.itemDrag', desc: 'shortcut.explorer.move' },
-      { keys: ['Ctrl+Z'], desc: 'shortcut.explorer.undo' }
+      { keys: [`${MOD}+Z`], desc: 'shortcut.explorer.undo' }
     ]
   }
 ]
