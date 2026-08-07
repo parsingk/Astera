@@ -142,9 +142,11 @@ export const ko = {
   'settings.worktree.change': '변경…',
   'settings.worktree.hint':
     '새 worktree가 이 폴더 아래 <repo명>/<이름>으로 생성됩니다. 기존 worktree는 이동하지 않습니다.',
-  'settings.cliMissing.title': 'Claude Code CLI를 찾을 수 없습니다',
+  // This screen only shows when NEITHER CLI is present — one of the two is enough to open the app.
+  'settings.cliMissing.title': '실행할 CLI를 찾을 수 없습니다',
   'settings.cliMissing.bodyPre': '이 앱은 설치된',
-  'settings.cliMissing.bodyPost': 'CLI를 실행하는 런처입니다. CLI 설치 후 앱을 다시 시작하세요.',
+  'settings.cliMissing.bodyPost':
+    'CLI를 실행하는 런처입니다. 둘 중 하나를 설치한 뒤 앱을 다시 시작하세요.',
   'settings.cliMissing.install': '설치:',
   // App.tsx — update status (the title-bar UpdateIndicator / the settings Info tab)
   'update.tb.restartInstallVersion': '재시작하여 v{version} 설치',
@@ -386,8 +388,11 @@ export const ko = {
   // NewSessionDialog.tsx — the new-session modal
   'session.new.title': '새 세션',
   'session.new.runningWarning': '실행 중 세션이 {count}개입니다. 성능 저하가 있을 수 있습니다.',
+  // Either CLI alone is enough to open the app, so the missing one can be either — the wording is
+  // picked per the selected account's provider, and the closing sentence is shared.
   'session.new.codexMissingPre': 'Codex CLI를 찾을 수 없습니다.',
-  'session.new.codexMissingPost': '설치 후 다시 시도하세요.',
+  'session.new.claudeMissingPre': 'Claude Code CLI를 찾을 수 없습니다.',
+  'session.new.cliMissingPost': '설치 후 다시 시도하세요.',
   'session.field.projectFolder': '프로젝트 폴더',
   'session.field.account': '계정',
   'session.new.folderNotSelected': '(선택 안 됨)',

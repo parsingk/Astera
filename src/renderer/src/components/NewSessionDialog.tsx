@@ -44,7 +44,8 @@ export function NewSessionDialog({
   const [slackNotify, setSlackNotify] = useState(false) // Slack progress notifications
   const [bypassPermissions, setBypassPermissions] = useState(false) // start without permission prompts
   const [slackReady, setSlackReady] = useState(false) // whether a webhook URL is configured — the checkbox is disabled when it is not
-  const [codexCliOk, setCodexCliOk] = useState(true) // blocks start when codex is not installed
+  // Both CLIs, because either one can be the missing one — the app opens with just one installed
+  const [cliOk, setCliOk] = useState({ claude: true, codex: true })
   const [repoRoot, setRepoRoot] = useState<string | null>(null) // result of the git repo check
   const [resolvingRepo, setResolvingRepo] = useState(false) // blocks start while the check runs — stops a spawn with the previous repoRoot
   const [useWorktree, setUseWorktree] = useState(false)
@@ -66,7 +67,7 @@ export function NewSessionDialog({
     // src/main/slack.ts — under the old condition that only looked at webhookUrl, a user who had set
     // only botToken + channelId could not tick the checkbox even though the bot path was actually on.
     void window.api.slack.getConfig().then((c) => setSlackReady(isSlackReady(c)))
-    void window.api.system.checkCli().then((c) => setCodexCliOk(c.codex.ok))
+    void window.api.system.checkCli().then((c) => setCliOk({ claude: c.claude.ok, codex: c.codex.ok }))
   }, [])
 
   useEffect(() => {
@@ -108,11 +109,11 @@ export function NewSessionDialog({
 
   // Only the undefined-tolerant wrapper is local to this file, the decision itself is delegated to providerOf
   const provider = (a: Account | undefined): Provider => (a ? providerOf(a) : 'claude')
-  // Only for gating the codex CLI install check (:171, :390) — rolling supports codex too
-  // (codexRolling.ts), and Slack notifications now support codex as well (turn completion is detected
-  // from rollout's task_complete). This flag must not hide either of those.
-  const isCodex = provider(accounts.find((a) => a.id === accountIds[0])) === 'codex'
   const primaryProvider = provider(accounts.find((a) => a.id === accountIds[0]))
+  // Whether the CLI this account needs is missing — the only thing that gates starting. Rolling
+  // supports codex too (codexRolling.ts) and so do Slack notifications (turn completion is detected
+  // from rollout's task_complete), so this flag must not hide either of those.
+  const primaryCliMissing = !cliOk[primaryProvider]
   // Per-slot options: this slot's current value plus any account no other slot uses (no duplicates).
   // Rolling slots (1 and 2) only offer accounts with the same provider as the primary account.
   const options = (slot: number): Account[] =>
@@ -170,10 +171,19 @@ export function NewSessionDialog({
         {runningCount >= SOFT_LIMIT && (
           <p className="warn">{t('session.new.runningWarning', { count: runningCount })}</p>
         )}
-        {isCodex && !codexCliOk && (
+        {primaryCliMissing && (
           <p className="warn">
-            {t('session.new.codexMissingPre')} <code>npm install -g @openai/codex</code>{' '}
-            {t('session.new.codexMissingPost')}
+            {t(
+              primaryProvider === 'codex'
+                ? 'session.new.codexMissingPre'
+                : 'session.new.claudeMissingPre'
+            )}{' '}
+            <code>
+              {primaryProvider === 'codex'
+                ? 'npm install -g @openai/codex'
+                : 'npm install -g @anthropic-ai/claude-code'}
+            </code>{' '}
+            {t('session.new.cliMissingPost')}
           </p>
         )}
         <div className="field">
@@ -328,7 +338,7 @@ export function NewSessionDialog({
               starting ||
               resolvingRepo ||
               accountIds.some((id) => !id) ||
-              (isCodex && !codexCliOk) ||
+              primaryCliMissing ||
               (schedOn && !schedule)
             }
             onClick={() => void start()}

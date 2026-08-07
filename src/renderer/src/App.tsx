@@ -632,7 +632,7 @@ export default function App(): React.JSX.Element {
         // cancelling leaves the layout untouched. pendingSplitRef is set only when the dialog actually
         // opens: if it does not, no cleanup path runs, the value lingers, and some later unrelated
         // session picks it up and splits unexpectedly.
-        if (cliRef.current?.claude.ok === true) {
+        if (cliRef.current?.claude.ok === true || cliRef.current?.codex.ok === true) {
           pendingSplitRef.current = dir
           setShowNew(true)
         }
@@ -1147,11 +1147,16 @@ export default function App(): React.JSX.Element {
     setActivePaneId(res.paneId)
   }
 
+  // Either CLI is enough to work with the app — someone who only uses Codex has no reason to install
+  // Claude Code. Which of the two an individual session needs depends on its account's provider, and
+  // that call belongs to the new-session dialog, which knows the account.
+  const anyCliOk = cli?.claude.ok === true || cli?.codex.ok === true
+
   /** A group's + button — moves the active group there first so the new session becomes that group's tab.
    *  spawn's placement reads activePaneIdRef, so this one line is enough. */
   const newInGroup = (paneId: string): void => {
     setActivePaneId(paneId)
-    if (cli?.claude.ok === true) setShowNew(true)
+    if (anyCliOk) setShowNew(true)
   }
 
   /** A drop on the tab bar — reorder within the same group, or move to that position in another group */
@@ -1492,17 +1497,23 @@ export default function App(): React.JSX.Element {
     }
   }, [usageSessionId])
 
-  if (cli && !cli.claude.ok) {
+  // Only when neither CLI is present is there nothing to launch. With one of the two installed the app
+  // opens as usual, and the new-session dialog blocks the accounts whose CLI is missing.
+  if (cli && !cli.claude.ok && !cli.codex.ok) {
     return (
       <div className="app">
         <Titlebar isMax={isMax} update={update} />
         <div className="cli-missing">
           <h1>{t('settings.cliMissing.title')}</h1>
           <p>
-            {t('settings.cliMissing.bodyPre')} <code>claude</code> {t('settings.cliMissing.bodyPost')}
+            {t('settings.cliMissing.bodyPre')} <code>claude</code> {t('common.or')} <code>codex</code>{' '}
+            {t('settings.cliMissing.bodyPost')}
           </p>
           <p>
             {t('settings.cliMissing.install')} <code>npm install -g @anthropic-ai/claude-code</code>
+          </p>
+          <p>
+            {t('settings.cliMissing.install')} <code>npm install -g @openai/codex</code>
           </p>
         </div>
       </div>
@@ -1652,7 +1663,7 @@ export default function App(): React.JSX.Element {
               schedStates={schedStates}
               busy={busy}
               draggingSessionId={dragSessionId}
-              newDisabled={cli?.claude.ok !== true}
+              newDisabled={!anyCliOk}
               onFocusPane={setActivePaneId}
               onSetRatio={(splitId, ratio) =>
                 setLayout((cur) => (cur ? setRatio(cur, splitId, ratio) : cur))
@@ -1673,9 +1684,9 @@ export default function App(): React.JSX.Element {
             {!active && (
               <button
                 className="placeholder primary"
-                disabled={cli?.claude.ok !== true}
+                disabled={!anyCliOk}
                 onClick={() => {
-                  if (cli?.claude.ok === true) setShowNew(true)
+                  if (anyCliOk) setShowNew(true)
                 }}
               >
                 {t('session.placeholder.start')}

@@ -1162,8 +1162,8 @@ export function registerIpc(
       return false
     }
   })
-  // Checks both CLIs in parallel. The renderer gates entry to the app on claude.ok, and starting a codex
-  // account session on codex.ok.
+  // Checks both CLIs in parallel. The renderer only blocks entry to the app when both are missing, and
+  // then gates starting a session on the CLI that the chosen account's provider needs.
   ipcMain.handle('system.checkCli', async () => {
     const check = (cli: string): Promise<{ ok: boolean; version?: string }> =>
       new Promise((resolve) => {
