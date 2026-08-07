@@ -318,8 +318,13 @@ export default function App(): React.JSX.Element {
   }
   const [fileBuffers, setFileBuffers] = useState<Record<string, FileBuffer>>({}) // file buffers — editing, saving, external changes
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    // 500 rather than the original 280. Account rows carry a provider badge, the label, the `default`
+    // badge and a login dot, and the history and worktree panels below them hold paths, so the default
+    // opens wide enough to read all three without dragging. It sits just under the 520 clamp — the user
+    // can only narrow it from here, which is the cheap direction.
+    // Only applies with no stored width; a width the user dragged is theirs and is never overridden.
     const v = Number(localStorage.getItem('cm.sidebarWidth'))
-    return v >= 160 && v <= 520 ? v : 280
+    return v >= 160 && v <= 520 ? v : 500
   })
   const sidebarRef = useRef<HTMLElement>(null)
 
