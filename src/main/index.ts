@@ -164,6 +164,15 @@ app.whenReady().then(async () => {
   // commands like Cmd+C/V/X/A/Z are provided by Electron's menu roles, so removing the menu would
   // kill those keys in every input field in the renderer. Hence a minimal, role-only menu on mac.
   Menu.setApplicationMenu(process.platform === 'darwin' ? buildMacMenu() : null)
+  // macOS takes the Dock icon from the running bundle's Info.plist, not from BrowserWindow's `icon`
+  // option (which is win32/linux only). In dev the bundle is node_modules/electron's own Electron.app,
+  // so the Dock shows the Electron logo — win32 has no such gap, because there the window icon is
+  // what the taskbar draws. Setting it explicitly closes that asymmetry.
+  //
+  // Only in dev: a packaged build already carries build/icon.icns as its bundle icon, and that file
+  // holds resolutions up to 1024 while APP_ICON is the 256px PNG. Overriding there would replace a
+  // sharp icon with an upscaled one.
+  if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(APP_ICON)
   // Launched from Finder on macOS, there's no login shell PATH. claude/codex/git/node are all looked
   // up via PATH, so this must be restored before createCore (= StatusLineManager.init, account detection).
   await applyLoginPath((m) => console.log(m))
