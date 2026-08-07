@@ -10,7 +10,7 @@
  *
  * The stored string and the displayed string are the same (`Ctrl+Shift+E`) — keybindings.json still reads
  * when a human opens it, and the settings screen and the docs can use the same notation.
- * macOS 에서는 주 수식어가 Cmd 다 (makeActions 참고). 저장 표기도 그대로 `Cmd+W` 형태다.
+ * On macOS the primary modifier is Cmd (see makeActions). The stored notation is still `Cmd+W`-shaped.
  */
 
 export type Chord = { ctrl: boolean; shift: boolean; alt: boolean; meta: boolean; code: string }
@@ -43,18 +43,20 @@ export type ActionSpec = {
 }
 
 /**
- * 플랫폼별 액션 목록.
+ * The per-platform action list.
  *
- * **왜 상수가 아니라 팩토리인가:** macOS 는 앱 단축키에 Cmd 를 쓴다. 그냥 취향이 아니라, 이 앱의
- * 주 화면이 터미널이기 때문이다 — Ctrl 조합은 xterm 을 거쳐 셸(readline, claude 자신)로 가야 하고,
- * 앱이 캡처 단계에서 삼키면 그 기능이 죽는다. 반대로 Cmd 는 셸이 쓰지 않으므로 안전하게 앱 것이다.
+ * **Why a factory instead of a constant:** macOS uses Cmd for app shortcuts. That isn't just taste —
+ * this app's primary screen is a terminal, and Ctrl combos need to pass through xterm to the shell
+ * (readline, claude itself); if the app swallows them at the capture stage, that functionality dies.
+ * Cmd, by contrast, is safely the app's own since the shell never uses it.
  *
- * yieldsToTerminal 도 같은 이유로 플랫폼마다 다르다. win32 에서 Ctrl+W 가 양보하는 것은 터미널의
- * '앞 단어 삭제'가 우선이기 때문인데, Cmd+W 에는 경쟁자가 없으므로 양보할 이유가 없다.
+ * yieldsToTerminal differs per platform for the same reason. On win32, Ctrl+W yields because the
+ * terminal's 'delete previous word' takes priority, but Cmd+W has no competitor, so there's no
+ * reason to yield.
  */
 export function makeActions(platform: string): readonly ActionSpec[] {
   const mac = platform === 'darwin'
-  /** 앱 단축키의 주 수식어. mac=Cmd, 그 외=Ctrl */
+  /** The app shortcuts' primary modifier. mac=Cmd, everything else=Ctrl */
   const M = mac ? 'Cmd' : 'Ctrl'
   return [
     {
@@ -67,7 +69,7 @@ export function makeActions(platform: string): readonly ActionSpec[] {
       id: 'explorer.closeFileTab',
       defaults: [`${M}+W`],
       descKey: 'shortcut.explorer.closeFileTab',
-      // win32 의 Ctrl+W 는 터미널의 '앞 단어 삭제'에 양보한다. mac 의 Cmd+W 는 경쟁자가 없다.
+      // On win32, Ctrl+W yields to the terminal's 'delete previous word'. On mac, Cmd+W has no competitor.
       yieldsToTerminal: !mac
     },
     {
@@ -167,7 +169,7 @@ function codeToToken(code: string): string | null {
   return CODE_TO_TOKEN[code] ?? null
 }
 
-/** 'Ctrl+Shift+E' → chord. 읽을 수 없는 표기는 null. */
+/** 'Ctrl+Shift+E' → chord. An unreadable notation returns null. */
 export function parseChord(text: string): Chord | null {
   const parts = text.split('+').map((p) => p.trim())
   if (parts.length === 0 || parts.some((p) => p === '')) return null
@@ -185,7 +187,7 @@ export function parseChord(text: string): Chord | null {
   }
 }
 
-/** chord → 'Ctrl+Cmd+Alt+Shift+E'. 수식어 순서를 정규화한다. */
+/** chord → 'Ctrl+Cmd+Alt+Shift+E'. Normalizes modifier order. */
 export function formatChord(chord: Chord): string {
   const token = codeToToken(chord.code) ?? chord.code
   const parts: string[] = []
@@ -199,8 +201,8 @@ export function formatChord(chord: Chord): string {
 
 const MODIFIER_CODES = /^(Control|Shift|Alt|Meta|OS)(Left|Right)?$/
 
-/** 키 이벤트를 chord 로. 수식어 키 자체는 받지 않는다.
- *  (Meta 를 거부하던 규칙은 macOS 지원과 함께 사라졌다 — 거기서는 Cmd 가 주 수식어다.) */
+/** Converts a key event to a chord. Modifier keys themselves are not accepted.
+ *  (The rule that rejected Meta went away along with macOS support — there, Cmd is the primary modifier.) */
 export function chordFromEvent(e: KeyboardEvent): Chord | null {
   if (MODIFIER_CODES.test(e.code)) return null
   if (!codeToToken(e.code)) return null
@@ -219,7 +221,8 @@ export function matchesChord(chord: Chord, e: KeyboardEvent): boolean {
 
 export type Bindings = Record<ActionId, Chord[]>
 
-/** 사용자 설정을 기본값 위에 덮는다. 빈 배열은 '끔', 읽을 수 없는 바인딩과 모르는 액션은 무시한다. */
+/** Overlays user settings on top of the defaults. An empty array means 'off'; unreadable bindings
+ *  and unknown actions are ignored. */
 export function resolveBindings(
   overrides: Partial<Record<string, string[]>>,
   actions: readonly ActionSpec[]
@@ -244,7 +247,7 @@ export function findActionForEvent(
   return null
 }
 
-/** 같은 키가 둘 이상의 액션에 걸린 경우를 모은다. */
+/** Collects cases where the same key is bound to more than one action. */
 export function findConflicts(
   bindings: Bindings,
   actions: readonly ActionSpec[]
@@ -262,9 +265,10 @@ export function findConflicts(
 }
 
 /**
- * 터미널 안의 CLI 가 쓰는 키인가. 앱이 캡처 단계에서 삼키면 그 기능이 죽으므로 저장 전에 경고한다.
- * 막지는 않는다 — 자기 터미널 습관은 사용자가 안다 (의도된 결정).
- * mac 의 Cmd 조합은 chord.ctrl 이 false 라 자동으로 통과한다. 셸은 Cmd 를 쓰지 않는다.
+ * Is this a key the CLI inside the terminal uses. If the app swallows it at the capture stage that
+ * functionality dies, so this warns before saving. It doesn't block — the user knows their own
+ * terminal habits (a deliberate decision).
+ * mac's Cmd combos pass through automatically since chord.ctrl is false for them. The shell never uses Cmd.
  */
 export function riskyReasonKey(chord: Chord): string | null {
   if (chord.code === 'Tab' && !chord.ctrl) return 'shortcut.risk.cliMode' // Tab·Shift+Tab

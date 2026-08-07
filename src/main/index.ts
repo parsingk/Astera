@@ -58,19 +58,20 @@ function readPolicyUrl(): string | null {
 // App icons. electron-vite copies both into out (?asset) for dev and packaged builds alike.
 // The tray gets its own asset rather than a downscale of the window icon: at 16-24px the full tile
 // loses the mark, so tray.png is generated from a tighter crop (see scripts/gen-icon.ps1).
-// **macOS 도 이 컬러 자산을 그대로 쓴다.** 메뉴바의 관례는 템플릿 이미지(알파만 있는 단색)이고
-// 시스템이 다크/라이트와 강조 상태에 맞춰 색을 칠해주지만, 그러려면 배경이 투명한 마크-only
-// 자산이 있어야 한다. 지금 브랜드 자산은 마크가 불투명한 어두운 타일 위에 얹혀 있어
-// (logo-source.png 는 hasAlpha:no), 이대로 setTemplateImage(true) 를 걸면 메뉴바에 단색 라운드
-// 사각형이 뜬다. 컬러 아이콘은 관례에서 조금 벗어날 뿐 잘못 보이지는 않으므로, 마크-only
-// 아트워크가 생길 때까지 이쪽을 택한다.
+// **macOS uses this same color asset too.** The menu-bar convention is a template image (a solid
+// color with only alpha), which the system tints for dark/light and accent state — but that needs a
+// mark-only asset with a transparent background. The current brand asset has the mark sitting on an
+// opaque dark tile (logo-source.png is hasAlpha:no), so setting setTemplateImage(true) as-is would
+// show a solid rounded square in the menu bar. A color icon only deviates from convention rather than
+// looking wrong, so this is the choice until mark-only artwork exists.
 const APP_ICON = nativeImage.createFromPath(iconAsset)
 const TRAY_ICON = nativeImage.createFromPath(trayAsset)
 
 /**
- * macOS 전용 최소 메뉴. 항목을 늘리지 않는 것이 요점이다 — 여기 있는 것은 전부 '없으면 키보드
- * 단축키가 죽는' role 들이고, 앱 기능은 커스텀 타이틀바와 트레이가 맡는다.
- * Quit 은 app.quit 을 거쳐 before-quit 의 세션 정리를 그대로 탄다.
+ * A minimal macOS-only menu. Keeping the item count down is the whole point — everything here is a
+ * role that 'kills a keyboard shortcut if absent', and app functionality is handled by the custom
+ * titlebar and tray instead.
+ * Quit goes through app.quit and rides straight through before-quit's session cleanup.
  */
 function buildMacMenu(): Menu {
   return Menu.buildFromTemplate([
@@ -87,8 +88,9 @@ function createWindow(): BrowserWindow {
     title: 'Astera',
     icon: APP_ICON, // window/taskbar icon (electron-builder win.icon only changes the installed exe icon)
     titleBarStyle: 'hidden',
-    // macOS: titleBarStyle:'hidden' 은 신호등 버튼을 남겨 좌상단에 띄운다. 기본 y 좌표는 32px
-    // 타이틀바보다 아래라 절반이 잘리므로 수직 중앙에 맞춘다. (버튼 높이 12px → (32-12)/2 = 10)
+    // macOS: titleBarStyle:'hidden' leaves the traffic-light buttons floating in the top-left. The
+    // default y coordinate sits below our 32px titlebar and gets half-clipped, so this centers them
+    // vertically. (button height 12px → (32-12)/2 = 10)
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : {}),
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false }
   })
@@ -117,9 +119,9 @@ function createTray(win: BrowserWindow): void {
       { label: t(core!.lang, 'common.trayQuit'), click: () => app.quit() }
     ])
   )
-  // win32 는 더블클릭이 관례, macOS 메뉴바는 한 번 클릭이 관례다. mac 에서 setContextMenu 가
-  // 걸려 있으면 클릭이 메뉴를 여므로 'click' 은 붙이지 않는다 — 창 복원은 Dock 아이콘과
-  // 메뉴의 '열기'가 맡는다.
+  // win32's convention is double-click; the macOS menu bar's is a single click. On mac, with
+  // setContextMenu set, a click opens the menu, so 'click' isn't attached here — window restore is
+  // handled by the Dock icon and the menu's 'Open' instead.
   if (process.platform !== 'darwin') tray.on('double-click', () => win.show())
 }
 
@@ -138,8 +140,9 @@ app.on('second-instance', () => {
   mainWindow.focus()
 })
 
-// macOS: 창을 닫아도 앱은 살아 있고(win.on('close') 가 hide 로 돌린다) Dock 아이콘이 남는다.
-// 그 아이콘을 클릭하면 activate 가 오는데, 기본 동작만으로는 숨긴 창이 돌아오지 않는다.
+// macOS: closing the window leaves the app alive (win.on('close') redirects to hide) and the Dock
+// icon stays. Clicking that icon fires activate, but the default behavior alone won't bring the
+// hidden window back.
 app.on('activate', () => {
   if (!mainWindow) return
   if (mainWindow.isMinimized()) mainWindow.restore()
@@ -149,12 +152,12 @@ app.on('activate', () => {
 
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return // second instance — waits for quit without initializing
-  // win32 는 메뉴바를 쓰지 않는다 (커스텀 타이틀바가 그 자리다). macOS 는 다르다 — Cmd+C/V/X/A/Z
-  // 같은 편집 명령은 Electron 에서 메뉴 role 이 제공하므로, 메뉴를 없애면 렌더러의 모든 입력
-  // 필드에서 그 키들이 죽는다. 그래서 mac 에는 role 만 담긴 최소 메뉴를 둔다.
+  // win32 doesn't use a menu bar (the custom titlebar takes that spot). macOS is different — edit
+  // commands like Cmd+C/V/X/A/Z are provided by Electron's menu roles, so removing the menu would
+  // kill those keys in every input field in the renderer. Hence a minimal, role-only menu on mac.
   Menu.setApplicationMenu(process.platform === 'darwin' ? buildMacMenu() : null)
-  // macOS에서 Finder로 실행되면 로그인 셸의 PATH가 없다. claude/codex/git/node를 전부 PATH에서
-  // 찾으므로 createCore(=StatusLineManager.init, 계정 감지)보다 먼저 복구해야 한다.
+  // Launched from Finder on macOS, there's no login shell PATH. claude/codex/git/node are all looked
+  // up via PATH, so this must be restored before createCore (= StatusLineManager.init, account detection).
   await applyLoginPath((m) => console.log(m))
   core = await createCore(app.getPath('userData'), app.getLocale())
   const win = createWindow()
@@ -622,9 +625,10 @@ app.on('before-quit', () => {
   void slackInboxControllerRef?.stop() // Slack inbound socket cleanup — a failure must not block quit
   slackInboxControllerRef = null
 })
-// win32 는 창이 다 닫히면 끝낸다. macOS 는 정반대 관례이고, 이 앱은 그 관례가 실제로 맞는다 —
-// 백그라운드에서 세션이 돌고 롤링과 Slack 알림이 살아 있어야 한다. 실제 종료 경로는 트레이의
-// 'Quit' 과 mac 앱 메뉴의 Cmd+Q(둘 다 app.quit)뿐이다.
+// win32 quits once every window is closed. macOS has the opposite convention, and it genuinely fits
+// this app — sessions keep running in the background, and rolling and Slack notifications need to
+// stay alive. The only real quit paths are the tray's 'Quit' and the mac app menu's Cmd+Q (both go
+// through app.quit).
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })

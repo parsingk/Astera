@@ -33,7 +33,7 @@ export interface Account {
 
 export interface DetectCandidate {
   configDir: string
-  loggedIn: boolean // accounts/loginStatus.ts 의 판정 결과 (claude 는 macOS 에서 Keychain 도 본다)
+  loggedIn: boolean // the verdict from accounts/loginStatus.ts (claude also checks Keychain on macOS)
   suggestedLabel: string // email, falling back to the folder name; ~/.claude is 'default account'
   provider: Provider // distinguishes the sources when detection results are merged
 }
@@ -232,7 +232,7 @@ export interface CoreApi {
     create(input: { label: string; color?: string; provider?: Provider }): Promise<Account>
     import(input: { label: string; configDir: string; provider?: Provider }): Promise<Account>
     remove(id: string): Promise<void> // deregisters only — the disk is not touched
-    loginStatus(id: string): Promise<boolean> // accounts/loginStatus.ts 의 판정 결과 (claude 는 macOS 에서 Keychain 도 본다)
+    loginStatus(id: string): Promise<boolean> // the verdict from accounts/loginStatus.ts (claude also checks Keychain on macOS)
     detect(): Promise<DetectCandidate[]> // detection candidates, excluding already-registered config dirs
     email(id: string): Promise<string | null> // the login email of a registered account (for the list)
     emailOfDir(configDir: string, provider?: Provider): Promise<string | null> // the email of an unregistered folder (to prefill the import dialog)
@@ -475,15 +475,16 @@ export type RendererApi = CoreApi & {
   clipboard: ClipboardApi
   update: UpdateApi
   rolling: RollingApi
-  /** 렌더러의 플랫폼 분기용. 동기 값이라 첫 렌더에서 바로 쓸 수 있다 — 타이틀바 신호등 여백과
-   *  단축키 기본값이 이 값에 달려 있어, 비동기로 오면 첫 프레임이 틀린 레이아웃으로 그려진다.
+  /** For the renderer's platform branching. It's a synchronous value so it's usable on the very first
+   *  render — the titlebar's traffic-light margin and the default shortcuts both depend on it, and an
+   *  async value would draw the first frame with the wrong layout.
    *
-   *  타입이 NodeJS.Platform 이 아니라 string 인 이유: 이 파일은 tsconfig.web.json 에 등록되어
-   *  렌더러도 임포트하는데, 거기에는 @types/node 가 없어 전역 NodeJS 네임스페이스가 존재하지
-   *  않는다. 비교하는 값은 'darwin' 하나뿐이라 string 으로 충분하다.
-   *  (core/run/config.ts:41-42 가 같은 이유로 같은 선택을 했다 — 그 관례를 따른다.
-   *  `/// <reference types="node" />` 로 해결하지 말 것: 웹 컴파일 단위에 node 전역이 통째로
-   *  끌려 들어온다.) */
+   *  Why the type is string rather than NodeJS.Platform: this file is registered in tsconfig.web.json
+   *  and imported by the renderer too, which has no @types/node and so no global NodeJS namespace to
+   *  reference. The only value ever compared against is 'darwin', so string is enough.
+   *  (core/run/config.ts:41-42 made the same choice for the same reason — this follows that
+   *  convention. Do not fix it with `/// <reference types="node" />`: that drags the entire node
+   *  global into the web compilation unit.) */
   platform: string
   win: WindowApi
   app: AppControlApi

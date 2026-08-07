@@ -1,28 +1,29 @@
-// macOS GUI 앱의 PATH 복구.
+// PATH recovery for the macOS GUI app.
 //
-// Finder(또는 Dock, LaunchServices)로 실행된 .app은 로그인 셸을 거치지 않으므로 launchd의 기본
-// PATH(/usr/bin:/bin:/usr/sbin:/sbin)만 받는다. 이 앱이 spawn하는 것은 전부 사용자가 직접 설치한
-// 도구다 — claude(~/.local/bin), codex(npm 전역), git(Xcode CLT 또는 homebrew), node, gradle.
-// 복구하지 않으면 세션 생성이 통째로 실패한다.
+// A .app launched from Finder (or the Dock, or LaunchServices) never goes through a login shell, so
+// it only gets launchd's default PATH (/usr/bin:/bin:/usr/sbin:/sbin). Everything this app spawns is
+// a tool the user installed themselves — claude (~/.local/bin), codex (npm global), git (Xcode CLT or
+// homebrew), node, gradle. Without recovery, session creation fails outright.
 //
-// 왜 process.env.PATH를 직접 고치는가: 세션 env는 SessionManager.spawn이 { ...process.env }로
-// 만들고(core/sessions/manager.ts:153), TerminalManager의 exists()는 process.env.PATH를 직접 읽으며
-// (main/terminalManager.ts:15), jdkScanner와 git spawn도 마찬가지다. 한 곳을 고치면 전부 따라온다.
+// Why process.env.PATH is patched directly: session env is built by SessionManager.spawn as
+// { ...process.env } (core/sessions/manager.ts:153), TerminalManager's exists() reads
+// process.env.PATH directly (main/terminalManager.ts:15), and jdkScanner and git spawn do the same.
+// Fixing one place carries through everywhere.
 //
-// 왜 로그인 셸을 실제로 실행하는가: PATH는 .zshrc/.zprofile/.bash_profile 어디서든 조립될 수 있고,
-// homebrew·mise·asdf·nvm은 전부 rc 파일에서 shellenv를 evaluate한다. 정적으로 후보 디렉터리를
-// 나열하는 방식은 그 어느 것도 잡지 못한다.
+// Why an actual login shell gets run: PATH can be assembled from any of .zshrc/.zprofile/.bash_profile,
+// and homebrew/mise/asdf/nvm all evaluate shellenv from within an rc file. Statically listing candidate
+// directories would miss every one of them.
 import { execFile } from 'node:child_process'
 
-/** 마커로 감싸서 rc 파일이 뱉는 배너·경고와 PATH를 구분한다. */
+/** Wraps the value in markers to separate PATH from whatever banners/warnings the rc file prints. */
 const START = '__ASTERA_PATH__'
 const END = '__END__'
 const PROBE = `printf '%s%s%s' '${START}' "$PATH" '${END}'`
 
-/** rc 파일이 무한 대기(예: 입력을 기다리는 프롬프트)에 빠져도 기동을 막지 않도록 한다. */
+/** Keeps startup from stalling if the rc file hangs forever (e.g. a prompt waiting for input). */
 const PROBE_TIMEOUT_MS = 5_000
 
-/** 프로브 출력에서 PATH만 뽑는다. 마커가 없거나 사이가 비면 null. */
+/** Extracts just PATH from the probe output. Returns null if the markers are missing or empty in between. */
 export function parseLoginPath(stdout: string): string | null {
   const start = stdout.indexOf(START)
   if (start === -1) return null
@@ -34,11 +35,12 @@ export function parseLoginPath(stdout: string): string | null {
 }
 
 /**
- * 로그인 PATH를 앞에, 기존 PATH의 나머지를 뒤에 둔다.
+ * Puts the login PATH first, with the rest of the existing PATH's unique entries after it.
  *
- * 왜 대체가 아니라 병합인가: launchd가 넣어준 항목 중 로그인 셸에 없는 것이 있을 수 있고
- * (관리형 Mac의 MDM 프로파일 등), 그것들을 잃으면 잃은 줄도 모른다. 왜 로그인 PATH가 앞인가:
- * 사용자가 rc 파일에서 앞에 둔 순서(예: homebrew를 /usr/bin보다 앞)가 그 사용자의 의도다.
+ * Why merge instead of replace: some entries launchd added may not be in the login shell (an MDM
+ * profile on a managed Mac, for instance), and losing those would go unnoticed. Why login PATH goes
+ * first: whatever order the user set in their rc file (e.g. homebrew ahead of /usr/bin) is that
+ * user's intent.
  */
 export function mergePath(current: string | undefined, loginPath: string | null): string | undefined {
   if (loginPath === null) return current
@@ -52,36 +54,36 @@ export function mergePath(current: string | undefined, loginPath: string | null)
   return out.length > 0 ? out.join(':') : current
 }
 
-/** 로그인 셸에게 PATH를 물어본다. darwin이 아니면 셸을 실행조차 하지 않는다. */
+/** Asks the login shell for PATH. On anything but darwin, the shell isn't even launched. */
 export async function readLoginPath(opts: {
   platform: NodeJS.Platform
   shell: string | undefined
   run: (file: string, args: string[]) => Promise<string>
 }): Promise<string | null> {
   if (opts.platform !== 'darwin') return null
-  // SHELL이 비는 경우는 드물지만, 비면 macOS 기본값인 zsh를 쓴다.
+  // SHELL being empty is rare, but if it is, fall back to macOS's default of zsh.
   const shell = opts.shell || '/bin/zsh'
   try {
-    // -i(interactive)까지 주는 이유: nvm·mise 같은 버전 매니저는 .zshrc에서만 초기화되고,
-    // .zshrc는 비대화형 셸에서 읽히지 않는 경우가 많다.
+    // Why -i (interactive) is included: version managers like nvm/mise only initialize in .zshrc,
+    // and .zshrc is often not read by non-interactive shells.
     return parseLoginPath(await opts.run(shell, ['-ilc', PROBE]))
   } catch {
-    return null // 프로브 실패가 앱 기동을 막아서는 안 된다
+    return null // A probe failure must not block app startup
   }
 }
 
 function runShell(file: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(file, args, { timeout: PROBE_TIMEOUT_MS, encoding: 'utf8' }, (err, stdout) => {
-      // 종료 코드가 0이 아니어도 stdout에 마커가 있으면 성공으로 친다 — rc 파일 마지막 명령이
-      // 실패해 셸이 non-zero로 끝나는 경우가 흔하다.
+      // Treated as success if stdout has the markers even when the exit code is nonzero — it's
+      // common for the rc file's last command to fail and leave the shell exiting non-zero.
       if (err && !stdout) reject(err)
       else resolve(stdout)
     })
   })
 }
 
-/** process.env.PATH를 로그인 셸 PATH로 갱신한다. darwin이 아니면 아무것도 하지 않는다. */
+/** Updates process.env.PATH to the login shell's PATH. Does nothing on anything but darwin. */
 export async function applyLoginPath(log: (m: string) => void): Promise<void> {
   const before = process.env.PATH
   const loginPath = await readLoginPath({

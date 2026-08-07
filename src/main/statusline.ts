@@ -59,13 +59,15 @@ process.stdin.on('error', finish)
 `
 
 /**
- * 캡처 스크립트를 돌릴 node의 절대경로.
+ * The absolute path to the node that will run the capture script.
  *
- * 왜 절대경로가 필요한가: statusLine/hook 설정의 command는 claude가 자기 셸로 실행한다. macOS에서
- * node가 nvm·mise 하위에 있으면 그 셸이 rc를 안 읽어 `node`를 못 찾고, 실패가 조용하다(캡처
- * 스크립트는 stdout으로만 말한다). 기동 시점에 한 번 풀어 박아두면 이 경로가 통째로 사라진다.
+ * Why an absolute path is needed: the statusLine/hook config's command is executed by claude in its
+ * own shell. On macOS, if node lives under nvm/mise, that shell won't read the rc file and won't find
+ * `node`, and the failure is silent (the capture script only talks over stdout). Resolving this once
+ * at startup and baking it in makes this whole failure mode disappear.
  *
- * 못 찾으면 'node'를 그대로 돌려준다 — 지금까지의 동작이고, PATH에 있으면 여전히 맞는다.
+ * If it can't be found, this just returns 'node' — the prior behavior, and still correct as long as
+ * it's on PATH.
  */
 export function resolveNodePath(
   env: { PATH?: string },
@@ -92,7 +94,7 @@ export class StatusLineManager {
 
   constructor(
     private userDataDir: string,
-    /** 캡처 스크립트를 돌릴 node. 기본값은 지금까지의 동작(PATH 조회)과 같다. */
+    /** The node that will run the capture script. The default matches prior behavior (a PATH lookup). */
     private nodePath: string = 'node'
   ) {
     this.capturePath = path.join(userDataDir, 'astera-statusline-capture.cjs')

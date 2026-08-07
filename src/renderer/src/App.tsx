@@ -147,8 +147,9 @@ function Titlebar({
   update: UpdateStatus | null
 }): React.JSX.Element {
   const { t } = useI18n()
-  // macOS 는 창 조작을 OS 신호등 버튼이 맡는다. 우리 버튼을 함께 그리면 같은 기능이 창 양끝에
-  // 두 벌 생긴다. .titlebar--mac 은 그 신호등이 앉을 좌측 여백을 만든다.
+  // On macOS, window controls are handled by the OS traffic-light buttons. Drawing our own controls
+  // too would put the same functionality at both ends of the window. .titlebar--mac reserves the
+  // left-hand margin the traffic lights sit in.
   const isMac = window.api.platform === 'darwin'
   return (
     <div

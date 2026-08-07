@@ -30,29 +30,29 @@ mac:
   target:
     - target: dmg
       arch: [universal]
-    # zip 은 선택이 아니다 — electron-updater 의 macOS 업데이트 경로(Squirrel.Mac)는 zip 만 받는다.
-    # dmg 는 최초 설치용이고, 자동 업데이트는 이 zip 으로 이뤄진다.
+    # zip isn't optional — electron-updater's macOS update path (Squirrel.Mac) only accepts zip.
+    # dmg is for initial installs; auto-updates go through this zip.
     - target: zip
       arch: [universal]
   icon: build/icon.icns
   category: public.app-category.developer-tools
-  # Gatekeeper 와 공증의 전제 조건. 켜는 순간 entitlements 가 필수가 된다.
+  # A prerequisite for Gatekeeper and notarization. The moment this is on, entitlements becomes required.
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
-  # 자식 프로세스(node-pty 의 spawn-helper, Electron 헬퍼들)가 같은 권한을 물려받게 한다.
+  # Lets child processes (node-pty's spawn-helper, Electron's helpers) inherit the same entitlements.
   entitlementsInherit: build/entitlements.mac.plist
   gatekeeperAssess: false
-  # 공증. APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID 환경변수를 읽는다.
-  # 시크릿이 없는 포크의 빌드는 릴리스 워크플로가 이 값을 false 로 덮어 통과시킨다(fail-open).
+  # Notarization. Reads the APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID env vars.
+  # Forks that build without the secrets get this value overridden to false by the release workflow, so it passes (fail-open).
   notarize: true
-  # @electron/universal 은 두 아키텍처 빌드를 병합하며 같은 경로의 파일이 바이트까지 같기를
-  # 기대한다. node-pty 의 네이티브 산출물은 아키텍처마다 다르므로 x64 쪽을 따로 보관하게 한다.
-  # node-pty@1.1.0 은 node-gyp 의 build/Release/ 가 아니라 prebuilds/darwin-<arch>/ 에
-  # 아키텍처별 pty.node 와 spawn-helper 를 실어 보낸다 — 두 아키텍처 빌드 모두 asarUnpack 으로
-  # node-pty 전체를 그대로 포함하므로, 반대쪽 아키텍처 prebuild 사본이 바이트까지 동일하게 들어있다.
+  # @electron/universal merges the two architecture builds and expects files at the same path to be
+  # byte-identical. node-pty's native artifacts differ per architecture, so the x64 side is kept separately.
+  # node-pty@1.1.0 ships its per-architecture pty.node and spawn-helper under prebuilds/darwin-<arch>/
+  # rather than node-gyp's build/Release/ — both architecture builds include the whole of node-pty via
+  # asarUnpack anyway, so the other architecture's prebuild copy sits inside byte-identical either way.
   x64ArchFiles: '**/node_modules/node-pty/prebuilds/**'
 dmg:
-  # 공백 없는 자산 이름 — 릴리스 자산 URL 에 퍼센트 인코딩이 끼지 않게 한다 (nsis 와 같은 규칙).
+  # An asset name with no spaces — keeps percent-encoding out of release asset URLs (the same rule nsis follows).
   artifactName: ${name}-${version}-${arch}.${ext}
 win:
   target: nsis

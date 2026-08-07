@@ -1,34 +1,36 @@
 #!/bin/sh
-# macOS 앱 번들 아이콘을 브랜드 원본 하나에서 만든다.
-#   저장소 루트에서:  sh scripts/gen-icon-mac.sh
+# Builds the macOS app bundle icon from a single brand source.
+#   From the repo root:  sh scripts/gen-icon-mac.sh
 #
-#   입력   resources/icon.png          (256x256 RGBA. gen-icon.ps1 이 라운드 마스크를 적용한 산출물)
-#   출력   build/icon.icns             16..1024 다해상도 (.app 번들 아이콘)
+#   input  resources/icon.png          (256x256 RGBA. Output of gen-icon.ps1's rounded-mask pass)
+#   output build/icon.icns             16..1024 multi-resolution (.app bundle icon)
 #
-# gen-icon.ps1 의 macOS 짝이다. 그쪽은 System.Drawing 을 써서 Windows 에서만 돌고, 이쪽은
-# sips/iconutil 을 써서 macOS 에서만 돈다. 어느 쪽도 CI 의존이 아니다 — 생성물을 커밋한다.
-# **원본을 공유하는 것이 요점이다**: 두 스크립트가 서로 다른 원본을 읽기 시작하면 두 플랫폼의
-# 아이콘이 시간이 지나며 조용히 어긋난다.
+# The macOS counterpart to gen-icon.ps1. That one uses System.Drawing and only runs on Windows; this
+# one uses sips/iconutil and only runs on macOS. Neither is a CI dependency — the output is committed.
+# **Sharing the source is the whole point**: if the two scripts start reading different sources, the
+# two platforms' icons will quietly drift apart over time.
 #
-# **왜 logo-source.png 가 아니라 icon.png 를 읽는가 (실측):** logo-source.png 는 hasAlpha:no 이고
-# 타일의 둥근 테두리 **바깥**이 불투명한 남색으로 채워져 있다 (모서리 픽셀 [15,21,36]). 그대로
-# icns 를 만들면 Dock·Finder·Launchpad·앱 전환기가 임의 배경 위에 그릴 때 네 모서리가 어두운
-# 네모로 드러난다 — 커밋 dd6a006 "fix: cut the opaque corners off the app icon" 이 Windows 에서
-# 고친 바로 그 버그다. macOS 는 iOS 와 달리 앱 아이콘을 자동으로 둥글려주지 않으므로 더 눈에 띈다.
-# icon.png 는 gen-icon.ps1 이 이미 타일의 실루엣으로 클리핑해 둔 산출물이라 모서리가 투명하다
-# (모서리 픽셀 [0,0,0,0]).
+# **Why this reads icon.png rather than logo-source.png (measured):** logo-source.png is hasAlpha:no,
+# and the area **outside** the tile's rounded border is filled with opaque navy (corner pixel
+# [15,21,36]). Building an icns from that as-is means the Dock/Finder/Launchpad/app switcher, drawing
+# it over an arbitrary background, show dark squares at the four corners — the exact bug commit
+# dd6a006 "fix: cut the opaque corners off the app icon" fixed on Windows. macOS doesn't auto-round
+# app icons the way iOS does, so it's even more noticeable there. icon.png is gen-icon.ps1's output
+# already clipped to the tile's silhouette, so its corners are transparent (corner pixel [0,0,0,0]).
 #
-# 대가는 해상도다: icon.png 는 256x256 이라 512 는 2배, 1024 는 4배 확대 보간이 된다. 마스크를
-# 여기서 직접 그려 352px 원본을 쓰는 편이 더 선명하겠지만, sips 에는 합성 기능이 없고 이 저장소는
-# ImageMagick 의존을 의도적으로 피한다 (gen-icon.ps1 헤더 참고). 모서리가 맞는 쪽이 선명한 쪽보다
-# 중요하다 — 확대는 조금 흐릴 뿐이지만 불투명 모서리는 명백한 결함이다. 더 선명하게 하려면
-# gen-icon.ps1 이 512 나 1024 짜리 마스크 적용본도 내보내게 하고 여기서 그걸 읽으면 된다.
+# The cost is resolution: icon.png is 256x256, so 512 is a 2x upscale and 1024 is a 4x upscale
+# interpolation. Drawing the mask here directly against a 352px source would be sharper, but sips has
+# no compositing, and this repo deliberately avoids an ImageMagick dependency (see gen-icon.ps1's
+# header). Correct corners matter more than sharpness — upscaling is just a bit blurry, but opaque
+# corners are a visible defect. For sharper output, have gen-icon.ps1 also export a 512 or 1024
+# mask-applied version and read that here instead.
 #
-# **트레이 아이콘은 여기서 만들지 않는다.** macOS 메뉴바의 템플릿 이미지는 알파만 읽어 시스템이
-# 색을 칠하는데, logo-source.png 는 hasAlpha:no 이고 마크가 불투명한 타일 위에 얹혀 있다. 그대로
-# 템플릿으로 넣으면 메뉴바에 단색 라운드 사각형이 뜬다. 배경이 투명한 마크-only 자산이 있어야
-# 하고 그건 새 아트워크다 (sips 에는 알파 키잉이 없고, 이 저장소는 ImageMagick 의존을 피한다).
-# 그때까지 macOS 도 기존 컬러 resources/tray.png 를 그대로 쓴다 — src/main/index.ts 참고.
+# **The tray icon isn't built here.** macOS menu-bar template images read only alpha and let the
+# system tint them, but logo-source.png is hasAlpha:no with the mark sitting on an opaque tile. Fed in
+# as a template as-is, it shows a solid rounded square in the menu bar. That needs a mark-only asset
+# with a transparent background, which means new artwork (sips has no alpha keying, and this repo
+# avoids an ImageMagick dependency). Until then, macOS also uses the existing color resources/tray.png
+# — see src/main/index.ts.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -41,7 +43,7 @@ command -v iconutil >/dev/null || { echo "iconutil 이 없다 (macOS 에서 실�
 
 mkdir -p "$build"
 
-# iconutil 은 정해진 이름 규칙의 .iconset 디렉터리만 받는다.
+# iconutil only accepts an .iconset directory following a fixed naming convention.
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 iconset="$work/icon.iconset"

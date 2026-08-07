@@ -45,7 +45,7 @@ export interface ProviderDescriptor extends ProviderMeta {
   configDirEnv: string
   /** The name of the home default (ambient) config dir */
   ambientDirName: string
-  /** 이 계정이 로그인되어 있는가. 근거는 프로바이더와 플랫폼마다 다르다 — accounts/loginStatus.ts 참고 */
+  /** Is this account logged in. The evidence differs per provider and platform — see accounts/loginStatus.ts */
   isLoggedIn: LoginProbe
   /** The accounts root directory name — the caller (core.ts) assembles the absolute path */
   accountsRootName: string
@@ -89,7 +89,7 @@ export interface ProviderDescriptor extends ProviderMeta {
   busyTitleReliable: boolean
 }
 
-/** security(1) 를 돌려 종료 코드만 돌려준다. stdout/stderr 는 버린다 (존재 여부만 필요하다). */
+/** Runs security(1) and returns only the exit code. stdout/stderr are discarded (only existence matters). */
 function runSecurity(file: string, args: string[]): Promise<number> {
   return new Promise((resolve) => {
     execFile(file, args, { timeout: 5_000 }, (err) => {
@@ -100,7 +100,7 @@ function runSecurity(file: string, args: string[]): Promise<number> {
 
 export function makeDescriptors(
   platform: NodeJS.Platform,
-  /** 테스트에서 키체인 조회를 갈아끼우기 위한 자리. 실제 배선은 기본값을 그대로 쓴다. */
+  /** A seam for swapping in the keychain lookup in tests. Real wiring just uses the default. */
   homeDir: string = os.homedir(),
   keychainHas = makeSecurityKeychainHas(runSecurity)
 ): Record<Provider, ProviderDescriptor> {

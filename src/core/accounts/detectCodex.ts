@@ -114,8 +114,8 @@ async function collectCandidateDirs(homeDir: string): Promise<string[]> {
 export async function detectCodexConfigDirs(opts: {
   homeDir: string // os.homedir() injected (easier to test)
   excludeDirs: string[] // the configDirs already registered
-  /** 로그인 판정. codex 는 플랫폼 차이가 없으므로 기본값(auth.json 마커)에서 사실상 바뀌지 않는다 —
-   *  claude 쪽과 시그니처를 맞추기 위해서만 존재한다 (providers/descriptor.ts). */
+  /** The login probe. codex has no platform differences, so this never really deviates from the
+   *  default (the auth.json marker) — it exists only to match claude's signature (providers/descriptor.ts). */
   isLoggedIn?: (configDir: string) => Promise<boolean>
 }): Promise<DetectCandidate[]> {
   const { homeDir, excludeDirs } = opts

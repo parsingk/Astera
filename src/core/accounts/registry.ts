@@ -129,8 +129,8 @@ export class AccountRegistry {
 
   async loginStatus(id: string): Promise<boolean> {
     const account = this.get(id)
-    // 판정 근거는 프로바이더와 플랫폼마다 다르다 — claude 는 .credentials.json 또는 macOS
-    // Keychain, codex 는 auth.json. accounts/loginStatus.ts 가 그 갈래를 쥔다.
+    // The evidence differs per provider and platform — claude is .credentials.json or macOS
+    // Keychain, codex is auth.json. accounts/loginStatus.ts owns that branching.
     return descriptorOf(this.descriptors, account).isLoggedIn(account.configDir)
   }
 
