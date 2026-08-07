@@ -10,9 +10,10 @@
  *
  * The stored string and the displayed string are the same (`Ctrl+Shift+E`) — keybindings.json still reads
  * when a human opens it, and the settings screen and the docs can use the same notation.
+ * macOS 에서는 주 수식어가 Cmd 다 (makeActions 참고). 저장 표기도 그대로 `Cmd+W` 형태다.
  */
 
-export type Chord = { ctrl: boolean; shift: boolean; alt: boolean; code: string }
+export type Chord = { ctrl: boolean; shift: boolean; alt: boolean; meta: boolean; code: string }
 
 export type ActionId =
   | 'explorer.toggleMode'
@@ -41,71 +42,84 @@ export type ActionSpec = {
   yieldsToTerminal: boolean
 }
 
-/** The actions the global capture handler deals with. FileExplorer (F2·Delete·Ctrl+A/X/C/V) and CodeMirror
- *  (Ctrl+S) are handled by a different mechanism, so they are not in this list — the settings screen shows
- *  them separately as fixed entries. */
-export const ACTIONS: readonly ActionSpec[] = [
-  {
-    id: 'explorer.toggleMode',
-    defaults: ['Ctrl+Tab', 'Ctrl+Shift+E'],
-    descKey: 'shortcut.explorer.toggleMode',
-    yieldsToTerminal: false
-  },
-  {
-    id: 'explorer.closeFileTab',
-    defaults: ['Ctrl+W'],
-    descKey: 'shortcut.explorer.closeFileTab',
-    yieldsToTerminal: true
-  },
-  {
-    id: 'sessionTab.prev',
-    defaults: ['Ctrl+PageUp'],
-    descKey: 'shortcut.sessionTab.prev',
-    yieldsToTerminal: false
-  },
-  {
-    id: 'sessionTab.next',
-    defaults: ['Ctrl+PageDown'],
-    descKey: 'shortcut.sessionTab.next',
-    yieldsToTerminal: false
-  },
-  {
-    id: 'pane.splitRight',
-    defaults: ['Ctrl+\\'],
-    descKey: 'shortcut.pane.splitRight',
-    yieldsToTerminal: false
-  },
-  {
-    id: 'pane.splitDown',
-    defaults: ['Ctrl+Shift+\\'],
-    descKey: 'shortcut.pane.splitDown',
-    yieldsToTerminal: false
-  },
-  {
-    id: 'pane.focusLeft',
-    defaults: ['Ctrl+Shift+←'],
-    descKey: 'shortcut.pane.focusLeft',
-    yieldsToTerminal: false
-  },
-  {
-    id: 'pane.focusRight',
-    defaults: ['Ctrl+Shift+→'],
-    descKey: 'shortcut.pane.focusRight',
-    yieldsToTerminal: false
-  },
-  {
-    id: 'pane.focusUp',
-    defaults: ['Ctrl+Shift+↑'],
-    descKey: 'shortcut.pane.focusUp',
-    yieldsToTerminal: false
-  },
-  {
-    id: 'pane.focusDown',
-    defaults: ['Ctrl+Shift+↓'],
-    descKey: 'shortcut.pane.focusDown',
-    yieldsToTerminal: false
-  }
-]
+/**
+ * 플랫폼별 액션 목록.
+ *
+ * **왜 상수가 아니라 팩토리인가:** macOS 는 앱 단축키에 Cmd 를 쓴다. 그냥 취향이 아니라, 이 앱의
+ * 주 화면이 터미널이기 때문이다 — Ctrl 조합은 xterm 을 거쳐 셸(readline, claude 자신)로 가야 하고,
+ * 앱이 캡처 단계에서 삼키면 그 기능이 죽는다. 반대로 Cmd 는 셸이 쓰지 않으므로 안전하게 앱 것이다.
+ *
+ * yieldsToTerminal 도 같은 이유로 플랫폼마다 다르다. win32 에서 Ctrl+W 가 양보하는 것은 터미널의
+ * '앞 단어 삭제'가 우선이기 때문인데, Cmd+W 에는 경쟁자가 없으므로 양보할 이유가 없다.
+ */
+export function makeActions(platform: string): readonly ActionSpec[] {
+  const mac = platform === 'darwin'
+  /** 앱 단축키의 주 수식어. mac=Cmd, 그 외=Ctrl */
+  const M = mac ? 'Cmd' : 'Ctrl'
+  return [
+    {
+      id: 'explorer.toggleMode',
+      defaults: [`${M}+Tab`, `${M}+Shift+E`],
+      descKey: 'shortcut.explorer.toggleMode',
+      yieldsToTerminal: false
+    },
+    {
+      id: 'explorer.closeFileTab',
+      defaults: [`${M}+W`],
+      descKey: 'shortcut.explorer.closeFileTab',
+      // win32 의 Ctrl+W 는 터미널의 '앞 단어 삭제'에 양보한다. mac 의 Cmd+W 는 경쟁자가 없다.
+      yieldsToTerminal: !mac
+    },
+    {
+      id: 'sessionTab.prev',
+      defaults: [`${M}+PageUp`],
+      descKey: 'shortcut.sessionTab.prev',
+      yieldsToTerminal: false
+    },
+    {
+      id: 'sessionTab.next',
+      defaults: [`${M}+PageDown`],
+      descKey: 'shortcut.sessionTab.next',
+      yieldsToTerminal: false
+    },
+    {
+      id: 'pane.splitRight',
+      defaults: [`${M}+\\`],
+      descKey: 'shortcut.pane.splitRight',
+      yieldsToTerminal: false
+    },
+    {
+      id: 'pane.splitDown',
+      defaults: [`${M}+Shift+\\`],
+      descKey: 'shortcut.pane.splitDown',
+      yieldsToTerminal: false
+    },
+    {
+      id: 'pane.focusLeft',
+      defaults: [`${M}+Shift+←`],
+      descKey: 'shortcut.pane.focusLeft',
+      yieldsToTerminal: false
+    },
+    {
+      id: 'pane.focusRight',
+      defaults: [`${M}+Shift+→`],
+      descKey: 'shortcut.pane.focusRight',
+      yieldsToTerminal: false
+    },
+    {
+      id: 'pane.focusUp',
+      defaults: [`${M}+Shift+↑`],
+      descKey: 'shortcut.pane.focusUp',
+      yieldsToTerminal: false
+    },
+    {
+      id: 'pane.focusDown',
+      defaults: [`${M}+Shift+↓`],
+      descKey: 'shortcut.pane.focusDown',
+      yieldsToTerminal: false
+    }
+  ]
+}
 
 /** Display token ↔ KeyboardEvent.code. A key that is not here cannot be bound (deliberately). */
 const NAMED_CODES: Record<string, string> = {
@@ -153,28 +167,30 @@ function codeToToken(code: string): string | null {
   return CODE_TO_TOKEN[code] ?? null
 }
 
-/** 'Ctrl+Shift+E' → chord. null for notation that cannot be read, or anything including Meta. */
+/** 'Ctrl+Shift+E' → chord. 읽을 수 없는 표기는 null. */
 export function parseChord(text: string): Chord | null {
   const parts = text.split('+').map((p) => p.trim())
   if (parts.length === 0 || parts.some((p) => p === '')) return null
   const keyToken = parts[parts.length - 1]
   const modifiers = parts.slice(0, -1).map((m) => m.toLowerCase())
-  if (modifiers.some((m) => !['ctrl', 'shift', 'alt'].includes(m))) return null
+  if (modifiers.some((m) => !['ctrl', 'cmd', 'shift', 'alt'].includes(m))) return null
   const code = tokenToCode(keyToken)
   if (!code) return null
   return {
     ctrl: modifiers.includes('ctrl'),
     shift: modifiers.includes('shift'),
     alt: modifiers.includes('alt'),
+    meta: modifiers.includes('cmd'),
     code
   }
 }
 
-/** chord → 'Ctrl+Alt+Shift+E'. Normalizes the modifier order. */
+/** chord → 'Ctrl+Cmd+Alt+Shift+E'. 수식어 순서를 정규화한다. */
 export function formatChord(chord: Chord): string {
   const token = codeToToken(chord.code) ?? chord.code
   const parts: string[] = []
   if (chord.ctrl) parts.push('Ctrl')
+  if (chord.meta) parts.push('Cmd')
   if (chord.alt) parts.push('Alt')
   if (chord.shift) parts.push('Shift')
   parts.push(token)
@@ -183,18 +199,18 @@ export function formatChord(chord: Chord): string {
 
 const MODIFIER_CODES = /^(Control|Shift|Alt|Meta|OS)(Left|Right)?$/
 
-/** A key event into a chord. Modifier keys themselves and Meta combinations are not accepted. */
+/** 키 이벤트를 chord 로. 수식어 키 자체는 받지 않는다.
+ *  (Meta 를 거부하던 규칙은 macOS 지원과 함께 사라졌다 — 거기서는 Cmd 가 주 수식어다.) */
 export function chordFromEvent(e: KeyboardEvent): Chord | null {
-  if (e.metaKey) return null
   if (MODIFIER_CODES.test(e.code)) return null
   if (!codeToToken(e.code)) return null
-  return { ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey, code: e.code }
+  return { ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey, meta: e.metaKey, code: e.code }
 }
 
 export function matchesChord(chord: Chord, e: KeyboardEvent): boolean {
   return (
-    !e.metaKey &&
     e.ctrlKey === chord.ctrl &&
+    e.metaKey === chord.meta &&
     e.shiftKey === chord.shift &&
     e.altKey === chord.alt &&
     e.code === chord.code
@@ -203,30 +219,38 @@ export function matchesChord(chord: Chord, e: KeyboardEvent): boolean {
 
 export type Bindings = Record<ActionId, Chord[]>
 
-/** Overlays the user's settings onto the defaults. An empty array means 'off', and bindings that cannot be parsed and unknown actions are ignored. */
-export function resolveBindings(overrides: Partial<Record<string, string[]>>): Bindings {
+/** 사용자 설정을 기본값 위에 덮는다. 빈 배열은 '끔', 읽을 수 없는 바인딩과 모르는 액션은 무시한다. */
+export function resolveBindings(
+  overrides: Partial<Record<string, string[]>>,
+  actions: readonly ActionSpec[]
+): Bindings {
   const result = {} as Bindings
-  for (const action of ACTIONS) {
+  for (const action of actions) {
     const override = overrides[action.id]
     const source = Array.isArray(override) ? override : action.defaults
-    result[action.id] = source
-      .map(parseChord)
-      .filter((c): c is Chord => c !== null)
+    result[action.id] = source.map(parseChord).filter((c): c is Chord => c !== null)
   }
   return result
 }
 
-export function findActionForEvent(bindings: Bindings, e: KeyboardEvent): ActionId | null {
-  for (const action of ACTIONS) {
+export function findActionForEvent(
+  bindings: Bindings,
+  e: KeyboardEvent,
+  actions: readonly ActionSpec[]
+): ActionId | null {
+  for (const action of actions) {
     if (bindings[action.id]?.some((chord) => matchesChord(chord, e))) return action.id
   }
   return null
 }
 
-/** Collects the cases where the same key is bound to two or more actions. */
-export function findConflicts(bindings: Bindings): { key: string; actions: ActionId[] }[] {
+/** 같은 키가 둘 이상의 액션에 걸린 경우를 모은다. */
+export function findConflicts(
+  bindings: Bindings,
+  actions: readonly ActionSpec[]
+): { key: string; actions: ActionId[] }[] {
   const byKey = new Map<string, ActionId[]>()
-  for (const action of ACTIONS) {
+  for (const action of actions) {
     for (const chord of bindings[action.id] ?? []) {
       const key = formatChord(chord)
       byKey.set(key, [...(byKey.get(key) ?? []), action.id])
@@ -238,9 +262,9 @@ export function findConflicts(bindings: Bindings): { key: string; actions: Actio
 }
 
 /**
- * Is this a key the CLI inside the terminal uses. If the app swallows it at the capture phase that feature
- * dies, so a warning is raised before saving.
- * It is not blocked — the user knows their own terminal habits (a deliberate decision).
+ * 터미널 안의 CLI 가 쓰는 키인가. 앱이 캡처 단계에서 삼키면 그 기능이 죽으므로 저장 전에 경고한다.
+ * 막지는 않는다 — 자기 터미널 습관은 사용자가 안다 (의도된 결정).
+ * mac 의 Cmd 조합은 chord.ctrl 이 false 라 자동으로 통과한다. 셸은 Cmd 를 쓰지 않는다.
  */
 export function riskyReasonKey(chord: Chord): string | null {
   if (chord.code === 'Tab' && !chord.ctrl) return 'shortcut.risk.cliMode' // Tab·Shift+Tab

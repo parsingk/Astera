@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import {
-  ACTIONS,
   chordFromEvent,
   findConflicts,
   formatChord,
@@ -8,6 +7,7 @@ import {
   riskyReasonKey,
   type ActionId
 } from '../../../core/keys/binding'
+import { ACTIONS } from '../lib/actions'
 import { useI18n } from '../i18n/I18nProvider'
 import { confirmModal } from '../lib/confirm'
 import { toast } from '../lib/toast'
@@ -32,8 +32,8 @@ export function ShortcutSettings({
 }): React.JSX.Element {
   const { t } = useI18n()
   const [capturing, setCapturing] = useState<ActionId | null>(null)
-  const bindings = resolveBindings(overrides)
-  const conflicts = findConflicts(bindings)
+  const bindings = resolveBindings(overrides, ACTIONS)
+  const conflicts = findConflicts(bindings, ACTIONS)
 
   useEffect(() => {
     if (!capturing) return

@@ -18,7 +18,8 @@ import { ShortcutSettings } from './components/ShortcutSettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import type { RunConfig, RunStatus, TerminalBuffer } from '../../core/types'
 import { slackMode } from '../../core/slack/ready'
-import { ACTIONS, findActionForEvent, resolveBindings, type Bindings } from '../../core/keys/binding'
+import { findActionForEvent, resolveBindings, type Bindings } from '../../core/keys/binding'
+import { ACTIONS } from './lib/actions'
 import {
   MIN_CHECKING_MS,
   formatCheckedAt,
@@ -288,8 +289,8 @@ export default function App(): React.JSX.Element {
   // Keybindings. The global key handler is registered once at mount so it reads through a ref, and it
   // is also held as state so the settings screen can draw the list.
   const [keyOverrides, setKeyOverrides] = useState<Record<string, string[]>>({})
-  const bindingsRef = useRef<Bindings>(resolveBindings({}))
-  bindingsRef.current = resolveBindings(keyOverrides)
+  const bindingsRef = useRef<Bindings>(resolveBindings({}, ACTIONS))
+  bindingsRef.current = resolveBindings(keyOverrides, ACTIONS)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [explorerOpen, setExplorerOpen] = useState(false) // the file explorer toggle
   const [explorerPin, setExplorerPin] = useState<string | null>(null) // the pinned root when entering from history
@@ -579,7 +580,7 @@ export default function App(): React.JSX.Element {
     const onKey = (e: KeyboardEvent): void => {
       // The bindings come from the registry. Keys the user changed in settings arrive here too, so no
       // key is hardcoded in a condition. Matching is on e.code, so it is unaffected by IME state or Shift.
-      const action = findActionForEvent(bindingsRef.current, e)
+      const action = findActionForEvent(bindingsRef.current, e, ACTIONS)
       if (!action) return
       if (modalOpenRef.current || isConfirmOpen()) return
       const focusEl = document.activeElement as HTMLElement | null
