@@ -77,7 +77,15 @@ function buildMacMenu(): Menu {
   return Menu.buildFromTemplate([
     { role: 'appMenu' },
     { role: 'editMenu' },
-    { role: 'windowMenu' }
+    // Not the built-in 'windowMenu' role: its Close Window item carries the Cmd+W key equivalent, and
+    // NSMenu resolves key equivalents in performKeyEquivalent: before the key ever reaches the web
+    // view — so Cmd+W would always close the window instead of reaching explorer.closeFileTab, which
+    // this app also binds to Cmd+W on macOS. Rebuilt by hand with the close item omitted; the window
+    // is closed via the traffic-light button instead (which hides it to the tray, see win.on('close')).
+    {
+      label: 'Window',
+      submenu: [{ role: 'minimize' }, { role: 'zoom' }, { type: 'separator' }, { role: 'front' }]
+    }
   ])
 }
 
