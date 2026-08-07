@@ -405,8 +405,9 @@ meaningless and repeats the same failure indefinitely.
 **Only this session's PATH is modified** — the app does not touch the user or system PATH. So a shell
 the app did not start has no `astera`, and even if it did, it owns no Dispatch and can do nothing as a
 worker. On win32 the shuttle is two files (`astera.cmd` for cmd and PowerShell, the extension-less
-`astera` for bash — MSYS bash does not consult PATHEXT). Calling `astera` works from any shell, and
-when it does not, `"$ASTERA_CLI"` always does.
+`astera` for bash — MSYS bash does not consult PATHEXT). On macOS and other posix platforms it is a
+single extension-less `astera` file. Calling `astera` works from any shell, and when it does not,
+`"$ASTERA_CLI"` always does.
 
 An empty `ASTERA_CLI` means this session was not started by the app, or orchestration is off — enable
 it in settings and start a new session. Use this value too whenever a script needs the absolute path.

@@ -31,8 +31,10 @@ import { claudeLoginProbe, fileMarkerProbe, type LoginProbe } from '../accounts/
 // normalizePath in settingsSync.ts (:13) and normalize in detectCodex.ts (:7) are still alive and really
 // used, by isHomeClaudeDir and isAmbientCodexDir respectively — today they are exactly identical to this
 // rule (all of them path.resolve(p).toLowerCase()) but they are separate definitions. toLowerCase is the
-// wrong rule on Linux, but changing the semantics was out of scope — whoever fixes that later has to look
-// at all three places together.
+// wrong rule on Linux, and it is wrong on macOS too if the volume was formatted case-sensitive — but it
+// is right for the two platforms we actually support, since APFS is case-insensitive by default.
+// Changing the semantics was out of scope; whoever fixes that later has to look at all three places
+// together (here, settingsSync.ts:12, detectCodex.ts:7).
 const normalizePath = (p: string): string => path.resolve(p).toLowerCase()
 
 export interface ProviderDescriptor extends ProviderMeta {

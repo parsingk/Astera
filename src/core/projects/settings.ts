@@ -1,7 +1,8 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
-// win32 first: ignores path case (to be branched when macOS is supported)
+// win32 first: ignores path case. macOS's default APFS volume also ignores case, so the same rule
+// is correct there too.
 const normalize = (p: string): string => path.resolve(p).toLowerCase()
 
 function isValidMap(obj: unknown): obj is Record<string, string> {

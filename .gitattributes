@@ -1,6 +1,6 @@
-# Normalise line endings. Text files are stored as LF in the repository and checked out as LF, so a
-# Windows-only working tree cannot leak CRLF into the history — this project is developed on Windows
-# but read from everywhere.
+# Normalise line endings. Text files are stored as LF in the repository and checked out as LF; without
+# this rule a working tree on either platform this project is developed on — Windows and macOS — could
+# leak CRLF into the history.
 * text=auto eol=lf
 
 # Windows scripts have to keep CRLF: a .ps1 read by Windows PowerShell 5.1 can misparse LF-only files.

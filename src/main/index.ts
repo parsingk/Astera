@@ -25,6 +25,9 @@ import type { SessionInfo, RollStateEvent, UpdateCampaignInfo } from '../core/ty
 // orphans the installed app's HookEventWatcher (fs.watch) on the deleted directory and silently
 // stops its Slack notifications. Isolating the folder rules that out. This must run before
 // requestSingleInstanceLock and createCore.
+//
+// The same rule applies on macOS: APFS is case-insensitive by default, so 'Astera' and 'astera'
+// resolve to the same folder under ~/Library/Application Support.
 if (!app.isPackaged) app.setPath('userData', app.getPath('userData') + '-dev')
 
 let core: Core | null = null

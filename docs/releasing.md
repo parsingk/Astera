@@ -2,8 +2,8 @@
 
 Astera is released by **pushing a `vX.Y.Z` tag**. That triggers
 [`.github/workflows/release.yml`](../.github/workflows/release.yml), which builds the Windows
-installer, publishes it to GitHub Releases, and installed apps then update themselves through
-`electron-updater`.
+installer and the macOS universal package, publishes both to GitHub Releases, and installed apps
+then update themselves through `electron-updater`.
 
 ## Procedure
 
@@ -26,8 +26,10 @@ installer, publishes it to GitHub Releases, and installed apps then update thems
    > If the tag and `package.json` disagree the workflow fails immediately, before building — this is
    > what keeps the update feed from advertising the wrong version.
 
-4. **Check** the `Release / windows` run under **Actions**, then confirm the release page has
-   `latest.yml`, `astera-<version>-setup.exe`, the `.blockmap`, and `policy.json` attached. An older
+4. **Check** the `Release / validate`, `Release / windows`, `Release / macos`, and `Release / publish`
+   runs under **Actions**, then confirm the release page has all seven assets attached:
+   `latest.yml`, `astera-<version>-setup.exe`, its `.blockmap`, `latest-mac.yml`,
+   `astera-<version>-universal.dmg`, `astera-<version>-universal-mac.zip`, and `policy.json`. An older
    app picks the update up on its next check.
 
 ### How the workflow publishes
@@ -146,6 +148,41 @@ and stays unsigned — signing it would require a certificate on the build machi
 
 ## macOS releases
 
+### Code signing and notarization (Apple Developer ID)
+
+Same fail-open shape as the Windows SignPath step — with no secrets present, the build ships
+unsigned; once you add them, the workflow turns fail-closed and a signing or notarization failure
+fails the release rather than shipping a half-signed build.
+
+**Where it differs from Windows, and why it matters more here:** on macOS, signing is not optional
+the way it is on Windows. `electron-updater`'s macOS update path (Squirrel.Mac) refuses to install an
+unsigned update onto a running app, so **shipping unsigned means no auto-update at all** — only a
+manual dmg download works. Windows SmartScreen is just a first-run speed bump by comparison.
+
+Required secrets:
+
+| Name | Value |
+|---|---|
+| `APPLE_CSC_LINK` | base64 of the Developer ID Application `.p12` (`base64 -i cert.p12`) |
+| `APPLE_CSC_KEY_PASSWORD` | the password for that `.p12` |
+| `APPLE_ID` | the Apple account email used for notarization |
+| `APPLE_APP_SPECIFIC_PASSWORD` | an app-specific password for that account (not the account's own password) |
+| `APPLE_TEAM_ID` | the Developer Team ID (10-character alphanumeric) |
+
+The certificate must be a **Developer ID Application** type. `Apple Development` and `Mac App
+Distribution` certificates cannot sign builds distributed outside the App Store.
+
+Notarization is a round trip to Apple's servers and takes 5-20 minutes — it is normal for the
+`macos` job to run long while it waits.
+
+To verify a build locally:
+
+```bash
+spctl -a -vvv -t install dist-installer/mac-universal/Astera.app
+```
+
+Expect `accepted` and `source=Notarized Developer ID` in the output.
+
 ### Verifying the first macOS release
 
 The first time you push a tag after this workflow change, check the following in order.
@@ -165,5 +202,7 @@ The first time you push a tag after this workflow change, check the following in
 - Until SignPath is enabled, the installer is unsigned and Windows SmartScreen warns on first run
   (`More info` → `Run anyway`). Auto-update integrity does not depend on signing — it is verified
   against the sha512 in `latest.yml`.
-- `build/icon.ico` is committed rather than generated in CI, because `scripts/gen-icon.ps1` uses
-  System.Drawing and therefore only runs on Windows.
+- `build/icon.ico` and `build/icon.icns` are committed rather than generated in CI, because
+  `scripts/gen-icon.ps1` uses System.Drawing and only runs on Windows, and `scripts/gen-icon-mac.sh`
+  uses `sips`/`iconutil` and only runs on macOS. Since neither script can run on the other platform,
+  and CI never runs both, both scripts' output has to be committed by whoever regenerates it.

@@ -8,18 +8,18 @@
 [![Latest release](https://img.shields.io/github/v/release/parsingk/Astera?logo=github)](https://github.com/parsingk/Astera/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/parsingk/Astera/total)](https://github.com/parsingk/Astera/releases)
 [![License](https://img.shields.io/github/license/parsingk/Astera?color=blue)](LICENSE)
-![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D4?logo=windows&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-555?logo=apple&logoColor=white)
 
 [Download](#install) · [What it does](#what-it-does) · [Documentation](#documentation) · [Report a bug](https://github.com/parsingk/Astera/issues/new)
 
 </div>
 
-Astera is a Windows desktop app for people who keep more than one agent session going at once. It
+Astera is a desktop app for people who keep more than one agent session going at once. It
 holds the sessions side by side, switches accounts for you when a usage limit lands, isolates work in
 git worktrees, and lets one agent hand tasks to another and wait for the results.
 
-> **Status:** 1.0.0, Windows only. It drives the `claude` and `codex` CLIs, so it is only as capable
-> as whichever of those you have installed.
+> **Status:** 1.0.0, Windows and macOS. It drives the `claude` and `codex` CLIs, so it is only as
+> capable as whichever of those you have installed.
 
 ## Install
 
@@ -27,13 +27,14 @@ Download the latest `astera-<version>-setup.exe` from
 **[Releases](https://github.com/parsingk/Astera/releases/latest)** and run it. The app updates itself
 from there afterwards; it asks before downloading, since the payload is around 100 MB.
 
-> Releases are not code-signed yet, so Windows SmartScreen may warn on first run — click
-> **More info → Run anyway**. Signing through the SignPath Foundation's open-source program is being
-> set up; see [docs/releasing.md](docs/releasing.md) for the details.
+> Unsigned builds can have their first launch blocked by Windows SmartScreen or macOS Gatekeeper —
+> on Windows click **More info → Run anyway**, on macOS right-click the app and choose **Open** to
+> get past it. Signing through the SignPath Foundation's open-source program (Windows) and an Apple
+> Developer ID (macOS) is being set up; see [docs/releasing.md](docs/releasing.md) for the details.
 
 You will also need:
 
-- **Windows 10 or 11**
+- **Windows 10 or 11**, or **macOS 12 (Monterey) or later**
 - **[Claude Code](https://claude.com/claude-code) and/or the Codex CLI** on your `PATH` — Astera runs
   them, it does not replace them
 
@@ -90,12 +91,16 @@ npm ci
 npm run dev        # run in development
 npm run typecheck  # tsc over both the node and web projects
 npm run build      # bundle
-npm run dist       # bundle + Windows installer into dist-installer/
+npm run dist       # package for the current platform into dist-installer/
+npm run dist:win   # Windows installer
+npm run dist:mac   # macOS universal dmg + zip
 ```
 
-`npm run dist` reads `build/icon.ico`, which is committed. If you change the logo, replace
-`resources/logo-source.png` and re-run `powershell -File scripts/gen-icon.ps1` to regenerate every
-icon asset.
+`npm run dist` reads the committed icon assets (`build/icon.ico` on Windows, `build/icon.icns` and the
+tray templates on macOS) rather than generating them. If you change the logo, replace
+`resources/logo-source.png` and re-run the matching script on its own platform — `powershell -File
+scripts/gen-icon.ps1` (ico/png) on Windows, `sh scripts/gen-icon-mac.sh` (icns/tray templates) on
+macOS — then commit the regenerated assets.
 
 Note on tests: this project has a Vitest suite colocated as `*.test.ts`, but the test sources are not
 distributed in this repository, so `npm test` here reports no test files. CI therefore runs typecheck
@@ -113,8 +118,9 @@ Issues and pull requests are welcome. A couple of things worth knowing before yo
 - Run `npm run typecheck` and `npm run build` before opening a PR — that is what CI checks.
 - The test sources are not in this repository, so a PR cannot add or change tests. If your change
   needs one, describe the case in the PR and it will be covered on the maintainer's side.
-- Bug reports are much easier to act on with the app version, your Windows version, and the relevant
-  lines from `%APPDATA%\astera\rolling.log` when the problem involves account rolling.
+- Bug reports are much easier to act on with the app version, your OS version, and the relevant
+  lines from `rolling.log` when the problem involves account rolling — `%APPDATA%\astera\rolling.log`
+  on Windows, `~/Library/Application Support/astera/rolling.log` on macOS.
 
 ## Acknowledgements
 
@@ -123,6 +129,9 @@ Issues and pull requests are welcome. A couple of things worth knowing before yo
   [Orca](https://github.com/stablyai/orca)'s agent orchestration. The implementation here is our own.
 - The Windows code-signing pipeline follows the fail-open SignPath flow Orca uses for its releases —
   see [docs/releasing.md](docs/releasing.md).
+- macOS releases are signed and notarized with an Apple Developer ID. Unlike the Windows path, this
+  one is not optional: without it, `electron-updater`'s macOS auto-update (built on Squirrel.Mac)
+  refuses to install updates at all.
 
 ## License
 
