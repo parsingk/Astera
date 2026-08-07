@@ -1,4 +1,3 @@
-/// <reference types="node" />
 import type { RunConfig, RunStatus } from './run/config'
 export type { RunConfig, RunStatus } from './run/config'
 import type { Jdk } from './run/jdk'
@@ -477,8 +476,15 @@ export type RendererApi = CoreApi & {
   update: UpdateApi
   rolling: RollingApi
   /** 렌더러의 플랫폼 분기용. 동기 값이라 첫 렌더에서 바로 쓸 수 있다 — 타이틀바 신호등 여백과
-   *  단축키 기본값이 이 값에 달려 있어, 비동기로 오면 첫 프레임이 틀린 레이아웃으로 그려진다. */
-  platform: NodeJS.Platform
+   *  단축키 기본값이 이 값에 달려 있어, 비동기로 오면 첫 프레임이 틀린 레이아웃으로 그려진다.
+   *
+   *  타입이 NodeJS.Platform 이 아니라 string 인 이유: 이 파일은 tsconfig.web.json 에 등록되어
+   *  렌더러도 임포트하는데, 거기에는 @types/node 가 없어 전역 NodeJS 네임스페이스가 존재하지
+   *  않는다. 비교하는 값은 'darwin' 하나뿐이라 string 으로 충분하다.
+   *  (core/run/config.ts:41-42 가 같은 이유로 같은 선택을 했다 — 그 관례를 따른다.
+   *  `/// <reference types="node" />` 로 해결하지 말 것: 웹 컴파일 단위에 node 전역이 통째로
+   *  끌려 들어온다.) */
+  platform: string
   win: WindowApi
   app: AppControlApi
   keys: KeysApi
