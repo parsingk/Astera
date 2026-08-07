@@ -123,9 +123,15 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   )
   // statusLine usage hook: prepares the capture script and settings file, and injects a session-scoped
   // statusLine via --settings on every session spawn. The global settings.json is never touched.
+  // On win32, pass the bare 'node' so the emitted statusLine command stays byte-identical to what
+  // shipped before absolute-path resolution existed — resolveNodePath's win32 branch is exercised by
+  // its test, not by this call. The absolute-path resolution is for macOS, where node under nvm/mise
+  // is otherwise unresolvable by the shell that runs the statusLine command (see resolveNodePath).
   const statusLine = new StatusLineManager(
     userDataDir,
-    resolveNodePath(process.env as { PATH?: string }, existsSync, process.platform)
+    process.platform === 'win32'
+      ? 'node'
+      : resolveNodePath(process.env as { PATH?: string }, existsSync, process.platform)
   )
   await statusLine.init()
   // descriptors is injected explicitly — left unspecified, each of them calls makeDescriptors(process.platform)

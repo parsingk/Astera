@@ -64,7 +64,11 @@ process.stdin.on('error', finish)
  * Why an absolute path is needed: the statusLine/hook config's command is executed by claude in its
  * own shell. On macOS, if node lives under nvm/mise, that shell won't read the rc file and won't find
  * `node`, and the failure is silent (the capture script only talks over stdout). Resolving this once
- * at startup and baking it in makes this whole failure mode disappear.
+ * at startup and baking it in makes this whole failure mode disappear. This resolution is for macOS.
+ *
+ * The win32 branch below exists and is covered by its own test, but the caller (core.ts) does not use
+ * it — it passes the literal 'node' on win32 instead, to keep the emitted statusLine command
+ * byte-identical to what shipped before this function existed.
  *
  * If it can't be found, this just returns 'node' — the prior behavior, and still correct as long as
  * it's on PATH.
