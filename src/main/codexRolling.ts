@@ -1,0 +1,444 @@
+// The codex account rolling coordinator. Limit detection → rollout copy → kill → `codex resume <id>
+// "<prompt>"` on the next account. The skeleton is the same as the claude coordinator (rolling.ts) but
+// it is far shorter because none of the statusLine-specific problems (a stale snapshot, readiness
+// polling, auto-accepting trust) apply. Every side effect is injected through deps — it does not depend
+// on electron, so it is verified with vitest. The wiring is in ipc.ts and index.ts.
+import type { Account, RollStateEvent, SessionInfo } from '../core/types'
+import type { RollConfig } from '../core/rolling/config'
+import { RollCycle } from '../core/rolling/cycle'
+import { pickAvailable, planRetry, type BlockRecord, type RetryState } from '../core/rolling/retry'
+import { copyTranscript } from '../core/rolling/transcript'
+import { codexHistoryStrategy } from '../core/history/strategies/codex'
+import { findRollout } from '../core/rolling/codexLocate'
+import {
+  CodexLimitScanner,
+  CodexRolloutTail,
+  limitReached,
+  maxedOut,
+  worstResetAt,
+  type CodexLimitState
+} from '../core/rolling/codexSignal'
+import { t, type Lang } from '../core/i18n'
+
+const TICK_MS = 15_000 // how often state is refreshed and the fallback trigger checked (mirrors rolling.ts)
+const LOCATE_POLL_MS = 1_000 // how often we poll to map the rollout
+const LOCATE_TIMEOUT_MS = 60_000 // the deadline for giving up on mapping — after this the chain has rolling disabled
+const FALLBACK_SILENCE_MS = 30_000 // the fallback verdict ③: 100% plus this long with no output
+const HEALTHY_MS = 60_000 // no limit detected for this long after a switch → reset the consecutive block count
+
+/** Which grounds the limit verdict fired on — a log label for calibrating the assumptions we have not measured yet (the phrase, reachedType, replay) */
+type LimitReason = 'reachedType' | 'text+gate' | 'maxed+silent' | 'force'
+
+export interface CodexRollingDeps {
+  spawn(opts: {
+    account: Account
+    cwd: string
+    resumeSessionId?: string
+    resumePrompt?: string
+    rollAccountIds?: string[]
+    slackNotify?: boolean
+    bypassPermissions?: boolean
+  }): SessionInfo
+  kill(sessionId: string): void
+  getAccount(id: string): Account | null
+  send(channel: 'session:rolled' | 'session:rollState', payload: unknown): void
+  log(message: string): void
+  lang: () => Lang // taken as a getter rather than a value so the latest language is used even after setLang
+  persistConfig?: (codexSessionId: string, config: RollConfig) => void
+  copy?: (src: string, dest: string) => Promise<void> // for test injection — defaults to copyTranscript
+  now?: () => number
+}
+
+interface Chain {
+  accountIds: string[]
+  prompt: string
+  cycle: RollCycle
+  liveId: string
+  liveInfo: SessionInfo
+  cwd: string
+  codexSessionId: string | null // the rollout's session_id — the same throughout the relay
+  rolloutPath: string | null
+  tail: CodexRolloutTail | null
+  state: CodexLimitState | null // the last rate_limits read
+  scanner: CodexLimitScanner // detects the limit phrase in PTY output (corrects for chunk boundaries)
+  textHit: boolean // whether the limit phrase was seen in this window (the tick combines it with the state to decide)
+  unmappedWarned: boolean // whether the rollout-unmapped skip has already been logged (suppresses repeats of the same line)
+  preemptWarned: boolean // whether the preemption has already been logged — keeps it from piling up on every 1-second poll
+  lastOutputAt: number
+  rolling: boolean
+  locateTimer: ReturnType<typeof setTimeout> | null
+  waitTimer: ReturnType<typeof setTimeout> | null
+  healthyTimer: ReturnType<typeof setTimeout> | null
+  disposed: boolean
+  recovery: (BlockRecord | null)[]
+}
+
+/** Extracts just the part of a Chain the retry verdict needs (the input of core/rolling/retry.ts) */
+const retryState = (chain: Chain): RetryState => ({
+  accountIds: chain.accountIds,
+  currentIndex: chain.cycle.currentIndex,
+  recovery: chain.recovery
+})
+
+export class CodexRollingCoordinator {
+  private chains = new Map<string, Chain>() // liveId → chain
+  private ticker: ReturnType<typeof setInterval> | null = null
+  private readonly copy: (src: string, dest: string) => Promise<void>
+  private readonly now: () => number
+
+  constructor(private deps: CodexRollingDeps) {
+    this.copy = deps.copy ?? copyTranscript
+    this.now = deps.now ?? Date.now
+  }
+
+  /** Called by ipc right after spawning a codex session that has rollAccountIds. One id means single-account auto-resume. */
+  register(info: SessionInfo): void {
+    const ids = info.rollAccountIds ?? []
+    if (ids.length < 1) return
+    const chain: Chain = {
+      accountIds: ids,
+      prompt: info.rollPrompt?.trim() || t(this.deps.lang(), 'rolling.continuePrompt'),
+      cycle: new RollCycle(ids.length),
+      liveId: info.id,
+      liveInfo: info,
+      cwd: info.cwd,
+      codexSessionId: null,
+      rolloutPath: null,
+      tail: null,
+      state: null,
+      scanner: new CodexLimitScanner(),
+      textHit: false,
+      unmappedWarned: false,
+      preemptWarned: false,
+      lastOutputAt: this.now(),
+      rolling: false,
+      locateTimer: null,
+      waitTimer: null,
+      healthyTimer: null,
+      disposed: false,
+      recovery: ids.map(() => null)
+    }
+    this.chains.set(info.id, chain)
+    this.startLocate(chain, this.deps.getAccount(ids[this.cycleIndexOf(chain)]))
+    this.ensureTicker()
+    this.deps.log(`codex chain registered session=${info.id} accounts=${ids.join(',')}`)
+  }
+
+  /** Whether this conversation belongs to an active rolling chain — the history resume guard (mirrors findLiveByClaudeSession in rolling.ts) */
+  findLiveByCodexSession(codexSessionId: string): SessionInfo | null {
+    for (const chain of this.chains.values())
+      if (!chain.disposed && chain.codexSessionId === codexSessionId) return chain.liveInfo
+    return null
+  }
+
+  handleData(e: { sessionId: string; data: string }): void {
+    const chain = this.chains.get(e.sessionId)
+    if (!chain || chain.disposed) return
+    chain.lastOutputAt = this.now()
+    if (chain.scanner.push(e.data)) {
+      chain.textHit = true
+      void this.evaluate(chain)
+    }
+  }
+
+  handleExit(e: { sessionId: string }): void {
+    const chain = this.chains.get(e.sessionId)
+    if (chain && !chain.rolling) this.disposeChain(chain)
+  }
+
+  /** A dev hook — forces a roll as if a real limit had hit, bypassing the gates (mirrors forceRoll in rolling.ts) */
+  async forceRoll(sessionId?: string): Promise<void> {
+    const chain = sessionId ? this.chains.get(sessionId) : [...this.chains.values()][0]
+    if (!chain || chain.disposed) throw new Error('no active codex rolling chain')
+    await this.refresh(chain)
+    this.onLimit(chain, 'force')
+  }
+
+  /** App shutdown and test cleanup — clears every timer */
+  stop(): void {
+    for (const chain of [...this.chains.values()]) this.disposeChain(chain)
+    if (this.ticker) {
+      clearInterval(this.ticker)
+      this.ticker = null
+    }
+  }
+
+  // ---- internals -------------------------------------------------------
+
+  private cycleIndexOf(chain: Chain): number {
+    return chain.cycle.currentIndex
+  }
+
+  /** The rollout paths other active chains have already claimed. Open two rolling tabs on the same folder
+   *  with the same account and both chains see the same rollout as a legitimate candidate; if two of them
+   *  bite on one conversation, both of them roll. */
+  private claimedRollouts(self: Chain): string[] {
+    const out: string[] = []
+    for (const c of this.chains.values())
+      if (c !== self && !c.disposed && c.rolloutPath) out.push(c.rolloutPath)
+    return out
+  }
+
+  /** Polls until the rollout file appears. On finding it, tailing starts; past the deadline rolling is
+   *  disabled.
+   *  exclude: on the re-locate right after a roll, it removes the old rollout we just copied in from the
+   *  candidates — the copy has the same cwd and session_id and its creation time is effectively
+   *  simultaneous with since, so biting on it would tail a file codex no longer writes to and would
+   *  immediately produce a false re-verdict from the old account's rate_limits. On the first register
+   *  there is nothing to exclude. */
+  private startLocate(chain: Chain, account: Account | null, exclude: string[] = []): void {
+    if (!account) {
+      this.deps.log(`codex locate aborted — no such account session=${chain.liveId}`)
+      return
+    }
+    const since = this.now()
+    const liveId = chain.liveId
+    const tick = async (): Promise<void> => {
+      if (chain.disposed || chain.liveId !== liveId) return
+      const found = await findRollout({
+        configDir: account.configDir,
+        cwd: chain.cwd,
+        since,
+        now: this.now,
+        excludePaths: [...exclude, ...this.claimedRollouts(chain)]
+      })
+      if (chain.disposed || chain.liveId !== liveId) return
+      // When two chains poll side by side, the other one can bite first while the findRollout above is in
+      // flight — re-checking after the await keeps one rollout to one chain. Both paths were produced by
+      // findRollout, so the strings are identical.
+      if (found && this.claimedRollouts(chain).includes(found.path)) {
+        // Logged once per chain so the same line does not pile up on every 1-second poll
+        if (!chain.preemptWarned) {
+          chain.preemptWarned = true
+          this.deps.log(
+            `codex rollout preempted — waiting for the next candidate session=${liveId} path=${found.path}`
+          )
+        }
+      } else if (found) {
+        chain.rolloutPath = found.path
+        chain.codexSessionId = found.sessionId
+        chain.tail = new CodexRolloutTail(found.path, this.now)
+        chain.unmappedWarned = false
+        chain.preemptWarned = false // the next roll's re-mapping gets to report it once again
+        this.deps.persistConfig?.(found.sessionId, {
+          accountIds: chain.accountIds,
+          prompt: chain.prompt
+        })
+        this.deps.log(`codex rollout located session=${liveId} id=${found.sessionId}`)
+        return
+      }
+      if (this.now() - since >= LOCATE_TIMEOUT_MS) {
+        this.deps.log(
+          `codex rollout not found within ${LOCATE_TIMEOUT_MS}ms — rolling disabled session=${liveId}`
+        )
+        return
+      }
+      chain.locateTimer = setTimeout(() => void tick(), LOCATE_POLL_MS)
+    }
+    chain.locateTimer = setTimeout(() => void tick(), LOCATE_POLL_MS)
+  }
+
+  private async refresh(chain: Chain): Promise<void> {
+    if (!chain.tail) return
+    const s = await chain.tail.read()
+    if (s) chain.state = s
+  }
+
+  /** Refreshes the state and applies verdicts ① and ② */
+  private async evaluate(chain: Chain): Promise<void> {
+    if (chain.rolling || chain.waitTimer || chain.disposed) return
+    await this.refresh(chain)
+    if (chain.rolling || chain.waitTimer || chain.disposed) return // the across-await state guard
+    if (!limitReached(chain.state, { textHit: chain.textHit })) {
+      // Record exactly why it was ignored — logging an unmapped rollout as "usage below the gate" (the old
+      // log printed undefined%) destroys the evidence for calibrating the phrase regex on the first real
+      // limit hit
+      if (chain.textHit)
+        this.deps.log(`codex limit-text ignored (${this.why(chain)}) session=${chain.liveId}`)
+      return
+    }
+    this.recordRecovery(chain)
+    this.onLimit(chain, chain.state?.reachedType ? 'reachedType' : 'text+gate')
+  }
+
+  /** Why the phrase was ignored — distinguishes unmapped, no state received, and usage below the gate */
+  private why(chain: Chain): string {
+    if (!chain.tail) return 'rollout unmapped'
+    if (!chain.state) return 'rate_limits not received'
+    const { primary, secondary } = chain.state
+    return `primary=${primary?.usedPercent ?? 'n/a'}%, secondary=${secondary?.usedPercent ?? 'n/a'}%`
+  }
+
+  /** The block record for the current account — the latest reset among the windows at or above the gate (mirrors recordRecovery in rolling.ts) */
+  private recordRecovery(chain: Chain): void {
+    const worst = worstResetAt(chain.state)
+    chain.recovery[chain.cycle.currentIndex] = {
+      at: worst.at,
+      weekly: worst.weekly,
+      since: this.now()
+    }
+  }
+
+  private onLimit(chain: Chain, reason: LimitReason): void {
+    if (chain.rolling || chain.waitTimer || chain.disposed) return
+    if (!chain.codexSessionId || !chain.rolloutPath) {
+      // An unmapped state does not resolve itself — logging on every repeat detection fills the log with the same line
+      if (!chain.unmappedWarned) {
+        chain.unmappedWarned = true
+        this.deps.log(`codex roll skipped — rollout unmapped session=${chain.liveId} reason=${reason}`)
+      }
+      return
+    }
+    if (chain.healthyTimer) {
+      clearTimeout(chain.healthyTimer)
+      chain.healthyTimer = null
+    }
+    chain.textHit = false
+    const action = chain.cycle.onLimit()
+    const target =
+      action.type === 'roll' ? pickAvailable(retryState(chain), action.toIndex, this.now()) : null
+    // reason and the raw reachedType are the only evidence for calibrating the assumptions we have not
+    // measured yet (the limit phrase, the reachedType values, replay behaviour) on the first real hit — so
+    // what fired and the raw value are recorded together
+    this.deps.log(
+      `codex limit detected session=${chain.liveId} reason=${reason} ` +
+        `reachedType=${chain.state?.reachedType ?? 'null'} ${this.why(chain)} ` +
+        `action=${JSON.stringify(action)}`
+    )
+    if (target === null) {
+      const plan = planRetry(retryState(chain), this.now())
+      this.pushState(chain, 'waiting', {
+        nextRetryAt: new Date(plan.retryAt).toISOString(),
+        scope: plan.weekly ? 'weekly' : 'session'
+      })
+      chain.waitTimer = setTimeout(
+        () => {
+          chain.waitTimer = null
+          void this.roll(chain, plan.target)
+        },
+        Math.max(0, plan.retryAt - this.now())
+      )
+    } else {
+      void this.roll(chain, target)
+    }
+  }
+
+  /** Runs the roll: copy the rollout → kill → respawn in the same slot with codex resume */
+  private async roll(chain: Chain, toIndex: number): Promise<void> {
+    if (chain.rolling || chain.disposed) return
+    chain.rolling = true
+    try {
+      const target = this.deps.getAccount(chain.accountIds[toIndex])
+      if (!target) {
+        this.deps.log(`codex roll aborted — no such account id=${chain.accountIds[toIndex]}`)
+        this.pushState(chain, 'none')
+        return
+      }
+      if (!chain.codexSessionId || !chain.rolloutPath) {
+        this.deps.log(`codex roll aborted — rollout unmapped session=${chain.liveId}`)
+        this.pushState(chain, 'none')
+        return
+      }
+      this.pushState(chain, 'switching', { accountLabel: target.label })
+      // ① The copy — a codex blocked by a limit is idle, so there is no write contention
+      const dest = codexHistoryStrategy.mapTargetPath(chain.rolloutPath, target.configDir)
+      await this.copy(chain.rolloutPath, dest)
+      // If the app shut down (stop) or the tab was closed (handleExit) while we waited on the copy, stop
+      // here — what follows is kill+spawn, and going on with a disposed chain leaves a zombie codex process
+      // and resurrected timers behind
+      if (chain.disposed) {
+        this.deps.log(`codex roll aborted — chain disposed during the copy session=${chain.liveId}`)
+        return
+      }
+      // ② kill → ③ respawn in the same slot. The prompt is a CLI argument, so there is no PTY typing
+      this.deps.kill(chain.liveId)
+      const oldId = chain.liveId
+      const info = this.deps.spawn({
+        account: target,
+        cwd: chain.cwd,
+        resumeSessionId: chain.codexSessionId,
+        resumePrompt: chain.prompt,
+        rollAccountIds: chain.accountIds,
+        slackNotify: chain.liveInfo.slackNotify, // the Slack notification is kept per chain (mirrors rolling.ts)
+        bypassPermissions: chain.liveInfo.bypassPermissions
+      })
+      this.chains.delete(oldId)
+      chain.liveId = info.id
+      chain.liveInfo = info
+      chain.lastOutputAt = this.now()
+      chain.state = null
+      chain.textHit = false
+      chain.scanner = new CodexLimitScanner() // so the dead session's tail does not get glued onto the new session's output
+      chain.cycle.advanceTo(toIndex)
+      this.chains.set(info.id, chain)
+      // The respawned codex creates a new rollout file (with the same session_id) — find it again and
+      // attach a tail. The dest we just copied in is excluded (same cwd and session_id, so it looks like a
+      // legitimate candidate)
+      chain.rolloutPath = null
+      chain.tail = null
+      this.startLocate(chain, target, [dest])
+      // dest is sent along too, so the CodexTurnWatcher re-registration (index.ts) can drop this copy from
+      // its candidates. CoreEvents['session:rolled'] does not declare this field, but send()'s payload is
+      // unknown so the extra field rides along safely — the renderer just ignores it.
+      this.deps.send('session:rolled', { oldSessionId: oldId, info, dest })
+      this.pushState(chain, 'switching', { accountLabel: target.label, reattach: true })
+      this.deps.log(`codex rolled ${oldId} → ${info.id} account=${target.label}`)
+      // No limit detected for 60 seconds after the switch → reset the consecutive block count
+      chain.healthyTimer = setTimeout(() => {
+        chain.healthyTimer = null
+        chain.cycle.onHealthy()
+        chain.recovery[chain.cycle.currentIndex] = null
+      }, HEALTHY_MS)
+      this.pushState(chain, 'none')
+    } catch (err) {
+      this.deps.log(`codex roll failed: ${err instanceof Error ? err.message : String(err)}`)
+      this.pushState(chain, 'none')
+    } finally {
+      chain.rolling = false
+    }
+  }
+
+  /** The 15-second tick — refreshes the state, applies verdict ① (reachedType with no phrase) and fallback ③ (100% plus 30 seconds of no output) */
+  private tick(): void {
+    for (const chain of this.chains.values()) {
+      if (chain.disposed || chain.rolling || chain.waitTimer || !chain.tail) continue
+      void this.refresh(chain).then(() => {
+        if (chain.disposed || chain.rolling || chain.waitTimer) return
+        if (limitReached(chain.state, { textHit: false })) {
+          this.recordRecovery(chain)
+          this.onLimit(chain, 'reachedType') // passing with no phrase can only be ①
+          return
+        }
+        if (maxedOut(chain.state) && this.now() - chain.lastOutputAt > FALLBACK_SILENCE_MS) {
+          this.recordRecovery(chain)
+          this.onLimit(chain, 'maxed+silent')
+        }
+      })
+    }
+  }
+
+  private pushState(
+    chain: Chain,
+    state: RollStateEvent['state'],
+    extra?: Partial<RollStateEvent>
+  ): void {
+    this.deps.send('session:rollState', { sessionId: chain.liveId, state, ...extra })
+  }
+
+  private disposeChain(chain: Chain): void {
+    if (chain.disposed) return
+    chain.disposed = true
+    for (const t of [chain.locateTimer, chain.waitTimer, chain.healthyTimer]) if (t) clearTimeout(t)
+    this.chains.delete(chain.liveId)
+    this.pushState(chain, 'none')
+    this.deps.log(`codex chain disposed session=${chain.liveId}`)
+    if (this.chains.size === 0 && this.ticker) {
+      clearInterval(this.ticker)
+      this.ticker = null
+    }
+  }
+
+  private ensureTicker(): void {
+    if (!this.ticker) this.ticker = setInterval(() => this.tick(), TICK_MS)
+  }
+}

@@ -1,0 +1,24 @@
+.idea/
+.claude/
+.superpowers/
+
+node_modules/
+out/
+dist-installer/
+
+# Test sources are not shipped in this repository. They still run locally with `npm test` — the
+# include globs in vitest.config.ts pick them up from the working tree.
+*.test.ts
+*.test.tsx
+# A test-only helper (imported by six tests). The extension rule above does not cover it.
+src/core/worktrees/testRepo.ts
+
+# docs/ is handled as a whitelist. Everything else there is design and planning notes that stay
+# local — written this way round so a new note defaults to "not published".
+docs/*
+!docs/releasing.md
+!docs/slack-bot-setup.md
+
+# The source brand sheet (a 1254x1254 mockup). Icons are cropped from it and only the outputs are
+# committed — see scripts/gen-icon.ps1.
+astera.png

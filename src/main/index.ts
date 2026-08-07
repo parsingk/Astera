@@ -1,0 +1,622 @@
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } from 'electron'
+import path from 'node:path'
+import { appendFileSync, readFileSync } from 'node:fs'
+import type { AppUpdater } from 'electron-updater'
+import iconAsset from '../../resources/icon.png?asset'
+import trayAsset from '../../resources/tray.png?asset'
+import { createCore, type Core } from './core'
+import { registerIpc } from './ipc'
+import { RollingCoordinator } from './rolling'
+import { SchedulerCoordinator } from './scheduler'
+import { CodexRollingCoordinator } from './codexRolling'
+import { SlackNotifier, SlackConfigStore } from './slack'
+import { SlackInboxController, createSocketClient } from './slackInbox'
+import { HookEventWatcher } from './hookEvents'
+import { CodexTurnWatcher } from './codexTurnWatcher'
+import { t } from '../core/i18n'
+import { loadPolicy, nextCheckDelayMs, parsePolicyUrl, shouldApplyCampaign } from './updatePolicy'
+import type { SessionInfo, RollStateEvent, UpdateCampaignInfo } from '../core/types'
+
+// The dev (unpackaged) app uses a different userData folder than the installed one. The installer
+// writes to %APPDATA%\Astera, and because Windows is case-insensitive the dev build (app name
+// 'astera') would otherwise share that exact folder. When it does, launching dev makes
+// createCore -> StatusLineManager.init() recreate the hook-events directory (rm+mkdir), which
+// orphans the installed app's HookEventWatcher (fs.watch) on the deleted directory and silently
+// stops its Slack notifications. Isolating the folder rules that out. This must run before
+// requestSingleInstanceLock and createCore.
+if (!app.isPackaged) app.setPath('userData', app.getPath('userData') + '-dev')
+
+let core: Core | null = null
+let codexRollingRef: CodexRollingCoordinator | null = null
+let schedulerRef: SchedulerCoordinator | null = null
+let codexTurnsRef: CodexTurnWatcher | null = null
+let slackInboxControllerRef: SlackInboxController | null = null // Slack inbound socket rebuilder — cut on quit
+let rollingRef: RollingCoordinator | null = null // lets the hook callback reach a coordinator created later
+let orchRef: { stop: () => void } | null = null // orchestration server shutdown cleanup
+let tray: Tray | null = null
+let quitting = false
+let mainWindow: BrowserWindow | null = null // focus target for the single-instance second-instance event
+let updateCampaign: UpdateCampaignInfo | null = null // update campaign verdict. null means no campaign
+
+/**
+ * Reads the campaign policy URL out of the packaged app-update.yml. electron-builder generates that
+ * file from electron-builder.yml, making it the single source of truth for the release location.
+ * Returns null in dev or when the file is missing, and the policy lookup is then skipped entirely.
+ */
+function readPolicyUrl(): string | null {
+  try {
+    return parsePolicyUrl(readFileSync(path.join(process.resourcesPath, 'app-update.yml'), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+// App icons. electron-vite copies both into out (?asset) for dev and packaged builds alike.
+// The tray gets its own asset rather than a downscale of the window icon: at 16-24px the full tile
+// loses the mark, so tray.png is generated from a tighter crop (see scripts/gen-icon.ps1).
+const APP_ICON = nativeImage.createFromPath(iconAsset)
+const TRAY_ICON = nativeImage.createFromPath(trayAsset)
+
+function createWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    title: 'Astera',
+    icon: APP_ICON, // window/taskbar icon (electron-builder win.icon only changes the installed exe icon)
+    titleBarStyle: 'hidden',
+    webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false }
+  })
+  if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
+  else win.loadFile(path.join(__dirname, '../renderer/index.html'))
+  win.maximize()
+
+  // Closing the window (X) always minimizes to the tray — whether or not sessions exist. The only
+  // real quit path is the tray 'Quit' menu (app.quit): app.quit sets quitting=true in before-quit,
+  // which is what lets a close through this guard.
+  win.on('close', (e) => {
+    if (!quitting) {
+      e.preventDefault()
+      win.hide()
+    }
+  })
+  return win
+}
+
+function createTray(win: BrowserWindow): void {
+  tray = new Tray(TRAY_ICON)
+  tray.setToolTip('Astera')
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: t(core!.lang, 'common.trayOpen'), click: () => win.show() },
+      { label: t(core!.lang, 'common.trayQuit'), click: () => app.quit() }
+    ])
+  )
+  tray.on('double-click', () => win.show())
+}
+
+// Single-instance lock — if one is already running, the second instance quits without initializing
+// and focuses the existing window. Hiding to the tray and then clicking the icon again can launch
+// the installed app twice, and the second process's createCore -> init() recreates the hook-events
+// directory, orphaning the first instance's watcher. This lock rules that out at the source. An
+// instance that loses the lock returns/quits before createCore, so the will-quit guard
+// (core === null) means it kills no sessions either.
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) app.quit()
+app.on('second-instance', () => {
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+})
+
+app.whenReady().then(async () => {
+  if (!gotSingleInstanceLock) return // second instance — waits for quit without initializing
+  Menu.setApplicationMenu(null)
+  core = await createCore(app.getPath('userData'), app.getLocale())
+  const win = createWindow()
+  mainWindow = win
+  // Slack progress notifications: hook events, roll state, limits and exits go out over an Incoming
+  // Webhook or a Slack bot (chat.postMessage) — SlackNotifier abstracts both behind a transport, so
+  // the wiring here does not know which path is in play. Logs go to userData/slack.log (same pattern
+  // as rolling.log) — the webhook URL and bot token are never recorded.
+  const slackLogFile = path.join(app.getPath('userData'), 'slack.log')
+  const slackLog = (m: string): void => {
+    try {
+      appendFileSync(slackLogFile, `${new Date().toISOString()} ${m}\n`)
+    } catch {
+      /* a logging failure must not block the notification */
+    }
+  }
+  const slackStore = new SlackConfigStore(path.join(app.getPath('userData'), 'slack.json'))
+  const slack = new SlackNotifier({
+    getAccount: (id) => {
+      try {
+        return core!.accounts.get(id)
+      } catch {
+        return null
+      }
+    },
+    readStatusPayload: (id) => core!.statusLinePayload(id),
+    lang: () => core!.lang,
+    log: slackLog
+  })
+  // Slack thread reply intake. Connects only when an app token is present and bot mode is on — on
+  // the webhook path there are no threads, so there is nothing to reply into. SlackInboxController
+  // safely rebuilds the socket whenever settings change (reconfigureInbox in registerIpc below) —
+  // that fixed a bug where turning bot mode off left the socket attached to the old channel until
+  // the next restart.
+  const slackInboxController = new SlackInboxController({
+    makeDeps: (channelId) => ({
+      channelId,
+      lang: () => core!.lang,
+      resolveSession: (ts) => slack.resolveSessionByThread(ts),
+      // Write only after confirming the session is alive, and hand that result straight back — this
+      // used to report a failed injection as a success. SessionManager.write returns silently for an
+      // already-exited session (its exited guard), so "did not throw" cannot tell success from
+      // failure. Rather than add a new API, this reuses the status core.sessions.list() already
+      // returns.
+      write: (sessionId, data) => {
+        const alive = core!.sessions.list().some((s) => s.id === sessionId && s.status === 'running')
+        if (!alive) return false
+        core!.sessions.write(sessionId, data)
+        return true
+      },
+      postNote: (ts, text) => slack.postThreadNote(ts, text),
+      isOwnMessage: (ts) => slack.isOwnMessage(ts),
+      // On a choice prompt, turn the reply into a key sequence and carry it through Submit
+      pendingChoiceShape: (sid) => slack.pendingChoiceShape(sid),
+      log: slackLog
+    }),
+    createClient: (appToken) => createSocketClient(appToken),
+    // Guards the race where the config load promise resolves after before-quit — while quitting,
+    // do not open a new socket.
+    isQuitting: () => quitting
+  })
+  slackInboxControllerRef = slackInboxController
+  void slackStore.load().then((c) => {
+    slack.applyConfig(c)
+    void slackInboxController.apply(c)
+  })
+  // codex turn-completion detection: codex has no hooks, so this reads task_complete out of the
+  // rollout jsonl. Independent of rolling, only codex sessions with Slack notifications on are
+  // watched (the caller decides that at register time) — the watcher's own logs share slack.log,
+  // since turn-completion notifications end up on Slack anyway.
+  const codexTurns = new CodexTurnWatcher({
+    getAccount: (id) => {
+      try {
+        return core!.accounts.get(id)
+      } catch {
+        return null
+      }
+    },
+    onTurnComplete: (sessionId, rolloutPath) => slack.onCodexTurnComplete(sessionId, rolloutPath),
+    log: slackLog
+  })
+  codexTurnsRef = codexTurns
+  const hookWatcher = new HookEventWatcher(
+    core.hookEventsDir,
+    (sid, payload) => {
+      slack.onHookEvent(sid, payload)
+      // Rolling taps the hooks too — an idle Notification is the signal for the idle nudge.
+      // Isolated in its own try, separate from the Slack tap, so an exception on one side does not
+      // swallow the other.
+      try {
+        rollingRef?.onHookEvent(sid, payload)
+      } catch {
+        /* a rolling tap failure must not block the Slack notification */
+      }
+    },
+    slackLog
+  )
+  hookWatcher.start()
+
+  // Account rolling: progress logs go to userData/rolling.log (same pattern as updater.log)
+  const rollLog = path.join(app.getPath('userData'), 'rolling.log')
+  const schedLog = (m: string): void => {
+    try {
+      appendFileSync(rollLog, `${new Date().toISOString()} [sched] ${m}\n`)
+    } catch {
+      /* a logging failure must not block the schedule */
+    }
+  }
+  // Reports the per-entry validation result for scheduler.json — createCore has no logger, so it is
+  // logged here instead. The normal path (recovered=false, dropped=0, pruned=0) stays quiet.
+  {
+    const { recovered, dropped, pruned } = core.schedulerConfigLoad
+    // recovered=true covers not only a parse failure (corrupt JSON and the like) but also a failure
+    // to read at all (EACCES etc.) — on a read failure the copyFile that follows fails too, so no
+    // .bak may exist, which is why this does not claim ".bak kept"
+    if (recovered) schedLog('scheduler.json read/parse failed — starting from an empty map')
+    else if (dropped > 0 || pruned > 0)
+      schedLog(`scheduler.json cleaned up (${dropped} invalid, ${pruned} expired) — .bak kept`)
+  }
+  // Session scheduler: runs periodic commands automatically. Logs share rolling.log ([sched] prefix)
+  const scheduler = new SchedulerCoordinator({
+    write: (id, d) => {
+      try {
+        core!.sessions.write(id, d)
+      } catch {
+        /* a write failure must not block the schedule timer */
+      }
+    },
+    readStatusPayload: (id) => core!.statusLinePayload(id),
+    send: (channel, payload) => {
+      try {
+        if (!win.isDestroyed()) win.webContents.send(channel, payload)
+      } catch {
+        /* renderer send failures are ignored */
+      }
+    },
+    log: schedLog,
+    persistConfig: (sid, cfg) => {
+      // fire-and-forget — a persist failure must not block the schedule
+      void core!.schedulerConfig.set(sid, cfg).catch(() => {})
+    },
+    deleteConfig: (sid) => {
+      void core!.schedulerConfig.delete(sid).catch(() => {})
+    }
+  })
+  schedulerRef = scheduler
+  const rolling = new RollingCoordinator({
+    spawn: (opts) => core!.sessions.spawn(opts),
+    write: (id, d) => core!.sessions.write(id, d),
+    kill: (id) => core!.sessions.kill(id),
+    getAccount: (id) => {
+      try {
+        return core!.accounts.get(id)
+      } catch {
+        return null
+      }
+    },
+    readStatusPayload: (id) => core!.statusLinePayload(id),
+    send: (channel, payload) => {
+      try {
+        if (!win.isDestroyed()) win.webContents.send(channel, payload)
+      } catch {
+        /* renderer send failures are ignored */
+      }
+      // The scheduler taps rolling events too — isolated in its own try, separate from the Slack
+      // tap, so a throw out of rekey does not silently swallow the Slack notification (rolled) below.
+      try {
+        if (channel === 'session:rolled') {
+          const p = payload as { oldSessionId: string; info: SessionInfo }
+          scheduler.rekey(p.oldSessionId, p.info.id) // the schedule follows the roll chain
+        } else if (channel === 'session:rollState') {
+          // Suppress schedule firing during the roll-resume window (switching/trust/waiting/nudged)
+          scheduler.handleRollState(payload as RollStateEvent)
+        }
+      } catch {
+        /* a schedule tap failure must not block rolling or the Slack notification */
+      }
+      // Slack notifications tap rolling events too. Isolated so a tap exception does not block rolling.
+      try {
+        if (channel === 'session:rolled') {
+          const p = payload as { oldSessionId: string; info: SessionInfo }
+          slack.onRolled(p.oldSessionId, p.info)
+        } else if (channel === 'session:rollState') {
+          slack.onRollState(payload as RollStateEvent)
+        }
+      } catch {
+        /* a Slack tap failure must not block rolling */
+      }
+    },
+    log: (m) => {
+      try {
+        appendFileSync(rollLog, `${new Date().toISOString()} ${m}\n`)
+      } catch {
+        /* a logging failure must not block rolling */
+      }
+    },
+    lang: () => core!.lang,
+    persistConfig: (sid, cfg) => {
+      // fire-and-forget — a persist failure must not block rolling
+      void core!.rollConfig.set(sid, cfg).catch(() => {})
+    }
+  })
+  rollingRef = rolling
+
+  // Codex account rolling. Uses the same log file and event channels as the Claude coordinator, but
+  // does not depend on statusLine or Slack.
+  const codexRolling = new CodexRollingCoordinator({
+    spawn: (opts) => core!.sessions.spawn(opts),
+    kill: (id) => core!.sessions.kill(id),
+    getAccount: (id) => {
+      try {
+        return core!.accounts.get(id)
+      } catch {
+        return null
+      }
+    },
+    send: (channel, payload) => {
+      try {
+        if (!win.isDestroyed()) win.webContents.send(channel, payload)
+      } catch {
+        /* renderer send failures are ignored */
+      }
+      try {
+        if (channel === 'session:rolled') {
+          // dest: the rollout path copied into the target account just before the roll
+          // (codexRolling.roll() carries it along). If that copy is the only candidate on the first
+          // polling tick right after re-registering, the watcher latches onto it and misfires on the
+          // last turn from before the roll — excludePaths keeps it out.
+          const p = payload as { oldSessionId: string; info: SessionInfo; dest?: string }
+          scheduler.rekey(p.oldSessionId, p.info.id) // the schedule follows the roll chain
+          // When rolling switches accounts the session respawns under a new sessionId and a new
+          // rollout file appears — without re-registering, turn-completion notifications stop for
+          // good after the switch. codexRolling is the codex-only coordinator (ipc.ts's spawn branch
+          // already splits on provider), so every session reaching here is codex — re-checking the
+          // provider is unnecessary.
+          codexTurns.unregister(p.oldSessionId)
+          if (p.info.slackNotify) codexTurns.register(p.info, p.dest ? [p.dest] : undefined)
+        } else if (channel === 'session:rollState') {
+          // codex rolling sends session:rollState too (switching/waiting/none) — suppress the resume window
+          scheduler.handleRollState(payload as RollStateEvent)
+        }
+      } catch {
+        /* a tap failure must not block rolling */
+      }
+      // Slack notifications tap codex rolling events too (mirroring the claude side) — isolated so a
+      // tap exception does not block rolling. Without this the SlackNotifier record stays on the old
+      // id, so turn notifications stop after the switch, onRolled cannot cancel the scheduled exit
+      // timer so a false session-exit goes out, and limit-reached, account-switch and reset
+      // notifications never arrive for codex at all.
+      try {
+        if (channel === 'session:rolled') {
+          const p = payload as { oldSessionId: string; info: SessionInfo }
+          slack.onRolled(p.oldSessionId, p.info)
+        } else if (channel === 'session:rollState') {
+          slack.onRollState(payload as RollStateEvent)
+        }
+      } catch {
+        /* a Slack tap failure must not block rolling */
+      }
+    },
+    log: (m) => {
+      try {
+        appendFileSync(rollLog, `${new Date().toISOString()} [codex] ${m}\n`)
+      } catch {
+        /* a logging failure must not block rolling */
+      }
+    },
+    lang: () => core!.lang,
+    persistConfig: (sid, cfg) => {
+      void core!.rollConfig.set(sid, cfg).catch(() => {}) // fire-and-forget
+    }
+  })
+  codexRollingRef = codexRolling
+  // Agent orchestration: an HTTP server embedded in the app plus the astera CLI let an agent spawn
+  // worker sessions on another vendor. registerIpc does the startup (spawnSession and busyState,
+  // which the coordinator requires, are owned by ipc.ts) — here it gets the same share as every
+  // other subsystem: a log file (userData/orchestration.log, same pattern as rolling.log and
+  // slack.log) and shutdown cleanup.
+  const orchLogFile = path.join(app.getPath('userData'), 'orchestration.log')
+  const orchLog = (m: string): void => {
+    try {
+      appendFileSync(orchLogFile, `${new Date().toISOString()} ${m}\n`)
+    } catch {
+      /* a logging failure must not block orchestration */
+    }
+  }
+  registerIpc(
+    core,
+    win,
+    rolling,
+    {
+      notifier: slack,
+      store: slackStore,
+      reconfigureInbox: (cfg) => void slackInboxController.apply(cfg) // rebuild the socket on settings change
+    },
+    codexRolling,
+    scheduler,
+    codexTurns,
+    {
+      log: orchLog,
+      onStarted: (h) => {
+        orchRef = h
+      }
+    }
+  )
+  createTray(win)
+
+  // Start the history file watcher in the background once the window is shown (live updates). Not
+  // awaited, so it does not block window creation.
+  void core.history.startBackground()
+
+  // Auto-update: pulled from public GitHub Releases with no credentials. Progress is surfaced both
+  // to a file log (userData/updater.log) and to the renderer (shown in the title bar).
+  if (app.isPackaged) {
+    const logFile = path.join(app.getPath('userData'), 'updater.log')
+    const flog = (m: string): void => {
+      try {
+        appendFileSync(logFile, `${new Date().toISOString()} ${m}\n`)
+      } catch {
+        /* a logging failure must not block the update */
+      }
+    }
+    const push = (s: {
+      state: string
+      version?: string
+      percent?: number
+      message?: string
+    }): void => {
+      flog(JSON.stringify(s))
+      try {
+        if (!win.isDestroyed()) win.webContents.send('update:status', s)
+      } catch {
+        /* renderer send failures are ignored */
+      }
+    }
+    push({ state: 'init', version: app.getVersion() })
+    import('electron-updater')
+      .then((mod) => {
+        // electron-updater is CommonJS, so depending on the dynamic import's interop autoUpdater can
+        // sit under default (0.1.6-0.1.8 destructured it off the top level, got undefined, and failed
+        // silently). Try both shapes.
+        const autoUpdater: AppUpdater | undefined =
+          (mod as { autoUpdater?: AppUpdater }).autoUpdater ??
+          (mod as { default?: { autoUpdater?: AppUpdater } }).default?.autoUpdater
+        if (!autoUpdater) {
+          push({ state: 'error', message: t(core!.lang, 'update.tb.autoUpdaterMissing') })
+          return
+        }
+        // Auto-download stays off — we do not pull a ~100MB payload without the user's consent.
+        // The flow is two steps: "Download" on available, "Install now" on downloaded.
+        autoUpdater.autoDownload = false
+        autoUpdater.logger = {
+          info: (m) => flog(`INFO ${m}`),
+          warn: (m) => flog(`WARN ${m}`),
+          error: (m) => flog(`ERROR ${m}`),
+          debug: () => {}
+        }
+        // Failures from the automatic (periodic) check are not surfaced to the user — the backoff is
+        // what handles errors that showed up over and over outside the internal network. Only a check
+        // the user pressed themselves pushes an error state.
+        let userInitiatedCheck = false
+        const settleCheck = (): void => {
+          userInitiatedCheck = false
+        }
+        autoUpdater.on('checking-for-update', () => push({ state: 'checking' }))
+        autoUpdater.on('update-available', (i) => {
+          push({ state: 'available', version: i.version })
+          settleCheck()
+        })
+        autoUpdater.on('update-not-available', (i) => {
+          push({ state: 'uptodate', version: i.version })
+          settleCheck()
+        })
+        autoUpdater.on('download-progress', (p) =>
+          push({ state: 'downloading', percent: Math.round(p.percent) })
+        )
+        autoUpdater.on('update-downloaded', (i) => push({ state: 'downloaded', version: i.version }))
+        autoUpdater.on('error', (e) => {
+          const message = e?.message ?? String(e)
+          if (userInitiatedCheck) push({ state: 'error', message })
+          else flog(`WARN automatic check failed (not surfaced to the user): ${message}`)
+          settleCheck()
+        })
+
+        // Periodic check: 24 hours after a success; as failures pile up, 1h -> 2h -> 4h -> 6h cap.
+        // A successful check rolls the failure counter back.
+        let checkTimer: NodeJS.Timeout | null = null
+        let consecutiveFailures = 0
+        const scheduleNextCheck = (): void => {
+          if (checkTimer) clearTimeout(checkTimer)
+          const delay = nextCheckDelayMs(consecutiveFailures)
+          flog(`next auto check: ${Math.round(delay / 60_000)}min (consecutive failures ${consecutiveFailures})`)
+          checkTimer = setTimeout(() => void runAutomaticCheck(), delay)
+        }
+        const runAutomaticCheck = async (): Promise<void> => {
+          try {
+            await autoUpdater.checkForUpdates()
+            consecutiveFailures = 0
+          } catch (e) {
+            consecutiveFailures += 1
+            flog(`WARN automatic check failed ${consecutiveFailures}x: ${(e as Error)?.message ?? String(e)}`)
+          }
+          scheduleNextCheck()
+        }
+
+        ipcMain.handle('update:check', async () => {
+          userInitiatedCheck = true
+          try {
+            await autoUpdater.checkForUpdates()
+            consecutiveFailures = 0
+          } catch {
+            /* the state is delivered through the error event */
+          }
+          scheduleNextCheck() // a manual check resets the cycle too — 24 hours from now is right
+        })
+        ipcMain.handle('update:download', async () => {
+          try {
+            await autoUpdater.downloadUpdate()
+          } catch {
+            /* the state is delivered through the error event */
+          }
+        })
+        ipcMain.handle('update:install', () => {
+          autoUpdater.quitAndInstall()
+        })
+
+        // Update campaign. The policy is fetched from the same address with the same token as the
+        // feed. Any lookup or parse failure means no campaign — a policy or network problem must not
+        // block or nag the user. The verdict can land either before or after the renderer mounts, so
+        // both a push and a query are provided.
+        ipcMain.handle('update:campaignState', () => updateCampaign)
+        ipcMain.handle('update:dismissCampaign', async (_e, id: unknown) => {
+          if (typeof id !== 'string' || !id.trim()) return
+          if (updateCampaign?.id === id) updateCampaign = null
+          await core!.appSettings.setDismissedCampaignId(id)
+          flog(`campaign dismissed: ${id}`)
+        })
+        void (async () => {
+          const policyUrl = readPolicyUrl()
+          if (!policyUrl) return
+          const campaign = await loadPolicy(policyUrl, fetch)
+          const appVersion = app.getVersion()
+          const dismissedId = core!.appSettings.getDismissedCampaignId()
+          if (!shouldApplyCampaign({ campaign, appVersion, dismissedId })) return
+          updateCampaign = { id: campaign!.id, mode: campaign!.mode }
+          flog(`campaign applied: id=${campaign!.id} mode=${campaign!.mode} version=${appVersion}`)
+          try {
+            if (!win.isDestroyed()) win.webContents.send('update:campaign', updateCampaign)
+          } catch {
+            /* send failures are ignored — the renderer also gets this via update:campaignState */
+          }
+        })()
+
+        // Check once at startup, then arm the periodic check. With autoDownload=false nothing is
+        // downloaded — only the state is reported.
+        void runAutomaticCheck()
+      })
+      .catch((e) => push({ state: 'error', message: `updater load failed: ${e?.message ?? String(e)}` }))
+  }
+})
+
+app.on('before-quit', () => {
+  quitting = true
+  void slackInboxControllerRef?.stop() // Slack inbound socket cleanup — a failure must not block quit
+  slackInboxControllerRef = null
+})
+app.on('window-all-closed', () => app.quit())
+app.on('will-quit', () => {
+  if (!core) return
+  const running = core.sessions.list().filter((s) => s.status === 'running')
+  for (const s of running) {
+    try {
+      core.sessions.kill(s.id)
+    } catch {
+      /* so one failed kill does not block cleanup of the remaining sessions */
+    }
+  }
+  try {
+    codexRollingRef?.stop()
+  } catch {
+    /* a coordinator cleanup failure must not block quit */
+  }
+  try {
+    schedulerRef?.stop() // schedule timer cleanup
+  } catch {
+    /* shutdown cleanup failures are ignored */
+  }
+  try {
+    codexTurnsRef?.stop() // codex turn watcher polling cleanup
+  } catch {
+    /* shutdown cleanup failures are ignored */
+  }
+  try {
+    core.run.stopAll()
+  } catch {
+    /* a run cleanup failure must not block quit */
+  }
+  try {
+    core.terminal.closeAll() // project terminal cleanup
+  } catch {
+    /* shutdown cleanup failures are ignored */
+  }
+  try {
+    orchRef?.stop() // close the orchestration server + delete the token file
+    orchRef = null
+  } catch {
+    /* shutdown cleanup failures are ignored */
+  }
+})

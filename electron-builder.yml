@@ -1,0 +1,40 @@
+appId: io.github.parsingk.astera
+productName: Astera
+directories:
+  output: dist-installer
+files:
+  - out/**
+  # The ?asset icons imported by main (resources/icon.png, resources/tray.png) are resolved at
+  # runtime through __dirname/../../resources, so resources must ship inside the package.
+  - resources/**
+  # logo-source.png is the input to scripts/gen-icon.ps1 and is never read at runtime.
+  - '!resources/logo-source.png'
+  # The skills directory also ships through extraResources below, and that is the copy the app reads
+  # (skillsPath = process.resourcesPath/skills when packaged). Keeping it out of the asar avoids
+  # shipping the same document twice.
+  - '!resources/skills/**'
+asarUnpack:
+  - '**/node_modules/node-pty/**'
+extraResources:
+  # The orchestration CLI is bundled into main (out/main/cli.js) and is not copied here.
+  # Only the skill document that `astera help` reads is shipped as a resource.
+  - from: resources/skills
+    to: skills
+win:
+  target: nsis
+  icon: build/icon.ico
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  # Space-free artifact name — keeps release asset URLs free of percent-encoding.
+  artifactName: ${name}-${version}-setup.${ext}
+publish:
+  # Public GitHub Releases. electron-updater reads the feed straight from the releases API, so no
+  # credentials are involved on the client side. electron-builder itself never publishes — the
+  # release workflow builds with --publish never and attaches assets through `gh` (the split exists
+  # so the installer can be code-signed between packaging and upload). This block still matters:
+  # it is what generates app-update.yml, which tells the installed app where updates live.
+  provider: github
+  owner: parsingk
+  repo: Astera
+  releaseType: draft

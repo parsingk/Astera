@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Runs on Windows because that is the only target the app ships for, and because `npm ci` triggers
+# `electron-builder install-app-deps`, which rebuilds node-pty against the Electron ABI with MSVC.
+#
+# There is no test job: test sources are not part of this repository (see .gitignore). Typecheck and
+# a full bundle build are what CI can verify here.
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 22.12 is a hard floor, not a preference: @electron/rebuild and node-abi — which
+      # `electron-builder install-app-deps` runs from postinstall — declare >=22.12.0.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run build

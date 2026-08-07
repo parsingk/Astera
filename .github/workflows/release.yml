@@ -1,0 +1,252 @@
+name: Release
+
+# Push a vX.Y.Z tag to cut a release:
+#   bump version in package.json -> commit -> git tag vX.Y.Z && git push origin vX.Y.Z
+# This builds the Windows installer, optionally code-signs it through SignPath (see below), publishes
+# it to GitHub Releases, and installed apps pick it up through electron-updater.
+#
+# Code signing is FAIL-OPEN: when the SignPath secret/variables are not configured the signing steps
+# are skipped and the release ships unsigned, exactly as before. Once signing is attempted, however,
+# it is FAIL-CLOSED: a signing failure fails the build rather than shipping a half-signed release.
+# Setup (docs/releasing.md has the full walkthrough):
+#   secret SIGNPATH_API_TOKEN            - SignPath REST API token
+#   variable SIGNPATH_ORGANIZATION_ID    - from the SignPath organization page
+#   variable SIGNPATH_PROJECT_SLUG       - the SignPath project (e.g. astera)
+#   variable SIGNPATH_POLICY_SLUG        - optional, defaults to release-signing
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: write # creating the release and uploading its assets
+  actions: read # the SignPath connector fetches the unsigned artifact through the Actions API
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      # Signing engages only when the token and the organization id are both present. Forks and local
+      # checkouts have neither, so their builds behave exactly like the pre-signing workflow.
+      SIGNING: ${{ secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Must match ci.yml: @electron/rebuild and node-abi require >=22.12.0.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # electron-updater decides whether an update exists by comparing versions, so a tag that
+      # disagrees with package.json would advertise the wrong version. Fail before building.
+      - name: Verify tag matches package.json version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = '${{ github.ref_name }}'
+          if ($tag -ne "v$version") {
+            throw "Tag ($tag) does not match package.json version ($version). Push the tag 'v$version'."
+          }
+          Write-Host "Building v$version (tag $tag)"
+
+      # The dangerous misconfiguration is a `block` campaign whose range covers the release being
+      # published: everyone gets locked out and there is no newer build to escape to. So `block`
+      # requires a maxVersion, and that bound must sit below this release. A campaign with no range at
+      # all targets every version, which is never intentional.
+      - name: Validate update campaign policy
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if (-not (Test-Path policy.json)) { Write-Host 'No policy.json — no campaign'; exit 0 }
+          try { $policy = Get-Content policy.json -Raw | ConvertFrom-Json }
+          catch { throw "policy.json failed to parse: $($_.Exception.Message)" }
+          if (-not $policy.id) { Write-Host 'Update campaign: none (id=null)'; exit 0 }
+          $min = $policy.minVersion
+          $max = $policy.maxVersion
+          $mode = if ($policy.mode) { $policy.mode } else { 'notify' }
+          if (-not $min -and -not $max) {
+            throw "Campaign '$($policy.id)' has no target range. Without one, every version is targeted — set minVersion or maxVersion."
+          }
+          if ($min -and $max -and ([version]$min -gt [version]$max)) {
+            throw "policy.json range is inverted: minVersion ($min) > maxVersion ($max)"
+          }
+          if ($mode -eq 'block') {
+            if (-not $max) {
+              throw "block mode requires maxVersion. With no upper bound, users on the newest release are blocked too."
+            }
+            if (-not ([version]$max -lt [version]$version)) {
+              throw "block mode maxVersion ($max) must be lower than the release version ($version). Otherwise the newest users are locked out with no update to take."
+            }
+            Write-Host "Update campaign: block (id=$($policy.id), targets <= $max, below this release $version — OK)"
+          } else {
+            if ($max -and -not ([version]$max -lt [version]$version)) {
+              Write-Host "::warning::notify campaign maxVersion ($max) is at or above the release version ($version) — users on the newest build will see the notice too."
+            }
+            Write-Host "Update campaign: notify (id=$($policy.id))"
+          }
+
+      - run: npm ci
+
+      # Stage 1 of the build: bundle and produce the unpacked app (dist-installer/win-unpacked).
+      # The installer is deliberately NOT built yet — the binaries inside the package have to be
+      # signed first, so that the installer is assembled from signed files.
+      - name: Build unpacked app
+        shell: pwsh
+        run: |
+          npm run build
+          npx electron-builder --win --dir --publish never
+
+      # ---- Signing stage 1: the binaries inside the package -------------------------------------
+      # Everything already carrying a valid Authenticode signature (Microsoft's conpty/OpenConsole,
+      # d3dcompiler and so on) is left untouched — re-signing would replace the vendor's signature.
+      # The rest (Astera.exe, Electron DLLs, node-pty builds, elevate.exe) is zipped with relative
+      # paths preserved and submitted as one signing request.
+      - name: Collect unsigned binaries
+        if: env.SIGNING == 'true'
+        shell: pwsh
+        run: |
+          $base = 'dist-installer/win-unpacked'
+          $stage = 'dist-installer/signing-stage'
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          $files = Get-ChildItem $base -Recurse -Include *.exe,*.dll,*.node -File |
+            Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -ne 'Valid' }
+          if (-not $files) { throw 'No unsigned binaries found — nothing to sign, which cannot be right.' }
+          foreach ($f in $files) {
+            $rel = [System.IO.Path]::GetRelativePath((Resolve-Path $base), $f.FullName)
+            $dest = Join-Path $stage $rel
+            New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
+            Copy-Item $f.FullName $dest
+          }
+          # The relative-path list drives the verification step after signing.
+          $files | ForEach-Object {
+            [System.IO.Path]::GetRelativePath((Resolve-Path $base), $_.FullName)
+          } | Set-Content dist-installer/signing-manifest.txt
+          Compress-Archive -Path "$stage/*" -DestinationPath dist-installer/unsigned-binaries.zip -CompressionLevel Optimal
+          Write-Host "Collected $($files.Count) binaries for signing"
+
+      - name: Upload unsigned binaries artifact
+        if: env.SIGNING == 'true'
+        id: upload-binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-binaries-${{ github.run_id }}
+          path: dist-installer/unsigned-binaries.zip
+          retention-days: 1
+
+      # wait-for-completion blocks until the signing request is approved and processed. SignPath
+      # release policies typically require a manual approval, so the timeout is generous — approve
+      # the request in the SignPath dashboard while this step waits.
+      - name: 'SignPath: sign binaries'
+        if: env.SIGNING == 'true'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: windows-binaries-zip
+          github-artifact-id: ${{ steps.upload-binaries.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: dist-installer/signed-binaries
+
+      # Fail-closed from here: signing was attempted, so every file in the manifest must now carry a
+      # valid signature — a partially signed package must never reach the installer step.
+      - name: Apply signed binaries
+        if: env.SIGNING == 'true'
+        shell: pwsh
+        run: |
+          $base = 'dist-installer/win-unpacked'
+          $signedRoot = 'dist-installer/signed-binaries'
+          # The signed artifact mirrors what was submitted: either the zip itself or its extracted
+          # tree, depending on connector behaviour. Handle both.
+          $zip = Get-ChildItem $signedRoot -Recurse -Filter *.zip -File | Select-Object -First 1
+          if ($zip) { Expand-Archive $zip.FullName -DestinationPath $signedRoot -Force }
+          $manifest = Get-Content dist-installer/signing-manifest.txt
+          # The zip was built from the staging tree, so the extracted output contains the manifest's
+          # relative paths under SOME root. Locate that root by probing for the first entry, then copy
+          # everything by its manifest path — no fuzzy filename matching.
+          $roots = @(Get-Item $signedRoot) + @(Get-ChildItem $signedRoot -Recurse -Directory)
+          $root = $roots | Where-Object { Test-Path (Join-Path $_.FullName $manifest[0]) } | Select-Object -First 1
+          if (-not $root) { throw "Signed artifact does not contain '$($manifest[0])' under any directory" }
+          $missing = @()
+          foreach ($rel in $manifest) {
+            $src = Join-Path $root.FullName $rel
+            if (-not (Test-Path $src)) { $missing += $rel; continue }
+            Copy-Item $src (Join-Path $base $rel) -Force
+          }
+          if ($missing) { throw "Signed artifact is missing: $($missing -join ', ')" }
+          $unsigned = $manifest | Where-Object {
+            (Get-AuthenticodeSignature (Join-Path $base $_)).Status -ne 'Valid'
+          }
+          if ($unsigned) { throw "Still unsigned after SignPath: $($unsigned -join ', ')" }
+          Write-Host "All $($manifest.Count) binaries verified signed"
+
+      # Stage 2 of the build: assemble the NSIS installer from the (now possibly signed) unpacked
+      # directory. This also writes latest.yml and the .blockmap — from the installer as it exists at
+      # this moment, i.e. before the installer itself is signed.
+      - name: Build installer
+        shell: pwsh
+        run: npx electron-builder --win --prepackaged dist-installer/win-unpacked --publish never
+
+      # ---- Signing stage 2: the installer itself -------------------------------------------------
+      - name: Upload unsigned installer artifact
+        if: env.SIGNING == 'true'
+        id: upload-installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-installer-${{ github.run_id }}
+          path: dist-installer/*-setup.exe
+          retention-days: 1
+
+      - name: 'SignPath: sign installer'
+        if: env.SIGNING == 'true'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: windows-installer
+          github-artifact-id: ${{ steps.upload-installer.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: dist-installer/signed-installer
+
+      # Signing changed the installer's bytes, so the update feed electron-builder wrote a step ago
+      # (sha512 + size in latest.yml, and the differential-download .blockmap) no longer matches —
+      # an updater would download the file and reject it. Regenerate both from the signed file.
+      - name: Apply signed installer and patch update feed
+        if: env.SIGNING == 'true'
+        shell: pwsh
+        run: |
+          $signed = Get-ChildItem dist-installer/signed-installer -Recurse -Filter *-setup.exe -File | Select-Object -First 1
+          if (-not $signed) { throw 'Signed installer not found in the SignPath output' }
+          $target = Get-ChildItem dist-installer -Filter *-setup.exe -File | Select-Object -First 1
+          Copy-Item $signed.FullName $target.FullName -Force
+          $sig = Get-AuthenticodeSignature $target.FullName
+          if ($sig.Status -ne 'Valid') { throw "Installer signature is $($sig.Status) after SignPath" }
+          Write-Host "Installer signed by: $($sig.SignerCertificate.Subject)"
+          node scripts/patch-update-feed.cjs $target.FullName dist-installer/latest.yml
+
+      # The release is created as a draft and only flipped to public once every asset is attached.
+      # That ordering matters: latest.yml IS the update feed, and a half-finished release would
+      # advertise a version whose installer is not there yet. policy.json rides along because the app
+      # fetches it from releases/latest/download/policy.json.
+      - name: Create draft release and upload assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -ne 0) { gh release create $tag --draft --title $tag --generate-notes }
+          $assets = @(Get-ChildItem dist-installer -File | Where-Object { $_.Name -match '-setup\.exe(\.blockmap)?$|^latest\.yml$' } | ForEach-Object { $_.FullName })
+          $assets += 'policy.json'
+          gh release upload $tag @assets --clobber
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit '${{ github.ref_name }}' --draft=false --latest

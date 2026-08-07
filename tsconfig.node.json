@@ -1,0 +1,7 @@
+{
+  "compilerOptions": {
+    "composite": true, "target": "ES2022", "module": "ESNext", "moduleResolution": "bundler",
+    "strict": true, "skipLibCheck": true, "types": ["node"], "outDir": "out/tsc-node"
+  },
+  "include": ["src/main/**/*", "src/preload/**/*", "src/core/**/*", "src/cli/**/*", "electron.vite.config.ts", "vitest.config.ts", "vitest.globalSetup.ts"]
+}

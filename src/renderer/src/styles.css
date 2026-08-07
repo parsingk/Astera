@@ -1,0 +1,955 @@
+:root {
+  --bg: #17171a; /* main background */
+  --rail: #101013; /* activity rail */
+  --panel: #1a1a1e; /* sidebar */
+  --elevated: #23232a; /* active / hover row */
+  --line: #000000; /* rail, sidebar, and region dividers (crisp IDE look) */
+  --line-soft: #26262c; /* thin divider between rows */
+  --text: #d0d0d6;
+  --text-dim: #7d7d88;
+  --text-faint: #55555f;
+  --accent: #37b0c4; /* active marker and focus (separate from the account colour) */
+  --ok: #79c98f; /* logged in */
+  --ok-bg: #14301f;
+  --status-bg: #0e6478; /* bottom status bar */
+  --status-ink: #d4f2f8;
+  --sans: system-ui, -apple-system, 'Segoe UI', 'Malgun Gothic', sans-serif;
+  /* file type icon tones */
+  --fi-blue: #5b9fe0;
+  --fi-cyan: #4fb6c4;
+  --fi-green: #7fbf6a;
+  --fi-yellow: #d7b45a;
+  --fi-orange: #d68b4f;
+  --fi-red: #d3706b;
+  --fi-purple: #a98ede;
+  --fi-pink: #d47fae;
+  --fi-gray: #8a8a94;
+  --fi-mute: #5f5f69; /* dependency, build output, and cache folders — deliberately dimmed to suppress noise */
+  /* git status colours. The values are reused from the existing palette — only the names are new, to
+     separate them from the file type colours. Using --fi-yellow directly to mean 'modified' would drag
+     one along when the other is adjusted. */
+  --git-new: #79c98f;      /* = --ok */
+  --git-modified: #d7b45a; /* = --fi-yellow */
+  --git-deleted: #d3706b;
+  --git-conflict: #d68b4f; /* = --fi-orange */
+  --mono: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+  /* group tab bar height. Includes the border — * { box-sizing: border-box } is global */
+  --pane-tabbar-h: 34px;
+}
+
+* { box-sizing: border-box; margin: 0; }
+html, body, #root { height: 100%; }
+body { font-family: var(--sans); background: var(--bg); color: var(--text); }
+
+/* ---------- scrollbars ---------- */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--elevated); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: #3a3a43; background-clip: padding-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+.app { display: flex; flex-direction: column; height: 100%; }
+.workbench { display: flex; flex: 1; min-height: 0; }
+
+/* ---------- title bar ---------- */
+.titlebar {
+  height: 34px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  background: var(--rail);
+  border-bottom: 1px solid var(--line);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.tb-brand { display: flex; align-items: center; gap: 8px; padding-left: 10px; }
+.tb-logo {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  object-fit: contain;
+  display: block;
+  -webkit-user-drag: none;
+}
+.tb-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.tb-controls { margin-left: auto; display: flex; -webkit-app-region: no-drag; }
+.tb-update { margin-left: auto; padding: 0 12px; font-size: 12px; color: #9a9aa5; white-space: nowrap; align-self: center; -webkit-app-region: no-drag; }
+.tb-update-err { color: #e66; cursor: default; }
+.tb-update-btn { margin-left: auto; margin-right: 8px; align-self: center; background: #2f9e6e; color: #fff; border: none; border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer; -webkit-app-region: no-drag; }
+.tb-update-btn:hover { background: #37b07b; }
+/* When the install and check buttons appear together, a narrow modal (600px) cannot fit both on one
+   line. The cell wraps rather than the label — the label stays on one line even as the version digits grow. */
+.update-cell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.update-cell button { white-space: nowrap; }
+/* Only the update row pins its label — as the cell widened, flex squeezed the label and broke it across lines */
+.settings-row .update-label { white-space: nowrap; }
+.update-note { font-size: 12px; color: #9a9aa5; }
+.update-note.update-err { color: #e66; }
+.tb-btn {
+  width: 46px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0;
+  border-radius: 0;
+}
+.tb-btn:hover { background: rgba(255, 255, 255, .08); color: var(--text); }
+.tb-btn.close:hover { background: #e11d48; color: #fff; }
+
+/* ---------- activity rail ---------- */
+.rail {
+  width: 46px;
+  flex: none;
+  background: var(--rail);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding-top: 10px;
+}
+.rail-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 15px;
+  cursor: pointer;
+  padding: 0;
+  margin: 0;
+}
+.rail-btn:hover { color: var(--text); }
+.rail-btn.on { color: var(--text); background: var(--elevated); box-shadow: inset 2px 0 0 var(--accent); }
+/* The wrapper that pins the terminal and ⚙ (settings) to the bottom together. The auto margin has to
+   live on this one wrapper — giving it to each .rail-btn (two auto siblings) distributes the free space
+   evenly and pushes the buttons apart. */
+.rail-bottom { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.rail-settings { margin-bottom: 10px; }
+
+/* ---------- sidebar / main ---------- */
+.sidebar { width: 280px; flex: none; background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; display: flex; flex-direction: column; }
+.resizer { width: 5px; flex: none; cursor: col-resize; background: transparent; }
+.resizer:hover, .resizer:active { background: var(--accent); }
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing-row { cursor: row-resize; user-select: none; }
+.run-resizer { flex: none; height: 6px; background: transparent; cursor: row-resize; position: relative; }
+.run-resizer::after { content: ''; position: absolute; left: 0; right: 0; top: 2px; height: 2px; background: var(--accent); opacity: 0; transition: opacity .12s; }
+.run-resizer:hover::after, .run-resizer:active::after { opacity: .8; }
+.content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.placeholder { margin: auto; color: var(--text-faint); font-size: 13px; }
+
+/* ---------- explorer / editor mode ---------- */
+.session-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.explorer-view { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.file-tabs { flex: none; }
+
+/* ---------- project Run/Stop — RunToolbar and workbench wiring ---------- */
+.workbench-topbar { flex: none; display: flex; align-items: stretch; }
+.workbench-topbar .file-tabs { flex: 1; min-width: 0; }
+.workbench-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.run-toolbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-bottom: 1px solid var(--line); border-left: 1px solid var(--line); background: var(--panel); position: relative; }
+.run-config-select {
+  appearance: none;
+  -webkit-appearance: none;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background-color: var(--bg);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%237d7d88' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  background-size: 10px;
+  color: var(--text);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: 4px 24px 4px 10px;
+  font-size: 12px;
+  font-family: var(--sans);
+  cursor: pointer;
+}
+.run-config-select:hover { border-color: var(--text-faint); }
+.run-config-select:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.run-btn { width: 28px; height: 28px; display: grid; place-items: center; background: transparent; border: 0; border-radius: 4px; color: var(--text-dim); font-size: 15px; padding: 0; cursor: pointer; }
+.run-btn:hover { background: var(--elevated); color: var(--text); }
+.run-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.run-btn.play { color: #3fb950; }
+.run-btn.play:disabled { color: var(--text-faint); background: transparent; cursor: default; }
+.run-btn.stop { color: #e5534b; }
+.run-global { position: relative; }
+.run-global-badge { display: inline-flex; align-items: center; gap: 4px; background: var(--elevated); border: 1px solid var(--line-soft); color: var(--text-dim); border-radius: 4px; font-size: 11px; padding: 2px 7px; cursor: pointer; font-variant-numeric: tabular-nums; }
+.run-global-badge:hover { border-color: var(--text-faint); }
+.run-global-badge .tri { color: #3fb950; font-size: 9px; }
+.run-global-badge .n { color: var(--ok); font-weight: 600; }
+.run-global-menu { position: absolute; top: calc(100% + 5px); right: 0; z-index: 20; min-width: 240px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; padding: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
+.run-global-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 4px; }
+.run-global-row:hover { background: var(--elevated); }
+.run-global-live { width: 7px; height: 7px; border-radius: 50%; background: #3fb950; flex: none; box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
+.run-global-jump { flex: 1; min-width: 0; text-align: left; background: none; border: none; color: var(--text); font-size: 12px; padding: 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-global-stop { width: 20px; height: 20px; display: grid; place-items: center; background: transparent; border: 0; border-radius: 4px; color: var(--text-faint); font-size: 11px; padding: 0; cursor: pointer; }
+.run-global-stop:hover { background: var(--bg); color: #e5534b; }
+/* .run-add-form (a popover hanging off the toolbar) was replaced by RunConfigDialog (.modal) and
+   deleted. Its right anchor and its vertical stack with a fixed width go with it — the modal achieves
+   what those were for (keeping the form visible and uncut), so this is a replacement rather than a revert. */
+
+.panel-header { padding: 11px 12px 6px; display: flex; flex-direction: column; gap: 6px; }
+.panel-header h2 { font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; }
+.panel-header h2 .count { color: var(--text-faint); font-weight: 400; margin-left: 4px; }
+.panel-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.panel-actions select {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 1;
+  min-width: 0;
+  background-color: var(--bg);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%237d7d88' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  background-size: 10px;
+  color: var(--text);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: 3px 22px 3px 8px;
+  font-size: 11px;
+  font-family: var(--sans);
+  cursor: pointer;
+}
+.panel-actions select:hover { border-color: var(--text-faint); }
+.panel-actions select:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.icon-btn {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-dim);
+  padding: 0;
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--elevated); color: var(--text); }
+.icon-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+
+button {
+  background: var(--elevated);
+  color: var(--text);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: 3px 9px;
+  font-size: 12px;
+  font-family: var(--sans);
+  cursor: pointer;
+}
+button:hover { background: #2a2a31; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+button.ghost { background: none; border: none; color: var(--text-dim); padding: 2px 5px; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; }
+button.ghost:hover { background: none; color: var(--text); }
+button.ghost.danger:hover { color: #e5534b; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #0d2b30; font-weight: 600; }
+button.primary:hover { filter: brightness(.85); }
+button.primary:disabled { background: var(--elevated); border-color: var(--line-soft); color: var(--text-faint); }
+
+/* ---------- account panel ---------- */
+.account-panel ul { list-style: none; padding: 0; }
+/* As the first element of .settings-content, the default top margin of a <ul> reads as padding above the tab area, so it is removed */
+.settings-accounts ul { list-style: none; padding: 0; margin: 0; }
+/* Wraps the hint together with the list — the gap of .settings-content applies only between direct
+   items, and the ul has margin:0, so without making this container a flex the hint sticks to the first
+   account row */
+.settings-accounts { display: flex; flex-direction: column; gap: 10px; }
+.account-row { display: flex; align-items: center; gap: 8px; padding: 5px 12px; border-left: 2px solid transparent; cursor: default; }
+.account-row:hover { background: var(--elevated); border-left-color: var(--accent); }
+.account-label { flex: 1; min-width: 0; font-size: 12px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.color-dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.account-row .color-dot { width: 9px; height: 9px; }
+.badge { font-size: 9px; font-family: var(--mono); color: var(--text-dim); background: var(--elevated); border-radius: 2px; padding: 0 4px; flex-shrink: 0; }
+.badge.ok { color: var(--ok); background: var(--ok-bg); }
+.login-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-faint); flex-shrink: 0; } /* grey, not logged in */
+.login-dot.on { background: var(--ok); } /* green, logged in */
+/* provider badge — shared by account rows, the detection list, and history entries */
+.provider-badge { flex: none; display: inline-flex; align-items: center; line-height: 1; opacity: 0.85; }
+.provider-badge.claude { color: #d97757; font-size: 11px; }
+.provider-badge.codex { color: #fff; } /* the OpenAI mark — its size is set by the svg attributes */
+.confirm-text { font-size: 13px; color: var(--text); line-height: 1.5; margin: 0 0 12px; }
+.toggle-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; user-select: none; }
+.warn-text { font-size: 11.5px; color: #d9a441; line-height: 1.5; margin: 8px 0 0; }
+.empty { color: var(--text-faint); font-size: 11px; padding: 6px 12px; }
+
+/* ---------- worktree panel ---------- */
+.worktree-panel { border-top: 1px solid var(--line); }
+/* Reuses the look of .panel-header h2 as a collapse/expand button */
+.panel-toggle { background: none; border: none; padding: 0; font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; cursor: pointer; }
+.panel-toggle:hover { color: var(--text); }
+/* It sits alongside the history section in the sidebar, so the hierarchy look matches that one:
+   .worktree-group=.project-group, .worktree-repo=.project-name, .worktree-list=.session-sublist,
+   .worktree-row=.session-row, .worktree-name=.session-row .entry-title.
+   (.worktree-name previously had no font-size and inherited the 16px body default, so it looked larger
+   than a history row.)
+   Unlike .project-group the last group keeps its divider here, because the HISTORY header sits directly
+   below and dropping it would invent a section divider that was not there (history is the end of a
+   scrolling list, so its last line is never seen). */
+.worktree-group:not(:last-child) { border-bottom: 1px solid var(--line-soft); }
+.worktree-repo { padding: 10px 12px 6px; font-size: 13.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.worktree-list { margin: 0 0 5px 22px; border-left: 2px solid var(--line); }
+.worktree-row { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 10px; }
+.worktree-row:hover { background: var(--elevated); }
+.worktree-name { flex: 1; min-width: 0; font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.worktree-status { opacity: 0.6; font-style: normal; }
+.worktree-actions { display: flex; gap: 2px; flex-shrink: 0; }
+/* the same restrained tone as .project-row .project-open-explorer */
+.worktree-actions .ghost { opacity: 0.7; }
+.worktree-actions .ghost:hover:not(:disabled) { opacity: 1; }
+/* The lock indicator while a delete is in flight — the 0.7 rule above is more specific than the global
+   button:disabled (opacity .5), so without dimming again here a locked button looks completely normal */
+.worktree-actions .ghost:disabled { opacity: 0.3; }
+/* The ✕ on a row being deleted holds the spinner — dimming it like a locked button would kill the
+   spinner with it (a parent's opacity cannot be undone by a child, so the button itself is an exception).
+   The height goes back to the line box the ✕ glyph used to make (normal line-height on a 13px font,
+   ≈ 1.333em) plus .ghost's 2px top and bottom padding — the spinner is 14px, so left alone this row would
+   sit 3px lower and the list would jitter */
+.worktree-actions .ghost.removing:disabled { opacity: 0.7; }
+.worktree-actions .ghost.removing { min-height: calc(1.333em + 4px); }
+
+/* ---------- tabs ---------- */
+.tabs { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; }
+.tab { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: 11.5px; color: var(--text-dim); border-right: 1px solid var(--line); cursor: pointer; white-space: nowrap; flex: none; }
+.tab.active { background: var(--bg); color: var(--text); }
+.tab.exited .tab-title { text-decoration: line-through; color: var(--text-faint); }
+.tab-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+/* The rolling-active session marker — a small, restrained, non-interactive mark; the account chain is exposed only through the title tooltip */
+.tab-roll { flex: none; font-size: 11px; opacity: 0.65; cursor: default; user-select: none; }
+/* Session working: a spinner in the account colour. Larger than a dot (10px) with a bright semicircular
+   arc turning, so it reads clearly. The colour is set inline (a faint track plus full colour on
+   top/right = a bright 180° arc). */
+.tab-dot.busy { width: 10px; height: 10px; box-sizing: border-box; border-width: 2px; border-style: solid; background: transparent; animation: cm-spin .6s linear infinite; }
+/* tab drag reordering */
+.tab { position: relative; }
+.tab.dragging { opacity: 0.4; }
+/* the drop insertion indicator — a vertical line on the left (or right) edge of the target tab */
+.tab.drop-before::before,
+.tab.drop-after::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent); z-index: 1;
+}
+.tab.drop-before::before { left: -1px; }
+.tab.drop-after::after { right: -1px; }
+.new-tab { background: none; border: none; border-left: 1px solid var(--line); border-right: 1px solid var(--line); color: var(--accent); padding: 8px 16px; font-size: 15px; font-weight: 600; line-height: 1; cursor: pointer; flex: none; }
+.new-tab:hover:not(:disabled) { background: var(--elevated); }
+.new-tab:disabled { color: var(--text-faint); cursor: default; }
+/* File viewer tabs — they inherit the same style as session tabs and are distinguished by a per-file-type
+   SVG icon (previously a single 📄 emoji was the only distinction) */
+.tab.file-tab { font-style: normal; }
+
+/* ---------- terminal ---------- */
+.terminal-slot { flex: 1; min-height: 0; }
+/* min-height:0 plus overflow:hidden — allows flex shrinking and confines the overflow to the slot, so
+   the xterm canvas (rows × cellHeight) cannot spill past it and encroach on the bottom status bar */
+.terminal-wrap { position: relative; flex: 1; display: flex; min-height: 0; overflow: hidden; }
+.terminal-host { flex: 1; background: #141417; min-height: 0; overflow: hidden; }
+/* No inner padding on the terminal — it has to sit flush against the sidebar's bottom line and the left
+   and right edges, or the session window looks like it is floating. Zero padding also prevents clipping:
+   FitAddon takes the parent's (host's) height as availableHeight verbatim and subtracts only the padding
+   of .xterm itself, so padding on the host is missing from that calculation, one row too many is
+   computed, and the last line was cut by up to 8px */
+/* The default .xterm-viewport background in xterm.css is #000 and the theme background (#141417) is not
+   applied there. The screen (rows × cellHeight) is smaller than the viewport by the cell grid remainder
+   (up to 15px), and that difference showed as a black band — letting the host background show through
+   makes the seam invisible */
+.terminal-host .xterm-viewport { background: transparent; }
+/* No room is reserved for a scrollbar — fitTerminalToHost fills the width to the cell grid, so a visible
+   track would cover the last column. Scrolling is by wheel and keyboard, and the thumb is not shown */
+.terminal-host .xterm-viewport::-webkit-scrollbar { width: 0; height: 0; }
+/* The scrollbar in xterm 6.0 is not native but a DOM overlay derived from VS Code, so the rule above does
+   not reach it. Its width is the overviewRuler.width default of 14px and the slider colour is 20% of the
+   foreground (#d0d0d6, i.e. grey), so the moment the scrollback exceeded the viewport a thick grey bar
+   appeared on the right — claude and codex sessions use the same TerminalView, and the only difference is
+   whether the TUI leaves scrollback behind.
+   It has to be display:none to drop out of hit testing as well (merely making it transparent lets the
+   right 14px eat drag selection).
+   Wheel and keyboard scrolling are still handled by the scrollable element. The selectors are verified
+   against the upstream xterm.css by core/terminal/scrollbarCss.test.ts */
+.terminal-host .xterm-scrollable-element > .scrollbar { display: none; }
+/* the resume loading overlay — shown in the centre of the terminal until the first output. No pointer-events, so terminal focus is unaffected */
+.loading-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--text-dim); font-size: 13px; background: #141417; pointer-events: none; }
+.loading-spinner { width: 14px; height: 14px; border: 2px solid var(--line-soft); border-top-color: var(--accent); border-radius: 50%; animation: cm-spin .8s linear infinite; }
+@keyframes cm-spin { to { transform: rotate(360deg); } }
+.exit-overlay { position: absolute; inset: 0; background: rgba(0,0,0,.7); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text); }
+.exit-overlay button { background: var(--accent); border-color: var(--accent); color: #0d2b30; font-weight: 600; }
+.exit-overlay button:hover { filter: brightness(.85); }
+/* the rolling progress banner — an overlay at the top of the terminal */
+.roll-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  padding: 4px 10px;
+  font-size: 12px;
+  background: #3a2f14;
+  color: #e8c35a;
+  border-bottom: 1px solid #5a4a1e;
+  pointer-events: none;
+}
+
+/* the schedule banner — the same shape as roll-banner. It has an off button, so pointer-events are allowed */
+.sched-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 10px;
+  font-size: 12px;
+  background: #14303a;
+  color: #5ac8e8;
+  border-bottom: 1px solid #1e4a5a;
+}
+/* Sits below the rolling banner when both are shown — the measured height of .roll-banner is 24.7px (at
+   DPR 1.5: 12px font + normal line-height ≈ 16px + 4+4 padding + ≈0.67px border), and 16+8+1=25px at DPR 1.
+   25px keeps them from covering each other on either side (the previous 23px overlapped by 1.7px and hid
+   the bottom border) */
+.sched-banner.below-roll { top: 25px; }
+.sched-banner button { font-size: 11px; padding: 0 8px; }
+/* the scheduler form (NewSessionDialog) */
+.sched-field { display: flex; flex-direction: column; gap: 6px; } /* gap only applies on a flex container */
+.sched-minutes { width: 70px; }
+/* .field input[type="text"] (width:100%, specificity 0,2,1) beats the width of this class on its own
+   (0,1,0) — the workaround is flex-basis, the same idiom as .jdk-select and .run-config-cwd. Once
+   flex-basis is set, the flex layout algorithm does not use width, so the rendered width is 90px even
+   though width wins the cascade */
+.sched-days { flex: 0 0 90px; }
+.sched-weekdays { gap: 4px; }
+.sched-weekdays .weekday { padding: 2px 8px; font-size: 12px; }
+.sched-weekdays .weekday.on { background: var(--accent); border-color: var(--accent); color: #0d2b30; }
+/* The dimming style of .check-note requires a label.check-small ancestor, so it does not apply inside
+   this form (which is in a .row) — the existing rule is left alone and a new one is added for this form only */
+.sched-field .check-note { opacity: 0.6; }
+
+/* ---------- modals ---------- */
+/* z-index: raises modals rendered inside the sidebar (AccountPanel) to group 7 so they are not covered by
+   .terminal-wrap (position:relative, group 6), which comes later in the DOM. Common to every modal. */
+.modal-backdrop { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; }
+.modal { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; padding: 20px; width: 460px; display: flex; flex-direction: column; gap: 12px; }
+/* In a modal wrapped in a form (add and import account) the form is the only child, so the modal gap does
+   not reach inside — the same vertical spacing is given to the form as well, keeping the input fields off
+   the button row */
+.modal form { display: flex; flex-direction: column; gap: 12px; }
+/* modal help text — small and muted, below the input */
+.modal-hint { color: var(--text-faint); font-size: 11.5px; }
+.modal h2 { font-size: 15px; font-weight: 600; color: var(--text); }
+/* The wait overlay for starting a new session — it reuses the spinner and text of the resume terminal
+   loading state (.loading-overlay) and only swaps the background for a modal tone. Unlike the terminal it
+   does not let clicks through (pointer-events): while the start is in progress it has to cover the form so
+   it cannot be touched or submitted again. position:relative is given to this modal only — putting it on
+   all of .modal would change the stacking context of every other modal too. */
+.modal.new-session { position: relative; }
+.modal .loading-overlay { background: var(--panel); border-radius: 6px; pointer-events: auto; z-index: 1; }
+.field label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+.field select, .field input[type="text"], .field textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 6px; border-radius: 4px; }
+/* A field entered line by line, like environment variables — monospaced so the values line up visibly, and resizable in height by the user */
+.field textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
+.field .modal-hint { margin-top: 4px; display: block; }
+.row { display: flex; align-items: center; gap: 8px; }
+.row.right { justify-content: flex-end; }
+/* Truncates a path or conversation summary to one line. display:block is essential — left inline, a
+   <span> does not honour overflow/text-overflow (a non-replaced inline element), so only nowrap applies
+   and the text spills out of the modal. Inside a .row it is a flex child and becomes a block
+   automatically, but not when it is a direct child of .field.
+   flex:1 is there to fill the leftover width inside a .row, and overflow:hidden releases the automatic
+   flex minimum size to 0, so the ellipsis works in that context too. */
+.path { display: block; flex: 1; font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.warn { color: #facc15; font-size: 13px; }
+.settings-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 13.5px; }
+.settings-row span:first-child { color: var(--text-dim); }
+/* language selection — unified with .slack-url-input's palette and sizing */
+.settings-lang-select { background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 5px 8px; border-radius: 4px; font-size: 13px; }
+/* Slack Webhook settings */
+.slack-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.slack-url-input { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 5px 8px; border-radius: 4px; font-size: 13px; }
+/* the shortcut list (and the settings sidebar) */
+.shortcut-group { display: flex; flex-direction: column; gap: 4px; }
+.shortcut-group-title { font-size: 12px; color: var(--text-faint); margin-top: 2px; }
+.shortcut-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; font-size: 13px; }
+.shortcut-keys { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.shortcut-or { color: var(--text-faint); font-size: 11px; margin: 0 2px; }
+.shortcut-desc { color: var(--text-dim); text-align: right; }
+.shortcut-keys kbd {
+  font-family: inherit; font-size: 11.5px; line-height: 1.4; color: var(--text);
+  background: var(--elevated); border: 1px solid var(--line); border-bottom-width: 2px;
+  border-radius: 4px; padding: 1px 6px; white-space: nowrap;
+}
+
+/* the two-column restructuring of the settings modal */
+/* Proportional to the window with a floor and ceiling (clamp) so it does not become oversized on a large monitor. The body is flex and fills the remaining height. */
+.modal.settings { width: clamp(600px, 58vw, 940px); height: clamp(440px, 70vh, 800px); padding: 0; gap: 0; overflow: hidden; }
+.settings-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 26px; border-bottom: 1px solid var(--line); }
+.settings-close { background: none; border: none; color: var(--text-dim); font-size: 14px; line-height: 1; cursor: pointer; padding: 6px 10px; border-radius: 4px; }
+.settings-close:hover { color: var(--text); background: var(--line-soft); }
+.settings-body { display: flex; flex: 1; min-height: 0; }
+.settings-nav { display: flex; flex-direction: column; gap: 2px; width: 200px; flex-shrink: 0; padding: 16px 12px; border-right: 1px solid var(--line); }
+.settings-nav-item { text-align: left; background: none; border: none; color: var(--text-dim); font-size: 13.5px; padding: 8px 12px; border-radius: 5px; cursor: pointer; }
+.settings-nav-item:hover { background: var(--line-soft); color: var(--text); }
+.settings-nav-item.active { background: var(--line-soft); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+.settings-content { flex: 1; min-width: 0; padding: 24px 32px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
+.settings-slack { display: flex; flex-direction: column; gap: 8px; }
+.settings-worktree { display: flex; flex-direction: column; gap: 8px; }
+.worktree-root-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.worktree-root-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.settings-field-label { font-size: 13.5px; color: var(--text-dim); }
+.settings-hint { font-size: 12px; color: var(--text-faint); }
+
+/* account rolling slots — multi-account selection in the new session modal */
+.account-slot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.account-slot .slot-label {
+  flex: 0 0 130px;
+  font-size: 11px;
+  opacity: 0.75;
+}
+.account-slot select {
+  flex: 1;
+}
+.account-slot .account-select {
+  flex: 1;
+  min-width: 0;
+}
+/* A custom dropdown for account selection — it replaces the native select so an SVG badge can go inside
+   an option. The trigger uses the same border and background as .field select. */
+.account-select { position: relative; }
+.account-select-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line-soft);
+  padding: 6px;
+  border-radius: 4px;
+  text-align: left;
+  cursor: pointer;
+}
+.account-select-trigger:hover { border-color: var(--text-faint); }
+.account-select-trigger:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.account-select-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-select-label.empty { color: var(--text-faint); }
+.account-select-caret { flex: none; color: var(--text-dim); font-size: 10px; }
+/* Aligns the badge-less 'all accounts' row — the same width as ProviderBadge (a 12px svg) */
+.provider-badge-spacer { flex: none; width: 12px; }
+.account-select-list {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: 2px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.45);
+}
+.account-select-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.account-select-option.cursor { background: var(--elevated); }
+.account-select-option.selected .account-select-label { color: var(--accent); }
+/* the history account filter — a panel header is denser than a form (sized to match .panel-actions select) */
+.history-account-filter { flex: 1; min-width: 0; }
+.history-account-filter .account-select-trigger { padding: 3px 8px; font-size: 11px; }
+.history-account-filter .account-select-option { padding: 4px 8px; font-size: 11px; }
+.account-slot .slot-remove {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  font-size: 11px;
+}
+.add-account {
+  font-size: 12px;
+  padding: 3px 8px;
+}
+/* the right-click context menu — the same surface tone as account-select-list */
+.context-menu {
+  position: fixed;
+  z-index: 210; /* above modal-backdrop (100) and toast-host (200) */
+  min-width: 180px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: 3px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.45);
+  font-size: 12px;
+}
+.context-menu-item { padding: 5px 10px; border-radius: 3px; cursor: pointer; color: var(--text); }
+.context-menu-item.cursor { background: var(--elevated); }
+.context-menu-item.danger { color: #d3706b; }
+.context-menu-item.disabled { color: var(--text-faint); cursor: default; }
+.context-menu-sep { height: 1px; margin: 3px 6px; background: var(--line-soft); }
+/* the rolling resume prompt input */
+.roll-prompt-field { display: flex; flex-direction: column; gap: 3px; margin-top: -2px; }
+.roll-prompt-input { width: 100%; font-size: 12px; }
+.roll-prompt-hint { font-size: 10.5px; color: var(--text-faint); }
+.modal label.check-small {
+  font-size: 11px;
+  opacity: 0.85;
+}
+.modal label.check-small .check-note {
+  margin-left: 4px;
+  opacity: 0.6;
+}
+
+/* ---------- history ---------- */
+.history-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.history-list { list-style: none; padding: 0; overflow-y: auto; flex: 1; }
+.unread-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex-shrink: 0; }
+.entry-title { flex: 1; min-width: 0; font-size: 11.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entry-sub { font-size: 9.5px; font-family: var(--mono); color: var(--text-faint); flex-shrink: 0; }
+.history-sentinel { padding: 8px 12px; font-size: 10.5px; color: var(--text-faint); text-align: center; }
+/* the per-project list */
+.project-group { border-bottom: 1px solid var(--line-soft); }
+.project-row { display: flex; align-items: center; gap: 9px; padding: 10px 12px; cursor: pointer; user-select: none; }
+.project-row:hover { background: var(--elevated); }
+.project-chevron { flex-shrink: 0; width: 12px; font-size: 11px; color: var(--text-faint); }
+.project-name { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-meta { font-size: 10px; font-family: var(--mono); color: var(--text-faint); flex-shrink: 0; }
+/* An expanded session: bound by a vertical rail in the account colour, with the title dimmed — the density stays as it is */
+.session-sublist { list-style: none; margin: 0 0 5px 22px; padding: 0; border-left: 2px solid var(--line); }
+.session-row { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 10px; cursor: pointer; }
+.session-row:hover { background: var(--elevated); }
+.session-row .entry-title { color: var(--text-dim); }
+.session-sublist .history-sentinel { padding-left: 10px; text-align: left; }
+.session-sublist .empty { padding-left: 10px; }
+.modal.preview { width: 640px; max-height: 80vh; }
+.modal.detect { width: 520px; max-height: 80vh; }
+.detect-list { list-style: none; max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.detect-row { display: flex; align-items: flex-start; gap: 8px; padding: 4px 2px; border-bottom: 1px solid var(--line-soft); }
+.detect-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.detect-main input[type="text"] { background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 4px 6px; border-radius: 4px; width: 100%; }
+.detect-path { font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the Local History modal — list-style modals follow the .detect-list convention (body plus metadata within a row) */
+.modal.local-history { width: 560px; max-height: 80vh; }
+/* The run configuration modal — with six fields (name, command, JDK, Spring profile, working folder,
+   environment variables) it can overflow on a small screen. .run-config-body is overflow-y:auto, so its
+   automatic flex minimum size becomes 0 (the spec rule for a flex item whose overflow is not visible) and
+   it shrinks and scrolls only when it has to, while the h2 and the button row are siblings and stay
+   outside the scroll — the same approach as .preview-scroll in .modal.preview. */
+.modal.run-config { max-height: 80vh; }
+/* The resume modal — with rolling, schedule, Slack, and permission checkboxes plus the conditional
+   schedule inputs stacked up, it can overflow in a narrow window. The same convention as its sibling modals. */
+.modal.resume { max-height: 80vh; overflow-y: auto; }
+.run-config-body { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
+/* The JDK select — paths are long and overflow, so it is ellipsised like .run-config-select (RunToolbar).
+   It takes the leftover width next to the "Browse…" button — width:100% on .field select loses to the
+   minimum size in a flex child, so flex:1 plus min-width:0 is stated explicitly */
+.jdk-select { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The working folder input takes the leftover width next to the "Choose…" button — the same convention as
+   the inputs of .slack-url-input and .worktree-root-cell (stating flex:1 rather than relying on width:100%) */
+.run-config-cwd { flex: 1; min-width: 0; }
+.lh-list { list-style: none; max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.lh-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 4px; cursor: pointer; }
+.lh-row:hover { background: var(--elevated); }
+.lh-row.selected { background: var(--line-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.lh-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.lh-name { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lh-path { font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lh-meta { font-size: 10.5px; font-family: var(--mono); color: var(--text-dim); flex-shrink: 0; }
+.preview-scroll { overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.msg { font-size: 13px; line-height: 1.5; }
+.msg.user b { color: #4f9cf9; }
+.msg.assistant b { color: #f97316; }
+.panes { flex: 1; min-height: 0; }
+/* The pane grid — PaneGrid always renders as .panes.pane-grid (the plain .panes JSX that was the
+   single-pane path disappeared when rendering became tree-based). The tree is flattened into percentage
+   rectangles by computeRects and each slot is positioned absolutely — if a slot's DOM parent changed,
+   xterm would remount and lose its scrollback, so only the position changes. .panes itself is a flex child
+   of .session-view, so the flex and min-height above stay as they are */
+.panes.pane-grid { display: block; position: relative; }
+.panes.pane-grid .terminal-slot { position: absolute; flex-direction: column; min-width: 0; min-height: 0; border-right: none; }
+/* boundary resizers — only the middle 1px is visible, the surrounding area is the hit area */
+.pane-resizer { position: absolute; z-index: 2; }
+.pane-resizer.row { width: 5px; transform: translateX(-2px); cursor: col-resize; }
+.pane-resizer.col { height: 5px; transform: translateY(-2px); cursor: row-resize; }
+.pane-resizer::before { content: ''; position: absolute; background: var(--line); }
+.pane-resizer.row::before { left: 2px; top: 0; width: 1px; height: 100%; }
+.pane-resizer.col::before { top: 2px; left: 0; height: 1px; width: 100%; }
+.pane-resizer:hover::before { background: var(--accent); }
+/* the drop preview — shows semi-transparently where a new pane would appear */
+.pane-dropzone {
+  position: absolute; z-index: 3; pointer-events: none;
+  /* a translucent --accent (#37b0c4) — this file's convention is rgba rather than color-mix */
+  background: rgba(55, 176, 196, .22);
+  border: 1px solid var(--accent);
+}
+.pane-dropzone.zone-center { inset: 0; }
+.pane-dropzone.zone-left { left: 0; top: 0; width: 50%; height: 100%; }
+.pane-dropzone.zone-right { right: 0; top: 0; width: 50%; height: 100%; }
+.pane-dropzone.zone-up { left: 0; top: 0; width: 100%; height: 50%; }
+.pane-dropzone.zone-down { left: 0; bottom: 0; width: 100%; height: 50%; }
+/* The group tab bar — a sibling layer of the session slots, not their parent. As a parent, splitting and
+   unsplitting would change a slot's DOM parent, React would unmount and remount, and the xterm instance
+   would be gone.
+   z-index 1: above the slots (auto) and below the resizers (2) — the 5px hit area of a column resizer
+   overlaps the top 3px of the group tab bar beneath it, so the resizer has to win for the boundary to be
+   grabbable. */
+.panes.pane-grid .pane-tabbar { position: absolute; z-index: 1; height: var(--pane-tabbar-h); }
+/* Background contrast is left alone. In this palette the WCAG luminance contrast between --panel, --bg,
+   and --rail is around 1.06:1, so no combination of them is visible — which tab is active within a group
+   was already carried by the text colour (--text-dim to --text, about 2.4:1). Only the background contrast
+   intended as the "focused group" signal failed, so that role passes to the account-coloured underline
+   (the focused prop). */
+.pane-tabbar .tabs { height: 100%; }
+/* Drops the vertical padding and centres instead — the global tab bar (≈32px) is gone.
+   Lets tabs shrink in a narrow group: the global bar was flex:none, so past six tabs it overflowed and got
+   cut. A minimum width keeps them from shrinking past recognition */
+/* align-self: stretch is the crux — .tabs is align-items:center, so with zero vertical padding the tab
+   element collapses to the text height and floats in the middle of the bar. The underline (inset 0 -2px 0)
+   would then be drawn just under the text rather than at the bottom of the tab, and the tab divider
+   (border-right) would be cut short */
+.pane-tabbar .tab { padding: 0 12px; flex: 0 1 auto; min-width: 84px; align-self: stretch; }
+.pane-tabbar .tab .tab-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Hides the horizontal scrollbar (10px globally) so it does not eat the vertical space of the tab row —
+   the same convention as the terminal's xterm-viewport. Wheel and trackpad scrolling still work */
+.pane-tabbar .tabs::-webkit-scrollbar { height: 0; }
+/* The + must not disappear when the tabs overflow — a group's + is the main entry point for a new session.
+   It is sticky above the tabs, so its background has to be the same opaque colour as the bar or the tabs
+   passing underneath show through */
+.pane-tabbar .new-tab { padding: 0 10px; align-self: stretch; position: sticky; right: 0; z-index: 1; background: var(--panel); }
+
+/* ---------- status bar ---------- */
+.statusbar {
+  flex: none;
+  /* Padding outside the terminal area (i.e. on .app column) — dark-on-dark makes the padding hard to see, so
+     a border comes with it. It was thought at the time that "xterm overflow covers terminal-host padding
+     and voids it", but the real cause was that the padding was missing from the fit calculation and xterm
+     drew over it — that was fixed by moving the padding onto .xterm. This margin is a separate one that
+     lifts the terminal off the status bar, so it stays */
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+  height: 32px;
+  background: var(--status-bg);
+  color: var(--status-ink);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 14px;
+  font-size: 11.5px;
+  font-family: var(--mono);
+  overflow: hidden;
+}
+.statusbar .sp { margin-left: auto; flex-shrink: 0; }
+.status-account { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.status-item { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* No flex growth (0 1 auto) — keeps the path from eating the leftover width and pushing the usage chips to the far right. It shrinks with an ellipsis when narrow */
+.status-path { opacity: .85; min-width: 0; flex: 0 1 auto; }
+/* the usage chip group — to the left, next to the folder name. Each chip is a mini progress bar plus n% */
+.status-metrics { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
+.status-metric { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.metric-label { opacity: .9; }
+.usage-bar { width: 44px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .2); overflow: hidden; flex: none; }
+.usage-bar-fill { display: block; height: 100%; border-radius: 3px; background: var(--ok); transition: width .3s ease; }
+.usage-bar-fill.warn { background: #ffd27a; } /* 70~84% */
+.usage-bar-fill.crit { background: #ef4444; } /* ≥85% */
+.usage-bar-fill.na { background: transparent; } /* no value */
+.metric-pct { font-weight: 600; min-width: 2.6ch; text-align: right; }
+.metric-reset { opacity: .7; }
+
+/* ---------- CLI not found screen ---------- */
+.cli-missing { margin: auto; max-width: 480px; text-align: center; display: flex; flex-direction: column; gap: 12px; }
+.cli-missing code { background: var(--elevated); color: var(--text); padding: 2px 6px; border-radius: 4px; }
+
+/* ---------- file viewer ---------- */
+.file-truncated { padding: 4px 12px; font-size: 12px; color: #d7ba7d; background: #3a3018; flex: none; }
+.file-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #9a9a9a; font-size: 13px; background: #1e1e1e; z-index: 2; }
+.tab-dirty { flex: none; font-size: 9px; opacity: 0.8; }
+.file-editor-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.file-conflict { flex: none; padding: 4px 12px; font-size: 12px; background: #3a3018; color: #d7ba7d; display: flex; gap: 8px; align-items: center; }
+
+/* ---------- file explorer ---------- */
+.file-explorer { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+/* Shift-click range selection extends the browser's text selection across rows and lays down a blue
+   highlight — the tree is not a text selection target, so it is blocked */
+.fx-tree { flex: 1; min-height: 0; overflow: auto; font-size: 13px; user-select: none; }
+.fx-row { display: flex; align-items: center; gap: 4px; padding: 2px 8px; cursor: pointer; white-space: nowrap; }
+.fx-row:hover { background: rgba(255, 255, 255, 0.06); }
+.fx-caret { flex: none; width: 12px; font-size: 10px; color: #9a9a9a; }
+.fx-name { overflow: hidden; text-overflow: ellipsis; }
+/* git status — colour on the filename only. File type icon colours are left alone */
+.fx-name.git-new { color: var(--git-new); }
+.fx-name.git-modified { color: var(--git-modified); }
+.fx-name.git-deleted { color: var(--git-deleted); text-decoration: line-through; }
+.fx-name.git-conflict { color: var(--git-conflict); }
+.fx-git-mark {
+  flex: none; margin-left: auto; padding-left: 6px;
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+}
+.fx-git-mark.git-new { color: var(--git-new); }
+.fx-git-mark.git-modified { color: var(--git-modified); }
+.fx-git-mark.git-deleted { color: var(--git-deleted); }
+.fx-git-mark.git-conflict { color: var(--git-conflict); }
+.fx-git-count {
+  flex: none; margin-left: auto; padding-left: 6px;
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.fx-note { padding: 2px 8px; font-size: 12px; color: #7a7a7a; white-space: nowrap; }
+/* the header root row — scoped to the explorer so the shared .panel-header h2 is untouched */
+.file-explorer .panel-header h2 { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.file-explorer .panel-header h2 .fi { width: 12px; height: 12px; }
+.fx-root-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* tree selection and inline editing */
+/* Tree selection — a background alone overlaps :hover in luminance and multi-selection does not read.
+   It follows the convention of settings-nav-item.active (a left accent bar plus a line-soft background) */
+.fx-row.selected { background: var(--line-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.fx-tree:focus-within .fx-row.selected { background: var(--elevated); }
+/* items pending a cut — dimmed until they are pasted */
+.fx-row.cut { opacity: .45; }
+/* drag and drop — the same vocabulary as session tab reordering (.tab.dragging) */
+.fx-row.dragging { opacity: .4; }
+/* the drop target folder — outlined with a border so it is distinct from selection (a left accent bar) */
+.fx-row.drop-into { background: var(--elevated); box-shadow: inset 0 0 0 1px var(--accent); }
+.fx-tree:focus { outline: none; }
+.fx-edit-box { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.fx-edit-box input {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font: inherit;
+  user-select: text; /* On top of .fx-tree's user-select:none, the rename input has to allow text selection
+                         (so the part before the extension can be preselected). Chromium excludes form
+                         controls from that inheritance, but stating it is safer. */
+}
+.fx-edit-box input.invalid { border-color: #d3706b; }
+.fx-edit-reason { font-size: 10.5px; color: #d3706b; }
+
+.project-row .project-open-explorer { flex: none; display: inline-flex; align-items: center; line-height: 0; opacity: 0.7; }
+.project-row .project-open-explorer:hover { opacity: 1; }
+
+/* ---------- file type icons ---------- */
+.fi { flex: none; display: block; width: 14px; height: 14px; color: var(--fi-gray); }
+.fi--blue { color: var(--fi-blue); }
+.fi--cyan { color: var(--fi-cyan); }
+.fi--green { color: var(--fi-green); }
+.fi--yellow { color: var(--fi-yellow); }
+.fi--orange { color: var(--fi-orange); }
+.fi--red { color: var(--fi-red); }
+.fi--purple { color: var(--fi-purple); }
+.fi--pink { color: var(--fi-pink); }
+.fi--gray { color: var(--fi-gray); }
+.fi--mute { color: var(--fi-mute); }
+
+/* ---------- file editor ---------- */
+.file-editor { flex: 1; min-height: 0; overflow: hidden; }
+.file-editor .cm-editor { height: 100%; }
+.file-editor .cm-scroller { font-family: Consolas, 'Courier New', monospace; font-size: 13px; }
+
+/* ---------- Run panel ---------- */
+.run-panel { flex: none; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: #141417; height: var(--run-panel-h, 220px); min-height: 120px; }
+.run-live-dot { width: 7px; height: 7px; border-radius: 50%; background: #3fb950; flex: none; box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
+.run-exit { color: var(--text-faint); }
+.run-panel-actions { display: flex; gap: 2px; }
+.run-panel-btn { width: 22px; height: 22px; display: grid; place-items: center; background: transparent; border: 0; border-radius: 4px; color: var(--text-dim); font-size: 12px; padding: 0; cursor: pointer; }
+.run-panel-btn:hover { background: var(--elevated); color: var(--text); }
+.run-panel-btn.stop:hover { color: #e5534b; }
+.run-panel-host { flex: 1; min-height: 0; padding: 4px 6px; overflow: hidden; }
+
+/* The bottom panel tab strip — Run and the terminal share this panel.
+   It replaces .run-panel-header while keeping the same height and colours, so the existing resize
+   calculations do not change. */
+.bottom-tabs { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 3px 8px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 11.5px; color: var(--text-dim); }
+.bottom-tab-list { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; }
+.bottom-tab { display: flex; align-items: center; gap: 4px; background: transparent; border: 0; border-radius: 4px; padding: 2px 8px; color: var(--text-dim); font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+.bottom-tab:hover { background: var(--elevated); color: var(--text); }
+.bottom-tab.on { background: var(--elevated); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.bottom-tab-close { background: transparent; border: 0; color: inherit; opacity: .5; padding: 0 0 0 2px; font-size: 10px; cursor: pointer; }
+.bottom-tab-close:hover { opacity: 1; }
+.bottom-tab-new { background: transparent; border: 0; color: var(--text-dim); padding: 2px 6px; font-size: 12px; cursor: pointer; }
+.bottom-tab-new:hover { color: var(--text); }
+/* The bodies are stacked and only the active one is visible — the inactive ones stay mounted so xterm state is preserved */
+.bottom-bodies { flex: 1; min-height: 0; display: flex; }
+.bottom-body { flex: 1; min-width: 0; min-height: 0; }
+.bottom-body > .run-panel-host { height: 100%; }
+
+/* ---------- toast notifications ---------- */
+/* Above the status bar (32px plus 10px margin-top) and in front of modals (z 100), so a failure notice raised inside a modal is not hidden either */
+.toast-host { position: fixed; right: 16px; bottom: 52px; z-index: 200; display: flex; flex-direction: column; gap: 8px; width: min(420px, calc(100vw - 32px)); pointer-events: none; }
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--elevated);
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--text-dim);
+  border-radius: 5px;
+  padding: 9px 8px 9px 11px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .45);
+  animation: toast-in .12s ease-out;
+}
+.toast.error { border-left-color: var(--fi-red); }
+.toast.success { border-left-color: var(--ok); }
+.toast.info { border-left-color: var(--accent); }
+/* alert messages contain \n, so line breaks are preserved */
+.toast-msg { flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.5; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.toast-close { width: 20px; height: 20px; flex: none; border-radius: 4px; }
+/* Shortcut editing — change and default buttons on the right of the row. Key labels are kept from wrapping. */
+/* The edit buttons hold a single icon each. With text buttons (Change, Default) in a narrow modal (600px)
+   the description wrapped to three or four lines and the row grew to 88px — measured, then reduced to
+   icons. The labels remain as title attributes. */
+.shortcut-actions { display: flex; gap: 4px; flex: none; align-self: center; }
+.shortcut-actions button {
+  width: 22px; height: 20px; flex: none; display: grid; place-items: center;
+  font-size: 12px; line-height: 1; padding: 0; border-radius: 4px;
+}
+.shortcut-actions button:disabled { opacity: .4; cursor: default; }
+/* Lets the description have the leftover width — otherwise the key and button columns squeeze it a character at a time */
+.shortcut-row .shortcut-desc { flex: 1; min-width: 0; }
+.shortcut-row .shortcut-keys { flex: none; }
+.shortcut-capturing { color: var(--accent); }
+.shortcut-unbound { color: var(--text-dim); }
+kbd.shortcut-conflict { color: var(--fi-red); border-color: var(--fi-red); }
+/* The forced update gate. It covers everything below the title bar (34px), leaving window moving and
+   minimising available.
+   Its z-index is above modals (100) and toasts (200) — nothing comes in front while the gate is up. */
+.update-gate { position: fixed; inset: 34px 0 0 0; z-index: 500; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.update-gate-card { width: min(440px, 100%); display: flex; flex-direction: column; gap: 12px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; padding: 24px; }
+.update-gate-card h2 { font-size: 15px; font-weight: 600; color: var(--text); }
+.update-gate-body { font-size: 13px; line-height: 1.6; color: var(--text); }
+.update-gate-state { font-size: 12px; color: var(--text-dim); }
+.update-gate-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.update-gate-actions button { white-space: nowrap; }
+.update-gate-primary { background: #2f9e6e; color: #fff; border: none; border-radius: 4px; padding: 5px 12px; cursor: pointer; }
+.update-gate-primary:hover:not(:disabled) { background: #37b07b; }
+.update-gate-primary:disabled { opacity: .5; cursor: default; }
+/* Action buttons. flex: none plus nowrap so the label does not wrap however long the message gets. */
+.toast-action { flex: none; white-space: nowrap; align-self: center; background: #2f9e6e; color: #fff; border: none; border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.toast-action:hover { background: #37b07b; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* the confirmation modal body — preserves paths and multi-line messages verbatim (the existing .confirm-text is excluded, being multi-line JSX) */
+.confirm-body { white-space: pre-wrap; overflow-wrap: anywhere; }

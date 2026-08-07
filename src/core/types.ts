@@ -1,0 +1,481 @@
+import type { RunConfig, RunStatus } from './run/config'
+export type { RunConfig, RunStatus } from './run/config'
+import type { Jdk } from './run/jdk'
+export type { Jdk } from './run/jdk'
+// This file already has a HistoryEntry for session history, so the local-history one comes in under
+// an alias. A deletion snapshot entry (originalPath, deletedAt, size, isDir) merely shares the name
+// with that session history entry; the two types are unrelated.
+import type { HistoryEntry as LocalHistoryEntry } from './files/localHistory'
+export type { HistoryEntry as LocalHistoryEntry } from './files/localHistory'
+import type { Lang, Message } from './i18n'
+import type { ScheduleRule, ScheduleConfig } from './scheduler/rule'
+export type { ScheduleRule, ScheduleConfig } from './scheduler/rule'
+import type { RollConfig } from './rolling/types'
+export type { RollConfig } from './rolling/types'
+import type { GitState } from './git/status'
+export type { GitState } from './git/status'
+import type { Provider } from './providers/meta'
+
+// providers/meta.ts owns Provider. It is re-exported here so that the files which already imported
+// Provider from types can stay as they are.
+export type { Provider } from './providers/meta'
+
+export interface Account {
+  id: string
+  label: string
+  configDir: string
+  color: string
+  createdAt: string // ISO 8601
+  isDefault?: boolean // whether this is the default (ambient) account — a derived field main computes at serialisation time, not stored in accounts.json
+  provider?: Provider // which CLI — absent means 'claude' (kept for compatibility with existing accounts.json)
+}
+
+export interface DetectCandidate {
+  configDir: string
+  loggedIn: boolean // existence of the credentials file only (claude=.credentials.json, codex=auth.json)
+  suggestedLabel: string // email, falling back to the folder name; ~/.claude is 'default account'
+  provider: Provider // distinguishes the sources when detection results are merged
+}
+
+export interface CliStatus {
+  ok: boolean
+  version?: string
+}
+
+export type SessionStatus = 'running' | 'exited'
+
+export interface SessionInfo {
+  id: string
+  accountId: string
+  cwd: string
+  status: SessionStatus
+  exitCode?: number
+  title: string
+  resumeSessionId?: string
+  rollAccountIds?: string[] // rolling account order — only active with 2 or more; [0] is the initial account
+  rollPrompt?: string // the carry-on prompt sent when rolling (empty means the default). Only meaningful on the initial spawn
+  slackNotify?: boolean // Slack progress notifications — decides hook injection and notifier registration at spawn, and propagates through rolling respawns
+  bypassPermissions?: boolean // start without permission prompts — passes --dangerously-skip-permissions at spawn, propagates through rolling and resume
+  schedule?: ScheduleConfig // recurring command schedule — only meaningful on the initial spawn; the coordinator owns its lifetime afterwards
+}
+
+/** The stored settings the resume modal reads to seed its checkboxes.
+ *  A read-only snapshot — what actually gets enabled is settled by the modal and passed down as
+ *  spawn opts. */
+export interface ResumeDefaults {
+  roll: RollConfig | null
+  schedule: ScheduleConfig | null
+}
+
+export type WorktreeStatus = 'ok' | 'orphan-dir' | 'missing'
+
+/** A git worktree record the app created — persisted in worktrees.json */
+export interface WorktreeInfo {
+  id: string // randomUUID
+  repoPath: string // the original repo root (normalised with path.resolve)
+  path: string // absolute path of the worktree
+  name: string // slug (the directory name)
+  branch: string // <username>/<slug>[-N]
+  baseRef: string // short form of the base at creation time (e.g. origin/main)
+  createdAt: string // ISO 8601
+}
+
+export interface WorktreeListItem extends WorktreeInfo {
+  status: WorktreeStatus // result of cross-checking `git worktree list` against directory existence
+}
+
+export interface WorktreeRemoveResult {
+  removed: boolean
+  branchDeleted: boolean
+  branchPreserved?: { branch: string; head: string } // set when an unmerged branch was preserved
+}
+
+export interface HistoryEntry {
+  id: string // `${accountId}:${sessionId}`
+  accountId: string
+  sessionId: string
+  projectPath: string
+  title: string // the last user message, falling back to the first real user message, then to sessionId
+  updatedAt: string // ISO 8601 (the file's mtime)
+  filePath: string
+  awaitingReply: boolean // true when the last meaningful message was the assistant's — drives the unread-reply marker (green dot)
+  rootUuid: string | null // the key that identifies a resume fork (the same conversation)
+}
+
+export interface TranscriptMessage {
+  role: 'user' | 'assistant'
+  text: string
+  timestamp?: string
+}
+
+export interface TranscriptPreview {
+  entryId: string
+  messages: TranscriptMessage[]
+  truncated: boolean
+}
+
+export interface HistoryFilter {
+  accountId?: string
+  projectPath?: string
+}
+
+export interface HistoryPageRequest extends HistoryFilter {
+  offset?: number
+  limit?: number
+}
+
+export interface HistoryPage {
+  entries: HistoryEntry[]
+  total: number
+}
+
+/** One row of the per-project history list (the session list is fetched separately when the row is
+ *  expanded via page()).
+ *  A lazy model: built cheaply from a folder listing, mtimes, and the cwd of the newest file. Session
+ *  counts and unread tallies need transcript parsing, so a collapsed row does not offer them — expand
+ *  the row and read them off the session list. */
+export interface ProjectSummary {
+  accountId: string
+  projectPath: string
+  name: string // the last path segment of projectPath (for display)
+  updatedAt: string // ISO — mtime of that project's newest file
+}
+
+export interface HistoryProjectsPageRequest {
+  accountId?: string
+  offset?: number
+  limit?: number
+}
+
+export interface HistoryProjectsPage {
+  projects: ProjectSummary[]
+  total: number
+}
+
+/** One rate-limit window (the 5-hour session window, or the weekly one) — usage % and reset time */
+export interface RateLimitWindow {
+  usedPercent: number // 0-100 (rounded to an integer)
+  resetsAt: string | null // ISO 8601, null when unknown
+}
+
+/** A usage snapshot for an active session, taken from the Claude Code statusLine payload
+ *  (context_window, rate_limits). The values are Claude's own, so no context-window-size (200k/1M)
+ *  heuristics and no credentials are needed. */
+export interface SessionUsage {
+  context: { usedPercent: number; usedTokens: number | null; windowSize: number | null } | null
+  session: RateLimitWindow | null // the 5-hour window
+  weekly: RateLimitWindow | null // the weekly (7-day) window
+}
+
+/** Rolling progress (main to renderer, for the terminal banner) */
+export interface RollStateEvent {
+  sessionId: string
+  // 'nudged' and 'stalled' are momentary events, not lasting states — the renderer leaves them out
+  // of the banner and only Slack is told (see TerminalView.rollBannerVisible)
+  state: 'switching' | 'trust' | 'waiting' | 'nudged' | 'stalled' | 'none'
+  accountLabel?: string // the account being switched to, when state='switching'
+  // A re-publish of state='switching' (reattaching the banner to the new sessionId after a respawn).
+  // It is not a new switch, so the renderer treats it the same but Slack ignores it to avoid a
+  // duplicate notification
+  reattach?: boolean
+  nextRetryAt?: string // ISO — the retry time, when state='waiting'
+  scope?: 'session' | 'weekly' // which limit, when state='waiting' — selects the banner wording and time format
+}
+
+/** Schedule progress (main to renderer, for the terminal banner) */
+export interface SchedStateEvent {
+  sessionId: string
+  state: 'active' | 'off' // off covers turning it off, the session ending, and clearing the old id when rolling re-keys it
+  nextAt?: string // ISO — the next run time, when state='active'
+  rule?: ScheduleRule // for the rule summary shown in the banner
+}
+
+/** One project terminal */
+export interface TerminalInfo {
+  id: string
+  projectPath: string
+}
+
+/** The recent output replayed into xterm when the panel is re-entered */
+export interface TerminalBuffer {
+  id: string
+  buffer: string
+}
+
+export interface CoreEvents {
+  'session:data': { sessionId: string; data: string }
+  'session:exit': { sessionId: string; exitCode: number }
+  // main created a session without the renderer asking — an orchestration worker. The whole
+  // SessionInfo is carried so the renderer can build the tab (the same value sessions.spawn returns).
+  // It is not emitted on the user path (sessions.spawn) — doing so would place the same session twice.
+  'session:created': SessionInfo
+  'session:rolled': { oldSessionId: string; info: SessionInfo } // tab swap on rolling
+  'session:rollState': RollStateEvent
+  'session:busy': { sessionId: string; busy: boolean } // session working/idle — the spinner dot on the tab
+  'session:schedState': SchedStateEvent // schedule banner
+  'history:updated': { total: number }
+  'accounts:changed': { accounts: Account[] }
+  'files:changed': { path: string; kind: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir' } // watcher
+  'git:changed': void // index/HEAD changes in the git dir, e.g. a commit from a session terminal — triggers a tree state refresh
+  'run:data': { projectPath: string; data: string } // run output
+  'run:status': RunStatus // run state change (running/exited)
+  'terminal:data': { id: string; data: string } // project terminal output
+  'terminal:exit': { id: string; exitCode: number } // shell exited — the renderer removes that tab
+}
+export type CoreEventChannel = keyof CoreEvents
+
+/** The contract the renderer sees as window.api. The IPC adapter implements it. */
+export interface CoreApi {
+  accounts: {
+    list(): Promise<Account[]>
+    create(input: { label: string; color?: string; provider?: Provider }): Promise<Account>
+    import(input: { label: string; configDir: string; provider?: Provider }): Promise<Account>
+    remove(id: string): Promise<void> // deregisters only — the disk is not touched
+    loginStatus(id: string): Promise<boolean> // existence of .credentials.json only
+    detect(): Promise<DetectCandidate[]> // detection candidates, excluding already-registered config dirs
+    email(id: string): Promise<string | null> // the login email of a registered account (for the list)
+    emailOfDir(configDir: string, provider?: Provider): Promise<string | null> // the email of an unregistered folder (to prefill the import dialog)
+    logout(id: string): Promise<{ ok: boolean; message?: Message }> // claude auth logout (removes the credentials)
+    syncSettings(id: string): Promise<{ ok: boolean; message?: Message }> // import the default account's settings and MCP servers
+  }
+  sessions: {
+    spawn(opts: {
+      accountId: string
+      cwd: string
+      cols?: number
+      rows?: number
+      resumeSessionId?: string
+      resumeTranscriptPath?: string // resuming under a different account — the source transcript to copy into the target configDir
+      rollAccountIds?: string[]
+      rollPrompt?: string
+      slackNotify?: boolean
+      bypassPermissions?: boolean // start without permission prompts
+      schedule?: ScheduleConfig // recurring command schedule
+    }): Promise<SessionInfo>
+    write(id: string, data: string): void
+    resize(id: string, cols: number, rows: number): void
+    ack(id: string, bytes: number): void // backpressure driven by the xterm write callback
+    kill(id: string): Promise<void>
+    list(): Promise<SessionInfo[]>
+    /** Reads the stored rolling and schedule settings — prefills the resume modal */
+    resumeDefaults(sessionId: string): Promise<ResumeDefaults>
+  }
+  history: {
+    page(req?: HistoryPageRequest): Promise<HistoryPage> // a page of sessions within a project
+    projectsPage(req?: HistoryProjectsPageRequest): Promise<HistoryProjectsPage> // a page of projects
+    preview(entryId: string): Promise<TranscriptPreview>
+    refresh(): Promise<void> // manual fallback when the watcher fails
+  }
+  projects: {
+    getDefaultAccount(projectPath: string): Promise<string | null>
+    setDefaultAccount(projectPath: string, accountId: string | null): Promise<void>
+  }
+  worktrees: {
+    // Splitting a session off into a git worktree.
+    list(): Promise<WorktreeListItem[]>
+    create(opts: { repoPath: string; name?: string }): Promise<{ info: WorktreeInfo; warnings: Message[] }>
+    remove(id: string, opts?: { force?: boolean }): Promise<WorktreeRemoveResult>
+    isGitRepo(dir: string): Promise<string | null> // returns the repo root, or null
+    getRoot(): Promise<string>
+    setRoot(root: string | null): Promise<void>
+  }
+  usage: {
+    session(sessionId: string): Promise<SessionUsage | null> // context, 5-hour, and weekly % for an active session (from statusLine)
+  }
+  localHistory: {
+    // Browsing and restoring the snapshot taken just before a deletion. projectPath uses the same
+    // allowed roots as files.*.
+    list(projectPath: string): Promise<LocalHistoryEntry[]>
+    restore(projectPath: string, id: string): Promise<string> // returns the path actually restored to (uniqueName avoids a name collision)
+  }
+  scheduler: {
+    disable(sessionId: string): Promise<void> // turn off the schedule of a running session — the banner button
+  }
+  slack: {
+    // Webhook, plus bot token and channel, plus app token.
+    // setConfig takes a partial update — fields that are not sent are merged with the stored values by
+    // main and preserved (see slack.setConfig in ipc.ts). The settings modal sends all four, but the
+    // partial-update contract is kept so that another caller touching one field leaves the rest alive.
+    // appToken is for Socket Mode receiving only, so for now it is stored but unused.
+    getConfig(): Promise<{
+      webhookUrl: string | null
+      botToken: string | null
+      channelId: string | null
+      appToken: string | null
+    }>
+    setConfig(cfg: {
+      webhookUrl?: string | null
+      botToken?: string | null
+      channelId?: string | null
+      appToken?: string | null
+    }): Promise<void>
+  }
+  settings: {
+    // App language. getLang derives a value from the OS locale when nothing is stored.
+    getLang(): Promise<Lang>
+    setLang(lang: Lang): Promise<void>
+    // The agent orchestration toggle. Turning it on makes the app run a local HTTP server and plant
+    // access to the astera CLI in newly created sessions — it does not apply to sessions that are
+    // already open (environment variables are fixed at spawn time).
+    getOrchestrationEnabled(): Promise<boolean>
+    setOrchestrationEnabled(enabled: boolean): Promise<void>
+  }
+  files: {
+    // The file explorer. Every files.* IPC call goes through assertAllowedPath, which permits only
+    // paths under a session cwd or a history project.
+    list(dirPath: string): Promise<{ name: string; path: string; isDir: boolean }[]>
+    read(path: string): Promise<{ content: string; truncated: boolean; binary: boolean }>
+    write(path: string, content: string): Promise<void> // save a file
+    watch(root: string): Promise<void> // start or replace the live-update watcher
+    unwatch(): Promise<void>
+    create(parentDir: string, name: string, isDir: boolean): Promise<string> // returns the created path
+    rename(from: string, newName: string): Promise<string> // returns the new path
+    move(from: string, destDir: string): Promise<string>
+    // Delete. projectRoot is the project root the explorer is showing (useFileOps' root) — it is
+    // required so the snapshot's key lines up with that root exactly. Using the matching root that
+    // assertAllowedPath finds internally instead would, with nested cwds, differ from the explorer
+    // root and the snapshot could then be missing from the restore list. A Local History snapshot is
+    // attempted just before deleting — the deletion always completes even when that attempt is
+    // skipped or fails. null means the snapshot was taken normally. snapshotId is that snapshot's id —
+    // the journal points at it so Ctrl+Z can restore. With no snapshot (too-large or failed) it is
+    // null, and since such a deletion cannot be undone it is not journalled
+    // (see useFileOps.removeSelection).
+    remove(
+      path: string,
+      projectRoot: string
+    ): Promise<{ snapshotSkipped: 'too-large' | 'failed' | null; snapshotId: string | null }>
+    copy(from: string, destDir: string): Promise<string> // duplicate — suffixes ' copy' on a collision
+    reveal(path: string): Promise<void> // show in the OS file manager
+    countEntries(path: string): Promise<number> // child count for the delete confirmation (stops at 9999)
+  }
+  git: {
+    // Inline status in the tree. root is the root the explorer is showing (same casing as files.list) —
+    // the keys of the returned map are absolute paths relative to that root, so they compare directly
+    // against a file node's path. An empty map means either not a git repo, or a repo with no changes.
+    // null means the lookup itself failed or timed out — the renderer then keeps the previous map
+    // rather than overwriting it with an empty one.
+    status(root: string): Promise<Record<string, GitState> | null>
+    watch(root: string): Promise<void> // start or replace watching the git dir's index and HEAD — emits 'git:changed'
+    unwatch(): Promise<void>
+  }
+  run: {
+    // Running and stopping a project. start and list go through assertAllowedPath, which permits only
+    // registered project paths.
+    // isSpringBoot tells RunConfigDialog whether to show the Spring profile field.
+    list(
+      projectPath: string
+    ): Promise<{ configs: RunConfig[]; active: RunStatus | null; recent: string; isSpringBoot: boolean }>
+    listActive(): Promise<RunStatus[]> // all active runs — for the count badge and the dropdown
+    start(projectPath: string, configId: string): Promise<RunStatus>
+    stop(projectPath: string): Promise<void>
+    write(projectPath: string, data: string): void
+    resize(projectPath: string, cols: number, rows: number): void
+    saveConfig(projectPath: string, config: RunConfig): Promise<RunConfig[]> // returns the refreshed display list after an add or edit
+    deleteConfig(projectPath: string, configId: string): Promise<RunConfig[]>
+    listJdks(): Promise<Jdk[]> // the detected JDKs — no path argument, so not subject to assertAllowedPath
+  }
+  terminal: {
+    // An interactive shell at a project path. open and list go through assertAllowedPath, which
+    // permits only registered paths.
+    open(projectPath: string, cols?: number, rows?: number): Promise<TerminalInfo>
+    list(projectPath: string): Promise<TerminalBuffer[]>
+    write(id: string, data: string): void
+    resize(id: string, cols: number, rows: number): void
+    close(id: string): Promise<void>
+  }
+}
+
+/** Extras on the Electron side (not core — main handles these directly) */
+export interface SystemApi {
+  // defaultPath is only where the dialog opens, so it changes nothing about security — the result is
+  // already validated by run.start and run.saveConfig. Omitting it behaves exactly as the existing
+  // caller (NewSessionDialog) does.
+  pickFolder(defaultPath?: string): Promise<string | null>
+  pathExists(p: string): Promise<boolean>
+  checkCli(): Promise<{ claude: CliStatus; codex: CliStatus }>
+  appVersion(): Promise<string>
+}
+
+/** Clipboard reads (for pasting — the Electron clipboard module exposed synchronously from preload) */
+export interface ClipboardApi {
+  readText(): string
+  writeText(text: string): void
+}
+
+/** Auto-update progress (main to renderer, for the title bar) */
+export interface UpdateStatus {
+  state: 'init' | 'checking' | 'available' | 'uptodate' | 'downloading' | 'downloaded' | 'error'
+  version?: string
+  percent?: number
+  message?: string
+}
+
+/**
+ * An update campaign. A value is present only when this app falls inside the target version range
+ * policy.json specifies — null means no campaign.
+ *
+ * `notify` is a dismissible notice; `block` is a screen that covers the app.
+ */
+export type UpdateCampaignMode = 'notify' | 'block'
+
+export interface UpdateCampaignInfo {
+  id: string
+  mode: UpdateCampaignMode
+}
+
+export interface UpdateApi {
+  onStatus(cb: (s: UpdateStatus) => void): () => void
+  /** The campaign verdict comes after a network policy lookup, so it can arrive later than the
+   *  renderer mounts — hence the push as well */
+  onCampaign(cb: (c: UpdateCampaignInfo) => void): () => void
+  /** And it can arrive earlier than the mount, so it is also queried once */
+  campaignState(): Promise<UpdateCampaignInfo | null>
+  /** The user dismissed the notice — the same campaign is not shown again */
+  dismissCampaign(id: string): Promise<void>
+  check(): Promise<void>
+  /** autoDownload is off; downloads only happen on a user action */
+  download(): Promise<void>
+  install(): Promise<void>
+}
+
+/** A rolling API for development only — packaged builds do not register the handler, so calls are
+ *  rejected there (used for manual end-to-end checks) */
+export interface RollingApi {
+  forceRoll(sessionId?: string): Promise<void>
+}
+
+/** Window controls (not core — the renderer/Electron layer, the same layer as system) */
+export interface WindowApi {
+  minimize(): void
+  maximizeToggle(): void
+  close(): void
+  isMaximized(): Promise<boolean>
+  onMaximizeChange(cb: (isMax: boolean) => void): () => void
+}
+
+/**
+ * User keybinding overrides. The renderer knows the defaults from core/keys/binding.ts, and only the
+ * overridden actions travel through here — so when a default changes, untouched actions follow it.
+ */
+export interface KeysApi {
+  get(): Promise<Record<string, string[]>>
+  set(actionId: string, keys: string[]): Promise<void>
+  /** With an actionId, resets just that action; without one, resets everything to the defaults */
+  reset(actionId?: string): Promise<void>
+}
+
+/** App-level control. win.close minimises to the tray, so a real quit path is needed separately */
+export interface AppControlApi {
+  quit(): void
+}
+
+export type RendererApi = CoreApi & {
+  system: SystemApi
+  clipboard: ClipboardApi
+  update: UpdateApi
+  rolling: RollingApi
+  win: WindowApi
+  app: AppControlApi
+  keys: KeysApi
+  on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
+}

@@ -1,0 +1,604 @@
+// Korean catalog — this file is the source. A key added here must be added to en.ts too for
+// typecheck to pass (en's type is tied to this object's key set).
+// Key rule: <domain>.<context>.<name> — the domains are settings/files/explorer/worktree/
+// account/session/history/run/rolling/common.
+export const ko = {
+  'settings.title': '설정',
+  'settings.tab.general': '일반',
+  'settings.tab.accounts': '계정',
+  'settings.tab.info': '정보',
+  'settings.tab.shortcuts': '단축키',
+  'settings.general.language': '언어',
+  // Agent orchestration
+  'settings.orchestration.label': '에이전트 오케스트레이션 (실험)',
+  'settings.orchestration.hint':
+    '켜면 앱이 띄운 에이전트 세션이 다른 벤더의 워커 세션을 띄울 수 있습니다. ' +
+    '에이전트가 앱의 어느 계정으로든 세션을 만들 수 있게 되므로 필요할 때만 켜세요. ' +
+    '이미 열려 있는 세션에는 적용되지 않습니다 — 새 세션부터 동작합니다. ' +
+    '오케스트레이터로 쓸 세션에서 astera help 를 실행하게 하면 전체 사용법을 얻습니다.',
+  'settings.orchestration.saveFailed': '오케스트레이션 설정을 저장하지 못했습니다: {detail}',
+  'settings.accounts.hint':
+    '⤓ 는 기본 계정의 설정·MCP를 가져옵니다. 기본 계정과 Codex 계정은 대상이 아닙니다.',
+  'common.cancel': '취소',
+  'common.confirm': '확인',
+  'common.close': '닫기',
+  'common.toastDismiss': '알림 닫기',
+  // A key with interpolation — added so a test pins t()'s placeholder substitution.
+  // validateName uses this key as-is (the FORBIDDEN check in files/ops.ts).
+  'files.validate.badChar': '이름에 쓸 수 없는 문자가 있습니다: {char}',
+  // files/ops.ts — the Message keys validateName/canMove/canCopy return
+  'files.validate.empty': '이름을 입력하세요',
+  'files.validate.reserved': '사용할 수 없는 이름입니다',
+  'files.validate.separator': '이름에 경로 구분자를 쓸 수 없습니다',
+  'files.validate.windowsReserved': 'Windows에서 예약된 이름입니다',
+  'files.validate.trailing': '이름은 공백이나 마침표로 끝날 수 없습니다',
+  'files.validate.tooLong': '이름이 너무 깁니다',
+  'files.move.intoSelf': '폴더를 자기 자신 안으로 옮길 수 없습니다',
+  'files.move.alreadyThere': '이미 그 위치에 있습니다',
+  'files.copy.intoSelf': '폴더를 자기 자신 안으로 복사할 수 없습니다',
+  'files.error.pathNotAllowed': '허용되지 않은 경로입니다',
+  'files.error.alreadyExists': "'{name}' 이(가) 이미 있습니다",
+  'files.error.alreadyExistsInDest': "'{name}' 이(가) 대상 폴더에 이미 있습니다",
+  'files.error.renameStranded': "이름 변경에 실패했고 되돌리지도 못했습니다. 파일이 '{tmp}' 에 있습니다",
+  // worktrees/include.ts, worktrees/create.ts — worktree creation warnings
+  'worktree.include.tooManyEntries': '.worktreeinclude 항목이 {max}개를 넘어 이후 줄은 무시했습니다',
+  'worktree.include.globUnsupported': 'glob·부정 패턴 미지원: {line}',
+  'worktree.include.absolutePath': '절대 경로 불가: {line}',
+  'worktree.include.parentPath': '상위 경로(..) 불가: {line}',
+  'worktree.include.gitDir': '.git 하위 불가: {line}',
+  'worktree.include.fileTooLarge': '.worktreeinclude가 {max}바이트를 넘어 무시했습니다',
+  'worktree.include.missing': '존재하지 않아 건너뜀: {entry}',
+  'worktree.include.notIgnored': 'gitignore되지 않아 건너뜀: {entry}',
+  'worktree.include.sizeFailed': '용량 계산 실패: {entry} ({detail})',
+  'worktree.include.overLimit': '복사 상한(200MB) 초과로 건너뜀: {entry}',
+  'worktree.include.copyFailed': '복사 실패: {entry} ({detail})',
+  'worktree.create.fetchFailed': '원격 갱신에 실패해 로컬에 있는 {baseRef} 기준으로 생성했습니다',
+  'worktree.create.baseRecordFailed': 'branch.base 기록 실패 — 삭제 시 머지 판정이 HEAD 기준이 됩니다',
+  'worktree.create.autoSetupRemoteFailed': 'push.autoSetupRemote 설정 실패 — 첫 push에 -u가 필요합니다',
+  // worktreeErrors.ts — worktree IPC error code → user-facing message
+  'worktree.error.notGitRepo': '선택한 폴더가 git 저장소가 아닙니다.',
+  'worktree.error.noBase': '기본 브랜치(origin/HEAD·main·master)를 찾을 수 없어 worktree를 만들 수 없습니다.',
+  'worktree.error.fetchFailed': '원격에서 기본 브랜치를 가져오지 못했습니다. 네트워크를 확인하세요.',
+  'worktree.error.nameExhausted': '같은 이름의 worktree·브랜치가 너무 많습니다. 다른 이름을 지정하세요.',
+  'worktree.error.invalidName': '이름에 사용할 수 있는 문자가 없습니다.',
+  'worktree.error.notManaged': '이 앱이 만든 worktree가 아니라 삭제할 수 없습니다.',
+  'worktree.error.dangerousPath': '안전하지 않은 경로라 삭제를 거부했습니다.',
+  'worktree.error.dirty': '커밋되지 않은 변경 사항이 있어 삭제하지 않았습니다.',
+  'worktree.error.orphanUnproven': '소유권을 확인할 수 없어 삭제하지 않았습니다. 수동으로 확인 후 삭제하세요.',
+  'worktree.error.orphanUnverifiable': 'git이 이 폴더를 추적하지 않아 미커밋 변경 여부를 확인할 수 없습니다.',
+  'worktree.error.gitAddFailed': 'git worktree 생성에 실패했습니다.',
+  'worktree.error.gitRemoveFailed': 'git worktree 제거에 실패했습니다.',
+  'worktree.error.raw': '{detail}',
+  'worktree.inUse.session': "실행 중 세션 '{title}'이(가) 이 worktree를 사용 중입니다. 세션을 먼저 닫으세요.",
+  'worktree.inUse.run': "실행 중 프로세스 '{name}'이(가) 이 worktree를 사용 중입니다. 실행을 먼저 중지하세요.",
+  'worktree.inUse.unknown': '이 worktree를 사용 중입니다.',
+  // ROLL_MIXED_PROVIDER in sessions/manager.ts — a session-rolling constraint unrelated to worktrees, so it uses
+  // session.* rather than worktree.*. The MESSAGES array in worktreeErrors.ts maps to this key
+  'session.roll.mixedProvider': 'Claude와 Codex 계정을 섞어 롤링할 수 없습니다',
+  // App.tsx — shared window controls, resizer, separator
+  'common.minimize': '최소화',
+  'common.maximize': '최대화',
+  'common.restore': '이전 크기로',
+  'common.resizeSidebar': '사이드바 크기 조절',
+  'common.or': '또는',
+  // index.ts — system tray context menu
+  'common.trayOpen': '열기',
+  'common.trayQuit': '종료',
+  // App.tsx — rail, session spawn failure, placeholder, status bar usage
+  'session.rail.toggleSidebar': '사이드바 접기/펼치기',
+  'session.spawn.failed': '세션 시작 실패: {message}',
+  'session.spawn.failedWorktreeKept':
+    '세션 시작 실패: {message} (worktree "{name}"는 남아 있으니 Worktrees 패널에서 삭제하세요)',
+  // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped
+  'session.spawn.resumeLiveIgnored': '이미 실행 중인 세션입니다 — 선택한 옵션은 적용되지 않았습니다.',
+  'session.placeholder.start': '+ 새 세션으로 시작하세요',
+  'session.usage.contextTitleWithTokens': '컨텍스트 사용률 ({used} / {window} 토큰)',
+  'session.usage.contextTitle': '컨텍스트 사용률',
+  'session.usage.contextEmpty': '컨텍스트 사용량 (첫 턴 이후 표시)',
+  'session.usage.fiveHourLabel': '5시간 사용량',
+  'session.usage.fiveHourTitle': '5시간 세션 사용량',
+  'session.usage.weekly': '주간 사용량',
+  'session.statusbar.count': '세션 {count}',
+  'session.statusbar.none': '세션 없음',
+  'session.statusbar.accountCount': '계정 {count}',
+  // App.tsx — file editor buffer state, save, conflict, close confirmation
+  'files.editor.binaryUnsupported': '바이너리 파일은 표시할 수 없습니다.',
+  'files.save.failed': '저장 실패: {detail}',
+  'files.reload.failed': '다시 로드 실패: {detail}',
+  'files.unsaved.title': '저장하지 않은 변경',
+  'files.unsaved.bodyWithTitle': "'{title}' 파일에 저장하지 않은 변경이 있습니다. 닫을까요?",
+  'files.unsaved.body': '저장하지 않은 변경이 있습니다. 닫을까요?',
+  'files.editor.deletedExternally': '파일이 삭제되었습니다',
+  'files.editor.readOnlyReason': '읽기전용 (큰 파일 또는 바이너리)',
+  'files.editor.conflictChanged': '디스크에서 변경됨',
+  'files.editor.reload': '다시 로드',
+  'files.editor.keepMine': '내 편집 유지',
+  'files.editor.loading': '불러오는 중…',
+  'files.editor.selectPrompt': '트리에서 파일을 선택하세요',
+  // App.tsx — explorer close confirmation
+  'explorer.closeConfirm.body': '저장하지 않은 변경이 있습니다. 탐색기를 닫을까요?',
+  // App.tsx — run console resizer, start failure
+  'run.resizeConsole': '콘솔 크기 조절',
+  'run.start.failed': '실행 실패: {detail}',
+  // App.tsx — settings modal Info/Slack/Worktree tabs, CLI-not-found screen
+  'settings.info.appName': '앱 이름',
+  'settings.info.version': '버전',
+  'settings.info.registeredAccounts': '등록 계정',
+  'settings.info.update': '업데이트',
+  'settings.info.cliNotDetected': '감지 안 됨',
+  'settings.slack.save': '저장',
+  'settings.slack.saved': '저장됨',
+  'settings.slack.hint': '새 세션에서 “Slack 진행상황 알림”을 켜면 진행 상황을 보냅니다.',
+  // Bot settings. Which delivery path is active has to be visible on screen at a glance —
+  // a bot token with no channel ID silently falls back to Webhook (slack.ts applyConfig), so that state has to show
+  'settings.slack.botSection': '봇 (세션별 스레드)',
+  'settings.slack.channelIdHint': '채널 우클릭 → 채널 세부정보 맨 아래에서 확인할 수 있습니다.',
+  'settings.slack.appTokenHint': 'Socket Mode 수신용입니다. 봇 모드일 때 스레드 답장을 이 토큰으로 받습니다.',
+  'settings.slack.modeBot': '봇 모드 — 세션마다 스레드 하나에 알림이 모입니다.',
+  'settings.slack.modeWebhook': 'Webhook 단방향 — 봇 토큰과 채널 ID를 함께 채우면 세션별 스레드로 바뀝니다.',
+  'settings.slack.modeOff': '전송 경로가 없어 알림이 나가지 않습니다. Webhook URL 또는 봇 토큰+채널 ID가 필요합니다.',
+  'settings.slack.setupGuide': '봇을 대상 채널에 초대해야 게시됩니다. 자세한 절차는 docs/slack-bot-setup.md 참고.',
+  'settings.worktree.createLocation': 'worktree 생성 위치',
+  'settings.worktree.change': '변경…',
+  'settings.worktree.hint':
+    '새 worktree가 이 폴더 아래 <repo명>/<이름>으로 생성됩니다. 기존 worktree는 이동하지 않습니다.',
+  'settings.cliMissing.title': 'Claude Code CLI를 찾을 수 없습니다',
+  'settings.cliMissing.bodyPre': '이 앱은 설치된',
+  'settings.cliMissing.bodyPost': 'CLI를 실행하는 런처입니다. CLI 설치 후 앱을 다시 시작하세요.',
+  'settings.cliMissing.install': '설치:',
+  // App.tsx — update status (the title-bar UpdateIndicator / the settings Info tab)
+  'update.tb.restartInstallVersion': '재시작하여 v{version} 설치',
+  'update.tb.checking': '업데이트 확인 중…',
+  'update.tb.available': '새 버전 {version} 발견',
+  'update.tb.downloading': '다운로드 중 {percent}%',
+  'update.tb.error': '업데이트 오류',
+  // index.ts — diagnostic message for when the electron-updater module does not export properly (title-bar tooltip)
+  'update.tb.autoUpdaterMissing': 'autoUpdater export를 찾지 못함',
+  'update.info.downloading': '다운로드 중 {percent}%…',
+  'update.info.restartInstallVersion': '재시작하여 v{version} 설치',
+  'update.info.checking': '확인 중…',
+  'update.info.checkButton': '업데이트 확인',
+  'update.info.upToDateAt': '현재 최신 버전입니다 ({time} 확인)',
+  'update.info.available': '새 버전 {version} 다운로드 중…',
+  'update.info.checkFailed': '확인 실패',
+  // App.tsx — the toast for a downloaded new version, and the session-kill confirmation when installing now
+  'update.toast.available': '새 버전 v{version}이 나왔습니다',
+  'update.toast.download': '다운로드',
+  'update.toast.ready': '업데이트 v{version} 준비됨',
+  'update.toast.installNow': '지금 설치',
+  'update.confirm.title': '지금 설치하고 재시작',
+  'update.confirm.body': '진행 중인 세션 {count}개가 종료됩니다. 계속할까요?',
+  // UpdateGate.tsx — the screen that covers the app when the version is below the minimum the release policy sets
+  'update.gate.title': '업데이트가 필요합니다',
+  'update.gate.body': '{version} 버전으로 업데이트를 진행해주세요',
+  'update.gate.bodyNoVersion': '업데이트를 진행해주세요',
+  'update.gate.preparing': '업데이트를 준비하고 있습니다…',
+  'update.gate.ready': 'v{version} 설치 준비 완료',
+  'update.gate.failed': '업데이트를 받지 못했습니다. 네트워크를 확인하고 다시 시도하세요.',
+  'update.gate.retry': '다시 시도',
+  'update.gate.quit': '앱 종료',
+  // App.tsx — settings modal Shortcuts tab (the SHORTCUTS array; a module-level constant, so translated at render time)
+  'shortcut.group.terminal': '터미널',
+  'shortcut.terminal.newline': '줄바꿈',
+  'shortcut.terminal.copyOrInterrupt': '선택 복사 · 없으면 중단',
+  'shortcut.paste': '붙여넣기',
+  'shortcut.group.sessionTab': '세션 탭',
+  'shortcut.sessionTab.prev': '이전 탭',
+  'shortcut.sessionTab.next': '다음 탭',
+  'shortcut.gesture.tabDrag': '탭 드래그',
+  'shortcut.sessionTab.reorder': '순서 변경',
+  'shortcut.group.pane': '패널',
+  'shortcut.pane.splitRight': '우측 분할',
+  'shortcut.pane.splitDown': '하단 분할',
+  'shortcut.pane.focusLeft': '왼쪽 패널',
+  'shortcut.pane.focusRight': '오른쪽 패널',
+  'shortcut.pane.focusUp': '위 패널',
+  'shortcut.pane.focusDown': '아래 패널',
+  // ShortcutSettings.tsx — the editable shortcut list
+  'shortcut.group.editable': '변경 가능',
+  'shortcut.edit': '변경',
+  'shortcut.resetOne': '기본값',
+  'shortcut.capturing': '키를 누르세요 (Esc 취소)',
+  'shortcut.unbound': '없음',
+  'shortcut.conflictWith': '{key}는 이미 "{action}"에 쓰입니다',
+  'shortcut.riskTitle': '{key}를 앱 단축키로 지정',
+  'shortcut.riskConfirm': '그래도 지정',
+  'shortcut.risk.interrupt': '터미널에서 실행 중인 작업을 중단하는 키입니다. 앱이 가져가면 세션에서 중단할 수 없습니다.',
+  'shortcut.risk.eof': '터미널에서 CLI를 종료하는 키입니다. 앱이 가져가면 세션에서 쓸 수 없습니다.',
+  'shortcut.risk.readline': '터미널 줄 편집에 쓰이는 키입니다(줄 처음·끝 이동, 단어 삭제 등). 앱이 가져가면 프롬프트 입력 중에 쓸 수 없습니다.',
+  'shortcut.risk.historySearch': '터미널 히스토리 검색에 쓰이는 키입니다. 앱이 가져가면 세션에서 쓸 수 없습니다.',
+  'shortcut.risk.clear': '터미널 화면을 지우는 키입니다. 앱이 가져가면 세션에서 쓸 수 없습니다.',
+  'shortcut.risk.newline': 'Codex에서 줄바꿈에 쓰이는 키입니다. 앱이 가져가면 여러 줄 입력이 막힙니다.',
+  'shortcut.risk.cliMode': 'Claude Code·Codex가 모드 전환·자동완성에 쓰는 키입니다. 앱이 가져가면 세션에서 쓸 수 없습니다.',
+  'shortcut.pane.dragSplit': '가장자리로 분할 · 가운데로 이동',
+  'shortcut.group.explorer': '파일 탐색기',
+  'shortcut.explorer.toggleMode': '세션 ↔ 탐색기 전환',
+  'shortcut.explorer.saveFile': '파일 저장',
+  'shortcut.explorer.closeFileTab': '파일 탭 닫기',
+  'shortcut.explorer.rename': '이름 변경',
+  'shortcut.explorer.delete': '삭제',
+  'shortcut.explorer.selectAll': '전체 선택',
+  'shortcut.explorer.cut': '잘라내기',
+  'shortcut.explorer.copy': '복사',
+  'shortcut.gesture.itemDrag': '항목 드래그',
+  'shortcut.explorer.move': '이동 · Ctrl 누르면 복사',
+  'shortcut.explorer.undo': '되돌리기',
+  // useFileOps.ts, FileExplorer.tsx — file-operation action names (shared by the runBatch label and the menu labels)
+  'files.action.delete': '삭제',
+  'files.action.duplicate': '복제',
+  'files.action.move': '이동',
+  'files.action.copy': '복사',
+  'files.action.create': '생성',
+  'files.action.rename': '이름 변경',
+  // useFileOps.ts — runBatch partial-failure aggregation
+  'files.batch.partialFail': '{label} {total}개 중 {failed}개 실패: {shown}{more}',
+  'files.batch.moreCount': ' 외 {count}건',
+  // useFileOps.ts — inline edit (create/rename) failure
+  'files.commit.failed': '{action} 실패: {detail}',
+  // useFileOps.ts — delete confirmation modal. The undoHint wording is settled —
+  // the "up to" and "over 50MB excluded" specifics have to stay (no over-promising; see the undoHint declaration comment).
+  'files.delete.undoHint':
+    'Ctrl+Z 또는 Local History에서 복구할 수 있습니다 (최대 30일 보관 · 50MB 초과 항목은 제외).',
+  'files.delete.confirmOne': "'{name}' 을(를) 삭제할까요?\n{undoHint}",
+  'files.delete.confirmDirWithCount': "'{name}' 폴더와 하위 {count}개 항목을 삭제할까요?\n{undoHint}",
+  'files.delete.confirmDirAll': "'{name}' 폴더와 하위 항목 전부를 삭제할까요?\n{undoHint}",
+  'files.delete.confirmMany': '{shown}{more} — {total}개 항목을 삭제할까요?{dirNote}\n{undoHint}',
+  'files.delete.dirNote': ' 폴더 {count}개의 하위 항목이 함께 삭제됩니다.',
+  'files.delete.moreNames': ' 외 {count}개',
+  'files.delete.skippedTooLarge': '항목이 너무 커서 Local History에 남기지 않았습니다',
+  'files.delete.skippedFailed': 'Local History 스냅샷에 실패했습니다 — 삭제는 완료됐습니다',
+  // useFileOps.ts — cut/copy and paste
+  'files.clipboard.cutDone': '{count}개 항목을 잘라냈습니다',
+  'files.clipboard.copyDone': '{count}개 항목을 복사했습니다',
+  'files.paste.blocked': '붙여넣기 불가: {reason}',
+  'files.paste.invalidTarget': '대상이 올바르지 않습니다',
+  'files.paste.empty': '붙여넣을 항목이 없습니다',
+  'files.transfer.movedTo': "{count}개 항목을 '{dest}' 에 이동했습니다",
+  'files.transfer.copiedTo': "{count}개 항목을 '{dest}' 에 복사했습니다",
+  'files.transfer.skipped': '{count}개 항목은 건너뜀: {reason}',
+  // useFileOps.ts — Ctrl+Z undo
+  'files.undo.empty': '되돌릴 조작이 없습니다',
+  'files.undo.changedOne': "'{name}' 이(가) 변경되었습니다",
+  'files.undo.changedMany': '{shown}{more} 이(가) 변경되었습니다',
+  'files.undo.blocked': '{desc} 되돌리기 불가: {detail}',
+  'files.undo.partialFail': '되돌리기 {attempted}개 중 {failed}개 실패: {shown}{more}',
+  'files.undo.partialMissing': '되돌리기 {total}개 중 {missing}개 실패: {shown}{more}',
+  'files.undo.permanentTooLarge':
+    '되돌리기로 영구 삭제됐습니다 — 용량이 커 Local History에 남기지 않아 복구할 수 없습니다',
+  'files.undo.permanentSnapshotFailed':
+    '되돌리기로 지워졌습니다 — Local History 스냅샷에 실패해 복구할 수 없습니다',
+  'files.undo.done': '{desc} 되돌렸습니다',
+  // undo.ts — the Message keys describe/describeRestored return. undo.ts is a pure core
+  // module and cannot call t(), so it builds keys only, not finished sentences. Plurals get their own keys (the rule).
+  'files.undo.desc.createdOne': "'{name}' 생성",
+  'files.undo.desc.createdMany': '{count}개 항목 생성',
+  'files.undo.desc.copiedOne': "'{name}' 복사",
+  'files.undo.desc.copiedMany': '{count}개 항목 복사',
+  'files.undo.desc.renamed': "'{from}' → '{to}' 이름 변경",
+  'files.undo.desc.movedOne': "'{name}' 이동",
+  'files.undo.desc.movedMany': '{count}개 항목 이동',
+  'files.undo.desc.deletedOne': "'{name}' 삭제",
+  'files.undo.desc.deletedMany': '{count}개 항목 삭제',
+  'files.undo.restored.one': "'{name}' 삭제 되돌렸습니다",
+  'files.undo.restored.many': '{count}개 항목 삭제 되돌렸습니다',
+  'files.undo.restored.renamedOne': "'{name}' 삭제 되돌림 — 같은 이름이 있어 다른 경로로 복구됨: {to}",
+  'files.undo.restored.renamedMany':
+    '{count}개 항목 삭제 되돌림 — {renamedCount}개는 같은 이름이 있어 다른 이름으로 복구됨: {shown}',
+  'files.undo.restored.renamedManyWithMore':
+    '{count}개 항목 삭제 되돌림 — {renamedCount}개는 같은 이름이 있어 다른 이름으로 복구됨: {shown} 외 {moreCount}건',
+  // FileExplorer.tsx — panel header, context menu
+  'explorer.title': '탐색기',
+  'explorer.noActiveSession': '활성 세션이 없습니다',
+  // Folder state shown inside the tree (the .fx-note row)
+  'explorer.dir.loading': '불러오는 중…',
+  'explorer.dir.readFailed': '읽기 실패: {detail}',
+  'explorer.dir.empty': '비어 있음',
+  'explorer.refresh': '새로고침',
+  'explorer.reveal.failed': '탐색기 열기 실패: {detail}',
+  'explorer.menu.newFile': '새 파일',
+  'explorer.menu.newFolder': '새 폴더',
+  'explorer.menu.rename': '이름 변경 (F2)',
+  'explorer.menu.delete': '삭제 (Del)',
+  'explorer.menu.deleteCount': '삭제 ({count}개, Del)',
+  'explorer.menu.duplicateCount': '복제 ({count}개)',
+  'explorer.menu.cut': '잘라내기 (Ctrl+X)',
+  'explorer.menu.copy': '복사 (Ctrl+C)',
+  'explorer.menu.paste': '붙여넣기 (Ctrl+V)',
+  'explorer.menu.copyPath': '경로 복사',
+  'explorer.menu.copyRelativePath': '상대 경로 복사',
+  'explorer.menu.reveal': '탐색기에서 열기',
+  // FileExplorer.tsx — git status on a tree row (tooltip, aria-label)
+  'explorer.git.new': '새 파일',
+  'explorer.git.modified': '수정됨',
+  'explorer.git.deleted': '삭제됨',
+  'explorer.git.conflict': '충돌',
+  'explorer.git.folderCount': '변경 {count}건',
+  // FileTabs.tsx — the dirty marker on a file tab
+  'explorer.tab.unsaved': '저장 안 됨',
+  // LocalHistoryDialog.tsx — the Local History browse/restore modal
+  // ('Local History' is treated as a proper noun and left untranslated — following the existing catalog precedent)
+  'localHistory.loading': '불러오는 중…',
+  'localHistory.empty': '삭제 이력이 없습니다',
+  'localHistory.restore': '복구',
+  'localHistory.restoring': '복구 중…',
+  'localHistory.restored': '복구됨: {path}',
+  'localHistory.restoreFailed': '복구 실패: {detail}',
+  'localHistory.listFailed': '이력 조회 실패: {detail}',
+  // The error store.ts (core, which does not know the language) throws with the LOCAL_HISTORY_NOT_FOUND code — main
+  // (localHistory.restore in ipc.ts) inspects the code and rethrows it translated through this key (the layering rule)
+  'localHistory.notFound': '이력 항목을 찾을 수 없습니다',
+  // AccountPanel.tsx — account register, import, detect, logout, settings sync
+  'account.field.kind': '종류',
+  'account.field.label': '라벨',
+  'account.panel.title': '계정',
+  'account.panel.empty': '계정을 추가하세요',
+  'account.add.title': '계정 추가',
+  'account.add.button': '추가',
+  'account.add.adding': '추가 중…',
+  'account.add.labelPlaceholder': '예: 회사 계정',
+  'account.add.copySettingsLabel': '기본 계정 설정 가져오기 (플러그인·MCP·개인 스킬/커맨드/에이전트)',
+  'account.add.loginHintClaude': '로그인은 세션 터미널에서 /login으로 진행합니다.',
+  'account.add.loginHintCodex': '로그인은 세션 터미널에서 codex 로그인 안내에 따라 진행합니다.',
+  'account.add.syncFailed': '계정은 추가됐지만 설정 가져오기에 실패했습니다: {detail}',
+  'account.import.title': '계정 가져오기',
+  'account.import.button': '가져오기',
+  'account.import.someFailed': '{count}개 계정 등록에 실패했습니다.',
+  'account.detect.title': '감지된 계정',
+  'account.detect.button': '자동 감지',
+  'account.detect.empty': '감지된 계정이 없습니다',
+  'account.detect.importSelected': '선택 등록',
+  'account.detect.failed': '자동 감지 실패: {detail}',
+  'account.status.loggedIn': '로그인됨',
+  'account.status.notLoggedIn': '미로그인',
+  // AccountPanel.tsx — unregister. When logout comes with it, it says the credentials are removed (destructive).
+  'account.remove.title': '계정 등록 해제',
+  'account.remove.button': '등록 해제',
+  'account.remove.confirm': '‘{label}’ 계정 등록을 해제하시겠습니까?',
+  'account.remove.logoutToo': '로그아웃까지 진행 (인증 제거)',
+  'account.remove.logoutWarning':
+    '로그아웃하면 이 계정의 인증이 제거되어 다시 로그인해야 합니다. 기본(홈) 계정이면 다른 곳에서 쓰는 메인 로그인도 함께 해제됩니다.',
+  'account.remove.processing': '처리 중…',
+  'account.remove.confirmWithLogout': '해제 + 로그아웃',
+  'account.logout.failed': '로그아웃 실패: {detail}\n\n등록 해제는 계속 진행합니다.',
+  // The Message key accountLogout in core.ts returns. account.logout.failed (above) is the outer template that
+  // slots this value into {detail}, so the two cannot share a name — it was split into the
+  // account.error.* namespace, alongside account.error.raw.
+  'account.error.raw': '{detail}',
+  'account.error.logoutFailed': '로그아웃 실패',
+  // AccountPanel.tsx — default-account settings sync. A destructive action that overwrites the target account's settings.
+  'account.sync.title': '기본 계정 설정 가져오기',
+  'account.sync.confirmBody':
+    '기본 계정의 설정(플러그인·MCP·개인 스킬/커맨드/에이전트 포함)을 ‘{label}’ 계정으로 가져옵니다. 같은 항목은 기본 계정 값으로 덮어씁니다.',
+  'account.sync.appliesNextSession': '실행 중인 세션에는 적용되지 않고 다음 세션부터 반영됩니다.',
+  'account.sync.confirm': '가져오기',
+  'account.sync.confirming': '가져오는 중…',
+  'account.sync.done': '설정을 가져왔습니다.',
+  'account.sync.failed': '가져오기 실패: {detail}',
+  // The Message keys accountSyncSettings in core.ts returns
+  'account.sync.codexUnsupported': 'Codex 계정은 설정 가져오기를 지원하지 않습니다.',
+  'account.sync.isDefaultSource': '기본 계정은 설정의 원본이라 가져올 대상이 아닙니다.',
+  'account.sync.nothingToCopy': '가져올 설정이 없습니다 (기본 계정 설정 파일 없음).',
+  // AccountSelect.tsx
+  'account.select.none': '(선택 안 됨)',
+  // NewSessionDialog.tsx — the new-session modal
+  'session.new.title': '새 세션',
+  'session.new.runningWarning': '실행 중 세션이 {count}개입니다. 성능 저하가 있을 수 있습니다.',
+  'session.new.codexMissingPre': 'Codex CLI를 찾을 수 없습니다.',
+  'session.new.codexMissingPost': '설치 후 다시 시도하세요.',
+  'session.field.projectFolder': '프로젝트 폴더',
+  'session.field.account': '계정',
+  'session.new.folderNotSelected': '(선택 안 됨)',
+  'session.new.pickFolder': '선택…',
+  'session.new.useWorktree': 'worktree로 분리해서 시작',
+  'session.new.worktreeNamePlaceholder': 'worktree 이름 (비우면 자동)',
+  'session.new.accountSlotPrimary': '계정 1',
+  'session.new.accountSlotRoll': '계정 {slot} (한도 시 전환)',
+  'session.new.removeAccountSlot': '계정 제거',
+  'session.new.addAccountSlot': '+ 계정 추가',
+  // NewSessionDialog.tsx — rolling, bypass permissions. Both spell out a risk, so keep the strength.
+  'session.new.rollLabel': '한도 도달 시 리셋까지 대기 후 자동 재개',
+  'session.new.multiAccountAuto': '(다계정: 자동)',
+  'session.new.rollPromptPlaceholder': '이어서 작업 진행해 줘',
+  'session.new.rollPromptHint': '재개 시 이 문구를 전송 (비우면 기본값)',
+  'session.new.slackNotify': 'Slack 진행상황 알림',
+  'session.new.slackNeedsWebhook': '(설정에서 Webhook URL 등록 필요)',
+  'session.new.saveDefaultAccount': '이 프로젝트의 기본 계정으로 저장',
+  'session.new.bypassPermissions': '권한 확인 없이 실행 (bypass permissions)',
+  'session.new.start': '시작',
+  // Waiting text between pressing Start and the tab opening. Splitting off a worktree chains fetch, worktree add and
+  // the include copy, taking several seconds, so what is in progress is announced separately.
+  'session.new.starting': '세션을 시작하는 중…',
+  'session.new.startingWorktree': 'worktree를 만드는 중…',
+  // NewSessionDialog.tsx scheduler UI — a merge from main brought in hardcoded text, later moved into this catalog
+  'session.new.schedLabel': '스케쥴러 — 주기적으로 명령 자동 실행',
+  'session.new.schedMode.interval': 'N분마다',
+  'session.new.schedMode.daily': '매일',
+  'session.new.schedMode.weekly': '매주',
+  'session.new.schedMode.monthly': '매월',
+  'session.new.schedMinutesUnit': '분마다',
+  'session.new.schedDaysUnit': '일',
+  'session.new.schedCommandPlaceholder': '실행할 명령어 (필수)',
+  'session.new.schedHint': '지정 주기마다 이 명령을 세션에 전송',
+  // Shared by NewSessionDialog.tsx and TerminalView.tsx — weekday button labels, weekday text in the schedule summary.
+  // Index 0 = Sunday (matches the Date.getDay() convention)
+  'session.sched.weekday.sun': '일',
+  'session.sched.weekday.mon': '월',
+  'session.sched.weekday.tue': '화',
+  'session.sched.weekday.wed': '수',
+  'session.sched.weekday.thu': '목',
+  'session.sched.weekday.fri': '금',
+  'session.sched.weekday.sat': '토',
+  // SessionTabs.tsx
+  'session.tab.rollTooltip': '롤링: {chain}',
+  // PaneGrid / pane context menu
+  'session.pane.splitRight': '우측 분할',
+  'session.pane.splitDown': '하단 분할',
+  'session.pane.unsplit': '분할 해제',
+  'session.pane.maxReached': '패널은 최대 4개까지 나눌 수 있습니다',
+  // ResumeDialog.tsx
+  'session.resume.title': '세션 이어하기',
+  'session.resume.conversationLabel': '대화',
+  'session.resume.checkingLogin': '로그인 계정 확인 중…',
+  'session.resume.noLoggedInAccounts': '로그인된 계정이 없습니다. 계정에 먼저 로그인하세요.',
+  'session.resume.originalAccountSuffix': ' (원 계정)',
+  'session.resume.crossAccountHint': '전사를 이 계정으로 복사한 뒤 이어갑니다 (원본 전사는 보존).',
+  'session.resume.rollChainHint': '한도 도달 시 이 순서로 전환합니다: {chain}',
+  'session.resume.confirm': '이어하기',
+  // TerminalView.tsx — only the rolling banner and the loading/exit overlays the renderer draws (main's direct PTY
+  // writes are separate and handled elsewhere)
+  'session.terminal.rollSwitching': "'{label}'(으)로 이어가는 중…",
+  'session.terminal.trustAccepting': '폴더 신뢰 자동 수락 중…',
+  'session.terminal.weeklyLimitWaiting': '주간 한도 소진 — {time} 자동 재개',
+  'session.terminal.limitWaiting': '한도 도달 — {time} 자동 재개',
+  // Auto-resume failure toast. See the App.tsx comment for why it is a toast and not a banner —
+  // for a rolling session with Slack off, this is the only path that calls a human.
+  'session.toast.stalled': "'{title}' 세션이 멈춰 있습니다 — 자동 재개 실패, 확인이 필요합니다",
+  'session.terminal.loadingContent': '내용 불러오는 중…',
+  'session.terminal.exited': '종료됨 (코드 {code})',
+  'session.terminal.restart': '다시 시작',
+  // TerminalView.tsx schedule banner — schedRuleSummary is a module-level pure function, so it takes t as an argument
+  // (the same convention as fmtTime/fmtDateTime). A merge from main brought in hardcoded text, later moved into this catalog
+  'session.terminal.schedFallback': '스케쥴',
+  'session.terminal.schedSummary.interval': '{minutes}분마다',
+  'session.terminal.schedSummary.daily': '매일 {time}',
+  'session.terminal.schedSummary.weekly': '매주 {days} {time}',
+  'session.terminal.schedSummary.monthly': '매월 {days}일 {time}',
+  'session.terminal.schedNextRun': ' · 다음 실행 {time}',
+  'session.terminal.schedDisable': '끄기',
+  // HistoryBrowser.tsx
+  'history.panel.title': '히스토리',
+  'history.panel.empty': '기록 없음',
+  'history.loading': '불러오는 중…',
+  'history.filter.allAccounts': '모든 계정',
+  'history.refresh.tooltip': '워쳐 실패 시 수동 폴백',
+  'history.project.openExplorer': '파일 탐색기로 열기',
+  'history.project.noSessions': '세션 없음',
+  'history.entry.preview': '미리보기',
+  'history.preview.truncated': '(앞부분만)',
+  'history.preview.me': '나',
+  'history.resume.folderMissingTitle': '프로젝트 폴더 없음',
+  'history.resume.folderMissingBody':
+    '원래 프로젝트 폴더가 없습니다:\n{cwd}\n\n재개할 폴더를 새로 선택할까요?',
+  'history.resume.pickFolder': '폴더 선택',
+  // WorktreePanel.tsx — status labels (STATUS_LABEL; a module-level constant, so translated at render time)
+  'worktree.status.orphanDir': 'git 등록 소실',
+  'worktree.status.missing': '폴더 없음',
+  // WorktreePanel.tsx — delete confirmation modal, result toasts
+  'worktree.remove.title': 'worktree 삭제',
+  'worktree.remove.body': '{name} ({branch})\n{path}\n\n이 worktree를 삭제할까요? 머지되지 않은 브랜치는 남겨둡니다.',
+  'worktree.remove.branchPreserved': '브랜치 {branch}는 머지되지 않아 남겨두었습니다',
+  'worktree.remove.done': 'worktree를 삭제했습니다',
+  'worktree.remove.alreadyGone': '{name}은(는) 이미 삭제되어 목록에서 정리했습니다',
+  // Shown on the row while deleting — git status, folder removal and the merge check (remote fetch) chain up and can pass 10 seconds
+  'worktree.remove.removing': '삭제 중…',
+  // WorktreePanel.tsx — force-delete second confirmation. When dirtyCount() is null the count is unknown, so it is
+  // left out of unverifiableBody — the keys split on whether a count is shown, not on singular/plural.
+  'worktree.forceRemove.unverifiableTitle': '변경 여부 확인 불가',
+  'worktree.forceRemove.dirtyTitle': '커밋되지 않은 변경',
+  'worktree.forceRemove.unverifiableBody':
+    '{name}은(는) git이 더 이상 추적하지 않아 미커밋 변경 여부를 확인할 수 없습니다.\n{path}\n강제 삭제하면 폴더 내용이 사라집니다. 폴더를 직접 열어 확인한 뒤 진행하세요.',
+  'worktree.forceRemove.dirtyBody':
+    '{name}에 커밋되지 않은 변경 {count}개가 있습니다.\n강제 삭제하면 변경 내용이 사라집니다. 계속할까요?',
+  'worktree.forceRemove.confirm': '강제 삭제',
+  // WorktreePanel.tsx — panel header, row icon buttons
+  'worktree.refresh': '새로 고침',
+  'worktree.action.startSession': '세션 시작',
+  'worktree.action.openExplorer': '탐색기',
+  // RunToolbar.tsx — config select, run/stop, edit/delete, the running list
+  'run.config.none': '실행 구성 없음',
+  'run.config.addOption': '+ 실행 구성 추가…',
+  'run.action.run': '실행',
+  'run.action.stop': '중지',
+  'run.config.editTitle': '구성 편집',
+  'run.config.deleteTitle': '구성 삭제',
+  'run.global.listTitle': '실행 중 목록',
+  'run.global.jump': '이동',
+  // App.tsx runAddConfig/runEditConfig — the text both sites share when the run.saveConfig IPC
+  // fails (same meaning: saving the config failed)
+  'run.config.saveFailed': '저장 실패: {detail}',
+  // ipc.ts resolveRunCwd — a sentence main throws also shows up verbatim in a renderer toast,
+  // so it is translated here before throwing (the layering rule)
+  'run.config.cwdNotString': '실행 구성의 작업 폴더가 올바르지 않습니다',
+  'run.config.cwdOutsideProject': '실행 구성의 작업 폴더는 프로젝트 안이어야 합니다',
+  // RunConfigDialog.tsx — RunToolbar's inline form was split out into this dialog component.
+  // namePlaceholder/commandPlaceholder were the old inline form's keys; nameLabel is the rename that
+  // matches the dialog structure (the value is reused as-is), and commandPlaceholder's value was
+  // refreshed for the new placeholder wording.
+  'run.form.editTitle': '실행 구성 편집',
+  'run.form.addTitle': '실행 구성 추가',
+  'run.form.nameLabel': '이름',
+  'run.form.commandLabel': '명령',
+  'run.form.commandPlaceholder': '예: gradlew.bat bootRun',
+  'run.form.commandHint': '프로젝트 폴더에서 셸로 실행됩니다.',
+  'run.form.jdkLabel': 'JDK (선택)',
+  'run.form.jdkLoading': 'JDK 조회 중…',
+  'run.form.jdkNone': '사용 안 함 (앱 환경 그대로)',
+  'run.form.jdkCustom': '{path} (직접 지정)',
+  'run.form.jdkBrowse': '찾아보기…',
+  'run.form.jdkHint': 'JAVA_HOME으로 설정됩니다.',
+  'run.form.springLabel': 'Spring 프로파일 (선택)',
+  'run.form.springHint': 'SPRING_PROFILES_ACTIVE로 설정됩니다. 콤마로 여러 개를 지정할 수 있습니다.',
+  'run.form.cwdLabel': '작업 폴더 (선택)',
+  'run.form.cwdPlaceholder': '비우면 프로젝트 루트',
+  'run.form.cwdBrowse': '선택…',
+  'run.form.cwdHint':
+    '프로젝트 폴더 기준 상대 경로로 저장됩니다(프로젝트 밖은 선택할 수 없습니다). 비우면 프로젝트 루트에서 실행합니다.',
+  'run.form.envLabel': '환경변수 (선택)',
+  'run.form.envPlaceholder': '한 줄에 하나\nCUSTOM_VAR=value',
+  'run.form.envHint': '비워 두면 앱 환경을 그대로 물려받습니다. 같은 이름은 이 구성이 우선합니다.',
+  'run.form.save': '저장',
+  'run.form.add': '추가',
+  // BottomPanel.tsx — the Run tab label in the tab strip (the default for the configName slot when no run is active),
+  // clear and collapse buttons. The header RunPanel.tsx used to own moved into BottomPanel; RunPanel.tsx itself remains as the body.
+  // noActiveRun was originally that header status text, and BottomPanel's Run tab label has the same value, so it is reused
+  // (a separately added terminal.tab.run was an exact duplicate of the value and was cleaned up).
+  'run.panel.noActiveRun': '실행',
+  'run.panel.exited': ' · 종료(코드 {code})',
+  'run.panel.clear': '지우기',
+  'run.panel.collapse': '접기',
+  // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
+  'terminal.rail.open': '터미널',
+  'terminal.tab.label': '터미널 {n}',
+  'terminal.tab.new': '새 터미널',
+  'terminal.tab.close': '터미널 닫기',
+  'terminal.open.failed': '터미널 열기 실패: {detail}',
+  // rolling.ts and codexRolling.ts — the default resume prompt main writes straight into the Claude PTY,
+  // or passes as a Codex CLI argument, when rolling resumes after a limit. It is also the default for the
+  // user's rollPrompt setting (session.new.rollPromptPlaceholder shows this value as its placeholder). It is
+  // an instruction sent to a CLI, but it follows the app language by decision.
+  'rolling.continuePrompt': '이어서 작업 진행해 줘',
+  // slack.ts — the notification text that goes out to Slack. Follows the app language (core.lang at send time).
+  'slack.turnDone': '✅ 응답 완료',
+  'slack.limitWaiting': '⏸ 한도 도달 — {at} 재개 예정 ({scope} 한도)',
+  'slack.limitScope.weekly': '주간',
+  'slack.limitScope.session': '5시간',
+  'slack.accountSwitched': '🔁 계정 전환 → {label}',
+  'slack.limitReset': '▶️ 한도 리셋 — 자동 재개 프롬프트 전송',
+  'slack.stalled': '⚠️ 세션이 멈춰 있습니다 — 자동 재개 실패, 확인이 필요합니다',
+  'slack.sessionExited': '⏹ 세션 종료 (exit {code})',
+  'slack.inputNeeded': '🙋 입력 필요',
+  'slack.inputNeededWith': '🙋 입력 필요 — {message}',
+  // core/slack/inbound.ts buildChoiceKeys — the reason a choice reply was in the wrong shape.
+  // core does not know the language, so it hands back a Message and main (slackInbox) translates it and posts it to the thread.
+  // With more than one question, the *At variants that say which question it was are used.
+  // core/slack/transcript.ts describePendingToolUse — the reply-format hint attached to the thread notification, and
+  // the notation for summarizing a sensitive argument as a character count instead of its value.
+  'slack.choice.hintPerQuestion': '💡 질문마다 `/`로 구분해 답장 (예: 1,3 / 2)',
+  'slack.choice.hintMulti': '💡 여러 개는 쉼표로 구분해 답장 (예: 1,3)',
+  'slack.pending.charCount': '{key}: {len}자',
+  'slack.choice.noShape': '대기 중인 선택지 정보를 찾지 못했습니다',
+  'slack.choice.countMismatch':
+    "질문이 {expected}개인데 답은 {got}개입니다 — 질문마다 '/'로 구분해 주세요 (예: 1,3 / 2)",
+  'slack.choice.noNumber': '번호를 찾지 못했습니다',
+  'slack.choice.noNumberAt': '{index}번째 질문: 번호를 찾지 못했습니다',
+  'slack.choice.singleOnly': '하나만 고를 수 있습니다',
+  'slack.choice.singleOnlyAt': '{index}번째 질문: 하나만 고를 수 있습니다',
+  'slack.choice.outOfRange': '{n}번은 없습니다 (1~{max})',
+  'slack.choice.outOfRangeAt': '{index}번째 질문: {n}번은 없습니다 (1~{max})',
+  // slackInbox.ts — the notice left in the thread when a thread reply could not be injected into the session
+  'slack.inbox.tooLong': '⚠️ 답장이 너무 길어 전달하지 않았습니다 ({max}자 이하만 가능)',
+  'slack.inbox.sessionEnded': '⚠️ 이 세션은 종료되어 입력을 전달하지 못했습니다',
+  'slack.inbox.injectFailed': '⚠️ 입력을 전달하지 못했습니다',
+  'slack.limitNoResume': '⛔ 한도 도달 — 자동 재개 없음',
+  'slack.limitNoResumeAt': '⛔ 한도 도달 — 자동 재개 없음 (리셋 {at})'
+} as const
