@@ -85,6 +85,16 @@ export interface WorktreeListItem extends WorktreeInfo {
   status: WorktreeStatus // result of cross-checking `git worktree list` against directory existence
 }
 
+/** One branch offered as a worktree base. Declared here rather than in worktrees/git.ts because the
+ *  renderer needs the shape and that module imports node:child_process — tsconfig.web.json whitelists
+ *  node-free core files, so git.ts can never be one of them. */
+export interface BranchRef {
+  name: string // short form — 'main' or 'origin/main'
+  remote: boolean // came from refs/remotes/
+  current: boolean // the local HEAD branch
+  updatedAt: string // ISO 8601 committer date, for display
+}
+
 export interface WorktreeRemoveResult {
   removed: boolean
   branchDeleted: boolean
@@ -298,7 +308,14 @@ export interface CoreApi {
   worktrees: {
     // Splitting a session off into a git worktree.
     list(): Promise<WorktreeListItem[]>
-    create(opts: { repoPath: string; name?: string }): Promise<{ info: WorktreeInfo; warnings: Message[] }>
+    create(opts: {
+      repoPath: string
+      name?: string
+      baseRef?: string // the branch to fork from, short form. Absent falls back to automatic detection
+    }): Promise<{ info: WorktreeInfo; warnings: Message[] }>
+    /** Base-branch candidates for the picker, newest commit first. `detected` is what the automatic path
+     *  would have chosen, so the select can preselect it and leave behaviour unchanged when untouched. */
+    listBranches(repoPath: string): Promise<{ branches: BranchRef[]; detected: string | null }>
     remove(id: string, opts?: { force?: boolean }): Promise<WorktreeRemoveResult>
     isGitRepo(dir: string): Promise<string | null> // returns the repo root, or null
     getRoot(): Promise<string>

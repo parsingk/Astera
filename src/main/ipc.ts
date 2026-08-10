@@ -33,6 +33,7 @@ import { parsePorcelainZ, type GitState } from '../core/git/status'
 import { FileWatcher } from './fileWatcher'
 import { GitWatcher } from './gitWatcher'
 import { createWorktree } from '../core/worktrees/create'
+import { listBranches, detectBaseRef } from '../core/worktrees/git'
 import { removeWorktree } from '../core/worktrees/remove'
 import { listWithStatus } from '../core/worktrees/list'
 import { git, repoRoot } from '../core/worktrees/git'
@@ -631,9 +632,20 @@ export function registerIpc(
     return null
   }
   ipcMain.handle('worktrees.list', () => listWithStatus(core.worktrees))
-  ipcMain.handle('worktrees.create', (_e, opts: { repoPath: string; name?: string }) =>
-    createWorktree({ repoPath: opts.repoPath, name: opts.name, registry: core.worktrees })
+  ipcMain.handle('worktrees.create', (_e, opts: { repoPath: string; name?: string; baseRef?: string }) =>
+    createWorktree({
+      repoPath: opts.repoPath,
+      name: opts.name,
+      baseRef: opts.baseRef,
+      registry: core.worktrees
+    })
   )
+  // Base-branch candidates for the new-session worktree picker. detected rides along so the select can
+  // preselect what the automatic path would have chosen — a separate IPC would mean a second round trip.
+  ipcMain.handle('worktrees.listBranches', async (_e, repoPath: string) => ({
+    branches: await listBranches(repoPath),
+    detected: await detectBaseRef(repoPath)
+  }))
   ipcMain.handle('worktrees.remove', (_e, id: string, opts?: { force?: boolean }) =>
     removeWorktree({ id, force: opts?.force === true, registry: core.worktrees, isPathInUse: isWorktreeInUse })
   )

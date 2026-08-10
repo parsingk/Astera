@@ -71,6 +71,7 @@ const api = {
   worktrees: {
     list: invoke('worktrees.list'),
     create: invoke('worktrees.create'),
+    listBranches: invoke('worktrees.listBranches'),
     remove: invoke('worktrees.remove'),
     isGitRepo: invoke('worktrees.isGitRepo'),
     getRoot: invoke('worktrees.getRoot'),

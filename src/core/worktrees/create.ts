@@ -18,6 +18,9 @@ const WORKTREE_ADD_TIMEOUT_MS = 180_000
 export async function createWorktree(args: {
   repoPath: string
   name?: string
+  /** The branch to fork from, in short form ('develop' or 'origin/develop'). Optional: the orchestration
+   *  path creates worker worktrees without a user in the loop and keeps the automatic detection. */
+  baseRef?: string
   registry: WorktreeRegistry
 }): Promise<{ info: WorktreeInfo; warnings: Message[] }> {
   const repo = await repoRoot(args.repoPath)
@@ -27,7 +30,10 @@ export async function createWorktree(args: {
   const baseSlug = args.name && args.name.trim() !== '' ? slugify(args.name) : autoName()
   const username = await gitUserName(repo)
 
-  const baseRef = await detectBaseRef(repo)
+  // A base the user picked is used as given; only the automatic path probes. Validation is the same for
+  // both — toFullRef below rejects anything that does not resolve, so a branch deleted between the picker
+  // rendering and the spawn lands on NO_BASE rather than a confusing git error.
+  const baseRef = args.baseRef ?? (await detectBaseRef(repo))
   if (!baseRef) throw new Error('NO_BASE: could not find a default branch (origin/HEAD, main or master)')
   if ((await fetchBaseRef(repo, baseRef)) === 'stale')
     warnings.push({ key: 'worktree.create.fetchFailed', params: { baseRef } })

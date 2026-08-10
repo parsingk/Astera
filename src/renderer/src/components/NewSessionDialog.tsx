@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, ScheduleConfig, Provider } from '../../../core/types'
+import type { Account, BranchRef, ScheduleConfig, Provider } from '../../../core/types'
 import { providerOf } from '../../../core/providers/meta'
 import { isSlackReady } from '../../../core/slack/ready'
 import { useI18n } from '../i18n/I18nProvider'
@@ -29,6 +29,7 @@ export function NewSessionDialog({
     bypassPermissions: boolean
     useWorktree: boolean
     worktreeName?: string
+    worktreeBaseRef?: string
     repoRoot: string | null
     schedule?: ScheduleConfig
   }) => void | Promise<void>
@@ -50,6 +51,10 @@ export function NewSessionDialog({
   const [resolvingRepo, setResolvingRepo] = useState(false) // blocks start while the check runs — stops a spawn with the previous repoRoot
   const [useWorktree, setUseWorktree] = useState(false)
   const [wtName, setWtName] = useState('')
+  // Base-branch candidates. null = not loaded yet (or the lookup failed) — the select stays hidden then and
+  // creation falls back to the automatic detection, exactly as before this picker existed.
+  const [branches, setBranches] = useState<BranchRef[] | null>(null)
+  const [wtBaseRef, setWtBaseRef] = useState('')
   // Recurring command scheduler. ScheduleFields assembles the input, this only holds the result
   const [schedOn, setSchedOn] = useState(false)
   const [schedule, setSchedule] = useState<ScheduleConfig | null>(null)
@@ -69,6 +74,28 @@ export function NewSessionDialog({
     void window.api.slack.getConfig().then((c) => setSlackReady(isSlackReady(c)))
     void window.api.system.checkCli().then((c) => setCliOk({ claude: c.claude.ok, codex: c.codex.ok }))
   }, [])
+
+  useEffect(() => {
+    // Loaded when the checkbox is ticked, not on every modal open — there is no reason to run git until the
+    // user actually wants a worktree. A failure leaves branches null, which hides the select and lets
+    // createWorktree detect the base as it always has.
+    if (!useWorktree || !repoRoot) return
+    let cancelled = false
+    void window.api.worktrees
+      .listBranches(repoRoot)
+      .then(({ branches: list, detected }) => {
+        if (cancelled) return
+        setBranches(list)
+        // Preselect what the automatic path would have chosen, so leaving this alone changes nothing
+        setWtBaseRef((prev) => prev || detected || '')
+      })
+      .catch(() => {
+        if (!cancelled) setBranches(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [useWorktree, repoRoot])
 
   useEffect(() => {
     // git repo check plus the default-account preselect. A worktree session uses the mapping keyed by the original repo too
@@ -148,6 +175,7 @@ export function NewSessionDialog({
         bypassPermissions,
         useWorktree: withWorktree,
         worktreeName: wtName.trim() || undefined,
+        worktreeBaseRef: wtBaseRef || undefined,
         repoRoot,
         schedule: schedOn ? (schedule ?? undefined) : undefined
       })
@@ -212,6 +240,44 @@ export function NewSessionDialog({
                   placeholder={t('session.new.worktreeNamePlaceholder')}
                   onChange={(e) => setWtName(e.target.value)}
                 />
+                {branches && branches.length > 0 && (
+                  <label className="worktree-base-row">
+                    <span>{t('session.new.worktreeBaseRef')}</span>
+                    <select
+                      className="settings-lang-select"
+                      value={wtBaseRef}
+                      onChange={(e) => setWtBaseRef(e.target.value)}
+                    >
+                      {/* Current branch first — branching off what you are on is the common case, and the
+                          automatic detection could never express it (it only probes origin/*, main, master) */}
+                      {branches
+                        .filter((b) => b.current)
+                        .map((b) => (
+                          <option key={`cur-${b.name}`} value={b.name}>
+                            {b.name} {t('session.new.worktreeBaseCurrent')}
+                          </option>
+                        ))}
+                      <optgroup label={t('session.new.worktreeBaseRemote')}>
+                        {branches
+                          .filter((b) => b.remote)
+                          .map((b) => (
+                            <option key={`r-${b.name}`} value={b.name}>
+                              {b.name}
+                            </option>
+                          ))}
+                      </optgroup>
+                      <optgroup label={t('session.new.worktreeBaseLocal')}>
+                        {branches
+                          .filter((b) => !b.remote && !b.current)
+                          .map((b) => (
+                            <option key={`l-${b.name}`} value={b.name}>
+                              {b.name}
+                            </option>
+                          ))}
+                      </optgroup>
+                    </select>
+                  </label>
+                )}
               </div>
             )}
           </>

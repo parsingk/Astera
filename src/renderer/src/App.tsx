@@ -829,6 +829,7 @@ export default function App(): React.JSX.Element {
     bypassPermissions?: boolean
     useWorktree?: boolean
     worktreeName?: string
+    worktreeBaseRef?: string
     repoRoot?: string | null
     schedule?: ScheduleConfig
     /** The old session id, for when an existing tab's session id has to be swapped, as on a restart */
@@ -843,7 +844,8 @@ export default function App(): React.JSX.Element {
       if (opts.useWorktree && opts.repoRoot) {
         const created = await window.api.worktrees.create({
           repoPath: opts.repoRoot,
-          name: opts.worktreeName
+          name: opts.worktreeName,
+          baseRef: opts.worktreeBaseRef
         })
         createdWorktreeName = created.info.name
         created.warnings.forEach((w) => toast.info(t(w.key, w.params)))

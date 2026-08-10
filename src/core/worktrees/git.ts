@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import path from 'node:path'
+import type { BranchRef } from '../types'
 
 export interface GitResult {
   ok: boolean
@@ -82,14 +83,30 @@ export async function toFullRef(repo: string, baseRef: string): Promise<string |
   return null
 }
 
+/** Whether that name is a configured remote. `git remote` lists one per line. */
+async function remoteExists(repo: string, name: string): Promise<boolean> {
+  const r = await git(['remote'], { cwd: repo })
+  if (!r.ok) return false
+  return r.stdout.split('\n').some((line) => line.trim() === name)
+}
+
 const FETCH_TIMEOUT_MS = 10_000
 
 /** For a remote-tracking base, fetches precisely that one branch.
- *  Success is fetched / failed but a local ref exists is stale / a local base is local / with neither, FETCH_FAILED. */
+ *  Success is fetched / failed but a local ref exists is stale / a local base is local / with neither, FETCH_FAILED.
+ *
+ *  Remote-ness is decided by whether the first segment names a configured remote, not by the name's shape.
+ *  A local branch can contain a slash too ('parsingk/maple' looks exactly like 'origin/main'), and
+ *  splitting on shape alone sent it to `git fetch parsingk refs/heads/maple` — no such remote, so it threw
+ *  FETCH_FAILED and took worktree creation down with it. Unreachable while detectBaseRef was the only
+ *  source (it yields origin/* or main/master), but the base-branch picker lets the user choose one.
+ *  Checking the remote list rather than refs/remotes/<baseRef> keeps the FETCH_FAILED case intact: a
+ *  configured-but-unreachable remote still has to report a network problem, not silently fall back. */
 export async function fetchBaseRef(repo: string, baseRef: string): Promise<'fetched' | 'stale' | 'local'> {
   const m = /^([^/]+)\/(.+)$/.exec(baseRef)
   if (!m) return 'local'
   const [, remote, branch] = m
+  if (!(await remoteExists(repo, remote))) return 'local'
   const r = await git(
     ['fetch', '--no-tags', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`],
     { cwd: repo, timeoutMs: FETCH_TIMEOUT_MS }
@@ -110,6 +127,49 @@ export async function isCleanWorktree(
   if (!r.ok) throw new Error(`GIT_REMOVE_FAILED: status check failed (${r.stderr})`)
   const lines = r.stdout === '' ? [] : r.stdout.split('\n')
   return { clean: lines.length === 0, changedCount: lines.length }
+}
+
+/**
+ * Local and remote-tracking branches in one pass, newest commit first.
+ *
+ * for-each-ref does the sorting, so no ordering happens here — alphabetical would bury the branch the user
+ * actually wants under stale ones. It also takes both ref namespaces in a single call, which keeps this to
+ * two git invocations total (the second one resolves HEAD).
+ *
+ * refs/remotes/<remote>/HEAD is dropped: it is a symref pointing at the default branch, not a branch of its
+ * own, and offering it would let someone create a worktree based on the literal name 'origin/HEAD'.
+ *
+ * A failure returns [] rather than throwing — the picker is an aid, and not being able to list branches is
+ * no reason to block starting a session (the caller falls back to detectBaseRef).
+ */
+export async function listBranches(repo: string): Promise<BranchRef[]> {
+  const r = await git(
+    [
+      'for-each-ref',
+      '--sort=-committerdate',
+      '--format=%(refname)\t%(committerdate:iso8601)',
+      'refs/heads',
+      'refs/remotes'
+    ],
+    { cwd: repo }
+  )
+  if (!r.ok || r.stdout === '') return []
+  // Empty on a detached HEAD, which is why no branch comes back marked current there
+  const head = await git(['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: repo })
+  const current = head.ok ? head.stdout : null
+
+  const rows: BranchRef[] = []
+  for (const line of r.stdout.split('\n')) {
+    const [refname, date] = line.split('\t')
+    if (!refname) continue
+    const remote = refname.startsWith('refs/remotes/')
+    const name = remote
+      ? refname.slice('refs/remotes/'.length)
+      : refname.slice('refs/heads/'.length)
+    if (remote && name.endsWith('/HEAD')) continue
+    rows.push({ name, remote, current: !remote && name === current, updatedAt: (date ?? '').trim() })
+  }
+  return rows
 }
 
 export interface GitWorktreeRow {
