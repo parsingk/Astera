@@ -37,9 +37,11 @@ All you need is a Slack account, and it takes about 15 minutes.
 
 Company workspaces often require admin approval to install an app. If you create a new personal workspace you own it yourself, so there are no restrictions, and the free plan is more than enough. The Slack mobile app lets you register several workspaces and switch between them, so nothing gets in the way of receiving notifications. Since threads pile up one per session, a dedicated workspace is actually tidier.
 
-**2. Anyone in that channel can send commands into your session.**
+**2. Only one Slack member can send commands into your session.**
 
-This feature does not distinguish between Slack users. Anyone who can reply in the thread can push input into the session. So it is best to use a **private channel with only you in it**.
+The channel is not a permission boundary on its own — anyone invited to it could reply in a thread and push input into your session. So every reply is matched against a **Member ID** you configure, and only that person's replies reach a session. **Until you set it, no reply is delivered at all**: a missing Member ID blocks everyone rather than allowing everyone. Step 6 covers where to enter it.
+
+A **private channel with only you in it** is still the tidier setup.
 
 ---
 
@@ -115,8 +117,13 @@ In Astera, open **Settings (⚙) → Slack** tab.
 | Bot Token | the `xoxb-…` from Step 3 |
 | Channel ID | the `C…` from Step 4 |
 | App Token | the `xapp-…` from Step 5 |
+| Member ID | your own Member ID, starting with `U` — see below |
 
-Click **Save**. It takes effect right away — no need to restart the app.
+To find your **Member ID**: in Slack, click your own avatar → **Profile** → the **⋯ (More)** button → **Copy member ID**.
+
+> ⚠️ **Leave the Member ID empty and no reply is delivered at all** — not yours, not anyone's. It is the permission check for the reply path, so an empty value blocks everyone rather than allowing everyone. While it is empty and bot mode is on, the settings screen says so in red.
+
+Click **Save**. It takes effect right away — no need to restart the app, and changing only the Member ID does not even drop the connection.
 
 **Fields you leave empty are not cleared.** Saving is a partial update, so any field you did not touch this time keeps the value you entered before — for example, if you fill in only the App Token and save, the Bot Token and Channel ID you already had stay as they are.
 
@@ -158,6 +165,8 @@ Open the `%APPDATA%\Astera\slack.log` file. If you are using the dev build, it i
 
 ### Replies do nothing
 
+First check the **Member ID** (Step 6). Leave it empty and every reply is refused, and the refusal is silent — nothing comes back into the thread.
+
 If `slack.log` only has `slack socket connected` and nothing after it → **you skipped step 5-2 (Event Subscriptions).** That is the most common cause.
 
 When you post a reply, one of the lines below is always written to the log. If there is nothing at all, the event is not reaching the app.
@@ -166,7 +175,11 @@ When you post a reply, one of the lines below is always written to the log. If t
 slack inbound -> injected into session=... chars=...   ← success
 slack inbound ignored(other-channel)                   ← you wrote in a different channel
 slack inbound ignored(not-thread-reply)                ← you wrote in the channel instead of the thread
+slack inbound ignored(member-id-unset)                 ← no Member ID is set yet (Step 6)
+slack inbound ignored(not-allowed-user) user=U0123…    ← the sender is not the configured Member ID
 ```
+
+The `user=` on that last line is **the ID of whoever sent the reply**. If that was you, it is the exact value to paste into the Member ID field — your own entry has a typo.
 
 ### A reply comes back saying "This session has ended, so the input could not be delivered"
 
@@ -193,9 +206,11 @@ That thread's session is already finished. **Restarting Astera puts every thread
 
 **What gets ignored** — messages the bot posted, posts in other channels, channel posts that are not in a thread, message edits and deletions, and empty replies. Replies that are too long (over roughly 4,000 characters) are also refused as a precaution, with a note in the thread.
 
+**A reply from anyone but the configured Member ID is ignored silently.** Nothing is posted back into the thread — a stranger never gets the bot to answer them, and a channel with several people in it does not fill up with warnings. The refusal is written to `slack.log` only, which is where you look if your own reply went nowhere.
+
 **Threads carry over when the account switches.** Even if a usage limit moves the work to another account, notifications keep arriving in the same thread and replies still go into the new session.
 
-**What the bot can see** — only the channels it was invited to. Slack uses the invitation as the permission boundary, so it cannot read anything in channels the bot was not added to. On top of that, Astera narrows it one step further and only writes to and reads from the single channel you configured.
+**What the bot can see** — only the channels it was invited to. Slack uses the invitation as the permission boundary, so it cannot read anything in channels the bot was not added to. On top of that, Astera narrows it two steps further: it only writes to and reads from the single channel you configured, and within that channel it only accepts replies from the single Member ID you configured.
 
 **If you run two copies of Astera** (the installed build and the dev build) **do not share the App Token.** Connecting twice with the same token makes Slack split replies between the two apps, so a reply can land on the one that does not own the thread. Use a separate app (or a separate workspace) for each.
 

@@ -311,7 +311,9 @@ export default function App(): React.JSX.Element {
   const [slackBotToken, setSlackBotToken] = useState('')
   const [slackChannelId, setSlackChannelId] = useState('')
   const [slackAppToken, setSlackAppToken] = useState('')
-  // Saving is blocked until getConfig has returned — the save button sends all four fields
+  // The one Slack Member ID allowed to reply into sessions. Left empty, every reply is blocked
+  const [slackMemberId, setSlackMemberId] = useState('')
+  // Saving is blocked until getConfig has returned — the save button sends all five fields
   // explicitly, so pressing it while they are still empty strings would overwrite an already-stored
   // token, channel, and webhook with null in one go. (When there was a single field, patch()
   // preserving undefined protected the rest; that is no longer the case.)
@@ -571,6 +573,7 @@ export default function App(): React.JSX.Element {
       setSlackBotToken(c.botToken ?? '')
       setSlackChannelId(c.channelId ?? '')
       setSlackAppToken(c.appToken ?? '')
+      setSlackMemberId(c.memberId ?? '')
       setSlackLoaded(true)
     })
     void window.api.worktrees.getRoot().then(setWtRoot)
@@ -2135,6 +2138,36 @@ export default function App(): React.JSX.Element {
                       }}
                     />
                     <span className="settings-hint">{t('settings.slack.appTokenHint')}</span>
+                    {/* The one member allowed to reply into sessions. The channel alone is not a
+                        permission boundary — anyone invited there could push input into a session — so
+                        replies are matched against this ID. Left empty, every reply is blocked rather
+                        than allowed (core/slack/inbound.ts), which is why the warning below is loud. */}
+                    <label className="settings-field-label">Member ID</label>
+                    <input
+                      type="text"
+                      className="slack-url-input"
+                      value={slackMemberId}
+                      placeholder="U0123456789"
+                      onChange={(e) => {
+                        setSlackMemberId(e.target.value)
+                        setSlackSaved(false)
+                      }}
+                    />
+                    <span className="settings-hint">{t('settings.slack.memberIdHint')}</span>
+                    {/* Gated on bot mode, not on the full intake condition (which also needs the app
+                        token): slackMode() is the verdict core already owns, so no third place gets to
+                        judge "is the bot on" and drift from it. In bot mode without an app token there
+                        is no intake at all, and the warning still reads true there. */}
+                    {slackMode({
+                      webhookUrl: slackUrl.trim() || null,
+                      botToken: slackBotToken.trim() || null,
+                      channelId: slackChannelId.trim() || null
+                    }) === 'bot' &&
+                      slackMemberId.trim() === '' && (
+                        <span className="update-note update-err">
+                          {t('settings.slack.memberIdRequired')}
+                        </span>
+                      )}
                     <div className="slack-cell">
                       <button
                         disabled={!slackLoaded}
@@ -2144,7 +2177,8 @@ export default function App(): React.JSX.Element {
                               webhookUrl: slackUrl.trim() || null,
                               botToken: slackBotToken.trim() || null,
                               channelId: slackChannelId.trim() || null,
-                              appToken: slackAppToken.trim() || null
+                              appToken: slackAppToken.trim() || null,
+                              memberId: slackMemberId.trim() || null
                             })
                             .then(() => setSlackSaved(true))
                         }

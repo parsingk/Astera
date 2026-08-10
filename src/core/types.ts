@@ -308,22 +308,27 @@ export interface CoreApi {
     disable(sessionId: string): Promise<void> // turn off the schedule of a running session — the banner button
   }
   slack: {
-    // Webhook, plus bot token and channel, plus app token.
+    // Webhook, plus bot token and channel, plus app token, plus the allowed Member ID.
     // setConfig takes a partial update — fields that are not sent are merged with the stored values by
-    // main and preserved (see slack.setConfig in ipc.ts). The settings modal sends all four, but the
+    // main and preserved (see slack.setConfig in ipc.ts). The settings modal sends all five, but the
     // partial-update contract is kept so that another caller touching one field leaves the rest alive.
     // appToken is for Socket Mode receiving only, so for now it is stored but unused.
+    // memberId is the one Slack Member ID whose thread replies are injected into sessions. It is a
+    // receiving-side permission, so it plays no part in choosing the transport — and a missing value
+    // blocks every reply rather than allowing everyone (core/slack/inbound.ts).
     getConfig(): Promise<{
       webhookUrl: string | null
       botToken: string | null
       channelId: string | null
       appToken: string | null
+      memberId: string | null
     }>
     setConfig(cfg: {
       webhookUrl?: string | null
       botToken?: string | null
       channelId?: string | null
       appToken?: string | null
+      memberId?: string | null
     }): Promise<void>
   }
   settings: {

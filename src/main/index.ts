@@ -217,8 +217,11 @@ app.whenReady().then(async () => {
   // that fixed a bug where turning bot mode off left the socket attached to the old channel until
   // the next restart.
   const slackInboxController = new SlackInboxController({
-    makeDeps: (channelId) => ({
+    makeDeps: (channelId, memberId) => ({
       channelId,
+      // Passed straight through as the getter the controller handed over — only the allowed member's
+      // thread replies are injected, and a settings save takes effect without a reconnect.
+      memberId,
       lang: () => core!.lang,
       resolveSession: (ts) => slack.resolveSessionByThread(ts),
       // Write only after confirming the session is alive, and hand that result straight back — this
