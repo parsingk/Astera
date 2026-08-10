@@ -8,6 +8,7 @@ export const ko = {
   'settings.tab.accounts': '계정',
   'settings.tab.info': '정보',
   'settings.tab.shortcuts': '단축키',
+  'settings.tab.history': '히스토리',
   'settings.general.language': '언어',
   // Agent orchestration
   'settings.orchestration.label': '에이전트 오케스트레이션 (실험)',
@@ -148,6 +149,9 @@ export const ko = {
   'settings.worktree.change': '변경…',
   'settings.worktree.hint':
     '새 worktree가 이 폴더 아래 <repo명>/<이름>으로 생성됩니다. 기존 worktree는 이동하지 않습니다.',
+  'settings.history.hiddenProjects': '숨긴 프로젝트',
+  'settings.history.unhide': '해제',
+  'settings.history.empty': '숨긴 프로젝트가 없습니다.',
   // No settings.cliMissing.* here on purpose. That screen replaces the whole workbench, so the rail
   // and the language switch on it are gone — it is hardcoded English in App.tsx instead.
   // App.tsx — update status (the title-bar UpdateIndicator / the settings Info tab)
@@ -489,6 +493,7 @@ export const ko = {
   'history.filter.allAccounts': '모든 계정',
   'history.refresh.tooltip': '워쳐 실패 시 수동 폴백',
   'history.project.openExplorer': '파일 탐색기로 열기',
+  'history.menu.hide': '숨기기',
   'history.project.noSessions': '세션 없음',
   'history.entry.preview': '미리보기',
   'history.preview.truncated': '(앞부분만)',

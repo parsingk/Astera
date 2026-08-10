@@ -510,8 +510,23 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .settings-content { flex: 1; min-width: 0; padding: 24px 32px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
 .settings-slack { display: flex; flex-direction: column; gap: 8px; }
 .settings-worktree { display: flex; flex-direction: column; gap: 8px; }
+/* Same column+gap as its two sibling tabs above. A tab that puts rows straight into
+   .settings-content inherits that container's gap, but a wrapper div does not — without this the
+   hidden-project rows butt together and their 해제 buttons end up touching. */
+.settings-history { display: flex; flex-direction: column; gap: 8px; }
 .worktree-root-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .worktree-root-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+/* 숨긴 프로젝트는 전체 경로로 보여주므로 폭을 넘길 수 있다 — 줄바꿈 대신 말줄임으로 행 높이를 지킨다.
+   .settings-row가 flex라서 이 span도 flex item이 되는데, flex item의 기본 min-width: auto는
+   내용의 최소 크기(줄바꿈 없는 전체 텍스트 폭)로 계산된다. min-width: 0으로 그 하한을 없애야
+   overflow/text-overflow가 실제로 발동한다 — 지워도 되는 중복처럼 보이지만 지우면 다시 깨진다. */
+.hidden-project-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .settings-field-label { font-size: 13.5px; color: var(--text-dim); }
 .settings-hint { font-size: 12px; color: var(--text-faint); }
 

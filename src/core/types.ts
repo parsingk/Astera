@@ -146,6 +146,9 @@ export interface HistoryProjectsPageRequest {
   accountId?: string
   offset?: number
   limit?: number
+  /** Project paths the renderer is hiding. Optional like accountId — absent filters nothing, so a
+   *  caller that does not know about the field keeps the old behaviour. */
+  hiddenPaths?: string[]
 }
 
 export interface HistoryProjectsPage {

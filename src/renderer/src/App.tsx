@@ -4,6 +4,7 @@ import type { MessageKey } from '../../core/i18n'
 import logoUrl from './assets/logo.png'
 import { AccountPanel } from './components/AccountPanel'
 import { AccountSettings } from './components/AccountSettings'
+import { HistorySettings } from './components/HistorySettings'
 import { HistoryBrowser } from './components/HistoryBrowser'
 import { FileTabs, type FileTab } from './components/FileTabs'
 import { FileEditor } from './components/FileEditor'
@@ -303,7 +304,7 @@ export default function App(): React.JSX.Element {
   const [explorerPin, setExplorerPin] = useState<string | null>(null) // the pinned root when entering from history
   const [showSettings, setShowSettings] = useState(false)
   const [settingsTab, setSettingsTab] = useState<
-    'general' | 'accounts' | 'info' | 'shortcuts' | 'slack' | 'worktree'
+    'general' | 'accounts' | 'info' | 'shortcuts' | 'slack' | 'worktree' | 'history'
   >('info') // the settings sidebar, with general and accounts added
   const [slackUrl, setSlackUrl] = useState('') // the Slack Webhook URL in the settings modal
   const [slackSaved, setSlackSaved] = useState(false)
@@ -1921,7 +1922,8 @@ export default function App(): React.JSX.Element {
                     ['info', t('settings.tab.info')],
                     ['shortcuts', t('settings.tab.shortcuts')],
                     ['slack', 'Slack'],
-                    ['worktree', 'Worktree']
+                    ['worktree', 'Worktree'],
+                    ['history', t('settings.tab.history')]
                   ] as const
                 ).map(([key, label]) => (
                   <button
@@ -2237,6 +2239,7 @@ export default function App(): React.JSX.Element {
                     </span>
                   </div>
                 )}
+                {settingsTab === 'history' && <HistorySettings />}
               </div>
             </div>
           </div>
