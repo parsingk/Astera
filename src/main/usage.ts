@@ -130,13 +130,13 @@ export async function readAccessToken(
  * account's configDir.
  *
  * Security guardrails:
- *  - the accessToken exists only inside this class (main) — what leaves is the percentage result
+ *  - the accessToken exists only inside this module (main) — what leaves is the percentage result
  *  - never logged (errors carry the status only) and never written to disk (the cache holds results only)
  *  - TLS verification stays on (net.fetch default, no bypass) with a 10-second timeout
  *  - .credentials.json is read-only — no refresh, no write (claude refreshes the active account's token)
- *  - on darwin, the macOS Keychain fallback (readAccessToken below) is read-only too — `security` is
+ *  - on darwin, the macOS Keychain fallback (readAccessToken above) is read-only too — `security` is
  *    never invoked with anything that writes or deletes an item — and that token likewise never leaves
- *    this class; it is folded into the same Authorization header as the file-sourced one
+ *    this module; it is folded into the same Authorization header as the file-sourced one
  *  - the token travels only as the Authorization header of the OAuth endpoint
  */
 export class RateLimitFetcher {
