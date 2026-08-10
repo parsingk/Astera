@@ -8,6 +8,11 @@ import { DEFAULT_ACCOUNT_PLACEHOLDER_LABEL } from './detect'
 
 const COLORS = ['#4f9cf9', '#f97316', '#22c55e', '#e879f9', '#facc15', '#ef4444']
 
+/** Same rule as detect.ts's own normalize (and descriptor.ts's normalizePath) — kept local because those
+ *  are too, and it must stay in step with them: detect.ts is what compares these paths for the exclusion.
+ *  Used here only to keep dismissedDirs free of case-variant duplicates. */
+const normalizeDir = (p: string): string => path.resolve(p).toLowerCase()
+
 function slugify(label: string): string {
   const s = label
     .toLowerCase()
@@ -36,6 +41,14 @@ function isValidAccount(a: unknown): a is Account {
 
 export class AccountRegistry {
   private accounts: Account[] = []
+  /** configDirs the user unregistered. Auto-detection excludes them so an account the user just removed
+   *  does not come straight back as a suggestion — remove() leaves the directory on disk (the CLI's own
+   *  settings and transcripts live there), and detect()'s marker check passes on settings.json or
+   *  projects/ alone, so the exclusion cannot come from the filesystem. It has to be remembered.
+   *  Deliberately not derived as "any unregistered dir under the accounts root": when accounts.json is
+   *  corrupt, load() starts from an empty list, and detection finding those dirs again is the recovery
+   *  path back. Only an explicit unregister excludes. */
+  private dismissed: string[] = []
   onChanged?: (accounts: Account[]) => void
   private roots: Record<Provider, string>
   private descriptors: Record<Provider, ProviderDescriptor> = makeDescriptors(process.platform)
@@ -61,15 +74,24 @@ export class AccountRegistry {
         throw new Error('invalid schema')
       }
       this.accounts = parsed.accounts
+      // Absent in files written before this field existed. A malformed value only costs the user a
+      // re-suggested account, so bad entries are filtered rather than failing the whole file the way a
+      // misshaped account does — accounts carry configDir, which a spawn would act on.
+      this.dismissed = Array.isArray(parsed.dismissedDirs)
+        ? parsed.dismissedDirs.filter((d: unknown): d is string => typeof d === 'string')
+        : []
       return { recovered: false }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         this.accounts = []
+        this.dismissed = []
         return { recovered: false }
       }
-      // Preserve the corrupt copy, then start from an empty list
+      // Preserve the corrupt copy, then start from an empty list. The exclusions go with it on purpose:
+      // with no accounts left, detection finding those directories again is the way back.
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       this.accounts = []
+      this.dismissed = []
       return { recovered: true }
     }
   }
@@ -99,9 +121,16 @@ export class AccountRegistry {
   }
 
   async remove(id: string): Promise<void> {
-    this.get(id) // verifies it exists
+    const account = this.get(id) // verifies it exists
     this.accounts = this.accounts.filter((a) => a.id !== id)
+    const norm = normalizeDir(account.configDir)
+    if (!this.dismissed.some((d) => normalizeDir(d) === norm)) this.dismissed.push(account.configDir)
     await this.save()
+  }
+
+  /** The unregistered configDirs, for detection to exclude. Raw paths — detect.ts normalizes them itself. */
+  dismissedDirs(): string[] {
+    return [...this.dismissed]
   }
 
   /**
@@ -149,6 +178,9 @@ export class AccountRegistry {
       createdAt: new Date().toISOString()
     }
     this.accounts.push(account)
+    // Registering this directory again overrides the earlier unregister — a registered account must never
+    // sit in the exclusion list, or re-adding it by hand would leave detection permanently blind to it
+    this.dismissed = this.dismissed.filter((d) => normalizeDir(d) !== normalizeDir(configDir))
     await this.save()
     return account
   }
@@ -167,7 +199,11 @@ export class AccountRegistry {
   private async save(): Promise<void> {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true })
     const tmp = this.filePath + '.tmp'
-    await fs.writeFile(tmp, JSON.stringify({ version: 1, accounts: this.accounts }, null, 2), 'utf8')
+    await fs.writeFile(
+      tmp,
+      JSON.stringify({ version: 1, accounts: this.accounts, dismissedDirs: this.dismissed }, null, 2),
+      'utf8'
+    )
     await fs.rename(tmp, this.filePath)
     this.onChanged?.(this.list())
   }

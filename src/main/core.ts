@@ -165,9 +165,12 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   const run = new RunManager(nodePtyFactory)
   const terminal = new TerminalManager(nodePtyFactory)
   // ipc.ts owns the accounts.onChanged wiring (history.reload included); nothing is wired here because it would be overwritten there
-  // Returns both providers' detection results merged — configDirs already registered are excluded from both
+  // Returns both providers' detection results merged — configDirs already registered, and ones the user
+  // unregistered, are excluded from both
   const detectAccounts = async (): Promise<DetectCandidate[]> => {
-    const excludeDirs = accounts.list().map((a) => a.configDir)
+    // Registered dirs, plus the ones the user unregistered — otherwise an account removed a moment ago
+    // comes straight back as a suggestion, since remove() leaves its directory (and transcripts) on disk
+    const excludeDirs = [...accounts.list().map((a) => a.configDir), ...accounts.dismissedDirs()]
     const lists = await Promise.all(
       PROVIDERS.map((p) => descriptors[p].detect({ homeDir: os.homedir(), excludeDirs }))
     )
