@@ -360,6 +360,7 @@ export const en: Record<keyof typeof ko, string> = {
   'session.new.folderNotSelected': '(Not selected)',
   'session.new.pickFolder': 'Select…',
   'session.new.useWorktree': 'Start in a separate worktree',
+  'session.new.worktreeNoBase': 'This repository has no branch to fork from, so a worktree cannot be created. Make a commit first.',
   'session.new.worktreeBaseRef': 'Base branch',
   'session.new.worktreeBaseCurrent': '(current branch)',
   'session.new.worktreeBaseRemote': 'Remote',

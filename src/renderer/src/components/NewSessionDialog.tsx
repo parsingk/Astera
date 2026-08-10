@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { Account, BranchRef, ScheduleConfig, Provider } from '../../../core/types'
 import { providerOf } from '../../../core/providers/meta'
 import { isSlackReady } from '../../../core/slack/ready'
+import { resolveInitialBase } from '../../../core/worktrees/base'
+import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
 import { AccountSelect } from './AccountSelect'
 import { ScheduleFields } from './ScheduleFields'
@@ -85,9 +87,19 @@ export function NewSessionDialog({
       .listBranches(repoRoot)
       .then(({ branches: list, detected }) => {
         if (cancelled) return
+        const base = resolveInitialBase({ branches: list, detected })
+        if (base === null) {
+          // Nothing to fork from (a repo with no commits yet). Refusing here beats letting the start
+          // button run: the loading overlay is opaque and covers the Cancel button, and outside-click
+          // close is disabled while starting, so a failure mid-flight leaves no way out of the modal.
+          toast.error(t('session.new.worktreeNoBase'))
+          setUseWorktree(false)
+          setBranches(null)
+          return
+        }
         setBranches(list)
-        // Preselect what the automatic path would have chosen, so leaving this alone changes nothing
-        setWtBaseRef((prev) => prev || detected || '')
+        // Preselect the detected base so leaving this alone behaves as it did before the picker existed
+        setWtBaseRef((prev) => prev || base)
       })
       .catch(() => {
         if (!cancelled) setBranches(null)
