@@ -52,7 +52,18 @@ const features = take('feat')
 const fixes = take('fix')
 const rest = commits.filter((c) => c.type !== 'feat' && c.type !== 'fix')
 
-const out = []
+// Windows builds up to and including v1.1.0 shipped without resources/app-update.yml, so on those
+// installs the update check, the update button and the campaign notice all fail — every in-app
+// channel reads that same file. The release page is the only way left to reach those users, which is
+// why this sits at the top of every release note rather than in a campaign.
+// REMOVE once the pre-1.1.1 installs have had time to move over.
+const STRANDED_WINDOWS_NOTICE =
+  '> **On Windows 1.1.0 or earlier? This one has to be installed by hand.** Those builds shipped ' +
+  'without the file the updater reads to find releases, so their update check fails and no notice ' +
+  'from inside the app can reach you. Download the installer below and run it — whatever you ' +
+  'install from here on updates itself normally.'
+
+const out = [STRANDED_WINDOWS_NOTICE]
 if (features.length) out.push(`## New features\n\n${features.map(entry).join('\n')}`)
 if (fixes.length) out.push(`## Fixes\n\n${fixes.map(entry).join('\n')}`)
 if (rest.length) {
