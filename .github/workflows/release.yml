@@ -300,13 +300,23 @@ jobs:
       # Unsigned path (forks, or secrets not configured). Turns off notarization and automatic
       # certificate discovery — without the latter, electron-builder would grab some unrelated
       # certificate from the runner's keychain and fail trying to sign with it.
+      #
+      # identity=- is ad-hoc signing, and it is not optional here: Apple Silicon refuses to execute
+      # arm64 code that carries no signature at all, and that refusal is a kernel check with no
+      # Gatekeeper-style override. Without it the universal package would not merely warn on first
+      # launch — it would fail to open on every Apple Silicon Mac. electron-builder only signs
+      # ad-hoc when the identity is explicitly '-'; with the identity left unset it skips signing
+      # entirely (app-builder-lib MacTargetHelper.findSigningIdentity).
+      #
+      # Ad-hoc signatures cannot be notarized and Squirrel.Mac rejects unsigned updates, so this
+      # path still means no auto-update — it buys a launchable app, not a releasable one.
       - name: Build unsigned package
         if: env.SIGNING != 'true'
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
           npm run build
-          npx electron-builder --mac --publish never -c.mac.notarize=false
+          npx electron-builder --mac --publish never -c.mac.notarize=false -c.mac.identity=-
 
       # Fail-closed once signing was attempted: verify the notarization ticket is actually stapled,
       # and die if not. A half-signed release shipping is worse than an unsigned one.
@@ -318,6 +328,23 @@ jobs:
           spctl -a -vvv -t install "$app"
           codesign --verify --deep --strict --verbose=2 "$app"
           xcrun stapler validate "$app"
+
+      # The ad-hoc signature is what makes the package launchable on Apple Silicon at all, so a build
+      # that silently lost it must not ship. electron-builder only warns when it skips signing, which
+      # would otherwise leave a package that fails to open on every arm64 Mac. The runner is arm64, so
+      # --verify checks the slice that actually matters. Gatekeeper will still reject the app on the
+      # user's machine — that is expected here, and only spctl would report it.
+      - name: Verify ad-hoc signature
+        if: env.SIGNING != 'true'
+        run: |
+          app=$(find dist-installer -maxdepth 2 -name 'Astera.app' -print -quit)
+          if [ -z "$app" ]; then echo "Astera.app not found in dist-installer" >&2; exit 1; fi
+          codesign --verify --deep --strict --verbose=2 "$app"
+          if ! codesign -dvv "$app" 2>&1 | grep -q 'Signature=adhoc'; then
+            echo "Expected an ad-hoc signature, got:" >&2
+            codesign -dvv "$app" 2>&1 >&2
+            exit 1
+          fi
 
       - name: Upload release assets
         uses: actions/upload-artifact@v7
@@ -364,6 +391,20 @@ jobs:
           gh release view "$tag" >/dev/null 2>&1 || \
             gh release create "$tag" --draft --title "$tag" --generate-notes
           gh release upload "$tag" assets/* policy.json --clobber
+
+      # Whoever downloads the dmg from this page has not read the README, so the caveat belongs on
+      # the release itself. It runs while the release is still a draft: a failure here leaves it
+      # unpublished rather than shipping an unsigned macOS build with no warning attached. The step
+      # drops out on its own once the Apple secrets are configured.
+      - name: Note the unsigned macOS build in the release
+        if: ${{ secrets.APPLE_CSC_LINK == '' || secrets.APPLE_ID == '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag='${{ github.ref_name }}'
+          notice='> **The macOS build is unsigned and should be treated as experimental.** It is ad-hoc signed, so it runs on Apple Silicon, but Gatekeeper blocks the first launch — open it, let it be refused, then allow it under **System Settings → Privacy & Security → Open Anyway**. Auto-update does not work on macOS until the build carries an Apple Developer ID, so new versions have to be downloaded from this page. The Windows installer is unaffected.'
+          body=$(gh release view "$tag" --json body -q .body)
+          gh release edit "$tag" --notes "$(printf '%s\n\n%s' "$notice" "$body")"
 
       - name: Publish the release
         env:

@@ -25,13 +25,17 @@ git worktrees, and lets one agent hand tasks to another and wait for the results
 
 Download the latest release from
 **[Releases](https://github.com/parsingk/Astera/releases/latest)** and run it — `astera-<version>-setup.exe`
-on Windows, `astera-<version>-universal.dmg` on macOS. The app updates itself from there afterwards;
-it asks before downloading, since the payload is around 100 MB.
+on Windows, `astera-<version>-universal.dmg` on macOS. On Windows the app updates itself from there
+afterwards; it asks before downloading, since the payload is around 100 MB.
 
-> Unsigned builds can have their first launch blocked by Windows SmartScreen or macOS Gatekeeper —
-> on Windows click **More info → Run anyway**, on macOS right-click the app and choose **Open** to
-> get past it. Signing through the SignPath Foundation's open-source program (Windows) and an Apple
-> Developer ID (macOS) is being set up; see [docs/releasing.md](docs/releasing.md) for the details.
+> **macOS builds are unsigned for now**, which costs you two things. Gatekeeper blocks the first
+> launch: open the app, let it be refused, then go to **System Settings → Privacy & Security** and
+> click **Open Anyway** — the Control-click → **Open** shortcut does not work, macOS 15 (Sequoia)
+> removed it. And auto-update stays off until the build is signed, so a new version means downloading
+> the dmg again. On Windows, SmartScreen may warn on first run — click **More info → Run anyway**.
+>
+> Signing through the SignPath Foundation's open-source program (Windows) and an Apple Developer ID
+> (macOS) is being set up; see [docs/releasing.md](docs/releasing.md) for the details.
 
 You will also need:
 

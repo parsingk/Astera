@@ -150,14 +150,27 @@ and stays unsigned — signing it would require a certificate on the build machi
 
 ### Code signing and notarization (Apple Developer ID)
 
-Same fail-open shape as the Windows SignPath step — with no secrets present, the build ships
-unsigned; once you add them, the workflow turns fail-closed and a signing or notarization failure
-fails the release rather than shipping a half-signed build.
+Same fail-open shape as the Windows SignPath step — with no secrets present, the build ships without
+a Developer ID; once you add them, the workflow turns fail-closed and a signing or notarization
+failure fails the release rather than shipping a half-signed build.
 
 **Where it differs from Windows, and why it matters more here:** on macOS, signing is not optional
 the way it is on Windows. `electron-updater`'s macOS update path (Squirrel.Mac) refuses to install an
-unsigned update onto a running app, so **shipping unsigned means no auto-update at all** — only a
-manual dmg download works. Windows SmartScreen is just a first-run speed bump by comparison.
+unsigned update onto a running app, so **shipping without a Developer ID means no auto-update at
+all** — only a manual dmg download works. Windows SmartScreen is just a first-run speed bump by
+comparison.
+
+**The fail-open path is ad-hoc signed, not unsigned.** Apple Silicon refuses to execute arm64 code
+carrying no signature at all — a kernel check with no Gatekeeper-style override — so a package with
+no signature would fail to open on every arm64 Mac rather than merely warn on first launch. The
+workflow passes `-c.mac.identity=-` on that path to get an ad-hoc signature, and verifies it
+survived the build. Note that electron-builder signs ad-hoc *only* when the identity is explicitly
+`-`; leaving it unset makes it skip signing altogether with nothing but a warning in the log.
+
+Ad-hoc buys a launchable package, not a releasable one. Gatekeeper still blocks the first launch
+(**System Settings → Privacy & Security → Open Anyway**; the Control-click → **Open** shortcut was
+removed in macOS 15 Sequoia), the signature cannot be notarized, and auto-update stays off. Ship
+that path as a pre-release, not as `--latest`.
 
 Required secrets:
 
