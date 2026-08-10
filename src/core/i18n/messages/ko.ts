@@ -489,6 +489,7 @@ export const ko = {
   'history.filter.allAccounts': '모든 계정',
   'history.refresh.tooltip': '워쳐 실패 시 수동 폴백',
   'history.project.openExplorer': '파일 탐색기로 열기',
+  'history.menu.hide': '숨기기',
   'history.project.noSessions': '세션 없음',
   'history.entry.preview': '미리보기',
   'history.preview.truncated': '(앞부분만)',

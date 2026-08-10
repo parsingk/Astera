@@ -6,6 +6,8 @@ import { ProviderBadge } from './ProviderBadge'
 import { FolderGlyph } from './FolderGlyph'
 import { confirmModal } from '../lib/confirm'
 import { useI18n } from '../i18n/I18nProvider'
+import { ContextMenu, type MenuItem } from './ContextMenu'
+import * as hiddenProjects from '../lib/hiddenProjects'
 
 const PAGE = 50
 const SEEN_KEY = 'cm.historySeen'
@@ -33,7 +35,8 @@ function ProjectRow({
   markSeen,
   onOpenPreview,
   onResume,
-  onOpenExplorer
+  onOpenExplorer,
+  onContextMenu
 }: {
   project: ProjectSummary
   expanded: boolean
@@ -47,6 +50,7 @@ function ProjectRow({
   onOpenPreview: (e: HistoryEntry) => void
   onResume: (e: HistoryEntry) => void
   onOpenExplorer: (projectPath: string) => void
+  onContextMenu: (x: number, y: number, projectPath: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const [sessions, setSessions] = useState<HistoryEntry[]>([])
@@ -119,6 +123,10 @@ function ProjectRow({
         className="project-row"
         title={`${project.projectPath} · ${new Date(project.updatedAt).toLocaleString()}`}
         onClick={() => onToggle(project.projectPath)}
+        onContextMenu={(ev) => {
+          ev.preventDefault() // Electron의 기본 메뉴를 막고 앱 메뉴를 띄운다
+          onContextMenu(ev.clientX, ev.clientY, project.projectPath)
+        }}
       >
         <span className="project-chevron">{expanded ? '▾' : '▸'}</span>
         <span className="project-name">{project.name}</span>
@@ -217,6 +225,9 @@ export function HistoryBrowser({
   const [seenMap, setSeenMap] = useState<Record<string, string>>(loadSeenMap)
   // Signal that makes the expanded projects re-pull their sessions on history:updated
   const [refreshNonce, setRefreshNonce] = useState(0)
+  // 우클릭 메뉴는 한 번에 하나만 열려야 하므로 행이 아니라 여기에 둔다 (FileExplorer와 같은 구조)
+  const [menu, setMenu] = useState<{ x: number; y: number; projectPath: string } | null>(null)
+  const [hidden, setHidden] = useState<string[]>(() => hiddenProjects.list())
   const previewReq = useRef<string | null>(null)
   const sentinelRef = useRef<HTMLLIElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
@@ -226,6 +237,8 @@ export function HistoryBrowser({
   projectsLenRef.current = projects.length
   const accountFilterRef = useRef('')
   accountFilterRef.current = accountFilter
+  const hiddenRef = useRef<string[]>(hidden)
+  hiddenRef.current = hidden
 
   const accountOf = (id: string): Account | undefined => accounts.find((a) => a.id === id)
   const isSeen = (e: HistoryEntry): boolean => seenMap[e.id] === e.updatedAt
@@ -246,7 +259,7 @@ export function HistoryBrowser({
   const loadFirstProjects = (acc: string): void => {
     const token = ++reqToken.current
     void window.api.history
-      .projectsPage({ accountId: acc || undefined, offset: 0, limit: PAGE })
+      .projectsPage({ accountId: acc || undefined, offset: 0, limit: PAGE, hiddenPaths: hiddenRef.current })
       .then((p) => {
         if (reqToken.current !== token) return // ignore a late response
         setProjects(p.projects)
@@ -262,7 +275,8 @@ export function HistoryBrowser({
       .projectsPage({
         accountId: accountFilterRef.current || undefined,
         offset: projects.length,
-        limit: PAGE
+        limit: PAGE,
+        hiddenPaths: hiddenRef.current
       })
       .then((p) => {
         fetchingRef.current = false
@@ -284,7 +298,8 @@ export function HistoryBrowser({
         .projectsPage({
           accountId: accountFilterRef.current || undefined,
           offset: 0,
-          limit: Math.max(projectsLenRef.current, PAGE)
+          limit: Math.max(projectsLenRef.current, PAGE),
+          hiddenPaths: hiddenRef.current
         })
         .then((p) => {
           if (reqToken.current !== token) return
@@ -295,6 +310,20 @@ export function HistoryBrowser({
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 숨기기(이 화면)와 해제(설정 모달) 양쪽에서 들어온다. offset을 유지한 부분 갱신이 아니라 첫
+  // 페이지부터 다시 받는다 — 목록에서 항목이 빠지면 그 뒤 offset이 전부 밀려 중복이나 누락이 생긴다
+  useEffect(
+    () =>
+      hiddenProjects.subscribe(() => {
+        const next = hiddenProjects.list()
+        setHidden(next)
+        hiddenRef.current = next // setState는 아직 커밋되지 않았고 아래 호출이 ref를 읽는다
+        loadFirstProjects(accountFilterRef.current)
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  )
 
   useEffect(() => {
     const sentinel = sentinelRef.current
@@ -355,6 +384,12 @@ export function HistoryBrowser({
     }
   }
 
+  const menuItemsFor = (projectPath: string): MenuItem[] => [
+    { label: t('history.menu.hide'), onSelect: () => hiddenProjects.hide(projectPath) },
+    'separator',
+    { label: t('history.project.openExplorer'), onSelect: () => onOpenExplorer(projectPath) }
+  ]
+
   return (
     <section className="history-panel">
       <header className="panel-header">
@@ -392,6 +427,7 @@ export function HistoryBrowser({
             onOpenPreview={openPreview}
             onResume={(e) => void resume(e)}
             onOpenExplorer={onOpenExplorer}
+            onContextMenu={(x, y, projectPath) => setMenu({ x, y, projectPath })}
           />
         ))}
         {projects.length === 0 && <li className="empty">{t('history.panel.empty')}</li>}
@@ -401,6 +437,14 @@ export function HistoryBrowser({
           </li>
         )}
       </ul>
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuItemsFor(menu.projectPath)}
+          onClose={() => setMenu(null)}
+        />
+      )}
       {preview && (
         <div className="modal-backdrop" onClick={closePreview}>
           <div className="modal preview" onClick={(e) => e.stopPropagation()}>

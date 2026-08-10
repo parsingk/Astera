@@ -426,6 +426,7 @@ export const en: Record<keyof typeof ko, string> = {
   'history.filter.allAccounts': 'All accounts',
   'history.refresh.tooltip': 'Manual fallback if the watcher fails',
   'history.project.openExplorer': 'Open in file explorer',
+  'history.menu.hide': 'Hide',
   'history.project.noSessions': 'No sessions',
   'history.entry.preview': 'Preview',
   'history.preview.truncated': '(showing the beginning only)',
