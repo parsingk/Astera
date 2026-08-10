@@ -110,14 +110,21 @@ jobs:
 
       - run: npm ci
 
-      # Stage 1 of the build: bundle and produce the unpacked app (dist-installer/win-unpacked).
-      # The installer is deliberately NOT built yet — the binaries inside the package have to be
-      # signed first, so that the installer is assembled from signed files.
+      # Stage 1 of the build: bundle and produce the unpacked app (dist-installer/win-unpacked). The
+      # installer it also emits here is a throwaway — stage 2 reassembles it from the signed binaries
+      # and overwrites it, which is the whole point of splitting the build.
+      #
+      # Do NOT put --dir back to skip that throwaway. electron-builder writes
+      # resources/app-update.yml from onAfterPack, and only when the build carries a suitable Windows
+      # target (nsis) — a --dir build's target is 'dir', and --prepackaged skips packing altogether,
+      # so with --dir in place NEITHER stage ever wrote the file. electron-updater reads it to learn
+      # which repository to check, so every update check died with ENOENT. That is what shipped in
+      # every Windows release from v1.0.0 through v1.1.0.
       - name: Build unpacked app
         shell: pwsh
         run: |
           npm run build
-          npx electron-builder --win --dir --publish never
+          npx electron-builder --win --publish never
 
       # ---- Signing stage 1: the binaries inside the package -------------------------------------
       # Everything already carrying a valid Authenticode signature (Microsoft's conpty/OpenConsole,

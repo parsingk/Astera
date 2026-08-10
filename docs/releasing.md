@@ -123,7 +123,7 @@ half-signed build.
 
 ### How it signs
 
-1. The unpacked app is built first (`--dir`), and every `.exe`/`.dll`/`.node` in it that does not
+1. The app is built first, and every `.exe`/`.dll`/`.node` in the unpacked directory that does not
    already carry a valid Authenticode signature is zipped and submitted as one signing request.
    Files already signed by their vendor (Microsoft's conpty binaries, for instance) are left alone.
 2. The NSIS installer is then assembled **from the signed files** (`--prepackaged`), and submitted as
@@ -131,6 +131,13 @@ half-signed build.
 3. Signing changes the installer's bytes, so `scripts/patch-update-feed.cjs` regenerates the
    `.blockmap` and rewrites the sha512/size in `latest.yml` — otherwise electron-updater would
    download the signed installer and reject it against the stale hash.
+
+Step 1 also produces an installer that step 2 throws away, and that waste is deliberate — **do not
+add `--dir` to skip it.** electron-builder writes `resources/app-update.yml` from `onAfterPack`, and
+only when the build carries an nsis target; a `--dir` build's target is `dir`, and `--prepackaged`
+skips packing entirely, so with `--dir` in place neither step ever wrote the file. `electron-updater`
+reads it to learn which repository to check, so without it every update check fails with `ENOENT` —
+which is exactly what shipped in the Windows builds of v1.0.0 through v1.1.0.
 
 Signing policies usually require a **manual approval per request**: the workflow waits (up to an hour
 per request) while you approve it in the SignPath dashboard.
