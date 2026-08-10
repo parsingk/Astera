@@ -27,10 +27,11 @@ then update themselves through `electron-updater`.
    > what keeps the update feed from advertising the wrong version.
 
 4. **Check** the `Release / validate`, `Release / windows`, `Release / macos`, and `Release / publish`
-   runs under **Actions**, then confirm the release page has all seven assets attached:
-   `latest.yml`, `astera-<version>-setup.exe`, its `.blockmap`, `latest-mac.yml`,
-   `astera-<version>-universal.dmg`, `Astera-<version>-universal-mac.zip`, and `policy.json`. An older
-   app picks the update up on its next check.
+   runs under **Actions**, then confirm the release page has all nine assets attached — three from
+   Windows (`astera-<version>-setup.exe`, its `.blockmap`, `latest.yml`), five from macOS
+   (`astera-<version>-universal.dmg` and `Astera-<version>-universal-mac.zip`, a `.blockmap` for
+   each, and `latest-mac.yml`), plus `policy.json`. Anything else on the page does not belong there.
+   An older app picks the update up on its next check.
 
 ### How the workflow publishes
 

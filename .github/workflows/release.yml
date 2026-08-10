@@ -387,9 +387,13 @@ jobs:
       # no longer matches what ships, so every electron-updater client fails the checksum and auto-
       # update breaks until the next release. unsigned-binaries.zip would also leak out as a public
       # release asset. Restricting to release-* avoids the intermediates entirely.
+      # Downloaded into release-assets/, deliberately NOT assets/: the repository has an assets/
+      # directory of its own (the README banner), which checkout has already put in place by now.
+      # Uploading assets/* from there published banner.jpg next to the installers in v1.1.0. Keep
+      # this path off any directory that exists in the repository.
       - uses: actions/download-artifact@v8
         with:
-          path: assets
+          path: release-assets
           pattern: release-*
           merge-multiple: true
 
@@ -404,7 +408,7 @@ jobs:
           gh release view "$tag" >/dev/null 2>&1 || \
             gh release create "$tag" --draft --title "$tag" \
               --notes "$(node scripts/build-release-notes.cjs "$tag")"
-          gh release upload "$tag" assets/* policy.json --clobber
+          gh release upload "$tag" release-assets/* policy.json --clobber
 
       # Whoever downloads the dmg from this page has not read the README, so the caveat belongs on
       # the release itself — and it has to carry the same xattr -cr line the README gives, since this
