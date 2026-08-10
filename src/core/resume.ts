@@ -11,20 +11,28 @@ import { providerOf } from './providers/meta'
  *
  * Only accounts on the same provider as the original are candidates — the session file format
  * differs per CLI, so cross-provider resume is impossible (codex cannot read a claude transcript,
- * and vice versa). If the original account is gone from the list, its provider is unknown, so claude
- * is assumed (preserving the existing behaviour).
+ * and vice versa).
+ *
+ * The owner arrives as an object rather than an id because a session can belong to an unregistered
+ * account (a ghost, see accounts/ghosts.ts): looking it up in `accounts` would never find it, and the
+ * provider would fall back to claude — offering claude accounts for a codex transcript. The caller
+ * already knows which source the entry came from, so it hands it over. `undefined` means the owner is
+ * unknown even to detection (an old entry whose directory is gone); claude is assumed there, which
+ * beats offering nothing.
+ *
+ * `accounts` must contain only registered accounts. A ghost cannot authenticate, so it must never come
+ * back as a candidate — passing ghosts in here would put one in the picker.
  */
 export function resumeAccountOptions(
   accounts: Account[],
   loggedInIds: Set<string>,
-  ownerId: string
+  owner: Account | undefined
 ): Account[] {
-  const owner0 = accounts.find((a) => a.id === ownerId)
-  const ownerProvider = owner0 ? providerOf(owner0) : 'claude'
+  const ownerProvider = owner ? providerOf(owner) : 'claude'
   const candidates = accounts.filter((a) => providerOf(a) === ownerProvider && loggedInIds.has(a.id))
-  const owner = candidates.find((a) => a.id === ownerId)
-  const others = candidates.filter((a) => a.id !== ownerId)
-  return owner ? [owner, ...others] : others
+  const ownerCandidate = owner ? candidates.find((a) => a.id === owner.id) : undefined
+  const others = candidates.filter((a) => a.id !== owner?.id)
+  return ownerCandidate ? [ownerCandidate, ...others] : others
 }
 
 /**

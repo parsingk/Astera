@@ -3,6 +3,7 @@ import type { Account, HistoryEntry, RollConfig, ScheduleConfig } from '../../..
 import { resumeAccountOptions, resumeRollAccountIds } from '../../../core/resume'
 import { isSlackReady } from '../../../core/slack/ready'
 import { useI18n } from '../i18n/I18nProvider'
+import { isGhostAccountId } from '../../../core/accounts/ghostId'
 import { AccountSelect } from './AccountSelect'
 import { ScheduleFields } from './ScheduleFields'
 
@@ -18,12 +19,16 @@ export function ResumeDialog({
   entry,
   cwd,
   accounts,
+  ghostAccounts,
   onConfirm,
   onCancel
 }: {
   entry: HistoryEntry
   cwd: string
   accounts: Account[]
+  /** Unregistered sources. Used only to identify the entry's owner — a ghost can never be a candidate,
+   *  because resuming needs an account that can authenticate. */
+  ghostAccounts: Account[]
   onConfirm: (opts: {
     accountIds: string[] // [0] = the account to continue on, with the chain after it when rolling is on
     roll: boolean
@@ -49,6 +54,11 @@ export function ResumeDialog({
   const [bypassPermissions, setBypassPermissions] = useState(false)
   const [loadedDefaults, setLoadedDefaults] = useState(false) // mount ScheduleFields only after the prefill
 
+  // The entry's owner, registered or not. undefined means not even detection knows the directory any
+  // more (an old entry whose folder is gone) — resume still works on another account.
+  const owner = accounts.find((a) => a.id === entry.accountId) ?? ghostAccounts.find((a) => a.id === entry.accountId)
+  const ownerGone = owner === undefined || isGhostAccountId(owner.id)
+
   useEffect(() => {
     let cancelled = false
     // Candidates are only logged-in accounts with the same provider as the original account —
@@ -59,7 +69,10 @@ export function ResumeDialog({
     ).then((pairs) => {
       if (cancelled) return
       const loggedIn = new Set(pairs.filter(([, ok]) => ok).map(([id]) => id))
-      const opts = resumeAccountOptions(accounts, loggedIn, entry.accountId)
+      // The owner goes in as an object: an unregistered owner is not in `accounts`, so looking it up by id
+      // would fail and the provider would fall back to claude — offering claude accounts for a codex
+      // transcript. Only registered accounts are passed as candidates.
+      const opts = resumeAccountOptions(accounts, loggedIn, owner)
       setOptions(opts)
       setSelectedId(opts[0]?.id ?? '')
     })
@@ -125,6 +138,17 @@ export function ResumeDialog({
           <label>{t('session.field.projectFolder')}</label>
           <span className="path">{cwd}</span>
         </div>
+        {/* Only when the owning account is gone. With it alive the picker already preselects it and puts
+            the '(original account)' suffix on it, so a second row would just repeat that. */}
+        {ownerGone && (
+          <div className="field">
+            <label>{t('session.resume.originAccount')}</label>
+            <span className="path">
+              {owner?.label ?? entry.accountId}
+              <em className="origin-deleted">{t('session.resume.originDeleted')}</em>
+            </span>
+          </div>
+        )}
         <div className="field">
           <label>{t('session.field.account')}</label>
           {options === null ? (

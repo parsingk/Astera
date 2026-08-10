@@ -267,6 +267,11 @@ function UsageChip({
 export default function App(): React.JSX.Element {
   const { t, lang, setLang } = useI18n()
   const [accounts, setAccounts] = useState<Account[]>([])
+  // Unregistered config dirs, account-shaped, for history display only. Deliberately a separate state
+  // from `accounts`: mixed in, NewSessionDialog would offer them as spawn targets and AccountPanel /
+  // AccountSettings would present them as manageable, and every one of those actions fails on a source
+  // that cannot authenticate. Only HistoryBrowser and ResumeDialog receive them.
+  const [ghostAccounts, setGhostAccounts] = useState<Account[]>([])
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [activeFileId, setActiveFileId] = useState<string | null>(null) // the active file tab in explorer mode
   // The pane layout tree. It replaces the old single split-slot state — up to 4 panes.
@@ -426,6 +431,7 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     void window.api.accounts.list().then(setAccounts)
+    void window.api.accounts.ghosts().then(setGhostAccounts)
     void window.api.system.checkCli().then(setCli)
     void window.api.system.appVersion().then(setAppVersion)
     // Re-adopts sessions that are still running after a renderer reload as tabs (scrollback is lost, by design)
@@ -444,6 +450,7 @@ export default function App(): React.JSX.Element {
       setActivePaneId(act.paneId)
     })
     const offAccounts = window.api.on('accounts:changed', (p) => setAccounts(p.accounts))
+    const offGhosts = window.api.on('accounts:ghostsChanged', (p) => setGhostAccounts(p.accounts))
     const offExit = window.api.on('session:exit', ({ sessionId, exitCode }) => {
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, status: 'exited', exitCode } : s))
@@ -514,6 +521,7 @@ export default function App(): React.JSX.Element {
     })
     return () => {
       offAccounts()
+      offGhosts()
       offExit()
       offCreated()
       offUpdate()
@@ -1639,7 +1647,12 @@ export default function App(): React.JSX.Element {
                   }}
                   onOpenExplorer={openExplorerAt}
                 />
-                <HistoryBrowser accounts={accounts} onResume={resumeFromHistory} onOpenExplorer={openExplorerAt} />
+                <HistoryBrowser
+                  accounts={accounts}
+                  ghostAccounts={ghostAccounts}
+                  onResume={resumeFromHistory}
+                  onOpenExplorer={openExplorerAt}
+                />
               </>
             )}
           </aside>

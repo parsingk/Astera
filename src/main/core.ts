@@ -19,11 +19,12 @@ import { RunManager } from './runManager'
 import { TerminalManager } from './terminalManager'
 import { WorktreeRegistry } from '../core/worktrees/registry'
 import { LocalHistoryStore } from '../core/localHistory/store'
+import { ghostAccounts } from '../core/accounts/ghosts'
 import { AppSettingsStore } from './appSettingsStore'
 import { KeybindingsStore } from './keybindingsStore'
 import { pickInitialLang } from '../core/i18n/locale'
 import type { Lang, Message } from '../core/i18n'
-import type { DetectCandidate, Provider, SessionUsage } from '../core/types'
+import type { Account, DetectCandidate, Provider, SessionUsage } from '../core/types'
 
 export interface Core {
   accounts: AccountRegistry
@@ -34,6 +35,13 @@ export interface Core {
   descriptors: Record<Provider, ProviderDescriptor>
   projects: ProjectSettings
   detectAccounts: () => Promise<DetectCandidate[]>
+  // Re-scans for unregistered config dirs. Not awaited at startup — index.ts fires it in the background
+  // alongside history.startBackground(), and ipc.ts re-runs it whenever the account list changes.
+  refreshGhostAccounts: () => Promise<void>
+  // The cached unregistered sources. Account-shaped so the history index can scan them, but they are NOT
+  // registry accounts: they cannot authenticate, so they must never reach spawning, rolling or the account
+  // management UI. Only the history sidebar and the resume modal see them.
+  ghostAccounts: () => Account[]
   accountEmail: (id: string) => Promise<string | null>
   accountEmailOfDir: (configDir: string, provider?: Provider) => Promise<string | null>
   accountLogout: (id: string) => Promise<{ ok: boolean; message?: Message }>
@@ -141,7 +149,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   )
   // Lazy history: nothing is scanned at startup. The project list comes from a directory listing; sessions are
   // parsed when expanded. index.ts starts the file watcher with startBackground() after the window is up, so window creation never blocks on a scan.
-  const history = new HistoryIndex(() => accounts.list(), descriptors)
+  // Ghosts join the sources so an unregistered account's transcripts stay in the sidebar
+  const history = new HistoryIndex(() => [...accounts.list(), ...ghostAccountList()], descriptors)
   const projects = new ProjectSettings(path.join(userDataDir, 'projects.json'))
   await projects.load()
   const rollConfig = new RollConfigStore(path.join(userDataDir, 'rolling.json'))
@@ -165,17 +174,32 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   const run = new RunManager(nodePtyFactory)
   const terminal = new TerminalManager(nodePtyFactory)
   // ipc.ts owns the accounts.onChanged wiring (history.reload included); nothing is wired here because it would be overwritten there
-  // Returns both providers' detection results merged — configDirs already registered, and ones the user
-  // unregistered, are excluded from both
-  const detectAccounts = async (): Promise<DetectCandidate[]> => {
-    // Registered dirs, plus the ones the user unregistered — otherwise an account removed a moment ago
-    // comes straight back as a suggestion, since remove() leaves its directory (and transcripts) on disk
-    const excludeDirs = [...accounts.list().map((a) => a.configDir), ...accounts.dismissedDirs()]
+  const detectFor = async (excludeDirs: string[]): Promise<DetectCandidate[]> => {
     const lists = await Promise.all(
       PROVIDERS.map((p) => descriptors[p].detect({ homeDir: os.homedir(), excludeDirs }))
     )
     return lists.flat()
   }
+  // Both providers' detection results merged, for the "detected accounts" suggestion list. Registered
+  // dirs are excluded, and so are the ones the user unregistered — otherwise an account removed a moment
+  // ago comes straight back as a suggestion, since remove() leaves its directory (and transcripts) on disk
+  const detectAccounts = (): Promise<DetectCandidate[]> =>
+    detectFor([...accounts.list().map((a) => a.configDir), ...accounts.dismissedDirs()])
+  /** Unregistered config dirs as account-shaped history sources. Unregistering leaves the transcripts on
+   *  disk, so they stay visible in the sidebar instead of vanishing with the registry entry.
+   *  Unlike the suggestion list this keeps the dismissed dirs: declining to be offered an account again
+   *  and wanting its past history are separate requests.
+   *  HistoryIndex calls getAccounts() synchronously in a dozen places while detection is async, so this is
+   *  a cache refreshed out of band. Until the first refresh lands the sidebar simply shows the registered
+   *  accounts; the caller follows a refresh with history.reload(), which makes the renderer re-query.
+   *  A second scan rather than filtering detectAccounts()'s result: the exclusion is compared inside
+   *  detect.ts with its own path normalization, and comparing here would mean a second copy of that rule.
+   *  Both paths are rare (startup, account changes, the Detect button), so the extra readdir costs nothing. */
+  let ghostCache: Account[] = []
+  const refreshGhostAccounts = async (): Promise<void> => {
+    ghostCache = ghostAccounts(await detectFor(accounts.list().map((a) => a.configDir)))
+  }
+  const ghostAccountList = (): Account[] => ghostCache
   const accountEmail = (id: string): Promise<string | null> => {
     const account = accounts.get(id)
     return descriptorOf(descriptors, account).readEmail(account.configDir, os.homedir())
@@ -237,6 +261,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     descriptors,
     projects,
     detectAccounts,
+    refreshGhostAccounts,
+    ghostAccounts: ghostAccountList,
     accountEmail,
     accountEmailOfDir,
     accountLogout,

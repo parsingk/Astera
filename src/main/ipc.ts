@@ -168,7 +168,12 @@ export function registerIpc(
   // it derives that itself with core/accounts/defaultAccount.ts.
   core.accounts.onChanged = (accounts) => {
     send('accounts:changed', { accounts })
-    void core.history.reload()
+    // Re-scan for unregistered dirs before reloading: a just-unregistered account has to become a ghost in
+    // the same pass, or its history disappears from the sidebar until the next app start
+    void core.refreshGhostAccounts().then(() => {
+      send('accounts:ghostsChanged', { accounts: core.ghostAccounts() })
+      return core.history.reload()
+    })
   }
 
   // accounts
@@ -178,6 +183,7 @@ export function registerIpc(
   ipcMain.handle('accounts.remove', (_e, id) => core.accounts.remove(id))
   ipcMain.handle('accounts.loginStatus', (_e, id) => core.accounts.loginStatus(id))
   ipcMain.handle('accounts.detect', () => core.detectAccounts())
+  ipcMain.handle('accounts.ghosts', () => core.ghostAccounts())
   ipcMain.handle('accounts.email', (_e, id) => core.accountEmail(id))
   ipcMain.handle('accounts.emailOfDir', (_e, dir, provider) => core.accountEmailOfDir(dir, provider))
   ipcMain.handle('accounts.logout', (_e, id) => core.accountLogout(id))

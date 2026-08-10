@@ -4,6 +4,7 @@ import { ResumeDialog } from './ResumeDialog'
 import { AccountSelect } from './AccountSelect'
 import { ProviderBadge } from './ProviderBadge'
 import { FolderGlyph } from './FolderGlyph'
+import { isGhostAccountId } from '../../../core/accounts/ghostId'
 import { confirmModal } from '../lib/confirm'
 import { useI18n } from '../i18n/I18nProvider'
 import { ContextMenu, type MenuItem } from './ContextMenu'
@@ -163,7 +164,12 @@ function ProjectRow({
               title={`${e.title} · ${new Date(e.updatedAt).toLocaleString()}`}
               onClick={() => onResume(e)} // clicking the row resumes straight away (markSeen happens inside resume)
             >
-              <span className="color-dot" style={{ background: accountOf(e.accountId)?.color ?? '#888' }} />
+              {/* A ghost gets a hollow dot: its colour is a single grey, so colour alone would not separate
+                  it from a registered account that happens to be grey */}
+              <span
+                className={isGhostAccountId(e.accountId) ? 'color-dot ghost' : 'color-dot'}
+                style={{ background: accountOf(e.accountId)?.color ?? '#888' }}
+              />
               <ProviderBadge provider={accountOf(e.accountId)?.provider} />
               {e.awaitingReply && !isSeen(e) && <span className="unread-dot" />}
               <span className="entry-title">{e.title}</span>
@@ -195,10 +201,14 @@ function ProjectRow({
 
 export function HistoryBrowser({
   accounts,
+  ghostAccounts,
   onResume,
   onOpenExplorer
 }: {
   accounts: Account[]
+  /** Unregistered sources, for display only. Kept apart from `accounts` so nothing here can be picked as
+   *  a spawn or rolling target; accountOf() looks through both so dots, badges and the filter keep working. */
+  ghostAccounts: Account[]
   onResume: (
     entry: HistoryEntry,
     cwd: string,
@@ -240,7 +250,8 @@ export function HistoryBrowser({
   const hiddenRef = useRef<string[]>(hidden)
   hiddenRef.current = hidden
 
-  const accountOf = (id: string): Account | undefined => accounts.find((a) => a.id === id)
+  const accountOf = (id: string): Account | undefined =>
+    accounts.find((a) => a.id === id) ?? ghostAccounts.find((a) => a.id === id)
   const isSeen = (e: HistoryEntry): boolean => seenMap[e.id] === e.updatedAt
 
   const markSeen = (e: HistoryEntry): void => {
@@ -406,7 +417,10 @@ export function HistoryBrowser({
         <div className="panel-actions">
           <AccountSelect
             className="history-account-filter"
-            accounts={accounts}
+            // Ghosts are filterable too — their sessions are in the list, so the filter has to be able to
+            // reach them. suffixOf marks them instead of rewriting the label.
+            accounts={[...accounts, ...ghostAccounts]}
+            suffixOf={(a) => (isGhostAccountId(a.id) ? t('history.filter.deletedSuffix') : '')}
             value={accountFilter}
             allLabel={t('history.filter.allAccounts')}
             onChange={(v) => {
@@ -478,6 +492,7 @@ export function HistoryBrowser({
           entry={pendingResume.entry}
           cwd={pendingResume.cwd}
           accounts={accounts}
+          ghostAccounts={ghostAccounts}
           onConfirm={(opts) => {
             onResume(pendingResume.entry, pendingResume.cwd, opts)
             setPendingResume(null)

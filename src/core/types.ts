@@ -234,6 +234,8 @@ export interface CoreEvents {
   'session:schedState': SchedStateEvent // schedule banner
   'history:updated': { total: number }
   'accounts:changed': { accounts: Account[] }
+  // The unregistered history sources were re-scanned (fires after an account is added or removed)
+  'accounts:ghostsChanged': { accounts: Account[] }
   'files:changed': { path: string; kind: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir' } // watcher
   'git:changed': void // index/HEAD changes in the git dir, e.g. a commit from a session terminal — triggers a tree state refresh
   'run:data': { projectPath: string; data: string } // run output
@@ -251,7 +253,11 @@ export interface CoreApi {
     import(input: { label: string; configDir: string; provider?: Provider }): Promise<Account>
     remove(id: string): Promise<void> // deregisters only — the disk is not touched
     loginStatus(id: string): Promise<boolean> // the verdict from accounts/loginStatus.ts (claude also checks Keychain on macOS)
-    detect(): Promise<DetectCandidate[]> // detection candidates, excluding already-registered config dirs
+    detect(): Promise<DetectCandidate[]> // detection candidates, excluding registered and unregistered-by-the-user config dirs
+    /** Unregistered config dirs as account-shaped history sources — this one keeps the ones the user
+     *  unregistered, since their transcripts should stay visible. Never registry accounts: they cannot
+     *  authenticate, so they must not reach session spawning, rolling or the account management UI. */
+    ghosts(): Promise<Account[]>
     email(id: string): Promise<string | null> // the login email of a registered account (for the list)
     emailOfDir(configDir: string, provider?: Provider): Promise<string | null> // the email of an unregistered folder (to prefill the import dialog)
     logout(id: string): Promise<{ ok: boolean; message?: Message }> // claude auth logout (removes the credentials)
