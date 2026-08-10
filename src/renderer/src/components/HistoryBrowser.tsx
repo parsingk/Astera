@@ -319,6 +319,12 @@ export function HistoryBrowser({
         const next = hiddenProjects.list()
         setHidden(next)
         hiddenRef.current = next // setState는 아직 커밋되지 않았고 아래 호출이 ref를 읽는다
+        // Unhiding a row should not resurrect it already expanded — that would fire ProjectRow's
+        // fetch-on-expand effect for a project the user only asked to make visible again
+        setExpanded((prev) => {
+          const nextSet = new Set([...prev].filter((p) => !next.includes(p)))
+          return nextSet.size === prev.size ? prev : nextSet
+        })
         // PAGE가 아니라 현재 로드된 창 크기를 요청한다 — 마운트·계정 필터 변경과 달리 이 경로는
         // 이미 여러 페이지를 스크롤해서 본 목록 중간 한 줄만 빠지는 경우라, PAGE로 자르면
         // 방금 보고 있던 나머지 행들이 통째로 사라진다 (history:updated 핸들러와 같은 이유)
