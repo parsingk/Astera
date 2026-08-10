@@ -42,7 +42,7 @@ jobs:
   validate:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # electron-updater decides whether an update exists by comparing versions, so a tag that
       # disagrees with package.json would advertise the wrong version. Fail before building.
@@ -100,10 +100,10 @@ jobs:
       # checkouts have neither, so their builds behave exactly like the pre-signing workflow.
       SIGNING: ${{ secrets.SIGNPATH_API_TOKEN != '' && vars.SIGNPATH_ORGANIZATION_ID != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Must match ci.yml: @electron/rebuild and node-abi require >=22.12.0.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -273,9 +273,9 @@ jobs:
       # notarization failure kills the build.
       SIGNING: ${{ secrets.APPLE_CSC_LINK != '' && secrets.APPLE_ID != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -374,7 +374,7 @@ jobs:
     steps:
       # fetch-depth: 0 because the release notes are built from the commits since the previous tag —
       # the default shallow clone has neither the history to walk nor the tags to find the range in.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -387,7 +387,7 @@ jobs:
       # no longer matches what ships, so every electron-updater client fails the checksum and auto-
       # update breaks until the next release. unsigned-binaries.zip would also leak out as a public
       # release asset. Restricting to release-* avoids the intermediates entirely.
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           path: assets
           pattern: release-*
