@@ -20,11 +20,18 @@ extraResources:
   # Only the skill document that `astera help` reads is shipped as a resource.
   - from: resources/skills
     to: skills
-# Apache-2.0 section 4(a) requires recipients of the Work to be given a copy of the License, and the
-# installer is a distribution of it. extraFiles (not extraResources) puts this at the application root,
-# next to the LICENSE.electron.txt and LICENSES.chromium.html that electron-builder places there for the
-# bundled runtime — the same place a user would look for the rest of the licensing.
-extraFiles:
+  # Apache-2.0 section 4(a) requires recipients of the Work to be given a copy of the License, and the
+  # installer is a distribution of it.
+  #
+  # **This must be a resource, not an extraFile, because of macOS.** extraFiles copies to the
+  # "application root", which on Windows is the install directory (next to Astera.exe and the
+  # LICENSE.electron.txt the runtime ships) but on macOS is Astera.app/Contents. A loose file sitting
+  # directly in Contents is not part of the bundle's sealed structure, so codesign rejects the whole
+  # app with "a sealed resource is missing or invalid" — measured, and it fails the ad-hoc signing the
+  # unsigned release path needs *and* the Developer ID signing the real path needs, which would block
+  # macOS releases entirely. Contents/Resources is inside the seal, so this placement signs cleanly.
+  #
+  # Windows keeps its app-root copy through win.extraFiles below, so nothing changes there.
   - LICENSE
 mac:
   target:
@@ -57,6 +64,13 @@ dmg:
 win:
   target: nsis
   icon: build/icon.ico
+  # Keeps LICENSE at the install root, next to Astera.exe and the LICENSE.electron.txt /
+  # LICENSES.chromium.html that electron-builder places there for the bundled runtime — the same place
+  # a user would look for the rest of the licensing. This used to be a top-level extraFiles; it is
+  # win-only now because on macOS that same setting lands the file in Astera.app/Contents and breaks
+  # code signing (see the extraResources comment above). The resources copy ships on both platforms.
+  extraFiles:
+    - LICENSE
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
