@@ -24,7 +24,12 @@ function read(): string[] {
 
 function write(next: string[]): void {
   cache = next
-  localStorage.setItem(KEY, JSON.stringify(next))
+  try {
+    localStorage.setItem(KEY, JSON.stringify(next))
+  } catch {
+    // Quota exceeded or storage disabled — this is a display preference, not data worth throwing
+    // over. The change is honoured for the rest of this session but will not survive a restart.
+  }
   for (const listener of listeners) listener()
 }
 
