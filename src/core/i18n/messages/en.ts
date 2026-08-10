@@ -438,7 +438,7 @@ export const en: Record<keyof typeof ko, string> = {
   'worktree.status.missing': 'Folder missing',
   'worktree.remove.title': 'Delete worktree',
   'worktree.remove.body':
-    '{name} ({branch})\n{path}\n\nDelete this worktree? Branches that have not been merged are kept.',
+    '{name} ({branch})\n{path}\n\nDelete this worktree? The folder and the branch are deleted together. A branch that has not been merged is kept so its commits are not lost.',
   'worktree.remove.branchPreserved': 'Branch {branch} was not merged, so it was kept',
   'worktree.remove.done': 'Deleted the worktree',
   'worktree.remove.alreadyGone': '{name} was already deleted, so it was removed from the list',

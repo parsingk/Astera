@@ -40,17 +40,32 @@ async function isProvenOrphanDir(worktreePath: string, repoPath: string): Promis
 
 /** Gate for an orphaned directory whose cleanliness cannot be confirmed: git status is unusable (it is
  *  outside the original repo's management) so there is no way to know what changed — if there is even one
- *  entry other than .git it counts as "unverifiable" and force is required (a different question from DIRTY) */
-async function countOrphanEntries(worktreePath: string): Promise<number> {
+ *  entry other than .git it counts as "unverifiable" and force is required (a different question from DIRTY).
+ *  .git is skipped because a proven orphan's .git is our own marker; with ownership unproven it has to be
+ *  counted (countGitDir), since a .git *directory* means a separate repo rather than a leftover of ours. */
+async function countOrphanEntries(
+  worktreePath: string,
+  opts?: { countGitDir?: boolean }
+): Promise<number> {
   try {
     const entries = await fs.readdir(worktreePath)
-    return entries.filter((e) => e !== '.git').length
+    return opts?.countGitDir ? entries.length : entries.filter((e) => e !== '.git').length
   } catch (err) {
     // ENOENT (a TOCTOU race after existsSync) and EACCES/EPERM (permission denied) both converge on "unverifiable"
     throw new Error(
       `ORPHAN_UNVERIFIABLE: ${worktreePath} (${err instanceof Error ? err.message : String(err)})`
     )
   }
+}
+
+/** create() makes <root>/<repoDirName> on the way to the worktree, and nothing else ever removed it —
+ *  so a repo whose last worktree is gone left an empty directory behind for good. rmdir is not recursive:
+ *  a surviving sibling worktree turns this into a silent no-op. The registry root itself is left alone,
+ *  since it can be a path the user chose for other things too. */
+async function pruneEmptyRepoDir(worktreePath: string, root: string): Promise<void> {
+  const parent = path.dirname(path.resolve(worktreePath))
+  if (samePath(parent, root) || !isPathWithin(root, parent)) return
+  await fs.rmdir(parent).catch(() => {}) // ENOTEMPTY / ENOENT / EACCES all mean "leave it"
 }
 
 /** The ref the merge check is made against: branch.<b>.base → origin/HEAD → HEAD */
@@ -108,6 +123,7 @@ export async function removeWorktree(args: {
     rows = await listGitWorktrees(info.repoPath)
   } catch {
     if (!existsSync(info.path)) {
+      await pruneEmptyRepoDir(info.path, args.registry.getRoot())
       await args.registry.removeEntry(args.id)
       return { removed: true, branchDeleted: false }
     }
@@ -122,9 +138,12 @@ export async function removeWorktree(args: {
     // git has forgotten it
     await git(['worktree', 'prune'], { cwd: info.repoPath })
     if (existsSync(info.path)) {
-      if (!(await isProvenOrphanDir(info.path, info.repoPath)))
-        throw new Error(`ORPHAN_UNPROVEN: ownership cannot be proven, so nothing is deleted (${info.path})`)
-      if (!args.force) {
+      if (!(await isProvenOrphanDir(info.path, info.repoPath))) {
+        // Without proof there is no telling our worktree from an unrelated directory — but an empty one
+        // has nothing to lose, and demanding proof there left the row undeletable forever
+        if ((await countOrphanEntries(info.path, { countGitDir: true })) > 0)
+          throw new Error(`ORPHAN_UNPROVEN: ownership cannot be proven, so nothing is deleted (${info.path})`)
+      } else if (!args.force) {
         const entryCount = await countOrphanEntries(info.path)
         if (entryCount > 0) throw new Error(`ORPHAN_UNVERIFIABLE: ${info.path}`)
       }
@@ -163,6 +182,7 @@ export async function removeWorktree(args: {
     if (head.ok) branchPreserved = { branch: info.branch, head: head.stdout }
   }
 
+  await pruneEmptyRepoDir(info.path, args.registry.getRoot())
   await args.registry.removeEntry(args.id)
   return { removed: true, branchDeleted, ...(branchPreserved ? { branchPreserved } : {}) }
 }

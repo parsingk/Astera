@@ -502,7 +502,8 @@ export const ko = {
   'worktree.status.missing': '폴더 없음',
   // WorktreePanel.tsx — delete confirmation modal, result toasts
   'worktree.remove.title': 'worktree 삭제',
-  'worktree.remove.body': '{name} ({branch})\n{path}\n\n이 worktree를 삭제할까요? 머지되지 않은 브랜치는 남겨둡니다.',
+  'worktree.remove.body':
+    '{name} ({branch})\n{path}\n\n이 worktree를 삭제할까요? 폴더와 브랜치를 함께 삭제합니다. 머지되지 않은 브랜치는 커밋을 잃지 않도록 남겨둡니다.',
   'worktree.remove.branchPreserved': '브랜치 {branch}는 머지되지 않아 남겨두었습니다',
   'worktree.remove.done': 'worktree를 삭제했습니다',
   'worktree.remove.alreadyGone': '{name}은(는) 이미 삭제되어 목록에서 정리했습니다',
