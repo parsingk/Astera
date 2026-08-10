@@ -210,6 +210,32 @@ The first time you push a tag after this workflow change, check the following in
    it and an update notice should appear; accepting and restarting should land on the new version. If
    this step fails, the cause is almost always signing — Squirrel.Mac refuses unsigned updates.
 
+### A locally built dmg cannot tell you whether Gatekeeper is happy
+
+macOS only runs its first-launch check on files carrying `com.apple.quarantine`, and that attribute is
+put there by whatever downloaded the file. A dmg you built yourself has never been downloaded, so it
+does not have it — the app installed from it opens straight away no matter how it is signed. **"It
+launched on my machine" therefore proves nothing about what a user will see.**
+
+Check the signature itself instead, which is independent of quarantine:
+
+```bash
+spctl -a -vvv -t exec /Applications/Astera.app
+```
+
+An ad-hoc build (the unsigned release path) is *expected* to report `rejected` here; a notarized one
+reports `accepted` with `source=Notarized Developer ID`.
+
+To rehearse the actual first-launch experience, put the attribute on by hand:
+
+```bash
+xattr -w com.apple.quarantine "0083;00000000;Safari;" /Applications/Astera.app
+open /Applications/Astera.app
+```
+
+Note that `xattr -cr`, the workaround the README gives users, strips every extended attribute — it was
+measured not to disturb the ad-hoc code signature, and the app still launches and verifies afterwards.
+
 ## Notes
 
 - Until SignPath is enabled, the installer is unsigned and Windows SmartScreen warns on first run

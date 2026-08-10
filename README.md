@@ -28,11 +28,20 @@ Download the latest release from
 on Windows, `astera-<version>-universal.dmg` on macOS. On Windows the app updates itself from there
 afterwards, asking before it downloads.
 
-> **macOS builds are unsigned for now**, which costs you two things. Gatekeeper blocks the first
-> launch: open the app, let it be refused, then go to **System Settings → Privacy & Security** and
-> click **Open Anyway** — the Control-click → **Open** shortcut does not work, macOS 15 (Sequoia)
-> removed it. And auto-update stays off until the build is signed, so a new version means downloading
-> the dmg again. On Windows, SmartScreen may warn on first run — click **More info → Run anyway**.
+> **macOS builds are not notarized yet**, which costs you two things. Gatekeeper blocks the first
+> launch, so after dragging the app to Applications, clear the quarantine flag macOS put on it:
+>
+> ```bash
+> xattr -cr /Applications/Astera.app
+> ```
+>
+> That removes the "downloaded from the internet" marker, which is the only thing standing in the way
+> — the app itself is signed (ad-hoc), so nothing else about it changes. System Settings →
+> **Privacy & Security** → **Open Anyway** works too if you prefer clicking; the Control-click →
+> **Open** shortcut does not, macOS 15 (Sequoia) removed it.
+>
+> And auto-update stays off until the build is notarized, so a new version means downloading the dmg
+> again. On Windows, SmartScreen may warn on first run — click **More info → Run anyway**.
 >
 > Signing through the SignPath Foundation's open-source program (Windows) and an Apple Developer ID
 > (macOS) is being set up; see [docs/releasing.md](docs/releasing.md) for the details.
