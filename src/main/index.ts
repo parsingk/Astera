@@ -14,6 +14,7 @@ import { SlackNotifier, SlackConfigStore } from './slack'
 import { SlackInboxController, createSocketClient } from './slackInbox'
 import { HookEventWatcher } from './hookEvents'
 import { CodexTurnWatcher } from './codexTurnWatcher'
+import { RateLimitFetcher } from './usage'
 import { t } from '../core/i18n'
 import { loadPolicy, nextCheckDelayMs, parsePolicyUrl, shouldApplyCampaign } from './updatePolicy'
 import type { SessionInfo, RollStateEvent, UpdateCampaignInfo } from '../core/types'
@@ -29,6 +30,12 @@ import type { SessionInfo, RollStateEvent, UpdateCampaignInfo } from '../core/ty
 // The same rule applies on macOS: APFS is case-insensitive by default, so 'Astera' and 'astera'
 // resolve to the same folder under ~/Library/Application Support.
 if (!app.isPackaged) app.setPath('userData', app.getPath('userData') + '-dev')
+
+// The oldest usage figure the limit gate is allowed to decide on. RateLimitFetcher's default 5-minute
+// cache is fine for a status bar but fatal for a verdict — a reading taken just below the threshold
+// (96%, say) would reject a genuine limit 90 seconds later. The phrase re-matches on every chunk while
+// it is on screen, so this window doubles as the query throttle.
+const USAGE_GATE_MAX_AGE_MS = 10_000
 
 let core: Core | null = null
 let codexRollingRef: CodexRollingCoordinator | null = null
@@ -321,6 +328,10 @@ app.whenReady().then(async () => {
     }
   })
   schedulerRef = scheduler
+  // Direct account-usage lookups. It carries its own call coalescing, backoff and 10-second timeout, so
+  // a limit phrase re-matching on every chunk still produces very few real requests. The token never
+  // leaves this process.
+  const usageFetcher = new RateLimitFetcher()
   const rolling = new RollingCoordinator({
     spawn: (opts) => core!.sessions.spawn(opts),
     write: (id, d) => core!.sessions.write(id, d),
@@ -333,6 +344,22 @@ app.whenReady().then(async () => {
       }
     },
     readStatusPayload: (id) => core!.statusLinePayload(id),
+    // What the limit evidence gate decides on. The screen phrase is only the trigger; whether to start a
+    // roll or a wait is settled by asking the account for its usage — the statusLine snapshot freezes at
+    // a stale value once a session halts on a limit, whereas this lookup is independent of session state.
+    //
+    // maxPercent rather than the max of the two windows: LIMIT_RE also matches the Opus, Sonnet, Fable
+    // and credit limits, and those sit in buckets that never appear in five_hour/seven_day — judging on
+    // the two windows alone would reject a genuine Opus limit as a false positive. USAGE_GATE_MAX_AGE_MS
+    // pierces the default 5-minute cache so a near-threshold reading cannot reject the real limit later.
+    //
+    // The target is always the account that is running right now, so its accessToken is fresh (Claude
+    // Code refreshes it at session start). Querying an account with no session would need the app to
+    // refresh the token itself — a separate piece of work.
+    readUsage: async (configDir) => {
+      const u = await usageFetcher.get(configDir, USAGE_GATE_MAX_AGE_MS)
+      return u.status === 'ok' ? u.maxPercent : null
+    },
     send: (channel, payload) => {
       try {
         if (!win.isDestroyed()) win.webContents.send(channel, payload)

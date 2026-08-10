@@ -159,6 +159,21 @@ export interface RateLimitWindow {
   resetsAt: string | null // ISO 8601, null when unknown
 }
 
+/** The result of asking the account API for its usage directly. Unlike the statusLine snapshot
+ *  (SessionUsage) this is fetched independently of session state, so it still answers with the current
+ *  figure when a session halted by a limit has left that snapshot frozen at a stale value.
+ *  status: 'ok' = at least one window was obtained, 'unavailable' = no credentials, 'error' = the
+ *  request or the parse failed. */
+export interface RateLimitUsage {
+  session: RateLimitWindow | null // the 5-hour window
+  weekly: RateLimitWindow | null // the weekly (7-day) window
+  /** The highest usage % across every limit bucket (session, weekly_all, weekly_scoped and so on) —
+   *  this is the value the limit verdict uses. The two windows alone are not enough; see the comment
+   *  on maxPercentOf in core/usage/rateLimit.ts. */
+  maxPercent: number | null
+  status: 'ok' | 'unavailable' | 'error'
+}
+
 /** A usage snapshot for an active session, taken from the Claude Code statusLine payload
  *  (context_window, rate_limits). The values are Claude's own, so no context-window-size (200k/1M)
  *  heuristics and no credentials are needed. */

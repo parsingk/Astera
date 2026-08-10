@@ -54,6 +54,14 @@ const NUDGE_ECHO_GRACE_MS = 2_000 // the grace period that keeps the echo of a n
 const REPLAY_GRACE_MS = 60_000
 // After matching a limit phrase without finding the choice number, keep looking in later chunks for this long
 const CHOICE_WATCH_MS = 30_000
+// The bar for accepting a limit on a directly queried usage figure. It carries no margin like GATE_PCT
+// (90) — that margin corrects for a value that may have frozen, and a figure fetched from the account
+// API cannot freeze. Measured (2026-08-08): three genuine limits read 103-110%, while the two false
+// positives had a single-digit 5-hour window.
+const LIMIT_PCT = 100
+// Throttle for the rejection log. The lookups themselves are throttled by the cache age the readUsage
+// wiring asks for (index.ts), so what this limits is the log line alone.
+const REJECT_LOG_MS = 30_000
 
 export interface RollingDeps {
   spawn(opts: {
@@ -76,6 +84,11 @@ export interface RollingDeps {
   now?: () => number
   probeActivity?: (transcriptPath: string) => Promise<number | null> // for test injection — defaults to lastActivityAt
   readPending?: (transcriptPath: string) => Promise<number | null> // for test injection — defaults to readPendingWorkflowCount
+  /** Asks the account for its real usage (the highest % across every limit bucket). null when it cannot
+   *  be read. The default is "cannot be read" because the real implementation (RateLimitFetcher) uses
+   *  the electron net module, and this file has to stay free of electron to be testable under vitest.
+   *  index.ts does the wiring. */
+  readUsage?: (configDir: string) => Promise<number | null>
 }
 
 interface Chain {
@@ -121,6 +134,19 @@ interface Chain {
   replayGraceWarned: boolean
   // The deadline (ms) for continuing to look for a choice number after failing to find one — null means not watching
   choiceWatchUntil: number | null
+  // When the rejection log may be written again (ms) — 0 means right away
+  rejectLogUntil: number
+  // Did we see the limit choice list on screen and fail to clear it?
+  // Writing a prompt plus Enter into a live PTY in that state has the Enter approve whatever item is
+  // highlighted, and item 1 of that list is "Adjust monthly spend limit". So this is the one case that
+  // falls back to the old kill path — kill wipes the screen, which removes the hazard.
+  //
+  // The condition is "the label was on screen but we could not press it", not "no number was found",
+  // and that distinction is the whole point. Across 53 measured matches the label appeared 0 times
+  // (a managed account has no spend-limit or upgrade item, so the CLI shows a sentence instead of a
+  // list); keying off a failed number search alone would leave this flag permanently on and make the
+  // fallback the default path rather than the exception.
+  choicePending: boolean
   // The usage percentage last observed (the higher of session and weekly) — the input of the
   // limit-evidence gate (limitEvidence). It is null when the snapshot could not be read, and that counts
   // as no evidence, so nothing intervenes.
@@ -147,12 +173,14 @@ export class RollingCoordinator {
   private readonly now: () => number
   private readonly probeActivity: (transcriptPath: string) => Promise<number | null>
   private readonly readPending: (transcriptPath: string) => Promise<number | null>
+  private readonly readUsage: (configDir: string) => Promise<number | null>
 
   constructor(private deps: RollingDeps) {
     this.copy = deps.copy ?? copyTranscript
     this.now = deps.now ?? Date.now
     this.probeActivity = deps.probeActivity ?? lastActivityAt
     this.readPending = deps.readPending ?? readPendingWorkflowCount
+    this.readUsage = deps.readUsage ?? ((): Promise<number | null> => Promise.resolve(null))
   }
 
   /** Called by ipc right after a spawn that has rollAccountIds (rolling active) — starts tracking the
@@ -191,6 +219,8 @@ export class RollingCoordinator {
       rolledAt: null,
       replayGraceWarned: false,
       choiceWatchUntil: null,
+      rejectLogUntil: 0,
+      choicePending: false,
       lastUsagePct: null,
       limitTail: null,
       limitTailReadFailWarned: false
@@ -346,6 +376,12 @@ export class RollingCoordinator {
       // waitPhrase and textLen go alongside it. The tail keeps only the last 300 characters, so the previous
       // form of this log could not separate "the list was on screen but the numbering differs" from "the
       // list had not arrived yet" — a distinction that could not be settled during the investigation.
+      //
+      // The label actually being on screen means the list is up, and going into a wait in that state
+      // rules out the in-place resume — resumeAfterWait falls back to the kill path instead. A failed
+      // number search on its own does not set it (the label appeared in 0 of 53 measured matches, so
+      // keying off that would make the fallback the default path).
+      if (hasWaitChoiceLabel(matchedText)) chain.choicePending = true
       this.deps.log(
         `limit choice not found session=${chain.liveId} ` +
           `waitPhrase=${hasWaitChoiceLabel(matchedText)} textLen=${matchedText.length} ` +
@@ -380,6 +416,7 @@ export class RollingCoordinator {
 
   /** Sends the choice number plus Enter. Shared by answerLimitChoice and watchLimitChoice. */
   private sendChoice(chain: Chain, n: number): void {
+    chain.choicePending = false // cleared away — nothing left to block the in-place resume
     const liveId = chain.liveId // captured so nothing is written to a stale session even if a roll finishes within 150ms
     this.deps.write(liveId, String(n))
     setTimeout(() => {
@@ -420,11 +457,63 @@ export class RollingCoordinator {
       }
       return
     }
+    // The evidence gate. A screen phrase on its own no longer starts a roll or a wait — the scanner
+    // cannot tell a banner Claude printed from a document or a tool output that happens to be on screen.
+    // Across a month of rolling.log every one of the four unjustified verdicts came through this path,
+    // and two of them killed a background workflow.
+    //
+    // The verdict runs on a direct account-usage lookup. The statusLine snapshot is not used for the
+    // same reason the usage gate was removed from the detection paths: once a session halts on a limit
+    // that snapshot stops updating and freezes at a stale value. An account query is independent of
+    // session state and has no such failure.
+    //
+    // The gate lives at this one spot only. Clearing the choice list (answerLimitChoice) stays where it
+    // is, handled synchronously by handleData — moving it behind this await would miss a choice list
+    // that arrives while the lookup is in flight, leaving the dialog up forever; in that state the
+    // session stops at an input wait, statusLine freezes and every later detection dies. The cost is
+    // that a false-positive phrase carrying a numbered list gets a digit plus Enter, which is far
+    // cheaper than losing detection altogether.
+    const liveId = chain.liveId
+    const usage = await this.readAccountUsage(chain)
+    // liveId is checked too: this await is a network round trip (up to 10 seconds), and another path can
+    // finish a roll inside it — the rest of this function would then stamp a block record on the *new*
+    // session from the old phrase and roll again immediately.
+    if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) return
+    if (chain.liveId !== liveId) return
+    if (usage !== null && usage < LIMIT_PCT) {
+      // Rejection happens only on positive evidence that the account is fine, and it changes no state at
+      // all (no recordRecovery, no pushState, no waitTimer) — half the cost of a false positive is not
+      // the verdict itself but being stuck in 'waiting' afterwards, where tick() skips the chain and
+      // detection, the fallback trigger and the idle nudge all stop with it.
+      if (this.now() >= chain.rejectLogUntil) {
+        chain.rejectLogUntil = this.now() + REJECT_LOG_MS
+        this.deps.log(`limit phrase rejected — account usage ${usage}% session=${chain.liveId}`)
+      }
+      return
+    }
+    // usage=null (the lookup failed) falls back to the old behaviour and accepts. Rejecting on "we do
+    // not know" would kill detection, and detection dying quietly is a far more expensive failure in
+    // this app than a false positive.
+    this.deps.log(
+      `limit confirmed via ${usage === null ? 'phrase (usage unavailable)' : `usage ${usage}%`} session=${chain.liveId}`
+    )
     // Called even with no payload — when the phrase itself carries the time, an accurate wait can be
     // recorded regardless of a missing capture file. With payload=null the snapshot candidates are empty
     // and at becomes null, which is the same outcome as previously skipping the record entirely.
     this.recordRecovery(chain, payload, text)
     this.onLimit(chain)
+  }
+
+  /** The current account's real usage (the highest % across every limit bucket). null when the account
+   *  cannot be found or the lookup fails.
+   *  It matters that the target is the *current* account — only that one has a session running, so only
+   *  its accessToken is fresh (Claude Code refreshes it at session start). An account with no session
+   *  has an expired token and fails with a 401; opening that path would need the app to refresh tokens
+   *  itself, which is separate work. */
+  private async readAccountUsage(chain: Chain): Promise<number | null> {
+    const account = this.deps.getAccount(chain.accountIds[chain.cycle.currentIndex])
+    if (!account) return null
+    return this.readUsage(account.configDir)
   }
 
   /** The block record for the current account (currentIndex). Priority order:
@@ -518,13 +607,81 @@ export class RollingCoordinator {
           chain.waitTimer = null
           // The records are not cleared — the target account's record expires naturally once its reset
           // passes, and the blocks still standing on other accounts (weekly and so on) have to stay valid.
-          void this.roll(chain, plan.target)
+          void this.resumeAfterWait(chain, plan.target)
         },
         Math.max(0, plan.retryAt - this.now())
       )
     } else {
       void this.roll(chain, target)
     }
+  }
+
+  /** Resuming once the wait expires. There is no reason to kill the process when the account is not
+   *  changing — a background Dynamic Workflow is a child of the claude CLI and dies with that kill alone.
+   *
+   *  It deliberately does not ask "is the session working right now". Once the evidence gate filters out
+   *  the false positives, a wait only ever happens on a genuine limit, and Claude Code does not carry on
+   *  by itself when the limit lifts — so the session at this moment is necessarily halted. An early
+   *  design tried to stack that verdict three ways and produced a fresh defect each time (the threshold
+   *  collided with the retry floor, the coordinator's own key input was read back as activity, and the
+   *  no-action branch had no correct way to handle the block record).
+   *
+   *  Exactly one thing is checked: is the limit choice list still on screen (choicePending). If it is,
+   *  the Enter that follows the prompt would approve the highlighted item, so it falls back to the old
+   *  kill path, which clears the screen. */
+  private resumeAfterWait(chain: Chain, toIndex: number): Promise<void> {
+    if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady)
+      return Promise.resolve()
+    if (toIndex !== chain.cycle.currentIndex) return this.roll(chain, toIndex) // the account changes — a new process is unavoidable
+    if (chain.choicePending) {
+      this.deps.log(`resume in place skipped — limit choice still on screen session=${chain.liveId}`)
+      return this.roll(chain, toIndex)
+    }
+    this.resumeInPlace(chain)
+    return Promise.resolve()
+  }
+
+  /** Resuming on the same account — the prompt goes into the live PTY with no kill, no spawn and no
+   *  transcript copy. Everything roll() does that belongs to switching accounts (publishing 'switching',
+   *  the copy, re-keying, auto-accepting trust, the ready polling, the replay grace) does not apply here
+   *  and is therefore not done. */
+  private resumeInPlace(chain: Chain): void {
+    // Through the wait, tick() skipped this chain (the waitTimer guard) so limitTailCheck never ran.
+    // JsonlTail hands the bytes accumulated in the meantime to the next read, and since is the tail's
+    // creation time (much earlier), so the first tick after the resume would read the very record that
+    // caused this wait and fire the limit again. roll() already does this for the same reason, on the copy.
+    if (chain.transcriptPath) {
+      chain.limitTail = new ClaudeTranscriptTail(chain.transcriptPath, this.now())
+      chain.limitTailReadFailWarned = false
+    }
+    // The same refresh roll() does after a respawn. Without it the first tick after the resume sees
+    // "30 seconds of silence plus a 100% snapshot that has not refreshed yet", fires the fallback trigger
+    // again and pushes the session we just resumed straight back into a wait.
+    chain.lastOutputAt = this.now()
+    // 'nudged' is the right state: this is a reset resume rather than an account switch, the renderer
+    // treats it as a momentary event, and the Slack mapping (slack.limitReset) already exists. It is the
+    // same sequence resetAnchorCheck uses.
+    this.pushState(chain, 'nudged')
+    this.deps.log(`limit reset → resume in place session=${chain.liveId}`)
+    const liveId = chain.liveId
+    const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same convention as elsewhere
+    this.deps.write(liveId, chain.prompt)
+    setTimeout(() => {
+      if (!chain.disposed && chain.liveId === liveId) {
+        this.deps.write(liveId, '\r')
+        // 'none' has to be published after Enter for the scheduler's suppression to lift. If a more
+        // recent state was published in between, ours is stale and is skipped.
+        if (chain.stateSeq === stateSeq) this.pushState(chain, 'none')
+      }
+    }, ENTER_DELAY_MS)
+    // On the roll path this timer is scheduled by sendPrompt. Without it recovery[current] stays set,
+    // limitEvidence() latches true (leaving the idle nudge and the reset anchor permanently armed), and
+    // with several accounts cycle.streak never resets so the next limit is misread as a whole lap blocked.
+    chain.healthyTimer = setTimeout(() => {
+      chain.healthyTimer = null
+      chain.cycle.onHealthy()
+      chain.recovery[chain.cycle.currentIndex] = null
+    }, HEALTHY_MS)
   }
 
   /** Executing a roll: copy → kill → respawn under the same ID → schedule the automatic prompt (the order is fixed) */
@@ -585,6 +742,7 @@ export class RollingCoordinator {
       chain.rolledAt = this.now()
       chain.replayGraceWarned = false
       chain.choiceWatchUntil = null
+      chain.choicePending = false // kill wiped the screen — the old list has nothing to do with the new session
       // The old account's usage must not be used to judge the new one — the replay grace reads this value
       // to answer "is this account already exhausted", so leaving the 100% of the account we just left
       // behind would make the grace permanently ineffective.
