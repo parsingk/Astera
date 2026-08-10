@@ -512,6 +512,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .settings-worktree { display: flex; flex-direction: column; gap: 8px; }
 .worktree-root-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .worktree-root-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+/* 숨긴 프로젝트는 전체 경로로 보여주므로 폭을 넘길 수 있다 — 줄바꿈 대신 말줄임으로 행 높이를 지킨다 */
+.hidden-project-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .settings-field-label { font-size: 13.5px; color: var(--text-dim); }
 .settings-hint { font-size: 12px; color: var(--text-faint); }
 

@@ -7,6 +7,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.tab.accounts': 'Accounts',
   'settings.tab.info': 'Info',
   'settings.tab.shortcuts': 'Shortcuts',
+  'settings.tab.history': 'History',
   'settings.general.language': 'Language',
   'settings.orchestration.label': 'Agent orchestration (experimental)',
   'settings.orchestration.hint':
@@ -132,6 +133,9 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.worktree.change': 'Change…',
   'settings.worktree.hint':
     'New worktrees are created under this folder as <repo>/<name>. Existing worktrees are not moved.',
+  'settings.history.hiddenProjects': 'Hidden projects',
+  'settings.history.unhide': 'Unhide',
+  'settings.history.empty': 'No hidden projects.',
   'update.tb.restartInstallVersion': 'Restart to install v{version}',
   'update.tb.checking': 'Checking for updates…',
   'update.tb.available': 'New version {version} found',
