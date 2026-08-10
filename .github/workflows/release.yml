@@ -365,6 +365,12 @@ jobs:
   publish:
     needs: [windows, macos]
     runs-on: ubuntu-latest
+    env:
+      # Hoisted here because the secrets context is NOT available in a step's if: — referencing it
+      # there makes the whole file an invalid workflow, which GitHub then fails on every push that
+      # touches it. Job-level env can read secrets, and steps can test env. Same shape as the macos
+      # job's SIGNING.
+      MAC_SIGNED: ${{ secrets.APPLE_CSC_LINK != '' && secrets.APPLE_ID != '' }}
     steps:
       # fetch-depth: 0 because the release notes are built from the commits since the previous tag —
       # the default shallow clone has neither the history to walk nor the tags to find the range in.
@@ -406,7 +412,7 @@ jobs:
       # here leaves it unpublished rather than shipping a build whose first launch fails with no
       # explanation attached. The step drops out on its own once the Apple secrets are configured.
       - name: Note the un-notarized macOS build in the release
-        if: ${{ secrets.APPLE_CSC_LINK == '' || secrets.APPLE_ID == '' }}
+        if: env.MAC_SIGNED != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
