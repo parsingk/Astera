@@ -26,7 +26,7 @@ git worktrees, and lets one agent hand tasks to another and wait for the results
 Download the latest release from
 **[Releases](https://github.com/parsingk/Astera/releases/latest)** and run it — `astera-<version>-setup.exe`
 on Windows, `astera-<version>-universal.dmg` on macOS. On Windows the app updates itself from there
-afterwards; it asks before downloading, since the payload is around 100 MB.
+afterwards, asking before it downloads.
 
 > **macOS builds are unsigned for now**, which costs you two things. Gatekeeper blocks the first
 > launch: open the app, let it be refused, then go to **System Settings → Privacy & Security** and
