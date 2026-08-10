@@ -268,9 +268,9 @@ jobs:
     needs: validate
     runs-on: macos-latest
     env:
-      # Fail-open like Windows's SignPath: forks without the secrets pass through unsigned. Once the
-      # secrets are present it flips to fail-closed — a signing or notarization failure kills the
-      # build.
+      # Fail-open like Windows's SignPath: forks without the secrets fall back to an ad-hoc signature
+      # instead of a Developer ID. Once the secrets are present it flips to fail-closed — a signing or
+      # notarization failure kills the build.
       SIGNING: ${{ secrets.APPLE_CSC_LINK != '' && secrets.APPLE_ID != '' }}
     steps:
       - uses: actions/checkout@v4
@@ -297,7 +297,7 @@ jobs:
           npm run build
           npx electron-builder --mac --publish never
 
-      # Unsigned path (forks, or secrets not configured). Turns off notarization and automatic
+      # No-Developer-ID path (forks, or secrets not configured). Turns off notarization and automatic
       # certificate discovery — without the latter, electron-builder would grab some unrelated
       # certificate from the runner's keychain and fail trying to sign with it.
       #
@@ -310,7 +310,7 @@ jobs:
       #
       # Ad-hoc signatures cannot be notarized and Squirrel.Mac rejects unsigned updates, so this
       # path still means no auto-update — it buys a launchable app, not a releasable one.
-      - name: Build unsigned package
+      - name: Build ad-hoc signed package
         if: env.SIGNING != 'true'
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -366,7 +366,11 @@ jobs:
     needs: [windows, macos]
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 because the release notes are built from the commits since the previous tag —
+      # the default shallow clone has neither the history to walk nor the tags to find the range in.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # Restricted to the release-* artifacts: the windows job also uploads the intermediate
       # unsigned-binaries-${{ github.run_id }} and unsigned-installer-${{ github.run_id }} artifacts
@@ -383,26 +387,31 @@ jobs:
           pattern: release-*
           merge-multiple: true
 
+      # Notes come from scripts/build-release-notes.cjs rather than gh's --generate-notes: that flag
+      # builds its list out of pull requests, and this repository commits straight to the branch, so
+      # it yielded nothing but a Full Changelog link on every release through v1.0.3.
       - name: Create draft release and upload assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag='${{ github.ref_name }}'
           gh release view "$tag" >/dev/null 2>&1 || \
-            gh release create "$tag" --draft --title "$tag" --generate-notes
+            gh release create "$tag" --draft --title "$tag" \
+              --notes "$(node scripts/build-release-notes.cjs "$tag")"
           gh release upload "$tag" assets/* policy.json --clobber
 
       # Whoever downloads the dmg from this page has not read the README, so the caveat belongs on
-      # the release itself. It runs while the release is still a draft: a failure here leaves it
-      # unpublished rather than shipping an unsigned macOS build with no warning attached. The step
-      # drops out on its own once the Apple secrets are configured.
-      - name: Note the unsigned macOS build in the release
+      # the release itself — and it has to carry the same xattr -cr line the README gives, since this
+      # page is where someone hits the problem. It runs while the release is still a draft: a failure
+      # here leaves it unpublished rather than shipping a build whose first launch fails with no
+      # explanation attached. The step drops out on its own once the Apple secrets are configured.
+      - name: Note the un-notarized macOS build in the release
         if: ${{ secrets.APPLE_CSC_LINK == '' || secrets.APPLE_ID == '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag='${{ github.ref_name }}'
-          notice='> **The macOS build is unsigned and should be treated as experimental.** It is ad-hoc signed, so it runs on Apple Silicon, but Gatekeeper blocks the first launch — open it, let it be refused, then allow it under **System Settings → Privacy & Security → Open Anyway**. Auto-update does not work on macOS until the build carries an Apple Developer ID, so new versions have to be downloaded from this page. The Windows installer is unaffected.'
+          notice='> **The macOS build is not notarized yet.** It is ad-hoc signed, so it runs on Apple Silicon, but Gatekeeper blocks the first launch: after dragging the app to Applications, clear the quarantine flag with `xattr -cr /Applications/Astera.app`. **System Settings → Privacy & Security → Open Anyway** works too. Auto-update stays off on macOS until the build is notarized, so a new version means downloading the dmg from this page again. The Windows installer is unaffected.'
           body=$(gh release view "$tag" --json body -q .body)
           gh release edit "$tag" --notes "$(printf '%s\n\n%s' "$notice" "$body")"
 

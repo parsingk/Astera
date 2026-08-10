@@ -38,6 +38,16 @@ The release is created as a **draft**, and only becomes visible once every asset
 ordering is deliberate: `latest.yml` *is* the update feed, so a half-finished release would advertise
 a version whose installer is not there yet.
 
+The notes are written by `scripts/build-release-notes.cjs` from the commits since the previous tag,
+grouped by conventional-commit type: `feat:` and `fix:` get a section each, everything else goes into
+a collapsed one so nothing is silently dropped. **Commit subjects are therefore user-facing** — they
+are the release page. gh's own `--generate-notes` is not used because it builds its list out of pull
+requests, and this repository commits straight to the branch; that is why every release through
+v1.0.3 shipped with nothing but a Full Changelog link.
+
+Until macOS builds are notarized, a further step prepends the Gatekeeper caveat (the `xattr -cr`
+line) to those notes. It drops out on its own once the Apple secrets are configured.
+
 ## Update campaigns (policy.json)
 
 Used to notify users on particular versions (the default) or, when it is genuinely necessary, to stop
