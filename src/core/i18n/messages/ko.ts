@@ -134,6 +134,12 @@ export const ko = {
   'settings.slack.botSection': '봇 (세션별 스레드)',
   'settings.slack.channelIdHint': '채널 우클릭 → 채널 세부정보 맨 아래에서 확인할 수 있습니다.',
   'settings.slack.appTokenHint': 'Socket Mode 수신용입니다. 봇 모드일 때 스레드 답장을 이 토큰으로 받습니다.',
+  // 채널만으로는 권한 경계가 되지 않는다 — 채널에 초대된 사람은 누구나 남의 세션에 입력을 밀어넣을 수 있다.
+  // 그래서 이 값과 일치하는 사람의 답장만 주입한다. 비어 있으면 전원 허용이 아니라 전원 차단이다.
+  'settings.slack.memberIdHint':
+    '이 멤버의 스레드 답장만 세션에 전달합니다. Slack에서 내 프로필 → ⋯ → “멤버 ID 복사”로 확인하세요.',
+  'settings.slack.memberIdRequired':
+    '⚠️ Member ID가 없어 스레드 답장이 아무에게서도 전달되지 않습니다. 본인 Member ID를 입력하세요.',
   'settings.slack.modeBot': '봇 모드 — 세션마다 스레드 하나에 알림이 모입니다.',
   'settings.slack.modeWebhook': 'Webhook 단방향 — 봇 토큰과 채널 ID를 함께 채우면 세션별 스레드로 바뀝니다.',
   'settings.slack.modeOff': '전송 경로가 없어 알림이 나가지 않습니다. Webhook URL 또는 봇 토큰+채널 ID가 필요합니다.',

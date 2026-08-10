@@ -1102,7 +1102,9 @@ export function registerIpc(
 
   // slack — configuration. Tokens and URLs are never written to the log.
   ipcMain.handle('slack.getConfig', () =>
-    slack ? slack.store.load() : { webhookUrl: null, botToken: null, channelId: null, appToken: null }
+    slack
+      ? slack.store.load()
+      : { webhookUrl: null, botToken: null, channelId: null, appToken: null, memberId: null }
   )
   // A partial update — passing the received object straight to store.save() would turn fields that were
   // not sent into null during normalisation, silently erasing already-stored values in a single save.

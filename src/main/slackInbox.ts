@@ -33,6 +33,12 @@ export interface SlackInboxDeps {
   /** The channel whose replies we accept. If the bot is invited to other channels too, their events
    *  are dropped */
   channelId: string
+  /** The one Slack Member ID allowed to drive sessions — anyone else's reply is dropped. Taken as a
+   *  getter rather than a value, by the same convention as lang below, and here it is not merely a
+   *  convention: the socket is rebuilt on an appToken+channelId key (SlackInboxController), so a save
+   *  that changes only this value never reconnects. Held as a value, that change would never reach the
+   *  live socket. null means unconfigured, which blocks everything (classifyInbound). */
+  memberId: () => string | null
   /** threadTs -> live session id. null for an exited session (SlackNotifier.resolveSessionByThread) */
   resolveSession(threadTs: string): string | null
   /** PTY write (backed by core.sessions.write). Returns whether it actually wrote —
@@ -136,11 +142,21 @@ export class SlackInbox {
       }
       this.rememberTs(ts)
     }
-    const decision = classifyInbound(event, this.deps.channelId)
+    const decision = classifyInbound(event, this.deps.channelId, this.deps.memberId())
     if (decision.kind === 'ignore') {
       // The bot's own messages come back on every notification and would flood the log — those alone
       // are dropped quietly
-      if (decision.reason !== 'bot-message') this.deps.log(`slack inbound ignored(${decision.reason})`)
+      if (decision.reason !== 'bot-message') {
+        // The rejected sender is appended, for not-allowed-user only. It is the entire diagnosis path
+        // for that case: nothing is posted into the thread (a stranger must never make the bot answer
+        // them), so the log is the only place a refused reply shows up — and when the refusal was the
+        // owner's own typo, the id printed here is exactly the value to paste into the Member ID field.
+        const who =
+          decision.reason === 'not-allowed-user' && typeof event.user === 'string'
+            ? ` user=${event.user}`
+            : ''
+        this.deps.log(`slack inbound ignored(${decision.reason})${who}`)
+      }
       if (decision.reason === 'too-long' && decision.threadTs) {
         await this.deps.postNote(
           decision.threadTs,
@@ -275,8 +291,10 @@ export function inboxTargetFor(cfg: {
 }
 
 export interface SlackInboxControllerDeps {
-  /** Once the channel is settled, builds SlackInboxDeps for that channel. */
-  makeDeps(channelId: string): SlackInboxDeps
+  /** Once the channel is settled, builds SlackInboxDeps for that channel. memberId arrives as a getter
+   *  rather than a value so a save that changes only the allowed member reaches the live socket without
+   *  a reconnect — see the field of the same name on SlackInboxDeps. */
+  makeDeps(channelId: string, memberId: () => string | null): SlackInboxDeps
   createClient(appToken: string): SocketClient
   /** While the app is quitting, do not open a new socket (the race where the config load promise
    *  resolves after before-quit). */
@@ -305,10 +323,19 @@ export class SlackInboxController {
   private current: SlackInbox | null = null
   private currentKey: string | null = null
   private pending: Promise<void> = Promise.resolve()
+  // The Member ID of the last applied config. Deliberately kept out of currentKey: this value has
+  // nothing to do with the socket, so a change to it must not tear the connection down. The getter
+  // handed to makeDeps reads this field, so a live socket picks the new value up on its next event.
+  private memberId: string | null = null
 
   constructor(private deps: SlackInboxControllerDeps) {}
 
-  apply(cfg: { appToken: string | null; botToken: string | null; channelId: string | null }): Promise<void> {
+  apply(cfg: {
+    appToken: string | null
+    botToken: string | null
+    channelId: string | null
+    memberId: string | null
+  }): Promise<void> {
     this.pending = this.pending.then(() => this.applyNow(cfg))
     return this.pending
   }
@@ -322,14 +349,19 @@ export class SlackInboxController {
     appToken: string | null
     botToken: string | null
     channelId: string | null
+    memberId: string | null
   }): Promise<void> {
+    // Recorded before the unchanged-key early return below. Placed after it, a save that touched only
+    // the Member ID would return without ever storing the new value — which is the whole failure this
+    // getter arrangement exists to avoid.
+    this.memberId = cfg.memberId
     const target = inboxTargetFor(cfg)
     // A space cannot appear in either a token or a channel ID, so it is safe as a separator
     const key = target ? `${target.appToken} ${target.channelId}` : null
     if (key === this.currentKey) return // no change — do not reconnect
     await this.teardown()
     if (!target || this.deps.isQuitting()) return
-    const inbox = new SlackInbox(this.deps.makeDeps(target.channelId))
+    const inbox = new SlackInbox(this.deps.makeDeps(target.channelId, () => this.memberId))
     this.current = inbox
     this.currentKey = key
     await inbox.start(this.deps.createClient(target.appToken))

@@ -117,6 +117,10 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.slack.botSection': 'Bot (per-session threads)',
   'settings.slack.channelIdHint': 'Right-click the channel → channel details, at the bottom.',
   'settings.slack.appTokenHint': 'For Socket Mode receiving. Thread replies arrive through this token when bot mode is on.',
+  'settings.slack.memberIdHint':
+    'Only this member’s thread replies reach a session. In Slack: your profile → ⋯ → “Copy member ID”.',
+  'settings.slack.memberIdRequired':
+    '⚠️ With no Member ID, nobody’s thread replies are delivered. Enter your own Member ID.',
   'settings.slack.modeBot': 'Bot mode — each session collects its notifications in one thread.',
   'settings.slack.modeWebhook':
     'Webhook, one-way — fill in both the bot token and channel ID to switch to per-session threads.',

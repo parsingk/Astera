@@ -137,6 +137,12 @@ export interface SlackConfig {
   // xapp-. It is for Socket Mode receiving only and plays no part in choosing the transport (applyConfig) —
   // the actual consumer is the inbox. It is stored ahead of time so the settings screen is only touched once.
   appToken: string | null
+  // The one Slack Member ID (U…) whose thread replies are injected into sessions. Receiving-side
+  // permission only — it plays no part in choosing the transport either, so sending keeps working
+  // without it while every reply is blocked (see classifyInbound in core/slack/inbound.ts). A missing
+  // value blocks everyone rather than allowing everyone, so an old slack.json with no such field
+  // converges on the safe side with no migration.
+  memberId: string | null
 }
 
 const norm = (v: unknown): string | null =>
@@ -154,10 +160,11 @@ export class SlackConfigStore {
         webhookUrl: norm(raw.webhookUrl),
         botToken: norm(raw.botToken),
         channelId: norm(raw.channelId),
-        appToken: norm(raw.appToken)
+        appToken: norm(raw.appToken),
+        memberId: norm(raw.memberId)
       }
     } catch {
-      return { webhookUrl: null, botToken: null, channelId: null, appToken: null }
+      return { webhookUrl: null, botToken: null, channelId: null, appToken: null, memberId: null }
     }
   }
 
@@ -167,7 +174,8 @@ export class SlackConfigStore {
       webhookUrl: norm(cfg.webhookUrl),
       botToken: norm(cfg.botToken),
       channelId: norm(cfg.channelId),
-      appToken: norm(cfg.appToken)
+      appToken: norm(cfg.appToken),
+      memberId: norm(cfg.memberId)
     }
     await fs.writeFile(this.filePath, JSON.stringify(normalized, null, 2), 'utf8')
     return normalized
@@ -179,7 +187,7 @@ export class SlackConfigStore {
    *  (undefined), and overwrites only those that were. One load() plus one save() is the whole thing, so
    *  the caller needs no separate "re-read after saving".
    *
-   *  The settings modal now sends all four fields, but patch is kept — partial updates have to work so that
+   *  The settings modal now sends all five fields, but patch is kept — partial updates have to work so that
    *  a future caller touching a single field leaves the rest alive. */
   async patch(partial: Partial<SlackConfig>): Promise<SlackConfig> {
     const current = await this.load()
@@ -187,7 +195,8 @@ export class SlackConfigStore {
       webhookUrl: partial.webhookUrl !== undefined ? partial.webhookUrl : current.webhookUrl,
       botToken: partial.botToken !== undefined ? partial.botToken : current.botToken,
       channelId: partial.channelId !== undefined ? partial.channelId : current.channelId,
-      appToken: partial.appToken !== undefined ? partial.appToken : current.appToken
+      appToken: partial.appToken !== undefined ? partial.appToken : current.appToken,
+      memberId: partial.memberId !== undefined ? partial.memberId : current.memberId
     })
   }
 }
