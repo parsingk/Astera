@@ -20,6 +20,7 @@ import { TerminalManager } from './terminalManager'
 import { WorktreeRegistry } from '../core/worktrees/registry'
 import { LocalHistoryStore } from '../core/localHistory/store'
 import { ghostAccounts } from '../core/accounts/ghosts'
+import { suggestableCandidates } from '../core/accounts/suggest'
 import { AppSettingsStore } from './appSettingsStore'
 import { KeybindingsStore } from './keybindingsStore'
 import { pickInitialLang } from '../core/i18n/locale'
@@ -180,11 +181,22 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     )
     return lists.flat()
   }
+  // The roots create() puts new account dirs under — anything still there but unregistered was
+  // unregistered by the user, which is what suggestableCandidates keys off
+  const accountsRoots = PROVIDERS.map((p) => path.join(os.homedir(), descriptors[p].accountsRootName))
   // Both providers' detection results merged, for the "detected accounts" suggestion list. Registered
   // dirs are excluded, and so are the ones the user unregistered — otherwise an account removed a moment
-  // ago comes straight back as a suggestion, since remove() leaves its directory (and transcripts) on disk
-  const detectAccounts = (): Promise<DetectCandidate[]> =>
-    detectFor([...accounts.list().map((a) => a.configDir), ...accounts.dismissedDirs()])
+  // ago comes straight back as a suggestion, since remove() leaves its directory (and transcripts) on disk.
+  // The dismissal record only covers unregisters made since it existed, so suggestableCandidates adds the
+  // retroactive half: an unregistered dir under our own accounts root is never suggested.
+  const detectAccounts = async (): Promise<DetectCandidate[]> => {
+    const registered = accounts.list().map((a) => a.configDir)
+    const candidates = await detectFor([...registered, ...accounts.dismissedDirs()])
+    return suggestableCandidates(candidates, {
+      accountsRoots,
+      registeredCount: registered.length
+    })
+  }
   /** Unregistered config dirs as account-shaped history sources. Unregistering leaves the transcripts on
    *  disk, so they stay visible in the sidebar instead of vanishing with the registry entry.
    *  Unlike the suggestion list this keeps the dismissed dirs: declining to be offered an account again
