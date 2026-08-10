@@ -163,12 +163,22 @@ export class HistoryIndex {
 
   /** Per-project summary list — built cheaply from directory enumeration + mtime + the newest file's
    *  meta (cwd) alone (sessions are not parsed). */
-  async projectsPage(req?: { accountId?: string; offset?: number; limit?: number }): Promise<{
+  async projectsPage(req?: {
+    accountId?: string
+    offset?: number
+    limit?: number
+    hiddenPaths?: string[]
+  }): Promise<{
     projects: ProjectSummary[]
     total: number
   }> {
     const all = await this.buildProjects()
-    const filtered = req?.accountId ? all.filter((p) => p.accountId === req.accountId) : all
+    const byAccount = req?.accountId ? all.filter((p) => p.accountId === req.accountId) : all
+    // Hidden projects drop out here rather than in the renderer: total comes from this list, and a
+    // renderer-side filter would leave it counting hidden rows, so the infinite-scroll sentinel would
+    // never resolve. norm() is the one comparison rule (Windows case and separators).
+    const hidden = new Set((req?.hiddenPaths ?? []).map(norm))
+    const filtered = hidden.size ? byAccount.filter((p) => !hidden.has(norm(p.projectPath))) : byAccount
     // The same folder used by several accounts produces one entry per account, so merge by
     // normalized path (the newest one represents them) — in the unified view a project is one row
     // per folder. With an accountId filter it is a single account, so this is effectively a no-op
