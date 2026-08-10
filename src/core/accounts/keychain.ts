@@ -53,6 +53,23 @@ export function claudeKeychainServices(configDir: string | null): string[] {
   return [...seen]
 }
 
+/**
+ * The keychain services to try for this configDir, folding in the ambient-directory rule.
+ *
+ * A session running against the default home directory (~/.claude) doesn't set CLAUDE_CONFIG_DIR —
+ * see sessions/manager.ts's isAmbientDir, which is what makes that true at spawn time. Since claude
+ * never saw a CLAUDE_CONFIG_DIR in that case, the keychain item it wrote carries no suffix either, so
+ * this has to special-case that directory to the unsuffixed name rather than hashing it like any other
+ * configDir.
+ *
+ * Pulled out of loginStatus.ts's claudeLoginProbe once a second caller (usage.ts's readAccessToken)
+ * needed the exact same rule — inlining it twice would have let the two drift apart silently.
+ */
+export function claudeKeychainServicesFor(configDir: string, homeDir: string): string[] {
+  const ambient = path.resolve(configDir) === path.resolve(path.join(homeDir, '.claude'))
+  return claudeKeychainServices(ambient ? null : configDir)
+}
+
 export type KeychainHas = (service: string, account: string) => Promise<boolean>
 
 /**
@@ -69,6 +86,29 @@ export function makeSecurityKeychainHas(
       return (await run('security', ['find-generic-password', '-a', account, '-s', service])) === 0
     } catch {
       return false
+    }
+  }
+}
+
+/** Reads an item's secret. Returns null when the item is absent or unreadable.
+ *
+ *  **This is the `-w` form, unlike KeychainHas.** Existence checks deliberately omit `-w` so they can
+ *  never raise a keychain-access prompt; reading the secret is the operation that can. Measured on the
+ *  claude-written item: no prompt appeared. That is not a contract — an item whose ACL is stricter will
+ *  make `security` block, which is why the caller must treat this as best-effort and degrade rather
+ *  than wait on it. */
+export type KeychainRead = (service: string, account: string) => Promise<string | null>
+
+export function makeSecurityKeychainRead(
+  run: (file: string, args: string[]) => Promise<string | null>
+): KeychainRead {
+  return async (service, account) => {
+    try {
+      const out = await run('security', ['find-generic-password', '-a', account, '-s', service, '-w'])
+      const trimmed = out?.trim()
+      return trimmed ? trimmed : null
+    } catch {
+      return null
     }
   }
 }

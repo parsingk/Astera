@@ -5,7 +5,7 @@
 // collects it here.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { claudeKeychainServices, type KeychainHas } from './keychain'
+import { claudeKeychainServicesFor, type KeychainHas } from './keychain'
 
 /** Takes a configDir and answers whether it's logged in. Never throws. */
 export type LoginProbe = (configDir: string) => Promise<boolean>
@@ -43,10 +43,10 @@ export function claudeLoginProbe(opts: {
   return async (configDir) => {
     if (await fileProbe(configDir)) return true
     if (opts.platform !== 'darwin') return false
-    // A session running against the default home directory (~/.claude) doesn't set CLAUDE_CONFIG_DIR
-    // (the isAmbientDir rule in sessions/manager.ts:154). So the keychain entry has no suffix either.
-    const ambient = path.resolve(configDir) === path.resolve(path.join(opts.homeDir, '.claude'))
-    const services = claudeKeychainServices(ambient ? null : configDir)
+    // The ambient-directory special case (no CLAUDE_CONFIG_DIR → no suffix in the keychain item) lives
+    // in claudeKeychainServicesFor now — see its docstring in keychain.ts. usage.ts's readAccessToken
+    // needs the identical rule, so it was pulled out here rather than kept inline.
+    const services = claudeKeychainServicesFor(configDir, opts.homeDir)
     for (const service of services) {
       try {
         if (await opts.keychainHas(service, opts.account)) return true
