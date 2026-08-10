@@ -8,7 +8,7 @@
 [![Latest release](https://img.shields.io/github/v/release/parsingk/Astera?logo=github)](https://github.com/parsingk/Astera/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/parsingk/Astera/total)](https://github.com/parsingk/Astera/releases)
 [![License](https://img.shields.io/github/license/parsingk/Astera?color=blue)](LICENSE)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-555?logo=apple&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-555)
 
 [Download](#install) · [What it does](#what-it-does) · [Documentation](#documentation) · [Report a bug](https://github.com/parsingk/Astera/issues/new)
 
@@ -18,7 +18,7 @@ Astera is a desktop app for people who keep more than one agent session going at
 holds the sessions side by side, switches accounts for you when a usage limit lands, isolates work in
 git worktrees, and lets one agent hand tasks to another and wait for the results.
 
-> **Status:** 1.0.0, Windows and macOS. It drives the `claude` and `codex` CLIs, so it is only as
+> **Status:** Windows and macOS. It drives the `claude` and `codex` CLIs, so it is only as
 > capable as whichever of those you have installed.
 
 ## Install
@@ -144,9 +144,10 @@ Issues and pull requests are welcome. A couple of things worth knowing before yo
   [Orca](https://github.com/stablyai/orca)'s agent orchestration. The implementation here is our own.
 - The Windows code-signing pipeline follows the fail-open SignPath flow Orca uses for its releases —
   see [docs/releasing.md](docs/releasing.md).
-- macOS releases are signed and notarized with an Apple Developer ID. Unlike the Windows path, this
-  one is not optional: without it, `electron-updater`'s macOS auto-update (built on Squirrel.Mac)
-  refuses to install updates at all.
+- macOS releases are meant to be signed and notarized with an Apple Developer ID, and the workflow is
+  ready for it. Unlike the Windows path, this one is not optional: without it, `electron-updater`'s
+  macOS auto-update (built on Squirrel.Mac) refuses to install updates at all — so until the
+  certificate is in place, builds ship ad-hoc signed and do not auto-update.
 
 ## License
 
