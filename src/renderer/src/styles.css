@@ -35,6 +35,13 @@
   --mono: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
   /* group tab bar height. Includes the border — * { box-sizing: border-box } is global */
   --pane-tabbar-h: 34px;
+  /* Control surface tokens. The one new colour is --surface-hover, between --panel and --elevated: a
+     dropdown row needs a hover fill that reads on --panel without looking like the active-row --elevated. */
+  --surface-hover: #1f1f25;
+  --radius: 6px;      /* triggers, options, inputs */
+  --radius-lg: 8px;   /* the floating dropdown panel */
+  --ring: rgba(55, 176, 196, 0.35); /* = --accent at 35%, for focus rings */
+  --ease: 120ms cubic-bezier(0.2, 0.6, 0.3, 1);
 }
 
 * { box-sizing: border-box; margin: 0; }
@@ -160,28 +167,9 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .workbench-topbar .file-tabs { flex: 1; min-width: 0; }
 .workbench-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .run-toolbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-bottom: 1px solid var(--line); border-left: 1px solid var(--line); background: var(--panel); position: relative; }
-.run-config-select {
-  appearance: none;
-  -webkit-appearance: none;
-  max-width: 190px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  background-color: var(--bg);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%237d7d88' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 6px center;
-  background-size: 10px;
-  color: var(--text);
-  border: 1px solid var(--line-soft);
-  border-radius: 4px;
-  padding: 4px 24px 4px 10px;
-  font-size: 12px;
-  font-family: var(--sans);
-  cursor: pointer;
-}
-.run-config-select:hover { border-color: var(--text-faint); }
-.run-config-select:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+/* The run-config picker in the toolbar. Only sizing lives here now — the surface comes from .sel.
+   Names get long, so the trigger ellipsises rather than pushing the toolbar wide. */
+.run-config-select { flex: 0 1 200px; min-width: 0; }
 .run-btn { width: 28px; height: 28px; display: grid; place-items: center; background: transparent; border: 0; border-radius: 4px; color: var(--text-dim); font-size: 15px; padding: 0; cursor: pointer; }
 .run-btn:hover { background: var(--elevated); color: var(--text); }
 .run-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
@@ -208,26 +196,7 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .panel-header h2 { font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; }
 .panel-header h2 .count { color: var(--text-faint); font-weight: 400; margin-left: 4px; }
 .panel-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-.panel-actions select {
-  appearance: none;
-  -webkit-appearance: none;
-  flex: 1;
-  min-width: 0;
-  background-color: var(--bg);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%237d7d88' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 6px center;
-  background-size: 10px;
-  color: var(--text);
-  border: 1px solid var(--line-soft);
-  border-radius: 4px;
-  padding: 3px 22px 3px 8px;
-  font-size: 11px;
-  font-family: var(--sans);
-  cursor: pointer;
-}
-.panel-actions select:hover { border-color: var(--text-faint); }
-.panel-actions select:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+/* Panel-header pickers are denser than form fields — .sel.dense carries that; nothing else is needed. */
 .icon-btn {
   width: 28px;
   height: 28px;
@@ -462,7 +431,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .modal.new-session { position: relative; }
 .modal .loading-overlay { background: var(--panel); border-radius: 6px; pointer-events: auto; z-index: 1; }
 .field label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
-.field select, .field input[type="text"], .field textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 6px; border-radius: 4px; }
+.field input[type="text"], .field textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 6px; border-radius: 4px; }
 /* A field entered line by line, like environment variables — monospaced so the values line up visibly, and resizable in height by the user */
 .field textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
 .field .modal-hint { margin-top: 4px; display: block; }
@@ -479,7 +448,8 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .settings-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 13.5px; }
 .settings-row span:first-child { color: var(--text-dim); }
 /* language selection — unified with .slack-url-input's palette and sizing */
-.settings-lang-select { background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 5px 8px; border-radius: 4px; font-size: 13px; }
+/* the language picker in settings — only its width; the surface comes from .sel */
+.settings-lang-select { flex: 0 0 140px; }
 /* Slack Webhook settings */
 .slack-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .slack-url-input { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 5px 8px; border-radius: 4px; font-size: 13px; }
@@ -516,7 +486,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .settings-history { display: flex; flex-direction: column; gap: 8px; }
 /* worktree 기준 브랜치 줄 — 이름 입력 바로 아래에 라벨과 셀렉트를 한 줄로 둔다 */
 .worktree-base-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 13px; }
-.worktree-base-row select { flex: 1; min-width: 0; }
+.worktree-base-row .sel { flex: 1; min-width: 0; }
 /* 등록 해제된 계정의 세션 — 색은 회색 하나로 고정이라 색만으로는 구분되지 않는다. 속을 비워
    등록된 계정과 구별한다(background 는 inline style 이 그대로 두므로 테두리만 그린다). */
 .color-dot.ghost { background: transparent !important; border: 1px solid var(--text-faint); }
@@ -550,64 +520,84 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
   font-size: 11px;
   opacity: 0.75;
 }
-.account-slot select {
+.account-slot .sel-trigger {
   flex: 1;
 }
-.account-slot .account-select {
+.account-slot .sel {
   flex: 1;
   min-width: 0;
 }
 /* A custom dropdown for account selection — it replaces the native select so an SVG badge can go inside
-   an option. The trigger uses the same border and background as .field select. */
-.account-select { position: relative; }
-.account-select-trigger {
+   an option. The trigger uses the same border and background as .sel-trigger. */
+/* ---------- Select: the app's one dropdown ----------
+   A native <select> renders option text only, so a per-row icon (the provider badge on an account, the
+   branch glyph on a branch) cannot go in one. Every picker in the app uses this instead, which is what
+   keeps a single look — see components/Select.tsx. */
+.sel { position: relative; }
+.sel-trigger {
   width: 100%;
+  height: 30px;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  padding: 0 10px;
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--line-soft);
-  padding: 6px;
-  border-radius: 4px;
+  border-radius: var(--radius);
+  font-family: var(--sans);
+  font-size: 13px;
   text-align: left;
   cursor: pointer;
+  transition: border-color var(--ease), background var(--ease), box-shadow var(--ease);
 }
-.account-select-trigger:hover { border-color: var(--text-faint); }
-.account-select-trigger:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
-.account-select-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.account-select-label.empty { color: var(--text-faint); }
-.account-select-caret { flex: none; color: var(--text-dim); font-size: 10px; }
-/* Aligns the badge-less 'all accounts' row — the same width as ProviderBadge (a 12px svg) */
-.provider-badge-spacer { flex: none; width: 12px; }
-.account-select-list {
+.sel-trigger:hover { border-color: var(--text-faint); background: var(--surface-hover); }
+/* A ring rather than an outline: outline cannot follow border-radius consistently across engines, and a
+   2px ring plus a brightened border reads as focus without the harsh hairline. */
+.sel-trigger:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
+.sel-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sel-value.empty { color: var(--text-faint); }
+/* Fixed width so labels line up even when a row has no icon (the 'All accounts' row) */
+.sel-icon { flex: none; display: grid; place-items: center; width: 14px; height: 14px; color: var(--text-dim); }
+.sel-caret { flex: none; color: var(--text-dim); display: grid; place-items: center; transition: transform var(--ease); }
+.sel[data-open='true'] .sel-caret { transform: rotate(180deg); }
+.sel-menu {
   position: absolute;
   z-index: 10;
-  top: calc(100% + 2px);
+  top: calc(100% + 4px);
   left: 0;
   right: 0;
-  max-height: 220px;
+  max-height: 240px;
   overflow-y: auto;
   background: var(--panel);
   border: 1px solid var(--line-soft);
-  border-radius: 4px;
-  padding: 2px;
-  box-shadow: 0 6px 18px rgba(0,0,0,.45);
+  border-radius: var(--radius-lg);
+  padding: 4px;
+  margin: 0;
+  list-style: none;
+  /* Two layers: a tight one that separates the panel edge from the surface, a wide one for the lift */
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.5);
+  animation: sel-in var(--ease);
 }
-.account-select-option {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 6px;
-  border-radius: 3px;
-  cursor: pointer;
+@keyframes sel-in { from { opacity: 0; transform: translateY(-2px); } }
+@media (prefers-reduced-motion: reduce) {
+  .sel-menu { animation: none; }
+  .sel-caret, .sel-trigger { transition: none; }
 }
-.account-select-option.cursor { background: var(--elevated); }
-.account-select-option.selected .account-select-label { color: var(--accent); }
-/* the history account filter — a panel header is denser than a form (sized to match .panel-actions select) */
+.sel-group { padding: 7px 8px 3px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-faint); }
+.sel-option { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--radius); cursor: pointer; }
+.sel-option.cursor { background: var(--surface-hover); }
+.sel-option[aria-selected='true'] .sel-value { color: var(--accent); }
+.sel-check { flex: none; width: 14px; height: 14px; display: grid; place-items: center; color: var(--accent); opacity: 0; }
+.sel-option[aria-selected='true'] .sel-check { opacity: 1; }
+.sel-meta { flex: none; color: var(--text-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+/* Denser variant for panel headers, which are tighter than form fields */
+.sel.dense .sel-trigger { height: 24px; padding: 0 8px; font-size: 11px; }
+.sel.dense .sel-option { padding: 4px 8px; font-size: 11px; }
+/* the schedule-mode picker sits in a row with number inputs, so it does not stretch */
+.sched-kind { flex: 0 0 150px; }
+/* the history account filter — a panel header is denser than a form */
 .history-account-filter { flex: 1; min-width: 0; }
-.history-account-filter .account-select-trigger { padding: 3px 8px; font-size: 11px; }
-.history-account-filter .account-select-option { padding: 4px 8px; font-size: 11px; }
 .account-slot .slot-remove {
   flex: 0 0 auto;
   padding: 2px 7px;
@@ -617,7 +607,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
   font-size: 12px;
   padding: 3px 8px;
 }
-/* the right-click context menu — the same surface tone as account-select-list */
+/* the right-click context menu — the same surface tone as .sel-menu */
 .context-menu {
   position: fixed;
   z-index: 210; /* above modal-backdrop (100) and toast-host (200) */
@@ -687,10 +677,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    schedule inputs stacked up, it can overflow in a narrow window. The same convention as its sibling modals. */
 .modal.resume { max-height: 80vh; overflow-y: auto; }
 .run-config-body { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
-/* The JDK select — paths are long and overflow, so it is ellipsised like .run-config-select (RunToolbar).
-   It takes the leftover width next to the "Browse…" button — width:100% on .field select loses to the
+/* The JDK picker — paths are long, and .sel-value already ellipsises. This only claims the leftover
+   width next to the "Browse…" button — a plain width:100% loses to the
    minimum size in a flex child, so flex:1 plus min-width:0 is stated explicitly */
-.jdk-select { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jdk-select { flex: 1; min-width: 0; }
 /* The working folder input takes the leftover width next to the "Choose…" button — the same convention as
    the inputs of .slack-url-input and .worktree-root-cell (stating flex:1 rather than relying on width:100%) */
 .run-config-cwd { flex: 1; min-width: 0; }

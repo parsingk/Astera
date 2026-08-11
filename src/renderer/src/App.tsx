@@ -6,6 +6,7 @@ import { AccountPanel } from './components/AccountPanel'
 import { AccountSettings } from './components/AccountSettings'
 import { HistorySettings } from './components/HistorySettings'
 import { HistoryBrowser } from './components/HistoryBrowser'
+import { Select } from './components/Select'
 import { FileTabs, type FileTab } from './components/FileTabs'
 import { FileEditor } from './components/FileEditor'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
@@ -1955,16 +1956,18 @@ export default function App(): React.JSX.Element {
                   <>
                     <div className="settings-row">
                       <span>{t('settings.general.language')}</span>
-                      <select
+                      {/* Each language is written in its own language, so it can be found without
+                          knowing the current one. Not a translation target. */}
+                      <Select
                         className="settings-lang-select"
+                        items={[
+                          { value: 'ko', label: '한국어' },
+                          { value: 'en', label: 'English' }
+                        ]}
                         value={lang}
-                        onChange={(e) => setLang(e.target.value as 'ko' | 'en')}
-                      >
-                        {/* Each language is written in its own language, so it can be found without
-                            knowing the current one. Not a translation target. */}
-                        <option value="ko">한국어</option>
-                        <option value="en">English</option>
-                      </select>
+                        onChange={(v) => setLang(v as 'ko' | 'en')}
+                        ariaLabel={t('settings.general.language')}
+                      />
                     </div>
                     {/* Agent orchestration — reuses the same settings-row plus settings-hint
                         combination as the language row. Turning it on starts the server immediately, but

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { RunConfig, RunStatus } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
+import { Select } from './Select'
 import { RunConfigDialog } from './RunConfigDialog'
 
 /** Run toolbar in the workbench's top right. Rendered only in explorer mode. */
@@ -66,21 +67,19 @@ export function RunToolbar({
 
   return (
     <div className="run-toolbar">
-      <select
+      <Select
         className="run-config-select"
+        items={[
+          ...(configs.length === 0 ? [{ value: '', label: t('run.config.none') }] : []),
+          ...configs.map((c) => ({ value: c.id, label: c.name })),
+          // An action disguised as an option, as it was before — picking it opens the editor instead of
+          // selecting anything, which is why onChange branches on the sentinel rather than passing it on
+          { value: '__add__', label: t('run.config.addOption') }
+        ]}
         value={selectedId ?? ''}
-        onChange={(e) =>
-          e.target.value === '__add__' ? setEditing({ config: null }) : onSelect(e.target.value)
-        }
-      >
-        {configs.length === 0 && <option value="">{t('run.config.none')}</option>}
-        {configs.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.name}
-          </option>
-        ))}
-        <option value="__add__">{t('run.config.addOption')}</option>
-      </select>
+        onChange={(v) => (v === '__add__' ? setEditing({ config: null }) : onSelect(v))}
+        ariaLabel={t('run.config.selectLabel')}
+      />
       {running ? (
         <button className="run-btn stop" title={t('run.action.stop')} onClick={onStop}>
           ⏹

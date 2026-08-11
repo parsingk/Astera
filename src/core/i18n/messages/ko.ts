@@ -536,6 +536,7 @@ export const ko = {
   'worktree.action.startSession': '세션 시작',
   'worktree.action.openExplorer': '탐색기',
   // RunToolbar.tsx — config select, run/stop, edit/delete, the running list
+  'run.config.selectLabel': '실행 구성 선택',
   'run.config.none': '실행 구성 없음',
   'run.config.addOption': '+ 실행 구성 추가…',
   'run.action.run': '실행',

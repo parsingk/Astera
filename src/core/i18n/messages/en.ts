@@ -466,6 +466,7 @@ export const en: Record<keyof typeof ko, string> = {
   'worktree.refresh': 'Refresh',
   'worktree.action.startSession': 'Start session',
   'worktree.action.openExplorer': 'Explorer',
+  'run.config.selectLabel': 'Run configuration',
   'run.config.none': 'No run configs',
   'run.config.addOption': '+ Add run config…',
   'run.action.run': 'Run',

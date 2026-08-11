@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ScheduleConfig, ScheduleRule } from '../../../core/types'
 import { buildScheduleConfig } from '../../../core/scheduler/rule'
 import { useI18n } from '../i18n/I18nProvider'
+import { Select } from './Select'
 
 type SchedKind = ScheduleRule['kind']
 
@@ -57,12 +58,17 @@ export function ScheduleFields({
   return (
     <div className="field sched-field">
       <div className="row">
-        <select value={kind} onChange={(e) => setKind(e.target.value as SchedKind)}>
-          <option value="interval">{t('session.new.schedMode.interval')}</option>
-          <option value="daily">{t('session.new.schedMode.daily')}</option>
-          <option value="weekly">{t('session.new.schedMode.weekly')}</option>
-          <option value="monthly">{t('session.new.schedMode.monthly')}</option>
-        </select>
+        <Select
+          className="sched-kind"
+          items={[
+            { value: 'interval', label: t('session.new.schedMode.interval') },
+            { value: 'daily', label: t('session.new.schedMode.daily') },
+            { value: 'weekly', label: t('session.new.schedMode.weekly') },
+            { value: 'monthly', label: t('session.new.schedMode.monthly') }
+          ]}
+          value={kind}
+          onChange={(v) => setKind(v as SchedKind)}
+        />
         {kind === 'interval' && (
           <>
             <input

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Jdk, RunConfig } from '../../../core/types'
 import { parseEnvLines, formatEnvLines, splitEnv, mergeEnv, toRelativeCwd } from '../../../core/run/config'
 import { useI18n } from '../i18n/I18nProvider'
+import { Select } from './Select'
 
 /** Label for the JDK select — the version, vendor and path all have to be visible.
  *  e.g. "21.0.5 (Temurin) — C:\Program Files\Eclipse Adoptium\jdk-21.0.5+11" */
@@ -154,21 +155,19 @@ export function RunConfigDialog({
               <span className="check-note">{t('run.form.jdkLoading')}</span>
             ) : (
               <div className="row">
-                <select
+                <Select
                   className="jdk-select"
+                  items={[
+                    { value: '', label: t('run.form.jdkNone') },
+                    ...(customJdk
+                      ? [{ value: customJdk, label: t('run.form.jdkCustom', { path: customJdk }) }]
+                      : []),
+                    ...jdks.map((j) => ({ value: j.path, label: jdkLabel(j) }))
+                  ]}
                   value={javaHome}
-                  onChange={(e) => setJavaHome(e.target.value)}
-                >
-                  <option value="">{t('run.form.jdkNone')}</option>
-                  {customJdk && (
-                    <option value={customJdk}>{t('run.form.jdkCustom', { path: customJdk })}</option>
-                  )}
-                  {jdks.map((j) => (
-                    <option key={j.path} value={j.path}>
-                      {jdkLabel(j)}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setJavaHome}
+                  ariaLabel={t('run.form.jdkLabel')}
+                />
                 <button type="button" onClick={() => void pickJdk()}>
                   {t('run.form.jdkBrowse')}
                 </button>

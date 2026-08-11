@@ -6,6 +6,8 @@ import { resolveInitialBase } from '../../../core/worktrees/base'
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
 import { AccountSelect } from './AccountSelect'
+import { BranchGlyph } from './BranchGlyph'
+import { Select, type SelectOption } from './Select'
 import { ScheduleFields } from './ScheduleFields'
 
 const SOFT_LIMIT = 12
@@ -166,6 +168,21 @@ export function NewSessionDialog({
     accounts.some((a) => provider(a) === primaryProvider && !accountIds.includes(a.id))
   // Whether rolling is on — with multiple accounts (2+) it is always on (checkbox pinned and disabled), with a single account the user toggles it
   const multi = accountIds.length >= 2
+  // The current branch leads, outside any group: forking from what you are on is the common case, and the
+  // automatic probe could never express it (it only looks at origin/*, main, master). listBranches already
+  // sorted by commit date, so the groups keep that order.
+  const branchItems: SelectOption[] = (branches ?? []).map((b) => ({
+    value: b.name,
+    label: b.name,
+    icon: <BranchGlyph />,
+    group: b.current
+      ? undefined
+      : b.remote
+        ? t('session.new.worktreeBaseRemote')
+        : t('session.new.worktreeBaseLocal'),
+    meta: b.current ? t('session.new.worktreeBaseCurrent') : b.updatedAt.slice(5, 10)
+  }))
+
   const rollChecked = multi ? true : rollMode
 
   const withWorktree = !!repoRoot && useWorktree
@@ -255,39 +272,12 @@ export function NewSessionDialog({
                 {branches && branches.length > 0 && (
                   <label className="worktree-base-row">
                     <span>{t('session.new.worktreeBaseRef')}</span>
-                    <select
-                      className="settings-lang-select"
+                    <Select
+                      items={branchItems}
                       value={wtBaseRef}
-                      onChange={(e) => setWtBaseRef(e.target.value)}
-                    >
-                      {/* Current branch first — branching off what you are on is the common case, and the
-                          automatic detection could never express it (it only probes origin/*, main, master) */}
-                      {branches
-                        .filter((b) => b.current)
-                        .map((b) => (
-                          <option key={`cur-${b.name}`} value={b.name}>
-                            {b.name} {t('session.new.worktreeBaseCurrent')}
-                          </option>
-                        ))}
-                      <optgroup label={t('session.new.worktreeBaseRemote')}>
-                        {branches
-                          .filter((b) => b.remote)
-                          .map((b) => (
-                            <option key={`r-${b.name}`} value={b.name}>
-                              {b.name}
-                            </option>
-                          ))}
-                      </optgroup>
-                      <optgroup label={t('session.new.worktreeBaseLocal')}>
-                        {branches
-                          .filter((b) => !b.remote && !b.current)
-                          .map((b) => (
-                            <option key={`l-${b.name}`} value={b.name}>
-                              {b.name}
-                            </option>
-                          ))}
-                      </optgroup>
-                    </select>
+                      onChange={setWtBaseRef}
+                      ariaLabel={t('session.new.worktreeBaseRef')}
+                    />
                   </label>
                 )}
               </div>
