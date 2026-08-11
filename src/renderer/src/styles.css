@@ -533,7 +533,13 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    A native <select> renders option text only, so a per-row icon (the provider badge on an account, the
    branch glyph on a branch) cannot go in one. Every picker in the app uses this instead, which is what
    keeps a single look — see components/Select.tsx. */
-.sel { position: relative; }
+.sel {
+  position: relative;
+  /* The size lives on the root so the trigger and the floating menu cannot disagree. body sets no
+     font-size, so the menu — a plain ul/li — would otherwise inherit the document default of 16px while
+     the trigger, a button, took the global button rule's 12px. That mismatch predates this component. */
+  font-size: 13px;
+}
 .sel-trigger {
   width: 100%;
   height: 30px;
@@ -546,7 +552,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
   font-family: var(--sans);
-  font-size: 13px;
+  font-size: inherit; /* beats the global button rule's 12px, and follows .sel.dense */
   text-align: left;
   cursor: pointer;
   transition: border-color var(--ease), background var(--ease), box-shadow var(--ease);
@@ -591,9 +597,11 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .sel-check { flex: none; width: 14px; height: 14px; display: grid; place-items: center; color: var(--accent); opacity: 0; }
 .sel-option[aria-selected='true'] .sel-check { opacity: 1; }
 .sel-meta { flex: none; color: var(--text-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
-/* Denser variant for panel headers, which are tighter than form fields */
-.sel.dense .sel-trigger { height: 24px; padding: 0 8px; font-size: 11px; }
-.sel.dense .sel-option { padding: 4px 8px; font-size: 11px; }
+/* Denser variant for panel headers, which are tighter than form fields. The size is set once on the root
+   for the same reason as above — the trigger and the menu have to move together. */
+.sel.dense { font-size: 11px; }
+.sel.dense .sel-trigger { height: 24px; padding: 0 8px; }
+.sel.dense .sel-option { padding: 4px 8px; }
 /* the schedule-mode picker sits in a row with number inputs, so it does not stretch */
 .sched-kind { flex: 0 0 150px; }
 /* the history account filter — a panel header is denser than a form */
