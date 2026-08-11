@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Account, BranchRef, ScheduleConfig, Provider } from '../../../core/types'
 import { providerOf } from '../../../core/providers/meta'
 import { isSlackReady } from '../../../core/slack/ready'
-import { resolveInitialBase } from '../../../core/worktrees/base'
+import { orderBranchesForPicker, resolveInitialBase } from '../../../core/worktrees/base'
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
 import { AccountSelect } from './AccountSelect'
@@ -169,9 +169,10 @@ export function NewSessionDialog({
   // Whether rolling is on — with multiple accounts (2+) it is always on (checkbox pinned and disabled), with a single account the user toggles it
   const multi = accountIds.length >= 2
   // The current branch leads, outside any group: forking from what you are on is the common case, and the
-  // automatic probe could never express it (it only looks at origin/*, main, master). listBranches already
-  // sorted by commit date, so the groups keep that order.
-  const branchItems: SelectOption[] = (branches ?? []).map((b) => ({
+  // automatic probe could never express it (it only looks at origin/*, main, master). orderBranchesForPicker
+  // then puts remotes and locals in two runs — listBranches sorts the whole set by date, which interleaves
+  // them and made the group headings repeat all the way down. Date order survives inside each run.
+  const branchItems: SelectOption[] = orderBranchesForPicker(branches ?? []).map((b) => ({
     value: b.name,
     label: b.name,
     icon: <BranchGlyph />,
