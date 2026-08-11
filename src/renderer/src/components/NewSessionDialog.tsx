@@ -269,8 +269,12 @@ export function NewSessionDialog({
                   placeholder={t('session.new.worktreeNamePlaceholder')}
                   onChange={(e) => setWtName(e.target.value)}
                 />
+                {/* The container is a div, not a label. Clicking inside a <label> makes the browser forward
+                    a second click to the control it labels — here the trigger button — so picking an item
+                    closed the menu and the forwarded click reopened it straight away. The trigger carries
+                    ariaLabel, so dropping the label element costs nothing. */}
                 {branches && branches.length > 0 && (
-                  <label className="worktree-base-row">
+                  <div className="worktree-base-row">
                     <span>{t('session.new.worktreeBaseRef')}</span>
                     <Select
                       items={branchItems}
@@ -278,7 +282,7 @@ export function NewSessionDialog({
                       onChange={setWtBaseRef}
                       ariaLabel={t('session.new.worktreeBaseRef')}
                     />
-                  </label>
+                  </div>
                 )}
               </div>
             )}

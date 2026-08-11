@@ -486,11 +486,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    .settings-content inherits that container's gap, but a wrapper div does not — without this the
    hidden-project rows butt together and their 해제 buttons end up touching. */
 .settings-history { display: flex; flex-direction: column; gap: 8px; }
-/* worktree 기준 브랜치 — 라벨을 위, 셀렉트를 아래에 둔다(.field label 들과 같은 관례).
-   선택자에 .field 를 포함해야 한다: `.field label`(0,1,1)이 클래스 하나(0,1,0)를 이기므로, 그것 없이는
-   display 선언이 죽고 gap 도 함께 무의미해진다 — 라벨과 셀렉트가 간격 0으로 붙어 버린다.
-   font-size 는 라벨에만 준다. 줄 전체에 주면 셀렉트가 상속해 .sel 의 12px 를 덮어쓴다. */
-.field label.worktree-base-row { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+/* worktree 기준 브랜치 — 라벨 문구를 위, 셀렉트를 아래에 둔다(.field label 들과 같은 관례).
+   컨테이너가 <label>이 아니라 <div>인 이유는 컴포넌트 쪽 주석에 있다(라벨은 클릭을 컨트롤로 한 번 더
+   전달해서 드롭다운이 닫히자마자 다시 열렸다). div 라서 `.field label`(0,1,1)과 경쟁하지 않으므로
+   클래스 하나로 충분하다.
+   font-size 는 문구에만 준다. 줄 전체에 주면 셀렉트가 상속해 .sel 의 12px 를 덮어쓴다. */
+.worktree-base-row { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 .worktree-base-row > span { font-size: 12px; color: var(--text-dim); }
 .worktree-base-row .sel { min-width: 0; }
 /* 등록 해제된 계정의 세션 — 색은 회색 하나로 고정이라 색만으로는 구분되지 않는다. 속을 비워
