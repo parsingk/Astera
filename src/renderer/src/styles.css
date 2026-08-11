@@ -448,8 +448,9 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .settings-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 13.5px; }
 .settings-row span:first-child { color: var(--text-dim); }
 /* language selection — unified with .slack-url-input's palette and sizing */
-/* the language picker in settings — only its width; the surface comes from .sel */
-.settings-lang-select { flex: 0 0 140px; }
+/* the language picker in settings — width, plus the 13px it has always used. That size is deliberate:
+   it pairs with .slack-url-input in the same panel (see the note there), so it does not follow .sel's 12px */
+.settings-lang-select { flex: 0 0 140px; font-size: 13px; }
 /* Slack Webhook settings */
 .slack-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .slack-url-input { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 5px 8px; border-radius: 4px; font-size: 13px; }
@@ -537,8 +538,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
   position: relative;
   /* The size lives on the root so the trigger and the floating menu cannot disagree. body sets no
      font-size, so the menu — a plain ul/li — would otherwise inherit the document default of 16px while
-     the trigger, a button, took the global button rule's 12px. That mismatch predates this component. */
-  font-size: 13px;
+     the trigger, a button, took the global button rule's 12px. That mismatch predates this component.
+     12px is the app's size for a dense control: the global button rule, .field label, .field textarea and
+     .roll-prompt-input all use it, and it is what the account trigger already rendered at. */
+  font-size: 12px;
 }
 .sel-trigger {
   width: 100%;
