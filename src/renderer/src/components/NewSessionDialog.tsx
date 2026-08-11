@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Account, BranchRef, ScheduleConfig, Provider } from '../../../core/types'
 import { providerOf } from '../../../core/providers/meta'
 import { isSlackReady } from '../../../core/slack/ready'
-import { orderBranchesForPicker, resolveInitialBase } from '../../../core/worktrees/base'
+import { orderBranchesForPicker, reconcileBaseRef } from '../../../core/worktrees/base'
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
 import { AccountSelect } from './AccountSelect'
@@ -59,6 +59,10 @@ export function NewSessionDialog({
   // creation falls back to the automatic detection, exactly as before this picker existed.
   const [branches, setBranches] = useState<BranchRef[] | null>(null)
   const [wtBaseRef, setWtBaseRef] = useState('')
+  // The effect below reads the current pick but must not re-run when it changes, or picking a branch would
+  // immediately refetch the list. Same ref-mirror idiom as HistoryBrowser's accountFilterRef.
+  const wtBaseRefRef = useRef('')
+  wtBaseRefRef.current = wtBaseRef
   // Recurring command scheduler. ScheduleFields assembles the input, this only holds the result
   const [schedOn, setSchedOn] = useState(false)
   const [schedule, setSchedule] = useState<ScheduleConfig | null>(null)
@@ -89,7 +93,10 @@ export function NewSessionDialog({
       .listBranches(repoRoot)
       .then(({ branches: list, detected }) => {
         if (cancelled) return
-        const base = resolveInitialBase({ branches: list, detected })
+        // Reconcile rather than overwrite: the pick survives toggling the checkbox, but a pick left over
+        // from a previous project folder does not — it is not in this repo's list, and keeping it left the
+        // picker on its "nothing selected" placeholder
+        const base = reconcileBaseRef({ branches: list, detected, current: wtBaseRefRef.current })
         if (base === null) {
           // Nothing to fork from (a repo with no commits yet). Refusing here beats letting the start
           // button run: the loading overlay is opaque and covers the Cancel button, and outside-click
@@ -100,8 +107,7 @@ export function NewSessionDialog({
           return
         }
         setBranches(list)
-        // Preselect the detected base so leaving this alone behaves as it did before the picker existed
-        setWtBaseRef((prev) => prev || base)
+        setWtBaseRef(base)
       })
       .catch(() => {
         if (!cancelled) setBranches(null)
@@ -116,6 +122,9 @@ export function NewSessionDialog({
     if (!cwd) return
     let cancelled = false
     setResolvingRepo(true) // disable the start button until the check finishes so nothing spawns with the previous repoRoot
+    // Drop the branch list the moment the folder changes. It belongs to the previous repository, and until
+    // the new fetch lands the picker would be offering branches that are not in this repo at all.
+    setBranches(null)
     void (async () => {
       let root: string | null
       try {

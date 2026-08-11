@@ -22,6 +22,27 @@ export function resolveInitialBase(opts: {
 }
 
 /**
+ * The base to show selected, given what the user already picked.
+ *
+ * Keeps their choice when it is still one of the offered branches, so toggling the worktree checkbox off
+ * and on does not throw the pick away. Falls back to resolveInitialBase when it is not — which is what
+ * happens after the project folder is changed with the modal still open: the pick belongs to the previous
+ * repository, is absent from the new branch list, and leaving it in place left the picker showing its
+ * "nothing selected" placeholder with no way to tell why.
+ *
+ * Comparison is by the exact short name, so 'develop' and 'origin/develop' are different bases — they are
+ * different refs and can point at different commits.
+ */
+export function reconcileBaseRef(opts: {
+  branches: BranchRef[]
+  detected: string | null
+  current: string
+}): string | null {
+  if (opts.current !== '' && opts.branches.some((b) => b.name === opts.current)) return opts.current
+  return resolveInitialBase(opts)
+}
+
+/**
  * Orders branches for the picker: the current branch, then every remote-tracking one, then the rest of the
  * locals. Within each run the incoming order is kept, and listBranches hands them over newest commit first.
  *
