@@ -1,7 +1,7 @@
 {
   "_comment": "Update campaign. Set id and the target version range (minVersion~maxVersion, both bounds inclusive); only apps whose version falls inside that range show the notice. minVersion is a target floor, not a blocking floor. mode: notify (default, user can dismiss) | block (app refuses to run). Leave id null for 'no campaign'. To target one defective build, set minVersion and maxVersion to the same value. To leave one bound open, REMOVE that key — a null value is rejected and voids the whole policy, and the release workflow does not catch it.",
-  "id": "upgrade-1.0.3",
+  "id": "upgrade-1.1.2",
   "minVersion": "1.0.0",
-  "maxVersion": "1.0.3",
+  "maxVersion": "1.1.1",
   "mode": "notify"
 }
