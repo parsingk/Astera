@@ -168,8 +168,9 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .workbench-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .run-toolbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-bottom: 1px solid var(--line); border-left: 1px solid var(--line); background: var(--panel); position: relative; }
 /* The run-config picker in the toolbar. Only sizing lives here now — the surface comes from .sel.
-   Names get long, so the trigger ellipsises rather than pushing the toolbar wide. */
-.run-config-select { flex: 0 1 200px; min-width: 0; }
+   It may shrink so the run buttons keep their room, but not past 140px, or the name is unreadable while
+   the buttons sit on empty space. The open menu is not bound by this — .sel-menu sizes to its content. */
+.run-config-select { flex: 0 1 200px; min-width: 140px; }
 .run-btn { width: 28px; height: 28px; display: grid; place-items: center; background: transparent; border: 0; border-radius: 4px; color: var(--text-dim); font-size: 15px; padding: 0; cursor: pointer; }
 .run-btn:hover { background: var(--elevated); color: var(--text); }
 .run-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
@@ -579,7 +580,14 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
   z-index: 10;
   top: calc(100% + 4px);
   left: 0;
-  right: 0;
+  /* Grows to fit its content instead of being pinned to the trigger's width. A native select's popup does
+     this, and losing it truncated long entries — run-config names, JDK paths, remote branch names — in the
+     one place the user opened the list to read them. Never narrower than the trigger, and capped so a long
+     entry cannot run the menu off the window; past the cap .sel-value ellipsises as before.
+     No edge flipping: these live in modals and left-aligned toolbars, so the menu grows into free space. */
+  min-width: 100%;
+  width: max-content;
+  max-width: min(420px, 70vw);
   max-height: 240px;
   overflow-y: auto;
   background: var(--panel);
