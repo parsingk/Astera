@@ -2,7 +2,7 @@
 
 <img src="assets/banner.jpg" width="640" alt="Astera — build beyond the stars" />
 
-**Run and orchestrate many Claude Code and Codex sessions from one desktop app.**
+**Keep Claude Code and Codex working while you are away.**
 
 [![CI](https://github.com/parsingk/Astera/actions/workflows/ci.yml/badge.svg)](https://github.com/parsingk/Astera/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/parsingk/Astera?logo=github)](https://github.com/parsingk/Astera/releases/latest)
@@ -14,9 +14,11 @@
 
 </div>
 
-Astera is a desktop app for people who keep more than one agent session going at once. It
-holds the sessions side by side, switches accounts for you when a usage limit lands, isolates work in
-git worktrees, and lets one agent hand tasks to another and wait for the results.
+Astera runs your agent sessions when you are not at the desk. Schedule one to start at 3am. When it
+hits a usage limit, Astera reads the reset time out of the transcript, switches to your next account,
+and resumes the *same* work — and tells you on Slack when the turn lands or a limit hits. Sessions sit
+side by side in one window, each isolated in its own git worktree, and one agent can hand tasks to
+another and wait for the results.
 
 > **Status:** Windows and macOS. It drives the `claude` and `codex` CLIs, so it is only as
 > capable as whichever of those you have installed.
@@ -118,8 +120,7 @@ macOS, and the shared `resources/tray.png` on both) rather than generating them.
 scripts/gen-icon.ps1` (ico/png) on Windows, `sh scripts/gen-icon-mac.sh` (icns) on
 macOS — then commit the regenerated assets.
 
-Note on tests: this project has a Vitest suite colocated as `*.test.ts`, but the test sources are not
-distributed in this repository, so `npm test` here reports no test files. CI therefore runs typecheck
+Tests are colocated as `*.test.ts` and run with `npm test` (Vitest). CI runs the typecheck, the suite,
 and a full bundle build.
 
 ## Documentation
@@ -132,9 +133,10 @@ and a full bundle build.
 
 Issues and pull requests are welcome. A couple of things worth knowing before you start:
 
-- Run `npm run typecheck` and `npm run build` before opening a PR — that is what CI checks.
-- The test sources are not in this repository, so a PR cannot add or change tests. If your change
-  needs one, describe the case in the PR and it will be covered on the maintainer's side.
+- Run `npm run typecheck`, `npm test` and `npm run build` before opening a PR — that is what CI checks.
+- A change to behaviour is expected to come with a test. One rule worth knowing before you touch the
+  rolling tests: the usage-limit phrases are split with `+` on purpose, because Astera watches session
+  output for them — see [CONTRIBUTING](.github/CONTRIBUTING.md).
 - Bug reports are much easier to act on with the app version, your OS version, and the relevant
   lines from `rolling.log` when the problem involves account rolling — `%APPDATA%\astera\rolling.log`
   on Windows, `~/Library/Application Support/astera/rolling.log` on macOS.

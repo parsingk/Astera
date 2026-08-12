@@ -1,0 +1,104 @@
+import { promises as fs } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { parseCodexMeta, parseCodexTail, parseCodexPreview, ROLLOUT_UUID_RE } from './codexParser'
+
+let dir: string
+beforeEach(async () => {
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-rollout-'))
+})
+
+const metaLine = JSON.stringify({
+  timestamp: '2026-07-09T04:31:54.185Z',
+  type: 'session_meta',
+  payload: {
+    session_id: '019f4524-e0ac-7571-a8af-5585504f0d32',
+    cwd: 'D:\\proj\\demo',
+    originator: 'codex-tui'
+  }
+})
+const user = (text: string): string =>
+  JSON.stringify({
+    timestamp: '2026-07-09T04:32:04.447Z',
+    type: 'event_msg',
+    payload: { type: 'user_message', message: text }
+  })
+const agent = (text: string): string =>
+  JSON.stringify({
+    timestamp: '2026-07-09T04:32:08.937Z',
+    type: 'event_msg',
+    payload: { type: 'agent_message', message: text }
+  })
+const noise = JSON.stringify({
+  timestamp: 't',
+  type: 'response_item',
+  payload: { type: 'reasoning', id: 'r1' }
+})
+
+async function write(name: string, lines: string[]): Promise<string> {
+  const p = path.join(dir, name)
+  await fs.writeFile(p, lines.join('\n') + '\n', 'utf8')
+  return p
+}
+
+describe('parseCodexMeta', () => {
+  it('session_meta에서 sessionId·cwd, 첫 사용자 메시지에서 title을 뽑는다', async () => {
+    const p = await write('a.jsonl', [metaLine, noise, user('버그 고쳐줘'), agent('네')])
+    expect(await parseCodexMeta(p)).toEqual({
+      sessionId: '019f4524-e0ac-7571-a8af-5585504f0d32',
+      cwd: 'D:\\proj\\demo',
+      title: '버그 고쳐줘'
+    })
+  })
+
+  it('환경 래퍼(<environment_context> 등)는 title에서 제외한다', async () => {
+    const p = await write('b.jsonl', [metaLine, user('<environment_context>...'), user('진짜 질문')])
+    expect((await parseCodexMeta(p)).title).toBe('진짜 질문')
+  })
+
+  it('깨진 줄·meta 없음은 null 필드로 폴백한다', async () => {
+    const p = await write('c.jsonl', ['{broken', noise])
+    expect(await parseCodexMeta(p)).toEqual({ sessionId: null, cwd: null, title: null })
+  })
+})
+
+describe('parseCodexTail', () => {
+  it('마지막 의미 메시지가 agent면 awaitingReply=true, 마지막 사용자 제목을 뽑는다', async () => {
+    const p = await write('d.jsonl', [
+      metaLine,
+      user('첫 질문'),
+      agent('답'),
+      user('두번째 질문'),
+      agent('최종 답'),
+      noise
+    ])
+    expect(await parseCodexTail(p)).toEqual({ lastUserTitle: '두번째 질문', awaitingReply: true })
+  })
+
+  it('마지막이 user면 awaitingReply=false', async () => {
+    const p = await write('e.jsonl', [metaLine, agent('a'), user('마지막 질문')])
+    expect(await parseCodexTail(p)).toEqual({ lastUserTitle: '마지막 질문', awaitingReply: false })
+  })
+})
+
+describe('parseCodexPreview', () => {
+  it('user/agent 메시지만 순서대로 role 매핑하고 래퍼·노이즈는 제외한다', async () => {
+    const p = await write('f.jsonl', [metaLine, user('<user_instructions>x'), user('q1'), noise, agent('a1')])
+    const { messages, truncated } = await parseCodexPreview(p)
+    expect(truncated).toBe(false)
+    expect(messages).toEqual([
+      { role: 'user', text: 'q1', timestamp: '2026-07-09T04:32:04.447Z' },
+      { role: 'assistant', text: 'a1', timestamp: '2026-07-09T04:32:08.937Z' }
+    ])
+  })
+})
+
+describe('ROLLOUT_UUID_RE', () => {
+  it('rollout 파일명에서 uuid를 뽑는다', () => {
+    const m = 'rollout-2026-07-09T13-31-12-019f4524-e0ac-7571-a8af-5585504f0d32.jsonl'.match(
+      ROLLOUT_UUID_RE
+    )
+    expect(m?.[1]).toBe('019f4524-e0ac-7571-a8af-5585504f0d32')
+  })
+})
