@@ -10,6 +10,9 @@ export const ko = {
   'settings.tab.shortcuts': '단축키',
   'settings.tab.history': '히스토리',
   'settings.general.language': '언어',
+  // {lang} is the language the OS locale resolves to, shown so the effect of picking System is
+  // visible before picking it
+  'settings.general.language.system': '시스템 설정 ({lang})',
   // Agent orchestration
   'settings.orchestration.label': '에이전트 오케스트레이션 (실험)',
   'settings.orchestration.hint':
