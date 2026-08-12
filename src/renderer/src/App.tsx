@@ -10,6 +10,7 @@ import { HistoryBrowser } from './components/HistoryBrowser'
 import { Select } from './components/Select'
 import { WorkbenchTabs, type FileTab, type WorkbenchTab } from './components/WorkbenchTabs'
 import { FileEditor } from './components/FileEditor'
+import type { EditorState } from '@codemirror/state'
 import { EditorStateCache } from './lib/editorStateCache'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { NewSessionDialog } from './components/NewSessionDialog'
@@ -965,6 +966,17 @@ export default function App(): React.JSX.Element {
       (d) => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { content: d.content, savedContent: d.content, readOnly: d.truncated || d.binary, loading: false, error: d.binary ? t('files.editor.binaryUnsupported') : null, conflict: false } } : prev)),
       (err) => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], loading: false, error: err instanceof Error ? err.message : String(err) } } : prev))
     )
+  }
+
+  /** 에디터가 사라질 때 그 상태를 캐시에 넘겨받는다. 세션 모드로 나가면 .explorer-view가 통째로
+   *  언마운트되므로, 이 경로가 없으면 되돌리기 이력이 거기서 끊긴다(세션 탭은 숨기기만 해서 안 끊긴다).
+   *
+   *  탭이 아직 열려 있을 때만 보관한다. 탭을 닫는 경로는 이미 cache.drop을 했고 그 뒤에 언마운트가
+   *  오므로, 무조건 저장하면 방금 버린 항목이 되살아난다. closeExplorer도 같은 이유로 이 가드에
+   *  걸린다 — 거기서는 clear() 뒤에 언마운트가 오고, 그때 fileTabs는 이미 비어 있다. */
+  const retireEditorState = (path: string, state: EditorState, scrollTop: number): void => {
+    if (!fileTabsRef.current.some((t) => t.path === path)) return
+    editorCacheRef.current.save(path, state, scrollTop)
   }
 
   const setBufferContent = (id: string, content: string): void => {
@@ -1950,6 +1962,7 @@ export default function App(): React.JSX.Element {
                         content={editorBuf.content}
                         readOnly={editorBuf.readOnly}
                         cache={editorCacheRef.current}
+                      onRetire={retireEditorState}
                         onChange={(next) => setBufferContent(editorFile.id, next)}
                         onSave={() => saveFile(editorFile.id)}
                       />

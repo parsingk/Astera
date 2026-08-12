@@ -55,14 +55,35 @@ function makeState(base: Extension[], doc: string, path: string, readOnly: boole
   })
 }
 
+/** 캐시에 쓸 수 있는 상태가 있으면 그것을, 없으면 새로 만든 상태를 돌려준다. 문서와 편집 가능 여부가
+ *  지금 프롭과 같을 때만 재사용한다 — 파일이 디스크에서 바뀌었거나 읽기 전용 여부가 달라졌으면 옛
+ *  상태는 화면에 맞지 않는다. 마운트와 파일 전환이 같은 규칙을 써야 해서 함수로 뽑았다. */
+function restoreOrBuild(
+  cache: EditorStateCache,
+  base: Extension[],
+  path: string,
+  content: string,
+  readOnly: boolean
+): { state: EditorState; scrollTop: number | null } {
+  const cached = cache.get(path)
+  const usable =
+    cached && cached.state.doc.toString() === content && cached.state.readOnly === readOnly
+  return {
+    state: usable ? cached.state : makeState(base, content, path, readOnly),
+    scrollTop: cached?.scrollTop ?? null
+  }
+}
+
 /** CM6 file editor (a controlled component). The buffer, the dirty flag and the save policy are owned by
  *  App. The EditorState is cached per file so undo, the cursor and the scroll position survive a tab
- *  switch (the VS Code style). */
+ *  switch (the VS Code style) — and, through onRetire, an unmount as well: leaving editor mode takes the
+ *  whole explorer view down with it. */
 export function FileEditor({
   path,
   content,
   readOnly,
   cache,
+  onRetire,
   onChange,
   onSave
 }: {
@@ -72,6 +93,9 @@ export function FileEditor({
   /** 파일별 EditorState·스크롤 캐시. 소유자는 App이다 — 이 컴포넌트가 여러 개 생기더라도 되돌리기와
    *  스크롤이 살아남아야 하므로 인스턴스 안에 두지 않는다 */
   cache: EditorStateCache
+  /** 이 에디터가 사라질 때 그 상태를 넘긴다. 캐시에 남길지는 App이 정한다 — 닫힌 파일의 상태를
+   *  되살리면 안 되기 때문에 여기서 직접 저장하지 않는다 */
+  onRetire: (path: string, state: EditorState, scrollTop: number) => void
   onChange: (next: string) => void
   onSave: () => void
 }): React.JSX.Element {
@@ -84,6 +108,8 @@ export function FileEditor({
   onChangeRef.current = onChange
   const onSaveRef = useRef(onSave)
   onSaveRef.current = onSave
+  const onRetireRef = useRef(onRetire)
+  onRetireRef.current = onRetire
 
   // Create the EditorView once
   useEffect(() => {
@@ -99,13 +125,22 @@ export function FileEditor({
         if (u.docChanged && u.transactions.length > 0) onChangeRef.current(u.state.doc.toString())
       })
     ]
-    const view = new EditorView({
-      parent: hostRef.current!,
-      state: makeState(baseRef.current, content, path, readOnly)
-    })
+    // 마운트에서도 캐시를 본다. 세션 모드로 나가면 이 컴포넌트가 언마운트되므로, 돌아왔을 때 되돌리기
+    // 이력이 이어지려면 나갈 때 넘겨 둔 상태를 여기서 다시 집어야 한다
+    const restored = restoreOrBuild(cache, baseRef.current, path, content, readOnly)
+    const view = new EditorView({ parent: hostRef.current!, state: restored.state })
     viewRef.current = view
     curPathRef.current = path
-    return () => view.destroy()
+    if (restored.scrollTop != null) {
+      const top = restored.scrollTop
+      requestAnimationFrame(() => {
+        if (viewRef.current === view) view.scrollDOM.scrollTop = top
+      })
+    }
+    return () => {
+      onRetireRef.current(curPathRef.current, view.state, view.scrollDOM.scrollTop)
+      view.destroy()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -119,13 +154,11 @@ export function FileEditor({
     const prev = curPathRef.current
     if (prev !== path) {
       cache.save(prev, view.state, view.scrollDOM.scrollTop)
-      const cached = cache.get(path)
-      const restorable =
-        cached && cached.state.doc.toString() === content && cached.state.readOnly === readOnly
-      view.setState(restorable ? cached.state : makeState(baseRef.current, content, path, readOnly))
+      const restored = restoreOrBuild(cache, baseRef.current, path, content, readOnly)
+      view.setState(restored.state)
       curPathRef.current = path
-      if (cached) {
-        const top = cached.scrollTop
+      if (restored.scrollTop != null) {
+        const top = restored.scrollTop
         requestAnimationFrame(() => {
           if (viewRef.current === view) view.scrollDOM.scrollTop = top
         })
