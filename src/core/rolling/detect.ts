@@ -11,11 +11,10 @@ export function stripAnsi(s: string): string {
   return s.replace(ANSI_RE, '')
 }
 
-// The real limit phrasing, extracted from the Claude Code 2.1.220 bundle. The on-screen phrase is
-// generated from the `You've hit your ${NPt[rateLimitType]}` template, and NPt is:
-//   five_hour:"session limit"  seven_day:"weekly limit"  seven_day_opus:"Opus limit"
-//   seven_day_sonnet:"Sonnet limit"  seven_day_overage_included:"Fable 5 limit"
-//   overage:"usage credit limit"
+// The limit phrasing as observed in Claude Code 2.1.220. On screen it reads "You've hit your <label>",
+// where the label names the window that ran out:
+//   five_hour → "session limit"   seven_day → "weekly limit"   opus → "Opus limit"
+//   sonnet → "Sonnet limit"       overage-included → "Fable 5 limit"   overage → "usage credit limit"
 // The previous regex required a trailing `reached`, so it bit none of these phrases, and as a result
 // the phrase-detection path had never fired once since release (verified across all of rolling.log).
 // The "... limit reached" form still exists in API error messages and in other versions, so it is
