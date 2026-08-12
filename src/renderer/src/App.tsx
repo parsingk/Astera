@@ -388,6 +388,11 @@ export default function App(): React.JSX.Element {
   modalOpenRef.current = showNew || showSettings || runModalOpen
   const fileTabsRef = useRef(fileTabs)
   fileTabsRef.current = fileTabs
+  // 에디터 모드의 탭 순환이 쓰는 것들 — 탭 줄에 그려진 순서와 지금 보이는 탭. 값은 아래쪽에서
+  // workbenchTabs·shownTabId가 계산된 뒤 채워진다(showSessionRef와 같은 방식)
+  const workbenchTabIdsRef = useRef<string[]>([])
+  const shownTabIdRef = useRef<string | null>(null)
+  const selectWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
   const fileBuffersRef = useRef(fileBuffers) // keeps the external-change handler from going stale
   fileBuffersRef.current = fileBuffers
   const explorerOpenRef = useRef(explorerOpen)
@@ -699,17 +704,18 @@ export default function App(): React.JSX.Element {
       if (editable && !inXterm) return
       // Tab cycling: only the tabs of the current mode
       if (explorerOpenRef.current) {
-        // Explorer mode — cycle file tabs
-        const ids = fileTabsRef.current.map((t) => t.id)
+        // 에디터 모드 — 탭 줄에 그려진 순서 그대로 돈다. 파일 탭과 세션 탭 사이에 경계가 없어서, 한
+        // 방향으로 계속 누르면 세션 탭에서 파일 탭으로 그냥 넘어간다. 클릭과 같은 경로를 타야 세션 탭을
+        // 지날 때 활성 세션도 함께 맞춰지므로 selectWorkbenchTab을 그대로 부른다
+        const ids = workbenchTabIdsRef.current
         if (ids.length < 2) return
-        const cur = activeFileIdRef.current
+        const cur = shownTabIdRef.current
         const i = cur ? ids.indexOf(cur) : -1
         if (i < 0) return
         e.preventDefault()
         e.stopPropagation()
         if (e.repeat) return
-        // 세션 탭이 활성이면 activeFileIdRef가 null이어서 위에서 이미 빠졌다 — 이 순환은 파일 탭 사이만 돈다
-        setActiveTabId(ids[(i + delta + ids.length) % ids.length])
+        selectWorkbenchTabRef.current(ids[(i + delta + ids.length) % ids.length])
         return
       }
       // Session mode — with Shift, move focus to a neighbouring group; otherwise cycle tabs within the
@@ -1022,6 +1028,9 @@ export default function App(): React.JSX.Element {
     setActiveTabId(tabId)
     if (ref.kind === 'session') showSession(ref.id)
   }
+  // 탭 순환 단축키가 클릭과 같은 경로를 타도록 — 이 함수는 매 렌더 새로 만들어지지만 본문이 setter와
+  // ref뿐이라 최신 상태에 대해 동작한다(toggleExplorer와 같은 관례)
+  selectWorkbenchTabRef.current = selectWorkbenchTab
 
   /** 파일 탭은 기존 경로(더티면 확인 모달), 세션 탭은 세션 모드의 탭 닫기와 같은 경로로 종료한다 */
   const closeWorkbenchTab = (tabId: string): void => {
@@ -1402,6 +1411,8 @@ export default function App(): React.JSX.Element {
           workbenchTabs.find((t) => t.kind === 'session') ??
           workbenchTabs[0])?.tabId ?? null
   const shownTab = shownTabId ? parseTab(shownTabId) : null
+  workbenchTabIdsRef.current = workbenchTabs.map((t) => t.tabId)
+  shownTabIdRef.current = shownTabId
 
   // 보고 있던 세션 탭이 탭 줄에서 사라졌다 — 죽은 id를 비우기만 하고, 그다음 무엇을 보여줄지는
   // shownTabId의 폴백이 정한다(남은 세션 → 없으면 첫 탭).
