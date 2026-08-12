@@ -1795,9 +1795,11 @@ export default function App(): React.JSX.Element {
         )}
         <main className="content">
           {/* The container shared by both modes. Always mounted — .session-view must live inside it so
-              showing the session in editor mode does not remount it (same rule as PaneGrid.tsx:104) */}
-          <div className="workbench">
-            {/* 탭 줄은 .workbench의 첫 자식이다. 파일 탭과 세션 탭을 한 줄에 담으므로 아래 두 화면
+              showing the session in editor mode does not remount it (same rule as PaneGrid.tsx:104).
+              Named .surfaces, not .workbench: the app shell above already uses that class, and giving
+              this one the same name silently overrode the shell's flex direction. */}
+          <div className="surfaces">
+            {/* 탭 줄은 .surfaces의 첫 자식이다. 파일 탭과 세션 탭을 한 줄에 담으므로 아래 두 화면
                 (.session-view / .explorer-view) 중 어느 쪽이 보이든 그 줄이 위에 남아야 한다.
                 에디터 모드에서만 그린다 */}
             {explorerOpen && (
