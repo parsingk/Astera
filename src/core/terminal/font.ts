@@ -6,11 +6,12 @@ const BASE_LATIN = ['"Cascadia Mono"', '"Cascadia Code"', 'Consolas']
 const BASE_HANGUL = ['"Malgun Gothic"']
 const TAIL = ['"Courier New"', 'monospace']
 
-/** ASCII letters, digits, space, hyphen, underscore and period — the character set a CSS font-family
- *  name can carry without quoting games. A name is rejected rather than escaped: it lands in a
- *  `font-family` string, where a stray quote or semicolon would end the declaration and start another
- *  one. Rejection is silent by design — the caller treats null as "not set" and falls back. */
-const SAFE = /^[A-Za-z0-9 ._-]+$/
+/** Rejects only the characters that can break out of the quoted font-family name or the declaration
+ *  it sits in — a quote, backslash, semicolon, comma, or brace — plus C0/C1 control characters.
+ *  Everything else (including non-Latin scripts such as Hangul) is allowed: the injection surface is
+ *  those terminator characters, not the script the name is written in. A name is rejected rather than
+ *  escaped, and rejection is silent by design — the caller treats null as "not set" and falls back. */
+const SAFE = /^[^"'\\;,{}\u0000-\u001F\u007F-\u009F]+$/
 
 /** The user's terminal font choice. null on either side means "not chosen" — the chain builder then
  *  falls back to the app default for that half. */
