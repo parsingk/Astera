@@ -113,6 +113,21 @@ function createWindow(): BrowserWindow {
   else win.loadFile(path.join(__dirname, '../renderer/index.html'))
   win.maximize()
 
+  // DevTools in development. Its usual accelerators (Ctrl/Cmd+Shift+I, F12) come from Electron's
+  // default application menu, and this app replaces that menu with null on win32 (see
+  // Menu.setApplicationMenu below) — so without this there is no way to open it at all, which has
+  // cost real debugging time. Bound on the window rather than through globalShortcut so it does not
+  // reach other applications, and only when unpackaged so a release build keeps them closed.
+  if (!app.isPackaged) {
+    win.webContents.on('before-input-event', (_e, input) => {
+      if (input.type !== 'keyDown') return
+      const devToolsKey =
+        input.key === 'F12' ||
+        ((input.control || input.meta) && input.shift && input.key.toLowerCase() === 'i')
+      if (devToolsKey) win.webContents.toggleDevTools()
+    })
+  }
+
   // Closing the window (X) always minimizes to the tray — whether or not sessions exist. The only
   // real quit path is the tray 'Quit' menu (app.quit): app.quit sets quitting=true in before-quit,
   // which is what lets a close through this guard.
