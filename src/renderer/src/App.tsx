@@ -1710,156 +1710,160 @@ export default function App(): React.JSX.Element {
           />
         )}
         <main className="content">
-          {/* The session view — hidden in explorer mode but not unmounted, so terminal scrollback survives */}
-          <div className="session-view" style={{ display: explorerOpen ? 'none' : 'flex' }}>
-            <PaneGrid
-              layout={layout}
-              activePaneId={activePaneId}
-              sessions={sessions}
-              accounts={accounts}
-              rollStates={rollStates}
-              schedStates={schedStates}
-              busy={busy}
-              draggingSessionId={dragSessionId}
-              newDisabled={!anyCliOk}
-              onFocusPane={setActivePaneId}
-              onSetRatio={(splitId, ratio) =>
-                setLayout((cur) => (cur ? setRatio(cur, splitId, ratio) : cur))
-              }
-              onDropSession={dropOnPane}
-              onRestart={restart}
-              onSelectTab={showSession}
-              onCloseSession={closeSession}
-              onNewInGroup={newInGroup}
-              onTabContextMenu={(sessionId, x, y) => setTabMenu({ sessionId, x, y })}
-              onDragSessionChange={setDragSessionId}
-              onDropTab={dropTabInGroup}
-            />
-            {/* When the layout is empty (not one group in the tree) there is no group tab bar, so there
-                is no '+' anywhere on screen — this placeholder becomes the sole entry point in its
-                place. Same guard as a group's '+' (newInGroup): with no CLI, pressing it does not open
-                the dialog */}
-            {!active && (
-              <button
-                className="placeholder primary"
-                disabled={!anyCliOk}
-                onClick={() => {
-                  if (anyCliOk) setShowNew(true)
-                }}
-              >
-                {t('session.placeholder.start')}
-              </button>
-            )}
-          </div>
-          {/* The explorer view — explorer mode only */}
-          {explorerOpen && (
-            <div
-              className="explorer-view"
-              ref={explorerViewRef}
-              style={{ ['--run-panel-h']: `${runPanelHeight}px` } as React.CSSProperties}
-            >
-              <div className="workbench-topbar">
-                <FileTabs tabs={fileTabs} activeId={activeFileId} dirtyIds={dirtyIds} onSelect={setActiveFileId} onClose={(id) => void closeFileTab(id)} />
-                <RunToolbar
-                  configs={runConfigs}
-                  selectedId={runSelectedId}
-                  onSelect={setRunSelectedId}
-                  active={runActive}
-                  onRun={runStart}
-                  onStop={runStop}
-                  onAddConfig={runAddConfig}
-                  onEditConfig={runEditConfig}
-                  onDeleteConfig={runDeleteConfig}
-                  activeRuns={activeRuns}
-                  onJump={runJump}
-                  onStopProject={runStopProject}
-                  onModalOpenChange={setRunModalOpen}
-                  projectPath={explorerRoot ?? ''}
-                  isSpringBoot={runIsSpringBoot}
-                />
-              </div>
-              <div className="workbench-body">
-                {activeFile && activeBuf ? (
-                  <div className="file-editor-wrap">
-                    {activeBuf.readOnly && !activeBuf.loading && !activeBuf.error && (
-                      <div className="file-truncated">{t('files.editor.readOnlyReason')}</div>
-                    )}
-                    {activeBuf.conflict && (
-                      <div className="file-conflict">
-                        {t('files.editor.conflictChanged')}
-                        <button onClick={() => reloadBufferFromDisk(activeFile.id)}>{t('files.editor.reload')}</button>
-                        <button onClick={() => setFileBuffers((prev) => (prev[activeFile.id] ? { ...prev, [activeFile.id]: { ...prev[activeFile.id], conflict: false } } : prev))}>{t('files.editor.keepMine')}</button>
-                      </div>
-                    )}
-                    {/* FileEditor always stays mounted — it must not unmount on loading or error, or the per-file EditorState cache (undo, scroll) is lost */}
-                    <FileEditor
-                      path={activeFile.path}
-                      content={activeBuf.content}
-                      readOnly={activeBuf.readOnly}
-                      cache={editorCacheRef.current}
-                      onChange={(next) => setBufferContent(activeFile.id, next)}
-                      onSave={() => saveFile(activeFile.id)}
-                    />
-                    {activeBuf.loading && <div className="file-overlay">{t('files.editor.loading')}</div>}
-                    {!activeBuf.loading && activeBuf.error && <div className="file-overlay">{activeBuf.error}</div>}
-                  </div>
-                ) : (
-                  <div className="placeholder">{t('files.editor.selectPrompt')}</div>
-                )}
-              </div>
-              {runPanelOpen && explorerRoot && (
-                <div
-                  className="run-resizer"
-                  role="separator"
-                  aria-orientation="horizontal"
-                  aria-label={t('run.resizeConsole')}
-                  onPointerDown={(e) => {
-                    e.preventDefault()
-                    const startY = e.clientY
-                    const startH = runPanelHeight
-                    let latestY = startY
-                    let rafId = 0
-                    const clamp = (y: number): number => Math.min(800, Math.max(120, startH + (startY - y)))
-                    const apply = (): void => {
-                      rafId = 0
-                      explorerViewRef.current?.style.setProperty('--run-panel-h', `${clamp(latestY)}px`)
-                    }
-                    const onMove = (ev: PointerEvent): void => {
-                      latestY = ev.clientY
-                      if (!rafId) rafId = requestAnimationFrame(apply)
-                    }
-                    const onUp = (): void => {
-                      if (rafId) cancelAnimationFrame(rafId)
-                      window.removeEventListener('pointermove', onMove)
-                      window.removeEventListener('pointerup', onUp)
-                      window.removeEventListener('pointercancel', onUp)
-                      document.body.classList.remove('resizing-row')
-                      const h = clamp(latestY)
-                      setRunPanelHeight(h) // React state is synchronised here, once only
-                      localStorage.setItem('cm.runPanelHeight', String(h))
-                    }
-                    document.body.classList.add('resizing-row')
-                    window.addEventListener('pointermove', onMove)
-                    window.addEventListener('pointerup', onUp)
-                    window.addEventListener('pointercancel', onUp)
+          {/* The container shared by both modes. Always mounted — .session-view must live inside it so
+              showing the session in editor mode does not remount it (same rule as PaneGrid.tsx:104) */}
+          <div className="workbench">
+            {/* The session view — hidden in explorer mode but not unmounted, so terminal scrollback survives */}
+            <div className="session-view" style={{ display: explorerOpen ? 'none' : 'flex' }}>
+              <PaneGrid
+                layout={layout}
+                activePaneId={activePaneId}
+                sessions={sessions}
+                accounts={accounts}
+                rollStates={rollStates}
+                schedStates={schedStates}
+                busy={busy}
+                draggingSessionId={dragSessionId}
+                newDisabled={!anyCliOk}
+                onFocusPane={setActivePaneId}
+                onSetRatio={(splitId, ratio) =>
+                  setLayout((cur) => (cur ? setRatio(cur, splitId, ratio) : cur))
+                }
+                onDropSession={dropOnPane}
+                onRestart={restart}
+                onSelectTab={showSession}
+                onCloseSession={closeSession}
+                onNewInGroup={newInGroup}
+                onTabContextMenu={(sessionId, x, y) => setTabMenu({ sessionId, x, y })}
+                onDragSessionChange={setDragSessionId}
+                onDropTab={dropTabInGroup}
+              />
+              {/* When the layout is empty (not one group in the tree) there is no group tab bar, so there
+                  is no '+' anywhere on screen — this placeholder becomes the sole entry point in its
+                  place. Same guard as a group's '+' (newInGroup): with no CLI, pressing it does not open
+                  the dialog */}
+              {!active && (
+                <button
+                  className="placeholder primary"
+                  disabled={!anyCliOk}
+                  onClick={() => {
+                    if (anyCliOk) setShowNew(true)
                   }}
-                />
-              )}
-              {runPanelOpen && explorerRoot && (
-                <BottomPanel
-                  projectPath={explorerRoot}
-                  runStatus={runActive}
-                  terminals={terminals}
-                  activeTab={bottomTab}
-                  onSelectTab={setBottomTab}
-                  onNewTerminal={() => void newTerminal()}
-                  onCloseTerminal={closeTerminal}
-                  onStopRun={runStop}
-                  onCollapse={() => setRunPanelOpen(false)}
-                />
+                >
+                  {t('session.placeholder.start')}
+                </button>
               )}
             </div>
-          )}
+            {/* The explorer view — explorer mode only */}
+            {explorerOpen && (
+              <div
+                className="explorer-view"
+                ref={explorerViewRef}
+                style={{ ['--run-panel-h']: `${runPanelHeight}px` } as React.CSSProperties}
+              >
+                <div className="workbench-topbar">
+                  <FileTabs tabs={fileTabs} activeId={activeFileId} dirtyIds={dirtyIds} onSelect={setActiveFileId} onClose={(id) => void closeFileTab(id)} />
+                  <RunToolbar
+                    configs={runConfigs}
+                    selectedId={runSelectedId}
+                    onSelect={setRunSelectedId}
+                    active={runActive}
+                    onRun={runStart}
+                    onStop={runStop}
+                    onAddConfig={runAddConfig}
+                    onEditConfig={runEditConfig}
+                    onDeleteConfig={runDeleteConfig}
+                    activeRuns={activeRuns}
+                    onJump={runJump}
+                    onStopProject={runStopProject}
+                    onModalOpenChange={setRunModalOpen}
+                    projectPath={explorerRoot ?? ''}
+                    isSpringBoot={runIsSpringBoot}
+                  />
+                </div>
+                <div className="workbench-body">
+                  {activeFile && activeBuf ? (
+                    <div className="file-editor-wrap">
+                      {activeBuf.readOnly && !activeBuf.loading && !activeBuf.error && (
+                        <div className="file-truncated">{t('files.editor.readOnlyReason')}</div>
+                      )}
+                      {activeBuf.conflict && (
+                        <div className="file-conflict">
+                          {t('files.editor.conflictChanged')}
+                          <button onClick={() => reloadBufferFromDisk(activeFile.id)}>{t('files.editor.reload')}</button>
+                          <button onClick={() => setFileBuffers((prev) => (prev[activeFile.id] ? { ...prev, [activeFile.id]: { ...prev[activeFile.id], conflict: false } } : prev))}>{t('files.editor.keepMine')}</button>
+                        </div>
+                      )}
+                      {/* FileEditor always stays mounted — it must not unmount on loading or error, or the per-file EditorState cache (undo, scroll) is lost */}
+                      <FileEditor
+                        path={activeFile.path}
+                        content={activeBuf.content}
+                        readOnly={activeBuf.readOnly}
+                        cache={editorCacheRef.current}
+                        onChange={(next) => setBufferContent(activeFile.id, next)}
+                        onSave={() => saveFile(activeFile.id)}
+                      />
+                      {activeBuf.loading && <div className="file-overlay">{t('files.editor.loading')}</div>}
+                      {!activeBuf.loading && activeBuf.error && <div className="file-overlay">{activeBuf.error}</div>}
+                    </div>
+                  ) : (
+                    <div className="placeholder">{t('files.editor.selectPrompt')}</div>
+                  )}
+                </div>
+                {runPanelOpen && explorerRoot && (
+                  <div
+                    className="run-resizer"
+                    role="separator"
+                    aria-orientation="horizontal"
+                    aria-label={t('run.resizeConsole')}
+                    onPointerDown={(e) => {
+                      e.preventDefault()
+                      const startY = e.clientY
+                      const startH = runPanelHeight
+                      let latestY = startY
+                      let rafId = 0
+                      const clamp = (y: number): number => Math.min(800, Math.max(120, startH + (startY - y)))
+                      const apply = (): void => {
+                        rafId = 0
+                        explorerViewRef.current?.style.setProperty('--run-panel-h', `${clamp(latestY)}px`)
+                      }
+                      const onMove = (ev: PointerEvent): void => {
+                        latestY = ev.clientY
+                        if (!rafId) rafId = requestAnimationFrame(apply)
+                      }
+                      const onUp = (): void => {
+                        if (rafId) cancelAnimationFrame(rafId)
+                        window.removeEventListener('pointermove', onMove)
+                        window.removeEventListener('pointerup', onUp)
+                        window.removeEventListener('pointercancel', onUp)
+                        document.body.classList.remove('resizing-row')
+                        const h = clamp(latestY)
+                        setRunPanelHeight(h) // React state is synchronised here, once only
+                        localStorage.setItem('cm.runPanelHeight', String(h))
+                      }
+                      document.body.classList.add('resizing-row')
+                      window.addEventListener('pointermove', onMove)
+                      window.addEventListener('pointerup', onUp)
+                      window.addEventListener('pointercancel', onUp)
+                    }}
+                  />
+                )}
+                {runPanelOpen && explorerRoot && (
+                  <BottomPanel
+                    projectPath={explorerRoot}
+                    runStatus={runActive}
+                    terminals={terminals}
+                    activeTab={bottomTab}
+                    onSelectTab={setBottomTab}
+                    onNewTerminal={() => void newTerminal()}
+                    onCloseTerminal={closeTerminal}
+                    onStopRun={runStop}
+                    onCollapse={() => setRunPanelOpen(false)}
+                  />
+                )}
+              </div>
+            )}
+          </div>
         </main>
       </div>
       <div className="statusbar">
