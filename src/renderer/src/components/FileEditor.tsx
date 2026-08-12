@@ -19,6 +19,7 @@ import { xml } from '@codemirror/lang-xml'
 import { yaml } from '@codemirror/lang-yaml'
 import { go } from '@codemirror/lang-go'
 import { languageForExt, type LangKey } from '../../../core/files/edit'
+import type { EditorStateCache } from '../lib/editorStateCache'
 
 function langExt(key: LangKey | null): Extension {
   switch (key) {
@@ -61,21 +62,22 @@ export function FileEditor({
   path,
   content,
   readOnly,
+  cache,
   onChange,
   onSave
 }: {
   path: string
   content: string
   readOnly: boolean
+  /** 파일별 EditorState·스크롤 캐시. 소유자는 App이다 — 이 컴포넌트가 여러 개 생기더라도 되돌리기와
+   *  스크롤이 살아남아야 하므로 인스턴스 안에 두지 않는다 */
+  cache: EditorStateCache
   onChange: (next: string) => void
   onSave: () => void
 }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const baseRef = useRef<Extension[]>([])
-  // Per-file-path EditorState and scroll cache — saved and restored on a tab switch
-  const statesRef = useRef<Map<string, EditorState>>(new Map())
-  const scrollRef = useRef<Map<string, number>>(new Map())
   const curPathRef = useRef(path)
   // References to the latest callbacks — the base extensions are built only once, so this avoids staleness
   const onChangeRef = useRef(onChange)
@@ -116,14 +118,18 @@ export function FileEditor({
     if (!view) return
     const prev = curPathRef.current
     if (prev !== path) {
-      statesRef.current.set(prev, view.state)
-      scrollRef.current.set(prev, view.scrollDOM.scrollTop)
-      const cached = statesRef.current.get(path)
-      const restorable = cached && cached.doc.toString() === content && cached.readOnly === readOnly
-      view.setState(restorable ? cached : makeState(baseRef.current, content, path, readOnly))
+      cache.save(prev, view.state, view.scrollDOM.scrollTop)
+      const cached = cache.get(path)
+      const restorable =
+        cached && cached.state.doc.toString() === content && cached.state.readOnly === readOnly
+      view.setState(restorable ? cached.state : makeState(baseRef.current, content, path, readOnly))
       curPathRef.current = path
-      const top = scrollRef.current.get(path)
-      if (top != null) requestAnimationFrame(() => { if (viewRef.current === view) view.scrollDOM.scrollTop = top })
+      if (cached) {
+        const top = cached.scrollTop
+        requestAnimationFrame(() => {
+          if (viewRef.current === view) view.scrollDOM.scrollTop = top
+        })
+      }
       return
     }
     if (view.state.doc.toString() !== content) view.setState(makeState(baseRef.current, content, path, readOnly))

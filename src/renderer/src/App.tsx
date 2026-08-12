@@ -10,6 +10,7 @@ import { HistoryBrowser } from './components/HistoryBrowser'
 import { Select } from './components/Select'
 import { FileTabs, type FileTab } from './components/FileTabs'
 import { FileEditor } from './components/FileEditor'
+import { EditorStateCache } from './lib/editorStateCache'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { WorktreePanel } from './components/WorktreePanel'
@@ -381,6 +382,8 @@ export default function App(): React.JSX.Element {
   fileBuffersRef.current = fileBuffers
   const explorerOpenRef = useRef(explorerOpen)
   explorerOpenRef.current = explorerOpen
+  // 파일별 에디터 상태 캐시. FileEditor보다 오래 살아야 하므로 여기서 소유한다 (editorStateCache.ts의 주석)
+  const editorCacheRef = useRef(new EditorStateCache())
   // onKey is registered once at mount, so values and callbacks recreated on every render are read through refs
   const tRef = useRef(t)
   tRef.current = t
@@ -979,7 +982,9 @@ export default function App(): React.JSX.Element {
       if (!ok) return
     }
     // An await boundary was crossed, so state is read from the ref again
+    const closedTab = fileTabsRef.current.find((t) => t.id === id)
     const next = fileTabsRef.current.filter((t) => t.id !== id)
+    if (closedTab) editorCacheRef.current.drop(closedTab.path)
     // Mirrored immediately, before the render — when clean tabs close in a chain (a folder deletion),
     // await only yields a microtask and the React commit (render) does not fit in between, so this
     // stops the ref being read stale on the next iteration
@@ -1791,6 +1796,7 @@ export default function App(): React.JSX.Element {
                       path={activeFile.path}
                       content={activeBuf.content}
                       readOnly={activeBuf.readOnly}
+                      cache={editorCacheRef.current}
                       onChange={(next) => setBufferContent(activeFile.id, next)}
                       onSave={() => saveFile(activeFile.id)}
                     />
