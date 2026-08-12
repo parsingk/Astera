@@ -14,6 +14,16 @@ Issues and pull requests are welcome. A couple of things worth knowing before yo
   documentation that ships has to extend one of the existing pages.
 - The test sources are not in this repository, so a PR cannot add or change tests. If your change
   needs one, describe the case in the PR and it will be covered on the maintainer's side.
+- The UI ships in Korean, English, Japanese, and Spanish, declared in one table in
+  `src/core/i18n/index.ts`. Korean and English are maintained by the author; Japanese and Spanish
+  were produced without a native speaker's review, so corrections there are welcome. To fix a
+  translation, edit the matching catalog in `src/core/i18n/messages/<lang>.ts` — `ko.ts` is the
+  source catalog and defines the key set, `en.ts` is complete. A key missing from `ja.ts` or `es.ts`
+  falls back to English and then Korean, on purpose, so a partial translation PR is fine; you do not
+  need to translate every string to contribute one. Two things any change must keep, checked by the
+  invariant tests: a placeholder (`{name}`-style) identical to the Korean value, and product and
+  command names — `Claude`, `Codex`, `Astera`, `Slack`, `GitHub`, `git`, `npm`, `PATH` — left
+  untranslated.
 - Bug reports are much easier to act on with the app version, your OS version, and the relevant
   lines from `rolling.log` when the problem involves account rolling — `%APPDATA%\astera\rolling.log`
   on Windows, `~/Library/Application Support/astera/rolling.log` on macOS.
