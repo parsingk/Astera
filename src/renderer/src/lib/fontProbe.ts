@@ -1,6 +1,7 @@
 import { sanitizeFontFamily } from '../../../core/terminal/font'
+import { fontCoversHangul } from '../../../core/terminal/hangulCoverage'
 
-type FontData = { family: string }
+type FontData = { family: string; blob: () => Promise<Blob> }
 type WithQuery = { queryLocalFonts?: () => Promise<FontData[]> }
 
 let cache: string[] | null = null
@@ -30,25 +31,94 @@ export async function listLocalFontFamilies(): Promise<string[]> {
   return cache
 }
 
-/**
- * Whether the family draws Hangul itself.
- *
- * Measures '한' against a font stack that cannot draw it, so both sides fall back to the same last
- * resort when the family has no Hangul glyph and the widths match. A family that does have the glyph
- * measures differently. This is only used for the settings hint, so a rare wrong answer costs a
- * misleading sentence, not a broken terminal.
- */
-export function hasHangulGlyph(family: string): boolean {
-  const safe = sanitizeFontFamily(family)
-  if (!safe) return false
-  const ctx = document.createElement('canvas').getContext('2d')
-  if (!ctx) return false
-  const measure = (stack: string): number => {
-    ctx.font = `32px ${stack}`
-    return ctx.measureText('한').width
+/** One FontData per distinct family — the first face queryLocalFonts() reports for it, since
+ *  Hangul coverage is a family-level question here (a family's regular and bold weight do not
+ *  disagree about which scripts they draw). Built once and reused by both exports below. */
+let familyDataCache: Map<string, FontData> | null = null
+
+async function familyData(): Promise<Map<string, FontData>> {
+  if (familyDataCache) return familyDataCache
+  const map = new Map<string, FontData>()
+  const query = (globalThis as WithQuery).queryLocalFonts
+  if (typeof query === 'function') {
+    for (const font of await query()) {
+      const name = sanitizeFontFamily(font.family)
+      if (name && !map.has(name)) map.set(name, font)
+    }
   }
-  // A family name that does not exist forces the generic fallback — the same one the real family falls
-  // back to when it has no Hangul.
-  const fallback = measure('"__astera_no_such_font__", monospace')
-  return measure(`"${safe}", "__astera_no_such_font__", monospace`) !== fallback
+  familyDataCache = map
+  return map
+}
+
+/** How many families to probe at once. Each probe is a handful of small ranged reads against a
+ *  Blob, not a full-file read, so this is about bounding concurrent promises rather than disk or
+ *  memory pressure — 16 is the batch size the approach was prototyped and measured with. */
+const BATCH_SIZE = 16
+
+const hangulCache = new Map<string, boolean>()
+
+/** Whether one family draws Hangul, decided by reading its font file's cmap table for U+AC00
+ *  rather than by measuring rendered glyph width — see hangulCoverage.ts for why the width
+ *  comparison this replaces was unsound. Memoised per family for the renderer's life; a family
+ *  whose file fails to parse is recorded as non-covering rather than left to error again later. */
+export async function familyCoversHangul(family: string): Promise<boolean> {
+  const cached = hangulCache.get(family)
+  if (cached !== undefined) return cached
+
+  const data = (await familyData()).get(family)
+  if (!data) {
+    hangulCache.set(family, false)
+    return false
+  }
+
+  const covers = await probe(data)
+  hangulCache.set(family, covers)
+  return covers
+}
+
+async function probe(data: FontData): Promise<boolean> {
+  try {
+    const blob = await data.blob()
+    return await fontCoversHangul((start, end) => blob.slice(start, end).arrayBuffer())
+  } catch {
+    // A file that fails to parse is simply not Hangul-capable for this purpose, not an error that
+    // should abort listHangulFamilies() or surface to the user.
+    return false
+  }
+}
+
+let hangulFamiliesCache: string[] | null = null
+
+/**
+ * The subset of installed families that actually draw Hangul, sorted. Cached for the renderer's
+ * life, same rationale as listLocalFontFamilies().
+ *
+ * Processes families in bounded batches (BATCH_SIZE) rather than all at once — probing every
+ * installed family's font file is the kind of fan-out that is fine at 16 concurrent reads and
+ * would just create contention at 300+.
+ */
+export async function listHangulFamilies(): Promise<string[]> {
+  if (hangulFamiliesCache) return hangulFamiliesCache
+  const data = await familyData()
+  const names = [...data.keys()]
+  const result: string[] = []
+
+  for (let i = 0; i < names.length; i += BATCH_SIZE) {
+    const batch = names.slice(i, i + BATCH_SIZE)
+    const covers = await Promise.all(
+      batch.map(async (name) => {
+        const cached = hangulCache.get(name)
+        if (cached !== undefined) return cached
+        const value = await probe(data.get(name) as FontData)
+        hangulCache.set(name, value)
+        return value
+      })
+    )
+    batch.forEach((name, idx) => {
+      if (covers[idx]) result.push(name)
+    })
+  }
+
+  hangulFamiliesCache = result.sort((a, b) => a.localeCompare(b))
+  return hangulFamiliesCache
 }
