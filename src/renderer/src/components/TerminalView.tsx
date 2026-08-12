@@ -225,6 +225,11 @@ export function TerminalView({
     const host = hostRef.current
     if (!term || !host) return
     term.options.fontFamily = family
+    // A hidden inactive pane has clientWidth/clientHeight 0; fitTerminalToHost would clamp through
+    // Math.max(2, 0) and resize the grid down to 2x1, pushing that size to the PTY too. Skip the
+    // refit while hidden — the same guard the ResizeObserver below already applies — and let showing
+    // the tab (which changes the host size and fires the observer) refit it with real metrics then.
+    if (host.clientWidth === 0 || host.clientHeight === 0) return
     fitTerminalToHost(term, host)
     sendResizeRef.current?.()
   }, [family, session.id])

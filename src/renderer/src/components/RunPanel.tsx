@@ -73,8 +73,13 @@ export function RunPanel({
   // resize directly, so the same call is made here.
   useEffect(() => {
     const term = termRef.current
-    if (!term) return
+    const host = hostRef.current
+    if (!term || !host) return
     term.options.fontFamily = family
+    // Same guard as the ResizeObserver above: a hidden Run tab has clientWidth/clientHeight 0, and
+    // fit() would be a no-op, but the resize call below would still send a same-size resize to the
+    // PTY on every font change and every mount.
+    if (host.clientWidth === 0 || host.clientHeight === 0) return
     fitRef.current?.fit()
     window.api.run.resize(projectPath, term.cols, term.rows)
   }, [family, projectPath])
