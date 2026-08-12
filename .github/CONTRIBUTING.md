@@ -31,6 +31,11 @@ Issues and pull requests are welcome. A couple of things worth knowing before yo
   invariant tests: a placeholder (`{name}`-style) identical to the Korean value, and product and
   command names — `Claude`, `Codex`, `Astera`, `Slack`, `GitHub`, `git`, `npm`, `PATH` — left
   untranslated.
+- The README ships in the same four languages, as `README.md` (English, the source), `README.ko.md`,
+  `README.ja.md` and `README.es.md`, each linking to the others under the badges. A change to the
+  English README that alters what the app does or how it is installed belongs in the translations
+  too; wording-only polish does not have to be mirrored. As with the catalogs, the Japanese and
+  Spanish pages had no native review.
 - Bug reports are much easier to act on with the app version, your OS version, and the relevant
   lines from `rolling.log` when the problem involves account rolling — `%APPDATA%\astera\rolling.log`
   on Windows, `~/Library/Application Support/astera/rolling.log` on macOS.

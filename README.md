@@ -12,6 +12,8 @@
 
 [Download](#install) · [What it does](#what-it-does) · [Documentation](#documentation) · [Report a bug](https://github.com/parsingk/Astera/issues/new)
 
+**English** · [한국어](README.ko.md) · [日本語](README.ja.md) · [Español](README.es.md)
+
 </div>
 
 Astera runs your agent sessions when you are not at the desk. Schedule one to start at 3am, and it
