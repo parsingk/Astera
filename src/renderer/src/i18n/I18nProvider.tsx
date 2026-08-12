@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from 'rea
 import type { ReactNode } from 'react'
 import { t as translate } from '../../../core/i18n'
 import type { Lang, LangPreference, Message, MessageKey, MessageParams } from '../../../core/i18n'
+import { toast } from '../lib/toast'
 
 interface I18nValue {
   /** What to translate with. Never null once the provider renders. */
@@ -35,12 +36,26 @@ export function I18nProvider({ children }: { children: ReactNode }): ReactNode {
     // Applied optimistically — the screen has already changed even if the save fails. Picking System
     // (null) has to resolve to something to render with, and main is the only side that knows the OS
     // locale, so the resolved half is re-read rather than guessed.
-    setPref((prev) => (prev ? { stored: next, resolved: next ?? prev.resolved } : prev))
+    // The previous preference is captured here (the updater runs synchronously) so a failed save can
+    // revert to it, the same pattern the orchestration toggle in App.tsx uses.
+    let previous: LangPreference | null = null
+    setPref((prev) => {
+      previous = prev
+      return prev ? { stored: next, resolved: next ?? prev.resolved } : prev
+    })
     void window.api.settings
       .setLang(next)
       .then(() => window.api.settings.getLang())
       .then(setPref)
-      .catch(() => {})
+      .catch((err) => {
+        setPref(previous)
+        const fallbackLang = previous?.resolved ?? 'ko'
+        toast.error(
+          translate(fallbackLang, 'settings.general.language.saveFailed', {
+            detail: err instanceof Error ? err.message : String(err)
+          })
+        )
+      })
   }, [])
 
   const value: I18nValue | null =

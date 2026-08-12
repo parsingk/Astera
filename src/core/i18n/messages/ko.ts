@@ -13,6 +13,7 @@ export const ko = {
   // {lang} is the language the OS locale resolves to, shown so the effect of picking System is
   // visible before picking it
   'settings.general.language.system': '시스템 설정 ({lang})',
+  'settings.general.language.saveFailed': '언어 설정을 저장하지 못했습니다: {detail}',
   // Agent orchestration
   'settings.orchestration.label': '에이전트 오케스트레이션 (실험)',
   'settings.orchestration.hint':

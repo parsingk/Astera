@@ -10,6 +10,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.tab.history': 'History',
   'settings.general.language': 'Language',
   'settings.general.language.system': 'System ({lang})',
+  'settings.general.language.saveFailed': 'Could not save the language setting: {detail}',
   'settings.orchestration.label': 'Agent orchestration (experimental)',
   'settings.orchestration.hint':
     'When on, agent sessions started by the app can start worker sessions on another vendor. ' +
