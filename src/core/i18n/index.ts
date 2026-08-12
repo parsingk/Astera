@@ -2,6 +2,7 @@ import { ko } from './messages/ko'
 import { en } from './messages/en'
 import { ja } from './messages/ja'
 import { es } from './messages/es'
+import { isPseudoLocalization, pseudoize } from './pseudo'
 
 export type MessageKey = keyof typeof ko
 export type MessageParams = Record<string, string | number>
@@ -49,9 +50,11 @@ export function t(lang: Lang, key: MessageKey, params?: MessageParams): string {
   // requested → en → ko. Korean is last because it is the source catalog and therefore cannot be
   // missing a key; English sits in front of it so a gap in ja or es shows English rather than Korean.
   const template: string = CATALOGS[lang].messages[key] ?? en[key] ?? ko[key]
-  if (!params) return template
   // A placeholder with no value is left as it is rather than erased (m is returned)
-  return template.replace(/\{(\w+)\}/g, (m, name: string) =>
-    name in params ? String(params[name]) : m
-  )
+  const out = !params
+    ? template
+    : template.replace(/\{(\w+)\}/g, (m, name: string) =>
+        name in params ? String(params[name]) : m
+      )
+  return isPseudoLocalization() ? pseudoize(out) : out
 }
