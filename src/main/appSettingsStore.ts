@@ -1,11 +1,8 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import type { Lang } from '../core/i18n'
+import { isLang, type Lang } from '../core/i18n'
 import { sanitizeFontFamily } from '../core/terminal/font'
 import type { TerminalFont } from '../core/terminal/font'
-
-// Reused by ipc.ts's settings.setLang handler as the trust-boundary check before writing to disk
-export const isLang = (v: unknown): v is Lang => v === 'ko' || v === 'en'
 
 /** App-wide settings persistence. Holds the language, the id of the dismissed update campaign, and the
  *  orchestration toggle.
@@ -68,7 +65,8 @@ export class AppSettingsStore {
     return this.lang
   }
 
-  async setLang(lang: Lang): Promise<void> {
+  /** null is System: it clears the stored choice so the OS locale decides again. */
+  async setLang(lang: Lang | null): Promise<void> {
     this.lang = lang
     await this.persist()
   }
