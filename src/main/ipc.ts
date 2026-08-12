@@ -37,9 +37,9 @@ import { listBranches, detectBaseRef } from '../core/worktrees/git'
 import { removeWorktree } from '../core/worktrees/remove'
 import { listWithStatus } from '../core/worktrees/list'
 import { git, repoRoot } from '../core/worktrees/git'
-import { t } from '../core/i18n'
-import type { Lang } from '../core/i18n'
-import { isLang } from './appSettingsStore'
+import { t, isLang } from '../core/i18n'
+import type { LangPreference } from '../core/i18n'
+import { pickInitialLang } from '../core/i18n/locale'
 import { listJdks } from './jdkScanner'
 
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
@@ -69,7 +69,8 @@ export function registerIpc(
   codexRolling?: CodexRollingCoordinator, // Codex rolling
   scheduler?: SchedulerCoordinator, // session scheduler
   codexTurns?: CodexTurnWatcher, // codex turn-completion watcher
-  orchWiring?: OrchWiring // agent orchestration
+  orchWiring?: OrchWiring, // agent orchestration
+  onLangChanged?: () => void // rebuilds anything (the tray menu) built with a fixed language
 ): void {
   const send = (channel: string, payload: unknown): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
@@ -1138,18 +1139,21 @@ export function registerIpc(
     slack.reconfigureInbox?.(normalized)
   })
 
-  // Language setting. setLang also updates core.lang so that sentences main builds (file operation
-  // errors, terminal banners) use the new language from the next call on. Banners already printed are
-  // not changed retroactively.
-  ipcMain.handle('settings.getLang', () => core.lang)
-  ipcMain.handle('settings.setLang', async (_e, lang: Lang) => {
-    // A trust boundary — checked before writing to disk, for the same reason as the other handlers in
-    // this file (assertAllowedPath and friends). A garbage value would self-heal on the next load
-    // because isLang rejects it, but writing it to disk before that is still prevented (reusing isLang
-    // from appSettingsStore.ts).
-    if (!isLang(lang)) throw new Error(`INVALID_LANG: ${String(lang)}`)
+  // The language setting. getLang returns both halves: `resolved` is what the renderer translates with,
+  // `stored` is what the settings dropdown shows — null there means System, and the dropdown has to be
+  // able to show System as selected rather than the language it happens to resolve to. One call rather
+  // than two so the two values cannot disagree.
+  ipcMain.handle('settings.getLang', (): LangPreference => ({
+    stored: core.appSettings.getLang(),
+    resolved: core.lang,
+    system: pickInitialLang(app.getLocale())
+  }))
+  ipcMain.handle('settings.setLang', async (_e, lang: unknown) => {
+    // A trust boundary — checked before writing to disk. null is System and is explicitly allowed.
+    if (lang !== null && !isLang(lang)) throw new Error(`INVALID_LANG: ${String(lang)}`)
     await core.appSettings.setLang(lang)
-    core.lang = lang
+    core.lang = lang ?? pickInitialLang(app.getLocale())
+    onLangChanged?.()
   })
 
   // The agent orchestration toggle. The same trust-boundary check as setLang — the value the renderer

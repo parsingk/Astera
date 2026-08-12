@@ -7,7 +7,7 @@ export type { Jdk } from './run/jdk'
 // with that session history entry; the two types are unrelated.
 import type { HistoryEntry as LocalHistoryEntry } from './files/localHistory'
 export type { HistoryEntry as LocalHistoryEntry } from './files/localHistory'
-import type { Lang, Message } from './i18n'
+import type { Lang, LangPreference, Message } from './i18n'
 import type { ScheduleRule, ScheduleConfig } from './scheduler/rule'
 export type { ScheduleRule, ScheduleConfig } from './scheduler/rule'
 import type { RollConfig } from './rolling/types'
@@ -359,9 +359,9 @@ export interface CoreApi {
     }): Promise<void>
   }
   settings: {
-    // App language. getLang derives a value from the OS locale when nothing is stored.
-    getLang(): Promise<Lang>
-    setLang(lang: Lang): Promise<void>
+    // App language. `stored: null` is System — the OS locale decides, and `resolved` is what it decided.
+    getLang(): Promise<LangPreference>
+    setLang(lang: Lang | null): Promise<void>
     // The agent orchestration toggle. Turning it on makes the app run a local HTTP server and plant
     // access to the astera CLI in newly created sessions — it does not apply to sessions that are
     // already open (environment variables are fixed at spawn time).

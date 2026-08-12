@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Account, CliStatus, HistoryEntry, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionUsage, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
-import type { MessageKey } from '../../core/i18n'
+import type { Lang, MessageKey } from '../../core/i18n'
+import { CATALOGS, LANGS } from '../../core/i18n'
 import logoUrl from './assets/logo.png'
 import { AccountPanel } from './components/AccountPanel'
 import { AccountSettings } from './components/AccountSettings'
@@ -266,8 +267,12 @@ function UsageChip({
   )
 }
 
+/** The value the "System" row carries. Empty string, because Select keys rows by string and null is
+ *  not one — it is mapped back to null on the way out. Same convention as TerminalFontSettings. */
+const SYSTEM_LANG = ''
+
 export default function App(): React.JSX.Element {
-  const { t, lang, setLang } = useI18n()
+  const { t, lang, storedLang, systemLang, setLang } = useI18n()
   const [accounts, setAccounts] = useState<Account[]>([])
   // Unregistered config dirs, account-shaped, for history display only. Deliberately a separate state
   // from `accounts`: mixed in, NewSessionDialog would offer them as spawn targets and AccountPanel /
@@ -1957,16 +1962,21 @@ export default function App(): React.JSX.Element {
                   <>
                     <div className="settings-row">
                       <span>{t('settings.general.language')}</span>
-                      {/* Each language is written in its own language, so it can be found without
-                          knowing the current one. Not a translation target. */}
                       <Select
                         className="settings-lang-select"
                         items={[
-                          { value: 'ko', label: '한국어' },
-                          { value: 'en', label: 'English' }
+                          {
+                            value: SYSTEM_LANG,
+                            label: t('settings.general.language.system', {
+                              lang: CATALOGS[systemLang].nativeName
+                            })
+                          },
+                          // Each language is written in its own language, so it can be found without
+                          // knowing the current one. Not a translation target.
+                          ...LANGS.map((l) => ({ value: l, label: CATALOGS[l].nativeName }))
                         ]}
-                        value={lang}
-                        onChange={(v) => setLang(v as 'ko' | 'en')}
+                        value={storedLang ?? SYSTEM_LANG}
+                        onChange={(v) => setLang(v === SYSTEM_LANG ? null : (v as Lang))}
                         ariaLabel={t('settings.general.language')}
                       />
                     </div>

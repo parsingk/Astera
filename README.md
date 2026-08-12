@@ -78,7 +78,7 @@ You will also need:
 - Each task can run in its own git worktree so parallel workers do not collide
 
 **Also**
-- Korean and English UI
+- Korean, English, Japanese, and Spanish UI, plus a System option that follows the OS locale
 - Customisable keybindings
 - Auto-update from GitHub Releases
 
