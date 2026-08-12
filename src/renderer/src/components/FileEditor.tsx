@@ -164,7 +164,9 @@ export function FileEditor({
     if (!view) return
     const prev = curPathRef.current
     if (prev !== path) {
-      cache.save(prev, view.state, lastScrollRef.current)
+      // 저장 경로를 언마운트와 하나로 맞춘다. cache.save를 직접 부르면 방금 닫은 파일의 상태가
+      // 되살아난다 — closeFileTab은 drop을 한 뒤 남은 탭으로 path만 바꾸므로 여기로 들어온다
+      onRetireRef.current(prev, view.state, lastScrollRef.current)
       lastScrollRef.current = null
       const restored = restoreOrBuild(cache, baseRef.current, path, content, readOnly)
       view.setState(restored.state)
@@ -174,8 +176,13 @@ export function FileEditor({
     }
     // 같은 비교가 여기에도 걸린다. 문자열을 그대로 비교하면 CRLF 파일은 매 렌더 새 상태로 갈아치워져
     // 되돌리기 이력이 계속 날아간다
-    if (!sameDocument(view.state.doc.toString(), content)) view.setState(makeState(baseRef.current, content, path, readOnly))
-    else if (view.state.readOnly !== readOnly) view.setState(makeState(baseRef.current, content, path, readOnly))
+    if (!sameDocument(view.state.doc.toString(), content)) {
+      // 문서가 바뀌었으니 들고 있던 스크롤 스냅샷은 다른 문서의 위치다. 버리지 않으면 다음 마운트에서
+      // 엉뚱한 곳으로 스크롤한다
+      lastScrollRef.current = null
+      view.setState(makeState(baseRef.current, content, path, readOnly))
+    } else if (view.state.readOnly !== readOnly)
+      view.setState(makeState(baseRef.current, content, path, readOnly))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, content, readOnly])
 

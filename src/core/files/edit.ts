@@ -56,7 +56,8 @@ export type Eol = '\r\n' | '\n'
 export function detectEol(text: string): Eol {
   const crlf = (text.match(/\r\n/g) ?? []).length
   if (crlf === 0) return '\n'
-  const lone = (text.match(/(^|[^\r])\n/g) ?? []).length
+  // 앞 문자를 함께 삼키는 형태로 쓰면 "\n\n"이 한 번으로 세어져 빈 줄이 많은 파일이 CRLF 쪽으로 기운다
+  const lone = (text.match(/(?<!\r)\n/g) ?? []).length
   return crlf > lone ? '\r\n' : '\n'
 }
 

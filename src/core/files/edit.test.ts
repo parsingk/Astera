@@ -75,6 +75,11 @@ describe('detectEol — 파일이 쓰는 줄바꿈', () => {
     expect(detectEol('')).toBe('\n')
   })
 
+  // 앞 문자를 삼키는 정규식으로 세면 연속된 빈 줄이 한 번으로 세어져 CRLF 쪽으로 기운다
+  it('연속된 빈 줄도 각각 센다', () => {
+    expect(detectEol('a\r\nb\n\n\n\nc')).toBe('\n')
+  })
+
   // 첫 줄바꿈만 보고 정하면 LF 파일에 CRLF가 한 줄 섞였을 때 파일 전체가 CRLF로 바뀐다
   it('섞여 있으면 다수를 따른다', () => {
     expect(detectEol('a\r\nb\nc\nd\ne')).toBe('\n')

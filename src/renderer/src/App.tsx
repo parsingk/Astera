@@ -1437,6 +1437,9 @@ export default function App(): React.JSX.Element {
       ? activeTabId
       : (workbenchTabs.find((t) => t.tabId === sessionTab(activeSessionId ?? '')) ??
           workbenchTabs.find((t) => t.kind === 'session') ??
+          // 세션 탭이 하나도 없으면 에디터가 이미 그리고 있는 파일을 고른다. 목록의 첫 탭으로 떨어지면
+          // 본문에는 마지막으로 보던 파일이, 탭 줄에는 다른 탭이 강조되어 둘이 어긋난다
+          workbenchTabs.find((t) => t.tabId === editorFileId) ??
           workbenchTabs[0])?.tabId ?? null
   const shownTab = shownTabId ? parseTab(shownTabId) : null
   workbenchTabIdsRef.current = workbenchTabs.map((t) => t.tabId)
