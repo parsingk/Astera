@@ -107,13 +107,16 @@ describe('chordFromEvent / matchesChord — e.code 기준', () => {
 describe('resolveBindings — 기본값에 사용자 설정을 덮어쓴다', () => {
   it('설정이 없으면 기본값 그대로', () => {
     const resolved = resolveBindings({}, ACTIONS)
-    expect(resolved['explorer.toggleMode'].map(formatChord)).toEqual(['Ctrl+Tab', 'Ctrl+Shift+E'])
+    expect(resolved['explorer.toggleMode'].map(formatChord)).toEqual(['Ctrl+Shift+E'])
+    // 탭 순환이 Ctrl+Tab을 가져갔다 — 탭 줄이 세션과 파일을 함께 담게 되면서 가장 잦은 동작이 되었다
+    expect(resolved['sessionTab.next'].map(formatChord)).toEqual(['Ctrl+Tab', 'Ctrl+PageDown'])
+    expect(resolved['sessionTab.prev'].map(formatChord)).toEqual(['Ctrl+Shift+Tab', 'Ctrl+PageUp'])
   })
 
   it('해당 액션만 갈아끼운다', () => {
     const resolved = resolveBindings({ 'explorer.toggleMode': ['Ctrl+`'] }, ACTIONS)
     expect(resolved['explorer.toggleMode'].map(formatChord)).toEqual(['Ctrl+`'])
-    expect(resolved['sessionTab.next'].map(formatChord)).toEqual(['Ctrl+PageDown'])
+    expect(resolved['sessionTab.next'].map(formatChord)).toEqual(['Ctrl+Tab', 'Ctrl+PageDown'])
   })
 
   it('빈 배열은 그 액션을 끈다 — 기본값으로 되돌아가지 않는다', () => {
@@ -137,8 +140,11 @@ describe('findActionForEvent', () => {
 
   it('기본 바인딩을 찾는다', () => {
     expect(findActionForEvent(bindings, ev({ code: 'Tab', ctrlKey: true }), ACTIONS)).toBe(
-      'explorer.toggleMode'
+      'sessionTab.next'
     )
+    expect(
+      findActionForEvent(bindings, ev({ code: 'Tab', ctrlKey: true, shiftKey: true }), ACTIONS)
+    ).toBe('sessionTab.prev')
     expect(findActionForEvent(bindings, ev({ code: 'KeyE', ctrlKey: true, shiftKey: true }), ACTIONS)).toBe(
       'explorer.toggleMode'
     )
@@ -158,7 +164,10 @@ describe('findConflicts — 같은 키가 두 액션에 걸리면', () => {
   })
 
   it('중복 키를 액션과 함께 보고한다', () => {
-    const conflicts = findConflicts(resolveBindings({ 'sessionTab.next': ['Ctrl+Tab'] }, ACTIONS), ACTIONS)
+    const conflicts = findConflicts(
+      resolveBindings({ 'explorer.toggleMode': ['Ctrl+Tab'] }, ACTIONS),
+      ACTIONS
+    )
     expect(conflicts).toHaveLength(1)
     expect(conflicts[0].key).toBe('Ctrl+Tab')
     expect(conflicts[0].actions.sort()).toEqual(['explorer.toggleMode', 'sessionTab.next'])

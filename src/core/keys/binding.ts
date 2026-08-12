@@ -61,12 +61,11 @@ export function makeActions(platform: string): readonly ActionSpec[] {
   return [
     {
       id: 'explorer.toggleMode',
-      // Cmd+Tab is reserved by macOS itself (application switcher, intercepted by the window server
-      // before the app ever sees it), so on darwin the first default is Ctrl+Tab instead of `${M}+Tab`.
-      // Ctrl+Tab is safe to use here: macOS does not reserve it, and unlike explorer.closeFileTab this
-      // action does not need to yield to the terminal, so there is no competing xterm binding either.
-      // win32 is untouched — Ctrl+Tab there is both `${M}+Tab` and already what shipped.
-      defaults: [mac ? 'Ctrl+Tab' : `${M}+Tab`, `${M}+Shift+E`],
+      // Ctrl+Tab used to be the first default here. It moved to sessionTab.next once the editor tab bar
+      // began holding sessions as well as files: switching tabs is the frequent action and Ctrl+Tab is
+      // what every browser and editor binds it to, while switching modes happens a handful of times a
+      // session. Ctrl+Shift+E was already the second default, so nothing was lost.
+      defaults: [`${M}+Shift+E`],
       descKey: 'shortcut.explorer.toggleMode',
       yieldsToTerminal: false
     },
@@ -79,13 +78,18 @@ export function makeActions(platform: string): readonly ActionSpec[] {
     },
     {
       id: 'sessionTab.prev',
-      defaults: [`${M}+PageUp`],
+      // Ctrl, not `${M}`, on both platforms: Cmd+Tab is the macOS application switcher, intercepted by
+      // the window server before the app ever sees it. Ctrl+Tab is free there and is what win32 uses
+      // anyway, so one literal covers both. PageUp/PageDown stay as a second default — they were the
+      // shipped binding and session mode's users have them in their fingers.
+      defaults: ['Ctrl+Shift+Tab', `${M}+PageUp`],
       descKey: 'shortcut.sessionTab.prev',
       yieldsToTerminal: false
     },
     {
       id: 'sessionTab.next',
-      defaults: [`${M}+PageDown`],
+      // See sessionTab.prev for why this is Ctrl rather than `${M}`.
+      defaults: ['Ctrl+Tab', `${M}+PageDown`],
       descKey: 'shortcut.sessionTab.next',
       yieldsToTerminal: false
     },

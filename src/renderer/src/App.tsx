@@ -700,8 +700,13 @@ export default function App(): React.JSX.Element {
       const focusMove = action.startsWith('pane.focus')
       const delta = action === 'sessionTab.prev' || action === 'pane.focusLeft' || action === 'pane.focusUp' ? -1 : 1
       const vertical = action === 'pane.focusUp' || action === 'pane.focusDown'
-      // Ignored while a normal input field — not a terminal — has focus (preserves its own Ctrl+Shift+arrow selection)
-      if (editable && !inXterm) return
+      // Ignored while a normal input field — not a terminal — has focus (preserves its own Ctrl+Shift+arrow selection).
+      // Tab cycling is the exception inside our own editor: the tab bar is reachable from the terminal
+      // but would otherwise be unreachable from the editor, which is where you sit while reading a file.
+      // The exception is scoped to .cm-editor rather than to every input, so a rebind onto an arrow chord
+      // still leaves a settings field's own selection alone. Same shape as explorer.toggleMode's exception.
+      const tabCycle = action === 'sessionTab.prev' || action === 'sessionTab.next'
+      if (editable && !inXterm && !(tabCycle && focusEl?.closest('.cm-editor'))) return
       // Tab cycling: only the tabs of the current mode
       if (explorerOpenRef.current) {
         // 에디터 모드 — 탭 줄에 그려진 순서 그대로 돈다. 파일 탭과 세션 탭 사이에 경계가 없어서, 한

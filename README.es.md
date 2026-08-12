@@ -70,7 +70,9 @@ También necesitarás:
 
 **Editor y atajos**
 - Una tecla alterna una sesión entre la vista del agente y un editor sobre el mismo proyecto:
-  `Ctrl`/`Cmd`+`Tab`, para leer lo que el agente acaba de cambiar sin salir de la ventana
+  `Ctrl`/`Cmd`+`Shift`+`E`, para leer lo que el agente acaba de cambiar sin salir de la ventana
+- Una sola fila de pestañas: las sesiones en marcha del proyecto se sitúan junto a los archivos
+  abiertos, y `Ctrl`+`Tab` recorre la fila entera
 - Un editor de verdad, no un cuadro de texto: CodeMirror con resaltado de sintaxis para TypeScript,
   JavaScript, Python, Go, Rust, C/C++, Java, PHP, SQL, HTML, CSS, Markdown, JSON, YAML y XML,
   abiertos en pestañas
