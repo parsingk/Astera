@@ -9,6 +9,9 @@
 [![Downloads](https://img.shields.io/github/downloads/parsingk/Astera/total)](https://github.com/parsingk/Astera/releases)
 [![License](https://img.shields.io/github/license/parsingk/Astera?color=blue)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-555)
+[![Last commit](https://img.shields.io/github/last-commit/parsingk/Astera?color=555)](https://github.com/parsingk/Astera/commits)
+![Electron](https://img.shields.io/badge/electron-41-47848F?logo=electron&logoColor=white)
+![Node](https://img.shields.io/badge/node-%E2%89%A522.12-5FA04E?logo=nodedotjs&logoColor=white)
 
 [Download](#install) · [What it does](#what-it-does) · [Documentation](#documentation) · [Report a bug](https://github.com/parsingk/Astera/issues/new)
 
