@@ -20,8 +20,9 @@ Astera ejecuta tus sesiones de agente cuando no estás en el escritorio. Program
 a las 3 de la mañana y arrancará sin ti. Cuando cualquier sesión alcanza un límite de uso —programada
 o no—, Astera lee la hora de reinicio en la transcripción, cambia a tu siguiente cuenta y retoma el
 *mismo* trabajo. Slack te avisa cuando termina un turno o se alcanza un límite. Las sesiones conviven
-en una sola ventana, cada una aislada en su propio worktree de git, y un agente puede delegar tareas
-a otro y esperar los resultados.
+en una sola ventana, cada una aislada en su propio worktree de git. Un agente puede iniciar otras
+sesiones, repartirles tareas y esperar bloqueado hasta que informen: lo hace él mismo a través de una
+CLI incluida, así que no vas despachando cada paso a mano.
 
 > **Estado:** Windows y macOS. Ejecuta las CLI de `claude` y `codex`, así que solo llega tan lejos
 > como la que tengas instalada.
@@ -65,15 +66,28 @@ También necesitarás:
 
 **Sesiones**
 - Muchas sesiones de `claude` / `codex` en una ventana, como pestañas y como paneles divididos
-- Terminal por proyecto, y un explorador de archivos con editor, operaciones de archivo e historial
-  local
-- El estado de git visible en el árbol de archivos
+- Una terminal por proyecto
+
+**Editor y atajos**
+- Una tecla alterna una sesión entre la vista del agente y un editor sobre el mismo proyecto:
+  `Ctrl`/`Cmd`+`Tab`, para leer lo que el agente acaba de cambiar sin salir de la ventana
+- Un editor de verdad, no un cuadro de texto: CodeMirror con resaltado de sintaxis para TypeScript,
+  JavaScript, Python, Go, Rust, C/C++, Java, PHP, SQL, HTML, CSS, Markdown, JSON, YAML y XML,
+  abiertos en pestañas
+- Un árbol de archivos con el estado de git en cada entrada (nuevo, modificado, eliminado, conflicto),
+  y crear, renombrar, mover, copiar, eliminar y mostrar en Finder / el Explorador
+- **Historial local:** se toma una instantánea antes de eliminar, así que lo que limpió el agente —o
+  tú— se puede recuperar. Se conserva 30 días, hasta 200 MB por proyecto
+- Todos los atajos se pueden reasignar en los ajustes, con `Cmd` por defecto en macOS y `Ctrl` en el
+  resto: dividir paneles, mover el foco entre ellos, recorrer sesiones, cerrar una pestaña de archivo
+- Elige la tipografía de la terminal, incluida la de reserva para texto CJK
 
 **Cuentas**
 - Varias cuentas por proveedor, cada una aislada mediante su propio `CLAUDE_CONFIG_DIR` / `CODEX_HOME`
 - **Rotación de cuentas:** cuando una sesión alcanza un límite de uso, Astera lo detecta en la
   transcripción, calcula la hora de reinicio y retoma el trabajo en la siguiente cuenta
-- Sincronización opcional de ajustes y de directorios de contenido personal entre cuentas
+- Importación opcional de la configuración de una cuenta nueva desde tu cuenta predeterminada:
+  `settings.json`, la lista de servidores MCP y los directorios `skills`, `commands` y `agents`
 
 <div align="center">
 <img src="assets/rolling.gif" width="820" alt="Diagrama: una sesión en marcha alcanza su límite semanal, Astera lee la hora de reinicio en la transcripción, cambia a la siguiente cuenta y la misma conversación continúa" />
@@ -98,7 +112,6 @@ También necesitarás:
 **Además**
 - Interfaz en coreano, inglés, japonés y español, más una opción System que sigue la configuración
   regional del sistema
-- Atajos de teclado personalizables
 - Actualización automática desde GitHub Releases
 
 ## Orquestación: primeros pasos

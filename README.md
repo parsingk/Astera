@@ -20,7 +20,8 @@ Astera runs your agent sessions when you are not at the desk. Schedule one to st
 starts without you. When any session hits a usage limit — scheduled or not — Astera reads the reset
 time out of the transcript, switches to your next account, and resumes the *same* work. Slack tells
 you when a turn lands or a limit hits. Sessions sit side by side in one window, each isolated in its
-own git worktree, and one agent can hand tasks to another and wait for the results.
+own git worktree. One agent can start others, hand them tasks, and block until they report — it
+drives that itself through a bundled CLI, so you are not dispatching each step by hand.
 
 > **Status:** Windows and macOS. It drives the `claude` and `codex` CLIs, so it is only as
 > capable as whichever of those you have installed.
@@ -61,14 +62,27 @@ You will also need:
 
 **Sessions**
 - Many `claude` / `codex` sessions in one window, as tabs and as split panes
-- Per-project terminal, and a file explorer with an editor, file operations, and local history
-- Git status shown in the file tree
+- A terminal per project
+
+**Editor and shortcuts**
+- One key flips a session between the agent view and an editor on the same project —
+  `Ctrl`/`Cmd`+`Tab`, so you can read what the agent just changed without leaving the window
+- A real editor, not a text box: CodeMirror with syntax highlighting for TypeScript, JavaScript,
+  Python, Go, Rust, C/C++, Java, PHP, SQL, HTML, CSS, Markdown, JSON, YAML and XML, open across tabs
+- A file tree with git state on each entry (new, modified, deleted, conflict), and create, rename,
+  move, copy, delete and reveal-in-Finder/Explorer
+- **Local history:** a snapshot is taken before a delete, so an agent's cleanup — or your own — is
+  recoverable. Kept 30 days, up to 200 MB per project
+- Every shortcut is remappable in settings, defaulting to `Cmd` on macOS and `Ctrl` elsewhere:
+  splitting panes, moving focus between them, cycling sessions, closing a file tab
+- Pick the terminal font, including the fallback for CJK text
 
 **Accounts**
 - Several accounts per vendor, each isolated through its own `CLAUDE_CONFIG_DIR` / `CODEX_HOME`
 - **Account rolling:** when a session hits a usage limit, Astera detects it from the transcript,
   works out the reset time, and resumes the work on the next account
-- Optional syncing of settings and personal content directories between accounts
+- Optional import of a new account's setup from your default one: `settings.json`, the MCP server
+  list, and the `skills`, `commands` and `agents` directories
 
 <div align="center">
 <img src="assets/rolling.gif" width="820" alt="Diagram: a running session hits its weekly limit, Astera reads the reset time from the transcript, switches to the next account, and the same conversation carries on" />
@@ -91,7 +105,6 @@ You will also need:
 
 **Also**
 - Korean, English, Japanese, and Spanish UI, plus a System option that follows the OS locale
-- Customisable keybindings
 - Auto-update from GitHub Releases
 
 ## Orchestration quickstart
