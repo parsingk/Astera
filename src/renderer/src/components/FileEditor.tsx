@@ -18,7 +18,7 @@ import { sql } from '@codemirror/lang-sql'
 import { xml } from '@codemirror/lang-xml'
 import { yaml } from '@codemirror/lang-yaml'
 import { go } from '@codemirror/lang-go'
-import { languageForExt, type LangKey } from '../../../core/files/edit'
+import { languageForExt, sameDocument, type LangKey } from '../../../core/files/edit'
 import type { EditorStateCache } from '../lib/editorStateCache'
 
 function langExt(key: LangKey | null): Extension {
@@ -76,7 +76,7 @@ function restoreOrBuild(
 ): { state: EditorState; scroll: StateEffect<unknown> | null } {
   const cached = cache.get(path)
   const usable =
-    cached && cached.state.doc.toString() === content && cached.state.readOnly === readOnly
+    cached && sameDocument(cached.state.doc.toString(), content) && cached.state.readOnly === readOnly
   if (import.meta.env.DEV) {
     const d = cached?.state.doc.toString() ?? ''
     // 판정에 떨어지는 이유를 보려면 비교 입력을 그대로 찍어야 한다 — 길이가 같은데 다르면 내용,
@@ -199,7 +199,9 @@ export function FileEditor({
       if (restored.scroll) view.dispatch({ effects: restored.scroll })
       return
     }
-    if (view.state.doc.toString() !== content) view.setState(makeState(baseRef.current, content, path, readOnly))
+    // 같은 비교가 여기에도 걸린다. 문자열을 그대로 비교하면 CRLF 파일은 매 렌더 새 상태로 갈아치워져
+    // 되돌리기 이력이 계속 날아간다
+    if (!sameDocument(view.state.doc.toString(), content)) view.setState(makeState(baseRef.current, content, path, readOnly))
     else if (view.state.readOnly !== readOnly) view.setState(makeState(baseRef.current, content, path, readOnly))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, content, readOnly])

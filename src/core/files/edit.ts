@@ -33,3 +33,16 @@ export function classifyExternalChange(
   if (diskContent === savedContent) return 'ignore'
   return dirty ? 'conflict' : 'reload'
 }
+
+/** Whether two texts are the same document, ignoring how their lines end.
+ *
+ *  CodeMirror normalises line endings to LF when it builds a document, while the buffer App holds is
+ *  whatever came off disk — CRLF for most files written on Windows. A plain === between the two
+ *  therefore never holds for such a file, which silently disabled every reuse of a cached EditorState:
+ *  undo history and scroll position were rebuilt from scratch on each remount. Lone CR (classic Mac)
+ *  is folded too, because CodeMirror splits on that as well.
+ *
+ *  The identity check comes first so LF files, the common case, never pay for the normalisation. */
+export function sameDocument(a: string, b: string): boolean {
+  return a === b || a.replace(/\r\n?/g, '\n') === b.replace(/\r\n?/g, '\n')
+}
