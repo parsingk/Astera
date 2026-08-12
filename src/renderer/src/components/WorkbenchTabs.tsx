@@ -2,6 +2,14 @@ import { resolveFileIcon } from '../../../core/files/icons'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
 
+/** File viewer tab. Renderer-only — unlike sessions, main is not involved. id = `file:${path}`.
+ *  (FileTabs.tsx가 이 탭 줄로 대체되면서 타입만 여기로 옮겨 왔다) */
+export interface FileTab {
+  id: string
+  path: string
+  title: string
+}
+
 /** 에디터 모드의 탭 줄. 파일 탭과 세션 탭을 한 줄에 그린다.
  *
  *  FileTabs를 확장하지 않은 이유는 표식이 다르기 때문이다 — 세션 탭은 계정 색과 작업 중 스피너를
