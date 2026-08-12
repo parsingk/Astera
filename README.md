@@ -9,7 +9,6 @@
 [![Downloads](https://img.shields.io/github/downloads/parsingk/Astera/total)](https://github.com/parsingk/Astera/releases)
 [![License](https://img.shields.io/github/license/parsingk/Astera?color=blue)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-555)
-[![Last commit](https://img.shields.io/github/last-commit/parsingk/Astera?color=555)](https://github.com/parsingk/Astera/commits)
 
 [Download](#install) · [What it does](#what-it-does) · [Documentation](#documentation) · [Report a bug](https://github.com/parsingk/Astera/issues/new)
 
