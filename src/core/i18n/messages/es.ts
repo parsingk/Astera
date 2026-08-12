@@ -32,7 +32,7 @@ export const es: Catalog = {
   'worktree.include.overLimit': 'Omitido, supera el límite de copia (200 MB): {entry}',
   'worktree.include.copyFailed': 'Error al copiar: {entry} ({detail})',
   'worktree.create.fetchFailed':
-    'No se pudo actualizar desde el remoto; se creó a partir del {baseRef} local',
+    'No se pudo actualizar desde el remoto; se creó a partir de {baseRef} local',
   'worktree.create.baseRecordFailed':
     'No se pudo registrar branch.base — al eliminar, la comprobación de fusión usará HEAD',
   'worktree.create.autoSetupRemoteFailed':
@@ -57,9 +57,9 @@ export const es: Catalog = {
   'worktree.error.gitRemoveFailed': 'No se pudo eliminar el worktree de git.',
   'worktree.error.raw': '{detail}',
   'worktree.inUse.session':
-    'La sesión «{title}» está en ejecución y usa este worktree. Cierre antes la sesión.',
+    'La sesión «{title}» está en ejecución y usa este worktree. Cierre primero esa sesión.',
   'worktree.inUse.run':
-    'El proceso «{name}» está en ejecución y usa este worktree. Deténgalo antes.',
+    'El proceso «{name}» está en ejecución y usa este worktree. Deténgalo primero.',
   'worktree.inUse.unknown': 'Este worktree está en uso.',
   // ROLL_MIXED_PROVIDER in sessions/manager.ts — a session-rolling constraint unrelated to worktrees
   'session.roll.mixedProvider': 'La rotación no puede mezclar cuentas de Claude y de Codex',
@@ -131,8 +131,8 @@ export const es: Catalog = {
   'files.transfer.skipped': 'Se omitieron {count} elementos: {reason}',
   // useFileOps.ts — Ctrl+Z undo
   'files.undo.empty': 'No hay nada que deshacer',
-  'files.undo.changedOne': '«{name}» ha cambiado',
-  'files.undo.changedMany': '{shown}{more} han cambiado',
+  'files.undo.changedOne': '«{name}» cambió',
+  'files.undo.changedMany': '{shown}{more} cambiaron',
   'files.undo.blocked': 'No se puede deshacer {desc}: {detail}',
   'files.undo.partialFail': 'Al deshacer fallaron {failed} de {attempted} elementos: {shown}{more}',
   'files.undo.partialMissing': 'Al deshacer fallaron {missing} de {total} elementos: {shown}{more}',
@@ -177,12 +177,12 @@ export const es: Catalog = {
   'account.import.button': 'Importar',
   'account.import.someFailed': 'No se pudieron registrar {count} cuentas.',
   'account.detect.title': 'Cuentas detectadas',
-  'account.detect.button': 'Detección automática',
+  'account.detect.button': 'Autodetectar',
   'account.detect.empty': 'No se detectaron cuentas',
   'account.detect.importSelected': 'Registrar selección',
   'account.detect.failed': 'Falló la detección automática: {detail}',
   'account.status.loggedIn': 'Sesión iniciada',
-  'account.status.notLoggedIn': 'Sesión no iniciada',
+  'account.status.notLoggedIn': 'Sin iniciar',
   // AccountPanel.tsx — unregister. When logout comes with it, it says the credentials are removed (destructive).
   'account.remove.title': 'Anular el registro de la cuenta',
   'account.remove.button': 'Anular registro',
@@ -191,7 +191,7 @@ export const es: Catalog = {
   'account.remove.logoutWarning':
     'Al cerrar sesión se elimina la autenticación de esta cuenta y tendrá que volver a iniciar sesión. Si la cuenta usa un directorio de inicio (~/.claude, ~/.codex), también se cerrará la sesión que utilizaba fuera de esta aplicación.',
   'account.remove.processing': 'Procesando…',
-  'account.remove.confirmWithLogout': 'Anular registro y cerrar sesión',
+  'account.remove.confirmWithLogout': 'Anular y cerrar sesión',
   'account.logout.failed': 'Error al cerrar sesión: {detail}\n\nLa anulación del registro continúa igualmente.',
   // The Message key accountLogout in core.ts returns
   'account.error.raw': '{detail}',
@@ -201,7 +201,7 @@ export const es: Catalog = {
   'account.sync.confirmBody':
     'Se importará la configuración de la cuenta «{source}» a la cuenta «{label}».',
   'account.sync.mergeNote':
-    'Los complementos, MCP y las habilidades, comandos y agentes personales se combinan elemento por elemento. Los elementos coincidentes toman el valor del origen y los que solo tiene esta cuenta se conservan.',
+    'Los plugins, MCP y las habilidades, comandos y agentes personales se combinan elemento por elemento. Los elementos coincidentes toman el valor del origen y los que solo tiene esta cuenta se conservan.',
   'account.sync.replaceNote':
     'El archivo config.toml se reemplaza por completo con el del origen. La configuración exclusiva de esta cuenta se pierde; el archivo existente se respalda como .bak.',
   'account.sync.appliesNextSession':
@@ -286,8 +286,8 @@ export const es: Catalog = {
     'No hay ninguna cuenta con la sesión iniciada. Inicie sesión en una cuenta primero.',
   'session.resume.originalAccountSuffix': ' (cuenta original)',
   'session.resume.crossAccountHint':
-    'Copia la transcripción a esta cuenta y luego reanuda (la transcripción original se conserva).',
-  'session.resume.rollChainHint': 'Al llegar al límite, cambia en este orden: {chain}',
+    'Se copia la transcripción a esta cuenta y luego se reanuda (la transcripción original se conserva).',
+  'session.resume.rollChainHint': 'Al llegar al límite, se cambia en este orden: {chain}',
   'session.resume.confirm': 'Reanudar',
   // TerminalView.tsx — the rolling banner and the loading/exit overlays
   'session.terminal.rollSwitching': 'Continuando con «{label}»…',
@@ -327,7 +327,7 @@ export const es: Catalog = {
   'worktree.forceRemove.unverifiableTitle': 'No se puede comprobar si hay cambios',
   'worktree.forceRemove.dirtyTitle': 'Cambios sin confirmar',
   'worktree.forceRemove.unverifiableBody':
-    'git ya no rastrea {name}, así que no se puede saber si hay cambios sin confirmar.\n{path}\nSi fuerza la eliminación, se perderá el contenido de la carpeta. Ábrala usted mismo para comprobarlo antes de continuar.',
+    'git ya no rastrea {name}, así que no se puede saber si hay cambios sin confirmar.\n{path}\nSi fuerza la eliminación, se perderá el contenido de la carpeta. Ábrala y compruébelo antes de continuar.',
   'worktree.forceRemove.dirtyBody':
     '{name} tiene {count} cambios sin confirmar.\nSi fuerza la eliminación, se perderán esos cambios. ¿Continuar?',
   'worktree.forceRemove.confirm': 'Forzar eliminación',
