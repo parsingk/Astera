@@ -72,7 +72,7 @@ export const ja: Catalog = {
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped
   'session.spawn.resumeLiveIgnored':
     'すでに実行中のセッションです — 選択したオプションは適用されませんでした。',
-  'session.placeholder.start': '+ 新しいセッションを開始してください',
+  'session.placeholder.start': '+ 新しいセッションを開始',
   'session.usage.contextTitleWithTokens': 'コンテキスト使用率 ({used} / {window} トークン)',
   'session.usage.contextTitle': 'コンテキスト使用率',
   'session.usage.contextEmpty': 'コンテキスト使用量 (最初のターン以降に表示)',
@@ -91,7 +91,7 @@ export const ja: Catalog = {
   'files.unsaved.body': '保存していない変更があります。閉じますか？',
   'files.editor.deletedExternally': 'ファイルが削除されました',
   'files.editor.readOnlyReason': '読み取り専用 (大きなファイルまたはバイナリ)',
-  'files.editor.conflictChanged': 'ディスク上で変更されました',
+  'files.editor.conflictChanged': 'ディスク上で変更あり',
   'files.editor.reload': '再読み込み',
   'files.editor.keepMine': '自分の編集を保持',
   'files.editor.loading': '読み込み中…',
@@ -262,7 +262,7 @@ export const ja: Catalog = {
   'session.new.schedMinutesUnit': '分ごと',
   'session.new.schedDaysUnit': '日',
   'session.new.schedCommandPlaceholder': '実行するコマンド (必須)',
-  'session.new.schedHint': '指定した周期でこのコマンドをセッションに送信',
+  'session.new.schedHint': '指定した周期ごとにこのコマンドをセッションに送信',
   // Weekday button labels. Index 0 = Sunday (matches the Date.getDay() convention)
   'session.sched.weekday.sun': '日',
   'session.sched.weekday.mon': '月',
@@ -290,7 +290,7 @@ export const ja: Catalog = {
   'session.resume.rollChainHint': '上限到達時はこの順で切り替えます: {chain}',
   'session.resume.confirm': '再開',
   // TerminalView.tsx — the rolling banner and the loading/exit overlays
-  'session.terminal.rollSwitching': '「{label}」に引き継いでいます…',
+  'session.terminal.rollSwitching': '「{label}」に切り替えています…',
   'session.terminal.trustAccepting': 'フォルダの信頼を自動承認しています…',
   'session.terminal.weeklyLimitWaiting': '週間上限に到達 — {time} に自動再開',
   'session.terminal.limitWaiting': '上限に到達 — {time} に自動再開',
