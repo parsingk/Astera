@@ -2,6 +2,32 @@ import type { Catalog } from '../index'
 
 /** Spanish. Partial by design — see ja.ts for why. */
 export const es: Catalog = {
+  'settings.title': 'Configuración',
+  'settings.tab.general': 'General',
+  'settings.tab.accounts': 'Cuentas',
+  'settings.tab.info': 'Información',
+  'settings.tab.shortcuts': 'Atajos',
+  'settings.tab.history': 'Historial',
+  'settings.general.language': 'Idioma',
+  // {lang} is the language the OS locale resolves to, shown so the effect of picking System is
+  // visible before picking it
+  'settings.general.language.system': 'Configuración del sistema ({lang})',
+  'settings.general.language.saveFailed': 'No se pudo guardar la configuración de idioma: {detail}',
+  // Agent orchestration
+  'settings.orchestration.label': 'Orquestación de agentes (experimental)',
+  'settings.orchestration.hint':
+    'Cuando está activada, las sesiones de agente que inicia la aplicación pueden iniciar sesiones de trabajo en otro proveedor. ' +
+    'Un agente podrá crear sesiones con cualquiera de las cuentas de la aplicación, así que actívela solo cuando la necesite. ' +
+    'No se aplica a las sesiones que ya están abiertas: funciona a partir de las sesiones nuevas. ' +
+    'Pida a la sesión que vaya a usar como orquestador que ejecute astera help para obtener la guía de uso completa.',
+  'settings.orchestration.saveFailed':
+    'No se pudo guardar la configuración de orquestación: {detail}',
+  'settings.accounts.hint':
+    '⤓ importa la configuración de la cuenta predeterminada del mismo CLI. La predeterminada es la primera cuenta registrada que tenga la sesión iniciada, una por CLI.',
+  'common.cancel': 'Cancelar',
+  'common.confirm': 'Aceptar',
+  'common.close': 'Cerrar',
+  'common.toastDismiss': 'Cerrar la notificación',
   // files/ops.ts — the Message keys validateName/canMove/canCopy return
   'files.validate.badChar': 'El nombre contiene un carácter no permitido: {char}',
   'files.validate.empty': 'Escriba un nombre',
@@ -63,6 +89,15 @@ export const es: Catalog = {
   'worktree.inUse.unknown': 'Este worktree está en uso.',
   // ROLL_MIXED_PROVIDER in sessions/manager.ts — a session-rolling constraint unrelated to worktrees
   'session.roll.mixedProvider': 'La rotación no puede mezclar cuentas de Claude y de Codex',
+  // App.tsx — shared window controls, resizer, separator
+  'common.minimize': 'Minimizar',
+  'common.maximize': 'Maximizar',
+  'common.restore': 'Restaurar',
+  'common.resizeSidebar': 'Ajustar el ancho de la barra lateral',
+  'common.or': 'o',
+  // index.ts — system tray context menu
+  'common.trayOpen': 'Abrir',
+  'common.trayQuit': 'Salir',
   // App.tsx — rail, session spawn failure, placeholder, status bar usage
   'session.rail.toggleSidebar': 'Contraer o expandir la barra lateral',
   'session.spawn.failed': 'No se pudo iniciar la sesión: {message}',
@@ -95,6 +130,147 @@ export const es: Catalog = {
   'files.editor.keepMine': 'Conservar mis cambios',
   'files.editor.loading': 'Cargando…',
   'files.editor.selectPrompt': 'Seleccione un archivo en el árbol',
+  // App.tsx — explorer close confirmation
+  'explorer.closeConfirm.body': 'Hay cambios sin guardar. ¿Cerrar el explorador igualmente?',
+  // App.tsx — run console resizer, start failure
+  'run.resizeConsole': 'Ajustar el tamaño de la consola',
+  'run.start.failed': 'Error al ejecutar: {detail}',
+  // App.tsx — settings modal Info/Slack/Worktree tabs, CLI-not-found screen
+  'settings.info.appName': 'Nombre de la aplicación',
+  'settings.info.version': 'Versión',
+  'settings.info.registeredAccounts': 'Cuentas registradas',
+  'settings.info.update': 'Actualización',
+  'settings.info.cliNotDetected': 'No detectado',
+  'settings.slack.save': 'Guardar',
+  'settings.slack.saved': 'Guardado',
+  'settings.slack.hint':
+    'Si activa «Notificaciones de progreso en Slack» en una sesión nueva, se envía el progreso.',
+  // Bot settings. Which delivery path is active has to be visible on screen at a glance —
+  // a bot token with no channel ID silently falls back to Webhook (slack.ts applyConfig), so that state has to show
+  'settings.slack.botSection': 'Bot (un hilo por sesión)',
+  'settings.slack.channelIdHint':
+    'Haga clic derecho en el canal → detalles del canal, al final del todo.',
+  'settings.slack.appTokenHint':
+    'Para la recepción en Socket Mode. En modo bot, las respuestas del hilo llegan con este token.',
+  // A channel is not a permission boundary — anyone invited to it could push input into someone else's
+  // session. Only replies from this member are injected. Empty means nobody, not everybody.
+  'settings.slack.memberIdHint':
+    'Solo las respuestas de este miembro en el hilo llegan a la sesión. En Slack: su perfil → ⋯ → «Copiar ID de miembro».',
+  'settings.slack.memberIdRequired':
+    '⚠️ Sin Member ID no se entrega la respuesta de nadie en el hilo. Escriba su propio Member ID.',
+  'settings.slack.modeBot': 'Modo bot: cada sesión reúne sus notificaciones en un mismo hilo.',
+  'settings.slack.modeWebhook':
+    'Webhook unidireccional: complete el token del bot y el ID de canal para pasar a un hilo por sesión.',
+  'settings.slack.modeOff':
+    'No hay ninguna vía de envío, así que no se envían notificaciones. Se necesita una URL de webhook, o un token de bot más el ID de canal.',
+  'settings.slack.setupGuide':
+    'Hay que invitar al bot al canal de destino para que publique. Consulte docs/slack-bot-setup.md para ver todos los pasos.',
+  'settings.worktree.createLocation': 'Ubicación donde se crean los worktrees',
+  'settings.worktree.change': 'Cambiar…',
+  'settings.worktree.hint':
+    'Los worktrees nuevos se crean bajo esta carpeta como <repo>/<nombre>. Los worktrees existentes no se mueven.',
+  'settings.history.hiddenProjects': 'Proyectos ocultos',
+  'settings.history.unhide': 'Mostrar',
+  'settings.history.empty': 'No hay proyectos ocultos.',
+  // TerminalFontSettings.tsx — the terminal font picker rows
+  'settings.font.latin': 'Fuente latina del terminal',
+  'settings.font.hangul': 'Fuente hangul del terminal',
+  'settings.font.system': 'Predeterminada del sistema',
+  'settings.font.notInstalled': 'no instalada',
+  'settings.font.sample': 'AaBb 한글 123',
+  'settings.font.hangulShadowed':
+    'La fuente latina seleccionada también dibuja el hangul, así que la fuente de hangul no tiene efecto.',
+  'settings.font.listFailed': 'No se pudo obtener la lista de fuentes instaladas: {detail}',
+  'settings.font.saveFailed': 'No se pudo guardar la configuración de fuentes: {detail}',
+  'settings.font.checkingHangul': 'comprobando las fuentes instaladas…',
+  'settings.font.loadingList': 'leyendo las fuentes instaladas…',
+  // App.tsx — update status (the title-bar UpdateIndicator / the settings Info tab)
+  'update.tb.restartInstallVersion': 'Reiniciar e instalar v{version}',
+  'update.tb.checking': 'Buscando actualizaciones…',
+  'update.tb.available': 'Nueva versión {version} encontrada',
+  'update.tb.downloading': 'Descargando {percent}%',
+  'update.tb.error': 'Error de actualización',
+  // index.ts — diagnostic message for when the electron-updater module does not export properly (title-bar tooltip)
+  'update.tb.autoUpdaterMissing': 'No se encontró el export autoUpdater',
+  'update.info.downloading': 'Descargando {percent}%…',
+  'update.info.restartInstallVersion': 'Reiniciar e instalar v{version}',
+  'update.info.checking': 'Comprobando…',
+  'update.info.checkButton': 'Buscar actualizaciones',
+  'update.info.upToDateAt': 'Ya tiene la última versión (comprobado {time})',
+  // 'available' means "found", not "downloading"
+  'update.info.available': 'Nueva versión {version} disponible',
+  'update.info.downloadVersion': 'Descargar {version}',
+  'update.info.checkFailed': 'Error al comprobar',
+  // App.tsx — the toast for a downloaded new version, and the session-kill confirmation when installing now
+  'update.toast.available': 'Ya está disponible la versión v{version}',
+  'update.toast.download': 'Descargar',
+  'update.toast.ready': 'La actualización v{version} está lista',
+  'update.toast.installNow': 'Instalar ahora',
+  'update.confirm.title': 'Instalar y reiniciar ahora',
+  'update.confirm.body': 'Se cerrarán {count} sesiones en curso. ¿Continuar?',
+  // UpdateGate.tsx — the screen that covers the app when the version is below the minimum the release policy sets
+  'update.gate.title': 'Hay que actualizar',
+  'update.gate.body': 'Actualice a la versión {version}',
+  'update.gate.bodyNoVersion': 'Actualice para continuar',
+  'update.gate.preparing': 'Preparando la actualización…',
+  'update.gate.ready': 'v{version} lista para instalar',
+  'update.gate.failed':
+    'No se pudo descargar la actualización. Compruebe la red y vuelva a intentarlo.',
+  'update.gate.retry': 'Reintentar',
+  'update.gate.quit': 'Salir de la aplicación',
+  // App.tsx — settings modal Shortcuts tab
+  'shortcut.group.terminal': 'Terminal',
+  'shortcut.terminal.newline': 'Salto de línea',
+  'shortcut.terminal.copyOrInterrupt': 'Copiar la selección · interrumpir si no hay',
+  'shortcut.paste': 'Pegar',
+  'shortcut.group.sessionTab': 'Pestañas de sesión',
+  'shortcut.sessionTab.prev': 'Pestaña anterior',
+  'shortcut.sessionTab.next': 'Pestaña siguiente',
+  'shortcut.gesture.tabDrag': 'Arrastrar la pestaña',
+  'shortcut.sessionTab.reorder': 'Reordenar',
+  'shortcut.group.pane': 'Paneles',
+  'shortcut.pane.splitRight': 'Dividir a la derecha',
+  'shortcut.pane.splitDown': 'Dividir abajo',
+  'shortcut.pane.focusLeft': 'Panel izquierdo',
+  'shortcut.pane.focusRight': 'Panel derecho',
+  'shortcut.pane.focusUp': 'Panel de arriba',
+  'shortcut.pane.focusDown': 'Panel de abajo',
+  // ShortcutSettings.tsx — the editable shortcut list
+  'shortcut.group.editable': 'Personalizables',
+  'shortcut.edit': 'Cambiar',
+  'shortcut.resetOne': 'Predeterminado',
+  'shortcut.capturing': 'Presione una tecla (Esc para cancelar)',
+  'shortcut.unbound': 'Ninguno',
+  'shortcut.conflictWith': '{key} ya se usa en "{action}"',
+  'shortcut.riskTitle': 'Asignar {key} como atajo de la aplicación',
+  'shortcut.riskConfirm': 'Asignar igualmente',
+  'shortcut.risk.interrupt':
+    'Esta tecla interrumpe la tarea en ejecución en el terminal. Si la toma la aplicación, no podrá interrumpir desde una sesión.',
+  'shortcut.risk.eof':
+    'Esta tecla cierra el CLI en el terminal. Si la toma la aplicación, no podrá usarla en una sesión.',
+  'shortcut.risk.readline':
+    'Esta tecla sirve para editar la línea en el terminal (ir al inicio o al final, borrar una palabra, etc.). Si la toma la aplicación, no podrá usarla mientras escribe.',
+  'shortcut.risk.historySearch':
+    'Esta tecla busca en el historial del terminal. Si la toma la aplicación, no podrá usarla en una sesión.',
+  'shortcut.risk.clear':
+    'Esta tecla limpia la pantalla del terminal. Si la toma la aplicación, no podrá usarla en una sesión.',
+  'shortcut.risk.newline':
+    'Codex usa esta tecla para el salto de línea. Si la toma la aplicación, se bloquea la entrada de varias líneas.',
+  'shortcut.risk.cliMode':
+    'Claude Code y Codex usan esta tecla para cambiar de modo y autocompletar. Si la toma la aplicación, no podrá usarla en una sesión.',
+  'shortcut.pane.dragSplit': 'Al borde para dividir · al centro para mover',
+  'shortcut.group.explorer': 'Explorador de archivos',
+  'shortcut.explorer.toggleMode': 'Sesión ↔ explorador',
+  'shortcut.explorer.saveFile': 'Guardar el archivo',
+  'shortcut.explorer.closeFileTab': 'Cerrar la pestaña de archivo',
+  'shortcut.explorer.rename': 'Cambiar nombre',
+  'shortcut.explorer.delete': 'Eliminar',
+  'shortcut.explorer.selectAll': 'Seleccionar todo',
+  'shortcut.explorer.cut': 'Cortar',
+  'shortcut.explorer.copy': 'Copiar',
+  'shortcut.gesture.itemDrag': 'Arrastrar el elemento',
+  'shortcut.explorer.move': 'Mover · con Ctrl, copiar',
+  'shortcut.explorer.undo': 'Deshacer',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names
   'files.action.delete': 'Eliminar',
   'files.action.duplicate': 'Duplicar',
@@ -159,6 +335,45 @@ export const es: Catalog = {
     'Se restauraron {count} elementos — {renamedCount} se recuperaron con otro nombre porque ya existía uno igual: {shown}',
   'files.undo.restored.renamedManyWithMore':
     'Se restauraron {count} elementos — {renamedCount} se recuperaron con otro nombre porque ya existía uno igual: {shown}, y {moreCount} más',
+  // FileExplorer.tsx — panel header, context menu
+  'explorer.title': 'Explorador',
+  'explorer.noActiveSession': 'No hay ninguna sesión activa',
+  // Folder state shown inside the tree (the .fx-note row)
+  'explorer.dir.loading': 'Cargando…',
+  'explorer.dir.readFailed': 'Error al leer: {detail}',
+  'explorer.dir.empty': 'Vacío',
+  'explorer.refresh': 'Actualizar',
+  'explorer.reveal.failed': 'No se pudo abrir en el explorador: {detail}',
+  'explorer.menu.newFile': 'Archivo nuevo',
+  'explorer.menu.newFolder': 'Carpeta nueva',
+  'explorer.menu.rename': 'Cambiar nombre (F2)',
+  'explorer.menu.delete': 'Eliminar (Del)',
+  'explorer.menu.deleteCount': 'Eliminar ({count}, Del)',
+  'explorer.menu.duplicateCount': 'Duplicar ({count})',
+  'explorer.menu.cut': 'Cortar (Ctrl+X)',
+  'explorer.menu.copy': 'Copiar (Ctrl+C)',
+  'explorer.menu.paste': 'Pegar (Ctrl+V)',
+  'explorer.menu.copyPath': 'Copiar la ruta',
+  'explorer.menu.copyRelativePath': 'Copiar la ruta relativa',
+  'explorer.menu.reveal': 'Abrir en el explorador',
+  // FileExplorer.tsx — git status on a tree row (tooltip, aria-label)
+  'explorer.git.new': 'Archivo nuevo',
+  'explorer.git.modified': 'Modificado',
+  'explorer.git.deleted': 'Eliminado',
+  'explorer.git.conflict': 'Conflicto',
+  'explorer.git.folderCount': '{count} cambios',
+  // FileTabs.tsx — the dirty marker on a file tab
+  'explorer.tab.unsaved': 'Sin guardar',
+  // LocalHistoryDialog.tsx — the Local History browse/restore modal
+  // ('Local History' is treated as a proper noun and left untranslated)
+  'localHistory.loading': 'Cargando…',
+  'localHistory.empty': 'No hay historial de eliminaciones',
+  'localHistory.restore': 'Restaurar',
+  'localHistory.restoring': 'Restaurando…',
+  'localHistory.restored': 'Se restauró: {path}',
+  'localHistory.restoreFailed': 'Error al restaurar: {detail}',
+  'localHistory.listFailed': 'Error al consultar el historial: {detail}',
+  'localHistory.notFound': 'No se encontró la entrada del historial',
   // AccountPanel.tsx — account register, import, detect, logout, settings sync
   'account.field.kind': 'Tipo',
   'account.field.label': 'Etiqueta',
@@ -308,9 +523,26 @@ export const es: Catalog = {
   'session.terminal.schedSummary.monthly': 'el día {days} de cada mes a las {time}',
   'session.terminal.schedNextRun': ' · próxima ejecución {time}',
   'session.terminal.schedDisable': 'Desactivar',
+  // HistoryBrowser.tsx
+  'history.panel.title': 'Historial',
+  'history.panel.empty': 'Sin registros',
+  'history.loading': 'Cargando…',
+  'history.filter.deletedSuffix': ' (eliminada)',
   // HistoryBrowser.tsx — account filter labels
   'session.resume.originAccount': 'Cuenta original',
   'session.resume.originDeleted': 'Cuenta eliminada',
+  'history.filter.allAccounts': 'Todas las cuentas',
+  'history.refresh.tooltip': 'Alternativa manual si falla el watcher',
+  'history.project.openExplorer': 'Abrir en el explorador de archivos',
+  'history.menu.hide': 'Ocultar',
+  'history.project.noSessions': 'Sin sesiones',
+  'history.entry.preview': 'Vista previa',
+  'history.preview.truncated': '(solo el principio)',
+  'history.preview.me': 'Yo',
+  'history.resume.folderMissingTitle': 'No se encontró la carpeta del proyecto',
+  'history.resume.folderMissingBody':
+    'La carpeta original del proyecto no existe:\n{cwd}\n\n¿Elegir otra carpeta para reanudar?',
+  'history.resume.pickFolder': 'Elegir carpeta',
   // WorktreePanel.tsx — status labels
   'worktree.status.orphanDir': 'Registro de git perdido',
   'worktree.status.missing': 'Falta la carpeta',
@@ -334,5 +566,93 @@ export const es: Catalog = {
   // WorktreePanel.tsx — panel header, row icon buttons
   'worktree.refresh': 'Actualizar',
   'worktree.action.startSession': 'Nueva sesión',
-  'worktree.action.openExplorer': 'Explorador'
+  'worktree.action.openExplorer': 'Explorador',
+  // RunToolbar.tsx — config select, run/stop, edit/delete, the running list
+  'run.config.selectLabel': 'Configuración de ejecución',
+  'run.config.none': 'Sin configuraciones de ejecución',
+  'run.config.addOption': '+ Agregar configuración de ejecución…',
+  'run.action.run': 'Ejecutar',
+  'run.action.stop': 'Detener',
+  'run.config.editTitle': 'Editar la configuración',
+  'run.config.deleteTitle': 'Eliminar la configuración',
+  'run.global.listTitle': 'Ejecuciones activas',
+  'run.global.jump': 'Ir',
+  // App.tsx runAddConfig/runEditConfig — shared when the run.saveConfig IPC fails
+  'run.config.saveFailed': 'Error al guardar: {detail}',
+  // ipc.ts resolveRunCwd — translated in main before throwing (the layering rule)
+  'run.config.cwdNotString': 'La carpeta de trabajo de la configuración de ejecución no es válida',
+  'run.config.cwdOutsideProject':
+    'La carpeta de trabajo de la configuración de ejecución debe estar dentro del proyecto',
+  // RunConfigDialog.tsx
+  'run.form.editTitle': 'Editar la configuración de ejecución',
+  'run.form.addTitle': 'Agregar una configuración de ejecución',
+  'run.form.nameLabel': 'Nombre',
+  'run.form.commandLabel': 'Comando',
+  'run.form.commandPlaceholder': 'Ej.: gradlew.bat bootRun',
+  'run.form.commandHint': 'Se ejecuta en un shell desde la carpeta del proyecto.',
+  'run.form.jdkLabel': 'JDK (opcional)',
+  'run.form.jdkLoading': 'Buscando JDK…',
+  'run.form.jdkNone': 'Sin usar (entorno de la aplicación tal cual)',
+  'run.form.jdkCustom': '{path} (personalizado)',
+  'run.form.jdkBrowse': 'Examinar…',
+  'run.form.jdkHint': 'Se establece como JAVA_HOME.',
+  'run.form.springLabel': 'Perfiles de Spring (opcional)',
+  'run.form.springHint':
+    'Se establece como SPRING_PROFILES_ACTIVE. Puede indicar varios separados por comas.',
+  'run.form.cwdLabel': 'Carpeta de trabajo (opcional)',
+  'run.form.cwdPlaceholder': 'Si se deja vacío, la raíz del proyecto',
+  'run.form.cwdBrowse': 'Seleccionar…',
+  'run.form.cwdHint':
+    'Se guarda como una ruta relativa a la carpeta del proyecto (no se puede seleccionar nada fuera del proyecto). Si se deja vacío, se ejecuta en la raíz del proyecto.',
+  'run.form.envLabel': 'Variables de entorno (opcional)',
+  'run.form.envPlaceholder': 'Una por línea\nCUSTOM_VAR=value',
+  'run.form.envHint':
+    'Si se deja vacío, se hereda el entorno de la aplicación tal cual. Si un nombre se repite, prevalece esta configuración.',
+  'run.form.save': 'Guardar',
+  'run.form.add': 'Agregar',
+  // BottomPanel.tsx — the Run tab label, clear and collapse buttons
+  'run.panel.noActiveRun': 'Ejecución',
+  'run.panel.exited': ' · Finalizado (código {code})',
+  'run.panel.clear': 'Limpiar',
+  'run.panel.collapse': 'Contraer',
+  // BottomPanel, the rail terminal button
+  'terminal.rail.open': 'Terminal',
+  'terminal.tab.label': 'Terminal {n}',
+  'terminal.tab.new': 'Terminal nuevo',
+  'terminal.tab.close': 'Cerrar el terminal',
+  'terminal.open.failed': 'Error al abrir el terminal: {detail}',
+  // rolling.ts and codexRolling.ts — the default resume prompt. Must stay identical to
+  // session.new.rollPromptPlaceholder, which shows this value as its placeholder.
+  'rolling.continuePrompt': 'Continúa con el trabajo',
+  // slack.ts — the notification text that goes out to Slack
+  'slack.turnDone': '✅ Respuesta completada',
+  'slack.limitWaiting': '⏸ Límite alcanzado — se reanudará a las {at} (límite {scope})',
+  'slack.limitScope.weekly': 'semanal',
+  'slack.limitScope.session': 'de 5 horas',
+  'slack.accountSwitched': '🔁 Cambio de cuenta → {label}',
+  'slack.limitReset': '▶️ Límite restablecido — se envió el mensaje de reanudación automática',
+  'slack.stalled': '⚠️ La sesión está detenida — falló la reanudación automática, hay que revisarla',
+  'slack.sessionExited': '⏹ Sesión finalizada (exit {code})',
+  'slack.inputNeeded': '🙋 Se necesita una entrada',
+  'slack.inputNeededWith': '🙋 Se necesita una entrada — {message}',
+  // core/slack/inbound.ts buildChoiceKeys — why a choice reply was in the wrong shape
+  'slack.choice.hintPerQuestion': '💡 Responda separando cada pregunta con `/` (ej.: 1,3 / 2)',
+  'slack.choice.hintMulti': '💡 Para varias opciones, respóndalas separadas por comas (ej.: 1,3)',
+  'slack.pending.charCount': '{key}: {len} caracteres',
+  'slack.choice.noShape': 'No se encontraron las opciones pendientes',
+  'slack.choice.countMismatch':
+    "Hay {expected} preguntas pero {got} respuestas — separe cada pregunta con '/' (ej.: 1,3 / 2)",
+  'slack.choice.noNumber': 'No se encontró ningún número',
+  'slack.choice.noNumberAt': 'Pregunta {index}: no se encontró ningún número',
+  'slack.choice.singleOnly': 'Solo se puede elegir una opción',
+  'slack.choice.singleOnlyAt': 'Pregunta {index}: solo se puede elegir una opción',
+  'slack.choice.outOfRange': 'No existe la opción {n} (1-{max})',
+  'slack.choice.outOfRangeAt': 'Pregunta {index}: no existe la opción {n} (1-{max})',
+  // slackInbox.ts — the notice left in the thread when a reply could not be injected
+  'slack.inbox.tooLong':
+    '⚠️ La respuesta era demasiado larga y no se entregó (máximo {max} caracteres)',
+  'slack.inbox.sessionEnded': '⚠️ Esta sesión finalizó, así que no se pudo entregar la entrada',
+  'slack.inbox.injectFailed': '⚠️ No se pudo entregar la entrada',
+  'slack.limitNoResume': '⛔ Límite alcanzado — sin reanudación automática',
+  'slack.limitNoResumeAt': '⛔ Límite alcanzado — sin reanudación automática (se restablece {at})'
 }
