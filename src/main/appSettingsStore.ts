@@ -2,16 +2,11 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { Lang } from '../core/i18n'
 import { sanitizeFontFamily } from '../core/terminal/font'
+import type { TerminalFont } from '../core/terminal/font'
+export type { TerminalFont } from '../core/terminal/font'
 
 // Reused by ipc.ts's settings.setLang handler as the trust-boundary check before writing to disk
 export const isLang = (v: unknown): v is Lang => v === 'ko' || v === 'en'
-
-/** The user's terminal font choice. null on either side means "not chosen" — the chain builder then
- *  falls back to the app default for that half. */
-export interface TerminalFont {
-  latin: string | null
-  hangul: string | null
-}
 
 /** App-wide settings persistence. Holds the language, the id of the dismissed update campaign, and the
  *  orchestration toggle.

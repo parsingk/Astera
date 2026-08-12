@@ -12,6 +12,13 @@ const TAIL = ['"Courier New"', 'monospace']
  *  one. Rejection is silent by design — the caller treats null as "not set" and falls back. */
 const SAFE = /^[A-Za-z0-9 ._-]+$/
 
+/** The user's terminal font choice. null on either side means "not chosen" — the chain builder then
+ *  falls back to the app default for that half. */
+export interface TerminalFont {
+  latin: string | null
+  hangul: string | null
+}
+
 export function sanitizeFontFamily(name: unknown): string | null {
   if (typeof name !== 'string') return null
   const trimmed = name.trim()
