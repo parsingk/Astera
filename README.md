@@ -68,6 +68,10 @@ You will also need:
   works out the reset time, and resumes the work on the next account
 - Optional syncing of settings and personal content directories between accounts
 
+<div align="center">
+<img src="assets/rolling.gif" width="820" alt="Diagram: a scheduled session hits its weekly limit, Astera reads the reset time from the transcript, switches to the next account, and the same conversation resumes" />
+</div>
+
 **Scheduling and remote control**
 - Schedule sessions to start at a given time
 - Slack notifications when a turn finishes or a limit is hit, and Slack-side replies back into a
