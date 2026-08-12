@@ -27,4 +27,9 @@ export class EditorStateCache {
   drop(path: string): void {
     this.entries.delete(path)
   }
+
+  // 탐색기를 완전히 닫을 때처럼 모든 파일 탭이 한꺼번에 사라지는 경우. drop을 파일별로 부를 기회가 없다.
+  clear(): void {
+    this.entries.clear()
+  }
 }

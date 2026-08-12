@@ -1130,11 +1130,14 @@ export default function App(): React.JSX.Element {
     setFileBuffers({})
     setActiveTabId(null)
     explorerTreeRef.current = null
-    // This is the point where the explorer is abandoned entirely, so the undo journal is cleared as
-    // well — unlike the tree snapshot, no screen remains to reuse it (that is the difference from a
-    // plain toggleExplorer). Left behind, it would let Ctrl+Z undo operations that are not on screen
-    // the next time the explorer opens (possibly on a different project).
+    // This is the point where the explorer is abandoned entirely, so the undo journal and the per-file
+    // EditorState cache are cleared as well — unlike the tree snapshot, no screen remains to reuse them
+    // (that is the difference from a plain toggleExplorer). Left behind, the journal would let Ctrl+Z
+    // undo operations that are not on screen the next time the explorer opens (possibly on a different
+    // project), and the cache would hold every document and undo history of every file ever opened for
+    // the lifetime of the process (drop is per file tab, and no tab is left to close).
     explorerUndoRef.current = []
+    editorCacheRef.current.clear()
   }
 
   // Toggling explorer mode — Ctrl+Tab or Ctrl+Shift+E. Explorer state (file tabs, pin, expansion) is preserved
@@ -1316,7 +1319,7 @@ export default function App(): React.JSX.Element {
   //    규칙이 유지되어야 한다.
   //  - editorFileId: 세션 탭이 활성인 동안에도 마지막으로 고른 파일 탭을 계속 가리킨다. FileEditor를
   //    언마운트시키지 않기 위한 값이다 — 언마운트되면 EditorView가 destroy되면서 되돌리기 이력이
-  //    사라진다(FileEditor.tsx의 생성 effect는 cache.save 없이 destroy만 한다). 숨기기는 .workbench-body의
+  //    사라진다(FileEditor.tsx의 생성 effect는 cache.save 없이 destroy만 한다). 숨기기는 .explorer-view의
   //    display로만 하고 마운트는 유지한다 — xterm을 지키는 규칙과 같다.
   // 닫힌 탭을 계속 가리키지 않도록 fileTabs 안에 남아 있는지 매번 확인한다(별도 정리 코드가 필요 없다).
   if (activeFileId) lastFileTabIdRef.current = activeFileId
@@ -1794,6 +1797,36 @@ export default function App(): React.JSX.Element {
           {/* The container shared by both modes. Always mounted — .session-view must live inside it so
               showing the session in editor mode does not remount it (same rule as PaneGrid.tsx:104) */}
           <div className="workbench">
+            {/* 탭 줄은 .workbench의 첫 자식이다. 파일 탭과 세션 탭을 한 줄에 담으므로 아래 두 화면
+                (.session-view / .explorer-view) 중 어느 쪽이 보이든 그 줄이 위에 남아야 한다.
+                에디터 모드에서만 그린다 */}
+            {explorerOpen && (
+              <div className="workbench-topbar">
+                <WorkbenchTabs
+                  tabs={workbenchTabs}
+                  activeTabId={activeTabId}
+                  onSelect={selectWorkbenchTab}
+                  onClose={closeWorkbenchTab}
+                />
+                <RunToolbar
+                  configs={runConfigs}
+                  selectedId={runSelectedId}
+                  onSelect={setRunSelectedId}
+                  active={runActive}
+                  onRun={runStart}
+                  onStop={runStop}
+                  onAddConfig={runAddConfig}
+                  onEditConfig={runEditConfig}
+                  onDeleteConfig={runDeleteConfig}
+                  activeRuns={activeRuns}
+                  onJump={runJump}
+                  onStopProject={runStopProject}
+                  onModalOpenChange={setRunModalOpen}
+                  projectPath={explorerRoot ?? ''}
+                  isSpringBoot={runIsSpringBoot}
+                />
+              </div>
+            )}
             {/* The session view — hidden but never unmounted, so terminal scrollback survives.
                 세션 화면이 보이는 조건: 세션 모드이거나, 에디터 모드에서 세션 탭이 활성일 때 */}
             <div
@@ -1849,46 +1882,17 @@ export default function App(): React.JSX.Element {
                 ref={explorerViewRef}
                 style={
                   {
+                    // Run 콘솔이 이 화면 안에 있으므로 --run-panel-h 는 계속 여기에 둔다(run-resizer가
+                    // explorerViewRef로 이 값을 직접 갱신한다).
                     ['--run-panel-h']: `${runPanelHeight}px`,
-                    // 세션 탭이 활성이면 본문(.workbench-body)이 숨으므로 이 화면은 탭 줄 높이만 차지해야
-                    // 한다. flex를 그대로 두면 .workbench의 두 자식이 남은 높이를 반씩 나눠 가져(둘 다
-                    // flex:1, styles.css:164-165) 탭 줄 아래에 빈 칸이 생기고 터미널이 아래 절반으로 밀린다.
-                    // order로 위로 올리는 이유: 이 화면은 JSX에서 .session-view 뒤에 있으므로 그대로 두면
-                    // 탭 줄이 터미널 아래에 그려진다. DOM을 옮기면 xterm이 remount되므로 순서만 바꾼다
-                    flex: activeTab?.kind === 'session' ? 'none' : undefined,
-                    order: activeTab?.kind === 'session' ? -1 : undefined
+                    // 세션 탭이 활성이면 에디터 화면 전체를 숨긴다 — 본문만 숨기면 그 아래의 Run 콘솔과
+                    // 리사이저가 남아 터미널 위에 그려진다. Run 콘솔은 에디터 화면의 출력 창이므로
+                    // 세션 터미널이 화면을 차지하는 동안에는 함께 물러나는 것이 맞다.
+                    display: activeTab?.kind === 'session' ? 'none' : undefined
                   } as React.CSSProperties
                 }
               >
-                <div className="workbench-topbar">
-                  <WorkbenchTabs
-                    tabs={workbenchTabs}
-                    activeTabId={activeTabId}
-                    onSelect={selectWorkbenchTab}
-                    onClose={closeWorkbenchTab}
-                  />
-                  <RunToolbar
-                    configs={runConfigs}
-                    selectedId={runSelectedId}
-                    onSelect={setRunSelectedId}
-                    active={runActive}
-                    onRun={runStart}
-                    onStop={runStop}
-                    onAddConfig={runAddConfig}
-                    onEditConfig={runEditConfig}
-                    onDeleteConfig={runDeleteConfig}
-                    activeRuns={activeRuns}
-                    onJump={runJump}
-                    onStopProject={runStopProject}
-                    onModalOpenChange={setRunModalOpen}
-                    projectPath={explorerRoot ?? ''}
-                    isSpringBoot={runIsSpringBoot}
-                  />
-                </div>
-                <div
-                  className="workbench-body"
-                  style={{ display: activeTab?.kind === 'session' ? 'none' : 'flex' }}
-                >
+                <div className="workbench-body">
                   {editorFile && editorBuf ? (
                     <div className="file-editor-wrap">
                       {editorBuf.readOnly && !editorBuf.loading && !editorBuf.error && (

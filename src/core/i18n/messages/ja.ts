@@ -360,7 +360,7 @@ export const ja: Catalog = {
   'explorer.git.deleted': '削除済み',
   'explorer.git.conflict': '競合',
   'explorer.git.folderCount': '変更 {count} 件',
-  // FileTabs.tsx — the dirty marker on a file tab
+  // WorkbenchTabs.tsx — the dirty marker on a file tab
   'explorer.tab.unsaved': '未保存',
   // LocalHistoryDialog.tsx — the Local History browse/restore modal
   'localHistory.loading': '読み込み中…',
