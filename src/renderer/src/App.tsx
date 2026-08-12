@@ -1367,14 +1367,10 @@ export default function App(): React.JSX.Element {
   /** 에디터 모드 탭 줄에 올라가는 세션. 판별은 core에 있다 — worktree 세션이 부모 프로젝트에 잡히지
    *  않는 이유가 그 모듈의 주석에 있다 */
   const projectSessions = sessionsOfProject(sessions, explorerRoot)
+  // 세션 탭이 먼저, 파일 탭이 뒤. 세션은 프로젝트에 딸린 고정된 것이고 파일은 열고 닫는 것이므로, 새로
+  // 연 파일이 브라우저 탭처럼 오른쪽 끝에 붙어야 한다. 반대로 두면 파일을 열 때마다 세션 탭이 오른쪽으로
+  // 밀린다.
   const workbenchTabs: WorkbenchTab[] = [
-    ...fileTabs.map((f) => ({
-      tabId: f.id,
-      kind: 'file' as const,
-      path: f.path,
-      title: f.title,
-      dirty: dirtyIds.has(f.id)
-    })),
     ...projectSessions.map((s) => ({
       tabId: sessionTab(s.id),
       kind: 'session' as const,
@@ -1382,10 +1378,33 @@ export default function App(): React.JSX.Element {
       color: accounts.find((a) => a.id === s.accountId)?.color ?? '#888',
       busy: busy[s.id] === true,
       exited: s.status === 'exited'
+    })),
+    ...fileTabs.map((f) => ({
+      tabId: f.id,
+      kind: 'file' as const,
+      path: f.path,
+      title: f.title,
+      dirty: dirtyIds.has(f.id)
     }))
   ]
 
-  // 보고 있던 세션 탭이 탭 줄에서 사라졌다 — 파일 탭이 있으면 그 첫 번째로, 없으면 아무것도 활성이 아니다.
+  /** 실제로 본문에 그려지는 탭. activeTabId가 비어 있거나(에디터 모드에 처음 들어왔고 연 파일이 없다,
+   *  또는 마지막 파일 탭을 닫았다) 가리키는 탭이 탭 줄에서 사라졌으면 세션 탭으로 떨어진다 — 파일을
+   *  하나도 열지 않았는데 빈 에디터를 보여주는 대신, 보고 있던 세션이 그대로 남는다. 파일을 연 적이
+   *  있으면 activeTabId가 그 상태를 들고 있으므로 이 폴백은 걸리지 않는다.
+   *
+   *  activeTabId를 고쳐 쓰지 않고 파생만 하는 이유는 activeFileId·activeFileIdRef가 activeTabId를
+   *  엄격하게 따라야 하기 때문이다(세션을 보는 동안 Ctrl/Cmd+W가 파일 탭을 닫으면 안 된다). */
+  const shownTabId =
+    activeTabId && workbenchTabs.some((t) => t.tabId === activeTabId)
+      ? activeTabId
+      : (workbenchTabs.find((t) => t.tabId === sessionTab(activeSessionId ?? '')) ??
+          workbenchTabs.find((t) => t.kind === 'session') ??
+          workbenchTabs[0])?.tabId ?? null
+  const shownTab = shownTabId ? parseTab(shownTabId) : null
+
+  // 보고 있던 세션 탭이 탭 줄에서 사라졌다 — 죽은 id를 비우기만 하고, 그다음 무엇을 보여줄지는
+  // shownTabId의 폴백이 정한다(남은 세션 → 없으면 첫 탭).
   // 세션이 닫힌 경우와 프로젝트가 바뀐 경우를 한 조건으로 덮는다: 둘 다 "그 세션 탭이 더는 그려지지
   // 않는데 본문에는 남아 있다"는 같은 유령이다. 종료된 세션은 목록에 남으므로(status: 'exited') 여기
   // 걸리지 않는다.
@@ -1396,7 +1415,7 @@ export default function App(): React.JSX.Element {
     const ref = parseTab(activeTabId)
     if (ref?.kind !== 'session') return
     if (sessionsOfProject(sessions, explorerRoot).some((s) => s.id === ref.id)) return
-    setActiveTabId(fileTabsRef.current[0]?.id ?? null)
+    setActiveTabId(null)
   }, [sessions, explorerRoot, activeTabId])
 
   // Loads that project's run configurations and active run whenever the explorer root or open state changes
@@ -1806,7 +1825,7 @@ export default function App(): React.JSX.Element {
               <div className="workbench-topbar">
                 <WorkbenchTabs
                   tabs={workbenchTabs}
-                  activeTabId={activeTabId}
+                  activeTabId={shownTabId}
                   onSelect={selectWorkbenchTab}
                   onClose={closeWorkbenchTab}
                 />
@@ -1833,7 +1852,7 @@ export default function App(): React.JSX.Element {
                 세션 화면이 보이는 조건: 세션 모드이거나, 에디터 모드에서 세션 탭이 활성일 때 */}
             <div
               className="session-view"
-              style={{ display: !explorerOpen || activeTab?.kind === 'session' ? 'flex' : 'none' }}
+              style={{ display: !explorerOpen || shownTab?.kind === 'session' ? 'flex' : 'none' }}
             >
               <PaneGrid
                 layout={layout}
@@ -1858,7 +1877,7 @@ export default function App(): React.JSX.Element {
                 onDragSessionChange={setDragSessionId}
                 onDropTab={dropTabInGroup}
                 soloSessionId={
-                  explorerOpen && activeTab?.kind === 'session' ? activeTab.id : null
+                  explorerOpen && shownTab?.kind === 'session' ? shownTab.id : null
                 }
               />
               {/* When the layout is empty (not one group in the tree) there is no group tab bar, so there
@@ -1890,7 +1909,7 @@ export default function App(): React.JSX.Element {
                     // 세션 탭이 활성이면 에디터 화면 전체를 숨긴다 — 본문만 숨기면 그 아래의 Run 콘솔과
                     // 리사이저가 남아 터미널 위에 그려진다. Run 콘솔은 에디터 화면의 출력 창이므로
                     // 세션 터미널이 화면을 차지하는 동안에는 함께 물러나는 것이 맞다.
-                    display: activeTab?.kind === 'session' ? 'none' : undefined
+                    display: shownTab?.kind === 'session' ? 'none' : undefined
                   } as React.CSSProperties
                 }
               >
