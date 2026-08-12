@@ -43,7 +43,7 @@ Signing happens inside the tagged release workflow
 4. Only then are the assets attached to the GitHub release.
 
 Nothing is signed from a developer machine, from a branch, or outside this workflow. Every signed
-artifact is therefore reproducible from the tagged commit in this repository.
+artifact is therefore built only from the tagged commit in this repository.
 
 ## Privacy
 

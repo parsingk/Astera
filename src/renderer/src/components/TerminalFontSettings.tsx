@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Select, type SelectOption } from './Select'
 import { useI18n } from '../i18n/I18nProvider'
 import { useTerminalFont } from '../lib/terminalFont'
@@ -68,7 +68,11 @@ export function TerminalFontSettings(): React.JSX.Element {
     ]
   }
 
-  const shadowed = font.latin !== null && hasHangulGlyph(font.latin)
+  // Measures via a canvas, so it is memoized instead of recomputed on every re-render of this tab.
+  const shadowed = useMemo(
+    () => font.latin !== null && hasHangulGlyph(font.latin),
+    [font.latin]
+  )
 
   return (
     <>
@@ -77,7 +81,7 @@ export function TerminalFontSettings(): React.JSX.Element {
         {/* onMouseDown covers the mouse path; onFocus (bubbles) covers keyboard users tabbing onto
             the trigger, since Select can be opened with Enter/Space/ArrowDown with no mousedown at
             all. Both are needed — neither is redundant with the other. */}
-        <div onMouseDown={loadFamilies} onFocus={loadFamilies}>
+        <div className="settings-font-select" onMouseDown={loadFamilies} onFocus={loadFamilies}>
           <Select
             items={itemsFor(font.latin)}
             value={font.latin ?? SYSTEM}
@@ -91,7 +95,7 @@ export function TerminalFontSettings(): React.JSX.Element {
         {/* onMouseDown covers the mouse path; onFocus (bubbles) covers keyboard users tabbing onto
             the trigger, since Select can be opened with Enter/Space/ArrowDown with no mousedown at
             all. Both are needed — neither is redundant with the other. */}
-        <div onMouseDown={loadFamilies} onFocus={loadFamilies}>
+        <div className="settings-font-select" onMouseDown={loadFamilies} onFocus={loadFamilies}>
           <Select
             items={itemsFor(font.hangul)}
             value={font.hangul ?? SYSTEM}

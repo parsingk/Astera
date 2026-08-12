@@ -452,6 +452,9 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* the language picker in settings — width, plus the 13px it has always used. That size is deliberate:
    it pairs with .slack-url-input in the same panel (see the note there), so it does not follow .sel's 12px */
 .settings-lang-select { flex: 0 0 140px; font-size: 13px; }
+/* terminal font pickers — pinned to the same width as .settings-lang-select so the three settings
+   rows line up instead of the trigger shrinking to fit whichever font name is currently selected */
+.settings-font-select { flex: 0 0 140px; }
 /* Slack Webhook settings */
 .slack-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .slack-url-input { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 5px 8px; border-radius: 4px; font-size: 13px; }
