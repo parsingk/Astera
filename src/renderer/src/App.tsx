@@ -372,6 +372,9 @@ export default function App(): React.JSX.Element {
   sessionsRef.current = sessions
   const activeFileIdRef = useRef(activeFileId)
   activeFileIdRef.current = activeFileId
+  // 마지막으로 활성이었던 파일 탭. 세션 탭으로 갔다 와도 FileEditor가 살아 있게 하는 값의 출처다 —
+  // 갱신과 사용은 아래 editorFileId 계산부에 있고, 왜 activeFileId와 규칙이 다른지도 거기에 적었다
+  const lastFileTabIdRef = useRef<string | null>(null)
   const layoutRef = useRef(layout)
   layoutRef.current = layout
   const activePaneIdRef = useRef(activePaneId)
@@ -1307,13 +1310,26 @@ export default function App(): React.JSX.Element {
   }
 
   const active = sessions.find((s) => s.id === activeSessionId) ?? null
-  const activeFile = fileTabs.find((t) => t.id === activeFileId) ?? null
+  // 에디터가 붙들고 있는 파일. activeFileId 와 규칙이 다르다는 점이 중요하다:
+  //  - activeFileId (와 activeFileIdRef): 세션 탭이 활성이면 무조건 null. "지금 본문에 파일이 떠 있는가"다.
+  //    Ctrl/Cmd+W(파일 탭 닫기)가 이 ref를 읽으므로, 세션을 보는 중에 파일이 닫히지 않으려면 이 엄격한
+  //    규칙이 유지되어야 한다.
+  //  - editorFileId: 세션 탭이 활성인 동안에도 마지막으로 고른 파일 탭을 계속 가리킨다. FileEditor를
+  //    언마운트시키지 않기 위한 값이다 — 언마운트되면 EditorView가 destroy되면서 되돌리기 이력이
+  //    사라진다(FileEditor.tsx의 생성 effect는 cache.save 없이 destroy만 한다). 숨기기는 .workbench-body의
+  //    display로만 하고 마운트는 유지한다 — xterm을 지키는 규칙과 같다.
+  // 닫힌 탭을 계속 가리키지 않도록 fileTabs 안에 남아 있는지 매번 확인한다(별도 정리 코드가 필요 없다).
+  if (activeFileId) lastFileTabIdRef.current = activeFileId
+  const editorFileId = fileTabs.some((t) => t.id === lastFileTabIdRef.current)
+    ? lastFileTabIdRef.current
+    : null
+  const editorFile = fileTabs.find((t) => t.id === editorFileId) ?? null
   const runningCount = sessions.filter((s) => s.status === 'running').length
   runningCountRef.current = runningCount // the toast's install button has to see the value at click time
   // A check round trip is around 350ms, so watching only the real state would make 'Checking…' invisible
   const updateChecking = showChecking(update?.state, checkClickedAt, Date.now())
 
-  const activeBuf = activeFileId ? fileBuffers[activeFileId] : null
+  const editorBuf = editorFileId ? fileBuffers[editorFileId] : null
   const dirtyIds = new Set(
     fileTabs.filter((t) => { const b = fileBuffers[t.id]; return b && !b.readOnly && b.content !== b.savedContent }).map((t) => t.id)
   )
@@ -1873,29 +1889,31 @@ export default function App(): React.JSX.Element {
                   className="workbench-body"
                   style={{ display: activeTab?.kind === 'session' ? 'none' : 'flex' }}
                 >
-                  {activeFile && activeBuf ? (
+                  {editorFile && editorBuf ? (
                     <div className="file-editor-wrap">
-                      {activeBuf.readOnly && !activeBuf.loading && !activeBuf.error && (
+                      {editorBuf.readOnly && !editorBuf.loading && !editorBuf.error && (
                         <div className="file-truncated">{t('files.editor.readOnlyReason')}</div>
                       )}
-                      {activeBuf.conflict && (
+                      {editorBuf.conflict && (
                         <div className="file-conflict">
                           {t('files.editor.conflictChanged')}
-                          <button onClick={() => reloadBufferFromDisk(activeFile.id)}>{t('files.editor.reload')}</button>
-                          <button onClick={() => setFileBuffers((prev) => (prev[activeFile.id] ? { ...prev, [activeFile.id]: { ...prev[activeFile.id], conflict: false } } : prev))}>{t('files.editor.keepMine')}</button>
+                          <button onClick={() => reloadBufferFromDisk(editorFile.id)}>{t('files.editor.reload')}</button>
+                          <button onClick={() => setFileBuffers((prev) => (prev[editorFile.id] ? { ...prev, [editorFile.id]: { ...prev[editorFile.id], conflict: false } } : prev))}>{t('files.editor.keepMine')}</button>
                         </div>
                       )}
-                      {/* FileEditor always stays mounted — it must not unmount on loading or error, or the per-file EditorState cache (undo, scroll) is lost */}
+                      {/* FileEditor always stays mounted — it must not unmount on loading or error, or the per-file
+                          EditorState cache (undo, scroll) is lost. 세션 탭이 활성일 때도 마운트가 유지되는
+                          이유는 editorFileId 주석에 있다 — 이 본문은 display로만 숨는다 */}
                       <FileEditor
-                        path={activeFile.path}
-                        content={activeBuf.content}
-                        readOnly={activeBuf.readOnly}
+                        path={editorFile.path}
+                        content={editorBuf.content}
+                        readOnly={editorBuf.readOnly}
                         cache={editorCacheRef.current}
-                        onChange={(next) => setBufferContent(activeFile.id, next)}
-                        onSave={() => saveFile(activeFile.id)}
+                        onChange={(next) => setBufferContent(editorFile.id, next)}
+                        onSave={() => saveFile(editorFile.id)}
                       />
-                      {activeBuf.loading && <div className="file-overlay">{t('files.editor.loading')}</div>}
-                      {!activeBuf.loading && activeBuf.error && <div className="file-overlay">{activeBuf.error}</div>}
+                      {editorBuf.loading && <div className="file-overlay">{t('files.editor.loading')}</div>}
+                      {!editorBuf.loading && editorBuf.error && <div className="file-overlay">{editorBuf.error}</div>}
                     </div>
                   ) : (
                     <div className="placeholder">{t('files.editor.selectPrompt')}</div>
