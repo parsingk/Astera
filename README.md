@@ -14,11 +14,11 @@
 
 </div>
 
-Astera runs your agent sessions when you are not at the desk. Schedule one to start at 3am. When it
-hits a usage limit, Astera reads the reset time out of the transcript, switches to your next account,
-and resumes the *same* work — and tells you on Slack when the turn lands or a limit hits. Sessions sit
-side by side in one window, each isolated in its own git worktree, and one agent can hand tasks to
-another and wait for the results.
+Astera runs your agent sessions when you are not at the desk. Schedule one to start at 3am, and it
+starts without you. When any session hits a usage limit — scheduled or not — Astera reads the reset
+time out of the transcript, switches to your next account, and resumes the *same* work. Slack tells
+you when a turn lands or a limit hits. Sessions sit side by side in one window, each isolated in its
+own git worktree, and one agent can hand tasks to another and wait for the results.
 
 > **Status:** Windows and macOS. It drives the `claude` and `codex` CLIs, so it is only as
 > capable as whichever of those you have installed.
@@ -69,13 +69,17 @@ You will also need:
 - Optional syncing of settings and personal content directories between accounts
 
 <div align="center">
-<img src="assets/rolling.gif" width="820" alt="Diagram: a scheduled session hits its weekly limit, Astera reads the reset time from the transcript, switches to the next account, and the same conversation resumes" />
+<img src="assets/rolling.gif" width="820" alt="Diagram: a running session hits its weekly limit, Astera reads the reset time from the transcript, switches to the next account, and the same conversation carries on" />
 </div>
 
 **Scheduling and remote control**
 - Schedule sessions to start at a given time
 - Slack notifications when a turn finishes or a limit is hit, and Slack-side replies back into a
   session — so you can keep an eye on a run from your phone
+
+<div align="center">
+<img src="assets/schedule.gif" width="820" alt="Diagram: at 03:00 a scheduled session starts on its own, runs the command left for it, finishes, and Slack reports the result" />
+</div>
 
 **Cross-vendor orchestration**
 - A coordinator session dispatches tasks to worker sessions — including workers on the *other* vendor
