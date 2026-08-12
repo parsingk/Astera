@@ -23,7 +23,8 @@ export function TerminalFontSettings(): React.JSX.Element {
     void listLocalFontFamilies()
       .then(setFamilies)
       .catch((err) => {
-        setFamilies([])
+        // Leave families null (not []) so a transient failure can be retried on the next open,
+        // instead of caching an empty list for the rest of the session.
         toast.error(
           t('settings.font.listFailed', {
             detail: err instanceof Error ? err.message : String(err)
@@ -73,7 +74,10 @@ export function TerminalFontSettings(): React.JSX.Element {
     <>
       <div className="settings-row">
         <span>{t('settings.font.latin')}</span>
-        <div onMouseDown={loadFamilies}>
+        {/* onMouseDown covers the mouse path; onFocus (bubbles) covers keyboard users tabbing onto
+            the trigger, since Select can be opened with Enter/Space/ArrowDown with no mousedown at
+            all. Both are needed — neither is redundant with the other. */}
+        <div onMouseDown={loadFamilies} onFocus={loadFamilies}>
           <Select
             items={itemsFor(font.latin)}
             value={font.latin ?? SYSTEM}
@@ -84,7 +88,10 @@ export function TerminalFontSettings(): React.JSX.Element {
       </div>
       <div className="settings-row">
         <span>{t('settings.font.hangul')}</span>
-        <div onMouseDown={loadFamilies}>
+        {/* onMouseDown covers the mouse path; onFocus (bubbles) covers keyboard users tabbing onto
+            the trigger, since Select can be opened with Enter/Space/ArrowDown with no mousedown at
+            all. Both are needed — neither is redundant with the other. */}
+        <div onMouseDown={loadFamilies} onFocus={loadFamilies}>
           <Select
             items={itemsFor(font.hangul)}
             value={font.hangul ?? SYSTEM}
