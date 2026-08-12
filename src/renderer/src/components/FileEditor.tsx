@@ -77,8 +77,17 @@ function restoreOrBuild(
   const cached = cache.get(path)
   const usable =
     cached && cached.state.doc.toString() === content && cached.state.readOnly === readOnly
-  if (import.meta.env.DEV)
-    debugNote(`restore ${path} cached=${cached != null} usable=${usable === true}`)
+  if (import.meta.env.DEV) {
+    const d = cached?.state.doc.toString() ?? ''
+    // 판정에 떨어지는 이유를 보려면 비교 입력을 그대로 찍어야 한다 — 길이가 같은데 다르면 내용,
+    // 길이가 다르면 어느 쪽이 갱신되지 않은 것이고, readOnly가 다르면 그쪽이다
+    debugNote(
+      `restore ${path} cached=${cached != null} usable=${usable === true}` +
+        ` docLen=${d.length} contentLen=${content.length}` +
+        ` docHead=${JSON.stringify(d.slice(0, 24))} contentHead=${JSON.stringify(content.slice(0, 24))}` +
+        ` roCached=${cached?.state.readOnly} roProp=${readOnly}`
+    )
+  }
   // 상태를 재사용할 때만 스크롤도 되돌린다. 문서가 달라졌다면 그 위치는 더 이상 같은 곳을 가리키지 않는다
   return usable
     ? { state: cached.state, scroll: cached.scroll }
