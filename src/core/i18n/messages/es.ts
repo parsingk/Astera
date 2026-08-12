@@ -16,7 +16,7 @@ export const es: Catalog = {
   // Agent orchestration
   'settings.orchestration.label': 'Orquestación de agentes (experimental)',
   'settings.orchestration.hint':
-    'Cuando está activada, las sesiones de agente que inicia la aplicación pueden iniciar sesiones de trabajo en otro proveedor. ' +
+    'Cuando está activada, las sesiones de agente que abre la aplicación pueden abrir sesiones de trabajador con otro proveedor. ' +
     'Un agente podrá crear sesiones con cualquiera de las cuentas de la aplicación, así que actívela solo cuando la necesite. ' +
     'No se aplica a las sesiones que ya están abiertas: funciona a partir de las sesiones nuevas. ' +
     'Pida a la sesión que vaya a usar como orquestador que ejecute astera help para obtener la guía de uso completa.',
@@ -149,7 +149,7 @@ export const es: Catalog = {
   // a bot token with no channel ID silently falls back to Webhook (slack.ts applyConfig), so that state has to show
   'settings.slack.botSection': 'Bot (un hilo por sesión)',
   'settings.slack.channelIdHint':
-    'Haga clic derecho en el canal → detalles del canal, al final del todo.',
+    'Haga clic derecho en el canal → Detalles del canal; está al final.',
   'settings.slack.appTokenHint':
     'Para la recepción en Socket Mode. En modo bot, las respuestas del hilo llegan con este token.',
   // A channel is not a permission boundary — anyone invited to it could push input into someone else's
@@ -165,7 +165,7 @@ export const es: Catalog = {
     'No hay ninguna vía de envío, así que no se envían notificaciones. Se necesita una URL de webhook, o un token de bot más el ID de canal.',
   'settings.slack.setupGuide':
     'Hay que invitar al bot al canal de destino para que publique. Consulte docs/slack-bot-setup.md para ver todos los pasos.',
-  'settings.worktree.createLocation': 'Ubicación donde se crean los worktrees',
+  'settings.worktree.createLocation': 'Ubicación de los worktrees nuevos',
   'settings.worktree.change': 'Cambiar…',
   'settings.worktree.hint':
     'Los worktrees nuevos se crean bajo esta carpeta como <repo>/<nombre>. Los worktrees existentes no se mueven.',
@@ -186,7 +186,7 @@ export const es: Catalog = {
   'settings.font.loadingList': 'leyendo las fuentes instaladas…',
   // App.tsx — update status (the title-bar UpdateIndicator / the settings Info tab)
   'update.tb.restartInstallVersion': 'Reiniciar e instalar v{version}',
-  'update.tb.checking': 'Buscando actualizaciones…',
+  'update.tb.checking': 'Comprobando actualizaciones…',
   'update.tb.available': 'Nueva versión {version} encontrada',
   'update.tb.downloading': 'Descargando {percent}%',
   'update.tb.error': 'Error de actualización',
@@ -195,7 +195,7 @@ export const es: Catalog = {
   'update.info.downloading': 'Descargando {percent}%…',
   'update.info.restartInstallVersion': 'Reiniciar e instalar v{version}',
   'update.info.checking': 'Comprobando…',
-  'update.info.checkButton': 'Buscar actualizaciones',
+  'update.info.checkButton': 'Comprobar actualizaciones',
   'update.info.upToDateAt': 'Ya tiene la última versión (comprobado {time})',
   // 'available' means "found", not "downloading"
   'update.info.available': 'Nueva versión {version} disponible',
@@ -207,7 +207,7 @@ export const es: Catalog = {
   'update.toast.ready': 'La actualización v{version} está lista',
   'update.toast.installNow': 'Instalar ahora',
   'update.confirm.title': 'Instalar y reiniciar ahora',
-  'update.confirm.body': 'Se cerrarán {count} sesiones en curso. ¿Continuar?',
+  'update.confirm.body': 'Se finalizarán {count} sesiones en curso. ¿Continuar?',
   // UpdateGate.tsx — the screen that covers the app when the version is below the minimum the release policy sets
   'update.gate.title': 'Hay que actualizar',
   'update.gate.body': 'Actualice a la versión {version}',
@@ -221,7 +221,7 @@ export const es: Catalog = {
   // App.tsx — settings modal Shortcuts tab
   'shortcut.group.terminal': 'Terminal',
   'shortcut.terminal.newline': 'Salto de línea',
-  'shortcut.terminal.copyOrInterrupt': 'Copiar la selección · interrumpir si no hay',
+  'shortcut.terminal.copyOrInterrupt': 'Copiar selección · interrumpir si no hay',
   'shortcut.paste': 'Pegar',
   'shortcut.group.sessionTab': 'Pestañas de sesión',
   'shortcut.sessionTab.prev': 'Pestaña anterior',
@@ -260,7 +260,7 @@ export const es: Catalog = {
     'Claude Code y Codex usan esta tecla para cambiar de modo y autocompletar. Si la toma la aplicación, no podrá usarla en una sesión.',
   'shortcut.pane.dragSplit': 'Al borde para dividir · al centro para mover',
   'shortcut.group.explorer': 'Explorador de archivos',
-  'shortcut.explorer.toggleMode': 'Sesión ↔ explorador',
+  'shortcut.explorer.toggleMode': 'Sesión ↔ Explorador',
   'shortcut.explorer.saveFile': 'Guardar el archivo',
   'shortcut.explorer.closeFileTab': 'Cerrar la pestaña de archivo',
   'shortcut.explorer.rename': 'Cambiar nombre',
@@ -507,7 +507,8 @@ export const es: Catalog = {
   // TerminalView.tsx — the rolling banner and the loading/exit overlays
   'session.terminal.rollSwitching': 'Continuando con «{label}»…',
   'session.terminal.trustAccepting': 'Aceptando automáticamente la confianza de la carpeta…',
-  'session.terminal.weeklyLimitWaiting': 'Límite semanal agotado — se reanudará a las {time}',
+  // {time} here is fmtDateTime (M/D HH:MM), not fmtTime — no preposition can precede it
+  'session.terminal.weeklyLimitWaiting': 'Límite semanal agotado — reanudación: {time}',
   'session.terminal.limitWaiting': 'Límite alcanzado — se reanudará a las {time}',
   // Auto-resume failure toast
   'session.toast.stalled':
@@ -592,7 +593,7 @@ export const es: Catalog = {
   'run.form.commandHint': 'Se ejecuta en un shell desde la carpeta del proyecto.',
   'run.form.jdkLabel': 'JDK (opcional)',
   'run.form.jdkLoading': 'Buscando JDK…',
-  'run.form.jdkNone': 'Sin usar (entorno de la aplicación tal cual)',
+  'run.form.jdkNone': 'No usar (entorno de la aplicación tal cual)',
   'run.form.jdkCustom': '{path} (personalizado)',
   'run.form.jdkBrowse': 'Examinar…',
   'run.form.jdkHint': 'Se establece como JAVA_HOME.',
@@ -626,15 +627,17 @@ export const es: Catalog = {
   'rolling.continuePrompt': 'Continúa con el trabajo',
   // slack.ts — the notification text that goes out to Slack
   'slack.turnDone': '✅ Respuesta completada',
-  'slack.limitWaiting': '⏸ Límite alcanzado — se reanudará a las {at} (límite {scope})',
+  // {at} is HH:MM for the 5-hour scope but M/D HH:MM for the weekly one (fmtAt in main/slack.ts),
+  // so no preposition can precede it
+  'slack.limitWaiting': '⏸ Límite alcanzado — reanudación: {at} (límite {scope})',
   'slack.limitScope.weekly': 'semanal',
   'slack.limitScope.session': 'de 5 horas',
   'slack.accountSwitched': '🔁 Cambio de cuenta → {label}',
   'slack.limitReset': '▶️ Límite restablecido — se envió el mensaje de reanudación automática',
   'slack.stalled': '⚠️ La sesión está detenida — falló la reanudación automática, hay que revisarla',
   'slack.sessionExited': '⏹ Sesión finalizada (exit {code})',
-  'slack.inputNeeded': '🙋 Se necesita una entrada',
-  'slack.inputNeededWith': '🙋 Se necesita una entrada — {message}',
+  'slack.inputNeeded': '🙋 Entrada necesaria',
+  'slack.inputNeededWith': '🙋 Entrada necesaria — {message}',
   // core/slack/inbound.ts buildChoiceKeys — why a choice reply was in the wrong shape
   'slack.choice.hintPerQuestion': '💡 Responda separando cada pregunta con `/` (ej.: 1,3 / 2)',
   'slack.choice.hintMulti': '💡 Para varias opciones, respóndalas separadas por comas (ej.: 1,3)',
