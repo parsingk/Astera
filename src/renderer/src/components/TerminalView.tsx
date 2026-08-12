@@ -71,6 +71,10 @@ export function TerminalView({
   const { family } = useTerminalFont()
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
+  // Set by the construction effect so the font effect can reuse its lastSent-guarded sendResize
+  // instead of calling window.api.sessions.resize directly (which would bypass the guard and leave
+  // its lastSent stale for the next ResizeObserver-driven call)
+  const sendResizeRef = useRef<(() => void) | null>(null)
   // A resumed session has a delay while claude reads and replays the whole conversation, so show a loading indicator until the first output
   const [loading, setLoading] = useState(Boolean(session.resumeSessionId))
 
@@ -83,6 +87,7 @@ export function TerminalView({
       // lookup used to fall through to the generic monospace, where Chromium picked Gulim — that made Hangul
       // (and only Hangul) look different from PowerShell, which falls back to Malgun Gothic via DirectWrite.
       // Order is what splits the roles: Latin is claimed by Cascadia Mono first, Hangul by Malgun Gothic.
+      // This is the chain `family` resolves to when the user hasn't configured a font.
       fontFamily: family,
       scrollback: 5000,
       theme: { background: '#141417', foreground: '#d0d0d6', cursor: '#37b0c4' }
@@ -102,6 +107,7 @@ export function TerminalView({
       window.api.sessions.resize(session.id, d.cols, d.rows)
       lastSent = d
     }
+    sendResizeRef.current = sendResize
     sendResize()
     term.focus() // so typing works immediately once the session opens
 
@@ -204,6 +210,7 @@ export function TerminalView({
       clearTimeout(resizeTimer)
       clearTimeout(loadingSafety)
       termRef.current = null
+      sendResizeRef.current = null
       term.dispose()
     }
   }, [session.id])
@@ -219,7 +226,7 @@ export function TerminalView({
     if (!term || !host) return
     term.options.fontFamily = family
     fitTerminalToHost(term, host)
-    window.api.sessions.resize(session.id, term.cols, term.rows)
+    sendResizeRef.current?.()
   }, [family, session.id])
 
   // When this tab becomes active (including keyboard switching and a tab click), focus the terminal so typing works right away
