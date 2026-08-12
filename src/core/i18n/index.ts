@@ -13,8 +13,9 @@ export type MessageParams = Record<string, string | number>
 export type Catalog = Partial<Record<MessageKey, string>>
 
 /** The one place a language is declared. Lang, isLang, the lookup below, the OS-locale match in
- *  locale.ts and the settings picker all derive from this table, so adding a language is a catalog file
- *  plus one line here.
+ *  locale.ts and the settings picker all derive from this table, so adding a language costs three
+ *  places: the catalog file, an entry here, and an entry in tsconfig.web.json's `include` array
+ *  (tsconfig.node.json uses a glob and needs nothing).
  *  nativeName is written in its own language and is not a translation target — someone hunting for
  *  their language should not have to know the current one. */
 export const CATALOGS = {
@@ -36,6 +37,10 @@ export const isLang = (v: unknown): v is Lang => typeof v === 'string' && v in C
 export interface LangPreference {
   stored: Lang | null
   resolved: Lang
+  /** What the OS locale resolves to, regardless of what is stored. Unlike `resolved` (which follows
+   *  `stored` once a language is explicitly chosen), this stays the OS resolution so the System row can
+   *  show what choosing it would actually do. */
+  system: Lang
 }
 
 /** The untranslated message a backend (a pure core module) returns instead of a finished sentence.

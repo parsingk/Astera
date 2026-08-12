@@ -122,6 +122,7 @@ export function runAccountLogout(
 
 export async function createCore(userDataDir: string, osLocale: string): Promise<Core> {
   // Same switch on the main side, so banners and error sentences are padded too
+  // Dev-only layout check: VITE_PSEUDO_LOCALE=1 ASTERA_PSEUDO_LOCALE=1 npm run dev
   setPseudoLocalization(!app.isPackaged && process.env.ASTERA_PSEUDO_LOCALE === '1')
   const descriptors = makeDescriptors(process.platform)
   const accounts = new AccountRegistry(

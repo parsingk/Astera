@@ -272,7 +272,7 @@ function UsageChip({
 const SYSTEM_LANG = ''
 
 export default function App(): React.JSX.Element {
-  const { t, lang, storedLang, setLang } = useI18n()
+  const { t, lang, storedLang, systemLang, setLang } = useI18n()
   const [accounts, setAccounts] = useState<Account[]>([])
   // Unregistered config dirs, account-shaped, for history display only. Deliberately a separate state
   // from `accounts`: mixed in, NewSessionDialog would offer them as spawn targets and AccountPanel /
@@ -1968,7 +1968,7 @@ export default function App(): React.JSX.Element {
                           {
                             value: SYSTEM_LANG,
                             label: t('settings.general.language.system', {
-                              lang: CATALOGS[lang].nativeName
+                              lang: CATALOGS[systemLang].nativeName
                             })
                           },
                           // Each language is written in its own language, so it can be found without

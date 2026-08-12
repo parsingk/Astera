@@ -502,6 +502,7 @@ export const ja: Catalog = {
   // TerminalView.tsx — the rolling banner and the loading/exit overlays
   'session.terminal.rollSwitching': '「{label}」に切り替えています…',
   'session.terminal.trustAccepting': 'フォルダの信頼を自動承認しています…',
+  // {time} here is fmtDateTime (M/D HH:MM), not fmtTime — no preposition can precede it
   'session.terminal.weeklyLimitWaiting': '週間上限に到達 — {time} に自動再開',
   'session.terminal.limitWaiting': '上限に到達 — {time} に自動再開',
   // Auto-resume failure toast

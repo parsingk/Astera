@@ -69,7 +69,8 @@ export function registerIpc(
   codexRolling?: CodexRollingCoordinator, // Codex rolling
   scheduler?: SchedulerCoordinator, // session scheduler
   codexTurns?: CodexTurnWatcher, // codex turn-completion watcher
-  orchWiring?: OrchWiring // agent orchestration
+  orchWiring?: OrchWiring, // agent orchestration
+  onLangChanged?: () => void // rebuilds anything (the tray menu) built with a fixed language
 ): void {
   const send = (channel: string, payload: unknown): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
@@ -1144,13 +1145,15 @@ export function registerIpc(
   // than two so the two values cannot disagree.
   ipcMain.handle('settings.getLang', (): LangPreference => ({
     stored: core.appSettings.getLang(),
-    resolved: core.lang
+    resolved: core.lang,
+    system: pickInitialLang(app.getLocale())
   }))
   ipcMain.handle('settings.setLang', async (_e, lang: unknown) => {
     // A trust boundary — checked before writing to disk. null is System and is explicitly allowed.
     if (lang !== null && !isLang(lang)) throw new Error(`INVALID_LANG: ${String(lang)}`)
     await core.appSettings.setLang(lang)
     core.lang = lang ?? pickInitialLang(app.getLocale())
+    onLangChanged?.()
   })
 
   // The agent orchestration toggle. The same trust-boundary check as setLang — the value the renderer
