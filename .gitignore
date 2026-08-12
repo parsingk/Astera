@@ -18,6 +18,9 @@ src/core/worktrees/testRepo.ts
 docs/*
 !docs/releasing.md
 !docs/slack-bot-setup.md
+# Published deliberately: the SignPath Foundation requires the code signing policy to be reachable at
+# a public URL, and the README links to it.
+!docs/code-signing.md
 
 # The source brand sheet (a 1254x1254 mockup). Icons are cropped from it and only the outputs are
 # committed — see scripts/gen-icon.ps1.

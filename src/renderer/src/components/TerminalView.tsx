@@ -76,8 +76,13 @@ export function TerminalView({
     const host = hostRef.current!
     const term = new Terminal({
       fontSize: 14,
-      // Matches the Windows PowerShell console font: Cascadia (the Win11 Terminal default) → Consolas (classic conhost) → fallbacks
-      fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace',
+      // Matches the Windows PowerShell console font: Cascadia (the Win11 Terminal default) → Consolas (classic conhost) → fallbacks.
+      // 'Malgun Gothic' is the slot for Hangul: none of the three fonts before it carry Hangul glyphs, so the
+      // lookup used to fall through to the generic monospace, where Chromium picked Gulim — that made Hangul
+      // (and only Hangul) look different from PowerShell, which falls back to Malgun Gothic via DirectWrite.
+      // Order is what splits the roles: Latin is claimed by Cascadia Mono first, Hangul by Malgun Gothic.
+      fontFamily:
+        '"Cascadia Mono", "Cascadia Code", Consolas, "Malgun Gothic", "Courier New", monospace',
       scrollback: 5000,
       theme: { background: '#141417', foreground: '#d0d0d6', cursor: '#37b0c4' }
     })

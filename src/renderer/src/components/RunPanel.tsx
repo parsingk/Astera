@@ -21,7 +21,9 @@ export function RunPanel({
     const host = hostRef.current!
     const term = new Terminal({
       fontSize: 13,
-      fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace',
+      // 'Malgun Gothic' carries the Hangul glyphs (see TerminalView for why the order matters)
+      fontFamily:
+        '"Cascadia Mono", "Cascadia Code", Consolas, "Malgun Gothic", "Courier New", monospace',
       scrollback: 5000,
       theme: { background: '#141417', foreground: '#d0d0d6', cursor: '#37b0c4' }
     })
