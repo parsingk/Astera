@@ -328,7 +328,15 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* min-height:0 plus overflow:hidden — allows flex shrinking and confines the overflow to the slot, so
    the xterm canvas (rows × cellHeight) cannot spill past it and encroach on the bottom status bar */
 .terminal-wrap { position: relative; flex: 1; display: flex; min-height: 0; overflow: hidden; }
-.terminal-host { flex: 1; background: #141417; min-height: 0; overflow: hidden; }
+/* clip, not hidden: an overflow:hidden box is still a scroll container, so the browser is free to
+   scroll it programmatically to reveal a focused descendant — and xterm parks its focused helper
+   textarea at the cursor while an IME is composing. With the cursor at the right edge of a narrow
+   split pane, that scrolled this host sideways and snapped back on the next render, so typing Hangul
+   made the pane visibly shake. Measured in the app: scrollLeft reached 340px mid-composition.
+   `clip` is not a scroll container at all, so nothing can scroll it. It only works because both axes
+   are clipped here — pair it with `auto` on the other axis and it degrades to `hidden`. xterm's own
+   scrolling is unaffected: that lives in the child .xterm-viewport. */
+.terminal-host { flex: 1; background: #141417; min-height: 0; overflow: clip; }
 /* No inner padding on the terminal — it has to sit flush against the sidebar's bottom line and the left
    and right edges, or the session window looks like it is floating. Zero padding also prevents clipping:
    FitAddon takes the parent's (host's) height as availableHeight verbatim and subtracts only the padding
