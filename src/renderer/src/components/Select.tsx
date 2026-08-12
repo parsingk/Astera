@@ -6,6 +6,10 @@ import { useI18n } from '../i18n/I18nProvider'
  *  core/ui/select.ts (that module is framework-free to stay testable). */
 export interface SelectOption extends SelectItem {
   icon?: React.ReactNode
+  /** Renders this row's label and meta in the given CSS font-family. The font picker uses it to draw
+   *  each family in itself, which is what lets the user see at a glance whether a font has Hangul —
+   *  a font without it shows the sample as tofu. */
+  font?: string
 }
 
 const Chevron = (): React.JSX.Element => (
@@ -122,7 +126,9 @@ export function Select({
         {selected ? (
           <>
             {iconCell(selected)}
-            <span className="sel-value">{selected.label}</span>
+            <span className="sel-value" style={selected.font ? { fontFamily: selected.font } : undefined}>
+              {selected.label}
+            </span>
           </>
         ) : (
           <span className="sel-value empty">{placeholder ?? t('account.select.none')}</span>
@@ -150,8 +156,14 @@ export function Select({
                 onClick={() => commit(row.item)}
               >
                 {iconCell(row.item)}
-                <span className="sel-value">{row.item.label}</span>
-                {row.item.meta && <span className="sel-meta">{row.item.meta}</span>}
+                <span className="sel-value" style={items[row.index].font ? { fontFamily: items[row.index].font } : undefined}>
+                  {row.item.label}
+                </span>
+                {row.item.meta && (
+                  <span className="sel-meta" style={items[row.index].font ? { fontFamily: items[row.index].font } : undefined}>
+                    {row.item.meta}
+                  </span>
+                )}
                 {!noCheck && (
                   <span className="sel-check" aria-hidden="true">
                     <Check />

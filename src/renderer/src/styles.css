@@ -452,6 +452,17 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* the language picker in settings — width, plus the 13px it has always used. That size is deliberate:
    it pairs with .slack-url-input in the same panel (see the note there), so it does not follow .sel's 12px */
 .settings-lang-select { flex: 0 0 140px; font-size: 13px; }
+/* terminal font pickers — pinned to the same width as .settings-lang-select so the three settings
+   rows line up instead of the trigger shrinking to fit whichever font name is currently selected */
+.settings-font-select { flex: 0 0 140px; }
+/* The font pickers are the one place a menu holds hundreds of rows, each drawn in a different family.
+   Without this, opening one lays out every row and so loads and shapes every installed font, even
+   though the menu only shows about eight at a time — measured at 1993ms for 361 families on a cold
+   font cache, against 3ms with it. content-visibility skips the layout of off-screen rows entirely,
+   so their fonts are never touched until they scroll into view. The `auto` in contain-intrinsic-size
+   makes each row remember its own last-rendered height, so the scrollbar stops guessing after the
+   first pass; the 24px is only the initial estimate. */
+.settings-font-select .sel-option { content-visibility: auto; contain-intrinsic-size: auto 24px; }
 /* Slack Webhook settings */
 .slack-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .slack-url-input { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 5px 8px; border-radius: 4px; font-size: 13px; }

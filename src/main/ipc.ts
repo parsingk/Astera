@@ -1163,6 +1163,19 @@ export function registerIpc(
     if (enabled && orchWiring) await startOrch()
   })
 
+  // The terminal font pair. The same trust-boundary check as setLang: the shape is validated here, and
+  // the names themselves are sanitised inside setTerminalFont before they reach disk.
+  ipcMain.handle('settings.getTerminalFont', () => core.appSettings.getTerminalFont())
+  ipcMain.handle('settings.setTerminalFont', async (_e, font: unknown) => {
+    if (font === null || typeof font !== 'object' || Array.isArray(font))
+      throw new Error(`INVALID_TERMINAL_FONT: ${String(font)}`)
+    const { latin, hangul } = font as { latin?: unknown; hangul?: unknown }
+    await core.appSettings.setTerminalFont({
+      latin: typeof latin === 'string' ? latin : null,
+      hangul: typeof hangul === 'string' ? hangul : null
+    })
+  })
+
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is
   // already validated by run.start and run.saveConfig. Omitting it (undefined) behaves exactly as the

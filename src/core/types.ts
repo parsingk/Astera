@@ -15,6 +15,7 @@ export type { RollConfig } from './rolling/types'
 import type { GitState } from './git/status'
 export type { GitState } from './git/status'
 import type { Provider } from './providers/meta'
+import type { TerminalFont } from './terminal/font'
 
 // providers/meta.ts owns Provider. It is re-exported here so that the files which already imported
 // Provider from types can stay as they are.
@@ -366,6 +367,10 @@ export interface CoreApi {
     // already open (environment variables are fixed at spawn time).
     getOrchestrationEnabled(): Promise<boolean>
     setOrchestrationEnabled(enabled: boolean): Promise<void>
+    // The terminal font pair. Either side may be null, meaning "not chosen" — the renderer then uses
+    // the app's default chain for that half.
+    getTerminalFont(): Promise<TerminalFont>
+    setTerminalFont(font: TerminalFont): Promise<void>
   }
   files: {
     // The file explorer. Every files.* IPC call goes through assertAllowedPath, which permits only

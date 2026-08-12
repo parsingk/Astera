@@ -8,6 +8,7 @@ import { fitTerminalToHost } from '../lib/fitTerminal'
 import { pinCursorBlinkOff } from '../lib/cursorBlink'
 import * as sessionBus from '../lib/sessionBus'
 import { useI18n } from '../i18n/I18nProvider'
+import { useTerminalFont } from '../lib/terminalFont'
 
 const fmtTime = (iso?: string): string =>
   iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
@@ -67,8 +68,13 @@ export function TerminalView({
   active?: boolean
 }): React.JSX.Element {
   const { t } = useI18n()
+  const { family } = useTerminalFont()
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
+  // Set by the construction effect so the font effect can reuse its lastSent-guarded sendResize
+  // instead of calling window.api.sessions.resize directly (which would bypass the guard and leave
+  // its lastSent stale for the next ResizeObserver-driven call)
+  const sendResizeRef = useRef<(() => void) | null>(null)
   // A resumed session has a delay while claude reads and replays the whole conversation, so show a loading indicator until the first output
   const [loading, setLoading] = useState(Boolean(session.resumeSessionId))
 
@@ -76,8 +82,13 @@ export function TerminalView({
     const host = hostRef.current!
     const term = new Terminal({
       fontSize: 14,
-      // Matches the Windows PowerShell console font: Cascadia (the Win11 Terminal default) → Consolas (classic conhost) → fallbacks
-      fontFamily: '"Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace',
+      // Matches the Windows PowerShell console font: Cascadia (the Win11 Terminal default) → Consolas (classic conhost) → fallbacks.
+      // 'Malgun Gothic' is the slot for Hangul: none of the three fonts before it carry Hangul glyphs, so the
+      // lookup used to fall through to the generic monospace, where Chromium picked Gulim — that made Hangul
+      // (and only Hangul) look different from PowerShell, which falls back to Malgun Gothic via DirectWrite.
+      // Order is what splits the roles: Latin is claimed by Cascadia Mono first, Hangul by Malgun Gothic.
+      // This is the chain `family` resolves to when the user hasn't configured a font.
+      fontFamily: family,
       scrollback: 5000,
       theme: { background: '#141417', foreground: '#d0d0d6', cursor: '#37b0c4' }
     })
@@ -96,6 +107,7 @@ export function TerminalView({
       window.api.sessions.resize(session.id, d.cols, d.rows)
       lastSent = d
     }
+    sendResizeRef.current = sendResize
     sendResize()
     term.focus() // so typing works immediately once the session opens
 
@@ -198,9 +210,29 @@ export function TerminalView({
       clearTimeout(resizeTimer)
       clearTimeout(loadingSafety)
       termRef.current = null
+      sendResizeRef.current = null
       term.dispose()
     }
   }, [session.id])
+
+  // The font is applied through options rather than by rebuilding the terminal — the construction
+  // effect is keyed by session id, and adding the font to it would tear the terminal down and take the
+  // screen and the scrollback with it. Changing the font changes the cell metrics, so the grid is
+  // refitted and the new size sent to the PTY; nextResize's guard drops the send when the grid works
+  // out the same.
+  useEffect(() => {
+    const term = termRef.current
+    const host = hostRef.current
+    if (!term || !host) return
+    term.options.fontFamily = family
+    // A hidden inactive pane has clientWidth/clientHeight 0; fitTerminalToHost would clamp through
+    // Math.max(2, 0) and resize the grid down to 2x1, pushing that size to the PTY too. Skip the
+    // refit while hidden — the same guard the ResizeObserver below already applies — and let showing
+    // the tab (which changes the host size and fires the observer) refit it with real metrics then.
+    if (host.clientWidth === 0 || host.clientHeight === 0) return
+    fitTerminalToHost(term, host)
+    sendResizeRef.current?.()
+  }, [family, session.id])
 
   // When this tab becomes active (including keyboard switching and a tab click), focus the terminal so typing works right away
   useEffect(() => {

@@ -44,7 +44,8 @@ afterwards, asking before it downloads.
 > again. On Windows, SmartScreen may warn on first run — click **More info → Run anyway**.
 >
 > Signing through the SignPath Foundation's open-source program (Windows) and an Apple Developer ID
-> (macOS) is being set up; see [docs/releasing.md](docs/releasing.md) for the details.
+> (macOS) is being set up — see the [Code signing policy](docs/code-signing.md) for who signs what,
+> and [docs/releasing.md](docs/releasing.md) for the mechanics.
 
 You will also need:
 
@@ -125,6 +126,7 @@ and a full bundle build.
 
 - [Slack bot setup](docs/slack-bot-setup.md) — creating the app, tokens, and permissions
 - [Releasing](docs/releasing.md) — how a version gets cut and published
+- [Code signing policy](docs/code-signing.md) — who signs the releases, what is signed, and privacy
 
 ## Contributing
 

@@ -146,19 +146,28 @@ per request) while you approve it in the SignPath dashboard.
 
 Apply at [signpath.org](https://signpath.org/apply) — the Foundation requires the project to already
 be released, so this happens *after* the first public release. Note that the certificate names
-**SignPath Foundation** as the publisher, not the repository owner. Once approved:
+**SignPath Foundation** as the publisher, not the repository owner.
 
-1. In SignPath, create a project with two artifact configurations — `windows-binaries-zip` (a zip
+Before applying, the Foundation's [conditions](https://signpath.org/terms.html) require a published
+code signing policy naming the team roles and the certificate issuer: that is
+[code-signing.md](code-signing.md), linked from the README's Install and Documentation sections
+under the exact term *Code signing policy*. Multi-factor authentication must be on for every team
+member's GitHub and SignPath account. Once approved:
+
+1. Credit the sponsor in the README, as the conditions require: *Windows code signing provided by
+   [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org)*.
+   Drop the "is being set up" wording in the Install section at the same time.
+2. In SignPath, create a project with two artifact configurations — `windows-binaries-zip` (a zip
    container, deep-signing the PE files inside) and `windows-installer` (a single PE file) — and a
    `release-signing` policy. Connect the GitHub repository as the trusted build system.
-2. In the GitHub repository settings, add:
+3. In the GitHub repository settings, add:
    | Kind | Name | Value |
    |---|---|---|
    | Secret | `SIGNPATH_API_TOKEN` | API token from SignPath |
    | Variable | `SIGNPATH_ORGANIZATION_ID` | from the SignPath organization page |
    | Variable | `SIGNPATH_PROJECT_SLUG` | the SignPath project slug |
    | Variable | `SIGNPATH_POLICY_SLUG` | optional — defaults to `release-signing` |
-3. Cut a release as usual. The signing steps engage on their own once the secret and the
+4. Cut a release as usual. The signing steps engage on their own once the secret and the
    organization id are both present.
 
 Known limitation: the uninstaller embedded inside the NSIS installer is generated during packaging
