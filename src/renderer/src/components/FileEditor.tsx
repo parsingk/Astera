@@ -55,15 +55,6 @@ function makeState(base: Extension[], doc: string, path: string, readOnly: boole
   })
 }
 
-/** 개발 빌드에서만 남기는 진단 기록. 스크롤 복원은 렌더러에서만 재현되고 이 저장소에는 렌더러 테스트가
- *  없어서, 실제 앱에서 어느 단계가 어긋나는지 볼 수단이 필요하다. DevTools에서 window.__asteraEditor로
- *  읽는다. 원인이 잡히면 지운다. */
-function debugNote(line: string): void {
-  const w = window as unknown as { __asteraEditor?: string[] }
-  ;(w.__asteraEditor ??= []).push(`${new Date().toISOString().slice(11, 23)} ${line}`)
-  if (w.__asteraEditor.length > 200) w.__asteraEditor.shift()
-}
-
 /** 캐시에 쓸 수 있는 상태가 있으면 그것을, 없으면 새로 만든 상태를 돌려준다. 문서와 편집 가능 여부가
  *  지금 프롭과 같을 때만 재사용한다 — 파일이 디스크에서 바뀌었거나 읽기 전용 여부가 달라졌으면 옛
  *  상태는 화면에 맞지 않는다. 마운트와 파일 전환이 같은 규칙을 써야 해서 함수로 뽑았다. */
@@ -77,17 +68,6 @@ function restoreOrBuild(
   const cached = cache.get(path)
   const usable =
     cached && sameDocument(cached.state.doc.toString(), content) && cached.state.readOnly === readOnly
-  if (import.meta.env.DEV) {
-    const d = cached?.state.doc.toString() ?? ''
-    // 판정에 떨어지는 이유를 보려면 비교 입력을 그대로 찍어야 한다 — 길이가 같은데 다르면 내용,
-    // 길이가 다르면 어느 쪽이 갱신되지 않은 것이고, readOnly가 다르면 그쪽이다
-    debugNote(
-      `restore ${path} cached=${cached != null} usable=${usable === true}` +
-        ` docLen=${d.length} contentLen=${content.length}` +
-        ` docHead=${JSON.stringify(d.slice(0, 24))} contentHead=${JSON.stringify(content.slice(0, 24))}` +
-        ` roCached=${cached?.state.readOnly} roProp=${readOnly}`
-    )
-  }
   // 상태를 재사용할 때만 스크롤도 되돌린다. 문서가 달라졌다면 그 위치는 더 이상 같은 곳을 가리키지 않는다
   return usable
     ? { state: cached.state, scroll: cached.scroll }
@@ -162,7 +142,6 @@ export function FileEditor({
       scrollFrame = requestAnimationFrame(() => {
         scrollFrame = null
         lastScrollRef.current = view.scrollSnapshot()
-        if (import.meta.env.DEV) debugNote(`scroll ${view.scrollDOM.scrollTop}`)
       })
     }
     view.scrollDOM.addEventListener('scroll', onScroll, { passive: true })
@@ -170,8 +149,6 @@ export function FileEditor({
     return () => {
       view.scrollDOM.removeEventListener('scroll', onScroll)
       if (scrollFrame != null) cancelAnimationFrame(scrollFrame)
-      if (import.meta.env.DEV)
-        debugNote(`unmount ${curPathRef.current} scrollTop=${view.scrollDOM.scrollTop} usingCached=${lastScrollRef.current != null}`)
       onRetireRef.current(curPathRef.current, view.state, lastScrollRef.current)
       view.destroy()
     }
