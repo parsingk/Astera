@@ -115,6 +115,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.info.cliNotDetected': 'Not detected',
   'settings.slack.save': 'Save',
   'settings.slack.saved': 'Saved',
+  'settings.slack.saveFailed': 'Could not save the Slack settings: {detail}',
   'settings.slack.hint':
     'Turning on “Slack progress notifications” in a new session sends progress updates.',
   'settings.slack.botSection': 'Bot (per-session threads)',

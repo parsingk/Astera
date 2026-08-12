@@ -757,6 +757,55 @@ describe('SlackConfigStore.patch', () => {
     expect(result).toEqual(cfg({ channelId: 'C9' }))
   })
 
+  // 파일이 있는데 읽히지 않는 경우가 값을 잃을 수 있는 유일한 길이다. load()는 앱을 막지 않으려고 전부
+  // null로 폴백하는데, patch()가 그 폴백 위에 병합하면 디스크에 살아 있는 토큰이 한 번의 저장으로 null이
+  // 된다. 읽기만 실패하고 쓰기는 되는 상태가 재현 조건이므로(Windows의 EPERM·EBUSY, fd 부족의 EMFILE 같은
+  // 일시적 실패) readFile을 직접 실패시킨다 — 경로 자체를 못 쓰게 만들면 save()도 같이 실패해서 테스트가
+  // 엉뚱한 이유로 통과한다.
+  it('읽기가 실패하면(파일 없음이 아니라) 저장하지 않고 던진다 — 살아 있는 값을 null로 덮지 않는다', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-slackcfg-patch-'))
+    const file = path.join(dir, 'slack.json')
+    const store = new SlackConfigStore(file)
+    await store.save(cfg({ botToken: 'xoxb-1', channelId: 'C1', appToken: 'xapp-1' }))
+    const onDisk = await fs.readFile(file, 'utf8')
+
+    const spy = vi
+      .spyOn(fs, 'readFile')
+      .mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }))
+    try {
+      await expect(store.patch({ webhookUrl: 'https://hooks/new' })).rejects.toThrow(/slack\.json/)
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(await fs.readFile(file, 'utf8')).toBe(onDisk) // 토큰은 그대로 남아 있다
+  })
+
+  it('읽기 실패는 load()를 막지 않는다 — 기본값으로 폴백해 앱은 계속 뜬다', async () => {
+    const spy = vi
+      .spyOn(fs, 'readFile')
+      .mockRejectedValue(Object.assign(new Error('EPERM'), { code: 'EPERM' }))
+    try {
+      expect(await new SlackConfigStore('whatever/slack.json').load()).toEqual(cfg())
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  // 손상된 파일은 읽기 실패와 달리 다시 시도해도 되돌아오지 않는다. 여기서도 던지면 설정 화면에서 고칠 길이
+  // 없어지므로 덮어쓰기를 허용한다 — 잃을 값이 애초에 없다.
+  it('손상된 파일은 patch()로 덮어쓸 수 있다', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-slackcfg-patch-'))
+    const file = path.join(dir, 'slack.json')
+    await fs.writeFile(file, '{broken', 'utf8')
+    const store = new SlackConfigStore(file)
+
+    const result = await store.patch({ channelId: 'C9' })
+
+    expect(result).toEqual(cfg({ channelId: 'C9' }))
+    expect(await store.load()).toEqual(result)
+  })
+
   it('빈 객체로 patch()해도 기존 값이 그대로 유지된다', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-slackcfg-patch-'))
     const store = new SlackConfigStore(path.join(dir, 'slack.json'))

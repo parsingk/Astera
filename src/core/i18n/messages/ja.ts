@@ -143,6 +143,7 @@ export const ja: Catalog = {
   'settings.info.cliNotDetected': '未検出',
   'settings.slack.save': '保存',
   'settings.slack.saved': '保存しました',
+  'settings.slack.saveFailed': 'Slack 設定を保存できませんでした: {detail}',
   'settings.slack.hint': '新しいセッションで「Slack 進捗通知」をオンにすると進捗を送信します。',
   // Bot settings. Which delivery path is active has to be visible on screen at a glance
   'settings.slack.botSection': 'ボット (セッションごとのスレッド)',

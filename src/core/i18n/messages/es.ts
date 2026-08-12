@@ -143,6 +143,7 @@ export const es: Catalog = {
   'settings.info.cliNotDetected': 'No detectado',
   'settings.slack.save': 'Guardar',
   'settings.slack.saved': 'Guardado',
+  'settings.slack.saveFailed': 'No se pudo guardar la configuración de Slack: {detail}',
   'settings.slack.hint':
     'Si activa «Notificaciones de progreso en Slack» en una sesión nueva, se envía el progreso.',
   // Bot settings. Which delivery path is active has to be visible on screen at a glance —

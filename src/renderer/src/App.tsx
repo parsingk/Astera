@@ -2213,6 +2213,16 @@ export default function App(): React.JSX.Element {
                               memberId: slackMemberId.trim() || null
                             })
                             .then(() => setSlackSaved(true))
+                            // A rejection means the store refused to overwrite values it could not read —
+                            // the settings on disk survived. Saying so beats a silently dead button, since
+                            // "Saved" never appears either way.
+                            .catch((err) =>
+                              toast.error(
+                                t('settings.slack.saveFailed', {
+                                  detail: err instanceof Error ? err.message : String(err)
+                                })
+                              )
+                            )
                         }
                       >
                         {t('settings.slack.save')}

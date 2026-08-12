@@ -133,6 +133,7 @@ export const ko = {
   'settings.info.cliNotDetected': '감지 안 됨',
   'settings.slack.save': '저장',
   'settings.slack.saved': '저장됨',
+  'settings.slack.saveFailed': 'Slack 설정을 저장하지 못했습니다: {detail}',
   'settings.slack.hint': '새 세션에서 “Slack 진행상황 알림”을 켜면 진행 상황을 보냅니다.',
   // Bot settings. Which delivery path is active has to be visible on screen at a glance —
   // a bot token with no channel ID silently falls back to Webhook (slack.ts applyConfig), so that state has to show
