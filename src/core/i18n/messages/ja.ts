@@ -3,6 +3,30 @@ import type { Catalog } from '../index'
 /** Japanese. Partial by design: a key that is not here falls back to English, then to Korean, so a new
  *  string can ship before its translation does. */
 export const ja: Catalog = {
+  'settings.title': '設定',
+  'settings.tab.general': '一般',
+  'settings.tab.accounts': 'アカウント',
+  'settings.tab.info': '情報',
+  'settings.tab.shortcuts': 'ショートカット',
+  'settings.tab.history': '履歴',
+  'settings.general.language': '言語',
+  // {lang} is the language the OS locale resolves to
+  'settings.general.language.system': 'システム設定 ({lang})',
+  'settings.general.language.saveFailed': '言語設定を保存できませんでした: {detail}',
+  // Agent orchestration
+  'settings.orchestration.label': 'エージェントオーケストレーション (実験)',
+  'settings.orchestration.hint':
+    'オンにすると、アプリが起動したエージェントセッションが別ベンダーのワーカーセッションを起動できます。 ' +
+    'エージェントがアプリのどのアカウントでもセッションを作成できるようになるため、必要なときだけオンにしてください。 ' +
+    'すでに開いているセッションには適用されません — 新しいセッションから有効になります。 ' +
+    'オーケストレーターとして使うセッションで astera help を実行させると、詳しい使い方が得られます。',
+  'settings.orchestration.saveFailed': 'オーケストレーション設定を保存できませんでした: {detail}',
+  'settings.accounts.hint':
+    '⤓ は同じ CLI の既定アカウントから設定を取り込みます。既定アカウントはログイン済みのアカウントのうち最初に登録されたもので、CLI ごとに1つあります。',
+  'common.cancel': 'キャンセル',
+  'common.confirm': '確認',
+  'common.close': '閉じる',
+  'common.toastDismiss': '通知を閉じる',
   // files/ops.ts — the Message keys validateName/canMove/canCopy return
   'files.validate.badChar': '名前に使用できない文字が含まれています: {char}',
   'files.validate.empty': '名前を入力してください',
@@ -64,6 +88,15 @@ export const ja: Catalog = {
   'worktree.inUse.unknown': 'この worktree は使用中です。',
   // ROLL_MIXED_PROVIDER in sessions/manager.ts — a session-rolling constraint unrelated to worktrees
   'session.roll.mixedProvider': 'Claude と Codex のアカウントを混在させてローリングはできません',
+  // App.tsx — shared window controls, resizer, separator
+  'common.minimize': '最小化',
+  'common.maximize': '最大化',
+  'common.restore': '元のサイズに戻す',
+  'common.resizeSidebar': 'サイドバーのサイズ変更',
+  'common.or': 'または',
+  // index.ts — system tray context menu
+  'common.trayOpen': '開く',
+  'common.trayQuit': '終了',
   // App.tsx — rail, session spawn failure, placeholder, status bar usage
   'session.rail.toggleSidebar': 'サイドバーの折りたたみ/展開',
   'session.spawn.failed': 'セッションの開始に失敗しました: {message}',
@@ -96,6 +129,145 @@ export const ja: Catalog = {
   'files.editor.keepMine': '自分の編集を保持',
   'files.editor.loading': '読み込み中…',
   'files.editor.selectPrompt': 'ツリーからファイルを選択してください',
+  // App.tsx — explorer close confirmation
+  'explorer.closeConfirm.body':
+    '保存していない変更があります。エクスプローラーを閉じますか？',
+  // App.tsx — run console resizer, start failure
+  'run.resizeConsole': 'コンソールのサイズ変更',
+  'run.start.failed': '実行に失敗しました: {detail}',
+  // App.tsx — settings modal Info/Slack/Worktree tabs, CLI-not-found screen
+  'settings.info.appName': 'アプリ名',
+  'settings.info.version': 'バージョン',
+  'settings.info.registeredAccounts': '登録アカウント',
+  'settings.info.update': 'アップデート',
+  'settings.info.cliNotDetected': '検出されません',
+  'settings.slack.save': '保存',
+  'settings.slack.saved': '保存しました',
+  'settings.slack.hint': '新しいセッションで「Slack 進捗通知」をオンにすると進捗を送信します。',
+  // Bot settings. Which delivery path is active has to be visible on screen at a glance
+  'settings.slack.botSection': 'ボット (セッションごとのスレッド)',
+  'settings.slack.channelIdHint':
+    'チャンネルを右クリック → チャンネル詳細の一番下で確認できます。',
+  'settings.slack.appTokenHint':
+    'Socket Mode の受信用です。ボットモードではスレッド返信をこのトークンで受け取ります。',
+  // A channel is not a permission boundary — only replies from this member are injected.
+  'settings.slack.memberIdHint':
+    'このメンバーからのスレッド返信だけをセッションに転送します。Slack の自分のプロフィール → ⋯ →「メンバー ID をコピー」で確認してください。',
+  'settings.slack.memberIdRequired':
+    '⚠️ Member ID がないため、スレッド返信が誰からも転送されません。自分の Member ID を入力してください。',
+  'settings.slack.modeBot': 'ボットモード — セッションごとに1つのスレッドへ通知がまとまります。',
+  'settings.slack.modeWebhook':
+    'Webhook 片方向 — ボットトークンとチャンネル ID を両方入力するとセッションごとのスレッドに切り替わります。',
+  'settings.slack.modeOff':
+    '送信経路がないため通知は送られません。Webhook URL またはボットトークン + チャンネル ID が必要です。',
+  'settings.slack.setupGuide':
+    'ボットを対象チャンネルに招待しないと投稿されません。詳しい手順は docs/slack-bot-setup.md を参照してください。',
+  'settings.worktree.createLocation': 'worktree の作成場所',
+  'settings.worktree.change': '変更…',
+  'settings.worktree.hint':
+    '新しい worktree はこのフォルダの下に <repo名>/<名前> で作成されます。既存の worktree は移動しません。',
+  'settings.history.hiddenProjects': '非表示のプロジェクト',
+  'settings.history.unhide': '解除',
+  'settings.history.empty': '非表示のプロジェクトはありません。',
+  // TerminalFontSettings.tsx — the terminal font picker rows
+  'settings.font.latin': 'ターミナルの欧文フォント',
+  'settings.font.hangul': 'ターミナルのハングルフォント',
+  'settings.font.system': 'システム既定',
+  'settings.font.notInstalled': '未インストール',
+  'settings.font.sample': 'AaBb 한글 123',
+  'settings.font.hangulShadowed':
+    '選択した欧文フォントがハングルも描画するため、ハングルフォントの設定は適用されません。',
+  'settings.font.listFailed': 'インストール済みフォントの一覧を取得できませんでした: {detail}',
+  'settings.font.saveFailed': 'フォント設定を保存できませんでした: {detail}',
+  'settings.font.checkingHangul': 'インストール済みフォントを確認中…',
+  'settings.font.loadingList': 'インストール済みフォントを読み込み中…',
+  // App.tsx — update status (the title-bar UpdateIndicator / the settings Info tab)
+  'update.tb.restartInstallVersion': '再起動して v{version} をインストール',
+  'update.tb.checking': 'アップデートを確認中…',
+  'update.tb.available': '新しいバージョン {version} を検出',
+  'update.tb.downloading': 'ダウンロード中 {percent}%',
+  'update.tb.error': 'アップデートエラー',
+  // index.ts — diagnostic message for when the electron-updater module does not export properly
+  'update.tb.autoUpdaterMissing': 'autoUpdater の export が見つかりません',
+  'update.info.downloading': 'ダウンロード中 {percent}%…',
+  'update.info.restartInstallVersion': '再起動して v{version} をインストール',
+  'update.info.checking': '確認中…',
+  'update.info.checkButton': 'アップデートを確認',
+  'update.info.upToDateAt': '最新バージョンです ({time} 確認)',
+  // 'available' means "found", not "downloading"
+  'update.info.available': '新しいバージョン {version} があります',
+  'update.info.downloadVersion': '{version} をダウンロード',
+  'update.info.checkFailed': '確認に失敗',
+  // App.tsx — the toast for a downloaded new version, and the session-kill confirmation when installing now
+  'update.toast.available': '新しいバージョン v{version} が公開されました',
+  'update.toast.download': 'ダウンロード',
+  'update.toast.ready': 'アップデート v{version} の準備ができました',
+  'update.toast.installNow': '今すぐインストール',
+  'update.confirm.title': '今すぐインストールして再起動',
+  'update.confirm.body': '進行中のセッション {count} 件が終了します。続行しますか？',
+  // UpdateGate.tsx — the screen that covers the app when the version is below the minimum
+  'update.gate.title': 'アップデートが必要です',
+  'update.gate.body': '{version} バージョンへのアップデートを進めてください',
+  'update.gate.bodyNoVersion': 'アップデートを進めてください',
+  'update.gate.preparing': 'アップデートを準備しています…',
+  'update.gate.ready': 'v{version} のインストール準備が完了しました',
+  'update.gate.failed':
+    'アップデートを取得できませんでした。ネットワークを確認して再試行してください。',
+  'update.gate.retry': '再試行',
+  'update.gate.quit': 'アプリを終了',
+  // App.tsx — settings modal Shortcuts tab
+  'shortcut.group.terminal': 'ターミナル',
+  'shortcut.terminal.newline': '改行',
+  'shortcut.terminal.copyOrInterrupt': '選択をコピー · なければ中断',
+  'shortcut.paste': '貼り付け',
+  'shortcut.group.sessionTab': 'セッションタブ',
+  'shortcut.sessionTab.prev': '前のタブ',
+  'shortcut.sessionTab.next': '次のタブ',
+  'shortcut.gesture.tabDrag': 'タブをドラッグ',
+  'shortcut.sessionTab.reorder': '並べ替え',
+  'shortcut.group.pane': 'パネル',
+  'shortcut.pane.splitRight': '右に分割',
+  'shortcut.pane.splitDown': '下に分割',
+  'shortcut.pane.focusLeft': '左のパネル',
+  'shortcut.pane.focusRight': '右のパネル',
+  'shortcut.pane.focusUp': '上のパネル',
+  'shortcut.pane.focusDown': '下のパネル',
+  // ShortcutSettings.tsx — the editable shortcut list
+  'shortcut.group.editable': '変更可能',
+  'shortcut.edit': '変更',
+  'shortcut.resetOne': '既定値',
+  'shortcut.capturing': 'キーを押してください (Esc でキャンセル)',
+  'shortcut.unbound': 'なし',
+  'shortcut.conflictWith': '{key} はすでに「{action}」に使われています',
+  'shortcut.riskTitle': '{key} をアプリのショートカットに設定',
+  'shortcut.riskConfirm': 'それでも設定',
+  'shortcut.risk.interrupt':
+    'ターミナルで実行中の作業を中断するキーです。アプリが使うと、セッションで中断できなくなります。',
+  'shortcut.risk.eof':
+    'ターミナルで CLI を終了するキーです。アプリが使うと、セッションで使えなくなります。',
+  'shortcut.risk.readline':
+    'ターミナルの行編集に使うキーです (行頭・行末への移動、単語の削除など)。アプリが使うと、プロンプト入力中に使えなくなります。',
+  'shortcut.risk.historySearch':
+    'ターミナルの履歴検索に使うキーです。アプリが使うと、セッションで使えなくなります。',
+  'shortcut.risk.clear':
+    'ターミナルの画面を消すキーです。アプリが使うと、セッションで使えなくなります。',
+  'shortcut.risk.newline':
+    'Codex で改行に使うキーです。アプリが使うと、複数行の入力ができなくなります。',
+  'shortcut.risk.cliMode':
+    'Claude Code・Codex がモード切り替えや補完に使うキーです。アプリが使うと、セッションで使えなくなります。',
+  'shortcut.pane.dragSplit': '端で分割 · 中央で移動',
+  'shortcut.group.explorer': 'ファイルエクスプローラー',
+  'shortcut.explorer.toggleMode': 'セッション ↔ エクスプローラー切り替え',
+  'shortcut.explorer.saveFile': 'ファイルを保存',
+  'shortcut.explorer.closeFileTab': 'ファイルタブを閉じる',
+  'shortcut.explorer.rename': '名前の変更',
+  'shortcut.explorer.delete': '削除',
+  'shortcut.explorer.selectAll': 'すべて選択',
+  'shortcut.explorer.cut': '切り取り',
+  'shortcut.explorer.copy': 'コピー',
+  'shortcut.gesture.itemDrag': '項目をドラッグ',
+  'shortcut.explorer.move': '移動 · Ctrl を押すとコピー',
+  'shortcut.explorer.undo': '元に戻す',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names
   'files.action.delete': '削除',
   'files.action.duplicate': '複製',
@@ -160,6 +332,44 @@ export const ja: Catalog = {
     '{count} 件の項目の削除を元に戻しました — {renamedCount} 件は同名の項目があるため別の名前で復元しました: {shown}',
   'files.undo.restored.renamedManyWithMore':
     '{count} 件の項目の削除を元に戻しました — {renamedCount} 件は同名の項目があるため別の名前で復元しました: {shown} ほか {moreCount} 件',
+  // FileExplorer.tsx — panel header, context menu
+  'explorer.title': 'エクスプローラー',
+  'explorer.noActiveSession': 'アクティブなセッションがありません',
+  // Folder state shown inside the tree (the .fx-note row)
+  'explorer.dir.loading': '読み込み中…',
+  'explorer.dir.readFailed': '読み込みに失敗しました: {detail}',
+  'explorer.dir.empty': '空です',
+  'explorer.refresh': '再読み込み',
+  'explorer.reveal.failed': 'エクスプローラーの起動に失敗しました: {detail}',
+  'explorer.menu.newFile': '新しいファイル',
+  'explorer.menu.newFolder': '新しいフォルダ',
+  'explorer.menu.rename': '名前の変更 (F2)',
+  'explorer.menu.delete': '削除 (Del)',
+  'explorer.menu.deleteCount': '削除 ({count} 件, Del)',
+  'explorer.menu.duplicateCount': '複製 ({count} 件)',
+  'explorer.menu.cut': '切り取り (Ctrl+X)',
+  'explorer.menu.copy': 'コピー (Ctrl+C)',
+  'explorer.menu.paste': '貼り付け (Ctrl+V)',
+  'explorer.menu.copyPath': 'パスをコピー',
+  'explorer.menu.copyRelativePath': '相対パスをコピー',
+  'explorer.menu.reveal': 'エクスプローラーで開く',
+  // FileExplorer.tsx — git status on a tree row (tooltip, aria-label)
+  'explorer.git.new': '新しいファイル',
+  'explorer.git.modified': '変更あり',
+  'explorer.git.deleted': '削除済み',
+  'explorer.git.conflict': '競合',
+  'explorer.git.folderCount': '変更 {count} 件',
+  // FileTabs.tsx — the dirty marker on a file tab
+  'explorer.tab.unsaved': '未保存',
+  // LocalHistoryDialog.tsx — the Local History browse/restore modal
+  'localHistory.loading': '読み込み中…',
+  'localHistory.empty': '削除履歴がありません',
+  'localHistory.restore': '復元',
+  'localHistory.restoring': '復元中…',
+  'localHistory.restored': '復元しました: {path}',
+  'localHistory.restoreFailed': '復元に失敗しました: {detail}',
+  'localHistory.listFailed': '履歴の取得に失敗しました: {detail}',
+  'localHistory.notFound': '履歴の項目が見つかりません',
   // AccountPanel.tsx — account register, import, detect, logout, settings sync
   'account.field.kind': '種類',
   'account.field.label': 'ラベル',
@@ -308,9 +518,25 @@ export const ja: Catalog = {
   'session.terminal.schedSummary.monthly': '毎月 {days}日 {time}',
   'session.terminal.schedNextRun': ' · 次回実行 {time}',
   'session.terminal.schedDisable': 'オフにする',
-  // HistoryBrowser.tsx — the account filter labels
+  // HistoryBrowser.tsx
+  'history.panel.title': '履歴',
+  'history.panel.empty': '記録なし',
+  'history.loading': '読み込み中…',
+  'history.filter.deletedSuffix': ' (削除済み)',
   'session.resume.originAccount': '元のアカウント',
   'session.resume.originDeleted': '削除されたアカウント',
+  'history.filter.allAccounts': 'すべてのアカウント',
+  'history.refresh.tooltip': 'ウォッチャー失敗時の手動フォールバック',
+  'history.project.openExplorer': 'ファイルエクスプローラーで開く',
+  'history.menu.hide': '非表示にする',
+  'history.project.noSessions': 'セッションなし',
+  'history.entry.preview': 'プレビュー',
+  'history.preview.truncated': '(先頭のみ)',
+  'history.preview.me': '自分',
+  'history.resume.folderMissingTitle': 'プロジェクトフォルダなし',
+  'history.resume.folderMissingBody':
+    '元のプロジェクトフォルダがありません:\n{cwd}\n\n再開するフォルダを選び直しますか？',
+  'history.resume.pickFolder': 'フォルダを選択',
   // WorktreePanel.tsx — status labels
   'worktree.status.orphanDir': 'git 登録が消失',
   'worktree.status.missing': 'フォルダなし',
@@ -334,5 +560,91 @@ export const ja: Catalog = {
   // WorktreePanel.tsx — panel header, row icon buttons
   'worktree.refresh': '更新',
   'worktree.action.startSession': 'セッションを開始',
-  'worktree.action.openExplorer': 'エクスプローラー'
+  'worktree.action.openExplorer': 'エクスプローラー',
+  // RunToolbar.tsx — config select, run/stop, edit/delete, the running list
+  'run.config.selectLabel': '実行構成の選択',
+  'run.config.none': '実行構成がありません',
+  'run.config.addOption': '+ 実行構成を追加…',
+  'run.action.run': '実行',
+  'run.action.stop': '停止',
+  'run.config.editTitle': '構成を編集',
+  'run.config.deleteTitle': '構成を削除',
+  'run.global.listTitle': '実行中の一覧',
+  'run.global.jump': '移動',
+  // App.tsx runAddConfig/runEditConfig — shared when the run.saveConfig IPC fails
+  'run.config.saveFailed': '保存に失敗しました: {detail}',
+  // ipc.ts resolveRunCwd — thrown in main, shown verbatim in a renderer toast
+  'run.config.cwdNotString': '実行構成の作業フォルダが正しくありません',
+  'run.config.cwdOutsideProject': '実行構成の作業フォルダはプロジェクト内である必要があります',
+  // RunConfigDialog.tsx
+  'run.form.editTitle': '実行構成の編集',
+  'run.form.addTitle': '実行構成の追加',
+  'run.form.nameLabel': '名前',
+  'run.form.commandLabel': 'コマンド',
+  'run.form.commandPlaceholder': '例: gradlew.bat bootRun',
+  'run.form.commandHint': 'プロジェクトフォルダでシェルから実行されます。',
+  'run.form.jdkLabel': 'JDK (任意)',
+  'run.form.jdkLoading': 'JDK を検索中…',
+  'run.form.jdkNone': '使用しない (アプリの環境のまま)',
+  'run.form.jdkCustom': '{path} (手動指定)',
+  'run.form.jdkBrowse': '参照…',
+  'run.form.jdkHint': 'JAVA_HOME に設定されます。',
+  'run.form.springLabel': 'Spring プロファイル (任意)',
+  'run.form.springHint':
+    'SPRING_PROFILES_ACTIVE に設定されます。カンマ区切りで複数指定できます。',
+  'run.form.cwdLabel': '作業フォルダ (任意)',
+  'run.form.cwdPlaceholder': '空欄ならプロジェクトルート',
+  'run.form.cwdBrowse': '選択…',
+  'run.form.cwdHint':
+    'プロジェクトフォルダからの相対パスで保存されます (プロジェクト外は選択できません)。空欄の場合はプロジェクトルートで実行します。',
+  'run.form.envLabel': '環境変数 (任意)',
+  'run.form.envPlaceholder': '1行に1つ\nCUSTOM_VAR=value',
+  'run.form.envHint':
+    '空欄のままにするとアプリの環境をそのまま引き継ぎます。同じ名前はこの構成が優先されます。',
+  'run.form.save': '保存',
+  'run.form.add': '追加',
+  // BottomPanel.tsx — the Run tab label, clear and collapse buttons
+  'run.panel.noActiveRun': '実行',
+  'run.panel.exited': ' · 終了 (コード {code})',
+  'run.panel.clear': '消去',
+  'run.panel.collapse': '折りたたむ',
+  // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
+  'terminal.rail.open': 'ターミナル',
+  'terminal.tab.label': 'ターミナル {n}',
+  'terminal.tab.new': '新しいターミナル',
+  'terminal.tab.close': 'ターミナルを閉じる',
+  'terminal.open.failed': 'ターミナルの起動に失敗しました: {detail}',
+  // rolling.ts and codexRolling.ts — the default resume prompt sent after a limit.
+  // Must stay identical to session.new.rollPromptPlaceholder, which shows this value as its placeholder.
+  'rolling.continuePrompt': '続けて作業を進めて',
+  // slack.ts — the notification text that goes out to Slack. Follows the app language.
+  'slack.turnDone': '✅ 応答完了',
+  'slack.limitWaiting': '⏸ 上限に到達 — {at} に再開予定 ({scope}上限)',
+  'slack.limitScope.weekly': '週間',
+  'slack.limitScope.session': '5時間',
+  'slack.accountSwitched': '🔁 アカウント切り替え → {label}',
+  'slack.limitReset': '▶️ 上限リセット — 自動再開プロンプトを送信',
+  'slack.stalled': '⚠️ セッションが停止しています — 自動再開に失敗、確認が必要です',
+  'slack.sessionExited': '⏹ セッション終了 (exit {code})',
+  'slack.inputNeeded': '🙋 入力が必要',
+  'slack.inputNeededWith': '🙋 入力が必要 — {message}',
+  // core/slack/inbound.ts buildChoiceKeys — why a choice reply was in the wrong shape
+  'slack.choice.hintPerQuestion': '💡 質問ごとに `/` で区切って返信 (例: 1,3 / 2)',
+  'slack.choice.hintMulti': '💡 複数はカンマ区切りで返信 (例: 1,3)',
+  'slack.pending.charCount': '{key}: {len}文字',
+  'slack.choice.noShape': '待機中の選択肢の情報が見つかりませんでした',
+  'slack.choice.countMismatch':
+    '質問は {expected} 個ですが回答は {got} 個です — 質問ごとに「/」で区切ってください (例: 1,3 / 2)',
+  'slack.choice.noNumber': '番号が見つかりませんでした',
+  'slack.choice.noNumberAt': '{index} 番目の質問: 番号が見つかりませんでした',
+  'slack.choice.singleOnly': '1つだけ選べます',
+  'slack.choice.singleOnlyAt': '{index} 番目の質問: 1つだけ選べます',
+  'slack.choice.outOfRange': '{n} 番はありません (1〜{max})',
+  'slack.choice.outOfRangeAt': '{index} 番目の質問: {n} 番はありません (1〜{max})',
+  // slackInbox.ts — the notice left in the thread when a reply could not be injected
+  'slack.inbox.tooLong': '⚠️ 返信が長すぎるため転送しませんでした ({max}文字以下のみ)',
+  'slack.inbox.sessionEnded': '⚠️ このセッションは終了しているため入力を転送できませんでした',
+  'slack.inbox.injectFailed': '⚠️ 入力を転送できませんでした',
+  'slack.limitNoResume': '⛔ 上限に到達 — 自動再開なし',
+  'slack.limitNoResumeAt': '⛔ 上限に到達 — 自動再開なし (リセット {at})'
 }
