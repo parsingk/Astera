@@ -163,6 +163,7 @@ export const ko = {
   'settings.font.listFailed': '설치된 폰트 목록을 가져오지 못했습니다: {detail}',
   'settings.font.saveFailed': '폰트 설정을 저장하지 못했습니다: {detail}',
   'settings.font.checkingHangul': '설치된 폰트 확인 중…',
+  'settings.font.loadingList': '설치된 폰트 읽는 중…',
   // No settings.cliMissing.* here on purpose. That screen replaces the whole workbench, so the rail
   // and the language switch on it are gone — it is hardcoded English in App.tsx instead.
   // App.tsx — update status (the title-bar UpdateIndicator / the settings Info tab)

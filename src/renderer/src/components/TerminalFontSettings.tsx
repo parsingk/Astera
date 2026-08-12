@@ -19,9 +19,6 @@ export function TerminalFontSettings(): React.JSX.Element {
   // installed font file's cmap table) is still running.
   const [hangulFamilies, setHangulFamilies] = useState<string[] | null>(null)
 
-  // Loaded on the first dropdown open rather than on mount: enumerating fonts costs nothing on a
-  // machine with 200 families and something on a machine with 2000, and nobody opens Settings to look
-  // at a closed dropdown.
   const loadFamilies = (): void => {
     if (families) return
     void listLocalFontFamilies()
@@ -57,6 +54,18 @@ export function TerminalFontSettings(): React.JSX.Element {
     loadFamilies()
     loadHangulFamilies()
   }
+
+  // Both lists start loading as soon as the General tab is on screen, rather than waiting for a
+  // dropdown to be opened. Neither is instant — enumerating the installed families takes a moment,
+  // and the Hangul scan reads a cmap table per family — and doing it here spends that time while
+  // the user is still looking at the panel instead of after they have clicked and are waiting on it.
+  // The open handlers still call these: the loaders are idempotent (fontProbe memoises the in-flight
+  // promise), so a click that lands before this finishes joins the same work rather than starting more.
+  useEffect(() => {
+    loadFamilies()
+    loadHangulFamilies()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per mount; the loaders' own guards handle repeats
+  }, [])
 
   const save = (next: TerminalFont): void => {
     const prev = font
@@ -127,6 +136,20 @@ export function TerminalFontSettings(): React.JSX.Element {
     return itemsFor(current, hangulFamilies, families)
   }
 
+  // The same status row for the Latin dropdown. It only waits on the family enumeration, which is far
+  // quicker than the Hangul scan — but "quicker" is not "instant", and without a row saying so the
+  // dropdown reads as an empty list that failed to load rather than one that is still filling.
+  const latinItems = (): SelectOption[] => {
+    const current = font.latin
+    if (families === null) {
+      return [
+        ...itemsFor(current, [], families),
+        { value: current ?? SYSTEM, label: t('settings.font.loadingList') }
+      ]
+    }
+    return itemsFor(current, families, families)
+  }
+
   // familyCoversHangul() reads the font file's cmap table, so it is async — held in state and
   // recomputed whenever the Latin choice changes. shadowed is reset to false at the top of the
   // effect, before the probe starts, so a hint left over from the previous font never lingers
@@ -155,7 +178,7 @@ export function TerminalFontSettings(): React.JSX.Element {
             all. Both are needed — neither is redundant with the other. */}
         <div className="settings-font-select" onMouseDown={loadFamilies} onFocus={loadFamilies}>
           <Select
-            items={itemsFor(font.latin, families ?? [], families)}
+            items={latinItems()}
             value={font.latin ?? SYSTEM}
             onChange={(v) => save({ ...font, latin: v === SYSTEM ? null : v })}
             ariaLabel={t('settings.font.latin')}

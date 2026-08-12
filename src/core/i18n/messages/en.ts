@@ -146,6 +146,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.font.listFailed': 'Could not read the installed fonts: {detail}',
   'settings.font.saveFailed': 'Could not save the font setting: {detail}',
   'settings.font.checkingHangul': 'checking installed fonts…',
+  'settings.font.loadingList': 'reading installed fonts…',
   'update.tb.restartInstallVersion': 'Restart to install v{version}',
   'update.tb.checking': 'Checking for updates…',
   'update.tb.available': 'New version {version} found',
