@@ -10,7 +10,7 @@ import { HistoryBrowser } from './components/HistoryBrowser'
 import { Select } from './components/Select'
 import { WorkbenchTabs, type FileTab, type WorkbenchTab } from './components/WorkbenchTabs'
 import { FileEditor } from './components/FileEditor'
-import type { EditorState } from '@codemirror/state'
+import type { EditorState, StateEffect } from '@codemirror/state'
 import { EditorStateCache } from './lib/editorStateCache'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { NewSessionDialog } from './components/NewSessionDialog'
@@ -974,9 +974,13 @@ export default function App(): React.JSX.Element {
    *  탭이 아직 열려 있을 때만 보관한다. 탭을 닫는 경로는 이미 cache.drop을 했고 그 뒤에 언마운트가
    *  오므로, 무조건 저장하면 방금 버린 항목이 되살아난다. closeExplorer도 같은 이유로 이 가드에
    *  걸린다 — 거기서는 clear() 뒤에 언마운트가 오고, 그때 fileTabs는 이미 비어 있다. */
-  const retireEditorState = (path: string, state: EditorState, scrollTop: number): void => {
+  const retireEditorState = (
+    path: string,
+    state: EditorState,
+    scroll: StateEffect<unknown>
+  ): void => {
     if (!fileTabsRef.current.some((t) => t.path === path)) return
-    editorCacheRef.current.save(path, state, scrollTop)
+    editorCacheRef.current.save(path, state, scroll)
   }
 
   const setBufferContent = (id: string, content: string): void => {

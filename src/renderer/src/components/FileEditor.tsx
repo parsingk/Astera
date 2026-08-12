@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { EditorState, type Extension } from '@codemirror/state'
+import { EditorState, type Extension, type StateEffect } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { basicSetup } from 'codemirror'
 import { oneDark } from '@codemirror/theme-one-dark'
@@ -64,14 +64,14 @@ function restoreOrBuild(
   path: string,
   content: string,
   readOnly: boolean
-): { state: EditorState; scrollTop: number | null } {
+): { state: EditorState; scroll: StateEffect<unknown> | null } {
   const cached = cache.get(path)
   const usable =
     cached && cached.state.doc.toString() === content && cached.state.readOnly === readOnly
-  return {
-    state: usable ? cached.state : makeState(base, content, path, readOnly),
-    scrollTop: cached?.scrollTop ?? null
-  }
+  // 상태를 재사용할 때만 스크롤도 되돌린다. 문서가 달라졌다면 그 위치는 더 이상 같은 곳을 가리키지 않는다
+  return usable
+    ? { state: cached.state, scroll: cached.scroll }
+    : { state: makeState(base, content, path, readOnly), scroll: null }
 }
 
 /** CM6 file editor (a controlled component). The buffer, the dirty flag and the save policy are owned by
@@ -95,7 +95,7 @@ export function FileEditor({
   cache: EditorStateCache
   /** 이 에디터가 사라질 때 그 상태를 넘긴다. 캐시에 남길지는 App이 정한다 — 닫힌 파일의 상태를
    *  되살리면 안 되기 때문에 여기서 직접 저장하지 않는다 */
-  onRetire: (path: string, state: EditorState, scrollTop: number) => void
+  onRetire: (path: string, state: EditorState, scroll: StateEffect<unknown>) => void
   onChange: (next: string) => void
   onSave: () => void
 }): React.JSX.Element {
@@ -131,14 +131,9 @@ export function FileEditor({
     const view = new EditorView({ parent: hostRef.current!, state: restored.state })
     viewRef.current = view
     curPathRef.current = path
-    if (restored.scrollTop != null) {
-      const top = restored.scrollTop
-      requestAnimationFrame(() => {
-        if (viewRef.current === view) view.scrollDOM.scrollTop = top
-      })
-    }
+    if (restored.scroll) view.dispatch({ effects: restored.scroll })
     return () => {
-      onRetireRef.current(curPathRef.current, view.state, view.scrollDOM.scrollTop)
+      onRetireRef.current(curPathRef.current, view.state, view.scrollSnapshot())
       view.destroy()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -153,16 +148,11 @@ export function FileEditor({
     if (!view) return
     const prev = curPathRef.current
     if (prev !== path) {
-      cache.save(prev, view.state, view.scrollDOM.scrollTop)
+      cache.save(prev, view.state, view.scrollSnapshot())
       const restored = restoreOrBuild(cache, baseRef.current, path, content, readOnly)
       view.setState(restored.state)
       curPathRef.current = path
-      if (restored.scrollTop != null) {
-        const top = restored.scrollTop
-        requestAnimationFrame(() => {
-          if (viewRef.current === view) view.scrollDOM.scrollTop = top
-        })
-      }
+      if (restored.scroll) view.dispatch({ effects: restored.scroll })
       return
     }
     if (view.state.doc.toString() !== content) view.setState(makeState(baseRef.current, content, path, readOnly))

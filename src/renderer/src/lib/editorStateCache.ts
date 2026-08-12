@@ -6,11 +6,14 @@
 // 파일이 페인을 옮겨 다녀도 상태가 따라간다.
 //
 // 그래서 drop은 파일 탭이 완전히 닫힐 때만 부른다. 페인이 사라지는 것은 파일이 닫히는 것과 다르다.
-import type { EditorState } from '@codemirror/state'
+import type { EditorState, StateEffect } from '@codemirror/state'
 
 export interface CachedEditorState {
   state: EditorState
-  scrollTop: number
+  /** CM의 scrollSnapshot() 이펙트. scrollTop 숫자를 들고 있다가 DOM에 직접 넣으면 갓 마운트된 뷰에서
+   *  깎인다 — 아직 측정 전이라 scrollHeight가 실제보다 작기 때문이다. 이펙트로 실어 보내면 CM이 자기
+   *  측정 주기에 맞춰 적용한다 */
+  scroll: StateEffect<unknown>
 }
 
 export class EditorStateCache {
@@ -20,8 +23,8 @@ export class EditorStateCache {
     return this.entries.get(path)
   }
 
-  save(path: string, state: EditorState, scrollTop: number): void {
-    this.entries.set(path, { state, scrollTop })
+  save(path: string, state: EditorState, scroll: StateEffect<unknown>): void {
+    this.entries.set(path, { state, scroll })
   }
 
   drop(path: string): void {
