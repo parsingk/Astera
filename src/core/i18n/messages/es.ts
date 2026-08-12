@@ -363,7 +363,7 @@ export const es: Catalog = {
   'explorer.git.deleted': 'Eliminado',
   'explorer.git.conflict': 'Conflicto',
   'explorer.git.folderCount': '{count} cambios',
-  // FileTabs.tsx — the dirty marker on a file tab
+  // WorkbenchTabs.tsx — the dirty marker on a file tab
   'explorer.tab.unsaved': 'Sin guardar',
   // LocalHistoryDialog.tsx — the Local History browse/restore modal
   // ('Local History' is treated as a proper noun and left untranslated)

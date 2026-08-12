@@ -41,7 +41,8 @@ export function PaneGrid({
   onNewInGroup,
   onTabContextMenu,
   onDragSessionChange,
-  onDropTab
+  onDropTab,
+  soloSessionId
 }: {
   layout: PaneNode | null
   activePaneId: string | null
@@ -64,6 +65,9 @@ export function PaneGrid({
   onDragSessionChange: (id: string | null) => void
   /** Dropped onto a group's tab bar. insertBefore is 0..length in terms of the original indexing */
   onDropTab: (paneId: string, sessionId: string, insertBefore: number) => void
+  /** Given, this session alone is drawn full-bleed and group tab bars are hidden. Used by editor mode; the
+   *  layout tree is untouched — this prop disappears once the tree carries tabs (stage 2) */
+  soloSessionId?: string | null
 }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   // Preview while dragging — which zone of which pane it would land in
@@ -101,24 +105,28 @@ export function PaneGrid({
     <div className="panes pane-grid" ref={hostRef}>
       {sessions.map((s) => {
         const pane = paneOfSession.get(s.id)
-        // Only a group's active tab is visible. The rest stay mounted and are hidden with display (preserving xterm)
-        const visible = pane != null && pane.activeSessionId === s.id
+        const solo = soloSessionId != null
+        // In solo, the one designated session is visible rather than each group's active tab. A session
+        // absent from the tree must still be showable, so pane presence is not part of the condition
+        const visible = solo ? s.id === soloSessionId : pane != null && pane.activeSessionId === s.id
         const rect = pane ? rects.get(pane.id) : undefined
         return (
           <div
             key={s.id}
             className="terminal-slot"
             style={
-              visible && rect
-                ? {
-                    display: 'flex',
-                    left: `${rect.x}%`,
-                    width: `${rect.w}%`,
-                    // The tab bar takes the top 26px of the group rect — the slot moves down and shortens by that much
-                    top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
-                    height: `calc(${rect.h}% - var(--pane-tabbar-h))`
-                  }
-                : { display: 'none' }
+              visible && solo
+                ? { display: 'flex', left: 0, top: 0, width: '100%', height: '100%' }
+                : visible && rect
+                  ? {
+                      display: 'flex',
+                      left: `${rect.x}%`,
+                      width: `${rect.w}%`,
+                      // The tab bar takes the top 26px of the group rect — the slot moves down and shortens by that much
+                      top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
+                      height: `calc(${rect.h}% - var(--pane-tabbar-h))`
+                    }
+                  : { display: 'none' }
             }
             onMouseDown={() => pane && onFocusPane(pane.id)}
             onDragOver={(e) => {
@@ -145,7 +153,7 @@ export function PaneGrid({
               onRestart={onRestart}
               rollState={rollStates[s.id] ?? null}
               schedState={schedStates[s.id] ?? null}
-              active={visible && pane.id === activePaneId}
+              active={solo ? visible : visible && pane != null && pane.id === activePaneId}
             />
             {/* Gated on draggingSessionId too — hover is only cleared by onDrop/onDragLeave, so this
                 keeps the drop zone from sticking on paths where neither of those events arrives, such as
@@ -160,89 +168,91 @@ export function PaneGrid({
           --pane-tabbar-h of the rect and the slot is pushed down by that much (the calc above). The focus
           indication is done by the focused prop, not a CSS class — it puts the account-colored underline
           only on that group's active tab */}
-      {paneLeaves.map((l) => {
-        const rect = rects.get(l.id)
-        if (!rect) return null
-        const groupSessions = l.sessionIds
-          .map((sid) => sessionOf.get(sid))
-          .filter((s): s is SessionInfo => s != null)
-        return (
+      {soloSessionId == null &&
+        paneLeaves.map((l) => {
+          const rect = rects.get(l.id)
+          if (!rect) return null
+          const groupSessions = l.sessionIds
+            .map((sid) => sessionOf.get(sid))
+            .filter((s): s is SessionInfo => s != null)
+          return (
+            <div
+              key={`tabbar-${l.id}`}
+              className="pane-tabbar"
+              style={{ left: `${rect.x}%`, top: `${rect.y}%`, width: `${rect.w}%` }}
+              onMouseDown={() => onFocusPane(l.id)}
+            >
+              <SessionTabs
+                sessions={groupSessions}
+                accounts={accounts}
+                activeId={l.activeSessionId}
+                busy={busy}
+                onSelect={onSelectTab}
+                onClose={onCloseSession}
+                onNew={() => onNewInGroup(l.id)}
+                onContextMenu={onTabContextMenu}
+                onDragSessionChange={onDragSessionChange}
+                draggingSessionId={draggingSessionId}
+                focused={l.id === activePaneId}
+                onDropTab={(sid, insertBefore) => onDropTab(l.id, sid, insertBefore)}
+                newDisabled={newDisabled}
+              />
+            </div>
+          )
+        })}
+      {soloSessionId == null &&
+        bounds.map((b) => (
           <div
-            key={`tabbar-${l.id}`}
-            className="pane-tabbar"
-            style={{ left: `${rect.x}%`, top: `${rect.y}%`, width: `${rect.w}%` }}
-            onMouseDown={() => onFocusPane(l.id)}
-          >
-            <SessionTabs
-              sessions={groupSessions}
-              accounts={accounts}
-              activeId={l.activeSessionId}
-              busy={busy}
-              onSelect={onSelectTab}
-              onClose={onCloseSession}
-              onNew={() => onNewInGroup(l.id)}
-              onContextMenu={onTabContextMenu}
-              onDragSessionChange={onDragSessionChange}
-              draggingSessionId={draggingSessionId}
-              focused={l.id === activePaneId}
-              onDropTab={(sid, insertBefore) => onDropTab(l.id, sid, insertBefore)}
-              newDisabled={newDisabled}
-            />
-          </div>
-        )
-      })}
-      {bounds.map((b) => (
-        <div
-          key={b.splitId}
-          className={`pane-resizer ${b.dir}`}
-          role="separator"
-          aria-orientation={b.dir === 'row' ? 'vertical' : 'horizontal'}
-          style={
-            b.dir === 'row'
-              ? { left: `${b.rect.x}%`, top: `${b.rect.y}%`, height: `${b.rect.h}%` }
-              : { top: `${b.rect.y}%`, left: `${b.rect.x}%`, width: `${b.rect.w}%` }
-          }
-          onPointerDown={(e) => {
-            e.preventDefault()
-            const host = hostRef.current
-            if (!host) return
-            const hostRect = host.getBoundingClientRect()
-            // Converts the sub-area this split divides (area, in %) into px so the ratio is taken within
-            // that area. A nested split divides only the area its parent gave it, not the whole screen
-            const areaPx =
+            key={b.splitId}
+            className={`pane-resizer ${b.dir}`}
+            role="separator"
+            aria-orientation={b.dir === 'row' ? 'vertical' : 'horizontal'}
+            style={
               b.dir === 'row'
-                ? {
-                    start: hostRect.left + (hostRect.width * b.area.x) / 100,
-                    size: (hostRect.width * b.area.w) / 100
-                  }
-                : {
-                    start: hostRect.top + (hostRect.height * b.area.y) / 100,
-                    size: (hostRect.height * b.area.h) / 100
-                  }
-            let rafId = 0
-            let latest = 0
-            const apply = (): void => {
-              rafId = 0
-              onSetRatio(b.splitId, clampRatio((latest - areaPx.start) / areaPx.size, areaPx.size))
+                ? { left: `${b.rect.x}%`, top: `${b.rect.y}%`, height: `${b.rect.h}%` }
+                : { top: `${b.rect.y}%`, left: `${b.rect.x}%`, width: `${b.rect.w}%` }
             }
-            const onMove = (ev: PointerEvent): void => {
-              latest = b.dir === 'row' ? ev.clientX : ev.clientY
-              if (!rafId) rafId = requestAnimationFrame(apply)
-            }
-            const onUp = (): void => {
-              if (rafId) cancelAnimationFrame(rafId)
-              window.removeEventListener('pointermove', onMove)
-              window.removeEventListener('pointerup', onUp)
-              window.removeEventListener('pointercancel', onUp)
-              document.body.classList.remove('resizing')
-            }
-            document.body.classList.add('resizing')
-            window.addEventListener('pointermove', onMove)
-            window.addEventListener('pointerup', onUp)
-            window.addEventListener('pointercancel', onUp)
-          }}
-        />
-      ))}
+            onPointerDown={(e) => {
+              e.preventDefault()
+              const host = hostRef.current
+              if (!host) return
+              const hostRect = host.getBoundingClientRect()
+              // Converts the sub-area this split divides (area, in %) into px so the ratio is taken within
+              // that area. A nested split divides only the area its parent gave it, not the whole screen
+              const areaPx =
+                b.dir === 'row'
+                  ? {
+                      start: hostRect.left + (hostRect.width * b.area.x) / 100,
+                      size: (hostRect.width * b.area.w) / 100
+                    }
+                  : {
+                      start: hostRect.top + (hostRect.height * b.area.y) / 100,
+                      size: (hostRect.height * b.area.h) / 100
+                    }
+              let rafId = 0
+              let latest = 0
+              const apply = (): void => {
+                rafId = 0
+                onSetRatio(b.splitId, clampRatio((latest - areaPx.start) / areaPx.size, areaPx.size))
+              }
+              const onMove = (ev: PointerEvent): void => {
+                latest = b.dir === 'row' ? ev.clientX : ev.clientY
+                if (!rafId) rafId = requestAnimationFrame(apply)
+              }
+              const onUp = (): void => {
+                if (rafId) cancelAnimationFrame(rafId)
+                window.removeEventListener('pointermove', onMove)
+                window.removeEventListener('pointerup', onUp)
+                window.removeEventListener('pointercancel', onUp)
+                document.body.classList.remove('resizing')
+              }
+              document.body.classList.add('resizing')
+              window.addEventListener('pointermove', onMove)
+              window.addEventListener('pointerup', onUp)
+              window.addEventListener('pointercancel', onUp)
+            }}
+          />
+        ))}
     </div>
   )
 }

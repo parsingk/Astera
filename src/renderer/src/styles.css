@@ -155,6 +155,11 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .run-resizer::after { content: ''; position: absolute; left: 0; right: 0; top: 2px; height: 2px; background: var(--accent); opacity: 0; transition: opacity .12s; }
 .run-resizer:hover::after, .run-resizer:active::after { opacity: .8; }
 .content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+/* The common parent of the session and editor screens. Both being siblings means the JSX position
+   does not change when the session is shown in editor mode, so xterm never remounts.
+   Not named .workbench: that class already belongs to the app shell above (rail | sidebar | content),
+   and a second rule under the same name overrode the shell's row direction and stacked it. */
+.surfaces { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .placeholder { margin: auto; color: var(--text-faint); font-size: 13px; }
 
 /* ---------- explorer / editor mode ---------- */

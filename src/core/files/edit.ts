@@ -33,3 +33,44 @@ export function classifyExternalChange(
   if (diskContent === savedContent) return 'ignore'
   return dirty ? 'conflict' : 'reload'
 }
+
+/** Whether two texts are the same document, ignoring how their lines end.
+ *
+ *  CodeMirror normalises line endings to LF when it builds a document, while the buffer App holds is
+ *  whatever came off disk — CRLF for most files written on Windows. A plain === between the two
+ *  therefore never holds for such a file, which silently disabled every reuse of a cached EditorState:
+ *  undo history and scroll position were rebuilt from scratch on each remount. Lone CR (classic Mac)
+ *  is folded too, because CodeMirror splits on that as well.
+ *
+ *  The identity check comes first so LF files, the common case, never pay for the normalisation. */
+export function sameDocument(a: string, b: string): boolean {
+  return a === b || a.replace(/\r\n?/g, '\n') === b.replace(/\r\n?/g, '\n')
+}
+
+/** The line ending a file uses on disk. */
+export type Eol = '\r\n' | '\n'
+
+/** Which line ending dominates the text. Mixed files pick the majority rather than the first hit, so a
+ *  single stray CRLF in an LF file does not convert the whole file on the next save. Text with no line
+ *  break at all reports LF, which is harmless: applying it changes nothing. */
+export function detectEol(text: string): Eol {
+  const crlf = (text.match(/\r\n/g) ?? []).length
+  if (crlf === 0) return '\n'
+  // 앞 문자를 함께 삼키는 형태로 쓰면 "\n\n"이 한 번으로 세어져 빈 줄이 많은 파일이 CRLF 쪽으로 기운다
+  const lone = (text.match(/(?<!\r)\n/g) ?? []).length
+  return crlf > lone ? '\r\n' : '\n'
+}
+
+/** Rewrites every line ending to LF. Everything above the filesystem boundary works in LF: CodeMirror
+ *  normalises documents that way, so keeping the buffer in the same shape is what lets a document be
+ *  compared with, and reused against, the editor's own state. */
+export function toLf(text: string): string {
+  return text.replace(/\r\n?/g, '\n')
+}
+
+/** Rewrites LF text back to the file's own line ending, for the moment it is written to disk. Without
+ *  this a CRLF file is silently converted to LF by the first save, which shows up as every line having
+ *  changed. */
+export function applyEol(text: string, eol: Eol): string {
+  return eol === '\n' ? toLf(text) : toLf(text).replace(/\n/g, '\r\n')
+}

@@ -65,7 +65,9 @@ git worktree에 격리됩니다. 한 에이전트가 다른 세션을 띄우고 
 
 **에디터와 단축키**
 - 키 하나로 세션을 에이전트 뷰와 같은 프로젝트의 에디터 사이에서 전환합니다 —
-  `Ctrl`/`Cmd`+`Tab`. 창을 떠나지 않고 에이전트가 방금 바꾼 것을 읽을 수 있습니다
+  `Ctrl`/`Cmd`+`Shift`+`E`. 창을 떠나지 않고 에이전트가 방금 바꾼 것을 읽을 수 있습니다
+- 탭 줄은 하나입니다. 그 프로젝트에서 돌고 있는 세션이 열어 둔 파일 옆에 놓이고, `Ctrl`+`Tab`이
+  그 줄 전체를 넘나듭니다
 - 텍스트 상자가 아닌 진짜 에디터입니다. CodeMirror 기반으로 TypeScript·JavaScript·Python·Go·
   Rust·C/C++·Java·PHP·SQL·HTML·CSS·Markdown·JSON·YAML·XML 문법 강조를 지원하고, 탭으로 여러
   파일을 엽니다
