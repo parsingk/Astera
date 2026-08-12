@@ -8,6 +8,7 @@ import { fitTerminalToHost } from '../lib/fitTerminal'
 import { pinCursorBlinkOff } from '../lib/cursorBlink'
 import * as sessionBus from '../lib/sessionBus'
 import { useI18n } from '../i18n/I18nProvider'
+import { useTerminalFont } from '../lib/terminalFont'
 
 const fmtTime = (iso?: string): string =>
   iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
@@ -67,6 +68,7 @@ export function TerminalView({
   active?: boolean
 }): React.JSX.Element {
   const { t } = useI18n()
+  const { family } = useTerminalFont()
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   // A resumed session has a delay while claude reads and replays the whole conversation, so show a loading indicator until the first output
@@ -81,8 +83,7 @@ export function TerminalView({
       // lookup used to fall through to the generic monospace, where Chromium picked Gulim — that made Hangul
       // (and only Hangul) look different from PowerShell, which falls back to Malgun Gothic via DirectWrite.
       // Order is what splits the roles: Latin is claimed by Cascadia Mono first, Hangul by Malgun Gothic.
-      fontFamily:
-        '"Cascadia Mono", "Cascadia Code", Consolas, "Malgun Gothic", "Courier New", monospace',
+      fontFamily: family,
       scrollback: 5000,
       theme: { background: '#141417', foreground: '#d0d0d6', cursor: '#37b0c4' }
     })
@@ -206,6 +207,20 @@ export function TerminalView({
       term.dispose()
     }
   }, [session.id])
+
+  // The font is applied through options rather than by rebuilding the terminal — the construction
+  // effect is keyed by session id, and adding the font to it would tear the terminal down and take the
+  // screen and the scrollback with it. Changing the font changes the cell metrics, so the grid is
+  // refitted and the new size sent to the PTY; nextResize's guard drops the send when the grid works
+  // out the same.
+  useEffect(() => {
+    const term = termRef.current
+    const host = hostRef.current
+    if (!term || !host) return
+    term.options.fontFamily = family
+    fitTerminalToHost(term, host)
+    window.api.sessions.resize(session.id, term.cols, term.rows)
+  }, [family, session.id])
 
   // When this tab becomes active (including keyboard switching and a tab click), focus the terminal so typing works right away
   useEffect(() => {

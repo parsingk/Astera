@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { pinCursorBlinkOff } from '../lib/cursorBlink'
+import { useTerminalFont } from '../lib/terminalFont'
 
 /** Run output body. The header and the actions are owned by BottomPanel.
  *  clearNonce: a counter BottomPanel's clear button increments. */
@@ -13,17 +14,17 @@ export function RunPanel({
   projectPath: string
   clearNonce: number
 }): React.JSX.Element {
+  const { family } = useTerminalFont()
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
+  const fitRef = useRef<FitAddon | null>(null)
 
   // One xterm per project — a new one is created when projectPath changes
   useEffect(() => {
     const host = hostRef.current!
     const term = new Terminal({
       fontSize: 13,
-      // 'Malgun Gothic' carries the Hangul glyphs (see TerminalView for why the order matters)
-      fontFamily:
-        '"Cascadia Mono", "Cascadia Code", Consolas, "Malgun Gothic", "Courier New", monospace',
+      fontFamily: family,
       scrollback: 5000,
       theme: { background: '#141417', foreground: '#d0d0d6', cursor: '#37b0c4' }
     })
@@ -34,6 +35,7 @@ export function RunPanel({
     term.open(host)
     fit.fit()
     termRef.current = term
+    fitRef.current = fit
     // Reconnect: fill in the recent output buffer first (the cancelled guard prevents a write after a switch or unmount)
     let cancelled = false
     void window.api.run.list(projectPath).then((r) => {
@@ -61,9 +63,21 @@ export function RunPanel({
       observer.disconnect()
       clearTimeout(resizeTimer)
       termRef.current = null
+      fitRef.current = null
       term.dispose()
     }
   }, [projectPath])
+
+  // Same rationale as TerminalView's font effect: mutate options rather than widen the construction
+  // effect's deps, then refit. This file has no onResize wiring — the ResizeObserver above sends the
+  // resize directly, so the same call is made here.
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    term.options.fontFamily = family
+    fitRef.current?.fit()
+    window.api.run.resize(projectPath, term.cols, term.rows)
+  }, [family, projectPath])
 
   useEffect(() => {
     if (clearNonce > 0) termRef.current?.clear()

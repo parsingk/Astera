@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { pinCursorBlinkOff } from '../lib/cursorBlink'
+import { useTerminalFont } from '../lib/terminalFont'
 
 /**
  * Project terminal body. Subscribes to terminal:data, and input goes to the PTY via terminal.write.
@@ -28,8 +29,10 @@ export function TerminalBody({
   clearNonce: number
   active: boolean
 }): React.JSX.Element {
+  const { family } = useTerminalFont()
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
+  const fitRef = useRef<FitAddon | null>(null)
 
   // deps is [id] only — initialBuffer is for a single replay at mount and is deliberately left out (with
   // it in, every time the buffer grows xterm gets recreated and the screen is wiped). Output after that
@@ -38,9 +41,7 @@ export function TerminalBody({
     const host = hostRef.current!
     const term = new Terminal({
       fontSize: 13,
-      // 'Malgun Gothic' carries the Hangul glyphs (see TerminalView for why the order matters)
-      fontFamily:
-        '"Cascadia Mono", "Cascadia Code", Consolas, "Malgun Gothic", "Courier New", monospace',
+      fontFamily: family,
       scrollback: 5000,
       theme: { background: '#141417', foreground: '#d0d0d6', cursor: '#37b0c4' }
     })
@@ -51,6 +52,7 @@ export function TerminalBody({
     term.open(host)
     fit.fit()
     termRef.current = term
+    fitRef.current = fit
     term.focus() // so typing works immediately once the terminal opens — follows TerminalView's precedent
     if (initialBuffer) term.write(initialBuffer) // replay the previous output on re-entry
     const off = window.api.on('terminal:data', (e) => {
@@ -74,9 +76,21 @@ export function TerminalBody({
       observer.disconnect()
       clearTimeout(resizeTimer)
       termRef.current = null
+      fitRef.current = null
       term.dispose()
     }
   }, [id])
+
+  // Same rationale as TerminalView's font effect: mutate options rather than widen the construction
+  // effect's deps, then refit. This file has no onResize wiring — the ResizeObserver above sends the
+  // resize directly, so the same call is made here.
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    term.options.fontFamily = family
+    fitRef.current?.fit()
+    window.api.terminal.resize(id, term.cols, term.rows)
+  }, [family, id])
 
   // Focus when this tab becomes active (a tab click) — the same shape as TerminalView's active effect.
   // Unlike a session, a terminal has no state such as 'exited', so active is all that has to be checked
