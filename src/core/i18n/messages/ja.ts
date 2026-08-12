@@ -16,9 +16,9 @@ export const ja: Catalog = {
   // Agent orchestration
   'settings.orchestration.label': 'エージェントオーケストレーション (実験)',
   'settings.orchestration.hint':
-    'オンにすると、アプリが起動したエージェントセッションが別ベンダーのワーカーセッションを起動できます。 ' +
-    'エージェントがアプリのどのアカウントでもセッションを作成できるようになるため、必要なときだけオンにしてください。 ' +
-    'すでに開いているセッションには適用されません — 新しいセッションから有効になります。 ' +
+    'オンにすると、アプリが起動したエージェントセッションが別ベンダーのワーカーセッションを起動できます。' +
+    'エージェントがアプリのどのアカウントでもセッションを作成できるようになるため、必要なときだけオンにしてください。' +
+    'すでに開いているセッションには適用されません — 新しいセッションから有効になります。' +
     'オーケストレーターとして使うセッションで astera help を実行させると、詳しい使い方が得られます。',
   'settings.orchestration.saveFailed': 'オーケストレーション設定を保存できませんでした: {detail}',
   'settings.accounts.hint':
@@ -140,7 +140,7 @@ export const ja: Catalog = {
   'settings.info.version': 'バージョン',
   'settings.info.registeredAccounts': '登録アカウント',
   'settings.info.update': 'アップデート',
-  'settings.info.cliNotDetected': '検出されません',
+  'settings.info.cliNotDetected': '未検出',
   'settings.slack.save': '保存',
   'settings.slack.saved': '保存しました',
   'settings.slack.hint': '新しいセッションで「Slack 進捗通知」をオンにすると進捗を送信します。',
@@ -207,7 +207,7 @@ export const ja: Catalog = {
   'update.confirm.body': '進行中のセッション {count} 件が終了します。続行しますか？',
   // UpdateGate.tsx — the screen that covers the app when the version is below the minimum
   'update.gate.title': 'アップデートが必要です',
-  'update.gate.body': '{version} バージョンへのアップデートを進めてください',
+  'update.gate.body': 'バージョン {version} へのアップデートをお願いします',
   'update.gate.bodyNoVersion': 'アップデートを進めてください',
   'update.gate.preparing': 'アップデートを準備しています…',
   'update.gate.ready': 'v{version} のインストール準備が完了しました',
@@ -339,7 +339,7 @@ export const ja: Catalog = {
   'explorer.dir.loading': '読み込み中…',
   'explorer.dir.readFailed': '読み込みに失敗しました: {detail}',
   'explorer.dir.empty': '空です',
-  'explorer.refresh': '再読み込み',
+  'explorer.refresh': '更新',
   'explorer.reveal.failed': 'エクスプローラーの起動に失敗しました: {detail}',
   'explorer.menu.newFile': '新しいファイル',
   'explorer.menu.newFolder': '新しいフォルダ',
@@ -631,7 +631,7 @@ export const ja: Catalog = {
   // core/slack/inbound.ts buildChoiceKeys — why a choice reply was in the wrong shape
   'slack.choice.hintPerQuestion': '💡 質問ごとに `/` で区切って返信 (例: 1,3 / 2)',
   'slack.choice.hintMulti': '💡 複数はカンマ区切りで返信 (例: 1,3)',
-  'slack.pending.charCount': '{key}: {len}文字',
+  'slack.pending.charCount': '{key}: {len} 文字',
   'slack.choice.noShape': '待機中の選択肢の情報が見つかりませんでした',
   'slack.choice.countMismatch':
     '質問は {expected} 個ですが回答は {got} 個です — 質問ごとに「/」で区切ってください (例: 1,3 / 2)',
@@ -642,7 +642,7 @@ export const ja: Catalog = {
   'slack.choice.outOfRange': '{n} 番はありません (1〜{max})',
   'slack.choice.outOfRangeAt': '{index} 番目の質問: {n} 番はありません (1〜{max})',
   // slackInbox.ts — the notice left in the thread when a reply could not be injected
-  'slack.inbox.tooLong': '⚠️ 返信が長すぎるため転送しませんでした ({max}文字以下のみ)',
+  'slack.inbox.tooLong': '⚠️ 返信が長すぎるため転送しませんでした ({max} 文字以下のみ)',
   'slack.inbox.sessionEnded': '⚠️ このセッションは終了しているため入力を転送できませんでした',
   'slack.inbox.injectFailed': '⚠️ 入力を転送できませんでした',
   'slack.limitNoResume': '⛔ 上限に到達 — 自動再開なし',
