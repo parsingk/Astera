@@ -16,17 +16,42 @@ const TTCF_TAG = 0x74746366 // 'ttcf'
 const CMAP_TAG = 0x636d6170 // 'cmap'
 const CODE_POINT = 0xac00 // U+AC00, the first Hangul syllable
 
-/** Whether a format 4 cmap subtable maps `codePoint`. Format 4 stores parallel arrays: end codes,
- *  a padding word, then start codes, each segCount entries of 2 bytes. */
+/**
+ * Whether a format 4 cmap subtable maps `codePoint` to a real glyph (not just whether the code
+ * point falls inside a segment's [startCode, endCode] range). Format 4 stores parallel arrays —
+ * endCode, a padding word, startCode, idDelta, idRangeOffset, each segCount entries of 2 bytes,
+ * followed by glyphIdArray — and range membership alone is not proof of coverage: when a
+ * segment's idRangeOffset is non-zero, the actual glyph id is looked up in glyphIdArray and can
+ * be 0 (".notdef", i.e. no glyph) for code points inside an otherwise-mapped range.
+ */
 function format4Covers(view: DataView, codePoint: number): boolean {
   const segCountX2 = view.getUint16(6)
   const segCount = segCountX2 / 2
   const endCodeAt = 14
-  const startCodeAt = 16 + segCountX2
+  const startCodeAt = endCodeAt + segCountX2 + 2 // +2 skips the reservedPad word
+  const idDeltaAt = startCodeAt + segCountX2
+  const idRangeOffsetAt = idDeltaAt + segCountX2
+
   for (let i = 0; i < segCount; i++) {
     const end = view.getUint16(endCodeAt + i * 2)
     const start = view.getUint16(startCodeAt + i * 2)
-    if (start <= codePoint && codePoint <= end) return true
+    if (codePoint < start || codePoint > end) continue
+
+    const idDelta = view.getInt16(idDeltaAt + i * 2)
+    const idRangeOffset = view.getUint16(idRangeOffsetAt + i * 2)
+
+    let glyphId: number
+    if (idRangeOffset === 0) {
+      glyphId = (codePoint + idDelta) & 0xffff
+    } else {
+      // Per the OpenType spec, this offset is relative to the address of the idRangeOffset entry
+      // itself, not to the start of the subtable.
+      const glyphIndexAt = idRangeOffsetAt + i * 2 + idRangeOffset + 2 * (codePoint - start)
+      if (glyphIndexAt + 2 > view.byteLength) continue
+      const rawGlyphId = view.getUint16(glyphIndexAt)
+      glyphId = rawGlyphId === 0 ? 0 : (rawGlyphId + idDelta) & 0xffff
+    }
+    if (glyphId !== 0) return true
   }
   return false
 }
@@ -55,11 +80,13 @@ function isUsablePlatform(platformId: number, encodingId: number): boolean {
 
 /**
  * Reads a font file's `cmap` table and checks whether it maps U+AC00 (the first Hangul syllable,
- * '가'). This is the accurate test for "does this font draw Hangul": Hangul syllables are
- * full-width in essentially every Korean font, so measuring glyph width against a fallback stack
- * (the approach this replaces) cannot tell a real glyph from tofu — both measure the same. Reading
- * the cmap is exact because it asks the font file directly what it maps, with no rendering or
- * fallback-stack guesswork involved.
+ * '가') to an actual glyph. This is a far more reliable test for "does this font draw Hangul" than
+ * measuring glyph width against a fallback stack (the approach this replaces): Hangul syllables
+ * are full-width in essentially every Korean font, so a width comparison cannot tell a real glyph
+ * from tofu — both measure the same. Reading the cmap asks the font file directly what it maps,
+ * with no rendering or fallback-stack guesswork involved — though, being a static, offline read of
+ * the format the font declares, it can still be wrong if a font's runtime behaviour (e.g. via
+ * OpenType features) diverges from what its cmap says.
  *
  * Reads only the byte ranges it needs (never the whole file): the sfnt header, the table
  * directory, the cmap table's header and subtable directory, and each subtable's own header plus

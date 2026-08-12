@@ -35,19 +35,31 @@ export async function listLocalFontFamilies(): Promise<string[]> {
  *  Hangul coverage is a family-level question here (a family's regular and bold weight do not
  *  disagree about which scripts they draw). Built once and reused by both exports below. */
 let familyDataCache: Map<string, FontData> | null = null
+// The in-flight build, so two callers that arrive before the first one finishes share it instead
+// of each calling queryLocalFonts() themselves — the settled-result cache above only helps once
+// the first call has already completed.
+let familyDataInFlight: Promise<Map<string, FontData>> | null = null
 
 async function familyData(): Promise<Map<string, FontData>> {
   if (familyDataCache) return familyDataCache
-  const map = new Map<string, FontData>()
-  const query = (globalThis as WithQuery).queryLocalFonts
-  if (typeof query === 'function') {
-    for (const font of await query()) {
-      const name = sanitizeFontFamily(font.family)
-      if (name && !map.has(name)) map.set(name, font)
+  if (familyDataInFlight) return familyDataInFlight
+  familyDataInFlight = (async () => {
+    const map = new Map<string, FontData>()
+    const query = (globalThis as WithQuery).queryLocalFonts
+    if (typeof query === 'function') {
+      for (const font of await query()) {
+        const name = sanitizeFontFamily(font.family)
+        if (name && !map.has(name)) map.set(name, font)
+      }
     }
+    familyDataCache = map
+    return map
+  })()
+  try {
+    return await familyDataInFlight
+  } finally {
+    familyDataInFlight = null
   }
-  familyDataCache = map
-  return map
 }
 
 /** How many families to probe at once. Each probe is a handful of small ranged reads against a
@@ -88,6 +100,11 @@ async function probe(data: FontData): Promise<boolean> {
 }
 
 let hangulFamiliesCache: string[] | null = null
+// Same in-flight sharing as familyData(): the settled-result cache above is null for the whole
+// duration of the scan, so without this, onMouseDown and onFocus firing on the same click (or any
+// other pair of near-simultaneous callers) would each start a full, independent batch scan —
+// twice the concurrent blob reads and roughly double the wall-clock work.
+let hangulFamiliesInFlight: Promise<string[]> | null = null
 
 /**
  * The subset of installed families that actually draw Hangul, sorted. Cached for the renderer's
@@ -99,26 +116,34 @@ let hangulFamiliesCache: string[] | null = null
  */
 export async function listHangulFamilies(): Promise<string[]> {
   if (hangulFamiliesCache) return hangulFamiliesCache
-  const data = await familyData()
-  const names = [...data.keys()]
-  const result: string[] = []
+  if (hangulFamiliesInFlight) return hangulFamiliesInFlight
+  hangulFamiliesInFlight = (async () => {
+    const data = await familyData()
+    const names = [...data.keys()]
+    const result: string[] = []
 
-  for (let i = 0; i < names.length; i += BATCH_SIZE) {
-    const batch = names.slice(i, i + BATCH_SIZE)
-    const covers = await Promise.all(
-      batch.map(async (name) => {
-        const cached = hangulCache.get(name)
-        if (cached !== undefined) return cached
-        const value = await probe(data.get(name) as FontData)
-        hangulCache.set(name, value)
-        return value
+    for (let i = 0; i < names.length; i += BATCH_SIZE) {
+      const batch = names.slice(i, i + BATCH_SIZE)
+      const covers = await Promise.all(
+        batch.map(async (name) => {
+          const cached = hangulCache.get(name)
+          if (cached !== undefined) return cached
+          const value = await probe(data.get(name) as FontData)
+          hangulCache.set(name, value)
+          return value
+        })
+      )
+      batch.forEach((name, idx) => {
+        if (covers[idx]) result.push(name)
       })
-    )
-    batch.forEach((name, idx) => {
-      if (covers[idx]) result.push(name)
-    })
-  }
+    }
 
-  hangulFamiliesCache = result.sort((a, b) => a.localeCompare(b))
-  return hangulFamiliesCache
+    hangulFamiliesCache = result.sort((a, b) => a.localeCompare(b))
+    return hangulFamiliesCache
+  })()
+  try {
+    return await hangulFamiliesInFlight
+  } finally {
+    hangulFamiliesInFlight = null
+  }
 }
