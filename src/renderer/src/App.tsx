@@ -33,7 +33,7 @@ import {
   shouldNotifyDownloaded,
   showChecking
 } from '../../core/update/checkFeedback'
-import { classifyExternalChange } from '../../core/files/edit'
+import { applyEol, classifyExternalChange, detectEol, toLf, type Eol } from '../../core/files/edit'
 import { isSubPath, rebasePath } from '../../core/files/ops'
 import { parentDir } from '../../core/files/paths'
 import type { UndoEntry } from '../../core/files/undo'
@@ -349,8 +349,13 @@ export default function App(): React.JSX.Element {
   const [busy, setBusy] = useState<Record<string, boolean>>({}) // whether each session is working — the tab spinner
   const [fileTabs, setFileTabs] = useState<FileTab[]>([]) // file viewer tabs
   interface FileBuffer {
+    /** 항상 LF다. CodeMirror가 문서를 LF로 정규화하므로 버퍼도 같은 모양이어야 에디터 상태와 비교되고
+     *  재사용된다. 디스크의 줄바꿈은 eol에 따로 들고 있다가 쓸 때 되돌린다 */
     content: string
     savedContent: string
+    /** 이 파일이 디스크에서 쓰는 줄바꿈. 저장할 때 되돌려 주지 않으면 CRLF 파일이 첫 저장에 LF로 바뀌고
+     *  git에는 전 줄이 변경으로 잡힌다 */
+    eol: Eol
     readOnly: boolean
     loading: boolean
     error: string | null
@@ -961,9 +966,9 @@ export default function App(): React.JSX.Element {
     const title = path.split(/[\\/]/).pop() || path
     setFileTabs((prev) => [...prev, { id, path, title }])
     setActiveTabId(id)
-    setFileBuffers((prev) => ({ ...prev, [id]: { content: '', savedContent: '', readOnly: false, loading: true, error: null, conflict: false } }))
+    setFileBuffers((prev) => ({ ...prev, [id]: { content: '', savedContent: '', eol: '\n', readOnly: false, loading: true, error: null, conflict: false } }))
     window.api.files.read(path).then(
-      (d) => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { content: d.content, savedContent: d.content, readOnly: d.truncated || d.binary, loading: false, error: d.binary ? t('files.editor.binaryUnsupported') : null, conflict: false } } : prev)),
+      (d) => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { content: toLf(d.content), savedContent: toLf(d.content), eol: detectEol(d.content), readOnly: d.truncated || d.binary, loading: false, error: d.binary ? t('files.editor.binaryUnsupported') : null, conflict: false } } : prev)),
       (err) => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], loading: false, error: err instanceof Error ? err.message : String(err) } } : prev))
     )
   }
@@ -977,7 +982,7 @@ export default function App(): React.JSX.Element {
   const retireEditorState = (
     path: string,
     state: EditorState,
-    scroll: StateEffect<unknown>
+    scroll: StateEffect<unknown> | null
   ): void => {
     if (!fileTabsRef.current.some((t) => t.path === path)) return
     editorCacheRef.current.save(path, state, scroll)
@@ -991,7 +996,9 @@ export default function App(): React.JSX.Element {
     const buf = fileBuffersRef.current[id]
     const tab = fileTabsRef.current.find((t) => t.id === id)
     if (!buf || !tab || buf.readOnly || buf.content === buf.savedContent) return
-    window.api.files.write(tab.path, buf.content).then(
+    // 디스크에는 그 파일 본래의 줄바꿈으로 되돌려 쓴다. savedContent는 LF 그대로 둔다 — 버퍼끼리의
+    // 비교(더티 판정)는 전부 LF 기준이고, 디스크와의 비교는 읽어 올 때 toLf를 거친다
+    window.api.files.write(tab.path, applyEol(buf.content, buf.eol)).then(
       () => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], savedContent: buf.content, conflict: false } } : prev)),
       (err) => toast.error(t('files.save.failed', { detail: err instanceof Error ? err.message : String(err) }))
     )
@@ -1002,7 +1009,7 @@ export default function App(): React.JSX.Element {
     if (!tab) return
     window.api.files.read(tab.path).then(
       (d) =>
-        setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], content: d.content, savedContent: d.content, readOnly: d.truncated || d.binary, conflict: false, error: d.binary ? t('files.editor.binaryUnsupported') : null } } : prev)),
+        setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], content: toLf(d.content), savedContent: toLf(d.content), eol: detectEol(d.content), readOnly: d.truncated || d.binary, conflict: false, error: d.binary ? t('files.editor.binaryUnsupported') : null } } : prev)),
       (err) => toast.error(t('files.reload.failed', { detail: err instanceof Error ? err.message : String(err) }))
     )
   }
@@ -1120,14 +1127,14 @@ export default function App(): React.JSX.Element {
         (d) => {
           const b = fileBuffersRef.current[id]
           if (!b) return
-          const verdict = classifyExternalChange(d.content, b.savedContent, b.content !== b.savedContent && !b.readOnly)
+          const verdict = classifyExternalChange(toLf(d.content), b.savedContent, b.content !== b.savedContent && !b.readOnly)
           if (verdict === 'ignore') {
             // Clears a lingering 'deleted' notice when the file was deleted and recreated (disk === savedContent)
             if (b.error) setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], error: null } } : prev))
             return
           }
           if (verdict === 'reload')
-            setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], content: d.content, savedContent: d.content, readOnly: d.truncated || d.binary, conflict: false, error: d.binary ? t('files.editor.binaryUnsupported') : null } } : prev))
+            setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], content: toLf(d.content), savedContent: toLf(d.content), eol: detectEol(d.content), readOnly: d.truncated || d.binary, conflict: false, error: d.binary ? t('files.editor.binaryUnsupported') : null } } : prev))
           else setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], conflict: true, error: null } } : prev))
         },
         () => {

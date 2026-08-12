@@ -13,7 +13,7 @@ export interface CachedEditorState {
   /** CM의 scrollSnapshot() 이펙트. scrollTop 숫자를 들고 있다가 DOM에 직접 넣으면 갓 마운트된 뷰에서
    *  깎인다 — 아직 측정 전이라 scrollHeight가 실제보다 작기 때문이다. 이펙트로 실어 보내면 CM이 자기
    *  측정 주기에 맞춰 적용한다 */
-  scroll: StateEffect<unknown>
+  scroll: StateEffect<unknown> | null
 }
 
 export class EditorStateCache {
@@ -23,8 +23,12 @@ export class EditorStateCache {
     return this.entries.get(path)
   }
 
-  save(path: string, state: EditorState, scroll: StateEffect<unknown>): void {
-    this.entries.set(path, { state, scroll })
+  /** scroll이 null이면 이번 마운트에서 사용자가 스크롤한 적이 없다는 뜻이므로, 이미 들고 있던 위치를
+   *  유지한다. 그 자리에서 새로 스냅샷을 뜨면 안 된다 — 아직 측정되지 않았거나 화면에서 떨어지는 중인
+   *  뷰는 언제나 맨 위를 가리키고, 그것으로 덮으면 제대로 저장돼 있던 위치가 사라진다. React가 개발
+   *  모드에서 마운트를 두 번 하기 때문에 이 덮어쓰기는 파일을 열 때마다 일어났다. */
+  save(path: string, state: EditorState, scroll: StateEffect<unknown> | null): void {
+    this.entries.set(path, { state, scroll: scroll ?? this.entries.get(path)?.scroll ?? null })
   }
 
   drop(path: string): void {

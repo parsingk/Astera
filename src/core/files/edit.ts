@@ -46,3 +46,30 @@ export function classifyExternalChange(
 export function sameDocument(a: string, b: string): boolean {
   return a === b || a.replace(/\r\n?/g, '\n') === b.replace(/\r\n?/g, '\n')
 }
+
+/** The line ending a file uses on disk. */
+export type Eol = '\r\n' | '\n'
+
+/** Which line ending dominates the text. Mixed files pick the majority rather than the first hit, so a
+ *  single stray CRLF in an LF file does not convert the whole file on the next save. Text with no line
+ *  break at all reports LF, which is harmless: applying it changes nothing. */
+export function detectEol(text: string): Eol {
+  const crlf = (text.match(/\r\n/g) ?? []).length
+  if (crlf === 0) return '\n'
+  const lone = (text.match(/(^|[^\r])\n/g) ?? []).length
+  return crlf > lone ? '\r\n' : '\n'
+}
+
+/** Rewrites every line ending to LF. Everything above the filesystem boundary works in LF: CodeMirror
+ *  normalises documents that way, so keeping the buffer in the same shape is what lets a document be
+ *  compared with, and reused against, the editor's own state. */
+export function toLf(text: string): string {
+  return text.replace(/\r\n?/g, '\n')
+}
+
+/** Rewrites LF text back to the file's own line ending, for the moment it is written to disk. Without
+ *  this a CRLF file is silently converted to LF by the first save, which shows up as every line having
+ *  changed. */
+export function applyEol(text: string, eol: Eol): string {
+  return eol === '\n' ? toLf(text) : toLf(text).replace(/\n/g, '\r\n')
+}

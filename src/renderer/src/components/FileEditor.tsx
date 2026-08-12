@@ -115,7 +115,7 @@ export function FileEditor({
   cache: EditorStateCache
   /** 이 에디터가 사라질 때 그 상태를 넘긴다. 캐시에 남길지는 App이 정한다 — 닫힌 파일의 상태를
    *  되살리면 안 되기 때문에 여기서 직접 저장하지 않는다 */
-  onRetire: (path: string, state: EditorState, scroll: StateEffect<unknown>) => void
+  onRetire: (path: string, state: EditorState, scroll: StateEffect<unknown> | null) => void
   onChange: (next: string) => void
   onSave: () => void
 }): React.JSX.Element {
@@ -172,11 +172,7 @@ export function FileEditor({
       if (scrollFrame != null) cancelAnimationFrame(scrollFrame)
       if (import.meta.env.DEV)
         debugNote(`unmount ${curPathRef.current} scrollTop=${view.scrollDOM.scrollTop} usingCached=${lastScrollRef.current != null}`)
-      onRetireRef.current(
-        curPathRef.current,
-        view.state,
-        lastScrollRef.current ?? view.scrollSnapshot()
-      )
+      onRetireRef.current(curPathRef.current, view.state, lastScrollRef.current)
       view.destroy()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -191,7 +187,7 @@ export function FileEditor({
     if (!view) return
     const prev = curPathRef.current
     if (prev !== path) {
-      cache.save(prev, view.state, lastScrollRef.current ?? view.scrollSnapshot())
+      cache.save(prev, view.state, lastScrollRef.current)
       lastScrollRef.current = null
       const restored = restoreOrBuild(cache, baseRef.current, path, content, readOnly)
       view.setState(restored.state)
