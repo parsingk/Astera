@@ -152,6 +152,16 @@ export const ko = {
   'settings.history.hiddenProjects': '숨긴 프로젝트',
   'settings.history.unhide': '해제',
   'settings.history.empty': '숨긴 프로젝트가 없습니다.',
+  // TerminalFontSettings.tsx — the terminal font picker rows
+  'settings.font.latin': '터미널 영문 폰트',
+  'settings.font.hangul': '터미널 한글 폰트',
+  'settings.font.system': '시스템 기본',
+  'settings.font.notInstalled': '설치되지 않음',
+  'settings.font.sample': 'AaBb 한글 123',
+  'settings.font.hangulShadowed':
+    '선택한 영문 폰트가 한글도 그리기 때문에 한글 폰트 설정은 적용되지 않습니다.',
+  'settings.font.listFailed': '설치된 폰트 목록을 가져오지 못했습니다: {detail}',
+  'settings.font.saveFailed': '폰트 설정을 저장하지 못했습니다: {detail}',
   // No settings.cliMissing.* here on purpose. That screen replaces the whole workbench, so the rail
   // and the language switch on it are gone — it is hardcoded English in App.tsx instead.
   // App.tsx — update status (the title-bar UpdateIndicator / the settings Info tab)

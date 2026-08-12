@@ -17,6 +17,7 @@ import { BottomPanel } from './components/BottomPanel'
 import { ToastHost } from './components/ToastHost'
 import { UpdateGate } from './components/UpdateGate'
 import { ShortcutSettings } from './components/ShortcutSettings'
+import { TerminalFontSettings } from './components/TerminalFontSettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import type { RunConfig, RunStatus, TerminalBuffer } from '../../core/types'
 import { slackMode } from '../../core/slack/ready'
@@ -1996,6 +1997,7 @@ export default function App(): React.JSX.Element {
                       />
                     </label>
                     <span className="settings-hint">{t('settings.orchestration.hint')}</span>
+                    <TerminalFontSettings />
                   </>
                 )}
                 {settingsTab === 'accounts' && <AccountSettings accounts={accounts} />}
