@@ -289,7 +289,7 @@ export default function App(): React.JSX.Element {
   // The session whose tab is being dragged (for PaneGrid's drop preview)
   const [dragTabId, setDragTabId] = useState<string | null>(null)
   // Position of the tab context menu
-  const [tabMenu, setTabMenu] = useState<{ sessionId: string; x: number; y: number } | null>(null)
+  const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null)
   // 지금 보고 있는 탭은 트리가 정한다 — 활성 페인의 활성 탭. 두 종류가 한 트리에 있으므로 별도의
   // activeTabId 상태를 두면 트리와 어긋난다(다른 페인의 탭을 클릭하거나 페인 포커스를 옮기는 순간
   // 갈라진다). 파일 탭 id는 전부터 `file:<path>` 형식이었으므로 파일 관련 코드는 그대로 쓴다
@@ -298,6 +298,13 @@ export default function App(): React.JSX.Element {
   /** 활성 탭이 파일일 때만 그 id */
   const activeFileId = activeTab?.kind === 'file' ? activeTabId : null
   const activeSessionId = activeTab?.kind === 'session' ? activeTab.id : null
+  // 활성 탭이 파일일 수 있게 되면서 "지금 보고 있는 것"과 "작업 중인 세션"이 갈라졌다. 세션에 딸린
+  // 표시(상태 바, 사용량 폴링)는 마지막으로 활성이었던 세션 탭을 따른다 — 파일을 읽는 동안 상태 바가
+  // 비고 컨텍스트·한도 칩이 사라지지 않게. 파일 트리 루트는 여기서 나오지 않고 활성 탭에서 나온다.
+  // 렌더 중 갱신은 이 파일의 다른 ref들과 같은 관례이고, 세션이 사라졌는지는 아래 `active`의
+  // sessions 조회가 판정하므로 여기서 따로 청소하지 않는다.
+  const lastSessionIdRef = useRef<string | null>(null)
+  if (activeSessionId) lastSessionIdRef.current = activeSessionId
   const [showNew, setShowNew] = useState(false)
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null) // prefill for WorktreePanel's 'start session'
   const [cli, setCli] = useState<{ claude: CliStatus; codex: CliStatus } | null>(null)
@@ -659,12 +666,13 @@ export default function App(): React.JSX.Element {
           toast.info(tRef.current('session.pane.maxReached'))
           return
         }
-        // With 2 or more tabs in the active group, the active tab moves into a new group
+        // With 2 or more tabs in the active group, the active tab moves into a new group — whichever
+        // kind it is. A file on one side and a session on the other is the arrangement this keyboard
+        // path exists for, so the tab id goes to the tree unread.
         const target =
           cur && ((activePaneIdRef.current && leafOf(cur, activePaneIdRef.current)) || firstLeaf(cur))
-        const targetTab = target ? parseTab(target.activeTabId) : null
-        if (target && target.tabIds.length >= 2 && targetTab?.kind === 'session') {
-          splitActiveRef.current(dir, false, targetTab.id)
+        if (target && target.tabIds.length >= 2) {
+          splitActiveRef.current(dir, false, target.activeTabId)
           return
         }
         // With only one tab, splitting would change nothing, so a new session is created first —
@@ -1214,11 +1222,12 @@ export default function App(): React.JSX.Element {
     void window.api.sessions.kill(id).catch(() => {})
   }
 
-  /** Splits the active group and moves sessionId into the new one. Past the cap, only a toast. */
-  const splitActive = (dir: PaneDir, placeBefore: boolean, sessionId: string): void => {
+  /** Splits the active group and moves tabId into the new one. Past the cap, only a toast.
+   *  The tab id goes straight to the tree, so a file tab splits exactly as a session tab does. */
+  const splitActive = (dir: PaneDir, placeBefore: boolean, tabId: string): void => {
     const cur = layoutRef.current
     if (!cur) {
-      const g = createGroup(sessionTab(sessionId))
+      const g = createGroup(tabId)
       setLayout(g)
       setActivePaneId(g.id)
       return
@@ -1228,7 +1237,7 @@ export default function App(): React.JSX.Element {
       return
     }
     const target = (activePaneIdRef.current && leafOf(cur, activePaneIdRef.current)) || firstLeaf(cur)
-    const res = splitAndMove(cur, sessionTab(sessionId), target.id, dir, placeBefore)
+    const res = splitAndMove(cur, tabId, target.id, dir, placeBefore)
     // null means the group had only one tab — splitting would change nothing. Not a failure, so no toast either
     if (!res) return
     setLayout(res.root)
@@ -1350,7 +1359,8 @@ export default function App(): React.JSX.Element {
     })
   }
 
-  const active = sessions.find((s) => s.id === activeSessionId) ?? null
+  // 마지막으로 활성이었던 세션. 그 세션이 이미 닫혔으면 find가 못 찾아 null이 되므로 별도의 청소가 없다
+  const active = sessions.find((s) => s.id === (activeSessionId ?? lastSessionIdRef.current)) ?? null
   const runningCount = sessions.filter((s) => s.status === 'running').length
   runningCountRef.current = runningCount // the toast's install button has to see the value at click time
   // A check round trip is around 350ms, so watching only the real state would make 'Checking…' invisible
@@ -1885,7 +1895,7 @@ export default function App(): React.JSX.Element {
                 onSelectTab={selectWorkbenchTab}
                 onCloseTab={closeWorkbenchTab}
                 onNewInGroup={newInGroup}
-                onTabContextMenu={(sessionId, x, y) => setTabMenu({ sessionId, x, y })}
+                onTabContextMenu={(tabId, x, y) => setTabMenu({ tabId, x, y })}
                 onDragTabChange={setDragTabId}
                 onDropTabInBar={dropTabInGroup}
               />
@@ -2404,9 +2414,11 @@ export default function App(): React.JSX.Element {
           </div>
         </div>
       )}
-      {/* The session tab context menu — the entry point for split and unsplit. What gets split is the
-          group the right-clicked tab belongs to, not the active pane — so right-clicking a tab in
-          another group does not split the wrong one (the same as IntelliJ). */}
+      {/* The pane tab context menu — the entry point for split and unsplit. It serves both kinds of tab:
+          the id goes to the tree unread, and Close takes the same path the tab's × does (a dirty file
+          still asks for confirmation, a session is still ended). What gets split is the group the
+          right-clicked tab belongs to, not the active pane — so right-clicking a tab in another group
+          does not split the wrong one (the same as IntelliJ). */}
       {tabMenu && (
         <ContextMenu
           x={tabMenu.x}
@@ -2414,14 +2426,14 @@ export default function App(): React.JSX.Element {
           onClose={() => setTabMenu(null)}
           items={((): MenuItem[] => {
             const cur = layout
-            const sid = tabMenu.sessionId
-            const group = cur ? groupOfTab(cur, sessionTab(sid)) : null
+            const tid = tabMenu.tabId
+            const group = cur ? groupOfTab(cur, tid) : null
             const atMax = cur != null && countLeaves(cur) >= MAX_PANES
             // With only one tab in the group, splitting changes nothing (splitAndMove returns null) — shown as disabled
             const cantSplit = !group || atMax || group.tabIds.length < 2
             const split = (dir: PaneDir): void => {
               if (!cur || !group) return
-              const res = splitAndMove(cur, sessionTab(sid), group.id, dir, false)
+              const res = splitAndMove(cur, tid, group.id, dir, false)
               if (!res) return
               setLayout(res.root)
               setActivePaneId(res.paneId)
@@ -2443,7 +2455,7 @@ export default function App(): React.JSX.Element {
                 onSelect: () => group && unsplitPane(group.id)
               },
               'separator',
-              { label: t('common.close'), danger: true, onSelect: () => closeSession(sid) }
+              { label: t('common.close'), danger: true, onSelect: () => closeWorkbenchTab(tid) }
             ]
           })()}
         />

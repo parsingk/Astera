@@ -240,7 +240,7 @@ export const ko = {
   'shortcut.risk.cliMode': 'Claude Code·Codex가 모드 전환·자동완성에 쓰는 키입니다. 앱이 가져가면 세션에서 쓸 수 없습니다.',
   'shortcut.pane.dragSplit': '가장자리로 분할 · 가운데로 이동',
   'shortcut.group.explorer': '파일 탐색기',
-  'shortcut.explorer.toggleMode': '세션 ↔ 탐색기 전환',
+  'shortcut.explorer.toggleMode': '탐색기 보이기/숨기기',
   'shortcut.explorer.saveFile': '파일 저장',
   'shortcut.explorer.closeFileTab': '파일 탭 닫기',
   'shortcut.explorer.rename': '이름 변경',

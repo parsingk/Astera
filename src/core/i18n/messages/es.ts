@@ -261,7 +261,7 @@ export const es: Catalog = {
     'Claude Code y Codex usan esta tecla para cambiar de modo y autocompletar. Si la toma la aplicación, no podrá usarla en una sesión.',
   'shortcut.pane.dragSplit': 'Al borde para dividir · al centro para mover',
   'shortcut.group.explorer': 'Explorador de archivos',
-  'shortcut.explorer.toggleMode': 'Sesión ↔ Explorador',
+  'shortcut.explorer.toggleMode': 'Mostrar/ocultar el explorador',
   'shortcut.explorer.saveFile': 'Guardar el archivo',
   'shortcut.explorer.closeFileTab': 'Cerrar la pestaña de archivo',
   'shortcut.explorer.rename': 'Cambiar nombre',

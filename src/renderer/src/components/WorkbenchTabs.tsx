@@ -69,8 +69,8 @@ export function WorkbenchTabs({
   onSelect: (tabId: string) => void
   onClose: (tabId: string) => void
   onNew: () => void
-  /** 세션 탭 우클릭 — 화면 좌표를 그대로 넘긴다. 메뉴를 그리는 것은 App이다 */
-  onContextMenu: (sessionId: string, x: number, y: number) => void
+  /** 탭 우클릭 — 종류를 가리지 않고 탭 id와 화면 좌표를 넘긴다. 메뉴를 그리는 것은 App이다 */
+  onContextMenu: (tabId: string, x: number, y: number) => void
   /** 드래그 중인 탭 id (끝나면 null). PaneGrid의 드롭 미리보기가 이 값을 본다 */
   onDragTabChange: (tabId: string | null) => void
   /** 드래그 중인 탭 id (App이 소유). 로컬 dragId만으로는 다른 페인에서 시작된 드래그를 받을 수 없다 */
@@ -145,9 +145,8 @@ export function WorkbenchTabs({
           draggable
           onClick={() => onSelect(tab.tabId)}
           onContextMenu={(e) => {
-            if (tab.kind !== 'session') return
             e.preventDefault()
-            onContextMenu(tab.sessionId, e.clientX, e.clientY)
+            onContextMenu(tab.tabId, e.clientX, e.clientY)
           }}
           onDragStart={(e) => {
             setDragId(tab.tabId)

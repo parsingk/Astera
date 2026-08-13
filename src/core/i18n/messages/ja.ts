@@ -258,7 +258,7 @@ export const ja: Catalog = {
     'Claude Code・Codex がモード切り替えや補完に使うキーです。アプリが使うと、セッションで使えなくなります。',
   'shortcut.pane.dragSplit': '端で分割 · 中央で移動',
   'shortcut.group.explorer': 'ファイルエクスプローラー',
-  'shortcut.explorer.toggleMode': 'セッション ↔ エクスプローラー切り替え',
+  'shortcut.explorer.toggleMode': 'エクスプローラーの表示/非表示',
   'shortcut.explorer.saveFile': 'ファイルを保存',
   'shortcut.explorer.closeFileTab': 'ファイルタブを閉じる',
   'shortcut.explorer.rename': '名前の変更',

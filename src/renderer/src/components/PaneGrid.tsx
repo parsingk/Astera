@@ -78,7 +78,7 @@ export function PaneGrid({
   onCloseTab: (tabId: string) => void
   onNewInGroup: (paneId: string) => void
   /** Right-click on a tab — the screen coordinates are passed through as-is. App is what shows the menu */
-  onTabContextMenu: (sessionId: string, x: number, y: number) => void
+  onTabContextMenu: (tabId: string, x: number, y: number) => void
   onDragTabChange: (tabId: string | null) => void
   /** Dropped onto a group's tab bar. insertBefore is 0..length in terms of the original indexing */
   onDropTabInBar: (paneId: string, tabId: string, insertBefore: number) => void

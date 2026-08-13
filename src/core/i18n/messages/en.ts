@@ -211,7 +211,7 @@ export const en: Record<keyof typeof ko, string> = {
   'shortcut.risk.cliMode': 'Claude Code and Codex use this key for mode switching / completion. If the app takes it, you cannot use it in a session.',
   'shortcut.pane.dragSplit': 'Edge to split · center to move',
   'shortcut.group.explorer': 'File explorer',
-  'shortcut.explorer.toggleMode': 'Session ↔ explorer',
+  'shortcut.explorer.toggleMode': 'Show/hide explorer',
   'shortcut.explorer.saveFile': 'Save file',
   'shortcut.explorer.closeFileTab': 'Close file tab',
   'shortcut.explorer.rename': 'Rename',
