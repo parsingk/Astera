@@ -3,7 +3,7 @@ import { EditorState, type Extension, type StateEffect } from '@codemirror/state
 import { EditorView, keymap } from '@codemirror/view'
 import { basicSetup } from 'codemirror'
 import { oneDark } from '@codemirror/theme-one-dark'
-import { indentWithTab } from '@codemirror/commands'
+import { indentWithTab, undoDepth } from '@codemirror/commands'
 import { javascript } from '@codemirror/lang-javascript'
 import { python } from '@codemirror/lang-python'
 import { json } from '@codemirror/lang-json'
@@ -55,6 +55,16 @@ function makeState(base: Extension[], doc: string, path: string, readOnly: boole
   })
 }
 
+/** 개발 빌드에서만 남기는 진단 기록. 페인 사이로 파일을 옮겼을 때 되돌리기 이력이 이어지는지는
+ *  실행 중인 앱에서만 재현되고 이 저장소에는 렌더러 테스트가 없다. DevTools 에서
+ *  window.__asteraEditor 로 읽는다. 원인이 잡히면 지운다. */
+function debugNote(line: string): void {
+  const w = window as unknown as { __asteraEditor?: string[] }
+  ;(w.__asteraEditor ??= []).push(`${new Date().toISOString().slice(11, 23)} ${line}`)
+  if (w.__asteraEditor.length > 200) w.__asteraEditor.shift()
+}
+const baseName = (p: string): string => p.split(/[\\/]/).pop() ?? p
+
 /** 캐시에 쓸 수 있는 상태가 있으면 그것을, 없으면 새로 만든 상태를 돌려준다. 문서와 편집 가능 여부가
  *  지금 프롭과 같을 때만 재사용한다 — 파일이 디스크에서 바뀌었거나 읽기 전용 여부가 달라졌으면 옛
  *  상태는 화면에 맞지 않는다. 마운트와 파일 전환이 같은 규칙을 써야 해서 함수로 뽑았다. */
@@ -68,6 +78,11 @@ function restoreOrBuild(
   const cached = cache.get(path)
   const usable =
     cached && sameDocument(cached.state.doc.toString(), content) && cached.state.readOnly === readOnly
+  if (import.meta.env.DEV)
+    debugNote(
+      `restore ${baseName(path)} cached=${cached != null} usable=${usable === true}` +
+        ` cachedUndo=${cached ? undoDepth(cached.state) : '-'}`
+    )
   // 상태를 재사용할 때만 스크롤도 되돌린다. 문서가 달라졌다면 그 위치는 더 이상 같은 곳을 가리키지 않는다
   return usable
     ? { state: cached.state, scroll: cached.scroll }
@@ -135,6 +150,7 @@ export function FileEditor({
     viewRef.current = view
     curPathRef.current = path
     if (restored.scroll) view.dispatch({ effects: restored.scroll })
+    if (import.meta.env.DEV) debugNote(`mount ${baseName(path)} undo=${undoDepth(view.state)}`)
 
     let scrollFrame: number | null = null
     const onScroll = (): void => {
@@ -149,6 +165,8 @@ export function FileEditor({
     return () => {
       view.scrollDOM.removeEventListener('scroll', onScroll)
       if (scrollFrame != null) cancelAnimationFrame(scrollFrame)
+      if (import.meta.env.DEV)
+        debugNote(`unmount ${baseName(curPathRef.current)} undo=${undoDepth(view.state)}`)
       onRetireRef.current(curPathRef.current, view.state, lastScrollRef.current)
       view.destroy()
     }
