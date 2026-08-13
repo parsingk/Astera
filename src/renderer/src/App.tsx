@@ -1425,10 +1425,20 @@ export default function App(): React.JSX.Element {
    *  FileEditor는 로딩·오류 중에도 언마운트되면 안 된다 — 언마운트는 EditorView를 destroy하고 되돌리기
    *  이력을 지운다. 그래서 오버레이는 위에 덮을 뿐이고, 활성 탭이 세션으로 바뀔 때도 슬롯이 display로만
    *  숨는다(PaneGrid의 lastFileOfPane). */
-  const renderEditor = (_paneId: string, fileTabId: string): React.ReactNode => {
+  const renderEditor = (paneId: string, fileTabId: string): React.ReactNode => {
     const f = fileTabs.find((t) => t.id === fileTabId)
     const buf = fileBuffers[fileTabId]
     if (!f || !buf) return null
+    // 진단용(개발 빌드 전용): 어느 페인이 어느 파일을 그리고, 그 에디터의 편집·저장이 어느 id로 가는지.
+    // 화면에 보이는 파일과 편집이 향하는 파일이 어긋나는 증상을 좁히기 위한 것이다
+    const note = (line: string): void => {
+      if (!import.meta.env.DEV) return
+      const w = window as unknown as { __asteraEditor?: string[] }
+      ;(w.__asteraEditor ??= []).push(`${new Date().toISOString().slice(11, 23)} ${line}`)
+      if (w.__asteraEditor.length > 200) w.__asteraEditor.shift()
+    }
+    const short = (id: string): string => id.split(/[\\/]/).pop() ?? id
+    note(`render pane=${paneId} file=${short(fileTabId)}`)
     return (
       <div className="workbench-body">
         <div className="file-editor-wrap">
@@ -1448,8 +1458,14 @@ export default function App(): React.JSX.Element {
             readOnly={buf.readOnly}
             cache={editorCacheRef.current}
             onRetire={retireEditorState}
-            onChange={(next) => setBufferContent(f.id, next)}
-            onSave={() => saveFile(f.id)}
+            onChange={(next) => {
+              note(`change pane=${paneId} -> ${short(f.id)}`)
+              setBufferContent(f.id, next)
+            }}
+            onSave={() => {
+              note(`save pane=${paneId} -> ${short(f.id)}`)
+              saveFile(f.id)
+            }}
           />
           {buf.loading && <div className="file-overlay">{t('files.editor.loading')}</div>}
           {!buf.loading && buf.error && <div className="file-overlay">{buf.error}</div>}
