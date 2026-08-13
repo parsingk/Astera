@@ -96,6 +96,34 @@ describe('OutputScanner', () => {
     expect(s.push(SQUASHED_TRUST).trust).toBe(true)
   })
 
+  // 실제로 화면에 뜬 문구다. 예전의 "Do you trust the files in this folder?"는 한 조각도 남아 있지
+  // 않다 — 질문이 아니라 우리가 실제로 누르는 선택 항목에 앵커를 두는 이유
+  const REAL_TRUST_SCREEN = [
+    ' Accessing workspace:',
+    '',
+    ' D:\\comfyUI',
+    '',
+    ' Quick safety check: Is this a project you created or one you trust? (Like your own code, a',
+    ' well-known open source project, or work from your team). If not, take a moment to review what',
+    " is in this folder first.",
+    '',
+    " Claude Code'll be able to read, edit, and execute files here.",
+    '',
+    ' Security guide',
+    '',
+    ' > 1. Yes, I trust this folder',
+    '   2. No, exit'
+  ].join('\n')
+
+  it('현재 버전의 신뢰 다이얼로그 문구를 감지한다', () => {
+    const s = new OutputScanner()
+    expect(s.push(REAL_TRUST_SCREEN).trust).toBe(true)
+  })
+
+  it('현재 버전의 신뢰 다이얼로그를 대화상자로도 본다', () => {
+    expect(looksLikeChoicePrompt(REAL_TRUST_SCREEN)).toBe(true)
+  })
+
   it('공백 없이 그려진 한도 문구를 감지한다', () => {
     const s = new OutputScanner()
     expect(s.push('MCPs' + 'sessionlimit' + 'reached').limit).toBe(true)

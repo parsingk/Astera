@@ -71,8 +71,17 @@ const LIMIT_RE =
 // feeds both renderings of the same sentence.
 const LIMIT_SQUASHED_RE =
   /you(?:['’ʼ`])?ve(?:hit|reached)your(?:session|weekly|Opus|Sonnet|Fable5|usagecredit)limit|(?:usage|5-hour|session)limitreached/i
-// Trust is only ever asked of screen text, so this one has no spaced twin
-const TRUST_RE = /doyoutrustthefilesinthisfolder/i
+// The folder-trust dialog. Trust is only ever asked of screen text, so this has no spaced twin.
+//
+// It is anchored on the **choice label**, not on the question, because the question is the part that
+// changes. Claude Code once asked "Do you trust the files in this folder?"; the wording observed in
+// production is now a paragraph — "Quick safety check: Is this a project you created or one you
+// trust? … Claude Code'll be able to read, edit, and execute files here." — with nothing of the old
+// sentence left. Matching that prose would mean re-chasing it at every rewrite. "Yes, I trust this
+// folder" is the option we actually press, so it is both the most stable string on the screen and the
+// one whose disappearance would genuinely mean the dialog changed. The old question stays as an
+// alternative for versions that still ask it.
+const TRUST_RE = /yes,itrustthisfolder|doyoutrustthefilesinthisfolder/i
 
 export interface ScanHit {
   limit: boolean
@@ -145,10 +154,11 @@ export function hasWaitChoiceLabel(text: string): boolean {
 // without spaces.
 const CHOICE_FOOTER_RE = /entertoconfirm/i
 const CHOICE_CANCEL_RE = /esctocancel/i
-// The spaced rendering of the same thing: a "❯" cursor sitting on a numbered item. Kept alongside the
+// The spaced rendering of the same thing: a cursor sitting on a numbered item. Kept alongside the
 // footer because a dialog that draws its list plainly has real spaces and real lines, and the cursor
-// is what tells it apart from a numbered list in ordinary agent output.
-const CHOICE_CURSOR_RE = /^[^\S\n]*❯[^\S\n]*\d+[ \t]*[.)][ \t]*\S/m
+// is what tells it apart from a numbered list in ordinary agent output. Both cursor glyphs are
+// accepted — the trust dialog draws a plain ">" where the limit list draws "❯".
+const CHOICE_CURSOR_RE = /^[^\S\n]*[❯>][^\S\n]*\d+[ \t]*[.)][ \t]*\S/m
 
 /** Is an interactive choice list waiting for input on this screen? The automatic prompt after a roll
  *  asks this before typing blind: a dialog we failed to recognise (an unknown wording, a new kind of
