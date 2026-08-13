@@ -434,8 +434,13 @@ export default function App(): React.JSX.Element {
   const pendingSplitRef = useRef<PaneDir | null>(null)
   // Even while a file tab is active, the explorer keeps the project of the last active session.
   const lastSessionIdRef = useRef<string | null>(null)
-  // Preserves tree expansion and cache even when toggling the explorer unmounts FileExplorer
-  const explorerTreeRef = useRef<ExplorerTreeState | null>(null)
+  // Per-root tree snapshots. Toggling the explorer unmounts FileExplorer, and the tree root is about to
+  // follow the active tab, so it will change far more often than it does today — a map keyed by root
+  // means each project's expansion comes back with it instead of collapsing on every switch.
+  const explorerTreesRef = useRef<Map<string, ExplorerTreeState>>(new Map())
+  // The clipboard exists precisely to cross project boundaries, so it is not kept inside the per-root
+  // map above — it is its own ref so pasting across projects keeps working.
+  const explorerClipboardRef = useRef<ExplorerTreeState['clipboard']>(null)
   // The Ctrl+Z undo journal. It is deliberately not inside ExplorerTreeState — that holds a per-root
   // tree snapshot and is rightly cleared on every root change (the [root] effect in FileExplorer),
   // whereas the journal's lifetime differs (it has to survive an explorer toggle, and is cleared
@@ -1175,7 +1180,8 @@ export default function App(): React.JSX.Element {
     setFileTabs([])
     setFileBuffers({})
     setActiveTabId(null)
-    explorerTreeRef.current = null
+    explorerTreesRef.current.clear()
+    explorerClipboardRef.current = null
     // This is the point where the explorer is abandoned entirely, so the undo journal and the per-file
     // EditorState cache are cleared as well — unlike the tree snapshot, no screen remains to reuse them
     // (that is the difference from a plain toggleExplorer). Left behind, the journal would let Ctrl+Z
@@ -1801,7 +1807,8 @@ export default function App(): React.JSX.Element {
                 root={explorerRoot}
                 onOpenFile={openFile}
                 onClose={() => void closeExplorer()}
-                stateRef={explorerTreeRef}
+                stateRef={explorerTreesRef}
+                clipboardRef={explorerClipboardRef}
                 undoRef={explorerUndoRef}
                 onPathRenamed={handlePathRenamed}
                 onPathDeleted={handlePathDeleted}
