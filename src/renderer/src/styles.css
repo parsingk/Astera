@@ -83,6 +83,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
   -webkit-user-drag: none;
 }
 .tb-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
+/* 실행 구성 위젯. 타이틀바 전체가 -webkit-app-region: drag 이므로 여기서 no-drag 로 되돌리지 않으면
+   클릭이 창 이동으로 먹힌다(.tb-controls·.tb-update 와 같은 처리). 툴바가 원래 갖고 있던 테두리와
+   배경은 없어진 상단 띠의 크롬이었으므로 여기서는 지운다. min-width:0 은 창이 좁아질 때 select 가
+   줄어들 수 있게 한다 — 없으면 창 컨트롤을 밀어낸다 */
+.tb-run { display: flex; align-items: center; margin-left: 12px; min-width: 0; -webkit-app-region: no-drag; }
+.tb-run .run-toolbar { border: 0; background: transparent; padding: 0; }
 .tb-controls { margin-left: auto; display: flex; -webkit-app-region: no-drag; }
 .tb-update { margin-left: auto; padding: 0 12px; font-size: 12px; color: #9a9aa5; white-space: nowrap; align-self: center; -webkit-app-region: no-drag; }
 .tb-update-err { color: #e66; cursor: default; }
@@ -171,11 +177,10 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 /* ---------- project Run/Stop — RunToolbar and workbench wiring ---------- */
 /* The top bar now carries the RunToolbar alone — the global tab row that used to sit beside it is gone,
    its tabs having moved into each pane's own bar (.pane-tabbar) */
-.workbench-topbar { flex: none; display: flex; align-items: stretch; }
 /* The editor body. It now lives inside a pane's slot rather than under .explorer-view, and the rule is
    unchanged because the slot is a column flex box just as .explorer-view was */
 .workbench-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.run-toolbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-bottom: 1px solid var(--line); border-left: 1px solid var(--line); background: var(--panel); position: relative; }
+.run-toolbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-left: 1px solid var(--line); background: var(--panel); position: relative; }
 /* The run-config picker in the toolbar. Only sizing lives here now — the surface comes from .sel.
    It may shrink so the run buttons keep their room, but not past 140px, or the name is unreadable while
    the buttons sit on empty space. The open menu is not bound by this — .sel-menu sizes to its content. */

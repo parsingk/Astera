@@ -4,7 +4,9 @@ import { useI18n } from '../i18n/I18nProvider'
 import { Select } from './Select'
 import { RunConfigDialog } from './RunConfigDialog'
 
-/** Run toolbar in the workbench's top right. Rendered only in explorer mode. */
+/** Run toolbar. It sits in the title bar, next to the app name, and is drawn whenever a project is
+ *  known — the explorer toggle does not reach it. Its own chrome (border, background, padding) is
+ *  cleared by .tb-run, which owns the spacing there. */
 export function RunToolbar({
   configs,
   selectedId,

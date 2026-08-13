@@ -154,10 +154,14 @@ function UpdateIndicator({ update }: { update: UpdateStatus | null }): React.JSX
 
 function Titlebar({
   isMax,
-  update
+  update,
+  runSlot
 }: {
   isMax: boolean
   update: UpdateStatus | null
+  /** 타이틀바 줄에 함께 놓이는 것 — 지금은 실행 구성 툴바다. 프롭 열넷을 내려보내는 대신 슬롯으로
+   *  받아, 타이틀바는 무엇이 들어오는지 모른 채 자리만 내준다 */
+  runSlot?: React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
   // On macOS, window controls are handled by the OS traffic-light buttons. Drawing our own controls
@@ -173,6 +177,7 @@ function Titlebar({
         <img className="tb-logo" src={logoUrl} alt="" />
         <span className="tb-name">Astera</span>
       </div>
+      {runSlot}
       <UpdateIndicator update={update} />
       {!isMac && (
         <div className="tb-controls" onDoubleClick={(e) => e.stopPropagation()}>
@@ -1706,7 +1711,36 @@ export default function App(): React.JSX.Element {
 
   return (
     <div className="app">
-      <Titlebar isMax={isMax} update={update} />
+      {/* 실행 구성은 타이틀바 줄에 놓인다(IntelliJ와 같은 자리). 별도의 띠를 두면 탐색기를 여닫을
+          때마다 그 띠가 생겼다 사라지며 아래 페인이 위아래로 튄다. 프로젝트가 정해졌을 때만 그리므로
+          Ctrl/Cmd+Shift+E 와는 무관하다 */}
+      <Titlebar
+        isMax={isMax}
+        update={update}
+        runSlot={
+          explorerRoot ? (
+            <div className="tb-run">
+              <RunToolbar
+                configs={runConfigs}
+                selectedId={runSelectedId}
+                onSelect={setRunSelectedId}
+                active={runActive}
+                onRun={runStart}
+                onStop={runStop}
+                onAddConfig={runAddConfig}
+                onEditConfig={runEditConfig}
+                onDeleteConfig={runDeleteConfig}
+                activeRuns={activeRuns}
+                onJump={runJump}
+                onStopProject={runStopProject}
+                onModalOpenChange={setRunModalOpen}
+                projectPath={explorerRoot}
+                isSpringBoot={runIsSpringBoot}
+              />
+            </div>
+          ) : null
+        }
+      />
       {/* Only a block-mode campaign covers the workbench. notify is announced with a toast */}
       {campaign?.mode === 'block' && (
         <UpdateGate
@@ -1847,29 +1881,6 @@ export default function App(): React.JSX.Element {
               Named .surfaces, not .workbench: the app shell above already uses that class, and giving
               this one the same name silently overrode the shell's flex direction. */}
           <div className="surfaces">
-            {/* 탭 줄이 페인마다로 옮겨 갔으므로 이 줄에는 RunToolbar만 남았다. 탐색기를 켰을 때만
-                그린다 — Run 은 프로젝트에 딸린 것이고 프로젝트를 정하는 것이 탐색기다 */}
-            {explorerOpen && (
-              <div className="workbench-topbar">
-                <RunToolbar
-                  configs={runConfigs}
-                  selectedId={runSelectedId}
-                  onSelect={setRunSelectedId}
-                  active={runActive}
-                  onRun={runStart}
-                  onStop={runStop}
-                  onAddConfig={runAddConfig}
-                  onEditConfig={runEditConfig}
-                  onDeleteConfig={runDeleteConfig}
-                  activeRuns={activeRuns}
-                  onJump={runJump}
-                  onStopProject={runStopProject}
-                  onModalOpenChange={setRunModalOpen}
-                  projectPath={explorerRoot ?? ''}
-                  isSpringBoot={runIsSpringBoot}
-                />
-              </div>
-            )}
             {/* 페인 격자. 이제 파일 탭과 세션 탭을 함께 담으므로 탐색기를 켜도 물러나지 않는다 —
                 에디터는 이 안의 페인 슬롯에 있다 */}
             <div className="session-view">
