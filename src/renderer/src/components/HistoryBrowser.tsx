@@ -36,7 +36,6 @@ function ProjectRow({
   markSeen,
   onOpenPreview,
   onResume,
-  onOpenExplorer,
   onContextMenu
 }: {
   project: ProjectSummary
@@ -50,7 +49,6 @@ function ProjectRow({
   markSeen: (e: HistoryEntry) => void
   onOpenPreview: (e: HistoryEntry) => void
   onResume: (e: HistoryEntry) => void
-  onOpenExplorer: (projectPath: string) => void
   onContextMenu: (x: number, y: number, projectPath: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
@@ -139,17 +137,6 @@ function ProjectRow({
             minute: '2-digit'
           })}
         </span>
-        <button
-          className="ghost project-open-explorer"
-          title={t('history.project.openExplorer')}
-          onClick={(e) => {
-            e.stopPropagation()
-            onOpenExplorer(project.projectPath)
-          }}
-        >
-          {/* Achromatic folder icon — inherits currentColor */}
-          <FolderGlyph />
-        </button>
       </div>
       {expanded && (
         <ul
@@ -202,8 +189,7 @@ function ProjectRow({
 export function HistoryBrowser({
   accounts,
   ghostAccounts,
-  onResume,
-  onOpenExplorer
+  onResume
 }: {
   accounts: Account[]
   /** Unregistered sources, for display only. Kept apart from `accounts` so nothing here can be picked as
@@ -221,7 +207,6 @@ export function HistoryBrowser({
       schedule?: ScheduleConfig
     }
   ) => void
-  onOpenExplorer: (projectPath: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const [projects, setProjects] = useState<ProjectSummary[]>([])
@@ -405,9 +390,7 @@ export function HistoryBrowser({
   }
 
   const menuItemsFor = (projectPath: string): MenuItem[] => [
-    { label: t('history.menu.hide'), onSelect: () => hiddenProjects.hide(projectPath) },
-    'separator',
-    { label: t('history.project.openExplorer'), onSelect: () => onOpenExplorer(projectPath) }
+    { label: t('history.menu.hide'), onSelect: () => hiddenProjects.hide(projectPath) }
   ]
 
   return (
@@ -449,7 +432,6 @@ export function HistoryBrowser({
             markSeen={markSeen}
             onOpenPreview={openPreview}
             onResume={(e) => void resume(e)}
-            onOpenExplorer={onOpenExplorer}
             onContextMenu={(x, y, projectPath) => setMenu({ x, y, projectPath })}
           />
         ))}

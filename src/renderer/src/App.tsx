@@ -332,7 +332,6 @@ export default function App(): React.JSX.Element {
   bindingsRef.current = resolveBindings(keyOverrides, ACTIONS)
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [explorerOpen, setExplorerOpen] = useState(false) // the file explorer toggle
-  const [explorerPin, setExplorerPin] = useState<string | null>(null) // the pinned root when entering from history
   const [showSettings, setShowSettings] = useState(false)
   const [settingsTab, setSettingsTab] = useState<
     'general' | 'accounts' | 'info' | 'shortcuts' | 'slack' | 'worktree' | 'history'
@@ -1162,7 +1161,6 @@ export default function App(): React.JSX.Element {
     )
       return
     setExplorerOpen(false)
-    setExplorerPin(null)
     // 트리에 들어 있는 파일 탭도 함께 뺀다 — 남겨 두면 파일이 없는데 탭만 남는다. 하나씩 빼는 것은
     // removeTab이 빈 그룹 정리와 다음 활성 탭 선택까지 맡고 있기 때문이다
     let nextLayout = layoutRef.current
@@ -1192,12 +1190,6 @@ export default function App(): React.JSX.Element {
   // Toggling explorer mode — Ctrl+Tab or Ctrl+Shift+E. Explorer state (file tabs, pin, expansion) is preserved
   const toggleExplorer = (): void => {
     setExplorerOpen((v) => !v)
-  }
-
-  // The 📁 on a history project row — opens the explorer at that project root (pinned). If already open, only the root is swapped
-  const openExplorerAt = (projectPath: string): void => {
-    setExplorerPin(projectPath)
-    setExplorerOpen(true)
   }
 
   // A setState updater can be invoked twice under StrictMode (in development), so setActivePaneId and
@@ -1393,14 +1385,15 @@ export default function App(): React.JSX.Element {
   const explorerViewRef = useRef<HTMLDivElement>(null)
 
   /** 트리 루트는 활성 탭을 따른다 — 활성 탭이 파일이면 그 파일의 프로젝트, 세션이면 그 세션의 cwd.
-   *  탭이 없으면 히스토리에서 들어올 때 걸린 핀, 그것도 없으면 null.
-   *  보고 있는 것과 트리가 항상 일치하는 것이 이 규칙의 목적이다 */
+   *  탭이 없으면 null이다. 보고 있는 것과 트리가 항상 일치하는 것이 이 규칙의 목적이다.
+   *
+   *  히스토리와 worktree 목록에 있던 '탐색기에서 열기'는 이 규칙과 양립하지 않아 없앴다. 그 버튼들은
+   *  루트를 핀으로 고정하려 했는데, 활성 탭이 언제나 이기므로 다른 프로젝트를 지정해도 화면은 보고
+   *  있던 프로젝트를 계속 보여줬다 — 아무 일도 하지 않는 버튼이었다. */
   const explorerRoot =
     (activeTab?.kind === 'file'
       ? fileTabs.find((t) => t.id === activeTabId)?.projectRoot
-      : sessions.find((s) => s.id === activeTab?.id)?.cwd) ??
-    explorerPin ??
-    null
+      : sessions.find((s) => s.id === activeTab?.id)?.cwd) ?? null
 
   // Mirrors explorerRoot into a ref — avoids a stale closure in the run:status subscription effect
   const explorerRootRef = useRef(explorerRoot)
@@ -1591,7 +1584,21 @@ export default function App(): React.JSX.Element {
       })
     })
   }
-  const runJump = (projectPath: string): void => { setExplorerPin(projectPath); setExplorerOpen(true) }
+  /** 실행 중 목록에서 다른 프로젝트로 점프. 트리 루트는 활성 탭이 정하므로, 그 프로젝트에 속한 탭을
+   *  활성으로 만드는 것이 곧 '그리로 간다'는 뜻이다. 세션을 먼저 찾고 없으면 그 프로젝트의 파일 탭을
+   *  쓴다. 둘 다 없으면 갈 곳이 없으므로 아무 일도 하지 않는다 — 예전처럼 루트만 핀으로 바꿔 두면
+   *  활성 탭이 그대로라 화면은 움직이지 않는다. */
+  const runJump = (projectPath: string): void => {
+    const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+    const target = norm(projectPath)
+    const session = sessionsRef.current.find((s) => norm(s.cwd) === target)
+    if (session) {
+      selectWorkbenchTabRef.current(sessionTab(session.id))
+      return
+    }
+    const file = fileTabsRef.current.find((t) => norm(t.projectRoot) === target)
+    if (file) selectWorkbenchTabRef.current(file.id)
+  }
   const runStopProject = (projectPath: string): void => { void window.api.run.stop(projectPath) }
 
   // openTerminal calls newTerminal below, so it is declared first to match reading order — an arrow
@@ -1825,13 +1832,11 @@ export default function App(): React.JSX.Element {
                     setNewSessionCwd(p)
                     setShowNew(true)
                   }}
-                  onOpenExplorer={openExplorerAt}
                 />
                 <HistoryBrowser
                   accounts={accounts}
                   ghostAccounts={ghostAccounts}
                   onResume={resumeFromHistory}
-                  onOpenExplorer={openExplorerAt}
                 />
               </>
             )}

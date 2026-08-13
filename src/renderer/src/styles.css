@@ -90,8 +90,17 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
    클릭이 창 이동으로 먹힌다(.tb-controls·.tb-update 와 같은 처리). 툴바가 원래 갖고 있던 테두리와
    배경은 없어진 상단 띠의 크롬이었으므로 여기서는 지운다. min-width:0 은 창이 좁아질 때 select 가
    줄어들 수 있게 한다 — 없으면 창 컨트롤을 밀어낸다 */
-.tb-run { display: flex; align-items: center; margin-left: 12px; margin-right: 4px; min-width: 0; -webkit-app-region: no-drag; }
-.tb-run .run-toolbar { border: 0; background: transparent; padding: 0; }
+.tb-run { display: flex; align-items: center; margin-left: 12px; margin-right: 4px; min-width: 0; padding: 1px 2px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); -webkit-app-region: no-drag; }
+.tb-run .run-toolbar { border: 0; background: transparent; padding: 0; gap: 2px; }
+/* 타이틀바는 앱에서 가장 어두운 면(--rail)이라, 본문을 기준으로 잡힌 --text-dim 이 여기서는 거의
+   읽히지 않는다. 쉬는 상태의 색을 본문 색까지 올리고, 위젯 전체에 한 단계 밝은 면과 테두리를 줘서
+   타이틀바에서 떠 보이게 한다 — IntelliJ의 run 위젯이 같은 방식으로 묶여 있다.
+   버튼을 24px로 줄인 것은 34px 타이틀바 안에서 패딩과 테두리까지 넣으면 28px이 꽉 차기 때문이다 */
+.tb-run .run-btn { width: 24px; height: 24px; color: var(--text); font-size: 14px; }
+.tb-run .run-btn.play { color: #57d364; }
+.tb-run .run-btn.stop { color: #ff6b61; }
+.tb-run .run-btn.play:disabled { color: var(--text-faint); }
+.tb-run .run-btn:hover { background: var(--elevated); }
 .tb-controls { margin-left: auto; display: flex; -webkit-app-region: no-drag; }
 .tb-update { margin-left: auto; padding: 0 12px; font-size: 12px; color: #9a9aa5; white-space: nowrap; align-self: center; -webkit-app-region: no-drag; }
 .tb-update-err { color: #e66; cursor: default; }
