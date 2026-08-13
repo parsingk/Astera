@@ -91,6 +91,9 @@ function harness(overrides: Partial<RollingDeps> = {}): {
     title: 'p',
     rollAccountIds: ['a1', 'a2', 'a3']
   }
+  // settleIo가 "아직 뭔가 도착하는 중인가"를 판단할 근거. 하네스가 스스로 등록하므로 호출부는
+  // 그대로다 — 자세한 이유는 settleIo 위 주석에
+  ioProbes.push(() => events.length + written.length + sent.length + copied.length + spawned.length)
   return { coord, events, written, sent, copied, spawned, payloads, info1 }
 }
 
@@ -104,6 +107,7 @@ const flush = (): Promise<void> => vi.advanceTimersByTimeAsync(0) as unknown as 
 
 beforeEach(() => {
   vi.useFakeTimers()
+  ioProbes.length = 0 // 지난 테스트의 하네스는 settleIo의 판단 근거가 될 수 없다
 })
 afterEach(() => {
   vi.useRealTimers()
@@ -1241,8 +1245,34 @@ describe('idle nudge', () => {
 // codexRolling.test.ts가 같은 문제(진짜 rollout 파일 + fake timer)에서 쓴 것과 동일한 처방이다.
 // fake 타이머를 진행시킨 뒤 실제 타이머로 이벤트 루프에 시간을 줘서 I/O를 정착시킨다.
 const realSetTimeout = setTimeout
+// 하네스가 등록하는 "지금까지 기록된 이벤트 수" 프로브. 여러 하네스가 살아 있을 수 있으니 배열이다
+const ioProbes: (() => number)[] = []
+const ioActivity = (): number => ioProbes.reduce((n, p) => n + p(), 0)
+
+/** 실제 fs I/O가 정착할 때까지 이벤트 루프에 실제 시간을 준다.
+ *
+ *  종전에는 30ms(5ms×6) 고정이었다. 그 예산은 한가한 머신에서만 충분해서, 전체 스위트를 돌릴 때처럼
+ *  워커가 붐비면 폴링이 파일을 못 본 채로 끝났다 — 이 파일과 codexRolling.test.ts가 간헐적으로
+ *  실패한 원인이 이것이다(전체 실행 3회 중 1회 재현, 예산을 1ms로 줄이면 같은 계열로 10개가 즉시
+ *  실패). 부하에 비례해 늘어나는 값을 상수로 박아 둔 것이 잘못이었다.
+ *
+ *  그래서 시간이 아니라 **활동이 멎는 것**을 기다린다. 기록이 계속 늘어나는 동안에는 더 기다리고,
+ *  두 라운드 연속 조용하면 나간다. 최소 예산은 종전과 같게 두어, "아무 일도 일어나지 않아야 한다"를
+ *  단언하는 테스트가 종전보다 느슨해지지 않게 한다. */
+//  상한을 시간이 아니라 라운드 수로 세는 이유: fake timer가 걸린 동안 Date.now()는 얼어 있어
+//  경과 시간을 물어봐야 늘 0이다. 라운드는 실제 setTimeout으로 도니 실제 시간에 비례한다.
+const SETTLE_MIN_ROUNDS = 6 // 종전의 5ms×6 — 부정 단언의 하한을 유지한다
+const SETTLE_MAX_ROUNDS = 400 // 5ms×400 = 2초. 부하가 아무리 심해도 여기서 멈춘다 — 넘으면 진짜 실패다
 const settleIo = async (): Promise<void> => {
-  for (let i = 0; i < 6; i++) await new Promise((r) => realSetTimeout(r, 5))
+  let last = ioActivity()
+  let quiet = 0
+  for (let round = 1; round <= SETTLE_MAX_ROUNDS; round++) {
+    await new Promise((r) => realSetTimeout(r, 5))
+    const now = ioActivity()
+    quiet = now === last ? quiet + 1 : 0
+    last = now
+    if (round >= SETTLE_MIN_ROUNDS && quiet >= 2) return
+  }
 }
 const advanceIo = async (ms: number): Promise<void> => {
   await vi.advanceTimersByTimeAsync(ms)

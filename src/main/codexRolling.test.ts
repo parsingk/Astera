@@ -115,6 +115,8 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
     title: 'p',
     rollAccountIds: ['c1', 'c2']
   }
+  // settleIo가 "아직 뭔가 도착하는 중인가"를 판단할 근거 — 자세한 이유는 settleIo 위 주석에
+  ioProbes.push(() => events.length + sent.length + copied.length + spawned.length)
   return { coord, events, sent, copied, spawned, info1 }
 }
 
@@ -127,8 +129,31 @@ const LIMIT_TEXT = "You’ve hit your " + 'usage limit. Upgrade to Plus to conti
 // fs I/O 완료 콜백이 돌지 않아, 타이머만 진행시키면 폴링이 파일을 못 본 채로 끝난다. 그래서 fake
 // 타이머를 진행시킨 뒤 실제 타이머로 이벤트 루프에 시간을 줘서 I/O를 정착시킨다.
 const realSetTimeout = setTimeout
+// 하네스가 등록하는 "지금까지 기록된 이벤트 수" 프로브 — rolling.test.ts와 같은 처방이다
+const ioProbes: (() => number)[] = []
+const ioActivity = (): number => ioProbes.reduce((n, p) => n + p(), 0)
+
+/** 실제 fs I/O가 정착할 때까지 이벤트 루프에 실제 시간을 준다.
+ *
+ *  종전에는 30ms(5ms×6) 고정이었다. 한가한 머신에서만 충분한 값이라, 전체 스위트처럼 워커가 붐비면
+ *  폴링이 rollout 파일을 못 본 채로 끝났다 — 이 파일과 rolling.test.ts의 간헐적 실패가 그것이다.
+ *  예산을 1ms로 줄이면 이 파일에서 같은 계열로 10개가 즉시 실패한다.
+ *
+ *  그래서 시간이 아니라 활동이 멎는 것을 기다린다. 최소 라운드는 종전과 같게 두어 "아무 일도
+ *  일어나지 않아야 한다"를 단언하는 테스트가 느슨해지지 않게 한다. 상한을 라운드로 세는 이유는
+ *  fake timer가 걸린 동안 Date.now()가 얼어 경과 시간을 물어볼 수 없기 때문이다. */
+const SETTLE_MIN_ROUNDS = 6
+const SETTLE_MAX_ROUNDS = 400 // 5ms×400 = 2초
 const settleIo = async (): Promise<void> => {
-  for (let i = 0; i < 6; i++) await new Promise((r) => realSetTimeout(r, 5))
+  let last = ioActivity()
+  let quiet = 0
+  for (let round = 1; round <= SETTLE_MAX_ROUNDS; round++) {
+    await new Promise((r) => realSetTimeout(r, 5))
+    const now = ioActivity()
+    quiet = now === last ? quiet + 1 : 0
+    last = now
+    if (round >= SETTLE_MIN_ROUNDS && quiet >= 2) return
+  }
 }
 
 /** 폴링·타이머를 진행시키고 대기 중인 Promise(실제 fs I/O 포함)를 소화한다 */
@@ -142,6 +167,7 @@ const advance = async (ms: number): Promise<void> => {
 beforeEach(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-cxroll-'))
   vi.useFakeTimers()
+  ioProbes.length = 0 // 지난 테스트의 하네스는 settleIo의 판단 근거가 될 수 없다
 })
 afterEach(async () => {
   vi.useRealTimers()
