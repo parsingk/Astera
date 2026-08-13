@@ -8,6 +8,9 @@ export interface FileTab {
   id: string
   path: string
   title: string
+  /** 이 파일이 열릴 때의 트리 루트. 활성 탭이 이 탭일 때 트리가 이 프로젝트를 보여준다.
+   *  경로에서 유추하지 않는 이유는 프로젝트가 서로의 하위 디렉터리일 수 있기 때문이다 */
+  projectRoot: string
 }
 
 /** 에디터 모드의 탭 줄. 파일 탭과 세션 탭을 한 줄에 그린다.

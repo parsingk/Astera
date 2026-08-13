@@ -432,8 +432,6 @@ export default function App(): React.JSX.Element {
   // When Ctrl+\ had no spare session and opened the new-session dialog instead, the split goes in this
   // direction once creation succeeds. Cancelling the dialog discards it, so no empty pane is left.
   const pendingSplitRef = useRef<PaneDir | null>(null)
-  // Even while a file tab is active, the explorer keeps the project of the last active session.
-  const lastSessionIdRef = useRef<string | null>(null)
   // Per-root tree snapshots. Toggling the explorer unmounts FileExplorer, and the tree root is about to
   // follow the active tab, so it will change far more often than it does today — a map keyed by root
   // means each project's expansion comes back with it instead of collapsing on every switch.
@@ -977,8 +975,10 @@ export default function App(): React.JSX.Element {
       setActiveTabId(id)
       return
     }
+    const root = explorerRootRef.current
+    if (!root) return // 트리가 없는 상태에서는 파일을 열 수 없다 — 열 수단 자체가 트리다
     const title = path.split(/[\\/]/).pop() || path
-    setFileTabs((prev) => [...prev, { id, path, title }])
+    setFileTabs((prev) => [...prev, { id, path, title, projectRoot: root }])
     setActiveTabId(id)
     setFileBuffers((prev) => ({ ...prev, [id]: { content: '', savedContent: '', eol: '\n', readOnly: false, loading: true, error: null, conflict: false } }))
     window.api.files.read(path).then(
@@ -1097,7 +1097,7 @@ export default function App(): React.JSX.Element {
         const nid = remap.get(t.id)
         if (!nid) return t
         const npath = nid.slice('file:'.length)
-        return { id: nid, path: npath, title: npath.split(/[\\/]/).pop() || npath }
+        return { id: nid, path: npath, title: npath.split(/[\\/]/).pop() || npath, projectRoot: t.projectRoot }
       })
     )
     setFileBuffers((prev) => {
@@ -1407,11 +1407,16 @@ export default function App(): React.JSX.Element {
   const [runIsSpringBoot, setRunIsSpringBoot] = useState(false)
   const explorerViewRef = useRef<HTMLDivElement>(null)
 
-  // Even while a file tab is active, the explorer keeps the project of the last active session.
-  // As long as the root string does not change, FileExplorer's [root] effect does not run and the expansion state is preserved.
-  if (active) lastSessionIdRef.current = active.id
+  /** 트리 루트는 활성 탭을 따른다 — 활성 탭이 파일이면 그 파일의 프로젝트, 세션이면 그 세션의 cwd.
+   *  탭이 없으면 히스토리에서 들어올 때 걸린 핀, 그것도 없으면 null.
+   *  보고 있는 것과 트리가 항상 일치하는 것이 이 규칙의 목적이다 */
+  const activeTabRef = activeTabId ? parseTab(activeTabId) : null
   const explorerRoot =
-    explorerPin ?? (active ?? sessions.find((s) => s.id === lastSessionIdRef.current))?.cwd ?? null
+    (activeTabRef?.kind === 'file'
+      ? fileTabs.find((t) => t.id === activeTabId)?.projectRoot
+      : sessions.find((s) => s.id === activeTabRef?.id)?.cwd) ??
+    explorerPin ??
+    null
 
   // Mirrors explorerRoot into a ref — avoids a stale closure in the run:status subscription effect
   const explorerRootRef = useRef(explorerRoot)
