@@ -73,7 +73,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
    margins ≈ 78px. Paired with trafficLightPosition x=12 in main/index.ts — change only one and
    they overlap or float. */
 .titlebar--mac .tb-brand { padding-left: 78px; }
-.tb-brand { display: flex; align-items: center; gap: 8px; padding-left: 10px; }
+/* flex:1 로 남는 폭을 브랜드가 먹는다 — 그래야 뒤따르는 것들(실행 위젯, 업데이트 알림, 창 버튼)이
+   오른쪽에 차례로 붙는다. 그 요소들이 각자 갖고 있는 margin-left:auto 는 남는 폭이 없어져 0이 되므로
+   서로 밀어내지 않는다. min-width:0 은 창이 좁아질 때 이름이 아니라 브랜드 칸이 먼저 줄게 한다 */
+.tb-brand { display: flex; align-items: center; gap: 8px; padding-left: 10px; flex: 1; min-width: 0; }
 .tb-logo {
   width: 20px;
   height: 20px;
@@ -87,7 +90,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
    클릭이 창 이동으로 먹힌다(.tb-controls·.tb-update 와 같은 처리). 툴바가 원래 갖고 있던 테두리와
    배경은 없어진 상단 띠의 크롬이었으므로 여기서는 지운다. min-width:0 은 창이 좁아질 때 select 가
    줄어들 수 있게 한다 — 없으면 창 컨트롤을 밀어낸다 */
-.tb-run { display: flex; align-items: center; margin-left: 12px; min-width: 0; -webkit-app-region: no-drag; }
+.tb-run { display: flex; align-items: center; margin-left: 12px; margin-right: 4px; min-width: 0; -webkit-app-region: no-drag; }
 .tb-run .run-toolbar { border: 0; background: transparent; padding: 0; }
 .tb-controls { margin-left: auto; display: flex; -webkit-app-region: no-drag; }
 .tb-update { margin-left: auto; padding: 0 12px; font-size: 12px; color: #9a9aa5; white-space: nowrap; align-self: center; -webkit-app-region: no-drag; }
