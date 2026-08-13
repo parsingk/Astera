@@ -84,8 +84,23 @@ describe('OutputScanner', () => {
     expect(hit.limit).toBe(false)
   })
 
-  // 좁은 창이 문장을 접으면 리터럴 공백은 매치에 실패한다. LIMIT_RE가 이미 겪은 실패이고,
-  // 실제로 롤링 뒤 신뢰 다이얼로그를 놓쳐 이어가기 문구가 그 다이얼로그 안으로 들어갔다
+  // rolling.log가 실제로 기록한 화면이다 — 단어 사이 공백이 하나도 없다. 패널을 다시 그릴 때
+  // 터미널이 공백 대신 커서 이동 escape를 쓰고, stripAnsi가 그걸 지우면 단어가 붙어 버린다.
+  // 이 렌더링을 놓쳐서 롤링 뒤 30초 폴백이 이어가기 문구를 이 다이얼로그 안으로 타이핑했다
+  const SQUASHED_TRUST =
+    'Thesewillapplywithoutasking.Onlyproceedifyoutrustthisconfiguration.Securityguide' +
+    'Doyoutrustthefilesinthisfolder?1.Yes,Itrustthisfolder2.No,exitEntertoconfirm·Esctocancel'
+
+  it('공백 없이 그려진 신뢰 다이얼로그를 감지한다', () => {
+    const s = new OutputScanner()
+    expect(s.push(SQUASHED_TRUST).trust).toBe(true)
+  })
+
+  it('공백 없이 그려진 한도 문구를 감지한다', () => {
+    const s = new OutputScanner()
+    expect(s.push('MCPs' + 'sessionlimit' + 'reached').limit).toBe(true)
+  })
+
   it('소프트 랩으로 끊긴 신뢰 다이얼로그도 감지한다', () => {
     const s = new OutputScanner()
     expect(s.push('Do you trust the files in\r\nthis folder?\n1. Yes, proceed').trust).toBe(true)
@@ -109,6 +124,15 @@ describe('looksLikeChoicePrompt', () => {
 
   it('빈 화면은 대화상자가 아니다', () => {
     expect(looksLikeChoicePrompt('')).toBe(false)
+  })
+
+  it('공백 없이 그려진 대화상자를 확인 푸터로 감지한다', () => {
+    expect(looksLikeChoicePrompt('1.Yes,Itrustthisfolder2.No,exitEntertoconfirm·Esctocancel')).toBe(true)
+  })
+
+  // 작업 중 표시되는 'esc to interrupt' 힌트는 대화상자가 아니다 — 확인 푸터의 두 짝을 모두 요구하는 이유
+  it('작업 중 인터럽트 힌트는 대화상자로 보지 않는다', () => {
+    expect(looksLikeChoicePrompt('✻ Brewing… (esc to interrupt)')).toBe(false)
   })
 })
 

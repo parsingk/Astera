@@ -155,6 +155,21 @@ describe('RollingCoordinator', () => {
     expect(h.sent.some((s) => s.channel === 'session:rollState' && s.payload.state === 'trust')).toBe(true)
   })
 
+  it('공백 없이 그려진 신뢰 다이얼로그도 자동 수락한다 (실제 rolling.log 화면)', async () => {
+    const h = harness()
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    // 종전에는 이 렌더링을 놓쳐 30초 폴백이 이어가기 문구를 다이얼로그 안으로 타이핑했다
+    h.coord.handleData({
+      sessionId: 's2',
+      data: 'Onlyproceedifyoutrustthisconfiguration.Doyoutrustthefilesinthisfolder?1.Yes,Itrustthisfolder2.No,exit'
+    })
+    await vi.advanceTimersByTimeAsync(400)
+    expect(h.written).toContainEqual({ id: 's2', data: '\r' })
+  })
+
   it('awaitingReady 구간에서는 forceRoll도 재롤하지 않는다 — 신뢰 타이머는 살아있는 세션에 정상 발화한다 (리뷰 Finding 2)', async () => {
     const h = harness()
     h.payloads.set('s1', payload(97))
