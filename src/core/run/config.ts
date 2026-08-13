@@ -1,11 +1,6 @@
-// Project run configurations. Language-agnostic free-form commands, plus auto-seeded entries for common cases.
-export interface RunConfig {
-  id: string
-  name: string
-  command: string
-  cwd?: string
-  env?: Record<string, string> // Per-config environment variables — runManager layers them over process.env when spawning
-}
+// Project run configurations. Auto-seeded entries for common cases, plus whatever the user adds.
+export type { RunConfig, RunConfigType } from './types'
+import type { RunConfig } from './types'
 
 // Live run state — used by the renderer count/dropdown and by the Run panel header
 export interface RunStatus {
@@ -60,12 +55,16 @@ export function detectSeedConfigs(
     if (scripts && typeof scripts === 'object' && !Array.isArray(scripts)) {
       for (const key of Object.keys(scripts)) {
         const command = `${pm} run ${key}`
-        out.push({ id: `seed:${command}`, name: command, command })
+        // TODO(Task 4): seed a typed npm config instead — shell is a stand-in until detectSeedConfigs learns kinds
+        out.push({ id: `seed:${command}`, name: command, type: 'shell', command })
       }
     }
   }
-  if (set.has('Cargo.toml')) out.push({ id: 'seed:cargo run', name: 'cargo run', command: 'cargo run' })
-  if (set.has('go.mod')) out.push({ id: 'seed:go run .', name: 'go run .', command: 'go run .' })
+  // TODO(Task 4): seed typed cargo/go configs instead — shell is a stand-in until detectSeedConfigs learns kinds
+  if (set.has('Cargo.toml'))
+    out.push({ id: 'seed:cargo run', name: 'cargo run', type: 'shell', command: 'cargo run' })
+  if (set.has('go.mod'))
+    out.push({ id: 'seed:go run .', name: 'go run .', type: 'shell', command: 'go run .' })
 
   // Gradle: the platform's wrapper when one is present, otherwise the global gradle.
   // posix runs through sh -c, which only searches PATH, so a bare 'gradlew' without './' never finds the executable — './gradlew' is required.
@@ -78,7 +77,8 @@ export function detectSeedConfigs(
     const isBoot = !!texts.buildGradle && texts.buildGradle.includes(SPRING_BOOT_MARKER)
     for (const task of isBoot ? ['bootRun', 'test', 'build'] : ['build', 'test']) {
       const command = `${runner} ${task}`
-      out.push({ id: `seed:${command}`, name: command, command })
+      // TODO(Task 4): seed a typed gradle config instead — shell is a stand-in until detectSeedConfigs learns kinds
+      out.push({ id: `seed:${command}`, name: command, type: 'shell', command })
     }
   }
 
@@ -89,7 +89,8 @@ export function detectSeedConfigs(
     const isBoot = !!texts.pom && texts.pom.includes(SPRING_BOOT_MARKER)
     for (const task of isBoot ? ['spring-boot:run', 'test', 'package'] : ['package', 'test']) {
       const command = `${runner} ${task}`
-      out.push({ id: `seed:${command}`, name: command, command })
+      // TODO(Task 4): seed a typed maven config instead — shell is a stand-in until detectSeedConfigs learns kinds
+      out.push({ id: `seed:${command}`, name: command, type: 'shell', command })
     }
   }
 
@@ -109,10 +110,14 @@ export function isSpringBootProject(texts: { buildGradle: string | null; pom: st
   )
 }
 
+// TODO(Task 4): every config here is still 'shell' (see the TODOs above), so this narrowing to
+// .command is temporary — Task 4 replaces the collision key with seedKeyOf(type + core parameter)
+const commandOf = (c: RunConfig): string => (c.type === 'shell' ? c.command : '')
+
 /** Display list = stored configs + seeds whose command does not collide. Stored (user) configs come first. */
 export function mergeConfigs(seed: RunConfig[], stored: RunConfig[]): RunConfig[] {
-  const storedCommands = new Set(stored.map((c) => c.command))
-  return [...stored, ...seed.filter((s) => !storedCommands.has(s.command))]
+  const storedCommands = new Set(stored.map(commandOf))
+  return [...stored, ...seed.filter((s) => !storedCommands.has(commandOf(s)))]
 }
 
 /** One `KEY=VALUE` per line → map. Blank lines and `#` comments are ignored. Splits on the first `=` only (the value may contain `=`). */

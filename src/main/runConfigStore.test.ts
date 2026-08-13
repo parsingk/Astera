@@ -18,11 +18,13 @@ describe('RunConfigStore', () => {
     const store = new RunConfigStore(file)
     await store.load()
     expect(store.get('D:/proj')).toEqual([])
-    await store.save('D:/proj', [{ id: 'u1', name: '내 dev', command: 'pnpm run dev' }])
+    await store.save('D:/proj', [{ id: 'u1', name: '내 dev', type: 'shell', command: 'pnpm run dev' }])
     // 새 인스턴스가 파일에서 다시 읽어도 남아 있어야 한다
     const store2 = new RunConfigStore(file)
     await store2.load()
-    expect(store2.get('D:/proj')).toEqual([{ id: 'u1', name: '내 dev', command: 'pnpm run dev' }])
+    expect(store2.get('D:/proj')).toEqual([
+      { id: 'u1', name: '내 dev', type: 'shell', command: 'pnpm run dev' }
+    ])
   })
   it('손상 파일은 빈 상태로 복구한다', async () => {
     const file = path.join(dir, 'run.json')

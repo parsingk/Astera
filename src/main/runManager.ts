@@ -36,11 +36,13 @@ export class RunManager {
     const existing = this.runs.get(opts.projectPath)
     if (existing && existing.status.status === 'running') throw new Error(`ALREADY_RUNNING: ${opts.projectPath}`)
     const cwd = opts.config.cwd || opts.projectPath
+    // TEMPORARY (Task 1): RunConfig is now a discriminated union and only ShellConfig has .command.
+    // This narrowing is deliberate, not dead code — Task 5 makes the caller pass an already-assembled
+    // command instead, and this line goes away then.
+    const command = opts.config.type === 'shell' ? opts.config.command : ''
     // The free-form command needs shell interpretation: cmd.exe on win32, sh -c on posix
     const spawn =
-      this.platform === 'win32'
-        ? { file: 'cmd.exe', args: ['/c', opts.config.command] }
-        : { file: 'sh', args: ['-c', opts.config.command] }
+      this.platform === 'win32' ? { file: 'cmd.exe', args: ['/c', command] } : { file: 'sh', args: ['-c', command] }
     // The config env overrides process.env — per-config overrides such as JAVA_HOME have to win.
     // When the config specified JAVA_HOME, its bin is prepended to PATH so the chosen JDK also applies when the
     // command invokes java directly. This happens **only when the config specified it** (which is why
@@ -62,7 +64,7 @@ export class RunManager {
       projectName: opts.projectName,
       configId: opts.config.id,
       configName: opts.config.name,
-      command: opts.config.command,
+      command,
       status: 'running'
     }
     const live: LiveRun = { status, pty, buffer: '' }

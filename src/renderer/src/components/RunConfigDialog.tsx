@@ -47,7 +47,9 @@ export function RunConfigDialog({
 }): React.JSX.Element {
   const { t } = useI18n()
   const [name, setName] = useState(() => config?.name ?? '')
-  const [command, setCommand] = useState(() => config?.command ?? '')
+  // TEMPORARY (Task 1): RunConfig is now a discriminated union and only ShellConfig has .command.
+  // This dialog is replaced in Task 6/7, so this narrowing is deliberate, not dead code.
+  const [command, setCommand] = useState(() => (config?.type === 'shell' ? config.command : ''))
   // Keys owned by the dedicated fields — outside a Spring project there is no field for
   // SPRING_PROFILES_ACTIVE, so it is left in the textarea (see the comment above).
   //

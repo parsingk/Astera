@@ -32,16 +32,16 @@ describe('detectSeedConfigs', () => {
       'linux'
     )
     expect(seeds).toEqual([
-      { id: 'seed:pnpm run dev', name: 'pnpm run dev', command: 'pnpm run dev' },
-      { id: 'seed:pnpm run build', name: 'pnpm run build', command: 'pnpm run build' }
+      { id: 'seed:pnpm run dev', name: 'pnpm run dev', type: 'shell', command: 'pnpm run dev' },
+      { id: 'seed:pnpm run build', name: 'pnpm run build', type: 'shell', command: 'pnpm run build' }
     ])
   })
   it('Cargo.toml·go.mod를 단일 명령으로 시드한다', () => {
     expect(detectSeedConfigs(['Cargo.toml'], noTexts, 'linux')).toEqual([
-      { id: 'seed:cargo run', name: 'cargo run', command: 'cargo run' }
+      { id: 'seed:cargo run', name: 'cargo run', type: 'shell', command: 'cargo run' }
     ])
     expect(detectSeedConfigs(['go.mod'], noTexts, 'linux')).toEqual([
-      { id: 'seed:go run .', name: 'go run .', command: 'go run .' }
+      { id: 'seed:go run .', name: 'go run .', type: 'shell', command: 'go run .' }
     ])
   })
   it('scripts 없거나 잘못된 package.json은 무시한다', () => {
@@ -65,30 +65,37 @@ describe('detectSeedConfigs', () => {
     it('래퍼 있음 + posix는 ./gradlew, Boot 아니면 build·test 순서로 시드한다', () => {
       const seeds = detectSeedConfigs(['build.gradle', 'gradlew'], noTexts, 'linux')
       expect(seeds).toEqual([
-        { id: 'seed:./gradlew build', name: './gradlew build', command: './gradlew build' },
-        { id: 'seed:./gradlew test', name: './gradlew test', command: './gradlew test' }
+        { id: 'seed:./gradlew build', name: './gradlew build', type: 'shell', command: './gradlew build' },
+        { id: 'seed:./gradlew test', name: './gradlew test', type: 'shell', command: './gradlew test' }
       ])
     })
     it('래퍼 없음 + posix는 전역 gradle을 쓴다', () => {
       const seeds = detectSeedConfigs(['build.gradle'], noTexts, 'linux')
-      expect(seeds.map((s) => s.command)).toEqual(['gradle build', 'gradle test'])
+      expect(seeds.map((s) => (s.type === 'shell' ? s.command : ''))).toEqual(['gradle build', 'gradle test'])
     })
     it('래퍼 있음 + win32는 gradlew.bat을 쓴다', () => {
       const seeds = detectSeedConfigs(['build.gradle', 'gradlew.bat'], noTexts, 'win32')
-      expect(seeds.map((s) => s.command)).toEqual(['gradlew.bat build', 'gradlew.bat test'])
+      expect(seeds.map((s) => (s.type === 'shell' ? s.command : ''))).toEqual([
+        'gradlew.bat build',
+        'gradlew.bat test'
+      ])
     })
     it('래퍼 없음 + win32도 전역 gradle을 쓴다 (cmd.exe는 현재 디렉터리를 먼저 찾지만 래퍼 파일 자체가 없다)', () => {
       const seeds = detectSeedConfigs(['build.gradle'], noTexts, 'win32')
-      expect(seeds.map((s) => s.command)).toEqual(['gradle build', 'gradle test'])
+      expect(seeds.map((s) => (s.type === 'shell' ? s.command : ''))).toEqual(['gradle build', 'gradle test'])
     })
     it('build.gradle 본문에 Spring Boot 플러그인이 있으면 bootRun·test·build 순으로 시드한다', () => {
       const buildGradle = "plugins { id 'org.springframework.boot' version '3.2.0' }"
       const seeds = detectSeedConfigs(['build.gradle', 'gradlew'], { ...noTexts, buildGradle }, 'linux')
-      expect(seeds.map((s) => s.command)).toEqual(['./gradlew bootRun', './gradlew test', './gradlew build'])
+      expect(seeds.map((s) => (s.type === 'shell' ? s.command : ''))).toEqual([
+        './gradlew bootRun',
+        './gradlew test',
+        './gradlew build'
+      ])
     })
     it('build.gradle.kts만 있어도 Gradle로 인식한다', () => {
       const seeds = detectSeedConfigs(['build.gradle.kts', 'gradlew'], noTexts, 'linux')
-      expect(seeds.map((s) => s.command)).toEqual(['./gradlew build', './gradlew test'])
+      expect(seeds.map((s) => (s.type === 'shell' ? s.command : ''))).toEqual(['./gradlew build', './gradlew test'])
     })
     it('시드 id는 user:로 시작하지 않는다', () => {
       const seeds = detectSeedConfigs(['build.gradle', 'gradlew'], noTexts, 'linux')
@@ -100,43 +107,50 @@ describe('detectSeedConfigs', () => {
     it('래퍼 있음 + posix는 ./mvnw, Boot 아니면 package·test 순서로 시드한다', () => {
       const seeds = detectSeedConfigs(['pom.xml', 'mvnw'], noTexts, 'linux')
       expect(seeds).toEqual([
-        { id: 'seed:./mvnw package', name: './mvnw package', command: './mvnw package' },
-        { id: 'seed:./mvnw test', name: './mvnw test', command: './mvnw test' }
+        { id: 'seed:./mvnw package', name: './mvnw package', type: 'shell', command: './mvnw package' },
+        { id: 'seed:./mvnw test', name: './mvnw test', type: 'shell', command: './mvnw test' }
       ])
     })
     it('래퍼 없음은 전역 mvn을 쓴다 (posix)', () => {
       const seeds = detectSeedConfigs(['pom.xml'], noTexts, 'linux')
-      expect(seeds.map((s) => s.command)).toEqual(['mvn package', 'mvn test'])
+      expect(seeds.map((s) => (s.type === 'shell' ? s.command : ''))).toEqual(['mvn package', 'mvn test'])
     })
     it('래퍼 있음 + win32는 mvnw.cmd를 쓴다', () => {
       const seeds = detectSeedConfigs(['pom.xml', 'mvnw.cmd'], noTexts, 'win32')
-      expect(seeds.map((s) => s.command)).toEqual(['mvnw.cmd package', 'mvnw.cmd test'])
+      expect(seeds.map((s) => (s.type === 'shell' ? s.command : ''))).toEqual([
+        'mvnw.cmd package',
+        'mvnw.cmd test'
+      ])
     })
     it('pom.xml 본문에 Spring Boot groupId가 있으면 spring-boot:run·test·package 순으로 시드한다', () => {
       const pom = '<dependency><groupId>org.springframework.boot</groupId></dependency>'
       const seeds = detectSeedConfigs(['pom.xml', 'mvnw'], { ...noTexts, pom }, 'linux')
-      expect(seeds.map((s) => s.command)).toEqual(['./mvnw spring-boot:run', './mvnw test', './mvnw package'])
+      expect(seeds.map((s) => (s.type === 'shell' ? s.command : ''))).toEqual([
+        './mvnw spring-boot:run',
+        './mvnw test',
+        './mvnw package'
+      ])
     })
   })
 
   it('JVM 빌드 파일이 없는 프로젝트는 기존 동작 그대로다 (회귀 없음)', () => {
     const pkg = JSON.stringify({ scripts: { dev: 'vite' } })
     expect(detectSeedConfigs(['package.json'], { ...noTexts, packageJson: pkg }, 'win32')).toEqual([
-      { id: 'seed:npm run dev', name: 'npm run dev', command: 'npm run dev' }
+      { id: 'seed:npm run dev', name: 'npm run dev', type: 'shell', command: 'npm run dev' }
     ])
   })
 })
 
 describe('mergeConfigs', () => {
   it('저장 구성 우선 + 명령 중복 시드 제외', () => {
-    const stored: RunConfig[] = [{ id: 'u1', name: '내 dev', command: 'pnpm run dev' }]
+    const stored: RunConfig[] = [{ id: 'u1', name: '내 dev', type: 'shell', command: 'pnpm run dev' }]
     const seed: RunConfig[] = [
-      { id: 'seed:pnpm run dev', name: 'pnpm run dev', command: 'pnpm run dev' },
-      { id: 'seed:pnpm run build', name: 'pnpm run build', command: 'pnpm run build' }
+      { id: 'seed:pnpm run dev', name: 'pnpm run dev', type: 'shell', command: 'pnpm run dev' },
+      { id: 'seed:pnpm run build', name: 'pnpm run build', type: 'shell', command: 'pnpm run build' }
     ]
     expect(mergeConfigs(seed, stored)).toEqual([
-      { id: 'u1', name: '내 dev', command: 'pnpm run dev' },
-      { id: 'seed:pnpm run build', name: 'pnpm run build', command: 'pnpm run build' }
+      { id: 'u1', name: '내 dev', type: 'shell', command: 'pnpm run dev' },
+      { id: 'seed:pnpm run build', name: 'pnpm run build', type: 'shell', command: 'pnpm run build' }
     ])
   })
 })

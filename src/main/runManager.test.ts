@@ -17,7 +17,7 @@ class FakePty implements PtyLike {
   resume() {}
 }
 
-const cfg: RunConfig = { id: 'c1', name: 'dev', command: 'npm run dev' }
+const cfg: RunConfig = { id: 'c1', name: 'dev', type: 'shell', command: 'npm run dev' }
 
 function setup(platform: NodeJS.Platform = 'linux') {
   const spawned: { file: string; args: string[]; opts: PtySpawnOptions; pty: FakePty }[] = []
