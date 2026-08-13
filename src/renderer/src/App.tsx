@@ -8,7 +8,7 @@ import { AccountSettings } from './components/AccountSettings'
 import { HistorySettings } from './components/HistorySettings'
 import { HistoryBrowser } from './components/HistoryBrowser'
 import { Select } from './components/Select'
-import { WorkbenchTabs, type FileTab, type WorkbenchTab } from './components/WorkbenchTabs'
+import { type FileTab } from './components/WorkbenchTabs'
 import { FileEditor } from './components/FileEditor'
 import type { EditorState, StateEffect } from '@codemirror/state'
 import { EditorStateCache } from './lib/editorStateCache'
@@ -64,8 +64,7 @@ import {
   type PaneDir,
   type PaneNode
 } from '../../core/panes/tree'
-import { parseTab, sessionTab } from '../../core/panes/tabId'
-import { sessionsOfProject } from '../../core/sessions/projectSessions'
+import { fileTab, parseTab, sessionTab } from '../../core/panes/tabId'
 import { placeTab } from '../../core/panes/place'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
@@ -284,12 +283,6 @@ export default function App(): React.JSX.Element {
   // that cannot authenticate. Only HistoryBrowser and ResumeDialog receive them.
   const [ghostAccounts, setGhostAccounts] = useState<Account[]>([])
   const [sessions, setSessions] = useState<SessionInfo[]>([])
-  // 본문에 무엇이 떠 있는지. `file:<path>` 또는 `session:<id>` (core/panes/tabId.ts). 파일 탭 id는 전부터
-  // 이 형식이었으므로, 이 상태는 옛 activeFileId를 그대로 승격시킨 것이다
-  const [activeTabId, setActiveTabId] = useState<string | null>(null)
-  const activeTab = activeTabId ? parseTab(activeTabId) : null
-  /** 활성 탭이 파일일 때만 그 id. 파일 관련 코드는 이 값을 계속 쓴다 */
-  const activeFileId = activeTab?.kind === 'file' ? activeTabId : null
   // The pane layout tree. It replaces the old single split-slot state — up to 4 panes.
   const [layout, setLayout] = useState<PaneNode | null>(null)
   const [activePaneId, setActivePaneId] = useState<string | null>(null)
@@ -297,12 +290,14 @@ export default function App(): React.JSX.Element {
   const [dragSessionId, setDragSessionId] = useState<string | null>(null)
   // Position of the tab context menu
   const [tabMenu, setTabMenu] = useState<{ sessionId: string; x: number; y: number } | null>(null)
-  // The session the active pane is showing. Derived from the tree so existing code that reads this value can stay as it is
-  // 트리에는 탭 id가 들어 있으므로(core/panes/tree.ts) 세션 id로 풀어 쓴다. 세션 탭이 아니면 활성
-  // 세션은 없는 것으로 본다 — 아직 파일 탭은 트리에 들어가지 않으므로 실제로는 늘 세션이다
-  const activePaneTab =
-    layout && activePaneId ? parseTab(leafOf(layout, activePaneId)?.activeTabId ?? '') : null
-  const activeSessionId = activePaneTab?.kind === 'session' ? activePaneTab.id : null
+  // 지금 보고 있는 탭은 트리가 정한다 — 활성 페인의 활성 탭. 두 종류가 한 트리에 있으므로 별도의
+  // activeTabId 상태를 두면 트리와 어긋난다(다른 페인의 탭을 클릭하거나 페인 포커스를 옮기는 순간
+  // 갈라진다). 파일 탭 id는 전부터 `file:<path>` 형식이었으므로 파일 관련 코드는 그대로 쓴다
+  const activeTabId = (layout && activePaneId ? leafOf(layout, activePaneId)?.activeTabId : null) ?? null
+  const activeTab = activeTabId ? parseTab(activeTabId) : null
+  /** 활성 탭이 파일일 때만 그 id */
+  const activeFileId = activeTab?.kind === 'file' ? activeTabId : null
+  const activeSessionId = activeTab?.kind === 'session' ? activeTab.id : null
   const [showNew, setShowNew] = useState(false)
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null) // prefill for WorktreePanel's 'start session'
   const [cli, setCli] = useState<{ claude: CliStatus; codex: CliStatus } | null>(null)
@@ -381,9 +376,6 @@ export default function App(): React.JSX.Element {
   sessionsRef.current = sessions
   const activeFileIdRef = useRef(activeFileId)
   activeFileIdRef.current = activeFileId
-  // 마지막으로 활성이었던 파일 탭. 세션 탭으로 갔다 와도 FileEditor가 살아 있게 하는 값의 출처다 —
-  // 갱신과 사용은 아래 editorFileId 계산부에 있고, 왜 activeFileId와 규칙이 다른지도 거기에 적었다
-  const lastFileTabIdRef = useRef<string | null>(null)
   const layoutRef = useRef(layout)
   layoutRef.current = layout
   const activePaneIdRef = useRef(activePaneId)
@@ -397,10 +389,7 @@ export default function App(): React.JSX.Element {
   modalOpenRef.current = showNew || showSettings || runModalOpen
   const fileTabsRef = useRef(fileTabs)
   fileTabsRef.current = fileTabs
-  // 에디터 모드의 탭 순환이 쓰는 것들 — 탭 줄에 그려진 순서와 지금 보이는 탭. 값은 아래쪽에서
-  // workbenchTabs·shownTabId가 계산된 뒤 채워진다(showSessionRef와 같은 방식)
-  const workbenchTabIdsRef = useRef<string[]>([])
-  const shownTabIdRef = useRef<string | null>(null)
+  // 탭 순환이 쓰는 것 — 클릭과 같은 경로를 타야 종류에 상관없이 같은 일이 일어난다
   const selectWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
   const fileBuffersRef = useRef(fileBuffers) // keeps the external-change handler from going stale
   fileBuffersRef.current = fileBuffers
@@ -445,26 +434,8 @@ export default function App(): React.JSX.Element {
   // separately on a full close — see closeExplorer below).
   const explorerUndoRef = useRef<UndoEntry[]>([])
 
-  /** Brings a session onto the screen. Thanks to invariant 1 every session is in some group, so all
-   *  this does is activate that group and make the session that group's active tab. When the layout is
-   *  empty, a single group is created. StrictMode can invoke an updater twice, so setActivePaneId and
-   *  createGroup are never called inside the setLayout callback. */
-  const showSession = (sessionId: string): void => {
-    const cur = layoutRef.current
-    if (!cur) {
-      const g = createGroup(sessionTab(sessionId))
-      setLayout(g)
-      setActivePaneId(g.id)
-      return
-    }
-    const act = activateTab(cur, sessionTab(sessionId))
-    if (!act) return
-    setLayout(act.root)
-    setActivePaneId(act.paneId)
-  }
-  // A ref so onKey (useEffect([])) can call the latest showSession without a stale closure
-  const showSessionRef = useRef(showSession)
-  showSessionRef.current = showSession
+  // showSession(sessionId)은 사라졌다 — 탭을 화면에 올리는 경로가 종류를 가리지 않는 selectWorkbenchTab
+  // 하나로 합쳐졌고, 그것이 유일한 호출자였다. 세션이 없는 상태에서 새로 만드는 경로는 place()가 맡는다.
 
   useEffect(() => {
     void window.api.accounts.list().then(setAccounts)
@@ -720,23 +691,7 @@ export default function App(): React.JSX.Element {
       // still leaves a settings field's own selection alone. Same shape as explorer.toggleMode's exception.
       const tabCycle = action === 'sessionTab.prev' || action === 'sessionTab.next'
       if (editable && !inXterm && !(tabCycle && focusEl?.closest('.cm-editor'))) return
-      // Tab cycling: only the tabs of the current mode
-      if (explorerOpenRef.current) {
-        // 에디터 모드 — 탭 줄에 그려진 순서 그대로 돈다. 파일 탭과 세션 탭 사이에 경계가 없어서, 한
-        // 방향으로 계속 누르면 세션 탭에서 파일 탭으로 그냥 넘어간다. 클릭과 같은 경로를 타야 세션 탭을
-        // 지날 때 활성 세션도 함께 맞춰지므로 selectWorkbenchTab을 그대로 부른다
-        const ids = workbenchTabIdsRef.current
-        if (ids.length < 2) return
-        const cur = shownTabIdRef.current
-        const i = cur ? ids.indexOf(cur) : -1
-        if (i < 0) return
-        e.preventDefault()
-        e.stopPropagation()
-        if (e.repeat) return
-        selectWorkbenchTabRef.current(ids[(i + delta + ids.length) % ids.length])
-        return
-      }
-      // Session mode — with Shift, move focus to a neighbouring group; otherwise cycle tabs within the
+      // With Shift, move focus to a neighbouring group; otherwise cycle tabs within the
       // active group. Global session cycling is gone: sessions are scattered across groups, so there is
       // no such thing as a "global order". To reach a session in another group, move groups with
       // Ctrl+Shift+arrow and pick the tab with Ctrl+PageUp/Down (the same division of labour as
@@ -766,8 +721,9 @@ export default function App(): React.JSX.Element {
       e.stopPropagation()
       if (e.repeat) return
       const n = group.tabIds.length
-      const next = parseTab(group.tabIds[(i + delta + n) % n])
-      if (next?.kind === 'session') showSessionRef.current(next.id)
+      // 종류를 가리지 않고 그 페인의 탭 줄에 그려진 순서대로 돈다 — 파일 탭과 세션 탭 사이에 경계가
+      // 없다. 클릭과 같은 경로(selectWorkbenchTab)를 타야 세션 탭을 지날 때 활성 세션도 함께 맞춰진다
+      selectWorkbenchTabRef.current(group.tabIds[(i + delta + n) % n])
     }
     window.addEventListener('keydown', onKey, true) // capture
     return () => window.removeEventListener('keydown', onKey, true)
@@ -970,16 +926,20 @@ export default function App(): React.JSX.Element {
   // Opening a file tab: clicking the same path again focuses the existing tab (VS Code's behaviour).
   // The buffer starts as loading and gets filled by files.read.
   const openFile = (path: string): void => {
-    const id = `file:${path}`
+    const id = fileTab(path)
     if (fileTabsRef.current.some((t) => t.id === id)) {
-      setActiveTabId(id)
+      selectWorkbenchTabRef.current(id)
       return
     }
     const root = explorerRootRef.current
     if (!root) return // 트리가 없는 상태에서는 파일을 열 수 없다 — 열 수단 자체가 트리다
     const title = path.split(/[\\/]/).pop() || path
     setFileTabs((prev) => [...prev, { id, path, title, projectRoot: root }])
-    setActiveTabId(id)
+    // 파일 탭도 세션 탭과 같은 트리에 들어간다 — 활성 페인의 새 탭으로 열린다. 세션을 놓을 때와 같은
+    // 함수를 쓰므로 배치 규칙이 한 벌뿐이다. StrictMode 대비로 setLayout 콜백 밖에서 계산한다
+    const placed = placeTab(layoutRef.current, id, { activePaneId: activePaneIdRef.current })
+    setLayout(placed.root)
+    if (placed.paneId) setActivePaneId(placed.paneId)
     setFileBuffers((prev) => ({ ...prev, [id]: { content: '', savedContent: '', eol: '\n', readOnly: false, loading: true, error: null, conflict: false } }))
     window.api.files.read(path).then(
       (d) => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { content: toLf(d.content), savedContent: toLf(d.content), eol: detectEol(d.content), readOnly: d.truncated || d.binary, loading: false, error: d.binary ? t('files.editor.binaryUnsupported') : null, conflict: false } } : prev)),
@@ -1053,22 +1013,32 @@ export default function App(): React.JSX.Element {
       const { [id]: _drop, ...rest } = prev
       return rest
     })
-    if (activeFileIdRef.current === id) {
-      const nextActive = next.length > 0 ? next[next.length - 1].id : null
-      // The same reason as above — lets the next iteration see an updated activeFileId when the active tab closes first
-      activeFileIdRef.current = nextActive
-      setActiveTabId(nextActive)
+    // 트리에서도 뺀다. 다음에 무엇이 활성이 되는지는 removeTab이 정한다(세션 탭을 닫을 때와 같은 규칙),
+    // 그러면 activeFileId는 파생값이므로 저절로 따라온다. 여기서 ref를 직접 맞춰 두는 것은 연쇄로 닫힐
+    // 때(폴더 삭제) 다음 반복이 렌더 전의 낡은 값을 읽지 않게 하기 위해서다 — closeFileTab 위쪽의
+    // fileTabsRef 미러링과 같은 이유다
+    if (activeFileIdRef.current === id) activeFileIdRef.current = null
+    const cur = layoutRef.current
+    if (cur && groupOfTab(cur, id)) {
+      const nextLayout = removeTab(cur, id)
+      layoutRef.current = nextLayout
+      const p = activePaneIdRef.current
+      const nextPane = nextLayout ? (p && leafOf(nextLayout, p) ? p : firstLeaf(nextLayout).id) : null
+      activePaneIdRef.current = nextPane
+      setActivePaneId(nextPane)
+      setLayout(nextLayout)
     }
   }
 
-  /** 탭 줄에서 탭을 골랐다. 세션 탭이면 앱의 활성 세션도 그 세션으로 맞춘다 — 그래야 Ctrl/Cmd+Tab으로
-   *  세션 모드에 나갔을 때 방금 보던 세션이 활성이다. 같은 프로젝트의 세션이므로 explorerRoot는 변하지
-   *  않고 파일 트리도 그대로다 */
+  /** 탭 줄에서 탭을 골랐다. 종류에 상관없이 트리에서 그 탭을 활성으로 만들고 그 페인에 포커스를 준다 —
+   *  다른 페인의 탭을 눌렀을 때 그 페인으로 옮겨 가는 것도 이 한 줄이 한다 */
   const selectWorkbenchTab = (tabId: string): void => {
-    const ref = parseTab(tabId)
-    if (!ref) return
-    setActiveTabId(tabId)
-    if (ref.kind === 'session') showSession(ref.id)
+    const cur = layoutRef.current
+    if (!cur) return
+    const act = activateTab(cur, tabId)
+    if (!act) return
+    setLayout(act.root)
+    setActivePaneId(act.paneId)
   }
   // 탭 순환 단축키가 클릭과 같은 경로를 타도록 — 이 함수는 매 렌더 새로 만들어지지만 본문이 setter와
   // ref뿐이라 최신 상태에 대해 동작한다(toggleExplorer와 같은 관례)
@@ -1105,8 +1075,14 @@ export default function App(): React.JSX.Element {
       for (const [k, v] of Object.entries(prev)) next[remap.get(k) ?? k] = v
       return next
     })
-    // 세션 탭이 활성이면 remap에 없으므로 그대로 남는다
-    setActiveTabId((cur) => (cur && remap.has(cur) ? remap.get(cur)! : cur))
+    // 트리에도 같은 id가 들어 있으므로 함께 갈아끼운다 — 위치·순서·활성 여부가 그대로 유지된다
+    // (계정 롤링이 세션 id를 바꿀 때 쓰는 것과 같은 함수). 세션 탭은 remap에 없으므로 건드려지지 않는다
+    setLayout((cur) => {
+      if (!cur) return cur
+      let next = cur
+      for (const [from, to] of remap) if (groupOfTab(next, from)) next = replaceTabId(next, from, to)
+      return next
+    })
   }
 
   const handlePathDeleted = (deleted: string[]): void => {
@@ -1177,9 +1153,20 @@ export default function App(): React.JSX.Element {
       return
     setExplorerOpen(false)
     setExplorerPin(null)
+    // 트리에 들어 있는 파일 탭도 함께 뺀다 — 남겨 두면 파일이 없는데 탭만 남는다. 하나씩 빼는 것은
+    // removeTab이 빈 그룹 정리와 다음 활성 탭 선택까지 맡고 있기 때문이다
+    let nextLayout = layoutRef.current
+    for (const tab of fileTabsRef.current)
+      if (nextLayout && groupOfTab(nextLayout, tab.id)) nextLayout = removeTab(nextLayout, tab.id)
+    layoutRef.current = nextLayout
+    const p = activePaneIdRef.current
+    const nextPane = nextLayout ? (p && leafOf(nextLayout, p) ? p : firstLeaf(nextLayout).id) : null
+    activePaneIdRef.current = nextPane
+    setActivePaneId(nextPane)
+    setLayout(nextLayout)
+    fileTabsRef.current = []
     setFileTabs([])
     setFileBuffers({})
-    setActiveTabId(null)
     explorerTreesRef.current.clear()
     explorerClipboardRef.current = null
     // This is the point where the explorer is abandoned entirely, so the undo journal and the per-file
@@ -1366,26 +1353,11 @@ export default function App(): React.JSX.Element {
   }
 
   const active = sessions.find((s) => s.id === activeSessionId) ?? null
-  // 에디터가 붙들고 있는 파일. activeFileId 와 규칙이 다르다는 점이 중요하다:
-  //  - activeFileId (와 activeFileIdRef): 세션 탭이 활성이면 무조건 null. "지금 본문에 파일이 떠 있는가"다.
-  //    Ctrl/Cmd+W(파일 탭 닫기)가 이 ref를 읽으므로, 세션을 보는 중에 파일이 닫히지 않으려면 이 엄격한
-  //    규칙이 유지되어야 한다.
-  //  - editorFileId: 세션 탭이 활성인 동안에도 마지막으로 고른 파일 탭을 계속 가리킨다. FileEditor를
-  //    언마운트시키지 않기 위한 값이다 — 언마운트되면 EditorView가 destroy되면서 되돌리기 이력이
-  //    사라진다(FileEditor.tsx의 생성 effect는 cache.save 없이 destroy만 한다). 숨기기는 .explorer-view의
-  //    display로만 하고 마운트는 유지한다 — xterm을 지키는 규칙과 같다.
-  // 닫힌 탭을 계속 가리키지 않도록 fileTabs 안에 남아 있는지 매번 확인한다(별도 정리 코드가 필요 없다).
-  if (activeFileId) lastFileTabIdRef.current = activeFileId
-  const editorFileId = fileTabs.some((t) => t.id === lastFileTabIdRef.current)
-    ? lastFileTabIdRef.current
-    : null
-  const editorFile = fileTabs.find((t) => t.id === editorFileId) ?? null
   const runningCount = sessions.filter((s) => s.status === 'running').length
   runningCountRef.current = runningCount // the toast's install button has to see the value at click time
   // A check round trip is around 350ms, so watching only the real state would make 'Checking…' invisible
   const updateChecking = showChecking(update?.state, checkClickedAt, Date.now())
 
-  const editorBuf = editorFileId ? fileBuffers[editorFileId] : null
   const dirtyIds = new Set(
     fileTabs.filter((t) => { const b = fileBuffers[t.id]; return b && !b.readOnly && b.content !== b.savedContent }).map((t) => t.id)
   )
@@ -1410,11 +1382,10 @@ export default function App(): React.JSX.Element {
   /** 트리 루트는 활성 탭을 따른다 — 활성 탭이 파일이면 그 파일의 프로젝트, 세션이면 그 세션의 cwd.
    *  탭이 없으면 히스토리에서 들어올 때 걸린 핀, 그것도 없으면 null.
    *  보고 있는 것과 트리가 항상 일치하는 것이 이 규칙의 목적이다 */
-  const activeTabRef = activeTabId ? parseTab(activeTabId) : null
   const explorerRoot =
-    (activeTabRef?.kind === 'file'
+    (activeTab?.kind === 'file'
       ? fileTabs.find((t) => t.id === activeTabId)?.projectRoot
-      : sessions.find((s) => s.id === activeTabRef?.id)?.cwd) ??
+      : sessions.find((s) => s.id === activeTab?.id)?.cwd) ??
     explorerPin ??
     null
 
@@ -1422,64 +1393,50 @@ export default function App(): React.JSX.Element {
   const explorerRootRef = useRef(explorerRoot)
   explorerRootRef.current = explorerRoot
 
-  /** 에디터 모드 탭 줄에 올라가는 세션. 판별은 core에 있다 — worktree 세션이 부모 프로젝트에 잡히지
-   *  않는 이유가 그 모듈의 주석에 있다 */
-  const projectSessions = sessionsOfProject(sessions, explorerRoot)
-  // 세션 탭이 먼저, 파일 탭이 뒤. 세션은 프로젝트에 딸린 고정된 것이고 파일은 열고 닫는 것이므로, 새로
-  // 연 파일이 브라우저 탭처럼 오른쪽 끝에 붙어야 한다. 반대로 두면 파일을 열 때마다 세션 탭이 오른쪽으로
-  // 밀린다.
-  const workbenchTabs: WorkbenchTab[] = [
-    ...projectSessions.map((s) => ({
-      tabId: sessionTab(s.id),
-      kind: 'session' as const,
-      title: s.title,
-      color: accounts.find((a) => a.id === s.accountId)?.color ?? '#888',
-      busy: busy[s.id] === true,
-      exited: s.status === 'exited'
-    })),
-    ...fileTabs.map((f) => ({
-      tabId: f.id,
-      kind: 'file' as const,
-      path: f.path,
-      title: f.title,
-      dirty: dirtyIds.has(f.id)
-    }))
-  ]
+  // 탭 줄은 이제 페인마다 있고 그 내용은 트리(leaf.tabIds)가 정한다 — 전역 한 줄과 그 폴백은 사라졌다.
+  // 어떤 프로젝트의 세션인지로 거르지도 않는다: 페인에 담긴 것이 곧 그 페인이 보여주는 것이다.
 
-  /** 실제로 본문에 그려지는 탭. activeTabId가 비어 있거나(에디터 모드에 처음 들어왔고 연 파일이 없다,
-   *  또는 마지막 파일 탭을 닫았다) 가리키는 탭이 탭 줄에서 사라졌으면 세션 탭으로 떨어진다 — 파일을
-   *  하나도 열지 않았는데 빈 에디터를 보여주는 대신, 보고 있던 세션이 그대로 남는다. 파일을 연 적이
-   *  있으면 activeTabId가 그 상태를 들고 있으므로 이 폴백은 걸리지 않는다.
+  /** 페인 하나의 에디터 본문. PaneGrid가 페인마다 슬롯을 잡고 그 안에 이것을 그린다.
    *
-   *  activeTabId를 고쳐 쓰지 않고 파생만 하는 이유는 activeFileId·activeFileIdRef가 activeTabId를
-   *  엄격하게 따라야 하기 때문이다(세션을 보는 동안 Ctrl/Cmd+W가 파일 탭을 닫으면 안 된다). */
-  const shownTabId =
-    activeTabId && workbenchTabs.some((t) => t.tabId === activeTabId)
-      ? activeTabId
-      : (workbenchTabs.find((t) => t.tabId === sessionTab(activeSessionId ?? '')) ??
-          workbenchTabs.find((t) => t.kind === 'session') ??
-          // 세션 탭이 하나도 없으면 에디터가 이미 그리고 있는 파일을 고른다. 목록의 첫 탭으로 떨어지면
-          // 본문에는 마지막으로 보던 파일이, 탭 줄에는 다른 탭이 강조되어 둘이 어긋난다
-          workbenchTabs.find((t) => t.tabId === editorFileId) ??
-          workbenchTabs[0])?.tabId ?? null
-  const shownTab = shownTabId ? parseTab(shownTabId) : null
-  workbenchTabIdsRef.current = workbenchTabs.map((t) => t.tabId)
-  shownTabIdRef.current = shownTabId
-
-  // 보고 있던 세션 탭이 탭 줄에서 사라졌다 — 죽은 id를 비우기만 하고, 그다음 무엇을 보여줄지는
-  // shownTabId의 폴백이 정한다(남은 세션 → 없으면 첫 탭).
-  // 세션이 닫힌 경우와 프로젝트가 바뀐 경우를 한 조건으로 덮는다: 둘 다 "그 세션 탭이 더는 그려지지
-  // 않는데 본문에는 남아 있다"는 같은 유령이다. 종료된 세션은 목록에 남으므로(status: 'exited') 여기
-  // 걸리지 않는다.
-  // 세션 목록만 다루는 effect는 따로 없으므로(구독들은 setSessions만 한다) 여기서 정리한다. deps에
-  // projectSessions 배열을 넣으면 매 렌더 새 배열이어서 매번 돌므로, 그 입력인 sessions와 explorerRoot를 쓴다
-  useEffect(() => {
-    if (!activeTabId) return
-    const ref = parseTab(activeTabId)
-    if (ref?.kind !== 'session') return
-    if (sessionsOfProject(sessions, explorerRoot).some((s) => s.id === ref.id)) return
-    setActiveTabId(null)
-  }, [sessions, explorerRoot, activeTabId])
+   *  에디터는 페인당 하나다 — 같은 페인에서 파일 탭을 오갈 때 이 FileEditor가 재사용되고, path만
+   *  바뀐다. 되돌리기와 스크롤을 이어 주는 EditorStateCache는 App이 계속 소유하므로 페인이 여럿이어도
+   *  캐시는 하나다.
+   *
+   *  FileEditor는 로딩·오류 중에도 언마운트되면 안 된다 — 언마운트는 EditorView를 destroy하고 되돌리기
+   *  이력을 지운다. 그래서 오버레이는 위에 덮을 뿐이고, 활성 탭이 세션으로 바뀔 때도 슬롯이 display로만
+   *  숨는다(PaneGrid의 lastFileOfPane). */
+  const renderEditor = (_paneId: string, fileTabId: string): React.ReactNode => {
+    const f = fileTabs.find((t) => t.id === fileTabId)
+    const buf = fileBuffers[fileTabId]
+    if (!f || !buf) return null
+    return (
+      <div className="workbench-body">
+        <div className="file-editor-wrap">
+          {buf.readOnly && !buf.loading && !buf.error && (
+            <div className="file-truncated">{t('files.editor.readOnlyReason')}</div>
+          )}
+          {buf.conflict && (
+            <div className="file-conflict">
+              {t('files.editor.conflictChanged')}
+              <button onClick={() => reloadBufferFromDisk(f.id)}>{t('files.editor.reload')}</button>
+              <button onClick={() => setFileBuffers((prev) => (prev[f.id] ? { ...prev, [f.id]: { ...prev[f.id], conflict: false } } : prev))}>{t('files.editor.keepMine')}</button>
+            </div>
+          )}
+          <FileEditor
+            path={f.path}
+            content={buf.content}
+            readOnly={buf.readOnly}
+            cache={editorCacheRef.current}
+            onRetire={retireEditorState}
+            onChange={(next) => setBufferContent(f.id, next)}
+            onSave={() => saveFile(f.id)}
+          />
+          {buf.loading && <div className="file-overlay">{t('files.editor.loading')}</div>}
+          {!buf.loading && buf.error && <div className="file-overlay">{buf.error}</div>}
+        </div>
+      </div>
+    )
+  }
 
   // Loads that project's run configurations and active run whenever the explorer root or open state changes
   useEffect(() => {
@@ -1877,22 +1834,15 @@ export default function App(): React.JSX.Element {
           />
         )}
         <main className="content">
-          {/* The container shared by both modes. Always mounted — .session-view must live inside it so
-              showing the session in editor mode does not remount it (same rule as PaneGrid.tsx:104).
+          {/* The container everything shares. Always mounted — .session-view must live inside it so
+              opening or closing the explorer does not remount it (same rule as PaneGrid's slots).
               Named .surfaces, not .workbench: the app shell above already uses that class, and giving
               this one the same name silently overrode the shell's flex direction. */}
           <div className="surfaces">
-            {/* 탭 줄은 .surfaces의 첫 자식이다. 파일 탭과 세션 탭을 한 줄에 담으므로 아래 두 화면
-                (.session-view / .explorer-view) 중 어느 쪽이 보이든 그 줄이 위에 남아야 한다.
-                에디터 모드에서만 그린다 */}
+            {/* 탭 줄이 페인마다로 옮겨 갔으므로 이 줄에는 RunToolbar만 남았다. 탐색기를 켰을 때만
+                그린다 — Run 은 프로젝트에 딸린 것이고 프로젝트를 정하는 것이 탐색기다 */}
             {explorerOpen && (
               <div className="workbench-topbar">
-                <WorkbenchTabs
-                  tabs={workbenchTabs}
-                  activeTabId={shownTabId}
-                  onSelect={selectWorkbenchTab}
-                  onClose={closeWorkbenchTab}
-                />
                 <RunToolbar
                   configs={runConfigs}
                   selectedId={runSelectedId}
@@ -1912,17 +1862,17 @@ export default function App(): React.JSX.Element {
                 />
               </div>
             )}
-            {/* The session view — hidden but never unmounted, so terminal scrollback survives.
-                세션 화면이 보이는 조건: 세션 모드이거나, 에디터 모드에서 세션 탭이 활성일 때 */}
-            <div
-              className="session-view"
-              style={{ display: !explorerOpen || shownTab?.kind === 'session' ? 'flex' : 'none' }}
-            >
+            {/* 페인 격자. 이제 파일 탭과 세션 탭을 함께 담으므로 탐색기를 켜도 물러나지 않는다 —
+                에디터는 이 안의 페인 슬롯에 있다 */}
+            <div className="session-view">
               <PaneGrid
                 layout={layout}
                 activePaneId={activePaneId}
                 sessions={sessions}
                 accounts={accounts}
+                fileTabs={fileTabs}
+                dirtyFileIds={dirtyIds}
+                renderEditor={renderEditor}
                 rollStates={rollStates}
                 schedStates={schedStates}
                 busy={busy}
@@ -1934,21 +1884,18 @@ export default function App(): React.JSX.Element {
                 }
                 onDropSession={dropOnPane}
                 onRestart={restart}
-                onSelectTab={showSession}
-                onCloseSession={closeSession}
+                onSelectTab={selectWorkbenchTab}
+                onCloseTab={closeWorkbenchTab}
                 onNewInGroup={newInGroup}
                 onTabContextMenu={(sessionId, x, y) => setTabMenu({ sessionId, x, y })}
                 onDragSessionChange={setDragSessionId}
                 onDropTab={dropTabInGroup}
-                soloSessionId={
-                  explorerOpen && shownTab?.kind === 'session' ? shownTab.id : null
-                }
               />
               {/* When the layout is empty (not one group in the tree) there is no group tab bar, so there
                   is no '+' anywhere on screen — this placeholder becomes the sole entry point in its
                   place. Same guard as a group's '+' (newInGroup): with no CLI, pressing it does not open
                   the dialog */}
-              {!active && (
+              {!layout && (
                 <button
                   className="placeholder primary"
                   disabled={!anyCliOk}
@@ -1960,7 +1907,8 @@ export default function App(): React.JSX.Element {
                 </button>
               )}
             </div>
-            {/* The explorer view — explorer mode only */}
+            {/* 탐색기 계통의 아래쪽 — 에디터 본문이 페인으로 옮겨 갔으므로 이제 Run 콘솔과 그 리사이저만
+                들어 있다 (.explorer-view가 flex:none인 이유가 styles.css에 있다) */}
             {explorerOpen && (
               <div
                 className="explorer-view"
@@ -1969,46 +1917,10 @@ export default function App(): React.JSX.Element {
                   {
                     // Run 콘솔이 이 화면 안에 있으므로 --run-panel-h 는 계속 여기에 둔다(run-resizer가
                     // explorerViewRef로 이 값을 직접 갱신한다).
-                    ['--run-panel-h']: `${runPanelHeight}px`,
-                    // 세션 탭이 활성이면 에디터 화면 전체를 숨긴다 — 본문만 숨기면 그 아래의 Run 콘솔과
-                    // 리사이저가 남아 터미널 위에 그려진다. Run 콘솔은 에디터 화면의 출력 창이므로
-                    // 세션 터미널이 화면을 차지하는 동안에는 함께 물러나는 것이 맞다.
-                    display: shownTab?.kind === 'session' ? 'none' : undefined
+                    ['--run-panel-h']: `${runPanelHeight}px`
                   } as React.CSSProperties
                 }
               >
-                <div className="workbench-body">
-                  {editorFile && editorBuf ? (
-                    <div className="file-editor-wrap">
-                      {editorBuf.readOnly && !editorBuf.loading && !editorBuf.error && (
-                        <div className="file-truncated">{t('files.editor.readOnlyReason')}</div>
-                      )}
-                      {editorBuf.conflict && (
-                        <div className="file-conflict">
-                          {t('files.editor.conflictChanged')}
-                          <button onClick={() => reloadBufferFromDisk(editorFile.id)}>{t('files.editor.reload')}</button>
-                          <button onClick={() => setFileBuffers((prev) => (prev[editorFile.id] ? { ...prev, [editorFile.id]: { ...prev[editorFile.id], conflict: false } } : prev))}>{t('files.editor.keepMine')}</button>
-                        </div>
-                      )}
-                      {/* FileEditor always stays mounted — it must not unmount on loading or error, or the per-file
-                          EditorState cache (undo, scroll) is lost. 세션 탭이 활성일 때도 마운트가 유지되는
-                          이유는 editorFileId 주석에 있다 — 이 본문은 display로만 숨는다 */}
-                      <FileEditor
-                        path={editorFile.path}
-                        content={editorBuf.content}
-                        readOnly={editorBuf.readOnly}
-                        cache={editorCacheRef.current}
-                      onRetire={retireEditorState}
-                        onChange={(next) => setBufferContent(editorFile.id, next)}
-                        onSave={() => saveFile(editorFile.id)}
-                      />
-                      {editorBuf.loading && <div className="file-overlay">{t('files.editor.loading')}</div>}
-                      {!editorBuf.loading && editorBuf.error && <div className="file-overlay">{editorBuf.error}</div>}
-                    </div>
-                  ) : (
-                    <div className="placeholder">{t('files.editor.selectPrompt')}</div>
-                  )}
-                </div>
                 {runPanelOpen && explorerRoot && (
                   <div
                     className="run-resizer"

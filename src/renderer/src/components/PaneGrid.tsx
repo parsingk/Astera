@@ -14,20 +14,29 @@ import {
   type Rect
 } from '../../../core/panes/tree'
 import { parseTab, sessionTab } from '../../../core/panes/tabId'
+import { tabLabels } from '../../../core/files/tabLabel'
+import { useI18n } from '../i18n/I18nProvider'
 import { TerminalView } from './TerminalView'
-import { SessionTabs } from './SessionTabs'
+import { WorkbenchTabs, type FileTab, type WorkbenchTab } from './WorkbenchTabs'
 
 /** Pane grid.
  *
  *  The tree is not rendered as nested DOM — the slots are placed absolute inside the % rectangles
  *  computeRects produces, because changing a slot's DOM parent makes React unmount→remount it, which
  *  destroys the xterm instance and its scrollback. Sessions that are off screen stay mounted and are
- *  only hidden with display (existing behavior). */
+ *  only hidden with display (existing behavior).
+ *
+ *  A pane holds both kinds of tab, so each pane has an editor slot beside the session slots. There is
+ *  **one editor per pane, not one per open file** — twenty open files would otherwise mean twenty
+ *  CodeMirror instances, while a pane switching between its own file tabs reuses the one editor and lets
+ *  App's EditorStateCache carry undo and scroll across. */
 export function PaneGrid({
   layout,
   activePaneId,
   sessions,
   accounts,
+  fileTabs,
+  dirtyFileIds,
   rollStates,
   schedStates,
   busy,
@@ -38,17 +47,20 @@ export function PaneGrid({
   onDropSession,
   onRestart,
   onSelectTab,
-  onCloseSession,
+  onCloseTab,
   onNewInGroup,
   onTabContextMenu,
   onDragSessionChange,
   onDropTab,
-  soloSessionId
+  renderEditor
 }: {
   layout: PaneNode | null
   activePaneId: string | null
   sessions: SessionInfo[]
   accounts: Account[]
+  /** Every open file tab, whichever pane holds it. The name hint is computed over all of them at once */
+  fileTabs: FileTab[]
+  dirtyFileIds: Set<string>
   rollStates: Record<string, RollStateEvent>
   schedStates: Record<string, SchedStateEvent>
   busy: Record<string, boolean>
@@ -58,21 +70,25 @@ export function PaneGrid({
   onSetRatio: (splitId: string, ratio: number) => void
   onDropSession: (paneId: string, zone: DropZone, sessionId: string) => void
   onRestart: (s: SessionInfo) => void
-  onSelectTab: (sessionId: string) => void
-  onCloseSession: (sessionId: string) => void
+  /** A tab was clicked — of either kind. App activates it in the tree, which also moves the focus there */
+  onSelectTab: (tabId: string) => void
+  onCloseTab: (tabId: string) => void
   onNewInGroup: (paneId: string) => void
   /** Right-click on a tab — the screen coordinates are passed through as-is. App is what shows the menu */
   onTabContextMenu: (sessionId: string, x: number, y: number) => void
   onDragSessionChange: (id: string | null) => void
   /** Dropped onto a group's tab bar. insertBefore is 0..length in terms of the original indexing */
   onDropTab: (paneId: string, sessionId: string, insertBefore: number) => void
-  /** Given, this session alone is drawn full-bleed and group tab bars are hidden. Used by editor mode; the
-   *  layout tree is untouched — this prop disappears once the tree carries tabs (stage 2) */
-  soloSessionId?: string | null
+  /** The editor body for a pane. App owns it (and the state cache), the grid only places it */
+  renderEditor: (paneId: string, fileTabId: string) => React.ReactNode
 }): React.JSX.Element {
+  const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement>(null)
   // Preview while dragging — which zone of which pane it would land in
   const [hover, setHover] = useState<{ paneId: string; zone: DropZone } | null>(null)
+  // The file tab each pane last showed. Kept across a switch to a session tab so the editor is hidden
+  // rather than unmounted — remounting rebuilds the document that many times over
+  const lastFileOfPane = useRef<Map<string, string>>(new Map())
 
   const paneLeaves = layout ? leaves(layout) : []
   const rects: Map<string, Rect> = layout ? computeRects(layout) : new Map()
@@ -86,8 +102,31 @@ export function PaneGrid({
       const ref = parseTab(tabId)
       if (ref?.kind === 'session') paneOfSession.set(ref.id, l)
     }
-  // Session id → session info. Used when passing a group's session list to its tab bar (SessionTabs)
+  // Session id → session info, file tab id → file tab. Used when a group's tab ids are turned into tabs
   const sessionOf = new Map(sessions.map((s) => [s.id, s]))
+  const fileTabOf = new Map(fileTabs.map((f) => [f.id, f]))
+  // The name hint is computed **over every open file tab at once**, not per pane — two files with the
+  // same name in different panes still have to be told apart
+  const labels = tabLabels(fileTabs.map((f) => f.path))
+  const colorOf = (accountId: string): string =>
+    accounts.find((a) => a.id === accountId)?.color ?? '#888'
+
+  // The last file of each pane, refreshed while rendering: a pane whose active tab is a file records it,
+  // a pane showing a session keeps what it had. A pane that is gone, or that no longer holds that file
+  // (it was closed or dragged elsewhere), forgets it — otherwise the editor would draw a closed file
+  const livePanes = new Set(paneLeaves.map((l) => l.id))
+  for (const paneId of [...lastFileOfPane.current.keys()])
+    if (!livePanes.has(paneId)) lastFileOfPane.current.delete(paneId)
+  for (const l of paneLeaves) {
+    const active = parseTab(l.activeTabId)
+    if (active?.kind === 'file' && fileTabOf.has(l.activeTabId)) {
+      lastFileOfPane.current.set(l.id, l.activeTabId)
+      continue
+    }
+    const kept = lastFileOfPane.current.get(l.id)
+    if (kept && (!l.tabIds.includes(kept) || !fileTabOf.has(kept)))
+      lastFileOfPane.current.delete(l.id)
+  }
 
   // Clears App's draggingSessionId as well as hover — if a split or a center move makes the drag
   // source's tab DOM disappear during the drop handling state flush, that tab's onDragEnd (on a
@@ -111,30 +150,23 @@ export function PaneGrid({
     <div className="panes pane-grid" ref={hostRef}>
       {sessions.map((s) => {
         const pane = paneOfSession.get(s.id)
-        const solo = soloSessionId != null
-        // In solo, the one designated session is visible rather than each group's active tab. A session
-        // absent from the tree must still be showable, so pane presence is not part of the condition
-        const visible = solo
-          ? s.id === soloSessionId
-          : pane != null && pane.activeTabId === sessionTab(s.id)
+        const visible = pane != null && pane.activeTabId === sessionTab(s.id)
         const rect = pane ? rects.get(pane.id) : undefined
         return (
           <div
             key={s.id}
             className="terminal-slot"
             style={
-              visible && solo
-                ? { display: 'flex', left: 0, top: 0, width: '100%', height: '100%' }
-                : visible && rect
-                  ? {
-                      display: 'flex',
-                      left: `${rect.x}%`,
-                      width: `${rect.w}%`,
-                      // The tab bar takes the top 26px of the group rect — the slot moves down and shortens by that much
-                      top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
-                      height: `calc(${rect.h}% - var(--pane-tabbar-h))`
-                    }
-                  : { display: 'none' }
+              visible && rect
+                ? {
+                    display: 'flex',
+                    left: `${rect.x}%`,
+                    width: `${rect.w}%`,
+                    // The tab bar takes the top of the group rect — the slot moves down and shortens by that much
+                    top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
+                    height: `calc(${rect.h}% - var(--pane-tabbar-h))`
+                  }
+                : { display: 'none' }
             }
             onMouseDown={() => pane && onFocusPane(pane.id)}
             onDragOver={(e) => {
@@ -161,7 +193,7 @@ export function PaneGrid({
               onRestart={onRestart}
               rollState={rollStates[s.id] ?? null}
               schedState={schedStates[s.id] ?? null}
-              active={solo ? visible : visible && pane != null && pane.id === activePaneId}
+              active={visible && pane != null && pane.id === activePaneId}
             />
             {/* Gated on draggingSessionId too — hover is only cleared by onDrop/onDragLeave, so this
                 keeps the drop zone from sticking on paths where neither of those events arrives, such as
@@ -172,47 +204,105 @@ export function PaneGrid({
           </div>
         )
       })}
+      {/* The editor slots — one per pane, siblings of the session slots and placed by the same rect
+          calculation. .terminal-slot is reused deliberately: the class name says terminal but its job is
+          to claim a place in the grid, and duplicating that placement under a second name would let the
+          two drift apart (see the comment on the rule in styles.css) */}
+      {paneLeaves.map((l) => {
+        const rect = rects.get(l.id)
+        const fileTabId = lastFileOfPane.current.get(l.id)
+        if (!rect || !fileTabId) return null
+        const visible = l.activeTabId === fileTabId
+        return (
+          <div
+            key={`editor-${l.id}`}
+            className="terminal-slot"
+            style={
+              visible
+                ? {
+                    display: 'flex',
+                    left: `${rect.x}%`,
+                    width: `${rect.w}%`,
+                    top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
+                    height: `calc(${rect.h}% - var(--pane-tabbar-h))`
+                  }
+                : { display: 'none' }
+            }
+            onMouseDown={() => onFocusPane(l.id)}
+          >
+            {renderEditor(l.id, fileTabId)}
+          </div>
+        )
+      })}
       {/* Group tab bars — a sibling layer, not the slots' parent. Each one occupies the top
-          --pane-tabbar-h of the rect and the slot is pushed down by that much (the calc above). The focus
-          indication is done by the focused prop, not a CSS class — it puts the account-colored underline
-          only on that group's active tab */}
-      {soloSessionId == null &&
-        paneLeaves.map((l) => {
-          const rect = rects.get(l.id)
-          if (!rect) return null
-          // The tab bar draws sessions only — a file tab in the tree is skipped
-          const groupSessions = l.tabIds
-            .map((tabId) => parseTab(tabId))
-            .map((ref) => (ref?.kind === 'session' ? sessionOf.get(ref.id) : undefined))
-            .filter((s): s is SessionInfo => s != null)
-          const activeRef = parseTab(l.activeTabId)
-          return (
-            <div
-              key={`tabbar-${l.id}`}
-              className="pane-tabbar"
-              style={{ left: `${rect.x}%`, top: `${rect.y}%`, width: `${rect.w}%` }}
-              onMouseDown={() => onFocusPane(l.id)}
-            >
-              <SessionTabs
-                sessions={groupSessions}
-                accounts={accounts}
-                activeId={activeRef?.kind === 'session' ? activeRef.id : null}
-                busy={busy}
-                onSelect={onSelectTab}
-                onClose={onCloseSession}
-                onNew={() => onNewInGroup(l.id)}
-                onContextMenu={onTabContextMenu}
-                onDragSessionChange={onDragSessionChange}
-                draggingSessionId={draggingSessionId}
-                focused={l.id === activePaneId}
-                onDropTab={(sid, insertBefore) => onDropTab(l.id, sid, insertBefore)}
-                newDisabled={newDisabled}
-              />
-            </div>
-          )
-        })}
-      {soloSessionId == null &&
-        bounds.map((b) => (
+          --pane-tabbar-h of the rect and the slots are pushed down by that much (the calc above). The
+          focus indication is done by the focused prop, not a CSS class — it puts the account-colored
+          underline only on that group's active tab */}
+      {paneLeaves.map((l) => {
+        const rect = rects.get(l.id)
+        if (!rect) return null
+        // A pane's tab ids in order, each resolved to what it needs to draw. An id whose session or file
+        // tab is gone is skipped rather than drawn empty
+        const tabs = l.tabIds
+          .map((tabId): WorkbenchTab | null => {
+            const ref = parseTab(tabId)
+            if (ref?.kind === 'session') {
+              const s = sessionOf.get(ref.id)
+              if (!s) return null
+              return {
+                tabId,
+                kind: 'session',
+                sessionId: s.id,
+                title: s.title,
+                color: colorOf(s.accountId),
+                busy: busy[s.id] === true,
+                exited: s.status === 'exited',
+                rollTooltip:
+                  s.rollAccountIds && s.rollAccountIds.length > 0
+                    ? t('session.tab.rollTooltip', {
+                        chain: s.rollAccountIds
+                          .map((id) => accounts.find((a) => a.id === id)?.label ?? id.slice(0, 6))
+                          .join(' → ')
+                      })
+                    : null
+              }
+            }
+            const f = ref?.kind === 'file' ? fileTabOf.get(tabId) : undefined
+            if (!f) return null
+            return {
+              tabId,
+              kind: 'file',
+              path: f.path,
+              title: labels.get(f.path)?.name ?? f.title,
+              hint: labels.get(f.path)?.hint ?? null,
+              dirty: dirtyFileIds.has(f.id)
+            }
+          })
+          .filter((x): x is WorkbenchTab => x != null)
+        return (
+          <div
+            key={`tabbar-${l.id}`}
+            className="pane-tabbar"
+            style={{ left: `${rect.x}%`, top: `${rect.y}%`, width: `${rect.w}%` }}
+            onMouseDown={() => onFocusPane(l.id)}
+          >
+            <WorkbenchTabs
+              tabs={tabs}
+              activeTabId={l.activeTabId}
+              focused={l.id === activePaneId}
+              newDisabled={newDisabled}
+              onSelect={onSelectTab}
+              onClose={onCloseTab}
+              onNew={() => onNewInGroup(l.id)}
+              onContextMenu={onTabContextMenu}
+              onDragSessionChange={onDragSessionChange}
+              draggingSessionId={draggingSessionId}
+              onDropTab={(sid, insertBefore) => onDropTab(l.id, sid, insertBefore)}
+            />
+          </div>
+        )
+      })}
+      {bounds.map((b) => (
           <div
             key={b.splitId}
             className={`pane-resizer ${b.dir}`}

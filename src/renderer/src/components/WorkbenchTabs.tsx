@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { resolveFileIcon } from '../../../core/files/icons'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
@@ -13,48 +14,164 @@ export interface FileTab {
   projectRoot: string
 }
 
-/** 에디터 모드의 탭 줄. 파일 탭과 세션 탭을 한 줄에 그린다.
+/** 페인 하나의 탭 줄에 올라가는 탭. 파일 탭과 세션 탭을 한 줄에 그린다.
  *
- *  FileTabs를 확장하지 않은 이유는 표식이 다르기 때문이다 — 세션 탭은 계정 색과 작업 중 스피너를
- *  가지며, 그 표식은 SessionTabs의 것을 따른다. 정렬은 받은 순서 그대로다: 어느 종류를 먼저 둘지는
- *  이 컴포넌트가 아니라 App이 정한다. */
+ *  표식이 종류마다 다르다 — 세션 탭은 계정 색과 작업 중 스피너와 롤링 표시를, 파일 탭은 확장자 아이콘과
+ *  더티 점과 이름 구분자를 가진다. 정렬은 받은 순서 그대로다: 어느 종류를 먼저 둘지는 이 컴포넌트가
+ *  아니라 트리(페인의 tabIds)가 정한다. */
 export type WorkbenchTab =
-  | { tabId: string; kind: 'file'; path: string; title: string; dirty: boolean }
-  | { tabId: string; kind: 'session'; title: string; color: string; busy: boolean; exited: boolean }
+  | {
+      tabId: string
+      kind: 'file'
+      path: string
+      title: string
+      /** 같은 이름의 파일이 다른 탭에도 열려 있을 때만 채워진다 (core/files/tabLabel.ts) */
+      hint: string | null
+      dirty: boolean
+    }
+  | {
+      tabId: string
+      kind: 'session'
+      sessionId: string
+      title: string
+      color: string
+      busy: boolean
+      exited: boolean
+      /** 계정 롤링 체인의 툴팁. 롤링이 걸려 있지 않으면 null — 계정 목록은 PaneGrid가 갖고 있으므로
+       *  문구를 거기서 만들어 넘긴다 */
+      rollTooltip: string | null
+    }
 
+/** 페인 하나의 탭 줄.
+ *
+ *  드래그·`+` 버튼·컨텍스트 메뉴·포커스 밑줄은 SessionTabs가 갖고 있던 것을 그대로 옮겨 온 것이다.
+ *  드래그가 실어 나르는 값은 아직 세션 id다(파일 탭은 draggable이 아니다) — 탭 id로 일반화하는 것은
+ *  페인 본문 드롭과 App 핸들러까지 함께 바꿔야 하므로 다음 작업에서 한 번에 한다. */
 export function WorkbenchTabs({
   tabs,
   activeTabId,
+  focused,
+  newDisabled,
   onSelect,
-  onClose
+  onClose,
+  onNew,
+  onContextMenu,
+  onDragSessionChange,
+  draggingSessionId,
+  onDropTab
 }: {
   tabs: WorkbenchTab[]
   activeTabId: string | null
+  /** 이 페인이 포커스를 갖고 있는가. 계정 색 밑줄은 여기에만 붙는다 — 모든 페인의 활성 탭에 똑같이
+   *  두면 탭 줄만 보고서는 어디에 타이핑되는지 알 수 없다 */
+  focused: boolean
+  newDisabled?: boolean
   onSelect: (tabId: string) => void
   onClose: (tabId: string) => void
+  onNew: () => void
+  /** 세션 탭 우클릭 — 화면 좌표를 그대로 넘긴다. 메뉴를 그리는 것은 App이다 */
+  onContextMenu: (sessionId: string, x: number, y: number) => void
+  /** 드래그 중인 세션 id (끝나면 null). PaneGrid의 드롭 미리보기가 이 값을 본다 */
+  onDragSessionChange: (id: string | null) => void
+  /** 드래그 중인 세션 id (App이 소유). 로컬 dragId만으로는 다른 페인에서 시작된 드래그를 받을 수 없다 */
+  draggingSessionId: string | null
+  /** 이 탭 줄에 떨어뜨렸다. insertBefore는 이 페인 tabIds 기준 0..length (core/reorder 규약) */
+  onDropTab: (sessionId: string, insertBefore: number) => void
 }): React.JSX.Element {
   const { t } = useI18n()
+  // 드래그 중인 탭과 드롭 표시 위치(insertBefore ∈ [0, n]) — 드래그하는 동안만 쓰는 상태
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [dropAt, setDropAt] = useState<number | null>(null)
+
+  const endDrag = (): void => {
+    setDragId(null)
+    setDropAt(null)
+    onDragSessionChange(null)
+  }
+
+  // 지나가는 탭의 인덱스에서, 포인터의 x가 어느 쪽 절반인지가 insertBefore(k 또는 k+1)를 정한다
+  const overTab = (e: React.DragEvent, index: number): void => {
+    if (!draggingSessionId) return
+    e.preventDefault() // allows the drop
+    const rect = e.currentTarget.getBoundingClientRect()
+    const after = e.clientX > rect.left + rect.width / 2
+    setDropAt(after ? index + 1 : index)
+  }
+
+  const commitDrop = (e: React.DragEvent): void => {
+    e.preventDefault()
+    const sid = e.dataTransfer.getData('text/plain') || draggingSessionId
+    const at = dropAt
+    endDrag()
+    if (sid && at !== null) onDropTab(sid, at)
+  }
+
   return (
-    <div className="tabs file-tabs workbench-tabs">
-      {tabs.map((tab) => (
+    <div
+      className="tabs"
+      onDragOver={(e) => {
+        if (!draggingSessionId) return
+        e.preventDefault()
+        // 탭에서 올라온 dragover는 무시한다 — overTab이 이미 정확한 위치를 정했다. 컨테이너 자신이
+        // 대상일 때(탭 사이의 빈 공간)만 맨 끝으로 정한다
+        if (e.target === e.currentTarget) setDropAt(tabs.length)
+      }}
+      onDrop={commitDrop}
+      onDragLeave={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+        setDropAt(null) // 탭 줄을 벗어났다 — 페인의 드롭 미리보기가 이어받는다
+      }}
+    >
+      {tabs.map((tab, index) => (
         <div
           key={tab.tabId}
-          className={`tab ${tab.kind === 'file' ? 'file-tab' : 'session-tab'} ${
-            tab.tabId === activeTabId ? 'active' : ''
-          } ${tab.kind === 'session' && tab.exited ? 'exited' : ''}`}
+          className={
+            `tab ${tab.kind === 'file' ? 'file-tab' : ''}` +
+            `${tab.tabId === activeTabId ? ' active' : ''}` +
+            `${tab.kind === 'session' && tab.exited ? ' exited' : ''}` +
+            `${tab.tabId === dragId ? ' dragging' : ''}` +
+            `${dropAt === index ? ' drop-before' : ''}` +
+            `${dropAt === index + 1 ? ' drop-after' : ''}`
+          }
+          style={
+            focused && tab.tabId === activeTabId
+              ? {
+                  // 파일 탭에는 계정 색이 없으므로 강조색을 쓴다
+                  boxShadow: `inset 0 -2px 0 ${tab.kind === 'session' ? tab.color : 'var(--accent)'}`
+                }
+              : undefined
+          }
           title={tab.kind === 'file' ? tab.path : tab.title}
+          draggable={tab.kind === 'session'}
           onClick={() => onSelect(tab.tabId)}
+          onContextMenu={(e) => {
+            if (tab.kind !== 'session') return
+            e.preventDefault()
+            onContextMenu(tab.sessionId, e.clientX, e.clientY)
+          }}
+          onDragStart={(e) => {
+            if (tab.kind !== 'session') return
+            setDragId(tab.tabId)
+            setDropAt(null)
+            e.dataTransfer.effectAllowed = 'move'
+            // 어떤 환경은 dragstart에 데이터가 실려야 드래그를 시작한다
+            e.dataTransfer.setData('text/plain', tab.sessionId)
+            onDragSessionChange(tab.sessionId) // 페인 드롭 미리보기용
+          }}
+          onDragOver={(e) => overTab(e, index)}
+          onDrop={commitDrop}
+          onDragEnd={endDrag}
         >
           {tab.kind === 'file' ? (
             <FileIcon {...resolveFileIcon(tab.title)} />
           ) : tab.busy && !tab.exited ? (
             // 작업 중: 계정 색의 회전하는 링. .tab-dot.busy는 background가 투명이고 테두리로 그려지므로
-            // 색을 borderColor로 줘야 한다 (SessionTabs.tsx:122-131과 같은 표식)
+            // 색을 borderColor로 줘야 한다
             <span
               className="tab-dot busy"
               style={{
-                borderColor: `${tab.color}33`,
-                borderTopColor: tab.color,
+                borderColor: `${tab.color}33`, // faint track
+                borderTopColor: tab.color, // a bright arc (180°) makes the rotation obvious
                 borderRightColor: tab.color
               }}
             />
@@ -62,9 +179,15 @@ export function WorkbenchTabs({
             <span className="tab-dot" style={{ background: tab.color }} />
           )}
           <span className="tab-title">{tab.title}</span>
+          {tab.kind === 'file' && tab.hint && <span className="tab-hint">{tab.hint}</span>}
           {tab.kind === 'file' && tab.dirty && (
             <span className="tab-dirty" title={t('explorer.tab.unsaved')}>
               ●
+            </span>
+          )}
+          {tab.kind === 'session' && tab.rollTooltip && (
+            <span className="tab-roll" title={tab.rollTooltip}>
+              🔁
             </span>
           )}
           <button
@@ -84,6 +207,15 @@ export function WorkbenchTabs({
           </button>
         </div>
       ))}
+      <button
+        className="new-tab"
+        aria-label={t('session.new.title')}
+        title={t('session.new.title')}
+        onClick={onNew}
+        disabled={newDisabled}
+      >
+        +
+      </button>
     </div>
   )
 }

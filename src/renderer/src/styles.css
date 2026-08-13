@@ -164,12 +164,16 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 
 /* ---------- explorer / editor mode ---------- */
 .session-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.explorer-view { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.file-tabs { flex: none; }
+/* flex: none, not 1 — the editor moved into the panes, so all that is left in here is the Run console,
+   whose height is its own. Left at 1 it would split the surface with .session-view and halve the grid */
+.explorer-view { flex: none; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 
 /* ---------- project Run/Stop — RunToolbar and workbench wiring ---------- */
+/* The top bar now carries the RunToolbar alone — the global tab row that used to sit beside it is gone,
+   its tabs having moved into each pane's own bar (.pane-tabbar) */
 .workbench-topbar { flex: none; display: flex; align-items: stretch; }
-.workbench-topbar .file-tabs { flex: 1; min-width: 0; }
+/* The editor body. It now lives inside a pane's slot rather than under .explorer-view, and the rule is
+   unchanged because the slot is a column flex box just as .explorer-view was */
 .workbench-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .run-toolbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-bottom: 1px solid var(--line); border-left: 1px solid var(--line); background: var(--panel); position: relative; }
 /* The run-config picker in the toolbar. Only sizing lives here now — the surface comes from .sel.
@@ -327,8 +331,14 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* File viewer tabs — they inherit the same style as session tabs and are distinguished by a per-file-type
    SVG icon (previously a single 📄 emoji was the only distinction) */
 .tab.file-tab { font-style: normal; }
+/* The name hint on a file tab — the shortest parent path that tells two same-named files apart
+   (core/files/tabLabel.ts). Only present when names collide, so it is drawn quietly: dim, smaller than
+   the name, and clipped rather than allowed to push the name out of a narrow pane */
+.tab-hint { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 10px; color: var(--text-faint); }
 
 /* ---------- terminal ---------- */
+/* .terminal-slot is not terminal-only: it is how a pane's body claims its place in the grid, and the
+   editor slot PaneGrid draws for each pane uses the same class so both follow one placement rule */
 .terminal-slot { flex: 1; min-height: 0; }
 /* min-height:0 plus overflow:hidden — allows flex shrinking and confines the overflow to the slot, so
    the xterm canvas (rows × cellHeight) cannot spill past it and encroach on the bottom status bar */
