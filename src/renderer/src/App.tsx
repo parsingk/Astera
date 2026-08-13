@@ -337,7 +337,11 @@ export default function App(): React.JSX.Element {
     ? `${t('explorer.rail.toggle')} (${formatChord(explorerChord)})`
     : t('explorer.rail.toggle')
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [explorerOpen, setExplorerOpen] = useState(false) // the file explorer toggle
+  const [explorerOpen, setExplorerOpen] = useState(false)
+  // 키 핸들러는 []로 한 번만 등록되어 첫 렌더의 클로저를 붙잡는다. toggleExplorer 가 렌더 값을 읽으면
+  // 단축키가 늘 같은 방향으로만 계산되므로, 최신 값을 이 ref 로 읽는다(이 파일의 다른 ref 들과 같은 이유)
+  const explorerOpenRef = useRef(explorerOpen)
+  explorerOpenRef.current = explorerOpen // the file explorer toggle
   const [showSettings, setShowSettings] = useState(false)
   const [settingsTab, setSettingsTab] = useState<
     'general' | 'accounts' | 'info' | 'shortcuts' | 'slack' | 'worktree' | 'history'
@@ -1193,17 +1197,18 @@ export default function App(): React.JSX.Element {
     editorCacheRef.current.clear()
   }
 
-  // Toggling explorer mode — Ctrl+Tab or Ctrl+Shift+E. Explorer state (file tabs, pin, expansion) is preserved
+  // 탐색기 토글 — 파일 탭과 루트별 펼침 상태는 그대로 유지된다
   /** 탐색기를 켤 때는 사이드바도 함께 편다. 레일의 탐색기 버튼과 같은 규칙이다 — 켰는데 사이드바가
    *  접혀 있으면 파일 트리가 어디에도 나타나지 않는다.
    *
    *  사이드바의 표시 여부는 sidebarOpen 하나가 정한다. 예전에는 sidebarOpen || explorerOpen 이라
    *  탐색기가 켜져 있는 동안 사이드바 토글이 아무 반응도 없었다 — OR 가 언제나 참이었기 때문이다. */
   const toggleExplorer = (): void => {
-    setExplorerOpen((v) => {
-      if (!v) setSidebarOpen(true)
-      return !v
-    })
+    // 켜는 경우인지는 갱신자 밖에서 정한다. setState 갱신자는 StrictMode 에서 두 번 불릴 수 있으므로
+    // 그 안에서 다른 setState 를 부르지 않는다는 것이 이 파일의 규약이다(setLayout 쪽 주석들과 같은 이유)
+    const opening = !explorerOpenRef.current
+    if (opening) setSidebarOpen(true)
+    setExplorerOpen(opening)
   }
 
   // A setState updater can be invoked twice under StrictMode (in development), so setActivePaneId and
@@ -1799,12 +1804,7 @@ export default function App(): React.JSX.Element {
             className={explorerOpen ? 'rail-btn on' : 'rail-btn'}
             aria-label={explorerShortcutLabel}
             title={explorerShortcutLabel}
-            onClick={() => {
-              setExplorerOpen((v) => {
-                if (!v) setSidebarOpen(true)
-                return !v
-              })
-            }}
+            onClick={toggleExplorer}
           >
             {/* 파일 트리 — 폴더 하나와 그 안의 줄 둘. 앱의 SVG 관례대로 16 viewBox 에 currentColor 하나 */}
             <svg

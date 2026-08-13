@@ -95,7 +95,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
    배경은 없어진 상단 띠의 크롬이었으므로 여기서는 지운다. min-width:0 은 창이 좁아질 때 select 가
    줄어들 수 있게 한다 — 없으면 창 컨트롤을 밀어낸다 */
 .tb-run { display: flex; align-items: center; margin-left: 12px; margin-right: 4px; min-width: 0; padding: 1px 2px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); -webkit-app-region: no-drag; }
-.tb-run .run-toolbar { border: 0; background: transparent; padding: 0; gap: 2px; }
+.tb-run .run-toolbar { border: 0; background: transparent; padding: 0; gap: 2px; min-width: 0; }
 /* 타이틀바는 앱에서 가장 어두운 면(--rail)이라, 본문을 기준으로 잡힌 --text-dim 이 여기서는 거의
    읽히지 않는다. 쉬는 상태의 색을 본문 색까지 올리고, 위젯 전체에 한 단계 밝은 면과 테두리를 줘서
    타이틀바에서 떠 보이게 한다 — IntelliJ의 run 위젯이 같은 방식으로 묶여 있다.
@@ -192,8 +192,6 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .explorer-view { flex: none; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 
 /* ---------- project Run/Stop — RunToolbar and workbench wiring ---------- */
-/* The top bar now carries the RunToolbar alone — the global tab row that used to sit beside it is gone,
-   its tabs having moved into each pane's own bar (.pane-tabbar) */
 /* The editor body. It now lives inside a pane's slot rather than under .explorer-view, and the rule is
    unchanged because the slot is a column flex box just as .explorer-view was */
 .workbench-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
