@@ -2,6 +2,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { app } from 'electron'
 import { AccountRegistry } from '../core/accounts/registry'
 import { PROVIDERS, providerOf } from '../core/providers/meta'
 import { makeDescriptors, descriptorOf, isAmbientDir, type ProviderDescriptor } from '../core/providers/descriptor'
@@ -24,6 +25,7 @@ import { suggestableCandidates } from '../core/accounts/suggest'
 import { AppSettingsStore } from './appSettingsStore'
 import { KeybindingsStore } from './keybindingsStore'
 import { pickInitialLang } from '../core/i18n/locale'
+import { setPseudoLocalization } from '../core/i18n/pseudo'
 import type { Lang, Message } from '../core/i18n'
 import type { Account, DetectCandidate, Provider, SessionUsage } from '../core/types'
 
@@ -119,6 +121,9 @@ export function runAccountLogout(
 }
 
 export async function createCore(userDataDir: string, osLocale: string): Promise<Core> {
+  // Same switch on the main side, so banners and error sentences are padded too
+  // Dev-only layout check: VITE_PSEUDO_LOCALE=1 ASTERA_PSEUDO_LOCALE=1 npm run dev
+  setPseudoLocalization(!app.isPackaged && process.env.ASTERA_PSEUDO_LOCALE === '1')
   const descriptors = makeDescriptors(process.platform)
   const accounts = new AccountRegistry(
     path.join(userDataDir, 'accounts.json'),

@@ -2,8 +2,8 @@
 
 Issues and pull requests are welcome. A couple of things worth knowing before you start:
 
-- Run `npm run typecheck` and `npm run build` before opening a PR — that is what CI checks, in that
-  order, after `npm ci`.
+- Run `npm run typecheck`, `npm test` and `npm run build` before opening a PR — that is what CI checks,
+  in that order, after `npm ci`.
 - `npm run typecheck` covers two TypeScript projects, and the split matters. `tsconfig.web.json` lists
   the node-free `src/core` files the renderer may import, one by one. Adding a core module and
   importing it from the renderer means adding it to that `include` array and keeping it free of `node:`
@@ -12,8 +12,30 @@ Issues and pull requests are welcome. A couple of things worth knowing before yo
 - `docs/` is a whitelist: `docs/*` is ignored except for the pages explicitly un-ignored in
   `.gitignore`. A new file there defaults to "not published" and will not be committed, so
   documentation that ships has to extend one of the existing pages.
-- The test sources are not in this repository, so a PR cannot add or change tests. If your change
-  needs one, describe the case in the PR and it will be covered on the maintainer's side.
+- Tests live next to what they test as `*.test.ts` and run with `npm test` (Vitest). A change to
+  behaviour is expected to come with one.
+- **Do not join the usage-limit phrases back together.** Several tests in `src/core/rolling/` and
+  `src/main/` build phrases like `"You've hit your " + 'weekly limit'` by concatenation instead of
+  writing them as one literal. That is deliberate: Astera watches session output for exactly those
+  phrases to decide when to switch accounts, so a file containing one whole would trigger a real
+  account roll the moment an agent reads it — which has happened. Test *titles* are subject to the
+  same rule, because Vitest prints them joined at runtime. Keep the concatenation, and keep the
+  comment that explains it.
+- The UI ships in Korean, English, Japanese, and Spanish, declared in one table in
+  `src/core/i18n/index.ts`. Korean and English are maintained by the author; Japanese and Spanish
+  were produced without a native speaker's review, so corrections there are welcome. To fix a
+  translation, edit the matching catalog in `src/core/i18n/messages/<lang>.ts` — `ko.ts` is the
+  source catalog and defines the key set, `en.ts` is complete. A key missing from `ja.ts` or `es.ts`
+  falls back to English and then Korean, on purpose, so a partial translation PR is fine; you do not
+  need to translate every string to contribute one. Two things any change must keep, checked by the
+  invariant tests: a placeholder (`{name}`-style) identical to the Korean value, and product and
+  command names — `Claude`, `Codex`, `Astera`, `Slack`, `GitHub`, `git`, `npm`, `PATH` — left
+  untranslated.
+- The README ships in the same four languages, as `README.md` (English, the source), `README.ko.md`,
+  `README.ja.md` and `README.es.md`, each linking to the others under the badges. A change to the
+  English README that alters what the app does or how it is installed belongs in the translations
+  too; wording-only polish does not have to be mirrored. As with the catalogs, the Japanese and
+  Spanish pages had no native review.
 - Bug reports are much easier to act on with the app version, your OS version, and the relevant
   lines from `rolling.log` when the problem involves account rolling — `%APPDATA%\astera\rolling.log`
   on Windows, `~/Library/Application Support/astera/rolling.log` on macOS.

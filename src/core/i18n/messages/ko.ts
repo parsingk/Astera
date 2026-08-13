@@ -10,6 +10,10 @@ export const ko = {
   'settings.tab.shortcuts': '단축키',
   'settings.tab.history': '히스토리',
   'settings.general.language': '언어',
+  // {lang} is the language the OS locale resolves to, shown so the effect of picking System is
+  // visible before picking it
+  'settings.general.language.system': '시스템 설정 ({lang})',
+  'settings.general.language.saveFailed': '언어 설정을 저장하지 못했습니다: {detail}',
   // Agent orchestration
   'settings.orchestration.label': '에이전트 오케스트레이션 (실험)',
   'settings.orchestration.hint':
@@ -129,6 +133,7 @@ export const ko = {
   'settings.info.cliNotDetected': '감지 안 됨',
   'settings.slack.save': '저장',
   'settings.slack.saved': '저장됨',
+  'settings.slack.saveFailed': 'Slack 설정을 저장하지 못했습니다: {detail}',
   'settings.slack.hint': '새 세션에서 “Slack 진행상황 알림”을 켜면 진행 상황을 보냅니다.',
   // Bot settings. Which delivery path is active has to be visible on screen at a glance —
   // a bot token with no channel ID silently falls back to Webhook (slack.ts applyConfig), so that state has to show
@@ -235,7 +240,7 @@ export const ko = {
   'shortcut.risk.cliMode': 'Claude Code·Codex가 모드 전환·자동완성에 쓰는 키입니다. 앱이 가져가면 세션에서 쓸 수 없습니다.',
   'shortcut.pane.dragSplit': '가장자리로 분할 · 가운데로 이동',
   'shortcut.group.explorer': '파일 탐색기',
-  'shortcut.explorer.toggleMode': '세션 ↔ 탐색기 전환',
+  'shortcut.explorer.toggleMode': '탐색기 보이기/숨기기',
   'shortcut.explorer.saveFile': '파일 저장',
   'shortcut.explorer.closeFileTab': '파일 탭 닫기',
   'shortcut.explorer.rename': '이름 변경',
@@ -336,7 +341,8 @@ export const ko = {
   'explorer.git.deleted': '삭제됨',
   'explorer.git.conflict': '충돌',
   'explorer.git.folderCount': '변경 {count}건',
-  // FileTabs.tsx — the dirty marker on a file tab
+  'explorer.rail.toggle': '파일 탐색기',
+  // WorkbenchTabs.tsx — the dirty marker on a file tab
   'explorer.tab.unsaved': '저장 안 됨',
   // LocalHistoryDialog.tsx — the Local History browse/restore modal
   // ('Local History' is treated as a proper noun and left untranslated — following the existing catalog precedent)
@@ -466,7 +472,7 @@ export const ko = {
   'session.sched.weekday.thu': '목',
   'session.sched.weekday.fri': '금',
   'session.sched.weekday.sat': '토',
-  // SessionTabs.tsx
+  // WorkbenchTabs.tsx
   'session.tab.rollTooltip': '롤링: {chain}',
   // PaneGrid / pane context menu
   'session.pane.splitRight': '우측 분할',
@@ -512,7 +518,6 @@ export const ko = {
   'session.resume.originDeleted': '삭제된 계정',
   'history.filter.allAccounts': '모든 계정',
   'history.refresh.tooltip': '워쳐 실패 시 수동 폴백',
-  'history.project.openExplorer': '파일 탐색기로 열기',
   'history.menu.hide': '숨기기',
   'history.project.noSessions': '세션 없음',
   'history.entry.preview': '미리보기',
@@ -546,11 +551,11 @@ export const ko = {
   // WorktreePanel.tsx — panel header, row icon buttons
   'worktree.refresh': '새로 고침',
   'worktree.action.startSession': '세션 시작',
-  'worktree.action.openExplorer': '탐색기',
   // RunToolbar.tsx — config select, run/stop, edit/delete, the running list
   'run.config.selectLabel': '실행 구성 선택',
   'run.config.none': '실행 구성 없음',
-  'run.config.addOption': '+ 실행 구성 추가…',
+  'run.config.add': '실행 구성 추가…',
+  'run.config.more': '추가 동작',
   'run.action.run': '실행',
   'run.action.stop': '중지',
   'run.config.editTitle': '구성 편집',

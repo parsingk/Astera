@@ -1,0 +1,794 @@
+import { describe, it, expect } from 'vitest'
+import {
+  emptyState,
+  createRun,
+  createTask,
+  openDispatch,
+  applyWorkerDone,
+  closeDispatch,
+  nextDelivery,
+  ackDelivery,
+  createQuestion,
+  applyReply,
+  createGate,
+  resolveGate,
+  type OrchState
+} from './state'
+import { DELIVERY_MAX, FAILURE_LIMIT } from './types'
+
+const NOW = '2026-08-04T00:00:00.000Z'
+const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchState; value: T } => {
+  if (!r.ok) throw new Error(`expected ok, got ${String(r.error)}`)
+  return { state: r.state as OrchState, value: r.value as T }
+}
+
+/** run + task + dispatch가 준비된 상태를 만든다 */
+const seed = (): { s: OrchState; runId: string; taskId: string; dispatchId: string } => {
+  let { state: s, value: run } = unwrap<{ id: string }>(
+    createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
+  )
+  const t = unwrap<{ id: string }>(
+    createTask(s, { runId: run.id, title: 't', spec: 'do it', deps: [] }, NOW) as never
+  )
+  s = t.state
+  const d = unwrap<{ id: string }>(
+    openDispatch(
+      s,
+      {
+        taskId: t.value.id,
+        provider: 'codex',
+        accountId: 'acc1',
+        sessionId: 'sess1',
+        cwd: 'D:/p',
+        specPath: 'D:/p/orch/specs/x.md'
+      },
+      NOW
+    ) as never
+  )
+  return { s: d.state, runId: run.id, taskId: t.value.id, dispatchId: d.value.id }
+}
+
+describe('Delivery 배치', () => {
+  it('ack 전에는 같은 배치를 다시 돌려준다', () => {
+    const { s, runId, taskId, dispatchId } = seed()
+    const done = unwrap<'accepted'>(
+      applyWorkerDone(
+        s,
+        { taskId, dispatchId, outcome: 'succeeded', subject: 'a', body: 'b' },
+        NOW
+      ) as never
+    )
+    const first = unwrap<{ delivery: { id: string }; messages: unknown[] }>(
+      nextDelivery(done.state, { runId }, NOW) as never
+    )
+    const second = unwrap<{ delivery: { id: string } }>(
+      nextDelivery(first.state, { runId }, NOW) as never
+    )
+    expect(second.value.delivery.id).toBe(first.value.delivery.id)
+  })
+  it('ack 후에는 빈 결과를 돌려준다', () => {
+    const { s, runId, taskId, dispatchId } = seed()
+    let cur = unwrap<'accepted'>(
+      applyWorkerDone(
+        s,
+        { taskId, dispatchId, outcome: 'succeeded', subject: 'a', body: 'b' },
+        NOW
+      ) as never
+    ).state
+    const first = unwrap<{ delivery: { id: string } }>(nextDelivery(cur, { runId }, NOW) as never)
+    cur = unwrap<unknown>(
+      ackDelivery(first.state, { deliveryId: first.value.delivery.id }, NOW) as never
+    ).state
+    const after = nextDelivery(cur, { runId }, NOW)
+    expect(after.ok && after.value).toBeNull()
+  })
+  it(`한 배치는 최대 ${DELIVERY_MAX}통이다`, () => {
+    let { s, runId, taskId, dispatchId } = seed()
+    for (let i = 0; i < DELIVERY_MAX + 5; i++) {
+      s = unwrap<unknown>(
+        createQuestion(s, { taskId, dispatchId, question: `q${i}` }, NOW) as never
+      ).state
+      // 다음 질문을 만들려면 앞 질문에 답이 있어야 한다 (Dispatch당 미응답 1개 규칙)
+      const pending = s.messages.filter((m) => m.type === 'question' && !m.answered)
+      s = unwrap<unknown>(applyReply(s, { messageId: pending[0].id, body: 'a' }, NOW) as never).state
+    }
+    const d = unwrap<{ messages: unknown[] }>(nextDelivery(s, { runId }, NOW) as never)
+    expect(d.value.messages.length).toBe(DELIVERY_MAX)
+  })
+  it('types 필터는 깨어날 조건만 정하고 배치는 전체를 준다', () => {
+    let { s, runId, taskId, dispatchId } = seed()
+    s = unwrap<unknown>(
+      createQuestion(s, { taskId, dispatchId, question: 'q' }, NOW) as never
+    ).state
+    s = unwrap<unknown>(applyReply(s, { messageId: s.messages[0].id, body: 'a' }, NOW) as never)
+      .state
+    s = unwrap<unknown>(
+      applyWorkerDone(
+        s,
+        { taskId, dispatchId, outcome: 'succeeded', subject: 'a', body: 'b' },
+        NOW
+      ) as never
+    ).state
+    const d = unwrap<{ messages: { type: string }[] }>(
+      nextDelivery(s, { runId, types: ['worker_done'] }, NOW) as never
+    )
+    // question·answer·worker_done 이 모두 들어 있다 — 필터는 깨어날 조건이었을 뿐
+    expect(d.value.messages.map((m) => m.type)).toContain('question')
+    expect(d.value.messages.map((m) => m.type)).toContain('worker_done')
+  })
+  it('미ack 배치 안의 질문이 종결돼도 재생 배치 크기가 줄지 않는다 — 메시지를 삭제하지 않는다', () => {
+    const { s, runId, taskId, dispatchId } = seed()
+    const q = unwrap<{ id: string }>(
+      createQuestion(s, { taskId, dispatchId, question: 'q' }, NOW) as never
+    )
+    const first = unwrap<{ delivery: { id: string }; messages: { id: string }[] }>(
+      nextDelivery(q.state, { runId }, NOW) as never
+    )
+    expect(first.value.messages.length).toBe(1)
+    // 세션이 죽어 미응답 질문이 종결된다 — 이 메시지는 이미 미ack 배치에 들어가 있다
+    const closed = unwrap<unknown>(
+      closeDispatch(first.state, { sessionId: 'sess1', exitCode: 1 }, NOW) as never
+    )
+    const replay = unwrap<{ delivery: { id: string }; messages: unknown[] }>(
+      nextDelivery(closed.state, { runId }, NOW) as never
+    )
+    expect(replay.value.delivery.id).toBe(first.value.delivery.id)
+    expect(replay.value.messages.length).toBe(first.value.messages.length)
+    const settled = closed.state.messages.find((m) => m.id === q.value.id)!
+    expect(settled.answered).toBe(true)
+    expect(settled.answerBody).toBe('')
+  })
+})
+
+describe('worker_done', () => {
+  it('Task와 Dispatch를 자동으로 종단 상태로 옮긴다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const r = unwrap<'accepted'>(
+      applyWorkerDone(
+        s,
+        { taskId, dispatchId, outcome: 'succeeded', subject: 'a', body: 'b' },
+        NOW
+      ) as never
+    )
+    expect(r.state.tasks.find((t) => t.id === taskId)!.status).toBe('completed')
+    expect(r.state.dispatches.find((d) => d.id === dispatchId)!.outcome).toBe('succeeded')
+  })
+  it('두 번째 보고는 alreadyReported로 무시한다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const once = unwrap<'accepted'>(
+      applyWorkerDone(
+        s,
+        { taskId, dispatchId, outcome: 'succeeded', subject: 'a', body: 'b' },
+        NOW
+      ) as never
+    )
+    const twice = applyWorkerDone(
+      once.state,
+      { taskId, dispatchId, outcome: 'failed', subject: 'c', body: 'd' },
+      NOW
+    )
+    expect(twice.ok && twice.value).toBe('alreadyReported')
+    expect(twice.ok && twice.state.tasks[0].status).toBe('completed')
+  })
+  it('낡은 dispatch id로 온 보고는 거부한다', () => {
+    const { s, taskId } = seed()
+    const r = applyWorkerDone(
+      s,
+      { taskId, dispatchId: 'dsp_deadbeef', outcome: 'succeeded', subject: 'a', body: 'b' },
+      NOW
+    )
+    expect(r.ok).toBe(false)
+  })
+  it('실패 보고는 consecutiveFailures를 올리고 3회면 재시도를 막는다', () => {
+    let { s, taskId, dispatchId } = seed()
+    for (let i = 0; i < 3; i++) {
+      s = unwrap<unknown>(
+        applyWorkerDone(
+          s,
+          { taskId, dispatchId, outcome: 'failed', subject: 'x', body: 'y' },
+          NOW
+        ) as never
+      ).state
+      if (i < 2) {
+        const d = unwrap<{ id: string }>(
+          openDispatch(
+            s,
+            {
+              taskId,
+              provider: 'codex',
+              accountId: 'acc1',
+              sessionId: `sess${i + 2}`,
+              cwd: 'D:/p',
+              specPath: 'D:/p/orch/specs/x.md',
+              retryOf: dispatchId
+            },
+            NOW
+          ) as never
+        )
+        s = d.state
+        dispatchId = d.value.id
+      }
+    }
+    expect(s.tasks[0].consecutiveFailures).toBe(3)
+    const blocked = openDispatch(
+      s,
+      {
+        taskId,
+        provider: 'codex',
+        accountId: 'acc1',
+        sessionId: 'sessX',
+        cwd: 'D:/p',
+        specPath: 'D:/p/orch/specs/x.md',
+        retryOf: dispatchId
+      },
+      NOW
+    )
+    expect(blocked.ok).toBe(false)
+  })
+  it('성공 보고는 consecutiveFailures를 0으로 되돌린다', () => {
+    let { s, taskId, dispatchId } = seed()
+    s = unwrap<unknown>(
+      applyWorkerDone(s, { taskId, dispatchId, outcome: 'failed', subject: 'x', body: 'y' }, NOW) as never
+    ).state
+    const d = unwrap<{ id: string }>(
+      openDispatch(
+        s,
+        {
+          taskId,
+          provider: 'claude',
+          accountId: 'acc2',
+          sessionId: 'sess2',
+          cwd: 'D:/p',
+          specPath: 'D:/p/orch/specs/y.md',
+          retryOf: dispatchId
+        },
+        NOW
+      ) as never
+    )
+    const ok = unwrap<unknown>(
+      applyWorkerDone(
+        d.state,
+        { taskId, dispatchId: d.value.id, outcome: 'succeeded', subject: 'a', body: 'b' },
+        NOW
+      ) as never
+    )
+    expect(ok.state.tasks[0].consecutiveFailures).toBe(0)
+  })
+  it('세션 종료로 닫힌 낡은 dispatch로 지연 도착한 worker_done은 alreadyReported로 무시되고 Task 종단 상태를 탈취하지 않는다', () => {
+    const { s, taskId, dispatchId } = seed()
+    // 세션이 보고 없이 죽는다 — dispatchId는 endedAt만 있고 outcome은 없다
+    const closed = unwrap<unknown>(
+      closeDispatch(s, { sessionId: 'sess1', exitCode: 137 }, NOW) as never
+    )
+    // 살아있는 retry를 새로 연다
+    const retry = unwrap<{ id: string }>(
+      openDispatch(
+        closed.state,
+        {
+          taskId,
+          provider: 'codex',
+          accountId: 'acc1',
+          sessionId: 'sess2',
+          cwd: 'D:/p',
+          specPath: 'D:/p/orch/specs/x.md',
+          retryOf: dispatchId
+        },
+        NOW
+      ) as never
+    )
+    // 낡은 dispatchId(dispatch1)로 지연 도착한 worker_done — alreadyReported로 무시돼야 한다
+    const stale = applyWorkerDone(
+      retry.state,
+      { taskId, dispatchId, outcome: 'succeeded', subject: 'stale', body: 'stale result' },
+      NOW
+    )
+    expect(stale.ok && stale.value).toBe('alreadyReported')
+    // retry(살아있는 dispatch)의 진짜 보고는 여전히 받아들여져야 한다 — 낡은 보고가 종단을
+    // 선점하지 않았다
+    const real = unwrap<'accepted'>(
+      applyWorkerDone(
+        stale.ok ? stale.state : retry.state,
+        { taskId, dispatchId: retry.value.id, outcome: 'failed', subject: 'real', body: 'real result' },
+        NOW
+      ) as never
+    )
+    expect(real.state.tasks.find((t) => t.id === taskId)!.status).toBe('failed')
+    expect(real.state.tasks.find((t) => t.id === taskId)!.result).toBe('real result')
+  })
+})
+
+describe('ask / reply', () => {
+  it('질문에 답하면 answered와 answerBody가 채워진다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const q = unwrap<{ id: string }>(
+      createQuestion(s, { taskId, dispatchId, question: '어느 쪽?', options: ['a', 'b'] }, NOW) as never
+    )
+    const r = unwrap<'accepted'>(
+      applyReply(q.state, { messageId: q.value.id, body: 'a' }, NOW) as never
+    )
+    const msg = r.state.messages.find((m) => m.id === q.value.id)!
+    expect(msg.answered).toBe(true)
+    expect(msg.answerBody).toBe('a')
+  })
+  it('Dispatch당 미응답 질문은 1개만 허용한다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const q = unwrap<unknown>(
+      createQuestion(s, { taskId, dispatchId, question: 'q1' }, NOW) as never
+    )
+    const second = createQuestion(q.state, { taskId, dispatchId, question: 'q2' }, NOW)
+    expect(second.ok).toBe(false)
+  })
+  it('이미 답한 질문에 또 답하면 alreadyAnswered로 무시한다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const q = unwrap<{ id: string }>(
+      createQuestion(s, { taskId, dispatchId, question: 'q' }, NOW) as never
+    )
+    const once = unwrap<'accepted'>(
+      applyReply(q.state, { messageId: q.value.id, body: 'a' }, NOW) as never
+    )
+    const twice = applyReply(once.state, { messageId: q.value.id, body: 'b' }, NOW)
+    expect(twice.ok && twice.value).toBe('alreadyAnswered')
+    expect(twice.ok && twice.state.messages.find((m) => m.id === q.value.id)!.answerBody).toBe('a')
+  })
+  it('존재하지 않는 질문에 답하면 거부한다', () => {
+    const { s } = seed()
+    expect(applyReply(s, { messageId: 'msg_deadbeef', body: 'a' }, NOW).ok).toBe(false)
+  })
+  it('Dispatch가 닫히면 미응답 질문을 답변 없이 종결한다 — 메시지를 삭제하지 않는다', () => {
+    // 원래는 "폐기한다"(삭제) 였으나, 미ack Delivery의 messageIds가 이 id를 참조하고 있으면
+    // 삭제가 재생 배치를 비워버리는 결함으로 이어진다. 삭제 대신 답변 없이
+    // 종결(answered:true, answerBody:'')하는 것이 이제 계약이다.
+    const { s, taskId, dispatchId } = seed()
+    const q = unwrap<{ id: string }>(
+      createQuestion(s, { taskId, dispatchId, question: 'q' }, NOW) as never
+    )
+    const closed = unwrap<unknown>(
+      closeDispatch(q.state, { sessionId: 'sess1', exitCode: 1 }, NOW) as never
+    )
+    const msg = closed.state.messages.find((m) => m.id === q.value.id)
+    expect(msg).toBeDefined()
+    expect(msg!.answered).toBe(true)
+    expect(msg!.answerBody).toBe('')
+  })
+  it('세션 종료로 닫힌 dispatch에는 새 질문을 만들 수 없다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const closed = unwrap<unknown>(
+      closeDispatch(s, { sessionId: 'sess1', exitCode: 1 }, NOW) as never
+    )
+    const q = createQuestion(closed.state, { taskId, dispatchId, question: 'q' }, NOW)
+    expect(q.ok).toBe(false)
+  })
+})
+
+describe('closeDispatch — 세션 exit 반영', () => {
+  it('종료 코드 0이면 stopped, 아니면 failed로 표시한다', () => {
+    const a = seed()
+    const zero = unwrap<unknown>(
+      closeDispatch(a.s, { sessionId: 'sess1', exitCode: 0 }, NOW) as never
+    )
+    expect(zero.state.dispatches[0].workerState).toBe('stopped')
+
+    const b = seed()
+    const one = unwrap<unknown>(
+      closeDispatch(b.s, { sessionId: 'sess1', exitCode: 1 }, NOW) as never
+    )
+    expect(one.state.dispatches[0].workerState).toBe('failed')
+  })
+  it('Task를 자동으로 failed로 옮기지 않는다 — 증명할 수 없는 결과는 단정하지 않는다', () => {
+    const { s, taskId } = seed()
+    const closed = unwrap<unknown>(
+      closeDispatch(s, { sessionId: 'sess1', exitCode: 1 }, NOW) as never
+    )
+    expect(closed.state.tasks.find((t) => t.id === taskId)!.status).toBe('dispatched')
+  })
+  it('exit 사실을 status 메시지로 inbox에 남긴다', () => {
+    const { s } = seed()
+    const closed = unwrap<unknown>(
+      closeDispatch(s, { sessionId: 'sess1', exitCode: 137 }, NOW) as never
+    )
+    const msg = closed.state.messages.find((m) => m.type === 'status')!
+    expect(msg.body).toContain('137')
+  })
+  it('이미 닫힌 Dispatch면 null을 돌려주고 상태를 바꾸지 않는다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const done = unwrap<unknown>(
+      applyWorkerDone(
+        s,
+        { taskId, dispatchId, outcome: 'succeeded', subject: 'a', body: 'b' },
+        NOW
+      ) as never
+    )
+    const r = closeDispatch(done.state, { sessionId: 'sess1', exitCode: 0 }, NOW)
+    expect(r.ok && r.value).toBeNull()
+  })
+
+  describe('보고 없는 죽음도 서킷 브레이커에 센다', () => {
+    it('consecutiveFailures를 올린다 — status는 그대로다', () => {
+      const { s, taskId } = seed()
+      const closed = unwrap<unknown>(
+        closeDispatch(s, { sessionId: 'sess1', exitCode: 1 }, NOW) as never
+      )
+      const t = closed.state.tasks.find((x) => x.id === taskId)!
+      expect(t.consecutiveFailures).toBe(1)
+      expect(t.status).toBe('dispatched')
+    })
+
+    it('세션 종료로 닫힌 Dispatch 3개 뒤 --retry-of가 circuit break로 거부된다', () => {
+      // 카운트하지 않으면 Task가 dispatched에 남고 moveTask의 `t.status === to` 통과 덕에
+      // --retry-of가 몇 번이든 받아들여진다 — 막으려 한 무한 재시도다.
+      let { s, taskId, dispatchId } = seed()
+      for (let i = 1; i <= FAILURE_LIMIT; i++) {
+        const closed = unwrap<unknown>(
+          closeDispatch(s, { sessionId: `sess${i}`, exitCode: 1 }, NOW) as never
+        )
+        s = closed.state
+        expect(s.tasks.find((t) => t.id === taskId)!.consecutiveFailures).toBe(i)
+        if (i === FAILURE_LIMIT) break
+        const retried = unwrap<{ id: string }>(
+          openDispatch(
+            s,
+            {
+              taskId,
+              provider: 'codex',
+              accountId: 'acc1',
+              sessionId: `sess${i + 1}`,
+              cwd: 'D:/p',
+              specPath: 'D:/p/orch/specs/x.md',
+              retryOf: dispatchId
+            },
+            NOW
+          ) as never
+        )
+        s = retried.state
+        dispatchId = retried.value.id
+      }
+      const blocked = openDispatch(
+        s,
+        {
+          taskId,
+          provider: 'codex',
+          accountId: 'acc1',
+          sessionId: 'sess_last',
+          cwd: 'D:/p',
+          specPath: 'D:/p/orch/specs/x.md',
+          retryOf: dispatchId
+        },
+        NOW
+      )
+      expect(blocked.ok).toBe(false)
+      expect(!blocked.ok && blocked.error).toContain('circuit break')
+    })
+  })
+})
+
+describe('closeDispatch — limitResetsAt', () => {
+  it('limitResetsAt을 넘기면 Dispatch에 실리고 status 메시지가 한도 문구로 바뀐다', () => {
+    const { s } = seed()
+    const limitResetsAt = 1_700_000_000_000
+    const closed = unwrap<{ limitResetsAt?: number }>(
+      closeDispatch(s, { sessionId: 'sess1', exitCode: 1, limitResetsAt }, NOW) as never
+    )
+    expect(closed.value.limitResetsAt).toBe(limitResetsAt)
+    const msg = closed.state.messages.find((m) => m.type === 'status')!
+    expect(msg.subject).toBe('session ended at a usage limit')
+    expect(msg.body).toContain(new Date(limitResetsAt).toISOString())
+  })
+  it('넘기지 않으면 필드가 아예 없다', () => {
+    const { s } = seed()
+    const closed = unwrap<Record<string, unknown>>(
+      closeDispatch(s, { sessionId: 'sess1', exitCode: 1 }, NOW) as never
+    )
+    expect('limitResetsAt' in closed.value).toBe(false)
+  })
+  it('넘기지 않을 때 기존 subject·body가 그대로다', () => {
+    const { s } = seed()
+    const closed = unwrap<unknown>(
+      closeDispatch(s, { sessionId: 'sess1', exitCode: 1 }, NOW) as never
+    )
+    const msg = closed.state.messages.find((m) => m.type === 'status')!
+    expect(msg.subject).toBe('session ended without reporting')
+    expect(msg.body).toBe('exitCode=1. No worker_done was received.')
+  })
+  it('한도여도 Task의 status는 자동으로 바뀌지 않는다', () => {
+    // **status 불변만 단정한다**. 이 테스트의 본질은 "Task를 자동 실패 처리하지
+    // 않는다"이고 그것은 status 하나에 실려 있다. 원래는 updatedAt 불변도 함께 단정했는데,
+    // closeDispatch가 consecutiveFailures를 올리게 되면서(§8 "한도도 3회에 센다" — 안 올리면
+    // --retry-of가 무한히 통과한다) updatedAt도 함께 갱신된다: store의 TTL이 Run의 마지막 활동
+    // 시각을 updatedAt에서 파생하므로 갱신하는 것이 맞다. 그 둘 외의 필드는 여전히 불변이다.
+    const seeded = seed()
+    // 이전 시도가 남긴 값을 심는다 — 비어 있으면 "불변" 단정이 undefined === undefined로 공허해진다
+    const s: OrchState = {
+      ...seeded.s,
+      tasks: seeded.s.tasks.map((t) =>
+        t.id === seeded.taskId
+          ? { ...t, result: '이전 시도의 결과', filesModified: ['src/a.ts'] }
+          : t
+      )
+    }
+    const taskId = seeded.taskId
+    const before = s.tasks.find((t) => t.id === taskId)!
+    const closed = unwrap<unknown>(
+      closeDispatch(
+        s,
+        { sessionId: 'sess1', exitCode: 1, limitResetsAt: 1_700_000_000_000 },
+        NOW
+      ) as never
+    )
+    const after = closed.state.tasks.find((t) => t.id === taskId)!
+    expect(after.status).toBe(before.status)
+    expect(after.result).toBe('이전 시도의 결과')
+    expect(after.filesModified).toEqual(['src/a.ts'])
+    expect(after.deps).toBe(before.deps)
+  })
+})
+
+describe('Gate', () => {
+  it('열린 dispatch가 있으면 Gate 생성을 거부한다 — Gate는 진행 중인 워커를 막는 장치가 아니다', () => {
+    const { s, taskId } = seed() // seed()는 항상 열린 dispatch를 남긴다
+    const g = createGate(s, { taskId, question: '진행할까?' }, NOW)
+    expect(g.ok).toBe(false)
+  })
+  it('Gate를 만들면 Task가 blocked가 되고 dispatch를 막는다', () => {
+    // 열린 dispatch가 있으면 Gate 자체가 거부되므로(위 테스트), 아직 dispatch되지 않은
+    // (ready) Task로 준비한다 — seed()는 쓸 수 없다.
+    const run = unwrap<{ id: string }>(
+      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
+    )
+    const t = unwrap<{ id: string }>(
+      createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW) as never
+    )
+    const g = unwrap<{ id: string }>(
+      createGate(
+        t.state,
+        { taskId: t.value.id, question: '진행할까?', options: ['yes', 'no'] },
+        NOW
+      ) as never
+    )
+    expect(g.state.tasks.find((x) => x.id === t.value.id)!.status).toBe('blocked')
+    const blocked = openDispatch(
+      g.state,
+      {
+        taskId: t.value.id,
+        provider: 'codex',
+        accountId: 'acc1',
+        sessionId: 'sessY',
+        cwd: 'D:/p',
+        specPath: 'D:/p/orch/specs/z.md'
+      },
+      NOW
+    )
+    expect(blocked.ok).toBe(false)
+  })
+  it('gate-resolve가 Task를 ready로 되돌린다', () => {
+    const run = unwrap<{ id: string }>(
+      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
+    )
+    const t = unwrap<{ id: string }>(
+      createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW) as never
+    )
+    const g = unwrap<{ id: string }>(
+      createGate(t.state, { taskId: t.value.id, question: 'q' }, NOW) as never
+    )
+    const r = unwrap<unknown>(
+      resolveGate(g.state, { gateId: g.value.id, resolution: 'yes' }, NOW) as never
+    )
+    expect(r.state.gates[0].status).toBe('resolved')
+    expect(r.state.tasks.find((x) => x.id === t.value.id)!.status).toBe('ready')
+  })
+  it('실패한 Task는 Gate로 감쌀 수 있다 — 재시도할지 포기할지 사람에게 묻고, 풀리면 재시도까지 간다 (2026-08-04 판정)', () => {
+    const { s, taskId, dispatchId } = seed()
+    const failed = unwrap<'accepted'>(
+      applyWorkerDone(s, { taskId, dispatchId, outcome: 'failed', subject: 'x', body: 'y' }, NOW) as never
+    )
+    expect(failed.state.tasks.find((t) => t.id === taskId)!.status).toBe('failed')
+    // failed에는 열린 dispatch가 없으므로 createGate가 열린-dispatch 가드에 걸리지 않고 성공한다
+    const g = unwrap<{ id: string }>(
+      createGate(
+        failed.state,
+        { taskId, question: '재시도할까 포기할까?', options: ['retry', 'abandon'] },
+        NOW
+      ) as never
+    )
+    expect(g.state.tasks.find((t) => t.id === taskId)!.status).toBe('blocked')
+    const resolved = unwrap<unknown>(
+      resolveGate(g.state, { gateId: g.value.id, resolution: 'retry' }, NOW) as never
+    )
+    expect(resolved.state.tasks.find((t) => t.id === taskId)!.status).toBe('ready')
+    const retry = openDispatch(
+      resolved.state,
+      {
+        taskId,
+        provider: 'codex',
+        accountId: 'acc1',
+        sessionId: 'sess2',
+        cwd: 'D:/p',
+        specPath: 'D:/p/orch/specs/x.md',
+        retryOf: dispatchId
+      },
+      NOW
+    )
+    expect(retry.ok).toBe(true)
+  })
+
+  describe('gate-resolve가 deps를 뛰어넘지 않는다', () => {
+    /** A(pending) ← B(deps:[A]) 를 만들고 B에 Gate를 걸어 blocked로 둔다 */
+    const blockedWithPendingDep = (): { s: OrchState; gateId: string; a: string; b: string } => {
+      const run = unwrap<{ id: string }>(
+        createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
+      )
+      const a = unwrap<{ id: string }>(
+        createTask(run.state, { runId: run.value.id, title: 'A', spec: 's', deps: [] }, NOW) as never
+      )
+      const b = unwrap<{ id: string }>(
+        createTask(
+          a.state,
+          { runId: run.value.id, title: 'B', spec: 's', deps: [a.value.id] },
+          NOW
+        ) as never
+      )
+      // A는 deps가 없어 곧바로 ready다 — 아직 completed가 아니므로 B는 pending에 머문다
+      expect(b.state.tasks.find((t) => t.id === b.value.id)!.status).toBe('pending')
+      const g = unwrap<{ id: string }>(
+        createGate(b.state, { taskId: b.value.id, question: '진행할까?' }, NOW) as never
+      )
+      return { s: g.state, gateId: g.value.id, a: a.value.id, b: b.value.id }
+    }
+
+    it('deps가 아직 completed가 아니면 pending으로 풀린다 — ready가 아니다', () => {
+      // 무조건 ready로 옮기면 task-list --ready가 B를 보여주고 worker-start가 통과해
+      // 워커가 A의 산출물 없이 작업한다(DAG 순서 강제가 사라진다).
+      const { s, gateId, b } = blockedWithPendingDep()
+      const r = unwrap<unknown>(resolveGate(s, { gateId, resolution: 'yes' }, NOW) as never)
+      expect(r.state.tasks.find((t) => t.id === b)!.status).toBe('pending')
+      expect(r.state.tasks.filter((t) => t.status === 'ready').map((t) => t.id)).not.toContain(b)
+    })
+
+    it('그 뒤 A가 완료되면 B가 ready로 올라온다', () => {
+      const { s, gateId, a, b } = blockedWithPendingDep()
+      const resolved = unwrap<unknown>(resolveGate(s, { gateId, resolution: 'yes' }, NOW) as never)
+      const dispatched = unwrap<{ id: string }>(
+        openDispatch(
+          resolved.state,
+          {
+            taskId: a,
+            provider: 'codex',
+            accountId: 'acc1',
+            sessionId: 'sessA',
+            cwd: 'D:/p',
+            specPath: 'D:/p/orch/specs/a.md'
+          },
+          NOW
+        ) as never
+      )
+      const done = unwrap<'accepted'>(
+        applyWorkerDone(
+          dispatched.state,
+          { taskId: a, dispatchId: dispatched.value.id, outcome: 'succeeded', subject: 'x', body: 'y' },
+          NOW
+        ) as never
+      )
+      expect(done.state.tasks.find((t) => t.id === b)!.status).toBe('ready')
+    })
+  })
+})
+
+describe('createTask — deps 검증', () => {
+  it('존재하지 않는 dep을 거부한다', () => {
+    const run = unwrap<{ id: string }>(
+      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
+    )
+    const r = createTask(
+      run.state,
+      { runId: run.value.id, title: 't', spec: 's', deps: ['tsk_nope'] },
+      NOW
+    )
+    expect(r.ok).toBe(false)
+  })
+  it('자기 자신을 dep으로 두는 순환을 거부한다', () => {
+    const run = unwrap<{ id: string }>(
+      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
+    )
+    const a = unwrap<{ id: string }>(
+      createTask(run.state, { runId: run.value.id, title: 'a', spec: 's', deps: [] }, NOW) as never
+    )
+    // b -> a 는 정상
+    const b = unwrap<{ id: string; deps: string[] }>(
+      createTask(
+        a.state,
+        { runId: run.value.id, title: 'b', spec: 's', deps: [a.value.id] },
+        NOW
+      ) as never
+    )
+    // a 의 deps 를 b 로 만들려면 task-update 가 필요하고 그건 이 함수의 책임이 아니다.
+    // 여기서는 생성 시점에 이미 있는 Task 만 참조할 수 있으므로 순환이 원리적으로 불가능하다.
+    expect(b.value.deps).toEqual([a.value.id])
+  })
+})
+
+describe('openDispatch — retryOf·sessionId 검증', () => {
+  it('retryOf가 아직 열려 있는 dispatch를 가리키면 거부한다', () => {
+    const { s, taskId, dispatchId } = seed() // seed()의 dispatch는 아직 열려 있다
+    const r = openDispatch(
+      s,
+      {
+        taskId,
+        provider: 'codex',
+        accountId: 'acc1',
+        sessionId: 'sess2',
+        cwd: 'D:/p',
+        specPath: 'D:/p/orch/specs/x.md',
+        retryOf: dispatchId
+      },
+      NOW
+    )
+    expect(r.ok).toBe(false)
+  })
+  it('retryOf가 존재하지 않는 dispatch를 가리키면 거부한다', () => {
+    const { s, taskId } = seed()
+    const closed = unwrap<unknown>(
+      closeDispatch(s, { sessionId: 'sess1', exitCode: 1 }, NOW) as never
+    )
+    const r = openDispatch(
+      closed.state,
+      {
+        taskId,
+        provider: 'codex',
+        accountId: 'acc1',
+        sessionId: 'sess2',
+        cwd: 'D:/p',
+        specPath: 'D:/p/orch/specs/x.md',
+        retryOf: 'dsp_deadbeef'
+      },
+      NOW
+    )
+    expect(r.ok).toBe(false)
+  })
+  it('retryOf가 다른 Task 소속 dispatch를 가리키면 거부한다', () => {
+    const { s, dispatchId } = seed()
+    const run2 = unwrap<{ id: string }>(
+      createRun(s, { objective: 'o2', cwd: 'D:/p' }, NOW) as never
+    )
+    const t2 = unwrap<{ id: string }>(
+      createTask(run2.state, { runId: run2.value.id, title: 't2', spec: 's', deps: [] }, NOW) as never
+    )
+    const r = openDispatch(
+      t2.state,
+      {
+        taskId: t2.value.id,
+        provider: 'codex',
+        accountId: 'acc1',
+        sessionId: 'sess2',
+        cwd: 'D:/p',
+        specPath: 'D:/p/orch/specs/y.md',
+        retryOf: dispatchId // seed()의 Task 소속, t2 소속이 아니다
+      },
+      NOW
+    )
+    expect(r.ok).toBe(false)
+  })
+  it('sessionId가 이미 열린 dispatch에 쓰이고 있으면 거부한다', () => {
+    const { s, taskId } = seed() // sessionId 'sess1'이 이미 열려 있다
+    const run2 = unwrap<{ id: string }>(
+      createRun(s, { objective: 'o2', cwd: 'D:/p' }, NOW) as never
+    )
+    const t2 = unwrap<{ id: string }>(
+      createTask(run2.state, { runId: run2.value.id, title: 't2', spec: 's', deps: [] }, NOW) as never
+    )
+    // 다른 Task에 같은 sessionId로 dispatch를 열려는 시도 — 여전히 거부돼야 한다
+    const r = openDispatch(
+      t2.state,
+      {
+        taskId: t2.value.id,
+        provider: 'codex',
+        accountId: 'acc1',
+        sessionId: 'sess1',
+        cwd: 'D:/p',
+        specPath: 'D:/p/orch/specs/y.md'
+      },
+      NOW
+    )
+    expect(r.ok).toBe(false)
+    // taskId를 참조는 하지만 아무 상태도 바뀌지 않았음을 확인 (미사용 변수 경고 방지 겸 확인)
+    expect(s.tasks.find((x) => x.id === taskId)!.status).toBe('dispatched')
+  })
+})

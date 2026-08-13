@@ -8,6 +8,7 @@ import {
   OutputScanner,
   findWaitChoice,
   hasWaitChoiceLabel,
+  looksLikeChoicePrompt,
   maskLimitPhrase
 } from '../core/rolling/detect'
 import { RollCycle } from '../core/rolling/cycle'
@@ -105,6 +106,10 @@ interface Chain {
   rolling: boolean // the re-trigger guard while a roll is running
   awaitingReady: boolean // true from a respawn until the automatic prompt (auto-accepting trust is limited to this window too)
   trustSeen: boolean
+  /** The most recent stripped screen text. The automatic prompt's fallback reads it to see whether a
+   *  dialog is still waiting, and logs it when it types anyway — a trust prompt we fail to recognise
+   *  leaves no trace of its own, so without this the next miss is undiagnosable again. */
+  lastScreen: string
   waitTimer: ReturnType<typeof setTimeout> | null
   healthyTimer: ReturnType<typeof setTimeout> | null
   promptTimer: ReturnType<typeof setTimeout> | null
@@ -203,6 +208,7 @@ export class RollingCoordinator {
       rolling: false,
       awaitingReady: false, // the first session — the user answers the trust prompt themselves
       trustSeen: false,
+      lastScreen: '',
       waitTimer: null,
       healthyTimer: null,
       promptTimer: null,
@@ -298,6 +304,7 @@ export class RollingCoordinator {
       chain.idleHandled = false
     }
     const hit = chain.scanner.push(e.data)
+    chain.lastScreen = hit.text
     if (hit.trust && chain.awaitingReady && !chain.trustSeen) {
       // The trust prompt on a rolling respawn — the first account already approved this folder, so it is accepted automatically
       chain.trustSeen = true
@@ -736,6 +743,7 @@ export class RollingCoordinator {
       chain.lastOutputAt = this.now()
       chain.trustSeen = false
       chain.awaitingReady = true
+      chain.lastScreen = '' // kill wiped the screen — the old session's dialog must not gate the new one's prompt
       // The reference point of the replay grace. A new roll has to be able to report its grace again, so
       // the throttle is released too. The choice watch is dropped — kill removed the old screen, so that
       // watch has nothing to do with the new session.
@@ -827,7 +835,29 @@ export class RollingCoordinator {
         return
       }
       if (elapsed >= READY_FALLBACK_MS && !chain.trustSeen) {
-        // If statusline never appears and no trust prompt showed either, send the fallback
+        // If statusline never appears and no trust prompt showed either, send the fallback.
+        //
+        // But "we did not recognise a trust prompt" is not "no dialog is up". A dialog we failed to
+        // match swallows the carry-on text and turns the Enter that follows into an arbitrary menu
+        // press — and statusline is absent precisely while a modal holds the screen, so this fallback
+        // is guaranteed to fire in exactly that case. That happened: a folder-trust prompt whose
+        // wording was soft-wrapped went unmatched and the prompt was typed into it.
+        //
+        // So the screen is asked whether anything is waiting. If something is, we keep waiting and let
+        // the 120-second deadline publish 'stalled' — calling a person is the right failure here,
+        // because the alternative is sending input we cannot predict the effect of.
+        if (looksLikeChoicePrompt(chain.lastScreen)) {
+          this.deps.log(
+            `auto-prompt held — unrecognised dialog on screen session=${liveId} tail=${maskLimitPhrase(chain.lastScreen.slice(-400))}`
+          )
+          chain.promptTimer = setTimeout(() => void tick(), READY_POLL_MS)
+          return
+        }
+        // Logged with the screen so a missed dialog is diagnosable next time — a trust prompt that goes
+        // unmatched leaves no record of its own
+        this.deps.log(
+          `auto-prompt fallback — no statusline session=${liveId} tail=${maskLimitPhrase(chain.lastScreen.slice(-400))}`
+        )
         sendPrompt()
         return
       }

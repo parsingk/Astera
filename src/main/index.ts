@@ -113,6 +113,21 @@ function createWindow(): BrowserWindow {
   else win.loadFile(path.join(__dirname, '../renderer/index.html'))
   win.maximize()
 
+  // DevTools in development. Its usual accelerators (Ctrl/Cmd+Shift+I, F12) come from Electron's
+  // default application menu, and this app replaces that menu with null on win32 (see
+  // Menu.setApplicationMenu below) — so without this there is no way to open it at all, which has
+  // cost real debugging time. Bound on the window rather than through globalShortcut so it does not
+  // reach other applications, and only when unpackaged so a release build keeps them closed.
+  if (!app.isPackaged) {
+    win.webContents.on('before-input-event', (_e, input) => {
+      if (input.type !== 'keyDown') return
+      const devToolsKey =
+        input.key === 'F12' ||
+        ((input.control || input.meta) && input.shift && input.key.toLowerCase() === 'i')
+      if (devToolsKey) win.webContents.toggleDevTools()
+    })
+  }
+
   // Closing the window (X) always minimizes to the tray — whether or not sessions exist. The only
   // real quit path is the tray 'Quit' menu (app.quit): app.quit sets quitting=true in before-quit,
   // which is what lets a close through this guard.
@@ -125,19 +140,29 @@ function createWindow(): BrowserWindow {
   return win
 }
 
+/** The tray context menu template — pulled out so it can be rebuilt after a language change
+ *  (refreshTrayMenu) rather than only once at createTray time. */
+function trayMenuTemplate(win: BrowserWindow): Electron.MenuItemConstructorOptions[] {
+  return [
+    { label: t(core!.lang, 'common.trayOpen'), click: () => win.show() },
+    { label: t(core!.lang, 'common.trayQuit'), click: () => app.quit() }
+  ]
+}
+
 function createTray(win: BrowserWindow): void {
   tray = new Tray(TRAY_ICON)
   tray.setToolTip('Astera')
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: t(core!.lang, 'common.trayOpen'), click: () => win.show() },
-      { label: t(core!.lang, 'common.trayQuit'), click: () => app.quit() }
-    ])
-  )
+  tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(win)))
   // win32's convention is double-click; the macOS menu bar's is a single click. On mac, with
   // setContextMenu set, a click opens the menu, so 'click' isn't attached here — window restore is
   // handled by the Dock icon and the menu's 'Open' instead.
   if (process.platform !== 'darwin') tray.on('double-click', () => win.show())
+}
+
+/** Rebuilds the tray menu with the current language — called after settings.setLang so Open/Quit
+ *  do not stay in the old language until restart. */
+function refreshTrayMenu(win: BrowserWindow): void {
+  tray?.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(win)))
 }
 
 // Single-instance lock — if one is already running, the second instance quits without initializing
@@ -508,7 +533,8 @@ app.whenReady().then(async () => {
       onStarted: (h) => {
         orchRef = h
       }
-    }
+    },
+    () => refreshTrayMenu(win) // rebuild Open/Quit in the new language after settings.setLang
   )
   createTray(win)
 

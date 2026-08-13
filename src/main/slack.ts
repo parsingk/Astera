@@ -145,17 +145,40 @@ export interface SlackConfig {
   memberId: string | null
 }
 
+const EMPTY_CONFIG: SlackConfig = {
+  webhookUrl: null,
+  botToken: null,
+  channelId: null,
+  appToken: null,
+  memberId: null
+}
+
 const norm = (v: unknown): string | null =>
   typeof v === 'string' && v.trim() !== '' ? v.trim() : null
 
 /** Settings storage (userData/slack.json). A missing or corrupt file falls back to defaults — it does not
  *  block the app. Tokens never leave this file: they are not put in logs or error messages. */
+// The file is the only copy of the credentials, so the read paths distinguish "nothing stored" from
+// "could not be read" — see read() for why, and patch() for what depends on it.
 export class SlackConfigStore {
   constructor(private filePath: string) {}
 
-  async load(): Promise<SlackConfig> {
+  /** The stored values, or null when the file is there but could not be read — a state that is not the same
+   *  as "nothing is stored" and must not be collapsed into one. A missing file (ENOENT) is a fresh install
+   *  and gives defaults; an unparseable file gives defaults too, because that damage does not heal on a
+   *  retry and the settings screen has to stay able to overwrite it. Anything else — EPERM or EBUSY while
+   *  another process holds the file on Windows, EMFILE under fd pressure — is transient, and the values it
+   *  hides are still on disk. */
+  private async read(): Promise<SlackConfig | null> {
+    let text: string
     try {
-      const raw = JSON.parse(await fs.readFile(this.filePath, 'utf8')) as Record<string, unknown>
+      text = await fs.readFile(this.filePath, 'utf8')
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { ...EMPTY_CONFIG }
+      return null
+    }
+    try {
+      const raw = JSON.parse(text) as Record<string, unknown>
       return {
         webhookUrl: norm(raw.webhookUrl),
         botToken: norm(raw.botToken),
@@ -164,8 +187,14 @@ export class SlackConfigStore {
         memberId: norm(raw.memberId)
       }
     } catch {
-      return { webhookUrl: null, botToken: null, channelId: null, appToken: null, memberId: null }
+      return { ...EMPTY_CONFIG }
     }
+  }
+
+  /** Reading is deliberately forgiving: an unreadable file leaves Slack looking unconfigured rather than
+   *  keeping the app from starting. Writers must not inherit that forgiveness — see patch(). */
+  async load(): Promise<SlackConfig> {
+    return (await this.read()) ?? { ...EMPTY_CONFIG }
   }
 
   /** Returns the normalised value — so the caller does not have to write and then read it back. */
@@ -188,9 +217,18 @@ export class SlackConfigStore {
    *  the caller needs no separate "re-read after saving".
    *
    *  The settings modal now sends all five fields, but patch is kept — partial updates have to work so that
-   *  a future caller touching a single field leaves the rest alive. */
+   *  a future caller touching a single field leaves the rest alive.
+   *
+   *  Merging is only safe when the current values are actually known. load()'s all-null fallback would turn
+   *  a failed read into "nothing was stored", and one save later the tokens on disk are gone — so a read
+   *  failure throws here instead, leaving the file untouched. The save fails visibly and the values survive
+   *  to be read on the next attempt. */
   async patch(partial: Partial<SlackConfig>): Promise<SlackConfig> {
-    const current = await this.load()
+    const current = await this.read()
+    if (!current)
+      throw new Error(
+        `slack.json could not be read; refusing to save over values that may still be there: ${this.filePath}`
+      )
     return this.save({
       webhookUrl: partial.webhookUrl !== undefined ? partial.webhookUrl : current.webhookUrl,
       botToken: partial.botToken !== undefined ? partial.botToken : current.botToken,

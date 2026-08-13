@@ -1,0 +1,82 @@
+import { describe, it, expect } from 'vitest'
+import { groupRowsOf, nextCursor, type SelectItem } from './select'
+
+const it_ = (value: string, group?: string): SelectItem => ({ value, label: value, group })
+
+describe('nextCursor', () => {
+  it('아래로 한 칸 움직인다', () => {
+    expect(nextCursor(0, 3, 1)).toBe(1)
+  })
+
+  it('마지막에서 아래로 가면 처음으로 감싼다', () => {
+    expect(nextCursor(2, 3, 1)).toBe(0)
+  })
+
+  it('처음에서 위로 가면 마지막으로 감싼다', () => {
+    // 음수 나머지를 그대로 쓰면 -1이 되어 아무 항목도 가리키지 못한다
+    expect(nextCursor(0, 3, -1)).toBe(2)
+  })
+
+  it('항목이 없으면 0에 머문다 — 0으로 나누지 않는다', () => {
+    expect(nextCursor(0, 0, 1)).toBe(0)
+    expect(nextCursor(0, 0, -1)).toBe(0)
+  })
+
+  it('항목이 하나면 항상 그 항목이다', () => {
+    expect(nextCursor(0, 1, 1)).toBe(0)
+    expect(nextCursor(0, 1, -1)).toBe(0)
+  })
+
+  it('범위를 벗어난 커서에서도 유효한 값을 낸다', () => {
+    // 목록이 줄어든 뒤 커서가 남아 있는 경우 — 렌더가 빈 항목을 짚지 않아야 한다
+    expect(nextCursor(9, 3, 1)).toBe(1)
+    expect(nextCursor(-4, 3, 1)).toBe(0)
+  })
+})
+
+describe('groupRowsOf', () => {
+  it('그룹이 없으면 제목을 넣지 않는다', () => {
+    const rows = groupRowsOf([it_('a'), it_('b')])
+    expect(rows.map((r) => r.kind)).toEqual(['option', 'option'])
+  })
+
+  it('그룹이 바뀌는 지점마다 제목을 넣는다', () => {
+    const rows = groupRowsOf([it_('a', '원격'), it_('b', '원격'), it_('c', '로컬')])
+    expect(rows.map((r) => (r.kind === 'group' ? `#${r.label}` : r.item.value))).toEqual([
+      '#원격',
+      'a',
+      'b',
+      '#로컬',
+      'c'
+    ])
+  })
+
+  it('그룹 없는 항목이 앞에 오고 그 뒤에 그룹이 시작될 수 있다', () => {
+    // 브랜치 선택의 모양 — '현재 브랜치'는 그룹 밖에 있고 그 뒤로 원격·로컬이 온다
+    const rows = groupRowsOf([it_('develop'), it_('origin/main', '원격'), it_('main', '로컬')])
+    expect(rows.map((r) => (r.kind === 'group' ? `#${r.label}` : r.item.value))).toEqual([
+      'develop',
+      '#원격',
+      'origin/main',
+      '#로컬',
+      'main'
+    ])
+  })
+
+  it('같은 그룹이 떨어져 다시 나오면 제목도 다시 넣는다', () => {
+    // 정렬을 신뢰하고 그대로 그린다 — 목록을 재배치하지 않는다
+    const rows = groupRowsOf([it_('a', 'X'), it_('b', 'Y'), it_('c', 'X')])
+    expect(rows.filter((r) => r.kind === 'group').length).toBe(3)
+  })
+
+  it('option 행은 항목의 인덱스를 그대로 들고 있다 — 커서가 이 인덱스를 쓴다', () => {
+    const items = [it_('a', '원격'), it_('b', '로컬')]
+    const rows = groupRowsOf(items)
+    const opts = rows.flatMap((r) => (r.kind === 'option' ? [r.index] : []))
+    expect(opts).toEqual([0, 1])
+  })
+
+  it('빈 목록은 빈 행', () => {
+    expect(groupRowsOf([])).toEqual([])
+  })
+})

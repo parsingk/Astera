@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Account, CliStatus, HistoryEntry, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionUsage, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
-import type { MessageKey } from '../../core/i18n'
+import type { Lang, MessageKey } from '../../core/i18n'
+import { CATALOGS, LANGS } from '../../core/i18n'
 import logoUrl from './assets/logo.png'
 import { AccountPanel } from './components/AccountPanel'
 import { AccountSettings } from './components/AccountSettings'
 import { HistorySettings } from './components/HistorySettings'
 import { HistoryBrowser } from './components/HistoryBrowser'
 import { Select } from './components/Select'
-import { FileTabs, type FileTab } from './components/FileTabs'
+import { type FileTab } from './components/WorkbenchTabs'
 import { FileEditor } from './components/FileEditor'
+import type { EditorState, StateEffect } from '@codemirror/state'
+import { EditorStateCache } from './lib/editorStateCache'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { WorktreePanel } from './components/WorktreePanel'
@@ -21,7 +24,7 @@ import { TerminalFontSettings } from './components/TerminalFontSettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import type { RunConfig, RunStatus, TerminalBuffer } from '../../core/types'
 import { slackMode } from '../../core/slack/ready'
-import { findActionForEvent, resolveBindings, type Bindings } from '../../core/keys/binding'
+import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
 import {
   MIN_CHECKING_MS,
@@ -30,7 +33,7 @@ import {
   shouldNotifyDownloaded,
   showChecking
 } from '../../core/update/checkFeedback'
-import { classifyExternalChange } from '../../core/files/edit'
+import { applyEol, classifyExternalChange, detectEol, toLf, type Eol } from '../../core/files/edit'
 import { isSubPath, rebasePath } from '../../core/files/ops'
 import { parentDir } from '../../core/files/paths'
 import type { UndoEntry } from '../../core/files/undo'
@@ -48,11 +51,11 @@ import {
   createGroup,
   findNeighbor,
   firstLeaf,
-  groupOfSession,
+  groupOfTab,
   leafOf,
   moveTab,
   removeTab,
-  replaceSessionId,
+  replaceTabId,
   setRatio,
   splitAndMove,
   unsplit,
@@ -61,7 +64,8 @@ import {
   type PaneDir,
   type PaneNode
 } from '../../core/panes/tree'
-import { placeSession } from '../../core/panes/place'
+import { fileTab, parseTab, sessionTab } from '../../core/panes/tabId'
+import { placeTab } from '../../core/panes/place'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
 
@@ -150,10 +154,14 @@ function UpdateIndicator({ update }: { update: UpdateStatus | null }): React.JSX
 
 function Titlebar({
   isMax,
-  update
+  update,
+  runSlot
 }: {
   isMax: boolean
   update: UpdateStatus | null
+  /** 타이틀바 줄에 함께 놓이는 것 — 지금은 실행 구성 툴바다. 프롭 열넷을 내려보내는 대신 슬롯으로
+   *  받아, 타이틀바는 무엇이 들어오는지 모른 채 자리만 내준다 */
+  runSlot?: React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
   // On macOS, window controls are handled by the OS traffic-light buttons. Drawing our own controls
@@ -169,6 +177,7 @@ function Titlebar({
         <img className="tb-logo" src={logoUrl} alt="" />
         <span className="tb-name">Astera</span>
       </div>
+      {runSlot}
       <UpdateIndicator update={update} />
       {!isMac && (
         <div className="tb-controls" onDoubleClick={(e) => e.stopPropagation()}>
@@ -266,8 +275,12 @@ function UsageChip({
   )
 }
 
+/** The value the "System" row carries. Empty string, because Select keys rows by string and null is
+ *  not one — it is mapped back to null on the way out. Same convention as TerminalFontSettings. */
+const SYSTEM_LANG = ''
+
 export default function App(): React.JSX.Element {
-  const { t, lang, setLang } = useI18n()
+  const { t, lang, storedLang, systemLang, setLang } = useI18n()
   const [accounts, setAccounts] = useState<Account[]>([])
   // Unregistered config dirs, account-shaped, for history display only. Deliberately a separate state
   // from `accounts`: mixed in, NewSessionDialog would offer them as spawn targets and AccountPanel /
@@ -275,17 +288,28 @@ export default function App(): React.JSX.Element {
   // that cannot authenticate. Only HistoryBrowser and ResumeDialog receive them.
   const [ghostAccounts, setGhostAccounts] = useState<Account[]>([])
   const [sessions, setSessions] = useState<SessionInfo[]>([])
-  const [activeFileId, setActiveFileId] = useState<string | null>(null) // the active file tab in explorer mode
   // The pane layout tree. It replaces the old single split-slot state — up to 4 panes.
   const [layout, setLayout] = useState<PaneNode | null>(null)
   const [activePaneId, setActivePaneId] = useState<string | null>(null)
   // The session whose tab is being dragged (for PaneGrid's drop preview)
-  const [dragSessionId, setDragSessionId] = useState<string | null>(null)
+  const [dragTabId, setDragTabId] = useState<string | null>(null)
   // Position of the tab context menu
-  const [tabMenu, setTabMenu] = useState<{ sessionId: string; x: number; y: number } | null>(null)
-  // The session the active pane is showing. Derived from the tree so existing code that reads this value can stay as it is
-  const activeSessionId =
-    layout && activePaneId ? (leafOf(layout, activePaneId)?.activeSessionId ?? null) : null
+  const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null)
+  // 지금 보고 있는 탭은 트리가 정한다 — 활성 페인의 활성 탭. 두 종류가 한 트리에 있으므로 별도의
+  // activeTabId 상태를 두면 트리와 어긋난다(다른 페인의 탭을 클릭하거나 페인 포커스를 옮기는 순간
+  // 갈라진다). 파일 탭 id는 전부터 `file:<path>` 형식이었으므로 파일 관련 코드는 그대로 쓴다
+  const activeTabId = (layout && activePaneId ? leafOf(layout, activePaneId)?.activeTabId : null) ?? null
+  const activeTab = activeTabId ? parseTab(activeTabId) : null
+  /** 활성 탭이 파일일 때만 그 id */
+  const activeFileId = activeTab?.kind === 'file' ? activeTabId : null
+  const activeSessionId = activeTab?.kind === 'session' ? activeTab.id : null
+  // 활성 탭이 파일일 수 있게 되면서 "지금 보고 있는 것"과 "작업 중인 세션"이 갈라졌다. 세션에 딸린
+  // 표시(상태 바, 사용량 폴링)는 마지막으로 활성이었던 세션 탭을 따른다 — 파일을 읽는 동안 상태 바가
+  // 비고 컨텍스트·한도 칩이 사라지지 않게. 파일 트리 루트는 여기서 나오지 않고 활성 탭에서 나온다.
+  // 렌더 중 갱신은 이 파일의 다른 ref들과 같은 관례이고, 세션이 사라졌는지는 아래 `active`의
+  // sessions 조회가 판정하므로 여기서 따로 청소하지 않는다.
+  const lastSessionIdRef = useRef<string | null>(null)
+  if (activeSessionId) lastSessionIdRef.current = activeSessionId
   const [showNew, setShowNew] = useState(false)
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null) // prefill for WorktreePanel's 'start session'
   const [cli, setCli] = useState<{ claude: CliStatus; codex: CliStatus } | null>(null)
@@ -306,9 +330,18 @@ export default function App(): React.JSX.Element {
   const [keyOverrides, setKeyOverrides] = useState<Record<string, string[]>>({})
   const bindingsRef = useRef<Bindings>(resolveBindings({}, ACTIONS))
   bindingsRef.current = resolveBindings(keyOverrides, ACTIONS)
+  /** 레일의 탐색기 버튼 툴팁. 사용자가 키를 바꿨으면 바꾼 키가 나와야 하므로 기본값이 아니라 해석된
+   *  바인딩에서 읽는다. 그 액션의 키를 모두 지운 사용자에게는 이름만 남는다 */
+  const explorerChord = bindingsRef.current['explorer.toggleMode']?.[0]
+  const explorerShortcutLabel = explorerChord
+    ? `${t('explorer.rail.toggle')} (${formatChord(explorerChord)})`
+    : t('explorer.rail.toggle')
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  const [explorerOpen, setExplorerOpen] = useState(false) // the file explorer toggle
-  const [explorerPin, setExplorerPin] = useState<string | null>(null) // the pinned root when entering from history
+  const [explorerOpen, setExplorerOpen] = useState(false)
+  // 키 핸들러는 []로 한 번만 등록되어 첫 렌더의 클로저를 붙잡는다. toggleExplorer 가 렌더 값을 읽으면
+  // 단축키가 늘 같은 방향으로만 계산되므로, 최신 값을 이 ref 로 읽는다(이 파일의 다른 ref 들과 같은 이유)
+  const explorerOpenRef = useRef(explorerOpen)
+  explorerOpenRef.current = explorerOpen // the file explorer toggle
   const [showSettings, setShowSettings] = useState(false)
   const [settingsTab, setSettingsTab] = useState<
     'general' | 'accounts' | 'info' | 'shortcuts' | 'slack' | 'worktree' | 'history'
@@ -335,8 +368,13 @@ export default function App(): React.JSX.Element {
   const [busy, setBusy] = useState<Record<string, boolean>>({}) // whether each session is working — the tab spinner
   const [fileTabs, setFileTabs] = useState<FileTab[]>([]) // file viewer tabs
   interface FileBuffer {
+    /** 항상 LF다. CodeMirror가 문서를 LF로 정규화하므로 버퍼도 같은 모양이어야 에디터 상태와 비교되고
+     *  재사용된다. 디스크의 줄바꿈은 eol에 따로 들고 있다가 쓸 때 되돌린다 */
     content: string
     savedContent: string
+    /** 이 파일이 디스크에서 쓰는 줄바꿈. 저장할 때 되돌려 주지 않으면 CRLF 파일이 첫 저장에 LF로 바뀌고
+     *  git에는 전 줄이 변경으로 잡힌다 */
+    eol: Eol
     readOnly: boolean
     loading: boolean
     error: string | null
@@ -372,10 +410,12 @@ export default function App(): React.JSX.Element {
   modalOpenRef.current = showNew || showSettings || runModalOpen
   const fileTabsRef = useRef(fileTabs)
   fileTabsRef.current = fileTabs
+  // 탭 순환이 쓰는 것 — 클릭과 같은 경로를 타야 종류에 상관없이 같은 일이 일어난다
+  const selectWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
   const fileBuffersRef = useRef(fileBuffers) // keeps the external-change handler from going stale
   fileBuffersRef.current = fileBuffers
-  const explorerOpenRef = useRef(explorerOpen)
-  explorerOpenRef.current = explorerOpen
+  // 파일별 에디터 상태 캐시. FileEditor보다 오래 살아야 하므로 여기서 소유한다 (editorStateCache.ts의 주석)
+  const editorCacheRef = useRef(new EditorStateCache())
   // onKey is registered once at mount, so values and callbacks recreated on every render are read through refs
   const tRef = useRef(t)
   tRef.current = t
@@ -400,36 +440,21 @@ export default function App(): React.JSX.Element {
   // When Ctrl+\ had no spare session and opened the new-session dialog instead, the split goes in this
   // direction once creation succeeds. Cancelling the dialog discards it, so no empty pane is left.
   const pendingSplitRef = useRef<PaneDir | null>(null)
-  // Even while a file tab is active, the explorer keeps the project of the last active session.
-  const lastSessionIdRef = useRef<string | null>(null)
-  // Preserves tree expansion and cache even when toggling the explorer unmounts FileExplorer
-  const explorerTreeRef = useRef<ExplorerTreeState | null>(null)
+  // Per-root tree snapshots. Toggling the explorer unmounts FileExplorer, and the tree root is about to
+  // follow the active tab, so it will change far more often than it does today — a map keyed by root
+  // means each project's expansion comes back with it instead of collapsing on every switch.
+  const explorerTreesRef = useRef<Map<string, ExplorerTreeState>>(new Map())
+  // The clipboard exists precisely to cross project boundaries, so it is not kept inside the per-root
+  // map above — it is its own ref so pasting across projects keeps working.
+  const explorerClipboardRef = useRef<ExplorerTreeState['clipboard']>(null)
   // The Ctrl+Z undo journal. It is deliberately not inside ExplorerTreeState — that holds a per-root
   // tree snapshot and is rightly cleared on every root change (the [root] effect in FileExplorer),
   // whereas the journal's lifetime differs (it has to survive an explorer toggle, and is cleared
   // separately on a full close — see closeExplorer below).
   const explorerUndoRef = useRef<UndoEntry[]>([])
 
-  /** Brings a session onto the screen. Thanks to invariant 1 every session is in some group, so all
-   *  this does is activate that group and make the session that group's active tab. When the layout is
-   *  empty, a single group is created. StrictMode can invoke an updater twice, so setActivePaneId and
-   *  createGroup are never called inside the setLayout callback. */
-  const showSession = (sessionId: string): void => {
-    const cur = layoutRef.current
-    if (!cur) {
-      const g = createGroup(sessionId)
-      setLayout(g)
-      setActivePaneId(g.id)
-      return
-    }
-    const act = activateTab(cur, sessionId)
-    if (!act) return
-    setLayout(act.root)
-    setActivePaneId(act.paneId)
-  }
-  // A ref so onKey (useEffect([])) can call the latest showSession without a stale closure
-  const showSessionRef = useRef(showSession)
-  showSessionRef.current = showSession
+  // showSession(sessionId)은 사라졌다 — 탭을 화면에 올리는 경로가 종류를 가리지 않는 selectWorkbenchTab
+  // 하나로 합쳐졌고, 그것이 유일한 호출자였다. 세션이 없는 상태에서 새로 만드는 경로는 place()가 맡는다.
 
   useEffect(() => {
     void window.api.accounts.list().then(setAccounts)
@@ -442,11 +467,11 @@ export default function App(): React.JSX.Element {
       if (list.length === 0) return
       // Every session belongs to exactly one group (invariant 1) — all re-adopted sessions go into the
       // first group, and a running session (or the first one, if none) becomes the active tab
-      const g = createGroup(list[0].id)
+      const g = createGroup(sessionTab(list[0].id))
       let root: PaneNode = g
-      for (const s of list.slice(1)) root = addTab(root, g.id, s.id)
+      for (const s of list.slice(1)) root = addTab(root, g.id, sessionTab(s.id))
       const wanted = (list.find((s) => s.status === 'running') ?? list[0]).id
-      const act = activateTab(root, wanted)
+      const act = activateTab(root, sessionTab(wanted))
       if (!act) return
       setLayout(act.root)
       setActivePaneId(act.paneId)
@@ -461,13 +486,13 @@ export default function App(): React.JSX.Element {
     // Receives sessions main created on its own (orchestration workers) as tabs. The user path builds a
     // tab from the return value of sessions.spawn, but the coordinator path creates the session inside
     // main so that return value never reaches here — this event is the only channel.
-    // Placement uses the same place() as spawn but with background=true: placeSession drops it in as a
+    // Placement uses the same place() as spawn but with background=true: placeTab drops it in as a
     // new tab of the active group (intoGroupBackground in core/panes/place.ts) without making it the
     // active tab.
     const offCreated = window.api.on('session:created', (info) => {
       // A session we already know about does nothing — right after a reload, the sessions.list()
       // re-adoption above can overlap with this event. **This is not the guard that prevents a
-      // duplicate tab**: intoGroupBackground in place.ts filters on its first line with groupOfSession
+      // duplicate tab**: intoGroupBackground in place.ts filters on its first line with groupOfTab
       // and makes the second placement a no-op. What this guard buys is not triggering the setSessions
       // and setLayout re-render that comes along with that no-op.
       if (sessionsRef.current.some((s) => s.id === info.id)) return
@@ -627,14 +652,14 @@ export default function App(): React.JSX.Element {
         toggleExplorer()
         return
       }
-      // Closing a file tab — explorer mode only, same as closing a browser tab. When dirty,
-      // closeFileTab raises a confirmation modal. It is not intercepted in session mode or while xterm
-      // has focus (the Run panel in explorer mode) — in a terminal, Ctrl+W deletes the previous word,
-      // which is needed while typing to Claude (see yieldsToTerminal above).
+      // Closing a file tab, same as closing a browser tab. When dirty, closeFileTab raises a
+      // confirmation modal. The only condition is that the active tab is a file — a file tab lives in a
+      // pane now, so whether the explorer sidebar is showing says nothing about it. It is still not
+      // intercepted while xterm has focus — in a terminal, Ctrl+W deletes the previous word, which is
+      // needed while typing to Claude (see yieldsToTerminal above).
       // closeFileTab is recreated on every render, but its body is all refs and setters, so it works
       // against the latest state even when stale (the same convention as toggleExplorer above).
       if (action === 'explorer.closeFileTab') {
-        if (!explorerOpenRef.current) return
         const id = activeFileIdRef.current
         if (!id) return // no file tab is open — unlike a browser, this does not close the window
         e.preventDefault()
@@ -646,7 +671,6 @@ export default function App(): React.JSX.Element {
       // Pane splitting — by default Ctrl+\ to the right, Ctrl+Shift+\ below. The same place VS Code
       // puts them. Neither the Claude Code nor the Codex TUI uses Ctrl+\, so terminal input is unaffected.
       if (action === 'pane.splitRight' || action === 'pane.splitDown') {
-        if (explorerOpenRef.current) return // explorer mode has no concept of panes
         e.preventDefault()
         e.stopPropagation()
         if (e.repeat) return
@@ -656,11 +680,13 @@ export default function App(): React.JSX.Element {
           toast.info(tRef.current('session.pane.maxReached'))
           return
         }
-        // With 2 or more tabs in the active group, the active tab moves into a new group
+        // With 2 or more tabs in the active group, the active tab moves into a new group — whichever
+        // kind it is. A file on one side and a session on the other is the arrangement this keyboard
+        // path exists for, so the tab id goes to the tree unread.
         const target =
           cur && ((activePaneIdRef.current && leafOf(cur, activePaneIdRef.current)) || firstLeaf(cur))
-        if (target && target.sessionIds.length >= 2) {
-          splitActiveRef.current(dir, false, target.activeSessionId)
+        if (target && target.tabIds.length >= 2) {
+          splitActiveRef.current(dir, false, target.activeTabId)
           return
         }
         // With only one tab, splitting would change nothing, so a new session is created first —
@@ -677,23 +703,14 @@ export default function App(): React.JSX.Element {
       const focusMove = action.startsWith('pane.focus')
       const delta = action === 'sessionTab.prev' || action === 'pane.focusLeft' || action === 'pane.focusUp' ? -1 : 1
       const vertical = action === 'pane.focusUp' || action === 'pane.focusDown'
-      // Ignored while a normal input field — not a terminal — has focus (preserves its own Ctrl+Shift+arrow selection)
-      if (editable && !inXterm) return
-      // Tab cycling: only the tabs of the current mode
-      if (explorerOpenRef.current) {
-        // Explorer mode — cycle file tabs
-        const ids = fileTabsRef.current.map((t) => t.id)
-        if (ids.length < 2) return
-        const cur = activeFileIdRef.current
-        const i = cur ? ids.indexOf(cur) : -1
-        if (i < 0) return
-        e.preventDefault()
-        e.stopPropagation()
-        if (e.repeat) return
-        setActiveFileId(ids[(i + delta + ids.length) % ids.length])
-        return
-      }
-      // Session mode — with Shift, move focus to a neighbouring group; otherwise cycle tabs within the
+      // Ignored while a normal input field — not a terminal — has focus (preserves its own Ctrl+Shift+arrow selection).
+      // Tab cycling is the exception inside our own editor: the tab bar is reachable from the terminal
+      // but would otherwise be unreachable from the editor, which is where you sit while reading a file.
+      // The exception is scoped to .cm-editor rather than to every input, so a rebind onto an arrow chord
+      // still leaves a settings field's own selection alone. Same shape as explorer.toggleMode's exception.
+      const tabCycle = action === 'sessionTab.prev' || action === 'sessionTab.next'
+      if (editable && !inXterm && !(tabCycle && focusEl?.closest('.cm-editor'))) return
+      // With Shift, move focus to a neighbouring group; otherwise cycle tabs within the
       // active group. Global session cycling is gone: sessions are scattered across groups, so there is
       // no such thing as a "global order". To reach a session in another group, move groups with
       // Ctrl+Shift+arrow and pick the tab with Ctrl+PageUp/Down (the same division of labour as
@@ -716,14 +733,16 @@ export default function App(): React.JSX.Element {
       if (vertical) return // unsplit, there is no cycling up or down
       // Unsplit, there is only one group, so this effectively cycles every session — the same as it always felt
       const group = cur && ((curPane && leafOf(cur, curPane)) || firstLeaf(cur))
-      if (!group || group.sessionIds.length < 2) return
-      const i = group.sessionIds.indexOf(group.activeSessionId)
+      if (!group || group.tabIds.length < 2) return
+      const i = group.tabIds.indexOf(group.activeTabId)
       if (i < 0) return
       e.preventDefault()
       e.stopPropagation()
       if (e.repeat) return
-      const n = group.sessionIds.length
-      showSessionRef.current(group.sessionIds[(i + delta + n) % n])
+      const n = group.tabIds.length
+      // 종류를 가리지 않고 그 페인의 탭 줄에 그려진 순서대로 돈다 — 파일 탭과 세션 탭 사이에 경계가
+      // 없다. 클릭과 같은 경로(selectWorkbenchTab)를 타야 세션 탭을 지날 때 활성 세션도 함께 맞춰진다
+      selectWorkbenchTabRef.current(group.tabIds[(i + delta + n) % n])
     }
     window.addEventListener('keydown', onKey, true) // capture
     return () => window.removeEventListener('keydown', onKey, true)
@@ -735,7 +754,9 @@ export default function App(): React.JSX.Element {
       sessionBus.discard(oldSessionId)
       setSessions((prev) => prev.map((s) => (s.id === oldSessionId ? info : s)))
       // Swaps only the id while keeping the tab's position, order, and active state — the same function as a restart
-      setLayout((cur) => (cur ? replaceSessionId(cur, oldSessionId, info.id) : cur))
+      setLayout((cur) =>
+        cur ? replaceTabId(cur, sessionTab(oldSessionId), sessionTab(info.id)) : cur
+      )
       setRollStates((prev) => {
         const { [oldSessionId]: _dropped, ...rest } = prev
         return rest
@@ -798,17 +819,19 @@ export default function App(): React.JSX.Element {
     return off
   }, [])
 
-  /** Places a new session. Which group it goes into is decided by placeSession, a pure function in core
+  /** Places a new session. Which group it goes into is decided by placeTab, a pure function in core
    *  (covering four cases: a restart swap, a reserved split, an already-open session, and the active
    *  group), and all this does is move that result into state.
    *  A null paneId leaves the active pane alone — a restart merely inherits the tab's position.
    *  StrictMode can invoke an updater twice, so nothing is computed inside the setLayout callback. */
   const place = (cur: PaneNode | null, sessionId: string, splitDir?: PaneDir | null,
     replaces?: string | null, background?: boolean): void => {
-    const res = placeSession(cur, sessionId, {
+    const res = placeTab(cur, sessionTab(sessionId), {
       activePaneId: activePaneIdRef.current,
       splitDir,
-      replaces,
+      // 트리에 담기는 값이 탭 id이므로 교체 대상도 같은 형식으로 감싼다 — 날 세션 id를 넘기면
+      // 트리에서 찾지 못해 조용히 일반 배치로 떨어지고, 탭이 자기 자리를 잃는다
+      replaces: replaces ? sessionTab(replaces) : replaces,
       background
     })
     setLayout(res.root)
@@ -897,7 +920,7 @@ export default function App(): React.JSX.Element {
       if (gone) {
         const cur = layoutRef.current
         if (cur && !sessionsRef.current.some((s) => s.id === gone)) {
-          const next = removeTab(cur, gone)
+          const next = removeTab(cur, sessionTab(gone))
           if (next) {
             const p = activePaneIdRef.current
             setActivePaneId(p && leafOf(next, p) ? p : firstLeaf(next).id)
@@ -922,19 +945,40 @@ export default function App(): React.JSX.Element {
   // Opening a file tab: clicking the same path again focuses the existing tab (VS Code's behaviour).
   // The buffer starts as loading and gets filled by files.read.
   const openFile = (path: string): void => {
-    const id = `file:${path}`
+    const id = fileTab(path)
     if (fileTabsRef.current.some((t) => t.id === id)) {
-      setActiveFileId(id)
+      selectWorkbenchTabRef.current(id)
       return
     }
+    const root = explorerRootRef.current
+    if (!root) return // 트리가 없는 상태에서는 파일을 열 수 없다 — 열 수단 자체가 트리다
     const title = path.split(/[\\/]/).pop() || path
-    setFileTabs((prev) => [...prev, { id, path, title }])
-    setActiveFileId(id)
-    setFileBuffers((prev) => ({ ...prev, [id]: { content: '', savedContent: '', readOnly: false, loading: true, error: null, conflict: false } }))
+    setFileTabs((prev) => [...prev, { id, path, title, projectRoot: root }])
+    // 파일 탭도 세션 탭과 같은 트리에 들어간다 — 활성 페인의 새 탭으로 열린다. 세션을 놓을 때와 같은
+    // 함수를 쓰므로 배치 규칙이 한 벌뿐이다. StrictMode 대비로 setLayout 콜백 밖에서 계산한다
+    const placed = placeTab(layoutRef.current, id, { activePaneId: activePaneIdRef.current })
+    setLayout(placed.root)
+    if (placed.paneId) setActivePaneId(placed.paneId)
+    setFileBuffers((prev) => ({ ...prev, [id]: { content: '', savedContent: '', eol: '\n', readOnly: false, loading: true, error: null, conflict: false } }))
     window.api.files.read(path).then(
-      (d) => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { content: d.content, savedContent: d.content, readOnly: d.truncated || d.binary, loading: false, error: d.binary ? t('files.editor.binaryUnsupported') : null, conflict: false } } : prev)),
+      (d) => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { content: toLf(d.content), savedContent: toLf(d.content), eol: detectEol(d.content), readOnly: d.truncated || d.binary, loading: false, error: d.binary ? t('files.editor.binaryUnsupported') : null, conflict: false } } : prev)),
       (err) => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], loading: false, error: err instanceof Error ? err.message : String(err) } } : prev))
     )
+  }
+
+  /** 에디터가 사라질 때 그 상태를 캐시에 넘겨받는다. 세션 모드로 나가면 .explorer-view가 통째로
+   *  언마운트되므로, 이 경로가 없으면 되돌리기 이력이 거기서 끊긴다(세션 탭은 숨기기만 해서 안 끊긴다).
+   *
+   *  탭이 아직 열려 있을 때만 보관한다. 탭을 닫는 경로는 이미 cache.drop을 했고 그 뒤에 언마운트가
+   *  오므로, 무조건 저장하면 방금 버린 항목이 되살아난다. closeExplorer도 같은 이유로 이 가드에
+   *  걸린다 — 거기서는 clear() 뒤에 언마운트가 오고, 그때 fileTabs는 이미 비어 있다. */
+  const retireEditorState = (
+    path: string,
+    state: EditorState,
+    scroll: StateEffect<unknown> | null
+  ): void => {
+    if (!fileTabsRef.current.some((t) => t.path === path)) return
+    editorCacheRef.current.save(path, state, scroll)
   }
 
   const setBufferContent = (id: string, content: string): void => {
@@ -945,7 +989,9 @@ export default function App(): React.JSX.Element {
     const buf = fileBuffersRef.current[id]
     const tab = fileTabsRef.current.find((t) => t.id === id)
     if (!buf || !tab || buf.readOnly || buf.content === buf.savedContent) return
-    window.api.files.write(tab.path, buf.content).then(
+    // 디스크에는 그 파일 본래의 줄바꿈으로 되돌려 쓴다. savedContent는 LF 그대로 둔다 — 버퍼끼리의
+    // 비교(더티 판정)는 전부 LF 기준이고, 디스크와의 비교는 읽어 올 때 toLf를 거친다
+    window.api.files.write(tab.path, applyEol(buf.content, buf.eol)).then(
       () => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], savedContent: buf.content, conflict: false } } : prev)),
       (err) => toast.error(t('files.save.failed', { detail: err instanceof Error ? err.message : String(err) }))
     )
@@ -956,7 +1002,7 @@ export default function App(): React.JSX.Element {
     if (!tab) return
     window.api.files.read(tab.path).then(
       (d) =>
-        setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], content: d.content, savedContent: d.content, readOnly: d.truncated || d.binary, conflict: false, error: d.binary ? t('files.editor.binaryUnsupported') : null } } : prev)),
+        setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], content: toLf(d.content), savedContent: toLf(d.content), eol: detectEol(d.content), readOnly: d.truncated || d.binary, conflict: false, error: d.binary ? t('files.editor.binaryUnsupported') : null } } : prev)),
       (err) => toast.error(t('files.reload.failed', { detail: err instanceof Error ? err.message : String(err) }))
     )
   }
@@ -974,7 +1020,9 @@ export default function App(): React.JSX.Element {
       if (!ok) return
     }
     // An await boundary was crossed, so state is read from the ref again
+    const closedTab = fileTabsRef.current.find((t) => t.id === id)
     const next = fileTabsRef.current.filter((t) => t.id !== id)
+    if (closedTab) editorCacheRef.current.drop(closedTab.path)
     // Mirrored immediately, before the render — when clean tabs close in a chain (a folder deletion),
     // await only yields a microtask and the React commit (render) does not fit in between, so this
     // stops the ref being read stale on the next iteration
@@ -984,12 +1032,46 @@ export default function App(): React.JSX.Element {
       const { [id]: _drop, ...rest } = prev
       return rest
     })
-    if (activeFileIdRef.current === id) {
-      const nextActive = next.length > 0 ? next[next.length - 1].id : null
-      // The same reason as above — lets the next iteration see an updated activeFileId when the active tab closes first
-      activeFileIdRef.current = nextActive
-      setActiveFileId(nextActive)
+    // 트리에서도 뺀다. 다음에 무엇이 활성이 되는지는 removeTab이 정한다(세션 탭을 닫을 때와 같은 규칙),
+    // 그러면 activeFileId는 파생값이므로 저절로 따라온다. 여기서 ref를 직접 맞춰 두는 것은 연쇄로 닫힐
+    // 때(폴더 삭제) 다음 반복이 렌더 전의 낡은 값을 읽지 않게 하기 위해서다 — closeFileTab 위쪽의
+    // fileTabsRef 미러링과 같은 이유다
+    if (activeFileIdRef.current === id) activeFileIdRef.current = null
+    const cur = layoutRef.current
+    if (cur && groupOfTab(cur, id)) {
+      const nextLayout = removeTab(cur, id)
+      layoutRef.current = nextLayout
+      const p = activePaneIdRef.current
+      const nextPane = nextLayout ? (p && leafOf(nextLayout, p) ? p : firstLeaf(nextLayout).id) : null
+      activePaneIdRef.current = nextPane
+      setActivePaneId(nextPane)
+      setLayout(nextLayout)
     }
+  }
+
+  /** 탭 줄에서 탭을 골랐다. 종류에 상관없이 트리에서 그 탭을 활성으로 만들고 그 페인에 포커스를 준다 —
+   *  다른 페인의 탭을 눌렀을 때 그 페인으로 옮겨 가는 것도 이 한 줄이 한다 */
+  const selectWorkbenchTab = (tabId: string): void => {
+    const cur = layoutRef.current
+    if (!cur) return
+    const act = activateTab(cur, tabId)
+    if (!act) return
+    setLayout(act.root)
+    setActivePaneId(act.paneId)
+  }
+  // 탭 순환 단축키가 클릭과 같은 경로를 타도록 — 이 함수는 매 렌더 새로 만들어지지만 본문이 setter와
+  // ref뿐이라 최신 상태에 대해 동작한다(toggleExplorer와 같은 관례)
+  selectWorkbenchTabRef.current = selectWorkbenchTab
+
+  /** 파일 탭은 기존 경로(더티면 확인 모달), 세션 탭은 세션 모드의 탭 닫기와 같은 경로로 종료한다 */
+  const closeWorkbenchTab = (tabId: string): void => {
+    const ref = parseTab(tabId)
+    if (!ref) return
+    if (ref.kind === 'file') {
+      void closeFileTab(tabId)
+      return
+    }
+    closeSession(ref.id)
   }
 
   // Adjusting open tabs after a file operation. A watcher event does not say 'what became what', so the
@@ -1004,7 +1086,7 @@ export default function App(): React.JSX.Element {
         const nid = remap.get(t.id)
         if (!nid) return t
         const npath = nid.slice('file:'.length)
-        return { id: nid, path: npath, title: npath.split(/[\\/]/).pop() || npath }
+        return { id: nid, path: npath, title: npath.split(/[\\/]/).pop() || npath, projectRoot: t.projectRoot }
       })
     )
     setFileBuffers((prev) => {
@@ -1012,7 +1094,14 @@ export default function App(): React.JSX.Element {
       for (const [k, v] of Object.entries(prev)) next[remap.get(k) ?? k] = v
       return next
     })
-    setActiveFileId((cur) => (cur && remap.has(cur) ? remap.get(cur)! : cur))
+    // 트리에도 같은 id가 들어 있으므로 함께 갈아끼운다 — 위치·순서·활성 여부가 그대로 유지된다
+    // (계정 롤링이 세션 id를 바꿀 때 쓰는 것과 같은 함수). 세션 탭은 remap에 없으므로 건드려지지 않는다
+    setLayout((cur) => {
+      if (!cur) return cur
+      let next = cur
+      for (const [from, to] of remap) if (groupOfTab(next, from)) next = replaceTabId(next, from, to)
+      return next
+    })
   }
 
   const handlePathDeleted = (deleted: string[]): void => {
@@ -1047,14 +1136,14 @@ export default function App(): React.JSX.Element {
         (d) => {
           const b = fileBuffersRef.current[id]
           if (!b) return
-          const verdict = classifyExternalChange(d.content, b.savedContent, b.content !== b.savedContent && !b.readOnly)
+          const verdict = classifyExternalChange(toLf(d.content), b.savedContent, b.content !== b.savedContent && !b.readOnly)
           if (verdict === 'ignore') {
             // Clears a lingering 'deleted' notice when the file was deleted and recreated (disk === savedContent)
             if (b.error) setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], error: null } } : prev))
             return
           }
           if (verdict === 'reload')
-            setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], content: d.content, savedContent: d.content, readOnly: d.truncated || d.binary, conflict: false, error: d.binary ? t('files.editor.binaryUnsupported') : null } } : prev))
+            setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], content: toLf(d.content), savedContent: toLf(d.content), eol: detectEol(d.content), readOnly: d.truncated || d.binary, conflict: false, error: d.binary ? t('files.editor.binaryUnsupported') : null } } : prev))
           else setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], conflict: true, error: null } } : prev))
         },
         () => {
@@ -1082,27 +1171,44 @@ export default function App(): React.JSX.Element {
     )
       return
     setExplorerOpen(false)
-    setExplorerPin(null)
+    // 트리에 들어 있는 파일 탭도 함께 뺀다 — 남겨 두면 파일이 없는데 탭만 남는다. 하나씩 빼는 것은
+    // removeTab이 빈 그룹 정리와 다음 활성 탭 선택까지 맡고 있기 때문이다
+    let nextLayout = layoutRef.current
+    for (const tab of fileTabsRef.current)
+      if (nextLayout && groupOfTab(nextLayout, tab.id)) nextLayout = removeTab(nextLayout, tab.id)
+    layoutRef.current = nextLayout
+    const p = activePaneIdRef.current
+    const nextPane = nextLayout ? (p && leafOf(nextLayout, p) ? p : firstLeaf(nextLayout).id) : null
+    activePaneIdRef.current = nextPane
+    setActivePaneId(nextPane)
+    setLayout(nextLayout)
+    fileTabsRef.current = []
     setFileTabs([])
     setFileBuffers({})
-    setActiveFileId(null)
-    explorerTreeRef.current = null
-    // This is the point where the explorer is abandoned entirely, so the undo journal is cleared as
-    // well — unlike the tree snapshot, no screen remains to reuse it (that is the difference from a
-    // plain toggleExplorer). Left behind, it would let Ctrl+Z undo operations that are not on screen
-    // the next time the explorer opens (possibly on a different project).
+    explorerTreesRef.current.clear()
+    explorerClipboardRef.current = null
+    // This is the point where the explorer is abandoned entirely, so the undo journal and the per-file
+    // EditorState cache are cleared as well — unlike the tree snapshot, no screen remains to reuse them
+    // (that is the difference from a plain toggleExplorer). Left behind, the journal would let Ctrl+Z
+    // undo operations that are not on screen the next time the explorer opens (possibly on a different
+    // project), and the cache would hold every document and undo history of every file ever opened for
+    // the lifetime of the process (drop is per file tab, and no tab is left to close).
     explorerUndoRef.current = []
+    editorCacheRef.current.clear()
   }
 
-  // Toggling explorer mode — Ctrl+Tab or Ctrl+Shift+E. Explorer state (file tabs, pin, expansion) is preserved
+  // 탐색기 토글 — 파일 탭과 루트별 펼침 상태는 그대로 유지된다
+  /** 탐색기를 켤 때는 사이드바도 함께 편다. 레일의 탐색기 버튼과 같은 규칙이다 — 켰는데 사이드바가
+   *  접혀 있으면 파일 트리가 어디에도 나타나지 않는다.
+   *
+   *  사이드바의 표시 여부는 sidebarOpen 하나가 정한다. 예전에는 sidebarOpen || explorerOpen 이라
+   *  탐색기가 켜져 있는 동안 사이드바 토글이 아무 반응도 없었다 — OR 가 언제나 참이었기 때문이다. */
   const toggleExplorer = (): void => {
-    setExplorerOpen((v) => !v)
-  }
-
-  // The 📁 on a history project row — opens the explorer at that project root (pinned). If already open, only the root is swapped
-  const openExplorerAt = (projectPath: string): void => {
-    setExplorerPin(projectPath)
-    setExplorerOpen(true)
+    // 켜는 경우인지는 갱신자 밖에서 정한다. setState 갱신자는 StrictMode 에서 두 번 불릴 수 있으므로
+    // 그 안에서 다른 setState 를 부르지 않는다는 것이 이 파일의 규약이다(setLayout 쪽 주석들과 같은 이유)
+    const opening = !explorerOpenRef.current
+    if (opening) setSidebarOpen(true)
+    setExplorerOpen(opening)
   }
 
   // A setState updater can be invoked twice under StrictMode (in development), so setActivePaneId and
@@ -1115,7 +1221,7 @@ export default function App(): React.JSX.Element {
     setSessions(rest)
     const cur = layoutRef.current
     if (cur) {
-      const next = removeTab(cur, id)
+      const next = removeTab(cur, sessionTab(id))
       if (next) {
         // If the active group is gone, focus moves to the first remaining group
         const p = activePaneIdRef.current
@@ -1132,11 +1238,12 @@ export default function App(): React.JSX.Element {
     void window.api.sessions.kill(id).catch(() => {})
   }
 
-  /** Splits the active group and moves sessionId into the new one. Past the cap, only a toast. */
-  const splitActive = (dir: PaneDir, placeBefore: boolean, sessionId: string): void => {
+  /** Splits the active group and moves tabId into the new one. Past the cap, only a toast.
+   *  The tab id goes straight to the tree, so a file tab splits exactly as a session tab does. */
+  const splitActive = (dir: PaneDir, placeBefore: boolean, tabId: string): void => {
     const cur = layoutRef.current
     if (!cur) {
-      const g = createGroup(sessionId)
+      const g = createGroup(tabId)
       setLayout(g)
       setActivePaneId(g.id)
       return
@@ -1146,7 +1253,7 @@ export default function App(): React.JSX.Element {
       return
     }
     const target = (activePaneIdRef.current && leafOf(cur, activePaneIdRef.current)) || firstLeaf(cur)
-    const res = splitAndMove(cur, sessionId, target.id, dir, placeBefore)
+    const res = splitAndMove(cur, tabId, target.id, dir, placeBefore)
     // null means the group had only one tab — splitting would change nothing. Not a failure, so no toast either
     if (!res) return
     setLayout(res.root)
@@ -1156,18 +1263,19 @@ export default function App(): React.JSX.Element {
   const splitActiveRef = useRef(splitActive)
   splitActiveRef.current = splitActive
 
-  /** A drop aimed at a specific group (coming from PaneGrid).
+  /** A drop aimed at a specific group's body (coming from PaneGrid). The tab id arrives as it is and goes
+   *  straight to the tree, so which kind it is does not matter here.
    *  An edge means Split and Move; the centre means Move To Group. */
-  const dropOnPane = (paneId: string, zone: DropZone, sessionId: string): void => {
+  const dropOnPane = (paneId: string, zone: DropZone, tabId: string): void => {
     const cur = layoutRef.current
     if (!cur) return
     if (zone === 'center') {
       // Already in that group means nothing happens — moving onto itself is meaningless rather than a failure
-      if (groupOfSession(cur, sessionId)?.id === paneId) {
+      if (groupOfTab(cur, tabId)?.id === paneId) {
         setActivePaneId(paneId)
         return
       }
-      const next = moveTab(cur, sessionId, paneId)
+      const next = moveTab(cur, tabId, paneId)
       if (!next) return
       setLayout(next)
       setActivePaneId(paneId)
@@ -1178,7 +1286,8 @@ export default function App(): React.JSX.Element {
       return
     }
     const dir: PaneDir = zone === 'left' || zone === 'right' ? 'row' : 'col'
-    const res = splitAndMove(cur, sessionId, paneId, dir, zone === 'left' || zone === 'up')
+    const before = zone === 'left' || zone === 'up'
+    const res = splitAndMove(cur, tabId, paneId, dir, before)
     if (!res) return
     setLayout(res.root)
     setActivePaneId(res.paneId)
@@ -1197,10 +1306,10 @@ export default function App(): React.JSX.Element {
   }
 
   /** A drop on the tab bar — reorder within the same group, or move to that position in another group */
-  const dropTabInGroup = (paneId: string, sessionId: string, insertBefore: number): void => {
+  const dropTabInGroup = (paneId: string, tabId: string, insertBefore: number): void => {
     const cur = layoutRef.current
     if (!cur) return
-    const next = moveTab(cur, sessionId, paneId, insertBefore)
+    const next = moveTab(cur, tabId, paneId, insertBefore)
     if (!next) return
     setActivePaneId(paneId)
     setLayout(next)
@@ -1211,7 +1320,7 @@ export default function App(): React.JSX.Element {
   const unsplitPane = (paneId: string): void => {
     const cur = layoutRef.current
     if (!cur) return
-    // The group is captured before it is removed — once gone, g.activeSessionId is the only way to
+    // The group is captured before it is removed — once gone, g.activeTabId is the only way to
     // trace where its tabs were absorbed
     const g = leafOf(cur, paneId)
     const next = unsplit(cur, paneId)
@@ -1220,7 +1329,7 @@ export default function App(): React.JSX.Element {
     // group itself is gone and any group will do), here we have to land on the sibling that absorbed
     // g's tabs. Otherwise, unsplitting G1 in G0 | (G1 / G2) bounces focus to G0 on the left instead of
     // to G2, which absorbed them.
-    setActivePaneId((g && groupOfSession(next, g.activeSessionId)?.id) ?? firstLeaf(next).id)
+    setActivePaneId((g && groupOfTab(next, g.activeTabId)?.id) ?? firstLeaf(next).id)
     setLayout(next)
   }
 
@@ -1266,14 +1375,13 @@ export default function App(): React.JSX.Element {
     })
   }
 
-  const active = sessions.find((s) => s.id === activeSessionId) ?? null
-  const activeFile = fileTabs.find((t) => t.id === activeFileId) ?? null
+  // 마지막으로 활성이었던 세션. 그 세션이 이미 닫혔으면 find가 못 찾아 null이 되므로 별도의 청소가 없다
+  const active = sessions.find((s) => s.id === (activeSessionId ?? lastSessionIdRef.current)) ?? null
   const runningCount = sessions.filter((s) => s.status === 'running').length
   runningCountRef.current = runningCount // the toast's install button has to see the value at click time
   // A check round trip is around 350ms, so watching only the real state would make 'Checking…' invisible
   const updateChecking = showChecking(update?.state, checkClickedAt, Date.now())
 
-  const activeBuf = activeFileId ? fileBuffers[activeFileId] : null
   const dirtyIds = new Set(
     fileTabs.filter((t) => { const b = fileBuffers[t.id]; return b && !b.readOnly && b.content !== b.savedContent }).map((t) => t.id)
   )
@@ -1295,15 +1403,75 @@ export default function App(): React.JSX.Element {
   const [runIsSpringBoot, setRunIsSpringBoot] = useState(false)
   const explorerViewRef = useRef<HTMLDivElement>(null)
 
-  // Even while a file tab is active, the explorer keeps the project of the last active session.
-  // As long as the root string does not change, FileExplorer's [root] effect does not run and the expansion state is preserved.
-  if (active) lastSessionIdRef.current = active.id
+  /** 트리 루트는 활성 탭을 따른다 — 활성 탭이 파일이면 그 파일의 프로젝트, 세션이면 그 세션의 cwd.
+   *  탭이 없으면 null이다. 보고 있는 것과 트리가 항상 일치하는 것이 이 규칙의 목적이다.
+   *
+   *  히스토리와 worktree 목록에 있던 '탐색기에서 열기'는 이 규칙과 양립하지 않아 없앴다. 그 버튼들은
+   *  루트를 핀으로 고정하려 했는데, 활성 탭이 언제나 이기므로 다른 프로젝트를 지정해도 화면은 보고
+   *  있던 프로젝트를 계속 보여줬다 — 아무 일도 하지 않는 버튼이었다. */
   const explorerRoot =
-    explorerPin ?? (active ?? sessions.find((s) => s.id === lastSessionIdRef.current))?.cwd ?? null
+    (activeTab?.kind === 'file'
+      ? fileTabs.find((t) => t.id === activeTabId)?.projectRoot
+      : sessions.find((s) => s.id === activeTab?.id)?.cwd) ?? null
 
   // Mirrors explorerRoot into a ref — avoids a stale closure in the run:status subscription effect
   const explorerRootRef = useRef(explorerRoot)
   explorerRootRef.current = explorerRoot
+
+  // 탭 줄은 이제 페인마다 있고 그 내용은 트리(leaf.tabIds)가 정한다 — 전역 한 줄과 그 폴백은 사라졌다.
+  // 어떤 프로젝트의 세션인지로 거르지도 않는다: 페인에 담긴 것이 곧 그 페인이 보여주는 것이다.
+
+  /** 페인 하나의 에디터 본문. PaneGrid가 페인마다 슬롯을 잡고 그 안에 이것을 그린다.
+   *
+   *  에디터는 페인당 하나다 — 같은 페인에서 파일 탭을 오갈 때 이 FileEditor가 재사용되고, path만
+   *  바뀐다. 되돌리기와 스크롤을 이어 주는 EditorStateCache는 App이 계속 소유하므로 페인이 여럿이어도
+   *  캐시는 하나다.
+   *
+   *  FileEditor는 로딩·오류 중에도 언마운트되면 안 된다 — 언마운트는 EditorView를 destroy하고 되돌리기
+   *  이력을 지운다. 그래서 오버레이는 위에 덮을 뿐이고, 활성 탭이 세션으로 바뀔 때도 슬롯이 display로만
+   *  숨는다(PaneGrid의 lastFileOfPane). */
+  const renderEditor = (_paneId: string, fileTabId: string, focused: boolean): React.ReactNode => {
+    const f = fileTabs.find((t) => t.id === fileTabId)
+    const buf = fileBuffers[fileTabId]
+    if (!f || !buf) return null
+    return (
+      <div className="workbench-body">
+        <div className="file-editor-wrap">
+          {buf.readOnly && !buf.loading && !buf.error && (
+            <div className="file-truncated">{t('files.editor.readOnlyReason')}</div>
+          )}
+          {buf.conflict && (
+            <div className="file-conflict">
+              {t('files.editor.conflictChanged')}
+              <button onClick={() => reloadBufferFromDisk(f.id)}>{t('files.editor.reload')}</button>
+              <button onClick={() => setFileBuffers((prev) => (prev[f.id] ? { ...prev, [f.id]: { ...prev[f.id], conflict: false } } : prev))}>{t('files.editor.keepMine')}</button>
+            </div>
+          )}
+          <FileEditor
+            path={f.path}
+            content={buf.content}
+            readOnly={buf.readOnly}
+            cache={editorCacheRef.current}
+            focused={focused}
+            onRetire={retireEditorState}
+            // 에디터가 알려 준 경로로 대상을 찾는다. 그리고 있는 파일과 다르면 그 편집은 뷰가 아직
+            // 갈아타지 않은 옛 문서의 것이므로 버린다
+            onChange={(fromPath, next) => {
+              const target = fileTabsRef.current.find((t) => t.path === fromPath)
+              if (!target || target.id !== f.id) return
+              setBufferContent(target.id, next)
+            }}
+            onSave={(fromPath) => {
+              const target = fileTabsRef.current.find((t) => t.path === fromPath)
+              if (target) saveFile(target.id)
+            }}
+          />
+          {buf.loading && <div className="file-overlay">{t('files.editor.loading')}</div>}
+          {!buf.loading && buf.error && <div className="file-overlay">{buf.error}</div>}
+        </div>
+      </div>
+    )
+  }
 
   // Loads that project's run configurations and active run whenever the explorer root or open state changes
   useEffect(() => {
@@ -1445,7 +1613,21 @@ export default function App(): React.JSX.Element {
       })
     })
   }
-  const runJump = (projectPath: string): void => { setExplorerPin(projectPath); setExplorerOpen(true) }
+  /** 실행 중 목록에서 다른 프로젝트로 점프. 트리 루트는 활성 탭이 정하므로, 그 프로젝트에 속한 탭을
+   *  활성으로 만드는 것이 곧 '그리로 간다'는 뜻이다. 세션을 먼저 찾고 없으면 그 프로젝트의 파일 탭을
+   *  쓴다. 둘 다 없으면 갈 곳이 없으므로 아무 일도 하지 않는다 — 예전처럼 루트만 핀으로 바꿔 두면
+   *  활성 탭이 그대로라 화면은 움직이지 않는다. */
+  const runJump = (projectPath: string): void => {
+    const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+    const target = norm(projectPath)
+    const session = sessionsRef.current.find((s) => norm(s.cwd) === target)
+    if (session) {
+      selectWorkbenchTabRef.current(sessionTab(session.id))
+      return
+    }
+    const file = fileTabsRef.current.find((t) => norm(t.projectRoot) === target)
+    if (file) selectWorkbenchTabRef.current(file.id)
+  }
   const runStopProject = (projectPath: string): void => { void window.api.run.stop(projectPath) }
 
   // openTerminal calls newTerminal below, so it is declared first to match reading order — an arrow
@@ -1565,7 +1747,36 @@ export default function App(): React.JSX.Element {
 
   return (
     <div className="app">
-      <Titlebar isMax={isMax} update={update} />
+      {/* 실행 구성은 타이틀바 줄에 놓인다(IntelliJ와 같은 자리). 별도의 띠를 두면 탐색기를 여닫을
+          때마다 그 띠가 생겼다 사라지며 아래 페인이 위아래로 튄다. 프로젝트가 정해졌을 때만 그리므로
+          Ctrl/Cmd+Shift+E 와는 무관하다 */}
+      <Titlebar
+        isMax={isMax}
+        update={update}
+        runSlot={
+          explorerRoot ? (
+            <div className="tb-run">
+              <RunToolbar
+                configs={runConfigs}
+                selectedId={runSelectedId}
+                onSelect={setRunSelectedId}
+                active={runActive}
+                onRun={runStart}
+                onStop={runStop}
+                onAddConfig={runAddConfig}
+                onEditConfig={runEditConfig}
+                onDeleteConfig={runDeleteConfig}
+                activeRuns={activeRuns}
+                onJump={runJump}
+                onStopProject={runStopProject}
+                onModalOpenChange={setRunModalOpen}
+                projectPath={explorerRoot}
+                isSpringBoot={runIsSpringBoot}
+              />
+            </div>
+          ) : null
+        }
+      />
       {/* Only a block-mode campaign covers the workbench. notify is announced with a toast */}
       {campaign?.mode === 'block' && (
         <UpdateGate
@@ -1584,6 +1795,33 @@ export default function App(): React.JSX.Element {
             onClick={() => setSidebarOpen((v) => !v)}
           >
             ◱
+          </button>
+          {/* 탐색기 토글. 폴더 아이콘과 컨텍스트 메뉴 항목을 걷어내면서 탐색기로 들어가는 길이 단축키
+              하나만 남았는데, 처음 쓰는 사람은 그 키를 알 수 없다. 툴팁에 실제 바인딩을 함께 띄우므로
+              한 번 눌러 본 사람은 다음부터 키를 쓴다 — 발견과 학습이 같은 자리에서 끝난다.
+              사이드바가 접혀 있으면 함께 편다. 안 그러면 눌러도 아무것도 나타나지 않는다 */}
+          <button
+            className={explorerOpen ? 'rail-btn on' : 'rail-btn'}
+            aria-label={explorerShortcutLabel}
+            title={explorerShortcutLabel}
+            onClick={toggleExplorer}
+          >
+            {/* 파일 트리 — 폴더 하나와 그 안의 줄 둘. 앱의 SVG 관례대로 16 viewBox 에 currentColor 하나 */}
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinejoin="round"
+            >
+              <path d="M1.8 4.1a1 1 0 0 1 1-1h3.1l1.4 1.6h5.9a1 1 0 0 1 1 1v6.2a1 1 0 0 1-1 1H2.8a1 1 0 0 1-1-1z" />
+              <g strokeWidth="1.2" strokeLinecap="round">
+                <line x1="5" y1="8.2" x2="11" y2="8.2" />
+                <line x1="5" y1="10.6" x2="9" y2="10.6" />
+              </g>
+            </svg>
           </button>
           {/* The bottom panel is for file and editor mode only, so the terminal is exposed only in that
               mode. The terminal and ⚙ are wrapped in .rail-bottom and that wrapper carries
@@ -1629,14 +1867,15 @@ export default function App(): React.JSX.Element {
             </button>
           </span>
         </nav>
-        {(sidebarOpen || explorerOpen) && (
+        {sidebarOpen && (
           <aside className="sidebar" ref={sidebarRef} style={{ width: sidebarWidth }}>
             {explorerOpen ? (
               <FileExplorer
                 root={explorerRoot}
                 onOpenFile={openFile}
                 onClose={() => void closeExplorer()}
-                stateRef={explorerTreeRef}
+                stateRef={explorerTreesRef}
+                clipboardRef={explorerClipboardRef}
                 undoRef={explorerUndoRef}
                 onPathRenamed={handlePathRenamed}
                 onPathDeleted={handlePathDeleted}
@@ -1649,19 +1888,17 @@ export default function App(): React.JSX.Element {
                     setNewSessionCwd(p)
                     setShowNew(true)
                   }}
-                  onOpenExplorer={openExplorerAt}
                 />
                 <HistoryBrowser
                   accounts={accounts}
                   ghostAccounts={ghostAccounts}
                   onResume={resumeFromHistory}
-                  onOpenExplorer={openExplorerAt}
                 />
               </>
             )}
           </aside>
         )}
-        {(sidebarOpen || explorerOpen) && (
+        {sidebarOpen && (
           <div
             className="resizer"
             role="separator"
@@ -1700,155 +1937,124 @@ export default function App(): React.JSX.Element {
           />
         )}
         <main className="content">
-          {/* The session view — hidden in explorer mode but not unmounted, so terminal scrollback survives */}
-          <div className="session-view" style={{ display: explorerOpen ? 'none' : 'flex' }}>
-            <PaneGrid
-              layout={layout}
-              activePaneId={activePaneId}
-              sessions={sessions}
-              accounts={accounts}
-              rollStates={rollStates}
-              schedStates={schedStates}
-              busy={busy}
-              draggingSessionId={dragSessionId}
-              newDisabled={!anyCliOk}
-              onFocusPane={setActivePaneId}
-              onSetRatio={(splitId, ratio) =>
-                setLayout((cur) => (cur ? setRatio(cur, splitId, ratio) : cur))
-              }
-              onDropSession={dropOnPane}
-              onRestart={restart}
-              onSelectTab={showSession}
-              onCloseSession={closeSession}
-              onNewInGroup={newInGroup}
-              onTabContextMenu={(sessionId, x, y) => setTabMenu({ sessionId, x, y })}
-              onDragSessionChange={setDragSessionId}
-              onDropTab={dropTabInGroup}
-            />
-            {/* When the layout is empty (not one group in the tree) there is no group tab bar, so there
-                is no '+' anywhere on screen — this placeholder becomes the sole entry point in its
-                place. Same guard as a group's '+' (newInGroup): with no CLI, pressing it does not open
-                the dialog */}
-            {!active && (
-              <button
-                className="placeholder primary"
-                disabled={!anyCliOk}
-                onClick={() => {
-                  if (anyCliOk) setShowNew(true)
-                }}
-              >
-                {t('session.placeholder.start')}
-              </button>
-            )}
-          </div>
-          {/* The explorer view — explorer mode only */}
-          {explorerOpen && (
-            <div
-              className="explorer-view"
-              ref={explorerViewRef}
-              style={{ ['--run-panel-h']: `${runPanelHeight}px` } as React.CSSProperties}
-            >
-              <div className="workbench-topbar">
-                <FileTabs tabs={fileTabs} activeId={activeFileId} dirtyIds={dirtyIds} onSelect={setActiveFileId} onClose={(id) => void closeFileTab(id)} />
-                <RunToolbar
-                  configs={runConfigs}
-                  selectedId={runSelectedId}
-                  onSelect={setRunSelectedId}
-                  active={runActive}
-                  onRun={runStart}
-                  onStop={runStop}
-                  onAddConfig={runAddConfig}
-                  onEditConfig={runEditConfig}
-                  onDeleteConfig={runDeleteConfig}
-                  activeRuns={activeRuns}
-                  onJump={runJump}
-                  onStopProject={runStopProject}
-                  onModalOpenChange={setRunModalOpen}
-                  projectPath={explorerRoot ?? ''}
-                  isSpringBoot={runIsSpringBoot}
-                />
-              </div>
-              <div className="workbench-body">
-                {activeFile && activeBuf ? (
-                  <div className="file-editor-wrap">
-                    {activeBuf.readOnly && !activeBuf.loading && !activeBuf.error && (
-                      <div className="file-truncated">{t('files.editor.readOnlyReason')}</div>
-                    )}
-                    {activeBuf.conflict && (
-                      <div className="file-conflict">
-                        {t('files.editor.conflictChanged')}
-                        <button onClick={() => reloadBufferFromDisk(activeFile.id)}>{t('files.editor.reload')}</button>
-                        <button onClick={() => setFileBuffers((prev) => (prev[activeFile.id] ? { ...prev, [activeFile.id]: { ...prev[activeFile.id], conflict: false } } : prev))}>{t('files.editor.keepMine')}</button>
-                      </div>
-                    )}
-                    {/* FileEditor always stays mounted — it must not unmount on loading or error, or the per-file EditorState cache (undo, scroll) is lost */}
-                    <FileEditor
-                      path={activeFile.path}
-                      content={activeBuf.content}
-                      readOnly={activeBuf.readOnly}
-                      onChange={(next) => setBufferContent(activeFile.id, next)}
-                      onSave={() => saveFile(activeFile.id)}
-                    />
-                    {activeBuf.loading && <div className="file-overlay">{t('files.editor.loading')}</div>}
-                    {!activeBuf.loading && activeBuf.error && <div className="file-overlay">{activeBuf.error}</div>}
-                  </div>
-                ) : (
-                  <div className="placeholder">{t('files.editor.selectPrompt')}</div>
-                )}
-              </div>
-              {runPanelOpen && explorerRoot && (
-                <div
-                  className="run-resizer"
-                  role="separator"
-                  aria-orientation="horizontal"
-                  aria-label={t('run.resizeConsole')}
-                  onPointerDown={(e) => {
-                    e.preventDefault()
-                    const startY = e.clientY
-                    const startH = runPanelHeight
-                    let latestY = startY
-                    let rafId = 0
-                    const clamp = (y: number): number => Math.min(800, Math.max(120, startH + (startY - y)))
-                    const apply = (): void => {
-                      rafId = 0
-                      explorerViewRef.current?.style.setProperty('--run-panel-h', `${clamp(latestY)}px`)
-                    }
-                    const onMove = (ev: PointerEvent): void => {
-                      latestY = ev.clientY
-                      if (!rafId) rafId = requestAnimationFrame(apply)
-                    }
-                    const onUp = (): void => {
-                      if (rafId) cancelAnimationFrame(rafId)
-                      window.removeEventListener('pointermove', onMove)
-                      window.removeEventListener('pointerup', onUp)
-                      window.removeEventListener('pointercancel', onUp)
-                      document.body.classList.remove('resizing-row')
-                      const h = clamp(latestY)
-                      setRunPanelHeight(h) // React state is synchronised here, once only
-                      localStorage.setItem('cm.runPanelHeight', String(h))
-                    }
-                    document.body.classList.add('resizing-row')
-                    window.addEventListener('pointermove', onMove)
-                    window.addEventListener('pointerup', onUp)
-                    window.addEventListener('pointercancel', onUp)
+          {/* The container everything shares. Always mounted — .session-view must live inside it so
+              opening or closing the explorer does not remount it (same rule as PaneGrid's slots).
+              Named .surfaces, not .workbench: the app shell above already uses that class, and giving
+              this one the same name silently overrode the shell's flex direction. */}
+          <div className="surfaces">
+            {/* 페인 격자. 이제 파일 탭과 세션 탭을 함께 담으므로 탐색기를 켜도 물러나지 않는다 —
+                에디터는 이 안의 페인 슬롯에 있다 */}
+            <div className="session-view">
+              <PaneGrid
+                layout={layout}
+                activePaneId={activePaneId}
+                sessions={sessions}
+                accounts={accounts}
+                fileTabs={fileTabs}
+                dirtyFileIds={dirtyIds}
+                renderEditor={renderEditor}
+                rollStates={rollStates}
+                schedStates={schedStates}
+                busy={busy}
+                draggingTabId={dragTabId}
+                newDisabled={!anyCliOk}
+                onFocusPane={setActivePaneId}
+                onSetRatio={(splitId, ratio) =>
+                  setLayout((cur) => (cur ? setRatio(cur, splitId, ratio) : cur))
+                }
+                onDropTabIntoPane={dropOnPane}
+                onRestart={restart}
+                onSelectTab={selectWorkbenchTab}
+                onCloseTab={closeWorkbenchTab}
+                onNewInGroup={newInGroup}
+                onTabContextMenu={(tabId, x, y) => setTabMenu({ tabId, x, y })}
+                onDragTabChange={setDragTabId}
+                onDropTabInBar={dropTabInGroup}
+              />
+              {/* When the layout is empty (not one group in the tree) there is no group tab bar, so there
+                  is no '+' anywhere on screen — this placeholder becomes the sole entry point in its
+                  place. Same guard as a group's '+' (newInGroup): with no CLI, pressing it does not open
+                  the dialog */}
+              {!layout && (
+                <button
+                  className="placeholder primary"
+                  disabled={!anyCliOk}
+                  onClick={() => {
+                    if (anyCliOk) setShowNew(true)
                   }}
-                />
-              )}
-              {runPanelOpen && explorerRoot && (
-                <BottomPanel
-                  projectPath={explorerRoot}
-                  runStatus={runActive}
-                  terminals={terminals}
-                  activeTab={bottomTab}
-                  onSelectTab={setBottomTab}
-                  onNewTerminal={() => void newTerminal()}
-                  onCloseTerminal={closeTerminal}
-                  onStopRun={runStop}
-                  onCollapse={() => setRunPanelOpen(false)}
-                />
+                >
+                  {t('session.placeholder.start')}
+                </button>
               )}
             </div>
-          )}
+            {/* 탐색기 계통의 아래쪽 — 에디터 본문이 페인으로 옮겨 갔으므로 이제 Run 콘솔과 그 리사이저만
+                들어 있다 (.explorer-view가 flex:none인 이유가 styles.css에 있다) */}
+            {explorerOpen && (
+              <div
+                className="explorer-view"
+                ref={explorerViewRef}
+                style={
+                  {
+                    // Run 콘솔이 이 화면 안에 있으므로 --run-panel-h 는 계속 여기에 둔다(run-resizer가
+                    // explorerViewRef로 이 값을 직접 갱신한다).
+                    ['--run-panel-h']: `${runPanelHeight}px`
+                  } as React.CSSProperties
+                }
+              >
+                {runPanelOpen && explorerRoot && (
+                  <div
+                    className="run-resizer"
+                    role="separator"
+                    aria-orientation="horizontal"
+                    aria-label={t('run.resizeConsole')}
+                    onPointerDown={(e) => {
+                      e.preventDefault()
+                      const startY = e.clientY
+                      const startH = runPanelHeight
+                      let latestY = startY
+                      let rafId = 0
+                      const clamp = (y: number): number => Math.min(800, Math.max(120, startH + (startY - y)))
+                      const apply = (): void => {
+                        rafId = 0
+                        explorerViewRef.current?.style.setProperty('--run-panel-h', `${clamp(latestY)}px`)
+                      }
+                      const onMove = (ev: PointerEvent): void => {
+                        latestY = ev.clientY
+                        if (!rafId) rafId = requestAnimationFrame(apply)
+                      }
+                      const onUp = (): void => {
+                        if (rafId) cancelAnimationFrame(rafId)
+                        window.removeEventListener('pointermove', onMove)
+                        window.removeEventListener('pointerup', onUp)
+                        window.removeEventListener('pointercancel', onUp)
+                        document.body.classList.remove('resizing-row')
+                        const h = clamp(latestY)
+                        setRunPanelHeight(h) // React state is synchronised here, once only
+                        localStorage.setItem('cm.runPanelHeight', String(h))
+                      }
+                      document.body.classList.add('resizing-row')
+                      window.addEventListener('pointermove', onMove)
+                      window.addEventListener('pointerup', onUp)
+                      window.addEventListener('pointercancel', onUp)
+                    }}
+                  />
+                )}
+                {runPanelOpen && explorerRoot && (
+                  <BottomPanel
+                    projectPath={explorerRoot}
+                    runStatus={runActive}
+                    terminals={terminals}
+                    activeTab={bottomTab}
+                    onSelectTab={setBottomTab}
+                    onNewTerminal={() => void newTerminal()}
+                    onCloseTerminal={closeTerminal}
+                    onStopRun={runStop}
+                    onCollapse={() => setRunPanelOpen(false)}
+                  />
+                )}
+              </div>
+            )}
+          </div>
         </main>
       </div>
       <div className="statusbar">
@@ -1957,16 +2163,21 @@ export default function App(): React.JSX.Element {
                   <>
                     <div className="settings-row">
                       <span>{t('settings.general.language')}</span>
-                      {/* Each language is written in its own language, so it can be found without
-                          knowing the current one. Not a translation target. */}
                       <Select
                         className="settings-lang-select"
                         items={[
-                          { value: 'ko', label: '한국어' },
-                          { value: 'en', label: 'English' }
+                          {
+                            value: SYSTEM_LANG,
+                            label: t('settings.general.language.system', {
+                              lang: CATALOGS[systemLang].nativeName
+                            })
+                          },
+                          // Each language is written in its own language, so it can be found without
+                          // knowing the current one. Not a translation target.
+                          ...LANGS.map((l) => ({ value: l, label: CATALOGS[l].nativeName }))
                         ]}
-                        value={lang}
-                        onChange={(v) => setLang(v as 'ko' | 'en')}
+                        value={storedLang ?? SYSTEM_LANG}
+                        onChange={(v) => setLang(v === SYSTEM_LANG ? null : (v as Lang))}
                         ariaLabel={t('settings.general.language')}
                       />
                     </div>
@@ -2203,6 +2414,16 @@ export default function App(): React.JSX.Element {
                               memberId: slackMemberId.trim() || null
                             })
                             .then(() => setSlackSaved(true))
+                            // A rejection means the store refused to overwrite values it could not read —
+                            // the settings on disk survived. Saying so beats a silently dead button, since
+                            // "Saved" never appears either way.
+                            .catch((err) =>
+                              toast.error(
+                                t('settings.slack.saveFailed', {
+                                  detail: err instanceof Error ? err.message : String(err)
+                                })
+                              )
+                            )
                         }
                       >
                         {t('settings.slack.save')}
@@ -2265,9 +2486,11 @@ export default function App(): React.JSX.Element {
           </div>
         </div>
       )}
-      {/* The session tab context menu — the entry point for split and unsplit. What gets split is the
-          group the right-clicked tab belongs to, not the active pane — so right-clicking a tab in
-          another group does not split the wrong one (the same as IntelliJ). */}
+      {/* The pane tab context menu — the entry point for split and unsplit. It serves both kinds of tab:
+          the id goes to the tree unread, and Close takes the same path the tab's × does (a dirty file
+          still asks for confirmation, a session is still ended). What gets split is the group the
+          right-clicked tab belongs to, not the active pane — so right-clicking a tab in another group
+          does not split the wrong one (the same as IntelliJ). */}
       {tabMenu && (
         <ContextMenu
           x={tabMenu.x}
@@ -2275,14 +2498,14 @@ export default function App(): React.JSX.Element {
           onClose={() => setTabMenu(null)}
           items={((): MenuItem[] => {
             const cur = layout
-            const sid = tabMenu.sessionId
-            const group = cur ? groupOfSession(cur, sid) : null
+            const tid = tabMenu.tabId
+            const group = cur ? groupOfTab(cur, tid) : null
             const atMax = cur != null && countLeaves(cur) >= MAX_PANES
             // With only one tab in the group, splitting changes nothing (splitAndMove returns null) — shown as disabled
-            const cantSplit = !group || atMax || group.sessionIds.length < 2
+            const cantSplit = !group || atMax || group.tabIds.length < 2
             const split = (dir: PaneDir): void => {
               if (!cur || !group) return
-              const res = splitAndMove(cur, sid, group.id, dir, false)
+              const res = splitAndMove(cur, tid, group.id, dir, false)
               if (!res) return
               setLayout(res.root)
               setActivePaneId(res.paneId)
@@ -2304,7 +2527,7 @@ export default function App(): React.JSX.Element {
                 onSelect: () => group && unsplitPane(group.id)
               },
               'separator',
-              { label: t('common.close'), danger: true, onSelect: () => closeSession(sid) }
+              { label: t('common.close'), danger: true, onSelect: () => closeWorkbenchTab(tid) }
             ]
           })()}
         />

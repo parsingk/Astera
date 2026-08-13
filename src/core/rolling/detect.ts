@@ -11,11 +11,10 @@ export function stripAnsi(s: string): string {
   return s.replace(ANSI_RE, '')
 }
 
-// The real limit phrasing, extracted from the Claude Code 2.1.220 bundle. The on-screen phrase is
-// generated from the `You've hit your ${NPt[rateLimitType]}` template, and NPt is:
-//   five_hour:"session limit"  seven_day:"weekly limit"  seven_day_opus:"Opus limit"
-//   seven_day_sonnet:"Sonnet limit"  seven_day_overage_included:"Fable 5 limit"
-//   overage:"usage credit limit"
+// The limit phrasing as observed in Claude Code 2.1.220. On screen it reads "You've hit your <label>",
+// where the label names the window that ran out:
+//   five_hour → "session limit"   seven_day → "weekly limit"   opus → "Opus limit"
+//   sonnet → "Sonnet limit"       overage-included → "Fable 5 limit"   overage → "usage credit limit"
 // The previous regex required a trailing `reached`, so it bit none of these phrases, and as a result
 // the phrase-detection path had never fired once since release (verified across all of rolling.log).
 // The "... limit reached" form still exists in API error messages and in other versions, so it is
@@ -28,13 +27,61 @@ export function stripAnsi(s: string): string {
 // codexSignal.ts).
 // 'Approaching ...' (the advance warning) has neither hit|reached nor the reached suffix, so it does
 // not match.
-// The gaps between words in the first alternative are \s+ rather than a literal space — stripAnsi
-// only strips escapes and does not touch the terminal's soft wrap, so when a narrow window splits
-// the line like "You've hit your\r\nsession limit" a literal space fails to match; that was the root
-// cause of this bug. The word gaps in Fable 5 and usage credit are \s+ for the same reason.
+/** Whitespace removed entirely — the form the PTY-screen patterns are matched against.
+ *
+ *  A TUI does not repaint a boxed, wrapped panel by writing spaces. It writes a word, emits a
+ *  cursor-move escape, writes the next word. stripAnsi removes the escape and leaves nothing behind,
+ *  so the words arrive concatenated. rolling.log caught it verbatim: the folder-trust dialog reached
+ *  the scanner as "Thesewillapplywithoutasking.Onlyproceedifyoutrustthisconfiguration." — every
+ *  inter-word space gone. Ordinary lines on the same screen keep their spaces, so both renderings
+ *  coexist and a screen pattern has to survive either.
+ *
+ *  A literal space and \s+ are both defeated by this (each demands at least one character that is not
+ *  there), and \s+ was in fact defeated in production: an unrecognised trust dialog let the post-roll
+ *  fallback type the carry-on prompt into the dialog. Squashing the haystack and the pattern together
+ *  is the only form that matches all three renderings — spaced, soft-wrapped, escape-separated. */
+function squash(s: string): string {
+  return stripAnsi(s).replace(/\s+/g, '')
+}
+
+// The limit phrasing as observed in Claude Code 2.1.220. On screen it reads "You've hit your <label>",
+// where the label names the window that ran out:
+//   five_hour → "session limit"   seven_day → "weekly limit"   opus → "Opus limit"
+//   sonnet → "Sonnet limit"       overage-included → "Fable 5 limit"   overage → "usage credit limit"
+// The previous regex required a trailing `reached`, so it bit none of these phrases, and as a result
+// the phrase-detection path had never fired once since release (verified across all of rolling.log).
+// The "... limit reached" form still exists in API error messages and in other versions, so it is
+// kept alongside.
+// Narrowing the window names down to an enumeration is the crux — catching a broad `limit reached`
+// alone also bites unrelated phrases like "Subagent spawn limit reached" and "Context limit
+// reached", which misfires a roll. The gate has been removed, so this specificity takes over
+// false-positive defence.
+// The apostrophe class allows both the straight quote and the typographic one ('’') (same rule as
+// codexSignal.ts).
+// 'Approaching ...' (the advance warning) has neither hit|reached nor the reached suffix, so it does
+// not match.
+// The word gaps are \s+ rather than a literal space, so a soft-wrapped "You've hit your\r\nsession
+// limit" still matches. This is the form used on ordinary prose — transcript text and the log masking
+// below, both of which carry real spaces.
 const LIMIT_RE =
   /you(?:['’ʼ`])?ve\s+(?:hit|reached)\s+your\s+(?:session|weekly|Opus|Sonnet|Fable\s+5|usage\s+credit)\s+limit|(?:usage|5-hour|session)\s+limit\s+reached/i
-const TRUST_RE = /do you trust the files in this folder/i
+// The same phrase with every gap removed, for squash()ed screen text. Kept beside LIMIT_RE rather
+// than derived from it: deriving would mean rewriting \s+ into nothing at runtime, which is the kind
+// of cleverness that hides a divergence instead of preventing one. The pair is covered by a test that
+// feeds both renderings of the same sentence.
+const LIMIT_SQUASHED_RE =
+  /you(?:['’ʼ`])?ve(?:hit|reached)your(?:session|weekly|Opus|Sonnet|Fable5|usagecredit)limit|(?:usage|5-hour|session)limitreached/i
+// The folder-trust dialog. Trust is only ever asked of screen text, so this has no spaced twin.
+//
+// It is anchored on the **choice label**, not on the question, because the question is the part that
+// changes. Claude Code once asked "Do you trust the files in this folder?"; the wording observed in
+// production is now a paragraph — "Quick safety check: Is this a project you created or one you
+// trust? … Claude Code'll be able to read, edit, and execute files here." — with nothing of the old
+// sentence left. Matching that prose would mean re-chasing it at every rewrite. "Yes, I trust this
+// folder" is the option we actually press, so it is both the most stable string on the screen and the
+// one whose disappearance would genuinely mean the dialog changed. The old question stays as an
+// alternative for versions that still ask it.
+const TRUST_RE = /yes,itrustthisfolder|doyoutrustthefilesinthisfolder/i
 
 export interface ScanHit {
   limit: boolean
@@ -54,8 +101,13 @@ export class OutputScanner {
 
   push(chunk: string): ScanHit {
     this.tail = (this.tail + stripAnsi(chunk)).slice(-2000)
-    const limit = LIMIT_RE.test(this.tail)
-    const trust = TRUST_RE.test(this.tail)
+    // Both renderings are tried: the spaced pattern for ordinary lines, the squashed one for the
+    // escape-separated panels. Testing only the squashed form would be enough in principle, but the
+    // spaced pattern is the one every other caller uses and keeping it in the path means a change
+    // there cannot silently stop applying to the screen.
+    const squashed = squash(this.tail)
+    const limit = LIMIT_RE.test(this.tail) || LIMIT_SQUASHED_RE.test(squashed)
+    const trust = TRUST_RE.test(squashed)
     const text = this.tail // capture before clearing — so the caller can re-parse what the match was based on
     if (limit || trust) this.tail = ''
     return { limit, trust, text }
@@ -94,6 +146,28 @@ export function findWaitChoice(text: string): number | null {
  *  Used only to record in the log why findWaitChoice returned null. */
 export function hasWaitChoiceLabel(text: string): boolean {
   return WAIT_LABEL_RE.test(stripAnsi(text))
+}
+
+// The footer a modal draws under its choices — "Enter to confirm · Esc to cancel". Both halves are
+// required, which is what separates a dialog from the "esc to interrupt" hint shown while the agent
+// is merely working. Matched on squashed text, since this footer sits inside the panel that renders
+// without spaces.
+const CHOICE_FOOTER_RE = /entertoconfirm/i
+const CHOICE_CANCEL_RE = /esctocancel/i
+// The spaced rendering of the same thing: a cursor sitting on a numbered item. Kept alongside the
+// footer because a dialog that draws its list plainly has real spaces and real lines, and the cursor
+// is what tells it apart from a numbered list in ordinary agent output. Both cursor glyphs are
+// accepted — the trust dialog draws a plain ">" where the limit list draws "❯".
+const CHOICE_CURSOR_RE = /^[^\S\n]*[❯>][^\S\n]*\d+[ \t]*[.)][ \t]*\S/m
+
+/** Is an interactive choice list waiting for input on this screen? The automatic prompt after a roll
+ *  asks this before typing blind: a dialog we failed to recognise (an unknown wording, a new kind of
+ *  prompt) swallows the carry-on text and turns the following Enter into an arbitrary menu press.
+ *  Answering "something is waiting" is enough to stop — knowing *what* is waiting is not needed. */
+export function looksLikeChoicePrompt(text: string): boolean {
+  const squashed = squash(text)
+  if (CHOICE_FOOTER_RE.test(squashed) && CHOICE_CANCEL_RE.test(squashed)) return true
+  return CHOICE_CURSOR_RE.test(stripAnsi(text))
 }
 
 /** Does this text contain a limit-reached phrase? Used by transcript's subagent error decision

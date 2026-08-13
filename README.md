@@ -2,7 +2,7 @@
 
 <img src="assets/banner.jpg" width="640" alt="Astera — build beyond the stars" />
 
-**Run and orchestrate many Claude Code and Codex sessions from one desktop app.**
+**Keep Claude Code and Codex working while you are away.**
 
 [![CI](https://github.com/parsingk/Astera/actions/workflows/ci.yml/badge.svg)](https://github.com/parsingk/Astera/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/parsingk/Astera?logo=github)](https://github.com/parsingk/Astera/releases/latest)
@@ -12,11 +12,16 @@
 
 [Download](#install) · [What it does](#what-it-does) · [Documentation](#documentation) · [Report a bug](https://github.com/parsingk/Astera/issues/new)
 
+**English** · [한국어](README.ko.md) · [日本語](README.ja.md) · [Español](README.es.md)
+
 </div>
 
-Astera is a desktop app for people who keep more than one agent session going at once. It
-holds the sessions side by side, switches accounts for you when a usage limit lands, isolates work in
-git worktrees, and lets one agent hand tasks to another and wait for the results.
+Astera runs your agent sessions when you are not at the desk. Schedule one to start at 3am, and it
+starts without you. When any session hits a usage limit — scheduled or not — Astera reads the reset
+time out of the transcript, switches to your next account, and resumes the *same* work. Slack tells
+you when a turn lands or a limit hits. Sessions sit side by side in one window, each isolated in its
+own git worktree. One agent can start others, hand them tasks, and block until they report — it
+drives that itself through a bundled CLI, so you are not dispatching each step by hand.
 
 > **Status:** Windows and macOS. It drives the `claude` and `codex` CLIs, so it is only as
 > capable as whichever of those you have installed.
@@ -57,19 +62,42 @@ You will also need:
 
 **Sessions**
 - Many `claude` / `codex` sessions in one window, as tabs and as split panes
-- Per-project terminal, and a file explorer with an editor, file operations, and local history
-- Git status shown in the file tree
+- A terminal per project
+
+**Editor and shortcuts**
+- One key shows and hides the explorer — `Ctrl`/`Cmd`+`Shift`+`E` for the file tree, the run toolbar
+  and the run console, leaving the panes where they are
+- One tab bar per pane, holding both kinds of tab: a file sits beside the session that is changing
+  it, a split shows the two at once, and `Ctrl`+`Tab` walks the active pane's row
+- A real editor, not a text box: CodeMirror with syntax highlighting for TypeScript, JavaScript,
+  Python, Go, Rust, C/C++, Java, PHP, SQL, HTML, CSS, Markdown, JSON, YAML and XML, open across tabs
+- A file tree with git state on each entry (new, modified, deleted, conflict), and create, rename,
+  move, copy, delete and reveal-in-Finder/Explorer
+- **Local history:** a snapshot is taken before a delete, so an agent's cleanup — or your own — is
+  recoverable. Kept 30 days, up to 200 MB per project
+- Every shortcut is remappable in settings, defaulting to `Cmd` on macOS and `Ctrl` elsewhere:
+  splitting panes, moving focus between them, cycling sessions, closing a file tab
+- Pick the terminal font, including the fallback for CJK text
 
 **Accounts**
 - Several accounts per vendor, each isolated through its own `CLAUDE_CONFIG_DIR` / `CODEX_HOME`
 - **Account rolling:** when a session hits a usage limit, Astera detects it from the transcript,
   works out the reset time, and resumes the work on the next account
-- Optional syncing of settings and personal content directories between accounts
+- Optional import of a new account's setup from your default one: `settings.json`, the MCP server
+  list, and the `skills`, `commands` and `agents` directories
+
+<div align="center">
+<img src="assets/rolling.gif" width="820" alt="Diagram: a running session hits its weekly limit, Astera reads the reset time from the transcript, switches to the next account, and the same conversation carries on" />
+</div>
 
 **Scheduling and remote control**
 - Schedule sessions to start at a given time
 - Slack notifications when a turn finishes or a limit is hit, and Slack-side replies back into a
   session — so you can keep an eye on a run from your phone
+
+<div align="center">
+<img src="assets/schedule.gif" width="820" alt="Diagram: at 03:00 a scheduled session starts on its own, runs the command left for it, finishes, and Slack reports the result" />
+</div>
 
 **Cross-vendor orchestration**
 - A coordinator session dispatches tasks to worker sessions — including workers on the *other* vendor
@@ -78,8 +106,7 @@ You will also need:
 - Each task can run in its own git worktree so parallel workers do not collide
 
 **Also**
-- Korean and English UI
-- Customisable keybindings
+- Korean, English, Japanese, and Spanish UI, plus a System option that follows the OS locale
 - Auto-update from GitHub Releases
 
 ## Orchestration quickstart
@@ -118,8 +145,7 @@ macOS, and the shared `resources/tray.png` on both) rather than generating them.
 scripts/gen-icon.ps1` (ico/png) on Windows, `sh scripts/gen-icon-mac.sh` (icns) on
 macOS — then commit the regenerated assets.
 
-Note on tests: this project has a Vitest suite colocated as `*.test.ts`, but the test sources are not
-distributed in this repository, so `npm test` here reports no test files. CI therefore runs typecheck
+Tests are colocated as `*.test.ts` and run with `npm test` (Vitest). CI runs the typecheck, the suite,
 and a full bundle build.
 
 ## Documentation
@@ -132,9 +158,10 @@ and a full bundle build.
 
 Issues and pull requests are welcome. A couple of things worth knowing before you start:
 
-- Run `npm run typecheck` and `npm run build` before opening a PR — that is what CI checks.
-- The test sources are not in this repository, so a PR cannot add or change tests. If your change
-  needs one, describe the case in the PR and it will be covered on the maintainer's side.
+- Run `npm run typecheck`, `npm test` and `npm run build` before opening a PR — that is what CI checks.
+- A change to behaviour is expected to come with a test. One rule worth knowing before you touch the
+  rolling tests: the usage-limit phrases are split with `+` on purpose, because Astera watches session
+  output for them — see [CONTRIBUTING](.github/CONTRIBUTING.md).
 - Bug reports are much easier to act on with the app version, your OS version, and the relevant
   lines from `rolling.log` when the problem involves account rolling — `%APPDATA%\astera\rolling.log`
   on Windows, `~/Library/Application Support/astera/rolling.log` on macOS.
