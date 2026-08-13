@@ -30,21 +30,16 @@ const SPRING_BOOT_MARKER = 'org.springframework.boot'
 
 /**
  * Builds the auto-seeded run configs from the project root file list plus the build file bodies (derived, never stored).
- * Why platform is a parameter: this module is pure and never reads process.platform itself (it is registered in
- * tsconfig.web.json, so the renderer imports it too) — the Gradle/Maven wrapper invocation differs between win32 and
- * posix, so the caller (ipc.ts) passes it in.
- * Why the type is string and not NodeJS.Platform: tsconfig.web.json has no @types/node, so the global NodeJS
- * namespace does not exist there — only 'win32' is ever compared, so string is enough.
+ * These come out typed, not as command strings — buildCommand assembles the actual command from the type and a
+ * RunContext at run time, so platform-specific detail like the Gradle/Maven wrapper choice lives there, not here.
  */
 export function detectSeedConfigs(
   files: string[],
-  texts: { packageJson: string | null; buildGradle: string | null; pom: string | null },
-  platform: string
+  texts: { packageJson: string | null; buildGradle: string | null; pom: string | null }
 ): RunConfig[] {
   const set = new Set(files)
   const out: RunConfig[] = []
   if (set.has('package.json') && texts.packageJson) {
-    const pm = detectPackageManager(files)
     let scripts: Record<string, unknown> | undefined
     try {
       const parsed = JSON.parse(texts.packageJson)
@@ -54,43 +49,27 @@ export function detectSeedConfigs(
     }
     if (scripts && typeof scripts === 'object' && !Array.isArray(scripts)) {
       for (const key of Object.keys(scripts)) {
-        const command = `${pm} run ${key}`
-        // TODO(Task 4): seed a typed npm config instead — shell is a stand-in until detectSeedConfigs learns kinds
-        out.push({ id: `seed:${command}`, name: command, type: 'shell', command })
+        out.push({ id: `seed:npm:${key}`, name: key, type: 'npm', script: key })
       }
     }
   }
-  // TODO(Task 4): seed typed cargo/go configs instead — shell is a stand-in until detectSeedConfigs learns kinds
   if (set.has('Cargo.toml'))
-    out.push({ id: 'seed:cargo run', name: 'cargo run', type: 'shell', command: 'cargo run' })
-  if (set.has('go.mod'))
-    out.push({ id: 'seed:go run .', name: 'go run .', type: 'shell', command: 'go run .' })
+    out.push({ id: 'seed:cargo:run', name: 'cargo run', type: 'cargo', subcommand: 'run' })
+  if (set.has('go.mod')) out.push({ id: 'seed:go:run', name: 'go run .', type: 'go', subcommand: 'run' })
 
-  // Gradle: the platform's wrapper when one is present, otherwise the global gradle.
-  // posix runs through sh -c, which only searches PATH, so a bare 'gradlew' without './' never finds the executable — './gradlew' is required.
-  // win32 runs through cmd.exe /c, which looks in the current directory first, so 'gradlew.bat' alone is enough.
   if (set.has('build.gradle') || set.has('build.gradle.kts')) {
-    const runner =
-      platform === 'win32' ? (set.has('gradlew.bat') ? 'gradlew.bat' : 'gradle') : set.has('gradlew') ? './gradlew' : 'gradle'
     // Limitation: in a multi-module Gradle build the Boot plugin may live only in a subproject, so when the root
     // body does not mention it only build/test get seeded. Those configs still work, so this stays as an acceptable heuristic.
     const isBoot = !!texts.buildGradle && texts.buildGradle.includes(SPRING_BOOT_MARKER)
     for (const task of isBoot ? ['bootRun', 'test', 'build'] : ['build', 'test']) {
-      const command = `${runner} ${task}`
-      // TODO(Task 4): seed a typed gradle config instead — shell is a stand-in until detectSeedConfigs learns kinds
-      out.push({ id: `seed:${command}`, name: command, type: 'shell', command })
+      out.push({ id: `seed:gradle:${task}`, name: task, type: 'gradle', tasks: task })
     }
   }
 
-  // Maven: the platform's wrapper when one is present, otherwise the global mvn. Same reasoning as Gradle.
   if (set.has('pom.xml')) {
-    const runner =
-      platform === 'win32' ? (set.has('mvnw.cmd') ? 'mvnw.cmd' : 'mvn') : set.has('mvnw') ? './mvnw' : 'mvn'
     const isBoot = !!texts.pom && texts.pom.includes(SPRING_BOOT_MARKER)
-    for (const task of isBoot ? ['spring-boot:run', 'test', 'package'] : ['package', 'test']) {
-      const command = `${runner} ${task}`
-      // TODO(Task 4): seed a typed maven config instead — shell is a stand-in until detectSeedConfigs learns kinds
-      out.push({ id: `seed:${command}`, name: command, type: 'shell', command })
+    for (const goal of isBoot ? ['spring-boot:run', 'test', 'package'] : ['package', 'test']) {
+      out.push({ id: `seed:maven:${goal}`, name: goal, type: 'maven', goals: goal })
     }
   }
 
@@ -110,14 +89,34 @@ export function isSpringBootProject(texts: { buildGradle: string | null; pom: st
   )
 }
 
-// TODO(Task 4): every config here is still 'shell' (see the TODOs above), so this narrowing to
-// .command is temporary — Task 4 replaces the collision key with seedKeyOf(type + core parameter)
-const commandOf = (c: RunConfig): string => (c.type === 'shell' ? c.command : '')
+/** The identity of a config — its type plus the core parameter that makes it what it is.
+ *
+ *  This used to be the assembled command. Now that the command is a derived value, comparing by it would make a
+ *  seed collide or stop colliding whenever the lockfile (npm) or wrapper (Gradle/Maven) changes, even though the
+ *  configuration itself did not. */
+export function seedKeyOf(c: RunConfig): string {
+  switch (c.type) {
+    case 'shell':
+      return `shell:${c.command}`
+    case 'npm':
+      return `npm:${c.script}`
+    case 'node':
+      return `node:${c.file}`
+    case 'gradle':
+      return `gradle:${c.tasks}`
+    case 'maven':
+      return `maven:${c.goals}`
+    case 'cargo':
+      return `cargo:${c.subcommand}`
+    case 'go':
+      return `go:${c.subcommand}:${c.packagePath ?? '.'}`
+  }
+}
 
-/** Display list = stored configs + seeds whose command does not collide. Stored (user) configs come first. */
+/** Display list = stored configs + seeds whose identity does not collide. Stored (user) configs come first. */
 export function mergeConfigs(seed: RunConfig[], stored: RunConfig[]): RunConfig[] {
-  const storedCommands = new Set(stored.map(commandOf))
-  return [...stored, ...seed.filter((s) => !storedCommands.has(commandOf(s)))]
+  const taken = new Set(stored.map(seedKeyOf))
+  return [...stored, ...seed.filter((s) => !taken.has(seedKeyOf(s)))]
 }
 
 /** One `KEY=VALUE` per line → map. Blank lines and `#` comments are ignored. Splits on the first `=` only (the value may contain `=`). */

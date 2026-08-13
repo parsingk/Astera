@@ -756,10 +756,7 @@ export function registerIpc(
     }
     const texts = await readSeedTexts(projectPath, files)
     const { detectSeedConfigs, mergeConfigs, isSpringBootProject } = await import('../core/run/config')
-    const configs = mergeConfigs(
-      detectSeedConfigs(files, texts, process.platform),
-      core.runConfig.get(projectPath)
-    )
+    const configs = mergeConfigs(detectSeedConfigs(files, texts), core.runConfig.get(projectPath))
     return {
       configs,
       active: core.run.get(projectPath),
@@ -805,10 +802,9 @@ export function registerIpc(
     }
     const texts = await readSeedTexts(projectPath, files)
     const { detectSeedConfigs, mergeConfigs } = await import('../core/run/config')
-    const config = mergeConfigs(
-      detectSeedConfigs(files, texts, process.platform),
-      core.runConfig.get(projectPath)
-    ).find((c) => c.id === configId)
+    const config = mergeConfigs(detectSeedConfigs(files, texts), core.runConfig.get(projectPath)).find(
+      (c) => c.id === configId
+    )
     if (!config) throw new Error(`NO_CONFIG: ${configId}`)
     // Send the validated cwd through — runManager uses config.cwd as the PTY cwd, so passing the
     // original would split what was validated from what runs
