@@ -13,6 +13,7 @@ import {
   type PaneNode,
   type Rect
 } from '../../../core/panes/tree'
+import { parseTab, sessionTab } from '../../../core/panes/tabId'
 import { TerminalView } from './TerminalView'
 import { SessionTabs } from './SessionTabs'
 
@@ -77,9 +78,14 @@ export function PaneGrid({
   const rects: Map<string, Rect> = layout ? computeRects(layout) : new Map()
   const bounds = layout ? splitBoundaries(layout) : []
   const full = layout ? countLeaves(layout) >= MAX_PANES : false
-  // Session → the group holding that session (absent means it is off screen)
+  // Session → the group holding that session (absent means it is off screen). The tree holds tab ids,
+  // so each one is read back through parseTab and only the session tabs are kept
   const paneOfSession = new Map<string, PaneLeaf>()
-  for (const l of paneLeaves) for (const sid of l.sessionIds) paneOfSession.set(sid, l)
+  for (const l of paneLeaves)
+    for (const tabId of l.tabIds) {
+      const ref = parseTab(tabId)
+      if (ref?.kind === 'session') paneOfSession.set(ref.id, l)
+    }
   // Session id → session info. Used when passing a group's session list to its tab bar (SessionTabs)
   const sessionOf = new Map(sessions.map((s) => [s.id, s]))
 
@@ -108,7 +114,9 @@ export function PaneGrid({
         const solo = soloSessionId != null
         // In solo, the one designated session is visible rather than each group's active tab. A session
         // absent from the tree must still be showable, so pane presence is not part of the condition
-        const visible = solo ? s.id === soloSessionId : pane != null && pane.activeSessionId === s.id
+        const visible = solo
+          ? s.id === soloSessionId
+          : pane != null && pane.activeTabId === sessionTab(s.id)
         const rect = pane ? rects.get(pane.id) : undefined
         return (
           <div
@@ -172,9 +180,12 @@ export function PaneGrid({
         paneLeaves.map((l) => {
           const rect = rects.get(l.id)
           if (!rect) return null
-          const groupSessions = l.sessionIds
-            .map((sid) => sessionOf.get(sid))
+          // The tab bar draws sessions only — a file tab in the tree is skipped
+          const groupSessions = l.tabIds
+            .map((tabId) => parseTab(tabId))
+            .map((ref) => (ref?.kind === 'session' ? sessionOf.get(ref.id) : undefined))
             .filter((s): s is SessionInfo => s != null)
+          const activeRef = parseTab(l.activeTabId)
           return (
             <div
               key={`tabbar-${l.id}`}
@@ -185,7 +196,7 @@ export function PaneGrid({
               <SessionTabs
                 sessions={groupSessions}
                 accounts={accounts}
-                activeId={l.activeSessionId}
+                activeId={activeRef?.kind === 'session' ? activeRef.id : null}
                 busy={busy}
                 onSelect={onSelectTab}
                 onClose={onCloseSession}

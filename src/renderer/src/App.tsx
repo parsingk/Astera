@@ -51,11 +51,11 @@ import {
   createGroup,
   findNeighbor,
   firstLeaf,
-  groupOfSession,
+  groupOfTab,
   leafOf,
   moveTab,
   removeTab,
-  replaceSessionId,
+  replaceTabId,
   setRatio,
   splitAndMove,
   unsplit,
@@ -66,7 +66,7 @@ import {
 } from '../../core/panes/tree'
 import { parseTab, sessionTab } from '../../core/panes/tabId'
 import { sessionsOfProject } from '../../core/sessions/projectSessions'
-import { placeSession } from '../../core/panes/place'
+import { placeTab } from '../../core/panes/place'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
 
@@ -298,8 +298,11 @@ export default function App(): React.JSX.Element {
   // Position of the tab context menu
   const [tabMenu, setTabMenu] = useState<{ sessionId: string; x: number; y: number } | null>(null)
   // The session the active pane is showing. Derived from the tree so existing code that reads this value can stay as it is
-  const activeSessionId =
-    layout && activePaneId ? (leafOf(layout, activePaneId)?.activeSessionId ?? null) : null
+  // 트리에는 탭 id가 들어 있으므로(core/panes/tree.ts) 세션 id로 풀어 쓴다. 세션 탭이 아니면 활성
+  // 세션은 없는 것으로 본다 — 아직 파일 탭은 트리에 들어가지 않으므로 실제로는 늘 세션이다
+  const activePaneTab =
+    layout && activePaneId ? parseTab(leafOf(layout, activePaneId)?.activeTabId ?? '') : null
+  const activeSessionId = activePaneTab?.kind === 'session' ? activePaneTab.id : null
   const [showNew, setShowNew] = useState(false)
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null) // prefill for WorktreePanel's 'start session'
   const [cli, setCli] = useState<{ claude: CliStatus; codex: CliStatus } | null>(null)
@@ -446,12 +449,12 @@ export default function App(): React.JSX.Element {
   const showSession = (sessionId: string): void => {
     const cur = layoutRef.current
     if (!cur) {
-      const g = createGroup(sessionId)
+      const g = createGroup(sessionTab(sessionId))
       setLayout(g)
       setActivePaneId(g.id)
       return
     }
-    const act = activateTab(cur, sessionId)
+    const act = activateTab(cur, sessionTab(sessionId))
     if (!act) return
     setLayout(act.root)
     setActivePaneId(act.paneId)
@@ -471,11 +474,11 @@ export default function App(): React.JSX.Element {
       if (list.length === 0) return
       // Every session belongs to exactly one group (invariant 1) — all re-adopted sessions go into the
       // first group, and a running session (or the first one, if none) becomes the active tab
-      const g = createGroup(list[0].id)
+      const g = createGroup(sessionTab(list[0].id))
       let root: PaneNode = g
-      for (const s of list.slice(1)) root = addTab(root, g.id, s.id)
+      for (const s of list.slice(1)) root = addTab(root, g.id, sessionTab(s.id))
       const wanted = (list.find((s) => s.status === 'running') ?? list[0]).id
-      const act = activateTab(root, wanted)
+      const act = activateTab(root, sessionTab(wanted))
       if (!act) return
       setLayout(act.root)
       setActivePaneId(act.paneId)
@@ -490,13 +493,13 @@ export default function App(): React.JSX.Element {
     // Receives sessions main created on its own (orchestration workers) as tabs. The user path builds a
     // tab from the return value of sessions.spawn, but the coordinator path creates the session inside
     // main so that return value never reaches here — this event is the only channel.
-    // Placement uses the same place() as spawn but with background=true: placeSession drops it in as a
+    // Placement uses the same place() as spawn but with background=true: placeTab drops it in as a
     // new tab of the active group (intoGroupBackground in core/panes/place.ts) without making it the
     // active tab.
     const offCreated = window.api.on('session:created', (info) => {
       // A session we already know about does nothing — right after a reload, the sessions.list()
       // re-adoption above can overlap with this event. **This is not the guard that prevents a
-      // duplicate tab**: intoGroupBackground in place.ts filters on its first line with groupOfSession
+      // duplicate tab**: intoGroupBackground in place.ts filters on its first line with groupOfTab
       // and makes the second placement a no-op. What this guard buys is not triggering the setSessions
       // and setLayout re-render that comes along with that no-op.
       if (sessionsRef.current.some((s) => s.id === info.id)) return
@@ -688,8 +691,9 @@ export default function App(): React.JSX.Element {
         // With 2 or more tabs in the active group, the active tab moves into a new group
         const target =
           cur && ((activePaneIdRef.current && leafOf(cur, activePaneIdRef.current)) || firstLeaf(cur))
-        if (target && target.sessionIds.length >= 2) {
-          splitActiveRef.current(dir, false, target.activeSessionId)
+        const targetTab = target ? parseTab(target.activeTabId) : null
+        if (target && target.tabIds.length >= 2 && targetTab?.kind === 'session') {
+          splitActiveRef.current(dir, false, targetTab.id)
           return
         }
         // With only one tab, splitting would change nothing, so a new session is created first —
@@ -752,14 +756,15 @@ export default function App(): React.JSX.Element {
       if (vertical) return // unsplit, there is no cycling up or down
       // Unsplit, there is only one group, so this effectively cycles every session — the same as it always felt
       const group = cur && ((curPane && leafOf(cur, curPane)) || firstLeaf(cur))
-      if (!group || group.sessionIds.length < 2) return
-      const i = group.sessionIds.indexOf(group.activeSessionId)
+      if (!group || group.tabIds.length < 2) return
+      const i = group.tabIds.indexOf(group.activeTabId)
       if (i < 0) return
       e.preventDefault()
       e.stopPropagation()
       if (e.repeat) return
-      const n = group.sessionIds.length
-      showSessionRef.current(group.sessionIds[(i + delta + n) % n])
+      const n = group.tabIds.length
+      const next = parseTab(group.tabIds[(i + delta + n) % n])
+      if (next?.kind === 'session') showSessionRef.current(next.id)
     }
     window.addEventListener('keydown', onKey, true) // capture
     return () => window.removeEventListener('keydown', onKey, true)
@@ -771,7 +776,9 @@ export default function App(): React.JSX.Element {
       sessionBus.discard(oldSessionId)
       setSessions((prev) => prev.map((s) => (s.id === oldSessionId ? info : s)))
       // Swaps only the id while keeping the tab's position, order, and active state — the same function as a restart
-      setLayout((cur) => (cur ? replaceSessionId(cur, oldSessionId, info.id) : cur))
+      setLayout((cur) =>
+        cur ? replaceTabId(cur, sessionTab(oldSessionId), sessionTab(info.id)) : cur
+      )
       setRollStates((prev) => {
         const { [oldSessionId]: _dropped, ...rest } = prev
         return rest
@@ -834,17 +841,19 @@ export default function App(): React.JSX.Element {
     return off
   }, [])
 
-  /** Places a new session. Which group it goes into is decided by placeSession, a pure function in core
+  /** Places a new session. Which group it goes into is decided by placeTab, a pure function in core
    *  (covering four cases: a restart swap, a reserved split, an already-open session, and the active
    *  group), and all this does is move that result into state.
    *  A null paneId leaves the active pane alone — a restart merely inherits the tab's position.
    *  StrictMode can invoke an updater twice, so nothing is computed inside the setLayout callback. */
   const place = (cur: PaneNode | null, sessionId: string, splitDir?: PaneDir | null,
     replaces?: string | null, background?: boolean): void => {
-    const res = placeSession(cur, sessionId, {
+    const res = placeTab(cur, sessionTab(sessionId), {
       activePaneId: activePaneIdRef.current,
       splitDir,
-      replaces,
+      // 트리에 담기는 값이 탭 id이므로 교체 대상도 같은 형식으로 감싼다 — 날 세션 id를 넘기면
+      // 트리에서 찾지 못해 조용히 일반 배치로 떨어지고, 탭이 자기 자리를 잃는다
+      replaces: replaces ? sessionTab(replaces) : replaces,
       background
     })
     setLayout(res.root)
@@ -933,7 +942,7 @@ export default function App(): React.JSX.Element {
       if (gone) {
         const cur = layoutRef.current
         if (cur && !sessionsRef.current.some((s) => s.id === gone)) {
-          const next = removeTab(cur, gone)
+          const next = removeTab(cur, sessionTab(gone))
           if (next) {
             const p = activePaneIdRef.current
             setActivePaneId(p && leafOf(next, p) ? p : firstLeaf(next).id)
@@ -1198,7 +1207,7 @@ export default function App(): React.JSX.Element {
     setSessions(rest)
     const cur = layoutRef.current
     if (cur) {
-      const next = removeTab(cur, id)
+      const next = removeTab(cur, sessionTab(id))
       if (next) {
         // If the active group is gone, focus moves to the first remaining group
         const p = activePaneIdRef.current
@@ -1219,7 +1228,7 @@ export default function App(): React.JSX.Element {
   const splitActive = (dir: PaneDir, placeBefore: boolean, sessionId: string): void => {
     const cur = layoutRef.current
     if (!cur) {
-      const g = createGroup(sessionId)
+      const g = createGroup(sessionTab(sessionId))
       setLayout(g)
       setActivePaneId(g.id)
       return
@@ -1229,7 +1238,7 @@ export default function App(): React.JSX.Element {
       return
     }
     const target = (activePaneIdRef.current && leafOf(cur, activePaneIdRef.current)) || firstLeaf(cur)
-    const res = splitAndMove(cur, sessionId, target.id, dir, placeBefore)
+    const res = splitAndMove(cur, sessionTab(sessionId), target.id, dir, placeBefore)
     // null means the group had only one tab — splitting would change nothing. Not a failure, so no toast either
     if (!res) return
     setLayout(res.root)
@@ -1246,11 +1255,11 @@ export default function App(): React.JSX.Element {
     if (!cur) return
     if (zone === 'center') {
       // Already in that group means nothing happens — moving onto itself is meaningless rather than a failure
-      if (groupOfSession(cur, sessionId)?.id === paneId) {
+      if (groupOfTab(cur, sessionTab(sessionId))?.id === paneId) {
         setActivePaneId(paneId)
         return
       }
-      const next = moveTab(cur, sessionId, paneId)
+      const next = moveTab(cur, sessionTab(sessionId), paneId)
       if (!next) return
       setLayout(next)
       setActivePaneId(paneId)
@@ -1261,7 +1270,8 @@ export default function App(): React.JSX.Element {
       return
     }
     const dir: PaneDir = zone === 'left' || zone === 'right' ? 'row' : 'col'
-    const res = splitAndMove(cur, sessionId, paneId, dir, zone === 'left' || zone === 'up')
+    const before = zone === 'left' || zone === 'up'
+    const res = splitAndMove(cur, sessionTab(sessionId), paneId, dir, before)
     if (!res) return
     setLayout(res.root)
     setActivePaneId(res.paneId)
@@ -1283,7 +1293,7 @@ export default function App(): React.JSX.Element {
   const dropTabInGroup = (paneId: string, sessionId: string, insertBefore: number): void => {
     const cur = layoutRef.current
     if (!cur) return
-    const next = moveTab(cur, sessionId, paneId, insertBefore)
+    const next = moveTab(cur, sessionTab(sessionId), paneId, insertBefore)
     if (!next) return
     setActivePaneId(paneId)
     setLayout(next)
@@ -1294,7 +1304,7 @@ export default function App(): React.JSX.Element {
   const unsplitPane = (paneId: string): void => {
     const cur = layoutRef.current
     if (!cur) return
-    // The group is captured before it is removed — once gone, g.activeSessionId is the only way to
+    // The group is captured before it is removed — once gone, g.activeTabId is the only way to
     // trace where its tabs were absorbed
     const g = leafOf(cur, paneId)
     const next = unsplit(cur, paneId)
@@ -1303,7 +1313,7 @@ export default function App(): React.JSX.Element {
     // group itself is gone and any group will do), here we have to land on the sibling that absorbed
     // g's tabs. Otherwise, unsplitting G1 in G0 | (G1 / G2) bounces focus to G0 on the left instead of
     // to G2, which absorbed them.
-    setActivePaneId((g && groupOfSession(next, g.activeSessionId)?.id) ?? firstLeaf(next).id)
+    setActivePaneId((g && groupOfTab(next, g.activeTabId)?.id) ?? firstLeaf(next).id)
     setLayout(next)
   }
 
@@ -2483,13 +2493,13 @@ export default function App(): React.JSX.Element {
           items={((): MenuItem[] => {
             const cur = layout
             const sid = tabMenu.sessionId
-            const group = cur ? groupOfSession(cur, sid) : null
+            const group = cur ? groupOfTab(cur, sessionTab(sid)) : null
             const atMax = cur != null && countLeaves(cur) >= MAX_PANES
             // With only one tab in the group, splitting changes nothing (splitAndMove returns null) — shown as disabled
-            const cantSplit = !group || atMax || group.sessionIds.length < 2
+            const cantSplit = !group || atMax || group.tabIds.length < 2
             const split = (dir: PaneDir): void => {
               if (!cur || !group) return
-              const res = splitAndMove(cur, sid, group.id, dir, false)
+              const res = splitAndMove(cur, sessionTab(sid), group.id, dir, false)
               if (!res) return
               setLayout(res.root)
               setActivePaneId(res.paneId)
