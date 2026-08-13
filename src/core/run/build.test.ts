@@ -1,0 +1,102 @@
+import { describe, it, expect } from 'vitest'
+import { buildCommand, quoteArg, hasUnsafeWin32Chars, type RunContext } from './build'
+
+const ctx: RunContext = {
+  packageManager: 'pnpm',
+  gradleRunner: 'gradlew.bat',
+  mavenRunner: 'mvnw.cmd',
+  composeFile: null,
+  platform: 'win32'
+}
+const posix: RunContext = { ...ctx, gradleRunner: './gradlew', mavenRunner: './mvnw', platform: 'linux' }
+const base = { id: 'x', name: 'x' }
+
+describe('buildCommand', () => {
+  it('shell 은 명령을 그대로 쓴다', () => {
+    expect(buildCommand({ ...base, type: 'shell', command: 'echo hi && echo bye' }, ctx))
+      .toBe('echo hi && echo bye')
+  })
+
+  it('npm 은 auto 일 때 락파일이 고른 매니저를 쓴다', () => {
+    expect(buildCommand({ ...base, type: 'npm', script: 'dev' }, ctx)).toBe('pnpm run dev')
+    expect(buildCommand({ ...base, type: 'npm', script: 'dev', packageManager: 'yarn' }, ctx))
+      .toBe('yarn run dev')
+  })
+
+  it('npm 의 args 는 뒤에 붙는다', () => {
+    expect(buildCommand({ ...base, type: 'npm', script: 'test', args: '--watch' }, ctx))
+      .toBe('pnpm run test --watch')
+  })
+
+  it('gradle 과 maven 은 문맥의 래퍼를 쓴다', () => {
+    expect(buildCommand({ ...base, type: 'gradle', tasks: 'bootRun' }, ctx)).toBe('gradlew.bat bootRun')
+    expect(buildCommand({ ...base, type: 'gradle', tasks: 'bootRun' }, posix)).toBe('./gradlew bootRun')
+    expect(buildCommand({ ...base, type: 'maven', goals: 'spring-boot:run' }, ctx))
+      .toBe('mvnw.cmd spring-boot:run')
+  })
+
+  it('cargo 의 release 와 features', () => {
+    expect(buildCommand({ ...base, type: 'cargo', subcommand: 'run', release: true }, ctx))
+      .toBe('cargo run --release')
+    expect(buildCommand({ ...base, type: 'cargo', subcommand: 'test', features: 'a b' }, ctx))
+      .toBe('cargo test --features "a b"')
+  })
+
+  it('go 는 패키지 경로가 없으면 . 을 쓴다', () => {
+    expect(buildCommand({ ...base, type: 'go', subcommand: 'run' }, ctx)).toBe('go run .')
+    expect(buildCommand({ ...base, type: 'go', subcommand: 'test', packagePath: './...' }, ctx))
+      .toBe('go test ./...')
+  })
+
+  // node 의 file 과 같은 성격의 단일 경로값이므로 같은 대접을 받아야 한다
+  it('go 의 패키지 경로에 공백이 있으면 인용한다', () => {
+    expect(buildCommand({ ...base, type: 'go', subcommand: 'run', packagePath: './cmd/my app' }, ctx))
+      .toBe('go run "./cmd/my app"')
+  })
+
+  it('node 는 파일 경로를 인용한다', () => {
+    expect(buildCommand({ ...base, type: 'node', file: 'scripts/a b.js' }, ctx))
+      .toBe('node "scripts/a b.js"')
+    expect(buildCommand({ ...base, type: 'node', file: 'scripts/a b.js' }, posix))
+      .toBe("node 'scripts/a b.js'")
+  })
+})
+
+describe('quoteArg', () => {
+  it('공백이 없으면 감싸지 않는다', () => {
+    expect(quoteArg('dev', 'win32')).toBe('dev')
+    expect(quoteArg('dev', 'linux')).toBe('dev')
+  })
+
+  it('빈 문자열은 빈 인자로 남긴다', () => {
+    expect(quoteArg('', 'win32')).toBe('""')
+    expect(quoteArg('', 'linux')).toBe("''")
+  })
+
+  // 두 셸의 인용이 다르다: sh 는 작은따옴표 안을 문자 그대로 읽고, cmd.exe 는 작은따옴표를
+  // 인용으로 보지 않는다
+  it('sh 는 작은따옴표, cmd.exe 는 큰따옴표', () => {
+    expect(quoteArg('a b', 'linux')).toBe("'a b'")
+    expect(quoteArg('a b', 'win32')).toBe('"a b"')
+  })
+
+  it('값 안의 따옴표를 각 셸의 방식으로 끊어 잇는다', () => {
+    expect(quoteArg("it's", 'linux')).toBe("'it'\\''s'")
+    expect(quoteArg('say "hi"', 'win32')).toBe('"say ""hi"""')
+  })
+})
+
+describe('hasUnsafeWin32Chars', () => {
+  // cmd.exe 는 & | ^ % ! < > 를 큰따옴표 안에서도 해석한다 — 조립으로 막을 수 없으니 저장을 거부한다
+  it('cmd.exe 가 인용 안에서도 해석하는 문자를 잡는다', () => {
+    expect(hasUnsafeWin32Chars('a&b')).toBe(true)
+    expect(hasUnsafeWin32Chars('100%')).toBe(true)
+    expect(hasUnsafeWin32Chars('a^b')).toBe(true)
+    expect(hasUnsafeWin32Chars('a|b')).toBe(true)
+  })
+
+  it('평범한 경로는 통과시킨다', () => {
+    expect(hasUnsafeWin32Chars('src/main/index.ts')).toBe(false)
+    expect(hasUnsafeWin32Chars('C:\\Program Files\\Java')).toBe(false)
+  })
+})
