@@ -116,8 +116,11 @@ export function FileEditor({
   /** 이 에디터가 사라질 때 그 상태를 넘긴다. 캐시에 남길지는 App이 정한다 — 닫힌 파일의 상태를
    *  되살리면 안 되기 때문에 여기서 직접 저장하지 않는다 */
   onRetire: (path: string, state: EditorState, scroll: StateEffect<unknown> | null) => void
-  onChange: (next: string) => void
-  onSave: () => void
+  /** 바뀐 텍스트와 **그 텍스트가 속한 경로**를 함께 넘긴다. 경로 없이 텍스트만 넘기면, 프롭이 새
+   *  파일로 바뀐 뒤 뷰가 아직 옛 문서를 들고 있는 찰나의 편집이 새 파일의 내용으로 기록된다 — 그 창이
+   *  실제로 다른 파일을 덮어썼다. 받는 쪽이 경로로 대상을 찾으면 그 오귀속이 구조적으로 불가능해진다 */
+  onChange: (path: string, next: string) => void
+  onSave: (path: string) => void
 }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -141,11 +144,12 @@ export function FileEditor({
       oneDark,
       keymap.of([
         indentWithTab,
-        { key: 'Mod-s', preventDefault: true, run: () => { onSaveRef.current(); return true } }
+        { key: 'Mod-s', preventDefault: true, run: () => { onSaveRef.current(curPathRef.current); return true } }
       ]),
       EditorView.updateListener.of((u) => {
         // Propagate user edits only: setState (a programmatic replacement) has an empty transactions array, so it is excluded
-        if (u.docChanged && u.transactions.length > 0) onChangeRef.current(u.state.doc.toString())
+        if (u.docChanged && u.transactions.length > 0)
+          onChangeRef.current(curPathRef.current, u.state.doc.toString())
       })
     ]
     // 마운트에서도 캐시를 본다. 세션 모드로 나가면 이 컴포넌트가 언마운트되므로, 돌아왔을 때 되돌리기

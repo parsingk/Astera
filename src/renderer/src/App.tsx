@@ -1459,13 +1459,18 @@ export default function App(): React.JSX.Element {
             cache={editorCacheRef.current}
             focused={focused}
             onRetire={retireEditorState}
-            onChange={(next) => {
-              note(`change pane=${paneId} -> ${short(f.id)}`)
-              setBufferContent(f.id, next)
+            onChange={(fromPath, next) => {
+              // 에디터가 알려 준 경로로 대상을 찾는다. 그리고 있는 파일과 다르면 그 편집은 뷰가 아직
+              // 갈아타지 않은 옛 문서의 것이므로 버린다 — 예전에는 이것이 다른 파일을 덮어썼다
+              const target = fileTabsRef.current.find((t) => t.path === fromPath)
+              note(`change pane=${paneId} view=${short(fromPath)} prop=${short(f.path)}`)
+              if (!target || target.id !== f.id) return
+              setBufferContent(target.id, next)
             }}
-            onSave={() => {
-              note(`save pane=${paneId} -> ${short(f.id)}`)
-              saveFile(f.id)
+            onSave={(fromPath) => {
+              const target = fileTabsRef.current.find((t) => t.path === fromPath)
+              note(`save pane=${paneId} view=${short(fromPath)} prop=${short(f.path)}`)
+              if (target) saveFile(target.id)
             }}
           />
           {buf.loading && <div className="file-overlay">{t('files.editor.loading')}</div>}
