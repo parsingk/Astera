@@ -1,0 +1,146 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>diagram</title>
+<style>
+  /* Palette taken from src/renderer/src/styles.css so the diagrams sit in the app's colours. */
+  :root {
+    --bg: #17171a; --panel: #1a1a1e; --elevated: #23232a; --line-soft: #26262c;
+    --text: #d0d0d6; --dim: #7d7d88; --faint: #55555f;
+    --accent: #37b0c4; --ok: #79c98f; --warn: #e8c35a;
+    --mono: "Cascadia Mono", Consolas, "Malgun Gothic", monospace;
+    --sans: system-ui, "Segoe UI", "Malgun Gothic", sans-serif;
+  }
+  * { box-sizing: border-box }
+  body { margin: 0; width: 900px; height: 330px; background: var(--bg); color: var(--text);
+         font-family: var(--sans); overflow: hidden; position: relative }
+  .stage { position: absolute; inset: 0; padding: 24px 28px }
+  h1 { margin: 0 0 20px; font-size: 12.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); font-weight: 600 }
+
+  .box { position: absolute; border: 1px solid var(--line-soft); background: var(--panel); border-radius: 10px; padding: 11px 13px }
+  .box .t { font-size: 12.5px; font-weight: 600 }
+  .box .s { font-size: 11.5px; color: var(--dim); margin-top: 4px; font-family: var(--mono) }
+  .box.lit { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 6px 20px rgba(55,176,196,.16) }
+  .box.warn { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn) }
+  .box.done { border-color: var(--ok) }
+  .box.off { opacity: .36 }
+  .bar { height: 4px; border-radius: 2px; background: var(--elevated); margin-top: 9px; overflow: hidden }
+  .bar i { display: block; height: 100%; background: var(--accent) }
+  .bar.w i { background: var(--warn) }
+  .bar.g i { background: var(--ok) }
+
+  .arrow { position: absolute; height: 1px; background: var(--faint) }
+  .arrow::after { content: ''; position: absolute; right: -1px; top: -3px; border-left: 6px solid var(--faint);
+                  border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent }
+  .arrow.lit { background: var(--accent) }
+  .arrow.lit::after { border-left-color: var(--accent) }
+  .arrow.v { width: 1px }
+  .arrow.v::after { right: -3px; bottom: -1px; top: auto; border-left: 3.5px solid transparent;
+                    border-right: 3.5px solid transparent; border-top: 6px solid var(--faint); border-bottom: 0 }
+  .arrow.v.lit::after { border-top-color: var(--accent) }
+  .hide { visibility: hidden }
+  .cap { position: absolute; left: 0; right: 0; bottom: 20px; text-align: center; font-size: 13.5px }
+  .cap b { color: var(--accent); font-weight: 600 }
+</style>
+<div class="stage">
+  <h1 id="title"></h1>
+  <div id="scene"></div>
+  <div class="cap" id="cap"></div>
+</div>
+<script>
+  const SET = new URLSearchParams(location.search).get('d') || 'rolling';
+  const scene = document.getElementById('scene');
+  const $ = (id) => document.getElementById(id);
+
+  // ── Account rolling: nothing here depends on the scheduler. ─────────────────
+  const rollingHtml = `
+    <div class="box" id="session" style="left:20px; top:84px; width:300px">
+      <div class="t">Session · refactor-parser</div><div class="s" id="st">running on Account A</div>
+      <div class="bar" id="bw"><i id="bi" style="width:40%"></i></div>
+    </div>
+    <div class="box" id="reset" style="left:20px; top:196px; width:300px">
+      <div class="t">Reset time, from the transcript</div><div class="s" id="rs">—</div>
+    </div>
+    <div class="box" id="acctA" style="left:600px; top:60px; width:250px">
+      <div class="t">Account A</div><div class="s" id="pa">weekly 62%</div>
+      <div class="bar g" id="ma"><i id="mai" style="width:62%"></i></div>
+    </div>
+    <div class="box off" id="acctB" style="left:600px; top:170px; width:250px">
+      <div class="t">Account B</div><div class="s">weekly 8%</div>
+      <div class="bar g"><i style="width:8%"></i></div>
+    </div>
+    <div class="arrow hide" id="aA" style="left:326px; top:100px; width:268px"></div>
+    <div class="arrow hide" id="aB" style="left:326px; top:210px; width:268px"></div>
+    <div class="arrow v hide" id="aR" style="left:170px; top:166px; height:26px"></div>`;
+
+  const rolling = [
+    { cap: 'A session is running on one of your accounts.', st: 'running on Account A', bw: '', bi: 40,
+      A: 'lit', pa: 'weekly 62%', ma: 62, aA: 1 },
+    { cap: '<b>It hits the weekly limit.</b>', st: "You've hit your weekly limit", bw: 'w', bi: 62,
+      A: 'warn', pa: 'weekly 100%', ma: 100, aA: 1, session: 'warn' },
+    { cap: 'Astera reads the reset time out of the transcript.', st: 'limit reached', bw: 'w', bi: 62,
+      A: 'warn', pa: 'weekly 100%', ma: 100, aR: 1, reset: 'lit', rs: 'resets 15:30 · 4h 12m away', session: 'warn' },
+    { cap: '<b>It switches to your next account.</b>', st: "switching to 'Account B'…", bw: '', bi: 62,
+      A: 'off', pa: 'weekly 100%', ma: 100, aB: 1, B: 'lit', reset: '', rs: 'resets 15:30 · 4h 12m away', session: 'lit' },
+    { cap: 'The same conversation carries on — nothing is retyped.', st: 'resumed on Account B', bw: '', bi: 82,
+      A: 'off', pa: 'weekly 100%', ma: 100, B: 'lit', reset: '', rs: 'resets 15:30 · 4h 12m away', session: 'lit' },
+    { cap: 'It finishes on the account that still had room.', st: 'done · 12/12 passing', bw: 'g', bi: 100,
+      A: 'off', pa: 'weekly 100%', ma: 100, B: 'done', reset: '', rs: 'resets 15:30 · 4h 12m away', session: 'done' }
+  ];
+
+  // ── Scheduling: nothing here depends on account rolling. ────────────────────
+  const scheduleHtml = `
+    <div class="box" id="sched" style="left:20px; top:110px; width:250px">
+      <div class="t">Schedule</div><div class="s" id="ss">every day · 03:00</div>
+    </div>
+    <div class="box off" id="session" style="left:330px; top:110px; width:280px">
+      <div class="t">Session · nightly-sync</div><div class="s" id="st">not running</div>
+      <div class="bar" id="bw"><i id="bi" style="width:0%"></i></div>
+    </div>
+    <div class="box off" id="slack" style="left:660px; top:110px; width:200px">
+      <div class="t">Slack</div><div class="s" id="sl">—</div>
+    </div>
+    <div class="arrow hide" id="a1" style="left:276px; top:132px; width:48px"></div>
+    <div class="arrow hide" id="a2" style="left:616px; top:132px; width:38px"></div>`;
+
+  const schedule = [
+    { cap: 'You are not at the desk. The clock is.', ss: 'every day · 03:00 · in 4m', sched: 'lit', st: 'not running', bi: 0 },
+    { cap: '<b>At 03:00 the session starts by itself.</b>', ss: 'every day · 03:00 · now', sched: 'lit',
+      a1: 1, session: 'lit', st: 'starting…', bi: 8 },
+    { cap: 'It runs the command you left for it.', ss: 'every day · 03:00', sched: '',
+      session: 'lit', st: 'running', bi: 55 },
+    { cap: 'The turn finishes.', ss: 'every day · 03:00', sched: '', session: 'done', st: 'done · 12/12 passing', bi: 100, bw: 'g' },
+    { cap: 'Slack tells you, so you read it over breakfast.', ss: 'every day · 03:00', sched: '',
+      session: 'done', st: 'done · 12/12 passing', bi: 100, bw: 'g', a2: 1, slack: 'lit', sl: '✅ turn finished' },
+    { cap: 'Tomorrow at 03:00 it goes again.', ss: 'every day · 03:00 · next 8/13', sched: 'lit',
+      session: 'done', st: 'done · 12/12 passing', bi: 100, bw: 'g', slack: '', sl: '✅ turn finished' }
+  ];
+
+  const cfg = SET === 'schedule'
+    ? { title: 'Scheduled sessions', html: scheduleHtml, frames: schedule }
+    : { title: 'Account rolling', html: rollingHtml, frames: rolling };
+
+  $('title').textContent = cfg.title;
+  scene.innerHTML = cfg.html;
+
+  const setCls = (id, base, v) => { const e = $(id); if (e) e.className = base + (v ? ' ' + v : '') };
+  const setTxt = (id, v) => { const e = $(id); if (e && v !== undefined) e.textContent = v };
+  const setArrow = (id, on) => { const e = $(id); if (!e) return; const v = e.classList.contains('v'); e.className = 'arrow' + (v ? ' v' : '') + (on ? ' lit' : ' hide') };
+
+  window.FRAME_COUNT = cfg.frames.length;
+  window.setFrame = (i) => {
+    const f = cfg.frames[i];
+    $('cap').innerHTML = f.cap;
+    setCls('session', 'box', f.session ?? (SET === 'schedule' ? 'off' : ''));
+    setCls('acctA', 'box', f.A); setCls('acctB', 'box', f.B ?? 'off');
+    setCls('reset', 'box', f.reset === undefined ? 'off' : f.reset);
+    setCls('sched', 'box', f.sched); setCls('slack', 'box', f.slack === undefined ? 'off' : f.slack);
+    setCls('bw', 'bar', f.bw); setCls('ma', 'bar g', '');
+    setTxt('st', f.st); setTxt('rs', f.rs ?? '—'); setTxt('pa', f.pa); setTxt('ss', f.ss); setTxt('sl', f.sl ?? '—');
+    if ($('bi')) $('bi').style.width = (f.bi ?? 0) + '%';
+    if ($('mai')) $('mai').style.width = (f.ma ?? 0) + '%';
+    if ($('ma') && f.ma === 100) $('ma').className = 'bar w';
+    for (const id of ['aA', 'aB', 'aR', 'a1', 'a2']) setArrow(id, f[id]);
+    return i;
+  };
+  window.setFrame(0);
+</script>

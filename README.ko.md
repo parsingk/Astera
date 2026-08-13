@@ -142,6 +142,10 @@ npm run dist:mac   # macOS universal dmg + zip
 해당 플랫폼에서 스크립트를 다시 실행하세요 — Windows는 `powershell -File scripts/gen-icon.ps1`
 (ico/png), macOS는 `sh scripts/gen-icon-mac.sh` (icns) — 그리고 생성된 에셋을 커밋하세요.
 
+README의 다이어그램 두 개도 같은 방식으로 커밋되어 있습니다. 원본은 `assets/src/diagram.html`이고,
+`npx electron scripts/gen-diagram.js`로 GIF를 다시 만든 뒤 커밋하면 됩니다(`PATH`에 `ffmpeg`가
+있어야 합니다).
+
 테스트는 대상 옆에 `*.test.ts`로 두고 `npm test`(Vitest)로 실행합니다. CI는 타입체크, 테스트, 전체
 번들 빌드를 돌립니다.
 
