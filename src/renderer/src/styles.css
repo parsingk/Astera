@@ -194,6 +194,13 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .run-btn.play { color: #3fb950; }
 .run-btn.play:disabled { color: var(--text-faint); background: transparent; cursor: default; }
 .run-btn.stop { color: #e5534b; }
+/* 구성 관리 메뉴(⋮). 타이틀바에 상시로 놓이는 툴바라 자주 쓰지 않는 동작은 접어 둔다.
+   위치와 생김새는 아래 .run-global-menu 와 같은 규칙을 따른다 — 같은 툴바에서 두 메뉴가 다르게
+   생기면 그게 더 눈에 띈다 */
+.run-more { position: relative; }
+.run-more-menu { position: absolute; top: calc(100% + 5px); right: 0; z-index: 20; min-width: 170px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; padding: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
+.run-more-item { text-align: left; white-space: nowrap; padding: 5px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text); font-size: 12.5px; cursor: pointer; }
+.run-more-item:hover { background: var(--elevated); }
 .run-global { position: relative; }
 .run-global-badge { display: inline-flex; align-items: center; gap: 4px; background: var(--elevated); border: 1px solid var(--line-soft); color: var(--text-dim); border-radius: 4px; font-size: 11px; padding: 2px 7px; cursor: pointer; font-variant-numeric: tabular-nums; }
 .run-global-badge:hover { border-color: var(--text-faint); }

@@ -566,7 +566,8 @@ export const ja: Catalog = {
   // RunToolbar.tsx — config select, run/stop, edit/delete, the running list
   'run.config.selectLabel': '実行構成の選択',
   'run.config.none': '実行構成がありません',
-  'run.config.addOption': '+ 実行構成を追加…',
+  'run.config.add': '実行構成を追加…',
+  'run.config.more': 'その他の操作',
   'run.action.run': '実行',
   'run.action.stop': '停止',
   'run.config.editTitle': '構成を編集',

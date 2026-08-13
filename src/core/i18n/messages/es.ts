@@ -572,7 +572,8 @@ export const es: Catalog = {
   // RunToolbar.tsx — config select, run/stop, edit/delete, the running list
   'run.config.selectLabel': 'Configuración de ejecución',
   'run.config.none': 'Sin configuraciones de ejecución',
-  'run.config.addOption': '+ Agregar configuración de ejecución…',
+  'run.config.add': 'Añadir configuración…',
+  'run.config.more': 'Más acciones',
   'run.action.run': 'Ejecutar',
   'run.action.stop': 'Detener',
   'run.config.editTitle': 'Editar la configuración',
