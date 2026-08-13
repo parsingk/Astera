@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { promises as fs, existsSync } from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { removeWorktree, isDangerousRemovalPath } from './remove'
 import { createWorktree } from './create'
 import { WorktreeRegistry } from './registry'
 import { localBranchExists } from './git'
-import { makeRepo } from './testRepo'
+import { makeRepo, tempDir } from './testRepo'
+import { absPath } from '../testPaths'
 
 const noUse = (): null => null
 let repo: string
@@ -18,21 +18,22 @@ const gitIn = (cwd: string, args: string[]): string =>
 
 beforeEach(async () => {
   repo = await makeRepo('astera-wt-rm-')
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wt-rmroot-'))
-  const regDir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wt-rmreg-'))
+  const root = await tempDir('astera-wt-rmroot-')
+  const regDir = await tempDir('astera-wt-rmreg-')
   reg = new WorktreeRegistry(path.join(regDir, 'worktrees.json'), root)
   await reg.load()
 })
 
 describe('isDangerousRemovalPath', () => {
   it('repo 자체·홈·홈 상위·드라이브 루트는 위험', () => {
-    const home = 'C:\\Users\\me'
-    expect(isDangerousRemovalPath('D:\\repos\\app', 'D:\\repos\\app', home)).toBe(true)
-    expect(isDangerousRemovalPath(home, 'D:\\repos\\app', home)).toBe(true)
-    expect(isDangerousRemovalPath('C:\\Users', 'D:\\repos\\app', home)).toBe(true) // 홈 포함 상위
-    expect(isDangerousRemovalPath('D:\\', 'D:\\repos\\app', home)).toBe(true)
-    expect(isDangerousRemovalPath('D:\\repos', 'D:\\repos\\app', home)).toBe(true) // repo 포함 상위
-    expect(isDangerousRemovalPath('C:\\Users\\me\\wt\\a', 'D:\\repos\\app', home)).toBe(false)
+    const home = absPath('Users', 'me')
+    const repoPath = absPath('repos', 'app')
+    expect(isDangerousRemovalPath(repoPath, repoPath, home)).toBe(true)
+    expect(isDangerousRemovalPath(home, repoPath, home)).toBe(true)
+    expect(isDangerousRemovalPath(absPath('Users'), repoPath, home)).toBe(true) // 홈 포함 상위
+    expect(isDangerousRemovalPath(path.parse(repoPath).root, repoPath, home)).toBe(true) // 파일시스템 루트
+    expect(isDangerousRemovalPath(absPath('repos'), repoPath, home)).toBe(true) // repo 포함 상위
+    expect(isDangerousRemovalPath(absPath('Users', 'me', 'wt', 'a'), repoPath, home)).toBe(false)
   })
 })
 

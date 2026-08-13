@@ -3,6 +3,7 @@ import path from 'node:path'
 import type { DetectCandidate } from './detect'
 import { GHOST_ID_PREFIX, isGhostAccountId } from './ghostId'
 import { ghostAccounts } from './ghosts'
+import { absPath } from '../testPaths'
 
 const candidate = (over: Partial<DetectCandidate> = {}): DetectCandidate => ({
   configDir: path.join('C:', 'Users', 'me', '.claude-accounts', 'work'),
@@ -33,7 +34,14 @@ describe('ghostAccounts', () => {
     expect(a.id).toBe(b.id)
   })
 
-  it('대소문자·경로 구분자만 다른 같은 경로는 같은 id', () => {
+  it('대소문자만 다른 같은 경로는 같은 id', () => {
+    const a = ghostAccounts([candidate({ configDir: absPath('Users', 'me', '.claude-accounts', 'work') })])[0]
+    const b = ghostAccounts([candidate({ configDir: absPath('Users', 'ME', '.claude-accounts', 'WORK') })])[0]
+    expect(a.id).toBe(b.id)
+  })
+
+  // 구분자 무시는 win32에서만 의미가 있다 — POSIX에서 `\`는 이름에 쓸 수 있는 글자다
+  it.runIf(process.platform === 'win32')('win32에서는 구분자만 달라도 같은 id', () => {
     const a = ghostAccounts([candidate({ configDir: 'C:\\Users\\me\\.claude-accounts\\work' })])[0]
     const b = ghostAccounts([candidate({ configDir: 'C:/Users/ME/.claude-accounts/WORK' })])[0]
     expect(a.id).toBe(b.id)

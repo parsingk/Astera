@@ -282,8 +282,12 @@ describe('HistoryIndex (lazy)', () => {
     const shouted = await index.projectsPage({ hiddenPaths: [target.toUpperCase()] })
     expect(shouted.total).toBe(0)
 
-    const slashed = await index.projectsPage({ hiddenPaths: [target.replace(/\\/g, '/')] })
-    expect(slashed.total).toBe(0)
+    // 구분자 바꿔치기는 win32에서만 같은 경로다. POSIX에서 `\`는 이름에 쓸 수 있는 글자라, 슬래시로
+    // 바꾼 문자열은 같은 경로가 아니라 아예 다른 경로가 된다
+    if (process.platform === 'win32') {
+      const slashed = await index.projectsPage({ hiddenPaths: [target.replace(/\\/g, '/')] })
+      expect(slashed.total).toBe(0)
+    }
   })
 
   it('projectsPage()는 hiddenPaths가 없거나 비어도 기존 동작을 유지한다', async () => {

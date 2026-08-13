@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { detectCodexConfigDirs, readCodexEmail, isAmbientCodexDir } from './detectCodex'
+import { absPath } from '../testPaths'
 
 let home: string
 
@@ -92,8 +93,14 @@ describe('detectCodexConfigDirs', () => {
 })
 
 describe('isAmbientCodexDir', () => {
-  it('~/.codex만 ambient, 대소문자·구분자 무시', () => {
+  it('~/.codex만 ambient, 대소문자 무시', () => {
+    const home = absPath('Users', 't')
+    expect(isAmbientCodexDir(home, path.join(absPath('Users', 'T'), '.CODEX'))).toBe(true)
+    expect(isAmbientCodexDir(home, path.join(home, '.codex-accounts', 'a'))).toBe(false)
+  })
+
+  // 구분자 무시는 win32에서만 의미가 있다 — POSIX에서 `\`는 이름에 쓸 수 있는 글자다
+  it.runIf(process.platform === 'win32')('win32에서는 구분자 차이도 무시한다', () => {
     expect(isAmbientCodexDir('C:\\Users\\t', 'c:/Users/T/.CODEX')).toBe(true)
-    expect(isAmbientCodexDir('C:\\Users\\t', 'C:\\Users\\t\\.codex-accounts\\a')).toBe(false)
   })
 })

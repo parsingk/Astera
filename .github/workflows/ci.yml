@@ -10,8 +10,11 @@ on:
 # Windows, clang on macOS). A successful build on one platform proves nothing about the other.
 # If the build breaks here, it breaks in the release workflow too, so both platforms must be tested.
 #
-# There is no test job: test sources are not part of this repository (see .gitignore). Typecheck and
-# a full bundle build are what CI can verify here.
+# Running both also matters for the suite itself, not just the native build. The tests were written
+# on Windows and, until they were published, had never run anywhere else — so they had picked up
+# assumptions that only hold there: that os.tmpdir() is already a canonical path (it is not, with
+# 8.3 short names on the Windows runner and /var → /private/var on macOS), and that `\` is a path
+# separator. Both platforms have to run them or those assumptions come back.
 jobs:
   build:
     strategy:

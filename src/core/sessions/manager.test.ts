@@ -5,6 +5,7 @@ import type { PtyFactory, PtyLike, PtySpawnOptions } from './pty'
 import { SessionManager, prependToPath } from './manager'
 import { buildClaudeCommand, buildCodexCommand } from './commands'
 import { makeDescriptors } from '../providers/descriptor'
+import { absPath } from '../testPaths'
 
 class FakePty implements PtyLike {
   pid = 4242
@@ -62,16 +63,16 @@ describe('SessionManager', () => {
   it('기본 계정(configDir가 <home>/.claude)은 CLAUDE_CONFIG_DIR을 주입하지 않는다', () => {
     // claude의 메인 상태(온보딩·oauth·폴더 신뢰)는 홈 루트 ~/.claude.json에 있고
     // CLAUDE_CONFIG_DIR 미설정일 때만 쓰이므로, 기본 계정엔 주입하면 안 된다
-    const homeDir = 'C:\\Users\\tester'
-    const defaultAccount: Account = { ...account, configDir: 'C:\\Users\\tester\\.claude' }
+    const homeDir = absPath('Users', 'tester')
+    const defaultAccount: Account = { ...account, configDir: absPath('Users', 'tester', '.claude') }
     const { manager, spawned } = setup(100, 20, homeDir)
     manager.spawn({ account: defaultAccount, cwd: process.cwd() })
     expect('CLAUDE_CONFIG_DIR' in spawned[0].opts.env).toBe(false)
   })
 
-  it('기본 계정 판정은 경로 대소문자·구분자 차이를 무시한다', () => {
-    const homeDir = 'C:\\Users\\tester'
-    const defaultAccount: Account = { ...account, configDir: 'c:/Users/Tester/.CLAUDE' }
+  it('기본 계정 판정은 경로 대소문자 차이를 무시한다', () => {
+    const homeDir = absPath('Users', 'tester')
+    const defaultAccount: Account = { ...account, configDir: absPath('Users', 'Tester', '.CLAUDE') }
     const { manager, spawned } = setup(100, 20, homeDir)
     manager.spawn({ account: defaultAccount, cwd: process.cwd() })
     expect('CLAUDE_CONFIG_DIR' in spawned[0].opts.env).toBe(false)
@@ -261,8 +262,8 @@ describe('SessionManager', () => {
   })
 
   it('ambient codex 계정(~/.codex)은 CODEX_HOME을 주입하지 않는다', () => {
-    const ambient: Account = { ...codexAccount, configDir: 'c:/Users/Tester/.CODEX' }
-    const { manager, spawned } = setup(100, 20, 'C:\\Users\\tester')
+    const ambient: Account = { ...codexAccount, configDir: absPath('Users', 'Tester', '.CODEX') }
+    const { manager, spawned } = setup(100, 20, absPath('Users', 'tester'))
     manager.spawn({ account: ambient, cwd: process.cwd() })
     expect('CODEX_HOME' in spawned[0].opts.env).toBe(false)
   })

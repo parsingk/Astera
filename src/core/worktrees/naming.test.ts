@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
+import { absPath } from '../testPaths'
 import {
   slugify, autoName, branchNameFor, candidateName, repoDirName, worktreePathFor, MAX_SUFFIX_ATTEMPTS
 } from './naming'
@@ -51,11 +52,12 @@ describe('candidateName / MAX_SUFFIX_ATTEMPTS', () => {
 
 describe('repoDirName / worktreePathFor', () => {
   it('.git 접미사 제거', () => {
-    expect(repoDirName('D:\\repos\\my-app.git')).toBe('my-app')
+    expect(repoDirName(absPath('repos', 'my-app.git'))).toBe('my-app')
   })
   it('루트/repo명/slug 조합', () => {
-    expect(worktreePathFor('D:\\wt', 'D:\\repos\\my-app', 'fix')).toBe(
-      path.join('D:\\wt', 'my-app', 'fix')
+    const root = absPath('wt')
+    expect(worktreePathFor(root, absPath('repos', 'my-app'), 'fix')).toBe(
+      path.join(root, 'my-app', 'fix')
     )
   })
 })

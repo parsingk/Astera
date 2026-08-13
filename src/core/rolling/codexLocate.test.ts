@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { findRollout } from './codexLocate'
+import { absPath } from '../testPaths'
 
 let home: string
 const NOW = Date.parse('2026-07-09T10:00:00Z') // 고정 '현재' — 오늘=2026/07/09, 어제=2026/07/08
@@ -128,15 +129,29 @@ describe('findRollout', () => {
     ).toBeNull()
   })
 
-  it('cwd 비교는 대소문자·구분자 차이를 무시한다', async () => {
+  it('cwd 비교는 대소문자 차이를 무시한다', async () => {
     await makeRollout({
       y: '2026', m: '07', d: '09',
       uuid: '019f4524-e0ac-7571-a8af-5585504f0d35',
+      cwd: absPath('WORK', 'p'),
+      mtimeMs: NOW - 1_000
+    })
+    const r = await findRollout({
+      configDir: home, cwd: absPath('work', 'p'), since: NOW - 5_000, now: () => NOW
+    })
+    expect(r?.sessionId).toBe('019f4524-e0ac-7571-a8af-5585504f0d35')
+  })
+
+  // 구분자 무시는 win32에서만 의미가 있다 — POSIX에서 `\`는 이름에 쓸 수 있는 글자다
+  it.runIf(process.platform === 'win32')('win32에서는 구분자 차이도 무시한다', async () => {
+    await makeRollout({
+      y: '2026', m: '07', d: '09',
+      uuid: '019f4524-e0ac-7571-a8af-5585504f0d3a',
       cwd: 'd:/WORK/p',
       mtimeMs: NOW - 1_000
     })
     const r = await findRollout({ configDir: home, cwd: 'D:\\work\\p', since: NOW - 5_000, now: () => NOW })
-    expect(r?.sessionId).toBe('019f4524-e0ac-7571-a8af-5585504f0d35')
+    expect(r?.sessionId).toBe('019f4524-e0ac-7571-a8af-5585504f0d3a')
   })
 
   it('어제 날짜 폴더도 본다 (자정 경계·타임존 차이)', async () => {
@@ -150,22 +165,29 @@ describe('findRollout', () => {
     expect(r?.sessionId).toBe('019f4524-e0ac-7571-a8af-5585504f0d36')
   })
 
-  it('후보가 여럿이면 가장 나중에 생성된 파일을 고른다 (mtime이 아니라 생성 시각)', async () => {
+  it('후보가 여럿이면 가장 나중에 생성된 파일을 고른다 (mtime이 아니라 생성 시각)', async (ctx) => {
     const older = await makeRollout({
       y: '2026', m: '07', d: '09',
       uuid: '019f4524-e0ac-7571-a8af-5585504f0d37',
-      cwd: 'D:\\work\\p',
+      cwd: absPath('work', 'p'),
       mtimeMs: NOW - 500 // 먼저 생겼지만 더 최근에 쓰였다 — 정렬 기준이 mtime이면 이쪽이 뽑힌다
     })
     await gap()
-    await makeRollout({
+    const newer = await makeRollout({
       y: '2026', m: '07', d: '09',
       uuid: '019f4524-e0ac-7571-a8af-5585504f0d38',
-      cwd: 'D:\\work\\p',
+      cwd: absPath('work', 'p'),
       mtimeMs: NOW - 3_000
     })
-    const since = (await fs.stat(older)).birthtimeMs - 1_000 // 둘 다 후보에 들어오게
-    const r = await findRollout({ configDir: home, cwd: 'D:\\work\\p', since, now: () => NOW })
+    // 이 테스트가 성립하려면 파일시스템이 두 생성 시각을 구별해 줘야 한다. createdAt은 birthtime이
+    // 0이면 mtime으로 물러나므로(codexLocate.ts), 그런 환경에서는 mtime 순서인 d37이 뽑히는 것이
+    // 옳은 동작이다 — 제품의 결함이 아니라 이 단언이 물어볼 수 없는 환경이다.
+    const [a, b] = [await fs.stat(older), await fs.stat(newer)]
+    if (!(a.birthtimeMs > 0 && b.birthtimeMs > a.birthtimeMs))
+      return ctx.skip('생성 시각을 구별하지 못하는 파일시스템 (birthtime 미지원 또는 해상도 부족)')
+
+    const since = a.birthtimeMs - 1_000 // 둘 다 후보에 들어오게
+    const r = await findRollout({ configDir: home, cwd: absPath('work', 'p'), since, now: () => NOW })
     expect(r?.sessionId).toBe('019f4524-e0ac-7571-a8af-5585504f0d38')
   })
 

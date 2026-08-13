@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
 import { sortEntries, isPathWithin, buildIgnoreMatcher, type DirEntry } from './tree'
+import { absPath } from '../testPaths'
 
 const e = (name: string, isDir: boolean): DirEntry => ({ name, path: `D:\\p\\${name}`, isDir })
 
@@ -23,21 +24,26 @@ describe('sortEntries', () => {
 })
 
 describe('isPathWithin', () => {
-  const base = 'D:\\work\\proj'
+  const base = absPath('work', 'proj')
 
   it('동일 경로와 하위 경로를 허용한다', () => {
-    expect(isPathWithin(base, 'D:\\work\\proj')).toBe(true)
-    expect(isPathWithin(base, 'D:\\work\\proj\\src\\a.ts')).toBe(true)
+    expect(isPathWithin(base, absPath('work', 'proj'))).toBe(true)
+    expect(isPathWithin(base, absPath('work', 'proj', 'src', 'a.ts'))).toBe(true)
   })
 
-  it('대소문자·구분자 차이를 무시한다', () => {
+  it('대소문자 차이를 무시한다', () => {
+    expect(isPathWithin(base, absPath('WORK', 'proj', 'src'))).toBe(true)
+  })
+
+  // 구분자 무시는 win32에서만 의미가 있다 — POSIX에서 `\`는 구분자가 아니라 이름에 쓸 수 있는 글자다
+  it.runIf(process.platform === 'win32')('win32에서는 구분자 차이도 무시한다', () => {
     expect(isPathWithin(base, 'd:\\WORK\\proj\\src')).toBe(true)
     expect(isPathWithin(base, 'D:/work/proj/src')).toBe(true)
   })
 
-  it('형제 prefix 경로를 거부한다 (D:\\work\\proj2)', () => {
-    expect(isPathWithin(base, 'D:\\work\\proj2')).toBe(false)
-    expect(isPathWithin(base, 'D:\\work\\proj2\\a.ts')).toBe(false)
+  it('형제 prefix 경로를 거부한다 (…/proj2)', () => {
+    expect(isPathWithin(base, absPath('work', 'proj2'))).toBe(false)
+    expect(isPathWithin(base, absPath('work', 'proj2', 'a.ts'))).toBe(false)
   })
 
   it('상위 경로와 .. 탈출을 거부한다', () => {

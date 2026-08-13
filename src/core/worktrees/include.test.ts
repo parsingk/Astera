@@ -2,10 +2,9 @@ import { describe, it, expect } from 'vitest'
 import type { TestContext } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { promises as fs } from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { parseWorktreeInclude, copyWorktreeInclude, dirSize } from './include'
-import { makeRepo } from './testRepo'
+import { makeRepo, tempDir } from './testRepo'
 
 /** symlink 생성 실패가 권한 문제(EPERM/EACCES)면 실패가 아니라 스킵으로 처리한다(리뷰 Finding 5) —
  *  Windows는 보통 관리자 권한/Developer Mode가 있어야 symlink를 만들 수 있고, 그게 없는 CI나
@@ -70,7 +69,7 @@ describe('copyWorktreeInclude', () => {
     )
     execFileSync('git', ['add', '.gitignore', '.worktreeinclude'], { cwd: repo, windowsHide: true })
     execFileSync('git', ['commit', '-m', 'inc'], { cwd: repo, windowsHide: true })
-    const wt = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wt-dest-'))
+    const wt = await tempDir('astera-wt-dest-')
     const warnings = await copyWorktreeInclude(repo, wt)
     expect(await fs.readFile(path.join(wt, '.env'), 'utf8')).toBe('KEY=1')
     expect(await fs.readFile(path.join(wt, 'secrets', 's.txt'), 'utf8')).toBe('s')
@@ -84,7 +83,7 @@ describe('copyWorktreeInclude', () => {
 
   it('.worktreeinclude 자체가 없으면 무동작·경고 없음', async () => {
     const repo = await makeRepo('astera-wt-inc2-')
-    const wt = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wt-dest2-'))
+    const wt = await tempDir('astera-wt-dest2-')
     expect(await copyWorktreeInclude(repo, wt)).toEqual([])
   })
 
@@ -101,7 +100,7 @@ describe('copyWorktreeInclude', () => {
     )
     execFileSync('git', ['add', '.gitignore', '.worktreeinclude'], { cwd: repo, windowsHide: true })
     execFileSync('git', ['commit', '-m', 'inc3'], { cwd: repo, windowsHide: true })
-    const wt = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wt-dest3-'))
+    const wt = await tempDir('astera-wt-dest3-')
     // 목적지에 'a'를 파일로 미리 만들어 fs.mkdir(recursive)가 ENOTDIR로 충돌하게 강제
     await fs.writeFile(path.join(wt, 'a'), 'blocker', 'utf8')
     const warnings = await copyWorktreeInclude(repo, wt) // throw 없이 resolve되어야 함
@@ -114,7 +113,7 @@ describe('dirSize', () => {
   it('심볼릭 링크는 dereference된 실체 크기로 집계한다 (리뷰 Finding 3)', async (ctx) => {
     // fs.cp(..., { dereference: true })는 링크의 실체를 복사하므로, 용량 상한 계산도
     // dirent 기준(isFile/isDirectory 둘 다 false)이 아니라 실체 stat 기준이어야 한다.
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wt-dirsize-'))
+    const dir = await tempDir('astera-wt-dirsize-')
     await fs.writeFile(path.join(dir, 'real.txt'), 'x'.repeat(1000), 'utf8')
     await trySymlink(ctx, path.join(dir, 'real.txt'), path.join(dir, 'link.txt'), 'file')
     expect(await dirSize(dir)).toBe(2000) // real.txt(1000) + link.txt 실체(1000), 0으로 누락되면 안 됨
@@ -124,7 +123,7 @@ describe('dirSize', () => {
     '디렉토리 symlink 순환은 무한 재귀 없이 settle하고 실파일 크기만 센다 (리뷰 Finding 4)',
     async (ctx) => {
       // dir/sub/back -> dir : pnpm류 node_modules에 흔한 디렉토리 symlink 순환을 그대로 재현
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wt-dirsize-cycle-'))
+      const dir = await tempDir('astera-wt-dirsize-cycle-')
       await fs.writeFile(path.join(dir, 'real.txt'), 'x'.repeat(500), 'utf8')
       await fs.mkdir(path.join(dir, 'sub'))
       await trySymlink(ctx, dir, path.join(dir, 'sub', 'back'), 'dir')

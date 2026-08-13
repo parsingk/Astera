@@ -1,12 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { promises as fs, existsSync } from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { createWorktree } from './create'
 import { WorktreeRegistry } from './registry'
 import { git, localBranchExists } from './git'
-import { makeRepo, addOrigin } from './testRepo'
+import { makeRepo, addOrigin, tempDir } from './testRepo'
 
 let repo: string
 let root: string
@@ -17,8 +16,8 @@ const gitIn = (cwd: string, args: string[]): string =>
 
 beforeEach(async () => {
   repo = await makeRepo('astera-wt-create-')
-  root = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wt-root-'))
-  const regDir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wt-regd-'))
+  root = await tempDir('astera-wt-root-')
+  const regDir = await tempDir('astera-wt-regd-')
   reg = new WorktreeRegistry(path.join(regDir, 'worktrees.json'), root)
   await reg.load()
 })
@@ -62,7 +61,7 @@ describe('createWorktree', () => {
   })
 
   it('git repo가 아니면 NOT_GIT_REPO', async () => {
-    const notRepo = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wt-plain-'))
+    const notRepo = await tempDir('astera-wt-plain-')
     await expect(createWorktree({ repoPath: notRepo, registry: reg })).rejects.toThrow(/NOT_GIT_REPO/)
   })
 
