@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { OutputScanner, stripAnsi, findWaitChoice } from './detect'
+import { OutputScanner, stripAnsi, findWaitChoice, looksLikeChoicePrompt } from './detect'
 
 describe('stripAnsi', () => {
   it('CSI·OSC 시퀀스를 제거한다', () => {
@@ -82,6 +82,33 @@ describe('OutputScanner', () => {
     const hit = s.push('Do you trust the files in this folder?\n1. Yes, proceed')
     expect(hit.trust).toBe(true)
     expect(hit.limit).toBe(false)
+  })
+
+  // 좁은 창이 문장을 접으면 리터럴 공백은 매치에 실패한다. LIMIT_RE가 이미 겪은 실패이고,
+  // 실제로 롤링 뒤 신뢰 다이얼로그를 놓쳐 이어가기 문구가 그 다이얼로그 안으로 들어갔다
+  it('소프트 랩으로 끊긴 신뢰 다이얼로그도 감지한다', () => {
+    const s = new OutputScanner()
+    expect(s.push('Do you trust the files in\r\nthis folder?\n1. Yes, proceed').trust).toBe(true)
+  })
+
+  it('청크 경계로 잘린 신뢰 다이얼로그도 감지한다', () => {
+    const s = new OutputScanner()
+    expect(s.push('Do you trust the fi').trust).toBe(false)
+    expect(s.push('les in this folder?').trust).toBe(true)
+  })
+})
+
+describe('looksLikeChoicePrompt', () => {
+  it('커서가 놓인 선택 목록을 감지한다', () => {
+    expect(looksLikeChoicePrompt('Do you trust the files in this folder?\n❯ 1. Yes, proceed\n  2. No, exit')).toBe(true)
+  })
+
+  it('커서가 없는 번호 목록은 대화상자로 보지 않는다', () => {
+    expect(looksLikeChoicePrompt('할 일:\n1. 테스트 작성\n2. 구현')).toBe(false)
+  })
+
+  it('빈 화면은 대화상자가 아니다', () => {
+    expect(looksLikeChoicePrompt('')).toBe(false)
   })
 })
 

@@ -190,6 +190,23 @@ describe('RollingCoordinator', () => {
     expect(h.spawned).toHaveLength(1) // 재롤 없음 — awaitingReady 가드가 막는다
   })
 
+  it('알아보지 못한 대화상자가 떠 있으면 30초 폴백이 그 위로 타이핑하지 않는다', async () => {
+    const h = harness()
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT }) // → a2 (s2), awaitingReady=true
+    await flush()
+    // statusline이 오지 않는다(payloads에 s2 없음) — 모달이 화면을 잡고 있을 때의 실제 상황이다.
+    // 문구는 우리가 아는 신뢰 문장이 아니므로 trustSeen은 서지 않는다. 종전에는 이 조합에서
+    // 30초 폴백이 이어가기 문구를 이 선택 목록 안으로 타이핑했다.
+    h.coord.handleData({ sessionId: 's2', data: 'Some prompt we do not know\n❯ 1. Yes\n  2. No' })
+    await vi.advanceTimersByTimeAsync(35_000)
+    expect(h.written.filter((w) => w.id === 's2')).toEqual([])
+    // 대신 120초 데드라인이 사람을 부른다 — 효과를 예측할 수 없는 입력을 보내는 것보다 낫다
+    await vi.advanceTimersByTimeAsync(90_000)
+    expect(h.sent.some((s) => s.channel === 'session:rollState' && s.payload.state === 'stalled')).toBe(true)
+  })
+
   it('자동 프롬프트가 타임아웃하면 awaitingReady를 되돌리고 stalled로 사람을 부른다', async () => {
     const h = harness()
     h.payloads.set('s1', payload(97))

@@ -33,7 +33,10 @@ export function stripAnsi(s: string): string {
 // cause of this bug. The word gaps in Fable 5 and usage credit are \s+ for the same reason.
 const LIMIT_RE =
   /you(?:['’ʼ`])?ve\s+(?:hit|reached)\s+your\s+(?:session|weekly|Opus|Sonnet|Fable\s+5|usage\s+credit)\s+limit|(?:usage|5-hour|session)\s+limit\s+reached/i
-const TRUST_RE = /do you trust the files in this folder/i
+// 단어 사이가 \s+ 인 이유는 LIMIT_RE 와 같다 — 좁은 창이 접은 줄을 stripAnsi 가 펴 주지 않으므로
+// 리터럴 공백은 "Do you trust the files in\r\nthis folder?" 를 놓친다. 실제로 그 누락 때문에 롤링
+// 직후의 30초 폴백이 신뢰 다이얼로그 위로 이어가기 문구를 타이핑했다
+const TRUST_RE = /do\s+you\s+trust\s+the\s+files\s+in\s+this\s+folder/i
 
 export interface ScanHit {
   limit: boolean
@@ -93,6 +96,19 @@ export function findWaitChoice(text: string): number | null {
  *  Used only to record in the log why findWaitChoice returned null. */
 export function hasWaitChoiceLabel(text: string): boolean {
   return WAIT_LABEL_RE.test(stripAnsi(text))
+}
+
+// An interactive selection list: a "❯" cursor sitting on a numbered item. The cursor is what makes
+// it a dialog rather than a numbered list in ordinary agent output, so it is required — text typed
+// while this is on screen goes into the list, not into the prompt box.
+const CHOICE_PROMPT_RE = /^[^\S\n]*❯[^\S\n]*\d+[ \t]*[.)][ \t]*\S/m
+
+/** Is an interactive choice list waiting for input on this screen? The automatic prompt after a roll
+ *  asks this before typing blind: a dialog we failed to recognise (an unknown wording, a new kind of
+ *  prompt) swallows the carry-on text and turns the following Enter into an arbitrary menu press.
+ *  Answering "something is waiting" is enough to stop — knowing *what* is waiting is not needed. */
+export function looksLikeChoicePrompt(text: string): boolean {
+  return CHOICE_PROMPT_RE.test(stripAnsi(text))
 }
 
 /** Does this text contain a limit-reached phrase? Used by transcript's subagent error decision
