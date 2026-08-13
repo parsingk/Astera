@@ -1438,7 +1438,10 @@ export default function App(): React.JSX.Element {
       if (w.__asteraEditor.length > 200) w.__asteraEditor.shift()
     }
     const short = (id: string): string => id.split(/[\\/]/).pop() ?? id
-    note(`render pane=${paneId} file=${short(fileTabId)}`)
+    note(
+      `render pane=${paneId} file=${short(fileTabId)} bufLen=${buf.content.length}` +
+        ` bufHead=${JSON.stringify(buf.content.slice(0, 30))}`
+    )
     return (
       <div className="workbench-body">
         <div className="file-editor-wrap">
@@ -1463,7 +1466,10 @@ export default function App(): React.JSX.Element {
               // 에디터가 알려 준 경로로 대상을 찾는다. 그리고 있는 파일과 다르면 그 편집은 뷰가 아직
               // 갈아타지 않은 옛 문서의 것이므로 버린다 — 예전에는 이것이 다른 파일을 덮어썼다
               const target = fileTabsRef.current.find((t) => t.path === fromPath)
-              note(`change pane=${paneId} view=${short(fromPath)} prop=${short(f.path)}`)
+              note(
+                `change pane=${paneId} view=${short(fromPath)} prop=${short(f.path)}` +
+                  ` len=${next.length} head=${JSON.stringify(next.slice(0, 30))}`
+              )
               if (!target || target.id !== f.id) return
               setBufferContent(target.id, next)
             }}
