@@ -4,7 +4,9 @@ import { useI18n } from '../i18n/I18nProvider'
 import { Select } from './Select'
 import { RunConfigDialog } from './RunConfigDialog'
 
-/** Run toolbar in the workbench's top right. Rendered only in explorer mode. */
+/** Run toolbar. It sits in the title bar, next to the app name, and is drawn whenever a project is
+ *  known — the explorer toggle does not reach it. Its own chrome (border, background, padding) is
+ *  cleared by .tb-run, which owns the spacing there. */
 export function RunToolbar({
   configs,
   selectedId,
@@ -51,6 +53,7 @@ export function RunToolbar({
   // null = closed, { config: null } = add, { config: X } = edit. The field state is owned by the modal.
   const [editing, setEditing] = useState<{ config: RunConfig | null } | null>(null)
   const [showRuns, setShowRuns] = useState(false)
+  const [showMore, setShowMore] = useState(false)
   const running = active?.status === 'running'
   const selected = configs.find((c) => c.id === selectedId) ?? null
   // Only user-defined configs (ids starting with user:) can be edited or deleted — the auto-seeded ones are derived, so they are not targets
@@ -71,13 +74,10 @@ export function RunToolbar({
         className="run-config-select"
         items={[
           ...(configs.length === 0 ? [{ value: '', label: t('run.config.none') }] : []),
-          ...configs.map((c) => ({ value: c.id, label: c.name })),
-          // An action disguised as an option, as it was before — picking it opens the editor instead of
-          // selecting anything, which is why onChange branches on the sentinel rather than passing it on
-          { value: '__add__', label: t('run.config.addOption') }
+          ...configs.map((c) => ({ value: c.id, label: c.name }))
         ]}
         value={selectedId ?? ''}
-        onChange={(v) => (v === '__add__' ? setEditing({ config: null }) : onSelect(v))}
+        onChange={onSelect}
         ariaLabel={t('run.config.selectLabel')}
       />
       {running ? (
@@ -89,20 +89,58 @@ export function RunToolbar({
           ▶
         </button>
       )}
-      {editable && !running && (
-        <>
-          <button
-            className="run-btn"
-            title={t('run.config.editTitle')}
-            onClick={() => setEditing({ config: selected })}
-          >
-            ✎
-          </button>
-          <button className="run-btn" title={t('run.config.deleteTitle')} onClick={() => selected && onDeleteConfig(selected.id)}>
-            ✕
-          </button>
-        </>
-      )}
+      {/* 구성 관리는 ⋮ 안으로 접는다. 이 툴바는 이제 타이틀바에 상시로 놓이므로, 자주 쓰지 않는
+          추가·편집·삭제까지 늘어놓으면 창 폭을 계속 먹는다. 편집과 삭제는 대상이 있을 때만 나오고,
+          추가는 언제나 있다 — 구성이 하나도 없을 때 만들 길이 그것뿐이기 때문이다 */}
+      <div className="run-more">
+        <button
+          className="run-btn"
+          title={t('run.config.more')}
+          aria-haspopup="menu"
+          aria-expanded={showMore}
+          onClick={() => setShowMore((v) => !v)}
+        >
+          ⋮
+        </button>
+        {showMore && (
+          <div className="run-more-menu" role="menu" onMouseLeave={() => setShowMore(false)}>
+            <button
+              className="run-more-item"
+              role="menuitem"
+              onClick={() => {
+                setShowMore(false)
+                setEditing({ config: null })
+              }}
+            >
+              {t('run.config.add')}
+            </button>
+            {editable && !running && (
+              <>
+                <button
+                  className="run-more-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowMore(false)
+                    setEditing({ config: selected })
+                  }}
+                >
+                  {t('run.config.editTitle')}
+                </button>
+                <button
+                  className="run-more-item"
+                  role="menuitem"
+                  onClick={() => {
+                    setShowMore(false)
+                    if (selected) onDeleteConfig(selected.id)
+                  }}
+                >
+                  {t('run.config.deleteTitle')}
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
       {activeRuns.length > 0 && (
         <div className="run-global">
           <button className="run-global-badge" title={t('run.global.listTitle')} onClick={() => setShowRuns((v) => !v)}>

@@ -41,6 +41,43 @@ function langExt(key: LangKey | null): Extension {
   }
 }
 
+/** 뷰마다의 소유자 — 그 뷰의 편집을 어디로 보낼지. **상태가 아니라 뷰에 매단다.**
+ *
+ *  편집 감지와 Ctrl+S 는 확장(extension)이고 확장은 EditorState 안에 산다. 그 확장이 인스턴스의
+ *  콜백을 클로저로 붙잡으면, 캐시에 담긴 상태를 다른 페인의 뷰가 복원해 쓰는 순간 그 뷰의 편집이
+ *  **상태를 만든 쪽의** 콜백을 부른다 — 한 페인에서 친 글자가 다른 파일에 기록되고 저장까지 그리로
+ *  간다. 실제로 그렇게 다른 프로젝트의 파일이 덮어써졌다.
+ *
+ *  그래서 확장은 아무것도 붙잡지 않고, 호출 시점에 넘어오는 view 로 소유자를 찾는다. 상태를 페인
+ *  사이로 옮기는 것이 이 설계의 핵심(되돌리기 보존)이므로, 상태 쪽을 인스턴스에서 떼어 내는 것이
+ *  맞는 방향이다. */
+interface EditorOwner {
+  change: (text: string) => void
+  save: () => void
+}
+const owners = new WeakMap<EditorView, EditorOwner>()
+
+/** 어느 인스턴스도 붙잡지 않는 공통 확장. 그래서 이것이 든 상태는 어느 뷰에서든 안전하다 */
+const sharedBase: Extension[] = [
+  basicSetup,
+  oneDark,
+  keymap.of([
+    indentWithTab,
+    {
+      key: 'Mod-s',
+      preventDefault: true,
+      run: (view) => {
+        owners.get(view)?.save()
+        return true
+      }
+    }
+  ]),
+  EditorView.updateListener.of((u) => {
+    // Propagate user edits only: setState (a programmatic replacement) has an empty transactions array, so it is excluded
+    if (u.docChanged && u.transactions.length > 0) owners.get(u.view)?.change(u.state.doc.toString())
+  })
+]
+
 // Builds the per-file EditorState — the editable/readOnly facets are baked straight into the state so
 // each file's editability is reflected exactly (a switch replaces the whole thing via setState).
 function makeState(base: Extension[], doc: string, path: string, readOnly: boolean): EditorState {
@@ -83,6 +120,7 @@ export function FileEditor({
   content,
   readOnly,
   cache,
+  focused,
   onRetire,
   onChange,
   onSave
@@ -93,15 +131,21 @@ export function FileEditor({
   /** 파일별 EditorState·스크롤 캐시. 소유자는 App이다 — 이 컴포넌트가 여러 개 생기더라도 되돌리기와
    *  스크롤이 살아남아야 하므로 인스턴스 안에 두지 않는다 */
   cache: EditorStateCache
+  /** 이 페인이 활성이고 그 활성 탭이 이 파일인가. 참이 되는 순간 커서를 가져온다 — 탭을 다른 페인으로
+   *  옮기거나 다른 페인의 파일 탭을 눌러도 커서가 옛 에디터에 남아 있으면, 이어서 친 글자가 화면에
+   *  보이지 않는 다른 파일로 들어간다 */
+  focused: boolean
   /** 이 에디터가 사라질 때 그 상태를 넘긴다. 캐시에 남길지는 App이 정한다 — 닫힌 파일의 상태를
    *  되살리면 안 되기 때문에 여기서 직접 저장하지 않는다 */
   onRetire: (path: string, state: EditorState, scroll: StateEffect<unknown> | null) => void
-  onChange: (next: string) => void
-  onSave: () => void
+  /** 바뀐 텍스트와 **그 텍스트가 속한 경로**를 함께 넘긴다. 경로 없이 텍스트만 넘기면, 프롭이 새
+   *  파일로 바뀐 뒤 뷰가 아직 옛 문서를 들고 있는 찰나의 편집이 새 파일의 내용으로 기록된다 — 그 창이
+   *  실제로 다른 파일을 덮어썼다. 받는 쪽이 경로로 대상을 찾으면 그 오귀속이 구조적으로 불가능해진다 */
+  onChange: (path: string, next: string) => void
+  onSave: (path: string) => void
 }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
-  const baseRef = useRef<Extension[]>([])
   const curPathRef = useRef(path)
   // References to the latest callbacks — the base extensions are built only once, so this avoids staleness
   const onChangeRef = useRef(onChange)
@@ -116,24 +160,17 @@ export function FileEditor({
 
   // Create the EditorView once
   useEffect(() => {
-    baseRef.current = [
-      basicSetup,
-      oneDark,
-      keymap.of([
-        indentWithTab,
-        { key: 'Mod-s', preventDefault: true, run: () => { onSaveRef.current(); return true } }
-      ]),
-      EditorView.updateListener.of((u) => {
-        // Propagate user edits only: setState (a programmatic replacement) has an empty transactions array, so it is excluded
-        if (u.docChanged && u.transactions.length > 0) onChangeRef.current(u.state.doc.toString())
-      })
-    ]
     // 마운트에서도 캐시를 본다. 세션 모드로 나가면 이 컴포넌트가 언마운트되므로, 돌아왔을 때 되돌리기
     // 이력이 이어지려면 나갈 때 넘겨 둔 상태를 여기서 다시 집어야 한다
-    const restored = restoreOrBuild(cache, baseRef.current, path, content, readOnly)
+    const restored = restoreOrBuild(cache, sharedBase, path, content, readOnly)
     const view = new EditorView({ parent: hostRef.current!, state: restored.state })
     viewRef.current = view
     curPathRef.current = path
+    // 이 뷰의 편집이 향할 곳. 경로는 호출 시점에 읽으므로 파일을 갈아타도 따라온다
+    owners.set(view, {
+      change: (text) => onChangeRef.current(curPathRef.current, text),
+      save: () => onSaveRef.current(curPathRef.current)
+    })
     if (restored.scroll) view.dispatch({ effects: restored.scroll })
 
     let scrollFrame: number | null = null
@@ -149,11 +186,19 @@ export function FileEditor({
     return () => {
       view.scrollDOM.removeEventListener('scroll', onScroll)
       if (scrollFrame != null) cancelAnimationFrame(scrollFrame)
+      owners.delete(view)
       onRetireRef.current(curPathRef.current, view.state, lastScrollRef.current)
       view.destroy()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 활성이 되면 커서를 가져온다. TerminalView 가 active 프롭으로 하는 것과 같은 규약이다.
+  // path 도 의존성에 넣는 이유: 같은 페인이 활성인 채 파일만 바뀌는 경우(같은 탭 줄에서 다른 파일 탭을
+  // 누름)에도 커서가 새 문서로 와야 하기 때문이다
+  useEffect(() => {
+    if (focused) viewRef.current?.focus()
+  }, [focused, path])
 
   // Handling path/content/readOnly changes:
   //  - switching to a different file: save the previous state and scroll, then either restore the target
@@ -168,7 +213,7 @@ export function FileEditor({
       // 되살아난다 — closeFileTab은 drop을 한 뒤 남은 탭으로 path만 바꾸므로 여기로 들어온다
       onRetireRef.current(prev, view.state, lastScrollRef.current)
       lastScrollRef.current = null
-      const restored = restoreOrBuild(cache, baseRef.current, path, content, readOnly)
+      const restored = restoreOrBuild(cache, sharedBase, path, content, readOnly)
       view.setState(restored.state)
       curPathRef.current = path
       if (restored.scroll) view.dispatch({ effects: restored.scroll })
@@ -180,9 +225,9 @@ export function FileEditor({
       // 문서가 바뀌었으니 들고 있던 스크롤 스냅샷은 다른 문서의 위치다. 버리지 않으면 다음 마운트에서
       // 엉뚱한 곳으로 스크롤한다
       lastScrollRef.current = null
-      view.setState(makeState(baseRef.current, content, path, readOnly))
+      view.setState(makeState(sharedBase, content, path, readOnly))
     } else if (view.state.readOnly !== readOnly)
-      view.setState(makeState(baseRef.current, content, path, readOnly))
+      view.setState(makeState(sharedBase, content, path, readOnly))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, content, readOnly])
 

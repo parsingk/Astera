@@ -258,7 +258,7 @@ export const ja: Catalog = {
     'Claude Code・Codex がモード切り替えや補完に使うキーです。アプリが使うと、セッションで使えなくなります。',
   'shortcut.pane.dragSplit': '端で分割 · 中央で移動',
   'shortcut.group.explorer': 'ファイルエクスプローラー',
-  'shortcut.explorer.toggleMode': 'セッション ↔ エクスプローラー切り替え',
+  'shortcut.explorer.toggleMode': 'エクスプローラーの表示/非表示',
   'shortcut.explorer.saveFile': 'ファイルを保存',
   'shortcut.explorer.closeFileTab': 'ファイルタブを閉じる',
   'shortcut.explorer.rename': '名前の変更',
@@ -360,6 +360,7 @@ export const ja: Catalog = {
   'explorer.git.deleted': '削除済み',
   'explorer.git.conflict': '競合',
   'explorer.git.folderCount': '変更 {count} 件',
+  'explorer.rail.toggle': 'ファイルエクスプローラー',
   // WorkbenchTabs.tsx — the dirty marker on a file tab
   'explorer.tab.unsaved': '未保存',
   // LocalHistoryDialog.tsx — the Local History browse/restore modal
@@ -482,7 +483,7 @@ export const ja: Catalog = {
   'session.sched.weekday.thu': '木',
   'session.sched.weekday.fri': '金',
   'session.sched.weekday.sat': '土',
-  // SessionTabs.tsx
+  // WorkbenchTabs.tsx
   'session.tab.rollTooltip': 'ローリング: {chain}',
   // PaneGrid / pane context menu
   'session.pane.splitRight': '右に分割',
@@ -529,7 +530,6 @@ export const ja: Catalog = {
   'session.resume.originDeleted': '削除されたアカウント',
   'history.filter.allAccounts': 'すべてのアカウント',
   'history.refresh.tooltip': 'ウォッチャー失敗時の手動フォールバック',
-  'history.project.openExplorer': 'ファイルエクスプローラーで開く',
   'history.menu.hide': '非表示にする',
   'history.project.noSessions': 'セッションなし',
   'history.entry.preview': 'プレビュー',
@@ -562,11 +562,11 @@ export const ja: Catalog = {
   // WorktreePanel.tsx — panel header, row icon buttons
   'worktree.refresh': '更新',
   'worktree.action.startSession': 'セッションを開始',
-  'worktree.action.openExplorer': 'エクスプローラー',
   // RunToolbar.tsx — config select, run/stop, edit/delete, the running list
   'run.config.selectLabel': '実行構成の選択',
   'run.config.none': '実行構成がありません',
-  'run.config.addOption': '+ 実行構成を追加…',
+  'run.config.add': '実行構成を追加…',
+  'run.config.more': 'その他の操作',
   'run.action.run': '実行',
   'run.action.stop': '停止',
   'run.config.editTitle': '構成を編集',

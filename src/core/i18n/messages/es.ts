@@ -261,7 +261,7 @@ export const es: Catalog = {
     'Claude Code y Codex usan esta tecla para cambiar de modo y autocompletar. Si la toma la aplicación, no podrá usarla en una sesión.',
   'shortcut.pane.dragSplit': 'Al borde para dividir · al centro para mover',
   'shortcut.group.explorer': 'Explorador de archivos',
-  'shortcut.explorer.toggleMode': 'Sesión ↔ Explorador',
+  'shortcut.explorer.toggleMode': 'Mostrar/ocultar el explorador',
   'shortcut.explorer.saveFile': 'Guardar el archivo',
   'shortcut.explorer.closeFileTab': 'Cerrar la pestaña de archivo',
   'shortcut.explorer.rename': 'Cambiar nombre',
@@ -363,6 +363,7 @@ export const es: Catalog = {
   'explorer.git.deleted': 'Eliminado',
   'explorer.git.conflict': 'Conflicto',
   'explorer.git.folderCount': '{count} cambios',
+  'explorer.rail.toggle': 'Explorador de archivos',
   // WorkbenchTabs.tsx — the dirty marker on a file tab
   'explorer.tab.unsaved': 'Sin guardar',
   // LocalHistoryDialog.tsx — the Local History browse/restore modal
@@ -487,7 +488,7 @@ export const es: Catalog = {
   'session.sched.weekday.thu': 'jue',
   'session.sched.weekday.fri': 'vie',
   'session.sched.weekday.sat': 'sáb',
-  // SessionTabs.tsx
+  // WorkbenchTabs.tsx
   'session.tab.rollTooltip': 'Rotación: {chain}',
   // PaneGrid / pane context menu
   'session.pane.splitRight': 'Dividir a la derecha',
@@ -535,7 +536,6 @@ export const es: Catalog = {
   'session.resume.originDeleted': 'Cuenta eliminada',
   'history.filter.allAccounts': 'Todas las cuentas',
   'history.refresh.tooltip': 'Alternativa manual si falla el watcher',
-  'history.project.openExplorer': 'Abrir en el explorador de archivos',
   'history.menu.hide': 'Ocultar',
   'history.project.noSessions': 'Sin sesiones',
   'history.entry.preview': 'Vista previa',
@@ -568,11 +568,11 @@ export const es: Catalog = {
   // WorktreePanel.tsx — panel header, row icon buttons
   'worktree.refresh': 'Actualizar',
   'worktree.action.startSession': 'Nueva sesión',
-  'worktree.action.openExplorer': 'Explorador',
   // RunToolbar.tsx — config select, run/stop, edit/delete, the running list
   'run.config.selectLabel': 'Configuración de ejecución',
   'run.config.none': 'Sin configuraciones de ejecución',
-  'run.config.addOption': '+ Agregar configuración de ejecución…',
+  'run.config.add': 'Añadir configuración…',
+  'run.config.more': 'Más acciones',
   'run.action.run': 'Ejecutar',
   'run.action.stop': 'Detener',
   'run.config.editTitle': 'Editar la configuración',

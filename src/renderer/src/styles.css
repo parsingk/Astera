@@ -8,6 +8,10 @@
   --text: #d0d0d6;
   --text-dim: #7d7d88;
   --text-faint: #55555f;
+  /* 레일 아이콘의 쉬는 색. --text-dim 은 본문(--bg/--panel) 위를 기준으로 잡힌 값이라, 앱에서 가장
+     어두운 --rail 위에서는 거의 읽히지 않는다. --text 까지 올리면 선택 상태(.rail-btn.on)와 구별이
+     사라지므로 그 사이에 둔다 */
+  --rail-icon: #a3a3ae;
   --accent: #37b0c4; /* active marker and focus (separate from the account colour) */
   --ok: #79c98f; /* logged in */
   --ok-bg: #14301f;
@@ -73,7 +77,10 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
    margins ≈ 78px. Paired with trafficLightPosition x=12 in main/index.ts — change only one and
    they overlap or float. */
 .titlebar--mac .tb-brand { padding-left: 78px; }
-.tb-brand { display: flex; align-items: center; gap: 8px; padding-left: 10px; }
+/* flex:1 로 남는 폭을 브랜드가 먹는다 — 그래야 뒤따르는 것들(실행 위젯, 업데이트 알림, 창 버튼)이
+   오른쪽에 차례로 붙는다. 그 요소들이 각자 갖고 있는 margin-left:auto 는 남는 폭이 없어져 0이 되므로
+   서로 밀어내지 않는다. min-width:0 은 창이 좁아질 때 이름이 아니라 브랜드 칸이 먼저 줄게 한다 */
+.tb-brand { display: flex; align-items: center; gap: 8px; padding-left: 10px; flex: 1; min-width: 0; }
 .tb-logo {
   width: 20px;
   height: 20px;
@@ -83,6 +90,21 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
   -webkit-user-drag: none;
 }
 .tb-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
+/* 실행 구성 위젯. 타이틀바 전체가 -webkit-app-region: drag 이므로 여기서 no-drag 로 되돌리지 않으면
+   클릭이 창 이동으로 먹힌다(.tb-controls·.tb-update 와 같은 처리). 툴바가 원래 갖고 있던 테두리와
+   배경은 없어진 상단 띠의 크롬이었으므로 여기서는 지운다. min-width:0 은 창이 좁아질 때 select 가
+   줄어들 수 있게 한다 — 없으면 창 컨트롤을 밀어낸다 */
+.tb-run { display: flex; align-items: center; margin-left: 12px; margin-right: 4px; min-width: 0; padding: 1px 2px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); -webkit-app-region: no-drag; }
+.tb-run .run-toolbar { border: 0; background: transparent; padding: 0; gap: 2px; min-width: 0; }
+/* 타이틀바는 앱에서 가장 어두운 면(--rail)이라, 본문을 기준으로 잡힌 --text-dim 이 여기서는 거의
+   읽히지 않는다. 쉬는 상태의 색을 본문 색까지 올리고, 위젯 전체에 한 단계 밝은 면과 테두리를 줘서
+   타이틀바에서 떠 보이게 한다 — IntelliJ의 run 위젯이 같은 방식으로 묶여 있다.
+   버튼을 24px로 줄인 것은 34px 타이틀바 안에서 패딩과 테두리까지 넣으면 28px이 꽉 차기 때문이다 */
+.tb-run .run-btn { width: 24px; height: 24px; color: var(--text); font-size: 14px; }
+.tb-run .run-btn.play { color: #57d364; }
+.tb-run .run-btn.stop { color: #ff6b61; }
+.tb-run .run-btn.play:disabled { color: var(--text-faint); }
+.tb-run .run-btn:hover { background: var(--elevated); }
 .tb-controls { margin-left: auto; display: flex; -webkit-app-region: no-drag; }
 .tb-update { margin-left: auto; padding: 0 12px; font-size: 12px; color: #9a9aa5; white-space: nowrap; align-self: center; -webkit-app-region: no-drag; }
 .tb-update-err { color: #e66; cursor: default; }
@@ -131,13 +153,14 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
   place-items: center;
   background: none;
   border: none;
-  color: var(--text-dim);
-  font-size: 15px;
+  color: var(--rail-icon);
+  font-size: 16px;
   cursor: pointer;
   padding: 0;
   margin: 0;
 }
-.rail-btn:hover { color: var(--text); }
+/* 배경까지 함께 바뀌어야 눌리는 것이라는 게 읽힌다 — 색만 밝아지는 변화는 어두운 면 위에서 잘 보이지 않는다 */
+.rail-btn:hover { color: var(--text); background: var(--elevated); }
 .rail-btn.on { color: var(--text); background: var(--elevated); box-shadow: inset 2px 0 0 var(--accent); }
 /* The wrapper that pins the terminal and ⚙ (settings) to the bottom together. The auto margin has to
    live on this one wrapper — giving it to each .rail-btn (two auto siblings) distributes the free space
@@ -164,14 +187,15 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 
 /* ---------- explorer / editor mode ---------- */
 .session-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.explorer-view { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.file-tabs { flex: none; }
+/* flex: none, not 1 — the editor moved into the panes, so all that is left in here is the Run console,
+   whose height is its own. Left at 1 it would split the surface with .session-view and halve the grid */
+.explorer-view { flex: none; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 
 /* ---------- project Run/Stop — RunToolbar and workbench wiring ---------- */
-.workbench-topbar { flex: none; display: flex; align-items: stretch; }
-.workbench-topbar .file-tabs { flex: 1; min-width: 0; }
+/* The editor body. It now lives inside a pane's slot rather than under .explorer-view, and the rule is
+   unchanged because the slot is a column flex box just as .explorer-view was */
 .workbench-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.run-toolbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-bottom: 1px solid var(--line); border-left: 1px solid var(--line); background: var(--panel); position: relative; }
+.run-toolbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-left: 1px solid var(--line); background: var(--panel); position: relative; }
 /* The run-config picker in the toolbar. Only sizing lives here now — the surface comes from .sel.
    It may shrink so the run buttons keep their room, but not past 140px, or the name is unreadable while
    the buttons sit on empty space. The open menu is not bound by this — .sel-menu sizes to its content. */
@@ -182,6 +206,13 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .run-btn.play { color: #3fb950; }
 .run-btn.play:disabled { color: var(--text-faint); background: transparent; cursor: default; }
 .run-btn.stop { color: #e5534b; }
+/* 구성 관리 메뉴(⋮). 타이틀바에 상시로 놓이는 툴바라 자주 쓰지 않는 동작은 접어 둔다.
+   위치와 생김새는 아래 .run-global-menu 와 같은 규칙을 따른다 — 같은 툴바에서 두 메뉴가 다르게
+   생기면 그게 더 눈에 띈다 */
+.run-more { position: relative; }
+.run-more-menu { position: absolute; top: calc(100% + 5px); right: 0; z-index: 20; min-width: 170px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; padding: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
+.run-more-item { text-align: left; white-space: nowrap; padding: 5px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text); font-size: 12.5px; cursor: pointer; }
+.run-more-item:hover { background: var(--elevated); }
 .run-global { position: relative; }
 .run-global-badge { display: inline-flex; align-items: center; gap: 4px; background: var(--elevated); border: 1px solid var(--line-soft); color: var(--text-dim); border-radius: 4px; font-size: 11px; padding: 2px 7px; cursor: pointer; font-variant-numeric: tabular-nums; }
 .run-global-badge:hover { border-color: var(--text-faint); }
@@ -327,8 +358,14 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* File viewer tabs — they inherit the same style as session tabs and are distinguished by a per-file-type
    SVG icon (previously a single 📄 emoji was the only distinction) */
 .tab.file-tab { font-style: normal; }
+/* The name hint on a file tab — the shortest parent path that tells two same-named files apart
+   (core/files/tabLabel.ts). Only present when names collide, so it is drawn quietly: dim, smaller than
+   the name, and clipped rather than allowed to push the name out of a narrow pane */
+.tab-hint { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 10px; color: var(--text-faint); }
 
 /* ---------- terminal ---------- */
+/* .terminal-slot is not terminal-only: it is how a pane's body claims its place in the grid, and the
+   editor slot PaneGrid draws for each pane uses the same class so both follow one placement rule */
 .terminal-slot { flex: 1; min-height: 0; }
 /* min-height:0 plus overflow:hidden — allows flex shrinking and confines the overflow to the slot, so
    the xterm canvas (rows × cellHeight) cannot spill past it and encroach on the bottom status bar */
@@ -760,6 +797,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .pane-resizer.row::before { left: 2px; top: 0; width: 1px; height: 100%; }
 .pane-resizer.col::before { top: 2px; left: 0; height: 1px; width: 100%; }
 .pane-resizer:hover::before { background: var(--accent); }
+/* The pane body's drop target. One per pane, and only while a tab is being dragged — a pane shows either
+   a terminal or the editor, so hanging the drop handlers on the session slot left a pane displaying a file
+   with no target at all. It exists only during a drag, so it never swallows normal mouse input.
+   z-index 2 puts it above the slots (auto) so the drag events land here rather than on the terminal; the
+   tab bar is not covered (the layer starts below --pane-tabbar-h), so bar drops still reorder */
+.pane-droplayer { position: absolute; z-index: 2; }
 /* the drop preview — shows semi-transparently where a new pane would appear */
 .pane-dropzone {
   position: absolute; z-index: 3; pointer-events: none;

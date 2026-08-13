@@ -31,6 +31,7 @@ export function FileExplorer({
   onOpenFile,
   onClose,
   stateRef,
+  clipboardRef,
   undoRef,
   onPathRenamed,
   onPathDeleted
@@ -38,7 +39,12 @@ export function FileExplorer({
   root: string | null
   onOpenFile: (path: string) => void
   onClose: () => void
-  stateRef: React.RefObject<ExplorerTreeState | null>
+  /** Per-root tree snapshots, keyed by root so each project's expansion survives both an explorer
+   *  toggle (unmount/remount) and the tree root changing to a different project. */
+  stateRef: React.RefObject<Map<string, ExplorerTreeState>>
+  /** The clipboard exists precisely to cross project boundaries, so it is not part of the per-root map
+   *  above — it is its own ref, held by the App so it survives both an explorer toggle and a root change. */
+  clipboardRef: React.RefObject<ExplorerTreeState['clipboard']>
   /** Ctrl+Z undo journal. The App holds it — its lifetime differs from ExplorerTreeState (the per-root
    *  tree snapshot), so the two are not stored in the same place (see the explorerUndoRef comment in App.tsx) */
   undoRef: React.RefObject<UndoEntry[]>
@@ -69,12 +75,16 @@ export function FileExplorer({
   // After editing ends (commit/cancel/Escape) focus goes back to the tree so F2/Delete can be used repeatedly
   const treeRef = useRef<HTMLDivElement>(null)
 
-  const savedTree = stateRef.current
+  // The map is keyed by root, so looking a snapshot up is just a get() — no root-match filtering needed
+  // to find the right entry (that part is handled by the key itself).
+  const savedTree = root ? (stateRef.current?.get(root) ?? null) : null
   // Initial value so that a remount with the same root (explorer toggle) shows the preserved tree from
   // the very first render — filling it in from an effect instead would show 'loading…' for one frame.
   // Why the root-match check lives here and not inside useFileTree: the three branches of the [root]
   // effect below make the same check (`s.root === root`), so keeping the check in this component is what
-  // stops the two from drifting apart.
+  // stops the two from drifting apart. The map's key is already the root, so this check can only ever be
+  // true here — it is kept anyway so both places enforce the same rule instead of one relying on the
+  // other's guarantee.
   // This initial value is only used as useState's lazy initializer, so it applies exactly once, on this
   // hook instance's first render — it does not cover the case where root later becomes equal to this
   // value while still mounted, and that path is still handled by the same branch of the [root] effect
@@ -90,13 +100,27 @@ export function FileExplorer({
   // The selection/anchor/clipboard state machine lives in the pure reducer in
   // core/files/explorerState.ts (extracted into useExplorerSelection so the data-loss guards can be
   // pinned down by unit tests) and this hook wires it into React. The initial clipboard is read from
-  // savedTree without comparing root — the clipboard has to survive the unmount caused by the explorer
-  // toggle, otherwise cross-project paste does not work.
-  const sel = useExplorerSelection(root, savedTree?.clipboard ?? null, tree.flatVisible)
+  // clipboardRef, not from the per-root savedTree — the clipboard has to survive both the unmount caused
+  // by the explorer toggle and a root change, otherwise cross-project paste does not work.
+  const sel = useExplorerSelection(root, clipboardRef.current ?? null, tree.flatVisible)
+
+  // Mirror of the currently committed root, independent of the per-root map — useFileOps needs to know
+  // whether root changed while an async op was in flight, and a map has no single "current root" of its
+  // own to ask.
+  const currentRootRef = useRef<{ root: string | null }>({ root })
 
   // The file operation engine plus inline editing live in useFileOps — it does not reimplement the tree
   // cache or the selection state machine, it takes tree and sel injected as-is.
-  const ops = useFileOps({ root, tree, sel, treeRef, stateRef, undoRef, onPathRenamed, onPathDeleted })
+  const ops = useFileOps({
+    root,
+    tree,
+    sel,
+    treeRef,
+    stateRef: currentRootRef,
+    undoRef,
+    onPathRenamed,
+    onPathDeleted
+  })
   const {
     editing,
     editValue,
@@ -147,7 +171,7 @@ export function FileExplorer({
       undoRef.current = []
       return
     }
-    const s = stateRef.current
+    const s = stateRef.current?.get(root) ?? null
     if (s && s.root === root) {
       // This branch is only reachable after an unmount→remount (see the comment in the else branch) —
       // and on a remount historyOpen is already false from its useState(false) initial value. So there
@@ -161,9 +185,10 @@ export function FileExplorer({
       // The rootRestored branch above does not need to clear it, and the reason is not "the row is
       // still alive" — that branch is only reachable after an unmount→remount in the first place
       // (stateRef is held by the App so it survives unmount, and while we stay mounted the mirror
-      // effect keeps stateRef.current.root tracking the current root, so s.root === root can never
-      // hold). On a remount dragPathsRef is a fresh instance's empty ref and is therefore already
-      // empty — the drag payload is not preserved through stateRef.
+      // effect keeps stateRef.current up to date for the current root, so a lookup for the new root
+      // can only find a stale entry if the App itself put one there under that key — s.root === root
+      // can never hold here). On a remount dragPathsRef is a fresh instance's empty ref and is
+      // therefore already empty — the drag payload is not preserved through stateRef.
       dragPathsRef.current = []
       setDragging(false)
       tree.resetTree({ load: root })
@@ -186,12 +211,17 @@ export function FileExplorer({
     }
   }, [root])
 
-  // Mirror the tree state into the App-owned ref on every change — the latest state is there right up
-  // to the moment of unmount.
-  // The clipboard is mirrored too — that is what keeps it alive while the explorer is closed and
-  // unmounted, so cross-project paste works.
+  // Mirror the tree state into the App-owned per-root map on every change — the latest state is there
+  // right up to the moment of unmount. Nothing is saved for a null root — there is no project to key the
+  // entry on, and the branch above already resets the tree in that case.
+  // The clipboard is mirrored into its own App-owned ref (not the map) — that is what keeps it alive
+  // across both an explorer toggle and a root change, so cross-project paste works.
+  // currentRootRef is mirrored here too, for the same reason as the map: useFileOps needs to see the
+  // latest committed root right up to the moment of unmount.
   useEffect(() => {
-    stateRef.current = { root, expanded, dirs, clipboard: sel.clipboard }
+    if (root) stateRef.current?.set(root, { root, expanded, dirs, clipboard: sel.clipboard })
+    clipboardRef.current = sel.clipboard
+    currentRootRef.current = { root }
   }, [root, expanded, dirs, sel.clipboard])
 
   const refresh = (): void => {
@@ -754,14 +784,13 @@ export function FileExplorer({
             // sel.dispatch for this closure's root, which has nothing to do with what is on screen: the
             // old project's directory listing gets planted in the dirs cache the current tree renders
             // from, and selection/anchor get overwritten with old paths — after which Ctrl+V and F2
-            // find that off-screen path as their target. stateRef.current.root is updated to the
-            // current root by the mirror effect (below) on every commit, so comparing it against this
-            // closure's root tells us exactly whether the root changed in between. If stateRef.current
-            // is null (no active session) then undefined !== root and we bail naturally. toast.success
-            // has already been shown inside LocalHistoryDialog — the restore really did happen, so it
-            // is not suppressed. When the user closes the modal themselves (root unchanged) this guard
+            // find that off-screen path as their target. currentRootRef.current.root is updated to the
+            // current root by the mirror effect (above) on every commit, so comparing it against this
+            // closure's root tells us exactly whether the root changed in between. toast.success has
+            // already been shown inside LocalHistoryDialog — the restore really did happen, so it is
+            // not suppressed. When the user closes the modal themselves (root unchanged) this guard
             // does not trip and the tree is refreshed normally.
-            if (stateRef.current?.root !== root) return
+            if (currentRootRef.current.root !== root) return
             // Same ordering convention as transferTo (paste/drop) — the parent has to be expanded and
             // re-read, otherwise the item just restored stays hidden behind a collapsed folder. Without
             // the expand, the selectionSet right after it would be a selection that is not visible on

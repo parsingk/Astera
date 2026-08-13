@@ -5,7 +5,6 @@ import { confirmModal } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import { dirtyCount, isOrphanUnverifiable, worktreeErrorMessage } from '../lib/worktreeErrors'
 import { subscribeCreated } from '../lib/worktreeBus'
-import { FolderGlyph } from './FolderGlyph'
 import { useI18n } from '../i18n/I18nProvider'
 
 const STATUS_LABEL: Record<WorktreeListItem['status'], MessageKey | null> = {
@@ -16,11 +15,9 @@ const STATUS_LABEL: Record<WorktreeListItem['status'], MessageKey | null> = {
 
 /** Sidebar worktree list — only the worktrees this app created (per the registry) */
 export function WorktreePanel({
-  onStartSession,
-  onOpenExplorer
+  onStartSession
 }: {
   onStartSession: (path: string) => void
-  onOpenExplorer: (path: string) => void
 }): React.JSX.Element | null {
   const { t } = useI18n()
   const [items, setItems] = useState<WorktreeListItem[]>([])
@@ -195,15 +192,6 @@ export function WorktreePanel({
                               onClick={() => onStartSession(w.path)}
                             >
                               ▶
-                            </button>
-                            <button
-                              className="ghost"
-                              title={t('worktree.action.openExplorer')}
-                              aria-label={t('worktree.action.openExplorer')}
-                              disabled={busy}
-                              onClick={() => onOpenExplorer(w.path)}
-                            >
-                              <FolderGlyph />
                             </button>
                           </>
                         )}

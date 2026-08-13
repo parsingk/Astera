@@ -1,4 +1,9 @@
-/** Session pane layout tree.
+/** Tab pane layout tree.
+ *
+ *  A grid of groups, each holding an ordered list of tabs. **A tab is an opaque string here — this
+ *  module does not know whether it names a session or a file** (core convention); tabId.ts owns
+ *  building and reading those strings, and any policy that has to branch on the kind lives above
+ *  this file. Keeping the tree ignorant is what lets sessions and files share one layout.
  *
  *  computeRects flattens the layout into percentages and the renderer (PaneGrid) positions
  *  everything absolutely — drawing the tree as nested DOM would change the DOM parent of a
@@ -14,9 +19,9 @@ export type PaneLeaf = {
   kind: 'leaf'
   id: string
   /** Tab order within this group. Never empty — when the last tab leaves, the group itself disappears from the tree */
-  sessionIds: string[]
-  /** The group's active tab. Always one of sessionIds */
-  activeSessionId: string
+  tabIds: string[]
+  /** The group's active tab. Always one of tabIds */
+  activeTabId: string
 }
 export type PaneSplit = {
   kind: 'split'
@@ -39,8 +44,8 @@ function nextId(): string {
   return `pane-${++seq}`
 }
 
-export function createGroup(sessionId: string): PaneLeaf {
-  return { kind: 'leaf', id: nextId(), sessionIds: [sessionId], activeSessionId: sessionId }
+export function createGroup(tabId: string): PaneLeaf {
+  return { kind: 'leaf', id: nextId(), tabIds: [tabId], activeTabId: tabId }
 }
 
 export function leaves(node: PaneNode): PaneLeaf[] {
@@ -55,9 +60,9 @@ export function leafOf(root: PaneNode, paneId: string): PaneLeaf | null {
   return leaves(root).find((l) => l.id === paneId) ?? null
 }
 
-/** The group a session belongs to. At most one, thanks to invariant 1 (a session lives in exactly one group). */
-export function groupOfSession(root: PaneNode, sessionId: string): PaneLeaf | null {
-  return leaves(root).find((l) => l.sessionIds.includes(sessionId)) ?? null
+/** The group a tab belongs to. At most one, thanks to invariant 1 (a tab lives in exactly one group). */
+export function groupOfTab(root: PaneNode, tabId: string): PaneLeaf | null {
+  return leaves(root).find((l) => l.tabIds.includes(tabId)) ?? null
 }
 
 export function firstLeaf(node: PaneNode): PaneLeaf {
@@ -78,14 +83,13 @@ function mapNode(node: PaneNode, fn: (n: PaneNode) => PaneNode): PaneNode {
 /** The leaf with one tab removed. null if it was the last tab (meaning the group must disappear).
  *  If the removed tab was the active one, the tab that took its slot becomes active, or the
  *  previous one if there is none — the browser/IntelliJ convention. */
-function withoutTab(leaf: PaneLeaf, sessionId: string): PaneLeaf | null {
-  const i = leaf.sessionIds.indexOf(sessionId)
+function withoutTab(leaf: PaneLeaf, tabId: string): PaneLeaf | null {
+  const i = leaf.tabIds.indexOf(tabId)
   if (i < 0) return leaf
-  const rest = leaf.sessionIds.filter((s) => s !== sessionId)
+  const rest = leaf.tabIds.filter((s) => s !== tabId)
   if (rest.length === 0) return null
-  const active =
-    leaf.activeSessionId === sessionId ? (rest[i] ?? rest[i - 1]) : leaf.activeSessionId
-  return { ...leaf, sessionIds: rest, activeSessionId: active }
+  const active = leaf.activeTabId === tabId ? (rest[i] ?? rest[i - 1]) : leaf.activeTabId
+  return { ...leaf, tabIds: rest, activeTabId: active }
 }
 
 /** Removes a group from the tree and promotes its sibling into the parent's slot. null if that group was the whole root. */
@@ -115,79 +119,73 @@ export function setRatio(root: PaneNode, splitId: string, ratio: number): PaneNo
 }
 
 /** Inserts a tab at the group's insertBefore position (the end by default) and makes it the active tab.
- *  Caller contract: sessionId must not be in the tree yet (use moveTab if it already is). */
+ *  Caller contract: tabId must not be in the tree yet (use moveTab if it already is). */
 export function addTab(
   root: PaneNode,
   paneId: string,
-  sessionId: string,
+  tabId: string,
   insertBefore?: number
 ): PaneNode {
   return mapNode(root, (n) => {
     if (n.kind !== 'leaf' || n.id !== paneId) return n
-    const ids = n.sessionIds.slice()
+    const ids = n.tabIds.slice()
     const at = Math.min(Math.max(insertBefore ?? ids.length, 0), ids.length)
-    ids.splice(at, 0, sessionId)
-    return { ...n, sessionIds: ids, activeSessionId: sessionId }
+    ids.splice(at, 0, tabId)
+    return { ...n, tabIds: ids, activeTabId: tabId }
   })
 }
 
-/** Makes the session the active tab of the group it belongs to, and returns that group's id
+/** Makes the tab the active tab of the group it belongs to, and returns that group's id
  *  alongside. App makes the returned paneId the active pane. */
 export function activateTab(
   root: PaneNode,
-  sessionId: string
+  tabId: string
 ): { root: PaneNode; paneId: string } | null {
-  const g = groupOfSession(root, sessionId)
+  const g = groupOfTab(root, tabId)
   if (!g) return null
-  if (g.activeSessionId === sessionId) return { root, paneId: g.id }
+  if (g.activeTabId === tabId) return { root, paneId: g.id }
   return {
-    root: mapNode(root, (n) => (n === g ? { ...g, activeSessionId: sessionId } : n)),
+    root: mapNode(root, (n) => (n === g ? { ...g, activeTabId: tabId } : n)),
     paneId: g.id
   }
 }
 
 /** Removes a tab. Promotes the sibling if the group empties, and returns null if it was the last tab in the whole tree. */
-export function removeTab(root: PaneNode, sessionId: string): PaneNode | null {
-  const g = groupOfSession(root, sessionId)
+export function removeTab(root: PaneNode, tabId: string): PaneNode | null {
+  const g = groupOfTab(root, tabId)
   if (!g) return root
-  const shrunk = withoutTab(g, sessionId)
+  const shrunk = withoutTab(g, tabId)
   return shrunk ? mapNode(root, (n) => (n === g ? shrunk : n)) : dropGroup(root, g.id)
 }
 
 /** Moves a tab to another group. When source == target this is a reorder within the same group. */
 export function moveTab(
   root: PaneNode,
-  sessionId: string,
+  tabId: string,
   toPaneId: string,
   insertBefore?: number
 ): PaneNode | null {
-  const from = groupOfSession(root, sessionId)
+  const from = groupOfTab(root, tabId)
   const to = leafOf(root, toPaneId)
   if (!from || !to) return null
   if (from.id === to.id) {
-    const ids = reorder(
-      from.sessionIds,
-      from.sessionIds.indexOf(sessionId),
-      insertBefore ?? from.sessionIds.length
-    )
-    return mapNode(root, (n) =>
-      n === from ? { ...from, sessionIds: ids, activeSessionId: sessionId } : n
-    )
+    const ids = reorder(from.tabIds, from.tabIds.indexOf(tabId), insertBefore ?? from.tabIds.length)
+    return mapNode(root, (n) => (n === from ? { ...from, tabIds: ids, activeTabId: tabId } : n))
   }
-  const shrunk = withoutTab(from, sessionId)
+  const shrunk = withoutTab(from, tabId)
   // from.id !== to.id, so there are at least 2 groups — dropGroup cannot return null
   const detached = shrunk
     ? mapNode(root, (n) => (n === from ? shrunk : n))
     : (dropGroup(root, from.id) as PaneNode)
-  return addTab(detached, toPaneId, sessionId, insertBefore)
+  return addTab(detached, toPaneId, tabId, insertBefore)
 }
 
-/** Splits the target group and places sessionId in the new group (IntelliJ Split and Move).
- *  If sessionId already lives in some group it is moved out of there; otherwise it is just
- *  placed — the latter is the path that opens a new session straight into a new group. */
+/** Splits the target group and places tabId in the new group (IntelliJ Split and Move).
+ *  If tabId already lives in some group it is moved out of there; otherwise it is just
+ *  placed — the latter is the path that opens a new tab straight into a new group. */
 export function splitAndMove(
   root: PaneNode,
-  sessionId: string,
+  tabId: string,
   targetPaneId: string,
   dir: PaneDir,
   placeBefore: boolean
@@ -195,19 +193,19 @@ export function splitAndMove(
   if (countLeaves(root) >= MAX_PANES) return null
   const target0 = leafOf(root, targetPaneId)
   if (!target0) return null
-  const from = groupOfSession(root, sessionId)
+  const from = groupOfTab(root, tabId)
   // Source == target with only one tab: after the split the remaining side is empty and collapses
   // again, so the result equals the input. That is not a failure but "already in that state", so
   // the caller does not even raise a toast.
-  if (from && from.id === target0.id && from.sessionIds.length < 2) return null
-  // Remove from the source group first — inserting the new group first would put sessionId in two
+  if (from && from.id === target0.id && from.tabIds.length < 2) return null
+  // Remove from the source group first — inserting the new group first would put tabId in two
   // groups and leave removeTab ambiguous about which one to strip. Not null, thanks to the guard above.
-  const detached = from ? (removeTab(root, sessionId) as PaneNode) : root
+  const detached = from ? (removeTab(root, tabId) as PaneNode) : root
   // The removal above can change node references, so look the target up by id again. The only way
   // the target group disappears is "from === target && one tab", which the guard above already
   // rejected, so this is not null
   const target = leafOf(detached, targetPaneId) as PaneLeaf
-  const group = createGroup(sessionId)
+  const group = createGroup(tabId)
   const split: PaneSplit = {
     kind: 'split',
     id: nextId(),
@@ -220,7 +218,7 @@ export function splitAndMove(
 }
 
 /** Removes a group and appends its tabs to the end of the sibling group (IntelliJ Unsplit). The
- *  sessions are not killed. If the sibling is a split, the tabs join that subtree's firstLeaf —
+ *  tabs are not closed. If the sibling is a split, the tabs join that subtree's firstLeaf —
  *  geometrically the left/top one, the same direction sibling promotion uses. The absorbing group
  *  keeps its own active tab. */
 export function unsplit(root: PaneNode, paneId: string): PaneNode {
@@ -231,19 +229,19 @@ export function unsplit(root: PaneNode, paneId: string): PaneNode {
   const dropped = dropGroup(root, paneId) as PaneNode // not null, since a sibling exists
   return mapNode(dropped, (n) =>
     n.kind === 'leaf' && n.id === hostId
-      ? { ...n, sessionIds: [...n.sessionIds, ...group.sessionIds] }
+      ? { ...n, tabIds: [...n.tabIds, ...group.tabIds] }
       : n
   )
 }
 
-/** Swaps only the session id, keeping the tab's slot and ordering. Shared by restart and rolling. */
-export function replaceSessionId(root: PaneNode, oldId: string, newId: string): PaneNode {
+/** Swaps only the tab id, keeping the tab's slot and ordering. Shared by restart and rolling. */
+export function replaceTabId(root: PaneNode, oldId: string, newId: string): PaneNode {
   return mapNode(root, (n) => {
-    if (n.kind !== 'leaf' || !n.sessionIds.includes(oldId)) return n
+    if (n.kind !== 'leaf' || !n.tabIds.includes(oldId)) return n
     return {
       ...n,
-      sessionIds: n.sessionIds.map((s) => (s === oldId ? newId : s)),
-      activeSessionId: n.activeSessionId === oldId ? newId : n.activeSessionId
+      tabIds: n.tabIds.map((s) => (s === oldId ? newId : s)),
+      activeTabId: n.activeTabId === oldId ? newId : n.activeTabId
     }
   })
 }

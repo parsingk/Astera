@@ -10,12 +10,12 @@ import {
   dropZoneOf,
   findNeighbor,
   firstLeaf,
-  groupOfSession,
+  groupOfTab,
   leafOf,
   leaves,
   moveTab,
   removeTab,
-  replaceSessionId,
+  replaceTabId,
   setRatio,
   splitAndMove,
   splitBoundaries,
@@ -25,12 +25,12 @@ import {
 
 /** 트리가 스펙의 불변식 4개를 지키는지. 모든 연산 결과에 적용한다. */
 function assertInvariants(root: PaneNode, expected: string[]): void {
-  const all = leaves(root).flatMap((l) => l.sessionIds)
-  expect(new Set(all).size).toBe(all.length) // 세션은 한 그룹에만 (불변식 1)
+  const all = leaves(root).flatMap((l) => l.tabIds)
+  expect(new Set(all).size).toBe(all.length) // 탭은 한 그룹에만 (불변식 1)
   expect([...all].sort()).toEqual([...expected].sort())
   for (const l of leaves(root)) {
-    expect(l.sessionIds.length).toBeGreaterThan(0) // 빈 그룹 없음 (불변식 2)
-    expect(l.sessionIds).toContain(l.activeSessionId) // (불변식 3)
+    expect(l.tabIds.length).toBeGreaterThan(0) // 빈 그룹 없음 (불변식 2)
+    expect(l.tabIds).toContain(l.activeTabId) // (불변식 3)
   }
   expect(countLeaves(root)).toBeLessThanOrEqual(MAX_PANES) // (불변식 4)
 }
@@ -58,8 +58,8 @@ describe('createGroup / addTab / activateTab', () => {
   it('탭 하나짜리 그룹을 만든다', () => {
     const g = createGroup('s1')
     expect(g.kind).toBe('leaf')
-    expect(g.sessionIds).toEqual(['s1'])
-    expect(g.activeSessionId).toBe('s1')
+    expect(g.tabIds).toEqual(['s1'])
+    expect(g.activeTabId).toBe('s1')
     assertInvariants(g, ['s1'])
   })
 
@@ -70,45 +70,45 @@ describe('createGroup / addTab / activateTab', () => {
   it('addTab은 끝에 붙이고 활성 탭으로 만든다', () => {
     const g = createGroup('s1')
     const next = addTab(g, g.id, 's2')
-    expect(leafOf(next, g.id)!.sessionIds).toEqual(['s1', 's2'])
-    expect(leafOf(next, g.id)!.activeSessionId).toBe('s2')
-    expect(g.sessionIds).toEqual(['s1']) // 원본 불변
+    expect(leafOf(next, g.id)!.tabIds).toEqual(['s1', 's2'])
+    expect(leafOf(next, g.id)!.activeTabId).toBe('s2')
+    expect(g.tabIds).toEqual(['s1']) // 원본 불변
     assertInvariants(next, ['s1', 's2'])
   })
 
   it('addTab의 insertBefore는 그 자리에 끼운다', () => {
     const g = createGroup('s1')
     const next = addTab(addTab(g, g.id, 's2'), g.id, 's3', 0)
-    expect(leafOf(next, g.id)!.sessionIds).toEqual(['s3', 's1', 's2'])
+    expect(leafOf(next, g.id)!.tabIds).toEqual(['s3', 's1', 's2'])
   })
 
   it('activateTab은 소속 그룹과 그 그룹 id를 돌려준다', () => {
     const { root, ids } = threePane()
     const act = activateTab(root, 's3')!
     expect(act.paneId).toBe(ids[2])
-    expect(leafOf(act.root, ids[2])!.activeSessionId).toBe('s3')
+    expect(leafOf(act.root, ids[2])!.activeTabId).toBe('s3')
     expect(activateTab(root, 'nope')).toBeNull()
   })
 
-  it('groupOfSession은 탭 목록으로 찾는다', () => {
+  it('groupOfTab은 탭 목록으로 찾는다', () => {
     const g = createGroup('s1')
     const next = addTab(g, g.id, 's2')
-    expect(groupOfSession(next, 's2')!.id).toBe(g.id)
-    expect(groupOfSession(next, 'nope')).toBeNull()
+    expect(groupOfTab(next, 's2')!.id).toBe(g.id)
+    expect(groupOfTab(next, 'nope')).toBeNull()
   })
 })
 
 describe('leafOf / firstLeaf', () => {
   it('id로 그룹을 찾고 첫 그룹을 돌려준다', () => {
     const { root, ids } = threePane()
-    expect(leafOf(root, ids[1])!.activeSessionId).toBe('s2')
+    expect(leafOf(root, ids[1])!.activeTabId).toBe('s2')
     expect(leafOf(root, 'nope')).toBeNull()
     expect(firstLeaf(root).id).toBe(ids[0])
   })
 })
 
 describe('splitAndMove', () => {
-  it('트리에 없는 세션은 새 그룹에 그냥 놓는다', () => {
+  it('트리에 없는 탭은 새 그룹에 그냥 놓는다', () => {
     const a = createGroup('s1')
     const res = splitAndMove(a, 's2', a.id, 'row', false)!
     const root = res.root
@@ -116,7 +116,7 @@ describe('splitAndMove', () => {
     expect(root.dir).toBe('row')
     expect(root.ratio).toBe(0.5)
     expect(root.a).toEqual(a)
-    expect(leafOf(root, res.paneId)!.sessionIds).toEqual(['s2'])
+    expect(leafOf(root, res.paneId)!.tabIds).toEqual(['s2'])
     assertInvariants(root, ['s1', 's2'])
   })
 
@@ -133,9 +133,9 @@ describe('splitAndMove', () => {
     const g = createGroup('s1')
     const two = addTab(g, g.id, 's2') // 활성 탭은 s2
     const res = splitAndMove(two, 's2', g.id, 'row', false)!
-    expect(leafOf(res.root, g.id)!.sessionIds).toEqual(['s1'])
-    expect(leafOf(res.root, g.id)!.activeSessionId).toBe('s1') // 활성 탭 승계
-    expect(leafOf(res.root, res.paneId)!.sessionIds).toEqual(['s2'])
+    expect(leafOf(res.root, g.id)!.tabIds).toEqual(['s1'])
+    expect(leafOf(res.root, g.id)!.activeTabId).toBe('s1') // 활성 탭 승계
+    expect(leafOf(res.root, res.paneId)!.tabIds).toEqual(['s2'])
     assertInvariants(res.root, ['s1', 's2'])
   })
 
@@ -148,7 +148,7 @@ describe('splitAndMove', () => {
     const { root, ids } = threePane() // (s1 | (s2 / s3)), 그룹 3개
     const res = splitAndMove(root, 's3', ids[0], 'col', false)!
     expect(countLeaves(res.root)).toBe(3)
-    expect(groupOfSession(res.root, 's3')!.id).toBe(res.paneId)
+    expect(groupOfTab(res.root, 's3')!.id).toBe(res.paneId)
     assertInvariants(res.root, ['s1', 's2', 's3'])
   })
 
@@ -176,7 +176,7 @@ describe('removeTab', () => {
     const g = createGroup('s1')
     const two = addTab(g, g.id, 's2')
     const next = removeTab(two, 's2')!
-    expect(leafOf(next, g.id)!.sessionIds).toEqual(['s1'])
+    expect(leafOf(next, g.id)!.tabIds).toEqual(['s1'])
     assertInvariants(next, ['s1'])
   })
 
@@ -184,9 +184,9 @@ describe('removeTab', () => {
     const g = createGroup('s1')
     const three = addTab(addTab(g, g.id, 's2'), g.id, 's3') // [s1,s2,s3] 활성 s3
     const mid = activateTab(three, 's2')!.root
-    expect(leafOf(removeTab(mid, 's2')!, g.id)!.activeSessionId).toBe('s3') // 다음
+    expect(leafOf(removeTab(mid, 's2')!, g.id)!.activeTabId).toBe('s3') // 다음
     const last = activateTab(three, 's3')!.root
-    expect(leafOf(removeTab(last, 's3')!, g.id)!.activeSessionId).toBe('s2') // 이전
+    expect(leafOf(removeTab(last, 's3')!, g.id)!.activeTabId).toBe('s2') // 이전
   })
 
   it('마지막 탭이 빠지면 그룹이 사라지고 형제가 승격된다', () => {
@@ -209,7 +209,7 @@ describe('removeTab', () => {
     expect(removeTab(g, 's1')).toBeNull()
   })
 
-  it('없는 세션이면 트리를 그대로 돌려준다', () => {
+  it('없는 탭이면 트리를 그대로 돌려준다', () => {
     const { root } = threePane()
     expect(removeTab(root, 'sX')).toBe(root)
   })
@@ -219,8 +219,8 @@ describe('moveTab', () => {
   it('다른 그룹으로 옮긴다', () => {
     const { root, ids } = threePane()
     const next = moveTab(root, 's3', ids[0])!
-    expect(leafOf(next, ids[0])!.sessionIds).toEqual(['s1', 's3'])
-    expect(leafOf(next, ids[0])!.activeSessionId).toBe('s3')
+    expect(leafOf(next, ids[0])!.tabIds).toEqual(['s1', 's3'])
+    expect(leafOf(next, ids[0])!.activeTabId).toBe('s3')
     assertInvariants(next, ['s1', 's2', 's3'])
   })
 
@@ -235,7 +235,7 @@ describe('moveTab', () => {
     const g = createGroup('s1')
     const three = addTab(addTab(g, g.id, 's2'), g.id, 's3') // [s1,s2,s3]
     const next = moveTab(three, 's3', g.id, 0)!
-    expect(leafOf(next, g.id)!.sessionIds).toEqual(['s3', 's1', 's2'])
+    expect(leafOf(next, g.id)!.tabIds).toEqual(['s3', 's1', 's2'])
     assertInvariants(next, ['s1', 's2', 's3'])
   })
 
@@ -243,10 +243,10 @@ describe('moveTab', () => {
     const { root, ids } = threePane()
     const g = addTab(root, ids[0], 'sX') // ids[0] = [s1, sX]
     const next = moveTab(g, 's2', ids[0], 1)!
-    expect(leafOf(next, ids[0])!.sessionIds).toEqual(['s1', 's2', 'sX'])
+    expect(leafOf(next, ids[0])!.tabIds).toEqual(['s1', 's2', 'sX'])
   })
 
-  it('없는 세션·대상이면 null', () => {
+  it('없는 탭·대상이면 null', () => {
     const { root, ids } = threePane()
     expect(moveTab(root, 'sX', ids[0])).toBeNull()
     expect(moveTab(root, 's2', 'nope')).toBeNull()
@@ -260,15 +260,15 @@ describe('unsplit', () => {
     const withTwo = addTab(res.root, res.paneId, 's3') // 오른쪽 그룹 = [s2, s3]
     const next = unsplit(withTwo, res.paneId)
     expect(next.kind).toBe('leaf')
-    expect(leafOf(next, a.id)!.sessionIds).toEqual(['s1', 's2', 's3'])
-    expect(leafOf(next, a.id)!.activeSessionId).toBe('s1') // 흡수한 쪽 유지
+    expect(leafOf(next, a.id)!.tabIds).toEqual(['s1', 's2', 's3'])
+    expect(leafOf(next, a.id)!.activeTabId).toBe('s1') // 흡수한 쪽 유지
     assertInvariants(next, ['s1', 's2', 's3'])
   })
 
   it('형제가 split이면 그 서브트리의 firstLeaf에 합친다', () => {
     const { root, ids } = threePane() // (s1 | (s2 / s3))
     const next = unsplit(root, ids[0]) // s1을 없애면 형제는 (s2 / s3)
-    expect(leafOf(next, ids[1])!.sessionIds).toEqual(['s2', 's1'])
+    expect(leafOf(next, ids[1])!.tabIds).toEqual(['s2', 's1'])
     assertInvariants(next, ['s1', 's2', 's3'])
   })
 
@@ -279,9 +279,9 @@ describe('unsplit', () => {
   it('중첩 안쪽 그룹을 없애면 남은 트리의 firstLeaf가 아니라 형제에 합친다', () => {
     const { root, ids } = threePane() // (s1 | (s2 / s3))
     const next = unsplit(root, ids[1]) // s2를 없애면 형제는 s3 하나뿐
-    expect(leafOf(next, ids[2])!.sessionIds).toEqual(['s3', 's2']) // 형제 s3에 합쳐진다
-    expect(leafOf(next, ids[0])!.sessionIds).toEqual(['s1']) // 남은 트리의 firstLeaf인 s1이 아니다
-    expect(leafOf(next, ids[2])!.activeSessionId).toBe('s3') // 흡수한 쪽의 활성 탭은 유지된다
+    expect(leafOf(next, ids[2])!.tabIds).toEqual(['s3', 's2']) // 형제 s3에 합쳐진다
+    expect(leafOf(next, ids[0])!.tabIds).toEqual(['s1']) // 남은 트리의 firstLeaf인 s1이 아니다
+    expect(leafOf(next, ids[2])!.activeTabId).toBe('s3') // 흡수한 쪽의 활성 탭은 유지된다
     assertInvariants(next, ['s1', 's2', 's3'])
   })
 
@@ -296,27 +296,27 @@ describe('unsplit', () => {
   })
 })
 
-describe('replaceSessionId / setRatio', () => {
+describe('replaceTabId / setRatio', () => {
   it('탭의 자리와 활성 여부를 유지한 채 id만 바꾼다', () => {
     const g = createGroup('s1')
     const three = addTab(addTab(g, g.id, 's2'), g.id, 's3')
     const mid = activateTab(three, 's2')!.root
-    const next = replaceSessionId(mid, 's2', 'sNew')
-    expect(leafOf(next, g.id)!.sessionIds).toEqual(['s1', 'sNew', 's3'])
-    expect(leafOf(next, g.id)!.activeSessionId).toBe('sNew')
-    expect(leafOf(mid, g.id)!.sessionIds).toEqual(['s1', 's2', 's3']) // 원본 불변
+    const next = replaceTabId(mid, 's2', 'sNew')
+    expect(leafOf(next, g.id)!.tabIds).toEqual(['s1', 'sNew', 's3'])
+    expect(leafOf(next, g.id)!.activeTabId).toBe('sNew')
+    expect(leafOf(mid, g.id)!.tabIds).toEqual(['s1', 's2', 's3']) // 원본 불변
   })
 
   it('비활성 탭이면 활성 탭은 건드리지 않는다', () => {
     const g = createGroup('s1')
     const two = addTab(g, g.id, 's2') // 활성 s2
-    const next = replaceSessionId(two, 's1', 'sNew')
-    expect(leafOf(next, g.id)!.activeSessionId).toBe('s2')
+    const next = replaceTabId(two, 's1', 'sNew')
+    expect(leafOf(next, g.id)!.activeTabId).toBe('s2')
   })
 
   it('없는 id면 무변화', () => {
     const { root } = threePane()
-    expect(replaceSessionId(root, 'sX', 'sY')).toBe(root)
+    expect(replaceTabId(root, 'sX', 'sY')).toBe(root)
   })
 
   it('setRatio는 하위 트리를 보존한다', () => {
@@ -484,5 +484,30 @@ describe('clampRatio', () => {
 
   it('컨테이너가 최소 폭 2배보다 좁으면 균등', () => {
     expect(clampRatio(0.9, 400)).toBe(0.5)
+  })
+})
+
+describe('종류가 섞인 트리', () => {
+  it('파일 탭을 다른 그룹으로 옮겨도 불변식이 유지된다', () => {
+    const a = createGroup('session:s1')
+    const r = splitAndMove(a, 'file:D:\\r\\a.ts', a.id, 'row', false)!
+    const moved = moveTab(r.root, 'file:D:\\r\\a.ts', a.id, 0)!
+    assertInvariants(moved, ['session:s1', 'file:D:\\r\\a.ts'])
+  })
+
+  it('그룹의 마지막 탭이 파일이어도 그룹이 사라진다', () => {
+    const a = createGroup('session:s1')
+    const r = splitAndMove(a, 'file:D:\\r\\a.ts', a.id, 'row', false)!
+    const next = removeTab(r.root, 'file:D:\\r\\a.ts')!
+    expect(countLeaves(next)).toBe(1)
+    assertInvariants(next, ['session:s1'])
+  })
+
+  // 롤링은 세션 id만 갈아끼운다 — 파일 탭이 섞여 있어도 건드리면 안 된다
+  it('replaceTabId는 지정한 탭만 바꾼다', () => {
+    const a = createGroup('session:s1')
+    const withFile = addTab(a, a.id, 'file:D:\\r\\a.ts')
+    const next = replaceTabId(withFile, 'session:s1', 'session:s2')
+    assertInvariants(next, ['session:s2', 'file:D:\\r\\a.ts'])
   })
 })

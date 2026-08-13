@@ -69,10 +69,11 @@ También necesitarás:
 - Una terminal por proyecto
 
 **Editor y atajos**
-- Una tecla alterna una sesión entre la vista del agente y un editor sobre el mismo proyecto:
-  `Ctrl`/`Cmd`+`Shift`+`E`, para leer lo que el agente acaba de cambiar sin salir de la ventana
-- Una sola fila de pestañas: las sesiones en marcha del proyecto se sitúan junto a los archivos
-  abiertos, y `Ctrl`+`Tab` recorre la fila entera
+- Una tecla muestra y oculta el explorador: `Ctrl`/`Cmd`+`Shift`+`E` para el árbol de archivos, la
+  barra de ejecución y la consola de ejecución, dejando los paneles donde están
+- Una fila de pestañas por panel, con los dos tipos de pestaña: un archivo se sitúa junto a la sesión
+  que lo está cambiando, una división muestra ambos a la vez y `Ctrl`+`Tab` recorre la fila del
+  panel activo
 - Un editor de verdad, no un cuadro de texto: CodeMirror con resaltado de sintaxis para TypeScript,
   JavaScript, Python, Go, Rust, C/C++, Java, PHP, SQL, HTML, CSS, Markdown, JSON, YAML y XML,
   abiertos en pestañas
