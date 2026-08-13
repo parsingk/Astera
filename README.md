@@ -145,10 +145,6 @@ macOS, and the shared `resources/tray.png` on both) rather than generating them.
 scripts/gen-icon.ps1` (ico/png) on Windows, `sh scripts/gen-icon-mac.sh` (icns) on
 macOS — then commit the regenerated assets.
 
-The two README diagrams are committed the same way. Their source is `assets/src/diagram.html`; run
-`npx electron scripts/gen-diagram.js` (it needs `ffmpeg` on `PATH`) to rebuild the GIFs and commit
-those.
-
 Tests are colocated as `*.test.ts` and run with `npm test` (Vitest). CI runs the typecheck, the suite,
 and a full bundle build.
 
