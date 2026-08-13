@@ -152,10 +152,6 @@ npm run dist:mac   # macOS universal dmg + zip
 ください — Windows は `powershell -File scripts/gen-icon.ps1`（ico/png）、macOS は
 `sh scripts/gen-icon-mac.sh`（icns）— そのうえで生成されたアセットをコミットします。
 
-README の 2 つの図も同じようにコミットされています。ソースは `assets/src/diagram.html` で、
-`npx electron scripts/gen-diagram.js` を実行すると GIF を作り直せます（`PATH` に `ffmpeg` が
-必要です）。生成物はコミットしてください。
-
 テストは対象の隣に `*.test.ts` として置き、`npm test`（Vitest）で実行します。CI は型チェック、
 テストスイート、そして完全なバンドルビルドを実行します。
 

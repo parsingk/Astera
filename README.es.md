@@ -153,10 +153,6 @@ el logotipo, sustituye `resources/logo-source.png` y vuelve a ejecutar el script
 su propia plataforma — `powershell -File scripts/gen-icon.ps1` (ico/png) en Windows,
 `sh scripts/gen-icon-mac.sh` (icns) en macOS — y luego versiona los recursos regenerados.
 
-Los dos diagramas del README se versionan igual. Su fuente es `assets/src/diagram.html`; ejecuta
-`npx electron scripts/gen-diagram.js` (necesita `ffmpeg` en el `PATH`) para regenerar los GIF y
-versiónalos.
-
 Las pruebas viven junto a lo que prueban como `*.test.ts` y se ejecutan con `npm test` (Vitest). CI
 ejecuta la comprobación de tipos, la suite y una compilación completa del bundle.
 

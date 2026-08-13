@@ -36,6 +36,11 @@ Issues and pull requests are welcome. A couple of things worth knowing before yo
   English README that alters what the app does or how it is installed belongs in the translations
   too; wording-only polish does not have to be mirrored. As with the catalogs, the Japanese and
   Spanish pages had no native review.
+- The two README diagrams are generated, and both the source and the output are committed. The source
+  is `assets/src/diagram.html` — a page of six states, one per caption; `npx electron
+  scripts/gen-diagram.js` renders them and encodes `assets/rolling.gif` and `assets/schedule.gif`,
+  which needs `ffmpeg` on `PATH`. Change the page rather than the GIFs, then commit both. The script
+  carries comments on the parts of Electron's offscreen rendering that do not behave as they read.
 - Bug reports are much easier to act on with the app version, your OS version, and the relevant
   lines from `rolling.log` when the problem involves account rolling — `%APPDATA%\astera\rolling.log`
   on Windows, `~/Library/Application Support/astera/rolling.log` on macOS.
