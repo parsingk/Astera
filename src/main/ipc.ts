@@ -756,12 +756,15 @@ export function registerIpc(
     }
     const texts = await readSeedTexts(projectPath, files)
     const { detectSeedConfigs, mergeConfigs, isSpringBootProject } = await import('../core/run/config')
+    const { buildRunContext } = await import('../core/run/build')
     const configs = mergeConfigs(detectSeedConfigs(files, texts), core.runConfig.get(projectPath))
     return {
       configs,
       active: core.run.get(projectPath),
       recent: core.run.recentOutput(projectPath),
-      isSpringBoot: isSpringBootProject(texts) // whether RunConfigDialog shows the Spring profile field
+      isSpringBoot: isSpringBootProject(texts), // whether RunConfigDialog shows the Spring profile field
+      // Same buildRunContext call as run.start below — the form's preview and the actual run must agree
+      context: buildRunContext(files, process.platform)
     }
   })
 
@@ -809,10 +812,14 @@ export function registerIpc(
     // Send the validated cwd through — runManager uses config.cwd as the PTY cwd, so passing the
     // original would split what was validated from what runs
     const cwd = await resolveRunCwd(projectPath, config.cwd)
+    const { buildCommand, buildRunContext } = await import('../core/run/build')
+    // Both handlers call buildRunContext the same way — keeping the wrapper/package-manager rule in one
+    // place is the point, so the form's preview (run.list) and the actual run never disagree.
     return core.run.start({
       projectPath,
       projectName: path.basename(projectPath) || projectPath,
-      config: { ...config, cwd }
+      config: { ...config, cwd },
+      command: buildCommand(config, buildRunContext(files, process.platform))
     })
   })
 
@@ -828,6 +835,27 @@ export function registerIpc(
     // hand-edited on disk and thus bypass this path.
     await assertAllowedPath(projectPath)
     await resolveRunCwd(projectPath, config?.cwd)
+    // Trusting only the renderer's form validation would let a hand-edited JSON file through
+    const { migrateRunConfigs } = await import('../core/run/migrate')
+    if (migrateRunConfigs([config]).length === 0) throw new Error('INVALID_CONFIG')
+    // cmd.exe interprets & | ^ % ! < > even inside double quotes — assembly cannot guard against
+    // that, so reject at save time.
+    //
+    // **Only values that actually land in the command string are checked.** id/name are metadata,
+    // cwd is handed to the PTY as its working directory rather than interpolated into the command
+    // text, and javaHome/springProfiles become environment variables. Checking every field would
+    // reject a configuration merely because it's named "build & test".
+    //
+    // Why an exclude list: the failure direction is the safe one. A new field defaults to being
+    // checked — possibly over-restrictive, but never a silent gap. An include list fails the other way.
+    const NOT_IN_COMMAND = new Set(['id', 'name', 'cwd', 'env', 'javaHome', 'springProfiles'])
+    if (process.platform === 'win32' && config.type !== 'shell') {
+      const { hasUnsafeWin32Chars } = await import('../core/run/build')
+      for (const [k, v] of Object.entries(config as unknown as Record<string, unknown>)) {
+        if (NOT_IN_COMMAND.has(k)) continue
+        if (typeof v === 'string' && hasUnsafeWin32Chars(v)) throw new Error('UNSAFE_VALUE')
+      }
+    }
     const list = core.runConfig.get(projectPath)
     const next = list.some((c) => c.id === config.id)
       ? list.map((c) => (c.id === config.id ? config : c))

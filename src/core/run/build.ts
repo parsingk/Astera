@@ -1,4 +1,4 @@
-import type { PackageManager } from './config'
+import { detectPackageManager, type PackageManager } from './config'
 import type { RunConfig } from './types'
 
 /** The context command assembly needs. Derived from the file list and platform, never stored */
@@ -68,5 +68,22 @@ export function buildCommand(config: RunConfig, ctx: RunContext): string {
       // packagePath 는 단일 값이므로 인용한다 — args·tasks·goals 처럼 여러 토큰을 담는 필드가 아니다.
       // quoteArg 는 특수문자가 없으면 그대로 돌려주므로 './...' 같은 흔한 값은 모양이 바뀌지 않는다
       return join('go', config.subcommand, q(config.packagePath || '.'), config.args)
+  }
+}
+
+/** Builds the assembly context from the file list and platform.
+ *
+ *  The wrapper choice lives here. posix runs via sh -c, which only searches PATH, so a bare `gradlew`
+ *  is never found — it has to be `./gradlew`. win32 runs via cmd.exe /c, which checks the current
+ *  directory first, so `gradlew.bat` alone is enough. No wrapper falls back to the global command. */
+export function buildRunContext(files: string[], platform: string): RunContext {
+  const set = new Set(files)
+  const win = platform === 'win32'
+  return {
+    packageManager: detectPackageManager(files),
+    gradleRunner: win ? (set.has('gradlew.bat') ? 'gradlew.bat' : 'gradle') : set.has('gradlew') ? './gradlew' : 'gradle',
+    mavenRunner: win ? (set.has('mvnw.cmd') ? 'mvnw.cmd' : 'mvn') : set.has('mvnw') ? './mvnw' : 'mvn',
+    composeFile: null, // Task 10 fills this in
+    platform
   }
 }

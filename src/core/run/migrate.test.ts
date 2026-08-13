@@ -52,4 +52,12 @@ describe('migrateRunConfigs', () => {
   it('알 수 없는 type 은 버린다', () => {
     expect(migrateRunConfigs([{ id: 'x', name: 'x', type: 'nope' }])).toEqual([])
   })
+
+  it('종류의 필수 필드가 없으면 버린다', () => {
+    expect(migrateRunConfigs([{ id: 'x', name: 'x', type: 'npm' }])).toEqual([])
+    expect(migrateRunConfigs([{ id: 'x', name: 'x', type: 'gradle', tasks: '' }])).toEqual([])
+    expect(migrateRunConfigs([{ id: 'x', name: 'x', type: 'npm', script: 'dev' }])).toEqual([
+      { id: 'x', name: 'x', type: 'npm', script: 'dev' }
+    ])
+  })
 })

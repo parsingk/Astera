@@ -1,5 +1,7 @@
 import type { RunConfig, RunStatus } from './run/config'
 export type { RunConfig, RunStatus } from './run/config'
+import type { RunContext } from './run/build'
+export type { RunContext } from './run/build'
 import type { Jdk } from './run/jdk'
 export type { Jdk } from './run/jdk'
 // This file already has a HistoryEntry for session history, so the local-history one comes in under
@@ -414,9 +416,15 @@ export interface CoreApi {
     // Running and stopping a project. start and list go through assertAllowedPath, which permits only
     // registered project paths.
     // isSpringBoot tells RunConfigDialog whether to show the Spring profile field.
-    list(
-      projectPath: string
-    ): Promise<{ configs: RunConfig[]; active: RunStatus | null; recent: string; isSpringBoot: boolean }>
+    // context is the assembly context (wrapper choice, package manager, platform) — the form's preview
+    // calls buildCommand(config, context) so it shows exactly what run.start will actually run.
+    list(projectPath: string): Promise<{
+      configs: RunConfig[]
+      active: RunStatus | null
+      recent: string
+      isSpringBoot: boolean
+      context: RunContext
+    }>
     listActive(): Promise<RunStatus[]> // all active runs — for the count badge and the dropdown
     start(projectPath: string, configId: string): Promise<RunStatus>
     stop(projectPath: string): Promise<void>

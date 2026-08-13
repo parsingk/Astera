@@ -1578,8 +1578,9 @@ export default function App(): React.JSX.Element {
   }
   const runAddConfig = (name: string, command: string, env?: Record<string, string>, cwd?: string): void => {
     if (!explorerRoot) return
-    // TEMPORARY (Task 1): RunConfigDialog only edits shell configs — Task 6/7 replace it with a
-    // kind-aware form, and this literal 'shell' goes away with it.
+    // TEMPORARY (Task 1): RunConfigDialog only edits shell configs. Task 8 removes this handler
+    // entirely along with RunConfigDialog and the old add/edit menu items, folding add/edit into
+    // RunConfigManager's onSave — this literal 'shell' goes away with it, not before.
     const config: RunConfig = { id: `user:${name}:${command}`, name, type: 'shell', command, env, cwd }
     void window.api.run.saveConfig(explorerRoot, config).then(
       () => {
@@ -1599,7 +1600,7 @@ export default function App(): React.JSX.Element {
     cwd?: string
   ): void => {
     if (!explorerRoot) return
-    // TEMPORARY (Task 1): same reason as runAddConfig above
+    // TEMPORARY (Task 1): same reason as runAddConfig above — Task 8 removes this handler too
     void window.api.run.saveConfig(explorerRoot, { id, name, type: 'shell', command, env, cwd }).then(
       () => {
         void window.api.run.list(explorerRoot).then((r) => { setRunConfigs(r.configs); setRunSelectedId(id) })

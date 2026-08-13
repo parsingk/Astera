@@ -2,6 +2,19 @@ import type { RunConfig, RunConfigType } from './types'
 
 const KNOWN: RunConfigType[] = ['shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go']
 
+/** The string fields a kind must have. Missing one means buildCommand would splice `undefined` into
+ *  the assembled command — this is the gate that stops that. A Record so adding a kind without a
+ *  line here fails the build (see the file structure table's later tasks, which each add one). */
+const REQUIRED: Record<RunConfigType, string[]> = {
+  shell: ['command'],
+  npm: ['script'],
+  node: ['file'],
+  gradle: ['tasks'],
+  maven: ['goals'],
+  cargo: ['subcommand'],
+  go: ['subcommand']
+}
+
 const isStringMap = (v: unknown): boolean =>
   v === undefined ||
   (v !== null &&
@@ -31,6 +44,7 @@ export function migrateRunConfigs(value: unknown): RunConfig[] {
       continue
     }
     if (typeof o.type !== 'string' || !KNOWN.includes(o.type as RunConfigType)) continue
+    if (REQUIRED[o.type as RunConfigType].some((k) => typeof o[k] !== 'string' || o[k] === '')) continue
     out.push(o as unknown as RunConfig)
   }
   return out

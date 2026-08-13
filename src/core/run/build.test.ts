@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildCommand, quoteArg, hasUnsafeWin32Chars, type RunContext } from './build'
+import { buildCommand, buildRunContext, quoteArg, hasUnsafeWin32Chars, type RunContext } from './build'
 
 const ctx: RunContext = {
   packageManager: 'pnpm',
@@ -98,5 +98,39 @@ describe('hasUnsafeWin32Chars', () => {
   it('평범한 경로는 통과시킨다', () => {
     expect(hasUnsafeWin32Chars('src/main/index.ts')).toBe(false)
     expect(hasUnsafeWin32Chars('C:\\Program Files\\Java')).toBe(false)
+  })
+})
+
+describe('buildRunContext', () => {
+  // Task 4가 detectSeedConfigs에서 이 규칙을 떼어내면서 테스트도 함께 지워졌다.
+  // 규칙은 제품에 남아 있으므로 커버리지도 여기서 다시 선다
+  it('Gradle 래퍼: 있으면 래퍼, 없으면 전역', () => {
+    expect(buildRunContext(['gradlew'], 'linux').gradleRunner).toBe('./gradlew')
+    expect(buildRunContext([], 'linux').gradleRunner).toBe('gradle')
+    expect(buildRunContext(['gradlew.bat'], 'win32').gradleRunner).toBe('gradlew.bat')
+    expect(buildRunContext([], 'win32').gradleRunner).toBe('gradle')
+  })
+
+  it('Maven 래퍼: 있으면 래퍼, 없으면 전역', () => {
+    expect(buildRunContext(['mvnw'], 'linux').mavenRunner).toBe('./mvnw')
+    expect(buildRunContext([], 'linux').mavenRunner).toBe('mvn')
+    expect(buildRunContext(['mvnw.cmd'], 'win32').mavenRunner).toBe('mvnw.cmd')
+    expect(buildRunContext([], 'win32').mavenRunner).toBe('mvn')
+  })
+
+  // posix의 래퍼는 반드시 './'가 붙어야 한다 — sh -c는 PATH만 뒤지므로 맨 이름은 못 찾는다
+  it('posix 래퍼에는 ./ 가 붙는다', () => {
+    expect(buildRunContext(['gradlew', 'mvnw'], 'darwin').gradleRunner.startsWith('./')).toBe(true)
+    expect(buildRunContext(['gradlew', 'mvnw'], 'darwin').mavenRunner.startsWith('./')).toBe(true)
+  })
+
+  it('락파일이 패키지 매니저를 고른다', () => {
+    expect(buildRunContext(['pnpm-lock.yaml'], 'win32').packageManager).toBe('pnpm')
+    expect(buildRunContext([], 'win32').packageManager).toBe('npm')
+  })
+
+  it('platform을 그대로 실어 보낸다 — 인용이 이 값으로 갈린다', () => {
+    expect(buildRunContext([], 'win32').platform).toBe('win32')
+    expect(buildRunContext([], 'linux').platform).toBe('linux')
   })
 })
