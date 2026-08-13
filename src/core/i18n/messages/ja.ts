@@ -529,7 +529,6 @@ export const ja: Catalog = {
   'session.resume.originDeleted': '削除されたアカウント',
   'history.filter.allAccounts': 'すべてのアカウント',
   'history.refresh.tooltip': 'ウォッチャー失敗時の手動フォールバック',
-  'history.project.openExplorer': 'ファイルエクスプローラーで開く',
   'history.menu.hide': '非表示にする',
   'history.project.noSessions': 'セッションなし',
   'history.entry.preview': 'プレビュー',
@@ -562,7 +561,6 @@ export const ja: Catalog = {
   // WorktreePanel.tsx — panel header, row icon buttons
   'worktree.refresh': '更新',
   'worktree.action.startSession': 'セッションを開始',
-  'worktree.action.openExplorer': 'エクスプローラー',
   // RunToolbar.tsx — config select, run/stop, edit/delete, the running list
   'run.config.selectLabel': '実行構成の選択',
   'run.config.none': '実行構成がありません',

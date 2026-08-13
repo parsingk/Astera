@@ -3,7 +3,6 @@ import type { Account, HistoryEntry, ProjectSummary, ScheduleConfig, TranscriptP
 import { ResumeDialog } from './ResumeDialog'
 import { AccountSelect } from './AccountSelect'
 import { ProviderBadge } from './ProviderBadge'
-import { FolderGlyph } from './FolderGlyph'
 import { isGhostAccountId } from '../../../core/accounts/ghostId'
 import { confirmModal } from '../lib/confirm'
 import { useI18n } from '../i18n/I18nProvider'

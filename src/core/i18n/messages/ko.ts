@@ -517,7 +517,6 @@ export const ko = {
   'session.resume.originDeleted': '삭제된 계정',
   'history.filter.allAccounts': '모든 계정',
   'history.refresh.tooltip': '워쳐 실패 시 수동 폴백',
-  'history.project.openExplorer': '파일 탐색기로 열기',
   'history.menu.hide': '숨기기',
   'history.project.noSessions': '세션 없음',
   'history.entry.preview': '미리보기',
@@ -551,7 +550,6 @@ export const ko = {
   // WorktreePanel.tsx — panel header, row icon buttons
   'worktree.refresh': '새로 고침',
   'worktree.action.startSession': '세션 시작',
-  'worktree.action.openExplorer': '탐색기',
   // RunToolbar.tsx — config select, run/stop, edit/delete, the running list
   'run.config.selectLabel': '실행 구성 선택',
   'run.config.none': '실행 구성 없음',

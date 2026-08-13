@@ -535,7 +535,6 @@ export const es: Catalog = {
   'session.resume.originDeleted': 'Cuenta eliminada',
   'history.filter.allAccounts': 'Todas las cuentas',
   'history.refresh.tooltip': 'Alternativa manual si falla el watcher',
-  'history.project.openExplorer': 'Abrir en el explorador de archivos',
   'history.menu.hide': 'Ocultar',
   'history.project.noSessions': 'Sin sesiones',
   'history.entry.preview': 'Vista previa',
@@ -568,7 +567,6 @@ export const es: Catalog = {
   // WorktreePanel.tsx — panel header, row icon buttons
   'worktree.refresh': 'Actualizar',
   'worktree.action.startSession': 'Nueva sesión',
-  'worktree.action.openExplorer': 'Explorador',
   // RunToolbar.tsx — config select, run/stop, edit/delete, the running list
   'run.config.selectLabel': 'Configuración de ejecución',
   'run.config.none': 'Sin configuraciones de ejecución',

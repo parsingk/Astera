@@ -5,7 +5,6 @@ import { confirmModal } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import { dirtyCount, isOrphanUnverifiable, worktreeErrorMessage } from '../lib/worktreeErrors'
 import { subscribeCreated } from '../lib/worktreeBus'
-import { FolderGlyph } from './FolderGlyph'
 import { useI18n } from '../i18n/I18nProvider'
 
 const STATUS_LABEL: Record<WorktreeListItem['status'], MessageKey | null> = {
