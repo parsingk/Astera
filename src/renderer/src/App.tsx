@@ -1194,8 +1194,16 @@ export default function App(): React.JSX.Element {
   }
 
   // Toggling explorer mode — Ctrl+Tab or Ctrl+Shift+E. Explorer state (file tabs, pin, expansion) is preserved
+  /** 탐색기를 켤 때는 사이드바도 함께 편다. 레일의 탐색기 버튼과 같은 규칙이다 — 켰는데 사이드바가
+   *  접혀 있으면 파일 트리가 어디에도 나타나지 않는다.
+   *
+   *  사이드바의 표시 여부는 sidebarOpen 하나가 정한다. 예전에는 sidebarOpen || explorerOpen 이라
+   *  탐색기가 켜져 있는 동안 사이드바 토글이 아무 반응도 없었다 — OR 가 언제나 참이었기 때문이다. */
   const toggleExplorer = (): void => {
-    setExplorerOpen((v) => !v)
+    setExplorerOpen((v) => {
+      if (!v) setSidebarOpen(true)
+      return !v
+    })
   }
 
   // A setState updater can be invoked twice under StrictMode (in development), so setActivePaneId and
@@ -1849,7 +1857,7 @@ export default function App(): React.JSX.Element {
             </button>
           </span>
         </nav>
-        {(sidebarOpen || explorerOpen) && (
+        {sidebarOpen && (
           <aside className="sidebar" ref={sidebarRef} style={{ width: sidebarWidth }}>
             {explorerOpen ? (
               <FileExplorer
@@ -1880,7 +1888,7 @@ export default function App(): React.JSX.Element {
             )}
           </aside>
         )}
-        {(sidebarOpen || explorerOpen) && (
+        {sidebarOpen && (
           <div
             className="resizer"
             role="separator"
