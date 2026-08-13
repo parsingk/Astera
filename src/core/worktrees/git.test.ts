@@ -7,7 +7,7 @@ import {
   git, repoRoot, gitDir, gitUserName, detectBaseRef, toFullRef, fetchBaseRef,
   localBranchExists, isCleanWorktree, listGitWorktrees, gitVersionAtLeast, listBranches
 } from './git'
-import { makeRepo, addOrigin } from './testRepo'
+import { makeRepo, addOrigin, tempDir } from './testRepo'
 
 let repo: string
 beforeEach(async () => {
@@ -19,7 +19,7 @@ describe('git 어댑터', () => {
     const sub = path.join(repo, 'sub')
     await fs.mkdir(sub)
     expect(await repoRoot(sub)).toBe(path.resolve(repo))
-    const out = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wt-out-'))
+    const out = await tempDir('astera-wt-out-')
     expect(await repoRoot(out)).toBeNull()
   })
 
@@ -48,7 +48,7 @@ describe('git 어댑터', () => {
 
   it('detectBaseRef: origin/master (entry 2) — origin/HEAD 미설정 시 폴백', async () => {
     execFileSync('git', ['branch', '-m', 'main', 'master'], { cwd: repo, windowsHide: true })
-    const bare = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wt-origin-'))
+    const bare = await tempDir('astera-wt-origin-')
     execFileSync('git', ['init', '--bare', '-b', 'main'], { cwd: bare, windowsHide: true })
     execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repo, windowsHide: true })
     execFileSync('git', ['push', '-u', 'origin', 'master'], { cwd: repo, windowsHide: true })
@@ -159,7 +159,7 @@ describe('git 어댑터', () => {
   })
 
   it('isCleanWorktree: git repo가 아니면 GIT_REMOVE_FAILED', async () => {
-    const notRepo = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wt-notrepo-'))
+    const notRepo = await tempDir('astera-wt-notrepo-')
     await expect(isCleanWorktree(notRepo)).rejects.toThrow(/GIT_REMOVE_FAILED/)
   })
 
@@ -172,7 +172,7 @@ describe('git 어댑터', () => {
   })
 
   it('listGitWorktrees: git repo가 아니면 GIT_REMOVE_FAILED', async () => {
-    const notRepo = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wt-notrepo-'))
+    const notRepo = await tempDir('astera-wt-notrepo-')
     await expect(listGitWorktrees(notRepo)).rejects.toThrow(/GIT_REMOVE_FAILED/)
   })
 
@@ -235,7 +235,7 @@ describe('gitDir', () => {
   })
 
   it('git 저장소가 아니면 null', async () => {
-    const plain = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-git-plain-'))
+    const plain = await tempDir('astera-git-plain-')
     expect(await gitDir(plain)).toBeNull()
   })
 })

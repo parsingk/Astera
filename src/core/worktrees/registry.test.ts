@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { promises as fs } from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { WorktreeRegistry } from './registry'
+import { tempDir } from './testRepo'
 import type { WorktreeInfo } from '../types'
 
 let tmp: string
@@ -19,7 +19,7 @@ const info = (id: string): WorktreeInfo => ({
 })
 
 beforeEach(async () => {
-  tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wt-reg-'))
+  tmp = await tempDir('astera-wt-reg-')
   reg = new WorktreeRegistry(path.join(tmp, 'worktrees.json'), 'D:\\default-root')
   await reg.load()
 })
