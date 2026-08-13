@@ -24,7 +24,7 @@ import { TerminalFontSettings } from './components/TerminalFontSettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import type { RunConfig, RunStatus, TerminalBuffer } from '../../core/types'
 import { slackMode } from '../../core/slack/ready'
-import { findActionForEvent, resolveBindings, type Bindings } from '../../core/keys/binding'
+import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
 import {
   MIN_CHECKING_MS,
@@ -330,6 +330,12 @@ export default function App(): React.JSX.Element {
   const [keyOverrides, setKeyOverrides] = useState<Record<string, string[]>>({})
   const bindingsRef = useRef<Bindings>(resolveBindings({}, ACTIONS))
   bindingsRef.current = resolveBindings(keyOverrides, ACTIONS)
+  /** 레일의 탐색기 버튼 툴팁. 사용자가 키를 바꿨으면 바꾼 키가 나와야 하므로 기본값이 아니라 해석된
+   *  바인딩에서 읽는다. 그 액션의 키를 모두 지운 사용자에게는 이름만 남는다 */
+  const explorerChord = bindingsRef.current['explorer.toggleMode']?.[0]
+  const explorerShortcutLabel = explorerChord
+    ? `${t('explorer.rail.toggle')} (${formatChord(explorerChord)})`
+    : t('explorer.rail.toggle')
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [explorerOpen, setExplorerOpen] = useState(false) // the file explorer toggle
   const [showSettings, setShowSettings] = useState(false)
@@ -1766,6 +1772,38 @@ export default function App(): React.JSX.Element {
             onClick={() => setSidebarOpen((v) => !v)}
           >
             ◱
+          </button>
+          {/* 탐색기 토글. 폴더 아이콘과 컨텍스트 메뉴 항목을 걷어내면서 탐색기로 들어가는 길이 단축키
+              하나만 남았는데, 처음 쓰는 사람은 그 키를 알 수 없다. 툴팁에 실제 바인딩을 함께 띄우므로
+              한 번 눌러 본 사람은 다음부터 키를 쓴다 — 발견과 학습이 같은 자리에서 끝난다.
+              사이드바가 접혀 있으면 함께 편다. 안 그러면 눌러도 아무것도 나타나지 않는다 */}
+          <button
+            className={explorerOpen ? 'rail-btn on' : 'rail-btn'}
+            aria-label={explorerShortcutLabel}
+            title={explorerShortcutLabel}
+            onClick={() => {
+              setExplorerOpen((v) => {
+                if (!v) setSidebarOpen(true)
+                return !v
+              })
+            }}
+          >
+            {/* 파일 트리 — 폴더 하나와 그 안의 줄 둘. 앱의 SVG 관례대로 16 viewBox 에 currentColor 하나 */}
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinejoin="round"
+            >
+              <path d="M1.8 4.1a1 1 0 0 1 1-1h3.1l1.4 1.6h5.9a1 1 0 0 1 1 1v6.2a1 1 0 0 1-1 1H2.8a1 1 0 0 1-1-1z" />
+              <g strokeWidth="1.2" strokeLinecap="round">
+                <line x1="5" y1="8.2" x2="11" y2="8.2" />
+                <line x1="5" y1="10.6" x2="9" y2="10.6" />
+              </g>
+            </svg>
           </button>
           {/* The bottom panel is for file and editor mode only, so the terminal is exposed only in that
               mode. The terminal and ⚙ are wrapped in .rail-bottom and that wrapper carries

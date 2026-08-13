@@ -8,6 +8,10 @@
   --text: #d0d0d6;
   --text-dim: #7d7d88;
   --text-faint: #55555f;
+  /* 레일 아이콘의 쉬는 색. --text-dim 은 본문(--bg/--panel) 위를 기준으로 잡힌 값이라, 앱에서 가장
+     어두운 --rail 위에서는 거의 읽히지 않는다. --text 까지 올리면 선택 상태(.rail-btn.on)와 구별이
+     사라지므로 그 사이에 둔다 */
+  --rail-icon: #a3a3ae;
   --accent: #37b0c4; /* active marker and focus (separate from the account colour) */
   --ok: #79c98f; /* logged in */
   --ok-bg: #14301f;
@@ -149,13 +153,14 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
   place-items: center;
   background: none;
   border: none;
-  color: var(--text-dim);
-  font-size: 15px;
+  color: var(--rail-icon);
+  font-size: 16px;
   cursor: pointer;
   padding: 0;
   margin: 0;
 }
-.rail-btn:hover { color: var(--text); }
+/* 배경까지 함께 바뀌어야 눌리는 것이라는 게 읽힌다 — 색만 밝아지는 변화는 어두운 면 위에서 잘 보이지 않는다 */
+.rail-btn:hover { color: var(--text); background: var(--elevated); }
 .rail-btn.on { color: var(--text); background: var(--elevated); box-shadow: inset 2px 0 0 var(--accent); }
 /* The wrapper that pins the terminal and ⚙ (settings) to the bottom together. The auto margin has to
    live on this one wrapper — giving it to each .rail-btn (two auto siblings) distributes the free space

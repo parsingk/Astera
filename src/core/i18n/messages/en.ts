@@ -301,6 +301,7 @@ export const en: Record<keyof typeof ko, string> = {
   'explorer.git.deleted': 'Deleted',
   'explorer.git.conflict': 'Conflict',
   'explorer.git.folderCount': '{count} changed',
+  'explorer.rail.toggle': 'File explorer',
   'explorer.tab.unsaved': 'Unsaved',
   'localHistory.loading': 'Loading…',
   'localHistory.empty': 'No delete history',

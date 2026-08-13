@@ -342,6 +342,7 @@ export const ko = {
   'explorer.git.conflict': '충돌',
   'explorer.git.folderCount': '변경 {count}건',
   // WorkbenchTabs.tsx — the dirty marker on a file tab
+  'explorer.rail.toggle': '파일 탐색기',
   'explorer.tab.unsaved': '저장 안 됨',
   // LocalHistoryDialog.tsx — the Local History browse/restore modal
   // ('Local History' is treated as a proper noun and left untranslated — following the existing catalog precedent)
