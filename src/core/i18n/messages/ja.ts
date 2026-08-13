@@ -482,7 +482,7 @@ export const ja: Catalog = {
   'session.sched.weekday.thu': '木',
   'session.sched.weekday.fri': '金',
   'session.sched.weekday.sat': '土',
-  // SessionTabs.tsx
+  // WorkbenchTabs.tsx
   'session.tab.rollTooltip': 'ローリング: {chain}',
   // PaneGrid / pane context menu
   'session.pane.splitRight': '右に分割',

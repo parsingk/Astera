@@ -487,7 +487,7 @@ export const es: Catalog = {
   'session.sched.weekday.thu': 'jue',
   'session.sched.weekday.fri': 'vie',
   'session.sched.weekday.sat': 'sáb',
-  // SessionTabs.tsx
+  // WorkbenchTabs.tsx
   'session.tab.rollTooltip': 'Rotación: {chain}',
   // PaneGrid / pane context menu
   'session.pane.splitRight': 'Dividir a la derecha',

@@ -65,10 +65,10 @@ You will also need:
 - A terminal per project
 
 **Editor and shortcuts**
-- One key flips a session between the agent view and an editor on the same project —
-  `Ctrl`/`Cmd`+`Shift`+`E`, so you can read what the agent just changed without leaving the window
-- One tab bar for both: the project's running sessions sit beside the open files, and `Ctrl`+`Tab`
-  walks the whole row
+- One key shows and hides the explorer — `Ctrl`/`Cmd`+`Shift`+`E` for the file tree, the run toolbar
+  and the run console, leaving the panes where they are
+- One tab bar per pane, holding both kinds of tab: a file sits beside the session that is changing
+  it, a split shows the two at once, and `Ctrl`+`Tab` walks the active pane's row
 - A real editor, not a text box: CodeMirror with syntax highlighting for TypeScript, JavaScript,
   Python, Go, Rust, C/C++, Java, PHP, SQL, HTML, CSS, Markdown, JSON, YAML and XML, open across tabs
 - A file tree with git state on each entry (new, modified, deleted, conflict), and create, rename,

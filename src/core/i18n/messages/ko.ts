@@ -471,7 +471,7 @@ export const ko = {
   'session.sched.weekday.thu': '목',
   'session.sched.weekday.fri': '금',
   'session.sched.weekday.sat': '토',
-  // SessionTabs.tsx
+  // WorkbenchTabs.tsx
   'session.tab.rollTooltip': '롤링: {chain}',
   // PaneGrid / pane context menu
   'session.pane.splitRight': '우측 분할',

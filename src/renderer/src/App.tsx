@@ -393,8 +393,6 @@ export default function App(): React.JSX.Element {
   const selectWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
   const fileBuffersRef = useRef(fileBuffers) // keeps the external-change handler from going stale
   fileBuffersRef.current = fileBuffers
-  const explorerOpenRef = useRef(explorerOpen)
-  explorerOpenRef.current = explorerOpen
   // 파일별 에디터 상태 캐시. FileEditor보다 오래 살아야 하므로 여기서 소유한다 (editorStateCache.ts의 주석)
   const editorCacheRef = useRef(new EditorStateCache())
   // onKey is registered once at mount, so values and callbacks recreated on every render are read through refs
@@ -633,14 +631,14 @@ export default function App(): React.JSX.Element {
         toggleExplorer()
         return
       }
-      // Closing a file tab — explorer mode only, same as closing a browser tab. When dirty,
-      // closeFileTab raises a confirmation modal. It is not intercepted in session mode or while xterm
-      // has focus (the Run panel in explorer mode) — in a terminal, Ctrl+W deletes the previous word,
-      // which is needed while typing to Claude (see yieldsToTerminal above).
+      // Closing a file tab, same as closing a browser tab. When dirty, closeFileTab raises a
+      // confirmation modal. The only condition is that the active tab is a file — a file tab lives in a
+      // pane now, so whether the explorer sidebar is showing says nothing about it. It is still not
+      // intercepted while xterm has focus — in a terminal, Ctrl+W deletes the previous word, which is
+      // needed while typing to Claude (see yieldsToTerminal above).
       // closeFileTab is recreated on every render, but its body is all refs and setters, so it works
       // against the latest state even when stale (the same convention as toggleExplorer above).
       if (action === 'explorer.closeFileTab') {
-        if (!explorerOpenRef.current) return
         const id = activeFileIdRef.current
         if (!id) return // no file tab is open — unlike a browser, this does not close the window
         e.preventDefault()
@@ -652,7 +650,6 @@ export default function App(): React.JSX.Element {
       // Pane splitting — by default Ctrl+\ to the right, Ctrl+Shift+\ below. The same place VS Code
       // puts them. Neither the Claude Code nor the Codex TUI uses Ctrl+\, so terminal input is unaffected.
       if (action === 'pane.splitRight' || action === 'pane.splitDown') {
-        if (explorerOpenRef.current) return // explorer mode has no concept of panes
         e.preventDefault()
         e.stopPropagation()
         if (e.repeat) return
