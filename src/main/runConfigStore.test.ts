@@ -45,7 +45,9 @@ describe('RunConfigStore', () => {
       const store = new RunConfigStore(file)
       const r = await store.load()
       expect(r.recovered).toBe(false)
-      expect(store.get('D:/proj')).toEqual([{ id: 'u1', name: '내 dev', command: 'pnpm run dev' }])
+      expect(store.get('D:/proj')).toEqual([
+        { id: 'u1', name: '내 dev', type: 'shell', command: 'pnpm run dev' }
+      ])
     })
 
     it('값이 모두 문자열인 env는 유효하다', async () => {
@@ -55,34 +57,44 @@ describe('RunConfigStore', () => {
       const store = new RunConfigStore(file)
       const r = await store.load()
       expect(r.recovered).toBe(false)
-      expect(store.get('D:/proj')).toEqual(configs)
+      expect(store.get('D:/proj')).toEqual([{ ...configs[0], type: 'shell' }])
     })
 
-    it('env 값이 숫자면 구성 전체를 거부해 복구 모드로 들어간다', async () => {
+    // 손 편집한 항목 하나가 저장소 전체를 날리면 안 된다 — migrateRunConfigs 가 그 항목만 버린다
+    it('env 값이 숫자인 항목만 버리고 나머지는 유지한다', async () => {
       const file = path.join(dir, 'run.json')
-      await write(file, [{ id: 'u1', name: 'boot', command: 'x', env: { PORT: 8080 } }])
+      await write(file, [
+        { id: 'u1', name: 'boot', command: 'x', env: { PORT: 8080 } },
+        { id: 'u2', name: 'ok', command: 'y' }
+      ])
       const store = new RunConfigStore(file)
       const r = await store.load()
-      expect(r.recovered).toBe(true)
-      expect(store.get('D:/proj')).toEqual([])
+      expect(r.recovered).toBe(false)
+      expect(store.get('D:/proj').map((c) => c.id)).toEqual(['u2'])
     })
 
-    it('env 값이 객체면 거부한다', async () => {
+    it('env 값이 객체인 항목만 버리고 나머지는 유지한다', async () => {
       const file = path.join(dir, 'run.json')
-      await write(file, [{ id: 'u1', name: 'boot', command: 'x', env: { NESTED: { a: 1 } } }])
+      await write(file, [
+        { id: 'u1', name: 'boot', command: 'x', env: { NESTED: { a: 1 } } },
+        { id: 'u2', name: 'ok', command: 'y' }
+      ])
       const store = new RunConfigStore(file)
       const r = await store.load()
-      expect(r.recovered).toBe(true)
-      expect(store.get('D:/proj')).toEqual([])
+      expect(r.recovered).toBe(false)
+      expect(store.get('D:/proj').map((c) => c.id)).toEqual(['u2'])
     })
 
-    it('env 자체가 배열이면 거부한다', async () => {
+    it('env 자체가 배열인 항목만 버리고 나머지는 유지한다', async () => {
       const file = path.join(dir, 'run.json')
-      await write(file, [{ id: 'u1', name: 'boot', command: 'x', env: ['A=1'] }])
+      await write(file, [
+        { id: 'u1', name: 'boot', command: 'x', env: ['A=1'] },
+        { id: 'u2', name: 'ok', command: 'y' }
+      ])
       const store = new RunConfigStore(file)
       const r = await store.load()
-      expect(r.recovered).toBe(true)
-      expect(store.get('D:/proj')).toEqual([])
+      expect(r.recovered).toBe(false)
+      expect(store.get('D:/proj').map((c) => c.id)).toEqual(['u2'])
     })
   })
 
@@ -97,7 +109,7 @@ describe('RunConfigStore', () => {
       const store = new RunConfigStore(file)
       const r = await store.load()
       expect(r.recovered).toBe(false)
-      expect(store.get('D:/proj')).toEqual(configs)
+      expect(store.get('D:/proj')).toEqual([{ ...configs[0], type: 'shell' }])
     })
 
     it('문자열 cwd는 유효하다 — 허용 루트 판정은 run.start가 실행 직전에 한다', async () => {
@@ -107,25 +119,31 @@ describe('RunConfigStore', () => {
       const store = new RunConfigStore(file)
       const r = await store.load()
       expect(r.recovered).toBe(false)
-      expect(store.get('D:/proj')).toEqual(configs)
+      expect(store.get('D:/proj')).toEqual([{ ...configs[0], type: 'shell' }])
     })
 
-    it('cwd가 문자열이 아니면 구성 전체를 거부한다', async () => {
+    it('cwd가 문자열이 아닌 항목만 버리고 나머지는 유지한다', async () => {
       const file = path.join(dir, 'run.json')
-      await write(file, [{ id: 'u1', name: 'boot', command: 'x', cwd: 123 }])
+      await write(file, [
+        { id: 'u1', name: 'boot', command: 'x', cwd: 123 },
+        { id: 'u2', name: 'ok', command: 'y' }
+      ])
       const store = new RunConfigStore(file)
       const r = await store.load()
-      expect(r.recovered).toBe(true)
-      expect(store.get('D:/proj')).toEqual([])
+      expect(r.recovered).toBe(false)
+      expect(store.get('D:/proj').map((c) => c.id)).toEqual(['u2'])
     })
 
-    it('cwd가 객체면 거부한다', async () => {
+    it('cwd가 객체인 항목만 버리고 나머지는 유지한다', async () => {
       const file = path.join(dir, 'run.json')
-      await write(file, [{ id: 'u1', name: 'boot', command: 'x', cwd: { path: 'D:/x' } }])
+      await write(file, [
+        { id: 'u1', name: 'boot', command: 'x', cwd: { path: 'D:/x' } },
+        { id: 'u2', name: 'ok', command: 'y' }
+      ])
       const store = new RunConfigStore(file)
       const r = await store.load()
-      expect(r.recovered).toBe(true)
-      expect(store.get('D:/proj')).toEqual([])
+      expect(r.recovered).toBe(false)
+      expect(store.get('D:/proj').map((c) => c.id)).toEqual(['u2'])
     })
   })
 })
