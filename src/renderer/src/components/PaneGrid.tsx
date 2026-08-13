@@ -40,18 +40,18 @@ export function PaneGrid({
   rollStates,
   schedStates,
   busy,
-  draggingSessionId,
+  draggingTabId,
   newDisabled,
   onFocusPane,
   onSetRatio,
-  onDropSession,
+  onDropTabIntoPane,
   onRestart,
   onSelectTab,
   onCloseTab,
   onNewInGroup,
   onTabContextMenu,
-  onDragSessionChange,
-  onDropTab,
+  onDragTabChange,
+  onDropTabInBar,
   renderEditor
 }: {
   layout: PaneNode | null
@@ -64,11 +64,14 @@ export function PaneGrid({
   rollStates: Record<string, RollStateEvent>
   schedStates: Record<string, SchedStateEvent>
   busy: Record<string, boolean>
-  draggingSessionId: string | null
+  /** The tab id being dragged (either kind), or null. App owns it so a drag started in one pane's bar is
+   *  visible to every other pane */
+  draggingTabId: string | null
   newDisabled: boolean
   onFocusPane: (paneId: string) => void
   onSetRatio: (splitId: string, ratio: number) => void
-  onDropSession: (paneId: string, zone: DropZone, sessionId: string) => void
+  /** Dropped on a pane's body — an edge zone splits, the centre moves into that pane */
+  onDropTabIntoPane: (paneId: string, zone: DropZone, tabId: string) => void
   onRestart: (s: SessionInfo) => void
   /** A tab was clicked — of either kind. App activates it in the tree, which also moves the focus there */
   onSelectTab: (tabId: string) => void
@@ -76,9 +79,9 @@ export function PaneGrid({
   onNewInGroup: (paneId: string) => void
   /** Right-click on a tab — the screen coordinates are passed through as-is. App is what shows the menu */
   onTabContextMenu: (sessionId: string, x: number, y: number) => void
-  onDragSessionChange: (id: string | null) => void
+  onDragTabChange: (tabId: string | null) => void
   /** Dropped onto a group's tab bar. insertBefore is 0..length in terms of the original indexing */
-  onDropTab: (paneId: string, sessionId: string, insertBefore: number) => void
+  onDropTabInBar: (paneId: string, tabId: string, insertBefore: number) => void
   /** The editor body for a pane. App owns it (and the state cache), the grid only places it */
   renderEditor: (paneId: string, fileTabId: string) => React.ReactNode
 }): React.JSX.Element {
@@ -128,14 +131,14 @@ export function PaneGrid({
       lastFileOfPane.current.delete(l.id)
   }
 
-  // Clears App's draggingSessionId as well as hover — if a split or a center move makes the drag
+  // Clears App's draggingTabId as well as hover — if a split or a center move makes the drag
   // source's tab DOM disappear during the drop handling state flush, that tab's onDragEnd (on a
   // detached node) never reaches the delegated listener, so endDrag is not called. Left uncleared, the
   // value lingers and an external drag from outside the tab bar (an Explorer file, etc.) silently falls
   // back to this stale id when getData fails
   const endDrag = (): void => {
     setHover(null)
-    onDragSessionChange(null)
+    onDragTabChange(null)
   }
 
   /** Picks the drop zone from the pointer's relative position inside the pane. At 4 panes the edge
@@ -169,24 +172,6 @@ export function PaneGrid({
                 : { display: 'none' }
             }
             onMouseDown={() => pane && onFocusPane(pane.id)}
-            onDragOver={(e) => {
-              if (!pane || !draggingSessionId) return
-              e.preventDefault()
-              e.dataTransfer.dropEffect = 'move'
-              setHover({ paneId: pane.id, zone: zoneAt(e) })
-            }}
-            onDragLeave={(e) => {
-              // Moving into a child is not a leave
-              if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
-              setHover((cur) => (cur && pane && cur.paneId === pane.id ? null : cur))
-            }}
-            onDrop={(e) => {
-              if (!pane) return
-              e.preventDefault()
-              const sessionId = e.dataTransfer.getData('text/plain') || draggingSessionId
-              endDrag()
-              if (sessionId) onDropSession(pane.id, zoneAt(e), sessionId)
-            }}
           >
             <TerminalView
               session={s}
@@ -195,12 +180,6 @@ export function PaneGrid({
               schedState={schedStates[s.id] ?? null}
               active={visible && pane != null && pane.id === activePaneId}
             />
-            {/* Gated on draggingSessionId too — hover is only cleared by onDrop/onDragLeave, so this
-                keeps the drop zone from sticking on paths where neither of those events arrives, such as
-                leaving the browser and getting a dragend */}
-            {pane && draggingSessionId != null && hover?.paneId === pane.id && (
-              <div className={`pane-dropzone zone-${hover.zone}`} />
-            )}
           </div>
         )
       })}
@@ -234,6 +213,46 @@ export function PaneGrid({
           </div>
         )
       })}
+      {/* The pane bodies' drop targets — one per pane, whichever kind of tab that pane is showing. They
+          cannot live on the slots: a session slot is display:none unless it is the active tab, so a pane
+          showing a file had no target, and putting them on the editor slot as well would give one pane two
+          overlapping targets. Rendered only during a drag, so nothing covers the terminal otherwise */}
+      {draggingTabId != null &&
+        paneLeaves.map((l) => {
+          const rect = rects.get(l.id)
+          if (!rect) return null
+          return (
+            <div
+              key={`drop-${l.id}`}
+              className="pane-droplayer"
+              style={{
+                left: `${rect.x}%`,
+                width: `${rect.w}%`,
+                top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
+                height: `calc(${rect.h}% - var(--pane-tabbar-h))`
+              }}
+              onDragOver={(e) => {
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'move'
+                setHover({ paneId: l.id, zone: zoneAt(e) })
+              }}
+              onDragLeave={(e) => {
+                // Moving into a child is not a leave
+                if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+                setHover((cur) => (cur && cur.paneId === l.id ? null : cur))
+              }}
+              onDrop={(e) => {
+                e.preventDefault()
+                const tabId = e.dataTransfer.getData('text/plain') || draggingTabId
+                const zone = zoneAt(e)
+                endDrag()
+                if (tabId) onDropTabIntoPane(l.id, zone, tabId)
+              }}
+            >
+              {hover?.paneId === l.id && <div className={`pane-dropzone zone-${hover.zone}`} />}
+            </div>
+          )
+        })}
       {/* Group tab bars — a sibling layer, not the slots' parent. Each one occupies the top
           --pane-tabbar-h of the rect and the slots are pushed down by that much (the calc above). The
           focus indication is done by the focused prop, not a CSS class — it puts the account-colored
@@ -295,9 +314,9 @@ export function PaneGrid({
               onClose={onCloseTab}
               onNew={() => onNewInGroup(l.id)}
               onContextMenu={onTabContextMenu}
-              onDragSessionChange={onDragSessionChange}
-              draggingSessionId={draggingSessionId}
-              onDropTab={(sid, insertBefore) => onDropTab(l.id, sid, insertBefore)}
+              onDragTabChange={onDragTabChange}
+              draggingTabId={draggingTabId}
+              onDropTabInBar={(tabId, insertBefore) => onDropTabInBar(l.id, tabId, insertBefore)}
             />
           </div>
         )

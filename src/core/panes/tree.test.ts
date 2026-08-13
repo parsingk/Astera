@@ -486,3 +486,28 @@ describe('clampRatio', () => {
     expect(clampRatio(0.9, 400)).toBe(0.5)
   })
 })
+
+describe('종류가 섞인 트리', () => {
+  it('파일 탭을 다른 그룹으로 옮겨도 불변식이 유지된다', () => {
+    const a = createGroup('session:s1')
+    const r = splitAndMove(a, 'file:D:\\r\\a.ts', a.id, 'row', false)!
+    const moved = moveTab(r.root, 'file:D:\\r\\a.ts', a.id, 0)!
+    assertInvariants(moved, ['session:s1', 'file:D:\\r\\a.ts'])
+  })
+
+  it('그룹의 마지막 탭이 파일이어도 그룹이 사라진다', () => {
+    const a = createGroup('session:s1')
+    const r = splitAndMove(a, 'file:D:\\r\\a.ts', a.id, 'row', false)!
+    const next = removeTab(r.root, 'file:D:\\r\\a.ts')!
+    expect(countLeaves(next)).toBe(1)
+    assertInvariants(next, ['session:s1'])
+  })
+
+  // 롤링은 세션 id만 갈아끼운다 — 파일 탭이 섞여 있어도 건드리면 안 된다
+  it('replaceTabId는 지정한 탭만 바꾼다', () => {
+    const a = createGroup('session:s1')
+    const withFile = addTab(a, a.id, 'file:D:\\r\\a.ts')
+    const next = replaceTabId(withFile, 'session:s1', 'session:s2')
+    assertInvariants(next, ['session:s2', 'file:D:\\r\\a.ts'])
+  })
+})

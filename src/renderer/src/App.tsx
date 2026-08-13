@@ -287,7 +287,7 @@ export default function App(): React.JSX.Element {
   const [layout, setLayout] = useState<PaneNode | null>(null)
   const [activePaneId, setActivePaneId] = useState<string | null>(null)
   // The session whose tab is being dragged (for PaneGrid's drop preview)
-  const [dragSessionId, setDragSessionId] = useState<string | null>(null)
+  const [dragTabId, setDragTabId] = useState<string | null>(null)
   // Position of the tab context menu
   const [tabMenu, setTabMenu] = useState<{ sessionId: string; x: number; y: number } | null>(null)
   // 지금 보고 있는 탭은 트리가 정한다 — 활성 페인의 활성 탭. 두 종류가 한 트리에 있으므로 별도의
@@ -1241,18 +1241,19 @@ export default function App(): React.JSX.Element {
   const splitActiveRef = useRef(splitActive)
   splitActiveRef.current = splitActive
 
-  /** A drop aimed at a specific group (coming from PaneGrid).
+  /** A drop aimed at a specific group's body (coming from PaneGrid). The tab id arrives as it is and goes
+   *  straight to the tree, so which kind it is does not matter here.
    *  An edge means Split and Move; the centre means Move To Group. */
-  const dropOnPane = (paneId: string, zone: DropZone, sessionId: string): void => {
+  const dropOnPane = (paneId: string, zone: DropZone, tabId: string): void => {
     const cur = layoutRef.current
     if (!cur) return
     if (zone === 'center') {
       // Already in that group means nothing happens — moving onto itself is meaningless rather than a failure
-      if (groupOfTab(cur, sessionTab(sessionId))?.id === paneId) {
+      if (groupOfTab(cur, tabId)?.id === paneId) {
         setActivePaneId(paneId)
         return
       }
-      const next = moveTab(cur, sessionTab(sessionId), paneId)
+      const next = moveTab(cur, tabId, paneId)
       if (!next) return
       setLayout(next)
       setActivePaneId(paneId)
@@ -1264,7 +1265,7 @@ export default function App(): React.JSX.Element {
     }
     const dir: PaneDir = zone === 'left' || zone === 'right' ? 'row' : 'col'
     const before = zone === 'left' || zone === 'up'
-    const res = splitAndMove(cur, sessionTab(sessionId), paneId, dir, before)
+    const res = splitAndMove(cur, tabId, paneId, dir, before)
     if (!res) return
     setLayout(res.root)
     setActivePaneId(res.paneId)
@@ -1283,10 +1284,10 @@ export default function App(): React.JSX.Element {
   }
 
   /** A drop on the tab bar — reorder within the same group, or move to that position in another group */
-  const dropTabInGroup = (paneId: string, sessionId: string, insertBefore: number): void => {
+  const dropTabInGroup = (paneId: string, tabId: string, insertBefore: number): void => {
     const cur = layoutRef.current
     if (!cur) return
-    const next = moveTab(cur, sessionTab(sessionId), paneId, insertBefore)
+    const next = moveTab(cur, tabId, paneId, insertBefore)
     if (!next) return
     setActivePaneId(paneId)
     setLayout(next)
@@ -1876,20 +1877,20 @@ export default function App(): React.JSX.Element {
                 rollStates={rollStates}
                 schedStates={schedStates}
                 busy={busy}
-                draggingSessionId={dragSessionId}
+                draggingTabId={dragTabId}
                 newDisabled={!anyCliOk}
                 onFocusPane={setActivePaneId}
                 onSetRatio={(splitId, ratio) =>
                   setLayout((cur) => (cur ? setRatio(cur, splitId, ratio) : cur))
                 }
-                onDropSession={dropOnPane}
+                onDropTabIntoPane={dropOnPane}
                 onRestart={restart}
                 onSelectTab={selectWorkbenchTab}
                 onCloseTab={closeWorkbenchTab}
                 onNewInGroup={newInGroup}
                 onTabContextMenu={(sessionId, x, y) => setTabMenu({ sessionId, x, y })}
-                onDragSessionChange={setDragSessionId}
-                onDropTab={dropTabInGroup}
+                onDragTabChange={setDragTabId}
+                onDropTabInBar={dropTabInGroup}
               />
               {/* When the layout is empty (not one group in the tree) there is no group tab bar, so there
                   is no '+' anywhere on screen — this placeholder becomes the sole entry point in its

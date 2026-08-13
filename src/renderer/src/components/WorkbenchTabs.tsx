@@ -45,8 +45,8 @@ export type WorkbenchTab =
 /** 페인 하나의 탭 줄.
  *
  *  드래그·`+` 버튼·컨텍스트 메뉴·포커스 밑줄은 SessionTabs가 갖고 있던 것을 그대로 옮겨 온 것이다.
- *  드래그가 실어 나르는 값은 아직 세션 id다(파일 탭은 draggable이 아니다) — 탭 id로 일반화하는 것은
- *  페인 본문 드롭과 App 핸들러까지 함께 바꿔야 하므로 다음 작업에서 한 번에 한다. */
+ *  드래그가 실어 나르는 값은 종류와 무관한 탭 id다 — 파일 탭도 세션 탭과 똑같이 끌 수 있고, 받는 쪽은
+ *  그 값을 그대로 트리 연산에 넘긴다. */
 export function WorkbenchTabs({
   tabs,
   activeTabId,
@@ -56,9 +56,9 @@ export function WorkbenchTabs({
   onClose,
   onNew,
   onContextMenu,
-  onDragSessionChange,
-  draggingSessionId,
-  onDropTab
+  onDragTabChange,
+  draggingTabId,
+  onDropTabInBar
 }: {
   tabs: WorkbenchTab[]
   activeTabId: string | null
@@ -71,12 +71,12 @@ export function WorkbenchTabs({
   onNew: () => void
   /** 세션 탭 우클릭 — 화면 좌표를 그대로 넘긴다. 메뉴를 그리는 것은 App이다 */
   onContextMenu: (sessionId: string, x: number, y: number) => void
-  /** 드래그 중인 세션 id (끝나면 null). PaneGrid의 드롭 미리보기가 이 값을 본다 */
-  onDragSessionChange: (id: string | null) => void
-  /** 드래그 중인 세션 id (App이 소유). 로컬 dragId만으로는 다른 페인에서 시작된 드래그를 받을 수 없다 */
-  draggingSessionId: string | null
+  /** 드래그 중인 탭 id (끝나면 null). PaneGrid의 드롭 미리보기가 이 값을 본다 */
+  onDragTabChange: (tabId: string | null) => void
+  /** 드래그 중인 탭 id (App이 소유). 로컬 dragId만으로는 다른 페인에서 시작된 드래그를 받을 수 없다 */
+  draggingTabId: string | null
   /** 이 탭 줄에 떨어뜨렸다. insertBefore는 이 페인 tabIds 기준 0..length (core/reorder 규약) */
-  onDropTab: (sessionId: string, insertBefore: number) => void
+  onDropTabInBar: (tabId: string, insertBefore: number) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   // 드래그 중인 탭과 드롭 표시 위치(insertBefore ∈ [0, n]) — 드래그하는 동안만 쓰는 상태
@@ -86,12 +86,12 @@ export function WorkbenchTabs({
   const endDrag = (): void => {
     setDragId(null)
     setDropAt(null)
-    onDragSessionChange(null)
+    onDragTabChange(null)
   }
 
   // 지나가는 탭의 인덱스에서, 포인터의 x가 어느 쪽 절반인지가 insertBefore(k 또는 k+1)를 정한다
   const overTab = (e: React.DragEvent, index: number): void => {
-    if (!draggingSessionId) return
+    if (!draggingTabId) return
     e.preventDefault() // allows the drop
     const rect = e.currentTarget.getBoundingClientRect()
     const after = e.clientX > rect.left + rect.width / 2
@@ -100,17 +100,17 @@ export function WorkbenchTabs({
 
   const commitDrop = (e: React.DragEvent): void => {
     e.preventDefault()
-    const sid = e.dataTransfer.getData('text/plain') || draggingSessionId
+    const tabId = e.dataTransfer.getData('text/plain') || draggingTabId
     const at = dropAt
     endDrag()
-    if (sid && at !== null) onDropTab(sid, at)
+    if (tabId && at !== null) onDropTabInBar(tabId, at)
   }
 
   return (
     <div
       className="tabs"
       onDragOver={(e) => {
-        if (!draggingSessionId) return
+        if (!draggingTabId) return
         e.preventDefault()
         // 탭에서 올라온 dragover는 무시한다 — overTab이 이미 정확한 위치를 정했다. 컨테이너 자신이
         // 대상일 때(탭 사이의 빈 공간)만 맨 끝으로 정한다
@@ -142,7 +142,7 @@ export function WorkbenchTabs({
               : undefined
           }
           title={tab.kind === 'file' ? tab.path : tab.title}
-          draggable={tab.kind === 'session'}
+          draggable
           onClick={() => onSelect(tab.tabId)}
           onContextMenu={(e) => {
             if (tab.kind !== 'session') return
@@ -150,13 +150,12 @@ export function WorkbenchTabs({
             onContextMenu(tab.sessionId, e.clientX, e.clientY)
           }}
           onDragStart={(e) => {
-            if (tab.kind !== 'session') return
             setDragId(tab.tabId)
             setDropAt(null)
             e.dataTransfer.effectAllowed = 'move'
             // 어떤 환경은 dragstart에 데이터가 실려야 드래그를 시작한다
-            e.dataTransfer.setData('text/plain', tab.sessionId)
-            onDragSessionChange(tab.sessionId) // 페인 드롭 미리보기용
+            e.dataTransfer.setData('text/plain', tab.tabId)
+            onDragTabChange(tab.tabId) // 페인 드롭 미리보기용
           }}
           onDragOver={(e) => overTab(e, index)}
           onDrop={commitDrop}

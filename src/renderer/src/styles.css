@@ -770,6 +770,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .pane-resizer.row::before { left: 2px; top: 0; width: 1px; height: 100%; }
 .pane-resizer.col::before { top: 2px; left: 0; height: 1px; width: 100%; }
 .pane-resizer:hover::before { background: var(--accent); }
+/* The pane body's drop target. One per pane, and only while a tab is being dragged — a pane shows either
+   a terminal or the editor, so hanging the drop handlers on the session slot left a pane displaying a file
+   with no target at all. It exists only during a drag, so it never swallows normal mouse input.
+   z-index 2 puts it above the slots (auto) so the drag events land here rather than on the terminal; the
+   tab bar is not covered (the layer starts below --pane-tabbar-h), so bar drops still reorder */
+.pane-droplayer { position: absolute; z-index: 2; }
 /* the drop preview — shows semi-transparently where a new pane would appear */
 .pane-dropzone {
   position: absolute; z-index: 3; pointer-events: none;
