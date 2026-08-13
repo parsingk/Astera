@@ -83,7 +83,9 @@ export function PaneGrid({
   /** Dropped onto a group's tab bar. insertBefore is 0..length in terms of the original indexing */
   onDropTabInBar: (paneId: string, tabId: string, insertBefore: number) => void
   /** The editor body for a pane. App owns it (and the state cache), the grid only places it */
-  renderEditor: (paneId: string, fileTabId: string) => React.ReactNode
+  /** focused = 이 페인이 활성이고 그 활성 탭이 이 파일일 때. 에디터가 커서를 가져갈 시점을 정한다 —
+   *  TerminalView 가 active 프롭으로 같은 일을 한다 */
+  renderEditor: (paneId: string, fileTabId: string, focused: boolean) => React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement>(null)
@@ -209,7 +211,7 @@ export function PaneGrid({
             }
             onMouseDown={() => onFocusPane(l.id)}
           >
-            {renderEditor(l.id, fileTabId)}
+            {renderEditor(l.id, fileTabId, l.id === activePaneId && l.activeTabId === fileTabId)}
           </div>
         )
       })}

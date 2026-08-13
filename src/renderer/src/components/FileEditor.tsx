@@ -98,6 +98,7 @@ export function FileEditor({
   content,
   readOnly,
   cache,
+  focused,
   onRetire,
   onChange,
   onSave
@@ -108,6 +109,10 @@ export function FileEditor({
   /** 파일별 EditorState·스크롤 캐시. 소유자는 App이다 — 이 컴포넌트가 여러 개 생기더라도 되돌리기와
    *  스크롤이 살아남아야 하므로 인스턴스 안에 두지 않는다 */
   cache: EditorStateCache
+  /** 이 페인이 활성이고 그 활성 탭이 이 파일인가. 참이 되는 순간 커서를 가져온다 — 탭을 다른 페인으로
+   *  옮기거나 다른 페인의 파일 탭을 눌러도 커서가 옛 에디터에 남아 있으면, 이어서 친 글자가 화면에
+   *  보이지 않는 다른 파일로 들어간다 */
+  focused: boolean
   /** 이 에디터가 사라질 때 그 상태를 넘긴다. 캐시에 남길지는 App이 정한다 — 닫힌 파일의 상태를
    *  되살리면 안 되기 때문에 여기서 직접 저장하지 않는다 */
   onRetire: (path: string, state: EditorState, scroll: StateEffect<unknown> | null) => void
@@ -172,6 +177,13 @@ export function FileEditor({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // 활성이 되면 커서를 가져온다. TerminalView 가 active 프롭으로 하는 것과 같은 규약이다.
+  // path 도 의존성에 넣는 이유: 같은 페인이 활성인 채 파일만 바뀌는 경우(같은 탭 줄에서 다른 파일 탭을
+  // 누름)에도 커서가 새 문서로 와야 하기 때문이다
+  useEffect(() => {
+    if (focused) viewRef.current?.focus()
+  }, [focused, path])
 
   // Handling path/content/readOnly changes:
   //  - switching to a different file: save the previous state and scroll, then either restore the target

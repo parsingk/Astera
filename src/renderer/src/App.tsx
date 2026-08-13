@@ -1425,7 +1425,7 @@ export default function App(): React.JSX.Element {
    *  FileEditor는 로딩·오류 중에도 언마운트되면 안 된다 — 언마운트는 EditorView를 destroy하고 되돌리기
    *  이력을 지운다. 그래서 오버레이는 위에 덮을 뿐이고, 활성 탭이 세션으로 바뀔 때도 슬롯이 display로만
    *  숨는다(PaneGrid의 lastFileOfPane). */
-  const renderEditor = (paneId: string, fileTabId: string): React.ReactNode => {
+  const renderEditor = (paneId: string, fileTabId: string, focused: boolean): React.ReactNode => {
     const f = fileTabs.find((t) => t.id === fileTabId)
     const buf = fileBuffers[fileTabId]
     if (!f || !buf) return null
@@ -1457,6 +1457,7 @@ export default function App(): React.JSX.Element {
             content={buf.content}
             readOnly={buf.readOnly}
             cache={editorCacheRef.current}
+            focused={focused}
             onRetire={retireEditorState}
             onChange={(next) => {
               note(`change pane=${paneId} -> ${short(f.id)}`)
