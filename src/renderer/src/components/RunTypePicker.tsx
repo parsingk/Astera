@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RunConfigType } from '../../../core/run/types'
 import type { MessageKey } from '../../../core/i18n'
+import { runTypeIcon } from '../../../core/run/typeIcon'
 import { useI18n } from '../i18n/I18nProvider'
+import { FileIcon } from './FileIcon'
 
 /** Every kind Task 1 modeled, in the order they are offered. Compose/Dockerfile/.NET/Python are out of
  *  scope until their own tasks give them a RunConfigType. */
@@ -71,6 +73,7 @@ export function RunTypePicker({
           <div className="rtp-group">{t('run.picker.detected')}</div>
           {detectedList.map((ty) => (
             <button key={ty} type="button" className="rtp-item" onClick={() => onPick(ty)}>
+              <FileIcon {...runTypeIcon(ty)} />
               {label(ty)}
             </button>
           ))}
@@ -81,6 +84,7 @@ export function RunTypePicker({
           {detectedList.length > 0 && <div className="rtp-group">{t('run.picker.other')}</div>}
           {otherList.map((ty) => (
             <button key={ty} type="button" className="rtp-item" onClick={() => onPick(ty)}>
+              <FileIcon {...runTypeIcon(ty)} />
               {label(ty)}
             </button>
           ))}

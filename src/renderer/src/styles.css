@@ -783,7 +783,8 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    without it the groups and rows shrink once the list is taller than the pane. A shrunk row draws its
    hover fill shorter than its own text, which reads as the highlight being clipped. */
 .rcm-group-block { flex: none; display: flex; flex-direction: column; gap: 1px; }
-.rcm-group { font-size: 11px; color: var(--text-faint); padding: 8px 6px 2px; }
+.rcm-group { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-faint); padding: 8px 6px 2px; }
+.rcm-group .fi { flex: none; }
 .rcm-item { flex: none; text-align: left; background: none; border: 0; border-left: 2px solid transparent; color: var(--text); font-size: 13px; padding: 5px 8px; border-radius: 4px; cursor: pointer; }
 .rcm-item:hover { background: var(--surface-hover); }
 .rcm-item.on { background: var(--elevated); border-left-color: var(--accent); }
@@ -807,7 +808,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    overflow-y can only scroll what refuses to be squashed. */
 .rtp-search { flex: none; width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 5px 7px; border-radius: 4px; font-size: 12px; margin-bottom: 4px; }
 .rtp-group { flex: none; font-size: 10.5px; color: var(--text-faint); padding: 6px 6px 2px; text-transform: uppercase; letter-spacing: .05em; }
-.rtp-item { flex: none; white-space: nowrap; text-align: left; background: transparent; border: 0; border-radius: 4px; padding: 4px 8px; font-size: 12px; color: var(--text); cursor: pointer; }
+/* width/box-sizing are explicit rather than left to the flex stretch: the menu is width: max-content,
+   and a stretched child inside a max-content container resolves its width from the container that is
+   itself being sized by the child. The hover fill is painted on that box, so when it came out short
+   the highlight looked clipped. Stating the width breaks the loop. */
+.rtp-item { flex: none; display: flex; align-items: center; gap: 7px; width: 100%; box-sizing: border-box; white-space: nowrap; text-align: left; background: transparent; border: 0; border-radius: 4px; padding: 4px 8px; font-size: 12px; color: var(--text); cursor: pointer; }
+.rtp-item .fi { flex: none; }
 .rtp-item:hover { background: var(--elevated); }
 /* RunConfigForm's "add optional field" menu — same shape as .rtp-menu but a flat list, so it gets its
    own (short) rule set rather than sharing .rtp-menu's grouped layout. */

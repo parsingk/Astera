@@ -3,7 +3,9 @@ import type { Jdk, RunConfig } from '../../../core/types'
 import type { RunContext } from '../../../core/run/build'
 import type { RunConfigType } from '../../../core/run/types'
 import type { MessageKey } from '../../../core/i18n'
+import { runTypeIcon } from '../../../core/run/typeIcon'
 import { useI18n } from '../i18n/I18nProvider'
+import { FileIcon } from './FileIcon'
 import { RunConfigForm } from './RunConfigForm'
 import { RunTypePicker } from './RunTypePicker'
 
@@ -109,7 +111,7 @@ export function RunConfigManager({
   const [pickerOpen, setPickerOpen] = useState(false)
 
   // Grouped by kind for the tree. Order follows the list's own order — user configurations come first
-  const groups = new Map<string, RunConfig[]>()
+  const groups = new Map<RunConfigType, RunConfig[]>()
   for (const c of displayConfigs) {
     const list = groups.get(c.type) ?? []
     list.push(c)
@@ -165,7 +167,10 @@ export function RunConfigManager({
                 // 그룹도 세로 flex 다. 평범한 블록이면 그 안의 button 이 inline-block 이라
                 // 가로로 흘러 버린다 — 항목이 둘 이상인 종류에서 바로 드러난다
                 <div className="rcm-group-block" key={type}>
-                  <div className="rcm-group">{t(`run.type.${type}` as MessageKey)}</div>
+                  <div className="rcm-group">
+                    <FileIcon {...runTypeIcon(type)} />
+                    {t(`run.type.${type}` as MessageKey)}
+                  </div>
                   {list.map((c) => (
                     <button
                       key={c.id}
