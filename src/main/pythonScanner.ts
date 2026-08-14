@@ -11,9 +11,15 @@ import {
  *  core/run/python.ts; this is the main-only layer that actually runs fs.access and execFile against
  *  those results — the same split as jdkScanner.ts.
  *
- *  Cached per project path rather than session-wide (jdkScanner's cache) — the venv candidates depend
- *  on the project root, so one shared cache would hand back the wrong project's venv. */
-const cache = new Map<string, Promise<PythonInterpreter[]>>()
+ *  Deliberately not cached, the same call dotnetScanner.ts makes and for the same reason: a venv is
+ *  created inside the project *while the app is open* (`python -m venv .venv` in the project terminal
+ *  is the ordinary way to start), and a per-project cache that never invalidates meant the new
+ *  interpreter could not appear until the app restarted. It ran per project path, so it did not even
+ *  answer with the wrong project's venv — it simply went stale with nothing able to refresh it.
+ *  The cost of rescanning is a handful of short-lived `--version` probes on a deliberate user action
+ *  (opening the run configuration dialog), which is the same bargain dotnetScanner already takes.
+ *  jdkScanner keeps its session-wide cache because a JDK is installed outside the app, not made inside
+ *  the project the app is looking at. */
 
 /** Checks whether one candidate path is a real interpreter — confirms it exists, then reads the
  *  version from `--version`. Returns null (never throws) so a candidate that is not actually installed
@@ -65,21 +71,14 @@ function pathPythons(): Promise<string[]> {
 /** The detected Python interpreters for one project: its venv (if any) plus whatever pythonBinNames
  *  resolves to on PATH. Verified in parallel, deduped by resolved path (case ignored on win32 only —
  *  the same interpreter can turn up twice, once from the venv scan and once via PATH). */
-export function listPythonInterpreters(projectPath: string): Promise<PythonInterpreter[]> {
-  let cached = cache.get(projectPath)
-  if (!cached) {
-    cached = (async () => {
-      const candidates = [...venvInterpreterPaths(projectPath, process.platform), ...(await pathPythons())]
-      const verified = await Promise.all(candidates.map(verify))
-      const byPath = new Map<string, PythonInterpreter>()
-      for (const py of verified) {
-        if (!py) continue
-        const key = process.platform === 'win32' ? py.path.toLowerCase() : py.path
-        if (!byPath.has(key)) byPath.set(key, py)
-      }
-      return [...byPath.values()]
-    })()
-    cache.set(projectPath, cached)
+export async function listPythonInterpreters(projectPath: string): Promise<PythonInterpreter[]> {
+  const candidates = [...venvInterpreterPaths(projectPath, process.platform), ...(await pathPythons())]
+  const verified = await Promise.all(candidates.map(verify))
+  const byPath = new Map<string, PythonInterpreter>()
+  for (const py of verified) {
+    if (!py) continue
+    const key = process.platform === 'win32' ? py.path.toLowerCase() : py.path
+    if (!byPath.has(key)) byPath.set(key, py)
   }
-  return cached
+  return [...byPath.values()]
 }

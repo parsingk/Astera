@@ -582,9 +582,9 @@ export const es: Catalog = {
   'run.config.cwdNotString': 'La carpeta de trabajo de la configuración de ejecución no es válida',
   'run.config.cwdOutsideProject':
     'La carpeta de trabajo de la configuración de ejecución debe estar dentro del proyecto',
-  // RunConfigForm.tsx — name/command fields and the JDK/file pickers shared by every per-kind form
+  'run.start.incomplete': 'Esta configuración de ejecución tiene un campo obligatorio vacío: {fields}',
+  // RunConfigForm.tsx — name field and the JDK/file pickers shared by every per-kind form
   'run.form.nameLabel': 'Nombre',
-  'run.form.commandLabel': 'Comando',
   'run.form.jdkLoading': 'Buscando JDK…',
   'run.form.jdkNone': 'No usar (entorno de la aplicación tal cual)',
   'run.form.jdkCustom': '{path} (personalizado)',
@@ -627,6 +627,7 @@ export const es: Catalog = {
   'run.field.args': 'Argumentos',
   'run.field.cwd': 'Carpeta de trabajo',
   'run.field.env': 'Variables de entorno',
+  'run.field.command': 'Comando',
   'run.field.script': 'Script',
   'run.field.file': 'Archivo',
   'run.field.tasks': 'Tareas',

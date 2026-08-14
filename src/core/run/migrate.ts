@@ -7,8 +7,10 @@ const KNOWN: RunConfigType[] = [
 
 /** The string fields a kind must have. Missing one means buildCommand would splice `undefined` into
  *  the assembled command — this is the gate that stops that. A Record so adding a kind without a
- *  line here fails the build (see the file structure table's later tasks, which each add one). */
-const REQUIRED: Record<RunConfigType, string[]> = {
+ *  line here fails the build (see the file structure table's later tasks, which each add one).
+ *  Exported so the "is this runnable yet" question (missingRequiredFields below, used by run.start)
+ *  and the tests that walk every kind read the same list this gate does. */
+export const REQUIRED: Record<RunConfigType, readonly string[]> = {
   shell: ['command'],
   npm: ['script'],
   node: ['file'],
@@ -33,13 +35,30 @@ const isStringMap = (v: unknown): boolean =>
     !Array.isArray(v) &&
     Object.values(v as Record<string, unknown>).every((x) => typeof x === 'string'))
 
+/** Which of a kind's required fields are still empty. A configuration in this state is storable but
+ *  not runnable — run.start refuses it by name rather than assembling a command with a hole in it.
+ *  The same rule migrateRunConfigs applies below, but to a value that is already typed. */
+export function missingRequiredFields(config: RunConfig): string[] {
+  const o = config as unknown as Record<string, unknown>
+  return REQUIRED[config.type].filter((k) => typeof o[k] !== 'string' || o[k] === '')
+}
+
 /** Reads one project's array of stored configs.
  *
  *  An item with no `type` predates kinds — back then a free-form command was all there was, so
  *  reading it as `shell` is lossless. A corrupt item is dropped silently (same contract as the
  *  sibling stores: one hand-edited item should not turn the whole store into a schema violation
- *  and get it thrown away). */
-export function migrateRunConfigs(value: unknown): RunConfig[] {
+ *  and get it thrown away).
+ *
+ *  `allowIncomplete` keeps everything above but stops rejecting a required field that is present and
+ *  empty. run.saveConfig passes it, because a configuration created by ＋ starts with exactly that
+ *  shape: without it the new configuration never reaches the store, lives only in the renderer's
+ *  single `pending` slot, and the next ＋ silently loses it. **RunConfigStore.load passes it too, and
+ *  must:** the two have to agree, or the app writes a file it then refuses to read back and the
+ *  half-filled configuration disappears at the next start with nothing said. What refuses an
+ *  incomplete configuration is run.start, by name (missingRequiredFields above) — the point where it
+ *  would otherwise become a command with a hole in it. */
+export function migrateRunConfigs(value: unknown, opts?: { allowIncomplete?: boolean }): RunConfig[] {
   if (!Array.isArray(value)) return []
   const out: RunConfig[] = []
   for (const raw of value) {
@@ -60,7 +79,11 @@ export function migrateRunConfigs(value: unknown): RunConfig[] {
       continue
     }
     if (typeof o.type !== 'string' || !KNOWN.includes(o.type as RunConfigType)) continue
-    if (REQUIRED[o.type as RunConfigType].some((k) => typeof o[k] !== 'string' || o[k] === '')) continue
+    // The type check always applies — a missing or non-string required field is what would splice
+    // `undefined` into the command. Only the emptiness half is relaxed by allowIncomplete.
+    const required = REQUIRED[o.type as RunConfigType]
+    if (required.some((k) => typeof o[k] !== 'string')) continue
+    if (!opts?.allowIncomplete && required.some((k) => o[k] === '')) continue
     out.push(o as unknown as RunConfig)
   }
   return out

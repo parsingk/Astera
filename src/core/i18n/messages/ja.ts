@@ -575,9 +575,9 @@ export const ja: Catalog = {
   // ipc.ts resolveRunCwd — thrown in main, shown verbatim in a renderer toast
   'run.config.cwdNotString': '実行構成の作業フォルダが正しくありません',
   'run.config.cwdOutsideProject': '実行構成の作業フォルダはプロジェクト内である必要があります',
-  // RunConfigForm.tsx — name/command fields and the JDK/file pickers shared by every per-kind form
+  'run.start.incomplete': '実行構成の必須項目が空です: {fields}',
+  // RunConfigForm.tsx — name field and the JDK/file pickers shared by every per-kind form
   'run.form.nameLabel': '名前',
-  'run.form.commandLabel': 'コマンド',
   'run.form.jdkLoading': 'JDK を検索中…',
   'run.form.jdkNone': '使用しない (アプリの環境のまま)',
   'run.form.jdkCustom': '{path} (手動指定)',
@@ -619,6 +619,7 @@ export const ja: Catalog = {
   'run.field.args': '引数',
   'run.field.cwd': '作業フォルダ',
   'run.field.env': '環境変数',
+  'run.field.command': 'コマンド',
   'run.field.script': 'スクリプト',
   'run.field.file': 'ファイル',
   'run.field.tasks': 'タスク',

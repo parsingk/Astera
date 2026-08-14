@@ -1,23 +1,33 @@
 import { describe, it, expect } from 'vitest'
 import { runTypeIcon } from './typeIcon'
+import type { FileIconSpec } from '../files/icons'
 import type { RunConfigType } from './types'
 
-const ALL: RunConfigType[] = [
-  'shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest', 'compose', 'dockerfile',
-  'dotnet'
-]
+/** 종류마다 그려야 하는 모양 전체. Record 라 종류가 늘면 여기서 컴파일이 깨진다 — 손으로 적은
+ *  배열은 열세 번째 종류를 조용히 건너뛴다. 아래 ALL 도 이 표에서 나온다.
+ *  왜 이 모양이어야 하는지(파일 트리와 같아야 한다는 것)는 아래 종류별 테스트가 따로 말한다. */
+const ICONS: Record<RunConfigType, FileIconSpec> = {
+  shell: { id: 'terminal', tone: 'gray' },
+  npm: { id: 'code-braces', tone: 'red' },
+  node: { id: 'label', tone: 'green', label: 'JS' },
+  gradle: { id: 'gear', tone: 'green' },
+  maven: { id: 'archive', tone: 'orange' },
+  cargo: { id: 'label', tone: 'orange', label: 'RS' },
+  go: { id: 'label', tone: 'cyan', label: 'GO' },
+  python: { id: 'label', tone: 'green', label: 'PY' },
+  pytest: { id: 'label', tone: 'green', label: 'PY', badge: 'test' },
+  compose: { id: 'container', tone: 'blue' },
+  dockerfile: { id: 'container', tone: 'blue' },
+  dotnet: { id: 'label', tone: 'purple', label: 'C#' }
+}
+const ALL = Object.keys(ICONS) as RunConfigType[]
 
 describe('runTypeIcon', () => {
-  it('모든 종류에 아이콘이 있다', () => {
-    for (const t of ALL) expect(runTypeIcon(t)).toBeTruthy()
-  })
-
-  // label 변형은 3자까지만 그린다 (FileIcon 의 glyph) — 넘으면 잘려 나온다
-  it('label 은 3자를 넘지 않는다', () => {
-    for (const t of ALL) {
-      const spec = runTypeIcon(t)
-      if (spec.id === 'label') expect(spec.label!.length).toBeLessThanOrEqual(3)
-    }
+  // 예전에는 falsy 가 아니라는 것만 봤다. 종류마다 객체 리터럴을 돌려주는 switch 는 falsy 일 수가
+  // 없으므로 그 테스트는 () => ({ id: 'gear', tone: 'green' }) 짜리 스텁도 통과했고, 실제로 shell·
+  // npm·gradle·maven 을 똑같은 톱니바퀴로 만들어도 아무 테스트가 울지 않았다
+  it('종류마다 아이콘 모양을 통째로 못박는다', () => {
+    for (const t of ALL) expect(runTypeIcon(t), t).toEqual(ICONS[t])
   })
 
   it('label 은 대문자다', () => {

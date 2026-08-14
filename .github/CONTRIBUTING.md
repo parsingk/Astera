@@ -37,17 +37,22 @@ Issues and pull requests are welcome. A couple of things worth knowing before yo
   `npm run typecheck`: `src/core/run/types.ts` (the string in `RunConfigType`, the interface in
   `RunConfig`, and `optionalFieldsFor`), `buildCommand` in `run/build.ts`, the `REQUIRED` record in
   `run/migrate.ts`, `seedKeyOf` in `run/config.ts`, `runTypeIcon` in `run/typeIcon.ts`, and
-  `defaultConfigFor` in `RunConfigManager.tsx`. These are hand-written lists no type covers, so a miss
+  `defaultConfigFor` in `RunConfigManager.tsx` — plus the per-kind expectation tables the tests are
+  driven from, each a `Record<RunConfigType, …>` for exactly this reason: `OPTIONAL` in
+  `run/types.test.ts`, `ICONS` in `run/typeIcon.test.ts` and `COMPLETE` in `run/migrate.test.ts`.
+  These are hand-written lists no type covers, so a miss
   is silent: the `KNOWN` array in `run/migrate.ts` — `migrateRunConfigs` guards the save as well as
   the read (`run.saveConfig` in `main/ipc.ts` rejects what it drops), so the first symptom is that a
   configuration of the new kind cannot be saved at all, not that it vanishes on reload — the per-kind
   field blocks in `RunConfigForm.tsx`, which are `draft.type === …` guards, so the form just draws
   nothing; `BLANKABLE` in the same file, which every new optional text field has to join, or clearing
   the box stores `''` rather than removing the field and the row can never be dismissed again;
-  `ALL_TYPES` in `RunTypePicker.tsx`, so the ＋ menu never offers the kind; and the kind lists in
-  `run/types.test.ts`, `run/typeIcon.test.ts` and `LITERALS` in `i18n/catalog.test.ts`, whose
-  invariants stop covering it while still passing. Beyond both groups, a kind needs its
-  `run.type.<kind>` label in the four catalogs, and it only lands under "detected in this project" if
+  `ALL_TYPES` in `RunTypePicker.tsx`, so the ＋ menu never offers the kind; and `LITERALS` in
+  `i18n/catalog.test.ts`, whose invariant stops covering the kind's label while still passing. Beyond
+  both groups, a kind needs its `run.type.<kind>` label in the four catalogs — and a `run.field.<name>`
+  label for every name it adds to `REQUIRED`, since `run.start` builds the "required field is empty"
+  message by looking one up (a test in `run/migrate.test.ts` pins that, because the key is assembled
+  from a string and no type can check it). It only lands under "detected in this project" if
   something supplies the evidence — a seed configuration, a boolean derived from the project's root
   file list, or a scan.
 - The README ships in the same four languages, as `README.md` (English, the source), `README.ko.md`,

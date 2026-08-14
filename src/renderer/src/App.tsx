@@ -1625,6 +1625,12 @@ export default function App(): React.JSX.Element {
         void window.api.run.list(explorerRoot).then((r) => {
           setRunConfigs(r.configs)
           setRunContext(r.context)
+          // The same reconciliation as the three siblings above. It is not optional here either:
+          // promoting a seed *removes* an id — mergeConfigs stops emitting seed:npm:dev the moment a
+          // stored config shares its seedKeyOf — so without this the toolbar keeps a seed id that no
+          // longer resolves, ▶ stays enabled (disabled={!selectedId}, and a stale string is truthy)
+          // and pressing it fails with NO_CONFIG.
+          setRunSelectedId((prev) => (r.configs.some((c) => c.id === prev) ? prev : r.configs[0]?.id ?? null))
         })
       },
       (err) => toast.error(t('run.config.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))

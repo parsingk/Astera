@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { Jdk, PythonInterpreter, RunConfig } from '../../../core/types'
 import type { RunContext } from '../../../core/run/build'
 import { buildCommand } from '../../../core/run/build'
-import { optionalFieldsFor } from '../../../core/run/types'
+import { availableOptionalFields } from '../../../core/run/types'
 import type { PackageManager } from '../../../core/run/config'
 import { parseEnvLines, formatEnvLines, toRelativeCwd } from '../../../core/run/config'
 import type { MessageKey } from '../../../core/i18n'
@@ -105,6 +105,11 @@ export function RunConfigForm({
     'cwd', 'args', 'springProfiles', 'features', 'packagePath', 'nodePath', 'target', 'composeFile', 'services',
     'dockerfilePath', 'buildArgs', 'runArgs', 'configuration'
   ] as const
+  // A kind's *required* field is deliberately not gated here: an empty one saves as empty, so what is
+  // on screen is always what is stored (run.saveConfig passes migrateRunConfigs' allowIncomplete for
+  // exactly this). Refusing the save instead would put the form and the store out of step with only a
+  // toast to say so — and would make a configuration that is still being filled in unsaveable, which
+  // is what lost a newly added configuration to the next ＋.
   const flush = (): void => {
     const next = { ...draft } as unknown as Record<string, unknown>
     for (const k of BLANKABLE) if (next[k] === '') delete next[k]
@@ -130,7 +135,10 @@ export function RunConfigForm({
    *  there is no separate "shown" list to persist, the value itself is the record. */
   const visible = (key: string): boolean =>
     shown.has(key) || (draft as unknown as Record<string, unknown>)[key] !== undefined
-  const available = optionalFieldsFor(draft.type, { springBoot: isSpringBoot }).filter((k) => !visible(k))
+  // The complement of visible(), over this kind's optional fields. It lives in core/run/types.ts
+  // rather than inline here so it can actually be tested — vitest is environment: 'node', so nothing
+  // in this file can be rendered.
+  const available = availableOptionalFields(draft, { springBoot: isSpringBoot }, shown)
 
   const pickCwd = async (): Promise<void> => {
     const dir = await window.api.system.pickFolder(projectPath)
@@ -230,7 +238,7 @@ export function RunConfigForm({
       {/* ---- required fields, one per kind ---- */}
       {draft.type === 'shell' && (
         <div className="field">
-          <label>{t('run.form.commandLabel')}</label>
+          <label>{t('run.field.command')}</label>
           <input
             type="text"
             value={draft.command}

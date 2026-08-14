@@ -28,6 +28,15 @@ describe('buildCommand', () => {
       .toBe('pnpm run test --watch')
   })
 
+  // script 도 node 의 file·go 의 packagePath 와 같은 단일 값이다. 여기서 특히 중요한 이유가 하나 더
+  // 있다: 시드의 스크립트 이름은 package.json 에서 그대로 오고, 시드는 run.saveConfig 의 win32 문자
+  // 관문을 거치지 않는다 — 명령줄에 닿는 유일한 프로젝트 파일 유래 값이다.
+  // 인용이 없으면 "build all" 이 `npm run build all` 이 되어 build 스크립트가 all 인자로 돌아간다
+  it('npm 의 스크립트 이름에 공백이 있으면 인용한다', () => {
+    expect(buildCommand({ ...base, type: 'npm', script: 'build all' }, ctx)).toBe('pnpm run "build all"')
+    expect(buildCommand({ ...base, type: 'npm', script: 'build all' }, posix)).toBe("pnpm run 'build all'")
+  })
+
   it('gradle 과 maven 은 문맥의 래퍼를 쓴다', () => {
     expect(buildCommand({ ...base, type: 'gradle', tasks: 'bootRun' }, ctx)).toBe('gradlew.bat bootRun')
     expect(buildCommand({ ...base, type: 'gradle', tasks: 'bootRun' }, posix)).toBe('./gradlew bootRun')
@@ -99,6 +108,18 @@ describe('buildCommand', () => {
     expect(buildCommand({ ...base, type: 'compose' }, ctx)).toBe('docker compose up')
   })
 
+  // 위 테스트들의 'docker-compose.yml' 은 quoteArg 가 손대지 않는 값이라, -f 뒤의 인용이 있는지
+  // 없는지 드러나지 않았다(q 를 지워도 초록이었다). 공백이 있는 값으로 두 경로 — 구성이 지정한 파일과
+  // 문맥이 찾은 파일 — 이 모두 인용을 지나는지 본다
+  it('compose 파일 경로에 공백이 있으면 인용한다 — 문맥이 찾은 것도 마찬가지다', () => {
+    expect(buildCommand({ ...base, type: 'compose', composeFile: 'deploy stack/compose.yaml' }, ctx))
+      .toBe('docker compose -f "deploy stack/compose.yaml" up')
+    expect(buildCommand({ ...base, type: 'compose' }, { ...ctx, composeFile: 'deploy stack/compose.yaml' }))
+      .toBe('docker compose -f "deploy stack/compose.yaml" up')
+    expect(buildCommand({ ...base, type: 'compose', composeFile: 'deploy stack/compose.yaml' }, posix))
+      .toBe("docker compose -f 'deploy stack/compose.yaml' up")
+  })
+
   it('dockerfile 은 빌드와 실행을 && 로 잇는다', () => {
     // 실행이 cmd.exe /s /c 또는 sh -c 를 거치므로 셸이 && 를 해석한다 (shell.ts 의 shellSpawn).
     // 바깥 따옴표 안에서도 && 가 구분자로 읽힌다는 것은 shellSpawn.test.ts 가 실제로 확인한다
@@ -143,6 +164,15 @@ describe('buildCommand', () => {
       .toBe('dotnet run --project "src/My App/App.csproj"')
     expect(buildCommand({ ...base, type: 'dotnet', project: 'src/My App/App.csproj' }, posix))
       .toBe("dotnet run --project 'src/My App/App.csproj'")
+  })
+
+  // imageTag 는 build 의 -t 와 run 의 꼬리, 두 자리에 들어간다 — 둘 다 인용을 지나야 한다.
+  // 다른 테스트의 'astera:dev' 는 quoteArg 가 손대지 않는 값이라 그 두 인용을 지워도 초록이었다
+  it('dockerfile 의 이미지 태그에 공백이 있으면 두 자리 모두 인용한다', () => {
+    expect(buildCommand({ ...base, type: 'dockerfile', imageTag: 'my app:dev' }, ctx))
+      .toBe('docker build -t "my app:dev" . && docker run --rm "my app:dev"')
+    expect(buildCommand({ ...base, type: 'dockerfile', imageTag: 'my app:dev' }, posix))
+      .toBe("docker build -t 'my app:dev' . && docker run --rm 'my app:dev'")
   })
 
   // node 의 파일 경로 인용 테스트와 같은 모양 — 공백이 있는 값에서만 두 셸의 인용이 갈린다

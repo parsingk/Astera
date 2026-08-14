@@ -49,7 +49,12 @@ export function buildCommand(config: RunConfig, ctx: RunContext): string {
         !config.packageManager || config.packageManager === 'auto'
           ? ctx.packageManager
           : config.packageManager
-      return join(pm, 'run', config.script, config.args)
+      // script is a single value, so it is quoted like every other single value here. It matters more
+      // than most: a seed's script name is read straight out of package.json and never passes through
+      // run.saveConfig's win32 character gate, so this is the only project-file-derived value that
+      // reaches the command line. Unquoted, `"build all"` runs the script `build` with the argument
+      // `all`. quoteArg leaves ordinary names untouched, so no existing command shape moves.
+      return join(pm, 'run', q(config.script), config.args)
     }
     case 'node':
       return join(config.nodePath ? q(config.nodePath) : 'node', q(config.file), config.args)

@@ -417,7 +417,8 @@ export interface CoreApi {
   run: {
     // Running and stopping a project. start and list go through assertAllowedPath, which permits only
     // registered project paths.
-    // isSpringBoot tells RunConfigDialog whether to show the Spring profile field.
+    // isSpringBoot tells the configuration form whether to offer the Spring profile field
+    // (optionalFieldsFor in core/run/types.ts, reached through RunConfigManager's isSpringBoot prop).
     // context is the assembly context (wrapper choice, package manager, platform) — the form's preview
     // calls buildCommand(config, context) so it shows exactly what run.start will actually run.
     list(projectPath: string): Promise<{
@@ -439,7 +440,10 @@ export interface CoreApi {
     stop(projectPath: string): Promise<void>
     write(projectPath: string, data: string): void
     resize(projectPath: string, cols: number, rows: number): void
-    saveConfig(projectPath: string, config: RunConfig): Promise<RunConfig[]> // returns the refreshed display list after an add or edit
+    // Both return the **stored** list only — never passed through mergeConfigs, so the auto-detected
+    // seeds are not in it. A caller that needs the display list has to refetch with run.list (which is
+    // what App.tsx does; it discards these return values).
+    saveConfig(projectPath: string, config: RunConfig): Promise<RunConfig[]>
     deleteConfig(projectPath: string, configId: string): Promise<RunConfig[]>
     listJdks(): Promise<Jdk[]> // the detected JDKs — no path argument, so not subject to assertAllowedPath
     // The detected Python interpreters for this project (its venv plus whatever is on PATH). Takes a

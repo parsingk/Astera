@@ -565,9 +565,11 @@ export const ko = {
   // so it is translated here before throwing (the layering rule)
   'run.config.cwdNotString': '실행 구성의 작업 폴더가 올바르지 않습니다',
   'run.config.cwdOutsideProject': '실행 구성의 작업 폴더는 프로젝트 안이어야 합니다',
-  // RunConfigForm.tsx — name/command fields and the JDK/file pickers shared by every per-kind form
+  // ipc.ts run.start — 필수 항목이 빈 구성은 저장은 되지만 실행은 거부한다. {fields} 는 아래 run.field.* 라벨이다
+  'run.start.incomplete': '실행 구성의 필수 항목이 비어 있습니다: {fields}',
+  // RunConfigForm.tsx — name field and the JDK/file pickers shared by every per-kind form.
+  // 종류별 필드 라벨은 shell 의 명령까지 모두 아래 run.field.* 에 모여 있다
   'run.form.nameLabel': '이름',
-  'run.form.commandLabel': '명령',
   'run.form.jdkLoading': 'JDK 조회 중…',
   'run.form.jdkNone': '사용 안 함 (앱 환경 그대로)',
   'run.form.jdkCustom': '{path} (직접 지정)',
@@ -617,6 +619,9 @@ export const ko = {
   'run.field.args': '인자',
   'run.field.cwd': '작업 폴더',
   'run.field.env': '환경변수',
+  // 종류별 필수 필드. shell 의 command 도 여기 있어야 run.start 의 "빈 필수 항목" 메시지가
+  // run.field.<이름> 으로 라벨을 찾을 수 있다 (migrate.ts 의 REQUIRED 에 있는 이름은 모두 여기 있다)
+  'run.field.command': '명령',
   'run.field.script': '스크립트',
   'run.field.file': '파일',
   'run.field.tasks': '작업',

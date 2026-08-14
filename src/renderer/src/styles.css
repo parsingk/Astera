@@ -225,9 +225,10 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .run-global-jump { flex: 1; min-width: 0; text-align: left; background: none; border: none; color: var(--text); font-size: 12px; padding: 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-global-stop { width: 20px; height: 20px; display: grid; place-items: center; background: transparent; border: 0; border-radius: 4px; color: var(--text-faint); font-size: 11px; padding: 0; cursor: pointer; }
 .run-global-stop:hover { background: var(--bg); color: #e5534b; }
-/* .run-add-form (a popover hanging off the toolbar) was replaced by RunConfigDialog (.modal) and
-   deleted. Its right anchor and its vertical stack with a fixed width go with it — the modal achieves
-   what those were for (keeping the form visible and uncut), so this is a replacement rather than a revert. */
+/* .run-add-form (a popover hanging off the toolbar) was replaced by a modal and deleted — today that
+   modal is RunConfigManager (.modal.rcm, below). Its right anchor and its vertical stack with a fixed
+   width went with it: the modal achieves what those were for (keeping the form visible and uncut), so
+   this is a replacement rather than a revert. */
 
 .panel-header { padding: 11px 12px 6px; display: flex; flex-direction: column; gap: 6px; }
 .panel-header h2 { font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; }
@@ -752,16 +753,9 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .detect-path { font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* the Local History modal — list-style modals follow the .detect-list convention (body plus metadata within a row) */
 .modal.local-history { width: 560px; max-height: 80vh; }
-/* The run configuration modal — with six fields (name, command, JDK, Spring profile, working folder,
-   environment variables) it can overflow on a small screen. .run-config-body is overflow-y:auto, so its
-   automatic flex minimum size becomes 0 (the spec rule for a flex item whose overflow is not visible) and
-   it shrinks and scrolls only when it has to, while the h2 and the button row are siblings and stay
-   outside the scroll — the same approach as .preview-scroll in .modal.preview. */
-.modal.run-config { max-height: 80vh; }
 /* The resume modal — with rolling, schedule, Slack, and permission checkboxes plus the conditional
    schedule inputs stacked up, it can overflow in a narrow window. The same convention as its sibling modals. */
 .modal.resume { max-height: 80vh; overflow-y: auto; }
-.run-config-body { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
 /* The JDK and Python interpreter pickers — paths are long, and .sel-value already ellipsises. This only
    claims the leftover width next to the "Browse…" button — a plain width:100% loses to the
    minimum size in a flex child, so flex:1 plus min-width:0 is stated explicitly */
@@ -799,6 +793,23 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    promotes it into a plain (non-italic) user configuration copy (core/run/config.ts promoteSeed). */
 .rcm-item.seed { font-style: italic; color: var(--text-dim); }
 .rcm-form { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
+/* Every "찾아보기…"/"Browse…" row in the form — a text input or a .path-select next to a button, inside
+   a plain .row (display:flex). The buttons carry no class of their own, so the only rule reaching them
+   is the global `button`, which sets neither flex-shrink nor white-space. The input's width:100% makes
+   its flex base size the whole row, the row overflows, every item shrinks in proportion, and the button
+   loses enough width for its label to wrap onto a second line — visible in Korean first, since it
+   breaks between any two characters. Stated on the container rather than per row: there are seven of
+   them (file, JDK, interpreter, compose file, Dockerfile path, .NET project, working folder) and a
+   later kind adding an eighth must not have to remember a class. Same prescription as
+   .update-gate-actions button; the input side is the flex:1 + min-width:0 idiom .path-select and
+   .run-config-cwd already state individually (width alone loses to the flex layout — see .sched-days).
+   The child combinator is load-bearing, not tidiness: a descendant form would also catch .sel-trigger,
+   the button *inside* a .path-select, whose whole job is width:100% — flex:none there would collapse
+   the JDK/interpreter/.NET dropdowns to their label width. (This stylesheet is the app's only one, and
+   nothing else here sets flex or white-space on a button reachable from .rcm-form, so what the sheet
+   says is what the element computes — the trap .rcm-tools > button above records.) */
+.rcm-form .row > input[type="text"] { flex: 1; min-width: 0; }
+.rcm-form .row > button { flex: none; white-space: nowrap; }
 .rcm-seed-hint { font-size: 12px; color: var(--text-faint); }
 .rcm-resolved { font-family: var(--mono); font-size: 12px; color: var(--ok); word-break: break-all; }
 /* RunTypePicker — the ＋ button's kind-picker popup. Anchored the same way as .run-more/.run-more-menu

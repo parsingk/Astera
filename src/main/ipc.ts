@@ -37,7 +37,7 @@ import { listBranches, detectBaseRef } from '../core/worktrees/git'
 import { removeWorktree } from '../core/worktrees/remove'
 import { listWithStatus } from '../core/worktrees/list'
 import { git, repoRoot } from '../core/worktrees/git'
-import { t, isLang } from '../core/i18n'
+import { t, isLang, type MessageKey } from '../core/i18n'
 import type { LangPreference } from '../core/i18n'
 import { pickInitialLang } from '../core/i18n/locale'
 import { listJdks } from './jdkScanner'
@@ -768,7 +768,8 @@ export function registerIpc(
       configs,
       active: core.run.get(projectPath),
       recent: core.run.recentOutput(projectPath),
-      isSpringBoot: isSpringBootProject(texts), // whether RunConfigDialog shows the Spring profile field
+      // whether the configuration form offers the Spring profile field (optionalFieldsFor)
+      isSpringBoot: isSpringBootProject(texts),
       // Whether RunTypePicker promotes 'python'/'pytest' into its "detected" group — there is no seed
       // config for them (no single entry point to key detection off of the way seedKeyOf does for the
       // other kinds), so this is threaded down separately instead.
@@ -845,6 +846,20 @@ export function registerIpc(
       (c) => c.id === configId
     )
     if (!config) throw new Error(`NO_CONFIG: ${configId}`)
+    // Saving an incomplete configuration is allowed (see run.saveConfig below) so a half-filled one is
+    // not lost; running it is not. Refuse here, naming the field that is still empty — assembling it
+    // instead would splice an empty argument into the command and fail somewhere inside the tool,
+    // where the message has nothing to do with the field the user has to go and fill in.
+    const { missingRequiredFields } = await import('../core/run/migrate')
+    const missing = missingRequiredFields(config)
+    if (missing.length > 0)
+      throw new Error(
+        t(core.lang, 'run.start.incomplete', {
+          // Every name in REQUIRED has a run.field.* label — pinned by a test in core/run/migrate.test.ts,
+          // since this lookup is built from a string and TypeScript cannot check it
+          fields: missing.map((k) => t(core.lang, `run.field.${k}` as MessageKey)).join(', ')
+        })
+      )
     // Send the validated cwd through — runManager uses config.cwd as the PTY cwd, so passing the
     // original would split what was validated from what runs
     const cwd = await resolveRunCwd(projectPath, config.cwd)
@@ -871,9 +886,14 @@ export function registerIpc(
     // hand-edited on disk and thus bypass this path.
     await assertAllowedPath(projectPath)
     await resolveRunCwd(projectPath, config?.cwd)
-    // Trusting only the renderer's form validation would let a hand-edited JSON file through
+    // Trusting only the renderer's form validation would let a hand-edited JSON file through.
+    // allowIncomplete: a configuration is saved the moment ＋ creates it, and at that point its one
+    // required field is still empty — refusing it here would leave the new configuration in the
+    // renderer only, where the next ＋ overwrites it. Running an incomplete one is what run.start
+    // refuses instead, by name. Everything else migrateRunConfigs checks still applies here.
     const { migrateRunConfigs } = await import('../core/run/migrate')
-    if (migrateRunConfigs([config]).length === 0) throw new Error('INVALID_CONFIG')
+    if (migrateRunConfigs([config], { allowIncomplete: true }).length === 0)
+      throw new Error('INVALID_CONFIG')
     // cmd.exe interprets & | ^ % ! < > even inside double quotes — assembly cannot guard against
     // that, so reject at save time.
     //

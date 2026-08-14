@@ -5,6 +5,7 @@ import type { RunConfigType } from '../../../core/run/types'
 import type { MessageKey } from '../../../core/i18n'
 import { runTypeIcon } from '../../../core/run/typeIcon'
 import { promoteSeed, defaultDotnetProject } from '../../../core/run/config'
+import { uniqueName } from '../../../core/files/ops'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
 import { RunConfigForm } from './RunConfigForm'
@@ -98,11 +99,15 @@ export function RunConfigManager({
   const { t } = useI18n()
   const [selectedId, setSelectedId] = useState<string | null>(configs[0]?.id ?? null)
 
-  // A freshly created configuration that has not round-tripped through onSave yet — appended to the
-  // tree so ＋ has somewhere to put it, ahead of the first save. Read during render (the same
-  // "derive, don't duplicate" convention as draftForId below): once its id shows up in `configs` it is
-  // dropped here rather than tracked further, so a later delete of the real record cannot resurrect
-  // this stale local copy.
+  // A freshly created configuration whose save has not round-tripped back through `configs` yet —
+  // appended to the tree so the pane does not go blank for the width of one IPC call. It is a bridge
+  // for that round trip only, never a place a configuration lives: ＋, ⧉ and the seed promotion below
+  // all call onSave in the same breath as setPending. (It used to be the only home of a new
+  // configuration until the first blur saved it — and being a single slot, a second ＋ threw the first
+  // one away. run.saveConfig now accepts an incomplete configuration precisely so it does not have to
+  // wait here.) Read during render (the same "derive, don't duplicate" convention as draftForId in
+  // RunConfigForm): once its id shows up in `configs` it is dropped rather than tracked further, so a
+  // later delete of the real record cannot resurrect this stale local copy.
   const [pending, setPending] = useState<RunConfig | null>(null)
   if (pending && configs.some((c) => c.id === pending.id)) setPending(null)
   const displayConfigs = pending && !configs.some((c) => c.id === pending.id) ? [...configs, pending] : configs
@@ -263,30 +268,55 @@ export function RunConfigManager({
                     onPick={(type) => {
                       const id = `user:${crypto.randomUUID()}`
                       const name = t(`run.type.${type}` as MessageKey)
-                      setPending(defaultConfigFor(type, id, name, npmScripts, dotnetProjects ?? []))
+                      const created = defaultConfigFor(type, id, name, npmScripts, dotnetProjects ?? [])
+                      setPending(created)
                       setSelectedId(id)
                       setPickerOpen(false)
+                      // Stored immediately, not on the first blur. Six kinds start with their required
+                      // field empty, so waiting for the form to make it valid left the configuration in
+                      // `pending` — a single slot the next ＋ overwrote. run.saveConfig accepts it
+                      // (migrateRunConfigs' allowIncomplete); run.start is what refuses to run it.
+                      onSave(created)
                     }}
                     onClose={() => setPickerOpen(false)}
                   />
                 )}
               </div>
               <button
+                type="button"
                 title={t('run.manager.remove')}
                 disabled={!selected || isSeed}
                 onClick={() => {
                   if (!selected) return
-                  if (isPending) {
-                    setPending(null)
-                    setSelectedId(configs[0]?.id ?? null)
-                  } else {
-                    onDelete(selected.id)
-                  }
+                  // Every configuration in this tree is stored now, including one created moments ago,
+                  // so the delete always goes to the store. Dropping the local bridge as well keeps the
+                  // row from lingering until the delete round-trips.
+                  if (isPending) setPending(null)
+                  onDelete(selected.id)
                 }}
               >
                 −
               </button>
-              <button title={t('run.manager.duplicate')} disabled={!selected}>
+              <button
+                type="button"
+                title={t('run.manager.duplicate')}
+                disabled={!selected}
+                onClick={() => {
+                  if (!selected) return
+                  // promoteSeed is already "the same configuration under a new user id", so a seed
+                  // duplicates into an ordinary user configuration through the very rule an edit would
+                  // have promoted it with — no second conversion to keep in step. uniqueName is the
+                  // app's existing copy-naming rule (the file explorer's own duplicate uses it), so the
+                  // copy is something the user can tell apart in the tree.
+                  const copy = {
+                    ...promoteSeed(selected, `user:${crypto.randomUUID()}`),
+                    name: uniqueName(displayConfigs.map((c) => c.name), selected.name)
+                  }
+                  setPending(copy)
+                  setSelectedId(copy.id)
+                  onSave(copy)
+                }}
+              >
                 ⧉
               </button>
             </div>

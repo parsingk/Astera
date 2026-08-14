@@ -1,4 +1,8 @@
-// Project run configurations. Auto-seeded entries for common cases, plus whatever the user adds.
+// Run configurations, everything except the model itself: the seeds derived from a project's files,
+// the identity rule that decides when a stored configuration hides a seed, and the small conversions
+// the form needs (environment text, project-relative paths). The RunConfig union and its per-kind
+// interfaces live in ./types and are only re-exported here, so a renderer module that needs both
+// still has one import.
 export type { RunConfig, RunConfigType } from './types'
 import type { RunConfig } from './types'
 
@@ -78,7 +82,8 @@ export function detectSeedConfigs(
 
 /** Whether the project is Spring Boot — true when a build file body contains SPRING_BOOT_MARKER. Separate from the
  *  per-build-system checks detectSeedConfigs makes locally, this exposes a project-level verdict for run.list to use
- *  when deciding whether RunConfigDialog shows the Spring profile field (buried inside that logic it could not be reused).
+ *  when deciding whether the configuration form offers the Spring profile field (optionalFieldsFor in ./types,
+ *  reached through RunConfigManager's isSpringBoot prop; buried inside that logic it could not be reused).
  *  The two isBoot checks inside detectSeedConfigs (local, per build system) are left alone — in the rare case both
  *  Gradle and Maven sit at the root, detectSeedConfigs may seed in a different order than this function reports, but
  *  those were always independent checks, so unifying them here would change the existing seed behaviour. */
@@ -193,9 +198,19 @@ export function formatEnvLines(env: Record<string, string> | undefined): string 
 }
 
 /** Converts the absolute path returned by one of RunConfigForm's "Choose…"/"찾기" dialogs (working
- *  folder, node's file) into a path relative to the project root. run.start resolves a relative
- *  RunConfig.cwd or file against the project root, so storing the absolute path breaks as soon as the
- *  project moves or is opened on another machine.
+ *  folder, node's file, and the rest) into a path relative to the project root. Every stored path
+ *  field is project-relative for the same reason: an absolute path breaks as soon as the project
+ *  moves or is opened on another machine.
+ *
+ *  How those relative paths are resolved differs by field, and only `cwd` is resolved here in the app:
+ *  run.start passes it through resolveRunCwd (ipc.ts), which resolves it against the project root and
+ *  hands the result to the PTY. Every other path field is spliced into the command text untouched and
+ *  is therefore resolved by the invoked tool against **the working folder**, not the project root — so
+ *  the two only coincide while the working folder is the project root (which is the default: an empty
+ *  cwd means the root). Set a cwd and a project-relative `file` resolves one level too deep. Rewriting
+ *  those paths at assembly time would be the more surprising rule — a tool resolving its arguments
+ *  against its own working directory is what every shell already does — so the mismatch is recorded
+ *  here rather than papered over.
  *  The prefix comparison ignores case — unlike useFileOps.copyPath(p.slice(root.length)...), whose input comes from
  *  the explorer tree, the input here is whatever the OS folder picker returned, and on win32 the drive letter and path
  *  casing it returns can differ from the project root string (same reasoning as isPathWithin in core/files/tree.ts).

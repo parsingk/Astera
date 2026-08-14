@@ -182,3 +182,20 @@ export function optionalFieldsFor(type: RunConfigType, opts: { springBoot: boole
       return ['subcommand', 'configuration', 'args', ...common]
   }
 }
+
+/** What the form's "add optional field" menu still offers: the kind's optional fields, minus the ones
+ *  already on screen — added during this editing session (`shown`) or already carrying a value, which
+ *  is the same "the value itself is the record" rule the form's own `visible()` uses.
+ *
+ *  This is optionalFieldsFor's only consumer, and it lives here rather than inline in RunConfigForm
+ *  because it is the reachable half of the defect that motivated the kind model (a JDK field drawn in
+ *  a Node project): vitest runs with environment: 'node', so the component cannot be rendered, but
+ *  this decision can be executed directly. */
+export function availableOptionalFields(
+  config: RunConfig,
+  opts: { springBoot: boolean },
+  shown: ReadonlySet<string>
+): string[] {
+  const values = config as unknown as Record<string, unknown>
+  return optionalFieldsFor(config.type, opts).filter((k) => !shown.has(k) && values[k] === undefined)
+}

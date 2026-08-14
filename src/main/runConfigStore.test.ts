@@ -35,6 +35,40 @@ describe('RunConfigStore', () => {
     expect(store.get('x')).toEqual([])
   })
 
+  // 읽기와 쓰기는 같은 관문을 지나야 한다. ＋ 는 종류를 고르는 순간 구성을 저장하는데, 그때 그
+  // 종류의 필수 필드는 아직 비어 있다 — 읽기만 엄격하면 앱이 자기가 쓴 파일을 못 읽어, 다음 실행에서
+  // 그 구성이 말없이 사라진다. 느슨해지는 것은 "비었다" 하나뿐이라는 것도 함께 건다
+  describe('아직 덜 채운 구성', () => {
+    const write = (file: string, configs: unknown): Promise<void> =>
+      fs.writeFile(file, JSON.stringify({ 'D:/proj': configs }), 'utf8')
+
+    it('필수 필드가 빈 구성도 다시 읽어 온다 — 저장이 허용한 것은 읽기도 허용한다', async () => {
+      const file = path.join(dir, 'run.json')
+      const configs = [
+        { id: 'u1', name: 'Node.js', type: 'node', file: '' },
+        { id: 'u2', name: 'Dockerfile', type: 'dockerfile', imageTag: '' }
+      ]
+      await write(file, configs)
+      const store = new RunConfigStore(file)
+      const r = await store.load()
+      expect(r.recovered).toBe(false)
+      expect(store.get('D:/proj')).toEqual(configs)
+    })
+
+    it('그래도 필수 필드가 아예 없거나 문자열이 아니면 그 항목만 버린다', async () => {
+      const file = path.join(dir, 'run.json')
+      await write(file, [
+        { id: 'u1', name: 'no field', type: 'node' },
+        { id: 'u2', name: 'wrong type', type: 'node', file: 3 },
+        { id: 'u3', name: 'ok', type: 'node', file: '' }
+      ])
+      const store = new RunConfigStore(file)
+      const r = await store.load()
+      expect(r.recovered).toBe(false)
+      expect(store.get('D:/proj').map((c) => c.id)).toEqual(['u3'])
+    })
+  })
+
   describe('env 스키마 검증', () => {
     const write = (file: string, configs: unknown): Promise<void> =>
       fs.writeFile(file, JSON.stringify({ 'D:/proj': configs }), 'utf8')

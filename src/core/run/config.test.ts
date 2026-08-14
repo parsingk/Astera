@@ -11,7 +11,8 @@ import {
   hasDockerfile,
   defaultDotnetProject,
   toRelativeCwd,
-  type RunConfig
+  type RunConfig,
+  type RunConfigType
 } from './config'
 
 const noTexts = { packageJson: null, buildGradle: null, pom: null }
@@ -218,10 +219,36 @@ describe('defaultDotnetProject', () => {
 })
 
 describe('seedKeyOf', () => {
-  it('종류와 핵심 매개변수를 잇는다', () => {
-    expect(seedKeyOf({ id: 'x', name: 'x', type: 'npm', script: 'dev' })).toBe('npm:dev')
-    expect(seedKeyOf({ id: 'x', name: 'x', type: 'gradle', tasks: 'bootRun' })).toBe('gradle:bootRun')
-    expect(seedKeyOf({ id: 'x', name: 'x', type: 'shell', command: 'ls' })).toBe('shell:ls')
+  // node·maven·cargo·go 는 한 번도 확인된 적이 없었다. Record 로 열두 종류를 한 표에 못박아 둔다 —
+  // 종류가 늘면 여기서 컴파일이 깨지므로 새 종류가 조용히 빠질 수 없다
+  it('열두 종류의 정체 문자열을 못박는다', () => {
+    const base = { id: 'x', name: 'x' }
+    const cases: Record<RunConfigType, [RunConfig, string]> = {
+      shell: [{ ...base, type: 'shell', command: 'ls -al' }, 'shell:ls -al'],
+      npm: [{ ...base, type: 'npm', script: 'dev' }, 'npm:dev'],
+      node: [{ ...base, type: 'node', file: 'server/app.js' }, 'node:server/app.js'],
+      gradle: [{ ...base, type: 'gradle', tasks: 'bootRun' }, 'gradle:bootRun'],
+      maven: [{ ...base, type: 'maven', goals: 'spring-boot:run' }, 'maven:spring-boot:run'],
+      cargo: [{ ...base, type: 'cargo', subcommand: 'test' }, 'cargo:test'],
+      go: [{ ...base, type: 'go', subcommand: 'run', packagePath: './cmd/api' }, 'go:run:./cmd/api'],
+      python: [{ ...base, type: 'python', file: 'main.py' }, 'python:main.py'],
+      pytest: [{ ...base, type: 'pytest', target: 'tests/unit' }, 'pytest:tests/unit'],
+      compose: [
+        { ...base, type: 'compose', composeFile: 'compose.yaml', services: 'web' },
+        'compose:compose.yaml:web'
+      ],
+      dockerfile: [{ ...base, type: 'dockerfile', imageTag: 'astera:dev' }, 'dockerfile:astera:dev'],
+      dotnet: [{ ...base, type: 'dotnet', project: 'src/App/App.csproj' }, 'dotnet:src/App/App.csproj:run']
+    }
+    for (const [type, [config, key]] of Object.entries(cases)) expect(seedKeyOf(config), type).toBe(key)
+  })
+
+  // go 의 `?? '.'` 는 지워도 아무 테스트가 울지 않았지만 하는 일이 있다: 시드(packagePath 없음)와
+  // 승격 사본이 같은 키여야 사본이 시드를 가린다. 없으면 같은 항목이 목록에 둘로 남는다
+  it('go 는 packagePath 가 없으면 . 로 정체를 짓는다 — 승격 사본이 시드를 가려야 한다', () => {
+    const seed: RunConfig = { id: 'seed:go:run', name: 'go run .', type: 'go', subcommand: 'run' }
+    expect(seedKeyOf(seed)).toBe('go:run:.')
+    expect(mergeConfigs([seed], [promoteSeed(seed, 'user:1')]).map((c) => c.id)).toEqual(['user:1'])
   })
 
   it('python 은 file, pytest 는 target(없으면 빈 문자열) 으로 정체를 짓는다', () => {

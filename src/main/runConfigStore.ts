@@ -20,7 +20,18 @@ export class RunConfigStore {
       }
       const map: Record<string, RunConfig[]> = {}
       for (const [projectPath, list] of Object.entries(parsed)) {
-        map[projectPath] = migrateRunConfigs(list)
+        // allowIncomplete, deliberately the same call run.saveConfig makes — the read and the write
+        // have to agree. A configuration whose required field is empty is one this app legitimately
+        // stores: ＋ saves a new configuration the moment the kind is picked, before its one required
+        // field has been filled in (see migrateRunConfigs' own comment for why waiting lost it).
+        // Reading strictly would mean writing a file we then refuse to load, and the loss would be
+        // silent, because a dropped item takes only itself with it.
+        // **This is not a hole in the hand-edit gate.** allowIncomplete relaxes exactly one half of
+        // one check: a required field must still be a string, it may now be ''. Every other check —
+        // id, name, env shape, cwd type, unknown type — still runs, so the malformed file that
+        // motivated the strict read is rejected exactly as before. Running an incomplete
+        // configuration is what run.start refuses, by name (missingRequiredFields).
+        map[projectPath] = migrateRunConfigs(list, { allowIncomplete: true })
       }
       this.map = map
       return { recovered: false }
