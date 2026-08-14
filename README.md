@@ -79,6 +79,15 @@ You will also need:
   splitting panes, moving focus between them, cycling sessions, closing a file tab
 - Pick the terminal font, including the fallback for CJK text
 
+**Run**
+- A run configuration has a kind — Shell, npm, Node.js, Gradle, Maven, cargo, go, Python, pytest,
+  Docker Compose, Dockerfile or .NET — and holds only the fields that kind actually has
+- The command is assembled when you run it, so the Gradle wrapper, the package manager your lockfile
+  implies and the quoting your shell needs are worked out then, not typed into a box
+- Your build files are read, so a project's npm scripts are already there as configurations, and a
+  Gradle or Maven project starts with the standard tasks and goals. A detected one shows in italics
+  until you edit it, which saves it as yours
+
 **Accounts**
 - Several accounts per vendor, each isolated through its own `CLAUDE_CONFIG_DIR` / `CODEX_HOME`
 - **Account rolling:** when a session hits a usage limit, Astera detects it from the transcript,

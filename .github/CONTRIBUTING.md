@@ -28,9 +28,28 @@ Issues and pull requests are welcome. A couple of things worth knowing before yo
   source catalog and defines the key set, `en.ts` is complete. A key missing from `ja.ts` or `es.ts`
   falls back to English and then Korean, on purpose, so a partial translation PR is fine; you do not
   need to translate every string to contribute one. Two things any change must keep, checked by the
-  invariant tests: a placeholder (`{name}`-style) identical to the Korean value, and product and
-  command names — `Claude`, `Codex`, `Astera`, `Slack`, `GitHub`, `git`, `npm`, `PATH` — left
-  untranslated.
+  invariant tests: a placeholder (`{name}`-style) identical to the Korean value, and product, tool
+  and command names — `Claude`, `git`, `npm`, `Gradle` and the like — left untranslated. That list
+  grows as the app names more tools, so take it from `LITERALS` in `src/core/i18n/catalog.test.ts`
+  rather than from here.
+- **Adding a run configuration kind touches more places than the kind itself, and the useful split is
+  whether a miss fails the build.** These are exhaustive over the union, so forgetting one stops
+  `npm run typecheck`: `src/core/run/types.ts` (the string in `RunConfigType`, the interface in
+  `RunConfig`, and `optionalFieldsFor`), `buildCommand` in `run/build.ts`, the `REQUIRED` record in
+  `run/migrate.ts`, `seedKeyOf` in `run/config.ts`, `runTypeIcon` in `run/typeIcon.ts`, and
+  `defaultConfigFor` in `RunConfigManager.tsx`. These are hand-written lists no type covers, so a miss
+  is silent: the `KNOWN` array in `run/migrate.ts` — `migrateRunConfigs` guards the save as well as
+  the read (`run.saveConfig` in `main/ipc.ts` rejects what it drops), so the first symptom is that a
+  configuration of the new kind cannot be saved at all, not that it vanishes on reload — the per-kind
+  field blocks in `RunConfigForm.tsx`, which are `draft.type === …` guards, so the form just draws
+  nothing; `BLANKABLE` in the same file, which every new optional text field has to join, or clearing
+  the box stores `''` rather than removing the field and the row can never be dismissed again;
+  `ALL_TYPES` in `RunTypePicker.tsx`, so the ＋ menu never offers the kind; and the kind lists in
+  `run/types.test.ts`, `run/typeIcon.test.ts` and `LITERALS` in `i18n/catalog.test.ts`, whose
+  invariants stop covering it while still passing. Beyond both groups, a kind needs its
+  `run.type.<kind>` label in the four catalogs, and it only lands under "detected in this project" if
+  something supplies the evidence — a seed configuration, a boolean derived from the project's root
+  file list, or a scan.
 - The README ships in the same four languages, as `README.md` (English, the source), `README.ko.md`,
   `README.ja.md` and `README.es.md`, each linking to the others under the badges. A change to the
   English README that alters what the app does or how it is installed belongs in the translations
