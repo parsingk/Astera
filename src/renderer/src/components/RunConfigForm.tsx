@@ -95,7 +95,8 @@ export function RunConfigForm({
   // (`cwd.trim() || undefined`). javaHome goes through changeNow with its own `|| undefined` instead,
   // since it is never typed freehand here (Select or the folder picker only).
   const BLANKABLE = [
-    'cwd', 'args', 'springProfiles', 'features', 'packagePath', 'nodePath', 'target', 'composeFile', 'services'
+    'cwd', 'args', 'springProfiles', 'features', 'packagePath', 'nodePath', 'target', 'composeFile', 'services',
+    'dockerfilePath', 'buildArgs', 'runArgs'
   ] as const
   const flush = (): void => {
     const next = { ...draft } as unknown as Record<string, unknown>
@@ -153,6 +154,13 @@ export function RunConfigForm({
     // Project-relative, same as cwd — an empty value means "use what the project context found",
     // the same "empty means default" meaning as cwd's own '' fallback, so the same `|| undefined` applies.
     if (file) changeNow({ ...draft, composeFile: toRelativeCwd(file, projectPath) || undefined })
+  }
+  const pickDockerfilePath = async (): Promise<void> => {
+    if (draft.type !== 'dockerfile') return
+    const file = await window.api.system.pickFile(projectPath)
+    // Same "empty means default" meaning as composeFile's own '' fallback — an empty value means
+    // "docker build's own default of ./Dockerfile", not "no Dockerfile".
+    if (file) changeNow({ ...draft, dockerfilePath: toRelativeCwd(file, projectPath) || undefined })
   }
 
   const knownJdkPaths = new Set((jdks ?? []).map((j) => j.path))
@@ -265,6 +273,17 @@ export function RunConfigForm({
             value={draft.subcommand}
             onChange={(v) => changeNow({ ...draft, subcommand: v as 'run' | 'test' | 'build' })}
             ariaLabel={t('run.field.subcommand')}
+          />
+        </div>
+      )}
+      {draft.type === 'dockerfile' && (
+        <div className="field">
+          <label>{t('run.field.imageTag')}</label>
+          <input
+            type="text"
+            value={draft.imageTag}
+            onChange={(e) => change({ ...draft, imageTag: e.target.value })}
+            onBlur={flush}
           />
         </div>
       )}
@@ -444,7 +463,47 @@ export function RunConfigForm({
           />
         </div>
       )}
-      {draft.type !== 'shell' && visible('args') && (
+      {draft.type === 'dockerfile' && visible('dockerfilePath') && (
+        <div className="field">
+          <label>{t('run.field.dockerfilePath')}</label>
+          <div className="row">
+            <input
+              type="text"
+              value={draft.dockerfilePath ?? ''}
+              onChange={(e) => change({ ...draft, dockerfilePath: e.target.value })}
+              onBlur={flush}
+            />
+            <button type="button" onClick={() => void pickDockerfilePath()}>
+              {t('run.form.dockerfilePathBrowse')}
+            </button>
+          </div>
+        </div>
+      )}
+      {draft.type === 'dockerfile' && visible('buildArgs') && (
+        <div className="field">
+          <label>{t('run.field.buildArgs')}</label>
+          <input
+            type="text"
+            value={draft.buildArgs ?? ''}
+            onChange={(e) => change({ ...draft, buildArgs: e.target.value })}
+            onBlur={flush}
+          />
+        </div>
+      )}
+      {draft.type === 'dockerfile' && visible('runArgs') && (
+        <div className="field">
+          <label>{t('run.field.runArgs')}</label>
+          <input
+            type="text"
+            value={draft.runArgs ?? ''}
+            onChange={(e) => change({ ...draft, runArgs: e.target.value })}
+            onBlur={flush}
+          />
+        </div>
+      )}
+      {/* dockerfile has no generic args field — buildArgs/runArgs above cover it, so it is excluded here
+          the same way shell is (shell's args go straight into the command instead) */}
+      {draft.type !== 'shell' && draft.type !== 'dockerfile' && visible('args') && (
         <div className="field">
           <label>{t('run.field.args')}</label>
           <input

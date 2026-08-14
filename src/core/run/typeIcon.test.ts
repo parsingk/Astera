@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { runTypeIcon } from './typeIcon'
 import type { RunConfigType } from './types'
 
-const ALL: RunConfigType[] = ['shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest', 'compose']
+const ALL: RunConfigType[] = [
+  'shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest', 'compose', 'dockerfile'
+]
 
 describe('runTypeIcon', () => {
   it('모든 종류에 아이콘이 있다', () => {
@@ -51,5 +53,10 @@ describe('runTypeIcon', () => {
   // 파일 트리의 docker-compose.yml/compose.yaml 과 같은 모양
   it('compose 는 파일 트리의 compose 파일과 같은 모양이다', () => {
     expect(runTypeIcon('compose')).toEqual({ id: 'container', tone: 'blue' })
+  })
+
+  // 파일 트리도 Dockerfile 과 compose 파일을 구분하지 않는다(files/icons.ts) — 여기서도 같은 모양이다
+  it('dockerfile 은 compose 와 같은 모양이다 — 파일 트리도 둘을 구분하지 않는다', () => {
+    expect(runTypeIcon('dockerfile')).toEqual({ id: 'container', tone: 'blue' })
   })
 })

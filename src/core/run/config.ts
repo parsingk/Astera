@@ -89,6 +89,17 @@ export function isSpringBootProject(texts: { buildGradle: string | null; pom: st
   )
 }
 
+/** Whether the project root has a Dockerfile — the run type picker's detection signal for
+ *  'dockerfile'. Unlike python/pytest (hasPythonProject in core/run/python.ts) there is no scanner and
+ *  no dedicated project-type concept: ipc.ts's run.list already reads the root file list for every
+ *  other seed, so this fact is already in hand and only needs a name to travel under. It is not part of
+ *  RunContext (unlike composeFile) because nothing in buildCommand's 'dockerfile' case reads context —
+ *  imageTag, dockerfilePath and both argument strings all live on the config itself, so there is no
+ *  assembly-time reason for this to double as anything beyond a detection flag. */
+export function hasDockerfile(files: string[]): boolean {
+  return files.includes('Dockerfile')
+}
+
 /** The identity of a config — its type plus the core parameter that makes it what it is.
  *
  *  This used to be the assembled command. Now that the command is a derived value, comparing by it would make a
@@ -116,6 +127,8 @@ export function seedKeyOf(c: RunConfig): string {
       return `pytest:${c.target ?? ''}`
     case 'compose':
       return `compose:${c.composeFile ?? ''}:${c.services ?? ''}`
+    case 'dockerfile':
+      return `dockerfile:${c.imageTag}`
   }
 }
 

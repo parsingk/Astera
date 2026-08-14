@@ -583,6 +583,8 @@ export const ko = {
   'run.form.composeFileBrowse': '찾아보기…',
   'run.form.composeServicesLoading': 'Compose 서비스 조회 중…',
   'run.form.composeServicesHint': '후보: {list}',
+  // Dockerfile 경로 찾기 버튼 (Task 11)
+  'run.form.dockerfilePathBrowse': '찾아보기…',
   // RunConfigManager.tsx — the two-pane dialog. run.type.* are kind labels grouping the tree;
   // product/tool names among them (npm, Gradle, Maven, cargo, go, Python, pytest) are not translated.
   'run.manager.title': '실행 구성',
@@ -602,6 +604,7 @@ export const ko = {
   'run.type.python': 'Python',
   'run.type.pytest': 'pytest',
   'run.type.compose': 'Docker Compose',
+  'run.type.dockerfile': 'Dockerfile',
   // RunConfigForm.tsx / RunTypePicker.tsx (Task 7) — per-kind field labels and the ＋ kind-picker popup.
   'run.field.javaHome': 'JDK',
   'run.field.springProfiles': 'Spring 프로파일',
@@ -627,6 +630,11 @@ export const ko = {
   'run.field.composeFile': 'Compose 파일',
   'run.field.services': '서비스',
   'run.field.action': '동작',
+  // Dockerfile 필드 (Task 11) — imageTag 만 필수, 나머지는 선택
+  'run.field.imageTag': '이미지 태그',
+  'run.field.dockerfilePath': 'Dockerfile 경로',
+  'run.field.buildArgs': '빌드 인자',
+  'run.field.runArgs': '실행 인자',
   'run.picker.search': '검색…',
   'run.picker.detected': '이 프로젝트에서 감지됨',
   'run.picker.other': '기타',

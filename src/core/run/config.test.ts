@@ -8,6 +8,7 @@ import {
   parseEnvLines,
   formatEnvLines,
   isSpringBootProject,
+  hasDockerfile,
   toRelativeCwd,
   type RunConfig
 } from './config'
@@ -212,6 +213,12 @@ describe('seedKeyOf', () => {
       seedKeyOf({ id: 'x', name: 'x', type: 'compose', composeFile: 'docker-compose.yml', services: 'web' })
     ).toBe('compose:docker-compose.yml:web')
   })
+
+  it('dockerfile 은 imageTag 로 정체를 짓는다', () => {
+    expect(seedKeyOf({ id: 'x', name: 'x', type: 'dockerfile', imageTag: 'astera:dev' })).toBe(
+      'dockerfile:astera:dev'
+    )
+  })
 })
 
 describe('parseEnvLines', () => {
@@ -267,6 +274,15 @@ describe('isSpringBootProject', () => {
   it('둘 다 없거나 마커가 없으면 false', () => {
     expect(isSpringBootProject({ buildGradle: null, pom: null })).toBe(false)
     expect(isSpringBootProject({ buildGradle: "id 'java'", pom: null })).toBe(false)
+  })
+})
+
+describe('hasDockerfile', () => {
+  it('루트에 Dockerfile 이 있으면 true', () => {
+    expect(hasDockerfile(['Dockerfile', 'package.json'])).toBe(true)
+  })
+  it('없으면 false', () => {
+    expect(hasDockerfile(['package.json'])).toBe(false)
   })
 })
 

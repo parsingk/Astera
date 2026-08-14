@@ -98,6 +98,47 @@ describe('buildCommand', () => {
   it('compose 파일이 전혀 없으면 -f 없이 부른다', () => {
     expect(buildCommand({ ...base, type: 'compose' }, ctx)).toBe('docker compose up')
   })
+
+  it('dockerfile 은 빌드와 실행을 && 로 잇는다', () => {
+    // 실행이 cmd.exe /c 또는 sh -c 를 거치므로 셸이 && 를 해석한다 (runManager.ts:40)
+    expect(buildCommand({ ...base, type: 'dockerfile', imageTag: 'astera:dev' }, ctx)).toBe(
+      'docker build -t astera:dev . && docker run --rm astera:dev'
+    )
+  })
+
+  it('dockerfile 의 경로와 인자를 붙인다', () => {
+    expect(
+      buildCommand(
+        {
+          ...base,
+          type: 'dockerfile',
+          imageTag: 'astera:dev',
+          dockerfilePath: 'docker/Dockerfile.dev',
+          buildArgs: '--no-cache',
+          runArgs: '-p 3000:3000'
+        },
+        ctx
+      )
+    ).toBe(
+      'docker build -t astera:dev -f docker/Dockerfile.dev --no-cache . && docker run --rm -p 3000:3000 astera:dev'
+    )
+  })
+
+  // node 의 파일 경로 인용 테스트와 같은 모양 — 공백이 있는 값에서만 두 셸의 인용이 갈린다
+  it('dockerfile 의 경로에 공백이 있으면 각 셸의 방식으로 인용한다', () => {
+    expect(
+      buildCommand(
+        { ...base, type: 'dockerfile', imageTag: 'astera:dev', dockerfilePath: 'docker files/Dockerfile' },
+        ctx
+      )
+    ).toBe('docker build -t astera:dev -f "docker files/Dockerfile" . && docker run --rm astera:dev')
+    expect(
+      buildCommand(
+        { ...base, type: 'dockerfile', imageTag: 'astera:dev', dockerfilePath: 'docker files/Dockerfile' },
+        posix
+      )
+    ).toBe("docker build -t astera:dev -f 'docker files/Dockerfile' . && docker run --rm astera:dev")
+  })
 })
 
 describe('quoteArg', () => {

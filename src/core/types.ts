@@ -428,6 +428,10 @@ export interface CoreApi {
       // Whether RunTypePicker should show 'python'/'pytest' as detected (pyproject.toml, requirements.txt,
       // or a *.py file at the project root) — there is no seed config for either kind to key that off of.
       isPythonProject: boolean
+      // Whether RunTypePicker should show 'dockerfile' as detected (a Dockerfile at the project root) —
+      // same "no seed to key off of" situation as isPythonProject. Not part of RunContext like
+      // composeFile is, because nothing in buildCommand's 'dockerfile' case reads context.
+      hasDockerfile: boolean
       context: RunContext
     }>
     listActive(): Promise<RunStatus[]> // all active runs — for the count badge and the dropdown

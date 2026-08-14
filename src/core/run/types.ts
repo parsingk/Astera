@@ -12,6 +12,7 @@ export type RunConfigType =
   | 'python'
   | 'pytest'
   | 'compose'
+  | 'dockerfile'
 
 /** What every kind shares. cwd is relative to the project root — empty means the root */
 interface RunConfigBase {
@@ -105,6 +106,18 @@ export interface ComposeConfig extends RunConfigBase {
   args?: string
 }
 
+/** Unlike Compose, nothing here reads from RunContext at assembly time — the image tag, Dockerfile
+ *  path and both argument strings are all on the config itself, so there is no project-wide fact this
+ *  kind needs handed down (no scanner, no context field: see typeIcon.ts and RunConfigManager.tsx for
+ *  where "is there a Dockerfile at the root" surfaces instead). */
+export interface DockerfileConfig extends RunConfigBase {
+  type: 'dockerfile'
+  imageTag: string
+  dockerfilePath?: string
+  buildArgs?: string
+  runArgs?: string
+}
+
 export type RunConfig =
   | ShellConfig
   | NpmConfig
@@ -116,6 +129,7 @@ export type RunConfig =
   | PythonConfig
   | PytestConfig
   | ComposeConfig
+  | DockerfileConfig
 
 /** The optional field keys a kind knows about. The form's "add optional field" dropdown is built
  *  from this.
@@ -145,5 +159,7 @@ export function optionalFieldsFor(type: RunConfigType, opts: { springBoot: boole
       return ['target', 'interpreter', 'args', ...common]
     case 'compose':
       return ['composeFile', 'services', 'action', 'args', ...common]
+    case 'dockerfile':
+      return ['dockerfilePath', 'buildArgs', 'runArgs', ...common]
   }
 }

@@ -94,4 +94,11 @@ describe('migrateRunConfigs', () => {
       { id: 'x', name: 'x', type: 'compose' }
     ])
   })
+
+  it('dockerfile 은 imageTag 가 필수다', () => {
+    expect(migrateRunConfigs([{ id: 'x', name: 'x', type: 'dockerfile' }])).toEqual([])
+    expect(migrateRunConfigs([{ id: 'x', name: 'x', type: 'dockerfile', imageTag: 'astera:dev' }])).toEqual([
+      { id: 'x', name: 'x', type: 'dockerfile', imageTag: 'astera:dev' }
+    ])
+  })
 })

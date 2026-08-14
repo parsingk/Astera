@@ -77,6 +77,25 @@ export function buildCommand(config: RunConfig, ctx: RunContext): string {
       const file = config.composeFile || ctx.composeFile
       return join('docker compose', file ? `-f ${q(file)}` : '', config.action ?? 'up', config.services, config.args)
     }
+    case 'dockerfile': {
+      // imageTag and dockerfilePath both go through quoteArg like any other single value (bare unless
+      // they need quoting — the same rule compose's -f above uses for its file). buildArgs/runArgs are
+      // multi-token by design (the same convention as args everywhere else in this file), so they are
+      // spliced in unquoted.
+      const build = join(
+        'docker build',
+        '-t',
+        q(config.imageTag),
+        config.dockerfilePath ? `-f ${q(config.dockerfilePath)}` : '',
+        config.buildArgs,
+        '.'
+      )
+      const run = join('docker run --rm', config.runArgs, q(config.imageTag))
+      // Joined with && rather than run as two separate steps: both cmd.exe (win32) and sh (posix) — the
+      // only two shells runManager.ts hands the assembled command to — read && the same way, so this is
+      // safe here even though buildCommand cannot in general assume a POSIX-compatible shell.
+      return `${build} && ${run}`
+    }
   }
 }
 

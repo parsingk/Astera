@@ -36,6 +36,8 @@ function defaultConfigFor(type: RunConfigType, id: string, name: string, npmScri
       return { id, name, type }
     case 'compose':
       return { id, name, type }
+    case 'dockerfile':
+      return { id, name, type, imageTag: '' }
   }
 }
 
@@ -57,6 +59,7 @@ export function RunConfigManager({
   context,
   isSpringBoot,
   isPythonProject,
+  hasDockerfile,
   projectPath,
   onSave,
   onDelete,
@@ -70,6 +73,12 @@ export function RunConfigManager({
   /** Whether RunTypePicker should show 'python'/'pytest' as detected — run.list decides this from the
    *  project root's file list (hasPythonProject), since neither kind has a seed config to key off of */
   isPythonProject: boolean
+  /** Whether RunTypePicker should show 'dockerfile' as detected — run.list decides this from the
+   *  project root's file list (hasDockerfile in core/run/config.ts), the same "no seed to key off of"
+   *  situation as isPythonProject above. Not folded into `context` the way compose's composeFile is:
+   *  buildCommand's 'dockerfile' case never reads context, so there is no assembly-time reason for this
+   *  fact to live there too — it is only ever a detection flag. */
+  hasDockerfile: boolean
   /** Base for the form's working-folder and JDK/interpreter "Choose…" pickers */
   projectPath: string
   onSave: (config: RunConfig) => void
@@ -180,11 +189,16 @@ export function RunConfigManager({
   // compose is the same situation, but its signal is cheaper to reuse than adding a seed: buildRunContext
   // already found (or didn't find) a compose file for the command-assembly context this component holds,
   // so context.composeFile doubles as the detection evidence instead of a seed:compose:… entry.
+  // dockerfile has no seed either, but unlike compose its assembly (buildCommand's 'dockerfile' case)
+  // never reads context — imageTag/dockerfilePath/buildArgs/runArgs all live on the config — so there is
+  // no RunContext field to double-purpose. It follows isPythonProject's shape instead: a plain boolean
+  // threaded down from run.list's own file-list read (hasDockerfile in core/run/config.ts).
   const detectedTypes = Array.from(
     new Set([
       ...configs.filter((c) => c.id.startsWith('seed:')).map((c) => c.type),
       ...(isPythonProject ? (['python', 'pytest'] as const) : []),
-      ...(context.composeFile ? (['compose'] as const) : [])
+      ...(context.composeFile ? (['compose'] as const) : []),
+      ...(hasDockerfile ? (['dockerfile'] as const) : [])
     ])
   )
   const [pickerOpen, setPickerOpen] = useState(false)

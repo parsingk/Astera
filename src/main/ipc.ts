@@ -757,7 +757,9 @@ export function registerIpc(
       /* An empty list if it cannot be read */
     }
     const texts = await readSeedTexts(projectPath, files)
-    const { detectSeedConfigs, mergeConfigs, isSpringBootProject } = await import('../core/run/config')
+    const { detectSeedConfigs, mergeConfigs, isSpringBootProject, hasDockerfile } = await import(
+      '../core/run/config'
+    )
     const { buildRunContext } = await import('../core/run/build')
     const { hasPythonProject } = await import('../core/run/python')
     const configs = mergeConfigs(detectSeedConfigs(files, texts), core.runConfig.get(projectPath))
@@ -770,6 +772,10 @@ export function registerIpc(
       // config for them (no single entry point to key detection off of the way seedKeyOf does for the
       // other kinds), so this is threaded down separately instead.
       isPythonProject: hasPythonProject(files),
+      // Same situation as isPythonProject: 'dockerfile' has no seed either, so its detection travels as
+      // its own flag rather than through a seed:dockerfile:… entry or through context (buildCommand's
+      // 'dockerfile' case never reads context, unlike compose's composeFile).
+      hasDockerfile: hasDockerfile(files),
       // Same buildRunContext call as run.start below — the form's preview and the actual run must agree
       context: buildRunContext(files, process.platform)
     }

@@ -44,5 +44,11 @@ export function runTypeIcon(type: RunConfigType): FileIconSpec {
     // EXACT table) — the same reasoning as go and python above.
     case 'compose':
       return { id: 'container', tone: 'blue' }
+    // Same shape as compose, deliberately: files/icons.ts itself does not distinguish Dockerfile from
+    // docker-compose.yml (both get { container, blue }, see its EXACT table and its 'dockerfile' PREFIX
+    // entry) — Docker is one tool with two config files, not two tools, so giving this kind a different
+    // mark would invent a distinction the file tree does not draw.
+    case 'dockerfile':
+      return { id: 'container', tone: 'blue' }
   }
 }
