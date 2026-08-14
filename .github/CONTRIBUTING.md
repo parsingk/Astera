@@ -36,10 +36,10 @@ Issues and pull requests are welcome. A couple of things worth knowing before yo
   whether a miss fails the build.** These are exhaustive over the union, so forgetting one stops
   `npm run typecheck`: `src/core/run/types.ts` (the string in `RunConfigType`, the interface in
   `RunConfig`, and `optionalFieldsFor`), `buildCommand` in `run/build.ts`, the `REQUIRED` record in
-  `run/migrate.ts`, `seedKeyOf` in `run/config.ts`, `runTypeIcon` in `run/typeIcon.ts`, and
-  `defaultConfigFor` in `RunConfigManager.tsx` — plus the per-kind expectation tables the tests are
-  driven from, each a `Record<RunConfigType, …>` for exactly this reason: `OPTIONAL` in
-  `run/types.test.ts`, `ICONS` in `run/typeIcon.test.ts` and `COMPLETE` in `run/migrate.test.ts`.
+  `run/migrate.ts`, `seedKeyOf` and `defaultConfigFor` in `run/config.ts`, and `runTypeIcon` in
+  `run/typeIcon.ts` — plus the per-kind expectation tables the tests are driven from, each a
+  `Record<RunConfigType, …>` for exactly this reason: `OPTIONAL` in `run/types.test.ts`, `ICONS` in
+  `run/typeIcon.test.ts`, `COMPLETE` in `run/migrate.test.ts` and `START` in `run/config.test.ts`.
   These are hand-written lists no type covers, so a miss
   is silent: the `KNOWN` array in `run/migrate.ts` — `migrateRunConfigs` guards the save as well as
   the read (`run.saveConfig` in `main/ipc.ts` rejects what it drops), so the first symptom is that a

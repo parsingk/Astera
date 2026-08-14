@@ -4,7 +4,7 @@
 // interfaces live in ./types and are only re-exported here, so a renderer module that needs both
 // still has one import.
 export type { RunConfig, RunConfigType } from './types'
-import type { RunConfig } from './types'
+import type { RunConfig, RunConfigType } from './types'
 
 // Live run state — used by the renderer count/dropdown and by the Run panel header
 export interface RunStatus {
@@ -171,6 +171,78 @@ export function mergeConfigs(seed: RunConfig[], stored: RunConfig[]): RunConfig[
  *  no second suppression to add here. */
 export function promoteSeed(config: RunConfig, newId: string): RunConfig {
   return { ...config, id: newId }
+}
+
+/** A new configuration's starting values for a kind, right after it is picked in RunTypePicker.
+ *
+ *  No kind may be born holding a *seed's* identity. mergeConfigs hides a seed the moment a stored
+ *  configuration shares its seedKeyOf, and ＋ stores the new configuration immediately (run.saveConfig,
+ *  see migrateRunConfigs' allowIncomplete), so a starting value that matches a detected configuration
+ *  takes that row out of the list as soon as the kind is picked — before anything has been typed, and
+ *  with no way to cancel. Three kinds could: npm started on the project's first script, and cargo and
+ *  go on `run`, which is exactly what detectSeedConfigs seeds for them. Each of those now starts on the
+ *  first candidate no seed has claimed. Only seeds are looked at, because only they can be hidden:
+ *  mergeConfigs filters the seed side alone, so two stored configurations sharing an identity both stay
+ *  on screen.
+ *
+ *  npm falls back to an empty script when every candidate is seeded — which is the usual case, since
+ *  every package.json script gets a seed. An empty required field is a value this app stores now, and
+ *  run.start is what refuses to run it; the form's Select draws its own "not selected" placeholder for
+ *  it, so this needs no copy of its own. cargo/go have no such fallback to reach — their subcommand is
+ *  a three-value union with no empty member — but detectSeedConfigs only ever seeds `run`, so a free
+ *  candidate always exists and the fallback below is the unreachable arm.
+ *
+ *  dotnet keeps the scanned default it was given — defaultDotnetProject rather than [0], since the
+ *  first entry is often a .sln and the subcommand this starts on (`run`) rejects one. Nothing can be
+ *  displaced there: .NET has no seed configurations. */
+export function defaultConfigFor(
+  type: RunConfigType,
+  id: string,
+  name: string,
+  /** The configurations on screen — only the seeds among them matter, see above */
+  existing: RunConfig[],
+  /** Script names already known for this project — the npm Select's candidate list */
+  npmScripts: string[],
+  dotnetProjects: string[]
+): RunConfig {
+  const seeded = new Set(existing.filter((c) => c.id.startsWith('seed:')).map(seedKeyOf))
+  // Candidates are compared through seedKeyOf itself rather than by spelling its key strings out a
+  // second time here, so a change to the identity rule cannot drift out from under this.
+  const firstFree = (candidates: RunConfig[], fallback: RunConfig): RunConfig =>
+    candidates.find((c) => !seeded.has(seedKeyOf(c))) ?? fallback
+  const SUBCOMMANDS = ['run', 'test', 'build'] as const
+  switch (type) {
+    case 'shell':
+      return { id, name, type, command: '' }
+    case 'npm': {
+      const candidates: RunConfig[] = npmScripts.map((script) => ({ id, name, type: 'npm', script }))
+      return firstFree(candidates, { id, name, type: 'npm', script: '' })
+    }
+    case 'node':
+      return { id, name, type, file: '' }
+    case 'gradle':
+      return { id, name, type, tasks: '' }
+    case 'maven':
+      return { id, name, type, goals: '' }
+    case 'cargo': {
+      const candidates: RunConfig[] = SUBCOMMANDS.map((subcommand) => ({ id, name, type: 'cargo', subcommand }))
+      return firstFree(candidates, { id, name, type: 'cargo', subcommand: 'run' })
+    }
+    case 'go': {
+      const candidates: RunConfig[] = SUBCOMMANDS.map((subcommand) => ({ id, name, type: 'go', subcommand }))
+      return firstFree(candidates, { id, name, type: 'go', subcommand: 'run' })
+    }
+    case 'python':
+      return { id, name, type, file: '' }
+    case 'pytest':
+      return { id, name, type }
+    case 'compose':
+      return { id, name, type }
+    case 'dockerfile':
+      return { id, name, type, imageTag: '' }
+    case 'dotnet':
+      return { id, name, type, project: defaultDotnetProject(dotnetProjects) }
+  }
 }
 
 /** One `KEY=VALUE` per line → map. Blank lines and `#` comments are ignored. Splits on the first `=` only (the value may contain `=`). */

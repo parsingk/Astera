@@ -1617,10 +1617,14 @@ export default function App(): React.JSX.Element {
   }
   /** RunConfigManager's onSave. It always hands over an assembled RunConfig of whatever kind — there
    *  is no per-field signature to match, so this one handler covers add, edit, and the promotion of a
-   *  seed into a user configuration copy (RunConfigManager.tsx's handleFormChange). */
-  const runManagerSave = (config: RunConfig): void => {
-    if (!explorerRoot) return
-    void window.api.run.saveConfig(explorerRoot, config).then(
+   *  seed into a user configuration copy (RunConfigManager.tsx's handleFormChange).
+   *
+   *  Answers whether the configuration reached the store: run.saveConfig refuses a value the command
+   *  gate rejects, and the dialog has to take a refused new configuration back out of its tree rather
+   *  than leave a row nothing is behind. */
+  const runManagerSave = (config: RunConfig): Promise<boolean> => {
+    if (!explorerRoot) return Promise.resolve(false)
+    return window.api.run.saveConfig(explorerRoot, config).then(
       () => {
         void window.api.run.list(explorerRoot).then((r) => {
           setRunConfigs(r.configs)
@@ -1632,8 +1636,12 @@ export default function App(): React.JSX.Element {
           // and pressing it fails with NO_CONFIG.
           setRunSelectedId((prev) => (r.configs.some((c) => c.id === prev) ? prev : r.configs[0]?.id ?? null))
         })
+        return true
       },
-      (err) => toast.error(t('run.config.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
+      (err) => {
+        toast.error(t('run.config.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
+        return false
+      }
     )
   }
   /** 실행 중 목록에서 다른 프로젝트로 점프. 트리 루트는 활성 탭이 정하므로, 그 프로젝트에 속한 탭을

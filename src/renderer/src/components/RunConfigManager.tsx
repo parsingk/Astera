@@ -4,53 +4,12 @@ import type { RunContext } from '../../../core/run/build'
 import type { RunConfigType } from '../../../core/run/types'
 import type { MessageKey } from '../../../core/i18n'
 import { runTypeIcon } from '../../../core/run/typeIcon'
-import { promoteSeed, defaultDotnetProject } from '../../../core/run/config'
+import { promoteSeed, defaultConfigFor } from '../../../core/run/config'
 import { uniqueName } from '../../../core/files/ops'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
 import { RunConfigForm } from './RunConfigForm'
 import { RunTypePicker } from './RunTypePicker'
-
-/** A new configuration's starting values for a kind, right after it is picked in RunTypePicker.
- *  npmScript defaults to the project's first known script rather than '' — an npm configuration with
- *  no script name is not a useful starting point, and it sidesteps an empty Select needing its own
- *  "nothing picked yet" placeholder copy. dotnet's project file defaults the same way, off the
- *  scanner's list, for the same two reasons — but through defaultDotnetProject rather than [0], since
- *  the first entry is often a .sln and the subcommand this starts on (`run`) rejects one. */
-function defaultConfigFor(
-  type: RunConfigType,
-  id: string,
-  name: string,
-  npmScripts: string[],
-  dotnetProjects: string[]
-): RunConfig {
-  switch (type) {
-    case 'shell':
-      return { id, name, type, command: '' }
-    case 'npm':
-      return { id, name, type, script: npmScripts[0] ?? '' }
-    case 'node':
-      return { id, name, type, file: '' }
-    case 'gradle':
-      return { id, name, type, tasks: '' }
-    case 'maven':
-      return { id, name, type, goals: '' }
-    case 'cargo':
-      return { id, name, type, subcommand: 'run' }
-    case 'go':
-      return { id, name, type, subcommand: 'run' }
-    case 'python':
-      return { id, name, type, file: '' }
-    case 'pytest':
-      return { id, name, type }
-    case 'compose':
-      return { id, name, type }
-    case 'dockerfile':
-      return { id, name, type, imageTag: '' }
-    case 'dotnet':
-      return { id, name, type, project: defaultDotnetProject(dotnetProjects) }
-  }
-}
 
 /** Run configuration management — a tree on the left, the selected configuration's form on the
  *  right. The same layout as IntelliJ's Run/Debug Configurations. It used to be a small modal reached
@@ -92,7 +51,10 @@ export function RunConfigManager({
   hasDockerfile: boolean
   /** Base for the form's working-folder and JDK/interpreter "Choose…" pickers */
   projectPath: string
-  onSave: (config: RunConfig) => void
+  /** Resolves false when the configuration did not reach the store — run.saveConfig still refuses a
+   *  value the command gate rejects (an unsafe character in a scanned .NET project path, say), and a
+   *  configuration that was never stored must not be left sitting in the tree. */
+  onSave: (config: RunConfig) => Promise<boolean>
   onDelete: (id: string) => void
   onClose: () => void
 }): React.JSX.Element {
@@ -102,18 +64,35 @@ export function RunConfigManager({
   // A freshly created configuration whose save has not round-tripped back through `configs` yet —
   // appended to the tree so the pane does not go blank for the width of one IPC call. It is a bridge
   // for that round trip only, never a place a configuration lives: ＋, ⧉ and the seed promotion below
-  // all call onSave in the same breath as setPending. (It used to be the only home of a new
-  // configuration until the first blur saved it — and being a single slot, a second ＋ threw the first
-  // one away. run.saveConfig now accepts an incomplete configuration precisely so it does not have to
-  // wait here.) Read during render (the same "derive, don't duplicate" convention as draftForId in
-  // RunConfigForm): once its id shows up in `configs` it is dropped rather than tracked further, so a
-  // later delete of the real record cannot resurrect this stale local copy.
+  // all go through saveNew, which saves in the same breath as it sets this and drops it again if the
+  // save is refused. (It used to be the only home of a new configuration until the first blur saved it
+  // — and being a single slot, a second ＋ threw the first one away. run.saveConfig now accepts an
+  // incomplete configuration precisely so it does not have to wait here.) Read during render (the same
+  // "derive, don't duplicate" convention as draftForId in RunConfigForm): once its id shows up in
+  // `configs` it is dropped rather than tracked further, so a later delete of the real record cannot
+  // resurrect this stale local copy.
   const [pending, setPending] = useState<RunConfig | null>(null)
   if (pending && configs.some((c) => c.id === pending.id)) setPending(null)
   const displayConfigs = pending && !configs.some((c) => c.id === pending.id) ? [...configs, pending] : configs
   const selected = displayConfigs.find((c) => c.id === selectedId) ?? null
   const isSeed = !!selected && selected.id.startsWith('seed:')
   const isPending = !!pending && selected?.id === pending.id
+
+  /** Shows a configuration that is not in the store yet and saves it — ＋, ⧉ and the seed promotion
+   *  below all go through here. If the save is refused the bridge is taken back down again: run.saveConfig
+   *  still rejects a value the command gate refuses, and until this a refused configuration stayed in
+   *  the tree as a row backed by nothing, in the single slot the next ＋ overwrites — the same loss ＋
+   *  saving immediately was meant to end. The selection then falls back to the first configuration
+   *  left, the same rule the delete path uses. */
+  const saveNew = (config: RunConfig): void => {
+    setPending(config)
+    setSelectedId(config.id)
+    void onSave(config).then((stored) => {
+      if (stored) return
+      setPending((p) => (p?.id === config.id ? null : p))
+      setSelectedId((cur) => (cur === config.id ? (configs[0]?.id ?? null) : cur))
+    })
+  }
 
   // RunConfigForm's onChange, for every configuration — not just seeds. A seed edit promotes: the
   // edited value itself (not the pre-edit selected) becomes the user copy, so the change that
@@ -124,13 +103,10 @@ export function RunConfigManager({
   // stored config shares its seedKeyOf, so no separate suppression is needed here.
   const handleFormChange = (next: RunConfig): void => {
     if (!next.id.startsWith('seed:')) {
-      onSave(next)
+      void onSave(next)
       return
     }
-    const promoted = promoteSeed(next, `user:${crypto.randomUUID()}`)
-    setPending(promoted)
-    setSelectedId(promoted.id)
-    onSave(promoted)
+    saveNew(promoteSeed(next, `user:${crypto.randomUUID()}`))
   }
 
   // The JDK list does not depend on which configuration is selected, so it is fetched once here
@@ -268,15 +244,14 @@ export function RunConfigManager({
                     onPick={(type) => {
                       const id = `user:${crypto.randomUUID()}`
                       const name = t(`run.type.${type}` as MessageKey)
-                      const created = defaultConfigFor(type, id, name, npmScripts, dotnetProjects ?? [])
-                      setPending(created)
-                      setSelectedId(id)
                       setPickerOpen(false)
-                      // Stored immediately, not on the first blur. Six kinds start with their required
+                      // Stored immediately, not on the first blur. Most kinds start with their required
                       // field empty, so waiting for the form to make it valid left the configuration in
                       // `pending` — a single slot the next ＋ overwrote. run.saveConfig accepts it
                       // (migrateRunConfigs' allowIncomplete); run.start is what refuses to run it.
-                      onSave(created)
+                      // The starting values are picked so the new configuration cannot take a detected
+                      // configuration's identity and hide its row — see defaultConfigFor.
+                      saveNew(defaultConfigFor(type, id, name, displayConfigs, npmScripts, dotnetProjects ?? []))
                     }}
                     onClose={() => setPickerOpen(false)}
                   />
@@ -292,6 +267,10 @@ export function RunConfigManager({
                   // so the delete always goes to the store. Dropping the local bridge as well keeps the
                   // row from lingering until the delete round-trips.
                   if (isPending) setPending(null)
+                  // The selection has to move off the row that is leaving, or the form pane goes blank
+                  // with configurations still in the tree (＋ then − was the shortest way to see it).
+                  // The first one left is what App's own delete reconciliation falls back to.
+                  setSelectedId(displayConfigs.find((c) => c.id !== selected.id)?.id ?? null)
                   onDelete(selected.id)
                 }}
               >
@@ -308,13 +287,10 @@ export function RunConfigManager({
                   // have promoted it with — no second conversion to keep in step. uniqueName is the
                   // app's existing copy-naming rule (the file explorer's own duplicate uses it), so the
                   // copy is something the user can tell apart in the tree.
-                  const copy = {
+                  saveNew({
                     ...promoteSeed(selected, `user:${crypto.randomUUID()}`),
                     name: uniqueName(displayConfigs.map((c) => c.name), selected.name)
-                  }
-                  setPending(copy)
-                  setSelectedId(copy.id)
-                  onSave(copy)
+                  })
                 }}
               >
                 ⧉

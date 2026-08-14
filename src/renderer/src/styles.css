@@ -803,11 +803,15 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    later kind adding an eighth must not have to remember a class. Same prescription as
    .update-gate-actions button; the input side is the flex:1 + min-width:0 idiom .path-select and
    .run-config-cwd already state individually (width alone loses to the flex layout — see .sched-days).
-   The child combinator is load-bearing, not tidiness: a descendant form would also catch .sel-trigger,
-   the button *inside* a .path-select, whose whole job is width:100% — flex:none there would collapse
-   the JDK/interpreter/.NET dropdowns to their label width. (This stylesheet is the app's only one, and
-   nothing else here sets flex or white-space on a button reachable from .rcm-form, so what the sheet
-   says is what the element computes — the trap .rcm-tools > button above records.) */
+   The child combinator keeps the rule to the row's own buttons. A descendant form would also reach
+   .sel-trigger, the button *inside* a .path-select, and — measured in Chromium against this sheet — that
+   changes nothing today: .sel is a block, so its trigger is not a flex item and the flex it would pick
+   up is inert, and the trigger's width comes from its own width:100% either way. It is scoped anyway
+   because the Select owns that button's sizing, and this rule is about the picker button next to it.
+   (This stylesheet is the app's only one, and nothing else here sets flex or white-space on a button
+   reachable from .rcm-form — without these two rules the trigger computes flex-shrink:1,
+   white-space:normal — so what the sheet says is what the element computes: the trap
+   .rcm-tools > button above records.) */
 .rcm-form .row > input[type="text"] { flex: 1; min-width: 0; }
 .rcm-form .row > button { flex: none; white-space: nowrap; }
 .rcm-seed-hint { font-size: 12px; color: var(--text-faint); }

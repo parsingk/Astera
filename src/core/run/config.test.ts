@@ -9,6 +9,7 @@ import {
   formatEnvLines,
   isSpringBootProject,
   hasDockerfile,
+  defaultConfigFor,
   defaultDotnetProject,
   toRelativeCwd,
   type RunConfig,
@@ -193,6 +194,85 @@ describe('promoteSeed', () => {
     const seed = { id: 'seed:npm:dev', name: 'dev', type: 'npm' as const, script: 'dev' }
     const promoted = promoteSeed(seed, 'user:abc')
     expect(mergeConfigs([seed], [promoted]).map((c) => c.id)).toEqual(['user:abc'])
+  })
+})
+
+describe('defaultConfigFor', () => {
+  // ＋ 는 종류를 고르는 순간 저장한다(run.saveConfig 의 allowIncomplete). 그래서 새 구성이 시드와 같은
+  // 정체로 태어나면 mergeConfigs 가 그 시드를 그 자리에서 목록에서 빼 버린다 — 아직 아무것도 입력하지
+  // 않았고 되돌릴 방법도 없다. 아래는 "누르기 전 목록"과 "누른 뒤 목록"을 실제로 만들어 비교한다.
+  const npmSeeds = detectSeedConfigs(['package.json'], {
+    ...noTexts,
+    packageJson: JSON.stringify({ scripts: { dev: 'vite', build: 'vite build' } })
+  })
+
+  it('＋ npm 이 감지된 npm 구성을 목록에서 밀어내지 않는다', () => {
+    const before = mergeConfigs(npmSeeds, [])
+    expect(before.map((c) => c.id)).toEqual(['seed:npm:dev', 'seed:npm:build'])
+    const created = defaultConfigFor('npm', 'user:1', 'npm', before, ['dev', 'build'], [])
+    // 예전에는 ['user:1', 'seed:npm:build'] — dev 행이 통째로 사라졌다
+    expect(mergeConfigs(npmSeeds, [created]).map((c) => c.id)).toEqual([
+      'user:1',
+      'seed:npm:dev',
+      'seed:npm:build'
+    ])
+  })
+
+  it('npm 후보가 모두 시드면 빈 스크립트로 시작한다', () => {
+    const created = defaultConfigFor('npm', 'user:1', 'npm', mergeConfigs(npmSeeds, []), ['dev', 'build'], [])
+    expect(created).toEqual({ id: 'user:1', name: 'npm', type: 'npm', script: '' })
+  })
+
+  it('시드가 없는 스크립트가 있으면 그것으로 시작한다', () => {
+    // npmScripts 는 목록의 npm 구성에서 모으므로 package.json 에 없는 스크립트도 들어 있을 수 있다
+    const stored: RunConfig[] = [{ id: 'user:1', name: 'lint', type: 'npm', script: 'lint' }]
+    const list = mergeConfigs(npmSeeds, stored)
+    const created = defaultConfigFor('npm', 'user:2', 'npm', list, ['dev', 'build', 'lint'], [])
+    expect(created).toEqual({ id: 'user:2', name: 'npm', type: 'npm', script: 'lint' })
+  })
+
+  it('＋ cargo·go 가 감지된 run 구성을 밀어내지 않는다', () => {
+    const seeds = detectSeedConfigs(['Cargo.toml', 'go.mod'], noTexts)
+    const before = mergeConfigs(seeds, [])
+    expect(before.map((c) => c.id)).toEqual(['seed:cargo:run', 'seed:go:run'])
+    const cargo = defaultConfigFor('cargo', 'user:1', 'Cargo', before, [], [])
+    const go = defaultConfigFor('go', 'user:2', 'Go', before, [], [])
+    expect(mergeConfigs(seeds, [cargo, go]).map((c) => c.id)).toEqual([
+      'user:1',
+      'user:2',
+      'seed:cargo:run',
+      'seed:go:run'
+    ])
+  })
+
+  it('가릴 수 있는 것은 시드뿐이라 사용자 구성과 겹치는 것은 피하지 않는다', () => {
+    // 저장 구성끼리는 정체가 같아도 둘 다 화면에 남는다 — mergeConfigs 는 시드 쪽만 걸러낸다
+    const stored: RunConfig[] = [{ id: 'user:1', name: 'Cargo', type: 'cargo', subcommand: 'run' }]
+    const created = defaultConfigFor('cargo', 'user:2', 'Cargo', stored, [], [])
+    expect(created).toEqual({ id: 'user:2', name: 'Cargo', type: 'cargo', subcommand: 'run' })
+    expect(mergeConfigs([], [...stored, created]).map((c) => c.id)).toEqual(['user:1', 'user:2'])
+  })
+
+  it('시드가 없는 프로젝트의 시작값을 열두 종류 모두 못박는다', () => {
+    const START: Record<RunConfigType, RunConfig> = {
+      shell: { id: 'x', name: 'n', type: 'shell', command: '' },
+      npm: { id: 'x', name: 'n', type: 'npm', script: 'dev' },
+      node: { id: 'x', name: 'n', type: 'node', file: '' },
+      gradle: { id: 'x', name: 'n', type: 'gradle', tasks: '' },
+      maven: { id: 'x', name: 'n', type: 'maven', goals: '' },
+      cargo: { id: 'x', name: 'n', type: 'cargo', subcommand: 'run' },
+      go: { id: 'x', name: 'n', type: 'go', subcommand: 'run' },
+      python: { id: 'x', name: 'n', type: 'python', file: '' },
+      pytest: { id: 'x', name: 'n', type: 'pytest' },
+      compose: { id: 'x', name: 'n', type: 'compose' },
+      dockerfile: { id: 'x', name: 'n', type: 'dockerfile', imageTag: '' },
+      dotnet: { id: 'x', name: 'n', type: 'dotnet', project: 'src/App/App.csproj' }
+    }
+    for (const [type, expected] of Object.entries(START)) {
+      expect(
+        defaultConfigFor(type as RunConfigType, 'x', 'n', [], ['dev'], ['App.sln', 'src/App/App.csproj'])
+      ).toEqual(expected)
+    }
   })
 })
 
