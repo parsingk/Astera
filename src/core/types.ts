@@ -1,7 +1,11 @@
 import type { RunConfig, RunStatus } from './run/config'
 export type { RunConfig, RunStatus } from './run/config'
+import type { RunContext } from './run/build'
+export type { RunContext } from './run/build'
 import type { Jdk } from './run/jdk'
 export type { Jdk } from './run/jdk'
+import type { PythonInterpreter } from './run/python'
+export type { PythonInterpreter } from './run/python'
 // This file already has a HistoryEntry for session history, so the local-history one comes in under
 // an alias. A deletion snapshot entry (originalPath, deletedAt, size, isDir) merely shares the name
 // with that session history entry; the two types are unrelated.
@@ -413,18 +417,48 @@ export interface CoreApi {
   run: {
     // Running and stopping a project. start and list go through assertAllowedPath, which permits only
     // registered project paths.
-    // isSpringBoot tells RunConfigDialog whether to show the Spring profile field.
-    list(
-      projectPath: string
-    ): Promise<{ configs: RunConfig[]; active: RunStatus | null; recent: string; isSpringBoot: boolean }>
+    // isSpringBoot tells the configuration form whether to offer the Spring profile field
+    // (optionalFieldsFor in core/run/types.ts, reached through RunConfigManager's isSpringBoot prop).
+    // context is the assembly context (wrapper choice, package manager, platform) — the form's preview
+    // calls buildCommand(config, context) so it shows exactly what run.start will actually run.
+    list(projectPath: string): Promise<{
+      configs: RunConfig[]
+      active: RunStatus | null
+      recent: string
+      isSpringBoot: boolean
+      // Whether RunTypePicker should show 'python'/'pytest' as detected (pyproject.toml, requirements.txt,
+      // or a *.py file at the project root) — there is no seed config for either kind to key that off of.
+      isPythonProject: boolean
+      // Whether RunTypePicker should show 'dockerfile' as detected (a Dockerfile at the project root) —
+      // same "no seed to key off of" situation as isPythonProject. Not part of RunContext like
+      // composeFile is, because nothing in buildCommand's 'dockerfile' case reads context.
+      hasDockerfile: boolean
+      context: RunContext
+    }>
     listActive(): Promise<RunStatus[]> // all active runs — for the count badge and the dropdown
     start(projectPath: string, configId: string): Promise<RunStatus>
     stop(projectPath: string): Promise<void>
     write(projectPath: string, data: string): void
     resize(projectPath: string, cols: number, rows: number): void
-    saveConfig(projectPath: string, config: RunConfig): Promise<RunConfig[]> // returns the refreshed display list after an add or edit
+    // Both return the **stored** list only — never passed through mergeConfigs, so the auto-detected
+    // seeds are not in it. A caller that needs the display list has to refetch with run.list (which is
+    // what App.tsx does; it discards these return values).
+    saveConfig(projectPath: string, config: RunConfig): Promise<RunConfig[]>
     deleteConfig(projectPath: string, configId: string): Promise<RunConfig[]>
     listJdks(): Promise<Jdk[]> // the detected JDKs — no path argument, so not subject to assertAllowedPath
+    // The detected Python interpreters for this project (its venv plus whatever is on PATH). Takes a
+    // path — unlike listJdks — because venv candidates live inside the project, so it is subject to
+    // assertAllowedPath.
+    listPythonInterpreters(projectPath: string): Promise<PythonInterpreter[]>
+    // The service names found in this project's compose file (empty if none, or if it could not be
+    // parsed) — feeds the compose form's services field hint. Subject to assertAllowedPath, same
+    // reasoning as listPythonInterpreters: the compose file lives inside the project.
+    listComposeServices(projectPath: string): Promise<string[]>
+    // The .csproj/.fsproj/.sln files found in this project (empty if none, or if the scan failed),
+    // project-relative — feeds the dotnet form's project Select, and a non-empty list is also what
+    // RunTypePicker treats as "dotnet detected here". Subject to assertAllowedPath, same reasoning as
+    // listComposeServices.
+    listDotnetProjects(projectPath: string): Promise<string[]>
   }
   terminal: {
     // An interactive shell at a project path. open and list go through assertAllowedPath, which
@@ -443,6 +477,10 @@ export interface SystemApi {
   // already validated by run.start and run.saveConfig. Omitting it behaves exactly as the existing
   // caller (NewSessionDialog) does.
   pickFolder(defaultPath?: string): Promise<string | null>
+  // Same contract as pickFolder, for a single file — the run configuration file-path fields (node's
+  // file, python's file and interpreter, compose's file, dockerfile's path, dotnet's project file)
+  // share this instead of each inventing its own.
+  pickFile(defaultPath?: string): Promise<string | null>
   pathExists(p: string): Promise<boolean>
   checkCli(): Promise<{ claude: CliStatus; codex: CliStatus }>
   appVersion(): Promise<string>

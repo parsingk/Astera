@@ -2,40 +2,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { RunConfig } from '../core/run/config'
-
-// env is an optional field — existing configs without it must stay valid. The stored file can be hand-edited and its
-// values flow straight through runManager into the PTY process env, so when a value is not a string (number, object,
-// array, ...) the whole config is rejected instead of breaking silently.
-function isValidEnv(v: unknown): v is Record<string, string> | undefined {
-  if (v === undefined) return true
-  if (v === null || typeof v !== 'object' || Array.isArray(v)) return false
-  return Object.values(v).every((val) => typeof val === 'string')
-}
-
-// cwd is optional too. For the same reason as env, only the type is checked — semantic verdicts such as whether it
-// is inside an allowed root or inside the project are made by run.start right before it runs (ipc.ts). Rejecting even
-// the empty string here would let one harmless hand-edit turn the whole store into a schema violation and get it
-// thrown away (load recovers to {}), so this stops at a type check.
-function isValidCwd(v: unknown): v is string | undefined {
-  return v === undefined || typeof v === 'string'
-}
-
-function isValidConfig(v: unknown): v is RunConfig {
-  if (v === null || typeof v !== 'object') return false
-  const o = v as Record<string, unknown>
-  return (
-    typeof o.id === 'string' &&
-    typeof o.name === 'string' &&
-    typeof o.command === 'string' &&
-    isValidEnv(o.env) &&
-    isValidCwd(o.cwd)
-  )
-}
-
-function isValidMap(obj: unknown): obj is Record<string, RunConfig[]> {
-  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return false
-  return Object.values(obj).every((v) => Array.isArray(v) && v.every(isValidConfig))
-}
+import { migrateRunConfigs } from '../core/run/migrate'
 
 /** Per-project user run config store. Key = project root path. Follows the RollConfigStore pattern. */
 export class RunConfigStore {
@@ -45,9 +12,28 @@ export class RunConfigStore {
 
   async load(): Promise<{ recovered: boolean }> {
     try {
-      const parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
-      if (!isValidMap(parsed)) throw new Error('invalid schema')
-      this.map = parsed
+      const parsed: unknown = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
+      // Only a file that isn't even a map counts as a schema violation. A hand-edited item is
+      // migrateRunConfigs's problem — it drops just that item, not the whole store.
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('invalid schema')
+      }
+      const map: Record<string, RunConfig[]> = {}
+      for (const [projectPath, list] of Object.entries(parsed)) {
+        // allowIncomplete, deliberately the same call run.saveConfig makes — the read and the write
+        // have to agree. A configuration whose required field is empty is one this app legitimately
+        // stores: ＋ saves a new configuration the moment the kind is picked, before its one required
+        // field has been filled in (see migrateRunConfigs' own comment for why waiting lost it).
+        // Reading strictly would mean writing a file we then refuse to load, and the loss would be
+        // silent, because a dropped item takes only itself with it.
+        // **This is not a hole in the hand-edit gate.** allowIncomplete relaxes exactly one half of
+        // one check: a required field must still be a string, it may now be ''. Every other check —
+        // id, name, env shape, cwd type, unknown type — still runs, so the malformed file that
+        // motivated the strict read is rejected exactly as before. Running an incomplete
+        // configuration is what run.start refuses, by name (missingRequiredFields).
+        map[projectPath] = migrateRunConfigs(list, { allowIncomplete: true })
+      }
+      this.map = map
       return { recovered: false }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {

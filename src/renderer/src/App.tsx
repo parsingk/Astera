@@ -16,13 +16,14 @@ import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { WorktreePanel } from './components/WorktreePanel'
 import { RunToolbar } from './components/RunToolbar'
+import { RunConfigManager } from './components/RunConfigManager'
 import { BottomPanel } from './components/BottomPanel'
 import { ToastHost } from './components/ToastHost'
 import { UpdateGate } from './components/UpdateGate'
 import { ShortcutSettings } from './components/ShortcutSettings'
 import { TerminalFontSettings } from './components/TerminalFontSettings'
 import { ConfirmHost } from './components/ConfirmHost'
-import type { RunConfig, RunStatus, TerminalBuffer } from '../../core/types'
+import type { RunConfig, RunContext, RunStatus, TerminalBuffer } from '../../core/types'
 import { slackMode } from '../../core/slack/ready'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
@@ -401,13 +402,8 @@ export default function App(): React.JSX.Element {
   layoutRef.current = layout
   const activePaneIdRef = useRef(activePaneId)
   activePaneIdRef.current = activePaneId
-  // The run configuration modal (its state lives inside RunToolbar) also suppresses global shortcuts.
-  // The setter is passed through directly because RunToolbar uses this callback as a useEffect
-  // dependency — recreating it on every render would flicker the suppression between false and true.
-  // A useState setter has a stable identity.
-  const [runModalOpen, setRunModalOpen] = useState(false)
   const modalOpenRef = useRef(false)
-  modalOpenRef.current = showNew || showSettings || runModalOpen
+  modalOpenRef.current = showNew || showSettings
   const fileTabsRef = useRef(fileTabs)
   fileTabsRef.current = fileTabs
   // 탭 순환이 쓰는 것 — 클릭과 같은 경로를 타야 종류에 상관없이 같은 일이 일어난다
@@ -1401,6 +1397,17 @@ export default function App(): React.JSX.Element {
   })
   // Whether to show the Spring profile field — run.list decides from the build file bodies and sends it down
   const [runIsSpringBoot, setRunIsSpringBoot] = useState(false)
+  // Whether RunTypePicker should show 'python'/'pytest' as detected — run.list decides this from the
+  // project root's file list (hasPythonProject) and sends it down the same way as isSpringBoot
+  const [runIsPythonProject, setRunIsPythonProject] = useState(false)
+  // Whether RunTypePicker should show 'dockerfile' as detected — run.list decides this from the project
+  // root's file list (hasDockerfile) and sends it down the same way as isPythonProject
+  const [runHasDockerfile, setRunHasDockerfile] = useState(false)
+  // The two-pane run configuration manager (Task 6). context is the assembly context run.list also
+  // sends down — the manager's preview calls buildCommand(config, context) so it shows exactly what
+  // run.start would run, and it starts null until the first run.list response arrives.
+  const [runManagerOpen, setRunManagerOpen] = useState(false)
+  const [runContext, setRunContext] = useState<RunContext | null>(null)
   const explorerViewRef = useRef<HTMLDivElement>(null)
 
   /** 트리 루트는 활성 탭을 따른다 — 활성 탭이 파일이면 그 파일의 프로젝트, 세션이면 그 세션의 cwd.
@@ -1413,6 +1420,15 @@ export default function App(): React.JSX.Element {
     (activeTab?.kind === 'file'
       ? fileTabs.find((t) => t.id === activeTabId)?.projectRoot
       : sessions.find((s) => s.id === activeTab?.id)?.cwd) ?? null
+
+  // Whether RunConfigManager is actually on screen — gates both its render below and the shortcut
+  // suppression right after it. Computed from the same three things that gate the render (open flag,
+  // project, context) so switching projects or losing the context drops the suppression in the same
+  // render as the unmount, not only when the dialog's own onClose fires.
+  const runManagerVisible = runManagerOpen && !!explorerRoot && !!runContext
+  // OR-ed onto the value the other modals already set above — runManagerVisible depends on
+  // explorerRoot, which is not computed yet at that point in the component.
+  modalOpenRef.current = modalOpenRef.current || runManagerVisible
 
   // Mirrors explorerRoot into a ref — avoids a stale closure in the run:status subscription effect
   const explorerRootRef = useRef(explorerRoot)
@@ -1482,6 +1498,9 @@ export default function App(): React.JSX.Element {
       setRunConfigs(r.configs)
       setRunActive(r.active)
       setRunIsSpringBoot(r.isSpringBoot)
+      setRunIsPythonProject(r.isPythonProject)
+      setRunHasDockerfile(r.hasDockerfile)
+      setRunContext(r.context)
       setRunSelectedId((prev) => (r.configs.some((c) => c.id === prev) ? prev : r.active?.configId ?? r.configs[0]?.id ?? null))
       if (r.active?.status === 'running') setRunPanelOpen(true)
     })
@@ -1532,7 +1551,14 @@ export default function App(): React.JSX.Element {
     const SEED_FILES = new Set([
       'package.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'Cargo.toml', 'go.mod',
       'build.gradle', 'build.gradle.kts', 'gradlew', 'gradlew.bat',
-      'pom.xml', 'mvnw', 'mvnw.cmd'
+      'pom.xml', 'mvnw', 'mvnw.cmd',
+      // These two do not seed a config (python/pytest have none — see hasPythonProject), but their
+      // presence is what flips RunTypePicker's "detected" grouping, so they still belong in this set.
+      // A root-level *.py file flips it too, but that is any of countless names and does not fit a
+      // fixed set — the picker just does not update live for that trigger until the project reopens.
+      'pyproject.toml', 'requirements.txt',
+      // Same situation for 'dockerfile' — no seed, but its presence flips the picker's detection (hasDockerfile)
+      'Dockerfile'
     ])
     const norm = (p: string): string => p.replace(/\\/g, '/').toLowerCase()
     const off = window.api.on('files:changed', (c) => {
@@ -1543,6 +1569,9 @@ export default function App(): React.JSX.Element {
       void window.api.run.list(root).then((r) => {
         setRunConfigs(r.configs)
         setRunIsSpringBoot(r.isSpringBoot)
+        setRunIsPythonProject(r.isPythonProject)
+        setRunHasDockerfile(r.hasDockerfile)
+        setRunContext(r.context)
         setRunSelectedId((prev) => (r.configs.some((cc) => cc.id === prev) ? prev : r.active?.configId ?? r.configs[0]?.id ?? null))
       })
     })
@@ -1576,42 +1605,44 @@ export default function App(): React.JSX.Element {
   const runStop = (): void => {
     if (explorerRoot) void window.api.run.stop(explorerRoot)
   }
-  const runAddConfig = (name: string, command: string, env?: Record<string, string>, cwd?: string): void => {
-    if (!explorerRoot) return
-    const config: RunConfig = { id: `user:${name}:${command}`, name, command, env, cwd }
-    void window.api.run.saveConfig(explorerRoot, config).then(
-      () => {
-        void window.api.run.list(explorerRoot).then((r) => { setRunConfigs(r.configs); setRunSelectedId(config.id) })
-      },
-      // The cwd validation in run.saveConfig rejects a working folder outside the project here — before
-      // the JDK and working-folder fields existed there was effectively no way to fail on this path, so
-      // the error handling was missing.
-      (err) => toast.error(t('run.config.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
-    )
-  }
-  const runEditConfig = (
-    id: string,
-    name: string,
-    command: string,
-    env?: Record<string, string>,
-    cwd?: string
-  ): void => {
-    if (!explorerRoot) return
-    void window.api.run.saveConfig(explorerRoot, { id, name, command, env, cwd }).then(
-      () => {
-        void window.api.run.list(explorerRoot).then((r) => { setRunConfigs(r.configs); setRunSelectedId(id) })
-      },
-      (err) => toast.error(t('run.config.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
-    )
-  }
   const runDeleteConfig = (id: string): void => {
     if (!explorerRoot) return
     void window.api.run.deleteConfig(explorerRoot, id).then(() => {
       void window.api.run.list(explorerRoot).then((r) => {
         setRunConfigs(r.configs)
+        setRunContext(r.context)
         setRunSelectedId((prev) => (r.configs.some((c) => c.id === prev) ? prev : r.configs[0]?.id ?? null))
       })
     })
+  }
+  /** RunConfigManager's onSave. It always hands over an assembled RunConfig of whatever kind — there
+   *  is no per-field signature to match, so this one handler covers add, edit, and the promotion of a
+   *  seed into a user configuration copy (RunConfigManager.tsx's handleFormChange).
+   *
+   *  Answers whether the configuration reached the store: run.saveConfig refuses a value the command
+   *  gate rejects, and the dialog has to take a refused new configuration back out of its tree rather
+   *  than leave a row nothing is behind. */
+  const runManagerSave = (config: RunConfig): Promise<boolean> => {
+    if (!explorerRoot) return Promise.resolve(false)
+    return window.api.run.saveConfig(explorerRoot, config).then(
+      () => {
+        void window.api.run.list(explorerRoot).then((r) => {
+          setRunConfigs(r.configs)
+          setRunContext(r.context)
+          // The same reconciliation as the three siblings above. It is not optional here either:
+          // promoting a seed *removes* an id — mergeConfigs stops emitting seed:npm:dev the moment a
+          // stored config shares its seedKeyOf — so without this the toolbar keeps a seed id that no
+          // longer resolves, ▶ stays enabled (disabled={!selectedId}, and a stale string is truthy)
+          // and pressing it fails with NO_CONFIG.
+          setRunSelectedId((prev) => (r.configs.some((c) => c.id === prev) ? prev : r.configs[0]?.id ?? null))
+        })
+        return true
+      },
+      (err) => {
+        toast.error(t('run.config.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
+        return false
+      }
+    )
   }
   /** 실행 중 목록에서 다른 프로젝트로 점프. 트리 루트는 활성 탭이 정하므로, 그 프로젝트에 속한 탭을
    *  활성으로 만드는 것이 곧 '그리로 간다'는 뜻이다. 세션을 먼저 찾고 없으면 그 프로젝트의 파일 탭을
@@ -1763,15 +1794,10 @@ export default function App(): React.JSX.Element {
                 active={runActive}
                 onRun={runStart}
                 onStop={runStop}
-                onAddConfig={runAddConfig}
-                onEditConfig={runEditConfig}
-                onDeleteConfig={runDeleteConfig}
+                onOpenManager={() => setRunManagerOpen(true)}
                 activeRuns={activeRuns}
                 onJump={runJump}
                 onStopProject={runStopProject}
-                onModalOpenChange={setRunModalOpen}
-                projectPath={explorerRoot}
-                isSpringBoot={runIsSpringBoot}
               />
             </div>
           ) : null
@@ -2530,6 +2556,21 @@ export default function App(): React.JSX.Element {
               { label: t('common.close'), danger: true, onSelect: () => closeWorkbenchTab(tid) }
             ]
           })()}
+        />
+      )}
+      {/* Re-checks explorerRoot/runContext directly (rather than just runManagerVisible) so TypeScript
+          narrows them to non-null here, instead of an assertion */}
+      {runManagerOpen && explorerRoot && runContext && (
+        <RunConfigManager
+          configs={runConfigs}
+          context={runContext}
+          isSpringBoot={runIsSpringBoot}
+          isPythonProject={runIsPythonProject}
+          hasDockerfile={runHasDockerfile}
+          projectPath={explorerRoot}
+          onSave={runManagerSave}
+          onDelete={runDeleteConfig}
+          onClose={() => setRunManagerOpen(false)}
         />
       )}
       <ConfirmHost />

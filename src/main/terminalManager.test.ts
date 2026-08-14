@@ -19,7 +19,7 @@ class FakePty implements PtyLike {
 }
 
 function setup(platform: NodeJS.Platform = 'win32') {
-  const spawned: { file: string; args: string[]; opts: PtySpawnOptions; pty: FakePty }[] = []
+  const spawned: { file: string; args: string[] | string; opts: PtySpawnOptions; pty: FakePty }[] = []
   const factory: PtyFactory = (file, args, opts) => {
     const pty = new FakePty()
     spawned.push({ file, args, opts, pty })
