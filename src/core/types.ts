@@ -450,6 +450,11 @@ export interface CoreApi {
     // parsed) — feeds the compose form's services field hint. Subject to assertAllowedPath, same
     // reasoning as listPythonInterpreters: the compose file lives inside the project.
     listComposeServices(projectPath: string): Promise<string[]>
+    // The .csproj/.fsproj/.sln files found in this project (empty if none, or if the scan failed),
+    // project-relative — feeds the dotnet form's project Select, and a non-empty list is also what
+    // RunTypePicker treats as "dotnet detected here". Subject to assertAllowedPath, same reasoning as
+    // listComposeServices.
+    listDotnetProjects(projectPath: string): Promise<string[]>
   }
   terminal: {
     // An interactive shell at a project path. open and list go through assertAllowedPath, which
@@ -468,9 +473,9 @@ export interface SystemApi {
   // already validated by run.start and run.saveConfig. Omitting it behaves exactly as the existing
   // caller (NewSessionDialog) does.
   pickFolder(defaultPath?: string): Promise<string | null>
-  // Same contract as pickFolder, for a single file — the run configuration file-path fields
-  // (node's file, python's file and interpreter, dockerfile/dotnet's later) share this instead of each
-  // inventing its own.
+  // Same contract as pickFolder, for a single file — the run configuration file-path fields (node's
+  // file, python's file and interpreter, compose's file, dockerfile's path, dotnet's project file)
+  // share this instead of each inventing its own.
   pickFile(defaultPath?: string): Promise<string | null>
   pathExists(p: string): Promise<boolean>
   checkCli(): Promise<{ claude: CliStatus; codex: CliStatus }>

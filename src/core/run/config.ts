@@ -100,6 +100,23 @@ export function hasDockerfile(files: string[]): boolean {
   return files.includes('Dockerfile')
 }
 
+/** The project file a new dotnet configuration starts on, out of what main/dotnetScanner.ts found.
+ *
+ *  Not simply the first entry. The scanner sorts alphabetically, so a repository with a root solution
+ *  file usually lists the .sln first — and a new configuration's subcommand defaults to `run`, which
+ *  refuses one ("'App.sln' is not a valid project file", checked against the installed .NET 9 SDK). So
+ *  an actual project file wins whenever the scan found one.
+ *
+ *  This is deliberately a rule about the *default*, not about the order: `dotnet test` and
+ *  `dotnet build` both accept a solution, so the .sln stays where the scanner put it in the form's
+ *  Select and a user who wants it can still pick it.
+ *
+ *  Falls back to the first entry, and then to '': a repository may genuinely hold only a solution
+ *  file, and a configuration pointing at one beats a configuration pointing at nothing. */
+export function defaultDotnetProject(projects: string[]): string {
+  return projects.find((p) => /\.(cs|fs)proj$/i.test(p)) ?? projects[0] ?? ''
+}
+
 /** The identity of a config — its type plus the core parameter that makes it what it is.
  *
  *  This used to be the assembled command. Now that the command is a derived value, comparing by it would make a
@@ -129,6 +146,8 @@ export function seedKeyOf(c: RunConfig): string {
       return `compose:${c.composeFile ?? ''}:${c.services ?? ''}`
     case 'dockerfile':
       return `dockerfile:${c.imageTag}`
+    case 'dotnet':
+      return `dotnet:${c.project}:${c.subcommand ?? 'run'}`
   }
 }
 

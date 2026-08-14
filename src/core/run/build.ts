@@ -96,6 +96,24 @@ export function buildCommand(config: RunConfig, ctx: RunContext): string {
       // safe here even though buildCommand cannot in general assume a POSIX-compatible shell.
       return `${build} && ${run}`
     }
+    case 'dotnet': {
+      const sub = config.subcommand ?? 'run'
+      // run 만 --project 를 쓴다. 설치된 .NET 9 SDK 로 직접 확인한 차이다:
+      //   dotnet run <경로>            → "실행할 프로젝트를 찾을 수 없습니다 … --project 를 쓰세요"
+      //   dotnet test|build <경로>     → 그 경로를 프로젝트로 읽는다
+      // `dotnet run --help` 의 사용법도 `dotnet run [<applicationArguments>...] [options]` 라, run 에
+      // 위치 인자로 준 경로는 실행되는 앱의 인자로 조용히 넘어가고 프로젝트는 cwd 에서 찾는다 —
+      // 실패가 아니라 엉뚱한 프로젝트가 도는 쪽이다. 두 갈래를 같은 모양으로 "정리"하지 말 것.
+      // project 와 configuration 은 단일 값이라 인용하고(go 의 packagePath 와 같은 이유), args 는
+      // 여러 토큰을 담는 필드라 그대로 이어 붙인다 — 이 파일의 다른 종류와 같은 규칙이다
+      return join(
+        'dotnet',
+        sub,
+        sub === 'run' ? `--project ${q(config.project)}` : q(config.project),
+        config.configuration ? `-c ${q(config.configuration)}` : '',
+        config.args
+      )
+    }
   }
 }
 

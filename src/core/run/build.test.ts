@@ -124,6 +124,26 @@ describe('buildCommand', () => {
     )
   })
 
+  // run 만 --project 를 쓰고 test·build 는 위치 인자다 — 설치된 .NET 9 SDK 로 확인한 차이다.
+  // 분기의 양쪽을 모두 확인한다
+  it('dotnet 은 하위명령과 프로젝트를 붙인다', () => {
+    expect(buildCommand({ ...base, type: 'dotnet', project: 'src/App/App.csproj' }, ctx))
+      .toBe('dotnet run --project src/App/App.csproj')
+    expect(buildCommand({
+      ...base, type: 'dotnet', project: 'src/App/App.csproj', subcommand: 'test', configuration: 'Release'
+    }, ctx)).toBe('dotnet test src/App/App.csproj -c Release')
+    expect(buildCommand({ ...base, type: 'dotnet', project: 'src/App/App.csproj', subcommand: 'build' }, ctx))
+      .toBe('dotnet build src/App/App.csproj')
+  })
+
+  // node·go 와 같은 성격의 단일 경로값이라 quoteArg 를 그대로 통과한다 — 공백이 있을 때만 감싸인다
+  it('dotnet 의 프로젝트 경로에 공백이 있으면 인용한다', () => {
+    expect(buildCommand({ ...base, type: 'dotnet', project: 'src/My App/App.csproj' }, ctx))
+      .toBe('dotnet run --project "src/My App/App.csproj"')
+    expect(buildCommand({ ...base, type: 'dotnet', project: 'src/My App/App.csproj' }, posix))
+      .toBe("dotnet run --project 'src/My App/App.csproj'")
+  })
+
   // node 의 파일 경로 인용 테스트와 같은 모양 — 공백이 있는 값에서만 두 셸의 인용이 갈린다
   it('dockerfile 의 경로에 공백이 있으면 각 셸의 방식으로 인용한다', () => {
     expect(

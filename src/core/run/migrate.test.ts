@@ -95,6 +95,14 @@ describe('migrateRunConfigs', () => {
     ])
   })
 
+  // subcommand 가 없어도(run) 통과한다 — dotnet 의 필수 필드는 project 뿐이다
+  it('dotnet 은 project 가 필수다', () => {
+    expect(migrateRunConfigs([{ id: 'x', name: 'x', type: 'dotnet' }])).toEqual([])
+    expect(migrateRunConfigs([{ id: 'x', name: 'x', type: 'dotnet', project: 'src/App/App.csproj' }])).toEqual([
+      { id: 'x', name: 'x', type: 'dotnet', project: 'src/App/App.csproj' }
+    ])
+  })
+
   it('dockerfile 은 imageTag 가 필수다', () => {
     expect(migrateRunConfigs([{ id: 'x', name: 'x', type: 'dockerfile' }])).toEqual([])
     expect(migrateRunConfigs([{ id: 'x', name: 'x', type: 'dockerfile', imageTag: 'astera:dev' }])).toEqual([

@@ -129,7 +129,8 @@ const api = {
     deleteConfig: invoke('run.deleteConfig'),
     listJdks: invoke('run.listJdks'),
     listPythonInterpreters: invoke('run.listPythonInterpreters'),
-    listComposeServices: invoke('run.listComposeServices')
+    listComposeServices: invoke('run.listComposeServices'),
+    listDotnetProjects: invoke('run.listDotnetProjects')
   },
   terminal: {
     open: invoke('terminal.open'),

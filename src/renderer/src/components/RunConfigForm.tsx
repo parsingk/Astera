@@ -36,6 +36,7 @@ export function RunConfigForm({
   jdks,
   pythonInterpreters,
   composeServices,
+  dotnetProjects,
   npmScripts,
   projectPath,
   onChange
@@ -55,6 +56,12 @@ export function RunConfigForm({
    *  field itself stays a plain text input (space-separated names), not a multi-select — this codebase
    *  has no multi-select control. */
   composeServices: string[] | null
+  /** null while still loading. Same "depends on projectPath" reasoning as the two above — the .csproj/
+   *  .fsproj/.sln files live inside the project. Unlike composeServices this is a real Select's item
+   *  list, not a hint: the project file is dotnet's one required field, so a candidate list beats a
+   *  path typed from memory. A file the scan did not reach (it stops three levels down) is still
+   *  reachable through the field's own "Browse…" button. */
+  dotnetProjects: string[] | null
   /** Script names already known for this project (from the npm seeds RunConfigManager already has) —
    *  the candidate list for the script Select. Not part of the plan's original prop list, but the
    *  Select this field calls for needs a source for "package.json's scripts", and this is the data
@@ -96,7 +103,7 @@ export function RunConfigForm({
   // since it is never typed freehand here (Select or the folder picker only).
   const BLANKABLE = [
     'cwd', 'args', 'springProfiles', 'features', 'packagePath', 'nodePath', 'target', 'composeFile', 'services',
-    'dockerfilePath', 'buildArgs', 'runArgs'
+    'dockerfilePath', 'buildArgs', 'runArgs', 'configuration'
   ] as const
   const flush = (): void => {
     const next = { ...draft } as unknown as Record<string, unknown>
@@ -155,6 +162,13 @@ export function RunConfigForm({
     // the same "empty means default" meaning as cwd's own '' fallback, so the same `|| undefined` applies.
     if (file) changeNow({ ...draft, composeFile: toRelativeCwd(file, projectPath) || undefined })
   }
+  const pickProject = async (): Promise<void> => {
+    if (draft.type !== 'dotnet') return
+    const file = await window.api.system.pickFile(projectPath)
+    // Project-relative, same as node's file — the project file lives inside the project, so an absolute
+    // path breaks the moment the project moves. Not blankable: it is dotnet's one required field.
+    if (file) changeNow({ ...draft, project: toRelativeCwd(file, projectPath) })
+  }
   const pickDockerfilePath = async (): Promise<void> => {
     if (draft.type !== 'dockerfile') return
     const file = await window.api.system.pickFile(projectPath)
@@ -187,6 +201,19 @@ export function RunConfigForm({
       : []),
     ...(pythonInterpreters ?? []).map((p) => ({ value: p.path, label: pythonInterpreterLabel(p) }))
   ]
+
+  // The scanned project files, plus whatever is stored if the scan did not turn it up (a stored value
+  // from before the file moved, or one the "Browse…" button picked from deeper than the scan reaches) —
+  // the same shape as scriptItems and interpreterItems. No empty row: the project file is required.
+  const projectItems: SelectOption[] =
+    draft.type === 'dotnet'
+      ? [
+          ...(dotnetProjects ?? []).map((p) => ({ value: p, label: p })),
+          ...(draft.project && !(dotnetProjects ?? []).includes(draft.project)
+            ? [{ value: draft.project, label: t('run.form.projectCustom', { path: draft.project }) }]
+            : [])
+        ]
+      : []
 
   return (
     <>
@@ -274,6 +301,30 @@ export function RunConfigForm({
             onChange={(v) => changeNow({ ...draft, subcommand: v as 'run' | 'test' | 'build' })}
             ariaLabel={t('run.field.subcommand')}
           />
+        </div>
+      )}
+      {/* The one kind whose required field is a scanned list: the project file. Drawn like the JDK and
+          interpreter fields (Select + "Browse…") rather than like node's file (plain text + "Browse…"),
+          because a .csproj path is not something anyone types from memory. */}
+      {draft.type === 'dotnet' && (
+        <div className="field">
+          <label>{t('run.field.project')}</label>
+          {dotnetProjects === null ? (
+            <span className="check-note">{t('run.form.projectLoading')}</span>
+          ) : (
+            <div className="row">
+              <Select
+                className="path-select"
+                items={projectItems}
+                value={draft.project}
+                onChange={(v) => changeNow({ ...draft, project: v })}
+                ariaLabel={t('run.field.project')}
+              />
+              <button type="button" onClick={() => void pickProject()}>
+                {t('run.form.projectBrowse')}
+              </button>
+            </div>
+          )}
         </div>
       )}
       {draft.type === 'dockerfile' && (
@@ -497,6 +548,34 @@ export function RunConfigForm({
             type="text"
             value={draft.runArgs ?? ''}
             onChange={(e) => change({ ...draft, runArgs: e.target.value })}
+            onBlur={flush}
+          />
+        </div>
+      )}
+      {/* Unlike cargo/go, dotnet's subcommand is optional — an unset one runs, which is the same value
+          the command assembly falls back to (build.ts's 'dotnet' case), so the Select shows 'run'. */}
+      {draft.type === 'dotnet' && visible('subcommand') && (
+        <div className="field">
+          <label>{t('run.field.subcommand')}</label>
+          <Select
+            items={[
+              { value: 'run', label: 'run' },
+              { value: 'test', label: 'test' },
+              { value: 'build', label: 'build' }
+            ]}
+            value={draft.subcommand ?? 'run'}
+            onChange={(v) => changeNow({ ...draft, subcommand: v as 'run' | 'test' | 'build' })}
+            ariaLabel={t('run.field.subcommand')}
+          />
+        </div>
+      )}
+      {draft.type === 'dotnet' && visible('configuration') && (
+        <div className="field">
+          <label>{t('run.field.configuration')}</label>
+          <input
+            type="text"
+            value={draft.configuration ?? ''}
+            onChange={(e) => change({ ...draft, configuration: e.target.value })}
             onBlur={flush}
           />
         </div>

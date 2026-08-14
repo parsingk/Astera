@@ -1,7 +1,8 @@
 import type { RunConfig, RunConfigType } from './types'
 
 const KNOWN: RunConfigType[] = [
-  'shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest', 'compose', 'dockerfile'
+  'shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest', 'compose', 'dockerfile',
+  'dotnet'
 ]
 
 /** The string fields a kind must have. Missing one means buildCommand would splice `undefined` into
@@ -21,7 +22,8 @@ const REQUIRED: Record<RunConfigType, string[]> = {
   // No required field — an empty composeFile falls back to what the project context found (or to
   // docker compose's own search), and an empty services list means "every service"
   compose: [],
-  dockerfile: ['imageTag']
+  dockerfile: ['imageTag'],
+  dotnet: ['project']
 }
 
 const isStringMap = (v: unknown): boolean =>

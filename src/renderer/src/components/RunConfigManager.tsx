@@ -4,7 +4,7 @@ import type { RunContext } from '../../../core/run/build'
 import type { RunConfigType } from '../../../core/run/types'
 import type { MessageKey } from '../../../core/i18n'
 import { runTypeIcon } from '../../../core/run/typeIcon'
-import { promoteSeed } from '../../../core/run/config'
+import { promoteSeed, defaultDotnetProject } from '../../../core/run/config'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
 import { RunConfigForm } from './RunConfigForm'
@@ -13,8 +13,16 @@ import { RunTypePicker } from './RunTypePicker'
 /** A new configuration's starting values for a kind, right after it is picked in RunTypePicker.
  *  npmScript defaults to the project's first known script rather than '' — an npm configuration with
  *  no script name is not a useful starting point, and it sidesteps an empty Select needing its own
- *  "nothing picked yet" placeholder copy. */
-function defaultConfigFor(type: RunConfigType, id: string, name: string, npmScripts: string[]): RunConfig {
+ *  "nothing picked yet" placeholder copy. dotnet's project file defaults the same way, off the
+ *  scanner's list, for the same two reasons — but through defaultDotnetProject rather than [0], since
+ *  the first entry is often a .sln and the subcommand this starts on (`run`) rejects one. */
+function defaultConfigFor(
+  type: RunConfigType,
+  id: string,
+  name: string,
+  npmScripts: string[],
+  dotnetProjects: string[]
+): RunConfig {
   switch (type) {
     case 'shell':
       return { id, name, type, command: '' }
@@ -38,6 +46,8 @@ function defaultConfigFor(type: RunConfigType, id: string, name: string, npmScri
       return { id, name, type }
     case 'dockerfile':
       return { id, name, type, imageTag: '' }
+    case 'dotnet':
+      return { id, name, type, project: defaultDotnetProject(dotnetProjects) }
   }
 }
 
@@ -174,6 +184,26 @@ export function RunConfigManager({
     }
   }, [projectPath])
 
+  // The dotnet form's project Select, and — since a non-empty list means the project has .NET project
+  // files — RunTypePicker's detection evidence for 'dotnet' too (see detectedTypes below). Same
+  // "depends on projectPath" shape as the two effects above.
+  const [dotnetProjects, setDotnetProjects] = useState<string[] | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    setDotnetProjects(null)
+    window.api.run
+      .listDotnetProjects(projectPath)
+      .then((list) => {
+        if (!cancelled) setDotnetProjects(list)
+      })
+      .catch(() => {
+        if (!cancelled) setDotnetProjects([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [projectPath])
+
   // The script Select's candidate list — the npm-typed entries already in the project's configuration
   // list (seeds from package.json, plus any user npm configurations), deduplicated.
   const npmScripts = Array.from(
@@ -193,12 +223,17 @@ export function RunConfigManager({
   // never reads context — imageTag/dockerfilePath/buildArgs/runArgs all live on the config — so there is
   // no RunContext field to double-purpose. It follows isPythonProject's shape instead: a plain boolean
   // threaded down from run.list's own file-list read (hasDockerfile in core/run/config.ts).
+  // dotnet needs neither: the project list the form's Select already fetches is itself the evidence — a
+  // .csproj/.fsproj/.sln anywhere in the project means .NET is here. It is deliberately not a third
+  // boolean from run.list, because finding those files is a recursive scan (main/dotnetScanner.ts), far
+  // more than the single root-directory read run.list does for the others.
   const detectedTypes = Array.from(
     new Set([
       ...configs.filter((c) => c.id.startsWith('seed:')).map((c) => c.type),
       ...(isPythonProject ? (['python', 'pytest'] as const) : []),
       ...(context.composeFile ? (['compose'] as const) : []),
-      ...(hasDockerfile ? (['dockerfile'] as const) : [])
+      ...(hasDockerfile ? (['dockerfile'] as const) : []),
+      ...(dotnetProjects && dotnetProjects.length > 0 ? (['dotnet'] as const) : [])
     ])
   )
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -228,7 +263,7 @@ export function RunConfigManager({
                     onPick={(type) => {
                       const id = `user:${crypto.randomUUID()}`
                       const name = t(`run.type.${type}` as MessageKey)
-                      setPending(defaultConfigFor(type, id, name, npmScripts))
+                      setPending(defaultConfigFor(type, id, name, npmScripts, dotnetProjects ?? []))
                       setSelectedId(id)
                       setPickerOpen(false)
                     }}
@@ -290,6 +325,7 @@ export function RunConfigManager({
                   jdks={jdks}
                   pythonInterpreters={pythonInterpreters}
                   composeServices={composeServices}
+                  dotnetProjects={dotnetProjects}
                   npmScripts={npmScripts}
                   projectPath={projectPath}
                   onChange={handleFormChange}

@@ -50,5 +50,11 @@ export function runTypeIcon(type: RunConfigType): FileIconSpec {
     // mark would invent a distinction the file tree does not draw.
     case 'dockerfile':
       return { id: 'container', tone: 'blue' }
+    // Matches what the file tree already draws for a .cs file (files/icons.ts's EXT table: a purple C#
+    // label) — the same reasoning as go, python and compose above. C# is the language of nearly every
+    // .NET project, so its mark stands for the kind; F# gets no separate icon for the same reason npm
+    // and Node.js share none: the kind is one tool, not one language.
+    case 'dotnet':
+      return { id: 'label', tone: 'purple', label: 'C#' }
   }
 }

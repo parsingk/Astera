@@ -43,6 +43,7 @@ import { pickInitialLang } from '../core/i18n/locale'
 import { listJdks } from './jdkScanner'
 import { listPythonInterpreters } from './pythonScanner'
 import { listComposeServices } from './composeScanner'
+import { listDotnetProjects } from './dotnetScanner'
 
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
  *  in this file — the two values the coordinator needs (spawnSession, busyState) are owned here, so
@@ -802,6 +803,13 @@ export function registerIpc(
     return listComposeServices(projectPath)
   })
 
+  // The .csproj/.fsproj/.sln files in this project, for the dotnet form's project Select. Takes a path
+  // (they live inside the project), so it goes through assertAllowedPath like the two above.
+  ipcMain.handle('run.listDotnetProjects', async (_e, projectPath: string) => {
+    await assertAllowedPath(projectPath)
+    return listDotnetProjects(projectPath)
+  })
+
   /** Validates a run configuration's cwd and returns the absolute path that will **actually be used**.
    *  cwd comes from two places outside the trust boundary — the stored file (hand-editable on disk) and
    *  the run.saveConfig IPC (the renderer) — and runManager passes it straight through as the PTY's cwd,
@@ -1242,8 +1250,8 @@ export function registerIpc(
     return r.canceled ? null : r.filePaths[0]
   })
   // Same spot and contract as pickFolder above, just 'openFile' instead of 'openDirectory'. Shared by
-  // the run configuration file-path fields (node's file, python's file and interpreter,
-  // dockerfile/dotnet's later).
+  // the run configuration file-path fields (node's file, python's file and interpreter, compose's
+  // file, dockerfile's path, dotnet's project file).
   ipcMain.handle('system.pickFile', async (_e, defaultPath?: string) => {
     const r = await dialog.showOpenDialog(win, { properties: ['openFile'], defaultPath })
     return r.canceled ? null : r.filePaths[0]

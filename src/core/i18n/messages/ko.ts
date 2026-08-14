@@ -585,6 +585,11 @@ export const ko = {
   'run.form.composeServicesHint': '후보: {list}',
   // Dockerfile 경로 찾기 버튼 (Task 11)
   'run.form.dockerfilePathBrowse': '찾아보기…',
+  // .NET 프로젝트 파일 Select + 찾기 버튼 (Task 12) — 인터프리터·JDK 필드와 같은 모양이다:
+  // 스캐너가 찾은 것을 고르거나, 찾지 못한 파일은 찾기 버튼으로 직접 지정한다
+  'run.form.projectLoading': '.NET 프로젝트 조회 중…',
+  'run.form.projectCustom': '{path} (직접 지정)',
+  'run.form.projectBrowse': '찾아보기…',
   // RunConfigManager.tsx — the two-pane dialog. run.type.* are kind labels grouping the tree;
   // product/tool names among them (npm, Gradle, Maven, cargo, go, Python, pytest) are not translated.
   'run.manager.title': '실행 구성',
@@ -605,6 +610,7 @@ export const ko = {
   'run.type.pytest': 'pytest',
   'run.type.compose': 'Docker Compose',
   'run.type.dockerfile': 'Dockerfile',
+  'run.type.dotnet': '.NET',
   // RunConfigForm.tsx / RunTypePicker.tsx (Task 7) — per-kind field labels and the ＋ kind-picker popup.
   'run.field.javaHome': 'JDK',
   'run.field.springProfiles': 'Spring 프로파일',
@@ -635,6 +641,10 @@ export const ko = {
   'run.field.dockerfilePath': 'Dockerfile 경로',
   'run.field.buildArgs': '빌드 인자',
   'run.field.runArgs': '실행 인자',
+  // .NET 필드 (Task 12) — project(.csproj/.fsproj/.sln) 만 필수다. 앱이 여는 '프로젝트'와 헷갈리지
+  // 않도록 '프로젝트 파일'로 적는다. subcommand 는 비면 run 이다
+  'run.field.project': '프로젝트 파일',
+  'run.field.configuration': '빌드 구성',
   'run.picker.search': '검색…',
   'run.picker.detected': '이 프로젝트에서 감지됨',
   'run.picker.other': '기타',

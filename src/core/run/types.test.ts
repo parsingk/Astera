@@ -3,7 +3,10 @@ import { optionalFieldsFor } from './types'
 
 describe('optionalFieldsFor', () => {
   it('모든 종류에 cwd 와 env 가 있다', () => {
-    for (const t of ['shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest', 'compose'] as const) {
+    for (const t of [
+      'shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest', 'compose', 'dockerfile',
+      'dotnet'
+    ] as const) {
       expect(optionalFieldsFor(t, { springBoot: false })).toContain('cwd')
       expect(optionalFieldsFor(t, { springBoot: false })).toContain('env')
     }
@@ -38,6 +41,14 @@ describe('optionalFieldsFor', () => {
   it('python 과 pytest 는 interpreter 를 공유한다', () => {
     expect(optionalFieldsFor('python', { springBoot: false })).toContain('interpreter')
     expect(optionalFieldsFor('pytest', { springBoot: false })).toContain('interpreter')
+  })
+
+  // dotnet 의 subcommand 는 cargo·go 와 달리 선택 항목이다 — 비면 run 이라, 필수로 둘 이유가 없다
+  it('subcommand 는 dotnet 에서만 선택 항목이다', () => {
+    expect(optionalFieldsFor('dotnet', { springBoot: false })).toContain('subcommand')
+    expect(optionalFieldsFor('dotnet', { springBoot: false })).toContain('configuration')
+    expect(optionalFieldsFor('cargo', { springBoot: false })).not.toContain('subcommand')
+    expect(optionalFieldsFor('go', { springBoot: false })).not.toContain('subcommand')
   })
 
   // compose 는 필수 필드가 없다 — composeFile·services 모두 선택 항목으로 추가한다

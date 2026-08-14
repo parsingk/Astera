@@ -3,7 +3,8 @@ import { runTypeIcon } from './typeIcon'
 import type { RunConfigType } from './types'
 
 const ALL: RunConfigType[] = [
-  'shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest', 'compose', 'dockerfile'
+  'shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest', 'compose', 'dockerfile',
+  'dotnet'
 ]
 
 describe('runTypeIcon', () => {
@@ -58,5 +59,10 @@ describe('runTypeIcon', () => {
   // 파일 트리도 Dockerfile 과 compose 파일을 구분하지 않는다(files/icons.ts) — 여기서도 같은 모양이다
   it('dockerfile 은 compose 와 같은 모양이다 — 파일 트리도 둘을 구분하지 않는다', () => {
     expect(runTypeIcon('dockerfile')).toEqual({ id: 'container', tone: 'blue' })
+  })
+
+  // 파일 트리의 .cs 파일과 같은 모양 — files/icons.ts 의 EXT.cs 도 보라 C# 이다
+  it('dotnet 은 파일 트리의 .cs 파일과 같은 모양이다', () => {
+    expect(runTypeIcon('dotnet')).toEqual({ id: 'label', tone: 'purple', label: 'C#' })
   })
 })

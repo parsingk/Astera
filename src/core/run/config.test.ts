@@ -9,6 +9,7 @@ import {
   formatEnvLines,
   isSpringBootProject,
   hasDockerfile,
+  defaultDotnetProject,
   toRelativeCwd,
   type RunConfig
 } from './config'
@@ -194,6 +195,28 @@ describe('promoteSeed', () => {
   })
 })
 
+describe('defaultDotnetProject', () => {
+  // 스캐너는 알파벳순이라 루트 솔루션 파일이 첫 항목이 되기 쉽다. 새 구성의 하위 명령 기본값은 run 이고
+  // `dotnet run --project App.sln` 은 SDK 가 거부한다 — "'App.sln'은(는) 유효한 프로젝트 파일이 아닙니다"
+  it('솔루션보다 실제 프로젝트 파일을 고른다', () => {
+    expect(defaultDotnetProject(['App.sln', 'src/App/App.csproj'])).toBe('src/App/App.csproj')
+    expect(defaultDotnetProject(['App.sln', 'src/Lib/Lib.fsproj'])).toBe('src/Lib/Lib.fsproj')
+  })
+
+  it('프로젝트 파일이 여럿이면 목록의 첫 프로젝트 파일이다', () => {
+    expect(defaultDotnetProject(['a/A.csproj', 'b/B.csproj'])).toBe('a/A.csproj')
+  })
+
+  // 솔루션 파일만 있는 저장소도 있다 — 아무것도 안 가리키는 구성보다는 솔루션을 가리키는 편이 낫다
+  it('솔루션밖에 없으면 그것을 고른다', () => {
+    expect(defaultDotnetProject(['App.sln'])).toBe('App.sln')
+  })
+
+  it('빈 목록이면 빈 문자열이다', () => {
+    expect(defaultDotnetProject([])).toBe('')
+  })
+})
+
 describe('seedKeyOf', () => {
   it('종류와 핵심 매개변수를 잇는다', () => {
     expect(seedKeyOf({ id: 'x', name: 'x', type: 'npm', script: 'dev' })).toBe('npm:dev')
@@ -212,6 +235,16 @@ describe('seedKeyOf', () => {
     expect(
       seedKeyOf({ id: 'x', name: 'x', type: 'compose', composeFile: 'docker-compose.yml', services: 'web' })
     ).toBe('compose:docker-compose.yml:web')
+  })
+
+  // 같은 프로젝트 파일로 run 과 test 를 따로 두는 게 흔하므로 하위 명령까지 정체에 넣는다(go 와 같은 이유)
+  it('dotnet 은 프로젝트와 하위 명령(없으면 run) 으로 정체를 짓는다', () => {
+    expect(seedKeyOf({ id: 'x', name: 'x', type: 'dotnet', project: 'src/App/App.csproj' })).toBe(
+      'dotnet:src/App/App.csproj:run'
+    )
+    expect(
+      seedKeyOf({ id: 'x', name: 'x', type: 'dotnet', project: 'src/App/App.csproj', subcommand: 'test' })
+    ).toBe('dotnet:src/App/App.csproj:test')
   })
 
   it('dockerfile 은 imageTag 로 정체를 짓는다', () => {

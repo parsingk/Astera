@@ -13,6 +13,7 @@ export type RunConfigType =
   | 'pytest'
   | 'compose'
   | 'dockerfile'
+  | 'dotnet'
 
 /** What every kind shares. cwd is relative to the project root — empty means the root */
 interface RunConfigBase {
@@ -118,6 +119,21 @@ export interface DockerfileConfig extends RunConfigBase {
   runArgs?: string
 }
 
+/** The project file (.csproj/.fsproj/.sln) is required — the .NET CLI would otherwise pick whatever
+ *  sits in the working folder, which is a different configuration every time the cwd changes. It is
+ *  stored project-relative, like node's `file` and compose's `composeFile`: main/dotnetScanner.ts finds
+ *  the candidates and the form's picker converts an absolute pick back down (toRelativeCwd).
+ *  subcommand is optional here, unlike cargo/go where it is required: `run` is the only sensible
+ *  default for a kind whose project file is already the thing that identifies it. */
+export interface DotnetConfig extends RunConfigBase {
+  type: 'dotnet'
+  project: string
+  subcommand?: 'run' | 'test' | 'build'
+  /** Debug/Release — free text, since a project can define its own configurations */
+  configuration?: string
+  args?: string
+}
+
 export type RunConfig =
   | ShellConfig
   | NpmConfig
@@ -130,6 +146,7 @@ export type RunConfig =
   | PytestConfig
   | ComposeConfig
   | DockerfileConfig
+  | DotnetConfig
 
 /** The optional field keys a kind knows about. The form's "add optional field" dropdown is built
  *  from this.
@@ -161,5 +178,7 @@ export function optionalFieldsFor(type: RunConfigType, opts: { springBoot: boole
       return ['composeFile', 'services', 'action', 'args', ...common]
     case 'dockerfile':
       return ['dockerfilePath', 'buildArgs', 'runArgs', ...common]
+    case 'dotnet':
+      return ['subcommand', 'configuration', 'args', ...common]
   }
 }
