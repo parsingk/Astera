@@ -402,13 +402,8 @@ export default function App(): React.JSX.Element {
   layoutRef.current = layout
   const activePaneIdRef = useRef(activePaneId)
   activePaneIdRef.current = activePaneId
-  // The run configuration modal (its state lives inside RunToolbar) also suppresses global shortcuts.
-  // The setter is passed through directly because RunToolbar uses this callback as a useEffect
-  // dependency — recreating it on every render would flicker the suppression between false and true.
-  // A useState setter has a stable identity.
-  const [runModalOpen, setRunModalOpen] = useState(false)
   const modalOpenRef = useRef(false)
-  modalOpenRef.current = showNew || showSettings || runModalOpen
+  modalOpenRef.current = showNew || showSettings
   const fileTabsRef = useRef(fileTabs)
   fileTabsRef.current = fileTabs
   // 탭 순환이 쓰는 것 — 클릭과 같은 경로를 타야 종류에 상관없이 같은 일이 일어난다
@@ -1593,38 +1588,6 @@ export default function App(): React.JSX.Element {
   const runStop = (): void => {
     if (explorerRoot) void window.api.run.stop(explorerRoot)
   }
-  const runAddConfig = (name: string, command: string, env?: Record<string, string>, cwd?: string): void => {
-    if (!explorerRoot) return
-    // TEMPORARY (Task 1): RunConfigDialog only edits shell configs. Task 8 removes this handler
-    // entirely along with RunConfigDialog and the old add/edit menu items, folding add/edit into
-    // RunConfigManager's onSave — this literal 'shell' goes away with it, not before.
-    const config: RunConfig = { id: `user:${name}:${command}`, name, type: 'shell', command, env, cwd }
-    void window.api.run.saveConfig(explorerRoot, config).then(
-      () => {
-        void window.api.run.list(explorerRoot).then((r) => { setRunConfigs(r.configs); setRunSelectedId(config.id) })
-      },
-      // The cwd validation in run.saveConfig rejects a working folder outside the project here — before
-      // the JDK and working-folder fields existed there was effectively no way to fail on this path, so
-      // the error handling was missing.
-      (err) => toast.error(t('run.config.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
-    )
-  }
-  const runEditConfig = (
-    id: string,
-    name: string,
-    command: string,
-    env?: Record<string, string>,
-    cwd?: string
-  ): void => {
-    if (!explorerRoot) return
-    // TEMPORARY (Task 1): same reason as runAddConfig above — Task 8 removes this handler too
-    void window.api.run.saveConfig(explorerRoot, { id, name, type: 'shell', command, env, cwd }).then(
-      () => {
-        void window.api.run.list(explorerRoot).then((r) => { setRunConfigs(r.configs); setRunSelectedId(id) })
-      },
-      (err) => toast.error(t('run.config.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
-    )
-  }
   const runDeleteConfig = (id: string): void => {
     if (!explorerRoot) return
     void window.api.run.deleteConfig(explorerRoot, id).then(() => {
@@ -1635,10 +1598,9 @@ export default function App(): React.JSX.Element {
       })
     })
   }
-  /** RunConfigManager's onSave (Task 6). Unlike runAddConfig/runEditConfig above, the manager already
-   *  hands over an assembled RunConfig of whatever kind — there is no per-field signature to match, so
-   *  this one handler covers both add and edit (Task 6 only ever calls it with an edit to an existing
-   *  shell configuration; Task 7's ＋ flow will call it for new ones too). */
+  /** RunConfigManager's onSave. It always hands over an assembled RunConfig of whatever kind — there
+   *  is no per-field signature to match, so this one handler covers add, edit, and the promotion of a
+   *  seed into a user configuration copy (RunConfigManager.tsx's handleFormChange). */
   const runManagerSave = (config: RunConfig): void => {
     if (!explorerRoot) return
     void window.api.run.saveConfig(explorerRoot, config).then(
@@ -1801,16 +1763,10 @@ export default function App(): React.JSX.Element {
                 active={runActive}
                 onRun={runStart}
                 onStop={runStop}
-                onAddConfig={runAddConfig}
-                onEditConfig={runEditConfig}
-                onDeleteConfig={runDeleteConfig}
                 onOpenManager={() => setRunManagerOpen(true)}
                 activeRuns={activeRuns}
                 onJump={runJump}
                 onStopProject={runStopProject}
-                onModalOpenChange={setRunModalOpen}
-                projectPath={explorerRoot}
-                isSpringBoot={runIsSpringBoot}
               />
             </div>
           ) : null

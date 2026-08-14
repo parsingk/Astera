@@ -1213,6 +1213,12 @@ export function registerIpc(
     const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], defaultPath })
     return r.canceled ? null : r.filePaths[0]
   })
+  // Same spot and contract as pickFolder above, just 'openFile' instead of 'openDirectory'. Shared by
+  // the run configuration file-path fields (node's file now, python/dockerfile/dotnet's later).
+  ipcMain.handle('system.pickFile', async (_e, defaultPath?: string) => {
+    const r = await dialog.showOpenDialog(win, { properties: ['openFile'], defaultPath })
+    return r.canceled ? null : r.filePaths[0]
+  })
   ipcMain.handle('system.pathExists', async (_e, p: string) => {
     try {
       await fs.access(p)

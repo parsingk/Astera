@@ -451,6 +451,9 @@ export interface SystemApi {
   // already validated by run.start and run.saveConfig. Omitting it behaves exactly as the existing
   // caller (NewSessionDialog) does.
   pickFolder(defaultPath?: string): Promise<string | null>
+  // Same contract as pickFolder, for a single file — the run configuration file-path fields
+  // (node's file now, python/dockerfile/dotnet's later) share this instead of each inventing its own.
+  pickFile(defaultPath?: string): Promise<string | null>
   pathExists(p: string): Promise<boolean>
   checkCli(): Promise<{ claude: CliStatus; codex: CliStatus }>
   appVersion(): Promise<string>

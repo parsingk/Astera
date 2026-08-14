@@ -4,6 +4,7 @@ import type { RunContext } from '../../../core/run/build'
 import type { RunConfigType } from '../../../core/run/types'
 import type { MessageKey } from '../../../core/i18n'
 import { runTypeIcon } from '../../../core/run/typeIcon'
+import { promoteSeed } from '../../../core/run/config'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
 import { RunConfigForm } from './RunConfigForm'
@@ -38,11 +39,13 @@ function defaultConfigFor(type: RunConfigType, id: string, name: string, npmScri
  *  the currently selected configuration. With the tree visible, those become one toolbar in the same
  *  place.
  *
- *  Task 6 wired up shell configurations inline. This task (7) delegates the field rendering to
- *  RunConfigForm — the per-kind fields, the optional-field dropdown and the draft/blur-save logic all
- *  live there now — and wires the ＋ button to RunTypePicker. Auto-detected (seed) configurations show
- *  up in the tree too, in italics, but are read-only here: turning one into an editable copy on first
- *  edit (promotion) is Task 8. */
+ *  Task 6 wired up shell configurations inline. Task 7 delegated the field rendering to RunConfigForm
+ *  — the per-kind fields, the optional-field dropdown and the draft/blur-save logic all live there now
+ *  — and wired the ＋ button to RunTypePicker. Auto-detected (seed) configurations show up in the tree
+ *  too, in italics: they are editable like any other configuration, but the moment a field actually
+ *  changes, handleFormChange below promotes the edited value into a user configuration copy (the same
+ *  rule IntelliJ uses for a temporary configuration created by running from the gutter) — see
+ *  promoteSeed in core/run/config.ts. */
 export function RunConfigManager({
   configs,
   context,
@@ -77,6 +80,24 @@ export function RunConfigManager({
   const selected = displayConfigs.find((c) => c.id === selectedId) ?? null
   const isSeed = !!selected && selected.id.startsWith('seed:')
   const isPending = !!pending && selected?.id === pending.id
+
+  // RunConfigForm's onChange, for every configuration — not just seeds. A seed edit promotes: the
+  // edited value itself (not the pre-edit selected) becomes the user copy, so the change that
+  // triggered the promotion is not lost. Reusing `pending` (the same bridge ＋ uses for a config that
+  // has not round-tripped through onSave yet) shows the copy immediately instead of the pane going
+  // blank until the save round-trips — and it moves the selection to the new id so the next keystroke
+  // edits the copy rather than promoting again. mergeConfigs already hides the original seed once a
+  // stored config shares its seedKeyOf, so no separate suppression is needed here.
+  const handleFormChange = (next: RunConfig): void => {
+    if (!next.id.startsWith('seed:')) {
+      onSave(next)
+      return
+    }
+    const promoted = promoteSeed(next, `user:${crypto.randomUUID()}`)
+    setPending(promoted)
+    setSelectedId(promoted.id)
+    onSave(promoted)
+  }
 
   // The JDK list does not depend on which configuration is selected, so it is fetched once here
   // rather than inside the form.
@@ -187,9 +208,8 @@ export function RunConfigManager({
           <div className="rcm-form">
             {selected && (
               <>
-                {/* Auto-detected configurations are read-only here (Task 8 turns an edit into a
-                    promotion). readOnly on its own would silently swallow keystrokes, so the state
-                    also gets a visible hint and a dimmed input style (.rcm-form input:read-only). */}
+                {/* Auto-detected configurations are fully editable — the hint just explains that
+                    touching one saves a promoted copy rather than editing the seed in place. */}
                 {isSeed && <div className="rcm-seed-hint">{t('run.manager.seedHint')}</div>}
                 <RunConfigForm
                   config={selected}
@@ -198,8 +218,7 @@ export function RunConfigManager({
                   jdks={jdks}
                   npmScripts={npmScripts}
                   projectPath={projectPath}
-                  readOnly={isSeed}
-                  onChange={onSave}
+                  onChange={handleFormChange}
                 />
               </>
             )}

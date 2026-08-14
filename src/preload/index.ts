@@ -138,6 +138,7 @@ const api = {
   },
   system: {
     pickFolder: invoke('system.pickFolder'),
+    pickFile: invoke('system.pickFile'),
     pathExists: invoke('system.pathExists'),
     checkCli: invoke('system.checkCli'),
     appVersion: invoke('system.appVersion')

@@ -551,64 +551,38 @@ export const ko = {
   // WorktreePanel.tsx — panel header, row icon buttons
   'worktree.refresh': '새로 고침',
   'worktree.action.startSession': '세션 시작',
-  // RunToolbar.tsx — config select, run/stop, edit/delete, the running list
+  // RunToolbar.tsx — config select, run/stop, the running list, ⋮ menu (only item opens RunConfigManager)
   'run.config.selectLabel': '실행 구성 선택',
   'run.config.none': '실행 구성 없음',
-  'run.config.add': '실행 구성 추가…',
   'run.config.more': '추가 동작',
   'run.action.run': '실행',
   'run.action.stop': '중지',
-  'run.config.editTitle': '구성 편집',
-  'run.config.deleteTitle': '구성 삭제',
   'run.global.listTitle': '실행 중 목록',
   'run.global.jump': '이동',
-  // App.tsx runAddConfig/runEditConfig — the text both sites share when the run.saveConfig IPC
-  // fails (same meaning: saving the config failed)
+  // App.tsx runManagerSave — the text shown when the run.saveConfig IPC fails
   'run.config.saveFailed': '저장 실패: {detail}',
   // ipc.ts resolveRunCwd — a sentence main throws also shows up verbatim in a renderer toast,
   // so it is translated here before throwing (the layering rule)
   'run.config.cwdNotString': '실행 구성의 작업 폴더가 올바르지 않습니다',
   'run.config.cwdOutsideProject': '실행 구성의 작업 폴더는 프로젝트 안이어야 합니다',
-  // RunConfigDialog.tsx — RunToolbar's inline form was split out into this dialog component.
-  // namePlaceholder/commandPlaceholder were the old inline form's keys; nameLabel is the rename that
-  // matches the dialog structure (the value is reused as-is), and commandPlaceholder's value was
-  // refreshed for the new placeholder wording.
-  'run.form.editTitle': '실행 구성 편집',
-  'run.form.addTitle': '실행 구성 추가',
+  // RunConfigForm.tsx — name/command fields and the JDK/file pickers shared by every per-kind form
   'run.form.nameLabel': '이름',
   'run.form.commandLabel': '명령',
-  'run.form.commandPlaceholder': '예: gradlew.bat bootRun',
-  'run.form.commandHint': '프로젝트 폴더에서 셸로 실행됩니다.',
-  'run.form.jdkLabel': 'JDK (선택)',
   'run.form.jdkLoading': 'JDK 조회 중…',
   'run.form.jdkNone': '사용 안 함 (앱 환경 그대로)',
   'run.form.jdkCustom': '{path} (직접 지정)',
   'run.form.jdkBrowse': '찾아보기…',
-  'run.form.jdkHint': 'JAVA_HOME으로 설정됩니다.',
-  'run.form.springLabel': 'Spring 프로파일 (선택)',
-  'run.form.springHint': 'SPRING_PROFILES_ACTIVE로 설정됩니다. 콤마로 여러 개를 지정할 수 있습니다.',
-  'run.form.cwdLabel': '작업 폴더 (선택)',
-  'run.form.cwdPlaceholder': '비우면 프로젝트 루트',
   'run.form.cwdBrowse': '선택…',
-  'run.form.cwdHint':
-    '프로젝트 폴더 기준 상대 경로로 저장됩니다(프로젝트 밖은 선택할 수 없습니다). 비우면 프로젝트 루트에서 실행합니다.',
-  'run.form.envLabel': '환경변수 (선택)',
-  'run.form.envPlaceholder': '한 줄에 하나\nCUSTOM_VAR=value',
-  'run.form.envHint': '비워 두면 앱 환경을 그대로 물려받습니다. 같은 이름은 이 구성이 우선합니다.',
-  'run.form.save': '저장',
-  'run.form.add': '추가',
-  // RunConfigManager.tsx — the two-pane dialog that replaces RunConfigDialog (Task 6: shell only,
-  // per-kind forms are Task 7). run.type.* are kind labels grouping the tree; product/tool names
-  // among them (npm, Gradle, Maven, cargo, go) are not translated.
+  'run.form.fileBrowse': '찾아보기…',
+  // RunConfigManager.tsx — the two-pane dialog. run.type.* are kind labels grouping the tree;
+  // product/tool names among them (npm, Gradle, Maven, cargo, go) are not translated.
   'run.manager.title': '실행 구성',
-  // RunToolbar.tsx ⋮ menu — TEMPORARY (Task 6): opens the new manager alongside the add/edit/delete
-  // items below, which still open the old single-config modal. Task 8 removes those three (and
-  // RunConfigDialog itself) and this becomes the menu's only item.
   'run.manager.open': '실행 구성 관리…',
   'run.manager.add': '추가',
   'run.manager.remove': '제거',
   'run.manager.duplicate': '복제',
-  'run.manager.seedHint': '자동 감지된 구성은 읽기 전용입니다.',
+  // 시드를 고치면 그 순간 사용자 구성 사본으로 승격된다(promoteSeed) — 더 이상 읽기 전용이 아니다
+  'run.manager.seedHint': '자동 감지된 구성을 수정하면 사용자 구성 사본으로 저장됩니다.',
   'run.type.shell': 'Shell',
   'run.type.npm': 'npm',
   'run.type.node': 'Node.js',

@@ -568,57 +568,37 @@ export const es: Catalog = {
   // WorktreePanel.tsx — panel header, row icon buttons
   'worktree.refresh': 'Actualizar',
   'worktree.action.startSession': 'Nueva sesión',
-  // RunToolbar.tsx — config select, run/stop, edit/delete, the running list
+  // RunToolbar.tsx — config select, run/stop, the running list, ⋮ menu (only item opens RunConfigManager)
   'run.config.selectLabel': 'Configuración de ejecución',
   'run.config.none': 'Sin configuraciones de ejecución',
-  'run.config.add': 'Añadir configuración…',
   'run.config.more': 'Más acciones',
   'run.action.run': 'Ejecutar',
   'run.action.stop': 'Detener',
-  'run.config.editTitle': 'Editar la configuración',
-  'run.config.deleteTitle': 'Eliminar la configuración',
   'run.global.listTitle': 'Ejecuciones activas',
   'run.global.jump': 'Ir',
-  // App.tsx runAddConfig/runEditConfig — shared when the run.saveConfig IPC fails
+  // App.tsx runManagerSave — shown when the run.saveConfig IPC fails
   'run.config.saveFailed': 'Error al guardar: {detail}',
   // ipc.ts resolveRunCwd — translated in main before throwing (the layering rule)
   'run.config.cwdNotString': 'La carpeta de trabajo de la configuración de ejecución no es válida',
   'run.config.cwdOutsideProject':
     'La carpeta de trabajo de la configuración de ejecución debe estar dentro del proyecto',
-  // RunConfigDialog.tsx
-  'run.form.editTitle': 'Editar la configuración de ejecución',
-  'run.form.addTitle': 'Agregar una configuración de ejecución',
+  // RunConfigForm.tsx — name/command fields and the JDK/file pickers shared by every per-kind form
   'run.form.nameLabel': 'Nombre',
   'run.form.commandLabel': 'Comando',
-  'run.form.commandPlaceholder': 'Ej.: gradlew.bat bootRun',
-  'run.form.commandHint': 'Se ejecuta en un shell desde la carpeta del proyecto.',
-  'run.form.jdkLabel': 'JDK (opcional)',
   'run.form.jdkLoading': 'Buscando JDK…',
   'run.form.jdkNone': 'No usar (entorno de la aplicación tal cual)',
   'run.form.jdkCustom': '{path} (personalizado)',
   'run.form.jdkBrowse': 'Examinar…',
-  'run.form.jdkHint': 'Se establece como JAVA_HOME.',
-  'run.form.springLabel': 'Perfiles de Spring (opcional)',
-  'run.form.springHint':
-    'Se establece como SPRING_PROFILES_ACTIVE. Puede indicar varios separados por comas.',
-  'run.form.cwdLabel': 'Carpeta de trabajo (opcional)',
-  'run.form.cwdPlaceholder': 'Si se deja vacío, la raíz del proyecto',
   'run.form.cwdBrowse': 'Seleccionar…',
-  'run.form.cwdHint':
-    'Se guarda como una ruta relativa a la carpeta del proyecto (no se puede seleccionar nada fuera del proyecto). Si se deja vacío, se ejecuta en la raíz del proyecto.',
-  'run.form.envLabel': 'Variables de entorno (opcional)',
-  'run.form.envPlaceholder': 'Una por línea\nCUSTOM_VAR=value',
-  'run.form.envHint':
-    'Si se deja vacío, se hereda el entorno de la aplicación tal cual. Si un nombre se repite, prevalece esta configuración.',
-  'run.form.save': 'Guardar',
-  'run.form.add': 'Agregar',
-  // RunConfigManager.tsx — the two-pane dialog (Task 6: shell only)
+  'run.form.fileBrowse': 'Examinar…',
+  // RunConfigManager.tsx — the two-pane dialog
   'run.manager.title': 'Configuraciones de ejecución',
   'run.manager.open': 'Gestionar configuraciones de ejecución…',
   'run.manager.add': 'Añadir',
   'run.manager.remove': 'Quitar',
   'run.manager.duplicate': 'Duplicar',
-  'run.manager.seedHint': 'Las configuraciones detectadas automáticamente son de solo lectura.',
+  'run.manager.seedHint':
+    'Editar una configuración detectada automáticamente la guarda como una copia de configuración de usuario.',
   'run.type.shell': 'Shell',
   'run.type.npm': 'npm',
   'run.type.node': 'Node.js',

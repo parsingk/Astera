@@ -31,7 +31,6 @@ export function RunConfigForm({
   jdks,
   npmScripts,
   projectPath,
-  readOnly,
   onChange
 }: {
   /** The last-persisted value for the current selection — the baseline draft is reseeded from and
@@ -48,8 +47,6 @@ export function RunConfigForm({
   npmScripts: string[]
   /** Base for the working-folder and JDK "Choose…" pickers, and for the relative-cwd conversion */
   projectPath: string
-  /** Auto-detected (seed) configurations are read-only — Task 8 turns an edit into a promotion */
-  readOnly: boolean
   onChange: (config: RunConfig) => void
 }): React.JSX.Element {
   const { t } = useI18n()
@@ -107,6 +104,13 @@ export function RunConfigForm({
     const dir = await window.api.system.pickFolder(projectPath)
     if (dir) changeNow({ ...draft, cwd: toRelativeCwd(dir, projectPath) || undefined })
   }
+  const pickFile = async (): Promise<void> => {
+    if (draft.type !== 'node') return
+    const file = await window.api.system.pickFile(projectPath)
+    // Stored project-relative, same as cwd — an absolute path breaks the moment the project moves.
+    // Unlike cwd, file has no "empty means root" meaning, so the '' fallback there does not apply.
+    if (file) changeNow({ ...draft, file: toRelativeCwd(file, projectPath) })
+  }
   const pickJdk = async (): Promise<void> => {
     if (draft.type !== 'gradle' && draft.type !== 'maven') return
     const dir = await window.api.system.pickFolder(draft.javaHome || undefined)
@@ -136,7 +140,6 @@ export function RunConfigForm({
         <input
           type="text"
           value={draft.name}
-          readOnly={readOnly}
           onChange={(e) => change({ ...draft, name: e.target.value })}
           onBlur={flush}
         />
@@ -149,7 +152,6 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.command}
-            readOnly={readOnly}
             onChange={(e) => change({ ...draft, command: e.target.value })}
             onBlur={flush}
           />
@@ -158,28 +160,28 @@ export function RunConfigForm({
       {draft.type === 'npm' && (
         <div className="field">
           <label>{t('run.field.script')}</label>
-          {readOnly ? (
-            <input type="text" readOnly value={draft.script} />
-          ) : (
-            <Select
-              items={scriptItems}
-              value={draft.script}
-              onChange={(v) => changeNow({ ...draft, script: v })}
-              ariaLabel={t('run.field.script')}
-            />
-          )}
+          <Select
+            items={scriptItems}
+            value={draft.script}
+            onChange={(v) => changeNow({ ...draft, script: v })}
+            ariaLabel={t('run.field.script')}
+          />
         </div>
       )}
       {draft.type === 'node' && (
         <div className="field">
           <label>{t('run.field.file')}</label>
-          <input
-            type="text"
-            value={draft.file}
-            readOnly={readOnly}
-            onChange={(e) => change({ ...draft, file: e.target.value })}
-            onBlur={flush}
-          />
+          <div className="row">
+            <input
+              type="text"
+              value={draft.file}
+              onChange={(e) => change({ ...draft, file: e.target.value })}
+              onBlur={flush}
+            />
+            <button type="button" onClick={() => void pickFile()}>
+              {t('run.form.fileBrowse')}
+            </button>
+          </div>
         </div>
       )}
       {draft.type === 'gradle' && (
@@ -188,7 +190,6 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.tasks}
-            readOnly={readOnly}
             onChange={(e) => change({ ...draft, tasks: e.target.value })}
             onBlur={flush}
           />
@@ -200,7 +201,6 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.goals}
-            readOnly={readOnly}
             onChange={(e) => change({ ...draft, goals: e.target.value })}
             onBlur={flush}
           />
@@ -209,20 +209,16 @@ export function RunConfigForm({
       {(draft.type === 'cargo' || draft.type === 'go') && (
         <div className="field">
           <label>{t('run.field.subcommand')}</label>
-          {readOnly ? (
-            <input type="text" readOnly value={draft.subcommand} />
-          ) : (
-            <Select
-              items={[
-                { value: 'run', label: 'run' },
-                { value: 'test', label: 'test' },
-                { value: 'build', label: 'build' }
-              ]}
-              value={draft.subcommand}
-              onChange={(v) => changeNow({ ...draft, subcommand: v as 'run' | 'test' | 'build' })}
-              ariaLabel={t('run.field.subcommand')}
-            />
-          )}
+          <Select
+            items={[
+              { value: 'run', label: 'run' },
+              { value: 'test', label: 'test' },
+              { value: 'build', label: 'build' }
+            ]}
+            value={draft.subcommand}
+            onChange={(v) => changeNow({ ...draft, subcommand: v as 'run' | 'test' | 'build' })}
+            ariaLabel={t('run.field.subcommand')}
+          />
         </div>
       )}
 
@@ -232,8 +228,6 @@ export function RunConfigForm({
           <label>{t('run.field.javaHome')}</label>
           {jdks === null ? (
             <span className="check-note">{t('run.form.jdkLoading')}</span>
-          ) : readOnly ? (
-            <input type="text" readOnly value={draft.javaHome ?? ''} />
           ) : (
             <div className="row">
               <Select
@@ -256,7 +250,6 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.springProfiles ?? ''}
-            readOnly={readOnly}
             onChange={(e) => change({ ...draft, springProfiles: e.target.value })}
             onBlur={flush}
           />
@@ -265,22 +258,18 @@ export function RunConfigForm({
       {draft.type === 'npm' && visible('packageManager') && (
         <div className="field">
           <label>{t('run.field.packageManager')}</label>
-          {readOnly ? (
-            <input type="text" readOnly value={draft.packageManager ?? 'auto'} />
-          ) : (
-            <Select
-              items={[
-                { value: 'auto', label: `${t('run.field.packageManagerAuto')} — ${context.packageManager}` },
-                { value: 'npm', label: 'npm' },
-                { value: 'pnpm', label: 'pnpm' },
-                { value: 'yarn', label: 'yarn' },
-                { value: 'bun', label: 'bun' }
-              ]}
-              value={draft.packageManager ?? 'auto'}
-              onChange={(v) => changeNow({ ...draft, packageManager: v as PackageManager | 'auto' })}
-              ariaLabel={t('run.field.packageManager')}
-            />
-          )}
+          <Select
+            items={[
+              { value: 'auto', label: `${t('run.field.packageManagerAuto')} — ${context.packageManager}` },
+              { value: 'npm', label: 'npm' },
+              { value: 'pnpm', label: 'pnpm' },
+              { value: 'yarn', label: 'yarn' },
+              { value: 'bun', label: 'bun' }
+            ]}
+            value={draft.packageManager ?? 'auto'}
+            onChange={(v) => changeNow({ ...draft, packageManager: v as PackageManager | 'auto' })}
+            ariaLabel={t('run.field.packageManager')}
+          />
         </div>
       )}
       {draft.type === 'node' && visible('nodePath') && (
@@ -289,7 +278,6 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.nodePath ?? ''}
-            readOnly={readOnly}
             onChange={(e) => change({ ...draft, nodePath: e.target.value })}
             onBlur={flush}
           />
@@ -300,7 +288,6 @@ export function RunConfigForm({
           <input
             type="checkbox"
             checked={!!draft.release}
-            disabled={readOnly}
             onChange={(e) => changeNow({ ...draft, release: e.target.checked })}
           />
           {t('run.field.release')}
@@ -312,7 +299,6 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.features ?? ''}
-            readOnly={readOnly}
             onChange={(e) => change({ ...draft, features: e.target.value })}
             onBlur={flush}
           />
@@ -324,7 +310,6 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.packagePath ?? ''}
-            readOnly={readOnly}
             onChange={(e) => change({ ...draft, packagePath: e.target.value })}
             onBlur={flush}
           />
@@ -336,7 +321,6 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.args ?? ''}
-            readOnly={readOnly}
             onChange={(e) => change({ ...draft, args: e.target.value })}
             onBlur={flush}
           />
@@ -350,27 +334,24 @@ export function RunConfigForm({
               type="text"
               className="run-config-cwd"
               value={draft.cwd ?? ''}
-              readOnly={readOnly}
               onChange={(e) => change({ ...draft, cwd: e.target.value })}
               onBlur={flush}
             />
-            {!readOnly && (
-              <button type="button" onClick={() => void pickCwd()}>
-                {t('run.form.cwdBrowse')}
-              </button>
-            )}
+            <button type="button" onClick={() => void pickCwd()}>
+              {t('run.form.cwdBrowse')}
+            </button>
           </div>
         </div>
       )}
       {visible('env') && (
         <div className="field">
           <label>{t('run.field.env')}</label>
-          <textarea rows={4} value={envText} readOnly={readOnly} onChange={(e) => setEnvText(e.target.value)} onBlur={commitEnv} />
+          <textarea rows={4} value={envText} onChange={(e) => setEnvText(e.target.value)} onBlur={commitEnv} />
         </div>
       )}
 
       <div className="rcm-add-option">
-        <button type="button" disabled={readOnly || available.length === 0} onClick={() => setAddOpen((v) => !v)}>
+        <button type="button" disabled={available.length === 0} onClick={() => setAddOpen((v) => !v)}>
           {t('run.form.addOption')} ▾
         </button>
         {addOpen && (

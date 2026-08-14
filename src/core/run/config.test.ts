@@ -4,11 +4,10 @@ import {
   detectSeedConfigs,
   mergeConfigs,
   seedKeyOf,
+  promoteSeed,
   parseEnvLines,
   formatEnvLines,
   isSpringBootProject,
-  splitEnv,
-  mergeEnv,
   toRelativeCwd,
   type RunConfig
 } from './config'
@@ -179,6 +178,21 @@ describe('mergeConfigs — 종류와 핵심 매개변수로 충돌을 본다', (
   })
 })
 
+describe('promoteSeed', () => {
+  it('시드를 사용자 구성 사본으로 만든다', () => {
+    const seed = { id: 'seed:npm:dev', name: 'dev', type: 'npm' as const, script: 'dev' }
+    const promoted = promoteSeed(seed, 'user:abc')
+    expect(promoted).toEqual({ id: 'user:abc', name: 'dev', type: 'npm', script: 'dev' })
+  })
+
+  it('승격된 사본이 원래 시드를 목록에서 가린다', () => {
+    // IntelliJ 의 임시 구성과 같은 규칙 — 기울임으로 있다가 손대면 정식 구성이 된다
+    const seed = { id: 'seed:npm:dev', name: 'dev', type: 'npm' as const, script: 'dev' }
+    const promoted = promoteSeed(seed, 'user:abc')
+    expect(mergeConfigs([seed], [promoted]).map((c) => c.id)).toEqual(['user:abc'])
+  })
+})
+
 describe('seedKeyOf', () => {
   it('종류와 핵심 매개변수를 잇는다', () => {
     expect(seedKeyOf({ id: 'x', name: 'x', type: 'npm', script: 'dev' })).toBe('npm:dev')
@@ -240,47 +254,6 @@ describe('isSpringBootProject', () => {
   it('둘 다 없거나 마커가 없으면 false', () => {
     expect(isSpringBootProject({ buildGradle: null, pom: null })).toBe(false)
     expect(isSpringBootProject({ buildGradle: "id 'java'", pom: null })).toBe(false)
-  })
-})
-
-describe('splitEnv', () => {
-  it('키가 없으면 picked는 빈 맵, rest는 원본과 같다', () => {
-    expect(splitEnv({ A: '1' }, ['JAVA_HOME'])).toEqual({ picked: {}, rest: { A: '1' } })
-  })
-  it('일부 키만 있으면 그만큼만 picked로 분리한다', () => {
-    expect(splitEnv({ JAVA_HOME: 'C:/jdk', A: '1' }, ['JAVA_HOME', 'SPRING_PROFILES_ACTIVE'])).toEqual({
-      picked: { JAVA_HOME: 'C:/jdk' },
-      rest: { A: '1' }
-    })
-  })
-  it('env가 undefined면 picked·rest 모두 빈 맵', () => {
-    expect(splitEnv(undefined, ['JAVA_HOME'])).toEqual({ picked: {}, rest: {} })
-  })
-  it('원본 env를 변형하지 않는다', () => {
-    const env = { JAVA_HOME: 'C:/jdk', A: '1' }
-    const snapshot = { ...env }
-    splitEnv(env, ['JAVA_HOME'])
-    expect(env).toEqual(snapshot)
-  })
-})
-
-describe('mergeEnv', () => {
-  it('picked의 빈 문자열·undefined 값은 버린다', () => {
-    expect(mergeEnv({ JAVA_HOME: '' }, { A: '1' })).toEqual({ A: '1' })
-    expect(mergeEnv({ JAVA_HOME: undefined }, { A: '1' })).toEqual({ A: '1' })
-  })
-  it('picked 값이 있으면 rest와 합친다', () => {
-    expect(mergeEnv({ JAVA_HOME: 'C:/jdk' }, { A: '1' })).toEqual({ JAVA_HOME: 'C:/jdk', A: '1' })
-  })
-  it('rest에 같은 키가 있어도 picked가 이긴다 (textarea에 손으로 겹쳐 쓴 경우)', () => {
-    expect(mergeEnv({ JAVA_HOME: 'C:/from-select' }, { JAVA_HOME: 'C:/typed-by-hand' })).toEqual({
-      JAVA_HOME: 'C:/from-select'
-    })
-  })
-  it('splitEnv와 왕복한다', () => {
-    const env = { JAVA_HOME: 'C:/jdk-21', SPRING_PROFILES_ACTIVE: 'local', OTHER: '1' }
-    const { picked, rest } = splitEnv(env, ['JAVA_HOME', 'SPRING_PROFILES_ACTIVE'])
-    expect(mergeEnv(picked, rest)).toEqual(env)
   })
 })
 

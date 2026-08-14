@@ -119,6 +119,17 @@ export function mergeConfigs(seed: RunConfig[], stored: RunConfig[]): RunConfig[
   return [...stored, ...seed.filter((s) => !taken.has(seedKeyOf(s)))]
 }
 
+/** Promotes an auto-detected configuration into a user configuration.
+ *
+ *  IntelliJ shows the temporary configuration created by running from the gutter in italics, and
+ *  saving it turns it into a permanent one. Our seeds are the same kind of thing, so they follow the
+ *  same rule rather than inventing a new concept. mergeConfigs already settles conflicts by
+ *  seedKeyOf, so the promoted copy automatically hides the original seed once it is stored — there is
+ *  no second suppression to add here. */
+export function promoteSeed(config: RunConfig, newId: string): RunConfig {
+  return { ...config, id: newId }
+}
+
 /** One `KEY=VALUE` per line → map. Blank lines and `#` comments are ignored. Splits on the first `=` only (the value may contain `=`). */
 export function parseEnvLines(text: string): Record<string, string> {
   const out: Record<string, string> = {}
@@ -143,43 +154,10 @@ export function formatEnvLines(env: Record<string, string> | undefined): string 
     .join('\n')
 }
 
-/** Splits specific env keys out so they can be edited in a dedicated field, like the JDK and Spring profile ones.
- *  RunConfigDialog uses it to keep those keys from showing up again in the environment variable textarea. The original
- *  env is never mutated (only shallow copies are returned) — the caller can go on editing rest in the textarea and the config.env original stays safe. */
-export function splitEnv(
-  env: Record<string, string> | undefined,
-  keys: string[]
-): { picked: Record<string, string>; rest: Record<string, string> } {
-  const picked: Record<string, string> = {}
-  const rest: Record<string, string> = {}
-  for (const [k, v] of Object.entries(env ?? {})) {
-    if (keys.includes(k)) picked[k] = v
-    else rest[k] = v
-  }
-  return { picked, rest }
-}
-
-/** Inverse of splitEnv — merges the dedicated field values with the remaining env into the final env to store.
- *  Empty-string and undefined values in picked are dropped — that stops a field left blank to mean "not used" from
- *  being stored as env: {KEY: ''}, which would make runManager overwrite the real process.env value with an empty string.
- *  When the same key is also in rest, picked wins — this state really does occur: the user re-typed JAVA_HOME= by hand
- *  into the environment variable textarea while the JDK select still holds a value.
- *  If the hand-written textarea value were stored instead of the value the dedicated field displays, the UI would be
- *  lying — "the field shows one value, the stored value is another". The dedicated field has to win for screen and storage to agree. */
-export function mergeEnv(
-  picked: Record<string, string | undefined>,
-  rest: Record<string, string>
-): Record<string, string> {
-  const out: Record<string, string> = { ...rest }
-  for (const [k, v] of Object.entries(picked)) {
-    if (v) out[k] = v
-  }
-  return out
-}
-
-/** Converts the absolute path returned by RunConfigDialog's working-folder "Choose…" dialog into a path relative to
- *  the project root. run.start resolves RunConfig.cwd against the project root, so storing the absolute path breaks
- *  as soon as the project moves or is opened on another machine.
+/** Converts the absolute path returned by one of RunConfigForm's "Choose…"/"찾기" dialogs (working
+ *  folder, node's file) into a path relative to the project root. run.start resolves a relative
+ *  RunConfig.cwd or file against the project root, so storing the absolute path breaks as soon as the
+ *  project moves or is opened on another machine.
  *  The prefix comparison ignores case — unlike useFileOps.copyPath(p.slice(root.length)...), whose input comes from
  *  the explorer tree, the input here is whatever the OS folder picker returned, and on win32 the drive letter and path
  *  casing it returns can differ from the project root string (same reasoning as isPathWithin in core/files/tree.ts).

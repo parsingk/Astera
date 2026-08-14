@@ -562,56 +562,35 @@ export const ja: Catalog = {
   // WorktreePanel.tsx — panel header, row icon buttons
   'worktree.refresh': '更新',
   'worktree.action.startSession': 'セッションを開始',
-  // RunToolbar.tsx — config select, run/stop, edit/delete, the running list
+  // RunToolbar.tsx — config select, run/stop, the running list, ⋮ menu (only item opens RunConfigManager)
   'run.config.selectLabel': '実行構成の選択',
   'run.config.none': '実行構成がありません',
-  'run.config.add': '実行構成を追加…',
   'run.config.more': 'その他の操作',
   'run.action.run': '実行',
   'run.action.stop': '停止',
-  'run.config.editTitle': '構成を編集',
-  'run.config.deleteTitle': '構成を削除',
   'run.global.listTitle': '実行中の一覧',
   'run.global.jump': '移動',
-  // App.tsx runAddConfig/runEditConfig — shared when the run.saveConfig IPC fails
+  // App.tsx runManagerSave — shown when the run.saveConfig IPC fails
   'run.config.saveFailed': '保存に失敗しました: {detail}',
   // ipc.ts resolveRunCwd — thrown in main, shown verbatim in a renderer toast
   'run.config.cwdNotString': '実行構成の作業フォルダが正しくありません',
   'run.config.cwdOutsideProject': '実行構成の作業フォルダはプロジェクト内である必要があります',
-  // RunConfigDialog.tsx
-  'run.form.editTitle': '実行構成の編集',
-  'run.form.addTitle': '実行構成の追加',
+  // RunConfigForm.tsx — name/command fields and the JDK/file pickers shared by every per-kind form
   'run.form.nameLabel': '名前',
   'run.form.commandLabel': 'コマンド',
-  'run.form.commandPlaceholder': '例: gradlew.bat bootRun',
-  'run.form.commandHint': 'プロジェクトフォルダでシェルから実行されます。',
-  'run.form.jdkLabel': 'JDK (任意)',
   'run.form.jdkLoading': 'JDK を検索中…',
   'run.form.jdkNone': '使用しない (アプリの環境のまま)',
   'run.form.jdkCustom': '{path} (手動指定)',
   'run.form.jdkBrowse': '参照…',
-  'run.form.jdkHint': 'JAVA_HOME に設定されます。',
-  'run.form.springLabel': 'Spring プロファイル (任意)',
-  'run.form.springHint':
-    'SPRING_PROFILES_ACTIVE に設定されます。カンマ区切りで複数指定できます。',
-  'run.form.cwdLabel': '作業フォルダ (任意)',
-  'run.form.cwdPlaceholder': '空欄ならプロジェクトルート',
   'run.form.cwdBrowse': '選択…',
-  'run.form.cwdHint':
-    'プロジェクトフォルダからの相対パスで保存されます (プロジェクト外は選択できません)。空欄の場合はプロジェクトルートで実行します。',
-  'run.form.envLabel': '環境変数 (任意)',
-  'run.form.envPlaceholder': '1行に1つ\nCUSTOM_VAR=value',
-  'run.form.envHint':
-    '空欄のままにするとアプリの環境をそのまま引き継ぎます。同じ名前はこの構成が優先されます。',
-  'run.form.save': '保存',
-  'run.form.add': '追加',
-  // RunConfigManager.tsx — the two-pane dialog (Task 6: shell only)
+  'run.form.fileBrowse': '参照…',
+  // RunConfigManager.tsx — the two-pane dialog
   'run.manager.title': '実行構成',
   'run.manager.open': '実行構成を管理…',
   'run.manager.add': '追加',
   'run.manager.remove': '削除',
   'run.manager.duplicate': '複製',
-  'run.manager.seedHint': '自動検出された構成は読み取り専用です。',
+  'run.manager.seedHint': '自動検出された構成を編集すると、ユーザー構成のコピーとして保存されます。',
   'run.type.shell': 'Shell',
   'run.type.npm': 'npm',
   'run.type.node': 'Node.js',

@@ -795,13 +795,11 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .rcm-item { flex: none; width: 100%; box-sizing: border-box; text-align: left; background: none; border: 0; border-left: 2px solid transparent; color: var(--text); font-size: 12px; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
 .rcm-item:hover { background: var(--surface-hover); }
 .rcm-item.on { background: var(--elevated); border-left-color: var(--accent); }
-/* Auto-detected (seed) configurations — italic marks them as read-only at a glance, mirroring the
-   .rcm-form input:read-only treatment below */
+/* Auto-detected (seed) configurations — italic marks them as not yet a user configuration. Editing one
+   promotes it into a plain (non-italic) user configuration copy (core/run/config.ts promoteSeed). */
 .rcm-item.seed { font-style: italic; color: var(--text-dim); }
 .rcm-form { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
 .rcm-seed-hint { font-size: 12px; color: var(--text-faint); }
-/* readOnly alone would silently swallow keystrokes — this makes the state visible without a second look */
-.rcm-form input:read-only { color: var(--text-faint); cursor: default; }
 .rcm-resolved { font-family: var(--mono); font-size: 12px; color: var(--ok); word-break: break-all; }
 /* RunTypePicker — the ＋ button's kind-picker popup. Anchored the same way as .run-more/.run-more-menu
    in RunToolbar; a separate namespace because it also holds a search input and two grouped sections
