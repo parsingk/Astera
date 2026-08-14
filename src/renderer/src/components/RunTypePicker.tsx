@@ -5,9 +5,11 @@ import { runTypeIcon } from '../../../core/run/typeIcon'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
 
-/** Every kind modeled so far, in the order they are offered. Compose/Dockerfile/.NET are out of scope
- *  until their own tasks give them a RunConfigType. */
-const ALL_TYPES: RunConfigType[] = ['shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest']
+/** Every kind modeled so far, in the order they are offered. Dockerfile/.NET are out of scope until
+ *  their own tasks give them a RunConfigType. */
+const ALL_TYPES: RunConfigType[] = [
+  'shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest', 'compose'
+]
 
 /** The ＋ button's popup for picking a new configuration's kind. A search box narrows the list; kinds
  *  already detected in this project (a seed of that kind exists in `configs` — RunConfigManager derives

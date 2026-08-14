@@ -34,6 +34,8 @@ function defaultConfigFor(type: RunConfigType, id: string, name: string, npmScri
       return { id, name, type, file: '' }
     case 'pytest':
       return { id, name, type }
+    case 'compose':
+      return { id, name, type }
   }
 }
 
@@ -144,6 +146,25 @@ export function RunConfigManager({
     }
   }, [projectPath])
 
+  // The compose services text field's candidate hint. Depends on projectPath like pythonInterpreters —
+  // the compose file, if any, lives inside the project.
+  const [composeServices, setComposeServices] = useState<string[] | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    setComposeServices(null)
+    window.api.run
+      .listComposeServices(projectPath)
+      .then((list) => {
+        if (!cancelled) setComposeServices(list)
+      })
+      .catch(() => {
+        if (!cancelled) setComposeServices([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [projectPath])
+
   // The script Select's candidate list — the npm-typed entries already in the project's configuration
   // list (seeds from package.json, plus any user npm configurations), deduplicated.
   const npmScripts = Array.from(
@@ -156,10 +177,14 @@ export function RunConfigManager({
   // Detection evidence for RunTypePicker: a kind already has a seed in this project's list — seeds are
   // derived from the project's own files, so their presence is the detection signal. python/pytest have
   // no seed config (no single entry point to key one off of), so isPythonProject stands in for them.
+  // compose is the same situation, but its signal is cheaper to reuse than adding a seed: buildRunContext
+  // already found (or didn't find) a compose file for the command-assembly context this component holds,
+  // so context.composeFile doubles as the detection evidence instead of a seed:compose:… entry.
   const detectedTypes = Array.from(
     new Set([
       ...configs.filter((c) => c.id.startsWith('seed:')).map((c) => c.type),
-      ...(isPythonProject ? (['python', 'pytest'] as const) : [])
+      ...(isPythonProject ? (['python', 'pytest'] as const) : []),
+      ...(context.composeFile ? (['compose'] as const) : [])
     ])
   )
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -250,6 +275,7 @@ export function RunConfigManager({
                   isSpringBoot={isSpringBoot}
                   jdks={jdks}
                   pythonInterpreters={pythonInterpreters}
+                  composeServices={composeServices}
                   npmScripts={npmScripts}
                   projectPath={projectPath}
                   onChange={handleFormChange}

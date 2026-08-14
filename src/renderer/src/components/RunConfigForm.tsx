@@ -35,6 +35,7 @@ export function RunConfigForm({
   isSpringBoot,
   jdks,
   pythonInterpreters,
+  composeServices,
   npmScripts,
   projectPath,
   onChange
@@ -49,6 +50,11 @@ export function RunConfigForm({
   /** null while still loading. Unlike jdks this is refetched whenever projectPath changes — venv
    *  candidates live inside the project. */
   pythonInterpreters: PythonInterpreter[] | null
+  /** null while still loading. Same "depends on projectPath" reasoning as pythonInterpreters — the
+   *  compose file, if any, lives inside the project. Feeds the services field's candidate hint; the
+   *  field itself stays a plain text input (space-separated names), not a multi-select — this codebase
+   *  has no multi-select control. */
+  composeServices: string[] | null
   /** Script names already known for this project (from the npm seeds RunConfigManager already has) —
    *  the candidate list for the script Select. Not part of the plan's original prop list, but the
    *  Select this field calls for needs a source for "package.json's scripts", and this is the data
@@ -88,7 +94,9 @@ export function RunConfigForm({
   // a value left blank means "not set", the same convention RunConfigDialog used for cwd
   // (`cwd.trim() || undefined`). javaHome goes through changeNow with its own `|| undefined` instead,
   // since it is never typed freehand here (Select or the folder picker only).
-  const BLANKABLE = ['cwd', 'args', 'springProfiles', 'features', 'packagePath', 'nodePath', 'target'] as const
+  const BLANKABLE = [
+    'cwd', 'args', 'springProfiles', 'features', 'packagePath', 'nodePath', 'target', 'composeFile', 'services'
+  ] as const
   const flush = (): void => {
     const next = { ...draft } as unknown as Record<string, unknown>
     for (const k of BLANKABLE) if (next[k] === '') delete next[k]
@@ -138,6 +146,13 @@ export function RunConfigForm({
     // one machine's virtual environment, so an absolute path is the only value that means anything.
     const file = await window.api.system.pickFile(draft.interpreter || projectPath)
     if (file) changeNow({ ...draft, interpreter: file })
+  }
+  const pickComposeFile = async (): Promise<void> => {
+    if (draft.type !== 'compose') return
+    const file = await window.api.system.pickFile(projectPath)
+    // Project-relative, same as cwd — an empty value means "use what the project context found",
+    // the same "empty means default" meaning as cwd's own '' fallback, so the same `|| undefined` applies.
+    if (file) changeNow({ ...draft, composeFile: toRelativeCwd(file, projectPath) || undefined })
   }
 
   const knownJdkPaths = new Set((jdks ?? []).map((j) => j.path))
@@ -377,6 +392,56 @@ export function RunConfigForm({
               </button>
             </div>
           )}
+        </div>
+      )}
+      {draft.type === 'compose' && visible('composeFile') && (
+        <div className="field">
+          <label>{t('run.field.composeFile')}</label>
+          <div className="row">
+            <input
+              type="text"
+              value={draft.composeFile ?? ''}
+              onChange={(e) => change({ ...draft, composeFile: e.target.value })}
+              onBlur={flush}
+            />
+            <button type="button" onClick={() => void pickComposeFile()}>
+              {t('run.form.composeFileBrowse')}
+            </button>
+          </div>
+        </div>
+      )}
+      {draft.type === 'compose' && visible('services') && (
+        <div className="field">
+          <label>{t('run.field.services')}</label>
+          <input
+            type="text"
+            value={draft.services ?? ''}
+            onChange={(e) => change({ ...draft, services: e.target.value })}
+            onBlur={flush}
+          />
+          {composeServices === null ? (
+            <span className="check-note">{t('run.form.composeServicesLoading')}</span>
+          ) : (
+            composeServices.length > 0 && (
+              <span className="check-note">
+                {t('run.form.composeServicesHint', { list: composeServices.join(', ') })}
+              </span>
+            )
+          )}
+        </div>
+      )}
+      {draft.type === 'compose' && visible('action') && (
+        <div className="field">
+          <label>{t('run.field.action')}</label>
+          <Select
+            items={[
+              { value: 'up', label: 'up' },
+              { value: 'build', label: 'build' }
+            ]}
+            value={draft.action ?? 'up'}
+            onChange={(v) => changeNow({ ...draft, action: v as 'up' | 'build' })}
+            ariaLabel={t('run.field.action')}
+          />
         </div>
       )}
       {draft.type !== 'shell' && visible('args') && (

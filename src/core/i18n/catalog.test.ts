@@ -9,7 +9,7 @@ const placeholders = (s: string): string[] =>
  *  elsewhere in the app, in the CLIs, or on disk. */
 const LITERALS = [
   'Claude', 'Codex', 'Astera', 'Slack', 'GitHub', 'git', 'npm', 'PATH', 'Gradle', 'Maven', 'cargo', 'go',
-  'Python', 'pytest'
+  'Python', 'pytest', 'Docker', 'Compose'
 ]
 
 describe('카탈로그 불변식', () => {

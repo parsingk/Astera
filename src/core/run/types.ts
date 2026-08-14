@@ -11,6 +11,7 @@ export type RunConfigType =
   | 'go'
   | 'python'
   | 'pytest'
+  | 'compose'
 
 /** What every kind shares. cwd is relative to the project root — empty means the root */
 interface RunConfigBase {
@@ -91,6 +92,19 @@ export interface PytestConfig extends RunConfigBase {
   args?: string
 }
 
+/** Unlike the other kinds, nothing here is required: an empty composeFile falls back to whatever
+ *  RunContext already found in the project root, and an empty services list means "all services" —
+ *  both are meaningful values, not placeholders for a value the user still has to supply. */
+export interface ComposeConfig extends RunConfigBase {
+  type: 'compose'
+  /** Empty uses the file the project context found. Also empty, docker compose finds its own. */
+  composeFile?: string
+  /** Space-separated service names. Empty means every service. */
+  services?: string
+  action?: 'up' | 'build'
+  args?: string
+}
+
 export type RunConfig =
   | ShellConfig
   | NpmConfig
@@ -101,6 +115,7 @@ export type RunConfig =
   | GoConfig
   | PythonConfig
   | PytestConfig
+  | ComposeConfig
 
 /** The optional field keys a kind knows about. The form's "add optional field" dropdown is built
  *  from this.
@@ -128,5 +143,7 @@ export function optionalFieldsFor(type: RunConfigType, opts: { springBoot: boole
       return ['interpreter', 'args', ...common]
     case 'pytest':
       return ['target', 'interpreter', 'args', ...common]
+    case 'compose':
+      return ['composeFile', 'services', 'action', 'args', ...common]
   }
 }

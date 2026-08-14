@@ -79,6 +79,25 @@ describe('buildCommand', () => {
     expect(buildCommand({ ...base, type: 'pytest', target: 'tests/unit' }, ctx))
       .toBe('python -m pytest tests/unit')
   })
+
+  it('compose 는 문맥이 찾은 파일을 -f 로 넘긴다', () => {
+    const c: RunContext = { ...ctx, composeFile: 'docker-compose.yml' }
+    expect(buildCommand({ ...base, type: 'compose' }, c)).toBe('docker compose -f docker-compose.yml up')
+    expect(buildCommand({ ...base, type: 'compose', services: 'web db', action: 'build' }, c))
+      .toBe('docker compose -f docker-compose.yml build web db')
+  })
+
+  // composeFile 이 있으면 문맥의 것보다 우선한다 — 사용자가 명시한 값이 자동 감지를 이긴다
+  it('compose 는 자신의 composeFile 을 문맥보다 우선한다', () => {
+    const c: RunContext = { ...ctx, composeFile: 'docker-compose.yml' }
+    expect(buildCommand({ ...base, type: 'compose', composeFile: 'compose.override.yml' }, c))
+      .toBe('docker compose -f compose.override.yml up')
+  })
+
+  // 문맥에도 자신에게도 파일이 없으면 -f 없이 부른다 — docker compose 가 스스로 찾는다
+  it('compose 파일이 전혀 없으면 -f 없이 부른다', () => {
+    expect(buildCommand({ ...base, type: 'compose' }, ctx)).toBe('docker compose up')
+  })
 })
 
 describe('quoteArg', () => {
@@ -151,5 +170,18 @@ describe('buildRunContext', () => {
   it('platform을 그대로 실어 보낸다 — 인용이 이 값으로 갈린다', () => {
     expect(buildRunContext([], 'win32').platform).toBe('win32')
     expect(buildRunContext([], 'linux').platform).toBe('linux')
+  })
+
+  // 없으면 null — docker compose 가 스스로 찾도록 -f 를 아예 붙이지 않는다 (build.ts 의 compose 분기)
+  it('compose 파일이 없으면 null', () => {
+    expect(buildRunContext([], 'linux').composeFile).toBeNull()
+  })
+
+  it('compose 파일은 COMPOSE_FILE_NAMES 우선순위대로 고른다', () => {
+    expect(buildRunContext(['docker-compose.yml', 'compose.yaml'], 'linux').composeFile).toBe('compose.yaml')
+    expect(buildRunContext(['docker-compose.yml', 'docker-compose.yaml'], 'linux').composeFile).toBe(
+      'docker-compose.yaml'
+    )
+    expect(buildRunContext(['docker-compose.yml'], 'linux').composeFile).toBe('docker-compose.yml')
   })
 })

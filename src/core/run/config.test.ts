@@ -205,6 +205,13 @@ describe('seedKeyOf', () => {
     expect(seedKeyOf({ id: 'x', name: 'x', type: 'pytest', target: 'tests/unit' })).toBe('pytest:tests/unit')
     expect(seedKeyOf({ id: 'x', name: 'x', type: 'pytest' })).toBe('pytest:')
   })
+
+  it('compose 는 composeFile 과 services 로 정체를 짓는다(둘 다 없으면 빈 문자열)', () => {
+    expect(seedKeyOf({ id: 'x', name: 'x', type: 'compose' })).toBe('compose::')
+    expect(
+      seedKeyOf({ id: 'x', name: 'x', type: 'compose', composeFile: 'docker-compose.yml', services: 'web' })
+    ).toBe('compose:docker-compose.yml:web')
+  })
 })
 
 describe('parseEnvLines', () => {

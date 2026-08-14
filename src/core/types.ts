@@ -442,6 +442,10 @@ export interface CoreApi {
     // path — unlike listJdks — because venv candidates live inside the project, so it is subject to
     // assertAllowedPath.
     listPythonInterpreters(projectPath: string): Promise<PythonInterpreter[]>
+    // The service names found in this project's compose file (empty if none, or if it could not be
+    // parsed) — feeds the compose form's services field hint. Subject to assertAllowedPath, same
+    // reasoning as listPythonInterpreters: the compose file lives inside the project.
+    listComposeServices(projectPath: string): Promise<string[]>
   }
   terminal: {
     // An interactive shell at a project path. open and list go through assertAllowedPath, which

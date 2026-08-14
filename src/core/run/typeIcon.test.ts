@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { runTypeIcon } from './typeIcon'
 import type { RunConfigType } from './types'
 
-const ALL: RunConfigType[] = ['shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest']
+const ALL: RunConfigType[] = ['shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest', 'compose']
 
 describe('runTypeIcon', () => {
   it('모든 종류에 아이콘이 있다', () => {
@@ -46,5 +46,10 @@ describe('runTypeIcon', () => {
   // pytest 는 새 모양을 만들지 않고 파일 트리의 테스트 파일 배지를 그대로 쓴다
   it('pytest 는 python 과 같은 라벨에 테스트 배지만 더한다', () => {
     expect(runTypeIcon('pytest')).toEqual({ id: 'label', tone: 'green', label: 'PY', badge: 'test' })
+  })
+
+  // 파일 트리의 docker-compose.yml/compose.yaml 과 같은 모양
+  it('compose 는 파일 트리의 compose 파일과 같은 모양이다', () => {
+    expect(runTypeIcon('compose')).toEqual({ id: 'container', tone: 'blue' })
   })
 })

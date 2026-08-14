@@ -87,4 +87,11 @@ describe('migrateRunConfigs', () => {
       { id: 'x', name: 'x', type: 'pytest' }
     ])
   })
+
+  // composeFile·services 모두 없어도(문맥의 파일, 전체 서비스) 통과한다 — compose 에는 필수 필드가 없다
+  it('compose 는 필수 필드가 없다', () => {
+    expect(migrateRunConfigs([{ id: 'x', name: 'x', type: 'compose' }])).toEqual([
+      { id: 'x', name: 'x', type: 'compose' }
+    ])
+  })
 })

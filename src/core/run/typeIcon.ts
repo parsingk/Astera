@@ -40,5 +40,9 @@ export function runTypeIcon(type: RunConfigType): FileIconSpec {
     // second way to say "this is a test" — it is Python's test runner, so the PY label still applies.
     case 'pytest':
       return { id: 'label', tone: 'green', label: 'PY', badge: 'test' }
+    // Matches what the file tree already draws for docker-compose.yml/compose.yaml (files/icons.ts's
+    // EXACT table) — the same reasoning as go and python above.
+    case 'compose':
+      return { id: 'container', tone: 'blue' }
   }
 }

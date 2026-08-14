@@ -42,6 +42,7 @@ import type { LangPreference } from '../core/i18n'
 import { pickInitialLang } from '../core/i18n/locale'
 import { listJdks } from './jdkScanner'
 import { listPythonInterpreters } from './pythonScanner'
+import { listComposeServices } from './composeScanner'
 
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
  *  in this file — the two values the coordinator needs (spawnSession, busyState) are owned here, so
@@ -786,6 +787,13 @@ export function registerIpc(
   ipcMain.handle('run.listPythonInterpreters', async (_e, projectPath: string) => {
     await assertAllowedPath(projectPath)
     return listPythonInterpreters(projectPath)
+  })
+
+  // The service names in this project's compose file, for the compose form's services field hint.
+  // Takes a path (the compose file lives inside the project), so it goes through assertAllowedPath.
+  ipcMain.handle('run.listComposeServices', async (_e, projectPath: string) => {
+    await assertAllowedPath(projectPath)
+    return listComposeServices(projectPath)
   })
 
   /** Validates a run configuration's cwd and returns the absolute path that will **actually be used**.

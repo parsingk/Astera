@@ -579,6 +579,10 @@ export const ko = {
   'run.form.interpreterAuto': '자동 (PATH 의 python)',
   'run.form.interpreterCustom': '{path} (직접 지정)',
   'run.form.interpreterBrowse': '찾아보기…',
+  // Compose 파일 찾기 버튼과 services 필드의 후보 힌트 (Task 10)
+  'run.form.composeFileBrowse': '찾아보기…',
+  'run.form.composeServicesLoading': 'Compose 서비스 조회 중…',
+  'run.form.composeServicesHint': '후보: {list}',
   // RunConfigManager.tsx — the two-pane dialog. run.type.* are kind labels grouping the tree;
   // product/tool names among them (npm, Gradle, Maven, cargo, go, Python, pytest) are not translated.
   'run.manager.title': '실행 구성',
@@ -597,6 +601,7 @@ export const ko = {
   'run.type.go': 'go',
   'run.type.python': 'Python',
   'run.type.pytest': 'pytest',
+  'run.type.compose': 'Docker Compose',
   // RunConfigForm.tsx / RunTypePicker.tsx (Task 7) — per-kind field labels and the ＋ kind-picker popup.
   'run.field.javaHome': 'JDK',
   'run.field.springProfiles': 'Spring 프로파일',
@@ -617,6 +622,11 @@ export const ko = {
   // Python(파일 필수)·pytest(대상 선택) 공용 인터프리터 필드와 pytest 전용 대상 필드 (Task 9)
   'run.field.interpreter': '인터프리터',
   'run.field.target': '테스트 대상',
+  // Docker Compose 필드 (Task 10) — 모두 선택 항목이다: composeFile 이 비면 문맥이 찾은 파일, services 가
+  // 비면 전체 서비스로 실행한다
+  'run.field.composeFile': 'Compose 파일',
+  'run.field.services': '서비스',
+  'run.field.action': '동작',
   'run.picker.search': '검색…',
   'run.picker.detected': '이 프로젝트에서 감지됨',
   'run.picker.other': '기타',

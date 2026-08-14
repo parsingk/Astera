@@ -3,7 +3,7 @@ import { optionalFieldsFor } from './types'
 
 describe('optionalFieldsFor', () => {
   it('모든 종류에 cwd 와 env 가 있다', () => {
-    for (const t of ['shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest'] as const) {
+    for (const t of ['shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest', 'compose'] as const) {
       expect(optionalFieldsFor(t, { springBoot: false })).toContain('cwd')
       expect(optionalFieldsFor(t, { springBoot: false })).toContain('env')
     }
@@ -38,5 +38,12 @@ describe('optionalFieldsFor', () => {
   it('python 과 pytest 는 interpreter 를 공유한다', () => {
     expect(optionalFieldsFor('python', { springBoot: false })).toContain('interpreter')
     expect(optionalFieldsFor('pytest', { springBoot: false })).toContain('interpreter')
+  })
+
+  // compose 는 필수 필드가 없다 — composeFile·services 모두 선택 항목으로 추가한다
+  it('compose 는 composeFile 과 services 를 선택 항목으로 갖는다', () => {
+    expect(optionalFieldsFor('compose', { springBoot: false })).toContain('composeFile')
+    expect(optionalFieldsFor('compose', { springBoot: false })).toContain('services')
+    expect(optionalFieldsFor('compose', { springBoot: false })).toContain('action')
   })
 })

@@ -114,6 +114,8 @@ export function seedKeyOf(c: RunConfig): string {
       return `python:${c.file}`
     case 'pytest':
       return `pytest:${c.target ?? ''}`
+    case 'compose':
+      return `compose:${c.composeFile ?? ''}:${c.services ?? ''}`
   }
 }
 

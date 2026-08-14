@@ -1,5 +1,6 @@
 import { detectPackageManager, type PackageManager } from './config'
 import type { RunConfig } from './types'
+import { COMPOSE_FILE_NAMES } from './compose'
 
 /** The context command assembly needs. Derived from the file list and platform, never stored */
 export interface RunContext {
@@ -72,6 +73,10 @@ export function buildCommand(config: RunConfig, ctx: RunContext): string {
       return join(q(config.interpreter || 'python'), q(config.file), config.args)
     case 'pytest':
       return join(q(config.interpreter || 'python'), '-m pytest', config.target ? q(config.target) : '', config.args)
+    case 'compose': {
+      const file = config.composeFile || ctx.composeFile
+      return join('docker compose', file ? `-f ${q(file)}` : '', config.action ?? 'up', config.services, config.args)
+    }
   }
 }
 
@@ -87,7 +92,8 @@ export function buildRunContext(files: string[], platform: string): RunContext {
     packageManager: detectPackageManager(files),
     gradleRunner: win ? (set.has('gradlew.bat') ? 'gradlew.bat' : 'gradle') : set.has('gradlew') ? './gradlew' : 'gradle',
     mavenRunner: win ? (set.has('mvnw.cmd') ? 'mvnw.cmd' : 'mvn') : set.has('mvnw') ? './mvnw' : 'mvn',
-    composeFile: null, // Task 10 fills this in
+    // Priority order, same as docker compose's own search — the first name present in the project root wins
+    composeFile: COMPOSE_FILE_NAMES.find((name) => set.has(name)) ?? null,
     platform
   }
 }
