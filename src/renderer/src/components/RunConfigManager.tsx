@@ -1,9 +1,34 @@
-import { useState } from 'react'
-import type { RunConfig } from '../../../core/types'
+import { useEffect, useState } from 'react'
+import type { Jdk, RunConfig } from '../../../core/types'
 import type { RunContext } from '../../../core/run/build'
-import { buildCommand } from '../../../core/run/build'
+import type { RunConfigType } from '../../../core/run/types'
 import type { MessageKey } from '../../../core/i18n'
 import { useI18n } from '../i18n/I18nProvider'
+import { RunConfigForm } from './RunConfigForm'
+import { RunTypePicker } from './RunTypePicker'
+
+/** A new configuration's starting values for a kind, right after it is picked in RunTypePicker.
+ *  npmScript defaults to the project's first known script rather than '' — an npm configuration with
+ *  no script name is not a useful starting point, and it sidesteps an empty Select needing its own
+ *  "nothing picked yet" placeholder copy. */
+function defaultConfigFor(type: RunConfigType, id: string, name: string, npmScripts: string[]): RunConfig {
+  switch (type) {
+    case 'shell':
+      return { id, name, type, command: '' }
+    case 'npm':
+      return { id, name, type, script: npmScripts[0] ?? '' }
+    case 'node':
+      return { id, name, type, file: '' }
+    case 'gradle':
+      return { id, name, type, tasks: '' }
+    case 'maven':
+      return { id, name, type, goals: '' }
+    case 'cargo':
+      return { id, name, type, subcommand: 'run' }
+    case 'go':
+      return { id, name, type, subcommand: 'run' }
+  }
+}
 
 /** Run configuration management — a tree on the left, the selected configuration's form on the
  *  right. The same layout as IntelliJ's Run/Debug Configurations. It used to be a small modal reached
@@ -11,13 +36,15 @@ import { useI18n } from '../i18n/I18nProvider'
  *  the currently selected configuration. With the tree visible, those become one toolbar in the same
  *  place.
  *
- *  This task (6) only wires up shell configurations — the per-kind fields (npm/node/gradle/…) are
- *  Task 7, so the ＋ button that would create a new configuration has no handler yet. Auto-detected
- *  (seed) configurations show up in the tree too, in italics, but are read-only here: turning one into
- *  an editable copy on first edit (promotion) is Task 8. */
+ *  Task 6 wired up shell configurations inline. This task (7) delegates the field rendering to
+ *  RunConfigForm — the per-kind fields, the optional-field dropdown and the draft/blur-save logic all
+ *  live there now — and wires the ＋ button to RunTypePicker. Auto-detected (seed) configurations show
+ *  up in the tree too, in italics, but are read-only here: turning one into an editable copy on first
+ *  edit (promotion) is Task 8. */
 export function RunConfigManager({
   configs,
   context,
+  isSpringBoot,
   projectPath,
   onSave,
   onDelete,
@@ -25,7 +52,10 @@ export function RunConfigManager({
 }: {
   configs: RunConfig[]
   context: RunContext
-  /** Reserved for the working-folder "Choose…" picker Task 7's form adds — unused until then */
+  /** Whether the Spring profile optional field is offered for gradle/maven — run.list decides this
+   *  from the build file's contents (isSpringBootProject) */
+  isSpringBoot: boolean
+  /** Base for the form's working-folder and JDK "Choose…" pickers */
   projectPath: string
   onSave: (config: RunConfig) => void
   onDelete: (id: string) => void
@@ -33,27 +63,54 @@ export function RunConfigManager({
 }): React.JSX.Element {
   const { t } = useI18n()
   const [selectedId, setSelectedId] = useState<string | null>(configs[0]?.id ?? null)
-  const selected = configs.find((c) => c.id === selectedId) ?? null
-  const isSeed = !!selected && selected.id.startsWith('seed:')
 
-  // The draft being edited. Reseeded from the configuration whenever the selection changes — updated
-  // explicitly instead of remounting the form via key (selection changes often, and a remount would
-  // also lose scroll position).
-  const [draft, setDraft] = useState<RunConfig | null>(selected)
-  const [draftFor, setDraftFor] = useState<string | null>(selectedId)
-  if (draftFor !== selectedId) {
-    setDraftFor(selectedId)
-    setDraft(selected)
-  }
-  /** Saves the draft. Does nothing if nothing changed — a write must not go out on every blur */
-  const commit = (): void => {
-    if (!draft || !selected || JSON.stringify(draft) === JSON.stringify(selected)) return
-    onSave(draft)
-  }
+  // A freshly created configuration that has not round-tripped through onSave yet — appended to the
+  // tree so ＋ has somewhere to put it, ahead of the first save. Read during render (the same
+  // "derive, don't duplicate" convention as draftForId below): once its id shows up in `configs` it is
+  // dropped here rather than tracked further, so a later delete of the real record cannot resurrect
+  // this stale local copy.
+  const [pending, setPending] = useState<RunConfig | null>(null)
+  if (pending && configs.some((c) => c.id === pending.id)) setPending(null)
+  const displayConfigs = pending && !configs.some((c) => c.id === pending.id) ? [...configs, pending] : configs
+  const selected = displayConfigs.find((c) => c.id === selectedId) ?? null
+  const isSeed = !!selected && selected.id.startsWith('seed:')
+  const isPending = !!pending && selected?.id === pending.id
+
+  // The JDK list does not depend on which configuration is selected, so it is fetched once here
+  // rather than inside the form.
+  const [jdks, setJdks] = useState<Jdk[] | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    window.api.run
+      .listJdks()
+      .then((list) => {
+        if (!cancelled) setJdks(list)
+      })
+      .catch(() => {
+        if (!cancelled) setJdks([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // The script Select's candidate list — the npm-typed entries already in the project's configuration
+  // list (seeds from package.json, plus any user npm configurations), deduplicated.
+  const npmScripts = Array.from(
+    new Set(
+      configs
+        .filter((c): c is Extract<RunConfig, { type: 'npm' }> => c.type === 'npm')
+        .map((c) => c.script)
+    )
+  )
+  // Detection evidence for RunTypePicker: a kind already has a seed in this project's list — seeds are
+  // derived from the project's own files, so their presence is the detection signal.
+  const detectedTypes = Array.from(new Set(configs.filter((c) => c.id.startsWith('seed:')).map((c) => c.type)))
+  const [pickerOpen, setPickerOpen] = useState(false)
 
   // Grouped by kind for the tree. Order follows the list's own order — user configurations come first
   const groups = new Map<string, RunConfig[]>()
-  for (const c of configs) {
+  for (const c of displayConfigs) {
     const list = groups.get(c.type) ?? []
     list.push(c)
     groups.set(c.type, list)
@@ -66,11 +123,36 @@ export function RunConfigManager({
         <div className="rcm-panes">
           <div className="rcm-list">
             <div className="rcm-tools">
-              <button title={t('run.manager.add')}>＋</button>
+              <div className="rtp-anchor">
+                <button title={t('run.manager.add')} onClick={() => setPickerOpen((v) => !v)}>
+                  ＋
+                </button>
+                {pickerOpen && (
+                  <RunTypePicker
+                    detected={detectedTypes}
+                    onPick={(type) => {
+                      const id = `user:${crypto.randomUUID()}`
+                      const name = t(`run.type.${type}` as MessageKey)
+                      setPending(defaultConfigFor(type, id, name, npmScripts))
+                      setSelectedId(id)
+                      setPickerOpen(false)
+                    }}
+                    onClose={() => setPickerOpen(false)}
+                  />
+                )}
+              </div>
               <button
                 title={t('run.manager.remove')}
                 disabled={!selected || isSeed}
-                onClick={() => selected && onDelete(selected.id)}
+                onClick={() => {
+                  if (!selected) return
+                  if (isPending) {
+                    setPending(null)
+                    setSelectedId(configs[0]?.id ?? null)
+                  } else {
+                    onDelete(selected.id)
+                  }
+                }}
               >
                 −
               </button>
@@ -96,41 +178,22 @@ export function RunConfigManager({
             </div>
           </div>
           <div className="rcm-form">
-            {selected && draft && (
+            {selected && (
               <>
                 {/* Auto-detected configurations are read-only here (Task 8 turns an edit into a
                     promotion). readOnly on its own would silently swallow keystrokes, so the state
                     also gets a visible hint and a dimmed input style (.rcm-form input:read-only). */}
                 {isSeed && <div className="rcm-seed-hint">{t('run.manager.seedHint')}</div>}
-                {/* The draft is held as local state and saved on blur. Calling onSave from onChange
-                    would send an IPC round trip, and rewrite the stored file, on every keystroke. */}
-                <div className="field">
-                  <label>{t('run.form.nameLabel')}</label>
-                  <input
-                    type="text"
-                    value={draft.name}
-                    readOnly={isSeed}
-                    onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                    onBlur={commit}
-                  />
-                </div>
-                {draft.type === 'shell' && (
-                  <div className="field">
-                    <label>{t('run.form.commandLabel')}</label>
-                    <input
-                      type="text"
-                      value={draft.command}
-                      readOnly={isSeed}
-                      onChange={(e) => setDraft({ ...draft, command: e.target.value })}
-                      onBlur={commit}
-                    />
-                  </div>
-                )}
-                {/* The assembled command. If the app assembled it silently there would be no way to
-                    know what actually runs, and the Run console is a real terminal that also takes
-                    input, so the user has to know. Built from the saved configuration, not the draft
-                    — this is what run.start would actually run right now. */}
-                <div className="rcm-resolved">{buildCommand(selected, context)}</div>
+                <RunConfigForm
+                  config={selected}
+                  context={context}
+                  isSpringBoot={isSpringBoot}
+                  jdks={jdks}
+                  npmScripts={npmScripts}
+                  projectPath={projectPath}
+                  readOnly={isSeed}
+                  onChange={onSave}
+                />
               </>
             )}
           </div>

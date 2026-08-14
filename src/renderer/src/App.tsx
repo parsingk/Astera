@@ -2577,6 +2577,7 @@ export default function App(): React.JSX.Element {
         <RunConfigManager
           configs={runConfigs}
           context={runContext}
+          isSpringBoot={runIsSpringBoot}
           projectPath={explorerRoot}
           onSave={runManagerSave}
           onDelete={runDeleteConfig}
