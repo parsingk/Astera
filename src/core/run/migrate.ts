@@ -34,7 +34,12 @@ export function migrateRunConfigs(value: unknown): RunConfig[] {
   for (const raw of value) {
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) continue
     const o = raw as Record<string, unknown>
-    if (typeof o.id !== 'string' || typeof o.name !== 'string') continue
+    // Blank is rejected, not just the wrong type. The name is the only thing identifying a
+    // configuration in the tree and in the run widget's selector, so a blank one is a row nobody can
+    // see or point at — and this function is also run.saveConfig's gate, so a renderer that let a
+    // blank through (it did) must not be able to store one.
+    if (typeof o.id !== 'string' || o.id.trim() === '') continue
+    if (typeof o.name !== 'string' || o.name.trim() === '') continue
     if (!isStringMap(o.env)) continue
     if (o.cwd !== undefined && typeof o.cwd !== 'string') continue
 

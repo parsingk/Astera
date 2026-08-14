@@ -44,6 +44,19 @@ describe('migrateRunConfigs', () => {
     expect(out.map((c) => c.id)).toEqual(['ok'])
   })
 
+  // 이 함수는 run.saveConfig 의 관문이기도 하다. 이름은 트리와 실행 위젯 선택기에서 그 구성을
+  // 가리키는 유일한 표시라, 빈 이름은 아무도 못 보고 못 누르는 행이 된다
+  it('이름이 비었거나 공백뿐이면 버린다', () => {
+    expect(migrateRunConfigs([{ id: 'x', name: '', command: 'ls' }])).toEqual([])
+    expect(migrateRunConfigs([{ id: 'x', name: '   ', command: 'ls' }])).toEqual([])
+    expect(migrateRunConfigs([{ id: 'x', name: '', type: 'npm', script: 'dev' }])).toEqual([])
+  })
+
+  it('id 가 비었거나 공백뿐이면 버린다', () => {
+    expect(migrateRunConfigs([{ id: '', name: 'x', command: 'ls' }])).toEqual([])
+    expect(migrateRunConfigs([{ id: '  ', name: 'x', command: 'ls' }])).toEqual([])
+  })
+
   it('배열이 아니면 빈 목록', () => {
     expect(migrateRunConfigs(null)).toEqual([])
     expect(migrateRunConfigs({})).toEqual([])

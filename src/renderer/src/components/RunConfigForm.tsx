@@ -82,6 +82,12 @@ export function RunConfigForm({
   const flush = (): void => {
     const next = { ...draft } as unknown as Record<string, unknown>
     for (const k of BLANKABLE) if (next[k] === '') delete next[k]
+    // The name is not blankable. It is the only thing naming this configuration in the tree and in
+    // the run widget's selector, so an empty one leaves a row nobody can read or point at. Leaving
+    // the field means keeping the stored name, not clearing it — the save gate rejects a blank name
+    // anyway, so without this the field would sit showing a value that was never stored.
+    const name = typeof next.name === 'string' ? next.name.trim() : ''
+    next.name = name === '' ? config.name : name
     const cleaned = next as unknown as RunConfig
     setDraft(cleaned)
     if (JSON.stringify(cleaned) !== JSON.stringify(config)) onChange(cleaned)
