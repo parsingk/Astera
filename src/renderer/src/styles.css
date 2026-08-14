@@ -796,9 +796,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    instead of one flat list. */
 .rtp-anchor { position: relative; }
 .rtp-menu { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; width: 220px; max-height: 320px; overflow-y: auto; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; padding: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
-.rtp-search { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 5px 7px; border-radius: 4px; font-size: 12px; margin-bottom: 4px; }
-.rtp-group { font-size: 10.5px; color: var(--text-faint); padding: 6px 6px 2px; text-transform: uppercase; letter-spacing: .05em; }
-.rtp-item { text-align: left; background: transparent; border: 0; border-radius: 4px; padding: 5px 8px; font-size: 12.5px; color: var(--text); cursor: pointer; }
+/* flex: none on every child. The menu is a flex column with a max-height, so without it the children
+   shrink to fit instead of overflowing — the rows lose their own height and the text collides.
+   overflow-y can only scroll what refuses to be squashed. */
+.rtp-search { flex: none; width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 5px 7px; border-radius: 4px; font-size: 12px; margin-bottom: 4px; }
+.rtp-group { flex: none; font-size: 10.5px; color: var(--text-faint); padding: 6px 6px 2px; text-transform: uppercase; letter-spacing: .05em; }
+.rtp-item { flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; background: transparent; border: 0; border-radius: 4px; padding: 5px 8px; font-size: 12.5px; color: var(--text); cursor: pointer; }
 .rtp-item:hover { background: var(--elevated); }
 /* RunConfigForm's "add optional field" menu — same shape as .rtp-menu but a flat list, so it gets its
    own (short) rule set rather than sharing .rtp-menu's grouped layout. */
