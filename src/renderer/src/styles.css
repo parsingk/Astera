@@ -783,9 +783,11 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    without it the groups and rows shrink once the list is taller than the pane. A shrunk row draws its
    hover fill shorter than its own text, which reads as the highlight being clipped. */
 .rcm-group-block { flex: none; display: flex; flex-direction: column; gap: 1px; }
-.rcm-group { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-faint); padding: 8px 6px 2px; }
+/* The tree and the kind picker are the same list seen twice, so they share one treatment: the group
+   headings and the rows match .rtp-group / .rtp-item exactly rather than each drifting to its own size. */
+.rcm-group { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--text-faint); padding: 8px 6px 2px; text-transform: uppercase; letter-spacing: .05em; }
 .rcm-group .fi { flex: none; }
-.rcm-item { flex: none; text-align: left; background: none; border: 0; border-left: 2px solid transparent; color: var(--text); font-size: 13px; padding: 5px 8px; border-radius: 4px; cursor: pointer; }
+.rcm-item { flex: none; width: 100%; box-sizing: border-box; text-align: left; background: none; border: 0; border-left: 2px solid transparent; color: var(--text); font-size: 12px; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
 .rcm-item:hover { background: var(--surface-hover); }
 .rcm-item.on { background: var(--elevated); border-left-color: var(--accent); }
 /* Auto-detected (seed) configurations — italic marks them as read-only at a glance, mirroring the
