@@ -1,0 +1,44 @@
+name: Linux artifacts
+
+# Stage 1 of Linux support needs installable artifacts to hand-verify, and neither Windows nor
+# macOS can produce a deb or an AppImage — electron-builder needs a Linux host. This is a
+# verification tool, not a gate, so it deliberately does not run on every push. Stage 2 moves these
+# steps into release.yml, where the artifacts become release assets instead.
+on:
+  workflow_dispatch:
+  # Stage-1 scaffolding, scoped to the branch that introduces it. workflow_dispatch only becomes
+  # available once this file reaches the default branch, so on this branch there is no way to ask for
+  # a build — and stage 1's whole point is having an installable artifact to try. A push trigger fires
+  # on the very commit that adds the file, and dies with the branch. It is deliberately not
+  # `pull_request`: unscoped, that would run this build on every future PR against develop.
+  push:
+    branches: [feature/linux-build]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # 22.12 is a hard floor, not a preference: @electron/rebuild and node-abi — which
+      # `electron-builder install-app-deps` runs from postinstall — declare >=22.12.0.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      # node-pty ships no linux prebuild (its prebuilds/ holds darwin-* and win32-* only), so this
+      # compiles it with node-gyp. python3 and build-essential are preinstalled on this runner.
+      - run: npm ci
+
+      - run: npm run dist:linux
+
+      - name: Upload the installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-installers
+          path: |
+            dist-installer/*.AppImage
+            dist-installer/*.deb
+          # A silent empty upload would read as a successful build that produced nothing.
+          if-no-files-found: error

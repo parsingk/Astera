@@ -76,6 +76,20 @@ nsis:
   allowToChangeInstallationDirectory: true
   # Space-free artifact name — keeps release asset URLs free of percent-encoding.
   artifactName: ${name}-${version}-setup.${ext}
+linux:
+  target:
+    - AppImage
+    - deb
+  icon: build/icon.png
+  # freedesktop category — the same role mac.category's public.app-category.developer-tools plays.
+  category: Development
+  # deb requires a maintainer and electron-builder cannot derive one from package.json's
+  # `author: "parsingk"`, which carries no email — packaging fails outright without this. The address
+  # is the one this repo's own commits use, so it satisfies the format without publishing a new one.
+  maintainer: parsingk <17137357+parsingk@users.noreply.github.com>
+  # A space-free artifact name, the same rule dmg and nsis follow — it keeps percent-encoding out of
+  # release asset URLs.
+  artifactName: ${name}-${version}-${arch}.${ext}
 publish:
   # Public GitHub Releases. electron-updater reads the feed straight from the releases API, so no
   # credentials are involved on the client side. electron-builder itself never publishes — the
