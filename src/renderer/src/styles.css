@@ -775,9 +775,14 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .rcm-panes { display: grid; grid-template-columns: 236px 1fr; gap: 14px; height: 420px; min-height: 0; }
 .rcm-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line-soft); padding-right: 14px; }
 .rcm-tools { display: flex; gap: 4px; padding-bottom: 8px; margin-bottom: 6px; border-bottom: 1px solid var(--line-soft); }
-.rcm-tools button { width: 26px; height: 26px; display: grid; place-items: center; background: transparent; border: 0; border-radius: 4px; color: var(--text-dim); font-size: 14px; padding: 0; cursor: pointer; }
-.rcm-tools button:hover:not(:disabled) { background: var(--elevated); color: var(--text); }
-.rcm-tools button:disabled { color: var(--text-faint); cursor: default; }
+/* Direct children only (plus the ＋ inside its popup anchor). The bare descendant form also matched
+   every button inside the kind picker, which is anchored inside this toolbar — and at class+element
+   specificity it beat .rtp-item, so the picker's rows were squeezed into these 26px grid boxes with
+   their icon and label drawn on top of each other. Found by reading the computed style off the live
+   window: the sheet said flex, the element said grid. */
+.rcm-tools > button, .rcm-tools > .rtp-anchor > button { width: 26px; height: 26px; display: grid; place-items: center; background: transparent; border: 0; border-radius: 4px; color: var(--text-dim); font-size: 14px; padding: 0; cursor: pointer; }
+.rcm-tools > button:hover:not(:disabled), .rcm-tools > .rtp-anchor > button:hover:not(:disabled) { background: var(--elevated); color: var(--text); }
+.rcm-tools > button:disabled, .rcm-tools > .rtp-anchor > button:disabled { color: var(--text-faint); cursor: default; }
 .rcm-tree { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
 /* flex: none, for the same reason as .rtp-*: the tree is a flex column with a bounded height, so
    without it the groups and rows shrink once the list is taller than the pane. A shrunk row draws its
