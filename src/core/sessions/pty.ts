@@ -16,4 +16,7 @@ export interface PtySpawnOptions {
   env: Record<string, string | undefined>
 }
 
-export type PtyFactory = (file: string, args: string[], opts: PtySpawnOptions) => PtyLike
+/** args as a string is node-pty's "command line verbatim" form (its own type is
+ *  `ArgvOrCommandLine = string[] | string`) — nothing is escaped, the line becomes `${file} ${args}`.
+ *  RunManager needs it on win32; see shellSpawn in core/run/shell.ts. Everything else passes an array. */
+export type PtyFactory = (file: string, args: string[] | string, opts: PtySpawnOptions) => PtyLike

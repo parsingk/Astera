@@ -25,7 +25,7 @@ const pathOf = (env: Record<string, string | undefined>): string | undefined =>
   env[Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH']
 
 function setup(platform: NodeJS.Platform = 'linux') {
-  const spawned: { file: string; args: string[]; opts: PtySpawnOptions; pty: FakePty }[] = []
+  const spawned: { file: string; args: string[] | string; opts: PtySpawnOptions; pty: FakePty }[] = []
   const factory: PtyFactory = (file, args, opts) => {
     const pty = new FakePty()
     spawned.push({ file, args, opts, pty })
@@ -192,7 +192,9 @@ describe('RunManager', () => {
         config: { id: 'x', name: 'dev', type: 'npm', script: 'dev' },
         command: 'pnpm run dev'
       })
-      expect(spawned[0].args).toEqual(['/c', 'pnpm run dev'])
+      // win32는 문자열로 넘어간다 — 배열이면 node-pty가 인용을 \" 로 바꿔 값이 쪼개진다
+      // (core/run/shell.ts의 shellSpawn, 실제 프로세스 검증은 shellSpawn.test.ts)
+      expect(spawned[0].args).toEqual('/s /c "pnpm run dev"')
     })
 
     it('javaHome과 springProfiles를 env로 되돌린다', () => {

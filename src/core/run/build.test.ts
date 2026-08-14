@@ -100,7 +100,8 @@ describe('buildCommand', () => {
   })
 
   it('dockerfile 은 빌드와 실행을 && 로 잇는다', () => {
-    // 실행이 cmd.exe /c 또는 sh -c 를 거치므로 셸이 && 를 해석한다 (runManager.ts:40)
+    // 실행이 cmd.exe /s /c 또는 sh -c 를 거치므로 셸이 && 를 해석한다 (shell.ts 의 shellSpawn).
+    // 바깥 따옴표 안에서도 && 가 구분자로 읽힌다는 것은 shellSpawn.test.ts 가 실제로 확인한다
     expect(buildCommand({ ...base, type: 'dockerfile', imageTag: 'astera:dev' }, ctx)).toBe(
       'docker build -t astera:dev . && docker run --rm astera:dev'
     )

@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import type { PtyFactory, PtyLike } from '../core/sessions/pty'
 import { treeKillCommand } from '../core/run/kill'
+import { shellSpawn } from '../core/run/shell'
 import { withJavaHomeOnPath } from '../core/run/jdk'
 import type { RunConfig, RunStatus } from '../core/run/config'
 
@@ -38,11 +39,9 @@ export class RunManager {
     const existing = this.runs.get(opts.projectPath)
     if (existing && existing.status.status === 'running') throw new Error(`ALREADY_RUNNING: ${opts.projectPath}`)
     const cwd = opts.config.cwd || opts.projectPath
-    // The assembled command needs shell interpretation: cmd.exe on win32, sh -c on posix
-    const spawn =
-      this.platform === 'win32'
-        ? { file: 'cmd.exe', args: ['/c', opts.command] }
-        : { file: 'sh', args: ['-c', opts.command] }
+    // The assembled command needs shell interpretation. Which shell, and the win32 string/posix array
+    // asymmetry that keeps quoted values intact, are decided (and explained) in shellSpawn
+    const spawn = shellSpawn(opts.command, this.platform)
     // javaHome and springProfiles are model fields but have to reach the process as environment variables.
     // Only Gradle/Maven configs carry them, so RunConfig (a union) needs a cast to read them here — this cast
     // is the point, not a narrowing to remove later, since RunManager otherwise stays kind-agnostic.
