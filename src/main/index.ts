@@ -128,10 +128,19 @@ function createWindow(): BrowserWindow {
     })
   }
 
-  // Closing the window (X) always minimizes to the tray — whether or not sessions exist. The only
-  // real quit path is the tray 'Quit' menu (app.quit): app.quit sets quitting=true in before-quit,
-  // which is what lets a close through this guard.
+  // Closing the window (X) minimizes to the tray on Windows and macOS — whether or not sessions
+  // exist. There the only real quit path is the tray 'Quit' menu (app.quit): app.quit sets
+  // quitting=true in before-quit, which is what lets a close through this guard.
+  //
+  // **Linux closes for real.** A tray icon cannot be relied on there — GNOME shows none without an
+  // AppIndicator extension — so hiding the window would leave the app running with nothing to click
+  // and no way out but killing the process. Letting the close through reaches the existing
+  // window-all-closed handler, which already calls app.quit() on every platform but macOS: this adds
+  // no new quit path, it stops blocking the one that was always there, and will-quit's session
+  // cleanup still runs. The cost is deliberate — rolling and the scheduler stop when the window
+  // closes on Linux, so minimizing is what keeps them alive.
   win.on('close', (e) => {
+    if (process.platform === 'linux') return
     if (!quitting) {
       e.preventDefault()
       win.hide()
@@ -174,7 +183,7 @@ function refreshTrayMenu(win: BrowserWindow): void {
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) app.quit()
 app.on('second-instance', () => {
-  if (!mainWindow) return
+  if (!mainWindow || mainWindow.isDestroyed()) return
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
@@ -536,7 +545,11 @@ app.whenReady().then(async () => {
     },
     () => refreshTrayMenu(win) // rebuild Open/Quit in the new language after settings.setLang
   )
-  createTray(win)
+  // No tray on Linux. With close quitting for real there is nothing to hide, so the menu's
+  // Open/Quit would only repeat what the window and its close button already do — while tying the
+  // app to AppIndicator support the desktop may not have. refreshTrayMenu guards on `tray?.`, so the
+  // language-change callback wired just above stays correct with no tray to rebuild.
+  if (process.platform !== 'linux') createTray(win)
 
   // Start the history file watcher in the background once the window is shown (live updates). Not
   // awaited, so it does not block window creation.
@@ -704,8 +717,8 @@ app.on('before-quit', () => {
 })
 // win32 quits once every window is closed. macOS has the opposite convention, and it genuinely fits
 // this app — sessions keep running in the background, and rolling and Slack notifications need to
-// stay alive. The only real quit paths are the tray's 'Quit' and the mac app menu's Cmd+Q (both go
-// through app.quit).
+// stay alive. The only real quit paths are the tray's 'Quit', the mac app menu's Cmd+Q, and — on
+// Linux, where there's no tray to hide to — an ordinary window close (all three go through app.quit).
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
