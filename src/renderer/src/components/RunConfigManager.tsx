@@ -162,7 +162,9 @@ export function RunConfigManager({
             </div>
             <div className="rcm-tree">
               {[...groups].map(([type, list]) => (
-                <div key={type}>
+                // 그룹도 세로 flex 다. 평범한 블록이면 그 안의 button 이 inline-block 이라
+                // 가로로 흘러 버린다 — 항목이 둘 이상인 종류에서 바로 드러난다
+                <div className="rcm-group-block" key={type}>
                   <div className="rcm-group">{t(`run.type.${type}` as MessageKey)}</div>
                   {list.map((c) => (
                     <button
