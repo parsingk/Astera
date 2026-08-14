@@ -54,7 +54,8 @@ Issues and pull requests are welcome. A couple of things worth knowing before yo
   message by looking one up (a test in `run/migrate.test.ts` pins that, because the key is assembled
   from a string and no type can check it). It only lands under "detected in this project" if
   something supplies the evidence — a seed configuration, a boolean derived from the project's root
-  file list, or a scan.
+  file list, or a scan. The four READMEs name the kinds one by one under **Run**, so a new one
+  belongs in all four as well — nothing checks that list, and it is the first thing a reader sees.
 - The README ships in the same four languages, as `README.md` (English, the source), `README.ko.md`,
   `README.ja.md` and `README.es.md`, each linking to the others under the badges. A change to the
   English README that alters what the app does or how it is installed belongs in the translations
