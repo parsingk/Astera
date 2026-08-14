@@ -9,22 +9,25 @@ import type { RunConfigType } from './types'
  *  anyway, which is the only thing it was for.
  *
  *  `go` deliberately matches what `go.mod` already gets in the tree (a cyan GO label) — the same tool
- *  should not look like two different things depending on which pane you are looking at. */
+ *  should not look like two different things depending on which pane you are looking at.
+ *
+ *  **No three-character labels here.** A label of three is squeezed to a fixed width to fit the
+ *  document silhouette (FileIcon's textLength), and at the 14px these render at the result is an
+ *  illegible smear that reads as the letters colliding with the outline. Rendered and looked at:
+ *  "NPM" and "MVN" both failed that way, which is why npm and Maven carry a shape instead. */
 export function runTypeIcon(type: RunConfigType): FileIconSpec {
   switch (type) {
     case 'shell':
       return { id: 'terminal', tone: 'gray' }
     case 'npm':
-      // Uppercase, like every label the tree draws. A 3-character label is squeezed to a fixed width
-      // (FileIcon's textLength), and lowercase has too little x-height to survive that — the letters
-      // run into each other. Red, as package.json is in the tree.
-      return { id: 'label', tone: 'red', label: 'NPM' }
+      // Red, as package.json is in the tree
+      return { id: 'code-braces', tone: 'red' }
     case 'node':
       return { id: 'label', tone: 'green', label: 'JS' }
     case 'gradle':
-      return { id: 'label', tone: 'green', label: 'GR' }
+      return { id: 'gear', tone: 'green' }
     case 'maven':
-      return { id: 'label', tone: 'orange', label: 'MVN' }
+      return { id: 'archive', tone: 'orange' }
     case 'cargo':
       return { id: 'label', tone: 'orange', label: 'RS' }
     case 'go':

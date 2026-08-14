@@ -17,12 +17,19 @@ describe('runTypeIcon', () => {
     }
   })
 
-  // 3자 라벨은 textLength 로 폭이 강제로 눌린다. 소문자는 x-height 가 낮아 그 압축에서 글자가
-  // 서로 붙어 버린다 — 실제로 소문자 'npm' 이 그렇게 그려졌다. 트리의 라벨이 전부 대문자인 이유다
   it('label 은 대문자다', () => {
     for (const t of ALL) {
       const spec = runTypeIcon(t)
       if (spec.id === 'label') expect(spec.label).toBe(spec.label!.toUpperCase())
+    }
+  })
+
+  // 3자 라벨은 textLength 로 폭이 눌려, 14px 로 그리면 글자가 뭉개져 테두리와 겹친 것처럼 보인다.
+  // 실제로 그려서 확인한 결과다 — 'NPM' 과 'MVN' 이 그랬고, 그래서 그 둘은 모양 아이콘을 쓴다
+  it('label 은 두 자를 넘지 않는다', () => {
+    for (const t of ALL) {
+      const spec = runTypeIcon(t)
+      if (spec.id === 'label') expect(spec.label!.length).toBeLessThanOrEqual(2)
     }
   })
 
