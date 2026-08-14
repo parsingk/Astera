@@ -60,6 +60,25 @@ describe('buildCommand', () => {
     expect(buildCommand({ ...base, type: 'node', file: 'scripts/a b.js' }, posix))
       .toBe("node 'scripts/a b.js'")
   })
+
+  it('python 은 인터프리터가 없으면 python 을 쓴다', () => {
+    expect(buildCommand({ ...base, type: 'python', file: 'main.py' }, ctx)).toBe('python main.py')
+    // nodePath 와 같은 성격의 단일 경로값이라 quoteArg 를 그대로 통과한다 — 공백이 있을 때만 감싸인다.
+    // (공백 없는 경로는 감싸이지 않는다는 뜻이기도 하다: D:\p\.venv\Scripts\python.exe 에는 특수문자가
+    // 없어 그대로 나간다 — 실제 venv 경로는 사용자 폴더 이름에 공백이 섞이는 경우가 흔해 이 분기가 실제로 쓰인다)
+    expect(
+      buildCommand(
+        { ...base, type: 'python', file: 'main.py', interpreter: 'C:\\Program Files\\Python311\\python.exe' },
+        ctx
+      )
+    ).toBe('"C:\\Program Files\\Python311\\python.exe" main.py')
+  })
+
+  it('pytest 는 -m pytest 로 부른다', () => {
+    expect(buildCommand({ ...base, type: 'pytest' }, ctx)).toBe('python -m pytest')
+    expect(buildCommand({ ...base, type: 'pytest', target: 'tests/unit' }, ctx))
+      .toBe('python -m pytest tests/unit')
+  })
 })
 
 describe('quoteArg', () => {

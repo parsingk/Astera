@@ -1397,6 +1397,9 @@ export default function App(): React.JSX.Element {
   })
   // Whether to show the Spring profile field — run.list decides from the build file bodies and sends it down
   const [runIsSpringBoot, setRunIsSpringBoot] = useState(false)
+  // Whether RunTypePicker should show 'python'/'pytest' as detected — run.list decides this from the
+  // project root's file list (hasPythonProject) and sends it down the same way as isSpringBoot
+  const [runIsPythonProject, setRunIsPythonProject] = useState(false)
   // The two-pane run configuration manager (Task 6). context is the assembly context run.list also
   // sends down — the manager's preview calls buildCommand(config, context) so it shows exactly what
   // run.start would run, and it starts null until the first run.list response arrives.
@@ -1492,6 +1495,7 @@ export default function App(): React.JSX.Element {
       setRunConfigs(r.configs)
       setRunActive(r.active)
       setRunIsSpringBoot(r.isSpringBoot)
+      setRunIsPythonProject(r.isPythonProject)
       setRunContext(r.context)
       setRunSelectedId((prev) => (r.configs.some((c) => c.id === prev) ? prev : r.active?.configId ?? r.configs[0]?.id ?? null))
       if (r.active?.status === 'running') setRunPanelOpen(true)
@@ -1543,7 +1547,12 @@ export default function App(): React.JSX.Element {
     const SEED_FILES = new Set([
       'package.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'Cargo.toml', 'go.mod',
       'build.gradle', 'build.gradle.kts', 'gradlew', 'gradlew.bat',
-      'pom.xml', 'mvnw', 'mvnw.cmd'
+      'pom.xml', 'mvnw', 'mvnw.cmd',
+      // These two do not seed a config (python/pytest have none — see hasPythonProject), but their
+      // presence is what flips RunTypePicker's "detected" grouping, so they still belong in this set.
+      // A root-level *.py file flips it too, but that is any of countless names and does not fit a
+      // fixed set — the picker just does not update live for that trigger until the project reopens.
+      'pyproject.toml', 'requirements.txt'
     ])
     const norm = (p: string): string => p.replace(/\\/g, '/').toLowerCase()
     const off = window.api.on('files:changed', (c) => {
@@ -1554,6 +1563,7 @@ export default function App(): React.JSX.Element {
       void window.api.run.list(root).then((r) => {
         setRunConfigs(r.configs)
         setRunIsSpringBoot(r.isSpringBoot)
+        setRunIsPythonProject(r.isPythonProject)
         setRunContext(r.context)
         setRunSelectedId((prev) => (r.configs.some((cc) => cc.id === prev) ? prev : r.active?.configId ?? r.configs[0]?.id ?? null))
       })
@@ -2534,6 +2544,7 @@ export default function App(): React.JSX.Element {
           configs={runConfigs}
           context={runContext}
           isSpringBoot={runIsSpringBoot}
+          isPythonProject={runIsPythonProject}
           projectPath={explorerRoot}
           onSave={runManagerSave}
           onDelete={runDeleteConfig}

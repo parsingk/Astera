@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { runTypeIcon } from './typeIcon'
 import type { RunConfigType } from './types'
 
-const ALL: RunConfigType[] = ['shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go']
+const ALL: RunConfigType[] = ['shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest']
 
 describe('runTypeIcon', () => {
   it('모든 종류에 아이콘이 있다', () => {
@@ -36,5 +36,15 @@ describe('runTypeIcon', () => {
   // 같은 도구가 보는 곳에 따라 달라 보이면 안 된다 — 파일 트리의 go.mod 가 청록 GO 다
   it('go 는 파일 트리의 go.mod 와 같은 모양이다', () => {
     expect(runTypeIcon('go')).toEqual({ id: 'label', tone: 'cyan', label: 'GO' })
+  })
+
+  // 파일 트리의 .py 파일과 같은 모양 — files/icons.ts 의 EXT.py 도 초록 PY 다
+  it('python 은 파일 트리의 .py 파일과 같은 모양이다', () => {
+    expect(runTypeIcon('python')).toEqual({ id: 'label', tone: 'green', label: 'PY' })
+  })
+
+  // pytest 는 새 모양을 만들지 않고 파일 트리의 테스트 파일 배지를 그대로 쓴다
+  it('pytest 는 python 과 같은 라벨에 테스트 배지만 더한다', () => {
+    expect(runTypeIcon('pytest')).toEqual({ id: 'label', tone: 'green', label: 'PY', badge: 'test' })
   })
 })

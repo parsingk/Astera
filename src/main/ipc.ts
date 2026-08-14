@@ -41,6 +41,7 @@ import { t, isLang } from '../core/i18n'
 import type { LangPreference } from '../core/i18n'
 import { pickInitialLang } from '../core/i18n/locale'
 import { listJdks } from './jdkScanner'
+import { listPythonInterpreters } from './pythonScanner'
 
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
  *  in this file — the two values the coordinator needs (spawnSession, busyState) are owned here, so
@@ -757,12 +758,17 @@ export function registerIpc(
     const texts = await readSeedTexts(projectPath, files)
     const { detectSeedConfigs, mergeConfigs, isSpringBootProject } = await import('../core/run/config')
     const { buildRunContext } = await import('../core/run/build')
+    const { hasPythonProject } = await import('../core/run/python')
     const configs = mergeConfigs(detectSeedConfigs(files, texts), core.runConfig.get(projectPath))
     return {
       configs,
       active: core.run.get(projectPath),
       recent: core.run.recentOutput(projectPath),
       isSpringBoot: isSpringBootProject(texts), // whether RunConfigDialog shows the Spring profile field
+      // Whether RunTypePicker promotes 'python'/'pytest' into its "detected" group — there is no seed
+      // config for them (no single entry point to key detection off of the way seedKeyOf does for the
+      // other kinds), so this is threaded down separately instead.
+      isPythonProject: hasPythonProject(files),
       // Same buildRunContext call as run.start below — the form's preview and the actual run must agree
       context: buildRunContext(files, process.platform)
     }
@@ -773,6 +779,14 @@ export function registerIpc(
   // The detected JDKs. There is no path argument, so this is not subject to assertAllowedPath — the scan
   // only looks at conventional directories (Program Files and friends) and PATH.
   ipcMain.handle('run.listJdks', async () => listJdks())
+
+  // The detected Python interpreters for this project (its venv plus whatever is on PATH). Unlike
+  // listJdks this does take a path — venv candidates live inside the project — so it is subject to
+  // assertAllowedPath.
+  ipcMain.handle('run.listPythonInterpreters', async (_e, projectPath: string) => {
+    await assertAllowedPath(projectPath)
+    return listPythonInterpreters(projectPath)
+  })
 
   /** Validates a run configuration's cwd and returns the absolute path that will **actually be used**.
    *  cwd comes from two places outside the trust boundary — the stored file (hand-editable on disk) and
@@ -1214,7 +1228,8 @@ export function registerIpc(
     return r.canceled ? null : r.filePaths[0]
   })
   // Same spot and contract as pickFolder above, just 'openFile' instead of 'openDirectory'. Shared by
-  // the run configuration file-path fields (node's file now, python/dockerfile/dotnet's later).
+  // the run configuration file-path fields (node's file, python's file and interpreter,
+  // dockerfile/dotnet's later).
   ipcMain.handle('system.pickFile', async (_e, defaultPath?: string) => {
     const r = await dialog.showOpenDialog(win, { properties: ['openFile'], defaultPath })
     return r.canceled ? null : r.filePaths[0]

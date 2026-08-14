@@ -1,7 +1,16 @@
 import type { PackageManager } from './config'
 
 /** The kind of a run configuration. This is the discriminant. */
-export type RunConfigType = 'shell' | 'npm' | 'node' | 'gradle' | 'maven' | 'cargo' | 'go'
+export type RunConfigType =
+  | 'shell'
+  | 'npm'
+  | 'node'
+  | 'gradle'
+  | 'maven'
+  | 'cargo'
+  | 'go'
+  | 'python'
+  | 'pytest'
 
 /** What every kind shares. cwd is relative to the project root — empty means the root */
 interface RunConfigBase {
@@ -67,6 +76,21 @@ export interface GoConfig extends RunConfigBase {
   args?: string
 }
 
+export interface PythonConfig extends RunConfigBase {
+  type: 'python'
+  file: string
+  interpreter?: string
+  args?: string
+}
+
+export interface PytestConfig extends RunConfigBase {
+  type: 'pytest'
+  /** Empty runs the whole suite */
+  target?: string
+  interpreter?: string
+  args?: string
+}
+
 export type RunConfig =
   | ShellConfig
   | NpmConfig
@@ -75,6 +99,8 @@ export type RunConfig =
   | MavenConfig
   | CargoConfig
   | GoConfig
+  | PythonConfig
+  | PytestConfig
 
 /** The optional field keys a kind knows about. The form's "add optional field" dropdown is built
  *  from this.
@@ -98,5 +124,9 @@ export function optionalFieldsFor(type: RunConfigType, opts: { springBoot: boole
       return ['release', 'features', 'args', ...common]
     case 'go':
       return ['packagePath', 'args', ...common]
+    case 'python':
+      return ['interpreter', 'args', ...common]
+    case 'pytest':
+      return ['target', 'interpreter', 'args', ...common]
   }
 }

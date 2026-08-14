@@ -574,8 +574,13 @@ export const ko = {
   'run.form.jdkBrowse': '찾아보기…',
   'run.form.cwdBrowse': '선택…',
   'run.form.fileBrowse': '찾아보기…',
+  // Python 인터프리터 Select + 찾기 버튼 (Task 9) — JDK 필드와 같은 모양
+  'run.form.interpreterLoading': '인터프리터 조회 중…',
+  'run.form.interpreterAuto': '자동 (PATH 의 python)',
+  'run.form.interpreterCustom': '{path} (직접 지정)',
+  'run.form.interpreterBrowse': '찾아보기…',
   // RunConfigManager.tsx — the two-pane dialog. run.type.* are kind labels grouping the tree;
-  // product/tool names among them (npm, Gradle, Maven, cargo, go) are not translated.
+  // product/tool names among them (npm, Gradle, Maven, cargo, go, Python, pytest) are not translated.
   'run.manager.title': '실행 구성',
   'run.manager.open': '실행 구성 관리…',
   'run.manager.add': '추가',
@@ -590,6 +595,8 @@ export const ko = {
   'run.type.maven': 'Maven',
   'run.type.cargo': 'cargo',
   'run.type.go': 'go',
+  'run.type.python': 'Python',
+  'run.type.pytest': 'pytest',
   // RunConfigForm.tsx / RunTypePicker.tsx (Task 7) — per-kind field labels and the ＋ kind-picker popup.
   'run.field.javaHome': 'JDK',
   'run.field.springProfiles': 'Spring 프로파일',
@@ -607,6 +614,9 @@ export const ko = {
   'run.field.features': '기능',
   'run.field.packagePath': '패키지 경로',
   'run.field.nodePath': 'Node 실행 파일',
+  // Python(파일 필수)·pytest(대상 선택) 공용 인터프리터 필드와 pytest 전용 대상 필드 (Task 9)
+  'run.field.interpreter': '인터프리터',
+  'run.field.target': '테스트 대상',
   'run.picker.search': '검색…',
   'run.picker.detected': '이 프로젝트에서 감지됨',
   'run.picker.other': '기타',

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Jdk, RunConfig } from '../../../core/types'
+import type { Jdk, PythonInterpreter, RunConfig } from '../../../core/types'
 import type { RunContext } from '../../../core/run/build'
 import { buildCommand } from '../../../core/run/build'
 import { optionalFieldsFor } from '../../../core/run/types'
@@ -13,6 +13,11 @@ import { Select, type SelectOption } from './Select'
  *  Lifted from RunConfigDialog (deleted in Task 8) rather than imported from it. */
 function jdkLabel(j: Jdk): string {
   return `${j.version}${j.vendor ? ` (${j.vendor})` : ''} — ${j.path}`
+}
+
+/** Label for the Python interpreter select — same shape as jdkLabel, minus the vendor Python has none of. */
+function pythonInterpreterLabel(p: PythonInterpreter): string {
+  return `${p.version} — ${p.path}`
 }
 
 /** The right-hand pane of RunConfigManager — required fields for the configuration's kind, an
@@ -29,6 +34,7 @@ export function RunConfigForm({
   context,
   isSpringBoot,
   jdks,
+  pythonInterpreters,
   npmScripts,
   projectPath,
   onChange
@@ -40,12 +46,16 @@ export function RunConfigForm({
   isSpringBoot: boolean
   /** null while still loading (RunConfigManager owns the fetch — it does not depend on the selection) */
   jdks: Jdk[] | null
+  /** null while still loading. Unlike jdks this is refetched whenever projectPath changes — venv
+   *  candidates live inside the project. */
+  pythonInterpreters: PythonInterpreter[] | null
   /** Script names already known for this project (from the npm seeds RunConfigManager already has) —
    *  the candidate list for the script Select. Not part of the plan's original prop list, but the
    *  Select this field calls for needs a source for "package.json's scripts", and this is the data
    *  RunConfigManager already holds; there is no IPC round trip to add. */
   npmScripts: string[]
-  /** Base for the working-folder and JDK "Choose…" pickers, and for the relative-cwd conversion */
+  /** Base for the working-folder, JDK and interpreter "Choose…" pickers, and for the relative-cwd
+   *  conversion */
   projectPath: string
   onChange: (config: RunConfig) => void
 }): React.JSX.Element {
@@ -78,7 +88,7 @@ export function RunConfigForm({
   // a value left blank means "not set", the same convention RunConfigDialog used for cwd
   // (`cwd.trim() || undefined`). javaHome goes through changeNow with its own `|| undefined` instead,
   // since it is never typed freehand here (Select or the folder picker only).
-  const BLANKABLE = ['cwd', 'args', 'springProfiles', 'features', 'packagePath', 'nodePath'] as const
+  const BLANKABLE = ['cwd', 'args', 'springProfiles', 'features', 'packagePath', 'nodePath', 'target'] as const
   const flush = (): void => {
     const next = { ...draft } as unknown as Record<string, unknown>
     for (const k of BLANKABLE) if (next[k] === '') delete next[k]
@@ -111,7 +121,7 @@ export function RunConfigForm({
     if (dir) changeNow({ ...draft, cwd: toRelativeCwd(dir, projectPath) || undefined })
   }
   const pickFile = async (): Promise<void> => {
-    if (draft.type !== 'node') return
+    if (draft.type !== 'node' && draft.type !== 'python') return
     const file = await window.api.system.pickFile(projectPath)
     // Stored project-relative, same as cwd — an absolute path breaks the moment the project moves.
     // Unlike cwd, file has no "empty means root" meaning, so the '' fallback there does not apply.
@@ -121,6 +131,13 @@ export function RunConfigForm({
     if (draft.type !== 'gradle' && draft.type !== 'maven') return
     const dir = await window.api.system.pickFolder(draft.javaHome || undefined)
     if (dir) changeNow({ ...draft, javaHome: dir })
+  }
+  const pickInterpreter = async (): Promise<void> => {
+    if (draft.type !== 'python' && draft.type !== 'pytest') return
+    // Unlike cwd/file, the interpreter is not stored project-relative — a venv interpreter belongs to
+    // one machine's virtual environment, so an absolute path is the only value that means anything.
+    const file = await window.api.system.pickFile(draft.interpreter || projectPath)
+    if (file) changeNow({ ...draft, interpreter: file })
   }
 
   const knownJdkPaths = new Set((jdks ?? []).map((j) => j.path))
@@ -138,6 +155,15 @@ export function RunConfigForm({
           ...(draft.script && !npmScripts.includes(draft.script) ? [{ value: draft.script, label: draft.script }] : [])
         ]
       : []
+
+  const knownInterpreterPaths = new Set((pythonInterpreters ?? []).map((p) => p.path))
+  const interpreterItems = (current: string): SelectOption[] => [
+    { value: '', label: t('run.form.interpreterAuto') },
+    ...(current && !knownInterpreterPaths.has(current)
+      ? [{ value: current, label: t('run.form.interpreterCustom', { path: current }) }]
+      : []),
+    ...(pythonInterpreters ?? []).map((p) => ({ value: p.path, label: pythonInterpreterLabel(p) }))
+  ]
 
   return (
     <>
@@ -174,7 +200,7 @@ export function RunConfigForm({
           />
         </div>
       )}
-      {draft.type === 'node' && (
+      {(draft.type === 'node' || draft.type === 'python') && (
         <div className="field">
           <label>{t('run.field.file')}</label>
           <div className="row">
@@ -237,7 +263,7 @@ export function RunConfigForm({
           ) : (
             <div className="row">
               <Select
-                className="jdk-select"
+                className="path-select"
                 items={jdkItems(draft.javaHome ?? '')}
                 value={draft.javaHome ?? ''}
                 onChange={(v) => changeNow({ ...draft, javaHome: v || undefined })}
@@ -319,6 +345,38 @@ export function RunConfigForm({
             onChange={(e) => change({ ...draft, packagePath: e.target.value })}
             onBlur={flush}
           />
+        </div>
+      )}
+      {draft.type === 'pytest' && visible('target') && (
+        <div className="field">
+          <label>{t('run.field.target')}</label>
+          <input
+            type="text"
+            value={draft.target ?? ''}
+            onChange={(e) => change({ ...draft, target: e.target.value })}
+            onBlur={flush}
+          />
+        </div>
+      )}
+      {(draft.type === 'python' || draft.type === 'pytest') && visible('interpreter') && (
+        <div className="field">
+          <label>{t('run.field.interpreter')}</label>
+          {pythonInterpreters === null ? (
+            <span className="check-note">{t('run.form.interpreterLoading')}</span>
+          ) : (
+            <div className="row">
+              <Select
+                className="path-select"
+                items={interpreterItems(draft.interpreter ?? '')}
+                value={draft.interpreter ?? ''}
+                onChange={(v) => changeNow({ ...draft, interpreter: v || undefined })}
+                ariaLabel={t('run.field.interpreter')}
+              />
+              <button type="button" onClick={() => void pickInterpreter()}>
+                {t('run.form.interpreterBrowse')}
+              </button>
+            </div>
+          )}
         </div>
       )}
       {draft.type !== 'shell' && visible('args') && (

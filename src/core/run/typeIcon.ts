@@ -32,5 +32,13 @@ export function runTypeIcon(type: RunConfigType): FileIconSpec {
       return { id: 'label', tone: 'orange', label: 'RS' }
     case 'go':
       return { id: 'label', tone: 'cyan', label: 'GO' }
+    // Matches what the file tree already draws for a .py file (files/icons.ts's EXT table) — the same
+    // tool should not look like two different things depending on which pane you are looking at.
+    case 'python':
+      return { id: 'label', tone: 'green', label: 'PY' }
+    // pytest reuses the tree's own test-file marker (the badge, not a new shape) rather than inventing a
+    // second way to say "this is a test" — it is Python's test runner, so the PY label still applies.
+    case 'pytest':
+      return { id: 'label', tone: 'green', label: 'PY', badge: 'test' }
   }
 }

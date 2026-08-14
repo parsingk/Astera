@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Jdk, RunConfig } from '../../../core/types'
+import type { Jdk, PythonInterpreter, RunConfig } from '../../../core/types'
 import type { RunContext } from '../../../core/run/build'
 import type { RunConfigType } from '../../../core/run/types'
 import type { MessageKey } from '../../../core/i18n'
@@ -30,6 +30,10 @@ function defaultConfigFor(type: RunConfigType, id: string, name: string, npmScri
       return { id, name, type, subcommand: 'run' }
     case 'go':
       return { id, name, type, subcommand: 'run' }
+    case 'python':
+      return { id, name, type, file: '' }
+    case 'pytest':
+      return { id, name, type }
   }
 }
 
@@ -50,6 +54,7 @@ export function RunConfigManager({
   configs,
   context,
   isSpringBoot,
+  isPythonProject,
   projectPath,
   onSave,
   onDelete,
@@ -60,7 +65,10 @@ export function RunConfigManager({
   /** Whether the Spring profile optional field is offered for gradle/maven — run.list decides this
    *  from the build file's contents (isSpringBootProject) */
   isSpringBoot: boolean
-  /** Base for the form's working-folder and JDK "Choose…" pickers */
+  /** Whether RunTypePicker should show 'python'/'pytest' as detected — run.list decides this from the
+   *  project root's file list (hasPythonProject), since neither kind has a seed config to key off of */
+  isPythonProject: boolean
+  /** Base for the form's working-folder and JDK/interpreter "Choose…" pickers */
   projectPath: string
   onSave: (config: RunConfig) => void
   onDelete: (id: string) => void
@@ -117,6 +125,25 @@ export function RunConfigManager({
     }
   }, [])
 
+  // Unlike jdks, this depends on projectPath — venv candidates live inside the project, so switching
+  // projects has to re-fetch rather than reuse a stale list.
+  const [pythonInterpreters, setPythonInterpreters] = useState<PythonInterpreter[] | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    setPythonInterpreters(null)
+    window.api.run
+      .listPythonInterpreters(projectPath)
+      .then((list) => {
+        if (!cancelled) setPythonInterpreters(list)
+      })
+      .catch(() => {
+        if (!cancelled) setPythonInterpreters([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [projectPath])
+
   // The script Select's candidate list — the npm-typed entries already in the project's configuration
   // list (seeds from package.json, plus any user npm configurations), deduplicated.
   const npmScripts = Array.from(
@@ -127,8 +154,14 @@ export function RunConfigManager({
     )
   )
   // Detection evidence for RunTypePicker: a kind already has a seed in this project's list — seeds are
-  // derived from the project's own files, so their presence is the detection signal.
-  const detectedTypes = Array.from(new Set(configs.filter((c) => c.id.startsWith('seed:')).map((c) => c.type)))
+  // derived from the project's own files, so their presence is the detection signal. python/pytest have
+  // no seed config (no single entry point to key one off of), so isPythonProject stands in for them.
+  const detectedTypes = Array.from(
+    new Set([
+      ...configs.filter((c) => c.id.startsWith('seed:')).map((c) => c.type),
+      ...(isPythonProject ? (['python', 'pytest'] as const) : [])
+    ])
+  )
   const [pickerOpen, setPickerOpen] = useState(false)
 
   // Grouped by kind for the tree. Order follows the list's own order — user configurations come first
@@ -216,6 +249,7 @@ export function RunConfigManager({
                   context={context}
                   isSpringBoot={isSpringBoot}
                   jdks={jdks}
+                  pythonInterpreters={pythonInterpreters}
                   npmScripts={npmScripts}
                   projectPath={projectPath}
                   onChange={handleFormChange}

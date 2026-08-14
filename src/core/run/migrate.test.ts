@@ -73,4 +73,18 @@ describe('migrateRunConfigs', () => {
       { id: 'x', name: 'x', type: 'npm', script: 'dev' }
     ])
   })
+
+  it('python 은 file 이 필수다', () => {
+    expect(migrateRunConfigs([{ id: 'x', name: 'x', type: 'python' }])).toEqual([])
+    expect(migrateRunConfigs([{ id: 'x', name: 'x', type: 'python', file: 'main.py' }])).toEqual([
+      { id: 'x', name: 'x', type: 'python', file: 'main.py' }
+    ])
+  })
+
+  // target 이 없어도(전체 실행) 통과한다 — pytest 에는 필수 필드가 없다
+  it('pytest 는 필수 필드가 없다 — target 이 없어도 통과한다', () => {
+    expect(migrateRunConfigs([{ id: 'x', name: 'x', type: 'pytest' }])).toEqual([
+      { id: 'x', name: 'x', type: 'pytest' }
+    ])
+  })
 })

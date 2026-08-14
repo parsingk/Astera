@@ -199,6 +199,12 @@ describe('seedKeyOf', () => {
     expect(seedKeyOf({ id: 'x', name: 'x', type: 'gradle', tasks: 'bootRun' })).toBe('gradle:bootRun')
     expect(seedKeyOf({ id: 'x', name: 'x', type: 'shell', command: 'ls' })).toBe('shell:ls')
   })
+
+  it('python 은 file, pytest 는 target(없으면 빈 문자열) 으로 정체를 짓는다', () => {
+    expect(seedKeyOf({ id: 'x', name: 'x', type: 'python', file: 'main.py' })).toBe('python:main.py')
+    expect(seedKeyOf({ id: 'x', name: 'x', type: 'pytest', target: 'tests/unit' })).toBe('pytest:tests/unit')
+    expect(seedKeyOf({ id: 'x', name: 'x', type: 'pytest' })).toBe('pytest:')
+  })
 })
 
 describe('parseEnvLines', () => {

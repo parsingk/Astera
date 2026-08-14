@@ -762,10 +762,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    schedule inputs stacked up, it can overflow in a narrow window. The same convention as its sibling modals. */
 .modal.resume { max-height: 80vh; overflow-y: auto; }
 .run-config-body { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
-/* The JDK picker — paths are long, and .sel-value already ellipsises. This only claims the leftover
-   width next to the "Browse…" button — a plain width:100% loses to the
+/* The JDK and Python interpreter pickers — paths are long, and .sel-value already ellipsises. This only
+   claims the leftover width next to the "Browse…" button — a plain width:100% loses to the
    minimum size in a flex child, so flex:1 plus min-width:0 is stated explicitly */
-.jdk-select { flex: 1; min-width: 0; }
+.path-select { flex: 1; min-width: 0; }
 /* The working folder input takes the leftover width next to the "Choose…" button — the same convention as
    the inputs of .slack-url-input and .worktree-root-cell (stating flex:1 rather than relying on width:100%) */
 .run-config-cwd { flex: 1; min-width: 0; }

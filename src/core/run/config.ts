@@ -110,6 +110,10 @@ export function seedKeyOf(c: RunConfig): string {
       return `cargo:${c.subcommand}`
     case 'go':
       return `go:${c.subcommand}:${c.packagePath ?? '.'}`
+    case 'python':
+      return `python:${c.file}`
+    case 'pytest':
+      return `pytest:${c.target ?? ''}`
   }
 }
 

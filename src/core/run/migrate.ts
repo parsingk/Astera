@@ -1,6 +1,6 @@
 import type { RunConfig, RunConfigType } from './types'
 
-const KNOWN: RunConfigType[] = ['shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go']
+const KNOWN: RunConfigType[] = ['shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest']
 
 /** The string fields a kind must have. Missing one means buildCommand would splice `undefined` into
  *  the assembled command — this is the gate that stops that. A Record so adding a kind without a
@@ -12,7 +12,10 @@ const REQUIRED: Record<RunConfigType, string[]> = {
   gradle: ['tasks'],
   maven: ['goals'],
   cargo: ['subcommand'],
-  go: ['subcommand']
+  go: ['subcommand'],
+  python: ['file'],
+  // No required field — an empty target runs the whole suite, so there is nothing to reject here
+  pytest: []
 }
 
 const isStringMap = (v: unknown): boolean =>

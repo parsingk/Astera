@@ -4,6 +4,8 @@ import type { RunContext } from './run/build'
 export type { RunContext } from './run/build'
 import type { Jdk } from './run/jdk'
 export type { Jdk } from './run/jdk'
+import type { PythonInterpreter } from './run/python'
+export type { PythonInterpreter } from './run/python'
 // This file already has a HistoryEntry for session history, so the local-history one comes in under
 // an alias. A deletion snapshot entry (originalPath, deletedAt, size, isDir) merely shares the name
 // with that session history entry; the two types are unrelated.
@@ -423,6 +425,9 @@ export interface CoreApi {
       active: RunStatus | null
       recent: string
       isSpringBoot: boolean
+      // Whether RunTypePicker should show 'python'/'pytest' as detected (pyproject.toml, requirements.txt,
+      // or a *.py file at the project root) — there is no seed config for either kind to key that off of.
+      isPythonProject: boolean
       context: RunContext
     }>
     listActive(): Promise<RunStatus[]> // all active runs — for the count badge and the dropdown
@@ -433,6 +438,10 @@ export interface CoreApi {
     saveConfig(projectPath: string, config: RunConfig): Promise<RunConfig[]> // returns the refreshed display list after an add or edit
     deleteConfig(projectPath: string, configId: string): Promise<RunConfig[]>
     listJdks(): Promise<Jdk[]> // the detected JDKs — no path argument, so not subject to assertAllowedPath
+    // The detected Python interpreters for this project (its venv plus whatever is on PATH). Takes a
+    // path — unlike listJdks — because venv candidates live inside the project, so it is subject to
+    // assertAllowedPath.
+    listPythonInterpreters(projectPath: string): Promise<PythonInterpreter[]>
   }
   terminal: {
     // An interactive shell at a project path. open and list go through assertAllowedPath, which
@@ -452,7 +461,8 @@ export interface SystemApi {
   // caller (NewSessionDialog) does.
   pickFolder(defaultPath?: string): Promise<string | null>
   // Same contract as pickFolder, for a single file — the run configuration file-path fields
-  // (node's file now, python/dockerfile/dotnet's later) share this instead of each inventing its own.
+  // (node's file, python's file and interpreter, dockerfile/dotnet's later) share this instead of each
+  // inventing its own.
   pickFile(defaultPath?: string): Promise<string | null>
   pathExists(p: string): Promise<boolean>
   checkCli(): Promise<{ claude: CliStatus; codex: CliStatus }>

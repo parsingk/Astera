@@ -68,6 +68,10 @@ export function buildCommand(config: RunConfig, ctx: RunContext): string {
       // packagePath 는 단일 값이므로 인용한다 — args·tasks·goals 처럼 여러 토큰을 담는 필드가 아니다.
       // quoteArg 는 특수문자가 없으면 그대로 돌려주므로 './...' 같은 흔한 값은 모양이 바뀌지 않는다
       return join('go', config.subcommand, q(config.packagePath || '.'), config.args)
+    case 'python':
+      return join(q(config.interpreter || 'python'), q(config.file), config.args)
+    case 'pytest':
+      return join(q(config.interpreter || 'python'), '-m pytest', config.target ? q(config.target) : '', config.args)
   }
 }
 
