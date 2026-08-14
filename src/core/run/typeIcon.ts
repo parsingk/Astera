@@ -15,8 +15,10 @@ export function runTypeIcon(type: RunConfigType): FileIconSpec {
     case 'shell':
       return { id: 'terminal', tone: 'gray' }
     case 'npm':
-      // Red, as package.json is in the tree — npm's own mark is red too, so the tone reads right
-      return { id: 'label', tone: 'red', label: 'npm' }
+      // Uppercase, like every label the tree draws. A 3-character label is squeezed to a fixed width
+      // (FileIcon's textLength), and lowercase has too little x-height to survive that — the letters
+      // run into each other. Red, as package.json is in the tree.
+      return { id: 'label', tone: 'red', label: 'NPM' }
     case 'node':
       return { id: 'label', tone: 'green', label: 'JS' }
     case 'gradle':
