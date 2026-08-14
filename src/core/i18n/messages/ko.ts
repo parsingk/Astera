@@ -551,52 +551,109 @@ export const ko = {
   // WorktreePanel.tsx — panel header, row icon buttons
   'worktree.refresh': '새로 고침',
   'worktree.action.startSession': '세션 시작',
-  // RunToolbar.tsx — config select, run/stop, edit/delete, the running list
+  // RunToolbar.tsx — config select, run/stop, the running list, ⋮ menu (only item opens RunConfigManager)
   'run.config.selectLabel': '실행 구성 선택',
   'run.config.none': '실행 구성 없음',
-  'run.config.add': '실행 구성 추가…',
   'run.config.more': '추가 동작',
   'run.action.run': '실행',
   'run.action.stop': '중지',
-  'run.config.editTitle': '구성 편집',
-  'run.config.deleteTitle': '구성 삭제',
   'run.global.listTitle': '실행 중 목록',
   'run.global.jump': '이동',
-  // App.tsx runAddConfig/runEditConfig — the text both sites share when the run.saveConfig IPC
-  // fails (same meaning: saving the config failed)
+  // App.tsx runManagerSave — the text shown when the run.saveConfig IPC fails
   'run.config.saveFailed': '저장 실패: {detail}',
   // ipc.ts resolveRunCwd — a sentence main throws also shows up verbatim in a renderer toast,
   // so it is translated here before throwing (the layering rule)
   'run.config.cwdNotString': '실행 구성의 작업 폴더가 올바르지 않습니다',
   'run.config.cwdOutsideProject': '실행 구성의 작업 폴더는 프로젝트 안이어야 합니다',
-  // RunConfigDialog.tsx — RunToolbar's inline form was split out into this dialog component.
-  // namePlaceholder/commandPlaceholder were the old inline form's keys; nameLabel is the rename that
-  // matches the dialog structure (the value is reused as-is), and commandPlaceholder's value was
-  // refreshed for the new placeholder wording.
-  'run.form.editTitle': '실행 구성 편집',
-  'run.form.addTitle': '실행 구성 추가',
+  // ipc.ts run.start — 필수 항목이 빈 구성은 저장은 되지만 실행은 거부한다. {fields} 는 아래 run.field.* 라벨이다
+  'run.start.incomplete': '실행 구성의 필수 항목이 비어 있습니다: {fields}',
+  // RunConfigForm.tsx — name field and the JDK/file pickers shared by every per-kind form.
+  // 종류별 필드 라벨은 shell 의 명령까지 모두 아래 run.field.* 에 모여 있다
   'run.form.nameLabel': '이름',
-  'run.form.commandLabel': '명령',
-  'run.form.commandPlaceholder': '예: gradlew.bat bootRun',
-  'run.form.commandHint': '프로젝트 폴더에서 셸로 실행됩니다.',
-  'run.form.jdkLabel': 'JDK (선택)',
   'run.form.jdkLoading': 'JDK 조회 중…',
   'run.form.jdkNone': '사용 안 함 (앱 환경 그대로)',
   'run.form.jdkCustom': '{path} (직접 지정)',
   'run.form.jdkBrowse': '찾아보기…',
-  'run.form.jdkHint': 'JAVA_HOME으로 설정됩니다.',
-  'run.form.springLabel': 'Spring 프로파일 (선택)',
-  'run.form.springHint': 'SPRING_PROFILES_ACTIVE로 설정됩니다. 콤마로 여러 개를 지정할 수 있습니다.',
-  'run.form.cwdLabel': '작업 폴더 (선택)',
-  'run.form.cwdPlaceholder': '비우면 프로젝트 루트',
   'run.form.cwdBrowse': '선택…',
-  'run.form.cwdHint':
-    '프로젝트 폴더 기준 상대 경로로 저장됩니다(프로젝트 밖은 선택할 수 없습니다). 비우면 프로젝트 루트에서 실행합니다.',
-  'run.form.envLabel': '환경변수 (선택)',
-  'run.form.envPlaceholder': '한 줄에 하나\nCUSTOM_VAR=value',
-  'run.form.envHint': '비워 두면 앱 환경을 그대로 물려받습니다. 같은 이름은 이 구성이 우선합니다.',
-  'run.form.save': '저장',
-  'run.form.add': '추가',
+  'run.form.fileBrowse': '찾아보기…',
+  // Python 인터프리터 Select + 찾기 버튼 (Task 9) — JDK 필드와 같은 모양
+  'run.form.interpreterLoading': '인터프리터 조회 중…',
+  'run.form.interpreterAuto': '자동 (PATH 의 python)',
+  'run.form.interpreterCustom': '{path} (직접 지정)',
+  'run.form.interpreterBrowse': '찾아보기…',
+  // Compose 파일 찾기 버튼과 services 필드의 후보 힌트 (Task 10)
+  'run.form.composeFileBrowse': '찾아보기…',
+  'run.form.composeServicesLoading': 'Compose 서비스 조회 중…',
+  'run.form.composeServicesHint': '후보: {list}',
+  // Dockerfile 경로 찾기 버튼 (Task 11)
+  'run.form.dockerfilePathBrowse': '찾아보기…',
+  // .NET 프로젝트 파일 Select + 찾기 버튼 (Task 12) — 인터프리터·JDK 필드와 같은 모양이다:
+  // 스캐너가 찾은 것을 고르거나, 찾지 못한 파일은 찾기 버튼으로 직접 지정한다
+  'run.form.projectLoading': '.NET 프로젝트 조회 중…',
+  'run.form.projectCustom': '{path} (직접 지정)',
+  'run.form.projectBrowse': '찾아보기…',
+  // RunConfigManager.tsx — the two-pane dialog. run.type.* are kind labels grouping the tree;
+  // product/tool names among them (npm, Gradle, Maven, cargo, go, Python, pytest) are not translated.
+  'run.manager.title': '실행 구성',
+  'run.manager.open': '실행 구성 관리…',
+  'run.manager.add': '추가',
+  'run.manager.remove': '제거',
+  'run.manager.duplicate': '복제',
+  // 시드를 고치면 그 순간 사용자 구성 사본으로 승격된다(promoteSeed) — 더 이상 읽기 전용이 아니다
+  'run.manager.seedHint': '자동 감지된 구성을 수정하면 사용자 구성 사본으로 저장됩니다.',
+  'run.type.shell': 'Shell',
+  'run.type.npm': 'npm',
+  'run.type.node': 'Node.js',
+  'run.type.gradle': 'Gradle',
+  'run.type.maven': 'Maven',
+  'run.type.cargo': 'cargo',
+  'run.type.go': 'go',
+  'run.type.python': 'Python',
+  'run.type.pytest': 'pytest',
+  'run.type.compose': 'Docker Compose',
+  'run.type.dockerfile': 'Dockerfile',
+  'run.type.dotnet': '.NET',
+  // RunConfigForm.tsx / RunTypePicker.tsx (Task 7) — per-kind field labels and the ＋ kind-picker popup.
+  'run.field.javaHome': 'JDK',
+  'run.field.springProfiles': 'Spring 프로파일',
+  'run.field.args': '인자',
+  'run.field.cwd': '작업 폴더',
+  'run.field.env': '환경변수',
+  // 종류별 필수 필드. shell 의 command 도 여기 있어야 run.start 의 "빈 필수 항목" 메시지가
+  // run.field.<이름> 으로 라벨을 찾을 수 있다 (migrate.ts 의 REQUIRED 에 있는 이름은 모두 여기 있다)
+  'run.field.command': '명령',
+  'run.field.script': '스크립트',
+  'run.field.file': '파일',
+  'run.field.tasks': '작업',
+  'run.field.goals': '목표',
+  'run.field.subcommand': '하위 명령',
+  'run.field.packageManager': '패키지 매니저',
+  'run.field.packageManagerAuto': '자동',
+  'run.field.release': '릴리스 빌드',
+  'run.field.features': '기능',
+  'run.field.packagePath': '패키지 경로',
+  'run.field.nodePath': 'Node 실행 파일',
+  // Python(파일 필수)·pytest(대상 선택) 공용 인터프리터 필드와 pytest 전용 대상 필드 (Task 9)
+  'run.field.interpreter': '인터프리터',
+  'run.field.target': '테스트 대상',
+  // Docker Compose 필드 (Task 10) — 모두 선택 항목이다: composeFile 이 비면 문맥이 찾은 파일, services 가
+  // 비면 전체 서비스로 실행한다
+  'run.field.composeFile': 'Compose 파일',
+  'run.field.services': '서비스',
+  'run.field.action': '동작',
+  // Dockerfile 필드 (Task 11) — imageTag 만 필수, 나머지는 선택
+  'run.field.imageTag': '이미지 태그',
+  'run.field.dockerfilePath': 'Dockerfile 경로',
+  'run.field.buildArgs': '빌드 인자',
+  'run.field.runArgs': '실행 인자',
+  // .NET 필드 (Task 12) — project(.csproj/.fsproj/.sln) 만 필수다. 앱이 여는 '프로젝트'와 헷갈리지
+  // 않도록 '프로젝트 파일'로 적는다. subcommand 는 비면 run 이다
+  'run.field.project': '프로젝트 파일',
+  'run.field.configuration': '빌드 구성',
+  'run.picker.search': '검색…',
+  'run.picker.detected': '이 프로젝트에서 감지됨',
+  'run.picker.other': '기타',
+  'run.form.addOption': '선택 항목 추가',
   // BottomPanel.tsx — the Run tab label in the tab strip (the default for the configName slot when no run is active),
   // clear and collapse buttons. The header RunPanel.tsx used to own moved into BottomPanel; RunPanel.tsx itself remains as the body.
   // noActiveRun was originally that header status text, and BottomPanel's Run tab label has the same value, so it is reused

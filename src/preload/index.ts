@@ -127,7 +127,10 @@ const api = {
     resize: fire('run.resize'),
     saveConfig: invoke('run.saveConfig'),
     deleteConfig: invoke('run.deleteConfig'),
-    listJdks: invoke('run.listJdks')
+    listJdks: invoke('run.listJdks'),
+    listPythonInterpreters: invoke('run.listPythonInterpreters'),
+    listComposeServices: invoke('run.listComposeServices'),
+    listDotnetProjects: invoke('run.listDotnetProjects')
   },
   terminal: {
     open: invoke('terminal.open'),
@@ -138,6 +141,7 @@ const api = {
   },
   system: {
     pickFolder: invoke('system.pickFolder'),
+    pickFile: invoke('system.pickFile'),
     pathExists: invoke('system.pathExists'),
     checkCli: invoke('system.checkCli'),
     appVersion: invoke('system.appVersion')

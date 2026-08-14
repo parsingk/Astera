@@ -36,8 +36,12 @@ const codexAccount: Account = {
   color: '#fff', createdAt: '2026-07-29T00:00:00Z', provider: 'codex'
 }
 
+// PtyFactory의 args는 실행 구성 때문에 win32에서 문자열도 받는다(core/run/shell.ts의 shellSpawn).
+// SessionManager는 늘 배열을 넘기지만 캡처한 값의 타입은 넓어진 쪽을 따르므로 여기서 흡수한다
+const argsText = (args: string[] | string): string => (typeof args === 'string' ? args : args.join(' '))
+
 function setup(highWater = 100, lowWater = 20, homeDir?: string) {
-  const spawned: { file: string; args: string[]; opts: PtySpawnOptions; pty: FakePty }[] = []
+  const spawned: { file: string; args: string[] | string; opts: PtySpawnOptions; pty: FakePty }[] = []
   const factory: PtyFactory = (file, args, opts) => {
     const pty = new FakePty()
     spawned.push({ file, args, opts, pty })
@@ -94,19 +98,19 @@ describe('SessionManager', () => {
   it('resume 세션은 --resume 인자를 붙인다', () => {
     const { manager, spawned } = setup()
     manager.spawn({ account, cwd: process.cwd(), resumeSessionId: 'sess-9' })
-    expect(spawned[0].args.join(' ')).toContain('--resume sess-9')
+    expect(argsText(spawned[0].args)).toContain('--resume sess-9')
   })
 
   it('bypassPermissions=true면 --dangerously-skip-permissions 인자를 붙인다', () => {
     const { manager, spawned } = setup()
     manager.spawn({ account, cwd: process.cwd(), bypassPermissions: true })
-    expect(spawned[0].args.join(' ')).toContain('--dangerously-skip-permissions')
+    expect(argsText(spawned[0].args)).toContain('--dangerously-skip-permissions')
   })
 
   it('bypassPermissions 미지정이면 --dangerously-skip-permissions를 붙이지 않는다', () => {
     const { manager, spawned } = setup()
     manager.spawn({ account, cwd: process.cwd() })
-    expect(spawned[0].args.join(' ')).not.toContain('--dangerously-skip-permissions')
+    expect(argsText(spawned[0].args)).not.toContain('--dangerously-skip-permissions')
   })
 
   it('pty 출력은 onData로, write는 pty로 전달된다', () => {

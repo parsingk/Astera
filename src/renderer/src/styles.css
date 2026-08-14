@@ -225,9 +225,10 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .run-global-jump { flex: 1; min-width: 0; text-align: left; background: none; border: none; color: var(--text); font-size: 12px; padding: 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-global-stop { width: 20px; height: 20px; display: grid; place-items: center; background: transparent; border: 0; border-radius: 4px; color: var(--text-faint); font-size: 11px; padding: 0; cursor: pointer; }
 .run-global-stop:hover { background: var(--bg); color: #e5534b; }
-/* .run-add-form (a popover hanging off the toolbar) was replaced by RunConfigDialog (.modal) and
-   deleted. Its right anchor and its vertical stack with a fixed width go with it — the modal achieves
-   what those were for (keeping the form visible and uncut), so this is a replacement rather than a revert. */
+/* .run-add-form (a popover hanging off the toolbar) was replaced by a modal and deleted — today that
+   modal is RunConfigManager (.modal.rcm, below). Its right anchor and its vertical stack with a fixed
+   width went with it: the modal achieves what those were for (keeping the form visible and uncut), so
+   this is a replacement rather than a revert. */
 
 .panel-header { padding: 11px 12px 6px; display: flex; flex-direction: column; gap: 6px; }
 .panel-header h2 { font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; }
@@ -752,23 +753,94 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .detect-path { font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* the Local History modal — list-style modals follow the .detect-list convention (body plus metadata within a row) */
 .modal.local-history { width: 560px; max-height: 80vh; }
-/* The run configuration modal — with six fields (name, command, JDK, Spring profile, working folder,
-   environment variables) it can overflow on a small screen. .run-config-body is overflow-y:auto, so its
-   automatic flex minimum size becomes 0 (the spec rule for a flex item whose overflow is not visible) and
-   it shrinks and scrolls only when it has to, while the h2 and the button row are siblings and stay
-   outside the scroll — the same approach as .preview-scroll in .modal.preview. */
-.modal.run-config { max-height: 80vh; }
 /* The resume modal — with rolling, schedule, Slack, and permission checkboxes plus the conditional
    schedule inputs stacked up, it can overflow in a narrow window. The same convention as its sibling modals. */
 .modal.resume { max-height: 80vh; overflow-y: auto; }
-.run-config-body { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; }
-/* The JDK picker — paths are long, and .sel-value already ellipsises. This only claims the leftover
-   width next to the "Browse…" button — a plain width:100% loses to the
+/* The JDK and Python interpreter pickers — paths are long, and .sel-value already ellipsises. This only
+   claims the leftover width next to the "Browse…" button — a plain width:100% loses to the
    minimum size in a flex child, so flex:1 plus min-width:0 is stated explicitly */
-.jdk-select { flex: 1; min-width: 0; }
+.path-select { flex: 1; min-width: 0; }
 /* The working folder input takes the leftover width next to the "Choose…" button — the same convention as
    the inputs of .slack-url-input and .worktree-root-cell (stating flex:1 rather than relying on width:100%) */
 .run-config-cwd { flex: 1; min-width: 0; }
+/* RunConfigManager — the two-pane run configuration dialog (list left, form right). The per-kind
+   fields, drawn by RunConfigForm, live inside .rcm-form. */
+.modal.rcm { width: 860px; max-height: 80vh; }
+.rcm-panes { display: grid; grid-template-columns: 236px 1fr; gap: 14px; height: 420px; min-height: 0; }
+.rcm-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line-soft); padding-right: 14px; }
+.rcm-tools { display: flex; gap: 4px; padding-bottom: 8px; margin-bottom: 6px; border-bottom: 1px solid var(--line-soft); }
+/* Direct children only (plus the ＋ inside its popup anchor). The bare descendant form also matched
+   every button inside the kind picker, which is anchored inside this toolbar — and at class+element
+   specificity it beat .rtp-item, so the picker's rows were squeezed into these 26px grid boxes with
+   their icon and label drawn on top of each other. Found by reading the computed style off the live
+   window: the sheet said flex, the element said grid. */
+.rcm-tools > button, .rcm-tools > .rtp-anchor > button { width: 26px; height: 26px; display: grid; place-items: center; background: transparent; border: 0; border-radius: 4px; color: var(--text-dim); font-size: 14px; padding: 0; cursor: pointer; }
+.rcm-tools > button:hover:not(:disabled), .rcm-tools > .rtp-anchor > button:hover:not(:disabled) { background: var(--elevated); color: var(--text); }
+.rcm-tools > button:disabled, .rcm-tools > .rtp-anchor > button:disabled { color: var(--text-faint); cursor: default; }
+.rcm-tree { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+/* flex: none, for the same reason as .rtp-*: the tree is a flex column with a bounded height, so
+   without it the groups and rows shrink once the list is taller than the pane. A shrunk row draws its
+   hover fill shorter than its own text, which reads as the highlight being clipped. */
+.rcm-group-block { flex: none; display: flex; flex-direction: column; gap: 1px; }
+/* The tree and the kind picker are the same list seen twice, so they share one treatment: the group
+   headings and the rows match .rtp-group / .rtp-item exactly rather than each drifting to its own size. */
+.rcm-group { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--text-faint); padding: 8px 6px 2px; text-transform: uppercase; letter-spacing: .05em; }
+.rcm-group .fi { flex: none; }
+.rcm-item { flex: none; width: 100%; box-sizing: border-box; text-align: left; background: none; border: 0; border-left: 2px solid transparent; color: var(--text); font-size: 12px; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
+.rcm-item:hover { background: var(--surface-hover); }
+.rcm-item.on { background: var(--elevated); border-left-color: var(--accent); }
+/* Auto-detected (seed) configurations — italic marks them as not yet a user configuration. Editing one
+   promotes it into a plain (non-italic) user configuration copy (core/run/config.ts promoteSeed). */
+.rcm-item.seed { font-style: italic; color: var(--text-dim); }
+.rcm-form { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
+/* Every "찾아보기…"/"Browse…" row in the form — a text input or a .path-select next to a button, inside
+   a plain .row (display:flex). The buttons carry no class of their own, so the only rule reaching them
+   is the global `button`, which sets neither flex-shrink nor white-space. The input's width:100% makes
+   its flex base size the whole row, the row overflows, every item shrinks in proportion, and the button
+   loses enough width for its label to wrap onto a second line — visible in Korean first, since it
+   breaks between any two characters. Stated on the container rather than per row: there are seven of
+   them (file, JDK, interpreter, compose file, Dockerfile path, .NET project, working folder) and a
+   later kind adding an eighth must not have to remember a class. Same prescription as
+   .update-gate-actions button; the input side is the flex:1 + min-width:0 idiom .path-select and
+   .run-config-cwd already state individually (width alone loses to the flex layout — see .sched-days).
+   The child combinator keeps the rule to the row's own buttons. A descendant form would also reach
+   .sel-trigger, the button *inside* a .path-select, and — measured in Chromium against this sheet — that
+   changes nothing today: .sel is a block, so its trigger is not a flex item and the flex it would pick
+   up is inert, and the trigger's width comes from its own width:100% either way. It is scoped anyway
+   because the Select owns that button's sizing, and this rule is about the picker button next to it.
+   (This stylesheet is the app's only one, and nothing else here sets flex or white-space on a button
+   reachable from .rcm-form — without these two rules the trigger computes flex-shrink:1,
+   white-space:normal — so what the sheet says is what the element computes: the trap
+   .rcm-tools > button above records.) */
+.rcm-form .row > input[type="text"] { flex: 1; min-width: 0; }
+.rcm-form .row > button { flex: none; white-space: nowrap; }
+.rcm-seed-hint { font-size: 12px; color: var(--text-faint); }
+.rcm-resolved { font-family: var(--mono); font-size: 12px; color: var(--ok); word-break: break-all; }
+/* RunTypePicker — the ＋ button's kind-picker popup. Anchored the same way as .run-more/.run-more-menu
+   in RunToolbar; a separate namespace because it also holds a search input and two grouped sections
+   instead of one flat list. */
+.rtp-anchor { position: relative; }
+/* Sized by its content between a floor and a ceiling, not pinned to one width — a kind label must
+   never be clipped, and the list grows as later tasks add kinds. */
+.rtp-menu { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; min-width: 220px; width: max-content; max-width: 340px; max-height: 60vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; padding: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
+/* flex: none on every child. The menu is a flex column with a max-height, so without it the children
+   shrink to fit instead of overflowing — the rows lose their own height and the text collides.
+   overflow-y can only scroll what refuses to be squashed. */
+.rtp-search { flex: none; width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 5px 7px; border-radius: 4px; font-size: 12px; margin-bottom: 4px; }
+.rtp-group { flex: none; font-size: 10.5px; color: var(--text-faint); padding: 6px 6px 2px; text-transform: uppercase; letter-spacing: .05em; }
+/* width/box-sizing are explicit rather than left to the flex stretch: the menu is width: max-content,
+   and a stretched child inside a max-content container resolves its width from the container that is
+   itself being sized by the child. The hover fill is painted on that box, so when it came out short
+   the highlight looked clipped. Stating the width breaks the loop. */
+.rtp-item { flex: none; display: flex; align-items: center; gap: 7px; width: 100%; box-sizing: border-box; white-space: nowrap; text-align: left; background: transparent; border: 0; border-radius: 4px; padding: 4px 8px; font-size: 12px; color: var(--text); cursor: pointer; }
+.rtp-item .fi { flex: none; }
+.rtp-item:hover { background: var(--elevated); }
+/* RunConfigForm's "add optional field" menu — same shape as .rtp-menu but a flat list, so it gets its
+   own (short) rule set rather than sharing .rtp-menu's grouped layout. */
+.rcm-add-option { position: relative; align-self: flex-start; }
+.rcm-add-option-menu { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; min-width: 160px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; padding: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
+.rcm-add-option-item { text-align: left; white-space: nowrap; padding: 5px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text); font-size: 12.5px; cursor: pointer; }
+.rcm-add-option-item:hover { background: var(--elevated); }
 .lh-list { list-style: none; max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .lh-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 4px; cursor: pointer; }
 .lh-row:hover { background: var(--elevated); }

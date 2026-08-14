@@ -37,10 +37,13 @@ import { listBranches, detectBaseRef } from '../core/worktrees/git'
 import { removeWorktree } from '../core/worktrees/remove'
 import { listWithStatus } from '../core/worktrees/list'
 import { git, repoRoot } from '../core/worktrees/git'
-import { t, isLang } from '../core/i18n'
+import { t, isLang, type MessageKey } from '../core/i18n'
 import type { LangPreference } from '../core/i18n'
 import { pickInitialLang } from '../core/i18n/locale'
 import { listJdks } from './jdkScanner'
+import { listPythonInterpreters } from './pythonScanner'
+import { listComposeServices } from './composeScanner'
+import { listDotnetProjects } from './dotnetScanner'
 
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
  *  in this file — the two values the coordinator needs (spawnSession, busyState) are owned here, so
@@ -755,16 +758,28 @@ export function registerIpc(
       /* An empty list if it cannot be read */
     }
     const texts = await readSeedTexts(projectPath, files)
-    const { detectSeedConfigs, mergeConfigs, isSpringBootProject } = await import('../core/run/config')
-    const configs = mergeConfigs(
-      detectSeedConfigs(files, texts, process.platform),
-      core.runConfig.get(projectPath)
+    const { detectSeedConfigs, mergeConfigs, isSpringBootProject, hasDockerfile } = await import(
+      '../core/run/config'
     )
+    const { buildRunContext } = await import('../core/run/build')
+    const { hasPythonProject } = await import('../core/run/python')
+    const configs = mergeConfigs(detectSeedConfigs(files, texts), core.runConfig.get(projectPath))
     return {
       configs,
       active: core.run.get(projectPath),
       recent: core.run.recentOutput(projectPath),
-      isSpringBoot: isSpringBootProject(texts) // whether RunConfigDialog shows the Spring profile field
+      // whether the configuration form offers the Spring profile field (optionalFieldsFor)
+      isSpringBoot: isSpringBootProject(texts),
+      // Whether RunTypePicker promotes 'python'/'pytest' into its "detected" group — there is no seed
+      // config for them (no single entry point to key detection off of the way seedKeyOf does for the
+      // other kinds), so this is threaded down separately instead.
+      isPythonProject: hasPythonProject(files),
+      // Same situation as isPythonProject: 'dockerfile' has no seed either, so its detection travels as
+      // its own flag rather than through a seed:dockerfile:… entry or through context (buildCommand's
+      // 'dockerfile' case never reads context, unlike compose's composeFile).
+      hasDockerfile: hasDockerfile(files),
+      // Same buildRunContext call as run.start below — the form's preview and the actual run must agree
+      context: buildRunContext(files, process.platform)
     }
   })
 
@@ -773,6 +788,28 @@ export function registerIpc(
   // The detected JDKs. There is no path argument, so this is not subject to assertAllowedPath — the scan
   // only looks at conventional directories (Program Files and friends) and PATH.
   ipcMain.handle('run.listJdks', async () => listJdks())
+
+  // The detected Python interpreters for this project (its venv plus whatever is on PATH). Unlike
+  // listJdks this does take a path — venv candidates live inside the project — so it is subject to
+  // assertAllowedPath.
+  ipcMain.handle('run.listPythonInterpreters', async (_e, projectPath: string) => {
+    await assertAllowedPath(projectPath)
+    return listPythonInterpreters(projectPath)
+  })
+
+  // The service names in this project's compose file, for the compose form's services field hint.
+  // Takes a path (the compose file lives inside the project), so it goes through assertAllowedPath.
+  ipcMain.handle('run.listComposeServices', async (_e, projectPath: string) => {
+    await assertAllowedPath(projectPath)
+    return listComposeServices(projectPath)
+  })
+
+  // The .csproj/.fsproj/.sln files in this project, for the dotnet form's project Select. Takes a path
+  // (they live inside the project), so it goes through assertAllowedPath like the two above.
+  ipcMain.handle('run.listDotnetProjects', async (_e, projectPath: string) => {
+    await assertAllowedPath(projectPath)
+    return listDotnetProjects(projectPath)
+  })
 
   /** Validates a run configuration's cwd and returns the absolute path that will **actually be used**.
    *  cwd comes from two places outside the trust boundary — the stored file (hand-editable on disk) and
@@ -805,18 +842,35 @@ export function registerIpc(
     }
     const texts = await readSeedTexts(projectPath, files)
     const { detectSeedConfigs, mergeConfigs } = await import('../core/run/config')
-    const config = mergeConfigs(
-      detectSeedConfigs(files, texts, process.platform),
-      core.runConfig.get(projectPath)
-    ).find((c) => c.id === configId)
+    const config = mergeConfigs(detectSeedConfigs(files, texts), core.runConfig.get(projectPath)).find(
+      (c) => c.id === configId
+    )
     if (!config) throw new Error(`NO_CONFIG: ${configId}`)
+    // Saving an incomplete configuration is allowed (see run.saveConfig below) so a half-filled one is
+    // not lost; running it is not. Refuse here, naming the field that is still empty — assembling it
+    // instead would splice an empty argument into the command and fail somewhere inside the tool,
+    // where the message has nothing to do with the field the user has to go and fill in.
+    const { missingRequiredFields } = await import('../core/run/migrate')
+    const missing = missingRequiredFields(config)
+    if (missing.length > 0)
+      throw new Error(
+        t(core.lang, 'run.start.incomplete', {
+          // Every name in REQUIRED has a run.field.* label — pinned by a test in core/run/migrate.test.ts,
+          // since this lookup is built from a string and TypeScript cannot check it
+          fields: missing.map((k) => t(core.lang, `run.field.${k}` as MessageKey)).join(', ')
+        })
+      )
     // Send the validated cwd through — runManager uses config.cwd as the PTY cwd, so passing the
     // original would split what was validated from what runs
     const cwd = await resolveRunCwd(projectPath, config.cwd)
+    const { buildCommand, buildRunContext } = await import('../core/run/build')
+    // Both handlers call buildRunContext the same way — keeping the wrapper/package-manager rule in one
+    // place is the point, so the form's preview (run.list) and the actual run never disagree.
     return core.run.start({
       projectPath,
       projectName: path.basename(projectPath) || projectPath,
-      config: { ...config, cwd }
+      config: { ...config, cwd },
+      command: buildCommand(config, buildRunContext(files, process.platform))
     })
   })
 
@@ -832,6 +886,32 @@ export function registerIpc(
     // hand-edited on disk and thus bypass this path.
     await assertAllowedPath(projectPath)
     await resolveRunCwd(projectPath, config?.cwd)
+    // Trusting only the renderer's form validation would let a hand-edited JSON file through.
+    // allowIncomplete: a configuration is saved the moment ＋ creates it, and at that point its one
+    // required field is still empty — refusing it here would leave the new configuration in the
+    // renderer only, where the next ＋ overwrites it. Running an incomplete one is what run.start
+    // refuses instead, by name. Everything else migrateRunConfigs checks still applies here.
+    const { migrateRunConfigs } = await import('../core/run/migrate')
+    if (migrateRunConfigs([config], { allowIncomplete: true }).length === 0)
+      throw new Error('INVALID_CONFIG')
+    // cmd.exe interprets & | ^ % ! < > even inside double quotes — assembly cannot guard against
+    // that, so reject at save time.
+    //
+    // **Only values that actually land in the command string are checked.** id/name are metadata,
+    // cwd is handed to the PTY as its working directory rather than interpolated into the command
+    // text, and javaHome/springProfiles become environment variables. Checking every field would
+    // reject a configuration merely because it's named "build & test".
+    //
+    // Why an exclude list: the failure direction is the safe one. A new field defaults to being
+    // checked — possibly over-restrictive, but never a silent gap. An include list fails the other way.
+    const NOT_IN_COMMAND = new Set(['id', 'name', 'cwd', 'env', 'javaHome', 'springProfiles'])
+    if (process.platform === 'win32' && config.type !== 'shell') {
+      const { hasUnsafeWin32Chars } = await import('../core/run/build')
+      for (const [k, v] of Object.entries(config as unknown as Record<string, unknown>)) {
+        if (NOT_IN_COMMAND.has(k)) continue
+        if (typeof v === 'string' && hasUnsafeWin32Chars(v)) throw new Error('UNSAFE_VALUE')
+      }
+    }
     const list = core.runConfig.get(projectPath)
     const next = list.some((c) => c.id === config.id)
       ? list.map((c) => (c.id === config.id ? config : c))
@@ -1187,6 +1267,13 @@ export function registerIpc(
   // there is no defaultPath.
   ipcMain.handle('system.pickFolder', async (_e, defaultPath?: string) => {
     const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], defaultPath })
+    return r.canceled ? null : r.filePaths[0]
+  })
+  // Same spot and contract as pickFolder above, just 'openFile' instead of 'openDirectory'. Shared by
+  // the run configuration file-path fields (node's file, python's file and interpreter, compose's
+  // file, dockerfile's path, dotnet's project file).
+  ipcMain.handle('system.pickFile', async (_e, defaultPath?: string) => {
+    const r = await dialog.showOpenDialog(win, { properties: ['openFile'], defaultPath })
     return r.canceled ? null : r.filePaths[0]
   })
   ipcMain.handle('system.pathExists', async (_e, p: string) => {

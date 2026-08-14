@@ -7,7 +7,10 @@ const placeholders = (s: string): string[] =>
 
 /** Product and command names a translation must not localise: they name things the user sees
  *  elsewhere in the app, in the CLIs, or on disk. */
-const LITERALS = ['Claude', 'Codex', 'Astera', 'Slack', 'GitHub', 'git', 'npm', 'PATH']
+const LITERALS = [
+  'Claude', 'Codex', 'Astera', 'Slack', 'GitHub', 'git', 'npm', 'PATH', 'Gradle', 'Maven', 'cargo', 'go',
+  'Python', 'pytest', 'Docker', 'Compose', '.NET'
+]
 
 describe('카탈로그 불변식', () => {
   it('자리표시자가 한국어 원문과 정확히 일치한다', () => {

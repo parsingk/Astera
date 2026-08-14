@@ -85,6 +85,15 @@ También necesitarás:
   resto: dividir paneles, mover el foco entre ellos, recorrer sesiones, cerrar una pestaña de archivo
 - Elige la tipografía de la terminal, incluida la de reserva para texto CJK
 
+**Ejecución**
+- Una configuración de ejecución tiene un tipo — Shell, npm, Node.js, Gradle, Maven, cargo, go,
+  Python, pytest, Docker Compose, Dockerfile o .NET — y guarda solo los campos que ese tipo tiene
+- El comando se arma al ejecutarlo, así que el wrapper de Gradle, el gestor de paquetes que implica
+  tu lockfile y las comillas que pide tu shell se resuelven entonces, no se escriben en una casilla
+- Se leen los archivos de compilación del proyecto, así que sus scripts de npm ya están ahí como
+  configuraciones, y un proyecto de Gradle o Maven trae las tareas y los objetivos habituales. Las
+  detectadas aparecen en cursiva hasta que editas una, lo que la guarda como tuya
+
 **Cuentas**
 - Varias cuentas por proveedor, cada una aislada mediante su propio `CLAUDE_CONFIG_DIR` / `CODEX_HOME`
 - **Rotación de cuentas:** cuando una sesión alcanza un límite de uso, Astera lo detecta en la

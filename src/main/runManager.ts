@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import type { PtyFactory, PtyLike } from '../core/sessions/pty'
 import { treeKillCommand } from '../core/run/kill'
+import { shellSpawn } from '../core/run/shell'
 import { withJavaHomeOnPath } from '../core/run/jdk'
 import type { RunConfig, RunStatus } from '../core/run/config'
 
@@ -30,27 +31,33 @@ export class RunManager {
     projectPath: string
     projectName: string
     config: RunConfig
+    /** The assembled command. Assembly is the caller's job (ipc.ts) — this class does not know kinds */
+    command: string
     cols?: number
     rows?: number
   }): RunStatus {
     const existing = this.runs.get(opts.projectPath)
     if (existing && existing.status.status === 'running') throw new Error(`ALREADY_RUNNING: ${opts.projectPath}`)
     const cwd = opts.config.cwd || opts.projectPath
-    // The free-form command needs shell interpretation: cmd.exe on win32, sh -c on posix
-    const spawn =
-      this.platform === 'win32'
-        ? { file: 'cmd.exe', args: ['/c', opts.config.command] }
-        : { file: 'sh', args: ['-c', opts.config.command] }
-    // The config env overrides process.env — per-config overrides such as JAVA_HOME have to win.
-    // When the config specified JAVA_HOME, its bin is prepended to PATH so the chosen JDK also applies when the
-    // command invokes java directly. This happens **only when the config specified it** (which is why
-    // opts.config.env?.JAVA_HOME is checked rather than the merged env): reacting to a JAVA_HOME the app merely
-    // inherited would mean reordering the user's shell PATH on their behalf.
-    const env = withJavaHomeOnPath(
-      { ...process.env, ...opts.config.env },
-      opts.config.env?.JAVA_HOME,
-      this.platform
-    )
+    // The assembled command needs shell interpretation. Which shell, and the win32 string/posix array
+    // asymmetry that keeps quoted values intact, are decided (and explained) in shellSpawn
+    const spawn = shellSpawn(opts.command, this.platform)
+    // javaHome and springProfiles are model fields but have to reach the process as environment variables.
+    // Only Gradle/Maven configs carry them, so RunConfig (a union) needs a cast to read them here — this cast
+    // is the point, not a narrowing to remove later, since RunManager otherwise stays kind-agnostic.
+    // Empty values are not added — that would overwrite an inherited env value with an empty string.
+    const c = opts.config as { javaHome?: string; springProfiles?: string }
+    const fromFields: Record<string, string> = {}
+    if (c.javaHome) fromFields.JAVA_HOME = c.javaHome
+    if (c.springProfiles) fromFields.SPRING_PROFILES_ACTIVE = c.springProfiles
+    // The config env overrides process.env, and fromFields overrides both — per-config overrides such as
+    // JAVA_HOME have to win.
+    const merged = { ...process.env, ...opts.config.env, ...fromFields }
+    // When the config specified JAVA_HOME (via the field or, for shell configs migrated from v1, via env),
+    // its bin is prepended to PATH so the chosen JDK also applies when the command invokes java directly.
+    // This happens **only when the config specified it**: reacting to a JAVA_HOME the app merely inherited
+    // would mean reordering the user's shell PATH on their behalf.
+    const env = withJavaHomeOnPath(merged, fromFields.JAVA_HOME ?? opts.config.env?.JAVA_HOME, this.platform)
     const pty = this.ptyFactory(spawn.file, spawn.args, {
       cwd,
       cols: opts.cols ?? 120,
@@ -62,7 +69,7 @@ export class RunManager {
       projectName: opts.projectName,
       configId: opts.config.id,
       configName: opts.config.name,
-      command: opts.config.command,
+      command: opts.command,
       status: 'running'
     }
     const live: LiveRun = { status, pty, buffer: '' }
