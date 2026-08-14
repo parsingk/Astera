@@ -95,6 +95,9 @@ export const es: Catalog = {
   'common.restore': 'Restaurar',
   'common.resizeSidebar': 'Ajustar el ancho de la barra lateral',
   'common.or': 'o',
+  'common.quitConfirm.title': 'Cerrar y salir de Astera',
+  'common.quitConfirm.body':
+    'Al cerrar la ventana, Astera se cierra y se finalizarán {count} sesiones en curso. ¿Continuar?',
   // index.ts — system tray context menu
   'common.trayOpen': 'Abrir',
   'common.trayQuit': 'Salir',

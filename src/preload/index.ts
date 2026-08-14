@@ -175,7 +175,7 @@ const api = {
     forceRoll: invoke('rolling.forceRoll')
   },
   app: {
-    // The 'quit app' of the forced-update gate. win.close cannot be used because it minimises to the tray
+    // The 'quit app' of the forced-update gate. win.close cannot be used: on win32/macOS it only minimises to the tray
     quit: () => ipcRenderer.send('app.quit')
   },
   keys: {

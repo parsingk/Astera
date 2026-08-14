@@ -193,7 +193,7 @@ app.on('second-instance', () => {
 // icon stays. Clicking that icon fires activate, but the default behavior alone won't bring the
 // hidden window back.
 app.on('activate', () => {
-  if (!mainWindow) return
+  if (!mainWindow || mainWindow.isDestroyed()) return
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
@@ -214,8 +214,9 @@ app.whenReady().then(async () => {
   // holds resolutions up to 1024 while APP_ICON is the 256px PNG. Overriding there would replace a
   // sharp icon with an upscaled one.
   if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(APP_ICON)
-  // Launched from Finder on macOS, there's no login shell PATH. claude/codex/git/node are all looked
-  // up via PATH, so this must be restored before createCore (= StatusLineManager.init, account detection).
+  // Launched from Finder on macOS or from a .desktop entry on Linux, there's no login shell PATH.
+  // claude/codex/git/node are all looked up via PATH, so this must be restored before createCore
+  // (= StatusLineManager.init, account detection).
   await applyLoginPath((m) => console.log(m))
   core = await createCore(app.getPath('userData'), app.getLocale())
   const win = createWindow()

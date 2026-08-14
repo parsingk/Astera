@@ -74,6 +74,9 @@ export const en: Record<keyof typeof ko, string> = {
   'common.restore': 'Restore',
   'common.resizeSidebar': 'Resize sidebar',
   'common.or': 'or',
+  'common.quitConfirm.title': 'Close and quit Astera',
+  'common.quitConfirm.body':
+    'Closing the window quits Astera, and {count} running session(s) will be terminated. Continue?',
   'common.trayOpen': 'Open',
   'common.trayQuit': 'Quit',
   'session.rail.toggleSidebar': 'Toggle sidebar',

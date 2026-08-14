@@ -94,6 +94,9 @@ export const ja: Catalog = {
   'common.restore': '元のサイズに戻す',
   'common.resizeSidebar': 'サイドバーのサイズ変更',
   'common.or': 'または',
+  'common.quitConfirm.title': '閉じて Astera を終了',
+  'common.quitConfirm.body':
+    'ウィンドウを閉じると Astera が終了し、進行中のセッション {count} 件も終了します。続行しますか？',
   // index.ts — system tray context menu
   'common.trayOpen': '開く',
   'common.trayQuit': '終了',

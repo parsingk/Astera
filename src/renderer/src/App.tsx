@@ -156,10 +156,13 @@ function UpdateIndicator({ update }: { update: UpdateStatus | null }): React.JSX
 function Titlebar({
   isMax,
   update,
+  runningCount,
   runSlot
 }: {
   isMax: boolean
   update: UpdateStatus | null
+  /** Only the close button reads it, and only on Linux — see closeWindow below */
+  runningCount: number
   /** 타이틀바 줄에 함께 놓이는 것 — 지금은 실행 구성 툴바다. 프롭 열넷을 내려보내는 대신 슬롯으로
    *  받아, 타이틀바는 무엇이 들어오는지 모른 채 자리만 내준다 */
   runSlot?: React.ReactNode
@@ -169,6 +172,20 @@ function Titlebar({
   // too would put the same functionality at both ends of the window. .titlebar--mac reserves the
   // left-hand margin the traffic lights sit in.
   const isMac = window.api.platform === 'darwin'
+  /** On Linux the X really quits the app (there is no tray to hide in — main/index.ts win.on('close')),
+   *  and will-quit kills every running session. That is the same outcome the update install asks about,
+   *  so it asks the same way. On win32/macOS the window only hides, so nothing is asked. */
+  const closeWindow = async (): Promise<void> => {
+    if (window.api.platform === 'linux' && runningCount > 0) {
+      const ok = await confirmModal({
+        title: t('common.quitConfirm.title'),
+        body: t('common.quitConfirm.body', { count: runningCount }),
+        confirmLabel: t('common.close')
+      })
+      if (!ok) return
+    }
+    window.api.win.close()
+  }
   return (
     <div
       className={isMac ? 'titlebar titlebar--mac' : 'titlebar'}
@@ -213,7 +230,7 @@ function Titlebar({
             className="tb-btn close"
             aria-label={t('common.close')}
             title={t('common.close')}
-            onClick={() => window.api.win.close()}
+            onClick={() => void closeWindow()}
           >
             <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1">
               <line x1="1" y1="1" x2="9" y2="9" />
@@ -1758,7 +1775,9 @@ export default function App(): React.JSX.Element {
   if (cli && !cli.claude.ok && !cli.codex.ok) {
     return (
       <div className="app">
-        <Titlebar isMax={isMax} update={update} />
+        {/* 0, not runningCount: this screen renders no ConfirmHost, so a close confirmation would
+            never be answered and the close button would stop working entirely. */}
+        <Titlebar isMax={isMax} update={update} runningCount={0} />
         <div className="cli-missing">
           <h1>No CLI found to run</h1>
           <p>
@@ -1784,6 +1803,7 @@ export default function App(): React.JSX.Element {
       <Titlebar
         isMax={isMax}
         update={update}
+        runningCount={runningCount}
         runSlot={
           explorerRoot ? (
             <div className="tb-run">

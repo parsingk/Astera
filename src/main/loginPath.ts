@@ -1,9 +1,16 @@
-// PATH recovery for the macOS GUI app.
+// PATH recovery for the GUI app on macOS and Linux.
 //
 // A .app launched from Finder (or the Dock, or LaunchServices) never goes through a login shell, so
 // it only gets launchd's default PATH (/usr/bin:/bin:/usr/sbin:/sbin). Everything this app spawns is
 // a tool the user installed themselves — claude (~/.local/bin), codex (npm global), git (Xcode CLT or
 // homebrew), node, gradle. Without recovery, session creation fails outright.
+//
+// Linux has the same gap for the same reason: an app started from a .desktop entry inherits the
+// systemd user-session environment and never sources ~/.bashrc or ~/.zshrc (and on Wayland often not
+// ~/.profile either), so nvm's shims and ~/.local/bin are missing. Launched from a terminal it works
+// by accident — the parent shell's PATH is inherited — which is why the deb/AppImage install path is
+// the one that breaks. Windows is the exception: PATH there is a machine/user environment variable
+// that a GUI process already inherits, so no shell is launched.
 //
 // Why process.env.PATH is patched directly: session env is built by SessionManager.spawn as
 // { ...process.env } (core/sessions/manager.ts:153), TerminalManager's exists() reads
@@ -54,18 +61,26 @@ export function mergePath(current: string | undefined, loginPath: string | null)
   return out.length > 0 ? out.join(':') : current
 }
 
-/** Asks the login shell for PATH. On anything but darwin, the shell isn't even launched. */
+/**
+ * The shell to probe. SHELL being empty is rare, but if it is, fall back to the platform's default:
+ * zsh is macOS's login shell, and /bin/sh is the only shell POSIX guarantees exists on Linux (naming
+ * bash would break a musl/dash-only image). Both accept -ilc.
+ */
+export function probeShell(platform: NodeJS.Platform, shell: string | undefined): string {
+  return shell || (platform === 'darwin' ? '/bin/zsh' : '/bin/sh')
+}
+
+/** Asks the login shell for PATH. On win32 the shell isn't even launched. */
 export async function readLoginPath(opts: {
   platform: NodeJS.Platform
   shell: string | undefined
   run: (file: string, args: string[]) => Promise<string>
 }): Promise<string | null> {
-  if (opts.platform !== 'darwin') return null
-  // SHELL being empty is rare, but if it is, fall back to macOS's default of zsh.
-  const shell = opts.shell || '/bin/zsh'
+  if (opts.platform === 'win32') return null
+  const shell = probeShell(opts.platform, opts.shell)
   try {
-    // Why -i (interactive) is included: version managers like nvm/mise only initialize in .zshrc,
-    // and .zshrc is often not read by non-interactive shells.
+    // Why -i (interactive) is included: version managers like nvm/mise only initialize in an rc file
+    // (.zshrc, .bashrc), and an rc file is often not read by non-interactive shells.
     return parseLoginPath(await opts.run(shell, ['-ilc', PROBE]))
   } catch {
     return null // A probe failure must not block app startup
@@ -83,7 +98,7 @@ function runShell(file: string, args: string[]): Promise<string> {
   })
 }
 
-/** Updates process.env.PATH to the login shell's PATH. Does nothing on anything but darwin. */
+/** Updates process.env.PATH to the login shell's PATH. Does nothing on win32. */
 export async function applyLoginPath(log: (m: string) => void): Promise<void> {
   const before = process.env.PATH
   const loginPath = await readLoginPath({
@@ -92,12 +107,13 @@ export async function applyLoginPath(log: (m: string) => void): Promise<void> {
     run: runShell
   })
   if (loginPath === null) {
-    if (process.platform === 'darwin') log('loginPath: probe failed, keeping the launchd PATH')
+    // Only where a probe actually ran — on win32 there is no failure to report.
+    if (process.platform !== 'win32') log('loginPath: probe failed, keeping the inherited PATH')
     return
   }
   const merged = mergePath(before, loginPath)
   if (merged && merged !== before) {
     process.env.PATH = merged
-    log(`loginPath: PATH restored from ${process.env.SHELL || '/bin/zsh'}`)
+    log(`loginPath: PATH restored from ${probeShell(process.platform, process.env.SHELL)}`)
   }
 }
