@@ -779,9 +779,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .rcm-tools button:hover:not(:disabled) { background: var(--elevated); color: var(--text); }
 .rcm-tools button:disabled { color: var(--text-faint); cursor: default; }
 .rcm-tree { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
-.rcm-group-block { display: flex; flex-direction: column; gap: 1px; }
+/* flex: none, for the same reason as .rtp-*: the tree is a flex column with a bounded height, so
+   without it the groups and rows shrink once the list is taller than the pane. A shrunk row draws its
+   hover fill shorter than its own text, which reads as the highlight being clipped. */
+.rcm-group-block { flex: none; display: flex; flex-direction: column; gap: 1px; }
 .rcm-group { font-size: 11px; color: var(--text-faint); padding: 8px 6px 2px; }
-.rcm-item { text-align: left; background: none; border: 0; border-left: 2px solid transparent; color: var(--text); font-size: 13px; padding: 5px 8px; border-radius: 4px; cursor: pointer; }
+.rcm-item { flex: none; text-align: left; background: none; border: 0; border-left: 2px solid transparent; color: var(--text); font-size: 13px; padding: 5px 8px; border-radius: 4px; cursor: pointer; }
 .rcm-item:hover { background: var(--surface-hover); }
 .rcm-item.on { background: var(--elevated); border-left-color: var(--accent); }
 /* Auto-detected (seed) configurations — italic marks them as read-only at a glance, mirroring the
