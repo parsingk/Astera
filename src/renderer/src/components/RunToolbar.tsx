@@ -17,6 +17,7 @@ export function RunToolbar({
   onAddConfig,
   onEditConfig,
   onDeleteConfig,
+  onOpenManager,
   activeRuns,
   onJump,
   onStopProject,
@@ -39,6 +40,10 @@ export function RunToolbar({
     cwd?: string
   ) => void
   onDeleteConfig: (id: string) => void
+  /** Opens the new two-pane RunConfigManager (Task 6). TEMPORARY alongside onAddConfig/onEditConfig/
+   *  onDeleteConfig above — Task 8 removes those three plus RunConfigDialog and this becomes the ⋮
+   *  menu's only item. */
+  onOpenManager: () => void
   activeRuns: RunStatus[]
   onJump: (projectPath: string) => void
   onStopProject: (projectPath: string) => void
@@ -104,6 +109,18 @@ export function RunToolbar({
         </button>
         {showMore && (
           <div className="run-more-menu" role="menu" onMouseLeave={() => setShowMore(false)}>
+            {/* TEMPORARY (Task 6): opens the new two-pane RunConfigManager, alongside the three items
+                below that still open the old single-config modal — see onOpenManager's comment above */}
+            <button
+              className="run-more-item"
+              role="menuitem"
+              onClick={() => {
+                setShowMore(false)
+                onOpenManager()
+              }}
+            >
+              {t('run.manager.open')}
+            </button>
             <button
               className="run-more-item"
               role="menuitem"

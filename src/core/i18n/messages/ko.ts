@@ -597,6 +597,25 @@ export const ko = {
   'run.form.envHint': '비워 두면 앱 환경을 그대로 물려받습니다. 같은 이름은 이 구성이 우선합니다.',
   'run.form.save': '저장',
   'run.form.add': '추가',
+  // RunConfigManager.tsx — the two-pane dialog that replaces RunConfigDialog (Task 6: shell only,
+  // per-kind forms are Task 7). run.type.* are kind labels grouping the tree; product/tool names
+  // among them (npm, Gradle, Maven, cargo, go) are not translated.
+  'run.manager.title': '실행 구성',
+  // RunToolbar.tsx ⋮ menu — TEMPORARY (Task 6): opens the new manager alongside the add/edit/delete
+  // items below, which still open the old single-config modal. Task 8 removes those three (and
+  // RunConfigDialog itself) and this becomes the menu's only item.
+  'run.manager.open': '실행 구성 관리…',
+  'run.manager.add': '추가',
+  'run.manager.remove': '제거',
+  'run.manager.duplicate': '복제',
+  'run.manager.seedHint': '자동 감지된 구성은 읽기 전용입니다.',
+  'run.type.shell': '셸 명령',
+  'run.type.npm': 'npm 스크립트',
+  'run.type.node': 'Node.js 파일',
+  'run.type.gradle': 'Gradle 작업',
+  'run.type.maven': 'Maven 목표',
+  'run.type.cargo': 'cargo',
+  'run.type.go': 'go',
   // BottomPanel.tsx — the Run tab label in the tab strip (the default for the configName slot when no run is active),
   // clear and collapse buttons. The header RunPanel.tsx used to own moved into BottomPanel; RunPanel.tsx itself remains as the body.
   // noActiveRun was originally that header status text, and BottomPanel's Run tab label has the same value, so it is reused

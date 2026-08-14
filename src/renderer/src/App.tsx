@@ -16,13 +16,14 @@ import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { WorktreePanel } from './components/WorktreePanel'
 import { RunToolbar } from './components/RunToolbar'
+import { RunConfigManager } from './components/RunConfigManager'
 import { BottomPanel } from './components/BottomPanel'
 import { ToastHost } from './components/ToastHost'
 import { UpdateGate } from './components/UpdateGate'
 import { ShortcutSettings } from './components/ShortcutSettings'
 import { TerminalFontSettings } from './components/TerminalFontSettings'
 import { ConfirmHost } from './components/ConfirmHost'
-import type { RunConfig, RunStatus, TerminalBuffer } from '../../core/types'
+import type { RunConfig, RunContext, RunStatus, TerminalBuffer } from '../../core/types'
 import { slackMode } from '../../core/slack/ready'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
@@ -1401,6 +1402,11 @@ export default function App(): React.JSX.Element {
   })
   // Whether to show the Spring profile field — run.list decides from the build file bodies and sends it down
   const [runIsSpringBoot, setRunIsSpringBoot] = useState(false)
+  // The two-pane run configuration manager (Task 6). context is the assembly context run.list also
+  // sends down — the manager's preview calls buildCommand(config, context) so it shows exactly what
+  // run.start would run, and it starts null until the first run.list response arrives.
+  const [runManagerOpen, setRunManagerOpen] = useState(false)
+  const [runContext, setRunContext] = useState<RunContext | null>(null)
   const explorerViewRef = useRef<HTMLDivElement>(null)
 
   /** 트리 루트는 활성 탭을 따른다 — 활성 탭이 파일이면 그 파일의 프로젝트, 세션이면 그 세션의 cwd.
@@ -1413,6 +1419,15 @@ export default function App(): React.JSX.Element {
     (activeTab?.kind === 'file'
       ? fileTabs.find((t) => t.id === activeTabId)?.projectRoot
       : sessions.find((s) => s.id === activeTab?.id)?.cwd) ?? null
+
+  // Whether RunConfigManager is actually on screen — gates both its render below and the shortcut
+  // suppression right after it. Computed from the same three things that gate the render (open flag,
+  // project, context) so switching projects or losing the context drops the suppression in the same
+  // render as the unmount, not only when the dialog's own onClose fires.
+  const runManagerVisible = runManagerOpen && !!explorerRoot && !!runContext
+  // OR-ed onto the value the other modals already set above — runManagerVisible depends on
+  // explorerRoot, which is not computed yet at that point in the component.
+  modalOpenRef.current = modalOpenRef.current || runManagerVisible
 
   // Mirrors explorerRoot into a ref — avoids a stale closure in the run:status subscription effect
   const explorerRootRef = useRef(explorerRoot)
@@ -1482,6 +1497,7 @@ export default function App(): React.JSX.Element {
       setRunConfigs(r.configs)
       setRunActive(r.active)
       setRunIsSpringBoot(r.isSpringBoot)
+      setRunContext(r.context)
       setRunSelectedId((prev) => (r.configs.some((c) => c.id === prev) ? prev : r.active?.configId ?? r.configs[0]?.id ?? null))
       if (r.active?.status === 'running') setRunPanelOpen(true)
     })
@@ -1543,6 +1559,7 @@ export default function App(): React.JSX.Element {
       void window.api.run.list(root).then((r) => {
         setRunConfigs(r.configs)
         setRunIsSpringBoot(r.isSpringBoot)
+        setRunContext(r.context)
         setRunSelectedId((prev) => (r.configs.some((cc) => cc.id === prev) ? prev : r.active?.configId ?? r.configs[0]?.id ?? null))
       })
     })
@@ -1613,9 +1630,26 @@ export default function App(): React.JSX.Element {
     void window.api.run.deleteConfig(explorerRoot, id).then(() => {
       void window.api.run.list(explorerRoot).then((r) => {
         setRunConfigs(r.configs)
+        setRunContext(r.context)
         setRunSelectedId((prev) => (r.configs.some((c) => c.id === prev) ? prev : r.configs[0]?.id ?? null))
       })
     })
+  }
+  /** RunConfigManager's onSave (Task 6). Unlike runAddConfig/runEditConfig above, the manager already
+   *  hands over an assembled RunConfig of whatever kind — there is no per-field signature to match, so
+   *  this one handler covers both add and edit (Task 6 only ever calls it with an edit to an existing
+   *  shell configuration; Task 7's ＋ flow will call it for new ones too). */
+  const runManagerSave = (config: RunConfig): void => {
+    if (!explorerRoot) return
+    void window.api.run.saveConfig(explorerRoot, config).then(
+      () => {
+        void window.api.run.list(explorerRoot).then((r) => {
+          setRunConfigs(r.configs)
+          setRunContext(r.context)
+        })
+      },
+      (err) => toast.error(t('run.config.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
+    )
   }
   /** 실행 중 목록에서 다른 프로젝트로 점프. 트리 루트는 활성 탭이 정하므로, 그 프로젝트에 속한 탭을
    *  활성으로 만드는 것이 곧 '그리로 간다'는 뜻이다. 세션을 먼저 찾고 없으면 그 프로젝트의 파일 탭을
@@ -1770,6 +1804,7 @@ export default function App(): React.JSX.Element {
                 onAddConfig={runAddConfig}
                 onEditConfig={runEditConfig}
                 onDeleteConfig={runDeleteConfig}
+                onOpenManager={() => setRunManagerOpen(true)}
                 activeRuns={activeRuns}
                 onJump={runJump}
                 onStopProject={runStopProject}
@@ -2534,6 +2569,18 @@ export default function App(): React.JSX.Element {
               { label: t('common.close'), danger: true, onSelect: () => closeWorkbenchTab(tid) }
             ]
           })()}
+        />
+      )}
+      {/* Re-checks explorerRoot/runContext directly (rather than just runManagerVisible) so TypeScript
+          narrows them to non-null here, instead of an assertion */}
+      {runManagerOpen && explorerRoot && runContext && (
+        <RunConfigManager
+          configs={runConfigs}
+          context={runContext}
+          projectPath={explorerRoot}
+          onSave={runManagerSave}
+          onDelete={runDeleteConfig}
+          onClose={() => setRunManagerOpen(false)}
         />
       )}
       <ConfirmHost />
