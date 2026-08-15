@@ -107,12 +107,15 @@ function createWindow(): BrowserWindow {
     // default y coordinate sits below our 32px titlebar and gets half-clipped, so this centers them
     // vertically. (button height 12px → (32-12)/2 = 10)
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : {}),
-    // Linux: titleBarStyle only affects macOS and Windows — the Linux window managers this app has
-    // been tried on ignore it and keep drawing their own frame, stacking it on top of the renderer's
-    // custom titlebar. frame:false drops that native frame so only our titlebar remains. Do not apply
-    // this to win32/darwin: there titleBarStyle:'hidden' is what keeps their native window controls
-    // (Windows' overlay, macOS' traffic lights) available, and frame:false would remove those instead.
-    ...(process.platform === 'linux' ? { frame: false } : {}),
+    // Linux: titleBarStyle only affects macOS and Windows, so Linux keeps its native frame and draws
+    // it above this app's own titlebar — a duplicate title bar. We tried frame:false to drop the
+    // native one: it does remove the duplicate, but it also made a maximized window overshoot the
+    // screen edge here, pushing the min/max/close buttons out of reach, and left dragging working
+    // only while the window is not maximized (frameless dragging relies on -webkit-app-region: drag,
+    // which this window manager does not honor reliably). A broken maximized window is worse than a
+    // cosmetic duplicate bar, so the native frame stays for now. Making Linux show only one bar is a
+    // real design decision — most likely hiding this app's own titlebar/buttons on Linux and letting
+    // the native frame serve as the only chrome — not something to flip back on as a one-line flag.
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false }
   })
   if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
