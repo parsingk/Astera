@@ -102,29 +102,26 @@ function createWindow(): BrowserWindow {
     height: 800,
     title: 'Astera',
     icon: APP_ICON, // window/taskbar icon (electron-builder win.icon only changes the installed exe icon)
-    // titleBarStyle is documented as macOS/Windows only, and stays load-bearing on both: on win32 it
-    // is what lets this app draw its own window controls instead of Windows', and on macOS it is
-    // what keeps the traffic-light buttons that trafficLightPosition below then repositions. Left
-    // unset on Linux — see that comment below for why.
-    ...(process.platform !== 'linux' ? { titleBarStyle: 'hidden' as const } : {}),
+    titleBarStyle: 'hidden',
     // macOS: titleBarStyle:'hidden' leaves the traffic-light buttons floating in the top-left. The
     // default y coordinate sits below our 32px titlebar and gets half-clipped, so this centers them
     // vertically. (button height 12px → (32-12)/2 = 10)
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : {}),
-    // Linux — hypothesis under test, not a settled fix: the owner reports the packaged window on
-    // Ubuntu 22.04/WSLg sits partly off the right edge of the screen, and clicks land roughly one
-    // title-bar-height above the control they visually hit. Both symptoms point at the same cause —
-    // titleBarStyle only affects macOS/Windows, but this window manager does not just ignore it: it
-    // decorates the window with its own native frame while Electron still sizes/positions it as if it
-    // had none, so what's painted and what receives input disagree by about the native bar's height.
-    // Leaving titleBarStyle unset here should let Electron and the window manager agree on one frame
-    // again. Whether it actually does needs checking by hand on that machine — none of this is
-    // reachable from a test. Known, accepted cost: with the native frame back and this app's own
-    // titlebar still drawn below it, Linux ends up with two title bars — cosmetic, unlike mis-clicking
-    // windows, which is not usable at all. A single Linux title bar is a separate follow-up (most
-    // likely hiding this app's own titlebar/buttons on Linux and letting the native frame be the only
-    // chrome). See 96a9f0a (frame:false — fixed the duplicate bar but broke maximize) and 340c2da (its
-    // revert): frame:false is not that follow-up, and is not being reintroduced here.
+    // Linux (measured under WSLg on Ubuntu 22.04): the packaged window hangs off the right edge of
+    // the screen, and clicks land above where things are actually drawn — you have to click above a
+    // button to hit it. Both clear up once the window is small; maximizing reproduces them, whether
+    // from win.maximize() below or by hand. Three things have been tried and none changed either
+    // symptom: frame:false (96a9f0a, reverted by 340c2da) — did remove the duplicate title bar Linux
+    // draws under titleBarStyle (a macOS/Windows-only option the WM ignores), but made maximize
+    // overshoot the screen so the window controls became unreachable, which is worse than a cosmetic
+    // duplicate bar; leaving titleBarStyle unset on Linux (0e45857, reverted by this commit) — no
+    // change to either symptom; and launching with --force-device-scale-factor=1, on the theory that
+    // the Windows host's 150% display scaling wasn't reaching the app — no change either. Three
+    // different window configs, identical symptoms, and correct behavior once the window is small,
+    // points at something outside this app's window options — most likely WSLg's compositing of large
+    // windows. Not yet reproduced on a real Linux desktop; that's the next step. Do not retry the
+    // three above. The duplicate title bar itself is separate and still open — most likely fixed by
+    // hiding this app's own window controls on Linux and letting the native bar be the only chrome.
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false }
   })
   if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
