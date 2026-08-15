@@ -122,6 +122,12 @@ function createWindow(): BrowserWindow {
     // windows. Not yet reproduced on a real Linux desktop; that's the next step. Do not retry the
     // three above. The duplicate title bar itself is separate and still open — most likely fixed by
     // hiding this app's own window controls on Linux and letting the native bar be the only chrome.
+    // That half cannot ship on its own: this app's own close button is the only thing that runs the
+    // Linux quit confirmation (App.tsx's closeWindow raises confirmModal while sessions are
+    // running), while the WM's X goes straight to win.on('close') below, which returns immediately
+    // on Linux. Hiding the controls without first moving that confirmation into the main process —
+    // into win.on('close'), where the WM's close path actually lands — silently kills every running
+    // session, which is exactly the regression a217ac1 was written to prevent.
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false }
   })
   if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])

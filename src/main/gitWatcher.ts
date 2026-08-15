@@ -21,6 +21,9 @@ export class GitWatcher {
   private watcher: FSWatcher | null = null
   private dir: string | null = null
   private ops: Promise<void> = Promise.resolve()
+  // Releases a doWatch that is still waiting for chokidar's `ready` — see close(). Resolving an
+  // already-settled promise is a no-op, so a stale call costs nothing.
+  private releaseWait: () => void = () => {}
 
   constructor(
     private emit: () => void,
@@ -48,22 +51,45 @@ export class GitWatcher {
     if (this.dir === dir && this.watcher) return // A repeat request for the same git dir is ignored
     await this.close()
     this.dir = dir
-    this.watcher = chokidar.watch(dir, {
+    const watcher = chokidar.watch(dir, {
       ignoreInitial: true,
       depth: 0, // Only the git dir's immediate children — the object and log subtrees are not watched
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 }
     })
+    this.watcher = watcher
     for (const kind of ['add', 'change', 'unlink'] as const) {
-      this.watcher.on(kind, (p: string) => {
+      watcher.on(kind, (p: string) => {
         if (WATCHED.has(path.basename(p))) this.emit()
       })
     }
-    this.watcher.on('error', (e) =>
+    watcher.on('error', (e) =>
       this.log(`git watch error: ${e instanceof Error ? e.message : String(e)}`)
     )
+    // chokidar registers its watches asynchronously and emits `ready` only once the initial scan has
+    // registered them; until then the watcher object exists but nothing is listening, so a write in
+    // that gap produces no event at all. Returning here without waiting would report a watcher that
+    // is not yet watching — an agent that commits in the first moments after a project opens gets no
+    // status refresh, and this file's own tests lost that race on Linux CI, whose per-directory
+    // inotify registration is the slowest of the three platforms.
+    //
+    // Two things other than `ready` have to end the wait, or watch() never settles: an initial scan
+    // that fails emits `error` and never reaches `ready`, and close() drops every listener on the
+    // watcher (chokidar's close() calls removeAllListeners), which is why it releases the wait
+    // itself rather than relying on an event that can no longer arrive.
+    await new Promise<void>((resolve) => {
+      this.releaseWait = resolve
+      const done = (): void => {
+        watcher.off('ready', done)
+        watcher.off('error', done)
+        resolve()
+      }
+      watcher.on('ready', done)
+      watcher.on('error', done)
+    })
   }
 
   async close(): Promise<void> {
+    this.releaseWait()
     await this.watcher?.close().catch(() => {})
     this.watcher = null
     this.dir = null
