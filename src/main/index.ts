@@ -107,6 +107,12 @@ function createWindow(): BrowserWindow {
     // default y coordinate sits below our 32px titlebar and gets half-clipped, so this centers them
     // vertically. (button height 12px → (32-12)/2 = 10)
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : {}),
+    // Linux: titleBarStyle only affects macOS and Windows — the Linux window managers this app has
+    // been tried on ignore it and keep drawing their own frame, stacking it on top of the renderer's
+    // custom titlebar. frame:false drops that native frame so only our titlebar remains. Do not apply
+    // this to win32/darwin: there titleBarStyle:'hidden' is what keeps their native window controls
+    // (Windows' overlay, macOS' traffic lights) available, and frame:false would remove those instead.
+    ...(process.platform === 'linux' ? { frame: false } : {}),
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false }
   })
   if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
