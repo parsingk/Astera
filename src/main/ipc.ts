@@ -10,7 +10,7 @@ import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
 import type { CodexTurnWatcher } from './codexTurnWatcher'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
-import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, RunConfig, SessionInfo } from '../core/types'
+import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, RunConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
 import { copyTranscript } from '../core/rolling/transcript'
@@ -22,6 +22,8 @@ import {
   type OrchServer,
   type OrchServerDeps
 } from './orchestration/server'
+import { sameSnapshot, snapshotFor } from '../core/orchestration/view'
+import type { OrchState } from '../core/orchestration/state'
 import { makeLimitProbe } from './orchestration/limitProbe'
 import { writeInfo, writeShuttle } from './orchestration/shuttle'
 import { WorkerTails } from './orchestration/tail'
@@ -108,6 +110,46 @@ export function registerIpc(
     orch && core.appSettings.getOrchestrationEnabled()
       ? { cliPath: orch.cliPath, infoPath: orch.infoPath, skillsPath: orch.skillsPath }
       : undefined
+  /** The project the Jobs sidebar is folded for. main is not otherwise told what the renderer has
+   *  open, and the snapshot is per project, so orch.list doubles as the subscription: the last path
+   *  it was asked about is the one 'orch:state' is pushed for. That is the shape files.watch and
+   *  git.watch already use — the renderer names the root it is showing and main scopes its pushes to
+   *  it — with the query and the subscription collapsed into one call, which a read-only view can do
+   *  because it has nothing else to say. null before the renderer has asked and again after
+   *  orch.unwatch — in both cases there is nothing to push, and never a path that has not been
+   *  through assertAllowedPath. */
+  let orchProject: string | null = null
+  /** The snapshot the renderer is currently holding for orchProject — whatever was last handed over,
+   *  by orch.list's return value or by a push. Kept so an unchanged fold can be dropped instead of
+   *  re-sent (see sameSnapshot); null means it holds nothing for this project yet. */
+  let orchSent: OrchSnapshot | null = null
+  /** Bumped by every call that settles the subscription (orch.list, orch.unwatch). orch.list captures
+   *  it before its await and re-checks after: **state set before an await is not state you may trust
+   *  after it.** Without the re-check, unwatch racing an in-flight list re-arms a subscription the
+   *  renderer has turned off (and nothing turns it off again), and two overlapping list calls can
+   *  settle in the wrong order, leaving main pushing project A to a renderer showing B. */
+  let orchRequest = 0
+  const orchSnapshotOf = (state: OrchState, projectPath: string): OrchSnapshot => {
+    // The set is built once per fold rather than per Task — sessions.list() copies every SessionInfo.
+    const known = new Set(core.sessions.list().map((s) => s.id))
+    return snapshotFor(state, projectPath, (id) => known.has(id))
+  }
+  const pushOrchState = (state: OrchState): void => {
+    if (orchProject === null) return // the renderer has not asked for a project, or it unwatched
+    // The push is a notification and runs inside the awaited setState (below), so a throw here would
+    // reject a write that has **already been persisted** — every CLI command would start answering
+    // 500 for a state change that in fact succeeded. The fold reads fields the store does not
+    // validate on load (a Dispatch with no startedAt reaches localeCompare), so this is reachable.
+    // Logged rather than swallowed: a fold that throws is a real defect and has to be findable.
+    try {
+      const next = orchSnapshotOf(state, orchProject)
+      if (orchSent !== null && sameSnapshot(orchSent, next)) return
+      orchSent = next
+      send('orch:state', next)
+    } catch (err) {
+      orchLog(`orch:state push failed project=${orchProject}: ${String(err)}`)
+    }
+  }
 
   // Events: core to renderer (session:data is batched at 16ms)
   const batcher = new DataBatcher(16, (sessionId, data) => send('session:data', { sessionId, data }))
@@ -476,7 +518,17 @@ export function registerIpc(
       // now serialises writes too, but what that prevents is inversion when two flows overlap; within a
       // single flow, waiting for the previous write before re-reading is still the caller's
       // responsibility.
-      setState: (next) => store.save(next),
+      // This is also where the Jobs sidebar is pushed from. Not server.ts's commit(): that helper is
+      // local to handleCommand and only five of its command branches route through it — the rest call
+      // deps.setState directly, and so does handleExit (a worker session dying is exactly the change
+      // the sidebar has to show). setState is the one point they all share, so the push cannot be
+      // missed by a command that writes state its own way. `next` is what was just committed, so no
+      // re-read is needed. A command that writes twice (worker-start) pushes twice — the payload is
+      // one project's Runs and the renderer replaces its copy wholesale, so a duplicate is a no-op.
+      setState: async (next) => {
+        await store.save(next)
+        pushOrchState(next)
+      },
       // The .bak for reset — the one documented safety net for a destructive operation
       backup: () => store.backup(),
       startWorker: async (a) => {
@@ -553,6 +605,11 @@ export function registerIpc(
     }
     orch = { server, deps, cliPath, infoPath, skillsPath }
     orchLog(`started — port=${server.port} cli=${cliPath} skills=${skillsPath}`)
+    // One push for the state that was just loaded off disk. Startup races the renderer's first
+    // orch.list (both happen at app start) and the settings toggle boots this long after it, and in
+    // both cases the renderer has already been answered with an empty snapshot — with no push it
+    // would keep showing nothing until some agent happened to change state.
+    pushOrchState(store.get())
     // Installing the discovery stub — without it there is no path by which an agent finds this feature.
     // **Done for every claude and codex account**: the path is the same
     // (<configDir>/skills/astera-orchestration/SKILL.md), and there is evidence that codex also treats
@@ -784,6 +841,37 @@ export function registerIpc(
   })
 
   ipcMain.handle('run.listActive', async () => core.run.listActive())
+
+  // The Jobs sidebar. Read-only — this is the only orchestration channel the renderer has, and there
+  // is deliberately no mutating counterpart (gate-resolve and the rest are COORDINATOR_ONLY, and the
+  // orchestrator reaches them through the CLI).
+  // The same assertAllowedPath as run.list: the path decides which Runs come back, so an arbitrary
+  // one would let the renderer enumerate Runs created outside every registered project.
+  // An empty snapshot before orchestration has started (toggle off, or startup still running or
+  // failed) — there is no state to read yet, and bootOrch pushes once as soon as there is.
+  ipcMain.handle('orch.list', async (_e, projectPath: string) => {
+    const request = ++orchRequest
+    await assertAllowedPath(projectPath)
+    const snapshot = orch ? orchSnapshotOf(orch.deps.getState(), projectPath) : { runs: [] }
+    // Superseded while awaiting — by an unwatch, or by a later list for another project. The caller
+    // still gets the project it asked for; what it does not get is the subscription, because
+    // something more recent already decided what that should be.
+    if (request !== orchRequest) return snapshot
+    orchProject = projectPath
+    // Recorded as what the renderer now holds — the return value is exactly that, so the dedupe stays
+    // correct across a project switch instead of comparing against the previous project's fold.
+    orchSent = snapshot
+    return snapshot
+  })
+  // The way out, the same as files.unwatch and git.unwatch: the Jobs view unmounts on a rail toggle,
+  // and without this main goes on folding a snapshot and sending it to nobody on every orchestration
+  // write. The bump is what makes this win against a list that is still awaiting its path check —
+  // otherwise that list lands afterwards and re-arms what was just turned off.
+  ipcMain.handle('orch.unwatch', () => {
+    orchRequest++
+    orchProject = null
+    orchSent = null
+  })
 
   // The detected JDKs. There is no path argument, so this is not subject to assertAllowedPath — the scan
   // only looks at conventional directories (Program Files and friends) and PATH.
