@@ -12,6 +12,9 @@ Issues and pull requests are welcome. A couple of things worth knowing before yo
 - `docs/` is a whitelist: `docs/*` is ignored except for the pages explicitly un-ignored in
   `.gitignore`. A new file there defaults to "not published" and will not be committed, so
   documentation that ships has to extend one of the existing pages.
+- `knowledge/` is the opposite and is committed by default: architecture notes, ADRs under
+  `knowledge/decisions/`, and anything else meant to outlive the branch that produced it. Its
+  `README.md` says what belongs in each part and, as importantly, what does not.
 - Tests live next to what they test as `*.test.ts` and run with `npm test` (Vitest). A change to
   behaviour is expected to come with one.
 - **Do not join the usage-limit phrases back together.** Several tests in `src/core/rolling/` and
