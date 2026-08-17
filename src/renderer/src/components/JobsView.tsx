@@ -24,9 +24,15 @@ const STATUS_DOT: Record<TaskStatus, string> = {
  *  it has no test of its own because the renderer has no jsdom (vitest runs environment: 'node'). */
 export function JobsView({
   snapshot,
+  canOpenSession,
   onOpenSession
 }: {
   snapshot: OrchSnapshot | null
+  /** Whether this window still has a tab for that session — the second half of "is this row
+   *  clickable", and the half main cannot answer. JobTask.sessionId means main's SessionManager still
+   *  has the session record, which is deliberately not the same set as the open tabs (see App). A row
+   *  that fails this draws exactly like a Task that was never dispatched. */
+  canOpenSession: (sessionId: string) => boolean
   /** Focus the tab that owns this session. The Jobs view creates no surface of its own — the worker
    *  sessions already arrive as tabs and Dispatch carries the id that ties a Task to one. */
   onOpenSession: (sessionId: string) => void
@@ -76,7 +82,10 @@ export function JobsView({
             {open && (
               <div className="jobs-tasks">
                 {run.tasks.map((task) => {
-                  const sessionId = task.sessionId
+                  // Both conditions or neither — the row's appearance and its click have to be
+                  // decided by the same value, or it looks clickable and silently does nothing.
+                  const sessionId =
+                    task.sessionId && canOpenSession(task.sessionId) ? task.sessionId : undefined
                   return (
                     <div key={task.id}>
                       <div

@@ -23,6 +23,7 @@ import {
   type OrchServerDeps
 } from './orchestration/server'
 import { sameSnapshot, snapshotFor } from '../core/orchestration/view'
+import { repoPathOf } from '../core/worktrees/repo'
 import type { OrchState } from '../core/orchestration/state'
 import { makeLimitProbe } from './orchestration/limitProbe'
 import { writeInfo, writeShuttle } from './orchestration/shuttle'
@@ -117,7 +118,12 @@ export function registerIpc(
    *  it — with the query and the subscription collapsed into one call, which a read-only view can do
    *  because it has nothing else to say. null before the renderer has asked and again after
    *  orch.unwatch — in both cases there is nothing to push, and never a path that has not been
-   *  through assertAllowedPath. */
+   *  through assertAllowedPath.
+   *
+   *  Holds the **repository** path, not the path the renderer sent: orch.list runs it through
+   *  repoPathOf first (see there). Storing the mapped value rather than the raw one is what keeps the
+   *  push and the reply agreeing — pushOrchState folds on this variable, so a subscription armed for
+   *  a worktree's repo must not later be pushed for the worktree itself. */
   let orchProject: string | null = null
   /** The snapshot the renderer is currently holding for orchProject — whatever was last handed over,
    *  by orch.list's return value or by a push. Kept so an unchanged fold can be dropped instead of
@@ -851,13 +857,22 @@ export function registerIpc(
   // failed) — there is no state to read yet, and bootOrch pushes once as soon as there is.
   ipcMain.handle('orch.list', async (_e, projectPath: string) => {
     const request = ++orchRequest
+    // The guard runs on the path as sent — it decides what the renderer is allowed to name, and the
+    // mapping below must not be able to widen that. The mapped value never reaches the filesystem;
+    // it only picks which Runs are folded.
     await assertAllowedPath(projectPath)
-    const snapshot = orch ? orchSnapshotOf(orch.deps.getState(), projectPath) : { runs: [] }
+    // A worktree path resolves back to its repository. The renderer scopes this call by the active
+    // tab's cwd, and focusing a worker dispatched with `--worktree new` makes that cwd the worktree
+    // — a path outside the repo, which no Run was created with. Done here rather than in the
+    // renderer because the registry is main's (core.worktrees), and applied to orchProject as well
+    // so the push path folds for the same project this reply did.
+    const project = repoPathOf(core.worktrees.list(), projectPath)
+    const snapshot = orch ? orchSnapshotOf(orch.deps.getState(), project) : { runs: [] }
     // Superseded while awaiting — by an unwatch, or by a later list for another project. The caller
     // still gets the project it asked for; what it does not get is the subscription, because
     // something more recent already decided what that should be.
     if (request !== orchRequest) return snapshot
-    orchProject = projectPath
+    orchProject = project
     // Recorded as what the renderer now holds — the return value is exactly that, so the dedupe stays
     // correct across a project switch instead of comparing against the previous project's fold.
     orchSent = snapshot

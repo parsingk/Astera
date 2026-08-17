@@ -1550,11 +1550,11 @@ export default function App(): React.JSX.Element {
   // Turning the setting off makes the rail button — the only control that can close the Jobs view —
   // disappear along with it (it is gated on the same orchEnabled), so a view left open past that point
   // is one the user has no way left to reach the control for. Closing it here is what lets the
-  // subscription effect below run its own cleanup (unwatch): that effect only depends on
-  // [jobsOpen, explorerRoot], not on orchEnabled, so adding orchEnabled to its dependency list alone
-  // would not help — jobsOpen would still be true and the effect would just re-arm. Setting jobsOpen to
-  // false here is what actually tears the subscription down, and it does not spring back open when the
-  // setting is turned back on (this effect only ever closes, never opens).
+  // subscription effect below run its own cleanup (unwatch): that effect does not depend on
+  // orchEnabled, and adding it to that dependency list alone would not help — jobsOpen would still be
+  // true and the effect would just re-arm. Setting jobsOpen to false here is what actually tears the
+  // subscription down, and it does not spring back open when the setting is turned back on (this
+  // effect only ever closes, never opens).
   useEffect(() => {
     if (!orchEnabled) setJobsOpen(false)
   }, [orchEnabled])
@@ -1566,7 +1566,25 @@ export default function App(): React.JSX.Element {
   // state. orch.unwatch on cleanup is the way out, the same pair as files.watch/unwatch and
   // git.watch/unwatch — without it main keeps folding and pushing a snapshot after this view is gone.
   useEffect(() => {
-    if (!jobsOpen || !explorerRoot) return
+    // Clearing before arming, the shape useGitStatus already uses (hooks/useGitStatus.ts: it clears on
+    // a null root and clears again on every root change). Without it orchSnapshot is only ever written
+    // and never reset, which shows up twice: on a project switch the previous project's Runs stay on
+    // screen for the whole round trip — the flash JobsView's own comment says it avoids is a flash of
+    // another project's objectives, which is worse than the "no jobs" frame it was avoiding — and with
+    // no active tab nothing ever arrives at all.
+    //
+    // The two cases want different values. A root change means "not known yet", so null, which is what
+    // JobsView's null guard draws nothing for while the request is in flight. A null root means there
+    // is no project to ask about and no response is coming, so an empty snapshot goes in instead —
+    // that reaches the empty state, where null would leave an unexplained blank sidebar for as long as
+    // the view stays open.
+    setOrchSnapshot(explorerRoot === null ? { runs: [] } : null)
+    // sidebarOpen belongs in this guard as much as jobsOpen does: collapsing the sidebar unmounts the
+    // whole <aside> and JobsView with it, but jobsOpen stays true, so without this no unwatch is sent
+    // and main goes on folding a snapshot on every orchestration write — inside the awaited setState,
+    // i.e. in the CLI request's critical path — and pushing it to a component that is not mounted.
+    // The fourth teardown trigger, after unmount, orch.unwatch and the orchEnabled effect above.
+    if (!jobsOpen || !sidebarOpen || !explorerRoot) return
     let cancelled = false
     void window.api.orch.list(explorerRoot).then((snapshot) => {
       if (cancelled) return
@@ -1580,7 +1598,7 @@ export default function App(): React.JSX.Element {
       off()
       void window.api.orch.unwatch()
     }
-  }, [jobsOpen, explorerRoot])
+  }, [jobsOpen, sidebarOpen, explorerRoot])
 
   // When the project changes, that project's terminal list is read again — main holds them per project,
   // so another project's terminals stay alive and are simply not shown here
@@ -2027,6 +2045,14 @@ export default function App(): React.JSX.Element {
             ) : sidebarPane === 'jobs' ? (
               <JobsView
                 snapshot={orchSnapshot}
+                // JobTask.sessionId only says main still has the session record, and main never drops
+                // one — SessionManager.kill flips the status and list() keeps exited sessions on
+                // purpose. closeSession, on the other hand, takes the tab out of this tree. So after a
+                // user closes a finished worker's tab the row would keep full opacity and its click
+                // would reach activateTab, find no group, and return null: a silent no-op that only
+                // heals on a window reload. The tree is the renderer's, so this is the one condition
+                // the fold in main cannot make, and it is exactly what selectWorkbenchTab needs.
+                canOpenSession={(sessionId) => !!layout && !!groupOfTab(layout, sessionTab(sessionId))}
                 onOpenSession={(sessionId) => selectWorkbenchTab(sessionTab(sessionId))}
               />
             ) : (

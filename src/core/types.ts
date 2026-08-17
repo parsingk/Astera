@@ -21,8 +21,14 @@ export type { GitState } from './git/status'
 import type { Provider } from './providers/meta'
 import type { TerminalFont } from './terminal/font'
 // The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
-// orchestration/types.ts is safe to reach for: it imports no values, so nothing from node leaks into
-// the renderer compilation target. state.ts and view.ts never may — they pull in node:path.
+// orchestration/types.ts is safe to reach for: its single import is a type-only providers/meta.ts,
+// already in tsconfig.web.json, so putting it in the renderer's compilation target pulled nothing
+// else in with it. state.ts and view.ts never may, for two different reasons — view.ts imports
+// isSamePath from files/tree.ts, which imports node:path; state.ts is node-free but is main-side by
+// role (the server owns OrchState) and is deliberately out of tsconfig.web.json, so importing it
+// here is what would put it back in. Either way the wrong fix is "types": ["node"] — it makes the
+// import resolve by handing the renderer typecheck every Node global, which is the guard this note
+// stands to protect.
 import type { TaskStatus } from './orchestration/types'
 export type { TaskStatus } from './orchestration/types'
 
@@ -293,8 +299,9 @@ export interface CoreEvents {
   'terminal:exit': { id: string; exitCode: number } // shell exited — the renderer removes that tab
   // The Jobs sidebar's whole snapshot, re-sent on every orchestration state change. Small enough to
   // send whole (one project's Runs and Tasks) and it removes any question of the renderer's copy
-  // drifting from main's. Which project it is folded for is the last one orch.list asked about —
-  // that call is the only thing that tells main what the renderer has open.
+  // drifting from main's. Which project it is folded for is the last one orch.list asked about, after
+  // main's worktree-to-repository resolution (see OrchApi) — that call is the only thing that tells
+  // main what the renderer has open.
   'orch:state': OrchSnapshot
 }
 export type CoreEventChannel = keyof CoreEvents
@@ -607,9 +614,14 @@ export interface AppControlApi {
  * the orchestrator reaches through the CLI, so there is no mutating counterpart here.
  *
  * list doubles as the subscription: the snapshot is per project and main is not otherwise told what
- * the renderer has open, so the path passed here is also the one 'orch:state' is folded for. unwatch
- * is the way out — the same pair as files.watch/unwatch and git.watch/unwatch, and without it main
- * keeps folding and sending a snapshot after the view is gone.
+ * the renderer has open, so the path passed here also settles what 'orch:state' is folded for.
+ * unwatch is the way out — the same pair as files.watch/unwatch and git.watch/unwatch, and without it
+ * main keeps folding and sending a snapshot after the view is gone.
+ *
+ * The path is a *location*, not a project identity: main resolves a registered worktree back to the
+ * repository it was created from (core/worktrees/repo.ts) and folds for that, so passing the cwd of a
+ * worker running in a `--worktree new` tree returns its repository's Runs rather than nothing. Any
+ * path that is not a registered worktree is used as given.
  *
  * **The value list resolves to is the initial payload, and the caller must render it.** 'orch:state'
  * carries subsequent changes only: main records what list handed over and drops a push whose fold is
