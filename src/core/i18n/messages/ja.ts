@@ -692,5 +692,12 @@ export const ja: Catalog = {
   'slack.inbox.sessionEnded': '⚠️ このセッションは終了しているため入力を転送できませんでした',
   'slack.inbox.injectFailed': '⚠️ 入力を転送できませんでした',
   'slack.limitNoResume': '⛔ 上限に到達 — 自動再開なし',
-  'slack.limitNoResumeAt': '⛔ 上限に到達 — 自動再開なし (リセット {at})'
+  'slack.limitNoResumeAt': '⛔ 上限に到達 — 自動再開なし (リセット {at})',
+  // JobsView.tsx, App.tsx — 読み取り専用の Jobs サイドバー（オーケストレーションの Run/Task 一覧）
+  'jobs.rail.open': 'Jobs',
+  'jobs.empty': 'まだ開始したジョブがありません',
+  'jobs.empty.hint': 'コーディネーターセッションでジョブを作成すると、ここに表示されます',
+  'jobs.progress': '{done}/{total}',
+  'jobs.completed': '完了',
+  'jobs.gates.more': '他 {count} 件'
 }

@@ -13,6 +13,7 @@ import { FileEditor } from './components/FileEditor'
 import type { EditorState, StateEffect } from '@codemirror/state'
 import { EditorStateCache } from './lib/editorStateCache'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
+import { JobsView } from './components/JobsView'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { WorktreePanel } from './components/WorktreePanel'
 import { RunToolbar } from './components/RunToolbar'
@@ -23,7 +24,7 @@ import { UpdateGate } from './components/UpdateGate'
 import { ShortcutSettings } from './components/ShortcutSettings'
 import { TerminalFontSettings } from './components/TerminalFontSettings'
 import { ConfirmHost } from './components/ConfirmHost'
-import type { RunConfig, RunContext, RunStatus, TerminalBuffer } from '../../core/types'
+import type { OrchSnapshot, RunConfig, RunContext, RunStatus, TerminalBuffer } from '../../core/types'
 import { slackMode } from '../../core/slack/ready'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
@@ -379,6 +380,9 @@ export default function App(): React.JSX.Element {
   const [slackLoaded, setSlackLoaded] = useState(false)
   const [wtRoot, setWtRoot] = useState('') // the worktree root in the settings modal
   const [orchEnabled, setOrchEnabled] = useState(false) // the agent orchestration toggle
+  // Whether the Jobs sidebar view is showing — same convention as explorerOpen (toggleJobs mirrors
+  // toggleExplorer below), just for the read-only orchestration view instead of the file tree.
+  const [jobsOpen, setJobsOpen] = useState(false)
   const [isMax, setIsMax] = useState(false)
   const [usage, setUsage] = useState<SessionUsage | null>(null)
   const [rollStates, setRollStates] = useState<Record<string, RollStateEvent>>({})
@@ -1220,8 +1224,24 @@ export default function App(): React.JSX.Element {
     // 켜는 경우인지는 갱신자 밖에서 정한다. setState 갱신자는 StrictMode 에서 두 번 불릴 수 있으므로
     // 그 안에서 다른 setState 를 부르지 않는다는 것이 이 파일의 규약이다(setLayout 쪽 주석들과 같은 이유)
     const opening = !explorerOpenRef.current
-    if (opening) setSidebarOpen(true)
+    if (opening) {
+      setSidebarOpen(true)
+      setJobsOpen(false) // 사이드바는 한 번에 한 뷰만 보여준다
+    }
     setExplorerOpen(opening)
+  }
+
+  /** Jobs 사이드바 토글 — 탐색기 토글과 같은 규칙이다: 켤 때 사이드바가 접혀 있으면 함께 펴고, 세
+   *  뷰 중 하나만 보이므로 탐색기가 열려 있었다면 닫는다. 키보드 단축키가 없으므로 toggleExplorer와
+   *  달리 ref가 아니라 최신 렌더의 jobsOpen을 그대로 읽는다 — 전역 리스너에 한 번만 등록되는 함수가
+   *  아니라 매 렌더 새로 만들어져 레일 버튼의 onClick에 바로 연결되기 때문이다. */
+  const toggleJobs = (): void => {
+    const opening = !jobsOpen
+    if (opening) {
+      setSidebarOpen(true)
+      setExplorerOpen(false)
+    }
+    setJobsOpen(opening)
   }
 
   // A setState updater can be invoked twice under StrictMode (in development), so setActivePaneId and
@@ -1425,6 +1445,9 @@ export default function App(): React.JSX.Element {
   // run.start would run, and it starts null until the first run.list response arrives.
   const [runManagerOpen, setRunManagerOpen] = useState(false)
   const [runContext, setRunContext] = useState<RunContext | null>(null)
+  // The Jobs sidebar snapshot for the open project — orch.list's initial payload, then every
+  // 'orch:state' push after it (see the subscription effect below). null until orch.list first resolves.
+  const [orchSnapshot, setOrchSnapshot] = useState<OrchSnapshot | null>(null)
   const explorerViewRef = useRef<HTMLDivElement>(null)
 
   /** 트리 루트는 활성 탭을 따른다 — 활성 탭이 파일이면 그 파일의 프로젝트, 세션이면 그 세션의 cwd.
@@ -1523,6 +1546,41 @@ export default function App(): React.JSX.Element {
     })
     return () => { cancelled = true }
   }, [explorerOpen, explorerRoot])
+
+  // Turning the setting off makes the rail button — the only control that can close the Jobs view —
+  // disappear along with it (it is gated on the same orchEnabled), so a view left open past that point
+  // is one the user has no way left to reach the control for. Closing it here is what lets the
+  // subscription effect below run its own cleanup (unwatch): that effect only depends on
+  // [jobsOpen, explorerRoot], not on orchEnabled, so adding orchEnabled to its dependency list alone
+  // would not help — jobsOpen would still be true and the effect would just re-arm. Setting jobsOpen to
+  // false here is what actually tears the subscription down, and it does not spring back open when the
+  // setting is turned back on (this effect only ever closes, never opens).
+  useEffect(() => {
+    if (!orchEnabled) setJobsOpen(false)
+  }, [orchEnabled])
+
+  // Loads the Jobs sidebar snapshot and subscribes to further changes, the same shape as the run.list
+  // effect above. orch.list doubles as the subscription (OrchApi's doc comment): its return value is
+  // the initial payload and must be rendered here, because 'orch:state' only carries changes after it —
+  // a caller that only awaits list to arm the subscription and discards the result never sees that first
+  // state. orch.unwatch on cleanup is the way out, the same pair as files.watch/unwatch and
+  // git.watch/unwatch — without it main keeps folding and pushing a snapshot after this view is gone.
+  useEffect(() => {
+    if (!jobsOpen || !explorerRoot) return
+    let cancelled = false
+    void window.api.orch.list(explorerRoot).then((snapshot) => {
+      if (cancelled) return
+      setOrchSnapshot(snapshot)
+    })
+    const off = window.api.on('orch:state', (snapshot) => {
+      if (!cancelled) setOrchSnapshot(snapshot)
+    })
+    return () => {
+      cancelled = true
+      off()
+      void window.api.orch.unwatch()
+    }
+  }, [jobsOpen, explorerRoot])
 
   // When the project changes, that project's terminal list is read again — main holds them per project,
   // so another project's terminals stay alive and are simply not shown here
@@ -1795,6 +1853,16 @@ export default function App(): React.JSX.Element {
     )
   }
 
+  // 사이드바에 그릴 뷰 하나 — 세 갈래 삼항보다 이 값 하나가 어느 뷰가 열려 있는지를 더 분명히 읽힌다.
+  // 탐색기와 Jobs는 서로 배타적이다(toggleExplorer/toggleJobs가 상대를 끈다). orchEnabled가 꺼지면
+  // jobsOpen이 내부적으로 true로 남아 있어도 Jobs를 그리지 않고 세션 목록으로 돌아간다 — 레일의 진입점이
+  // 사라지는 시점에 사이드바도 조용히 원래 모습으로 돌아가야 어색해지지 않는다.
+  const sidebarPane: 'explorer' | 'jobs' | 'sessions' = explorerOpen
+    ? 'explorer'
+    : jobsOpen && orchEnabled
+      ? 'jobs'
+      : 'sessions'
+
   return (
     <div className="app">
       {/* 실행 구성은 타이틀바 줄에 놓인다(IntelliJ와 같은 자리). 별도의 띠를 두면 탐색기를 여닫을
@@ -1869,6 +1937,36 @@ export default function App(): React.JSX.Element {
               </g>
             </svg>
           </button>
+          {/* Jobs 사이드바 토글. 오케스트레이션 설정이 꺼져 있으면 아예 그리지 않는다 — 뒤에 아무것도
+              없는 진입점을 보여줄 이유가 없다(App.tsx:381의 orchEnabled, 설정 모달의 토글이 mirror한다) */}
+          {orchEnabled && (
+            <button
+              className={jobsOpen ? 'rail-btn on' : 'rail-btn'}
+              aria-label={t('jobs.rail.open')}
+              title={t('jobs.rail.open')}
+              onClick={toggleJobs}
+            >
+              {/* Jobs — 체크리스트. 앱의 SVG 관례대로 16 viewBox 에 currentColor 하나, 바깥 사각형은
+                  1.4, 안쪽 체크와 줄은 1.2 */}
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinejoin="round"
+              >
+                <rect x="2.6" y="1.8" width="10.8" height="12.4" rx="1.4" />
+                <g strokeWidth="1.2" strokeLinecap="round">
+                  <path d="M4.8 5.2 5.7 6.1 7.3 4.3" />
+                  <line x1="9" y1="5.4" x2="11.4" y2="5.4" />
+                  <path d="M4.8 9.6 5.7 10.5 7.3 8.7" />
+                  <line x1="9" y1="9.8" x2="11.4" y2="9.8" />
+                </g>
+              </svg>
+            </button>
+          )}
           {/* The bottom panel is for file and editor mode only, so the terminal is exposed only in that
               mode. The terminal and ⚙ are wrapped in .rail-bottom and that wrapper carries
               margin-top:auto so the two stick to the bottom together — giving the terminal button its
@@ -1915,7 +2013,7 @@ export default function App(): React.JSX.Element {
         </nav>
         {sidebarOpen && (
           <aside className="sidebar" ref={sidebarRef} style={{ width: sidebarWidth }}>
-            {explorerOpen ? (
+            {sidebarPane === 'explorer' ? (
               <FileExplorer
                 root={explorerRoot}
                 onOpenFile={openFile}
@@ -1925,6 +2023,11 @@ export default function App(): React.JSX.Element {
                 undoRef={explorerUndoRef}
                 onPathRenamed={handlePathRenamed}
                 onPathDeleted={handlePathDeleted}
+              />
+            ) : sidebarPane === 'jobs' ? (
+              <JobsView
+                snapshot={orchSnapshot}
+                onOpenSession={(sessionId) => selectWorkbenchTab(sessionTab(sessionId))}
               />
             ) : (
               <>
