@@ -6,8 +6,13 @@
   --line: #000000; /* rail, sidebar, and region dividers (crisp IDE look) */
   --line-soft: #26262c; /* thin divider between rows */
   --text: #d0d0d6;
-  --text-dim: #7d7d88;
-  --text-faint: #55555f;
+  /* --text-dim was 4.40:1 against --bg and --text-faint 2.43:1 — --text itself is 11.65:1 (AAA), but
+     neither secondary tier passed anything. Both are measured against --elevated (#23232a), not --bg:
+     secondary text also sits on a selected row, the lightest surface it lands on, so that is the binding
+     surface. There: dim 3.84 → 5.13 (AA), faint 2.12 → 3.48 (passes 3:1). On --bg they land at 5.88 and
+     3.99. --text-dim stays 1.98× darker than --text, so the body/secondary hierarchy still reads. */
+  --text-dim: #93939e;
+  --text-faint: #767682;
   /* 레일 아이콘의 쉬는 색. --text-dim 은 본문(--bg/--panel) 위를 기준으로 잡힌 값이라, 앱에서 가장
      어두운 --rail 위에서는 거의 읽히지 않는다. --text 까지 올리면 선택 상태(.rail-btn.on)와 구별이
      사라지므로 그 사이에 둔다 */
@@ -44,6 +49,7 @@
   --surface-hover: #1f1f25;
   --radius: 6px;      /* triggers, options, inputs */
   --radius-lg: 8px;   /* the floating dropdown panel */
+  --radius-sm: 3px;   /* small marks — badges, chips, key caps, dots under ~18px */
   --ring: rgba(55, 176, 196, 0.35); /* = --accent at 35%, for focus rings */
   --ease: 120ms cubic-bezier(0.2, 0.6, 0.3, 1);
 }
@@ -55,7 +61,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
 /* ---------- scrollbars ---------- */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--elevated); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb { background: var(--elevated); border-radius: var(--radius); border: 2px solid transparent; background-clip: padding-box; }
 ::-webkit-scrollbar-thumb:hover { background: #3a3a43; background-clip: padding-box; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
@@ -84,6 +90,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
 .tb-logo {
   width: 20px;
   height: 20px;
+  /* Deliberately bespoke: matched to the artwork, not the control scale — a brand mark, not a control,
+     so it does not owe --radius/--radius-sm anything. Leave it hardcoded on a later tokenising pass. */
   border-radius: 5px;
   object-fit: contain;
   display: block;
@@ -94,7 +102,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
    클릭이 창 이동으로 먹힌다(.tb-controls·.tb-update 와 같은 처리). 툴바가 원래 갖고 있던 테두리와
    배경은 없어진 상단 띠의 크롬이었으므로 여기서는 지운다. min-width:0 은 창이 좁아질 때 select 가
    줄어들 수 있게 한다 — 없으면 창 컨트롤을 밀어낸다 */
-.tb-run { display: flex; align-items: center; margin-left: 12px; margin-right: 4px; min-width: 0; padding: 1px 2px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); -webkit-app-region: no-drag; }
+.tb-run { display: flex; align-items: center; margin-left: 12px; margin-right: 4px; min-width: 0; padding: 1px 2px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); -webkit-app-region: no-drag; }
 .tb-run .run-toolbar { border: 0; background: transparent; padding: 0; gap: 2px; min-width: 0; }
 /* 타이틀바는 앱에서 가장 어두운 면(--rail)이라, 본문을 기준으로 잡힌 --text-dim 이 여기서는 거의
    읽히지 않는다. 쉬는 상태의 색을 본문 색까지 올리고, 위젯 전체에 한 단계 밝은 면과 테두리를 줘서
@@ -108,7 +116,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
 .tb-controls { margin-left: auto; display: flex; -webkit-app-region: no-drag; }
 .tb-update { margin-left: auto; padding: 0 12px; font-size: 12px; color: #9a9aa5; white-space: nowrap; align-self: center; -webkit-app-region: no-drag; }
 .tb-update-err { color: #e66; cursor: default; }
-.tb-update-btn { margin-left: auto; margin-right: 8px; align-self: center; background: #2f9e6e; color: #fff; border: none; border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer; -webkit-app-region: no-drag; }
+.tb-update-btn { margin-left: auto; margin-right: 8px; align-self: center; background: #2f9e6e; color: #fff; border: none; border-radius: var(--radius); padding: 4px 10px; font-size: 12px; cursor: pointer; -webkit-app-region: no-drag; }
 .tb-update-btn:hover { background: #37b07b; }
 /* When the install and check buttons appear together, a narrow modal (600px) cannot fit both on one
    line. The cell wraps rather than the label — the label stays on one line even as the version digits grow. */
@@ -128,6 +136,9 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
   color: var(--text-dim);
   cursor: pointer;
   padding: 0;
+  /* Square on purpose: this sits flush against the titlebar's top and (for the rightmost of the three)
+     the window's right edge, matching Windows' own minimize/maximize/close chrome — rounding it would
+     leave a gap at the window corner. */
   border-radius: 0;
 }
 .tb-btn:hover { background: rgba(255, 255, 255, .08); color: var(--text); }
@@ -148,7 +159,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
 .rail-btn {
   width: 30px;
   height: 30px;
-  border-radius: 7px;
+  border-radius: var(--radius);
   display: grid;
   place-items: center;
   background: none;
@@ -162,6 +173,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); }
 /* 배경까지 함께 바뀌어야 눌리는 것이라는 게 읽힌다 — 색만 밝아지는 변화는 어두운 면 위에서 잘 보이지 않는다 */
 .rail-btn:hover { color: var(--text); background: var(--elevated); }
 .rail-btn.on { color: var(--text); background: var(--elevated); box-shadow: inset 2px 0 0 var(--accent); }
+/* box-shadow does not composite across rules — one declaration wins outright. Without this, tabbing to
+   the active rail button would show the .on marker OR the button:focus-visible ring, never both, because
+   whichever rule matched last (or matched more specifically) would replace the other's box-shadow
+   entirely. Restating both explicitly, marker first then ring, is the only way to keep both visible. */
+.rail-btn.on:focus-visible { box-shadow: inset 2px 0 0 var(--accent), 0 0 0 2px var(--ring); }
 /* The wrapper that pins the terminal and ⚙ (settings) to the bottom together. The auto margin has to
    live on this one wrapper — giving it to each .rail-btn (two auto siblings) distributes the free space
    evenly and pushes the buttons apart. */
@@ -200,9 +216,10 @@ body.resizing-row { cursor: row-resize; user-select: none; }
    It may shrink so the run buttons keep their room, but not past 140px, or the name is unreadable while
    the buttons sit on empty space. The open menu is not bound by this — .sel-menu sizes to its content. */
 .run-config-select { flex: 0 1 200px; min-width: 140px; }
-.run-btn { width: 28px; height: 28px; display: grid; place-items: center; background: transparent; border: 0; border-radius: 4px; color: var(--text-dim); font-size: 15px; padding: 0; cursor: pointer; }
+.run-btn { width: 28px; height: 28px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); font-size: 15px; padding: 0; cursor: pointer; }
 .run-btn:hover { background: var(--elevated); color: var(--text); }
-.run-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+/* Same ring as .sel-trigger below — no border to brighten on a ghost button, so only the ring shows. */
+.run-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
 .run-btn.play { color: #3fb950; }
 .run-btn.play:disabled { color: var(--text-faint); background: transparent; cursor: default; }
 .run-btn.stop { color: #e5534b; }
@@ -210,20 +227,20 @@ body.resizing-row { cursor: row-resize; user-select: none; }
    위치와 생김새는 아래 .run-global-menu 와 같은 규칙을 따른다 — 같은 툴바에서 두 메뉴가 다르게
    생기면 그게 더 눈에 띈다 */
 .run-more { position: relative; }
-.run-more-menu { position: absolute; top: calc(100% + 5px); right: 0; z-index: 20; min-width: 170px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; padding: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
-.run-more-item { text-align: left; white-space: nowrap; padding: 5px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text); font-size: 12.5px; cursor: pointer; }
+.run-more-menu { position: absolute; top: calc(100% + 5px); right: 0; z-index: 20; min-width: 170px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
+.run-more-item { text-align: left; white-space: nowrap; padding: 5px 8px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text); font-size: 12.5px; cursor: pointer; }
 .run-more-item:hover { background: var(--elevated); }
 .run-global { position: relative; }
-.run-global-badge { display: inline-flex; align-items: center; gap: 4px; background: var(--elevated); border: 1px solid var(--line-soft); color: var(--text-dim); border-radius: 4px; font-size: 11px; padding: 2px 7px; cursor: pointer; font-variant-numeric: tabular-nums; }
+.run-global-badge { display: inline-flex; align-items: center; gap: 4px; background: var(--elevated); border: 1px solid var(--line-soft); color: var(--text-dim); border-radius: var(--radius-sm); font-size: 11px; padding: 2px 7px; cursor: pointer; font-variant-numeric: tabular-nums; }
 .run-global-badge:hover { border-color: var(--text-faint); }
 .run-global-badge .tri { color: #3fb950; font-size: 9px; }
 .run-global-badge .n { color: var(--ok); font-weight: 600; }
-.run-global-menu { position: absolute; top: calc(100% + 5px); right: 0; z-index: 20; min-width: 240px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; padding: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
-.run-global-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: 4px; }
+.run-global-menu { position: absolute; top: calc(100% + 5px); right: 0; z-index: 20; min-width: 240px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
+.run-global-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--radius); transition: background var(--ease); }
 .run-global-row:hover { background: var(--elevated); }
 .run-global-live { width: 7px; height: 7px; border-radius: 50%; background: #3fb950; flex: none; box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
 .run-global-jump { flex: 1; min-width: 0; text-align: left; background: none; border: none; color: var(--text); font-size: 12px; padding: 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.run-global-stop { width: 20px; height: 20px; display: grid; place-items: center; background: transparent; border: 0; border-radius: 4px; color: var(--text-faint); font-size: 11px; padding: 0; cursor: pointer; }
+.run-global-stop { width: 20px; height: 20px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-faint); font-size: 11px; padding: 0; cursor: pointer; }
 .run-global-stop:hover { background: var(--bg); color: #e5534b; }
 /* .run-add-form (a popover hanging off the toolbar) was replaced by a modal and deleted — today that
    modal is RunConfigManager (.modal.rcm, below). Its right anchor and its vertical stack with a fixed
@@ -242,27 +259,30 @@ body.resizing-row { cursor: row-resize; user-select: none; }
   place-items: center;
   background: transparent;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius);
   color: var(--text-dim);
   padding: 0;
   cursor: pointer;
 }
 .icon-btn:hover { background: var(--elevated); color: var(--text); }
-.icon-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+/* Same ring as .sel-trigger below — no border to brighten on a ghost button, so only the ring shows. */
+.icon-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
 
 button {
   background: var(--elevated);
   color: var(--text);
   border: 1px solid var(--line-soft);
-  border-radius: 4px;
+  border-radius: var(--radius);
   padding: 3px 9px;
   font-size: 12px;
   font-family: var(--sans);
   cursor: pointer;
+  transition: background var(--ease), color var(--ease), border-color var(--ease), box-shadow var(--ease);
 }
 button:hover { background: #2a2a31; }
 button:disabled { opacity: .5; cursor: not-allowed; }
-button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+/* Same ring as .sel-trigger below — this one keeps border-color too, since the default button has a real border to brighten. */
+button:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
 button.ghost { background: none; border: none; color: var(--text-dim); padding: 2px 5px; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; }
 button.ghost:hover { background: none; color: var(--text); }
 button.ghost.danger:hover { color: #e5534b; }
@@ -278,12 +298,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    items, and the ul has margin:0, so without making this container a flex the hint sticks to the first
    account row */
 .settings-accounts { display: flex; flex-direction: column; gap: 10px; }
-.account-row { display: flex; align-items: center; gap: 8px; padding: 5px 12px; border-left: 2px solid transparent; cursor: default; }
+.account-row { display: flex; align-items: center; gap: 8px; padding: 5px 12px; border-left: 2px solid transparent; cursor: default; transition: background var(--ease), border-color var(--ease); }
 .account-row:hover { background: var(--elevated); border-left-color: var(--accent); }
 .account-label { flex: 1; min-width: 0; font-size: 12px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.color-dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.color-dot { width: 8px; height: 8px; border-radius: var(--radius-sm); flex-shrink: 0; }
 .account-row .color-dot { width: 9px; height: 9px; }
-.badge { font-size: 9px; font-family: var(--mono); color: var(--text-dim); background: var(--elevated); border-radius: 2px; padding: 0 4px; flex-shrink: 0; }
+.badge { font-size: 9px; font-family: var(--mono); color: var(--text-dim); background: var(--elevated); border-radius: var(--radius-sm); padding: 0 4px; flex-shrink: 0; }
 .badge.ok { color: var(--ok); background: var(--ok-bg); }
 .login-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-faint); flex-shrink: 0; } /* grey, not logged in */
 .login-dot.on { background: var(--ok); } /* green, logged in */
@@ -312,7 +332,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .worktree-group:not(:last-child) { border-bottom: 1px solid var(--line-soft); }
 .worktree-repo { padding: 10px 12px 6px; font-size: 13.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .worktree-list { margin: 0 0 5px 22px; border-left: 2px solid var(--line); }
-.worktree-row { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 10px; }
+.worktree-row { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 10px; transition: background var(--ease); }
 .worktree-row:hover { background: var(--elevated); }
 .worktree-name { flex: 1; min-width: 0; font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .worktree-status { opacity: 0.6; font-style: normal; }
@@ -333,7 +353,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 
 /* ---------- tabs ---------- */
 .tabs { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; }
-.tab { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: 11.5px; color: var(--text-dim); border-right: 1px solid var(--line); cursor: pointer; white-space: nowrap; flex: none; }
+.tab { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: 11.5px; color: var(--text-dim); border-right: 1px solid var(--line); cursor: pointer; white-space: nowrap; flex: none; transition: background var(--ease), color var(--ease); }
 .tab.active { background: var(--bg); color: var(--text); }
 .tab.exited .tab-title { text-decoration: line-through; color: var(--text-faint); }
 .tab-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
@@ -467,7 +487,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* z-index: raises modals rendered inside the sidebar (AccountPanel) to group 7 so they are not covered by
    .terminal-wrap (position:relative, group 6), which comes later in the DOM. Common to every modal. */
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; }
-.modal { background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; padding: 20px; width: 460px; display: flex; flex-direction: column; gap: 12px; }
+.modal { background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 20px; width: 460px; display: flex; flex-direction: column; gap: 12px; }
 /* In a modal wrapped in a form (add and import account) the form is the only child, so the modal gap does
    not reach inside — the same vertical spacing is given to the form as well, keeping the input fields off
    the button row */
@@ -481,9 +501,9 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    it cannot be touched or submitted again. position:relative is given to this modal only — putting it on
    all of .modal would change the stacking context of every other modal too. */
 .modal.new-session { position: relative; }
-.modal .loading-overlay { background: var(--panel); border-radius: 6px; pointer-events: auto; z-index: 1; }
+.modal .loading-overlay { background: var(--panel); border-radius: var(--radius-lg); pointer-events: auto; z-index: 1; }
 .field label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
-.field input[type="text"], .field textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 6px; border-radius: 4px; }
+.field input[type="text"], .field textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 6px; border-radius: var(--radius); }
 /* A field entered line by line, like environment variables — monospaced so the values line up visibly, and resizable in height by the user */
 .field textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
 .field .modal-hint { margin-top: 4px; display: block; }
@@ -516,7 +536,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .settings-font-select .sel-option { content-visibility: auto; contain-intrinsic-size: auto 24px; }
 /* Slack Webhook settings */
 .slack-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.slack-url-input { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 5px 8px; border-radius: 4px; font-size: 13px; }
+.slack-url-input { flex: 1; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 5px 8px; border-radius: var(--radius); font-size: 13px; }
 /* the shortcut list (and the settings sidebar) */
 .shortcut-group { display: flex; flex-direction: column; gap: 4px; }
 .shortcut-group-title { font-size: 12px; color: var(--text-faint); margin-top: 2px; }
@@ -527,20 +547,23 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .shortcut-keys kbd {
   font-family: inherit; font-size: 11.5px; line-height: 1.4; color: var(--text);
   background: var(--elevated); border: 1px solid var(--line); border-bottom-width: 2px;
-  border-radius: 4px; padding: 1px 6px; white-space: nowrap;
+  border-radius: var(--radius-sm); padding: 1px 6px; white-space: nowrap;
 }
 
 /* the two-column restructuring of the settings modal */
 /* Proportional to the window with a floor and ceiling (clamp) so it does not become oversized on a large monitor. The body is flex and fills the remaining height. */
 .modal.settings { width: clamp(600px, 58vw, 940px); height: clamp(440px, 70vh, 800px); padding: 0; gap: 0; overflow: hidden; }
 .settings-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 26px; border-bottom: 1px solid var(--line); }
-.settings-close { background: none; border: none; color: var(--text-dim); font-size: 14px; line-height: 1; cursor: pointer; padding: 6px 10px; border-radius: 4px; }
+.settings-close { background: none; border: none; color: var(--text-dim); font-size: 14px; line-height: 1; cursor: pointer; padding: 6px 10px; border-radius: var(--radius); }
 .settings-close:hover { color: var(--text); background: var(--line-soft); }
 .settings-body { display: flex; flex: 1; min-height: 0; }
 .settings-nav { display: flex; flex-direction: column; gap: 2px; width: 200px; flex-shrink: 0; padding: 16px 12px; border-right: 1px solid var(--line); }
-.settings-nav-item { text-align: left; background: none; border: none; color: var(--text-dim); font-size: 13.5px; padding: 8px 12px; border-radius: 5px; cursor: pointer; }
+.settings-nav-item { text-align: left; background: none; border: none; color: var(--text-dim); font-size: 13.5px; padding: 8px 12px; border-radius: var(--radius); cursor: pointer; }
 .settings-nav-item:hover { background: var(--line-soft); color: var(--text); }
 .settings-nav-item.active { background: var(--line-soft); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+/* Same reasoning as .rail-btn.on:focus-visible above — box-shadow does not composite, so the current
+   settings tab needs both shadows restated explicitly or tabbing to it shows no ring. */
+.settings-nav-item.active:focus-visible { box-shadow: inset 2px 0 0 var(--accent), 0 0 0 2px var(--ring); }
 .settings-content { flex: 1; min-width: 0; padding: 24px 32px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
 .settings-slack { display: flex; flex-direction: column; gap: 8px; }
 .settings-worktree { display: flex; flex-direction: column; gap: 8px; }
@@ -666,10 +689,11 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 @keyframes sel-in { from { opacity: 0; transform: translateY(-2px); } }
 @media (prefers-reduced-motion: reduce) {
   .sel-menu { animation: none; }
-  .sel-caret, .sel-trigger { transition: none; }
+  .sel-caret, .sel-trigger, button, .tab, .bottom-tab, .fx-row, .sel-option, .context-menu-item,
+  .run-global-row, .account-row, .worktree-row, .session-row, .project-row, .lh-row { transition: none; }
 }
 .sel-group { padding: 7px 8px 3px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-faint); }
-.sel-option { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--radius); cursor: pointer; }
+.sel-option { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--radius); cursor: pointer; transition: background var(--ease); }
 .sel-option.cursor { background: var(--surface-hover); }
 .sel-option[aria-selected='true'] .sel-value { color: var(--accent); }
 .sel-check { flex: none; width: 14px; height: 14px; display: grid; place-items: center; color: var(--accent); opacity: 0; }
@@ -700,12 +724,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
   min-width: 180px;
   background: var(--panel);
   border: 1px solid var(--line-soft);
-  border-radius: 4px;
+  border-radius: var(--radius-lg);
   padding: 3px;
   box-shadow: 0 6px 18px rgba(0,0,0,.45);
   font-size: 12px;
 }
-.context-menu-item { padding: 5px 10px; border-radius: 3px; cursor: pointer; color: var(--text); }
+.context-menu-item { padding: 5px 10px; border-radius: var(--radius-sm); cursor: pointer; color: var(--text); transition: background var(--ease); }
 .context-menu-item.cursor { background: var(--elevated); }
 .context-menu-item.danger { color: #d3706b; }
 .context-menu-item.disabled { color: var(--text-faint); cursor: default; }
@@ -732,14 +756,14 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .history-sentinel { padding: 8px 12px; font-size: 10.5px; color: var(--text-faint); text-align: center; }
 /* the per-project list */
 .project-group { border-bottom: 1px solid var(--line-soft); }
-.project-row { display: flex; align-items: center; gap: 9px; padding: 10px 12px; cursor: pointer; user-select: none; }
+.project-row { display: flex; align-items: center; gap: 9px; padding: 10px 12px; cursor: pointer; user-select: none; transition: background var(--ease); }
 .project-row:hover { background: var(--elevated); }
 .project-chevron { flex-shrink: 0; width: 12px; font-size: 11px; color: var(--text-faint); }
 .project-name { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-meta { font-size: 10px; font-family: var(--mono); color: var(--text-faint); flex-shrink: 0; }
 /* An expanded session: bound by a vertical rail in the account colour, with the title dimmed — the density stays as it is */
 .session-sublist { list-style: none; margin: 0 0 5px 22px; padding: 0; border-left: 2px solid var(--line); }
-.session-row { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 10px; cursor: pointer; }
+.session-row { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 10px; cursor: pointer; transition: background var(--ease); }
 .session-row:hover { background: var(--elevated); }
 .session-row .entry-title { color: var(--text-dim); }
 .session-sublist .history-sentinel { padding-left: 10px; text-align: left; }
@@ -749,7 +773,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .detect-list { list-style: none; max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 .detect-row { display: flex; align-items: flex-start; gap: 8px; padding: 4px 2px; border-bottom: 1px solid var(--line-soft); }
 .detect-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.detect-main input[type="text"] { background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 4px 6px; border-radius: 4px; width: 100%; }
+.detect-main input[type="text"] { background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 4px 6px; border-radius: var(--radius); width: 100%; }
 .detect-path { font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* the Local History modal — list-style modals follow the .detect-list convention (body plus metadata within a row) */
 .modal.local-history { width: 560px; max-height: 80vh; }
@@ -774,7 +798,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    specificity it beat .rtp-item, so the picker's rows were squeezed into these 26px grid boxes with
    their icon and label drawn on top of each other. Found by reading the computed style off the live
    window: the sheet said flex, the element said grid. */
-.rcm-tools > button, .rcm-tools > .rtp-anchor > button { width: 26px; height: 26px; display: grid; place-items: center; background: transparent; border: 0; border-radius: 4px; color: var(--text-dim); font-size: 14px; padding: 0; cursor: pointer; }
+.rcm-tools > button, .rcm-tools > .rtp-anchor > button { width: 26px; height: 26px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); font-size: 14px; padding: 0; cursor: pointer; }
 .rcm-tools > button:hover:not(:disabled), .rcm-tools > .rtp-anchor > button:hover:not(:disabled) { background: var(--elevated); color: var(--text); }
 .rcm-tools > button:disabled, .rcm-tools > .rtp-anchor > button:disabled { color: var(--text-faint); cursor: default; }
 .rcm-tree { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
@@ -786,7 +810,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    headings and the rows match .rtp-group / .rtp-item exactly rather than each drifting to its own size. */
 .rcm-group { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--text-faint); padding: 8px 6px 2px; text-transform: uppercase; letter-spacing: .05em; }
 .rcm-group .fi { flex: none; }
-.rcm-item { flex: none; width: 100%; box-sizing: border-box; text-align: left; background: none; border: 0; border-left: 2px solid transparent; color: var(--text); font-size: 12px; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
+.rcm-item { flex: none; width: 100%; box-sizing: border-box; text-align: left; background: none; border: 0; border-left: 2px solid transparent; color: var(--text); font-size: 12px; padding: 4px 8px; border-radius: var(--radius); cursor: pointer; }
 .rcm-item:hover { background: var(--surface-hover); }
 .rcm-item.on { background: var(--elevated); border-left-color: var(--accent); }
 /* Auto-detected (seed) configurations — italic marks them as not yet a user configuration. Editing one
@@ -822,27 +846,27 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .rtp-anchor { position: relative; }
 /* Sized by its content between a floor and a ceiling, not pinned to one width — a kind label must
    never be clipped, and the list grows as later tasks add kinds. */
-.rtp-menu { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; min-width: 220px; width: max-content; max-width: 340px; max-height: 60vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; padding: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
+.rtp-menu { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; min-width: 220px; width: max-content; max-width: 340px; max-height: 60vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
 /* flex: none on every child. The menu is a flex column with a max-height, so without it the children
    shrink to fit instead of overflowing — the rows lose their own height and the text collides.
    overflow-y can only scroll what refuses to be squashed. */
-.rtp-search { flex: none; width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 5px 7px; border-radius: 4px; font-size: 12px; margin-bottom: 4px; }
+.rtp-search { flex: none; width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 5px 7px; border-radius: var(--radius); font-size: 12px; margin-bottom: 4px; }
 .rtp-group { flex: none; font-size: 10.5px; color: var(--text-faint); padding: 6px 6px 2px; text-transform: uppercase; letter-spacing: .05em; }
 /* width/box-sizing are explicit rather than left to the flex stretch: the menu is width: max-content,
    and a stretched child inside a max-content container resolves its width from the container that is
    itself being sized by the child. The hover fill is painted on that box, so when it came out short
    the highlight looked clipped. Stating the width breaks the loop. */
-.rtp-item { flex: none; display: flex; align-items: center; gap: 7px; width: 100%; box-sizing: border-box; white-space: nowrap; text-align: left; background: transparent; border: 0; border-radius: 4px; padding: 4px 8px; font-size: 12px; color: var(--text); cursor: pointer; }
+.rtp-item { flex: none; display: flex; align-items: center; gap: 7px; width: 100%; box-sizing: border-box; white-space: nowrap; text-align: left; background: transparent; border: 0; border-radius: var(--radius); padding: 4px 8px; font-size: 12px; color: var(--text); cursor: pointer; }
 .rtp-item .fi { flex: none; }
 .rtp-item:hover { background: var(--elevated); }
 /* RunConfigForm's "add optional field" menu — same shape as .rtp-menu but a flat list, so it gets its
    own (short) rule set rather than sharing .rtp-menu's grouped layout. */
 .rcm-add-option { position: relative; align-self: flex-start; }
-.rcm-add-option-menu { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; min-width: 160px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; padding: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
-.rcm-add-option-item { text-align: left; white-space: nowrap; padding: 5px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text); font-size: 12.5px; cursor: pointer; }
+.rcm-add-option-menu { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; min-width: 160px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
+.rcm-add-option-item { text-align: left; white-space: nowrap; padding: 5px 8px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text); font-size: 12.5px; cursor: pointer; }
 .rcm-add-option-item:hover { background: var(--elevated); }
 .lh-list { list-style: none; max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
-.lh-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 4px; cursor: pointer; }
+.lh-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: var(--radius); cursor: pointer; transition: background var(--ease), box-shadow var(--ease); }
 .lh-row:hover { background: var(--elevated); }
 .lh-row.selected { background: var(--line-soft); box-shadow: inset 2px 0 0 var(--accent); }
 .lh-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -948,8 +972,8 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .status-metrics { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
 .status-metric { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .metric-label { opacity: .9; }
-.usage-bar { width: 44px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .2); overflow: hidden; flex: none; }
-.usage-bar-fill { display: block; height: 100%; border-radius: 3px; background: var(--ok); transition: width .3s ease; }
+.usage-bar { width: 44px; height: 6px; border-radius: var(--radius-sm); background: rgba(255, 255, 255, .2); overflow: hidden; flex: none; }
+.usage-bar-fill { display: block; height: 100%; border-radius: var(--radius-sm); background: var(--ok); transition: width .3s ease; }
 .usage-bar-fill.warn { background: #ffd27a; } /* 70~84% */
 .usage-bar-fill.crit { background: #ef4444; } /* ≥85% */
 .usage-bar-fill.na { background: transparent; } /* no value */
@@ -958,7 +982,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 
 /* ---------- CLI not found screen ---------- */
 .cli-missing { margin: auto; max-width: 480px; text-align: center; display: flex; flex-direction: column; gap: 12px; }
-.cli-missing code { background: var(--elevated); color: var(--text); padding: 2px 6px; border-radius: 4px; }
+.cli-missing code { background: var(--elevated); color: var(--text); padding: 2px 6px; border-radius: var(--radius-sm); }
 
 /* ---------- file viewer ---------- */
 .file-truncated { padding: 4px 12px; font-size: 12px; color: #d7ba7d; background: #3a3018; flex: none; }
@@ -972,7 +996,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* Shift-click range selection extends the browser's text selection across rows and lays down a blue
    highlight — the tree is not a text selection target, so it is blocked */
 .fx-tree { flex: 1; min-height: 0; overflow: auto; font-size: 13px; user-select: none; }
-.fx-row { display: flex; align-items: center; gap: 4px; padding: 2px 8px; cursor: pointer; white-space: nowrap; }
+.fx-row { display: flex; align-items: center; gap: 4px; padding: 2px 8px; cursor: pointer; white-space: nowrap; transition: background var(--ease), box-shadow var(--ease); }
 .fx-row:hover { background: rgba(255, 255, 255, 0.06); }
 .fx-caret { flex: none; width: 12px; font-size: 10px; color: #9a9a9a; }
 .fx-name { overflow: hidden; text-overflow: ellipsis; }
@@ -1018,7 +1042,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--accent);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   padding: 1px 4px;
   font: inherit;
   user-select: text; /* On top of .fx-tree's user-select:none, the rename input has to allow text selection
@@ -1054,7 +1078,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .run-live-dot { width: 7px; height: 7px; border-radius: 50%; background: #3fb950; flex: none; box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
 .run-exit { color: var(--text-faint); }
 .run-panel-actions { display: flex; gap: 2px; }
-.run-panel-btn { width: 22px; height: 22px; display: grid; place-items: center; background: transparent; border: 0; border-radius: 4px; color: var(--text-dim); font-size: 12px; padding: 0; cursor: pointer; }
+.run-panel-btn { width: 22px; height: 22px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); font-size: 12px; padding: 0; cursor: pointer; }
 .run-panel-btn:hover { background: var(--elevated); color: var(--text); }
 .run-panel-btn.stop:hover { color: #e5534b; }
 .run-panel-host { flex: 1; min-height: 0; padding: 4px 6px; overflow: hidden; }
@@ -1064,9 +1088,16 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    calculations do not change. */
 .bottom-tabs { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 3px 8px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 11.5px; color: var(--text-dim); }
 .bottom-tab-list { display: flex; align-items: center; gap: 2px; min-width: 0; overflow-x: auto; }
-.bottom-tab { display: flex; align-items: center; gap: 4px; background: transparent; border: 0; border-radius: 4px; padding: 2px 8px; color: var(--text-dim); font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+.bottom-tab { display: flex; align-items: center; gap: 4px; background: transparent; border: 0; border-radius: var(--radius); padding: 2px 8px; color: var(--text-dim); font-size: 11.5px; cursor: pointer; white-space: nowrap; transition: background var(--ease), color var(--ease), box-shadow var(--ease); }
 .bottom-tab:hover { background: var(--elevated); color: var(--text); }
+/* Same ring as .sel-trigger below — no border to brighten on a ghost tab, so only the ring shows.
+   It is a <span role="tab" tabIndex={0}>, not a <button>, so it does not inherit the global button rule
+   and needs its own rule the way .run-btn and .icon-btn do. */
+.bottom-tab:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
 .bottom-tab.on { background: var(--elevated); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+/* Same reasoning as .rail-btn.on:focus-visible above — box-shadow does not composite, so the active
+   bottom tab needs both shadows restated explicitly or tabbing to it shows no ring. */
+.bottom-tab.on:focus-visible { box-shadow: inset 0 -2px 0 var(--accent), 0 0 0 2px var(--ring); }
 .bottom-tab-close { background: transparent; border: 0; color: inherit; opacity: .5; padding: 0 0 0 2px; font-size: 10px; cursor: pointer; }
 .bottom-tab-close:hover { opacity: 1; }
 .bottom-tab-new { background: transparent; border: 0; color: var(--text-dim); padding: 2px 6px; font-size: 12px; cursor: pointer; }
@@ -1087,7 +1118,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
   background: var(--elevated);
   border: 1px solid var(--line-soft);
   border-left: 3px solid var(--text-dim);
-  border-radius: 5px;
+  border-radius: var(--radius-lg);
   padding: 9px 8px 9px 11px;
   box-shadow: 0 6px 18px rgba(0, 0, 0, .45);
   animation: toast-in .12s ease-out;
@@ -1097,7 +1128,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .toast.info { border-left-color: var(--accent); }
 /* alert messages contain \n, so line breaks are preserved */
 .toast-msg { flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.5; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
-.toast-close { width: 20px; height: 20px; flex: none; border-radius: 4px; }
+.toast-close { width: 20px; height: 20px; flex: none; border-radius: var(--radius); }
 /* Shortcut editing — change and default buttons on the right of the row. Key labels are kept from wrapping. */
 /* The edit buttons hold a single icon each. With text buttons (Change, Default) in a narrow modal (600px)
    the description wrapped to three or four lines and the row grew to 88px — measured, then reduced to
@@ -1105,7 +1136,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .shortcut-actions { display: flex; gap: 4px; flex: none; align-self: center; }
 .shortcut-actions button {
   width: 22px; height: 20px; flex: none; display: grid; place-items: center;
-  font-size: 12px; line-height: 1; padding: 0; border-radius: 4px;
+  font-size: 12px; line-height: 1; padding: 0; border-radius: var(--radius);
 }
 .shortcut-actions button:disabled { opacity: .4; cursor: default; }
 /* Lets the description have the leftover width — otherwise the key and button columns squeeze it a character at a time */
@@ -1118,17 +1149,17 @@ kbd.shortcut-conflict { color: var(--fi-red); border-color: var(--fi-red); }
    minimising available.
    Its z-index is above modals (100) and toasts (200) — nothing comes in front while the gate is up. */
 .update-gate { position: fixed; inset: 34px 0 0 0; z-index: 500; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: 24px; }
-.update-gate-card { width: min(440px, 100%); display: flex; flex-direction: column; gap: 12px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: 6px; padding: 24px; }
+.update-gate-card { width: min(440px, 100%); display: flex; flex-direction: column; gap: 12px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 24px; }
 .update-gate-card h2 { font-size: 15px; font-weight: 600; color: var(--text); }
 .update-gate-body { font-size: 13px; line-height: 1.6; color: var(--text); }
 .update-gate-state { font-size: 12px; color: var(--text-dim); }
 .update-gate-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 .update-gate-actions button { white-space: nowrap; }
-.update-gate-primary { background: #2f9e6e; color: #fff; border: none; border-radius: 4px; padding: 5px 12px; cursor: pointer; }
+.update-gate-primary { background: #2f9e6e; color: #fff; border: none; border-radius: var(--radius); padding: 5px 12px; cursor: pointer; }
 .update-gate-primary:hover:not(:disabled) { background: #37b07b; }
 .update-gate-primary:disabled { opacity: .5; cursor: default; }
 /* Action buttons. flex: none plus nowrap so the label does not wrap however long the message gets. */
-.toast-action { flex: none; white-space: nowrap; align-self: center; background: #2f9e6e; color: #fff; border: none; border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+.toast-action { flex: none; white-space: nowrap; align-self: center; background: #2f9e6e; color: #fff; border: none; border-radius: var(--radius); padding: 4px 10px; font-size: 12px; cursor: pointer; }
 .toast-action:hover { background: #37b07b; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 /* the confirmation modal body — preserves paths and multi-line messages verbatim (the existing .confirm-text is excluded, being multi-line JSX) */
