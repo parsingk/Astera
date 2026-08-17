@@ -107,6 +107,27 @@ function createWindow(): BrowserWindow {
     // default y coordinate sits below our 32px titlebar and gets half-clipped, so this centers them
     // vertically. (button height 12px → (32-12)/2 = 10)
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : {}),
+    // Linux (measured under WSLg on Ubuntu 22.04): the packaged window hangs off the right edge of
+    // the screen, and clicks land above where things are actually drawn — you have to click above a
+    // button to hit it. Both clear up once the window is small; maximizing reproduces them, whether
+    // from win.maximize() below or by hand. Three things have been tried and none changed either
+    // symptom: frame:false (96a9f0a, reverted by 340c2da) — did remove the duplicate title bar Linux
+    // draws under titleBarStyle (a macOS/Windows-only option the WM ignores), but made maximize
+    // overshoot the screen so the window controls became unreachable, which is worse than a cosmetic
+    // duplicate bar; leaving titleBarStyle unset on Linux (0e45857, reverted by this commit) — no
+    // change to either symptom; and launching with --force-device-scale-factor=1, on the theory that
+    // the Windows host's 150% display scaling wasn't reaching the app — no change either. Three
+    // different window configs, identical symptoms, and correct behavior once the window is small,
+    // points at something outside this app's window options — most likely WSLg's compositing of large
+    // windows. Not yet reproduced on a real Linux desktop; that's the next step. Do not retry the
+    // three above. The duplicate title bar itself is separate and still open — most likely fixed by
+    // hiding this app's own window controls on Linux and letting the native bar be the only chrome.
+    // That half cannot ship on its own: this app's own close button is the only thing that runs the
+    // Linux quit confirmation (App.tsx's closeWindow raises confirmModal while sessions are
+    // running), while the WM's X goes straight to win.on('close') below, which returns immediately
+    // on Linux. Hiding the controls without first moving that confirmation into the main process —
+    // into win.on('close'), where the WM's close path actually lands — silently kills every running
+    // session, which is exactly the regression a217ac1 was written to prevent.
     webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false }
   })
   if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
@@ -128,10 +149,19 @@ function createWindow(): BrowserWindow {
     })
   }
 
-  // Closing the window (X) always minimizes to the tray — whether or not sessions exist. The only
-  // real quit path is the tray 'Quit' menu (app.quit): app.quit sets quitting=true in before-quit,
-  // which is what lets a close through this guard.
+  // Closing the window (X) minimizes to the tray on Windows and macOS — whether or not sessions
+  // exist. There the only real quit path is the tray 'Quit' menu (app.quit): app.quit sets
+  // quitting=true in before-quit, which is what lets a close through this guard.
+  //
+  // **Linux closes for real.** A tray icon cannot be relied on there — GNOME shows none without an
+  // AppIndicator extension — so hiding the window would leave the app running with nothing to click
+  // and no way out but killing the process. Letting the close through reaches the existing
+  // window-all-closed handler, which already calls app.quit() on every platform but macOS: this adds
+  // no new quit path, it stops blocking the one that was always there, and will-quit's session
+  // cleanup still runs. The cost is deliberate — rolling and the scheduler stop when the window
+  // closes on Linux, so minimizing is what keeps them alive.
   win.on('close', (e) => {
+    if (process.platform === 'linux') return
     if (!quitting) {
       e.preventDefault()
       win.hide()
@@ -174,7 +204,7 @@ function refreshTrayMenu(win: BrowserWindow): void {
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) app.quit()
 app.on('second-instance', () => {
-  if (!mainWindow) return
+  if (!mainWindow || mainWindow.isDestroyed()) return
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
@@ -184,7 +214,7 @@ app.on('second-instance', () => {
 // icon stays. Clicking that icon fires activate, but the default behavior alone won't bring the
 // hidden window back.
 app.on('activate', () => {
-  if (!mainWindow) return
+  if (!mainWindow || mainWindow.isDestroyed()) return
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
@@ -205,8 +235,9 @@ app.whenReady().then(async () => {
   // holds resolutions up to 1024 while APP_ICON is the 256px PNG. Overriding there would replace a
   // sharp icon with an upscaled one.
   if (process.platform === 'darwin' && !app.isPackaged) app.dock?.setIcon(APP_ICON)
-  // Launched from Finder on macOS, there's no login shell PATH. claude/codex/git/node are all looked
-  // up via PATH, so this must be restored before createCore (= StatusLineManager.init, account detection).
+  // Launched from Finder on macOS or from a .desktop entry on Linux, there's no login shell PATH.
+  // claude/codex/git/node are all looked up via PATH, so this must be restored before createCore
+  // (= StatusLineManager.init, account detection).
   await applyLoginPath((m) => console.log(m))
   core = await createCore(app.getPath('userData'), app.getLocale())
   const win = createWindow()
@@ -536,7 +567,11 @@ app.whenReady().then(async () => {
     },
     () => refreshTrayMenu(win) // rebuild Open/Quit in the new language after settings.setLang
   )
-  createTray(win)
+  // No tray on Linux. With close quitting for real there is nothing to hide, so the menu's
+  // Open/Quit would only repeat what the window and its close button already do — while tying the
+  // app to AppIndicator support the desktop may not have. refreshTrayMenu guards on `tray?.`, so the
+  // language-change callback wired just above stays correct with no tray to rebuild.
+  if (process.platform !== 'linux') createTray(win)
 
   // Start the history file watcher in the background once the window is shown (live updates). Not
   // awaited, so it does not block window creation.
@@ -704,8 +739,8 @@ app.on('before-quit', () => {
 })
 // win32 quits once every window is closed. macOS has the opposite convention, and it genuinely fits
 // this app — sessions keep running in the background, and rolling and Slack notifications need to
-// stay alive. The only real quit paths are the tray's 'Quit' and the mac app menu's Cmd+Q (both go
-// through app.quit).
+// stay alive. The only real quit paths are the tray's 'Quit', the mac app menu's Cmd+Q, and — on
+// Linux, where there's no tray to hide to — an ordinary window close (all three go through app.quit).
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })

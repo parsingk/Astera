@@ -554,7 +554,8 @@ export interface KeysApi {
   reset(actionId?: string): Promise<void>
 }
 
-/** App-level control. win.close minimises to the tray, so a real quit path is needed separately */
+/** App-level control. On win32/macOS win.close only minimises to the tray (on Linux it quits for
+ *  real), so a quit path that works everywhere is needed separately */
 export interface AppControlApi {
   quit(): void
 }

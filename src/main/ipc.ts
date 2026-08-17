@@ -1314,10 +1314,11 @@ export function registerIpc(
   // window chrome (not core — Electron window control)
   ipcMain.on('win.minimize', () => win.minimize())
   ipcMain.on('win.maximizeToggle', () => (win.isMaximized() ? win.unmaximize() : win.maximize()))
-  ipcMain.on('win.close', () => win.close()) // reuses the existing win.on('close') tray logic as-is
+  // win.on('close') decides what this means: hide to the tray on win32/macOS, quit for real on Linux
+  ipcMain.on('win.close', () => win.close())
   ipcMain.handle('win.isMaximized', () => win.isMaximized())
-  // 'Quit' in the forced-update gate. win.close minimises to the tray, so app.quit is the only real
-  // exit — before-quit sets quitting=true, which lets it through the window close guard.
+  // 'Quit' in the forced-update gate. On win32/macOS win.close only minimises to the tray, so app.quit
+  // is the only real exit — before-quit sets quitting=true, which lets it through the window close guard.
   ipcMain.on('app.quit', () => app.quit())
   win.on('maximize', () => send('win:maximized', true))
   win.on('unmaximize', () => send('win:maximized', false))

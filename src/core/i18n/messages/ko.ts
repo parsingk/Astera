@@ -86,6 +86,10 @@ export const ko = {
   'common.restore': '이전 크기로',
   'common.resizeSidebar': '사이드바 크기 조절',
   'common.or': '또는',
+  // App.tsx — Linux에서만 뜨는 창 닫기 확인. 거기서는 트레이로 숨는 대신 앱이 실제로 종료되고
+  // will-quit이 실행 중 세션을 모두 죽인다. 업데이트 설치와 같은 결과이므로 같은 동의를 받는다
+  'common.quitConfirm.title': '닫고 Astera 종료',
+  'common.quitConfirm.body': '창을 닫으면 Astera가 종료되고 진행 중인 세션 {count}개도 함께 종료됩니다. 계속할까요?',
   // index.ts — system tray context menu
   'common.trayOpen': '열기',
   'common.trayQuit': '종료',

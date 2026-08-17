@@ -4,23 +4,29 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Any branch, on demand. The triggers above cover main and PRs, so a feature branch gets no CI run
+  # of its own — and Linux support needs the matrix green on the branch before a PR exists.
+  workflow_dispatch:
 
-# Runs on both Windows and macOS because `npm ci` triggers `electron-builder install-app-deps`,
+# Runs on Windows, macOS and Linux because `npm ci` triggers `electron-builder install-app-deps`,
 # which compiles node-pty against the Electron ABI with a platform-specific toolchain (MSVC on
-# Windows, clang on macOS). A successful build on one platform proves nothing about the other.
-# If the build breaks here, it breaks in the release workflow too, so both platforms must be tested.
+# Windows, clang on macOS, gcc on Linux — node-pty ships no linux prebuild, so there it is a full
+# node-gyp build). A successful build on one platform proves nothing about the others. If the build
+# breaks here, it breaks in the release workflow too, so every platform must be tested.
 #
-# Running both also matters for the suite itself, not just the native build. The tests were written
-# on Windows and, until they were published, had never run anywhere else — so they had picked up
-# assumptions that only hold there: that os.tmpdir() is already a canonical path (it is not, with
+# Running all three also matters for the suite itself, not just the native build. The tests were
+# written on Windows and, until they were published, had never run anywhere else — so they had picked
+# up assumptions that only hold there: that os.tmpdir() is already a canonical path (it is not, with
 # 8.3 short names on the Windows runner and /var → /private/var on macOS), and that `\` is a path
-# separator. Both platforms have to run them or those assumptions come back.
+# separator. Linux is the newest of the three and the one the suite has run on least, and it is the
+# only case-sensitive filesystem of the three. Every platform has to run them or those assumptions
+# come back.
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
