@@ -300,6 +300,19 @@ describe('참조링크', () => {
   it('정의 블록 자체는 화면에 남지 않는다', () => {
     expect(parseMarkdown('[b]: https://c.com\n')).toEqual([])
   })
+  it('정의의 꺾쇠 목적지도 벗겨서 판정한다 — 허용 스킴이면 외부 링크', () => {
+    const md = '[a][b]\n\n[b]: <https://c.com> "t"\n'
+    const p = parseMarkdown(md)[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline[0] as Extract<MdInline, { k: 'link' }>
+    expect(link.href).toBe('https://c.com')
+    expect(link.title).toBe('t')
+    expect(classifyHref(link.href)).toEqual({ kind: 'external', url: 'https://c.com' })
+  })
+  it('정의의 꺾쇠 목적지가 허용되지 않는 스킴이면 링크를 만들지 않는다', () => {
+    const md = '[a][b]\n\n[b]: <file:///C:/secret.txt>\n'
+    const p = parseMarkdown(md)[0] as Extract<MdBlock, { k: 'para' }>
+    expect(p.inline.every((n) => n.k !== 'link')).toBe(true)
+  })
 })
 
 describe('자동링크의 암시 스킴', () => {
@@ -351,6 +364,9 @@ describe('링크 표시부의 자동링크가 목적지를 가리지 않는다',
     const link = p.inline[0] as Extract<MdInline, { k: 'link' }>
     expect(link.href).toBe('https://b.com')
     expect(link.children.every((n) => n.k !== 'link')).toBe(true)
+    // unwrapLinks 가 펼치면서 인접 텍스트도 합친다 — 'see '와 펼쳐진 'https://a.com'가
+    // 두 개의 형제 텍스트 노드로 남지 않고 하나로 합쳐진다(pushText 가 지키는 불변식과 동일)
+    expect(link.children).toEqual([{ k: 'text', text: 'see https://a.com' }])
   })
   it('표시부의 이메일 자동링크도 목적지를 가리지 않는다', () => {
     const p = parseMarkdown('[mail me@b.com](./local.md)\n')[0] as Extract<MdBlock, { k: 'para' }>
@@ -464,9 +480,26 @@ describe('프로토콜-상대 URL 과 UNC 경로는 링크가 되지 않는다',
   it('\\\\ 로 시작하면 null (UNC 경로)', () => {
     expect(classifyHref('\\\\host\\share')).toBe(null)
   })
+  it('구분자가 세 개 이상이어도 null', () => {
+    expect(classifyHref('///evil.example/x')).toBe(null)
+  })
+  it('슬래시·백슬래시가 섞여도 null — startsWith 두 번으로는 못 잡는 변형', () => {
+    expect(classifyHref('/\\evil.example/x')).toBe(null)
+    expect(classifyHref('\\/evil.example/x')).toBe(null)
+  })
+  it('맨 앞 제어문자로 이 검사를 피해가지 못한다', () => {
+    // trim() 은 공백만 지우고 제어문자는 그대로 둔다 — probe(스킴 판정과 같은 것)로 검사해야
+    // \u0001 처럼 앞에 붙은 제어문자를 뚫고 // 를 잡아낼 수 있다
+    expect(classifyHref('\u0001//evil.example/x')).toBe(null)
+  })
   it('Windows 드라이브 경로는 여전히 null', () => {
     expect(classifyHref('C:\\Windows')).toBe(null)
     expect(classifyHref('c:/x')).toBe(null)
+  })
+  it('맨 앞 구분자가 하나뿐이면 여전히 파일 경로다 — 지나치게 넓히지 않았다', () => {
+    expect(classifyHref('/etc/passwd')).toEqual({ kind: 'file', path: '/etc/passwd' })
+    expect(classifyHref('./a.md')).toEqual({ kind: 'file', path: './a.md' })
+    expect(classifyHref('docs/d.md')).toEqual({ kind: 'file', path: 'docs/d.md' })
   })
 })
 

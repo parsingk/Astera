@@ -148,15 +148,20 @@ export function classifyHref(raw: string): MdHref {
   const trimmed = raw.trim()
   if (!trimmed) return null
   if (trimmed.startsWith('#')) return { kind: 'anchor', id: trimmed.slice(1) }
-  // 프로토콜-상대 URL(`//host/x`)과 UNC 경로(`\\host\share`)는 허용 스킴이 있는 외부 링크도,
-  // 프로젝트 안의 상대경로도 아니다 — 링크로 만들지 않는다. 오늘은 task 7 의 resolveRelative 가
-  // `//evil.example/x` 를 프로젝트 경로로 우연히 무해화하지만, 그건 분리 방식의 우연이지 결정이
-  // 아니다. Windows 에서 `\\host\share` 는 UNC 경로라 fs·셸에 그대로 건네지면 SMB 접속이 된다.
-  // `C:\Windows`·`c:/x` 는 그대로 null 이 나온다 — 드라이브 문자가 SCHEME 정규식에 "c" 스킴으로
-  // 잡히고 허용 목록에 없어서 걸러진다(이 검사보다 아래, 원래부터 그렇다).
-  if (trimmed.startsWith('//') || trimmed.startsWith('\\\\')) return null
   // 스킴 판정 전에만 제어문자를 지운다. 통과한 URL 은 원문 그대로 넘긴다
   const probe = trimmed.replace(/[\u0000-\u0020]/g, '')
+  // 프로토콜-상대 URL(`//host/x`)·UNC 경로(`\\host\share`)·구분자가 섞인 변형(`/\host/x`,
+  // `\/host/x`)은 모두 허용 스킴이 있는 외부 링크도, 프로젝트 안의 상대경로도 아니다 — 링크로
+  // 만들지 않는다. 반드시 probe(제어문자를 지운 것)로 검사한다 — trimmed 로 검사하면
+  // `\u0001//evil.example/x` 처럼 맨 앞에 제어문자 하나를 붙이는 것만으로 피해간다(trim() 은
+  // 공백만 지우고 제어문자는 그대로 둔다 — 리뷰에서 확인). `[/\\]{2,}` 로 슬래시·백슬래시가
+  // 섞여도 두 개 이상 이어지면 잡는다 — 정상적인 상대경로는 구분자 두 개로 시작하지 않는다.
+  // 맨 앞 구분자 하나(`/etc/passwd` 같은)는 여전히 file 이다. 오늘은 task 7 의 resolveRelative 가
+  // `//evil.example/x` 를 프로젝트 경로로 우연히 무해화하지만, 그건 분리 방식의 우연이지 결정이
+  // 아니다. Windows 에서 UNC 경로는 fs·셸에 그대로 건네지면 SMB 접속이 된다. `C:\Windows`·
+  // `c:/x` 는 그대로 null 이 나온다 — 드라이브 문자가 SCHEME 정규식에 "c" 스킴으로 잡히고
+  // 허용 목록에 없어서 걸러진다(이 검사와 무관하게 원래부터 그렇다).
+  if (/^[/\\]{2,}/.test(probe)) return null
   const m = SCHEME.exec(probe)
   if (!m) return { kind: 'file', path: trimmed }
   return ALLOWED_SCHEMES.has(m[1].toLowerCase() + ':') ? { kind: 'external', url: trimmed } : null
@@ -241,12 +246,21 @@ function autolinkHref(raw: string): string {
  *  `[mail me@b.com](url)`) inlineOf 가 그 부분을 link 로 만들어 버린다 — Link 노드 안의
  *  표시부·목적지가 둘 다 URL 노드로 나오는 트리 모양(실제 덤프로 확인) 때문에 노드 차원에서는
  *  막을 수 없고, MdInline 을 만든 뒤 펼쳐야 한다. 안 그러면 `<a>` 안에 `<a>` 가 들어가는 잘못된
- *  구조가 되고, GitHub 은 이런 경우 안쪽을 평문으로 그린다 — 여기서도 그렇게 맞춘다. */
+ *  구조가 되고, GitHub 은 이런 경우 안쪽을 평문으로 그린다 — 여기서도 그렇게 맞춘다.
+ *
+ *  펼치면서 인접한 텍스트 노드도 합친다 — `pushText` 가 파일 전체에서 지키는 "인접 텍스트는
+ *  합친다"는 불변식을 여기서만 깨면 안 된다. `[see https://a.com](url)` 를 펼치면 `"see "` 와
+ *  펼쳐진 `"https://a.com"` 이 나란히 남는데, 합치지 않으면 화면은 똑같이 나오지만 이 파일이
+ *  다른 곳에서 늘 지키는 규칙에 조용한 예외가 생긴다. */
 function unwrapLinks(nodes: MdInline[]): MdInline[] {
   const out: MdInline[] = []
   for (const n of nodes) {
-    if (n.k === 'link') out.push(...unwrapLinks(n.children))
-    else out.push(n)
+    const flat = n.k === 'link' ? unwrapLinks(n.children) : [n]
+    for (const f of flat) {
+      const last = out[out.length - 1]
+      if (f.k === 'text' && last && last.k === 'text') last.text += f.text
+      else out.push(f)
+    }
   }
   return out
 }
