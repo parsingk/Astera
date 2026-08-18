@@ -24,9 +24,20 @@ const KIND_LABEL: Record<Exclude<JobEvent['kind'], 'message'>, MessageKey> = {
 }
 
 /** 시각의 표시 형태 — 날짜는 버리고 시:분:초만 남긴다. 한 Run 이 여러 날에 걸치는 경우가 드물고,
- *  좁은 칸에서 날짜는 전부 같은 값이라 자리만 먹는다. Intl 을 쓰지 않는 이유는 이 값이 정렬 기준
- *  그대로여야 하기 때문이다 — 로케일 형식이 섞이면 눈으로 순서를 따라갈 수 없다. */
-const timeOf = (at: string): string => at.slice(11, 19)
+ *  좁은 칸에서 날짜는 전부 같은 값이라 자리만 먹는다.
+ *
+ *  **문자열을 자르지 않는다.** `JobEvent.at` 은 ISO-Z(UTC)이므로 `at.slice(11, 19)` 는 UTC 를
+ *  그린다 — KST 사용자에게는 아홉 시간 이른 시각이고, 워커가 방금 한 일이 오늘 아침에 일어난 것처럼
+ *  보인다. Date 로 파싱해 지역 시각으로 옮기는 것이 이 값의 유일한 올바른 표시다. 정렬은 core 의
+ *  ISO 문자열이 하므로(timeline.ts) 표시를 바꾸는 것이 순서에 영향을 주지 않는다.
+ *
+ *  형식은 Intl 이 아니라 손으로 맞춘다 — 로케일마다 12시간제와 구분자가 달라지면 한 화면에서 눈으로
+ *  순서를 따라가기 어렵고, 이 칸은 tabular-nums 로 자리를 맞춰 둔 고정폭 칸이다. */
+const timeOf = (at: string): string => {
+  const d = new Date(at)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
 
 /** 한 Run 의 기록. 읽기 전용이다 — Gate 를 답하는 것은 Slack 제어면의 몫이다.
  *
