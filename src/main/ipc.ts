@@ -2,6 +2,7 @@ import { ipcMain, dialog, app, shell, type BrowserWindow } from 'electron'
 import { promises as fs, existsSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import type { Core } from './core'
 import type { RollingCoordinator } from './rolling'
 import type { CodexRollingCoordinator } from './codexRolling'
@@ -15,7 +16,7 @@ import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
 import { copyTranscript } from '../core/rolling/transcript'
 import { OrchestrationStore } from './orchestration/store'
-import { OrchCoordinator, LAUNCH_FORBIDDEN } from './orchestration/coordinator'
+import { OrchCoordinator, LAUNCH_FORBIDDEN, buildReviewSpecFile } from './orchestration/coordinator'
 import {
   handleExit as orchHandleExit,
   startOrchServer,
@@ -23,7 +24,13 @@ import {
   type OrchServerDeps
 } from './orchestration/server'
 import { TaskValidator, ValidatorBusyError } from './orchestration/validator'
-import { applyValidationResult, blockForValidation } from '../core/orchestration/state'
+import {
+  applyValidationResult,
+  blockForValidation,
+  blockForReview,
+  openReviewDispatch
+} from '../core/orchestration/state'
+import { pickReviewer } from '../core/orchestration/reviewer'
 import { sameSnapshot, snapshotFor, runsForProject } from '../core/orchestration/view'
 import { timelineFor } from '../core/orchestration/timeline'
 import { repoPathOf } from '../core/worktrees/repo'
@@ -573,12 +580,21 @@ export function registerIpc(
         output: (cwd) => core.run.recentOutput(cwd).slice(-4000)
       },
       onSettled: async ({ taskId, exitCode, output }) => {
-        const r = applyValidationResult(store.get(), { taskId, exitCode, output }, new Date().toISOString())
+        const r = applyValidationResult(
+          store.get(),
+          // 서버가 applyWorkerDone 에 넘기는 것과 같은 값이다 — 이 배선에는 startReview 가 있다.
+          { taskId, exitCode, output, canReview: true },
+          new Date().toISOString()
+        )
         if (!r.ok) {
           orchLog(`validation result rejected task=${taskId}: ${r.error}`)
           return
         }
         await deps.setState(r.state)
+        // 검증이 통과했고 검토가 걸려 있으면 여기서 이어진다. 서버의 worker_done 분기가 검증이 걸리지
+        // 않은 Task 에 대해 같은 일을 한다. cwd 는 넘기지 않는다 — startReview 가 구현 Dispatch 에서
+        // 얻는다(그 Dispatch 를 provider 때문에 어차피 찾는다).
+        if (r.value.status === 'reviewing') void startReview({ taskId })
       },
       onCannotRun: async ({ taskId, reason }) => {
         const r = blockForValidation(store.get(), { taskId, reason }, new Date().toISOString())
@@ -591,6 +607,119 @@ export function registerIpc(
       log: orchLog
     })
     orchValidator = validator
+
+    /** 검토 세션 하나를 띄운다. 실패하는 모든 경로가 Gate 로 간다 — 조용히 통과시키면 "검토됨"과
+     *  "검토 못 함"이 화면에서 같아진다. */
+    const startReview = async ({ taskId }: { taskId: string }): Promise<void> => {
+      const gate = async (reason: string): Promise<void> => {
+        const r = blockForReview(store.get(), { taskId, reason }, new Date().toISOString())
+        if (!r.ok) {
+          orchLog(`could not block task=${taskId} for review: ${r.error}`)
+          return
+        }
+        await deps.setState(r.state)
+      }
+      try {
+        const st = store.get()
+        const task = st.tasks.find((t) => t.id === taskId)
+        // 큐를 거치지 않고 곧바로 오지만, setState 뒤에 불리므로 그 사이 task-update 가 상태를
+        // 옮겼을 수 있다. validator.start 가 같은 이유로 'skip' 을 돌려준다.
+        if (task?.status !== 'reviewing') return
+        // 구현 Dispatch — 그 provider 를 피해야 하고, cwd 도 여기서 얻는다(그래서 이 함수는 taskId
+        // 하나만 받는다: 호출자가 cwd 를 따로 구하면 두 경로가 갈라진다)
+        const impl = st.dispatches
+          .filter((d) => d.taskId === taskId && !d.review)
+          .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+          .at(-1)
+        if (!impl) return void (await gate(`no implementation dispatch for task ${taskId}`))
+        const cwd = impl.cwd
+        const accounts = core.accounts.list()
+        const loggedIn = new Set<string>()
+        for (const account of accounts) {
+          if (await core.accounts.loginStatus(account.id)) loggedIn.add(account.id)
+        }
+        const picked = pickReviewer({ implProvider: impl.provider, accounts, loggedInIds: loggedIn })
+        if (!picked)
+          return void (await gate(`no logged-in account on a provider other than ${impl.provider}`))
+        // PTY 를 띄울 경로는 가드를 통과해야 한다 — validator.start 와 같은 이유(Dispatch.cwd 는
+        // 오케스트레이션 소켓에서 온 값이고 정규화는 검증이 아니다, ADR-003).
+        await assertAllowedPath(cwd)
+        // Dispatch 를 먼저 커밋한다 — 세션을 띄우기 전에 id 가 있어야 spec 파일의 보고 문장에
+        // 그것을 실을 수 있다. worker-start 가 같은 순서다(server.ts: openDispatch 커밋 → startWorker).
+        const opened = openReviewDispatch(
+          st,
+          {
+            taskId,
+            provider: picked.provider,
+            accountId: picked.accountId,
+            // 세션 id 는 아직 없다. worker-start 가 같은 자리에서 쓰는 자리표시자와 같은 모양이다
+            // (server.ts:415 의 `pending:${randomBytes(4).toString('hex')}`) — 그 값은 어떤 세션도
+            // 가리키지 않으며 jobTaskOf 의 isKnownSession 이 걸러 낸다.
+            sessionId: `pending:${randomBytes(4).toString('hex')}`,
+            cwd,
+            specPath: ''
+          },
+          new Date().toISOString()
+        )
+        if (!opened.ok) return void (await gate(opened.error))
+        await deps.setState(opened.state)
+        const spec = buildReviewSpecFile({
+          title: task.title,
+          spec: task.spec,
+          taskId,
+          dispatchId: opened.value.id,
+          implReport: task.result,
+          filesModified: task.filesModified,
+          validated: !!task.validateConfigId
+        })
+        let started: { sessionId: string; cwd: string; specPath: string }
+        try {
+          // 검토자는 구현자가 일한 트리에서 돈다 — worktree 'current' + runCwd = 그 cwd.
+          started = await coordinator.startWorker({
+            dispatchId: opened.value.id,
+            taskId,
+            title: `Review: ${task.title}`,
+            spec,
+            provider: picked.provider,
+            accountId: picked.accountId,
+            runCwd: cwd,
+            worktree: 'current'
+          })
+        } catch (e) {
+          // **롤백이 없으면 Gate 가 열리지 않는다.** createGate 는 열린 Dispatch 가 있는 Task 를
+          // 거절하므로(state.ts), 방금 커밋한 검토 Dispatch 를 그대로 두고 gate() 를 부르면 그것도
+          // 실패하고 Task 는 reviewing 에 열린 Dispatch 와 함께 갇힌다 — 꺼내 줄 것이 아무것도 없다.
+          // worker-start 가 같은 자리에서 같은 일을 한다(server.ts 의 실패 롤백): Dispatch 를 배열에서
+          // 아예 지운다. 다만 Task 의 상태는 되돌리지 않는다 — openReviewDispatch 는 상태를 옮기지
+          // 않았으므로 reviewing 그대로가 맞고, 그 자리에서 Gate 가 blocked 로 데려간다.
+          const latest = store.get()
+          await deps.setState({
+            ...latest,
+            dispatches: latest.dispatches.filter((d) => d.id !== opened.value.id)
+          })
+          return void (await gate(
+            `failed to start the reviewer: ${e instanceof Error ? e.message : String(e)}`
+          ))
+        }
+        // 실제 세션 id 와 spec 경로로 Dispatch 를 메운다. **여기서도 최신 상태를 다시 읽는다** —
+        // 코디네이터를 기다리는 동안 그 Dispatch 에 다른 변경이 내려앉았을 수 있고, 넘겨줄 것은
+        // 이 세 필드뿐이다(worker-start 의 같은 주석 참고).
+        const latest = store.get()
+        await deps.setState({
+          ...latest,
+          dispatches: latest.dispatches.map((d) =>
+            d.id === opened.value.id
+              ? { ...d, sessionId: started.sessionId, cwd: started.cwd, specPath: started.specPath }
+              : d
+          )
+        })
+        orchLog(
+          `review started task=${taskId} provider=${picked.provider} dispatch=${opened.value.id}`
+        )
+      } catch (err) {
+        await gate(String(err))
+      }
+    }
 
     const deps: OrchServerDeps = {
       getState: () => store.get(),
@@ -711,6 +840,13 @@ export function registerIpc(
         return configs.map((c) => ({ id: c.id, name: c.name, type: c.type }))
       },
       startValidation: ({ taskId, cwd }) => validator.enqueue({ taskId, cwd }),
+      // 검토를 시작한다. 검증과 달리 **세션을 띄운다** — 그래서 provider·계정을 고르고, 검토
+      // Dispatch 를 커밋하고, coordinator.startWorker 를 부르는 세 걸음이다. 동기 서명이므로
+      // 비동기 작업은 안에서 흘려보낸다(startValidation 이 큐에 넣기만 하는 것과 같은 이유:
+      // 기다리면 worker_done 응답이 그만큼 늦어지고 워커 세션이 그 자리에서 멈춘다).
+      startReview: ({ taskId }) => {
+        void startReview({ taskId })
+      },
       log: orchLog
     }
 
