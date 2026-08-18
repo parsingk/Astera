@@ -1095,6 +1095,23 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .file-editor .cm-editor { height: 100%; }
 .file-editor .cm-scroller { font-family: Consolas, 'Courier New', monospace; font-size: 13px; }
 
+/* ---------- markdown split (toolbar + editor/preview split) ---------- */
+.md-split-host { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.md-toolbar { display: flex; justify-content: flex-end; gap: 2px; padding: 3px 6px;
+  border-bottom: 1px solid var(--line-soft); flex: 0 0 auto; }
+.md-toolbar button { background: none; border: 1px solid transparent; border-radius: 3px;
+  color: inherit; opacity: .55; cursor: pointer; padding: 1px 7px; font-size: 13px; line-height: 1.4; }
+.md-toolbar button:hover { opacity: .85; }
+.md-toolbar button.active { opacity: 1; border-color: var(--line-soft); background: rgba(255, 255, 255, .07); }
+.md-split { flex: 1; min-height: 0; display: flex; }
+/* hidden 속성이 display:flex 에 덮이지 않게 못 박는다 — 이것이 에디터를 언마운트하지 않고 숨기는 방법이다 */
+.md-pane[hidden] { display: none; }
+.md-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.md-pane-editor { flex: 1; }
+.md-pane-preview { flex: 1; }
+.md-resizer { flex: 0 0 4px; cursor: col-resize; background: var(--line-soft); }
+.md-resizer:hover { background: var(--accent); }
+
 /* ---------- markdown preview ---------- */
 .md-preview { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 16px 20px; outline: none;
   /* A long unbroken URL or inline code span must wrap inside prose rather than push .md-preview itself

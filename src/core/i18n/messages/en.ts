@@ -114,6 +114,10 @@ export const en: Record<keyof typeof ko, string> = {
   'files.markdown.image.failed': 'Could not load the image',
   'files.markdown.image.remote': 'Remote images are not shown — click to open in the browser',
   'files.markdown.renderError': 'This document could not be rendered',
+  // MarkdownSplit.tsx — the three mode toolbar buttons
+  'files.markdown.mode.editor': 'Editor only',
+  'files.markdown.mode.split': 'Editor and preview',
+  'files.markdown.mode.preview': 'Preview only',
   'explorer.closeConfirm.body': 'There are unsaved changes. Close the explorer anyway?',
   'run.resizeConsole': 'Resize console',
   'run.start.failed': 'Run failed: {detail}',

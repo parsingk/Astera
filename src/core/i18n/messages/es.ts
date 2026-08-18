@@ -139,6 +139,10 @@ export const es: Catalog = {
   'files.markdown.image.failed': 'No se pudo cargar la imagen',
   'files.markdown.image.remote': 'Las imágenes remotas no se muestran — haga clic para abrirlas en el navegador',
   'files.markdown.renderError': 'No se pudo mostrar este documento',
+  // MarkdownSplit.tsx — los tres botones de modo de la barra de herramientas
+  'files.markdown.mode.editor': 'Solo editor',
+  'files.markdown.mode.split': 'Editor y vista previa',
+  'files.markdown.mode.preview': 'Solo vista previa',
   // App.tsx — explorer close confirmation
   'explorer.closeConfirm.body': 'Hay cambios sin guardar. ¿Cerrar el explorador igualmente?',
   // App.tsx — run console resizer, start failure
