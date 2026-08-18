@@ -2248,6 +2248,7 @@ export default function App(): React.JSX.Element {
             aria-label={t('common.resizeSidebar')}
             onPointerDown={(e) => {
               e.preventDefault()
+              const startId = e.pointerId
               const startX = e.clientX
               const startW = sidebarRef.current?.getBoundingClientRect().width ?? sidebarWidth
               let latestX = startX
@@ -2257,11 +2258,17 @@ export default function App(): React.JSX.Element {
                 rafId = 0
                 if (sidebarRef.current) sidebarRef.current.style.width = `${clamp(latestX)}px`
               }
+              // MarkdownSplit 의 md-resizer 와 같은 이유로 pointerId 를 확인한다 — window 리스너는
+              // 이 드래그를 시작한 포인터가 아닌 다른 포인터(예: 화면 다른 곳의 두 번째 터치 접점)의
+              // pointermove/pointerup/pointercancel 도 그냥 받는다. 그 이벤트를 걸러내지 않으면 무관한
+              // 포인터가 드래그를 조기에 끝내거나(onUp) 폭을 엉뚱한 좌표로 끌고 간다(onMove).
               const onMove = (ev: PointerEvent): void => {
+                if (ev.pointerId !== startId) return
                 latestX = ev.clientX
                 if (!rafId) rafId = requestAnimationFrame(apply)
               }
-              const onUp = (): void => {
+              const onUp = (ev: PointerEvent): void => {
+                if (ev.pointerId !== startId) return
                 if (rafId) cancelAnimationFrame(rafId)
                 window.removeEventListener('pointermove', onMove)
                 window.removeEventListener('pointerup', onUp)
