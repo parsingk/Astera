@@ -40,6 +40,7 @@ import { isSubPath, rebasePath } from '../../core/files/ops'
 import { parentDir } from '../../core/files/paths'
 import type { UndoEntry } from '../../core/files/undo'
 import * as sessionBus from './lib/sessionBus'
+import * as sticky from './lib/stickyProject'
 import { toast } from './lib/toast'
 import { confirmModal, isConfirmOpen } from './lib/confirm'
 import { worktreeErrorMessage } from './lib/worktreeErrors'
@@ -974,7 +975,7 @@ export default function App(): React.JSX.Element {
       selectWorkbenchTabRef.current(id)
       return
     }
-    const root = explorerRootRef.current
+    const root = currentProjectRef.current
     if (!root) return // 트리가 없는 상태에서는 파일을 열 수 없다 — 열 수단 자체가 트리다
     const title = path.split(/[\\/]/).pop() || path
     setFileTabs((prev) => [...prev, { id, path, title, projectRoot: root }])
@@ -1465,32 +1466,61 @@ export default function App(): React.JSX.Element {
   /** Run 콘솔의 자리. 리사이저가 --run-panel-h 를 이 노드에 직접 쓴다 */
   const runHostRef = useRef<HTMLDivElement>(null)
 
-  /** 트리 루트는 활성 탭을 따른다 — 활성 탭이 파일이면 그 파일의 프로젝트, 세션이면 그 세션의 cwd.
-   *  탭이 없으면 null이다. 보고 있는 것과 트리가 항상 일치하는 것이 이 규칙의 목적이다.
+  /** 활성 탭이 말하는 루트 — 파일 탭이면 그 파일의 프로젝트, 세션 탭이면 그 세션의 cwd.
+   *  탭이 없으면 null이고, 그 자리는 아래에서 stickyRoot 가 채운다.
    *
    *  히스토리와 worktree 목록에 있던 '탐색기에서 열기'는 이 규칙과 양립하지 않아 없앴다. 그 버튼들은
    *  루트를 핀으로 고정하려 했는데, 활성 탭이 언제나 이기므로 다른 프로젝트를 지정해도 화면은 보고
-   *  있던 프로젝트를 계속 보여줬다 — 아무 일도 하지 않는 버튼이었다. */
-  const explorerRoot =
+   *  있던 프로젝트를 계속 보여줬다 — 아무 일도 하지 않는 버튼이었다. **그 규칙은 그대로다** —
+   *  stickyRoot 는 활성 탭을 이기지 않고 빈 자리만 채우므로 같은 모순이 생기지 않는다. */
+  const activeTabRoot =
     (activeTab?.kind === 'file'
       ? fileTabs.find((t) => t.id === activeTabId)?.projectRoot
       : sessions.find((s) => s.id === activeTab?.id)?.cwd) ?? null
+
+  /** 탭이 하나도 없을 때의 현재 프로젝트. 마운트에서 한 번 복원하고, 그 뒤로는 활성 탭이 갱신한다.
+   *  영속 규칙은 lib/stickyProject.ts 에 있다(렌더러에 테스트가 없어 App.tsx 안에서는 확인할 수 없다). */
+  const [stickyRoot, setStickyRoot] = useState<string | null>(null)
+  useEffect(() => {
+    const stored = sticky.read()
+    if (!stored) return
+    // 저장된 값을 그대로 채택하지 않는다. 폴더가 사라졌거나 이름이 바뀌었을 수 있고, main 의 경로
+    // 가드가 더는 허용하지 않을 수도 있다 — 메시지를 하나도 남기지 않은 세션의 프로젝트는
+    // provider 의 JSONL 이 없어 history 에 없고, 따라서 knownProjectPaths() 에도 없다. files.list 는
+    // 탐색기가 이 루트로 어차피 부르는 호출이라, 존재와 허용을 한 번에 답한다. 거부되면 키를 버린다
+    // — 그러지 않으면 사이드바의 네 가지가 켤 때마다 '허용되지 않은 경로입니다'를 받는다.
+    void window.api.files.list(stored).then(
+      // 복원이 도착하기 전에 활성 탭이 정한 값이 있으면 그쪽이 이긴다 (탭이 있는 채로 시작한 경우)
+      () => setStickyRoot((prev) => prev ?? stored),
+      () => sticky.clear()
+    )
+  }, [])
+  // 활성 탭이 루트를 말할 때마다 그것이 다음의 기억이 된다. 탭이 사라져도(null) 지우지 않는 것이
+  // 이 슬라이스의 전부다
+  useEffect(() => {
+    if (!activeTabRoot) return
+    setStickyRoot(activeTabRoot)
+    sticky.write(activeTabRoot)
+  }, [activeTabRoot])
+
+  /** 사이드바와 실행 구성이 '어느 프로젝트인가'로 읽는 값 — 활성 탭이 이기고, 없으면 마지막 기억. */
+  const currentProject = activeTabRoot ?? stickyRoot
 
   // Whether RunConfigManager is actually on screen — gates both its render below and the shortcut
   // suppression right after it. Computed from the same three things that gate the render (open flag,
   // project, context) so switching projects or losing the context drops the suppression in the same
   // render as the unmount, not only when the dialog's own onClose fires.
-  const runManagerVisible = runManagerOpen && !!explorerRoot && !!runContext
+  const runManagerVisible = runManagerOpen && !!currentProject && !!runContext
   // OR-ed onto the value the other modals already set above — runManagerVisible depends on
-  // explorerRoot, which is not computed yet at that point in the component.
+  // currentProject, which is not computed yet at that point in the component.
   modalOpenRef.current = modalOpenRef.current || runManagerVisible
 
-  // Mirrors explorerRoot into a ref — avoids a stale closure in the run:status subscription effect
-  const explorerRootRef = useRef(explorerRoot)
-  explorerRootRef.current = explorerRoot
+  // Mirrors currentProject into a ref — avoids a stale closure in the run:status subscription effect
+  const currentProjectRef = useRef(currentProject)
+  currentProjectRef.current = currentProject
 
   /** bottomRoot 를 ref 로 비춘다 — 비동기 흐름 중에 루트가 바뀌었는지 보는 데 쓴다(openTerminal).
-   *  explorerRootRef 로는 안 된다: 프로젝트가 없을 때 그쪽은 null 이고 bottomRoot 는 홈이다. */
+   *  currentProjectRef 로는 안 된다: 프로젝트가 없을 때 그쪽은 null 이고 bottomRoot 는 홈이다. */
   const bottomRootRef = useRef<string | null>(null)
 
   // 탭 줄은 이제 페인마다 있고 그 내용은 트리(leaf.tabIds)가 정한다 — 전역 한 줄과 그 폴백은 사라졌다.
@@ -1565,9 +1595,9 @@ export default function App(): React.JSX.Element {
    *  그래야 탭이 하나도 없을 때도 터미널을 열 수 있다. 홈에서는 Run 탭이 없다(runAvailable):
    *  실행 구성은 프로젝트 단위이고, 홈의 파일 목록으로 시드를 감지하면 남의 홈 package.json 스크립트를
    *  실행 구성으로 제안하게 된다. main 의 경로 가드도 터미널에만 홈을 열어 준다(assertTerminalPath). */
-  const bottomRoot = explorerRoot ?? homeDir
+  const bottomRoot = currentProject ?? homeDir
   bottomRootRef.current = bottomRoot
-  const runAvailable = explorerRoot !== null
+  const runAvailable = currentProject !== null
   /** 아래쪽 패널에 실제로 넘길 탭. Run 탭이 없는데 bottomTab 이 'run' 에 남아 있으면 본문이 비므로,
    *  그때는 터미널로 떨어뜨린다. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
    *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. */
@@ -1577,14 +1607,14 @@ export default function App(): React.JSX.Element {
 
   // Loads that project's run configurations and active run whenever the host pane or the root changes
   useEffect(() => {
-    // 여기는 explorerRoot 그대로다 — 실행 구성은 프로젝트 단위이므로 홈에서는 읽을 것이 없다.
-    if (!explorerRoot) return
+    // 여기는 currentProject 그대로다 — 실행 구성은 프로젝트 단위이므로 홈에서는 읽을 것이 없다.
+    if (!currentProject) return
     let cancelled = false
     // 거부를 삼키지 않고 상태를 비운다. 이 호출은 예전에 탐색기가 열려 있을 때만 돌았고 지금은
     // 프로젝트가 있으면 항상 돈다 — 그래서 가드가 거부하는 루트(사라진 워크트리의 파일 탭 등)가
     // 처리되지 않은 거부로 콘솔에 튀어나왔다. 실패하면 이전 프로젝트의 구성이 남는 것이 더 나쁘므로
     // 비운다: 남겨 두면 그 목록의 ▶ 가 다른 프로젝트를 실행한다.
-    void window.api.run.list(explorerRoot).then((r) => {
+    void window.api.run.list(currentProject).then((r) => {
       if (cancelled) return
       setRunConfigs(r.configs)
       setRunActive(r.active)
@@ -1602,7 +1632,7 @@ export default function App(): React.JSX.Element {
       setRunContext(null)
     })
     return () => { cancelled = true }
-  }, [explorerRoot])
+  }, [currentProject])
 
   // Turning the setting off makes the rail button — the only control that can close the Jobs view —
   // disappear along with it (it is gated on the same orchEnabled), so a view left open past that point
@@ -1635,15 +1665,15 @@ export default function App(): React.JSX.Element {
     // is no project to ask about and no response is coming, so an empty snapshot goes in instead —
     // that reaches the empty state, where null would leave an unexplained blank sidebar for as long as
     // the view stays open.
-    setOrchSnapshot(explorerRoot === null ? { runs: [] } : null)
+    setOrchSnapshot(currentProject === null ? { runs: [] } : null)
     // sidebarOpen belongs in this guard as much as jobsOpen does: collapsing the sidebar unmounts the
     // whole <aside> and JobsView with it, but jobsOpen stays true, so without this no unwatch is sent
     // and main goes on folding a snapshot on every orchestration write — inside the awaited setState,
     // i.e. in the CLI request's critical path — and pushing it to a component that is not mounted.
     // The fourth teardown trigger, after unmount, orch.unwatch and the orchEnabled effect above.
-    if (!jobsOpen || !sidebarOpen || !explorerRoot) return
+    if (!jobsOpen || !sidebarOpen || !currentProject) return
     let cancelled = false
-    void window.api.orch.list(explorerRoot).then((snapshot) => {
+    void window.api.orch.list(currentProject).then((snapshot) => {
       if (cancelled) return
       setOrchSnapshot(snapshot)
     })
@@ -1655,12 +1685,12 @@ export default function App(): React.JSX.Element {
       off()
       void window.api.orch.unwatch()
     }
-  }, [jobsOpen, sidebarOpen, explorerRoot])
+  }, [jobsOpen, sidebarOpen, currentProject])
 
   // When the project changes, that project's terminal list is read again — main holds them per project,
   // so another project's terminals stay alive and are simply not shown here
   useEffect(() => {
-    // bottomRoot 로 읽는다 — 프로젝트가 없으면 홈의 터미널 목록이다. explorerRoot 로 걸러 두면
+    // bottomRoot 로 읽는다 — 프로젝트가 없으면 홈의 터미널 목록이다. currentProject 로 걸러 두면
     // 프로젝트 없이 연 터미널이 목록에 잡히지 않아 탭이 빈 껍데기가 된다.
     if (!bottomRoot) {
       setTerminals([])
@@ -1689,7 +1719,7 @@ export default function App(): React.JSX.Element {
     const off = window.api.on('run:status', (s) => {
       void window.api.run.listActive().then(setActiveRuns)
       // If the run belongs to the current workbench project, the local state is updated too
-      if (explorerRootRef.current && s.projectPath === explorerRootRef.current) setRunActive(s)
+      if (currentProjectRef.current && s.projectPath === currentProjectRef.current) setRunActive(s)
     })
     return off
   }, [])
@@ -1714,7 +1744,7 @@ export default function App(): React.JSX.Element {
     ])
     const norm = (p: string): string => p.replace(/\\/g, '/').toLowerCase()
     const off = window.api.on('files:changed', (c) => {
-      const root = explorerRootRef.current
+      const root = currentProjectRef.current
       if (!root) return
       const base = c.path.split(/[\\/]/).pop() ?? ''
       if (!SEED_FILES.has(base) || norm(parentDir(c.path)) !== norm(root)) return
@@ -1731,8 +1761,8 @@ export default function App(): React.JSX.Element {
   }, [])
 
   const runStart = (): void => {
-    if (!explorerRoot || !runSelectedId) return
-    const root = explorerRoot
+    if (!currentProject || !runSelectedId) return
+    const root = currentProject
     void window.api.run.start(root, runSelectedId).then(
       async (st) => {
         setRunActive(st)
@@ -1742,11 +1772,11 @@ export default function App(): React.JSX.Element {
         // setRunPanelOpen(true) that causes the mount — the same reason as in openTerminal.
         if (terminals.length > 0) {
           const list = await window.api.terminal.list(root).catch(() => terminals)
-          // If the project changes while this is in flight, the result is discarded — explorerRootRef is
+          // If the project changes while this is in flight, the result is discarded — currentProjectRef is
           // the same idiom the other async callbacks in this file use against stale closures. Without
           // discarding, the screen shows the new project while the panel holds the previous project's
           // terminal tabs, and input goes to that shell.
-          if (explorerRootRef.current !== root) return
+          if (currentProjectRef.current !== root) return
           setTerminals(list)
         }
         setRunPanelOpen(true)
@@ -1755,12 +1785,12 @@ export default function App(): React.JSX.Element {
     )
   }
   const runStop = (): void => {
-    if (explorerRoot) void window.api.run.stop(explorerRoot)
+    if (currentProject) void window.api.run.stop(currentProject)
   }
   const runDeleteConfig = (id: string): void => {
-    if (!explorerRoot) return
-    void window.api.run.deleteConfig(explorerRoot, id).then(() => {
-      void window.api.run.list(explorerRoot).then((r) => {
+    if (!currentProject) return
+    void window.api.run.deleteConfig(currentProject, id).then(() => {
+      void window.api.run.list(currentProject).then((r) => {
         setRunConfigs(r.configs)
         setRunContext(r.context)
         setRunSelectedId((prev) => (r.configs.some((c) => c.id === prev) ? prev : r.configs[0]?.id ?? null))
@@ -1775,10 +1805,10 @@ export default function App(): React.JSX.Element {
    *  gate rejects, and the dialog has to take a refused new configuration back out of its tree rather
    *  than leave a row nothing is behind. */
   const runManagerSave = (config: RunConfig): Promise<boolean> => {
-    if (!explorerRoot) return Promise.resolve(false)
-    return window.api.run.saveConfig(explorerRoot, config).then(
+    if (!currentProject) return Promise.resolve(false)
+    return window.api.run.saveConfig(currentProject, config).then(
       () => {
-        void window.api.run.list(explorerRoot).then((r) => {
+        void window.api.run.list(currentProject).then((r) => {
           setRunConfigs(r.configs)
           setRunContext(r.context)
           // The same reconciliation as the three siblings above. It is not optional here either:
@@ -1818,7 +1848,7 @@ export default function App(): React.JSX.Element {
   // produce a runtime reference error (both are created when the component body runs, and the actual
   // call happens later on a click, by which time openTerminal's closure over newTerminal is initialised).
   const newTerminal = async (): Promise<void> => {
-    // bottomRoot — openTerminal 과 같은 경로여야 한다. explorerRoot 로 두면 프로젝트가 없을 때
+    // bottomRoot — openTerminal 과 같은 경로여야 한다. currentProject 로 두면 프로젝트가 없을 때
     // 여기서 조용히 빠지고, 패널만 열린 채 터미널이 만들어지지 않는다.
     if (!bottomRoot) return
     try {
@@ -1847,7 +1877,7 @@ export default function App(): React.JSX.Element {
       // If the root changes while this is in flight, the result is discarded — the list effect has
       // already set the new root's list, so overwriting with the old result would leave the screen on
       // the new root while the active tab is the previous one's terminal, sending input to that shell.
-      // bottomRootRef, not explorerRootRef: with no project those two differ (null vs the home
+      // bottomRootRef, not currentProjectRef: with no project those two differ (null vs the home
       // directory), so comparing against the project ref bailed on every call.
       if (bottomRootRef.current !== root) return
       setTerminals(list)
@@ -1944,7 +1974,7 @@ export default function App(): React.JSX.Element {
         update={update}
         runningCount={runningCount}
         runSlot={
-          explorerRoot ? (
+          currentProject ? (
             <div className="tb-run">
               <RunToolbar
                 configs={runConfigs}
@@ -2087,7 +2117,7 @@ export default function App(): React.JSX.Element {
           <aside className="sidebar" ref={sidebarRef} style={{ width: sidebarWidth }}>
             {sidebarPane === 'explorer' ? (
               <FileExplorer
-                root={explorerRoot}
+                root={currentProject}
                 onOpenFile={openFile}
                 onClose={() => void closeExplorer()}
                 stateRef={explorerTreesRef}
@@ -2764,16 +2794,16 @@ export default function App(): React.JSX.Element {
           })()}
         />
       )}
-      {/* Re-checks explorerRoot/runContext directly (rather than just runManagerVisible) so TypeScript
+      {/* Re-checks currentProject/runContext directly (rather than just runManagerVisible) so TypeScript
           narrows them to non-null here, instead of an assertion */}
-      {runManagerOpen && explorerRoot && runContext && (
+      {runManagerOpen && currentProject && runContext && (
         <RunConfigManager
           configs={runConfigs}
           context={runContext}
           isSpringBoot={runIsSpringBoot}
           isPythonProject={runIsPythonProject}
           hasDockerfile={runHasDockerfile}
-          projectPath={explorerRoot}
+          projectPath={currentProject}
           onSave={runManagerSave}
           onDelete={runDeleteConfig}
           onClose={() => setRunManagerOpen(false)}
