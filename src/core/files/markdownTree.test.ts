@@ -771,9 +771,33 @@ describe('블록 경계를 넘는 HTML 컨테이너', () => {
     expect(details.children.map((c) => c.k)).toEqual(['para'])
   })
   it('위험 태그 컨테이너는 안의 블록까지 사라진다', () => {
+    // `<script>` 는 CommonMark type-1 이라 빈 줄에서 끊기지 않고 `</script>` 가 나올 때까지
+    // 통째로 **하나의** HTMLBlock 이 된다(실제 트리 덤프로 확인) — 그래서 이 테스트는 이 파일의
+    // blocksOf 를 손대기 전에도 이미 통과했고(RED 단계에서 확인됨), 스택을 전혀 거치지 않는다.
+    // 아래 두 테스트가 실제로 스택을 거치는 경계-넘김을 지킨다(리뷰 Finding 3).
     const b = parseMarkdown('<script>\n\nvar x = 1\n\n</script>\n\nafter\n')
     expect(b.map((x) => x.k)).toEqual(['para'])
     expect(plain((b[0] as Extract<MdBlock, { k: 'para' }>).inline)).toBe('after')
+  })
+  it('DROP_TAGS 컨테이너는 빈 줄로 끊긴 채로도 안의 블록까지 버린다', () => {
+    // <iframe>/<form> 은 CommonMark type-1 목록(script·pre·style)에 없어 실제로 빈 줄에서
+    // 끊긴다(실제 트리 덤프로 확인: `<iframe>`·`var x = 1`·`</iframe>` 이 각각 별도의
+    // HTMLBlock·Paragraph·HTMLBlock 노드) — 그래서 이 테스트는 위 테스트와 달리 문서 수준 스택을
+    // 실제로 거친다.
+    const b = parseMarkdown('<iframe>\n\nvar x = 1\n\n</iframe>\n\nafter\n')
+    expect(b.map((x) => x.k)).toEqual(['para'])
+    expect(plain((b[0] as Extract<MdBlock, { k: 'para' }>).inline)).toBe('after')
+  })
+  it('인용문 안에서 여러 줄에 걸친 drop 컨테이너도 계속줄의 `>` 표시에 속지 않는다', () => {
+    // 인용문 안에서 여러 줄에 걸친 HTMLBlock 은 계속줄의 `>` 표시가 lezer 트리 안에서 이 노드
+    // 자신의 자식(QuoteMark)으로 남고 그 범위가 노드의 원문 슬라이스 안에 그대로 끼어든다(실제
+    // 트리 덤프로 확인: `HTMLBlock 2-40` 의 자식으로 `QuoteMark 11-12`, `QuoteMark 30-31`).
+    // `</script` 뒤에 `>` 를 일부러 빼먹어, 끼어든 `>` 가 그 자리를 대신 채우는지 본다 — htmlBlockSrc
+    // 없이 통짜 슬라이스했다면 그 `>` 에서 닫는 태그가 완성돼 drop 프레임이 일찍 닫히고
+    // `alert(2)` 가 새어나갔다(리뷰 Finding 1 — 고치기 전 실측으로 확인됨)
+    const b = parseMarkdown('> <script>\n> alert(1)</script\n> alert(2)\n')
+    const quote = b[0] as Extract<MdBlock, { k: 'quote' }>
+    expect(quote.children).toEqual([])
   })
   it('모르는 컨테이너는 벗기고 안의 블록은 형제로 올라온다', () => {
     const b = parseMarkdown('<picture>\n\n<img src="a.png">\n\n</picture>\n')

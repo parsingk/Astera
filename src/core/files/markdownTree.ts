@@ -511,7 +511,11 @@ export function lexHtml(src: string): HtmlToken[] {
  *  것 — weaveHtml 이 파싱된 형제 노드와 lexHtml 의 결과를 한 줄로 엮을 때 쓴다. */
 type FoldToken = HtmlToken | { t: 'node'; node: MdInline }
 
-/** 토큰 목록을 인라인 노드로 접는다. 스택으로 짝을 맞추고, 남은 것은 끝에서 자동으로 닫는다 */
+/** 토큰 목록을 인라인 노드로 접는다. 스택으로 짝을 맞추고, 남은 것은 끝에서 자동으로 닫는다.
+ *
+ *  `blocksOf`(문서 수준 HTML 컨테이너 스택)가 이 함수의 스택·dropIdx 크로스오버 방지 로직을
+ *  그대로 본떴다 — 한쪽을 고치면 다른 쪽도 봐야 한다. 지금은 손으로 맞춰야 하는 두 번째 지점이다
+ *  (dropIdx 다음). */
 function foldInline(tokens: FoldToken[]): MdInline[] {
   const root: MdInline[] = []
   const stack: { tag: string; policy: TagPolicy; attrs: MdAttrs; children: MdInline[] }[] = []
@@ -815,6 +819,25 @@ function listStart(list: SyntaxNode, ctx: Ctx): number {
   return Number.isFinite(n) ? n : 1
 }
 
+/** HTMLBlock 노드의 "논리적" 원문. 인용문 안에서 여러 줄에 걸친 HTMLBlock 은 계속줄의 `>`
+ *  표시가 lezer 트리 안에서 이 노드의 **자식**(QuoteMark)으로 남고, 그 범위가 노드 자신의
+ *  from-to 안에 그대로 포함된다(실제 트리 덤프로 확인: `HTMLBlock 2-40` 의 자식으로
+ *  `QuoteMark 11-12`, `QuoteMark 30-31`). 그래서 통짜로 `ctx.text.slice(c.from, c.to)` 하면
+ *  끼어든 `>` 가 살아남는다 — `</script` 뒤의 `>` 를 찾다가 다음 줄 표시의 `>` 에서 먼저
+ *  멈춰버려 drop 프레임이 일찍 닫히고 그 뒤 내용이 새는 사고로 이어진다(리뷰 Finding 1). inlineOf
+ *  가 자식 노드가 차지한 자리를 건너뛰고 그 사이 틈만 잇는 것과 같은 이유로, 여기서도 자식
+ *  (표시)이 차지한 자리를 건너뛰고 틈만 이어 붙인다. 자식이 없는(인용문 밖) 흔한 경우에는
+ *  결과가 통짜 슬라이스와 같다. */
+function htmlBlockSrc(node: SyntaxNode, ctx: Ctx): string {
+  let out = ''
+  let pos = node.from
+  for (let c = node.firstChild; c; c = c.nextSibling) {
+    out += ctx.text.slice(pos, c.from)
+    pos = c.to
+  }
+  return out + ctx.text.slice(pos, node.to)
+}
+
 /** 한 노드의 자식들을 블록 목록으로 만든다. Document·Blockquote·ListItem 이 모두 이것을 쓴다 —
  *  그리고 그 재귀 호출마다 아래 스택을 새로 만든다. 그래서 인용문·목록 항목 안에서 연 HTML
  *  컨테이너는 그 자신에게만 갇히고 바깥으로 새지 않는다.
@@ -828,7 +851,17 @@ function blocksOf(parent: SyntaxNode, ctx: Ctx): MdBlock[] {
   const stack: { tag: string; policy: TagPolicy; attrs: MdAttrs; line: number; children: MdBlock[] }[] = []
   /** 지금 블록이 담길 곳 */
   const sink = (): MdBlock[] => (stack.length ? stack[stack.length - 1].children : root)
-  /** drop 컨테이너 안이면 아무것도 담지 않는다 */
+  /** drop 컨테이너 안이면 아무것도 담지 않는다.
+   *
+   *  **이 스택이 못 보는 것**: 이 담김 판정은 lezer 가 `HTMLBlock` 으로 보고해 준 컨테이너에만
+   *  미친다. `<script>` 가 자체종결(`<script/>`)로 한 줄에 홀로 오면 type-1/type-7 어느 시작
+   *  조건도 만족하지 못해 `Paragraph`(그 안의 `HTMLTag`) 로 도착한다(실제 트리 덤프로 확인) —
+   *  즉 이 블록 스택에 전혀 안 걸리고, drop 여닫힘이 인라인 쪽 `foldInline` 안에서 그 문단
+   *  하나로 끝나 버린다. 그래서 `<script/>\n\nalert(1)\n\n</script>` 같은 문서는 `alert(1)` 이
+   *  문단으로 그대로 보인다(리뷰 Finding 2 — 확인됨, 이 fix round 에서는 의도적으로 고치지
+   *  않는다: 인라인 fold 가 못 닫은 drop 프레임을 블록 수준까지 보고하는 계층 간 계약이 필요한데
+   *  그 설계를 fix round 안에서 하지 않기로 함). `<script>` 처럼 태그가 온전히 `HTMLBlock` 으로
+   *  도착하는 흔한 철자만 이 스택의 보호를 받는다 — 모든 철자 변형을 다 막아준다고 과신하지 말 것. */
   const dropped = (): boolean => stack.some((f) => f.policy === 'drop')
   const put = (block: MdBlock): void => {
     if (!dropped()) sink().push(block)
@@ -854,7 +887,7 @@ function blocksOf(parent: SyntaxNode, ctx: Ctx): MdBlock[] {
     const line = lineAt(ctx.starts, c.from)
 
     if (c.name === 'HTMLBlock') {
-      for (const tok of lexHtml(ctx.text.slice(c.from, c.to))) {
+      for (const tok of lexHtml(htmlBlockSrc(c, ctx))) {
         if (tok.t === 'text') {
           // 태그 사이의 평문. 블록 문맥이므로 문단으로 담는다
           const text = tok.text.trim()
@@ -898,9 +931,13 @@ function blocksOf(parent: SyntaxNode, ctx: Ctx): MdBlock[] {
       continue
     }
     switch (c.name) {
-      case 'Paragraph':
-        put({ k: 'para', line, inline: inlineOf(c, ctx) })
+      case 'Paragraph': {
+        // 문단 전체가 drop 태그 하나였으면 inlineOf 가 빈 배열을 준다(예: `<script/>` 홀로 한
+        // 문단). 그대로 담으면 task 7 이 빈 <p> 를 그린다 — 아무것도 없던 것처럼 건너뛴다
+        const inline = inlineOf(c, ctx)
+        if (inline.length > 0) put({ k: 'para', line, inline })
         break
+      }
       case 'FencedCode':
         put({ k: 'code', line, lang: fenceLang(c, ctx), text: codeText(c, ctx) })
         break
