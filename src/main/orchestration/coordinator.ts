@@ -132,6 +132,76 @@ For files you changed, give the paths through --files-modified.
 `
 }
 
+/** 검토 워커의 spec 파일. buildSpecFile 의 형제이고, 다른 것은 두 가지다 — 판정 기준이 원래 Task 의
+ *  요구라는 것, 그리고 **코드를 바꾸지 말라는 것.**
+ *
+ *  검토자가 고치기 시작하면 그것은 구현이고 그 변경은 아무도 검증하지 않는다: 검증은 이미 지나갔고
+ *  검토자를 검토하는 층은 없다. */
+export function buildReviewSpecFile(a: {
+  title: string
+  spec: string
+  taskId: string
+  dispatchId: string
+  implReport?: string
+  filesModified?: string[]
+  /** 검증 구성이 걸려 있었고 통과했는가. 검토자가 컴파일·테스트를 다시 판정하지 않게 하는 근거다 */
+  validated: boolean
+}): string {
+  return `# Review: ${a.title}
+
+You are reviewing work another agent finished. **Do not change any code.** Read, judge, report.
+
+## The requirement this work has to satisfy
+
+${a.spec}
+
+## What the implementer reported
+
+${a.implReport?.trim() || '(nothing was reported)'}
+
+## Files the implementer says it changed
+
+${a.filesModified?.length ? a.filesModified.map((f) => `- ${f}`).join('\n') : '(none reported)'}
+
+## What is already decided — do not re-judge it
+
+${
+  a.validated
+    ? 'The project\'s own build/test configuration was run against this work and it passed. Whether the code compiles and the tests run is settled.'
+    : 'No automated validation was attached to this task, so nothing has been proven about the build or the tests. Say so in your report if that matters for the requirement, but do not run the build yourself — that is not what you were started for.'
+}
+
+## The one question you answer
+
+**Was the requirement above satisfied?** Not "is this the code I would have written", not "could this be
+structured better" — those are not grounds for rejecting the work, because a rejection sends this task
+back through the retry flow and a third rejection breaks the circuit and stops the whole dependency
+subtree behind it.
+
+Reject when the work does not do what was asked: a missing case, a requirement addressed in name only, a
+change that contradicts the spec. Say concretely what is missing, because your body text is the only
+record the next attempt gets.
+
+---
+## Reporting obligation (assembled by the app — do not delete)
+
+When you have made your judgement you must run the following exactly once. Without a report the task
+stays in \`reviewing\` and nothing moves.
+
+If \`astera\` in the commands below comes back as command not found, call it as \`"$ASTERA_CLI"\`
+instead — that is the absolute path to the same program, and the variable is always present in this
+session.
+
+  astera send --type worker_done \\
+    --task-id ${a.taskId} --dispatch-id ${a.dispatchId} \\
+    --outcome succeeded --subject "<one-line verdict>" --body - <<'EOF'
+  <why the requirement is satisfied>
+  EOF
+
+Use \`--outcome failed\` instead when it is not satisfied, and put what is missing in the body.
+`
+}
+
 export class OrchCoordinator {
   private readonly idleWaitTimeoutMs: number
 
