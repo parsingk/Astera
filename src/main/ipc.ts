@@ -819,9 +819,17 @@ export function registerIpc(
     if (!mime) throw new Error(t(core.lang, 'files.error.unsupportedImageType'))
     // isPathWithin (inside assertAllowedPath) only resolves '..' lexically — it does not follow
     // symlinks, but fs.open below does. A hostile repo can ship an image-named symlink pointing at
-    // ~/.ssh/id_rsa or /etc/passwd, so the real target is re-checked here. A symlink that stays inside
-    // an allowed root (e.g. a shared asset linked into a project) keeps working; only one that escapes
-    // every root is refused.
+    // ~/.ssh/id_rsa or /etc/passwd, so the real target is re-checked here — against the single root
+    // that assertAllowedPath already matched lexically, not against every allowed root again. A
+    // symlink that resolves inside that same root (e.g. a shared asset linked into a project) keeps
+    // working; one that resolves into a *different* allowed root, or outside all of them, is refused
+    // too. That is deliberately narrower than "allowed by any root": the lexical check above already
+    // committed to one root for this path, and a resolved target landing in some other root is exactly
+    // the kind of lexical/real disagreement this re-check exists to catch, so it fails closed rather
+    // than asking isPathWithin a second time against the full list. The one real thing this costs is a
+    // symlink that legitimately crosses two allowed roots — a git worktree, or a session cwd nested
+    // below its own project root — where the read now has to go through whichever root actually owns
+    // the file instead of whichever one happened to match lexically first.
     // The re-check compares two realpath'd values, not a realpath'd file against a lexical root: on
     // macOS /tmp, /var and /etc are themselves symlinks, and a relocated Windows user folder can be a
     // junction — comparing `real` against the lexical `root` would then reject every in-root image
