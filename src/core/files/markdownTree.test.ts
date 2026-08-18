@@ -708,3 +708,82 @@ describe('인라인 HTML', () => {
     expect(p.inline[0]).toEqual({ k: 'text', text: 'a  b' })
   })
 })
+
+describe('블록 경계를 넘는 HTML 컨테이너', () => {
+  // 이 저장소 README.md 의 실제 모양이다. 여기가 깨지면 README 프리뷰가 통째로 어긋난다
+  const readmeShape = [
+    '<div align="center">',
+    '',
+    '<img src="assets/banner.jpg" width="640" alt="Astera" />',
+    '',
+    '**Keep Claude Code working.**',
+    '',
+    '</div>',
+    '',
+    'After.',
+    ''
+  ].join('\n')
+
+  it('여는 태그와 닫는 태그가 다른 블록에 있어도 하나로 묶인다', () => {
+    const b = parseMarkdown(readmeShape)
+    expect(b.map((x) => x.k)).toEqual(['htmlEl', 'para'])
+    const div = b[0] as Extract<MdBlock, { k: 'htmlEl' }>
+    expect(div).toMatchObject({ tag: 'div', attrs: { style: { textAlign: 'center' } }, line: 0 })
+  })
+  it('컨테이너 안의 마크다운이 정상 블록으로 자식에 들어간다', () => {
+    // 배너 줄은 자체종결(`/>`)이다. lezer 의 HTML 블록 타입7 정규식(node_modules/@lezer/markdown
+    // HTMLBlockStyle[4])은 `\s*>`로 끝나 `/>` 를 매치하지 못한다(실측: 슬래시 없는
+    // `<img ... >` 는 매치해 HTMLBlock 이 되지만, `<img ... />` 는 매치하지 않는다) — `img` 는
+    // 타입6 목록에도 없으므로 이 줄은 HTMLBlock 이 아니라 인라인 HTML 을 담은 Paragraph 로
+    // 남는다. img 는 여전히 htmlEl 이 되지만, 이미 Task 4 가 담당하는 인라인 경로를 타고 그
+    // 문단의 inline 안에 들어간다 — 블록 수준 htmlEl 이 되지 않는다.
+    const div = parseMarkdown(readmeShape)[0] as Extract<MdBlock, { k: 'htmlEl' }>
+    expect(div.children.map((c) => c.k)).toEqual(['para', 'para'])
+    const bannerPara = div.children[0] as Extract<MdBlock, { k: 'para' }>
+    const img = bannerPara.inline.find((n) => n.k === 'htmlEl') as Extract<MdInline, { k: 'htmlEl' }>
+    expect(img).toMatchObject({
+      tag: 'img',
+      attrs: { src: 'assets/banner.jpg', alt: 'Astera', style: { width: '640px' } }
+    })
+    const p = div.children[1] as Extract<MdBlock, { k: 'para' }>
+    expect(p.inline[0].k).toBe('strong')
+  })
+  it('컨테이너 뒤의 블록은 형제로 남는다', () => {
+    const b = parseMarkdown(readmeShape)
+    expect(plain((b[1] as Extract<MdBlock, { k: 'para' }>).inline)).toBe('After.')
+  })
+  it('닫히지 않은 컨테이너는 문서 끝에서 자동으로 닫힌다', () => {
+    const b = parseMarkdown('<div>\n\ninside\n')
+    expect(b.map((x) => x.k)).toEqual(['htmlEl'])
+    const div = b[0] as Extract<MdBlock, { k: 'htmlEl' }>
+    expect(div.children.map((c) => c.k)).toEqual(['para'])
+  })
+  it('스택에 없는 닫는 태그는 무시된다', () => {
+    const b = parseMarkdown('a\n\n</div>\n\nb\n')
+    expect(b.map((x) => x.k)).toEqual(['para', 'para'])
+  })
+  it('중첩 컨테이너도 묶인다', () => {
+    const b = parseMarkdown('<div>\n\n<details>\n\ninner\n\n</details>\n\n</div>\n')
+    const div = b[0] as Extract<MdBlock, { k: 'htmlEl' }>
+    expect(div.tag).toBe('div')
+    const details = div.children[0] as Extract<MdBlock, { k: 'htmlEl' }>
+    expect(details.tag).toBe('details')
+    expect(details.children.map((c) => c.k)).toEqual(['para'])
+  })
+  it('위험 태그 컨테이너는 안의 블록까지 사라진다', () => {
+    const b = parseMarkdown('<script>\n\nvar x = 1\n\n</script>\n\nafter\n')
+    expect(b.map((x) => x.k)).toEqual(['para'])
+    expect(plain((b[0] as Extract<MdBlock, { k: 'para' }>).inline)).toBe('after')
+  })
+  it('모르는 컨테이너는 벗기고 안의 블록은 형제로 올라온다', () => {
+    const b = parseMarkdown('<picture>\n\n<img src="a.png">\n\n</picture>\n')
+    expect(b.map((x) => x.k)).toEqual(['htmlEl'])
+    expect((b[0] as Extract<MdBlock, { k: 'htmlEl' }>).tag).toBe('img')
+  })
+  it('한 블록 안에서 열고 닫는 컨테이너도 그대로 묶인다', () => {
+    const b = parseMarkdown('<div align="center">text</div>\n')
+    const div = b[0] as Extract<MdBlock, { k: 'htmlEl' }>
+    expect(div.tag).toBe('div')
+    expect(div.children.map((c) => c.k)).toEqual(['para'])
+  })
+})

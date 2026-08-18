@@ -74,6 +74,7 @@ export type MdBlock =
   | { k: 'quote'; line: number; children: MdBlock[] }
   | { k: 'hr'; line: number }
   | { k: 'table'; line: number; align: MdAlign[]; header: MdInline[][]; rows: MdInline[][][] }
+  | { k: 'htmlEl'; line: number; tag: string; attrs: MdAttrs; children: MdBlock[] }
 
 /** 문서를 한 번 훑어 만드는 줄 시작 offset 표. lineAt 이 이진탐색한다 */
 function lineStarts(text: string): number[] {
@@ -814,37 +815,98 @@ function listStart(list: SyntaxNode, ctx: Ctx): number {
   return Number.isFinite(n) ? n : 1
 }
 
-/** 한 노드의 자식들을 블록 목록으로 만든다. Document·Blockquote·ListItem 이 모두 이것을 쓴다.
+/** 한 노드의 자식들을 블록 목록으로 만든다. Document·Blockquote·ListItem 이 모두 이것을 쓴다 —
+ *  그리고 그 재귀 호출마다 아래 스택을 새로 만든다. 그래서 인용문·목록 항목 안에서 연 HTML
+ *  컨테이너는 그 자신에게만 갇히고 바깥으로 새지 않는다.
  *
- *  Task 5 가 여기에 문서 수준 HTML 컨테이너 스택을 더한다. */
+ *  **HTML 컨테이너 스택이 여기 있는 이유**: CommonMark 는 HTML 블록을 빈 줄에서 끊는다. 그래서
+ *  `<div align="center">` 다음에 빈 줄이 오면 여는 태그와 `</div>` 가 서로 다른 HTMLBlock 노드에
+ *  들어가고, 사이의 내용은 정상 마크다운으로 파싱된다. 블록마다 독립해서 접으면 짝이 만나지
+ *  못하므로 스택은 이 순회 전체를 살아야 한다. 이 저장소 README.md 가 정확히 그 모양이다. */
 function blocksOf(parent: SyntaxNode, ctx: Ctx): MdBlock[] {
-  const out: MdBlock[] = []
+  const root: MdBlock[] = []
+  const stack: { tag: string; policy: TagPolicy; attrs: MdAttrs; line: number; children: MdBlock[] }[] = []
+  /** 지금 블록이 담길 곳 */
+  const sink = (): MdBlock[] => (stack.length ? stack[stack.length - 1].children : root)
+  /** drop 컨테이너 안이면 아무것도 담지 않는다 */
+  const dropped = (): boolean => stack.some((f) => f.policy === 'drop')
+  const put = (block: MdBlock): void => {
+    if (!dropped()) sink().push(block)
+  }
+  const closeTop = (): void => {
+    const frame = stack.pop()
+    if (!frame) return
+    if (frame.policy === 'drop') return
+    if (stack.some((f) => f.policy === 'drop')) return
+    const parentSink = stack.length ? stack[stack.length - 1].children : root
+    if (frame.policy === 'unwrap') parentSink.push(...frame.children)
+    else
+      parentSink.push({
+        k: 'htmlEl',
+        line: frame.line,
+        tag: frame.tag,
+        attrs: frame.attrs,
+        children: frame.children
+      })
+  }
+
   for (let c = parent.firstChild; c; c = c.nextSibling) {
     const line = lineAt(ctx.starts, c.from)
+
+    if (c.name === 'HTMLBlock') {
+      for (const tok of lexHtml(ctx.text.slice(c.from, c.to))) {
+        if (tok.t === 'text') {
+          // 태그 사이의 평문. 블록 문맥이므로 문단으로 담는다
+          const text = tok.text.trim()
+          if (text) put({ k: 'para', line, inline: [{ k: 'text', text }] })
+          continue
+        }
+        const policy = policyFor(tok.tag)
+        if (tok.t === 'self') {
+          if (policy === 'allow')
+            put({ k: 'htmlEl', line, tag: tok.tag, attrs: tok.attrs, children: [] })
+          continue
+        }
+        if (tok.t === 'open') {
+          stack.push({ tag: tok.tag, policy, attrs: tok.attrs, line, children: [] })
+          continue
+        }
+        // close — 스택에서 짝을 찾는다. 없으면 무시한다
+        const at = [...stack].reverse().findIndex((f) => f.tag === tok.tag)
+        if (at < 0) continue
+        const idx = stack.length - 1 - at
+        // drop 프레임을 뚫고 그 바깥까지 팝하지 않는다 — foldInline 과 같은 이유다
+        // (`<b><script></b>alert(1)</script>` 류의 어긋난 닫는 태그가 drop 프레임 밖의 태그와
+        // 우연히 짝을 이루면, 그 태그를 정말로 닫아버려서 이후 내용이 더 이상 어떤 drop 프레임
+        // 안에도 있지 않게 된다). 가장 바깥 drop 프레임 자신을 닫거나(idx === dropIdx) 그 안쪽만
+        // 닫는 경우는 그대로 두고, 그 밖으로 나가려는 시도만 무시한다.
+        const dropIdx = stack.findIndex((f) => f.policy === 'drop')
+        if (dropIdx >= 0 && idx < dropIdx) continue
+        while (stack.length > idx) closeTop()
+      }
+      continue
+    }
+
     const atx = ATX.exec(c.name)
     if (atx) {
-      out.push({
-        k: 'heading', line, level: Number(atx[1]) as HeadingLevel, inline: headingInline(c, ctx)
-      })
+      put({ k: 'heading', line, level: Number(atx[1]) as HeadingLevel, inline: headingInline(c, ctx) })
       continue
     }
     const setext = SETEXT.exec(c.name)
     if (setext) {
-      out.push({
-        k: 'heading', line, level: Number(setext[1]) as HeadingLevel, inline: headingInline(c, ctx)
-      })
+      put({ k: 'heading', line, level: Number(setext[1]) as HeadingLevel, inline: headingInline(c, ctx) })
       continue
     }
     switch (c.name) {
       case 'Paragraph':
-        out.push({ k: 'para', line, inline: inlineOf(c, ctx) })
+        put({ k: 'para', line, inline: inlineOf(c, ctx) })
         break
       case 'FencedCode':
-        out.push({ k: 'code', line, lang: fenceLang(c, ctx), text: codeText(c, ctx) })
+        put({ k: 'code', line, lang: fenceLang(c, ctx), text: codeText(c, ctx) })
         break
       case 'CodeBlock':
         // 들여쓰기 코드 블록. codeText 가 CodeText 조각을 이어붙여 이미 벗겨진 본문을 준다
-        out.push({ k: 'code', line, lang: null, text: codeText(c, ctx) })
+        put({ k: 'code', line, lang: null, text: codeText(c, ctx) })
         break
       case 'BulletList':
       case 'OrderedList': {
@@ -854,18 +916,18 @@ function blocksOf(parent: SyntaxNode, ctx: Ctx): MdBlock[] {
           task: itemTask(it, ctx),
           children: blocksOf(it, ctx)
         }))
-        out.push({ k: 'list', line, ordered, start: ordered ? listStart(c, ctx) : 1, items })
+        put({ k: 'list', line, ordered, start: ordered ? listStart(c, ctx) : 1, items })
         break
       }
       case 'Blockquote':
-        out.push({ k: 'quote', line, children: blocksOf(c, ctx) })
+        put({ k: 'quote', line, children: blocksOf(c, ctx) })
         break
       case 'HorizontalRule':
-        out.push({ k: 'hr', line })
+        put({ k: 'hr', line })
         break
       case 'Table': {
         const header = c.getChild('TableHeader')
-        out.push({
+        put({
           k: 'table',
           line,
           align: tableAlign(c, ctx),
@@ -875,11 +937,12 @@ function blocksOf(parent: SyntaxNode, ctx: Ctx): MdBlock[] {
         break
       }
       default:
-        // LinkReference 정의(Task 3), HTMLBlock(Task 5), 그리고 공백류. 여기서는 버린다
+        // LinkReference 정의(Task 3), 그리고 공백류. 여기서는 버린다
         break
     }
   }
-  return out
+  while (stack.length > 0) closeTop()
+  return root
 }
 
 /** 마크다운 원문을 블록 목록으로 바꾼다. 입력은 LF 여야 한다 */
