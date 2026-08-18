@@ -135,6 +135,18 @@ describe('resolveBindings — 기본값에 사용자 설정을 덮어쓴다', ()
   })
 })
 
+describe('makeActions — yieldsToTerminal', () => {
+  // Ctrl+Shift+V(mac: Cmd+Shift+V)는 터미널의 붙여넣기(TerminalView.tsx)와 같은 조합이다 —
+  // TerminalView 의 붙여넣기 매칭이 v/V·clipMod 만 보고 shiftKey 를 확인하지 않아서다(복사 쪽
+  // 매칭과 다르다). App.tsx 의 전역 keydown 리스너는 capture:true 로 등록되어 있어 yieldsToTerminal
+  // 이 거짓이면 e.stopPropagation() 이 xterm 에 닿기 전에 이벤트를 삼켜, 터미널의 붙여넣기가
+  // 동작하지 않게 된다 — 그래서 참이어야 한다.
+  it('explorer.cyclePreview 는 터미널에 양보한다 — Ctrl+Shift+V 가 터미널 붙여넣기와 겹친다', () => {
+    const spec = ACTIONS.find((a) => a.id === 'explorer.cyclePreview')
+    expect(spec?.yieldsToTerminal).toBe(true)
+  })
+})
+
 describe('findActionForEvent', () => {
   const bindings = resolveBindings({}, ACTIONS)
 
@@ -162,10 +174,6 @@ describe('findActionForEvent', () => {
 })
 
 describe('findConflicts — 같은 키가 두 액션에 걸리면', () => {
-  it('충돌이 없으면 빈 배열', () => {
-    expect(findConflicts(resolveBindings({}, ACTIONS), ACTIONS)).toEqual([])
-  })
-
   it('기본 바인딩끼리는 충돌하지 않는다', () => {
     expect(findConflicts(resolveBindings({}, ACTIONS), ACTIONS)).toEqual([])
   })
