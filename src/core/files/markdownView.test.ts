@@ -1,0 +1,130 @@
+import { describe, it, expect } from 'vitest'
+import {
+  cycleViewMode, isMdViewMode, clampSplitRatio, langForFence,
+  topForLine, lineForTop, SPLIT_DEFAULT, SPLIT_MIN, SPLIT_MAX
+} from './markdownView'
+
+describe('cycleViewMode', () => {
+  it('editor → split → preview → editor 로 돈다', () => {
+    expect(cycleViewMode('editor')).toBe('split')
+    expect(cycleViewMode('split')).toBe('preview')
+    expect(cycleViewMode('preview')).toBe('editor')
+  })
+})
+
+describe('isMdViewMode', () => {
+  it('세 값만 통과시킨다', () => {
+    expect(isMdViewMode('split')).toBe(true)
+    expect(isMdViewMode('editor')).toBe(true)
+    expect(isMdViewMode('preview')).toBe(true)
+    expect(isMdViewMode('other')).toBe(false)
+    expect(isMdViewMode(null)).toBe(false)
+    expect(isMdViewMode(undefined)).toBe(false)
+    expect(isMdViewMode(0.5)).toBe(false)
+  })
+})
+
+describe('clampSplitRatio', () => {
+  it('범위 안의 값은 그대로 둔다', () => {
+    expect(clampSplitRatio(0.5)).toBe(0.5)
+    expect(clampSplitRatio(0.2)).toBe(0.2)
+  })
+  it('범위 밖은 자른다', () => {
+    expect(clampSplitRatio(0)).toBe(SPLIT_MIN)
+    expect(clampSplitRatio(1)).toBe(SPLIT_MAX)
+    expect(clampSplitRatio(-3)).toBe(SPLIT_MIN)
+    expect(clampSplitRatio(99)).toBe(SPLIT_MAX)
+  })
+  // localStorage에서 온 값은 문자열이고, 사람이 고쳤거나 옛 버전이 쓴 쓰레기일 수 있다
+  it('문자열 숫자를 받아들이고 그 밖은 기본값으로 되돌린다', () => {
+    expect(clampSplitRatio('0.4')).toBe(0.4)
+    expect(clampSplitRatio('')).toBe(SPLIT_DEFAULT)
+    expect(clampSplitRatio('abc')).toBe(SPLIT_DEFAULT)
+    expect(clampSplitRatio(null)).toBe(SPLIT_DEFAULT)
+    expect(clampSplitRatio(undefined)).toBe(SPLIT_DEFAULT)
+    expect(clampSplitRatio(NaN)).toBe(SPLIT_DEFAULT)
+    expect(clampSplitRatio(Infinity)).toBe(SPLIT_DEFAULT)
+  })
+})
+
+describe('langForFence', () => {
+  it('별칭을 언어 키로 옮긴다', () => {
+    expect(langForFence('ts')).toBe('javascript')
+    expect(langForFence('typescript')).toBe('javascript')
+    expect(langForFence('py')).toBe('python')
+    expect(langForFence('python')).toBe('python')
+    expect(langForFence('golang')).toBe('go')
+    expect(langForFence('c++')).toBe('cpp')
+  })
+  it('대소문자를 무시하고 앞뒤 공백을 버린다', () => {
+    expect(langForFence('  TS  ')).toBe('javascript')
+    expect(langForFence('JSON')).toBe('json')
+  })
+  // ```ts title="foo.ts" 처럼 뒤에 메타가 붙는 관례가 널리 쓰인다
+  it('첫 낱말만 본다', () => {
+    expect(langForFence('ts title="foo.ts"')).toBe('javascript')
+  })
+  it('빈 info 와 모르는 언어는 null', () => {
+    expect(langForFence('')).toBe(null)
+    expect(langForFence('   ')).toBe(null)
+    expect(langForFence('brainfuck')).toBe(null)
+    // 이 저장소에는 셸용 CM6 언어 패키지가 없다. 색 없이 그린다
+    expect(langForFence('bash')).toBe(null)
+  })
+})
+
+describe('topForLine', () => {
+  const anchors = [
+    { line: 0, top: 0 },
+    { line: 10, top: 100 },
+    { line: 20, top: 400 }
+  ]
+  it('앵커가 없으면 0', () => {
+    expect(topForLine([], 5)).toBe(0)
+  })
+  it('앵커가 하나면 항상 그 top', () => {
+    expect(topForLine([{ line: 7, top: 42 }], 0)).toBe(42)
+    expect(topForLine([{ line: 7, top: 42 }], 99)).toBe(42)
+  })
+  it('앵커에 정확히 맞으면 그 top', () => {
+    expect(topForLine(anchors, 0)).toBe(0)
+    expect(topForLine(anchors, 10)).toBe(100)
+    expect(topForLine(anchors, 20)).toBe(400)
+  })
+  it('사이는 선형보간한다', () => {
+    expect(topForLine(anchors, 5)).toBe(50)
+    expect(topForLine(anchors, 15)).toBe(250)
+  })
+  it('첫 앵커 위와 마지막 앵커 아래는 끝값에 붙는다', () => {
+    expect(topForLine(anchors, -5)).toBe(0)
+    expect(topForLine(anchors, 100)).toBe(400)
+  })
+})
+
+describe('lineForTop', () => {
+  const anchors = [
+    { line: 0, top: 0 },
+    { line: 10, top: 100 },
+    { line: 20, top: 400 }
+  ]
+  it('앵커가 없으면 0', () => {
+    expect(lineForTop([], 123)).toBe(0)
+  })
+  it('앵커에 정확히 맞으면 그 줄', () => {
+    expect(lineForTop(anchors, 0)).toBe(0)
+    expect(lineForTop(anchors, 100)).toBe(10)
+    expect(lineForTop(anchors, 400)).toBe(20)
+  })
+  it('사이는 보간해 정수로 반올림한다', () => {
+    expect(lineForTop(anchors, 50)).toBe(5)
+    expect(lineForTop(anchors, 250)).toBe(15)
+  })
+  it('범위 밖은 끝값에 붙는다', () => {
+    expect(lineForTop(anchors, -10)).toBe(0)
+    expect(lineForTop(anchors, 9999)).toBe(20)
+  })
+  it('topForLine 과 왕복이 맞는다', () => {
+    for (const line of [0, 3, 10, 17, 20])
+      expect(lineForTop(anchors, topForLine(anchors, line))).toBe(line)
+  })
+})
