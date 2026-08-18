@@ -684,6 +684,9 @@ export interface AppControlApi {
  */
 export interface OrchApi {
   list(projectPath: string): Promise<OrchSnapshot>
+  /** 한 Run 의 이벤트, 시각 오름차순. 스냅샷과 달리 **요청할 때만** 온다 — Message.body 에는
+   *  검증 출력 꼬리가 실리므로 매 쓰기마다 밀 수 있는 크기가 아니다. */
+  timeline(projectPath: string, runId: string): Promise<JobEvent[]>
   unwatch(): Promise<void>
 }
 
