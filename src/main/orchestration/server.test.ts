@@ -1457,6 +1457,21 @@ describe('run-create — cwd 정규화', () => {
     expect(deps.getState().runs[0].cwd).toBe('D:/proj/src/main')
   })
 
+  // 배선(ipc.ts)은 계정마다 파일시스템을 훑고 git 까지 부른다. 거기서 난 실패가 Run 생성을
+  // 막으면 코디네이터가 아무 작업도 시작하지 못한다 — handleExit 이 probeLimit 을 감싼 것과 같다
+  it('해석기가 실패하면 주어진 --cwd 를 그대로 저장한다', async () => {
+    const deps = makeDeps()
+    const logged: string[] = []
+    deps.log = (m) => logged.push(m)
+    deps.resolveProjectRoot = async () => {
+      throw new Error('EACCES')
+    }
+    const r = await call(deps, 'run-create', { objective: '목표', cwd: 'D:/proj/src/main' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().runs[0].cwd).toBe('D:/proj/src/main')
+    expect(logged.some((m) => m.includes('EACCES'))).toBe(true)
+  })
+
   it('objective 가 비면 정규화 이전에 거절한다', async () => {
     const deps = makeDeps()
     let called = false

@@ -216,7 +216,20 @@ export async function handleCommand(
       // Normalised to the owning project root before it is stored, so that the sidebar's
       // exact-match ownership test (runsForProject) can stay exact. Skipped when the dependency is
       // not injected — the same optional-dependency convention as now?/log?/backup?.
-      const cwd = deps.resolveProjectRoot ? await deps.resolveProjectRoot(given) : given
+      //
+      // A rejection falls back to the path as given, for the same reason handleExit wraps
+      // deps.probeLimit: the wiring reads files (knownProjectPaths walks every configured account)
+      // and shells out to git (ipc.ts), and none of that may stop a Run from being created. The
+      // normalisation only decides which project list the Run shows up in; failing it closed would
+      // trade the whole feature for a display improvement.
+      let cwd = given
+      if (deps.resolveProjectRoot) {
+        try {
+          cwd = await deps.resolveProjectRoot(given)
+        } catch (err) {
+          deps.log?.(`project root resolution failed cwd=${given}: ${String(err)}`)
+        }
+      }
       return commit(createRun(s, { objective, cwd }, now))
     }
     case 'run-list':
