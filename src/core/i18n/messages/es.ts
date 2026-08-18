@@ -40,6 +40,8 @@ export const es: Catalog = {
   'files.move.alreadyThere': 'Ya se encuentra en esa ubicación',
   'files.copy.intoSelf': 'No se puede copiar una carpeta dentro de sí misma',
   'files.error.pathNotAllowed': 'Ruta no permitida',
+  'files.error.unsupportedImageType': 'Tipo de imagen no compatible',
+  'files.error.imageTooLarge': 'La imagen es demasiado grande',
   'files.error.alreadyExists': '«{name}» ya existe',
   'files.error.alreadyExistsInDest': '«{name}» ya existe en la carpeta de destino',
   'files.error.renameStranded':
@@ -133,6 +135,15 @@ export const es: Catalog = {
   'files.editor.keepMine': 'Conservar mis cambios',
   'files.editor.loading': 'Cargando…',
   'files.editor.selectPrompt': 'Seleccione un archivo en el árbol',
+  // MarkdownPreview.tsx — fallo al cargar imagen, aviso de imagen remota
+  'files.markdown.image.failed': 'No se pudo cargar la imagen',
+  'files.markdown.image.remote': 'Las imágenes remotas no se muestran — haga clic para abrirlas en el navegador',
+  'files.markdown.renderError': 'No se pudo mostrar este documento',
+  // MarkdownSplit.tsx — los tres botones de modo de la barra de herramientas, el divisor izquierda/derecha
+  'files.markdown.mode.editor': 'Solo editor',
+  'files.markdown.mode.split': 'Editor y vista previa',
+  'files.markdown.mode.preview': 'Solo vista previa',
+  'files.markdown.resizeSplit': 'Ajustar el tamaño de la división',
   // App.tsx — explorer close confirmation
   'explorer.closeConfirm.body': 'Hay cambios sin guardar. ¿Cerrar el explorador igualmente?',
   // App.tsx — run console resizer, start failure
@@ -267,6 +278,7 @@ export const es: Catalog = {
   'shortcut.explorer.toggleMode': 'Mostrar/ocultar el explorador',
   'shortcut.explorer.saveFile': 'Guardar el archivo',
   'shortcut.explorer.closeFileTab': 'Cerrar la pestaña de archivo',
+  'shortcut.explorer.cyclePreview': 'Cambiar el modo de vista previa de markdown',
   'shortcut.explorer.rename': 'Cambiar nombre',
   'shortcut.explorer.delete': 'Eliminar',
   'shortcut.explorer.selectAll': 'Seleccionar todo',

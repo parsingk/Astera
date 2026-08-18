@@ -34,6 +34,7 @@ import { releaseArgsFor } from './orchestration/release'
 import { installStub } from './orchestration/stub'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
+import { imageMime } from '../core/files/imageMime'
 import { parsePorcelainZ, type GitState } from '../core/git/status'
 import { FileWatcher } from './fileWatcher'
 import { GitWatcher } from './gitWatcher'
@@ -907,6 +908,42 @@ export function registerIpc(
     const binary = buf.includes(0)
     return { content: binary ? '' : buf.toString('utf8'), truncated, binary }
   })
+  const IMAGE_READ_MAX = 5 * 1024 * 1024 // 5MB
+  ipcMain.handle('files.readDataUrl', async (_e, filePath: string) => {
+    const root = await assertAllowedPath(filePath)
+    const mime = imageMime(path.extname(filePath).slice(1))
+    if (!mime) throw new Error(t(core.lang, 'files.error.unsupportedImageType'))
+    // isPathWithin (inside assertAllowedPath) only resolves '..' lexically — it does not follow
+    // symlinks, but fs.open below does. A hostile repo can ship an image-named symlink pointing at
+    // ~/.ssh/id_rsa or /etc/passwd, so the real target is re-checked here. A symlink that stays inside
+    // an allowed root (e.g. a shared asset linked into a project) keeps working; only one that escapes
+    // every root is refused.
+    // The re-check compares two realpath'd values, not a realpath'd file against a lexical root: on
+    // macOS /tmp, /var and /etc are themselves symlinks, and a relocated Windows user folder can be a
+    // junction — comparing `real` against the lexical `root` would then reject every in-root image
+    // under a session whose cwd sits below one of those, failing closed for a plain, non-hostile file.
+    // Realpath-ing the matched root (rather than re-running assertAllowedPath, which would repeat the
+    // same lexical-only comparison against the same un-resolved roots) is what actually fixes that.
+    const real = await fs.realpath(filePath)
+    const realRoot = await fs.realpath(root)
+    if (!isPathWithin(realRoot, real)) throw new Error(t(core.lang, 'files.error.pathNotAllowed'))
+    // A single bounded read, not stat+readFile: stat.size is advisory (the file can grow between the
+    // stat and the read) and reads 0 for FIFOs/character devices, so a symlink to a named pipe or
+    // /dev/zero would sail past a size check and fs.readFile would then grow unbounded in the main
+    // process. Reading at most IMAGE_READ_MAX + 1 bytes in one call makes the cap a hard bound no
+    // matter what the path actually names — the same shape files.read uses for its truncation branch.
+    const handle = await fs.open(real, 'r')
+    let buf: Buffer
+    try {
+      const alloc = Buffer.alloc(IMAGE_READ_MAX + 1)
+      const { bytesRead } = await handle.read(alloc, 0, IMAGE_READ_MAX + 1, 0)
+      if (bytesRead > IMAGE_READ_MAX) throw new Error(t(core.lang, 'files.error.imageTooLarge'))
+      buf = alloc.subarray(0, bytesRead)
+    } finally {
+      await handle.close()
+    }
+    return { dataUrl: `data:${mime};base64,${buf.toString('base64')}` }
+  })
   ipcMain.handle('files.write', async (_e, filePath: string, content: string) => {
     await assertAllowedPath(filePath)
     const tmp = filePath + '.cmtmp'
@@ -1315,6 +1352,25 @@ export function registerIpc(
   ipcMain.handle('files.reveal', async (_e, targetPath: string) => {
     await assertAllowedPath(targetPath)
     shell.showItemInFolder(targetPath)
+  })
+
+  /** 마크다운 프리뷰의 외부 링크. 허용 스킴 밖은 조용히 버린다 — 렌더러가 이미 걸렀으므로 여기에
+   *  도달하는 것은 버그이거나 우회 시도다. 예외를 던지지 않는 이유는 링크 클릭이 실패해도 사용자가
+   *  할 수 있는 일이 없기 때문이다.
+   *
+   *  **검증한 값과 쓰는 값을 같게 만든다.** new URL 은 탭·개행을 스스로 걷어내므로, 그 결과인
+   *  parsed.toString() 을 넘기면 프로토콜을 확인한 바로 그 문자열이 OS 로 간다. url 을 그대로
+   *  넘기면 검증하지 않은 바이트를 넘기는 것이 된다. */
+  ipcMain.handle('system.openExternal', async (_e, url: string) => {
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch {
+      return
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:' && parsed.protocol !== 'mailto:')
+      return
+    await shell.openExternal(parsed.toString())
   })
 
   // For the "N child entries" line in the delete confirmation modal. Stops at 9999 — it is for display, so it need not be exact.

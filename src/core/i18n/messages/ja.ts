@@ -39,6 +39,8 @@ export const ja: Catalog = {
   'files.move.alreadyThere': 'すでにその場所にあります',
   'files.copy.intoSelf': 'フォルダを自分自身の中へコピーすることはできません',
   'files.error.pathNotAllowed': '許可されていないパスです',
+  'files.error.unsupportedImageType': 'サポートされていない画像形式です',
+  'files.error.imageTooLarge': '画像が大きすぎます',
   'files.error.alreadyExists': '「{name}」はすでに存在します',
   'files.error.alreadyExistsInDest': '「{name}」は移動先フォルダにすでに存在します',
   'files.error.renameStranded':
@@ -132,6 +134,15 @@ export const ja: Catalog = {
   'files.editor.keepMine': '自分の編集を保持',
   'files.editor.loading': '読み込み中…',
   'files.editor.selectPrompt': 'ツリーからファイルを選択してください',
+  // MarkdownPreview.tsx — 画像の読み込み失敗・リモート画像の案内
+  'files.markdown.image.failed': '画像を読み込めません',
+  'files.markdown.image.remote': 'リモート画像は表示しません — クリックするとブラウザで開きます',
+  'files.markdown.renderError': 'このドキュメントは表示できません',
+  // MarkdownSplit.tsx — モードツールバーの3つのボタン、左右分割のリサイザー
+  'files.markdown.mode.editor': '編集のみ',
+  'files.markdown.mode.split': '編集とプレビュー',
+  'files.markdown.mode.preview': 'プレビューのみ',
+  'files.markdown.resizeSplit': '分割のサイズ変更',
   // App.tsx — explorer close confirmation
   'explorer.closeConfirm.body':
     '保存していない変更があります。エクスプローラーを閉じますか？',
@@ -264,6 +275,7 @@ export const ja: Catalog = {
   'shortcut.explorer.toggleMode': 'エクスプローラーの表示/非表示',
   'shortcut.explorer.saveFile': 'ファイルを保存',
   'shortcut.explorer.closeFileTab': 'ファイルタブを閉じる',
+  'shortcut.explorer.cyclePreview': 'マークダウンプレビューモードの切り替え',
   'shortcut.explorer.rename': '名前の変更',
   'shortcut.explorer.delete': '削除',
   'shortcut.explorer.selectAll': 'すべて選択',
