@@ -127,9 +127,15 @@ export function BottomPanel({
         </span>
       </div>
       <div className="bottom-bodies">
-        <div className="bottom-body" style={{ display: activeTab === 'run' ? 'flex' : 'none' }}>
-          <RunPanel projectPath={projectPath} clearNonce={clearNonces['run'] ?? 0} />
-        </div>
+        {/* runAvailable 로 **마운트 자체를** 막는다. 비활성 탭은 display:none 으로 살려 두는 것이 이
+            패널의 관례지만(아래 주석), RunPanel 은 마운트되면 projectPath 로 run.list 를 부른다 —
+            프로젝트가 없을 때 그 값은 홈이고, 실행 구성 조회는 홈을 허용하지 않으므로 탭이 보이지도
+            않는데 거부된 요청이 매번 나간다. */}
+        {runAvailable && (
+          <div className="bottom-body" style={{ display: activeTab === 'run' ? 'flex' : 'none' }}>
+            <RunPanel projectPath={projectPath} clearNonce={clearNonces['run'] ?? 0} />
+          </div>
+        )}
         {/* Inactive tabs stay mounted with display:none (see the comment above) — as a result, when a
             terminal tab is first mounted while inactive, TerminalBody's initial fit.fit() runs against a
             0×0 host and xterm stays at the default 80×24 (the PTY is 120×30). Output that arrives while
