@@ -210,6 +210,13 @@ export function HistoryBrowser({
   const { t } = useI18n()
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [total, setTotal] = useState(0)
+  // Whether the first project page has ever arrived. Without it an empty `projects` means two different
+  // things — still loading, or genuinely nothing — and the list showed "기록 없음" for the whole first
+  // fetch, which enumerates every account's project directories and reads each newest file's meta.
+  // It never goes back to false: on an account-filter change or history:updated the previous list stays
+  // on screen until the new one lands, so there is no empty state to cover and replacing a populated
+  // list with a spinner would be a step backwards.
+  const [loaded, setLoaded] = useState(false)
   const [accountFilter, setAccountFilter] = useState<string>('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [preview, setPreview] = useState<TranscriptPreview | null>(null)
@@ -259,6 +266,7 @@ export function HistoryBrowser({
         if (reqToken.current !== token) return // ignore a late response
         setProjects(p.projects)
         setTotal(p.total)
+        setLoaded(true)
       })
   }
 
@@ -300,6 +308,10 @@ export function HistoryBrowser({
           if (reqToken.current !== token) return
           setProjects(p.projects)
           setTotal(p.total)
+          // Also settles the first load, not just a refresh of it: a transcript written while the mount
+          // fetch is still in flight bumps reqToken here, which makes that fetch's own .then bail out.
+          // Without this line the spinner would then never come down.
+          setLoaded(true)
         })
       setRefreshNonce((n) => n + 1)
     })
@@ -434,7 +446,17 @@ export function HistoryBrowser({
             onContextMenu={(x, y, projectPath) => setMenu({ x, y, projectPath })}
           />
         ))}
-        {projects.length === 0 && <li className="empty">{t('history.panel.empty')}</li>}
+        {/* 첫 페이지가 오기 전에는 스피너, 도착한 뒤에 비어 있으면 '기록 없음'. 두 상태를 가르지 않으면
+            프로젝트 디렉터리를 훑는 동안 계속 '기록 없음'이 보인다. 글자는 없고 스피너만 두므로 읽히는
+            이름은 aria-label이 맡는다 (기존 history.loading 문구를 그대로 쓴다) */}
+        {!loaded && (
+          <li className="history-loading" role="status" aria-label={t('history.loading')}>
+            <span className="loading-spinner" aria-hidden="true" />
+          </li>
+        )}
+        {loaded && projects.length === 0 && (
+          <li className="empty">{t('history.panel.empty')}</li>
+        )}
         {projects.length < total && (
           <li ref={sentinelRef} className="history-sentinel">
             {t('history.loading')}

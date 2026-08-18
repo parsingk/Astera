@@ -478,6 +478,10 @@ export default function App(): React.JSX.Element {
     void window.api.accounts.ghosts().then(setGhostAccounts)
     void window.api.system.checkCli().then(setCli)
     void window.api.system.appVersion().then(setAppVersion)
+    // The rail draws the Jobs button only while this is on, so it has to be read at startup. Reading it
+    // only when the settings modal opens (the showSettings effect below) meant the button was missing
+    // from a cold start until someone opened settings once — not late, absent.
+    void window.api.settings.getOrchestrationEnabled().then(setOrchEnabled)
     // Re-adopts sessions that are still running after a renderer reload as tabs (scrollback is lost, by design)
     void window.api.sessions.list().then((list) => {
       setSessions(list)
@@ -630,7 +634,10 @@ export default function App(): React.JSX.Element {
       setSlackLoaded(true)
     })
     void window.api.worktrees.getRoot().then(setWtRoot)
-    void window.api.settings.getOrchestrationEnabled().then(setOrchEnabled) // orchestration toggle's initial state
+    // Re-syncs the orchestration toggle whenever the modal opens. The initial value comes from the mount
+    // effect above (the rail needs it before anyone opens this modal); this is what keeps the checkbox
+    // honest if the stored value ever diverges from what the renderer is holding.
+    void window.api.settings.getOrchestrationEnabled().then(setOrchEnabled)
   }, [showSettings])
 
   // Keyboard session tab switching: a global capture listener, so it works regardless of where focus
