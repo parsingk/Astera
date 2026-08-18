@@ -7,6 +7,9 @@ import {
   applyWorkerDone,
   applyValidationResult,
   blockForValidation,
+  openReviewDispatch,
+  applyReviewResult,
+  blockForReview,
   closeDispatch,
   nextDelivery,
   ackDelivery,
@@ -1135,5 +1138,335 @@ describe('blockForValidation', () => {
     )
     expect(r.state.tasks[0].status).toBe('blocked')
     expect(r.value.question).toContain('cfg1')
+  })
+})
+
+describe('openReviewDispatch', () => {
+  /** seed() 로 만든 Task 를 reviewing 까지 보낸 상태 — applyValidationResult 의 validating 헬퍼와
+   *  같은 모양이다. worker_done 경로만 쓴다 — 검증을 거치는지는 이 describe 의 관심사가 아니다. */
+  const reviewing = (extra: Partial<Task> = {}): { s: OrchState; taskId: string } => {
+    const { s, taskId, dispatchId } = seed()
+    const armed: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, reviewRequested: true, ...extra } : t))
+    }
+    const r = unwrap(
+      applyWorkerDone(
+        armed,
+        { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' },
+        NOW
+      ) as never
+    )
+    return { s: r.state, taskId }
+  }
+  const review = (taskId: string, sessionId = 'sess2') => ({
+    taskId,
+    provider: 'claude' as const,
+    accountId: 'acc2',
+    sessionId,
+    cwd: 'D:/p',
+    specPath: 'D:/p/orch/specs/review.md'
+  })
+
+  it('reviewing 인 Task 에 review: true 인 Dispatch 를 연다', () => {
+    const { s, taskId } = reviewing()
+    const r = unwrap<{ id: string; taskId: string; review?: boolean }>(
+      openReviewDispatch(s, review(taskId), NOW) as never
+    )
+    expect(r.value.taskId).toBe(taskId)
+    expect(r.value.review).toBe(true)
+  })
+
+  // openDispatch 와 가장 크게 다른 점이다. 옮기면 의존 Task 를 막는 장치가 사라진다
+  it('Task 를 dispatched 로 옮기지 않는다 — reviewing 그대로다', () => {
+    const { s, taskId } = reviewing()
+    const r = unwrap(openReviewDispatch(s, review(taskId), NOW) as never)
+    expect(r.state.tasks.find((t) => t.id === taskId)!.status).toBe('reviewing')
+  })
+
+  it('reviewing 이 아닌 Task 에는 열 수 없다', () => {
+    const { s, taskId } = seed() // seed() 직후는 dispatched 다
+    const r = openReviewDispatch(s, review(taskId), NOW)
+    expect(r.ok).toBe(false)
+  })
+
+  it('그 Task 에 열린 Dispatch 가 있으면 거절한다', () => {
+    const { s, taskId } = reviewing()
+    const first = unwrap(openReviewDispatch(s, review(taskId), NOW) as never)
+    const second = openReviewDispatch(first.state, review(taskId, 'sess3'), NOW)
+    expect(second.ok).toBe(false)
+  })
+
+  it('같은 sessionId 를 쓰는 열린 Dispatch 가 있으면 거절한다', () => {
+    const { s, taskId } = reviewing()
+    const t2 = unwrap<{ id: string }>(
+      createTask(s, { runId: s.runs[0].id, title: 't2', spec: 's2', deps: [] }, NOW) as never
+    )
+    const d2 = unwrap(
+      openDispatch(
+        t2.state,
+        {
+          taskId: t2.value.id,
+          provider: 'codex',
+          accountId: 'acc1',
+          sessionId: 'sess2',
+          cwd: 'D:/p',
+          specPath: 'x'
+        },
+        NOW
+      ) as never
+    )
+    const r = openReviewDispatch(d2.state, review(taskId, 'sess2'), NOW)
+    expect(r.ok).toBe(false)
+  })
+})
+
+describe('applyReviewResult', () => {
+  /** reviewing 인 Task 에 검토 Dispatch 까지 열어 둔 상태 */
+  const reviewDispatched = (
+    extra: Partial<Task> = {}
+  ): { s: OrchState; taskId: string; reviewDispatchId: string } => {
+    const { s, taskId, dispatchId } = seed()
+    const armed: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, reviewRequested: true, ...extra } : t))
+    }
+    const toReviewing = unwrap(
+      applyWorkerDone(
+        armed,
+        { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' },
+        NOW
+      ) as never
+    )
+    const opened = unwrap<{ id: string }>(
+      openReviewDispatch(
+        toReviewing.state,
+        {
+          taskId,
+          provider: 'claude',
+          accountId: 'acc2',
+          sessionId: 'sess2',
+          cwd: 'D:/p',
+          specPath: 'D:/p/orch/specs/review.md'
+        },
+        NOW
+      ) as never
+    )
+    return { s: opened.state, taskId, reviewDispatchId: opened.value.id }
+  }
+
+  it('통과하면 completed 로 가고 카운터가 0 이 된다', () => {
+    const { s, taskId, reviewDispatchId } = reviewDispatched({ consecutiveFailures: 2 })
+    const r = unwrap(
+      applyReviewResult(
+        s,
+        { taskId, dispatchId: reviewDispatchId, outcome: 'succeeded', subject: 's', body: 'ok' },
+        NOW
+      ) as never
+    )
+    expect(r.state.tasks.find((t) => t.id === taskId)!.status).toBe('completed')
+    expect(r.state.tasks.find((t) => t.id === taskId)!.consecutiveFailures).toBe(0)
+  })
+
+  it('실패하면 failed 로 가고 카운터가 오른다', () => {
+    const { s, taskId, reviewDispatchId } = reviewDispatched({ consecutiveFailures: 1 })
+    const r = unwrap(
+      applyReviewResult(
+        s,
+        { taskId, dispatchId: reviewDispatchId, outcome: 'failed', subject: 's', body: '부족합니다' },
+        NOW
+      ) as never
+    )
+    expect(r.state.tasks.find((t) => t.id === taskId)!.status).toBe('failed')
+    expect(r.state.tasks.find((t) => t.id === taskId)!.consecutiveFailures).toBe(2)
+  })
+
+  it('실패의 이유를 Task.result 에 남긴다', () => {
+    const { s, taskId, reviewDispatchId } = reviewDispatched()
+    const r = unwrap(
+      applyReviewResult(
+        s,
+        {
+          taskId,
+          dispatchId: reviewDispatchId,
+          outcome: 'failed',
+          subject: 's',
+          body: '요구사항 미충족'
+        },
+        NOW
+      ) as never
+    )
+    expect(r.state.tasks.find((t) => t.id === taskId)!.result).toContain('요구사항 미충족')
+  })
+
+  // **양쪽 다 메시지가 되어야 한다.** 메시지가 코디네이터의 유일한 깨우기 수단이다 —
+  // 통과를 알리지 않으면 의존 Task 가 풀린 것을 모르고 다음 Task 를 띄우지 않는다
+  it('통과와 실패 양쪽에서 status 메시지를 남긴다', () => {
+    const pass = reviewDispatched()
+    const passR = unwrap(
+      applyReviewResult(
+        pass.s,
+        {
+          taskId: pass.taskId,
+          dispatchId: pass.reviewDispatchId,
+          outcome: 'succeeded',
+          subject: 's',
+          body: 'ok'
+        },
+        NOW
+      ) as never
+    )
+    const passMsg = passR.state.messages[passR.state.messages.length - 1]
+    expect(passMsg.type).toBe('status')
+    expect(passMsg.subject).toBe('review passed')
+
+    const fail = reviewDispatched()
+    const failR = unwrap(
+      applyReviewResult(
+        fail.s,
+        {
+          taskId: fail.taskId,
+          dispatchId: fail.reviewDispatchId,
+          outcome: 'failed',
+          subject: 's',
+          body: 'no'
+        },
+        NOW
+      ) as never
+    )
+    const failMsg = failR.state.messages[failR.state.messages.length - 1]
+    expect(failMsg.type).toBe('status')
+    expect(failMsg.subject).toBe('review failed')
+  })
+
+  it('그 메시지 본문에 검토자가 쓴 이유가 담긴다', () => {
+    const { s, taskId, reviewDispatchId } = reviewDispatched()
+    const r = unwrap(
+      applyReviewResult(
+        s,
+        {
+          taskId,
+          dispatchId: reviewDispatchId,
+          outcome: 'failed',
+          subject: 's',
+          body: '에러 처리가 빠졌습니다'
+        },
+        NOW
+      ) as never
+    )
+    const m = r.state.messages[r.state.messages.length - 1]
+    expect(m.body).toContain('에러 처리가 빠졌습니다')
+  })
+
+  it('구현 Dispatch(review 가 없는)의 id 로 오면 거절한다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const armed: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, reviewRequested: true } : t))
+    }
+    const toReviewing = unwrap(
+      applyWorkerDone(
+        armed,
+        { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' },
+        NOW
+      ) as never
+    )
+    const r = applyReviewResult(
+      toReviewing.state,
+      { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'x' },
+      NOW
+    )
+    expect(r.ok).toBe(false)
+  })
+
+  it('reviewing 이 아닌 Task 면 거절한다', () => {
+    const { s, taskId, reviewDispatchId } = reviewDispatched()
+    // 열린 검토 Dispatch 는 그대로 두고 Task 만 옮긴다 — API 로는 나올 수 없는 조합이지만,
+    // applyReviewResult 의 가드가 Dispatch 가 아니라 Task 의 상태로 판정한다는 것을 확인한다
+    const detached: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, status: 'dispatched' } : t))
+    }
+    const r = applyReviewResult(
+      detached,
+      { taskId, dispatchId: reviewDispatchId, outcome: 'succeeded', subject: 's', body: 'x' },
+      NOW
+    )
+    expect(r.ok).toBe(false)
+  })
+
+  // applyWorkerDone 과 같은 판정 — closeDispatch 가 닫아 둔 Dispatch 에 늦게 도착한 보고가
+  // Task 의 종료 상태를 가로채는 것을 막는다
+  it('이미 닫힌 Dispatch 의 보고는 alreadyReported 다', () => {
+    const { s, taskId, reviewDispatchId } = reviewDispatched()
+    const settled = unwrap(
+      applyReviewResult(
+        s,
+        { taskId, dispatchId: reviewDispatchId, outcome: 'succeeded', subject: 's', body: 'ok' },
+        NOW
+      ) as never
+    )
+    const again = unwrap<'accepted' | 'alreadyReported'>(
+      applyReviewResult(
+        settled.state,
+        { taskId, dispatchId: reviewDispatchId, outcome: 'succeeded', subject: 's', body: 'ok' },
+        NOW
+      ) as never
+    )
+    expect(again.value).toBe('alreadyReported')
+  })
+
+  it('검토 Dispatch 를 닫는다 (outcome, endedAt, workerState)', () => {
+    const { s, taskId, reviewDispatchId } = reviewDispatched()
+    const r = unwrap(
+      applyReviewResult(
+        s,
+        { taskId, dispatchId: reviewDispatchId, outcome: 'failed', subject: 's', body: 'no' },
+        NOW
+      ) as never
+    )
+    const d = r.state.dispatches.find((x) => x.id === reviewDispatchId)!
+    expect(d.outcome).toBe('failed')
+    expect(d.endedAt).toBe(NOW)
+    expect(d.workerState).toBe('failed')
+  })
+})
+
+describe('blockForReview', () => {
+  /** 검토를 아예 돌릴 수 없는 자리 — reviewing 이지만 (아직) 열린 Dispatch 가 없다. createGate 가
+   *  열린 Dispatch 를 거절하므로, 이 describe 는 이 모양의 상태로만 blockForReview 를 부른다. */
+  const reviewingNoDispatch = (): { s: OrchState; taskId: string } => {
+    const { s, taskId, dispatchId } = seed()
+    const armed: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, reviewRequested: true } : t))
+    }
+    const r = unwrap(
+      applyWorkerDone(
+        armed,
+        { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' },
+        NOW
+      ) as never
+    )
+    return { s: r.state, taskId }
+  }
+
+  it('Task 를 blocked 로 옮기고 이유를 담은 Gate 를 만든다', () => {
+    const { s, taskId } = reviewingNoDispatch()
+    const r = unwrap<{ question: string }>(
+      blockForReview(s, { taskId, reason: '검토자로 쓸 계정이 없습니다' }, NOW) as never
+    )
+    expect(r.state.tasks.find((t) => t.id === taskId)!.status).toBe('blocked')
+    expect(r.value.question).toContain('검토자로 쓸 계정이 없습니다')
+  })
+
+  // 끝나고 검증까지 통과한 일을 버리지 않고 Task 를 닫는 길
+  it('Gate 질문이 task-update 로 빠져나가는 길을 말한다', () => {
+    const { s, taskId } = reviewingNoDispatch()
+    const r = unwrap<{ question: string }>(
+      blockForReview(s, { taskId, reason: '검토자로 쓸 계정이 없습니다' }, NOW) as never
+    )
+    expect(r.value.question).toContain('task-update')
+    expect(r.value.question).toContain('completed')
   })
 })
