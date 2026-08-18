@@ -1043,6 +1043,13 @@ export default function App(): React.JSX.Element {
     setLayout(placed.root)
     if (placed.paneId) setActivePaneId(placed.paneId)
     setFileBuffers((prev) => ({ ...prev, [id]: { content: '', savedContent: '', eol: '\n', readOnly: false, loading: true, error: null, conflict: false } }))
+    // mdModes 를 여기서 바로 채운다 — fileBuffers 와 같은 자리(탭이 생기는 시점). 그렇지 않으면
+    // 이 탭의 모드는 사용자가 그 탭에서 직접 모드를 바꾸기 전까지 mdModes 에 아예 없고, 렌더가
+    // `mdModes[f.id] ?? defaultMdMode()` 로 매번 localStorage 를 다시 읽어 "마지막으로 고른 모드"를
+    // 대신 쓴다 — 그러면 다른 탭에서 모드를 바꾸는 순간 이 탭도 함께 바뀐 것처럼 보인다(탭별이어야
+    // 할 모드가 사실상 전역이 된다). 여기서 한 번 못박아 두면 `??` 는 이 탭이 실제로 아직 없을 때만
+    // 쓰이는 안전망으로 되돌아간다.
+    if (isMarkdownPath(path)) setMdModes((prev) => ({ ...prev, [id]: defaultMdMode() }))
     window.api.files.read(path).then(
       (d) => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { content: toLf(d.content), savedContent: toLf(d.content), eol: detectEol(d.content), readOnly: d.truncated || d.binary, loading: false, error: d.binary ? t('files.editor.binaryUnsupported') : null, conflict: false } } : prev)),
       (err) => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], loading: false, error: err instanceof Error ? err.message : String(err) } } : prev))
