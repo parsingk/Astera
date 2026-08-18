@@ -3,18 +3,33 @@ import type { PtyFactory, PtyLike, PtySpawnOptions } from '../core/sessions/pty'
 import { RunManager } from './runManager'
 import type { RunConfig } from '../core/run/config'
 
+// node-pty 를 흉내낸다 — **종료된 pty 에 write/resize 를 부르면 던진다.** 이 더블이 그것을 no-op
+// 으로 두고 있었던 탓에, RunManager 가 끝난 실행에 resize 를 흘려보내 main 프로세스를 죽이는 결함이
+// 테스트를 통과했다("Cannot resize a pty that has already exited"). 더블이 실물보다 관대하면
+// 테스트는 통과하고 앱은 죽는다.
 class FakePty implements PtyLike {
   pid = 999
   dataCb: (d: string) => void = () => {}
   exitCb: (e: { exitCode: number }) => void = () => {}
   killed = false
+  exited = false
+  resizes = 0
+  writes = 0
   onData(cb: (d: string) => void) { this.dataCb = cb }
   onExit(cb: (e: { exitCode: number }) => void) { this.exitCb = cb }
-  write() {}
-  resize() {}
-  kill() { this.killed = true; this.exitCb({ exitCode: 0 }) }
+  write() {
+    if (this.exited) throw new Error('Cannot write to a pty that has already exited')
+    this.writes++
+  }
+  resize() {
+    if (this.exited) throw new Error('Cannot resize a pty that has already exited')
+    this.resizes++
+  }
+  kill() { this.killed = true; this.exit(0) }
   pause() {}
   resume() {}
+  /** 실물의 종료를 흉내낸다 — 콜백을 부르기 전에 죽은 상태가 된다 */
+  exit(exitCode: number) { this.exited = true; this.exitCb({ exitCode }) }
 }
 
 const cfg: RunConfig = { id: 'c1', name: 'dev', type: 'shell', command: 'npm run dev' }
@@ -247,6 +262,45 @@ describe('RunManager', () => {
         command: 'gradlew.bat build'
       })
       expect('SPRING_PROFILES_ACTIVE' in spawned[0].opts.env).toBe(false)
+    })
+  })
+
+  // 종료된 실행은 맵에서 지워지지 않는다 — 재접속 때 recentOutput 과 마지막 exitCode 를 돌려줘야
+  // 하기 때문이다(get/recentOutput 이 그것에 의존한다). 그래서 끝난 항목에 write/resize 가 도착하는
+  // 것이 정상 흐름이고, 그것을 그대로 pty 에 넘기면 node-pty 가 던져 main 프로세스가 죽는다.
+  // stop 은 처음부터 status 를 검사했는데 write/resize 는 하지 않았다.
+  describe('종료된 실행에 대한 write/resize', () => {
+    const exited = (): ReturnType<typeof setup> & { pty: FakePty } => {
+      const s = setup()
+      s.mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
+      const pty = s.spawned[0].pty
+      pty.exit(0)
+      return { ...s, pty }
+    }
+
+    // 실행 패널을 열면 렌더러가 resize 를 보낸다. 검증이 끝난 뒤 그 패널을 열면 이 경로를 타고
+    // "Cannot resize a pty that has already exited" 로 앱이 죽었다.
+    it('resize 를 종료된 pty 로 넘기지 않는다', () => {
+      const { mgr, pty } = exited()
+      expect(() => mgr.resize('D:/p', 120, 30)).not.toThrow()
+      expect(pty.resizes).toBe(0)
+    })
+
+    it('write 를 종료된 pty 로 넘기지 않는다', () => {
+      const { mgr, pty } = exited()
+      expect(() => mgr.write('D:/p', 'x')).not.toThrow()
+      expect(pty.writes).toBe(0)
+    })
+
+    // 살아 있는 실행에는 그대로 전달되어야 한다 — 가드가 정상 경로를 막으면 터미널 입력과 크기
+    // 조정이 조용히 죽는다
+    it('도는 실행에는 그대로 전달한다', () => {
+      const { mgr, spawned } = setup()
+      mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
+      mgr.resize('D:/p', 120, 30)
+      mgr.write('D:/p', 'x')
+      expect(spawned[0].pty.resizes).toBe(1)
+      expect(spawned[0].pty.writes).toBe(1)
     })
   })
 })

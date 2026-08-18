@@ -100,12 +100,21 @@ export class RunManager {
     else live.pty.kill()
   }
 
+  // write/resize 는 **도는 실행에만** 넘긴다. 종료된 항목은 맵에 남는다 — get/recentOutput 이
+  // 재접속 때 마지막 exitCode 와 최근 출력을 돌려줘야 하기 때문이다 — 그래서 끝난 실행에 이 둘이
+  // 도착하는 것은 정상 흐름이다(실행 패널을 열면 렌더러가 resize 를 보낸다). node-pty 는 죽은 pty 에
+  // 그것을 부르면 던지고, 여기는 IPC 핸들러 뒤라 잡는 사람이 없어 main 프로세스가 죽는다.
+  // stop 이 처음부터 같은 검사를 하고 있었다 — 이 둘만 빠져 있었다.
   write(projectPath: string, data: string): void {
-    this.runs.get(projectPath)?.pty.write(data)
+    const live = this.runs.get(projectPath)
+    if (live?.status.status !== 'running') return
+    live.pty.write(data)
   }
 
   resize(projectPath: string, cols: number, rows: number): void {
-    this.runs.get(projectPath)?.pty.resize(cols, rows)
+    const live = this.runs.get(projectPath)
+    if (live?.status.status !== 'running') return
+    live.pty.resize(cols, rows)
   }
 
   get(projectPath: string): RunStatus | null {
