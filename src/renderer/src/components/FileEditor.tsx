@@ -123,7 +123,8 @@ export function FileEditor({
   focused,
   onRetire,
   onChange,
-  onSave
+  onSave,
+  onViewChange
 }: {
   path: string
   content: string
@@ -143,6 +144,10 @@ export function FileEditor({
    *  실제로 다른 파일을 덮어썼다. 받는 쪽이 경로로 대상을 찾으면 그 오귀속이 구조적으로 불가능해진다 */
   onChange: (path: string, next: string) => void
   onSave: (path: string) => void
+  /** 이 에디터의 EditorView 를 밖에 알린다. 마크다운 분할 뷰의 스크롤 동기화가 그 뷰의 스크롤
+   *  위치와 줄 배치를 읽어야 해서 열어 둔 통로다. 마운트에서 뷰를, 언마운트에서 null 을 넘긴다.
+   *  이 컴포넌트의 다른 규약은 아무것도 바뀌지 않는다 — 넘겨받은 쪽은 읽기만 한다. */
+  onViewChange?: (view: EditorView | null) => void
 }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -154,6 +159,8 @@ export function FileEditor({
   onSaveRef.current = onSave
   const onRetireRef = useRef(onRetire)
   onRetireRef.current = onRetire
+  const onViewChangeRef = useRef(onViewChange)
+  onViewChangeRef.current = onViewChange
   // 스크롤이 멈출 때마다 떠 두는 최신 스냅샷. 언마운트 정리 함수에서 읽으면 늦다 — 그 시점의 뷰는
   // 화면에서 떨어지는 중이라 위치가 0으로 읽힐 수 있고, 그러면 맨 위가 저장된다
   const lastScrollRef = useRef<StateEffect<unknown> | null>(null)
@@ -171,6 +178,7 @@ export function FileEditor({
       change: (text) => onChangeRef.current(curPathRef.current, text),
       save: () => onSaveRef.current(curPathRef.current)
     })
+    onViewChangeRef.current?.(view)
     if (restored.scroll) view.dispatch({ effects: restored.scroll })
 
     let scrollFrame: number | null = null
@@ -188,6 +196,7 @@ export function FileEditor({
       if (scrollFrame != null) cancelAnimationFrame(scrollFrame)
       owners.delete(view)
       onRetireRef.current(curPathRef.current, view.state, lastScrollRef.current)
+      onViewChangeRef.current?.(null)
       view.destroy()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

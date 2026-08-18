@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { EditorView } from '@codemirror/view'
 import { MarkdownPreview } from './MarkdownPreview'
-import { clampSplitRatio, SPLIT_DEFAULT, type MdViewMode } from '../../../core/files/markdownView'
+import {
+  clampSplitRatio, SPLIT_DEFAULT, topForLine, lineForTop,
+  type MdViewMode, type ScrollAnchor
+} from '../../../core/files/markdownView'
 import { useI18n } from '../i18n/I18nProvider'
 
 const RATIO_KEY = 'cm.md.splitRatio'
@@ -34,7 +38,8 @@ export function MarkdownSplit({
   docPath,
   onOpenFile,
   onSave,
-  editor
+  editor,
+  editorView
 }: {
   mode: MdViewMode
   onModeChange: (mode: MdViewMode) => void
@@ -45,6 +50,11 @@ export function MarkdownSplit({
   /** 왼쪽에 들어갈 것 — App 이 만든 FileEditor 를 그대로 받는다. 이 컴포넌트가 FileEditor 를
    *  직접 만들지 않는 이유는, 그 프롭이 열 개가 넘고 전부 App 의 상태에서 오기 때문이다 */
   editor: React.ReactNode
+  /** `editor` 가 감싸고 있는 FileEditor 의 실제 EditorView. 스크롤 동기화가 그 스크롤 위치와 줄
+   *  배치를 읽고 쓰는 데 쓰고, 프리뷰를 벗어날 때 포커스를 되돌리는 데도 쓴다. `editor` 자체는
+   *  불투명한 ReactNode 라 이 프롭 없이는 둘 다 할 수 없다 — App 이 FileEditor 의 onViewChange 로
+   *  받은 뷰를 그대로 내려준다. 마운트 전/언마운트 후에는 null. */
+  editorView: EditorView | null
 }): React.JSX.Element {
   const { t } = useI18n()
   const splitRef = useRef<HTMLDivElement>(null)
@@ -53,6 +63,98 @@ export function MarkdownSplit({
   const [ratio, setRatio] = useState<number>(() =>
     clampSplitRatio(localStorage.getItem(RATIO_KEY) ?? SPLIT_DEFAULT)
   )
+
+  const anchorsRef = useRef<ScrollAnchor[]>([])
+  /** 프로그램적 스크롤이 상대편의 핸들러를 다시 깨우는 것을 막는 창. 여기 없으면 두 패널이
+   *  서로를 밀며 진동한다 */
+  const suppressUntilRef = useRef(0)
+  const frameRef = useRef<number | null>(null)
+
+  /** 프리뷰의 (줄번호, offsetTop) 표를 다시 만든다. 레이아웃이 끝난 뒤여야 한다 */
+  const rebuildAnchors = (): void => {
+    const host = previewElRef.current
+    if (!host) return
+    const out: ScrollAnchor[] = []
+    for (const el of host.querySelectorAll<HTMLElement>('[data-md-line]')) {
+      const line = Number(el.dataset.mdLine)
+      if (!Number.isFinite(line)) continue
+      const top = el.offsetTop - host.offsetTop
+      // 중첩 요소가 같은 줄을 주는 경우가 있다. 가장 바깥(먼저 만나는) 것만 남긴다
+      if (out.length > 0 && out[out.length - 1].line === line) continue
+      out.push({ line, top })
+    }
+    out.sort((a, b) => a.line - b.line)
+    anchorsRef.current = out
+  }
+
+  // 문서가 바뀌면 앵커가 옛 레이아웃의 것이다. 렌더 뒤에 다시 만든다
+  useEffect(() => {
+    const id = requestAnimationFrame(rebuildAnchors)
+    return () => cancelAnimationFrame(id)
+  }, [text, mode, ratio])
+
+  // 폭이 바뀌면 줄바꿈이 달라져 offsetTop 이 전부 움직인다
+  useEffect(() => {
+    const host = previewElRef.current
+    if (!host || mode === 'editor') return
+    const ro = new ResizeObserver(() => rebuildAnchors())
+    ro.observe(host)
+    return () => ro.disconnect()
+  }, [mode])
+
+  const suppressed = (): boolean => performance.now() < suppressUntilRef.current
+  const suppress = (): void => {
+    suppressUntilRef.current = performance.now() + 120
+  }
+
+  // 에디터 → 프리뷰
+  useEffect(() => {
+    if (!editorView || mode !== 'split') return
+    const scroller = editorView.scrollDOM
+    const onScroll = (): void => {
+      if (suppressed()) return
+      if (frameRef.current != null) cancelAnimationFrame(frameRef.current)
+      frameRef.current = requestAnimationFrame(() => {
+        frameRef.current = null
+        const host = previewElRef.current
+        if (!host) return
+        const block = editorView.lineBlockAtHeight(scroller.scrollTop - editorView.documentTop)
+        const line = editorView.state.doc.lineAt(block.from).number - 1 // CM6 는 1-기반
+        suppress()
+        host.scrollTop = topForLine(anchorsRef.current, line)
+      })
+    }
+    scroller.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      scroller.removeEventListener('scroll', onScroll)
+      if (frameRef.current != null) cancelAnimationFrame(frameRef.current)
+    }
+  }, [editorView, mode])
+
+  // 프리뷰 → 에디터
+  useEffect(() => {
+    const host = previewElRef.current
+    if (!host || !editorView || mode !== 'split') return
+    const onScroll = (): void => {
+      if (suppressed()) return
+      const line = lineForTop(anchorsRef.current, host.scrollTop)
+      const doc = editorView.state.doc
+      const target = Math.min(Math.max(line + 1, 1), doc.lines) // 1-기반으로 되돌리고 범위를 자른다
+      suppress()
+      editorView.dispatch({
+        effects: EditorView.scrollIntoView(doc.line(target).from, { y: 'start' })
+      })
+    }
+    host.addEventListener('scroll', onScroll, { passive: true })
+    return () => host.removeEventListener('scroll', onScroll)
+  }, [editorView, mode])
+
+  // display:none 이었던 에디터가 돌아오면 높이를 0 으로 읽은 상태다. 다시 재게 하지 않으면
+  // 복귀 직후 첫 동기화가 어긋난다
+  useEffect(() => {
+    if (mode !== 'editor' && mode !== 'split') return
+    editorView?.requestMeasure()
+  }, [mode, editorView])
 
   // preview 모드로 "들어갈 때"만 포커스를 프리뷰 컨테이너로 옮긴다 — Mod+S 가 반응할 곳이 이곳뿐이기
   // 때문이다(CM6 의 키맵은 에디터가 display:none 인 동안 키를 볼 수 없다). split·editor 모드로 갈
@@ -64,16 +166,37 @@ export function MarkdownSplit({
   // 빼앗지 않는다"는 규칙을 어기게 된다 — 사용자가 split/editor 로 돌아왔을 때 이미 다른 곳, 예를
   // 들어 방금 누른 툴바 버튼에 포커스가 있을 수 있고 그것도 존중해야 한다).
   //
-  // 알려진 갭(여기서는 못 고친다, task 9 가 닫는다): mode 가 'preview'를 벗어나면 포커스를 들고 있던
-  // .md-preview 서브트리가 hidden 이 되고, 숨겨진 요소는 포커스를 들고 있을 수 없어 브라우저가
+  // 이전의 갭(task 8 이 남기고 task 9 가 닫음): mode 가 'preview'를 벗어나면 포커스를 들고 있던
+  // .md-preview 서브트리가 hidden 이 될 수 있고, 숨겨진 요소는 포커스를 들고 있을 수 없어 브라우저가
   // document.body 로 blur 한다. 툴바 버튼 클릭으로 모드가 바뀌는 경로는 클릭 자체가 모드 커밋 전에
   // 포커스를 그 버튼으로 옮겨 놓아 이 경로를 타지 않지만, task 10 의 순환 키바인딩으로 preview 중에
-  // 모드를 바꾸면 키보드 사용자가 document.body 에 남는다. 이 컴포넌트는 editor 를 불투명한
-  // ReactNode 로만 받아 여기서 에디터에 포커스를 되돌릴 수 없다 — task 9 가 EditorView 를
-  // `editorView` 프롭으로 받게 되면 그쪽에서 view.focus() 로 닫아야 한다.
+  // 모드를 바꾸면 키보드 사용자가 document.body 에 남았을 것이다. 아래의 두 번째 effect가 이제
+  // `editorView` 로 받은 EditorView 에 `view.focus()` 를 호출해 이 경로를 닫는다.
   useEffect(() => {
     if (mode === 'preview') previewElRef.current?.focus()
   }, [mode])
+
+  // 위 effect 의 반대 방향: 'preview'를 실제로 "떠날 때" 포커스가 아직 프리뷰 서브트리 안에 있으면
+  // 에디터로 되돌린다. prevModeRef 로 실제 전이(직전 모드가 'preview')만 걸러낸다 — 그냥
+  // `mode !== 'preview'` 만 보면 mode 는 그대로인데 editorView 만 바뀌어(예: 에디터 마운트) 이
+  // effect 가 다시 뛰는 경우에도 걸려, 위 effect 가 지키는 "mode 가 안 바뀌면 포커스를 빼앗지 않는다"는
+  // 규칙을 어기게 된다.
+  //
+  // useLayoutEffect 인 이유: 브라우저가 hidden 요소에서 포커스를 body 로 옮기는 시점은 스펙상
+  // "렌더링을 업데이트하는" 단계(페인트 직전)에 걸려 있다. 커밋 뒤 페인트 앞에 동기로 도는
+  // useLayoutEffect 는 그 단계보다 먼저 실행되므로 `document.activeElement` 가 아직 프리뷰 안에
+  // 있는 채로 관찰될 가능성이 크다. 페인트 뒤로 미뤄지는 일반 useEffect 로 하면 우리가 확인하기 전에
+  // 브라우저가 이미 body 로 blur 를 마쳤을 수 있어, 그 경우 아래 조건이 항상 거짓이 되어 이 fix 가
+  // 조용히 무력화된다. (실제 브라우저에서 이 타이밍을 직접 계측해 확인하지는 못했다 — 스펙과 커밋/
+  // 페인트 순서로부터의 추론이다.)
+  const prevModeRef = useRef(mode)
+  useLayoutEffect(() => {
+    const leftPreview = prevModeRef.current === 'preview' && mode !== 'preview'
+    prevModeRef.current = mode
+    if (!leftPreview) return
+    const host = previewElRef.current
+    if (host && host.contains(document.activeElement)) editorView?.focus()
+  }, [mode, editorView])
 
   // 드래그가 진행 중인지, 그리고 그 드래그가 등록한 window 리스너를 어떻게 걸러내고 떼어낼지.
   // draggingRef 는 "두 번째 포인터가 이 리사이저 위에 내려와 startDrag 를 다시 부르는" 경로만 막는다
