@@ -71,6 +71,17 @@ export interface OrchServerDeps {
    * If it is not injected, no limit detection happens at all.
    */
   probeLimit?: (d: Dispatch) => Promise<number | null>
+  /**
+   * 임의 경로를 그것이 속한 프로젝트 루트로 되돌린다. run-create 가 --cwd 를 저장하기 전에
+   * 통과시킨다.
+   *
+   * 소유 판정(core/orchestration/view.ts 의 runsForProject)이 '동일 경로'라, 하위 디렉터리에서
+   * 만들어진 Run 은 어떤 프로젝트 목록에도 나타나지 않는다. 질의를 넓히는 대신 저장 값을
+   * 여기서 바로잡는다.
+   *
+   * 주입되지 않으면 정규화하지 않는다 — now?/log?/backup?/probeLimit? 와 같은 관례다.
+   */
+  resolveProjectRoot?(cwd: string): Promise<string>
   /** Audit log left behind when task-update bypasses the transition table (canTransition) — the same
    *  shape as log(message: string) in coordinator.ts. The wiring decides where it goes. If it is not
    *  injected (existing tests and the like) logging is skipped — optional for the same reason as
@@ -193,13 +204,20 @@ export async function handleCommand(
   switch (cmd) {
     case 'run-create': {
       const objective = str(args.objective)
-      if (!objective) return bad('--objective is required')
+      // .trim() here (unlike the plain str() presence check elsewhere) because resolveProjectRoot
+      // below is a real async call now — a whitespace-only objective must not reach it.
+      if (!objective?.trim()) return bad('--objective is required')
       // process.cwd() is evaluated in the Electron main process — a different process from the CLI
       // (src/cli/run.ts), so this fallback has nothing to do with the CLI's actual working directory.
       // The CLI already fills in its own process.cwd() in buildRequest when --cwd is omitted, so in
       // practice this server-side fallback is unreachable unless a caller bypasses the CLI — it is
       // kept defensively anyway.
-      return commit(createRun(s, { objective, cwd: str(args.cwd) ?? process.cwd() }, now))
+      const given = str(args.cwd) ?? process.cwd()
+      // Normalised to the owning project root before it is stored, so that the sidebar's
+      // exact-match ownership test (runsForProject) can stay exact. Skipped when the dependency is
+      // not injected — the same optional-dependency convention as now?/log?/backup?.
+      const cwd = deps.resolveProjectRoot ? await deps.resolveProjectRoot(given) : given
+      return commit(createRun(s, { objective, cwd }, now))
     }
     case 'run-list':
       return okBody(s.runs)

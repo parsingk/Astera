@@ -30,7 +30,7 @@ import { writeInfo, writeShuttle } from './orchestration/shuttle'
 import { WorkerTails } from './orchestration/tail'
 import { releaseArgsFor } from './orchestration/release'
 import { installStub } from './orchestration/stub'
-import { sortEntries, isPathWithin } from '../core/files/tree'
+import { sortEntries, isPathWithin, projectRootOf } from '../core/files/tree'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
 import { parsePorcelainZ, type GitState } from '../core/git/status'
 import { FileWatcher } from './fileWatcher'
@@ -591,6 +591,22 @@ export function registerIpc(
         },
         log: orchLog
       }),
+      // run-create 가 --cwd 를 저장하기 전에 통과시키는 해석기. 후보는 두 곳에서 온다.
+      //
+      // **세션 cwd 는 후보가 아니다.** assertAllowedPath 는 그것을 첫 번째로 보지만, 워커 세션의
+      // cwd 는 워크트리라서 후보에 넣으면 Run.cwd 가 워크트리 **안으로** 내려간다 — 정규화가
+      // 하려는 것과 정반대 방향이다.
+      //
+      // 워크트리는 path 가 아니라 repoPath 를 넣는다. 코디네이터가 워크트리 안에서 도는 경우
+      // 그 Run 은 저장소에 속해야 한다.
+      resolveProjectRoot: async (cwd) =>
+        projectRootOf(
+          [
+            ...core.worktrees.list().map((w) => w.repoPath),
+            ...(await core.history.knownProjectPaths())
+          ],
+          cwd
+        ),
       log: orchLog
     }
 
