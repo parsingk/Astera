@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { runsForProject, progressOf, snapshotFor, sameSnapshot } from './view'
+import { runsForProject, progressOf, outcomeOf, snapshotFor, sameSnapshot } from './view'
 import { emptyState } from './state'
 import type { OrchState } from './state'
 import type { Dispatch, Gate, Run, Task } from './types'
@@ -77,6 +77,55 @@ describe('progressOf', () => {
       task('t1', 'r1', 'completed'), task('t2', 'r2', 'completed')
     ])
     expect(progressOf(s, 'r1')).toEqual({ done: 1, total: 1 })
+  })
+})
+
+describe('outcomeOf', () => {
+  const only = (statuses: Task['status'][]): OrchState =>
+    withRuns(
+      [run('r1', absPath('p'))],
+      statuses.map((s, i) => task(`t${i}`, 'r1', s))
+    )
+
+  // Run 만 만들고 Task 를 아직 만들지 않은 상태가 정상적인 시작 지점이다. every 는 빈 배열에
+  // 참이므로 이 가드가 없으면 새로 만든 Run 이 completed 로 보인다
+  it('Task 가 없으면 running 이다', () => {
+    expect(outcomeOf(only([]), 'r1')).toBe('running')
+  })
+
+  it('모두 completed 면 completed 다', () => {
+    expect(outcomeOf(only(['completed', 'completed']), 'r1')).toBe('completed')
+  })
+
+  // 사람이 손봐야 하는 Run 을 목록에서 바로 찾을 수 있어야 한다
+  it('종료되었지만 failed 가 섞이면 failed 다', () => {
+    expect(outcomeOf(only(['completed', 'failed']), 'r1')).toBe('failed')
+  })
+
+  it('모두 failed 면 failed 다', () => {
+    expect(outcomeOf(only(['failed']), 'r1')).toBe('failed')
+  })
+
+  it('하나라도 종료되지 않았으면 running 이다', () => {
+    expect(outcomeOf(only(['completed', 'dispatched']), 'r1')).toBe('running')
+  })
+
+  // blocked 는 terminal 이 아니다 — Gate 가 풀리면 다시 흐른다
+  it('blocked 가 섞이면 running 이다', () => {
+    expect(outcomeOf(only(['completed', 'blocked']), 'r1')).toBe('running')
+  })
+
+  it('pending 과 ready 도 종료가 아니다', () => {
+    expect(outcomeOf(only(['pending']), 'r1')).toBe('running')
+    expect(outcomeOf(only(['ready']), 'r1')).toBe('running')
+  })
+
+  it('다른 Run 의 Task 는 세지 않는다', () => {
+    const s = withRuns(
+      [run('r1', absPath('p')), run('r2', absPath('p'))],
+      [task('t1', 'r1', 'completed'), task('t2', 'r2', 'dispatched')]
+    )
+    expect(outcomeOf(s, 'r1')).toBe('completed')
   })
 })
 

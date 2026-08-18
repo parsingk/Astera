@@ -264,6 +264,12 @@ export interface JobTask {
   gateQuestion?: string
   openGates: number
 }
+/** Run 이 끝났는지 — Task 상태에서 계산된다. 저장되지 않는다.
+ *
+ *  여기(web 포함 파일)에 선언하는 이유: JobRun 이 이 타입을 필드로 갖고, 그것을 계산하는
+ *  core/orchestration/view.ts 는 node:path 를 끌고 와서 tsconfig.web.json 에 넣을 수 없다.
+ *  그래서 타입은 이쪽이 선언하고 view.ts 가 가져간다 — TaskStatus 와 같은 방향이다. */
+export type RunOutcome = 'running' | 'completed' | 'failed'
 export interface JobRun {
   id: string
   objective: string

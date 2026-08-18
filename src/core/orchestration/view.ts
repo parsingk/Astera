@@ -9,7 +9,7 @@
 // either fails (files/tree.ts's node:path import has no declarations there) or "succeeds" by adding
 // "types": ["node"], which loosens the guard that keeps Node globals out of the renderer typecheck.
 import { isSamePath } from '../files/tree'
-import type { JobTask, OrchSnapshot } from '../types'
+import type { JobTask, OrchSnapshot, RunOutcome } from '../types'
 import type { OrchState } from './state'
 import type { Run, Task } from './types'
 
@@ -40,6 +40,31 @@ export function runsForProject(state: OrchState, projectPath: string): Run[] {
 export function progressOf(state: OrchState, runId: string): { done: number; total: number } {
   const tasks = state.tasks.filter((t) => t.runId === runId)
   return { done: tasks.filter((t) => t.status === 'completed').length, total: tasks.length }
+}
+
+/** completed 와 failed — Task 가 더 움직이지 않는 상태. store.ts 의 TTL 판정이 쓰는 것과 같은 집합이다 */
+const TERMINAL = new Set<Task['status']>(['completed', 'failed'])
+
+/** Run 이 끝났는지, 끝났다면 성공인지 실패인지.
+ *
+ *  **저장된 값이 아니라 파생이다.** store.ts 의 TTL 정리가 이미 "모든 Task 가 terminal 이면 끝난
+ *  Run"이라는 정의를 쓰고 있어(RUN_TTL_MS 근처), 화면이 두 번째 정의를 만드는 대신 그것을 같이
+ *  쓴다. 명시적인 close 명령을 두면 코디네이터가 그것을 부른다는 규율에 기대게 되고, 잊으면
+ *  화면은 지금과 똑같아진다.
+ *
+ *  Task 가 없으면 running: Run 만 만들고 Task 를 아직 만들지 않은 상태가 정상적인 시작 지점이다.
+ *  every 는 빈 배열에 참이므로, 이 가드가 없으면 방금 만든 Run 이 completed 로 보인다.
+ *  (store.ts 가 같은 이유로 own.length > 0 을 두고 있다.)
+ *
+ *  failed 가 completed 를 이긴다 — 사람이 손봐야 하는 Run 을 목록에서 바로 찾을 수 있어야 한다.
+ *
+ *  대가: 모두 끝난 뒤 Task 가 추가되면 completed 가 running 으로 되돌아간다. 진행률 숫자도 같은
+ *  방식으로 움직이므로 정직한 표시라고 본다. */
+export function outcomeOf(state: OrchState, runId: string): RunOutcome {
+  const tasks = state.tasks.filter((t) => t.runId === runId)
+  if (tasks.length === 0) return 'running'
+  if (!tasks.every((t) => TERMINAL.has(t.status))) return 'running'
+  return tasks.some((t) => t.status === 'failed') ? 'failed' : 'completed'
 }
 
 /** One Task row.
