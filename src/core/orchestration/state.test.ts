@@ -1416,6 +1416,31 @@ describe('applyReviewResult', () => {
     expect(again.value).toBe('alreadyReported')
   })
 
+  // 위 테스트는 outcome 이 찍힌 Dispatch 만 본다 — 그것만으로는 가드의 절반(`|| dispatch.endedAt`)을
+  // 지워도 통과한다. 그리고 지워지면 안 되는 쪽이 이 절반이다: closeDispatch 는 endedAt 만 찍고
+  // outcome 은 남기지 않으므로(세션이 보고 없이 죽은 경우), 그 뒤에 늦게 도착한 보고가 Task 의
+  // 종료 상태를 가로챈다. applyWorkerDone 에서 실제로 났던 결함이다.
+  it('endedAt 만 찍힌 Dispatch(보고 없이 죽은 세션)의 지연 보고도 alreadyReported 다', () => {
+    const { s, taskId, reviewDispatchId } = reviewDispatched()
+    // closeDispatch 가 만드는 모양 — endedAt 은 있고 outcome 은 없다
+    const closed: OrchState = {
+      ...s,
+      dispatches: s.dispatches.map((d) =>
+        d.id === reviewDispatchId ? { ...d, endedAt: NOW, workerState: 'failed' as const } : d
+      )
+    }
+    const late = unwrap<'accepted' | 'alreadyReported'>(
+      applyReviewResult(
+        closed,
+        { taskId, dispatchId: reviewDispatchId, outcome: 'succeeded', subject: 's', body: 'ok' },
+        NOW
+      ) as never
+    )
+    expect(late.value).toBe('alreadyReported')
+    // Task 는 건드려지지 않는다 — 그것이 이 가드가 막는 것이다
+    expect(late.state.tasks.find((t) => t.id === taskId)!.status).toBe('reviewing')
+  })
+
   it('검토 Dispatch 를 닫는다 (outcome, endedAt, workerState)', () => {
     const { s, taskId, reviewDispatchId } = reviewDispatched()
     const r = unwrap(
