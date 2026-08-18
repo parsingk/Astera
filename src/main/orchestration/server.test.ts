@@ -1578,8 +1578,11 @@ describe('worker_done 이 검증을 시작한다', () => {
     expect(started).toEqual([])
   })
 
-  // 주입되지 않은 기존 호출자는 그대로 동작해야 한다 — Task 는 validating 에 머문다
-  it('startValidation 이 주입되지 않아도 커밋은 성공한다', async () => {
+  // **주입되지 않으면 검증이 없는 것으로 동작한다**(스펙 5절). validating 으로 보내면 결과를
+  // 가져다줄 것이 아무것도 없어 Task 가 영원히 그 상태이고, recomputeReady 는 completed 만
+  // 승격시키므로 의존 Task 는 전부 pending 에 멈춘다 — 선택적 의존성이 저하하는 대신 Task 를
+  // 고립시키는 것이다. 같은 자루의 listRunConfigs 는 빈 목록으로 올바르게 저하한다.
+  it('startValidation 이 주입되지 않으면 검증 없이 completed 로 간다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
     await call(deps, 'task-create', { spec: '작업', validate: 'cfg1' })
@@ -1593,7 +1596,7 @@ describe('worker_done 이 검증을 시작한다', () => {
       d.sessionId
     )
     expect(r.status).toBe(200)
-    expect(deps.getState().tasks[0].status).toBe('validating')
+    expect(deps.getState().tasks[0].status).toBe('completed')
   })
 
   // 재전송(재시도 네트워크 요청 등)은 applyWorkerDone 이 상태를 바꾸지 않고 'alreadyReported' 를

@@ -851,6 +851,44 @@ describe('검증을 거치는 전이', () => {
     expect(r.state.tasks[0].consecutiveFailures).toBe(2)
   })
 
+  // **선택적 의존성은 무해하게 저하해야 한다.** 검증기가 없는 배선에서 validating 으로 보내면
+  // 결과를 가져다줄 것이 아무것도 없어 Task 가 영원히 validating 이고, recomputeReady 는 completed
+  // 만 승격시키므로 그 의존 서브트리 전체가 pending 에 멈춘다 — 앱 재시작 말고는 회복 수단이 없다.
+  it('canValidate 가 false 면 검증이 걸려 있어도 곧바로 completed 로 간다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const r = unwrap(
+      applyWorkerDone(
+        withValidate(s, taskId),
+        { ...done(taskId, dispatchId, 'succeeded'), canValidate: false },
+        NOW
+      ) as never
+    )
+    expect(r.state.tasks[0].status).toBe('completed')
+  })
+
+  // 검증 없이 completed 에 도달한 것이므로 카운터도 그때와 똑같이 초기화된다
+  it('canValidate 가 false 면 consecutiveFailures 도 초기화한다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const withCount = withValidate(s, taskId, { consecutiveFailures: 2 })
+    const r = unwrap(
+      applyWorkerDone(
+        withCount,
+        { ...done(taskId, dispatchId, 'succeeded'), canValidate: false },
+        NOW
+      ) as never
+    )
+    expect(r.state.tasks[0].consecutiveFailures).toBe(0)
+  })
+
+  // 인자를 모르는 순수 계층의 호출자에게는 지금까지의 동작이 유지된다
+  it('canValidate 를 주지 않으면 검증이 걸린 Task 는 validating 으로 간다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const r = unwrap(
+      applyWorkerDone(withValidate(s, taskId), { ...done(taskId, dispatchId, 'succeeded'), canValidate: true }, NOW) as never
+    )
+    expect(r.state.tasks[0].status).toBe('validating')
+  })
+
   it('검증 없이 completed 로 갈 때는 초기화한다', () => {
     const { s, taskId, dispatchId } = seed()
     const withCount: OrchState = {

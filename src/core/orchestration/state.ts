@@ -185,6 +185,14 @@ export function applyWorkerDone(
     subject: string
     body: string
     filesModified?: string[]
+    /** 검증을 실제로 돌릴 수 있는가. 배선이 검증기를 주입하지 않았으면 서버가 false 로 넘긴다 —
+     *  그 경우 validateConfigId 가 걸려 있어도 validating 으로 보내지 않는다. 보내면 결과를
+     *  가져다줄 것이 아무것도 없어 Task 가 영원히 validating 이고, recomputeReady 는 completed 만
+     *  승격시키므로 그 의존 서브트리 전체가 pending 에 멈춘다 — 선택적 의존성이 무해하게 저하하는
+     *  대신 Task 를 고립시키는 것이다. 스펙 5절이 정한 동작은 "주입되지 않으면 검증이 없는 것으로
+     *  동작한다(worker_done 을 그대로 믿는다)"다.
+     *  기본값은 true — 이 인자를 모르는 순수 계층의 호출자에게는 지금까지의 동작이 유지된다. */
+    canValidate?: boolean
   },
   now: string
 ): Res<'accepted' | 'alreadyReported'> {
@@ -202,7 +210,9 @@ export function applyWorkerDone(
 
   // 검증이 걸린 Task 는 성공 보고만으로 끝나지 않는다 — 실제로 돌려 본 결과가 정한다.
   // 워커가 실패를 보고했으면 검증하지 않는다. 워커 자신이 안 됐다고 하는데 확인할 이유가 없다.
-  const validating = a.outcome === 'succeeded' && !!task.validateConfigId
+  // canValidate === false 는 검증기가 없는 배선이다 — 그때는 검증이 없는 Task 와 똑같이 다룬다.
+  const validating =
+    a.outcome === 'succeeded' && !!task.validateConfigId && a.canValidate !== false
   const to = validating ? 'validating' : a.outcome === 'succeeded' ? 'completed' : 'failed'
   const moved = moveTask(task, to, now)
   if (!moved) return err(`cannot move task ${task.status} -> ${to}`)

@@ -87,7 +87,10 @@ export interface OrchServerDeps {
   listRunConfigs?(projectPath: string): Promise<{ id: string; name: string; type: string }[]>
   /** 검증을 시작한다. **동기다** — 검증은 몇 분이 걸리므로 기다리면 worker_done 응답이 그만큼
    *  늦어지고, 워커 세션이 그 자리에서 멈춘다. 결과는 배선이 나중에 setState 로 커밋한다.
-   *  주입되지 않으면 Task 가 validating 에 머문다(검증기가 없는 배선). */
+   *  주입되지 않으면 검증이 없는 것으로 동작한다 — validateConfigId 가 걸린 Task 도 worker_done
+   *  성공에 곧바로 completed 로 간다(applyWorkerDone 의 canValidate 인자로 전달된다).
+   *  validating 으로 보내지 않는 이유는 그 상태에서 꺼내 줄 것이 아무것도 없기 때문이다 —
+   *  now?/log?/backup?/probeLimit? 와 같은 "주입되지 않으면 그 기능이 없다" 관례다. */
   startValidation?(a: { taskId: string; cwd: string }): void
   /** Audit log left behind when task-update bypasses the transition table (canTransition) — the same
    *  shape as log(message: string) in coordinator.ts. The wiring decides where it goes. If it is not
@@ -596,7 +599,10 @@ export async function handleCommand(
             filesModified:
               typeof args.filesModified === 'string'
                 ? args.filesModified.split(',').filter(Boolean)
-                : undefined
+                : undefined,
+            // 검증기가 주입되지 않은 배선에서는 검증이 없는 것으로 동작한다. validating 으로
+            // 보내면 결과를 가져다줄 것이 없어 Task 가 거기서 영원히 멈춘다(startValidation 참고).
+            canValidate: !!deps.startValidation
           },
           now
         )
