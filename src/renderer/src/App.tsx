@@ -2002,13 +2002,14 @@ export default function App(): React.JSX.Element {
               </svg>
             </button>
           )}
-          {/* The bottom panel is for file and editor mode only, so the terminal is exposed only in that
-              mode. The terminal and ⚙ are wrapped in .rail-bottom and that wrapper carries
-              margin-top:auto so the two stick to the bottom together — giving the terminal button its
-              own auto margin as well (two auto siblings) would distribute the free space evenly and
-              push the buttons apart. */}
+          {/* 이 버튼은 아래쪽 패널(.run-host)을 여는 입구이므로 그 패널이 붙는 페인에서만 보인다 —
+              같은 hostsBottomPanel 을 쓴다. 예전에는 explorerOpen 이었고 주석도 "파일·에디터 모드
+              전용"이라고 적혀 있었는데, 콘솔이 Jobs 에서도 붙게 된 뒤로는 둘 다 거짓이 됐다.
+              터미널과 ⚙ 은 .rail-bottom 으로 감싸고 그 wrapper 가 margin-top:auto 를 지므로 둘이 함께
+              아래에 붙는다 — 터미널 버튼에 따로 auto 마진을 주면(auto 형제가 둘) 남은 공간이 균등
+              분배되어 버튼들이 벌어진다. */}
           <span className="rail-bottom">
-            {explorerOpen && (
+            {hostsBottomPanel && (
               <button
                 className="rail-btn"
                 aria-label={t('terminal.rail.open')}
