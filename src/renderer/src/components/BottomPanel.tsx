@@ -15,6 +15,7 @@ import { TerminalBody } from './TerminalBody'
 export function BottomPanel({
   projectPath,
   runStatus,
+  runAvailable = true,
   terminals,
   activeTab,
   onSelectTab,
@@ -25,6 +26,10 @@ export function BottomPanel({
 }: {
   projectPath: string
   runStatus: RunStatus | null
+  /** Run 탭을 그릴지. 프로젝트가 지정되지 않았을 때(홈에서 연 패널) false — 실행 구성은 프로젝트
+   *  단위라 홈에서는 돌릴 것이 없고, 빈 Run 탭은 고장처럼 보인다. 기본값 true 는 프로젝트가 있는
+   *  기존 호출자를 그대로 두기 위한 것이다. */
+  runAvailable?: boolean
   terminals: TerminalBuffer[]
   activeTab: string
   onSelectTab: (tab: string) => void
@@ -44,6 +49,7 @@ export function BottomPanel({
     <div className="run-panel">
       <div className="bottom-tabs">
         <span className="bottom-tab-list">
+          {runAvailable && (
           <button
             className={activeTab === 'run' ? 'bottom-tab on' : 'bottom-tab'}
             onClick={() => onSelectTab('run')}
@@ -56,6 +62,7 @@ export function BottomPanel({
               </span>
             )}
           </button>
+          )}
           {terminals.map((term, i) => (
             <span
               key={term.id}

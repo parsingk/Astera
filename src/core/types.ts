@@ -537,6 +537,8 @@ export interface SystemApi {
   pathExists(p: string): Promise<boolean>
   checkCli(): Promise<{ claude: CliStatus; codex: CliStatus }>
   appVersion(): Promise<string>
+  /** 프로젝트가 지정되지 않았을 때 아래쪽 패널의 터미널이 열릴 자리 — 셸을 직접 띄웠을 때와 같은 곳 */
+  homeDir(): Promise<string>
 }
 
 /** Clipboard reads (for pasting — the Electron clipboard module exposed synchronously from preload) */

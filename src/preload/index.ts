@@ -145,7 +145,8 @@ const api = {
     pickFile: invoke('system.pickFile'),
     pathExists: invoke('system.pathExists'),
     checkCli: invoke('system.checkCli'),
-    appVersion: invoke('system.appVersion')
+    appVersion: invoke('system.appVersion'),
+    homeDir: invoke('system.homeDir')
   },
   clipboard: {
     readText: () => clipboard.readText(),

@@ -1455,6 +1455,13 @@ export default function App(): React.JSX.Element {
   // The Jobs sidebar snapshot for the open project — orch.list's initial payload, then every
   // 'orch:state' push after it (see the subscription effect below). null until orch.list first resolves.
   const [orchSnapshot, setOrchSnapshot] = useState<OrchSnapshot | null>(null)
+  /** 홈 디렉터리 — 프로젝트가 없을 때 아래쪽 패널의 터미널이 열릴 자리. 프로세스 수명 동안 바뀌지
+   *  않으므로 한 번만 읽는다. 도착하기 전에는 null 이고, 그동안 패널은 그려지지 않는다. */
+  const [homeDir, setHomeDir] = useState<string | null>(null)
+  useEffect(() => {
+    void window.api.system.homeDir().then(setHomeDir, () => setHomeDir(null))
+  }, [])
+
   /** Run 콘솔의 자리. 리사이저가 --run-panel-h 를 이 노드에 직접 쓴다 */
   const runHostRef = useRef<HTMLDivElement>(null)
 
@@ -1550,13 +1557,23 @@ export default function App(): React.JSX.Element {
     : jobsOpen && orchEnabled
       ? 'jobs'
       : 'sessions'
-  /** Run 콘솔과 터미널이 붙는 페인인가. 세션 목록에는 붙지 않는다 — 그쪽은 프로젝트가 아니라
-   *  세션을 고르는 화면이고, 지금 동작을 바꾸지 않는다. */
-  const hostsBottomPanel = sidebarPane !== 'sessions'
+  /** 아래쪽 패널이 쓰는 경로. 프로젝트가 없으면 홈으로 떨어진다 — 셸을 직접 띄웠을 때와 같은 곳이고,
+   *  그래야 탭이 하나도 없을 때도 터미널을 열 수 있다. 홈에서는 Run 탭이 없다(runAvailable):
+   *  실행 구성은 프로젝트 단위이고, 홈의 파일 목록으로 시드를 감지하면 남의 홈 package.json 스크립트를
+   *  실행 구성으로 제안하게 된다. main 의 경로 가드도 터미널에만 홈을 열어 준다(assertTerminalPath). */
+  const bottomRoot = explorerRoot ?? homeDir
+  const runAvailable = explorerRoot !== null
+  /** 아래쪽 패널에 실제로 넘길 탭. Run 탭이 없는데 bottomTab 이 'run' 에 남아 있으면 본문이 비므로,
+   *  그때는 터미널로 떨어뜨린다. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
+   *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. */
+  const bottomTabShown = runAvailable
+    ? bottomTab
+    : (terminals.find((x) => x.id === bottomTab)?.id ?? terminals[0]?.id ?? 'run')
 
   // Loads that project's run configurations and active run whenever the host pane or the root changes
   useEffect(() => {
-    if (!hostsBottomPanel || !explorerRoot) return
+    // 여기는 explorerRoot 그대로다 — 실행 구성은 프로젝트 단위이므로 홈에서는 읽을 것이 없다.
+    if (!explorerRoot) return
     let cancelled = false
     void window.api.run.list(explorerRoot).then((r) => {
       if (cancelled) return
@@ -1570,7 +1587,7 @@ export default function App(): React.JSX.Element {
       if (r.active?.status === 'running') setRunPanelOpen(true)
     })
     return () => { cancelled = true }
-  }, [hostsBottomPanel, explorerRoot])
+  }, [bottomRoot])
 
   // Turning the setting off makes the rail button — the only control that can close the Jobs view —
   // disappear along with it (it is gated on the same orchEnabled), so a view left open past that point
@@ -1628,14 +1645,14 @@ export default function App(): React.JSX.Element {
   // When the project changes, that project's terminal list is read again — main holds them per project,
   // so another project's terminals stay alive and are simply not shown here
   useEffect(() => {
-    // hostsBottomPanel 로 거르는 이유: BottomPanel 이 Run 콘솔과 터미널을 함께 담으므로, Jobs 에서
-    // 콘솔만 그리고 이 목록을 안 읽으면 터미널 탭이 빈 껍데기가 된다.
-    if (!hostsBottomPanel || !explorerRoot) {
+    // bottomRoot 로 읽는다 — 프로젝트가 없으면 홈의 터미널 목록이다. explorerRoot 로 걸러 두면
+    // 프로젝트 없이 연 터미널이 목록에 잡히지 않아 탭이 빈 껍데기가 된다.
+    if (!bottomRoot) {
       setTerminals([])
       return
     }
     let cancelled = false
-    void window.api.terminal.list(explorerRoot).then(
+    void window.api.terminal.list(bottomRoot).then(
       (list) => {
         if (cancelled) return
         setTerminals(list)
@@ -1649,7 +1666,7 @@ export default function App(): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [hostsBottomPanel, explorerRoot])
+  }, [explorerRoot])
 
   // An event subscription (refreshed by run:status) plus one initial query, instead of polling all active runs
   useEffect(() => {
@@ -1801,8 +1818,9 @@ export default function App(): React.JSX.Element {
 
   // The rail terminal button: opens the panel, creates a terminal if this project has none, and otherwise just focuses
   const openTerminal = async (): Promise<void> => {
-    if (!explorerRoot) return
-    const root = explorerRoot
+    // bottomRoot — 프로젝트가 없으면 홈에서 연다
+    if (!bottomRoot) return
+    const root = bottomRoot
     if (terminals.length > 0) {
       // Collapsing unmounts BottomPanel and every TerminalBody inside it (the runPanelOpen gate).
       // TerminalBody replays initialBuffer only once, at mount, and ignores later updates, so the latest
@@ -2002,14 +2020,14 @@ export default function App(): React.JSX.Element {
               </svg>
             </button>
           )}
-          {/* 이 버튼은 아래쪽 패널(.run-host)을 여는 입구이므로 그 패널이 붙는 페인에서만 보인다 —
-              같은 hostsBottomPanel 을 쓴다. 예전에는 explorerOpen 이었고 주석도 "파일·에디터 모드
-              전용"이라고 적혀 있었는데, 콘솔이 Jobs 에서도 붙게 된 뒤로는 둘 다 거짓이 됐다.
+          {/* 아래쪽 패널을 여는 입구. 페인을 가리지 않는다 — 프로젝트가 없으면 홈에서 열리므로 어느
+              화면에서든 셸을 하나 띄울 수 있다. 예전에는 explorerOpen 이었고 주석도 "파일·에디터 모드
+              전용"이라고 적혀 있었는데, 이 패널이 탐색기의 것이 아니게 된 뒤로는 둘 다 거짓이 됐다.
               터미널과 ⚙ 은 .rail-bottom 으로 감싸고 그 wrapper 가 margin-top:auto 를 지므로 둘이 함께
               아래에 붙는다 — 터미널 버튼에 따로 auto 마진을 주면(auto 형제가 둘) 남은 공간이 균등
               분배되어 버튼들이 벌어진다. */}
           <span className="rail-bottom">
-            {hostsBottomPanel && (
+            {bottomRoot && (
               <button
                 className="rail-btn"
                 aria-label={t('terminal.rail.open')}
@@ -2180,11 +2198,11 @@ export default function App(): React.JSX.Element {
                 </button>
               )}
             </div>
-            {/* Run 콘솔과 그 리사이저의 자리. 예전에는 탐색기 페인 안에 있었고 이름도 그랬지만, 콘솔은
-                탐색기의 것이 아니라 **프로젝트**의 것이다 — Jobs 를 보면서도 빌드를 돌리고 그 출력을
-                봐야 한다. 세션 목록에는 붙지 않는다(hostsBottomPanel): 그쪽은 프로젝트가 아니라 세션을
-                고르는 화면이다. (.run-host 가 flex:none 인 이유는 styles.css 에 있다) */}
-            {hostsBottomPanel && (
+            {/* 아래쪽 패널의 자리. 예전에는 탐색기 페인 안에 있었고 이름도 그랬지만, 이 패널은 탐색기의
+                것이 아니다 — Jobs 를 보면서도 빌드를 돌려야 하고, 프로젝트가 아예 없을 때도 셸은 필요하다.
+                그래서 페인을 가리지 않고, 경로는 bottomRoot(프로젝트가 없으면 홈)를 쓴다.
+                (.run-host 가 flex:none 인 이유는 styles.css 에 있다) */}
+            {bottomRoot && (
               <div
                 className="run-host"
                 ref={runHostRef}
@@ -2196,7 +2214,7 @@ export default function App(): React.JSX.Element {
                   } as React.CSSProperties
                 }
               >
-                {runPanelOpen && explorerRoot && (
+                {runPanelOpen && (
                   <div
                     className="run-resizer"
                     role="separator"
@@ -2234,12 +2252,13 @@ export default function App(): React.JSX.Element {
                     }}
                   />
                 )}
-                {runPanelOpen && explorerRoot && (
+                {runPanelOpen && (
                   <BottomPanel
-                    projectPath={explorerRoot}
+                    projectPath={bottomRoot}
+                    runAvailable={runAvailable}
                     runStatus={runActive}
                     terminals={terminals}
-                    activeTab={bottomTab}
+                    activeTab={bottomTabShown}
                     onSelectTab={setBottomTab}
                     onNewTerminal={() => void newTerminal()}
                     onCloseTerminal={closeTerminal}
