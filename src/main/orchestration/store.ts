@@ -126,7 +126,7 @@ export class OrchestrationStore {
       runs: st.runs.filter((r) => !doomed.has(r.id)),
       tasks: keptTasks,
       dispatches: dispatches.filter((d) => keptTaskIds.has(d.taskId)),
-      messages: st.messages.filter((m) => !doomed.has(m.runId)),
+      messages: withGates.messages.filter((m) => !doomed.has(m.runId)),
       deliveries: st.deliveries.filter((d) => !doomed.has(d.runId)),
       gates: withGates.gates.filter((g) => !doomed.has(g.runId))
     }

@@ -292,6 +292,21 @@ describe('OrchestrationStore', () => {
     expect(store.get().gates).toHaveLength(0)
   })
 
+  // Gate가 tasks/gates뿐 아니라 decision_gate 메시지도 만든다 — 그 메시지가 최종 상태에서
+  // 누락되면 Gate 자체는 멀쩡해 보여도 delivery 스트림(check/nextDelivery)에는 알림이 가지 않는다.
+  it('재시작 Gate 가 만든 decision_gate 메시지도 최종 상태에 남는다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    s.tasks[0] = { ...s.tasks[0], status: 'validating' }
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    const msg = store
+      .get()
+      .messages.find((m) => m.type === 'decision_gate' && m.taskId === s.tasks[0].id)
+    expect(msg).toBeTruthy()
+  })
+
   it('Message 활동도 TTL 판정에 반영된다', async () => {
     const file = path.join(dir, 'orchestration.json')
     const old = new Date(Date.now() - RUN_TTL_MS - 1000).toISOString()
