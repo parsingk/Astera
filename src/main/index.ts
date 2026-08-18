@@ -1,11 +1,12 @@
 import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } from 'electron'
 import path from 'node:path'
-import { appendFileSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import type { AppUpdater } from 'electron-updater'
 import iconAsset from '../../resources/icon.png?asset'
 import trayAsset from '../../resources/tray.png?asset'
 import { createCore, type Core } from './core'
 import { applyLoginPath } from './loginPath'
+import { shouldForceWaylandOzone } from './ozone'
 import { registerIpc } from './ipc'
 import { RollingCoordinator } from './rolling'
 import { SchedulerCoordinator } from './scheduler'
@@ -30,6 +31,12 @@ import type { SessionInfo, RollStateEvent, UpdateCampaignInfo } from '../core/ty
 // The same rule applies on macOS: APFS is case-insensitive by default, so 'Astera' and 'astera'
 // resolve to the same folder under ~/Library/Application Support.
 if (!app.isPackaged) app.setPath('userData', app.getPath('userData') + '-dev')
+
+// Under WSLg, running on XWayland is what puts the window off the screen edge and makes clicks land
+// away from what they are drawn on. ozone.ts carries the measurements, the dead ends, and why this is
+// scoped to WSLg alone. A command-line switch has to be appended before the app starts, hence here.
+if (shouldForceWaylandOzone(process.platform, process.env['WAYLAND_DISPLAY'], existsSync))
+  app.commandLine.appendSwitch('ozone-platform', 'wayland')
 
 // The oldest usage figure the limit gate is allowed to decide on. RateLimitFetcher's default 5-minute
 // cache is fine for a status bar but fatal for a verdict — a reading taken just below the threshold
@@ -107,20 +114,18 @@ function createWindow(): BrowserWindow {
     // default y coordinate sits below our 32px titlebar and gets half-clipped, so this centers them
     // vertically. (button height 12px → (32-12)/2 = 10)
     ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 12, y: 10 } } : {}),
-    // Linux (measured under WSLg on Ubuntu 22.04): the packaged window hangs off the right edge of
-    // the screen, and clicks land above where things are actually drawn — you have to click above a
-    // button to hit it. Both clear up once the window is small; maximizing reproduces them, whether
-    // from win.maximize() below or by hand. Three things have been tried and none changed either
-    // symptom: frame:false (96a9f0a, reverted by 340c2da) — did remove the duplicate title bar Linux
-    // draws under titleBarStyle (a macOS/Windows-only option the WM ignores), but made maximize
-    // overshoot the screen so the window controls became unreachable, which is worse than a cosmetic
-    // duplicate bar; leaving titleBarStyle unset on Linux (0e45857, reverted by this commit) — no
-    // change to either symptom; and launching with --force-device-scale-factor=1, on the theory that
-    // the Windows host's 150% display scaling wasn't reaching the app — no change either. Three
-    // different window configs, identical symptoms, and correct behavior once the window is small,
-    // points at something outside this app's window options — most likely WSLg's compositing of large
-    // windows. Not yet reproduced on a real Linux desktop; that's the next step. Do not retry the
-    // three above. The duplicate title bar itself is separate and still open — most likely fixed by
+    // Linux: the window options are not where the old WSLg geometry problem lived. The window hanging
+    // off the right edge and clicks landing away from what they are drawn on were the same bug, and its
+    // cause was the Ozone platform, not anything set here — see ozone.ts, which now switches WSLg onto
+    // Wayland and records the measurements. Three window configs were tried against those symptoms
+    // before the cause was known and none of them changed anything; do not retry them: frame:false
+    // (96a9f0a, reverted by 340c2da) — it did remove the duplicate title bar Linux draws under
+    // titleBarStyle (a macOS/Windows-only option the WM ignores), but made maximize overshoot the
+    // screen so the window controls became unreachable, which is worse than a cosmetic duplicate bar;
+    // leaving titleBarStyle unset on Linux (0e45857, reverted by 926a75a) — no change; and
+    // --force-device-scale-factor=1 — no change either, and forcing 1.5 instead (tried later, on
+    // Wayland) breaks the window geometry outright.
+    // The duplicate title bar itself is separate and still open — most likely fixed by
     // hiding this app's own window controls on Linux and letting the native bar be the only chrome.
     // That half cannot ship on its own: this app's own close button is the only thing that runs the
     // Linux quit confirmation (App.tsx's closeWindow raises confirmModal while sessions are
