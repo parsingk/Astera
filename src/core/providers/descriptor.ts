@@ -66,12 +66,16 @@ export interface ProviderDescriptor extends ProviderMeta {
    *  The darwin measurement was done headlessly rather than through the packaged app: a script drove
    *  a real claude session over node-pty, replicating the production BusyScanner algorithm exactly and
    *  logging every busy/idle transition it produced. Over a 110s run it recorded exactly three
-   *  transitions — a braille spinner frame while the turn was in progress, ✳ once it went idle, and a
-   *  stable idle state afterwards — with no spurious flipping in between. That matches the win32
-   *  behaviour documented below, so the flag stays a platform-independent `true` for claude.
+   *  transitions — a spinner frame while the turn was in progress (braille at the version measured), ✳
+   *  once it went idle, and a stable idle state afterwards — with no spurious flipping in between. That
+   *  matches the win32 behaviour documented below, so the flag stays a platform-independent `true` for
+   *  claude.
    *
-   *  claude=true: the title transitions cleanly between a braille spinner (working) and ✳ (idle) — the
-   *  BusyScanner verdict can be used as it is.
+   *  claude=true: the title transitions cleanly between a spinner frame (working) and ✳ (idle) — the
+   *  BusyScanner verdict can be used as it is. Which glyphs the spinner uses has changed across CLI
+   *  versions (braille when this was first measured, ◐/◑ on 2.1.234) and is busy.ts's business, not this
+   *  flag's: re-measured on 2.1.234, the transition pattern is still the clean three above, so the
+   *  verdict stays trustworthy.
    *
    *  codex=false: a decorative spinner keeps streaming through the window title at 10 frames per second and
    *  does not stop even after the turn ends, and the child processes codex launches (npm, npm exec

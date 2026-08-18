@@ -4,8 +4,10 @@ import { BusyScanner } from './busy'
 // OSC 0 제목 시퀀스 헬퍼 (BEL 종료)
 const title = (t: string): string => `\x1b]0;${t}\x07`
 const titleST = (t: string): string => `\x1b]0;${t}\x1b\\` // ST 종료 변형
-const SPIN = '\u2802' // ⠂ 점자 스피너 프레임 (작업 중)
+const SPIN = '\u2802' // ⠂ 점자 스피너 프레임 (작업 중) — 구버전 claude
 const SPIN2 = '\u2810' // ⠐
+const HALF = '\u25d0' // ◐ 반원 스피너 프레임 (작업 중) — claude 2.1.234 실측
+const HALF2 = '\u25d1' // ◑
 const IDLE = '\u2733' // ✳ 유휴/완료
 
 describe('BusyScanner', () => {
@@ -17,6 +19,11 @@ describe('BusyScanner', () => {
   it('점자 스피너로 시작하는 제목이면 작업 중(true)', () => {
     const s = new BusyScanner()
     expect(s.push(title(`${SPIN} 1부터 10까지 출력`))).toBe(true)
+  })
+
+  it('반원 스피너로 시작하는 제목이면 작업 중(true)', () => {
+    const s = new BusyScanner()
+    expect(s.push(title(`${HALF} Claude Code`))).toBe(true)
   })
 
   it('✳로 시작하는 제목이면 유휴(false)', () => {
@@ -36,6 +43,14 @@ describe('BusyScanner', () => {
     expect(s.push(title(`${SPIN} p`))).toBe(true)
     expect(s.push(title(`${SPIN2} p`))).toBe(true) // 애니메이션 프레임 갱신 — 계속 작업 중
     expect(s.push(title(`${IDLE} p`))).toBe(false)
+  })
+
+  it('작업중→완료 전이: 반원 프레임 다음 ✳ (실측한 제목 그대로)', () => {
+    const s = new BusyScanner()
+    expect(s.push(title(`${HALF} Claude Code`))).toBe(true)
+    expect(s.push(title(`${HALF2} Claude Code`))).toBe(true) // ◐↔◑ 2프레임 교대 — 계속 작업 중
+    expect(s.push(title(`${HALF2} 1부터 20까지 숫자 세기`))).toBe(true) // 턴 제목으로 바뀌어도 작업 중
+    expect(s.push(title(`${IDLE} 1부터 20까지 숫자 세기`))).toBe(false)
   })
 
   it('한 청크에 제목이 여러 개면 마지막 제목의 상태를 쓴다', () => {

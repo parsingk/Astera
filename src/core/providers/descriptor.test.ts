@@ -65,7 +65,7 @@ describe('provider descriptor', () => {
 
   it('busyTitleReliable은 창 제목 OSC 판정의 신뢰 여부를 나타낸다 (실측 근거)', () => {
     const t = makeDescriptors('win32')
-    // claude: 제목이 점자 스피너 ↔ ✳로 정확히 전이한다
+    // claude: 제목이 스피너 프레임 ↔ ✳로 정확히 전이한다 (글리프는 버전에 따라 바뀐다 — busy.ts)
     expect(t.claude.busyTitleReliable).toBe(true)
     // codex: 장식 스피너가 계속 흐르고 자식 프로세스가 제목을 덮어써 신뢰할 수 없다
     expect(t.codex.busyTitleReliable).toBe(false)
