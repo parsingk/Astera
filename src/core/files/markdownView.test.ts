@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   cycleViewMode, isMdViewMode, clampSplitRatio, langForFence,
-  topForLine, lineForTop, SPLIT_DEFAULT, SPLIT_MIN, SPLIT_MAX
+  topForLine, lineForTop, toAnchors, SPLIT_DEFAULT, SPLIT_MIN, SPLIT_MAX
 } from './markdownView'
 
 describe('cycleViewMode', () => {
@@ -70,6 +70,40 @@ describe('langForFence', () => {
     expect(langForFence('brainfuck')).toBe(null)
     // 이 저장소에는 셸용 CM6 언어 패키지가 없다. 색 없이 그린다
     expect(langForFence('bash')).toBe(null)
+  })
+})
+
+describe('toAnchors', () => {
+  it('빈 목록은 빈 목록', () => {
+    expect(toAnchors([])).toEqual([])
+  })
+  it('항목이 하나면 그대로', () => {
+    expect(toAnchors([{ line: 3, top: 30 }])).toEqual([{ line: 3, top: 30 }])
+  })
+  it('이미 오름차순이면 그대로', () => {
+    const input = [{ line: 0, top: 0 }, { line: 5, top: 50 }, { line: 10, top: 100 }]
+    expect(toAnchors(input)).toEqual(input)
+  })
+  it('뒤섞인 입력은 줄번호 오름차순으로 정렬한다', () => {
+    const input = [{ line: 10, top: 100 }, { line: 0, top: 0 }, { line: 5, top: 50 }]
+    expect(toAnchors(input)).toEqual([
+      { line: 0, top: 0 },
+      { line: 5, top: 50 },
+      { line: 10, top: 100 }
+    ])
+  })
+  it('같은 줄이 중복되면 문서 순서상 먼저 온(바깥) 것이 남는다', () => {
+    const input = [{ line: 5, top: 10 }, { line: 5, top: 12 }, { line: 8, top: 40 }]
+    expect(toAnchors(input)).toEqual([{ line: 5, top: 10 }, { line: 8, top: 40 }])
+  })
+  it('중복이 서로 떨어져 있어도(사이에 다른 줄이 끼어도) 먼저 온 것이 남는다', () => {
+    const input = [{ line: 5, top: 10 }, { line: 7, top: 50 }, { line: 5, top: 99 }]
+    expect(toAnchors(input)).toEqual([{ line: 5, top: 10 }, { line: 7, top: 50 }])
+  })
+  // data-md-line 이 숫자가 아니거나 비어 있으면 Number()가 NaN을 준다 — 그런 항목은 버린다
+  it('줄번호가 유한수가 아니면 버린다', () => {
+    const input = [{ line: 0, top: 0 }, { line: NaN, top: 5 }, { line: 10, top: 100 }]
+    expect(toAnchors(input)).toEqual([{ line: 0, top: 0 }, { line: 10, top: 100 }])
   })
 })
 

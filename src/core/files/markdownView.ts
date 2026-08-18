@@ -80,6 +80,26 @@ export interface ScrollAnchor {
   top: number
 }
 
+/** DOM 에서 모은 (줄번호, 요소 offsetTop) 원본 쌍을 topForLine/lineForTop 이 요구하는 전제 —
+ *  줄번호 오름차순, 중복 없음 — 로 만든다. DOM 을 만지지 않으므로 여기 있다(이 파일의 다른 함수와
+ *  같은 이유).
+ *
+ *  `line` 이 `data-md-line` 에서 그대로 온 수라 신뢰할 수 없다 — 파싱에 실패한 값(비 유한수)은
+ *  버린다. 같은 줄을 여러 요소가 보고하면(중첩 요소, 또는 task 5 의 다중 줄 HTMLBlock 이 여러 자식에게
+ *  시작 줄을 물려주는 경우) 문서 순서상 먼저 온 것(바깥 요소, 또는 먼저 만난 요소)을 남긴다 —
+ *  `Array.prototype.sort` 가 안정 정렬이라 같은 줄 값을 가진 항목들은 정렬 뒤에도 입력 순서 그대로
+ *  인접하게 되므로, 정렬 다음에 인접한 중복만 걸러도 "먼저 만난 것"이 항상 남는다. 이 성질 덕분에
+ *  중복이 입력에서 서로 떨어져 있어도(사이에 다른 줄이 끼어 있어도) 정확히 동작한다. */
+export function toAnchors(pairs: { line: number; top: number }[]): ScrollAnchor[] {
+  const sorted = pairs.filter((p) => Number.isFinite(p.line)).sort((a, b) => a.line - b.line)
+  const out: ScrollAnchor[] = []
+  for (const p of sorted) {
+    if (out.length > 0 && out[out.length - 1].line === p.line) continue
+    out.push(p)
+  }
+  return out
+}
+
 /** 원문 줄번호 → 프리뷰 스크롤 위치. 앵커 사이는 선형보간한다.
  *
  *  블록 단위 앵커이므로 긴 코드 블록이나 큰 이미지 **안에서는** 어긋난다. IntelliJ 도 같은 성질을

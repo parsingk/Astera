@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { EditorView } from '@codemirror/view'
 import { MarkdownPreview } from './MarkdownPreview'
 import {
-  clampSplitRatio, SPLIT_DEFAULT, topForLine, lineForTop,
+  clampSplitRatio, SPLIT_DEFAULT, topForLine, lineForTop, toAnchors,
   type MdViewMode, type ScrollAnchor
 } from '../../../core/files/markdownView'
 import { useI18n } from '../i18n/I18nProvider'
@@ -70,21 +70,18 @@ export function MarkdownSplit({
   const suppressUntilRef = useRef(0)
   const frameRef = useRef<number | null>(null)
 
-  /** 프리뷰의 (줄번호, offsetTop) 표를 다시 만든다. 레이아웃이 끝난 뒤여야 한다 */
+  /** 프리뷰의 (줄번호, offsetTop) 표를 다시 만든다. 레이아웃이 끝난 뒤여야 한다.
+   *
+   *  DOM 을 읽는 것(querySelectorAll·offsetTop)만 여기서 하고, 그 결과를 정렬·중복 제거해
+   *  topForLine/lineForTop 이 기대하는 모양으로 만드는 순수 변환은 markdownView.ts 의 toAnchors 다 —
+   *  DOM 을 만지지 않는 계산이라 그쪽에 두고 단위 테스트를 붙였다. */
   const rebuildAnchors = (): void => {
     const host = previewElRef.current
     if (!host) return
-    const out: ScrollAnchor[] = []
-    for (const el of host.querySelectorAll<HTMLElement>('[data-md-line]')) {
-      const line = Number(el.dataset.mdLine)
-      if (!Number.isFinite(line)) continue
-      const top = el.offsetTop - host.offsetTop
-      // 중첩 요소가 같은 줄을 주는 경우가 있다. 가장 바깥(먼저 만나는) 것만 남긴다
-      if (out.length > 0 && out[out.length - 1].line === line) continue
-      out.push({ line, top })
-    }
-    out.sort((a, b) => a.line - b.line)
-    anchorsRef.current = out
+    const pairs: { line: number; top: number }[] = []
+    for (const el of host.querySelectorAll<HTMLElement>('[data-md-line]'))
+      pairs.push({ line: Number(el.dataset.mdLine), top: el.offsetTop - host.offsetTop })
+    anchorsRef.current = toAnchors(pairs)
   }
 
   // 문서가 바뀌면 앵커가 옛 레이아웃의 것이다. 렌더 뒤에 다시 만든다
@@ -116,6 +113,10 @@ export function MarkdownSplit({
       if (frameRef.current != null) cancelAnimationFrame(frameRef.current)
       frameRef.current = requestAnimationFrame(() => {
         frameRef.current = null
+        // 예약과 실행 사이에 프리뷰→에디터 동기화가 끼어들어 suppress() 를 걸었을 수 있다 — 그
+        // 경우 여기서도 다시 확인해야 한다. 프리뷰→에디터 쪽은 이벤트 시점에 바로 동작하므로 이
+        // 재확인이 필요 없지만, 이쪽은 rAF 로 미뤄지는 만큼 그 사이의 suppress() 를 놓칠 수 있다
+        if (suppressed()) return
         const host = previewElRef.current
         if (!host) return
         const block = editorView.lineBlockAtHeight(scroller.scrollTop - editorView.documentTop)
@@ -182,13 +183,22 @@ export function MarkdownSplit({
   // effect 가 다시 뛰는 경우에도 걸려, 위 effect 가 지키는 "mode 가 안 바뀌면 포커스를 빼앗지 않는다"는
   // 규칙을 어기게 된다.
   //
-  // useLayoutEffect 인 이유: 브라우저가 hidden 요소에서 포커스를 body 로 옮기는 시점은 스펙상
-  // "렌더링을 업데이트하는" 단계(페인트 직전)에 걸려 있다. 커밋 뒤 페인트 앞에 동기로 도는
-  // useLayoutEffect 는 그 단계보다 먼저 실행되므로 `document.activeElement` 가 아직 프리뷰 안에
-  // 있는 채로 관찰될 가능성이 크다. 페인트 뒤로 미뤄지는 일반 useEffect 로 하면 우리가 확인하기 전에
-  // 브라우저가 이미 body 로 blur 를 마쳤을 수 있어, 그 경우 아래 조건이 항상 거짓이 되어 이 fix 가
-  // 조용히 무력화된다. (실제 브라우저에서 이 타이밍을 직접 계측해 확인하지는 못했다 — 스펙과 커밋/
-  // 페인트 순서로부터의 추론이다.)
+  // useLayoutEffect 인 이유: display:none 이 된 요소에서 포커스를 body 로 옮기는 focus fixup rule 은
+  // (WHATWG HTML, whatwg/html PR #8392 — DOM 제거로 도는 동기 변형과 분리됐다) "update the rendering"
+  // 단계에서 도는 변형이고, 그 단계는 HTML 이벤트 루프의 한 단계로서 스크립트가 실행 중이 아닐 때(no
+  // script is running)에만 도달한다 — 즉 지금 실행 중인 태스크(리액트의 동기 커밋 + layout effect
+  // 체인 전체)가 다 끝나야 브라우저가 거기 이를 수 있다. useLayoutEffect 는 그 커밋과 같은 스크립트
+  // 실행 안에서 동기로 돌므로, 중간에 다른 곳으로 제어가 넘어가지 않는 한 fixup 이 돌 기회보다 반드시
+  // 먼저 끝난다. 페인트 뒤로 미뤄지는 일반 useEffect 로 하면 그 사이 fixup 이 이미 지나갔을 수 있어,
+  // 그 경우 아래 `host.contains(document.activeElement)` 가 항상 거짓이 되어 이 fix 가 조용히
+  // 무력화된다. (실제 브라우저에서 계측해 확인하지는 않았다 — task 10 의 수동 검증 항목: 프리뷰
+  // 모드에서 순환 키를 눌러 포커스가 body 가 아니라 에디터로 가는지 확인한다.)
+  //
+  // `editorView` 가 이 순간 null 이면 `editorView?.focus()` 는 아무 일도 하지 않아, 그 렌더에서는
+  // body 로의 blur 갭이 다시 열린다. 마운트 시점에는 이 경우가 실제로 걱정할 필요가 없다 — 두 effect가
+  // "같은 커밋에서 돈다"는 이유가 아니라(FileEditor 가 뷰를 넘기는 것은 별도의 passive useEffect 라
+  // 페인트 뒤 별도 커밋에서 돈다), `prevModeRef` 가 최초 렌더의 `mode` 값으로 시작해서 마운트 시점의
+  // `leftPreview` 는 `editorView` 가 null 이든 아니든 항상 거짓이기 때문이다.
   const prevModeRef = useRef(mode)
   useLayoutEffect(() => {
     const leftPreview = prevModeRef.current === 'preview' && mode !== 'preview'
