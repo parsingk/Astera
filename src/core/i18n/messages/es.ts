@@ -730,5 +730,8 @@ export const es: Catalog = {
   'jobs.event.question': 'pregunta',
   'jobs.event.escalation': 'escalación',
   'jobs.event.heartbeat': 'latido',
-  'jobs.event.decisionGate': 'decisión'
+  'jobs.event.decisionGate': 'decisión',
+  // El resultado de worker_done — no jobs.completed/jobs.failed, que etiquetan un Run completo
+  'jobs.event.succeeded': 'correcto',
+  'jobs.event.outcomeFailed': 'fallido'
 }

@@ -624,5 +624,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.event.question': 'question',
   'jobs.event.escalation': 'escalation',
   'jobs.event.heartbeat': 'heartbeat',
-  'jobs.event.decisionGate': 'decision'
+  'jobs.event.decisionGate': 'decision',
+  // worker_done's outcome — deliberately not jobs.completed/jobs.failed, which label a whole Run
+  'jobs.event.succeeded': 'succeeded',
+  'jobs.event.outcomeFailed': 'failed'
 }

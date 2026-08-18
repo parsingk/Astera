@@ -744,5 +744,9 @@ export const ko = {
   'jobs.event.question': '질문',
   'jobs.event.escalation': '에스컬레이션',
   'jobs.event.heartbeat': '신호',
-  'jobs.event.decisionGate': '결정 요청'
+  'jobs.event.decisionGate': '결정 요청',
+  // worker_done 의 결과. jobs.completed/jobs.failed 를 쓰지 않는다 — 그 둘은 사이드바에서 Run
+  // 전체의 상태를 가리키는 말이라, 워커 보고 한 건에 붙이면 같은 주장을 다른 대상에 하는 것으로 읽힌다
+  'jobs.event.succeeded': '성공',
+  'jobs.event.outcomeFailed': '실패'
 } as const

@@ -1457,8 +1457,14 @@ export default function App(): React.JSX.Element {
   // The Jobs sidebar snapshot for the open project — orch.list's initial payload, then every
   // 'orch:state' push after it (see the subscription effect below). null until orch.list first resolves.
   const [orchSnapshot, setOrchSnapshot] = useState<OrchSnapshot | null>(null)
-  /** 기록 모달이 열려 있는 Run. null 이면 닫혀 있다 */
-  const [timelineRunId, setTimelineRunId] = useState<string | null>(null)
+  /** 기록 모달이 열려 있는 Run. null 이면 닫혀 있다.
+   *
+   *  **runId 만 들지 않고 프로젝트를 함께 든다.** 프로젝트가 바뀌는 커밋에서는 리셋 효과의
+   *  setTimeline(null) 이 그 렌더의 값을 바꾸지 못하므로(효과 단계다) 재조회는 옛 runId 로 한 번
+   *  발사되고, 그러면 main 이 `run X does not belong to Y` 를 orchLog 에 쓴다 — 진짜 크로스 프로젝트
+   *  접근 시도가 남기는 줄과 한 글자도 다르지 않아 그 로그를 감사에 쓸 수 없게 된다. 짝을 한 값으로
+   *  들면 재조회가 발사 지점에서 스스로 거를 수 있다(효과 선언 순서를 바꾸는 것으로는 고쳐지지 않는다). */
+  const [timeline, setTimeline] = useState<{ projectPath: string; runId: string } | null>(null)
   /** 그 Run 의 이벤트. null 은 아직 도착하지 않았다는 뜻이고 빈 배열과 다르다 — 모달은 전자에
    *  아무것도 그리지 않고 후자에만 빈 상태를 그린다. 읽는 효과는 currentProject 선언 아래에 있다. */
   const [timelineEvents, setTimelineEvents] = useState<JobEvent[] | null>(null)
@@ -1520,11 +1526,14 @@ export default function App(): React.JSX.Element {
   // 상태가 움직였다"이고, JobRun.eventCount 가 스냅샷에 실려 있으므로 Task 상태를 하나도 옮기지 않는
   // 메시지도 그 신호에 포함된다. 폴링을 두지 않는 이유가 그것이다.
   useEffect(() => {
-    if (!timelineRunId || !currentProject) return
+    // 짝이 맞지 않으면 부르지 않는다 — 프로젝트 A→B 커밋에서 이 효과는 아직 A 의 runId 를 들고
+    // 돌지만, 그 조합은 main 이 거부할 조합이다. 여기서 거르면 orchLog 에 접근 위반과 똑같이 생긴
+    // 줄이 남지 않는다. 모달을 닫는 것은 아래의 리셋 효과다(이 가드는 로그만 지킨다).
+    if (!timeline || timeline.projectPath !== currentProject) return
     let cancelled = false
-    // 거부 팔을 반드시 둔다 — 프로젝트가 바뀌는 찰나에 부르면 main 의 경로 가드가 거부하고, 그러면
+    // 거부 팔을 반드시 둔다 — 위의 가드가 걸러도 main 은 저장소를 읽다 던질 수 있고, 그러면
     // DevTools 에 Uncaught (in promise) 가 뜬다. 빈 배열로 접으면 모달은 빈 상태를 그린다.
-    void window.api.orch.timeline(currentProject, timelineRunId).then(
+    void window.api.orch.timeline(timeline.projectPath, timeline.runId).then(
       (evts) => {
         if (!cancelled) setTimelineEvents(evts)
       },
@@ -1535,10 +1544,10 @@ export default function App(): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [timelineRunId, currentProject, orchSnapshot])
-  // 프로젝트가 바뀌면 닫는다 — 다른 프로젝트의 Run 을 열어 둔 채로 두면 orch.timeline 이 거부한다
+  }, [timeline, currentProject, orchSnapshot])
+  // 프로젝트가 바뀌면 닫는다 — 다른 프로젝트의 Run 을 열어 둔 채로 둘 이유가 없다
   useEffect(() => {
-    setTimelineRunId(null)
+    setTimeline(null)
     setTimelineEvents(null)
   }, [currentProject])
 
@@ -1550,7 +1559,7 @@ export default function App(): React.JSX.Element {
   // OR-ed onto the value the other modals already set above — runManagerVisible depends on
   // currentProject, which is not computed yet at that point in the component. The history modal joins
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
-  modalOpenRef.current = modalOpenRef.current || runManagerVisible || timelineRunId !== null
+  modalOpenRef.current = modalOpenRef.current || runManagerVisible || timeline !== null
 
   // Mirrors currentProject into a ref — avoids a stale closure in the run:status subscription effect
   const currentProjectRef = useRef(currentProject)
@@ -1865,8 +1874,18 @@ export default function App(): React.JSX.Element {
   }
   /** 실행 중 목록에서 다른 프로젝트로 점프. 트리 루트는 활성 탭이 정하므로, 그 프로젝트에 속한 탭을
    *  활성으로 만드는 것이 곧 '그리로 간다'는 뜻이다. 세션을 먼저 찾고 없으면 그 프로젝트의 파일 탭을
-   *  쓴다. 둘 다 없으면 갈 곳이 없으므로 아무 일도 하지 않는다 — 예전처럼 루트만 핀으로 바꿔 두면
-   *  활성 탭이 그대로라 화면은 움직이지 않는다. */
+   *  쓴다.
+   *
+   *  **둘 다 없으면 sticky 루트를 그 프로젝트로 옮긴다.** 이 폴백은 탭이 하나도 없는 상태에서만
+   *  무언가를 한다 — runSlot 이 explorerRoot 에서 currentProject 로 옮겨 오면서 처음 생긴 상태이고,
+   *  그 상태에서는 이 툴바가 그려지는데도(전역 실행 목록이 거기 있다) 활성화할 탭이 없어 점프 버튼이
+   *  조용히 아무 일도 하지 않았다.
+   *
+   *  이것이 없앤 '탐색기에서 열기' 버튼들의 모순을 되살리지 않는 이유: 그 버튼들은 **탭이 있는
+   *  상태에서** 루트를 핀으로 바꾸려 했고, activeTabRoot 가 언제나 stickyRoot 를 이기므로
+   *  (currentProject 참고) 화면이 움직이지 않아 무력했다. 여기서는 탭이 있으면 위의 두 분기가 먼저
+   *  탭 활성화로 끝나므로 이 줄에 도달하지 않는다 — 즉 이기지 못하는 자리에서 이기려 하지 않는다.
+   *  경로는 run.listActive 가 준 것이라 main 의 가드가 이미 허용한 값이다. */
   const runJump = (projectPath: string): void => {
     const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
     const target = norm(projectPath)
@@ -1876,7 +1895,12 @@ export default function App(): React.JSX.Element {
       return
     }
     const file = fileTabsRef.current.find((t) => norm(t.projectRoot) === target)
-    if (file) selectWorkbenchTabRef.current(file.id)
+    if (file) {
+      selectWorkbenchTabRef.current(file.id)
+      return
+    }
+    setStickyRoot(projectPath)
+    sticky.write(projectPath)
   }
   const runStopProject = (projectPath: string): void => { void window.api.run.stop(projectPath) }
 
@@ -2177,7 +2201,8 @@ export default function App(): React.JSX.Element {
                 onOpenSession={(sessionId) => selectWorkbenchTab(sessionTab(sessionId))}
                 onOpenTimeline={(runId) => {
                   setTimelineEvents(null) // 이전 Run 의 이벤트가 한 프레임 보이지 않게 한다
-                  setTimelineRunId(runId)
+                  // 여는 시점의 프로젝트를 runId 와 함께 든다 — 이 스냅샷을 준 프로젝트가 그것이다
+                  if (currentProject) setTimeline({ projectPath: currentProject, runId })
                 }}
               />
             ) : (
@@ -2850,9 +2875,9 @@ export default function App(): React.JSX.Element {
           onClose={() => setRunManagerOpen(false)}
         />
       )}
-      {timelineRunId && (
+      {timeline && (
         <JobTimeline
-          objective={orchSnapshot?.runs.find((r) => r.id === timelineRunId)?.objective ?? ''}
+          objective={orchSnapshot?.runs.find((r) => r.id === timeline.runId)?.objective ?? ''}
           events={timelineEvents}
           // Verbatim the pair JobsView is handed above, and for the reason its comment there records:
           // the tab tree is the only place that knows whether the worker's tab is still open, so a
@@ -2860,10 +2885,10 @@ export default function App(): React.JSX.Element {
           // silently do nothing.
           canOpenSession={(sessionId) => !!layout && !!groupOfTab(layout, sessionTab(sessionId))}
           onOpenSession={(sessionId) => {
-            setTimelineRunId(null) // 탭으로 가면서 닫는다
+            setTimeline(null) // 탭으로 가면서 닫는다
             selectWorkbenchTab(sessionTab(sessionId))
           }}
-          onClose={() => setTimelineRunId(null)}
+          onClose={() => setTimeline(null)}
         />
       )}
       <ConfirmHost />

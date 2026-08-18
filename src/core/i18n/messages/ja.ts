@@ -719,5 +719,8 @@ export const ja: Catalog = {
   'jobs.event.question': '質問',
   'jobs.event.escalation': 'エスカレーション',
   'jobs.event.heartbeat': 'ハートビート',
-  'jobs.event.decisionGate': '判断要求'
+  'jobs.event.decisionGate': '判断要求',
+  // worker_done の結果。jobs.completed/jobs.failed は Run 全体の状態を指す語なので使わない
+  'jobs.event.succeeded': '成功',
+  'jobs.event.outcomeFailed': '失敗'
 }

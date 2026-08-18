@@ -88,10 +88,19 @@ export function JobTimeline({
                   onClick={e.body ? () => toggle(key) : undefined}
                 >
                   <span className="timeline-at">{timeOf(e.at)}</span>
-                  <span className={`timeline-kind k-${e.kind}`}>
+                  <span className="timeline-kind">
                     {e.kind === 'message'
                       ? t(MSG_LABEL[e.messageType ?? 'status'])
                       : t(KIND_LABEL[e.kind])}
+                    {/* 결과가 실린 메시지에만 나오는 표시. **이 줄이 워커가 실패를 보고했다는
+                        사실의 유일한 기록이다** — applyWorkerDone 은 두 번째 메시지를 만들지 않고,
+                        타임라인에는 Task 상태 변화 이벤트가 없다. 색은 JobsView 의 상태 점이 같은
+                        세 뜻에 쓰는 팔레트를 그대로 빌린다. */}
+                    {e.outcome && (
+                      <span className={`timeline-outcome o-${e.outcome}`}>
+                        {t(e.outcome === 'succeeded' ? 'jobs.event.succeeded' : 'jobs.event.outcomeFailed')}
+                      </span>
+                    )}
                   </span>
                   <span className="timeline-task" title={e.taskTitle}>
                     {e.taskTitle ?? ''}
