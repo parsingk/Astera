@@ -71,8 +71,8 @@ export class OrchestrationStore {
       return { ...d, endedAt: now, workerState: 'outcome_unknown' as const }
     })
 
-    // TTL cleanup: once a finished Run (closed, or every Task terminal) is 30 days old, every
-    // entry belonging to that Run is discarded.
+    // TTL cleanup: once a finished Run (every Task terminal) is 30 days old, every entry belonging
+    // to that Run is discarded.
     const cutoff = Date.now() - RUN_TTL_MS
     const terminal = new Set(['completed', 'failed'])
     const doomed = new Set(
@@ -90,7 +90,7 @@ export class OrchestrationStore {
           ]
           const endTime = Math.max(...terminalTimes)
           if (endTime > cutoff) return false
-          return r.status === 'closed' || (own.length > 0 && own.every((t) => terminal.has(t.status)))
+          return own.length > 0 && own.every((t) => terminal.has(t.status))
         })
         .map((r) => r.id)
     )

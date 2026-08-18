@@ -5,8 +5,8 @@ import type { OrchState } from './state'
 import type { Dispatch, Gate, Run, Task } from './types'
 import { absPath } from '../testPaths'
 
-const run = (id: string, cwd: string, status: Run['status'] = 'open'): Run => ({
-  id, objective: `objective ${id}`, cwd, status, createdAt: '2026-08-18T00:00:00.000Z'
+const run = (id: string, cwd: string): Run => ({
+  id, objective: `objective ${id}`, cwd, createdAt: '2026-08-18T00:00:00.000Z'
 })
 const task = (id: string, runId: string, status: Task['status']): Task => ({
   id, runId, title: `task ${id}`, spec: '', deps: [], status,
