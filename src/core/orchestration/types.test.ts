@@ -67,6 +67,22 @@ describe('validating 전이', () => {
   })
 })
 
+describe('reviewing 전이', () => {
+  it('dispatched -> reviewing, validating -> reviewing 이 허용된다', () => {
+    expect(canTransition('dispatched', 'reviewing')).toBe(true)
+    expect(canTransition('validating', 'reviewing')).toBe(true)
+  })
+  it('reviewing -> completed | failed | blocked 가 허용된다', () => {
+    expect(canTransition('reviewing', 'completed')).toBe(true)
+    expect(canTransition('reviewing', 'failed')).toBe(true)
+    expect(canTransition('reviewing', 'blocked')).toBe(true)
+  })
+  // 검토 결과가 도착할 자리가 사라진다 — validating 이 같은 이유로 없다
+  it('reviewing -> dispatched 는 허용되지 않는다', () => {
+    expect(canTransition('reviewing', 'dispatched')).toBe(false)
+  })
+})
+
 describe('recomputeReady', () => {
   it('deps가 없는 pending은 ready가 된다', () => {
     const out = recomputeReady([task('a', 'pending')])
