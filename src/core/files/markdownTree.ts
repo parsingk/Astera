@@ -104,7 +104,9 @@ interface Ctx {
 const INLINE_SKIP = new Set([
   'EmphasisMark', 'CodeMark', 'StrikethroughMark', 'HeaderMark', 'QuoteMark', 'ListMark',
   'TaskMarker', 'CodeInfo', 'TableDelimiter', 'Comment', 'ProcessingInstruction',
-  'LinkLabel', 'URL', 'LinkTitle'
+  'LinkLabel', 'LinkTitle'
+  // 'URL' 는 여기 없다 — switch 에 case 'URL' 이 있어 default 분기(이 집합을 보는 곳)에는
+  // 절대 닿지 않는다. 예전에는 여기 있었지만 그 case 가 생기며 죽은 코드가 됐다 — 리뷰에서 확인
 ])
 
 function pushText(out: MdInline[], text: string): void {
@@ -146,6 +148,13 @@ export function classifyHref(raw: string): MdHref {
   const trimmed = raw.trim()
   if (!trimmed) return null
   if (trimmed.startsWith('#')) return { kind: 'anchor', id: trimmed.slice(1) }
+  // 프로토콜-상대 URL(`//host/x`)과 UNC 경로(`\\host\share`)는 허용 스킴이 있는 외부 링크도,
+  // 프로젝트 안의 상대경로도 아니다 — 링크로 만들지 않는다. 오늘은 task 7 의 resolveRelative 가
+  // `//evil.example/x` 를 프로젝트 경로로 우연히 무해화하지만, 그건 분리 방식의 우연이지 결정이
+  // 아니다. Windows 에서 `\\host\share` 는 UNC 경로라 fs·셸에 그대로 건네지면 SMB 접속이 된다.
+  // `C:\Windows`·`c:/x` 는 그대로 null 이 나온다 — 드라이브 문자가 SCHEME 정규식에 "c" 스킴으로
+  // 잡히고 허용 목록에 없어서 걸러진다(이 검사보다 아래, 원래부터 그렇다).
+  if (trimmed.startsWith('//') || trimmed.startsWith('\\\\')) return null
   // 스킴 판정 전에만 제어문자를 지운다. 통과한 URL 은 원문 그대로 넘긴다
   const probe = trimmed.replace(/[\u0000-\u0020]/g, '')
   const m = SCHEME.exec(probe)
@@ -161,12 +170,28 @@ export function classifyHref(raw: string): MdHref {
  *  **LinkLabel 이 있어도 비어 있을 수 있다**: `[a][]`(collapsed reference) 는 LinkLabel 노드가
  *  실제로 존재하지만 그 안이 비어 있다(`"[]"`, 대괄호 사이에 글자가 없다) — 실제 트리 덤프로 확인.
  *  라벨이 없는 것과 같은 뜻이므로, 비어 있으면 축약형 `[a]` 처럼 본문 텍스트로 되돌아간다.
- *  이걸 하지 않으면 `defs.get('')` 을 찾게 되어 정의가 있어도 연결되지 않는다. */
+ *  이걸 하지 않으면 `defs.get('')` 을 찾게 되어 정의가 있어도 연결되지 않는다.
+ *
+ *  **표시부 안의 자동링크가 진짜 목적지를 가릴 수 있다**: `[www.paypal.com](https://evil.example)`
+ *  에서 표시부의 `www.paypal.com` 도 GFM 맨텍스트 자동링크라 URL 노드를 만든다 — Link 노드
+ *  자식으로는 두 개의 URL 이 나란히 있고 첫 번째가 표시부 것이다(실제 트리 덤프로 확인). 그래서
+ *  `getChild('URL')`(첫 번째를 돌려줌)로는 표시부의 가짜 목적지를 집게 된다. 닫는 표시 마크
+ *  (`marks[1]`) **뒤**에 오는 URL 만 목적지로 본다 — 목적지는 항상 그 뒤에 있다.
+ *
+ *  **꺾쇠 목적지는 꺾쇠를 포함해 슬라이스된다**: `[a](<b c.md>)` 의 URL 노드 원문은 `"<b c.md>"`
+ *  다(실제 트리 덤프로 확인) — 공백·괄호가 든 목적지를 쓰는 CommonMark 의 표준 표기다. Autolink
+ *  갈래와 같은 정규식으로 벗긴다. 벗기지 않으면 정상적인 문법이 `classifyHref` 를 오판시킨다 —
+ *  허용 스킴이 있어도 꺾쇠 때문에 `file` 로 잘못 분류되거나(예: `<https://b.com>`), 반대로
+ *  허용되지 않는 스킴이 꺾쇠 때문에 SCHEME 정규식을 피해 게이트를 그냥 통과한다(예:
+ *  `<file:///C:/secret.txt>` — `<` 로 시작해 `^[a-z]` 에 걸리지 않으므로 스킴을 못 찾아
+ *  `file` 종류의 비-null 값을 내놓아 링크가 만들어진다). */
 function linkTarget(node: SyntaxNode, ctx: Ctx): { dest: string; title: string | null } | null {
-  const url = node.getChild('URL')
+  const marks = node.getChildren('LinkMark')
+  const destFrom = marks.length >= 2 ? marks[1].to : node.to
+  const url = node.getChildren('URL').find((u) => u.from >= destFrom)
   const titleNode = node.getChild('LinkTitle')
   const title = titleNode ? ctx.text.slice(titleNode.from + 1, titleNode.to - 1) : null
-  if (url) return { dest: ctx.text.slice(url.from, url.to), title }
+  if (url) return { dest: ctx.text.slice(url.from, url.to).replace(/^<|>$/g, ''), title }
 
   const labelNode = node.getChild('LinkLabel')
   const rawLabel = labelNode ? ctx.text.slice(labelNode.from + 1, labelNode.to - 1) : ''
@@ -191,27 +216,72 @@ function innerText(node: SyntaxNode, ctx: Ctx): string {
  *  스킴을 뜻하는지 채우는 것뿐이고, GFM 자동링크 리터럴이 만들 수 있는 꼴은 세 가지뿐이다 —
  *  이메일, `www.`, 이미 스킴이 있는 URL. 그래서 이 세 갈래로 완결된다(추측이 아니다).
  *
+ *  **판정 순서: www. 를 이메일보다 먼저 본다.** `www.youtube.com/@chan`·`www.a.com?x=1@2` 처럼
+ *  경로·쿼리·조각에 `@` 가 들어간 www 링크가 흔하다(유튜브·마스토돈 손잡이). `@` 를 먼저 보면 이
+ *  www 링크들이 통째로 `mailto:` 로 잘못 묶인다 — www. 를 먼저 걸러야 한다.
+ *
+ *  이메일 판정은 `@` 앞부분에 `/`·`?`·`#`·`:` 가 없을 때만 한다. `/`·`?`·`#` 는 그 `@` 가 경로·
+ *  쿼리·조각의 일부라는 뜻이고(www. 를 이미 걸렀으니 여기 남은 것은 경로 없는 도메인이거나 이미
+ *  스킴이 있는 URL 뿐), `:` 는 이미 스킴이 있다는 뜻이다(`mailto:a@b.com`, `https://user@host.com`
+ *  처럼 GFM 이 스킴까지 통째로 URL 노드로 묶어주는 경우) — 이때 또 스킴을 붙이면
+ *  `mailto:mailto:...` 로 겹친다.
+ *
  *  화면에 보이는 텍스트는 원문 그대로 둔다 — href 에만 스킴을 붙인다. GitHub 도 이렇게 한다. */
 function autolinkHref(raw: string): string {
-  const at = raw.indexOf('@')
-  if (at !== -1 && !raw.slice(0, at).includes(':')) return `mailto:${raw}`
   if (/^www\./i.test(raw)) return `http://${raw}`
+  const at = raw.indexOf('@')
+  if (at !== -1 && !/[/?#:]/.test(raw.slice(0, at))) return `mailto:${raw}`
   return raw
+}
+
+/** 링크 표시부 안에 중첩된 link 를 그 자식으로 펼친다.
+ *
+ *  CommonMark 는 링크 안의 링크를 허용하지 않는다. 그런데 표시부 텍스트 자체가 GFM 맨텍스트
+ *  자동링크 모양이면(`[www.paypal.com](https://evil.example)`, `[see https://a.com](url)`,
+ *  `[mail me@b.com](url)`) inlineOf 가 그 부분을 link 로 만들어 버린다 — Link 노드 안의
+ *  표시부·목적지가 둘 다 URL 노드로 나오는 트리 모양(실제 덤프로 확인) 때문에 노드 차원에서는
+ *  막을 수 없고, MdInline 을 만든 뒤 펼쳐야 한다. 안 그러면 `<a>` 안에 `<a>` 가 들어가는 잘못된
+ *  구조가 되고, GitHub 은 이런 경우 안쪽을 평문으로 그린다 — 여기서도 그렇게 맞춘다. */
+function unwrapLinks(nodes: MdInline[]): MdInline[] {
+  const out: MdInline[] = []
+  for (const n of nodes) {
+    if (n.k === 'link') out.push(...unwrapLinks(n.children))
+    else out.push(n)
+  }
+  return out
 }
 
 /** 링크 표시부의 인라인 — 첫 LinkMark 와 그 짝 **사이만** 본다.
  *
  *  범위를 주지 않으면 URL 과 LinkTitle 사이의 공백이 본문에 섞인다. `[a](https://b.com "t")` 가
- *  본문 `"a "` 로 나오는 것이 그 증상이다 (inlineOf 의 limit 주석 참고). */
+ *  본문 `"a "` 로 나오는 것이 그 증상이다 (inlineOf 의 limit 주석 참고).
+ *
+ *  표시부가 비어 있으면(`[](https://a.com)`) 빈 배열을 돌려준다 — `pushText` 가 지키는 "빈
+ *  텍스트 노드는 만들지 않는다"는 불변식을 여기서도 지킨다. */
 function linkChildren(node: SyntaxNode, ctx: Ctx): MdInline[] {
   const marks = node.getChildren('LinkMark')
-  if (marks.length < 2) return [{ k: 'text', text: innerText(node, ctx) }]
-  const inner = trimEnds(inlineOf(node, ctx, { from: marks[0].to, to: marks[1].from }))
-  return inner.length > 0 ? inner : [{ k: 'text', text: innerText(node, ctx) }]
+  if (marks.length < 2) {
+    const text = innerText(node, ctx)
+    return text ? [{ k: 'text', text }] : []
+  }
+  const inner = unwrapLinks(trimEnds(inlineOf(node, ctx, { from: marks[0].to, to: marks[1].from })))
+  if (inner.length > 0) return inner
+  const text = innerText(node, ctx)
+  return text ? [{ k: 'text', text }] : []
 }
 
 /** 문서 전체의 참조링크 정의를 모은다. 본문 순회보다 먼저 돌아야 한다 — 정의가 사용보다 뒤에
- *  올 수 있기 때문이다(CommonMark 는 순서를 요구하지 않는다) */
+ *  올 수 있기 때문이다(CommonMark 는 순서를 요구하지 않는다).
+ *
+ *  **같은 라벨이 두 번 정의되면 첫 번째가 이긴다** — CommonMark 규칙이고, 커서는 문서 순서로
+ *  돈다. `ctx.defs.has(key)` 로 이미 채워진 라벨을 건너뛰기만 하면 된다 — 안 그러면 파일 아래로
+ *  갈수록 더 신뢰받는다는 뜻이 되어, 눈에 보이는 사용 지점보다 훨씬 아래에 묻힌 재정의가 목적지를
+ *  조용히 바꿔칠 수 있다.
+ *
+ *  **꺾쇠 목적지는 여기서도 꺾쇠를 포함해 슬라이스된다** — `[b]: <https://c.com> "t"` 의 URL
+ *  노드 원문이 `"<https://c.com>"` 이다(linkTarget 의 인라인 목적지와 같은 트리 모양). 여기서
+ *  벗기지 않으면 방금 linkTarget 에서 고친 것과 같은 문제가 참조링크 경로로 다시 들어온다 —
+ *  defs 표에 꺾쇠 붙은 href 가 저장되고, 그게 그대로 classifyHref 에 들어가 오판을 부른다. */
 function collectDefs(root: SyntaxNode, ctx: Ctx): void {
   const cursor = root.cursor()
   do {
@@ -220,9 +290,11 @@ function collectDefs(root: SyntaxNode, ctx: Ctx): void {
     const label = node.getChild('LinkLabel')
     const url = node.getChild('URL')
     if (!label || !url) continue
+    const key = ctx.text.slice(label.from + 1, label.to - 1).trim().toLowerCase()
+    if (ctx.defs.has(key)) continue
     const titleNode = node.getChild('LinkTitle')
-    ctx.defs.set(ctx.text.slice(label.from + 1, label.to - 1).trim().toLowerCase(), {
-      href: ctx.text.slice(url.from, url.to),
+    ctx.defs.set(key, {
+      href: ctx.text.slice(url.from, url.to).replace(/^<|>$/g, ''),
       title: titleNode ? ctx.text.slice(titleNode.from + 1, titleNode.to - 1) : null
     })
   } while (cursor.next())
@@ -292,11 +364,14 @@ function inlineOf(node: SyntaxNode, ctx: Ctx, limit?: { from: number; to: number
       }
       // GFM 의 맨 URL 자동링크(`see https://a.com now`)는 Autolink 노드가 아니라 밋밋한 URL
       // 노드로 나온다 — Link/Image 의 목적지 자식과 노드 이름이 같다(실제 트리 덤프로 확인).
-      // 그 자식은 linkChildren 의 limit 범위 밖에 있어 이 switch 에 닿지 않으므로, 여기서 만나는
-      // URL 은 항상 이 GFM 맨 자동링크다. `<me@b.com>` 형은 Autolink 노드로 감싸여 있고 꺾쇠를
-      // 포함해 슬라이스되므로 replace 로 벗긴다 — 맨 텍스트형은 꺾쇠가 없어 그대로 통과한다.
-      // 이메일·www. 자동링크는 스킴이 없는 텍스트로 나오므로 classifyHref 에 넘기기 전에
-      // autolinkHref 로 스킴을 채운다 — 화면 텍스트(`text`)는 원문 그대로, href 만 바뀐다.
+      // 그 destination 자식은 linkTarget 이 marks[1] 뒤에서만 고르므로 여기 닿지 않는다. 반면
+      // Link 의 표시부 안에 있는 맨 URL(`[see https://a.com](url)`)은 linkChildren 이 그 구간을
+      // inlineOf 로 다시 훑을 때 이 switch 에 그대로 닿는다 — 그래서 여기서 link 로 만들고,
+      // linkChildren 의 unwrapLinks 가 나중에 그 link 를 다시 평문으로 펼친다(중첩 링크 금지).
+      // `<me@b.com>` 형은 Autolink 노드로 감싸여 있고 꺾쇠를 포함해 슬라이스되므로 replace 로
+      // 벗긴다 — 맨 텍스트형은 꺾쇠가 없어 그대로 통과한다. 이메일·www. 자동링크는 스킴이 없는
+      // 텍스트로 나오므로 classifyHref 에 넘기기 전에 autolinkHref 로 스킴을 채운다 — 화면
+      // 텍스트(`text`)는 원문 그대로, href 만 바뀐다.
       case 'Autolink':
       case 'URL': {
         const text = ctx.text.slice(c.from, c.to).replace(/^<|>$/g, '')

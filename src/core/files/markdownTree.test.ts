@@ -331,3 +331,107 @@ describe('자동링크의 암시 스킴', () => {
     expect(classifyHref('me@b.com')).toEqual({ kind: 'file', path: 'me@b.com' })
   })
 })
+
+describe('링크 표시부의 자동링크가 목적지를 가리지 않는다', () => {
+  it('표시부의 www. 자동링크가 진짜 목적지 대신 쓰이지 않는다', () => {
+    const p = parseMarkdown('[www.paypal.com](https://evil.example/phish)\n')[0] as Extract<
+      MdBlock, { k: 'para' }
+    >
+    const link = p.inline[0] as Extract<MdInline, { k: 'link' }>
+    expect(link.k).toBe('link')
+    expect(link.href).toBe('https://evil.example/phish')
+    expect(plain(link.children)).toBe('www.paypal.com')
+    // 링크 안에 링크가 없다 — <a> 안에 <a> 가 들어가는 잘못된 구조를 만들지 않는다
+    expect(link.children.every((n) => n.k !== 'link')).toBe(true)
+  })
+  it('표시부의 맨 URL 자동링크도 목적지를 가리지 않는다', () => {
+    const p = parseMarkdown('[see https://a.com](https://b.com)\n')[0] as Extract<
+      MdBlock, { k: 'para' }
+    >
+    const link = p.inline[0] as Extract<MdInline, { k: 'link' }>
+    expect(link.href).toBe('https://b.com')
+    expect(link.children.every((n) => n.k !== 'link')).toBe(true)
+  })
+  it('표시부의 이메일 자동링크도 목적지를 가리지 않는다', () => {
+    const p = parseMarkdown('[mail me@b.com](./local.md)\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline[0] as Extract<MdInline, { k: 'link' }>
+    expect(link.href).toBe('./local.md')
+    expect(link.children.every((n) => n.k !== 'link')).toBe(true)
+  })
+})
+
+describe('자동링크의 www. 판정이 이메일 판정보다 먼저다', () => {
+  it('경로에 @ 가 있는 www. 링크(유튜브 손잡이)를 mailto 로 잘못 묶지 않는다', () => {
+    const p = parseMarkdown('see www.youtube.com/@chan now\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline.find((n) => n.k === 'link') as Extract<MdInline, { k: 'link' }>
+    expect(link.href).toBe('http://www.youtube.com/@chan')
+  })
+  it('경로에 @ 가 있는 www. 링크(마스토돈 손잡이)도 마찬가지다', () => {
+    const p = parseMarkdown('see www.mastodon.social/@alice now\n')[0] as Extract<
+      MdBlock, { k: 'para' }
+    >
+    const link = p.inline.find((n) => n.k === 'link') as Extract<MdInline, { k: 'link' }>
+    expect(link.href).toBe('http://www.mastodon.social/@alice')
+  })
+  it('조각(#) 뒤에 @ 가 있는 www. 링크도 마찬가지다', () => {
+    const p = parseMarkdown('see www.a.com/#@x now\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline.find((n) => n.k === 'link') as Extract<MdInline, { k: 'link' }>
+    expect(link.href).toBe('http://www.a.com/#@x')
+  })
+  it('이미 스킴이 있는 이메일형 자동링크(mailto:a@b.com)는 스킴을 겹쳐 붙이지 않는다', () => {
+    // autolinkHref 가 www. 를 먼저 보고 나서도 이미 스킴이 있는 경우를 또 걸러야 한다는 회귀
+    // 가드 — `@` 앞에 `:` 가 있으면 GFM 이 스킴까지 통째로 묶어준 것이니 다시 붙이지 않는다
+    const p = parseMarkdown('send mailto:a@b.com now\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline.find((n) => n.k === 'link') as Extract<MdInline, { k: 'link' }>
+    expect(link.href).toBe('mailto:a@b.com')
+  })
+})
+
+describe('꺾쇠로 감싼 링크 목적지', () => {
+  it('허용 스킴이면 꺾쇠를 벗기고 외부 링크로 만든다', () => {
+    const p = parseMarkdown('[a](<https://b.com>)\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline[0] as Extract<MdInline, { k: 'link' }>
+    expect(link.href).toBe('https://b.com')
+    expect(classifyHref(link.href)).toEqual({ kind: 'external', url: 'https://b.com' })
+  })
+  it('허용되지 않는 스킴이면 꺾쇠에 숨어도 링크를 만들지 않는다', () => {
+    const p = parseMarkdown('[a](<file:///C:/secret.txt>)\n')[0] as Extract<MdBlock, { k: 'para' }>
+    expect(p.inline.every((n) => n.k !== 'link')).toBe(true)
+  })
+  it('공백이 든 상대경로(표준 꺾쇠 표기)는 꺾쇠를 벗긴 파일 경로가 된다', () => {
+    const p = parseMarkdown('[a](<b c.md>)\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline[0] as Extract<MdInline, { k: 'link' }>
+    expect(link.href).toBe('b c.md')
+    expect(classifyHref(link.href)).toEqual({ kind: 'file', path: 'b c.md' })
+  })
+})
+
+describe('참조링크 정의가 중복되면 첫 정의가 이긴다', () => {
+  it('같은 라벨을 뒤에서 다시 정의해도 무시한다', () => {
+    const md = '[a][b]\n\n[b]: https://c.com "t"\n[b]: https://evil.example\n'
+    const p = parseMarkdown(md)[0] as Extract<MdBlock, { k: 'para' }>
+    expect(p.inline[0]).toMatchObject({ k: 'link', href: 'https://c.com', title: 't' })
+  })
+})
+
+describe('프로토콜-상대 URL 과 UNC 경로는 링크가 되지 않는다', () => {
+  it('// 로 시작하면 null', () => {
+    expect(classifyHref('//evil.example/x')).toBe(null)
+  })
+  it('\\\\ 로 시작하면 null (UNC 경로)', () => {
+    expect(classifyHref('\\\\host\\share')).toBe(null)
+  })
+  it('Windows 드라이브 경로는 여전히 null', () => {
+    expect(classifyHref('C:\\Windows')).toBe(null)
+    expect(classifyHref('c:/x')).toBe(null)
+  })
+})
+
+describe('빈 표시부', () => {
+  it('표시부가 없는 링크는 빈 텍스트 노드를 만들지 않는다', () => {
+    const p = parseMarkdown('[](https://a.com)\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline[0] as Extract<MdInline, { k: 'link' }>
+    expect(link.k).toBe('link')
+    expect(link.children).toEqual([])
+  })
+})
