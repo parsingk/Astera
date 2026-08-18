@@ -156,9 +156,54 @@ const CodeBlock = memo(function CodeBlock({
  *  Map preserves insertion order, so the oldest key is always `keys().next().value`). Unlike that cache,
  *  an entry here can be as large as IMAGE_READ_MAX (5MB, main/ipc.ts) once base64-encoded, so this cap is
  *  also what keeps a document with many large images from holding all of their data URLs in memory with
- *  no ceiling — there was no bound at all on that total before this cache existed. */
+ *  no ceiling — there was no bound at all on that total before this cache existed.
+ *
+ *  Unlike highlightCache, a stale entry here is wrong, not just uncomputed: the file it was read from can
+ *  change on disk. invalidateImageCache (below) is App's hook into this cache for exactly that — called
+ *  from the same files:changed subscription that already reloads open text buffers, on every add/change/
+ *  unlink chokidar reports for the watched project. */
 const IMAGE_CACHE_MAX = 64
 const imageDataUrlCache = new Map<string, string>()
+
+/** Case-insensitive equality for two resolveImageSrc outputs. Exists because the cache key is never
+ *  canonicalised to on-disk casing — resolveImageSrc (below) builds it by string surgery on the literal
+ *  text the markdown author typed, not by walking the filesystem — while a files:changed path (main's
+ *  FileWatcher, chokidar) reflects the actual on-disk entry name. On a case-preserving-but-insensitive
+ *  filesystem (Windows NTFS, default macOS) those two strings can differ only in case for the exact same
+ *  file — `assets/Diagram.PNG` in the markdown vs. `Diagram.png` chokidar reports — and a case-sensitive
+ *  comparison would silently miss the invalidation. Lowercasing unconditionally, on every platform, is
+ *  the same call this codebase already made for the same reason (isPathWithin's normalizePath,
+ *  core/files/tree.ts, "win32-first: ignore differences in path case and separators") — on a genuinely
+ *  case-sensitive filesystem (Linux) it is a harmless no-op, since a real casing mismatch there means
+ *  the image never opened in the first place (fs.open is case-sensitive, so no cache entry would exist
+ *  under the mismatched key to begin with). Separators are not normalised here: resolveImageSrc always
+ *  uses docPath's own separator, and a files:changed path is native-separator too (fileWatcher.ts), so
+ *  on any one platform both sides already agree.
+ *
+ *  Exported for its own unit test (Finding 2) — everywhere else in this file compares paths through this
+ *  function rather than importing it directly. */
+export function sameAbsPath(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase()
+}
+
+/** Module-scope, per-path listeners a mounted LocalImage registers so invalidateImageCache can reach it.
+ *  Deleting the Map entry alone would not do anything for an already-mounted LocalImage — its data URL
+ *  lives in that instance's own React state, not re-read from the cache after mount. Notifying listeners
+ *  is the second half of invalidation: it tells every live instance showing this path to drop its state
+ *  and re-fetch, without forcing an unrelated re-render anywhere else in the tree. */
+const imageInvalidationListeners = new Set<(absPath: string) => void>()
+
+/** Called from App's files:changed subscription (main/fileWatcher.ts via chokidar) whenever a file the
+ *  workspace watches is added, changed, or unlinked. Evicts every cache entry that resolves to the same
+ *  file as `absPath` (sameAbsPath above — there is normally at most one, but nothing stops two documents
+ *  from referencing the same image via different-case relative links) and tells any currently-mounted
+ *  LocalImage showing it to re-fetch. A miss (no cache entry, no mounted image at this path) is the
+ *  common case and costs one Map scan plus one Set iteration — cheap enough that the caller does not
+ *  need to filter by extension or by "is this path actually referenced anywhere" first. */
+export function invalidateImageCache(absPath: string): void {
+  for (const key of imageDataUrlCache.keys()) if (sameAbsPath(key, absPath)) imageDataUrlCache.delete(key)
+  for (const listener of imageInvalidationListeners) listener(absPath)
+}
 
 /** The document-relative src resolved to an absolute path, or '' for a disallowed/fragment-only one.
  *  Shared by LocalImage's cache lookup and its fetch effect so the two cannot compute it differently.
@@ -189,12 +234,32 @@ function LocalImage({
   // this, a remount always paints the loading placeholder for one frame even for a path already cached.
   const [dataUrl, setDataUrl] = useState<string | null>(() => (abs ? imageDataUrlCache.get(abs) ?? null : null))
   const [failed, setFailed] = useState(() => !abs)
+  // Bumped by the invalidation listener below to force the fetch effect to re-run even though `abs`
+  // itself has not changed — the effect's own dependency array cannot see a change to module-scope
+  // cache state.
+  const [reloadTick, setReloadTick] = useState(0)
+  // Registers for this instance's own abs path so an on-disk edit (App's files:changed → invalidateImageCache)
+  // refetches this mounted image instead of leaving it showing the stale data URL from state until an
+  // unrelated remount happens to discard it (Finding 2 — before this cache existed, a remount incidentally
+  // refetched; the cache made that stop happening).
+  useEffect(() => {
+    if (!abs) return
+    const onInvalidate = (changed: string): void => {
+      if (sameAbsPath(changed, abs)) setReloadTick((n) => n + 1)
+    }
+    imageInvalidationListeners.add(onInvalidate)
+    return () => {
+      imageInvalidationListeners.delete(onInvalidate)
+    }
+  }, [abs])
   useEffect(() => {
     if (!abs) {
       setDataUrl(null)
       setFailed(true)
       return
     }
+    // invalidateImageCache already deleted the stale entry before bumping reloadTick, so a cache hit
+    // here only happens on a genuine remount (the abs-path-keyed lookup), never right after invalidation.
     const cached = imageDataUrlCache.get(abs)
     if (cached !== undefined) {
       setDataUrl(cached)
@@ -220,7 +285,7 @@ function LocalImage({
     return () => {
       cancelled = true
     }
-  }, [abs])
+  }, [abs, reloadTick])
   // style also goes on the placeholders — a raw <img width height> otherwise loses its reserved box
   // while loading (or on failure) and the surrounding layout jumps twice instead of once.
   if (failed) return <span className="md-img-failed" style={style}>{alt || t('files.markdown.image.failed')}</span>

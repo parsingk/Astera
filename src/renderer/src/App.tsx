@@ -11,6 +11,7 @@ import { Select } from './components/Select'
 import { type FileTab } from './components/WorkbenchTabs'
 import { FileEditor } from './components/FileEditor'
 import { MarkdownSplit } from './components/MarkdownSplit'
+import { invalidateImageCache } from './components/MarkdownPreview'
 import type { EditorState, StateEffect } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { EditorStateCache } from './lib/editorStateCache'
@@ -1188,6 +1189,14 @@ export default function App(): React.JSX.Element {
       for (const [k, v] of Object.entries(prev)) next[remap.get(k) ?? k] = v
       return next
     })
+    // mdModes도 같은 모양으로 옮긴다 — 옮기지 않으면 이 탭의 모드가 사라져(openFile이 세운 "모든
+    // 마크다운 탭은 mdModes 항목을 가진다"는 불변식이 깨짐) 다음 렌더가 `?? defaultMdMode()`로
+    // 떨어지고, 방금까지 split/editor였던 탭이 이름만 바뀌었을 뿐인데 모드가 리셋된 것처럼 보인다
+    setMdModes((prev) => {
+      const next: typeof prev = {}
+      for (const [k, v] of Object.entries(prev)) next[remap.get(k) ?? k] = v
+      return next
+    })
     // 트리에도 같은 id가 들어 있으므로 함께 갈아끼운다 — 위치·순서·활성 여부가 그대로 유지된다
     // (계정 롤링이 세션 id를 바꿀 때 쓰는 것과 같은 함수). 세션 탭은 remap에 없으므로 건드려지지 않는다
     setLayout((cur) => {
@@ -1216,8 +1225,13 @@ export default function App(): React.JSX.Element {
   // Subscribing to external changes: only change/add on the paths of open buffers are handled.
   // classifyExternalChange separates our own save (ignore), unmodified (reload), and mid-edit (a
   // conflict banner).
+  // The same event also invalidates MarkdownPreview's local-image cache — unconditionally, ahead of the
+  // open-buffer check below, since a referenced image is almost never itself an open file tab. A miss is
+  // cheap (invalidateImageCache's own comment), so nothing here needs to guess whether c.path is actually
+  // an image before calling it.
   useEffect(() => {
     const off = window.api.on('files:changed', (c) => {
+      if (c.kind === 'add' || c.kind === 'change' || c.kind === 'unlink') invalidateImageCache(c.path)
       const id = `file:${c.path}`
       const buf = fileBuffersRef.current[id]
       if (!buf) return

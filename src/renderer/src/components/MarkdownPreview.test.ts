@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { MarkdownPreview } from './MarkdownPreview'
+import { MarkdownPreview, sameAbsPath } from './MarkdownPreview'
 
 // MarkdownPreview reaches useI18n() unconditionally (the toolbar-less preview itself has no i18n need
 // for most nodes, but LocalImage/RemoteImage do). There is no I18nProvider here — its own effect never
@@ -108,6 +108,24 @@ describe('MarkdownPreview — <img src="mailto:...">', () => {
     const html = renderPreview('![x](mailto:a@b.com)\n')
     expect(html).not.toContain('<button')
     expect(html).not.toContain('md-img-remote')
+  })
+})
+
+describe('sameAbsPath — image cache invalidation key comparability (Finding 2)', () => {
+  // resolveImageSrc builds the cache key from the literal text a markdown author typed, never from an
+  // on-disk directory listing — while a files:changed path (chokidar, via main's FileWatcher) reflects
+  // the actual on-disk entry name. On Windows (and default macOS) those can differ only in case for the
+  // exact same file, and a case-sensitive comparison would silently fail to invalidate.
+  it('Windows 스타일 경로에서 대소문자만 다르면 같은 파일로 본다', () => {
+    expect(sameAbsPath('C:\\proj\\assets\\Diagram.PNG', 'C:\\proj\\assets\\diagram.png')).toBe(true)
+  })
+
+  it('POSIX 스타일 경로에서도 대소문자만 다르면 같은 파일로 본다', () => {
+    expect(sameAbsPath('/proj/assets/Diagram.PNG', '/proj/assets/diagram.png')).toBe(true)
+  })
+
+  it('실제로 다른 파일은 다르게 본다', () => {
+    expect(sameAbsPath('C:\\proj\\assets\\a.png', 'C:\\proj\\assets\\b.png')).toBe(false)
   })
 })
 
