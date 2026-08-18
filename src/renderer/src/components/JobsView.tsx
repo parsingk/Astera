@@ -28,7 +28,8 @@ const STATUS_DOT: Record<TaskStatus, string> = {
 export function JobsView({
   snapshot,
   canOpenSession,
-  onOpenSession
+  onOpenSession,
+  onOpenTimeline
 }: {
   snapshot: OrchSnapshot | null
   /** Whether this window still has a tab for that session — the second half of "is this row
@@ -39,6 +40,9 @@ export function JobsView({
   /** Focus the tab that owns this session. The Jobs view creates no surface of its own — the worker
    *  sessions already arrive as tabs and Dispatch carries the id that ties a Task to one. */
   onOpenSession: (sessionId: string) => void
+  /** Open the history modal for that Run. The Run's events are fetched on demand (orch.timeline), so
+   *  this view only names the Run — App owns both the request and the modal. */
+  onOpenTimeline: (runId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   // Runs the user collapsed. Absence means expanded — a Run that just appeared, or one from before this
@@ -82,6 +86,25 @@ export function JobsView({
                 {run.outcome === 'completed' ? ` ${t('jobs.completed')}` : ''}
                 {run.outcome === 'failed' ? ` ${t('jobs.failed')}` : ''}
               </span>
+              <button
+                className="jobs-timeline-btn"
+                title={t('jobs.timeline.open')}
+                aria-label={t('jobs.timeline.open')}
+                onClick={(e) => {
+                  // The header's own click collapses the Run. Without this the button would do both,
+                  // so opening the history would fold the Run shut behind the modal — the same reason
+                  // .bottom-tab-close stops the event before its tab strip sees it.
+                  e.stopPropagation()
+                  onOpenTimeline(run.id)
+                }}
+              >
+                {/* 기록 — 시계. 앱의 SVG 관례대로 16 viewBox 에 currentColor 하나 */}
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                     strokeWidth="1.4" strokeLinecap="round">
+                  <circle cx="8" cy="8" r="5.6" />
+                  <path d="M8 4.8V8l2.2 1.6" />
+                </svg>
+              </button>
             </div>
             {open && (
               <div className="jobs-tasks">

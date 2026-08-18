@@ -606,5 +606,23 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.progress': '{done}/{total}',
   'jobs.completed': 'completed',
   'jobs.failed': 'failed',
-  'jobs.gates.more': '+{count} more'
+  'jobs.gates.more': '+{count} more',
+  // JobTimeline.tsx — the history modal. The badge is chosen by the event kind (or the message type)
+  'jobs.timeline.open': 'History',
+  'jobs.timeline.title': 'History',
+  'jobs.timeline.empty': 'Nothing has happened yet',
+  'jobs.timeline.close': 'Close',
+  'jobs.timeline.openSession': 'Open session',
+  'jobs.timeline.retry': 'retry',
+  'jobs.event.runCreated': 'job started',
+  'jobs.event.taskCreated': 'Task added',
+  'jobs.event.dispatchStarted': 'worker started',
+  'jobs.event.gateOpened': 'awaiting decision',
+  'jobs.event.gateResolved': 'decided',
+  'jobs.event.status': 'status',
+  'jobs.event.workerDone': 'worker report',
+  'jobs.event.question': 'question',
+  'jobs.event.escalation': 'escalation',
+  'jobs.event.heartbeat': 'heartbeat',
+  'jobs.event.decisionGate': 'decision'
 }

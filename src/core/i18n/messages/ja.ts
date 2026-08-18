@@ -701,5 +701,23 @@ export const ja: Catalog = {
   'jobs.progress': '{done}/{total}',
   'jobs.completed': '完了',
   'jobs.failed': '失敗',
-  'jobs.gates.more': '他 {count} 件'
+  'jobs.gates.more': '他 {count} 件',
+  // JobTimeline.tsx — 履歴モーダル。種別バッジはイベント種別（またはメッセージ種別）が決める
+  'jobs.timeline.open': '履歴',
+  'jobs.timeline.title': '履歴',
+  'jobs.timeline.empty': 'まだ何も起きていません',
+  'jobs.timeline.close': '閉じる',
+  'jobs.timeline.openSession': 'セッションを開く',
+  'jobs.timeline.retry': '再試行',
+  'jobs.event.runCreated': 'ジョブ開始',
+  'jobs.event.taskCreated': 'Task 追加',
+  'jobs.event.dispatchStarted': 'ワーカー開始',
+  'jobs.event.gateOpened': '判断待ち',
+  'jobs.event.gateResolved': '判断済み',
+  'jobs.event.status': '状況',
+  'jobs.event.workerDone': 'ワーカー報告',
+  'jobs.event.question': '質問',
+  'jobs.event.escalation': 'エスカレーション',
+  'jobs.event.heartbeat': 'ハートビート',
+  'jobs.event.decisionGate': '判断要求'
 }

@@ -30,7 +30,7 @@ import type { TerminalFont } from './terminal/font'
 // import resolve by handing the renderer typecheck every Node global, which is the guard this note
 // stands to protect.
 import type { MessageType, Outcome, TaskStatus } from './orchestration/types'
-export type { TaskStatus } from './orchestration/types'
+export type { MessageType, TaskStatus } from './orchestration/types'
 
 // providers/meta.ts owns Provider. It is re-exported here so that the files which already imported
 // Provider from types can stay as they are.

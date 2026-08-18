@@ -14,6 +14,7 @@ import type { EditorState, StateEffect } from '@codemirror/state'
 import { EditorStateCache } from './lib/editorStateCache'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { JobsView } from './components/JobsView'
+import { JobTimeline } from './components/JobTimeline'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { WorktreePanel } from './components/WorktreePanel'
 import { RunToolbar } from './components/RunToolbar'
@@ -24,7 +25,7 @@ import { UpdateGate } from './components/UpdateGate'
 import { ShortcutSettings } from './components/ShortcutSettings'
 import { TerminalFontSettings } from './components/TerminalFontSettings'
 import { ConfirmHost } from './components/ConfirmHost'
-import type { OrchSnapshot, RunConfig, RunContext, RunStatus, TerminalBuffer } from '../../core/types'
+import type { JobEvent, OrchSnapshot, RunConfig, RunContext, RunStatus, TerminalBuffer } from '../../core/types'
 import { slackMode } from '../../core/slack/ready'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
@@ -1456,6 +1457,11 @@ export default function App(): React.JSX.Element {
   // The Jobs sidebar snapshot for the open project — orch.list's initial payload, then every
   // 'orch:state' push after it (see the subscription effect below). null until orch.list first resolves.
   const [orchSnapshot, setOrchSnapshot] = useState<OrchSnapshot | null>(null)
+  /** 기록 모달이 열려 있는 Run. null 이면 닫혀 있다 */
+  const [timelineRunId, setTimelineRunId] = useState<string | null>(null)
+  /** 그 Run 의 이벤트. null 은 아직 도착하지 않았다는 뜻이고 빈 배열과 다르다 — 모달은 전자에
+   *  아무것도 그리지 않고 후자에만 빈 상태를 그린다. 읽는 효과는 currentProject 선언 아래에 있다. */
+  const [timelineEvents, setTimelineEvents] = useState<JobEvent[] | null>(null)
   /** 홈 디렉터리 — 프로젝트가 없을 때 아래쪽 패널의 터미널이 열릴 자리. 프로세스 수명 동안 바뀌지
    *  않으므로 한 번만 읽는다. 도착하기 전에는 null 이고, 그동안 패널은 그려지지 않는다. */
   const [homeDir, setHomeDir] = useState<string | null>(null)
@@ -1506,14 +1512,45 @@ export default function App(): React.JSX.Element {
   /** 사이드바와 실행 구성이 '어느 프로젝트인가'로 읽는 값 — 활성 탭이 이기고, 없으면 마지막 기억. */
   const currentProject = activeTabRoot ?? stickyRoot
 
+  // 기록 모달이 열려 있는 동안 이벤트를 다시 읽는다. **이 자리에 있어야 한다** — 의존성 배열은
+  // 렌더 중에 평가되므로, currentProject 선언보다 위에 두면 TDZ ReferenceError 로 죽는다(타입체크는
+  // 잡지 못한다).
+  //
+  // orchSnapshot 을 의존성에 두는 것이 요점이다: 그 값이 바뀌는 것이 곧 "이 프로젝트의 오케스트레이션
+  // 상태가 움직였다"이고, JobRun.eventCount 가 스냅샷에 실려 있으므로 Task 상태를 하나도 옮기지 않는
+  // 메시지도 그 신호에 포함된다. 폴링을 두지 않는 이유가 그것이다.
+  useEffect(() => {
+    if (!timelineRunId || !currentProject) return
+    let cancelled = false
+    // 거부 팔을 반드시 둔다 — 프로젝트가 바뀌는 찰나에 부르면 main 의 경로 가드가 거부하고, 그러면
+    // DevTools 에 Uncaught (in promise) 가 뜬다. 빈 배열로 접으면 모달은 빈 상태를 그린다.
+    void window.api.orch.timeline(currentProject, timelineRunId).then(
+      (evts) => {
+        if (!cancelled) setTimelineEvents(evts)
+      },
+      () => {
+        if (!cancelled) setTimelineEvents([])
+      }
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [timelineRunId, currentProject, orchSnapshot])
+  // 프로젝트가 바뀌면 닫는다 — 다른 프로젝트의 Run 을 열어 둔 채로 두면 orch.timeline 이 거부한다
+  useEffect(() => {
+    setTimelineRunId(null)
+    setTimelineEvents(null)
+  }, [currentProject])
+
   // Whether RunConfigManager is actually on screen — gates both its render below and the shortcut
   // suppression right after it. Computed from the same three things that gate the render (open flag,
   // project, context) so switching projects or losing the context drops the suppression in the same
   // render as the unmount, not only when the dialog's own onClose fires.
   const runManagerVisible = runManagerOpen && !!currentProject && !!runContext
   // OR-ed onto the value the other modals already set above — runManagerVisible depends on
-  // currentProject, which is not computed yet at that point in the component.
-  modalOpenRef.current = modalOpenRef.current || runManagerVisible
+  // currentProject, which is not computed yet at that point in the component. The history modal joins
+  // the same chain: while it is open the shortcuts must not reach the workbench behind it.
+  modalOpenRef.current = modalOpenRef.current || runManagerVisible || timelineRunId !== null
 
   // Mirrors currentProject into a ref — avoids a stale closure in the run:status subscription effect
   const currentProjectRef = useRef(currentProject)
@@ -2138,6 +2175,10 @@ export default function App(): React.JSX.Element {
                 // the fold in main cannot make, and it is exactly what selectWorkbenchTab needs.
                 canOpenSession={(sessionId) => !!layout && !!groupOfTab(layout, sessionTab(sessionId))}
                 onOpenSession={(sessionId) => selectWorkbenchTab(sessionTab(sessionId))}
+                onOpenTimeline={(runId) => {
+                  setTimelineEvents(null) // 이전 Run 의 이벤트가 한 프레임 보이지 않게 한다
+                  setTimelineRunId(runId)
+                }}
               />
             ) : (
               <>
@@ -2807,6 +2848,22 @@ export default function App(): React.JSX.Element {
           onSave={runManagerSave}
           onDelete={runDeleteConfig}
           onClose={() => setRunManagerOpen(false)}
+        />
+      )}
+      {timelineRunId && (
+        <JobTimeline
+          objective={orchSnapshot?.runs.find((r) => r.id === timelineRunId)?.objective ?? ''}
+          events={timelineEvents}
+          // Verbatim the pair JobsView is handed above, and for the reason its comment there records:
+          // the tab tree is the only place that knows whether the worker's tab is still open, so a
+          // sessions.some(...) check would keep saying yes after the user closed it and the ↗ would
+          // silently do nothing.
+          canOpenSession={(sessionId) => !!layout && !!groupOfTab(layout, sessionTab(sessionId))}
+          onOpenSession={(sessionId) => {
+            setTimelineRunId(null) // 탭으로 가면서 닫는다
+            selectWorkbenchTab(sessionTab(sessionId))
+          }}
+          onClose={() => setTimelineRunId(null)}
         />
       )}
       <ConfirmHost />

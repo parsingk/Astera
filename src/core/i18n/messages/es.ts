@@ -712,5 +712,23 @@ export const es: Catalog = {
   'jobs.progress': '{done}/{total}',
   'jobs.completed': 'completadas',
   'jobs.failed': 'fallidas',
-  'jobs.gates.more': '+{count} más'
+  'jobs.gates.more': '+{count} más',
+  // JobTimeline.tsx — el modal de historial. La insignia la elige el tipo de evento (o el tipo de mensaje)
+  'jobs.timeline.open': 'Historial',
+  'jobs.timeline.title': 'Historial',
+  'jobs.timeline.empty': 'Aún no ha ocurrido nada',
+  'jobs.timeline.close': 'Cerrar',
+  'jobs.timeline.openSession': 'Abrir sesión',
+  'jobs.timeline.retry': 'reintento',
+  'jobs.event.runCreated': 'trabajo iniciado',
+  'jobs.event.taskCreated': 'Task añadida',
+  'jobs.event.dispatchStarted': 'worker iniciado',
+  'jobs.event.gateOpened': 'esperando decisión',
+  'jobs.event.gateResolved': 'decidido',
+  'jobs.event.status': 'estado',
+  'jobs.event.workerDone': 'informe del worker',
+  'jobs.event.question': 'pregunta',
+  'jobs.event.escalation': 'escalación',
+  'jobs.event.heartbeat': 'latido',
+  'jobs.event.decisionGate': 'decisión'
 }
