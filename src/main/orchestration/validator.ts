@@ -31,6 +31,11 @@ interface Pending {
   /** runner.start 가 실제로 시작에 성공했는지. 자리가 사용 중이어서 아직 시작하지 못했으면
    *  false 로 남아 큐 맨 앞을 지킨다 — onRunExit 이 이 값을 보고 정산할지 재시도할지를 가른다. */
   started: boolean
+  /** 이 항목의 종료를 이미 정산 중인가. 같은 head 의 종료가 겹쳐 들어오면 정산도 advance 도 두 번
+   *  일어난다 — 두 번째 정산은 applyValidationResult 가 거절하므로 상태는 안전하지만, runner.output
+   *  을 헛되게 부르고 거절 로그를 남긴다. 유실을 막는 것은 advance 의 항등성 검사고, 이 표시는 그
+   *  헛일 자체를 막는다. */
+  settling: boolean
 }
 
 export class TaskValidator {
@@ -51,7 +56,7 @@ export class TaskValidator {
   ) {}
 
   enqueue(a: { taskId: string; cwd: string }): void {
-    const entry: Pending = { ...a, started: false }
+    const entry: Pending = { ...a, started: false, settling: false }
     const q = this.queues.get(a.cwd)
     if (q) {
       q.push(entry)
@@ -75,11 +80,15 @@ export class TaskValidator {
       void this.startHead(a.cwd)
       return
     }
+    // 같은 head 의 종료가 두 번 들어오는 창이 있다 — 정산은 await 이고, 그 사이에 도착한 두 번째
+    // 종료는 head 가 아직 큐 맨 앞이고 started 라서 여기까지 온다. 한 번만 정산한다.
+    if (head.settling) return
+    head.settling = true
     const output = this.deps.runner.output(a.cwd)
     void this.deps
       .onSettled({ taskId: head.taskId, exitCode: a.exitCode, output })
       .catch((e) => this.deps.log?.(`validation settle failed task=${head.taskId}: ${String(e)}`))
-      .finally(() => this.advance(a.cwd))
+      .finally(() => this.advance(a.cwd, head))
   }
 
   private async startHead(cwd: string): Promise<void> {
@@ -120,13 +129,24 @@ export class TaskValidator {
       await this.deps
         .onCannotRun({ taskId: head.taskId, reason: brokenReason })
         .catch((err) => this.deps.log?.(`onCannotRun failed task=${head.taskId}: ${String(err)}`))
-      this.advance(cwd)
+      this.advance(cwd, head)
     }
   }
 
-  private advance(cwd: string): void {
+  /** 큐 맨 앞을 지나 다음 항목으로 넘어간다.
+   *
+   *  **entry 를 받는 이유는 항등성 검사다.** 같은 head 에 대해 이 함수가 두 번 불릴 수 있는 창이
+   *  두 군데 있다 — 겹쳐 들어온 종료(위 settling 표시가 막는 그것), 그리고 고장난 head 의 이중
+   *  시작(startHead 에서 starting 은 finally 로 풀리는데 advance 는 await onCannotRun 뒤에 온다.
+   *  그 창에 도착한 종료가 head.started === false 를 보고 startHead 를 다시 부르면 같은 고장난
+   *  head 로 runner.start 가 또 불리고, 두 번째 onCannotRun 과 두 번째 advance 가 이어진다).
+   *  무조건 shift 하면 그 두 번째 호출이 아직 시작하지 않은 다음 항목을 큐에서 지운다. 그 Task
+   *  에는 종료가 오지 않으므로 영원히 validating 이고, recomputeReady 는 completed 만 승격시키므로
+   *  그 의존 서브트리 전체가 pending 에 멈춘다 — 앱을 다시 켜는 것 말고는 회복 수단이 없다.
+   *  즉 이 브랜치가 막으려는 바로 그 실패다. */
+  private advance(cwd: string, entry: Pending): void {
     const q = this.queues.get(cwd)
-    if (!q) return
+    if (!q || q[0] !== entry) return
     q.shift()
     if (q.length === 0) {
       this.queues.delete(cwd)

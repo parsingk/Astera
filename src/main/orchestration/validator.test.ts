@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { TaskValidator, ValidatorBusyError, type ValidatorRunner } from './validator'
+import { absPath } from '../../core/testPaths'
 
 const settledCalls = (): {
   onSettled: (a: { taskId: string; exitCode: number; output: string }) => Promise<void>
@@ -286,5 +287,72 @@ describe('TaskValidator', () => {
     v.onRunExit({ cwd: 'D:/w1', exitCode: 0 })
     await vi.waitFor(() => expect(attempts).toHaveLength(2)) // 재시도는 일어났지만
     expect(calls).toHaveLength(0) // 정산되지는 않았다
+  })
+})
+
+// ── 큐 유실 (advance 의 항등성 검사) ──────────────────────────────────────────
+// 결과가 이 브랜치가 막으려는 바로 그 실패다: 시작되지 않은 채 큐에서 사라진 항목의 Task 는
+// 종료가 오지 않아 영원히 validating 이고, recomputeReady 는 completed 만 승격시키므로 그 의존
+// 서브트리 전체가 pending 에 멈춘다. 회복 수단은 앱 재시작뿐이다.
+describe('TaskValidator — 큐 항목 유실 방지', () => {
+  const CWD = absPath('w1')
+
+  // 같은 head 의 종료가 겹쳐 들어오면 advance 가 두 번 돌아 아직 시작하지 않은 다음 항목이
+  // 큐에서 사라진다
+  it('같은 head 의 종료가 두 번 와도 다음 항목을 건너뛰지 않는다', async () => {
+    const runner = fakeRunner()
+    let release: (() => void) | undefined
+    const settled: string[] = []
+    const v = new TaskValidator({
+      runner,
+      // 정산을 붙잡아 두어 두 번째 종료가 같은 창에 들어오게 만든다
+      onSettled: async (a) => {
+        settled.push(a.taskId)
+        await new Promise<void>((r) => (release = r))
+      },
+      onCannotRun: async () => {}
+    })
+    v.enqueue({ taskId: 'tsk_1', cwd: CWD })
+    v.enqueue({ taskId: 'tsk_2', cwd: CWD })
+    v.enqueue({ taskId: 'tsk_3', cwd: CWD })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(1))
+    v.onRunExit({ cwd: CWD, exitCode: 0 })
+    await vi.waitFor(() => expect(settled).toEqual(['tsk_1']))
+    v.onRunExit({ cwd: CWD, exitCode: 0 }) // 겹쳐 들어온 두 번째 종료
+    release?.()
+    await vi.waitFor(() => expect(runner.started).toHaveLength(2))
+    expect(runner.started[1].taskId).toBe('tsk_2') // tsk_2 가 건너뛰어지지 않았다
+    expect(settled).toEqual(['tsk_1']) // 두 번 정산하지도 않았다
+  })
+
+  // 고장난 head 의 이중 시작. startHead 에서 starting 은 finally 로 풀리는데 advance 는
+  // await onCannotRun 뒤에 온다 — 그 창에 도착한 종료가 head.started === false 를 보고
+  // startHead 를 다시 부르면 같은 고장난 head 로 runner.start 가 또 불리고, 두 번째
+  // onCannotRun 과 두 번째 advance 가 이어져 같은 항목이 유실된다.
+  it('고장난 head 가 두 번 시작돼도 다음 항목을 건너뛰지 않는다', async () => {
+    const started: string[] = []
+    let release: (() => void) | undefined
+    const runner: ValidatorRunner = {
+      start: async (a) => {
+        started.push(a.taskId)
+        if (a.taskId === 'tsk_1') throw new Error('NO_CONFIG')
+      },
+      output: () => ''
+    }
+    const v = new TaskValidator({
+      runner,
+      onSettled: async () => {},
+      // Gate 커밋을 붙잡아 두어 starting 이 풀린 뒤 advance 전인 창을 만든다
+      onCannotRun: async () => {
+        await new Promise<void>((r) => (release = r))
+      }
+    })
+    v.enqueue({ taskId: 'tsk_1', cwd: CWD })
+    v.enqueue({ taskId: 'tsk_2', cwd: CWD })
+    await vi.waitFor(() => expect(release).toBeTruthy()) // onCannotRun 안에 걸려 있다
+    v.onRunExit({ cwd: CWD, exitCode: 0 }) // 그 창에 도착한 종료 — 고장난 head 를 다시 시작한다
+    await vi.waitFor(() => expect(started).toEqual(['tsk_1', 'tsk_1']))
+    release?.()
+    await vi.waitFor(() => expect(started).toEqual(['tsk_1', 'tsk_1', 'tsk_2']))
   })
 })

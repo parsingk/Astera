@@ -540,6 +540,11 @@ export function registerIpc(
           const st = store.get()
           const task = st.tasks.find((t) => t.id === taskId)
           if (!task?.validateConfigId) throw new Error(`no validateConfigId on task ${taskId}`)
+          // 큐에서 기다리는 동안 Task 가 validating 을 떠났을 수 있다(task-update). 그대로 두면
+          // 빌드 전체가 돌고 실행 슬롯과 실행 패널을 차지한 뒤에야 applyValidationResult 가
+          // 결과를 거절한다.
+          if (task.status !== 'validating')
+            throw new Error(`task ${taskId} is no longer validating: ${task.status}`)
           const run = st.runs.find((r) => r.id === task.runId)
           if (!run) throw new Error(`unknown run for task ${taskId}`)
           // 구성은 Run 의 프로젝트에서, 실행은 Dispatch 의 cwd 에서. ignoreConfigCwd 는 구성에 박힌
