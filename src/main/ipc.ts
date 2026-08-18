@@ -939,8 +939,8 @@ export function registerIpc(
   ipcMain.on('run.resize', (_e, projectPath: string, cols: number, rows: number) =>
     core.run.resize(projectPath, cols, rows)
   )
-  // 저장 시점의 cwd 검사. prepareRun 의 것과 같은 규칙이지만 그쪽은 id 로 구성을 찾는 일까지 하므로
-  // 저장 경로에서는 쓸 수 없다.
+  // 저장 시점의 cwd 검사 — 규칙과 그 근거는 main/run/prepare.ts 의 resolveRunCwd 를 보라. 그 함수는
+  // prepareRun 이 id 로 구성을 찾는 일까지 하므로 저장 경로에서는 쓸 수 없어, 같은 규칙을 여기 따로 둔다.
   const assertConfigCwd = async (projectPath: string, cwd: unknown): Promise<void> => {
     if (cwd === undefined || cwd === null || cwd === '') return
     if (typeof cwd !== 'string') throw new Error(t(core.lang, 'run.config.cwdNotString'))

@@ -275,7 +275,7 @@ export function formatEnvLines(env: Record<string, string> | undefined): string 
  *  moves or is opened on another machine.
  *
  *  How those relative paths are resolved differs by field, and only `cwd` is resolved here in the app:
- *  run.start passes it through resolveRunCwd (ipc.ts), which resolves it against the project root and
+ *  run.start passes it through resolveRunCwd (main/run/prepare.ts), which resolves it against the project root and
  *  hands the result to the PTY. Every other path field is spliced into the command text untouched and
  *  is therefore resolved by the invoked tool against **the working folder**, not the project root — so
  *  the two only coincide while the working folder is the project root (which is the default: an empty

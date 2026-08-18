@@ -575,7 +575,7 @@ export const ja: Catalog = {
   'run.global.jump': '移動',
   // App.tsx runManagerSave — shown when the run.saveConfig IPC fails
   'run.config.saveFailed': '保存に失敗しました: {detail}',
-  // ipc.ts resolveRunCwd — thrown in main, shown verbatim in a renderer toast
+  // main/run/prepare.ts resolveRunCwd (run.start) and ipc.ts assertConfigCwd (run.saveConfig) — thrown in main, shown verbatim in a renderer toast
   'run.config.cwdNotString': '実行構成の作業フォルダが正しくありません',
   'run.config.cwdOutsideProject': '実行構成の作業フォルダはプロジェクト内である必要があります',
   'run.start.incomplete': '実行構成の必須項目が空です: {fields}',

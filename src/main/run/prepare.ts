@@ -85,6 +85,16 @@ export async function prepareRun(
   }
 }
 
+/** Validates a run configuration's cwd and returns the absolute path that will **actually be used**.
+ *  cwd comes from two places outside the trust boundary — the stored file (hand-editable on disk) and
+ *  the run.saveConfig IPC (the renderer, checked again there since a hand-edited file bypasses that
+ *  check) — and runManager passes it straight through as the PTY's cwd, so without validation a
+ *  process starts outside the allowed roots.
+ *  A relative path is resolved against the project root; resolving against this process's own cwd
+ *  instead would run somewhere other than intended.
+ *  **The return value is what must be handed to execution** — validating and then passing the original
+ *  cwd puts this in the "validated one value, used another" category, and a defect of that shape has
+ *  recurred six times in this feature area. */
 async function resolveRunCwd(a: PrepareRunArgs, cwd: unknown): Promise<string | undefined> {
   if (cwd === undefined || cwd === null || cwd === '') return undefined
   if (typeof cwd !== 'string') throw new Error(a.t('run.config.cwdNotString'))
