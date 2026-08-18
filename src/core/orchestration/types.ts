@@ -3,7 +3,7 @@
 // providers/meta.ts).
 import type { Provider } from '../providers/meta'
 
-export type TaskStatus = 'pending' | 'ready' | 'dispatched' | 'completed' | 'failed' | 'blocked'
+export type TaskStatus = 'pending' | 'ready' | 'dispatched' | 'validating' | 'completed' | 'failed' | 'blocked'
 export type Outcome = 'succeeded' | 'failed'
 /** Observed state of the session a Dispatch owns. outcome_unknown = cannot be proven (section 7 of
  *  the orchestration guide) */
@@ -123,7 +123,13 @@ const ALLOWED: Record<TaskStatus, TaskStatus[]> = {
   // There is no dispatched -> blocked: a Task with an open dispatch is not blocked by a Gate. A
   // Gate is for deciding the task DAG the coordinator manages; it is not a device for halting a
   // worker that is already running — that is worker-stop.
-  dispatched: ['completed', 'failed'],
+  // dispatched -> validating: 워커가 성공을 보고했지만 그 Task 에 검증이 걸려 있는 경우.
+  // 검증이 없으면 지금처럼 곧바로 completed 로 간다.
+  dispatched: ['completed', 'failed', 'validating'],
+  // validating -> blocked 는 검증을 아예 돌릴 수 없을 때다(구성이 없다, cwd 가 사라졌다). 그 판단은
+  // 사람의 것이므로 Gate 를 연다. validating -> dispatched 는 없다 — 검증 결과가 도착할 자리가
+  // 사라지기 때문이다.
+  validating: ['completed', 'failed', 'blocked'],
   completed: [],
   // failed -> blocked is allowed: failed is by definition a state with no open dispatch
   // (applyWorkerDone sets outcome and endedAt together) — so there is no reason to block the flow

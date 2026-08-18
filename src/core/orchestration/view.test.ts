@@ -147,6 +147,11 @@ describe('outcomeOf', () => {
     expect(outcomeOf(only(['completed', 'dispatched']), 'r1')).toBe('running')
   })
 
+  // validating 은 종료가 아니다 — 검증이 끝나야 결과가 정해진다
+  it('validating 이 섞이면 running 이다', () => {
+    expect(outcomeOf(only(['completed', 'validating']), 'r1')).toBe('running')
+  })
+
   // blocked 는 terminal 이 아니다 — Gate 가 풀리면 다시 흐른다
   it('blocked 가 섞이면 running 이다', () => {
     expect(outcomeOf(only(['completed', 'blocked']), 'r1')).toBe('running')

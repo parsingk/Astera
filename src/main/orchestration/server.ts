@@ -133,10 +133,13 @@ const COORDINATOR_ONLY = new Set([
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null)
 
+// TaskStatus 유니온에서 파생되지 않는 손수 쓴 목록이다 — 빠뜨려도 컴파일은 통과하고,
+// `task-list --status validating` 이 "must be one of ..." 로 거절되는 것이 유일한 증상이다.
 const TASK_STATUSES: TaskStatus[] = [
   'pending',
   'ready',
   'dispatched',
+  'validating',
   'completed',
   'failed',
   'blocked'
