@@ -135,6 +135,9 @@ export const es: Catalog = {
   'files.editor.keepMine': 'Conservar mis cambios',
   'files.editor.loading': 'Cargando…',
   'files.editor.selectPrompt': 'Seleccione un archivo en el árbol',
+  // MarkdownPreview.tsx — fallo al cargar imagen, aviso de imagen remota
+  'files.markdown.image.failed': 'No se pudo cargar la imagen',
+  'files.markdown.image.remote': 'Las imágenes remotas no se muestran — haga clic para abrirlas en el navegador',
   // App.tsx — explorer close confirmation
   'explorer.closeConfirm.body': 'Hay cambios sin guardar. ¿Cerrar el explorador igualmente?',
   // App.tsx — run console resizer, start failure

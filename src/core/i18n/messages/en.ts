@@ -110,6 +110,9 @@ export const en: Record<keyof typeof ko, string> = {
   'files.editor.keepMine': 'Keep my edits',
   'files.editor.loading': 'Loading…',
   'files.editor.selectPrompt': 'Select a file from the tree',
+  // MarkdownPreview.tsx — image load failure, remote image notice
+  'files.markdown.image.failed': 'Could not load the image',
+  'files.markdown.image.remote': 'Remote images are not shown — click to open in the browser',
   'explorer.closeConfirm.body': 'There are unsaved changes. Close the explorer anyway?',
   'run.resizeConsole': 'Resize console',
   'run.start.failed': 'Run failed: {detail}',

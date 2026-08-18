@@ -134,6 +134,9 @@ export const ja: Catalog = {
   'files.editor.keepMine': '自分の編集を保持',
   'files.editor.loading': '読み込み中…',
   'files.editor.selectPrompt': 'ツリーからファイルを選択してください',
+  // MarkdownPreview.tsx — 画像の読み込み失敗・リモート画像の案内
+  'files.markdown.image.failed': '画像を読み込めません',
+  'files.markdown.image.remote': 'リモート画像は表示しません — クリックするとブラウザで開きます',
   // App.tsx — explorer close confirmation
   'explorer.closeConfirm.body':
     '保存していない変更があります。エクスプローラーを閉じますか？',
