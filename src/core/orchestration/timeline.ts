@@ -73,6 +73,7 @@ function collect(
       summary: d.provider,
       provider: d.provider,
       ...(d.retryOf ? { retry: true } : {}),
+      ...(d.review ? { review: true } : {}),
       ...(isKnownSession(d.sessionId) ? { sessionId: d.sessionId } : {})
     })
   }

@@ -732,6 +732,8 @@ export const es: Catalog = {
   'jobs.event.escalation': 'escalación',
   'jobs.event.heartbeat': 'latido',
   'jobs.event.decisionGate': 'decisión',
+  // Mismo lugar que retry (junto al resumen de dispatch-started), solo cuando el Dispatch es de revisión (Dispatch.review)
+  'jobs.event.review': 'revisión',
   // El resultado de worker_done — no jobs.completed/jobs.failed, que etiquetan un Run completo
   'jobs.event.succeeded': 'correcto',
   'jobs.event.outcomeFailed': 'fallido'

@@ -746,6 +746,8 @@ export const ko = {
   'jobs.event.escalation': '에스컬레이션',
   'jobs.event.heartbeat': '신호',
   'jobs.event.decisionGate': '결정 요청',
+  // retry 와 같은 자리(dispatch-started 의 요약 옆)에, 이 Dispatch 가 검토용(Dispatch.review)일 때만 붙는다
+  'jobs.event.review': '검토',
   // worker_done 의 결과. jobs.completed/jobs.failed 를 쓰지 않는다 — 그 둘은 사이드바에서 Run
   // 전체의 상태를 가리키는 말이라, 워커 보고 한 건에 붙이면 같은 주장을 다른 대상에 하는 것으로 읽힌다
   'jobs.event.succeeded': '성공',

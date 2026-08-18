@@ -296,6 +296,9 @@ export interface JobEvent {
   provider?: Provider
   /** 재시도로 뜬 워커인가 (Dispatch.retryOf) */
   retry?: boolean
+  /** 검토 Dispatch 인가 (Dispatch.review). 한 Task 에 구현과 검토의 dispatch-started 가 둘 나오므로,
+   *  구별하지 않으면 같은 Task 를 두 번 시작한 것처럼 보인다 */
+  review?: boolean
   /** 이 앱이 아직 아는 세션이면 그 id — 클릭하면 그 탭으로 간다. view.ts 의 jobTaskOf 와 같은
    *  판정이고 같은 이유로 주입받는다 */
   sessionId?: string

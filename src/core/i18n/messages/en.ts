@@ -626,6 +626,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.event.escalation': 'escalation',
   'jobs.event.heartbeat': 'heartbeat',
   'jobs.event.decisionGate': 'decision',
+  // Same spot as retry (next to dispatch-started's summary), shown only when the Dispatch is a review (Dispatch.review)
+  'jobs.event.review': 'review',
   // worker_done's outcome — deliberately not jobs.completed/jobs.failed, which label a whole Run
   'jobs.event.succeeded': 'succeeded',
   'jobs.event.outcomeFailed': 'failed'

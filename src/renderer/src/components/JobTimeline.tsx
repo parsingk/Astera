@@ -108,6 +108,7 @@ export function JobTimeline({
                   <span className="timeline-summary" title={e.summary}>
                     {e.summary}
                     {e.retry && <span className="timeline-retry">{t('jobs.timeline.retry')}</span>}
+                    {e.review && <span className="timeline-review">{t('jobs.event.review')}</span>}
                   </span>
                   {sessionId && (
                     <button

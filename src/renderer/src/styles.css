@@ -874,6 +874,9 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .timeline-task { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .timeline-summary { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .timeline-retry { margin-left: 6px; color: var(--git-modified); font-size: 11px; }
+/* 검토 Dispatch 표시. 색은 JobsView 의 STATUS_DOT.reviewing 과 같은 --fi-purple 이다 — 같은 뜻이
+   화면에서 다른 색이면 안 된다. */
+.timeline-review { margin-left: 6px; color: var(--fi-purple); font-size: 11px; }
 .timeline-jump { background: none; border: 0; color: var(--text-faint); cursor: pointer; padding: 0 2px; }
 .timeline-jump:hover { color: var(--accent); }
 /* 펼친 본문. 모달의 --panel 보다 어두운 --bg 라 안으로 들어간 블록으로 읽힌다. 왼쪽 62px 은 시각

@@ -65,6 +65,15 @@ describe('timelineFor', () => {
     expect(e?.retry).toBe(true)
   })
 
+  it('review 인 Dispatch 는 review 로 표시된다', () => {
+    const s = state({
+      runs: [run('r1')], tasks: [task('t1', 'r1')],
+      dispatches: [{ ...dispatch('d1', 't1'), review: true }]
+    })
+    const e = timelineFor(s, 'r1', anySession).find((x) => x.kind === 'dispatch-started')
+    expect(e?.review).toBe(true)
+  })
+
   // Dispatch 는 runId 를 갖지 않는다 — 이 Run 의 Task 를 통해서만 골라야 한다
   it('다른 Run 의 Dispatch 는 섞이지 않는다', () => {
     const s = state({
