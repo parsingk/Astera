@@ -138,6 +138,7 @@ export const ja: Catalog = {
   // App.tsx — run console resizer, start failure
   'run.resizeConsole': 'コンソールのサイズ変更',
   'run.start.failed': '実行に失敗しました: {detail}',
+  'run.jump.notAllowed': 'そのプロジェクトへは移動できません — このアプリで一度開いたプロジェクトである必要があります',
   // App.tsx — settings modal Info/Slack/Worktree tabs, CLI-not-found screen
   'settings.info.appName': 'アプリ名',
   'settings.info.version': 'バージョン',

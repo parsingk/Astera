@@ -111,6 +111,7 @@ export const en: Record<keyof typeof ko, string> = {
   'explorer.closeConfirm.body': 'There are unsaved changes. Close the explorer anyway?',
   'run.resizeConsole': 'Resize console',
   'run.start.failed': 'Run failed: {detail}',
+  'run.jump.notAllowed': 'Cannot go to that project — it has to be one this app has opened before',
   'settings.info.appName': 'App name',
   'settings.info.version': 'Version',
   'settings.info.registeredAccounts': 'Registered accounts',

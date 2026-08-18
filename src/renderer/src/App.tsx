@@ -1899,8 +1899,20 @@ export default function App(): React.JSX.Element {
       selectWorkbenchTabRef.current(file.id)
       return
     }
-    setStickyRoot(projectPath)
-    sticky.write(projectPath)
+    // 탭이 하나도 없다 — 기억을 옮기면 화면이 실제로 움직인다. 다만 **복원과 같은 확인을 거친다.**
+    // 검증 없이 채택하면 경로 가드가 허용하지 않는 프로젝트가 currentProject 가 되고, 그것을 읽는
+    // 네 소비자(탐색기·실행 구성·Jobs·터미널)가 전부 거부를 받는다 — 그리고 그 값이 localStorage 에
+    // 남아 다음 실행까지 간다. files.list 를 쓰는 이유도 복원과 같다: 탐색기가 이 루트로 어차피 부르는
+    // 호출이라 존재와 허용을 한 번에 답한다.
+    void window.api.files.list(projectPath).then(
+      () => {
+        setStickyRoot(projectPath)
+        sticky.write(projectPath)
+      },
+      // 조용히 아무 일도 하지 않으면 이 버튼이 다시 '눌리는데 안 되는' 컨트롤이 된다 — 그것을 없애려고
+      // 이 폴백을 만들었으므로, 갈 수 없는 이유를 말한다
+      () => toast.error(t('run.jump.notAllowed'))
+    )
   }
   const runStopProject = (projectPath: string): void => { void window.api.run.stop(projectPath) }
 

@@ -129,6 +129,7 @@ export const ko = {
   // App.tsx — run console resizer, start failure
   'run.resizeConsole': '콘솔 크기 조절',
   'run.start.failed': '실행 실패: {detail}',
+  'run.jump.notAllowed': '그 프로젝트로 갈 수 없습니다 — 앱에서 한 번 열어 본 프로젝트여야 합니다',
   // App.tsx — settings modal Info/Slack/Worktree tabs, CLI-not-found screen
   'settings.info.appName': '앱 이름',
   'settings.info.version': '버전',

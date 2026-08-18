@@ -138,6 +138,7 @@ export const es: Catalog = {
   // App.tsx — run console resizer, start failure
   'run.resizeConsole': 'Ajustar el tamaño de la consola',
   'run.start.failed': 'Error al ejecutar: {detail}',
+  'run.jump.notAllowed': 'No se puede ir a ese proyecto — debe ser uno que esta app haya abierto antes',
   // App.tsx — settings modal Info/Slack/Worktree tabs, CLI-not-found screen
   'settings.info.appName': 'Nombre de la aplicación',
   'settings.info.version': 'Versión',
