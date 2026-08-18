@@ -597,5 +597,12 @@ export const en: Record<keyof typeof ko, string> = {
   'slack.inbox.sessionEnded': '⚠️ This session has ended, so the input could not be delivered',
   'slack.inbox.injectFailed': '⚠️ The input could not be delivered',
   'slack.limitNoResume': '⛔ Limit reached — no auto-resume',
-  'slack.limitNoResumeAt': '⛔ Limit reached — no auto-resume (resets {at})'
+  'slack.limitNoResumeAt': '⛔ Limit reached — no auto-resume (resets {at})',
+  // JobsView.tsx, App.tsx — the read-only Jobs sidebar (the orchestration Run/Task list)
+  'jobs.rail.open': 'Jobs',
+  'jobs.empty': 'No jobs started yet',
+  'jobs.empty.hint': 'Jobs created from a coordinator session will appear here',
+  'jobs.progress': '{done}/{total}',
+  'jobs.completed': 'completed',
+  'jobs.gates.more': '+{count} more'
 }

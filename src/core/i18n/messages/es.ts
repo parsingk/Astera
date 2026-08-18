@@ -703,5 +703,12 @@ export const es: Catalog = {
   'slack.inbox.sessionEnded': '⚠️ Esta sesión finalizó, así que no se pudo entregar la entrada',
   'slack.inbox.injectFailed': '⚠️ No se pudo entregar la entrada',
   'slack.limitNoResume': '⛔ Límite alcanzado — sin reanudación automática',
-  'slack.limitNoResumeAt': '⛔ Límite alcanzado — sin reanudación automática (se restablece {at})'
+  'slack.limitNoResumeAt': '⛔ Límite alcanzado — sin reanudación automática (se restablece {at})',
+  // JobsView.tsx, App.tsx — la barra lateral de Jobs, de solo lectura (la lista de Run/Task de la orquestación)
+  'jobs.rail.open': 'Jobs',
+  'jobs.empty': 'Aún no se ha iniciado ningún trabajo',
+  'jobs.empty.hint': 'Los trabajos creados desde una sesión coordinadora aparecerán aquí',
+  'jobs.progress': '{done}/{total}',
+  'jobs.completed': 'completadas',
+  'jobs.gates.more': '+{count} más'
 }

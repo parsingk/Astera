@@ -710,5 +710,15 @@ export const ko = {
   'slack.inbox.sessionEnded': '⚠️ 이 세션은 종료되어 입력을 전달하지 못했습니다',
   'slack.inbox.injectFailed': '⚠️ 입력을 전달하지 못했습니다',
   'slack.limitNoResume': '⛔ 한도 도달 — 자동 재개 없음',
-  'slack.limitNoResumeAt': '⛔ 한도 도달 — 자동 재개 없음 (리셋 {at})'
+  'slack.limitNoResumeAt': '⛔ 한도 도달 — 자동 재개 없음 (리셋 {at})',
+  // JobsView.tsx, App.tsx — the read-only Jobs sidebar (오케스트레이션 Run/Task 목록)
+  // 'Jobs'는 번역하지 않는다 — '작업'은 이미 Task를 가리키는 말이라, 뷰 이름까지 '작업'이라 하면
+  // 그 안의 Task 행들과 이름이 겹친다. catalog.test.ts의 LITERALS가 네 카탈로그 모두에서 그대로
+  // 남도록 강제한다.
+  'jobs.rail.open': 'Jobs',
+  'jobs.empty': '아직 시작한 작업이 없습니다',
+  'jobs.empty.hint': '코디네이터 세션에서 작업을 만들면 여기에 나타납니다',
+  'jobs.progress': '{done}/{total}',
+  'jobs.completed': '완료',
+  'jobs.gates.more': '외 {count}건'
 } as const

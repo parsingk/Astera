@@ -27,6 +27,15 @@ export function isPathWithin(base: string, target: string): boolean {
   return t === b || t.startsWith(b + path.sep)
 }
 
+/** Whether a and b are the same path — ownership, not containment. isPathWithin's "at or below"
+ *  is right for a guard (the files IPC must not escape a root), but wrong for "does this Run belong
+ *  to this project": isPathWithin(project, run.cwd) is also true for a nested repository below the
+ *  project root, which silently pulls in a Run that belongs to a different, nested project. Shares
+ *  normalizePath with isPathWithin, so it inherits the same win32-first case-insensitivity. */
+export function isSamePath(a: string, b: string): boolean {
+  return normalizePath(a) === normalizePath(b)
+}
+
 // Excluded from the watcher — language-neutral, cross-language heavy/generated directories.
 // Under gitignore semantics a name with no slash matches at any depth.
 const CURATED_IGNORE = [

@@ -32,7 +32,8 @@ const EVENT_CHANNELS = [
   'run:data',
   'run:status',
   'terminal:data',
-  'terminal:exit'
+  'terminal:exit',
+  'orch:state'
 ]
 
 const api = {
@@ -182,6 +183,10 @@ const api = {
     get: invoke('keys.get'),
     set: invoke('keys.set'),
     reset: invoke('keys.reset')
+  },
+  orch: {
+    list: invoke('orch.list'),
+    unwatch: invoke('orch.unwatch')
   },
   platform: process.platform,
   win: {

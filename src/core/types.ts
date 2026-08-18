@@ -20,6 +20,17 @@ import type { GitState } from './git/status'
 export type { GitState } from './git/status'
 import type { Provider } from './providers/meta'
 import type { TerminalFont } from './terminal/font'
+// The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
+// orchestration/types.ts is safe to reach for: its single import is a type-only providers/meta.ts,
+// already in tsconfig.web.json, so putting it in the renderer's compilation target pulled nothing
+// else in with it. state.ts and view.ts never may, for two different reasons — view.ts imports
+// isSamePath from files/tree.ts, which imports node:path; state.ts is node-free but is main-side by
+// role (the server owns OrchState) and is deliberately out of tsconfig.web.json, so importing it
+// here is what would put it back in. Either way the wrong fix is "types": ["node"] — it makes the
+// import resolve by handing the renderer typecheck every Node global, which is the guard this note
+// stands to protect.
+import type { TaskStatus } from './orchestration/types'
+export type { TaskStatus } from './orchestration/types'
 
 // providers/meta.ts owns Provider. It is re-exported here so that the files which already imported
 // Provider from types can stay as they are.
@@ -236,6 +247,35 @@ export interface TerminalBuffer {
   buffer: string
 }
 
+/** One Task row of the Jobs sidebar. A projection of the orchestration Task, folded in main —
+ *  OrchState itself never crosses the bridge (it carries messages, deliveries and dispatch records
+ *  the view has no use for, and it would make the renderer re-derive what main already computed). */
+export interface JobTask {
+  id: string
+  title: string
+  status: TaskStatus
+  /** The worker session this Task was dispatched to, when this app process still has that session —
+   *  so it is present for a worker that has exited as well as a running one, because the tab is still
+   *  there either way. Absent means there is no tab to open and the Jobs view draws the row as
+   *  unclickable: the Task was never dispatched, or its Dispatch is from a previous app run, or the
+   *  worker is mid-launch and its real session id does not exist yet. */
+  sessionId?: string
+  /** The oldest open Gate's question. Only a 'blocked' Task has one. */
+  gateQuestion?: string
+  openGates: number
+}
+export interface JobRun {
+  id: string
+  objective: string
+  status: 'open' | 'closed'
+  done: number
+  total: number
+  tasks: JobTask[]
+}
+export interface OrchSnapshot {
+  runs: JobRun[]
+}
+
 export interface CoreEvents {
   'session:data': { sessionId: string; data: string }
   'session:exit': { sessionId: string; exitCode: number }
@@ -257,6 +297,12 @@ export interface CoreEvents {
   'run:status': RunStatus // run state change (running/exited)
   'terminal:data': { id: string; data: string } // project terminal output
   'terminal:exit': { id: string; exitCode: number } // shell exited — the renderer removes that tab
+  // The Jobs sidebar's whole snapshot, re-sent on every orchestration state change. Small enough to
+  // send whole (one project's Runs and Tasks) and it removes any question of the renderer's copy
+  // drifting from main's. Which project it is folded for is the last one orch.list asked about, after
+  // main's worktree-to-repository resolution (see OrchApi) — that call is the only thing that tells
+  // main what the renderer has open.
+  'orch:state': OrchSnapshot
 }
 export type CoreEventChannel = keyof CoreEvents
 
@@ -560,6 +606,34 @@ export interface AppControlApi {
   quit(): void
 }
 
+/**
+ * The Jobs sidebar. Not core, for the same reason as system and win: nothing in src/main/core.ts
+ * knows about orchestration — the store, the server and this fold all live in the ipc wiring.
+ *
+ * Read-only by design. Dispatching, answering a Gate and closing a Run are COORDINATOR_ONLY commands
+ * the orchestrator reaches through the CLI, so there is no mutating counterpart here.
+ *
+ * list doubles as the subscription: the snapshot is per project and main is not otherwise told what
+ * the renderer has open, so the path passed here also settles what 'orch:state' is folded for.
+ * unwatch is the way out — the same pair as files.watch/unwatch and git.watch/unwatch, and without it
+ * main keeps folding and sending a snapshot after the view is gone.
+ *
+ * The path is a *location*, not a project identity: main resolves a registered worktree back to the
+ * repository it was created from (core/worktrees/repo.ts) and folds for that, so passing the cwd of a
+ * worker running in a `--worktree new` tree returns its repository's Runs rather than nothing. Any
+ * path that is not a registered worktree is used as given.
+ *
+ * **The value list resolves to is the initial payload, and the caller must render it.** 'orch:state'
+ * carries subsequent changes only: main records what list handed over and drops a push whose fold is
+ * identical to it, so a caller that arms the subscription and discards the result never receives that
+ * first state — and nothing later heals it, because the next unchanged write is exactly what the
+ * comparison suppresses.
+ */
+export interface OrchApi {
+  list(projectPath: string): Promise<OrchSnapshot>
+  unwatch(): Promise<void>
+}
+
 export type RendererApi = CoreApi & {
   system: SystemApi
   clipboard: ClipboardApi
@@ -579,5 +653,6 @@ export type RendererApi = CoreApi & {
   win: WindowApi
   app: AppControlApi
   keys: KeysApi
+  orch: OrchApi
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }
