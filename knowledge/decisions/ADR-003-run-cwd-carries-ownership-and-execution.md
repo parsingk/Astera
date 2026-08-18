@@ -79,6 +79,23 @@ Splitting the field remains available and gets easier, not harder, from here: bo
 through a named function, so introducing a second stored value is a change to those two call sites
 rather than a search for everything that touches `cwd`.
 
+**A third reader arrived with the Validator slice — configuration ownership.** `Run.cwd` now also
+decides *whose run configurations apply*: `run-configs` lists the configurations of the project at
+`Run.cwd`, and `task-create --validate <configId>` names one of those. This is the trigger the
+"Alternatives considered" section below predicted, and it has a functional consequence rather than a
+merely conceptual one. `RunConfigStore.get` is an exact-string lookup, so **a Run created inside a
+registered worktree sees none of the stored configurations** — decision 2 above deliberately keeps
+`Run.cwd` at the worktree so `--worktree current` workers stay isolated, and the worktree path is not
+a key in the configuration store. `run-configs` then returns only the auto-detected seeds, and a
+coordinator that names an id belonging to the repository root gets `NO_CONFIG` → a Gate → a human
+called in because of a configuration that does exist, one directory up.
+
+That is left as it is for now. Whether configuration ownership should follow the repository (so a
+worktree Run inherits the repository's configurations) or the worktree (so a worktree can carry its
+own) is a judgement, not an oversight, and the repair is the field split this ADR already scoped:
+give the display/ownership side its own derived `projectRoot` and let configuration lookup read that,
+while execution keeps the raw `cwd`.
+
 ## Alternatives considered
 
 **Loosen the ownership test to containment.** One-line change, fixes the subdirectory case with no

@@ -8,7 +8,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { emptyState, type OrchState } from '../../core/orchestration/state'
+import { createGate, emptyState, type OrchState } from '../../core/orchestration/state'
 
 /** Cutoff for discarding a finished Run. The same 30 days as SchedulerConfigStore's ENTRY_TTL_MS */
 export const RUN_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -35,23 +35,28 @@ export class OrchestrationStore {
 
   constructor(private filePath: string) {}
 
-  async load(): Promise<{ recovered: boolean; unknownOutcomes: number; pruned: number }> {
+  async load(): Promise<{
+    recovered: boolean
+    unknownOutcomes: number
+    pruned: number
+    staleValidations: number
+  }> {
     let parsed: unknown
     try {
       parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
         this.state = emptyState()
-        return { recovered: false, unknownOutcomes: 0, pruned: 0 }
+        return { recovered: false, unknownOutcomes: 0, pruned: 0, staleValidations: 0 }
       }
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       this.state = emptyState()
-      return { recovered: true, unknownOutcomes: 0, pruned: 0 }
+      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0 }
     }
     if (!isValidState(parsed)) {
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       this.state = emptyState()
-      return { recovered: true, unknownOutcomes: 0, pruned: 0 }
+      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0 }
     }
 
     // isValidState only checks that the arrays exist, so the elements of parsed's arrays are
@@ -70,6 +75,26 @@ export class OrchestrationStore {
       unknownOutcomes++
       return { ...d, endedAt: now, workerState: 'outcome_unknown' as const }
     })
+
+    // 같은 이유로 Task 도 정리한다. validating 은 어딘가에서 검증 프로세스가 돌고 있다는 뜻인데,
+    // 앱이 죽으면 그것도 죽었다 — 아무도 결과를 가져다주지 않으므로 그대로 두면 영원히 validating 이다.
+    // failed 로 보내지 않는 이유: 재시도 흐름이 워커를 다시 띄우는데 그 작업은 이미 끝났고 잃어버린
+    // 것은 검증뿐이다. 다시 검증할지 손으로 통과시킬지는 사람이 정한다.
+    // 이 시점에서 Dispatch 는 위에서 endedAt 이 채워졌으므로 createGate 의 "열린 dispatch" 검사에
+    // 걸리지 않는다. consecutiveFailures 는 건드리지 않는다 — 작업이 틀렸다는 증거가 아니다.
+    let staleValidations = 0
+    let withGates: OrchState = { ...st, dispatches }
+    for (const t of st.tasks) {
+      if (t.status !== 'validating') continue
+      const r = createGate(
+        withGates,
+        { taskId: t.id, question: '앱이 재시작되어 검증이 중단되었습니다. 다시 검증할까요?' },
+        now
+      )
+      if (!r.ok) continue // 전이가 막히면 그 Task 는 그대로 둔다 — 잃는 것보다 낫다
+      withGates = r.state
+      staleValidations++
+    }
 
     // TTL cleanup: once a finished Run (every Task terminal) is 30 days old, every entry belonging
     // to that Run is discarded.
@@ -94,24 +119,24 @@ export class OrchestrationStore {
         })
         .map((r) => r.id)
     )
-    const keptTasks = st.tasks.filter((t) => !doomed.has(t.runId))
+    const keptTasks = withGates.tasks.filter((t) => !doomed.has(t.runId))
     const keptTaskIds = new Set(keptTasks.map((t) => t.id))
 
     this.state = {
       runs: st.runs.filter((r) => !doomed.has(r.id)),
       tasks: keptTasks,
       dispatches: dispatches.filter((d) => keptTaskIds.has(d.taskId)),
-      messages: st.messages.filter((m) => !doomed.has(m.runId)),
+      messages: withGates.messages.filter((m) => !doomed.has(m.runId)),
       deliveries: st.deliveries.filter((d) => !doomed.has(d.runId)),
-      gates: st.gates.filter((g) => !doomed.has(g.runId))
+      gates: withGates.gates.filter((g) => !doomed.has(g.runId))
     }
 
-    if (unknownOutcomes > 0 || doomed.size > 0) {
+    if (unknownOutcomes > 0 || doomed.size > 0 || staleValidations > 0) {
       if (doomed.size > 0) await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       // Unguarded save — the same rewrite convention as RunConfigStore and SchedulerConfigStore
       await this.save(this.state).catch(() => {})
     }
-    return { recovered: false, unknownOutcomes, pruned: doomed.size }
+    return { recovered: false, unknownOutcomes, pruned: doomed.size, staleValidations }
   }
 
   get(): OrchState {

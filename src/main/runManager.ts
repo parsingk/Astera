@@ -35,6 +35,9 @@ export class RunManager {
     command: string
     cols?: number
     rows?: number
+    /** 오케스트레이션 Task 의 검증 실행이라는 표시. 상태에 그대로 실려 렌더러까지 간다 —
+     *  RunManager 는 이 값으로 아무 판단도 하지 않는다(RunStatus.validation 참고) */
+    validation?: boolean
   }): RunStatus {
     const existing = this.runs.get(opts.projectPath)
     if (existing && existing.status.status === 'running') throw new Error(`ALREADY_RUNNING: ${opts.projectPath}`)
@@ -70,7 +73,9 @@ export class RunManager {
       configId: opts.config.id,
       configName: opts.config.name,
       command: opts.command,
-      status: 'running'
+      status: 'running',
+      // 켜져 있을 때만 필드를 만든다 — 검증이 아닌 실행의 상태에는 이 키가 없다
+      ...(opts.validation ? { validation: true as const } : {})
     }
     const live: LiveRun = { status, pty, buffer: '' }
     this.runs.set(opts.projectPath, live)

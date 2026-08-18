@@ -49,6 +49,24 @@ describe('RunManager', () => {
     expect(mgr.recentOutput('D:/p')).toContain('hello')
   })
 
+  // 검증 실행 표시. 렌더러가 그 실행을 라벨하고, run.stop 이 그것으로 markStopped 를 가른다 —
+  // 표시가 상태·get·listActive 세 통로에 모두 실려야 그 판정이 성립한다
+  it('validation 을 주면 상태와 get·listActive 에 표시가 실린다', () => {
+    const { mgr } = setup()
+    const st = mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev', validation: true })
+    expect(st.validation).toBe(true)
+    expect(mgr.get('D:/p')?.validation).toBe(true)
+    expect(mgr.listActive()[0].validation).toBe(true)
+  })
+
+  // 검증이 아닌 실행에는 키가 아예 없다 — 사용자 실행이 검증으로 라벨되면 안 된다
+  it('validation 을 주지 않으면 표시가 없다', () => {
+    const { mgr } = setup()
+    const st = mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
+    expect('validation' in st).toBe(false)
+    expect(mgr.get('D:/p')?.validation).toBeUndefined()
+  })
+
   it('같은 프로젝트 동시 실행은 거부한다', () => {
     const { mgr } = setup()
     mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })

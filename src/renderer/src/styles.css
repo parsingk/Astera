@@ -239,6 +239,9 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .run-global-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--radius); transition: background var(--ease); }
 .run-global-row:hover { background: var(--elevated); }
 .run-global-live { width: 7px; height: 7px; border-radius: 50%; background: #3fb950; flex: none; box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
+/* 검증 실행 라벨. 실행 툴바와 전역 목록 두 곳이 같은 배지를 쓴다 — 사용자가 시작하지 않은 실행이
+   자기 실행처럼 보이면 정지시켜 오케스트레이션 Task 를 실패시킨다(RunStatus.validation) */
+.run-tag { flex: none; background: var(--elevated); border: 1px solid var(--line-soft); color: var(--text-dim); border-radius: var(--radius-sm); font-size: 10px; line-height: 1.4; padding: 1px 5px; white-space: nowrap; }
 .run-global-jump { flex: 1; min-width: 0; text-align: left; background: none; border: none; color: var(--text); font-size: 12px; padding: 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-global-stop { width: 20px; height: 20px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-faint); font-size: 11px; padding: 0; cursor: pointer; }
 .run-global-stop:hover { background: var(--bg); color: #e5534b; }

@@ -10,6 +10,9 @@ const STATUS_DOT: Record<TaskStatus, string> = {
   pending: 'var(--text-faint)',
   ready: 'var(--text-dim)',
   dispatched: 'var(--accent)',
+  // 검증 중 — 도는 중(accent)과도, 끝난 셋과도 달라야 한다. git 의 '수정됨' 톤을 빌린다:
+  // 이 앱에서 이미 "아직 정해지지 않았다"를 뜻하는 색이다.
+  validating: 'var(--git-modified)',
   completed: 'var(--ok)',
   failed: 'var(--git-deleted)',
   blocked: 'var(--git-conflict)'

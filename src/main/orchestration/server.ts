@@ -82,6 +82,16 @@ export interface OrchServerDeps {
    * 주입되지 않으면 정규화하지 않는다 — now?/log?/backup?/probeLimit? 와 같은 관례다.
    */
   resolveProjectRoot?(cwd: string): Promise<string>
+  /** Run 의 프로젝트에 저장된 실행 구성 목록. 주입되지 않으면 빈 목록이다 —
+   *  now?/log?/backup?/probeLimit? 와 같은 관례다. */
+  listRunConfigs?(projectPath: string): Promise<{ id: string; name: string; type: string }[]>
+  /** 검증을 시작한다. **동기다** — 검증은 몇 분이 걸리므로 기다리면 worker_done 응답이 그만큼
+   *  늦어지고, 워커 세션이 그 자리에서 멈춘다. 결과는 배선이 나중에 setState 로 커밋한다.
+   *  주입되지 않으면 검증이 없는 것으로 동작한다 — validateConfigId 가 걸린 Task 도 worker_done
+   *  성공에 곧바로 completed 로 간다(applyWorkerDone 의 canValidate 인자로 전달된다).
+   *  validating 으로 보내지 않는 이유는 그 상태에서 꺼내 줄 것이 아무것도 없기 때문이다 —
+   *  now?/log?/backup?/probeLimit? 와 같은 "주입되지 않으면 그 기능이 없다" 관례다. */
+  startValidation?(a: { taskId: string; cwd: string }): void
   /** Audit log left behind when task-update bypasses the transition table (canTransition) — the same
    *  shape as log(message: string) in coordinator.ts. The wiring decides where it goes. If it is not
    *  injected (existing tests and the like) logging is skipped — optional for the same reason as
@@ -133,10 +143,13 @@ const COORDINATOR_ONLY = new Set([
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null)
 
+// TaskStatus 유니온에서 파생되지 않는 손수 쓴 목록이다 — 빠뜨려도 컴파일은 통과하고,
+// `task-list --status validating` 이 "must be one of ..." 로 거절되는 것이 유일한 증상이다.
 const TASK_STATUSES: TaskStatus[] = [
   'pending',
   'ready',
   'dispatched',
+  'validating',
   'completed',
   'failed',
   'blocked'
@@ -234,6 +247,14 @@ export async function handleCommand(
     }
     case 'run-list':
       return okBody(s.runs)
+    // 코디네이터가 --validate 에 넣을 id 를 알아야 한다. 상태를 바꾸지 않으므로 COORDINATOR_ONLY
+    // 가 아니다 — 워커도 자기가 무엇으로 검증될지 볼 수 있어야 한다.
+    case 'run-configs': {
+      if (!deps.listRunConfigs) return okBody([])
+      const run = s.runs[s.runs.length - 1]
+      if (!run) return bad('no run exists')
+      return okBody(await deps.listRunConfigs(run.cwd))
+    }
     case 'run-show': {
       const id = str(args.id)
       const run = s.runs.find((r) => r.id === id)
@@ -252,7 +273,8 @@ export async function handleCommand(
             title: str(args.title) ?? spec.split('\n')[0].slice(0, 80),
             spec,
             deps: Array.isArray(args.deps) ? (args.deps as string[]) : [],
-            parentId: str(args.parent) ?? undefined
+            parentId: str(args.parent) ?? undefined,
+            validateConfigId: str(args.validate) ?? undefined
           },
           now
         )
@@ -577,7 +599,10 @@ export async function handleCommand(
             filesModified:
               typeof args.filesModified === 'string'
                 ? args.filesModified.split(',').filter(Boolean)
-                : undefined
+                : undefined,
+            // 검증기가 주입되지 않은 배선에서는 검증이 없는 것으로 동작한다. validating 으로
+            // 보내면 결과를 가져다줄 것이 없어 Task 가 거기서 영원히 멈춘다(startValidation 참고).
+            canValidate: !!deps.startValidation
           },
           now
         )
@@ -618,6 +643,14 @@ export async function handleCommand(
           }
         }
         await deps.setState(nextState)
+        // 커밋 뒤에 부른다 — 검증이 먼저 끝나면 아직 validating 이 아닌 Task 에 결과를 쓰게 된다.
+        // result.value가 'alreadyReported'인 재전송은 상태를 바꾸지 않았다(첫 호출의 커밋을 그대로
+        // 다시 읽을 뿐이다) — 걸러내지 않으면 재전송마다 검증이 다시 큐에 들어가고, 그 사이 Task가
+        // 재시도돼 validating으로 다시 들어왔다면 낡은 검증의 종료 코드가 새 시도를 정산해 버린다.
+        const settled = deps.getState().tasks.find((t) => t.id === taskId)
+        const dispatch = deps.getState().dispatches.find((d) => d.id === dispatchId)
+        if (result.value === 'accepted' && settled?.status === 'validating' && dispatch)
+          deps.startValidation?.({ taskId, cwd: dispatch.cwd })
         return okBody(result.value)
       }
       // status, escalation and heartbeat — recorded only, with no bearing on lifetime.

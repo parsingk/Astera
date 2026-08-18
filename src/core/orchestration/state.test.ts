@@ -5,6 +5,8 @@ import {
   createTask,
   openDispatch,
   applyWorkerDone,
+  applyValidationResult,
+  blockForValidation,
   closeDispatch,
   nextDelivery,
   ackDelivery,
@@ -14,7 +16,7 @@ import {
   resolveGate,
   type OrchState
 } from './state'
-import { DELIVERY_MAX, FAILURE_LIMIT } from './types'
+import { DELIVERY_MAX, FAILURE_LIMIT, type Task } from './types'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchState; value: T } => {
@@ -703,6 +705,24 @@ describe('createTask — deps 검증', () => {
     // 여기서는 생성 시점에 이미 있는 Task 만 참조할 수 있으므로 순환이 원리적으로 불가능하다.
     expect(b.value.deps).toEqual([a.value.id])
   })
+  it('validateConfigId 를 그대로 저장한다', () => {
+    const run = unwrap<{ id: string }>(
+      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
+    )
+    const r = createTask(
+      run.state,
+      { runId: run.value.id, title: 't', spec: 's', deps: [], validateConfigId: 'cfg1' },
+      NOW
+    )
+    expect(r.ok && r.value.validateConfigId).toBe('cfg1')
+  })
+  it('validateConfigId 가 없으면 필드 자체가 없다', () => {
+    const run = unwrap<{ id: string }>(
+      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
+    )
+    const r = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW)
+    expect(r.ok && 'validateConfigId' in r.value).toBe(false)
+  })
 })
 
 describe('openDispatch — retryOf·sessionId 검증', () => {
@@ -790,5 +810,215 @@ describe('openDispatch — retryOf·sessionId 검증', () => {
     expect(r.ok).toBe(false)
     // taskId를 참조는 하지만 아무 상태도 바뀌지 않았음을 확인 (미사용 변수 경고 방지 겸 확인)
     expect(s.tasks.find((x) => x.id === taskId)!.status).toBe('dispatched')
+  })
+})
+
+describe('검증을 거치는 전이', () => {
+  /** seed() 가 만드는 Task 에 검증 구성을 달아 준다 — seed 자체는 건드리지 않는다 */
+  const withValidate = (s: OrchState, taskId: string, extra: Partial<Task> = {}): OrchState => ({
+    ...s,
+    tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigId: 'cfg1', ...extra } : t))
+  })
+  const done = (taskId: string, dispatchId: string, outcome: 'succeeded' | 'failed') => ({
+    taskId, dispatchId, outcome, subject: 's', body: 'b'
+  })
+
+  it('검증이 걸린 Task 는 worker_done(succeeded) 에 validating 으로 간다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const r = unwrap(applyWorkerDone(withValidate(s, taskId), done(taskId, dispatchId, 'succeeded'), NOW) as never)
+    expect(r.state.tasks[0].status).toBe('validating')
+  })
+
+  it('검증이 없으면 지금처럼 completed 로 간다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const r = unwrap(applyWorkerDone(s, done(taskId, dispatchId, 'succeeded'), NOW) as never)
+    expect(r.state.tasks[0].status).toBe('completed')
+  })
+
+  // 워커가 실패했다는데 검증할 이유가 없다
+  it('worker_done(failed) 는 검증이 걸려 있어도 failed 로 간다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const r = unwrap(applyWorkerDone(withValidate(s, taskId), done(taskId, dispatchId, 'failed'), NOW) as never)
+    expect(r.state.tasks[0].status).toBe('failed')
+  })
+
+  // **회로 차단이 걸리려면 이것이 필요하다.** 성공 보고에 카운터를 0 으로 되돌리면, 이어진 검증
+  // 실패가 1 을 만들고 다음 시도도 0 -> 1 이라 FAILURE_LIMIT 에 닿을 수 없다
+  it('validating 으로 갈 때 consecutiveFailures 를 초기화하지 않는다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const withCount = withValidate(s, taskId, { consecutiveFailures: 2 })
+    const r = unwrap(applyWorkerDone(withCount, done(taskId, dispatchId, 'succeeded'), NOW) as never)
+    expect(r.state.tasks[0].consecutiveFailures).toBe(2)
+  })
+
+  // **선택적 의존성은 무해하게 저하해야 한다.** 검증기가 없는 배선에서 validating 으로 보내면
+  // 결과를 가져다줄 것이 아무것도 없어 Task 가 영원히 validating 이고, recomputeReady 는 completed
+  // 만 승격시키므로 그 의존 서브트리 전체가 pending 에 멈춘다 — 앱 재시작 말고는 회복 수단이 없다.
+  it('canValidate 가 false 면 검증이 걸려 있어도 곧바로 completed 로 간다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const r = unwrap(
+      applyWorkerDone(
+        withValidate(s, taskId),
+        { ...done(taskId, dispatchId, 'succeeded'), canValidate: false },
+        NOW
+      ) as never
+    )
+    expect(r.state.tasks[0].status).toBe('completed')
+  })
+
+  // 검증 없이 completed 에 도달한 것이므로 카운터도 그때와 똑같이 초기화된다
+  it('canValidate 가 false 면 consecutiveFailures 도 초기화한다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const withCount = withValidate(s, taskId, { consecutiveFailures: 2 })
+    const r = unwrap(
+      applyWorkerDone(
+        withCount,
+        { ...done(taskId, dispatchId, 'succeeded'), canValidate: false },
+        NOW
+      ) as never
+    )
+    expect(r.state.tasks[0].consecutiveFailures).toBe(0)
+  })
+
+  // 인자를 모르는 순수 계층의 호출자에게는 지금까지의 동작이 유지된다
+  it('canValidate 를 주지 않으면 검증이 걸린 Task 는 validating 으로 간다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const r = unwrap(
+      applyWorkerDone(withValidate(s, taskId), { ...done(taskId, dispatchId, 'succeeded'), canValidate: true }, NOW) as never
+    )
+    expect(r.state.tasks[0].status).toBe('validating')
+  })
+
+  it('검증 없이 completed 로 갈 때는 초기화한다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const withCount: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, consecutiveFailures: 2 } : t))
+    }
+    const r = unwrap(applyWorkerDone(withCount, done(taskId, dispatchId, 'succeeded'), NOW) as never)
+    expect(r.state.tasks[0].consecutiveFailures).toBe(0)
+  })
+})
+
+describe('applyValidationResult', () => {
+  /** worker_done 까지 흘려 Task 를 validating 으로 만든 상태 */
+  const validating = (extra: Partial<Task> = {}): { s: OrchState; taskId: string } => {
+    const { s, taskId, dispatchId } = seed()
+    const armed: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigId: 'cfg1', ...extra } : t))
+    }
+    const r = unwrap(
+      applyWorkerDone(armed, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never
+    )
+    return { s: r.state, taskId }
+  }
+
+  it('종료 코드 0 이면 completed 이고 카운터를 초기화한다', () => {
+    const { s, taskId } = validating({ consecutiveFailures: 2 })
+    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 0, output: 'ok' }, NOW) as never)
+    expect(r.state.tasks[0].status).toBe('completed')
+    expect(r.state.tasks[0].consecutiveFailures).toBe(0)
+  })
+
+  it('종료 코드가 0 이 아니면 failed 이고 카운터가 오른다', () => {
+    const { s, taskId } = validating({ consecutiveFailures: 1 })
+    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 1, output: '실패 로그' }, NOW) as never)
+    expect(r.state.tasks[0].status).toBe('failed')
+    expect(r.state.tasks[0].consecutiveFailures).toBe(2)
+  })
+
+  // 재시도하는 워커가 무엇이 틀렸는지 읽을 수 있어야 한다
+  it('실패하면 출력을 result 에 담는다', () => {
+    const { s, taskId } = validating()
+    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 1, output: '실패 로그' }, NOW) as never)
+    expect(r.state.tasks[0].result).toContain('실패 로그')
+  })
+
+  // **이것이 요점이다** — 검증되지 않은 결과 위에 다음 작업이 쌓이면 안 된다
+  it('의존 Task 는 검증이 통과해야 ready 가 된다', () => {
+    const { s, taskId } = validating()
+    const next = unwrap<{ id: string }>(
+      createTask(s, { runId: s.runs[0].id, title: 'next', spec: 'x', deps: [taskId] }, NOW) as never
+    )
+    expect(next.state.tasks[1].status).toBe('pending')
+    const done = unwrap(applyValidationResult(next.state, { taskId, exitCode: 0, output: '' }, NOW) as never)
+    expect(done.state.tasks[1].status).toBe('ready')
+  })
+
+  // **C1 — 코디네이터를 깨우는 수단은 메시지뿐이다.** check 는 nextDelivery 를 통해 s.messages 만
+  // 읽으므로, 메시지가 없으면 검증이 Task 를 failed 로 보냈다는 사실이 코디네이터에게 영원히
+  // 도착하지 않는다. 그 코디네이터가 받은 마지막 소식은 "워커가 성공했다"다.
+  it('실패하면 종료 코드와 출력을 담은 status 메시지를 붙인다', () => {
+    const { s, taskId } = validating()
+    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 2, output: '실패 로그' }, NOW) as never)
+    const m = r.state.messages[r.state.messages.length - 1]
+    expect(m.type).toBe('status')
+    expect(m.taskId).toBe(taskId)
+    expect(m.runId).toBe(s.runs[0].id)
+    expect(m.subject).toBe('validation failed')
+    expect(m.body).toContain('exitCode=2')
+    expect(m.body).toContain('실패 로그')
+  })
+
+  // 통과도 알려야 한다 — 의존 Task 가 풀린 것을 모르면 코디네이터는 다음 Task 를 띄우지 않는다
+  it('통과해도 status 메시지를 붙인다', () => {
+    const { s, taskId } = validating()
+    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 0, output: 'ok' }, NOW) as never)
+    const m = r.state.messages[r.state.messages.length - 1]
+    expect(m.type).toBe('status')
+    expect(m.subject).toBe('validation passed')
+    expect(m.taskId).toBe(taskId)
+  })
+
+  // 메시지는 미배달 상태로 붙어야 nextDelivery 가 배치를 만든다 — deliveryId 가 이미 있으면
+  // check 가 그것을 건너뛰고 코디네이터는 그대로 잠들어 있는다
+  it('붙은 메시지는 nextDelivery 의 배치에 들어간다', () => {
+    const { s, taskId } = validating()
+    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 1, output: 'x' }, NOW) as never)
+    const d = unwrap<{ messages: { subject: string }[] }>(
+      nextDelivery(r.state, { runId: s.runs[0].id, types: ['status'] }, NOW) as never
+    )
+    expect(d.value.messages.map((m) => m.subject)).toContain('validation failed')
+  })
+
+  it('validating 이 아닌 Task 는 거절한다', () => {
+    const { s, taskId } = seed()
+    const r = applyValidationResult(s, { taskId, exitCode: 0, output: '' }, NOW)
+    expect(r.ok).toBe(false)
+  })
+
+  // 거절된 호출은 메시지도 남기지 않는다 — 거절인데 코디네이터를 깨우면 안 된다
+  it('거절되면 메시지도 붙지 않는다', () => {
+    const { s, taskId } = validating()
+    const settled = unwrap(applyValidationResult(s, { taskId, exitCode: 0, output: '' }, NOW) as never)
+    const before = settled.state.messages.length
+    const again = applyValidationResult(settled.state, { taskId, exitCode: 1, output: '' }, NOW)
+    expect(again.ok).toBe(false)
+    expect(settled.state.messages).toHaveLength(before)
+  })
+
+  it('없는 Task 는 거절한다', () => {
+    const { s } = validating()
+    const r = applyValidationResult(s, { taskId: 'nope', exitCode: 0, output: '' }, NOW)
+    expect(r.ok).toBe(false)
+  })
+})
+
+describe('blockForValidation', () => {
+  it('Gate 를 열고 Task 를 blocked 로 보낸다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const armed: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, validateConfigId: 'cfg1' } : t))
+    }
+    const v = unwrap(
+      applyWorkerDone(armed, { taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }, NOW) as never
+    )
+    const r = unwrap<{ question: string }>(
+      blockForValidation(v.state, { taskId, reason: '구성 cfg1 이 없습니다' }, NOW) as never
+    )
+    expect(r.state.tasks[0].status).toBe('blocked')
+    expect(r.value.question).toContain('cfg1')
   })
 })

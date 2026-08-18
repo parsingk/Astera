@@ -15,6 +15,13 @@ export interface RunStatus {
   command: string
   status: 'running' | 'exited'
   exitCode?: number
+  /** 오케스트레이션 Task 의 검증 실행이다. 이 실행은 사용자가 시작한 것이 아니지만 RunManager 의
+   *  한 통로를 그대로 지나가므로 실행 툴바와 전역 목록에 똑같이 나타난다 — 그것을 구별하는 표시가
+   *  없으면 사용자는 자기 실행을 시작할 수 없는 이유도 모르고, 남의 빌드로 보이는 것을 정지시켜
+   *  Task 를 실패시킨다. 정지 버튼은 남긴다(폭주하는 검증을 멈출 수단은 있어야 한다) — 대신 그
+   *  정지는 실패가 아니라 Gate 가 된다(TaskValidator.markStopped). 검증이 아닌 실행에는 이 필드가
+   *  아예 없다. */
+  validation?: true
 }
 
 export type PackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun'
@@ -275,7 +282,7 @@ export function formatEnvLines(env: Record<string, string> | undefined): string 
  *  moves or is opened on another machine.
  *
  *  How those relative paths are resolved differs by field, and only `cwd` is resolved here in the app:
- *  run.start passes it through resolveRunCwd (ipc.ts), which resolves it against the project root and
+ *  run.start passes it through resolveRunCwd (main/run/prepare.ts), which resolves it against the project root and
  *  hands the result to the PTY. Every other path field is spliced into the command text untouched and
  *  is therefore resolved by the invoked tool against **the working folder**, not the project root — so
  *  the two only coincide while the working folder is the project root (which is the default: an empty

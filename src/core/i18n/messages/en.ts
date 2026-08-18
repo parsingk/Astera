@@ -489,6 +489,7 @@ export const en: Record<keyof typeof ko, string> = {
   'run.action.stop': 'Stop',
   'run.global.listTitle': 'Active runs',
   'run.global.jump': 'Go to',
+  'run.validation.tag': 'Validation',
   'run.config.saveFailed': 'Save failed: {detail}',
   'run.config.cwdNotString': 'The working directory for this run configuration is invalid',
   'run.config.cwdOutsideProject': 'The working directory for this run configuration must be inside the project',

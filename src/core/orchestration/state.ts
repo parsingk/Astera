@@ -81,7 +81,14 @@ export function createRun(
 
 export function createTask(
   s: OrchState,
-  a: { runId: string; title: string; spec: string; deps: string[]; parentId?: string },
+  a: {
+    runId: string
+    title: string
+    spec: string
+    deps: string[]
+    parentId?: string
+    validateConfigId?: string
+  },
   now: string
 ): Res<Task> {
   if (!s.runs.some((r) => r.id === a.runId)) return err(`unknown run: ${a.runId}`)
@@ -97,6 +104,7 @@ export function createTask(
     spec: a.spec,
     deps: a.deps,
     parentId: a.parentId,
+    ...(a.validateConfigId ? { validateConfigId: a.validateConfigId } : {}),
     status: 'pending',
     consecutiveFailures: 0,
     createdAt: now,
@@ -177,6 +185,14 @@ export function applyWorkerDone(
     subject: string
     body: string
     filesModified?: string[]
+    /** 검증을 실제로 돌릴 수 있는가. 배선이 검증기를 주입하지 않았으면 서버가 false 로 넘긴다 —
+     *  그 경우 validateConfigId 가 걸려 있어도 validating 으로 보내지 않는다. 보내면 결과를
+     *  가져다줄 것이 아무것도 없어 Task 가 영원히 validating 이고, recomputeReady 는 completed 만
+     *  승격시키므로 그 의존 서브트리 전체가 pending 에 멈춘다 — 선택적 의존성이 무해하게 저하하는
+     *  대신 Task 를 고립시키는 것이다. 스펙 5절이 정한 동작은 "주입되지 않으면 검증이 없는 것으로
+     *  동작한다(worker_done 을 그대로 믿는다)"다.
+     *  기본값은 true — 이 인자를 모르는 순수 계층의 호출자에게는 지금까지의 동작이 유지된다. */
+    canValidate?: boolean
   },
   now: string
 ): Res<'accepted' | 'alreadyReported'> {
@@ -192,14 +208,26 @@ export function applyWorkerDone(
   const run = s.runs.find((r) => r.id === task.runId)
   if (!run) return err(`unknown run for task: ${a.taskId}`)
 
-  const to = a.outcome === 'succeeded' ? 'completed' : 'failed'
+  // 검증이 걸린 Task 는 성공 보고만으로 끝나지 않는다 — 실제로 돌려 본 결과가 정한다.
+  // 워커가 실패를 보고했으면 검증하지 않는다. 워커 자신이 안 됐다고 하는데 확인할 이유가 없다.
+  // canValidate === false 는 검증기가 없는 배선이다 — 그때는 검증이 없는 Task 와 똑같이 다룬다.
+  const validating =
+    a.outcome === 'succeeded' && !!task.validateConfigId && a.canValidate !== false
+  const to = validating ? 'validating' : a.outcome === 'succeeded' ? 'completed' : 'failed'
   const moved = moveTask(task, to, now)
   if (!moved) return err(`cannot move task ${task.status} -> ${to}`)
   const nextTask: Task = {
     ...moved,
     result: a.body,
     filesModified: a.filesModified,
-    consecutiveFailures: a.outcome === 'succeeded' ? 0 : task.consecutiveFailures + 1
+    // **validating 으로 갈 때는 그대로 넘긴다.** 여기서 0 으로 되돌리면 이어진 검증 실패가 1 을
+    // 만들고 다음 시도도 0 -> 1 이라 FAILURE_LIMIT 에 영원히 닿지 않는다 — 검증을 통과하지 못하는
+    // Task 가 무한히 재시도된다. 초기화는 실제로 completed 에 도달할 때만 한다.
+    consecutiveFailures: validating
+      ? task.consecutiveFailures
+      : a.outcome === 'succeeded'
+        ? 0
+        : task.consecutiveFailures + 1
   }
   const nextDispatch: Dispatch = {
     ...dispatch,
@@ -230,6 +258,66 @@ export function applyWorkerDone(
   // left to answer them. See the settlePendingQuestions comment for why they are not deleted.
   state = { ...state, messages: settlePendingQuestions(state.messages, a.dispatchId) }
   return ok(state, 'accepted')
+}
+
+/** 검증 결과를 Task 에 반영한다. 종료 코드가 판정이다.
+ *
+ *  실패는 기존 재시도 흐름을 그대로 탄다 — consecutiveFailures 가 오르고 FAILURE_LIMIT 에서
+ *  회로가 끊긴다. 출력 꼬리는 result 와 아래 status 메시지 양쪽에 담는다. 재시도하는 워커가
+ *  그것을 읽지는 못한다 — coordinator.ts 의 buildSpecFile 은 spec 파일에 title 과 spec 만
+ *  싣는다 — 그래서 무엇이 틀렸는지 다음 시도에 전달하는 것은 이 메시지를 읽은 코디네이터의 일이다.
+ *
+ *  **결과는 반드시 메시지가 된다.** 코디네이터를 깨우는 수단은 메시지뿐이다(check 는
+ *  nextDelivery 를 통해 s.messages 만 읽는다). 여기서 메시지를 붙이지 않으면 워커의 "성공했다"가
+ *  코디네이터가 받은 마지막 소식으로 남고, 검증이 실패해 Task 가 failed 가 되어도 재시도 흐름을
+ *  타는 사람이 아무도 없다 — check --wait 는 영원히 타임아웃만 돌려주고, 가이드는 타임아웃을
+ *  실패의 신호로 보지 말라고 못박아 두었다. 통과도 알려야 한다: 의존 Task 가 풀린 것을 알지
+ *  못하면 코디네이터는 다음 Task 를 띄우지 않는다. */
+export function applyValidationResult(
+  s: OrchState,
+  a: { taskId: string; exitCode: number; output: string },
+  now: string
+): Res<Task> {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return err(`unknown task: ${a.taskId}`)
+  if (task.status !== 'validating') return err(`task is not validating: ${task.status}`)
+  const passed = a.exitCode === 0
+  const moved = moveTask(task, passed ? 'completed' : 'failed', now)
+  if (!moved) return err(`cannot move task ${task.status} -> ${passed ? 'completed' : 'failed'}`)
+  const next: Task = {
+    ...moved,
+    consecutiveFailures: passed ? 0 : task.consecutiveFailures + 1,
+    ...(passed ? {} : { result: `validation failed (exit ${a.exitCode})\n${a.output}` })
+  }
+  let state: OrchState = { ...s, tasks: recomputeReady(replace(s.tasks, next)) }
+  // closeDispatch 의 한도 감지 메시지와 같은 모양이다 — type: 'status', 제목이 결과를 말하고
+  // 본문이 종료 코드와 출력 꼬리를 담는다. dispatchId 는 붙이지 않는다: 검증은 Dispatch 가 끝난
+  // 뒤에 도는 것이므로 어떤 Dispatch 의 소식도 아니다. 앱이 만드는 오케스트레이션 문자열이라 영어다.
+  state = pushMessage(
+    state,
+    {
+      runId: task.runId,
+      type: 'status',
+      taskId: task.id,
+      subject: passed ? 'validation passed' : 'validation failed',
+      body: passed
+        ? `exitCode=0. The Task moved to completed.\n${a.output}`
+        : `exitCode=${a.exitCode}. The Task moved to failed (consecutiveFailures=${next.consecutiveFailures}). Retry with worker-start --retry-of. The output tail below is the only record of what went wrong — a retry worker's spec file does not carry it, so pass on whatever it needs.\n${a.output}`
+    },
+    now
+  ).state
+  return ok(state, next)
+}
+
+/** 검증을 아예 돌릴 수 없을 때. 조용히 통과시키면 "검증됨"과 "검증 못 함"이 화면에서 같아지고,
+ *  인프라 문제로 실패시키면 멀쩡한 작업이 재시도 세 번 끝에 회로 차단까지 간다. 어느 쪽도 기계가
+ *  정할 일이 아니므로 Gate 를 열어 사람에게 넘긴다. */
+export function blockForValidation(
+  s: OrchState,
+  a: { taskId: string; reason: string },
+  now: string
+): Res<Gate> {
+  return createGate(s, { taskId: a.taskId, question: `검증을 실행할 수 없습니다: ${a.reason}` }, now)
 }
 
 /** Settle unanswered questions without an answer — never delete them. An unacked Delivery's

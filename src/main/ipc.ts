@@ -22,6 +22,8 @@ import {
   type OrchServer,
   type OrchServerDeps
 } from './orchestration/server'
+import { TaskValidator, ValidatorBusyError } from './orchestration/validator'
+import { applyValidationResult, blockForValidation } from '../core/orchestration/state'
 import { sameSnapshot, snapshotFor } from '../core/orchestration/view'
 import { repoPathOf } from '../core/worktrees/repo'
 import type { OrchState } from '../core/orchestration/state'
@@ -47,6 +49,7 @@ import { listJdks } from './jdkScanner'
 import { listPythonInterpreters } from './pythonScanner'
 import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
+import { loadRunConfigs, prepareRun } from './run/prepare'
 
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
  *  in this file — the two values the coordinator needs (spawnSession, busyState) are owned here, so
@@ -97,6 +100,8 @@ export function registerIpc(
     infoPath: string
     skillsPath: string
   } | null = null
+  /** 검증기. startOrchestration 이 만들 때까지, 그리고 오케스트레이션이 꺼져 있으면 null 이다 */
+  let orchValidator: TaskValidator | null = null
   /** A bounded per-dispatch tail of worker output — what worker-read reads. The append, cap, eviction,
    *  and limit rules, along with "when does it get cleared", live in orchestration/tail.ts (its tests
    *  pin them down). Eviction is the only path that clears it — not a dead session, not a
@@ -214,7 +219,12 @@ export function registerIpc(
   }
   // run output and status to the renderer
   core.run.onData = (e) => send('run:data', e)
-  core.run.onStatus = (e) => send('run:status', e)
+  core.run.onStatus = (e) => {
+    send('run:status', e)
+    // 검증 실행의 종료도 이 한 통로로 온다 — RunManager 의 onStatus 는 하나뿐이다.
+    // 검증이 아닌 실행의 종료도 흘러 들어가지만, TaskValidator 가 큐에 없는 cwd 는 무시한다.
+    if (e.status === 'exited') orchValidator?.onRunExit({ cwd: e.projectPath, exitCode: e.exitCode ?? 1 })
+  }
   // project terminal output and exit to the renderer
   core.terminal.onData = (e) => send('terminal:data', e)
   core.terminal.onExit = (e) => send('terminal:exit', e)
@@ -444,9 +454,10 @@ export function registerIpc(
     const store = new OrchestrationStore(path.join(app.getPath('userData'), 'orchestration.json'))
     const loaded = await store.load()
     if (loaded.recovered) orchLog('failed to read or parse orchestration.json — kept the .bak and started from an empty state')
-    if (loaded.unknownOutcomes > 0 || loaded.pruned > 0)
+    if (loaded.unknownOutcomes > 0 || loaded.pruned > 0 || loaded.staleValidations > 0)
       orchLog(
-        `restart cleanup — ${loaded.unknownOutcomes} dispatch(es) left as outcome_unknown, ${loaded.pruned} expired Run(s)`
+        `restart cleanup — ${loaded.unknownOutcomes} dispatch(es) left as outcome_unknown, ` +
+          `${loaded.pruned} expired Run(s), ${loaded.staleValidations} interrupted validation(s)`
       )
 
     // The coordinator never reads or writes OrchState (the server owns state).
@@ -520,6 +531,65 @@ export function registerIpc(
       specsDir,
       log: orchLog
     })
+
+    // 검증 실행. runner 는 prepareRun + RunManager 이고, 결과는 서버의 setState 로 되돌아간다.
+    // dispatchOf 로 cwd 에서 Task 를 되찾지 않는 이유: TaskValidator 가 taskId 를 들고 있다.
+    const validator = new TaskValidator({
+      runner: {
+        start: async ({ cwd, taskId }) => {
+          const st = store.get()
+          const task = st.tasks.find((t) => t.id === taskId)
+          if (!task?.validateConfigId) throw new Error(`no validateConfigId on task ${taskId}`)
+          // 큐에서 기다리는 동안 Task 가 validating 을 떠났을 수 있다(task-update). 그대로 두면
+          // 빌드 전체가 돌고 실행 슬롯과 실행 패널을 차지한 뒤에야 applyValidationResult 가
+          // 결과를 거절한다. 던지지 않고 'skip' 을 돌려주는 이유는 ValidatorRunner.start 의 주석에
+          // 있다 — 이것은 실패가 아니라 없어진 할 일이다.
+          if (task.status !== 'validating') return 'skip'
+          const run = st.runs.find((r) => r.id === task.runId)
+          if (!run) throw new Error(`unknown run for task ${taskId}`)
+          // PTY 를 띄울 경로는 가드를 통과해야 한다. Dispatch.cwd 는 오케스트레이션 소켓에서 온
+          // 값이고 resolveProjectRoot 는 ADR-003 이 명시하듯 "최선 노력이지 검증이 아니다".
+          // 실패하면 그것이 그대로 Gate 가 되므로(onCannotRun) 여기가 올바른 자리다.
+          await assertAllowedPath(cwd)
+          // 구성은 Run 의 프로젝트에서, 실행은 Dispatch 의 cwd 에서. ignoreConfigCwd 는 구성에 박힌
+          // 경로가 워커의 트리가 아닌 곳을 가리키기 때문이다(spec 2절).
+          const { config, command, projectName } = await prepareRun({
+            projectPath: run.cwd,
+            configId: task.validateConfigId,
+            stored: core.runConfig.get(run.cwd),
+            ignoreConfigCwd: true,
+            assertAllowedPath,
+            t: (key, params) => t(core.lang, key as MessageKey, params)
+          })
+          // RunManager 는 projectPath(=cwd) 하나에 하나만 돌린다. 사용자가 그 사이 Run 버튼으로
+          // 직접 채웠을 수 있다 — 그 충돌은 지나가는 것이므로, ALREADY_RUNNING 문자열을 잡아내는
+          // 대신 시작 전에 미리 살펴 ValidatorBusyError 로 구분한다(큐가 기다리게 한다).
+          if (core.run.get(cwd)?.status === 'running') throw new ValidatorBusyError(cwd)
+          // validation: 이 실행이 사용자의 것이 아니라는 표시. 실행 툴바와 전역 목록이 이것으로
+          // 라벨하고, run.stop 이 이것으로 markStopped 를 부른다(RunStatus.validation 참고).
+          core.run.start({ projectPath: cwd, projectName, config, command, validation: true })
+        },
+        output: (cwd) => core.run.recentOutput(cwd).slice(-4000)
+      },
+      onSettled: async ({ taskId, exitCode, output }) => {
+        const r = applyValidationResult(store.get(), { taskId, exitCode, output }, new Date().toISOString())
+        if (!r.ok) {
+          orchLog(`validation result rejected task=${taskId}: ${r.error}`)
+          return
+        }
+        await deps.setState(r.state)
+      },
+      onCannotRun: async ({ taskId, reason }) => {
+        const r = blockForValidation(store.get(), { taskId, reason }, new Date().toISOString())
+        if (!r.ok) {
+          orchLog(`could not block task=${taskId}: ${r.error}`)
+          return
+        }
+        await deps.setState(r.state)
+      },
+      log: orchLog
+    })
+    orchValidator = validator
 
     const deps: OrchServerDeps = {
       getState: () => store.get(),
@@ -629,6 +699,17 @@ export function registerIpc(
         const bounded = root === null ? candidates : candidates.filter((c) => isPathWithin(root, c))
         return projectRootOf(bounded, cwd)
       },
+      // 코디네이터가 --validate 에 넣을 목록. 조립은 하지 않으므로
+      // loadRunConfigs 만 부른다.
+      listRunConfigs: async (projectPath) => {
+        const { configs } = await loadRunConfigs({
+          projectPath,
+          stored: core.runConfig.get(projectPath),
+          assertAllowedPath
+        })
+        return configs.map((c) => ({ id: c.id, name: c.name, type: c.type }))
+      },
+      startValidation: ({ taskId, cwd }) => validator.enqueue({ taskId, cwd }),
       log: orchLog
     }
 
@@ -824,47 +905,17 @@ export function registerIpc(
     }
   })
 
-  // Shared by run.list and run.start: reads the build file bodies needed for the seed verdict. When both
-  // .kts and .gradle exist, .kts wins. A read failure is swallowed to null — the same convention as the
-  // existing package.json handling — so the seed just ends up empty (one unreadable file must not take
-  // down all of run.list and run.start).
-  const readSeedTexts = async (
-    projectRoot: string,
-    files: string[]
-  ): Promise<{ packageJson: string | null; buildGradle: string | null; pom: string | null }> => {
-    const readIfPresent = async (name: string): Promise<string | null> => {
-      if (!files.includes(name)) return null
-      try {
-        return await fs.readFile(path.join(projectRoot, name), 'utf8')
-      } catch {
-        return null
-      }
-    }
-    const gradleFile = files.includes('build.gradle.kts') ? 'build.gradle.kts' : 'build.gradle'
-    const [packageJson, buildGradle, pom] = await Promise.all([
-      readIfPresent('package.json'),
-      readIfPresent(gradleFile),
-      readIfPresent('pom.xml')
-    ])
-    return { packageJson, buildGradle, pom }
-  }
-
   // run.list: stored configs unioned with the auto-seeded ones, plus the active status and recent output for reattaching
   ipcMain.handle('run.list', async (_e, projectPath: string) => {
     await assertAllowedPath(projectPath)
-    let files: string[] = []
-    try {
-      files = (await fs.readdir(projectPath, { withFileTypes: true })).map((d) => d.name)
-    } catch {
-      /* An empty list if it cannot be read */
-    }
-    const texts = await readSeedTexts(projectPath, files)
-    const { detectSeedConfigs, mergeConfigs, isSpringBootProject, hasDockerfile } = await import(
-      '../core/run/config'
-    )
+    const { configs, files, texts } = await loadRunConfigs({
+      projectPath,
+      stored: core.runConfig.get(projectPath),
+      assertAllowedPath
+    })
+    const { isSpringBootProject, hasDockerfile } = await import('../core/run/config')
     const { buildRunContext } = await import('../core/run/build')
     const { hasPythonProject } = await import('../core/run/python')
-    const configs = mergeConfigs(detectSeedConfigs(files, texts), core.runConfig.get(projectPath))
     return {
       configs,
       active: core.run.get(projectPath),
@@ -952,81 +1003,46 @@ export function registerIpc(
     return listDotnetProjects(projectPath)
   })
 
-  /** Validates a run configuration's cwd and returns the absolute path that will **actually be used**.
-   *  cwd comes from two places outside the trust boundary — the stored file (hand-editable on disk) and
-   *  the run.saveConfig IPC (the renderer) — and runManager passes it straight through as the PTY's cwd,
-   *  so without validation a process starts outside the allowed roots.
-   *  A relative path is resolved against the project root. Without that it would resolve against the
-   *  Electron process's cwd and run somewhere other than intended. isPathWithin resolves `..` through
-   *  path.resolve, blocks sibling prefixes (D:\proj vs D:\proj2) at a separator boundary, and includes
-   *  the project root itself.
-   *  **The return value is what must be handed to execution** — validating and then passing the original
-   *  cwd puts this in the "validated one value, used another" category, and a defect of that shape has
-   *  recurred six times in this feature area. */
-  const resolveRunCwd = async (projectPath: string, cwd: unknown): Promise<string | undefined> => {
-    if (cwd === undefined || cwd === null || cwd === '') return undefined
+  ipcMain.handle('run.start', async (_e, projectPath: string, configId: string) => {
+    await assertAllowedPath(projectPath)
+    const { config, command, projectName } = await prepareRun({
+      projectPath,
+      configId,
+      stored: core.runConfig.get(projectPath),
+      assertAllowedPath,
+      t: (key, params) => t(core.lang, key as MessageKey, params)
+    })
+    return core.run.start({ projectPath, projectName, config, command })
+  })
+
+  ipcMain.handle('run.stop', async (_e, projectPath: string) => {
+    // 검증 실행을 사용자가 정지시킨 것은 "작업이 틀렸다"가 아니라 "증명하지 못했다"다 — 표시를
+    // 남겨 이어질 종료가 실패 정산이 아니라 Gate 로 가게 한다(TaskValidator.markStopped).
+    if (core.run.get(projectPath)?.validation) orchValidator?.markStopped(projectPath)
+    return core.run.stop(projectPath)
+  })
+  ipcMain.on('run.write', (_e, projectPath: string, data: string) => core.run.write(projectPath, data))
+  ipcMain.on('run.resize', (_e, projectPath: string, cols: number, rows: number) =>
+    core.run.resize(projectPath, cols, rows)
+  )
+  // 저장 시점의 cwd 검사 — 규칙과 그 근거는 main/run/prepare.ts 의 resolveRunCwd 를 보라. 그 함수는
+  // prepareRun 이 id 로 구성을 찾는 일까지 하므로 저장 경로에서는 쓸 수 없어, 같은 규칙을 여기 따로 둔다.
+  const assertConfigCwd = async (projectPath: string, cwd: unknown): Promise<void> => {
+    if (cwd === undefined || cwd === null || cwd === '') return
     if (typeof cwd !== 'string') throw new Error(t(core.lang, 'run.config.cwdNotString'))
     const resolved = path.resolve(projectPath, cwd)
     await assertAllowedPath(resolved)
     if (!isPathWithin(projectPath, resolved))
       throw new Error(t(core.lang, 'run.config.cwdOutsideProject'))
-    return resolved
   }
 
-  ipcMain.handle('run.start', async (_e, projectPath: string, configId: string) => {
-    await assertAllowedPath(projectPath)
-    let files: string[] = []
-    try {
-      files = (await fs.readdir(projectPath, { withFileTypes: true })).map((d) => d.name)
-    } catch {
-      /* Ignore */
-    }
-    const texts = await readSeedTexts(projectPath, files)
-    const { detectSeedConfigs, mergeConfigs } = await import('../core/run/config')
-    const config = mergeConfigs(detectSeedConfigs(files, texts), core.runConfig.get(projectPath)).find(
-      (c) => c.id === configId
-    )
-    if (!config) throw new Error(`NO_CONFIG: ${configId}`)
-    // Saving an incomplete configuration is allowed (see run.saveConfig below) so a half-filled one is
-    // not lost; running it is not. Refuse here, naming the field that is still empty — assembling it
-    // instead would splice an empty argument into the command and fail somewhere inside the tool,
-    // where the message has nothing to do with the field the user has to go and fill in.
-    const { missingRequiredFields } = await import('../core/run/migrate')
-    const missing = missingRequiredFields(config)
-    if (missing.length > 0)
-      throw new Error(
-        t(core.lang, 'run.start.incomplete', {
-          // Every name in REQUIRED has a run.field.* label — pinned by a test in core/run/migrate.test.ts,
-          // since this lookup is built from a string and TypeScript cannot check it
-          fields: missing.map((k) => t(core.lang, `run.field.${k}` as MessageKey)).join(', ')
-        })
-      )
-    // Send the validated cwd through — runManager uses config.cwd as the PTY cwd, so passing the
-    // original would split what was validated from what runs
-    const cwd = await resolveRunCwd(projectPath, config.cwd)
-    const { buildCommand, buildRunContext } = await import('../core/run/build')
-    // Both handlers call buildRunContext the same way — keeping the wrapper/package-manager rule in one
-    // place is the point, so the form's preview (run.list) and the actual run never disagree.
-    return core.run.start({
-      projectPath,
-      projectName: path.basename(projectPath) || projectPath,
-      config: { ...config, cwd },
-      command: buildCommand(config, buildRunContext(files, process.platform))
-    })
-  })
-
-  ipcMain.handle('run.stop', async (_e, projectPath: string) => core.run.stop(projectPath))
-  ipcMain.on('run.write', (_e, projectPath: string, data: string) => core.run.write(projectPath, data))
-  ipcMain.on('run.resize', (_e, projectPath: string, cols: number, rows: number) =>
-    core.run.resize(projectPath, cols, rows)
-  )
   ipcMain.handle('run.saveConfig', async (_e, projectPath: string, config: RunConfig) => {
     // Unlike the other run handlers this was missing its path guard — a configuration could be saved
     // under an arbitrary key. cwd is filtered here too, so an invalid configuration never gets stored in
     // the first place. run.start looks again right before executing because the stored file can be
     // hand-edited on disk and thus bypass this path.
     await assertAllowedPath(projectPath)
-    await resolveRunCwd(projectPath, config?.cwd)
+    await assertConfigCwd(projectPath, config?.cwd)
     // Trusting only the renderer's form validation would let a hand-edited JSON file through.
     // allowIncomplete: a configuration is saved the moment ＋ creates it, and at that point its one
     // required field is still empty — refusing it here would leave the new configuration in the

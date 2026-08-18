@@ -259,6 +259,78 @@ describe('OrchestrationStore', () => {
     })
   })
 
+  it('재시작하면 validating 이던 Task 를 blocked 로 보내고 Gate 를 연다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    s.tasks[0] = { ...s.tasks[0], status: 'validating' }
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    const r = await store.load()
+    expect(r.staleValidations).toBe(1)
+    expect(store.get().tasks[0].status).toBe('blocked')
+    expect(store.get().gates).toHaveLength(1)
+    expect(store.get().gates[0].taskId).toBe(s.tasks[0].id)
+  })
+
+  // 연속 실패로 세지 않는다 — 인프라 사정이지 작업이 틀린 것이 아니다
+  it('정리된 검증은 consecutiveFailures 를 올리지 않는다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    s.tasks[0] = { ...s.tasks[0], status: 'validating', consecutiveFailures: 1 }
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    expect(store.get().tasks[0].consecutiveFailures).toBe(1)
+  })
+
+  // **한 Run 에 stale validating Task 가 둘 이상인 경우.** 정리 루프는 st.tasks 를 돌면서
+  // withGates 를 이어 간다 — 그 이어짐이 유일한 누적 경로이므로, 두 번째 createGate 가 첫 번째의
+  // 결과 위에서 돌지 않으면 첫 Gate 와 그 decision_gate 메시지가 조용히 사라진다. 이 슬라이스의
+  // Important 하나가 정확히 그 기제에서 깨졌다.
+  it('한 Run 의 validating Task 가 둘이면 둘 다 Gate 가 되고 메시지도 둘 다 남는다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    s.tasks = [
+      { ...s.tasks[0], status: 'validating' },
+      { ...s.tasks[0], id: 'tsk_2', status: 'validating' }
+    ]
+    // 두 번째 Task 에도 자기 Dispatch 가 있다 — 열린 dispatch 는 createGate 가 거절하므로,
+    // 재시작 정리가 먼저 endedAt 을 채워 주는 것에 이 케이스가 기대고 있다는 것까지 함께 고정한다
+    s.dispatches = [s.dispatches[0], { ...s.dispatches[0], id: 'dsp_2', taskId: 'tsk_2', sessionId: 'sess2' }]
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    const r = await store.load()
+    expect(r.staleValidations).toBe(2)
+    expect(store.get().tasks.map((t) => t.status)).toEqual(['blocked', 'blocked'])
+    expect(store.get().gates.map((g) => g.taskId).sort()).toEqual(['tsk_1', 'tsk_2'])
+    const gateMessages = store.get().messages.filter((m) => m.type === 'decision_gate')
+    expect(gateMessages.map((m) => m.taskId).sort()).toEqual(['tsk_1', 'tsk_2'])
+  })
+
+  it('validating 이 없으면 staleValidations 가 0 이고 Gate 도 생기지 않는다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const r = await store.load()
+    expect(r.staleValidations).toBe(0)
+    expect(store.get().gates).toHaveLength(0)
+  })
+
+  // Gate가 tasks/gates뿐 아니라 decision_gate 메시지도 만든다 — 그 메시지가 최종 상태에서
+  // 누락되면 Gate 자체는 멀쩡해 보여도 delivery 스트림(check/nextDelivery)에는 알림이 가지 않는다.
+  it('재시작 Gate 가 만든 decision_gate 메시지도 최종 상태에 남는다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    s.tasks[0] = { ...s.tasks[0], status: 'validating' }
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    const msg = store
+      .get()
+      .messages.find((m) => m.type === 'decision_gate' && m.taskId === s.tasks[0].id)
+    expect(msg).toBeTruthy()
+  })
+
   it('Message 활동도 TTL 판정에 반영된다', async () => {
     const file = path.join(dir, 'orchestration.json')
     const old = new Date(Date.now() - RUN_TTL_MS - 1000).toISOString()

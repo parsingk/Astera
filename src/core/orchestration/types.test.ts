@@ -44,6 +44,29 @@ describe('canTransition', () => {
   })
 })
 
+describe('validating 전이', () => {
+  it('dispatched 에서 validating 으로 갈 수 있다', () => {
+    expect(canTransition('dispatched', 'validating')).toBe(true)
+  })
+
+  it('validating 에서 completed·failed·blocked 로 갈 수 있다', () => {
+    expect(canTransition('validating', 'completed')).toBe(true)
+    expect(canTransition('validating', 'failed')).toBe(true)
+    expect(canTransition('validating', 'blocked')).toBe(true)
+  })
+
+  // 검증 중인 Task 에는 열린 Dispatch 가 없다(applyWorkerDone 이 먼저 닫는다). 그래도 새 워커를
+  // 붙이는 것은 막아야 한다 — 검증 결과가 도착할 자리가 사라진다
+  it('validating 에서 dispatched 로는 갈 수 없다', () => {
+    expect(canTransition('validating', 'dispatched')).toBe(false)
+  })
+
+  it('validating 은 pending·ready 에서 바로 올 수 없다', () => {
+    expect(canTransition('pending', 'validating')).toBe(false)
+    expect(canTransition('ready', 'validating')).toBe(false)
+  })
+})
+
 describe('recomputeReady', () => {
   it('deps가 없는 pending은 ready가 된다', () => {
     const out = recomputeReady([task('a', 'pending')])

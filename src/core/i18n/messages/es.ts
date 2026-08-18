@@ -579,9 +579,10 @@ export const es: Catalog = {
   'run.action.stop': 'Detener',
   'run.global.listTitle': 'Ejecuciones activas',
   'run.global.jump': 'Ir',
+  'run.validation.tag': 'Validación',
   // App.tsx runManagerSave — shown when the run.saveConfig IPC fails
   'run.config.saveFailed': 'Error al guardar: {detail}',
-  // ipc.ts resolveRunCwd — translated in main before throwing (the layering rule)
+  // main/run/prepare.ts resolveRunCwd (run.start) and ipc.ts assertConfigCwd (run.saveConfig) — translated in main before throwing (the layering rule)
   'run.config.cwdNotString': 'La carpeta de trabajo de la configuración de ejecución no es válida',
   'run.config.cwdOutsideProject':
     'La carpeta de trabajo de la configuración de ejecución debe estar dentro del proyecto',
