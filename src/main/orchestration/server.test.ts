@@ -1484,3 +1484,51 @@ describe('run-create — cwd 정규화', () => {
     expect(called).toBe(false)
   })
 })
+
+describe('task-create --validate 와 run-configs', () => {
+  it('--validate 를 Task 에 저장한다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    const r = await call(deps, 'task-create', { spec: '작업', validate: 'cfg1' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().tasks[0].validateConfigId).toBe('cfg1')
+  })
+
+  it('--validate 없이 만든 Task 에는 그 필드가 없다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: '작업' })
+    expect(deps.getState().tasks[0].validateConfigId).toBeUndefined()
+  })
+
+  it('run-configs 는 주입된 목록을 그대로 돌려준다', async () => {
+    const deps = makeDeps()
+    deps.listRunConfigs = async () => [{ id: 'cfg1', name: '테스트', type: 'npm' }]
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    const r = await call(deps, 'run-configs', {})
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual([{ id: 'cfg1', name: '테스트', type: 'npm' }])
+  })
+
+  // 주입되지 않는 기존 호출자(테스트 포함)가 깨지면 안 된다 — now?/log?/backup? 와 같은 관례다
+  it('listRunConfigs 가 주입되지 않으면 빈 목록이다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    const r = await call(deps, 'run-configs', {})
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual([])
+  })
+
+  // 워커도 자기가 무엇으로 검증될지 볼 수 있어야 한다 — 상태를 바꾸지 않는 읽기 명령이다
+  it('워커 세션도 run-configs 를 부를 수 있다', async () => {
+    const deps = makeDeps()
+    deps.listRunConfigs = async () => [{ id: 'cfg1', name: '테스트', type: 'npm' }]
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: '작업' })
+    const taskId = deps.getState().tasks[0].id
+    await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
+    const workerSession = deps.getState().dispatches[0].sessionId
+    const r = await call(deps, 'run-configs', {}, workerSession)
+    expect(r.status).toBe(200)
+  })
+})

@@ -630,6 +630,15 @@ export function registerIpc(
         const bounded = root === null ? candidates : candidates.filter((c) => isPathWithin(root, c))
         return projectRootOf(bounded, cwd)
       },
+      // 코디네이터가 --validate 에 넣을 목록. 조립은 하지 않으므로
+      // loadRunConfigs 만 부른다.
+      listRunConfigs: async (projectPath) => {
+        const { configs } = await loadRunConfigs({
+          projectPath,
+          stored: core.runConfig.get(projectPath)
+        })
+        return configs.map((c) => ({ id: c.id, name: c.name, type: c.type }))
+      },
       log: orchLog
     }
 

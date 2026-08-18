@@ -703,6 +703,24 @@ describe('createTask — deps 검증', () => {
     // 여기서는 생성 시점에 이미 있는 Task 만 참조할 수 있으므로 순환이 원리적으로 불가능하다.
     expect(b.value.deps).toEqual([a.value.id])
   })
+  it('validateConfigId 를 그대로 저장한다', () => {
+    const run = unwrap<{ id: string }>(
+      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
+    )
+    const r = createTask(
+      run.state,
+      { runId: run.value.id, title: 't', spec: 's', deps: [], validateConfigId: 'cfg1' },
+      NOW
+    )
+    expect(r.ok && r.value.validateConfigId).toBe('cfg1')
+  })
+  it('validateConfigId 가 없으면 필드 자체가 없다', () => {
+    const run = unwrap<{ id: string }>(
+      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
+    )
+    const r = createTask(run.state, { runId: run.value.id, title: 't', spec: 's', deps: [] }, NOW)
+    expect(r.ok && 'validateConfigId' in r.value).toBe(false)
+  })
 })
 
 describe('openDispatch — retryOf·sessionId 검증', () => {

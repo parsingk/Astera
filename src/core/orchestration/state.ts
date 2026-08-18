@@ -81,7 +81,14 @@ export function createRun(
 
 export function createTask(
   s: OrchState,
-  a: { runId: string; title: string; spec: string; deps: string[]; parentId?: string },
+  a: {
+    runId: string
+    title: string
+    spec: string
+    deps: string[]
+    parentId?: string
+    validateConfigId?: string
+  },
   now: string
 ): Res<Task> {
   if (!s.runs.some((r) => r.id === a.runId)) return err(`unknown run: ${a.runId}`)
@@ -97,6 +104,7 @@ export function createTask(
     spec: a.spec,
     deps: a.deps,
     parentId: a.parentId,
+    ...(a.validateConfigId ? { validateConfigId: a.validateConfigId } : {}),
     status: 'pending',
     consecutiveFailures: 0,
     createdAt: now,

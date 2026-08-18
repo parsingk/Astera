@@ -82,6 +82,9 @@ export interface OrchServerDeps {
    * 주입되지 않으면 정규화하지 않는다 — now?/log?/backup?/probeLimit? 와 같은 관례다.
    */
   resolveProjectRoot?(cwd: string): Promise<string>
+  /** Run 의 프로젝트에 저장된 실행 구성 목록. 주입되지 않으면 빈 목록이다 —
+   *  now?/log?/backup?/probeLimit? 와 같은 관례다. */
+  listRunConfigs?(projectPath: string): Promise<{ id: string; name: string; type: string }[]>
   /** Audit log left behind when task-update bypasses the transition table (canTransition) — the same
    *  shape as log(message: string) in coordinator.ts. The wiring decides where it goes. If it is not
    *  injected (existing tests and the like) logging is skipped — optional for the same reason as
@@ -237,6 +240,14 @@ export async function handleCommand(
     }
     case 'run-list':
       return okBody(s.runs)
+    // 코디네이터가 --validate 에 넣을 id 를 알아야 한다. 상태를 바꾸지 않으므로 COORDINATOR_ONLY
+    // 가 아니다 — 워커도 자기가 무엇으로 검증될지 볼 수 있어야 한다.
+    case 'run-configs': {
+      if (!deps.listRunConfigs) return okBody([])
+      const run = s.runs[s.runs.length - 1]
+      if (!run) return bad('no run exists')
+      return okBody(await deps.listRunConfigs(run.cwd))
+    }
     case 'run-show': {
       const id = str(args.id)
       const run = s.runs.find((r) => r.id === id)
@@ -255,7 +266,8 @@ export async function handleCommand(
             title: str(args.title) ?? spec.split('\n')[0].slice(0, 80),
             spec,
             deps: Array.isArray(args.deps) ? (args.deps as string[]) : [],
-            parentId: str(args.parent) ?? undefined
+            parentId: str(args.parent) ?? undefined,
+            validateConfigId: str(args.validate) ?? undefined
           },
           now
         )

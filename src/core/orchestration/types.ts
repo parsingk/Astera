@@ -33,6 +33,9 @@ export interface Task {
   status: TaskStatus
   result?: string
   filesModified?: string[]
+  /** 이 Task 를 완료로 판정할 실행 구성의 id. 없으면 worker_done 을 그대로 믿는다 —
+   *  "문서를 고친다" 같은 Task 에 빌드를 거는 것은 틀린 판정이므로 검증 없음이 기본이다. */
+  validateConfigId?: string
   /** Consecutive failure count. 3 means circuit break */
   consecutiveFailures: number
   createdAt: string
