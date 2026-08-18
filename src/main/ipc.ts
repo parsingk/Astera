@@ -64,6 +64,24 @@ export interface OrchWiring {
   onStarted: (h: { stop: () => void }) => void
 }
 
+/** http:/https:/mailto: 만 허용하는 스킴 화이트리스트. 통과하면 파싱된 URL 을 돌려준다 —
+ *  new URL 은 탭·개행을 스스로 걷어내므로, 호출자는 원래 문자열이 아니라 이 반환값의
+ *  toString() 을 써야 프로토콜을 확인한 바로 그 문자열이 OS 로 간다.
+ *
+ *  system.openExternal(아래)와 main/index.ts 의 setWindowOpenHandler/will-navigate 가드가 이 검사를
+ *  공유한다 — 스킴 목록이 두 곳에서 따로 자라다 어긋나는 사고를 막기 위해서다. */
+export function parseAllowedExternalUrl(url: string): URL | null {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:' && parsed.protocol !== 'mailto:')
+    return null
+  return parsed
+}
+
 export function registerIpc(
   core: Core,
   win: BrowserWindow,
@@ -1364,20 +1382,10 @@ export function registerIpc(
 
   /** 마크다운 프리뷰의 외부 링크. 허용 스킴 밖은 조용히 버린다 — 렌더러가 이미 걸렀으므로 여기에
    *  도달하는 것은 버그이거나 우회 시도다. 예외를 던지지 않는 이유는 링크 클릭이 실패해도 사용자가
-   *  할 수 있는 일이 없기 때문이다.
-   *
-   *  **검증한 값과 쓰는 값을 같게 만든다.** new URL 은 탭·개행을 스스로 걷어내므로, 그 결과인
-   *  parsed.toString() 을 넘기면 프로토콜을 확인한 바로 그 문자열이 OS 로 간다. url 을 그대로
-   *  넘기면 검증하지 않은 바이트를 넘기는 것이 된다. */
+   *  할 수 있는 일이 없기 때문이다. */
   ipcMain.handle('system.openExternal', async (_e, url: string) => {
-    let parsed: URL
-    try {
-      parsed = new URL(url)
-    } catch {
-      return
-    }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:' && parsed.protocol !== 'mailto:')
-      return
+    const parsed = parseAllowedExternalUrl(url)
+    if (!parsed) return
     await shell.openExternal(parsed.toString())
   })
 

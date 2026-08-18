@@ -1,5 +1,6 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } from 'electron'
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell } from 'electron'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import type { AppUpdater } from 'electron-updater'
 import iconAsset from '../../resources/icon.png?asset'
@@ -7,7 +8,8 @@ import trayAsset from '../../resources/tray.png?asset'
 import { createCore, type Core } from './core'
 import { applyLoginPath } from './loginPath'
 import { shouldForceWaylandOzone } from './ozone'
-import { registerIpc } from './ipc'
+import { registerIpc, parseAllowedExternalUrl } from './ipc'
+import { isOwnDocument } from './navigationGuard'
 import { RollingCoordinator } from './rolling'
 import { SchedulerCoordinator } from './scheduler'
 import { CodexRollingCoordinator } from './codexRolling'
@@ -153,6 +155,25 @@ function createWindow(): BrowserWindow {
       if (devToolsKey) win.webContents.toggleDevTools()
     })
   }
+
+  // Arbitrary user-controlled <a href> now reaches the renderer (the markdown preview renders a link
+  // whose text and target come from a file the user merely opened, possibly written by someone else).
+  // This is defence in depth, not a live hole — every rendered link's click is already intercepted and
+  // its target attribute stripped — but a missed interception path must not be able to navigate this
+  // window or pop an uncontrolled one.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    const parsed = parseAllowedExternalUrl(url)
+    if (parsed) void shell.openExternal(parsed.toString())
+    return { action: 'deny' }
+  })
+  const indexFileUrl = pathToFileURL(path.join(__dirname, '../renderer/index.html')).toString()
+  win.webContents.on('will-navigate', (e, url) => {
+    // a reload of the app's own document (dev server or the production file://) — let it through
+    if (isOwnDocument(url, process.env['ELECTRON_RENDERER_URL'], indexFileUrl)) return
+    e.preventDefault()
+    const parsed = parseAllowedExternalUrl(url)
+    if (parsed) void shell.openExternal(parsed.toString())
+  })
 
   // Closing the window (X) minimizes to the tray on Windows and macOS — whether or not sessions
   // exist. There the only real quit path is the tray 'Quit' menu (app.quit): app.quit sets
