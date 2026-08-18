@@ -200,14 +200,24 @@ export function applyWorkerDone(
   const run = s.runs.find((r) => r.id === task.runId)
   if (!run) return err(`unknown run for task: ${a.taskId}`)
 
-  const to = a.outcome === 'succeeded' ? 'completed' : 'failed'
+  // 검증이 걸린 Task 는 성공 보고만으로 끝나지 않는다 — 실제로 돌려 본 결과가 정한다.
+  // 워커가 실패를 보고했으면 검증하지 않는다. 워커 자신이 안 됐다고 하는데 확인할 이유가 없다.
+  const validating = a.outcome === 'succeeded' && !!task.validateConfigId
+  const to = validating ? 'validating' : a.outcome === 'succeeded' ? 'completed' : 'failed'
   const moved = moveTask(task, to, now)
   if (!moved) return err(`cannot move task ${task.status} -> ${to}`)
   const nextTask: Task = {
     ...moved,
     result: a.body,
     filesModified: a.filesModified,
-    consecutiveFailures: a.outcome === 'succeeded' ? 0 : task.consecutiveFailures + 1
+    // **validating 으로 갈 때는 그대로 넘긴다.** 여기서 0 으로 되돌리면 이어진 검증 실패가 1 을
+    // 만들고 다음 시도도 0 -> 1 이라 FAILURE_LIMIT 에 영원히 닿지 않는다 — 검증을 통과하지 못하는
+    // Task 가 무한히 재시도된다. 초기화는 실제로 completed 에 도달할 때만 한다.
+    consecutiveFailures: validating
+      ? task.consecutiveFailures
+      : a.outcome === 'succeeded'
+        ? 0
+        : task.consecutiveFailures + 1
   }
   const nextDispatch: Dispatch = {
     ...dispatch,
@@ -238,6 +248,41 @@ export function applyWorkerDone(
   // left to answer them. See the settlePendingQuestions comment for why they are not deleted.
   state = { ...state, messages: settlePendingQuestions(state.messages, a.dispatchId) }
   return ok(state, 'accepted')
+}
+
+/** 검증 결과를 Task 에 반영한다. 종료 코드가 판정이다.
+ *
+ *  실패는 기존 재시도 흐름을 그대로 탄다 — consecutiveFailures 가 오르고 FAILURE_LIMIT 에서
+ *  회로가 끊긴다. 출력 꼬리를 result 에 담는 이유는 재시도하는 워커가 무엇이 틀렸는지 읽어야
+ *  하기 때문이다. */
+export function applyValidationResult(
+  s: OrchState,
+  a: { taskId: string; exitCode: number; output: string },
+  now: string
+): Res<Task> {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return err(`unknown task: ${a.taskId}`)
+  if (task.status !== 'validating') return err(`task is not validating: ${task.status}`)
+  const passed = a.exitCode === 0
+  const moved = moveTask(task, passed ? 'completed' : 'failed', now)
+  if (!moved) return err(`cannot move task ${task.status} -> ${passed ? 'completed' : 'failed'}`)
+  const next: Task = {
+    ...moved,
+    consecutiveFailures: passed ? 0 : task.consecutiveFailures + 1,
+    ...(passed ? {} : { result: `validation failed (exit ${a.exitCode})\n${a.output}` })
+  }
+  return ok({ ...s, tasks: recomputeReady(replace(s.tasks, next)) }, next)
+}
+
+/** 검증을 아예 돌릴 수 없을 때. 조용히 통과시키면 "검증됨"과 "검증 못 함"이 화면에서 같아지고,
+ *  인프라 문제로 실패시키면 멀쩡한 작업이 재시도 세 번 끝에 회로 차단까지 간다. 어느 쪽도 기계가
+ *  정할 일이 아니므로 Gate 를 열어 사람에게 넘긴다. */
+export function blockForValidation(
+  s: OrchState,
+  a: { taskId: string; reason: string },
+  now: string
+): Res<Gate> {
+  return createGate(s, { taskId: a.taskId, question: `검증을 실행할 수 없습니다: ${a.reason}` }, now)
 }
 
 /** Settle unanswered questions without an answer — never delete them. An unacked Delivery's
