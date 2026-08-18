@@ -375,6 +375,19 @@ function inlineOf(node: SyntaxNode, ctx: Ctx, limit?: { from: number; to: number
       case 'Autolink':
       case 'URL': {
         const text = ctx.text.slice(c.from, c.to).replace(/^<|>$/g, '')
+        // GFM 의 리터럴 이메일 규칙이 URL 의 userinfo 조각만 떼어 잡을 때가 있다 —
+        // `https://user@host.com` 에서 스킴+`://` 는 평문으로 남고 `user@host.com` 만 이 노드로
+        // 들어온다(실제 트리 덤프로 확인: URL [12-25] "user@host.com", 앞쪽 12글자 "see https://"
+        // 는 노드 밖). @lezer/markdown 이 GFM 스펙과 갈라지는 지점이라 리뷰에서 확정됨 — 우리
+        // 코드의 문제가 아니다. 이걸 놓치고 mailto: 를 붙이면 "host" 라는 잘못된 수신자로 메일을
+        // 보내는 링크가 생긴다 — 아무 링크도 안 만드는 것보다 나쁘다. 앞쪽 원문이 스킴+`://` 로
+        // 끝나면 이 노드는 그 URL 의 나머지 조각이라고 보고 링크를 만들지 않는다. 앞쪽 텍스트를
+        // 이어붙여 완전한 URL 을 복원하지는 않는다 — 이미 평문으로 내보낸 조각과 아직 안 본
+        // 조각을 넘나드는 것은 이 파일이 이미 두 번 벌준 종류의 잔재주다(Task 3 리뷰 1·2 라운드).
+        if (/[a-z][a-z0-9+.-]*:\/\/$/i.test(ctx.text.slice(0, c.from))) {
+          pushText(out, text)
+          break
+        }
         const href = autolinkHref(text)
         if (classifyHref(href) === null) {
           pushText(out, text)

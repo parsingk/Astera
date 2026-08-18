@@ -385,6 +385,49 @@ describe('자동링크의 www. 판정이 이메일 판정보다 먼저다', () =
     const link = p.inline.find((n) => n.k === 'link') as Extract<MdInline, { k: 'link' }>
     expect(link.href).toBe('mailto:a@b.com')
   })
+  it('www.a.com?x=1@2 — 쿼리 문자열은 리터럴 URL 매칭에서 빠진다(실제 파서 동작을 고정한다)', () => {
+    // 실제 트리 덤프로 확인: URL 노드는 "www.a.com" 까지만이고 "?x=1@2" 는 노드 밖의 평문이다.
+    // 그래서 이 입력은 www./이메일 판정 순서 버그를 실제로는 겪지 않는다 — @ 가 URL 노드 안에
+    // 들어 있지 않기 때문이다. 여기서는 그 실제 동작을 고정한다: 링크는 "www.a.com" 만 갖고,
+    // 뒤에 남은 "?x=1@2" 는 잘리거나 삼켜지지 않은 평문으로 남는다.
+    const p = parseMarkdown('see www.a.com?x=1@2 now\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline.find((n) => n.k === 'link') as Extract<MdInline, { k: 'link' }>
+    expect(link.href).toBe('http://www.a.com')
+    expect(plain(link.children)).toBe('www.a.com')
+    const trailingText = p.inline
+      .filter((n): n is Extract<MdInline, { k: 'text' }> => n.k === 'text')
+      .map((n) => n.text)
+      .join('')
+    expect(trailingText).toContain('?x=1@2')
+  })
+})
+
+describe('GFM 리터럴 URL 이 userinfo 만 떼어 잡을 때는 링크를 만들지 않는다', () => {
+  // @lezer/markdown 이 `scheme://user@host` 꼴에서 스킴+`://` 를 평문으로 남기고 이메일 규칙으로
+  // `user@host` 만 URL 노드로 잡는다(GFM 스펙과 다른 동작, 실제 트리 덤프로 확인 — 이 파일의
+  // 문제가 아니다). 이걸 그대로 mailto: 로 링크화하면 "host" 라는 잘못된 수신자로 메일을 보내는
+  // 링크가 생긴다 — 링크를 아예 안 만드는 쪽을 택한다(리뷰 결정).
+  it('https://user@host.com/path — 스킴+userinfo 오분할은 링크를 만들지 않고 원문을 그대로 남긴다', () => {
+    const p = parseMarkdown('see https://user@host.com/path now\n')[0] as Extract<
+      MdBlock, { k: 'para' }
+    >
+    expect(p.inline.every((n) => n.k !== 'link')).toBe(true)
+    expect(plain(p.inline)).toBe('see https://user@host.com/path now')
+  })
+  it('git 스타일 URL(https://me@github.com/a/b.git)도 마찬가지다', () => {
+    const p = parseMarkdown('run https://me@github.com/a/b.git now\n')[0] as Extract<
+      MdBlock, { k: 'para' }
+    >
+    expect(p.inline.every((n) => n.k !== 'link')).toBe(true)
+    expect(plain(p.inline)).toBe('run https://me@github.com/a/b.git now')
+  })
+  it('@ 가 없는 보통 https 자동링크는 앞에 스킴이 없으므로 그대로 링크가 된다(회귀 가드)', () => {
+    const p = parseMarkdown('see https://host.com/path now\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline.find((n) => n.k === 'link') as Extract<MdInline, { k: 'link' }>
+    expect(link.href).toBe('https://host.com/path')
+  })
+  // 'mail me@b.com now' → mailto:me@b.com 유지 회귀는 '자동링크의 암시 스킴' describe 의
+  // 기존 테스트가 이미 지킨다 — 앞에 스킴+`://` 가 없으니 이 새 검사가 끼어들지 않는다.
 })
 
 describe('꺾쇠로 감싼 링크 목적지', () => {
