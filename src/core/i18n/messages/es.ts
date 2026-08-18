@@ -138,6 +138,7 @@ export const es: Catalog = {
   // MarkdownPreview.tsx — fallo al cargar imagen, aviso de imagen remota
   'files.markdown.image.failed': 'No se pudo cargar la imagen',
   'files.markdown.image.remote': 'Las imágenes remotas no se muestran — haga clic para abrirlas en el navegador',
+  'files.markdown.renderError': 'No se pudo mostrar este documento',
   // App.tsx — explorer close confirmation
   'explorer.closeConfirm.body': 'Hay cambios sin guardar. ¿Cerrar el explorador igualmente?',
   // App.tsx — run console resizer, start failure

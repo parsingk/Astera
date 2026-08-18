@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { highlightCode, classHighlighter } from '@lezer/highlight'
 import type { Language } from '@codemirror/language'
 import { javascriptLanguage } from '@codemirror/lang-javascript'
@@ -20,7 +20,7 @@ import {
   type MdBlock, type MdInline, type MdAttrs
 } from '../../../core/files/markdownTree'
 import type { LangKey } from '../../../core/files/edit'
-import { resolveRelative } from '../../../core/files/paths'
+import { resolveRelative, decodeUriPath } from '../../../core/files/paths'
 import { useI18n } from '../i18n/I18nProvider'
 
 /** LangKey → the Lezer language to parse with, standalone (outside a CodeMirror instance).
@@ -49,10 +49,19 @@ const LANGUAGES: Record<LangKey, Language> = {
   go: goLanguage
 }
 
+/** Above this size a fence is shown as plain text instead of highlighted. Measured directly against
+ *  this file's own highlight(): a 200KB fence costs 87ms to parse and produces 118,719 <span>/text
+ *  children in one <pre> — a 1MB fence (the files.readFile size bound) costs 412ms to parse and
+ *  produces 593,639 children. Neither the parse cost nor a `<pre>` with that many DOM nodes is worth
+ *  paying for a code sample; 100_000 sits at the top of the reviewed 50-100KB range, which still covers
+ *  the large majority of real fenced examples people paste into a README. */
+const HIGHLIGHT_MAX = 100_000
+
 /** Splits a code block into colored fragments. classHighlighter gives stable `tok-*` classes meant for
  *  external CSS — oneDarkHighlightStyle injects its own StyleModule when mounted as a CM6 extension, so
  *  there is no matching CSS for it outside an editor. */
 function highlight(code: string, lang: LangKey | null): React.ReactNode {
+  if (code.length > HIGHLIGHT_MAX) return code
   const language = lang ? LANGUAGES[lang] : null
   if (!language) return code
   const out: React.ReactNode[] = []
@@ -68,6 +77,29 @@ function highlight(code: string, lang: LangKey | null): React.ReactNode {
   )
   return out
 }
+
+/** One fenced/indented code block. Wrapped in React.memo so that editing anywhere else in the document
+ *  — which gives every block a brand-new object identity, since parseMarkdown rebuilds the whole tree —
+ *  does not re-run highlight() for a block whose own text and language did not change: memo's shallow
+ *  prop comparison sees the same string values (strings compare by value) and bails out before this
+ *  component's function body, and therefore before highlight(), runs again. Props are kept to plain
+ *  primitives (string, string|null, number) on purpose — an object or array prop here would be a new
+ *  reference every render and defeat the comparison. useMemo is a second, cheaper line of defence for
+ *  the rare case this instance does re-render (e.g. only `lang` changed). */
+const CodeBlock = memo(function CodeBlock({
+  text, lang, line
+}: {
+  text: string
+  lang: LangKey | null
+  line: number
+}): React.JSX.Element {
+  const nodes = useMemo(() => highlight(text, lang), [text, lang])
+  return (
+    <pre data-md-line={line}>
+      <code>{nodes}</code>
+    </pre>
+  )
+})
 
 /** One local image. Path validation happens in main, so this only turns a rejection into a message. */
 function LocalImage({
@@ -87,8 +119,16 @@ function LocalImage({
     setDataUrl(null)
     setFailed(false)
     // Resolves the document-relative path to an absolute one. An anchor or query has no meaning for a
-    // local file, so it is cut off first.
-    const clean = src.split(/[?#]/)[0]
+    // local file, so it is cut off first (on the still-encoded string — see decodeUriPath's own note on
+    // why decoding has to happen after that split, not before).
+    const clean = decodeUriPath(src.split(/[?#]/)[0])
+    // A disallowed src (attrsFor already refused to keep it) or a fragment-only one (e.g. `![x](#foo)`)
+    // lands here as ''. Resolving that would just point at the document's own directory, which is never
+    // a valid image — failing straight away skips a doomed IPC round trip.
+    if (!clean) {
+      setFailed(true)
+      return
+    }
     const abs = resolveRelative(docPath, clean)
     void window.api.files
       .readDataUrl(abs)
@@ -155,10 +195,26 @@ export function MarkdownPreview({
   scrollRef: React.Ref<HTMLDivElement>
 }): React.JSX.Element {
   const { t } = useI18n()
-  const blocks = useMemo(() => parseMarkdown(text), [text])
+  // null means parseMarkdown threw — e.g. a pathologically nested document (thousands of '>' quote
+  // markers) overflows the parser's own recursion, which is a parser-side limit this component cannot
+  // fix. It runs inside this useMemo, i.e. during render, and this app has no ErrorBoundary anywhere —
+  // an uncaught throw here would blank the entire window, not just the preview. This is the one surface
+  // whose whole input is untrusted, so it is the one place that has to contain it.
+  const blocks = useMemo<MdBlock[] | null>(() => {
+    try {
+      return parseMarkdown(text)
+    } catch {
+      return null
+    }
+  }, [text])
   const keyRef = useRef(0)
   keyRef.current = 0
   const nextKey = (): number => keyRef.current++
+  // GitHub-style heading anchor dedup: the first heading to produce a given slug keeps it plain, later
+  // ones get -1, -2, ... appended. Reset every render like keyRef, and read/written strictly in the
+  // document order renderBlocks walks, so the numbering is deterministic for a given document.
+  const slugSeenRef = useRef<Map<string, number>>(new Map())
+  slugSeenRef.current.clear()
 
   const clickLink = (href: string, e: React.MouseEvent): void => {
     const target = classifyHref(href)
@@ -169,7 +225,10 @@ export function MarkdownPreview({
       return
     }
     if (target.kind === 'file') {
-      const clean = target.path.split(/[?#]/)[0]
+      // Splitting on the still-encoded string first, then decoding: a filename that legitimately
+      // contains a literal '#' or '?' is percent-encoded (%23/%3F) in the link — decoding first could
+      // turn that into a real delimiter and truncate the path at the wrong point.
+      const clean = decodeUriPath(target.path.split(/[?#]/)[0])
       onOpenFile(resolveRelative(docPath, clean))
       return
     }
@@ -195,8 +254,12 @@ export function MarkdownPreview({
               title={n.title ?? undefined}
               onClick={(e) => clickLink(n.href, e)}
               // A middle click fires auxclick, not click. Left alone, the relative href would fall
-              // through to the browser's default of opening a new Electron window. Same gate as onClick.
-              onAuxClick={(e) => clickLink(n.href, e)}
+              // through to the browser's default of opening a new Electron window. Same gate as onClick,
+              // but only for the middle button (1) — auxclick also fires for a right click (button 2),
+              // which must reach the browser's own contextmenu handling undisturbed.
+              onAuxClick={(e) => {
+                if (e.button === 1) clickLink(n.href, e)
+              }}
             >
               {renderInline(n.children)}
             </a>
@@ -233,7 +296,9 @@ export function MarkdownPreview({
                 key={nextKey()}
                 href={n.attrs.href}
                 onClick={(e) => clickLink(n.attrs.href as string, e)}
-                onAuxClick={(e) => clickLink(n.attrs.href as string, e)}
+                onAuxClick={(e) => {
+                  if (e.button === 1) clickLink(n.attrs.href as string, e)
+                }}
                 {...attrsToProps(n.attrs)}
               >
                 {renderInline(n.children)}
@@ -255,16 +320,45 @@ export function MarkdownPreview({
       }
     })
 
-  /** A heading's anchor id. A shortened version of GitHub's rule — lowercase, spaces become hyphens,
-   *  everything else is dropped. */
-  const slug = (nodes: MdInline[]): string =>
+  /** The plain text a heading (or link label) renders as, for building its anchor id. Recurses into
+   *  every variant that carries children (strong/em/del/link/htmlEl) rather than only reading direct
+   *  text/code children — `## **bold only**` used to slug to the empty string because the bold text
+   *  lived one level deeper than this looked. */
+  const inlineText = (nodes: MdInline[]): string =>
     nodes
-      .map((n) => (n.k === 'text' || n.k === 'code' ? n.text : ''))
+      .map((n) => {
+        switch (n.k) {
+          case 'text': return n.text
+          case 'code': return n.text
+          case 'image': return n.alt
+          case 'br': return ' '
+          case 'strong': case 'em': case 'del': case 'link': case 'htmlEl':
+            return inlineText(n.children)
+          default:
+            return assertNever(n)
+        }
+      })
       .join('')
+
+  /** A shortened version of GitHub's slugify rule — lowercase, spaces become hyphens, everything else
+   *  is dropped. */
+  const slugify = (text: string): string =>
+    text
       .toLowerCase()
       .trim()
       .replace(/[^\w가-힣 -]/g, '')
       .replace(/\s+/g, '-')
+
+  /** GitHub-style dedup: the first heading with a given base slug (which can be the empty string, e.g.
+   *  a heading that is only an image with no alt text) keeps it as-is; every later heading with the same
+   *  base gets -1, -2, ... appended, so two same-titled sections never collide on one id and a link to
+   *  the first one never silently lands on a later one instead. */
+  const dedupeSlug = (base: string): string => {
+    const seen = slugSeenRef.current
+    const count = seen.get(base) ?? 0
+    seen.set(base, count + 1)
+    return count === 0 ? base : `${base}-${count}`
+  }
 
   const renderBlocks = (list: MdBlock[]): React.ReactNode =>
     list.map((b) => {
@@ -273,8 +367,9 @@ export function MarkdownPreview({
       switch (b.k) {
         case 'heading': {
           const Tag = `h${b.level}` as 'h1'
+          const id = dedupeSlug(slugify(inlineText(b.inline)))
           return (
-            <Tag key={nextKey()} id={`md-${slug(b.inline)}`} {...anchor}>
+            <Tag key={nextKey()} id={`md-${id}`} {...anchor}>
               {renderInline(b.inline)}
             </Tag>
           )
@@ -282,11 +377,7 @@ export function MarkdownPreview({
         case 'para':
           return <p key={nextKey()} {...anchor}>{renderInline(b.inline)}</p>
         case 'code':
-          return (
-            <pre key={nextKey()} {...anchor}>
-              <code>{highlight(b.text, b.lang)}</code>
-            </pre>
-          )
+          return <CodeBlock key={nextKey()} text={b.text} lang={b.lang} line={b.line} />
         case 'hr':
           return <hr key={nextKey()} {...anchor} />
         case 'quote':
@@ -298,7 +389,11 @@ export function MarkdownPreview({
               {b.items.map((item) => (
                 <li key={nextKey()} data-md-line={item.line} className={item.task === null ? undefined : 'md-task'}>
                   {item.task !== null && (
-                    <input type="checkbox" checked={item.task} readOnly tabIndex={-1} />
+                    // readOnly alone does not stop a checkbox from visually toggling on click before
+                    // React's controlled re-render snaps it back — disabled is what actually blocks
+                    // the click. readOnly stays too: it is what suppresses the dev warning about a
+                    // checked prop with no onChange handler.
+                    <input type="checkbox" checked={item.task} disabled readOnly tabIndex={-1} />
                   )}
                   {renderBlocks(item.children)}
                 </li>
@@ -384,9 +479,11 @@ export function MarkdownPreview({
         }
       }}
     >
-      {blocks.length === 0 ? (
-        <div className="md-preview-empty">{t('files.editor.selectPrompt')}</div>
+      {blocks === null ? (
+        <div className="md-preview-notice">{t('files.markdown.renderError')}</div>
       ) : (
+        // blocks.length === 0 means an open file with empty content — not "no file selected", which
+        // is a different screen entirely. Render nothing rather than a misleading prompt for it.
         renderBlocks(blocks)
       )}
     </div>

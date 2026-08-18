@@ -113,6 +113,7 @@ export const en: Record<keyof typeof ko, string> = {
   // MarkdownPreview.tsx — image load failure, remote image notice
   'files.markdown.image.failed': 'Could not load the image',
   'files.markdown.image.remote': 'Remote images are not shown — click to open in the browser',
+  'files.markdown.renderError': 'This document could not be rendered',
   'explorer.closeConfirm.body': 'There are unsaved changes. Close the explorer anyway?',
   'run.resizeConsole': 'Resize console',
   'run.start.failed': 'Run failed: {detail}',

@@ -1096,13 +1096,18 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .file-editor .cm-scroller { font-family: Consolas, 'Courier New', monospace; font-size: 13px; }
 
 /* ---------- markdown preview ---------- */
-.md-preview { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 16px 20px; outline: none; }
-.md-preview-empty { opacity: .5; }
+.md-preview { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 16px 20px; outline: none;
+  /* A long unbroken URL or inline code span must wrap inside prose rather than push .md-preview itself
+     into horizontal scroll — pre/table-wrap below scroll on their own and are unaffected by this. */
+  overflow-wrap: anywhere; }
+.md-preview-notice { opacity: .5; }
 .md-preview > :first-child { margin-top: 0; }
 .md-preview h1, .md-preview h2, .md-preview h3,
 .md-preview h4, .md-preview h5, .md-preview h6 { margin: 1.4em 0 .5em; line-height: 1.25; font-weight: 600; }
-.md-preview h1 { font-size: 1.7em; border-bottom: 1px solid var(--line); padding-bottom: .3em; }
-.md-preview h2 { font-size: 1.4em; border-bottom: 1px solid var(--line); padding-bottom: .3em; }
+/* --line-soft, not --line: --line is the rail/sidebar divider (near-black), which on --bg reads as a
+   gap rather than a rule. One divider color for every in-prose rule keeps this consistent too. */
+.md-preview h1 { font-size: 1.7em; border-bottom: 1px solid var(--line-soft); padding-bottom: .3em; }
+.md-preview h2 { font-size: 1.4em; border-bottom: 1px solid var(--line-soft); padding-bottom: .3em; }
 .md-preview h3 { font-size: 1.2em; }
 .md-preview p, .md-preview ul, .md-preview ol, .md-preview blockquote { margin: 0 0 1em; }
 .md-preview li { margin: .25em 0; }
@@ -1110,7 +1115,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .md-preview li.md-task { list-style: none; margin-left: -1.2em; }
 .md-preview li.md-task > input { margin-right: .5em; }
 .md-preview blockquote { border-left: 3px solid var(--line-soft); padding-left: 12px; opacity: .85; }
-.md-preview hr { border: 0; border-top: 1px solid var(--line); margin: 1.5em 0; }
+.md-preview hr { border: 0; border-top: 1px solid var(--line-soft); margin: 1.5em 0; }
 .md-preview a { color: var(--accent); text-decoration: none; }
 .md-preview a:hover { text-decoration: underline; }
 .md-preview img { max-width: 100%; height: auto; }
