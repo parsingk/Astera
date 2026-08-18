@@ -11,6 +11,7 @@ import { Select } from './components/Select'
 import { type FileTab } from './components/WorkbenchTabs'
 import { FileEditor } from './components/FileEditor'
 import { MarkdownSplit } from './components/MarkdownSplit'
+import { invalidateImageCache } from './components/MarkdownPreview'
 import type { EditorState, StateEffect } from '@codemirror/state'
 import type { EditorView } from '@codemirror/view'
 import { EditorStateCache } from './lib/editorStateCache'
@@ -1216,8 +1217,13 @@ export default function App(): React.JSX.Element {
   // Subscribing to external changes: only change/add on the paths of open buffers are handled.
   // classifyExternalChange separates our own save (ignore), unmodified (reload), and mid-edit (a
   // conflict banner).
+  // The same event also invalidates MarkdownPreview's local-image cache — unconditionally, ahead of the
+  // open-buffer check below, since a referenced image is almost never itself an open file tab. A miss is
+  // cheap (invalidateImageCache's own comment), so nothing here needs to guess whether c.path is actually
+  // an image before calling it.
   useEffect(() => {
     const off = window.api.on('files:changed', (c) => {
+      if (c.kind === 'add' || c.kind === 'change' || c.kind === 'unlink') invalidateImageCache(c.path)
       const id = `file:${c.path}`
       const buf = fileBuffersRef.current[id]
       if (!buf) return
