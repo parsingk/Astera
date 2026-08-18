@@ -710,5 +710,6 @@ export const es: Catalog = {
   'jobs.empty.hint': 'Los trabajos creados desde una sesión coordinadora aparecerán aquí',
   'jobs.progress': '{done}/{total}',
   'jobs.completed': 'completadas',
+  'jobs.failed': 'fallidas',
   'jobs.gates.more': '+{count} más'
 }

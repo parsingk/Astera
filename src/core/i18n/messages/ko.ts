@@ -720,5 +720,6 @@ export const ko = {
   'jobs.empty.hint': '코디네이터 세션에서 작업을 만들면 여기에 나타납니다',
   'jobs.progress': '{done}/{total}',
   'jobs.completed': '완료',
+  'jobs.failed': '실패',
   'jobs.gates.more': '외 {count}건'
 } as const

@@ -273,7 +273,8 @@ export type RunOutcome = 'running' | 'completed' | 'failed'
 export interface JobRun {
   id: string
   objective: string
-  status: 'open' | 'closed'
+  /** 저장된 값이 아니라 Task 에서 계산된다 — core/orchestration/view.ts 의 outcomeOf */
+  outcome: RunOutcome
   done: number
   total: number
   tasks: JobTask[]

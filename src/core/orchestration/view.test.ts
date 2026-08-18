@@ -43,12 +43,10 @@ describe('runsForProject', () => {
     expect(runsForProject(s, 'd:\\proj').map((r) => r.id)).toEqual(['r1'])
   })
 
-  it('열린 Run 이 먼저, 그 안에서 최신순', () => {
+  it('최신순으로 정렬한다', () => {
     const older = { ...run('a', absPath('p')), createdAt: '2026-08-01T00:00:00.000Z' }
     const newer = { ...run('b', absPath('p')), createdAt: '2026-08-18T00:00:00.000Z' }
-    const closed = { ...run('c', absPath('p'), 'closed' as const), createdAt: '2026-08-19T00:00:00.000Z' }
-    expect(runsForProject(withRuns([older, closed, newer]), absPath('p')).map((r) => r.id))
-      .toEqual(['b', 'a', 'c'])
+    expect(runsForProject(withRuns([older, newer]), absPath('p')).map((r) => r.id)).toEqual(['b', 'a'])
   })
 })
 
@@ -136,13 +134,33 @@ describe('snapshotFor', () => {
     ])
     expect(snapshotFor(s, absPath('p'), anySession).runs).toEqual([
       {
-        id: 'r1', objective: 'objective r1', status: 'open', done: 1, total: 2,
+        id: 'r1', objective: 'objective r1', outcome: 'running', done: 1, total: 2,
         tasks: [
           { id: 't1', title: 'task t1', status: 'completed', sessionId: undefined, gateQuestion: undefined, openGates: 0 },
           { id: 't2', title: 'task t2', status: 'ready', sessionId: undefined, gateQuestion: undefined, openGates: 0 }
         ]
       }
     ])
+  })
+
+  // 끝난 Run 이 아래로 간다 — 예전에는 저장된 status 로 판정했고, 이제는 Task 에서 파생한다.
+  // 목록의 맨 위는 지금 도는 작업의 자리다
+  it('도는 Run 이 먼저, 그 안에서 최신순', () => {
+    const older = { ...run('a', absPath('p')), createdAt: '2026-08-01T00:00:00.000Z' }
+    const newer = { ...run('b', absPath('p')), createdAt: '2026-08-18T00:00:00.000Z' }
+    const done = { ...run('c', absPath('p')), createdAt: '2026-08-19T00:00:00.000Z' }
+    const s = withRuns([older, done, newer], [task('t1', 'c', 'completed')])
+    expect(snapshotFor(s, absPath('p'), anySession).runs.map((r) => r.id)).toEqual(['b', 'a', 'c'])
+  })
+
+  it('각 Run 에 outcome 을 실어 보낸다', () => {
+    const s = withRuns(
+      [run('r1', absPath('p')), run('r2', absPath('p'))],
+      [task('t1', 'r1', 'completed'), task('t2', 'r2', 'failed')]
+    )
+    const byId = new Map(snapshotFor(s, absPath('p'), anySession).runs.map((r) => [r.id, r.outcome]))
+    expect(byId.get('r1')).toBe('completed')
+    expect(byId.get('r2')).toBe('failed')
   })
 
   // 오케스트레이터가 Task 를 선언한 순서 = 의존 사슬을 읽는 순서. deps 는 전순서가 아니라 정렬 기준이 못 된다

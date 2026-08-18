@@ -13,7 +13,10 @@ import type { JobTask, OrchSnapshot, RunOutcome } from '../types'
 import type { OrchState } from './state'
 import type { Run, Task } from './types'
 
-/** The Runs belonging to one project, open ones first and newest first within each group.
+/** 한 프로젝트에 속한 Run 들, 최신순.
+ *
+ *  끝난 Run 을 아래로 보내는 것은 여기가 아니라 snapshotFor 다 — 그 판정(outcomeOf)이 Task 를
+ *  읽어야 하는데 이 함수는 Run 만 돌려준다.
  *
  *  Matching is isSamePath rather than ===: Run.cwd is the project root (worktrees are created per
  *  Dispatch, not per Run — see coordinator.ts), but the same path can arrive with a different drive
@@ -25,10 +28,7 @@ import type { Run, Task } from './types'
 export function runsForProject(state: OrchState, projectPath: string): Run[] {
   return state.runs
     .filter((r) => isSamePath(projectPath, r.cwd))
-    .sort((a, b) => {
-      if ((a.status === 'open') !== (b.status === 'open')) return a.status === 'open' ? -1 : 1
-      return b.createdAt.localeCompare(a.createdAt)
-    })
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
 /** Completed Tasks over total Tasks, unweighted.
@@ -123,22 +123,29 @@ export function snapshotFor(
   projectPath: string,
   isKnownSession: (sessionId: string) => boolean
 ): OrchSnapshot {
+  const runs = runsForProject(state, projectPath).map((run) => {
+    const { done, total } = progressOf(state, run.id)
+    return {
+      id: run.id,
+      objective: run.objective,
+      outcome: outcomeOf(state, run.id),
+      done,
+      total,
+      // createdAt ascending — the order the orchestrator declared the Tasks in, which is the order
+      // the dependency chain reads in. Task.deps is not a total order, so it cannot sort this.
+      tasks: state.tasks
+        .filter((t) => t.runId === run.id)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        .map((t) => jobTaskOf(state, t, isKnownSession))
+    }
+  })
+  // 도는 Run 이 먼저. runsForProject 가 이미 최신순으로 정렬해 두었고 Array.prototype.sort 는
+  // 안정 정렬이라, 같은 그룹 안의 최신순은 이 단계에서 보존된다.
   return {
-    runs: runsForProject(state, projectPath).map((run) => {
-      const { done, total } = progressOf(state, run.id)
-      return {
-        id: run.id,
-        objective: run.objective,
-        status: run.status,
-        done,
-        total,
-        // createdAt ascending — the order the orchestrator declared the Tasks in, which is the order
-        // the dependency chain reads in. Task.deps is not a total order, so it cannot sort this.
-        tasks: state.tasks
-          .filter((t) => t.runId === run.id)
-          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-          .map((t) => jobTaskOf(state, t, isKnownSession))
-      }
+    runs: runs.sort((a, b) => {
+      const ar = a.outcome === 'running'
+      const br = b.outcome === 'running'
+      return ar === br ? 0 : ar ? -1 : 1
     })
   }
 }

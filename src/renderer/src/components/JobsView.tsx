@@ -76,7 +76,8 @@ export function JobsView({
               </span>
               <span className="jobs-progress">
                 {t('jobs.progress', { done: run.done, total: run.total })}
-                {run.status === 'closed' ? ` ${t('jobs.completed')}` : ''}
+                {run.outcome === 'completed' ? ` ${t('jobs.completed')}` : ''}
+                {run.outcome === 'failed' ? ` ${t('jobs.failed')}` : ''}
               </span>
             </div>
             {open && (

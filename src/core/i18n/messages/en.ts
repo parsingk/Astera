@@ -604,5 +604,6 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.empty.hint': 'Jobs created from a coordinator session will appear here',
   'jobs.progress': '{done}/{total}',
   'jobs.completed': 'completed',
+  'jobs.failed': 'failed',
   'jobs.gates.more': '+{count} more'
 }
