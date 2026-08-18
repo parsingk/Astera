@@ -58,8 +58,13 @@ export interface MdItem {
   children: MdBlock[]
 }
 
+/** ATX·Setext 제목이 공유하는 수준. 리터럴 유니온이라 `Number(...) as HeadingLevel` 캐스트가
+ *  실제로 6 을 넘는 값이 섞여 들어오는 실수를 잡아낼 여지를 남긴다 — `as 1` 로 뭉개면 그 여지가
+ *  사라진다 */
+type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6
+
 export type MdBlock =
-  | { k: 'heading'; line: number; level: 1 | 2 | 3 | 4 | 5 | 6; inline: MdInline[] }
+  | { k: 'heading'; line: number; level: HeadingLevel; inline: MdInline[] }
   | { k: 'para'; line: number; inline: MdInline[] }
   | { k: 'code'; line: number; lang: LangKey | null; text: string }
   | { k: 'list'; line: number; ordered: boolean; start: number; items: MdItem[] }
@@ -122,6 +127,11 @@ function trimEnds(nodes: MdInline[]): MdInline[] {
  *  **limit 이 왜 필요한가**: 이 함수는 자식 노드 *사이*의 원문을 평문으로 취한다. 그래서 범위를
  *  주지 않으면 `# one` 의 `#` 뒤 공백과 `[a](url "t")` 의 URL·제목 사이 공백이 본문에 섞인다.
  *  화면에 나오는 구간만 넘기는 것이 유일한 해법이다 — 마크 노드를 건너뛰는 것으로는 부족하다.
+ *
+ *  **limit 의 전제**: lo·hi 는 반드시 형제 노드의 경계에 떨어져야 한다. 경계를 걸치는 자식은
+ *  잘라내지 않고 통째로 포함한다 — `c.to <= lo || c.from >= hi` 는 완전히 밖에 있는 자식만
+ *  걸러내지, 걸친 자식을 자르지는 않는다. 지금은 이 조건이 항상 지켜진다(제목의 HeaderMark, Task 3
+ *  의 링크 경계 모두 형제 사이 틈에 놓인다). 어긋나는 limit 을 넘기면 자식이 그대로 새어 나온다.
  *
  *  Task 3 이 Link/Image 갈래를, Task 4 가 HTMLTag 갈래를 여기에 더한다. */
 function inlineOf(node: SyntaxNode, ctx: Ctx, limit?: { from: number; to: number }): MdInline[] {
@@ -193,10 +203,21 @@ function headingInline(node: SyntaxNode, ctx: Ctx): MdInline[] {
   )
 }
 
-/** 펜스/들여쓰기 코드의 본문. CodeText 자식이 있으면 그것이 본문이고, 없으면(빈 펜스) 빈 문자열 */
+/** 펜스/들여쓰기 코드의 본문. CodeText 자식들을 이어붙인 것이 본문이다 — 자식이 없으면(빈 펜스)
+ *  빈 문자열이다.
+ *
+ *  왜 원문을 통째로 슬라이스해 손으로 들여쓰기를 벗기지 않는가: 파서가 이미 그 일을 줄 단위로 해
+ *  놓았다. 들여쓰기 코드 블록은 노드 자체가 첫 줄의 필수 4-스페이스 뒤에서 시작하고, 이어지는
+ *  줄들은 형제 사이의 "틈"(그 줄의 필수 들여쓰기)이 CodeText 조각 밖으로 빠지면서 각 조각에는
+ *  그 줄의 내용만 남는다 — 초과 들여쓰기나 탭도 그 안에 그대로 보존된다. 인용문 안의 펜스도
+ *  QuoteMark 가 같은 방식으로 줄마다 CodeText 를 쪼갠다. 그래서 원문을 한 번에 슬라이스해
+ *  `{1,4}` 스페이스만 정규식으로 벗기는 방식은 이미 벗겨진 첫 줄을 이중으로 깎고, 탭 들여쓰기와
+ *  인용문 안 펜스에서는 벗겨야 할 들여쓰기를 아예 놓친다.
+ *
+ *  CodeText 는 자기 뒤의 개행을 이미 포함하고 있으므로 이어붙일 때 구분자를 넣지 않는다 —
+ *  `'\n'` 으로 이으면 개행이 중복된다. */
 function codeText(node: SyntaxNode, ctx: Ctx): string {
-  const body = node.getChild('CodeText')
-  return body ? ctx.text.slice(body.from, body.to) : ''
+  return node.getChildren('CodeText').map((t) => ctx.text.slice(t.from, t.to)).join('')
 }
 
 function fenceLang(node: SyntaxNode, ctx: Ctx): LangKey | null {
@@ -255,12 +276,16 @@ function blocksOf(parent: SyntaxNode, ctx: Ctx): MdBlock[] {
     const line = lineAt(ctx.starts, c.from)
     const atx = ATX.exec(c.name)
     if (atx) {
-      out.push({ k: 'heading', line, level: Number(atx[1]) as 1, inline: headingInline(c, ctx) })
+      out.push({
+        k: 'heading', line, level: Number(atx[1]) as HeadingLevel, inline: headingInline(c, ctx)
+      })
       continue
     }
     const setext = SETEXT.exec(c.name)
     if (setext) {
-      out.push({ k: 'heading', line, level: Number(setext[1]) as 1, inline: headingInline(c, ctx) })
+      out.push({
+        k: 'heading', line, level: Number(setext[1]) as HeadingLevel, inline: headingInline(c, ctx)
+      })
       continue
     }
     switch (c.name) {
@@ -271,17 +296,8 @@ function blocksOf(parent: SyntaxNode, ctx: Ctx): MdBlock[] {
         out.push({ k: 'code', line, lang: fenceLang(c, ctx), text: codeText(c, ctx) })
         break
       case 'CodeBlock':
-        // 들여쓰기 코드 블록. CodeText 자식이 없고 노드 전체가 본문이므로 들여쓰기를 벗긴다
-        out.push({
-          k: 'code',
-          line,
-          lang: null,
-          text: ctx.text
-            .slice(c.from, c.to)
-            .split('\n')
-            .map((l) => l.replace(/^ {1,4}/, ''))
-            .join('\n')
-        })
+        // 들여쓰기 코드 블록. codeText 가 CodeText 조각을 이어붙여 이미 벗겨진 본문을 준다
+        out.push({ k: 'code', line, lang: null, text: codeText(c, ctx) })
         break
       case 'BulletList':
       case 'OrderedList': {

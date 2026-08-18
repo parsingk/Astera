@@ -57,6 +57,12 @@ describe('문단과 인라인', () => {
     const b = parseMarkdown('a \\*b\\* c\n')
     expect(plain((b[0] as Extract<MdBlock, { k: 'para' }>).inline)).toBe('a *b* c')
   })
+  it('HTML 주석과 처리 지시어는 화면에 나오지 않고 사라진다', () => {
+    const comment = parseMarkdown('a <!-- c --> b\n')
+    expect(plain((comment[0] as Extract<MdBlock, { k: 'para' }>).inline)).toBe('a  b')
+    const pi = parseMarkdown('a <?pi?> b\n')
+    expect(plain((pi[0] as Extract<MdBlock, { k: 'para' }>).inline)).toBe('a  b')
+  })
 })
 
 describe('코드 블록', () => {
@@ -76,6 +82,32 @@ describe('코드 블록', () => {
   it('들여쓰기 코드 블록도 읽는다', () => {
     const b = parseMarkdown('    indented\n')
     expect(b[0]).toMatchObject({ k: 'code', lang: null, text: 'indented' })
+  })
+  it('필수 들여쓰기를 넘는 여분은 본문에 남는다', () => {
+    const b = parseMarkdown('      onlyline\n')
+    expect((b[0] as Extract<MdBlock, { k: 'code' }>).text).toBe('  onlyline')
+  })
+  it('여분 들여쓰기가 있는 줄과 없는 줄이 섞여도 줄마다 맞게 벗긴다', () => {
+    const b = parseMarkdown('      first\n    second\n')
+    expect((b[0] as Extract<MdBlock, { k: 'code' }>).text).toBe('  first\nsecond')
+  })
+  it('탭으로 들여쓴 이어지는 줄도 읽는다', () => {
+    const b = parseMarkdown('    line one\n\tline two\n')
+    expect((b[0] as Extract<MdBlock, { k: 'code' }>).text).toBe('line one\nline two')
+  })
+  it('들여쓰기 코드 블록 안의 빈 줄이 개행을 중복시키지 않는다', () => {
+    const b = parseMarkdown('    a\n\n    b\n')
+    expect((b[0] as Extract<MdBlock, { k: 'code' }>).text).toBe('a\n\nb')
+  })
+  it('여러 줄 펜스 코드도 온전히 읽는다', () => {
+    const b = parseMarkdown('```ts\nconst a = 1\nconst b = 2\nconst c = 3\n```\n')
+    expect((b[0] as Extract<MdBlock, { k: 'code' }>).text).toBe(
+      'const a = 1\nconst b = 2\nconst c = 3'
+    )
+  })
+  it('펜스 코드 안의 빈 줄이 개행을 중복시키지 않는다', () => {
+    const b = parseMarkdown('```\na\n\nb\n```\n')
+    expect((b[0] as Extract<MdBlock, { k: 'code' }>).text).toBe('a\n\nb')
   })
 })
 
@@ -116,6 +148,13 @@ describe('인용', () => {
     const b = parseMarkdown('> > deep\n')
     const q = b[0] as Extract<MdBlock, { k: 'quote' }>
     expect(q.children[0].k).toBe('quote')
+  })
+  it('인용 안의 펜스 코드는 QuoteMark 로 쪼개진 줄을 다시 이어붙인다', () => {
+    const b = parseMarkdown('> ```\n> a\n> b\n> ```\n')
+    const q = b[0] as Extract<MdBlock, { k: 'quote' }>
+    const code = q.children[0] as Extract<MdBlock, { k: 'code' }>
+    expect(code.k).toBe('code')
+    expect(code.text).toBe('a\nb')
   })
 })
 
