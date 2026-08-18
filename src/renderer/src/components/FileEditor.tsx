@@ -114,7 +114,14 @@ function restoreOrBuild(
 /** CM6 file editor (a controlled component). The buffer, the dirty flag and the save policy are owned by
  *  App. The EditorState is cached per file so undo, the cursor and the scroll position survive a tab
  *  switch (the VS Code style) — and, through onRetire, an unmount as well: leaving editor mode takes the
- *  whole explorer view down with it. */
+ *  whole explorer view down with it.
+ *
+ *  Its parent chain runs through MarkdownSplit's fixed skeleton for every file tab, markdown or not:
+ *  `.md-split-host` > `.md-split` > `.md-pane-editor` > this component. MarkdownSplit.tsx's own comment
+ *  explains why that skeleton never changes shape — the short version is that App used to render either
+ *  `<MarkdownSplit/>` or `editor` directly, and switching between a `.md` and a non-`.md` file in the same
+ *  pane swapped the element type at that spot, which unmounted and remounted this component and lost the
+ *  undo history the paragraph above depends on. This component must keep sitting in exactly that slot. */
 export function FileEditor({
   path,
   content,

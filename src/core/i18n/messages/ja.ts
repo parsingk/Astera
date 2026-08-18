@@ -138,10 +138,11 @@ export const ja: Catalog = {
   'files.markdown.image.failed': '画像を読み込めません',
   'files.markdown.image.remote': 'リモート画像は表示しません — クリックするとブラウザで開きます',
   'files.markdown.renderError': 'このドキュメントは表示できません',
-  // MarkdownSplit.tsx — モードツールバーの3つのボタン
+  // MarkdownSplit.tsx — モードツールバーの3つのボタン、左右分割のリサイザー
   'files.markdown.mode.editor': '編集のみ',
   'files.markdown.mode.split': '編集とプレビュー',
   'files.markdown.mode.preview': 'プレビューのみ',
+  'files.markdown.resizeSplit': '分割のサイズ変更',
   // App.tsx — explorer close confirmation
   'explorer.closeConfirm.body':
     '保存していない変更があります。エクスプローラーを閉じますか？',

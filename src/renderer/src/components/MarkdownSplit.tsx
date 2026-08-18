@@ -330,6 +330,7 @@ export function MarkdownSplit({
             onPointerDown={startDrag}
             role="separator"
             aria-orientation="vertical"
+            aria-label={t('files.markdown.resizeSplit')}
           />
         )}
         {markdown && (

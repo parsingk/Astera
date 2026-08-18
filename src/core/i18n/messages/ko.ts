@@ -130,10 +130,11 @@ export const ko = {
   'files.markdown.image.failed': '이미지를 열 수 없습니다',
   'files.markdown.image.remote': '원격 이미지는 표시하지 않습니다 — 눌러서 브라우저에서 엽니다',
   'files.markdown.renderError': '이 문서를 표시할 수 없습니다',
-  // MarkdownSplit.tsx — 모드 툴바 버튼 세 개
+  // MarkdownSplit.tsx — 모드 툴바 버튼 세 개, 좌우 분할 리사이저
   'files.markdown.mode.editor': '편집기만',
   'files.markdown.mode.split': '편집기와 프리뷰',
   'files.markdown.mode.preview': '프리뷰만',
+  'files.markdown.resizeSplit': '분할 크기 조절',
   // App.tsx — explorer close confirmation
   'explorer.closeConfirm.body': '저장하지 않은 변경이 있습니다. 탐색기를 닫을까요?',
   // App.tsx — run console resizer, start failure
