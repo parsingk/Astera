@@ -32,7 +32,7 @@ import { writeInfo, writeShuttle } from './orchestration/shuttle'
 import { WorkerTails } from './orchestration/tail'
 import { releaseArgsFor } from './orchestration/release'
 import { installStub } from './orchestration/stub'
-import { sortEntries, isPathWithin, projectRootOf } from '../core/files/tree'
+import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
 import { parsePorcelainZ, type GitState } from '../core/git/status'
 import { FileWatcher } from './fileWatcher'
@@ -865,6 +865,21 @@ export function registerIpc(
     if (projectRoot) return projectRoot
     throw new Error(t(core.lang, 'files.error.pathNotAllowed'))
   }
+
+  /** 터미널 전용 경로 검사. assertAllowedPath 가 거부하면 **홈 디렉터리 그 자체**만 추가로 허용한다
+   *  — 그 아래 전부가 아니다.
+   *
+   *  왜 여기만 여는가: 프로젝트가 지정되지 않았을 때 셸을 하나 주는 것은 사용자가 이미 가진 권한이다
+   *  (cmd 든 터미널 앱이든 직접 열 수 있다). 반면 assertAllowedPath 를 홈까지 넓히면 그 가드는
+   *  '그 아래 전부'라서 같은 가드를 쓰는 files.list/files.read 가 홈 트리 전체로 열린다 —
+   *  ~/.ssh, 브라우저 프로필, 이 앱 자신의 자격증명까지. 그것은 새 권한이므로 열지 않는다.
+   *
+   *  정확 일치인 이유도 같다: 홈 아래를 열면 위와 같은 결과가 된다. 홈에 띄운 셸에서 사용자가
+   *  어디로 cd 하든 그것은 셸의 일이고, 이 앱의 파일 API 가 그 경로를 읽을 수 있게 되는 것과 다르다. */
+  const assertTerminalPath = async (p: string): Promise<void> => {
+    if (isSamePath(p, app.getPath('home'))) return
+    await assertAllowedPath(p)
+  }
   ipcMain.handle('files.list', async (_e, dirPath: string) => {
     await assertAllowedPath(dirPath)
     const entries = await fs.readdir(dirPath, { withFileTypes: true })
@@ -1088,11 +1103,11 @@ export function registerIpc(
   // path validation, and the only valid ids are the ones open returned (anything not in the map is
   // silently ignored).
   ipcMain.handle('terminal.open', async (_e, projectPath: string, cols?: number, rows?: number) => {
-    await assertAllowedPath(projectPath)
+    await assertTerminalPath(projectPath)
     return core.terminal.open(projectPath, cols, rows)
   })
   ipcMain.handle('terminal.list', async (_e, projectPath: string) => {
-    await assertAllowedPath(projectPath)
+    await assertTerminalPath(projectPath)
     return core.terminal.list(projectPath)
   })
   ipcMain.on('terminal.write', (_e, id: string, data: string) => core.terminal.write(id, data))
@@ -1454,6 +1469,9 @@ export function registerIpc(
     return { claude, codex }
   })
   ipcMain.handle('system.appVersion', () => app.getVersion())
+  // 프로젝트가 지정되지 않았을 때 아래쪽 패널의 터미널이 열릴 자리. cmd 나 셸을 직접 띄웠을 때와
+  // 같은 곳이고, 세 플랫폼 모두 app.getPath('home') 이 그 값을 준다.
+  ipcMain.handle('system.homeDir', () => app.getPath('home'))
 
   // User keybinding overrides. The renderer knows the defaults from core/keys/binding.ts, and only the
   // overrides travel through here. Validation (parseable, conflicts, dangerous keys) is done by the

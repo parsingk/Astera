@@ -15,6 +15,7 @@ import { TerminalBody } from './TerminalBody'
 export function BottomPanel({
   projectPath,
   runStatus,
+  runAvailable = true,
   terminals,
   activeTab,
   onSelectTab,
@@ -25,6 +26,10 @@ export function BottomPanel({
 }: {
   projectPath: string
   runStatus: RunStatus | null
+  /** Run 탭을 그릴지. 프로젝트가 지정되지 않았을 때(홈에서 연 패널) false — 실행 구성은 프로젝트
+   *  단위라 홈에서는 돌릴 것이 없고, 빈 Run 탭은 고장처럼 보인다. 기본값 true 는 프로젝트가 있는
+   *  기존 호출자를 그대로 두기 위한 것이다. */
+  runAvailable?: boolean
   terminals: TerminalBuffer[]
   activeTab: string
   onSelectTab: (tab: string) => void
@@ -44,6 +49,7 @@ export function BottomPanel({
     <div className="run-panel">
       <div className="bottom-tabs">
         <span className="bottom-tab-list">
+          {runAvailable && (
           <button
             className={activeTab === 'run' ? 'bottom-tab on' : 'bottom-tab'}
             onClick={() => onSelectTab('run')}
@@ -56,6 +62,7 @@ export function BottomPanel({
               </span>
             )}
           </button>
+          )}
           {terminals.map((term, i) => (
             <span
               key={term.id}
@@ -120,9 +127,15 @@ export function BottomPanel({
         </span>
       </div>
       <div className="bottom-bodies">
-        <div className="bottom-body" style={{ display: activeTab === 'run' ? 'flex' : 'none' }}>
-          <RunPanel projectPath={projectPath} clearNonce={clearNonces['run'] ?? 0} />
-        </div>
+        {/* runAvailable 로 **마운트 자체를** 막는다. 비활성 탭은 display:none 으로 살려 두는 것이 이
+            패널의 관례지만(아래 주석), RunPanel 은 마운트되면 projectPath 로 run.list 를 부른다 —
+            프로젝트가 없을 때 그 값은 홈이고, 실행 구성 조회는 홈을 허용하지 않으므로 탭이 보이지도
+            않는데 거부된 요청이 매번 나간다. */}
+        {runAvailable && (
+          <div className="bottom-body" style={{ display: activeTab === 'run' ? 'flex' : 'none' }}>
+            <RunPanel projectPath={projectPath} clearNonce={clearNonces['run'] ?? 0} />
+          </div>
+        )}
         {/* Inactive tabs stay mounted with display:none (see the comment above) — as a result, when a
             terminal tab is first mounted while inactive, TerminalBody's initial fit.fit() runs against a
             0×0 host and xterm stays at the default 80×24 (the PTY is 120×30). Output that arrives while
