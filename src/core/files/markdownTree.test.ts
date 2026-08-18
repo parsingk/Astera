@@ -301,3 +301,33 @@ describe('참조링크', () => {
     expect(parseMarkdown('[b]: https://c.com\n')).toEqual([])
   })
 })
+
+describe('자동링크의 암시 스킴', () => {
+  it('맨텍스트 이메일 자동링크는 href 에 mailto: 를 붙인다', () => {
+    const p = parseMarkdown('mail me@b.com now\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline.find((n) => n.k === 'link') as Extract<MdInline, { k: 'link' }>
+    expect(link.href).toBe('mailto:me@b.com')
+    expect(plain(link.children)).toBe('me@b.com')
+  })
+  it('각괄호 이메일 자동링크도 마찬가지다', () => {
+    const p = parseMarkdown('mail <me@b.com> now\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline.find((n) => n.k === 'link') as Extract<MdInline, { k: 'link' }>
+    expect(link.href).toBe('mailto:me@b.com')
+    expect(plain(link.children)).toBe('me@b.com')
+  })
+  it('www. 자동링크는 href 에 http:// 를 붙인다', () => {
+    const p = parseMarkdown('see www.example.com now\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline.find((n) => n.k === 'link') as Extract<MdInline, { k: 'link' }>
+    expect(link.href).toBe('http://www.example.com')
+    expect(plain(link.children)).toBe('www.example.com')
+  })
+  it('이미 스킴이 있는 자동링크는 그대로 둔다', () => {
+    const p = parseMarkdown('see https://a.com now\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline.find((n) => n.k === 'link') as Extract<MdInline, { k: 'link' }>
+    expect(link.href).toBe('https://a.com')
+    expect(plain(link.children)).toBe('https://a.com')
+  })
+  it('classifyHref 단독 호출은 스킴을 추론하지 않는다 — 추정은 자동링크 갈래에만 머문다', () => {
+    expect(classifyHref('me@b.com')).toEqual({ kind: 'file', path: 'me@b.com' })
+  })
+})

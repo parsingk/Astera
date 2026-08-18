@@ -182,6 +182,23 @@ function innerText(node: SyntaxNode, ctx: Ctx): string {
   return ctx.text.slice(marks[0].to, marks[1].from)
 }
 
+/** GFM 자동링크(각괄호형 `<me@b.com>`, 맨텍스트형 `me@b.com`/`www.example.com`)가 암시하는
+ *  스킴을 채운다.
+ *
+ *  왜 classifyHref 안이 아니라 여기인가: classifyHref 는 범용 href 판정기이자 보안 게이트다 —
+ *  스킴이 없다고 추측해 채워주는 쪽으로 넓히면 그 게이트 자체가 느슨해진다. 반면 GFM 의 Autolink
+ *  확장은 "이건 링크다"라는 판정을 이미 끝낸 상태로 이 갈래에 도착한다. 남은 일은 그 판정이 어떤
+ *  스킴을 뜻하는지 채우는 것뿐이고, GFM 자동링크 리터럴이 만들 수 있는 꼴은 세 가지뿐이다 —
+ *  이메일, `www.`, 이미 스킴이 있는 URL. 그래서 이 세 갈래로 완결된다(추측이 아니다).
+ *
+ *  화면에 보이는 텍스트는 원문 그대로 둔다 — href 에만 스킴을 붙인다. GitHub 도 이렇게 한다. */
+function autolinkHref(raw: string): string {
+  const at = raw.indexOf('@')
+  if (at !== -1 && !raw.slice(0, at).includes(':')) return `mailto:${raw}`
+  if (/^www\./i.test(raw)) return `http://${raw}`
+  return raw
+}
+
 /** 링크 표시부의 인라인 — 첫 LinkMark 와 그 짝 **사이만** 본다.
  *
  *  범위를 주지 않으면 URL 과 LinkTitle 사이의 공백이 본문에 섞인다. `[a](https://b.com "t")` 가
@@ -276,16 +293,19 @@ function inlineOf(node: SyntaxNode, ctx: Ctx, limit?: { from: number; to: number
       // GFM 의 맨 URL 자동링크(`see https://a.com now`)는 Autolink 노드가 아니라 밋밋한 URL
       // 노드로 나온다 — Link/Image 의 목적지 자식과 노드 이름이 같다(실제 트리 덤프로 확인).
       // 그 자식은 linkChildren 의 limit 범위 밖에 있어 이 switch 에 닿지 않으므로, 여기서 만나는
-      // URL 은 항상 이 GFM 맨 자동링크다. `<https://a.com>` 형은 Autolink 노드로 감싸여 있고
-      // 꺾쇠를 포함해 슬라이스되므로 replace 로 벗긴다 — 맨 URL 은 꺾쇠가 없어 그대로 통과한다.
+      // URL 은 항상 이 GFM 맨 자동링크다. `<me@b.com>` 형은 Autolink 노드로 감싸여 있고 꺾쇠를
+      // 포함해 슬라이스되므로 replace 로 벗긴다 — 맨 텍스트형은 꺾쇠가 없어 그대로 통과한다.
+      // 이메일·www. 자동링크는 스킴이 없는 텍스트로 나오므로 classifyHref 에 넘기기 전에
+      // autolinkHref 로 스킴을 채운다 — 화면 텍스트(`text`)는 원문 그대로, href 만 바뀐다.
       case 'Autolink':
       case 'URL': {
-        const url = ctx.text.slice(c.from, c.to).replace(/^<|>$/g, '')
-        if (classifyHref(url) === null) {
-          pushText(out, url)
+        const text = ctx.text.slice(c.from, c.to).replace(/^<|>$/g, '')
+        const href = autolinkHref(text)
+        if (classifyHref(href) === null) {
+          pushText(out, text)
           break
         }
-        out.push({ k: 'link', href: url, title: null, children: [{ k: 'text', text: url }] })
+        out.push({ k: 'link', href, title: null, children: [{ k: 'text', text }] })
         break
       }
       case 'HardBreak':
