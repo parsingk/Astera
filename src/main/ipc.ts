@@ -454,9 +454,10 @@ export function registerIpc(
     const store = new OrchestrationStore(path.join(app.getPath('userData'), 'orchestration.json'))
     const loaded = await store.load()
     if (loaded.recovered) orchLog('failed to read or parse orchestration.json — kept the .bak and started from an empty state')
-    if (loaded.unknownOutcomes > 0 || loaded.pruned > 0)
+    if (loaded.unknownOutcomes > 0 || loaded.pruned > 0 || loaded.staleValidations > 0)
       orchLog(
-        `restart cleanup — ${loaded.unknownOutcomes} dispatch(es) left as outcome_unknown, ${loaded.pruned} expired Run(s)`
+        `restart cleanup — ${loaded.unknownOutcomes} dispatch(es) left as outcome_unknown, ` +
+          `${loaded.pruned} expired Run(s), ${loaded.staleValidations} interrupted validation(s)`
       )
 
     // The coordinator never reads or writes OrchState (the server owns state).

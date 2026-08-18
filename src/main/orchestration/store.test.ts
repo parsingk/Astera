@@ -259,6 +259,39 @@ describe('OrchestrationStore', () => {
     })
   })
 
+  it('재시작하면 validating 이던 Task 를 blocked 로 보내고 Gate 를 연다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    s.tasks[0] = { ...s.tasks[0], status: 'validating' }
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    const r = await store.load()
+    expect(r.staleValidations).toBe(1)
+    expect(store.get().tasks[0].status).toBe('blocked')
+    expect(store.get().gates).toHaveLength(1)
+    expect(store.get().gates[0].taskId).toBe(s.tasks[0].id)
+  })
+
+  // 연속 실패로 세지 않는다 — 인프라 사정이지 작업이 틀린 것이 아니다
+  it('정리된 검증은 consecutiveFailures 를 올리지 않는다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    s.tasks[0] = { ...s.tasks[0], status: 'validating', consecutiveFailures: 1 }
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    expect(store.get().tasks[0].consecutiveFailures).toBe(1)
+  })
+
+  it('validating 이 없으면 staleValidations 가 0 이고 Gate 도 생기지 않는다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const r = await store.load()
+    expect(r.staleValidations).toBe(0)
+    expect(store.get().gates).toHaveLength(0)
+  })
+
   it('Message 활동도 TTL 판정에 반영된다', async () => {
     const file = path.join(dir, 'orchestration.json')
     const old = new Date(Date.now() - RUN_TTL_MS - 1000).toISOString()
