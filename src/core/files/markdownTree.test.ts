@@ -511,3 +511,126 @@ describe('빈 표시부', () => {
     expect(link.children).toEqual([])
   })
 })
+
+import { lexHtml, policyFor } from './markdownTree'
+
+describe('policyFor', () => {
+  it('통과 목록의 태그는 allow', () => {
+    for (const tag of ['div', 'span', 'a', 'img', 'details', 'summary', 'kbd', 'sub', 'h3', 'td'])
+      expect(policyFor(tag)).toBe('allow')
+  })
+  it('위험 태그는 drop', () => {
+    for (const tag of ['script', 'style', 'iframe', 'object', 'embed', 'svg', 'math', 'form', 'input'])
+      expect(policyFor(tag)).toBe('drop')
+  })
+  it('그 밖은 unwrap', () => {
+    expect(policyFor('picture')).toBe('unwrap')
+    expect(policyFor('source')).toBe('unwrap')
+    expect(policyFor('marquee')).toBe('unwrap')
+  })
+  it('대소문자를 무시한다', () => {
+    expect(policyFor('DIV')).toBe('allow')
+    expect(policyFor('ScRiPt')).toBe('drop')
+  })
+})
+
+describe('lexHtml', () => {
+  it('여는 태그·닫는 태그·자체 종결을 구분한다', () => {
+    expect(lexHtml('<div>x</div>')).toEqual([
+      { t: 'open', tag: 'div', attrs: {} },
+      { t: 'text', text: 'x' },
+      { t: 'close', tag: 'div', attrs: {} }
+    ])
+    expect(lexHtml('<br/>')).toEqual([{ t: 'self', tag: 'br', attrs: {} }])
+    // void 요소는 슬래시가 없어도 자체 종결이다
+    expect(lexHtml('<br>')).toEqual([{ t: 'self', tag: 'br', attrs: {} }])
+    expect(lexHtml('<img src="a.png">')).toEqual([
+      { t: 'self', tag: 'img', attrs: { src: 'a.png' } }
+    ])
+  })
+  it('허용 속성만 남긴다', () => {
+    expect(lexHtml('<img src="a.png" alt="b" title="c" width="10" height="20">')[0]).toEqual({
+      t: 'self',
+      tag: 'img',
+      attrs: { src: 'a.png', alt: 'b', title: 'c', style: { width: '10px', height: '20px' } }
+    })
+  })
+  it('style·class·id·on* 을 버린다', () => {
+    const tok = lexHtml('<div style="background:url(https://x)" class="c" id="i" onclick="x()">')[0]
+    expect(tok).toEqual({ t: 'open', tag: 'div', attrs: {} })
+  })
+  it('target 을 버린다 — 링크는 항상 외부 브라우저로 열린다', () => {
+    const tok = lexHtml('<a href="https://a.com" target="_blank">')[0]
+    expect(tok).toEqual({ t: 'open', tag: 'a', attrs: { href: 'https://a.com' } })
+  })
+  it('align 을 textAlign 스타일로 옮기고 이상한 값은 버린다', () => {
+    expect(lexHtml('<div align="center">')[0]).toEqual({
+      t: 'open', tag: 'div', attrs: { style: { textAlign: 'center' } }
+    })
+    expect(lexHtml('<div align="sideways">')[0]).toEqual({ t: 'open', tag: 'div', attrs: {} })
+  })
+  it('width/height 는 숫자와 퍼센트만 받는다', () => {
+    expect(lexHtml('<img width="640">')[0]).toMatchObject({ attrs: { style: { width: '640px' } } })
+    expect(lexHtml('<img width="50%">')[0]).toMatchObject({ attrs: { style: { width: '50%' } } })
+    expect(lexHtml('<img width="calc(100% - 1px)">')[0]).toEqual({
+      t: 'self', tag: 'img', attrs: {}
+    })
+  })
+  it('href 가 허용 스킴이 아니면 버린다', () => {
+    expect(lexHtml('<a href="javascript:alert(1)">')[0]).toEqual({
+      t: 'open', tag: 'a', attrs: {}
+    })
+  })
+  it('colspan/rowspan/start 는 정수만 받는다', () => {
+    expect(lexHtml('<td colspan="2">')[0]).toMatchObject({ attrs: { colspan: '2' } })
+    expect(lexHtml('<td colspan="x">')[0]).toEqual({ t: 'open', tag: 'td', attrs: {} })
+  })
+  it('불리언 속성 open 을 읽는다', () => {
+    expect(lexHtml('<details open>')[0]).toEqual({ t: 'open', tag: 'details', attrs: { open: true } })
+    expect(lexHtml('<details>')[0]).toEqual({ t: 'open', tag: 'details', attrs: {} })
+  })
+  it('따옴표 없는 값과 홑따옴표를 모두 읽는다', () => {
+    expect(lexHtml("<img src='a.png' width=10>")[0]).toMatchObject({
+      attrs: { src: 'a.png', style: { width: '10px' } }
+    })
+  })
+  it('주석과 처리 명령은 버린다', () => {
+    expect(lexHtml('<!-- hi -->')).toEqual([])
+    expect(lexHtml('<?php echo 1; ?>')).toEqual([])
+    expect(lexHtml('a<!-- c -->b')).toEqual([{ t: 'text', text: 'a' }, { t: 'text', text: 'b' }])
+  })
+  it('태그가 아닌 < 는 텍스트로 남는다', () => {
+    expect(lexHtml('a < b')).toEqual([{ t: 'text', text: 'a < b' }])
+  })
+  it('닫히지 않은 태그는 텍스트로 남는다', () => {
+    expect(lexHtml('<div')).toEqual([{ t: 'text', text: '<div' }])
+  })
+})
+
+describe('인라인 HTML', () => {
+  it('통과 태그를 htmlEl 로 만든다', () => {
+    const p = parseMarkdown('press <kbd>Ctrl</kbd> now\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const el = p.inline.find((n) => n.k === 'htmlEl') as Extract<MdInline, { k: 'htmlEl' }>
+    expect(el).toMatchObject({ k: 'htmlEl', tag: 'kbd' })
+    expect(plain(el.children)).toBe('Ctrl')
+  })
+  it('위험 태그는 내용까지 사라진다', () => {
+    const p = parseMarkdown('a <script>alert(1)</script> b\n')[0] as Extract<MdBlock, { k: 'para' }>
+    expect(plain(p.inline)).not.toContain('alert')
+    expect(p.inline.every((n) => n.k !== 'htmlEl')).toBe(true)
+  })
+  it('모르는 태그는 벗기고 내용은 남긴다', () => {
+    const p = parseMarkdown('a <marquee>b</marquee> c\n')[0] as Extract<MdBlock, { k: 'para' }>
+    expect(plain(p.inline)).toBe('a b c')
+    expect(p.inline.every((n) => n.k !== 'htmlEl')).toBe(true)
+  })
+  it('인라인 img 를 image 가 아닌 htmlEl 로 만든다', () => {
+    // 태그가 한 줄에 단독으로 있으면 CommonMark 의 HTML 블록(type 7)이 되어 Task 5 의 몫으로
+    // 빠진다(실제 트리 덤프로 확인: `<img ...>` 한 줄만 있으면 HTMLBlock, `blocksOf` 가 지금은
+    // 버린다) — 그래서 같은 줄에 평문을 둘러 인라인 컨텍스트를 강제한다. 의도(인라인 img 는
+    // image 가 아니라 htmlEl)는 브리프와 같다.
+    const p = parseMarkdown('a <img src="a.png" alt="x"> b\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const el = p.inline.find((n) => n.k === 'htmlEl') as Extract<MdInline, { k: 'htmlEl' }>
+    expect(el).toMatchObject({ k: 'htmlEl', tag: 'img', attrs: { src: 'a.png', alt: 'x' } })
+  })
+})

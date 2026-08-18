@@ -52,6 +52,7 @@ export type MdInline =
   | { k: 'br' }
   | { k: 'link'; href: string; title: string | null; children: MdInline[] }
   | { k: 'image'; src: string; alt: string; title: string | null }
+  | { k: 'htmlEl'; tag: string; attrs: MdAttrs; children: MdInline[] }
 
 export interface MdItem {
   line: number
@@ -314,6 +315,240 @@ function collectDefs(root: SyntaxNode, ctx: Ctx): void {
   } while (cursor.next())
 }
 
+/* ── 원문 HTML의 안전 부분집합 ─────────────────────────────────────────────
+ *
+ * IntelliJ 는 원문 HTML 을 손대지 않고 통과시키고 별도 프로세스의 JCEF 안에서 CSP 로 잠근다.
+ * 우리 프리뷰는 window.api 가 살아 있는 같은 렌더러에 그려지므로 그 격리를 물려받을 수 없다.
+ * 그래서 결과는 IntelliJ 에 맞추고, 격리 대신 **변환**으로 안전을 얻는다 — 통과 목록의 태그만
+ * React 엘리먼트가 되고, HTML 문자열은 어디에도 남지 않는다.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+export type TagPolicy = 'allow' | 'drop' | 'unwrap'
+
+/** 변환해서 그리는 태그 */
+const ALLOWED_TAGS = new Set([
+  'div', 'p', 'center', 'details', 'summary', 'blockquote', 'hr', 'br',
+  'table', 'thead', 'tbody', 'tr', 'th', 'td',
+  'ul', 'ol', 'li',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'span', 'a', 'img', 'b', 'i', 'strong', 'em', 'u', 's', 'del', 'ins',
+  'code', 'kbd', 'samp', 'var', 'sub', 'sup', 'small', 'mark'
+])
+
+/** 태그만 벗기면 본문이 글자로 쏟아지는 것들. 내용까지 버린다 */
+const DROP_TAGS = new Set([
+  'script', 'style', 'iframe', 'object', 'embed', 'svg', 'math',
+  'template', 'noscript', 'link', 'meta', 'base',
+  'form', 'input', 'button', 'select', 'textarea'
+])
+
+/** 닫는 태그가 오지 않는 요소들. `<br>` 처럼 슬래시 없이 쓰여도 자체 종결로 본다 */
+const VOID_TAGS = new Set(['br', 'hr', 'img', 'input', 'link', 'meta', 'base', 'source'])
+
+export function policyFor(tag: string): TagPolicy {
+  const t = tag.toLowerCase()
+  if (DROP_TAGS.has(t)) return 'drop'
+  return ALLOWED_TAGS.has(t) ? 'allow' : 'unwrap'
+}
+
+const ALIGN_VALUES = new Set(['left', 'center', 'right', 'justify'])
+const SIZE = /^(\d+)(%?)$/
+const INT = /^\d+$/
+
+/** 태그별 속성 allowlist. style·class·id·on*·target 은 어느 태그에서도 통과하지 않는다.
+ *
+ *  style 을 허용하면 `background:url(https://…)` 하나로 문서를 여는 것만으로 외부 요청이 나가고,
+ *  class/id 는 우리 CSS 와 충돌한다. align/width/height 는 값만 읽어 우리가 스타일 객체를 짓는다 —
+ *  사용자가 준 CSS 문자열이 담기는 경로가 아예 없다. */
+function attrsFor(tag: string, raw: Map<string, string | true>): MdAttrs {
+  const out: MdAttrs = {}
+  const style: MdStyle = {}
+  const t = tag.toLowerCase()
+
+  const align = raw.get('align')
+  if (typeof align === 'string' && ALIGN_VALUES.has(align.toLowerCase()))
+    style.textAlign = align.toLowerCase() as MdStyle['textAlign']
+
+  const title = raw.get('title')
+  if (typeof title === 'string') out.title = title
+
+  if (t === 'a') {
+    const href = raw.get('href')
+    // 렌더러의 클릭 처리와 같은 판정을 쓴다 — 통과하지 못하면 href 자체를 두지 않으므로
+    // 링크가 아닌 <a> 가 되고, 누를 것이 없다
+    if (typeof href === 'string' && classifyHref(href) !== null) out.href = href
+  }
+
+  if (t === 'img') {
+    const src = raw.get('src')
+    if (typeof src === 'string') out.src = src
+    const alt = raw.get('alt')
+    if (typeof alt === 'string') out.alt = alt
+  }
+
+  if (t === 'img' || t === 'div' || t === 'span' || t === 'table')
+    for (const dim of ['width', 'height'] as const) {
+      const v = raw.get(dim)
+      if (typeof v !== 'string') continue
+      const m = SIZE.exec(v.trim())
+      if (m) style[dim] = m[2] ? `${m[1]}%` : `${m[1]}px`
+    }
+
+  if (t === 'td' || t === 'th')
+    for (const span of ['colspan', 'rowspan'] as const) {
+      const v = raw.get(span)
+      if (typeof v === 'string' && INT.test(v.trim())) out[span] = v.trim()
+    }
+
+  if (t === 'ol') {
+    const v = raw.get('start')
+    if (typeof v === 'string' && INT.test(v.trim())) out.start = v.trim()
+  }
+
+  if (t === 'details' && raw.has('open')) out.open = true
+
+  if (Object.keys(style).length > 0) out.style = style
+  return out
+}
+
+export type HtmlToken =
+  | { t: 'open' | 'close' | 'self'; tag: string; attrs: MdAttrs }
+  | { t: 'text'; text: string }
+
+const TAG_START = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)/
+const ATTR = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+)))?/g
+
+/** 원문 HTML 조각을 토큰으로 자른다.
+ *
+ *  브라우저의 HTML 파서를 흉내내려는 것이 아니다 — 마크다운 문서에 실제로 나타나는 형태(여는·닫는
+ *  태그, 자체 종결, 속성, 주석)만 읽고, 읽지 못한 것은 텍스트로 남긴다. 읽지 못한 것을 통과시키는
+ *  경로가 없다는 점이 중요하다.
+ *
+ *  `start`(아직 흘려보내지 않은 평문의 시작)와 `i`(다음 `<` 를 찾는 스캔 위치)를 나누어 쓴다.
+ *  태그 모양이 아닌 `<`(`a < b`)를 만나면 스캔만 전진하고 아직 흘려보내지 않는다 — 그래야 그
+ *  둘레의 평문이 하나로 합쳐진다("a < b" 가 조각 두 개로 쪼개지지 않는다, 실제로 테스트에서
+ *  확인됨). 반면 주석·처리 지시어처럼 실제로 건너뛴 구간은 경계로 친다 — 그 앞뒤 평문은 합치지
+ *  않고 따로 남긴다(`a<!-- c -->b` 가 "a"·"b" 두 조각으로 남는 것이 그 증거). 두 자리를 하나로
+ *  합쳐 매 `<` 마다 즉시 흘려보내면 앞의 불변식이 깨진다 — TDD 로 확인됨. */
+export function lexHtml(src: string): HtmlToken[] {
+  const out: HtmlToken[] = []
+  const pushText = (s: string): void => {
+    if (s) out.push({ t: 'text', text: s })
+  }
+  let i = 0
+  let start = 0
+  while (i < src.length) {
+    const lt = src.indexOf('<', i)
+    if (lt < 0) break
+    // 주석과 처리 명령은 통째로 버린다 — 화면에 남기지 않는다
+    if (src.startsWith('<!--', lt)) {
+      pushText(src.slice(start, lt))
+      const end = src.indexOf('-->', lt + 4)
+      i = end < 0 ? src.length : end + 3
+      start = i
+      continue
+    }
+    if (src.startsWith('<?', lt)) {
+      pushText(src.slice(start, lt))
+      const end = src.indexOf('?>', lt + 2)
+      i = end < 0 ? src.length : end + 2
+      start = i
+      continue
+    }
+    if (src.startsWith('<!', lt)) {
+      pushText(src.slice(start, lt))
+      const end = src.indexOf('>', lt + 2)
+      i = end < 0 ? src.length : end + 1
+      start = i
+      continue
+    }
+    const m = TAG_START.exec(src.slice(lt))
+    if (!m || m.index !== 0) {
+      // 태그가 아닌 `<` — 흘려보내지 않고 스캔만 전진해 둘레의 평문에 그대로 남긴다
+      i = lt + 1
+      continue
+    }
+    const gt = src.indexOf('>', lt)
+    if (gt < 0) break // 닫히지 않은 태그 — 원문을 평문으로 남긴다(아래 최종 flush)
+    pushText(src.slice(start, lt))
+    const closing = m[1] === '/'
+    const tag = m[2].toLowerCase()
+    const body = src.slice(lt + m[0].length, gt)
+    const selfClosing = body.trimEnd().endsWith('/')
+    const raw = new Map<string, string | true>()
+    if (!closing) {
+      ATTR.lastIndex = 0
+      let a: RegExpExecArray | null
+      while ((a = ATTR.exec(body)) !== null) {
+        const value = a[2] ?? a[3] ?? a[4]
+        raw.set(a[1].toLowerCase(), value === undefined ? true : value)
+      }
+    }
+    const attrs = closing ? {} : attrsFor(tag, raw)
+    const t = closing ? 'close' : selfClosing || VOID_TAGS.has(tag) ? 'self' : 'open'
+    out.push({ t, tag, attrs })
+    i = gt + 1
+    start = i
+  }
+  pushText(src.slice(start))
+  return out
+}
+
+/** foldInline 이 접는 동안 쓰는 토큰. HtmlToken 에 "이미 만들어진 인라인 노드" 한 갈래를 더한
+ *  것 — weaveHtml 이 파싱된 형제 노드와 lexHtml 의 결과를 한 줄로 엮을 때 쓴다. */
+type FoldToken = HtmlToken | { t: 'node'; node: MdInline }
+
+/** 토큰 목록을 인라인 노드로 접는다. 스택으로 짝을 맞추고, 남은 것은 끝에서 자동으로 닫는다 */
+function foldInline(tokens: FoldToken[]): MdInline[] {
+  const root: MdInline[] = []
+  const stack: { tag: string; policy: TagPolicy; attrs: MdAttrs; children: MdInline[] }[] = []
+  const top = (): MdInline[] => (stack.length ? stack[stack.length - 1].children : root)
+  /** drop 안에 있으면 아무것도 담지 않는다 */
+  const dropped = (): boolean => stack.some((f) => f.policy === 'drop')
+
+  const emit = (node: MdInline): void => {
+    if (!dropped()) top().push(node)
+  }
+
+  for (const tok of tokens) {
+    if (tok.t === 'text') {
+      if (!dropped()) pushText(top(), tok.text)
+      continue
+    }
+    if (tok.t === 'node') {
+      if (!dropped()) top().push(tok.node)
+      continue
+    }
+    const policy = policyFor(tok.tag)
+    if (tok.t === 'self') {
+      if (policy === 'allow') emit({ k: 'htmlEl', tag: tok.tag, attrs: tok.attrs, children: [] })
+      continue
+    }
+    if (tok.t === 'open') {
+      stack.push({ tag: tok.tag, policy, attrs: tok.attrs, children: [] })
+      continue
+    }
+    // close — 스택에서 짝을 찾는다. 없으면 무시한다
+    const at = [...stack].reverse().findIndex((f) => f.tag === tok.tag)
+    if (at < 0) continue
+    const idx = stack.length - 1 - at
+    while (stack.length > idx) closeFrame()
+  }
+  while (stack.length > 0) closeFrame()
+  return root
+
+  function closeFrame(): void {
+    const frame = stack.pop()
+    if (!frame) return
+    // 버릴 프레임이거나 버려지는 조상 안이면 아무 곳에도 담지 않는다. 담을 곳을 고르기 **전에**
+    // 판단한다 — 순서를 뒤집으면 쓰이지 않을 참조를 먼저 잡는 죽은 코드가 된다
+    if (frame.policy === 'drop' || stack.some((f) => f.policy === 'drop')) return
+    const parent = stack.length ? stack[stack.length - 1].children : root
+    if (frame.policy === 'unwrap') parent.push(...frame.children)
+    else parent.push({ k: 'htmlEl', tag: frame.tag, attrs: frame.attrs, children: frame.children })
+  }
+}
+
 /** 노드의 자식들을 인라인 목록으로 만든다. 자식 사이의 빈 구간은 평문이다.
  *
  *  **limit 이 왜 필요한가**: 이 함수는 자식 노드 *사이*의 원문을 평문으로 취한다. 그래서 범위를
@@ -330,11 +565,28 @@ function inlineOf(node: SyntaxNode, ctx: Ctx, limit?: { from: number; to: number
   const lo = limit ? limit.from : node.from
   const hi = limit ? limit.to : node.to
   const out: MdInline[] = []
+  /** HTMLTag 조각과 그것이 out 의 어느 자리에 있었는지. 여는 태그와 닫는 태그가 각각 다른
+   *  HTMLTag 노드로 오므로 여기서 접으면 짝을 못 찾는다 — 원문만 모아 두고 이 함수 끝에서
+   *  weaveHtml 로 한 번에 접는다 */
+  const htmlChunks: { at: number; src: string }[] = []
+  // HTMLTag 는 out 에 아무것도 밀어넣지 않고 위치만 기록한다. 그런데 pushText 는 인접한 텍스트를
+  // 합친다(파일 전체의 불변식, 건드리지 않는다) — 그래서 태그 앞뒤의 평문이 태그를 사이에 두고도
+  // 하나로 합쳐질 수 있고, 그러면 기록해 둔 at 자리가 틀어진다(`<kbd>` 앞의 "press "와 뒤의
+  // "Ctrl"이 합쳐지면 kbd 의 자식이 사라진다 — TDD 로 확인됨). sealFrom 은 "이 시점 이후로 out 에
+  // 아직 아무것도 안 밀어넣었다"를 표시한다. out.length 가 sealFrom 과 같으면 다음 텍스트는
+  // 무조건 새 자리를 받는다 — 무엇이든 실제로 밀어넣히면(텍스트든 다른 노드든) out.length 가
+  // 늘어나 이 비교가 저절로 거짓이 되므로 따로 해제할 필요가 없다.
+  let sealFrom = -1
+  const emitText = (text: string): void => {
+    if (!text) return
+    if (out.length === sealFrom) out.push({ k: 'text', text })
+    else pushText(out, text)
+  }
   let pos = lo
   for (let c = node.firstChild; c; c = c.nextSibling) {
     // 범위 밖의 자식은 건너뛴다 — 제목의 `#`, 링크의 URL·제목처럼 화면에 나오지 않는 부분이다
     if (c.to <= lo || c.from >= hi) continue
-    if (c.from > pos) pushText(out, ctx.text.slice(pos, c.from))
+    if (c.from > pos) emitText(ctx.text.slice(pos, c.from))
     pos = c.to
     switch (c.name) {
       case 'StrongEmphasis':
@@ -359,7 +611,7 @@ function inlineOf(node: SyntaxNode, ctx: Ctx, limit?: { from: number; to: number
         const target = linkTarget(c, ctx)
         // 대상이 없거나(정의 미해결) 허용 스킴이 아니면 링크를 만들지 않고 원문을 평문으로 남긴다
         if (!target || classifyHref(target.dest) === null) {
-          pushText(out, ctx.text.slice(c.from, c.to))
+          emitText(ctx.text.slice(c.from, c.to))
           break
         }
         out.push({ k: 'link', href: target.dest, title: target.title, children: linkChildren(c, ctx) })
@@ -368,7 +620,7 @@ function inlineOf(node: SyntaxNode, ctx: Ctx, limit?: { from: number; to: number
       case 'Image': {
         const target = linkTarget(c, ctx)
         if (!target || classifyHref(target.dest) === null) {
-          pushText(out, ctx.text.slice(c.from, c.to))
+          emitText(ctx.text.slice(c.from, c.to))
           break
         }
         const marks = c.getChildren('LinkMark')
@@ -399,12 +651,12 @@ function inlineOf(node: SyntaxNode, ctx: Ctx, limit?: { from: number; to: number
         // 이어붙여 완전한 URL 을 복원하지는 않는다 — 이미 평문으로 내보낸 조각과 아직 안 본
         // 조각을 넘나드는 것은 이 파일이 이미 두 번 벌준 종류의 잔재주다(Task 3 리뷰 1·2 라운드).
         if (/[a-z][a-z0-9+.-]*:\/\/$/i.test(ctx.text.slice(0, c.from))) {
-          pushText(out, text)
+          emitText(text)
           break
         }
         const href = autolinkHref(text)
         if (classifyHref(href) === null) {
-          pushText(out, text)
+          emitText(text)
           break
         }
         out.push({ k: 'link', href, title: null, children: [{ k: 'text', text }] })
@@ -415,18 +667,40 @@ function inlineOf(node: SyntaxNode, ctx: Ctx, limit?: { from: number; to: number
         break
       case 'Escape':
         // `\*` 는 두 글자 노드다. 백슬래시를 버리고 뒤 글자만 남긴다
-        pushText(out, ctx.text.slice(c.from + 1, c.to))
+        emitText(ctx.text.slice(c.from + 1, c.to))
         break
       case 'Entity':
         // &amp; 같은 것. 지금은 원문 그대로 둔다 — 엔티티 표를 들이는 것은 이 범위가 아니다
-        pushText(out, ctx.text.slice(c.from, c.to))
+        emitText(ctx.text.slice(c.from, c.to))
+        break
+      case 'HTMLTag':
+        // 여는 태그와 닫는 태그가 각각 다른 HTMLTag 노드로 온다. 여기서 접으면 짝을 못 찾으므로
+        // 원문을 모아 두고 inlineOf 의 끝에서 한 번에 접는다
+        htmlChunks.push({ at: out.length, src: ctx.text.slice(c.from, c.to) })
+        sealFrom = out.length
         break
       default:
-        if (!INLINE_SKIP.has(c.name)) pushText(out, ctx.text.slice(c.from, c.to))
+        if (!INLINE_SKIP.has(c.name)) emitText(ctx.text.slice(c.from, c.to))
     }
   }
-  if (pos < hi) pushText(out, ctx.text.slice(pos, hi))
-  return out
+  if (pos < hi) emitText(ctx.text.slice(pos, hi))
+  if (htmlChunks.length === 0) return out
+  return weaveHtml(out, htmlChunks)
+}
+
+/** 이미 만든 인라인 목록과 HTMLTag 조각을 원래 순서대로 엮어 접는다.
+ *
+ *  이미 만들어진 노드는 HtmlToken 의 텍스트 자리에 그대로 끼워 넣는다 — foldInline 이 스택으로
+ *  짝을 맞추므로, `<b>` 와 `</b>` 사이에 있던 노드들이 그 요소의 자식이 된다. */
+function weaveHtml(nodes: MdInline[], chunks: { at: number; src: string }[]): MdInline[] {
+  const tokens: FoldToken[] = []
+  let cursor = 0
+  for (const chunk of chunks) {
+    while (cursor < chunk.at) tokens.push({ t: 'node', node: nodes[cursor++] })
+    tokens.push(...lexHtml(chunk.src))
+  }
+  while (cursor < nodes.length) tokens.push({ t: 'node', node: nodes[cursor++] })
+  return foldInline(tokens)
 }
 
 const ATX = /^ATXHeading([1-6])$/
