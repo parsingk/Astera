@@ -454,8 +454,9 @@ automatically. After receiving `worker_done`, pick one of these **yourself**:
   command that undoes it** — see 4.3.
 
 **Do not try to move a Task's state by hand after `worker_done`.** `worker_done` already settles the
-Dispatch, and the Task too — to a terminal state (`completed`/`failed`) directly, or to `validating`
-first if the Task has `--validate` attached (section 2).
+Dispatch, and the Task too — to a terminal state (`completed`/`failed`) directly, or through
+`validating` first if the Task has `--validate`, and through `reviewing` if it has `--review`
+(both, in that order, when it has both — section 2).
 
 `task-update --id <tsk> --status <s>` is **not for the normal flow.** It bypasses the state transition
 table, so use it only as an escape hatch for a stranded Task — for example, a Task stuck at `failed`
@@ -466,9 +467,12 @@ it leaves a record of the bypass in the app log. Once corrected, Tasks that depe
 **`task-update` resets that Task's `consecutiveFailures` (the circuit counter) to 0.** So even a Task
 whose circuit opened after 3 failures can be dispatched again after
 `task-update --id <tsk> --status ready` — because it means a human checked the cause and cleared it.
-This is the only escape hatch that opens the circuit (the other two paths to a zero counter are a
-worker's `worker_done --outcome succeeded` on a Task with no `--validate`, and a validation that
-exits `0` — and both are unreachable while dispatching is blocked).
+This is the only escape hatch that opens the circuit. The other paths to a zero counter all end at
+`completed` and are unreachable while dispatching is blocked: a worker's `worker_done --outcome
+succeeded` on a Task with neither `--validate` nor `--review`, a validation that exits `0` on a Task
+with no `--review`, and a passing review. **Reaching `validating` or `reviewing` does not reset it** —
+otherwise a Task that never passes them would go 0 → 1 on every attempt and the circuit would never
+break.
 **Do not reach for it out of habit without checking the cause** — that makes the circuit breaker
 meaningless and repeats the same failure indefinitely.
 
