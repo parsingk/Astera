@@ -71,6 +71,13 @@ describe('langForFence', () => {
     // 이 저장소에는 셸용 CM6 언어 패키지가 없다. 색 없이 그린다
     expect(langForFence('bash')).toBe(null)
   })
+  // 대괄호 lookup 이 Object.prototype 으로 새면 함수·객체가 LangKey 인 것처럼 돌아온다 — own() 이
+  // 그것을 막는다(own() 이 없다면 이 두 값은 각각 Object 함수와 Object.prototype 이 되어 null 이
+  // 아니게 된다)
+  it("'constructor'·'__proto__' 는 Object.prototype 으로 새지 않고 null", () => {
+    expect(langForFence('constructor')).toBe(null)
+    expect(langForFence('__proto__')).toBe(null)
+  })
 })
 
 describe('toAnchors', () => {
@@ -104,6 +111,28 @@ describe('toAnchors', () => {
   it('줄번호가 유한수가 아니면 버린다', () => {
     const input = [{ line: 0, top: 0 }, { line: NaN, top: 5 }, { line: 10, top: 100 }]
     expect(toAnchors(input)).toEqual([{ line: 0, top: 0 }, { line: 10, top: 100 }])
+  })
+  // 닫힌 <details> 안의 모든 줄은 offsetTop 이 0(숨겨진 요소)이라 host.offsetTop 을 빼면 음수가 된다.
+  // 줄번호는 계속 늘어나는데 top 이 그 구간에서 거꾸로 떨어지면 topForLine/lineForTop 의 한 방향
+  // 훑기가 전제하는 "top 도 오름차순"이 깨진다 — 그 구간을 통째로 버려서 나머지가 오름차순을 유지한다
+  it('top 이 직전보다 작아지는 항목(닫힌 <details> 등)은 버린다', () => {
+    const input = [
+      { line: 0, top: 0 },
+      { line: 5, top: 100 },
+      // <details> 안의 줄들 — 숨겨져 있어 top 이 음수로 떨어진다
+      { line: 6, top: -20 },
+      { line: 7, top: -18 },
+      { line: 10, top: 300 }
+    ]
+    expect(toAnchors(input)).toEqual([
+      { line: 0, top: 0 },
+      { line: 5, top: 100 },
+      { line: 10, top: 300 }
+    ])
+  })
+  it('직전과 같은 top 은 버리지 않는다(내림차순만 막는다)', () => {
+    const input = [{ line: 0, top: 10 }, { line: 5, top: 10 }, { line: 10, top: 20 }]
+    expect(toAnchors(input)).toEqual(input)
   })
 })
 

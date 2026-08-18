@@ -4,6 +4,7 @@
  *  아니라 여기에 있다 (edit.ts·icons.ts 와 같은 자리). */
 
 import type { LangKey } from './edit'
+import { own } from './imageMime'
 
 export type MdViewMode = 'editor' | 'split' | 'preview'
 
@@ -71,7 +72,10 @@ export function langForFence(info: string): LangKey | null {
   // ```ts title="foo.ts" 처럼 info 뒤에 메타를 붙이는 관례가 널리 쓰이므로 첫 낱말만 본다
   const first = info.trim().split(/\s+/)[0]?.toLowerCase()
   if (!first) return null
-  return LANG_BY_FENCE[first] ?? null
+  // 대괄호 lookup(LANG_BY_FENCE[first])은 'constructor'·'__proto__' 같은 낱말에서 Object.prototype 으로
+  // 새어, LangKey 가 아닌 함수·객체를 LangKey 인 것처럼 돌려준다 — ```constructor``` 펜스가 그 예다.
+  // imageMime.ts 의 own() 이 이미 같은 모양의 표를 위해 이 방어를 갖고 있어 그대로 쓴다.
+  return own(LANG_BY_FENCE, first) ?? null
 }
 
 /** 프리뷰의 (원문 줄번호, 요소 offsetTop) 짝. 줄번호 오름차순으로 정렬되어 있어야 한다. */
@@ -89,12 +93,21 @@ export interface ScrollAnchor {
  *  시작 줄을 물려주는 경우) 문서 순서상 먼저 온 것(바깥 요소, 또는 먼저 만난 요소)을 남긴다 —
  *  `Array.prototype.sort` 가 안정 정렬이라 같은 줄 값을 가진 항목들은 정렬 뒤에도 입력 순서 그대로
  *  인접하게 되므로, 정렬 다음에 인접한 중복만 걸러도 "먼저 만난 것"이 항상 남는다. 이 성질 덕분에
- *  중복이 입력에서 서로 떨어져 있어도(사이에 다른 줄이 끼어 있어도) 정확히 동작한다. */
+ *  중복이 입력에서 서로 떨어져 있어도(사이에 다른 줄이 끼어 있어도) 정확히 동작한다.
+ *
+ *  **`top` 도 오름차순이어야 한다 — 그런데 원본 쌍은 그것을 보장하지 않는다.** 접힌(닫힌) `<details>`
+ *  안의 모든 줄은 `offsetTop`이 0이다(숨겨진 요소라 레이아웃을 갖지 않는다) — `rebuildAnchors`가 적어
+ *  넣는 값은 `0 - host.offsetTop`, 즉 음수다. 줄번호는 오름차순으로 계속 늘어나는데 top은 그 구간에서
+ *  거꾸로 떨어지는 것이다. topForLine·lineForTop 은 각각 한 방향으로만 훑으며(`while (... anchors[i+1]
+ *  ... <= ...) i++`) 그 전제(줄과 top 이 함께 오름차순)에 기대므로, 어긋난 쌍이 하나라도 끼어들면
+ *  그 지점부터 두 함수 모두 엉뚱한 자리를 가리킨다. 그래서 줄 중복 제거와 같은 자리에서, 직전에 남긴
+ *  것보다 top 이 작아지는 항목은 버린다 — 실행 중 최댓값(running max)을 유지하는 것과 같다. */
 export function toAnchors(pairs: { line: number; top: number }[]): ScrollAnchor[] {
   const sorted = pairs.filter((p) => Number.isFinite(p.line)).sort((a, b) => a.line - b.line)
   const out: ScrollAnchor[] = []
   for (const p of sorted) {
     if (out.length > 0 && out[out.length - 1].line === p.line) continue
+    if (out.length > 0 && p.top < out[out.length - 1].top) continue
     out.push(p)
   }
   return out

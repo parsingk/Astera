@@ -18,8 +18,9 @@ const IMAGE_MIME: Record<string, string> = {
 /** Looks up only the table's own keys. A plain object literal's bracket lookup otherwise falls through
  *  to Object.prototype for names like `constructor` or `__proto__`, returning a truthy, stringifiable
  *  value (a function, an object) instead of undefined — the same defence as icons.ts's `own`, needed
- *  here for the same reason. */
-function own<T>(table: Record<string, T>, key: string): T | undefined {
+ *  here for the same reason. Exported so markdownView.ts's LANG_BY_FENCE lookup (the same shape of
+ *  table, the same risk) can reuse it instead of growing a second copy. */
+export function own<T>(table: Record<string, T>, key: string): T | undefined {
   return Object.hasOwn(table, key) ? table[key] : undefined
 }
 
