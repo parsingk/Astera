@@ -74,7 +74,6 @@ export function createRun(
     id: newId('run'),
     objective: a.objective,
     cwd: a.cwd,
-    status: 'open',
     createdAt: now
   }
   return ok({ ...s, runs: [...s.runs, run] }, run)

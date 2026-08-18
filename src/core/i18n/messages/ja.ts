@@ -699,5 +699,6 @@ export const ja: Catalog = {
   'jobs.empty.hint': 'コーディネーターセッションでジョブを作成すると、ここに表示されます',
   'jobs.progress': '{done}/{total}',
   'jobs.completed': '完了',
+  'jobs.failed': '失敗',
   'jobs.gates.more': '他 {count} 件'
 }

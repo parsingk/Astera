@@ -20,7 +20,6 @@ export interface Run {
   id: string
   objective: string
   cwd: string
-  status: 'open' | 'closed'
   createdAt: string
 }
 

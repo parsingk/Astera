@@ -1428,3 +1428,59 @@ describe("send --type worker_done --outcome failed: 한도 탐침", () => {
     expect(deps.getState().messages.some((m) => m.id === 'msg_concurrent')).toBe(true)
   })
 })
+
+describe('run-create — cwd 정규화', () => {
+  it('해석기가 주입되면 그것이 돌려준 값을 cwd로 저장한다', async () => {
+    const deps = makeDeps()
+    deps.resolveProjectRoot = async () => 'D:/proj'
+    const r = await call(deps, 'run-create', { objective: '목표', cwd: 'D:/proj/src/main' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().runs[0].cwd).toBe('D:/proj')
+  })
+
+  it('해석기에 주어진 --cwd 를 그대로 넘긴다', async () => {
+    const deps = makeDeps()
+    const seen: string[] = []
+    deps.resolveProjectRoot = async (cwd) => {
+      seen.push(cwd)
+      return 'D:/proj'
+    }
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/proj/src/main' })
+    expect(seen).toEqual(['D:/proj/src/main'])
+  })
+
+  // 선택적 의존성 관례 — 주입하지 않는 기존 호출자(테스트 포함)는 그대로 동작해야 한다
+  it('해석기가 없으면 주어진 --cwd 를 그대로 저장한다', async () => {
+    const deps = makeDeps()
+    const r = await call(deps, 'run-create', { objective: '목표', cwd: 'D:/proj/src/main' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().runs[0].cwd).toBe('D:/proj/src/main')
+  })
+
+  // 배선(ipc.ts)은 계정마다 파일시스템을 훑고 git 까지 부른다. 거기서 난 실패가 Run 생성을
+  // 막으면 코디네이터가 아무 작업도 시작하지 못한다 — handleExit 이 probeLimit 을 감싼 것과 같다
+  it('해석기가 실패하면 주어진 --cwd 를 그대로 저장한다', async () => {
+    const deps = makeDeps()
+    const logged: string[] = []
+    deps.log = (m) => logged.push(m)
+    deps.resolveProjectRoot = async () => {
+      throw new Error('EACCES')
+    }
+    const r = await call(deps, 'run-create', { objective: '목표', cwd: 'D:/proj/src/main' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().runs[0].cwd).toBe('D:/proj/src/main')
+    expect(logged.some((m) => m.includes('EACCES'))).toBe(true)
+  })
+
+  it('objective 가 비면 정규화 이전에 거절한다', async () => {
+    const deps = makeDeps()
+    let called = false
+    deps.resolveProjectRoot = async (cwd) => {
+      called = true
+      return cwd
+    }
+    const r = await call(deps, 'run-create', { objective: '  ', cwd: 'D:/proj' })
+    expect(r.status).toBe(400)
+    expect(called).toBe(false)
+  })
+})

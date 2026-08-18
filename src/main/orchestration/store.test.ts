@@ -16,7 +16,7 @@ afterEach(async () => {
 const NOW = '2026-08-04T00:00:00.000Z'
 const withOpenDispatch = (): OrchState => ({
   ...emptyState(),
-  runs: [{ id: 'run_1', objective: 'o', cwd: 'D:/p', status: 'open', createdAt: NOW }],
+  runs: [{ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
   tasks: [
     {
       id: 'tsk_1',
@@ -108,7 +108,7 @@ describe('OrchestrationStore', () => {
     const file = path.join(dir, 'orchestration.json')
     const old = new Date(Date.now() - RUN_TTL_MS - 1000).toISOString()
     const s = withOpenDispatch()
-    s.runs[0] = { ...s.runs[0], status: 'closed', createdAt: old }
+    s.runs[0] = { ...s.runs[0], createdAt: old }
     s.dispatches[0] = { ...s.dispatches[0], endedAt: old, outcome: 'succeeded' }
     s.tasks[0] = { ...s.tasks[0], status: 'completed', updatedAt: old }
     await fs.writeFile(file, JSON.stringify(s), 'utf8')
@@ -123,7 +123,6 @@ describe('OrchestrationStore', () => {
   it('TTL 이내의 종료 Run은 남긴다', async () => {
     const file = path.join(dir, 'orchestration.json')
     const s = withOpenDispatch()
-    s.runs[0] = { ...s.runs[0], status: 'closed' }
     s.dispatches[0] = { ...s.dispatches[0], endedAt: NOW, outcome: 'succeeded' }
     s.tasks[0] = { ...s.tasks[0], status: 'completed' }
     await fs.writeFile(file, JSON.stringify(s), 'utf8')
@@ -146,7 +145,7 @@ describe('OrchestrationStore', () => {
     const file = path.join(dir, 'orchestration.json')
     const old = new Date(Date.now() - RUN_TTL_MS - 1000).toISOString()
     const s = withOpenDispatch()
-    s.runs[0] = { ...s.runs[0], status: 'open', createdAt: old }
+    s.runs[0] = { ...s.runs[0], createdAt: old }
     s.dispatches[0] = { ...s.dispatches[0], endedAt: NOW, outcome: 'succeeded' }
     s.tasks[0] = { ...s.tasks[0], status: 'completed', updatedAt: NOW }
     await fs.writeFile(file, JSON.stringify(s), 'utf8')
@@ -160,7 +159,7 @@ describe('OrchestrationStore', () => {
     const file = path.join(dir, 'orchestration.json')
     const old = new Date(Date.now() - RUN_TTL_MS - 1000).toISOString()
     const s = withOpenDispatch()
-    s.runs[0] = { ...s.runs[0], status: 'closed', createdAt: old }
+    s.runs[0] = { ...s.runs[0], createdAt: old }
     s.dispatches[0] = { ...s.dispatches[0], endedAt: old, outcome: 'succeeded' }
     s.tasks[0] = { ...s.tasks[0], status: 'completed', updatedAt: old }
     s.messages = [
@@ -207,7 +206,7 @@ describe('OrchestrationStore', () => {
   describe('save 직렬화', () => {
     const runState = (id: string): OrchState => ({
       ...emptyState(),
-      runs: [{ id, objective: id, cwd: 'D:/p', status: 'open', createdAt: NOW }]
+      runs: [{ id, objective: id, cwd: 'D:/p', createdAt: NOW }]
     })
 
     /** 그 tmp 파일이 first의 상태를 담고 있는가. 도착 순서(몇 번째 rename인가)로 판정하면
@@ -264,7 +263,7 @@ describe('OrchestrationStore', () => {
     const file = path.join(dir, 'orchestration.json')
     const old = new Date(Date.now() - RUN_TTL_MS - 1000).toISOString()
     const s = withOpenDispatch()
-    s.runs[0] = { ...s.runs[0], status: 'closed', createdAt: old }
+    s.runs[0] = { ...s.runs[0], createdAt: old }
     s.dispatches[0] = { ...s.dispatches[0], endedAt: old, outcome: 'succeeded' }
     s.tasks[0] = { ...s.tasks[0], status: 'completed', updatedAt: old }
     s.messages = [
