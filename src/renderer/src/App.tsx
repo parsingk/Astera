@@ -10,7 +10,9 @@ import { HistoryBrowser } from './components/HistoryBrowser'
 import { Select } from './components/Select'
 import { type FileTab } from './components/WorkbenchTabs'
 import { FileEditor } from './components/FileEditor'
+import { MarkdownSplit } from './components/MarkdownSplit'
 import type { EditorState, StateEffect } from '@codemirror/state'
+import type { EditorView } from '@codemirror/view'
 import { EditorStateCache } from './lib/editorStateCache'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { JobsView } from './components/JobsView'
@@ -38,6 +40,7 @@ import {
 import { applyEol, classifyExternalChange, detectEol, toLf, type Eol } from '../../core/files/edit'
 import { isSubPath, rebasePath } from '../../core/files/ops'
 import { parentDir } from '../../core/files/paths'
+import { cycleViewMode, isMdViewMode, type MdViewMode } from '../../core/files/markdownView'
 import type { UndoEntry } from '../../core/files/undo'
 import * as sessionBus from './lib/sessionBus'
 import { toast } from './lib/toast'
@@ -403,6 +406,15 @@ export default function App(): React.JSX.Element {
     conflict: boolean
   }
   const [fileBuffers, setFileBuffers] = useState<Record<string, FileBuffer>>({}) // file buffers — editing, saving, external changes
+  /** 파일 탭별 마크다운 뷰 모드. fileTabs·fileBuffers 와 같은 자리에 두는 이유는 탭이 닫힐 때
+   *  함께 지워져야 하기 때문이다. 마지막으로 고른 모드는 localStorage 에 남아 새로 여는 .md 탭의
+   *  기본값이 된다 — cm.sidebarWidth 와 같은 관례다 */
+  const [mdModes, setMdModes] = useState<Record<string, MdViewMode>>({})
+  const mdModesRef = useRef(mdModes)
+  mdModesRef.current = mdModes
+  /** 파일 탭별 EditorView. 스크롤 동기화가 그 뷰를 읽어야 하고, 뷰가 생기는 시점은 FileEditor 의
+   *  마운트라 ref 로는 렌더가 다시 돌지 않는다 — 그래서 상태다 */
+  const [mdViews, setMdViews] = useState<Record<string, EditorView | null>>({})
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     // 500 rather than the original 280. Account rows carry a provider badge, the label, the `default`
     // badge and a login dot, and the history and worktree panels below them hold paths, so the default
@@ -419,6 +431,15 @@ export default function App(): React.JSX.Element {
   sessionsRef.current = sessions
   const activeFileIdRef = useRef(activeFileId)
   activeFileIdRef.current = activeFileId
+  const MD_MODE_KEY = 'cm.md.viewMode'
+  const defaultMdMode = (): MdViewMode => {
+    const stored = localStorage.getItem(MD_MODE_KEY)
+    return isMdViewMode(stored) ? stored : 'split'
+  }
+  const setMdMode = (tabId: string, mode: MdViewMode): void => {
+    localStorage.setItem(MD_MODE_KEY, mode)
+    setMdModes((prev) => ({ ...prev, [tabId]: mode }))
+  }
   const layoutRef = useRef(layout)
   layoutRef.current = layout
   const activePaneIdRef = useRef(activePaneId)
@@ -690,6 +711,22 @@ export default function App(): React.JSX.Element {
         e.stopPropagation()
         if (e.repeat) return // stops tabs closing in a chain while the key is held
         void closeFileTab(id)
+        return
+      }
+      // 마크다운 프리뷰 모드 순환. 활성 탭이 .md 일 때만 의미가 있다. 툴바 버튼은 모드를 직접
+      // 지정하고 이 키만 순환한다 — 두 진입점의 역할이 다르다.
+      // CM6 안에서도 동작해야 한다(explorer.toggleMode 와 같은 예외): 편집하다가 결과를 보려고
+      // 누르는 키인데 에디터에 포커스가 있을 때 막히면 쓸 수 없다
+      if (action === 'explorer.cyclePreview') {
+        const id = activeFileIdRef.current
+        if (!id) return
+        const tab = fileTabsRef.current.find((tb) => tb.id === id)
+        if (!tab || !isMarkdownPath(tab.path)) return
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return
+        const cur = mdModesRef.current[id] ?? defaultMdMode()
+        setMdMode(id, cycleViewMode(cur))
         return
       }
       // Pane splitting — by default Ctrl+\ to the right, Ctrl+Shift+\ below. The same place VS Code
@@ -1056,6 +1093,10 @@ export default function App(): React.JSX.Element {
       const { [id]: _drop, ...rest } = prev
       return rest
     })
+    setMdModes((prev) => {
+      const { [id]: _drop, ...rest } = prev
+      return rest
+    })
     // 트리에서도 뺀다. 다음에 무엇이 활성이 되는지는 removeTab이 정한다(세션 탭을 닫을 때와 같은 규칙),
     // 그러면 activeFileId는 파생값이므로 저절로 따라온다. 여기서 ref를 직접 맞춰 두는 것은 연쇄로 닫힐
     // 때(폴더 삭제) 다음 반복이 렌더 전의 낡은 값을 읽지 않게 하기 위해서다 — closeFileTab 위쪽의
@@ -1209,6 +1250,7 @@ export default function App(): React.JSX.Element {
     fileTabsRef.current = []
     setFileTabs([])
     setFileBuffers({})
+    setMdModes({})
     explorerTreesRef.current.clear()
     explorerClipboardRef.current = null
     // This is the point where the explorer is abandoned entirely, so the undo journal and the per-file
@@ -1493,10 +1535,35 @@ export default function App(): React.JSX.Element {
    *  FileEditor는 로딩·오류 중에도 언마운트되면 안 된다 — 언마운트는 EditorView를 destroy하고 되돌리기
    *  이력을 지운다. 그래서 오버레이는 위에 덮을 뿐이고, 활성 탭이 세션으로 바뀔 때도 슬롯이 display로만
    *  숨는다(PaneGrid의 lastFileOfPane). */
+  /** 마크다운으로 다룰 확장자. edit.ts 의 LANG_BY_EXT 가 markdown 으로 잡는 둘과 같다 */
+  const isMarkdownPath = (p: string): boolean => /\.(md|markdown)$/i.test(p)
   const renderEditor = (_paneId: string, fileTabId: string, focused: boolean): React.ReactNode => {
     const f = fileTabs.find((t) => t.id === fileTabId)
     const buf = fileBuffers[fileTabId]
     if (!f || !buf) return null
+    const editor = (
+      <FileEditor
+        path={f.path}
+        content={buf.content}
+        readOnly={buf.readOnly}
+        cache={editorCacheRef.current}
+        focused={focused}
+        onRetire={retireEditorState}
+        onViewChange={(view) => setMdViews((prev) => ({ ...prev, [f.id]: view }))}
+        // 에디터가 알려 준 경로로 대상을 찾는다. 그리고 있는 파일과 다르면 그 편집은 뷰가 아직
+        // 갈아타지 않은 옛 문서의 것이므로 버린다
+        onChange={(fromPath, next) => {
+          const target = fileTabsRef.current.find((t) => t.path === fromPath)
+          if (!target || target.id !== f.id) return
+          setBufferContent(target.id, next)
+        }}
+        onSave={(fromPath) => {
+          const target = fileTabsRef.current.find((t) => t.path === fromPath)
+          if (target) saveFile(target.id)
+        }}
+      />
+    )
+    const md = isMarkdownPath(f.path)
     return (
       <div className="workbench-body">
         <div className="file-editor-wrap">
@@ -1510,25 +1577,20 @@ export default function App(): React.JSX.Element {
               <button onClick={() => setFileBuffers((prev) => (prev[f.id] ? { ...prev, [f.id]: { ...prev[f.id], conflict: false } } : prev))}>{t('files.editor.keepMine')}</button>
             </div>
           )}
-          <FileEditor
-            path={f.path}
-            content={buf.content}
-            readOnly={buf.readOnly}
-            cache={editorCacheRef.current}
-            focused={focused}
-            onRetire={retireEditorState}
-            // 에디터가 알려 준 경로로 대상을 찾는다. 그리고 있는 파일과 다르면 그 편집은 뷰가 아직
-            // 갈아타지 않은 옛 문서의 것이므로 버린다
-            onChange={(fromPath, next) => {
-              const target = fileTabsRef.current.find((t) => t.path === fromPath)
-              if (!target || target.id !== f.id) return
-              setBufferContent(target.id, next)
-            }}
-            onSave={(fromPath) => {
-              const target = fileTabsRef.current.find((t) => t.path === fromPath)
-              if (target) saveFile(target.id)
-            }}
-          />
+          {md ? (
+            <MarkdownSplit
+              mode={mdModes[f.id] ?? defaultMdMode()}
+              onModeChange={(mode) => setMdMode(f.id, mode)}
+              text={buf.content}
+              docPath={f.path}
+              onOpenFile={(abs) => openFile(abs)}
+              onSave={() => saveFile(f.id)}
+              editor={editor}
+              editorView={mdViews[f.id] ?? null}
+            />
+          ) : (
+            editor
+          )}
           {buf.loading && <div className="file-overlay">{t('files.editor.loading')}</div>}
           {!buf.loading && buf.error && <div className="file-overlay">{buf.error}</div>}
         </div>

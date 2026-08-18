@@ -151,6 +151,9 @@ describe('findActionForEvent', () => {
     expect(findActionForEvent(bindings, ev({ code: 'PageUp', ctrlKey: true }), ACTIONS)).toBe(
       'sessionTab.prev'
     )
+    expect(
+      findActionForEvent(bindings, ev({ code: 'KeyV', ctrlKey: true, shiftKey: true }), ACTIONS)
+    ).toBe('explorer.cyclePreview')
   })
 
   it('바인딩이 없으면 null', () => {
@@ -160,6 +163,10 @@ describe('findActionForEvent', () => {
 
 describe('findConflicts — 같은 키가 두 액션에 걸리면', () => {
   it('충돌이 없으면 빈 배열', () => {
+    expect(findConflicts(resolveBindings({}, ACTIONS), ACTIONS)).toEqual([])
+  })
+
+  it('기본 바인딩끼리는 충돌하지 않는다', () => {
     expect(findConflicts(resolveBindings({}, ACTIONS), ACTIONS)).toEqual([])
   })
 

@@ -274,6 +274,7 @@ export const ja: Catalog = {
   'shortcut.explorer.toggleMode': 'エクスプローラーの表示/非表示',
   'shortcut.explorer.saveFile': 'ファイルを保存',
   'shortcut.explorer.closeFileTab': 'ファイルタブを閉じる',
+  'shortcut.explorer.cyclePreview': 'マークダウンプレビューモードの切り替え',
   'shortcut.explorer.rename': '名前の変更',
   'shortcut.explorer.delete': '削除',
   'shortcut.explorer.selectAll': 'すべて選択',

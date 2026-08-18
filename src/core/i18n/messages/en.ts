@@ -227,6 +227,7 @@ export const en: Record<keyof typeof ko, string> = {
   'shortcut.explorer.toggleMode': 'Show/hide explorer',
   'shortcut.explorer.saveFile': 'Save file',
   'shortcut.explorer.closeFileTab': 'Close file tab',
+  'shortcut.explorer.cyclePreview': 'Cycle markdown preview mode',
   'shortcut.explorer.rename': 'Rename',
   'shortcut.explorer.delete': 'Delete',
   'shortcut.explorer.selectAll': 'Select all',

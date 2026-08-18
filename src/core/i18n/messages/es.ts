@@ -277,6 +277,7 @@ export const es: Catalog = {
   'shortcut.explorer.toggleMode': 'Mostrar/ocultar el explorador',
   'shortcut.explorer.saveFile': 'Guardar el archivo',
   'shortcut.explorer.closeFileTab': 'Cerrar la pestaña de archivo',
+  'shortcut.explorer.cyclePreview': 'Cambiar el modo de vista previa de markdown',
   'shortcut.explorer.rename': 'Cambiar nombre',
   'shortcut.explorer.delete': 'Eliminar',
   'shortcut.explorer.selectAll': 'Seleccionar todo',

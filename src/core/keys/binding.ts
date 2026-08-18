@@ -18,6 +18,7 @@ export type Chord = { ctrl: boolean; shift: boolean; alt: boolean; meta: boolean
 export type ActionId =
   | 'explorer.toggleMode'
   | 'explorer.closeFileTab'
+  | 'explorer.cyclePreview'
   | 'sessionTab.prev'
   | 'sessionTab.next'
   | 'pane.splitRight'
@@ -75,6 +76,13 @@ export function makeActions(platform: string): readonly ActionSpec[] {
       descKey: 'shortcut.explorer.closeFileTab',
       // On win32, Ctrl+W yields to the terminal's 'delete previous word'. On mac, Cmd+W has no competitor.
       yieldsToTerminal: !mac
+    },
+    {
+      id: 'explorer.cyclePreview',
+      defaults: [`${M}+Shift+V`],
+      descKey: 'shortcut.explorer.cyclePreview',
+      // 마크다운 파일 탭에서만 의미가 있고 터미널에는 경쟁자가 없다
+      yieldsToTerminal: false
     },
     {
       id: 'sessionTab.prev',
