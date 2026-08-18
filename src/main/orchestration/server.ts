@@ -153,8 +153,11 @@ const COORDINATOR_ONLY = new Set([
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null)
 
-// TaskStatus 유니온에서 파생되지 않는 손수 쓴 목록이다 — 빠뜨려도 컴파일은 통과하고,
-// `task-list --status validating` 이 "must be one of ..." 로 거절되는 것이 유일한 증상이다.
+// TaskStatus 유니온에서 파생되지 않는 손수 쓴 목록이다 — 빠뜨려도 컴파일은 통과한다.
+// 유일한 증상은 `task-update --status <빠진 상태>` 가 "must be one of ..." 로 거절되는 것이다:
+// isTaskStatus 를 쓰는 자리는 그 명령 하나뿐이고(아래 task-update), task-list 는 --status 를
+// 검증하지 않는다(모르는 값이면 조용히 빈 목록이 된다). 이 주석은 예전에 task-list 를 가리키고
+// 있었는데, 그 문장을 믿고 쓴 테스트는 아무것도 검증하지 못한다.
 const TASK_STATUSES: TaskStatus[] = [
   'pending',
   'ready',

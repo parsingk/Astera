@@ -1790,7 +1790,7 @@ describe('task-create --review 와 검토 라우팅', () => {
 
   // TASK_STATUSES 는 손수 쓴 목록이라 빠뜨려도 컴파일은 통과한다 — task-update가 그 목록으로
   // --status 를 검증하는 실제 지점이다(task-list는 필터일 뿐 검증하지 않는다).
-  it('task-list --status reviewing 이 거절되지 않는다', async () => {
+  it('task-update --status reviewing 이 거절되지 않는다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
     const task = await call(deps, 'task-create', { spec: '작업' })
