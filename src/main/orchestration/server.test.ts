@@ -1589,4 +1589,32 @@ describe('worker_done 이 검증을 시작한다', () => {
     expect(r.status).toBe(200)
     expect(deps.getState().tasks[0].status).toBe('validating')
   })
+
+  // 재전송(재시도 네트워크 요청 등)은 applyWorkerDone 이 상태를 바꾸지 않고 'alreadyReported' 를
+  // 돌려주는 문서화된 idempotent 경로다 — 이 경우 startValidation 을 다시 부르면 같은 cwd 에
+  // 검증이 중복으로 큐잉되고, 그 사이 Task 가 재시도돼 validating 으로 다시 들어왔다면 낡은
+  // 검증의 종료 코드가 새 시도를 정산해 버린다.
+  it('재전송된 worker_done 은 startValidation 을 다시 부르지 않는다', async () => {
+    const deps = makeDeps()
+    const started: { taskId: string; cwd: string }[] = []
+    deps.startValidation = (a) => void started.push(a)
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: '작업', validate: 'cfg1' })
+    const taskId = deps.getState().tasks[0].id
+    await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
+    const d = deps.getState().dispatches[0]
+    const args = {
+      type: 'worker_done',
+      taskId,
+      dispatchId: d.id,
+      outcome: 'succeeded',
+      subject: 's',
+      body: 'b'
+    }
+    await call(deps, 'send', args, d.sessionId)
+    expect(started).toHaveLength(1)
+    const r2 = await call(deps, 'send', args, d.sessionId)
+    expect(r2.body).toBe('alreadyReported')
+    expect(started).toHaveLength(1) // 재전송으로 다시 큐잉되지 않는다
+  })
 })

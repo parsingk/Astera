@@ -183,9 +183,10 @@ describe('TaskValidator', () => {
     expect(attempts).toEqual(['tsk_1'])
   })
 
-  // 자리를 비운 실행(사용자가 손으로 시작한 Run)이 끝나면, 기다리던 헤드가 다시 시작을 시도한다.
-  // 타이머 없이 그 종료 이벤트 자체가 재시도 신호다.
-  it('자리가 사용 중이라 기다리던 항목은, 그 자리를 비운 실행이 끝나면 시작한다', async () => {
+  // 자리를 비운 실행(사용자가 손으로 시작한 Run)이 끝나면, 기다리던 헤드가 다시 시작을 시도하고
+  // 이번에는 성공한다(started 가 true 로 바뀐다). 그 다음에 오는 종료는 이제 헤드 자신의 것이므로
+  // 재시도가 아니라 정산으로 이어져야 한다 — 이 왕복 전체가 이번 교정이 기대는 메커니즘이다.
+  it('자리가 사용 중이라 기다리던 항목은, 그 자리를 비운 실행이 끝나면 시작하고, 그 다음 종료로 정산된다', async () => {
     let busy = true
     const attempts: string[] = []
     const runner: ValidatorRunner = {
@@ -198,11 +199,74 @@ describe('TaskValidator', () => {
       },
       output: () => '출력'
     }
-    const v = new TaskValidator({ runner, onSettled: async () => {}, onCannotRun: async () => {} })
+    const { onSettled, calls } = settledCalls()
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
     v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
     await vi.waitFor(() => expect(attempts).toEqual(['tsk_1']))
     v.onRunExit({ cwd: 'D:/w1', exitCode: 0 }) // 자리를 비운 실행의 종료 — tsk_1 이 낸 것이 아니다
     await vi.waitFor(() => expect(attempts).toEqual(['tsk_1', 'tsk_1'])) // 다음 항목이 아니라 같은 헤드를 재시도한다
+    expect(calls).toHaveLength(0) // 재시도일 뿐이다 — 아직 정산되지 않았다
+    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 }) // 이번에는 tsk_1 자신의 종료다 — started 가 true 라서 정산된다
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0]).toEqual({ taskId: 'tsk_1', exitCode: 0, output: '출력' })
+  })
+
+  // startHead 는 onRunExit 의 재시도로 재진입할 수 있다 — 겹쳐 들어온 두 번째 종료가 runner.start 를
+  // 또 부르면, 첫 시도가 아직 진행 중인데도 같은 사용자 명령이 두 번 시작된다. 재진입은 조용히
+  // 아무 일도 하지 않아야 하고, 첫 시도가 끝난 뒤에는 다시 정상적으로 시작할 수 있어야 한다.
+  it('시작이 진행 중일 때 겹쳐 들어온 종료는 재진입해서 두 번째 시작을 만들지 않는다', async () => {
+    const attempts: string[] = []
+    let resolveFirst: (() => void) | undefined
+    const runner: ValidatorRunner = {
+      start: async (a) => {
+        attempts.push(a.taskId)
+        if (attempts.length === 1) {
+          await new Promise<void>((r) => (resolveFirst = r)) // 첫 시도를 제어 가능한 시점에 묶어 둔다
+          throw new ValidatorBusyError(a.cwd)
+        }
+      },
+      output: () => '출력'
+    }
+    const v = new TaskValidator({ runner, onSettled: async () => {}, onCannotRun: async () => {} })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    await vi.waitFor(() => expect(attempts).toHaveLength(1)) // 첫 시도가 걸려 있다
+
+    // 첫 시도가 끝나기 전에 종료가 겹쳐 들어온다 — 재진입을 시도하지만 아무 일도 해서는 안 된다
+    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 })
+    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(attempts).toHaveLength(1) // 겹친 재진입이 두 번째 시도를 만들지 않았다
+
+    resolveFirst?.() // 첫 시도가 (여전히 사용 중이라는) 실패로 끝난다
+    await new Promise((r) => setTimeout(r, 10))
+    expect(attempts).toHaveLength(1) // 시도가 끝났을 뿐, 저절로 다시 시도하지는 않는다
+
+    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 }) // 이 종료는 첫 시도가 끝난 뒤에 온다 — 재시도로 이어진다
+    await vi.waitFor(() => expect(attempts).toHaveLength(2))
+  })
+
+  // ValidatorBusyError 가 표준 경로지만, ipc.ts 의 사전 검사가 놓친 경우 RunManager 가 곧바로
+  // 'ALREADY_RUNNING: ...' 로 시작하는 평범한 Error 를 던질 수 있다 — 그 모양도 같은 지나가는
+  // 문제로 다뤄야 사전 검사와 실제 판정이 어긋나는 날에도 사람에게 잘못 묻지 않는다.
+  it('ValidatorBusyError 가 아니어도 ALREADY_RUNNING: 로 시작하는 메시지는 사용 중으로 다룬다', async () => {
+    const attempts: string[] = []
+    const cannotRun: string[] = []
+    const runner: ValidatorRunner = {
+      start: async (a) => {
+        attempts.push(a.taskId)
+        throw new Error(`ALREADY_RUNNING: ${a.cwd}`) // RunManager 가 직접 던지는 것과 같은 모양
+      },
+      output: () => ''
+    }
+    const v = new TaskValidator({
+      runner,
+      onSettled: async () => {},
+      onCannotRun: async (a) => void cannotRun.push(a.taskId)
+    })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    await vi.waitFor(() => expect(attempts).toHaveLength(1))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(cannotRun).toHaveLength(0) // Gate 로 가지 않는다 — 지나가는 문제로 다뤄진다
   })
 
   // 헤드가 아직 시작하지 못한 채로 온 종료는 다른 실행의 것이다 — 그 코드로 Task 를 정산하면 안 된다

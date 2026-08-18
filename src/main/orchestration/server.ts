@@ -638,9 +638,13 @@ export async function handleCommand(
         }
         await deps.setState(nextState)
         // 커밋 뒤에 부른다 — 검증이 먼저 끝나면 아직 validating 이 아닌 Task 에 결과를 쓰게 된다.
+        // result.value가 'alreadyReported'인 재전송은 상태를 바꾸지 않았다(첫 호출의 커밋을 그대로
+        // 다시 읽을 뿐이다) — 걸러내지 않으면 재전송마다 검증이 다시 큐에 들어가고, 그 사이 Task가
+        // 재시도돼 validating으로 다시 들어왔다면 낡은 검증의 종료 코드가 새 시도를 정산해 버린다.
         const settled = deps.getState().tasks.find((t) => t.id === taskId)
         const dispatch = deps.getState().dispatches.find((d) => d.id === dispatchId)
-        if (settled?.status === 'validating' && dispatch) deps.startValidation?.({ taskId, cwd: dispatch.cwd })
+        if (result.value === 'accepted' && settled?.status === 'validating' && dispatch)
+          deps.startValidation?.({ taskId, cwd: dispatch.cwd })
         return okBody(result.value)
       }
       // status, escalation and heartbeat — recorded only, with no bearing on lifetime.
