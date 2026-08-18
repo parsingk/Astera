@@ -19,8 +19,17 @@ export class ValidatorBusyError extends Error {
 
 export interface ValidatorRunner {
   /** 실행을 시작한다. 자리가 사용 중이면 ValidatorBusyError 를 던진다 — 그 밖의 이유로 시작할 수
-   *  없으면 평범한 Error 를 던진다. 그 이유가 Gate 의 질문이 된다 */
-  start(a: { cwd: string; taskId: string }): Promise<void>
+   *  없으면 평범한 Error 를 던진다. 그 이유가 Gate 의 질문이 된다.
+   *
+   *  **'skip' 은 실패가 아니다.** 그 항목이 더 이상 할 일이 아니라는 뜻이다 — 큐에서 기다리는 동안
+   *  Task 가 validating 을 떠났고(task-update 로 사람이 손수 구해 냈다), 그 검증의 결과를 받을 자리가
+   *  이미 없다. 던져서 Gate 를 열면 사람의 결정을 되돌리게 되므로(ready/failed -> blocked 는 전이표가
+   *  허용한다) 조용히 큐에서 빠지는 길이 따로 있어야 한다. 판정을 여기 인터페이스에 두는 이유는
+   *  runner 구현이 ipc.ts 의 클로저이고 테스트가 거기까지 닿지 않기 때문이다 — 그 클로저는 사실만
+   *  돌려주고, 그것으로 무엇을 할지는 이 클래스가 정한다.
+   *
+   *  아무것도 돌려주지 않으면 시작한 것이다. */
+  start(a: { cwd: string; taskId: string }): Promise<'skip' | void>
   /** 그 cwd 의 최근 출력 */
   output(cwd: string): string
 }
@@ -130,9 +139,12 @@ export class TaskValidator {
     // 뒤에 있어야 한다. advance 가 부르는 다음 startHead 는 같은 cwd 를 다시 검사하므로, 그때도
     // starting 이 남아 있으면 방금 추가한 지금 이 표시에 막혀 아무 일도 하지 않게 된다.
     let brokenReason: string | null = null
+    // 이 항목이 더 이상 할 일이 아닌가. brokenReason 과 같은 이유로 밖으로 들고 나온다.
+    let skipped = false
     try {
-      await this.deps.runner.start({ cwd, taskId: head.taskId })
-      head.started = true
+      const outcome = await this.deps.runner.start({ cwd, taskId: head.taskId })
+      if (outcome === 'skip') skipped = true
+      else head.started = true
     } catch (e) {
       // ValidatorBusyError 가 표준 경로지만, RunManager 가 곧바로 던지는 그대로도 온다 — ipc.ts 의
       // 사전 검사는 시작 전에 살펴보는 지름길일 뿐, RunManager 의 실제 판정과 이중화돼 있지 않다.
@@ -151,6 +163,15 @@ export class TaskValidator {
       }
     } finally {
       this.starting.delete(cwd)
+    }
+    // 할 일이 아닌 항목은 조용히 빠진다 — onCannotRun 도, 실패 기록도 없다. 큐는 계속 움직여야
+    // 하므로 advance 는 부른다(항등성 검사가 그대로 이 항목을 지운다). 낡은 검증이 사람의 구조를
+    // 되돌리는 것을 막는 것이 요점이고, 검사 자체의 목적 — 이미 지나간 Task 를 위해 빌드가 몇 분
+    // 돌면서 실행 패널을 덮는 것을 막는 것 — 은 그대로 남는다.
+    if (skipped) {
+      this.deps.log?.(`validation no longer needed task=${head.taskId} cwd=${cwd}`)
+      this.advance(cwd, head)
+      return
     }
     if (brokenReason !== null) {
       await this.deps

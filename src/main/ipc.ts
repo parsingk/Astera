@@ -542,9 +542,9 @@ export function registerIpc(
           if (!task?.validateConfigId) throw new Error(`no validateConfigId on task ${taskId}`)
           // 큐에서 기다리는 동안 Task 가 validating 을 떠났을 수 있다(task-update). 그대로 두면
           // 빌드 전체가 돌고 실행 슬롯과 실행 패널을 차지한 뒤에야 applyValidationResult 가
-          // 결과를 거절한다.
-          if (task.status !== 'validating')
-            throw new Error(`task ${taskId} is no longer validating: ${task.status}`)
+          // 결과를 거절한다. 던지지 않고 'skip' 을 돌려주는 이유는 ValidatorRunner.start 의 주석에
+          // 있다 — 이것은 실패가 아니라 없어진 할 일이다.
+          if (task.status !== 'validating') return 'skip'
           const run = st.runs.find((r) => r.id === task.runId)
           if (!run) throw new Error(`unknown run for task ${taskId}`)
           // PTY 를 띄울 경로는 가드를 통과해야 한다. Dispatch.cwd 는 오케스트레이션 소켓에서 온

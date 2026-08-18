@@ -440,3 +440,69 @@ describe('TaskValidator — markStopped', () => {
     expect(() => v.markStopped(absPath('other'))).not.toThrow()
   })
 })
+
+// ── 더 이상 할 일이 아닌 항목 ────────────────────────────────────────────────
+// 큐에서 기다리는 동안 Task 가 validating 을 떠날 수 있다 — task-update 로 사람이 손수 구해 낸
+// 경우다. 그 검증은 실패가 아니라 없어진 할 일이므로 Gate 를 열어서는 안 된다:
+// ready/failed -> blocked 는 전이표가 허용하므로, 열면 사람의 결정을 낡은 검증이 되돌린다.
+describe('TaskValidator — 없어진 할 일', () => {
+  const CWD = absPath('w1')
+
+  it("러너가 'skip' 을 돌려주면 onCannotRun 도 정산도 없이 큐에서 빠진다", async () => {
+    const attempts: string[] = []
+    const runner: ValidatorRunner = {
+      start: async (a) => {
+        attempts.push(a.taskId)
+        return 'skip'
+      },
+      output: () => '출력'
+    }
+    const { onSettled, calls } = settledCalls()
+    const reasons: string[] = []
+    const v = new TaskValidator({
+      runner,
+      onSettled,
+      onCannotRun: async (a) => void reasons.push(a.reason)
+    })
+    v.enqueue({ taskId: 'tsk_1', cwd: CWD })
+    await vi.waitFor(() => expect(attempts).toEqual(['tsk_1']))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(reasons).toHaveLength(0) // Gate 가 열리지 않았다 — 사람의 결정을 되돌리지 않는다
+    expect(calls).toHaveLength(0) // 실패로 정산되지도 않았다
+    // 항목이 큐에서 빠졌다: 뒤늦게 온 종료가 그 항목을 되살려 정산하지 않는다
+    v.onRunExit({ cwd: CWD, exitCode: 1 })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(calls).toHaveLength(0)
+    expect(attempts).toEqual(['tsk_1'])
+  })
+
+  // 큐는 계속 움직여야 한다. 건너뛴 항목에서 멈추면 그 cwd 의 나머지 검증이 영원히 돌지 않는다
+  it('건너뛴 항목 뒤의 항목이 시작하고 정상으로 정산된다', async () => {
+    const attempts: string[] = []
+    const runner: ValidatorRunner = {
+      start: async (a) => {
+        attempts.push(a.taskId)
+        if (a.taskId === 'tsk_1') return 'skip'
+      },
+      output: () => '출력'
+    }
+    const { onSettled, calls } = settledCalls()
+    const reasons: string[] = []
+    const v = new TaskValidator({
+      runner,
+      onSettled,
+      onCannotRun: async (a) => void reasons.push(a.reason)
+    })
+    v.enqueue({ taskId: 'tsk_1', cwd: CWD })
+    v.enqueue({ taskId: 'tsk_2', cwd: CWD })
+    v.enqueue({ taskId: 'tsk_3', cwd: CWD })
+    await vi.waitFor(() => expect(attempts).toEqual(['tsk_1', 'tsk_2']))
+    // tsk_2 는 실제로 시작했으므로 그 종료는 자기 것이다 — 항등성 검사가 건너뛴 항목을 이미
+    // 지웠으니, 이 정산이 tsk_3 을 함께 밀어내지 않는지도 여기서 함께 고정된다
+    v.onRunExit({ cwd: CWD, exitCode: 0 })
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].taskId).toBe('tsk_2')
+    await vi.waitFor(() => expect(attempts).toEqual(['tsk_1', 'tsk_2', 'tsk_3']))
+    expect(reasons).toHaveLength(0)
+  })
+})
