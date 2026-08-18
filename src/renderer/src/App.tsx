@@ -1489,6 +1489,10 @@ export default function App(): React.JSX.Element {
   const explorerRootRef = useRef(explorerRoot)
   explorerRootRef.current = explorerRoot
 
+  /** bottomRoot 를 ref 로 비춘다 — 비동기 흐름 중에 루트가 바뀌었는지 보는 데 쓴다(openTerminal).
+   *  explorerRootRef 로는 안 된다: 프로젝트가 없을 때 그쪽은 null 이고 bottomRoot 는 홈이다. */
+  const bottomRootRef = useRef<string | null>(null)
+
   // 탭 줄은 이제 페인마다 있고 그 내용은 트리(leaf.tabIds)가 정한다 — 전역 한 줄과 그 폴백은 사라졌다.
   // 어떤 프로젝트의 세션인지로 거르지도 않는다: 페인에 담긴 것이 곧 그 페인이 보여주는 것이다.
 
@@ -1562,6 +1566,7 @@ export default function App(): React.JSX.Element {
    *  실행 구성은 프로젝트 단위이고, 홈의 파일 목록으로 시드를 감지하면 남의 홈 package.json 스크립트를
    *  실행 구성으로 제안하게 된다. main 의 경로 가드도 터미널에만 홈을 열어 준다(assertTerminalPath). */
   const bottomRoot = explorerRoot ?? homeDir
+  bottomRootRef.current = bottomRoot
   const runAvailable = explorerRoot !== null
   /** 아래쪽 패널에 실제로 넘길 탭. Run 탭이 없는데 bottomTab 이 'run' 에 남아 있으면 본문이 비므로,
    *  그때는 터미널로 떨어뜨린다. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
@@ -1803,9 +1808,11 @@ export default function App(): React.JSX.Element {
   // produce a runtime reference error (both are created when the component body runs, and the actual
   // call happens later on a click, by which time openTerminal's closure over newTerminal is initialised).
   const newTerminal = async (): Promise<void> => {
-    if (!explorerRoot) return
+    // bottomRoot — openTerminal 과 같은 경로여야 한다. explorerRoot 로 두면 프로젝트가 없을 때
+    // 여기서 조용히 빠지고, 패널만 열린 채 터미널이 만들어지지 않는다.
+    if (!bottomRoot) return
     try {
-      const info = await window.api.terminal.open(explorerRoot)
+      const info = await window.api.terminal.open(bottomRoot)
       setTerminals((prev) => [...prev, { id: info.id, buffer: '' }])
       setBottomTab(info.id)
       setRunPanelOpen(true)
@@ -1827,11 +1834,12 @@ export default function App(): React.JSX.Element {
       // buffer has to be read *before* the setRunPanelOpen(true) that causes the remount — updating
       // terminals after the mount does not reach an xterm that is already mounted.
       const list = await window.api.terminal.list(root).catch(() => terminals)
-      // If the project changes while this is in flight, the result is discarded — the project-load
-      // effect has already set the new project's list, so overwriting with the old result would leave
-      // the screen on the new project while the active tab is the previous project's terminal, sending
-      // input to that shell.
-      if (explorerRootRef.current !== root) return
+      // If the root changes while this is in flight, the result is discarded — the list effect has
+      // already set the new root's list, so overwriting with the old result would leave the screen on
+      // the new root while the active tab is the previous one's terminal, sending input to that shell.
+      // bottomRootRef, not explorerRootRef: with no project those two differ (null vs the home
+      // directory), so comparing against the project ref bailed on every call.
+      if (bottomRootRef.current !== root) return
       setTerminals(list)
       if (list.length === 0) {
         // If a missed terminal:exit means the re-query really does come back empty, create one instead
