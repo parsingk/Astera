@@ -41,6 +41,22 @@ describe('TaskValidator', () => {
     expect(calls[0]).toEqual({ taskId: 'tsk_1', exitCode: 0, output: '출력' })
   })
 
+  // 검증 출력은 PTY 원문이라 이스케이프가 섞인다. 이 값은 Task.result 와 status 메시지 본문으로
+  // 들어가고 코디네이터 LLM 이 그것을 읽어 재시도를 판단하므로, 화면이 아니라 여기서 지운다
+  it('출력의 ANSI 이스케이프를 지운다', async () => {
+    const runner: ValidatorRunner = {
+      start: async () => {},
+      output: () => '\u001b[32mPASS\u001b[0m\r\n\u001b]0;title\u0007done\r\n'
+    }
+    const { onSettled, calls } = settledCalls()
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    await vi.waitFor(() => expect(calls).toHaveLength(0))
+    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 })
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].output).toBe('PASS\r\ndone\r\n')
+  })
+
   // 같은 cwd 의 두 검증은 직렬화된다 — RunManager 가 그 키로 하나만 돌리기 때문이다
   it('같은 cwd 의 두 번째 검증은 첫 번째가 끝난 뒤에 시작한다', async () => {
     const runner = fakeRunner()

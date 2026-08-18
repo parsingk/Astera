@@ -1,3 +1,5 @@
+import { stripAnsi } from '../../core/rolling/detect'
+
 // 검증 실행의 순서 관리. RunManager 도 OrchState 도 모른다 — 러너와 두 콜백만 안다.
 // 그래서 테스트가 닿는다(ipc.ts 안에 있었다면 닿지 않았을 것이다).
 //
@@ -110,7 +112,11 @@ export class TaskValidator {
         .finally(() => this.advance(a.cwd, head))
       return
     }
-    const output = this.deps.runner.output(a.cwd)
+    // **표시 시점이 아니라 여기서 지운다.** 이 값을 읽는 독자가 화면만이 아니다 — Task.result 와
+    // status 메시지 본문으로 들어가고, 그것을 코디네이터 LLM 이 읽어 재시도를 판단한다. 화면에서만
+    // 지우면 판단하는 쪽은 계속 제어 문자를 읽는다. RunPanel 의 xterm 은 건드리지 않는다 — 그쪽은
+    // 터미널이고 이스케이프가 제 일을 한다.
+    const output = stripAnsi(this.deps.runner.output(a.cwd))
     void this.deps
       .onSettled({ taskId: head.taskId, exitCode: a.exitCode, output })
       .catch((e) => this.deps.log?.(`validation settle failed task=${head.taskId}: ${String(e)}`))
