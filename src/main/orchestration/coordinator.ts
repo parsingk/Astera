@@ -238,6 +238,15 @@ export class OrchCoordinator {
     taskId: string
     title: string
     spec: string
+    /** The finished spec file, when the caller assembled it itself. `spec` above is a **body** —
+     *  buildSpecFile wraps it in the implementer's template (an H1, then the reporting obligation with
+     *  --files-modified and the escalation boilerplate). A review dispatch needs a different file, not
+     *  a different body: buildReviewSpecFile already carries its own H1 and its own obligation, and
+     *  wrapping it would append "give the paths through --files-modified" underneath a file whose
+     *  first instruction is "do not change any code" — two contradicting instruction sets in one
+     *  file. So the caller hands the whole file over and this skips the builder. Not named specFile:
+     *  specPath in the return value already means a location and the two must not read alike. */
+    specFileContent?: string
     provider: Provider
     accountId: string
     /** Run.cwd — the base cwd when worktree is 'current'. The server reads it from state and passes it in */
@@ -324,7 +333,10 @@ export class OrchCoordinator {
     await fs.mkdir(path.dirname(specPath), { recursive: true })
     await fs.writeFile(
       specPath,
-      buildSpecFile({ title: a.title, spec: a.spec, taskId: a.taskId, dispatchId: a.dispatchId }),
+      // The caller may have assembled the file already (a review dispatch does — see
+      // specFileContent). Only when it did not does the implementer's template get built here.
+      a.specFileContent ??
+        buildSpecFile({ title: a.title, spec: a.spec, taskId: a.taskId, dispatchId: a.dispatchId }),
       'utf8'
     )
 

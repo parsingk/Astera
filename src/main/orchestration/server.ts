@@ -47,6 +47,11 @@ export interface OrchServerDeps {
     taskId: string
     title: string
     spec: string
+    /** The finished spec file, when the caller assembled it itself — passed straight through to
+     *  OrchCoordinator.startWorker, where the reason it exists is documented. worker-start never sets
+     *  it (task.spec is a body and the implementer's template is the right wrapper for it); the
+     *  wiring's review path does. */
+    specFileContent?: string
     provider: Provider
     accountId: string
     runCwd: string

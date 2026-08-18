@@ -195,6 +195,26 @@ describe('OrchCoordinator.startWorker', () => {
     // 그리고 그 위치만이 아니라 cwd 아래 **아무것도** 생기지 않았다 (dir는 빈 임시 디렉토리다)
     expect(await fs.readdir(dir)).toEqual([])
   })
+  // 검토 Dispatch 가 이 경로로 온다. spec 은 **본문**이고 buildSpecFile 이 그것을 구현자의 템플릿으로
+  // 감싸므로, 조립이 끝난 검토 파일을 spec 자리에 넣으면 H1 과 보고 의무가 두 벌이 되고 마지막 줄이
+  // "바꾼 파일을 --files-modified 로 넘겨라"가 되어 맨 위의 "코드를 바꾸지 말라"와 부딪힌다.
+  it('specFileContent 를 주면 그 문자열만 그대로 쓴다 — buildSpecFile 로 다시 감싸지 않는다', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    const file = buildReviewSpecFile({
+      title: '인증 리팩터',
+      spec: '설계하고 반영하라',
+      taskId: 'tsk_1',
+      dispatchId: 'dsp_1',
+      validated: true
+    })
+    const r = await co.startWorker({ ...baseArgs(), runCwd: dir, specFileContent: file })
+    const written = await fs.readFile(r.specPath, 'utf8')
+    expect(written).toBe(file)
+    // H1 이 하나뿐이고 구현자의 보고 의무가 섞여 들어오지 않았다
+    expect(written.match(/^# /gm)).toHaveLength(1)
+    expect(written).not.toContain('--files-modified "path/a,path/b"')
+  })
   it('초기 프롬프트가 spec의 절대경로를 담고 앞슬래시만 쓴다 — 워커가 Bash로도 다룬다', async () => {
     const deps = makeDeps()
     const co = new OrchCoordinator(deps)
