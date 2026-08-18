@@ -71,12 +71,21 @@ Task in a Run.
   the tree it changed, not the project root.
 - **Dependents wait.** A Task whose dependency is `validating` stays `pending`; only a passing
   validation releases it, never the worker's own report.
-- **Exit code `0` completes the Task; non-zero fails it** the same way a failed worker would — the
-  output tail lands in the Task's `result` so the next attempt can read what went wrong,
-  `consecutiveFailures` climbs, and the circuit still breaks at 3.
+- **Exit code `0` completes the Task; non-zero fails it** the same way a failed worker would —
+  `consecutiveFailures` climbs and the circuit still breaks at 3. The output tail is stored in the
+  Task's `result`, but **a retry worker never sees it**: the spec file the app assembles for a worker
+  carries only that Task's title and spec, so nothing a previous attempt produced — neither the
+  validation output nor the earlier worker's report — reaches the next one. If the next attempt needs
+  to know what failed, write it into the spec yourself.
+- **Either outcome arrives in your inbox as a `status` message**: `validation passed` or `validation
+  failed`, with the exit code and the output tail in the body. That message is what wakes `check`, so
+  a validated Task is **not** settled when `worker_done` comes back — wait for its validation message
+  before you decide what to dispatch next. (A validation that cannot run announces itself the same
+  way, as the Gate's `decision_gate` message.)
 - **If the validation cannot run at all** — no such configuration, a required field empty, the
-  directory gone, the app restarted mid-run — the Task goes to `blocked` behind a Gate whose question
-  says why. That is a call for a person, not a silent pass and not a failure charged against the work.
+  directory gone, the app restarted mid-run, or the user stopping the validation run from the app's
+  Run panel — the Task goes to `blocked` behind a Gate whose question says why. A stopped run is not
+  counted as a failure: it means the work was never judged, not that it was wrong. That is a call for a person, not a silent pass and not a failure charged against the work.
 - **If the directory is merely busy** with something else — another validation, or a run the user
   started by hand — the validation waits its turn rather than failing.
 
@@ -420,8 +429,9 @@ it leaves a record of the bypass in the app log. Once corrected, Tasks that depe
 **`task-update` resets that Task's `consecutiveFailures` (the circuit counter) to 0.** So even a Task
 whose circuit opened after 3 failures can be dispatched again after
 `task-update --id <tsk> --status ready` — because it means a human checked the cause and cleared it.
-This is the only escape hatch that opens the circuit (the only other path to a zero counter is a
-worker's `worker_done --outcome succeeded`, and that is unreachable while dispatching is blocked).
+This is the only escape hatch that opens the circuit (the other two paths to a zero counter are a
+worker's `worker_done --outcome succeeded` on a Task with no `--validate`, and a validation that
+exits `0` — and both are unreachable while dispatching is blocked).
 **Do not reach for it out of habit without checking the cause** — that makes the circuit breaker
 meaningless and repeats the same failure indefinitely.
 

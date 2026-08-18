@@ -91,7 +91,15 @@ export async function prepareRun(
   const cwd = a.ignoreConfigCwd ? undefined : await resolveRunCwd(a, config.cwd)
   return {
     config: { ...config, cwd },
-    // run.list 의 미리보기와 실제 실행이 어긋나지 않도록 buildRunContext 는 한 곳에서만 만든다
+    // run.list 의 미리보기와 실제 실행이 어긋나지 않도록 buildRunContext 는 한 곳에서만 만든다.
+    //
+    // **검증에서는 조립 컨텍스트와 실행 위치가 다른 트리에서 온다.** files 는 projectPath(=Run.cwd)
+    // 의 목록이지만, 검증 명령은 Dispatch.cwd 에서 돈다(ignoreConfigCwd: true) — ./gradlew·./mvnw
+    // 존재 여부, composeFile 이름, 패키지 매니저 선택이 실행되지 않는 트리에서 결정된다.
+    // git 워크트리라면 추적 파일이 같으므로 무해하지만, 래퍼나 lockfile 이 추적되지 않으면
+    // 조립이 틀리고 그것이 0 이 아닌 종료 코드로 나타나 작업 탓이 된다. 고치려면 컨텍스트를
+    // 실행 트리에서 읽어야 하는데, 그러면 구성 조회와 컨텍스트 계산의 기준이 갈라진다 —
+    // ADR-003 이 기록한 "구성 소유가 저장소를 따라야 하는지 워크트리를 따라야 하는지"와 같은 판단.
     command: buildCommand(config, buildRunContext(files, process.platform)),
     projectName: path.basename(a.projectPath) || a.projectPath
   }
