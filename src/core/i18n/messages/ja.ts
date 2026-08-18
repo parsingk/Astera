@@ -573,6 +573,7 @@ export const ja: Catalog = {
   'run.action.stop': '停止',
   'run.global.listTitle': '実行中の一覧',
   'run.global.jump': '移動',
+  'run.validation.tag': '検証',
   // App.tsx runManagerSave — shown when the run.saveConfig IPC fails
   'run.config.saveFailed': '保存に失敗しました: {detail}',
   // main/run/prepare.ts resolveRunCwd (run.start) and ipc.ts assertConfigCwd (run.saveConfig) — thrown in main, shown verbatim in a renderer toast

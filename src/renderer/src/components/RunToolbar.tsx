@@ -51,6 +51,13 @@ export function RunToolbar({
         onChange={onSelect}
         ariaLabel={t('run.config.selectLabel')}
       />
+      {/* 검증 실행은 사용자가 시작한 것이 아니다. 정지 버튼은 그대로 남기고(폭주하는 검증을 멈출
+          수단은 있어야 한다) 라벨만 붙인다 — 표시가 없으면 ▶ 가 ⏹ 로 바뀐 이유를 알 수 없다. */}
+      {running && active?.validation === true && (
+        <span className="run-tag" title={t('run.validation.tag')}>
+          {t('run.validation.tag')}
+        </span>
+      )}
       {running ? (
         <button className="run-btn stop" title={t('run.action.stop')} onClick={onStop}>
           ⏹
@@ -98,6 +105,11 @@ export function RunToolbar({
               {activeRuns.map((r) => (
                 <div className="run-global-row" key={r.projectPath}>
                   <span className="run-global-live" />
+                  {r.validation === true && (
+                    <span className="run-tag" title={t('run.validation.tag')}>
+                      {t('run.validation.tag')}
+                    </span>
+                  )}
                   <button className="run-global-jump" title={t('run.global.jump')} onClick={() => { onJump(r.projectPath); setShowRuns(false) }}>
                     {r.projectName} — {r.configName}
                   </button>

@@ -561,7 +561,9 @@ export function registerIpc(
           // 직접 채웠을 수 있다 — 그 충돌은 지나가는 것이므로, ALREADY_RUNNING 문자열을 잡아내는
           // 대신 시작 전에 미리 살펴 ValidatorBusyError 로 구분한다(큐가 기다리게 한다).
           if (core.run.get(cwd)?.status === 'running') throw new ValidatorBusyError(cwd)
-          core.run.start({ projectPath: cwd, projectName, config, command })
+          // validation: 이 실행이 사용자의 것이 아니라는 표시. 실행 툴바와 전역 목록이 이것으로
+          // 라벨하고, run.stop 이 이것으로 markStopped 를 부른다(RunStatus.validation 참고).
+          core.run.start({ projectPath: cwd, projectName, config, command, validation: true })
         },
         output: (cwd) => core.run.recentOutput(cwd).slice(-4000)
       },
@@ -1007,7 +1009,12 @@ export function registerIpc(
     return core.run.start({ projectPath, projectName, config, command })
   })
 
-  ipcMain.handle('run.stop', async (_e, projectPath: string) => core.run.stop(projectPath))
+  ipcMain.handle('run.stop', async (_e, projectPath: string) => {
+    // 검증 실행을 사용자가 정지시킨 것은 "작업이 틀렸다"가 아니라 "증명하지 못했다"다 — 표시를
+    // 남겨 이어질 종료가 실패 정산이 아니라 Gate 로 가게 한다(TaskValidator.markStopped).
+    if (core.run.get(projectPath)?.validation) orchValidator?.markStopped(projectPath)
+    return core.run.stop(projectPath)
+  })
   ipcMain.on('run.write', (_e, projectPath: string, data: string) => core.run.write(projectPath, data))
   ipcMain.on('run.resize', (_e, projectPath: string, cols: number, rows: number) =>
     core.run.resize(projectPath, cols, rows)

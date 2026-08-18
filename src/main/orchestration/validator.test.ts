@@ -356,3 +356,87 @@ describe('TaskValidator — 큐 항목 유실 방지', () => {
     await vi.waitFor(() => expect(started).toEqual(['tsk_1', 'tsk_1', 'tsk_2']))
   })
 })
+
+// ── 사용자가 정지시킨 검증 ────────────────────────────────────────────────────
+// 정지된 PTY 는 0 이 아닌 종료 코드를 낸다. 그것을 실패로 정산하면 남의 빌드를 치우려던 사용자가
+// 오케스트레이션 Task 를 실패시키고, 세 번이면 회로가 영구히 끊긴다. --worktree current 가
+// 기본값이므로 검증은 보통 사용자가 열어 둔 프로젝트 루트에서 돈다 — 흔한 경우다.
+describe('TaskValidator — markStopped', () => {
+  const CWD = absPath('w1')
+
+  it('정지 표시가 선 head 의 종료는 onSettled 가 아니라 onCannotRun 으로 간다', async () => {
+    const runner = fakeRunner()
+    const { onSettled, calls } = settledCalls()
+    const reasons: { taskId: string; reason: string }[] = []
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async (a) => void reasons.push(a) })
+    v.enqueue({ taskId: 'tsk_1', cwd: CWD })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(1))
+    v.markStopped(CWD)
+    v.onRunExit({ cwd: CWD, exitCode: 1 })
+    await vi.waitFor(() => expect(reasons).toHaveLength(1))
+    expect(reasons[0].taskId).toBe('tsk_1')
+    expect(reasons[0].reason).toContain('정지')
+    expect(calls).toHaveLength(0) // 실패로 정산되지 않았다 — consecutiveFailures 가 오르지 않는다
+  })
+
+  it('정지된 검증 뒤에도 같은 cwd 의 다음 검증은 시작한다', async () => {
+    const runner = fakeRunner()
+    const { onSettled } = settledCalls()
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
+    v.enqueue({ taskId: 'tsk_1', cwd: CWD })
+    v.enqueue({ taskId: 'tsk_2', cwd: CWD })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(1))
+    v.markStopped(CWD)
+    v.onRunExit({ cwd: CWD, exitCode: 1 })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(2))
+    expect(runner.started[1].taskId).toBe('tsk_2')
+  })
+
+  // 표시는 한 번만 쓰인다 — 남아 있으면 다음 검증이 정상적으로 끝나도 Gate 가 된다
+  it('표시는 소비 후 지워진다 — 다음 검증은 정상 정산된다', async () => {
+    const runner = fakeRunner()
+    const { onSettled, calls } = settledCalls()
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
+    v.enqueue({ taskId: 'tsk_1', cwd: CWD })
+    v.enqueue({ taskId: 'tsk_2', cwd: CWD })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(1))
+    v.markStopped(CWD)
+    v.onRunExit({ cwd: CWD, exitCode: 1 })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(2))
+    v.onRunExit({ cwd: CWD, exitCode: 0 })
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].taskId).toBe('tsk_2')
+  })
+
+  // 아직 시작하지 못한 head 에는 표시하지 않는다 — 그 cwd 에서 도는 것은 검증이 아니라 그 자리를
+  // 차지하고 있는 다른 실행이므로, 그 정지는 이 검증과 아무 상관이 없다
+  it('시작하지 못한 head 에는 표시하지 않는다', async () => {
+    const attempts: string[] = []
+    const runner: ValidatorRunner = {
+      start: async (a) => {
+        attempts.push(a.taskId)
+        if (attempts.length === 1) throw new ValidatorBusyError(a.cwd)
+      },
+      output: () => '출력'
+    }
+    const { onSettled, calls } = settledCalls()
+    const reasons: string[] = []
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async (a) => void reasons.push(a.reason) })
+    v.enqueue({ taskId: 'tsk_1', cwd: CWD })
+    await vi.waitFor(() => expect(attempts).toHaveLength(1))
+    v.markStopped(CWD) // 자리를 차지하고 있던 사용자 실행의 정지다
+    v.onRunExit({ cwd: CWD, exitCode: 1 }) // 그 실행의 종료 — head 를 다시 시작한다
+    await vi.waitFor(() => expect(attempts).toHaveLength(2))
+    v.onRunExit({ cwd: CWD, exitCode: 0 }) // 이번에는 검증 자신의 종료다
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(reasons).toHaveLength(0) // Gate 로 가지 않았다
+  })
+
+  // 큐가 비어 있는 cwd 의 정지는 검증이 아닌 실행의 정지다
+  it('큐가 비어 있으면 아무 일도 하지 않는다', () => {
+    const runner = fakeRunner()
+    const { onSettled } = settledCalls()
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
+    expect(() => v.markStopped(absPath('other'))).not.toThrow()
+  })
+})

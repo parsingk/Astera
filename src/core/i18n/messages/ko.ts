@@ -563,6 +563,9 @@ export const ko = {
   'run.action.stop': '중지',
   'run.global.listTitle': '실행 중 목록',
   'run.global.jump': '이동',
+  // 오케스트레이션이 Task 를 판정하려고 띄운 실행이라는 라벨. 사용자가 시작한 실행과 구별되지
+  // 않으면 정지시켜 그 Task 를 실패시킨다(core/run/config.ts 의 RunStatus.validation)
+  'run.validation.tag': '검증',
   // App.tsx runManagerSave — the text shown when the run.saveConfig IPC fails
   'run.config.saveFailed': '저장 실패: {detail}',
   // main/run/prepare.ts resolveRunCwd (run.start) and ipc.ts assertConfigCwd (run.saveConfig) — a

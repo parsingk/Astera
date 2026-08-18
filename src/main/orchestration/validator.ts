@@ -36,7 +36,13 @@ interface Pending {
    *  을 헛되게 부르고 거절 로그를 남긴다. 유실을 막는 것은 advance 의 항등성 검사고, 이 표시는 그
    *  헛일 자체를 막는다. */
   settling: boolean
+  /** 사용자가 이 검증 실행을 정지시켰다(markStopped). 이어질 종료는 결과가 아니라 "증명하지
+   *  못했다"이므로 onSettled 가 아니라 onCannotRun 으로 간다. */
+  stopped: boolean
 }
+
+/** 정지된 검증이 Gate 에 남기는 이유. blockForValidation 이 앞에 한국어 문장을 붙인다 */
+const STOPPED_REASON = '사용자가 검증 실행을 정지했습니다'
 
 export class TaskValidator {
   /** cwd -> 대기열. 맨 앞이 지금 도는 것이다 */
@@ -56,7 +62,7 @@ export class TaskValidator {
   ) {}
 
   enqueue(a: { taskId: string; cwd: string }): void {
-    const entry: Pending = { ...a, started: false, settling: false }
+    const entry: Pending = { ...a, started: false, settling: false, stopped: false }
     const q = this.queues.get(a.cwd)
     if (q) {
       q.push(entry)
@@ -84,11 +90,32 @@ export class TaskValidator {
     // 종료는 head 가 아직 큐 맨 앞이고 started 라서 여기까지 온다. 한 번만 정산한다.
     if (head.settling) return
     head.settling = true
+    // 사용자가 정지시킨 검증의 종료 코드는 0 이 아니지만, 그것은 "작업이 틀렸다"가 아니라
+    // "증명하지 못했다"다. 실패로 세면 남의 빌드를 치우려던 사용자가 Task 를 실패시키고 세 번이면
+    // 회로가 끊긴다 — 그래서 Gate 로 보낸다(markStopped 참고).
+    if (head.stopped) {
+      head.stopped = false // 표시는 소비하고 지운다
+      void this.deps
+        .onCannotRun({ taskId: head.taskId, reason: STOPPED_REASON })
+        .catch((e) => this.deps.log?.(`onCannotRun failed task=${head.taskId}: ${String(e)}`))
+        .finally(() => this.advance(a.cwd, head))
+      return
+    }
     const output = this.deps.runner.output(a.cwd)
     void this.deps
       .onSettled({ taskId: head.taskId, exitCode: a.exitCode, output })
       .catch((e) => this.deps.log?.(`validation settle failed task=${head.taskId}: ${String(e)}`))
       .finally(() => this.advance(a.cwd, head))
+  }
+
+  /** 사용자가 그 cwd 에서 도는 검증 실행을 정지시켰다(run.stop). 여기서는 표시만 남기고, 판정은
+   *  곧 도착할 onRunExit 이 한다 — 정지는 종료 코드로만 구별할 수 없기 때문이다.
+   *  시작하지 못한 head 에는 표시하지 않는다: 그 cwd 에서 도는 것은 검증이 아니라 그 자리를
+   *  차지하고 있는 다른 실행이므로, 그 정지는 이 검증과 아무 상관이 없다. */
+  markStopped(cwd: string): void {
+    const head = this.queues.get(cwd)?.[0]
+    if (!head?.started) return
+    head.stopped = true
   }
 
   private async startHead(cwd: string): Promise<void> {
