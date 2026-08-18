@@ -63,14 +63,25 @@ export function MarkdownSplit({
   // 다시 보이는 것 자체는 포커스를 옮기지 않는다(에디터에 포커스를 강제하는 것도 "에디터의 포커스를
   // 빼앗지 않는다"는 규칙을 어기게 된다 — 사용자가 split/editor 로 돌아왔을 때 이미 다른 곳, 예를
   // 들어 방금 누른 툴바 버튼에 포커스가 있을 수 있고 그것도 존중해야 한다).
+  //
+  // 알려진 갭(여기서는 못 고친다, task 9 가 닫는다): mode 가 'preview'를 벗어나면 포커스를 들고 있던
+  // .md-preview 서브트리가 hidden 이 되고, 숨겨진 요소는 포커스를 들고 있을 수 없어 브라우저가
+  // document.body 로 blur 한다. 툴바 버튼 클릭으로 모드가 바뀌는 경로는 클릭 자체가 모드 커밋 전에
+  // 포커스를 그 버튼으로 옮겨 놓아 이 경로를 타지 않지만, task 10 의 순환 키바인딩으로 preview 중에
+  // 모드를 바꾸면 키보드 사용자가 document.body 에 남는다. 이 컴포넌트는 editor 를 불투명한
+  // ReactNode 로만 받아 여기서 에디터에 포커스를 되돌릴 수 없다 — task 9 가 EditorView 를
+  // `editorView` 프롭으로 받게 되면 그쪽에서 view.focus() 로 닫아야 한다.
   useEffect(() => {
     if (mode === 'preview') previewElRef.current?.focus()
   }, [mode])
 
-  // 드래그가 진행 중인지, 그리고 그 드래그가 등록한 window 리스너를 어떻게 떼어낼지.
-  // draggingRef 는 "두 번째 포인터가 드래그 중에 눌리는" 경로를 막는다 — 그것을 막지 않으면 리스너가
-  // 두 벌 등록되고, pointerId 를 가리지 않는 up() 이 서로 다른 포인터의 pointerup 에도 반응해 남의
-  // 드래그를 조기에 끝내 버린다(리스너를 지우고 저장하는 것까지).
+  // 드래그가 진행 중인지, 그리고 그 드래그가 등록한 window 리스너를 어떻게 걸러내고 떼어낼지.
+  // draggingRef 는 "두 번째 포인터가 이 리사이저 위에 내려와 startDrag 를 다시 부르는" 경로만 막는다
+  // — 막지 않으면 리스너가 두 벌 등록된다. 이것만으로는 부족하다: 화면 다른 곳에서 발생한 무관한
+  // 두 번째 포인터(예: 터치스크린의 다른 접점)는 이 리사이저에 내려오지 않고도 이미 등록된 window
+  // 리스너로 pointermove/pointerup 이벤트를 그냥 흘려보낸다 — 그 경로는 startDrag 를 다시 부르지
+  // 않으므로 draggingRef 가 볼 수 없다. 그래서 move/up 이 이벤트의 pointerId 를 시작한 포인터의
+  // id(startId)와 직접 비교한다 — 아래 참고.
   // dragCleanupRef 는 "드래그 중 컴포넌트가 언마운트되는" 경로를 막는다 — 사이드바 리사이저에는 없는
   // 청소이지만, 여기서는 mode 전환만으로도 리사이저 DOM 자체가(그리고 이 컴포넌트 전체도, 예: 다른
   // 파일로 전환) 사라질 수 있어 그 경로를 열어 두지 않는다. 남겨 두면 실제 드래그가 끝난 뒤 이미 죽은
@@ -79,7 +90,10 @@ export function MarkdownSplit({
   const dragCleanupRef = useRef<(() => void) | null>(null)
   useEffect(() => () => dragCleanupRef.current?.(), [])
 
-  // 사이드바 리사이저(App.tsx)와 같은 방식 — 포인터 캡처로 끌고, 놓을 때 저장한다. pointercancel 도
+  // 사이드바 리사이저(App.tsx)와 같은 방식 — window 에 pointermove/pointerup 리스너를 걸어 두고,
+  // 놓을 때 저장한다. (포인터 캡처가 아니다 — setPointerCapture 를 부르지 않는다. 그래서 move/up
+  // 둘 다 이벤트의 pointerId 가 이 드래그를 시작한 포인터(startId)와 같은지 먼저 확인한다 — 다른
+  // 포인터가 window 로 보낸 pointermove/pointerup/pointercancel 은 무시한다.) pointercancel 도
   // pointerup 과 같은 핸들러로 받는다(같은 이유 — 사이드바·Run 패널 리사이저 모두 그렇게 한다):
   // 제스처가 OS/브라우저에 의해 취소돼도 마지막으로 계산된 비율은 그대로 커밋한다.
   const startDrag = (e: React.PointerEvent): void => {
@@ -88,7 +102,9 @@ export function MarkdownSplit({
     const host = splitRef.current
     if (!host) return
     draggingRef.current = true
+    const startId = e.pointerId
     const move = (ev: PointerEvent): void => {
+      if (ev.pointerId !== startId) return
       const box = host.getBoundingClientRect()
       // 폭이 0인 프레임(모드 전환 직후)에서는 NaN 이 나온다. clampSplitRatio 가 기본값으로 되돌린다
       setRatio(clampSplitRatio((ev.clientX - box.left) / box.width))
@@ -100,7 +116,8 @@ export function MarkdownSplit({
       draggingRef.current = false
       dragCleanupRef.current = null
     }
-    const up = (): void => {
+    const up = (ev: PointerEvent): void => {
+      if (ev.pointerId !== startId) return
       cleanup()
       setRatio((r) => {
         localStorage.setItem(RATIO_KEY, String(r))
