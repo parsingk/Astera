@@ -35,6 +35,8 @@ export const en: Record<keyof typeof ko, string> = {
   'files.move.alreadyThere': 'Already in that location',
   'files.copy.intoSelf': 'Cannot copy a folder into itself',
   'files.error.pathNotAllowed': 'That path is not allowed',
+  'files.error.unsupportedImageType': 'Unsupported image type',
+  'files.error.imageTooLarge': 'Image is too large',
   'files.error.alreadyExists': '“{name}” already exists',
   'files.error.alreadyExistsInDest': '“{name}” already exists in the destination folder',
   'files.error.renameStranded': 'Rename failed and could not be rolled back. The file is at “{tmp}”',

@@ -39,6 +39,8 @@ export const ja: Catalog = {
   'files.move.alreadyThere': 'すでにその場所にあります',
   'files.copy.intoSelf': 'フォルダを自分自身の中へコピーすることはできません',
   'files.error.pathNotAllowed': '許可されていないパスです',
+  'files.error.unsupportedImageType': 'サポートされていない画像形式です',
+  'files.error.imageTooLarge': '画像が大きすぎます',
   'files.error.alreadyExists': '「{name}」はすでに存在します',
   'files.error.alreadyExistsInDest': '「{name}」は移動先フォルダにすでに存在します',
   'files.error.renameStranded':

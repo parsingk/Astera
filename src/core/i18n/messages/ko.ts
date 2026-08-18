@@ -42,6 +42,8 @@ export const ko = {
   'files.move.alreadyThere': '이미 그 위치에 있습니다',
   'files.copy.intoSelf': '폴더를 자기 자신 안으로 복사할 수 없습니다',
   'files.error.pathNotAllowed': '허용되지 않은 경로입니다',
+  'files.error.unsupportedImageType': '지원하지 않는 이미지 형식입니다',
+  'files.error.imageTooLarge': '이미지가 너무 큽니다',
   'files.error.alreadyExists': "'{name}' 이(가) 이미 있습니다",
   'files.error.alreadyExistsInDest': "'{name}' 이(가) 대상 폴더에 이미 있습니다",
   'files.error.renameStranded': "이름 변경에 실패했고 되돌리지도 못했습니다. 파일이 '{tmp}' 에 있습니다",

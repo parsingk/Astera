@@ -40,6 +40,8 @@ export const es: Catalog = {
   'files.move.alreadyThere': 'Ya se encuentra en esa ubicación',
   'files.copy.intoSelf': 'No se puede copiar una carpeta dentro de sí misma',
   'files.error.pathNotAllowed': 'Ruta no permitida',
+  'files.error.unsupportedImageType': 'Tipo de imagen no compatible',
+  'files.error.imageTooLarge': 'La imagen es demasiado grande',
   'files.error.alreadyExists': '«{name}» ya existe',
   'files.error.alreadyExistsInDest': '«{name}» ya existe en la carpeta de destino',
   'files.error.renameStranded':

@@ -32,6 +32,7 @@ import { releaseArgsFor } from './orchestration/release'
 import { installStub } from './orchestration/stub'
 import { sortEntries, isPathWithin, projectRootOf } from '../core/files/tree'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
+import { imageMime } from '../core/files/imageMime'
 import { parsePorcelainZ, type GitState } from '../core/git/status'
 import { FileWatcher } from './fileWatcher'
 import { GitWatcher } from './gitWatcher'
@@ -812,27 +813,32 @@ export function registerIpc(
     return { content: binary ? '' : buf.toString('utf8'), truncated, binary }
   })
   const IMAGE_READ_MAX = 5 * 1024 * 1024 // 5MB
-  /** 확장자 → MIME. 이 표에 없으면 거부한다. 확장자에서 MIME 문자열을 만들어 내면 임의의 타입을
-   *  data URL 에 실어 보낼 수 있게 된다.
-   *  svg 는 있지만 <img src="data:image/svg+xml"> 로만 들어간다 — 그 자리의 SVG 는 브라우저가
-   *  스크립트를 실행하지 않는다. 인라인 <svg> 로는 절대 넣지 않는다(markdownTree 의 DROP_TAGS). */
-  const IMAGE_MIME: Record<string, string> = {
-    png: 'image/png',
-    jpg: 'image/jpeg',
-    jpeg: 'image/jpeg',
-    gif: 'image/gif',
-    webp: 'image/webp',
-    avif: 'image/avif',
-    svg: 'image/svg+xml'
-  }
   ipcMain.handle('files.readDataUrl', async (_e, filePath: string) => {
     await assertAllowedPath(filePath)
-    const ext = path.extname(filePath).slice(1).toLowerCase()
-    const mime = IMAGE_MIME[ext]
-    if (!mime) throw new Error(t(core.lang, 'files.error.pathNotAllowed'))
-    const stat = await fs.stat(filePath)
-    if (stat.size > IMAGE_READ_MAX) throw new Error(t(core.lang, 'files.error.pathNotAllowed'))
-    const buf = await fs.readFile(filePath)
+    const mime = imageMime(path.extname(filePath).slice(1))
+    if (!mime) throw new Error(t(core.lang, 'files.error.unsupportedImageType'))
+    // isPathWithin (inside assertAllowedPath) only resolves '..' lexically — it does not follow
+    // symlinks, but fs.open below does. A hostile repo can ship an image-named symlink pointing at
+    // ~/.ssh/id_rsa or /etc/passwd, so the real target is re-checked here. A symlink that stays inside
+    // an allowed root (e.g. a shared asset linked into a project) keeps working; only one that escapes
+    // every root is refused.
+    const real = await fs.realpath(filePath)
+    await assertAllowedPath(real)
+    // A single bounded read, not stat+readFile: stat.size is advisory (the file can grow between the
+    // stat and the read) and reads 0 for FIFOs/character devices, so a symlink to a named pipe or
+    // /dev/zero would sail past a size check and fs.readFile would then grow unbounded in the main
+    // process. Reading at most IMAGE_READ_MAX + 1 bytes in one call makes the cap a hard bound no
+    // matter what the path actually names — the same shape files.read uses for its truncation branch.
+    const handle = await fs.open(real, 'r')
+    let buf: Buffer
+    try {
+      const alloc = Buffer.alloc(IMAGE_READ_MAX + 1)
+      const { bytesRead } = await handle.read(alloc, 0, IMAGE_READ_MAX + 1, 0)
+      if (bytesRead > IMAGE_READ_MAX) throw new Error(t(core.lang, 'files.error.imageTooLarge'))
+      buf = alloc.subarray(0, bytesRead)
+    } finally {
+      await handle.close()
+    }
     return { dataUrl: `data:${mime};base64,${buf.toString('base64')}` }
   })
   ipcMain.handle('files.write', async (_e, filePath: string, content: string) => {
