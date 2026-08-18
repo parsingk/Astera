@@ -122,7 +122,11 @@ export function MarkdownSplit({
             type="button"
             className={mode === m.id ? 'active' : undefined}
             aria-pressed={mode === m.id}
+            // 글리프 하나뿐인 버튼이라 텍스트 콘텐츠가 접근성 이름이 되어 주지 못한다 — title 과
+            // aria-label 을 같은 문구로 같이 주는 것은 이 앱의 아이콘 전용 버튼 관례
+            // (App.tsx 의 rail-btn, WorktreePanel 의 icon-btn 등) 을 그대로 따른 것이다.
             title={t(`files.markdown.mode.${m.id}`)}
+            aria-label={t(`files.markdown.mode.${m.id}`)}
             onClick={() => onModeChange(m.id)}
           >
             {m.glyph}
