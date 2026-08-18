@@ -201,3 +201,103 @@ describe('빈 입력', () => {
     expect(parseMarkdown('\n\n')).toEqual([])
   })
 })
+
+import { classifyHref } from './markdownTree'
+
+describe('classifyHref', () => {
+  it('http/https/mailto 는 외부 링크', () => {
+    expect(classifyHref('https://a.com/b')).toEqual({ kind: 'external', url: 'https://a.com/b' })
+    expect(classifyHref('http://a.com')).toEqual({ kind: 'external', url: 'http://a.com' })
+    expect(classifyHref('mailto:a@b.com')).toEqual({ kind: 'external', url: 'mailto:a@b.com' })
+  })
+  it('대소문자와 앞뒤 공백을 무시한다', () => {
+    expect(classifyHref('  HTTPS://a.com  ')).toEqual({ kind: 'external', url: 'HTTPS://a.com' })
+  })
+  // innerHTML 을 쓰지 않아도 <a href="javascript:..."> 는 그대로 동작한다. 이 검사가 그것을 막는다
+  it('위험한 스킴은 링크를 만들지 않는다', () => {
+    for (const raw of [
+      'javascript:alert(1)',
+      'JavaScript:alert(1)',
+      '  javascript:alert(1)',
+      'java\tscript:alert(1)',
+      'data:text/html;base64,PHNjcmlwdD4=',
+      'file:///etc/passwd',
+      'vbscript:msgbox(1)',
+      'blob:https://a.com/x',
+      'about:blank'
+    ])
+      expect(classifyHref(raw)).toBe(null)
+  })
+  it('상대경로는 파일 링크', () => {
+    expect(classifyHref('./a.md')).toEqual({ kind: 'file', path: './a.md' })
+    expect(classifyHref('../b/c.md')).toEqual({ kind: 'file', path: '../b/c.md' })
+    expect(classifyHref('docs/d.md')).toEqual({ kind: 'file', path: 'docs/d.md' })
+  })
+  it('# 로 시작하면 앵커', () => {
+    expect(classifyHref('#install')).toEqual({ kind: 'anchor', id: 'install' })
+  })
+  it('빈 문자열은 링크가 아니다', () => {
+    expect(classifyHref('')).toBe(null)
+    expect(classifyHref('   ')).toBe(null)
+  })
+})
+
+describe('링크와 이미지', () => {
+  it('인라인 링크의 href·title·본문을 읽는다', () => {
+    const p = parseMarkdown('[a](https://b.com "t")\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline[0] as Extract<MdInline, { k: 'link' }>
+    expect(link).toMatchObject({ k: 'link', href: 'https://b.com', title: 't' })
+    expect(plain(link.children)).toBe('a')
+  })
+  it('title 이 없으면 null', () => {
+    const p = parseMarkdown('[a](https://b.com)\n')[0] as Extract<MdBlock, { k: 'para' }>
+    expect((p.inline[0] as Extract<MdInline, { k: 'link' }>).title).toBe(null)
+  })
+  it('링크 안의 강조가 중첩으로 남는다', () => {
+    const p = parseMarkdown('[**a**](https://b.com)\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline[0] as Extract<MdInline, { k: 'link' }>
+    expect(link.children[0].k).toBe('strong')
+  })
+  it('위험한 스킴의 링크는 평문으로 남는다', () => {
+    const p = parseMarkdown('[click](javascript:alert(1))\n')[0] as Extract<MdBlock, { k: 'para' }>
+    expect(p.inline.every((n) => n.k !== 'link')).toBe(true)
+    expect(plain(p.inline)).toContain('click')
+  })
+  it('이미지의 src·alt·title 을 읽는다', () => {
+    const p = parseMarkdown('![alt](a.png "t")\n')[0] as Extract<MdBlock, { k: 'para' }>
+    expect(p.inline[0]).toEqual({ k: 'image', src: 'a.png', alt: 'alt', title: 't' })
+  })
+  it('위험한 스킴의 이미지는 만들지 않는다', () => {
+    const p = parseMarkdown('![x](javascript:alert(1))\n')[0] as Extract<MdBlock, { k: 'para' }>
+    expect(p.inline.every((n) => n.k !== 'image')).toBe(true)
+  })
+  it('자동링크를 링크로 만든다', () => {
+    const p = parseMarkdown('see https://a.com now\n')[0] as Extract<MdBlock, { k: 'para' }>
+    const link = p.inline.find((n) => n.k === 'link') as Extract<MdInline, { k: 'link' }>
+    expect(link.href).toBe('https://a.com')
+  })
+})
+
+describe('참조링크', () => {
+  it('정의를 찾아 잇는다', () => {
+    const md = '[a][b]\n\n[b]: https://c.com "t"\n'
+    const p = parseMarkdown(md)[0] as Extract<MdBlock, { k: 'para' }>
+    expect(p.inline[0]).toMatchObject({ k: 'link', href: 'https://c.com', title: 't' })
+  })
+  it('라벨은 대소문자를 무시한다', () => {
+    const p = parseMarkdown('[a][B]\n\n[b]: https://c.com\n')[0] as Extract<MdBlock, { k: 'para' }>
+    expect(p.inline[0]).toMatchObject({ k: 'link', href: 'https://c.com' })
+  })
+  it('축약형 [a][] 도 잇는다', () => {
+    const p = parseMarkdown('[a][]\n\n[a]: https://c.com\n')[0] as Extract<MdBlock, { k: 'para' }>
+    expect(p.inline[0]).toMatchObject({ k: 'link', href: 'https://c.com' })
+  })
+  it('정의가 없으면 원문 그대로 평문', () => {
+    const p = parseMarkdown('[a][missing]\n')[0] as Extract<MdBlock, { k: 'para' }>
+    expect(p.inline.every((n) => n.k !== 'link')).toBe(true)
+    expect(plain(p.inline)).toBe('[a][missing]')
+  })
+  it('정의 블록 자체는 화면에 남지 않는다', () => {
+    expect(parseMarkdown('[b]: https://c.com\n')).toEqual([])
+  })
+})

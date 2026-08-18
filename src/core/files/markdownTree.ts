@@ -50,6 +50,8 @@ export type MdInline =
   | { k: 'del'; children: MdInline[] }
   | { k: 'code'; text: string }
   | { k: 'br' }
+  | { k: 'link'; href: string; title: string | null; children: MdInline[] }
+  | { k: 'image'; src: string; alt: string; title: string | null }
 
 export interface MdItem {
   line: number
@@ -93,13 +95,16 @@ function lineAt(starts: number[], offset: number): number {
 interface Ctx {
   text: string
   starts: number[]
+  /** 참조링크 정의. 키는 소문자로 접은 라벨 */
+  defs: Map<string, { href: string; title: string | null }>
 }
 
 /** 인라인 순회에서 건너뛰는 구분자 노드들. 이들은 원문에 글자로 남아 있지만 화면에는 나오지 않는다
  *  (`*`, `` ` ``, `~~`, `#`, `>`, `-`, `[ ]`) */
 const INLINE_SKIP = new Set([
   'EmphasisMark', 'CodeMark', 'StrikethroughMark', 'HeaderMark', 'QuoteMark', 'ListMark',
-  'TaskMarker', 'CodeInfo', 'TableDelimiter', 'Comment', 'ProcessingInstruction'
+  'TaskMarker', 'CodeInfo', 'TableDelimiter', 'Comment', 'ProcessingInstruction',
+  'LinkLabel', 'URL', 'LinkTitle'
 ])
 
 function pushText(out: MdInline[], text: string): void {
@@ -120,6 +125,90 @@ function trimEnds(nodes: MdInline[]): MdInline[] {
   const last = out[lastIdx]
   if (last && last.k === 'text') out[lastIdx] = { k: 'text', text: last.text.replace(/\s+$/, '') }
   return out.filter((n) => !(n.k === 'text' && n.text === ''))
+}
+
+/** 링크 대상의 분류. null 은 링크로 만들지 않는다는 뜻이다 */
+export type MdHref =
+  | { kind: 'external'; url: string }
+  | { kind: 'file'; path: string }
+  | { kind: 'anchor'; id: string }
+  | null
+
+/** 허용 스킴. 이 셋 말고는 어떤 것도 링크가 되지 않는다.
+ *
+ *  innerHTML 을 쓰지 않아도 <a href="javascript:..."> 는 그대로 동작하므로 이 검사가 필요하다.
+ *  스킴 탐지에서 제어문자를 먼저 지우는 이유: `java\tscript:` 처럼 스킴 안에 탭이나 개행을 넣는
+ *  것은 브라우저가 무시하고 실행하는 고전적인 우회다. */
+const ALLOWED_SCHEMES = new Set(['http:', 'https:', 'mailto:'])
+const SCHEME = /^([a-z][a-z0-9+.-]*):/i
+
+export function classifyHref(raw: string): MdHref {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  if (trimmed.startsWith('#')) return { kind: 'anchor', id: trimmed.slice(1) }
+  // 스킴 판정 전에만 제어문자를 지운다. 통과한 URL 은 원문 그대로 넘긴다
+  const probe = trimmed.replace(/[\u0000-\u0020]/g, '')
+  const m = SCHEME.exec(probe)
+  if (!m) return { kind: 'file', path: trimmed }
+  return ALLOWED_SCHEMES.has(m[1].toLowerCase() + ':') ? { kind: 'external', url: trimmed } : null
+}
+
+/** 링크/이미지 노드에서 (대상, 제목)을 꺼낸다.
+ *
+ *  인라인 형태는 URL·LinkTitle 자식을 가진다. 참조 형태는 LinkLabel 을 가지므로 정의 표를 본다.
+ *  둘 다 없으면 축약형 `[a][]`/`[a]` 이므로 본문 텍스트를 라벨로 쓴다.
+ *
+ *  **LinkLabel 이 있어도 비어 있을 수 있다**: `[a][]`(collapsed reference) 는 LinkLabel 노드가
+ *  실제로 존재하지만 그 안이 비어 있다(`"[]"`, 대괄호 사이에 글자가 없다) — 실제 트리 덤프로 확인.
+ *  라벨이 없는 것과 같은 뜻이므로, 비어 있으면 축약형 `[a]` 처럼 본문 텍스트로 되돌아간다.
+ *  이걸 하지 않으면 `defs.get('')` 을 찾게 되어 정의가 있어도 연결되지 않는다. */
+function linkTarget(node: SyntaxNode, ctx: Ctx): { dest: string; title: string | null } | null {
+  const url = node.getChild('URL')
+  const titleNode = node.getChild('LinkTitle')
+  const title = titleNode ? ctx.text.slice(titleNode.from + 1, titleNode.to - 1) : null
+  if (url) return { dest: ctx.text.slice(url.from, url.to), title }
+
+  const labelNode = node.getChild('LinkLabel')
+  const rawLabel = labelNode ? ctx.text.slice(labelNode.from + 1, labelNode.to - 1) : ''
+  const label = rawLabel || innerText(node, ctx)
+  const def = ctx.defs.get(label.trim().toLowerCase())
+  return def ? { dest: def.href, title: title ?? def.title } : null
+}
+
+/** 링크 표시부의 평문. 축약형 참조링크의 라벨을 얻는 데 쓴다 */
+function innerText(node: SyntaxNode, ctx: Ctx): string {
+  const marks = node.getChildren('LinkMark')
+  if (marks.length < 2) return ''
+  return ctx.text.slice(marks[0].to, marks[1].from)
+}
+
+/** 링크 표시부의 인라인 — 첫 LinkMark 와 그 짝 **사이만** 본다.
+ *
+ *  범위를 주지 않으면 URL 과 LinkTitle 사이의 공백이 본문에 섞인다. `[a](https://b.com "t")` 가
+ *  본문 `"a "` 로 나오는 것이 그 증상이다 (inlineOf 의 limit 주석 참고). */
+function linkChildren(node: SyntaxNode, ctx: Ctx): MdInline[] {
+  const marks = node.getChildren('LinkMark')
+  if (marks.length < 2) return [{ k: 'text', text: innerText(node, ctx) }]
+  const inner = trimEnds(inlineOf(node, ctx, { from: marks[0].to, to: marks[1].from }))
+  return inner.length > 0 ? inner : [{ k: 'text', text: innerText(node, ctx) }]
+}
+
+/** 문서 전체의 참조링크 정의를 모은다. 본문 순회보다 먼저 돌아야 한다 — 정의가 사용보다 뒤에
+ *  올 수 있기 때문이다(CommonMark 는 순서를 요구하지 않는다) */
+function collectDefs(root: SyntaxNode, ctx: Ctx): void {
+  const cursor = root.cursor()
+  do {
+    if (cursor.name !== 'LinkReference') continue
+    const node = cursor.node
+    const label = node.getChild('LinkLabel')
+    const url = node.getChild('URL')
+    if (!label || !url) continue
+    const titleNode = node.getChild('LinkTitle')
+    ctx.defs.set(ctx.text.slice(label.from + 1, label.to - 1).trim().toLowerCase(), {
+      href: ctx.text.slice(url.from, url.to),
+      title: titleNode ? ctx.text.slice(titleNode.from + 1, titleNode.to - 1) : null
+    })
+  } while (cursor.next())
 }
 
 /** 노드의 자식들을 인라인 목록으로 만든다. 자식 사이의 빈 구간은 평문이다.
@@ -161,6 +250,42 @@ function inlineOf(node: SyntaxNode, ctx: Ctx, limit?: { from: number; to: number
         const from = first && first.name === 'CodeMark' ? first.to : c.from
         const to = last && last.name === 'CodeMark' ? last.from : c.to
         out.push({ k: 'code', text: ctx.text.slice(from, to) })
+        break
+      }
+      case 'Link': {
+        const target = linkTarget(c, ctx)
+        // 대상이 없거나(정의 미해결) 허용 스킴이 아니면 링크를 만들지 않고 원문을 평문으로 남긴다
+        if (!target || classifyHref(target.dest) === null) {
+          pushText(out, ctx.text.slice(c.from, c.to))
+          break
+        }
+        out.push({ k: 'link', href: target.dest, title: target.title, children: linkChildren(c, ctx) })
+        break
+      }
+      case 'Image': {
+        const target = linkTarget(c, ctx)
+        if (!target || classifyHref(target.dest) === null) {
+          pushText(out, ctx.text.slice(c.from, c.to))
+          break
+        }
+        const marks = c.getChildren('LinkMark')
+        const alt = marks.length >= 2 ? ctx.text.slice(marks[0].to, marks[1].from) : ''
+        out.push({ k: 'image', src: target.dest, alt, title: target.title })
+        break
+      }
+      // GFM 의 맨 URL 자동링크(`see https://a.com now`)는 Autolink 노드가 아니라 밋밋한 URL
+      // 노드로 나온다 — Link/Image 의 목적지 자식과 노드 이름이 같다(실제 트리 덤프로 확인).
+      // 그 자식은 linkChildren 의 limit 범위 밖에 있어 이 switch 에 닿지 않으므로, 여기서 만나는
+      // URL 은 항상 이 GFM 맨 자동링크다. `<https://a.com>` 형은 Autolink 노드로 감싸여 있고
+      // 꺾쇠를 포함해 슬라이스되므로 replace 로 벗긴다 — 맨 URL 은 꺾쇠가 없어 그대로 통과한다.
+      case 'Autolink':
+      case 'URL': {
+        const url = ctx.text.slice(c.from, c.to).replace(/^<|>$/g, '')
+        if (classifyHref(url) === null) {
+          pushText(out, url)
+          break
+        }
+        out.push({ k: 'link', href: url, title: null, children: [{ k: 'text', text: url }] })
         break
       }
       case 'HardBreak':
@@ -337,6 +462,8 @@ function blocksOf(parent: SyntaxNode, ctx: Ctx): MdBlock[] {
 
 /** 마크다운 원문을 블록 목록으로 바꾼다. 입력은 LF 여야 한다 */
 export function parseMarkdown(text: string): MdBlock[] {
-  const ctx: Ctx = { text, starts: lineStarts(text) }
-  return blocksOf(mdParser.parse(text).topNode, ctx)
+  const ctx: Ctx = { text, starts: lineStarts(text), defs: new Map() }
+  const root = mdParser.parse(text).topNode
+  collectDefs(root, ctx)
+  return blocksOf(root, ctx)
 }
