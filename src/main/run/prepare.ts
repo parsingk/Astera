@@ -35,11 +35,19 @@ export async function readSeedTexts(projectRoot: string, files: string[]): Promi
 }
 
 /** 저장된 구성과 자동 감지된 시드를 합친 목록. 파일 목록과 본문도 함께 돌려준다 —
- *  호출자가 buildRunContext 나 isSpringBootProject 같은 판정에 다시 필요로 한다. */
+ *  호출자가 buildRunContext 나 isSpringBootProject 같은 판정에 다시 필요로 한다.
+ *
+ *  **assertAllowedPath 가 필수 인자인 이유:** 이 함수는 projectPath 를 readdir 하고 그 아래
+ *  빌드 파일들을 읽는다. IPC 핸들러(run.list)는 자기 자리에서 이미 검사하지만, 오케스트레이션의
+ *  run-configs 는 코디네이터가 준 Run.cwd 를 그대로 들고 들어온다 — resolveProjectRoot 는
+ *  ADR-003 이 명시하듯 "최선 노력이지 검증이 아니다". 인자로 받아 두면 호출자가 검사를 빠뜨릴
+ *  자리가 없다. 앱의 다른 모든 경로 읽기가 이 가드 뒤에 있다. */
 export async function loadRunConfigs(a: {
   projectPath: string
   stored: RunConfig[]
+  assertAllowedPath: (p: string) => Promise<string>
 }): Promise<{ configs: RunConfig[]; files: string[]; texts: SeedTexts }> {
+  await a.assertAllowedPath(a.projectPath)
   let files: string[] = []
   try {
     files = (await fs.readdir(a.projectPath, { withFileTypes: true })).map((d) => d.name)
@@ -67,7 +75,11 @@ export interface PrepareRunArgs {
 export async function prepareRun(
   a: PrepareRunArgs
 ): Promise<{ config: RunConfig; command: string; projectName: string }> {
-  const { configs, files } = await loadRunConfigs({ projectPath: a.projectPath, stored: a.stored })
+  const { configs, files } = await loadRunConfigs({
+    projectPath: a.projectPath,
+    stored: a.stored,
+    assertAllowedPath: a.assertAllowedPath
+  })
   const config = configs.find((c) => c.id === a.configId)
   if (!config) throw new Error(`NO_CONFIG: ${a.configId}`)
   // 미완성 구성을 저장하는 것은 허용되지만 실행은 아니다. 비어 있는 필드를 이름으로 알려 준다 —

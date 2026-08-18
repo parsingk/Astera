@@ -547,6 +547,10 @@ export function registerIpc(
             throw new Error(`task ${taskId} is no longer validating: ${task.status}`)
           const run = st.runs.find((r) => r.id === task.runId)
           if (!run) throw new Error(`unknown run for task ${taskId}`)
+          // PTY 를 띄울 경로는 가드를 통과해야 한다. Dispatch.cwd 는 오케스트레이션 소켓에서 온
+          // 값이고 resolveProjectRoot 는 ADR-003 이 명시하듯 "최선 노력이지 검증이 아니다".
+          // 실패하면 그것이 그대로 Gate 가 되므로(onCannotRun) 여기가 올바른 자리다.
+          await assertAllowedPath(cwd)
           // 구성은 Run 의 프로젝트에서, 실행은 Dispatch 의 cwd 에서. ignoreConfigCwd 는 구성에 박힌
           // 경로가 워커의 트리가 아닌 곳을 가리키기 때문이다(spec 2절).
           const { config, command, projectName } = await prepareRun({
@@ -700,7 +704,8 @@ export function registerIpc(
       listRunConfigs: async (projectPath) => {
         const { configs } = await loadRunConfigs({
           projectPath,
-          stored: core.runConfig.get(projectPath)
+          stored: core.runConfig.get(projectPath),
+          assertAllowedPath
         })
         return configs.map((c) => ({ id: c.id, name: c.name, type: c.type }))
       },
@@ -905,7 +910,8 @@ export function registerIpc(
     await assertAllowedPath(projectPath)
     const { configs, files, texts } = await loadRunConfigs({
       projectPath,
-      stored: core.runConfig.get(projectPath)
+      stored: core.runConfig.get(projectPath),
+      assertAllowedPath
     })
     const { isSpringBootProject, hasDockerfile } = await import('../core/run/config')
     const { buildRunContext } = await import('../core/run/build')

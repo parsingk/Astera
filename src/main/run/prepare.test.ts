@@ -47,16 +47,38 @@ describe('loadRunConfigs', () => {
     const stored = [
       { id: 'c1', name: '내 구성', type: 'shell' as const, command: 'echo hi' }
     ]
-    const r = await loadRunConfigs({ projectPath: dir, stored })
+    const r = await loadRunConfigs({ projectPath: dir, stored, assertAllowedPath: allowAll })
     expect(r.configs.some((c) => c.id === 'c1')).toBe(true)
     expect(r.configs.length).toBeGreaterThan(1) // 시드가 최소 하나 붙는다
     expect(r.files).toContain('package.json')
     expect(r.texts.packageJson).toContain('tsc')
   })
 
+  // 가드는 필수 인자다 — 오케스트레이션의 run-configs 는 검사되지 않은 Run.cwd 를 그대로 들고
+  // 들어온다. 거절은 삼키지 않고 그대로 던진다: 빈 목록으로 돌려주면 "구성이 없다"와 "볼 권한이
+  // 없다"가 호출자에게 같아진다.
+  it('허용되지 않은 경로는 읽지 않고 거절한다', async () => {
+    const seen: string[] = []
+    await expect(
+      loadRunConfigs({
+        projectPath: dir,
+        stored: [],
+        assertAllowedPath: async (p) => {
+          seen.push(p)
+          throw new Error('files.error.pathNotAllowed')
+        }
+      })
+    ).rejects.toThrow('files.error.pathNotAllowed')
+    expect(seen).toEqual([dir])
+  })
+
   it('읽을 수 없는 디렉터리면 파일 목록이 비고 저장된 구성만 남는다', async () => {
     const stored = [{ id: 'c1', name: '내 구성', type: 'shell' as const, command: 'echo hi' }]
-    const r = await loadRunConfigs({ projectPath: path.join(dir, 'nope'), stored })
+    const r = await loadRunConfigs({
+      projectPath: path.join(dir, 'nope'),
+      stored,
+      assertAllowedPath: allowAll
+    })
     expect(r.files).toEqual([])
     expect(r.configs.map((c) => c.id)).toEqual(['c1'])
   })
