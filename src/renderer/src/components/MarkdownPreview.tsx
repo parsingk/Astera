@@ -78,14 +78,54 @@ function highlight(code: string, lang: LangKey | null): React.ReactNode {
   return out
 }
 
+/** Highlight results, cached by content rather than by tree position.
+ *
+ *  CodeBlock's own React `key` comes from the shared positional counter (nextKey()), not from its
+ *  content — so a structural edit anywhere earlier in the document (splitting a paragraph, adding
+ *  emphasis, a new list item) shifts every key after it. React then unmounts the old CodeBlock fiber and
+ *  mounts a fresh one for what is, content-wise, the exact same code block — discarding both memo's
+ *  bailout and useMemo's cache, since neither survives past the fiber they live on. This cache does,
+ *  because it lives at module scope rather than on any one fiber, so a remount for unchanged text+lang
+ *  still hits it.
+ *
+ *  Capped at 64 entries, FIFO eviction (a Map preserves insertion order, so the oldest key is always
+ *  `keys().next().value`). Unlike useMemo, nothing here is bounded by a fiber's own lifetime — an
+ *  unbounded module cache would grow by one entry per distinct (lang, text) pair ever seen across a
+ *  whole editing session, including every intermediate state of a fence being actively typed into. 64
+ *  covers a document with an unusually large number of distinct code fences while keeping the cache's
+ *  own footprint bounded (each entry is at most HIGHLIGHT_MAX characters of key text, since anything
+ *  over that cap returns early below, before ever touching the cache).
+ *
+ *  Keyed on `${lang} ${code}`: no LangKey value contains a space or equals the literal string "null" (the
+ *  template literal's stringification of the null case), so this cannot map two distinct (lang, code)
+ *  pairs onto the same string. */
+const HIGHLIGHT_CACHE_MAX = 64
+const highlightCache = new Map<string, React.ReactNode>()
+
+function cachedHighlight(code: string, lang: LangKey | null): React.ReactNode {
+  if (code.length > HIGHLIGHT_MAX) return code
+  const key = `${lang} ${code}`
+  const cached = highlightCache.get(key)
+  if (cached !== undefined) return cached
+  const result = highlight(code, lang)
+  highlightCache.set(key, result)
+  if (highlightCache.size > HIGHLIGHT_CACHE_MAX) {
+    const oldest = highlightCache.keys().next().value
+    if (oldest !== undefined) highlightCache.delete(oldest)
+  }
+  return result
+}
+
 /** One fenced/indented code block. Wrapped in React.memo so that editing anywhere else in the document
  *  — which gives every block a brand-new object identity, since parseMarkdown rebuilds the whole tree —
- *  does not re-run highlight() for a block whose own text and language did not change: memo's shallow
- *  prop comparison sees the same string values (strings compare by value) and bails out before this
- *  component's function body, and therefore before highlight(), runs again. Props are kept to plain
- *  primitives (string, string|null, number) on purpose — an object or array prop here would be a new
- *  reference every render and defeat the comparison. useMemo is a second, cheaper line of defence for
- *  the rare case this instance does re-render (e.g. only `lang` changed). */
+ *  does not re-run cachedHighlight() for a block whose own text and language did not change within one
+ *  render pass: memo's shallow prop comparison sees the same string values (strings compare by value)
+ *  and bails out before this component's function body runs again. Props are kept to plain primitives
+ *  (string, string|null, number) on purpose — an object or array prop here would be a new reference
+ *  every render and defeat the comparison. useMemo is a second, cheaper line of defence for the rare
+ *  case this instance does re-render (e.g. only `lang` changed) — it still saves the Map lookup itself.
+ *  Neither of these survives the key-driven remount described above, which is what the module-level
+ *  cachedHighlight() cache is for. */
 const CodeBlock = memo(function CodeBlock({
   text, lang, line
 }: {
@@ -93,7 +133,7 @@ const CodeBlock = memo(function CodeBlock({
   lang: LangKey | null
   line: number
 }): React.JSX.Element {
-  const nodes = useMemo(() => highlight(text, lang), [text, lang])
+  const nodes = useMemo(() => cachedHighlight(text, lang), [text, lang])
   return (
     <pre data-md-line={line}>
       <code>{nodes}</code>
