@@ -990,7 +990,7 @@ export default function App(): React.JSX.Element {
     )
   }
 
-  /** 에디터가 사라질 때 그 상태를 캐시에 넘겨받는다. 세션 모드로 나가면 .explorer-view가 통째로
+  /** 에디터가 사라질 때 그 상태를 캐시에 넘겨받는다. 세션 모드로 나가면 .run-host가 통째로
    *  언마운트되므로, 이 경로가 없으면 되돌리기 이력이 거기서 끊긴다(세션 탭은 숨기기만 해서 안 끊긴다).
    *
    *  탭이 아직 열려 있을 때만 보관한다. 탭을 닫는 경로는 이미 cache.drop을 했고 그 뒤에 언마운트가
@@ -1455,7 +1455,8 @@ export default function App(): React.JSX.Element {
   // The Jobs sidebar snapshot for the open project — orch.list's initial payload, then every
   // 'orch:state' push after it (see the subscription effect below). null until orch.list first resolves.
   const [orchSnapshot, setOrchSnapshot] = useState<OrchSnapshot | null>(null)
-  const explorerViewRef = useRef<HTMLDivElement>(null)
+  /** Run 콘솔의 자리. 리사이저가 --run-panel-h 를 이 노드에 직접 쓴다 */
+  const runHostRef = useRef<HTMLDivElement>(null)
 
   /** 트리 루트는 활성 탭을 따른다 — 활성 탭이 파일이면 그 파일의 프로젝트, 세션이면 그 세션의 cwd.
    *  탭이 없으면 null이다. 보고 있는 것과 트리가 항상 일치하는 것이 이 규칙의 목적이다.
@@ -1536,9 +1537,26 @@ export default function App(): React.JSX.Element {
     )
   }
 
-  // Loads that project's run configurations and active run whenever the explorer root or open state changes
+  // 사이드바에 그릴 뷰 하나 — 세 갈래 삼항보다 이 값 하나가 어느 뷰가 열려 있는지를 더 분명히 읽힌다.
+  // 탐색기와 Jobs는 서로 배타적이다(toggleExplorer/toggleJobs가 상대를 끈다). orchEnabled가 꺼지면
+  // jobsOpen이 내부적으로 true로 남아 있어도 Jobs를 그리지 않고 세션 목록으로 돌아간다 — 레일의 진입점이
+  // 사라지는 시점에 사이드바도 조용히 원래 모습으로 돌아가야 어색해지지 않는다.
+  //
+  // **아래 효과들과 Run 콘솔의 렌더가 이 값을 공유한다.** 그래서 선언이 렌더 본문 끝이 아니라 여기에
+  // 있다 — 효과의 의존성 배열은 렌더 중에 평가되므로 선언이 그보다 아래면 TDZ 로 터진다.
+  // 세 자리에 `explorerOpen || jobsOpen` 을 각각 쓰면 사이드바가 실제로 보여주는 것과 어긋날 수 있다.
+  const sidebarPane: 'explorer' | 'jobs' | 'sessions' = explorerOpen
+    ? 'explorer'
+    : jobsOpen && orchEnabled
+      ? 'jobs'
+      : 'sessions'
+  /** Run 콘솔과 터미널이 붙는 페인인가. 세션 목록에는 붙지 않는다 — 그쪽은 프로젝트가 아니라
+   *  세션을 고르는 화면이고, 지금 동작을 바꾸지 않는다. */
+  const hostsBottomPanel = sidebarPane !== 'sessions'
+
+  // Loads that project's run configurations and active run whenever the host pane or the root changes
   useEffect(() => {
-    if (!explorerOpen || !explorerRoot) return
+    if (!hostsBottomPanel || !explorerRoot) return
     let cancelled = false
     void window.api.run.list(explorerRoot).then((r) => {
       if (cancelled) return
@@ -1552,7 +1570,7 @@ export default function App(): React.JSX.Element {
       if (r.active?.status === 'running') setRunPanelOpen(true)
     })
     return () => { cancelled = true }
-  }, [explorerOpen, explorerRoot])
+  }, [hostsBottomPanel, explorerRoot])
 
   // Turning the setting off makes the rail button — the only control that can close the Jobs view —
   // disappear along with it (it is gated on the same orchEnabled), so a view left open past that point
@@ -1610,7 +1628,9 @@ export default function App(): React.JSX.Element {
   // When the project changes, that project's terminal list is read again — main holds them per project,
   // so another project's terminals stay alive and are simply not shown here
   useEffect(() => {
-    if (!explorerOpen || !explorerRoot) {
+    // hostsBottomPanel 로 거르는 이유: BottomPanel 이 Run 콘솔과 터미널을 함께 담으므로, Jobs 에서
+    // 콘솔만 그리고 이 목록을 안 읽으면 터미널 탭이 빈 껍데기가 된다.
+    if (!hostsBottomPanel || !explorerRoot) {
       setTerminals([])
       return
     }
@@ -1629,7 +1649,7 @@ export default function App(): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [explorerOpen, explorerRoot])
+  }, [hostsBottomPanel, explorerRoot])
 
   // An event subscription (refreshed by run:status) plus one initial query, instead of polling all active runs
   useEffect(() => {
@@ -1877,16 +1897,6 @@ export default function App(): React.JSX.Element {
       </div>
     )
   }
-
-  // 사이드바에 그릴 뷰 하나 — 세 갈래 삼항보다 이 값 하나가 어느 뷰가 열려 있는지를 더 분명히 읽힌다.
-  // 탐색기와 Jobs는 서로 배타적이다(toggleExplorer/toggleJobs가 상대를 끈다). orchEnabled가 꺼지면
-  // jobsOpen이 내부적으로 true로 남아 있어도 Jobs를 그리지 않고 세션 목록으로 돌아간다 — 레일의 진입점이
-  // 사라지는 시점에 사이드바도 조용히 원래 모습으로 돌아가야 어색해지지 않는다.
-  const sidebarPane: 'explorer' | 'jobs' | 'sessions' = explorerOpen
-    ? 'explorer'
-    : jobsOpen && orchEnabled
-      ? 'jobs'
-      : 'sessions'
 
   return (
     <div className="app">
@@ -2169,16 +2179,18 @@ export default function App(): React.JSX.Element {
                 </button>
               )}
             </div>
-            {/* 탐색기 계통의 아래쪽 — 에디터 본문이 페인으로 옮겨 갔으므로 이제 Run 콘솔과 그 리사이저만
-                들어 있다 (.explorer-view가 flex:none인 이유가 styles.css에 있다) */}
-            {explorerOpen && (
+            {/* Run 콘솔과 그 리사이저의 자리. 예전에는 탐색기 페인 안에 있었고 이름도 그랬지만, 콘솔은
+                탐색기의 것이 아니라 **프로젝트**의 것이다 — Jobs 를 보면서도 빌드를 돌리고 그 출력을
+                봐야 한다. 세션 목록에는 붙지 않는다(hostsBottomPanel): 그쪽은 프로젝트가 아니라 세션을
+                고르는 화면이다. (.run-host 가 flex:none 인 이유는 styles.css 에 있다) */}
+            {hostsBottomPanel && (
               <div
-                className="explorer-view"
-                ref={explorerViewRef}
+                className="run-host"
+                ref={runHostRef}
                 style={
                   {
                     // Run 콘솔이 이 화면 안에 있으므로 --run-panel-h 는 계속 여기에 둔다(run-resizer가
-                    // explorerViewRef로 이 값을 직접 갱신한다).
+                    // runHostRef로 이 값을 직접 갱신한다).
                     ['--run-panel-h']: `${runPanelHeight}px`
                   } as React.CSSProperties
                 }
@@ -2198,7 +2210,7 @@ export default function App(): React.JSX.Element {
                       const clamp = (y: number): number => Math.min(800, Math.max(120, startH + (startY - y)))
                       const apply = (): void => {
                         rafId = 0
-                        explorerViewRef.current?.style.setProperty('--run-panel-h', `${clamp(latestY)}px`)
+                        runHostRef.current?.style.setProperty('--run-panel-h', `${clamp(latestY)}px`)
                       }
                       const onMove = (ev: PointerEvent): void => {
                         latestY = ev.clientY

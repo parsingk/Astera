@@ -205,11 +205,13 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .session-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 /* flex: none, not 1 — the editor moved into the panes, so all that is left in here is the Run console,
    whose height is its own. Left at 1 it would split the surface with .session-view and halve the grid */
-.explorer-view { flex: none; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+/* Run 콘솔과 그 리사이저의 자리. 탐색기 전용이던 시절의 이름(.explorer-view)을 버렸다 — 콘솔은
+   탐색기가 아니라 프로젝트의 것이고, Jobs 페인에서도 같은 자리에 붙는다. */
+.run-host { flex: none; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 
 /* ---------- project Run/Stop — RunToolbar and workbench wiring ---------- */
-/* The editor body. It now lives inside a pane's slot rather than under .explorer-view, and the rule is
-   unchanged because the slot is a column flex box just as .explorer-view was */
+/* The editor body. It now lives inside a pane's slot rather than under the run console's host, and the
+   rule is unchanged because the slot is a column flex box just as that host is */
 .workbench-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .run-toolbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-left: 1px solid var(--line); background: var(--panel); position: relative; }
 /* The run-config picker in the toolbar. Only sizing lives here now — the surface comes from .sel.
