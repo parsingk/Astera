@@ -162,13 +162,25 @@ describe('timelineFor', () => {
       .toBe('ses-d1')
   })
 
-  it('다른 Run 의 메시지와 Gate 는 섞이지 않는다', () => {
+  it('다른 Run 의 메시지는 섞이지 않는다', () => {
     const s = state({
       runs: [run('r1'), run('r2')],
       messages: [message('m1', 'r1', 'status'), message('m2', 'r2', 'status')]
     })
     expect(timelineFor(s, 'r1', anySession).filter((e) => e.kind === 'message').map((e) => e.sourceId))
       .toEqual(['m1'])
+  })
+
+  // Gate 는 runId 를 직접 들고 있어 Task 를 통하지 않고 걸러진다 — 그 필터에도 자기 테스트가 있어야
+  // 한다. 새면 다른 Run 의 질문이 이 Run 의 기록에 나타난다
+  it('다른 Run 의 Gate 는 섞이지 않는다', () => {
+    const s = state({
+      runs: [run('r1'), run('r2')],
+      tasks: [task('t1', 'r1'), task('t2', 'r2')],
+      gates: [gate('g1', 't1'), { ...gate('g2', 't2'), runId: 'r2' }]
+    })
+    expect(timelineFor(s, 'r1', anySession).filter((e) => e.kind === 'gate-opened').map((e) => e.sourceId))
+      .toEqual(['g1'])
   })
 })
 
