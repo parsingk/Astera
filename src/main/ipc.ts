@@ -47,6 +47,7 @@ import { listJdks } from './jdkScanner'
 import { listPythonInterpreters } from './pythonScanner'
 import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
+import { loadRunConfigs, prepareRun } from './run/prepare'
 
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
  *  in this file — the two values the coordinator needs (spawnSession, busyState) are owned here, so
@@ -824,47 +825,16 @@ export function registerIpc(
     }
   })
 
-  // Shared by run.list and run.start: reads the build file bodies needed for the seed verdict. When both
-  // .kts and .gradle exist, .kts wins. A read failure is swallowed to null — the same convention as the
-  // existing package.json handling — so the seed just ends up empty (one unreadable file must not take
-  // down all of run.list and run.start).
-  const readSeedTexts = async (
-    projectRoot: string,
-    files: string[]
-  ): Promise<{ packageJson: string | null; buildGradle: string | null; pom: string | null }> => {
-    const readIfPresent = async (name: string): Promise<string | null> => {
-      if (!files.includes(name)) return null
-      try {
-        return await fs.readFile(path.join(projectRoot, name), 'utf8')
-      } catch {
-        return null
-      }
-    }
-    const gradleFile = files.includes('build.gradle.kts') ? 'build.gradle.kts' : 'build.gradle'
-    const [packageJson, buildGradle, pom] = await Promise.all([
-      readIfPresent('package.json'),
-      readIfPresent(gradleFile),
-      readIfPresent('pom.xml')
-    ])
-    return { packageJson, buildGradle, pom }
-  }
-
   // run.list: stored configs unioned with the auto-seeded ones, plus the active status and recent output for reattaching
   ipcMain.handle('run.list', async (_e, projectPath: string) => {
     await assertAllowedPath(projectPath)
-    let files: string[] = []
-    try {
-      files = (await fs.readdir(projectPath, { withFileTypes: true })).map((d) => d.name)
-    } catch {
-      /* An empty list if it cannot be read */
-    }
-    const texts = await readSeedTexts(projectPath, files)
-    const { detectSeedConfigs, mergeConfigs, isSpringBootProject, hasDockerfile } = await import(
-      '../core/run/config'
-    )
+    const { configs, files, texts } = await loadRunConfigs({
+      projectPath,
+      stored: core.runConfig.get(projectPath)
+    })
+    const { isSpringBootProject, hasDockerfile } = await import('../core/run/config')
     const { buildRunContext } = await import('../core/run/build')
     const { hasPythonProject } = await import('../core/run/python')
-    const configs = mergeConfigs(detectSeedConfigs(files, texts), core.runConfig.get(projectPath))
     return {
       configs,
       active: core.run.get(projectPath),
@@ -952,67 +922,16 @@ export function registerIpc(
     return listDotnetProjects(projectPath)
   })
 
-  /** Validates a run configuration's cwd and returns the absolute path that will **actually be used**.
-   *  cwd comes from two places outside the trust boundary — the stored file (hand-editable on disk) and
-   *  the run.saveConfig IPC (the renderer) — and runManager passes it straight through as the PTY's cwd,
-   *  so without validation a process starts outside the allowed roots.
-   *  A relative path is resolved against the project root. Without that it would resolve against the
-   *  Electron process's cwd and run somewhere other than intended. isPathWithin resolves `..` through
-   *  path.resolve, blocks sibling prefixes (D:\proj vs D:\proj2) at a separator boundary, and includes
-   *  the project root itself.
-   *  **The return value is what must be handed to execution** — validating and then passing the original
-   *  cwd puts this in the "validated one value, used another" category, and a defect of that shape has
-   *  recurred six times in this feature area. */
-  const resolveRunCwd = async (projectPath: string, cwd: unknown): Promise<string | undefined> => {
-    if (cwd === undefined || cwd === null || cwd === '') return undefined
-    if (typeof cwd !== 'string') throw new Error(t(core.lang, 'run.config.cwdNotString'))
-    const resolved = path.resolve(projectPath, cwd)
-    await assertAllowedPath(resolved)
-    if (!isPathWithin(projectPath, resolved))
-      throw new Error(t(core.lang, 'run.config.cwdOutsideProject'))
-    return resolved
-  }
-
   ipcMain.handle('run.start', async (_e, projectPath: string, configId: string) => {
     await assertAllowedPath(projectPath)
-    let files: string[] = []
-    try {
-      files = (await fs.readdir(projectPath, { withFileTypes: true })).map((d) => d.name)
-    } catch {
-      /* Ignore */
-    }
-    const texts = await readSeedTexts(projectPath, files)
-    const { detectSeedConfigs, mergeConfigs } = await import('../core/run/config')
-    const config = mergeConfigs(detectSeedConfigs(files, texts), core.runConfig.get(projectPath)).find(
-      (c) => c.id === configId
-    )
-    if (!config) throw new Error(`NO_CONFIG: ${configId}`)
-    // Saving an incomplete configuration is allowed (see run.saveConfig below) so a half-filled one is
-    // not lost; running it is not. Refuse here, naming the field that is still empty — assembling it
-    // instead would splice an empty argument into the command and fail somewhere inside the tool,
-    // where the message has nothing to do with the field the user has to go and fill in.
-    const { missingRequiredFields } = await import('../core/run/migrate')
-    const missing = missingRequiredFields(config)
-    if (missing.length > 0)
-      throw new Error(
-        t(core.lang, 'run.start.incomplete', {
-          // Every name in REQUIRED has a run.field.* label — pinned by a test in core/run/migrate.test.ts,
-          // since this lookup is built from a string and TypeScript cannot check it
-          fields: missing.map((k) => t(core.lang, `run.field.${k}` as MessageKey)).join(', ')
-        })
-      )
-    // Send the validated cwd through — runManager uses config.cwd as the PTY cwd, so passing the
-    // original would split what was validated from what runs
-    const cwd = await resolveRunCwd(projectPath, config.cwd)
-    const { buildCommand, buildRunContext } = await import('../core/run/build')
-    // Both handlers call buildRunContext the same way — keeping the wrapper/package-manager rule in one
-    // place is the point, so the form's preview (run.list) and the actual run never disagree.
-    return core.run.start({
+    const { config, command, projectName } = await prepareRun({
       projectPath,
-      projectName: path.basename(projectPath) || projectPath,
-      config: { ...config, cwd },
-      command: buildCommand(config, buildRunContext(files, process.platform))
+      configId,
+      stored: core.runConfig.get(projectPath),
+      assertAllowedPath,
+      t: (key, params) => t(core.lang, key as MessageKey, params)
     })
+    return core.run.start({ projectPath, projectName, config, command })
   })
 
   ipcMain.handle('run.stop', async (_e, projectPath: string) => core.run.stop(projectPath))
@@ -1020,13 +939,24 @@ export function registerIpc(
   ipcMain.on('run.resize', (_e, projectPath: string, cols: number, rows: number) =>
     core.run.resize(projectPath, cols, rows)
   )
+  // 저장 시점의 cwd 검사. prepareRun 의 것과 같은 규칙이지만 그쪽은 id 로 구성을 찾는 일까지 하므로
+  // 저장 경로에서는 쓸 수 없다.
+  const assertConfigCwd = async (projectPath: string, cwd: unknown): Promise<void> => {
+    if (cwd === undefined || cwd === null || cwd === '') return
+    if (typeof cwd !== 'string') throw new Error(t(core.lang, 'run.config.cwdNotString'))
+    const resolved = path.resolve(projectPath, cwd)
+    await assertAllowedPath(resolved)
+    if (!isPathWithin(projectPath, resolved))
+      throw new Error(t(core.lang, 'run.config.cwdOutsideProject'))
+  }
+
   ipcMain.handle('run.saveConfig', async (_e, projectPath: string, config: RunConfig) => {
     // Unlike the other run handlers this was missing its path guard — a configuration could be saved
     // under an arbitrary key. cwd is filtered here too, so an invalid configuration never gets stored in
     // the first place. run.start looks again right before executing because the stored file can be
     // hand-edited on disk and thus bypass this path.
     await assertAllowedPath(projectPath)
-    await resolveRunCwd(projectPath, config?.cwd)
+    await assertConfigCwd(projectPath, config?.cwd)
     // Trusting only the renderer's form validation would let a hand-edited JSON file through.
     // allowIncomplete: a configuration is saved the moment ＋ creates it, and at that point its one
     // required field is still empty — refusing it here would leave the new configuration in the
