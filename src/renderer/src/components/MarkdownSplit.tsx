@@ -25,6 +25,17 @@ const MODES: { id: MdViewMode; glyph: string }[] = [
  *  숨긴다 — 언마운트는 EditorView 를 destroy 하고 되돌리기 이력을 지운다(FileEditor 의 주석이
  *  지키는 규약, PaneGrid 의 lastFileOfPane 도 같은 이유로 display 만 쓴다).
  *
+ *  **`markdown=false` 일 때도 이 컴포넌트가 항상 렌더된다 — App 은 더 이상 `{md ? <MarkdownSplit/> :
+ *  editor}` 를 하지 않는다.** 그 삼항연산자가 5개 task 가 지켜온 "에디터를 언마운트하지 않는다"는
+ *  규약을 가장 바깥에서 깨고 있었다: 같은 자리에서 엘리먼트 타입이 `MarkdownSplit`↔`FileEditor` 로
+ *  바뀌면 리액트는 그 자리의 서브트리를 통째로 갈아치운다 — 같은 페인에서 `.md` 파일과 `.ts` 파일을
+ *  오가기만 해도 FileEditor 가 매번 언마운트·재마운트되어 되돌리기 이력이 사라졌다. 고친 방법은
+ *  `hidden` 을 다루는 이 컴포넌트의 기존 관례를 한 단계 밖으로 넓힌 것이다: `markdown` 이 거짓이면
+ *  툴바·리사이저·프리뷰 패널을 렌더하지 않고(이 셋은 `editor` 가 앉은 자리의 형제일 뿐이라 빼도
+ *  `editor` 의 위치·타입은 흔들리지 않는다), `.md-split-host > .md-split > .md-pane-editor` 골격은
+ *  항상 그대로 유지해 `editor` 가 앉는 자리 자체는 절대 바뀌지 않는다. `key` 로 강제 재마운트를
+ *  시키는 대안은 고르지 않았다 — 그것은 이 문제를 "피하는" 게 아니라 "매번 일으키는" 것이다.
+ *
  *  툴바는 순환 버튼 하나가 아니라 라디오처럼 동작하는 세 버튼이고, 어느 모드에서든 셋 다 보인다 —
  *  에디터만 모드에서 툴바가 사라지면 돌아올 길이 없다. 키바인딩(explorer.cyclePreview, task 10)만
  *  순환한다.
@@ -32,6 +43,7 @@ const MODES: { id: MdViewMode; glyph: string }[] = [
  *  프리뷰의 스크롤 컨테이너(`previewElRef`)는 이 컴포넌트가 직접 들고 App 으로 내보내지 않는다 —
  *  그것을 읽는 것은 task 9 의 스크롤 동기화뿐이고, 그 동기화도 이 컴포넌트 안에 산다. */
 export function MarkdownSplit({
+  markdown,
   mode,
   onModeChange,
   text,
@@ -41,6 +53,10 @@ export function MarkdownSplit({
   editor,
   editorView
 }: {
+  /** 이 탭이 실제로 `.md`/`.markdown` 인가. 거짓이면 툴바·리사이저·프리뷰를 그리지 않고 `editor` 만
+   *  그린다 — App 의 isMarkdownPath 결과를 그대로 받는다. 아래 모든 mode 기반 effect·렌더 분기는
+   *  이 값으로 먼저 게이트된다: 마크다운이 아닌 파일에서는 모드라는 개념 자체가 의미가 없다. */
+  markdown: boolean
   mode: MdViewMode
   onModeChange: (mode: MdViewMode) => void
   text: string
@@ -85,19 +101,24 @@ export function MarkdownSplit({
   }
 
   // 문서가 바뀌면 앵커가 옛 레이아웃의 것이다. 렌더 뒤에 다시 만든다
+  // markdown 이 거짓이면 프리뷰 자체가 그려지지 않으므로(아래 렌더 참고) rebuildAnchors 는
+  // previewElRef.current 가 없어 즉시 no-op 이지만, 매 키입력마다 rAF 를 예약하는 낭비까지 막으려고
+  // 여기서 먼저 게이트한다.
   useEffect(() => {
+    if (!markdown) return
     const id = requestAnimationFrame(rebuildAnchors)
     return () => cancelAnimationFrame(id)
-  }, [text, mode, ratio])
+  }, [markdown, text, mode, ratio])
 
   // 폭이 바뀌면 줄바꿈이 달라져 offsetTop 이 전부 움직인다
   useEffect(() => {
+    if (!markdown) return
     const host = previewElRef.current
     if (!host || mode === 'editor') return
     const ro = new ResizeObserver(() => rebuildAnchors())
     ro.observe(host)
     return () => ro.disconnect()
-  }, [mode])
+  }, [markdown, mode])
 
   const suppressed = (): boolean => performance.now() < suppressUntilRef.current
   const suppress = (): void => {
@@ -106,7 +127,7 @@ export function MarkdownSplit({
 
   // 에디터 → 프리뷰
   useEffect(() => {
-    if (!editorView || mode !== 'split') return
+    if (!markdown || !editorView || mode !== 'split') return
     const scroller = editorView.scrollDOM
     const onScroll = (): void => {
       if (suppressed()) return
@@ -130,10 +151,11 @@ export function MarkdownSplit({
       scroller.removeEventListener('scroll', onScroll)
       if (frameRef.current != null) cancelAnimationFrame(frameRef.current)
     }
-  }, [editorView, mode])
+  }, [markdown, editorView, mode])
 
   // 프리뷰 → 에디터
   useEffect(() => {
+    if (!markdown) return
     const host = previewElRef.current
     if (!host || !editorView || mode !== 'split') return
     const onScroll = (): void => {
@@ -148,14 +170,15 @@ export function MarkdownSplit({
     }
     host.addEventListener('scroll', onScroll, { passive: true })
     return () => host.removeEventListener('scroll', onScroll)
-  }, [editorView, mode])
+  }, [markdown, editorView, mode])
 
   // display:none 이었던 에디터가 돌아오면 높이를 0 으로 읽은 상태다. 다시 재게 하지 않으면
-  // 복귀 직후 첫 동기화가 어긋난다
+  // 복귀 직후 첫 동기화가 어긋난다. markdown 이 거짓이면 에디터가 hidden 되는 경로 자체가 없으니
+  // (아래 렌더 참고) 이 재측정은 필요 없다 — 게이트해 두지 않으면 매 마운트마다 의미 없이 돈다.
   useEffect(() => {
-    if (mode !== 'editor' && mode !== 'split') return
+    if (!markdown || (mode !== 'editor' && mode !== 'split')) return
     editorView?.requestMeasure()
-  }, [mode, editorView])
+  }, [markdown, mode, editorView])
 
   // preview 모드로 "들어갈 때"만 포커스를 프리뷰 컨테이너로 옮긴다 — Mod+S 가 반응할 곳이 이곳뿐이기
   // 때문이다(CM6 의 키맵은 에디터가 display:none 인 동안 키를 볼 수 없다). split·editor 모드로 갈
@@ -174,8 +197,8 @@ export function MarkdownSplit({
   // 모드를 바꾸면 키보드 사용자가 document.body 에 남았을 것이다. 아래의 두 번째 effect가 이제
   // `editorView` 로 받은 EditorView 에 `view.focus()` 를 호출해 이 경로를 닫는다.
   useEffect(() => {
-    if (mode === 'preview') previewElRef.current?.focus()
-  }, [mode])
+    if (markdown && mode === 'preview') previewElRef.current?.focus()
+  }, [markdown, mode])
 
   // 위 effect 의 반대 방향: 'preview'를 실제로 "떠날 때" 포커스가 아직 프리뷰 서브트리 안에 있으면
   // 에디터로 되돌린다. prevModeRef 로 실제 전이(직전 모드가 'preview')만 걸러낸다 — 그냥
@@ -201,12 +224,12 @@ export function MarkdownSplit({
   // `leftPreview` 는 `editorView` 가 null 이든 아니든 항상 거짓이기 때문이다.
   const prevModeRef = useRef(mode)
   useLayoutEffect(() => {
-    const leftPreview = prevModeRef.current === 'preview' && mode !== 'preview'
+    const leftPreview = markdown && prevModeRef.current === 'preview' && mode !== 'preview'
     prevModeRef.current = mode
     if (!leftPreview) return
     const host = previewElRef.current
     if (host && host.contains(document.activeElement)) editorView?.focus()
-  }, [mode, editorView])
+  }, [markdown, mode, editorView])
 
   // 드래그가 진행 중인지, 그리고 그 드래그가 등록한 window 리스너를 어떻게 걸러내고 떼어낼지.
   // draggingRef 는 "두 번째 포인터가 이 리사이저 위에 내려와 startDrag 를 다시 부르는" 경로만 막는다
@@ -265,33 +288,43 @@ export function MarkdownSplit({
 
   return (
     <div className="md-split-host">
-      <div className="md-toolbar">
-        {MODES.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            className={mode === m.id ? 'active' : undefined}
-            aria-pressed={mode === m.id}
-            // 글리프 하나뿐인 버튼이라 텍스트 콘텐츠가 접근성 이름이 되어 주지 못한다 — title 과
-            // aria-label 을 같은 문구로 같이 주는 것은 이 앱의 아이콘 전용 버튼 관례
-            // (App.tsx 의 rail-btn, WorktreePanel 의 icon-btn 등) 을 그대로 따른 것이다.
-            title={t(`files.markdown.mode.${m.id}`)}
-            aria-label={t(`files.markdown.mode.${m.id}`)}
-            onClick={() => onModeChange(m.id)}
-          >
-            {m.glyph}
-          </button>
-        ))}
-      </div>
-      <div className="md-split" ref={splitRef} data-mode={mode}>
+      {/* markdown 이 거짓인 파일에는 툴바가 없다 — 안 그려지는 것이지, css 로 숨겨지는 게 아니다.
+          이 div 는 .md-split-editor 의 형제일 뿐이라 있고 없고가 아래 .md-pane-editor 의 자리·타입에는
+          영향을 주지 않는다 — FileEditor 는 그대로 마운트 상태를 유지한다. */}
+      {markdown && (
+        <div className="md-toolbar">
+          {MODES.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              className={mode === m.id ? 'active' : undefined}
+              aria-pressed={mode === m.id}
+              // 글리프 하나뿐인 버튼이라 텍스트 콘텐츠가 접근성 이름이 되어 주지 못한다 — title 과
+              // aria-label 을 같은 문구로 같이 주는 것은 이 앱의 아이콘 전용 버튼 관례
+              // (App.tsx 의 rail-btn, WorktreePanel 의 icon-btn 등) 을 그대로 따른 것이다.
+              title={t(`files.markdown.mode.${m.id}`)}
+              aria-label={t(`files.markdown.mode.${m.id}`)}
+              onClick={() => onModeChange(m.id)}
+            >
+              {m.glyph}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="md-split" ref={splitRef} data-mode={markdown ? mode : 'editor'}>
+        {/* markdown 이 거짓이든 참이든 이 자리는 항상 같은 타입(div.md-pane.md-pane-editor)이고
+            {editor} 는 항상 그 자리 그대로다 — 이 컴포넌트 자체도 App 에서 항상 렌더된다(더 이상
+            {md ? <MarkdownSplit/> : editor} 삼항연산자가 없다). 그래서 파일이 .md 와 비-.md 사이를
+            오가도 FileEditor 의 부모 체인이 어느 지점에서도 타입이 바뀌지 않고, 리액트가 그 서브트리를
+            언마운트할 이유가 없다. */}
         <div
           className="md-pane md-pane-editor"
-          style={mode === 'split' ? { flex: `0 0 ${ratio * 100}%` } : undefined}
-          hidden={mode === 'preview'}
+          style={markdown && mode === 'split' ? { flex: `0 0 ${ratio * 100}%` } : undefined}
+          hidden={markdown && mode === 'preview'}
         >
           {editor}
         </div>
-        {mode === 'split' && (
+        {markdown && mode === 'split' && (
           <div
             className="md-resizer"
             onPointerDown={startDrag}
@@ -299,15 +332,17 @@ export function MarkdownSplit({
             aria-orientation="vertical"
           />
         )}
-        <div className="md-pane md-pane-preview" hidden={mode === 'editor'}>
-          <MarkdownPreview
-            text={text}
-            docPath={docPath}
-            onOpenFile={onOpenFile}
-            onSave={onSave}
-            scrollRef={previewElRef}
-          />
-        </div>
+        {markdown && (
+          <div className="md-pane md-pane-preview" hidden={mode === 'editor'}>
+            <MarkdownPreview
+              text={text}
+              docPath={docPath}
+              onOpenFile={onOpenFile}
+              onSave={onSave}
+              scrollRef={previewElRef}
+            />
+          </div>
+        )}
       </div>
     </div>
   )

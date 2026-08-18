@@ -58,6 +58,7 @@ import {
   firstLeaf,
   groupOfTab,
   leafOf,
+  leaves,
   moveTab,
   removeTab,
   replaceTabId,
@@ -412,9 +413,30 @@ export default function App(): React.JSX.Element {
   const [mdModes, setMdModes] = useState<Record<string, MdViewMode>>({})
   const mdModesRef = useRef(mdModes)
   mdModesRef.current = mdModes
-  /** 파일 탭별 EditorView. 스크롤 동기화가 그 뷰를 읽어야 하고, 뷰가 생기는 시점은 FileEditor 의
-   *  마운트라 ref 로는 렌더가 다시 돌지 않는다 — 그래서 상태다 */
+  /** 페인별 EditorView — 파일 탭별이 아니다. FileEditor 는 페인 하나당 하나이고 그 페인 안에서
+   *  파일이 바뀌어도(같은 마크다운 파일 사이든, 마크다운·비-마크다운 사이든) 재사용되며, onViewChange
+   *  는 그 인스턴스의 마운트·언마운트에서만 불린다 — 파일 탭 id 로 저장했다면 한 페인에서 두 번째로
+   *  여는 마크다운 파일은 영원히 null 을 받았을 것이다(뷰는 그대로인데 map 의 키만 새 파일 것이길
+   *  기다리므로). 뷰가 생기는 시점은 FileEditor 의 마운트라 ref 로는 렌더가 다시 돌지 않는다 —
+   *  그래서 상태다. */
   const [mdViews, setMdViews] = useState<Record<string, EditorView | null>>({})
+  // 죽은 페인의 항목을 지운다 — PaneGrid 의 lastFileOfPane 이 자기 것을 정리하는 것과 같은 이유
+  // (그 파일의 주석 참고)다. FileEditor 의 언마운트가 이미 onViewChange(null) 을 부르므로 이 정리가
+  // 없어도 죽은 참조가 남지는 않지만(destroy() 된 EditorView 를 계속 붙잡지는 않는다), 다시 쓰이지
+  // 않을 페인 id 키가 사라진 페인마다 하나씩 map 에 영원히 쌓이는 것은 그것과는 별개의 문제라 이
+  // effect 로 정리한다.
+  useEffect(() => {
+    const livePanes = new Set(layout ? leaves(layout).map((l) => l.id) : [])
+    setMdViews((prev) => {
+      let changed = false
+      const next: Record<string, EditorView | null> = {}
+      for (const [paneId, view] of Object.entries(prev)) {
+        if (livePanes.has(paneId)) next[paneId] = view
+        else changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [layout])
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     // 500 rather than the original 280. Account rows carry a provider badge, the label, the `default`
     // badge and a login dot, and the history and worktree panels below them hold paths, so the default
@@ -1537,7 +1559,13 @@ export default function App(): React.JSX.Element {
    *  숨는다(PaneGrid의 lastFileOfPane). */
   /** 마크다운으로 다룰 확장자. edit.ts 의 LANG_BY_EXT 가 markdown 으로 잡는 둘과 같다 */
   const isMarkdownPath = (p: string): boolean => /\.(md|markdown)$/i.test(p)
-  const renderEditor = (_paneId: string, fileTabId: string, focused: boolean): React.ReactNode => {
+  /** paneId 를 쓰는 이유: FileEditor 는 파일 탭이 아니라 페인 하나당 하나이고(위 주석), path 만
+   *  바뀌며 그 페인 안에서 재사용된다 — onViewChange 는 그 인스턴스의 마운트·언마운트에서만 불리고
+   *  파일이 바뀔 때는 다시 불리지 않는다. 그래서 이 뷰를 파일 탭 id 로 저장하면(예전 코드) 한 페인에서
+   *  두 번째로 여는 마크다운 파일은 영원히 null 을 받는다 — 뷰는 첫 파일에서 그대로인데 map 의 키는
+   *  새 파일 것이길 기대하기 때문이다. 페인 id 로 저장하면 "이 페인의 지금 뷰"가 항상 맞다.
+   */
+  const renderEditor = (paneId: string, fileTabId: string, focused: boolean): React.ReactNode => {
     const f = fileTabs.find((t) => t.id === fileTabId)
     const buf = fileBuffers[fileTabId]
     if (!f || !buf) return null
@@ -1549,7 +1577,7 @@ export default function App(): React.JSX.Element {
         cache={editorCacheRef.current}
         focused={focused}
         onRetire={retireEditorState}
-        onViewChange={(view) => setMdViews((prev) => ({ ...prev, [f.id]: view }))}
+        onViewChange={(view) => setMdViews((prev) => ({ ...prev, [paneId]: view }))}
         // 에디터가 알려 준 경로로 대상을 찾는다. 그리고 있는 파일과 다르면 그 편집은 뷰가 아직
         // 갈아타지 않은 옛 문서의 것이므로 버린다
         onChange={(fromPath, next) => {
@@ -1563,7 +1591,6 @@ export default function App(): React.JSX.Element {
         }}
       />
     )
-    const md = isMarkdownPath(f.path)
     return (
       <div className="workbench-body">
         <div className="file-editor-wrap">
@@ -1577,20 +1604,23 @@ export default function App(): React.JSX.Element {
               <button onClick={() => setFileBuffers((prev) => (prev[f.id] ? { ...prev, [f.id]: { ...prev[f.id], conflict: false } } : prev))}>{t('files.editor.keepMine')}</button>
             </div>
           )}
-          {md ? (
-            <MarkdownSplit
-              mode={mdModes[f.id] ?? defaultMdMode()}
-              onModeChange={(mode) => setMdMode(f.id, mode)}
-              text={buf.content}
-              docPath={f.path}
-              onOpenFile={(abs) => openFile(abs)}
-              onSave={() => saveFile(f.id)}
-              editor={editor}
-              editorView={mdViews[f.id] ?? null}
-            />
-          ) : (
-            editor
-          )}
+          {/* markdown=false 여도 MarkdownSplit 은 항상 렌더된다 — {md ? <MarkdownSplit/> : editor}
+              삼항연산자였을 때는 이 자리의 엘리먼트 타입이 파일을 오갈 때마다 MarkdownSplit↔FileEditor
+              로 바뀌어, 같은 페인에서 .md 파일과 비-.md 파일 사이를 전환하기만 해도 리액트가 FileEditor
+              를 언마운트·재마운트해 되돌리기 이력을 지웠다(MarkdownSplit.tsx 상단 주석 참고). 이제
+              이 위치는 항상 <MarkdownSplit> 이고, 툴바·리사이저·프리뷰를 그리는지는 그 컴포넌트 내부의
+              markdown 프롭이 결정한다. */}
+          <MarkdownSplit
+            markdown={isMarkdownPath(f.path)}
+            mode={mdModes[f.id] ?? defaultMdMode()}
+            onModeChange={(mode) => setMdMode(f.id, mode)}
+            text={buf.content}
+            docPath={f.path}
+            onOpenFile={(abs) => openFile(abs)}
+            onSave={() => saveFile(f.id)}
+            editor={editor}
+            editorView={mdViews[paneId] ?? null}
+          />
           {buf.loading && <div className="file-overlay">{t('files.editor.loading')}</div>}
           {!buf.loading && buf.error && <div className="file-overlay">{buf.error}</div>}
         </div>
