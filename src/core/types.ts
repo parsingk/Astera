@@ -314,6 +314,13 @@ export interface JobRun {
   outcome: RunOutcome
   done: number
   total: number
+  /** 이 Run 의 타임라인 이벤트 수(core/orchestration/timeline.ts 의 eventCountFor).
+   *
+   *  **화면에 그리지 않는다.** 이 값의 일은 sameSnapshot 을 깨우는 것이다 — Task 상태도
+   *  openGates 도 움직이지 않는 메시지(질문, 워커의 진행 보고)는 나머지 필드를 하나도 바꾸지
+   *  않아서, 이 숫자가 없으면 그 이벤트가 도착해도 푸시가 나가지 않는다. 시각이 아니라 개수인
+   *  이유: 한 번의 쓰기가 여러 레코드에 같은 now 를 찍으므로 시각은 바뀌지 않을 수 있다. */
+  eventCount: number
   tasks: JobTask[]
 }
 export interface OrchSnapshot {
