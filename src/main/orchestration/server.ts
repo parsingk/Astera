@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto'
 import {
   ackDelivery,
   applyReply,
+  applyReviewResult,
   applyWorkerDone,
   closeDispatch,
   createGate,
@@ -92,6 +93,15 @@ export interface OrchServerDeps {
    *  validating 으로 보내지 않는 이유는 그 상태에서 꺼내 줄 것이 아무것도 없기 때문이다 —
    *  now?/log?/backup?/probeLimit? 와 같은 "주입되지 않으면 그 기능이 없다" 관례다. */
   startValidation?(a: { taskId: string; cwd: string }): void
+  /** 검토를 시작한다. **동기다** — startValidation 과 같은 이유이고, 검토는 세션을 하나 띄우므로
+   *  더 오래 걸린다. 배선이 provider·계정을 고르고, 검토 Dispatch 를 열고, 세션을 띄운다.
+   *  주입되지 않으면 검토가 없는 것으로 동작한다(applyWorkerDone/applyValidationResult 의
+   *  canReview 인자로 전달된다) — reviewing 으로 보내면 그 상태에서 꺼내 줄 것이 없다.
+   *
+   *  **cwd 를 넘기지 않는다.** 배선은 provider 를 고르려고 구현 Dispatch 를 어차피 찾아야 하고,
+   *  그 Dispatch 가 cwd 를 들고 있다. 여기서 넘기면 두 호출자(이 서버와 검증 통과 경로)가 같은 값을
+   *  서로 다른 방법으로 구하게 되고, 그 둘은 갈라진다. */
+  startReview?(a: { taskId: string }): void
   /** Audit log left behind when task-update bypasses the transition table (canTransition) — the same
    *  shape as log(message: string) in coordinator.ts. The wiring decides where it goes. If it is not
    *  injected (existing tests and the like) logging is skipped — optional for the same reason as
@@ -150,6 +160,7 @@ const TASK_STATUSES: TaskStatus[] = [
   'ready',
   'dispatched',
   'validating',
+  'reviewing',
   'completed',
   'failed',
   'blocked'
@@ -274,7 +285,10 @@ export async function handleCommand(
             spec,
             deps: Array.isArray(args.deps) ? (args.deps as string[]) : [],
             parentId: str(args.parent) ?? undefined,
-            validateConfigId: str(args.validate) ?? undefined
+            validateConfigId: str(args.validate) ?? undefined,
+            // `--review` 는 값이 없는 플래그다(task-list --ready 와 같은 모양). 어느 provider 가
+            // 읽을지는 앱이 고른다 — 계정 풀을 아는 것은 앱이다.
+            reviewRequested: args.review === true ? true : undefined
           },
           now
         )
@@ -568,6 +582,25 @@ export async function handleCommand(
         // idempotent response with a 403.
         if (isWorker && !myDispatchIds.has(dispatchId))
           return denied('cannot report for another dispatch')
+        // 검토 Dispatch 의 보고는 다른 판정으로 간다. applyWorkerDone 으로 보내면 dispatched 에서만
+        // 나가는 전이를 reviewing 인 Task 에 적용하려다 거절되고, 검토 결과가 어디에도 반영되지 않는다.
+        const reporting = s.dispatches.find((d) => d.id === dispatchId)
+        if (reporting?.review) {
+          const r = applyReviewResult(
+            s,
+            {
+              taskId,
+              dispatchId,
+              outcome,
+              subject: str(args.subject) ?? '',
+              body: str(args.body) ?? ''
+            },
+            now
+          )
+          if (!r.ok) return bad(r.error)
+          await deps.setState(r.state)
+          return okBody(r.value)
+        }
         // Limit probe — only when outcome is failed. handleExit alone is not enough: a claude TUI
         // that hit a limit does not die, it prints a notice and then stops, so there are sessions
         // that close only through this path, where the worker reports worker_done --outcome failed
@@ -602,7 +635,9 @@ export async function handleCommand(
                 : undefined,
             // 검증기가 주입되지 않은 배선에서는 검증이 없는 것으로 동작한다. validating 으로
             // 보내면 결과를 가져다줄 것이 없어 Task 가 거기서 영원히 멈춘다(startValidation 참고).
-            canValidate: !!deps.startValidation
+            canValidate: !!deps.startValidation,
+            // startValidation 과 같은 이유 — 주입되지 않은 배선에서는 검토가 없는 것으로 동작한다.
+            canReview: !!deps.startReview
           },
           now
         )
@@ -651,6 +686,10 @@ export async function handleCommand(
         const dispatch = deps.getState().dispatches.find((d) => d.id === dispatchId)
         if (result.value === 'accepted' && settled?.status === 'validating' && dispatch)
           deps.startValidation?.({ taskId, cwd: dispatch.cwd })
+        // 검증이 걸리지 않고 검토만 걸린 Task 는 여기서 곧바로 reviewing 이다. 검증이 걸린 Task 는
+        // 검증이 통과한 뒤 배선의 onSettled 가 같은 일을 한다(ipc.ts).
+        else if (result.value === 'accepted' && settled?.status === 'reviewing')
+          deps.startReview?.({ taskId })
         return okBody(result.value)
       }
       // status, escalation and heartbeat — recorded only, with no bearing on lifetime.
