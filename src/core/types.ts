@@ -434,6 +434,12 @@ export interface CoreApi {
     // paths under a session cwd or a history project.
     list(dirPath: string): Promise<{ name: string; path: string; isDir: boolean }[]>
     read(path: string): Promise<{ content: string; truncated: boolean; binary: boolean }>
+    /** 마크다운 프리뷰의 이미지. 바이트를 data URL 로 돌려준다 — read 는 바이너리에 빈 문자열을
+     *  주므로 이미지에 쓸 수 없다.
+     *  read 와 상한이 다르다(1MB vs 5MB): 저 값은 편집기가 열 텍스트의 상한이고 이 값은 이미지의
+     *  상한이라 같은 숫자를 쓸 이유가 없다. 확장자가 허용 목록에 없으면 거부한다 — 확장자에서
+     *  MIME 을 만들어 내지 않는다. */
+    readDataUrl(path: string): Promise<{ dataUrl: string }>
     write(path: string, content: string): Promise<void> // save a file
     watch(root: string): Promise<void> // start or replace the live-update watcher
     unwatch(): Promise<void>
@@ -537,6 +543,9 @@ export interface SystemApi {
   pathExists(p: string): Promise<boolean>
   checkCli(): Promise<{ claude: CliStatus; codex: CliStatus }>
   appVersion(): Promise<string>
+  /** 기본 브라우저로 링크를 연다. http/https/mailto 만 통과한다 — 렌더러도 같은 검사를 하지만
+   *  거기서의 판정은 UI 를 위한 것이고 실제 경계는 메인이다. */
+  openExternal(url: string): Promise<void>
 }
 
 /** Clipboard reads (for pasting — the Electron clipboard module exposed synchronously from preload) */

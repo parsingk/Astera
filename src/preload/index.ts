@@ -103,6 +103,7 @@ const api = {
   files: {
     list: invoke('files.list'),
     read: invoke('files.read'),
+    readDataUrl: invoke('files.readDataUrl'),
     write: invoke('files.write'),
     watch: invoke('files.watch'),
     unwatch: invoke('files.unwatch'),
@@ -145,7 +146,8 @@ const api = {
     pickFile: invoke('system.pickFile'),
     pathExists: invoke('system.pathExists'),
     checkCli: invoke('system.checkCli'),
-    appVersion: invoke('system.appVersion')
+    appVersion: invoke('system.appVersion'),
+    openExternal: invoke('system.openExternal')
   },
   clipboard: {
     readText: () => clipboard.readText(),

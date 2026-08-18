@@ -811,6 +811,30 @@ export function registerIpc(
     const binary = buf.includes(0)
     return { content: binary ? '' : buf.toString('utf8'), truncated, binary }
   })
+  const IMAGE_READ_MAX = 5 * 1024 * 1024 // 5MB
+  /** 확장자 → MIME. 이 표에 없으면 거부한다. 확장자에서 MIME 문자열을 만들어 내면 임의의 타입을
+   *  data URL 에 실어 보낼 수 있게 된다.
+   *  svg 는 있지만 <img src="data:image/svg+xml"> 로만 들어간다 — 그 자리의 SVG 는 브라우저가
+   *  스크립트를 실행하지 않는다. 인라인 <svg> 로는 절대 넣지 않는다(markdownTree 의 DROP_TAGS). */
+  const IMAGE_MIME: Record<string, string> = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    avif: 'image/avif',
+    svg: 'image/svg+xml'
+  }
+  ipcMain.handle('files.readDataUrl', async (_e, filePath: string) => {
+    await assertAllowedPath(filePath)
+    const ext = path.extname(filePath).slice(1).toLowerCase()
+    const mime = IMAGE_MIME[ext]
+    if (!mime) throw new Error(t(core.lang, 'files.error.pathNotAllowed'))
+    const stat = await fs.stat(filePath)
+    if (stat.size > IMAGE_READ_MAX) throw new Error(t(core.lang, 'files.error.pathNotAllowed'))
+    const buf = await fs.readFile(filePath)
+    return { dataUrl: `data:${mime};base64,${buf.toString('base64')}` }
+  })
   ipcMain.handle('files.write', async (_e, filePath: string, content: string) => {
     await assertAllowedPath(filePath)
     const tmp = filePath + '.cmtmp'
@@ -1284,6 +1308,25 @@ export function registerIpc(
   ipcMain.handle('files.reveal', async (_e, targetPath: string) => {
     await assertAllowedPath(targetPath)
     shell.showItemInFolder(targetPath)
+  })
+
+  /** 마크다운 프리뷰의 외부 링크. 허용 스킴 밖은 조용히 버린다 — 렌더러가 이미 걸렀으므로 여기에
+   *  도달하는 것은 버그이거나 우회 시도다. 예외를 던지지 않는 이유는 링크 클릭이 실패해도 사용자가
+   *  할 수 있는 일이 없기 때문이다.
+   *
+   *  **검증한 값과 쓰는 값을 같게 만든다.** new URL 은 탭·개행을 스스로 걷어내므로, 그 결과인
+   *  parsed.toString() 을 넘기면 프로토콜을 확인한 바로 그 문자열이 OS 로 간다. url 을 그대로
+   *  넘기면 검증하지 않은 바이트를 넘기는 것이 된다. */
+  ipcMain.handle('system.openExternal', async (_e, url: string) => {
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch {
+      return
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:' && parsed.protocol !== 'mailto:')
+      return
+    await shell.openExternal(parsed.toString())
   })
 
   // For the "N child entries" line in the delete confirmation modal. Stops at 9999 — it is for display, so it need not be exact.
