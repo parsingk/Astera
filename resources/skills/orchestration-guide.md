@@ -28,9 +28,11 @@ told otherwise. `run-use --id <run>` only checks that the Run exists and returns
 nothing to the session (the current implementation is a no-op). If you plan to keep several Runs going
 at once, pass `--run <run>` explicitly on every command (`task-list` and `check` accept it).
 
-## 2. Six Task states and their transitions
+## 2. Seven Task states and their transitions
 
-`pending → ready → dispatched → completed | failed`, plus `blocked` (a Gate).
+`pending → ready → dispatched → completed | failed`, plus `blocked` (a Gate) and `validating` — a Task
+created with `--validate` (4.2) passes through `validating` between `dispatched` and `completed | failed`
+while the run happens.
 
 | from | to | Trigger |
 |---|---|---|
@@ -38,13 +40,45 @@ at once, pass `--run <run>` explicitly on every command (`task-list` and `check`
 | `pending`, `ready` | `dispatched` | `worker-start` |
 | `pending`, `ready`, `failed` | `blocked` | `gate-create` (rejected if a Dispatch is open) |
 | `blocked` | `ready` | `gate-resolve` (if the Task has more open Gates, all of them must be resolved too) |
-| `dispatched` | `completed` | the worker's `send --type worker_done --outcome succeeded` |
+| `dispatched` | `completed` | `worker_done --outcome succeeded`, when the Task has no `--validate` (4.2) |
+| `dispatched` | `validating` | `worker_done --outcome succeeded`, when the Task has `--validate` (4.2) |
 | `dispatched` | `failed` | `worker_done --outcome failed`, or the session dies without reporting |
+| `validating` | `completed` | the validation run exits `0` |
+| `validating` | `failed` | the validation run exits non-zero — the same retry path as any other failure |
+| `validating` | `blocked` | the validation cannot run at all — a Gate opens automatically |
 | `failed` | `dispatched` | `worker-start --retry-of <dsp>` (fewer than 3 consecutive failures) |
 | `failed` | (terminal) | 3 consecutive failures — circuit break, no further retries |
 
-There is no `dispatched → blocked`. Receiving `worker_done` puts the Task and the Dispatch into a
-terminal state **automatically** — do not add anything after it (see section 10).
+There is no `dispatched → blocked`. Receiving `worker_done` puts the Dispatch into a terminal state
+**automatically**, and the Task too — unless the Task has `--validate` attached, in which case success
+moves it to `validating` instead of `completed` (below). Either way, do not add anything after it (see
+section 10).
+
+### When a validation is worth attaching
+
+Attach `--validate <configId>` (4.2) when the Task's outcome is provable by running something — a
+build, a test suite, a lint or type-check — and skip it when the work is not: documentation, a spec, or
+exploration have no exit code to judge them by, and forcing a run configuration onto that kind of Task
+only adds a gate a human has to clear later for no reason. Decide per Task, not as a default for every
+Task in a Run.
+
+- **Success does not mean done.** `worker_done --outcome succeeded` on a validated Task moves it to
+  `validating` instead of `completed` (table above) while the configuration runs. `worker_done
+  --outcome failed` skips validation entirely — there is nothing to check when the worker itself says
+  it did not finish.
+- **The configuration runs where the worker actually worked.** It is looked up in the Run's project,
+  but executed in the **dispatch's** working directory — a worker given its own worktree is judged on
+  the tree it changed, not the project root.
+- **Dependents wait.** A Task whose dependency is `validating` stays `pending`; only a passing
+  validation releases it, never the worker's own report.
+- **Exit code `0` completes the Task; non-zero fails it** the same way a failed worker would — the
+  output tail lands in the Task's `result` so the next attempt can read what went wrong,
+  `consecutiveFailures` climbs, and the circuit still breaks at 3.
+- **If the validation cannot run at all** — no such configuration, a required field empty, the
+  directory gone, the app restarted mid-run — the Task goes to `blocked` behind a Gate whose question
+  says why. That is a call for a person, not a silent pass and not a failure charged against the work.
+- **If the directory is merely busy** with something else — another validation, or a run the user
+  started by hand — the validation waits its turn rather than failing.
 
 ## 3. A supervision loop, end to end
 
@@ -93,6 +127,7 @@ run-create --objective <s> [--cwd <p>] [--json]
 run-list [--json]
 run-show --id <run> [--json]
 run-use --id <run> [--json]        # confirms existence only; binds nothing (see section 1)
+run-configs [--json]               # that Run's project's run configurations, [{ id, name, type }]
 ```
 
 **Always pass `--cwd`.** Omit it and `astera` fills in **its own process's working directory** — that
@@ -100,10 +135,16 @@ is, the current directory of that shell. If that is not the repository root, eve
 (`--worktree current` being the default) comes up in the wrong directory, and nothing reports it.
 Passing `--cwd <absolute repo path>` is the only reliable way.
 
+`run-configs` returns the Run's project's run configurations as `[{ id, name, type }]` — the ids
+`task-create --validate` accepts (4.2). It always reads the **most recently created** Run and takes no
+`--run` flag, unlike `task-list` and `check` (section 1). It changes no state, and unlike most commands
+here it is **not** coordinator-only — a worker may call it to see what it will be judged by before it
+starts.
+
 ### 4.2 Task and Gate
 
 ```
-task-create --title <s> --spec <s|-> [--deps <json_array>] [--parent <tsk>] [--json]
+task-create --title <s> --spec <s|-> [--deps <json_array>] [--parent <tsk>] [--validate <configId>] [--json]
 task-list [--run <run>] [--status <s>] [--ready] [--brief] [--json]
 task-update --id <tsk> --status <s> [--result <s|->] [--json]   # bypasses the transition table — see section 8
 dispatch-show --task <tsk> [--json]        # returns that Task's Dispatch history as an array (retries included)
@@ -120,6 +161,11 @@ gate-list [--task <tsk>] [--status <s>] [--json]
 - The target flag for `task-update` is **`--id`**, not `--task` — passing `--task` yields
   `400 --id is required`.
 - Omitting `--title` fills it from the first line of the spec (cut at 80 characters).
+- **`--validate <configId>` makes this Task's completion depend on a run configuration**, not just the
+  worker's own report — the id comes from `run-configs` (4.1). Omit it and nothing changes:
+  `worker_done --outcome succeeded` completes the Task exactly as before. With it, that same report
+  instead moves the Task to `validating` (section 2, which covers what happens next and when it is
+  worth attaching).
 - `--ready` filters to Tasks with `status=ready`. `--brief` truncates the spec to 160 characters and
   returns `spec_truncated` alongside it — for a coordinator skimming many Tasks without burning
   context.
@@ -361,8 +407,9 @@ automatically. After receiving `worker_done`, pick one of these **yourself**:
   and `worker-release` returns `skipped: "retained"` (meaning no session was closed). **There is no
   command that undoes it** — see 4.3.
 
-**Do not try to move a Task's state by hand after `worker_done`.** `worker_done` already puts the Task
-and the Dispatch into a terminal state (`completed`/`failed`).
+**Do not try to move a Task's state by hand after `worker_done`.** `worker_done` already settles the
+Dispatch, and the Task too — to a terminal state (`completed`/`failed`) directly, or to `validating`
+first if the Task has `--validate` attached (section 2).
 
 `task-update --id <tsk> --status <s>` is **not for the normal flow.** It bypasses the state transition
 table, so use it only as an escape hatch for a stranded Task — for example, a Task stuck at `failed`
