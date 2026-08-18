@@ -1580,6 +1580,10 @@ export default function App(): React.JSX.Element {
     // 여기는 explorerRoot 그대로다 — 실행 구성은 프로젝트 단위이므로 홈에서는 읽을 것이 없다.
     if (!explorerRoot) return
     let cancelled = false
+    // 거부를 삼키지 않고 상태를 비운다. 이 호출은 예전에 탐색기가 열려 있을 때만 돌았고 지금은
+    // 프로젝트가 있으면 항상 돈다 — 그래서 가드가 거부하는 루트(사라진 워크트리의 파일 탭 등)가
+    // 처리되지 않은 거부로 콘솔에 튀어나왔다. 실패하면 이전 프로젝트의 구성이 남는 것이 더 나쁘므로
+    // 비운다: 남겨 두면 그 목록의 ▶ 가 다른 프로젝트를 실행한다.
     void window.api.run.list(explorerRoot).then((r) => {
       if (cancelled) return
       setRunConfigs(r.configs)
@@ -1590,9 +1594,15 @@ export default function App(): React.JSX.Element {
       setRunContext(r.context)
       setRunSelectedId((prev) => (r.configs.some((c) => c.id === prev) ? prev : r.active?.configId ?? r.configs[0]?.id ?? null))
       if (r.active?.status === 'running') setRunPanelOpen(true)
+    }, () => {
+      if (cancelled) return
+      setRunConfigs([])
+      setRunActive(null)
+      setRunSelectedId(null)
+      setRunContext(null)
     })
     return () => { cancelled = true }
-  }, [bottomRoot])
+  }, [explorerRoot])
 
   // Turning the setting off makes the rail button — the only control that can close the Jobs view —
   // disappear along with it (it is gated on the same orchEnabled), so a view left open past that point
@@ -1671,7 +1681,7 @@ export default function App(): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [explorerRoot])
+  }, [bottomRoot])
 
   // An event subscription (refreshed by run:status) plus one initial query, instead of polling all active runs
   useEffect(() => {
