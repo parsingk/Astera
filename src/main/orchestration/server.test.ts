@@ -1,11 +1,17 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { handleCommand, handleExit, type OrchServerDeps } from './server'
 import { OrchCoordinator, type CoordinatorDeps } from './coordinator'
 import { OrchestrationStore } from './store'
-import { emptyState, type OrchState } from '../../core/orchestration/state'
+import {
+  applyValidationResult,
+  blockForValidation,
+  emptyState,
+  type OrchState
+} from '../../core/orchestration/state'
+import { TaskValidator } from './validator'
 import { FAILURE_LIMIT } from '../../core/orchestration/types'
 
 const NOW = '2026-08-04T00:00:00.000Z'
@@ -1616,5 +1622,122 @@ describe('worker_done 이 검증을 시작한다', () => {
     const r2 = await call(deps, 'send', args, d.sessionId)
     expect(r2.body).toBe('alreadyReported')
     expect(started).toHaveLength(1) // 재전송으로 다시 큐잉되지 않는다
+  })
+})
+
+// ── 이음매를 통과하는 통합 테스트 ──────────────────────────────────────────────
+// 층마다 테스트가 있었는데 리뷰가 낸 Critical 은 그 사이에 살아 있었다: 검증 결과가 Message 를
+// 만들지 않아 코디네이터가 영원히 알지 못한다는 것. handleCommand('send', worker_done) 에서
+// 시작해 가짜 ValidatorRunner 와 TaskValidator 를 지나, **Task 상태와 결과 받은편지함(check)을
+// 함께** 단언한다 — 코디네이터를 깨우는 수단은 메시지뿐이므로 상태만 보는 단언으로는 이 결함이
+// 잡히지 않는다.
+describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
+  /** ipc.ts 가 하는 배선과 같은 모양으로 서버·검증기·순수 계층을 잇는다 */
+  const wire = async (): Promise<{
+    deps: OrchServerDeps
+    validator: TaskValidator
+    started: { cwd: string; taskId: string }[]
+    taskId: string
+    cwd: string
+  }> => {
+    const deps = makeDeps()
+    const started: { cwd: string; taskId: string }[] = []
+    const validator = new TaskValidator({
+      runner: {
+        start: async (a) => void started.push(a),
+        output: () => '빌드 로그 꼬리'
+      },
+      onSettled: async ({ taskId, exitCode, output }) => {
+        const r = applyValidationResult(deps.getState(), { taskId, exitCode, output }, NOW)
+        if (r.ok) await deps.setState(r.state)
+      },
+      onCannotRun: async ({ taskId, reason }) => {
+        const r = blockForValidation(deps.getState(), { taskId, reason }, NOW)
+        if (r.ok) await deps.setState(r.state)
+      }
+    })
+    deps.startValidation = (a) => validator.enqueue(a)
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: '작업', validate: 'cfg1' })
+    const taskId = deps.getState().tasks[0].id
+    await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
+    const d = deps.getState().dispatches[0]
+    await call(
+      deps,
+      'send',
+      { type: 'worker_done', taskId, dispatchId: d.id, outcome: 'succeeded', subject: 's', body: 'b' },
+      d.sessionId
+    )
+    // 코디네이터가 실제로 하는 일: worker_done 배치를 받아 ack 한다. 이 ack 뒤에는 새 메시지가
+    // 붙지 않는 한 check 가 아무것도 돌려주지 않는다 — 그것이 이 결함의 증상이었다.
+    const first = (await call(deps, 'check', {})).body as { deliveryId: string }
+    await call(deps, 'check', { ack: first.deliveryId })
+    await vi.waitFor(() => expect(started).toHaveLength(1))
+    return { deps, validator, started, taskId, cwd: d.cwd }
+  }
+
+  it('worker_done 성공은 Task 를 validating 으로 보내고 그 cwd 에서 검증을 시작한다', async () => {
+    const { deps, started, taskId, cwd } = await wire()
+    expect(deps.getState().tasks[0].status).toBe('validating')
+    expect(started).toEqual([{ taskId, cwd }])
+  })
+
+  it('검증 실패는 Task 를 failed 로 보내고 status 메시지를 코디네이터에게 배달한다', async () => {
+    const { deps, validator, taskId, cwd } = await wire()
+    validator.onRunExit({ cwd, exitCode: 2 })
+    await vi.waitFor(() => expect(deps.getState().tasks[0].status).toBe('failed'))
+    const r = await call(deps, 'check', {})
+    const body = r.body as { count: number; messages: { type: string; subject: string; body: string; taskId?: string }[] }
+    expect(body.count).toBe(1)
+    expect(body.messages[0].type).toBe('status')
+    expect(body.messages[0].subject).toBe('validation failed')
+    expect(body.messages[0].taskId).toBe(taskId)
+    expect(body.messages[0].body).toContain('exitCode=2')
+    expect(body.messages[0].body).toContain('빌드 로그 꼬리')
+  })
+
+  // 통과도 배달돼야 한다 — 의존 Task 가 풀린 것을 모르면 코디네이터는 다음 Task 를 띄우지 않는다
+  it('검증 통과는 Task 를 completed 로 보내고 그것도 배달된다', async () => {
+    const { deps, validator, cwd } = await wire()
+    validator.onRunExit({ cwd, exitCode: 0 })
+    await vi.waitFor(() => expect(deps.getState().tasks[0].status).toBe('completed'))
+    const r = await call(deps, 'check', {})
+    const body = r.body as { messages: { subject: string }[] }
+    expect(body.messages.map((m) => m.subject)).toEqual(['validation passed'])
+  })
+
+  // 검증을 아예 돌릴 수 없으면 Gate 다. 이쪽은 createGate 가 decision_gate 메시지를 붙여 원래부터
+  // 통보되고 있었다 — 그 비대칭이 위의 두 경로에 메시지가 없다는 것을 확정해 준 근거다.
+  it('검증을 돌릴 수 없으면 Gate 가 열리고 decision_gate 가 배달된다', async () => {
+    const deps = makeDeps()
+    const validator = new TaskValidator({
+      runner: {
+        start: async () => {
+          throw new Error('NO_CONFIG: cfg1')
+        },
+        output: () => ''
+      },
+      onSettled: async () => {},
+      onCannotRun: async ({ taskId, reason }) => {
+        const r = blockForValidation(deps.getState(), { taskId, reason }, NOW)
+        if (r.ok) await deps.setState(r.state)
+      }
+    })
+    deps.startValidation = (a) => validator.enqueue(a)
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: '작업', validate: 'cfg1' })
+    const taskId = deps.getState().tasks[0].id
+    await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
+    const d = deps.getState().dispatches[0]
+    await call(
+      deps,
+      'send',
+      { type: 'worker_done', taskId, dispatchId: d.id, outcome: 'succeeded', subject: 's', body: 'b' },
+      d.sessionId
+    )
+    await vi.waitFor(() => expect(deps.getState().tasks[0].status).toBe('blocked'))
+    const r = await call(deps, 'check', { types: 'decision_gate' })
+    const body = r.body as { messages: { type: string; body: string }[] }
+    expect(body.messages.some((m) => m.type === 'decision_gate' && m.body.includes('NO_CONFIG'))).toBe(true)
   })
 })

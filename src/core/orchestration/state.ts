@@ -253,8 +253,16 @@ export function applyWorkerDone(
 /** 검증 결과를 Task 에 반영한다. 종료 코드가 판정이다.
  *
  *  실패는 기존 재시도 흐름을 그대로 탄다 — consecutiveFailures 가 오르고 FAILURE_LIMIT 에서
- *  회로가 끊긴다. 출력 꼬리를 result 에 담는 이유는 재시도하는 워커가 무엇이 틀렸는지 읽어야
- *  하기 때문이다. */
+ *  회로가 끊긴다. 출력 꼬리는 result 와 아래 status 메시지 양쪽에 담는다. 재시도하는 워커가
+ *  그것을 읽지는 못한다 — coordinator.ts 의 buildSpecFile 은 spec 파일에 title 과 spec 만
+ *  싣는다 — 그래서 무엇이 틀렸는지 다음 시도에 전달하는 것은 이 메시지를 읽은 코디네이터의 일이다.
+ *
+ *  **결과는 반드시 메시지가 된다.** 코디네이터를 깨우는 수단은 메시지뿐이다(check 는
+ *  nextDelivery 를 통해 s.messages 만 읽는다). 여기서 메시지를 붙이지 않으면 워커의 "성공했다"가
+ *  코디네이터가 받은 마지막 소식으로 남고, 검증이 실패해 Task 가 failed 가 되어도 재시도 흐름을
+ *  타는 사람이 아무도 없다 — check --wait 는 영원히 타임아웃만 돌려주고, 가이드는 타임아웃을
+ *  실패의 신호로 보지 말라고 못박아 두었다. 통과도 알려야 한다: 의존 Task 가 풀린 것을 알지
+ *  못하면 코디네이터는 다음 Task 를 띄우지 않는다. */
 export function applyValidationResult(
   s: OrchState,
   a: { taskId: string; exitCode: number; output: string },
@@ -271,7 +279,24 @@ export function applyValidationResult(
     consecutiveFailures: passed ? 0 : task.consecutiveFailures + 1,
     ...(passed ? {} : { result: `validation failed (exit ${a.exitCode})\n${a.output}` })
   }
-  return ok({ ...s, tasks: recomputeReady(replace(s.tasks, next)) }, next)
+  let state: OrchState = { ...s, tasks: recomputeReady(replace(s.tasks, next)) }
+  // closeDispatch 의 한도 감지 메시지와 같은 모양이다 — type: 'status', 제목이 결과를 말하고
+  // 본문이 종료 코드와 출력 꼬리를 담는다. dispatchId 는 붙이지 않는다: 검증은 Dispatch 가 끝난
+  // 뒤에 도는 것이므로 어떤 Dispatch 의 소식도 아니다. 앱이 만드는 오케스트레이션 문자열이라 영어다.
+  state = pushMessage(
+    state,
+    {
+      runId: task.runId,
+      type: 'status',
+      taskId: task.id,
+      subject: passed ? 'validation passed' : 'validation failed',
+      body: passed
+        ? `exitCode=0. The Task moved to completed.\n${a.output}`
+        : `exitCode=${a.exitCode}. The Task moved to failed (consecutiveFailures=${next.consecutiveFailures}). Retry with worker-start --retry-of. The output tail below is the only record of what went wrong — a retry worker's spec file does not carry it, so pass on whatever it needs.\n${a.output}`
+    },
+    now
+  ).state
+  return ok(state, next)
 }
 
 /** 검증을 아예 돌릴 수 없을 때. 조용히 통과시키면 "검증됨"과 "검증 못 함"이 화면에서 같아지고,

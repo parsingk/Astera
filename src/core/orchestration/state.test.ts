@@ -908,10 +908,56 @@ describe('applyValidationResult', () => {
     expect(done.state.tasks[1].status).toBe('ready')
   })
 
+  // **C1 — 코디네이터를 깨우는 수단은 메시지뿐이다.** check 는 nextDelivery 를 통해 s.messages 만
+  // 읽으므로, 메시지가 없으면 검증이 Task 를 failed 로 보냈다는 사실이 코디네이터에게 영원히
+  // 도착하지 않는다. 그 코디네이터가 받은 마지막 소식은 "워커가 성공했다"다.
+  it('실패하면 종료 코드와 출력을 담은 status 메시지를 붙인다', () => {
+    const { s, taskId } = validating()
+    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 2, output: '실패 로그' }, NOW) as never)
+    const m = r.state.messages[r.state.messages.length - 1]
+    expect(m.type).toBe('status')
+    expect(m.taskId).toBe(taskId)
+    expect(m.runId).toBe(s.runs[0].id)
+    expect(m.subject).toBe('validation failed')
+    expect(m.body).toContain('exitCode=2')
+    expect(m.body).toContain('실패 로그')
+  })
+
+  // 통과도 알려야 한다 — 의존 Task 가 풀린 것을 모르면 코디네이터는 다음 Task 를 띄우지 않는다
+  it('통과해도 status 메시지를 붙인다', () => {
+    const { s, taskId } = validating()
+    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 0, output: 'ok' }, NOW) as never)
+    const m = r.state.messages[r.state.messages.length - 1]
+    expect(m.type).toBe('status')
+    expect(m.subject).toBe('validation passed')
+    expect(m.taskId).toBe(taskId)
+  })
+
+  // 메시지는 미배달 상태로 붙어야 nextDelivery 가 배치를 만든다 — deliveryId 가 이미 있으면
+  // check 가 그것을 건너뛰고 코디네이터는 그대로 잠들어 있는다
+  it('붙은 메시지는 nextDelivery 의 배치에 들어간다', () => {
+    const { s, taskId } = validating()
+    const r = unwrap(applyValidationResult(s, { taskId, exitCode: 1, output: 'x' }, NOW) as never)
+    const d = unwrap<{ messages: { subject: string }[] }>(
+      nextDelivery(r.state, { runId: s.runs[0].id, types: ['status'] }, NOW) as never
+    )
+    expect(d.value.messages.map((m) => m.subject)).toContain('validation failed')
+  })
+
   it('validating 이 아닌 Task 는 거절한다', () => {
     const { s, taskId } = seed()
     const r = applyValidationResult(s, { taskId, exitCode: 0, output: '' }, NOW)
     expect(r.ok).toBe(false)
+  })
+
+  // 거절된 호출은 메시지도 남기지 않는다 — 거절인데 코디네이터를 깨우면 안 된다
+  it('거절되면 메시지도 붙지 않는다', () => {
+    const { s, taskId } = validating()
+    const settled = unwrap(applyValidationResult(s, { taskId, exitCode: 0, output: '' }, NOW) as never)
+    const before = settled.state.messages.length
+    const again = applyValidationResult(settled.state, { taskId, exitCode: 1, output: '' }, NOW)
+    expect(again.ok).toBe(false)
+    expect(settled.state.messages).toHaveLength(before)
   })
 
   it('없는 Task 는 거절한다', () => {
