@@ -814,7 +814,7 @@ export function registerIpc(
   })
   const IMAGE_READ_MAX = 5 * 1024 * 1024 // 5MB
   ipcMain.handle('files.readDataUrl', async (_e, filePath: string) => {
-    await assertAllowedPath(filePath)
+    const root = await assertAllowedPath(filePath)
     const mime = imageMime(path.extname(filePath).slice(1))
     if (!mime) throw new Error(t(core.lang, 'files.error.unsupportedImageType'))
     // isPathWithin (inside assertAllowedPath) only resolves '..' lexically — it does not follow
@@ -822,8 +822,15 @@ export function registerIpc(
     // ~/.ssh/id_rsa or /etc/passwd, so the real target is re-checked here. A symlink that stays inside
     // an allowed root (e.g. a shared asset linked into a project) keeps working; only one that escapes
     // every root is refused.
+    // The re-check compares two realpath'd values, not a realpath'd file against a lexical root: on
+    // macOS /tmp, /var and /etc are themselves symlinks, and a relocated Windows user folder can be a
+    // junction — comparing `real` against the lexical `root` would then reject every in-root image
+    // under a session whose cwd sits below one of those, failing closed for a plain, non-hostile file.
+    // Realpath-ing the matched root (rather than re-running assertAllowedPath, which would repeat the
+    // same lexical-only comparison against the same un-resolved roots) is what actually fixes that.
     const real = await fs.realpath(filePath)
-    await assertAllowedPath(real)
+    const realRoot = await fs.realpath(root)
+    if (!isPathWithin(realRoot, real)) throw new Error(t(core.lang, 'files.error.pathNotAllowed'))
     // A single bounded read, not stat+readFile: stat.size is advisory (the file can grow between the
     // stat and the read) and reads 0 for FIFOs/character devices, so a symlink to a named pipe or
     // /dev/zero would sail past a size check and fs.readFile would then grow unbounded in the main
