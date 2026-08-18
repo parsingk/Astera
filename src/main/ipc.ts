@@ -634,10 +634,13 @@ export function registerIpc(
         if (!impl) return void (await gate(`no implementation dispatch for task ${taskId}`))
         const cwd = impl.cwd
         const accounts = core.accounts.list()
-        const loggedIn = new Set<string>()
-        for (const account of accounts) {
-          if (await core.accounts.loginStatus(account.id)) loggedIn.add(account.id)
-        }
+        // core.ts 의 defaultAccountIdFor 와 같은 모양 — 로그인 조회는 계정마다 파일(또는 macOS 에서는
+        // Keychain)을 읽으므로 순차로 돌리면 계정 수만큼 늘어난다. 같은 일을 하는 자리가 이미 있으니
+        // 그 모양을 따른다.
+        const loggedInIds = await Promise.all(
+          accounts.map(async (a) => ((await core.accounts.loginStatus(a.id)) ? a.id : null))
+        )
+        const loggedIn = new Set(loggedInIds.filter((id): id is string => id !== null))
         const picked = pickReviewer({ implProvider: impl.provider, accounts, loggedInIds: loggedIn })
         if (!picked)
           return void (await gate(`no logged-in account on a provider other than ${impl.provider}`))
@@ -675,7 +678,13 @@ export function registerIpc(
         let started: { sessionId: string; cwd: string; specPath: string }
         try {
           // 검토자는 구현자가 일한 트리에서 돈다 — worktree 'current' + runCwd = 그 cwd.
-          started = await coordinator.startWorker({
+          //
+          // **coordinator.startWorker 가 아니라 deps.startWorker 다.** 그쪽은 통과 함수가 아니다 —
+          // 코디네이터를 부른 뒤 orchTails.start 로 그 세션의 출력을 이 Dispatch 에 묶는다. 직접
+          // 부르면 검토 Dispatch 에는 tail 이 없고 worker-read 가 untracked 를 돌려준다: 검토자가
+          // 멈췄거나 판정이 이해되지 않을 때 코디네이터가 볼 것이 사라진다. 그리고 그 차이는 검토
+          // Dispatch 만 다르게 행동하는 자리가 되어 다음 사람을 속인다.
+          started = await deps.startWorker({
             dispatchId: opened.value.id,
             taskId,
             title: `Review: ${task.title}`,
@@ -841,7 +850,7 @@ export function registerIpc(
       },
       startValidation: ({ taskId, cwd }) => validator.enqueue({ taskId, cwd }),
       // 검토를 시작한다. 검증과 달리 **세션을 띄운다** — 그래서 provider·계정을 고르고, 검토
-      // Dispatch 를 커밋하고, coordinator.startWorker 를 부르는 세 걸음이다. 동기 서명이므로
+      // Dispatch 를 커밋하고, deps.startWorker 를 부르는 세 걸음이다. 동기 서명이므로
       // 비동기 작업은 안에서 흘려보낸다(startValidation 이 큐에 넣기만 하는 것과 같은 이유:
       // 기다리면 worker_done 응답이 그만큼 늦어지고 워커 세션이 그 자리에서 멈춘다).
       startReview: ({ taskId }) => {
