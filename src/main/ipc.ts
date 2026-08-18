@@ -22,6 +22,8 @@ import {
   type OrchServer,
   type OrchServerDeps
 } from './orchestration/server'
+import { TaskValidator, ValidatorBusyError } from './orchestration/validator'
+import { applyValidationResult, blockForValidation } from '../core/orchestration/state'
 import { sameSnapshot, snapshotFor } from '../core/orchestration/view'
 import { repoPathOf } from '../core/worktrees/repo'
 import type { OrchState } from '../core/orchestration/state'
@@ -98,6 +100,8 @@ export function registerIpc(
     infoPath: string
     skillsPath: string
   } | null = null
+  /** 검증기. startOrchestration 이 만들 때까지, 그리고 오케스트레이션이 꺼져 있으면 null 이다 */
+  let orchValidator: TaskValidator | null = null
   /** A bounded per-dispatch tail of worker output — what worker-read reads. The append, cap, eviction,
    *  and limit rules, along with "when does it get cleared", live in orchestration/tail.ts (its tests
    *  pin them down). Eviction is the only path that clears it — not a dead session, not a
@@ -215,7 +219,12 @@ export function registerIpc(
   }
   // run output and status to the renderer
   core.run.onData = (e) => send('run:data', e)
-  core.run.onStatus = (e) => send('run:status', e)
+  core.run.onStatus = (e) => {
+    send('run:status', e)
+    // 검증 실행의 종료도 이 한 통로로 온다 — RunManager 의 onStatus 는 하나뿐이다.
+    // 검증이 아닌 실행의 종료도 흘러 들어가지만, TaskValidator 가 큐에 없는 cwd 는 무시한다.
+    if (e.status === 'exited') orchValidator?.onRunExit({ cwd: e.projectPath, exitCode: e.exitCode ?? 1 })
+  }
   // project terminal output and exit to the renderer
   core.terminal.onData = (e) => send('terminal:data', e)
   core.terminal.onExit = (e) => send('terminal:exit', e)
@@ -522,6 +531,54 @@ export function registerIpc(
       log: orchLog
     })
 
+    // 검증 실행. runner 는 prepareRun + RunManager 이고, 결과는 서버의 setState 로 되돌아간다.
+    // dispatchOf 로 cwd 에서 Task 를 되찾지 않는 이유: TaskValidator 가 taskId 를 들고 있다.
+    const validator = new TaskValidator({
+      runner: {
+        start: async ({ cwd, taskId }) => {
+          const st = store.get()
+          const task = st.tasks.find((t) => t.id === taskId)
+          if (!task?.validateConfigId) throw new Error(`no validateConfigId on task ${taskId}`)
+          const run = st.runs.find((r) => r.id === task.runId)
+          if (!run) throw new Error(`unknown run for task ${taskId}`)
+          // 구성은 Run 의 프로젝트에서, 실행은 Dispatch 의 cwd 에서. ignoreConfigCwd 는 구성에 박힌
+          // 경로가 워커의 트리가 아닌 곳을 가리키기 때문이다(spec 2절).
+          const { config, command, projectName } = await prepareRun({
+            projectPath: run.cwd,
+            configId: task.validateConfigId,
+            stored: core.runConfig.get(run.cwd),
+            ignoreConfigCwd: true,
+            assertAllowedPath,
+            t: (key, params) => t(core.lang, key as MessageKey, params)
+          })
+          // RunManager 는 projectPath(=cwd) 하나에 하나만 돌린다. 사용자가 그 사이 Run 버튼으로
+          // 직접 채웠을 수 있다 — 그 충돌은 지나가는 것이므로, ALREADY_RUNNING 문자열을 잡아내는
+          // 대신 시작 전에 미리 살펴 ValidatorBusyError 로 구분한다(큐가 기다리게 한다).
+          if (core.run.get(cwd)?.status === 'running') throw new ValidatorBusyError(cwd)
+          core.run.start({ projectPath: cwd, projectName, config, command })
+        },
+        output: (cwd) => core.run.recentOutput(cwd).slice(-4000)
+      },
+      onSettled: async ({ taskId, exitCode, output }) => {
+        const r = applyValidationResult(store.get(), { taskId, exitCode, output }, new Date().toISOString())
+        if (!r.ok) {
+          orchLog(`validation result rejected task=${taskId}: ${r.error}`)
+          return
+        }
+        await deps.setState(r.state)
+      },
+      onCannotRun: async ({ taskId, reason }) => {
+        const r = blockForValidation(store.get(), { taskId, reason }, new Date().toISOString())
+        if (!r.ok) {
+          orchLog(`could not block task=${taskId}: ${r.error}`)
+          return
+        }
+        await deps.setState(r.state)
+      },
+      log: orchLog
+    })
+    orchValidator = validator
+
     const deps: OrchServerDeps = {
       getState: () => store.get(),
       // Passed in a form that is definitely awaited — the caller's await contract stays. save() itself
@@ -639,6 +696,7 @@ export function registerIpc(
         })
         return configs.map((c) => ({ id: c.id, name: c.name, type: c.type }))
       },
+      startValidation: ({ taskId, cwd }) => validator.enqueue({ taskId, cwd }),
       log: orchLog
     }
 

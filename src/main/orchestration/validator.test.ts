@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { TaskValidator, type ValidatorRunner } from './validator'
+import { TaskValidator, ValidatorBusyError, type ValidatorRunner } from './validator'
 
 const settledCalls = (): {
   onSettled: (a: { taskId: string; exitCode: number; output: string }) => Promise<void>
@@ -155,5 +155,72 @@ describe('TaskValidator', () => {
     v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
     v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1' })
     await vi.waitFor(() => expect(started).toEqual(['tsk_2']))
+  })
+
+  // 자리가 사용 중인 것(ValidatorBusyError)은 지나가는 문제다 — NO_CONFIG 같은 진짜 실패와 달리
+  // 사람에게 묻지 않고, 다음 항목으로 큐를 넘기지도 않는다.
+  it('자리가 사용 중이면 onCannotRun 을 부르지 않고 큐를 넘기지도 않는다', async () => {
+    const attempts: string[] = []
+    const cannotRun: string[] = []
+    const runner: ValidatorRunner = {
+      start: async (a) => {
+        attempts.push(a.taskId)
+        throw new ValidatorBusyError(a.cwd)
+      },
+      output: () => ''
+    }
+    const v = new TaskValidator({
+      runner,
+      onSettled: async () => {},
+      onCannotRun: async (a) => void cannotRun.push(a.taskId)
+    })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1' })
+    await vi.waitFor(() => expect(attempts).toHaveLength(1))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(cannotRun).toHaveLength(0)
+    // tsk_2 는 아직 시도조차 되지 않았다 — tsk_1 이 큐 맨 앞에 그대로 남아 있다
+    expect(attempts).toEqual(['tsk_1'])
+  })
+
+  // 자리를 비운 실행(사용자가 손으로 시작한 Run)이 끝나면, 기다리던 헤드가 다시 시작을 시도한다.
+  // 타이머 없이 그 종료 이벤트 자체가 재시도 신호다.
+  it('자리가 사용 중이라 기다리던 항목은, 그 자리를 비운 실행이 끝나면 시작한다', async () => {
+    let busy = true
+    const attempts: string[] = []
+    const runner: ValidatorRunner = {
+      start: async (a) => {
+        attempts.push(a.taskId)
+        if (busy) {
+          busy = false
+          throw new ValidatorBusyError(a.cwd)
+        }
+      },
+      output: () => '출력'
+    }
+    const v = new TaskValidator({ runner, onSettled: async () => {}, onCannotRun: async () => {} })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    await vi.waitFor(() => expect(attempts).toEqual(['tsk_1']))
+    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 }) // 자리를 비운 실행의 종료 — tsk_1 이 낸 것이 아니다
+    await vi.waitFor(() => expect(attempts).toEqual(['tsk_1', 'tsk_1'])) // 다음 항목이 아니라 같은 헤드를 재시도한다
+  })
+
+  // 헤드가 아직 시작하지 못한 채로 온 종료는 다른 실행의 것이다 — 그 코드로 Task 를 정산하면 안 된다
+  it('헤드가 시작하지 못한 채로 온 종료는 아무것도 정산하지 않는다', async () => {
+    const attempts: string[] = []
+    const runner: ValidatorRunner = {
+      start: async (a) => {
+        attempts.push(a.taskId)
+        throw new ValidatorBusyError(a.cwd)
+      },
+      output: () => ''
+    }
+    const { onSettled, calls } = settledCalls()
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    await vi.waitFor(() => expect(attempts).toHaveLength(1))
+    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 })
+    await vi.waitFor(() => expect(attempts).toHaveLength(2)) // 재시도는 일어났지만
+    expect(calls).toHaveLength(0) // 정산되지는 않았다
   })
 })

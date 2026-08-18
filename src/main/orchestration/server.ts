@@ -85,6 +85,10 @@ export interface OrchServerDeps {
   /** Run 의 프로젝트에 저장된 실행 구성 목록. 주입되지 않으면 빈 목록이다 —
    *  now?/log?/backup?/probeLimit? 와 같은 관례다. */
   listRunConfigs?(projectPath: string): Promise<{ id: string; name: string; type: string }[]>
+  /** 검증을 시작한다. **동기다** — 검증은 몇 분이 걸리므로 기다리면 worker_done 응답이 그만큼
+   *  늦어지고, 워커 세션이 그 자리에서 멈춘다. 결과는 배선이 나중에 setState 로 커밋한다.
+   *  주입되지 않으면 Task 가 validating 에 머문다(검증기가 없는 배선). */
+  startValidation?(a: { taskId: string; cwd: string }): void
   /** Audit log left behind when task-update bypasses the transition table (canTransition) — the same
    *  shape as log(message: string) in coordinator.ts. The wiring decides where it goes. If it is not
    *  injected (existing tests and the like) logging is skipped — optional for the same reason as
@@ -633,6 +637,10 @@ export async function handleCommand(
           }
         }
         await deps.setState(nextState)
+        // 커밋 뒤에 부른다 — 검증이 먼저 끝나면 아직 validating 이 아닌 Task 에 결과를 쓰게 된다.
+        const settled = deps.getState().tasks.find((t) => t.id === taskId)
+        const dispatch = deps.getState().dispatches.find((d) => d.id === dispatchId)
+        if (settled?.status === 'validating' && dispatch) deps.startValidation?.({ taskId, cwd: dispatch.cwd })
         return okBody(result.value)
       }
       // status, escalation and heartbeat — recorded only, with no bearing on lifetime.
