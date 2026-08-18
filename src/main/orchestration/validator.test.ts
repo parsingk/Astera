@@ -110,4 +110,50 @@ describe('TaskValidator', () => {
     await new Promise((r) => setTimeout(r, 10))
     expect(calls).toHaveLength(0)
   })
+
+  // onSettled 는 실제 배선에서 상태를 커밋한다 — 실패할 수 있다. 그 실패가 advance 를 막으면
+  // 그 cwd 의 다음 검증들이 영원히 돌지 않는다. 그래서 거부되어도 큐는 넘어가야 한다.
+  it('onSettled 가 거부돼도 같은 cwd 의 다음 검증은 시작한다', async () => {
+    const runner = fakeRunner()
+    const v = new TaskValidator({
+      runner,
+      onSettled: async () => {
+        throw new Error('commit failed')
+      },
+      onCannotRun: async () => {}
+    })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1' })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(1))
+    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(2))
+    expect(runner.started[1].taskId).toBe('tsk_2')
+  })
+
+  // onCannotRun 도 실제 배선에서 상태를 커밋한다 — 실패할 수 있다. startHead 의 catch 블록이
+  // 이 거부에 걸려 advance 를 못 부르면 그 cwd 는 첫 실패 이후로 영원히 막힌다.
+  it('onCannotRun 이 거부돼도 같은 cwd 의 다음 검증은 시작한다', async () => {
+    let first = true
+    const started: string[] = []
+    const runner: ValidatorRunner = {
+      start: async (a) => {
+        if (first) {
+          first = false
+          throw new Error('NO_CONFIG')
+        }
+        started.push(a.taskId)
+      },
+      output: () => ''
+    }
+    const v = new TaskValidator({
+      runner,
+      onSettled: async () => {},
+      onCannotRun: async () => {
+        throw new Error('commit failed')
+      }
+    })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1' })
+    await vi.waitFor(() => expect(started).toEqual(['tsk_2']))
+  })
 })
