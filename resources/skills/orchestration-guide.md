@@ -184,7 +184,7 @@ starts.
 task-create --title <s> --spec <s|-> [--deps <json_array>] [--parent <tsk>] [--validate <configId>] [--review] [--json]
 task-list [--run <run>] [--status <s>] [--ready] [--brief] [--json]
 task-update --id <tsk> --status <s> [--result <s|->] [--json]   # bypasses the transition table — see section 8
-dispatch-show --task <tsk> [--json]        # returns that Task's Dispatch history as an array (retries included)
+dispatch-show --task <tsk> [--json]        # that Task's Dispatch history as an array (retries and the app's review Dispatch included)
 
 gate-create --task <tsk> --question <s|-> [--options <json_array>] [--json]
 gate-resolve --id <gat> --resolution <s> [--json]
@@ -208,6 +208,12 @@ gate-list [--task <tsk>] [--status <s>] [--json]
   a passing validation, if `--validate` is also attached) moves the Task to `reviewing` instead of
   `completed` (section 2, which covers what happens next, when it is worth attaching, and what the
   reviewer sees).
+- **`dispatch-show` also lists the review Dispatch the app started**, on a Task with `--review`
+  (above). You did not open it and there is nothing to clean up on it: `worker-release` or
+  `worker-stop` on that entry kills the reviewer's session mid-review, and because that command
+  validates no state by design (section 8), nothing stops you. The Task then goes to `blocked`
+  behind a Gate you have to answer. Release only the Dispatches you started yourself — a review
+  Dispatch is the app's to end.
 - `--ready` filters to Tasks with `status=ready`. `--brief` truncates the spec to 160 characters and
   returns `spec_truncated` alongside it — for a coordinator skimming many Tasks without burning
   context.
