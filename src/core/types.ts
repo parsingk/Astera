@@ -29,7 +29,7 @@ import type { TerminalFont } from './terminal/font'
 // here is what would put it back in. Either way the wrong fix is "types": ["node"] — it makes the
 // import resolve by handing the renderer typecheck every Node global, which is the guard this note
 // stands to protect.
-import type { TaskStatus } from './orchestration/types'
+import type { MessageType, Outcome, TaskStatus } from './orchestration/types'
 export type { TaskStatus } from './orchestration/types'
 
 // providers/meta.ts owns Provider. It is re-exported here so that the files which already imported
@@ -264,6 +264,43 @@ export interface JobTask {
   gateQuestion?: string
   openGates: number
 }
+
+export type JobEventKind =
+  | 'run-created'
+  | 'task-created'
+  | 'dispatch-started'
+  | 'message'
+  | 'gate-opened'
+  | 'gate-resolved'
+
+/** 타임라인 한 줄. 저장된 레코드가 아니라 core/orchestration/timeline.ts 가 파생한 값이다.
+ *  Jobs 사이드바의 JobTask 와 같은 자리에 있는 이유도 같다 — 렌더러가 그리는 투영이다. */
+export interface JobEvent {
+  /** ISO 시각. 정렬 기준이고 화면에 그대로 쓰인다 */
+  at: string
+  kind: JobEventKind
+  /** 이 이벤트를 만든 레코드의 id. **종류 안에서만 유일하다** — 한 Gate 가 열림과 해제 두
+   *  이벤트를 만들므로, 렌더러의 key 는 kind 와 함께 써야 한다 */
+  sourceId: string
+  taskId?: string
+  /** Task 제목. 렌더러가 Task 를 다시 찾지 않게 여기서 붙인다 */
+  taskTitle?: string
+  /** kind === 'message' 일 때만. 배지 문구를 이것으로 고른다 */
+  messageType?: MessageType
+  /** 한 줄 요약 */
+  summary: string
+  /** 펼쳤을 때 보이는 본문. 없을 수 있다 */
+  body?: string
+  outcome?: Outcome
+  /** kind === 'dispatch-started' 일 때만 */
+  provider?: Provider
+  /** 재시도로 뜬 워커인가 (Dispatch.retryOf) */
+  retry?: boolean
+  /** 이 앱이 아직 아는 세션이면 그 id — 클릭하면 그 탭으로 간다. view.ts 의 jobTaskOf 와 같은
+   *  판정이고 같은 이유로 주입받는다 */
+  sessionId?: string
+}
+
 /** Run 이 끝났는지 — Task 상태에서 계산된다. 저장되지 않는다.
  *
  *  여기(web 포함 파일)에 선언하는 이유: JobRun 이 이 타입을 필드로 갖고, 그것을 계산하는
