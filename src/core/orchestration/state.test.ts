@@ -16,7 +16,7 @@ import {
   resolveGate,
   type OrchState
 } from './state'
-import { DELIVERY_MAX, FAILURE_LIMIT, type Task } from './types'
+import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task } from './types'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchState; value: T } => {
@@ -1002,6 +1002,137 @@ describe('applyValidationResult', () => {
     const { s } = validating()
     const r = applyValidationResult(s, { taskId: 'nope', exitCode: 0, output: '' }, NOW)
     expect(r.ok).toBe(false)
+  })
+})
+
+describe('reviewing', () => {
+  /** seed() 가 만드는 Task 에 검토 요청을 달아 준다 — withValidate 와 같은 모양이다 */
+  const withReview = (s: OrchState, taskId: string, extra: Partial<Task> = {}): OrchState => ({
+    ...s,
+    tasks: s.tasks.map((t) => (t.id === taskId ? { ...t, reviewRequested: true, ...extra } : t))
+  })
+  const done = (taskId: string, dispatchId: string, outcome: 'succeeded' | 'failed') => ({
+    taskId, dispatchId, outcome, subject: 's', body: 'b'
+  })
+
+  it('검토가 걸린 Task 는 성공 보고에 completed 가 아니라 reviewing 으로 간다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const r = unwrap(
+      applyWorkerDone(withReview(s, taskId), done(taskId, dispatchId, 'succeeded'), NOW) as never
+    )
+    expect(r.state.tasks[0].status).toBe('reviewing')
+  })
+
+  it('검토가 걸리지 않은 Task 는 지금과 똑같이 completed 로 간다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const r = unwrap(applyWorkerDone(s, done(taskId, dispatchId, 'succeeded'), NOW) as never)
+    expect(r.state.tasks[0].status).toBe('completed')
+  })
+
+  // 배선이 검토기를 주입하지 않은 경우 — reviewing 으로 보내면 꺼내 줄 것이 없어 그 자리에 멈춘다
+  it('canReview: false 면 검토가 없는 Task 와 똑같이 동작한다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const r = unwrap(
+      applyWorkerDone(
+        withReview(s, taskId),
+        { ...done(taskId, dispatchId, 'succeeded'), canReview: false },
+        NOW
+      ) as never
+    )
+    expect(r.state.tasks[0].status).toBe('completed')
+  })
+
+  // 워커 자신이 안 됐다고 하는데 다른 에이전트에게 읽히는 것은 세션 낭비다
+  it('워커가 실패를 보고하면 검토하지 않는다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const r = unwrap(
+      applyWorkerDone(withReview(s, taskId), done(taskId, dispatchId, 'failed'), NOW) as never
+    )
+    expect(r.state.tasks[0].status).toBe('failed')
+  })
+
+  // **검증이 먼저다.** 컴파일도 안 되는 코드를 읽으라고 세션을 태우지 않는다
+  it('검증과 검토가 둘 다 걸리면 먼저 validating 으로 간다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const armed = withReview(s, taskId, { validateConfigId: 'cfg1' })
+    const r = unwrap(applyWorkerDone(armed, done(taskId, dispatchId, 'succeeded'), NOW) as never)
+    expect(r.state.tasks[0].status).toBe('validating')
+  })
+
+  it('검증이 통과하면 completed 가 아니라 reviewing 으로 간다', () => {
+    const { s, taskId, dispatchId } = seed()
+    const armed = withReview(s, taskId, { validateConfigId: 'cfg1' })
+    const toValidating = unwrap(
+      applyWorkerDone(armed, done(taskId, dispatchId, 'succeeded'), NOW) as never
+    )
+    const r = unwrap(
+      applyValidationResult(
+        toValidating.state,
+        { taskId, exitCode: 0, output: 'ok', canReview: true },
+        NOW
+      ) as never
+    )
+    expect(r.state.tasks[0].status).toBe('reviewing')
+  })
+
+  // 이 셋이 이 슬라이스에서 가장 틀리기 쉬운 자리다
+  it('reviewing 으로 갈 때 연속 실패 카운터를 초기화하지 않는다 (worker_done 경로)', () => {
+    const { s, taskId, dispatchId } = seed()
+    const armed = withReview(s, taskId, { consecutiveFailures: 2 })
+    const r = unwrap(applyWorkerDone(armed, done(taskId, dispatchId, 'succeeded'), NOW) as never)
+    expect(r.state.tasks[0].status).toBe('reviewing')
+    expect(r.state.tasks[0].consecutiveFailures).toBe(2)
+  })
+
+  it('reviewing 으로 갈 때 연속 실패 카운터를 초기화하지 않는다 (검증 통과 경로)', () => {
+    // applyValidationResult 는 지금 passed ? 0 : ... 로 초기화한다 — reviewing 으로 갈 때는 넘겨야
+    // 한다. 안 그러면 검증은 통과하고 검토는 실패하는 Task 가 매 시도마다 0 -> 1 을 반복해
+    // FAILURE_LIMIT 에 영원히 닿지 않는다
+    const { s, taskId, dispatchId } = seed()
+    const armed = withReview(s, taskId, { validateConfigId: 'cfg1', consecutiveFailures: 2 })
+    const toValidating = unwrap(
+      applyWorkerDone(armed, done(taskId, dispatchId, 'succeeded'), NOW) as never
+    )
+    const r = unwrap(
+      applyValidationResult(toValidating.state, { taskId, exitCode: 0, output: 'ok' }, NOW) as never
+    )
+    expect(r.state.tasks[0].status).toBe('reviewing')
+    expect(r.state.tasks[0].consecutiveFailures).toBe(2)
+  })
+
+  it('검증이 통과해 completed 로 갈 때는 카운터를 0 으로 되돌린다', () => {
+    // 위 두 개의 반대 — 실제로 completed 에 도달할 때만 초기화한다
+    const { s, taskId, dispatchId } = seed()
+    const armed: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) =>
+        t.id === taskId ? { ...t, validateConfigId: 'cfg1', consecutiveFailures: 2 } : t
+      )
+    }
+    const toValidating = unwrap(
+      applyWorkerDone(armed, done(taskId, dispatchId, 'succeeded'), NOW) as never
+    )
+    const r = unwrap(
+      applyValidationResult(toValidating.state, { taskId, exitCode: 0, output: 'ok' }, NOW) as never
+    )
+    expect(r.state.tasks[0].status).toBe('completed')
+    expect(r.state.tasks[0].consecutiveFailures).toBe(0)
+  })
+})
+
+describe('canTransition — reviewing', () => {
+  it('dispatched -> reviewing, validating -> reviewing 이 허용된다', () => {
+    expect(canTransition('dispatched', 'reviewing')).toBe(true)
+    expect(canTransition('validating', 'reviewing')).toBe(true)
+  })
+  it('reviewing -> completed | failed | blocked 가 허용된다', () => {
+    expect(canTransition('reviewing', 'completed')).toBe(true)
+    expect(canTransition('reviewing', 'failed')).toBe(true)
+    expect(canTransition('reviewing', 'blocked')).toBe(true)
+  })
+  // 검토 결과가 도착할 자리가 사라진다 — validating 이 같은 이유로 없다
+  it('reviewing -> dispatched 는 허용되지 않는다', () => {
+    expect(canTransition('reviewing', 'dispatched')).toBe(false)
   })
 })
 

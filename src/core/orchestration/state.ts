@@ -88,6 +88,7 @@ export function createTask(
     deps: string[]
     parentId?: string
     validateConfigId?: string
+    reviewRequested?: boolean
   },
   now: string
 ): Res<Task> {
@@ -105,6 +106,7 @@ export function createTask(
     deps: a.deps,
     parentId: a.parentId,
     ...(a.validateConfigId ? { validateConfigId: a.validateConfigId } : {}),
+    ...(a.reviewRequested ? { reviewRequested: a.reviewRequested } : {}),
     status: 'pending',
     consecutiveFailures: 0,
     createdAt: now,
@@ -193,6 +195,11 @@ export function applyWorkerDone(
      *  동작한다(worker_done 을 그대로 믿는다)"다.
      *  기본값은 true — 이 인자를 모르는 순수 계층의 호출자에게는 지금까지의 동작이 유지된다. */
     canValidate?: boolean
+    /** 검토를 실제로 돌릴 수 있는가. 배선이 검토기를 주입하지 않았으면 서버가 false 로 넘긴다 —
+     *  canValidate 와 완전히 같은 이유다: 보내면 결과를 가져다줄 것이 없어 Task 가 영원히
+     *  reviewing 이고, recomputeReady 는 completed 만 승격시키므로 그 의존 서브트리 전체가
+     *  pending 에 멈춘다. 기본값 true — 이 인자를 모르는 호출자에게는 지금까지의 동작이 유지된다. */
+    canReview?: boolean
   },
   now: string
 ): Res<'accepted' | 'alreadyReported'> {
@@ -213,21 +220,32 @@ export function applyWorkerDone(
   // canValidate === false 는 검증기가 없는 배선이다 — 그때는 검증이 없는 Task 와 똑같이 다룬다.
   const validating =
     a.outcome === 'succeeded' && !!task.validateConfigId && a.canValidate !== false
-  const to = validating ? 'validating' : a.outcome === 'succeeded' ? 'completed' : 'failed'
+  // 검증이 먼저다 — !validating 이 그것을 강제한다. 검증이 통과한 뒤의 검토는
+  // applyValidationResult 가 같은 판단으로 넘긴다.
+  const reviewing =
+    a.outcome === 'succeeded' && !validating && !!task.reviewRequested && a.canReview !== false
+  const to = validating
+    ? 'validating'
+    : reviewing
+      ? 'reviewing'
+      : a.outcome === 'succeeded'
+        ? 'completed'
+        : 'failed'
   const moved = moveTask(task, to, now)
   if (!moved) return err(`cannot move task ${task.status} -> ${to}`)
   const nextTask: Task = {
     ...moved,
     result: a.body,
     filesModified: a.filesModified,
-    // **validating 으로 갈 때는 그대로 넘긴다.** 여기서 0 으로 되돌리면 이어진 검증 실패가 1 을
-    // 만들고 다음 시도도 0 -> 1 이라 FAILURE_LIMIT 에 영원히 닿지 않는다 — 검증을 통과하지 못하는
-    // Task 가 무한히 재시도된다. 초기화는 실제로 completed 에 도달할 때만 한다.
-    consecutiveFailures: validating
-      ? task.consecutiveFailures
-      : a.outcome === 'succeeded'
-        ? 0
-        : task.consecutiveFailures + 1
+    // **validating 이나 reviewing 으로 갈 때는 그대로 넘긴다.** 여기서 0 으로 되돌리면 이어진
+    // 검증/검토 실패가 1 을 만들고 다음 시도도 0 -> 1 이라 FAILURE_LIMIT 에 영원히 닿지 않는다 —
+    // 통과하지 못하는 Task 가 무한히 재시도된다. 초기화는 실제로 completed 에 도달할 때만 한다.
+    consecutiveFailures:
+      validating || reviewing
+        ? task.consecutiveFailures
+        : a.outcome === 'succeeded'
+          ? 0
+          : task.consecutiveFailures + 1
   }
   const nextDispatch: Dispatch = {
     ...dispatch,
@@ -275,18 +293,36 @@ export function applyWorkerDone(
  *  못하면 코디네이터는 다음 Task 를 띄우지 않는다. */
 export function applyValidationResult(
   s: OrchState,
-  a: { taskId: string; exitCode: number; output: string },
+  a: {
+    taskId: string
+    exitCode: number
+    output: string
+    /** applyWorkerDone 의 canReview 와 같은 판정이다 — 배선이 검토기를 주입하지 않았으면 서버가
+     *  false 로 넘긴다. */
+    canReview?: boolean
+  },
   now: string
 ): Res<Task> {
   const task = s.tasks.find((t) => t.id === a.taskId)
   if (!task) return err(`unknown task: ${a.taskId}`)
   if (task.status !== 'validating') return err(`task is not validating: ${task.status}`)
   const passed = a.exitCode === 0
-  const moved = moveTask(task, passed ? 'completed' : 'failed', now)
-  if (!moved) return err(`cannot move task ${task.status} -> ${passed ? 'completed' : 'failed'}`)
+  // 검증이 통과했어도 검토가 걸려 있으면 아직 끝난 것이 아니다. applyWorkerDone 과 같은 판단이고,
+  // 여기에 없으면 검증이 걸린 Task 만 검토를 건너뛴다.
+  const reviewing = passed && !!task.reviewRequested && a.canReview !== false
+  const to = reviewing ? 'reviewing' : passed ? 'completed' : 'failed'
+  const moved = moveTask(task, to, now)
+  if (!moved) return err(`cannot move task ${task.status} -> ${to}`)
   const next: Task = {
     ...moved,
-    consecutiveFailures: passed ? 0 : task.consecutiveFailures + 1,
+    // reviewing 으로 갈 때 0 으로 되돌리지 않는다 — 위 applyWorkerDone 의 주석과 같은 이유이고,
+    // 이쪽이 더 잡기 어렵다: 검증은 통과하고 검토는 실패하는 Task 가 매 시도마다 0 -> 1 을
+    // 반복해 회로가 영원히 끊기지 않는다.
+    consecutiveFailures: reviewing
+      ? task.consecutiveFailures
+      : passed
+        ? 0
+        : task.consecutiveFailures + 1,
     ...(passed ? {} : { result: `validation failed (exit ${a.exitCode})\n${a.output}` })
   }
   let state: OrchState = { ...s, tasks: recomputeReady(replace(s.tasks, next)) }
@@ -301,7 +337,7 @@ export function applyValidationResult(
       taskId: task.id,
       subject: passed ? 'validation passed' : 'validation failed',
       body: passed
-        ? `exitCode=0. The Task moved to completed.\n${a.output}`
+        ? `exitCode=0. ${reviewing ? 'The Task moved to reviewing — a reviewer on another provider now reads it.' : 'The Task moved to completed.'}\n${a.output}`
         : `exitCode=${a.exitCode}. The Task moved to failed (consecutiveFailures=${next.consecutiveFailures}). Retry with worker-start --retry-of. The output tail below is the only record of what went wrong — a retry worker's spec file does not carry it, so pass on whatever it needs.\n${a.output}`
     },
     now

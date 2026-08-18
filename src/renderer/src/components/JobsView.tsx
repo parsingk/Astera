@@ -13,6 +13,9 @@ const STATUS_DOT: Record<TaskStatus, string> = {
   // 검증 중 — 도는 중(accent)과도, 끝난 셋과도 달라야 한다. git 의 '수정됨' 톤을 빌린다:
   // 이 앱에서 이미 "아직 정해지지 않았다"를 뜻하는 색이다.
   validating: 'var(--git-modified)',
+  // 검토 중 — 검증(--git-modified)과도, 도는 중(accent)과도, 끝난 셋과도 달라야 한다.
+  // 다른 에이전트가 읽고 있는 상태이므로 상태 팔레트에 없던 색을 하나 빌린다.
+  reviewing: 'var(--fi-purple)',
   completed: 'var(--ok)',
   failed: 'var(--git-deleted)',
   blocked: 'var(--git-conflict)'
