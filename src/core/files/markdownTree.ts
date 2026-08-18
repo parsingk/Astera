@@ -381,7 +381,10 @@ function attrsFor(tag: string, raw: Map<string, string | true>): MdAttrs {
 
   if (t === 'img') {
     const src = raw.get('src')
-    if (typeof src === 'string') out.src = src
+    // Image 갈래(linkTarget → classifyHref)와 같은 게이트를 쓴다 — href 와 마찬가지로 통과하지
+    // 못하면 src 자체를 두지 않는다. 이 값이 실제 DOM <img src> 에 그대로 닿을 수도 있는 컴포넌트가
+    // 아직 없다는 사실에 기대지 않는다 — 안전 계층이 내놓는 값 자체가 안전해야 한다
+    if (typeof src === 'string' && classifyHref(src) !== null) out.src = src
     const alt = raw.get('alt')
     if (typeof alt === 'string') out.alt = alt
   }
@@ -415,7 +418,10 @@ export type HtmlToken =
   | { t: 'open' | 'close' | 'self'; tag: string; attrs: MdAttrs }
   | { t: 'text'; text: string }
 
-const TAG_START = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)/
+// sticky(y) — lastIndex 에서 정확히 매치되지 않으면 즉시 실패한다. `<` 마다 꼬리를 slice 해
+// 통째로 다시 스캔하던 예전 방식은 `<` 개수에 대해 이차식으로 느려졌다(실측: 32000개에 396ms) —
+// Task 5 가 문서 전체 HTML 블록을 이 함수에 넘기므로 지금 고쳐 둔다.
+const TAG_START = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)/y
 const ATTR = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>=`]+)))?/g
 
 /** 원문 HTML 조각을 토큰으로 자른다.
@@ -462,8 +468,9 @@ export function lexHtml(src: string): HtmlToken[] {
       start = i
       continue
     }
-    const m = TAG_START.exec(src.slice(lt))
-    if (!m || m.index !== 0) {
+    TAG_START.lastIndex = lt
+    const m = TAG_START.exec(src)
+    if (!m) {
       // 태그가 아닌 `<` — 흘려보내지 않고 스캔만 전진해 둘레의 평문에 그대로 남긴다
       i = lt + 1
       continue
@@ -485,7 +492,12 @@ export function lexHtml(src: string): HtmlToken[] {
       }
     }
     const attrs = closing ? {} : attrsFor(tag, raw)
-    const t = closing ? 'close' : selfClosing || VOID_TAGS.has(tag) ? 'self' : 'open'
+    // DROP_TAGS 중 void 가 아닌 것(script·style·textarea…)은 슬래시를 자체 종결로 받아주지
+    // 않는다 — 받아주면 `<script/>` 가 drop 프레임을 열지 못한 채 넘어가고, 원래 그 태그의 본문
+    // 이었을 내용이 평문으로 그대로 보인다(실측으로 확인). 브라우저도 void 가 아닌 HTML 요소에서는
+    // 슬래시를 무시하고 rawtext 를 계속 읽는다 — 그 동작에 맞춘다.
+    const dropOpensAnyway = DROP_TAGS.has(tag) && !VOID_TAGS.has(tag)
+    const t = closing ? 'close' : !dropOpensAnyway && (selfClosing || VOID_TAGS.has(tag)) ? 'self' : 'open'
     out.push({ t, tag, attrs })
     i = gt + 1
     start = i
@@ -509,6 +521,13 @@ function foldInline(tokens: FoldToken[]): MdInline[] {
   const emit = (node: MdInline): void => {
     if (!dropped()) top().push(node)
   }
+  // 이미 만들어진 노드를 밀어넣을 때도 파일 전체의 "인접 텍스트는 합친다" 불변식을 지킨다 —
+  // text 노드면 pushText 를 거쳐 마지막 노드와 합칠지 판단하고, 그 밖은 그대로 붙인다. 이걸
+  // 빼먹으면 태그를 사이에 두지 않았을 때도 문단이 여러 조각으로 쪼개진다(실측으로 확인).
+  const pushNode = (arr: MdInline[], node: MdInline): void => {
+    if (node.k === 'text') pushText(arr, node.text)
+    else arr.push(node)
+  }
 
   for (const tok of tokens) {
     if (tok.t === 'text') {
@@ -516,7 +535,7 @@ function foldInline(tokens: FoldToken[]): MdInline[] {
       continue
     }
     if (tok.t === 'node') {
-      if (!dropped()) top().push(tok.node)
+      if (!dropped()) pushNode(top(), tok.node)
       continue
     }
     const policy = policyFor(tok.tag)
@@ -532,6 +551,13 @@ function foldInline(tokens: FoldToken[]): MdInline[] {
     const at = [...stack].reverse().findIndex((f) => f.tag === tok.tag)
     if (at < 0) continue
     const idx = stack.length - 1 - at
+    // drop 프레임을 뚫고 그 바깥까지 팝하지 않는다. `<b><script></b>alert(1)</script>` 처럼
+    // 어긋난(crossed) 닫는 태그가 drop 프레임 밖의 태그와 우연히 짝을 이루면, 그 태그를 정말로
+    // 닫아버려서 이후의 alert(1) 이 더 이상 어떤 drop 프레임 안에도 있지 않게 된다(실측으로
+    // 확인 — Finding 2). 가장 바깥 drop 프레임 자신을 닫는 경우(idx === dropIdx)나 그 안쪽만
+    // 닫는 경우(idx > dropIdx)는 그대로 두고, 그 밖으로 나가려는 시도만 무시한다.
+    const dropIdx = stack.findIndex((f) => f.policy === 'drop')
+    if (dropIdx >= 0 && idx < dropIdx) continue
     while (stack.length > idx) closeFrame()
   }
   while (stack.length > 0) closeFrame()
@@ -544,7 +570,7 @@ function foldInline(tokens: FoldToken[]): MdInline[] {
     // 판단한다 — 순서를 뒤집으면 쓰이지 않을 참조를 먼저 잡는 죽은 코드가 된다
     if (frame.policy === 'drop' || stack.some((f) => f.policy === 'drop')) return
     const parent = stack.length ? stack[stack.length - 1].children : root
-    if (frame.policy === 'unwrap') parent.push(...frame.children)
+    if (frame.policy === 'unwrap') for (const child of frame.children) pushNode(parent, child)
     else parent.push({ k: 'htmlEl', tag: frame.tag, attrs: frame.attrs, children: frame.children })
   }
 }

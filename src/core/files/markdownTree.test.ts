@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseMarkdown, type MdBlock, type MdInline } from './markdownTree'
+import { parseMarkdown, lexHtml, policyFor, type MdBlock, type MdInline } from './markdownTree'
 
 /** 인라인을 평문으로 되돌린다 — 구조가 아니라 텍스트만 볼 때 쓴다 */
 function plain(inline: MdInline[]): string {
@@ -10,6 +10,9 @@ function plain(inline: MdInline[]): string {
         case 'code': return n.text
         case 'br': return '\n'
         case 'strong': case 'em': case 'del': return plain(n.children)
+        // htmlEl 도 재귀한다 — 안 그러면 허용 태그 안에 숨은 drop 누출을 plain() 이 그냥
+        // 못 본 채 지나쳐서 `not.toContain` 류 검사가 헛돈다(Finding 5)
+        case 'htmlEl': return plain(n.children)
         default: return ''
       }
     })
@@ -512,8 +515,6 @@ describe('빈 표시부', () => {
   })
 })
 
-import { lexHtml, policyFor } from './markdownTree'
-
 describe('policyFor', () => {
   it('통과 목록의 태그는 allow', () => {
     for (const tag of ['div', 'span', 'a', 'img', 'details', 'summary', 'kbd', 'sub', 'h3', 'td'])
@@ -605,6 +606,38 @@ describe('lexHtml', () => {
   it('닫히지 않은 태그는 텍스트로 남는다', () => {
     expect(lexHtml('<div')).toEqual([{ t: 'text', text: '<div' }])
   })
+  // Fix round 1, Finding 1: href 와 같은 게이트가 없으면 //evil.com, UNC 경로, file:, javascript:
+  // 가 그대로 src 에 남는다 — markdown ![]() 의 같은 값은 이미 전부 거부한다
+  it('src 가 허용 스킴이 아니면 버린다 — href 와 같은 게이트를 쓴다', () => {
+    for (const src of [
+      '//evil.com/x.gif',
+      '\\\\evil.com\\share\\x.gif',
+      'file:///C:/Windows/win.ini',
+      'javascript:alert(1)'
+    ])
+      expect(lexHtml(`<img src="${src}">`)).toEqual([{ t: 'self', tag: 'img', attrs: {} }])
+    expect(lexHtml('<img src="assets/a.png">')).toEqual([
+      { t: 'self', tag: 'img', attrs: { src: 'assets/a.png' } }
+    ])
+    expect(lexHtml('<img src="https://x/y.png">')).toEqual([
+      { t: 'self', tag: 'img', attrs: { src: 'https://x/y.png' } }
+    ])
+  })
+  // Fix round 1, Finding 2: 슬래시를 self-closing 신호로 받아주면 drop 태그가 프레임을 아예 열지
+  // 못한 채 넘어간다 — void 가 아닌 drop 태그는 슬래시가 있어도 open 이어야 한다
+  it('self-closing 표기의 drop 태그는 open 으로 남는다', () => {
+    expect(lexHtml('<script/>')).toEqual([{ t: 'open', tag: 'script', attrs: {} }])
+    expect(lexHtml('<script />')).toEqual([{ t: 'open', tag: 'script', attrs: {} }])
+    expect(lexHtml('<style/>body{x}</style>')).toEqual([
+      { t: 'open', tag: 'style', attrs: {} },
+      { t: 'text', text: 'body{x}' },
+      { t: 'close', tag: 'style', attrs: {} }
+    ])
+    expect(lexHtml('<textarea/>')).toEqual([{ t: 'open', tag: 'textarea', attrs: {} }])
+    // void 태그는(DROP_TAGS 와 겹치는 것들 포함) 여전히 자체 종결이다 — 애초에 본문이 없다
+    expect(lexHtml('<input/>')).toEqual([{ t: 'self', tag: 'input', attrs: {} }])
+    expect(lexHtml('<input>')).toEqual([{ t: 'self', tag: 'input', attrs: {} }])
+  })
 })
 
 describe('인라인 HTML', () => {
@@ -632,5 +665,46 @@ describe('인라인 HTML', () => {
     const p = parseMarkdown('a <img src="a.png" alt="x"> b\n')[0] as Extract<MdBlock, { k: 'para' }>
     const el = p.inline.find((n) => n.k === 'htmlEl') as Extract<MdInline, { k: 'htmlEl' }>
     expect(el).toMatchObject({ k: 'htmlEl', tag: 'img', attrs: { src: 'a.png', alt: 'x' } })
+  })
+  // Fix round 1, Finding 2: 슬래시 하나로 drop 프레임을 열지 못하게 만들면 본문이 평문으로 샌다.
+  // 마지막 둘은 리뷰가 조각으로 제시한 <style/>...·<textarea/> 를 최소 문단으로 감싼 것이다 —
+  // <style/> 조각은 이미 닫는 태그를 포함하고 있고, <textarea/> 는 내용을 담아 봉인 여부를 볼 수
+  // 있게 닫는 태그를 붙였다.
+  it('self-closing 표기로도 drop 태그의 본문까지 사라진다', () => {
+    for (const md of [
+      'a <script/>alert(1)</script> b\n',
+      'a <script />alert(1)</script> b\n',
+      'a <style/>body{x}</style> b\n',
+      'a <textarea/>alert(1)</textarea> b\n'
+    ]) {
+      const p = parseMarkdown(md)[0] as Extract<MdBlock, { k: 'para' }>
+      expect(plain(p.inline)).not.toContain('alert')
+      expect(plain(p.inline)).not.toContain('body{x}')
+      expect(p.inline.every((n) => n.k !== 'htmlEl')).toBe(true)
+    }
+  })
+  // Fix round 1, Finding 2: 어긋난(crossed) 닫는 태그가 drop 프레임 밖의 태그와 짝을 이루면 그
+  // 프레임을 뚫고 나가서, 그 뒤 내용이 더 이상 어떤 drop 프레임 안에도 있지 않게 된다
+  it('drop 프레임을 뚫고 닫는 태그는 그 프레임 밖으로 나가지 못한다', () => {
+    const p = parseMarkdown('a <b><script></b>alert(1)</script> b\n')[0] as Extract<
+      MdBlock, { k: 'para' }
+    >
+    expect(plain(p.inline)).not.toContain('alert')
+  })
+  // Fix round 1, Finding 5: plain() 이 htmlEl 을 재귀하지 않으면 이 검사는 허용 태그 안에 숨은
+  // 누출을 못 보고 지나쳐 헛돈다 — plain 을 고친 뒤에야 의미가 생기는 검사다
+  it('허용 태그 안에 숨어도 drop 태그의 본문은 사라진다', () => {
+    const p = parseMarkdown('a <b><script>alert(1)</script></b> b\n')[0] as Extract<
+      MdBlock, { k: 'para' }
+    >
+    expect(plain(p.inline)).not.toContain('alert')
+  })
+  // Fix round 1, Finding 4: HTMLTag 가 out 에 아무것도 남기지 않으므로, drop 태그 앞뒤의 평문은
+  // 태그가 아예 없었던 것처럼 하나로 합쳐져야 한다 — foldInline 의 node/unwrap 경로가 pushText 를
+  // 거치지 않으면 조각난 채로 남는다
+  it('drop 태그 앞뒤의 평문이 하나로 합쳐진다', () => {
+    const p = parseMarkdown('a <script>x</script> b\n')[0] as Extract<MdBlock, { k: 'para' }>
+    expect(p.inline).toHaveLength(1)
+    expect(p.inline[0]).toEqual({ k: 'text', text: 'a  b' })
   })
 })
