@@ -1107,28 +1107,58 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .project-row .project-open-explorer:hover { opacity: 1; }
 
 /* ---------- jobs sidebar ---------- */
-/* Same row rhythm as the file tree (.fx-row) — height, padding and hover — so the two sidebar views
-   do not feel like two different apps stitched together. */
-.jobs-row { display: flex; align-items: center; gap: 4px; padding: 2px 8px; cursor: pointer; white-space: nowrap; transition: background var(--ease), box-shadow var(--ease); }
-.jobs-row:hover { background: rgba(255, 255, 255, 0.06); }
-.jobs-caret { flex: none; width: 12px; font-size: 10px; color: #9a9a9a; }
-.jobs-objective, .jobs-task-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.jobs-progress { flex: none; margin-left: auto; padding-left: 6px; color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
-/* Indented Task list under a Run — the same shape as .worktree-list under .worktree-repo */
-.jobs-tasks { margin: 0 0 5px 22px; border-left: 2px solid var(--line); }
-.jobs-status-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+/* 상태를 말로 적지 않는다 — 움직임이 "일하는 중"을, 색이 "어떤 일"을 말한다(JobIcons.tsx).
+   회전이 컴포넌트가 아니라 여기 있는 이유는 둘이다: 도는 글리프 셋이 **같은** 애니메이션을 공유해야
+   "무언가 돌고 있다"가 하나의 신호로 읽히고, 그것을 멈춰야 할 때 끌 자리가 하나여야 한다. */
+@keyframes job-spin { to { transform: rotate(360deg); } }
+.job-ic { flex: none; display: block; }
+.job-arc { transform-origin: 50% 50%; animation: job-spin 1.5s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .job-arc { animation: none; } }
+
+.jobs-run { border-bottom: 1px solid var(--line-soft); }
+.jobs-run-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px 0; cursor: pointer; }
+.jobs-run-head:hover { background: rgba(255, 255, 255, 0.04); }
+.jobs-caret { flex: none; width: 9px; font-size: 10px; color: var(--text-faint); }
+.jobs-objective { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 560; }
+/* 끝난 Run 은 물러난다 — 목록이 길어질수록 눈이 가야 하는 것은 아직 도는 쪽이다. 실패한 Run 은
+   여기서 흐려지지 않는다: 사람이 손봐야 하는 것이라 끝났어도 읽혀야 한다 */
+.jobs-objective.done { color: var(--text-faint); }
+/* 아이콘 하나와 숫자 하나 — 헤더의 묶음 표시와 아래 한 줄이 같은 모양을 쓴다 */
+.jobs-count { flex: none; display: inline-flex; align-items: center; gap: 3px; color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+/* 띠 — Task 하나가 칸 하나다. 접힌 Run 은 이것만 남으므로 아래 여백을 조금 더 준다 */
+.jobs-bar { display: flex; gap: 2px; height: 6px; margin: 7px 10px 8px; }
+.jobs-run.collapsed .jobs-bar { margin-bottom: 10px; }
+.jobs-seg { flex: 1; border-radius: 2px; }
+.jobs-rows { display: flex; flex-direction: column; gap: 4px; padding: 0 10px 8px; }
+.jobs-task { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: var(--radius-sm); background: var(--elevated); cursor: pointer; transition: box-shadow var(--ease); }
+/* 줄의 바탕이 이미 상태를 말하고 있어서(검토는 보라) hover 가 그 색을 덮지 않는다 — 덮으면
+   가리키는 동안 그 줄이 무슨 상태인지 사라진다. 그래서 테두리로만 말한다 */
+.jobs-task:not(.no-session):not(.jobs-fold):hover { box-shadow: inset 0 0 0 1px var(--ring); }
 /* No sessionId: never dispatched, a stale Dispatch from a previous app run, or the worker is still
    launching — there is no tab to open, so the row neither highlights on hover nor reacts to a click */
-.jobs-task.no-session { opacity: .45; cursor: default; }
-.jobs-task.no-session:hover { background: none; }
-.jobs-gate { padding: 1px 8px 4px 24px; font-size: 11.5px; color: var(--text-dim); white-space: normal; }
+.jobs-task.no-session { cursor: default; }
+.jobs-task--reviewing { background: rgba(169, 142, 222, 0.10); }
+.jobs-av { flex: none; width: 21px; height: 21px; display: grid; place-items: center; border-radius: var(--radius-sm); background: var(--line-soft); color: var(--text-dim); font-size: 9px; font-weight: 700; }
+/* 배지의 색은 provider 가 아니라 **상태**다 — 같은 워커가 구현으로 돌 때와 검토로 돌 때는 다른
+   일이고, 어느 CLI 인지는 두 글자와 바로 아래 줄의 이름이 이미 말한다 */
+.jobs-task--dispatched .jobs-av { background: rgba(55, 176, 196, 0.16); color: var(--accent); }
+.jobs-task--validating .jobs-av { background: rgba(215, 180, 90, 0.16); color: var(--git-modified); }
+.jobs-task--reviewing .jobs-av { background: rgba(169, 142, 222, 0.18); color: var(--fi-purple); }
+.jobs-task-body { flex: 1; min-width: 0; }
+.jobs-task-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.jobs-task-meta { display: block; color: var(--text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.jobs-jump { flex: none; color: var(--text-faint); font-size: 12px; }
+/* 넷째부터를 접은 줄. 여는 곳이 없으므로 눌리지 않는다 */
+.jobs-fold { cursor: default; color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+/* Gate — 사람을 부르는 유일한 줄이라 접힌 Run 에서도 남고, 유일하게 여러 줄로 접힌다 */
+.jobs-gate { display: flex; align-items: flex-start; gap: 7px; margin: 0 10px 9px; padding: 6px 8px; background: rgba(214, 139, 79, 0.09); border-left: 2px solid var(--git-conflict); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; color: var(--text-dim); font-size: 11.5px; white-space: normal; }
+.jobs-gate .job-ic { margin-top: 1px; }
+.jobs-foot { display: flex; align-items: center; gap: 11px; padding: 6px 10px 9px; border-top: 1px solid var(--line-soft); color: var(--text-faint); font-size: 11px; }
+/* 상세 창으로 가는 입구. 머리말 없이 이것 하나다 — 넓은 창을 여는 길은 하나뿐이라 이름이 필요 없다 */
+.jobs-more { margin-left: auto; padding: 0 2px; background: none; border: 0; color: var(--text-faint); font-size: 13px; line-height: 1; cursor: pointer; }
+.jobs-more:hover { color: var(--accent); }
 .jobs-empty { margin: auto; text-align: center; padding: 0 24px; color: var(--text-faint); font-size: 13px; }
 .jobs-empty-hint { margin-top: 6px; font-size: 11.5px; }
-/* Run 헤더 오른쪽의 기록 버튼 — 그 Run 의 JobTimeline 을 연다. .jobs-progress 와 나란히 서므로
-   같은 쉬는 색(--text-faint)을 쓰고, hover 에서만 --accent 로 올라온다. `flex: none` 은 .jobs-caret 과
-   .jobs-progress 가 같은 이유로 선언한 것과 같다 — 사이드바가 좁아지면 이 아이콘이 먼저 눌린다. */
-.jobs-timeline-btn { flex: none; background: none; border: 0; color: var(--text-faint); cursor: pointer; display: flex; padding: 0 2px; }
-.jobs-timeline-btn:hover { color: var(--accent); }
 
 /* ---------- file type icons ---------- */
 .fi { flex: none; display: block; width: 14px; height: 14px; color: var(--fi-gray); }

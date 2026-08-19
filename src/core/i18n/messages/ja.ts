@@ -710,9 +710,17 @@ export const ja: Catalog = {
   'jobs.rail.open': 'Jobs',
   'jobs.empty': 'まだ開始したジョブがありません',
   'jobs.empty.hint': 'コーディネーターセッションでジョブを作成すると、ここに表示されます',
-  'jobs.progress': '{done}/{total}',
-  'jobs.completed': '完了',
-  'jobs.failed': '失敗',
+  // 8 つの状態グリフ(JobIcons.tsx)のツールチップ。サイドバーが状態を言葉で書かなくなったので、
+  // これらは常時表示されない — アイコンを初めて見る人が学ぶ場所。pending と blocked は書き分ける:
+  // 前者は依存が、後者は人が止めている
+  'jobs.state.pending': 'まだ依存でふさがっている',
+  'jobs.state.ready': '開始できる',
+  'jobs.state.dispatched': 'ワーカーが作業中',
+  'jobs.state.validating': '検証が実行中',
+  'jobs.state.reviewing': '別のエージェントがレビュー中',
+  'jobs.state.completed': '終わった',
+  'jobs.state.failed': '失敗した',
+  'jobs.state.blocked': '人を待っている',
   'jobs.gates.more': '他 {count} 件',
   // JobTimeline.tsx — 履歴モーダル。種別バッジはイベント種別（またはメッセージ種別）が決める
   'jobs.timeline.open': '履歴',
@@ -734,7 +742,8 @@ export const ja: Catalog = {
   'jobs.event.decisionGate': '判断要求',
   // retry と同じ位置(dispatch-started の要約の横)。この Dispatch がレビュー用(Dispatch.review)のときだけ付く
   'jobs.event.review': 'レビュー',
-  // worker_done の結果。jobs.completed/jobs.failed は Run 全体の状態を指す語なので使わない
+  // worker_done の結果。jobs.state.completed/failed は Task の状態を指す語なので使わない
+  // (1 つの Task に複数のワーカー報告があり得る)
   'jobs.event.succeeded': '成功',
   'jobs.event.outcomeFailed': '失敗'
 }

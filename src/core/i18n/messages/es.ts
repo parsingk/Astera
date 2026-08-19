@@ -721,9 +721,17 @@ export const es: Catalog = {
   'jobs.rail.open': 'Jobs',
   'jobs.empty': 'Aún no se ha iniciado ningún trabajo',
   'jobs.empty.hint': 'Los trabajos creados desde una sesión coordinadora aparecerán aquí',
-  'jobs.progress': '{done}/{total}',
-  'jobs.completed': 'completadas',
-  'jobs.failed': 'fallidas',
+  // Descripciones emergentes de los ocho glifos de estado (JobIcons.tsx). La barra lateral ya no
+  // escribe el estado, así que no están siempre en pantalla: son donde se aprenden los iconos.
+  // pending y blocked deben leerse distinto — a la primera la retiene una dependencia, a la otra una persona.
+  'jobs.state.pending': 'Aún retenida por una dependencia',
+  'jobs.state.ready': 'Lista para empezar',
+  'jobs.state.dispatched': 'Un worker está en ello',
+  'jobs.state.validating': 'La validación está en marcha',
+  'jobs.state.reviewing': 'Otro agente la está revisando',
+  'jobs.state.completed': 'Terminada',
+  'jobs.state.failed': 'Falló',
+  'jobs.state.blocked': 'Esperando a una persona',
   'jobs.gates.more': '+{count} más',
   // JobTimeline.tsx — el modal de historial. La insignia la elige el tipo de evento (o el tipo de mensaje)
   'jobs.timeline.open': 'Historial',
@@ -745,7 +753,8 @@ export const es: Catalog = {
   'jobs.event.decisionGate': 'decisión',
   // Mismo lugar que retry (junto al resumen de dispatch-started), solo cuando el Dispatch es de revisión (Dispatch.review)
   'jobs.event.review': 'revisión',
-  // El resultado de worker_done — no jobs.completed/jobs.failed, que etiquetan un Run completo
+  // El resultado de worker_done — no jobs.state.completed/failed, que etiquetan una Task (y una Task
+  // puede tener varios informes de worker)
   'jobs.event.succeeded': 'correcto',
   'jobs.event.outcomeFailed': 'fallido'
 }

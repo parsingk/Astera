@@ -2331,7 +2331,7 @@ export default function App(): React.JSX.Element {
                 // the fold in main cannot make, and it is exactly what selectWorkbenchTab needs.
                 canOpenSession={(sessionId) => !!layout && !!groupOfTab(layout, sessionTab(sessionId))}
                 onOpenSession={(sessionId) => selectWorkbenchTab(sessionTab(sessionId))}
-                onOpenTimeline={(runId) => {
+                onOpenRun={(runId) => {
                   setDetail(null) // 이전 Run 의 상세가 한 프레임 보이지 않게 한다
                   // 여는 시점의 프로젝트를 runId 와 함께 든다 — 이 스냅샷을 준 프로젝트가 그것이다
                   if (currentProject) setOpenRun({ projectPath: currentProject, runId })

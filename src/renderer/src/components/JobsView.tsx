@@ -1,27 +1,77 @@
-import { useState } from 'react'
-import type { OrchSnapshot, TaskStatus } from '../../../core/types'
+import { useEffect, useState } from 'react'
+import type { JobRun, JobTask, OrchSnapshot, Provider, TaskStatus } from '../../../core/types'
+import type { MessageKey } from '../../../core/i18n'
+import { formatElapsed } from '../../../core/orchestration/elapsed'
 import { useI18n } from '../i18n/I18nProvider'
+import { RunIcon, STATUS_COLOR, TaskIcon } from './JobIcons'
+import type { RunIconKind } from './JobIcons'
 
-/** One dot colour per Task status. pending/ready reuse the muted text tones, dispatched is the app's
- *  one accent colour (the active marker everywhere else — the rail's .on state, focus rings), and the
- *  three outcomes reuse the git-status palette (ok/attention/danger) rather than inventing new colours
- *  for the same three meanings. */
-const STATUS_DOT: Record<TaskStatus, string> = {
-  pending: 'var(--text-faint)',
-  ready: 'var(--text-dim)',
-  dispatched: 'var(--accent)',
-  // 검증 중 — 도는 중(accent)과도, 끝난 셋과도 달라야 한다. git 의 '수정됨' 톤을 빌린다:
-  // 이 앱에서 이미 "아직 정해지지 않았다"를 뜻하는 색이다.
-  validating: 'var(--git-modified)',
-  // 검토 중 — 검증(--git-modified)과도, 도는 중(accent)과도, 끝난 셋과도 달라야 한다.
-  // 다른 에이전트가 읽고 있는 상태이므로 상태 팔레트에 없던 색을 하나 빌린다.
-  reviewing: 'var(--fi-purple)',
-  completed: 'var(--ok)',
-  failed: 'var(--git-deleted)',
-  blocked: 'var(--git-conflict)'
+/** 여덟 상태의 툴팁 키. `jobs.state.${status}` 로 조립하지 않는다 — 조립한 키는 grep 에 걸리지
+ *  않아서, 카탈로그에서 지워져도 아무도 모르고 화면에서만 사라진다. */
+const STATE_KEY: Record<TaskStatus, MessageKey> = {
+  pending: 'jobs.state.pending',
+  ready: 'jobs.state.ready',
+  dispatched: 'jobs.state.dispatched',
+  validating: 'jobs.state.validating',
+  reviewing: 'jobs.state.reviewing',
+  completed: 'jobs.state.completed',
+  failed: 'jobs.state.failed',
+  blocked: 'jobs.state.blocked'
 }
 
+/** Run 헤더 글리프의 툴팁. 묶음이라고 다른 말을 쓰지 않는다 — 같은 모양이 같은 뜻이라는 것이
+ *  이 화면의 규칙이고, 헤더의 체크와 줄의 체크는 실제로 같은 것을 말한다. */
+const RUN_KIND_KEY: Record<RunIconKind, MessageKey> = {
+  running: 'jobs.state.dispatched',
+  blocked: 'jobs.state.blocked',
+  done: 'jobs.state.completed',
+  failed: 'jobs.state.failed'
+}
+
+/** 띠 한 칸의 색. 시작하지 않은 둘만 STATUS_COLOR 를 따르지 않는다 — 띠는 "얼마나 갔나"를 말하는
+ *  자리라, 아직 안 간 칸이 배경으로 남아야 채워진 칸이 읽힌다. 그 둘을 서로 구별하는 일은 아래
+ *  한 줄의 글리프(빈 원과 점선 원)가 한다. */
+const segColor = (status: TaskStatus): string =>
+  status === 'pending' || status === 'ready' ? 'var(--line-soft)' : STATUS_COLOR[status]
+
+/** provider 배지의 두 글자. 21px 칸에 이름은 들어가지 않고, 바로 아래 줄이 이미 전체 이름을 적는다 */
+const PROVIDER_ABBR: Record<Provider, string> = { claude: 'CL', codex: 'CX' }
+
+/** 아래 한 줄이 세는 상태와 그 순서. 도는 셋은 줄로 서 있고 blocked 는 Gate 줄이 펼쳐져 있으므로
+ *  여기서 다시 세지 않는다 — 같은 Task 를 두 자리에 적으면 세로도 낭비하고 합도 맞지 않는다. */
+const FOOT_STATES: readonly TaskStatus[] = ['completed', 'failed', 'ready', 'pending']
+
+/** 도는 줄의 최대 개수. 워커 여섯이 동시에 돌면 한 Run 이 사이드바의 세로를 다 먹는다 —
+ *  넷째부터는 개수로 접는다. */
+const MAX_ROWS = 3
+
+/** Run 헤더의 한 글리프가 말하는 것.
+ *
+ *  blocked 가 가장 세다: 사람을 부르는 것이고, 그것을 놓치면 Run 이 거기서 선다. 그 아래는 Run 자신의
+ *  outcome 이 정한다 — outcomeOf(view.ts)가 이미 "failed 가 completed 를 이긴다"와 "끝나지 않은
+ *  Task 가 하나라도 있으면 running" 을 답해 두었다.
+ *
+ *  "도는 Task 가 있으면 running" 을 startedAt 으로 여기서 다시 계산하지 않는 이유: 아직 아무것도
+ *  뜨지 않은 Run(모든 Task 가 pending)에는 도는 것도 실패한 것도 없어서 done 으로 떨어지고, 시작도
+ *  하지 않은 Run 에 체크 표시가 붙는다. */
+function runKind(run: JobRun): RunIconKind {
+  if (run.tasks.some((t) => t.status === 'blocked')) return 'blocked'
+  if (run.outcome === 'running') return 'running'
+  return run.outcome === 'failed' ? 'failed' : 'done'
+}
+
+/** 지금 도는 Task — 열린 Dispatch 가 있는 것들(view.ts 의 jobTaskOf 가 그때만 이 둘을 넣는다).
+ *  술어로 좁히는 이유는 타입이다: 둘은 항상 함께 오지만 JobTask 는 각각을 optional 로 적고 있어서,
+ *  filter 만으로는 아래에서 startedAt 과 provider 를 다시 검사해야 한다. */
+type RunningTask = JobTask & { provider: Provider; startedAt: string }
+const isRunning = (t: JobTask): t is RunningTask =>
+  t.provider !== undefined && t.startedAt !== undefined
+
 /** Read-only Jobs sidebar — the orchestration Runs and Tasks of the open project.
+ *
+ *  상태를 말로 적지 않는다: **움직임이 "일하는 중"을, 색이 "어떤 일"을** 말한다(JobIcons.tsx).
+ *  Run 하나는 띠 하나로 다 말하고, 줄로 서는 것은 지금 도는 Task 뿐이다 — 끝난 것과 시작 전인 것은
+ *  아래 한 줄의 아이콘·숫자로 접힌다. Gate 만 예외로 펼친다: 사람을 부르는 것이라 접으면 놓친다.
  *
  *  snapshot is the already-folded OrchSnapshot from window.api.orch.list / the 'orch:state' push
  *  (src/main/ipc.ts, src/core/orchestration/view.ts). Every judgement — which Runs belong to this
@@ -32,7 +82,7 @@ export function JobsView({
   snapshot,
   canOpenSession,
   onOpenSession,
-  onOpenTimeline
+  onOpenRun
 }: {
   snapshot: OrchSnapshot | null
   /** Whether this window still has a tab for that session — the second half of "is this row
@@ -43,9 +93,9 @@ export function JobsView({
   /** Focus the tab that owns this session. The Jobs view creates no surface of its own — the worker
    *  sessions already arrive as tabs and Dispatch carries the id that ties a Task to one. */
   onOpenSession: (sessionId: string) => void
-  /** Open the history modal for that Run. The Run's events are fetched on demand (orch.timeline), so
-   *  this view only names the Run — App owns both the request and the modal. */
-  onOpenTimeline: (runId: string) => void
+  /** Open the Run detail window. Its graph and events are fetched on demand (orch.runDetail), so this
+   *  view only names the Run — App owns both the request and the window. */
+  onOpenRun: (runId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   // Runs the user collapsed. Absence means expanded — a Run that just appeared, or one from before this
@@ -59,6 +109,16 @@ export function JobsView({
       return next
     })
   }
+
+  // 도는 것이 없으면 타이머도 없다 — 아무것도 안 변하는 화면을 1초마다 다시 그릴 이유가 없다.
+  // 조건을 스냅샷에서 뽑는 덕분에 마지막 워커가 끝나면 다음 푸시에서 저절로 꺼진다.
+  const anyRunning = snapshot?.runs.some((r) => r.tasks.some((tk) => tk.startedAt)) ?? false
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    if (!anyRunning) return
+    const id = setInterval(() => setNowMs(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [anyRunning])
 
   // Before the first orch.list response — nothing is known yet, so nothing is drawn (not even the
   // empty state, which would otherwise flash "no jobs" for a frame on every project switch).
@@ -77,70 +137,106 @@ export function JobsView({
     <section className="jobs-view">
       {snapshot.runs.map((run) => {
         const open = !collapsed.has(run.id)
+        const kind = runKind(run)
+        const running = run.tasks.filter(isRunning)
+        const gates = run.tasks.filter((tk) => tk.status === 'blocked' && tk.gateQuestion)
+        const counts = FOOT_STATES.map(
+          (status) => [status, run.tasks.filter((tk) => tk.status === status).length] as const
+        ).filter(([, n]) => n > 0)
         return (
-          <div key={run.id} className="jobs-run">
-            <div className="jobs-row jobs-run-header" onClick={() => toggle(run.id)}>
+          <div key={run.id} className={`jobs-run${open ? '' : ' collapsed'}`}>
+            <div className="jobs-run-head" onClick={() => toggle(run.id)}>
               <span className="jobs-caret">{open ? '▾' : '▸'}</span>
-              <span className="jobs-objective" title={run.objective}>
+              <span className={`jobs-objective${kind === 'done' ? ' done' : ''}`} title={run.objective}>
                 {run.objective}
               </span>
-              <span className="jobs-progress">
-                {t('jobs.progress', { done: run.done, total: run.total })}
-                {run.outcome === 'completed' ? ` ${t('jobs.completed')}` : ''}
-                {run.outcome === 'failed' ? ` ${t('jobs.failed')}` : ''}
+              <span className="jobs-count">
+                <RunIcon kind={kind} label={t(RUN_KIND_KEY[kind])} />
+                {kind === 'running' && running.length > 0 ? <span>{running.length}</span> : null}
               </span>
-              <button
-                className="jobs-timeline-btn"
-                title={t('jobs.timeline.open')}
-                aria-label={t('jobs.timeline.open')}
-                onClick={(e) => {
-                  // The header's own click collapses the Run. Without this the button would do both,
-                  // so opening the history would fold the Run shut behind the modal — the same reason
-                  // .bottom-tab-close stops the event before its tab strip sees it.
-                  e.stopPropagation()
-                  onOpenTimeline(run.id)
-                }}
-              >
-                {/* 기록 — 시계. 앱의 SVG 관례대로 16 viewBox 에 currentColor 하나 */}
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                     strokeWidth="1.4" strokeLinecap="round">
-                  <circle cx="8" cy="8" r="5.6" />
-                  <path d="M8 4.8V8l2.2 1.6" />
-                </svg>
-              </button>
             </div>
-            {open && (
-              <div className="jobs-tasks">
-                {run.tasks.map((task) => {
+            {/* 띠 — Task 하나가 칸 하나다. **클릭 대상이 아니다**: 6px 은 정확히 누를 수 없고,
+                누를 수 있어 보이면 누르고 아무 일도 없는 자리가 된다. 제목은 title 로만 붙는다 */}
+            <div className="jobs-bar">
+              {run.tasks.map((task) => (
+                <span
+                  key={task.id}
+                  className="jobs-seg"
+                  style={{ background: segColor(task.status) }}
+                  title={`${task.title} — ${t(STATE_KEY[task.status])}`}
+                />
+              ))}
+            </div>
+            {open && running.length > 0 && (
+              <div className="jobs-rows">
+                {running.slice(0, MAX_ROWS).map((task) => {
                   // Both conditions or neither — the row's appearance and its click have to be
                   // decided by the same value, or it looks clickable and silently does nothing.
                   const sessionId =
                     task.sessionId && canOpenSession(task.sessionId) ? task.sessionId : undefined
                   return (
-                    <div key={task.id}>
-                      <div
-                        className={`jobs-row jobs-task${sessionId ? '' : ' no-session'}`}
-                        onClick={sessionId ? () => onOpenSession(sessionId) : undefined}
-                      >
-                        <span
-                          className="jobs-status-dot"
-                          style={{ background: STATUS_DOT[task.status] }}
-                        />
+                    <div
+                      key={task.id}
+                      className={`jobs-task jobs-task--${task.status}${sessionId ? '' : ' no-session'}`}
+                      onClick={sessionId ? () => onOpenSession(sessionId) : undefined}
+                    >
+                      <span className="jobs-av">{PROVIDER_ABBR[task.provider]}</span>
+                      <span className="jobs-task-body">
                         <span className="jobs-task-title" title={task.title}>
                           {task.title}
                         </span>
-                      </div>
-                      {task.status === 'blocked' && task.gateQuestion && (
-                        <div className="jobs-gate">
-                          {task.gateQuestion}
-                          {task.openGates > 1
-                            ? ` ${t('jobs.gates.more', { count: task.openGates - 1 })}`
-                            : ''}
-                        </div>
-                      )}
+                        <span className="jobs-task-meta">
+                          {task.provider} · {formatElapsed(task.startedAt, nowMs)}
+                        </span>
+                      </span>
+                      <TaskIcon status={task.status} label={t(STATE_KEY[task.status])} />
+                      {sessionId ? (
+                        <span className="jobs-jump" aria-hidden="true">
+                          ↗
+                        </span>
+                      ) : null}
                     </div>
                   )
                 })}
+                {/* 넷째부터는 한 줄로 접는다. 여기의 글리프가 회전이 아니라 채워진 점인 이유는
+                    Run 헤더와 같다 — 이 한 줄은 Task 여럿을 가리키고, 묶음은 돌지 않는다 */}
+                {running.length > MAX_ROWS && (
+                  <div className="jobs-task jobs-fold">
+                    <RunIcon kind="running" />
+                    <span>+{running.length - MAX_ROWS}</span>
+                  </div>
+                )}
+              </div>
+            )}
+            {/* Gate 는 접힌 Run 에서도 남는다 — 사람을 기다리는 줄이고, 접혀서 안 보이면 그 Run 은
+                아무도 모르는 채로 선다. 접기는 세로를 아끼는 장치이지 알림을 끄는 장치가 아니다 */}
+            {gates.map((task) => (
+              <div key={task.id} className="jobs-gate">
+                <TaskIcon status="blocked" label={t(STATE_KEY.blocked)} />
+                <span>
+                  {task.gateQuestion}
+                  {task.openGates > 1
+                    ? ` ${t('jobs.gates.more', { count: task.openGates - 1 })}`
+                    : ''}
+                </span>
+              </div>
+            ))}
+            {open && (
+              <div className="jobs-foot">
+                {counts.map(([status, n]) => (
+                  <span key={status} className="jobs-count">
+                    <TaskIcon status={status} label={t(STATE_KEY[status])} />
+                    <span>{n}</span>
+                  </span>
+                ))}
+                <button
+                  className="jobs-more"
+                  title={t('jobs.timeline.open')}
+                  aria-label={t('jobs.timeline.open')}
+                  onClick={() => onOpenRun(run.id)}
+                >
+                  ›
+                </button>
               </div>
             )}
           </div>

@@ -615,9 +615,17 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.rail.open': 'Jobs',
   'jobs.empty': 'No jobs started yet',
   'jobs.empty.hint': 'Jobs created from a coordinator session will appear here',
-  'jobs.progress': '{done}/{total}',
-  'jobs.completed': 'completed',
-  'jobs.failed': 'failed',
+  // Tooltips for the eight state glyphs (JobIcons.tsx). The sidebar no longer spells a state out, so
+  // these are not on screen all the time — they are where someone meeting the icons learns them.
+  // pending and blocked have to read differently: a dependency holds the first, a person the second.
+  'jobs.state.pending': 'Still held by a dependency',
+  'jobs.state.ready': 'Ready to start',
+  'jobs.state.dispatched': 'A worker is on it',
+  'jobs.state.validating': 'Validation is running',
+  'jobs.state.reviewing': 'Another agent is reviewing it',
+  'jobs.state.completed': 'Done',
+  'jobs.state.failed': 'Failed',
+  'jobs.state.blocked': 'Waiting for a person',
   'jobs.gates.more': '+{count} more',
   // JobTimeline.tsx — the history modal. The badge is chosen by the event kind (or the message type)
   'jobs.timeline.open': 'History',
@@ -639,7 +647,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.event.decisionGate': 'decision',
   // Same spot as retry (next to dispatch-started's summary), shown only when the Dispatch is a review (Dispatch.review)
   'jobs.event.review': 'review',
-  // worker_done's outcome — deliberately not jobs.completed/jobs.failed, which label a whole Run
+  // worker_done's outcome — deliberately not jobs.state.completed/failed, which label a Task (and one
+  // Task can have several worker reports). The same word on two layers hides which one is being claimed
   'jobs.event.succeeded': 'succeeded',
   'jobs.event.outcomeFailed': 'failed'
 }

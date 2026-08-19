@@ -733,9 +733,17 @@ export const ko = {
   'jobs.rail.open': 'Jobs',
   'jobs.empty': '아직 시작한 작업이 없습니다',
   'jobs.empty.hint': '코디네이터 세션에서 작업을 만들면 여기에 나타납니다',
-  'jobs.progress': '{done}/{total}',
-  'jobs.completed': '완료',
-  'jobs.failed': '실패',
+  // 여덟 상태의 툴팁 — JobIcons.tsx 의 글리프가 달고 다닌다. 사이드바가 상태를 말로 적지 않게 된
+  // 뒤로 이 문구들은 상시로 보이지 않는다: 아이콘을 처음 보는 사람이 배우는 자리다.
+  // pending 과 blocked 를 다르게 적는 것이 특히 중요하다 — 앞은 의존이, 뒤는 사람이 막고 있다
+  'jobs.state.pending': '아직 막혀 있다',
+  'jobs.state.ready': '시작할 수 있다',
+  'jobs.state.dispatched': '워커가 일하는 중',
+  'jobs.state.validating': '검증이 도는 중',
+  'jobs.state.reviewing': '다른 에이전트가 검토 중',
+  'jobs.state.completed': '끝났다',
+  'jobs.state.failed': '실패했다',
+  'jobs.state.blocked': '사람을 기다린다',
   'jobs.gates.more': '외 {count}건',
   // JobTimeline.tsx — 기록 모달. 종류 배지는 이벤트 종류(또는 메시지 종류)가 고른다.
   // Run 을 '작업'이라 부르는 것은 위의 jobs.empty 와 같고, 그 안의 Task 는 'Task' 로 적는다 —
@@ -759,8 +767,9 @@ export const ko = {
   'jobs.event.decisionGate': '결정 요청',
   // retry 와 같은 자리(dispatch-started 의 요약 옆)에, 이 Dispatch 가 검토용(Dispatch.review)일 때만 붙는다
   'jobs.event.review': '검토',
-  // worker_done 의 결과. jobs.completed/jobs.failed 를 쓰지 않는다 — 그 둘은 사이드바에서 Run
-  // 전체의 상태를 가리키는 말이라, 워커 보고 한 건에 붙이면 같은 주장을 다른 대상에 하는 것으로 읽힌다
+  // worker_done 의 결과. jobs.state.completed/failed 를 쓰지 않는다 — 그 둘은 Task 의 상태를
+  // 가리키는 말이고, 한 Task 에는 워커 보고가 여럿 있을 수 있다. 같은 낱말을 두 층에 쓰면 어느
+  // 쪽 주장인지 사라진다
   'jobs.event.succeeded': '성공',
   'jobs.event.outcomeFailed': '실패'
 } as const
