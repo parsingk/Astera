@@ -11,7 +11,7 @@ import type { MessageKey } from '../../../core/i18n'
 import type { GraphBox } from '../../../core/orchestration/graphLayout'
 import { edgePath, layoutRows, NODE_H, NODE_W } from '../../../core/orchestration/graphLayout'
 import { useI18n } from '../i18n/I18nProvider'
-import { RunIcon, STATE_KEY, STATUS_COLOR, TaskIcon } from './JobIcons'
+import { RUNNING_STATES, RunIcon, STATE_KEY, STATUS_COLOR, TaskIcon } from './JobIcons'
 
 /** 종류 배지의 문구. message 는 messageType 이 정한다.
  *  heartbeat 과 decision_gate 는 timeline.ts 의 SKIP 이 걸러 지금은 도달하지 않지만, 맵을
@@ -41,9 +41,6 @@ const CALLS_FOR_A_PERSON: ReadonlySet<MessageType> = new Set<MessageType>([
   'decision_gate'
 ])
 
-/** 헤더에서 하나로 묶여 세지는 셋. 묶음은 돌지 않으므로 회전 글리프가 아니라 채워진 점 하나와
- *  숫자로 적는다(JobIcons 의 RunIcon, 사이드바와 같은 규칙). */
-const RUNNING_STATES: readonly TaskStatus[] = ['dispatched', 'validating', 'reviewing']
 /** 헤더에서 따로 세는 다섯. 순서는 눈이 가야 하는 차례다 — 사람을 기다리는 것이 먼저다 */
 const HEAD_STATES: readonly TaskStatus[] = ['blocked', 'completed', 'failed', 'ready', 'pending']
 

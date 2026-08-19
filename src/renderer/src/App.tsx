@@ -1623,6 +1623,11 @@ export default function App(): React.JSX.Element {
     // 돌지만, 그 조합은 main 이 거부할 조합이다. 여기서 거르면 orchLog 에 접근 위반과 똑같이 생긴
     // 줄이 남지 않는다. 모달을 닫는 것은 아래의 리셋 효과다(이 가드는 로그만 지킨다).
     if (!openRun || openRun.projectPath !== currentProject) return
+    // 스냅샷에 없는 Run 도 부르지 않는다 — worktree 제거나 astera reset 으로 Run 이 사라지면
+    // 프로젝트는 그대로인데 main 은 접근 위반과 똑같이 생긴 `run X does not belong to Y` 를 로그에
+    // 남긴다. orchSnapshot 이 아직 null 이면(안 왔다) 없다고 단정하지 않는다 — 그때는 부르는 쪽이
+    // 맞다. Run 이 사라진 뒤에 창을 닫는 것은 아래의 새 효과다.
+    if (orchSnapshot !== null && !orchSnapshot.runs.some((r) => r.id === openRun.runId)) return
     let cancelled = false
     // 거부 팔을 반드시 둔다 — 위의 가드가 걸러도 main 은 저장소를 읽다 던질 수 있고, 그러면
     // DevTools 에 Uncaught (in promise) 가 뜬다. 빈 모양으로 접으면 모달은 빈 상태를 그린다.
@@ -1643,6 +1648,16 @@ export default function App(): React.JSX.Element {
     setOpenRun(null)
     setDetail(null)
   }, [currentProject])
+  // Run 이 스냅샷에서 사라지면 닫는다 — 프로젝트는 그대로인데 Run 만 사라지면(worktree 제거,
+  // astera reset) 위의 효과는 반응하지 않고, 창은 제목 없이 열린 채 "아직 아무 일도 없었습니다"를
+  // 그린다(App.tsx 의 openRun 렌더가 orchSnapshot 에 없는 Run 을 undefined 로 넘긴다). 이 자리에
+  // 두는 이유는 openRun·orchSnapshot 선언보다 아래여야 하기 때문이다 — 위로 옮기면 TDZ
+  // ReferenceError 로 죽는다(타입체크는 못 잡는다). 여기서도 orchSnapshot === null 은 "없다"가
+  // 아니다 — 아직 첫 조회가 오지 않았을 뿐이면 닫지 않는다.
+  useEffect(() => {
+    if (!openRun || openRun.projectPath !== currentProject || orchSnapshot === null) return
+    if (!orchSnapshot.runs.some((r) => r.id === openRun.runId)) setOpenRun(null)
+  }, [openRun, currentProject, orchSnapshot])
 
   // Whether RunConfigManager is actually on screen — gates both its render below and the shortcut
   // suppression right after it. Computed from the same three things that gate the render (open flag,

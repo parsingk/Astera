@@ -882,8 +882,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    선의 끝점도 같은 상수에서 나온다. 한 번 더 적으면 한쪽만 고쳐졌을 때 선이 상자에서 어긋난다 */
 .detail-node { box-sizing: border-box; display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--elevated); font-size: 12px; cursor: pointer; }
 .detail-node:hover { box-shadow: inset 0 0 0 1px var(--ring); }
-/* 고른 노드 = 지금 오른쪽을 거르고 있는 것. 테두리가 굵어지고 바탕이 한 단 밝아진다 */
-.detail-node.on { background: var(--surface-hover); box-shadow: inset 0 0 0 2px var(--accent); }
+/* 고른 노드 = 지금 오른쪽을 거르고 있는 것. 표시는 2px 청록 링뿐이다 — 배경도 함께 바꾸면
+   --surface-hover(#1f1f25)가 노드의 기본 배경 --elevated(#23232a)보다 어두워서, dispatched·
+   validating·reviewing·failed·blocked 노드는 고르면 오히려 한 단 어두워진다. 링 하나로 충분하다 */
+.detail-node.on { box-shadow: inset 0 0 0 2px var(--accent); }
 /* 아직 아무 일도 없었던 둘과 끝난 것은 물러난다. 점선이 pending 에만 붙는 것은 글리프와 같은
    규칙이다 — 자기 힘으로 시작할 수 없는 쪽(의존이 막고 있다)이다 */
 .detail-node--pending { background: var(--bg); border-style: dashed; color: var(--text-faint); }
@@ -896,8 +898,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .detail-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 14px; color: var(--text-faint); font-size: 10.5px; }
 .detail-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .detail-line { width: 16px; border-top: 1.5px solid; }
-/* 순환 묶음. Gate 와 같은 취급이다(경고 톤에 왼쪽 띠) — 사람이 손대야 풀리는 것이고, 지금 이 화면
-   말고는 아무도 그것을 말해 주지 않는다(createTask 는 deps 를 검사하지 않는다) */
+/* 순환 묶음. Gate 와 같은 취급이다(경고 톤에 왼쪽 띠) — 사람이 손대야 풀리는 것이고, 순환은 명령으로는
+   만들 수 없다(createTask 는 존재하지 않는 dep 을 거절하고, 이미 만들어진 Task 의 deps 를 바꾸는
+   명령이 없다). 저장 파일(orchestration.json)이 프로세스 밖에서 손으로 고쳐졌을 때만 생기므로, 지금
+   이 화면 말고는 아무도 그것을 말해 주지 않는다 */
 .detail-cycle { margin-top: 16px; }
 .detail-cycle-note { padding: 6px 8px; margin-bottom: 8px; background: rgba(214, 139, 79, 0.09); border-left: 2px solid var(--git-conflict); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; color: var(--text-dim); font-size: 11.5px; }
 .detail-cycle-nodes { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -1199,7 +1203,6 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* 배지의 색은 provider 가 아니라 **상태**다 — 같은 워커가 구현으로 돌 때와 검토로 돌 때는 다른
    일이고, 어느 CLI 인지는 두 글자와 바로 아래 줄의 이름이 이미 말한다 */
 .jobs-task--dispatched .jobs-av { background: rgba(55, 176, 196, 0.16); color: var(--accent); }
-.jobs-task--validating .jobs-av { background: rgba(215, 180, 90, 0.16); color: var(--git-modified); }
 .jobs-task--reviewing .jobs-av { background: rgba(169, 142, 222, 0.18); color: var(--fi-purple); }
 .jobs-task-body { flex: 1; min-width: 0; }
 .jobs-task-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }

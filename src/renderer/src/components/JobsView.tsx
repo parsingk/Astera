@@ -3,7 +3,7 @@ import type { JobRun, JobTask, OrchSnapshot, Provider, TaskStatus } from '../../
 import type { MessageKey } from '../../../core/i18n'
 import { formatElapsed } from '../../../core/orchestration/elapsed'
 import { useI18n } from '../i18n/I18nProvider'
-import { RunIcon, STATE_KEY, STATUS_COLOR, TaskIcon } from './JobIcons'
+import { RUNNING_STATES, RunIcon, STATE_KEY, STATUS_COLOR, TaskIcon } from './JobIcons'
 import type { RunIconKind } from './JobIcons'
 
 /** Run 헤더 글리프의 툴팁. 끝난·실패·막힘은 줄의 글리프와 같은 모양이고 같은 뜻이라 같은 문구를 쓴다.
@@ -128,7 +128,14 @@ export function JobsView({
       {snapshot.runs.map((run) => {
         const open = !collapsed.has(run.id)
         const kind = runKind(run)
-        const running = run.tasks.filter(isRunning)
+        // 줄은 여전히 열린 Dispatch 기반이다 — 줄에는 provider 배지와 경과 시간이 있고 둘 다 열린
+        // Dispatch 에서만 온다. 숫자는 상태 기반이다(RUNNING_STATES, JobIcons.tsx) — validating 에는
+        // 열린 Dispatch 가 없어서 Dispatch 로 세면 검증만 남은 Run 이 0 이 되어 화면에서 사라진다.
+        const rows = run.tasks.filter(isRunning).slice(0, MAX_ROWS)
+        const runningCount = run.tasks.filter((tk) => RUNNING_STATES.includes(tk.status)).length
+        // 줄을 세우지 못한 것도 여기 접힌다 — 넷째부터 넘친 것뿐 아니라, validating 처럼 애초에 줄로
+        // 세울 수 없는 것도 folded 로만 나타난다.
+        const folded = runningCount - rows.length
         const gates = run.tasks.filter((tk) => tk.status === 'blocked' && tk.gateQuestion)
         const counts = FOOT_STATES.map(
           (status) => [status, run.tasks.filter((tk) => tk.status === status).length] as const
@@ -142,7 +149,7 @@ export function JobsView({
               </span>
               <span className="jobs-count">
                 <RunIcon kind={kind} label={t(RUN_KIND_KEY[kind])} />
-                {kind === 'running' && running.length > 0 ? <span>{running.length}</span> : null}
+                {kind === 'running' && runningCount > 0 ? <span>{runningCount}</span> : null}
               </span>
             </div>
             {/* 띠 — Task 하나가 칸 하나다. **클릭 대상이 아니다**: 6px 은 정확히 누를 수 없고,
@@ -157,9 +164,9 @@ export function JobsView({
                 />
               ))}
             </div>
-            {open && running.length > 0 && (
+            {open && (rows.length > 0 || folded > 0) && (
               <div className="jobs-rows">
-                {running.slice(0, MAX_ROWS).map((task) => {
+                {rows.map((task) => {
                   // Both conditions or neither — the row's appearance and its click have to be
                   // decided by the same value, or it looks clickable and silently does nothing.
                   const sessionId =
@@ -188,12 +195,13 @@ export function JobsView({
                     </div>
                   )
                 })}
-                {/* 넷째부터는 한 줄로 접는다. 여기의 글리프가 회전이 아니라 채워진 점인 이유는
-                    Run 헤더와 같다 — 이 한 줄은 Task 여럿을 가리키고, 묶음은 돌지 않는다 */}
-                {running.length > MAX_ROWS && (
+                {/* 접힌 줄 — 넷째부터 넘친 것과, validating 처럼 열린 Dispatch 가 없어 애초에 줄을
+                    세울 수 없는 것이 함께 접힌다. 글리프가 회전이 아니라 채워진 점인 이유는 Run
+                    헤더와 같다 — 이 한 줄은 Task 여럿을 가리키고, 묶음은 돌지 않는다 */}
+                {folded > 0 && (
                   <div className="jobs-task jobs-fold">
                     <RunIcon kind="running" />
-                    <span>+{running.length - MAX_ROWS}</span>
+                    <span>+{folded}</span>
                   </div>
                 )}
               </div>
