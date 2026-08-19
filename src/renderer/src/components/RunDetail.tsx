@@ -356,28 +356,43 @@ function Graph({
 
   return (
     <>
-      <div className="detail-canvas" style={{ width: layout.width, height: layout.height }}>
-        <svg className="detail-edges" width={layout.width} height={layout.height} aria-hidden="true">
-          {rows.flat().map((task) =>
-            (deps[task.id] ?? []).map((depId) => {
-              const from = posOf.get(depId)
-              const to = posOf.get(task.id)
-              if (!from || !to) return null
-              return (
-                <path
-                  key={`${depId}:${task.id}`}
-                  d={edgePath(from, to)}
-                  fill="none"
-                  strokeWidth="1.5"
-                  stroke={
-                    byId.get(depId)?.status === 'completed' ? 'var(--line-soft)' : 'var(--accent)'
-                  }
-                />
-              )
-            })
-          )}
-        </svg>
-        {rows.map((row, i) => row.map((task, j) => node(task, layout.rows[i][j])))}
+      {/* 스크롤은 **이 안에서만** 돈다 — 범례는 이 밖에 있어 무엇을 스크롤하든 칸의 왼쪽 아래에
+          그대로 붙어 있다. 선의 색을 설명하는 글이 스크롤에 밀려 사라지면, 색을 물어볼 자리가
+          화면에서 없어진다(선에는 툴팁을 달 곳이 없다). */}
+      <div className="detail-scroll">
+        <div className="detail-canvas" style={{ width: layout.width, height: layout.height }}>
+          <svg className="detail-edges" width={layout.width} height={layout.height} aria-hidden="true">
+            {rows.flat().map((task) =>
+              (deps[task.id] ?? []).map((depId) => {
+                const from = posOf.get(depId)
+                const to = posOf.get(task.id)
+                if (!from || !to) return null
+                return (
+                  <path
+                    key={`${depId}:${task.id}`}
+                    d={edgePath(from, to)}
+                    fill="none"
+                    strokeWidth="1.5"
+                    stroke={
+                      byId.get(depId)?.status === 'completed' ? 'var(--line-soft)' : 'var(--accent)'
+                    }
+                  />
+                )
+              })
+            )}
+          </svg>
+          {rows.map((row, i) => row.map((task, j) => node(task, layout.rows[i][j])))}
+        </div>
+        {/* 순환. **서로 간 선을 긋지 않는다** — 그을 순서가 없다는 것이 바로 이 묶음이 여기 있는
+            이유다. 명령으로는 만들 수 없고(createTask 가 없는 dep 을 거절하고 deps 를 바꾸는 명령이
+            없다) 저장 파일이 손으로 고쳐졌을 때만 생기는데, 그래서 더더욱 이 화면 말고는 아무도
+            말해 주지 않는다. 조용히 숨기지 않는 이유다 */}
+        {cycle.length > 0 && (
+          <div className="detail-cycle">
+            <p className="detail-cycle-note">{t('jobs.detail.cycle')}</p>
+            <div className="detail-cycle-nodes">{cycle.map((task) => node(task))}</div>
+          </div>
+        )}
       </div>
       {/* 선이 하나도 없는 그래프에는 설명할 색도 없다 */}
       {rows.flat().some((task) => (deps[task.id] ?? []).some((d) => posOf.has(d))) && (
@@ -390,16 +405,6 @@ function Graph({
             <i className="detail-line" style={{ borderTopColor: 'var(--line-soft)' }} />
             {t('jobs.detail.edgeResolved')}
           </span>
-        </div>
-      )}
-      {/* 순환. **서로 간 선을 긋지 않는다** — 그을 순서가 없다는 것이 바로 이 묶음이 여기 있는
-          이유다. 명령으로는 만들 수 없고(createTask 가 없는 dep 을 거절하고 deps 를 바꾸는 명령이
-          없다) 저장 파일이 손으로 고쳐졌을 때만 생기는데, 그래서 더더욱 이 화면 말고는 아무도
-          말해 주지 않는다. 조용히 숨기지 않는 이유다 */}
-      {cycle.length > 0 && (
-        <div className="detail-cycle">
-          <p className="detail-cycle-note">{t('jobs.detail.cycle')}</p>
-          <div className="detail-cycle-nodes">{cycle.map((task) => node(task))}</div>
         </div>
       )}
     </>
