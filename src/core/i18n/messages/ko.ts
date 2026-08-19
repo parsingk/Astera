@@ -744,6 +744,7 @@ export const ko = {
   'jobs.state.completed': '끝났다',
   'jobs.state.failed': '실패했다',
   'jobs.state.blocked': '사람을 기다린다',
+  'jobs.run.running': '도는 중',
   'jobs.gates.more': '외 {count}건',
   // JobTimeline.tsx — 기록 모달. 종류 배지는 이벤트 종류(또는 메시지 종류)가 고른다.
   // Run 을 '작업'이라 부르는 것은 위의 jobs.empty 와 같고, 그 안의 Task 는 'Task' 로 적는다 —

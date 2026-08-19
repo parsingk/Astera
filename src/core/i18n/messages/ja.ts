@@ -721,6 +721,7 @@ export const ja: Catalog = {
   'jobs.state.completed': '終わった',
   'jobs.state.failed': '失敗した',
   'jobs.state.blocked': '人を待っている',
+  'jobs.run.running': '進行中',
   'jobs.gates.more': '他 {count} 件',
   // JobTimeline.tsx — 履歴モーダル。種別バッジはイベント種別（またはメッセージ種別）が決める
   'jobs.timeline.open': '履歴',

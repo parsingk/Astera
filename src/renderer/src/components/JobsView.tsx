@@ -19,10 +19,13 @@ const STATE_KEY: Record<TaskStatus, MessageKey> = {
   blocked: 'jobs.state.blocked'
 }
 
-/** Run 헤더 글리프의 툴팁. 묶음이라고 다른 말을 쓰지 않는다 — 같은 모양이 같은 뜻이라는 것이
- *  이 화면의 규칙이고, 헤더의 체크와 줄의 체크는 실제로 같은 것을 말한다. */
+/** Run 헤더 글리프의 툴팁. 끝난·실패·막힘은 줄의 글리프와 같은 모양이고 같은 뜻이라 같은 문구를 쓴다.
+ *
+ *  **도는 중만 다르다.** 헤더의 채워진 점은 링이 아니고, 뜻도 "워커가 일하는 중"이 아니라 "이 Run 에
+ *  도는 일이 있다"이다 — 그 안에서 도는 것은 워커일 수도, 검증일 수도, 검토일 수도 있다. 어느
+ *  하나의 문구를 빌려 오면 검증만 도는 Run 이 "워커가 일하는 중"이라고 말한다. */
 const RUN_KIND_KEY: Record<RunIconKind, MessageKey> = {
-  running: 'jobs.state.dispatched',
+  running: 'jobs.run.running',
   blocked: 'jobs.state.blocked',
   done: 'jobs.state.completed',
   failed: 'jobs.state.failed'

@@ -732,6 +732,7 @@ export const es: Catalog = {
   'jobs.state.completed': 'Terminada',
   'jobs.state.failed': 'Falló',
   'jobs.state.blocked': 'Esperando a una persona',
+  'jobs.run.running': 'en curso',
   'jobs.gates.more': '+{count} más',
   // JobTimeline.tsx — el modal de historial. La insignia la elige el tipo de evento (o el tipo de mensaje)
   'jobs.timeline.open': 'Historial',

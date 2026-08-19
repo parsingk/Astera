@@ -626,6 +626,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.state.completed': 'Done',
   'jobs.state.failed': 'Failed',
   'jobs.state.blocked': 'Waiting for a person',
+  'jobs.run.running': 'in progress',
   'jobs.gates.more': '+{count} more',
   // JobTimeline.tsx — the history modal. The badge is chosen by the event kind (or the message type)
   'jobs.timeline.open': 'History',
