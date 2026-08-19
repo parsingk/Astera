@@ -445,7 +445,7 @@ export function useFileOps(deps: {
   }
 
   // Fallback basename used only by undo() — matches the convention of the same fallback in
-  // removeSelection(:159). Paths held in the journal may not be in the tree cache (already moved to
+  // removeSelection. Paths held in the journal may not be in the tree cache (already moved to
   // another folder, or inside a collapsed folder), so an entriesOf-based name cannot be used — and
   // since it is display-only anyway, the basename is enough.
   const nameOf = (p: string): string => p.split(/[\\/]/).pop() ?? p
@@ -558,7 +558,7 @@ export function useFileOps(deps: {
         attempted++
         try {
           if (op.op === 'remove') {
-            if (!root) continue // cannot happen, but the same defense as removeSelection(:155)
+            if (!root) continue // cannot happen, but the same defense as removeSelection
             const { snapshotSkipped } = await window.api.files.remove(op.path, root)
             if (snapshotSkipped === 'too-large') skipped.tooLarge = true
             else if (snapshotSkipped === 'failed') skipped.failed = true
@@ -577,10 +577,10 @@ export function useFileOps(deps: {
             landed.push(to)
           } else {
             // op.op === 'restore' — a delete undo. root is needed for the same reason as the
-            // files.remove branch (:479).
+            // `op.op === 'remove'` branch above.
             if (!root) continue
             const to = await window.api.localHistory.restore(root, op.id)
-            // Restore destination — treated like a move's destDir (:489): always expanded and refreshed
+            // Restore destination — treated like the `op.op === 'move'` branch's destDir above: always expanded and refreshed
             // regardless of whether it is cached. Not touched — touched is where an item "leaves from"
             // and this is where an item "comes back to".
             restoreDirs.add(parentDir(to))
@@ -605,7 +605,7 @@ export function useFileOps(deps: {
           failed.push(`${nameOf(src)} (${errText(err)})`)
         }
       }
-      // Same aggregation wording as runBatch(:84-88) — attempted is the number actually tried. Ops left
+      // Same aggregation wording as runBatch — attempted is the number actually tried. Ops left
       // over after a root-switch abort were never attempted rather than failed, so they are excluded
       // from the denominator.
       if (failed.length > 0) {

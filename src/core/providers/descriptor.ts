@@ -28,7 +28,7 @@ import { claudeLoginProbe, fileMarkerProbe, type LoginProbe } from '../accounts/
 // (There used to be 4 copies of this rule — in manager.ts, settingsSync.ts, detectCodex.ts and core.ts.
 // The consolidation merged only 2 of them: the private method in manager.ts and the inline normalizeDir in
 // core.ts.)
-// normalizePath in settingsSync.ts (:13) and normalize in detectCodex.ts (:7) are still alive and really
+// normalizePath in settingsSync.ts and normalize in detectCodex.ts are still alive and really
 // used, by isHomeClaudeDir and isAmbientCodexDir respectively — today they are exactly identical to this
 // rule (all of them path.resolve(p).toLowerCase()) but they are separate definitions. toLowerCase is the
 // wrong rule on Linux, and it is wrong on macOS too if the volume was formatted case-sensitive — but it

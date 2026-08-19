@@ -677,7 +677,7 @@ export function FileExplorer({
         // undo (no special handling needed). The editing guard below is a second line of defense
         // independent of that.
         // historyOpen (the Local History modal) is guarded too — the modal renders inside this
-        // <section> (:634) so in DOM terms it is inside this onKeyDown, and ContextMenu gives itself
+        // <section> (`<LocalHistoryDialog>` below) so in DOM terms it is inside this onKeyDown, and ContextMenu gives itself
         // neither focus() nor tabIndex on mount, so opening the modal with Enter from the menu leaves
         // focus on .fx-tree — without the guard, Ctrl+Z/Ctrl+V would fire on the tree behind the open
         // modal with no confirmation. This guard means "every overlay on top of the explorer" — any
@@ -738,7 +738,7 @@ export function FileExplorer({
           // Ignored while the menu is open too — running a shortcut over the menu buries the confirm
           // modal underneath it
           // historyOpen (the Local History modal) is ignored as well — in DOM terms the modal renders
-          // inside this tree (:634), and if it was opened with Enter from the context menu, focus is
+          // inside this tree (`<LocalHistoryDialog>` below), and if it was opened with Enter from the context menu, focus is
           // still on .fx-tree, so without the guard F2/Delete over the modal would reach the tree
           // behind it. This guard means "every overlay on top of the explorer" — when a modal is added,
           // widen this too.

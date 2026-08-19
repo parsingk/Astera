@@ -73,13 +73,24 @@ reads longer than `server.ts:460`). That cost is the point: a symbol name is sli
 survives the next edit, where a line number is slightly less to type and is a coin flip by the next
 commit.
 
-The guard test cannot see a citation with no filename at all — a bare `(:402)` or `(:1870 부근)`
-self-reference within the same file, of which a few already exist in this codebase (`App.tsx`'s
-`:710`, coordinator.ts's `:402` fixed by `6e03791`) — because matching a bare colon-plus-digits would
-false-positive on ratios, ternaries, and object literals throughout the codebase. Those are left as a
-known gap rather than a narrower regex chasing them; if one goes stale it fails the same way the four
-that motivated this ADR did, silently, and someone will have to notice by reading rather than by the
-test failing red.
+The guard test also catches a bare self-reference with no filename at all — `(:402)` or `(:1870 부근)`,
+pointing at "this same file" — as long as the colon sits directly after an opening parenthesis, the
+shape every such citation in this codebase actually used (`(:NN)`, `(:NN-MM)`, or `symbol(:NN)`). That
+shape cannot be confused with a ternary (whose colon has a space before it, not a paren) or a ratio
+(whose colon has a digit before it, not a paren), so widening the regex to `\(:\d+(?:-\d+)?(?:\s*부근)?\)`
+added no false positives: scanning the whole `src/` tree for it turned up exactly the citations that
+needed converting and nothing else. Historical examples of this shape include `App.tsx`'s `:710` and
+`coordinator.ts`'s `:402` (fixed by `6e03791`), and ten more found across `descriptor.ts`,
+`limitProbe.test.ts`, `FileExplorer.tsx` and `useFileOps.ts` when the guard was widened to catch this
+shape — all now converted.
+
+A gap remains for bare self-references that do **not** have a `(` immediately before the colon —
+`removeSelection:214` (a bare `word:NN`, no parenthesis at all) or `transferTo's destDir (around
+:322-323)` (a parenthesis, but with a word between it and the colon), both still living in
+`useFileOps.ts`. Widening the regex to reach those would risk exactly the ternary/ratio false positives
+the original design avoided, so they are left as a known gap the same way the fully-bare form used to
+be: if one goes stale it fails the same way the four that motivated this ADR did, silently, and someone
+will have to notice by reading rather than by the test failing red.
 
 Anyone who sees `git.ts` 의 `toFullRef` and reaches for the file to add back a precise-looking line
 number should stop — that instinct is exactly what this ADR exists to head off, and the guard test will

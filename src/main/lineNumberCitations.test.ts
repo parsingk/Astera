@@ -21,6 +21,11 @@ import path from 'node:path'
 //
 // "이게 주석인가"는 판별하지 않고 모든 줄을 그냥 스캔한다. 단순하고 튼튼한 편이 똑똑한 편보다
 // 낫다: 오탐이 실제로 나오면 그때 좁히는 것이 comment-detection을 제대로 하려는 것보다 작은 변경이다.
+//
+// 파일 이름 없이 "(:줄번호)"만 남기는 자기 자신 참조(같은 파일 안에서 "저 위 그 지점"을 가리키는
+// 형태)도 잡는다. 콜론 바로 앞에 "("가 오는 모양만 잡으므로 삼항 연산자나 비율 표기와는 오탐이 나지
+// 않는다 — 삼항의 콜론 앞은 공백, 비율의 콜론 앞은 숫자이지 "("가 아니다. node_modules 예외는 여기엔
+// 적용하지 않는다: 자기 자신을 가리키는 인용이 남의 코드를 향할 일은 없다.
 
 const SRC_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const EXTS = /\.tsx?$/
@@ -37,6 +42,9 @@ function collect(dir: string, out: string[]): string[] {
 // path/name.ts 또는 path/name.tsx 뒤에 :줄번호 하나, 또는 :시작-끝 범위가 붙은 형태를 잡는다.
 const CITATION_RE = /[\w./-]+\.tsx?:\d+(?:-\d+)?/g
 
+// 파일 이름 없는 자기 자신 참조: "(:NN)"이나 "(:NN-MM)"처럼 콜론 바로 앞에 "("가 오는 형태만 잡는다.
+const BARE_CITATION_RE = /\(:\d+(?:-\d+)?(?:\s*부근)?\)/g
+
 /** node_modules 경로를 담은 인용은 유일하게 허용된 형태이므로 걸러낸다. */
 function isAllowed(citation: string): boolean {
   return citation.includes('node_modules/')
@@ -50,6 +58,10 @@ function findViolations(): string[] {
     lines.forEach((line, i) => {
       for (const citation of line.match(CITATION_RE) ?? []) {
         if (isAllowed(citation)) continue
+        violations.push(`${rel}:${i + 1}: ${citation}`)
+      }
+      // 파일 이름이 없으니 node_modules 예외가 적용될 여지가 없다 — 전부 위반이다.
+      for (const citation of line.match(BARE_CITATION_RE) ?? []) {
         violations.push(`${rel}:${i + 1}: ${citation}`)
       }
     })

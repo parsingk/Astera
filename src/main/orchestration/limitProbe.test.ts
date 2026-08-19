@@ -278,7 +278,7 @@ describe('tailLines (limitProbe.ts 내부 — 공개 API로 간접 검증)', () 
     const result = await makeLimitProbe(deps)(baseDispatch())
     expect(result).toBeNull()
     // 리뷰 I5: tailLines의 try/catch·finally를 통째로 지워도(open()이 그냥 던지게 두면)
-    // makeLimitProbe 바깥의 catch(:163-169)가 잡아 "limit probe threw ..."를 남기고 null을
+    // makeLimitProbe 안의 catch가 잡아 "limit probe threw ..."를 남기고 null을
     // 돌려주므로, result===null 단정만으로는 이 항목("파일이 없으면 [] — 던지지 않는다")이
     // 실제로 지켜지는지 구분하지 못한다. 로그 문구로 "tailLines 내부에서 처리됐다"(threw가
     // 아니다)는 것까지 확인한다.
