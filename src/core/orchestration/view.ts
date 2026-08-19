@@ -112,7 +112,14 @@ export function outcomeOf(state: OrchState, runId: string): RunOutcome {
  *  in the session map (SessionManager only flips status to 'exited'; nothing is ever removed), so its
  *  tab is still there and its row stays clickable — which is what the user wants after a worker
  *  finishes. worker-release kills the PTY, and that lands in the same place: still listed, still
- *  clickable. */
+ *  clickable.
+ *
+ *  provider and startedAt are a separate lookup, deliberately not reconciled with sessionId's: they
+ *  answer "is this running right now", so they come from the open Dispatch, while sessionId answers
+ *  "what tab does this row open" and keeps pointing at the most recent Dispatch even once it has
+ *  ended. On a retried Task those are two different Dispatch records, and that is correct, not a bug
+ *  to fix — the sidebar badge must disappear the moment nothing is running, well before the tab it
+ *  points to stops being worth opening. */
 function jobTaskOf(
   state: OrchState,
   task: Task,
@@ -122,6 +129,9 @@ function jobTaskOf(
     .filter((d) => d.taskId === task.id)
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
   const latest = dispatches[dispatches.length - 1]
+  // sessionId 와 다른 Dispatch 를 볼 수 있다: 끝난 워커의 탭은 여전히 열 수 있어야 하므로
+  // sessionId 는 최신 Dispatch 에서 오지만, "지금 도는 중"은 열린 Dispatch 만이 말할 수 있다.
+  const running = dispatches.find((d) => !d.outcome && !d.endedAt)
   const open = state.gates
     .filter((g) => g.taskId === task.id && g.status === 'open')
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
@@ -133,7 +143,8 @@ function jobTaskOf(
     // The oldest open Gate is the one the orchestrator has to answer first, so that is the question
     // the row shows. openGates carries the rest as a count rather than a second question.
     gateQuestion: open[0]?.question,
-    openGates: open.length
+    openGates: open.length,
+    ...(running ? { provider: running.provider, startedAt: running.startedAt } : {})
   }
 }
 

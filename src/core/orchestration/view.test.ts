@@ -247,6 +247,52 @@ describe('snapshotFor', () => {
     expect(snapshotFor(s, absPath('p'), anySession, noWorktrees).runs[0].tasks[0].sessionId).toBeUndefined()
   })
 
+  // provider·startedAt 은 "지금 도는 중"을 말하는 값이다 — 열린 Dispatch(끝나지 않은 것) 하나면 그대로 실린다
+  it('열린 Dispatch 가 있으면 그 provider 와 startedAt 을 싣는다', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),
+      dispatches: [dispatch('d1', 't1', 'sess-1', '2026-08-18T01:00:00.000Z')]
+    }
+    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees).runs[0].tasks[0]
+    expect(t.provider).toBe('claude')
+    expect(t.startedAt).toBe('2026-08-18T01:00:00.000Z')
+  })
+
+  // outcome 과 endedAt 이 붙으면 그 Dispatch 는 더 이상 도는 것이 아니다. sessionId 는 그 워커의
+  // 탭을 여전히 열어야 하므로 남지만, provider·startedAt 은 "지금 돈다"는 주장이라 남으면 거짓말이 된다
+  it('Dispatch 가 끝났으면 둘 다 없다 — 도는 것이 아니기 때문이다', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'completed')]),
+      dispatches: [{
+        ...dispatch('d1', 't1', 'sess-1', '2026-08-18T01:00:00.000Z'),
+        outcome: 'succeeded', endedAt: '2026-08-18T02:00:00.000Z'
+      }]
+    }
+    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees).runs[0].tasks[0]
+    expect(t.sessionId).toBe('sess-1')
+    expect(t.provider).toBeUndefined()
+    expect(t.startedAt).toBeUndefined()
+  })
+
+  // 첫 시도(d1)는 끝났고 재시도(d2)가 지금 돈다. sessionId 는 가장 최근 Dispatch(d2)의 것이고,
+  // provider·startedAt 도 열린 Dispatch(d2)의 것이다 — 끝난 d1 의 provider('codex')는 새지 않는다
+  it('재시도로 Dispatch 가 둘이면 열린 쪽을 쓴다', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),
+      dispatches: [
+        {
+          ...dispatch('d1', 't1', 'sess-old', '2026-08-18T01:00:00.000Z'),
+          provider: 'codex', outcome: 'failed', endedAt: '2026-08-18T01:30:00.000Z'
+        },
+        dispatch('d2', 't1', 'sess-new', '2026-08-18T02:00:00.000Z')
+      ]
+    }
+    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees).runs[0].tasks[0]
+    expect(t.sessionId).toBe('sess-new')
+    expect(t.provider).toBe('claude')
+    expect(t.startedAt).toBe('2026-08-18T02:00:00.000Z')
+  })
+
   it('gateQuestion 은 열린 Gate 중 가장 이른 것이고 openGates 는 그 개수다', () => {
     const s: OrchState = {
       ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'blocked')]),

@@ -263,6 +263,12 @@ export interface JobTask {
   /** The oldest open Gate's question. Only a 'blocked' Task has one. */
   gateQuestion?: string
   openGates: number
+  /** The provider of the Dispatch that is **running this Task right now**. A Dispatch that has ended
+   *  does not count — the sidebar's rows are the running ones, and this is the field that badge draws
+   *  from. */
+  provider?: Provider
+  /** That Dispatch's startedAt. The renderer counts elapsed time from this with formatElapsed. */
+  startedAt?: string
 }
 
 export type JobEventKind =
