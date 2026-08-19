@@ -72,8 +72,13 @@ const timeOf = (at: string): string => {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-/** 한 Run 의 상세 창 — 위가 의존 그래프, 아래가 이벤트다. 읽기 전용이다(Gate 를 답하는 것은
- *  Slack 제어면의 몫이다).
+/** 한 Run 의 상세 창 — 위가 의존 그래프, 아래가 이벤트다. **더 이상 읽기 전용이 아니다** — Task 8 이
+ *  여기서 Task 를 짓게 했고(`task-create`), Task 9 가 노드에서 `띄우기`·`멈추기`·`물어보기`·
+ *  `다시 띄우기`(`worker-start`·`worker-stop`·`gate-create`·`task-update`)를 열었다. 이 계획이
+ *  초안될 때는 이 파일이 쓰는 쪽이 될 줄 몰랐고, 그 반전은 `knowledge/decisions/ADR-004`에 있다.
+ *  **Gate 에 답하는 것만은 아직 Slack 제어면의 몫이다** — `물어보기`가 여는 것은 `gate-create`
+ *  (Gate 를 **여는** 것)이고, `gate-resolve`(Gate 에 **답하는** 것)는 이 계획의 어느 Task 도 이
+ *  파일에 더하지 않았다.
  *
  *  **그래프는 장식이 아니라 필터다.** 노드를 누르면 아래가 그 Task 의 이벤트만 남는다 — "왜 저게
  *  안 도나"(위)와 "저기서 무슨 일이 있었나"(아래)가 한 화면에서 이어지고, 이벤트가 수십 줄이 되는
