@@ -1193,6 +1193,11 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .job-arc { transform-origin: 50% 50%; animation: job-spin 1.5s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .job-arc { animation: none; } }
 
+/* '+ 새 작업' — 목록의 첫 자식과 빈 화면(.jobs-empty) 양쪽에서 같은 버튼이 쓴다. 아이콘이 아니라
+   '+' 글자 하나이므로 배지 크기를 맞출 필요가 없고, 기존 토큰만 쓴다 */
+.jobs-new { margin: 10px 10px 4px; padding: 5px 10px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: none; color: var(--text-dim); font-size: 12px; cursor: pointer; }
+.jobs-new:hover { color: var(--accent); border-color: var(--accent); }
+
 .jobs-run { border-bottom: 1px solid var(--line-soft); }
 .jobs-run-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px 0; cursor: pointer; }
 .jobs-run-head:hover { background: rgba(255, 255, 255, 0.04); }

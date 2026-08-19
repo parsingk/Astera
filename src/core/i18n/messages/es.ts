@@ -720,7 +720,9 @@ export const es: Catalog = {
   // JobsView.tsx, App.tsx — la barra lateral de Jobs, de solo lectura (la lista de Run/Task de la orquestación)
   'jobs.rail.open': 'Jobs',
   'jobs.empty': 'Aún no se ha iniciado ningún trabajo',
-  'jobs.empty.hint': 'Los trabajos creados desde una sesión coordinadora aparecerán aquí',
+  // Una sesión coordinadora sigue siendo otra forma de que aparezca un trabajo, incluso con el botón
+  // "+ Nuevo trabajo" de la barra lateral — esta frase dice ambas cosas en vez de descartar una.
+  'jobs.empty.hint': 'Puedes crear uno aquí mismo — los trabajos creados desde una sesión coordinadora también aparecerán aquí',
   // Descripciones emergentes de los ocho glifos de estado (JobIcons.tsx). La barra lateral ya no
   // escribe el estado, así que no están siempre en pantalla: son donde se aprenden los iconos.
   // pending y blocked deben leerse distinto — a la primera la retiene una dependencia, a la otra una persona.
@@ -766,5 +768,16 @@ export const es: Catalog = {
   'jobs.detail.hidden': '{count} eventos de otras Tasks — pulsa el nodo otra vez para quitar el filtro',
   'jobs.detail.clearFilter': 'Quitar filtro',
   'jobs.detail.edgeWaiting': 'dependencia pendiente',
-  'jobs.detail.edgeResolved': 'dependencia ya resuelta'
+  'jobs.detail.edgeResolved': 'dependencia ya resuelta',
+  // NewRunModal.tsx — el formulario que abre el botón "+ Nuevo trabajo" de la barra lateral.
+  // jobs.new.concurrency es un límite por Run, no del proyecto entero: cuántos workers mantiene
+  // abiertos a la vez este Run en concreto, distinto de cualquier otro ajuste de concurrencia.
+  'jobs.new.open': 'Nuevo trabajo',
+  'jobs.new.title': 'Crear un trabajo',
+  'jobs.new.objective': 'Objetivo',
+  'jobs.new.provider': 'Agente',
+  'jobs.new.concurrency': 'En paralelo',
+  'jobs.new.concurrencyHint': 'Cuántos workers mantiene abiertos a la vez',
+  'jobs.new.create': 'Crear',
+  'jobs.new.failed': 'No se pudo crear el trabajo'
 }

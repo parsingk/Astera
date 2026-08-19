@@ -72,7 +72,8 @@ export function JobsView({
   snapshot,
   canOpenSession,
   onOpenSession,
-  onOpenRun
+  onOpenRun,
+  onNewRun
 }: {
   snapshot: OrchSnapshot | null
   /** Whether this window still has a tab for that session — the second half of "is this row
@@ -86,6 +87,9 @@ export function JobsView({
   /** Open the Run detail window. Its graph and events are fetched on demand (orch.runDetail), so this
    *  view only names the Run — App owns both the request and the window. */
   onOpenRun: (runId: string) => void
+  /** Opens NewRunModal. This view creates no Run itself — App owns the modal and the project path it
+   *  needs, the same split as onOpenRun/onOpenSession above. */
+  onNewRun: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
   // Runs the user collapsed. Absence means expanded — a Run that just appeared, or one from before this
@@ -119,12 +123,20 @@ export function JobsView({
       <div className="jobs-empty">
         <p>{t('jobs.empty')}</p>
         <p className="jobs-empty-hint">{t('jobs.empty.hint')}</p>
+        {/* 아무것도 없을 때가 만들고 싶을 때다 — 목록이 생긴 뒤의 자리(아래)와 같은 버튼 */}
+        <button className="jobs-new" onClick={onNewRun}>
+          + {t('jobs.new.open')}
+        </button>
       </div>
     )
   }
 
   return (
     <section className="jobs-view">
+      {/* 목록 위, 첫 자식 — 아이콘을 새로 만들지 않는다: '+' 글자로 충분하다 */}
+      <button className="jobs-new" onClick={onNewRun}>
+        + {t('jobs.new.open')}
+      </button>
       {snapshot.runs.map((run) => {
         const open = !collapsed.has(run.id)
         const kind = runKind(run)

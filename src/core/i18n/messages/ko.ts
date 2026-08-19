@@ -732,7 +732,9 @@ export const ko = {
   // 남도록 강제한다.
   'jobs.rail.open': 'Jobs',
   'jobs.empty': '아직 시작한 작업이 없습니다',
-  'jobs.empty.hint': '코디네이터 세션에서 작업을 만들면 여기에 나타납니다',
+  // 사이드바에 '+ 새 작업' 버튼이 생긴 뒤로도 코디네이터 세션은 여전히 작업이 생기는 또 다른 경로다
+  // — 이 문장은 둘 중 하나를 지우지 않고 함께 말한다.
+  'jobs.empty.hint': '새 작업은 여기서 바로 만들 수 있습니다 — 코디네이터 세션에서 만든 작업도 여기에 나타납니다',
   // 여덟 상태의 툴팁 — JobIcons.tsx 의 글리프가 달고 다닌다. 사이드바가 상태를 말로 적지 않게 된
   // 뒤로 이 문구들은 상시로 보이지 않는다: 아이콘을 처음 보는 사람이 배우는 자리다.
   // pending 과 blocked 를 다르게 적는 것이 특히 중요하다 — 앞은 의존이, 뒤는 사람이 막고 있다
@@ -783,5 +785,16 @@ export const ko = {
   'jobs.detail.clearFilter': '필터 해제',
   // 선 색의 뜻. 아이콘과 달리 선에는 툴팁을 달 곳이 없어 그래프 아래에 두 줄로 적는다
   'jobs.detail.edgeWaiting': '기다리는 중인 의존',
-  'jobs.detail.edgeResolved': '이미 풀린 의존'
+  'jobs.detail.edgeResolved': '이미 풀린 의존',
+  // NewRunModal.tsx — 사이드바의 '+ 새 작업'이 여는 Run 생성 폼의 문구. jobs.new.concurrency 는
+  // 프로젝트 전체가 아니라 이 Run 하나가 동시에 열어 둘 워커 수의 상한이다 — 다른 동시 실행
+  // 설정과 자리가 다르므로 섞어 쓰면 안 된다.
+  'jobs.new.open': '새 작업',
+  'jobs.new.title': '새 작업 만들기',
+  'jobs.new.objective': '목표',
+  'jobs.new.provider': '에이전트',
+  'jobs.new.concurrency': '동시 실행',
+  'jobs.new.concurrencyHint': '이 작업이 한 번에 열어 둘 워커 수',
+  'jobs.new.create': '만들기',
+  'jobs.new.failed': '작업을 만들지 못했습니다'
 } as const

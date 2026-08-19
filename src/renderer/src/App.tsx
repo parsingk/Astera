@@ -18,6 +18,7 @@ import { EditorStateCache } from './lib/editorStateCache'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { JobsView } from './components/JobsView'
 import { RunDetail } from './components/RunDetail'
+import { NewRunModal } from './components/NewRunModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { WorktreePanel } from './components/WorktreePanel'
 import { RunToolbar } from './components/RunToolbar'
@@ -1611,6 +1612,13 @@ export default function App(): React.JSX.Element {
   /** 사이드바와 실행 구성이 '어느 프로젝트인가'로 읽는 값 — 활성 탭이 이기고, 없으면 마지막 기억. */
   const currentProject = activeTabRoot ?? stickyRoot
 
+  /** NewRunModal 이 열려 있는지. currentProject 아래에 두는 것은 이 파일이 지켜 온 자리 규칙이다 —
+   *  바로 아래 두 효과의 주석이 기록하듯, 이 파일은 currentProject 보다 위에서 그 값을 참조해 TDZ
+   *  ReferenceError 로 죽은 전례가 있고(타입체크는 잡지 못한다) 그 사고를 되풀이하지 않으려는
+   *  자리다. currentProject 가 있을 때만 모달을 그리므로(아래 렌더) 이 값 자체는 프로젝트가 없어도
+   *  true 로 남을 수 있지만, 프로젝트를 잃으면 그릴 자리가 없어 조용히 닫힌 것과 같다. */
+  const [newRunOpen, setNewRunOpen] = useState(false)
+
   // 기록 모달이 열려 있는 동안 이벤트를 다시 읽는다. **이 자리에 있어야 한다** — 의존성 배열은
   // 렌더 중에 평가되므로, currentProject 선언보다 위에 두면 TDZ ReferenceError 로 죽는다(타입체크는
   // 잡지 못한다).
@@ -2352,6 +2360,7 @@ export default function App(): React.JSX.Element {
                   // 여는 시점의 프로젝트를 runId 와 함께 든다 — 이 스냅샷을 준 프로젝트가 그것이다
                   if (currentProject) setOpenRun({ projectPath: currentProject, runId })
                 }}
+                onNewRun={() => setNewRunOpen(true)}
               />
             ) : (
               <>
@@ -3046,6 +3055,19 @@ export default function App(): React.JSX.Element {
             selectWorkbenchTab(sessionTab(sessionId))
           }}
           onClose={() => setOpenRun(null)}
+        />
+      )}
+      {/* currentProject 가 있을 때만 그린다 — 없으면 run-create 에 넘길 cwd 가 없어 만들 자리가
+          없다(JobsView 의 jobs 사이드바 자체도 currentProject 없이는 열리지 않는다). */}
+      {newRunOpen && currentProject && (
+        <NewRunModal
+          projectPath={currentProject}
+          onClose={() => setNewRunOpen(false)}
+          onCreated={(runId) => {
+            setNewRunOpen(false)
+            // 만들자마자 상세 창을 열어 Task 를 짤 수 있게 한다 — onOpenRun 이 하는 것과 같은 짝
+            setOpenRun({ projectPath: currentProject, runId })
+          }}
         />
       )}
       <ConfirmHost />
