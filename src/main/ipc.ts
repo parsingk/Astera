@@ -33,6 +33,7 @@ import {
 } from '../core/orchestration/state'
 import { pickReviewer } from '../core/orchestration/reviewer'
 import { slotsToFill } from '../core/orchestration/schedule'
+import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
 import { defaultAccountIdOf } from '../core/accounts/defaultAccount'
 import { sameSnapshot, snapshotFor, runsForProject } from '../core/orchestration/view'
 import { timelineFor } from '../core/orchestration/timeline'
@@ -51,6 +52,7 @@ import { parsePorcelainZ, type GitState } from '../core/git/status'
 import { FileWatcher } from './fileWatcher'
 import { GitWatcher } from './gitWatcher'
 import { createWorktree } from '../core/worktrees/create'
+import { nameForTask } from '../core/worktrees/naming'
 import { listBranches, detectBaseRef } from '../core/worktrees/git'
 import { removeWorktree } from '../core/worktrees/remove'
 import { listWithStatus } from '../core/worktrees/list'
@@ -914,11 +916,35 @@ export function registerIpc(
                 )
                 continue
               }
+              // **한 Run 은 두 방식 중 하나로만 돈다.** 섞지 않는 이유는 병합 대상이다 — 병합은
+              // 깨끗한 작업 트리에만 적용되고, 워커 하나를 프로젝트 폴더에 띄우면 그 폴더에 커밋 안
+              // 된 변경이 남아 나머지 워크트리를 합칠 자리가 없어진다. 그래서 동시 실행 손잡이 하나가
+              // 두 가지를 정한다: 1 이면 프로젝트 폴더에서 차례대로, 2 이상이면 전부 자기 워크트리에서.
+              // 병렬인데 한 폴더는 고를 수 있어서는 안 되는 조합이다 — 서로를 덮어쓴다.
+              //
+              // run 은 slotsToFill 이 만든 것과 같은 스냅숏에서 찾는다 — 그 함수가 이미 run.id ===
+              // task.runId 인 run 이 있는 Task 만 후보로 냈으므로(schedule.ts), 이 활성화 동안 Run 이
+              // 지워지지 않는 한(그런 명령은 없다) 반드시 있다.
+              const state = orch.deps.getState()
+              const run = state.runs.find((r) => r.id === slot.runId)!
+              const limit = run.concurrency ?? DEFAULT_CONCURRENCY
+              const placement =
+                limit <= 1
+                  ? { worktree: 'current' }
+                  : {
+                      worktree: 'new',
+                      // Task 도 같은 이유로 반드시 있다. nameForTask 는 이미 slugify 를 거친 값(또는
+                      // 그것이 던질 때의 Task id)을 낸다 — 여기서 이미 유일성을 보장하지는 않지만,
+                      // createWorktree 가 받는 이름에 slugify 를 한 번 더 걸어도(naming.ts, 멱등이다)
+                      // 값이 바뀌지 않고, 충돌(같은 이름의 브랜치·경로)도 candidateName 접미사 루프로
+                      // 스스로 피한다(create.ts) — 그래서 여기서 접미사를 더 붙이지 않는다.
+                      name: nameForTask(state.tasks.find((t) => t.id === slot.taskId)!)
+                    }
               const reply = await orchHandleCommand(
                 orch.deps,
                 { sessionId: UI_CALLER },
                 'worker-start',
-                { task: slot.taskId, agent: slot.provider, account: accountId, worktree: 'current' }
+                { task: slot.taskId, agent: slot.provider, account: accountId, ...placement }
               )
               if (reply.status >= 400)
                 await gateSlot(

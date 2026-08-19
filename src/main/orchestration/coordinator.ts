@@ -81,11 +81,42 @@ export function buildSpecFile(a: {
   spec: string
   taskId: string
   dispatchId: string
+  /** True when this dispatch runs in its own worktree, not the project folder (startWorker derives
+   *  it from `worktree !== 'current'` — see the comment there for why the derivation lives at that
+   *  one call site and not here too). A worktree is merge material; an uncommitted change in it is
+   *  invisible to the merge and is thrown away with the worktree. The commit has to be the coding
+   *  agent's own act — a coding agent can end a turn without committing, and the app committing on
+   *  its behalf would be committing content it never reviewed. Requiring it through the spec is the
+   *  same shape as the reporting obligation below: the app assembles the instruction, the worker
+   *  cannot edit it out. */
+  committing?: boolean
 }): string {
+  // Inserted before the reporting obligation, not after — a worker that reports first and commits
+  // second can still end its turn (the spec never told it not to) between the two, leaving the
+  // report and the commit racing each other for no reason. Requiring the commit first removes that
+  // race instead of relying on the agent to read ahead.
+  const commitObligation = a.committing
+    ? `
+---
+## Commit obligation (assembled by the app — do not delete)
+
+This task is running in its own worktree, on its own branch — not in the project folder. When the
+work is finished you must commit it: that is the only way the app can bring this work back together
+with the results of the other tasks running in parallel. Right now this work exists only on this
+worktree's branch; if you do not commit it, it never merges anywhere and it is discarded once this
+worktree is torn down.
+
+  git add -A
+  git commit -m "<one-line summary of the change>"
+
+Commit before you report below.
+`
+    : ''
+
   return `# ${a.title}
 
 ${a.spec}
-
+${commitObligation}
 ---
 ## Reporting obligation (assembled by the app — do not delete)
 
@@ -335,8 +366,20 @@ export class OrchCoordinator {
       specPath,
       // The caller may have assembled the file already (a review dispatch does — see
       // specFileContent). Only when it did not does the implementer's template get built here.
+      //
+      // committing is derived from a.worktree right here, not passed in as a separate argument by
+      // the caller: worktree already says whether this dispatch runs in its own worktree or in the
+      // project folder, so a second argument saying the same thing again is two places that can
+      // drift apart (the scheduler could pass 'new' and forget to also pass committing:true). This
+      // is the one place a.worktree is already a local, so deriving it here keeps it a single fact.
       a.specFileContent ??
-        buildSpecFile({ title: a.title, spec: a.spec, taskId: a.taskId, dispatchId: a.dispatchId }),
+        buildSpecFile({
+          title: a.title,
+          spec: a.spec,
+          taskId: a.taskId,
+          dispatchId: a.dispatchId,
+          committing: a.worktree !== 'current'
+        }),
       'utf8'
     )
 

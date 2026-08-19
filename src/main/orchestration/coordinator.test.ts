@@ -118,6 +118,26 @@ describe('buildSpecFile', () => {
     const out = buildSpecFile({ title: 'T', spec: 'S', taskId: 'tsk_1', dispatchId: 'dsp_1' })
     expect(out).toContain('files-modified')
   })
+  // committing 이 워크트리 워커에만 켜진다(coordinator.ts의 startWorker가 worktree !== 'current'로
+  // 유도한다) — 워크트리는 병합 대상이라 커밋이 없으면 그 일이 다른 결과와 합쳐질 길이 없다.
+  it('committing 이 참이면 커밋 의무 절을 보고 의무보다 앞에 넣는다', () => {
+    const out = buildSpecFile({ title: 'T', spec: 'S', taskId: 'tsk_1', dispatchId: 'dsp_1', committing: true })
+    expect(out).toContain('git add')
+    expect(out).toContain('git commit')
+    expect(out.indexOf('git commit')).toBeLessThan(out.indexOf('Reporting obligation'))
+    // 커밋 의무가 보고 의무를 밀어내지 않았다 — 두 절 모두 있어야 한다
+    expect(out).toContain('worker_done')
+  })
+  it('committing 이 없거나 거짓이면 커밋 의무 절이 없다 — 프로젝트 폴더 워커에는 해당 없다', () => {
+    const withoutFlag = buildSpecFile({ title: 'T', spec: 'S', taskId: 'tsk_1', dispatchId: 'dsp_1' })
+    const explicitFalse = buildSpecFile({
+      title: 'T', spec: 'S', taskId: 'tsk_1', dispatchId: 'dsp_1', committing: false
+    })
+    for (const out of [withoutFlag, explicitFalse]) {
+      expect(out).not.toContain('git commit')
+      expect(out).toContain('worker_done')
+    }
+  })
 })
 
 describe('buildReviewSpecFile', () => {
