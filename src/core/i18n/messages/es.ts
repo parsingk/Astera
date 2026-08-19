@@ -779,5 +779,19 @@ export const es: Catalog = {
   'jobs.new.concurrency': 'En paralelo',
   'jobs.new.concurrencyHint': 'Cuántos workers mantiene abiertos a la vez',
   'jobs.new.create': 'Crear',
-  'jobs.new.failed': 'No se pudo crear el trabajo'
+  'jobs.new.failed': 'No se pudo crear el trabajo',
+  // NewTaskModal.tsx — el formulario en el que se convierte el panel inferior de RunDetail
+  // (.detail-events) mientras se está creando una Task. deps pertenece al grafo, no a este formulario
+  // (el grafo es donde se eligen las dependencias) — por eso este catálogo solo tiene el texto que
+  // apunta al grafo, no los valores de deps en sí.
+  'jobs.task.new': 'Añadir tarea',
+  'jobs.task.title': 'Título',
+  'jobs.task.spec': 'Instrucciones',
+  'jobs.task.deps': 'Debe terminar antes',
+  'jobs.task.depsHint': 'Elige nodos en el grafo de arriba',
+  'jobs.task.validate': 'Configuración que prueba que terminó',
+  'jobs.task.validateNone': 'Sin validación',
+  'jobs.task.review': 'Revisión por otro agente',
+  'jobs.task.create': 'Añadir',
+  'jobs.task.failed': 'No se pudo crear la tarea'
 }

@@ -796,5 +796,18 @@ export const ko = {
   'jobs.new.concurrency': '동시 실행',
   'jobs.new.concurrencyHint': '이 작업이 한 번에 열어 둘 워커 수',
   'jobs.new.create': '만들기',
-  'jobs.new.failed': '작업을 만들지 못했습니다'
+  'jobs.new.failed': '작업을 만들지 못했습니다',
+  // NewTaskModal.tsx — Task 를 짜는 동안 상세 창의 아래 칸(.detail-events)이 바뀌는 폼. deps 는
+  // 이 폼이 아니라 그래프가 쥐고 있다(고르는 자리가 그래프이므로) — 그래서 이 카탈로그에는 deps
+  // 자체의 값이 아니라 그것을 고르라고 안내하는 문구(depsHint)만 있다.
+  'jobs.task.new': 'Task 추가',
+  'jobs.task.title': '제목',
+  'jobs.task.spec': '지시',
+  'jobs.task.deps': '먼저 끝나야 하는 것',
+  'jobs.task.depsHint': '위 그래프에서 노드를 눌러 고릅니다',
+  'jobs.task.validate': '완료를 검증할 실행 구성',
+  'jobs.task.validateNone': '검증 없음',
+  'jobs.task.review': '다른 에이전트가 검토',
+  'jobs.task.create': '추가',
+  'jobs.task.failed': 'Task 를 만들지 못했습니다'
 } as const

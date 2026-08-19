@@ -766,5 +766,18 @@ export const ja: Catalog = {
   'jobs.new.concurrency': '同時実行',
   'jobs.new.concurrencyHint': 'この作業が同時に開くワーカー数',
   'jobs.new.create': '作る',
-  'jobs.new.failed': '作業を作れませんでした'
+  'jobs.new.failed': '作業を作れませんでした',
+  // NewTaskModal.tsx — Task を組み立てている間、詳細ウィンドウの下段(.detail-events)が変わるフォーム。
+  // deps はこのフォームではなくグラフが持つ(選ぶ場所がグラフだから) — このカタログには deps の値
+  // 自体ではなく、グラフを指すヒント文言(depsHint)だけがある。
+  'jobs.task.new': 'Task を追加',
+  'jobs.task.title': 'タイトル',
+  'jobs.task.spec': '指示',
+  'jobs.task.deps': '先に終わるもの',
+  'jobs.task.depsHint': '上のグラフでノードを選びます',
+  'jobs.task.validate': '完了を検証する実行構成',
+  'jobs.task.validateNone': '検証なし',
+  'jobs.task.review': '別のエージェントが確認',
+  'jobs.task.create': '追加',
+  'jobs.task.failed': 'Task を作れませんでした'
 }

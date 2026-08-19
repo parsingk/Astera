@@ -3047,6 +3047,10 @@ export default function App(): React.JSX.Element {
           // 그 Run 이 스냅샷에서 사라졌으면(다른 프로젝트로 갔거나 지워졌다) undefined 다.
           run={orchSnapshot?.runs.find((r) => r.id === openRun.runId)}
           detail={detail}
+          // Task 짓기(task-create)와 검증 구성 조회(run.list)가 쓴다 — run 이 undefined 인 동안에도
+          // openRun 이 이 짝을 그대로 들고 있으므로 run?.id 를 대신 넘길 이유가 없다.
+          projectPath={openRun.projectPath}
+          runId={openRun.runId}
           // Verbatim the pair JobsView is handed above, and for the reason its comment there records:
           // the tab tree is the only place that knows whether the worker's tab is still open, so a
           // sessions.some(...) check would keep saying yes after the user closed it and the ↗ would

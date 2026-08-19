@@ -675,5 +675,19 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.new.concurrency': 'Run at once',
   'jobs.new.concurrencyHint': 'How many workers this job keeps open at once',
   'jobs.new.create': 'Create',
-  'jobs.new.failed': 'Could not create the job'
+  'jobs.new.failed': 'Could not create the job',
+  // NewTaskModal.tsx — the form RunDetail's bottom pane (.detail-events) turns into while a Task is
+  // being authored. deps belongs to the graph, not this form (the graph is where dependencies get
+  // picked) — that is why this catalog only has the hint text pointing at the graph, not the deps
+  // values themselves.
+  'jobs.task.new': 'Add task',
+  'jobs.task.title': 'Title',
+  'jobs.task.spec': 'Instructions',
+  'jobs.task.deps': 'Must finish first',
+  'jobs.task.depsHint': 'Pick nodes in the graph above',
+  'jobs.task.validate': 'Run configuration that proves it done',
+  'jobs.task.validateNone': 'No validation',
+  'jobs.task.review': 'Review by another agent',
+  'jobs.task.create': 'Add',
+  'jobs.task.failed': 'Could not create the task'
 }
