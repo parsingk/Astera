@@ -333,6 +333,16 @@ export type RunOutcome = 'running' | 'completed' | 'failed'
 export interface JobRun {
   id: string
   objective: string
+  /** 이 Run 의 워커를 띄울 provider — Run(core/orchestration/types.ts)이 들고 있는 값을 그대로
+   *  옮긴 것이다. **여기서 계산하거나 기본값을 채우지 않는다** — CLI 가 --provider 없이 만든
+   *  Run 에는 이 값이 없을 수 있고(schedule.ts 의 slotsToFill 이 그런 Run 을 건너뛰는 것과 같은
+   *  사정), 그것을 감추면 "이 Run 은 무엇으로도 못 띄운다"는 사실이 사라진다. 기본값을 적용하는
+   *  것은 이 값을 쓰는 쪽(RunDetail.tsx)의 일이다. */
+  provider?: Provider
+  /** 이 Run 이 동시에 열어 둘 Dispatch 수 — Run 이 들고 있는 값을 그대로 옮긴 것이다. 없으면
+   *  DEFAULT_CONCURRENCY(core/orchestration/types.ts) 인데, 그 기본값도 여기서 채우지 않는다 —
+   *  provider 와 같은 이유다. */
+  concurrency?: number
   /** 저장된 값이 아니라 Task 에서 계산된다 — core/orchestration/view.ts 의 outcomeOf */
   outcome: RunOutcome
   done: number
@@ -695,8 +705,14 @@ export interface AppControlApi {
  * The Jobs sidebar. Not core, for the same reason as system and win: nothing in src/main/core.ts
  * knows about orchestration — the store, the server and this fold all live in the ipc wiring.
  *
- * Read-only by design. Dispatching, answering a Gate and closing a Run are COORDINATOR_ONLY commands
- * the orchestrator reaches through the CLI, so there is no mutating counterpart here.
+ * Not read-only anymore: `command` (see its doc below) is the one mutating door — the app reaches the
+ * orchestration command surface (`task-create`, `worker-start`, gate-resolve, …) through
+ * it exactly the way the CLI does, rather than through a channel of its own. That reversal is
+ * knowledge/decisions/ADR-004's subject. It also was never a question of authorization: COORDINATOR_ONLY
+ * (server.ts's set of commands a worker session may not call) only blocks *worker* sessions —
+ * server.ts checks `isWorker && COORDINATOR_ONLY.has(cmd)`, and the app's caller id has never owned a
+ * Dispatch, so isWorker is always false for it and every command is open to it. What used to be
+ * missing was the IPC channel itself, not permission through it.
  *
  * list doubles as the subscription: the snapshot is per project and main is not otherwise told what
  * the renderer has open, so the path passed here also settles what 'orch:state' is folded for.
@@ -719,6 +735,17 @@ export interface OrchApi {
   /** 한 Run 의 이벤트와 의존 그래프. 스냅샷과 달리 **요청할 때만** 온다 — Message.body 에는
    *  검증 출력 꼬리가 실리므로 매 쓰기마다 밀 수 있는 크기가 아니다. */
   runDetail(projectPath: string, runId: string): Promise<RunDetail>
+  /** UI 가 오케스트레이션 상태를 바꾸는 유일한 통로 — server.ts 의 명령 표면을 그대로 부른다.
+   *  cmd 는 CLI 와 같은 이름이고(`task-create`, `worker-start`, …) args 도 같은 키를 쓴다.
+   *
+   *  반환 모양은 server.ts 의 `Reply` 와 같지만 그것을 import 하지 않는다 — 그 타입은 export 되지
+   *  않고, core 가 main 을 import 하는 것은 층의 방향과 반대다. 둘이 갈라지면 타입체크가 아니라
+   *  이 주석이 알려 준다. */
+  command(
+    projectPath: string,
+    cmd: string,
+    args: Record<string, unknown>
+  ): Promise<{ status: number; body: unknown }>
   unwatch(): Promise<void>
 }
 

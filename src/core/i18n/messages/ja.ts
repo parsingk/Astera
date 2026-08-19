@@ -709,7 +709,9 @@ export const ja: Catalog = {
   // JobsView.tsx, App.tsx — 読み取り専用の Jobs サイドバー（オーケストレーションの Run/Task 一覧）
   'jobs.rail.open': 'Jobs',
   'jobs.empty': 'まだ開始したジョブがありません',
-  'jobs.empty.hint': 'コーディネーターセッションでジョブを作成すると、ここに表示されます',
+  // サイドバーに「+ 新しい作業」ボタンができた後も、コーディネーターセッションは作業ができるもう
+  // 一つの経路のままなので、どちらも消さずに言う
+  'jobs.empty.hint': '作業はここで直接作れます — コーディネーターセッションで作った作業もここに表示されます',
   // 8 つの状態グリフ(JobIcons.tsx)のツールチップ。サイドバーが状態を言葉で書かなくなったので、
   // これらは常時表示されない — アイコンを初めて見る人が学ぶ場所。pending と blocked は書き分ける:
   // 前者は依存が、後者は人が止めている
@@ -754,5 +756,34 @@ export const ja: Catalog = {
   'jobs.detail.hidden': '他の Task のイベント {count} 件 — ノードをもう一度押すと解除',
   'jobs.detail.clearFilter': 'フィルターを解除',
   'jobs.detail.edgeWaiting': '待っている依存',
-  'jobs.detail.edgeResolved': 'すでに解けた依存'
+  'jobs.detail.edgeResolved': 'すでに解けた依存',
+  // NewRunModal.tsx — サイドバーの「+ 新しい作業」が開く Run 作成フォームの文言。
+  // jobs.new.concurrency はプロジェクト全体ではなく、この Run 単体が同時に開くワーカー数の上限だ。
+  'jobs.new.open': '新しい作業',
+  'jobs.new.title': '新しい作業を作る',
+  'jobs.new.objective': '目標',
+  'jobs.new.provider': 'エージェント',
+  'jobs.new.concurrency': '同時実行',
+  'jobs.new.concurrencyHint': 'この作業が同時に開くワーカー数',
+  'jobs.new.create': '作る',
+  'jobs.new.failed': '作業を作れませんでした',
+  // NewTaskModal.tsx — Task を組み立てている間、詳細ウィンドウの下段(.detail-events)が変わるフォーム。
+  // deps はこのフォームではなくグラフが持つ(選ぶ場所がグラフだから) — このカタログには deps の値
+  // 自体ではなく、グラフを指すヒント文言(depsHint)だけがある。
+  'jobs.task.new': 'Task を追加',
+  'jobs.task.title': 'タイトル',
+  'jobs.task.spec': '指示',
+  'jobs.task.deps': '先に終わるもの',
+  'jobs.task.depsHint': '上のグラフでノードを選びます',
+  'jobs.task.validate': '完了を検証する実行構成',
+  'jobs.task.validateNone': '検証なし',
+  'jobs.task.review': '別のエージェントが確認',
+  'jobs.task.create': '追加',
+  'jobs.task.failed': 'Task を作れませんでした',
+  'jobs.node.start': '起動',
+  'jobs.node.stop': '停止',
+  'jobs.node.restart': 'もう一度起動',
+  'jobs.node.gate': '人に聞く',
+  'jobs.node.gateQuestion': '何を聞きますか',
+  'jobs.node.failed': 'この操作を行えませんでした'
 }

@@ -70,11 +70,23 @@ const isRunning = (t: JobTask): t is RunningTask =>
  *  it has no test of its own because the renderer has no jsdom (vitest runs environment: 'node'). */
 export function JobsView({
   snapshot,
+  hasProject,
   canOpenSession,
   onOpenSession,
-  onOpenRun
+  onOpenRun,
+  onNewRun
 }: {
   snapshot: OrchSnapshot | null
+  /** Whether the caller currently has a project open. snapshot alone cannot answer that — with no
+   *  project App.tsx deliberately still hands this component `{ runs: [] }` rather than null (its
+   *  own comment: null would leave an unexplained blank sidebar for as long as the view stays open,
+   *  where the empty state at least says something). That means the no-project case and a real
+   *  project with zero Runs render the exact same snapshot shape, so the empty state's "+ 새 작업"
+   *  button needs a signal snapshot cannot carry — this prop, from the one caller that knows
+   *  (App's currentProject). Without it the button opens NewRunModal's flag with no project to hand
+   *  it (App.tsx gates the modal itself on currentProject), and that leftover flag joins
+   *  modalOpenRef and kills every global shortcut with no visible modal to explain why. */
+  hasProject: boolean
   /** Whether this window still has a tab for that session — the second half of "is this row
    *  clickable", and the half main cannot answer. JobTask.sessionId means main's SessionManager still
    *  has the session record, which is deliberately not the same set as the open tabs (see App). A row
@@ -86,6 +98,9 @@ export function JobsView({
   /** Open the Run detail window. Its graph and events are fetched on demand (orch.runDetail), so this
    *  view only names the Run — App owns both the request and the window. */
   onOpenRun: (runId: string) => void
+  /** Opens NewRunModal. This view creates no Run itself — App owns the modal and the project path it
+   *  needs, the same split as onOpenRun/onOpenSession above. */
+  onNewRun: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
   // Runs the user collapsed. Absence means expanded — a Run that just appeared, or one from before this
@@ -119,12 +134,25 @@ export function JobsView({
       <div className="jobs-empty">
         <p>{t('jobs.empty')}</p>
         <p className="jobs-empty-hint">{t('jobs.empty.hint')}</p>
+        {/* 아무것도 없을 때가 만들고 싶을 때다 — 목록이 생긴 뒤의 자리(아래)와 같은 버튼.
+            hasProject 로 가드하는 이유는 위 hasProject 의 주석대로다: 이 빈 상태는 프로젝트가
+            없을 때도 그려지고(snapshot 만으로는 그 둘을 구별할 수 없다), 그때 이 버튼을 누르면
+            만들 자리도 없는 newRunOpen 이 true 로 남아 전역 단축키를 죽인다. */}
+        {hasProject && (
+          <button className="jobs-new" onClick={onNewRun}>
+            + {t('jobs.new.open')}
+          </button>
+        )}
       </div>
     )
   }
 
   return (
     <section className="jobs-view">
+      {/* 목록 위, 첫 자식 — 아이콘을 새로 만들지 않는다: '+' 글자로 충분하다 */}
+      <button className="jobs-new" onClick={onNewRun}>
+        + {t('jobs.new.open')}
+      </button>
       {snapshot.runs.map((run) => {
         const open = !collapsed.has(run.id)
         const kind = runKind(run)

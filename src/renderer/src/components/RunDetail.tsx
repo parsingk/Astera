@@ -1,17 +1,22 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type {
   JobEvent,
   JobRun,
   JobTask,
   MessageType,
+  Provider,
   RunDetail as RunDetailData,
   TaskStatus
 } from '../../../core/types'
 import type { MessageKey } from '../../../core/i18n'
+import { defaultAccountIdOf } from '../../../core/accounts/defaultAccount'
 import type { GraphBox } from '../../../core/orchestration/graphLayout'
 import { edgePath, layoutRows, NODE_H, NODE_W } from '../../../core/orchestration/graphLayout'
+import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/types'
 import { useI18n } from '../i18n/I18nProvider'
+import { toast } from '../lib/toast'
 import { RUNNING_STATES, RunIcon, STATE_KEY, STATUS_COLOR, TaskIcon } from './JobIcons'
+import { NewTaskModal } from './NewTaskModal'
 
 /** 종류 배지의 문구. message 는 messageType 이 정한다.
  *  heartbeat 과 decision_gate 는 timeline.ts 의 SKIP 이 걸러 지금은 도달하지 않지만, 맵을
@@ -67,8 +72,13 @@ const timeOf = (at: string): string => {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-/** 한 Run 의 상세 창 — 위가 의존 그래프, 아래가 이벤트다. 읽기 전용이다(Gate 를 답하는 것은
- *  Slack 제어면의 몫이다).
+/** 한 Run 의 상세 창 — 위가 의존 그래프, 아래가 이벤트다. **더 이상 읽기 전용이 아니다** — Task 8 이
+ *  여기서 Task 를 짓게 했고(`task-create`), Task 9 가 노드에서 `띄우기`·`멈추기`·`물어보기`·
+ *  `다시 띄우기`(`worker-start`·`worker-stop`·`gate-create`·`task-update`)를 열었다. 이 계획이
+ *  초안될 때는 이 파일이 쓰는 쪽이 될 줄 몰랐고, 그 반전은 `knowledge/decisions/ADR-004`에 있다.
+ *  **Gate 에 답하는 것만은 아직 Slack 제어면의 몫이다** — `물어보기`가 여는 것은 `gate-create`
+ *  (Gate 를 **여는** 것)이고, `gate-resolve`(Gate 에 **답하는** 것)는 이 계획의 어느 Task 도 이
+ *  파일에 더하지 않았다.
  *
  *  **그래프는 장식이 아니라 필터다.** 노드를 누르면 아래가 그 Task 의 이벤트만 남는다 — "왜 저게
  *  안 도나"(위)와 "저기서 무슨 일이 있었나"(아래)가 한 화면에서 이어지고, 이벤트가 수십 줄이 되는
@@ -84,6 +94,8 @@ const timeOf = (at: string): string => {
 export function RunDetail({
   run,
   detail,
+  projectPath,
+  runId,
   canOpenSession,
   onOpenSession,
   onClose
@@ -93,6 +105,11 @@ export function RunDetail({
   run: JobRun | undefined
   /** null 은 아직 도착하지 않았다는 뜻 — 빈 상태와 구분한다(JobsView 의 snapshot === null 과 같다) */
   detail: RunDetailData | null
+  /** Task 짓기(task-create)와 그 검증 구성 조회(run.list)가 쓴다. App.tsx 의 openRun 이 이미 이
+   *  짝을 들고 있으므로 그대로 받는다 — run?.id 로 대신하면 run 이 undefined 인 순간(스냅샷이 아직
+   *  없거나 Run 이 막 사라졌을 때)에는 Task 를 지을 수 없어야 할 이유가 없는데도 지을 수 없게 된다. */
+  projectPath: string
+  runId: string
   canOpenSession: (sessionId: string) => boolean
   onOpenSession: (sessionId: string) => void
   onClose: () => void
@@ -101,6 +118,108 @@ export function RunDetail({
   /** 고른 노드 = 아래 이벤트의 필터. 같은 노드를 다시 누르면 풀린다 */
   const [selected, setSelected] = useState<string | null>(null)
   const [open, setOpen] = useState<Set<string>>(new Set())
+  /** null 이면 평소(그래프는 필터) — 배열이면 Task 를 짓는 중이고 그래프 클릭은 이 배열에 넣고 뺀다.
+   *
+   *  **필터(selected)는 건드리지 않는다.** 짓는 동안에도 그대로 남아 있다가 끝나면(성공이든 취소든)
+   *  그대로 돌아온다 — 지우거나 감추면, 이미 한 Task 로 걸러서 그 사정을 보던 사람이 + Task 를
+   *  누른 순간 그 맥락을 잃는다. 두 상태를 이렇게 겹쳐 둘 수 있는 것은 표시가 서로 다른 채널이기
+   *  때문이다: 필터는 청록 링(.detail-node.on), 고른 의존은 체크 글리프(Graph 의 node())다 — 한
+   *  노드가 우연히 둘 다에 해당해도 두 표시가 같이 뜰 뿐 뜻이 섞이지 않는다("같은 모양으로 두 뜻을
+   *  말하지 않는다"). 짓는 동안 아래 칸(.detail-events)이 폼으로 바뀌어 그 필터 줄 자체는 잠깐
+   *  보이지 않지만, 상태는 그대로 있으므로 폼을 닫으면 원래 걸러 보던 화면이 다시 나온다. */
+  const [picking, setPicking] = useState<string[] | null>(null)
+  /** Task 짓기 폼의 검증 구성 목록. null 은 아직 안 온 것 — NewTaskModal 의 prop 문서와 같은 뜻이다.
+   *
+   *  **run.list 로 받는다. orch.command(..., 'run-configs', ...) 가 아니다.** run-configs 명령은
+   *  `s.runs[s.runs.length - 1]` — 가장 최근에 만들어진 Run — 을 위해 답하고 어느 Run 을 위한 것인지
+   *  받는 인자가 아예 없다(server.ts 의 'run-configs' case). 이 창은 프로젝트마다 열릴 수 있고 그
+   *  프로젝트가 반드시 "가장 최근 Run"의 프로젝트라는 보장이 없으므로, 그 명령을 쓰면 다른
+   *  프로젝트의 실행 구성 목록이 뜰 수 있다. run.list(projectPath) 는 프로젝트로 직접 물어보고
+   *  (assertAllowedPath 를 거친다) 오케스트레이션 상태를 바꾸지 않는 프로젝트 설정 조회이므로 "UI 는
+   *  orch.command 만 부른다" 규칙과 부딪히지 않는다 — 그 규칙은 오케스트레이션 상태를 바꾸는
+   *  통로에 대한 것이다. listRunConfigs(ipc.ts, run-configs 가 쓰는 것)와 run.list 핸들러는 똑같이
+   *  loadRunConfigs({projectPath, stored, assertAllowedPath})를 부르므로 id 가 갈라지지 않는다 —
+   *  여기서 고른 id 가 곧 validateConfigId 로 저장되고 TaskValidator 가 나중에 그 id 로 찾아낼 그
+   *  설정이다. */
+  const [runConfigs, setRunConfigs] = useState<{ id: string; name: string }[] | null>(null)
+  // picking 자체가 아니라 이 값을 의존성에 두는 이유: picking 은 고른 원소가 바뀔 때마다(토글마다)
+  // 새 배열이 되므로, 그것을 그대로 넣으면 클릭마다 다시 불러오게 된다. authoring 은 짓기 시작/
+  // 끝(false→true, true→false) 그 경계에서만 바뀌는 값이다.
+  const authoring = picking !== null
+  useEffect(() => {
+    if (!authoring) {
+      setRunConfigs(null) // 다음에 지을 때 다시 받도록 비운다 — 그 사이 설정이 바뀌었을 수 있다
+      return
+    }
+    let cancelled = false
+    // 거부 팔을 반드시 둔다 — main 이 프로젝트를 읽다 던질 수 있고, 그러면 DevTools 에
+    // Uncaught (in promise) 가 뜬다. 실패해도 폼은 그대로 쓸 수 있어야 하므로(검증 없이 Task 를
+    // 만드는 것도 유효한 선택이다) 빈 목록으로 접는다 — "검증 없음" 하나만 남는다.
+    void window.api.run.list(projectPath).then(
+      (r) => {
+        if (!cancelled) setRunConfigs(r.configs.map((c) => ({ id: c.id, name: c.name })))
+      },
+      () => {
+        if (!cancelled) setRunConfigs([])
+      }
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [authoring, projectPath])
+  /** 물어보기(Gate)의 질문을 쓰는 중인 Task id. null 이면 안 쓰는 중이다 — picking 과 같은 자리에
+   *  서는 세 번째 모습이다(그래프는 그대로, .detail-events 만 바뀐다). picking 처럼 selected(필터)는
+   *  건드리지 않는다. */
+  const [asking, setAsking] = useState<string | null>(null)
+  const [question, setQuestion] = useState('')
+  /** 지금 도는 노드 동작(띄우기·멈추기·물어보기·다시 띄우기)의 대상 Task id, 없으면 null.
+   *
+   *  **하나뿐이고 Task 별로 나누지 않는다** — 그래서 무언가 도는 동안에는 그래프의 모든 노드
+   *  버튼이 함께 숨는다. 이 창은 한 번에 하나만 다루는 것이 보통의 쓰임이고, Task 마다 따로 두면
+   *  "다른 Task 의 명령이 도는 동안 이 버튼은 눌러도 되는가"를 버튼마다 다시 정해야 한다.
+   *
+   *  picking·asking 과 따로 두는 이유: 그 둘은 "폼이 열려 있다"를 말하지만 띄우기·멈추기·다시
+   *  띄우기에는 폼이 없다 — 버튼 하나가 곧 명령이라, 명령이 오가는 동안을 표시할 값이 그 셋에는
+   *  따로 필요하다(물어보기는 asking 이 그 구간도 이미 덮는다 — 성공했을 때만 asking 을 null 로
+   *  돌리므로). */
+  const [busy, setBusy] = useState<string | null>(null)
+  /** 물어보기(gate-create) 제출이 실패했을 때의 안내 — 이 폼(asking)과 함께 살고 죽는다.
+   *  NewTaskModal 이 자기 에러를 자기 폼 안에 두는 것과 같은 자리다. **띄우기·멈추기·다시
+   *  띄우기는 이 값을 쓰지 않는다** — 그 셋에는 폼이 없어서 실패를 인라인으로 보여 줄 자리가
+   *  없고, 이 앱은 그런 폼 없는 단발 액션의 실패를 이미 toast.error 로 보낸다(App.tsx 의
+   *  run.start.failed·files.save.failed 등과 같은 관례). 하나의 배너에 넷을 몰아넣는 것은 "폼이
+   *  있으면 인라인, 없으면 토스트"라는 이 저장소의 규칙 옆에 같은 일을 하는 두 번째 장치를
+   *  세우는 것이라 고르지 않았다. */
+  const [gateError, setGateError] = useState<string | null>(null)
+  /** 그래프의 노드 버튼이 무언가를 조용히 버릴 수 있는 동안 — Task 짓기 폼이 열려 있거나, 질문을
+   *  쓰는 중이거나, 명령이 도는 중이다. 이 동안은 노드 버튼(↗ 포함)을 전부 숨기고 배경 클릭으로
+   *  창을 닫지도 않는다: 다른 버튼을 누르면 지금 쓰던 것을 잃고, 배경을 눌러 창을 닫으면 도는
+   *  명령의 결과를 아무도 보지 못한다(이 창을 새로 열지 않는 한 다시 알 길이 없다). */
+  const formOpen = picking !== null || asking !== null || busy !== null
+  /** 띄우기 버튼을 보일 조건 — **둘 다** 참이어야 한다. 한 자리에 모아 두는 것은 둘 중 하나만
+   *  보고 고치면 나머지 조건을 깨뜨리기 쉬워서다.
+   *
+   *  1) 이 Run 의 동시 실행 한도(없으면 DEFAULT_CONCURRENCY, JobRun 의 주석과 같다)가 1 이하다.
+   *     한도가 2 이상인 Run 은 모든 워커가 각자의 워크트리에서 돌고, 사람이 여기서 하나를
+   *     프로젝트 폴더(worker-start 의 기본 worktree='current')에 띄우면 "병렬인데 한 폴더"라는
+   *     금지된 조합이 된다(coordinator/runScheduler 주석) — 나머지 워커들의 워크트리와 달리 이
+   *     워커만 프로젝트 폴더의 커밋 안 된 변경을 남겨 병합 자리를 없앤다. 렌더러는 워크트리
+   *     이름을 지어 줄 수도 없다 — nameForTask(core/worktrees/naming.ts)가 node:path 를 끌고 와
+   *     tsconfig.web.json 에 못 들어간다. 그래서 한도 2 이상인 Run 에서는 버튼 자체를 없앤다
+   *     (스케줄러가 거기서 띄우는 것을 대신 맡는다). DEFAULT_CONCURRENCY 가 3 이므로 사이드바가
+   *     기본값으로 만든 Run 에는 이 버튼이 나오지 않는다 — 대안(프로젝트 폴더로라도 억지로
+   *     띄우기)을 만들지 않기로 한 결정이다.
+   *
+   *  2) 이 Run 에 provider 가 있다. 없으면 이 버튼은 눌려도 결코 되지 않는다 — worker-start 가
+   *     --agent 로 지목할 provider 가 없어 `--agent must be claude|codex` 로 거절한다(server.ts).
+   *     **schedule.ts 의 slotsToFill 이 이미 같은 판단을 내려 두었다** — `const provider =
+   *     run.provider; if (!provider) continue` 로 provider 없는 Run 을 건너뛴다는 그 주석과 같은
+   *     사정이다(그런 Run 은 명령으로는 만들 수 없지만 orchestration.json 은 프로세스보다 오래
+   *     살고 손으로 고쳐질 수 있다). 스케줄러가 이미 내린 판단을 UI 가 다르게 낼 이유가 없다.
+   *     버튼을 그대로 두고 실패했을 때 안내로 대신하는 것도 틀렸다 — "로그인된 계정이 없다"는
+   *     이 경우 거짓이다(계정은 있을 수 있고, 없는 것은 이 Run 의 provider 다). 원인을 잘못
+   *     말하는 오류 문구는 문구가 없는 것보다 나쁘다. */
+  const canManualStart = (run?.concurrency ?? DEFAULT_CONCURRENCY) <= 1 && run?.provider !== undefined
   const keyOf = (e: JobEvent): string => `${e.kind}:${e.sourceId}`
   const toggle = (key: string): void =>
     setOpen((prev) => {
@@ -136,8 +255,163 @@ export function RunDetail({
     return <span className="detail-dot" />
   }
 
+  /** 그래프 노드 클릭의 뜻은 모드가 정한다 — 짓는 중이 아니면 필터(같은 노드를 다시 누르면
+   *  풀린다), 짓는 중이면 picking 배열에 넣고 뺀다. 판단을 여기 한 곳에 두는 것은 Graph 는 그리기만
+   *  하고(파일 머리말의 규칙) 어느 모드인지는 몰라도 되게 하려는 것이다.
+   *
+   *  **formOpen 인데 picking 이 아니면(즉 asking 이나 busy) 클릭을 통째로 무시한다.** 노드
+   *  버튼들이 이 동안 전부 숨는 것(node() 의 `!formOpen &&`)과 같은 규칙을 이 함수도 지켜야
+   *  한다 — 버튼만 숨기고 노드 자신의 onClick(필터)을 그대로 두면, 물어보기 폼을 쓰는 중에
+   *  다른 노드를 눌러 필터 링을 조용히 옮길 수 있는 구멍이 남는다. 그러면 asking 의 주석이
+   *  약속한 "picking 처럼 selected 는 건드리지 않는다"가 asking 에서는 지켜지지 않는다. 이
+   *  판단을 Graph 안에 두지 않고 여기 두는 것은 판단이 한 곳에 있어야 한다는, 이 함수가 이미
+   *  지키고 있던 성질을 그대로 따르는 것이다. */
+  const onNodeClick = (id: string): void => {
+    if (formOpen && picking === null) return
+    if (picking !== null) {
+      setPicking((cur) => {
+        const list = cur ?? []
+        return list.includes(id) ? list.filter((x) => x !== id) : [...list, id]
+      })
+      return
+    }
+    setSelected((prev) => (prev === id ? null : id))
+  }
+
+  /** 계정을 고른다 — 스케줄러(src/main/ipc.ts 의 runScheduler)와 같은 방법이다: 계정 목록과
+   *  로그인 여부를 병렬로 확인한 뒤 defaultAccountIdOf(그 규칙을 정하는 단 하나의 함수)에게
+   *  넘긴다. 로그인 조회를 계정마다 차례로 기다리면 계정 수만큼 느려지므로 Promise.all 로 편다. */
+  const accountFor = async (provider: Provider): Promise<string | null> => {
+    const accounts = await window.api.accounts.list()
+    const loggedIn = new Set(
+      (
+        await Promise.all(
+          accounts.map(async (a) => ((await window.api.accounts.loginStatus(a.id)) ? a.id : null))
+        )
+      ).filter((id): id is string => id !== null)
+    )
+    return defaultAccountIdOf(provider, accounts, loggedIn)
+  }
+
+  /** 띄우기. ready·pending 에서만 보이고(Graph.node), canManualStart 가 아니면 버튼 자체가 없다.
+   *  worktree 는 언제나 'current' 를 명시한다 — 이 버튼이 나오는 것 자체가 이미 한도 1 이하인
+   *  Run 으로 좁혀져 있어(canManualStart) worker-start 의 기본값('current')과 결과가 같지만,
+   *  명시하는 것은 그 기본값이 나중에 바뀌어도(그럴 계획은 없지만) 이 버튼의 뜻이 조용히
+   *  달라지지 않게 하기 위해서다. */
+  const startTask = async (taskId: string): Promise<void> => {
+    setBusy(taskId)
+    try {
+      const provider = run?.provider
+      // provider 가 없는 Run 은 canManualStart 가 이미 버튼을 지워 이 자리에 닿지 못한다 — 이
+      // 확인은 그 상태가 정말로 불가능함을 다시 강제하는 것이 아니라, 페인트와 클릭 사이에
+      // 스냅샷이 바뀌는 좁은 창에 대한 방어일 뿐이다(canManualStart 의 주석).
+      const accountId = provider ? await accountFor(provider) : null
+      if (!provider || !accountId) {
+        // 폼이 없는 단발 액션의 실패라 toast 로 보낸다(gateError 의 주석과 같은 규칙) —
+        // 계정을 못 찾은 경우도 같은 안내다(worker-start 를 부를 수 없다는 결과가 같다).
+        toast.error(t('session.resume.noLoggedInAccounts'))
+        return
+      }
+      const reply = await window.api.orch.command(projectPath, 'worker-start', {
+        taskId,
+        agent: provider,
+        account: accountId,
+        worktree: 'current'
+      })
+      if (reply.status >= 400) toast.error(t('jobs.node.failed'))
+    } catch {
+      toast.error(t('jobs.node.failed'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  /** 멈추기. **worker-stop 은 Task id 가 아니라 Dispatch id 를 요구한다**(server.ts 의
+   *  `str(args.dispatch)`) — 그래서 dispatch-show 로 이 Task 의 열린 Dispatch 를 먼저 찾는다.
+   *  dispatch-show 는 읽기만 하는 명령이지만 "UI 는 orch.command 만 부른다" 규칙과 부딪히지
+   *  않는다 — 그 규칙은 오케스트레이션 상태를 바꾸는 통로에 대한 것이고, 이 조회는 CLI 도 쓰는
+   *  같은 명령 표면을 그대로 쓸 뿐 새 통로를 열지 않는다. */
+  const stopTask = async (taskId: string): Promise<void> => {
+    setBusy(taskId)
+    try {
+      const shown = await window.api.orch.command(projectPath, 'dispatch-show', { task: taskId })
+      if (shown.status >= 400) {
+        toast.error(t('jobs.node.failed'))
+        return
+      }
+      const open = (shown.body as Dispatch[]).find((d) => !d.outcome && !d.endedAt)
+      // 멈추기 버튼은 열린 Dispatch 가 있을 때만 보이므로(provider 의 유무로 안다) 보통은
+      // 반드시 찾는다 — 그 사이 워커가 스스로 끝났을 수는 있으니 방어적으로만 확인한다.
+      if (!open) {
+        toast.error(t('jobs.node.failed'))
+        return
+      }
+      const reply = await window.api.orch.command(projectPath, 'worker-stop', { dispatch: open.id })
+      if (reply.status >= 400) toast.error(t('jobs.node.failed'))
+    } catch {
+      toast.error(t('jobs.node.failed'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  /** 다시 띄우기. task-update 로 상태를 ready 로 되돌린다 — 전이표(dispatched 에는 dispatched 가
+   *  없다)를 일부러 우회하는 사람의 손보기 명령이다. **대가:** consecutiveFailures 도 함께 0 으로
+   *  돌아간다 — task-update 가 회로 차단을 여는 유일한 길이라 그렇게 만들어져 있다. 실패 횟수를
+   *  건드리지 않고 상태만 되돌리려면 명령 표면을 나눠야 하고, 이 슬라이스는 그것을 하지 않는다. */
+  const restartTask = async (taskId: string): Promise<void> => {
+    setBusy(taskId)
+    try {
+      const reply = await window.api.orch.command(projectPath, 'task-update', {
+        id: taskId,
+        status: 'ready'
+      })
+      if (reply.status >= 400) toast.error(t('jobs.node.failed'))
+    } catch {
+      toast.error(t('jobs.node.failed'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  /** 물어보기의 제출. asking 이 성공했을 때만 null 로 돌아간다 — NewTaskModal.onCreated 와 같은
+   *  관례로, 실패하면 폼(과 이미 쓴 질문)이 그대로 남아야 사람이 다시 쓰지 않아도 된다. 이
+   *  실패만 인라인(gateError)이다 — 이 액션에는 폼이 있고, 나머지 셋에는 없다. */
+  const askQuestion = async (): Promise<void> => {
+    const taskId = asking
+    const trimmed = question.trim()
+    if (taskId === null || !trimmed) return
+    setBusy(taskId)
+    setGateError(null)
+    try {
+      const reply = await window.api.orch.command(projectPath, 'gate-create', {
+        task: taskId,
+        question: trimmed
+      })
+      if (reply.status >= 400) {
+        setGateError(t('jobs.node.failed'))
+        return
+      }
+      setAsking(null)
+      setQuestion('')
+    } catch {
+      setGateError(t('jobs.node.failed'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  /** 물어보기 폼을 닫는다(취소든 배경 클릭이든) — busy 인 동안은 막는다. NewTaskModal.tsx:69 의
+   *  `!busy && onClose()` 와 같은 관례다: 제출이 도는 동안 닫으면 그 요청이 끝났을 때 아무도
+   *  결과를 보지 못한다. */
+  const cancelAsk = (): void => {
+    if (busy !== null) return
+    setAsking(null)
+    setQuestion('')
+  }
+
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={() => !formOpen && onClose()}>
       <div className="modal run-detail" onClick={(e) => e.stopPropagation()}>
         {/* 머리말이 없다 — Run 의 목표가 제목이고, 그 옆의 아이콘과 숫자가 상태를 말한다 */}
         <div className="detail-head">
@@ -159,118 +433,204 @@ export function RunDetail({
             넘치고 닫기 버튼이 밀려난다. 이 저장소가 실제로 그 결함을 냈던 자리다 */}
         <div className="detail-body">
           <div className="detail-graph">
+            {/* 짓는 동안(또는 질문을 쓰는 동안)에는 치운다 — Task 짓기 중이라면 다시 누르면
+                setPicking([]) 이 또 불려 이미 골라 둔 의존을 버리게 되고, 질문을 쓰는 중이라면
+                누르면 아래 칸이 통째로 NewTaskModal 로 바뀌어 아직 안 보낸 질문을 잃는다. 이
+                버튼이 여는 것은 새 창이 아니라 아래 칸(.detail-events)의 두 번째 모습이다: 그래프는
+                그대로 있고 클릭의 뜻만 바뀐다. */}
+            {!formOpen && (
+              <div className="detail-graph-head">
+                <button className="jobs-new" onClick={() => setPicking([])}>
+                  + {t('jobs.task.new')}
+                </button>
+              </div>
+            )}
             <Graph
               tasks={tasks}
               layers={detail?.layers ?? []}
               deps={detail?.deps ?? {}}
               cyclic={detail?.cyclic ?? []}
               selected={selectedTask?.id}
-              onSelect={(id) => setSelected((prev) => (prev === id ? null : id))}
+              picking={picking}
+              onSelect={onNodeClick}
               canOpenSession={canOpenSession}
               onOpenSession={onOpenSession}
+              canManualStart={canManualStart}
+              formOpen={formOpen}
+              onStart={(taskId) => void startTask(taskId)}
+              onStop={(taskId) => void stopTask(taskId)}
+              onGate={(taskId) => {
+                setAsking(taskId)
+                setQuestion('')
+                setGateError(null)
+              }}
+              onRestart={(taskId) => void restartTask(taskId)}
             />
           </div>
           <div className="detail-events">
-            {selectedTask && (
-              <div className="detail-filter">
-                <TaskIcon status={selectedTask.status} label={t(STATE_KEY[selectedTask.status])} />
-                <b>{selectedTask.title}</b>
-                <button
-                  className="detail-clear"
-                  title={t('jobs.detail.clearFilter')}
-                  aria-label={t('jobs.detail.clearFilter')}
-                  onClick={() => setSelected(null)}
-                >
-                  ✕
-                </button>
-              </div>
-            )}
-            <div className="detail-list">
-              {events !== null && shown.length === 0 && (
-                <p className="modal-hint">{t('jobs.timeline.empty')}</p>
-              )}
-              {shown.map((e) => {
-                const key = keyOf(e)
-                const expanded = open.has(key)
-                const sessionId = e.sessionId && canOpenSession(e.sessionId) ? e.sessionId : undefined
-                // dispatch-started 의 요약은 provider 이름 그대로다(timeline.ts) — 배지가 이미 그것을
-                // 적고 있으므로 아래 줄을 비운다
-                const summary = e.kind === 'dispatch-started' ? '' : e.summary
-                return (
-                  <div key={key} className="detail-event">
-                    <div
-                      className={`detail-ev${e.body ? ' has-body' : ''}`}
-                      onClick={e.body ? () => toggle(key) : undefined}
-                    >
-                      <span className="detail-at">{timeOf(e.at)}</span>
-                      <span className="detail-mark">{markOf(e)}</span>
-                      <div className="detail-ev-main">
-                        <div className="detail-eh">
-                          <b>
-                            {e.kind === 'message'
-                              ? t(MSG_LABEL[e.messageType ?? 'status'])
-                              : t(KIND_LABEL[e.kind])}
-                          </b>
-                          {e.provider && <span className="detail-chip provider">{e.provider}</span>}
-                          {e.retry && (
-                            <span className="detail-chip retry">{t('jobs.timeline.retry')}</span>
-                          )}
-                          {e.review && (
-                            <span className="detail-chip review">{t('jobs.event.review')}</span>
-                          )}
-                          {/* 결과가 실린 메시지에만 나온다. **이 줄이 워커가 실패를 보고했다는 사실의
-                              유일한 기록이다** — applyWorkerDone 은 두 번째 메시지를 만들지 않고,
-                              타임라인에는 Task 상태 변화 이벤트가 없다 */}
-                          {e.outcome && (
-                            <span className={`detail-outcome o-${e.outcome}`}>
-                              {t(
-                                e.outcome === 'succeeded'
-                                  ? 'jobs.event.succeeded'
-                                  : 'jobs.event.outcomeFailed'
-                              )}
-                            </span>
-                          )}
-                          {/* 어느 Task 의 일인가. 걸러 놓은 동안에는 위의 필터 줄이 이미 같은 말을
-                              하고 있어서 적지 않는다 */}
-                          {!selectedTask && e.taskTitle && (
-                            <span className="detail-ev-task" title={e.taskTitle}>
-                              {e.taskTitle}
-                            </span>
-                          )}
-                          {sessionId && (
-                            <button
-                              className="detail-jump"
-                              title={t('jobs.timeline.openSession')}
-                              aria-label={t('jobs.timeline.openSession')}
-                              onClick={(ev) => {
-                                ev.stopPropagation() // 펼치기와 겹치지 않게 한다
-                                onOpenSession(sessionId)
-                              }}
-                            >
-                              ↗
-                            </button>
-                          )}
-                        </div>
-                        {summary && (
-                          <div className="detail-summary" title={summary}>
-                            {summary}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                    {expanded && e.body && <pre className="detail-ev-body">{e.body}</pre>}
+            {picking !== null ? (
+              <NewTaskModal
+                projectPath={projectPath}
+                runId={runId}
+                deps={picking}
+                runConfigs={runConfigs}
+                onClose={() => setPicking(null)}
+                onCreated={() => setPicking(null)}
+              />
+            ) : asking !== null ? (
+              <>
+                {/* .detail-filter/.detail-clear 를 NewTaskModal 과 같이 빌린다 — 무엇을 하고 있는지
+                    보여 주던 자리를 그대로 쓴다 */}
+                <div className="detail-filter">
+                  <b>{t('jobs.node.gate')}</b>
+                  <button
+                    className="detail-clear"
+                    title={t('common.cancel')}
+                    aria-label={t('common.cancel')}
+                    onClick={cancelAsk}
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="detail-task-fields">
+                  <div className="field">
+                    <label>{t('jobs.node.gateQuestion')}</label>
+                    <textarea
+                      rows={4}
+                      value={question}
+                      onChange={(e) => setQuestion(e.target.value)}
+                      autoFocus
+                    />
                   </div>
-                )
-              })}
-            </div>
-            {/* 가려진 개수. 이것이 없으면 걸러 놓은 화면과 이벤트가 원래 적은 Run 이 같아 보인다 */}
-            {selectedTask && hidden > 0 && (
-              <p className="detail-hidden">{t('jobs.detail.hidden', { count: hidden })}</p>
+                  {/* NewTaskModal 과 같은 자리 — 이 폼에만 있는 실패는 이 폼 안에서 죽는다 */}
+                  {gateError && <p className="warn">{gateError}</p>}
+                </div>
+                <div className="row right">
+                  <button onClick={cancelAsk} disabled={busy !== null}>
+                    {t('common.cancel')}
+                  </button>
+                  <button
+                    className="primary"
+                    disabled={busy !== null || !question.trim()}
+                    onClick={() => void askQuestion()}
+                  >
+                    {t('jobs.node.gate')}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                {selectedTask && (
+                  <div className="detail-filter">
+                    <TaskIcon status={selectedTask.status} label={t(STATE_KEY[selectedTask.status])} />
+                    <b>{selectedTask.title}</b>
+                    <button
+                      className="detail-clear"
+                      title={t('jobs.detail.clearFilter')}
+                      aria-label={t('jobs.detail.clearFilter')}
+                      onClick={() => setSelected(null)}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
+                <div className="detail-list">
+                  {events !== null && shown.length === 0 && (
+                    <p className="modal-hint">{t('jobs.timeline.empty')}</p>
+                  )}
+                  {shown.map((e) => {
+                    const key = keyOf(e)
+                    const expanded = open.has(key)
+                    const sessionId =
+                      e.sessionId && canOpenSession(e.sessionId) ? e.sessionId : undefined
+                    // dispatch-started 의 요약은 provider 이름 그대로다(timeline.ts) — 배지가 이미
+                    // 그것을 적고 있으므로 아래 줄을 비운다
+                    const summary = e.kind === 'dispatch-started' ? '' : e.summary
+                    return (
+                      <div key={key} className="detail-event">
+                        <div
+                          className={`detail-ev${e.body ? ' has-body' : ''}`}
+                          onClick={e.body ? () => toggle(key) : undefined}
+                        >
+                          <span className="detail-at">{timeOf(e.at)}</span>
+                          <span className="detail-mark">{markOf(e)}</span>
+                          <div className="detail-ev-main">
+                            <div className="detail-eh">
+                              <b>
+                                {e.kind === 'message'
+                                  ? t(MSG_LABEL[e.messageType ?? 'status'])
+                                  : t(KIND_LABEL[e.kind])}
+                              </b>
+                              {e.provider && (
+                                <span className="detail-chip provider">{e.provider}</span>
+                              )}
+                              {e.retry && (
+                                <span className="detail-chip retry">{t('jobs.timeline.retry')}</span>
+                              )}
+                              {e.review && (
+                                <span className="detail-chip review">{t('jobs.event.review')}</span>
+                              )}
+                              {/* 결과가 실린 메시지에만 나온다. **이 줄이 워커가 실패를 보고했다는
+                                  사실의 유일한 기록이다** — applyWorkerDone 은 두 번째 메시지를
+                                  만들지 않고, 타임라인에는 Task 상태 변화 이벤트가 없다 */}
+                              {e.outcome && (
+                                <span className={`detail-outcome o-${e.outcome}`}>
+                                  {t(
+                                    e.outcome === 'succeeded'
+                                      ? 'jobs.event.succeeded'
+                                      : 'jobs.event.outcomeFailed'
+                                  )}
+                                </span>
+                              )}
+                              {/* 어느 Task 의 일인가. 걸러 놓은 동안에는 위의 필터 줄이 이미 같은
+                                  말을 하고 있어서 적지 않는다 */}
+                              {!selectedTask && e.taskTitle && (
+                                <span className="detail-ev-task" title={e.taskTitle}>
+                                  {e.taskTitle}
+                                </span>
+                              )}
+                              {sessionId && (
+                                <button
+                                  className="detail-jump"
+                                  title={t('jobs.timeline.openSession')}
+                                  aria-label={t('jobs.timeline.openSession')}
+                                  onClick={(ev) => {
+                                    ev.stopPropagation() // 펼치기와 겹치지 않게 한다
+                                    onOpenSession(sessionId)
+                                  }}
+                                >
+                                  ↗
+                                </button>
+                              )}
+                            </div>
+                            {summary && (
+                              <div className="detail-summary" title={summary}>
+                                {summary}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {expanded && e.body && <pre className="detail-ev-body">{e.body}</pre>}
+                      </div>
+                    )
+                  })}
+                </div>
+                {/* 가려진 개수. 이것이 없으면 걸러 놓은 화면과 이벤트가 원래 적은 Run 이 같아
+                    보인다 */}
+                {selectedTask && hidden > 0 && (
+                  <p className="detail-hidden">{t('jobs.detail.hidden', { count: hidden })}</p>
+                )}
+              </>
             )}
           </div>
         </div>
         <div className="modal-actions">
-          <button onClick={onClose}>{t('jobs.timeline.close')}</button>
+          {/* 배경 클릭과 같은 이유로 막는다 — formOpen 인 동안 이 버튼도 창을 닫을 수 있다면
+              배경만 막는 것은 반쪽짜리 수정이다(같은 문제를 여는 문 하나를 남겨 둔 것일 뿐이다).
+              NewRunModal 의 취소 버튼(disabled={busy})과 같은 관례다. */}
+          <button onClick={onClose} disabled={formOpen}>
+            {t('jobs.timeline.close')}
+          </button>
         </div>
       </div>
     </div>
@@ -290,18 +650,44 @@ function Graph({
   deps,
   cyclic,
   selected,
+  picking,
   onSelect,
   canOpenSession,
-  onOpenSession
+  onOpenSession,
+  canManualStart,
+  formOpen,
+  onStart,
+  onStop,
+  onGate,
+  onRestart
 }: {
   tasks: JobTask[]
   layers: string[][]
   deps: Record<string, string[]>
   cyclic: string[]
   selected: string | undefined
+  /** null 이면 평소(필터 모드) — 배열이면 그 배열에 든 것이 지금 고른 의존이다. onSelect 뒤에서
+   *  RunDetail 이 이미 모드를 갈랐으므로(onNodeClick) 여기서는 어느 쪽 뜻인지 몰라도 그리기만 하면
+   *  된다: 이 컴포넌트는 판단하지 않는다는 파일 머리말의 규칙과 같다. */
+  picking: string[] | null
   onSelect: (taskId: string) => void
   canOpenSession: (sessionId: string) => boolean
   onOpenSession: (sessionId: string) => void
+  /** 띄우기 버튼을 보일지 — 이 Run 의 동시 실행 한도가 1 이하이고 **그리고** provider 가 있을
+   *  때만이다(RunDetail.canManualStart 의 주석에 둘 다, 각각 왜인지 적혀 있다). 판단은
+   *  RunDetail 이 하고 여기는 결과만 받는다 — 이 컴포넌트는 판단하지 않는다는 파일 머리말의
+   *  규칙과 같다. */
+  canManualStart: boolean
+  /** Task 짓기 폼이 열려 있거나, 질문을 쓰는 중이거나, 명령이 도는 중이다(RunDetail.formOpen).
+   *  참이면 노드의 버튼(↗ 포함)을 전부 숨긴다 — 다른 버튼을 눌러 지금 하는 일을 조용히 버리지
+   *  못하게 한다. */
+  formOpen: boolean
+  onStart: (taskId: string) => void
+  onStop: (taskId: string) => void
+  /** 물어보기 버튼을 누른 결과 — 명령을 바로 보내지 않고 질문을 쓸 폼을 연다(RunDetail 이 asking
+   *  을 세운다) */
+  onGate: (taskId: string) => void
+  onRestart: (taskId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const byId = new Map(tasks.map((tk) => [tk.id, tk]))
@@ -320,6 +706,20 @@ function Graph({
 
   const node = (task: JobTask, pos?: GraphBox): React.JSX.Element => {
     const sessionId = task.sessionId && canOpenSession(task.sessionId) ? task.sessionId : undefined
+    // Task 를 짓는 동안 이 노드가 지금 고른 의존인지. **createTask 는 새 Task 가 이미 있는 어느
+    // Task 를 가리켜도 거절하지 않는다**(core/orchestration/state.ts) — 존재 확인만 하고 순환은
+    // 보지 않는데, 갓 만드는 Task 는 아직 아무도 그것을 가리키지 않으므로 자신을 향한 경로가 생길
+    // 수가 없다(순환이 되려면 먼저 무언가 이 새 Task 를 가리켜야 한다). 그래서 순환 묶음(cycle,
+    // 아래) 안의 Task 를 고르는 것도 막지 않는다 — 그 자리에 자리가 없는 것은 표시상의 문제일 뿐,
+    // 의존으로서는 다른 Task 와 다르지 않다.
+    const picked = picking?.includes(task.id) ?? false
+    // 열린 Dispatch 가 있는지는 provider(그리고 startedAt)의 유무로만 안다 — 스냅샷에 Dispatch
+    // 배열 자체가 없으므로 이것이 유일한 신호다(view.ts 의 jobTaskOf 주석과 brief 의 Step 2).
+    const dispatchOpen = task.provider !== undefined
+    const showStart = canManualStart && (task.status === 'ready' || task.status === 'pending')
+    const showGate = task.status === 'ready' || task.status === 'pending'
+    const showStop = task.status === 'dispatched' && dispatchOpen
+    const showRestart = task.status === 'failed' || (task.status === 'dispatched' && !dispatchOpen)
     return (
       <div
         key={task.id}
@@ -335,20 +735,96 @@ function Graph({
       >
         <TaskIcon status={task.status} label={t(STATE_KEY[task.status])} />
         <span className="detail-node-title">{task.title}</span>
-        {/* 세션이 없으면 그리지 않는다 — 눌러도 아무 일이 없는 자리를 만들지 않기 위해서다.
-            stopPropagation 이 필수다: 이 버튼은 필터를 여는 노드 위에 얹혀 있다 */}
-        {sessionId && (
-          <button
-            className="detail-node-jump"
-            title={t('jobs.timeline.openSession')}
-            aria-label={t('jobs.timeline.openSession')}
-            onClick={(ev) => {
-              ev.stopPropagation()
-              onOpenSession(sessionId)
-            }}
-          >
-            ↗
-          </button>
+        {/* 고른 의존 표시. 필터의 링(위의 ' on', .detail-node.on)과 다른 채널이다 — 같은 모양으로
+            두 뜻을 말하지 않으려고 링이 아니라 글리프를 하나 더 붙인다.
+            **완료(completed) 상태 글리프를 빌리지 않는다** — TaskIcon status="completed" 를 쓰면
+            completed 인 Task 는 자기 상태 글리프와 이 표시가 같은 자리에 나란히 서서 픽셀까지
+            같은 모양이 되고, 위치만으로 둘을 구별해야 한다("같은 모양으로 두 뜻을 말하지 않는다"가
+            글리프 대 글리프로 깨진다). 그래서 상태 팔레트가 아닌 accent(그래프 필터 링과 같은
+            청록)로, 텍스트 글리프(✓)로 적는다 — 어느 상태의 노드 위에 있어도 그 상태의 글리프와
+            겹치지 않는다. aria-hidden 인 이유는 그대로다: 이 Task 의 상태가 completed 라는 말이
+            아니므로 스크린 리더에는 읽히지 않는다. */}
+        {picked && (
+          <span className="detail-node-picked" aria-hidden="true">
+            ✓
+          </span>
+        )}
+        {/* 세션 열기·띄우기·멈추기·물어보기·다시 띄우기 — 노드 안의 버튼들. formOpen 인 동안은
+            전부 숨긴다: Task 짓기·질문 쓰기 폼이 열려 있거나 다른 명령이 도는 동안 이 버튼 중
+            하나를 누르면 그 폼이나 그 명령의 결과를 조용히 버리게 된다(RunDetail.formOpen 의
+            주석). 세션 열기(↗)는 원래 있던 버튼이지만 이 규칙은 새로 더한 네 버튼과 똑같이
+            적용한다 — 노드 버튼이 하나든 다섯이든 "폼이 열려 있는 동안 무엇을 하는가"의 답은
+            하나여야 한다.
+            각 버튼은 onClick 에서 stopPropagation 을 부른다 — 노드 자신의 onClick(필터 또는
+            의존 고르기)으로 새지 않게 한다. */}
+        {!formOpen && (
+          <>
+            {sessionId && (
+              <button
+                className="detail-node-jump"
+                title={t('jobs.timeline.openSession')}
+                aria-label={t('jobs.timeline.openSession')}
+                onClick={(ev) => {
+                  ev.stopPropagation()
+                  onOpenSession(sessionId)
+                }}
+              >
+                ↗
+              </button>
+            )}
+            {showStart && (
+              <button
+                className="detail-node-btn"
+                title={t('jobs.node.start')}
+                aria-label={t('jobs.node.start')}
+                onClick={(ev) => {
+                  ev.stopPropagation()
+                  onStart(task.id)
+                }}
+              >
+                ▶
+              </button>
+            )}
+            {showGate && (
+              <button
+                className="detail-node-btn"
+                title={t('jobs.node.gate')}
+                aria-label={t('jobs.node.gate')}
+                onClick={(ev) => {
+                  ev.stopPropagation()
+                  onGate(task.id)
+                }}
+              >
+                ?
+              </button>
+            )}
+            {showStop && (
+              <button
+                className="detail-node-btn"
+                title={t('jobs.node.stop')}
+                aria-label={t('jobs.node.stop')}
+                onClick={(ev) => {
+                  ev.stopPropagation()
+                  onStop(task.id)
+                }}
+              >
+                ⏹
+              </button>
+            )}
+            {showRestart && (
+              <button
+                className="detail-node-btn"
+                title={t('jobs.node.restart')}
+                aria-label={t('jobs.node.restart')}
+                onClick={(ev) => {
+                  ev.stopPropagation()
+                  onRestart(task.id)
+                }}
+              >
+                ▶
+              </button>
+            )}
+          </>
         )}
       </div>
     )

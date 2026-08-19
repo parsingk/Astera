@@ -76,6 +76,31 @@ describe('handleCommand — 기본', () => {
     const r = await call(makeDeps(), 'run-create', {})
     expect(r.status).toBe(400)
   })
+  it('run-create 가 provider·concurrency·auto 를 Run 에 싣는다', async () => {
+    const r = await call(makeDeps(), 'run-create', {
+      objective: '무언가',
+      cwd: '/p',
+      provider: 'claude',
+      concurrency: 5,
+      auto: true
+    })
+    expect(r.status).toBe(200)
+    expect(r.body).toMatchObject({ provider: 'claude', concurrency: 5, autoDispatch: true })
+  })
+  it('run-create 에 셋이 없으면 Run 에도 없다 — 옛 동작이 그대로다', async () => {
+    const r = await call(makeDeps(), 'run-create', { objective: '무언가', cwd: '/p' })
+    expect(r.body).not.toHaveProperty('provider')
+    expect(r.body).not.toHaveProperty('concurrency')
+    expect(r.body).not.toHaveProperty('autoDispatch')
+  })
+  it('concurrency 가 1 미만이거나 정수가 아니면 거절한다', async () => {
+    const r = await call(makeDeps(), 'run-create', { objective: 'x', cwd: '/p', concurrency: 0 })
+    expect(r.status).toBe(400)
+  })
+  it('provider 가 claude|codex 가 아니면 거절한다', async () => {
+    const r = await call(makeDeps(), 'run-create', { objective: 'x', cwd: '/p', provider: 'gpt' })
+    expect(r.status).toBe(400)
+  })
 })
 
 describe('handleCommand — 역할 인가', () => {

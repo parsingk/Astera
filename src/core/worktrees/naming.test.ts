@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import path from 'node:path'
 import { absPath } from '../testPaths'
 import {
-  slugify, autoName, branchNameFor, candidateName, repoDirName, worktreePathFor, MAX_SUFFIX_ATTEMPTS
+  slugify, autoName, branchNameFor, candidateName, repoDirName, worktreePathFor, nameForTask,
+  MAX_SUFFIX_ATTEMPTS
 } from './naming'
 
 describe('slugify', () => {
@@ -29,6 +30,16 @@ describe('autoName', () => {
     const b = autoName(() => 0.999)
     expect(a).not.toBe(b)
     expect(slugify(a)).toBe(a)
+  })
+})
+
+describe('nameForTask', () => {
+  it('제목이 slugify 가능하면 슬러그를 쓴다', () => {
+    expect(nameForTask({ id: 'tsk_1', title: '로그인 수정' })).toBe('로그인-수정')
+  })
+  it('제목에 쓸 문자가 전혀 없으면(slugify가 던지면) Task id로 대체한다', () => {
+    expect(nameForTask({ id: 'tsk_1', title: '!!!' })).toBe('tsk_1')
+    expect(nameForTask({ id: 'tsk_1', title: '   ' })).toBe('tsk_1')
   })
 })
 

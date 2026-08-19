@@ -732,7 +732,9 @@ export const ko = {
   // 남도록 강제한다.
   'jobs.rail.open': 'Jobs',
   'jobs.empty': '아직 시작한 작업이 없습니다',
-  'jobs.empty.hint': '코디네이터 세션에서 작업을 만들면 여기에 나타납니다',
+  // 사이드바에 '+ 새 작업' 버튼이 생긴 뒤로도 코디네이터 세션은 여전히 작업이 생기는 또 다른 경로다
+  // — 이 문장은 둘 중 하나를 지우지 않고 함께 말한다.
+  'jobs.empty.hint': '새 작업은 여기서 바로 만들 수 있습니다 — 코디네이터 세션에서 만든 작업도 여기에 나타납니다',
   // 여덟 상태의 툴팁 — JobIcons.tsx 의 글리프가 달고 다닌다. 사이드바가 상태를 말로 적지 않게 된
   // 뒤로 이 문구들은 상시로 보이지 않는다: 아이콘을 처음 보는 사람이 배우는 자리다.
   // pending 과 blocked 를 다르게 적는 것이 특히 중요하다 — 앞은 의존이, 뒤는 사람이 막고 있다
@@ -783,5 +785,41 @@ export const ko = {
   'jobs.detail.clearFilter': '필터 해제',
   // 선 색의 뜻. 아이콘과 달리 선에는 툴팁을 달 곳이 없어 그래프 아래에 두 줄로 적는다
   'jobs.detail.edgeWaiting': '기다리는 중인 의존',
-  'jobs.detail.edgeResolved': '이미 풀린 의존'
+  'jobs.detail.edgeResolved': '이미 풀린 의존',
+  // NewRunModal.tsx — 사이드바의 '+ 새 작업'이 여는 Run 생성 폼의 문구. jobs.new.concurrency 는
+  // 프로젝트 전체가 아니라 이 Run 하나가 동시에 열어 둘 워커 수의 상한이다 — 다른 동시 실행
+  // 설정과 자리가 다르므로 섞어 쓰면 안 된다.
+  'jobs.new.open': '새 작업',
+  'jobs.new.title': '새 작업 만들기',
+  'jobs.new.objective': '목표',
+  'jobs.new.provider': '에이전트',
+  'jobs.new.concurrency': '동시 실행',
+  'jobs.new.concurrencyHint': '이 작업이 한 번에 열어 둘 워커 수',
+  'jobs.new.create': '만들기',
+  'jobs.new.failed': '작업을 만들지 못했습니다',
+  // NewTaskModal.tsx — Task 를 짜는 동안 상세 창의 아래 칸(.detail-events)이 바뀌는 폼. deps 는
+  // 이 폼이 아니라 그래프가 쥐고 있다(고르는 자리가 그래프이므로) — 그래서 이 카탈로그에는 deps
+  // 자체의 값이 아니라 그것을 고르라고 안내하는 문구(depsHint)만 있다.
+  'jobs.task.new': 'Task 추가',
+  'jobs.task.title': '제목',
+  'jobs.task.spec': '지시',
+  'jobs.task.deps': '먼저 끝나야 하는 것',
+  'jobs.task.depsHint': '위 그래프에서 노드를 눌러 고릅니다',
+  'jobs.task.validate': '완료를 검증할 실행 구성',
+  'jobs.task.validateNone': '검증 없음',
+  'jobs.task.review': '다른 에이전트가 검토',
+  'jobs.task.create': '추가',
+  'jobs.task.failed': 'Task 를 만들지 못했습니다',
+  // RunDetail.tsx — 그래프 노드 위의 버튼. 띄우기와 다시 띄우기는 같은 글리프(▶)를 쓴다 — 전이표상
+  // 한 노드에 둘이 함께 나오는 일이 없어(서로 배타적인 상태에서만 보인다) 뜻이 섞이지 않는다.
+  // jobs.node.failed 는 이 네 동작(띄우기·멈추기·물어보기·다시 띄우기)이 함께 쓰는 하나의 실패
+  // 안내다 — 이 버튼들에는 NewTaskModal/NewRunModal 같은 자기 폼이 없어(물어보기만 예외) 동작별로
+  // 문구를 나눌 자리가 없다. 계정을 못 찾은 경우는 새 키를 만들지 않고 이미 있는
+  // session.resume.noLoggedInAccounts 를 그대로 쓴다.
+  'jobs.node.start': '띄우기',
+  'jobs.node.stop': '멈추기',
+  'jobs.node.restart': '다시 띄우기',
+  'jobs.node.gate': '물어보기',
+  'jobs.node.gateQuestion': '무엇을 물어볼까요',
+  'jobs.node.failed': '이 동작을 하지 못했습니다'
 } as const

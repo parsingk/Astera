@@ -118,6 +118,26 @@ describe('buildSpecFile', () => {
     const out = buildSpecFile({ title: 'T', spec: 'S', taskId: 'tsk_1', dispatchId: 'dsp_1' })
     expect(out).toContain('files-modified')
   })
+  // committing 이 워크트리 워커에만 켜진다(coordinator.ts의 startWorker가 worktree !== 'current'로
+  // 유도한다) — 워크트리는 병합 대상이라 커밋이 없으면 그 일이 다른 결과와 합쳐질 길이 없다.
+  it('committing 이 참이면 커밋 의무 절을 보고 의무보다 앞에 넣는다', () => {
+    const out = buildSpecFile({ title: 'T', spec: 'S', taskId: 'tsk_1', dispatchId: 'dsp_1', committing: true })
+    expect(out).toContain('git add')
+    expect(out).toContain('git commit')
+    expect(out.indexOf('git commit')).toBeLessThan(out.indexOf('Reporting obligation'))
+    // 커밋 의무가 보고 의무를 밀어내지 않았다 — 두 절 모두 있어야 한다
+    expect(out).toContain('worker_done')
+  })
+  it('committing 이 없거나 거짓이면 커밋 의무 절이 없다 — 프로젝트 폴더 워커에는 해당 없다', () => {
+    const withoutFlag = buildSpecFile({ title: 'T', spec: 'S', taskId: 'tsk_1', dispatchId: 'dsp_1' })
+    const explicitFalse = buildSpecFile({
+      title: 'T', spec: 'S', taskId: 'tsk_1', dispatchId: 'dsp_1', committing: false
+    })
+    for (const out of [withoutFlag, explicitFalse]) {
+      expect(out).not.toContain('git commit')
+      expect(out).toContain('worker_done')
+    }
+  })
 })
 
 describe('buildReviewSpecFile', () => {
@@ -269,6 +289,58 @@ describe('OrchCoordinator.startWorker', () => {
     const deps = { ...makeDeps(), accountProvider: () => 'claude' as const }
     const co = new OrchCoordinator(deps)
     await expect(co.startWorker({ ...baseArgs(), runCwd: dir })).rejects.toThrow(/provider/)
+  })
+})
+
+// committing은 a.worktree가 아니라 확정된 cwd에서 유도한다(coordinator.ts의 startWorker 안,
+// buildSpecFile 호출 앞 — cwd !== a.runCwd, isSamePath로 비교). a.worktree로 유도했다면 이
+// describe의 마지막 두 테스트가 실패했을 것이다 — --terminal 재사용은 cwd를 a.terminalCwd로
+// 정하면서 a.worktree를 완전히 무시하므로(위 cwd 대입문 참고), 워크트리 세션을 --worktree를
+// 다시 주지 않고 재사용하면(그것이 server.ts:405의 기본값 'current' 때문에 자연스러운 호출
+// 모양이다) a.worktree만 보는 유도는 워크트리에서 도는 워커의 커밋 의무를 빠뜨린다 — 이 Task가
+// 막으려던 실패 모드 그대로다.
+describe('OrchCoordinator.startWorker — committing은 확정된 cwd에서 유도한다', () => {
+  it("worktree: 'current'면 커밋 의무 절이 없다", async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    const r = await co.startWorker({ ...baseArgs(), runCwd: dir, worktree: 'current' })
+    expect(await fs.readFile(r.specPath, 'utf8')).not.toContain('git commit')
+  })
+  it("worktree: 'new'면 커밋 의무 절이 있다", async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    const r = await co.startWorker({ ...baseArgs(), runCwd: dir, worktree: 'new', name: 'auth' })
+    expect(await fs.readFile(r.specPath, 'utf8')).toContain('git commit')
+  })
+  it('명시 경로 worktree(프로젝트 폴더가 아닌 경로)면 커밋 의무 절이 있다', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    const sub = path.join(dir, 'repo')
+    await fs.mkdir(sub)
+    const r = await co.startWorker({ ...baseArgs(), runCwd: dir, worktree: sub })
+    expect(await fs.readFile(r.specPath, 'utf8')).toContain('git commit')
+  })
+  it('--terminal 재사용이고 그 세션의 cwd가 워크트리(runCwd와 다름)면, --worktree를 다시 주지 않아도 커밋 의무가 있다', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    const r = await co.startWorker({
+      ...baseArgs(), // worktree: 'current' 그대로 — 재사용 호출이 자연스럽게 이 모양이다
+      runCwd: dir,
+      terminal: 'sess1',
+      terminalCwd: path.join(dir, 'wt-existing') // runCwd와 다른 폴더
+    })
+    expect(await fs.readFile(r.specPath, 'utf8')).toContain('git commit')
+  })
+  it('--terminal 재사용이고 그 세션의 cwd가 runCwd와 같으면 커밋 의무가 없다', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    const r = await co.startWorker({
+      ...baseArgs(),
+      runCwd: dir,
+      terminal: 'sess1',
+      terminalCwd: dir
+    })
+    expect(await fs.readFile(r.specPath, 'utf8')).not.toContain('git commit')
   })
 })
 

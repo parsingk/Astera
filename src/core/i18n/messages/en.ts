@@ -614,7 +614,9 @@ export const en: Record<keyof typeof ko, string> = {
   // JobsView.tsx, App.tsx — the read-only Jobs sidebar (the orchestration Run/Task list)
   'jobs.rail.open': 'Jobs',
   'jobs.empty': 'No jobs started yet',
-  'jobs.empty.hint': 'Jobs created from a coordinator session will appear here',
+  // A coordinator session is still one way a job appears, even with the sidebar's "+ New job" button —
+  // this says both rather than dropping one.
+  'jobs.empty.hint': 'Create one right here, or start it from a coordinator session — either way it lands here',
   // Tooltips for the eight state glyphs (JobIcons.tsx). The sidebar no longer spells a state out, so
   // these are not on screen all the time — they are where someone meeting the icons learns them.
   // pending and blocked have to read differently: a dependency holds the first, a person the second.
@@ -662,5 +664,36 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.detail.clearFilter': 'Clear filter',
   // What an edge colour means. Unlike an icon, a line has nowhere to hang a tooltip
   'jobs.detail.edgeWaiting': 'waiting on this dependency',
-  'jobs.detail.edgeResolved': 'dependency already met'
+  'jobs.detail.edgeResolved': 'dependency already met',
+  // NewRunModal.tsx — the form the sidebar's "+ New job" button opens. jobs.new.concurrency is a
+  // per-Run ceiling, not a project-wide one — how many workers this particular Run keeps open at
+  // once, a different setting from any other concurrency knob in the app.
+  'jobs.new.open': 'New job',
+  'jobs.new.title': 'Create a job',
+  'jobs.new.objective': 'Objective',
+  'jobs.new.provider': 'Agent',
+  'jobs.new.concurrency': 'Run at once',
+  'jobs.new.concurrencyHint': 'How many workers this job keeps open at once',
+  'jobs.new.create': 'Create',
+  'jobs.new.failed': 'Could not create the job',
+  // NewTaskModal.tsx — the form RunDetail's bottom pane (.detail-events) turns into while a Task is
+  // being authored. deps belongs to the graph, not this form (the graph is where dependencies get
+  // picked) — that is why this catalog only has the hint text pointing at the graph, not the deps
+  // values themselves.
+  'jobs.task.new': 'Add task',
+  'jobs.task.title': 'Title',
+  'jobs.task.spec': 'Instructions',
+  'jobs.task.deps': 'Must finish first',
+  'jobs.task.depsHint': 'Pick nodes in the graph above',
+  'jobs.task.validate': 'Run configuration that proves it done',
+  'jobs.task.validateNone': 'No validation',
+  'jobs.task.review': 'Review by another agent',
+  'jobs.task.create': 'Add',
+  'jobs.task.failed': 'Could not create the task',
+  'jobs.node.start': 'Start',
+  'jobs.node.stop': 'Stop',
+  'jobs.node.restart': 'Start again',
+  'jobs.node.gate': 'Ask a person',
+  'jobs.node.gateQuestion': 'What is the question',
+  'jobs.node.failed': 'Could not do that'
 }

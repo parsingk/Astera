@@ -885,6 +885,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    스크롤하는 것이 이 칸이 아니라 안쪽인 이유는 범례다 — 범례는 이 칸의 왼쪽 아래에 붙박여 있어야
    하고, 같이 스크롤되면 선의 색을 설명하는 유일한 글이 밀려 사라진다(선에는 툴팁을 달 곳이 없다) */
 .detail-graph { min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; padding-bottom: 14px; border-bottom: 1px solid var(--line-soft); }
+/* Task 짓기 시작 버튼의 줄. flex: none — 그래프를 그리는 .detail-scroll 이 flex: 1 로 남는 높이를
+   다 가져가야 하므로, 이 줄이 늘어나면 안 된다. 짓는 동안에는 이 줄 자체가 그려지지 않는다
+   (RunDetail.tsx) — .jobs-new 의 사이드바용 여백(margin: 10px 10px 4px)은 이 자리에 안 맞아
+   지운다: 이 줄의 margin-bottom 이 이미 그래프와 사이를 두고 있다 */
+.detail-graph-head { flex: none; display: flex; justify-content: flex-end; margin-bottom: 6px; }
+.detail-graph-head .jobs-new { margin: 0; }
 /* safe center — 그림이 칸보다 작으면 가운데에 놓이고, 커지면 왼쪽 위부터 놓인다. safe 가 없으면
    넘칠 때도 가운데로 밀어붙여 **위쪽과 왼쪽이 스크롤로 닿지 않는 자리**로 잘려 나간다 */
 .detail-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; display: grid; place-content: safe center; }
@@ -909,8 +915,15 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .detail-node--ready { background: var(--bg); }
 .detail-node--completed { background: var(--bg); color: var(--text-faint); }
 .detail-node-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.detail-node-jump { flex: none; background: none; border: 0; padding: 0 2px; color: var(--text-faint); font-size: 12px; cursor: pointer; }
-.detail-node-jump:hover { color: var(--accent); }
+/* Task 짓기 중 고른 의존 표시. 필터의 .detail-node.on(청록 링)과 다른 채널이라 위치도 다르다 —
+   테두리가 아니라 제목 옆에 글리프를 하나 더 세운다. color 를 accent(청록)로 주는 것은 상태
+   팔레트(--ok 등)를 피하기 위해서다 — completed 상태의 글리프와 같은 색이면 텍스트 글리프(✓)를
+   쓴 것과 별개로 또 한 번 헷갈릴 자리를 만든다 */
+.detail-node-picked { flex: none; display: inline-flex; color: var(--accent); font-size: 12px; }
+/* .detail-node-btn 은 띄우기·멈추기·물어보기·다시 띄우기 네 버튼이 쓴다 — ↗(세션 열기)와 같은
+   자리, 같은 존재감이어야 하므로 규칙을 나누지 않고 셀렉터에 더한다 */
+.detail-node-jump, .detail-node-btn { flex: none; background: none; border: 0; padding: 0 2px; color: var(--text-faint); font-size: 12px; cursor: pointer; }
+.detail-node-jump:hover, .detail-node-btn:hover { color: var(--accent); }
 /* 선 색의 뜻. 그래프에서 유일하게 글자로 적는 자리다 — 아이콘에는 툴팁을 달 수 있지만 선에는 달 곳이 없다 */
 .detail-legend { flex: none; display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 14px; color: var(--text-faint); font-size: 10.5px; }
 .detail-legend span { display: inline-flex; align-items: center; gap: 6px; }
@@ -968,6 +981,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .detail-ev-body { margin: 2px 6px 6px 65px; padding: 6px 8px; background: var(--bg); border-radius: var(--radius-sm); color: var(--text-dim); font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; overflow-x: auto; max-height: 240px; overflow-y: auto; }
 /* 가려진 개수. margin-top: auto 로 칸의 맨 아래에 붙는다 */
 .detail-hidden { flex: none; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--line-soft); color: var(--text-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+/* NewTaskModal.tsx — Task 짓는 동안 .detail-events 가 통째로 바뀌는 폼의 입력 칸들.
+   .detail-list 와 같은 이유로 flex: 1; min-height: 0; overflow-y: auto 다 — 필드가 늘어나도 이
+   칸 안에서만 스크롤되어야, 높이가 고정된 .modal.run-detail 밖으로 넘쳐 아래 버튼 줄을 밀어내지
+   않는다. gap 이 .field 하나만큼(10px) 큰 것은 이벤트 한 줄(.detail-list, gap: 1px)과 달리 이
+   칸의 자식은 입력 필드 하나하나라서다. */
+.detail-task-fields { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
 
 /* RunTypePicker — the ＋ button's kind-picker popup. Anchored the same way as .run-more/.run-more-menu
    in RunToolbar; a separate namespace because it also holds a search input and two grouped sections
@@ -1192,6 +1211,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .job-ic { flex: none; display: block; }
 .job-arc { transform-origin: 50% 50%; animation: job-spin 1.5s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .job-arc { animation: none; } }
+
+/* '+ 새 작업'/'+ Task' — 사이드바 목록의 첫 자식과 빈 화면(.jobs-empty), 그리고 RunDetail 의
+   그래프 칸(.detail-graph-head, Task 짓기 시작 버튼)까지 같은 버튼을 쓴다. 아이콘이 아니라
+   '+' 글자 하나이므로 배지 크기를 맞출 필요가 없고, 기존 토큰만 쓴다 */
+.jobs-new { margin: 10px 10px 4px; padding: 5px 10px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: none; color: var(--text-dim); font-size: 12px; cursor: pointer; }
+.jobs-new:hover { color: var(--accent); border-color: var(--accent); }
 
 .jobs-run { border-bottom: 1px solid var(--line-soft); }
 .jobs-run-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px 0; cursor: pointer; }

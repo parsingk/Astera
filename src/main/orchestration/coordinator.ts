@@ -17,6 +17,7 @@
 // testable).
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import { isSamePath } from '../../core/files/tree'
 import type { Provider } from '../../core/providers/meta'
 
 export interface CoordinatorDeps {
@@ -81,11 +82,48 @@ export function buildSpecFile(a: {
   spec: string
   taskId: string
   dispatchId: string
+  /** True when this dispatch runs in its own worktree, not the project folder (startWorker derives
+   *  it from `!isSamePath(cwd, a.runCwd)` at its call site below (:402) — see the comment there for
+   *  why the derivation lives at that one call site and not here too). **Not** `a.worktree !==
+   *  'current'` — that was the original formula, and it is wrong for a --terminal reuse: the
+   *  --terminal branch sets cwd to a.terminalCwd regardless of what a.worktree says (server.ts's
+   *  default fills a.worktree with 'current' on that path), so a worktree session reused through
+   *  --terminal read as committing:false and shipped its work with no commit obligation at all —
+   *  a real defect this branch hit and fixed, not a hypothetical one. A worktree is merge material;
+   *  an uncommitted change in it is invisible to the merge and is thrown away with the worktree. The
+   *  commit has to be the coding agent's own act — a coding agent can end a turn without
+   *  committing, and the app committing on
+   *  its behalf would be committing content it never reviewed. Requiring it through the spec is the
+   *  same shape as the reporting obligation below: the app assembles the instruction, the worker
+   *  cannot edit it out. */
+  committing?: boolean
 }): string {
+  // Inserted before the reporting obligation, not after — a worker that reports first and commits
+  // second can still end its turn (the spec never told it not to) between the two, leaving the
+  // report and the commit racing each other for no reason. Requiring the commit first removes that
+  // race instead of relying on the agent to read ahead.
+  const commitObligation = a.committing
+    ? `
+---
+## Commit obligation (assembled by the app — do not delete)
+
+This task is running in its own worktree, on its own branch — not in the project folder. When the
+work is finished you must commit it: that is the only way the app can bring this work back together
+with the results of the other tasks running in parallel. Right now this work exists only on this
+worktree's branch; if you do not commit it, it never merges anywhere and it is discarded once this
+worktree is torn down.
+
+  git add -A
+  git commit -m "<one-line summary of the change>"
+
+Commit before you report below.
+`
+    : ''
+
   return `# ${a.title}
 
 ${a.spec}
-
+${commitObligation}
 ---
 ## Reporting obligation (assembled by the app — do not delete)
 
@@ -331,12 +369,38 @@ export class OrchCoordinator {
     // specPath has nothing to do with cwd (it was settled above) — the wiring creates this directory
     // at boot, but the user can delete it in the meantime, so the mkdir stays.
     await fs.mkdir(path.dirname(specPath), { recursive: true })
+    // committing asks one question — "does this worker run somewhere other than the project
+    // folder" — and cwd is the only place that question has a single, already-settled answer.
+    // a.worktree looks like the same fact but is not: it is only one of the four inputs that decide
+    // cwd above, and the --terminal branch ignores it outright (cwd becomes a.terminalCwd no matter
+    // what a.worktree says). Deriving from a.worktree would silently disagree with reality for a
+    // --terminal reuse of a worktree session, which is exactly the "call reused, --worktree not
+    // repeated" shape server.ts's default (worktree='current') makes the common case, not a rare
+    // one. cwd !== a.runCwd covers all four branches with one comparison: 'current' sets cwd =
+    // a.runCwd (false), 'new' and an explicit path set cwd to somewhere else (true unless the
+    // explicit path happens to equal runCwd, which is correctly false — it is the project folder
+    // either way), and --terminal carries whatever the original dispatch actually used.
+    //
+    // isSamePath (not ===) because a.runCwd and a.terminalCwd are recorded independently (Run.cwd
+    // vs a Dispatch's cwd field) and can name the same folder with different casing or separators
+    // (a Windows drive letter typed/stored as `d:` vs `D:`, or `\` vs `/`) without being different
+    // folders. isSamePath already carries this exact win32-first normalization for the same "same
+    // folder" question elsewhere (view.ts's project ownership check, ipc.ts's home-path check), so
+    // it is reused here rather than inventing a fresh comparison. This repository is win32-first
+    // (isPathWithin/isSamePath's own comment), so that normalization is the established answer, not
+    // a new judgment call being made here.
     await fs.writeFile(
       specPath,
       // The caller may have assembled the file already (a review dispatch does — see
       // specFileContent). Only when it did not does the implementer's template get built here.
       a.specFileContent ??
-        buildSpecFile({ title: a.title, spec: a.spec, taskId: a.taskId, dispatchId: a.dispatchId }),
+        buildSpecFile({
+          title: a.title,
+          spec: a.spec,
+          taskId: a.taskId,
+          dispatchId: a.dispatchId,
+          committing: !isSamePath(cwd, a.runCwd)
+        }),
       'utf8'
     )
 
