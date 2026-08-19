@@ -114,12 +114,18 @@ export function outcomeOf(state: OrchState, runId: string): RunOutcome {
  *  finishes. worker-release kills the PTY, and that lands in the same place: still listed, still
  *  clickable.
  *
- *  provider and startedAt are a separate lookup, deliberately not reconciled with sessionId's: they
- *  answer "is this running right now", so they come from the open Dispatch, while sessionId answers
- *  "what tab does this row open" and keeps pointing at the most recent Dispatch even once it has
- *  ended. On a retried Task those are two different Dispatch records, and that is correct, not a bug
- *  to fix — the sidebar badge must disappear the moment nothing is running, well before the tab it
- *  points to stops being worth opening. */
+ *  provider and startedAt are a separate lookup, and separate on purpose: they answer "is this
+ *  running right now", so they come from the **open** Dispatch, while sessionId answers "what tab
+ *  does this row open" and keeps pointing at the most recent Dispatch even once it has ended.
+ *
+ *  **The two lookups always land on the same record when either finds one**, and that is not a
+ *  coincidence worth removing: openDispatch and openReviewDispatch both reject a Task that already
+ *  has an open Dispatch (state.ts), so a retry can only start after the previous attempt ended and
+ *  its startedAt is therefore always the largest. What actually differs is the *absence* — once
+ *  nothing is running, provider and startedAt vanish while sessionId stays. That is the behaviour
+ *  the sidebar needs: the badge and the clock must disappear the moment the work stops, well before
+ *  the tab they sat next to stops being worth opening. Keeping the lookups apart is how each one
+ *  says what it means rather than what it happens to equal. */
 function jobTaskOf(
   state: OrchState,
   task: Task,
@@ -129,8 +135,9 @@ function jobTaskOf(
     .filter((d) => d.taskId === task.id)
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
   const latest = dispatches[dispatches.length - 1]
-  // sessionId 와 다른 Dispatch 를 볼 수 있다: 끝난 워커의 탭은 여전히 열 수 있어야 하므로
-  // sessionId 는 최신 Dispatch 에서 오지만, "지금 도는 중"은 열린 Dispatch 만이 말할 수 있다.
+  // 열린 Dispatch 만이 "지금 도는 중"을 말할 수 있다. 위 주석대로 이것은 latest 와 같은 레코드가
+  // 되지만, 같아지는 것이 규칙(Task 당 열린 Dispatch 하나)의 결과일 뿐이므로 뜻이 다른 두 조회를
+  // 하나로 합치지 않는다 — 합치면 그 규칙이 바뀌는 날 조용히 틀린다.
   const running = dispatches.find((d) => !d.outcome && !d.endedAt)
   const open = state.gates
     .filter((g) => g.taskId === task.id && g.status === 'open')
