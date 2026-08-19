@@ -737,7 +737,7 @@ export const es: Catalog = {
   // RunDetail.tsx, panel derecho — la lista de eventos. La insignia la elige el tipo de evento (o el tipo
   // de mensaje). Los nombres jobs.timeline.* se mantienen: ese panel es la línea de tiempo, y
   // jobs.detail.open lo usa la barra lateral (JobsView.tsx) para abrir la ventana — esa ventana ahora
-  // also contiene el grafo de dependencias, por eso es "Detalles" y no "Historial". Los textos de la
+  // también contiene el grafo de dependencias, por eso es "Detalles" y no "Historial". Los textos de la
   // ventana en sí son los jobs.detail.* de abajo
   'jobs.detail.open': 'Detalles',
   'jobs.timeline.empty': 'Aún no ha ocurrido nada',
