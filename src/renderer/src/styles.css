@@ -916,10 +916,14 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .detail-node--completed { background: var(--bg); color: var(--text-faint); }
 .detail-node-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Task 짓기 중 고른 의존 표시. 필터의 .detail-node.on(청록 링)과 다른 채널이라 위치도 다르다 —
-   테두리가 아니라 제목 옆에 글리프를 하나 더 세운다 */
-.detail-node-picked { flex: none; display: inline-flex; }
-.detail-node-jump { flex: none; background: none; border: 0; padding: 0 2px; color: var(--text-faint); font-size: 12px; cursor: pointer; }
-.detail-node-jump:hover { color: var(--accent); }
+   테두리가 아니라 제목 옆에 글리프를 하나 더 세운다. color 를 accent(청록)로 주는 것은 상태
+   팔레트(--ok 등)를 피하기 위해서다 — completed 상태의 글리프와 같은 색이면 텍스트 글리프(✓)를
+   쓴 것과 별개로 또 한 번 헷갈릴 자리를 만든다 */
+.detail-node-picked { flex: none; display: inline-flex; color: var(--accent); font-size: 12px; }
+/* .detail-node-btn 은 띄우기·멈추기·물어보기·다시 띄우기 네 버튼이 쓴다 — ↗(세션 열기)와 같은
+   자리, 같은 존재감이어야 하므로 규칙을 나누지 않고 셀렉터에 더한다 */
+.detail-node-jump, .detail-node-btn { flex: none; background: none; border: 0; padding: 0 2px; color: var(--text-faint); font-size: 12px; cursor: pointer; }
+.detail-node-jump:hover, .detail-node-btn:hover { color: var(--accent); }
 /* 선 색의 뜻. 그래프에서 유일하게 글자로 적는 자리다 — 아이콘에는 툴팁을 달 수 있지만 선에는 달 곳이 없다 */
 .detail-legend { flex: none; display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 14px; color: var(--text-faint); font-size: 10.5px; }
 .detail-legend span { display: inline-flex; align-items: center; gap: 6px; }

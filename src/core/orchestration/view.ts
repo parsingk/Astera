@@ -177,6 +177,11 @@ export function snapshotFor(
     return {
       id: run.id,
       objective: run.objective,
+      // Run 이 그대로 들고 있는 값을 그대로 옮긴다 — 계산도 기본값도 여기서 넣지 않는다(JobRun
+      // 의 주석과 같다). worker-start 에 --agent/--account 를 채우는 일과 워크트리 배치 규칙
+      // (동시 실행 한도가 1 이하일 때만 프로젝트 폴더)의 판단은 이 값을 받은 렌더러가 한다.
+      provider: run.provider,
+      concurrency: run.concurrency,
       outcome: outcomeOf(state, run.id),
       done,
       total,

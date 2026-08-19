@@ -779,5 +779,11 @@ export const ja: Catalog = {
   'jobs.task.validateNone': '検証なし',
   'jobs.task.review': '別のエージェントが確認',
   'jobs.task.create': '追加',
-  'jobs.task.failed': 'Task を作れませんでした'
+  'jobs.task.failed': 'Task を作れませんでした',
+  'jobs.node.start': '起動',
+  'jobs.node.stop': '停止',
+  'jobs.node.restart': 'もう一度起動',
+  'jobs.node.gate': '人に聞く',
+  'jobs.node.gateQuestion': '何を聞きますか',
+  'jobs.node.failed': 'この操作を行えませんでした'
 }

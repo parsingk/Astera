@@ -793,5 +793,11 @@ export const es: Catalog = {
   'jobs.task.validateNone': 'Sin validación',
   'jobs.task.review': 'Revisión por otro agente',
   'jobs.task.create': 'Añadir',
-  'jobs.task.failed': 'No se pudo crear la tarea'
+  'jobs.task.failed': 'No se pudo crear la tarea',
+  'jobs.node.start': 'Iniciar',
+  'jobs.node.stop': 'Detener',
+  'jobs.node.restart': 'Iniciar de nuevo',
+  'jobs.node.gate': 'Preguntar',
+  'jobs.node.gateQuestion': '¿Cuál es la pregunta?',
+  'jobs.node.failed': 'No se pudo completar esta acción'
 }

@@ -337,6 +337,24 @@ describe('snapshotFor', () => {
     // run-created + task-created + message
     expect(snapshotFor(s, absPath('p'), anySession, noWorktrees).runs[0].eventCount).toBe(3)
   })
+
+  // provider·concurrency 는 Run 이 들고 있는 값을 그대로 옮긴 것이다 — 계산도 기본값도 여기서
+  // 넣지 않는다(JobRun 의 주석과 같다). 기본값(DEFAULT_CONCURRENCY)을 적용하는 것은 이 값을
+  // 읽는 렌더러의 일이다.
+  it('Run 의 provider·concurrency 를 그대로 싣는다', () => {
+    const withBoth: Run = { ...run('r1', absPath('p')), provider: 'codex', concurrency: 2 }
+    const s = withRuns([withBoth])
+    const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees).runs
+    expect(r.provider).toBe('codex')
+    expect(r.concurrency).toBe(2)
+  })
+
+  it('Run 에 없으면 undefined 다 — 기본값을 여기서 채우지 않는다', () => {
+    const s = withRuns([run('r1', absPath('p'))])
+    const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees).runs
+    expect(r.provider).toBeUndefined()
+    expect(r.concurrency).toBeUndefined()
+  })
 })
 
 describe('sameSnapshot', () => {

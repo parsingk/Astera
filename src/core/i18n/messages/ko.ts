@@ -809,5 +809,17 @@ export const ko = {
   'jobs.task.validateNone': '검증 없음',
   'jobs.task.review': '다른 에이전트가 검토',
   'jobs.task.create': '추가',
-  'jobs.task.failed': 'Task 를 만들지 못했습니다'
+  'jobs.task.failed': 'Task 를 만들지 못했습니다',
+  // RunDetail.tsx — 그래프 노드 위의 버튼. 띄우기와 다시 띄우기는 같은 글리프(▶)를 쓴다 — 전이표상
+  // 한 노드에 둘이 함께 나오는 일이 없어(서로 배타적인 상태에서만 보인다) 뜻이 섞이지 않는다.
+  // jobs.node.failed 는 이 네 동작(띄우기·멈추기·물어보기·다시 띄우기)이 함께 쓰는 하나의 실패
+  // 안내다 — 이 버튼들에는 NewTaskModal/NewRunModal 같은 자기 폼이 없어(물어보기만 예외) 동작별로
+  // 문구를 나눌 자리가 없다. 계정을 못 찾은 경우는 새 키를 만들지 않고 이미 있는
+  // session.resume.noLoggedInAccounts 를 그대로 쓴다.
+  'jobs.node.start': '띄우기',
+  'jobs.node.stop': '멈추기',
+  'jobs.node.restart': '다시 띄우기',
+  'jobs.node.gate': '물어보기',
+  'jobs.node.gateQuestion': '무엇을 물어볼까요',
+  'jobs.node.failed': '이 동작을 하지 못했습니다'
 } as const

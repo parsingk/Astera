@@ -689,5 +689,11 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.task.validateNone': 'No validation',
   'jobs.task.review': 'Review by another agent',
   'jobs.task.create': 'Add',
-  'jobs.task.failed': 'Could not create the task'
+  'jobs.task.failed': 'Could not create the task',
+  'jobs.node.start': 'Start',
+  'jobs.node.stop': 'Stop',
+  'jobs.node.restart': 'Start again',
+  'jobs.node.gate': 'Ask a person',
+  'jobs.node.gateQuestion': 'What is the question',
+  'jobs.node.failed': 'Could not do that'
 }
