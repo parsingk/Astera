@@ -32,15 +32,40 @@ export function toTitle(text: string): string | null {
   return t.length > 80 ? t.slice(0, 80) + '…' : t
 }
 
-/** Filters out text "the real user did not write" — command execution records, interruption markers,
- *  and the like (shared by the title and conversation decisions) */
+/** 사람이 쓰지 않은 `type: 'user'` 줄의 앞머리. 이 줄들도 트랜스크립트에서는 user 로 기록되므로,
+ *  목록의 제목이 사람이 마지막에 친 말이 되려면 여기서 걸러야 한다.
+ *
+ *  **실측으로 모았다.** 이 저장소의 히스토리에서 목록에 실제로 나오는 파일 40 개를 재 보니
+ *  bash-input 76 · bash-stdout 76 · task-notification 9 · local-command-caveat 5 ·
+ *  command-name 5 · local-command-stdout 3 · `[Request interrupted` 14 ·
+ *  `This session is being continued` 1 이었고, **그중 셋만 걸러지고 있었다.** 그래서 목록에
+ *  `<task-notification> <task-id>…` 이나 `<bash-stdout>{"stopped":…}` 같은 것이 제목으로 떴다.
+ *
+ *  bash-stderr 와 system-reminder 는 이 표본에 없었지만 같은 부류의 기계 기록이고 사람이 그것으로
+ *  메시지를 시작할 일이 없어 함께 넣는다 — 어느 것이 실측이고 어느 것이 모양으로 넣은 것인지
+ *  구분해 두는 이유는, 근거 없이 얹은 항목이 나중에 반례를 만나는 것을 이 파일이 이미 겪었기
+ *  때문이다(NON_CONVERSATION_FIRST_TYPES 의 ai-title).
+ *
+ *  전부 걸러져 남는 것이 없으면 호출하는 쪽이 첫 실제 사용자 메시지(meta.title)로 떨어진다
+ *  (strategies/claude.ts) — 세션 uuid 를 제목으로 보여 주는 것보다 낫다. */
+const MACHINE_USER_PREFIXES = [
+  '<local-command-caveat>', // 실측
+  '<local-command-stdout>', // 실측
+  '<command-name>', // 실측
+  '<bash-input>', // 실측 — 사용자가 `!` 로 실행한 명령. 행동이지만 할 말은 아니다
+  '<bash-stdout>', // 실측
+  '<bash-stderr>', // 모양으로 추가(위 짝)
+  '<task-notification>', // 실측 — 배경 작업 완료 알림
+  '<system-reminder>', // 모양으로 추가
+  '[Request interrupted', // 실측
+  'This session is being continued from a previous conversation' // 실측 — 압축 이어가기 안내
+]
+
+/** 사람이 실제로 쓴 텍스트인가 (제목과 대화 판정이 함께 쓴다) */
 function isRealUserText(text: string): boolean {
   const t = text.trim()
   if (!t) return false
-  if (t.startsWith('<local-command-caveat>')) return false // local command record wrapper
-  if (t.startsWith('<command-name>')) return false // command execution record
-  if (t.startsWith('[Request interrupted')) return false // interruption marker
-  return true
+  return !MACHINE_USER_PREFIXES.some((p) => t.startsWith(p))
 }
 
 // Non-conversation record file: a session file holding only auxiliary records and no conversation

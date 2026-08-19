@@ -316,6 +316,37 @@ describe('parseTranscriptTail', () => {
   })
 })
 
+describe('제목에서 기계가 쓴 user 줄을 걸러낸다', () => {
+  // 이 목록은 실측으로 모았다(parser.ts 의 MACHINE_USER_PREFIXES 주석). 걸러지지 않던 것들이
+  // 목록의 제목으로 떠서 "무슨 세션이었나"를 읽을 수 없었다
+  const noise = [
+    '<task-notification> <task-id>a5079f895761d8526</task-id>',
+    '<bash-stdout>{"stopped":"dsp_506882e8e232cea0"}</bash-stdout>',
+    '<bash-input>git status</bash-input>',
+    '<bash-stderr>fatal: not a git repository</bash-stderr>',
+    '<local-command-stdout>...</local-command-stdout>',
+    '<system-reminder>기억하세요</system-reminder>',
+    'This session is being continued from a previous conversation that ran out of context'
+  ]
+
+  it('마지막 user 줄이 기계 기록이면 그 앞의 실제 사용자 말을 제목으로 쓴다', async () => {
+    const file = await write('noisy.jsonl', [
+      line({ type: 'user', sessionId: 's', cwd: 'D:\\p', message: { role: 'user', content: '실제로 친 말' } }),
+      line({ type: 'assistant', message: { role: 'assistant', content: '네' } }),
+      ...noise.map((t) => line({ type: 'user', message: { role: 'user', content: t } }))
+    ])
+    expect((await parseTranscriptTail(file)).lastUserTitle).toBe('실제로 친 말')
+  })
+
+  it('meta 의 제목도 같은 규칙을 쓴다 — 기계 기록이 첫 줄이어도 건너뛴다', async () => {
+    const file = await write('noisy-head.jsonl', [
+      line({ type: 'user', message: { role: 'user', content: noise[0] } }),
+      line({ type: 'user', sessionId: 's', cwd: 'D:\\p', message: { role: 'user', content: '진짜 첫 말' } })
+    ])
+    expect((await parseTranscriptMeta(file)).title).toBe('진짜 첫 말')
+  })
+})
+
 describe('lastTurns', () => {
   const u = (t: string) => ({ role: 'user' as const, text: t })
   const a = (t: string) => ({ role: 'assistant' as const, text: t })
