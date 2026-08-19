@@ -2,6 +2,7 @@ import { ipcMain, dialog, app, shell, type BrowserWindow } from 'electron'
 import { promises as fs, existsSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import type { Core } from './core'
 import type { RollingCoordinator } from './rolling'
 import type { CodexRollingCoordinator } from './codexRolling'
@@ -15,7 +16,7 @@ import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
 import { copyTranscript } from '../core/rolling/transcript'
 import { OrchestrationStore } from './orchestration/store'
-import { OrchCoordinator, LAUNCH_FORBIDDEN } from './orchestration/coordinator'
+import { OrchCoordinator, LAUNCH_FORBIDDEN, buildReviewSpecFile } from './orchestration/coordinator'
 import {
   handleExit as orchHandleExit,
   startOrchServer,
@@ -23,8 +24,15 @@ import {
   type OrchServerDeps
 } from './orchestration/server'
 import { TaskValidator, ValidatorBusyError } from './orchestration/validator'
-import { applyValidationResult, blockForValidation } from '../core/orchestration/state'
-import { sameSnapshot, snapshotFor } from '../core/orchestration/view'
+import {
+  applyValidationResult,
+  blockForValidation,
+  blockForReview,
+  openReviewDispatch
+} from '../core/orchestration/state'
+import { pickReviewer } from '../core/orchestration/reviewer'
+import { sameSnapshot, snapshotFor, runsForProject } from '../core/orchestration/view'
+import { timelineFor } from '../core/orchestration/timeline'
 import { repoPathOf } from '../core/worktrees/repo'
 import type { OrchState } from '../core/orchestration/state'
 import { makeLimitProbe } from './orchestration/limitProbe'
@@ -473,10 +481,16 @@ export function registerIpc(
     const store = new OrchestrationStore(path.join(app.getPath('userData'), 'orchestration.json'))
     const loaded = await store.load()
     if (loaded.recovered) orchLog('failed to read or parse orchestration.json — kept the .bak and started from an empty state')
-    if (loaded.unknownOutcomes > 0 || loaded.pruned > 0 || loaded.staleValidations > 0)
+    if (
+      loaded.unknownOutcomes > 0 ||
+      loaded.pruned > 0 ||
+      loaded.staleValidations > 0 ||
+      loaded.staleReviews > 0
+    )
       orchLog(
         `restart cleanup — ${loaded.unknownOutcomes} dispatch(es) left as outcome_unknown, ` +
-          `${loaded.pruned} expired Run(s), ${loaded.staleValidations} interrupted validation(s)`
+          `${loaded.pruned} expired Run(s), ${loaded.staleValidations} interrupted validation(s), ` +
+          `${loaded.staleReviews} interrupted review(s)`
       )
 
     // The coordinator never reads or writes OrchState (the server owns state).
@@ -591,12 +605,26 @@ export function registerIpc(
         output: (cwd) => core.run.recentOutput(cwd).slice(-4000)
       },
       onSettled: async ({ taskId, exitCode, output }) => {
-        const r = applyValidationResult(store.get(), { taskId, exitCode, output }, new Date().toISOString())
+        const r = applyValidationResult(
+          store.get(),
+          // 서버가 applyWorkerDone 에 넘기는 것과 같은 값이다 — 이 배선에는 startReview 가 있다.
+          { taskId, exitCode, output, canReview: true },
+          new Date().toISOString()
+        )
         if (!r.ok) {
           orchLog(`validation result rejected task=${taskId}: ${r.error}`)
           return
         }
         await deps.setState(r.state)
+        // 검증이 통과했고 검토가 걸려 있으면 여기서 이어진다. 서버의 worker_done 분기가 검증이 걸리지
+        // 않은 Task 에 대해 같은 일을 한다. cwd 는 넘기지 않는다 — startReview 가 구현 Dispatch 에서
+        // 얻는다(그 Dispatch 를 provider 때문에 어차피 찾는다).
+        // 종단 .catch 를 붙인다 — 이유는 deps.startReview 쪽 주석에 있다(validator 가 자기
+        // onSettled/onCannotRun 에 붙이는 것과 같은 것이다).
+        if (r.value.status === 'reviewing')
+          void startReview({ taskId }).catch((e) =>
+            orchLog(`startReview failed task=${taskId}: ${String(e)}`)
+          )
       },
       onCannotRun: async ({ taskId, reason }) => {
         const r = blockForValidation(store.get(), { taskId, reason }, new Date().toISOString())
@@ -609,6 +637,163 @@ export function registerIpc(
       log: orchLog
     })
     orchValidator = validator
+
+    /** 검토 세션 하나를 띄운다. 실패하는 모든 경로가 Gate 로 간다 — 조용히 통과시키면 "검토됨"과
+     *  "검토 못 함"이 화면에서 같아진다. */
+    const startReview = async ({ taskId }: { taskId: string }): Promise<void> => {
+      /** Gate 로 넘긴다. **먼저 이 Task 의 열린 검토 Dispatch 를 지운다.** createGate 는 열린
+       *  Dispatch 가 있는 Task 를 거절하므로(state.ts), 이미 커밋한 검토 Dispatch 를 그대로 두고
+       *  Gate 를 열려 하면 그것도 실패하고 Task 는 reviewing 에 열린 Dispatch 와 함께 갇힌다 —
+       *  꺼내 줄 것이 아무것도 없다. worker-start 의 실패 롤백이 같은 일을 한다(server.ts): Dispatch
+       *  를 배열에서 아예 지운다. 다만 Task 의 상태는 되돌리지 않는다 — openReviewDispatch 는 상태를
+       *  옮기지 않았으므로 reviewing 그대로가 맞고, 그 자리에서 Gate 가 blocked 로 데려간다.
+       *
+       *  정리가 세션 시작 실패 자리가 아니라 여기 있는 이유: 커밋 뒤에 던지는 경로는 그 하나가
+       *  아니다(뒤의 setState, 그리고 밖의 catch 로 오는 모든 것). 두 자리에 같은 코드를 두면 한쪽만
+       *  고쳐지고, "실패하는 모든 경로가 Gate 로 간다"는 위의 문장이 거짓이 된다.
+       *
+       *  조건을 id 가 아니라 "이 Task 의 열려 있는 검토 Dispatch"로 쓴 것도 그래서다 — 아직 아무것도
+       *  열지 않은 경로는 지울 것이 없어 그대로 지나가고(그래서 두 번 불러도 같다), 구현 Dispatch 는
+       *  정당하게 남아 있는 닫힌 Dispatch 이므로 건드리지 않고, 이미 보고를 마친 검토 Dispatch 도
+       *  대상이 아니다. */
+      const gate = async (reason: string): Promise<void> => {
+        const before = store.get()
+        const kept = before.dispatches.filter(
+          (d) => !(d.taskId === taskId && d.review && !d.outcome && !d.endedAt)
+        )
+        if (kept.length !== before.dispatches.length)
+          await deps.setState({ ...before, dispatches: kept })
+        // 방금 쓴 것을 다시 읽는다 — 위 커밋이 메모리의 상태를 바꿨으므로 before 로 Gate 를 열면
+        // 지운 Dispatch 가 되살아난다.
+        const r = blockForReview(store.get(), { taskId, reason }, new Date().toISOString())
+        if (!r.ok) {
+          orchLog(`could not block task=${taskId} for review: ${r.error}`)
+          return
+        }
+        await deps.setState(r.state)
+      }
+      try {
+        const st = store.get()
+        const task = st.tasks.find((t) => t.id === taskId)
+        // 큐를 거치지 않고 곧바로 오지만, setState 뒤에 불리므로 그 사이 task-update 가 상태를
+        // 옮겼을 수 있다. validator.start 가 같은 이유로 'skip' 을 돌려준다.
+        if (task?.status !== 'reviewing') return
+        // 구현 Dispatch — 그 provider 를 피해야 하고, cwd 도 여기서 얻는다(그래서 이 함수는 taskId
+        // 하나만 받는다: 호출자가 cwd 를 따로 구하면 두 경로가 갈라진다)
+        const impl = st.dispatches
+          .filter((d) => d.taskId === taskId && !d.review)
+          .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+          .at(-1)
+        if (!impl) return void (await gate(`no implementation dispatch for task ${taskId}`))
+        const cwd = impl.cwd
+        const accounts = core.accounts.list()
+        // core.ts 의 defaultAccountIdFor 와 같은 모양 — 로그인 조회는 계정마다 파일(또는 macOS 에서는
+        // Keychain)을 읽으므로 순차로 돌리면 계정 수만큼 늘어난다. 같은 일을 하는 자리가 이미 있으니
+        // 그 모양을 따른다.
+        const loggedInIds = await Promise.all(
+          accounts.map(async (a) => ((await core.accounts.loginStatus(a.id)) ? a.id : null))
+        )
+        const loggedIn = new Set(loggedInIds.filter((id): id is string => id !== null))
+        const picked = pickReviewer({ implProvider: impl.provider, accounts, loggedInIds: loggedIn })
+        if (!picked)
+          return void (await gate(`no logged-in account on a provider other than ${impl.provider}`))
+        // PTY 를 띄울 경로는 가드를 통과해야 한다 — validator.start 와 같은 이유(Dispatch.cwd 는
+        // 오케스트레이션 소켓에서 온 값이고 정규화는 검증이 아니다, ADR-003).
+        await assertAllowedPath(cwd)
+        // Dispatch 를 먼저 커밋한다 — 세션을 띄우기 전에 id 가 있어야 spec 파일의 보고 문장에
+        // 그것을 실을 수 있다. worker-start 가 같은 순서다(server.ts: openDispatch 커밋 → startWorker).
+        //
+        // **입구의 st 가 아니라 여기서 다시 읽은 상태를 넘긴다.** 위의 loginStatus 와
+        // assertAllowedPath 는 진짜 await(계정마다 파일·Keychain 읽기, knownProjectPaths)이고, 그
+        // 사이에 다른 흐름이 커밋할 수 있다. st 를 넘기면 setState 가 그 낡은 상태를 통째로 되쓰므로
+        // 그 창에 들어온 커밋이 디스크에서만이 아니라 메모리에서도 사라진다 — 남의 Task 의
+        // worker_done 이 되돌려져 그 Dispatch 가 다시 열리고, 이미 "ok" 를 듣고 떠난 워커는 두 번
+        // 보고하지 않는다. server.ts 가 probeLimit 뒤에 getState 를 다시 읽는 것과 같은 규칙이고,
+        // store.ts 가 같은 것을 못박아 두었다. worker-start 는 openDispatch 앞의 검사가 전부 동기라서
+        // 입구 스냅숏을 그대로 넘길 수 있다 — 이쪽은 그렇지 않다.
+        //
+        // 그 창에서 옮겨졌을 상태도 여기서 다시 본다. 입구의 검사는 이제 너무 이르다 — 그것은
+        // 로그인 조회를 아끼는 값싼 선검사로 남는다.
+        const fresh = store.get()
+        if (fresh.tasks.find((t) => t.id === taskId)?.status !== 'reviewing') return
+        const opened = openReviewDispatch(
+          fresh,
+          {
+            taskId,
+            provider: picked.provider,
+            accountId: picked.accountId,
+            // 세션 id 는 아직 없다. worker-start 가 같은 자리에서 쓰는 자리표시자와 같은 모양이다
+            // (server.ts:415 의 `pending:${randomBytes(4).toString('hex')}`) — 그 값은 어떤 세션도
+            // 가리키지 않으며 jobTaskOf 의 isKnownSession 이 걸러 낸다.
+            sessionId: `pending:${randomBytes(4).toString('hex')}`,
+            cwd,
+            specPath: ''
+          },
+          new Date().toISOString()
+        )
+        if (!opened.ok) return void (await gate(opened.error))
+        await deps.setState(opened.state)
+        const spec = buildReviewSpecFile({
+          title: task.title,
+          spec: task.spec,
+          taskId,
+          dispatchId: opened.value.id,
+          implReport: task.result,
+          filesModified: task.filesModified,
+          validated: !!task.validateConfigId
+        })
+        let started: { sessionId: string; cwd: string; specPath: string }
+        try {
+          // 검토자는 구현자가 일한 트리에서 돈다 — worktree 'current' + runCwd = 그 cwd.
+          //
+          // **coordinator.startWorker 가 아니라 deps.startWorker 다.** 그쪽은 통과 함수가 아니다 —
+          // 코디네이터를 부른 뒤 orchTails.start 로 그 세션의 출력을 이 Dispatch 에 묶는다. 직접
+          // 부르면 검토 Dispatch 에는 tail 이 없고 worker-read 가 untracked 를 돌려준다: 검토자가
+          // 멈췄거나 판정이 이해되지 않을 때 코디네이터가 볼 것이 사라진다. 그리고 그 차이는 검토
+          // Dispatch 만 다르게 행동하는 자리가 되어 다음 사람을 속인다.
+          started = await deps.startWorker({
+            dispatchId: opened.value.id,
+            taskId,
+            title: `Review: ${task.title}`,
+            // spec 은 본문이고 coordinator 가 그것을 **구현자의** 템플릿으로 감싼다 — 검토 파일을
+            // 그 자리에 넣으면 H1 과 보고 의무가 두 벌이 되고, 마지막 줄이 "바꾼 파일의 경로를
+            // --files-modified 로 넘겨라"가 되어 맨 위의 "코드를 바꾸지 말라"와 정면으로 부딪힌다.
+            // 그래서 조립이 끝난 파일은 specFileContent 로 넘긴다(coordinator.ts 에 이유가 있다).
+            // spec 은 이 경로에서 쓰이지 않지만 인터페이스의 필수 필드이므로 Task 의 본문을 준다 —
+            // 빈 문자열을 주면 이 값이 무엇인지 다음 사람이 읽을 수 없다.
+            spec: task.spec,
+            specFileContent: spec,
+            provider: picked.provider,
+            accountId: picked.accountId,
+            runCwd: cwd,
+            worktree: 'current'
+          })
+        } catch (e) {
+          // 검토 Dispatch 의 롤백은 gate() 안에 있다 — 커밋 뒤에 던지는 경로가 이 자리 하나가 아니기
+          // 때문이다(그 이유는 gate 의 주석에 있다).
+          return void (await gate(
+            `failed to start the reviewer: ${e instanceof Error ? e.message : String(e)}`
+          ))
+        }
+        // 실제 세션 id 와 spec 경로로 Dispatch 를 메운다. **여기서도 최신 상태를 다시 읽는다** —
+        // 코디네이터를 기다리는 동안 그 Dispatch 에 다른 변경이 내려앉았을 수 있고, 넘겨줄 것은
+        // 이 세 필드뿐이다(worker-start 의 같은 주석 참고).
+        const latest = store.get()
+        await deps.setState({
+          ...latest,
+          dispatches: latest.dispatches.map((d) =>
+            d.id === opened.value.id
+              ? { ...d, sessionId: started.sessionId, cwd: started.cwd, specPath: started.specPath }
+              : d
+          )
+        })
+        orchLog(
+          `review started task=${taskId} provider=${picked.provider} dispatch=${opened.value.id}`
+        )
+      } catch (err) {
+        await gate(String(err))
+      }
+    }
 
     const deps: OrchServerDeps = {
       getState: () => store.get(),
@@ -729,6 +914,20 @@ export function registerIpc(
         return configs.map((c) => ({ id: c.id, name: c.name, type: c.type }))
       },
       startValidation: ({ taskId, cwd }) => validator.enqueue({ taskId, cwd }),
+      // 검토를 시작한다. 검증과 달리 **세션을 띄운다** — 그래서 provider·계정을 고르고, 검토
+      // Dispatch 를 커밋하고, deps.startWorker 를 부르는 세 걸음이다. 동기 서명이므로
+      // 비동기 작업은 안에서 흘려보낸다(startValidation 이 큐에 넣기만 하는 것과 같은 이유:
+      // 기다리면 worker_done 응답이 그만큼 늦어지고 워커 세션이 그 자리에서 멈춘다).
+      startReview: ({ taskId }) => {
+        // 떠나 보내는 promise 에 **종단 .catch 가 있어야 한다.** 안의 catch 는 gate() 를 기다리고
+        // gate() 는 store.save 를 기다리는데, 그 쓰기(tmp+rename)는 거부될 수 있다 — 디스크가 찼거나
+        // Windows 에서 rename 이 잠겼을 때다. 붙이지 않으면 그 거부가 main 프로세스의 unhandled
+        // rejection 이 되고, Node 의 기본값은 그것으로 프로세스를 죽이는 것이다. validator 가 같은
+        // 패턴(void ... .catch(log))을 쓴다. 조용히 삼키지 않고 로그를 남긴다.
+        void startReview({ taskId }).catch((e) =>
+          orchLog(`startReview failed task=${taskId}: ${String(e)}`)
+        )
+      },
       log: orchLog
     }
 
@@ -1044,6 +1243,23 @@ export function registerIpc(
     // correct across a project switch instead of comparing against the previous project's fold.
     orchSent = snapshot
     return snapshot
+  })
+  // 스냅샷에 태우지 않고 따로 읽는 이유는 크기다 — Message.body 에는 검증 출력 꼬리가 실리므로
+  // 프로젝트의 모든 Run 의 모든 이벤트를 매 쓰기마다 미는 것은 불가능하다. 모달이 열릴 때만 온다.
+  ipcMain.handle('orch.timeline', async (_e, projectPath: string, runId: string) => {
+    // orch.list 와 같은 가드, 같은 이유 — 경로가 어느 Run 을 볼 수 있는지를 정한다
+    await assertAllowedPath(projectPath)
+    if (!orch) return []
+    const project = repoPathOf(core.worktrees.list(), projectPath)
+    const state = orch.deps.getState()
+    // **소유 판정을 복제하지 않는다.** 이 프로젝트의 Run 목록에 없는 id 는 읽지 않는다 — 규칙을
+    // 다시 쓰면 orch.list 가 막는 Run 을 이 핸들러가 통과시키는 우회로가 된다.
+    if (!runsForProject(state, project, core.worktrees.list()).some((r) => r.id === runId)) {
+      orchLog(`orch.timeline: run ${runId} does not belong to ${project}`)
+      return []
+    }
+    const known = new Set(core.sessions.list().map((s) => s.id))
+    return timelineFor(state, runId, (id) => known.has(id))
   })
   // The way out, the same as files.unwatch and git.unwatch: the Jobs view unmounts on a rail toggle,
   // and without this main goes on folding a snapshot and sending it to nobody on every orchestration

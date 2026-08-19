@@ -88,6 +88,7 @@ export function createTask(
     deps: string[]
     parentId?: string
     validateConfigId?: string
+    reviewRequested?: boolean
   },
   now: string
 ): Res<Task> {
@@ -105,6 +106,7 @@ export function createTask(
     deps: a.deps,
     parentId: a.parentId,
     ...(a.validateConfigId ? { validateConfigId: a.validateConfigId } : {}),
+    ...(a.reviewRequested ? { reviewRequested: a.reviewRequested } : {}),
     status: 'pending',
     consecutiveFailures: 0,
     createdAt: now,
@@ -193,6 +195,11 @@ export function applyWorkerDone(
      *  동작한다(worker_done 을 그대로 믿는다)"다.
      *  기본값은 true — 이 인자를 모르는 순수 계층의 호출자에게는 지금까지의 동작이 유지된다. */
     canValidate?: boolean
+    /** 검토를 실제로 돌릴 수 있는가. 배선이 검토기를 주입하지 않았으면 서버가 false 로 넘긴다 —
+     *  canValidate 와 완전히 같은 이유다: 보내면 결과를 가져다줄 것이 없어 Task 가 영원히
+     *  reviewing 이고, recomputeReady 는 completed 만 승격시키므로 그 의존 서브트리 전체가
+     *  pending 에 멈춘다. 기본값 true — 이 인자를 모르는 호출자에게는 지금까지의 동작이 유지된다. */
+    canReview?: boolean
   },
   now: string
 ): Res<'accepted' | 'alreadyReported'> {
@@ -213,21 +220,32 @@ export function applyWorkerDone(
   // canValidate === false 는 검증기가 없는 배선이다 — 그때는 검증이 없는 Task 와 똑같이 다룬다.
   const validating =
     a.outcome === 'succeeded' && !!task.validateConfigId && a.canValidate !== false
-  const to = validating ? 'validating' : a.outcome === 'succeeded' ? 'completed' : 'failed'
+  // 검증이 먼저다 — !validating 이 그것을 강제한다. 검증이 통과한 뒤의 검토는
+  // applyValidationResult 가 같은 판단으로 넘긴다.
+  const reviewing =
+    a.outcome === 'succeeded' && !validating && !!task.reviewRequested && a.canReview !== false
+  const to = validating
+    ? 'validating'
+    : reviewing
+      ? 'reviewing'
+      : a.outcome === 'succeeded'
+        ? 'completed'
+        : 'failed'
   const moved = moveTask(task, to, now)
   if (!moved) return err(`cannot move task ${task.status} -> ${to}`)
   const nextTask: Task = {
     ...moved,
     result: a.body,
     filesModified: a.filesModified,
-    // **validating 으로 갈 때는 그대로 넘긴다.** 여기서 0 으로 되돌리면 이어진 검증 실패가 1 을
-    // 만들고 다음 시도도 0 -> 1 이라 FAILURE_LIMIT 에 영원히 닿지 않는다 — 검증을 통과하지 못하는
-    // Task 가 무한히 재시도된다. 초기화는 실제로 completed 에 도달할 때만 한다.
-    consecutiveFailures: validating
-      ? task.consecutiveFailures
-      : a.outcome === 'succeeded'
-        ? 0
-        : task.consecutiveFailures + 1
+    // **validating 이나 reviewing 으로 갈 때는 그대로 넘긴다.** 여기서 0 으로 되돌리면 이어진
+    // 검증/검토 실패가 1 을 만들고 다음 시도도 0 -> 1 이라 FAILURE_LIMIT 에 영원히 닿지 않는다 —
+    // 통과하지 못하는 Task 가 무한히 재시도된다. 초기화는 실제로 completed 에 도달할 때만 한다.
+    consecutiveFailures:
+      validating || reviewing
+        ? task.consecutiveFailures
+        : a.outcome === 'succeeded'
+          ? 0
+          : task.consecutiveFailures + 1
   }
   const nextDispatch: Dispatch = {
     ...dispatch,
@@ -275,18 +293,36 @@ export function applyWorkerDone(
  *  못하면 코디네이터는 다음 Task 를 띄우지 않는다. */
 export function applyValidationResult(
   s: OrchState,
-  a: { taskId: string; exitCode: number; output: string },
+  a: {
+    taskId: string
+    exitCode: number
+    output: string
+    /** applyWorkerDone 의 canReview 와 같은 판정이다 — 배선이 검토기를 주입하지 않았으면 서버가
+     *  false 로 넘긴다. */
+    canReview?: boolean
+  },
   now: string
 ): Res<Task> {
   const task = s.tasks.find((t) => t.id === a.taskId)
   if (!task) return err(`unknown task: ${a.taskId}`)
   if (task.status !== 'validating') return err(`task is not validating: ${task.status}`)
   const passed = a.exitCode === 0
-  const moved = moveTask(task, passed ? 'completed' : 'failed', now)
-  if (!moved) return err(`cannot move task ${task.status} -> ${passed ? 'completed' : 'failed'}`)
+  // 검증이 통과했어도 검토가 걸려 있으면 아직 끝난 것이 아니다. applyWorkerDone 과 같은 판단이고,
+  // 여기에 없으면 검증이 걸린 Task 만 검토를 건너뛴다.
+  const reviewing = passed && !!task.reviewRequested && a.canReview !== false
+  const to = reviewing ? 'reviewing' : passed ? 'completed' : 'failed'
+  const moved = moveTask(task, to, now)
+  if (!moved) return err(`cannot move task ${task.status} -> ${to}`)
   const next: Task = {
     ...moved,
-    consecutiveFailures: passed ? 0 : task.consecutiveFailures + 1,
+    // reviewing 으로 갈 때 0 으로 되돌리지 않는다 — 위 applyWorkerDone 의 주석과 같은 이유이고,
+    // 이쪽이 더 잡기 어렵다: 검증은 통과하고 검토는 실패하는 Task 가 매 시도마다 0 -> 1 을
+    // 반복해 회로가 영원히 끊기지 않는다.
+    consecutiveFailures: reviewing
+      ? task.consecutiveFailures
+      : passed
+        ? 0
+        : task.consecutiveFailures + 1,
     ...(passed ? {} : { result: `validation failed (exit ${a.exitCode})\n${a.output}` })
   }
   let state: OrchState = { ...s, tasks: recomputeReady(replace(s.tasks, next)) }
@@ -301,7 +337,7 @@ export function applyValidationResult(
       taskId: task.id,
       subject: passed ? 'validation passed' : 'validation failed',
       body: passed
-        ? `exitCode=0. The Task moved to completed.\n${a.output}`
+        ? `exitCode=0. ${reviewing ? 'The Task moved to reviewing — a reviewer on another provider now reads it.' : 'The Task moved to completed.'}\n${a.output}`
         : `exitCode=${a.exitCode}. The Task moved to failed (consecutiveFailures=${next.consecutiveFailures}). Retry with worker-start --retry-of. The output tail below is the only record of what went wrong — a retry worker's spec file does not carry it, so pass on whatever it needs.\n${a.output}`
     },
     now
@@ -318,6 +354,143 @@ export function blockForValidation(
   now: string
 ): Res<Gate> {
   return createGate(s, { taskId: a.taskId, question: `검증을 실행할 수 없습니다: ${a.reason}` }, now)
+}
+
+/** 검토 Dispatch 를 연다. openDispatch 와 다른 점 셋:
+ *
+ *  - **Task 를 dispatched 로 옮기지 않는다.** 이미 reviewing 이고, 그 상태가 의존 Task 를 막는
+ *    장치다 — 옮기면 recomputeReady 가 다음 Task 를 풀어 준다.
+ *  - retryOf 가 없다. 검토를 다시 띄우는 것은 앱이 하지 않는다(보고 없이 죽으면 Gate 다).
+ *  - review: true 를 찍는다. worker_done 이 도착했을 때 어느 쪽 Dispatch 인지 아는 유일한 방법이다.
+ *
+ *  회로 차단 검사는 두지 않는다 — 이 Task 는 reviewing 에 도달했으므로 연속 실패가 한도 아래다. */
+export function openReviewDispatch(
+  s: OrchState,
+  a: {
+    taskId: string
+    provider: Provider
+    accountId: string
+    sessionId: string
+    cwd: string
+    specPath: string
+  },
+  now: string
+): Res<Dispatch> {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return err(`unknown task: ${a.taskId}`)
+  if (task.status !== 'reviewing') return err(`task is not reviewing: ${task.status}`)
+  const open = s.dispatches.find((d) => d.taskId === a.taskId && !d.outcome && !d.endedAt)
+  if (open) return err(`dispatch already open: ${open.id}`)
+  // openDispatch 와 같은 이유 — 같은 sessionId 를 쓰는 열린 Dispatch 가 둘이면 closeDispatch 가
+  // 어느 것을 닫을지 알 수 없다
+  const sessionOpen = s.dispatches.find(
+    (d) => d.sessionId === a.sessionId && !d.outcome && !d.endedAt
+  )
+  if (sessionOpen) return err(`sessionId already in use by an open dispatch: ${sessionOpen.id}`)
+  const dispatch: Dispatch = {
+    id: newId('dsp'),
+    taskId: a.taskId,
+    provider: a.provider,
+    accountId: a.accountId,
+    sessionId: a.sessionId,
+    cwd: a.cwd,
+    specPath: a.specPath,
+    review: true,
+    startedAt: now,
+    workerState: 'ready',
+    retained: false
+  }
+  return ok({ ...s, dispatches: [...s.dispatches, dispatch] }, dispatch)
+}
+
+/** 검토자의 판정을 Task 에 반영한다.
+ *
+ *  실패는 기존 재시도 흐름을 그대로 탄다 — Gate 를 열지 않는다. 검토가 "부족하다"고 판정한 것은
+ *  **정상 결과**이고, 정상 결과를 사람에게 넘기면 자동화가 아니다. Gate 는 검토를 **돌릴 수 없을**
+ *  때만 쓴다(blockForReview).
+ *
+ *  **결과는 반드시 메시지가 된다** — applyValidationResult 와 같은 이유다. 코디네이터를 깨우는
+ *  수단은 메시지뿐이고(check 는 nextDelivery 를 통해 s.messages 만 읽는다), 통과도 알려야 한다:
+ *  의존 Task 가 풀린 것을 모르면 다음 Task 를 띄우지 않는다.
+ *
+ *  worker_done 이 아니라 status 인 이유: 코디네이터 쪽에서 보면 이것은 **앱이 얻어 온 판정을 앱이
+ *  보고하는 것**이고 검증 결과와 같은 성격이다. worker_done 은 "내가 띄운 워커가 보고했다"로 남긴다. */
+export function applyReviewResult(
+  s: OrchState,
+  a: { taskId: string; dispatchId: string; outcome: Outcome; subject: string; body: string },
+  now: string
+): Res<'accepted' | 'alreadyReported'> {
+  const dispatch = s.dispatches.find((d) => d.id === a.dispatchId)
+  if (!dispatch) return err(`unknown dispatch: ${a.dispatchId}`)
+  if (!dispatch.review) return err(`not a review dispatch: ${a.dispatchId}`)
+  if (dispatch.taskId !== a.taskId) return err('taskId does not match dispatch')
+  // applyWorkerDone 과 같은 판정 — outcome 만 보면 closeDispatch 가 닫아 둔(endedAt 만 있고
+  // outcome 은 없는) Dispatch 가 걸러지지 않아, 늦게 도착한 보고가 Task 의 종료 상태를 가로챈다.
+  if (dispatch.outcome || dispatch.endedAt) return ok(s, 'alreadyReported')
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return err(`unknown task: ${a.taskId}`)
+  if (task.status !== 'reviewing') return err(`task is not reviewing: ${task.status}`)
+  const passed = a.outcome === 'succeeded'
+  const moved = moveTask(task, passed ? 'completed' : 'failed', now)
+  if (!moved) return err(`cannot move task ${task.status} -> ${passed ? 'completed' : 'failed'}`)
+  const next: Task = {
+    ...moved,
+    // 무엇이 부족했는지를 Task 에 남긴다. 재시도 워커가 이것을 읽지는 못한다 — buildSpecFile 은
+    // spec 파일에 title 과 spec 만 싣는다 — 그래서 전달은 아래 메시지를 읽은 코디네이터의 일이다.
+    ...(passed ? {} : { result: a.body }),
+    consecutiveFailures: passed ? 0 : task.consecutiveFailures + 1
+  }
+  const nextDispatch: Dispatch = {
+    ...dispatch,
+    outcome: a.outcome,
+    endedAt: now,
+    workerState: passed ? 'stopped' : 'failed'
+  }
+  let state: OrchState = {
+    ...s,
+    tasks: recomputeReady(replace(s.tasks, next)),
+    dispatches: replace(s.dispatches, nextDispatch)
+  }
+  state = pushMessage(
+    state,
+    {
+      runId: task.runId,
+      type: 'status',
+      taskId: task.id,
+      dispatchId: dispatch.id,
+      subject: passed ? 'review passed' : 'review failed',
+      body: passed
+        ? `The reviewer accepted the work. The Task moved to completed.\n${a.body}`
+        : `The reviewer rejected the work (consecutiveFailures=${next.consecutiveFailures}). Retry with worker-start --retry-of. The reason below is the only record of what was missing — a retry worker's spec file does not carry it, so pass on whatever it needs.\n${a.body}`
+    },
+    now
+  ).state
+  return ok(state, 'accepted')
+}
+
+/** 검토를 아예 돌릴 수 없을 때. blockForValidation 과 같은 판단이다 — 조용히 통과시키면 "검토됨"과
+ *  "검토 못 함"이 화면에서 같아지고, 실패시키면 인프라 문제로 멀쩡한 작업이 재시도 세 번 끝에 회로
+ *  차단까지 간다.
+ *
+ *  **질문이 빠져나갈 길을 말한다.** resolveGate 는 Task 를 pending 으로 돌리므로, 그것으로 풀면
+ *  이미 끝나고 검증까지 통과한 일이 버려질 수 있다(코디네이터가 구현 워커를 새로 띄운다).
+ *  task-update 는 전이표를 일부러 우회하므로 그 일을 버리지 않고 Task 를 닫는다.
+ *
+ *  문장이 한국어인 것은 blockForValidation 과 같다 — Gate 질문의 하드코딩된 언어는 그 슬라이스가
+ *  남긴 후속이고 여기서 새로 풀지 않는다. */
+export function blockForReview(
+  s: OrchState,
+  a: { taskId: string; reason: string },
+  now: string
+): Res<Gate> {
+  return createGate(
+    s,
+    {
+      taskId: a.taskId,
+      question: `검토를 실행할 수 없습니다: ${a.reason}\n끝난 일을 버리지 않고 이 Task 를 닫으려면 task-update --status completed 를 쓰세요.`
+    },
+    now
+  )
 }
 
 /** Settle unanswered questions without an answer — never delete them. An unacked Delivery's

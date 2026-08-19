@@ -3,7 +3,7 @@
 // providers/meta.ts).
 import type { Provider } from '../providers/meta'
 
-export type TaskStatus = 'pending' | 'ready' | 'dispatched' | 'validating' | 'completed' | 'failed' | 'blocked'
+export type TaskStatus = 'pending' | 'ready' | 'dispatched' | 'validating' | 'reviewing' | 'completed' | 'failed' | 'blocked'
 export type Outcome = 'succeeded' | 'failed'
 /** Observed state of the session a Dispatch owns. outcome_unknown = cannot be proven (section 7 of
  *  the orchestration guide) */
@@ -36,6 +36,10 @@ export interface Task {
   /** 이 Task 를 완료로 판정할 실행 구성의 id. 없으면 worker_done 을 그대로 믿는다 —
    *  "문서를 고친다" 같은 Task 에 빌드를 거는 것은 틀린 판정이므로 검증 없음이 기본이다. */
   validateConfigId?: string
+  /** 이 Task 를 **다른 provider** 가 읽어 "요구가 충족됐는가"를 판정할지. task-create --review 가
+   *  켠다. 검증(validateConfigId)과 독립이고, 둘 다 걸리면 검증이 먼저다 — 컴파일도 안 되는 코드를
+   *  읽으라고 에이전트 세션을 태우는 것은 낭비다. */
+  reviewRequested?: boolean
   /** Consecutive failure count. 3 means circuit break */
   consecutiveFailures: number
   createdAt: string
@@ -65,6 +69,9 @@ export interface Dispatch {
   limitResetsAt?: number
   /** Cleanup held back at the user's request (worker-retain) */
   retained: boolean
+  /** 이 Dispatch 가 구현이 아니라 검토인가. 한 Task 에 구현 Dispatch 와 검토 Dispatch 가 함께
+   *  붙으므로, worker_done 이 도착했을 때 어느 쪽인지 아는 유일한 방법이다. */
+  review?: boolean
 }
 
 export interface Message {
@@ -128,11 +135,17 @@ const ALLOWED: Record<TaskStatus, TaskStatus[]> = {
   // worker that is already running — that is worker-stop.
   // dispatched -> validating: 워커가 성공을 보고했지만 그 Task 에 검증이 걸려 있는 경우.
   // 검증이 없으면 지금처럼 곧바로 completed 로 간다.
-  dispatched: ['completed', 'failed', 'validating'],
+  // dispatched -> reviewing: 검증이 걸리지 않고 검토만 걸린 Task 의 성공 보고.
+  dispatched: ['completed', 'failed', 'validating', 'reviewing'],
   // validating -> blocked 는 검증을 아예 돌릴 수 없을 때다(구성이 없다, cwd 가 사라졌다). 그 판단은
   // 사람의 것이므로 Gate 를 연다. validating -> dispatched 는 없다 — 검증 결과가 도착할 자리가
   // 사라지기 때문이다.
-  validating: ['completed', 'failed', 'blocked'],
+  // validating -> reviewing: 검증이 통과했고 검토가 걸려 있다. 순서는 검증 -> 검토다.
+  validating: ['completed', 'failed', 'blocked', 'reviewing'],
+  // reviewing -> blocked 는 검토를 아예 돌릴 수 없을 때다(쓸 수 있는 다른 provider 계정이 없다,
+  // 검토자가 보고 없이 죽었다). 그 판단은 사람의 것이므로 Gate 를 연다. reviewing -> dispatched 는
+  // 없다 — 검토 결과가 도착할 자리가 사라진다(validating 과 같은 이유).
+  reviewing: ['completed', 'failed', 'blocked'],
   completed: [],
   // failed -> blocked is allowed: failed is by definition a state with no open dispatch
   // (applyWorkerDone sets outcome and endedAt together) — so there is no reason to block the flow

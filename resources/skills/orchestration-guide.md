@@ -28,11 +28,13 @@ told otherwise. `run-use --id <run>` only checks that the Run exists and returns
 nothing to the session (the current implementation is a no-op). If you plan to keep several Runs going
 at once, pass `--run <run>` explicitly on every command (`task-list` and `check` accept it).
 
-## 2. Seven Task states and their transitions
+## 2. Eight Task states and their transitions
 
-`pending → ready → dispatched → completed | failed`, plus `blocked` (a Gate) and `validating` — a Task
+`pending → ready → dispatched → completed | failed`, plus `blocked` (a Gate), `validating` — a Task
 created with `--validate` (4.2) passes through `validating` between `dispatched` and `completed | failed`
-while the run happens.
+while the run happens — and `reviewing` — a Task created with `--review` (4.2) passes through `reviewing`
+after a successful report (and after a passing validation, if both are attached) while another agent on a
+different provider judges it.
 
 | from | to | Trigger |
 |---|---|---|
@@ -40,19 +42,25 @@ while the run happens.
 | `pending`, `ready` | `dispatched` | `worker-start` |
 | `pending`, `ready`, `failed` | `blocked` | `gate-create` (rejected if a Dispatch is open) |
 | `blocked` | `ready` | `gate-resolve` (if the Task has more open Gates, all of them must be resolved too) |
-| `dispatched` | `completed` | `worker_done --outcome succeeded`, when the Task has no `--validate` (4.2) |
+| `dispatched` | `completed` | `worker_done --outcome succeeded`, when the Task has neither `--validate` nor `--review` (4.2) |
 | `dispatched` | `validating` | `worker_done --outcome succeeded`, when the Task has `--validate` (4.2) |
+| `dispatched` | `reviewing` | `worker_done --outcome succeeded`, when the Task has `--review` but no `--validate` (4.2) |
 | `dispatched` | `failed` | `worker_done --outcome failed`, or the session dies without reporting |
-| `validating` | `completed` | the validation run exits `0` |
+| `validating` | `completed` | the validation run exits `0`, and the Task has no `--review` |
+| `validating` | `reviewing` | the validation run exits `0`, and the Task has `--review` (4.2) |
 | `validating` | `failed` | the validation run exits non-zero — the same retry path as any other failure |
 | `validating` | `blocked` | the validation cannot run at all — a Gate opens automatically |
+| `reviewing` | `completed` | the reviewer reports `worker_done --outcome succeeded` |
+| `reviewing` | `failed` | the reviewer reports `worker_done --outcome failed` — the same retry path as any other failure |
+| `reviewing` | `blocked` | the review cannot run at all (no other provider has a usable account, or the reviewer dies without reporting) — a Gate opens automatically |
 | `failed` | `dispatched` | `worker-start --retry-of <dsp>` (fewer than 3 consecutive failures) |
 | `failed` | (terminal) | 3 consecutive failures — circuit break, no further retries |
 
 There is no `dispatched → blocked`. Receiving `worker_done` puts the Dispatch into a terminal state
-**automatically**, and the Task too — unless the Task has `--validate` attached, in which case success
-moves it to `validating` instead of `completed` (below). Either way, do not add anything after it (see
-section 10).
+**automatically**, and the Task too — unless the Task has `--validate` and/or `--review` attached, in
+which case success moves it to `validating` or `reviewing` instead of `completed` (below, and "When a
+review is worth attaching"). Validation runs first: a Task with both only reaches `reviewing` once the
+validation has passed. Either way, do not add anything after it (see section 10).
 
 ### When a validation is worth attaching
 
@@ -88,6 +96,26 @@ Task in a Run.
   counted as a failure: it means the work was never judged, not that it was wrong. That is a call for a person, not a silent pass and not a failure charged against the work.
 - **If the directory is merely busy** with something else — another validation, or a run the user
   started by hand — the validation waits its turn rather than failing.
+
+### When a review is worth attaching
+
+Attach `--review` (4.2) to a Task whose requirement leaves room for interpretation. What a machine can
+judge by running something — a build, a test suite — is `--validate`'s job; review exists for what that
+cannot settle: whether the work actually does what was asked. **It costs one more agent session, so it
+spends quota** — attaching it to a Task like a one-line documentation fix is the wrong call.
+
+- **The app picks the reviewer, on a provider other than the implementer's.** A Task built on `claude`
+  is never reviewed by `claude`. If no other provider has a logged-in, usable account, the Task goes to
+  `blocked` behind a Gate instead of silently skipping the review.
+- **Validation runs first.** A Task with both `--validate` and `--review` only reaches `reviewing` once
+  the validation has passed (section 2's table) — the reviewer is not asked to re-judge whether the code
+  compiles or the tests run.
+- **A review failure rides the normal retry flow** — `worker-start --retry-of`, exactly like a validation
+  or a worker failure. The `review failed` status message's body is the **only** record of what was
+  missing; a retry worker's spec file does not carry it (the same limitation as validation, above), so
+  pass on whatever the next attempt needs.
+- **A review passing moves the Task straight to `completed`** and releases its dependents, the same as
+  any other route to that state.
 
 ## 3. A supervision loop, end to end
 
@@ -144,6 +172,12 @@ is, the current directory of that shell. If that is not the repository root, eve
 (`--worktree current` being the default) comes up in the wrong directory, and nothing reports it.
 Passing `--cwd <absolute repo path>` is the only reliable way.
 
+**That path also decides where a human can see the Run.** The app's Jobs sidebar lists the Runs of the
+project it currently has open, matched against `Run.cwd`. So a Run created with a `--cwd` pointing
+somewhere other than the project your session belongs to still works — every command succeeds — but it
+is invisible in that window until the user opens the project it names. If you are working on one
+repository, pass that repository's root and open your session there.
+
 `run-configs` returns the Run's project's run configurations as `[{ id, name, type }]` — the ids
 `task-create --validate` accepts (4.2). It always reads the **most recently created** Run and takes no
 `--run` flag, unlike `task-list` and `check` (section 1). It changes no state, and unlike most commands
@@ -153,10 +187,10 @@ starts.
 ### 4.2 Task and Gate
 
 ```
-task-create --title <s> --spec <s|-> [--deps <json_array>] [--parent <tsk>] [--validate <configId>] [--json]
+task-create --title <s> --spec <s|-> [--deps <json_array>] [--parent <tsk>] [--validate <configId>] [--review] [--json]
 task-list [--run <run>] [--status <s>] [--ready] [--brief] [--json]
 task-update --id <tsk> --status <s> [--result <s|->] [--json]   # bypasses the transition table — see section 8
-dispatch-show --task <tsk> [--json]        # returns that Task's Dispatch history as an array (retries included)
+dispatch-show --task <tsk> [--json]        # that Task's Dispatch history as an array (retries and the app's review Dispatch included)
 
 gate-create --task <tsk> --question <s|-> [--options <json_array>] [--json]
 gate-resolve --id <gat> --resolution <s> [--json]
@@ -175,6 +209,17 @@ gate-list [--task <tsk>] [--status <s>] [--json]
   `worker_done --outcome succeeded` completes the Task exactly as before. With it, that same report
   instead moves the Task to `validating` (section 2, which covers what happens next and when it is
   worth attaching).
+- **`--review` makes this Task's completion depend on another agent's judgement** — a value-less flag,
+  the same shape as `task-list --ready`. Omit it and nothing changes. With it, a successful report (and
+  a passing validation, if `--validate` is also attached) moves the Task to `reviewing` instead of
+  `completed` (section 2, which covers what happens next, when it is worth attaching, and what the
+  reviewer sees).
+- **`dispatch-show` also lists the review Dispatch the app started**, on a Task with `--review`
+  (above). You did not open it and there is nothing to clean up on it: `worker-release` or
+  `worker-stop` on that entry kills the reviewer's session mid-review, and because that command
+  validates no state by design (section 8), nothing stops you. The Task then goes to `blocked`
+  behind a Gate you have to answer. Release only the Dispatches you started yourself — a review
+  Dispatch is the app's to end.
 - `--ready` filters to Tasks with `status=ready`. `--brief` truncates the spec to 160 characters and
   returns `spec_truncated` alongside it — for a coordinator skimming many Tasks without burning
   context.
@@ -334,6 +379,10 @@ server blocks `check` and `inbox` as coordinator-only (403).
   ```
   Body goes through stdin: three sentences on what you did, what you found, and what is left — do not
   copy the code across, you share a working directory with the orchestrator.
+- **A worker started for a review Dispatch does not change code.** Its spec file says so explicitly —
+  read the requirement, the implementer's report, and the changed files, then judge; do not fix
+  anything you find wrong. It still reports exactly once, `worker_done --outcome succeeded` or
+  `--outcome failed`, under **its own** dispatch id — not the implementation Dispatch's.
 - **When stuck, `ask` (blocking).** If a judgement call, missing information, or a permissions problem
   is preventing progress, ask instead of guessing:
   ```bash
@@ -417,8 +466,9 @@ automatically. After receiving `worker_done`, pick one of these **yourself**:
   command that undoes it** — see 4.3.
 
 **Do not try to move a Task's state by hand after `worker_done`.** `worker_done` already settles the
-Dispatch, and the Task too — to a terminal state (`completed`/`failed`) directly, or to `validating`
-first if the Task has `--validate` attached (section 2).
+Dispatch, and the Task too — to a terminal state (`completed`/`failed`) directly, or through
+`validating` first if the Task has `--validate`, and through `reviewing` if it has `--review`
+(both, in that order, when it has both — section 2).
 
 `task-update --id <tsk> --status <s>` is **not for the normal flow.** It bypasses the state transition
 table, so use it only as an escape hatch for a stranded Task — for example, a Task stuck at `failed`
@@ -429,9 +479,12 @@ it leaves a record of the bypass in the app log. Once corrected, Tasks that depe
 **`task-update` resets that Task's `consecutiveFailures` (the circuit counter) to 0.** So even a Task
 whose circuit opened after 3 failures can be dispatched again after
 `task-update --id <tsk> --status ready` — because it means a human checked the cause and cleared it.
-This is the only escape hatch that opens the circuit (the other two paths to a zero counter are a
-worker's `worker_done --outcome succeeded` on a Task with no `--validate`, and a validation that
-exits `0` — and both are unreachable while dispatching is blocked).
+This is the only escape hatch that opens the circuit. The other paths to a zero counter all end at
+`completed` and are unreachable while dispatching is blocked: a worker's `worker_done --outcome
+succeeded` on a Task with neither `--validate` nor `--review`, a validation that exits `0` on a Task
+with no `--review`, and a passing review. **Reaching `validating` or `reviewing` does not reset it** —
+otherwise a Task that never passes them would go 0 → 1 on every attempt and the circuit would never
+break.
 **Do not reach for it out of habit without checking the cause** — that makes the circuit breaker
 meaningless and repeats the same failure indefinitely.
 

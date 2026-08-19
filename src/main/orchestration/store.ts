@@ -8,7 +8,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { createGate, emptyState, type OrchState } from '../../core/orchestration/state'
+import { blockForReview, createGate, emptyState, type OrchState } from '../../core/orchestration/state'
 
 /** Cutoff for discarding a finished Run. The same 30 days as SchedulerConfigStore's ENTRY_TTL_MS */
 export const RUN_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -40,6 +40,9 @@ export class OrchestrationStore {
     unknownOutcomes: number
     pruned: number
     staleValidations: number
+    /** 재시작에 끊긴 검토. staleValidations 와 따로 센다 — 배선이 이 숫자를 시작 로그에 적으므로
+     *  한데 묶으면 검토가 끊긴 재시작이 "검증이 끊겼다"고 기록된다. */
+    staleReviews: number
   }> {
     let parsed: unknown
     try {
@@ -47,16 +50,16 @@ export class OrchestrationStore {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
         this.state = emptyState()
-        return { recovered: false, unknownOutcomes: 0, pruned: 0, staleValidations: 0 }
+        return { recovered: false, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0 }
       }
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       this.state = emptyState()
-      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0 }
+      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0 }
     }
     if (!isValidState(parsed)) {
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       this.state = emptyState()
-      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0 }
+      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0 }
     }
 
     // isValidState only checks that the arrays exist, so the elements of parsed's arrays are
@@ -82,18 +85,33 @@ export class OrchestrationStore {
     // 것은 검증뿐이다. 다시 검증할지 손으로 통과시킬지는 사람이 정한다.
     // 이 시점에서 Dispatch 는 위에서 endedAt 이 채워졌으므로 createGate 의 "열린 dispatch" 검사에
     // 걸리지 않는다. consecutiveFailures 는 건드리지 않는다 — 작업이 틀렸다는 증거가 아니다.
+    //
+    // **reviewing 도 같이 본다.** 검토자는 별도의 세션이므로 앱과 함께 죽었고, 사정은 validating 보다
+    // 나쁘다: 검증에는 앱 쪽 큐가 있어 사람이 다시 돌릴 수 있지만, 검토를 다시 띄우는 명령은
+    // 코디네이터에게 없고 reviewing -> dispatched 전이가 없어 --retry-of 도 거절된다. 그대로 두면
+    // Task 는 영원히 reviewing 이고 그 아래 의존 서브트리 전체가 pending 에 멈춘다.
     let staleValidations = 0
+    let staleReviews = 0
     let withGates: OrchState = { ...st, dispatches }
     for (const t of st.tasks) {
-      if (t.status !== 'validating') continue
-      const r = createGate(
-        withGates,
-        { taskId: t.id, question: '앱이 재시작되어 검증이 중단되었습니다. 다시 검증할까요?' },
-        now
-      )
+      if (t.status !== 'validating' && t.status !== 'reviewing') continue
+      // 검토는 질문을 손으로 쓰지 않고 blockForReview 에 맡긴다 — 그 질문에는 "끝난 일을 버리지 않고
+      // 이 Task 를 닫으려면 task-update --status completed" 라는 탈출구가 붙어 있고, reviewing Task
+      // 에는 그것이 꼭 필요하다: 구현이 끝나고 검증까지 통과했을 수 있는 일인데 resolveGate 는 Task 를
+      // pending 으로 돌려보내 그 일을 버린다. 문장을 여기 옮겨 적으면 같은 안내가 두 곳에 생겨
+      // 갈라진다. 검증 쪽 질문은 그대로 둔다.
+      const r =
+        t.status === 'validating'
+          ? createGate(
+              withGates,
+              { taskId: t.id, question: '앱이 재시작되어 검증이 중단되었습니다. 다시 검증할까요?' },
+              now
+            )
+          : blockForReview(withGates, { taskId: t.id, reason: '앱이 재시작되어 검토가 중단되었습니다' }, now)
       if (!r.ok) continue // 전이가 막히면 그 Task 는 그대로 둔다 — 잃는 것보다 낫다
       withGates = r.state
-      staleValidations++
+      if (t.status === 'validating') staleValidations++
+      else staleReviews++
     }
 
     // TTL cleanup: once a finished Run (every Task terminal) is 30 days old, every entry belonging
@@ -131,12 +149,12 @@ export class OrchestrationStore {
       gates: withGates.gates.filter((g) => !doomed.has(g.runId))
     }
 
-    if (unknownOutcomes > 0 || doomed.size > 0 || staleValidations > 0) {
+    if (unknownOutcomes > 0 || doomed.size > 0 || staleValidations > 0 || staleReviews > 0) {
       if (doomed.size > 0) await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       // Unguarded save — the same rewrite convention as RunConfigStore and SchedulerConfigStore
       await this.save(this.state).catch(() => {})
     }
-    return { recovered: false, unknownOutcomes, pruned: doomed.size, staleValidations }
+    return { recovered: false, unknownOutcomes, pruned: doomed.size, staleValidations, staleReviews }
   }
 
   get(): OrchState {

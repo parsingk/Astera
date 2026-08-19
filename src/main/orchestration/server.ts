@@ -7,7 +7,9 @@ import { randomBytes } from 'node:crypto'
 import {
   ackDelivery,
   applyReply,
+  applyReviewResult,
   applyWorkerDone,
+  blockForReview,
   closeDispatch,
   createGate,
   createQuestion,
@@ -46,6 +48,11 @@ export interface OrchServerDeps {
     taskId: string
     title: string
     spec: string
+    /** The finished spec file, when the caller assembled it itself — passed straight through to
+     *  OrchCoordinator.startWorker, where the reason it exists is documented. worker-start never sets
+     *  it (task.spec is a body and the implementer's template is the right wrapper for it); the
+     *  wiring's review path does. */
+    specFileContent?: string
     provider: Provider
     accountId: string
     runCwd: string
@@ -92,6 +99,15 @@ export interface OrchServerDeps {
    *  validating 으로 보내지 않는 이유는 그 상태에서 꺼내 줄 것이 아무것도 없기 때문이다 —
    *  now?/log?/backup?/probeLimit? 와 같은 "주입되지 않으면 그 기능이 없다" 관례다. */
   startValidation?(a: { taskId: string; cwd: string }): void
+  /** 검토를 시작한다. **동기다** — startValidation 과 같은 이유이고, 검토는 세션을 하나 띄우므로
+   *  더 오래 걸린다. 배선이 provider·계정을 고르고, 검토 Dispatch 를 열고, 세션을 띄운다.
+   *  주입되지 않으면 검토가 없는 것으로 동작한다(applyWorkerDone/applyValidationResult 의
+   *  canReview 인자로 전달된다) — reviewing 으로 보내면 그 상태에서 꺼내 줄 것이 없다.
+   *
+   *  **cwd 를 넘기지 않는다.** 배선은 provider 를 고르려고 구현 Dispatch 를 어차피 찾아야 하고,
+   *  그 Dispatch 가 cwd 를 들고 있다. 여기서 넘기면 두 호출자(이 서버와 검증 통과 경로)가 같은 값을
+   *  서로 다른 방법으로 구하게 되고, 그 둘은 갈라진다. */
+  startReview?(a: { taskId: string }): void
   /** Audit log left behind when task-update bypasses the transition table (canTransition) — the same
    *  shape as log(message: string) in coordinator.ts. The wiring decides where it goes. If it is not
    *  injected (existing tests and the like) logging is skipped — optional for the same reason as
@@ -143,13 +159,17 @@ const COORDINATOR_ONLY = new Set([
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null)
 
-// TaskStatus 유니온에서 파생되지 않는 손수 쓴 목록이다 — 빠뜨려도 컴파일은 통과하고,
-// `task-list --status validating` 이 "must be one of ..." 로 거절되는 것이 유일한 증상이다.
+// TaskStatus 유니온에서 파생되지 않는 손수 쓴 목록이다 — 빠뜨려도 컴파일은 통과한다.
+// 유일한 증상은 `task-update --status <빠진 상태>` 가 "must be one of ..." 로 거절되는 것이다:
+// isTaskStatus 를 쓰는 자리는 그 명령 하나뿐이고(아래 task-update), task-list 는 --status 를
+// 검증하지 않는다(모르는 값이면 조용히 빈 목록이 된다). 이 주석은 예전에 task-list 를 가리키고
+// 있었는데, 그 문장을 믿고 쓴 테스트는 아무것도 검증하지 못한다.
 const TASK_STATUSES: TaskStatus[] = [
   'pending',
   'ready',
   'dispatched',
   'validating',
+  'reviewing',
   'completed',
   'failed',
   'blocked'
@@ -274,7 +294,10 @@ export async function handleCommand(
             spec,
             deps: Array.isArray(args.deps) ? (args.deps as string[]) : [],
             parentId: str(args.parent) ?? undefined,
-            validateConfigId: str(args.validate) ?? undefined
+            validateConfigId: str(args.validate) ?? undefined,
+            // `--review` 는 값이 없는 플래그다(task-list --ready 와 같은 모양). 어느 provider 가
+            // 읽을지는 앱이 고른다 — 계정 풀을 아는 것은 앱이다.
+            reviewRequested: args.review === true ? true : undefined
           },
           now
         )
@@ -568,21 +591,82 @@ export async function handleCommand(
         // idempotent response with a 403.
         if (isWorker && !myDispatchIds.has(dispatchId))
           return denied('cannot report for another dispatch')
+        const reporting = s.dispatches.find((d) => d.id === dispatchId)
         // Limit probe — only when outcome is failed. handleExit alone is not enough: a claude TUI
         // that hit a limit does not die, it prints a notice and then stops, so there are sessions
         // that close only through this path, where the worker reports worker_done --outcome failed
         // itself.
+        //
+        // **검토 분기보다 위에 있다.** 아래에 두면 한도가 다 된 검토자의 보고는 이 탐침을 지나지
+        // 못하고, 코디네이터는 "검토자가 일을 반려했다"만 읽는다 — 멀쩡한 작업에 구현자를 다시 띄워
+        // 회로 차단에 한 걸음 다가가면서, 그 계정이 언제 풀리는지는 아무도 알지 못한다. 위 주석이
+        // 말하는 "이 경로로만 닫히는 세션"은 검토자에게도 똑같이 있다.
         let limitResetsAt: number | null = null
-        if (outcome === 'failed' && deps.probeLimit) {
-          const dispatch = s.dispatches.find((d) => d.id === dispatchId)
-          if (dispatch) {
-            // The probe reads files — a failure there must not block handling the worker's report.
-            try {
-              limitResetsAt = await deps.probeLimit(dispatch)
-            } catch (err) {
-              deps.log?.(`limit probe failed dispatch=${dispatch.id}: ${String(err)}`)
-            }
+        if (outcome === 'failed' && deps.probeLimit && reporting) {
+          // The probe reads files — a failure there must not block handling the worker's report.
+          try {
+            limitResetsAt = await deps.probeLimit(reporting)
+          } catch (err) {
+            deps.log?.(`limit probe failed dispatch=${reporting.id}: ${String(err)}`)
           }
+        }
+        /** limitResetsAt 을 그 Dispatch 에 싣고 같은 소식을 status 메시지로도 남긴다. 두 경로(검토
+         *  보고와 구현 보고)가 같은 것을 해야 하므로 한 군데에 둔다 — 복사해 두면 한쪽만 고쳐진다.
+         *
+         *  Adds a status message in the same shape as closeDispatch (state.ts:264-284) — section 7 of
+         *  the orchestration guide ("when limitResetsAt is set it also arrives in the inbox as a
+         *  status message") applies to every path, not just the handleExit one. The worker's own
+         *  worker_done message (subject, body) is left untouched — this is a separate message added
+         *  alongside it. Not finding the task should be impossible (applyWorkerDone and
+         *  applyReviewResult have already validated it) but is handled defensively. */
+        const withLimit = (next: OrchState): OrchState => {
+          if (limitResetsAt === null) return next
+          const task = next.tasks.find((t) => t.id === taskId)
+          return {
+            ...next,
+            dispatches: next.dispatches.map((d) =>
+              d.id === dispatchId ? { ...d, limitResetsAt } : d
+            ),
+            messages: task
+              ? [
+                  ...next.messages,
+                  {
+                    // 16 hex — the same width as newId in the pure layer (types.ts). 8 hex has a
+                    // collision probability of ≈1.2% over 10,000 messages, and on a collision reply
+                    // answers the wrong question.
+                    id: `msg_${randomBytes(8).toString('hex')}`,
+                    runId: task.runId,
+                    type: 'status' as MessageType,
+                    taskId,
+                    dispatchId,
+                    subject: 'session ended at a usage limit',
+                    body: `limitResetsAt=${new Date(limitResetsAt).toISOString()}. After that time, a --retry-of on the same account can proceed.`,
+                    answered: false,
+                    createdAt: now
+                  }
+                ]
+              : next.messages
+          }
+        }
+        // 검토 Dispatch 의 보고는 다른 판정으로 간다. applyWorkerDone 으로 보내면 dispatched 에서만
+        // 나가는 전이를 reviewing 인 Task 에 적용하려다 거절되고, 검토 결과가 어디에도 반영되지 않는다.
+        if (reporting?.review) {
+          // 진입 스냅숏(s)이 아니라 지금 상태를 읽는다 — 위 탐침의 await 동안 다른 흐름이 커밋했을 수
+          // 있고, 낡은 스냅숏으로 부르면 setState 가 그것을 덮어 잃는다(아래 구현 경로와 같은 이유).
+          const r = applyReviewResult(
+            deps.getState(),
+            {
+              taskId,
+              dispatchId,
+              outcome,
+              subject: str(args.subject) ?? '',
+              body: str(args.body) ?? ''
+            },
+            now
+          )
+          if (!r.ok) return bad(r.error)
+          await deps.setState(withLimit(r.state))
+          return okBody(r.value)
         }
         // getState is read again here — the state may have changed during the probeLimit await
         // above, and calling applyWorkerDone with the pre-await snapshot (s) would overwrite and
@@ -602,47 +686,14 @@ export async function handleCommand(
                 : undefined,
             // 검증기가 주입되지 않은 배선에서는 검증이 없는 것으로 동작한다. validating 으로
             // 보내면 결과를 가져다줄 것이 없어 Task 가 거기서 영원히 멈춘다(startValidation 참고).
-            canValidate: !!deps.startValidation
+            canValidate: !!deps.startValidation,
+            // startValidation 과 같은 이유 — 주입되지 않은 배선에서는 검토가 없는 것으로 동작한다.
+            canReview: !!deps.startReview
           },
           now
         )
         if (!result.ok) return bad(result.error)
-        let nextState = result.state
-        if (limitResetsAt !== null) {
-          const task = nextState.tasks.find((t) => t.id === taskId)
-          nextState = {
-            ...nextState,
-            dispatches: nextState.dispatches.map((d) =>
-              d.id === dispatchId ? { ...d, limitResetsAt } : d
-            ),
-            // Adds a status message in the same shape as closeDispatch (state.ts:264-284) — section
-            // 7 of the orchestration guide ("when limitResetsAt is set it also arrives in the inbox
-            // as a status message") applies to both paths, not just the handleExit one. The worker's
-            // own worker_done message (subject, body) is left untouched — this is a separate message
-            // added alongside it. Not finding the task should be impossible (applyWorkerDone has
-            // already validated it) but is handled defensively.
-            messages: task
-              ? [
-                  ...nextState.messages,
-                  {
-                    // 16 hex — the same width as newId in the pure layer (types.ts). 8 hex has a
-                    // collision probability of ≈1.2% over 10,000 messages, and on a collision reply
-                    // answers the wrong question.
-                    id: `msg_${randomBytes(8).toString('hex')}`,
-                    runId: task.runId,
-                    type: 'status' as MessageType,
-                    taskId,
-                    dispatchId,
-                    subject: 'session ended at a usage limit',
-                    body: `limitResetsAt=${new Date(limitResetsAt).toISOString()}. After that time, a --retry-of on the same account can proceed.`,
-                    answered: false,
-                    createdAt: now
-                  }
-                ]
-              : nextState.messages
-          }
-        }
-        await deps.setState(nextState)
+        await deps.setState(withLimit(result.state))
         // 커밋 뒤에 부른다 — 검증이 먼저 끝나면 아직 validating 이 아닌 Task 에 결과를 쓰게 된다.
         // result.value가 'alreadyReported'인 재전송은 상태를 바꾸지 않았다(첫 호출의 커밋을 그대로
         // 다시 읽을 뿐이다) — 걸러내지 않으면 재전송마다 검증이 다시 큐에 들어가고, 그 사이 Task가
@@ -651,6 +702,10 @@ export async function handleCommand(
         const dispatch = deps.getState().dispatches.find((d) => d.id === dispatchId)
         if (result.value === 'accepted' && settled?.status === 'validating' && dispatch)
           deps.startValidation?.({ taskId, cwd: dispatch.cwd })
+        // 검증이 걸리지 않고 검토만 걸린 Task 는 여기서 곧바로 reviewing 이다. 검증이 걸린 Task 는
+        // 검증이 통과한 뒤 배선의 onSettled 가 같은 일을 한다(ipc.ts).
+        else if (result.value === 'accepted' && settled?.status === 'reviewing')
+          deps.startReview?.({ taskId })
         return okBody(result.value)
       }
       // status, escalation and heartbeat — recorded only, with no bearing on lifetime.
@@ -935,14 +990,50 @@ export async function handleExit(
   }
   // getState is read again here — the state may have changed during the await above, and calling
   // setState with the pre-await snapshot would overwrite and lose that change (the write inversion
-  // this has caused before).
-  const r = closeDispatch(
-    deps.getState(),
-    { ...e, ...(limitResetsAt !== null ? { limitResetsAt } : {}) },
+  // this has caused before). The same snapshot is kept in `before`: closeDispatch bumps
+  // consecutiveFailures, and the review branch below needs the value it had before that bump.
+  const before = deps.getState()
+  const r = closeDispatch(before, { ...e, ...(limitResetsAt !== null ? { limitResetsAt } : {}) }, now)
+  if (!r.ok || r.value === null) return
+  const closed = r.value
+  const task = r.state.tasks.find((t) => t.id === closed.taskId)
+  // 검토 Dispatch 가 보고 없이 닫혔으면 Gate 를 연다. closeDispatch 는 **Task 의 상태를 일부러
+  // 건드리지 않는다** — 증명할 수 없는 결과를 주장하지 않는다는 규칙이고, 구현 Dispatch 에는 그것이
+  // 맞다: Task 는 dispatched 에 남고 worker-start --retry-of 가 집어 간다. 검토 Dispatch 에는 그 길이
+  // 없다. 검토자를 띄운 것은 앱이고 코디네이터에게는 그것을 다시 띄우는 명령이 없으며,
+  // reviewing -> dispatched 전이 자체가 없어서 --retry-of 도 거절된다(ALLOWED.reviewing). 그대로 두면
+  // Task 는 세션도 Gate 도 없이 영원히 reviewing 이고, recomputeReady 는 completed 에서만 의존
+  // Task 를 풀어 주므로 그 아래 서브트리 전체가 pending 에 멈춘다. 가이드 2절의 표가 이 Gate 를
+  // 이미 약속하고 있다.
+  if (!closed.review || task?.status !== 'reviewing') {
+    await deps.setState(r.state)
+    return
+  }
+  const gated = blockForReview(
+    r.state,
+    { taskId: task.id, reason: `검토자의 세션이 보고 없이 끝났습니다(dispatch=${closed.id})` },
     now
   )
-  if (!r.ok || r.value === null) return
-  await deps.setState(r.state)
+  if (!gated.ok) {
+    // 여기까지 왔으면 Gate 를 열 수 없는 이유는 하나뿐이다(그 Task 에 또 다른 열린 Dispatch 가 있다).
+    // Dispatch 를 닫은 것은 그대로 커밋한다 — 그것은 실제로 일어난 일이다.
+    deps.log?.(`could not gate task=${task.id} after the reviewer session ended: ${gated.error}`)
+    await deps.setState(r.state)
+    return
+  }
+  // **consecutiveFailures 를 닫기 전 값으로 되돌린다.** closeDispatch 가 그것을 올리는 것은 회로
+  // 차단이 무한 재시도를 막기 위한 것인데, 여기서는 그 재시도가 아예 불가능하고 되돌릴 사람은
+  // Gate 를 받은 사람이다. 남겨 두면 검토자가 세 번 죽는 것만으로 멀쩡한 작업의 회로가 끊기고, 그것은
+  // 이 Gate 가 막으려는 바로 그 일이다. store.ts 의 재시작 정리가 같은 상황에 같은 원칙을 적는다 —
+  // "consecutiveFailures 는 건드리지 않는다: 작업이 틀렸다는 증거가 아니다". Gate 와 함께 한 번의
+  // setState 로 커밋한다.
+  const priorFailures = before.tasks.find((t) => t.id === task.id)?.consecutiveFailures
+  await deps.setState({
+    ...gated.state,
+    tasks: gated.state.tasks.map((t) =>
+      t.id === task.id && priorFailures !== undefined ? { ...t, consecutiveFailures: priorFailures } : t
+    )
+  })
 }
 
 export async function startOrchServer(deps: OrchServerDeps): Promise<OrchServer> {

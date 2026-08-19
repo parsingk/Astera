@@ -13,6 +13,7 @@ import { isSamePath } from '../files/tree'
 import type { JobTask, OrchSnapshot, RunOutcome, WorktreeInfo } from '../types'
 import { repoPathOf } from '../worktrees/repo'
 import type { OrchState } from './state'
+import { eventCountFor } from './timeline'
 import { FAILURE_LIMIT } from './types'
 import type { Run, Task } from './types'
 
@@ -161,6 +162,7 @@ export function snapshotFor(
       outcome: outcomeOf(state, run.id),
       done,
       total,
+      eventCount: eventCountFor(state, run.id),
       // createdAt ascending — the order the orchestrator declared the Tasks in, which is the order
       // the dependency chain reads in. Task.deps is not a total order, so it cannot sort this.
       tasks: state.tasks
@@ -183,11 +185,16 @@ export function snapshotFor(
 /** Whether two folds show the same thing — the guard that keeps a push from going out when nothing
  *  the view can see has changed.
  *
- *  Most orchestration writes do not touch this projection at all: a heartbeat, a status message, a
- *  Delivery being taken or acknowledged, a Dispatch's tail moving. All of them commit state, and the
- *  push hangs off every commit (src/main/ipc.ts), so without this the sidebar is re-sent constantly
- *  with an identical payload. Comparing the result instead of debouncing the trigger kills the whole
- *  class and has nothing to tune.
+ *  Most orchestration writes still do not touch this projection: a heartbeat, a Delivery being taken
+ *  or acknowledged. All of them commit state, and the push hangs off every commit (src/main/ipc.ts),
+ *  so without this the sidebar is re-sent constantly with an identical payload. Comparing the result
+ *  instead of debouncing the trigger kills the whole class and has nothing to tune.
+ *
+ *  **A status message is deliberately no longer in that list.** JobRun.eventCount counts the
+ *  timeline's events, so any message that becomes an event changes this fold and lets the push
+ *  through — that is the point of the field (see there), because a question or a progress report
+ *  moves no Task status and would otherwise never reach the renderer. heartbeat is excluded from the
+ *  count for exactly this reason (core/orchestration/timeline.ts's SKIP).
  *
  *  **This is a serialized compare, and it is only sound for values snapshotFor built.** JSON.stringify
  *  is key-order sensitive, and what makes that safe here is that both sides come out of the object

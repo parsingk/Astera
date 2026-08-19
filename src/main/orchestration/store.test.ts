@@ -307,6 +307,39 @@ describe('OrchestrationStore', () => {
     expect(gateMessages.map((m) => m.taskId).sort()).toEqual(['tsk_1', 'tsk_2'])
   })
 
+  // **reviewing 도 같은 정리 대상이다.** 검토자는 별도의 세션이라 앱과 함께 죽었고, 그것을 다시 띄우는
+  // 명령은 코디네이터에게 없다 — reviewing -> dispatched 전이가 없어 --retry-of 도 거절되므로, Gate 가
+  // 없으면 Task 는 영원히 reviewing 이고 의존 Task 는 영원히 pending 이다.
+  it('재시작하면 reviewing 이던 Task 도 blocked 로 보내고 Gate 를 연다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    s.tasks[0] = { ...s.tasks[0], status: 'reviewing', consecutiveFailures: 1 }
+    s.dispatches[0] = { ...s.dispatches[0], review: true }
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    const r = await store.load()
+    expect(r.staleReviews).toBe(1)
+    expect(r.staleValidations).toBe(0) // 검증과 섞이지 않는다 — 시작 로그가 둘을 구별해 적는다
+    expect(store.get().tasks[0].status).toBe('blocked')
+    expect(store.get().gates).toHaveLength(1)
+    // 끝난 일을 버리지 않는 탈출구가 질문에 실린다(blockForReview) — resolveGate 로 풀면 Task 가
+    // pending 으로 돌아가 이미 끝난 구현이 버려진다
+    expect(store.get().gates[0].question).toContain('task-update --status completed')
+    // 코디네이터를 깨우는 수단은 메시지뿐이다
+    expect(store.get().messages.some((m) => m.type === 'decision_gate')).toBe(true)
+    // 연속 실패로 세지 않는다 — 인프라 사정이지 작업이 틀린 것이 아니다(검증 쪽과 같은 규칙)
+    expect(store.get().tasks[0].consecutiveFailures).toBe(1)
+  })
+
+  it('reviewing 도 validating 도 없으면 두 카운터가 0 이다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const r = await store.load()
+    expect(r.staleReviews).toBe(0)
+    expect(r.staleValidations).toBe(0)
+  })
+
   it('validating 이 없으면 staleValidations 가 0 이고 Gate 도 생기지 않는다', async () => {
     const file = path.join(dir, 'orchestration.json')
     await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')

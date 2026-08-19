@@ -121,6 +121,7 @@ export const en: Record<keyof typeof ko, string> = {
   'explorer.closeConfirm.body': 'There are unsaved changes. Close the explorer anyway?',
   'run.resizeConsole': 'Resize console',
   'run.start.failed': 'Run failed: {detail}',
+  'run.jump.notAllowed': 'Cannot go to that project — it has to be one this app has opened before',
   'settings.info.appName': 'App name',
   'settings.info.version': 'Version',
   'settings.info.registeredAccounts': 'Registered accounts',
@@ -617,5 +618,28 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.progress': '{done}/{total}',
   'jobs.completed': 'completed',
   'jobs.failed': 'failed',
-  'jobs.gates.more': '+{count} more'
+  'jobs.gates.more': '+{count} more',
+  // JobTimeline.tsx — the history modal. The badge is chosen by the event kind (or the message type)
+  'jobs.timeline.open': 'History',
+  'jobs.timeline.title': 'History',
+  'jobs.timeline.empty': 'Nothing has happened yet',
+  'jobs.timeline.close': 'Close',
+  'jobs.timeline.openSession': 'Open session',
+  'jobs.timeline.retry': 'retry',
+  'jobs.event.runCreated': 'job started',
+  'jobs.event.taskCreated': 'Task added',
+  'jobs.event.dispatchStarted': 'worker started',
+  'jobs.event.gateOpened': 'awaiting decision',
+  'jobs.event.gateResolved': 'decided',
+  'jobs.event.status': 'status',
+  'jobs.event.workerDone': 'worker report',
+  'jobs.event.question': 'question',
+  'jobs.event.escalation': 'escalation',
+  'jobs.event.heartbeat': 'heartbeat',
+  'jobs.event.decisionGate': 'decision',
+  // Same spot as retry (next to dispatch-started's summary), shown only when the Dispatch is a review (Dispatch.review)
+  'jobs.event.review': 'review',
+  // worker_done's outcome — deliberately not jobs.completed/jobs.failed, which label a whole Run
+  'jobs.event.succeeded': 'succeeded',
+  'jobs.event.outcomeFailed': 'failed'
 }

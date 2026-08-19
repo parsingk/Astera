@@ -148,6 +148,7 @@ export const es: Catalog = {
   // App.tsx — run console resizer, start failure
   'run.resizeConsole': 'Ajustar el tamaño de la consola',
   'run.start.failed': 'Error al ejecutar: {detail}',
+  'run.jump.notAllowed': 'No se puede ir a ese proyecto — debe ser uno que esta app haya abierto antes',
   // App.tsx — settings modal Info/Slack/Worktree tabs, CLI-not-found screen
   'settings.info.appName': 'Nombre de la aplicación',
   'settings.info.version': 'Versión',
@@ -723,5 +724,28 @@ export const es: Catalog = {
   'jobs.progress': '{done}/{total}',
   'jobs.completed': 'completadas',
   'jobs.failed': 'fallidas',
-  'jobs.gates.more': '+{count} más'
+  'jobs.gates.more': '+{count} más',
+  // JobTimeline.tsx — el modal de historial. La insignia la elige el tipo de evento (o el tipo de mensaje)
+  'jobs.timeline.open': 'Historial',
+  'jobs.timeline.title': 'Historial',
+  'jobs.timeline.empty': 'Aún no ha ocurrido nada',
+  'jobs.timeline.close': 'Cerrar',
+  'jobs.timeline.openSession': 'Abrir sesión',
+  'jobs.timeline.retry': 'reintento',
+  'jobs.event.runCreated': 'trabajo iniciado',
+  'jobs.event.taskCreated': 'Task añadida',
+  'jobs.event.dispatchStarted': 'worker iniciado',
+  'jobs.event.gateOpened': 'esperando decisión',
+  'jobs.event.gateResolved': 'decidido',
+  'jobs.event.status': 'estado',
+  'jobs.event.workerDone': 'informe del worker',
+  'jobs.event.question': 'pregunta',
+  'jobs.event.escalation': 'escalación',
+  'jobs.event.heartbeat': 'latido',
+  'jobs.event.decisionGate': 'decisión',
+  // Mismo lugar que retry (junto al resumen de dispatch-started), solo cuando el Dispatch es de revisión (Dispatch.review)
+  'jobs.event.review': 'revisión',
+  // El resultado de worker_done — no jobs.completed/jobs.failed, que etiquetan un Run completo
+  'jobs.event.succeeded': 'correcto',
+  'jobs.event.outcomeFailed': 'fallido'
 }

@@ -29,8 +29,8 @@ import type { TerminalFont } from './terminal/font'
 // here is what would put it back in. Either way the wrong fix is "types": ["node"] — it makes the
 // import resolve by handing the renderer typecheck every Node global, which is the guard this note
 // stands to protect.
-import type { TaskStatus } from './orchestration/types'
-export type { TaskStatus } from './orchestration/types'
+import type { MessageType, Outcome, TaskStatus } from './orchestration/types'
+export type { MessageType, TaskStatus } from './orchestration/types'
 
 // providers/meta.ts owns Provider. It is re-exported here so that the files which already imported
 // Provider from types can stay as they are.
@@ -264,6 +264,46 @@ export interface JobTask {
   gateQuestion?: string
   openGates: number
 }
+
+export type JobEventKind =
+  | 'run-created'
+  | 'task-created'
+  | 'dispatch-started'
+  | 'message'
+  | 'gate-opened'
+  | 'gate-resolved'
+
+/** 타임라인 한 줄. 저장된 레코드가 아니라 core/orchestration/timeline.ts 가 파생한 값이다.
+ *  Jobs 사이드바의 JobTask 와 같은 자리에 있는 이유도 같다 — 렌더러가 그리는 투영이다. */
+export interface JobEvent {
+  /** ISO 시각. 정렬 기준이고 화면에 그대로 쓰인다 */
+  at: string
+  kind: JobEventKind
+  /** 이 이벤트를 만든 레코드의 id. **종류 안에서만 유일하다** — 한 Gate 가 열림과 해제 두
+   *  이벤트를 만들므로, 렌더러의 key 는 kind 와 함께 써야 한다 */
+  sourceId: string
+  taskId?: string
+  /** Task 제목. 렌더러가 Task 를 다시 찾지 않게 여기서 붙인다 */
+  taskTitle?: string
+  /** kind === 'message' 일 때만. 배지 문구를 이것으로 고른다 */
+  messageType?: MessageType
+  /** 한 줄 요약 */
+  summary: string
+  /** 펼쳤을 때 보이는 본문. 없을 수 있다 */
+  body?: string
+  outcome?: Outcome
+  /** kind === 'dispatch-started' 일 때만 */
+  provider?: Provider
+  /** 재시도로 뜬 워커인가 (Dispatch.retryOf) */
+  retry?: boolean
+  /** 검토 Dispatch 인가 (Dispatch.review). 한 Task 에 구현과 검토의 dispatch-started 가 둘 나오므로,
+   *  구별하지 않으면 같은 Task 를 두 번 시작한 것처럼 보인다 */
+  review?: boolean
+  /** 이 앱이 아직 아는 세션이면 그 id — 클릭하면 그 탭으로 간다. view.ts 의 jobTaskOf 와 같은
+   *  판정이고 같은 이유로 주입받는다 */
+  sessionId?: string
+}
+
 /** Run 이 끝났는지 — Task 상태에서 계산된다. 저장되지 않는다.
  *
  *  여기(web 포함 파일)에 선언하는 이유: JobRun 이 이 타입을 필드로 갖고, 그것을 계산하는
@@ -277,6 +317,13 @@ export interface JobRun {
   outcome: RunOutcome
   done: number
   total: number
+  /** 이 Run 의 타임라인 이벤트 수(core/orchestration/timeline.ts 의 eventCountFor).
+   *
+   *  **화면에 그리지 않는다.** 이 값의 일은 sameSnapshot 을 깨우는 것이다 — Task 상태도
+   *  openGates 도 움직이지 않는 메시지(질문, 워커의 진행 보고)는 나머지 필드를 하나도 바꾸지
+   *  않아서, 이 숫자가 없으면 그 이벤트가 도착해도 푸시가 나가지 않는다. 시각이 아니라 개수인
+   *  이유: 한 번의 쓰기가 여러 레코드에 같은 now 를 찍으므로 시각은 바뀌지 않을 수 있다. */
+  eventCount: number
   tasks: JobTask[]
 }
 export interface OrchSnapshot {
@@ -649,6 +696,9 @@ export interface AppControlApi {
  */
 export interface OrchApi {
   list(projectPath: string): Promise<OrchSnapshot>
+  /** 한 Run 의 이벤트, 시각 오름차순. 스냅샷과 달리 **요청할 때만** 온다 — Message.body 에는
+   *  검증 출력 꼬리가 실리므로 매 쓰기마다 밀 수 있는 크기가 아니다. */
+  timeline(projectPath: string, runId: string): Promise<JobEvent[]>
   unwatch(): Promise<void>
 }
 

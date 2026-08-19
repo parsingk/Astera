@@ -139,6 +139,7 @@ export const ko = {
   // App.tsx — run console resizer, start failure
   'run.resizeConsole': '콘솔 크기 조절',
   'run.start.failed': '실행 실패: {detail}',
+  'run.jump.notAllowed': '그 프로젝트로 갈 수 없습니다 — 앱에서 한 번 열어 본 프로젝트여야 합니다',
   // App.tsx — settings modal Info/Slack/Worktree tabs, CLI-not-found screen
   'settings.info.appName': '앱 이름',
   'settings.info.version': '버전',
@@ -735,5 +736,31 @@ export const ko = {
   'jobs.progress': '{done}/{total}',
   'jobs.completed': '완료',
   'jobs.failed': '실패',
-  'jobs.gates.more': '외 {count}건'
+  'jobs.gates.more': '외 {count}건',
+  // JobTimeline.tsx — 기록 모달. 종류 배지는 이벤트 종류(또는 메시지 종류)가 고른다.
+  // Run 을 '작업'이라 부르는 것은 위의 jobs.empty 와 같고, 그 안의 Task 는 'Task' 로 적는다 —
+  // 한 타임라인에 두 층의 사건이 나란히 나오므로 같은 낱말이면 구분되지 않는다
+  'jobs.timeline.open': '기록',
+  'jobs.timeline.title': '기록',
+  'jobs.timeline.empty': '아직 기록이 없습니다',
+  'jobs.timeline.close': '닫기',
+  'jobs.timeline.openSession': '세션 열기',
+  'jobs.timeline.retry': '재시도',
+  'jobs.event.runCreated': '작업 시작',
+  'jobs.event.taskCreated': 'Task 추가',
+  'jobs.event.dispatchStarted': '워커 시작',
+  'jobs.event.gateOpened': '결정 대기',
+  'jobs.event.gateResolved': '결정 완료',
+  'jobs.event.status': '소식',
+  'jobs.event.workerDone': '워커 보고',
+  'jobs.event.question': '질문',
+  'jobs.event.escalation': '에스컬레이션',
+  'jobs.event.heartbeat': '신호',
+  'jobs.event.decisionGate': '결정 요청',
+  // retry 와 같은 자리(dispatch-started 의 요약 옆)에, 이 Dispatch 가 검토용(Dispatch.review)일 때만 붙는다
+  'jobs.event.review': '검토',
+  // worker_done 의 결과. jobs.completed/jobs.failed 를 쓰지 않는다 — 그 둘은 사이드바에서 Run
+  // 전체의 상태를 가리키는 말이라, 워커 보고 한 건에 붙이면 같은 주장을 다른 대상에 하는 것으로 읽힌다
+  'jobs.event.succeeded': '성공',
+  'jobs.event.outcomeFailed': '실패'
 } as const

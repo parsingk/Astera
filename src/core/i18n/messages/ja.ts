@@ -148,6 +148,7 @@ export const ja: Catalog = {
   // App.tsx — run console resizer, start failure
   'run.resizeConsole': 'コンソールのサイズ変更',
   'run.start.failed': '実行に失敗しました: {detail}',
+  'run.jump.notAllowed': 'そのプロジェクトへは移動できません — このアプリで一度開いたプロジェクトである必要があります',
   // App.tsx — settings modal Info/Slack/Worktree tabs, CLI-not-found screen
   'settings.info.appName': 'アプリ名',
   'settings.info.version': 'バージョン',
@@ -712,5 +713,28 @@ export const ja: Catalog = {
   'jobs.progress': '{done}/{total}',
   'jobs.completed': '完了',
   'jobs.failed': '失敗',
-  'jobs.gates.more': '他 {count} 件'
+  'jobs.gates.more': '他 {count} 件',
+  // JobTimeline.tsx — 履歴モーダル。種別バッジはイベント種別（またはメッセージ種別）が決める
+  'jobs.timeline.open': '履歴',
+  'jobs.timeline.title': '履歴',
+  'jobs.timeline.empty': 'まだ何も起きていません',
+  'jobs.timeline.close': '閉じる',
+  'jobs.timeline.openSession': 'セッションを開く',
+  'jobs.timeline.retry': '再試行',
+  'jobs.event.runCreated': 'ジョブ開始',
+  'jobs.event.taskCreated': 'Task 追加',
+  'jobs.event.dispatchStarted': 'ワーカー開始',
+  'jobs.event.gateOpened': '判断待ち',
+  'jobs.event.gateResolved': '判断済み',
+  'jobs.event.status': '状況',
+  'jobs.event.workerDone': 'ワーカー報告',
+  'jobs.event.question': '質問',
+  'jobs.event.escalation': 'エスカレーション',
+  'jobs.event.heartbeat': 'ハートビート',
+  'jobs.event.decisionGate': '判断要求',
+  // retry と同じ位置(dispatch-started の要約の横)。この Dispatch がレビュー用(Dispatch.review)のときだけ付く
+  'jobs.event.review': 'レビュー',
+  // worker_done の結果。jobs.completed/jobs.failed は Run 全体の状態を指す語なので使わない
+  'jobs.event.succeeded': '成功',
+  'jobs.event.outcomeFailed': '失敗'
 }

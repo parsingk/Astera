@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { runsForProject, progressOf, outcomeOf, snapshotFor, sameSnapshot } from './view'
 import { emptyState } from './state'
 import type { OrchState } from './state'
-import type { Dispatch, Gate, Run, Task } from './types'
+import type { Dispatch, Gate, Message, Run, Task } from './types'
 import { FAILURE_LIMIT } from './types'
 import type { WorktreeInfo } from '../types'
 import { absPath } from '../testPaths'
@@ -32,6 +32,10 @@ const wt = (repoPath: string, p: string): WorktreeInfo => ({
 })
 /** 재시도가 소진된 실패 Task — 여기까지 와야 terminal 이다 */
 const exhausted = (t: Task): Task => ({ ...t, consecutiveFailures: FAILURE_LIMIT })
+const message = (id: string, runId: string, type: Message['type']): Message => ({
+  id, runId, type, subject: `subject ${id}`, body: '', answered: false,
+  createdAt: '2026-08-18T00:00:00.000Z'
+})
 
 describe('runsForProject', () => {
   it('그 프로젝트의 Run 만 고른다', () => {
@@ -178,7 +182,7 @@ describe('snapshotFor', () => {
     ])
     expect(snapshotFor(s, absPath('p'), anySession, noWorktrees).runs).toEqual([
       {
-        id: 'r1', objective: 'objective r1', outcome: 'running', done: 1, total: 2,
+        id: 'r1', objective: 'objective r1', outcome: 'running', done: 1, total: 2, eventCount: 3,
         tasks: [
           { id: 't1', title: 'task t1', status: 'completed', sessionId: undefined, gateQuestion: undefined, openGates: 0 },
           { id: 't2', title: 'task t2', status: 'ready', sessionId: undefined, gateQuestion: undefined, openGates: 0 }
@@ -280,6 +284,13 @@ describe('snapshotFor', () => {
     const s = withRuns([run('r1', absPath('other'))])
     expect(snapshotFor(s, absPath('p'), anySession, noWorktrees)).toEqual({ runs: [] })
   })
+
+  it('Run 마다 이벤트 개수를 싣는다', () => {
+    const s = { ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'pending')]),
+      messages: [message('m1', 'r1', 'status')] }
+    // run-created + task-created + message
+    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees).runs[0].eventCount).toBe(3)
+  })
 })
 
 describe('sameSnapshot', () => {
@@ -331,5 +342,27 @@ describe('sameSnapshot', () => {
 
   it('빈 스냅샷끼리는 같다고 본다', () => {
     expect(sameSnapshot({ runs: [] }, { runs: [] })).toBe(true)
+  })
+
+  // 이 필드의 존재 이유가 이것이다. 질문 메시지는 Task 상태도 openGates 도 움직이지 않으므로
+  // eventCount 가 없으면 sameSnapshot 이 같다고 판정해 푸시가 나가지 않는다 — 타임라인이 가장
+  // 보고 싶어 하는 이벤트가 화면에 도착하지 못한다
+  it('Task 상태를 움직이지 않는 메시지가 스냅샷을 바꾼다', () => {
+    const before = withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')])
+    const after = { ...before, messages: [message('m1', 'r1', 'question')] }
+    expect(sameSnapshot(
+      snapshotFor(before, absPath('p'), anySession, noWorktrees),
+      snapshotFor(after, absPath('p'), anySession, noWorktrees)
+    )).toBe(false)
+  })
+
+  // heartbeat 을 세면 이 필드가 푸시를 끊이지 않게 만든다 — 그것이 SKIP 의 이유다
+  it('heartbeat 은 스냅샷을 바꾸지 않는다', () => {
+    const before = withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')])
+    const after = { ...before, messages: [message('m1', 'r1', 'heartbeat')] }
+    expect(sameSnapshot(
+      snapshotFor(before, absPath('p'), anySession, noWorktrees),
+      snapshotFor(after, absPath('p'), anySession, noWorktrees)
+    )).toBe(true)
   })
 })

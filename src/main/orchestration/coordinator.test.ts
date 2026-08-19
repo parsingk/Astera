@@ -5,6 +5,7 @@ import path from 'node:path'
 import {
   OrchCoordinator,
   buildSpecFile,
+  buildReviewSpecFile,
   launchPrompt,
   LAUNCH_FORBIDDEN,
   type CoordinatorDeps
@@ -119,6 +120,59 @@ describe('buildSpecFile', () => {
   })
 })
 
+describe('buildReviewSpecFile', () => {
+  it('원래 Task 의 요구를 판정 기준으로 싣는다', () => {
+    const md = buildReviewSpecFile({ title: 'T', spec: '요구 본문', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: false })
+    expect(md).toContain('요구 본문')
+  })
+
+  it('구현자가 보고한 것과 바꾼 파일을 싣는다', () => {
+    const md = buildReviewSpecFile({
+      title: 'T',
+      spec: 's',
+      taskId: 'tsk_1',
+      dispatchId: 'dsp_1',
+      implReport: '구현자가 남긴 보고 본문',
+      filesModified: ['src/a.ts', 'src/b.ts'],
+      validated: false
+    })
+    expect(md).toContain('구현자가 남긴 보고 본문')
+    expect(md).toContain('src/a.ts')
+    expect(md).toContain('src/b.ts')
+  })
+
+  it('검증이 통과했으면 그 사실을 싣는다', () => {
+    // 검토자가 컴파일·테스트를 다시 판정하지 않게 하는 근거다
+    const md = buildReviewSpecFile({ title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: true })
+    expect(md).toContain('it passed')
+    expect(md).toContain('is settled')
+  })
+
+  it('검증이 없었으면 통과했다고 말하지 않는다', () => {
+    const md = buildReviewSpecFile({ title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: false })
+    expect(md).toContain('No automated validation was attached')
+    expect(md).not.toContain('is settled')
+    expect(md).not.toContain('it passed')
+  })
+
+  // 이 둘이 이 파일의 존재 이유다
+  it('볼 것이 "요구가 충족됐는가" 하나임을 못박는다', () => {
+    const md = buildReviewSpecFile({ title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: false })
+    expect(md).toContain('Was the requirement above satisfied?')
+    expect(md).toContain('not grounds for rejecting the work')
+  })
+  it('코드를 바꾸지 말라고 못박는다', () => {
+    const md = buildReviewSpecFile({ title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: false })
+    expect(md).toContain('Do not change any code.')
+  })
+
+  it('자기 dispatch id 로 보고하게 한다', () => {
+    const md = buildReviewSpecFile({ title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_review', validated: false })
+    expect(md).toContain('dsp_review')
+    expect(md).toContain('--task-id tsk_1')
+  })
+})
+
 describe('OrchCoordinator.startWorker', () => {
   it('세션을 띄우고 spec 파일을 쓴다', async () => {
     const deps = makeDeps()
@@ -140,6 +194,26 @@ describe('OrchCoordinator.startWorker', () => {
     expect(await fs.stat(path.join(dir, '.orch')).catch(() => null)).toBeNull()
     // 그리고 그 위치만이 아니라 cwd 아래 **아무것도** 생기지 않았다 (dir는 빈 임시 디렉토리다)
     expect(await fs.readdir(dir)).toEqual([])
+  })
+  // 검토 Dispatch 가 이 경로로 온다. spec 은 **본문**이고 buildSpecFile 이 그것을 구현자의 템플릿으로
+  // 감싸므로, 조립이 끝난 검토 파일을 spec 자리에 넣으면 H1 과 보고 의무가 두 벌이 되고 마지막 줄이
+  // "바꾼 파일을 --files-modified 로 넘겨라"가 되어 맨 위의 "코드를 바꾸지 말라"와 부딪힌다.
+  it('specFileContent 를 주면 그 문자열만 그대로 쓴다 — buildSpecFile 로 다시 감싸지 않는다', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    const file = buildReviewSpecFile({
+      title: '인증 리팩터',
+      spec: '설계하고 반영하라',
+      taskId: 'tsk_1',
+      dispatchId: 'dsp_1',
+      validated: true
+    })
+    const r = await co.startWorker({ ...baseArgs(), runCwd: dir, specFileContent: file })
+    const written = await fs.readFile(r.specPath, 'utf8')
+    expect(written).toBe(file)
+    // H1 이 하나뿐이고 구현자의 보고 의무가 섞여 들어오지 않았다
+    expect(written.match(/^# /gm)).toHaveLength(1)
+    expect(written).not.toContain('--files-modified "path/a,path/b"')
   })
   it('초기 프롬프트가 spec의 절대경로를 담고 앞슬래시만 쓴다 — 워커가 Bash로도 다룬다', async () => {
     const deps = makeDeps()

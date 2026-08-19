@@ -1628,6 +1628,313 @@ describe('worker_done 이 검증을 시작한다', () => {
   })
 })
 
+describe('task-create --review 와 검토 라우팅', () => {
+  it('task-create --review 가 reviewRequested 를 켠다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: '작업', review: true })
+    expect(deps.getState().tasks[0].reviewRequested).toBe(true)
+  })
+
+  it('--review 없이 만든 Task 는 reviewRequested 가 없다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: '작업' })
+    expect(deps.getState().tasks[0].reviewRequested).toBeUndefined()
+  })
+
+  // 이것이 이 Task 의 핵심이다 — 검토 Dispatch 의 보고가 구현 보고로 처리되면 Task 가 두 번 끝난다
+  it('검토 Dispatch 로 온 worker_done 은 applyReviewResult 로 간다', async () => {
+    // review: true 인 Dispatch, reviewing 인 Task → worker_done succeeded → completed
+    // 그리고 'review passed' status 메시지가 남는다
+    const deps = makeDeps()
+    deps.startReview = () => {}
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: '작업', review: true })
+    const taskId = deps.getState().tasks[0].id
+    await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
+    const impl = deps.getState().dispatches[0]
+    await call(
+      deps,
+      'send',
+      {
+        type: 'worker_done',
+        taskId,
+        dispatchId: impl.id,
+        outcome: 'succeeded',
+        subject: 's',
+        body: 'b'
+      },
+      impl.sessionId
+    )
+    expect(deps.getState().tasks[0].status).toBe('reviewing')
+    // 검토 Dispatch를 직접 주입한다 — 그것을 여는 배선(startReview 구현)은 이 Task의 몫이 아니다.
+    // 다른 provider(codex)를 쓴다 — 구현은 claude였다.
+    const reviewDispatch = {
+      id: 'dsp_review',
+      taskId,
+      provider: 'codex' as const,
+      accountId: 'acc1',
+      sessionId: 'sess_review',
+      cwd: 'D:/p',
+      specPath: 'D:/p/orch/specs/review.md',
+      review: true,
+      startedAt: NOW,
+      workerState: 'ready' as const,
+      retained: false
+    }
+    await deps.setState({
+      ...deps.getState(),
+      dispatches: [...deps.getState().dispatches, reviewDispatch]
+    })
+    const r = await call(
+      deps,
+      'send',
+      {
+        type: 'worker_done',
+        taskId,
+        dispatchId: reviewDispatch.id,
+        outcome: 'succeeded',
+        subject: 's',
+        body: '리뷰 통과'
+      },
+      reviewDispatch.sessionId
+    )
+    expect(r.status).toBe(200)
+    expect(deps.getState().tasks[0].status).toBe('completed')
+    expect(
+      deps.getState().messages.some((m) => m.subject === 'review passed')
+    ).toBe(true)
+  })
+
+  it('구현 Dispatch 로 온 worker_done 은 지금과 똑같이 처리된다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: '작업' })
+    const taskId = deps.getState().tasks[0].id
+    await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
+    const d = deps.getState().dispatches[0]
+    const r = await call(
+      deps,
+      'send',
+      { type: 'worker_done', taskId, dispatchId: d.id, outcome: 'succeeded', subject: 's', body: 'b' },
+      d.sessionId
+    )
+    expect(r.status).toBe(200)
+    expect(r.body).toBe('accepted')
+    expect(deps.getState().tasks[0].status).toBe('completed')
+  })
+
+  it('startReview 가 주입되지 않으면 canReview: false 가 넘어간다', async () => {
+    // reviewRequested 가 걸린 Task 도 성공 보고에 곧바로 completed 로 간다
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: '작업', review: true })
+    const taskId = deps.getState().tasks[0].id
+    await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
+    const d = deps.getState().dispatches[0]
+    const r = await call(
+      deps,
+      'send',
+      { type: 'worker_done', taskId, dispatchId: d.id, outcome: 'succeeded', subject: 's', body: 'b' },
+      d.sessionId
+    )
+    expect(r.status).toBe(200)
+    expect(deps.getState().tasks[0].status).toBe('completed')
+  })
+
+  it('Task 가 reviewing 이 되면 startReview 를 taskId 로 부른다', async () => {
+    // cwd 는 넘기지 않는다 — 배선이 구현 Dispatch 에서 얻는다(그 Dispatch 를 어차피 찾아야 한다)
+    const deps = makeDeps()
+    const started: { taskId: string }[] = []
+    deps.startReview = (a) => void started.push(a)
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: '작업', review: true })
+    const taskId = deps.getState().tasks[0].id
+    await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
+    const d = deps.getState().dispatches[0]
+    await call(
+      deps,
+      'send',
+      { type: 'worker_done', taskId, dispatchId: d.id, outcome: 'succeeded', subject: 's', body: 'b' },
+      d.sessionId
+    )
+    expect(deps.getState().tasks[0].status).toBe('reviewing')
+    expect(started).toEqual([{ taskId }])
+  })
+
+  it('재전송(alreadyReported)에는 startReview 를 부르지 않는다', async () => {
+    // startValidation 이 같은 이유로 result.value === 'accepted' 를 본다
+    const deps = makeDeps()
+    const started: { taskId: string }[] = []
+    deps.startReview = (a) => void started.push(a)
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: '작업', review: true })
+    const taskId = deps.getState().tasks[0].id
+    await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
+    const d = deps.getState().dispatches[0]
+    const args = {
+      type: 'worker_done',
+      taskId,
+      dispatchId: d.id,
+      outcome: 'succeeded',
+      subject: 's',
+      body: 'b'
+    }
+    await call(deps, 'send', args, d.sessionId)
+    expect(started).toHaveLength(1)
+    const r2 = await call(deps, 'send', args, d.sessionId)
+    expect(r2.body).toBe('alreadyReported')
+    expect(started).toHaveLength(1)
+  })
+
+  // TASK_STATUSES 는 손수 쓴 목록이라 빠뜨려도 컴파일은 통과한다 — task-update가 그 목록으로
+  // --status 를 검증하는 실제 지점이다(task-list는 필터일 뿐 검증하지 않는다).
+  it('task-update --status reviewing 이 거절되지 않는다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    const task = await call(deps, 'task-create', { spec: '작업' })
+    const taskId = (task.body as { id: string }).id
+    const r = await call(deps, 'task-update', { id: taskId, status: 'reviewing' })
+    expect(r.status).toBe(200)
+  })
+})
+
+// 검토 Dispatch 는 앱이 띄운 것이고, 코디네이터에게는 그것을 다시 띄우는 명령이 없다 — 그래서 그것이
+// 스스로 끝나지 못한 두 경우(세션이 죽는다 / 한도에 걸려 실패를 보고한다)를 서버가 각각 받아 준다.
+describe('검토 Dispatch 가 스스로 끝나지 못했을 때 — handleExit 의 Gate 와 한도 탐침', () => {
+  /** Task 를 reviewing 까지 보내고 열린 검토 Dispatch(sessionId='sess_review')를 넣는다 — '검토
+   *  라우팅' 블록과 같은 주입 방식이다(검토 Dispatch 를 여는 배선은 ipc.ts 의 몫이라 서버에 없다).
+   *  consecutiveFailures 는 2 로 둔다: FAILURE_LIMIT 이 3 이므로, 여기서 한 번 더 오르면 회로가
+   *  끊긴다 — 검토자가 죽은 것만으로 그렇게 되어서는 안 된다는 것이 이 블록의 요점이다. */
+  const seedReviewing = async (): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    taskId: string
+    reviewId: string
+  }> => {
+    const deps = makeDeps()
+    deps.startReview = () => {}
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: '작업', review: true })
+    const taskId = deps.getState().tasks[0].id
+    await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
+    const impl = deps.getState().dispatches[0]
+    await call(
+      deps,
+      'send',
+      { type: 'worker_done', taskId, dispatchId: impl.id, outcome: 'succeeded', subject: 's', body: 'b' },
+      impl.sessionId
+    )
+    const reviewId = 'dsp_review'
+    await deps.setState({
+      ...deps.getState(),
+      tasks: deps.getState().tasks.map((t) => (t.id === taskId ? { ...t, consecutiveFailures: 2 } : t)),
+      dispatches: [
+        ...deps.getState().dispatches,
+        {
+          id: reviewId,
+          taskId,
+          provider: 'codex' as const,
+          accountId: 'acc1',
+          sessionId: 'sess_review',
+          cwd: 'D:/p',
+          specPath: 'D:/p/orch/specs/review.md',
+          review: true,
+          startedAt: NOW,
+          workerState: 'ready' as const,
+          retained: false
+        }
+      ]
+    })
+    return { deps, taskId, reviewId }
+  }
+
+  it('검토자 세션이 보고 없이 죽으면 Gate 가 열리고 Task 가 blocked 로 간다', async () => {
+    const { deps, taskId, reviewId } = await seedReviewing()
+    await handleExit(deps, { sessionId: 'sess_review', exitCode: 1 })
+    const st = deps.getState()
+    expect(st.dispatches.find((d) => d.id === reviewId)!.endedAt).toBeDefined()
+    expect(st.tasks[0].status).toBe('blocked')
+    expect(st.gates).toHaveLength(1)
+    expect(st.gates[0].taskId).toBe(taskId)
+    // 끝난 일을 버리지 않는 탈출구가 질문에 실린다(blockForReview)
+    expect(st.gates[0].question).toContain('task-update --status completed')
+    // 코디네이터를 깨우는 수단은 메시지뿐이다 — Gate 만 만들고 알리지 않으면 아무도 오지 않는다
+    expect(st.messages.some((m) => m.type === 'decision_gate' && m.taskId === taskId)).toBe(true)
+  })
+
+  // closeDispatch 가 올린 값을 되돌린다. 남겨 두면 검토자가 세 번 죽는 것만으로 멀쩡한 작업의 회로가
+  // 끊기고, 그것은 이 Gate 가 막으려는 바로 그 일이다.
+  it('검토자가 죽어 열린 Gate 는 consecutiveFailures 를 올리지 않는다', async () => {
+    const { deps } = await seedReviewing()
+    await handleExit(deps, { sessionId: 'sess_review', exitCode: 1 })
+    expect(deps.getState().tasks[0].consecutiveFailures).toBe(2)
+    expect(deps.getState().tasks[0].consecutiveFailures).toBeLessThan(FAILURE_LIMIT)
+  })
+
+  // 구현 Dispatch 의 종료는 한 글자도 달라지지 않는다 — Task 는 dispatched 에 남고(--retry-of 가
+  // 집어 간다) 카운터는 올라간다.
+  it('구현 Dispatch 가 죽으면 Gate 를 열지 않고 기존 동작 그대로다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { spec: '작업' })
+    const taskId = deps.getState().tasks[0].id
+    await call(deps, 'worker-start', { task: taskId, agent: 'codex', account: 'acc1' })
+    await handleExit(deps, { sessionId: 'sess1', exitCode: 1 })
+    expect(deps.getState().gates).toHaveLength(0)
+    expect(deps.getState().tasks[0].status).toBe('dispatched')
+    expect(deps.getState().tasks[0].consecutiveFailures).toBe(1)
+  })
+
+  // 탐침이 검토 분기보다 위에 있어야 한다. 아래에 있으면 이 보고는 탐침을 지나지 못하고 코디네이터는
+  // "검토자가 반려했다"만 읽는다 — 멀쩡한 작업에 구현자를 다시 띄우고, 계정이 언제 풀리는지는 아무도
+  // 모른다. 가이드 7절의 "limitResetsAt 이 붙으면 받은편지함에도 status 메시지로 온다"가 이 경로에도
+  // 적용된다.
+  it('한도에 걸린 검토자의 failed 보고도 limitResetsAt 과 status 메시지를 남긴다', async () => {
+    const { deps, taskId, reviewId } = await seedReviewing()
+    const probed: string[] = []
+    deps.probeLimit = async (d) => {
+      probed.push(d.id)
+      return 1_700_000_000_000
+    }
+    const r = await call(
+      deps,
+      'send',
+      { type: 'worker_done', taskId, dispatchId: reviewId, outcome: 'failed', subject: '반려', body: '부족하다' },
+      'sess_review'
+    )
+    expect(r.status).toBe(200)
+    expect(probed).toEqual([reviewId])
+    const st = deps.getState()
+    expect(st.dispatches.find((d) => d.id === reviewId)!.limitResetsAt).toBe(1_700_000_000_000)
+    const status = st.messages.find(
+      (m) => m.dispatchId === reviewId && m.subject === 'session ended at a usage limit'
+    )
+    expect(status?.body).toContain(new Date(1_700_000_000_000).toISOString())
+    // 검토 판정 자체는 그대로 반영된다 — 탐침이 그것을 덮지 않는다
+    expect(st.tasks[0].status).toBe('failed')
+    expect(st.messages.some((m) => m.subject === 'review failed')).toBe(true)
+  })
+
+  it('검토자가 succeeded 로 보고하면 탐침을 부르지 않는다', async () => {
+    const { deps, taskId, reviewId } = await seedReviewing()
+    let calls = 0
+    deps.probeLimit = async () => {
+      calls++
+      return 1_700_000_000_000
+    }
+    await call(
+      deps,
+      'send',
+      { type: 'worker_done', taskId, dispatchId: reviewId, outcome: 'succeeded', subject: 's', body: 'b' },
+      'sess_review'
+    )
+    expect(calls).toBe(0)
+    expect(deps.getState().tasks[0].status).toBe('completed')
+    expect('limitResetsAt' in deps.getState().dispatches.find((d) => d.id === reviewId)!).toBe(false)
+  })
+})
+
 // ── 이음매를 통과하는 통합 테스트 ──────────────────────────────────────────────
 // 층마다 테스트가 있었는데 리뷰가 낸 Critical 은 그 사이에 살아 있었다: 검증 결과가 Message 를
 // 만들지 않아 코디네이터가 영원히 알지 못한다는 것. handleCommand('send', worker_done) 에서
