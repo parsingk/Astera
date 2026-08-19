@@ -168,10 +168,11 @@ Two rules followed from that decision, and both are load-bearing for the rest of
   (`resources/skills/orchestration-guide.md:190`, with the reservation explained at `:207-217`) — a
   coordinator setting it on an ordinary Task would make the scheduler mistake that Task for its own
   integration marker, skip the merge step, and run it in the project folder instead of a worktree —
-  the one combination the placement rule forbids for an *ordinary* Task (the exception above is for the
-  app's own integration Task specifically, identified by `parentId` actually pointing at a Task that is
-  really waiting on a merge, not by the mere presence of the field) — and suppress the real integration
-  Task from ever being created.
+  the one combination the placement rule forbids for an *ordinary* Task (the exception above is for
+  the app's own integration Task, and `isIntegrationTask` marks one by exactly that — the mere presence
+  of `parentId`, nothing more: `integrate.ts:120-122` checks only `!!t.parentId`. That is not a gap in
+  the exception; it is why setting `--parent` on an ordinary Task causes this precise misreading rather
+  than some other failure) — and suppress the real integration Task from ever being created.
 
 *What to check to reverse it.* This reversal has the most surface area of the three, because five
 things shipped together and none of them makes sense alone:
