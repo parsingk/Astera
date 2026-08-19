@@ -734,7 +734,7 @@ export const es: Catalog = {
   'jobs.state.blocked': 'Esperando a una persona',
   'jobs.run.running': 'en curso',
   'jobs.gates.more': '+{count} más',
-  // RunDetail.tsx, panel derecho — la lista de eventos. La insignia la elige el tipo de evento (o el tipo
+  // RunDetail.tsx, panel inferior — la lista de eventos. La insignia la elige el tipo de evento (o el tipo
   // de mensaje). Los nombres jobs.timeline.* se mantienen: ese panel es la línea de tiempo, y
   // jobs.detail.open lo usa la barra lateral (JobsView.tsx) para abrir la ventana — esa ventana ahora
   // también contiene el grafo de dependencias, por eso es "Detalles" y no "Historial". Los textos de la
@@ -761,7 +761,7 @@ export const es: Catalog = {
   // puede tener varios informes de worker)
   'jobs.event.succeeded': 'correcto',
   'jobs.event.outcomeFailed': 'fallido',
-  // RunDetail.tsx — los textos de la ventana de detalle: el grafo de la izquierda y el filtro que abre
+  // RunDetail.tsx — los textos de la ventana de detalle: el grafo de arriba y el filtro que abre
   'jobs.detail.cycle': 'Sus dependencias se apuntan entre sí, así que no hay orden que dibujar — estas Tasks nunca empezarán',
   'jobs.detail.hidden': '{count} eventos de otras Tasks — pulsa el nodo otra vez para quitar el filtro',
   'jobs.detail.clearFilter': 'Quitar filtro',

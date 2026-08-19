@@ -723,7 +723,7 @@ export const ja: Catalog = {
   'jobs.state.blocked': '人を待っている',
   'jobs.run.running': '進行中',
   'jobs.gates.more': '他 {count} 件',
-  // RunDetail.tsx の右カラム — イベント一覧。種別バッジはイベント種別（またはメッセージ種別）が決める。
+  // RunDetail.tsx の下カラム — イベント一覧。種別バッジはイベント種別（またはメッセージ種別）が決める。
   // jobs.timeline.* の名前が残るのは、このカラムがタイムラインそのものだからだ。ウィンドウを開く
   // サイドバーの入口は jobs.detail.open — その窓は履歴だけでなく依存グラフも持つので「履歴」ではなく
   // 「詳細」である。窓自身の文言は下の jobs.detail.* にある
@@ -749,7 +749,7 @@ export const ja: Catalog = {
   // (1 つの Task に複数のワーカー報告があり得る)
   'jobs.event.succeeded': '成功',
   'jobs.event.outcomeFailed': '失敗',
-  // RunDetail.tsx — 詳細ウィンドウ自身の文言。左のグラフと、それが開くフィルターが使う
+  // RunDetail.tsx — 詳細ウィンドウ自身の文言。上のグラフと、それが開くフィルターが使う
   'jobs.detail.cycle': '依存が互いを指しているため順序を決められません — これらの Task は永久に始まりません',
   'jobs.detail.hidden': '他の Task のイベント {count} 件 — ノードをもう一度押すと解除',
   'jobs.detail.clearFilter': 'フィルターを解除',

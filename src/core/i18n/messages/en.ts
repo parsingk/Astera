@@ -628,7 +628,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.state.blocked': 'Waiting for a person',
   'jobs.run.running': 'in progress',
   'jobs.gates.more': '+{count} more',
-  // RunDetail.tsx, right pane — the event list. The badge is chosen by the event kind (or the message
+  // RunDetail.tsx, lower pane — the event list. The badge is chosen by the event kind (or the message
   // type). The jobs.timeline.* names stay because that pane is the timeline. The sidebar's way in is
   // jobs.detail.open — the window now holds the dependency graph too, so it is "Details", not
   // "History". The window's own wording is jobs.detail.* below
@@ -654,7 +654,7 @@ export const en: Record<keyof typeof ko, string> = {
   // Task can have several worker reports). The same word on two layers hides which one is being claimed
   'jobs.event.succeeded': 'succeeded',
   'jobs.event.outcomeFailed': 'failed',
-  // RunDetail.tsx — the detail window itself: the graph on the left and the filter it drives.
+  // RunDetail.tsx — the detail window itself: the graph on top and the filter it drives.
   // A cycle is a coordinator mistake nothing else in the app catches, so the sentence says both why the
   // Tasks cannot be placed and what becomes of them
   'jobs.detail.cycle': 'Their dependencies point at each other, so there is no order to draw — these Tasks will never start',

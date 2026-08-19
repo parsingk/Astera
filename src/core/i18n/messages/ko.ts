@@ -746,7 +746,7 @@ export const ko = {
   'jobs.state.blocked': '사람을 기다린다',
   'jobs.run.running': '도는 중',
   'jobs.gates.more': '외 {count}건',
-  // RunDetail.tsx 의 오른쪽 칸 — 이벤트 목록. 종류 배지는 이벤트 종류(또는 메시지 종류)가 고른다.
+  // RunDetail.tsx 의 아래 칸 — 이벤트 목록. 종류 배지는 이벤트 종류(또는 메시지 종류)가 고른다.
   // Run 을 '작업'이라 부르는 것은 위의 jobs.empty 와 같고, 그 안의 Task 는 'Task' 로 적는다 —
   // 한 목록에 두 층의 사건이 나란히 나오므로 같은 낱말이면 구분되지 않는다.
   // 이름이 timeline 으로 남는 것은 이 칸이 곧 타임라인이기 때문이다. 창을 여는 사이드바의 입구는
@@ -775,7 +775,7 @@ export const ko = {
   // 쪽 주장인지 사라진다
   'jobs.event.succeeded': '성공',
   'jobs.event.outcomeFailed': '실패',
-  // RunDetail.tsx — 상세 창 자신의 문구. 왼쪽 그래프와 그것이 여는 필터가 쓴다.
+  // RunDetail.tsx — 상세 창 자신의 문구. 위의 그래프와 그것이 여는 필터가 쓴다.
   // 순환은 코디네이터의 실수인데 이 화면 말고는 아무도 잡아 주지 않으므로, 한 문장이 왜 그려질 수
   // 없는지와 그래서 그 Task 들이 어떻게 되는지를 함께 말한다
   'jobs.detail.cycle': '의존이 서로를 가리켜 순서를 정할 수 없습니다 — 이 Task 들은 영원히 시작되지 않습니다',

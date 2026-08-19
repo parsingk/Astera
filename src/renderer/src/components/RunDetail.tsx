@@ -67,12 +67,16 @@ const timeOf = (at: string): string => {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-/** 한 Run 의 상세 창 — 왼쪽이 의존 그래프, 오른쪽이 이벤트다. 읽기 전용이다(Gate 를 답하는 것은
+/** 한 Run 의 상세 창 — 위가 의존 그래프, 아래가 이벤트다. 읽기 전용이다(Gate 를 답하는 것은
  *  Slack 제어면의 몫이다).
  *
- *  **그래프는 장식이 아니라 필터다.** 노드를 누르면 오른쪽이 그 Task 의 이벤트만 남는다 — "왜 저게
- *  안 도나"(왼쪽)와 "저기서 무슨 일이 있었나"(오른쪽)가 한 화면에서 이어지고, 이벤트가 수십 줄이 되는
+ *  **그래프는 장식이 아니라 필터다.** 노드를 누르면 아래가 그 Task 의 이벤트만 남는다 — "왜 저게
+ *  안 도나"(위)와 "저기서 무슨 일이 있었나"(아래)가 한 화면에서 이어지고, 이벤트가 수십 줄이 되는
  *  문제도 같이 풀린다(가려진 개수는 맨 아래에 적는다).
+ *
+ *  두 칸을 옆이 아니라 위아래로 두는 이유는 자라는 방향이다: 그래프는 한 층에 Task 가 늘수록
+ *  **가로로** 자라고, 이벤트는 세로로 자란다. 옆에 세우면 그래프가 창의 절반도 못 쓰고 넷만 나란히
+ *  서도 잘린다. 스크롤은 둘 다 자기 칸 안에서만 돈다(styles.css 의 min-height: 0).
  *
  *  이 컴포넌트에는 테스트가 없다(렌더러에 jsdom 이 없다). 그래서 판정은 전부 core 에 있고 —
  *  이벤트는 orchestration/timeline.ts, 층은 graph.ts, 노드의 좌표는 graphLayout.ts — 여기는 건네받은
@@ -94,7 +98,7 @@ export function RunDetail({
   onClose: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
-  /** 고른 노드 = 오른쪽의 필터. 같은 노드를 다시 누르면 풀린다 */
+  /** 고른 노드 = 아래 이벤트의 필터. 같은 노드를 다시 누르면 풀린다 */
   const [selected, setSelected] = useState<string | null>(null)
   const [open, setOpen] = useState<Set<string>>(new Set())
   const keyOf = (e: JobEvent): string => `${e.kind}:${e.sourceId}`
@@ -389,7 +393,9 @@ function Graph({
         </div>
       )}
       {/* 순환. **서로 간 선을 긋지 않는다** — 그을 순서가 없다는 것이 바로 이 묶음이 여기 있는
-          이유다. 코디네이터의 실수이고 다른 어느 화면도 잡아 주지 않으므로 조용히 숨기지 않는다 */}
+          이유다. 명령으로는 만들 수 없고(createTask 가 없는 dep 을 거절하고 deps 를 바꾸는 명령이
+          없다) 저장 파일이 손으로 고쳐졌을 때만 생기는데, 그래서 더더욱 이 화면 말고는 아무도
+          말해 주지 않는다. 조용히 숨기지 않는 이유다 */}
       {cycle.length > 0 && (
         <div className="detail-cycle">
           <p className="detail-cycle-note">{t('jobs.detail.cycle')}</p>
