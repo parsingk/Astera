@@ -559,9 +559,49 @@ export function registerIpc(
       // registers it, so the worktree list and delete paths in settings handle a worker's worktree
       // exactly like any other.
       createWorktree: async (a) => {
+        // A worker's worktree must fork from the branch the Run is standing on, not whatever
+        // createWorktree's own auto-detection would pick (origin/HEAD → main → master,
+        // core/worktrees/git.ts detectBaseRef). Left to that default, a worker forks from the
+        // project's default branch — a different ancestor than the branch the Run is actually
+        // running on — and the merge-before-start step (integrateWorktrees, further down in this
+        // file) becomes pointless: it waits for a dependency's worktree to be folded into the
+        // project folder before this Task starts, but a worker that branched from origin/HEAD
+        // never had that project-folder history as an ancestor in the first place, so nothing it
+        // sees changes because of the merge. This only matters when a worktree exists at all,
+        // which is limit >= 2 — at limit 1 the scheduler's placement rule picks
+        // `worktree: 'current'` and never calls this adapter.
+        //
+        // The literal string 'HEAD' cannot be passed as-is: createWorktree's baseRef goes through
+        // toFullRef (core/worktrees/git.ts), which resolves a slash-free name only as
+        // refs/heads/<name> — 'HEAD' would look for refs/heads/HEAD, find nothing, and
+        // createWorktree would throw NO_BASE. So the branch's short name has to be read first.
+        //
+        // `symbolic-ref --quiet --short HEAD` is used rather than `rev-parse --abbrev-ref HEAD`:
+        // the latter returns the literal string 'HEAD' on a detached HEAD instead of failing, so a
+        // caller that trusts its output would silently try to fork from a branch named 'HEAD' that
+        // does not exist. symbolic-ref fails outright on a detached HEAD instead, and that failure
+        // is exactly the signal this needs (see the throw below). The same question is asked the
+        // same way, for the same reason, elsewhere in this codebase: the pre-merge check further
+        // down in this file (`symbolic-ref --quiet HEAD` inside integrateWorktrees) and
+        // listBranches (core/worktrees/git.ts) both treat a failing symbolic-ref as "detached".
+        const head = await git(['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: a.repoPath })
+        if (!head.ok)
+          // Fail rather than silently falling back to auto-detection (baseRef undefined): a
+          // fallback would recreate the exact bug this check exists to prevent, and the worker
+          // would go on to do work that Task 5 can never merge — integrateWorktrees (further down
+          // in this file) opens a Gate instead of merging when the project folder's own HEAD is
+          // detached, which is precisely the state detected here. So a fallback burns an entire
+          // worker session before the problem is visible; throwing here reports it at the start.
+          // The throw propagates through OrchCoordinator.startWorker to server.ts's `worker-start`
+          // catch, which rolls the half-open Dispatch back and returns an error response; the
+          // scheduler's per-slot catch (further down in this file) turns that into a Gate the user
+          // sees — the same wiring every other worker-start failure already goes through, so
+          // nothing new needs to be built for this one to reach the user.
+          throw new Error(`NO_BASE: HEAD is not on a branch (detached) — cannot fork a worker worktree from ${a.repoPath}`)
         const r = await createWorktree({
           repoPath: a.repoPath,
           name: a.name,
+          baseRef: head.stdout,
           registry: core.worktrees
         })
         // Warnings are not discarded — worktree.create.fetchFailed means "the base could not be fetched,
