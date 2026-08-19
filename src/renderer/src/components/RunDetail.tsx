@@ -186,17 +186,30 @@ export function RunDetail({
    *  창을 닫지도 않는다: 다른 버튼을 누르면 지금 쓰던 것을 잃고, 배경을 눌러 창을 닫으면 도는
    *  명령의 결과를 아무도 보지 못한다(이 창을 새로 열지 않는 한 다시 알 길이 없다). */
   const formOpen = picking !== null || asking !== null || busy !== null
-  /** 이 Run 의 동시 실행 한도 — 없으면 DEFAULT_CONCURRENCY(JobRun 의 주석과 같다). 띄우기 버튼은
-   *  한도가 1 이하일 때만 보인다: 한도가 2 이상인 Run 은 모든 워커가 각자의 워크트리에서 돌고,
-   *  사람이 여기서 하나를 프로젝트 폴더(worker-start 의 기본 worktree='current')에 띄우면 "병렬인데
-   *  한 폴더"라는 금지된 조합이 된다(coordinator/runScheduler 주석) — 나머지 워커들의 워크트리와
-   *  달리 이 워커만 프로젝트 폴더의 커밋 안 된 변경을 남겨 병합 자리를 없앤다. 렌더러는 워크트리
-   *  이름을 지어 줄 수도 없다 — nameForTask(core/worktrees/naming.ts)가 node:path 를 끌고 와
-   *  tsconfig.web.json 에 못 들어간다. 그래서 한도 2 이상인 Run 에서는 버튼 자체를 없앤다(스케줄러가
-   *  거기서 띄우는 것을 대신 맡는다). DEFAULT_CONCURRENCY 가 3 이므로 사이드바가 기본값으로 만든
-   *  Run 에는 이 버튼이 나오지 않는다 — 대안(프로젝트 폴더로라도 억지로 띄우기)을 만들지 않기로 한
-   *  결정이다. */
-  const canManualStart = (run?.concurrency ?? DEFAULT_CONCURRENCY) <= 1
+  /** 띄우기 버튼을 보일 조건 — **둘 다** 참이어야 한다. 한 자리에 모아 두는 것은 둘 중 하나만
+   *  보고 고치면 나머지 조건을 깨뜨리기 쉬워서다.
+   *
+   *  1) 이 Run 의 동시 실행 한도(없으면 DEFAULT_CONCURRENCY, JobRun 의 주석과 같다)가 1 이하다.
+   *     한도가 2 이상인 Run 은 모든 워커가 각자의 워크트리에서 돌고, 사람이 여기서 하나를
+   *     프로젝트 폴더(worker-start 의 기본 worktree='current')에 띄우면 "병렬인데 한 폴더"라는
+   *     금지된 조합이 된다(coordinator/runScheduler 주석) — 나머지 워커들의 워크트리와 달리 이
+   *     워커만 프로젝트 폴더의 커밋 안 된 변경을 남겨 병합 자리를 없앤다. 렌더러는 워크트리
+   *     이름을 지어 줄 수도 없다 — nameForTask(core/worktrees/naming.ts)가 node:path 를 끌고 와
+   *     tsconfig.web.json 에 못 들어간다. 그래서 한도 2 이상인 Run 에서는 버튼 자체를 없앤다
+   *     (스케줄러가 거기서 띄우는 것을 대신 맡는다). DEFAULT_CONCURRENCY 가 3 이므로 사이드바가
+   *     기본값으로 만든 Run 에는 이 버튼이 나오지 않는다 — 대안(프로젝트 폴더로라도 억지로
+   *     띄우기)을 만들지 않기로 한 결정이다.
+   *
+   *  2) 이 Run 에 provider 가 있다. 없으면 이 버튼은 눌려도 결코 되지 않는다 — worker-start 가
+   *     --agent 로 지목할 provider 가 없어 `--agent must be claude|codex` 로 거절한다(server.ts).
+   *     **schedule.ts 의 slotsToFill 이 이미 같은 판단을 내려 두었다** — `const provider =
+   *     run.provider; if (!provider) continue` 로 provider 없는 Run 을 건너뛴다는 그 주석과 같은
+   *     사정이다(그런 Run 은 명령으로는 만들 수 없지만 orchestration.json 은 프로세스보다 오래
+   *     살고 손으로 고쳐질 수 있다). 스케줄러가 이미 내린 판단을 UI 가 다르게 낼 이유가 없다.
+   *     버튼을 그대로 두고 실패했을 때 안내로 대신하는 것도 틀렸다 — "로그인된 계정이 없다"는
+   *     이 경우 거짓이다(계정은 있을 수 있고, 없는 것은 이 Run 의 provider 다). 원인을 잘못
+   *     말하는 오류 문구는 문구가 없는 것보다 나쁘다. */
+  const canManualStart = (run?.concurrency ?? DEFAULT_CONCURRENCY) <= 1 && run?.provider !== undefined
   const keyOf = (e: JobEvent): string => `${e.kind}:${e.sourceId}`
   const toggle = (key: string): void =>
     setOpen((prev) => {
@@ -642,9 +655,10 @@ function Graph({
   onSelect: (taskId: string) => void
   canOpenSession: (sessionId: string) => boolean
   onOpenSession: (sessionId: string) => void
-  /** 띄우기 버튼을 보일지 — 이 Run 의 동시 실행 한도가 1 이하일 때만이다(RunDetail.canManualStart
-   *  의 주석). 판단은 RunDetail 이 하고 여기는 결과만 받는다 — 이 컴포넌트는 판단하지 않는다는
-   *  파일 머리말의 규칙과 같다. */
+  /** 띄우기 버튼을 보일지 — 이 Run 의 동시 실행 한도가 1 이하이고 **그리고** provider 가 있을
+   *  때만이다(RunDetail.canManualStart 의 주석에 둘 다, 각각 왜인지 적혀 있다). 판단은
+   *  RunDetail 이 하고 여기는 결과만 받는다 — 이 컴포넌트는 판단하지 않는다는 파일 머리말의
+   *  규칙과 같다. */
   canManualStart: boolean
   /** Task 짓기 폼이 열려 있거나, 질문을 쓰는 중이거나, 명령이 도는 중이다(RunDetail.formOpen).
    *  참이면 노드의 버튼(↗ 포함)을 전부 숨긴다 — 다른 버튼을 눌러 지금 하는 일을 조용히 버리지
