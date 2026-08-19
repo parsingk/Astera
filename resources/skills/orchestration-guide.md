@@ -172,6 +172,12 @@ is, the current directory of that shell. If that is not the repository root, eve
 (`--worktree current` being the default) comes up in the wrong directory, and nothing reports it.
 Passing `--cwd <absolute repo path>` is the only reliable way.
 
+**That path also decides where a human can see the Run.** The app's Jobs sidebar lists the Runs of the
+project it currently has open, matched against `Run.cwd`. So a Run created with a `--cwd` pointing
+somewhere other than the project your session belongs to still works — every command succeeds — but it
+is invisible in that window until the user opens the project it names. If you are working on one
+repository, pass that repository's root and open your session there.
+
 `run-configs` returns the Run's project's run configurations as `[{ id, name, type }]` — the ids
 `task-create --validate` accepts (4.2). It always reads the **most recently created** Run and takes no
 `--run` flag, unlike `task-list` and `check` (section 1). It changes no state, and unlike most commands
