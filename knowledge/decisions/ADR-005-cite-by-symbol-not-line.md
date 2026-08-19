@@ -84,13 +84,20 @@ needed converting and nothing else. Historical examples of this shape include `A
 `limitProbe.test.ts`, `FileExplorer.tsx` and `useFileOps.ts` when the guard was widened to catch this
 shape — all now converted.
 
-A gap remains for bare self-references that do **not** have a `(` immediately before the colon —
-`removeSelection:214` (a bare `word:NN`, no parenthesis at all) or `transferTo's destDir (around
-:322-323)` (a parenthesis, but with a word between it and the colon), both still living in
-`useFileOps.ts`. Widening the regex to reach those would risk exactly the ternary/ratio false positives
-the original design avoided, so they are left as a known gap the same way the fully-bare form used to
-be: if one goes stale it fails the same way the four that motivated this ADR did, silently, and someone
-will have to notice by reading rather than by the test failing red.
+A gap remains for bare self-references that do **not** have a `(` immediately before the colon — a
+bare `word:NN` with no parenthesis at all, or a parenthesis followed by a word before the colon rather
+than sitting directly against it. Widening the regex to reach those would risk exactly the ternary/ratio
+false positives the original design avoided, so they are left as a known gap the same way the
+fully-bare form used to be: if one goes stale it fails the same way the four that motivated this ADR
+did, silently, and someone will have to notice by reading rather than by the test failing red.
+
+As of this decision, no citation of either shape remains anywhere in the tree — a statement about the
+moment this ADR was adopted, not an ongoing guarantee the guard test enforces, since the guard test is
+exactly what cannot see this shape. This section deliberately does not name where such a citation lived
+or where one might turn up next: an inventory of offenders inside a decision record is itself a citation
+that drifts the instant someone converts one, leaving a reader who greps for a name it once listed
+unable to tell whether that case was fixed or simply renamed. A decision record holds rules, not
+inventories, for the same reason a comment holds a symbol name and not a line number.
 
 Anyone who sees `git.ts` 의 `toFullRef` and reaches for the file to add back a precise-looking line
 number should stop — that instinct is exactly what this ADR exists to head off, and the guard test will

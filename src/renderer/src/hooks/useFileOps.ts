@@ -527,8 +527,8 @@ export function useFileOps(deps: {
       // LocalHistoryDialog's onRestored).
       if (stateRef.current?.root !== root) return
 
-      const touched = new Set<string>() // plain refresh targets — refreshed only when already in the cache (same convention as removeSelection:214)
-      // Restore destinations — like transferTo's destDir (around :322-323) these are always expanded and
+      const touched = new Set<string>() // plain refresh targets — refreshed only when already in the cache (same convention as removeSelection)
+      // Restore destinations — like transferTo's destDir these are always expanded and
       // refreshed regardless of whether they are cached. A move's destDir and a rename's
       // parentDir(op.from) are "where the item comes back and has to be visible again", and while
       // collapsed the undone result cannot be confirmed on screen. A remove's parent is where the item
@@ -536,7 +536,7 @@ export function useFileOps(deps: {
       const restoreDirs = new Set<string>()
       const removed: string[] = []
       // The final paths a rename/move undo landed on — the selection is moved to these (same convention
-      // as commitEdit:152, duplicateSelection:234 and transferTo's landed). Undoing a remove (i.e.
+      // as commitEdit, duplicateSelection and transferTo's landed). Undoing a remove (i.e.
       // undoing a create/duplicate) is handled through removed/pathsRemoved rather than landed —
       // invert (undo.ts) produces only homogeneous ops per entry.kind, so one undo() call's invOps are
       // either all remove or all rename/move, which means removed and landed are never filled in the
@@ -623,7 +623,7 @@ export function useFileOps(deps: {
         const more = missing.length > 3 ? t('files.batch.moreCount', { count: missing.length - 3 }) : ''
         toast.error(t('files.undo.partialMissing', { total: invOps.length, missing: missing.length, shown, more }))
       }
-      // Wording specific to the undo context — the one from removeSelection (around :211-212) is not
+      // Wording specific to the undo context — the one from removeSelection is not
       // reused. There the delete confirmation modal has already been shown, so the framing "the user
       // asked for a delete" fits; here it is only a Ctrl+Z, and undo() deliberately shows no
       // confirmation modal, relying on Local History as the safety net instead.
