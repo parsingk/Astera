@@ -189,7 +189,7 @@ const api = {
   },
   orch: {
     list: invoke('orch.list'),
-    timeline: invoke('orch.timeline'),
+    runDetail: invoke('orch.runDetail'),
     unwatch: invoke('orch.unwatch')
   },
   platform: process.platform,

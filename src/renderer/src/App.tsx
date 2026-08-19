@@ -28,7 +28,14 @@ import { UpdateGate } from './components/UpdateGate'
 import { ShortcutSettings } from './components/ShortcutSettings'
 import { TerminalFontSettings } from './components/TerminalFontSettings'
 import { ConfirmHost } from './components/ConfirmHost'
-import type { JobEvent, OrchSnapshot, RunConfig, RunContext, RunStatus, TerminalBuffer } from '../../core/types'
+import type {
+  OrchSnapshot,
+  RunConfig,
+  RunContext,
+  RunDetail,
+  RunStatus,
+  TerminalBuffer
+} from '../../core/types'
 import { slackMode } from '../../core/slack/ready'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
@@ -1542,17 +1549,17 @@ export default function App(): React.JSX.Element {
   // The Jobs sidebar snapshot for the open project — orch.list's initial payload, then every
   // 'orch:state' push after it (see the subscription effect below). null until orch.list first resolves.
   const [orchSnapshot, setOrchSnapshot] = useState<OrchSnapshot | null>(null)
-  /** 기록 모달이 열려 있는 Run. null 이면 닫혀 있다.
+  /** 상세 창이 열려 있는 Run. null 이면 닫혀 있다.
    *
    *  **runId 만 들지 않고 프로젝트를 함께 든다.** 프로젝트가 바뀌는 커밋에서는 리셋 효과의
-   *  setTimeline(null) 이 그 렌더의 값을 바꾸지 못하므로(효과 단계다) 재조회는 옛 runId 로 한 번
+   *  setOpenRun(null) 이 그 렌더의 값을 바꾸지 못하므로(효과 단계다) 재조회는 옛 runId 로 한 번
    *  발사되고, 그러면 main 이 `run X does not belong to Y` 를 orchLog 에 쓴다 — 진짜 크로스 프로젝트
    *  접근 시도가 남기는 줄과 한 글자도 다르지 않아 그 로그를 감사에 쓸 수 없게 된다. 짝을 한 값으로
    *  들면 재조회가 발사 지점에서 스스로 거를 수 있다(효과 선언 순서를 바꾸는 것으로는 고쳐지지 않는다). */
-  const [timeline, setTimeline] = useState<{ projectPath: string; runId: string } | null>(null)
-  /** 그 Run 의 이벤트. null 은 아직 도착하지 않았다는 뜻이고 빈 배열과 다르다 — 모달은 전자에
-   *  아무것도 그리지 않고 후자에만 빈 상태를 그린다. 읽는 효과는 currentProject 선언 아래에 있다. */
-  const [timelineEvents, setTimelineEvents] = useState<JobEvent[] | null>(null)
+  const [openRun, setOpenRun] = useState<{ projectPath: string; runId: string } | null>(null)
+  /** 그 Run 의 이벤트와 의존 그래프. null 은 아직 도착하지 않았다는 뜻이고 빈 배열과 다르다 — 모달은
+   *  전자에 아무것도 그리지 않고 후자에만 빈 상태를 그린다. 읽는 효과는 currentProject 선언 아래에 있다. */
+  const [detail, setDetail] = useState<RunDetail | null>(null)
   /** 홈 디렉터리 — 프로젝트가 없을 때 아래쪽 패널의 터미널이 열릴 자리. 프로세스 수명 동안 바뀌지
    *  않으므로 한 번만 읽는다. 도착하기 전에는 null 이고, 그동안 패널은 그려지지 않는다. */
   const [homeDir, setHomeDir] = useState<string | null>(null)
@@ -1614,26 +1621,26 @@ export default function App(): React.JSX.Element {
     // 짝이 맞지 않으면 부르지 않는다 — 프로젝트 A→B 커밋에서 이 효과는 아직 A 의 runId 를 들고
     // 돌지만, 그 조합은 main 이 거부할 조합이다. 여기서 거르면 orchLog 에 접근 위반과 똑같이 생긴
     // 줄이 남지 않는다. 모달을 닫는 것은 아래의 리셋 효과다(이 가드는 로그만 지킨다).
-    if (!timeline || timeline.projectPath !== currentProject) return
+    if (!openRun || openRun.projectPath !== currentProject) return
     let cancelled = false
     // 거부 팔을 반드시 둔다 — 위의 가드가 걸러도 main 은 저장소를 읽다 던질 수 있고, 그러면
-    // DevTools 에 Uncaught (in promise) 가 뜬다. 빈 배열로 접으면 모달은 빈 상태를 그린다.
-    void window.api.orch.timeline(timeline.projectPath, timeline.runId).then(
-      (evts) => {
-        if (!cancelled) setTimelineEvents(evts)
+    // DevTools 에 Uncaught (in promise) 가 뜬다. 빈 모양으로 접으면 모달은 빈 상태를 그린다.
+    void window.api.orch.runDetail(openRun.projectPath, openRun.runId).then(
+      (d) => {
+        if (!cancelled) setDetail(d)
       },
       () => {
-        if (!cancelled) setTimelineEvents([])
+        if (!cancelled) setDetail({ events: [], layers: [], cyclic: [] })
       }
     )
     return () => {
       cancelled = true
     }
-  }, [timeline, currentProject, orchSnapshot])
+  }, [openRun, currentProject, orchSnapshot])
   // 프로젝트가 바뀌면 닫는다 — 다른 프로젝트의 Run 을 열어 둔 채로 둘 이유가 없다
   useEffect(() => {
-    setTimeline(null)
-    setTimelineEvents(null)
+    setOpenRun(null)
+    setDetail(null)
   }, [currentProject])
 
   // Whether RunConfigManager is actually on screen — gates both its render below and the shortcut
@@ -1644,7 +1651,7 @@ export default function App(): React.JSX.Element {
   // OR-ed onto the value the other modals already set above — runManagerVisible depends on
   // currentProject, which is not computed yet at that point in the component. The history modal joins
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
-  modalOpenRef.current = modalOpenRef.current || runManagerVisible || timeline !== null
+  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null
 
   // Mirrors currentProject into a ref — avoids a stale closure in the run:status subscription effect
   const currentProjectRef = useRef(currentProject)
@@ -2325,9 +2332,9 @@ export default function App(): React.JSX.Element {
                 canOpenSession={(sessionId) => !!layout && !!groupOfTab(layout, sessionTab(sessionId))}
                 onOpenSession={(sessionId) => selectWorkbenchTab(sessionTab(sessionId))}
                 onOpenTimeline={(runId) => {
-                  setTimelineEvents(null) // 이전 Run 의 이벤트가 한 프레임 보이지 않게 한다
+                  setDetail(null) // 이전 Run 의 상세가 한 프레임 보이지 않게 한다
                   // 여는 시점의 프로젝트를 runId 와 함께 든다 — 이 스냅샷을 준 프로젝트가 그것이다
-                  if (currentProject) setTimeline({ projectPath: currentProject, runId })
+                  if (currentProject) setOpenRun({ projectPath: currentProject, runId })
                 }}
               />
             ) : (
@@ -3007,20 +3014,20 @@ export default function App(): React.JSX.Element {
           onClose={() => setRunManagerOpen(false)}
         />
       )}
-      {timeline && (
+      {openRun && (
         <JobTimeline
-          objective={orchSnapshot?.runs.find((r) => r.id === timeline.runId)?.objective ?? ''}
-          events={timelineEvents}
+          objective={orchSnapshot?.runs.find((r) => r.id === openRun.runId)?.objective ?? ''}
+          events={detail?.events ?? null}
           // Verbatim the pair JobsView is handed above, and for the reason its comment there records:
           // the tab tree is the only place that knows whether the worker's tab is still open, so a
           // sessions.some(...) check would keep saying yes after the user closed it and the ↗ would
           // silently do nothing.
           canOpenSession={(sessionId) => !!layout && !!groupOfTab(layout, sessionTab(sessionId))}
           onOpenSession={(sessionId) => {
-            setTimeline(null) // 탭으로 가면서 닫는다
+            setOpenRun(null) // 탭으로 가면서 닫는다
             selectWorkbenchTab(sessionTab(sessionId))
           }}
-          onClose={() => setTimeline(null)}
+          onClose={() => setOpenRun(null)}
         />
       )}
       <ConfirmHost />

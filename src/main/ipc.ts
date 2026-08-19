@@ -33,6 +33,7 @@ import {
 import { pickReviewer } from '../core/orchestration/reviewer'
 import { sameSnapshot, snapshotFor, runsForProject } from '../core/orchestration/view'
 import { timelineFor } from '../core/orchestration/timeline'
+import { layersOf } from '../core/orchestration/graph'
 import { repoPathOf } from '../core/worktrees/repo'
 import type { OrchState } from '../core/orchestration/state'
 import { makeLimitProbe } from './orchestration/limitProbe'
@@ -1246,20 +1247,21 @@ export function registerIpc(
   })
   // 스냅샷에 태우지 않고 따로 읽는 이유는 크기다 — Message.body 에는 검증 출력 꼬리가 실리므로
   // 프로젝트의 모든 Run 의 모든 이벤트를 매 쓰기마다 미는 것은 불가능하다. 모달이 열릴 때만 온다.
-  ipcMain.handle('orch.timeline', async (_e, projectPath: string, runId: string) => {
+  ipcMain.handle('orch.runDetail', async (_e, projectPath: string, runId: string) => {
     // orch.list 와 같은 가드, 같은 이유 — 경로가 어느 Run 을 볼 수 있는지를 정한다
     await assertAllowedPath(projectPath)
-    if (!orch) return []
+    if (!orch) return { events: [], layers: [], cyclic: [] }
     const project = repoPathOf(core.worktrees.list(), projectPath)
     const state = orch.deps.getState()
     // **소유 판정을 복제하지 않는다.** 이 프로젝트의 Run 목록에 없는 id 는 읽지 않는다 — 규칙을
     // 다시 쓰면 orch.list 가 막는 Run 을 이 핸들러가 통과시키는 우회로가 된다.
     if (!runsForProject(state, project, core.worktrees.list()).some((r) => r.id === runId)) {
-      orchLog(`orch.timeline: run ${runId} does not belong to ${project}`)
-      return []
+      orchLog(`orch.runDetail: run ${runId} does not belong to ${project}`)
+      return { events: [], layers: [], cyclic: [] }
     }
     const known = new Set(core.sessions.list().map((s) => s.id))
-    return timelineFor(state, runId, (id) => known.has(id))
+    const { layers, cyclic } = layersOf(state, runId)
+    return { events: timelineFor(state, runId, (id) => known.has(id)), layers, cyclic }
   })
   // The way out, the same as files.unwatch and git.unwatch: the Jobs view unmounts on a rail toggle,
   // and without this main goes on folding a snapshot and sending it to nobody on every orchestration

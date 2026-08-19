@@ -121,7 +121,7 @@ function collect(
   return events
 }
 
-/** Run 하나의 이벤트, 시각 오름차순. 모달이 열릴 때만 불린다(orch.timeline). */
+/** Run 하나의 이벤트, 시각 오름차순. 모달이 열릴 때만 불린다(orch.runDetail). */
 export function timelineFor(
   state: OrchState,
   runId: string,

@@ -310,6 +310,16 @@ export interface JobEvent {
   sessionId?: string
 }
 
+/** 상세 창이 한 번에 받는 것. 이벤트만 오던 것을 그래프까지 함께 주도록 넓혔고, 그래서 이름이
+ *  timeline 이 아니다 — 창이 열릴 때 한 번 부르므로 두 번 왕복할 이유가 없다. */
+export interface RunDetail {
+  events: JobEvent[]
+  /** 의존 깊이별 Task id (core/orchestration/graph.ts) */
+  layers: string[][]
+  /** 깊이를 정할 수 없는 Task — deps 에 순환이 있다 */
+  cyclic: string[]
+}
+
 /** Run 이 끝났는지 — Task 상태에서 계산된다. 저장되지 않는다.
  *
  *  여기(web 포함 파일)에 선언하는 이유: JobRun 이 이 타입을 필드로 갖고, 그것을 계산하는
@@ -702,9 +712,9 @@ export interface AppControlApi {
  */
 export interface OrchApi {
   list(projectPath: string): Promise<OrchSnapshot>
-  /** 한 Run 의 이벤트, 시각 오름차순. 스냅샷과 달리 **요청할 때만** 온다 — Message.body 에는
+  /** 한 Run 의 이벤트와 의존 그래프. 스냅샷과 달리 **요청할 때만** 온다 — Message.body 에는
    *  검증 출력 꼬리가 실리므로 매 쓰기마다 밀 수 있는 크기가 아니다. */
-  timeline(projectPath: string, runId: string): Promise<JobEvent[]>
+  runDetail(projectPath: string, runId: string): Promise<RunDetail>
   unwatch(): Promise<void>
 }
 
