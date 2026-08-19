@@ -18,6 +18,7 @@ import { copyTranscript } from '../core/rolling/transcript'
 import { OrchestrationStore } from './orchestration/store'
 import { OrchCoordinator, LAUNCH_FORBIDDEN, buildReviewSpecFile } from './orchestration/coordinator'
 import {
+  handleCommand as orchHandleCommand,
   handleExit as orchHandleExit,
   startOrchServer,
   type OrchServer,
@@ -31,6 +32,8 @@ import {
   openReviewDispatch
 } from '../core/orchestration/state'
 import { pickReviewer } from '../core/orchestration/reviewer'
+import { slotsToFill } from '../core/orchestration/schedule'
+import { defaultAccountIdOf } from '../core/accounts/defaultAccount'
 import { sameSnapshot, snapshotFor, runsForProject } from '../core/orchestration/view'
 import { timelineFor } from '../core/orchestration/timeline'
 import { layersOf } from '../core/orchestration/graph'
@@ -72,6 +75,12 @@ export interface OrchWiring {
    *  file has to happen (OS permissions on the token file are the access control). */
   onStarted: (h: { stop: () => void }) => void
 }
+
+/** 앱 자신이 명령을 부를 때의 호출자 id. **어떤 세션 id 와도 겹칠 수 없는 모양**이어야 한다 —
+ *  handleCommand 는 caller.sessionId 가 Dispatch 를 가진 적이 있으면 워커로 보고 COORDINATOR_ONLY
+ *  명령을 막는다. 겹치면 앱이 워커로 오인되어 Task 를 만들 수 없게 된다. 세션 id 는 randomUUID
+ *  (core/sessions/manager.ts)이므로 콜론이 들어갈 자리가 없다. */
+const UI_CALLER = 'astera:app'
 
 /** http:/https:/mailto: 만 허용하는 스킴 화이트리스트. 통과하면 파싱된 URL 을 돌려준다 —
  *  new URL 은 탭·개행을 스스로 걷어내므로, 호출자는 원래 문자열이 아니라 이 반환값의
@@ -796,6 +805,96 @@ export function registerIpc(
       }
     }
 
+    // 자동 진행. **setState 뒤에 매단다** — 새 Task 가 ready 가 되거나 자리가 비는 경로가 일곱이고
+    // (task-create, worker_done, 검증 결과, 검토 결과, gate-resolve, worker-stop, task-update),
+    // 명령마다 훅을 달면 하나를 빠뜨린다. 빠뜨렸을 때의 증상은 "Task 가 이유 없이 안 돈다"이고,
+    // 그것은 이 기능 계열이 없애려는 바로 그 증상이다. setState 는 상태가 저장되는 유일한 문이다.
+    //
+    // 띄우는 길은 orchHandleCommand 하나뿐이다 — openDispatch 나 deps.startWorker 를 직접 부르면
+    // CLI 가 지나는 검사(회로 차단, 열린 Dispatch, 실패 롤백)를 앱만 건너뛰는 두 번째 문이 생긴다.
+    let scheduling = false
+    let scheduleAgain = false
+    const runScheduler = async (): Promise<void> => {
+      // 재진입 가드 — 띄우기가 openDispatch 를 커밋하면 그것이 다시 setState 를 부른다. 도는 중이면
+      // 표시만 남기고 빠지고, 끝난 뒤 한 번 더 돈다. 8cce9c2 의 startHead 재진입 방어와 같은 모양이다.
+      if (scheduling) {
+        scheduleAgain = true
+        return
+      }
+      scheduling = true
+      try {
+        // 이 활성화에서 이미 한 번 손댄 Task. **없으면 아래 do-while 이 영원히 돈다.** worker-start 가
+        // 세션을 띄우다 실패하면 server.ts 의 롤백이 Dispatch 를 배열에서 지우고 Task 를 ready 로
+        // 되돌리는데, 그 롤백 자체가 setState 라서 scheduleAgain 이 서고, 다음 바퀴의 slotsToFill 은
+        // 같은 자리를 그대로 다시 준다 — 롤백 경로는 consecutiveFailures 를 올리지 않으므로 회로
+        // 차단도 걸리지 않는다(그것을 올리는 것은 closeDispatch 이고, 그 경로는 세션이 실제로 떴을
+        // 때만 지난다). 그래서 실패 → 롤백 → 같은 실패가 CLI 를 무한히 다시 띄운다. 한 활성화 안에서
+        // 한 Task 는 한 번만 건드린다: 다음 기회는 다음 상태 변경이 주고, 그때는 정말로 달라진 것이
+        // 있다.
+        const attempted = new Set<string>()
+        do {
+          scheduleAgain = false
+          if (!orch) return
+          const slots = slotsToFill(orch.deps.getState()).filter((s) => !attempted.has(s.taskId))
+          // 띄울 자리가 없으면 계정 조회까지 가지 않는다. 이 함수는 **모든 저장마다** 불리고 그
+          // 대부분은 띄울 것이 없는 저장이다 — 아래 조회에 계정마다 파일(macOS 에서는 Keychain)
+          // 읽기가 하나씩 붙으므로, 빈 바퀴에 그것을 치르면 상태를 쓰는 모든 명령이 그만큼 느려진다.
+          if (slots.length === 0) continue
+          // 계정 조회는 **바퀴마다 한 번**이다. 슬롯마다 부르면 같은 파일 읽기가 슬롯 수만큼 되풀이되고,
+          // 활성화 전체에 한 번만 부르면 do-while 이 여러 바퀴 도는 동안(그 사이 워커가 실제로 뜬다)
+          // 로그인 상태가 낡는다. "한 바퀴 = 한 스냅숏"이 그 둘의 가운데다.
+          //
+          // 얻는 방식은 startReview 와 같다(core.ts 의 defaultAccountIdFor 도 같은 모양이다) — 로그인
+          // 조회를 순차로 돌리면 계정 수만큼 늘어나므로 병렬로 편다.
+          const accounts = core.accounts.list()
+          const loggedInIds = await Promise.all(
+            accounts.map(async (a) => ((await core.accounts.loginStatus(a.id)) ? a.id : null))
+          )
+          const loggedIn = new Set(loggedInIds.filter((id): id is string => id !== null))
+          for (const slot of slots) {
+            attempted.add(slot.taskId)
+            const accountId = defaultAccountIdOf(slot.provider, accounts, loggedIn)
+            if (!accountId) {
+              // 조용히 넘기면 Run 이 이유 없이 서 있다 — 이 슬라이스가 없애려는 증상 그대로다.
+              // Reviewer 슬라이스가 "쓸 수 있는 다른 provider 계정이 없다"에 내린 것과 같은 판단이다.
+              const gated = await orchHandleCommand(
+                orch.deps,
+                { sessionId: UI_CALLER },
+                'gate-create',
+                {
+                  task: slot.taskId,
+                  question: `${slot.provider} 계정에 로그인되어 있지 않아 이 Task 를 시작할 수 없습니다`
+                }
+              )
+              // Gate 도 열리지 않았으면 사용자에게 남는 신호가 하나도 없다. 그 자리를 로그로 메운다.
+              if (gated.status >= 400)
+                orchLog(
+                  `scheduler: gate-create rejected task=${slot.taskId} — ${JSON.stringify(gated.body)}`
+                )
+              continue
+            }
+            const reply = await orchHandleCommand(
+              orch.deps,
+              { sessionId: UI_CALLER },
+              'worker-start',
+              { task: slot.taskId, agent: slot.provider, account: accountId, worktree: 'current' }
+            )
+            // 던지지 않고 로그만 남긴다 — 하나가 거절되었다고 나머지 자리까지 비워 두면 Run 하나의
+            // 문제가 전부를 세운다. 판정에서 이미 걸러졌어야 하는 경우이므로 로그가 곧 신호다.
+            if (reply.status >= 400)
+              orchLog(
+                `scheduler: worker-start rejected task=${slot.taskId} — ${JSON.stringify(reply.body)}`
+              )
+          }
+        } while (scheduleAgain)
+      } finally {
+        // finally 여야 한다 — 위의 `if (!orch) return` 도, handleCommand 안에서 올라오는 예외(디스크가
+        // 찬 store.save 가 그것이다)도 이 자리를 지나간다. 한 번이라도 놓치면 scheduling 이 true 로
+        // 남아 스케줄러가 앱이 사는 내내 다시는 돌지 않는다.
+        scheduling = false
+      }
+    }
+
     const deps: OrchServerDeps = {
       getState: () => store.get(),
       // Passed in a form that is definitely awaited — the caller's await contract stays. save() itself
@@ -812,6 +911,10 @@ export function registerIpc(
       setState: async (next) => {
         await store.save(next)
         pushOrchState(next)
+        // 저장이 끝난 뒤에 돈다 — 스케줄러가 읽는 것은 getState() 이고, 저장 전에 부르면 방금의
+        // 변경을 못 본다. 떠나 보내는 promise 에 **종단 .catch 가 있어야 한다**(startReview 와 같은
+        // 이유: 붙이지 않으면 unhandled rejection 이 main 프로세스를 죽인다).
+        void runScheduler().catch((e) => orchLog(`scheduler failed: ${String(e)}`))
       },
       // The .bak for reset — the one documented safety net for a destructive operation
       backup: () => store.backup(),
@@ -954,6 +1057,10 @@ export function registerIpc(
     // both cases the renderer has already been answered with an empty snapshot — with no push it
     // would keep showing nothing until some agent happened to change state.
     pushOrchState(store.get())
+    // 재시작 뒤 ready 인 Task 가 남아 있을 수 있다. 아무도 돌지 않으면 사용자가 앱을 켠 채로
+    // 아무 일도 일어나지 않고, 그 이유는 화면 어디에도 없다.
+    // **orch 대입 뒤에 있어야 한다** — 앞에 두면 orch 가 아직 null 이라 아무 일도 하지 않는다.
+    void runScheduler().catch((e) => orchLog(`scheduler failed at startup: ${String(e)}`))
     // Installing the discovery stub — without it there is no path by which an agent finds this feature.
     // **Done for every claude and codex account**: the path is the same
     // (<configDir>/skills/astera-orchestration/SKILL.md), and there is evidence that codex also treats
