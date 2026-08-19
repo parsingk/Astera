@@ -14,6 +14,7 @@ import type { GraphBox } from '../../../core/orchestration/graphLayout'
 import { edgePath, layoutRows, NODE_H, NODE_W } from '../../../core/orchestration/graphLayout'
 import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/types'
 import { useI18n } from '../i18n/I18nProvider'
+import { toast } from '../lib/toast'
 import { RUNNING_STATES, RunIcon, STATE_KEY, STATUS_COLOR, TaskIcon } from './JobIcons'
 import { NewTaskModal } from './NewTaskModal'
 
@@ -177,10 +178,14 @@ export function RunDetail({
    *  따로 필요하다(물어보기는 asking 이 그 구간도 이미 덮는다 — 성공했을 때만 asking 을 null 로
    *  돌리므로). */
   const [busy, setBusy] = useState<string | null>(null)
-  /** 네 동작 중 하나가 실패했을 때의 안내. NewTaskModal/NewRunModal 처럼 폼 안에 두지 않는 것은
-   *  띄우기·멈추기·다시 띄우기에는 폼이 없기 때문이다 — 창 위쪽 한 곳에 두어 넷이 같은 자리를
-   *  쓴다. */
-  const [actionError, setActionError] = useState<string | null>(null)
+  /** 물어보기(gate-create) 제출이 실패했을 때의 안내 — 이 폼(asking)과 함께 살고 죽는다.
+   *  NewTaskModal 이 자기 에러를 자기 폼 안에 두는 것과 같은 자리다. **띄우기·멈추기·다시
+   *  띄우기는 이 값을 쓰지 않는다** — 그 셋에는 폼이 없어서 실패를 인라인으로 보여 줄 자리가
+   *  없고, 이 앱은 그런 폼 없는 단발 액션의 실패를 이미 toast.error 로 보낸다(App.tsx 의
+   *  run.start.failed·files.save.failed 등과 같은 관례). 하나의 배너에 넷을 몰아넣는 것은 "폼이
+   *  있으면 인라인, 없으면 토스트"라는 이 저장소의 규칙 옆에 같은 일을 하는 두 번째 장치를
+   *  세우는 것이라 고르지 않았다. */
+  const [gateError, setGateError] = useState<string | null>(null)
   /** 그래프의 노드 버튼이 무언가를 조용히 버릴 수 있는 동안 — Task 짓기 폼이 열려 있거나, 질문을
    *  쓰는 중이거나, 명령이 도는 중이다. 이 동안은 노드 버튼(↗ 포함)을 전부 숨기고 배경 클릭으로
    *  창을 닫지도 않는다: 다른 버튼을 누르면 지금 쓰던 것을 잃고, 배경을 눌러 창을 닫으면 도는
@@ -247,8 +252,17 @@ export function RunDetail({
 
   /** 그래프 노드 클릭의 뜻은 모드가 정한다 — 짓는 중이 아니면 필터(같은 노드를 다시 누르면
    *  풀린다), 짓는 중이면 picking 배열에 넣고 뺀다. 판단을 여기 한 곳에 두는 것은 Graph 는 그리기만
-   *  하고(파일 머리말의 규칙) 어느 모드인지는 몰라도 되게 하려는 것이다. */
+   *  하고(파일 머리말의 규칙) 어느 모드인지는 몰라도 되게 하려는 것이다.
+   *
+   *  **formOpen 인데 picking 이 아니면(즉 asking 이나 busy) 클릭을 통째로 무시한다.** 노드
+   *  버튼들이 이 동안 전부 숨는 것(node() 의 `!formOpen &&`)과 같은 규칙을 이 함수도 지켜야
+   *  한다 — 버튼만 숨기고 노드 자신의 onClick(필터)을 그대로 두면, 물어보기 폼을 쓰는 중에
+   *  다른 노드를 눌러 필터 링을 조용히 옮길 수 있는 구멍이 남는다. 그러면 asking 의 주석이
+   *  약속한 "picking 처럼 selected 는 건드리지 않는다"가 asking 에서는 지켜지지 않는다. 이
+   *  판단을 Graph 안에 두지 않고 여기 두는 것은 판단이 한 곳에 있어야 한다는, 이 함수가 이미
+   *  지키고 있던 성질을 그대로 따르는 것이다. */
   const onNodeClick = (id: string): void => {
+    if (formOpen && picking === null) return
     if (picking !== null) {
       setPicking((cur) => {
         const list = cur ?? []
@@ -281,15 +295,16 @@ export function RunDetail({
    *  달라지지 않게 하기 위해서다. */
   const startTask = async (taskId: string): Promise<void> => {
     setBusy(taskId)
-    setActionError(null)
     try {
       const provider = run?.provider
-      // provider 가 없는 Run(CLI 에서 --provider 없이 만든 것)은 무엇으로 띄울지 자체가 없다 —
-      // 스케줄러도 이런 Run 은 건너뛴다(schedule.ts 의 slotsToFill). 계정을 못 찾은 경우와 결과가
-      // 같으므로(어느 쪽이든 worker-start 를 부를 수 없다) 같은 안내를 쓴다.
+      // provider 가 없는 Run 은 canManualStart 가 이미 버튼을 지워 이 자리에 닿지 못한다 — 이
+      // 확인은 그 상태가 정말로 불가능함을 다시 강제하는 것이 아니라, 페인트와 클릭 사이에
+      // 스냅샷이 바뀌는 좁은 창에 대한 방어일 뿐이다(canManualStart 의 주석).
       const accountId = provider ? await accountFor(provider) : null
       if (!provider || !accountId) {
-        setActionError(t('session.resume.noLoggedInAccounts'))
+        // 폼이 없는 단발 액션의 실패라 toast 로 보낸다(gateError 의 주석과 같은 규칙) —
+        // 계정을 못 찾은 경우도 같은 안내다(worker-start 를 부를 수 없다는 결과가 같다).
+        toast.error(t('session.resume.noLoggedInAccounts'))
         return
       }
       const reply = await window.api.orch.command(projectPath, 'worker-start', {
@@ -298,9 +313,9 @@ export function RunDetail({
         account: accountId,
         worktree: 'current'
       })
-      if (reply.status >= 400) setActionError(t('jobs.node.failed'))
+      if (reply.status >= 400) toast.error(t('jobs.node.failed'))
     } catch {
-      setActionError(t('jobs.node.failed'))
+      toast.error(t('jobs.node.failed'))
     } finally {
       setBusy(null)
     }
@@ -313,24 +328,23 @@ export function RunDetail({
    *  같은 명령 표면을 그대로 쓸 뿐 새 통로를 열지 않는다. */
   const stopTask = async (taskId: string): Promise<void> => {
     setBusy(taskId)
-    setActionError(null)
     try {
       const shown = await window.api.orch.command(projectPath, 'dispatch-show', { task: taskId })
       if (shown.status >= 400) {
-        setActionError(t('jobs.node.failed'))
+        toast.error(t('jobs.node.failed'))
         return
       }
       const open = (shown.body as Dispatch[]).find((d) => !d.outcome && !d.endedAt)
       // 멈추기 버튼은 열린 Dispatch 가 있을 때만 보이므로(provider 의 유무로 안다) 보통은
       // 반드시 찾는다 — 그 사이 워커가 스스로 끝났을 수는 있으니 방어적으로만 확인한다.
       if (!open) {
-        setActionError(t('jobs.node.failed'))
+        toast.error(t('jobs.node.failed'))
         return
       }
       const reply = await window.api.orch.command(projectPath, 'worker-stop', { dispatch: open.id })
-      if (reply.status >= 400) setActionError(t('jobs.node.failed'))
+      if (reply.status >= 400) toast.error(t('jobs.node.failed'))
     } catch {
-      setActionError(t('jobs.node.failed'))
+      toast.error(t('jobs.node.failed'))
     } finally {
       setBusy(null)
     }
@@ -342,41 +356,41 @@ export function RunDetail({
    *  건드리지 않고 상태만 되돌리려면 명령 표면을 나눠야 하고, 이 슬라이스는 그것을 하지 않는다. */
   const restartTask = async (taskId: string): Promise<void> => {
     setBusy(taskId)
-    setActionError(null)
     try {
       const reply = await window.api.orch.command(projectPath, 'task-update', {
         id: taskId,
         status: 'ready'
       })
-      if (reply.status >= 400) setActionError(t('jobs.node.failed'))
+      if (reply.status >= 400) toast.error(t('jobs.node.failed'))
     } catch {
-      setActionError(t('jobs.node.failed'))
+      toast.error(t('jobs.node.failed'))
     } finally {
       setBusy(null)
     }
   }
 
   /** 물어보기의 제출. asking 이 성공했을 때만 null 로 돌아간다 — NewTaskModal.onCreated 와 같은
-   *  관례로, 실패하면 폼(과 이미 쓴 질문)이 그대로 남아야 사람이 다시 쓰지 않아도 된다. */
+   *  관례로, 실패하면 폼(과 이미 쓴 질문)이 그대로 남아야 사람이 다시 쓰지 않아도 된다. 이
+   *  실패만 인라인(gateError)이다 — 이 액션에는 폼이 있고, 나머지 셋에는 없다. */
   const askQuestion = async (): Promise<void> => {
     const taskId = asking
     const trimmed = question.trim()
     if (taskId === null || !trimmed) return
     setBusy(taskId)
-    setActionError(null)
+    setGateError(null)
     try {
       const reply = await window.api.orch.command(projectPath, 'gate-create', {
         task: taskId,
         question: trimmed
       })
       if (reply.status >= 400) {
-        setActionError(t('jobs.node.failed'))
+        setGateError(t('jobs.node.failed'))
         return
       }
       setAsking(null)
       setQuestion('')
     } catch {
-      setActionError(t('jobs.node.failed'))
+      setGateError(t('jobs.node.failed'))
     } finally {
       setBusy(null)
     }
@@ -410,9 +424,6 @@ export function RunDetail({
             </span>
           ))}
         </div>
-        {/* 띄우기·멈추기·물어보기·다시 띄우기 네 동작이 공유하는 실패 안내 — 이 넷에는(물어보기의
-            폼을 빼면) 안내를 넣을 자기 폼이 없어 창 위쪽 한 곳에 둔다 */}
-        {actionError && <p className="warn">{actionError}</p>}
         {/* flex: 1; min-height: 0 이 styles.css 에 있다 — 없으면 아래의 두 칸이 줄지 않아 모달 밖으로
             넘치고 닫기 버튼이 밀려난다. 이 저장소가 실제로 그 결함을 냈던 자리다 */}
         <div className="detail-body">
@@ -446,7 +457,7 @@ export function RunDetail({
               onGate={(taskId) => {
                 setAsking(taskId)
                 setQuestion('')
-                setActionError(null)
+                setGateError(null)
               }}
               onRestart={(taskId) => void restartTask(taskId)}
             />
@@ -486,6 +497,8 @@ export function RunDetail({
                       autoFocus
                     />
                   </div>
+                  {/* NewTaskModal 과 같은 자리 — 이 폼에만 있는 실패는 이 폼 안에서 죽는다 */}
+                  {gateError && <p className="warn">{gateError}</p>}
                 </div>
                 <div className="row right">
                   <button onClick={cancelAsk} disabled={busy !== null}>
