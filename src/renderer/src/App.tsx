@@ -1675,7 +1675,9 @@ export default function App(): React.JSX.Element {
   // OR-ed onto the value the other modals already set above — runManagerVisible depends on
   // currentProject, which is not computed yet at that point in the component. The history modal joins
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
-  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null
+  // newRunOpen joins for the same reason — it has a text input (objective), and without this a global
+  // shortcut key would reach the workbench behind the modal while that field has focus.
+  modalOpenRef.current = modalOpenRef.current || runManagerVisible || openRun !== null || newRunOpen
 
   // Mirrors currentProject into a ref — avoids a stale closure in the run:status subscription effect
   const currentProjectRef = useRef(currentProject)
