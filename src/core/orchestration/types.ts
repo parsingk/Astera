@@ -16,11 +16,23 @@ export type MessageType =
   | 'heartbeat'
   | 'decision_gate'
 
+/** 한 Run 이 동시에 열어 둘 Dispatch 수의 기본값. 사람이 Run 을 만들 때 바꾼다. */
+export const DEFAULT_CONCURRENCY = 3
+
 export interface Run {
   id: string
   objective: string
   cwd: string
   createdAt: string
+  /** 이 Run 의 워커를 띄울 provider. 계정은 defaultAccountIdOf 가 고른다. */
+  provider?: Provider
+  /** 동시에 열어 둘 Dispatch 수. 없으면 DEFAULT_CONCURRENCY. */
+  concurrency?: number
+  /** 앱이 이 Run 을 스스로 돌리는가. **UI 가 만든 Run 에만 참이다** — 코디네이터가 만든 Run 을
+   *  앱이 함께 돌리면 둘이 같은 ready Task 를 두고 경합하고, 진 쪽(대개 코디네이터)의
+   *  worker-start 가 `dispatch already open` 을 받는다. 코디네이터 LLM 에게는 자기 명령이 이유
+   *  없이 실패하기 시작하는 일이고, 그것을 어떻게 다룰지는 우리가 통제할 수 없다. */
+  autoDispatch?: boolean
 }
 
 export interface Task {

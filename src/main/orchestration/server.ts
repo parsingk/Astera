@@ -159,6 +159,12 @@ const COORDINATOR_ONLY = new Set([
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null)
 
+/** 1 이상의 정수만 통과. CLI 는 숫자를 문자열로 넘길 수도 있으므로 둘 다 받는다. */
+const posInt = (v: unknown): number | null => {
+  const n = typeof v === 'string' ? Number(v) : typeof v === 'number' ? v : NaN
+  return Number.isInteger(n) && n >= 1 ? n : null
+}
+
 // TaskStatus 유니온에서 파생되지 않는 손수 쓴 목록이다 — 빠뜨려도 컴파일은 통과한다.
 // 유일한 증상은 `task-update --status <빠진 상태>` 가 "must be one of ..." 로 거절되는 것이다:
 // isTaskStatus 를 쓰는 자리는 그 명령 하나뿐이고(아래 task-update), task-list 는 --status 를
@@ -240,6 +246,12 @@ export async function handleCommand(
       // .trim() here (unlike the plain str() presence check elsewhere) because resolveProjectRoot
       // below is a real async call now — a whitespace-only objective must not reach it.
       if (!objective?.trim()) return bad('--objective is required')
+      const providerArg = str(args.provider)
+      if (providerArg !== null && providerArg !== 'claude' && providerArg !== 'codex')
+        return bad('--provider must be claude|codex')
+      const concurrency = args.concurrency === undefined ? null : posInt(args.concurrency)
+      if (args.concurrency !== undefined && concurrency === null)
+        return bad('--concurrency must be an integer >= 1')
       // process.cwd() is evaluated in the Electron main process — a different process from the CLI
       // (src/cli/run.ts), so this fallback has nothing to do with the CLI's actual working directory.
       // The CLI already fills in its own process.cwd() in buildRequest when --cwd is omitted, so in
@@ -263,7 +275,20 @@ export async function handleCommand(
           deps.log?.(`project root resolution failed cwd=${given}: ${String(err)}`)
         }
       }
-      return commit(createRun(s, { objective, cwd }, now))
+      return commit(
+        createRun(
+          s,
+          {
+            objective,
+            cwd,
+            ...(providerArg ? { provider: providerArg } : {}),
+            ...(concurrency !== null ? { concurrency } : {}),
+            // `--auto` 는 값이 없는 플래그다(task-create --review 와 같은 모양)
+            ...(args.auto === true ? { autoDispatch: true } : {})
+          },
+          now
+        )
+      )
     }
     case 'run-list':
       return okBody(s.runs)

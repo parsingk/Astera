@@ -66,7 +66,13 @@ function pushMessage(
 
 export function createRun(
   s: OrchState,
-  a: { objective: string; cwd: string },
+  a: {
+    objective: string
+    cwd: string
+    provider?: Provider
+    concurrency?: number
+    autoDispatch?: boolean
+  },
   now: string
 ): Res<Run> {
   if (!a.objective.trim()) return err('objective is required')
@@ -74,7 +80,10 @@ export function createRun(
     id: newId('run'),
     objective: a.objective,
     cwd: a.cwd,
-    createdAt: now
+    createdAt: now,
+    ...(a.provider ? { provider: a.provider } : {}),
+    ...(a.concurrency !== undefined ? { concurrency: a.concurrency } : {}),
+    ...(a.autoDispatch ? { autoDispatch: true } : {})
   }
   return ok({ ...s, runs: [...s.runs, run] }, run)
 }
