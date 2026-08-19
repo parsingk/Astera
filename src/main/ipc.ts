@@ -598,6 +598,38 @@ export function registerIpc(
           // sees — the same wiring every other worker-start failure already goes through, so
           // nothing new needs to be built for this one to reach the user.
           throw new Error(`NO_BASE: HEAD is not on a branch (detached) — cannot fork a worker worktree from ${a.repoPath}`)
+        // Known residual risk in the value just read, left as a comment rather than fixed here: if
+        // the branch's first path segment (before the first '/') is exactly the name of a
+        // configured remote (remoteExists, git.ts:87-91) and that remote actually has a branch
+        // with the matching tail name, toFullRef (git.ts:76-84) tries `refs/remotes/<baseRef>`
+        // before `refs/heads/<baseRef>` for any baseRef containing a slash — so the worktree forks
+        // from the fetched remote-tracking copy instead of the exact local branch this project
+        // folder is on. This is the same trap git.ts:95-104's fetchBaseRef comment already
+        // documents; until now it was reachable only when a user deliberately picked such a name
+        // in the base-branch picker. This adapter opens a second, automatic path to it: on every
+        // limit >= 2 worker start, whatever the project folder's local branch happens to be named
+        // flows into baseRef with no one looking at it.
+        //
+        // Not thrown, and not structurally fixed, for three reasons:
+        //  1. It degrades, it does not corrupt. A remote-tracking copy is normally at or behind the
+        //     local branch of the same name, so the worker starts from a slightly stale ancestor of
+        //     the same line of work — its branch is still what integrateWorktrees (further down in
+        //     this file) merges into the project branch, and a wider diff at merge time (or an
+        //     outright conflict) is handled exactly like any other merge conflict already is: handed
+        //     to the agent. No work is lost and no repository is left in a strange state.
+        //  2. Throwing would block a legitimate workflow outright: naming a personal remote after
+        //     yourself and namespacing branches to match it (a 'parsingk' remote alongside a
+        //     'parsingk/maple' branch) is a real pattern, and losing every limit >= 2 Run entirely
+        //     over a name collision is disproportionate to how rarely this fires.
+        //  3. The real fix is toFullRef's resolution order, and that order is deliberate for the
+        //     picker's own callers — choosing 'origin/main' there is supposed to mean the remote
+        //     ref, not a same-named local branch. Changing that policy is a separate decision for a
+        //     separate task, not something to smuggle in here. (A full-ref bypass does not work
+        //     either: passing 'refs/heads/<name>' as baseRef just gets re-wrapped into
+        //     'refs/remotes/refs/heads/<name>' / 'refs/heads/refs/heads/<name>', neither of which
+        //     exists, so it throws NO_BASE instead.)
+        // Unreachable in this repository today: its only remote is 'origin', and every local
+        // branch's first segment (develop, docs, feature, fix, main) differs from it.
         const r = await createWorktree({
           repoPath: a.repoPath,
           name: a.name,
