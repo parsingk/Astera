@@ -165,7 +165,7 @@ export function FileExplorer({
       // the clipboard is something the user explicitly put there and it has on-screen feedback (cut
       // items are dimmed, etc.) so it may cross projects, but the journal holds only paths and has no
       // on-screen presence, so if it survives the active session going away, Ctrl+Z fires against
-      // whichever other project is opened next (same rule as explorerState.ts:9-10).
+      // whichever other project is opened next (same rule as explorerState.ts's ExplorerState.selection).
       // This rule applies when root disappears or changes — a refresh (refresh()) on the same root is
       // the deliberate exception and does not clear the journal. See the comment at refresh() for why.
       undoRef.current = []

@@ -329,7 +329,7 @@ export function registerIpc(
     // that had stored values it only re-stamps updatedAt, and for one where a schedule was just enabled
     // it creates a new entry in scheduler.json (set is an upsert).
     // This path is also the only place a codex schedule is persisted: codex has no statusLine, so
-    // register() cannot obtain a sessionKey through learning (learnKey) (scheduler.ts:29,50). Without
+    // register() cannot obtain a sessionKey through learning (learnKey) (both on scheduler.ts's SchedulerCoordinator). Without
     // writing resumeSessionId (the rollout session id) as the key here, a codex schedule would exist
     // only for the session's lifetime and could never be prefilled on the next resume.
     if (opts.resumeSessionId && opts.schedule) {
@@ -600,11 +600,11 @@ export function registerIpc(
           throw new Error(`NO_BASE: HEAD is not on a branch (detached) — cannot fork a worker worktree from ${a.repoPath}`)
         // Known residual risk in the value just read, left as a comment rather than fixed here: if
         // the branch's first path segment (before the first '/') is exactly the name of a
-        // configured remote (remoteExists, git.ts:87-91) and that remote actually has a branch
-        // with the matching tail name, toFullRef (git.ts:76-84) tries `refs/remotes/<baseRef>`
+        // configured remote (remoteExists in git.ts) and that remote actually has a branch
+        // with the matching tail name, toFullRef (in git.ts) tries `refs/remotes/<baseRef>`
         // before `refs/heads/<baseRef>` for any baseRef containing a slash — so the worktree forks
         // from the fetched remote-tracking copy instead of the exact local branch this project
-        // folder is on. This is the same trap git.ts:95-104's fetchBaseRef comment already
+        // folder is on. This is the same trap git.ts's fetchBaseRef comment already
         // documents; until now it was reachable only when a user deliberately picked such a name
         // in the base-branch picker. This adapter opens a second, automatic path to it: on every
         // limit >= 2 worker start, whatever the project folder's local branch happens to be named
@@ -815,7 +815,7 @@ export function registerIpc(
             provider: picked.provider,
             accountId: picked.accountId,
             // 세션 id 는 아직 없다. worker-start 가 같은 자리에서 쓰는 자리표시자와 같은 모양이다
-            // (server.ts:415 의 `pending:${randomBytes(4).toString('hex')}`) — 그 값은 어떤 세션도
+            // (server.ts 의 handleCommand, worker-start 분기의 pendingSessionId: `pending:${randomBytes(4).toString('hex')}`) — 그 값은 어떤 세션도
             // 가리키지 않으며 jobTaskOf 의 isKnownSession 이 걸러 낸다.
             sessionId: `pending:${randomBytes(4).toString('hex')}`,
             cwd,
@@ -1857,7 +1857,7 @@ export function registerIpc(
   // orch.command 의 args 에서 Run id·Task id·Dispatch id 를 읽는 키 — 명령마다 다르고, 짐작이 아니라
   // server.ts 의 switch 를 다시 열어 확인한 값만 적었다: task-create 는 args.runId, task-update 는
   // args.id, dispatch-show·gate-create 는 args.task, worker-start 는 args.taskId 를 먼저 보고 없으면
-  // args.task 를 본다(server.ts:412), worker-stop 은 Task id 가 아니라 args.dispatch — Dispatch id
+  // args.task 를 본다(server.ts 의 handleCommand, 'worker-start' 분기), worker-stop 은 Task id 가 아니라 args.dispatch — Dispatch id
   // 라 그 Dispatch 의 taskId 로 한 번 더 찾아야 Run 에 닿는다. 이 표들이 담는 것은 "id 를 나르는
   // 모든 명령"이 아니라 지금 렌더러가 실제로 부르는 명령뿐이다 — 여기 없는 명령 중에도 id 를
   // 나르는 것이 있다(task-list 는 args.run, gate-resolve 는 args.id, worker-show 는 args.dispatch

@@ -358,7 +358,7 @@ export class OrchCoordinator {
     } else {
       // A worktree given as a path (an arbitrary string the orchestrator LLM produced) — check that
       // it exists first. If the fs.mkdir({recursive:true}) below materialized the parents as well it
-      // would defeat SessionManager's CWD_MISSING guard (core/sessions/manager.ts:62) and let a
+      // would defeat SessionManager.spawn's CWD_MISSING guard (core/sessions/manager.ts) and let a
       // worker boot in an empty directory that is not a repository.
       const stat = await fs.stat(a.worktree).catch(() => null)
       if (!stat || !stat.isDirectory())

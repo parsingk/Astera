@@ -1619,7 +1619,7 @@ export default function App(): React.JSX.Element {
    *  currentProject 없이는 절대 true 로 만들지 않으므로, "프로젝트가 없는데 열림" 은 정상 경로로는
    *  일어나지 않는다.
    *
-   *  **한 번은 일어났다.** 프로젝트가 없을 때도 Jobs 사이드바의 빈 상태는 그려지고(App.tsx:1870 이
+   *  **한 번은 일어났다.** 프로젝트가 없을 때도 Jobs 사이드바의 빈 상태는 그려지고(`setOrchSnapshot(currentProject === null ? { runs: [] } : null)` 이
    *  orchSnapshot 을 `{ runs: [] }` 로 채운다) 그 안의 "+ 새 작업" 버튼이 가드 없이 이 값을 세운
    *  적이 있었다 — 그때 이 값은 "프로젝트를 잃어 조용히 닫힌 것"이 아니었다: 모달을 그릴 자리가
    *  없을 뿐 이 값 자체는 true 로 남아 modalOpenRef 체인에 걸리고(:710 의 가드), 전역 키보드
@@ -2268,7 +2268,7 @@ export default function App(): React.JSX.Element {
             </svg>
           </button>
           {/* Jobs 사이드바 토글. 오케스트레이션 설정이 꺼져 있으면 아예 그리지 않는다 — 뒤에 아무것도
-              없는 진입점을 보여줄 이유가 없다(App.tsx:381의 orchEnabled, 설정 모달의 토글이 mirror한다) */}
+              없는 진입점을 보여줄 이유가 없다(App.tsx 의 orchEnabled, 설정 모달의 토글이 mirror한다) */}
           {orchEnabled && (
             <button
               className={jobsOpen ? 'rail-btn on' : 'rail-btn'}

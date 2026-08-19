@@ -13,8 +13,9 @@
 // that a GUI process already inherits, so no shell is launched.
 //
 // Why process.env.PATH is patched directly: session env is built by SessionManager.spawn as
-// { ...process.env } (core/sessions/manager.ts:153), TerminalManager's exists() reads
-// process.env.PATH directly (main/terminalManager.ts:15), and jdkScanner and git spawn do the same.
+// { ...process.env } (core/sessions/manager.ts), main/terminalManager.ts's onPath (resolveShell's
+// default exists implementation) reads process.env.PATH directly, and jdkScanner and git spawn do
+// the same.
 // Fixing one place carries through everywhere.
 //
 // Why an actual login shell gets run: PATH can be assembled from any of .zshrc/.zprofile/.bash_profile,

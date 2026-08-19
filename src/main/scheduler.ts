@@ -50,7 +50,7 @@ export class SchedulerCoordinator {
    *  ipc.ts passes providerOf(account) explicitly. A provider that does not use statusLine is
    *  learnable=false: it works only while the session is alive, and this coordinator never learns its
    *  key. The resume modal path is the exception — ipc.ts persists straight into schedulerConfig.set
-   *  keyed by resumeSessionId (ipc.ts:148), so codex gets pre-filled there too. "No resume restore" is a
+   *  keyed by resumeSessionId (ipc.ts's spawnSession), so codex gets pre-filled there too. "No resume restore" is a
    *  statement about the inside of this coordinator only. */
   register(info: SessionInfo, provider: Provider = 'claude'): void {
     if (!info.schedule) return

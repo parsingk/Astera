@@ -34,7 +34,7 @@ import { claudeLoginProbe, fileMarkerProbe, type LoginProbe } from '../accounts/
 // wrong rule on Linux, and it is wrong on macOS too if the volume was formatted case-sensitive — but it
 // is right for the two platforms we actually support, since APFS is case-insensitive by default.
 // Changing the semantics was out of scope; whoever fixes that later has to look at all three places
-// together (here, settingsSync.ts:12, detectCodex.ts:7).
+// together (here, normalizePath in settingsSync.ts, normalize in detectCodex.ts).
 const normalizePath = (p: string): string => path.resolve(p).toLowerCase()
 
 export interface ProviderDescriptor extends ProviderMeta {

@@ -652,7 +652,7 @@ export async function handleCommand(
         /** limitResetsAt 을 그 Dispatch 에 싣고 같은 소식을 status 메시지로도 남긴다. 두 경로(검토
          *  보고와 구현 보고)가 같은 것을 해야 하므로 한 군데에 둔다 — 복사해 두면 한쪽만 고쳐진다.
          *
-         *  Adds a status message in the same shape as closeDispatch (state.ts:264-284) — section 7 of
+         *  Adds a status message in the same shape as closeDispatch (state.ts) — section 7 of
          *  the orchestration guide ("when limitResetsAt is set it also arrives in the inbox as a
          *  status message") applies to every path, not just the handleExit one. The worker's own
          *  worker_done message (subject, body) is left untouched — this is a separate message added

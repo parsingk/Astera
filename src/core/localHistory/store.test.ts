@@ -209,7 +209,7 @@ describe('LocalHistoryStore.snapshot', () => {
     expect(entry!.size).toBe(Buffer.byteLength('contents-here')) // 이제 store가 직접 재므로 실제 바이트와 일치
     expect(store.list(projDir)).toEqual([entry])
 
-    // .tmp가 남지 않고 index.json만 남아야 한다 (원자적 쓰기, registry.ts:166과 같은 규약)
+    // .tmp가 남지 않고 index.json만 남아야 한다 (원자적 쓰기, registry.ts 의 AccountRegistry.save와 같은 규약)
     const files = await fs.readdir(historyDir)
     expect(files).toContain('index.json')
     expect(files.some((f) => f.endsWith('.tmp'))).toBe(false)

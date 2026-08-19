@@ -244,7 +244,7 @@ d('describeRestored', () => {
   })
 
   // 경계값(renamed.length 정확히 3 vs 4) — 원본은 more를 빈 문자열로 조립해 같은 문장에 붙였지만
-  // (undo.ts:170의 이관 전 코드), 이제는 키가 renamedMany/renamedManyWithMore로 갈린다. 두 키를
+  // (undo.ts 의 describeRestored, 이관 전 코드), 이제는 키가 renamedMany/renamedManyWithMore로 갈린다. 두 키를
   // t()로 번역한 결과가 원본 문구(외 n건 유무)와 정확히 같은지 고정한다.
   it('renamed가 정확히 3개면 원본과 같은 문구(외 없음)를 내는 renamedMany 키를 낸다', () => {
     const items = [

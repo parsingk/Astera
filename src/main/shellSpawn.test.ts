@@ -47,8 +47,8 @@ beforeAll(async () => {
   // node 와 docker 를 이름만으로 찾을 수 있게 한다 — 이 검사의 대상은 인용이지 PATH 가 아니다.
   // PATH 키의 실제 대소문자는 OS가 정한다(win32는 보통 Path). { ...process.env } 는 대소문자를
   // 구분하는 평범한 객체라 여기에 PATH 를 새로 얹으면 Path 와 PATH 가 **둘 다** 남고, 자식이 어느
-  // 쪽을 보는지가 불확실해진다 — jdk.ts 의 withJavaHomeOnPath 가 존재하는 이유와 같은 문제다
-  // (jdk.ts:121-124). 그래서 기존 키를 대소문자 무시로 찾아 **그 키**를 덮어쓴다. 여기서 이게
+  // 쪽을 보는지가 불확실해진다 — jdk.ts 의 withJavaHomeOnPath 가 존재하는 이유와 같은 문제다.
+  // 그래서 기존 키를 대소문자 무시로 찾아 **그 키**를 덮어쓴다. 여기서 이게
   // 틀어지면 dockerfile 케이스가 stub 이 아니라 이 PC 에 설치된 진짜 docker 를 부르게 된다
   const env: NodeJS.ProcessEnv = { ...process.env }
   const pathKey = Object.keys(env).find((k) => k.toLowerCase() === 'path') ?? 'PATH'

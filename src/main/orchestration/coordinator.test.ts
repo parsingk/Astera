@@ -296,7 +296,7 @@ describe('OrchCoordinator.startWorker', () => {
 // buildSpecFile 호출 앞 — cwd !== a.runCwd, isSamePath로 비교). a.worktree로 유도했다면 이
 // describe의 마지막 두 테스트가 실패했을 것이다 — --terminal 재사용은 cwd를 a.terminalCwd로
 // 정하면서 a.worktree를 완전히 무시하므로(위 cwd 대입문 참고), 워크트리 세션을 --worktree를
-// 다시 주지 않고 재사용하면(그것이 server.ts:405의 기본값 'current' 때문에 자연스러운 호출
+// 다시 주지 않고 재사용하면(그것이 server.ts 의 handleCommand — worker-start 분기 — 의 기본값 'current' 때문에 자연스러운 호출
 // 모양이다) a.worktree만 보는 유도는 워크트리에서 도는 워커의 커밋 의무를 빠뜨린다 — 이 Task가
 // 막으려던 실패 모드 그대로다.
 describe('OrchCoordinator.startWorker — committing은 확정된 cwd에서 유도한다', () => {

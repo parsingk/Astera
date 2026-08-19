@@ -145,7 +145,7 @@ async function probeCodexLimit(d: Dispatch, deps: LimitProbeDeps): Promise<numbe
     // A deliberate decision: when reachedType is definite (a limit) but neither window is at or above the
     // gate (90%), worstResetAt returns null — and GATE_PCT in codexSignal.ts is not lowered here. The very
     // reason limitReached decides without a gate (a request refused by a limit produces no new
-    // token_count, so usage freezes at a low value, codexSignal.ts:137-144) is exactly what creates this
+    // token_count, so usage freezes at a low value, per codexSignal.ts's limitReached doc comment) is exactly what creates this
     // combination: a definite limit with a low usage snapshot. Removing the gate so worstResetAt simply
     // picks the max would let the reset of a weekly window at 5% usage (days away) get attached to a
     // 5-hour session limit, making the coordinator wait days for something that really lifts in a few

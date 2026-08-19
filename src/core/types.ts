@@ -761,7 +761,7 @@ export type RendererApi = CoreApi & {
    *  Why the type is string rather than NodeJS.Platform: this file is registered in tsconfig.web.json
    *  and imported by the renderer too, which has no @types/node and so no global NodeJS namespace to
    *  reference. The only value ever compared against is 'darwin', so string is enough.
-   *  (core/run/config.ts:41-42 made the same choice for the same reason — this follows that
+   *  (core/run/build.ts's RunContext.platform made the same choice for the same reason — this follows that
    *  convention. Do not fix it with `/// <reference types="node" />`: that drags the entire node
    *  global into the web compilation unit.) */
   platform: string

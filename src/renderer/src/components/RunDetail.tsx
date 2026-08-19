@@ -401,7 +401,7 @@ export function RunDetail({
     }
   }
 
-  /** 물어보기 폼을 닫는다(취소든 배경 클릭이든) — busy 인 동안은 막는다. NewTaskModal.tsx:69 의
+  /** 물어보기 폼을 닫는다(취소든 배경 클릭이든) — busy 인 동안은 막는다. NewTaskModal.tsx 의
    *  `!busy && onClose()` 와 같은 관례다: 제출이 도는 동안 닫으면 그 요청이 끝났을 때 아무도
    *  결과를 보지 못한다. */
   const cancelAsk = (): void => {

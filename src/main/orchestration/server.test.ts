@@ -1415,7 +1415,7 @@ describe("send --type worker_done --outcome failed: 한도 탐침", () => {
     expect(
       messages.some((m) => m.type === 'worker_done' && m.subject === '워커 자체 보고')
     ).toBe(true)
-    // closeDispatch(handleExit 경로, state.ts:264-284)와 같은 형식의 별도 status 메시지가 추가된다.
+    // closeDispatch(handleExit 경로, state.ts)와 같은 형식의 별도 status 메시지가 추가된다.
     const status = messages.find((m) => m.type === 'status' && m.dispatchId === dispatchId)
     expect(status?.subject).toBe('session ended at a usage limit')
     expect(status?.body).toContain(new Date(1_700_000_000_000).toISOString())
