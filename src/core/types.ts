@@ -696,10 +696,10 @@ export interface AppControlApi {
  * knows about orchestration — the store, the server and this fold all live in the ipc wiring.
  *
  * Not read-only anymore: `command` (see its doc below) is the one mutating door — the app reaches the
- * orchestration command surface (`task-create`, `worker-start`, gate-resolve, run-close, …) through
+ * orchestration command surface (`task-create`, `worker-start`, gate-resolve, …) through
  * it exactly the way the CLI does, rather than through a channel of its own. That reversal is
  * knowledge/decisions/ADR-004's subject. It also was never a question of authorization: COORDINATOR_ONLY
- * (the set dispatching, answering a Gate and closing a Run belong to) only blocks *worker* sessions —
+ * (server.ts's set of commands a worker session may not call) only blocks *worker* sessions —
  * server.ts checks `isWorker && COORDINATOR_ONLY.has(cmd)`, and the app's caller id has never owned a
  * Dispatch, so isWorker is always false for it and every command is open to it. What used to be
  * missing was the IPC channel itself, not permission through it.
