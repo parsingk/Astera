@@ -42,6 +42,8 @@ export const ko = {
   'files.move.alreadyThere': '이미 그 위치에 있습니다',
   'files.copy.intoSelf': '폴더를 자기 자신 안으로 복사할 수 없습니다',
   'files.error.pathNotAllowed': '허용되지 않은 경로입니다',
+  'files.error.unsupportedImageType': '지원하지 않는 이미지 형식입니다',
+  'files.error.imageTooLarge': '이미지가 너무 큽니다',
   'files.error.alreadyExists': "'{name}' 이(가) 이미 있습니다",
   'files.error.alreadyExistsInDest': "'{name}' 이(가) 대상 폴더에 이미 있습니다",
   'files.error.renameStranded': "이름 변경에 실패했고 되돌리지도 못했습니다. 파일이 '{tmp}' 에 있습니다",
@@ -124,6 +126,14 @@ export const ko = {
   'files.editor.keepMine': '내 편집 유지',
   'files.editor.loading': '불러오는 중…',
   'files.editor.selectPrompt': '트리에서 파일을 선택하세요',
+  // MarkdownPreview.tsx — 이미지 로드 실패·원격 이미지 안내
+  'files.markdown.image.failed': '이미지를 열 수 없습니다',
+  'files.markdown.renderError': '이 문서를 표시할 수 없습니다',
+  // MarkdownSplit.tsx — 모드 툴바 버튼 세 개, 좌우 분할 리사이저
+  'files.markdown.mode.editor': '편집기만',
+  'files.markdown.mode.split': '편집기와 프리뷰',
+  'files.markdown.mode.preview': '프리뷰만',
+  'files.markdown.resizeSplit': '분할 크기 조절',
   // App.tsx — explorer close confirmation
   'explorer.closeConfirm.body': '저장하지 않은 변경이 있습니다. 탐색기를 닫을까요?',
   // App.tsx — run console resizer, start failure
@@ -248,6 +258,7 @@ export const ko = {
   'shortcut.explorer.toggleMode': '탐색기 보이기/숨기기',
   'shortcut.explorer.saveFile': '파일 저장',
   'shortcut.explorer.closeFileTab': '파일 탭 닫기',
+  'shortcut.explorer.cyclePreview': '마크다운 프리뷰 모드 전환',
   'shortcut.explorer.rename': '이름 변경',
   'shortcut.explorer.delete': '삭제',
   'shortcut.explorer.selectAll': '전체 선택',

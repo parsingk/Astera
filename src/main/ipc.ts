@@ -42,6 +42,7 @@ import { releaseArgsFor } from './orchestration/release'
 import { installStub } from './orchestration/stub'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
+import { imageMime } from '../core/files/imageMime'
 import { parsePorcelainZ, type GitState } from '../core/git/status'
 import { FileWatcher } from './fileWatcher'
 import { GitWatcher } from './gitWatcher'
@@ -69,6 +70,24 @@ export interface OrchWiring {
    *  synchronous: asynchronous cleanup may not finish before the process ends, and deleting the token
    *  file has to happen (OS permissions on the token file are the access control). */
   onStarted: (h: { stop: () => void }) => void
+}
+
+/** http:/https:/mailto: 만 허용하는 스킴 화이트리스트. 통과하면 파싱된 URL 을 돌려준다 —
+ *  new URL 은 탭·개행을 스스로 걷어내므로, 호출자는 원래 문자열이 아니라 이 반환값의
+ *  toString() 을 써야 프로토콜을 확인한 바로 그 문자열이 OS 로 간다.
+ *
+ *  system.openExternal(아래)와 main/index.ts 의 setWindowOpenHandler/will-navigate 가드가 이 검사를
+ *  공유한다 — 스킴 목록이 두 곳에서 따로 자라다 어긋나는 사고를 막기 위해서다. */
+export function parseAllowedExternalUrl(url: string): URL | null {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:' && parsed.protocol !== 'mailto:')
+    return null
+  return parsed
 }
 
 export function registerIpc(
@@ -1106,6 +1125,50 @@ export function registerIpc(
     const binary = buf.includes(0)
     return { content: binary ? '' : buf.toString('utf8'), truncated, binary }
   })
+  const IMAGE_READ_MAX = 5 * 1024 * 1024 // 5MB
+  ipcMain.handle('files.readDataUrl', async (_e, filePath: string) => {
+    const root = await assertAllowedPath(filePath)
+    const mime = imageMime(path.extname(filePath).slice(1))
+    if (!mime) throw new Error(t(core.lang, 'files.error.unsupportedImageType'))
+    // isPathWithin (inside assertAllowedPath) only resolves '..' lexically — it does not follow
+    // symlinks, but fs.open below does. A hostile repo can ship an image-named symlink pointing at
+    // ~/.ssh/id_rsa or /etc/passwd, so the real target is re-checked here — against the single root
+    // that assertAllowedPath already matched lexically, not against every allowed root again. A
+    // symlink that resolves inside that same root (e.g. a shared asset linked into a project) keeps
+    // working; one that resolves into a *different* allowed root, or outside all of them, is refused
+    // too. That is deliberately narrower than "allowed by any root": the lexical check above already
+    // committed to one root for this path, and a resolved target landing in some other root is exactly
+    // the kind of lexical/real disagreement this re-check exists to catch, so it fails closed rather
+    // than asking isPathWithin a second time against the full list. The one real thing this costs is a
+    // symlink that legitimately crosses two allowed roots — a git worktree, or a session cwd nested
+    // below its own project root — where the read now has to go through whichever root actually owns
+    // the file instead of whichever one happened to match lexically first.
+    // The re-check compares two realpath'd values, not a realpath'd file against a lexical root: on
+    // macOS /tmp, /var and /etc are themselves symlinks, and a relocated Windows user folder can be a
+    // junction — comparing `real` against the lexical `root` would then reject every in-root image
+    // under a session whose cwd sits below one of those, failing closed for a plain, non-hostile file.
+    // Realpath-ing the matched root (rather than re-running assertAllowedPath, which would repeat the
+    // same lexical-only comparison against the same un-resolved roots) is what actually fixes that.
+    const real = await fs.realpath(filePath)
+    const realRoot = await fs.realpath(root)
+    if (!isPathWithin(realRoot, real)) throw new Error(t(core.lang, 'files.error.pathNotAllowed'))
+    // A single bounded read, not stat+readFile: stat.size is advisory (the file can grow between the
+    // stat and the read) and reads 0 for FIFOs/character devices, so a symlink to a named pipe or
+    // /dev/zero would sail past a size check and fs.readFile would then grow unbounded in the main
+    // process. Reading at most IMAGE_READ_MAX + 1 bytes in one call makes the cap a hard bound no
+    // matter what the path actually names — the same shape files.read uses for its truncation branch.
+    const handle = await fs.open(real, 'r')
+    let buf: Buffer
+    try {
+      const alloc = Buffer.alloc(IMAGE_READ_MAX + 1)
+      const { bytesRead } = await handle.read(alloc, 0, IMAGE_READ_MAX + 1, 0)
+      if (bytesRead > IMAGE_READ_MAX) throw new Error(t(core.lang, 'files.error.imageTooLarge'))
+      buf = alloc.subarray(0, bytesRead)
+    } finally {
+      await handle.close()
+    }
+    return { dataUrl: `data:${mime};base64,${buf.toString('base64')}` }
+  })
   ipcMain.handle('files.write', async (_e, filePath: string, content: string) => {
     await assertAllowedPath(filePath)
     const tmp = filePath + '.cmtmp'
@@ -1531,6 +1594,15 @@ export function registerIpc(
   ipcMain.handle('files.reveal', async (_e, targetPath: string) => {
     await assertAllowedPath(targetPath)
     shell.showItemInFolder(targetPath)
+  })
+
+  /** 마크다운 프리뷰의 외부 링크. 허용 스킴 밖은 조용히 버린다 — 렌더러가 이미 걸렀으므로 여기에
+   *  도달하는 것은 버그이거나 우회 시도다. 예외를 던지지 않는 이유는 링크 클릭이 실패해도 사용자가
+   *  할 수 있는 일이 없기 때문이다. */
+  ipcMain.handle('system.openExternal', async (_e, url: string) => {
+    const parsed = parseAllowedExternalUrl(url)
+    if (!parsed) return
+    await shell.openExternal(parsed.toString())
   })
 
   // For the "N child entries" line in the delete confirmation modal. Stops at 9999 — it is for display, so it need not be exact.

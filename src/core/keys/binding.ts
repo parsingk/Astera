@@ -18,6 +18,7 @@ export type Chord = { ctrl: boolean; shift: boolean; alt: boolean; meta: boolean
 export type ActionId =
   | 'explorer.toggleMode'
   | 'explorer.closeFileTab'
+  | 'explorer.cyclePreview'
   | 'sessionTab.prev'
   | 'sessionTab.next'
   | 'pane.splitRight'
@@ -75,6 +76,16 @@ export function makeActions(platform: string): readonly ActionSpec[] {
       descKey: 'shortcut.explorer.closeFileTab',
       // On win32, Ctrl+W yields to the terminal's 'delete previous word'. On mac, Cmd+W has no competitor.
       yieldsToTerminal: !mac
+    },
+    {
+      id: 'explorer.cyclePreview',
+      defaults: [`${M}+Shift+V`],
+      descKey: 'shortcut.explorer.cyclePreview',
+      // Ctrl+Shift+V(mac 은 Cmd+Shift+V) 는 경쟁자가 없지 않다 — TerminalView 의 붙여넣기 매칭이
+      // v/V 와 clipMod 만 보고 e.shiftKey 를 확인하지 않아(복사 쪽 매칭과 다르게), 이 조합이 터미널의
+      // 붙여넣기이기도 하다. Linux·Windows Terminal 에서 Ctrl+Shift+V 는 표준 터미널 붙여넣기 조합이기도
+      // 하다. 마크다운 프리뷰 모드 순환에 터미널 입력을 가로챌 이유가 없으므로 양보한다.
+      yieldsToTerminal: true
     },
     {
       id: 'sessionTab.prev',
