@@ -695,8 +695,14 @@ export interface AppControlApi {
  * The Jobs sidebar. Not core, for the same reason as system and win: nothing in src/main/core.ts
  * knows about orchestration — the store, the server and this fold all live in the ipc wiring.
  *
- * Read-only by design. Dispatching, answering a Gate and closing a Run are COORDINATOR_ONLY commands
- * the orchestrator reaches through the CLI, so there is no mutating counterpart here.
+ * Not read-only anymore: `command` (see its doc below) is the one mutating door — the app reaches the
+ * orchestration command surface (`task-create`, `worker-start`, gate-resolve, run-close, …) through
+ * it exactly the way the CLI does, rather than through a channel of its own. That reversal is
+ * knowledge/decisions/ADR-004's subject. It also was never a question of authorization: COORDINATOR_ONLY
+ * (the set dispatching, answering a Gate and closing a Run belong to) only blocks *worker* sessions —
+ * server.ts checks `isWorker && COORDINATOR_ONLY.has(cmd)`, and the app's caller id has never owned a
+ * Dispatch, so isWorker is always false for it and every command is open to it. What used to be
+ * missing was the IPC channel itself, not permission through it.
  *
  * list doubles as the subscription: the snapshot is per project and main is not otherwise told what
  * the renderer has open, so the path passed here also settles what 'orch:state' is folded for.
@@ -719,6 +725,17 @@ export interface OrchApi {
   /** 한 Run 의 이벤트와 의존 그래프. 스냅샷과 달리 **요청할 때만** 온다 — Message.body 에는
    *  검증 출력 꼬리가 실리므로 매 쓰기마다 밀 수 있는 크기가 아니다. */
   runDetail(projectPath: string, runId: string): Promise<RunDetail>
+  /** UI 가 오케스트레이션 상태를 바꾸는 유일한 통로 — server.ts 의 명령 표면을 그대로 부른다.
+   *  cmd 는 CLI 와 같은 이름이고(`task-create`, `worker-start`, …) args 도 같은 키를 쓴다.
+   *
+   *  반환 모양은 server.ts 의 `Reply` 와 같지만 그것을 import 하지 않는다 — 그 타입은 export 되지
+   *  않고, core 가 main 을 import 하는 것은 층의 방향과 반대다. 둘이 갈라지면 타입체크가 아니라
+   *  이 주석이 알려 준다. */
+  command(
+    projectPath: string,
+    cmd: string,
+    args: Record<string, unknown>
+  ): Promise<{ status: number; body: unknown }>
   unwatch(): Promise<void>
 }
 

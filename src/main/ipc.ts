@@ -1794,9 +1794,14 @@ export function registerIpc(
 
   ipcMain.handle('run.listActive', async () => core.run.listActive())
 
-  // The Jobs sidebar. Read-only — this is the only orchestration channel the renderer has, and there
-  // is deliberately no mutating counterpart (gate-resolve and the rest are COORDINATOR_ONLY, and the
-  // orchestrator reaches them through the CLI).
+  // The Jobs sidebar's read side — the snapshot, and the subscription it doubles as. orch.command
+  // (below, past orch.runDetail) is the mutating counterpart: this is what makes false what this
+  // comment used to claim ("the only orchestration channel the renderer has, and there is
+  // deliberately no mutating counterpart"). That claim was never really about authorization either —
+  // COORDINATOR_ONLY (the set gate-resolve and the rest belong to) only blocks *worker* sessions
+  // (`isWorker && COORDINATOR_ONLY.has(cmd)` in server.ts), and UI_CALLER has never owned a Dispatch,
+  // so isWorker is always false for it and every command is open to the app. What was missing before
+  // orch.command existed was the IPC door itself, not permission through it.
   // The same assertAllowedPath as run.list: the path decides which Runs come back, so an arbitrary
   // one would let the renderer enumerate Runs created outside every registered project.
   // An empty snapshot before orchestration has started (toggle off, or startup still running or
@@ -1842,6 +1847,20 @@ export function registerIpc(
     const { layers, deps, cyclic } = layersOf(state, runId)
     return { events: timelineFor(state, runId, (id) => known.has(id)), layers, deps, cyclic }
   })
+  // UI 가 상태를 바꾸는 **유일한** 통로. 명령별 IPC(orch.createTask, orch.startWorker, …)를 만들지
+  // 않는 이유는 문이 둘이 되기 때문이다 — 전이표·회로 차단·중복 보고 방어·감사 로그가 두 벌이 되고,
+  // 한쪽만 고쳐지는 날 어느 쪽이 옳은지 알 방법이 없다. UI 는 CLI 와 같은 문을 쓰는 또 하나의 손님이다.
+  //
+  // 이것이 `main/ipc.ts 의 오케스트레이션 IPC 는 읽기 전용이다` 를 뒤집는다 —
+  // knowledge/decisions/ADR-004 에 근거가 있다.
+  ipcMain.handle(
+    'orch.command',
+    async (_e, projectPath: string, cmd: string, args: Record<string, unknown>) => {
+      await assertAllowedPath(projectPath)
+      if (!orch) return { status: 409, body: { error: 'orchestration disabled' } }
+      return orchHandleCommand(orch.deps, { sessionId: UI_CALLER }, cmd, args ?? {})
+    }
+  )
   // The way out, the same as files.unwatch and git.unwatch: the Jobs view unmounts on a rail toggle,
   // and without this main goes on folding a snapshot and sending it to nobody on every orchestration
   // write. The bump is what makes this win against a list that is still awaiting its path check —

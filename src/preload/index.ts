@@ -190,6 +190,7 @@ const api = {
   orch: {
     list: invoke('orch.list'),
     runDetail: invoke('orch.runDetail'),
+    command: invoke('orch.command'),
     unwatch: invoke('orch.unwatch')
   },
   platform: process.platform,
