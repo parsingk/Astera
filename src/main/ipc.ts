@@ -33,6 +33,14 @@ import {
 } from '../core/orchestration/state'
 import { pickReviewer } from '../core/orchestration/reviewer'
 import { slotsToFill } from '../core/orchestration/schedule'
+import {
+  buildIntegrationSpec,
+  integrationTaskFor,
+  isIntegrationTask,
+  pendingMerges,
+  workingInProjectFolder,
+  worktreeDepsOf
+} from '../core/orchestration/integrate'
 import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
 import { defaultAccountIdOf } from '../core/accounts/defaultAccount'
 import { sameSnapshot, snapshotFor, runsForProject } from '../core/orchestration/view'
@@ -56,7 +64,7 @@ import { nameForTask } from '../core/worktrees/naming'
 import { listBranches, detectBaseRef } from '../core/worktrees/git'
 import { removeWorktree } from '../core/worktrees/remove'
 import { listWithStatus } from '../core/worktrees/list'
-import { git, repoRoot } from '../core/worktrees/git'
+import { git, repoRoot, gitVersionAtLeast, listGitWorktrees } from '../core/worktrees/git'
 import { t, isLang, type MessageKey } from '../core/i18n'
 import type { LangPreference } from '../core/i18n'
 import { pickInitialLang } from '../core/i18n/locale'
@@ -841,6 +849,135 @@ export function registerIpc(
       }
     }
 
+    /** 통합의 결과. 셋뿐이다 — 합쳤다, 사람에게 가야 한다, 에이전트에게 넘겨야 한다. */
+    type Integration =
+      | { kind: 'merged' }
+      | { kind: 'human'; reason: string }
+      | { kind: 'agent'; reason: string; worktrees: { path: string; branch: string | null }[] }
+
+    /** 워크트리에서 끝난 일을 **프로젝트 폴더로 실제로 합친다.** 무엇을 합쳐야 하는가의 판정은
+     *  integrate.ts 가 하고(순수하므로 테스트가 있다), 이 함수는 그 답을 git 으로 실행한다.
+     *
+     *  **이것이 사용자의 저장소에 스스로 쓰는 유일한 자동 경로다.** 사용자가 그렇게 결정했으므로
+     *  허용되지만, 지켜야 하는 것이 하나 있다: **어떤 실패 경로에서도 프로젝트 폴더를 병합 중간
+     *  상태로 남기지 않는다.** 아래의 순서(미리 검사 → 진짜 병합 → 실패하면 되돌리고 되돌아갔는지
+     *  확인)가 전부 그것을 위한 것이다. */
+    const integrateWorktrees = async (runCwd: string, paths: string[]): Promise<Integration> => {
+      // 1. **추적되는 변경이 남아 있으면 아무것도 하지 않는다.** 병합은 작업 트리에 쓰므로, 그 위에
+      //    사용자가 저장하지 않은 일이 있으면 그것을 위험에 놓는다. 그 일을 어떻게 할지는 사람의
+      //    판단이고 에이전트가 대신 정할 것이 아니므로 Gate 다("돌릴 수 없을 때만 Gate" 규칙 그대로다).
+      //
+      //    **isCleanWorktree(worktrees/git.ts)를 쓰지 않는다.** 그쪽은 `--untracked-files=all` 이라
+      //    추적되지 않는 파일 하나만 있어도 dirty 라고 답한다 — 그 함수가 답하는 질문은 "이 워크트리를
+      //    지워도 되는가"이고 거기서는 그것이 맞다. 여기서 그것을 쓰면 스크린샷 하나 남은 저장소(그것이
+      //    보통의 저장소다)에서 자동 Run 이 늘 서 버린다. 추적되지 않는 파일을 통과시켜도 안전한
+      //    이유는 git 이 그것을 스스로 지키기 때문이다: 병합이 그 파일을 덮어써야 하면 작업 트리를
+      //    **건드리기 전에** 거절한다("untracked working tree files would be overwritten").
+      //
+      //    `git diff --quiet HEAD` 가 아니라 porcelain 을 읽는 이유는 실패를 구별할 수 있어서다 —
+      //    diff 는 "차이가 있다"와 "명령이 실패했다"를 둘 다 0 이 아닌 종료 코드로 내고 git() 은 ok
+      //    하나만 준다. 그러면 Gate 의 문장이 사실을 말할 수 없다.
+      const status = await git(['status', '--porcelain', '--untracked-files=no'], { cwd: runCwd })
+      if (!status.ok)
+        return {
+          kind: 'human',
+          reason: `프로젝트 폴더(${runCwd})의 git 상태를 읽을 수 없어 워크트리를 합치지 못했습니다: ${status.stderr}`
+        }
+      if (status.stdout !== '')
+        return {
+          kind: 'human',
+          reason:
+            `프로젝트 폴더에 커밋되지 않은 변경이 ${status.stdout.split('\n').length}개 있어 워크트리를 ` +
+            `합칠 수 없습니다. 커밋하거나 되돌린 뒤 이 Gate 를 해결해 주세요(추적되지 않는 새 파일은 ` +
+            `여기에 세지 않습니다).`
+        }
+
+      // 2. 각 워크트리의 브랜치를 알아낸다. `git worktree list` 한 번으로 경로 → 브랜치가 전부 나온다.
+      //    listGitWorktrees 는 git() 과 달리 **실패하면 던진다** — 그래서 감싼다.
+      let rows: { path: string; branch: string | null }[]
+      try {
+        rows = await listGitWorktrees(runCwd)
+      } catch (e) {
+        return { kind: 'human', reason: `워크트리 목록을 읽을 수 없습니다: ${String(e)}` }
+      }
+      // 경로 비교는 isSamePath 다 — 한쪽은 createWorktree 가 만들어 Dispatch 에 저장된 값이고 다른
+      // 쪽은 git 이 방금 낸 값이라 대소문자나 구분자가 다를 수 있다(둘 다 절대경로이므로 결정적이다).
+      const targets = paths.map((p) => ({
+        path: p,
+        branch: rows.find((r) => isSamePath(r.path, p))?.branch ?? null
+      }))
+      const unknown = targets.filter((x) => !x.branch)
+      if (unknown.length > 0)
+        return {
+          kind: 'agent',
+          // 워크트리가 지워졌거나 HEAD 가 분리된 경우다. 합칠 ref 의 이름을 모르므로 앱은 여기서
+          // 할 수 있는 것이 없다 — 그렇다고 없는 것으로 치면 그 의존의 일이 없는 채로 다음 Task 가
+          // 뜨고, 그것은 조용히 틀린 결과다.
+          reason: `the app could not work out which branch belongs to ${unknown
+            .map((x) => x.path)
+            .join(', ')} — the worktree may have been removed, or its HEAD may be detached`,
+          worktrees: targets
+        }
+
+      // 3. merge-tree 가 없으면 **미리 검사할 수 없다.** 검사하지 못하는 것을 낙관하지 않는다 —
+      //    낙관해서 진짜 병합을 걸면 충돌할 때 `git merge --abort` 로 되돌려야 하고, 그 되돌리기까지
+      //    실패하면 사용자의 저장소가 충돌 상태로 남는다. 그래서 곧바로 에이전트에게 넘긴다.
+      if (!(await gitVersionAtLeast(2, 38)))
+        return {
+          kind: 'agent',
+          reason:
+            'this git is older than 2.38, so the app has no way to test a merge without writing to the working tree',
+          worktrees: targets
+        }
+
+      // 4. 하나씩 **미리 검사한 바로 뒤에 합친다.** 전부 검사하고 전부 합치는 순서가 아닌 이유는
+      //    merge-tree 의 기준이 그때의 HEAD 라는 것이다 — 첫 병합이 커밋을 만들면 HEAD 가 움직이고,
+      //    그 앞에서 통과했던 두 번째 검사는 낡은 사실이 된다(첫 병합이 가져온 변경 때문에 충돌할 수
+      //    있다). 그러면 진짜 병합이 실패하고, 되돌리기에 기대는 바로 그 경로로 들어간다.
+      //
+      //    검사는 `merge-tree --write-tree` 의 **종료 코드**로 읽는다. remove.ts 의 isBranchMerged 는
+      //    같은 명령의 결과 트리를 대상의 트리와 견주지만 그것은 다른 질문("이미 합쳐졌는가", squash
+      //    병합 판정)에 답하는 것이다. 여기서 필요한 것은 "충돌하는가"이고 그것이 곧 종료 코드다.
+      //
+      //    병합 대상은 `HEAD` 다. mergeTarget()(remove.ts)을 쓰지 않는 이유는 그 함수가
+      //    branch.<b>.base → origin/HEAD 를 고를 수 있어서다 — 원격 ref 에 합치는 것은 다른 일이다.
+      //    이름(`rev-parse --abbrev-ref HEAD`)을 따로 얻지 않는 이유는 `HEAD` 가 같은 것을 더 정확히
+      //    가리키기 때문이다: 같은 이름의 태그와 헷갈릴 일이 없고, 분리된 HEAD 에서도 답이 있다.
+      for (const target of targets) {
+        // 같은 이름의 태그가 브랜치보다 먼저 잡히는 것을 막으려고 전체 ref 를 쓴다(remove.ts 와 같다)
+        const ref = `refs/heads/${target.branch}`
+        const probe = await git(['merge-tree', '--write-tree', 'HEAD', ref], { cwd: runCwd })
+        if (!probe.ok)
+          return {
+            kind: 'agent',
+            reason: `git merge-tree says ${target.branch} does not merge cleanly into the branch this folder is on`,
+            worktrees: targets
+          }
+        // `--no-edit` 는 편집기를 막는 것이다. 이 자리에는 사람이 없고, 편집기가 뜨면 그 git 프로세스는
+        // git() 의 30초 timeout 까지 서 있다가 죽는다 — 그때 남는 저장소가 곧 병합 중간 상태다.
+        const merged = await git(['merge', '--no-edit', ref], { cwd: runCwd })
+        if (!merged.ok) {
+          // 미리 검사가 통과했는데도 실패했다면 충돌이 아닌 이유다(추적되지 않는 파일과의 겹침,
+          // index.lock, 훅, 서명). 되돌린 뒤 사람에게 간다 — 에이전트에게 넘기지 않는 이유는 이것이
+          // "합치면 충돌한다"가 아니라 "앱이 병합을 돌릴 수 없다"이기 때문이다.
+          await git(['merge', '--abort'], { cwd: runCwd }) // 병합이 시작되지도 않았으면 실패한다 — 무시한다
+          // **되돌아갔는지 확인해서 그 사실을 문장에 넣는다.** 앱이 저장소를 어떤 상태로 두었는지를
+          // 사용자가 짐작하게 두지 않는다 — 이 경로가 있는 이유가 그것이다.
+          const after = await git(['status', '--porcelain', '--untracked-files=no'], { cwd: runCwd })
+          const left =
+            after.ok && after.stdout === ''
+              ? '프로젝트 폴더는 병합 전 상태로 되돌렸습니다.'
+              : '**프로젝트 폴더가 병합 중간 상태로 남아 있을 수 있습니다 — git status 로 직접 확인해 주세요.**'
+          return {
+            kind: 'human',
+            reason: `${target.branch} 브랜치를 프로젝트 폴더에 합치지 못했습니다: ${merged.stderr || merged.stdout}. ${left}`
+          }
+        }
+        orchLog(`scheduler: merged ${ref} into ${runCwd}`)
+      }
+      return { kind: 'merged' }
+    }
+
     // 자동 진행. **setState 뒤에 매단다** — 새 Task 가 ready 가 되거나 자리가 비는 경로가 일곱이고
     // (task-create, worker_done, 검증 결과, 검토 결과, gate-resolve, worker-stop, task-update),
     // 명령마다 훅을 달면 하나를 빠뜨린다. 빠뜨렸을 때의 증상은 "Task 가 이유 없이 안 돈다"이고,
@@ -927,18 +1064,134 @@ export function registerIpc(
               // 지워지지 않는 한(그런 명령은 없다) 반드시 있다.
               const state = orch.deps.getState()
               const run = state.runs.find((r) => r.id === slot.runId)!
+              // Task 도 같은 이유로 반드시 있다(slotsToFill 이 상태에서 골라낸 id 다)
+              const task = state.tasks.find((t) => t.id === slot.taskId)!
+
+              // **통합 단계 — worker-start 앞이다.** 의존이 자기 워크트리에서 돌았다면 그 브랜치의
+              // 커밋을 프로젝트 폴더로 먼저 합친다. 앱이 직접 합치고 **충돌할 때만 에이전트에게**
+              // 넘기는 것이 이 기능의 결정이다: 사람을 부르는 것은 모든 작업이 끝났을 때로 미룬다.
+              //
+              // 통합 Task 자신은 이 단계를 지나지 않는다. 지나면 그 Task 의 deps(= 그 워크트리 Task
+              // 들)를 보고 통합 Task 를 위한 통합 Task 를 만들고, 그것이 끝없이 이어진다 — 새 Task 는
+              // 매번 새 id 라서 아래의 attempted 가 막지 못한다(integrate.ts 에 자세히 적었다).
+              const merges = isIntegrationTask(task) ? [] : pendingMerges(state, slot.taskId)
+              if (merges.length > 0) {
+                // **이미 통합 Task 가 있으면 새로 만들지 않는다.** 아직 끝나지 않았으면 그것을
+                // 기다린다. 실패했어도 만들지 않는다 — 즉시 실패하는 통합은 상태 변경마다 Task 를
+                // 하나씩 늘리게 되고 그것은 경계가 없다. 보이는 정지가 조용한 쌓임보다 낫다(실패한
+                // Task 는 그래프에 그대로 남고, 거기서 다시 띄우는 것이 사람의 길이다).
+                const existing = integrationTaskFor(state, slot.taskId)
+                if (existing && existing.status !== 'completed') {
+                  orchLog(
+                    `scheduler: task=${slot.taskId} waits for integration task=${existing.id} (${existing.status})`
+                  )
+                  continue
+                }
+                // 프로젝트 폴더에서 도는 워커가 있으면 합치지 않는다 — 그 워커가 읽은 트리를 그
+                // 아래에서 갈아치우는 일이고, 그 실패는 조용하다(integrate.ts 에 이유가 있다).
+                // 다음 상태 변경에 다시 본다. 그 워커가 끝나는 것 자체가 상태 변경이다.
+                if (workingInProjectFolder(state, slot.runId)) {
+                  orchLog(
+                    `scheduler: task=${slot.taskId} waits — a worker is still working in ${run.cwd}`
+                  )
+                  continue
+                }
+                // **여기서부터 git 이 돈다.** 위까지는 상태만 본다 — runScheduler 는 모든 저장마다
+                // 불리고 그 대부분은 합칠 것이 없는 저장이므로, 그 바퀴에 git 프로세스를 띄우지 않는다
+                // (슬롯이 없을 때 계정 조회 앞에서 빠지는 것과 같은 성격이다).
+                const integration = await integrateWorktrees(run.cwd, merges)
+                if (integration.kind === 'human') {
+                  await gateSlot(orch.deps, slot.taskId, integration.reason)
+                  continue
+                }
+                if (integration.kind === 'agent') {
+                  // 통합 Task 가 이미 completed 인데 아직 깨끗하지 않다면 넘길 곳이 없다 — 두 번째
+                  // 통합 Task 를 만들지 않기로 했으므로 사람에게 간다. 조용히 넘기면 사용자에게
+                  // 남는 것은 '완료된 통합 Task 와 이유 없이 서 있는 Task' 뿐이어서 문제가 보이지
+                  // 않는다(실패한 통합 Task 는 그래프에서 스스로 보이므로 그쪽은 Gate 가 아니다).
+                  if (existing) {
+                    await gateSlot(
+                      orch.deps,
+                      slot.taskId,
+                      `통합 Task 가 끝났는데도 워크트리를 합칠 수 없습니다: ${integration.reason}`
+                    )
+                    continue
+                  }
+                  // 통합 Task 도 **task-create 로** 만든다 — 앱이 createTask 를 직접 부르지 않는다.
+                  // 문은 하나다. `runId` 도 명시한다: 그 인자가 없으면 task-create 는 '가장 마지막에
+                  // 만들어진 Run' 을 쓰고(server.ts), 그것은 이 슬롯의 Run 이 아닐 수 있다.
+                  const created = await orchHandleCommand(
+                    orch.deps,
+                    { sessionId: UI_CALLER },
+                    'task-create',
+                    {
+                      runId: slot.runId,
+                      // parentId 가 "이 Task 의 통합 Task" 라는 표식이다 — 다음 바퀴에 그것을 보고
+                      // 두 번 만들지 않는다(integrate.ts 의 integrationTaskFor).
+                      parent: slot.taskId,
+                      deps: worktreeDepsOf(state, slot.taskId),
+                      // 제목은 그래프에 뜨므로 사람의 말(한국어)이고 — 같은 파일의 Gate 질문이
+                      // 그렇다 — spec 본문은 에이전트가 읽으므로 영어다(buildSpecFile 의 의무 절과
+                      // 같은 이유). 둘 다 i18n 카탈로그에 넣지 않는다: 그 카탈로그는 렌더러의 문구를
+                      // 위한 것이고 이 문구는 main 에서 조립된다. 80자로 자르는 것은 title 을 주지
+                      // 않았을 때 task-create 가 하는 것과 같은 길이다.
+                      title: `워크트리 병합: ${task.title}`.slice(0, 80),
+                      spec: buildIntegrationSpec({
+                        runCwd: run.cwd,
+                        reason: integration.reason,
+                        worktrees: integration.worktrees
+                      })
+                    }
+                  )
+                  if (created.status >= 400) {
+                    await gateSlot(
+                      orch.deps,
+                      slot.taskId,
+                      `워크트리를 합칠 통합 Task 를 만들지 못했습니다: ${JSON.stringify(created.body)}`
+                    )
+                    continue
+                  }
+                  orchLog(
+                    `scheduler: integration task created for task=${slot.taskId} — ${integration.reason}`
+                  )
+                  // 이번 회차에서 이 Task 는 띄우지 않는다. 통합 Task 는 방금의 setState 로 스케줄러가
+                  // 한 바퀴 더 돌 때 스스로 슬롯이 된다(deps 가 이미 전부 completed 이므로 ready 다).
+                  continue
+                }
+              }
+
+              // 통합 Task 는 프로젝트 폴더에서 도는 유일한 워커이므로(아래 배치 예외), **둘이 겹치지
+              // 않게 한다.** 접합점이 둘이면 통합 Task 도 둘이 만들어질 수 있고, 그 둘을 같은 폴더에
+              // 함께 띄우면 서로의 index.lock 과 서로가 만든 병합을 밟는다 — 한 폴더에 병렬 워커를
+              // 두지 않는다는 Task 배치 규칙의 이유가 그대로 여기에도 있다. 뒤의 것은 다음 상태
+              // 변경에 다시 본다(앞의 것이 끝나는 것 자체가 상태 변경이다).
+              if (isIntegrationTask(task) && workingInProjectFolder(state, slot.runId)) {
+                orchLog(
+                  `scheduler: integration task=${slot.taskId} waits — a worker is still working in ${run.cwd}`
+                )
+                continue
+              }
+
               const limit = run.concurrency ?? DEFAULT_CONCURRENCY
+              // **통합 Task 는 프로젝트 폴더에서 돈다 — 위 규칙의 유일한 예외다.** 예외인 이유는 그
+              // Task 의 일 자체가 "프로젝트 폴더로 합치는 것"이라서다: 자기 워크트리에서 돌면 origin
+              // 기준으로 갈라진 다른 브랜치에 합치게 되어 아무 값이 없고, buildSpecFile 이 붙이는 커밋
+              // 의무("이 워크트리에 커밋하라")가 spec 본문("프로젝트 폴더에 합치고 커밋하라")과 정면으로
+              // 부딪힌다(코디네이터가 검토 spec 을 구현자 템플릿으로 감싸지 않는 것과 같은 부류의
+              // 충돌이다). 섞지 않는 원래 이유(프로젝트 폴더에 커밋 안 된 변경이 남으면 합칠 자리가
+              // 없어진다)는 여기서도 지켜진다: 그 spec 이 끝에 작업 트리를 깨끗하게 두라고 요구하고,
+              // 그 Dispatch 가 열려 있는 동안은 workingInProjectFolder 가 앱의 병합을 막는다.
               const placement =
-                limit <= 1
+                isIntegrationTask(task) || limit <= 1
                   ? { worktree: 'current' }
                   : {
+                      // nameForTask 는 이미 slugify 를 거친 값(또는 그것이 던질 때의 Task id)을 낸다 —
+                      // 여기서 이미 유일성을 보장하지는 않지만, createWorktree 가 받는 이름에 slugify 를
+                      // 한 번 더 걸어도(naming.ts, 멱등이다) 값이 바뀌지 않고, 충돌(같은 이름의
+                      // 브랜치·경로)도 candidateName 접미사 루프로 스스로 피한다(create.ts) — 그래서
+                      // 여기서 접미사를 더 붙이지 않는다.
                       worktree: 'new',
-                      // Task 도 같은 이유로 반드시 있다. nameForTask 는 이미 slugify 를 거친 값(또는
-                      // 그것이 던질 때의 Task id)을 낸다 — 여기서 이미 유일성을 보장하지는 않지만,
-                      // createWorktree 가 받는 이름에 slugify 를 한 번 더 걸어도(naming.ts, 멱등이다)
-                      // 값이 바뀌지 않고, 충돌(같은 이름의 브랜치·경로)도 candidateName 접미사 루프로
-                      // 스스로 피한다(create.ts) — 그래서 여기서 접미사를 더 붙이지 않는다.
-                      name: nameForTask(state.tasks.find((t) => t.id === slot.taskId)!)
+                      name: nameForTask(task)
                     }
               const reply = await orchHandleCommand(
                 orch.deps,

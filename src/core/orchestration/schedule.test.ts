@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { pendingMerges } from './integrate'
 import { slotsToFill } from './schedule'
 import { emptyState, type OrchState } from './state'
 import type { Run, Task } from './types'
@@ -146,5 +147,33 @@ describe('slotsToFill', () => {
       ]
     })
     expect(slotsToFill(s).map((x) => x.taskId)).toEqual(['t2'])
+  })
+
+  // 판정과 배선의 경계를 못박는다. slotsToFill 은 순수해야 하고 워크트리를 모른다 — 그래서 **아직
+  // 합쳐지지 않은 Task 도 슬롯으로는 나온다.** 거르는 것은 배선이다(ipc.ts 가 pendingMerges 를 보고
+  // 직접 합치거나 통합 Task 를 만든다). 이것을 적어 두지 않으면 나중에 누군가 이 함수 안에 통합
+  // 검사를 넣고, 그러면 이 함수가 git 을 알아야 하므로 이 파일의 테스트 전부가 저장소를 요구하게 된다.
+  it('의존이 워크트리에서 돌아 아직 합쳐지지 않은 Task 도 슬롯으로 나온다 — 거르는 것은 배선이다', () => {
+    const s = state({
+      tasks: [task('t1', { status: 'completed' }), task('t2', { deps: ['t1'] })],
+      dispatches: [
+        {
+          id: 'dsp_1',
+          taskId: 't1',
+          provider: 'claude',
+          accountId: 'a',
+          sessionId: 's',
+          cwd: '/p-worktrees/t1', // run.cwd('/p')가 아니다 — 워크트리에서 돌았다
+          specPath: '/s',
+          startedAt: '2026-08-19T00:00:00.000Z',
+          endedAt: '2026-08-19T00:01:00.000Z',
+          outcome: 'succeeded',
+          workerState: 'stopped',
+          retained: false
+        }
+      ]
+    })
+    expect(pendingMerges(s, 't2')).toEqual(['/p-worktrees/t1']) // 합칠 것이 있는데도
+    expect(slotsToFill(s).map((x) => x.taskId)).toEqual(['t2']) // 슬롯으로는 나온다
   })
 })
