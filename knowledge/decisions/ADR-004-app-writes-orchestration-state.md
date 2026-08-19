@@ -65,8 +65,12 @@ was missing was the IPC door, not authorization through it.
 as of this ADR that is `NewRunModal.tsx` (`run-create`), `NewTaskModal.tsx` (`task-create`), and
 `RunDetail.tsx`'s `startTask`/`stopTask`/`restartTask`/`askQuestion` (`worker-start`, `dispatch-show`
 + `worker-stop`, `task-update`, `gate-create`). None of that break is silent — the type system finds
-every call site. Separately, restore a "read-only" description to the three comments this ADR is cited
-from (`ipc.ts:1798-1800`, `ipc.ts:1854-1855`, `types.ts:711`). The app's own scheduler does **not** go
+every call site. Separately, restore a "read-only" description to the comments that actually cite
+this ADR by name — `ipc.ts:1854-1855`, `types.ts:711`, and `RunDetail.tsx:75-81`'s header (added once
+this same fix round found `RunDetail.tsx` carrying the same stale claim, after this ADR's own text had
+already been drafted). A fourth comment, `ipc.ts:1798-1800`, narrates the same reversal in prose but
+does not name the ADR — check it too; reversing this has to update every place that describes the old
+behavior, not only the ones that cite this file by number. The app's own scheduler does **not** go
 through this channel (it calls `orchHandleCommand` directly via `deps`, `ipc.ts`'s slot-fill loop), so
 removing `orch.command` does not by itself disable auto-dispatch — see Decision 3.
 
@@ -95,7 +99,7 @@ opened a new IPC surface of their own.
 inside `RunDetail.tsx`'s `Graph`/`node()` (`showStart`/`showGate`/`showStop`/`showRestart` and their
 handlers). Remove the `+ 새 작업` / `+ Task 추가` entry points from `JobsView.tsx` and `RunDetail.tsx`.
 Check `App.tsx`'s `newRunOpen` state and its join into `modalOpenRef` (`App.tsx:1620`, and the `||
-newRunOpen` at `:302`) — both become dead once the modal is gone. Check the `jobs.new.*`, `jobs.task.*`
+newRunOpen` at `:1680`) — both become dead once the modal is gone. Check the `jobs.new.*`, `jobs.task.*`
 and `jobs.node.*` keys in all four i18n catalogs (`src/core/i18n/messages/{ko,en,ja,es}.ts`) — they
 become unused, and `jobs.empty.hint`'s current wording (which now advertises both the sidebar button
 and the coordinator session) would need to go back to mentioning only the coordinator session.
@@ -124,15 +128,28 @@ everything else is done or genuinely stuck," rather than asking for review of ev
 
 Two rules followed from that decision, and both are load-bearing for the rest of the design:
 
-- **`Run.concurrency` decides *where* every worker in that Run runs, not just how many run at once.**
-  `concurrency <= 1` means the Run's single worker runs in the project folder itself, sequentially
-  (`worktree: 'current'`); `concurrency >= 2` means **every** worker gets its own git worktree
-  (`worktree: 'new'`) — never a mix, because mixing is exactly the "one worker in the shared folder"
-  case the merge step exists to avoid. This is also why the `띄우기` button in `RunDetail.tsx` only
-  renders when `run.concurrency` (or the default) is `<= 1` **and** the Run has a `provider` —
-  the renderer cannot name a worktree (`nameForTask` needs `node:path`, which cannot enter
-  `tsconfig.web.json`), so a manual start is only offered in the one placement it can honor without
-  inventing a name.
+- **`Run.concurrency` decides *where* every ordinary worker in that Run runs, not just how many run
+  at once.** `concurrency <= 1` means the Run's single worker runs in the project folder itself,
+  sequentially (`worktree: 'current'`); `concurrency >= 2` means every ordinary Task's worker gets its
+  own git worktree (`worktree: 'new'`) — never a mix among ordinary Tasks, because mixing is exactly
+  the "one worker in the shared folder" case the merge step exists to avoid. This is also why the
+  `띄우기` button in `RunDetail.tsx` only renders when `run.concurrency` (or the default) is `<= 1`
+  **and** the Run has a `provider` — the renderer cannot name a worktree (`nameForTask` needs
+  `node:path`, which cannot enter `tsconfig.web.json`), so a manual start is only offered in the one
+  placement it can honor without inventing a name.
+
+  **The one exception is the app's own integration Task, which always runs in the project folder
+  regardless of `concurrency`** (`ipc.ts:1325-1344`: `isIntegrationTask(task) || limit <= 1 ?
+  { worktree: 'current' } : { worktree: 'new', … }`, with the comment directly above it calling this
+  out as "the only exception to the rule above"). It is an exception rather than a violation because
+  that Task's entire job *is* merging into the project folder — running it in its own worktree would
+  merge into a branch that itself has diverged from `origin`, producing nothing of value, and would put
+  `buildSpecFile`'s commit obligation (committing the worktree's own branch before finishing) in direct
+  conflict with what the integration spec itself instructs (`git merge --no-edit` *from* the project
+  folder, `integrate.ts`'s `buildIntegrationSpec`). The original
+  reason for never mixing (an uncommitted change left in the project folder blocks a place for anything
+  else to land) still holds here: the integration spec requires a clean tree at the end, and
+  `workingInProjectFolder` blocks the app's own automatic merge while that Dispatch is open.
 - **When a Task's dependency finishes in its own worktree, the app merges that worktree into the
   project folder before starting the dependent Task** (`integrateWorktrees`, `src/main/ipc.ts`, using
   `git merge-tree --write-tree` as a conflict precheck that never touches the working tree, then a real
@@ -140,17 +157,21 @@ Two rules followed from that decision, and both are load-bearing for the rest of
   Gate for a human — when the project folder has uncommitted changes to **tracked** files (untracked
   files are let through, because git itself refuses cleanly if one collides), or when the repository is
   on a detached `HEAD` or mid-rebase/bisect/cherry-pick/revert/merge (detected via `gitDir()`'s marker
-  files, not `isCleanWorktree`, which is a different question about worktree removal and answers "yes"
-  on any untracked file). When the precheck instead finds a real conflict, the app does **not** ask a
+  files, not `isCleanWorktree`, which is a different question about worktree removal and treats a
+  single **untracked** file as enough to call the tree dirty (`clean: false`) — using it here would
+  make the app refuse to merge on the ordinary case of an untracked scratch file sitting in the project
+  folder). When the precheck instead finds a real conflict, the app does **not** ask a
   human — it creates an **integration Task**, marked by `parentId = <the waiting Task's id>`, and hands
   the conflict to an agent. `parentId` was read by nothing before this (`state.ts` only validated and
   stored it); it is now reserved app-wide as this one marker, and as a direct, mechanical consequence
   `--parent` was removed from `task-create`'s documented syntax in the orchestration guide
   (`resources/skills/orchestration-guide.md:190`, with the reservation explained at `:207-217`) — a
   coordinator setting it on an ordinary Task would make the scheduler mistake that Task for its own
-  integration marker, skip the merge step, run it in the project folder instead of a worktree (the one
-  combination the placement rule forbids), and suppress the real integration Task from ever being
-  created.
+  integration marker, skip the merge step, and run it in the project folder instead of a worktree —
+  the one combination the placement rule forbids for an *ordinary* Task (the exception above is for the
+  app's own integration Task specifically, identified by `parentId` actually pointing at a Task that is
+  really waiting on a merge, not by the mere presence of the field) — and suppress the real integration
+  Task from ever being created.
 
 *What to check to reverse it.* This reversal has the most surface area of the three, because five
 things shipped together and none of them makes sense alone:
@@ -160,7 +181,7 @@ things shipped together and none of them makes sense alone:
    the CLI's `worker-start` path does not, so it survives untouched.
 2. `auto: true` on the UI's `run-create` call (`NewRunModal.tsx`) — removing it without deciding what a
    UI-created Run does instead would leave a Run whose Tasks reach `ready` and never move, because
-   `띾우기` is not offered for `concurrency >= 2` (see below).
+   `띄우기` is not offered for `concurrency >= 2` (see below).
 3. `integrateWorktrees` and the `pendingMerges` check the scheduler runs before dispatching a Task with
    a dependency (`ipc.ts`'s slot-fill loop) — before removing it, check whether any Task in a live
    `orchestration.json` currently carries a `parentId` set by this mechanism; an integration Task left
