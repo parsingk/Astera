@@ -734,9 +734,11 @@ export const es: Catalog = {
   'jobs.state.blocked': 'Esperando a una persona',
   'jobs.run.running': 'en curso',
   'jobs.gates.more': '+{count} más',
-  // JobTimeline.tsx — el modal de historial. La insignia la elige el tipo de evento (o el tipo de mensaje)
+  // RunDetail.tsx, panel derecho — la lista de eventos. La insignia la elige el tipo de evento (o el tipo
+  // de mensaje). Los nombres jobs.timeline.* se mantienen: ese panel es la línea de tiempo, y
+  // jobs.timeline.open lo usa la barra lateral (JobsView.tsx) para abrir la ventana. Los textos de la
+  // ventana en sí son los jobs.detail.* de abajo
   'jobs.timeline.open': 'Historial',
-  'jobs.timeline.title': 'Historial',
   'jobs.timeline.empty': 'Aún no ha ocurrido nada',
   'jobs.timeline.close': 'Cerrar',
   'jobs.timeline.openSession': 'Abrir sesión',
@@ -757,5 +759,11 @@ export const es: Catalog = {
   // El resultado de worker_done — no jobs.state.completed/failed, que etiquetan una Task (y una Task
   // puede tener varios informes de worker)
   'jobs.event.succeeded': 'correcto',
-  'jobs.event.outcomeFailed': 'fallido'
+  'jobs.event.outcomeFailed': 'fallido',
+  // RunDetail.tsx — los textos de la ventana de detalle: el grafo de la izquierda y el filtro que abre
+  'jobs.detail.cycle': 'Sus dependencias se apuntan entre sí, así que no hay orden que dibujar — estas Tasks nunca empezarán',
+  'jobs.detail.hidden': '{count} eventos de otras Tasks — pulsa el nodo otra vez para quitar el filtro',
+  'jobs.detail.clearFilter': 'Quitar filtro',
+  'jobs.detail.edgeWaiting': 'dependencia pendiente',
+  'jobs.detail.edgeResolved': 'dependencia ya resuelta'
 }

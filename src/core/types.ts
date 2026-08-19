@@ -316,6 +316,10 @@ export interface RunDetail {
   events: JobEvent[]
   /** 의존 깊이별 Task id (core/orchestration/graph.ts) */
   layers: string[][]
+  /** Task id → 이 Run 안의 의존 id. **선을 긋는 것은 이것이고 layers 가 아니다** — 층은 자리만
+   *  정하고, 어느 노드가 어느 노드를 기다리는지는 층에서 되살릴 수 없다(층을 건너뛰는 의존이 있고,
+   *  같은 층의 모든 노드가 아래 층의 모든 노드를 기다리는 것도 아니다). */
+  deps: Record<string, string[]>
   /** 깊이를 정할 수 없는 Task — deps 에 순환이 있다 */
   cyclic: string[]
 }

@@ -1,4 +1,22 @@
 import type { TaskStatus } from '../../../core/types'
+import type { MessageKey } from '../../../core/i18n'
+
+/** 여덟 상태의 툴팁 키. 글리프와 **같은 파일에** 있는 이유는 글리프가 여기 있는 이유와 같다 —
+ *  아이콘이 말로 풀리는 자리(툴팁, 접근성 이름)가 화면마다 다른 낱말을 쓰면 같은 모양이 두 뜻을
+ *  갖게 된다. 사이드바와 상세 창이 이 한 표를 가져다 쓴다.
+ *
+ *  `jobs.state.${status}` 로 조립하지 않는다 — 조립한 키는 grep 에 걸리지 않아서, 카탈로그에서
+ *  지워져도 아무도 모르고 화면에서만 사라진다. */
+export const STATE_KEY: Record<TaskStatus, MessageKey> = {
+  pending: 'jobs.state.pending',
+  ready: 'jobs.state.ready',
+  dispatched: 'jobs.state.dispatched',
+  validating: 'jobs.state.validating',
+  reviewing: 'jobs.state.reviewing',
+  completed: 'jobs.state.completed',
+  failed: 'jobs.state.failed',
+  blocked: 'jobs.state.blocked'
+}
 
 /** Task 한 상태의 색. 글리프도 띠도 그래프도 여기서 가져간다.
  *

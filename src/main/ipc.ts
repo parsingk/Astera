@@ -1250,18 +1250,18 @@ export function registerIpc(
   ipcMain.handle('orch.runDetail', async (_e, projectPath: string, runId: string) => {
     // orch.list 와 같은 가드, 같은 이유 — 경로가 어느 Run 을 볼 수 있는지를 정한다
     await assertAllowedPath(projectPath)
-    if (!orch) return { events: [], layers: [], cyclic: [] }
+    if (!orch) return { events: [], layers: [], deps: {}, cyclic: [] }
     const project = repoPathOf(core.worktrees.list(), projectPath)
     const state = orch.deps.getState()
     // **소유 판정을 복제하지 않는다.** 이 프로젝트의 Run 목록에 없는 id 는 읽지 않는다 — 규칙을
     // 다시 쓰면 orch.list 가 막는 Run 을 이 핸들러가 통과시키는 우회로가 된다.
     if (!runsForProject(state, project, core.worktrees.list()).some((r) => r.id === runId)) {
       orchLog(`orch.runDetail: run ${runId} does not belong to ${project}`)
-      return { events: [], layers: [], cyclic: [] }
+      return { events: [], layers: [], deps: {}, cyclic: [] }
     }
     const known = new Set(core.sessions.list().map((s) => s.id))
-    const { layers, cyclic } = layersOf(state, runId)
-    return { events: timelineFor(state, runId, (id) => known.has(id)), layers, cyclic }
+    const { layers, deps, cyclic } = layersOf(state, runId)
+    return { events: timelineFor(state, runId, (id) => known.has(id)), layers, deps, cyclic }
   })
   // The way out, the same as files.unwatch and git.unwatch: the Jobs view unmounts on a rail toggle,
   // and without this main goes on folding a snapshot and sending it to nobody on every orchestration

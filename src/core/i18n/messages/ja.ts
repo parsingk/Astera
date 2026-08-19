@@ -723,9 +723,10 @@ export const ja: Catalog = {
   'jobs.state.blocked': '人を待っている',
   'jobs.run.running': '進行中',
   'jobs.gates.more': '他 {count} 件',
-  // JobTimeline.tsx — 履歴モーダル。種別バッジはイベント種別（またはメッセージ種別）が決める
+  // RunDetail.tsx の右カラム — イベント一覧。種別バッジはイベント種別（またはメッセージ種別）が決める。
+  // jobs.timeline.* の名前が残るのは、このカラムがタイムラインそのものであり、jobs.timeline.open は
+  // その窓を開くサイドバー（JobsView.tsx）が使うからだ。窓自身の文言は下の jobs.detail.* にある
   'jobs.timeline.open': '履歴',
-  'jobs.timeline.title': '履歴',
   'jobs.timeline.empty': 'まだ何も起きていません',
   'jobs.timeline.close': '閉じる',
   'jobs.timeline.openSession': 'セッションを開く',
@@ -746,5 +747,11 @@ export const ja: Catalog = {
   // worker_done の結果。jobs.state.completed/failed は Task の状態を指す語なので使わない
   // (1 つの Task に複数のワーカー報告があり得る)
   'jobs.event.succeeded': '成功',
-  'jobs.event.outcomeFailed': '失敗'
+  'jobs.event.outcomeFailed': '失敗',
+  // RunDetail.tsx — 詳細ウィンドウ自身の文言。左のグラフと、それが開くフィルターが使う
+  'jobs.detail.cycle': '依存が互いを指しているため順序を決められません — これらの Task は永久に始まりません',
+  'jobs.detail.hidden': '他の Task のイベント {count} 件 — ノードをもう一度押すと解除',
+  'jobs.detail.clearFilter': 'フィルターを解除',
+  'jobs.detail.edgeWaiting': '待っている依存',
+  'jobs.detail.edgeResolved': 'すでに解けた依存'
 }

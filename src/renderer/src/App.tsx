@@ -17,7 +17,7 @@ import type { EditorView } from '@codemirror/view'
 import { EditorStateCache } from './lib/editorStateCache'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { JobsView } from './components/JobsView'
-import { JobTimeline } from './components/JobTimeline'
+import { RunDetail } from './components/RunDetail'
 import { NewSessionDialog } from './components/NewSessionDialog'
 import { WorktreePanel } from './components/WorktreePanel'
 import { RunToolbar } from './components/RunToolbar'
@@ -32,7 +32,8 @@ import type {
   OrchSnapshot,
   RunConfig,
   RunContext,
-  RunDetail,
+  // 컴포넌트 이름과 겹친다 — 이 창이 그리는 값의 타입이고, 그리는 것은 위의 RunDetail 이다
+  RunDetail as RunDetailData,
   RunStatus,
   TerminalBuffer
 } from '../../core/types'
@@ -1559,7 +1560,7 @@ export default function App(): React.JSX.Element {
   const [openRun, setOpenRun] = useState<{ projectPath: string; runId: string } | null>(null)
   /** 그 Run 의 이벤트와 의존 그래프. null 은 아직 도착하지 않았다는 뜻이고 빈 배열과 다르다 — 모달은
    *  전자에 아무것도 그리지 않고 후자에만 빈 상태를 그린다. 읽는 효과는 currentProject 선언 아래에 있다. */
-  const [detail, setDetail] = useState<RunDetail | null>(null)
+  const [detail, setDetail] = useState<RunDetailData | null>(null)
   /** 홈 디렉터리 — 프로젝트가 없을 때 아래쪽 패널의 터미널이 열릴 자리. 프로세스 수명 동안 바뀌지
    *  않으므로 한 번만 읽는다. 도착하기 전에는 null 이고, 그동안 패널은 그려지지 않는다. */
   const [homeDir, setHomeDir] = useState<string | null>(null)
@@ -1630,7 +1631,7 @@ export default function App(): React.JSX.Element {
         if (!cancelled) setDetail(d)
       },
       () => {
-        if (!cancelled) setDetail({ events: [], layers: [], cyclic: [] })
+        if (!cancelled) setDetail({ events: [], layers: [], deps: {}, cyclic: [] })
       }
     )
     return () => {
@@ -3015,9 +3016,11 @@ export default function App(): React.JSX.Element {
         />
       )}
       {openRun && (
-        <JobTimeline
-          objective={orchSnapshot?.runs.find((r) => r.id === openRun.runId)?.objective ?? ''}
-          events={detail?.events ?? null}
+        <RunDetail
+          // 그래프의 노드는 제목·상태·세션을 스냅샷에서 읽는다(detail 의 layers 는 id 뿐이다).
+          // 그 Run 이 스냅샷에서 사라졌으면(다른 프로젝트로 갔거나 지워졌다) undefined 다.
+          run={orchSnapshot?.runs.find((r) => r.id === openRun.runId)}
+          detail={detail}
           // Verbatim the pair JobsView is handed above, and for the reason its comment there records:
           // the tab tree is the only place that knows whether the worker's tab is still open, so a
           // sessions.some(...) check would keep saying yes after the user closed it and the ↗ would

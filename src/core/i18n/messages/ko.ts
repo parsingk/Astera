@@ -746,11 +746,12 @@ export const ko = {
   'jobs.state.blocked': '사람을 기다린다',
   'jobs.run.running': '도는 중',
   'jobs.gates.more': '외 {count}건',
-  // JobTimeline.tsx — 기록 모달. 종류 배지는 이벤트 종류(또는 메시지 종류)가 고른다.
+  // RunDetail.tsx 의 오른쪽 칸 — 이벤트 목록. 종류 배지는 이벤트 종류(또는 메시지 종류)가 고른다.
   // Run 을 '작업'이라 부르는 것은 위의 jobs.empty 와 같고, 그 안의 Task 는 'Task' 로 적는다 —
-  // 한 타임라인에 두 층의 사건이 나란히 나오므로 같은 낱말이면 구분되지 않는다
+  // 한 목록에 두 층의 사건이 나란히 나오므로 같은 낱말이면 구분되지 않는다.
+  // 이름이 timeline 으로 남는 이유: 이 칸이 곧 타임라인이고, jobs.timeline.open 은 그 창을 여는
+  // 사이드바(JobsView.tsx)의 입구가 쓴다. 창 자체의 문구는 아래 jobs.detail.* 이다
   'jobs.timeline.open': '기록',
-  'jobs.timeline.title': '기록',
   'jobs.timeline.empty': '아직 기록이 없습니다',
   'jobs.timeline.close': '닫기',
   'jobs.timeline.openSession': '세션 열기',
@@ -772,5 +773,14 @@ export const ko = {
   // 가리키는 말이고, 한 Task 에는 워커 보고가 여럿 있을 수 있다. 같은 낱말을 두 층에 쓰면 어느
   // 쪽 주장인지 사라진다
   'jobs.event.succeeded': '성공',
-  'jobs.event.outcomeFailed': '실패'
+  'jobs.event.outcomeFailed': '실패',
+  // RunDetail.tsx — 상세 창 자신의 문구. 왼쪽 그래프와 그것이 여는 필터가 쓴다.
+  // 순환은 코디네이터의 실수인데 이 화면 말고는 아무도 잡아 주지 않으므로, 한 문장이 왜 그려질 수
+  // 없는지와 그래서 그 Task 들이 어떻게 되는지를 함께 말한다
+  'jobs.detail.cycle': '의존이 서로를 가리켜 순서를 정할 수 없습니다 — 이 Task 들은 영원히 시작되지 않습니다',
+  'jobs.detail.hidden': '다른 Task 의 이벤트 {count}개 — 노드를 다시 눌러 해제',
+  'jobs.detail.clearFilter': '필터 해제',
+  // 선 색의 뜻. 아이콘과 달리 선에는 툴팁을 달 곳이 없어 그래프 아래에 두 줄로 적는다
+  'jobs.detail.edgeWaiting': '기다리는 중인 의존',
+  'jobs.detail.edgeResolved': '이미 풀린 의존'
 } as const

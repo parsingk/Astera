@@ -3,21 +3,8 @@ import type { JobRun, JobTask, OrchSnapshot, Provider, TaskStatus } from '../../
 import type { MessageKey } from '../../../core/i18n'
 import { formatElapsed } from '../../../core/orchestration/elapsed'
 import { useI18n } from '../i18n/I18nProvider'
-import { RunIcon, STATUS_COLOR, TaskIcon } from './JobIcons'
+import { RunIcon, STATE_KEY, STATUS_COLOR, TaskIcon } from './JobIcons'
 import type { RunIconKind } from './JobIcons'
-
-/** 여덟 상태의 툴팁 키. `jobs.state.${status}` 로 조립하지 않는다 — 조립한 키는 grep 에 걸리지
- *  않아서, 카탈로그에서 지워져도 아무도 모르고 화면에서만 사라진다. */
-const STATE_KEY: Record<TaskStatus, MessageKey> = {
-  pending: 'jobs.state.pending',
-  ready: 'jobs.state.ready',
-  dispatched: 'jobs.state.dispatched',
-  validating: 'jobs.state.validating',
-  reviewing: 'jobs.state.reviewing',
-  completed: 'jobs.state.completed',
-  failed: 'jobs.state.failed',
-  blocked: 'jobs.state.blocked'
-}
 
 /** Run 헤더 글리프의 툴팁. 끝난·실패·막힘은 줄의 글리프와 같은 모양이고 같은 뜻이라 같은 문구를 쓴다.
  *

@@ -628,9 +628,10 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.state.blocked': 'Waiting for a person',
   'jobs.run.running': 'in progress',
   'jobs.gates.more': '+{count} more',
-  // JobTimeline.tsx — the history modal. The badge is chosen by the event kind (or the message type)
+  // RunDetail.tsx, right pane — the event list. The badge is chosen by the event kind (or the message
+  // type). The jobs.timeline.* names stay: that pane is the timeline, and jobs.timeline.open is the
+  // sidebar's way in (JobsView.tsx). The window's own wording is jobs.detail.* below
   'jobs.timeline.open': 'History',
-  'jobs.timeline.title': 'History',
   'jobs.timeline.empty': 'Nothing has happened yet',
   'jobs.timeline.close': 'Close',
   'jobs.timeline.openSession': 'Open session',
@@ -651,5 +652,14 @@ export const en: Record<keyof typeof ko, string> = {
   // worker_done's outcome — deliberately not jobs.state.completed/failed, which label a Task (and one
   // Task can have several worker reports). The same word on two layers hides which one is being claimed
   'jobs.event.succeeded': 'succeeded',
-  'jobs.event.outcomeFailed': 'failed'
+  'jobs.event.outcomeFailed': 'failed',
+  // RunDetail.tsx — the detail window itself: the graph on the left and the filter it drives.
+  // A cycle is a coordinator mistake nothing else in the app catches, so the sentence says both why the
+  // Tasks cannot be placed and what becomes of them
+  'jobs.detail.cycle': 'Their dependencies point at each other, so there is no order to draw — these Tasks will never start',
+  'jobs.detail.hidden': '{count} events from other Tasks — click the node again to clear',
+  'jobs.detail.clearFilter': 'Clear filter',
+  // What an edge colour means. Unlike an icon, a line has nowhere to hang a tooltip
+  'jobs.detail.edgeWaiting': 'waiting on this dependency',
+  'jobs.detail.edgeResolved': 'dependency already met'
 }

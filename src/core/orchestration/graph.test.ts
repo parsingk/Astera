@@ -20,7 +20,7 @@ const state = (p: Partial<OrchState>): OrchState => ({ ...emptyState(), ...p })
 describe('layersOf', () => {
   it('deps 가 없는 Task 는 0층이다', () => {
     const s = state({ runs: [run('r1')], tasks: [task('a', 'r1')] })
-    expect(layersOf(s, 'r1')).toEqual({ layers: [['a']], cyclic: [] })
+    expect(layersOf(s, 'r1')).toEqual({ layers: [['a']], deps: { a: [] }, cyclic: [] })
   })
 
   it('사슬 A→B→C 는 세 층이다', () => {
@@ -73,6 +73,21 @@ describe('layersOf', () => {
     expect(layersOf(s, 'r1').layers).toEqual([['a'], ['b'], ['d']])
   })
 
+  // 층만으로는 선을 그을 수 없다: 여기서 D 는 2층이지만 1층의 B 에도, 0층의 A 에도 매여 있다.
+  // 인접한 층끼리 이으면 A→D 가 사라지고, 층을 전부 이으면 없는 의존이 생긴다 — 그래서 상세 창은
+  // 이 목록으로 선을 긋는다
+  it('deps 는 층을 건너뛰는 의존까지 그대로 담는다', () => {
+    const s = state({
+      runs: [run('r1')],
+      tasks: [
+        task('a', 'r1', [], T(1)),
+        task('b', 'r1', ['a'], T(2)),
+        task('d', 'r1', ['a', 'b'], T(3))
+      ]
+    })
+    expect(layersOf(s, 'r1').deps).toEqual({ a: [], b: ['a'], d: ['a', 'b'] })
+  })
+
   it('같은 층 안에서는 createdAt 순서가 보존된다', () => {
     const s = state({
       runs: [run('r1')],
@@ -97,7 +112,8 @@ describe('layersOf', () => {
       runs: [run('r1'), run('r2')],
       tasks: [task('x', 'r2'), task('a', 'r1', ['x'])]
     })
-    expect(layersOf(s, 'r1')).toEqual({ layers: [['a']], cyclic: [] })
+    // deps 에도 남지 않는다 — 상세 창은 이 목록으로 선을 긋는다
+    expect(layersOf(s, 'r1')).toEqual({ layers: [['a']], deps: { a: [] }, cyclic: [] })
   })
 
   it('순환 A→B→A 는 layers 에 없고 cyclic 으로 빠진다', () => {
@@ -105,7 +121,11 @@ describe('layersOf', () => {
       runs: [run('r1')],
       tasks: [task('a', 'r1', ['b'], T(1)), task('b', 'r1', ['a'], T(2))]
     })
-    expect(layersOf(s, 'r1')).toEqual({ layers: [], cyclic: ['a', 'b'] })
+    expect(layersOf(s, 'r1')).toEqual({
+      layers: [],
+      deps: { a: ['b'], b: ['a'] },
+      cyclic: ['a', 'b']
+    })
   })
 
   // 순환 자체가 아니라 그 뒤에 매달린 Task 도 순서를 정할 수 없다
@@ -118,11 +138,15 @@ describe('layersOf', () => {
         task('c', 'r1', ['a'], T(3))
       ]
     })
-    expect(layersOf(s, 'r1')).toEqual({ layers: [], cyclic: ['a', 'b', 'c'] })
+    expect(layersOf(s, 'r1')).toEqual({
+      layers: [],
+      deps: { a: ['b'], b: ['a'], c: ['a'] },
+      cyclic: ['a', 'b', 'c']
+    })
   })
 
   it('Task 가 없는 Run 은 빈 층과 빈 cyclic 이다', () => {
     const s = state({ runs: [run('r1')] })
-    expect(layersOf(s, 'r1')).toEqual({ layers: [], cyclic: [] })
+    expect(layersOf(s, 'r1')).toEqual({ layers: [], deps: {}, cyclic: [] })
   })
 })
