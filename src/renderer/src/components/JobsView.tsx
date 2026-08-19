@@ -221,8 +221,8 @@ export function JobsView({
                 ))}
                 <button
                   className="jobs-more"
-                  title={t('jobs.timeline.open')}
-                  aria-label={t('jobs.timeline.open')}
+                  title={t('jobs.detail.open')}
+                  aria-label={t('jobs.detail.open')}
                   onClick={() => onOpenRun(run.id)}
                 >
                   ›

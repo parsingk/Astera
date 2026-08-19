@@ -629,9 +629,10 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.run.running': 'in progress',
   'jobs.gates.more': '+{count} more',
   // RunDetail.tsx, right pane — the event list. The badge is chosen by the event kind (or the message
-  // type). The jobs.timeline.* names stay: that pane is the timeline, and jobs.timeline.open is the
-  // sidebar's way in (JobsView.tsx). The window's own wording is jobs.detail.* below
-  'jobs.timeline.open': 'History',
+  // type). The jobs.timeline.* names stay because that pane is the timeline. The sidebar's way in is
+  // jobs.detail.open — the window now holds the dependency graph too, so it is "Details", not
+  // "History". The window's own wording is jobs.detail.* below
+  'jobs.detail.open': 'Details',
   'jobs.timeline.empty': 'Nothing has happened yet',
   'jobs.timeline.close': 'Close',
   'jobs.timeline.openSession': 'Open session',

@@ -724,9 +724,11 @@ export const ja: Catalog = {
   'jobs.run.running': '進行中',
   'jobs.gates.more': '他 {count} 件',
   // RunDetail.tsx の右カラム — イベント一覧。種別バッジはイベント種別（またはメッセージ種別）が決める。
-  // jobs.timeline.* の名前が残るのは、このカラムがタイムラインそのものであり、jobs.timeline.open は
+  // jobs.timeline.* の名前が残るのは、このカラムがタイムラインそのものだからだ。ウィンドウを開く
+  // サイドバーの入口は jobs.detail.open — その窓は履歴だけでなく依存グラフも持つので「履歴」ではなく
+  // 「詳細」である。旧コメント:
   // その窓を開くサイドバー（JobsView.tsx）が使うからだ。窓自身の文言は下の jobs.detail.* にある
-  'jobs.timeline.open': '履歴',
+  'jobs.detail.open': '詳細',
   'jobs.timeline.empty': 'まだ何も起きていません',
   'jobs.timeline.close': '閉じる',
   'jobs.timeline.openSession': 'セッションを開く',

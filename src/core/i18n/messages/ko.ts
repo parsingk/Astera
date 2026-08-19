@@ -749,9 +749,10 @@ export const ko = {
   // RunDetail.tsx 의 오른쪽 칸 — 이벤트 목록. 종류 배지는 이벤트 종류(또는 메시지 종류)가 고른다.
   // Run 을 '작업'이라 부르는 것은 위의 jobs.empty 와 같고, 그 안의 Task 는 'Task' 로 적는다 —
   // 한 목록에 두 층의 사건이 나란히 나오므로 같은 낱말이면 구분되지 않는다.
-  // 이름이 timeline 으로 남는 이유: 이 칸이 곧 타임라인이고, jobs.timeline.open 은 그 창을 여는
-  // 사이드바(JobsView.tsx)의 입구가 쓴다. 창 자체의 문구는 아래 jobs.detail.* 이다
-  'jobs.timeline.open': '기록',
+  // 이름이 timeline 으로 남는 것은 이 칸이 곧 타임라인이기 때문이다. 창을 여는 사이드바의 입구는
+  // jobs.detail.open 이다 — 그 창은 이제 기록만이 아니라 의존 그래프도 담으므로 '기록' 이 아니라
+  // '자세히' 다. 창 자체의 문구도 jobs.detail.* 이다
+  'jobs.detail.open': '자세히',
   'jobs.timeline.empty': '아직 기록이 없습니다',
   'jobs.timeline.close': '닫기',
   'jobs.timeline.openSession': '세션 열기',

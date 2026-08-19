@@ -16,10 +16,15 @@ import type { OrchState } from './state'
  *  걸러내는 규칙이 이미 여기 있으므로 여기서 함께 내보낸다 — 렌더러나 ipc 가 그 규칙을 다시 쓰면
  *  둘이 갈라진다.
  *
- *  **cyclic 은 버그를 드러내는 자리다.** deps 에 순환이 있으면 깊이가 정의되지 않는데,
- *  순환은 코디네이터의 실수이고 지금 아무도 잡아 주지 않는다(createTask 는 deps 를 검사하지 않고,
- *  recomputeReady 는 그 Task 들을 영원히 pending 에 둔다 — 증상은 "아무 이유 없이 안 도는 Task" 다).
- *  그래서 조용히 버리지 않고 따로 돌려주며, 상세 창이 그것을 보여준다. */
+ *  **cyclic 은 API 로는 만들 수 없는 상태를 위한 것이다.** deps 에 순환이 있으면 깊이가 정의되지
+ *  않는데, 그런 상태는 명령으로 만들어지지 않는다: createTask 는 존재하지 않는 dep 을 거절하고
+ *  (state.ts 의 `unknown deps`), 이미 만들어진 Task 의 deps 를 바꾸는 명령이 없다 — 그래서 생성
+ *  순서가 곧 위상 순서이고 그래프는 만들어질 때부터 DAG 다.
+ *
+ *  그런데도 이 함수가 순환을 견뎌야 하는 이유는 **입력이 명령이 아니라 파일**이기 때문이다.
+ *  orchestration.json 은 프로세스보다 오래 살고 손으로 고쳐질 수 있다. 그때 이 함수가 무한히 돌거나
+ *  Task 를 조용히 떨어뜨리면 화면에서 그 Task 가 사라진 이유를 알 길이 없다. 따로 돌려주면 상세 창이
+ *  "순서를 정할 수 없다"고 말할 수 있다. */
 export function layersOf(
   state: OrchState,
   runId: string
