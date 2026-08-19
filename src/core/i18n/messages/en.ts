@@ -112,7 +112,6 @@ export const en: Record<keyof typeof ko, string> = {
   'files.editor.selectPrompt': 'Select a file from the tree',
   // MarkdownPreview.tsx — image load failure, remote image notice
   'files.markdown.image.failed': 'Could not load the image',
-  'files.markdown.image.remote': 'Remote images are not shown — click to open in the browser',
   'files.markdown.renderError': 'This document could not be rendered',
   // MarkdownSplit.tsx — the three mode toolbar buttons, the left/right split resizer
   'files.markdown.mode.editor': 'Editor only',

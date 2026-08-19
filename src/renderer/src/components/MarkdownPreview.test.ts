@@ -68,18 +68,23 @@ describe('MarkdownPreview — raw-HTML <a> (Finding 1)', () => {
   })
 })
 
-describe('MarkdownPreview — 링크 안/밖의 원격 이미지 (Finding 2)', () => {
-  it('마크다운 배지([![alt](img)](url))의 원격 이미지는 button 이 아니라 비활성 span 이다', () => {
+// 원격 이미지는 원래 자리표시로만 그렸다가(문서를 여는 것만으로 외부에 신호가 나가므로) 실제로
+// 불러오도록 바꿨다 — README 의 배지 줄이 원격 이미지의 가장 흔한 쓰임이고, 그 자리에 자리표시가
+// 늘어선 화면은 고장으로 읽힌다. 아래 세 케이스가 지키는 것은 두 가지다: 실제 <img> 가 나온다는 것,
+// 그리고 링크 안이든 밖이든 <button> 이 다시 생기지 않는다는 것 — 링크 안의 button 은 유효하지 않은
+// HTML 이고 클릭 한 번에 탭을 두 개 열었던 회귀의 원인이었다.
+describe('MarkdownPreview — 원격 이미지', () => {
+  it('마크다운 배지([![alt](img)](url))의 원격 이미지를 실제로 불러온다', () => {
     const html = renderPreview('[![CI](https://x.example/badge.svg)](https://github.com/x/y/ci.yml)\n')
+    expect(html).toContain('src="https://x.example/badge.svg"')
+    expect(html).toContain('alt="CI"')
     expect(html).not.toContain('<button')
-    expect(html).toContain('class="md-img-remote"')
-    expect(html).toContain('CI')
+    // 감싼 링크는 그대로 살아 있어야 한다 — 배지를 누르면 이미지가 아니라 그 대상으로 간다
+    expect(html).toContain('href="https://github.com/x/y/ci.yml"')
   })
 
-  // Finding 1 의 block-level <a><img></a> idiom 은 동시에 Finding 2 의 대상이기도 하다 — img 가
-  // 원격이면 그 자리에 button 이 아니라 span 이 나와야 한다(안 그러면 a 안의 button 이 되어 클릭이
-  // 두 핸들러 모두를 깨워 탭이 두 번 열린다).
-  it('block-level <a href><img></a> 의 원격 이미지도 button 이 아니다', () => {
+  // Finding 1 의 block-level <a><img></a> idiom. 원격 이미지가 그 안에 들어와도 마찬가지다.
+  it('block-level <a href><img></a> 안의 원격 이미지도 불러온다', () => {
     const md = [
       '<p align="center">',
       '<a href="https://github.com/x/y/actions"><img src="https://img.shields.io/badge.svg" alt="CI"></a>',
@@ -87,16 +92,15 @@ describe('MarkdownPreview — 링크 안/밖의 원격 이미지 (Finding 2)', (
       ''
     ].join('\n')
     const html = renderPreview(md)
+    expect(html).toContain('src="https://img.shields.io/badge.svg"')
     expect(html).not.toContain('<button')
-    expect(html).toContain('class="md-img-remote"')
+    expect(html).toContain('href="https://github.com/x/y/actions"')
   })
 
-  // 링크 밖의 원격 이미지는 그 자체가 유일한 클릭 대상이므로 여전히 상호작용 가능한 button 이어야
-  // 한다 — insideLink 가 항상 false 로 굳어 있지 않은지 지켜본다.
-  it('링크 밖의 원격 이미지는 여전히 클릭 가능한 button 이다', () => {
+  it('링크 밖의 원격 이미지도 같은 <img> 다', () => {
     const html = renderPreview('![CI](https://x.example/badge.svg)\n')
-    expect(html).toContain('<button')
-    expect(html).toContain('class="md-img-remote"')
+    expect(html).toContain('src="https://x.example/badge.svg"')
+    expect(html).not.toContain('<button')
   })
 })
 
@@ -107,7 +111,8 @@ describe('MarkdownPreview — <img src="mailto:...">', () => {
   it('메일 클라이언트를 여는 원격 이미지로 취급하지 않는다', () => {
     const html = renderPreview('![x](mailto:a@b.com)\n')
     expect(html).not.toContain('<button')
-    expect(html).not.toContain('md-img-remote')
+    // mailto: 가 <img src> 로 새지 않는다 — LocalImage 로 떨어져 결국 실패 자리표시가 된다
+    expect(html).not.toContain('src="mailto:')
   })
 })
 

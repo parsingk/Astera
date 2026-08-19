@@ -293,40 +293,34 @@ function LocalImage({
   return <img src={dataUrl} alt={alt} title={title ?? undefined} style={style} />
 }
 
-/** A remote image is never shown — opening the document alone would otherwise signal an external host.
- *  IntelliJ allows `img-src *`; this preview does not.
+/** An http(s) image, loaded straight from its host.
  *
- *  `interactive` is false when this placeholder sits inside a link (a markdown `[![alt](img)](url)` badge,
- *  or a raw `<a href><img></a>`) — the surrounding anchor already owns the click and the link target is
- *  almost always what the reader wants, so this renders as a plain, non-clickable `<span>` instead of a
- *  `<button>`. A `<button>` nested inside an `<a>` is invalid HTML, and — because a click on the inner
- *  button also bubbles to the outer anchor's own onClick — it used to open two browser tabs for one click
- *  (this repository's own README has five such badges). onClick still stops propagation and prevents the
- *  default when this is rendered interactive, as a second line of defence in case some caller ever passes
- *  interactive=true for an instance that is, in fact, nested inside a link. */
+ *  **This costs privacy, and the trade was made deliberately.** Rendering the document is enough to make
+ *  the request, so a file someone else wrote learns your IP, your user agent and the moment you opened it,
+ *  and a per-recipient URL turns that into a read receipt. The preview refused these images at first for
+ *  exactly that reason. It loads them now because a README's badge row is the single most common use of a
+ *  remote image and a wall of placeholders where the badges belong reads as broken — the same call
+ *  IntelliJ, VS Code and GitHub all make. Nothing executes either way: this is an `<img>`, not markup, and
+ *  the URL still had to clear `classifyHref`'s scheme allowlist to reach here.
+ *
+ *  A failure falls back to the alt text rather than a broken-image glyph, matching LocalImage. `style`
+ *  rides along so a raw `<img width height>` keeps its reserved box in both states and the surrounding
+ *  layout settles once instead of twice. */
 function RemoteImage({
-  src, alt, interactive
+  src, alt, title, style
 }: {
   src: string
   alt: string
-  interactive: boolean
+  title: string | null
+  style?: React.CSSProperties
 }): React.JSX.Element {
   const { t } = useI18n()
-  const title = t('files.markdown.image.remote')
-  if (!interactive) return <span className="md-img-remote" title={title}>{alt || src}</span>
+  const [failed, setFailed] = useState(false)
+  // A new URL deserves a fresh attempt — without this, one failure would stick to every later src.
+  useEffect(() => setFailed(false), [src])
+  if (failed) return <span className="md-img-failed" style={style}>{alt || t('files.markdown.image.failed')}</span>
   return (
-    <button
-      type="button"
-      className="md-img-remote"
-      title={title}
-      onClick={(e) => {
-        e.stopPropagation()
-        e.preventDefault()
-        void window.api.system.openExternal(src)
-      }}
-    >
-      {alt || src}
-    </button>
+    <img src={src} alt={alt} title={title ?? undefined} style={style} onError={() => setFailed(true)} />
   )
 }
 
@@ -363,16 +357,14 @@ function isRemoteImage(target: MdHref): target is { kind: 'external'; url: strin
 /** Renders a raw-HTML `<img>` — RemoteImage for an http(s) src, LocalImage otherwise. The one thing
  *  both renderInline and renderBlocks call for a `tag === 'img'` htmlEl node, so the local/remote split
  *  cannot diverge between them the way the `<a>` handling below once did (Finding 1). */
-function renderHtmlImg(
-  attrs: MdAttrs,
-  docPath: string,
-  key: number,
-  insideLink: boolean
-): React.ReactNode {
+function renderHtmlImg(attrs: MdAttrs, docPath: string, key: number): React.ReactNode {
   const src = attrs.src ?? ''
   const alt = attrs.alt ?? ''
   const target = classifyHref(src)
-  if (isRemoteImage(target)) return <RemoteImage key={key} src={target.url} alt={alt} interactive={!insideLink} />
+  if (isRemoteImage(target))
+    return (
+      <RemoteImage key={key} src={target.url} alt={alt} title={attrs.title ?? null} style={attrs.style} />
+    )
   return (
     <LocalImage key={key} src={src} alt={alt} title={attrs.title ?? null} docPath={docPath} style={attrs.style} />
   )
@@ -482,19 +474,13 @@ export function MarkdownPreview({
     el?.scrollIntoView({ block: 'start' })
   }
 
-  // insideLink: whether this call is rendering the content of a link (markdown 'link', or a raw-HTML
-  // <a href>) — set true only at those two points and threaded through every other case unchanged, since
-  // being inside e.g. <strong> nested in a link does not remove the link context. A remote-image
-  // placeholder reads this to decide whether it may own its own click (RemoteImage's own comment,
-  // Finding 2) — nested inside a link, the surrounding anchor already owns it, and an inner <button>
-  // would both double-fire and be invalid HTML.
-  const renderInline = (nodes: MdInline[], insideLink = false): React.ReactNode =>
+  const renderInline = (nodes: MdInline[]): React.ReactNode =>
     nodes.map((n) => {
       switch (n.k) {
         case 'text': return n.text
-        case 'strong': return <strong key={nextKey()}>{renderInline(n.children, insideLink)}</strong>
-        case 'em': return <em key={nextKey()}>{renderInline(n.children, insideLink)}</em>
-        case 'del': return <del key={nextKey()}>{renderInline(n.children, insideLink)}</del>
+        case 'strong': return <strong key={nextKey()}>{renderInline(n.children)}</strong>
+        case 'em': return <em key={nextKey()}>{renderInline(n.children)}</em>
+        case 'del': return <del key={nextKey()}>{renderInline(n.children)}</del>
         case 'code': return <code key={nextKey()}>{n.text}</code>
         case 'br': return <br key={nextKey()} />
         case 'link':
@@ -512,22 +498,22 @@ export function MarkdownPreview({
                 if (e.button === 1) clickLink(n.href, e)
               }}
             >
-              {renderInline(n.children, true)}
+              {renderInline(n.children)}
             </a>
           )
         case 'image': {
           const target = classifyHref(n.src)
           if (isRemoteImage(target))
-            return <RemoteImage key={nextKey()} src={target.url} alt={n.alt} interactive={!insideLink} />
+            return <RemoteImage key={nextKey()} src={target.url} alt={n.alt} title={n.title} />
           return (
             <LocalImage key={nextKey()} src={n.src} alt={n.alt} title={n.title} docPath={docPath} />
           )
         }
         case 'htmlEl': {
           const key = nextKey()
-          if (n.tag === 'img') return renderHtmlImg(n.attrs, docPath, key, insideLink)
+          if (n.tag === 'img') return renderHtmlImg(n.attrs, docPath, key)
           if (n.tag === 'a') {
-            const anchor = renderHtmlAnchor(n.attrs, () => renderInline(n.children, true), clickLink, key)
+            const anchor = renderHtmlAnchor(n.attrs, () => renderInline(n.children), clickLink, key)
             if (anchor) return anchor
           }
           // No children (e.g. <br>, <hr>) renders without a children prop at all. React DOM throws for
@@ -537,7 +523,7 @@ export function MarkdownPreview({
             <Tag key={key} {...attrsToProps(n.attrs)} />
           ) : (
             <Tag key={key} {...attrsToProps(n.attrs)}>
-              {renderInline(n.children, insideLink)}
+              {renderInline(n.children)}
             </Tag>
           )
         }
@@ -586,12 +572,7 @@ export function MarkdownPreview({
     return count === 0 ? base : `${base}-${count}`
   }
 
-  // insideLink mirrors renderInline's parameter of the same name — true only inside a raw-HTML block-level
-  // <a href> (`<div align><a href><img></a></div>` is the common README idiom this exists for), threaded
-  // through unchanged everywhere else. A block-level <a> is rare, but blocksOf folds one exactly like any
-  // other HTML container, so a remote image can land inside one just as easily as inline — RemoteImage
-  // needs to know either way (Finding 2).
-  const renderBlocks = (list: MdBlock[], insideLink = false): React.ReactNode =>
+  const renderBlocks = (list: MdBlock[]): React.ReactNode =>
     list.map((b) => {
       // data-md-line anchors scroll sync. It has to be on every block, without exception.
       const anchor = { 'data-md-line': b.line }
@@ -601,18 +582,18 @@ export function MarkdownPreview({
           const id = dedupeSlug(slugify(inlineText(b.inline)))
           return (
             <Tag key={nextKey()} id={`md-${id}`} {...anchor}>
-              {renderInline(b.inline, insideLink)}
+              {renderInline(b.inline)}
             </Tag>
           )
         }
         case 'para':
-          return <p key={nextKey()} {...anchor}>{renderInline(b.inline, insideLink)}</p>
+          return <p key={nextKey()} {...anchor}>{renderInline(b.inline)}</p>
         case 'code':
           return <CodeBlock key={nextKey()} text={b.text} lang={b.lang} line={b.line} />
         case 'hr':
           return <hr key={nextKey()} {...anchor} />
         case 'quote':
-          return <blockquote key={nextKey()} {...anchor}>{renderBlocks(b.children, insideLink)}</blockquote>
+          return <blockquote key={nextKey()} {...anchor}>{renderBlocks(b.children)}</blockquote>
         case 'list': {
           const Tag = b.ordered ? 'ol' : 'ul'
           return (
@@ -626,7 +607,7 @@ export function MarkdownPreview({
                     // checked prop with no onChange handler.
                     <input type="checkbox" checked={item.task} disabled readOnly tabIndex={-1} />
                   )}
-                  {renderBlocks(item.children, insideLink)}
+                  {renderBlocks(item.children)}
                 </li>
               ))}
             </Tag>
@@ -640,7 +621,7 @@ export function MarkdownPreview({
                   <tr>
                     {b.header.map((cell, i) => (
                       <th key={nextKey()} style={{ textAlign: b.align[i] ?? undefined }}>
-                        {renderInline(cell, insideLink)}
+                        {renderInline(cell)}
                       </th>
                     ))}
                   </tr>
@@ -650,7 +631,7 @@ export function MarkdownPreview({
                     <tr key={nextKey()}>
                       {row.map((cell, i) => (
                         <td key={nextKey()} style={{ textAlign: b.align[i] ?? undefined }}>
-                          {renderInline(cell, insideLink)}
+                          {renderInline(cell)}
                         </td>
                       ))}
                     </tr>
@@ -664,13 +645,13 @@ export function MarkdownPreview({
           if (b.tag === 'img')
             return (
               <p key={key} {...anchor}>
-                {renderHtmlImg(b.attrs, docPath, nextKey(), insideLink)}
+                {renderHtmlImg(b.attrs, docPath, nextKey())}
               </p>
             )
           if (b.tag === 'a') {
             const rendered = renderHtmlAnchor(
               b.attrs,
-              () => renderBlocks(b.children, true),
+              () => renderBlocks(b.children),
               clickLink,
               key,
               anchor
@@ -684,7 +665,7 @@ export function MarkdownPreview({
           if (b.tag === 'table')
             return (
               <div key={key} className="md-table-wrap" {...anchor}>
-                <table {...attrsToProps(b.attrs)}>{renderBlocks(b.children, insideLink)}</table>
+                <table {...attrsToProps(b.attrs)}>{renderBlocks(b.children)}</table>
               </div>
             )
           // No children (e.g. <br>, <hr>) renders without a children prop at all. React DOM throws for
@@ -694,7 +675,7 @@ export function MarkdownPreview({
             <Tag key={key} {...anchor} {...attrsToProps(b.attrs)} />
           ) : (
             <Tag key={key} {...anchor} {...attrsToProps(b.attrs)}>
-              {renderBlocks(b.children, insideLink)}
+              {renderBlocks(b.children)}
             </Tag>
           )
         }

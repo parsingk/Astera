@@ -136,7 +136,6 @@ export const ja: Catalog = {
   'files.editor.selectPrompt': 'ツリーからファイルを選択してください',
   // MarkdownPreview.tsx — 画像の読み込み失敗・リモート画像の案内
   'files.markdown.image.failed': '画像を読み込めません',
-  'files.markdown.image.remote': 'リモート画像は表示しません — クリックするとブラウザで開きます',
   'files.markdown.renderError': 'このドキュメントは表示できません',
   // MarkdownSplit.tsx — モードツールバーの3つのボタン、左右分割のリサイザー
   'files.markdown.mode.editor': '編集のみ',

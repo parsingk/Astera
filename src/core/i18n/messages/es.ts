@@ -137,7 +137,6 @@ export const es: Catalog = {
   'files.editor.selectPrompt': 'Seleccione un archivo en el árbol',
   // MarkdownPreview.tsx — fallo al cargar imagen, aviso de imagen remota
   'files.markdown.image.failed': 'No se pudo cargar la imagen',
-  'files.markdown.image.remote': 'Las imágenes remotas no se muestran — haga clic para abrirlas en el navegador',
   'files.markdown.renderError': 'No se pudo mostrar este documento',
   // MarkdownSplit.tsx — los tres botones de modo de la barra de herramientas, el divisor izquierda/derecha
   'files.markdown.mode.editor': 'Solo editor',

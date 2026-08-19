@@ -18,6 +18,11 @@
      사라지므로 그 사이에 둔다 */
   --rail-icon: #a3a3ae;
   --accent: #37b0c4; /* active marker and focus (separate from the account colour) */
+  /* Markdown preview links. Deliberately not --accent: that token is the active-marker/focus colour and
+     reads as UI chrome, while a link in prose is expected to look like a link. This is GitHub's own
+     dark-theme link colour, so a README looks the same here as on the page it was written for.
+     5.77:1 on --bg and 5.04:1 on --elevated — AA at both. */
+  --md-link: #4493f8;
   --ok: #79c98f; /* logged in */
   --ok-bg: #14301f;
   --status-bg: #0e6478; /* bottom status bar */
@@ -1142,7 +1147,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .md-preview li.md-task > input { margin-right: .5em; }
 .md-preview blockquote { border-left: 3px solid var(--line-soft); padding-left: 12px; opacity: .85; }
 .md-preview hr { border: 0; border-top: 1px solid var(--line-soft); margin: 1.5em 0; }
-.md-preview a { color: var(--accent); text-decoration: none; }
+.md-preview a { color: var(--md-link); text-decoration: none; }
 .md-preview a:hover { text-decoration: underline; }
 .md-preview img { max-width: 100%; height: auto; }
 .md-preview code { font-family: var(--mono); font-size: .9em;
@@ -1156,8 +1161,6 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .md-preview th, .md-preview td { border: 1px solid var(--line-soft); padding: 6px 10px; }
 .md-preview th { background: rgba(255, 255, 255, .05); font-weight: 600; }
 .md-img-failed, .md-img-loading { opacity: .55; font-style: italic; }
-.md-img-remote { background: none; border: 1px dashed var(--line); border-radius: 3px;
-  color: inherit; opacity: .7; cursor: pointer; padding: .1em .4em; font: inherit; }
 
 /* Code colors — the stable classes @lezer/highlight's classHighlighter attaches. oneDark palette,
    matching the file editor's colors so switching between edit and preview does not shift them. */
