@@ -805,6 +805,40 @@ export function registerIpc(
       }
     }
 
+    /** 이 자리를 지금 띄울 수 없다고 **사람에게** 알린다. 로그가 아니라 Gate 인 이유: 이 층의 실패는
+     *  "일이 실패했다"가 아니라 **"앱이 일을 시작하지 못했다"** 이고, 그 판단은 사람의 것이다.
+     *  Reviewer 슬라이스가 정한 규칙("Gate 는 돌릴 수 없을 때만 쓴다")이 정확히 이 경우다 — 계정이
+     *  없을 때가 이미 그렇게 처리되고 있으므로 같은 부류인 worker-start 실패를 다르게 다루지 않는다.
+     *
+     *  **되풀이를 멈추는 장치이기도 하다.** Gate 가 열리면 Task 가 blocked 로 가고 slotsToFill 은
+     *  ready 만 고르므로 그 자리는 더 이상 후보가 아니다. 그것이 없으면 진짜로 매번 실패하는 자리
+     *  (userData 경로에 & 가 들어가 launch 프롬프트가 깨지는 경우가 그렇다 — 위의 LAUNCH_FORBIDDEN
+     *  경고는 경고일 뿐 startup 을 막지 않는다)가 **바깥의 상태 변경마다 한 번씩 영원히** 다시 시도된다.
+     *  실패 롤백은 consecutiveFailures 를 올리지 않으므로 회로 차단이 대신 걸리는 일도 없다.
+     *
+     *  이 함수는 실패를 **알리는** 자리이지 실패를 만드는 자리가 아니므로 던지지 않는다. gate-create
+     *  도 setState 를 지나므로 같은 이유로 거부될 수 있고, 그것을 그대로 흘려보내면 이 함수를 부르게
+     *  만든 원래의 실패까지 함께 지워진다. */
+    const gateSlot = async (d: OrchServerDeps, taskId: string, reason: string): Promise<void> => {
+      // Gate 와 별개로 로그를 남긴다 — Gate 는 사용자가 읽는 것이고, 이 줄은 왜 그 Gate 가 열렸는지
+      // 나중에 되짚을 때 읽는 것이다.
+      orchLog(`scheduler: cannot start task=${taskId} — ${reason}`)
+      try {
+        const gated = await orchHandleCommand(d, { sessionId: UI_CALLER }, 'gate-create', {
+          task: taskId,
+          question: reason
+        })
+        // Gate 마저 거절되는 경우가 있다: gate-create 는 열린 Dispatch 가 있는 Task 를 거절하고
+        // (state.ts), dispatched 에서 blocked 로 가는 전이도 없다(types.ts 의 ALLOWED). 그 상태로
+        // 남는 자리는 ready 가 아니라서 slotsToFill 이 더는 고르지 않으므로 되풀이로는 이어지지
+        // 않지만, 사용자에게 남는 신호가 사라지므로 그 자리를 로그로 메운다.
+        if (gated.status >= 400)
+          orchLog(`scheduler: gate-create rejected task=${taskId} — ${JSON.stringify(gated.body)}`)
+      } catch (e) {
+        orchLog(`scheduler: gate-create failed task=${taskId} — ${String(e)}`)
+      }
+    }
+
     // 자동 진행. **setState 뒤에 매단다** — 새 Task 가 ready 가 되거나 자리가 비는 경로가 일곱이고
     // (task-create, worker_done, 검증 결과, 검토 결과, gate-resolve, worker-stop, task-update),
     // 명령마다 훅을 달면 하나를 빠뜨린다. 빠뜨렸을 때의 증상은 "Task 가 이유 없이 안 돈다"이고,
@@ -831,10 +865,19 @@ export function registerIpc(
         // 때만 지난다). 그래서 실패 → 롤백 → 같은 실패가 CLI 를 무한히 다시 띄운다. 한 활성화 안에서
         // 한 Task 는 한 번만 건드린다: 다음 기회는 다음 상태 변경이 주고, 그때는 정말로 달라진 것이
         // 있다.
+        //
+        // **아래 gateSlot 이 생겼다고 이것이 남아돌지는 않는다.** Gate 가 열리면 Task 가 blocked 로
+        // 가서 그 자리가 후보에서 빠지지만, gate-create 자체가 거절되거나 던지는 경우(그 이유는
+        // gateSlot 에 적었다)에는 Task 가 ready 그대로 남는다. 그 경우에 회전을 막는 것은 이것뿐이다.
         const attempted = new Set<string>()
         do {
           scheduleAgain = false
           if (!orch) return
+          // 꺼져 있으면 곧바로 나간다. **판정의 두 번째 사본이 아니다** — 권위는 그대로
+          // handleCommand 에 있고(그쪽이 409 conflict 로 거절한다), 여기 있는 이유는 값을 아끼는
+          // 것뿐이다: 꺼진 채로 저장이 일어날 때마다 슬롯 수만큼 로그가 쌓이는데 orchLog 는 메인
+          // 스레드의 동기 appendFileSync 다. 아래 slots.length === 0 조기 탈출과 같은 성격이다.
+          if (!orch.deps.enabled()) return
           const slots = slotsToFill(orch.deps.getState()).filter((s) => !attempted.has(s.taskId))
           // 띄울 자리가 없으면 계정 조회까지 가지 않는다. 이 함수는 **모든 저장마다** 불리고 그
           // 대부분은 띄울 것이 없는 저장이다 — 아래 조회에 계정마다 파일(macOS 에서는 Keychain)
@@ -853,38 +896,39 @@ export function registerIpc(
           const loggedIn = new Set(loggedInIds.filter((id): id is string => id !== null))
           for (const slot of slots) {
             attempted.add(slot.taskId)
-            const accountId = defaultAccountIdOf(slot.provider, accounts, loggedIn)
-            if (!accountId) {
-              // 조용히 넘기면 Run 이 이유 없이 서 있다 — 이 슬라이스가 없애려는 증상 그대로다.
-              // Reviewer 슬라이스가 "쓸 수 있는 다른 provider 계정이 없다"에 내린 것과 같은 판단이다.
-              const gated = await orchHandleCommand(
+            // 슬롯 하나의 실패는 **그 슬롯에서 멈춘다.** 거절(status >= 400)과 예외는 여기서 같은
+            // 뜻이다 — "이 자리는 지금 못 뜬다" — 이므로 같은 곳으로 보낸다. handleCommand 는 실제로
+            // 던진다: 그 안의 setState 가 store.save 의 tmp+rename 을 지나고, 디스크가 찼거나
+            // Windows 에서 rename 이 잠기면 거부된다. 잡지 않으면 그 예외가 이 for 를 뚫고 나가
+            // **남은 슬롯이 통째로 버려진다** — 상관없는 다른 프로젝트의 Run 이 남의 실패 때문에
+            // 서 있게 되고, 하나의 문제가 전부를 세우지 않는다는 이 루프의 전제가 거짓이 된다.
+            try {
+              const accountId = defaultAccountIdOf(slot.provider, accounts, loggedIn)
+              if (!accountId) {
+                // 조용히 넘기면 Run 이 이유 없이 서 있다 — 이 슬라이스가 없애려는 증상 그대로다.
+                // Reviewer 슬라이스가 "쓸 수 있는 다른 provider 계정이 없다"에 내린 것과 같은 판단이다.
+                await gateSlot(
+                  orch.deps,
+                  slot.taskId,
+                  `${slot.provider} 계정에 로그인되어 있지 않아 이 Task 를 시작할 수 없습니다`
+                )
+                continue
+              }
+              const reply = await orchHandleCommand(
                 orch.deps,
                 { sessionId: UI_CALLER },
-                'gate-create',
-                {
-                  task: slot.taskId,
-                  question: `${slot.provider} 계정에 로그인되어 있지 않아 이 Task 를 시작할 수 없습니다`
-                }
+                'worker-start',
+                { task: slot.taskId, agent: slot.provider, account: accountId, worktree: 'current' }
               )
-              // Gate 도 열리지 않았으면 사용자에게 남는 신호가 하나도 없다. 그 자리를 로그로 메운다.
-              if (gated.status >= 400)
-                orchLog(
-                  `scheduler: gate-create rejected task=${slot.taskId} — ${JSON.stringify(gated.body)}`
+              if (reply.status >= 400)
+                await gateSlot(
+                  orch.deps,
+                  slot.taskId,
+                  `이 Task 를 시작하지 못했습니다: ${JSON.stringify(reply.body)}`
                 )
-              continue
+            } catch (e) {
+              await gateSlot(orch.deps, slot.taskId, `이 Task 를 시작하지 못했습니다: ${String(e)}`)
             }
-            const reply = await orchHandleCommand(
-              orch.deps,
-              { sessionId: UI_CALLER },
-              'worker-start',
-              { task: slot.taskId, agent: slot.provider, account: accountId, worktree: 'current' }
-            )
-            // 던지지 않고 로그만 남긴다 — 하나가 거절되었다고 나머지 자리까지 비워 두면 Run 하나의
-            // 문제가 전부를 세운다. 판정에서 이미 걸러졌어야 하는 경우이므로 로그가 곧 신호다.
-            if (reply.status >= 400)
-              orchLog(
-                `scheduler: worker-start rejected task=${slot.taskId} — ${JSON.stringify(reply.body)}`
-              )
           }
         } while (scheduleAgain)
       } finally {
