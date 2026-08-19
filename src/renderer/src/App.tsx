@@ -1622,7 +1622,7 @@ export default function App(): React.JSX.Element {
    *  **한 번은 일어났다.** 프로젝트가 없을 때도 Jobs 사이드바의 빈 상태는 그려지고(`setOrchSnapshot(currentProject === null ? { runs: [] } : null)` 이
    *  orchSnapshot 을 `{ runs: [] }` 로 채운다) 그 안의 "+ 새 작업" 버튼이 가드 없이 이 값을 세운
    *  적이 있었다 — 그때 이 값은 "프로젝트를 잃어 조용히 닫힌 것"이 아니었다: 모달을 그릴 자리가
-   *  없을 뿐 이 값 자체는 true 로 남아 modalOpenRef 체인에 걸리고(:710 의 가드), 전역 키보드
+   *  없을 뿐 이 값 자체는 true 로 남아 modalOpenRef 체인에 걸리고(onKey 의 `modalOpenRef.current || isConfirmOpen()` 가드), 전역 키보드
    *  단축키가 아무 안내도 없이 전부 죽었다. 그리고 나중에 프로젝트를 열면 아무도 누르지 않은
    *  모달이 그제서야 튀어나왔다. 그 경로를 이전 리뷰는 "stickyRoot 는 한 번 정해지면 null 로
    *  돌아가지 않는다"는 이유로 도달 불가능이라 판단했지만, 새로 설치한 상태의 stickyRoot 는
@@ -3087,7 +3087,7 @@ export default function App(): React.JSX.Element {
       )}
       {/* currentProject 가 있을 때만 그린다 — 없으면 run-create 에 넘길 cwd 가 없어 만들 자리가
           없다. **Jobs 사이드바 자체는 currentProject 없이도 열린다** — 프로젝트가 없으면
-          orchSnapshot 이 `{ runs: [] }` 로 채워져(:1870 부근) 빈 상태가 그려진다. "프로젝트 없이
+          orchSnapshot 이 `{ runs: [] }` 로 채워져(그 effect 의 `currentProject === null ? { runs: [] } : null`) 빈 상태가 그려진다. "프로젝트 없이
           이 값이 true 가 되는" 사고는 그 빈 상태의 "+ 새 작업" 버튼과 onNewRun 콜백 쪽에서 이미
           막아 두었다(JobsView 의 hasProject, 바로 위 onNewRun) — currentProject 없이는 newRunOpen
           자체가 true 가 되지 않으므로 이 조건은 실제로는 걸리지 않지만, 렌더 자리를 currentProject

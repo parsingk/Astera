@@ -83,7 +83,7 @@ export function buildSpecFile(a: {
   taskId: string
   dispatchId: string
   /** True when this dispatch runs in its own worktree, not the project folder (startWorker derives
-   *  it from `!isSamePath(cwd, a.runCwd)` at its call site below (:402) — see the comment there for
+   *  it from `!isSamePath(cwd, a.runCwd)` at its call site below — see the comment there for
    *  why the derivation lives at that one call site and not here too). **Not** `a.worktree !==
    *  'current'` — that was the original formula, and it is wrong for a --terminal reuse: the
    *  --terminal branch sets cwd to a.terminalCwd regardless of what a.worktree says (server.ts's
