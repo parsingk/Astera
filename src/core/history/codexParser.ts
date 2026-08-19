@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import type { TranscriptMessage } from '../types'
-import { toTitle } from './parser'
+import { lastTurns, PREVIEW_TURNS, toTitle } from './parser'
 
 /** Extracts the session uuid from a codex rollout filename (rollout-<ts>-<uuid>.jsonl) */
 export const ROLLOUT_UUID_RE = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i
@@ -148,21 +148,18 @@ export async function parseCodexTail(
   }
 }
 
-/** Full (capped) parse for the preview (mirrors parseTranscriptPreview in parser.ts) */
+/** 미리보기용 파싱 — parseTranscriptPreview(parser.ts)와 **같은 규칙이어야 한다.** 두 provider 의
+ *  미리보기가 서로 다른 범위를 보여 주면 같은 화면이 계정에 따라 다르게 읽힌다. 그래서 턴을 자르는
+ *  일은 lastTurns 하나가 하고 여기서 되풀이하지 않는다. */
 export async function parseCodexPreview(
   filePath: string,
-  maxMessages = 200
+  maxTurns = PREVIEW_TURNS
 ): Promise<{ messages: TranscriptMessage[]; truncated: boolean }> {
   const messages: TranscriptMessage[] = []
-  let truncated = false
   const stream = createReadStream(filePath, { encoding: 'utf8' })
   const rl = createInterface({ input: stream })
   try {
     for await (const raw of rl) {
-      if (messages.length >= maxMessages) {
-        truncated = true
-        break
-      }
       const obj = parseLine(raw)
       if (!obj) continue
       const msg = eventMessage(obj)
@@ -178,5 +175,5 @@ export async function parseCodexPreview(
     rl.close()
     stream.destroy()
   }
-  return { messages, truncated }
+  return lastTurns(messages, maxTurns)
 }

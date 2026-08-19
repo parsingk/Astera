@@ -83,6 +83,21 @@ describe('parseCodexTail', () => {
 })
 
 describe('parseCodexPreview', () => {
+  // parser.ts 의 parseTranscriptPreview 와 **같은 규칙**이어야 한다 — 두 provider 의 미리보기가
+  // 서로 다른 범위를 보여 주면 같은 화면이 계정에 따라 다르게 읽힌다
+  it('턴이 많으면 최근 10 턴만 남기고 truncated=true', async () => {
+    const lines: string[] = [metaLine]
+    for (let i = 1; i <= 12; i++) {
+      lines.push(user(`q${i}`))
+      lines.push(agent(`a${i}`))
+    }
+    const { messages, truncated } = await parseCodexPreview(await write('many.jsonl', lines))
+    expect(truncated).toBe(true)
+    expect(messages[0].text).toBe('q3')
+    expect(messages.at(-1)?.text).toBe('a12')
+    expect(messages).toHaveLength(20)
+  })
+
   it('user/agent 메시지만 순서대로 role 매핑하고 래퍼·노이즈는 제외한다', async () => {
     const p = await write('f.jsonl', [metaLine, user('<user_instructions>x'), user('q1'), noise, agent('a1')])
     const { messages, truncated } = await parseCodexPreview(p)

@@ -548,7 +548,7 @@ export const ja: Catalog = {
   'history.menu.hide': '非表示にする',
   'history.project.noSessions': 'セッションなし',
   'history.entry.preview': 'プレビュー',
-  'history.preview.truncated': '(先頭のみ)',
+  'history.preview.truncated': '(最近の会話のみ)',
   'history.preview.me': '自分',
   'history.resume.folderMissingTitle': 'プロジェクトフォルダなし',
   'history.resume.folderMissingBody':

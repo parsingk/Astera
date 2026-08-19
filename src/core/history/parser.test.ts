@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { parseTranscriptMeta, parseTranscriptPreview, parseTranscriptTail } from './parser'
+import {
+  lastTurns,
+  parseTranscriptMeta,
+  parseTranscriptPreview,
+  parseTranscriptTail
+} from './parser'
 
 let tmp: string
 beforeEach(async () => {
@@ -311,7 +316,54 @@ describe('parseTranscriptTail', () => {
   })
 })
 
+describe('lastTurns', () => {
+  const u = (t: string) => ({ role: 'user' as const, text: t })
+  const a = (t: string) => ({ role: 'assistant' as const, text: t })
+
+  it('턴이 상한 이하면 그대로 두고 truncated=false', () => {
+    const msgs = [u('q1'), a('a1'), u('q2'), a('a2')]
+    expect(lastTurns(msgs, 10)).toEqual({ messages: msgs, truncated: false })
+  })
+
+  it('상한을 넘으면 마지막 상한 개 턴만 남기고 truncated=true', () => {
+    const msgs = [u('q1'), a('a1'), u('q2'), a('a2'), u('q3'), a('a3')]
+    expect(lastTurns(msgs, 2)).toEqual({
+      messages: [u('q2'), a('a2'), u('q3'), a('a3')],
+      truncated: true
+    })
+  })
+
+  // 턴의 시작이 user 이므로, 남기는 첫 user 앞의 assistant 는 함께 떨어진다 — 그것이 턴의 뜻이다
+  it('남기는 첫 user 앞의 assistant 는 떨어진다', () => {
+    const msgs = [u('q1'), a('버려질 답'), u('q2')]
+    expect(lastTurns(msgs, 1)).toEqual({ messages: [u('q2')], truncated: true })
+  })
+
+  it('user 메시지가 없으면 아무것도 자르지 않는다', () => {
+    const msgs = [a('a1'), a('a2')]
+    expect(lastTurns(msgs, 1)).toEqual({ messages: msgs, truncated: false })
+  })
+})
+
 describe('parseTranscriptPreview', () => {
+  // 방향이 뒤집힌 자리다. 예전에는 앞에서부터 200 개를 모아 "(앞부분만)" 을 보여 줬는데, 긴 세션에서
+  // 그것은 몇 시간 전 이야기라 "무엇을 하고 있었나"에 답하지 못했다.
+  it('턴이 많으면 **최근** 10 턴만 남기고 truncated=true', async () => {
+    const lines: string[] = []
+    for (let i = 1; i <= 12; i++) {
+      lines.push(line({ type: 'user', message: { role: 'user', content: `q${i}` } }))
+      lines.push(
+        line({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: `a${i}` }] } })
+      )
+    }
+    const preview = await parseTranscriptPreview(await write('many.jsonl', lines))
+    expect(preview.truncated).toBe(true)
+    // 12 턴 중 마지막 10 턴 → q3 부터
+    expect(preview.messages[0]).toEqual({ role: 'user', text: 'q3', timestamp: undefined })
+    expect(preview.messages.at(-1)).toEqual({ role: 'assistant', text: 'a12', timestamp: undefined })
+    expect(preview.messages).toHaveLength(20)
+  })
+
   it('user/assistant 텍스트만 순서대로 모은다', async () => {
     const file = await write('p.jsonl', [
       line({ type: 'user', message: { role: 'user', content: '질문' } }),
