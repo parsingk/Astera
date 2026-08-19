@@ -51,7 +51,14 @@ function isRealUserText(text: string): boolean {
 // folder-slug (D--…) noise.
 const NON_CONVERSATION_FIRST_TYPES = new Set([
   'queue-operation',
-  'ai-title',
+  // **'ai-title' 은 여기 있었고, 실측이 빼게 했다.** 이 저장소의 히스토리 디렉터리를 전수 조사한
+  // 결과: queue-operation 이 첫 줄인 파일 834 개(20KB~151KB, HUD 플러그인이 만든다), last-prompt
+  // 37 개, mode 2 개, 그리고 **ai-title 은 딱 하나였는데 28.6MB 짜리 실제 대화**였다. 제목 기록은
+  // 첫 사용자 줄보다 먼저 흘러나올 수 있고(그 하나가 그랬다), 그것을 헬퍼로 판정해 사람이 몇 시간
+  // 쓴 세션을 목록에서 통째로 뺐다.
+  //
+  // 아래 둘은 같은 경합에 걸릴 수 있지만 반례를 아직 재지 못했다(이 디렉터리에 그것으로 시작하는
+  // 파일이 0 개다). 반례가 나오면 같은 이유로 뺀다.
   'agent-name',
   'bridge-session'
 ])

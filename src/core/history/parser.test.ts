@@ -54,19 +54,48 @@ describe('parseTranscriptMeta', () => {
     expect(meta.isSidechain).toBe(false)
   })
 
-  it('첫 줄이 ai-title / agent-name / bridge-session이면 isHelper=true (비대화 기록 파일)', async () => {
-    const aiTitle = await write('ai-title.jsonl', [
-      line({ type: 'ai-title', title: '제목생성' }),
-      line({ type: 'agent-name', name: '서브에이전트' })
-    ])
+  it('첫 줄이 agent-name / bridge-session이면 isHelper=true (비대화 기록 파일)', async () => {
     const bridge = await write('bridge.jsonl', [
       line({ type: 'bridge-session' }),
       line({ type: 'bridge-session' })
     ])
     const agent = await write('agent.jsonl', [line({ type: 'agent-name', name: 'x' })])
-    expect((await parseTranscriptMeta(aiTitle)).isHelper).toBe(true)
     expect((await parseTranscriptMeta(bridge)).isHelper).toBe(true)
     expect((await parseTranscriptMeta(agent)).isHelper).toBe(true)
+  })
+
+  // 이 테스트는 이전에 반대를 못박고 있었다(ai-title 이 첫 줄이면 isHelper=true). 실측이 그것을
+  // 뒤집었다 — 이 저장소를 만드는 데 쓰인 28MB 세션이 정확히 그 모양이었고, 목록에서 통째로
+  // 빠져 있었다. 제목 기록은 첫 사용자 줄보다 먼저 흘러나올 수 있다.
+  it('첫 줄이 ai-title 이어도 대화가 있으면 isHelper=false (제목 기록이 먼저 나온 실제 세션)', async () => {
+    const file = await write('real.jsonl', [
+      line({ type: 'ai-title', title: '제목생성' }),
+      line({
+        type: 'user',
+        sessionId: 'real-1',
+        cwd: 'D:\\proj',
+        message: { role: 'user', content: '이건 실제 대화다' }
+      }),
+      line({ type: 'assistant', message: { role: 'assistant', content: '네' } })
+    ])
+    const meta = await parseTranscriptMeta(file)
+    expect(meta.isHelper).toBe(false)
+    expect(meta.sessionId).toBe('real-1')
+    expect(meta.title).toBe('이건 실제 대화다')
+  })
+
+  it('첫 줄이 queue-operation 이면 대화가 있어도 isHelper=true 그대로다', async () => {
+    const file = await write('hud.jsonl', [
+      line({ type: 'queue-operation', sessionId: 'hud-1' }),
+      line({
+        type: 'user',
+        sessionId: 'hud-1',
+        cwd: 'D:\\proj',
+        message: { role: 'user', content: '주제를 한 줄로' }
+      }),
+      line({ type: 'assistant', message: { role: 'assistant', content: '한 줄' } })
+    ])
+    expect((await parseTranscriptMeta(file)).isHelper).toBe(true)
   })
 
   it('isSidechain:true 줄이 있으면 isSidechain=true (레거시 사이드체인)', async () => {
