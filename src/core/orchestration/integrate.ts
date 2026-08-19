@@ -98,10 +98,12 @@ export function worktreeDepsOf(s: OrchState, taskId: string): string[] {
  *  거기서 나온 거짓 양성은 통합 Task 가 **영원히 만들어지지 않는다**는 뜻이 된다(조용한 정지).
  *
  *  `parentId` 는 이 저장소에서 지금까지 쓰기만 하고 읽는 곳이 없었다(state.ts 가 존재만 검증한다).
- *  그래서 이 판정이 그 필드의 첫 독자다. 코디네이터 LLM 도 `task-create --parent` 로 이 필드를 넣을
- *  수 있으므로 완벽한 표식은 아니다 — 그 경우 그 하위 Task 를 통합 Task 로 잘못 보고 새 통합 Task 를
- *  만들지 않는다. 그 대가를 받는 이유는 반대 방향의 실패가 훨씬 나쁘기 때문이다: 표식이 없으면 저장
- *  한 번마다 Task 가 하나씩 늘어난다. */
+ *  그래서 이 판정이 그 필드의 첫 독자다. 첫 독자가 되면서 그 필드는 **앱의 것으로 예약된다** —
+ *  오케스트레이션 가이드 §4.2 에서 `--parent` 를 문법에서 빼고 그 예약을 적었다(server.ts 는 계속
+ *  그 인자를 받는다: 제거가 아니라 광고 중단이다. 이 변경 전까지 아무도 읽지 않던 필드라 되돌아갈
+ *  동작이 없다). 그래도 코디네이터가 그 인자를 쓰면 그 하위 Task 를 통합 Task 로 잘못 보고 새
+ *  통합 Task 를 만들지 않는다 — 그 대가를 받는 이유는 반대 방향의 실패가 훨씬 나쁘기 때문이다:
+ *  표식이 없으면 저장 한 번마다 Task 가 하나씩 늘어난다. */
 export function integrationTaskFor(s: OrchState, taskId: string): Task | undefined {
   return s.tasks.find((t) => t.parentId === taskId)
 }

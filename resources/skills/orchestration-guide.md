@@ -187,7 +187,7 @@ starts.
 ### 4.2 Task and Gate
 
 ```
-task-create --title <s> --spec <s|-> [--deps <json_array>] [--parent <tsk>] [--validate <configId>] [--review] [--json]
+task-create --title <s> --spec <s|-> [--deps <json_array>] [--validate <configId>] [--review] [--json]
 task-list [--run <run>] [--status <s>] [--ready] [--brief] [--json]
 task-update --id <tsk> --status <s> [--result <s|->] [--json]   # bypasses the transition table — see section 8
 dispatch-show --task <tsk> [--json]        # that Task's Dispatch history as an array (retries and the app's review Dispatch included)
@@ -204,6 +204,17 @@ gate-list [--task <tsk>] [--status <s>] [--json]
 - The target flag for `task-update` is **`--id`**, not `--task` — passing `--task` yields
   `400 --id is required`.
 - Omitting `--title` fills it from the first line of the spec (cut at 80 characters).
+- **A Task's `parentId` is reserved for the app, which is why `--parent` is no longer listed above.**
+  `task-create` still accepts it, so nothing you already have breaks, but the app now reads that field
+  as one specific marker: the integration Task it creates for itself when finished worktrees have to be
+  merged back into the project folder before the next Task can start. Setting it makes the app misread
+  your Task as that marker, and three things go wrong at once — it skips the merge step before starting
+  that Task, it starts it in the project folder instead of its own worktree (the one combination the
+  placement rule forbids, because parallel workers then overwrite each other), and it counts as the
+  integration Task that already exists, so the real one is never created and the Task waiting on the
+  merge waits forever. **This only reaches Runs the app drives itself** — the scheduler ignores every
+  other Run — but `task-create` with no explicit run attaches to the most recently created Run, which
+  can be one of those. Use `--deps` to say what a Task follows; that is what the graph is built from.
 - **`--validate <configId>` makes this Task's completion depend on a run configuration**, not just the
   worker's own report — the id comes from `run-configs` (4.1). Omit it and nothing changes:
   `worker_done --outcome succeeded` completes the Task exactly as before. With it, that same report

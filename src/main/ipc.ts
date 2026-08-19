@@ -64,7 +64,7 @@ import { nameForTask } from '../core/worktrees/naming'
 import { listBranches, detectBaseRef } from '../core/worktrees/git'
 import { removeWorktree } from '../core/worktrees/remove'
 import { listWithStatus } from '../core/worktrees/list'
-import { git, repoRoot, gitVersionAtLeast, listGitWorktrees } from '../core/worktrees/git'
+import { git, repoRoot, gitDir, gitVersionAtLeast, listGitWorktrees } from '../core/worktrees/git'
 import { t, isLang, type MessageKey } from '../core/i18n'
 import type { LangPreference } from '../core/i18n'
 import { pickInitialLang } from '../core/i18n/locale'
@@ -863,7 +863,69 @@ export function registerIpc(
      *  상태로 남기지 않는다.** 아래의 순서(미리 검사 → 진짜 병합 → 실패하면 되돌리고 되돌아갔는지
      *  확인)가 전부 그것을 위한 것이다. */
     const integrateWorktrees = async (runCwd: string, paths: string[]): Promise<Integration> => {
-      // 1. **추적되는 변경이 남아 있으면 아무것도 하지 않는다.** 병합은 작업 트리에 쓰므로, 그 위에
+      // 1. **저장소가 무언가의 중간이면 아무것도 하지 않는다.** 아래 2의 porcelain 검사는 경로 항목만
+      //    내므로 브랜치·상태를 전혀 말하지 않는다 — 작업 트리가 깨끗한 채로 rebase·bisect 중인
+      //    저장소와 분리된 HEAD 는 **빈 출력을 낸다.** 그것을 안전으로 읽으면 앱이 그 위에 병합을 건다.
+      //
+      //    **git 이 막아 주지 않는다.** 임시 저장소에서 실측한 것이다(이 자리에는 테스트가 없다):
+      //    bisect 중에도, `rebase -i` 가 break 에서 멈춘 상태에서도 `git merge` 는 **성공한다**
+      //    (exit 0, "Merge made by the 'ort' strategy"). 그 병합 커밋은 분리된 HEAD 위에 생기고 앱은
+      //    "합쳤다"고 보고한다. 사용자가 브랜치를 체크아웃하거나 `rebase --continue|--abort` 를 하는
+      //    순간 그 커밋은 도달 불가가 되고, bisect·rebase 세션은 깨진다. 일 자체는 워크트리 브랜치에
+      //    남으므로 영구 손실은 아니지만, **사용자의 저장소를 이상한 상태로 두지 않는다**는 이 함수의
+      //    규칙에 정면으로 걸린다.
+      //
+      //    두 가지를 함께 묻는다. 하나로는 못 덮기 때문이다.
+      //    - **분리된 HEAD 는 `symbolic-ref --quiet HEAD` 의 실패**로 본다(listBranches 가 이미 그렇게
+      //      묻는다). 이것 하나가 bisect·rebase(대화형이든 아니든 HEAD 를 분리한다)·순수 분리 HEAD 를
+      //      함께 덮는다. `status --porcelain=v2 --branch` 의 헤더로도 분리는 알 수 있지만 그 헤더는
+      //      rebase·bisect·cherry-pick 을 전혀 알려주지 않아 어차피 두 번째 질문이 필요하다.
+      //    - **HEAD 를 분리하지 않는 진행 중 작업은 git 디렉터리의 표시 파일**로 본다. cherry-pick·
+      //      revert·am·병합은 브랜치 위에 머무르므로 위의 질문에 걸리지 않고, 그 대부분은 충돌이나
+      //      staged 변경을 남겨 2가 잡지만 전부는 아니다 — 빈 커밋에서 멈춘 cherry-pick 은 작업
+      //      트리가 깨끗한 채 CHERRY_PICK_HEAD 만 남는다. git 자신도 wt_status_get_state 에서 같은
+      //      파일들을 본다.
+      //
+      //    표시 파일의 자리를 `<runCwd>/.git` 으로 짐작하지 않는다 — 워크트리에서 `.git` 은 파일이고
+      //    실제 디렉터리는 <주 저장소>/.git/worktrees/<이름> 이다. 그리고 이 상태들은 워크트리마다
+      //    따로다. gitDir()(worktrees/git.ts)이 `--absolute-git-dir` 로 그 자리를 답한다.
+      const head = await git(['symbolic-ref', '--quiet', 'HEAD'], { cwd: runCwd })
+      if (!head.ok)
+        return {
+          kind: 'human',
+          reason:
+            `프로젝트 폴더(${runCwd})의 HEAD 가 브랜치를 가리키지 않아 워크트리를 합치지 않았습니다` +
+            `(분리된 HEAD — bisect 나 rebase 중일 수도 있습니다). 그 위에 병합하면 만든 커밋이 어느 ` +
+            `브랜치에도 남지 않고, 진행 중인 작업이 있다면 그것이 깨집니다. 브랜치를 체크아웃한 뒤 ` +
+            `이 Gate 를 해결해 주세요.`
+        }
+      const dir = await gitDir(runCwd)
+      if (!dir)
+        return {
+          kind: 'human',
+          reason: `프로젝트 폴더(${runCwd})의 git 디렉터리를 찾을 수 없어 워크트리를 합치지 못했습니다.`
+        }
+      // 표시 파일과 사람에게 보일 이름. rebase-apply 는 `git am` 도 쓴다.
+      const busy = (
+        [
+          ['rebase-merge', 'rebase'],
+          ['rebase-apply', 'rebase 또는 am'],
+          ['BISECT_LOG', 'bisect'],
+          ['CHERRY_PICK_HEAD', 'cherry-pick'],
+          ['REVERT_HEAD', 'revert'],
+          ['MERGE_HEAD', '병합']
+        ] as const
+      ).find(([marker]) => existsSync(path.join(dir, marker)))
+      if (busy)
+        return {
+          kind: 'human',
+          reason:
+            `프로젝트 폴더에서 ${busy[1]} 작업이 진행 중(${busy[0]})이어서 워크트리를 합치지 ` +
+            `않았습니다. 그 중간에 병합하면 진행 중인 작업이 깨집니다 — 끝내거나 중단한 뒤 이 Gate 를 ` +
+            `해결해 주세요.`
+        }
+
+      // 2. **추적되는 변경이 남아 있으면 아무것도 하지 않는다.** 병합은 작업 트리에 쓰므로, 그 위에
       //    사용자가 저장하지 않은 일이 있으면 그것을 위험에 놓는다. 그 일을 어떻게 할지는 사람의
       //    판단이고 에이전트가 대신 정할 것이 아니므로 Gate 다("돌릴 수 없을 때만 Gate" 규칙 그대로다).
       //
@@ -892,7 +954,7 @@ export function registerIpc(
             `여기에 세지 않습니다).`
         }
 
-      // 2. 각 워크트리의 브랜치를 알아낸다. `git worktree list` 한 번으로 경로 → 브랜치가 전부 나온다.
+      // 3. 각 워크트리의 브랜치를 알아낸다. `git worktree list` 한 번으로 경로 → 브랜치가 전부 나온다.
       //    listGitWorktrees 는 git() 과 달리 **실패하면 던진다** — 그래서 감싼다.
       let rows: { path: string; branch: string | null }[]
       try {
@@ -919,7 +981,7 @@ export function registerIpc(
           worktrees: targets
         }
 
-      // 3. merge-tree 가 없으면 **미리 검사할 수 없다.** 검사하지 못하는 것을 낙관하지 않는다 —
+      // 4. merge-tree 가 없으면 **미리 검사할 수 없다.** 검사하지 못하는 것을 낙관하지 않는다 —
       //    낙관해서 진짜 병합을 걸면 충돌할 때 `git merge --abort` 로 되돌려야 하고, 그 되돌리기까지
       //    실패하면 사용자의 저장소가 충돌 상태로 남는다. 그래서 곧바로 에이전트에게 넘긴다.
       if (!(await gitVersionAtLeast(2, 38)))
@@ -930,7 +992,7 @@ export function registerIpc(
           worktrees: targets
         }
 
-      // 4. 하나씩 **미리 검사한 바로 뒤에 합친다.** 전부 검사하고 전부 합치는 순서가 아닌 이유는
+      // 5. 하나씩 **미리 검사한 바로 뒤에 합친다.** 전부 검사하고 전부 합치는 순서가 아닌 이유는
       //    merge-tree 의 기준이 그때의 HEAD 라는 것이다 — 첫 병합이 커밋을 만들면 HEAD 가 움직이고,
       //    그 앞에서 통과했던 두 번째 검사는 낡은 사실이 된다(첫 병합이 가져온 변경 때문에 충돌할 수
       //    있다). 그러면 진짜 병합이 실패하고, 되돌리기에 기대는 바로 그 경로로 들어간다.
@@ -941,8 +1003,11 @@ export function registerIpc(
       //
       //    병합 대상은 `HEAD` 다. mergeTarget()(remove.ts)을 쓰지 않는 이유는 그 함수가
       //    branch.<b>.base → origin/HEAD 를 고를 수 있어서다 — 원격 ref 에 합치는 것은 다른 일이다.
-      //    이름(`rev-parse --abbrev-ref HEAD`)을 따로 얻지 않는 이유는 `HEAD` 가 같은 것을 더 정확히
-      //    가리키기 때문이다: 같은 이름의 태그와 헷갈릴 일이 없고, 분리된 HEAD 에서도 답이 있다.
+      //    이름(`rev-parse --abbrev-ref HEAD`)을 따로 얻지 않는 이유는 **1에서 HEAD 가 브랜치를
+      //    가리킴을 이미 보장했으므로** 여기서 `HEAD` 가 곧 "사용자가 지금 서 있는 로컬 브랜치"이고,
+      //    그 이름을 다시 문자열로 받아 오면 같은 이름의 태그와 헷갈릴 여지만 생기기 때문이다
+      //    (`rev-parse --abbrev-ref HEAD` 는 분리된 HEAD 에서 브랜치 이름이 아니라 `HEAD` 를
+      //    돌려주므로, 1의 검사가 없다면 그 문자열을 대상으로 삼는 것 자체가 결함이 된다).
       for (const target of targets) {
         // 같은 이름의 태그가 브랜치보다 먼저 잡히는 것을 막으려고 전체 ref 를 쓴다(remove.ts 와 같다)
         const ref = `refs/heads/${target.branch}`
@@ -950,7 +1015,19 @@ export function registerIpc(
         if (!probe.ok)
           return {
             kind: 'agent',
-            reason: `git merge-tree says ${target.branch} does not merge cleanly into the branch this folder is on`,
+            // **0 이 아닌 것에는 두 가지가 섞여 있다** — 충돌과 "명령이 아예 못 돌았다"(없는 ref,
+            // 커밋이 없는 HEAD …). git() 은 ok 하나만 주므로 종료 코드로는 가를 수 없고, 임시
+            // 저장소에서 실측한 결과 둘 다 exit 1 이었다(오류가 128 이라는 보장도 없다). 대신
+            // **stderr 가 갈라 준다**: 충돌일 때 merge-tree 는 결과를 stdout 에 쓰고 stderr 를
+            // 비우며(273바이트/0바이트), 없는 ref 에서는 stdout 이 비고 stderr 에
+            // "merge-tree: refs/heads/nope - not something we can merge" 가 온다.
+            //
+            // 가는 곳은 어느 쪽이든 에이전트다. 가르는 것은 **문장**이다: 실제로는 ref 가 잘못된
+            // 것인데 spec 의 첫 문장이 "충돌한다"이면 에이전트는 없는 충돌을 찾아 헤매다 결국
+            // `git merge` 를 돌려 진짜 오류를 다시 발견해야 한다. 앱이 아는 것을 그대로 넘긴다.
+            reason: probe.stderr
+              ? `the app could not test whether ${target.branch} merges into the branch this folder is on — git merge-tree failed: ${probe.stderr}`
+              : `git merge-tree says ${target.branch} does not merge cleanly into the branch this folder is on`,
             worktrees: targets
           }
         // `--no-edit` 는 편집기를 막는 것이다. 이 자리에는 사람이 없고, 편집기가 뜨면 그 git 프로세스는
