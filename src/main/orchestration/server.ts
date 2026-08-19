@@ -275,9 +275,23 @@ export async function handleCommand(
           deps.log?.(`project root resolution failed cwd=${given}: ${String(err)}`)
         }
       }
+      // getState is read again here, not the snapshot s taken on entry — resolveProjectRoot above
+      // is a real await (it reads files and shells out to git), so by the time this runs, s is
+      // stale. createRun(s, ...) would commit against that stale snapshot and silently overwrite
+      // whatever landed during the await — a Dispatch opened in that window would disappear from
+      // the committed state while its session keeps running, orphaning the worker. Every other
+      // command with an await between its entry read and its commit already re-reads (worker-start
+      // below after deps.startWorker, handleExit after deps.probeLimit, send after deps.probeLimit,
+      // reset's wipe() after deps.backup) — this is the same fix, just late: run-create used to be
+      // the one place in this switch that awaited and then committed against the entry snapshot
+      // anyway, because before this branch a second Run mid-await was rare enough not to matter.
+      // The scheduler added in this branch runs after every setState, and the sidebar's "+ 새 작업"
+      // button makes a person creating a second Run while workers are running ordinary, not rare —
+      // so the window this await always had is now one this app hits in normal use.
+      const latest = deps.getState()
       return commit(
         createRun(
-          s,
+          latest,
           {
             objective,
             cwd,

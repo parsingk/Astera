@@ -83,10 +83,16 @@ export function buildSpecFile(a: {
   taskId: string
   dispatchId: string
   /** True when this dispatch runs in its own worktree, not the project folder (startWorker derives
-   *  it from `worktree !== 'current'` — see the comment there for why the derivation lives at that
-   *  one call site and not here too). A worktree is merge material; an uncommitted change in it is
-   *  invisible to the merge and is thrown away with the worktree. The commit has to be the coding
-   *  agent's own act — a coding agent can end a turn without committing, and the app committing on
+   *  it from `!isSamePath(cwd, a.runCwd)` at its call site below (:396) — see the comment there for
+   *  why the derivation lives at that one call site and not here too). **Not** `a.worktree !==
+   *  'current'` — that was the original formula, and it is wrong for a --terminal reuse: the
+   *  --terminal branch sets cwd to a.terminalCwd regardless of what a.worktree says (server.ts's
+   *  default fills a.worktree with 'current' on that path), so a worktree session reused through
+   *  --terminal read as committing:false and shipped its work with no commit obligation at all —
+   *  a real defect this branch hit and fixed, not a hypothetical one. A worktree is merge material;
+   *  an uncommitted change in it is invisible to the merge and is thrown away with the worktree. The
+   *  commit has to be the coding agent's own act — a coding agent can end a turn without
+   *  committing, and the app committing on
    *  its behalf would be committing content it never reviewed. Requiring it through the spec is the
    *  same shape as the reporting obligation below: the app assembles the instruction, the worker
    *  cannot edit it out. */

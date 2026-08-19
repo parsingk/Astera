@@ -1615,8 +1615,18 @@ export default function App(): React.JSX.Element {
   /** NewRunModal 이 열려 있는지. currentProject 아래에 두는 것은 이 파일이 지켜 온 자리 규칙이다 —
    *  바로 아래 두 효과의 주석이 기록하듯, 이 파일은 currentProject 보다 위에서 그 값을 참조해 TDZ
    *  ReferenceError 로 죽은 전례가 있고(타입체크는 잡지 못한다) 그 사고를 되풀이하지 않으려는
-   *  자리다. currentProject 가 있을 때만 모달을 그리므로(아래 렌더) 이 값 자체는 프로젝트가 없어도
-   *  true 로 남을 수 있지만, 프로젝트를 잃으면 그릴 자리가 없어 조용히 닫힌 것과 같다. */
+   *  자리다. onNewRun 콜백(아래 JobsView 호출부)과 JobsView 의 hasProject 가드가 이제 이 값을
+   *  currentProject 없이는 절대 true 로 만들지 않으므로, "프로젝트가 없는데 열림" 은 정상 경로로는
+   *  일어나지 않는다.
+   *
+   *  **한 번은 일어났다.** 프로젝트가 없을 때도 Jobs 사이드바의 빈 상태는 그려지고(App.tsx:1870 이
+   *  orchSnapshot 을 `{ runs: [] }` 로 채운다) 그 안의 "+ 새 작업" 버튼이 가드 없이 이 값을 세운
+   *  적이 있었다 — 그때 이 값은 "프로젝트를 잃어 조용히 닫힌 것"이 아니었다: 모달을 그릴 자리가
+   *  없을 뿐 이 값 자체는 true 로 남아 modalOpenRef 체인에 걸리고(:710 의 가드), 전역 키보드
+   *  단축키가 아무 안내도 없이 전부 죽었다. 그리고 나중에 프로젝트를 열면 아무도 누르지 않은
+   *  모달이 그제서야 튀어나왔다. 그 경로를 이전 리뷰는 "stickyRoot 는 한 번 정해지면 null 로
+   *  돌아가지 않는다"는 이유로 도달 불가능이라 판단했지만, 새로 설치한 상태의 stickyRoot 는
+   *  처음부터 비어 있어 정확히 그 경로에 닿았다 — 그 판단은 틀렸다. */
   const [newRunOpen, setNewRunOpen] = useState(false)
 
   // 기록 모달이 열려 있는 동안 이벤트를 다시 읽는다. **이 자리에 있어야 한다** — 의존성 배열은
@@ -2348,6 +2358,11 @@ export default function App(): React.JSX.Element {
             ) : sidebarPane === 'jobs' ? (
               <JobsView
                 snapshot={orchSnapshot}
+                // 빈 상태의 "+ 새 작업" 버튼을 가리는 신호 — snapshot 만으로는 프로젝트가 없는
+                // 경우와 프로젝트가 있는데 Run 이 없는 경우를 구별할 수 없다(JobsView 의
+                // hasProject 주석). onNewRun 의 가드(아래)와 함께 newRunOpen 이 프로젝트 없이
+                // true 가 되는 두 갈래를 모두 막는다.
+                hasProject={!!currentProject}
                 // JobTask.sessionId only says main still has the session record, and main never drops
                 // one — SessionManager.kill flips the status and list() keeps exited sessions on
                 // purpose. closeSession, on the other hand, takes the tab out of this tree. So after a
@@ -2362,7 +2377,14 @@ export default function App(): React.JSX.Element {
                   // 여는 시점의 프로젝트를 runId 와 함께 든다 — 이 스냅샷을 준 프로젝트가 그것이다
                   if (currentProject) setOpenRun({ projectPath: currentProject, runId })
                 }}
-                onNewRun={() => setNewRunOpen(true)}
+                // currentProject 가 없으면 세우지 않는다 — hasProject 가 버튼 자체를 지우므로
+                // 정상 클릭으로는 이 가드에 닿지 않지만, 그 버튼을 세운 것이 바로 이 값을
+                // 가드 없이 세우는 사고였다(newRunOpen 선언부의 주석) — 그 원인을 한 군데(버튼)
+                // 가 아니라 값이 세워지는 자리에서도 막아, 나중에 이 콜백을 다른 데서 새로
+                // 부르더라도 같은 사고가 되풀이되지 않게 한다.
+                onNewRun={() => {
+                  if (currentProject) setNewRunOpen(true)
+                }}
               />
             ) : (
               <>
@@ -3064,7 +3086,12 @@ export default function App(): React.JSX.Element {
         />
       )}
       {/* currentProject 가 있을 때만 그린다 — 없으면 run-create 에 넘길 cwd 가 없어 만들 자리가
-          없다(JobsView 의 jobs 사이드바 자체도 currentProject 없이는 열리지 않는다). */}
+          없다. **Jobs 사이드바 자체는 currentProject 없이도 열린다** — 프로젝트가 없으면
+          orchSnapshot 이 `{ runs: [] }` 로 채워져(:1870 부근) 빈 상태가 그려진다. "프로젝트 없이
+          이 값이 true 가 되는" 사고는 그 빈 상태의 "+ 새 작업" 버튼과 onNewRun 콜백 쪽에서 이미
+          막아 두었다(JobsView 의 hasProject, 바로 위 onNewRun) — currentProject 없이는 newRunOpen
+          자체가 true 가 되지 않으므로 이 조건은 실제로는 걸리지 않지만, 렌더 자리를 currentProject
+          와 별개로 옮기지 않기 위해 남겨 둔다. */}
       {newRunOpen && currentProject && (
         <NewRunModal
           projectPath={currentProject}

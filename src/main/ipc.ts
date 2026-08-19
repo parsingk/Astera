@@ -1208,12 +1208,19 @@ export function registerIpc(
               // 두 가지를 정한다: 1 이면 프로젝트 폴더에서 차례대로, 2 이상이면 전부 자기 워크트리에서.
               // 병렬인데 한 폴더는 고를 수 있어서는 안 되는 조합이다 — 서로를 덮어쓴다.
               //
-              // run 은 slotsToFill 이 만든 것과 같은 스냅숏에서 찾는다 — 그 함수가 이미 run.id ===
-              // task.runId 인 run 이 있는 Task 만 후보로 냈으므로(schedule.ts), 이 활성화 동안 Run 이
-              // 지워지지 않는 한(그런 명령은 없다) 반드시 있다.
+              // run 은 slotsToFill 이 만든 스냅숏이 **아니라** 여기서 새로 읽은 상태에서 찾는다 —
+              // 그 사이(위) 계정 로그인 조회가 await 를 하나 두었고, 이 for 문의 앞선 슬롯이 이미
+              // gateSlot 이나(아래) orchHandleCommand(worker-start) 로 실제 쓰기를 했을 수 있어,
+              // 이 시점의 상태를 slotsToFill 이 봤던 것과 같다고 가정할 수 없다. run 과 task 가
+              // 그래도 반드시 있는 것은 스냅숏이 같아서가 아니라, 이 활성화 동안 Run 이나 Task 를
+              // 지우는 명령이 없기 때문이다(slotsToFill 이 이미 run.id === task.runId 인 run 이
+              // 있는 Task 만 후보로 냈으므로 — schedule.ts). **이 루프의 동시성 논증은 모두 이
+              // 전제(스냅숏이 아니라 슬롯마다 새로 읽는다) 위에 서 있다** — 여기를 "같은 스냅숏"
+              // 이라고 잘못 적으면 다음에 이 루프의 레이스를 따지는 사람이 틀린 전제에서 시작한다.
               const state = orch.deps.getState()
               const run = state.runs.find((r) => r.id === slot.runId)!
-              // Task 도 같은 이유로 반드시 있다(slotsToFill 이 상태에서 골라낸 id 다)
+              // Task 도 같은 이유로 반드시 있다(slotsToFill 이 상태에서 골라낸 id 다) — 위와 같은
+              // 새로 읽은 state 에서다
               const task = state.tasks.find((t) => t.id === slot.taskId)!
 
               // **통합 단계 — worker-start 앞이다.** 의존이 자기 워크트리에서 돌았다면 그 브랜치의
@@ -1847,17 +1854,101 @@ export function registerIpc(
     const { layers, deps, cyclic } = layersOf(state, runId)
     return { events: timelineFor(state, runId, (id) => known.has(id)), layers, deps, cyclic }
   })
+  // orch.command 의 args 에서 Run id·Task id·Dispatch id 를 읽는 키 — 명령마다 다르고, 짐작이 아니라
+  // server.ts 의 switch 를 다시 열어 확인한 값만 적었다: task-create 는 args.runId, task-update 는
+  // args.id, dispatch-show·gate-create 는 args.task, worker-start 는 args.taskId 를 먼저 보고 없으면
+  // args.task 를 본다(server.ts:412), worker-stop 은 Task id 가 아니라 args.dispatch — Dispatch id
+  // 라 그 Dispatch 의 taskId 로 한 번 더 찾아야 Run 에 닿는다. 여기 없는 명령(run-create 등)은 이
+  // 표들에 없다는 것 자체가 "이 명령의 args 는 소유권을 물을 id 를 나르지 않는다"는 뜻이고,
+  // orchOwnerMismatch 는 그런 명령을 그대로 통과시킨다(아래).
+  const RUN_ID_ARG: Record<string, string> = { 'task-create': 'runId' }
+  const TASK_ID_ARG: Record<string, string[]> = {
+    'task-update': ['id'],
+    'dispatch-show': ['task'],
+    'gate-create': ['task'],
+    'worker-start': ['taskId', 'task']
+  }
+  const DISPATCH_ID_ARG: Record<string, string> = { 'worker-stop': 'dispatch' }
+  /** orch.command 가 받은 명령의 args 가 project 가 아닌 다른 프로젝트의 Run·Task·Dispatch 를
+   *  가리키면 그 이유를 문자열로, 아니면 null 을 돌려준다.
+   *
+   *  **소유 판정을 복제하지 않는다** — orch.runDetail 이 이미 쓰는 runsForProject 를 그대로
+   *  부른다(위 orch.runDetail 의 주석과 같은 이유: 규칙을 다시 쓰면 그 규칙이 막는 조합을 이
+   *  door 가 통과시키는 우회로가 된다).
+   *
+   *  이 명령의 args 에 id 가 없거나(위 세 표에 그 명령이 없다), 있어도 그 id 를 가진 Run·Task·
+   *  Dispatch 가 애초에 존재하지 않으면 null 이다 — 그것은 소유 판정이 아니라 '없는 id' 오류이고,
+   *  handleCommand 자신이 이미 그 오류를 안다(예: task-update 의 `unknown task`). 여기서 막는 것은
+   *  존재하는데 다른 프로젝트 것인 경우 하나뿐이다 — 그래서 지금 있는 여섯 호출부(NewTaskModal의
+   *  task-create, RunDetail 의 worker-start·dispatch-show·worker-stop·task-update·gate-create)는
+   *  모두 projectPath 와 짝이 맞는 id 를 보내므로 이 판정을 통과한다. */
+  const orchOwnerMismatch = (
+    state: OrchState,
+    project: string,
+    cmd: string,
+    args: Record<string, unknown>
+  ): string | null => {
+    const strArg = (key: string): string | null => {
+      const v = args[key]
+      return typeof v === 'string' && v.length > 0 ? v : null
+    }
+    const runBelongs = (runId: string): boolean =>
+      runsForProject(state, project, core.worktrees.list()).some((r) => r.id === runId)
+
+    const runKey = RUN_ID_ARG[cmd]
+    const runId = runKey ? strArg(runKey) : null
+    if (runId) {
+      if (!state.runs.some((r) => r.id === runId)) return null
+      return runBelongs(runId) ? null : `run ${runId} does not belong to ${project}`
+    }
+
+    const taskKeys = TASK_ID_ARG[cmd]
+    const taskId = taskKeys ? taskKeys.map(strArg).find((v) => v !== null) ?? null : null
+    if (taskId) {
+      const task = state.tasks.find((t) => t.id === taskId)
+      if (!task) return null
+      return runBelongs(task.runId) ? null : `task ${taskId} does not belong to ${project}`
+    }
+
+    const dispatchKey = DISPATCH_ID_ARG[cmd]
+    const dispatchId = dispatchKey ? strArg(dispatchKey) : null
+    if (dispatchId) {
+      const dispatch = state.dispatches.find((d) => d.id === dispatchId)
+      const task = dispatch ? state.tasks.find((t) => t.id === dispatch.taskId) : undefined
+      if (!task) return null
+      return runBelongs(task.runId) ? null : `dispatch ${dispatchId} does not belong to ${project}`
+    }
+
+    return null
+  }
   // UI 가 상태를 바꾸는 **유일한** 통로. 명령별 IPC(orch.createTask, orch.startWorker, …)를 만들지
   // 않는 이유는 문이 둘이 되기 때문이다 — 전이표·회로 차단·중복 보고 방어·감사 로그가 두 벌이 되고,
   // 한쪽만 고쳐지는 날 어느 쪽이 옳은지 알 방법이 없다. UI 는 CLI 와 같은 문을 쓰는 또 하나의 손님이다.
   //
   // 이것이 `main/ipc.ts 의 오케스트레이션 IPC 는 읽기 전용이다` 를 뒤집는다 —
   // knowledge/decisions/ADR-004 에 근거가 있다.
+  //
+  // assertAllowedPath 는 projectPath 가 허용된 경로인지만 답한다 — args 가 나르는 Run·Task·
+  // Dispatch id 가 **그 projectPath 의 것인지**는 별개의 질문이고, 여기까지는 그것을 아무도 묻지
+  // 않았다. orch.runDetail(위)은 정확히 같은 질문을 runId 에 대해 이미 묻고 있고("소유 판정을
+  // 복제하지 않는다"는 그 주석), 그 판정을 orchOwnerMismatch 가 그대로 재사용한다.
   ipcMain.handle(
     'orch.command',
     async (_e, projectPath: string, cmd: string, args: Record<string, unknown>) => {
       await assertAllowedPath(projectPath)
       if (!orch) return { status: 409, body: { error: 'orchestration disabled' } }
+      // orch.list/orch.runDetail 과 같은 정규화 — Run.cwd 가 워크트리 안일 수 있으므로, args 의
+      // id 가 이 프로젝트 것인지는 저장소 경로로 정규화한 뒤에야 정확히 답할 수 있다.
+      const project = repoPathOf(core.worktrees.list(), projectPath)
+      const mismatch = orchOwnerMismatch(orch.deps.getState(), project, cmd, args ?? {})
+      if (mismatch) {
+        // 조용히 버려지지 않는다 — orch.runDetail 이 소유권 불일치를 거부할 때 남기는 것과 같은
+        // 로그(그 옆의 orchLog 호출과 같은 이유: 있어야 할 요청이 어디서도 사라진 것처럼 보이면
+        // 디버깅이 훨씬 어려워진다), 그리고 호출자가 분기할 수 있는 형태의 응답(denied()가
+        // server.ts 에서 쓰는 것과 같은 403 모양) — 둘 다다.
+        orchLog(`orch.command: rejected ${cmd} — ${mismatch}`)
+        return { status: 403, body: { error: mismatch } }
+      }
       return orchHandleCommand(orch.deps, { sessionId: UI_CALLER }, cmd, args ?? {})
     }
   )
