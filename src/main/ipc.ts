@@ -1858,9 +1858,10 @@ export function registerIpc(
   // server.ts 의 switch 를 다시 열어 확인한 값만 적었다: task-create 는 args.runId, task-update 는
   // args.id, dispatch-show·gate-create 는 args.task, worker-start 는 args.taskId 를 먼저 보고 없으면
   // args.task 를 본다(server.ts:412), worker-stop 은 Task id 가 아니라 args.dispatch — Dispatch id
-  // 라 그 Dispatch 의 taskId 로 한 번 더 찾아야 Run 에 닿는다. 여기 없는 명령(run-create 등)은 이
-  // 표들에 없다는 것 자체가 "이 명령의 args 는 소유권을 물을 id 를 나르지 않는다"는 뜻이고,
-  // orchOwnerMismatch 는 그런 명령을 그대로 통과시킨다(아래).
+  // 라 그 Dispatch 의 taskId 로 한 번 더 찾아야 Run 에 닿는다. 이 표들이 담는 것은 "id 를 나르는
+  // 모든 명령"이 아니라 지금 렌더러가 실제로 부르는 명령뿐이다 — 여기 없는 명령 중에도 id 를
+  // 나르는 것이 있다(task-list 는 args.run, gate-resolve 는 args.id, worker-show 는 args.dispatch
+  // 등). 새 호출부가 id 를 나르는 명령을 추가로 부르게 되면 그 키를 여기에 넣는다.
   const RUN_ID_ARG: Record<string, string> = { 'task-create': 'runId' }
   const TASK_ID_ARG: Record<string, string[]> = {
     'task-update': ['id'],
