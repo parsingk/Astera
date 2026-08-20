@@ -1230,7 +1230,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    남아야 한다(flex 항목이 되면 여백 병합과 축소 규칙이 달라진다) */
 .jobs-view > .jobs-new { display: block; width: fit-content; margin-left: auto; }
 
-.jobs-run { border-bottom: 1px solid var(--line-soft); }
+/* Run 사이의 경계. **안쪽 구분선과 다른 토큰을 쓴다** — 처음에는 둘 다 --line-soft 였고, 그래서
+   한 Run 안의 구분선(.jobs-foot 의 border-top)과 Run 과 Run 사이의 경계가 픽셀까지 같아서 어느
+   선이 묶음의 끝인지 읽을 수 없었다. Run 이 몇 개 쌓이면 하나로 뭉쳐 보인다.
+   --line 은 토큰 정의가 이미 이 용도를 적어 두었다("rail, sidebar, and region dividers") — 새
+   색을 만들 것이 없고, 사이드바 자신의 오른쪽 경계가 쓰는 것과 같은 선이다 */
+.jobs-run { border-bottom: 1px solid var(--line); }
 .jobs-run-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px 0; cursor: pointer; }
 .jobs-run-head:hover { background: rgba(255, 255, 255, 0.04); }
 .jobs-caret { flex: none; width: 9px; font-size: 10px; color: var(--text-faint); }
@@ -1268,9 +1273,13 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .jobs-gate { display: flex; align-items: flex-start; gap: 7px; margin: 0 10px 9px; padding: 6px 8px; background: rgba(214, 139, 79, 0.09); border-left: 2px solid var(--git-conflict); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; color: var(--text-dim); font-size: 11.5px; white-space: normal; }
 .jobs-gate .job-ic { margin-top: 1px; }
 .jobs-foot { display: flex; align-items: center; gap: 11px; padding: 6px 10px 9px; border-top: 1px solid var(--line-soft); color: var(--text-faint); font-size: 11px; }
-/* 상세 창으로 가는 입구. 머리말 없이 이것 하나다 — 넓은 창을 여는 길은 하나뿐이라 이름이 필요 없다 */
-.jobs-more { margin-left: auto; padding: 0 2px; background: none; border: 0; color: var(--text-faint); font-size: 13px; line-height: 1; cursor: pointer; }
-.jobs-more:hover { color: var(--accent); }
+/* 상세 창으로 가는 입구. 머리말 없이 이것 하나다 — 넓은 창을 여는 길은 하나뿐이라 이름이 필요 없다.
+   **이름이 없는 만큼 버튼으로 읽혀야 한다.** 처음에는 테두리가 없고 색이 주변 개수와 같은
+   --text-faint 여서, 회색 숫자 사이에 낀 구두점처럼 읽히고 찾지 못했다(누를 자리도 2px 이었다).
+   목록 맨 위 '+ 새 작업'의 유령 테두리를 그대로 빌린다 — 사이드바에서 "이건 눌리는 것"을 말하는
+   기존 언어이고 새 토큰이 없다. 채움은 hover 에서 기본 button 규칙이 준다 */
+.jobs-more { margin-left: auto; display: inline-flex; align-items: center; padding: 1px 6px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: none; color: var(--text-dim); font-size: 13px; line-height: 1.4; cursor: pointer; }
+.jobs-more:hover { color: var(--accent); border-color: var(--accent); }
 .jobs-empty { margin: auto; text-align: center; padding: 0 24px; color: var(--text-faint); font-size: 13px; }
 .jobs-empty-hint { margin-top: 6px; font-size: 11.5px; }
 
