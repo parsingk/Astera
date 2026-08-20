@@ -28,6 +28,7 @@ import { ToastHost } from './components/ToastHost'
 import { UpdateGate } from './components/UpdateGate'
 import { ShortcutSettings } from './components/ShortcutSettings'
 import { TerminalFontSettings } from './components/TerminalFontSettings'
+import { ThemeSettings } from './components/ThemeSettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import type {
   OrchSnapshot,
@@ -379,7 +380,7 @@ export default function App(): React.JSX.Element {
   explorerOpenRef.current = explorerOpen // the file explorer toggle
   const [showSettings, setShowSettings] = useState(false)
   const [settingsTab, setSettingsTab] = useState<
-    'general' | 'accounts' | 'info' | 'shortcuts' | 'slack' | 'worktree' | 'history'
+    'general' | 'appearance' | 'accounts' | 'info' | 'shortcuts' | 'slack' | 'worktree' | 'history'
   >('info') // the settings sidebar, with general and accounts added
   const [slackUrl, setSlackUrl] = useState('') // the Slack Webhook URL in the settings modal
   const [slackSaved, setSlackSaved] = useState(false)
@@ -2687,6 +2688,7 @@ export default function App(): React.JSX.Element {
                 {(
                   [
                     ['general', t('settings.tab.general')],
+                    ['appearance', t('settings.tab.appearance')],
                     ['accounts', t('settings.tab.accounts')],
                     ['info', t('settings.tab.info')],
                     ['shortcuts', t('settings.tab.shortcuts')],
@@ -2754,6 +2756,11 @@ export default function App(): React.JSX.Element {
                       />
                     </label>
                     <span className="settings-hint">{t('settings.orchestration.hint')}</span>
+                  </>
+                )}
+                {settingsTab === 'appearance' && (
+                  <>
+                    <ThemeSettings />
                     <TerminalFontSettings />
                   </>
                 )}

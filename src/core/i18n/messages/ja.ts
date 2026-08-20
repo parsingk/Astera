@@ -5,6 +5,7 @@ import type { Catalog } from '../index'
 export const ja: Catalog = {
   'settings.title': '設定',
   'settings.tab.general': '一般',
+  'settings.tab.appearance': '外観',
   'settings.tab.accounts': 'アカウント',
   'settings.tab.info': '情報',
   'settings.tab.shortcuts': 'ショートカット',
@@ -184,6 +185,10 @@ export const ja: Catalog = {
   'settings.history.hiddenProjects': '非表示のプロジェクト',
   'settings.history.unhide': '解除',
   'settings.history.empty': '非表示のプロジェクトはありません。',
+  // ThemeSettings.tsx — the theme card grid
+  'settings.theme.label': 'テーマ',
+  'settings.theme.hint': '色・角丸・書体がまとめて変わります。ターミナルのフォントは下で個別に選びます。',
+  'settings.theme.saveFailed': 'テーマを保存できませんでした: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': 'ターミナルの欧文フォント',
   'settings.font.hangul': 'ターミナルのハングルフォント',

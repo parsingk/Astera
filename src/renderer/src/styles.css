@@ -719,6 +719,18 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    .settings-content inherits that container's gap, but a wrapper div does not — without this the
    hidden-project rows butt together and their 해제 buttons end up touching. */
 .settings-history { display: flex; flex-direction: column; gap: 8px; }
+/* ---------- 모양 탭: 테마 카드 ---------- */
+.settings-theme { display: flex; flex-direction: column; gap: 8px; }
+.theme-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+/* 카드는 자기 테마의 값으로 그린다(인라인 스타일) — 앱 토큰을 쓰면 여섯 장이 전부 같아 보인다.
+   그래서 여기서는 색을 정하지 않고 배치만 정한다. */
+.theme-card { display: flex; flex-direction: column; gap: 8px; align-items: flex-start;
+  padding: 10px; border: 1px solid; cursor: pointer; text-align: left; font-size: 12.5px; }
+.theme-card.on { box-shadow: 0 0 0 2px currentColor; }
+.theme-card:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.theme-card-bars { display: flex; width: 100%; height: 18px; border-radius: inherit; overflow: hidden; }
+.theme-card-bars i { flex: 1; }
+.theme-card-name { font-weight: 600; }
 /* worktree 기준 브랜치 — 라벨 문구를 위, 셀렉트를 아래에 둔다(.field label 들과 같은 관례).
    컨테이너가 <label>이 아니라 <div>인 이유는 컴포넌트 쪽 주석에 있다(라벨은 클릭을 컨트롤로 한 번 더
    전달해서 드롭다운이 닫히자마자 다시 열렸다). div 라서 `.field label`(0,1,1)과 경쟁하지 않으므로

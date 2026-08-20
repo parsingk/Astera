@@ -4,6 +4,7 @@ import type { Catalog } from '../index'
 export const es: Catalog = {
   'settings.title': 'Configuración',
   'settings.tab.general': 'General',
+  'settings.tab.appearance': 'Apariencia',
   'settings.tab.accounts': 'Cuentas',
   'settings.tab.info': 'Información',
   'settings.tab.shortcuts': 'Atajos',
@@ -187,6 +188,11 @@ export const es: Catalog = {
   'settings.history.hiddenProjects': 'Proyectos ocultos',
   'settings.history.unhide': 'Mostrar',
   'settings.history.empty': 'No hay proyectos ocultos.',
+  // ThemeSettings.tsx — the theme card grid
+  'settings.theme.label': 'Tema',
+  'settings.theme.hint':
+    'Cambia colores, esquinas y tipografía a la vez. La fuente del terminal se elige aparte, más abajo.',
+  'settings.theme.saveFailed': 'No se pudo guardar el tema: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': 'Fuente latina del terminal',
   'settings.font.hangul': 'Fuente hangul del terminal',

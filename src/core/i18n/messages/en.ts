@@ -4,6 +4,7 @@ import type { ko } from './ko'
 export const en: Record<keyof typeof ko, string> = {
   'settings.title': 'Settings',
   'settings.tab.general': 'General',
+  'settings.tab.appearance': 'Appearance',
   'settings.tab.accounts': 'Accounts',
   'settings.tab.info': 'Info',
   'settings.tab.shortcuts': 'Shortcuts',
@@ -153,6 +154,11 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.history.hiddenProjects': 'Hidden projects',
   'settings.history.unhide': 'Unhide',
   'settings.history.empty': 'No hidden projects.',
+  // ThemeSettings.tsx — the theme card grid
+  'settings.theme.label': 'Theme',
+  'settings.theme.hint':
+    'Changes colours, corners and typeface together. The terminal font is chosen separately below.',
+  'settings.theme.saveFailed': 'Could not save the theme: {detail}',
   'settings.font.latin': 'Terminal font (Latin)',
   'settings.font.hangul': 'Terminal font (Hangul)',
   'settings.font.system': 'System default',

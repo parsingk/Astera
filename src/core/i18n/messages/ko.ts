@@ -5,6 +5,7 @@
 export const ko = {
   'settings.title': '설정',
   'settings.tab.general': '일반',
+  'settings.tab.appearance': '모양',
   'settings.tab.accounts': '계정',
   'settings.tab.info': '정보',
   'settings.tab.shortcuts': '단축키',
@@ -172,6 +173,10 @@ export const ko = {
   'settings.history.hiddenProjects': '숨긴 프로젝트',
   'settings.history.unhide': '해제',
   'settings.history.empty': '숨긴 프로젝트가 없습니다.',
+  // ThemeSettings.tsx — the theme card grid
+  'settings.theme.label': '테마',
+  'settings.theme.hint': '색과 모서리, 서체가 함께 바뀝니다. 터미널 폰트는 아래에서 따로 고릅니다.',
+  'settings.theme.saveFailed': '테마 저장 실패: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': '터미널 영문 폰트',
   'settings.font.hangul': '터미널 한글 폰트',
