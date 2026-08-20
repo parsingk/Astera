@@ -136,6 +136,7 @@
   --confirm: #2f9e6e;
   --confirm-hover: #37b07b;
   --warn: #d9a441;
+  /* 배너 위에 올라가는 글자색이다 — hover 상태가 아니다 */
   --warn-ink: #e8c35a;
   --warn-bg: #3a2f14;
   --warn-line: #5a4a1e;
@@ -196,6 +197,7 @@ body { font-family: var(--sans); letter-spacing: var(--tracking); background: va
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--elevated); border-radius: var(--radius); border: 2px solid transparent; background-clip: padding-box; }
+/* 기본값이 이미 var(--elevated) 라 hover 는 한 단계 밝아야 하는데, 그걸 나타내는 토큰이 없다(--surface-hover 는 더 어둡다) — 스크롤바 하나 때문에 토큰을 새로 만들 가치는 없고, 여섯 테마 모두 충분히 어두워서 중간 회색이면 자연스럽게 읽힌다 */
 ::-webkit-scrollbar-thumb:hover { background: #3a3a43; background-clip: padding-box; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
@@ -248,7 +250,7 @@ body { font-family: var(--sans); letter-spacing: var(--tracking); background: va
 .tb-run .run-btn.play:disabled { color: var(--text-faint); }
 .tb-run .run-btn:hover { background: var(--elevated); }
 .tb-controls { margin-left: auto; display: flex; -webkit-app-region: no-drag; }
-.tb-update { margin-left: auto; padding: 0 12px; font-size: 12px; color: #9a9aa5; white-space: nowrap; align-self: center; -webkit-app-region: no-drag; }
+.tb-update { margin-left: auto; padding: 0 12px; font-size: 12px; color: var(--text-dim); white-space: nowrap; align-self: center; -webkit-app-region: no-drag; }
 .tb-update-err { color: var(--danger); cursor: default; }
 .tb-update-btn { margin-left: auto; margin-right: 8px; align-self: center; background: var(--confirm); color: #fff; border: none; border-radius: var(--radius); padding: 4px 10px; font-size: 12px; cursor: pointer; -webkit-app-region: no-drag; }
 .tb-update-btn:hover { background: var(--confirm-hover); }
@@ -258,7 +260,7 @@ body { font-family: var(--sans); letter-spacing: var(--tracking); background: va
 .update-cell button { white-space: nowrap; }
 /* Only the update row pins its label — as the cell widened, flex squeezed the label and broke it across lines */
 .settings-row .update-label { white-space: nowrap; }
-.update-note { font-size: 12px; color: #9a9aa5; }
+.update-note { font-size: 12px; color: var(--text-dim); }
 .update-note.update-err { color: var(--danger); }
 .tb-btn {
   width: 46px;
@@ -422,14 +424,14 @@ button {
   cursor: pointer;
   transition: background var(--ease), color var(--ease), border-color var(--ease), box-shadow var(--ease);
 }
-button:hover { background: #2a2a31; }
+button:hover { background: var(--elevated); }
 button:disabled { opacity: .5; cursor: not-allowed; }
 /* Same ring as .sel-trigger below — this one keeps border-color too, since the default button has a real border to brighten. */
 button:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
 button.ghost { background: none; border: none; color: var(--text-dim); padding: 2px 5px; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; }
 button.ghost:hover { background: none; color: var(--text); }
 button.ghost.danger:hover { color: var(--danger); }
-button.primary { background: var(--accent); border-color: var(--accent); color: #0d2b30; font-weight: 600; }
+button.primary { background: var(--btn-bg); border-color: var(--btn-bg); color: var(--btn-ink); font-weight: 600; }
 button.primary:hover { filter: brightness(.85); }
 button.primary:disabled { background: var(--elevated); border-color: var(--line-soft); color: var(--text-faint); }
 
@@ -542,7 +544,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    `clip` is not a scroll container at all, so nothing can scroll it. It only works because both axes
    are clipped here — pair it with `auto` on the other axis and it degrades to `hidden`. xterm's own
    scrolling is unaffected: that lives in the child .xterm-viewport. */
-.terminal-host { flex: 1; background: #141417; min-height: 0; overflow: clip; }
+.terminal-host { flex: 1; background: var(--term-bg); min-height: 0; overflow: clip; }
 /* No inner padding on the terminal — it has to sit flush against the sidebar's bottom line and the left
    and right edges, or the session window looks like it is floating. Zero padding also prevents clipping:
    FitAddon takes the parent's (host's) height as availableHeight verbatim and subtracts only the padding
@@ -567,11 +569,11 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    against the upstream xterm.css by core/terminal/scrollbarCss.test.ts */
 .terminal-host .xterm-scrollable-element > .scrollbar { display: none; }
 /* the resume loading overlay — shown in the centre of the terminal until the first output. No pointer-events, so terminal focus is unaffected */
-.loading-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--text-dim); font-size: 13px; background: #141417; pointer-events: none; }
+.loading-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--text-dim); font-size: 13px; background: var(--term-bg); pointer-events: none; }
 .loading-spinner { width: 14px; height: 14px; border: 2px solid var(--line-soft); border-top-color: var(--accent); border-radius: 50%; animation: cm-spin .8s linear infinite; }
 @keyframes cm-spin { to { transform: rotate(360deg); } }
 .exit-overlay { position: absolute; inset: 0; background: rgba(0,0,0,.7); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text); }
-.exit-overlay button { background: var(--accent); border-color: var(--accent); color: #0d2b30; font-weight: 600; }
+.exit-overlay button { background: var(--btn-bg); border-color: var(--btn-bg); color: var(--btn-ink); font-weight: 600; }
 .exit-overlay button:hover { filter: brightness(.85); }
 /* the rolling progress banner — an overlay at the top of the terminal */
 .roll-banner {
@@ -621,7 +623,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .sched-days { flex: 0 0 90px; }
 .sched-weekdays { gap: 4px; }
 .sched-weekdays .weekday { padding: 2px 8px; font-size: 12px; }
-.sched-weekdays .weekday.on { background: var(--accent); border-color: var(--accent); color: #0d2b30; }
+.sched-weekdays .weekday.on { background: var(--btn-bg); border-color: var(--btn-bg); color: var(--btn-ink); }
 /* The dimming style of .check-note requires a label.check-small ancestor, so it does not apply inside
    this form (which is in a .row) — the existing rule is left alone and a new one is added for this form only */
 .sched-field .check-note { opacity: 0.6; }
@@ -1294,7 +1296,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 
 /* ---------- file viewer ---------- */
 .file-truncated { padding: 4px 12px; font-size: 12px; color: #d7ba7d; background: #3a3018; flex: none; }
-.file-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #9a9a9a; font-size: 13px; background: #1e1e1e; z-index: 2; }
+.file-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-dim); font-size: 13px; background: var(--panel); z-index: 2; }
 .tab-dirty { flex: none; font-size: 9px; opacity: 0.8; }
 .file-editor-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
 .file-conflict { flex: none; padding: 4px 12px; font-size: 12px; background: #3a3018; color: #d7ba7d; display: flex; gap: 8px; align-items: center; }
@@ -1306,7 +1308,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .fx-tree { flex: 1; min-height: 0; overflow: auto; font-size: 13px; user-select: none; }
 .fx-row { display: flex; align-items: center; gap: 4px; padding: 2px 8px; cursor: pointer; white-space: nowrap; transition: background var(--ease), box-shadow var(--ease); }
 .fx-row:hover { background: rgba(255, 255, 255, 0.06); }
-.fx-caret { flex: none; width: 12px; font-size: 10px; color: #9a9a9a; }
+.fx-caret { flex: none; width: 12px; font-size: 10px; color: var(--text-dim); }
 .fx-name { overflow: hidden; text-overflow: ellipsis; }
 /* git status — colour on the filename only. File type icon colours are left alone */
 .fx-name.git-new { color: var(--git-new); }
@@ -1326,7 +1328,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
   font-family: var(--mono); font-size: 10.5px; color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
-.fx-note { padding: 2px 8px; font-size: 12px; color: #7a7a7a; white-space: nowrap; }
+.fx-note { padding: 2px 8px; font-size: 12px; color: var(--text-faint); white-space: nowrap; }
 /* the header root row — scoped to the explorer so the shared .panel-header h2 is untouched */
 .file-explorer .panel-header h2 { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .file-explorer .panel-header h2 .fi { width: 12px; height: 12px; }
@@ -1382,7 +1384,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    그대로 빌린다(새 토큰 없음). RunDetail 의 '+ Task 추가'가 여기 빠지는 이유는 그 칸의 주역이
    그래프이기 때문이다. 두 자리 모두 `>` 로 잡아 특이도를 맞춰 두었다: 그러지 않으면 위
    .jobs-new:hover 와 동점이 되어 순서에 기대게 된다. */
-.jobs-view > .jobs-new, .jobs-empty > .jobs-new { background: var(--accent); border-color: var(--accent); color: #0d2b30; font-weight: 600; }
+.jobs-view > .jobs-new, .jobs-empty > .jobs-new { background: var(--btn-bg); border-color: var(--btn-bg); color: var(--btn-ink); font-weight: 600; }
 .jobs-view > .jobs-new:hover, .jobs-empty > .jobs-new:hover { filter: brightness(.85); }
 /* 목록 쪽만 오른쪽 끝에 선다 — 왼쪽 열은 Run 의 글리프와 제목이 쓰는 자리라, 버튼이 거기 서면
    목록의 첫 줄처럼 읽힌다. 빈 화면 쪽은 .jobs-empty 의 text-align: center 를 그대로 따른다.
@@ -1608,7 +1610,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .md-preview .tok-invalid { color: #ffffff; background: #e06c75; }
 
 /* ---------- Run panel ---------- */
-.run-panel { flex: none; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: #141417; height: var(--run-panel-h, 220px); min-height: 120px; }
+.run-panel { flex: none; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--term-bg); height: var(--run-panel-h, 220px); min-height: 120px; }
 .run-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--run); flex: none; box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
 .run-exit { color: var(--text-faint); }
 .run-panel-actions { display: flex; gap: 2px; }
