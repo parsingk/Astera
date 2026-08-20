@@ -18,6 +18,13 @@
      사라지므로 그 사이에 둔다 */
   --rail-icon: #a3a3ae;
   --accent: #37b0c4; /* active marker and focus (separate from the account colour) */
+  /* 액센트 위에 올라가는 글자색. button.primary 가 #0d2b30 으로 박아 쓰던 값이다 */
+  --accent-ink: #0d2b30;
+  --btn-bg: var(--accent);
+  --btn-ink: var(--accent-ink);
+  --btn-border: transparent;
+  /* .terminal-host 가 #141417 로 박아 쓰던 값. xterm theme.background 와 같아야 한다 */
+  --term-bg: #141417;
   /* Markdown preview links. Deliberately not --accent: that token is the active-marker/focus colour and
      reads as UI chrome, while a link in prose is expected to look like a link. This is GitHub's own
      dark-theme link colour, so a README looks the same here as on the page it was written for.
@@ -36,6 +43,23 @@
   --ok-bg: #14301f;
   --status-bg: #0e6478; /* bottom status bar */
   --status-ink: #d4f2f8;
+  /* 상태색. 같은 의미인데 값이 갈려 있던 것들을 기본/hover 두 종으로 모았다 */
+  --danger: #e5534b;
+  --danger-hover: #ff6b61;
+  --danger-bg: #3a1a18;
+  --danger-line: #5a2622;
+  --ok-hover: #57d364;
+  --warn: #d9a441;
+  --warn-hover: #e8c35a;
+  --warn-bg: #3a2f14;
+  --warn-line: #5a4a1e;
+  --info: #5ac8e8;
+  --info-bg: #14303a;
+  --info-line: #1e4a5a;
+  /* 브랜드·역할색은 테마가 바꾸지 않는다 — Claude 의 색이고 발화자 구분이다 */
+  --brand-claude: #d97757;
+  --role-user: #4f9cf9;
+  --role-assistant: #f97316;
   --sans: system-ui, -apple-system, 'Segoe UI', 'Malgun Gothic', sans-serif;
   /* file type icon tones */
   --fi-blue: #5b9fe0;
@@ -61,6 +85,16 @@
   /* Control surface tokens. The one new colour is --surface-hover, between --panel and --elevated: a
      dropdown row needs a hover fill that reads on --panel without looking like the active-row --elevated. */
   --surface-hover: #1f1f25;
+  /* 모양 */
+  --marker-w: 2px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .3);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, .5);
+  --tracking: 0;
+  /* 밀도. 눈에 보이는 네 곳만 연다 — 전부 토큰화하면 CSS 전면 재작성이 된다 */
+  --row-pad-y: 4px;
+  --tab-pad-y: 7px;
+  --sel-h: 30px;
+  --modal-pad: 20px;
   --radius: 6px;      /* triggers, options, inputs */
   --radius-lg: 8px;   /* the floating dropdown panel */
   --radius-sm: 3px;   /* small marks — badges, chips, key caps, dots under ~18px */
@@ -70,7 +104,7 @@
 
 * { box-sizing: border-box; margin: 0; }
 html, body, #root { height: 100%; }
-body { font-family: var(--sans); background: var(--bg); color: var(--text); }
+body { font-family: var(--sans); letter-spacing: var(--tracking); background: var(--bg); color: var(--text); }
 
 /* ---------- scrollbars ---------- */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
