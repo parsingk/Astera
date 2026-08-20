@@ -79,9 +79,12 @@ const timeOf = (at: string): string => {
  *  여기서 Task 를 짓게 했고(`task-create`), Task 9 가 노드에서 `띄우기`·`멈추기`·`물어보기`·
  *  `다시 띄우기`(`worker-start`·`worker-stop`·`gate-create`·`task-update`)를 열었다. 이 계획이
  *  초안될 때는 이 파일이 쓰는 쪽이 될 줄 몰랐고, 그 반전은 `knowledge/decisions/ADR-004`에 있다.
- *  **Gate 에 답하는 것만은 아직 Slack 제어면의 몫이다** — `물어보기`가 여는 것은 `gate-create`
- *  (Gate 를 **여는** 것)이고, `gate-resolve`(Gate 에 **답하는** 것)는 이 계획의 어느 Task 도 이
- *  파일에 더하지 않았다.
+ *  **Gate 에 답하는 것도 이제 여기다**(`답하기` → `gate-resolve`). 한때 이 주석은 그것이 "아직
+ *  Slack 제어면의 몫"이라고 적었는데, 그 절반이 참인 동안 앱은 Gate 를 **열고 보여 주기만 하고
+ *  푸는 곳이 아무 데도 없었다** — 로드맵 5번이 그래서 "Slack 에 제어면을 만든다"에서 "Gate 를
+ *  앱에서 푼다"로 좁아졌다. 사람이 앱에서 일을 만들게 해 놓고 그 일이 던지는 질문은 다른 데서
+ *  답하라는 것은 앞뒤가 맞지 않고, `물어보기` 로 연 Gate 는 애초에 사람이 스스로 쓴 질문이다.
+ *  Slack 은 알림으로 남는다.
  *
  *  **그래프는 장식이 아니라 필터다.** 노드를 누르면 아래가 그 Task 의 이벤트만 남는다 — "왜 저게
  *  안 도나"(위)와 "저기서 무슨 일이 있었나"(아래)가 한 화면에서 이어지고, 이벤트가 수십 줄이 되는
@@ -198,6 +201,10 @@ export function RunDetail({
    *  건드리지 않는다. */
   const [asking, setAsking] = useState<string | null>(null)
   const [question, setQuestion] = useState('')
+  /** Gate 에 답을 쓰는 중인 Task id. asking 의 짝이다 — 저쪽은 질문을 만들고 이쪽은 그 질문을 푼다.
+   *  **둘은 동시에 열리지 않는다**(아래 formOpen 이 둘 다 잠근다) 그래서 gateError 를 함께 쓴다. */
+  const [answering, setAnswering] = useState<string | null>(null)
+  const [answer, setAnswer] = useState('')
   /** 지금 도는 노드 동작(띄우기·멈추기·물어보기·다시 띄우기)의 대상 Task id, 없으면 null.
    *
    *  **하나뿐이고 Task 별로 나누지 않는다** — 그래서 무언가 도는 동안에는 그래프의 모든 노드
@@ -221,7 +228,7 @@ export function RunDetail({
    *  쓰는 중이거나, 명령이 도는 중이다. 이 동안은 노드 버튼(↗ 포함)을 전부 숨기고 배경 클릭으로
    *  창을 닫지도 않는다: 다른 버튼을 누르면 지금 쓰던 것을 잃고, 배경을 눌러 창을 닫으면 도는
    *  명령의 결과를 아무도 보지 못한다(이 창을 새로 열지 않는 한 다시 알 길이 없다). */
-  const formOpen = authoring || asking !== null || busy !== null
+  const formOpen = authoring || asking !== null || answering !== null || busy !== null
   /** 띄우기 버튼을 보일 조건 — **둘 다** 참이어야 한다. 한 자리에 모아 두는 것은 둘 중 하나만
    *  보고 고치면 나머지 조건을 깨뜨리기 쉬워서다.
    *
@@ -440,6 +447,44 @@ export function RunDetail({
     setQuestion('')
   }
 
+  /** Gate 에 답한다. **선택지 버튼도 이것을 부른다** — 그 버튼의 라벨을 그대로 resolution 으로
+   *  보낸다(gate-resolve 는 자유 텍스트를 받으므로 새 규약이 필요 없다).
+   *
+   *  풀린 뒤 Task 를 어디로 보낼지는 core 가 이미 정해 두었다(resolveGate) — blocked 에서 곧바로
+   *  ready 로 올리지 않고 pending 으로 내린 뒤 recomputeReady 가 판단한다. 여기서 그 판단을
+   *  다시 하지 않는다.
+   *
+   *  askQuestion 과 같은 관례: 성공했을 때만 폼을 닫는다. 실패하면 쓴 답이 남아야 다시 쓰지 않는다. */
+  const resolveGate = async (gateId: string, resolution: string): Promise<void> => {
+    const taskId = answering
+    const trimmed = resolution.trim()
+    if (taskId === null || !trimmed) return
+    setBusy(taskId)
+    setGateError(null)
+    try {
+      const reply = await window.api.orch.command(projectPath, 'gate-resolve', {
+        id: gateId,
+        resolution: trimmed
+      })
+      if (reply.status >= 400) {
+        setGateError(t('jobs.node.failed'))
+        return
+      }
+      setAnswering(null)
+      setAnswer('')
+    } catch {
+      setGateError(t('jobs.node.failed'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const cancelAnswer = (): void => {
+    if (busy !== null) return
+    setAnswering(null)
+    setAnswer('')
+  }
+
   return (
     <div className="modal-backdrop" onClick={() => !formOpen && onClose()}>
       <div className="modal run-detail" onClick={(e) => e.stopPropagation()}>
@@ -509,6 +554,11 @@ export function RunDetail({
                 setQuestion('')
                 setGateError(null)
               }}
+              onAnswer={(taskId) => {
+                setAnswering(taskId)
+                setAnswer('')
+                setGateError(null)
+              }}
               onRestart={(taskId) => void restartTask(taskId)}
             />
           </div>
@@ -527,6 +577,71 @@ export function RunDetail({
                 onClose={() => setAuthoring(false)}
                 onCreated={() => setAuthoring(false)}
               />
+            ) : answering !== null ? (
+              (() => {
+                // 답할 Gate 는 스냅숏에서 다시 찾는다 — 폼을 연 뒤에 그 Gate 가 풀렸을 수 있고
+                // (코디네이터나 CLI 가 답할 수 있다), 그때 열어 둔 id 로 보내면 이미 끝난 것을
+                // 다시 푼다. 사라졌으면 폼을 그리지 않고 원래 화면으로 돌아간다.
+                const gate = tasks.find((tk) => tk.id === answering)?.gate
+                if (!gate) return <></>
+                return (
+                  <>
+                    <div className="detail-filter">
+                      <b>{t('jobs.node.answer')}</b>
+                      <button
+                        className="detail-clear"
+                        title={t('common.cancel')}
+                        aria-label={t('common.cancel')}
+                        onClick={cancelAnswer}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <div className="detail-task-fields">
+                      {/* 질문을 그대로 보여 준다 — 답하는 사람이 그래프의 Gate 줄을 기억하고 있을
+                          이유가 없다. 읽는 글이라 modal-hint 가 아니라 본문 톤이다 */}
+                      <p className="detail-gate-question">{gate.question}</p>
+                      {/* 코디네이터가 고를 것을 줬으면 그것이 답이다 — 자유 입력으로 그 낱말을 다시
+                          치게 하지 않는다. 버튼의 라벨을 그대로 resolution 으로 보낸다 */}
+                      {gate.options && gate.options.length > 0 && (
+                        <div className="detail-gate-options">
+                          {gate.options.map((opt) => (
+                            <button
+                              key={opt}
+                              disabled={busy !== null}
+                              onClick={() => void resolveGate(gate.id, opt)}
+                            >
+                              {opt}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="field">
+                        <label>{t('jobs.node.answerLabel')}</label>
+                        <textarea
+                          rows={3}
+                          value={answer}
+                          onChange={(e) => setAnswer(e.target.value)}
+                          autoFocus
+                        />
+                      </div>
+                      {gateError && <p className="warn">{gateError}</p>}
+                    </div>
+                    <div className="row right">
+                      <button onClick={cancelAnswer} disabled={busy !== null}>
+                        {t('common.cancel')}
+                      </button>
+                      <button
+                        className="primary"
+                        disabled={busy !== null || !answer.trim()}
+                        onClick={() => void resolveGate(gate.id, answer)}
+                      >
+                        {t('jobs.node.answer')}
+                      </button>
+                    </div>
+                  </>
+                )
+              })()
             ) : asking !== null ? (
               <>
                 {/* .detail-filter/.detail-clear 를 NewTaskModal 과 같이 빌린다 — 무엇을 하고 있는지
@@ -714,6 +829,7 @@ function Graph({
   onStart,
   onStop,
   onGate,
+  onAnswer,
   onRestart
 }: {
   tasks: JobTask[]
@@ -741,6 +857,8 @@ function Graph({
   /** 물어보기 버튼을 누른 결과 — 명령을 바로 보내지 않고 질문을 쓸 폼을 연다(RunDetail 이 asking
    *  을 세운다) */
   onGate: (taskId: string) => void
+  /** 답하기 버튼을 누른 결과 — onGate 와 같은 관례로 명령을 보내지 않고 답을 쓸 폼을 연다 */
+  onAnswer: (taskId: string) => void
   onRestart: (taskId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
@@ -767,6 +885,10 @@ function Graph({
     const showGate = task.status === 'ready' || task.status === 'pending'
     const showStop = task.status === 'dispatched' && dispatchOpen
     const showRestart = task.status === 'failed' || (task.status === 'dispatched' && !dispatchOpen)
+    // 열린 Gate 가 있어야 답할 것이 있다. blocked 인데 gate 가 없는 조합은 만들어지지 않지만
+    // (blocked 로 가는 길이 createGate 뿐이다) 판정이 그 사실에 기대지 않는다 — 기대면 그
+    // 불변식이 깨지는 날 답할 것 없는 버튼이 뜬다
+    const showAnswer = task.status === 'blocked' && task.gate !== undefined
     return (
       <div
         key={task.id}
@@ -829,6 +951,21 @@ function Graph({
                 }}
               >
                 ?
+              </button>
+            )}
+            {/* 답하기 — Gate 가 열려 있는 blocked 노드에만. 이 버튼이 이 슬라이스의 전부다: 앱은
+                Gate 를 열고(위 `?`) 보여 주기만 하고 푸는 곳이 아무 데도 없었다. */}
+            {showAnswer && (
+              <button
+                className="detail-node-btn"
+                title={t('jobs.node.answer')}
+                aria-label={t('jobs.node.answer')}
+                onClick={(ev) => {
+                  ev.stopPropagation()
+                  onAnswer(task.id)
+                }}
+              >
+                !
               </button>
             )}
             {showStop && (

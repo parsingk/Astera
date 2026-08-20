@@ -811,6 +811,8 @@ export const es: Catalog = {
   'jobs.node.stop': 'Detener',
   'jobs.node.restart': 'Iniciar de nuevo',
   'jobs.node.gate': 'Preguntar',
+  'jobs.node.answer': 'Responder',
+  'jobs.node.answerLabel': 'Respuesta',
   'jobs.node.gateQuestion': '¿Cuál es la pregunta?',
   'jobs.node.failed': 'No se pudo completar esta acción'
 }

@@ -1000,6 +1000,13 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    않는다. gap 이 .field 하나만큼(10px) 큰 것은 이벤트 한 줄(.detail-list, gap: 1px)과 달리 이
    칸의 자식은 입력 필드 하나하나라서다. */
 .detail-task-fields { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+/* 답할 Gate 의 질문. modal-hint 가 아닌 이유는 이것이 안내가 아니라 **읽어야 하는 글**이기 때문이다 —
+   답을 쓰는 사람이 그래프의 Gate 줄을 기억하고 있을 이유가 없다. Gate 줄과 같은 경고 톤을 쓰되
+   왼쪽 띠 없이: 여기서는 이 글이 화면의 주역이라 표식으로 가리킬 필요가 없다 */
+.detail-gate-question { color: var(--text); font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; }
+/* 코디네이터가 준 선택지. 줄바꿈을 허용한다 — 문장이 선택지로 오는 경우가 있고, 한 줄에 밀어 넣고
+   자르면 무엇을 고르는지 읽을 수 없다 */
+.detail-gate-options { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* RunTypePicker — the ＋ button's kind-picker popup. Anchored the same way as .run-more/.run-more-menu
    in RunToolbar; a separate namespace because it also holds a search input and two grouped sections

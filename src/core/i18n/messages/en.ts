@@ -707,6 +707,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.node.stop': 'Stop',
   'jobs.node.restart': 'Start again',
   'jobs.node.gate': 'Ask a person',
+  'jobs.node.answer': 'Answer',
+  'jobs.node.answerLabel': 'Answer',
   'jobs.node.gateQuestion': 'What is the question',
   'jobs.node.failed': 'Could not do that'
 }

@@ -320,8 +320,24 @@ describe('snapshotFor', () => {
       ]
     }
     const t = snapshotFor(s, absPath('p'), anySession, noWorktrees).runs[0].tasks[0]
-    expect(t.gateQuestion).toBe('먼저 질문')
+    // **id 가 함께 실린다** — gate-resolve 가 그것을 요구하므로, 없으면 화면에서 답할 길이 없다.
+    // 질문과 한 묶음인 이유: 셋 다 "가장 이른 열린 Gate" 하나를 가리키는데 따로 실으면 그중 하나만
+    // 고쳐지는 날 화면이 A 의 질문을 보여 주고 B 를 푼다
+    expect(t.gate).toEqual({ id: 'g1', question: '먼저 질문' })
     expect(t.openGates).toBe(2)
+  })
+
+  // gate-create --options 가 받는 값이다. 코디네이터가 고를 것을 줬는데 화면이 그것을 모르면
+  // 사람은 자유 입력으로 그 낱말을 다시 쳐야 한다
+  it('Gate 의 선택지도 함께 싣는다', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'blocked')]),
+      gates: [
+        { ...gate('g1', 't1', '어느 쪽으로 갈까요', '2026-08-18T01:00:00.000Z'), options: ['A', 'B'] }
+      ]
+    }
+    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees).runs[0].tasks[0]
+    expect(t.gate).toEqual({ id: 'g1', question: '어느 쪽으로 갈까요', options: ['A', 'B'] })
   })
 
   it('resolved 된 Gate 는 세지 않는다', () => {
@@ -330,7 +346,7 @@ describe('snapshotFor', () => {
       gates: [gate('g1', 't1', '끝난 질문', '2026-08-18T01:00:00.000Z', 'resolved')]
     }
     const t = snapshotFor(s, absPath('p'), anySession, noWorktrees).runs[0].tasks[0]
-    expect(t.gateQuestion).toBeUndefined()
+    expect(t.gate).toBeUndefined()
     expect(t.openGates).toBe(0)
   })
 
@@ -341,7 +357,7 @@ describe('snapshotFor', () => {
     }
     const [t1, t2] = snapshotFor(s, absPath('p'), anySession, noWorktrees).runs[0].tasks
     expect(t1.openGates).toBe(0)
-    expect(t2.gateQuestion).toBe('질문')
+    expect(t2.gate?.question).toBe('질문')
   })
 
   it('그 프로젝트에 Run 이 없으면 빈 목록이다', () => {

@@ -149,9 +149,19 @@ function jobTaskOf(
     status: task.status,
     ...(task.accountId !== undefined ? { accountId: task.accountId } : {}),
     sessionId: latest && isKnownSession(latest.sessionId) ? latest.sessionId : undefined,
-    // The oldest open Gate is the one the orchestrator has to answer first, so that is the question
-    // the row shows. openGates carries the rest as a count rather than a second question.
-    gateQuestion: open[0]?.question,
+    // The oldest open Gate is the one the orchestrator has to answer first, so that is the one the
+    // row shows and the one the answer form resolves. openGates carries the rest as a count rather
+    // than a second question. id 가 함께 가는 이유는 gate-resolve 가 그것을 요구하기 때문이고,
+    // options 는 코디네이터가 고를 것을 준 경우다 — 셋이 한 묶음인 이유는 JobTask.gate 의 주석에 있다.
+    ...(open[0]
+      ? {
+          gate: {
+            id: open[0].id,
+            question: open[0].question,
+            ...(open[0].options ? { options: open[0].options } : {})
+          }
+        }
+      : {}),
     openGates: open.length,
     ...(running ? { provider: running.provider, startedAt: running.startedAt } : {})
   }

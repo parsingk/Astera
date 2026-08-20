@@ -853,6 +853,10 @@ export const ko = {
   'jobs.node.stop': '멈추기',
   'jobs.node.restart': '다시 띄우기',
   'jobs.node.gate': '물어보기',
+  // 열린 Gate 에 답하는 자리. 앱이 Gate 를 열고 보여 주기만 하고 푸는 곳이 아무 데도 없던
+  // 것을 없앤 문구다 — 5번이 '답하는 자리를 앱에 둔다'로 좁아진 결과다
+  'jobs.node.answer': '답하기',
+  'jobs.node.answerLabel': '답',
   'jobs.node.gateQuestion': '무엇을 물어볼까요',
   'jobs.node.failed': '이 동작을 하지 못했습니다'
 } as const

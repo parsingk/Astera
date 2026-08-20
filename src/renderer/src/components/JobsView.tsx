@@ -171,7 +171,7 @@ export function JobsView({
         // 줄을 세우지 못한 것도 여기 접힌다 — 넷째부터 넘친 것뿐 아니라, validating 처럼 애초에 줄로
         // 세울 수 없는 것도 folded 로만 나타난다.
         const folded = running - rows.length
-        const gates = run.tasks.filter((tk) => tk.status === 'blocked' && tk.gateQuestion)
+        const gates = run.tasks.filter((tk) => tk.status === 'blocked' && tk.gate)
         const counts = FOOT_STATES.map(
           (status) => [status, run.tasks.filter((tk) => tk.status === status).length] as const
         ).filter(([, n]) => n > 0)
@@ -280,7 +280,7 @@ export function JobsView({
               <div key={task.id} className="jobs-gate">
                 <TaskIcon status="blocked" label={t(STATE_KEY.blocked)} />
                 <span>
-                  {task.gateQuestion}
+                  {task.gate?.question}
                   {task.openGates > 1
                     ? ` ${t('jobs.gates.more', { count: task.openGates - 1 })}`
                     : ''}

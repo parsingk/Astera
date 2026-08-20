@@ -264,8 +264,16 @@ export interface JobTask {
    *  계정**을 고르려면 이 값이 필요하다 — 없으면 그 버튼이 기본 계정으로 띄워, 같은 Task 가 누가
    *  띄웠는지에 따라 다른 계정에서 돌게 된다. */
   accountId?: string
-  /** The oldest open Gate's question. Only a 'blocked' Task has one. */
-  gateQuestion?: string
+  /** 가장 이른 열린 Gate. 없으면 이 칸이 없다.
+   *
+   *  **셋을 한 묶음으로 싣는다.** 한때 질문만 따로 실었는데, 화면에서 답하려면 `gate-resolve` 가
+   *  요구하는 **id** 가 있어야 하고 선택지(gate-create --options)도 있어야 한다. 따로 실으면 셋이
+   *  같은 Gate 를 가리킨다는 것을 아무것도 강제하지 않아, 그중 하나만 고쳐지는 날 화면이 A 의
+   *  질문을 보여 주고 B 를 푼다. 묶어 두면 "열린 Gate 가 있나"도 검사 하나가 된다.
+   *
+   *  나머지 열린 Gate 는 아래 openGates 가 개수로만 말한다 — 한 번에 하나씩 답하는 자리이고,
+   *  답하면 그다음 것이 이 자리로 올라온다. */
+  gate?: { id: string; question: string; options?: string[] }
   openGates: number
   /** The provider of the Dispatch that is **running this Task right now**. A Dispatch that has ended
    *  does not count — the sidebar's rows are the running ones, and this is the field that badge draws
