@@ -23,6 +23,15 @@
      dark-theme link colour, so a README looks the same here as on the page it was written for.
      5.77:1 on --bg and 5.04:1 on --elevated — AA at both. */
   --md-link: #4493f8;
+  /* The preview's own surface. IntelliJ New UI dark, sampled from the reference screenshot the
+     preview is matched against (see the markdown preview block for the measurements): these are the
+     only colours in the app that deliberately come from outside the palette above, because the
+     preview is matched to the IDE's viewer rather than to the app chrome. --md-text on --md-bg is
+     8.87:1 (AAA). */
+  --md-bg: #1e1f22;
+  --md-text: #bcbec4;
+  --md-code-bg: #303236;
+  --md-line: #393b40;
   --ok: #79c98f; /* logged in */
   --ok-bg: #14301f;
   --status-bg: #0e6478; /* bottom status bar */
@@ -1397,39 +1406,60 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .md-resizer:hover { background: var(--accent); }
 
 /* ---------- markdown preview ---------- */
+/* Typography, spacing and colours here mirror IntelliJ's markdown preview, which is this feature's
+   reference implementation throughout — markdownTree.ts follows it for raw-HTML passthrough and
+   markdownView.ts for block-anchored scroll sync, so the rendering should not be the one place that
+   goes its own way. The values are read from the IDE's own stylesheet (markdown.jar!/org/intellij/
+   plugins/markdown/extensions/common/baseStyles/default.css, 2025.2.4), taken at the 13px base its
+   "Preview font size" setting injects rather than that file's own 14px default. 13px is measured,
+   not assumed: against a reference screenshot the same sentence is 490 device px wide there vs 612
+   here at 16px (0.80 -> 12.8px), and its 31px line pitch at line-height 1.6 on a 1.5x display gives
+   12.9px. The colours are absent from that stylesheet (the IDE injects them from the active theme),
+   so they are sampled from the same screenshot into the --md-* tokens in :root. */
 .md-preview { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 16px 20px; outline: none;
+  font-size: 13px; line-height: 1.6; background: var(--md-bg); color: var(--md-text);
   /* A long unbroken URL or inline code span must wrap inside prose rather than push .md-preview itself
      into horizontal scroll — pre/table-wrap below scroll on their own and are unaffected by this. */
   overflow-wrap: anywhere; }
 .md-preview-notice { opacity: .5; }
 .md-preview > :first-child { margin-top: 0; }
 .md-preview h1, .md-preview h2, .md-preview h3,
-.md-preview h4, .md-preview h5, .md-preview h6 { margin: 1.4em 0 .5em; line-height: 1.25; font-weight: 600; }
-/* --line-soft, not --line: --line is the rail/sidebar divider (near-black), which on --bg reads as a
-   gap rather than a rule. One divider color for every in-prose rule keeps this consistent too. */
-.md-preview h1 { font-size: 1.7em; border-bottom: 1px solid var(--line-soft); padding-bottom: .3em; }
-.md-preview h2 { font-size: 1.4em; border-bottom: 1px solid var(--line-soft); padding-bottom: .3em; }
-.md-preview h3 { font-size: 1.2em; }
-.md-preview p, .md-preview ul, .md-preview ol, .md-preview blockquote { margin: 0 0 1em; }
-.md-preview li { margin: .25em 0; }
+.md-preview h4, .md-preview h5, .md-preview h6 { margin: 1em 0 16px; font-weight: bold; }
+/* IntelliJ's scale is 2.2 / 1.8 / 1.3em and then a flat 1em for h4-h6 — no size step at all below
+   h3 — each of the first three with its own line-height and a .6em lead-in. The h4-h6 rule is not
+   redundant: without it the UA stylesheet's own .83em/.67em for h5/h6 applies (measured: 10.79px and
+   8.71px on this 13px base), which is why IntelliJ declares 1em there too. No border under h1/h2
+   either: IntelliJ draws none. */
+.md-preview h1 { font-size: 2.2em; line-height: 1.4; padding-top: .6em; }
+.md-preview h2 { font-size: 1.8em; line-height: 1.2; padding-top: .6em; }
+.md-preview h3 { font-size: 1.3em; line-height: 1; padding-top: .6em; }
+.md-preview h4, .md-preview h5, .md-preview h6 { font-size: 1em; }
+.md-preview p, .md-preview ul, .md-preview ol,
+.md-preview blockquote, .md-preview pre { margin: 16px 0; }
+.md-preview ul, .md-preview ol { padding-left: 2em; }
 .md-preview li > p { margin: 0; }
 .md-preview li.md-task { list-style: none; margin-left: -1.2em; }
 .md-preview li.md-task > input { margin-right: .5em; }
-.md-preview blockquote { border-left: 3px solid var(--line-soft); padding-left: 12px; opacity: .85; }
-.md-preview hr { border: 0; border-top: 1px solid var(--line-soft); margin: 1.5em 0; }
+.md-preview blockquote { padding: 10px 10px 10px 16px; border-left: 2px solid var(--md-line);
+  border-radius: 0 3px 3px 0; }
+.md-preview blockquote > :first-child { margin-top: 0; }
+.md-preview blockquote > :last-child { margin-bottom: 0; }
+.md-preview hr { border: 0; border-top: 1px solid var(--md-line); margin: 20px 0; }
 .md-preview a { color: var(--md-link); text-decoration: none; }
 .md-preview a:hover { text-decoration: underline; }
 .md-preview img { max-width: 100%; height: auto; }
 .md-preview code { font-family: var(--mono); font-size: .9em;
-  background: rgba(255, 255, 255, .07); border-radius: 3px; padding: .15em .35em; }
-.md-preview pre { background: rgba(255, 255, 255, .05); border-radius: 4px; padding: 12px;
-  overflow-x: auto; margin: 0 0 1em; }
-.md-preview pre code { background: none; padding: 0; font-size: .875em; line-height: 1.5; }
+  background: var(--md-code-bg); border-radius: 3px; padding: .2em .4em; }
+/* The fence carries the size and IntelliJ resets the inner <code> to 100% — leaving the .9em above
+   in place would compound with this .85em. */
+.md-preview pre { background: var(--md-code-bg); border-radius: 3px; padding: 16px;
+  font-size: .85em; line-height: 1.45; overflow-x: auto; }
+.md-preview pre code { background: none; padding: 0; font-size: 100%; }
 /* Tables scroll horizontally within themselves only — the page must not shift */
-.md-table-wrap { overflow-x: auto; margin: 0 0 1em; }
+.md-table-wrap { overflow-x: auto; margin: 16px 0; }
 .md-preview table { border-collapse: collapse; }
-.md-preview th, .md-preview td { border: 1px solid var(--line-soft); padding: 6px 10px; }
-.md-preview th { background: rgba(255, 255, 255, .05); font-weight: 600; }
+.md-preview th, .md-preview td { border: 1px solid var(--md-line); padding: 6px 13px; }
+.md-preview th { font-weight: bold; }
 .md-img-failed, .md-img-loading { opacity: .55; font-style: italic; }
 
 /* Code colors — the stable classes @lezer/highlight's classHighlighter attaches. oneDark palette,
