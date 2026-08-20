@@ -145,28 +145,39 @@ export function RunDetail({
    *  여기서 고른 id 가 곧 validateConfigId 로 저장되고 TaskValidator 가 나중에 그 id 로 찾아낼 그
    *  설정이다. */
   const [runConfigs, setRunConfigs] = useState<{ id: string; name: string }[] | null>(null)
-  /** Task 짓기 폼의 계정 목록 — 이 Run 의 provider 것만. runConfigs 와 같은 자리에서 같은 이유로
-   *  받는다(그 사이 계정이 늘거나 지워졌을 수 있다). **로그인 여부는 묻지 않는다**: 이 목록은
-   *  "고를 수 있는 것"이고, 고른 계정을 정말 쓸 수 있는지는 띄우는 순간
-   *  accountToDispatchOn 이 본다 — 지금 로그아웃돼 있어도 나중에 로그인하면 되는 것이라, 여기서
-   *  숨기면 고를 수 없는 이유가 화면에 남지 않는다. */
+  /** 계정 목록. **두 곳이 쓴다** — Task 짓기 폼의 계정 칸(그 Run 의 provider 것만 걸러 넘긴다)과
+   *  아래 필터 줄이 지정된 계정의 **이름**을 적는 자리다. 그래서 폼이 열릴 때만이 아니라 창이 열려
+   *  있는 동안 들고 있고, 폼을 열 때마다 다시 받는다(그 사이 계정이 늘거나 지워졌을 수 있다).
+   *
+   *  **로그인 여부는 묻지 않는다**: 이 목록은 "고를 수 있는 것"이고, 고른 계정을 정말 쓸 수 있는지는
+   *  띄우는 순간 accountToDispatchOn 이 본다 — 지금 로그아웃돼 있어도 나중에 로그인하면 되는
+   *  것이라, 여기서 숨기면 고를 수 없는 이유가 화면에 남지 않는다. */
   const [accounts, setAccounts] = useState<Account[] | null>(null)
+  // 계정 목록은 창이 열려 있는 동안 들고 있고 폼을 열 때 다시 받는다(authoring 이 의존성에 있는
+  // 이유). 실행 구성과 **따로 둔 이유**: 그쪽은 폼이 닫히면 비우고 이쪽은 비우지 않는다 — 두
+  // 수명을 한 effect 에 넣으면 정리 함수가 갈래마다 생겨 읽을 수 없게 된다.
   useEffect(() => {
-    if (!authoring) {
-      setRunConfigs(null) // 다음에 지을 때 다시 받도록 비운다 — 그 사이 설정이 바뀌었을 수 있다
-      setAccounts(null)
-      return
-    }
     let cancelled = false
+    // 거부 팔을 둔다 — 실패해도 폼은 쓸 수 있어야 하므로 빈 목록으로 접는다. 그러면 계정 칸이
+    // 그려지지 않고(고를 것이 둘 미만) 지정 없이 Task 를 만드는 길이 남는다.
     void window.api.accounts.list().then(
       (list) => {
-        if (!cancelled)
-          setAccounts(run?.provider ? list.filter((a) => providerOf(a) === run.provider) : [])
+        if (!cancelled) setAccounts(list)
       },
       () => {
         if (!cancelled) setAccounts([])
       }
     )
+    return () => {
+      cancelled = true
+    }
+  }, [authoring])
+  useEffect(() => {
+    if (!authoring) {
+      setRunConfigs(null) // 다음에 지을 때 다시 받도록 비운다 — 그 사이 설정이 바뀌었을 수 있다
+      return
+    }
+    let cancelled = false
     // 거부 팔을 반드시 둔다 — main 이 프로젝트를 읽다 던질 수 있고, 그러면 DevTools 에
     // Uncaught (in promise) 가 뜬다. 실패해도 폼은 그대로 쓸 수 있어야 하므로(검증 없이 Task 를
     // 만드는 것도 유효한 선택이다) 빈 목록으로 접는다 — "검증 없음" 하나만 남는다.
@@ -181,7 +192,7 @@ export function RunDetail({
     return () => {
       cancelled = true
     }
-  }, [authoring, projectPath, run?.provider])
+  }, [authoring, projectPath])
   /** 물어보기(Gate)의 질문을 쓰는 중인 Task id. null 이면 안 쓰는 중이다 — authoring 과 같은 자리에
    *  서는 세 번째 모습이다(그래프는 그대로, .detail-events 만 바뀐다). authoring 처럼 selected(필터)는
    *  건드리지 않는다. */
@@ -507,7 +518,11 @@ export function RunDetail({
                 projectPath={projectPath}
                 runId={runId}
                 tasks={tasks}
-                accounts={accounts}
+                accounts={
+                  accounts === null
+                    ? null
+                    : accounts.filter((a) => providerOf(a) === run?.provider)
+                }
                 runConfigs={runConfigs}
                 onClose={() => setAuthoring(false)}
                 onCreated={() => setAuthoring(false)}
@@ -559,6 +574,20 @@ export function RunDetail({
                   <div className="detail-filter">
                     <TaskGlyph task={selectedTask} />
                     <b>{selectedTask.title}</b>
+                    {/* 지정된 계정. **지정이 있을 때만 그린다** — 없는 것이 보통이라 "기본 계정"을
+                        늘 적으면 이 줄이 그 낱말로 채워지고, 정작 지정된 Task 가 눈에 안 띈다.
+                        그래서 이 칩이 있다는 것 자체가 "이 Task 는 계정이 못박혀 있다"는 뜻이다.
+                        이름을 못 찾으면 id 를 적는다 — 지워진 계정을 가리키는 지정이고, 그것을
+                        감추면 왜 이 Task 가 Gate 로 가는지 화면에 남지 않는다. */}
+                    {selectedTask.accountId !== undefined && (
+                      <span
+                        className="detail-chip"
+                        title={t('jobs.task.accountHint')}
+                      >
+                        {accounts?.find((a) => a.id === selectedTask.accountId)?.label ??
+                          selectedTask.accountId}
+                      </span>
+                    )}
                     <button
                       className="detail-clear"
                       title={t('jobs.detail.clearFilter')}
