@@ -4,7 +4,7 @@ import type { MessageKey } from '../../../core/i18n'
 import { formatElapsed } from '../../../core/orchestration/elapsed'
 import { runningCount } from '../../../core/orchestration/running'
 import { useI18n } from '../i18n/I18nProvider'
-import { RunIcon, STATE_KEY, STATUS_COLOR, TaskGlyph, TaskIcon } from './JobIcons'
+import { RunIcon, STATE_KEY, STATUS_COLOR, TaskGlyph, TaskIcon, TrashIcon } from './JobIcons'
 import type { RunIconKind } from './JobIcons'
 
 /** Run 헤더 글리프의 툴팁. 끝난·실패·막힘은 줄의 글리프와 같은 모양이고 같은 뜻이라 같은 문구를 쓴다.
@@ -207,24 +207,6 @@ export function JobsView({
                   (같은 판단을 Gate 줄이 이미 하고 있다). 그리고 Run 이 쌓여 접어 두게 될 때가
                   상세 창이 가장 필요한 때다.
                   stopPropagation: 이 줄 자체가 접기·펴기라서, 없으면 창을 열면서 동시에 접는다 */}
-              {/* 물러나게 하기. **자동 정리가 손대지 못하는 것을 위해 있다** — store.ts 의 TTL 은
-                  모든 Task 가 끝난 Run 만, 그것도 30일 뒤에 버리므로 중단한 작업이나 워커가 죽어
-                  dispatched 에 멈춘 Task 를 가진 Run 은 영원히 남는다.
-                  `›` 옆인 이유: 이 줄이 그 Run 에 대해 할 수 있는 일이 모이는 자리다. 도는 워커가
-                  있으면 명령이 409 로 거절하고(server.ts) App 이 그것을 토스트로 보여 준다 —
-                  버튼을 지우지 않는 것은 왜 못 지우는지를 화면이 말해야 하기 때문이다.
-                  stopPropagation: 이 줄 자체가 접기·펴기다 */}
-              <button
-                className="jobs-more jobs-delete"
-                title={t('jobs.run.delete')}
-                aria-label={t('jobs.run.delete')}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onDeleteRun(run.id)
-                }}
-              >
-                ✕
-              </button>
               <button
                 className="jobs-more"
                 title={t('jobs.detail.open')}
@@ -317,6 +299,24 @@ export function JobsView({
                     <span>{n}</span>
                   </span>
                 ))}
+                {/* 물러나게 하기. **자동 정리가 손대지 못하는 것을 위해 있다** — store.ts 의 TTL 은
+                    모든 Task 가 끝난 Run 만, 그것도 30일 뒤에 버리므로 중단한 작업이나 워커가 죽어
+                    dispatched 에 멈춘 Task 를 가진 Run 은 영원히 남는다.
+                    **제목 줄이 아니라 이 줄에 있다.** 되돌릴 수 없는 동작을 상세 창으로 가는 `›`
+                    바로 옆에 두면 둘 다 작은 표적이라 오클릭이 값비싸진다. 그리고 이 줄은 펼쳤을
+                    때만 보이므로 그 Run 을 열어 본 사람만 지우게 된다 — Gate 줄이 접혀도 남는 규칙과
+                    어긋나지 않는다: 그것은 알림이고 이것은 알림이 아니다.
+                    누르면 App 이 확인 창을 먼저 띄운다(onDeleteRun). 도는 워커가 있으면 명령이
+                    409 로 거절하고 그것을 토스트로 말한다 — 버튼을 감추지 않는 것은 왜 못 지우는지가
+                    화면에 남아야 하기 때문이다. */}
+                <button
+                  className="jobs-delete"
+                  title={t('jobs.run.delete')}
+                  aria-label={t('jobs.run.delete')}
+                  onClick={() => onDeleteRun(run.id)}
+                >
+                  <TrashIcon />
+                </button>
               </div>
             )}
           </div>

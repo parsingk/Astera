@@ -147,6 +147,29 @@ export const UnlockIcon = (): React.JSX.Element => (
   </svg>
 )
 
+/** 휴지통 — Run 을 물러나게 하는 버튼이 쓴다. 자물쇠 둘과 같은 관례다(단색, currentColor 를
+ *  물려받아 버튼의 색과 hover 를 따라간다). `✕` 로 하지 않는 이유: 이 사이드바에서 `✕` 는 이미
+ *  "닫는다·취소한다"의 모양이고(상세 창의 필터 지우기, 폼 취소), 지우는 것은 되돌릴 수 없어 같은
+ *  모양을 빌려 쓸 자리가 아니다. */
+export const TrashIcon = (): React.JSX.Element => (
+  <svg
+    viewBox="0 0 16 16"
+    width="12"
+    height="12"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.5"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M3 4.5h10" />
+    <path d="M6.5 4.5V3.2h3v1.3" />
+    <path d="M4.4 4.5l.6 8a.9.9 0 0 0 .9.8h4.2a.9.9 0 0 0 .9-.8l.6-8" />
+    <path d="M6.8 7v4M9.2 7v4" />
+  </svg>
+)
+
 export type RunIconKind = 'running' | 'blocked' | 'done' | 'failed'
 
 /** 여럿을 묶은 자리(Run 헤더, 접힌 줄)의 글리프. **도는 것은 채워진 점으로 적는다** — 묶음까지
