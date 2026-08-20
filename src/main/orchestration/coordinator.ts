@@ -19,7 +19,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { isSamePath } from '../../core/files/tree'
 import type { Provider } from '../../core/providers/meta'
-import type { KnowledgeFiles } from '../../core/knowledge/knowledge'
+import { KNOWLEDGE_DIRS, knowledgeFilesFrom, type KnowledgeFiles } from '../../core/knowledge/knowledge'
 
 export interface CoordinatorDeps {
   spawnSession(o: {
@@ -77,6 +77,42 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 /** specPath is an absolute path normalized to forward slashes (see startWorker below) */
 export const launchPrompt = (specPath: string): string =>
   `Read ${specPath} and follow the instructions in it`
+
+/** 워커가 일할 폴더에서 지식 파일을 모은다.
+ *
+ *  **`runCwd` 가 아니라 워커의 `cwd` 를 훑는다.** 워크트리는 같은 저장소의 다른 체크아웃이므로 그
+ *  파일들이 거기에도 있고, 그 트리에서 얻은 경로여야 워커가 자기가 고칠 코드와 같은 트리의 결정을
+ *  읽는다.
+ *
+ *  **읽지 못하면 빈 목록이다.** 권한이 없거나 경로가 사라졌을 때 지식을 못 읽는 것이 워커를 못
+ *  띄우는 이유가 되어서는 안 된다 — loadRunConfigs(main/run/prepare.ts)가 readdir 실패를 같은
+ *  방식으로 접는다.
+ *
+ *  깊이는 관례 디렉터리 자신과 그 바로 아래 한 층까지다. 이 저장소의 knowledge/ 가 그 모양이고
+ *  (README.md 는 바로 아래, decisions/*.md 는 한 층 더) docs/adr/ 은 평평하다. 더 깊이 들어가면
+ *  큰 저장소에서 비용이 예측되지 않는다. */
+async function knowledgeIn(cwd: string): Promise<KnowledgeFiles> {
+  const found: string[] = []
+  for (const dir of KNOWLEDGE_DIRS) {
+    const entries = await fs
+      .readdir(path.join(cwd, dir), { withFileTypes: true })
+      .catch(() => null)
+    if (!entries) continue // 그 관례를 쓰지 않는 저장소다 — 흔한 경우이고 오류가 아니다
+    for (const e of entries) {
+      // 경로는 항상 슬래시로 적는다 — spec 을 읽는 것이 사람이 아니라 에이전트이고, win32 의
+      // 역슬래시는 그 글에서 이스케이프로 읽힐 수 있다
+      if (e.isFile()) found.push(`${dir}/${e.name}`)
+      else if (e.isDirectory()) {
+        const inner = await fs
+          .readdir(path.join(cwd, dir, e.name), { withFileTypes: true })
+          .catch(() => null)
+        if (!inner) continue // 한 층 아래를 못 읽으면 그것만 건너뛴다
+        for (const f of inner) if (f.isFile()) found.push(`${dir}/${e.name}/${f.name}`)
+      }
+    }
+  }
+  return knowledgeFilesFrom(found)
+}
 
 export function buildSpecFile(a: {
   title: string
@@ -429,7 +465,8 @@ export class OrchCoordinator {
           spec: a.spec,
           taskId: a.taskId,
           dispatchId: a.dispatchId,
-          committing: !isSamePath(cwd, a.runCwd)
+          committing: !isSamePath(cwd, a.runCwd),
+          knowledge: await knowledgeIn(cwd)
         }),
       'utf8'
     )
