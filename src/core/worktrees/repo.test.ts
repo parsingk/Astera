@@ -46,13 +46,14 @@ describe('repoPathOf', () => {
     expect(repoPathOf(list, nested)).toBe(nested)
   })
 
-  it('대소문자만 다른 같은 경로도 되돌린다 — isSamePath 의 win32 규칙을 따른다', () => {
+  it('대소문자만 다른 같은 경로도 되돌린다 — isSamePath 의 win32-first 규칙을 따른다', () => {
     const list = [wt(absPath('repos', 'app'), absPath('wt', 'app', 'feature'))]
     const shouted = absPath('wt', 'app', 'feature').toUpperCase()
-    // win32 에서만 대소문자를 무시한다 — 그 외 플랫폼에서는 다른 경로이므로 그대로 통과한다
-    expect(repoPathOf(list, shouted)).toBe(
-      process.platform === 'win32' ? absPath('repos', 'app') : shouted
-    )
+    // 플랫폼을 타지 않는다. isSamePath 의 normalizePath 는 어디서나 resolve().toLowerCase() 라서
+    // (files/tree.ts 의 "win32-first" 주석) POSIX 에서도 대소문자만 다른 경로는 같은 경로다.
+    // 플랫폼을 타는 것은 구분자 쪽이고, history/index.test.ts 의 hiddenPaths 테스트가 그 둘을
+    // 갈라 둔 참고 사례다 — 대소문자는 무조건, `\`→`/` 치환은 win32 에서만.
+    expect(repoPathOf(list, shouted)).toBe(absPath('repos', 'app'))
   })
 
   it('첫 번째로 일치하는 등록을 쓴다', () => {
