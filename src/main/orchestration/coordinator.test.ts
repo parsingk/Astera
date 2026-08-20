@@ -7,6 +7,7 @@ import {
   buildSpecFile,
   buildReviewSpecFile,
   launchPrompt,
+  knowledgeIn,
   LAUNCH_FORBIDDEN,
   type CoordinatorDeps
 } from './coordinator'
@@ -247,6 +248,55 @@ describe('buildReviewSpecFile', () => {
     const md = buildReviewSpecFile({ title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_review', validated: false })
     expect(md).toContain('dsp_review')
     expect(md).toContain('--task-id tsk_1')
+  })
+})
+
+describe('knowledgeIn', () => {
+  let tmpDir: string
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-knowledge-'))
+  })
+
+  it('convention directory의 파일과 한 층 아래 파일은 상대 경로(슬래시)로 찾는다', async () => {
+    // 실제로는 `C:\Users\...` 같은 역슬래시가 있어도 forward slash로 적혀야 한다
+    await fs.mkdir(path.join(tmpDir, 'knowledge'))
+    await fs.mkdir(path.join(tmpDir, 'knowledge', 'decisions'))
+    await fs.writeFile(path.join(tmpDir, 'knowledge', 'README.md'), 'root', 'utf8')
+    await fs.writeFile(path.join(tmpDir, 'knowledge', 'decisions', 'ADR-001-x.md'), 'adr', 'utf8')
+
+    const result = await knowledgeIn(tmpDir)
+    // 정렬되고 exact match — 역슬래시도 절대 경로도 없어야 한다
+    expect(result.paths).toEqual(['knowledge/README.md', 'knowledge/decisions/ADR-001-x.md'])
+    expect(result.more).toBe(0)
+  })
+
+  it('convention directory 아래 두 층은 걷지 않는다', async () => {
+    // 내부 루프는 `f.isFile()`만 테스트하므로, 그 한 층 아래의 디렉터리는 걸리지 않는다
+    await fs.mkdir(path.join(tmpDir, 'knowledge', 'a', 'b'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'knowledge', 'a', 'b', 'deep.md'), 'deep', 'utf8')
+
+    const result = await knowledgeIn(tmpDir)
+    expect(result.paths).not.toContain(expect.stringContaining('deep.md'))
+    expect(result.paths).toEqual([])
+    expect(result.more).toBe(0)
+  })
+
+  it('convention directory가 전혀 없으면 빈 결과를 반환한다', async () => {
+    // readdir이 모두 실패하면 빈 목록으로 접힌다
+    const result = await knowledgeIn(tmpDir)
+    expect(result).toEqual({ paths: [], more: 0 })
+  })
+
+  it('여러 convention directory를 합친다', async () => {
+    await fs.mkdir(path.join(tmpDir, 'knowledge'))
+    await fs.mkdir(path.join(tmpDir, 'docs', 'adr'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'knowledge', 'x.md'), 'k', 'utf8')
+    await fs.writeFile(path.join(tmpDir, 'docs', 'adr', 'y.md'), 'a', 'utf8')
+
+    const result = await knowledgeIn(tmpDir)
+    // knowledgeFilesFrom가 정렬하므로 둘 다 나오고 정렬된 순서다
+    expect(result.paths).toEqual(['docs/adr/y.md', 'knowledge/x.md'])
+    expect(result.more).toBe(0)
   })
 })
 

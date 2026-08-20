@@ -80,6 +80,10 @@ export const launchPrompt = (specPath: string): string =>
 
 /** 워커가 일할 폴더에서 지식 파일을 모은다.
  *
+ *  **Exported for testing.** This is the only code in the knowledge feature that touches the
+ *  filesystem. The relative-path requirement must be protected by automated tests — a one-off
+ *  manual scan cannot preserve the failure case. Do not remove this export.
+ *
  *  **`runCwd` 가 아니라 워커의 `cwd` 를 훑는다.** 워크트리는 같은 저장소의 다른 체크아웃이므로 그
  *  파일들이 거기에도 있고, 그 트리에서 얻은 경로여야 워커가 자기가 고칠 코드와 같은 트리의 결정을
  *  읽는다.
@@ -91,7 +95,7 @@ export const launchPrompt = (specPath: string): string =>
  *  깊이는 관례 디렉터리 자신과 그 바로 아래 한 층까지다. 이 저장소의 knowledge/ 가 그 모양이고
  *  (README.md 는 바로 아래, decisions/*.md 는 한 층 더) docs/adr/ 은 평평하다. 더 깊이 들어가면
  *  큰 저장소에서 비용이 예측되지 않는다. */
-async function knowledgeIn(cwd: string): Promise<KnowledgeFiles> {
+export async function knowledgeIn(cwd: string): Promise<KnowledgeFiles> {
   const found: string[] = []
   for (const dir of KNOWLEDGE_DIRS) {
     const entries = await fs
