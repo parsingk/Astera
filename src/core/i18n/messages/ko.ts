@@ -759,6 +759,13 @@ export const ko = {
   'jobs.run.running': '도는 중',
   // 얽힌 Run 의 줄에 붙는 글자와 그 툴팁. Gate 의 주황 `!` 를 빌리지 않는 이유는 뜻이
   // 다르기 때문이다 — 막힌 것이 아니라 나눠 쓰는 중이고, 기다리는 사람이 없다
+  // Run 을 물러나게 하기. **자동 정리(store.ts 의 TTL)가 손대지 못하는 것을 위해 있다** — 그것은
+  // 모든 Task 가 끝난 Run 만, 그것도 30일 뒤에 버린다. 중단한 작업이나 워커가 죽어 dispatched 에
+  // 멈춘 Task 를 가진 Run 은 영원히 남는다
+  'jobs.run.delete': '작업 지우기',
+  'jobs.run.deleteBody': '"{objective}" 를 지웁니다 — Task {tasks}개와 이벤트 {events}개가 함께 사라지고 되돌릴 수 없습니다.\n\n이 작업이 만든 워크트리와 브랜치는 지우지 않습니다(파일 탐색기의 워크트리 패널에서 지울 수 있습니다).',
+  'jobs.run.deleteBusy': '이 작업에 도는 워커가 있어 지울 수 없습니다 — 먼저 멈춰 주세요',
+  'jobs.run.deleteFailed': '작업을 지우지 못했습니다',
   'jobs.run.sharedFolder': '폴더 공유',
   'jobs.run.sharedFolderHint': '다른 작업의 워커와 같은 폴더에서 돌고 있습니다 — 서로의 편집이 섞일 수 있고, 앱은 그것을 막지도 알아채지도 못합니다',
   'jobs.gates.more': '외 {count}건',

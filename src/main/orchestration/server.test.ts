@@ -2076,3 +2076,93 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
     expect(body.messages.some((m) => m.type === 'decision_gate' && m.body.includes('NO_CONFIG'))).toBe(true)
   })
 })
+
+// 자동 정리(store.ts 의 TTL)는 **끝난** Run 만, 그것도 30일 뒤에 버린다. 끝나지 않은 Run 은 영원히
+// 남으므로 사람이 물러나게 할 길이 있어야 한다 — 이 명령이 그 자리다.
+describe('run-delete', () => {
+  it('없는 Run 은 거절한다', async () => {
+    const deps = makeDeps()
+    const r = await call(deps, 'run-delete', { id: 'run_nope' })
+    expect(r.status).toBe(400)
+  })
+
+  it('--id 가 없으면 거절한다', async () => {
+    const deps = makeDeps()
+    expect((await call(deps, 'run-delete', {})).status).toBe(400)
+  })
+
+  // reset 과 같은 판정이고 같은 이유다: 삭제는 되돌릴 수 없으므로 도는 상태에서 다룰 것을 하나 더
+  // 만들지 않는다. 세션까지 죽이게 하면 커밋 안 된 작업이 조용히 사라진다
+  it('그 Run 에 열린 Dispatch 가 있으면 409 로 거절한다', async () => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    await call(deps, 'worker-start', {
+      taskId: (task.body as { id: string }).id,
+      agent: 'codex',
+      account: 'acc1',
+      worktree: 'current'
+    })
+    const r = await call(deps, 'run-delete', { id: runId })
+    expect(r.status).toBe(409)
+    expect(deps.getState().runs).toHaveLength(1)
+  })
+
+  it('도는 워커가 없으면 그 Run 과 딸린 것을 지운다', async () => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const r = await call(deps, 'run-delete', { id: runId })
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ deleted: runId, tasks: 1 })
+    expect(deps.getState().runs).toHaveLength(0)
+    expect(deps.getState().tasks).toHaveLength(0)
+  })
+
+  // 다른 Run 의 열린 Dispatch 는 이 Run 의 삭제를 막지 않는다 — 판정이 폴더나 앱 전체가 아니라
+  // **그 Run** 을 봐야 한다. reset 과 다른 점이 이것이다
+  it('다른 Run 이 돌고 있어도 이 Run 은 지운다', async () => {
+    const deps = makeDeps()
+    const busy = await call(deps, 'run-create', { objective: 'busy', cwd: 'D:/p' })
+    const busyId = (busy.body as { id: string }).id
+    const bt = await call(deps, 'task-create', { runId: busyId, title: 'bt', spec: 's' })
+    await call(deps, 'worker-start', {
+      taskId: (bt.body as { id: string }).id,
+      agent: 'codex',
+      account: 'acc1',
+      worktree: 'current'
+    })
+    const idle = await call(deps, 'run-create', { objective: 'idle', cwd: 'D:/p' })
+    const idleId = (idle.body as { id: string }).id
+    expect((await call(deps, 'run-delete', { id: idleId })).status).toBe(200)
+    expect(deps.getState().runs.map((r) => r.id)).toEqual([busyId])
+  })
+
+  // 되돌릴 수 없는 삭제이므로 지우기 전에 .bak 을 남긴다 — reset 과 같은 관례다
+  it('지우기 전에 백업을 부른다', async () => {
+    let backups = 0
+    const deps = { ...makeDeps(), backup: async () => void backups++ }
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    await call(deps, 'run-delete', { id: (run.body as { id: string }).id })
+    expect(backups).toBe(1)
+  })
+
+  // 워커는 Run 을 지울 이유가 없다 — COORDINATOR_ONLY 에 들어 있어야 한다
+  it('워커 세션은 부를 수 없다', async () => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    await call(deps, 'worker-start', {
+      taskId: (task.body as { id: string }).id,
+      agent: 'codex',
+      account: 'acc1',
+      worktree: 'current'
+    })
+    // 그 워커의 세션 id 로 부른다 — handleCommand 가 Dispatch 를 가진 세션을 워커로 본다
+    const r = await call(deps, 'run-delete', { id: runId }, 'sess1')
+    expect(r.status).toBe(403)
+  })
+})

@@ -17,6 +17,7 @@ import {
   applyReply,
   createGate,
   resolveGate,
+  deleteRuns,
   type OrchState
 } from './state'
 import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task } from './types'
@@ -1493,5 +1494,68 @@ describe('blockForReview', () => {
     )
     expect(r.value.question).toContain('task-update')
     expect(r.value.question).toContain('completed')
+  })
+})
+
+// Run 하나를 사람이 물러나게 하는 것. **TTL prune 과 같은 규칙을 쓴다** — 그 규칙이 store.ts 안에만
+// 있어 테스트가 닿지 않았고, 여기로 옮기면서 둘이 함께 이 테스트를 얻는다.
+describe('deleteRuns', () => {
+  it('그 Run 에 딸린 여섯 배열을 모두 지운다', () => {
+    const { s, runId } = seed()
+    // 메시지·전달·Gate 를 **실제로 채워 넣고** 본다 — 비어 있는 배열에 toEqual([]) 은 아무것도
+    // 증명하지 않는다. 하나라도 남으면 그 Run 의 흔적이 화면 밖에서 산다
+    const withQ = unwrap<{ id: string }>(
+      createQuestion(s, { taskId: s.tasks[0].id, dispatchId: s.dispatches[0].id, question: 'q' }, NOW) as never
+    ).state
+    const withDelivery = unwrap<unknown>(nextDelivery(withQ, { runId }, NOW) as never).state
+    // Gate 는 열린 Dispatch 가 있는 Task 에 걸 수 없다(createGate) — 그래서 Task 를 하나 더 만든다
+    const t2 = unwrap<{ id: string }>(
+      createTask(withDelivery, { runId, title: 't2', spec: 's2', deps: [] }, NOW) as never
+    )
+    const withGate = unwrap<unknown>(
+      createGate(t2.state, { taskId: t2.value.id, question: 'why' }, NOW) as never
+    ).state
+    expect(withGate.messages.length).toBeGreaterThan(0)
+    expect(withGate.deliveries.length).toBeGreaterThan(0)
+    expect(withGate.gates.length).toBeGreaterThan(0)
+    const next = deleteRuns(withGate, new Set([runId]))
+    expect(next.runs).toEqual([])
+    expect(next.tasks).toEqual([])
+    expect(next.dispatches).toEqual([])
+    expect(next.messages).toEqual([])
+    expect(next.deliveries).toEqual([])
+    expect(next.gates).toEqual([])
+  })
+
+  // Dispatch 는 runId 를 들고 있지 않다 — taskId 로만 그 Run 에 매인다. 이것이 이 함수에서 유일하게
+  // 간접적인 자리이고, 놓치면 지워진 Task 를 가리키는 고아 Dispatch 가 남는다
+  it('Dispatch 는 taskId 를 통해 함께 지워진다', () => {
+    const { s, runId, dispatchId } = seed()
+    expect(s.dispatches.some((d) => d.id === dispatchId)).toBe(true)
+    expect(deleteRuns(s, new Set([runId])).dispatches).toEqual([])
+  })
+
+  it('다른 Run 은 건드리지 않는다', () => {
+    const { s: s1, runId: keep } = seed()
+    const { state: s2, value: gone } = unwrap<{ id: string }>(
+      createRun(s1, { objective: 'o2', cwd: 'D:/q' }, NOW) as never
+    )
+    const withTask = unwrap<{ id: string }>(
+      createTask(s2, { runId: gone.id, title: 't2', spec: 's2', deps: [] }, NOW) as never
+    ).state
+    const next = deleteRuns(withTask, new Set([gone.id]))
+    expect(next.runs.map((r) => r.id)).toEqual([keep])
+    expect(next.tasks.map((t) => t.runId)).toEqual([keep])
+    expect(next.dispatches).toHaveLength(1)
+  })
+
+  it('없는 id 는 무해하다 — 상태가 그대로다', () => {
+    const { s } = seed()
+    expect(deleteRuns(s, new Set(['run_nope']))).toEqual(s)
+  })
+
+  it('빈 집합이면 상태가 그대로다', () => {
+    const { s } = seed()
+    expect(deleteRuns(s, new Set())).toEqual(s)
   })
 })

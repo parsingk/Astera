@@ -2385,6 +2385,36 @@ export default function App(): React.JSX.Element {
                 onNewRun={() => {
                   if (currentProject) setNewRunOpen(true)
                 }}
+                // Run 을 물러나게 한다. **확인을 여기서 받는다** — 되돌릴 수 없고, 지워지는 것을
+                // 세어 보여 줄 수 있는 곳이 스냅숏을 든 이 자리다. 워크트리는 건드리지 않으므로
+                // (사용자의 git 저장소다) 몇 개가 남는지도 함께 말한다: 조용히 고아로 두지 않는다.
+                // 거절(도는 워커가 있다)은 토스트로 — 폼이 없는 단발 액션의 실패 관례다.
+                onDeleteRun={(runId) => {
+                  void (async () => {
+                    if (!currentProject) return
+                    const run = orchSnapshot?.runs.find((r) => r.id === runId)
+                    if (!run) return
+                    const ok = await confirmModal({
+                      title: t('jobs.run.delete'),
+                      body: t('jobs.run.deleteBody', {
+                        objective: run.objective,
+                        tasks: run.total,
+                        events: run.eventCount
+                      }),
+                      confirmLabel: t('jobs.run.delete')
+                    })
+                    if (!ok) return
+                    try {
+                      const reply = await window.api.orch.command(currentProject, 'run-delete', {
+                        id: runId
+                      })
+                      if (reply.status === 409) toast.error(t('jobs.run.deleteBusy'))
+                      else if (reply.status >= 400) toast.error(t('jobs.run.deleteFailed'))
+                    } catch {
+                      toast.error(t('jobs.run.deleteFailed'))
+                    }
+                  })()
+                }}
               />
             ) : (
               <>

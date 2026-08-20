@@ -1348,6 +1348,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    않는다: 이 버튼은 Run 마다 하나씩 있어서 넷이 쌓이면 넷이 빛나고, 그러면 정작 상태 색과 다툰다 */
 .jobs-more { flex: none; display: inline-flex; align-items: center; padding: 2px 7px; border-radius: var(--radius-sm); font-size: 14px; line-height: 1.2; }
 .jobs-more:hover { color: var(--accent); border-color: var(--accent); }
+/* 지우기 — 같은 칩을 쓰고 hover 에서만 갈라진다. 평소에 붉지 않은 이유는 Run 마다 하나씩 있어서다:
+   여섯 줄이 쌓이면 붉은 점 여섯이 상태 색과 다투고, 정작 사람이 봐야 하는 것(도는 중·막힘)을 이긴다.
+   되돌릴 수 없는 동작이라는 경고는 색이 아니라 확인 창이 한다(App.tsx 의 onDeleteRun) */
+.jobs-delete:hover { color: var(--git-deleted); border-color: var(--git-deleted); }
 .jobs-empty { margin: auto; text-align: center; padding: 0 24px; color: var(--text-faint); font-size: 13px; }
 .jobs-empty-hint { margin-top: 6px; font-size: 11.5px; }
 

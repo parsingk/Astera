@@ -769,3 +769,30 @@ export function resolveGate(
     next
   )
 }
+
+/** 그 Run 들과 그것에 딸린 모든 것을 지운다. 되돌릴 수 없다.
+ *
+ *  **두 곳이 이 함수를 쓴다** — 사람이 사이드바에서 물러나게 하는 `run-delete`, 그리고 store 의 TTL
+ *  prune(끝난 Run 이 30일 지나면 버린다). 그 규칙은 store.ts 안에만 있어서 테스트가 닿지 않았고,
+ *  두 벌로 자라면 한쪽만 고쳐지는 날 사람이 지운 Run 의 잔해가 남거나 그 반대가 된다.
+ *
+ *  **Dispatch 만 간접적이다.** Dispatch 는 runId 를 들고 있지 않고 taskId 로만 그 Run 에 매이므로,
+ *  남은 Task 로 걸러야 한다. 이것을 놓치면 지워진 Task 를 가리키는 고아 Dispatch 가 남고, 그것은
+ *  view.ts 의 jobTaskOf 가 절대 찾지 못하는(그래서 화면에 안 나오는) 채로 상태 파일에 산다.
+ *
+ *  **도는 워커가 있는지는 여기서 보지 않는다.** 그 판정은 부르는 쪽의 것이다 — server.ts 의
+ *  `run-delete` 가 열린 Dispatch 를 세어 거절하고(reset 이 같은 판정을 한다), TTL prune 은 애초에
+ *  모든 Task 가 terminal 인 Run 만 고른다. 순수 층에 그 검사를 두면 TTL 쪽이 두 번 검사하게 된다. */
+export function deleteRuns(s: OrchState, runIds: ReadonlySet<string>): OrchState {
+  if (runIds.size === 0) return s
+  const tasks = s.tasks.filter((t) => !runIds.has(t.runId))
+  const keptTaskIds = new Set(tasks.map((t) => t.id))
+  return {
+    runs: s.runs.filter((r) => !runIds.has(r.id)),
+    tasks,
+    dispatches: s.dispatches.filter((d) => keptTaskIds.has(d.taskId)),
+    messages: s.messages.filter((m) => !runIds.has(m.runId)),
+    deliveries: s.deliveries.filter((d) => !runIds.has(d.runId)),
+    gates: s.gates.filter((g) => !runIds.has(g.runId))
+  }
+}

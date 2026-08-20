@@ -8,7 +8,13 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { blockForReview, createGate, emptyState, type OrchState } from '../../core/orchestration/state'
+import {
+  blockForReview,
+  createGate,
+  deleteRuns,
+  emptyState,
+  type OrchState
+} from '../../core/orchestration/state'
 
 /** Cutoff for discarding a finished Run. The same 30 days as SchedulerConfigStore's ENTRY_TTL_MS */
 export const RUN_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -137,17 +143,15 @@ export class OrchestrationStore {
         })
         .map((r) => r.id)
     )
-    const keptTasks = withGates.tasks.filter((t) => !doomed.has(t.runId))
-    const keptTaskIds = new Set(keptTasks.map((t) => t.id))
-
-    this.state = {
-      runs: st.runs.filter((r) => !doomed.has(r.id)),
-      tasks: keptTasks,
-      dispatches: dispatches.filter((d) => keptTaskIds.has(d.taskId)),
-      messages: withGates.messages.filter((m) => !doomed.has(m.runId)),
-      deliveries: st.deliveries.filter((d) => !doomed.has(d.runId)),
-      gates: withGates.gates.filter((g) => !doomed.has(g.runId))
-    }
+    // **지우는 방법은 deleteRuns(core/orchestration/state.ts)가 안다.** 여기가 정하는 것은 어느 Run
+    // 인가뿐이다 — 사람이 사이드바에서 물러나게 하는 run-delete 가 같은 함수를 쓰고, 규칙이 두 벌로
+    // 자라면 한쪽만 고쳐지는 날 한쪽 경로가 잔해를 남긴다. 이 로직이 이 파일 안에만 있던 동안은
+    // 테스트도 닿지 않았다.
+    // **withGates 를 바탕으로 쓴다, st 가 아니다.** 위 복구 단계가 validating·reviewing 이던 Task 를
+    // blocked 로 옮기고 Gate 를 열어 둔 결과가 그쪽에 있다 — st 를 펼치면 그 복구가 조용히 덮인다
+    // (실제로 그렇게 썼다가 store.test.ts 의 복구 테스트 셋이 잡았다). dispatches 만 따로 넘기는
+    // 것은 그것이 outcome 정규화를 거친 별도 배열이기 때문이다.
+    this.state = deleteRuns({ ...withGates, dispatches }, doomed)
 
     if (unknownOutcomes > 0 || doomed.size > 0 || staleValidations > 0 || staleReviews > 0) {
       if (doomed.size > 0) await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})

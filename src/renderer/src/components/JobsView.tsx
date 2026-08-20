@@ -75,7 +75,8 @@ export function JobsView({
   canOpenSession,
   onOpenSession,
   onOpenRun,
-  onNewRun
+  onNewRun,
+  onDeleteRun
 }: {
   snapshot: OrchSnapshot | null
   /** Whether the caller currently has a project open. snapshot alone cannot answer that — with no
@@ -102,6 +103,9 @@ export function JobsView({
   /** Opens NewRunModal. This view creates no Run itself — App owns the modal and the project path it
    *  needs, the same split as onOpenRun/onOpenSession above. */
   onNewRun: () => void
+  /** 이 Run 을 물러나게 한다(`run-delete`). **되돌릴 수 없다** — 확인은 이 뷰가 받고(지워지는 것을
+   *  세어 보여 준다) 명령은 App 이 보낸다, onOpenRun 과 같은 갈래다. */
+  onDeleteRun: (runId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   // Runs the user collapsed. Absence means expanded — a Run that just appeared, or one from before this
@@ -203,6 +207,24 @@ export function JobsView({
                   (같은 판단을 Gate 줄이 이미 하고 있다). 그리고 Run 이 쌓여 접어 두게 될 때가
                   상세 창이 가장 필요한 때다.
                   stopPropagation: 이 줄 자체가 접기·펴기라서, 없으면 창을 열면서 동시에 접는다 */}
+              {/* 물러나게 하기. **자동 정리가 손대지 못하는 것을 위해 있다** — store.ts 의 TTL 은
+                  모든 Task 가 끝난 Run 만, 그것도 30일 뒤에 버리므로 중단한 작업이나 워커가 죽어
+                  dispatched 에 멈춘 Task 를 가진 Run 은 영원히 남는다.
+                  `›` 옆인 이유: 이 줄이 그 Run 에 대해 할 수 있는 일이 모이는 자리다. 도는 워커가
+                  있으면 명령이 409 로 거절하고(server.ts) App 이 그것을 토스트로 보여 준다 —
+                  버튼을 지우지 않는 것은 왜 못 지우는지를 화면이 말해야 하기 때문이다.
+                  stopPropagation: 이 줄 자체가 접기·펴기다 */}
+              <button
+                className="jobs-more jobs-delete"
+                title={t('jobs.run.delete')}
+                aria-label={t('jobs.run.delete')}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onDeleteRun(run.id)
+                }}
+              >
+                ✕
+              </button>
               <button
                 className="jobs-more"
                 title={t('jobs.detail.open')}

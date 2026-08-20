@@ -19,6 +19,7 @@ import {
   nextDelivery,
   openDispatch,
   resolveGate,
+  deleteRuns,
   type OrchState,
   type Res
 } from '../../core/orchestration/state'
@@ -142,6 +143,7 @@ const conflict = (msg: string): Reply => ({ status: 409, body: { error: msg } })
 const COORDINATOR_ONLY = new Set([
   'run-create',
   'run-use',
+  'run-delete',
   'task-create',
   'task-update',
   'worker-start',
@@ -318,6 +320,39 @@ export async function handleCommand(
       const id = str(args.id)
       const run = s.runs.find((r) => r.id === id)
       return run ? okBody(run) : bad(`unknown run: ${String(id)}`)
+    }
+    // 사람이 사이드바에서 Run 을 물러나게 한다. **되돌릴 수 없다.**
+    //
+    // 자동 정리는 이미 있지만(store.ts 의 TTL: 모든 Task 가 terminal 인 Run 이 30일 지나면 버린다)
+    // 그것이 손대지 못하는 것이 있다 — **끝나지 않은 Run 은 영원히 남는다.** 중단한 작업, 실패한
+    // 실험, 워커가 죽어 dispatched 에 멈춘 Task 가 그렇다. 이 명령이 메우는 자리가 정확히 그것이다.
+    //
+    // 지우는 방법은 deleteRuns(core/orchestration/state.ts)가 안다 — TTL prune 과 **같은 함수**다.
+    //
+    // 워크트리와 브랜치는 건드리지 않는다: 그것은 사용자의 git 저장소이고 지우는 자리가 이미 있다
+    // (파일 탐색기의 워크트리 패널). 앱이 Run 기록을 지우는 것과 사용자의 저장소를 지우는 것은
+    // 다른 무게다.
+    case 'run-delete': {
+      const id = str(args.id)
+      if (!id) return bad('--id is required')
+      if (!s.runs.some((r) => r.id === id)) return bad(`unknown run: ${String(id)}`)
+      // 도는 워커가 있으면 거절한다 — reset 이 같은 판정을 한다. 삭제는 되돌릴 수 없으므로 도는
+      // 상태에서 다룰 것을 하나 더 만들지 않는다. 세션을 죽이는 일까지 이 명령이 하게 하면, 커밋
+      // 안 된 작업을 워크트리에 남긴 워커가 조용히 사라진다.
+      const open = s.dispatches.filter((d) => {
+        if (d.outcome || d.endedAt) return false
+        return s.tasks.find((t) => t.id === d.taskId)?.runId === id
+      })
+      if (open.length > 0)
+        return conflict(
+          `refusing to delete while ${open.length} dispatch(es) are open — stop them first`
+        )
+      // 백업은 지우기 전에. reset 과 같은 관례이고 같은 이유다 — 되돌릴 수 없는 삭제에 .bak 하나는
+      // 값이 싸다. 실패해도 삭제를 막지 않는다(deps.backup 이 스스로 접는다).
+      if (deps.backup) await deps.backup()
+      const before = s.tasks.filter((t) => t.runId === id).length
+      await deps.setState(deleteRuns(deps.getState(), new Set([id])))
+      return okBody({ deleted: id, tasks: before })
     }
     case 'task-create': {
       const runId = str(args.runId) ?? s.runs[s.runs.length - 1]?.id
