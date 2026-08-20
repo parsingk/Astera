@@ -11,9 +11,9 @@ interface DensityValues {
 /** 스펙 §4.2. 밀도는 눈에 보이는 네 곳만 연다 — styles.css 의 padding 140곳을 전부 토큰화하면
  *  테마 기능이 아니라 CSS 전면 재작성이 된다. */
 export const DENSITY: Record<Density, DensityValues> = {
-  compact: { rowPadY: '3px', tabPadY: '5px', selH: '26px', modalPad: '16px' },
-  normal: { rowPadY: '4px', tabPadY: '7px', selH: '30px', modalPad: '20px' },
-  roomy: { rowPadY: '6px', tabPadY: '9px', selH: '34px', modalPad: '24px' }
+  compact: { rowPadY: '3px', tabPadY: '6px', selH: '26px', modalPad: '16px' },
+  normal: { rowPadY: '4px', tabPadY: '8px', selH: '30px', modalPad: '20px' },
+  roomy: { rowPadY: '6px', tabPadY: '10px', selH: '34px', modalPad: '24px' }
 }
 
 /** 테마를 CSS 변수 표로 펼친다. 프로바이더가 이 표를 documentElement 에 심는다.

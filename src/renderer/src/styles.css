@@ -145,6 +145,8 @@
   --info-line: #1e4a5a;
   /* 브랜드·역할색은 테마가 바꾸지 않는다 — Claude 의 색이고 발화자 구분이다 */
   --brand-claude: #d97757;
+  /* OpenAI 마크의 색이다 — --brand-claude 와 같은 이유로 테마가 다시 칠하지 않는다 */
+  --brand-codex: #fff;
   --role-user: #4f9cf9;
   --role-assistant: #f97316;
   --sans: system-ui, -apple-system, 'Segoe UI', 'Malgun Gothic', sans-serif;
@@ -179,7 +181,7 @@
   --tracking: 0;
   /* 밀도. 눈에 보이는 네 곳만 연다 — 전부 토큰화하면 CSS 전면 재작성이 된다 */
   --row-pad-y: 4px;
-  --tab-pad-y: 7px;
+  --tab-pad-y: 8px;
   --sel-h: 30px;
   --modal-pad: 20px;
   --radius: 6px;      /* triggers, options, inputs */
@@ -308,12 +310,12 @@ body { font-family: var(--sans); letter-spacing: var(--tracking); background: va
 }
 /* 배경까지 함께 바뀌어야 눌리는 것이라는 게 읽힌다 — 색만 밝아지는 변화는 어두운 면 위에서 잘 보이지 않는다 */
 .rail-btn:hover { color: var(--text); background: var(--elevated); }
-.rail-btn.on { color: var(--text); background: var(--elevated); box-shadow: inset 2px 0 0 var(--accent); }
+.rail-btn.on { color: var(--text); background: var(--elevated); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
 /* box-shadow does not composite across rules — one declaration wins outright. Without this, tabbing to
    the active rail button would show the .on marker OR the button:focus-visible ring, never both, because
    whichever rule matched last (or matched more specifically) would replace the other's box-shadow
    entirely. Restating both explicitly, marker first then ring, is the only way to keep both visible. */
-.rail-btn.on:focus-visible { box-shadow: inset 2px 0 0 var(--accent), 0 0 0 2px var(--ring); }
+.rail-btn.on:focus-visible { box-shadow: inset var(--marker-w) 0 0 var(--accent), 0 0 0 2px var(--ring); }
 /* The wrapper that pins the terminal and ⚙ (settings) to the bottom together. The auto margin has to
    live on this one wrapper — giving it to each .rail-btn (two auto siblings) distributes the free space
    evenly and pushes the buttons apart. */
@@ -365,7 +367,7 @@ body.resizing-row { cursor: row-resize; user-select: none; }
    위치와 생김새는 아래 .run-global-menu 와 같은 규칙을 따른다 — 같은 툴바에서 두 메뉴가 다르게
    생기면 그게 더 눈에 띈다 */
 .run-more { position: relative; }
-.run-more-menu { position: absolute; top: calc(100% + 5px); right: 0; z-index: 20; min-width: 170px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
+.run-more-menu { position: absolute; top: calc(100% + 5px); right: 0; z-index: 20; min-width: 170px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 4px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 1px; }
 .run-more-item { text-align: left; white-space: nowrap; padding: 5px 8px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text); font-size: 12.5px; cursor: pointer; }
 .run-more-item:hover { background: var(--elevated); }
 .run-global { position: relative; }
@@ -373,7 +375,7 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .run-global-badge:hover { border-color: var(--text-faint); }
 .run-global-badge .tri { color: var(--run); font-size: 9px; }
 .run-global-badge .n { color: var(--ok); font-weight: 600; }
-.run-global-menu { position: absolute; top: calc(100% + 5px); right: 0; z-index: 20; min-width: 240px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
+.run-global-menu { position: absolute; top: calc(100% + 5px); right: 0; z-index: 20; min-width: 240px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 4px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 1px; }
 .run-global-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--radius); transition: background var(--ease); }
 .run-global-row:hover { background: var(--elevated); }
 .run-global-live { width: 7px; height: 7px; border-radius: 50%; background: var(--run); flex: none; box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
@@ -443,6 +445,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    items, and the ul has margin:0, so without making this container a flex the hint sticks to the first
    account row */
 .settings-accounts { display: flex; flex-direction: column; gap: 10px; }
+/* --row-pad-y 보다 일부러 1px 더 넉넉하다 — 밀도 토큰에 넣지 않았다. "고쳐" 5px→4px 로 맞추면 2px 만큼 눈에 보이게 좁아진다 */
 .account-row { display: flex; align-items: center; gap: 8px; padding: 5px 12px; border-left: 2px solid transparent; cursor: default; transition: background var(--ease), border-color var(--ease); }
 .account-row:hover { background: var(--elevated); border-left-color: var(--accent); }
 .account-label { flex: 1; min-width: 0; font-size: 12px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -454,8 +457,8 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .login-dot.on { background: var(--ok); } /* green, logged in */
 /* provider badge — shared by account rows, the detection list, and history entries */
 .provider-badge { flex: none; display: inline-flex; align-items: center; line-height: 1; opacity: 0.85; }
-.provider-badge.claude { color: #d97757; font-size: 11px; }
-.provider-badge.codex { color: #fff; } /* the OpenAI mark — its size is set by the svg attributes */
+.provider-badge.claude { color: var(--brand-claude); font-size: 11px; }
+.provider-badge.codex { color: var(--brand-codex); } /* the OpenAI mark — its size is set by the svg attributes */
 .confirm-text { font-size: 13px; color: var(--text); line-height: 1.5; margin: 0 0 12px; }
 .toggle-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; user-select: none; }
 .warn-text { font-size: 11.5px; color: var(--warn); line-height: 1.5; margin: 8px 0 0; }
@@ -477,7 +480,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .worktree-group:not(:last-child) { border-bottom: 1px solid var(--line-soft); }
 .worktree-repo { padding: 10px 12px 6px; font-size: 13.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .worktree-list { margin: 0 0 5px 22px; border-left: 2px solid var(--line); }
-.worktree-row { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 10px; transition: background var(--ease); }
+.worktree-row { display: flex; align-items: center; gap: 8px; padding: var(--row-pad-y) 12px var(--row-pad-y) 10px; transition: background var(--ease); }
 .worktree-row:hover { background: var(--elevated); }
 .worktree-name { flex: 1; min-width: 0; font-size: 11.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .worktree-status { opacity: 0.6; font-style: normal; }
@@ -498,7 +501,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 
 /* ---------- tabs ---------- */
 .tabs { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; }
-.tab { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: 11.5px; color: var(--text-dim); border-right: 1px solid var(--line); cursor: pointer; white-space: nowrap; flex: none; transition: background var(--ease), color var(--ease); }
+.tab { display: flex; align-items: center; gap: 8px; padding: var(--tab-pad-y) 14px; font-size: 11.5px; color: var(--text-dim); border-right: 1px solid var(--line); cursor: pointer; white-space: nowrap; flex: none; transition: background var(--ease), color var(--ease); }
 .tab.active { background: var(--bg); color: var(--text); }
 .tab.exited .tab-title { text-decoration: line-through; color: var(--text-faint); }
 .tab-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
@@ -632,7 +635,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* z-index: raises modals rendered inside the sidebar (AccountPanel) to group 7 so they are not covered by
    .terminal-wrap (position:relative, group 6), which comes later in the DOM. Common to every modal. */
 .modal-backdrop { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; }
-.modal { background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 20px; width: 460px; display: flex; flex-direction: column; gap: 12px; }
+.modal { background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: var(--modal-pad); width: 460px; display: flex; flex-direction: column; gap: 12px; }
 /* In a modal wrapped in a form (add and import account) the form is the only child, so the modal gap does
    not reach inside — the same vertical spacing is given to the form as well, keeping the input fields off
    the button row */
@@ -705,10 +708,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .settings-nav { display: flex; flex-direction: column; gap: 2px; width: 200px; flex-shrink: 0; padding: 16px 12px; border-right: 1px solid var(--line); }
 .settings-nav-item { text-align: left; background: none; border: none; color: var(--text-dim); font-size: 13.5px; padding: 8px 12px; border-radius: var(--radius); cursor: pointer; }
 .settings-nav-item:hover { background: var(--line-soft); color: var(--text); }
-.settings-nav-item.active { background: var(--line-soft); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
+.settings-nav-item.active { background: var(--line-soft); color: var(--text); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
 /* Same reasoning as .rail-btn.on:focus-visible above — box-shadow does not composite, so the current
    settings tab needs both shadows restated explicitly or tabbing to it shows no ring. */
-.settings-nav-item.active:focus-visible { box-shadow: inset 2px 0 0 var(--accent), 0 0 0 2px var(--ring); }
+.settings-nav-item.active:focus-visible { box-shadow: inset var(--marker-w) 0 0 var(--accent), 0 0 0 2px var(--ring); }
 .settings-content { flex: 1; min-width: 0; padding: 24px 32px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
 .settings-slack { display: flex; flex-direction: column; gap: 8px; }
 .settings-worktree { display: flex; flex-direction: column; gap: 8px; }
@@ -781,7 +784,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 }
 .sel-trigger {
   width: 100%;
-  height: 30px;
+  height: var(--sel-h);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -829,7 +832,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
   margin: 0;
   list-style: none;
   /* Two layers: a tight one that separates the panel edge from the surface, a wide one for the lift */
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-sm), var(--shadow-lg);
   animation: sel-in var(--ease);
 }
 /* Opens upward instead, when the space below the trigger cannot hold the menu — menuPlacement() in
@@ -882,7 +885,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-lg);
   padding: 3px;
-  box-shadow: 0 6px 18px rgba(0,0,0,.45);
+  box-shadow: var(--shadow-lg);
   font-size: 12px;
 }
 .context-menu-item { padding: 5px 10px; border-radius: var(--radius-sm); cursor: pointer; color: var(--text); transition: background var(--ease); }
@@ -1156,7 +1159,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .rtp-anchor { position: relative; }
 /* Sized by its content between a floor and a ceiling, not pinned to one width — a kind label must
    never be clipped, and the list grows as later tasks add kinds. */
-.rtp-menu { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; min-width: 220px; width: max-content; max-width: 340px; max-height: 60vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 6px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
+.rtp-menu { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; min-width: 220px; width: max-content; max-width: 340px; max-height: 60vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 6px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 1px; }
 /* flex: none on every child. The menu is a flex column with a max-height, so without it the children
    shrink to fit instead of overflowing — the rows lose their own height and the text collides.
    overflow-y can only scroll what refuses to be squashed. */
@@ -1172,21 +1175,21 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* RunConfigForm's "add optional field" menu — same shape as .rtp-menu but a flat list, so it gets its
    own (short) rule set rather than sharing .rtp-menu's grouped layout. */
 .rcm-add-option { position: relative; align-self: flex-start; }
-.rcm-add-option-menu { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; min-width: 160px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, .5); display: flex; flex-direction: column; gap: 1px; }
+.rcm-add-option-menu { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; min-width: 160px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 4px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 1px; }
 .rcm-add-option-item { text-align: left; white-space: nowrap; padding: 5px 8px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text); font-size: 12.5px; cursor: pointer; }
 .rcm-add-option-item:hover { background: var(--elevated); }
 .lh-list { list-style: none; max-height: 360px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .lh-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: var(--radius); cursor: pointer; transition: background var(--ease), box-shadow var(--ease); }
 .lh-row:hover { background: var(--elevated); }
-.lh-row.selected { background: var(--line-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.lh-row.selected { background: var(--line-soft); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
 .lh-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .lh-name { font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lh-path { font-size: 11px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lh-meta { font-size: 10.5px; font-family: var(--mono); color: var(--text-dim); flex-shrink: 0; }
 .preview-scroll { overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
 .msg { font-size: 13px; line-height: 1.5; }
-.msg.user b { color: #4f9cf9; }
-.msg.assistant b { color: #f97316; }
+.msg.user b { color: var(--role-user); }
+.msg.assistant b { color: var(--role-assistant); }
 .panes { flex: 1; min-height: 0; }
 /* The pane grid — PaneGrid always renders as .panes.pane-grid (the plain .panes JSX that was the
    single-pane path disappeared when rendering became tree-based). The tree is flattened into percentage
@@ -1337,7 +1340,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* tree selection and inline editing */
 /* Tree selection — a background alone overlaps :hover in luminance and multi-selection does not read.
    It follows the convention of settings-nav-item.active (a left accent bar plus a line-soft background) */
-.fx-row.selected { background: var(--line-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.fx-row.selected { background: var(--line-soft); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
 .fx-tree:focus-within .fx-row.selected { background: var(--elevated); }
 /* items pending a cut — dimmed until they are pasted */
 .fx-row.cut { opacity: .45; }
@@ -1424,12 +1427,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    상태 색을 지키려는 것이다), Gate 줄이 이미 같은 뜻의 톤을 왼쪽 띠로 쓰고 있어 눈이 배울 것이 없다.
    **border-left 가 아니라 inset box-shadow 다.** box-sizing 이 전역 border-box 라 진짜 테두리는
    내용을 2px 밀어 얽힌 Run 만 줄이 어긋난다. 이 앱은 그 자리에 쓰는 관용구가 따로 있다
-   (.rail-btn.on, .lh-row.selected, .settings-nav-item.active — 전부 inset 2px 0 0).
+   (.rail-btn.on, .lh-row.selected, .settings-nav-item.active — 전부 inset var(--marker-w) 0 0).
    그래서 hover 와 같은 property 를 쓰게 되므로 아래에서 둘을 함께 적는다 — 안 그러면 가리키는
    동안 이 표식이 사라진다 */
-.jobs-run.shared-folder { box-shadow: inset 2px 0 0 var(--git-conflict); }
+.jobs-run.shared-folder { box-shadow: inset var(--marker-w) 0 0 var(--git-conflict); }
 .jobs-run.shared-folder:hover {
-  box-shadow: inset 0 0 0 1px var(--accent), inset 2px 0 0 var(--git-conflict);
+  box-shadow: inset 0 0 0 1px var(--accent), inset var(--marker-w) 0 0 var(--git-conflict);
 }
 /* 줄에 붙는 글자. 개수 묶음(--text-dim)보다 앞에 서므로 톤으로 갈라 둔다 — 같은 색이면 그 옆의
    숫자와 한 덩어리로 읽힌다 */
@@ -1451,7 +1454,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* 띠 — Task 하나가 칸 하나다. 접힌 Run 은 이것만 남으므로 아래 여백을 조금 더 준다 */
 .jobs-bar { display: flex; gap: 2px; height: 6px; margin: 7px 10px 8px; }
 .jobs-run.collapsed .jobs-bar { margin-bottom: 10px; }
-.jobs-seg { flex: 1; border-radius: 2px; }
+.jobs-seg { flex: 1; border-radius: var(--radius-sm); }
 .jobs-rows { display: flex; flex-direction: column; gap: 4px; padding: 0 10px 8px; }
 .jobs-task { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: var(--radius-sm); background: var(--elevated); cursor: pointer; transition: box-shadow var(--ease); }
 /* 줄의 바탕이 이미 상태를 말하고 있어서(검토는 보라) hover 가 그 색을 덮지 않는다 — 덮으면
@@ -1525,7 +1528,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .md-split-host { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .md-toolbar { display: flex; justify-content: flex-end; gap: 2px; padding: 3px 6px;
   border-bottom: 1px solid var(--line-soft); flex: 0 0 auto; }
-.md-toolbar button { background: none; border: 1px solid transparent; border-radius: 3px;
+.md-toolbar button { background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
   color: inherit; opacity: .55; cursor: pointer; padding: 1px 7px; font-size: 13px; line-height: 1.4; }
 .md-toolbar button:hover { opacity: .85; }
 .md-toolbar button.active { opacity: 1; border-color: var(--line-soft); background: rgba(255, 255, 255, .07); }
@@ -1574,7 +1577,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .md-preview li.md-task { list-style: none; margin-left: -1.2em; }
 .md-preview li.md-task > input { margin-right: .5em; }
 .md-preview blockquote { padding: 10px 10px 10px 16px; border-left: 2px solid var(--md-line);
-  border-radius: 0 3px 3px 0; }
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
 .md-preview blockquote > :first-child { margin-top: 0; }
 .md-preview blockquote > :last-child { margin-bottom: 0; }
 .md-preview hr { border: 0; border-top: 1px solid var(--md-line); margin: 20px 0; }
@@ -1582,10 +1585,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .md-preview a:hover { text-decoration: underline; }
 .md-preview img { max-width: 100%; height: auto; }
 .md-preview code { font-family: var(--mono); font-size: .9em;
-  background: var(--md-code-bg); border-radius: 3px; padding: .2em .4em; }
+  background: var(--md-code-bg); border-radius: var(--radius-sm); padding: .2em .4em; }
 /* The fence carries the size and IntelliJ resets the inner <code> to 100% — leaving the .9em above
    in place would compound with this .85em. */
-.md-preview pre { background: var(--md-code-bg); border-radius: 3px; padding: 16px;
+.md-preview pre { background: var(--md-code-bg); border-radius: var(--radius-sm); padding: 16px;
   font-size: .85em; line-height: 1.45; overflow-x: auto; }
 .md-preview pre code { background: none; padding: 0; font-size: 100%; }
 /* Tables scroll horizontally within themselves only — the page must not shift */

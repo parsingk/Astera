@@ -42,7 +42,7 @@ describe('themeCssVars', () => {
   it('밀도 등급이 네 개의 수치 토큰으로 펼쳐진다', () => {
     const v = themeCssVars(themeById('umbra')) // roomy
     expect(v['--row-pad-y']).toBe('6px')
-    expect(v['--tab-pad-y']).toBe('9px')
+    expect(v['--tab-pad-y']).toBe('10px')
     expect(v['--sel-h']).toBe('34px')
     expect(v['--modal-pad']).toBe('24px')
   })
@@ -96,7 +96,7 @@ describe('themeCssVars', () => {
       '--shadow-sm': 'none',
       '--shadow-lg': '0 0 0 1px var(--line)',
       '--row-pad-y': '3px',
-      '--tab-pad-y': '5px',
+      '--tab-pad-y': '6px',
       '--sel-h': '26px',
       '--modal-pad': '16px',
       '--sans': `'Geist', 'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans CJK KR', sans-serif`,
