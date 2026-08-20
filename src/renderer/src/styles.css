@@ -1,3 +1,59 @@
+/* 번들 서체. 테마가 --sans/--mono 로 고르고, 쓰이지 않는 face 의 파일은 읽히지 않는다.
+   한글은 어느 face 에도 없다 — 각 테마의 스택 꼬리가 맑은 고딕·Apple SD Gothic Neo·Noto Sans CJK KR 을
+   직접 지정한다(core/theme/themes.ts 의 HANGUL). generic sans-serif 에 맡기면 Chromium 버전에 따라
+   결과가 달라진다.
+   font-display: block — 로컬 파일이라 즉시 로드되지만, 라틴이 한 프레임 폴백으로 보였다 바뀌는 것을 막는다.
+   라이선스 전문은 resources/font-licenses/ 로 함께 배포된다(OFL 1.1 의 의무). */
+@font-face {
+  font-family: 'Geist';
+  src: url('./assets/fonts/Geist/Geist-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('./assets/fonts/Geist/Geist-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('./assets/fonts/Geist/Geist-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('./assets/fonts/IBMPlexSans/IBMPlexSans-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('./assets/fonts/IBMPlexSans/IBMPlexSans-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('./assets/fonts/IBMPlexSans/IBMPlexSans-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('./assets/fonts/IBMPlexMono/IBMPlexMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
 :root {
   --bg: #17171a; /* main background */
   --rail: #101013; /* activity rail */

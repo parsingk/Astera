@@ -33,6 +33,11 @@ extraResources:
   #
   # Windows keeps its app-root copy through win.extraFiles below, so nothing changes there.
   - LICENSE
+  # OFL 1.1 은 폰트 파일과 함께 라이선스 전문을 배포하도록 요구한다. 폰트는 렌더러 번들
+  # (out/renderer/assets)로 실리고, 전문만 여기로 온다 — Vite 는 import 되지 않은 .txt 를 방출하지 않는다.
+  # LICENSE 와 같은 이유로 extraFiles 가 아니라 extraResources 다(macOS 코드사인).
+  - from: resources/font-licenses
+    to: font-licenses
 mac:
   target:
     - target: dmg
