@@ -31,8 +31,10 @@ nothing, no log is written because no JavaScript runs.
 
 The supported floor is **Ubuntu 22.04 / Debian 12**, enforced in two places that must stay in step:
 
-- `.github/workflows/linux-artifacts.yml` pins `runs-on: ubuntu-22.04`. Building on the oldest
-  supported distro is what makes the declared floor true rather than accidental.
+- `.github/workflows/release.yml`'s `linux` job pins `runs-on: ubuntu-22.04`. Building on the oldest
+  supported distro is what makes the declared floor true rather than accidental. (Until the Linux
+  artifacts became release assets, this pin lived in a `linux-artifacts.yml` that only built them for
+  hand-verification; that workflow is gone and the pin moved with the build.)
 - `electron-builder.yml` declares `libc6 (>= 2.35)` in `deb.depends`, so apt refuses an unsupported
   system instead of installing something that cannot start.
 

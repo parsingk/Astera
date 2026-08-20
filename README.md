@@ -8,7 +8,7 @@
 [![Latest release](https://img.shields.io/github/v/release/parsingk/Astera?logo=github)](https://github.com/parsingk/Astera/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/parsingk/Astera/total)](https://github.com/parsingk/Astera/releases)
 [![License](https://img.shields.io/github/license/parsingk/Astera?color=blue)](LICENSE)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-555)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-555)
 
 [Download](#install) · [What it does](#what-it-does) · [Documentation](#documentation) · [Report a bug](https://github.com/parsingk/Astera/issues/new)
 
@@ -23,15 +23,16 @@ you when a turn lands or a limit hits. Sessions sit side by side in one window, 
 own git worktree. One agent can start others, hand them tasks, and block until they report — it
 drives that itself through a bundled CLI, so you are not dispatching each step by hand.
 
-> **Status:** Windows and macOS. It drives the `claude` and `codex` CLIs, so it is only as
+> **Status:** Windows, macOS and Linux. It drives the `claude` and `codex` CLIs, so it is only as
 > capable as whichever of those you have installed.
 
 ## Install
 
 Download the latest release from
 **[Releases](https://github.com/parsingk/Astera/releases/latest)** and run it — `astera-<version>-setup.exe`
-on Windows, `astera-<version>-universal.dmg` on macOS. On Windows the app updates itself from there
-afterwards, asking before it downloads.
+on Windows, `astera-<version>-universal.dmg` on macOS, and `astera-<version>-x86_64.AppImage` or
+`astera-<version>-amd64.deb` on Linux. On Windows the app updates itself from there afterwards,
+asking before it downloads.
 
 > **macOS builds are not notarized yet**, which costs you two things. Gatekeeper blocks the first
 > launch, so after dragging the app to Applications, clear the quarantine flag macOS put on it:
@@ -50,11 +51,28 @@ afterwards, asking before it downloads.
 >
 > Signing through the SignPath Foundation's open-source program (Windows) and an Apple Developer ID
 > (macOS) is being set up — see the [Code signing policy](docs/code-signing.md) for who signs what,
-> and [docs/releasing.md](docs/releasing.md) for the mechanics.
+> and [docs/releasing.md](docs/releasing.md) for the mechanics. The Linux builds are unsigned, which
+> is what that channel expects.
+
+> **On Linux**, neither artifact runs straight from the download. Give the AppImage the executable
+> bit:
+>
+> ```bash
+> chmod +x astera-<version>-x86_64.AppImage
+> ```
+>
+> and install the deb through apt rather than `dpkg -i`, so its dependencies come with it:
+>
+> ```bash
+> sudo apt install ./astera-<version>-amd64.deb
+> ```
+>
+> The deb declares the supported floor, so apt refuses an older system instead of installing
+> something that cannot start.
 
 You will also need:
 
-- **Windows 10 or 11**, or **macOS 12 (Monterey) or later**
+- **Windows 10 or 11**, **macOS 12 (Monterey) or later**, or **Ubuntu 22.04 / Debian 12 or later**
 - **[Claude Code](https://claude.com/claude-code) and/or the Codex CLI** on your `PATH` — Astera runs
   them, it does not replace them
 
@@ -71,6 +89,8 @@ You will also need:
   it, a split shows the two at once, and `Ctrl`+`Tab` walks the active pane's row
 - A real editor, not a text box: CodeMirror with syntax highlighting for TypeScript, JavaScript,
   Python, Go, Rust, C/C++, Java, PHP, SQL, HTML, CSS, Markdown, JSON, YAML and XML, open across tabs
+- **Markdown side by side:** a markdown file opens as editor, split, or preview, and
+  `Ctrl`/`Cmd`+`Shift`+`V` cycles the three — in split, the two panes follow each other's scrolling
 - A file tree with git state on each entry (new, modified, deleted, conflict), and create, rename,
   move, copy, delete and reveal-in-Finder/Explorer
 - **Local history:** a snapshot is taken before a delete, so an agent's cleanup — or your own — is
@@ -113,6 +133,24 @@ You will also need:
 - Workers report back through the bundled `astera` CLI; the coordinator waits on completion,
   dependencies, questions, and escalations
 - Each task can run in its own git worktree so parallel workers do not collide
+- **A task can be proven done rather than reported done:** attach one of the project's run
+  configurations and it completes only when that build or test suite exits `0`
+- What no exit code settles — whether the work does what was asked — can go to a reviewer on the
+  *other* vendor, and the task waits on that verdict
+- Every agent started this way is pointed at the project's own decision records, whatever sits in
+  `knowledge/`, `docs/adr/`, `docs/decisions/` and the like, so a settled question is not reopened
+- **Or leave the coordinator out:** describe the job in the app and Astera drives it itself — each
+  task starts once its dependencies are done, only as many at a time as you allow, and the finished
+  worktrees are merged back before the tasks that follow them start, with a conflict handed to an
+  agent rather than left for you
+- A decision the job cannot take on its own stops and waits for a person to answer it
+
+**Jobs**
+- Every job of the open project in the sidebar, its tasks drawn as a dependency graph, and what
+  happened as a timeline
+- Which vendor is working on which task, and for how long
+- Start a task, stop it, retry it, or raise a question for a person — from the task's own node in
+  the graph, where a waiting decision is answered too
 
 **Also**
 - Korean, English, Japanese, and Spanish UI, plus a System option that follows the OS locale
@@ -135,8 +173,9 @@ orchestration is off.
 ## Build from source
 
 Building needs **Node.js 22.12+**, and a C++ toolchain for `node-pty`'s native rebuild (via
-`electron-builder install-app-deps`): the **Visual Studio Build Tools (C++)** on Windows, or the
-**Xcode Command Line Tools** (`xcode-select --install`) on macOS.
+`electron-builder install-app-deps`): the **Visual Studio Build Tools (C++)** on Windows, the
+**Xcode Command Line Tools** (`xcode-select --install`) on macOS, or **build-essential** and
+**python3** on Linux, where node-pty ships no prebuild and is always compiled.
 
 ```bash
 npm ci
@@ -146,6 +185,7 @@ npm run build      # bundle
 npm run dist       # package for the current platform into dist-installer/
 npm run dist:win   # Windows installer
 npm run dist:mac   # macOS universal dmg + zip
+npm run dist:linux # Linux AppImage + deb
 ```
 
 `npm run dist` reads the committed icon assets (`build/icon.ico` on Windows, `build/icon.icns` on

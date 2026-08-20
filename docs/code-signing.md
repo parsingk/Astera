@@ -17,6 +17,10 @@ a sign that the installer came from somewhere else.
 macOS releases are signed and notarized separately with an Apple Developer ID; SignPath is not
 involved there.
 
+Linux releases — the AppImage and the deb — are not signed at all. Neither the Foundation's
+certificate nor the Apple Developer ID applies to them, and that distribution channel does not expect
+a signature.
+
 ## Team roles
 
 Astera is maintained by a single person, [parsingk](https://github.com/parsingk), who therefore holds

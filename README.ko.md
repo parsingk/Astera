@@ -8,7 +8,7 @@
 [![Latest release](https://img.shields.io/github/v/release/parsingk/Astera?logo=github)](https://github.com/parsingk/Astera/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/parsingk/Astera/total)](https://github.com/parsingk/Astera/releases)
 [![License](https://img.shields.io/github/license/parsingk/Astera?color=blue)](LICENSE)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-555)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-555)
 
 [다운로드](#설치) · [기능](#무엇을-하는-앱인가) · [문서](#문서) · [버그 신고](https://github.com/parsingk/Astera/issues/new)
 
@@ -23,14 +23,15 @@ Astera는 책상 앞에 없을 때에도 에이전트 세션을 대신 돌립니
 git worktree에 격리됩니다. 한 에이전트가 다른 세션을 띄우고 작업을 넘긴 뒤 보고가 올 때까지 기다릴 수
 있는데, 함께 설치되는 CLI로 에이전트가 직접 하는 일이라 단계마다 손으로 지시할 필요가 없습니다.
 
-> **상태:** Windows와 macOS를 지원합니다. `claude`와 `codex` CLI를 구동하는 방식이므로, 설치된
+> **상태:** Windows·macOS·Linux를 지원합니다. `claude`와 `codex` CLI를 구동하는 방식이므로, 설치된
 > CLI가 할 수 있는 만큼만 할 수 있습니다.
 
 ## 설치
 
 **[Releases](https://github.com/parsingk/Astera/releases/latest)** 에서 최신 릴리스를 받아
-실행하세요 — Windows는 `astera-<version>-setup.exe`, macOS는 `astera-<version>-universal.dmg`
-입니다. Windows에서는 이후 앱이 스스로 업데이트하며, 내려받기 전에 물어봅니다.
+실행하세요 — Windows는 `astera-<version>-setup.exe`, macOS는 `astera-<version>-universal.dmg`,
+Linux는 `astera-<version>-x86_64.AppImage` 또는 `astera-<version>-amd64.deb` 입니다. Windows에서는
+이후 앱이 스스로 업데이트하며, 내려받기 전에 물어봅니다.
 
 > **macOS 빌드는 아직 공증(notarize)되지 않았고**, 그 때문에 두 가지 불편이 있습니다. Gatekeeper가
 > 첫 실행을 막으므로, 앱을 Applications로 옮긴 뒤 macOS가 붙여 둔 격리 플래그를 지워 주세요.
@@ -49,11 +50,27 @@ git worktree에 격리됩니다. 한 에이전트가 다른 세션을 띄우고 
 >
 > SignPath Foundation 오픈소스 프로그램(Windows)과 Apple Developer ID(macOS)를 통한 서명을
 > 준비하고 있습니다 — 누가 무엇에 서명하는지는 [코드 서명 정책](docs/code-signing.md), 구체적인
-> 절차는 [docs/releasing.md](docs/releasing.md)를 보세요.
+> 절차는 [docs/releasing.md](docs/releasing.md)를 보세요. Linux 빌드는 서명하지 않습니다. 그 배포
+> 경로에서는 그것이 통상적인 방식입니다.
+
+> **Linux에서는** 두 파일 모두 받은 그대로는 실행되지 않습니다. AppImage에는 실행 권한을 주세요.
+>
+> ```bash
+> chmod +x astera-<version>-x86_64.AppImage
+> ```
+>
+> deb는 `dpkg -i` 말고 apt로 설치해야 의존성이 함께 딸려 옵니다.
+>
+> ```bash
+> sudo apt install ./astera-<version>-amd64.deb
+> ```
+>
+> 지원 하한은 deb에 선언돼 있어서, 더 낮은 시스템에는 apt가 설치를 거부합니다 — 설치는 되고 실행만
+> 안 되는 상황을 만들지 않습니다.
 
 이 밖에 필요한 것:
 
-- **Windows 10 또는 11**, 혹은 **macOS 12 (Monterey) 이상**
+- **Windows 10 또는 11**, **macOS 12 (Monterey) 이상**, 혹은 **Ubuntu 22.04 / Debian 12 이상**
 - `PATH` 상의 **[Claude Code](https://claude.com/claude-code) 또는 Codex CLI** (둘 다여도 됩니다) —
   Astera는 이들을 실행할 뿐, 대체하지는 않습니다
 
@@ -71,6 +88,8 @@ git worktree에 격리됩니다. 한 에이전트가 다른 세션을 띄우고 
 - 텍스트 상자가 아닌 진짜 에디터입니다. CodeMirror 기반으로 TypeScript·JavaScript·Python·Go·
   Rust·C/C++·Java·PHP·SQL·HTML·CSS·Markdown·JSON·YAML·XML 문법 강조를 지원하고, 탭으로 여러
   파일을 엽니다
+- **마크다운은 나란히 볼 수 있습니다:** 마크다운 파일은 에디터·분할·프리뷰 중 하나로 열리고
+  `Ctrl`/`Cmd`+`Shift`+`V`가 셋을 순환합니다. 분할에서는 양쪽 스크롤이 서로를 따라갑니다
 - 항목마다 git 상태(추가·수정·삭제·충돌)가 표시되는 파일 트리, 그리고 생성·이름 변경·이동·복사·
   삭제·탐색기(Finder)에서 열기
 - **로컬 히스토리:** 삭제하기 전에 스냅샷을 남기므로, 에이전트가 정리해 버린 것도 직접 지운 것도
@@ -113,6 +132,23 @@ git worktree에 격리됩니다. 한 에이전트가 다른 세션을 띄우고 
 - 워커는 함께 설치되는 `astera` CLI로 보고하고, 코디네이터는 완료·의존성·질문·에스컬레이션을
   기다립니다
 - 각 작업을 자기 git worktree에서 실행해 병렬 워커가 서로 충돌하지 않게 할 수 있습니다
+- **작업의 완료를 보고가 아니라 증명으로 받을 수 있습니다.** 프로젝트의 실행 구성을 하나 붙여 두면
+  그 빌드나 테스트가 `0`으로 끝났을 때에만 그 작업이 완료됩니다
+- 종료 코드가 가려 주지 못하는 것 — 요청한 대로 되었는가 — 은 *다른* 벤더의 리뷰어에게 맡길 수
+  있고, 작업은 그 판정을 기다립니다
+- 이렇게 띄운 에이전트에게는 프로젝트가 자기 결정을 적어 둔 자리(`knowledge/`, `docs/adr/`,
+  `docs/decisions/` 등)를 함께 알려 줍니다 — 이미 닫힌 결정을 다시 열지 않도록
+- **코디네이터 없이도 됩니다.** 앱에서 작업을 짜 두면 Astera가 직접 몰아갑니다 — 의존성이 끝난
+  작업을 허용한 개수만큼만 띄우고, 뒤따르는 작업이 시작되기 전에 끝난 worktree들을 되돌려 합치며,
+  충돌은 사람에게 떠넘기지 않고 에이전트에게 맡깁니다
+- 스스로 정할 수 없는 결정은 거기서 멈춰 서서 사람을 기다립니다
+
+**Jobs**
+- 열려 있는 프로젝트의 작업이 사이드바에 모입니다 — 작업들은 의존성 그래프로 그려지고, 지나간 일은
+  타임라인으로 쌓입니다
+- 어느 벤더가 어떤 작업을 얼마나 오래 붙들고 있는지 그대로 보입니다
+- 시작·중지·재시도, 그리고 사람에게 묻기까지 그래프의 노드에서 합니다 — 기다리고 있는 결정에
+  답하는 것도 거기서 합니다
 
 **그 외**
 - 한국어·영어·일본어·스페인어 UI, 그리고 OS 로케일을 따르는 System 옵션
@@ -134,7 +170,8 @@ astera help
 
 빌드에는 **Node.js 22.12+** 와, `node-pty` 네이티브 재빌드(`electron-builder install-app-deps`)를 위한
 C++ 툴체인이 필요합니다. Windows는 **Visual Studio Build Tools (C++)**, macOS는
-**Xcode Command Line Tools** (`xcode-select --install`) 입니다.
+**Xcode Command Line Tools** (`xcode-select --install`), Linux는 **build-essential**과 **python3**
+입니다 — Linux에는 node-pty 프리빌드가 없어 항상 직접 컴파일합니다.
 
 ```bash
 npm ci
@@ -144,6 +181,7 @@ npm run build      # 번들
 npm run dist       # 현재 플랫폼용으로 dist-installer/ 에 패키징
 npm run dist:win   # Windows 인스톨러
 npm run dist:mac   # macOS universal dmg + zip
+npm run dist:linux # Linux AppImage + deb
 ```
 
 `npm run dist`는 아이콘을 생성하지 않고 커밋된 에셋(Windows `build/icon.ico`, macOS `build/icon.icns`,

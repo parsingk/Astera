@@ -8,7 +8,7 @@
 [![Latest release](https://img.shields.io/github/v/release/parsingk/Astera?logo=github)](https://github.com/parsingk/Astera/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/parsingk/Astera/total)](https://github.com/parsingk/Astera/releases)
 [![License](https://img.shields.io/github/license/parsingk/Astera?color=blue)](LICENSE)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-555)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-555)
 
 [Descargar](#instalación) · [Qué hace](#qué-hace) · [Documentación](#documentación) · [Reportar un error](https://github.com/parsingk/Astera/issues/new)
 
@@ -24,14 +24,15 @@ en una sola ventana, cada una aislada en su propio worktree de git. Un agente pu
 sesiones, repartirles tareas y esperar bloqueado hasta que informen: lo hace él mismo a través de una
 CLI incluida, así que no vas despachando cada paso a mano.
 
-> **Estado:** Windows y macOS. Ejecuta las CLI de `claude` y `codex`, así que solo llega tan lejos
+> **Estado:** Windows, macOS y Linux. Ejecuta las CLI de `claude` y `codex`, así que solo llega tan lejos
 > como la que tengas instalada.
 
 ## Instalación
 
 Descarga la última versión desde
 **[Releases](https://github.com/parsingk/Astera/releases/latest)** y ejecútala:
-`astera-<version>-setup.exe` en Windows, `astera-<version>-universal.dmg` en macOS. En Windows la
+`astera-<version>-setup.exe` en Windows, `astera-<version>-universal.dmg` en macOS, y
+`astera-<version>-x86_64.AppImage` o `astera-<version>-amd64.deb` en Linux. En Windows la
 aplicación se actualiza sola a partir de ahí, preguntando antes de descargar.
 
 > **Las compilaciones de macOS aún no están notarizadas**, y eso cuesta dos cosas. Gatekeeper bloquea
@@ -56,9 +57,26 @@ aplicación se actualiza sola a partir de ahí, preguntando antes de descargar.
 > [política de firma de código](docs/code-signing.md) para saber quién firma qué, y
 > [docs/releasing.md](docs/releasing.md) para el procedimiento.
 
+> **En Linux**, ninguno de los dos artefactos arranca tal como se descarga. Dale el bit de
+> ejecución al AppImage:
+>
+> ```bash
+> chmod +x astera-<version>-x86_64.AppImage
+> ```
+>
+> e instala el deb con apt y no con `dpkg -i`, para que sus dependencias vengan con él:
+>
+> ```bash
+> sudo apt install ./astera-<version>-amd64.deb
+> ```
+>
+> El deb declara el mínimo soportado, así que apt rechaza un sistema más antiguo en vez de instalar
+> algo que no podría arrancar.
+
 También necesitarás:
 
-- **Windows 10 u 11**, o **macOS 12 (Monterey) o posterior**
+- **Windows 10 u 11**, **macOS 12 (Monterey) o posterior**, o **Ubuntu 22.04 / Debian 12 o
+  posterior**
 - **[Claude Code](https://claude.com/claude-code) y/o la CLI de Codex** en tu `PATH` — Astera las
   ejecuta, no las sustituye
 
@@ -77,6 +95,9 @@ También necesitarás:
 - Un editor de verdad, no un cuadro de texto: CodeMirror con resaltado de sintaxis para TypeScript,
   JavaScript, Python, Go, Rust, C/C++, Java, PHP, SQL, HTML, CSS, Markdown, JSON, YAML y XML,
   abiertos en pestañas
+- **Markdown en paralelo:** un archivo markdown se abre como editor, dividido o previsualización, y
+  `Ctrl`/`Cmd`+`Shift`+`V` recorre los tres — en la vista dividida, los dos paneles se siguen al
+  desplazarse
 - Un árbol de archivos con el estado de git en cada entrada (nuevo, modificado, eliminado, conflicto),
   y crear, renombrar, mover, copiar, eliminar y mostrar en Finder / el Explorador
 - **Historial local:** se toma una instantánea antes de eliminar, así que lo que limpió el agente —o
@@ -120,6 +141,25 @@ También necesitarás:
   finalizaciones, dependencias, preguntas y escalaciones
 - Cada tarea puede ejecutarse en su propio worktree de git para que las trabajadoras en paralelo no
   choquen
+- **Una tarea puede demostrarse terminada en vez de declararse terminada:** asóciale una de las
+  configuraciones de ejecución del proyecto y solo se completa si esa compilación o esa batería de
+  pruebas termina en `0`
+- Lo que ningún código de salida resuelve — si el trabajo hace lo que se pidió — puede pasar a un
+  revisor del *otro* proveedor, y la tarea espera ese veredicto
+- Todo agente iniciado así recibe la ubicación de las decisiones del propio proyecto, lo que haya en
+  `knowledge/`, `docs/adr/`, `docs/decisions/` y similares, para no reabrir lo que ya está cerrado
+- **O prescinde de la coordinadora:** describe el trabajo en la app y Astera lo lleva sola — cada
+  tarea arranca cuando sus dependencias están hechas, solo tantas a la vez como permitas, y los
+  worktrees terminados se fusionan de vuelta antes de que empiecen las tareas que los siguen, con
+  cualquier conflicto en manos de un agente en vez de en las tuyas
+- Una decisión que el trabajo no puede tomar por su cuenta se detiene y espera a una persona
+
+**Jobs**
+- Todos los trabajos del proyecto abierto en la barra lateral, sus tareas dibujadas como un grafo de
+  dependencias y lo ocurrido como una línea de tiempo
+- Qué proveedor trabaja en qué tarea, y desde hace cuánto
+- Iniciar una tarea, detenerla, reintentarla o plantear una pregunta a una persona — desde el nodo de
+  la propia tarea, donde también se responde la decisión que está esperando
 
 **Además**
 - Interfaz en coreano, inglés, japonés y español, más una opción System que sigue la configuración
@@ -144,7 +184,9 @@ está desactivada.
 
 Compilar requiere **Node.js 22.12+** y un conjunto de herramientas de C++ para la recompilación
 nativa de `node-pty` (vía `electron-builder install-app-deps`): las **Visual Studio Build Tools
-(C++)** en Windows, o las **Xcode Command Line Tools** (`xcode-select --install`) en macOS.
+(C++)** en Windows, las **Xcode Command Line Tools** (`xcode-select --install`) en macOS, o
+**build-essential** y **python3** en Linux, donde node-pty no trae binarios precompilados y siempre
+se compila.
 
 ```bash
 npm ci
@@ -154,6 +196,7 @@ npm run build      # empaquetar el bundle
 npm run dist       # empaquetar para la plataforma actual en dist-installer/
 npm run dist:win   # instalador de Windows
 npm run dist:mac   # dmg universal + zip de macOS
+npm run dist:linux # AppImage + deb de Linux
 ```
 
 `npm run dist` lee los recursos de iconos ya versionados (`build/icon.ico` en Windows,

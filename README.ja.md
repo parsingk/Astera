@@ -8,7 +8,7 @@
 [![Latest release](https://img.shields.io/github/v/release/parsingk/Astera?logo=github)](https://github.com/parsingk/Astera/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/parsingk/Astera/total)](https://github.com/parsingk/Astera/releases)
 [![License](https://img.shields.io/github/license/parsingk/Astera?color=blue)](LICENSE)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-555)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-555)
 
 [ダウンロード](#インストール) · [できること](#できること) · [ドキュメント](#ドキュメント) · [バグ報告](https://github.com/parsingk/Astera/issues/new)
 
@@ -24,14 +24,15 @@ Astera は、あなたが席にいない間もエージェントのセッショ�
 さらに、あるエージェントが別のセッションを立ち上げてタスクを渡し、報告が来るまで待つこともできます。
 同梱の CLI を使ってエージェント自身が行うので、一手ずつ指示する必要はありません。
 
-> **状況:** Windows と macOS に対応。`claude` と `codex` の CLI を動かす仕組みなので、できることは
+> **状況:** Windows・macOS・Linux に対応。`claude` と `codex` の CLI を動かす仕組みなので、できることは
 > インストール済みの CLI の能力次第です。
 
 ## インストール
 
 **[Releases](https://github.com/parsingk/Astera/releases/latest)** から最新リリースを
 ダウンロードして実行してください — Windows は `astera-<version>-setup.exe`、macOS は
-`astera-<version>-universal.dmg` です。Windows ではその後アプリ自身が更新を行い、ダウンロードの
+`astera-<version>-universal.dmg`、Linux は `astera-<version>-x86_64.AppImage` または
+`astera-<version>-amd64.deb` です。Windows ではその後アプリ自身が更新を行い、ダウンロードの
 前に確認します。
 
 > **macOS ビルドはまだ notarize されていません。** そのため 2 つの制約があります。まず Gatekeeper が
@@ -53,11 +54,28 @@ Astera は、あなたが席にいない間もエージェントのセッショ�
 >
 > SignPath Foundation のオープンソースプログラム（Windows）と Apple Developer ID（macOS）による
 > 署名を準備中です — 誰が何に署名するのかは[コード署名ポリシー](docs/code-signing.md)、手順は
-> [docs/releasing.md](docs/releasing.md) を参照してください。
+> [docs/releasing.md](docs/releasing.md) を参照してください。Linux ビルドは署名しません。その配布
+> 経路ではそれが通例です。
+
+> **Linux では**、どちらのファイルもダウンロードしたままでは起動しません。AppImage には実行権限を
+> 与えてください。
+>
+> ```bash
+> chmod +x astera-<version>-x86_64.AppImage
+> ```
+>
+> deb は `dpkg -i` ではなく apt で入れます。依存関係が一緒に解決されます。
+>
+> ```bash
+> sudo apt install ./astera-<version>-amd64.deb
+> ```
+>
+> 対応下限は deb 自身が宣言しているので、それより古いシステムには apt が導入を拒否します — 入る
+> けれど起動しない、という状態にはなりません。
 
 ほかに必要なもの:
 
-- **Windows 10 または 11**、あるいは **macOS 12 (Monterey) 以降**
+- **Windows 10 または 11**、**macOS 12 (Monterey) 以降**、あるいは **Ubuntu 22.04 / Debian 12 以降**
 - `PATH` 上の **[Claude Code](https://claude.com/claude-code) と Codex CLI のいずれか、または両方** —
   Astera はそれらを実行するだけで、置き換えるものではありません
 
@@ -76,6 +94,8 @@ Astera は、あなたが席にいない間もエージェントのセッショ�
 - テキストボックスではなく本物のエディタです。CodeMirror ベースで TypeScript・JavaScript・Python・
   Go・Rust・C/C++・Java・PHP・SQL・HTML・CSS・Markdown・JSON・YAML・XML のシンタックス
   ハイライトに対応し、タブで複数のファイルを開けます
+- **Markdown は並べて読めます:** Markdown ファイルはエディタ・分割・プレビューのいずれかで開き、
+  `Ctrl`/`Cmd`+`Shift`+`V` が 3 つを切り替えます。分割では両側のスクロールが互いに追随します
 - 項目ごとに git の状態（新規・変更・削除・コンフリクト）が表示されるファイルツリー、そして作成・
   名前変更・移動・コピー・削除・Finder / エクスプローラーで表示
 - **ローカル履歴:** 削除の前にスナップショットを取るので、エージェントが片づけてしまったものも、
@@ -119,6 +139,23 @@ Astera は、あなたが席にいない間もエージェントのセッショ�
 - ワーカーは同梱の `astera` CLI で報告し、コーディネーターは完了・依存関係・質問・
   エスカレーションを待ちます
 - 各タスクを専用の git worktree で実行できるので、並列のワーカーが衝突しません
+- **タスクの完了を、報告ではなく証明として受け取れます。** プロジェクトの実行構成をひとつ結び
+  付けておけば、そのビルドやテストが `0` で終わったときにだけ完了になります
+- 終了コードでは決められないこと — 頼んだとおりになっているか — は*別*ベンダーのレビュアーに
+  任せられます。タスクはその判定を待ちます
+- こうして起動したエージェントには、プロジェクトが自分の決定を書き留めている場所（`knowledge/`、
+  `docs/adr/`、`docs/decisions/` など）も伝わるので、決着済みのことを蒸し返しません
+- **コーディネーターなしでもかまいません。** アプリでジョブを組んでおけば Astera 自身が進めます —
+  依存関係が片づいたタスクを、許した数だけ起動し、後続のタスクが始まる前に終わった worktree を
+  マージし戻し、コンフリクトは人に押し付けずエージェントに任せます
+- ジョブが自分では決められないことは、そこで止まって人を待ちます
+
+**Jobs**
+- 開いているプロジェクトのジョブがサイドバーに並び、タスクは依存関係のグラフとして、起きたことは
+  タイムラインとして見えます
+- どのベンダーがどのタスクを、どれだけの時間つかんでいるか
+- 開始・停止・再試行、そして人への問いかけまでグラフのノードから行えます — 待っている判断に
+  答えるのもそこです
 
 **そのほか**
 - 韓国語・英語・日本語・スペイン語の UI、および OS のロケールに従う System オプション
@@ -143,7 +180,8 @@ astera help
 ビルドには **Node.js 22.12+** と、`node-pty` のネイティブ再ビルド
 （`electron-builder install-app-deps` 経由）のための C++ ツールチェーンが必要です。Windows なら
 **Visual Studio Build Tools (C++)**、macOS なら **Xcode Command Line Tools**
-（`xcode-select --install`）です。
+（`xcode-select --install`）、Linux なら **build-essential** と **python3** です — Linux には
+node-pty のプリビルドがなく、常にコンパイルされます。
 
 ```bash
 npm ci
@@ -153,6 +191,7 @@ npm run build      # バンドル
 npm run dist       # 現在のプラットフォーム向けに dist-installer/ へパッケージ
 npm run dist:win   # Windows インストーラ
 npm run dist:mac   # macOS universal dmg + zip
+npm run dist:linux # Linux AppImage + deb
 ```
 
 `npm run dist` はアイコンを生成せず、コミット済みのアセット（Windows は `build/icon.ico`、macOS は
