@@ -165,9 +165,13 @@ export function NewTaskModal({
             <p className="modal-hint">{t('jobs.task.depsHint')}</p>
           </div>
         )}
-        {/* 계정이 하나뿐이면 고를 것이 없다 — 그때는 이 칸을 그리지 않는다(기본 계정이 그 하나다).
+        {/* **계정이 하나도 없을 때만 접는다** — 위 선행 Task 칸과 같은 규칙이다: 고를 것이 없는
+            컨트롤만 감춘다. 한때 "둘 이상일 때만" 이었는데 둘이 어긋났다. (1) 계정이 하나여도
+            "지정 안 함"과 "이 계정으로 못박음"은 뜻이 다르다 — 그 계정이 로그아웃되고 둘째가
+            등록되면 지정 없는 Task 는 새 계정으로 조용히 넘어가고 못박은 Task 는 Gate 를 연다.
+            (2) 칸이 없는 이유를 화면이 말하지 않아, 계정이 하나인 사람은 기능이 빠진 줄 안다.
             null 은 아직 안 온 것이라 같이 접힌다 */}
-        {(accounts?.length ?? 0) > 1 && (
+        {(accounts?.length ?? 0) > 0 && (
           <div className="field">
             <label>{t('jobs.task.account')}</label>
             <AccountSelect

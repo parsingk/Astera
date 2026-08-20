@@ -797,7 +797,7 @@ export const es: Catalog = {
   'jobs.task.depsAdd': 'Elegir una Task',
   'jobs.task.account': 'Cuenta',
   'jobs.task.accountDefault': 'Cuenta por defecto',
-  'jobs.task.accountHint': 'La cuenta en la que esta Task levanta su worker',
+  'jobs.task.accountHint': 'La cuenta en la que esta Task levanta su worker — la cuenta por defecto si no eliges',
   'jobs.task.validate': 'Configuración que prueba que terminó',
   'jobs.task.validateNone': 'Sin validación',
   'jobs.task.review': 'Revisión por otro agente',

@@ -827,7 +827,7 @@ export const ko = {
   // 안 고르면 그 provider 의 기본 계정으로 간다(core/accounts/dispatchAccount.ts)
   'jobs.task.account': '계정',
   'jobs.task.accountDefault': '기본 계정',
-  'jobs.task.accountHint': '이 Task 의 워커를 띄울 계정입니다',
+  'jobs.task.accountHint': '이 Task 의 워커를 띄울 계정입니다 — 고르지 않으면 기본 계정으로 갑니다',
   'jobs.task.validate': '완료를 검증할 실행 구성',
   'jobs.task.validateNone': '검증 없음',
   'jobs.task.review': '다른 에이전트가 검토',

@@ -783,7 +783,7 @@ export const ja: Catalog = {
   'jobs.task.depsAdd': '先行 Task を選ぶ',
   'jobs.task.account': 'アカウント',
   'jobs.task.accountDefault': '既定のアカウント',
-  'jobs.task.accountHint': 'この Task のワーカーを立てるアカウントです',
+  'jobs.task.accountHint': 'この Task のワーカーを立てるアカウントです — 選ばなければ既定のアカウントになります',
   'jobs.task.validate': '完了を検証する実行構成',
   'jobs.task.validateNone': '検証なし',
   'jobs.task.review': '別のエージェントが確認',
