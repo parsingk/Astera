@@ -90,8 +90,8 @@ linux:
   # A space-free artifact name, the same rule dmg and nsis follow — it keeps percent-encoding out of
   # release asset URLs.
   artifactName: ${name}-${version}-${arch}.${ext}
-# The declared Linux floor is Ubuntu 22.04 / Debian 12 (see the release workflow's linux job runner
-# pin). The
+# The declared Linux floor is Ubuntu 22.04 / Debian 12 (held by the pinned `container: ubuntu:22.04`
+# in linux-package.yml). The
 # pin and the `libc6` bound below are two halves of the same guarantee: the pin stops the artifact
 # from ever needing more glibc than 22.04 provides (2.35; Debian 12's 2.36 also qualifies), and the
 # bound stops apt from installing the deb somewhere it cannot run. Without it, the deb installs
@@ -113,7 +113,7 @@ linux:
 # bundled `.so` under app.asar.unpacked came back clean; only the app's own binary was short two
 # libraries). The gap is upstream's, not a local mistake; do not remove these as "stray" entries
 # during a future cleanup:
-# - `libc6 (>= 2.35)` states the floor above (see release.yml's linux job runner pin).
+# - `libc6 (>= 2.35)` states the floor above (see linux-package.yml's container image pin).
 # - `libasound2t64 | libasound2` is an alternative dependency, not a single name, because of Ubuntu
 #   24.04's `t64` (64-bit time_t) transition: it renamed the real ALSA package to `libasound2t64`
 #   and left plain `libasound2` as a virtual package. A bare `libasound2` here would still resolve
@@ -131,7 +131,7 @@ linux:
 #   without it would get the same silent non-start the two earlier defects produced. Plain name: the
 #   t64 transition did not rename this one.
 #
-# All four are exercised, per distro, by release.yml's post-build step, which installs the
+# All four are exercised, per distro, by linux-package.yml's verify job, which installs the
 # freshly built deb into a clean container and asserts `ldd` is clean on every ELF object it
 # installs — the app binary, the bundled Electron libraries and node-pty's `pty.node`.
 deb:

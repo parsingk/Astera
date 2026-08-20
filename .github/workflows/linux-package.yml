@@ -1,0 +1,166 @@
+name: Linux package
+
+# Builds the Linux release artifacts and proves they can actually be started, for release.yml to
+# attach to a release.
+#
+# **Why this is a separate, callable workflow rather than a job inside release.yml.** release.yml
+# runs only on a `v*` tag, so nothing in it can be rehearsed before it matters — a mistake there is
+# found by a release failing, and fixing it means moving a tag or cutting another version. A `push`
+# trigger on this file runs *this* code, the same file the tagged run will call, so the build can be
+# confirmed green before a tag is cut. Copying the steps into a throwaway workflow instead would have
+# verified a copy, which proves nothing from the first moment the copy drifts.
+on:
+  workflow_call:
+  # TEMPORARY — delete these three lines once the container build has been confirmed green on this
+  # branch. A `workflow_dispatch` trigger would be tidier, but GitHub only offers that for workflow
+  # files that have already reached the default branch, and this one has not.
+  push:
+    branches: [develop]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # **The glibc floor is pinned by this image, not by the runner label.** The build host's glibc
+    # caps the symbol versions a compiled artifact can reference, and that cap becomes the artifact's
+    # floor — knowledge/decisions/ADR-001-linux-support-floor.md has the measurement behind that, and
+    # the `libc6 (>= 2.35)` bound in electron-builder.yml is the other half of the same guarantee.
+    #
+    # Pinning the image rather than `runs-on: ubuntu-22.04` decouples the floor from GitHub's runner
+    # image lifecycle: the Ubuntu 22 runner images begin brownouts on 2026-09-17 and stop resolving
+    # on 2027-04-17, while `ubuntu:22.04` on Docker Hub does not expire on that schedule.
+    #
+    # Do **not** "simplify" this to a bare `ubuntu-latest` host. It would raise the floor silently,
+    # with the build staying green and both container checks below still passing, and Ubuntu 22.04
+    # and Debian 12 users would get an app that installs cleanly and never opens.
+    container:
+      image: ubuntu:22.04
+    steps:
+      # A bare base image has none of what a runner image provides: no git for checkout, no curl or
+      # xz-utils for setup-node's download, and no toolchain for node-pty — which ships no Linux
+      # prebuild (its prebuilds/ holds darwin-* and win32-* only) and is therefore always compiled
+      # from source here by node-gyp.
+      - name: Install what a runner image would have provided
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git xz-utils python3 build-essential
+
+      - uses: actions/checkout@v7
+
+      # Must match ci.yml: @electron/rebuild and node-abi require >=22.12.0.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The same script a developer runs locally, so what ships is something that can be reproduced
+      # by hand rather than a separately spelled-out command that drifts from it.
+      - run: npm run dist:linux
+
+      # latest-linux.yml IS the Linux update feed, the way latest.yml is Windows's. Were it missing,
+      # the release would still look complete on the page while every installed Linux app's update
+      # check failed against a feed that is not there. Printing it is deliberate rather than noise:
+      # the feed is what decides which artifact an installed app can update itself from, and the log
+      # is where that can be read back after a release.
+      - name: Verify the update feed was written
+        run: |
+          test -f dist-installer/latest-linux.yml || {
+            echo "electron-builder wrote no dist-installer/latest-linux.yml — nothing would advertise this release to installed Linux apps" >&2
+            ls -la dist-installer >&2
+            exit 1
+          }
+          cat dist-installer/latest-linux.yml
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-linux
+          path: |
+            dist-installer/*.AppImage
+            dist-installer/*.deb
+            dist-installer/latest-linux.yml
+          # A silent empty upload would read as a successful build that produced nothing.
+          if-no-files-found: error
+          retention-days: 1
+
+  verify:
+    needs: build
+    # Deliberately NOT in a container. The check below is `docker run`, which needs the host's Docker
+    # daemon, and a job-level `container:` is not given the socket. That is the whole reason the
+    # build and the check are two jobs instead of one.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-linux
+          path: dist-installer
+
+      # A build that produces an artifact nobody can start is still a green build — this exact shape
+      # of failure has bitten Linux packaging twice already (an unstated glibc floor, then missing
+      # ALSA/GBM shared-library dependencies), both silently: the deb installed cleanly and the app
+      # never launched. The runner already has half the world installed, so a check run directly on
+      # it would pass regardless of what the deb actually declares; only a clean container — nothing
+      # preinstalled but the base OS — tests whether the package's own dependencies are enough to
+      # satisfy the binary's dynamic linking on a real user machine. Two distros are checked because
+      # Ubuntu 24.04 renamed libasound2 to libasound2t64 (the "t64" 64-bit time_t transition) and left
+      # plain `libasound2` resolvable through more than one provider, so the actual resolution on that
+      # distro needs confirming rather than assumed.
+      #
+      # The step is named for what it does. It checks dynamic linking; it does not start the app.
+      # Starting it here is not currently possible — chrome-sandbox needs SUID and Electron refuses to
+      # run as root without --no-sandbox — and a name promising more coverage than exists is how the
+      # two defects above got past a green build in the first place.
+      #
+      # It checks **every** ELF object the deb installs, not just the app binary. The binary's own
+      # DT_NEEDED set happens to be a superset of the bundled Electron libraries', but not of
+      # node-pty's pty.node, which additionally needs libstdc++.so.6 — so a check limited to the
+      # binary structurally cannot see one of the package's real dependencies, and it belongs to the
+      # component imported at main startup, where a failure is a silent non-start with no window and
+      # no log. The script is written once and run against both images rather than duplicated per
+      # distro.
+      - name: Check the shared-library links of every ELF the deb installs, in clean containers
+        run: |
+          # A quoted heredoc: nothing below is expanded by the runner's shell, so the script can use
+          # quotes and $ freely and reaches the container exactly as written.
+          cat > check-links.sh <<'SCRIPT'
+          set -euo pipefail
+          apt-get update -qq
+          apt-get install -y --no-install-recommends /artifacts/*.deb
+
+          # Assert the install path before testing it. `ldd <missing path>` writes to stderr and
+          # exits non-zero, so the older `ldd … | grep "not found" || true` form produced an empty
+          # result and reported success having linked nothing at all — a productName change is
+          # enough to relocate this directory and turn the whole check into a no-op.
+          test -x /opt/Astera/astera || { echo "no app binary at /opt/Astera/astera — the install path moved and nothing was checked"; exit 1; }
+          # The one object whose dependencies the app binary does not cover. If asarUnpack ever
+          # stops unpacking node-pty, this check would keep passing while covering strictly less.
+          test -n "$(find /opt/Astera -name pty.node -print -quit)" || { echo "node-pty's pty.node is not in the payload — asarUnpack changed"; exit 1; }
+
+          status=0
+          checked=0
+          while IFS= read -r obj; do
+            # ELF magic (7f 45 4c 46). The payload is mostly scripts, JSON and the asar, and ldd on
+            # those is meaningless.
+            [ "$(od -An -N4 -tx1 "$obj" | tr -d ' \n')" = "7f454c46" ] || continue
+            checked=$((checked + 1))
+            if ! out=$(ldd "$obj" 2>&1); then
+              echo "ldd failed on $obj:"; echo "$out"; status=1; continue
+            fi
+            if missing=$(printf '%s\n' "$out" | grep 'not found'); then
+              echo "unresolved shared libraries in $obj:"; echo "$missing"; status=1
+            fi
+          done < <(find /opt/Astera -type f)
+
+          echo "checked $checked ELF objects"
+          [ "$checked" -gt 0 ] || { echo "no ELF objects found under /opt/Astera"; status=1; }
+          exit $status
+          SCRIPT
+          for image in ubuntu:22.04 ubuntu:24.04; do
+            echo "=== $image"
+            docker run --rm \
+              -v "$PWD/dist-installer:/artifacts:ro" \
+              -v "$PWD/check-links.sh:/check-links.sh:ro" \
+              "$image" bash /check-links.sh
+          done

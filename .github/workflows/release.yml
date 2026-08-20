@@ -367,141 +367,15 @@ jobs:
             dist-installer/latest-mac.yml
           retention-days: 1
 
-  # Linux ships unsigned: there is no Linux counterpart to SignPath or a Developer ID, so this job has
-  # no fail-open signing branch — it builds, proves the package can actually be started, and hands the
-  # artifacts off.
+  # The Linux build and its clean-container check live in their own callable workflow. release.yml
+  # runs only on a tag, so a job written inline here could not be tried before the release that
+  # depends on it; linux-package.yml can be pushed and rehearsed, and this call runs that same file.
+  # It also holds the reason the glibc floor is pinned by a container image rather than a runner
+  # label. There is no signing step for Linux — no counterpart to SignPath or a Developer ID exists
+  # for it, and that distribution channel does not expect one.
   linux:
     needs: validate
-    # Astera's declared Linux floor is Ubuntu 22.04 / Debian 12 (knowledge/decisions/ADR-001). Pinning
-    # to the oldest supported distro, rather than `ubuntu-latest`, is what makes that floor true: a
-    # native module links against whatever glibc symbol versions it happens to reference, capped by
-    # whatever glibc the build host has installed. `ubuntu-latest` tracks the newest runner image
-    # (24.04, glibc 2.39) and would raise the floor the moment a dependency starts referencing a newer
-    # symbol, silently and without a failing build, breaking the app on 22.04 for part of the user
-    # base while CI stays green. Building on 22.04 caps the linked symbol versions at what 22.04
-    # itself provides.
-    #
-    # **This pin has a dated expiry.** GitHub announced on 2026-06-16 that the Ubuntu 22 runner images
-    # begin deprecation (intermittent brownouts) on 2026-09-17 and are fully unsupported on
-    # 2027-04-17, after which this label stops resolving. When that happens the fix is to move the
-    # floor deliberately: pin the next oldest *supported* image and raise the `libc6 (>= …)` bound in
-    # electron-builder.yml to that image's glibc in the same change, so the declared floor and the
-    # built artifact stay one fact. Do **not** reach for `ubuntu-latest` — it raises the floor
-    # silently, with no failing build, which is the precise outcome this pin exists to prevent, and it
-    # will look like the one-word fix at exactly the moment there is release pressure. If the floor
-    # should instead stay at 22.04 past the image's life, pin the *build* environment rather than the
-    # host (`container: ubuntu:22.04` on a supported runner), which decouples the glibc cap from the
-    # runner image lifecycle entirely.
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-
-      # node-pty ships no linux prebuild (its prebuilds/ holds darwin-* and win32-* only), so this
-      # compiles it with node-gyp. python3 and build-essential are preinstalled on this runner.
-      - run: npm ci
-
-      # The same script a developer runs locally, so what ships is what was hand-verified while Linux
-      # packaging was being brought up, rather than a separately spelled-out command that can drift.
-      - run: npm run dist:linux
-
-      # A build that produces an artifact nobody can start is still a green build — this exact shape
-      # of failure has bitten Linux packaging twice already (an unstated glibc floor, then missing
-      # ALSA/GBM shared-library dependencies), both silently: the deb installed cleanly and the app
-      # never launched. This runner already has half the world installed, so a check run directly on
-      # it would pass regardless of what the deb actually declares; only a clean container — nothing
-      # preinstalled but the base OS — tests whether the package's own dependencies are enough to
-      # satisfy the binary's dynamic linking on a real user machine. Two distros are checked because
-      # Ubuntu 24.04 renamed libasound2 to libasound2t64 (the "t64" 64-bit time_t transition) and left
-      # plain `libasound2` resolvable through more than one provider, so the actual resolution on that
-      # distro needs confirming rather than assumed.
-      #
-      # The step is named for what it does. It checks dynamic linking; it does not start the app.
-      # Starting it here is not currently possible — chrome-sandbox needs SUID and Electron refuses to
-      # run as root without --no-sandbox — and a name promising more coverage than exists is how the
-      # two defects above got past a green build in the first place.
-      #
-      # It checks **every** ELF object the deb installs, not just the app binary. The binary's own
-      # DT_NEEDED set happens to be a superset of the bundled Electron libraries', but not of
-      # node-pty's pty.node, which additionally needs libstdc++.so.6 — so a check limited to the
-      # binary structurally cannot see one of the package's real dependencies, and it belongs to the
-      # component imported at main startup, where a failure is a silent non-start with no window and
-      # no log. The script is written once and run against both images rather than duplicated per
-      # distro.
-      - name: Check the shared-library links of every ELF the deb installs, in clean containers
-        run: |
-          # A quoted heredoc: nothing below is expanded by the runner's shell, so the script can use
-          # quotes and $ freely and reaches the container exactly as written.
-          cat > check-links.sh <<'SCRIPT'
-          set -euo pipefail
-          apt-get update -qq
-          apt-get install -y --no-install-recommends /artifacts/*.deb
-
-          # Assert the install path before testing it. `ldd <missing path>` writes to stderr and
-          # exits non-zero, so the older `ldd … | grep "not found" || true` form produced an empty
-          # result and reported success having linked nothing at all — a productName change is
-          # enough to relocate this directory and turn the whole check into a no-op.
-          test -x /opt/Astera/astera || { echo "no app binary at /opt/Astera/astera — the install path moved and nothing was checked"; exit 1; }
-          # The one object whose dependencies the app binary does not cover. If asarUnpack ever
-          # stops unpacking node-pty, this check would keep passing while covering strictly less.
-          test -n "$(find /opt/Astera -name pty.node -print -quit)" || { echo "node-pty's pty.node is not in the payload — asarUnpack changed"; exit 1; }
-
-          status=0
-          checked=0
-          while IFS= read -r obj; do
-            # ELF magic (7f 45 4c 46). The payload is mostly scripts, JSON and the asar, and ldd on
-            # those is meaningless.
-            [ "$(od -An -N4 -tx1 "$obj" | tr -d ' \n')" = "7f454c46" ] || continue
-            checked=$((checked + 1))
-            if ! out=$(ldd "$obj" 2>&1); then
-              echo "ldd failed on $obj:"; echo "$out"; status=1; continue
-            fi
-            if missing=$(printf '%s\n' "$out" | grep 'not found'); then
-              echo "unresolved shared libraries in $obj:"; echo "$missing"; status=1
-            fi
-          done < <(find /opt/Astera -type f)
-
-          echo "checked $checked ELF objects"
-          [ "$checked" -gt 0 ] || { echo "no ELF objects found under /opt/Astera"; status=1; }
-          exit $status
-          SCRIPT
-          for image in ubuntu:22.04 ubuntu:24.04; do
-            echo "=== $image"
-            docker run --rm \
-              -v "$PWD/dist-installer:/artifacts:ro" \
-              -v "$PWD/check-links.sh:/check-links.sh:ro" \
-              "$image" bash /check-links.sh
-          done
-
-      # latest-linux.yml IS the Linux update feed, the way latest.yml is Windows's. Were it missing,
-      # the release would still look complete on the page while every installed Linux app's update
-      # check failed against a feed that is not there. Printing it is deliberate rather than noise:
-      # the feed is what decides which artifact an installed app can update itself from, and the log
-      # is where that can be read back after a release.
-      - name: Verify the update feed was written
-        run: |
-          test -f dist-installer/latest-linux.yml || {
-            echo "electron-builder wrote no dist-installer/latest-linux.yml — nothing would advertise this release to installed Linux apps" >&2
-            ls -la dist-installer >&2
-            exit 1
-          }
-          cat dist-installer/latest-linux.yml
-
-      - name: Upload release assets
-        uses: actions/upload-artifact@v7
-        with:
-          name: release-linux
-          path: |
-            dist-installer/*.AppImage
-            dist-installer/*.deb
-            dist-installer/latest-linux.yml
-          # A silent empty upload would read as a successful build that produced nothing.
-          if-no-files-found: error
-          retention-days: 1
+    uses: ./.github/workflows/linux-package.yml
 
   # The release is created as a draft and only made public once every asset is attached. That
   # ordering is the whole point: latest.yml / latest-mac.yml ARE the update feeds, so a half-built

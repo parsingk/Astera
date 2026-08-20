@@ -26,8 +26,8 @@ Releases, and installed apps then update themselves through `electron-updater`.
    > If the tag and `package.json` disagree the workflow fails immediately, before building — this is
    > what keeps the update feed from advertising the wrong version.
 
-4. **Check** the `Release / validate`, `Release / windows`, `Release / macos`, `Release / linux` and
-   `Release / publish` runs under **Actions**, then confirm the release page has all twelve assets
+4. **Check** the `Release / validate`, `Release / windows`, `Release / macos`, `Release / linux`
+   (which expands into `build` and `verify`) and `Release / publish` runs under **Actions**, then confirm the release page has all twelve assets
    attached — three from Windows (`astera-<version>-setup.exe`, its `.blockmap`, `latest.yml`), five
    from macOS (`astera-<version>-universal.dmg` and `Astera-<version>-universal-mac.zip`, a
    `.blockmap` for each, and `latest-mac.yml`), three from Linux
@@ -238,8 +238,9 @@ Expect `accepted` and `source=Notarized Developer ID` in the output.
 The first time you push a tag after this workflow change, check the following in order.
 
 1. Bump `version` in `package.json`, commit, then `git tag vX.Y.Z && git push origin main --tags`
-2. In Actions, confirm all five jobs (`validate`, `windows`, `macos`, `linux`, `publish`) go green.
-   It's normal for `macos` to take 5-20 minutes waiting on notarization.
+2. In Actions, confirm all five jobs (`validate`, `windows`, `macos`, `linux` — which expands into
+   `build` and `verify` — and `publish`) go green. It's normal for `macos` to take 5-20 minutes
+   waiting on notarization.
 3. On the release page, confirm all 12 assets are attached —
    `astera-X.Y.Z-setup.exe`, its `.blockmap`, `latest.yml`,
    `astera-X.Y.Z-universal.dmg` and `Astera-X.Y.Z-universal-mac.zip`, a `.blockmap` for each,
@@ -278,18 +279,30 @@ measured not to disturb the ad-hoc code signature, and the app still launches an
 
 ## Linux releases
 
-The `linux` job builds the AppImage and the deb and attaches them together with `latest-linux.yml`.
-There is no signing step — no Linux counterpart to SignPath or to a Developer ID exists for this
-project, and that distribution channel does not expect one.
+The `linux` job is a call into
+[`.github/workflows/linux-package.yml`](../.github/workflows/linux-package.yml), which builds the
+AppImage and the deb and attaches them together with `latest-linux.yml`. There is no signing step —
+no Linux counterpart to SignPath or to a Developer ID exists for this project, and that distribution
+channel does not expect one.
 
-Two things in that job are load-bearing:
+It is a callable workflow of its own rather than a job inline in `release.yml` because **release.yml
+runs only on a tag**: a job written inline there cannot be tried until the release that depends on it
+is already being cut. Pushing `linux-package.yml` with a temporary `push:` trigger rehearses the same
+file the tagged run calls. If that trigger is present on a branch, remember to take it out before
+tagging.
 
-- **The runner is pinned to `ubuntu-22.04`, never `ubuntu-latest`.** The build host's glibc becomes
-  the artifact's floor, so the pin is what makes the declared floor (Ubuntu 22.04 / Debian 12) true
-  rather than accidental. **The pin has a dated expiry:** GitHub's Ubuntu 22 images begin browning out
-  on 2026-09-17 and stop resolving on 2027-04-17. The job's own comment says what to do when that
-  lands, and [ADR-001](../knowledge/decisions/ADR-001-linux-support-floor.md) carries the reasoning
-  behind the floor and the `libc6 (>= 2.35)` bound that has to move with it.
+Three things in it are load-bearing:
+
+- **The glibc floor is pinned by `container: ubuntu:22.04`, not by the runner label.** The build
+  host's glibc becomes the artifact's floor, so the pin is what makes the declared floor (Ubuntu
+  22.04 / Debian 12) true rather than accidental — and an image pin, unlike `runs-on: ubuntu-22.04`,
+  does not expire when GitHub retires a runner image. Never swap it for a bare `ubuntu-latest` host:
+  that raises the floor silently, with the build green.
+  [ADR-001](../knowledge/decisions/ADR-001-linux-support-floor.md) carries the measurement, the
+  `libc6 (>= 2.35)` bound that is the other half of the guarantee, and why moving the pin *up* is not
+  an option while Debian 12 is supported.
+- **The build and the check are two jobs.** The check is `docker run`, which needs the host's Docker
+  daemon, and a job-level `container:` is not given the socket.
 - **The freshly built deb is installed into clean `ubuntu:22.04` and `ubuntu:24.04` containers, and
   every ELF object it lays down is checked with `ldd`.** A Linux build that produces something nobody
   can start is otherwise a perfectly green build — that has happened twice here, both times silently:
