@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type {
+  Account,
   JobEvent,
   JobRun,
   JobTask,
@@ -9,7 +10,8 @@ import type {
   TaskStatus
 } from '../../../core/types'
 import type { MessageKey } from '../../../core/i18n'
-import { defaultAccountIdOf } from '../../../core/accounts/defaultAccount'
+import { accountToDispatchOn } from '../../../core/accounts/dispatchAccount'
+import { providerOf } from '../../../core/providers/meta'
 import type { GraphBox } from '../../../core/orchestration/graphLayout'
 import { edgePath, layoutRows, NODE_H, NODE_W } from '../../../core/orchestration/graphLayout'
 import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/types'
@@ -143,12 +145,28 @@ export function RunDetail({
    *  여기서 고른 id 가 곧 validateConfigId 로 저장되고 TaskValidator 가 나중에 그 id 로 찾아낼 그
    *  설정이다. */
   const [runConfigs, setRunConfigs] = useState<{ id: string; name: string }[] | null>(null)
+  /** Task 짓기 폼의 계정 목록 — 이 Run 의 provider 것만. runConfigs 와 같은 자리에서 같은 이유로
+   *  받는다(그 사이 계정이 늘거나 지워졌을 수 있다). **로그인 여부는 묻지 않는다**: 이 목록은
+   *  "고를 수 있는 것"이고, 고른 계정을 정말 쓸 수 있는지는 띄우는 순간
+   *  accountToDispatchOn 이 본다 — 지금 로그아웃돼 있어도 나중에 로그인하면 되는 것이라, 여기서
+   *  숨기면 고를 수 없는 이유가 화면에 남지 않는다. */
+  const [accounts, setAccounts] = useState<Account[] | null>(null)
   useEffect(() => {
     if (!authoring) {
       setRunConfigs(null) // 다음에 지을 때 다시 받도록 비운다 — 그 사이 설정이 바뀌었을 수 있다
+      setAccounts(null)
       return
     }
     let cancelled = false
+    void window.api.accounts.list().then(
+      (list) => {
+        if (!cancelled)
+          setAccounts(run?.provider ? list.filter((a) => providerOf(a) === run.provider) : [])
+      },
+      () => {
+        if (!cancelled) setAccounts([])
+      }
+    )
     // 거부 팔을 반드시 둔다 — main 이 프로젝트를 읽다 던질 수 있고, 그러면 DevTools 에
     // Uncaught (in promise) 가 뜬다. 실패해도 폼은 그대로 쓸 수 있어야 하므로(검증 없이 Task 를
     // 만드는 것도 유효한 선택이다) 빈 목록으로 접는다 — "검증 없음" 하나만 남는다.
@@ -163,7 +181,7 @@ export function RunDetail({
     return () => {
       cancelled = true
     }
-  }, [authoring, projectPath])
+  }, [authoring, projectPath, run?.provider])
   /** 물어보기(Gate)의 질문을 쓰는 중인 Task id. null 이면 안 쓰는 중이다 — authoring 과 같은 자리에
    *  서는 세 번째 모습이다(그래프는 그대로, .detail-events 만 바뀐다). authoring 처럼 selected(필터)는
    *  건드리지 않는다. */
@@ -271,16 +289,22 @@ export function RunDetail({
   /** 계정을 고른다 — 스케줄러(src/main/ipc.ts 의 runScheduler)와 같은 방법이다: 계정 목록과
    *  로그인 여부를 병렬로 확인한 뒤 defaultAccountIdOf(그 규칙을 정하는 단 하나의 함수)에게
    *  넘긴다. 로그인 조회를 계정마다 차례로 기다리면 계정 수만큼 느려지므로 Promise.all 로 편다. */
-  const accountFor = async (provider: Provider): Promise<string | null> => {
-    const accounts = await window.api.accounts.list()
+  const accountFor = async (provider: Provider, assigned?: string): Promise<string | null> => {
+    const list = await window.api.accounts.list()
     const loggedIn = new Set(
       (
         await Promise.all(
-          accounts.map(async (a) => ((await window.api.accounts.loginStatus(a.id)) ? a.id : null))
+          list.map(async (a) => ((await window.api.accounts.loginStatus(a.id)) ? a.id : null))
         )
       ).filter((id): id is string => id !== null)
     )
-    return defaultAccountIdOf(provider, accounts, loggedIn)
+    const picked = accountToDispatchOn({
+      ...(assigned !== undefined ? { assigned } : {}),
+      provider,
+      accounts: list,
+      loggedInIds: loggedIn
+    })
+    return picked.ok ? picked.accountId : null
   }
 
   /** 띄우기. ready·pending 에서만 보이고(Graph.node), canManualStart 가 아니면 버튼 자체가 없다.
@@ -295,7 +319,12 @@ export function RunDetail({
       // provider 가 없는 Run 은 canManualStart 가 이미 버튼을 지워 이 자리에 닿지 못한다 — 이
       // 확인은 그 상태가 정말로 불가능함을 다시 강제하는 것이 아니라, 페인트와 클릭 사이에
       // 스냅샷이 바뀌는 좁은 창에 대한 방어일 뿐이다(canManualStart 의 주석).
-      const accountId = provider ? await accountFor(provider) : null
+      // **이 Task 에 지정된 계정을 지킨다.** 스케줄러와 같은 판정을 쓴다(accountToDispatchOn) —
+      // 두 경로가 다른 계정을 고르면 같은 Task 가 누가 띄웠는지에 따라 다른 계정에서 돌게 된다.
+      const assigned = tasks.find((tk) => tk.id === taskId)?.accountId
+      const accountId = provider
+        ? await accountFor(provider, assigned ?? undefined)
+        : null
       if (!provider || !accountId) {
         // 폼이 없는 단발 액션의 실패라 toast 로 보낸다(gateError 의 주석과 같은 규칙) —
         // 계정을 못 찾은 경우도 같은 안내다(worker-start 를 부를 수 없다는 결과가 같다).
@@ -478,6 +507,7 @@ export function RunDetail({
                 projectPath={projectPath}
                 runId={runId}
                 tasks={tasks}
+                accounts={accounts}
                 runConfigs={runConfigs}
                 onClose={() => setAuthoring(false)}
                 onCreated={() => setAuthoring(false)}

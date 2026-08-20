@@ -768,6 +768,8 @@ export const ja: Catalog = {
   'jobs.new.concurrencyHint': 'この作業が同時に開くワーカー数',
   'jobs.new.create': '作る',
   'jobs.new.failed': '作業を作れませんでした',
+  'jobs.gate.noAccount': '{provider} アカウントにログインしていないため、この Task を開始できません',
+  'jobs.gate.assignedAccountUnusable': 'この Task に指定されたアカウントは使用できません — ログインしていない、削除された、または別のエージェントのアカウントです',
   // NewTaskModal.tsx — Task を組み立てている間、詳細ウィンドウの下段(.detail-events)が変わるフォーム。
   // deps はこのフォームではなくグラフが持つ(選ぶ場所がグラフだから) — このカタログには deps の値
   // 自体ではなく、グラフを指すヒント文言(depsHint)だけがある。
@@ -777,6 +779,9 @@ export const ja: Catalog = {
   'jobs.task.deps': '先行 Task',
   'jobs.task.depsHint': '選んだ Task が全部終わってから始まります',
   'jobs.task.depsAdd': '先行 Task を選ぶ',
+  'jobs.task.account': 'アカウント',
+  'jobs.task.accountDefault': '既定のアカウント',
+  'jobs.task.accountHint': 'この Task のワーカーを立てるアカウントです',
   'jobs.task.validate': '完了を検証する実行構成',
   'jobs.task.validateNone': '検証なし',
   'jobs.task.review': '別のエージェントが確認',

@@ -677,6 +677,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.new.concurrencyHint': 'How many workers this job keeps open at once',
   'jobs.new.create': 'Create',
   'jobs.new.failed': 'Could not create the job',
+  'jobs.gate.noAccount': 'No {provider} account is logged in, so this Task cannot start',
+  'jobs.gate.assignedAccountUnusable': 'The account assigned to this Task cannot be used — it is not logged in, has been removed, or belongs to another agent',
   // NewTaskModal.tsx — the form RunDetail's bottom pane (.detail-events) turns into while a Task is
   // being authored. deps belongs to the graph, not this form (the graph is where dependencies get
   // picked) — that is why this catalog only has the hint text pointing at the graph, not the deps
@@ -687,6 +689,9 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.task.deps': 'Depends on',
   'jobs.task.depsHint': 'Starts once every picked Task is done',
   'jobs.task.depsAdd': 'Pick a Task',
+  'jobs.task.account': 'Account',
+  'jobs.task.accountDefault': 'Default account',
+  'jobs.task.accountHint': 'The account this Task runs its worker on',
   'jobs.task.validate': 'Run configuration that proves it done',
   'jobs.task.validateNone': 'No validation',
   'jobs.task.review': 'Review by another agent',

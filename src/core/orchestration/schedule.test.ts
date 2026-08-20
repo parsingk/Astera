@@ -35,6 +35,25 @@ const state = (over: Partial<OrchState> = {}): OrchState => ({
   ...over
 })
 
+describe('slotsToFill — 계정 지정', () => {
+  // Slot 이 계정을 실어 보내는 이유: 고르는 판정은 core 의 accountToDispatchOn 이 하지만, 그것은
+  // 계정 목록과 로그인 여부를 받아야 하고 그 둘은 앱이 아는 것이다(이 파일 머리말). 그래서 이 층은
+  // "사람이 무엇을 지정했나"만 실어 보내고 배선이 그 값으로 판정한다
+  it('Task 에 지정된 계정을 Slot 에 싣는다', () => {
+    const s = state({ tasks: [task('t1', { accountId: 'acc_2' })] })
+    expect(slotsToFill(s)).toEqual([
+      { runId: 'run_1', taskId: 't1', provider: 'claude', accountId: 'acc_2' }
+    ])
+  })
+
+  // 지정이 없으면 칸을 아예 넣지 않는다 — undefined 를 실으면 이 Slot 을 JSON 으로 비교하는
+  // 자리에서 "지정 없음"과 "지정이 undefined" 가 다른 값이 된다
+  it('지정이 없으면 accountId 칸이 없다', () => {
+    const s = state({ tasks: [task('t1')] })
+    expect(slotsToFill(s)).toEqual([{ runId: 'run_1', taskId: 't1', provider: 'claude' }])
+  })
+})
+
 describe('slotsToFill', () => {
   it('autoDispatch 가 아닌 Run 은 보지 않는다 — 코디네이터가 돌리는 Run 이다', () => {
     const s = state({ runs: [run({ autoDispatch: undefined })], tasks: [task('t1')] })

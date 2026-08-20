@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import type { JobTask } from '../../../core/types'
+import type { Account, JobTask } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
+import { AccountSelect } from './AccountSelect'
 import { Select, type SelectOption } from './Select'
 
 /** RunDetail 의 그래프가 Task 를 짓는 동안 상세 창의 아래 칸(.detail-events)이 통째로 바뀌는 폼.
@@ -16,6 +17,7 @@ export function NewTaskModal({
   projectPath,
   runId,
   tasks,
+  accounts,
   runConfigs,
   onClose,
   onCreated
@@ -26,6 +28,8 @@ export function NewTaskModal({
    *  자기 자신은 아직 만들어지지 않았으므로 목록에 있을 수가 없고, 그래서 "자신을 의존으로 고르는"
    *  경우를 걸러 낼 필요가 없다. */
   tasks: JobTask[]
+  /** 고를 수 있는 계정 — 이 Run 의 provider 것만 걸러 온다. null 은 아직 안 온 것 */
+  accounts: Account[] | null
   /** 검증 구성 목록. null 은 아직 안 온 것 */
   runConfigs: { id: string; name: string }[] | null
   onClose: () => void
@@ -39,6 +43,10 @@ export function NewTaskModal({
   const [deps, setDeps] = useState<string[]>([])
   // '검증 없음'을 값 '' 으로 표현한다 — RunConfig.id 는 seed:* 접두사이거나 저장된 uuid라 절대 빈
   // 문자열이 될 수 없으므로 이 값과 겹칠 일이 없다.
+  /** 이 Task 를 띄울 계정. **'' 는 "지정 안 함"이고 그것이 기본이다** — 그때는 그 provider 의 기본
+   *  계정으로 간다(core/accounts/dispatchAccount.ts). validateConfigId 가 '' 로 "검증 없음"을
+   *  적는 것과 같은 관례다: 계정 id 는 절대 빈 문자열이 아니므로 겹칠 일이 없다. */
+  const [accountId, setAccountId] = useState('')
   const [validateConfigId, setValidateConfigId] = useState('')
   const [review, setReview] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -73,6 +81,7 @@ export function NewTaskModal({
         title: title.trim(),
         spec: trimmedSpec,
         deps,
+        ...(accountId ? { account: accountId } : {}),
         ...(validateConfigId ? { validate: validateConfigId } : {}),
         ...(review ? { review: true } : {})
         // parent 는 보내지 않는다 — parentId 는 통합(integration) Task 의 표식이라, 이 폼에서 보내면
@@ -154,6 +163,20 @@ export function NewTaskModal({
               </div>
             )}
             <p className="modal-hint">{t('jobs.task.depsHint')}</p>
+          </div>
+        )}
+        {/* 계정이 하나뿐이면 고를 것이 없다 — 그때는 이 칸을 그리지 않는다(기본 계정이 그 하나다).
+            null 은 아직 안 온 것이라 같이 접힌다 */}
+        {(accounts?.length ?? 0) > 1 && (
+          <div className="field">
+            <label>{t('jobs.task.account')}</label>
+            <AccountSelect
+              accounts={accounts ?? []}
+              value={accountId}
+              onChange={setAccountId}
+              allLabel={t('jobs.task.accountDefault')}
+            />
+            <p className="modal-hint">{t('jobs.task.accountHint')}</p>
           </div>
         )}
         <div className="field">

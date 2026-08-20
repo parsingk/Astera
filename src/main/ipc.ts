@@ -42,7 +42,7 @@ import {
   worktreeDepsOf
 } from '../core/orchestration/integrate'
 import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
-import { defaultAccountIdOf } from '../core/accounts/defaultAccount'
+import { accountToDispatchOn } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, runsForProject } from '../core/orchestration/view'
 import { timelineFor } from '../core/orchestration/timeline'
 import { layersOf } from '../core/orchestration/graph'
@@ -1191,17 +1191,29 @@ export function registerIpc(
             // **남은 슬롯이 통째로 버려진다** — 상관없는 다른 프로젝트의 Run 이 남의 실패 때문에
             // 서 있게 되고, 하나의 문제가 전부를 세우지 않는다는 이 루프의 전제가 거짓이 된다.
             try {
-              const accountId = defaultAccountIdOf(slot.provider, accounts, loggedIn)
-              if (!accountId) {
+              // 사람이 이 Task 에 계정을 지정했으면 그것, 아니면 그 provider 의 기본 계정.
+              // 판정은 core 에 있다(accountToDispatchOn) — 이 파일에는 테스트가 닿지 않는다.
+              const picked = accountToDispatchOn({
+                ...(slot.accountId !== undefined ? { assigned: slot.accountId } : {}),
+                provider: slot.provider,
+                accounts,
+                loggedInIds: loggedIn
+              })
+              if (!picked.ok) {
                 // 조용히 넘기면 Run 이 이유 없이 서 있다 — 이 슬라이스가 없애려는 증상 그대로다.
                 // Reviewer 슬라이스가 "쓸 수 있는 다른 provider 계정이 없다"에 내린 것과 같은 판단이다.
+                // **지정한 계정을 못 쓰는 경우도 여기로 온다.** 기본 계정으로 갈아타지 않는 이유는
+                // accountToDispatchOn 의 주석에 있다: 그가 아끼려던 계정에 일이 간다.
                 await gateSlot(
                   orch.deps,
                   slot.taskId,
-                  `${slot.provider} 계정에 로그인되어 있지 않아 이 Task 를 시작할 수 없습니다`
+                  picked.reason === 'assigned-unusable'
+                    ? t(core.lang, 'jobs.gate.assignedAccountUnusable')
+                    : t(core.lang, 'jobs.gate.noAccount', { provider: slot.provider })
                 )
                 continue
               }
+              const accountId = picked.accountId
               // **한 Run 은 두 방식 중 하나로만 돈다.** 섞지 않는 이유는 병합 대상이다 — 병합은
               // 깨끗한 작업 트리에만 적용되고, 워커 하나를 프로젝트 폴더에 띄우면 그 폴더에 커밋 안
               // 된 변경이 남아 나머지 워크트리를 합칠 자리가 없어진다. 그래서 동시 실행 손잡이 하나가

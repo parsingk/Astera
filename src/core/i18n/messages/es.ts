@@ -781,6 +781,8 @@ export const es: Catalog = {
   'jobs.new.concurrencyHint': 'Cuántos workers mantiene abiertos a la vez',
   'jobs.new.create': 'Crear',
   'jobs.new.failed': 'No se pudo crear el trabajo',
+  'jobs.gate.noAccount': 'Ninguna cuenta de {provider} tiene la sesión iniciada, así que esta Task no puede empezar',
+  'jobs.gate.assignedAccountUnusable': 'La cuenta asignada a esta Task no se puede usar — no tiene la sesión iniciada, fue eliminada o pertenece a otro agente',
   // NewTaskModal.tsx — el formulario en el que se convierte el panel inferior de RunDetail
   // (.detail-events) mientras se está creando una Task. deps pertenece al grafo, no a este formulario
   // (el grafo es donde se eligen las dependencias) — por eso este catálogo solo tiene el texto que
@@ -791,6 +793,9 @@ export const es: Catalog = {
   'jobs.task.deps': 'Depende de',
   'jobs.task.depsHint': 'Empieza cuando todas las Task elegidas terminen',
   'jobs.task.depsAdd': 'Elegir una Task',
+  'jobs.task.account': 'Cuenta',
+  'jobs.task.accountDefault': 'Cuenta por defecto',
+  'jobs.task.accountHint': 'La cuenta en la que esta Task levanta su worker',
   'jobs.task.validate': 'Configuración que prueba que terminó',
   'jobs.task.validateNone': 'Sin validación',
   'jobs.task.review': 'Revisión por otro agente',

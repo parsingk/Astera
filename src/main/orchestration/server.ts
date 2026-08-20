@@ -324,6 +324,25 @@ export async function handleCommand(
       const spec = str(args.spec)
       if (!runId) return bad('--run is required (no run exists)')
       if (!spec) return bad('--spec is required')
+      // `--account` 는 이 Task 를 띄울 계정이다. 없으면 그 provider 의 기본 계정으로 간다
+      // (core/accounts/dispatchAccount.ts). **여기서 거절하는 이유**: 지정이 잘못돼 있으면
+      // dispatch 시점에 Gate 가 열리는데, 그때는 사람이 이미 Task 를 만들어 둔 뒤라 왜 안 도는지
+      // 되짚어야 한다. 만들 때 거절하면 그 자리에서 알 수 있다. 다만 **거절이 유일한 방어는 아니다** —
+      // orchestration.json 은 프로세스보다 오래 살고 손으로 고쳐지므로 dispatch 시점 검사도 남는다.
+      const account = str(args.account)
+      if (account !== null) {
+        const run = s.runs.find((r) => r.id === runId)
+        // Run 의 provider 로 좁혀 묻는다. provider 가 없는 Run(명령으로는 만들 수 없는 조합이지만
+        // 파일은 손으로 고쳐진다)에서는 좁힐 기준이 없어 존재만 본다 — 그런 Run 은 애초에
+        // slotsToFill 이 건너뛴다.
+        const known = deps.listAccounts(run?.provider)
+        if (!known.some((x) => x.id === account))
+          return bad(
+            run?.provider
+              ? `unknown ${run.provider} account: ${account}`
+              : `unknown account: ${account}`
+          )
+      }
       return commit(
         createTask(
           s,
@@ -333,6 +352,7 @@ export async function handleCommand(
             spec,
             deps: Array.isArray(args.deps) ? (args.deps as string[]) : [],
             parentId: str(args.parent) ?? undefined,
+            accountId: account ?? undefined,
             validateConfigId: str(args.validate) ?? undefined,
             // `--review` 는 값이 없는 플래그다(task-list --ready 와 같은 모양). 어느 provider 가
             // 읽을지는 앱이 고른다 — 계정 풀을 아는 것은 앱이다.
