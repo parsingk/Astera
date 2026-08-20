@@ -796,9 +796,9 @@ export const ja: Catalog = {
   'jobs.node.start': '起動',
   'jobs.node.stop': '停止',
   'jobs.node.restart': 'もう一度起動',
-  'jobs.node.gate': '人に聞く',
-  'jobs.node.answer': '答える',
-  'jobs.node.answerLabel': '答え',
-  'jobs.node.gateQuestion': '何を聞きますか',
+  'jobs.node.gate': 'ロックする',
+  'jobs.node.answer': 'ロックを解除',
+  'jobs.node.answerLabel': '決定',
+  'jobs.node.gateQuestion': 'なぜ止めるのか',
   'jobs.node.failed': 'この操作を行えませんでした'
 }

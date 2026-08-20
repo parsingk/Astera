@@ -99,6 +99,54 @@ export function TaskGlyph({ task, size }: { task: JobTask; size?: number }): Rea
   return <TaskIcon status={task.status} label={t(g.key)} still={g.still} size={size} />
 }
 
+/** 자물쇠 둘 — Gate 를 걸고 푸는 노드 버튼이 쓴다.
+ *
+ *  **왜 그림인가**: 이 버튼들의 이웃(`▶ ⏹ ↗ ↻`)은 전부 단색 텍스트 글리프인데 자물쇠에는 널리
+ *  쓰이는 단색 문자가 없다 — `🔒`/`🔓` 는 컬러 이모지라 그 줄에서 혼자 튄다.
+ *
+ *  **왜 자물쇠인가**: 이 짝은 한때 `물어보기`/`답하기` 였는데 대화처럼 읽혔다. 실제로 하는 일은
+ *  잠금이다 — Gate 는 Task 를 `blocked` 로 내려 **시작을 막고**, 푸는 것이 그것을 되돌린다.
+ *  `createGate` 가 열린 Dispatch 가 있는 Task 를 거절하는 것이 그 증거다(묻는 장치라면 상대가 있을
+ *  때 막을 이유가 없다). 가이드도 "a decision block … for deciding the task DAG" 라 적는다.
+ *
+ *  Glyph 를 쓰지 않는다 — 그것은 색을 스스로 정하는데, 이 둘은 버튼의 색(--text-faint → hover
+ *  accent)을 물려받아야 한다. Select.tsx 의 Chevron 과 같은 모양이다. */
+export const LockIcon = (): React.JSX.Element => (
+  <svg
+    viewBox="0 0 16 16"
+    width="12"
+    height="12"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.6"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <rect x="3.5" y="7" width="9" height="6.5" rx="1.2" />
+    <path d="M5.8 7V5.2a2.2 2.2 0 0 1 4.4 0V7" />
+  </svg>
+)
+
+/** 풀린 자물쇠 — 고리가 한쪽만 걸려 있다. 잠긴 것과 **몸통이 같고 고리만 다르다**: 두 상태가 한
+ *  물건의 두 모습으로 읽혀야 하고, 모양을 통째로 바꾸면 서로 다른 두 아이콘이 된다. */
+export const UnlockIcon = (): React.JSX.Element => (
+  <svg
+    viewBox="0 0 16 16"
+    width="12"
+    height="12"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.6"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <rect x="3.5" y="7" width="9" height="6.5" rx="1.2" />
+    <path d="M5.8 7V5.2a2.2 2.2 0 0 1 4.3-.7" />
+  </svg>
+)
+
 export type RunIconKind = 'running' | 'blocked' | 'done' | 'failed'
 
 /** 여럿을 묶은 자리(Run 헤더, 접힌 줄)의 글리프. **도는 것은 채워진 점으로 적는다** — 묶음까지

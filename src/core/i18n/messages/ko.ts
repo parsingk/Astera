@@ -852,11 +852,15 @@ export const ko = {
   'jobs.node.start': '띄우기',
   'jobs.node.stop': '멈추기',
   'jobs.node.restart': '다시 띄우기',
-  'jobs.node.gate': '물어보기',
+  'jobs.node.gate': '잠그기',
   // 열린 Gate 에 답하는 자리. 앱이 Gate 를 열고 보여 주기만 하고 푸는 곳이 아무 데도 없던
   // 것을 없앤 문구다 — 5번이 '답하는 자리를 앱에 둔다'로 좁아진 결과다
-  'jobs.node.answer': '답하기',
-  'jobs.node.answerLabel': '답',
-  'jobs.node.gateQuestion': '무엇을 물어볼까요',
+  'jobs.node.answer': '잠금 풀기',
+  'jobs.node.answerLabel': '결정',
+  // **묻는 말이 아니라 잠그는 이유다.** 한때 '물어보기'/'답하기'/'질문'/'답' 이었는데 대화처럼
+  // 읽혔다 — 실제로 하는 일은 Task 를 blocked 로 내려 시작을 막고 그것을 되돌리는 것이고,
+  // 화면에서 만든 Run 에는 그 글을 읽는 코디네이터가 아예 없다. 코디네이터가 있는 Run 에서는
+  // 여전히 질문으로 읽히므로 잃는 것이 없다(가이드: a decision block for deciding the task DAG)
+  'jobs.node.gateQuestion': '왜 세워 두는지',
   'jobs.node.failed': '이 동작을 하지 못했습니다'
 } as const

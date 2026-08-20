@@ -706,9 +706,9 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.node.start': 'Start',
   'jobs.node.stop': 'Stop',
   'jobs.node.restart': 'Start again',
-  'jobs.node.gate': 'Ask a person',
-  'jobs.node.answer': 'Answer',
-  'jobs.node.answerLabel': 'Answer',
-  'jobs.node.gateQuestion': 'What is the question',
+  'jobs.node.gate': 'Lock',
+  'jobs.node.answer': 'Unlock',
+  'jobs.node.answerLabel': 'Decision',
+  'jobs.node.gateQuestion': 'Why it is held',
   'jobs.node.failed': 'Could not do that'
 }

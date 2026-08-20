@@ -810,9 +810,9 @@ export const es: Catalog = {
   'jobs.node.start': 'Iniciar',
   'jobs.node.stop': 'Detener',
   'jobs.node.restart': 'Iniciar de nuevo',
-  'jobs.node.gate': 'Preguntar',
-  'jobs.node.answer': 'Responder',
-  'jobs.node.answerLabel': 'Respuesta',
-  'jobs.node.gateQuestion': '¿Cuál es la pregunta?',
+  'jobs.node.gate': 'Bloquear',
+  'jobs.node.answer': 'Desbloquear',
+  'jobs.node.answerLabel': 'Decisión',
+  'jobs.node.gateQuestion': 'Por qué queda en espera',
   'jobs.node.failed': 'No se pudo completar esta acción'
 }

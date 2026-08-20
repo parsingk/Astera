@@ -18,7 +18,7 @@ import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/
 import { runningCount } from '../../../core/orchestration/running'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
-import { RunIcon, STATE_KEY, STATUS_COLOR, TaskGlyph, TaskIcon } from './JobIcons'
+import { LockIcon, RunIcon, STATE_KEY, STATUS_COLOR, TaskGlyph, TaskIcon, UnlockIcon } from './JobIcons'
 import { NewTaskModal } from './NewTaskModal'
 
 /** 종류 배지의 문구. message 는 messageType 이 정한다.
@@ -950,7 +950,7 @@ function Graph({
                   onGate(task.id)
                 }}
               >
-                ?
+                <LockIcon />
               </button>
             )}
             {/* 답하기 — Gate 가 열려 있는 blocked 노드에만. 이 버튼이 이 슬라이스의 전부다: 앱은
@@ -965,7 +965,7 @@ function Graph({
                   onAnswer(task.id)
                 }}
               >
-                !
+                <UnlockIcon />
               </button>
             )}
             {showStop && (
