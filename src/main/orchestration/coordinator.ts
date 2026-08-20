@@ -313,7 +313,36 @@ export function buildReviewSpecFile(a: {
   filesModified?: string[]
   /** 검증 구성이 걸려 있었고 통과했는가. 검토자가 컴파일·테스트를 다시 판정하지 않게 하는 근거다 */
   validated: boolean
+  /** 이 프로젝트가 자기 결정을 적어 둔 파일들. 구현자의 spec 과 **같은 목록**을 받는다
+   *  (knowledgeIn). 검토자에게 이것을 주는 이유: 이 기능이 있는 목적이 에이전트가 닫힌 결정을 다시
+   *  열지 않게 하는 것이고, **다시 열렸는지 잡는 것이 검토자의 일**이다. 목록을 안 주면 그 자리가
+   *  빈다. 없거나 비면 이 절이 붙지 않는다. */
+  knowledge?: KnowledgeFiles
 }): string {
+  // 구현자용 문구를 그대로 쓰지 않는다. 구현자는 "고치기 전에 읽어라"를 받고, 검토자는 "다시 열린
+  // 결정은 구체적 결함이다"를 받아야 한다 — 같은 글을 두 번 실으면 이 자리가 값을 못 낸다.
+  // **좁혀 둔 판정 기준을 넓히지 않는다.** 아래 "The one question you answer" 가 취향으로 반려하는
+  // 것을 일부러 막아 두었으므로, 이 절도 "결정을 다시 연 것"만 결함이라 말하고 그 결정 자체와
+  // 다투는 것은 범위 밖이라고 못박는다.
+  const knowledgeSection =
+    a.knowledge && a.knowledge.paths.length > 0
+      ? `
+## The project's own decisions (assembled by the app — do not delete)
+
+This repository records its decisions and architecture notes in the files below. The implementer was
+handed the same list. They bind this work the way the requirement above does.
+
+Read the ones this change touches. **A decision that was reopened is a concrete finding, not a matter
+of taste** — if the work takes a path one of these files rejected, name the file and what it settled.
+That is the same kind of ground as a change contradicting the spec.
+
+What is **not** ground for rejection is disagreeing with a decision yourself. These are the project's
+settled positions; re-litigating one is outside this review.
+
+${a.knowledge.paths.map((p) => `  ${p}`).join('\n')}
+${a.knowledge.more > 0 ? `\n  … and ${a.knowledge.more} more file(s) in the project's knowledge directories.\n` : ''}`
+      : ''
+
   return `# Review: ${a.title}
 
 You are reviewing work another agent finished. **Do not change any code.** Read, judge, report.
@@ -338,6 +367,7 @@ ${
     : 'No automated validation was attached to this task, so nothing has been proven about the build or the tests. Say so in your report if that matters for the requirement, but do not run the build yourself — that is not what you were started for.'
 }
 
+${knowledgeSection}
 ## The one question you answer
 
 **Was the requirement above satisfied?** Not "is this the code I would have written", not "could this be

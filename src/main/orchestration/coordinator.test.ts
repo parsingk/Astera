@@ -199,6 +199,43 @@ describe('buildSpecFile', () => {
 })
 
 describe('buildReviewSpecFile', () => {
+  // 이 기능이 있는 이유는 에이전트가 이미 닫힌 결정을 다시 열지 않게 하는 것이고, **닫힌 결정이
+  // 다시 열렸는지 잡는 것이 바로 검토자의 일**이다. 검토자에게만 그 목록을 주지 않으면 그 자리가 빈다
+  it('프로젝트의 결정 목록을 싣는다', () => {
+    const md = buildReviewSpecFile({
+      title: 'T',
+      spec: 's',
+      taskId: 'tsk_1',
+      dispatchId: 'dsp_1',
+      validated: false,
+      knowledge: { paths: ['knowledge/decisions/ADR-004-x.md'], more: 0 }
+    })
+    expect(md).toContain('knowledge/decisions/ADR-004-x.md')
+    expect(md).toContain('assembled by the app — do not delete')
+  })
+
+  // 구현자용 문구와 **같지 않아야 한다**. 구현자는 "고치기 전에 읽어라"를 받고, 검토자는 "닫힌 결정을
+  // 다시 열었으면 그것이 결함이다"를 받아야 한다 — 같은 글을 두 번 쓰면 이 자리의 값이 사라진다
+  it('검토자에게는 구현자와 다른 지시를 준다', () => {
+    const md = buildReviewSpecFile({
+      title: 'T',
+      spec: 's',
+      taskId: 'tsk_1',
+      dispatchId: 'dsp_1',
+      validated: false,
+      knowledge: { paths: ['knowledge/a.md'], more: 0 }
+    })
+    expect(md).not.toContain('before** you change anything')
+    expect(md.toLowerCase()).toContain('reopen')
+  })
+
+  // 절 제목으로 본다 — 'project' 같은 흔한 낱말로 보면 다른 문장이 그것을 담게 되는 날 조용히
+  // 통과한다(이 파일의 validated 분기가 이미 "The project's own build/test configuration" 을 적는다)
+  it('지식이 없으면 그 절이 아예 없다', () => {
+    const md = buildReviewSpecFile({ title: 'T', spec: 's', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: false })
+    expect(md).not.toContain("## The project's own decisions")
+  })
+
   it('원래 Task 의 요구를 판정 기준으로 싣는다', () => {
     const md = buildReviewSpecFile({ title: 'T', spec: '요구 본문', taskId: 'tsk_1', dispatchId: 'dsp_1', validated: false })
     expect(md).toContain('요구 본문')

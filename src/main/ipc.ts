@@ -16,7 +16,12 @@ import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
 import { copyTranscript } from '../core/rolling/transcript'
 import { OrchestrationStore } from './orchestration/store'
-import { OrchCoordinator, LAUNCH_FORBIDDEN, buildReviewSpecFile } from './orchestration/coordinator'
+import {
+  OrchCoordinator,
+  LAUNCH_FORBIDDEN,
+  buildReviewSpecFile,
+  knowledgeIn
+} from './orchestration/coordinator'
 import {
   handleCommand as orchHandleCommand,
   handleExit as orchHandleExit,
@@ -832,7 +837,11 @@ export function registerIpc(
           dispatchId: opened.value.id,
           implReport: task.result,
           filesModified: task.filesModified,
-          validated: !!task.validateConfigId
+          validated: !!task.validateConfigId,
+          // 구현자와 **같은 목록**을 받는다 — 검토자의 일이 "닫힌 결정이 다시 열렸는지"를 잡는 것인데
+          // 그 목록을 안 주면 그 자리가 빈다. 훑는 뿌리도 같다: 검토자는 구현자가 일한 트리에서
+          // 돈다(바로 아래 worktree 'current' + runCwd = 그 cwd).
+          knowledge: await knowledgeIn(cwd, orchLog)
         })
         let started: { sessionId: string; cwd: string; specPath: string }
         try {
