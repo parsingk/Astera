@@ -1249,9 +1249,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    바탕이 아니라 테두리로 말하는 이유는 .jobs-task 의 hover 주석과 같다 — 안쪽 줄의 바탕은 이미
    상태를 말하고 있어서 덮으면 그 뜻이 사라진다. Run 에서는 진행 띠의 색이 그 자리다.
    아래쪽 1px 은 경계선이 이미 그리고 있으므로 그 색만 함께 바꿔 상자를 닫는다.
+   **--ring 이 아니라 --accent 다.** --ring 은 accent 의 35% 알파라 초점 링(여러 px 로 번지는
+   자리)에서는 통하지만 1px 선에서는 남는 것이 없다 — 이 파일에서 1px inset 링이 실제로 읽히는
+   자리는 전강도를 쓰고 있다(.fx-row.drop-into).
    **이 테두리는 "지금 이것을 가리키고 있다"이지 "여기를 누르면 된다"가 아니다** — 접기는 여전히
    제목 줄이고, 그 사실은 캐럿(▾/▸)과 그 줄의 pointer 커서가 말한다 */
-.jobs-run:hover { box-shadow: inset 0 0 0 1px var(--ring); border-bottom-color: var(--ring); }
+.jobs-run:hover { box-shadow: inset 0 0 0 1px var(--accent); border-bottom-color: var(--accent); }
 /* 제목 줄. **바탕을 깔지 않는다** — 한때 --elevated 밴드를 깔아 Run 경계를 표시했는데, 이
    사이드바에서 그 색은 이미 hover/활성 줄의 뜻이라 hover 가 무엇을 말하는지가 흐려졌다. 경계는
    위의 border 가 말하고, hover 도 그 자리에서 Run 전체로 말한다 — 이 줄은 바탕을 갖지 않는다.
