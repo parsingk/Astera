@@ -1239,11 +1239,16 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* Run 의 제목 띠. **바탕을 상시로 깐다** — 검은 경계선 하나로는 Run 이 몇 개 쌓였을 때 어디서
    끊기는지 읽히지 않았다(어두운 패널 위의 검정은 구분선보다 그림자로 읽힌다). 선을 더 진하게 하는
    길은 이미 끝(검정)이라, 대신 각 Run 이 제목 띠로 시작하게 만든다 — 세로를 한 픽셀도 더 쓰지
-   않는다(아래 padding 7px 은 .jobs-bar 의 margin-top 에서 옮겨 온 것이다).
+   않는다(아래 padding 은 .jobs-bar 의 margin-top 에서 옮겨 온 것이다 — Run 하나당 2px 만 늘었다).
    --elevated 인 이유: --surface-hover(#1f1f25)는 --panel(#1a1a1e)과 차이가 5 밖에 안 되고, 이
    사이드바에서 --elevated 가 패널 위에 떠 보인다는 것은 도는 줄(.jobs-task)이 이미 보여 주고 있다.
-   전폭이라 띠로 읽히고, 안쪽의 줄(inset + radius)과는 모양으로 갈린다 */
-.jobs-run-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px 7px; background: var(--elevated); cursor: pointer; }
+   전폭이라 띠로 읽히고, 안쪽의 줄(inset + radius)과는 모양으로 갈린다.
+   **이 띠가 곧 hover·클릭 영역이다.** hover 와 toggle 이 걸린 요소가 이것뿐이고 진행 띠·줄·아래
+   한 줄은 형제 요소다. 그래서 진행 띠를 이 띠에 붙여 두면 둘이 한 덩어리로 읽히는데 반응은 위쪽만
+   해서 hover 가 잘려 보인다 — 아래 .jobs-bar 의 margin-top 이 그 둘을 갈라 두는 값이고, 그것이
+   0 이 되면 안 된다. 진행 띠를 이 띠 안으로 넣는 길은 막혀 있다: 시작 전 칸의 --line-soft 가
+   --elevated 위에서 사라진다(그 색은 패널 위에서만 "아직 안 간 칸"으로 읽힌다) */
+.jobs-run-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px 5px; background: var(--elevated); cursor: pointer; }
 /* hover 를 값으로 적는 이유: 반투명 흰색을 얹으면 이제 뒤가 --panel 이 아니라 --elevated 라
    composite 결과가 바탕보다 어두워져 눌리는 느낌이 거꾸로 된다. 기본 button:hover 와 같은 값이다 */
 .jobs-run-head:hover { background: #2a2a31; }
@@ -1255,7 +1260,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* 아이콘 하나와 숫자 하나 — 헤더의 묶음 표시와 아래 한 줄이 같은 모양을 쓴다 */
 .jobs-count { flex: none; display: inline-flex; align-items: center; gap: 3px; color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
 /* 띠 — Task 하나가 칸 하나다. 접힌 Run 은 이것만 남으므로 아래 여백을 조금 더 준다 */
-.jobs-bar { display: flex; gap: 2px; height: 6px; margin: 0 10px 8px; }
+.jobs-bar { display: flex; gap: 2px; height: 6px; margin: 4px 10px 8px; }
 .jobs-run.collapsed .jobs-bar { margin-bottom: 10px; }
 .jobs-seg { flex: 1; border-radius: 2px; }
 .jobs-rows { display: flex; flex-direction: column; gap: 4px; padding: 0 10px 8px; }
