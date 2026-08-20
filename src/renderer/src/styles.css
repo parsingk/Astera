@@ -868,7 +868,13 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* 머리말 없이 목표가 제목이고, 그 옆이 묶음 개수다. .jobs-count 를 사이드바에서 그대로 빌린다 —
    같은 아이콘과 같은 숫자가 화면마다 다르게 생기면 "아이콘으로 읽는다"는 규칙이 무너진다 */
 .detail-head { flex: none; display: flex; align-items: center; gap: 9px; }
-.detail-head h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.detail-head h2 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 창을 닫는 ✕. 아래 .detail-clear 와 같은 모양을 쓰지만 margin-left: auto 가 아니다 — 제목이
+   flex: 1 로 남는 자리를 다 가져가므로 개수 묶음과 이 버튼은 이미 오른쪽 끝에 붙어 있고, auto 를
+   또 주면 개수 묶음과 이 버튼 사이가 벌어진다. 글자를 --text-faint 로 두지 않는 이유는 사이드바에서
+   배운 것과 같다: 이 패널 위에서 그 색의 12px 글리프는 찾을 수 없다 */
+.detail-x { flex: none; background: none; border: 0; padding: 0 2px; color: var(--text-dim); font-size: 13px; line-height: 1; cursor: pointer; }
+.detail-x:hover { color: var(--accent); }
 /* 위아래로 **정확히 반반** 쌓는다 — 그래프는 층이 넓어질수록 가로로 자라는데, 옆에 이벤트를
    세우면 그래프가 쓸 수 있는 폭이 창의 절반도 안 된다. 넷만 나란히 서도 잘려서 가로 스크롤이
    생겼다. 위아래로 두면 그래프가 창의 온 폭을 쓰고, 이벤트는 어차피 세로로 읽는 것이라 폭이
@@ -919,7 +925,6 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    테두리가 아니라 제목 옆에 글리프를 하나 더 세운다. color 를 accent(청록)로 주는 것은 상태
    팔레트(--ok 등)를 피하기 위해서다 — completed 상태의 글리프와 같은 색이면 텍스트 글리프(✓)를
    쓴 것과 별개로 또 한 번 헷갈릴 자리를 만든다 */
-.detail-node-picked { flex: none; display: inline-flex; color: var(--accent); font-size: 12px; }
 /* .detail-node-btn 은 띄우기·멈추기·물어보기·다시 띄우기 네 버튼이 쓴다 — ↗(세션 열기)와 같은
    자리, 같은 존재감이어야 하므로 규칙을 나누지 않고 셀렉터에 더한다 */
 .detail-node-jump, .detail-node-btn { flex: none; background: none; border: 0; padding: 0 2px; color: var(--text-faint); font-size: 12px; cursor: pointer; }
@@ -962,6 +967,14 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .detail-ev-main { min-width: 0; }
 .detail-eh { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }
 .detail-chip { flex: none; font-size: 10px; padding: 1px 5px; border-radius: var(--radius-sm); background: var(--line-soft); color: var(--text-dim); }
+/* 고른 선행 Task. 칩을 그대로 빌리되 지우는 ✕ 를 안에 하나 둔다 — 고른 것을 되돌리는 자리가 고른
+   것 자신이어야 한다. 제목이 길 수 있어 줄바꿈을 허용한다(wrap): 사이드바처럼 한 줄에 밀어 넣고
+   자르면 어느 Task 를 골랐는지 못 읽는다 */
+.detail-dep-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.detail-chip.detail-dep { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 2px 4px 2px 7px; max-width: 100%; }
+.detail-chip.detail-dep > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.detail-chip.detail-dep button { flex: none; background: none; border: 0; padding: 0 1px; color: var(--text-faint); font-size: 10px; line-height: 1; cursor: pointer; }
+.detail-chip.detail-dep button:hover { background: none; color: var(--accent); }
 .detail-chip.provider { background: rgba(55, 176, 196, 0.14); color: var(--accent); }
 .detail-chip.retry { color: var(--git-modified); }
 /* 검토 Dispatch 표시. 색은 JobIcons 의 STATUS_COLOR.reviewing 과 같은 --fi-purple 이다 — 같은 뜻이

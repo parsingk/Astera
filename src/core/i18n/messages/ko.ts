@@ -807,8 +807,11 @@ export const ko = {
   'jobs.task.new': 'Task 추가',
   'jobs.task.title': '제목',
   'jobs.task.spec': '지시',
-  'jobs.task.deps': '먼저 끝나야 하는 것',
-  'jobs.task.depsHint': '위 그래프에서 노드를 눌러 고릅니다',
+  'jobs.task.deps': '선행 Task',
+  // 예전 문구는 '위 그래프에서 노드를 눌러 고릅니다'였다 — 고르는 자리가 셀렉트로 옮겨져
+  // 거짓이 됐다. 대신 고른 것이 무엇을 뜻하는지 적는다(recomputeReady 의 규칙 그대로다)
+  'jobs.task.depsHint': '고른 Task 가 모두 끝나야 시작합니다',
+  'jobs.task.depsAdd': '선행 Task 고르기',
   'jobs.task.validate': '완료를 검증할 실행 구성',
   'jobs.task.validateNone': '검증 없음',
   'jobs.task.review': '다른 에이전트가 검토',

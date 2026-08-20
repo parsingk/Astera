@@ -119,16 +119,16 @@ export function RunDetail({
   /** 고른 노드 = 아래 이벤트의 필터. 같은 노드를 다시 누르면 풀린다 */
   const [selected, setSelected] = useState<string | null>(null)
   const [open, setOpen] = useState<Set<string>>(new Set())
-  /** null 이면 평소(그래프는 필터) — 배열이면 Task 를 짓는 중이고 그래프 클릭은 이 배열에 넣고 뺀다.
+  /** Task 를 짓는 중인가. **한때 string[] | null 이었다** — 그래프 노드를 눌러 의존을 골랐으므로
+   *  이 상태가 "폼이 열렸다"와 "무엇을 골랐다"를 겸했다. 의존이 폼의 셀렉트로 가면서 고른 값은
+   *  NewTaskModal 이 소유하고, 여기 남는 것은 열렸는가 하나다.
    *
    *  **필터(selected)는 건드리지 않는다.** 짓는 동안에도 그대로 남아 있다가 끝나면(성공이든 취소든)
    *  그대로 돌아온다 — 지우거나 감추면, 이미 한 Task 로 걸러서 그 사정을 보던 사람이 + Task 를
-   *  누른 순간 그 맥락을 잃는다. 두 상태를 이렇게 겹쳐 둘 수 있는 것은 표시가 서로 다른 채널이기
-   *  때문이다: 필터는 청록 링(.detail-node.on), 고른 의존은 체크 글리프(Graph 의 node())다 — 한
-   *  노드가 우연히 둘 다에 해당해도 두 표시가 같이 뜰 뿐 뜻이 섞이지 않는다("같은 모양으로 두 뜻을
-   *  말하지 않는다"). 짓는 동안 아래 칸(.detail-events)이 폼으로 바뀌어 그 필터 줄 자체는 잠깐
-   *  보이지 않지만, 상태는 그대로 있으므로 폼을 닫으면 원래 걸러 보던 화면이 다시 나온다. */
-  const [picking, setPicking] = useState<string[] | null>(null)
+   *  누른 순간 그 맥락을 잃는다. 짓는 동안 아래 칸(.detail-events)이 폼으로 바뀌어 그 필터 줄
+   *  자체는 잠깐 보이지 않지만, 상태는 그대로 있으므로 폼을 닫으면 원래 걸러 보던 화면이 다시
+   *  나온다. */
+  const [authoring, setAuthoring] = useState(false)
   /** Task 짓기 폼의 검증 구성 목록. null 은 아직 안 온 것 — NewTaskModal 의 prop 문서와 같은 뜻이다.
    *
    *  **run.list 로 받는다. orch.command(..., 'run-configs', ...) 가 아니다.** run-configs 명령은
@@ -143,10 +143,6 @@ export function RunDetail({
    *  여기서 고른 id 가 곧 validateConfigId 로 저장되고 TaskValidator 가 나중에 그 id 로 찾아낼 그
    *  설정이다. */
   const [runConfigs, setRunConfigs] = useState<{ id: string; name: string }[] | null>(null)
-  // picking 자체가 아니라 이 값을 의존성에 두는 이유: picking 은 고른 원소가 바뀔 때마다(토글마다)
-  // 새 배열이 되므로, 그것을 그대로 넣으면 클릭마다 다시 불러오게 된다. authoring 은 짓기 시작/
-  // 끝(false→true, true→false) 그 경계에서만 바뀌는 값이다.
-  const authoring = picking !== null
   useEffect(() => {
     if (!authoring) {
       setRunConfigs(null) // 다음에 지을 때 다시 받도록 비운다 — 그 사이 설정이 바뀌었을 수 있다
@@ -168,8 +164,8 @@ export function RunDetail({
       cancelled = true
     }
   }, [authoring, projectPath])
-  /** 물어보기(Gate)의 질문을 쓰는 중인 Task id. null 이면 안 쓰는 중이다 — picking 과 같은 자리에
-   *  서는 세 번째 모습이다(그래프는 그대로, .detail-events 만 바뀐다). picking 처럼 selected(필터)는
+  /** 물어보기(Gate)의 질문을 쓰는 중인 Task id. null 이면 안 쓰는 중이다 — authoring 과 같은 자리에
+   *  서는 세 번째 모습이다(그래프는 그대로, .detail-events 만 바뀐다). authoring 처럼 selected(필터)는
    *  건드리지 않는다. */
   const [asking, setAsking] = useState<string | null>(null)
   const [question, setQuestion] = useState('')
@@ -179,7 +175,7 @@ export function RunDetail({
    *  버튼이 함께 숨는다. 이 창은 한 번에 하나만 다루는 것이 보통의 쓰임이고, Task 마다 따로 두면
    *  "다른 Task 의 명령이 도는 동안 이 버튼은 눌러도 되는가"를 버튼마다 다시 정해야 한다.
    *
-   *  picking·asking 과 따로 두는 이유: 그 둘은 "폼이 열려 있다"를 말하지만 띄우기·멈추기·다시
+   *  authoring·asking 과 따로 두는 이유: 그 둘은 "폼이 열려 있다"를 말하지만 띄우기·멈추기·다시
    *  띄우기에는 폼이 없다 — 버튼 하나가 곧 명령이라, 명령이 오가는 동안을 표시할 값이 그 셋에는
    *  따로 필요하다(물어보기는 asking 이 그 구간도 이미 덮는다 — 성공했을 때만 asking 을 null 로
    *  돌리므로). */
@@ -196,7 +192,7 @@ export function RunDetail({
    *  쓰는 중이거나, 명령이 도는 중이다. 이 동안은 노드 버튼(↗ 포함)을 전부 숨기고 배경 클릭으로
    *  창을 닫지도 않는다: 다른 버튼을 누르면 지금 쓰던 것을 잃고, 배경을 눌러 창을 닫으면 도는
    *  명령의 결과를 아무도 보지 못한다(이 창을 새로 열지 않는 한 다시 알 길이 없다). */
-  const formOpen = picking !== null || asking !== null || busy !== null
+  const formOpen = authoring || asking !== null || busy !== null
   /** 띄우기 버튼을 보일 조건 — **둘 다** 참이어야 한다. 한 자리에 모아 두는 것은 둘 중 하나만
    *  보고 고치면 나머지 조건을 깨뜨리기 쉬워서다.
    *
@@ -256,26 +252,19 @@ export function RunDetail({
     return <span className="detail-dot" />
   }
 
-  /** 그래프 노드 클릭의 뜻은 모드가 정한다 — 짓는 중이 아니면 필터(같은 노드를 다시 누르면
-   *  풀린다), 짓는 중이면 picking 배열에 넣고 뺀다. 판단을 여기 한 곳에 두는 것은 Graph 는 그리기만
-   *  하고(파일 머리말의 규칙) 어느 모드인지는 몰라도 되게 하려는 것이다.
+  /** 그래프 노드 클릭은 필터 하나만 뜻한다 — 같은 노드를 다시 누르면 풀린다.
    *
-   *  **formOpen 인데 picking 이 아니면(즉 asking 이나 busy) 클릭을 통째로 무시한다.** 노드
-   *  버튼들이 이 동안 전부 숨는 것(node() 의 `!formOpen &&`)과 같은 규칙을 이 함수도 지켜야
-   *  한다 — 버튼만 숨기고 노드 자신의 onClick(필터)을 그대로 두면, 물어보기 폼을 쓰는 중에
-   *  다른 노드를 눌러 필터 링을 조용히 옮길 수 있는 구멍이 남는다. 그러면 asking 의 주석이
-   *  약속한 "picking 처럼 selected 는 건드리지 않는다"가 asking 에서는 지켜지지 않는다. 이
-   *  판단을 Graph 안에 두지 않고 여기 두는 것은 판단이 한 곳에 있어야 한다는, 이 함수가 이미
-   *  지키고 있던 성질을 그대로 따르는 것이다. */
+   *  **예전에는 뜻이 둘이었다**: 짓는 중이면 의존을 고르고, 아니면 필터였다. 의존이 폼의 셀렉트로
+   *  가면서 그 분기가 없어졌고, 함께 없어진 것이 하나 더 있다 — 같은 노드가 "걸러 놓은 것"과
+   *  "고른 의존" 두 표시를 동시에 달 수 있던 상태다(청록 링과 체크 글리프). 뜻이 하나면 표시도
+   *  하나다.
+   *
+   *  **폼이 열려 있는 동안에는 클릭을 통째로 무시한다.** 노드 버튼들이 이 동안 전부 숨는 것
+   *  (node() 의 `!formOpen &&`)과 같은 규칙이다 — 버튼만 숨기고 노드 자신의 onClick 을 그대로
+   *  두면, 폼을 쓰는 중에 다른 노드를 눌러 필터 링을 조용히 옮길 수 있는 구멍이 남는다. 이 판단을
+   *  Graph 안에 두지 않고 여기 두는 것은 Graph 는 그리기만 한다는 파일 머리말의 규칙이다. */
   const onNodeClick = (id: string): void => {
-    if (formOpen && picking === null) return
-    if (picking !== null) {
-      setPicking((cur) => {
-        const list = cur ?? []
-        return list.includes(id) ? list.filter((x) => x !== id) : [...list, id]
-      })
-      return
-    }
+    if (formOpen) return
     setSelected((prev) => (prev === id ? null : id))
   }
 
@@ -429,19 +418,35 @@ export function RunDetail({
               <span>{n}</span>
             </span>
           ))}
+          {/* 창을 닫는다. **폼이 열려 있는 동안은 숨는다** — 노드 버튼들과 같은 규칙이고(node() 의
+              `!formOpen &&`) 이유가 하나 더 있다: 폼 자신도 오른쪽 위에 ✕ 를 갖고 있어서
+              (NewTaskModal 의 .detail-clear) 둘이 함께 보이면 어느 ✕ 가 무엇을 닫는지 알 수 없다.
+              폼이 열린 동안 나가는 길은 그 폼의 취소 하나다.
+              한때 이 자리가 왼쪽 아래의 `닫기` 버튼이었고 formOpen 이면 disabled 였다. 죽은 버튼이
+              폼의 취소·추가 옆에 서서 세 버튼처럼 읽혔고, 무엇에 쓰는 것이냐는 질문을 받았다 —
+              같은 가드를 이 파일이 세 자리에서 이미 "숨긴다"로 쓰고 있었는데 이 자리만 달랐다. */}
+          {!formOpen && (
+            <button
+              className="detail-x"
+              title={t('jobs.timeline.close')}
+              aria-label={t('jobs.timeline.close')}
+              onClick={onClose}
+            >
+              ✕
+            </button>
+          )}
         </div>
         {/* flex: 1; min-height: 0 이 styles.css 에 있다 — 없으면 아래의 두 칸이 줄지 않아 모달 밖으로
             넘치고 닫기 버튼이 밀려난다. 이 저장소가 실제로 그 결함을 냈던 자리다 */}
         <div className="detail-body">
           <div className="detail-graph">
-            {/* 짓는 동안(또는 질문을 쓰는 동안)에는 치운다 — Task 짓기 중이라면 다시 누르면
-                setPicking([]) 이 또 불려 이미 골라 둔 의존을 버리게 되고, 질문을 쓰는 중이라면
-                누르면 아래 칸이 통째로 NewTaskModal 로 바뀌어 아직 안 보낸 질문을 잃는다. 이
-                버튼이 여는 것은 새 창이 아니라 아래 칸(.detail-events)의 두 번째 모습이다: 그래프는
-                그대로 있고 클릭의 뜻만 바뀐다. */}
+            {/* 짓는 동안(또는 질문을 쓰는 동안)에는 치운다 — 질문을 쓰는 중에 누르면 아래 칸이
+                통째로 NewTaskModal 로 바뀌어 아직 안 보낸 질문을 잃고, Task 를 짓는 중에 누르면
+                폼이 다시 그려져 채워 둔 것을 잃는다. 이 버튼이 여는 것은 새 창이 아니라 아래 칸
+                (.detail-events)의 두 번째 모습이다: 그래프는 그대로 보이고 아래만 바뀐다. */}
             {!formOpen && (
               <div className="detail-graph-head">
-                <button className="jobs-new" onClick={() => setPicking([])}>
+                <button className="jobs-new" onClick={() => setAuthoring(true)}>
                   + {t('jobs.task.new')}
                 </button>
               </div>
@@ -452,7 +457,6 @@ export function RunDetail({
               deps={detail?.deps ?? {}}
               cyclic={detail?.cyclic ?? []}
               selected={selectedTask?.id}
-              picking={picking}
               onSelect={onNodeClick}
               canOpenSession={canOpenSession}
               onOpenSession={onOpenSession}
@@ -469,14 +473,14 @@ export function RunDetail({
             />
           </div>
           <div className="detail-events">
-            {picking !== null ? (
+            {authoring ? (
               <NewTaskModal
                 projectPath={projectPath}
                 runId={runId}
-                deps={picking}
+                tasks={tasks}
                 runConfigs={runConfigs}
-                onClose={() => setPicking(null)}
-                onCreated={() => setPicking(null)}
+                onClose={() => setAuthoring(false)}
+                onCreated={() => setAuthoring(false)}
               />
             ) : asking !== null ? (
               <>
@@ -625,14 +629,6 @@ export function RunDetail({
             )}
           </div>
         </div>
-        <div className="modal-actions">
-          {/* 배경 클릭과 같은 이유로 막는다 — formOpen 인 동안 이 버튼도 창을 닫을 수 있다면
-              배경만 막는 것은 반쪽짜리 수정이다(같은 문제를 여는 문 하나를 남겨 둔 것일 뿐이다).
-              NewRunModal 의 취소 버튼(disabled={busy})과 같은 관례다. */}
-          <button onClick={onClose} disabled={formOpen}>
-            {t('jobs.timeline.close')}
-          </button>
-        </div>
       </div>
     </div>
   )
@@ -651,7 +647,6 @@ function Graph({
   deps,
   cyclic,
   selected,
-  picking,
   onSelect,
   canOpenSession,
   onOpenSession,
@@ -670,7 +665,6 @@ function Graph({
   /** null 이면 평소(필터 모드) — 배열이면 그 배열에 든 것이 지금 고른 의존이다. onSelect 뒤에서
    *  RunDetail 이 이미 모드를 갈랐으므로(onNodeClick) 여기서는 어느 쪽 뜻인지 몰라도 그리기만 하면
    *  된다: 이 컴포넌트는 판단하지 않는다는 파일 머리말의 규칙과 같다. */
-  picking: string[] | null
   onSelect: (taskId: string) => void
   canOpenSession: (sessionId: string) => boolean
   onOpenSession: (sessionId: string) => void
@@ -707,13 +701,6 @@ function Graph({
 
   const node = (task: JobTask, pos?: GraphBox): React.JSX.Element => {
     const sessionId = task.sessionId && canOpenSession(task.sessionId) ? task.sessionId : undefined
-    // Task 를 짓는 동안 이 노드가 지금 고른 의존인지. **createTask 는 새 Task 가 이미 있는 어느
-    // Task 를 가리켜도 거절하지 않는다**(core/orchestration/state.ts) — 존재 확인만 하고 순환은
-    // 보지 않는데, 갓 만드는 Task 는 아직 아무도 그것을 가리키지 않으므로 자신을 향한 경로가 생길
-    // 수가 없다(순환이 되려면 먼저 무언가 이 새 Task 를 가리켜야 한다). 그래서 순환 묶음(cycle,
-    // 아래) 안의 Task 를 고르는 것도 막지 않는다 — 그 자리에 자리가 없는 것은 표시상의 문제일 뿐,
-    // 의존으로서는 다른 Task 와 다르지 않다.
-    const picked = picking?.includes(task.id) ?? false
     // 열린 Dispatch 가 있는지는 provider(그리고 startedAt)의 유무로만 안다 — 스냅샷에 Dispatch
     // 배열 자체가 없으므로 이것이 유일한 신호다(view.ts 의 jobTaskOf 주석과 brief 의 Step 2).
     const dispatchOpen = task.provider !== undefined
@@ -736,28 +723,14 @@ function Graph({
       >
         <TaskGlyph task={task} />
         <span className="detail-node-title">{task.title}</span>
-        {/* 고른 의존 표시. 필터의 링(위의 ' on', .detail-node.on)과 다른 채널이다 — 같은 모양으로
-            두 뜻을 말하지 않으려고 링이 아니라 글리프를 하나 더 붙인다.
-            **완료(completed) 상태 글리프를 빌리지 않는다** — TaskIcon status="completed" 를 쓰면
-            completed 인 Task 는 자기 상태 글리프와 이 표시가 같은 자리에 나란히 서서 픽셀까지
-            같은 모양이 되고, 위치만으로 둘을 구별해야 한다("같은 모양으로 두 뜻을 말하지 않는다"가
-            글리프 대 글리프로 깨진다). 그래서 상태 팔레트가 아닌 accent(그래프 필터 링과 같은
-            청록)로, 텍스트 글리프(✓)로 적는다 — 어느 상태의 노드 위에 있어도 그 상태의 글리프와
-            겹치지 않는다. aria-hidden 인 이유는 그대로다: 이 Task 의 상태가 completed 라는 말이
-            아니므로 스크린 리더에는 읽히지 않는다. */}
-        {picked && (
-          <span className="detail-node-picked" aria-hidden="true">
-            ✓
-          </span>
-        )}
         {/* 세션 열기·띄우기·멈추기·물어보기·다시 띄우기 — 노드 안의 버튼들. formOpen 인 동안은
             전부 숨긴다: Task 짓기·질문 쓰기 폼이 열려 있거나 다른 명령이 도는 동안 이 버튼 중
             하나를 누르면 그 폼이나 그 명령의 결과를 조용히 버리게 된다(RunDetail.formOpen 의
             주석). 세션 열기(↗)는 원래 있던 버튼이지만 이 규칙은 새로 더한 네 버튼과 똑같이
             적용한다 — 노드 버튼이 하나든 다섯이든 "폼이 열려 있는 동안 무엇을 하는가"의 답은
             하나여야 한다.
-            각 버튼은 onClick 에서 stopPropagation 을 부른다 — 노드 자신의 onClick(필터 또는
-            의존 고르기)으로 새지 않게 한다. */}
+            각 버튼은 onClick 에서 stopPropagation 을 부른다 — 노드 자신의 onClick(필터)으로
+            새지 않게 한다. */}
         {!formOpen && (
           <>
             {sessionId && (
