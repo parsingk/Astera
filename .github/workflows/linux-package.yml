@@ -5,17 +5,19 @@ name: Linux package
 #
 # **Why this is a separate, callable workflow rather than a job inside release.yml.** release.yml
 # runs only on a `v*` tag, so nothing in it can be rehearsed before it matters — a mistake there is
-# found by a release failing, and fixing it means moving a tag or cutting another version. A `push`
-# trigger on this file runs *this* code, the same file the tagged run will call, so the build can be
-# confirmed green before a tag is cut. Copying the steps into a throwaway workflow instead would have
-# verified a copy, which proves nothing from the first moment the copy drifts.
+# found by a release failing, and fixing it means moving a tag or cutting another version. Given a
+# trigger of its own (below), this file can be run on demand — and what runs is *this* code, the same
+# file the tagged run will call, so the build can be confirmed green before a tag is cut. Copying the
+# steps into a throwaway workflow instead would have verified a copy, which proves nothing from the
+# first moment the copy drifts.
 on:
   workflow_call:
-  # TEMPORARY — delete these three lines once the container build has been confirmed green on this
-  # branch. A `workflow_dispatch` trigger would be tidier, but GitHub only offers that for workflow
-  # files that have already reached the default branch, and this one has not.
-  push:
-    branches: [develop]
+  # The rehearsal hatch. release.yml runs only on a tag, so without a way to start this workflow by
+  # hand there is no trying a change to the Linux build before the release that depends on it — which
+  # is how the container build below was confirmed before v1.3.0 was tagged. GitHub only lists a
+  # workflow as dispatchable once the file is on the default branch; on a branch that has not merged
+  # yet, swap this for a `push:` trigger scoped to that branch and take it back out afterwards.
+  workflow_dispatch:
 
 jobs:
   build:
