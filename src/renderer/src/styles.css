@@ -1231,8 +1231,8 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .jobs-view > .jobs-new { display: block; width: fit-content; margin-left: auto; }
 
 /* Run 사이의 경계. 두 번을 잘못 짚고 여기 왔다.
-   (1) --line-soft: 한 Run 안의 구분선(.jobs-foot 의 border-top)과 픽셀까지 같아서 어느 선이 묶음의
-       끝인지 읽을 수 없었다.
+   (1) --line-soft: 그때 .jobs-foot 이 갖고 있던 위쪽 구분선과 픽셀까지 같아서 어느 선이 묶음의
+       끝인지 읽을 수 없었다(그 선은 지금 없다 — 아래 .jobs-foot 참고).
    (2) --line(검정): 토큰 정의가 "region dividers" 라 적고 있어 골랐지만, 그것이 통하는 자리는
        **다른 두 표면 사이**(패널 대 배경)다. 같은 패널색 블록 둘 사이에서 검정은 구분선이 아니라
        그림자로 읽힌다.
@@ -1285,7 +1285,11 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* Gate — 사람을 부르는 유일한 줄이라 접힌 Run 에서도 남고, 유일하게 여러 줄로 접힌다 */
 .jobs-gate { display: flex; align-items: flex-start; gap: 7px; margin: 0 10px 9px; padding: 6px 8px; background: rgba(214, 139, 79, 0.09); border-left: 2px solid var(--git-conflict); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; color: var(--text-dim); font-size: 11.5px; white-space: normal; }
 .jobs-gate .job-ic { margin-top: 1px; }
-.jobs-foot { display: flex; align-items: center; gap: 11px; padding: 6px 10px 9px; border-top: 1px solid var(--line-soft); color: var(--text-faint); font-size: 11px; }
+/* 아래 한 줄 — 개수뿐이다('자세히' 는 제목 줄로 갔다). **위쪽 구분선이 없다**: 펼칠 때만 나타나는
+   옅은 선이라 한 Run 안에서 무엇이 갈리는지 말해 주지 않으면서, 이제 Run 경계가 쓰는 선과 굵기만
+   같고 색만 다른 두 번째 가로선이 되어 경계를 읽기 어렵게 만든다. 이 줄은 색(--text-faint)과
+   크기(11px)로 이미 본문과 갈린다 */
+.jobs-foot { display: flex; align-items: center; gap: 11px; padding: 6px 10px 9px; color: var(--text-faint); font-size: 11px; }
 /* 상세 창으로 가는 입구. 머리말 없이 이것 하나다 — 넓은 창을 여는 길은 하나뿐이라 이름이 필요 없다.
    **이름이 없는 만큼 버튼으로 읽혀야 한다.** 처음에는 테두리가 없고 색이 주변 개수와 같은
    --text-faint 여서, 회색 숫자 사이에 낀 구두점처럼 읽히고 찾지 못했다(누를 자리도 2px 이었다).
