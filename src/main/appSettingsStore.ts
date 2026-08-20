@@ -3,6 +3,7 @@ import path from 'node:path'
 import { isLang, type Lang } from '../core/i18n'
 import { sanitizeFontFamily } from '../core/terminal/font'
 import type { TerminalFont } from '../core/terminal/font'
+import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from '../core/theme/themes'
 
 /** App-wide settings persistence. Holds the language, the id of the dismissed update campaign, and the
  *  orchestration toggle.
@@ -14,6 +15,7 @@ export class AppSettingsStore {
   private dismissedCampaignId: string | null = null
   private orchestrationEnabled = false
   private terminalFont: TerminalFont = { latin: null, hangul: null }
+  private theme: ThemeId = DEFAULT_THEME_ID
 
   constructor(private filePath: string) {}
 
@@ -41,6 +43,8 @@ export class AppSettingsStore {
               hangul: sanitizeFontFamily((font as { hangul?: unknown }).hangul)
             }
           : { latin: null, hangul: null }
+      const theme = (parsed as { theme?: unknown }).theme
+      this.theme = isThemeId(theme) ? theme : DEFAULT_THEME_ID
       return { recovered: false }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -48,6 +52,7 @@ export class AppSettingsStore {
         this.dismissedCampaignId = null
         this.orchestrationEnabled = false
         this.terminalFont = { latin: null, hangul: null }
+        this.theme = DEFAULT_THEME_ID
         return { recovered: false }
       }
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
@@ -57,6 +62,7 @@ export class AppSettingsStore {
       // survives the corrupt-file recovery and leaves a setting enabled that the file does not contain
       this.orchestrationEnabled = false
       this.terminalFont = { latin: null, hangul: null }
+      this.theme = DEFAULT_THEME_ID
       return { recovered: true }
     }
   }
@@ -101,6 +107,15 @@ export class AppSettingsStore {
     await this.persist()
   }
 
+  getTheme(): ThemeId {
+    return this.theme
+  }
+
+  async setTheme(id: ThemeId): Promise<void> {
+    this.theme = isThemeId(id) ? id : DEFAULT_THEME_ID
+    await this.persist()
+  }
+
   /** There is more than one field, so the whole object is always written — writing only one of them wipes the other
    *  (the defect from back when setLang wrote JSON.stringify({ lang })).
    *  Falsy values are omitted: leaving lang:null and orchestrationEnabled:false out of the file still gives load the
@@ -111,11 +126,13 @@ export class AppSettingsStore {
       dismissedCampaignId?: string
       orchestrationEnabled?: boolean
       terminalFont?: TerminalFont
+      theme?: ThemeId
     } = {}
     if (this.lang) data.lang = this.lang
     if (this.dismissedCampaignId) data.dismissedCampaignId = this.dismissedCampaignId
     if (this.orchestrationEnabled) data.orchestrationEnabled = true
     if (this.terminalFont.latin || this.terminalFont.hangul) data.terminalFont = this.terminalFont
+    if (this.theme !== DEFAULT_THEME_ID) data.theme = this.theme
     await fs.mkdir(path.dirname(this.filePath), { recursive: true })
     await fs.writeFile(this.filePath, JSON.stringify(data, null, 2), 'utf8')
   }

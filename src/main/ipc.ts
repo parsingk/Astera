@@ -71,6 +71,7 @@ import { removeWorktree } from '../core/worktrees/remove'
 import { listWithStatus } from '../core/worktrees/list'
 import { git, repoRoot, gitDir, gitVersionAtLeast, listGitWorktrees } from '../core/worktrees/git'
 import { t, isLang, type MessageKey } from '../core/i18n'
+import { isThemeId } from '../core/theme/themes'
 import type { LangPreference } from '../core/i18n'
 import { pickInitialLang } from '../core/i18n/locale'
 import { listJdks } from './jdkScanner'
@@ -2433,6 +2434,14 @@ export function registerIpc(
       latin: typeof latin === 'string' ? latin : null,
       hangul: typeof hangul === 'string' ? hangul : null
     })
+  })
+
+  ipcMain.handle('settings.getTheme', () => core.appSettings.getTheme())
+  ipcMain.handle('settings.setTheme', async (_e, id: unknown) => {
+    // 신뢰 경계는 스토어가 다시 본다. 여기서 먼저 걸러 잘못된 값이 디스크까지 가지 않게 한다.
+    if (!isThemeId(id)) return core.appSettings.getTheme()
+    await core.appSettings.setTheme(id)
+    return core.appSettings.getTheme()
   })
 
   // system (Electron extras)

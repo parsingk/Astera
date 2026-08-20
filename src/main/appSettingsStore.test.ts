@@ -234,3 +234,53 @@ describe('terminalFont', () => {
     expect(store.getTerminalFont()).toEqual({ latin: null, hangul: null })
   })
 })
+
+describe('theme', () => {
+  it('아무것도 저장하지 않았으면 기본은 vega', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getTheme()).toBe('vega')
+  })
+
+  it('저장하고 다시 읽으면 유지된다', async () => {
+    const filePath = file()
+    const store = new AppSettingsStore(filePath)
+    await store.load()
+    await store.setTheme('umbra')
+
+    const again = new AppSettingsStore(filePath)
+    await again.load()
+    expect(again.getTheme()).toBe('umbra')
+  })
+
+  it('파일에 든 알 수 없는 테마 이름은 vega 로 떨어진다', async () => {
+    // 사람이 손으로 고칠 수 있는 파일이다. 구버전에서 지운 테마 이름이 남아 있을 수도 있다.
+    const filePath = file()
+    await fs.writeFile(filePath, JSON.stringify({ theme: 'darcula' }), 'utf8')
+    const store = new AppSettingsStore(filePath)
+    await store.load()
+    expect(store.getTheme()).toBe('vega')
+  })
+
+  it('기본 테마는 파일에 쓰지 않는다 — 다른 필드의 falsy 생략 관례와 같다', async () => {
+    const filePath = file()
+    const store = new AppSettingsStore(filePath)
+    await store.load()
+    await store.setTheme('vega')
+    expect(JSON.parse(await fs.readFile(filePath, 'utf8'))).not.toHaveProperty('theme')
+  })
+
+  it('테마를 저장해도 터미널 폰트가 지워지지 않는다', async () => {
+    // persist() 가 항상 전체 객체를 쓰는 이유가 이것이다(그 주석이 기록한 과거 결함)
+    const filePath = file()
+    const store = new AppSettingsStore(filePath)
+    await store.load()
+    await store.setTerminalFont({ latin: 'Consolas', hangul: null })
+    await store.setTheme('quasar')
+
+    const again = new AppSettingsStore(filePath)
+    await again.load()
+    expect(again.getTerminalFont()).toEqual({ latin: 'Consolas', hangul: null })
+    expect(again.getTheme()).toBe('quasar')
+  })
+})

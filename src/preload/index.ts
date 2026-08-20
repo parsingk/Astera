@@ -98,7 +98,9 @@ const api = {
     getOrchestrationEnabled: invoke('settings.getOrchestrationEnabled'),
     setOrchestrationEnabled: invoke('settings.setOrchestrationEnabled'),
     getTerminalFont: invoke('settings.getTerminalFont'),
-    setTerminalFont: invoke('settings.setTerminalFont')
+    setTerminalFont: invoke('settings.setTerminalFont'),
+    getTheme: invoke('settings.getTheme'),
+    setTheme: invoke('settings.setTheme')
   },
   files: {
     list: invoke('files.list'),

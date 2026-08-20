@@ -20,6 +20,7 @@ import type { GitState } from './git/status'
 export type { GitState } from './git/status'
 import type { Provider } from './providers/meta'
 import type { TerminalFont } from './terminal/font'
+import type { ThemeId } from './theme/themes'
 // The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
 // orchestration/types.ts is safe to reach for: its single import is a type-only providers/meta.ts,
 // already in tsconfig.web.json, so putting it in the renderer's compilation target pulled nothing
@@ -537,6 +538,10 @@ export interface CoreApi {
     // the app's default chain for that half.
     getTerminalFont(): Promise<TerminalFont>
     setTerminalFont(font: TerminalFont): Promise<void>
+    // The chosen theme id. isThemeId is the trust boundary on the main-process side, so whatever comes
+    // back here is always one of the six known ids.
+    getTheme(): Promise<ThemeId>
+    setTheme(id: ThemeId): Promise<void>
   }
   files: {
     // The file explorer. Every files.* IPC call goes through assertAllowedPath, which permits only
