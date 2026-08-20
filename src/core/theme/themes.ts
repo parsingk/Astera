@@ -1,6 +1,8 @@
 /** 한글 담당을 스택에 직접 적는다 — 스펙 §4.3, 그리고 themes.test.ts 가 이것을 검사한다. */
 const HANGUL = "'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans CJK KR', sans-serif"
-/** 지금 앱의 mono 체인. font.mono 가 null 인 테마는 이것을 쓴다. */
+/** styles.css 의 --mono 값. font.mono 가 null 인 테마는 이것을 쓴다.
+ *  터미널의 mono 체인(core/terminal/font.ts)은 별개다 — 그건 사용자가 설정에서 고르는 값이고,
+ *  이 값(앱 UI의 코드 서식)은 테마가 고른다. */
 export const DEFAULT_MONO = "ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace"
 
 export type ThemeId = 'vega' | 'orion' | 'umbra' | 'aurora' | 'antares' | 'quasar'
@@ -85,7 +87,7 @@ export const THEMES: readonly Theme[] = [
       mdLink: '#6f9dff'
     },
     radius: { base: '10px', lg: '12px', sm: '6px' },
-    markerW: '0',
+    markerW: '0px',
     shadow: { sm: '0 2px 4px rgba(0,0,0,.5)', lg: '0 12px 32px rgba(0,0,0,.7)' },
     density: 'roomy',
     font: { sans: `'Geist', ${HANGUL}`, mono: null, tracking: '0' }
@@ -134,8 +136,11 @@ export const THEMES: readonly Theme[] = [
     },
     radius: { base: '2px', lg: '3px', sm: '1px' },
     markerW: '2px',
-    // 그림자 대신 선명한 외곽선으로 층을 만든다 — 각진 모서리와 같은 성격이다
-    shadow: { sm: 'none', lg: '0 0 0 1px var(--line)' },
+    // 그림자 대신 선명한 외곽선으로 층을 만든다 — 각진 모서리와 같은 성격이다.
+    // sm 은 'none' 이 아니라 투명한 0 그림자다 — .sel-menu 처럼 box-shadow 목록에 다른 그림자와
+    // 나란히 오는 자리가 있는데, 'none' 은 목록의 원소로 올 수 없어(단독일 때만 유효) 그 선언 전체가
+    // 무효가 된다. 이 값은 그리는 게 없는 채로 목록에 낄 수 있는 진짜 no-op 이다.
+    shadow: { sm: '0 0 0 0 rgba(0,0,0,0)', lg: '0 0 0 1px var(--line)' },
     density: 'compact',
     font: { sans: `'Geist', ${HANGUL}`, mono: null, tracking: '-0.01em' }
   }

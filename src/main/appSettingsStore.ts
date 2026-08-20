@@ -5,8 +5,8 @@ import { sanitizeFontFamily } from '../core/terminal/font'
 import type { TerminalFont } from '../core/terminal/font'
 import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from '../core/theme/themes'
 
-/** App-wide settings persistence. Holds the language, the id of the dismissed update campaign, and the
- *  orchestration toggle.
+/** App-wide settings persistence. Holds the language, the id of the dismissed update campaign, the
+ *  orchestration toggle, the terminal font, and the theme.
  *  A null lang means the user has never picked one explicitly — the caller derives it with
  *  pickInitialLang(app.getLocale()). The derived value is not stored. */
 export class AppSettingsStore {

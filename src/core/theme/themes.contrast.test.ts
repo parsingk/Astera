@@ -38,7 +38,9 @@ const SHARED: Record<string, string> = {
   '--git-new': '#79c98f', '--git-modified': '#d7b45a', '--git-deleted': '#d3706b',
   '--git-conflict': '#d68b4f',
   '--ok': '#79c98f', '--danger': '#e5534b', '--warn': '#d9a441', '--info': '#5ac8e8',
-  '--brand-claude': '#d97757', '--role-user': '#4f9cf9', '--role-assistant': '#f97316'
+  '--brand-claude': '#d97757', '--role-user': '#4f9cf9', '--role-assistant': '#f97316',
+  '--run': '#3fb950', '--run-hover': '#57d364', '--confirm': '#2f9e6e', '--confirm-hover': '#37b07b',
+  '--warn-ink': '#e8c35a', '--brand-codex': '#fff'
 }
 
 describe('공유 시맨틱', () => {

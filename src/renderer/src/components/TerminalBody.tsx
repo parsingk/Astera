@@ -100,7 +100,7 @@ export function TerminalBody({
     window.api.terminal.resize(id, term.cols, term.rows)
   }, [family, id])
 
-  // 테마가 바뀌면 색만 갈아끼운다. 재생성하면 스크롤백이 날아간다 — 이 파일의 규약이다.
+  // Recolour only when the theme changes. Recreating would wipe the scrollback — this file's convention.
   useEffect(() => {
     const term = termRef.current
     if (term) term.options.theme = xtermThemeOf(theme)

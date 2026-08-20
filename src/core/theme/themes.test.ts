@@ -40,6 +40,16 @@ describe('THEMES', () => {
   it('밀도는 세 등급 중 하나다', () => {
     for (const t of THEMES) expect(['compact', 'normal', 'roomy']).toContain(t.density)
   })
+
+  it('길이 토큰은 단위를 갖고, 그림자는 목록에 넣을 수 있는 값이다', () => {
+    // 단위 없는 0 은 calc() 안에서 <length> 가 아니라 <number> 라 선언 전체가 무효가 되고,
+    // 'none' 은 box-shadow 목록의 원소로 올 수 없어 같은 일이 벌어진다. 둘 다 실제로 겪은 결함이다.
+    for (const t of THEMES) {
+      expect(t.markerW, t.id).toMatch(/^\d+(\.\d+)?(px|em|rem)$/)
+      for (const r of Object.values(t.radius)) expect(r, t.id).toMatch(/px$/)
+      for (const s of Object.values(t.shadow)) expect(s, t.id).not.toBe('none')
+    }
+  })
 })
 
 describe('isThemeId', () => {

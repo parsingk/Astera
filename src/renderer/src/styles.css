@@ -109,15 +109,16 @@
      dark-theme link colour, so a README looks the same here as on the page it was written for.
      5.77:1 on --bg and 5.04:1 on --elevated — AA at both. */
   --md-link: #4493f8;
-  /* The preview's own surface. IntelliJ New UI dark, sampled from the reference screenshot the
-     preview is matched against (see the markdown preview block for the measurements): these are the
-     only colours in the app that deliberately come from outside the palette above, because the
-     preview is matched to the IDE's viewer rather than to the app chrome. --md-text on --md-bg is
-     8.87:1 (AAA). */
-  --md-bg: #1e1f22;
-  --md-text: #bcbec4;
-  --md-code-bg: #303236;
-  --md-line: #393b40;
+  /* The preview's own surface, derived from Vega's own bg/text/elevated/line — the same derivation
+     themeCssVars() applies for every theme (core/theme/apply.ts). This block is both the fallback if the
+     theme provider fails to run and the place a reader learns what these tokens mean; it is not a place
+     where the preview deliberately diverges from the app chrome. (Orion's runtime values happen to
+     reproduce IntelliJ's measured palette, but that happens in apply.ts, not here.)
+     --md-text on --md-bg is 11.65:1 (AAA) — same figure as --text on --bg, since they are the same pair. */
+  --md-bg: #17171a;
+  --md-text: #d0d0d6;
+  --md-code-bg: #23232a;
+  --md-line: #000000;
   --ok: #79c98f; /* logged in */
   --ok-bg: #14301f;
   --status-bg: #0e6478; /* bottom status bar */
@@ -149,7 +150,7 @@
   --brand-codex: #fff;
   --role-user: #4f9cf9;
   --role-assistant: #f97316;
-  --sans: system-ui, -apple-system, 'Segoe UI', 'Malgun Gothic', sans-serif;
+  --sans: system-ui, -apple-system, 'Segoe UI', 'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans CJK KR', sans-serif;
   /* file type icon tones */
   --fi-blue: #5b9fe0;
   --fi-cyan: #4fb6c4;
@@ -181,7 +182,6 @@
   --tracking: 0;
   /* 밀도. 눈에 보이는 네 곳만 연다 — 전부 토큰화하면 CSS 전면 재작성이 된다 */
   --row-pad-y: 4px;
-  --tab-pad-y: 8px;
   --sel-h: 30px;
   --modal-pad: 20px;
   --radius: 6px;      /* triggers, options, inputs */
@@ -199,8 +199,9 @@ body { font-family: var(--sans); letter-spacing: var(--tracking); background: va
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--elevated); border-radius: var(--radius); border: 2px solid transparent; background-clip: padding-box; }
-/* 기본값이 이미 var(--elevated) 라 hover 는 한 단계 밝아야 하는데, 그걸 나타내는 토큰이 없다(--surface-hover 는 더 어둡다) — 스크롤바 하나 때문에 토큰을 새로 만들 가치는 없고, 여섯 테마 모두 충분히 어두워서 중간 회색이면 자연스럽게 읽힌다 */
-::-webkit-scrollbar-thumb:hover { background: #3a3a43; background-clip: padding-box; }
+/* 쉬는 상태가 --elevated, hover 는 그보다 한 단계 밝은 값 — color-mix 로 계산한다(고정 리터럴이면 테마마다
+   --elevated 보다 어두워질 수 있다). button:hover 와 같은 이유, 같은 식이다 */
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--elevated), #fff 8%); background-clip: padding-box; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
 .app { display: flex; flex-direction: column; height: 100%; }
@@ -426,7 +427,9 @@ button {
   cursor: pointer;
   transition: background var(--ease), color var(--ease), border-color var(--ease), box-shadow var(--ease);
 }
-button:hover { background: var(--elevated); }
+/* --elevated 보다 한 단계 밝은 값 — 그걸 나타내는 토큰이 없고, 고정 리터럴은 테마마다 --elevated 보다
+   어두워질 수 있다(예: Antares 의 --elevated #2c2822 는 옛 리터럴 #2a2a31 보다 이미 밝다) */
+button:hover { background: color-mix(in srgb, var(--elevated), #fff 8%); }
 button:disabled { opacity: .5; cursor: not-allowed; }
 /* Same ring as .sel-trigger below — this one keeps border-color too, since the default button has a real border to brighten. */
 button:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
@@ -501,7 +504,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 
 /* ---------- tabs ---------- */
 .tabs { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; }
-.tab { display: flex; align-items: center; gap: 8px; padding: var(--tab-pad-y) 14px; font-size: 11.5px; color: var(--text-dim); border-right: 1px solid var(--line); cursor: pointer; white-space: nowrap; flex: none; transition: background var(--ease), color var(--ease); }
+/* 이 padding 은 죽은 값이다 — WorkbenchTabs 는 .pane-tabbar 안에서만 렌더링되고, 거기서는
+   .pane-tabbar .tab 이 padding: 0 12px 로 덮어쓴다. 앱이 실제로 그리는 모든 탭이 그 규칙을 타므로,
+   여기 다시 토큰을 걸지 않는다 */
+.tab { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: 11.5px; color: var(--text-dim); border-right: 1px solid var(--line); cursor: pointer; white-space: nowrap; flex: none; transition: background var(--ease), color var(--ease); }
 .tab.active { background: var(--bg); color: var(--text); }
 .tab.exited .tab-title { text-decoration: line-through; color: var(--text-faint); }
 .tab-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
@@ -930,6 +936,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .history-loading { display: flex; justify-content: center; padding: 14px 12px; }
 /* the per-project list */
 .project-group { border-bottom: 1px solid var(--line-soft); }
+/* 그룹 헤더라 .worktree-row/.session-row 와 같은 종류의 행이 아니다 — --row-pad-y 를 걸지 않은 게 빠뜨린 게 아니다 */
 .project-row { display: flex; align-items: center; gap: 9px; padding: 10px 12px; cursor: pointer; user-select: none; transition: background var(--ease); }
 .project-row:hover { background: var(--elevated); }
 .project-chevron { flex-shrink: 0; width: 12px; font-size: 11px; color: var(--text-faint); }
@@ -937,7 +944,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .project-meta { font-size: 10px; font-family: var(--mono); color: var(--text-faint); flex-shrink: 0; }
 /* An expanded session: bound by a vertical rail in the account colour, with the title dimmed — the density stays as it is */
 .session-sublist { list-style: none; margin: 0 0 5px 22px; padding: 0; border-left: 2px solid var(--line); }
-.session-row { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 10px; cursor: pointer; transition: background var(--ease); }
+.session-row { display: flex; align-items: center; gap: 8px; padding: var(--row-pad-y) 12px var(--row-pad-y) 10px; cursor: pointer; transition: background var(--ease); }
 .session-row:hover { background: var(--elevated); }
 .session-row .entry-title { color: var(--text-dim); }
 .session-sublist .history-sentinel { padding-left: 10px; text-align: left; }
@@ -1253,9 +1260,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    Lets tabs shrink in a narrow group: the global bar was flex:none, so past six tabs it overflowed and got
    cut. A minimum width keeps them from shrinking past recognition */
 /* align-self: stretch is the crux — .tabs is align-items:center, so with zero vertical padding the tab
-   element collapses to the text height and floats in the middle of the bar. The underline (inset 0 -2px 0)
-   would then be drawn just under the text rather than at the bottom of the tab, and the tab divider
-   (border-right) would be cut short */
+   element collapses to the text height and floats in the middle of the bar. The underline
+   (inset 0 calc(-1 * var(--marker-w)) 0 <color>, set inline in WorkbenchTabs.tsx) would then be drawn
+   just under the text rather than at the bottom of the tab, and the tab divider (border-right) would be
+   cut short */
 .pane-tabbar .tab { padding: 0 12px; flex: 0 1 auto; min-width: 84px; align-self: stretch; }
 .pane-tabbar .tab .tab-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* Hides the horizontal scrollbar (10px globally) so it does not eat the vertical space of the tab row —
@@ -1310,11 +1318,11 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .cli-missing code { background: var(--elevated); color: var(--text); padding: 2px 6px; border-radius: var(--radius-sm); }
 
 /* ---------- file viewer ---------- */
-.file-truncated { padding: 4px 12px; font-size: 12px; color: #d7ba7d; background: #3a3018; flex: none; }
+.file-truncated { padding: 4px 12px; font-size: 12px; color: var(--warn); background: var(--warn-bg); flex: none; }
 .file-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-dim); font-size: 13px; background: var(--panel); z-index: 2; }
 .tab-dirty { flex: none; font-size: 9px; opacity: 0.8; }
 .file-editor-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
-.file-conflict { flex: none; padding: 4px 12px; font-size: 12px; background: #3a3018; color: #d7ba7d; display: flex; gap: 8px; align-items: center; }
+.file-conflict { flex: none; padding: 4px 12px; font-size: 12px; background: var(--warn-bg); color: var(--warn); display: flex; gap: 8px; align-items: center; }
 
 /* ---------- file explorer ---------- */
 .file-explorer { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
