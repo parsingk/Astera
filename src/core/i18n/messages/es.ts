@@ -723,6 +723,8 @@ export const es: Catalog = {
   // Una sesión coordinadora sigue siendo otra forma de que aparezca un trabajo, incluso con el botón
   // "+ Nuevo trabajo" de la barra lateral — esta frase dice ambas cosas en vez de descartar una.
   'jobs.empty.hint': 'Puedes crear uno aquí mismo — los trabajos creados desde una sesión coordinadora también aparecerán aquí',
+  'jobs.noProject': 'No hay ningún proyecto abierto',
+  'jobs.noProject.hint': 'Abre una sesión y su carpeta pasa a ser el proyecto de esta ventana — desde entonces se pueden crear trabajos aquí',
   // Descripciones emergentes de los ocho glifos de estado (JobIcons.tsx). La barra lateral ya no
   // escribe el estado, así que no están siempre en pantalla: son donde se aprenden los iconos.
   // pending y blocked deben leerse distinto — a la primera la retiene una dependencia, a la otra una persona.

@@ -617,6 +617,8 @@ export const en: Record<keyof typeof ko, string> = {
   // A coordinator session is still one way a job appears, even with the sidebar's "+ New job" button —
   // this says both rather than dropping one.
   'jobs.empty.hint': 'Create one right here, or start it from a coordinator session — either way it lands here',
+  'jobs.noProject': 'No project is open',
+  'jobs.noProject.hint': 'Open a session and its folder becomes this window project — jobs can be created here from then on',
   // Tooltips for the eight state glyphs (JobIcons.tsx). The sidebar no longer spells a state out, so
   // these are not on screen all the time — they are where someone meeting the icons learns them.
   // pending and blocked have to read differently: a dependency holds the first, a person the second.

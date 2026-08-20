@@ -131,13 +131,19 @@ export function JobsView({
   if (snapshot === null) return <></>
 
   if (snapshot.runs.length === 0) {
+    // **프로젝트가 없을 때와 있을 때가 다른 화면이다.** 이 빈 상태는 둘 다에서 그려진다(App.tsx 가
+    // 프로젝트 없을 때 일부러 `{ runs: [] }` 를 넣는다 — 빈 사이드바보다 낫다는 판단). 그런데
+    // '+ 새 작업' 버튼은 프로젝트가 없으면 그릴 수 없다(아래 가드): 그때 두 문구를 그대로 두면
+    // "여기서 바로 만들 수 있습니다" 가 버튼 없이 남아 **화면이 거짓말을 한다.** 그래서 문구도
+    // 함께 갈라, 무엇을 하면 되는지 그 자리에서 말한다.
     return (
       <div className="jobs-empty">
-        <p>{t('jobs.empty')}</p>
-        <p className="jobs-empty-hint">{t('jobs.empty.hint')}</p>
+        <p>{hasProject ? t('jobs.empty') : t('jobs.noProject')}</p>
+        <p className="jobs-empty-hint">
+          {hasProject ? t('jobs.empty.hint') : t('jobs.noProject.hint')}
+        </p>
         {/* 아무것도 없을 때가 만들고 싶을 때다 — 목록이 생긴 뒤의 자리(아래)와 같은 버튼.
-            hasProject 로 가드하는 이유는 위 hasProject 의 주석대로다: 이 빈 상태는 프로젝트가
-            없을 때도 그려지고(snapshot 만으로는 그 둘을 구별할 수 없다), 그때 이 버튼을 누르면
+            hasProject 로 가드하는 이유는 위 hasProject 의 주석대로다: 그때 이 버튼을 누르면
             만들 자리도 없는 newRunOpen 이 true 로 남아 전역 단축키를 죽인다. */}
         {hasProject && (
           <button className="jobs-new" onClick={onNewRun}>
