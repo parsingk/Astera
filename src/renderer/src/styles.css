@@ -693,7 +693,9 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
      this, and losing it truncated long entries — run-config names, JDK paths, remote branch names — in the
      one place the user opened the list to read them. Never narrower than the trigger, and capped so a long
      entry cannot run the menu off the window; past the cap .sel-value ellipsises as before.
-     No edge flipping: these live in modals and left-aligned toolbars, so the menu grows into free space. */
+     Horizontally there is still no edge flipping: these live in modals and left-aligned toolbars, so the
+     menu grows into free space. Vertically it does flip — see .sel-menu.above below.
+     max-height is duplicated as MENU_MAX_H in Select.tsx, which needs the number to decide the side. */
   min-width: 100%;
   width: max-content;
   max-width: min(420px, 70vw);
@@ -709,6 +711,11 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.5);
   animation: sel-in var(--ease);
 }
+/* Opens upward instead, when the space below the trigger cannot hold the menu — menuPlacement() in
+   core/ui/select.ts decides, and the gap here has to stay equal to the `top` above. Without this a
+   select sitting at the bottom of a scrolling panel (the terminal font pickers, last rows of the
+   settings General tab) opened its 240px menu into 20px of room and showed 22px of it. */
+.sel-menu.above { top: auto; bottom: calc(100% + 4px); }
 @keyframes sel-in { from { opacity: 0; transform: translateY(-2px); } }
 @media (prefers-reduced-motion: reduce) {
   .sel-menu { animation: none; }

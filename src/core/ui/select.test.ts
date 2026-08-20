@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { groupRowsOf, nextCursor, type SelectItem } from './select'
+import { groupRowsOf, menuPlacement, nextCursor, type SelectItem } from './select'
 
 const it_ = (value: string, group?: string): SelectItem => ({ value, label: value, group })
 
@@ -78,5 +78,47 @@ describe('groupRowsOf', () => {
 
   it('빈 목록은 빈 행', () => {
     expect(groupRowsOf([])).toEqual([])
+  })
+})
+
+describe('menuPlacement', () => {
+  // 트리거와 잘림 상자(스크롤 컨테이너의 보이는 영역, 또는 창)의 좌표는 같은 공간에서 온다 —
+  // 컴포넌트가 getBoundingClientRect 로 재서 넘긴다.
+  const clip = { top: 162, bottom: 594 }
+
+  it('아래에 자리가 있으면 아래로 연다', () => {
+    expect(menuPlacement({ top: 200, bottom: 230 }, clip, 240, 4)).toEqual({ side: 'below', maxHeight: null })
+  })
+
+  it('아래가 부족하고 위가 넉넉하면 위로 뒤집는다', () => {
+    // 실제 버그: 설정 일반 탭 맨 아래의 폰트 드롭다운. 아래 여유 20px, 위 여유 374px,
+    // 메뉴 240px — 240 중 22px 만 보였다.
+    expect(menuPlacement({ top: 540, bottom: 570 }, clip, 240, 4)).toEqual({ side: 'above', maxHeight: null })
+  })
+
+  it('메뉴 높이가 아래 여유와 정확히 같으면 아래에 그대로 둔다', () => {
+    // 경계에서 굳이 뒤집지 않는다 — 아래가 기본 방향이다
+    expect(menuPlacement({ top: 300, bottom: 350 }, clip, 240, 4)).toEqual({ side: 'below', maxHeight: null })
+  })
+
+  it('양쪽 다 부족하면 더 넓은 쪽으로 열고 그 여유만큼 높이를 자른다', () => {
+    // 위 138, 아래 132 → 위쪽이 넓다
+    expect(menuPlacement({ top: 304, bottom: 458 }, clip, 240, 4)).toEqual({ side: 'above', maxHeight: 138 })
+  })
+
+  it('아래가 더 넓으면 부족해도 아래를 고른다', () => {
+    // 위 34, 아래 236
+    expect(menuPlacement({ top: 200, bottom: 354 }, clip, 240, 4)).toEqual({ side: 'below', maxHeight: 236 })
+  })
+
+  it('트리거가 잘림 상자 아래로 밀려나 있으면 위로 열고 자르지 않는다', () => {
+    // 스크롤 도중 트리거가 보이는 영역을 벗어난 상태. 위쪽 여유는 534px 로 메뉴가 그대로 들어간다
+    expect(menuPlacement({ top: 700, bottom: 730 }, clip, 240, 4)).toEqual({ side: 'above', maxHeight: null })
+  })
+
+  it('양쪽 여유가 음수인 자리에서도 높이는 0 아래로 내려가지 않는다', () => {
+    // 잘림 상자가 트리거만큼 얕은 극단 — 음수 max-height 는 CSS 에서 무효값이라 렌더가 깨진다
+    expect(menuPlacement({ top: 300, bottom: 320 }, { top: 300, bottom: 320 }, 240, 4))
+      .toEqual({ side: 'below', maxHeight: 0 })
   })
 })

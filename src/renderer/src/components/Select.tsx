@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
-import { groupRowsOf, nextCursor, type SelectItem } from '../../../core/ui/select'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+  groupRowsOf, menuPlacement, nextCursor, type MenuPlacement, type SelectItem
+} from '../../../core/ui/select'
 import { useI18n } from '../i18n/I18nProvider'
 
 /** An item plus the icon the component draws for it. The icon is a ReactNode, so it cannot live in
@@ -25,6 +27,28 @@ const Check = (): React.JSX.Element => (
     <path d="M3.5 8.5 6.5 11.5l6-7" />
   </svg>
 )
+
+/** Distance between trigger and menu. Must stay equal to the 4px in .sel-menu's `top`/`bottom`. */
+const MENU_GAP = 4
+/** .sel-menu's own max-height. Needed here because the side decision depends on how tall the menu can
+ *  get, and the CSS cap is the answer for any list longer than the cap. */
+const MENU_MAX_H = 240
+
+/** The box the menu has to stay inside: every scrolling or clipping ancestor intersected with the
+ *  window. Both kinds have to count — the settings modal clips with `overflow: hidden` while the panel
+ *  inside it scrolls with `overflow-y: auto`, and the tighter of the two is what the user sees. */
+function clipBoxOf(el: HTMLElement): { top: number; bottom: number } {
+  let top = 0
+  let bottom = window.innerHeight
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const overflowY = getComputedStyle(p).overflowY
+    if (overflowY === 'visible') continue
+    const box = p.getBoundingClientRect()
+    top = Math.max(top, box.top)
+    bottom = Math.min(bottom, box.bottom)
+  }
+  return { top, bottom }
+}
 
 /**
  * The app's one dropdown. Everything that picks from a list uses this, so there is a single look and a
@@ -62,6 +86,9 @@ export function Select({
   const [open, setOpen] = useState(false)
   const [cursor, setCursor] = useState(0)
   const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLUListElement>(null)
+  const [placement, setPlacement] = useState<MenuPlacement>({ side: 'below', maxHeight: null })
 
   const selected = items.find((it) => it.value === value) ?? null
   const rows = groupRowsOf(items)
@@ -77,6 +104,34 @@ export function Select({
     document.addEventListener('mousedown', onDocDown)
     return () => document.removeEventListener('mousedown', onDocDown)
   }, [open])
+
+  /** Which side to open on, measured after the menu is in the DOM but before the browser paints it —
+   *  useLayoutEffect, not useEffect, or the first frame shows the menu below and it jumps.
+   *
+   *  Measured from scrollHeight rather than the rendered height: the rendered one is already capped
+   *  (by the CSS, or by the max-height this very effect sets), so feeding it back in would let a menu
+   *  that flipped once stay stuck at that height. The ResizeObserver is what catches the font pickers,
+   *  whose lists arrive asynchronously — the menu opens one row tall ("checking installed fonts…") and
+   *  grows to full height a second later, long after this effect first ran. */
+  useLayoutEffect(() => {
+    if (!open) return
+    const measure = (): void => {
+      const trigger = triggerRef.current
+      const menu = menuRef.current
+      if (!trigger || !menu) return
+      const need = Math.min(menu.scrollHeight, MENU_MAX_H)
+      const next = menuPlacement(trigger.getBoundingClientRect(), clipBoxOf(trigger), need, MENU_GAP)
+      setPlacement((prev) =>
+        prev.side === next.side && prev.maxHeight === next.maxHeight ? prev : next
+      )
+    }
+    measure()
+    const menu = menuRef.current
+    if (!menu) return
+    const ro = new ResizeObserver(measure)
+    ro.observe(menu)
+    return () => ro.disconnect()
+  }, [open, items.length])
 
   const openList = (): void => {
     setCursor(Math.max(0, items.findIndex((it) => it.value === value)))
@@ -115,6 +170,7 @@ export function Select({
   return (
     <div className={className ? `sel ${className}` : 'sel'} data-open={open} ref={rootRef}>
       <button
+        ref={triggerRef}
         type="button"
         className="sel-trigger"
         aria-haspopup="listbox"
@@ -138,7 +194,12 @@ export function Select({
         </span>
       </button>
       {open && (
-        <ul className="sel-menu" role="listbox">
+        <ul
+          ref={menuRef}
+          className={placement.side === 'above' ? 'sel-menu above' : 'sel-menu'}
+          style={placement.maxHeight === null ? undefined : { maxHeight: placement.maxHeight }}
+          role="listbox"
+        >
           {rows.map((row) =>
             row.kind === 'group' ? (
               // role=presentation: a heading is not selectable, and without this a screen reader would
