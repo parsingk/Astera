@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { runningCount } from './running'
+import { runningCount, isStoppedWorker } from './running'
 import { snapshotFor } from './view'
 import { emptyState } from './state'
 import type { OrchState } from './state'
@@ -55,6 +55,14 @@ const countOf = (tasks: Task[], dispatches: Dispatch[]): number => {
   return runningCount(snapshotFor(s, PROJ, () => true, []).runs[0].tasks)
 }
 
+/** 상태를 투영까지 돌려 그 Run 의 JobTask 하나를 얻는다 */
+const taskOf = (tasks: Task[], dispatches: Dispatch[], id: string) => {
+  const s: OrchState = { ...emptyState(), runs: [run('r1')], tasks, dispatches }
+  const t = snapshotFor(s, PROJ, () => true, []).runs[0].tasks.find((x) => x.id === id)
+  if (!t) throw new Error(`no such task in snapshot: ${id}`)
+  return t
+}
+
 describe('runningCount', () => {
   it('열린 Dispatch 가 붙은 dispatched Task 를 센다', () => {
     const ts = [task('t1', 'dispatched'), task('t2', 'dispatched')]
@@ -99,5 +107,33 @@ describe('runningCount', () => {
       task('t5', 'pending')
     ]
     expect(countOf(ts, [])).toBe(0)
+  })
+})
+
+
+describe('isStoppedWorker', () => {
+  // 글리프의 문구와 회전이 이것을 묻는다 — worker-stop 은 killSession 으로 세션을 정말 죽이므로
+  // (coordinator.ts 의 releaseWorker) "워커가 일하는 중"도, 도는 모양도 그 뒤로는 거짓이다
+  it('worker-stop 으로 Dispatch 가 닫힌 dispatched Task 가 그것이다', () => {
+    const ts = [task('t1', 'dispatched')]
+    expect(isStoppedWorker(taskOf(ts, [stopped(open('d1', 't1'))], 't1'))).toBe(true)
+  })
+
+  it('워커가 살아 있으면 아니다', () => {
+    const ts = [task('t1', 'dispatched')]
+    expect(isStoppedWorker(taskOf(ts, [open('d1', 't1')], 't1'))).toBe(false)
+  })
+
+  // 한 번도 뜬 적 없는 Task 도 dispatched 가 아니므로 여기 걸리지 않는다 — 걸리면 시작 전인 노드가
+  // "워커가 멈췄다"를 달게 된다
+  it('아직 뜬 적 없는 Task 는 아니다', () => {
+    expect(isStoppedWorker(taskOf([task('t1', 'ready')], [], 't1'))).toBe(false)
+  })
+
+  // 끝난 Task 의 Dispatch 도 닫혀 있다. 상태로 먼저 걸러야 completed 노드가 멈춘 워커로 읽히지 않는다
+  it('끝난 Task 는 Dispatch 가 닫혀 있어도 아니다', () => {
+    const ts = [task('t1', 'completed')]
+    const d = { ...open('d1', 't1'), outcome: 'succeeded' as const, endedAt: '2026-08-20T02:00:00.000Z' }
+    expect(isStoppedWorker(taskOf(ts, [d], 't1'))).toBe(false)
   })
 })

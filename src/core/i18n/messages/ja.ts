@@ -718,6 +718,7 @@ export const ja: Catalog = {
   'jobs.state.pending': 'まだ依存でふさがっている',
   'jobs.state.ready': '開始できる',
   'jobs.state.dispatched': 'ワーカーが作業中',
+  'jobs.state.dispatchedStopped': 'ワーカーが停止した',
   'jobs.state.validating': '検証が実行中',
   'jobs.state.reviewing': '別のエージェントがレビュー中',
   'jobs.state.completed': '終わった',

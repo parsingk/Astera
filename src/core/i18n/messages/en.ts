@@ -623,6 +623,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.state.pending': 'Still held by a dependency',
   'jobs.state.ready': 'Ready to start',
   'jobs.state.dispatched': 'A worker is on it',
+  'jobs.state.dispatchedStopped': 'The worker was stopped',
   'jobs.state.validating': 'Validation is running',
   'jobs.state.reviewing': 'Another agent is reviewing it',
   'jobs.state.completed': 'Done',

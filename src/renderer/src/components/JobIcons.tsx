@@ -1,5 +1,7 @@
-import type { TaskStatus } from '../../../core/types'
+import type { JobTask, TaskStatus } from '../../../core/types'
 import type { MessageKey } from '../../../core/i18n'
+import { isStoppedWorker } from '../../../core/orchestration/running'
+import { useI18n } from '../i18n/I18nProvider'
 
 /** 여덟 상태의 툴팁 키. 글리프와 **같은 파일에** 있는 이유는 글리프가 여기 있는 이유와 같다 —
  *  아이콘이 말로 풀리는 자리(툴팁, 접근성 이름)가 화면마다 다른 낱말을 쓰면 같은 모양이 두 뜻을
@@ -53,17 +55,48 @@ export const STATUS_COLOR: Record<TaskStatus, string> = {
 export function TaskIcon({
   status,
   size = 13,
-  label
+  label,
+  still = false
 }: {
   status: TaskStatus
   size?: number
   label?: string
+  /** 도는 셋의 회전을 멈춘다. **모양과 색은 그대로다** — 상태가 바뀐 것이 아니라 그 상태에서
+   *  움직이는 것이 없을 뿐이다. 지금 쓰는 곳은 워커가 멈춰 세워진 dispatched 하나다(glyphOf). */
+  still?: boolean
 }): React.JSX.Element {
   return (
     <Glyph color={STATUS_COLOR[status]} size={size} label={label}>
-      {shapeOf(status)}
+      {shapeOf(status, still)}
     </Glyph>
   )
+}
+
+/** 한 Task 의 글리프가 쓸 문구와 회전 여부. **둘을 함께 돌려주는 이유는 둘이 같은 사실을 말하기
+ *  때문이다** — 문구만 고치고 회전을 두면 항상 보이는 쪽이 계속 거짓말한다(툴팁은 올려 봐야 보인다).
+ *
+ *  워커가 멈춰 세워진 Task 가 그 자리다(isStoppedWorker, core/orchestration/running.ts):
+ *  `dispatched` 인데 열린 Dispatch 가 없다. 상태 문구는 그것을 "워커가 일하는 중"이라고 적고
+ *  회전은 "지금 무언가 돌고 있다"를 말하는데(styles.css 의 job-spin 주석), 둘 다 거짓이다.
+ *
+ *  판정 자체는 core 에 있다 — 렌더러에 두면 이 질문의 답이 화면마다 한 벌씩 생기고, 도는 개수가
+ *  정확히 그렇게 두 화면에 복사되어 똑같이 틀렸다. */
+export const glyphOf = (task: JobTask): { key: MessageKey; still: boolean } =>
+  isStoppedWorker(task)
+    ? { key: 'jobs.state.dispatchedStopped', still: true }
+    : { key: STATE_KEY[task.status], still: false }
+
+/** 한 Task 의 상태 글리프. **Task 를 그리는 자리는 전부 이것을 쓴다** — 사이드바의 줄, 상세 창의
+ *  그래프 노드, 그 아래 칸의 필터 표시. 문구를 여기서 직접 풀기 때문에 호출부가 문구와 회전 중
+ *  하나만 넘기고 다른 하나를 잊는 일이 생기지 않는다: 도는 개수가 그렇게 두 화면에 복사되어 똑같이
+ *  틀려 있었다.
+ *
+ *  상태만 있고 Task 가 없는 자리(머리말의 개수 묶음, 이벤트 앞의 표식)는 TaskIcon 을 그대로 쓴다 —
+ *  그 자리들은 어느 한 Task 를 가리키지 않으므로 "그 워커가 멈췄는가"라는 질문 자체가 없다. */
+export function TaskGlyph({ task, size }: { task: JobTask; size?: number }): React.JSX.Element {
+  const { t } = useI18n()
+  const g = glyphOf(task)
+  return <TaskIcon status={task.status} label={t(g.key)} still={g.still} size={size} />
 }
 
 export type RunIconKind = 'running' | 'blocked' | 'done' | 'failed'
@@ -127,10 +160,13 @@ function Glyph({
   )
 }
 
-function shapeOf(status: TaskStatus): React.JSX.Element {
+function shapeOf(status: TaskStatus, still: boolean): React.JSX.Element {
   switch (status) {
     // 도는 셋. 회색 테두리 위를 4분의 1 호가 돈다 — 호만 있으면 작은 크기에서 무엇이 도는지
-    // 읽히지 않아서, 도는 자리를 테두리가 먼저 그려 준다
+    // 읽히지 않아서, 도는 자리를 테두리가 먼저 그려 준다.
+    // still 이면 같은 그림이 멈춘다. 클래스를 떼는 것만으로 되는 이유는 회전이 CSS 에 있기
+    // 때문이고(.job-arc), 그래서 reduced-motion 인 사람이 이미 보고 있던 그림과 같아진다 —
+    // 움직임으로 말하는 신호는 애초에 그쪽에 닿지 않는다
     case 'dispatched':
     case 'validating':
     case 'reviewing':
@@ -138,7 +174,7 @@ function shapeOf(status: TaskStatus): React.JSX.Element {
         <>
           <circle cx="8" cy="8" r="6" fill="none" stroke="var(--line-soft)" strokeWidth="2" />
           <path
-            className="job-arc"
+            className={still ? undefined : 'job-arc'}
             d="M8 2a6 6 0 0 1 6 6"
             fill="none"
             stroke="currentColor"

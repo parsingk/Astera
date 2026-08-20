@@ -4,7 +4,7 @@ import type { MessageKey } from '../../../core/i18n'
 import { formatElapsed } from '../../../core/orchestration/elapsed'
 import { runningCount } from '../../../core/orchestration/running'
 import { useI18n } from '../i18n/I18nProvider'
-import { RunIcon, STATE_KEY, STATUS_COLOR, TaskIcon } from './JobIcons'
+import { glyphOf, RunIcon, STATE_KEY, STATUS_COLOR, TaskGlyph, TaskIcon } from './JobIcons'
 import type { RunIconKind } from './JobIcons'
 
 /** Run 헤더 글리프의 툴팁. 끝난·실패·막힘은 줄의 글리프와 같은 모양이고 같은 뜻이라 같은 문구를 쓴다.
@@ -189,7 +189,7 @@ export function JobsView({
                   key={task.id}
                   className="jobs-seg"
                   style={{ background: segColor(task.status) }}
-                  title={`${task.title} — ${t(STATE_KEY[task.status])}`}
+                  title={`${task.title} — ${t(glyphOf(task).key)}`}
                 />
               ))}
             </div>
@@ -215,7 +215,7 @@ export function JobsView({
                           {task.provider} · {formatElapsed(task.startedAt, nowMs)}
                         </span>
                       </span>
-                      <TaskIcon status={task.status} label={t(STATE_KEY[task.status])} />
+                      <TaskGlyph task={task} />
                       {sessionId ? (
                         <span className="jobs-jump" aria-hidden="true">
                           ↗

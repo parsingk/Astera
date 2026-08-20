@@ -741,6 +741,10 @@ export const ko = {
   'jobs.state.pending': '아직 막혀 있다',
   'jobs.state.ready': '시작할 수 있다',
   'jobs.state.dispatched': '워커가 일하는 중',
+  // dispatched 인데 워커가 없는 상태 — worker-stop 이 세션을 죽이고 Task 는 그대로 둔다.
+  // 글리프는 여전히 도는 모양이다(결론이 나지 않았다는 뜻이라 그것은 맞다) — 거짓이 되는 것은
+  // 살아 있는 워커를 약속하는 위 문구뿐이라, 그 자리에만 이것을 쓴다
+  'jobs.state.dispatchedStopped': '워커가 멈췄다',
   'jobs.state.validating': '검증이 도는 중',
   'jobs.state.reviewing': '다른 에이전트가 검토 중',
   'jobs.state.completed': '끝났다',

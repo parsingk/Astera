@@ -16,7 +16,7 @@ import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/
 import { runningCount } from '../../../core/orchestration/running'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
-import { RunIcon, STATE_KEY, STATUS_COLOR, TaskIcon } from './JobIcons'
+import { RunIcon, STATE_KEY, STATUS_COLOR, TaskGlyph, TaskIcon } from './JobIcons'
 import { NewTaskModal } from './NewTaskModal'
 
 /** 종류 배지의 문구. message 는 messageType 이 정한다.
@@ -523,7 +523,7 @@ export function RunDetail({
               <>
                 {selectedTask && (
                   <div className="detail-filter">
-                    <TaskIcon status={selectedTask.status} label={t(STATE_KEY[selectedTask.status])} />
+                    <TaskGlyph task={selectedTask} />
                     <b>{selectedTask.title}</b>
                     <button
                       className="detail-clear"
@@ -734,7 +734,7 @@ function Graph({
         onClick={() => onSelect(task.id)}
         title={task.title}
       >
-        <TaskIcon status={task.status} label={t(STATE_KEY[task.status])} />
+        <TaskGlyph task={task} />
         <span className="detail-node-title">{task.title}</span>
         {/* 고른 의존 표시. 필터의 링(위의 ' on', .detail-node.on)과 다른 채널이다 — 같은 모양으로
             두 뜻을 말하지 않으려고 링이 아니라 글리프를 하나 더 붙인다.

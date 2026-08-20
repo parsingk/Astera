@@ -729,6 +729,7 @@ export const es: Catalog = {
   'jobs.state.pending': 'Aún retenida por una dependencia',
   'jobs.state.ready': 'Lista para empezar',
   'jobs.state.dispatched': 'Un worker está en ello',
+  'jobs.state.dispatchedStopped': 'El worker se detuvo',
   'jobs.state.validating': 'La validación está en marcha',
   'jobs.state.reviewing': 'Otro agente la está revisando',
   'jobs.state.completed': 'Terminada',
