@@ -1481,7 +1481,7 @@ export function registerIpc(
       // 워크트리는 path 가 아니라 repoPath 를 넣는다. path 를 넣으면 Run.cwd 가 워크트리가 되고,
       // 그 값은 worker-start 가 runCwd 로도 쓰므로 워커가 도는 자리까지 바뀐다. 다만 이 후보가
       // **워크트리 안에서 만든 Run 을 저장소로 올려 주지는 않는다** — 워크트리는 레지스트리
-      // 루트(기본 ~/ai-worktrees) 아래, 저장소 밖에 있어서 projectRootOf 의 포함 판정에 걸리지
+      // 루트(기본 ~/astera-worktrees) 아래, 저장소 밖에 있어서 projectRootOf 의 포함 판정에 걸리지
       // 않기 때문이다. 그 경우의 소유 판정은 읽는 쪽에서 한다(core/orchestration/view.ts 의
       // runsForProject 가 r.cwd 를 repoPathOf 로 되돌린다). 여기서 repoPath 가 하는 일은, 저장소
       // 루트가 knownProjectPaths 에 아직 없을 때 그 자리를 채워 주는 것이다.

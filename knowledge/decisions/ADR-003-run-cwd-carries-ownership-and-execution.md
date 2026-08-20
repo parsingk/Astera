@@ -32,7 +32,7 @@ But normalisation is not free, because the field is also the execution site. Two
   test was chosen to prevent, reappearing on the write side and affecting execution rather than
   display.
 - **Out of a worktree.** A registered worktree lives under the worktree root
-  (`~/ai-worktrees` by default), outside the repository, so no `repoPath` candidate contains it. The
+  (`~/astera-worktrees` by default), outside the repository, so no `repoPath` candidate contains it. The
   symmetrical-looking repair — add the worktree's own path as a candidate and lift the result to its
   `repoPath` — would make `Run.cwd` the repository root. Workers started with `--worktree current`
   would then leave the worktree and run in the main checkout. Isolation is the whole reason a

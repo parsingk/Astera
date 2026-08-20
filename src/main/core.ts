@@ -167,8 +167,9 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   await runConfig.load()
   const worktrees = new WorktreeRegistry(
     path.join(userDataDir, 'worktrees.json'),
-    // The default root uses a brand-neutral name — renaming the app must not move the worktree location in the user's home
-    path.join(os.homedir(), 'ai-worktrees')
+    // The default root carries the app name. It only steers new worktrees — a root saved in
+    // worktrees.json wins over it, and existing entries keep the absolute path they were created at
+    path.join(os.homedir(), 'astera-worktrees')
   )
   await worktrees.load()
   const localHistory = new LocalHistoryStore(path.join(userDataDir, 'local-history'))
