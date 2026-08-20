@@ -1837,7 +1837,9 @@ export function registerIpc(
     // renderer because the registry is main's (core.worktrees), and applied to orchProject as well
     // so the push path folds for the same project this reply did.
     const project = repoPathOf(core.worktrees.list(), projectPath)
-    const snapshot = orch ? orchSnapshotOf(orch.deps.getState(), project) : { runs: [] }
+    const snapshot = orch
+      ? orchSnapshotOf(orch.deps.getState(), project)
+      : { runs: [], projectFolderBusy: false }
     // Superseded while awaiting — by an unwatch, or by a later list for another project. The caller
     // still gets the project it asked for; what it does not get is the subscription, because
     // something more recent already decided what that should be.

@@ -727,6 +727,8 @@ export const ja: Catalog = {
   'jobs.state.failed': '失敗した',
   'jobs.state.blocked': '人を待っている',
   'jobs.run.running': '進行中',
+  'jobs.run.sharedFolder': 'フォルダ共有',
+  'jobs.run.sharedFolderHint': '別の作業のワーカーと同じフォルダで動いています — 互いの編集が混ざることがあり、アプリはそれを防ぐことも気づくこともできません',
   'jobs.gates.more': '他 {count} 件',
   // RunDetail.tsx の下カラム — イベント一覧。種別バッジはイベント種別（またはメッセージ種別）が決める。
   // jobs.timeline.* の名前が残るのは、このカラムがタイムラインそのものだからだ。ウィンドウを開く
@@ -769,6 +771,7 @@ export const ja: Catalog = {
   'jobs.new.concurrency': '同時実行',
   'jobs.new.concurrencyHint': 'この作業が同時に開くワーカー数',
   'jobs.new.create': '作る',
+  'jobs.new.folderBusy': 'このフォルダではすでにワーカーが動いています — 同時実行が 1 だとこの作業のワーカーも同じフォルダで回るため、互いの編集が混ざることがあります',
   'jobs.new.failed': '作業を作れませんでした',
   'jobs.gate.noAccount': '{provider} アカウントにログインしていないため、この Task を開始できません',
   'jobs.gate.assignedAccountUnusable': 'この Task に指定されたアカウントは使用できません — ログインしていない、削除された、または別のエージェントのアカウントです',

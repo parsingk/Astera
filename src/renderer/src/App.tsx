@@ -1867,7 +1867,7 @@ export default function App(): React.JSX.Element {
     // is no project to ask about and no response is coming, so an empty snapshot goes in instead —
     // that reaches the empty state, where null would leave an unexplained blank sidebar for as long as
     // the view stays open.
-    setOrchSnapshot(currentProject === null ? { runs: [] } : null)
+    setOrchSnapshot(currentProject === null ? { runs: [], projectFolderBusy: false } : null)
     // sidebarOpen belongs in this guard as much as jobsOpen does: collapsing the sidebar unmounts the
     // whole <aside> and JobsView with it, but jobsOpen stays true, so without this no unwatch is sent
     // and main goes on folding a snapshot on every orchestration write — inside the awaited setState,
@@ -3095,6 +3095,9 @@ export default function App(): React.JSX.Element {
       {newRunOpen && currentProject && (
         <NewRunModal
           projectPath={currentProject}
+          // 스냅숏이 이미 프로젝트별로 접혀 오므로 폴더 사실이 앉을 자리가 그것이다(view.ts).
+          // 아직 안 왔으면 거짓 — 없는 것을 경고하는 것보다 낫다
+          projectFolderBusy={orchSnapshot?.projectFolderBusy ?? false}
           onClose={() => setNewRunOpen(false)}
           onCreated={(runId) => {
             setNewRunOpen(false)

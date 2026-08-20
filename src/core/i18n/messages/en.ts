@@ -632,6 +632,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.state.failed': 'Failed',
   'jobs.state.blocked': 'Waiting for a person',
   'jobs.run.running': 'in progress',
+  'jobs.run.sharedFolder': 'shared folder',
+  'jobs.run.sharedFolderHint': 'Running in the same folder as another job worker — their edits can mix, and the app neither prevents it nor notices it',
   'jobs.gates.more': '+{count} more',
   // RunDetail.tsx, lower pane — the event list. The badge is chosen by the event kind (or the message
   // type). The jobs.timeline.* names stay because that pane is the timeline. The sidebar's way in is
@@ -678,6 +680,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.new.concurrency': 'Run at once',
   'jobs.new.concurrencyHint': 'How many workers this job keeps open at once',
   'jobs.new.create': 'Create',
+  'jobs.new.folderBusy': 'A worker is already running in this folder — at a limit of 1 this job runs its worker there too, so their edits can mix',
   'jobs.new.failed': 'Could not create the job',
   'jobs.gate.noAccount': 'No {provider} account is logged in, so this Task cannot start',
   'jobs.gate.assignedAccountUnusable': 'The account assigned to this Task cannot be used — it is not logged in, has been removed, or belongs to another agent',

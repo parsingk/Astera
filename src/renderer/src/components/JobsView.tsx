@@ -176,12 +176,24 @@ export function JobsView({
           (status) => [status, run.tasks.filter((tk) => tk.status === status).length] as const
         ).filter(([, n]) => n > 0)
         return (
-          <div key={run.id} className={`jobs-run${open ? '' : ' collapsed'}`}>
+          <div
+            key={run.id}
+            className={`jobs-run${open ? '' : ' collapsed'}${run.sharesProjectFolder ? ' shared-folder' : ''}`}
+          >
             <div className="jobs-run-head" onClick={() => toggle(run.id)}>
               <span className="jobs-caret">{open ? '▾' : '▸'}</span>
               <span className={`jobs-objective${kind === 'done' ? ' done' : ''}`} title={run.objective}>
                 {run.objective}
               </span>
+              {/* 이 Run 의 워커가 프로젝트 폴더를 다른 Run 과 나눠 쓰고 있다. **막힌 것이 아니라
+                  얽힌 것**이라 Gate 글리프(주황 `!`)를 빌리지 않는다 — 그것은 사람을 기다리는
+                  자리의 모양이고, 여기서는 기다리는 것이 없다. 경고 톤의 테두리(styles.css)와 이
+                  글자 하나로 말하고, 무엇이 위험한지는 툴팁이 적는다. */}
+              {run.sharesProjectFolder && (
+                <span className="jobs-shared" title={t('jobs.run.sharedFolderHint')}>
+                  {t('jobs.run.sharedFolder')}
+                </span>
+              )}
               <span className="jobs-count">
                 <RunIcon kind={kind} label={t(RUN_KIND_KEY[kind])} />
                 {kind === 'running' && running > 0 ? <span>{running}</span> : null}

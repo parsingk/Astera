@@ -1268,6 +1268,23 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    **이 테두리는 "지금 이것을 가리키고 있다"이지 "여기를 누르면 된다"가 아니다** — 접기는 여전히
    제목 줄이고, 그 사실은 캐럿(▾/▸)과 그 줄의 pointer 커서가 말한다 */
 .jobs-run:hover { box-shadow: inset 0 0 0 1px var(--accent); border-bottom-color: var(--accent); }
+/* 프로젝트 폴더를 다른 Run 과 나눠 쓰는 Run. 순환 묶음(.detail-cycle-note)이 쓰는 것과 **같은 경고
+   톤**이고 이유도 같다: 정상 경로로 만들어지는데 앱의 어떤 기계도 잡지 않는 상태라, 이 화면 말고는
+   아무도 그것을 말해 주지 않는다. 새 색을 만들지 않는다.
+   왼쪽 띠로 말하는 이유는 자리 다툼이다 — 바탕은 hover 가 쓰지 않기로 했고(그 규칙은 안쪽 줄의
+   상태 색을 지키려는 것이다), Gate 줄이 이미 같은 뜻의 톤을 왼쪽 띠로 쓰고 있어 눈이 배울 것이 없다.
+   **border-left 가 아니라 inset box-shadow 다.** box-sizing 이 전역 border-box 라 진짜 테두리는
+   내용을 2px 밀어 얽힌 Run 만 줄이 어긋난다. 이 앱은 그 자리에 쓰는 관용구가 따로 있다
+   (.rail-btn.on, .lh-row.selected, .settings-nav-item.active — 전부 inset 2px 0 0).
+   그래서 hover 와 같은 property 를 쓰게 되므로 아래에서 둘을 함께 적는다 — 안 그러면 가리키는
+   동안 이 표식이 사라진다 */
+.jobs-run.shared-folder { box-shadow: inset 2px 0 0 var(--git-conflict); }
+.jobs-run.shared-folder:hover {
+  box-shadow: inset 0 0 0 1px var(--accent), inset 2px 0 0 var(--git-conflict);
+}
+/* 줄에 붙는 글자. 개수 묶음(--text-dim)보다 앞에 서므로 톤으로 갈라 둔다 — 같은 색이면 그 옆의
+   숫자와 한 덩어리로 읽힌다 */
+.jobs-shared { flex: none; font-size: 10px; padding: 1px 5px; border-radius: var(--radius-sm); background: rgba(214, 139, 79, 0.14); color: var(--git-conflict); white-space: nowrap; }
 /* 제목 줄. **바탕을 깔지 않는다** — 한때 --elevated 밴드를 깔아 Run 경계를 표시했는데, 이
    사이드바에서 그 색은 이미 hover/활성 줄의 뜻이라 hover 가 무엇을 말하는지가 흐려졌다. 경계는
    위의 border 가 말하고, hover 도 그 자리에서 Run 전체로 말한다 — 이 줄은 바탕을 갖지 않는다.

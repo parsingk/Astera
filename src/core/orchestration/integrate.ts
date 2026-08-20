@@ -121,19 +121,42 @@ export function isIntegrationTask(t: Task): boolean {
   return !!t.parentId
 }
 
+/** 지금 그 폴더에서 일하고 있는 워커들의 Run id.
+ *
+ *  **이 파일의 폴더 판정은 전부 여기서 나온다.** 부르는 쪽의 질문이 셋인데 답의 재료는 하나다:
+ *  - 앱이 병합해도 되는가 → 비었는가 (workingInProjectFolder, 아래)
+ *  - 이 폴더에 이미 누가 있는가 → 비었는가 (새 Run 을 만들 때 — 그 Run 은 아직 없으므로 Run 별로
+ *    물을 수 없다)
+ *  - 이 Run 이 남과 나눠 쓰는가 → 내가 들어 있고 크기가 2 이상인가
+ *  셋을 각각 순회로 쓰면 "무엇을 세는가"가 세 벌이 되고, 그중 하나만 고쳐지는 날 화면과 병합
+ *  판정이 서로 다른 말을 한다.
+ *
+ *  **Run 이 아니라 폴더로 센다.** 두 Run 이 같은 cwd 를 가질 수 있고(사이드바로 만든 Run 은 cwd 가
+ *  프로젝트 루트로 정규화된다), 그때 위험한 것은 같은 폴더에서 도는 워커이지 같은 Run 에 속한
+ *  워커가 아니다.
+ *
+ *  Task 를 찾지 못한 Dispatch 는 세지 않는다 — 어느 Run 것인지 말할 수 없는 것을 어느 Run 의
+ *  것으로도 세면 안 된다. */
+export function runsWorkingIn(s: OrchState, cwd: string): Set<string> {
+  const runIds = new Set<string>()
+  for (const d of s.dispatches) {
+    if (d.outcome || d.endedAt || !isSamePath(d.cwd, cwd)) continue
+    const runId = s.tasks.find((t) => t.id === d.taskId)?.runId
+    if (runId !== undefined) runIds.add(runId)
+  }
+  return runIds
+}
+
 /** 지금 프로젝트 폴더에서 일하고 있는 워커가 있는가. 있으면 **앱은 병합하지 않는다.**
  *
  *  병합은 작업 트리를 바꾼다. 워커가 그 폴더에서 파일을 읽고 고치는 중에 앱이 그 아래에서 파일을
  *  갈아치우면, 그 워커는 자기가 읽은 것과 다른 트리에 편집을 얹는다 — 그 실패는 조용하고 되짚기
  *  어렵다. 통합 Task 자체가 프로젝트 폴더에서 도는 유일한 워커이므로(ipc.ts 의 배치 예외), 실제로
- *  이것이 막는 것은 "통합 에이전트가 합치는 중에 앱이 다른 접합점을 합치는" 경우다.
- *
- *  Run 을 가리지 않고 **폴더로** 본다 — 두 Run 이 같은 cwd 를 가질 수 있고, 그때 위험한 것은 같은
- *  폴더에서 도는 워커이지 같은 Run 에 속한 워커가 아니다. */
+ *  이것이 막는 것은 "통합 에이전트가 합치는 중에 앱이 다른 접합점을 합치는" 경우다. */
 export function workingInProjectFolder(s: OrchState, runId: string): boolean {
   const run = s.runs.find((r) => r.id === runId)
   if (!run) return false
-  return s.dispatches.some((d) => !d.outcome && !d.endedAt && isSamePath(d.cwd, run.cwd))
+  return runsWorkingIn(s, run.cwd).size > 0
 }
 
 /** 통합 Task 의 spec 본문. **영어다** — 이것을 읽는 것은 사람이 아니라 에이전트이고, 같은 이유로

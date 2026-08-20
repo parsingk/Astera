@@ -4,6 +4,7 @@ import {
   integrationTaskFor,
   isIntegrationTask,
   pendingMerges,
+  runsWorkingIn,
   workingInProjectFolder,
   worktreeDepsOf
 } from './integrate'
@@ -233,6 +234,48 @@ describe('isIntegrationTask', () => {
 
   it('parentId 가 없으면 아니다', () => {
     expect(isIntegrationTask(task('t1'))).toBe(false)
+  })
+})
+
+describe('runsWorkingIn', () => {
+  // 열린 Dispatch 하나가 곧 "그 폴더에서 일하는 워커 하나"다. Run 을 돌려주는 이유는 부르는 쪽의
+  // 질문이 둘로 갈리기 때문이다 — "이 폴더에 누가 있나"(집합이 비었나)와 "이 Run 이 남과 나눠
+  // 쓰나"(내가 있고 크기가 2 이상인가). 술어를 둘로 나누면 같은 순회가 두 벌이 된다
+  const open = (id: string, over = {}): Dispatch =>
+    dispatch(id, { outcome: undefined, endedAt: undefined, workerState: 'ready', ...over })
+
+  it('그 폴더에 열린 Dispatch 를 가진 Run 들을 낸다', () => {
+    const s = state({
+      runs: [run(), run({ id: 'run_2' })],
+      tasks: [task('t1'), task('t2', { runId: 'run_2' })],
+      dispatches: [open('dsp_1', { taskId: 't1' }), open('dsp_2', { taskId: 't2' })]
+    })
+    expect(runsWorkingIn(s, RUN_CWD)).toEqual(new Set(['run_1', 'run_2']))
+  })
+
+  it('끝난 Dispatch 는 세지 않는다', () => {
+    const s = state({ tasks: [task('t1')], dispatches: [dispatch('dsp_1', { taskId: 't1' })] })
+    expect(runsWorkingIn(s, RUN_CWD)).toEqual(new Set())
+  })
+
+  // 워크트리에서 도는 워커는 그 폴더를 나눠 쓰지 않는다 — 이 판정이 세는 것은 **한 작업 트리를
+  // 함께 만지는** 워커뿐이다
+  it('다른 폴더의 Dispatch 는 세지 않는다', () => {
+    const s = state({ tasks: [task('t1')], dispatches: [open('dsp_1', { taskId: 't1', cwd: WT_A })] })
+    expect(runsWorkingIn(s, RUN_CWD)).toEqual(new Set())
+  })
+
+  it('Task 가 없는 Dispatch 는 세지 않는다 — 어느 Run 것인지 알 수 없다', () => {
+    const s = state({ tasks: [], dispatches: [open('dsp_1', { taskId: 'gone' })] })
+    expect(runsWorkingIn(s, RUN_CWD)).toEqual(new Set())
+  })
+
+  it('한 Run 이 그 폴더에 워커 둘을 가져도 Run 하나다', () => {
+    const s = state({
+      tasks: [task('t1'), task('t2')],
+      dispatches: [open('dsp_1', { taskId: 't1' }), open('dsp_2', { taskId: 't2' })]
+    })
+    expect(runsWorkingIn(s, RUN_CWD)).toEqual(new Set(['run_1']))
   })
 })
 

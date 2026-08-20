@@ -738,6 +738,8 @@ export const es: Catalog = {
   'jobs.state.failed': 'Falló',
   'jobs.state.blocked': 'Esperando a una persona',
   'jobs.run.running': 'en curso',
+  'jobs.run.sharedFolder': 'carpeta compartida',
+  'jobs.run.sharedFolderHint': 'Corre en la misma carpeta que el worker de otro trabajo — sus ediciones pueden mezclarse, y la app ni lo impide ni lo detecta',
   'jobs.gates.more': '+{count} más',
   // RunDetail.tsx, panel inferior — la lista de eventos. La insignia la elige el tipo de evento (o el tipo
   // de mensaje). Los nombres jobs.timeline.* se mantienen: ese panel es la línea de tiempo, y
@@ -782,6 +784,7 @@ export const es: Catalog = {
   'jobs.new.concurrency': 'En paralelo',
   'jobs.new.concurrencyHint': 'Cuántos workers mantiene abiertos a la vez',
   'jobs.new.create': 'Crear',
+  'jobs.new.folderBusy': 'Ya hay un worker trabajando en esta carpeta — con límite 1 el worker de este trabajo también corre ahí, así que sus ediciones pueden mezclarse',
   'jobs.new.failed': 'No se pudo crear el trabajo',
   'jobs.gate.noAccount': 'Ninguna cuenta de {provider} tiene la sesión iniciada, así que esta Task no puede empezar',
   'jobs.gate.assignedAccountUnusable': 'La cuenta asignada a esta Task no se puede usar — no tiene la sesión iniciada, fue eliminada o pertenece a otro agente',

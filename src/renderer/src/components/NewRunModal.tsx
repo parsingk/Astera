@@ -18,9 +18,14 @@ const PROVIDER_ITEMS: SelectOption[] = [
  *  끝'이라 flush/onBlur 배선은 없다 — 제출 버튼 하나가 전부다. */
 export function NewRunModal({
   projectPath,
+  projectFolderBusy,
   onClose,
   onCreated
 }: {
+  /** 이 프로젝트 폴더에서 이미 일하는 워커가 있는가(OrchSnapshot.projectFolderBusy). 동시 실행 1 을
+   *  고르면 이 Run 의 워커도 그 폴더로 가므로 둘이 한 작업 트리를 나눠 쓰게 된다 — 그때 경고한다.
+   *  **막지 않는다**: 파일을 안 건드리는 워커끼리는 충돌할 것이 없고 앱은 그것을 알 수 없다. */
+  projectFolderBusy: boolean
   projectPath: string
   onClose: () => void
   /** 만들어진 Run 의 id — 부르는 쪽이 곧바로 상세 창을 열어 Task 를 짜게 한다 */
@@ -99,6 +104,15 @@ export function NewRunModal({
             }}
           />
           <p className="modal-hint">{t('jobs.new.concurrencyHint')}</p>
+          {/* 동시 실행 1 을 골랐고 그 폴더에 이미 워커가 있을 때만. 2 이상이면 배치 규칙이 워커마다
+              워크트리를 주므로 나눠 쓸 일이 없다(ipc.ts 의 배치) — 그때 이 줄을 띄우면 틀린 말이다.
+              **하필 조심스러운 값(1)이 위험한 값이다**: 상한 1 의 안전 논거는 "그 폴더에 한 번에
+              하나"였는데 그 보장이 Run 별이고 위험은 폴더별이라, 상한 1 인 Run 둘이 각자 1슬롯씩
+              받으면 워커 둘이 한 폴더에서 동시에 일한다. 그러고도 커밋 의무도 병합 단계도 붙지
+              않아 앱의 어떤 기계도 알아채지 못한다 — 그래서 만들기 전에 여기서 말한다. */}
+          {concurrency <= 1 && projectFolderBusy && (
+            <p className="warn-text">{t('jobs.new.folderBusy')}</p>
+          )}
         </div>
         {error && <p className="warn">{error}</p>}
         <div className="row right">

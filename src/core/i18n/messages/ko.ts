@@ -757,6 +757,10 @@ export const ko = {
   'jobs.state.failed': '실패했다',
   'jobs.state.blocked': '사람을 기다린다',
   'jobs.run.running': '도는 중',
+  // 얽힌 Run 의 줄에 붙는 글자와 그 툴팁. Gate 의 주황 `!` 를 빌리지 않는 이유는 뜻이
+  // 다르기 때문이다 — 막힌 것이 아니라 나눠 쓰는 중이고, 기다리는 사람이 없다
+  'jobs.run.sharedFolder': '폴더 공유',
+  'jobs.run.sharedFolderHint': '다른 작업의 워커와 같은 폴더에서 돌고 있습니다 — 서로의 편집이 섞일 수 있고, 앱은 그것을 막지도 알아채지도 못합니다',
   'jobs.gates.more': '외 {count}건',
   // RunDetail.tsx 의 아래 칸 — 이벤트 목록. 종류 배지는 이벤트 종류(또는 메시지 종류)가 고른다.
   // Run 을 '작업'이라 부르는 것은 위의 jobs.empty 와 같고, 그 안의 Task 는 'Task' 로 적는다 —
@@ -806,6 +810,9 @@ export const ko = {
   'jobs.new.concurrency': '동시 실행',
   'jobs.new.concurrencyHint': '이 작업이 한 번에 열어 둘 워커 수',
   'jobs.new.create': '만들기',
+  // 동시 실행 1 을 골랐는데 그 폴더에 이미 워커가 있을 때. 막지 않고 알려만 준다 —
+  // 파일을 안 건드리는 워커끼리는 충돌할 것이 없고 앱은 그것을 알 수 없다
+  'jobs.new.folderBusy': '이 폴더에서 이미 워커가 일하고 있습니다 — 동시 실행 1 이면 이 작업의 워커도 같은 폴더에서 돌아 서로의 편집이 섞일 수 있습니다',
   'jobs.new.failed': '작업을 만들지 못했습니다',
   // 스케줄러가 워커를 띄울 계정을 못 골랐을 때 여는 Gate 의 문구(ipc.ts). 첫째는 예전부터
   // 있던 경우(그 provider 에 로그인된 계정이 없다), 둘째는 사람이 이 Task 에 지정한 계정을

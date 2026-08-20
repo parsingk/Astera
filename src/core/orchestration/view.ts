@@ -10,6 +10,7 @@
 // either fails (files/tree.ts's node:path import has no declarations there) or "succeeds" by adding
 // "types": ["node"], which loosens the guard that keeps Node globals out of the renderer typecheck.
 import { isSamePath } from '../files/tree'
+import { runsWorkingIn } from './integrate'
 import type { JobTask, OrchSnapshot, RunOutcome, WorktreeInfo } from '../types'
 import { repoPathOf } from '../worktrees/repo'
 import type { OrchState } from './state'
@@ -173,6 +174,9 @@ export function snapshotFor(
   isKnownSession: (sessionId: string) => boolean,
   worktrees: WorktreeInfo[]
 ): OrchSnapshot {
+  // 폴더 사실을 **한 번만** 센다 — Run 마다 다시 세면 같은 순회가 Run 수만큼 돌고, 그보다 나쁜
+  // 것은 두 값(폴더 수준과 Run 수준)이 다른 순간의 상태를 볼 수 있다는 것이다.
+  const workingHere = runsWorkingIn(state, projectPath)
   const runs = runsForProject(state, projectPath, worktrees).map((run) => {
     const { done, total } = progressOf(state, run.id)
     return {
@@ -187,6 +191,8 @@ export function snapshotFor(
       done,
       total,
       eventCount: eventCountFor(state, run.id),
+      // 내가 그 폴더에 있고, 나 말고도 있는가. 크기만 보면 남의 얽힘까지 내 줄에 그리게 된다
+      sharesProjectFolder: workingHere.has(run.id) && workingHere.size > 1,
       // createdAt ascending — the order the orchestrator declared the Tasks in, which is the order
       // the dependency chain reads in. Task.deps is not a total order, so it cannot sort this.
       tasks: state.tasks
@@ -202,7 +208,8 @@ export function snapshotFor(
       const ar = a.outcome === 'running'
       const br = b.outcome === 'running'
       return ar === br ? 0 : ar ? -1 : 1
-    })
+    }),
+    projectFolderBusy: workingHere.size > 0
   }
 }
 

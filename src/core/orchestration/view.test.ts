@@ -183,6 +183,7 @@ describe('snapshotFor', () => {
     expect(snapshotFor(s, absPath('p'), anySession, noWorktrees).runs).toEqual([
       {
         id: 'r1', objective: 'objective r1', outcome: 'running', done: 1, total: 2, eventCount: 3,
+        provider: undefined, concurrency: undefined, sharesProjectFolder: false,
         tasks: [
           { id: 't1', title: 'task t1', status: 'completed', sessionId: undefined, gateQuestion: undefined, openGates: 0 },
           { id: 't2', title: 'task t2', status: 'ready', sessionId: undefined, gateQuestion: undefined, openGates: 0 }
@@ -345,7 +346,10 @@ describe('snapshotFor', () => {
 
   it('그 프로젝트에 Run 이 없으면 빈 목록이다', () => {
     const s = withRuns([run('r1', absPath('other'))])
-    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees)).toEqual({ runs: [] })
+    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees)).toEqual({
+      runs: [],
+      projectFolderBusy: false
+    })
   })
 
   it('Run 마다 이벤트 개수를 싣는다', () => {
@@ -371,6 +375,73 @@ describe('snapshotFor', () => {
     const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees).runs
     expect(r.provider).toBeUndefined()
     expect(r.concurrency).toBeUndefined()
+  })
+})
+
+// 같은 프로젝트 폴더를 두 Run 이 나눠 쓰는 상태를 화면이 말하게 하는 두 값. **막지 않는다** —
+// 파일을 안 건드리는 워커 여럿이 한 폴더에 있는 것은 안전할 수도 있고 앱은 그것을 알 수 없다.
+// 상한 1 인 Run 을 둘 만들면 각 Run 이 1슬롯씩 받아 워커 둘이 그 폴더에서 동시에 일하는데,
+// 그때 커밋 의무도 병합 단계도 붙지 않아 **앱의 어떤 기계도 알아채지 못한다.**
+describe('스냅숏의 폴더 경합 표시', () => {
+  const openIn = (id: string, taskId: string, cwd: string): Dispatch => ({
+    ...dispatch(id, taskId, `sess-${id}`, '2026-08-18T01:00:00.000Z'),
+    cwd
+  })
+
+  it('한 Run 만 프로젝트 폴더에서 일하면 폴더는 쓰이는 중이고 그 Run 은 나눠 쓰지 않는다', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),
+      dispatches: [openIn('d1', 't1', absPath('p'))]
+    }
+    const snap = snapshotFor(s, absPath('p'), anySession, noWorktrees)
+    expect(snap.projectFolderBusy).toBe(true)
+    expect(snap.runs[0].sharesProjectFolder).toBe(false)
+  })
+
+  // 이 자리가 이 슬라이스의 이유다 — 상한 1 짜리 Run 둘이 같은 폴더에서 동시에 돈다
+  it('두 Run 이 같은 폴더에서 일하면 둘 다 나눠 쓴다', () => {
+    const s: OrchState = {
+      ...withRuns(
+        [run('r1', absPath('p')), run('r2', absPath('p'))],
+        [task('t1', 'r1', 'dispatched'), task('t2', 'r2', 'dispatched')]
+      ),
+      dispatches: [openIn('d1', 't1', absPath('p')), openIn('d2', 't2', absPath('p'))]
+    }
+    const snap = snapshotFor(s, absPath('p'), anySession, noWorktrees)
+    expect(snap.projectFolderBusy).toBe(true)
+    expect(snap.runs.map((r) => r.sharesProjectFolder)).toEqual([true, true])
+  })
+
+  // 워크트리에서 도는 워커는 그 폴더를 나눠 쓰지 않는다. 동시 실행 2 이상이면 전부 그쪽이므로,
+  // 그 흔한 경우에 이 표시가 뜨면 안 된다
+  it('워크트리에서 도는 워커는 폴더를 쓰는 것이 아니다', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),
+      dispatches: [openIn('d1', 't1', absPath('wt', 'a'))]
+    }
+    const snap = snapshotFor(s, absPath('p'), anySession, noWorktrees)
+    expect(snap.projectFolderBusy).toBe(false)
+    expect(snap.runs[0].sharesProjectFolder).toBe(false)
+  })
+
+  it('도는 워커가 없으면 폴더는 비어 있다', () => {
+    const s = withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'ready')])
+    const snap = snapshotFor(s, absPath('p'), anySession, noWorktrees)
+    expect(snap.projectFolderBusy).toBe(false)
+    expect(snap.runs[0].sharesProjectFolder).toBe(false)
+  })
+
+  // 다른 프로젝트의 Run 이 자기 폴더에서 도는 것은 이 프로젝트와 상관없다
+  it('다른 폴더의 Run 은 이 폴더를 쓰지 않는다', () => {
+    const s: OrchState = {
+      ...withRuns(
+        [run('r1', absPath('p')), run('r2', absPath('other'))],
+        [task('t1', 'r1', 'ready'), task('t2', 'r2', 'dispatched')]
+      ),
+      dispatches: [openIn('d2', 't2', absPath('other'))]
+    }
+    const snap = snapshotFor(s, absPath('p'), anySession, noWorktrees)
+    expect(snap.projectFolderBusy).toBe(false)
   })
 })
 
@@ -422,7 +493,8 @@ describe('sameSnapshot', () => {
   })
 
   it('빈 스냅샷끼리는 같다고 본다', () => {
-    expect(sameSnapshot({ runs: [] }, { runs: [] })).toBe(true)
+    const empty = { runs: [], projectFolderBusy: false }
+    expect(sameSnapshot(empty, { ...empty })).toBe(true)
   })
 
   // 이 필드의 존재 이유가 이것이다. 질문 메시지는 Task 상태도 openGates 도 움직이지 않으므로
