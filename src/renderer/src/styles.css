@@ -1633,10 +1633,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    It is a <span role="tab" tabIndex={0}>, not a <button>, so it does not inherit the global button rule
    and needs its own rule the way .run-btn and .icon-btn do. */
 .bottom-tab:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
-.bottom-tab.on { background: var(--elevated); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.bottom-tab.on { background: var(--elevated); color: var(--text); box-shadow: inset 0 calc(-1 * var(--marker-w)) 0 var(--accent); }
 /* Same reasoning as .rail-btn.on:focus-visible above — box-shadow does not composite, so the active
    bottom tab needs both shadows restated explicitly or tabbing to it shows no ring. */
-.bottom-tab.on:focus-visible { box-shadow: inset 0 -2px 0 var(--accent), 0 0 0 2px var(--ring); }
+.bottom-tab.on:focus-visible { box-shadow: inset 0 calc(-1 * var(--marker-w)) 0 var(--accent), 0 0 0 2px var(--ring); }
 .bottom-tab-close { background: transparent; border: 0; color: inherit; opacity: .5; padding: 0 0 0 2px; font-size: 10px; cursor: pointer; }
 .bottom-tab-close:hover { opacity: 1; }
 .bottom-tab-new { background: transparent; border: 0; color: var(--text-dim); padding: 2px 6px; font-size: 12px; cursor: pointer; }
@@ -1659,7 +1659,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
   border-left: 3px solid var(--text-dim);
   border-radius: var(--radius-lg);
   padding: 9px 8px 9px 11px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, .45);
+  box-shadow: var(--shadow-lg);
   animation: toast-in .12s ease-out;
 }
 .toast.error { border-left-color: var(--fi-red); }
