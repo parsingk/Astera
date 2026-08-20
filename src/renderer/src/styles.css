@@ -1276,9 +1276,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* 상세 창으로 가는 입구. 머리말 없이 이것 하나다 — 넓은 창을 여는 길은 하나뿐이라 이름이 필요 없다.
    **이름이 없는 만큼 버튼으로 읽혀야 한다.** 처음에는 테두리가 없고 색이 주변 개수와 같은
    --text-faint 여서, 회색 숫자 사이에 낀 구두점처럼 읽히고 찾지 못했다(누를 자리도 2px 이었다).
-   목록 맨 위 '+ 새 작업'의 유령 테두리를 그대로 빌린다 — 사이드바에서 "이건 눌리는 것"을 말하는
-   기존 언어이고 새 토큰이 없다. 채움은 hover 에서 기본 button 규칙이 준다 */
-.jobs-more { margin-left: auto; display: inline-flex; align-items: center; padding: 1px 6px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: none; color: var(--text-dim); font-size: 13px; line-height: 1.4; cursor: pointer; }
+   **유령 테두리로는 안 된다** — 한 번 그렇게 고쳤다가 되돌렸다. --line-soft(#26262c) 테두리는
+   --panel(#1a1a1e) 위에서 차이가 거의 없고, 그것이 '+ 새 작업'도 안 보이게 만들던 원인이다.
+   그래서 이 버튼은 **기본 button 규칙을 그대로 쓴다** — --elevated 바탕에 --text 글자, 앱의 다른
+   버튼과 같은 표면이다. 여기서 정하는 것은 이 자리에 맞는 크기뿐이고, 채움 색은 accent 로 올리지
+   않는다: 이 버튼은 Run 마다 하나씩 있어서 넷이 쌓이면 넷이 빛나고, 그러면 정작 상태 색과 다툰다 */
+.jobs-more { margin-left: auto; display: inline-flex; align-items: center; padding: 2px 7px; border-radius: var(--radius-sm); font-size: 14px; line-height: 1.2; }
 .jobs-more:hover { color: var(--accent); border-color: var(--accent); }
 .jobs-empty { margin: auto; text-align: center; padding: 0 24px; color: var(--text-faint); font-size: 13px; }
 .jobs-empty-hint { margin-top: 6px; font-size: 11.5px; }
