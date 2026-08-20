@@ -59,6 +59,51 @@ describe('themeCssVars', () => {
       }
     }
   })
+
+  // 키 집합 테스트는 여섯 테마에서 균일하게 빠진 토큰과 잘못 매핑된 파생을 둘 다 통과시키므로,
+  // 테마 하나의 반환 객체 전체를 고정해 그 두 경우를 잡는다.
+  it('Quasar 의 전체 반환 객체를 고정한다', () => {
+    expect(themeCssVars(themeById('quasar'))).toEqual({
+      '--bg': '#0b0b0d',
+      '--rail': '#000000',
+      '--panel': '#121216',
+      '--elevated': '#1e1e24',
+      '--surface-hover': '#18181e',
+      '--term-bg': '#000000',
+      '--line': '#2a2a32',
+      '--line-soft': '#22222a',
+      '--text': '#e8e8ee',
+      '--text-dim': '#9b9baa',
+      '--text-faint': '#7d7d8c',
+      '--rail-icon': '#c8c8d4',
+      '--accent': '#79c98f',
+      '--accent-ink': '#06150b',
+      '--ring': 'rgba(121, 201, 143, 0.35)',
+      '--status-bg': '#14241a',
+      '--status-ink': '#cdeed7',
+      '--md-bg': '#0b0b0d',
+      '--md-text': '#e8e8ee',
+      '--md-code-bg': '#1e1e24',
+      '--md-line': '#2a2a32',
+      '--md-link': '#8ad3a0',
+      '--btn-bg': '#79c98f',
+      '--btn-ink': '#06150b',
+      '--btn-border': 'transparent',
+      '--radius': '2px',
+      '--radius-lg': '3px',
+      '--radius-sm': '1px',
+      '--marker-w': '2px',
+      '--shadow-sm': 'none',
+      '--shadow-lg': '0 0 0 1px var(--line)',
+      '--row-pad-y': '3px',
+      '--tab-pad-y': '5px',
+      '--sel-h': '26px',
+      '--modal-pad': '16px',
+      '--sans': `'Geist', 'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans CJK KR', sans-serif`,
+      '--mono': "ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace",
+      '--tracking': '-0.01em'
+    })
+  })
 })
 
 describe('xtermThemeOf', () => {
