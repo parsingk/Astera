@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import type { JobRun, JobTask, OrchSnapshot, Provider, TaskStatus } from '../../../core/types'
 import type { MessageKey } from '../../../core/i18n'
 import { formatElapsed } from '../../../core/orchestration/elapsed'
+import { runningCount } from '../../../core/orchestration/running'
 import { useI18n } from '../i18n/I18nProvider'
-import { RUNNING_STATES, RunIcon, STATE_KEY, STATUS_COLOR, TaskIcon } from './JobIcons'
+import { RunIcon, STATE_KEY, STATUS_COLOR, TaskIcon } from './JobIcons'
 import type { RunIconKind } from './JobIcons'
 
 /** Run 헤더 글리프의 툴팁. 끝난·실패·막힘은 줄의 글리프와 같은 모양이고 같은 뜻이라 같은 문구를 쓴다.
@@ -156,14 +157,14 @@ export function JobsView({
       {snapshot.runs.map((run) => {
         const open = !collapsed.has(run.id)
         const kind = runKind(run)
-        // 줄은 여전히 열린 Dispatch 기반이다 — 줄에는 provider 배지와 경과 시간이 있고 둘 다 열린
-        // Dispatch 에서만 온다. 숫자는 상태 기반이다(RUNNING_STATES, JobIcons.tsx) — validating 에는
-        // 열린 Dispatch 가 없어서 Dispatch 로 세면 검증만 남은 Run 이 0 이 되어 화면에서 사라진다.
+        // 줄은 열린 Dispatch 기반이다 — 줄에는 provider 배지와 경과 시간이 있고 둘 다 열린
+        // Dispatch 에서만 온다. 숫자는 그것과 다른 질문이라 core 의 runningCount 가 답한다
+        // (running.ts — 상태와 열린 Dispatch 중 어느 하나로도 답이 안 되는 이유가 거기 있다).
         const rows = run.tasks.filter(isRunning).slice(0, MAX_ROWS)
-        const runningCount = run.tasks.filter((tk) => RUNNING_STATES.includes(tk.status)).length
+        const running = runningCount(run.tasks)
         // 줄을 세우지 못한 것도 여기 접힌다 — 넷째부터 넘친 것뿐 아니라, validating 처럼 애초에 줄로
         // 세울 수 없는 것도 folded 로만 나타난다.
-        const folded = runningCount - rows.length
+        const folded = running - rows.length
         const gates = run.tasks.filter((tk) => tk.status === 'blocked' && tk.gateQuestion)
         const counts = FOOT_STATES.map(
           (status) => [status, run.tasks.filter((tk) => tk.status === status).length] as const
@@ -177,7 +178,7 @@ export function JobsView({
               </span>
               <span className="jobs-count">
                 <RunIcon kind={kind} label={t(RUN_KIND_KEY[kind])} />
-                {kind === 'running' && runningCount > 0 ? <span>{runningCount}</span> : null}
+                {kind === 'running' && running > 0 ? <span>{running}</span> : null}
               </span>
             </div>
             {/* 띠 — Task 하나가 칸 하나다. **클릭 대상이 아니다**: 6px 은 정확히 누를 수 없고,

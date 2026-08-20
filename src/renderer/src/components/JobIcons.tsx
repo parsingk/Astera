@@ -66,12 +66,6 @@ export function TaskIcon({
   )
 }
 
-/** 묶음 글리프 하나(RunIcon 의 running)가 대표하는 상태들. **열린 Dispatch 가 아니라 상태로 센다** —
- *  validating 인 Task 에는 열린 Dispatch 가 없다(applyWorkerDone 이 상태를 옮기기 전에 워커의
- *  Dispatch 를 닫고, 검증은 TaskValidator 가 돌린다). Dispatch 로 세면 검증만 남은 Run 이 0 이 되어
- *  화면에서 사라진다. 사이드바와 상세 창이 같은 값을 적어야 하므로 정의는 여기 하나뿐이다. */
-export const RUNNING_STATES: readonly TaskStatus[] = ['dispatched', 'validating', 'reviewing']
-
 export type RunIconKind = 'running' | 'blocked' | 'done' | 'failed'
 
 /** 여럿을 묶은 자리(Run 헤더, 접힌 줄)의 글리프. **도는 것은 채워진 점으로 적는다** — 묶음까지

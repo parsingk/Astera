@@ -13,9 +13,10 @@ import { defaultAccountIdOf } from '../../../core/accounts/defaultAccount'
 import type { GraphBox } from '../../../core/orchestration/graphLayout'
 import { edgePath, layoutRows, NODE_H, NODE_W } from '../../../core/orchestration/graphLayout'
 import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/types'
+import { runningCount } from '../../../core/orchestration/running'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
-import { RUNNING_STATES, RunIcon, STATE_KEY, STATUS_COLOR, TaskIcon } from './JobIcons'
+import { RunIcon, STATE_KEY, STATUS_COLOR, TaskIcon } from './JobIcons'
 import { NewTaskModal } from './NewTaskModal'
 
 /** 종류 배지의 문구. message 는 messageType 이 정한다.
@@ -238,7 +239,7 @@ export function RunDetail({
     : (events ?? [])
   const hidden = (events?.length ?? 0) - shown.length
 
-  const running = tasks.filter((tk) => RUNNING_STATES.includes(tk.status)).length
+  const running = runningCount(tasks)
   const counts = HEAD_STATES.map(
     (status) => [status, tasks.filter((tk) => tk.status === status).length] as const
   ).filter(([, n]) => n > 0)
