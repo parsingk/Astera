@@ -72,6 +72,12 @@ const IDLE_POLL_MS = 50
  *  busy frame (a few seconds) while still always elapsing before the user's next turn starts. */
 const DEFAULT_IDLE_WAIT_TIMEOUT_MS = 30_000
 
+/** Limit on the whole knowledgeIn scan (below). The scan is a handful of readdir calls on local
+ *  disk — sub-millisecond in the healthy case — so 2s is far past anything a working repository
+ *  should ever hit. If six directory listings cannot finish inside that, the knowledge section is
+ *  not worth delaying a worker launch for. */
+const KNOWLEDGE_SCAN_TIMEOUT_MS = 2_000
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 /** specPath is an absolute path normalized to forward slashes (see startWorker below) */
@@ -102,11 +108,21 @@ export const launchPrompt = (specPath: string): string =>
  *  worker-start 분기가 startWorker 호출을 감싸 둔 실패 rollback(catch) 도 돌 기회를 못 얻는다 —
  *  그 rollback 이 있는 이유가 바로 "dispatched 에서 실패하면 재시도할 길이 없다"(dispatched Task
  *  는 --ready 목록에 나오지 않는다)였는데, catch 조차 못 돌면 Task 는 그 무엇에도 잡히지 않고
- *  그대로 박힌다. 그런데도 시간 제한을 두지 않는 것은 의도한 선택이다 — loadRunConfigs
- *  (main/run/prepare.ts), jdkScanner, dotnetScanner, core/history/strategies 의 codex.ts·claude.ts
- *  도 readdir 를 하나같이 제한 없이 부른다. 이 앱이 저장소를 읽는 자리는 이미 다 이렇고, 이 함수
- *  하나에만 새 규칙(타임아웃)을 들이는 것은 이번 조각의 몫이 아니다. 알려진 실패 모드가 모르는
- *  실패 모드보다 낫다.
+ *  그대로 박힌다 — 사람이 손으로 task-update 를 칠 때까지.
+ *
+ *  **그래서 훑기 전체를 KNOWLEDGE_SCAN_TIMEOUT_MS 로 묶는다(race, 아래).** 예전에는 이 함수도
+ *  loadRunConfigs(main/run/prepare.ts), jdkScanner, dotnetScanner, core/history/strategies 의
+ *  codex.ts·claude.ts 를 근거로 제한을 두지 않았다 — 그것들도 readdir 를 하나같이 제한 없이
+ *  부르니까. 하지만 그 넷은 다른 부류다: 전부 **사람이 켠 작업**이다. 설정 화면을 열거나 목록을
+ *  조회할 때만 도는 코드라, 멈춰도 사람이 보는 스피너로 나타나고 그 사람이 자리를 뜨면 그만이다.
+ *  이 함수는 반대로 **스케줄러의 경로** 위, 워커를 띄울 때마다 지켜보는 사람 없이 돈다 — 멈추면
+ *  바로 위 문단이 적은 실패가 그대로 일어난다. 이 파일 안에 이미 같은 이유로 시간 제한을 둔 자리가
+ *  있다 — DEFAULT_IDLE_WAIT_TIMEOUT_MS 의 주석이 적은 그대로, 제한 없는 대기는 함수를 영원히
+ *  붙들고 그 위의 셸 명령을 출력 없이 매달아 둔다. 같은 논리가 여기에도 적용된다.
+ *
+ *  시간을 넘기면 지식이 없는 저장소가 받는 것과 같은 값(knowledgeFilesFrom([]))을 돌려준다 —
+ *  그리고 그 사실을 log 로 남긴다. 로그가 없으면 시간 초과로 빠진 절과 원래 지식이 없는 저장소를
+ *  구별할 방법이 없어, 누군가 증거 없이 사라진 절을 쫓아다니게 된다.
  *
  *  **KNOWLEDGE_MAX 만큼 모았다고 훑기를 멈추지 않는다.** docs/architecture/ 아래 서브디렉터리가
  *  500개면 40개를 채운 뒤로도 나머지 460번을 계속 읽는다는 뜻이지만, 채워지는 대로 멈추면 "어느
@@ -114,27 +130,51 @@ export const launchPrompt = (specPath: string): string =>
  *  수 없는 순서 — 에 달리게 된다. 그러면 같은 저장소가 실행마다 다른 spec 을 받는다. 다 모아서
  *  순수 계층(knowledgeFilesFrom)이 정렬하고 자르게 하는 것이 결정성을 지키는 유일한 방법이다.
  *  누군가 이것을 "최적화"하려 들 것이다 — 그 전에 이 문단을 읽으라고 남긴다. */
-export async function knowledgeIn(cwd: string): Promise<KnowledgeFiles> {
-  const found: string[] = []
-  for (const dir of KNOWLEDGE_DIRS) {
-    const entries = await fs
-      .readdir(path.join(cwd, dir), { withFileTypes: true })
-      .catch(() => null)
-    if (!entries) continue // 그 관례를 쓰지 않는 저장소다 — 흔한 경우이고 오류가 아니다
-    for (const e of entries) {
-      // 경로는 항상 슬래시로 적는다 — spec 을 읽는 것이 사람이 아니라 에이전트이고, win32 의
-      // 역슬래시는 그 글에서 이스케이프로 읽힐 수 있다
-      if (e.isFile()) found.push(`${dir}/${e.name}`)
-      else if (e.isDirectory()) {
-        const inner = await fs
-          .readdir(path.join(cwd, dir, e.name), { withFileTypes: true })
-          .catch(() => null)
-        if (!inner) continue // 한 층 아래를 못 읽으면 그것만 건너뛴다
-        for (const f of inner) if (f.isFile()) found.push(`${dir}/${e.name}/${f.name}`)
+export async function knowledgeIn(
+  cwd: string,
+  log: (message: string) => void
+): Promise<KnowledgeFiles> {
+  const scan = (async (): Promise<KnowledgeFiles> => {
+    const found: string[] = []
+    for (const dir of KNOWLEDGE_DIRS) {
+      const entries = await fs
+        .readdir(path.join(cwd, dir), { withFileTypes: true })
+        .catch(() => null)
+      if (!entries) continue // 그 관례를 쓰지 않는 저장소다 — 흔한 경우이고 오류가 아니다
+      for (const e of entries) {
+        // 경로는 항상 슬래시로 적는다 — spec 을 읽는 것이 사람이 아니라 에이전트이고, win32 의
+        // 역슬래시는 그 글에서 이스케이프로 읽힐 수 있다
+        if (e.isFile()) found.push(`${dir}/${e.name}`)
+        else if (e.isDirectory()) {
+          const inner = await fs
+            .readdir(path.join(cwd, dir, e.name), { withFileTypes: true })
+            .catch(() => null)
+          if (!inner) continue // 한 층 아래를 못 읽으면 그것만 건너뛴다
+          for (const f of inner) if (f.isFile()) found.push(`${dir}/${e.name}/${f.name}`)
+        }
       }
     }
+    return knowledgeFilesFrom(found)
+  })()
+
+  // 훑기 전체를 하나로 묶어 race 한다 — readdir 호출마다 따로 타이머를 걸면 여섯 번이 곱해져
+  // KNOWLEDGE_SCAN_TIMEOUT_MS 하나로는 전체 예산을 표현할 수 없다. 진 쪽이 남아도 다음 turn에
+  // fs 콜백이 다시 도는 것은 해가 없다 — found 는 이 스코프에 갇혀 있고 아무도 그 결과를 읽지 않는다.
+  let timer!: ReturnType<typeof setTimeout>
+  const timedOut = new Promise<KnowledgeFiles>((resolve) => {
+    timer = setTimeout(() => {
+      log(
+        `orch: knowledge scan timed out after ${KNOWLEDGE_SCAN_TIMEOUT_MS}ms for cwd=${cwd} — dropping knowledge section`
+      )
+      resolve(knowledgeFilesFrom([]))
+    }, KNOWLEDGE_SCAN_TIMEOUT_MS)
+  })
+
+  try {
+    return await Promise.race([scan, timedOut])
+  } finally {
+    clearTimeout(timer)
   }
-  return knowledgeFilesFrom(found)
 }
 
 export function buildSpecFile(a: {
@@ -489,7 +529,7 @@ export class OrchCoordinator {
           taskId: a.taskId,
           dispatchId: a.dispatchId,
           committing: !isSamePath(cwd, a.runCwd),
-          knowledge: await knowledgeIn(cwd)
+          knowledge: await knowledgeIn(cwd, this.deps.log)
         }),
       'utf8'
     )

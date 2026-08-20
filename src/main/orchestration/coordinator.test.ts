@@ -253,6 +253,7 @@ describe('buildReviewSpecFile', () => {
 
 describe('knowledgeIn', () => {
   let tmpDir: string
+  const log = (): void => {} // 이 describe의 케이스들은 시간 제한 안에서 끝난다 — 호출되면 안 된다
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-knowledge-'))
   })
@@ -264,7 +265,7 @@ describe('knowledgeIn', () => {
     await fs.writeFile(path.join(tmpDir, 'knowledge', 'README.md'), 'root', 'utf8')
     await fs.writeFile(path.join(tmpDir, 'knowledge', 'decisions', 'ADR-001-x.md'), 'adr', 'utf8')
 
-    const result = await knowledgeIn(tmpDir)
+    const result = await knowledgeIn(tmpDir, log)
     // 정렬되고 exact match — 역슬래시도 절대 경로도 없어야 한다
     expect(result.paths).toEqual(['knowledge/README.md', 'knowledge/decisions/ADR-001-x.md'])
     expect(result.more).toBe(0)
@@ -275,14 +276,14 @@ describe('knowledgeIn', () => {
     await fs.mkdir(path.join(tmpDir, 'knowledge', 'a', 'b'), { recursive: true })
     await fs.writeFile(path.join(tmpDir, 'knowledge', 'a', 'b', 'deep.md'), 'deep', 'utf8')
 
-    const result = await knowledgeIn(tmpDir)
+    const result = await knowledgeIn(tmpDir, log)
     expect(result.paths).toEqual([])
     expect(result.more).toBe(0)
   })
 
   it('convention directory가 전혀 없으면 빈 결과를 반환한다', async () => {
     // readdir이 모두 실패하면 빈 목록으로 접힌다
-    const result = await knowledgeIn(tmpDir)
+    const result = await knowledgeIn(tmpDir, log)
     expect(result).toEqual({ paths: [], more: 0 })
   })
 
@@ -292,7 +293,7 @@ describe('knowledgeIn', () => {
     await fs.writeFile(path.join(tmpDir, 'knowledge', 'x.md'), 'k', 'utf8')
     await fs.writeFile(path.join(tmpDir, 'docs', 'adr', 'y.md'), 'a', 'utf8')
 
-    const result = await knowledgeIn(tmpDir)
+    const result = await knowledgeIn(tmpDir, log)
     // knowledgeFilesFrom가 정렬하므로 둘 다 나오고 정렬된 순서다
     expect(result.paths).toEqual(['docs/adr/y.md', 'knowledge/x.md'])
     expect(result.more).toBe(0)
