@@ -1243,14 +1243,22 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    (--line-soft #26262c 다음이 --text-faint #767682) 이 자리에서만 쓰는 값으로 적는다 — 전역
    토큰으로 올리면 "적당히 보이는 선"이라는 이름으로 아무 데나 쓰이게 된다. rgba 로 적는 것은 이
    파일의 관례다(.md-toolbar button.active 등) */
-.jobs-run { border-bottom: 1px solid rgba(255, 255, 255, 0.12); }
+.jobs-run { border-bottom: 1px solid rgba(255, 255, 255, 0.12); transition: box-shadow var(--ease); }
+/* hover 는 **Run 전체**다. 제목 줄만 칠하던 것을 옮겼다 — 칠하는 자리가 한 Run 의 범위와 어긋나서,
+   접기·펴기가 그 줄에만 걸려 있다는 사실이 "여기까지가 이 Run"이라는 신호를 이겨 버렸다.
+   바탕이 아니라 테두리로 말하는 이유는 .jobs-task 의 hover 주석과 같다 — 안쪽 줄의 바탕은 이미
+   상태를 말하고 있어서 덮으면 그 뜻이 사라진다. Run 에서는 진행 띠의 색이 그 자리다.
+   아래쪽 1px 은 경계선이 이미 그리고 있으므로 그 색만 함께 바꿔 상자를 닫는다.
+   **이 테두리는 "지금 이것을 가리키고 있다"이지 "여기를 누르면 된다"가 아니다** — 접기는 여전히
+   제목 줄이고, 그 사실은 캐럿(▾/▸)과 그 줄의 pointer 커서가 말한다 */
+.jobs-run:hover { box-shadow: inset 0 0 0 1px var(--ring); border-bottom-color: var(--ring); }
 /* 제목 줄. **바탕을 깔지 않는다** — 한때 --elevated 밴드를 깔아 Run 경계를 표시했는데, 이
    사이드바에서 그 색은 이미 hover/활성 줄의 뜻이라 hover 가 무엇을 말하는지가 흐려졌다. 경계는
-   위의 border 가 말하고, 이 줄의 바탕은 hover 하나만 말한다.
+   위의 border 가 말하고, hover 도 그 자리에서 Run 전체로 말한다 — 이 줄은 바탕을 갖지 않는다.
    접기·펴기가 걸린 유일한 요소이기도 하다(진행 띠·줄·아래 한 줄은 형제다). 그래서 안에 놓인
-   '자세히' 버튼은 stopPropagation 을 부른다 — JobsView.tsx 의 그 자리 주석 참고 */
+   '자세히' 버튼은 stopPropagation 을 부른다 — JobsView.tsx 의 그 자리 주석 참고.
+   **hover 를 이 줄에 두지 않는다** — 위 .jobs-run:hover 가 Run 전체로 말한다 */
 .jobs-run-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px 0; cursor: pointer; }
-.jobs-run-head:hover { background: rgba(255, 255, 255, 0.04); }
 .jobs-caret { flex: none; width: 9px; font-size: 10px; color: var(--text-faint); }
 .jobs-objective { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 560; }
 /* 끝난 Run 은 물러난다 — 목록이 길어질수록 눈이 가야 하는 것은 아직 도는 쪽이다. 실패한 Run 은
