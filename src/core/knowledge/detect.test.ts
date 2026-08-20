@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { KNOWLEDGE_DIRS, KNOWLEDGE_MAX, knowledgeFilesFrom } from './knowledge'
+import { KNOWLEDGE_DIRS, KNOWLEDGE_MAX, knowledgeFilesFrom } from './detect'
 
 describe('KNOWLEDGE_DIRS', () => {
   // 자기 관례 하나만 찾는 도구는 이 저장소 밖에서 아무것도 찾지 못한다 — knowledge/README.md 가

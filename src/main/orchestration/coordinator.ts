@@ -19,7 +19,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { isSamePath } from '../../core/files/tree'
 import type { Provider } from '../../core/providers/meta'
-import { KNOWLEDGE_DIRS, knowledgeFilesFrom, type KnowledgeFiles } from '../../core/knowledge/knowledge'
+import { KNOWLEDGE_DIRS, knowledgeFilesFrom, type KnowledgeFiles } from '../../core/knowledge/detect'
 
 export interface CoordinatorDeps {
   spawnSession(o: {
@@ -94,7 +94,26 @@ export const launchPrompt = (specPath: string): string =>
  *
  *  깊이는 관례 디렉터리 자신과 그 바로 아래 한 층까지다. 이 저장소의 knowledge/ 가 그 모양이고
  *  (README.md 는 바로 아래, decisions/*.md 는 한 층 더) docs/adr/ 은 평평하다. 더 깊이 들어가면
- *  큰 저장소에서 비용이 예측되지 않는다. */
+ *  큰 저장소에서 비용이 예측되지 않는다.
+ *
+ *  **이 함수는 launch 경로 위에 있다 — startWorker 가 세션을 띄우기(spawnSession) 전에 이 함수를
+ *  기다린다.** 네트워크 마운트가 멈춰 있으면 그만큼 launch 가 늦어지고, readdir 중 하나가 끝내
+ *  반환하지 않으면 startWorker 자체가 반환하지 않는다. 그러면 server.ts 의 handleCommand 안
+ *  worker-start 분기가 startWorker 호출을 감싸 둔 실패 rollback(catch) 도 돌 기회를 못 얻는다 —
+ *  그 rollback 이 있는 이유가 바로 "dispatched 에서 실패하면 재시도할 길이 없다"(dispatched Task
+ *  는 --ready 목록에 나오지 않는다)였는데, catch 조차 못 돌면 Task 는 그 무엇에도 잡히지 않고
+ *  그대로 박힌다. 그런데도 시간 제한을 두지 않는 것은 의도한 선택이다 — loadRunConfigs
+ *  (main/run/prepare.ts), jdkScanner, dotnetScanner, core/history/strategies 의 codex.ts·claude.ts
+ *  도 readdir 를 하나같이 제한 없이 부른다. 이 앱이 저장소를 읽는 자리는 이미 다 이렇고, 이 함수
+ *  하나에만 새 규칙(타임아웃)을 들이는 것은 이번 조각의 몫이 아니다. 알려진 실패 모드가 모르는
+ *  실패 모드보다 낫다.
+ *
+ *  **KNOWLEDGE_MAX 만큼 모았다고 훑기를 멈추지 않는다.** docs/architecture/ 아래 서브디렉터리가
+ *  500개면 40개를 채운 뒤로도 나머지 460번을 계속 읽는다는 뜻이지만, 채워지는 대로 멈추면 "어느
+ *  파일이 살아남는가"가 readdir 가 돌려주는 순서 — 플랫폼과 파일시스템이 정하는, 이 코드가 통제할
+ *  수 없는 순서 — 에 달리게 된다. 그러면 같은 저장소가 실행마다 다른 spec 을 받는다. 다 모아서
+ *  순수 계층(knowledgeFilesFrom)이 정렬하고 자르게 하는 것이 결정성을 지키는 유일한 방법이다.
+ *  누군가 이것을 "최적화"하려 들 것이다 — 그 전에 이 문단을 읽으라고 남긴다. */
 export async function knowledgeIn(cwd: string): Promise<KnowledgeFiles> {
   const found: string[] = []
   for (const dir of KNOWLEDGE_DIRS) {
@@ -138,7 +157,7 @@ export function buildSpecFile(a: {
    *  same shape as the reporting obligation below: the app assembles the instruction, the worker
    *  cannot edit it out. */
   committing?: boolean
-  /** 이 프로젝트가 자기 결정을 적어 둔 파일들(core/knowledge/knowledge.ts 의 knowledgeFilesFrom).
+  /** 이 프로젝트가 자기 결정을 적어 둔 파일들(core/knowledge/detect.ts 의 knowledgeFilesFrom).
    *  없거나 비면 이 절이 아예 붙지 않는다 — 지식이 없는 저장소에서 spec 이 달라지지 않아야 한다.
    *
    *  **경로는 상대 경로여야 한다.** 워커는 워크트리에서 돌고 그 cwd 는 프로젝트 폴더가 아니다.
@@ -165,7 +184,7 @@ rejected and why, and reopening a closed decision is work that gets thrown away.
 Paths are relative to the directory you are working in.
 
 ${a.knowledge.paths.map((p) => `  ${p}`).join('\n')}
-${a.knowledge.more > 0 ? `\n  … and ${a.knowledge.more} more file(s) in those directories.\n` : ''}`
+${a.knowledge.more > 0 ? `\n  … and ${a.knowledge.more} more file(s) in the project's knowledge directories.\n` : ''}`
       : ''
 
   // Inserted before the reporting obligation, not after — a worker that reports first and commits

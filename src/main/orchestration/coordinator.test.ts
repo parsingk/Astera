@@ -276,7 +276,6 @@ describe('knowledgeIn', () => {
     await fs.writeFile(path.join(tmpDir, 'knowledge', 'a', 'b', 'deep.md'), 'deep', 'utf8')
 
     const result = await knowledgeIn(tmpDir)
-    expect(result.paths).not.toContain(expect.stringContaining('deep.md'))
     expect(result.paths).toEqual([])
     expect(result.more).toBe(0)
   })
@@ -396,6 +395,28 @@ describe('OrchCoordinator.startWorker', () => {
     const deps = { ...makeDeps(), accountProvider: () => 'claude' as const }
     const co = new OrchCoordinator(deps)
     await expect(co.startWorker({ ...baseArgs(), runCwd: dir })).rejects.toThrow(/provider/)
+  })
+
+  // makeDeps().createWorktree 는 디스크에 아무것도 만들지 않는 경로를 돌려준다 — 그래서 이 파일의
+  // 다른 startWorker 테스트는 모두 빈 knowledge 분기만 지난다. knowledgeIn 이 runCwd 가 아니라
+  // 워커의 cwd 를 훑는다는 것(coordinator.ts의 knowledgeIn 주석이 적어 둔 그 결정)은 그 테스트들
+  // 중 어느 것도 확인하지 못한다 — 그 결정이 뒤집혀도 통과한다.
+  it('워크트리에 있는 지식 파일이 spec 에 상대 경로로 실린다 — 훑는 뿌리가 runCwd 아니라 cwd 다', async () => {
+    // wt 를 워커의 cwd 로 쓰고 runCwd 는 그와 **다른** 빈 디렉토리로 둔다. 둘이 같으면 knowledgeIn
+    // 이 cwd 를 훑는지 runCwd 를 훑는지 이 테스트로는 구별할 수 없다 — 어느 쪽을 훑어도 같은
+    // knowledge/a.md 를 찾아 통과해 버린다. 다르게 둬야만 "cwd 를 훑는다"는 주장이 실제로 검증된다.
+    const wt = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-knowledge-wt-'))
+    await fs.mkdir(path.join(wt, 'knowledge'))
+    await fs.writeFile(path.join(wt, 'knowledge', 'a.md'), 'decision', 'utf8')
+
+    const deps = { ...makeDeps(), createWorktree: async () => ({ path: wt }) }
+    const co = new OrchCoordinator(deps)
+    // runCwd: dir 는 beforeEach 가 만든 빈 임시 디렉토리다 — knowledge/ 가 없다. worktree: 'new' 라서
+    // createWorktree 가 워커의 cwd 를 정하고, 위 stub 이 그것을 wt 로 고정한다.
+    const r = await co.startWorker({ ...baseArgs(), runCwd: dir, worktree: 'new', name: 'auth' })
+
+    const written = await fs.readFile(r.specPath, 'utf8')
+    expect(written).toContain('knowledge/a.md')
   })
 })
 
