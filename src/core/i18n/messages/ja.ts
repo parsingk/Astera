@@ -784,6 +784,7 @@ export const ja: Catalog = {
   'jobs.task.account': 'アカウント',
   'jobs.task.accountDefault': '既定のアカウント',
   'jobs.task.accountHint': 'この Task のワーカーを立てるアカウントです — 選ばなければ既定のアカウントになります',
+  'jobs.task.accountTrust': 'このアカウントでこのフォルダを初めて使うとき、セッションタブにフォルダの信頼確認が出ます — 承認するまでワーカーは始まりません',
   'jobs.task.validate': '完了を検証する実行構成',
   'jobs.task.validateNone': '検証なし',
   'jobs.task.review': '別のエージェントが確認',

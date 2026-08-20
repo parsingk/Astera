@@ -181,6 +181,13 @@ export function NewTaskModal({
               allLabel={t('jobs.task.accountDefault')}
             />
             <p className="modal-hint">{t('jobs.task.accountHint')}</p>
+            {/* 고른 경우에만 띄운다. 기본 계정은 이 프로젝트에서 이미 써 온 계정일 가능성이 높고,
+                모든 Task 마다 이 문장을 보여 주면 읽히지 않는 줄이 된다.
+                **앱이 대신 눌러 주지 않는다** — 롤링은 신뢰 확인을 자동 승인하지만(rolling.ts) 그것은
+                같은 사람이 이미 이 폴더를 신뢰한 뒤 같은 일을 이어가는 자리다. 처음 쓰는 계정의 보안
+                확인은 성격이 다르므로 사람에게 넘긴다. 대신 언제·어디서 뜨는지는 미리 말한다 —
+                모르면 워커가 도는 것처럼 보이면서 아무것도 안 한다(그 화면에는 이유가 없다). */}
+            {accountId !== '' && <p className="warn-text">{t('jobs.task.accountTrust')}</p>}
           </div>
         )}
         <div className="field">

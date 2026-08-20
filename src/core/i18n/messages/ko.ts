@@ -828,6 +828,9 @@ export const ko = {
   'jobs.task.account': '계정',
   'jobs.task.accountDefault': '기본 계정',
   'jobs.task.accountHint': '이 Task 의 워커를 띄울 계정입니다 — 고르지 않으면 기본 계정으로 갑니다',
+  // 고른 계정이 이 폴더를 처음 쓰면 CLI 가 신뢰 확인을 띄우고 **거기서 멈춘다** — 앱은 그것을
+  // 모르고 노드는 도는 모양 그대로라, 미리 말해 두지 않으면 왜 아무 일도 없는지 알 길이 없다
+  'jobs.task.accountTrust': '이 계정으로 이 폴더를 처음 쓰면 세션 탭에 폴더 신뢰 확인이 뜹니다 — 승인해야 워커가 일을 시작합니다',
   'jobs.task.validate': '완료를 검증할 실행 구성',
   'jobs.task.validateNone': '검증 없음',
   'jobs.task.review': '다른 에이전트가 검토',
