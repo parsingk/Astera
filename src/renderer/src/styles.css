@@ -1236,8 +1236,17 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    --line 은 토큰 정의가 이미 이 용도를 적어 두었다("rail, sidebar, and region dividers") — 새
    색을 만들 것이 없고, 사이드바 자신의 오른쪽 경계가 쓰는 것과 같은 선이다 */
 .jobs-run { border-bottom: 1px solid var(--line); }
-.jobs-run-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px 0; cursor: pointer; }
-.jobs-run-head:hover { background: rgba(255, 255, 255, 0.04); }
+/* Run 의 제목 띠. **바탕을 상시로 깐다** — 검은 경계선 하나로는 Run 이 몇 개 쌓였을 때 어디서
+   끊기는지 읽히지 않았다(어두운 패널 위의 검정은 구분선보다 그림자로 읽힌다). 선을 더 진하게 하는
+   길은 이미 끝(검정)이라, 대신 각 Run 이 제목 띠로 시작하게 만든다 — 세로를 한 픽셀도 더 쓰지
+   않는다(아래 padding 7px 은 .jobs-bar 의 margin-top 에서 옮겨 온 것이다).
+   --elevated 인 이유: --surface-hover(#1f1f25)는 --panel(#1a1a1e)과 차이가 5 밖에 안 되고, 이
+   사이드바에서 --elevated 가 패널 위에 떠 보인다는 것은 도는 줄(.jobs-task)이 이미 보여 주고 있다.
+   전폭이라 띠로 읽히고, 안쪽의 줄(inset + radius)과는 모양으로 갈린다 */
+.jobs-run-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px 7px; background: var(--elevated); cursor: pointer; }
+/* hover 를 값으로 적는 이유: 반투명 흰색을 얹으면 이제 뒤가 --panel 이 아니라 --elevated 라
+   composite 결과가 바탕보다 어두워져 눌리는 느낌이 거꾸로 된다. 기본 button:hover 와 같은 값이다 */
+.jobs-run-head:hover { background: #2a2a31; }
 .jobs-caret { flex: none; width: 9px; font-size: 10px; color: var(--text-faint); }
 .jobs-objective { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 560; }
 /* 끝난 Run 은 물러난다 — 목록이 길어질수록 눈이 가야 하는 것은 아직 도는 쪽이다. 실패한 Run 은
@@ -1246,7 +1255,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* 아이콘 하나와 숫자 하나 — 헤더의 묶음 표시와 아래 한 줄이 같은 모양을 쓴다 */
 .jobs-count { flex: none; display: inline-flex; align-items: center; gap: 3px; color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
 /* 띠 — Task 하나가 칸 하나다. 접힌 Run 은 이것만 남으므로 아래 여백을 조금 더 준다 */
-.jobs-bar { display: flex; gap: 2px; height: 6px; margin: 7px 10px 8px; }
+.jobs-bar { display: flex; gap: 2px; height: 6px; margin: 0 10px 8px; }
 .jobs-run.collapsed .jobs-bar { margin-bottom: 10px; }
 .jobs-seg { flex: 1; border-radius: 2px; }
 .jobs-rows { display: flex; flex-direction: column; gap: 4px; padding: 0 10px 8px; }
