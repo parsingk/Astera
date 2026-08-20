@@ -180,6 +180,22 @@ export function JobsView({
                 <RunIcon kind={kind} label={t(RUN_KIND_KEY[kind])} />
                 {kind === 'running' && running > 0 ? <span>{running}</span> : null}
               </span>
+              {/* 상세 창으로 가는 입구. **제목 줄에 있는 이유는 접기 때문이다** — 아래 한 줄은
+                  접으면 사라지는데, 접기는 세로를 아끼는 장치이지 유일한 문을 잠그는 장치가 아니다
+                  (같은 판단을 Gate 줄이 이미 하고 있다). 그리고 Run 이 쌓여 접어 두게 될 때가
+                  상세 창이 가장 필요한 때다.
+                  stopPropagation: 이 줄 자체가 접기·펴기라서, 없으면 창을 열면서 동시에 접는다 */}
+              <button
+                className="jobs-more"
+                title={t('jobs.detail.open')}
+                aria-label={t('jobs.detail.open')}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onOpenRun(run.id)
+                }}
+              >
+                ›
+              </button>
             </div>
             {/* 띠 — Task 하나가 칸 하나다. **클릭 대상이 아니다**: 6px 은 정확히 누를 수 없고,
                 누를 수 있어 보이면 누르고 아무 일도 없는 자리가 된다. 제목은 title 로만 붙는다 */}
@@ -256,14 +272,6 @@ export function JobsView({
                     <span>{n}</span>
                   </span>
                 ))}
-                <button
-                  className="jobs-more"
-                  title={t('jobs.detail.open')}
-                  aria-label={t('jobs.detail.open')}
-                  onClick={() => onOpenRun(run.id)}
-                >
-                  ›
-                </button>
               </div>
             )}
           </div>
