@@ -3,7 +3,9 @@
    직접 지정한다(core/theme/themes.ts 의 HANGUL). generic sans-serif 에 맡기면 Chromium 버전에 따라
    결과가 달라진다.
    font-display: block — 로컬 파일이라 즉시 로드되지만, 라틴이 한 프레임 폴백으로 보였다 바뀌는 것을 막는다.
-   라이선스 전문은 resources/font-licenses/ 로 함께 배포된다(OFL 1.1 의 의무). */
+   라이선스 전문은 resources/font-licenses/ 로 함께 배포된다(OFL 1.1 의 의무).
+   서브셋을 만들지 않는다 — OFL 1.1 의 Reserved Font Name 조항 때문에 수정본은 원래 이름을 쓸 수 없고,
+   이름이 바뀌면 위 font-family 가 해결되지 않는다. */
 @font-face {
   font-family: 'Geist';
   src: url('./assets/fonts/Geist/Geist-Regular.woff2') format('woff2');
@@ -22,6 +24,13 @@
   font-family: 'Geist';
   src: url('./assets/fonts/Geist/Geist-SemiBold.woff2') format('woff2');
   font-weight: 600;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('./assets/fonts/Geist/Geist-Bold.woff2') format('woff2');
+  font-weight: 700;
   font-style: normal;
   font-display: block;
 }
@@ -47,9 +56,23 @@
   font-display: block;
 }
 @font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('./assets/fonts/IBMPlexSans/IBMPlexSans-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
   font-family: 'IBM Plex Mono';
   src: url('./assets/fonts/IBMPlexMono/IBMPlexMono-Regular.woff2') format('woff2');
   font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('./assets/fonts/IBMPlexMono/IBMPlexMono-SemiBold.woff2') format('woff2');
+  font-weight: 600;
   font-style: normal;
   font-display: block;
 }

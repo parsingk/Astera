@@ -13,6 +13,10 @@ files:
   # (skillsPath = process.resourcesPath/skills when packaged). Keeping it out of the asar avoids
   # shipping the same document twice.
   - '!resources/skills/**'
+  # font-licenses also ships through extraResources below (as font-licenses/); nothing in the app reads
+  # this asar copy, it exists only to satisfy OFL 1.1's distribution requirement. Same reasoning as
+  # resources/skills above — keeping it out of the asar avoids shipping the same document twice.
+  - '!resources/font-licenses/**'
 asarUnpack:
   - '**/node_modules/node-pty/**'
 extraResources:
