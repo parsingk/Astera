@@ -81,7 +81,7 @@ export function TaskIcon({
  *
  *  판정 자체는 core 에 있다 — 렌더러에 두면 이 질문의 답이 화면마다 한 벌씩 생기고, 도는 개수가
  *  정확히 그렇게 두 화면에 복사되어 똑같이 틀렸다. */
-export const glyphOf = (task: JobTask): { key: MessageKey; still: boolean } =>
+const glyphOf = (task: JobTask): { key: MessageKey; still: boolean } =>
   isStoppedWorker(task)
     ? { key: 'jobs.state.dispatchedStopped', still: true }
     : { key: STATE_KEY[task.status], still: false }

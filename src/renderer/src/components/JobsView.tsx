@@ -4,7 +4,7 @@ import type { MessageKey } from '../../../core/i18n'
 import { formatElapsed } from '../../../core/orchestration/elapsed'
 import { runningCount } from '../../../core/orchestration/running'
 import { useI18n } from '../i18n/I18nProvider'
-import { glyphOf, RunIcon, STATE_KEY, STATUS_COLOR, TaskGlyph, TaskIcon } from './JobIcons'
+import { RunIcon, STATE_KEY, STATUS_COLOR, TaskGlyph, TaskIcon } from './JobIcons'
 import type { RunIconKind } from './JobIcons'
 
 /** Run 헤더 글리프의 툴팁. 끝난·실패·막힘은 줄의 글리프와 같은 모양이고 같은 뜻이라 같은 문구를 쓴다.
@@ -198,14 +198,19 @@ export function JobsView({
               </button>
             </div>
             {/* 띠 — Task 하나가 칸 하나다. **클릭 대상이 아니다**: 6px 은 정확히 누를 수 없고,
-                누를 수 있어 보이면 누르고 아무 일도 없는 자리가 된다. 제목은 title 로만 붙는다 */}
+                누를 수 있어 보이면 누르고 아무 일도 없는 자리가 된다.
+                **툴팁은 제목뿐이다.** 한때 상태 문구를 붙여 `제목 — 끝났다` 처럼 적었는데, 그
+                문구들은 글리프를 처음 보는 사람에게 아이콘을 가르치려고 문장으로 쓴 것이라
+                (`jobs.state.*`) 제목 뒤에 이어 붙으면 길고 어색하다. 이 칸이 답해야 하는 질문은
+                "이게 어느 Task 인가" 하나이고, 어떤 일인지는 칸의 색이 말한다 — 이 화면의 규칙
+                그대로다. 상태를 말로 읽어야 하는 자리에는 글리프가 자기 툴팁을 갖고 있다 */}
             <div className="jobs-bar">
               {run.tasks.map((task) => (
                 <span
                   key={task.id}
                   className="jobs-seg"
                   style={{ background: segColor(task.status) }}
-                  title={`${task.title} — ${t(glyphOf(task).key)}`}
+                  title={task.title}
                 />
               ))}
             </div>
