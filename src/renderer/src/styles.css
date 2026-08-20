@@ -1522,6 +1522,8 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* ---------- file editor ---------- */
 .file-editor { flex: 1; min-height: 0; overflow: hidden; }
 .file-editor .cm-editor { height: 100%; }
+/* oneDark 의 색은 유지하고 배경만 테마를 따라간다 — 확장을 재구성하면 되돌리기 이력이 사라진다 */
+.file-editor .cm-editor, .file-editor .cm-gutters { background: var(--md-code-bg); }
 .file-editor .cm-scroller { font-family: Consolas, 'Courier New', monospace; font-size: 13px; }
 
 /* ---------- markdown split (toolbar + editor/preview split) ---------- */

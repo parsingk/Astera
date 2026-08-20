@@ -2,8 +2,10 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import { xtermThemeOf } from '../../../core/theme/apply'
 import { pinCursorBlinkOff } from '../lib/cursorBlink'
 import { useTerminalFont } from '../lib/terminalFont'
+import { useTheme } from '../lib/theme'
 
 /** Run output body. The header and the actions are owned by BottomPanel.
  *  clearNonce: a counter BottomPanel's clear button increments. */
@@ -15,6 +17,7 @@ export function RunPanel({
   clearNonce: number
 }): React.JSX.Element {
   const { family } = useTerminalFont()
+  const { theme } = useTheme()
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -26,7 +29,7 @@ export function RunPanel({
       fontSize: 13,
       fontFamily: family,
       scrollback: 5000,
-      theme: { background: '#141417', foreground: '#d0d0d6', cursor: '#37b0c4' }
+      theme: xtermThemeOf(theme)
     })
     // If the Run command (or one of its child processes) changes the cursor style and does not restore it, the cursor blinks
     const blinkGuard = pinCursorBlinkOff(term)
@@ -83,6 +86,12 @@ export function RunPanel({
     fitRef.current?.fit()
     window.api.run.resize(projectPath, term.cols, term.rows)
   }, [family, projectPath])
+
+  // 테마가 바뀌면 색만 갈아끼운다. 재생성하면 스크롤백이 날아간다 — 이 파일의 규약이다.
+  useEffect(() => {
+    const term = termRef.current
+    if (term) term.options.theme = xtermThemeOf(theme)
+  }, [theme])
 
   useEffect(() => {
     if (clearNonce > 0) termRef.current?.clear()

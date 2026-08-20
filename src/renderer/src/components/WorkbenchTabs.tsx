@@ -137,7 +137,7 @@ export function WorkbenchTabs({
             focused && tab.tabId === activeTabId
               ? {
                   // 파일 탭에는 계정 색이 없으므로 강조색을 쓴다
-                  boxShadow: `inset 0 -2px 0 ${tab.kind === 'session' ? tab.color : 'var(--accent)'}`
+                  boxShadow: `inset 0 calc(-1 * var(--marker-w)) 0 ${tab.kind === 'session' ? tab.color : 'var(--accent)'}`
                 }
               : undefined
           }

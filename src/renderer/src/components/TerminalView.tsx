@@ -4,11 +4,13 @@ import '@xterm/xterm/css/xterm.css'
 import type { RollStateEvent, SchedStateEvent, ScheduleRule, SessionInfo } from '../../../core/types'
 import type { MessageKey, MessageParams } from '../../../core/i18n'
 import { nextResize, type Dims } from '../../../core/terminal/resize'
+import { xtermThemeOf } from '../../../core/theme/apply'
 import { fitTerminalToHost } from '../lib/fitTerminal'
 import { pinCursorBlinkOff } from '../lib/cursorBlink'
 import * as sessionBus from '../lib/sessionBus'
 import { useI18n } from '../i18n/I18nProvider'
 import { useTerminalFont } from '../lib/terminalFont'
+import { useTheme } from '../lib/theme'
 
 const fmtTime = (iso?: string): string =>
   iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
@@ -69,6 +71,7 @@ export function TerminalView({
 }): React.JSX.Element {
   const { t } = useI18n()
   const { family } = useTerminalFont()
+  const { theme } = useTheme()
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   // Set by the construction effect so the font effect can reuse its lastSent-guarded sendResize
@@ -90,7 +93,7 @@ export function TerminalView({
       // This is the chain `family` resolves to when the user hasn't configured a font.
       fontFamily: family,
       scrollback: 5000,
-      theme: { background: '#141417', foreground: '#d0d0d6', cursor: '#37b0c4' }
+      theme: xtermThemeOf(theme)
     })
     // If a program run inside the session changes the cursor style and does not restore it, only that tab's cursor blinks
     const blinkGuard = pinCursorBlinkOff(term)
@@ -233,6 +236,12 @@ export function TerminalView({
     fitTerminalToHost(term, host)
     sendResizeRef.current?.()
   }, [family, session.id])
+
+  // 테마가 바뀌면 색만 갈아끼운다. 재생성하면 스크롤백이 날아간다 — 이 파일의 규약이다.
+  useEffect(() => {
+    const term = termRef.current
+    if (term) term.options.theme = xtermThemeOf(theme)
+  }, [theme])
 
   // When this tab becomes active (including keyboard switching and a tab click), focus the terminal so typing works right away
   useEffect(() => {

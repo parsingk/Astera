@@ -2,8 +2,10 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import { xtermThemeOf } from '../../../core/theme/apply'
 import { pinCursorBlinkOff } from '../lib/cursorBlink'
 import { useTerminalFont } from '../lib/terminalFont'
+import { useTheme } from '../lib/theme'
 
 /**
  * Project terminal body. Subscribes to terminal:data, and input goes to the PTY via terminal.write.
@@ -30,6 +32,7 @@ export function TerminalBody({
   active: boolean
 }): React.JSX.Element {
   const { family } = useTerminalFont()
+  const { theme } = useTheme()
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -43,7 +46,7 @@ export function TerminalBody({
       fontSize: 13,
       fontFamily: family,
       scrollback: 5000,
-      theme: { background: '#141417', foreground: '#d0d0d6', cursor: '#37b0c4' }
+      theme: xtermThemeOf(theme)
     })
     // If a program run from the shell changes the cursor style and does not restore it, the cursor blinks (the same reason as in TerminalView)
     const blinkGuard = pinCursorBlinkOff(term)
@@ -96,6 +99,12 @@ export function TerminalBody({
     fitRef.current?.fit()
     window.api.terminal.resize(id, term.cols, term.rows)
   }, [family, id])
+
+  // 테마가 바뀌면 색만 갈아끼운다. 재생성하면 스크롤백이 날아간다 — 이 파일의 규약이다.
+  useEffect(() => {
+    const term = termRef.current
+    if (term) term.options.theme = xtermThemeOf(theme)
+  }, [theme])
 
   // Focus when this tab becomes active (a tab click) — the same shape as TerminalView's active effect.
   // Unlike a session, a terminal has no state such as 'exited', so active is all that has to be checked
