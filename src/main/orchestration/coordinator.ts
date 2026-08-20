@@ -19,6 +19,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { isSamePath } from '../../core/files/tree'
 import type { Provider } from '../../core/providers/meta'
+import type { KnowledgeFiles } from '../../core/knowledge/knowledge'
 
 export interface CoordinatorDeps {
   spawnSession(o: {
@@ -97,7 +98,36 @@ export function buildSpecFile(a: {
    *  same shape as the reporting obligation below: the app assembles the instruction, the worker
    *  cannot edit it out. */
   committing?: boolean
+  /** 이 프로젝트가 자기 결정을 적어 둔 파일들(core/knowledge/knowledge.ts 의 knowledgeFilesFrom).
+   *  없거나 비면 이 절이 아예 붙지 않는다 — 지식이 없는 저장소에서 spec 이 달라지지 않아야 한다.
+   *
+   *  **경로는 상대 경로여야 한다.** 워커는 워크트리에서 돌고 그 cwd 는 프로젝트 폴더가 아니다.
+   *  절대 경로를 받으면 워커가 자기 트리 밖의 문서를 읽어, 자기가 고칠 코드와 다른 트리의 결정을
+   *  본다 — 조용히 어긋나고 결과물에만 나타난다. 상대 경로로 만드는 일은 부르는 쪽(startWorker)이
+   *  한다. */
+  knowledge?: KnowledgeFiles
 }): string {
+  // 커밋·보고 의무보다 앞에 둔다 — 그 둘은 일이 끝난 뒤의 의무이고 이것은 시작하기 전에 읽을
+  // 것이다. spec 본문 뒤인 이유: 무엇을 하는 일인지 읽은 다음에야 "그 결정이 어디 있는지"가
+  // 쓸모를 갖는다.
+  // 본문을 싣지 않고 경로만 싣는다 — 파일은 저장소에 이미 있고 에이전트에게는 파일 도구가 있다.
+  // 본문을 박으면 spec 이 커지고 그 파일이 바뀌는 순간 낡는다.
+  const knowledgeSection =
+    a.knowledge && a.knowledge.paths.length > 0
+      ? `
+---
+## Project knowledge (assembled by the app — do not delete)
+
+This repository records its own decisions and architecture notes in the files below. Read the ones
+that touch your task **before** you change anything: they say which alternatives were already
+rejected and why, and reopening a closed decision is work that gets thrown away.
+
+Paths are relative to the directory you are working in.
+
+${a.knowledge.paths.map((p) => `  ${p}`).join('\n')}
+${a.knowledge.more > 0 ? `\n  … and ${a.knowledge.more} more file(s) in those directories.\n` : ''}`
+      : ''
+
   // Inserted before the reporting obligation, not after — a worker that reports first and commits
   // second can still end its turn (the spec never told it not to) between the two, leaving the
   // report and the commit racing each other for no reason. Requiring the commit first removes that
@@ -123,7 +153,7 @@ Commit before you report below.
   return `# ${a.title}
 
 ${a.spec}
-${commitObligation}
+${knowledgeSection}${commitObligation}
 ---
 ## Reporting obligation (assembled by the app — do not delete)
 

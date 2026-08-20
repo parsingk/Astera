@@ -138,6 +138,60 @@ describe('buildSpecFile', () => {
       expect(out).toContain('worker_done')
     }
   })
+  // 지식이 없는 저장소에서 spec 이 조금이라도 달라지면, 이 기능이 없던 때의 동작을 바꾼 것이다 —
+  // 그 비교가 이 절의 유일한 회귀 방어다
+  it('지식이 없으면 spec 이 한 글자도 달라지지 않는다', () => {
+    const base = buildSpecFile({ title: 'T', spec: 'S', taskId: 'tsk_1', dispatchId: 'dsp_1' })
+    const empty = buildSpecFile({
+      title: 'T',
+      spec: 'S',
+      taskId: 'tsk_1',
+      dispatchId: 'dsp_1',
+      knowledge: { paths: [], more: 0 }
+    })
+    expect(empty).toBe(base)
+  })
+
+  it('지식이 있으면 상대 경로를 목록으로 적는다', () => {
+    const out = buildSpecFile({
+      title: 'T',
+      spec: 'S',
+      taskId: 'tsk_1',
+      dispatchId: 'dsp_1',
+      knowledge: { paths: ['knowledge/decisions/ADR-001-x.md', 'docs/adr/002.md'], more: 0 }
+    })
+    expect(out).toContain('knowledge/decisions/ADR-001-x.md')
+    expect(out).toContain('docs/adr/002.md')
+    // 워커가 지워 낼 수 없는 글이라는 표시 — 다른 두 절과 같은 문구다
+    expect(out).toContain('assembled by the app — do not delete')
+  })
+
+  // 자리가 뜻을 정한다: 무엇을 하는 일인지 읽은 다음에 "이 프로젝트의 결정은 여기 있다"가 와야
+  // 쓸모가 있고, 커밋·보고 의무보다는 앞이어야 한다
+  it('spec 본문 뒤, 커밋 의무 앞에 온다', () => {
+    const out = buildSpecFile({
+      title: 'T',
+      spec: 'SPEC_BODY',
+      taskId: 'tsk_1',
+      dispatchId: 'dsp_1',
+      committing: true,
+      knowledge: { paths: ['knowledge/a.md'], more: 0 }
+    })
+    expect(out.indexOf('SPEC_BODY')).toBeLessThan(out.indexOf('knowledge/a.md'))
+    expect(out.indexOf('knowledge/a.md')).toBeLessThan(out.indexOf('Commit obligation'))
+  })
+
+  // 조용히 자르면 그 목록이 "이게 전부"로 읽힌다
+  it('잘렸으면 남은 개수를 적는다', () => {
+    const out = buildSpecFile({
+      title: 'T',
+      spec: 'S',
+      taskId: 'tsk_1',
+      dispatchId: 'dsp_1',
+      knowledge: { paths: ['knowledge/a.md'], more: 12 }
+    })
+    expect(out).toContain('12')
+  })
 })
 
 describe('buildReviewSpecFile', () => {
