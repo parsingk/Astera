@@ -88,3 +88,36 @@ export function menuPlacement(
   const side = above > below ? 'above' : 'below'
   return { side, maxHeight: Math.max(0, side === 'above' ? above : below) }
 }
+
+/** Which edge of the trigger the menu is pinned to, and the width it has to fit into. Same shape as
+ *  MenuPlacement: `maxWidth` is null when the menu fits as it is. */
+export interface MenuAlignment {
+  align: 'left' | 'right'
+  maxWidth: number | null
+}
+
+/**
+ * Picks the trigger edge the dropdown hangs from, on the same principle as menuPlacement().
+ *
+ * The menu is wider than its trigger whenever the list is — `.sel-menu` is `width: max-content` up to
+ * a cap, deliberately, so a long entry can be read. Pinned to the trigger's left edge it then grows
+ * rightward, and a trigger near a right edge pushes the box outside: the terminal font pickers are
+ * 140px wide at the right end of a settings row, so their menu ran past the modal and the samples were
+ * sliced mid-glyph at its border. Left stays the default for the same reason below does in the vertical
+ * axis — the menu should not move out from under the pointer unless it has to.
+ *
+ * No gap on this axis: the menu lines up flush with the trigger's edge, unlike the 4px it keeps above
+ * or below.
+ */
+export function menuAlignment(
+  trigger: { left: number; right: number },
+  clip: { left: number; right: number },
+  menuWidth: number
+): MenuAlignment {
+  const toRight = clip.right - trigger.left
+  const toLeft = trigger.right - clip.left
+  if (menuWidth <= toRight) return { align: 'left', maxWidth: null }
+  if (menuWidth <= toLeft) return { align: 'right', maxWidth: null }
+  const align = toLeft > toRight ? 'right' : 'left'
+  return { align, maxWidth: Math.max(0, align === 'right' ? toLeft : toRight) }
+}

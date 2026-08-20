@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { groupRowsOf, menuPlacement, nextCursor, type SelectItem } from './select'
+import { groupRowsOf, menuAlignment, menuPlacement, nextCursor, type SelectItem } from './select'
 
 const it_ = (value: string, group?: string): SelectItem => ({ value, label: value, group })
 
@@ -120,5 +120,39 @@ describe('menuPlacement', () => {
     // 잘림 상자가 트리거만큼 얕은 극단 — 음수 max-height 는 CSS 에서 무효값이라 렌더가 깨진다
     expect(menuPlacement({ top: 300, bottom: 320 }, { top: 300, bottom: 320 }, 240, 4))
       .toEqual({ side: 'below', maxHeight: 0 })
+  })
+})
+
+describe('menuAlignment', () => {
+  // 설정 모달의 실제 좌표: 폰트 셀렉트는 행 오른쪽 끝에 140px 로 붙어 있고, 그 안쪽 스크롤 패널이
+  // 잘림 상자다. 메뉴는 max-content 로 자라기 때문에 트리거보다 훨씬 넓어질 수 있다.
+  const clip = { left: 432, right: 868 }
+  const trigger = { left: 686, right: 826 }
+
+  it('오른쪽에 자리가 있으면 왼쪽 정렬을 유지한다', () => {
+    expect(menuAlignment(trigger, clip, 140)).toEqual({ align: 'left', maxWidth: null })
+  })
+
+  it('오른쪽이 부족하고 왼쪽이 넉넉하면 오른쪽 정렬로 뒤집는다', () => {
+    // 실제 버그: 오른쪽 여유 182px, 왼쪽 여유 394px, 메뉴 320px — 상자가 모달 밖으로 나갔다
+    expect(menuAlignment(trigger, clip, 320)).toEqual({ align: 'right', maxWidth: null })
+  })
+
+  it('메뉴 폭이 오른쪽 여유와 정확히 같으면 왼쪽 정렬을 유지한다', () => {
+    expect(menuAlignment(trigger, clip, 182)).toEqual({ align: 'left', maxWidth: null })
+  })
+
+  it('양쪽 다 부족하면 더 넓은 쪽으로 붙이고 그 여유만큼 폭을 자른다', () => {
+    expect(menuAlignment(trigger, clip, 420)).toEqual({ align: 'right', maxWidth: 394 })
+  })
+
+  it('오른쪽이 더 넓으면 부족해도 왼쪽 정렬을 고른다', () => {
+    // 트리거가 잘림 상자 왼쪽에 붙어 있는 배치 — 오른쪽 여유 436, 왼쪽 여유 140
+    expect(menuAlignment({ left: 432, right: 572 }, clip, 500)).toEqual({ align: 'left', maxWidth: 436 })
+  })
+
+  it('양쪽 여유가 음수인 자리에서도 폭은 0 아래로 내려가지 않는다', () => {
+    expect(menuAlignment({ left: 300, right: 320 }, { left: 320, right: 300 }, 240))
+      .toEqual({ align: 'left', maxWidth: 0 })
   })
 })

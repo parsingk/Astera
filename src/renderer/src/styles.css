@@ -693,9 +693,8 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
      this, and losing it truncated long entries — run-config names, JDK paths, remote branch names — in the
      one place the user opened the list to read them. Never narrower than the trigger, and capped so a long
      entry cannot run the menu off the window; past the cap .sel-value ellipsises as before.
-     Horizontally there is still no edge flipping: these live in modals and left-aligned toolbars, so the
-     menu grows into free space. Vertically it does flip — see .sel-menu.above below.
-     max-height is duplicated as MENU_MAX_H in Select.tsx, which needs the number to decide the side. */
+     Both caps are duplicated in Select.tsx (MENU_MAX_H, menuMaxW), which needs the numbers to decide
+     which side and which edge the menu opens from — see .sel-menu.above and .sel-menu.right below. */
   min-width: 100%;
   width: max-content;
   max-width: min(420px, 70vw);
@@ -716,6 +715,11 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    select sitting at the bottom of a scrolling panel (the terminal font pickers, last rows of the
    settings General tab) opened its 240px menu into 20px of room and showed 22px of it. */
 .sel-menu.above { top: auto; bottom: calc(100% + 4px); }
+/* Hangs from the trigger's right edge instead, when growing rightward would take the box outside the
+   clip — menuAlignment() decides. The menu is wider than its trigger whenever the list is (width:
+   max-content above), and the terminal font pickers are 140px wide at the right end of a settings row,
+   so theirs ran past the modal and its border sliced the samples mid-glyph. */
+.sel-menu.right { left: auto; right: 0; }
 @keyframes sel-in { from { opacity: 0; transform: translateY(-2px); } }
 @media (prefers-reduced-motion: reduce) {
   .sel-menu { animation: none; }

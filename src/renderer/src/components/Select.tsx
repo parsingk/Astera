@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
-  groupRowsOf, menuPlacement, nextCursor, type MenuPlacement, type SelectItem
+  groupRowsOf, menuAlignment, menuPlacement, nextCursor,
+  type MenuAlignment, type MenuPlacement, type SelectItem
 } from '../../../core/ui/select'
 import { useI18n } from '../i18n/I18nProvider'
 
@@ -33,21 +34,30 @@ const MENU_GAP = 4
 /** .sel-menu's own max-height. Needed here because the side decision depends on how tall the menu can
  *  get, and the CSS cap is the answer for any list longer than the cap. */
 const MENU_MAX_H = 240
+/** .sel-menu's own max-width, `min(420px, 70vw)`. Same reason as MENU_MAX_H, and it has to be read at
+ *  measure time because the viewport half of it moves. */
+const menuMaxW = (): number => Math.min(420, window.innerWidth * 0.7)
 
 /** The box the menu has to stay inside: every scrolling or clipping ancestor intersected with the
  *  window. Both kinds have to count — the settings modal clips with `overflow: hidden` while the panel
  *  inside it scrolls with `overflow-y: auto`, and the tighter of the two is what the user sees. */
-function clipBoxOf(el: HTMLElement): { top: number; bottom: number } {
+function clipBoxOf(el: HTMLElement): { top: number; bottom: number; left: number; right: number } {
   let top = 0
   let bottom = window.innerHeight
+  let left = 0
+  let right = window.innerWidth
   for (let p = el.parentElement; p; p = p.parentElement) {
-    const overflowY = getComputedStyle(p).overflowY
-    if (overflowY === 'visible') continue
+    const style = getComputedStyle(p)
+    // Either axis being non-visible clips both: a box with `overflow-y: auto` and no overflow-x of its
+    // own still computes overflow-x to auto, so it cuts sideways as well.
+    if (style.overflowY === 'visible' && style.overflowX === 'visible') continue
     const box = p.getBoundingClientRect()
     top = Math.max(top, box.top)
     bottom = Math.min(bottom, box.bottom)
+    left = Math.max(left, box.left)
+    right = Math.min(right, box.right)
   }
-  return { top, bottom }
+  return { top, bottom, left, right }
 }
 
 /**
@@ -88,7 +98,12 @@ export function Select({
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLUListElement>(null)
-  const [placement, setPlacement] = useState<MenuPlacement>({ side: 'below', maxHeight: null })
+  const [box, setBox] = useState<MenuPlacement & MenuAlignment>({
+    side: 'below',
+    maxHeight: null,
+    align: 'left',
+    maxWidth: null
+  })
 
   const selected = items.find((it) => it.value === value) ?? null
   const rows = groupRowsOf(items)
@@ -105,7 +120,8 @@ export function Select({
     return () => document.removeEventListener('mousedown', onDocDown)
   }, [open])
 
-  /** Which side to open on, measured after the menu is in the DOM but before the browser paints it —
+  /** Which side and which edge to open from, measured after the menu is in the DOM but before the
+   *  browser paints it —
    *  useLayoutEffect, not useEffect, or the first frame shows the menu below and it jumps.
    *
    *  Measured from scrollHeight rather than the rendered height: the rendered one is already capped
@@ -119,10 +135,23 @@ export function Select({
       const trigger = triggerRef.current
       const menu = menuRef.current
       if (!trigger || !menu) return
-      const need = Math.min(menu.scrollHeight, MENU_MAX_H)
-      const next = menuPlacement(trigger.getBoundingClientRect(), clipBoxOf(trigger), need, MENU_GAP)
-      setPlacement((prev) =>
-        prev.side === next.side && prev.maxHeight === next.maxHeight ? prev : next
+      const rect = trigger.getBoundingClientRect()
+      const clip = clipBoxOf(trigger)
+      // offsetWidth - clientWidth is the gutter scrollWidth leaves out: the 1px border on each side
+      // (box-sizing is border-box app-wide) plus the vertical scrollbar, which a list past the height
+      // cap always has. Measured on the reported case: 297 + 12 = the 309 the menu actually renders at,
+      // where scrollWidth alone would have understated it by the scrollbar and let a menu 10px too wide
+      // pass as fitting.
+      const gutter = menu.offsetWidth - menu.clientWidth
+      const next = {
+        ...menuPlacement(rect, clip, Math.min(menu.scrollHeight, MENU_MAX_H), MENU_GAP),
+        ...menuAlignment(rect, clip, Math.min(menu.scrollWidth + gutter, menuMaxW()))
+      }
+      setBox((prev) =>
+        prev.side === next.side && prev.maxHeight === next.maxHeight &&
+        prev.align === next.align && prev.maxWidth === next.maxWidth
+          ? prev
+          : next
       )
     }
     measure()
@@ -196,8 +225,13 @@ export function Select({
       {open && (
         <ul
           ref={menuRef}
-          className={placement.side === 'above' ? 'sel-menu above' : 'sel-menu'}
-          style={placement.maxHeight === null ? undefined : { maxHeight: placement.maxHeight }}
+          className={
+            'sel-menu' + (box.side === 'above' ? ' above' : '') + (box.align === 'right' ? ' right' : '')
+          }
+          style={{
+            ...(box.maxHeight === null ? null : { maxHeight: box.maxHeight }),
+            ...(box.maxWidth === null ? null : { maxWidth: box.maxWidth })
+          }}
           role="listbox"
         >
           {rows.map((row) =>
