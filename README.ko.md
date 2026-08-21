@@ -16,51 +16,58 @@
 
 </div>
 
-Astera는 책상 앞에 없을 때에도 에이전트 세션을 대신 돌립니다. 새벽 3시에 시작하도록 예약해 두면 그
-시간에 알아서 시작합니다. 어떤 세션이든 사용량 한도에 걸리면 — 예약된 세션이든 아니든 — Astera가
-트랜스크립트에서 리셋 시각을 읽어내고, 다음 계정으로 전환한 뒤 *같은* 작업을 이어갑니다. 턴이
-끝났을 때와 한도에 걸렸을 때는 Slack이 알려줍니다. 세션들은 한 창 안에 나란히 놓이고 각자 자기
-git worktree에 격리됩니다. 그리고 열두 단계짜리 일이라도 단계마다 손으로 지시할 필요가 없습니다 —
-작업과 그 의존 관계를 그려 두면 Astera가 직접 그래프를 따라 내려가고, 원한다면 한 에이전트가 다른
-세션들을 띄워 작업을 넘긴 뒤 함께 설치되는 CLI로 보고가 올 때까지 기다리게 할 수도 있습니다.
+Astera는 오래 걸리는 Claude Code와 Codex 작업을 위한 데스크톱 워크벤치입니다. 자리를 비운 동안에도
+여러 세션을 계속 진행할 수 있습니다. 예약한 시각에 세션을 시작하고, 사용량 한도에 걸리면 다음
+계정으로 전환해 같은 작업을 이어갑니다. 병렬 세션은 각자의 git worktree에서 격리되며, Slack으로
+휴대폰에서도 진행 상황을 확인하고 응답할 수 있습니다. 작업에 의존 관계가 있다면 Job으로 구성해 두
+벤더에 걸쳐 조율하고, 결과를 확인하며, 사람이 판단해야 할 지점에서 멈출 수 있습니다.
 
 > **상태:** Windows·macOS·Linux를 지원합니다. `claude`와 `codex` CLI를 구동하는 방식이므로, 설치된
 > CLI가 할 수 있는 만큼만 할 수 있습니다.
 
+## 오래 걸리는 에이전트 작업을 위해
+
+- **세션을 지켜보지 않아도 됩니다.** 지정한 시각에 작업을 시작하고, 턴 완료나 사용량 한도 도달을
+  Slack으로 알림 받으며, 작업 흐름을 잃지 않고 다음 계정에서 이어갑니다.
+- **체크아웃을 공유하지 않고 병렬로 작업합니다.** Claude Code와 Codex 세션을 한 창에서 관리하면서,
+  필요하면 각 세션을 별도의 git worktree에서 실행할 수 있습니다.
+- **여러 단계의 작업을 조율합니다.** 의존 관계를 Job으로 모델링하고, 준비된 Task를 어느 벤더에서든
+  실행하며, 빌드·테스트·리뷰·사람의 판단을 완료 조건으로 둘 수 있습니다.
+
 ## 설치
 
-**[Releases](https://github.com/parsingk/Astera/releases/latest)** 에서 최신 릴리스를 받아
-실행하세요 — Windows는 `astera-<version>-setup.exe`, macOS는 `astera-<version>-universal.dmg`,
-Linux는 `astera-<version>-x86_64.AppImage` 또는 `astera-<version>-amd64.deb` 입니다. Windows에서는
-이후 앱이 스스로 업데이트하며, 내려받기 전에 물어봅니다.
+**[Releases](https://github.com/parsingk/Astera/releases/latest)** 에서 최신 릴리스를 내려받아
+실행합니다. Windows는 `astera-<version>-setup.exe`, macOS는 `astera-<version>-universal.dmg`,
+Linux는 `astera-<version>-x86_64.AppImage` 또는 `astera-<version>-amd64.deb`를 사용합니다.
+Windows에서는 이후 업데이트를 자동으로 확인하고, 내려받기 전에 묻습니다.
 
-> **macOS 빌드는 아직 공증(notarize)되지 않았고**, 그 때문에 두 가지 불편이 있습니다. Gatekeeper가
-> 첫 실행을 막으므로, 앱을 Applications로 옮긴 뒤 macOS가 붙여 둔 격리 플래그를 지워 주세요.
+> **macOS 빌드는 아직 공증(notarize)되지 않았습니다.** 따라서 Gatekeeper가 첫 실행을 막을 수 있습니다.
+> 앱을 Applications로 옮긴 뒤 macOS가 붙인 격리 플래그를 지워 주세요.
 >
 > ```bash
 > xattr -cr /Applications/Astera.app
 > ```
 >
-> "인터넷에서 다운로드됨" 표시만 제거하는 명령이며, 그 표시가 유일한 걸림돌입니다 — 앱 자체는
-> (ad-hoc) 서명되어 있으므로 다른 것은 바뀌지 않습니다. 클릭이 편하다면 시스템 설정 →
-> **개인정보 보호 및 보안** → **확인 없이 열기** 도 됩니다. Control-클릭 → **열기** 는 macOS 15
-> (Sequoia)에서 없어져 더 이상 동작하지 않습니다.
+> 이 명령은 "인터넷에서 다운로드됨" 표시만 제거합니다. 그 표시가 유일한 실행 차단 요인이며, 앱은
+> ad-hoc 서명 상태로 유지됩니다. 클릭으로 처리하고 싶다면 시스템 설정 → **개인정보 보호 및 보안** →
+> **확인 없이 열기**를 사용해도 됩니다. Control-클릭 → **열기** 방식은 macOS 15 (Sequoia)에서
+> 없어져 더 이상 동작하지 않습니다.
 >
 > 그리고 공증 전까지는 자동 업데이트가 꺼져 있어, 새 버전이 나오면 dmg를 다시 받아야 합니다.
 > Windows에서는 첫 실행 때 SmartScreen 경고가 뜰 수 있습니다 — **추가 정보 → 실행** 을 누르세요.
 >
 > SignPath Foundation 오픈소스 프로그램(Windows)과 Apple Developer ID(macOS)를 통한 서명을
 > 준비하고 있습니다 — 누가 무엇에 서명하는지는 [코드 서명 정책](docs/code-signing.md), 구체적인
-> 절차는 [docs/releasing.md](docs/releasing.md)를 보세요. Linux 빌드는 서명하지 않습니다. 그 배포
-> 경로에서는 그것이 통상적인 방식입니다.
+> 절차는 [docs/releasing.md](docs/releasing.md)를 보세요. Linux 빌드는 서명하지 않습니다. Linux
+> 배포 환경에서는 일반적인 방식입니다.
 
-> **Linux에서는** 두 파일 모두 받은 그대로는 실행되지 않습니다. AppImage에는 실행 권한을 주세요.
+> **Linux에서는** 두 파일 모두 다운로드만으로는 사용할 수 없습니다. AppImage에는 실행 권한을 주세요.
 >
 > ```bash
 > chmod +x astera-<version>-x86_64.AppImage
 > ```
 >
-> deb는 `dpkg -i` 말고 apt로 설치해야 의존성이 함께 딸려 옵니다.
+> deb는 `dpkg -i` 대신 apt로 설치해야 의존성도 함께 설치됩니다.
 >
 > ```bash
 > sudo apt install ./astera-<version>-amd64.deb
@@ -77,38 +84,39 @@ Linux는 `astera-<version>-x86_64.AppImage` 또는 `astera-<version>-amd64.deb` 
 
 ## 무엇을 하는 앱인가
 
-**세션**
+**프로젝트 작업 공간**
 - 여러 개의 `claude` / `codex` 세션을 한 창에서 탭과 분할 창으로
 - 프로젝트별 터미널
 
 **에디터와 단축키**
 - 키 하나로 탐색기를 켜고 끕니다 — `Ctrl`/`Cmd`+`Shift`+`E`가 파일 트리와 Run 툴바, Run 콘솔을
   여닫고 페인 배치는 그대로 둡니다
-- 탭 줄은 페인마다 하나이고 두 종류의 탭을 함께 담습니다. 파일이 그것을 고치고 있는 세션 옆에
-  놓이고, 분할하면 둘을 나란히 보며, `Ctrl`+`Tab`이 활성 페인의 줄을 넘나듭니다
-- 텍스트 상자가 아닌 진짜 에디터입니다. CodeMirror 기반으로 TypeScript·JavaScript·Python·Go·
-  Rust·C/C++·Java·PHP·SQL·HTML·CSS·Markdown·JSON·YAML·XML 문법 강조를 지원하고, 탭으로 여러
-  파일을 엽니다
+- 각 페인에는 파일 탭과 세션 탭을 함께 담는 탭 표시줄이 하나씩 있습니다. 파일을 수정하는 세션은
+  그 파일 옆에 둘 수 있고, 분할 화면에서는 둘을 나란히 보며, `Ctrl`+`Tab`으로 활성 페인의 탭을
+  순환합니다
+- 단순 텍스트 상자가 아닌 CodeMirror 기반 편집기입니다. TypeScript·JavaScript·Python·Go·Rust·
+  C/C++·Java·PHP·SQL·HTML·CSS·Markdown·JSON·YAML·XML 문법 강조를 지원하며, 여러 파일을 탭으로
+  열 수 있습니다
 - **마크다운은 나란히 볼 수 있습니다:** 마크다운 파일은 에디터·분할·프리뷰 중 하나로 열리고
   `Ctrl`/`Cmd`+`Shift`+`V`가 셋을 순환합니다. 분할에서는 양쪽 스크롤이 서로를 따라갑니다
-- 항목마다 git 상태(추가·수정·삭제·충돌)가 표시되는 파일 트리, 그리고 생성·이름 변경·이동·복사·
-  삭제·탐색기(Finder)에서 열기
+- 항목마다 git 상태(추가·수정·삭제·충돌)를 표시하는 파일 트리와 생성·이름 변경·이동·복사·삭제·
+  Finder/Explorer에서 보기
 - **로컬 히스토리:** 삭제하기 전에 스냅샷을 남기므로, 에이전트가 정리해 버린 것도 직접 지운 것도
   되살릴 수 있습니다. 30일간, 프로젝트당 최대 200 MB 보관
 - 모든 단축키는 설정에서 다시 지정할 수 있고, 기본값은 macOS에서 `Cmd`, 그 외에서 `Ctrl`입니다 —
   창 분할, 분할된 창 사이 포커스 이동, 세션 순회, 파일 탭 닫기
 
 **실행 구성**
-- 실행 구성에는 종류가 있습니다 — Shell·npm·Node.js·Gradle·Maven·cargo·go·Python·pytest·
-  Docker Compose·Dockerfile·.NET — 그리고 그 종류에 실제로 있는 항목만 담습니다
-- 명령은 실행할 때 조립됩니다. Gradle 래퍼, 락파일이 가리키는 패키지 매니저, 셸에 맞는 인용은
-  칸에 적어 넣는 것이 아니라 그때 정해집니다
-- 프로젝트의 빌드 파일을 읽으므로 npm 스크립트는 그대로 구성으로 올라오고, Gradle·Maven 프로젝트에는
-  표준 태스크와 골이 준비됩니다. 자동으로 찾은 것은 기울임꼴로 보이다가, 손대는 순간 내 구성으로
+- 실행 구성은 Shell·npm·Node.js·Gradle·Maven·cargo·go·Python·pytest·Docker Compose·Dockerfile·
+  .NET 유형을 지원하며, 유형별로 필요한 항목만 입력합니다
+- 명령은 실행할 때 조합됩니다. Gradle Wrapper, 락파일이 가리키는 패키지 매니저, 셸에 맞는 인용은
+  입력란에 직접 적는 대신 실행 시점에 결정됩니다
+- 프로젝트의 빌드 파일을 읽어 npm 스크립트를 실행 구성으로 가져오고, Gradle·Maven 프로젝트에는 표준
+  태스크와 골을 준비합니다. 자동으로 찾은 구성은 기울임꼴로 표시되며, 수정하는 순간 내 구성으로
   저장됩니다
 
 **계정**
-- 벤더별로 여러 계정을 두고, 각 계정을 자체 `CLAUDE_CONFIG_DIR` / `CODEX_HOME`으로 격리
+- 벤더별로 여러 계정을 둘 수 있으며, 각 계정은 자체 `CLAUDE_CONFIG_DIR` / `CODEX_HOME`으로 격리
 - **계정 롤링:** 세션이 사용량 한도에 걸리면 Astera가 트랜스크립트에서 이를 감지하고 리셋 시각을
   계산한 뒤, 다음 계정에서 작업을 이어갑니다
 - 새 계정의 설정을 기본 계정에서 가져오기(선택) — `settings.json`, MCP 서버 목록, 그리고 `skills`·
@@ -118,7 +126,7 @@ Linux는 `astera-<version>-x86_64.AppImage` 또는 `astera-<version>-amd64.deb` 
 <img src="assets/rolling.gif" width="820" alt="다이어그램: 실행 중인 세션이 주간 한도에 걸리고, Astera가 트랜스크립트에서 리셋 시각을 읽어 다음 계정으로 전환하며, 같은 대화가 그대로 이어진다" />
 </div>
 
-**예약 실행과 원격 조작**
+**예약 실행과 Slack 원격 제어**
 - 지정한 시각에 세션이 시작되도록 예약
 - 턴이 끝나거나 한도에 걸릴 때 Slack 알림, 그리고 Slack에서 보낸 답장을 세션으로 다시 전달 —
   휴대폰으로 진행 상황을 지켜볼 수 있습니다
@@ -127,7 +135,7 @@ Linux는 `astera-<version>-x86_64.AppImage` 또는 `astera-<version>-amd64.deb` 
 <img src="assets/schedule.gif" width="820" alt="다이어그램: 03:00에 예약된 세션이 스스로 시작해 남겨 둔 명령을 실행하고, 끝나면 Slack이 결과를 알린다" />
 </div>
 
-**모양새**
+**테마와 모양**
 - 테마 여섯 — Vega, Orion, Umbra, Aurora, Antares, Quasar. 카드마다 자기 팔레트로 스스로를 그리므로
   이름이 아니라 눈으로 고릅니다
 - 테마는 색만이 아닙니다: 모서리 반경, 그림자, UI 서체, 행 밀도가 함께 따라옵니다 — Quasar는 Umbra보다
@@ -142,26 +150,26 @@ Linux는 `astera-<version>-x86_64.AppImage` 또는 `astera-<version>-amd64.deb` 
 
 ## Jobs
 
-이 기능은 설정의 **에이전트 오케스트레이션**을 켜야 작동합니다.  
-Jobs 사이드바가 함께 따라오고, 거기서 새 작업을 만들어 작업을 적고 시작하면 됩니다.
+Jobs는 선택 기능입니다. 설정에서 **에이전트 오케스트레이션**을 켜면 Jobs 사이드바가 나타납니다.
+Task의 이름과 의존 관계, 동시 실행 수를 정한 뒤 Job을 시작하면 됩니다.
 
-Job 하나는 서로 의존하는 작업들의 묶음이고, 두 벤더에 걸쳐 돌아갑니다 :
+Job은 Claude와 Codex에서 실행할 수 있는 Task의 의존성 그래프입니다. 실행 방식은 두 가지입니다.
 
-- **Astera가 관리합니다.** 앱에서 Job을 그려 두면 — 작업, 무엇이 무엇을 기다리는지, 동시에 몇
-  개까지 — 그대로 굴러갑니다: 의존성이 끝난 작업만 시작하고, 뒤따르는 작업이 시작되기 전에 끝난
-  worktree들을 되돌려 합치며, 충돌은 사람에게 떠넘기지 않고 에이전트에게 맡깁니다
-- **에이전트가 몰아가게 할 수도 있습니다.** 코디네이터 세션이 워커 세션들에 작업을 배분하고 —
-  *다른* 벤더의 워커까지 — 완료·의존성·질문·에스컬레이션을 기다립니다. 워커는 함께 설치되는
-  `astera` CLI로 보고합니다
+- **Astera가 조율합니다.** 앱에서 Task와 의존 관계, 동시 실행 수를 정하면 의존성이 끝난 Task만
+  시작합니다. 다음 Task를 시작하기 전에 완료된 worktree를 프로젝트 폴더로 병합하고, 충돌은
+  사람에게 넘기지 않고 에이전트에게 맡깁니다
+- **에이전트가 조율할 수도 있습니다.** 코디네이터 세션이 워커 세션에 작업을 배분하고, *다른*
+  벤더의 워커까지 포함해 완료·의존성·질문·에스컬레이션을 기다립니다. 워커는 함께 설치되는
+  `astera` CLI로 결과를 보고합니다
 
 두 방식 모두:
 
-- **작업의 완료를 보고가 아니라 증명으로 받을 수 있습니다.** 프로젝트의 실행 구성을 하나 붙여 두면
-  그 빌드나 테스트가 `0`으로 끝났을 때에만 그 작업이 완료됩니다
-- 종료 코드가 가려 주지 못하는 것 — 요청한 대로 되었는가 — 은 *다른* 벤더의 리뷰어에게 맡길 수
-  있고, 작업은 그 판정을 기다립니다
+- **작업 완료를 보고만 믿지 않고 검증할 수 있습니다.** 프로젝트의 실행 구성을 하나 연결하면, 그
+  빌드나 테스트가 `0`으로 끝났을 때에만 Task가 완료됩니다
+- 종료 코드만으로 판단하기 어려운 것, 즉 요청한 대로 구현됐는지는 *다른* 벤더의 리뷰어에게 맡길 수
+  있으며, Task는 그 판정을 기다립니다
 - 각 작업을 자기 git worktree에서 실행해 병렬 워커가 서로 충돌하지 않게 할 수 있습니다
-- 스스로 정할 수 없는 결정은 거기서 멈춰 서서 사람을 기다립니다
+- 자동으로 결정할 수 없는 부분에서는 멈추고 사람의 답을 기다립니다
 - 이렇게 띄운 에이전트에게는 프로젝트가 자기 결정을 적어 둔 자리(`knowledge/`, `docs/adr/`,
   `docs/decisions/` 등)를 함께 알려 줍니다
 
@@ -188,7 +196,7 @@ astera help
 
 ## 소스에서 빌드하기
 
-빌드에는 **Node.js 22.12+** 와, `node-pty` 네이티브 재빌드(`electron-builder install-app-deps`)를 위한
+빌드에는 **Node.js 22.12+**와 `node-pty` 네이티브 재빌드(`electron-builder install-app-deps`)를 위한
 C++ 툴체인이 필요합니다. Windows는 **Visual Studio Build Tools (C++)**, macOS는
 **Xcode Command Line Tools** (`xcode-select --install`), Linux는 **build-essential**과 **python3**
 입니다 — Linux에는 node-pty 프리빌드가 없어 항상 직접 컴파일합니다.
@@ -223,9 +231,9 @@ npm run dist:linux # Linux AppImage + deb
 이슈와 풀 리퀘스트를 환영합니다. 시작하기 전에 알아 두면 좋은 것들:
 
 - PR을 열기 전에 `npm run typecheck`, `npm test`, `npm run build`를 실행하세요 — CI가 확인하는 것들입니다.
-- 동작이 바뀌는 변경에는 테스트가 함께 오기를 기대합니다. 롤링 테스트를 건드릴 때 알아 둘 규칙이
-  하나 있습니다. 사용량 한도 문구는 의도적으로 `+`로 쪼개 놓았습니다. Astera가 세션 출력에서 그
-  문구를 감시하기 때문입니다 — [CONTRIBUTING](.github/CONTRIBUTING.md)을 보세요.
+- 동작을 바꾸는 변경에는 테스트도 함께 포함해야 합니다. 롤링 테스트를 수정할 때 알아 둘 규칙이
+  하나 있습니다. 사용량 한도 문구는 Astera가 세션 출력에서 감시하므로 의도적으로 `+`로 나눠 두었습니다
+  — [CONTRIBUTING](.github/CONTRIBUTING.md)을 보세요.
 - 버그 신고에는 앱 버전, OS 버전, 그리고 계정 롤링과 관련된 문제라면 `rolling.log`의 해당 부분을
   함께 적어 주시면 훨씬 다루기 쉽습니다 — Windows는 `%APPDATA%\astera\rolling.log`, macOS는
   `~/Library/Application Support/astera/rolling.log` 입니다.

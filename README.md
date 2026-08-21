@@ -16,16 +16,23 @@
 
 </div>
 
-Astera runs your agent sessions when you are not at the desk. Schedule one to start at 3am, and it
-starts without you. When any session hits a usage limit — scheduled or not — Astera reads the reset
-time out of the transcript, switches to your next account, and resumes the *same* work. Slack tells
-you when a turn lands or a limit hits. Sessions sit side by side in one window, each isolated in its
-own git worktree. And work that takes a dozen steps does not need you to dispatch each one: draw the
-tasks and what waits on what, and Astera works down the graph itself — or let one agent start the
-others, hand them tasks, and block until they report through a bundled CLI.
+Astera is a desktop workbench for long-running Claude Code and Codex work. Keep several sessions
+moving without staying at the desk: schedule them, switch accounts when a usage limit lands, and
+resume the same work. Concurrent sessions stay isolated in their own git worktrees, and Slack keeps
+the loop open from your phone. When the work has dependencies, a Job coordinates tasks across both
+vendors, checks the result, and waits when a human decision is needed.
 
 > **Status:** Windows, macOS and Linux. It drives the `claude` and `codex` CLIs, so it is only as
 > capable as whichever of those you have installed.
+
+## Built for long-running agent work
+
+- **Leave sessions unattended.** Start work at a scheduled time, get notified in Slack when a turn
+  ends or a limit is reached, and continue on the next configured account without losing the thread.
+- **Run work in parallel without sharing a checkout.** Keep Claude Code and Codex sessions together
+  in one window while each session can work from its own git worktree.
+- **Coordinate work that has more than one step.** Model dependencies as a Job, run ready tasks on
+  either vendor, and use builds, tests, reviews, and human decisions as completion gates.
 
 ## Install
 
@@ -79,7 +86,7 @@ You will also need:
 
 ## What it does
 
-**Sessions**
+**Project workspaces**
 - Many `claude` / `codex` sessions in one window, as tabs and as split panes
 - A terminal per project
 
@@ -143,12 +150,10 @@ You will also need:
 
 ## Jobs
 
-All of this is behind one setting: **Agent orchestration**, in settings. Turn it on and the Jobs
-sidebar comes with it — a job you draw there needs nothing else: name the tasks, say what waits on
-what, and start it.
+Jobs is opt-in. Turn on **Agent orchestration** in settings to add the Jobs sidebar, then name the
+tasks, define their dependencies and concurrency, and start the job.
 
-A job is a set of tasks with dependencies between them, run across both vendors. There are two ways
-to run one:
+A job is a dependency graph whose tasks can run under either vendor. There are two ways to run one:
 
 - **Astera drives it.** Draw the job in the app — the tasks, what waits on what, how many may run
   at once — and it goes: each task starts once its dependencies are done, and the finished worktrees
