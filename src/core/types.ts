@@ -381,6 +381,20 @@ export interface JobRun {
    *  병합 단계도(deps 가 같은 폴더에서 돌아 pendingMerges 가 비었다) 지나지 않아 **앱의 어떤
    *  기계도 알아채지 못한다.** 이 화면 말고는 아무도 그것을 말해 주지 않는다. */
   sharesProjectFolder: boolean
+  /** 이 Run 이 예약 템플릿이면 그 규칙 — Run 이 들고 있는 값을 그대로 옮긴 것이다. 있으면 이
+   *  줄은 정의이고 스스로 돌지 않는다. 사이드바가 "매일 09:00" 을 적는 근거다. */
+  schedule?: ScheduleRule
+  /** 다음 발화 시각(epoch ms). 템플릿만 갖는다.
+   *
+   *  **저장된 값이 아니다** — ticker 가 메모리에 들고 있는 값이라 주입으로 들어온다
+   *  (snapshotFor 의 nextFireOf). 렌더러가 스스로 계산할 수 없는 이유는 interval 이다:
+   *  "무장 시각 + N분" 이라 그 앵커를 렌더러가 모른다. */
+  nextFireAt?: number
+  /** 이 템플릿의 회차들, 최신순. 접힌 회차는 OrchSnapshot.runs 의 최상위에서 빠진다.
+   *
+   *  **예약이 아닌 Run 에는 이 칸이 아예 없다.** 빈 배열을 달면 sameSnapshot 의 문자열이 이유
+   *  없이 길어지고, 화면에서 "회차가 아직 없는 템플릿"과 "템플릿이 아님"이 같아 보인다. */
+  children?: JobRun[]
   tasks: JobTask[]
 }
 export interface OrchSnapshot {

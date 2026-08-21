@@ -11,7 +11,7 @@
 // "types": ["node"], which loosens the guard that keeps Node globals out of the renderer typecheck.
 import { isSamePath } from '../files/tree'
 import { runsWorkingIn } from './integrate'
-import type { JobTask, OrchSnapshot, RunOutcome, WorktreeInfo } from '../types'
+import type { JobRun, JobTask, OrchSnapshot, RunOutcome, WorktreeInfo } from '../types'
 import { repoPathOf } from '../worktrees/repo'
 import type { OrchState } from './state'
 import { eventCountFor } from './timeline'
@@ -177,17 +177,21 @@ function jobTaskOf(
  *  isKnownSession is injected because session ownership belongs to main (core.sessions.list()) and
  *  this layer is framework-free. worktrees is injected for the same reason — the registry is
  *  core.worktrees, and runsForProject needs it to map a worktree-rooted Run.cwd back to its
- *  repository (see there). */
+ *  repository (see there). nextFireOf is injected for the same reason again — a template's next
+ *  fire time lives in the ticker's memory, not in OrchState. */
 export function snapshotFor(
   state: OrchState,
   projectPath: string,
   isKnownSession: (sessionId: string) => boolean,
-  worktrees: WorktreeInfo[]
+  worktrees: WorktreeInfo[],
+  /** 예약 템플릿의 다음 발화 시각(epoch ms), 없으면 null. **상태에 없는 값이라 주입된다** —
+   *  무장은 ticker 의 메모리에 있다(src/main/ipc.ts). isKnownSession 과 같은 갈래다. */
+  nextFireOf: (runId: string) => number | null
 ): OrchSnapshot {
   // 폴더 사실을 **한 번만** 센다 — Run 마다 다시 세면 같은 순회가 Run 수만큼 돌고, 그보다 나쁜
   // 것은 두 값(폴더 수준과 Run 수준)이 다른 순간의 상태를 볼 수 있다는 것이다.
   const workingHere = runsWorkingIn(state, projectPath)
-  const runs = runsForProject(state, projectPath, worktrees).map((run) => {
+  const runs = runsForProject(state, projectPath, worktrees).map((run): JobRun => {
     const { done, total } = progressOf(state, run.id)
     return {
       id: run.id,
@@ -203,6 +207,10 @@ export function snapshotFor(
       eventCount: eventCountFor(state, run.id),
       // 내가 그 폴더에 있고, 나 말고도 있는가. 크기만 보면 남의 얽힘까지 내 줄에 그리게 된다
       sharesProjectFolder: workingHere.has(run.id) && workingHere.size > 1,
+      ...(run.schedule ? { schedule: run.schedule } : {}),
+      ...(run.schedule && nextFireOf(run.id) !== null
+        ? { nextFireAt: nextFireOf(run.id) as number }
+        : {}),
       // createdAt ascending — the order the orchestrator declared the Tasks in, which is the order
       // the dependency chain reads in. Task.deps is not a total order, so it cannot sort this.
       tasks: state.tasks
@@ -211,10 +219,29 @@ export function snapshotFor(
         .map((t) => jobTaskOf(state, t, isKnownSession))
     }
   })
+  // 회차를 템플릿 밑으로 접는다. **최상위에서 빠지지만 사라지지는 않는다** — 이 프로젝트에 부모가
+  // 없는 회차(템플릿의 cwd 가 바뀌었거나 손으로 고친 파일)는 그대로 최상위에 남는다: 삼키면
+  // 목록에서 사라지고, 그 Run 을 지울 문도 없어진다.
+  const byId = new Map(runs.map((r) => [r.id, r]))
+  const parented = new Set<string>()
+  for (const r of runs) {
+    const parentId = state.runs.find((x) => x.id === r.id)?.templateId
+    if (parentId === undefined) continue
+    const parent = byId.get(parentId)
+    if (!parent) continue
+    // runsForProject 가 이미 최신순으로 정렬해 두었으므로 순서대로 밀어 넣으면 최신순이 된다
+    parent.children = [...(parent.children ?? []), r]
+    parented.add(r.id)
+  }
+  const top = runs.filter((r) => !parented.has(r.id))
   // 도는 Run 이 먼저. runsForProject 가 이미 최신순으로 정렬해 두었고 Array.prototype.sort 는
   // 안정 정렬이라, 같은 그룹 안의 최신순은 이 단계에서 보존된다.
+  //
+  // 템플릿은 언제나 이 앞 묶음에 들어간다 — outcomeOf 가 배치되지 않는 Task 를 terminal 로 보지
+  // 않아 늘 'running' 을 준다. 우연이지만 원하는 자리다: 예약은 지금 도는 것과 함께 위에 있어야
+  // 하고, 아래로 내려가면 회차가 쌓일수록 정의를 찾기 어려워진다.
   return {
-    runs: runs.sort((a, b) => {
+    runs: top.sort((a, b) => {
       const ar = a.outcome === 'running'
       const br = b.outcome === 'running'
       return ar === br ? 0 : ar ? -1 : 1

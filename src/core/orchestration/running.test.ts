@@ -52,13 +52,13 @@ const stopped = (d: Dispatch): Dispatch => ({
 /** 상태를 투영까지 돌려 그 Run 의 JobTask 들을 얻는다 */
 const countOf = (tasks: Task[], dispatches: Dispatch[]): number => {
   const s: OrchState = { ...emptyState(), runs: [run('r1')], tasks, dispatches }
-  return runningCount(snapshotFor(s, PROJ, () => true, []).runs[0].tasks)
+  return runningCount(snapshotFor(s, PROJ, () => true, [], () => null).runs[0].tasks)
 }
 
 /** 상태를 투영까지 돌려 그 Run 의 JobTask 하나를 얻는다 */
 const taskOf = (tasks: Task[], dispatches: Dispatch[], id: string) => {
   const s: OrchState = { ...emptyState(), runs: [run('r1')], tasks, dispatches }
-  const t = snapshotFor(s, PROJ, () => true, []).runs[0].tasks.find((x) => x.id === id)
+  const t = snapshotFor(s, PROJ, () => true, [], () => null).runs[0].tasks.find((x) => x.id === id)
   if (!t) throw new Error(`no such task in snapshot: ${id}`)
   return t
 }

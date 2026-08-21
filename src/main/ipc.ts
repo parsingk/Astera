@@ -199,7 +199,8 @@ export function registerIpc(
     // The registry lives here, and runsForProject maps each Run.cwd through it — a Run created inside
     // a registered worktree is owned by the worktree's repository, which is the same mapping this
     // handler applies to the path the renderer sent (repoPathOf, in orch.list below).
-    return snapshotFor(state, projectPath, (id) => known.has(id), core.worktrees.list())
+    // 무장은 Task 9 의 ticker 가 들고 있다. 지금은 아직 그 Map 이 없으므로 늘 null 이다.
+    return snapshotFor(state, projectPath, (id) => known.has(id), core.worktrees.list(), () => null)
   }
   const pushOrchState = (state: OrchState): void => {
     if (orchProject === null) return // the renderer has not asked for a project, or it unwatched
