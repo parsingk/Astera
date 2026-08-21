@@ -665,6 +665,32 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .field input[type="text"], .field textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 6px; border-radius: var(--radius); }
 /* A field entered line by line, like environment variables — monospaced so the values line up visibly, and resizable in height by the user */
 .field textarea { font-family: var(--mono); font-size: 12px; resize: vertical; }
+/* NewRunModal's concurrency box. The palette rule above matches input[type="text"] only, so this one
+   field fell through to the browser default — a white box with a light-grey native spinner — next to a
+   text input and a Select that both follow the theme. The resting look is taken from .sel-trigger, the
+   control standard it sits directly under, rather than from .field input[type="text"]: the trigger is
+   what the eye compares it with in this modal. Width is not 100% because the value is one or two digits.
+   The native spin button goes because it cannot be themed: it takes no colour of its own, and Chromium
+   draws it from the light scheme no matter what — measured with color-scheme: dark set on the input and
+   then on the root, and it stayed a light-grey widget both times. Left in, it would have been the one
+   piece of this field still not following the theme, on the hover where it appears. The cost is
+   click-to-step; the arrow keys still step the value and the box is a digit or two wide to type in. */
+.jobs-concurrency {
+  width: 80px;
+  height: var(--sel-h);
+  padding: 0 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  font-family: var(--sans);
+  font-size: 12px;
+  transition: border-color var(--ease), box-shadow var(--ease);
+}
+.jobs-concurrency::-webkit-inner-spin-button { appearance: none; }
+/* Same ring-plus-brightened-border as .sel-trigger:focus-visible, on :focus rather than :focus-visible —
+   a text box is focused to be typed in, so there is no pointer-versus-keyboard distinction to make. */
+.jobs-concurrency:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
 .field .modal-hint { margin-top: 4px; display: block; }
 .row { display: flex; align-items: center; gap: 8px; }
 .row.right { justify-content: flex-end; }

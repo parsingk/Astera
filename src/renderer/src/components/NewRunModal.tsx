@@ -96,6 +96,7 @@ export function NewRunModal({
           <label>{t('jobs.new.concurrency')}</label>
           <input
             type="number"
+            className="jobs-concurrency"
             min={1}
             value={concurrency}
             onChange={(e) => {
