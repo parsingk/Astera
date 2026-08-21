@@ -2268,4 +2268,26 @@ describe('run-spawn — 예약 회차', () => {
     const r = await call(deps, 'run-spawn', { run: templateId }, 'worker1')
     expect(r.status).toBe(403)
   })
+
+  it('템플릿을 지우면 그 회차도 함께 지운다', async () => {
+    const { deps, templateId } = await withTemplate()
+    await call(deps, 'run-spawn', { run: templateId })
+    await call(deps, 'run-spawn', { run: templateId })
+    expect(deps.getState().runs).toHaveLength(3)
+    const r = await call(deps, 'run-delete', { id: templateId })
+    expect(r.status).toBe(200)
+    expect(deps.getState().runs).toHaveLength(0)
+  })
+
+  // 정의는 템플릿에 있으므로 회차 하나를 버리는 것은 기록 하나를 버리는 일이다
+  it('회차 하나만 지우면 템플릿과 다른 회차는 남는다', async () => {
+    const { deps, templateId } = await withTemplate()
+    const child = (await call(deps, 'run-spawn', { run: templateId })).body as { id: string }
+    await call(deps, 'run-spawn', { run: templateId })
+    await call(deps, 'run-delete', { id: child.id })
+    const ids = deps.getState().runs.map((x) => x.id)
+    expect(ids).toContain(templateId)
+    expect(ids).not.toContain(child.id)
+    expect(ids).toHaveLength(2)
+  })
 })

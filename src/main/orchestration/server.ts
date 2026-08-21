@@ -349,12 +349,17 @@ export async function handleCommand(
       const id = str(args.id)
       if (!id) return bad('--id is required')
       if (!s.runs.some((r) => r.id === id)) return bad(`unknown run: ${String(id)}`)
+      // **템플릿을 지우면 그 회차도 함께 지운다.** 자식만 남기면 정의가 사라진 회차 기록이
+      // 프로젝트 목록에 떠돌고, 사이드바에서 접을 부모가 없다. 자식 하나만 지우는 것은 그대로
+      // 된다 — 그것은 기록 하나를 버리는 일이고 정의는 템플릿에 있다.
+      const doomed = new Set([id, ...s.runs.filter((r) => r.templateId === id).map((r) => r.id)])
       // 도는 워커가 있으면 거절한다 — reset 이 같은 판정을 한다. 삭제는 되돌릴 수 없으므로 도는
       // 상태에서 다룰 것을 하나 더 만들지 않는다. 세션을 죽이는 일까지 이 명령이 하게 하면, 커밋
       // 안 된 작업을 워크트리에 남긴 워커가 조용히 사라진다.
       const open = s.dispatches.filter((d) => {
         if (d.outcome || d.endedAt) return false
-        return s.tasks.find((t) => t.id === d.taskId)?.runId === id
+        const runId = s.tasks.find((t) => t.id === d.taskId)?.runId
+        return runId !== undefined && doomed.has(runId)
       })
       if (open.length > 0)
         return conflict(
@@ -363,8 +368,8 @@ export async function handleCommand(
       // 백업은 지우기 전에. reset 과 같은 관례이고 같은 이유다 — 되돌릴 수 없는 삭제에 .bak 하나는
       // 값이 싸다. 실패해도 삭제를 막지 않는다(deps.backup 이 스스로 접는다).
       if (deps.backup) await deps.backup()
-      const before = s.tasks.filter((t) => t.runId === id).length
-      await deps.setState(deleteRuns(deps.getState(), new Set([id])))
+      const before = s.tasks.filter((t) => doomed.has(t.runId)).length
+      await deps.setState(deleteRuns(deps.getState(), doomed))
       return okBody({ deleted: id, tasks: before })
     }
     // 예약 템플릿의 한 회차를 만든다. **부르는 것은 앱의 ticker 뿐이다**(src/main/ipc.ts) —

@@ -132,6 +132,29 @@ describe('OrchestrationStore', () => {
     expect(store.get().runs).toHaveLength(1)
   })
 
+  // 예약이 30일 뒤 조용히 사라지면 안 된다. 템플릿의 Task 는 배치되지 않아 terminal 이 되지
+  // 않으므로 지금은 저절로 남지만, 그 성질이 우연히 깨지는 것을 여기서 잡는다
+  it('30일이 지나도 예약 템플릿은 남기고 그 회차만 지운다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const old = new Date(Date.now() - RUN_TTL_MS - 1000).toISOString()
+    const s: OrchState = {
+      ...emptyState(),
+      runs: [
+        { id: 'tmpl', objective: '매일', cwd: 'D:/p', createdAt: old, schedule: { kind: 'daily', time: '09:00' } },
+        { id: 'kid', objective: '매일', cwd: 'D:/p', createdAt: old, templateId: 'tmpl', autoDispatch: true }
+      ],
+      tasks: [
+        { id: 't_tmpl', runId: 'tmpl', title: 'A', spec: 's', deps: [], status: 'ready', consecutiveFailures: 0, createdAt: old, updatedAt: old },
+        { id: 't_kid', runId: 'kid', title: 'A', spec: 's', deps: [], status: 'completed', consecutiveFailures: 0, createdAt: old, updatedAt: old }
+      ]
+    }
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    const r = await store.load()
+    expect(r.pruned).toBe(1)
+    expect(store.get().runs.map((x) => x.id)).toEqual(['tmpl'])
+  })
+
   it('원자 쓰기 — tmp 파일을 남기지 않는다', async () => {
     const file = path.join(dir, 'orchestration.json')
     const store = new OrchestrationStore(file)
