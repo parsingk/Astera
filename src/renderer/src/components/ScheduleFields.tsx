@@ -1,18 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ScheduleConfig, ScheduleRule } from '../../../core/types'
-import { buildScheduleConfig } from '../../../core/scheduler/rule'
 import { useI18n } from '../i18n/I18nProvider'
-import { Select } from './Select'
+import { ScheduleRuleFields } from './ScheduleRuleFields'
 
-type SchedKind = ScheduleRule['kind']
-
-/** Recurring command schedule input (extracted from NewSessionDialog, where it used to live).
- *  The new session modal and the resume modal share it — copy-pasting it makes the two modals'
- *  validation rules drift apart.
- *  This component owns nothing but the input state; assembling, parsing and validity checks are all
- *  delegated to core's buildScheduleConfig — kept inside the .tsx, vitest cannot reach them and the
- *  validation rules would stay outside the tests.
- *  initial is read exactly once, at mount — reapplying it while the user types would revert their input. */
+/** 주기 명령 예약 입력(NewSessionDialog 에서 뽑아낸 것). 새 세션 모달과 이어하기 모달이 나눠 쓴다 —
+ *  복사해 두면 두 모달의 검증 규칙이 갈라진다.
+ *
+ *  **규칙 부분은 ScheduleRuleFields 가 그린다.** Job 예약이 같은 규칙 UI 를 쓰면서 명령 칸만
+ *  필요 없어서 나눴다. 이 컴포넌트가 더하는 것은 명령 한 칸과 "규칙 + 명령" 의 조립뿐이다.
+ *  이 컴포넌트의 공개 인터페이스는 나누기 전과 같다.
+ *  initial 은 마운트 때 한 번만 읽는다 — 타이핑 중에 되먹이면 입력이 되돌아간다. */
 export function ScheduleFields({
   initial,
   onChange
@@ -21,101 +18,22 @@ export function ScheduleFields({
   onChange: (v: ScheduleConfig | null) => void
 }): React.JSX.Element {
   const { t } = useI18n()
-  // Weekday button labels (0 = Sunday) — shares the session.sched.weekday.* catalog with TerminalView
-  const weekdayLabels = [
-    t('session.sched.weekday.sun'),
-    t('session.sched.weekday.mon'),
-    t('session.sched.weekday.tue'),
-    t('session.sched.weekday.wed'),
-    t('session.sched.weekday.thu'),
-    t('session.sched.weekday.fri'),
-    t('session.sched.weekday.sat')
-  ]
-  const [kind, setKind] = useState<SchedKind>(initial?.rule.kind ?? 'interval')
-  const [minutes, setMinutes] = useState(
-    initial?.rule.kind === 'interval' ? String(initial.rule.minutes) : '30'
-  )
-  const [time, setTime] = useState(
-    initial && initial.rule.kind !== 'interval' ? initial.rule.time : '09:00'
-  )
-  const [weekdays, setWeekdays] = useState<number[]>(
-    initial?.rule.kind === 'weekly' ? initial.rule.weekdays : []
-  )
-  const [days, setDays] = useState(
-    initial?.rule.kind === 'monthly' ? initial.rule.days.join(',') : ''
-  )
+  const [rule, setRule] = useState<ScheduleRule | null>(initial?.rule ?? null)
   const [command, setCommand] = useState(initial?.command ?? '')
 
-  // onChange is held in a ref and kept out of the effect deps — this stops the effect from re-running on
-  // every render even when the parent does not wrap it in useCallback
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
 
+  // 규칙이 유효하고 명령이 비어 있지 않을 때만 값이 선다. 판정을 여기서 손으로 쓰지 않는 이유는
+  // core 의 주석과 같다 — UI 가 판정의 사본을 들면 둘이 갈라진다
   useEffect(() => {
-    onChangeRef.current(buildScheduleConfig({ kind, minutes, time, weekdays, days, command }))
-  }, [kind, minutes, time, weekdays, days, command])
+    const trimmed = command.trim()
+    onChangeRef.current(rule && trimmed ? { rule, command: trimmed } : null)
+  }, [rule, command])
 
   return (
     <div className="field sched-field">
-      <div className="row">
-        <Select
-          className="sched-kind"
-          items={[
-            { value: 'interval', label: t('session.new.schedMode.interval') },
-            { value: 'daily', label: t('session.new.schedMode.daily') },
-            { value: 'weekly', label: t('session.new.schedMode.weekly') },
-            { value: 'monthly', label: t('session.new.schedMode.monthly') }
-          ]}
-          value={kind}
-          onChange={(v) => setKind(v as SchedKind)}
-        />
-        {kind === 'interval' && (
-          <>
-            <input
-              type="number"
-              className="sched-minutes"
-              min={1}
-              max={525_600}
-              value={minutes}
-              onChange={(e) => setMinutes(e.target.value)}
-            />
-            <span className="check-note">{t('session.new.schedMinutesUnit')}</span>
-          </>
-        )}
-        {kind === 'monthly' && (
-          <>
-            <input
-              type="text"
-              className="sched-days"
-              placeholder="1,15"
-              value={days}
-              onChange={(e) => setDays(e.target.value)}
-            />
-            <span className="check-note">{t('session.new.schedDaysUnit')}</span>
-          </>
-        )}
-        {kind !== 'interval' && (
-          <input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
-        )}
-      </div>
-      {kind === 'weekly' && (
-        <div className="row sched-weekdays">
-          {weekdayLabels.map((label, d) => (
-            <button
-              key={d}
-              type="button"
-              className={weekdays.includes(d) ? 'weekday on' : 'weekday'}
-              onClick={() =>
-                setWeekdays((prev) =>
-                  prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d].sort((a, b) => a - b)
-                )
-              }
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
+      <ScheduleRuleFields initial={initial?.rule ?? null} onChange={setRule} />
       <input
         type="text"
         value={command}
