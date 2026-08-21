@@ -229,7 +229,7 @@ export function RunDetail({
    *  창을 닫지도 않는다: 다른 버튼을 누르면 지금 쓰던 것을 잃고, 배경을 눌러 창을 닫으면 도는
    *  명령의 결과를 아무도 보지 못한다(이 창을 새로 열지 않는 한 다시 알 길이 없다). */
   const formOpen = authoring || asking !== null || answering !== null || busy !== null
-  /** 띄우기 버튼을 보일 조건 — **둘 다** 참이어야 한다. 한 자리에 모아 두는 것은 둘 중 하나만
+  /** 띄우기 버튼을 보일 조건 — **셋 다** 참이어야 한다. 한 자리에 모아 두는 것은 하나만
    *  보고 고치면 나머지 조건을 깨뜨리기 쉬워서다.
    *
    *  1) 이 Run 의 동시 실행 한도(없으면 DEFAULT_CONCURRENCY, JobRun 의 주석과 같다)가 1 이하다.
@@ -251,8 +251,18 @@ export function RunDetail({
    *     살고 손으로 고쳐질 수 있다). 스케줄러가 이미 내린 판단을 UI 가 다르게 낼 이유가 없다.
    *     버튼을 그대로 두고 실패했을 때 안내로 대신하는 것도 틀렸다 — "로그인된 계정이 없다"는
    *     이 경우 거짓이다(계정은 있을 수 있고, 없는 것은 이 Run 의 provider 다). 원인을 잘못
-   *     말하는 오류 문구는 문구가 없는 것보다 나쁘다. */
-  const canManualStart = (run?.concurrency ?? DEFAULT_CONCURRENCY) <= 1 && run?.provider !== undefined
+   *     말하는 오류 문구는 문구가 없는 것보다 나쁘다.
+   *
+   *  3) 이 Run 이 **예약 템플릿이 아니다.** 템플릿은 자신의 Task 를 돌리지 않는다 — 발화가 만든
+   *     회차가 돈다. `worker-start` 가 이 조합을 거절하므로(server.ts) 버튼을 두면 서버가 반드시
+   *     거절할 동작을 권하는 것이 되고, 무엇보다 그 거절이 없던 동안에는 눌리는 대로 템플릿의
+   *     Task 가 terminal 이 되어 TTL 정리가 예약과 모든 회차를 30일 뒤에 지우는 경로가 열려
+   *     있었다(store.ts). 이 창은 템플릿에서 **Task 를 짜는 자리**이고 돌리는 자리가 아니다.
+   *     회차에서는 그대로 보인다 — 회차는 templateId 를 갖고 schedule 은 갖지 않는다. */
+  const canManualStart =
+    (run?.concurrency ?? DEFAULT_CONCURRENCY) <= 1 &&
+    run?.provider !== undefined &&
+    run.schedule === undefined
   const keyOf = (e: JobEvent): string => `${e.kind}:${e.sourceId}`
   const toggle = (key: string): void =>
     setOpen((prev) => {

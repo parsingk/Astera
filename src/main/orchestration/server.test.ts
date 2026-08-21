@@ -518,6 +518,60 @@ describe('handleCommand — worker-start 사전 검증 (고아 세션 방지)', 
     expect(second.status).toBe(400)
     expect(startWorkerCalls).toBe(1) // 두 번째 시도에서 startWorker가 불리지 않았다
   })
+
+  // 템플릿의 Task 를 배치하면 그것이 terminal 이 되고, 그러면 store.ts 의 TTL 조건이 템플릿에서
+  // 참이 되어 30일 뒤 예약과 모든 회차가 조용히 사라진다. slotsToFill 은 자동 배치만 막는다 —
+  // 이 명령이 사람과 코디네이터가 쓰는 두 번째 문이다.
+  it('예약 템플릿의 Task 로 worker-start 를 부르면 startWorker 를 부르지 않고 거부한다', async () => {
+    let startWorkerCalls = 0
+    const deps = {
+      ...makeDeps(),
+      startWorker: async () => {
+        startWorkerCalls++
+        return { sessionId: 'sessX', cwd: 'D:/p', specPath: 'D:/p/orch/specs/a.md' }
+      }
+    }
+    const run = await call(deps, 'run-create', {
+      objective: '매일 점검',
+      cwd: 'D:/p',
+      provider: 'codex',
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    const r = await call(deps, 'worker-start', {
+      taskId,
+      agent: 'codex',
+      account: 'acc1',
+      worktree: 'current'
+    })
+    expect(r.status).toBe(400)
+    expect(JSON.stringify(r.body)).toContain('template')
+    expect(startWorkerCalls).toBe(0)
+  })
+
+  // 회차는 운영이 되어야 한다(설계 2절) — 위의 거절이 회차까지 막으면 예약은 아무것도 돌리지 못한다
+  it('예약 회차의 Task 는 그대로 배치된다', async () => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', {
+      objective: '매일 점검',
+      cwd: 'D:/p',
+      provider: 'codex',
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    const templateId = (run.body as { id: string }).id
+    await call(deps, 'task-create', { runId: templateId, title: 't', spec: 's' })
+    const child = (await call(deps, 'run-spawn', { run: templateId })).body as { id: string }
+    const copy = deps.getState().tasks.find((t) => t.runId === child.id)!
+    const r = await call(deps, 'worker-start', {
+      taskId: copy.id,
+      agent: 'codex',
+      account: 'acc1',
+      worktree: 'current'
+    })
+    expect(r.status).toBe(200)
+  })
 })
 
 describe('handleCommand — check', () => {

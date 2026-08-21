@@ -522,6 +522,15 @@ export async function handleCommand(
 
       const run = s.runs.find((r) => r.id === task.runId)
       if (!run) return bad(`unknown run for task: ${taskId}`)
+      // **템플릿은 자신의 Task 를 배치하지 않는다.** slotsToFill 이 이미 같은 판단을 하지만 그쪽은
+      // 자동 배치 경로뿐이고, 이 명령은 사람과 코디네이터가 직접 부르는 두 번째 문이다. 여기를
+      // 열어 두면 템플릿의 Task 가 completed 로 끝나고, 그러면 TTL 정리의 조건(`own.length > 0 &&
+      // own.every(terminal)`, store.ts)이 템플릿에서 참이 되어 **30일 뒤 예약과 모든 회차가 조용히
+      // 사라진다** — 설계 10절이 일어나지 않는다고 적어 둔 바로 그것이다.
+      if (run.schedule)
+        return bad(
+          `run ${run.id} is a schedule template — it does not dispatch its own Tasks; its executions do`
+        )
 
       // For a --terminal reuse the server looks up in advance which dispatch actually owned that
       // session (its cwd, provider and accountId) and passes them to the coordinator as arguments —
