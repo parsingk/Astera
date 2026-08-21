@@ -579,6 +579,15 @@ describe('snapshotFor — 예약 템플릿과 회차', () => {
     expect(snap.runs[0].nextFireAt).toBe(1_800_000_000_000)
   })
 
+  // children: [] 이나 nextFireAt: null 도 이 자리를 통과한다 — 없어야 할 칸이 있는지는 'in' 으로만
+  // 알 수 있다. toBeUndefined() 는 생략된 칸과 값이 undefined 인 칸을 구별하지 못한다
+  it('회차가 아직 없고 무장도 없는 템플릿은 두 칸이 아예 없다', () => {
+    const s = withRuns([scheduled('t1', absPath('proj'))])
+    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires)
+    expect('children' in snap.runs[0]).toBe(false)
+    expect('nextFireAt' in snap.runs[0]).toBe(false)
+  })
+
   // 예약이 아닌 Run 에 빈 배열을 달면 sameSnapshot 의 문자열이 이유 없이 길어지고, 화면 쪽에서
   // "회차가 없는 템플릿"과 "템플릿이 아님"을 구별할 수 없다
   it('평범한 Run 에는 children 칸이 없다', () => {
