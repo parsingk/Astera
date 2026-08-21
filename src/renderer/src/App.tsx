@@ -2409,13 +2409,26 @@ export default function App(): React.JSX.Element {
                     const kids = run.children ?? []
                     const tasks = kids.reduce((n, k) => n + k.total, run.total)
                     const events = kids.reduce((n, k) => n + k.eventCount, run.eventCount)
+                    // 정지될 워커 수. **runningCount 를 쓰지 않는다** — 그것은 validating·reviewing
+                    // 까지 세는데 그 둘에는 죽일 세션이 없다(running.ts). 여기서 세야 하는 것은
+                    // "열린 Dispatch 가 있는 Task", 즉 실제로 닫히는 세션의 수다.
+                    const workers = [run, ...kids].reduce(
+                      (n, r) => n + r.tasks.filter((tk) => tk.startedAt !== undefined).length,
+                      0
+                    )
                     const ok = await confirmModal({
                       title: t('jobs.run.delete'),
-                      body: t('jobs.run.deleteBody', {
-                        objective: run.objective,
-                        tasks,
-                        events
-                      }),
+                      // 예약 템플릿을 지우는 것만 워커를 정지시킨다(server.ts 의 run-delete) —
+                      // 되돌릴 수 없는 동작이므로 무엇이 함께 사라지는지 여기서 말한다
+                      body:
+                        t('jobs.run.deleteBody', {
+                          objective: run.objective,
+                          tasks,
+                          events
+                        }) +
+                        (run.schedule && workers > 0
+                          ? '\n\n' + t('jobs.run.deleteStopsWorkers', { workers })
+                          : ''),
                       confirmLabel: t('jobs.run.delete')
                     })
                     if (!ok) return
@@ -2423,7 +2436,15 @@ export default function App(): React.JSX.Element {
                       const reply = await window.api.orch.command(currentProject, 'run-delete', {
                         id: runId
                       })
-                      if (reply.status === 409) toast.error(t('jobs.run.deleteBusy'))
+                      // 409 의 두 갈래를 가른다. **문구로 가르는 이유**: 양쪽 문장이 모두 우리
+                      // server.ts 의 것이고, "멈춰 주세요" 는 붙잡아 둔 세션에 틀린 안내다 —
+                      // 그쪽은 멈추는 것이 아니라 붙잡음을 놓는 것이 답이다.
+                      if (reply.status === 409)
+                        toast.error(
+                          JSON.stringify(reply.body).includes('worker-retain')
+                            ? t('jobs.run.deleteRetained')
+                            : t('jobs.run.deleteBusy')
+                        )
                       else if (reply.status >= 400) toast.error(t('jobs.run.deleteFailed'))
                     } catch {
                       toast.error(t('jobs.run.deleteFailed'))

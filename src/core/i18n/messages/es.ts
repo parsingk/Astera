@@ -746,6 +746,8 @@ export const es: Catalog = {
   'jobs.run.running': 'en curso',
   'jobs.run.delete': 'Eliminar trabajo',
   'jobs.run.deleteBody': 'Se eliminará "{objective}" — junto con {tasks} Task(s) y {events} evento(s), y no se puede deshacer.\n\nLos worktrees y las ramas que creó este trabajo no se tocan (puedes borrarlos desde el panel de worktrees del explorador).',
+  'jobs.run.deleteStopsWorkers': 'Detiene {workers} trabajador(es) en ejecución. El trabajo que esté en un worktree y aún no se haya fusionado en la carpeta del proyecto se perderá.',
+  'jobs.run.deleteRetained': 'Hay una sesión retenida por worker-retain, así que no se puede eliminar — libérala primero',
   'jobs.run.deleteBusy': 'Hay un worker corriendo en este trabajo, así que no se puede eliminar — deténlo primero',
   'jobs.run.deleteFailed': 'No se pudo eliminar el trabajo',
   'jobs.run.sharedFolder': 'carpeta compartida',

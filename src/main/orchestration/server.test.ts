@@ -2345,15 +2345,29 @@ describe('run-spawn — 예약 회차', () => {
     expect(ids).toHaveLength(2)
   })
 
-  it('회차에 도는 Dispatch 가 있으면 템플릿째 지우는 것을 막는다', async () => {
-    const { deps, templateId } = await withTemplate()
-    const child = (await call(deps, 'run-spawn', { run: templateId })).body as { id: string }
-    const withOpenChildDispatch: OrchState = {
+  /** 회차 하나에 열린 Dispatch 를 심는다. retained 를 바꿔 붙잡아 둔 세션도 만든다 */
+  const withRunningChild = async (
+    retained = false
+  ): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    templateId: string
+    childId: string
+    released: string[]
+  }> => {
+    const released: string[] = []
+    const base = await withTemplate()
+    const deps = Object.assign(base.deps, {
+      releaseWorker: async ({ dispatchId }: { dispatchId: string }) => {
+        released.push(dispatchId)
+      }
+    })
+    const child = (await call(deps, 'run-spawn', { run: base.templateId })).body as { id: string }
+    await deps.setState({
       ...deps.getState(),
       tasks: [
         ...deps.getState().tasks,
         {
-          id: 'tsk1',
+          id: 'tsk_live',
           runId: child.id,
           title: 't',
           spec: 's',
@@ -2366,8 +2380,8 @@ describe('run-spawn — 예약 회차', () => {
       ],
       dispatches: [
         {
-          id: 'dsp1',
-          taskId: 'tsk1',
+          id: 'dsp_live',
+          taskId: 'tsk_live',
           provider: 'claude',
           accountId: 'acc1',
           sessionId: 'worker1',
@@ -2375,13 +2389,40 @@ describe('run-spawn — 예약 회차', () => {
           specPath: 'D:/p/spec.md',
           startedAt: NOW,
           workerState: 'ready',
-          retained: false
+          retained
         }
       ]
-    }
-    await deps.setState(withOpenChildDispatch)
+    })
+    return { deps, templateId: base.templateId, childId: child.id, released }
+  }
+
+  // **예약에서는 "먼저 워커를 멈춰라"가 충족될 수 없다** — 템플릿이 계속 새 회차를 띄우므로 멈춘
+  // 자리에 다음 발화가 또 띄운다. 그래서 템플릿 삭제만은 도는 워커를 스스로 정리한다.
+  it('템플릿 삭제는 도는 워커를 정지시키고 전부 지운다', async () => {
+    const { deps, templateId, released } = await withRunningChild()
+    const r = await call(deps, 'run-delete', { id: templateId })
+    expect(r.status).toBe(200)
+    expect(released).toEqual(['dsp_live'])
+    expect(deps.getState().runs).toHaveLength(0)
+  })
+
+  // 붙잡아 둔 세션은 죽이지 않는다 — 사람이 일부러 살려 둔 것이고, 기록만 지우면 그 세션이 고아가
+  // 된다(coordinator.releaseWorker 가 retained 를 건너뛴다). 이것은 풀 수 있는 거절이다
+  it('붙잡아 둔(retained) 워커가 있으면 거절하고 아무것도 지우지 않는다', async () => {
+    const { deps, templateId, released } = await withRunningChild(true)
     const r = await call(deps, 'run-delete', { id: templateId })
     expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toContain('retain')
+    expect(released).toEqual([])
     expect(deps.getState().runs).toHaveLength(2)
   })
+
+  it('예약이 아닌 Run 은 여전히 거절한다 — 그쪽은 멈추면 다시 뜨지 않는다', async () => {
+    const { deps, childId, released } = await withRunningChild()
+    const r = await call(deps, 'run-delete', { id: childId })
+    expect(r.status).toBe(409)
+    expect(released).toEqual([])
+    expect(deps.getState().runs).toHaveLength(2)
+  })
+
 })

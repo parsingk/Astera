@@ -362,10 +362,30 @@ export async function handleCommand(
         const runId = s.tasks.find((t) => t.id === d.taskId)?.runId
         return runId !== undefined && doomed.has(runId)
       })
-      if (open.length > 0)
-        return conflict(
-          `refusing to delete while ${open.length} dispatch(es) are open — stop them first`
-        )
+      if (open.length > 0) {
+        // **예약 템플릿만 스스로 정리한다.** 평범한 Run 에서는 "먼저 워커를 멈춰라"가 지킬 수 있는
+        // 요구다 — 멈추면 다시 뜨지 않는다. 템플릿에서는 그것이 **충족될 수 없는 요구**다: 멈춘
+        // 자리에 다음 발화가 또 워커를 띄우므로, 사람은 예약을 영원히 지울 수 없다(실제로 그렇게
+        // 보고됐다). 그 고리를 끊는 자리가 여기다. 비대칭에는 이 이유가 있고, 그래서 자식 회차를
+        // 직접 지울 때는 아래 옛 거절이 그대로 남는다.
+        const target = s.runs.find((r) => r.id === id)
+        if (!target?.schedule)
+          return conflict(
+            `refusing to delete while ${open.length} dispatch(es) are open — stop them first`
+          )
+        // **붙잡아 둔 세션은 죽이지 않는다.** worker-retain 은 사람이 "이 세션을 살려 둬라"고 말한
+        // 것이고, coordinator.releaseWorker 는 그것을 건너뛴다 — 그러면 기록만 지워져 그 세션이
+        // 고아가 된다(worker-stop 이 같은 이유로 409 를 낸다). 이 거절은 풀 수 있다: worker-release
+        // 로 붙잡음을 놓으면 된다.
+        const retained = open.filter((d) => d.retained)
+        if (retained.length > 0)
+          return conflict(
+            `refusing to delete while ${retained.length} dispatch(es) are held by worker-retain — release them first`
+          )
+        // 순차로 닫는다. releaseWorker 는 세션을 죽이는 부수 효과이고 상태를 쓰지 않는다 — 상태에서
+        // 사라지는 것은 아래 deleteRuns 가 한꺼번에 한다.
+        for (const d of open) await deps.releaseWorker({ dispatchId: d.id })
+      }
       // 백업은 지우기 전에. reset 과 같은 관례이고 같은 이유다 — 되돌릴 수 없는 삭제에 .bak 하나는
       // 값이 싸다. 실패해도 삭제를 막지 않는다(deps.backup 이 스스로 접는다).
       if (deps.backup) await deps.backup()
