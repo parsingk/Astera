@@ -2401,12 +2401,20 @@ export default function App(): React.JSX.Element {
                     // 회차의 휴지통은 눌려도 이 자리에서 조용히 되돌아갔다.
                     const run = orchSnapshot ? findRun(orchSnapshot, runId) : undefined
                     if (!run) return
+                    // **회차를 함께 센다.** `run-delete` 는 템플릿을 지울 때 그 회차도 같은
+                    // 집합으로 지우므로(server.ts), 템플릿 자신의 total·eventCount 만 적으면
+                    // 확인 창의 숫자가 실제로 사라지는 것보다 적다 — 되돌릴 수 없는 동작에서
+                    // 축소해 말하는 것이 가장 나쁜 방향이다. 예약이 아닌 Run 에는 children 이
+                    // 아예 없어 합이 그대로다(JobRun 의 주석).
+                    const kids = run.children ?? []
+                    const tasks = kids.reduce((n, k) => n + k.total, run.total)
+                    const events = kids.reduce((n, k) => n + k.eventCount, run.eventCount)
                     const ok = await confirmModal({
                       title: t('jobs.run.delete'),
                       body: t('jobs.run.deleteBody', {
                         objective: run.objective,
-                        tasks: run.total,
-                        events: run.eventCount
+                        tasks,
+                        events
                       }),
                       confirmLabel: t('jobs.run.delete')
                     })

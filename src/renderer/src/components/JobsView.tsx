@@ -332,6 +332,28 @@ function ScheduleCard({
             ))}
           </div>
         ))}
+      {open && (
+        <div className="jobs-foot">
+          {/* 예약을 물러나게 하는 **유일한 문이다.** schedule 을 나중에 고치는 UI 는 없으므로
+              (`run-update` 계열 명령이 없다) 바꾸려면 템플릿을 지우고 다시 만든다 — 그 "지우고"
+              가 여기다. 그리고 TTL 정리는 템플릿을 절대 건드리지 않으므로(store.ts 의 조건이
+              Task 가 하나도 없는 Run 과 안 끝난 Run 을 둘 다 남긴다) 이 버튼이 없으면 예약은
+              지울 방법이 아예 없다.
+              **회차도 함께 지워진다** — `run-delete` 가 템플릿 id 와 그 회차를 한 집합으로
+              지운다(server.ts). App 의 확인 창이 그 숫자를 합해서 보여 준다.
+              자리와 모양은 RunCard 의 그것과 같고 이유도 같다: 되돌릴 수 없는 동작을 상세 창으로
+              가는 `›` 옆에 두면 둘 다 작은 표적이라 오클릭이 값비싸고, 펼쳤을 때만 보이므로 그
+              예약을 열어 본 사람만 지우게 된다. */}
+          <button
+            className="jobs-delete"
+            title={t('jobs.run.delete')}
+            aria-label={t('jobs.run.delete')}
+            onClick={() => onDeleteRun(run.id)}
+          >
+            <TrashIcon />
+          </button>
+        </div>
+      )}
     </div>
   )
 }
