@@ -32,7 +32,9 @@ at once, pass `--run <run>` explicitly on every command (`task-list` and `check`
 guide documents.** `run-create`'s server-side handler also reads `--provider`, `--concurrency`, and
 `--auto` — none of which appear in its syntax line (4.1) — and `--auto` makes that Run dispatch and
 place its own workers exactly the way a Run the app's Jobs sidebar created does, with no `worker-start`
-from anyone. This guide does not document how to do that on purpose, but nothing at the CLI's own
+from anyone. `--auto` also arms a start gate (`pendingStart`): such a Run holds still until `run-start`
+clears it, which is the app's "Run" button in the job detail window. So a Run made this way does
+nothing at all until that command lands. This guide does not document how to do that on purpose, but nothing at the CLI's own
 argument parser stops you from passing them anyway (it accepts any `--flag value` for any command).
 So "the most recently created Run" (which `task-create` with no `--run` attaches to) can already be
 one of these — whether the app made it that way or a coordinator did — and that is exactly the case

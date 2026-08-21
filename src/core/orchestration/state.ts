@@ -73,6 +73,8 @@ export function createRun(
     provider?: Provider
     concurrency?: number
     autoDispatch?: boolean
+    /** 사용자가 '실행' 을 누르기 전까지 돌지 않게 한다 — Run.pendingStart 의 주석을 보라 */
+    pendingStart?: boolean
     /** 있으면 이 Run 은 템플릿이다 — Run.schedule 의 주석을 보라. 규칙의 유효성은 부르는
      *  쪽(server.ts 의 run-create)이 isValidRule 로 본다, provider·accountId 와 같은 관례다 */
     schedule?: ScheduleRule
@@ -88,7 +90,8 @@ export function createRun(
     ...(a.provider ? { provider: a.provider } : {}),
     ...(a.concurrency !== undefined ? { concurrency: a.concurrency } : {}),
     ...(a.autoDispatch ? { autoDispatch: true } : {}),
-    ...(a.schedule ? { schedule: a.schedule } : {})
+    ...(a.schedule ? { schedule: a.schedule } : {}),
+    ...(a.pendingStart ? { pendingStart: true } : {})
   }
   return ok({ ...s, runs: [...s.runs, run] }, run)
 }
@@ -176,6 +179,24 @@ export function spawnScheduledRun(s: OrchState, templateId: string, now: string)
  */
 export function latestOrdinaryRun(s: OrchState): Run | undefined {
   return [...s.runs].reverse().find((r) => r.schedule === undefined && r.templateId === undefined)
+}
+
+/**
+ * 사람이 '실행' 을 눌렀다 — pendingStart 를 걷는다. 이 커밋의 setState 가 자동 배치 펌프를 깨우고
+ * (src/main/ipc.ts) 그때부터 이 Run 의 ready Task 가 돈다.
+ *
+ * **이미 걷힌 Run 에 다시 불러도 성공이다.** 버튼이 사라지기 전에 두 번 눌릴 수 있고, 그때 사람이
+ * 손쓸 수 없는 실패 문구를 띄우는 것은 이 명령이 하려는 일과 무관하다 — 요청한 끝 상태는 이미
+ * 그것이다. 예약 템플릿에는 이 칸이 없으므로 여기서 따로 거절하지 않아도 아무 일도 일어나지 않는다.
+ */
+export function startRun(s: OrchState, id: string): Res<Run> {
+  const run = s.runs.find((r) => r.id === id)
+  if (!run) return err(`unknown run: ${id}`)
+  if (!run.pendingStart) return ok(s, run)
+  // pendingStart 를 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이 코드베이스는
+  // 해당 없는 칸을 아예 두지 않는 관례다
+  const { pendingStart: _drop, ...started } = run
+  return ok({ ...s, runs: s.runs.map((r) => (r.id === id ? started : r)) }, started)
 }
 
 export function createTask(

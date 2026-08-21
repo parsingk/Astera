@@ -97,6 +97,11 @@ const timeOf = (at: string): string => {
  *  이 컴포넌트에는 테스트가 없다(렌더러에 jsdom 이 없다). 그래서 판정은 전부 core 에 있고 —
  *  이벤트는 orchestration/timeline.ts, 층은 graph.ts, 노드의 좌표는 graphLayout.ts — 여기는 건네받은
  *  것을 그리기만 한다. */
+/** busy 가 담는 값은 노드 동작의 대상 Task id 인데, 실행 버튼에는 대상 Task 가 없다. Task id 와
+ *  겹칠 수 없는 값을 하나 둔다 — id 는 `tsk_` 로 시작하므로(core/orchestration/types.ts 의 newId)
+ *  이 문자열과 같아질 수 없다. UI_CALLER 가 세션 id 와 겹치지 않게 하는 것과 같은 방식이다. */
+const RUN_START = 'run:start'
+
 export function RunDetail({
   run,
   detail,
@@ -336,6 +341,26 @@ export function RunDetail({
     return picked.ok ? picked.accountId : null
   }
 
+  /** 실행. **사이드바로 만든 Run 은 사람이 이것을 누를 때까지 돌지 않는다** — 예전에는 Task 를
+   *  하나 만드는 순간 돌기 시작해서, 나머지를 짜는 동안 첫 Task 의 워커가 이미 일하고 있었다.
+   *  게이트는 Run.pendingStart 이고 이 명령이 그것을 걷는다(server.ts 의 run-start).
+   *
+   *  **버튼은 pendingStart 일 때만 있다** — 코디네이터가 돌리는 Run 에는 그 칸이 없으므로 나타나지
+   *  않는다. 앱이 그쪽 Run 을 함께 돌리면 같은 ready Task 를 두고 경합한다(Run.autoDispatch 주석).
+   *
+   *  실패는 toast 다 — 폼이 없는 단발 액션의 관례(startTask 와 같다). */
+  const startRunNow = async (): Promise<void> => {
+    setBusy(RUN_START)
+    try {
+      const reply = await window.api.orch.command(projectPath, 'run-start', { run: runId })
+      if (reply.status >= 400) toast.error(t('jobs.run.startFailed'))
+    } catch {
+      toast.error(t('jobs.run.startFailed'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   /** 띄우기. ready·pending 에서만 보이고(Graph.node), canManualStart 가 아니면 버튼 자체가 없다.
    *  worktree 는 언제나 'current' 를 명시한다 — 이 버튼이 나오는 것 자체가 이미 한도 1 이하인
    *  Run 으로 좁혀져 있어(canManualStart) worker-start 의 기본값('current')과 결과가 같지만,
@@ -545,6 +570,20 @@ export function RunDetail({
                 <button className="jobs-new" onClick={() => setAuthoring(true)}>
                   + {t('jobs.task.new')}
                 </button>
+                {/* Task 를 다 짜고 누르는 버튼. **Task 가 없으면 잠근다** — 빈 Run 을 시작하면
+                    pendingStart 만 걷히고 아무 일도 일어나지 않아, 눌렀는데 아무 반응이 없는
+                    자리가 된다. 누르면 게이트가 걷히고 이 버튼도 사라진다(run.pendingStart 가
+                    조건이다). */}
+                {run?.pendingStart && (
+                  <button
+                    className="jobs-new primary"
+                    disabled={busy === RUN_START || tasks.length === 0}
+                    title={t('jobs.run.startHint')}
+                    onClick={() => void startRunNow()}
+                  >
+                    {t('jobs.run.start')}
+                  </button>
+                )}
               </div>
             )}
             <Graph

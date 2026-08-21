@@ -549,6 +549,23 @@ const child = (id: string, cwd: string, templateId: string): Run => ({
   createdAt: '2026-08-19T00:00:00.000Z'
 })
 
+describe('snapshotFor — 실행 대기', () => {
+  it('pendingStart 를 그대로 싣고, 없으면 칸도 없다', () => {
+    const waiting = { ...run('r1', absPath('proj')), pendingStart: true }
+    const going = run('r2', absPath('proj'))
+    const snap = snapshotFor(
+      withRuns([waiting, going]),
+      absPath('proj'),
+      anySession,
+      noWorktrees,
+      noFires
+    )
+    const byId = new Map(snap.runs.map((r) => [r.id, r]))
+    expect(byId.get('r1')!.pendingStart).toBe(true)
+    expect('pendingStart' in byId.get('r2')!).toBe(false)
+  })
+})
+
 describe('snapshotFor — 예약 템플릿과 회차', () => {
   it('회차는 템플릿 밑으로 접히고 최상위에서 빠진다', () => {
     const s = withRuns([scheduled('t1', absPath('proj')), child('c1', absPath('proj'), 't1')])

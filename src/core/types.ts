@@ -384,6 +384,9 @@ export interface JobRun {
    *  병합 단계도(deps 가 같은 폴더에서 돌아 pendingMerges 가 비었다) 지나지 않아 **앱의 어떤
    *  기계도 알아채지 못한다.** 이 화면 말고는 아무도 그것을 말해 주지 않는다. */
   sharesProjectFolder: boolean
+  /** 사용자가 아직 '실행' 을 누르지 않았다 — Run 이 들고 있는 값을 그대로 옮긴 것이다.
+   *  상세 창의 실행 버튼과 사이드바의 표시가 이 값으로 판단한다. */
+  pendingStart?: boolean
   /** 이 Run 이 예약 템플릿이면 그 규칙 — Run 이 들고 있는 값을 그대로 옮긴 것이다. 있으면 이
    *  줄은 정의이고 스스로 돌지 않는다. 사이드바가 "매일 09:00" 을 적는 근거다. */
   schedule?: ScheduleRule

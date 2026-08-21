@@ -34,6 +34,18 @@ export interface Run {
    *  worker-start 가 `dispatch already open` 을 받는다. 코디네이터 LLM 에게는 자기 명령이 이유
    *  없이 실패하기 시작하는 일이고, 그것을 어떻게 다룰지는 우리가 통제할 수 없다. */
   autoDispatch?: boolean
+  /** 사용자가 아직 '실행' 을 누르지 않았다. **있으면 이 Run 은 돌지 않는다** — 사이드바로 만든
+   *  Run 은 Task 를 다 짜고 사람이 실행을 눌러야 시작한다(그 전에는 Task 하나를 만드는 순간
+   *  돌기 시작했다).
+   *
+   *  **autoDispatch 를 끄는 것으로는 이것을 표현할 수 없다.** 그러면 "아직 시작 안 한 UI Run" 과
+   *  "코디네이터가 돌리는 Run" 이 구별되지 않고(둘 다 autoDispatch 가 없다), 실행 버튼이 코디네이터
+   *  Run 에도 나타나 앱과 코디네이터가 같은 ready Task 를 두고 경합한다(autoDispatch 의 주석).
+   *  그래서 게이트를 따로 둔다: autoDispatch 는 "누가 돌리는가", 이것은 "시작했는가" 다.
+   *
+   *  **예약은 이 칸을 쓰지 않는다.** 템플릿은 애초에 돌지 않고, 발화가 만든 회차는 예약 시각이
+   *  곧 시작 신호이므로 즉시 돌아야 한다. */
+  pendingStart?: boolean
   /** 발화 시각마다 이 Run 의 한 회차를 돌리는 규칙. **있으면 이 Run 은 템플릿이다** — 자신은
    *  한 번도 돌지 않고(run-create 가 autoDispatch 를 켜지 않는다), 발화마다 자식 Run 을 하나
    *  만든다. 세션 예약의 ScheduleConfig 가 아니라 그 규칙 부분만인 이유: ScheduleConfig 는

@@ -2426,3 +2426,86 @@ describe('run-spawn — 예약 회차', () => {
   })
 
 })
+
+describe('run-start — 사람이 실행을 누를 때까지 기다린다', () => {
+  it('run-create --auto 는 pendingStart 를 함께 켠다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', provider: 'claude', auto: true })
+    const run = deps.getState().runs[0]
+    expect(run.autoDispatch).toBe(true)
+    expect(run.pendingStart).toBe(true)
+  })
+
+  // 예약은 이 게이트를 쓰지 않는다 — 템플릿은 애초에 돌지 않고, 회차는 예약 시각이 곧 시작이다
+  it('예약 Run 에는 pendingStart 를 켜지 않는다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      auto: true,
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    expect(deps.getState().runs[0].pendingStart).toBeUndefined()
+  })
+
+  it('run-spawn 이 만든 회차에는 pendingStart 가 없다', async () => {
+    const deps = makeDeps()
+    const t = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      provider: 'claude',
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    const r = await call(deps, 'run-spawn', { run: (t.body as { id: string }).id })
+    expect((r.body as { pendingStart?: boolean }).pendingStart).toBeUndefined()
+  })
+
+  it('run-start 가 pendingStart 를 걷는다', async () => {
+    const deps = makeDeps()
+    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', provider: 'claude', auto: true })
+    const id = (c.body as { id: string }).id
+    const r = await call(deps, 'run-start', { run: id })
+    expect(r.status).toBe(200)
+    expect(deps.getState().runs[0].pendingStart).toBeUndefined()
+  })
+
+  // 두 번 눌리는 것을 오류로 만들지 않는다 — 버튼이 사라지기 전에 두 번 눌릴 수 있고, 그때
+  // 사람이 손쓸 수 없는 실패 문구를 띄우는 것은 이 명령이 하려는 일과 무관하다
+  it('이미 시작한 Run 에 다시 불러도 200 이다', async () => {
+    const deps = makeDeps()
+    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', provider: 'claude', auto: true })
+    const id = (c.body as { id: string }).id
+    await call(deps, 'run-start', { run: id })
+    expect((await call(deps, 'run-start', { run: id })).status).toBe(200)
+  })
+
+  it('없는 Run 은 400, --run 이 없으면 400', async () => {
+    const deps = makeDeps()
+    expect((await call(deps, 'run-start', { run: 'run_nope' })).status).toBe(400)
+    expect((await call(deps, 'run-start', {})).status).toBe(400)
+  })
+
+  it('워커 세션은 부를 수 없다', async () => {
+    const deps = makeDeps()
+    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', provider: 'claude', auto: true })
+    const id = (c.body as { id: string }).id
+    await deps.setState({
+      ...deps.getState(),
+      dispatches: [
+        {
+          id: 'dsp1',
+          taskId: 'tsk1',
+          provider: 'claude',
+          accountId: 'acc1',
+          sessionId: 'worker1',
+          cwd: 'D:/p',
+          specPath: 'D:/p/spec.md',
+          startedAt: NOW,
+          workerState: 'ready',
+          retained: false
+        }
+      ]
+    })
+    expect((await call(deps, 'run-start', { run: id }, 'worker1')).status).toBe(403)
+  })
+})

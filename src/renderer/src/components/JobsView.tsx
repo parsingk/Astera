@@ -118,6 +118,15 @@ function RunCard({
             얽힌 것**이라 Gate 글리프(주황 `!`)를 빌리지 않는다 — 그것은 사람을 기다리는
             자리의 모양이고, 여기서는 기다리는 것이 없다. 경고 톤의 테두리(styles.css)와 이
             글자 하나로 말하고, 무엇이 위험한지는 툴팁이 적는다. */}
+        {/* 아직 실행을 누르지 않은 Run. **이 표시가 없으면 조용히 안 도는 Run 이 된다** — 상세
+            창을 닫고 실행을 잊으면 목록에서는 갓 만든 Run 과 구별되지 않고, "이유 없이 안 도는
+            Task" 가 이 화면이 없애려는 바로 그 증상이다. 경고가 아니라 상태이므로 톤은 중립이다
+            (.jobs-ordinal 과 같은 칩). */}
+        {run.pendingStart && (
+          <span className="jobs-ordinal" title={t('jobs.run.notStartedHint')}>
+            {t('jobs.run.notStarted')}
+          </span>
+        )}
         {run.sharesProjectFolder && (
           <span className="jobs-shared" title={t('jobs.run.sharedFolderHint')}>
             {t('jobs.run.sharedFolder')}

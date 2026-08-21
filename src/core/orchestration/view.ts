@@ -207,6 +207,7 @@ export function snapshotFor(
       eventCount: eventCountFor(state, run.id),
       // 내가 그 폴더에 있고, 나 말고도 있는가. 크기만 보면 남의 얽힘까지 내 줄에 그리게 된다
       sharesProjectFolder: workingHere.has(run.id) && workingHere.size > 1,
+      ...(run.pendingStart ? { pendingStart: true } : {}),
       ...(run.schedule ? { schedule: run.schedule } : {}),
       ...(run.fireCount !== undefined ? { fireCount: run.fireCount } : {}),
       ...(run.fireOrdinal !== undefined ? { fireOrdinal: run.fireOrdinal } : {}),

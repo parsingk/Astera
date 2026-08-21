@@ -766,6 +766,11 @@ export const ko = {
   // Run 을 물러나게 하기. **자동 정리(store.ts 의 TTL)가 손대지 못하는 것을 위해 있다** — 그것은
   // 모든 Task 가 끝난 Run 만, 그것도 30일 뒤에 버린다. 중단한 작업이나 워커가 죽어 dispatched 에
   // 멈춘 Task 를 가진 Run 은 영원히 남는다
+  'jobs.run.start': '실행',
+  'jobs.run.startHint': 'Task 를 다 짠 뒤 누르면 이 작업이 돌기 시작합니다',
+  'jobs.run.startFailed': '작업을 시작하지 못했습니다',
+  'jobs.run.notStarted': '실행 대기',
+  'jobs.run.notStartedHint': '아직 실행하지 않았습니다 — 상세 창에서 실행을 누르면 시작합니다',
   'jobs.run.delete': '작업 지우기',
   'jobs.run.deleteBody': '"{objective}" 를 지웁니다 — Task {tasks}개와 이벤트 {events}개가 함께 사라지고 되돌릴 수 없습니다.\n\n아직 합쳐지지 않은 워크트리와 브랜치는 지우지 않습니다(합친 것은 병합할 때 이미 지워졌습니다 — 남은 것은 파일 탐색기의 워크트리 패널에서 지울 수 있습니다).',
   'jobs.run.deleteStopsWorkers': '도는 워커 {workers}개를 정지시킵니다. 워크트리에 있고 아직 프로젝트 폴더로 병합되지 않은 작업은 함께 사라집니다.',

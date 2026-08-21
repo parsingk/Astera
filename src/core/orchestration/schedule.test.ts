@@ -218,6 +218,20 @@ describe('slotsToFill', () => {
   })
 
   // 자식은 평범한 Run 이다 — templateId 는 어느 템플릿의 회차인지만 말하고 배치를 막지 않는다
+  // 사용자가 Task 를 다 짜고 '실행' 을 누르기 전까지는 돌지 않는다. **autoDispatch 와 따로 두는
+  // 이유**: 그것을 끄면 "아직 시작 안 한 UI Run" 과 "코디네이터가 돌리는 Run" 이 구별되지 않는다
+  // (둘 다 autoDispatch 가 없다). 그러면 시작 버튼을 코디네이터 Run 에도 보이게 되고, 앱과
+  // 코디네이터가 같은 ready Task 를 두고 경합한다 — Run.autoDispatch 의 주석이 경고하는 그것이다
+  it('pendingStart 인 Run 은 슬롯을 만들지 않는다', () => {
+    const s = state({ runs: [run({ pendingStart: true })], tasks: [task('t1')] })
+    expect(slotsToFill(s)).toEqual([])
+  })
+
+  it('pendingStart 가 걷히면 평소처럼 돈다', () => {
+    const s = state({ runs: [run({ pendingStart: undefined })], tasks: [task('t1')] })
+    expect(slotsToFill(s)).toEqual([{ runId: 'run_1', taskId: 't1', provider: 'claude' }])
+  })
+
   it('자식 Run(templateId 만 있는) 은 평소처럼 돈다', () => {
     const s = state({ runs: [run({ templateId: 'run_tmpl' })], tasks: [task('t1')] })
     expect(slotsToFill(s)).toEqual([{ runId: 'run_1', taskId: 't1', provider: 'claude' }])

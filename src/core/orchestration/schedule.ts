@@ -34,6 +34,9 @@ export function slotsToFill(s: OrchState): Slot[] {
     // orchestration.json 은 프로세스보다 오래 살고 손으로 고쳐진다 — 이 파일 머리말이 provider
     // 없는 Run 을 건너뛰는 것과 같은 이유다.
     if (run.schedule) continue
+    // 사람이 '실행' 을 누르기 전까지는 돌지 않는다. autoDispatch 와 따로 두는 이유는
+    // Run.pendingStart 의 주석에 있다 — 그것을 끄는 방식으로는 코디네이터 Run 과 구별되지 않는다.
+    if (run.pendingStart) continue
     const provider = run.provider
     if (!provider) continue
     const open = s.dispatches.filter((d) => !d.outcome && !d.endedAt)

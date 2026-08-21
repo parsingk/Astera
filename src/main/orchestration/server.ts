@@ -22,6 +22,7 @@ import {
   resolveGate,
   deleteRuns,
   spawnScheduledRun,
+  startRun,
   type OrchState,
   type Res
 } from '../../core/orchestration/state'
@@ -148,6 +149,7 @@ const COORDINATOR_ONLY = new Set([
   'run-use',
   'run-delete',
   'run-spawn',
+  'run-start',
   'task-create',
   'task-update',
   'worker-start',
@@ -314,7 +316,11 @@ export async function handleCommand(
             // 않는다** — 템플릿은 자신이 돌지 않고, 발화가 만든 자식 Run 이 돈다(그 자식은
             // spawnScheduledRun 이 autoDispatch 를 켠다).
             ...(args.auto === true && schedule === undefined ? { autoDispatch: true } : {}),
-            ...(schedule !== undefined ? { schedule } : {})
+            ...(schedule !== undefined ? { schedule } : {}),
+            // `--auto` 는 "앱이 돌린다" 이고, 그 시작 시점은 사람이 정한다 — Task 를 하나 만드는
+            // 순간 돌기 시작하던 것을 '실행' 버튼 뒤로 미룬다(Run.pendingStart). 예약은 이 게이트를
+            // 쓰지 않는다: 템플릿은 애초에 돌지 않고 회차는 예약 시각이 곧 시작이다.
+            ...(args.auto === true && schedule === undefined ? { pendingStart: true } : {})
           },
           now
         )
@@ -396,6 +402,13 @@ export async function handleCommand(
     // 예약 템플릿의 한 회차를 만든다. **부르는 것은 앱의 ticker 뿐이다**(src/main/ipc.ts) —
     // 코디네이터에게 이 명령을 광고하지 않는다. 그래도 명령으로 두는 이유는 이 파일이 지키는
     // 규율이다: 상태를 쓰는 문은 하나이고, 그 문이 검증·커밋·감사 로그를 함께 지난다.
+    // 사람이 '실행' 을 눌렀다. **부르는 것은 UI 뿐이다** — 코디네이터 Run 에는 pendingStart 가
+    // 없으므로 이 명령이 할 일도 없다(startRun 이 그때 아무것도 바꾸지 않는다).
+    case 'run-start': {
+      const id = str(args.run)
+      if (!id) return bad('--run is required')
+      return commit(startRun(s, id))
+    }
     case 'run-spawn': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
