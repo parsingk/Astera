@@ -236,37 +236,39 @@ describe('terminalFont', () => {
 })
 
 describe('theme', () => {
-  it('아무것도 저장하지 않았으면 기본은 vega', async () => {
+  it('아무것도 저장하지 않았으면 기본은 umbra', async () => {
     const store = new AppSettingsStore(file())
     await store.load()
-    expect(store.getTheme()).toBe('vega')
+    expect(store.getTheme()).toBe('umbra')
   })
 
+  // 기본값이 아닌 테마로 왕복시킨다 — 기본값을 쓰면 파일에 키가 없어도(생략 규칙) 통과해 버려서
+  // 저장이 실제로 됐는지 확인하지 못한다.
   it('저장하고 다시 읽으면 유지된다', async () => {
     const filePath = file()
     const store = new AppSettingsStore(filePath)
     await store.load()
-    await store.setTheme('umbra')
+    await store.setTheme('vega')
 
     const again = new AppSettingsStore(filePath)
     await again.load()
-    expect(again.getTheme()).toBe('umbra')
+    expect(again.getTheme()).toBe('vega')
   })
 
-  it('파일에 든 알 수 없는 테마 이름은 vega 로 떨어진다', async () => {
+  it('파일에 든 알 수 없는 테마 이름은 기본값으로 떨어진다', async () => {
     // 사람이 손으로 고칠 수 있는 파일이다. 구버전에서 지운 테마 이름이 남아 있을 수도 있다.
     const filePath = file()
     await fs.writeFile(filePath, JSON.stringify({ theme: 'darcula' }), 'utf8')
     const store = new AppSettingsStore(filePath)
     await store.load()
-    expect(store.getTheme()).toBe('vega')
+    expect(store.getTheme()).toBe('umbra')
   })
 
   it('기본 테마는 파일에 쓰지 않는다 — 다른 필드의 falsy 생략 관례와 같다', async () => {
     const filePath = file()
     const store = new AppSettingsStore(filePath)
     await store.load()
-    await store.setTheme('vega')
+    await store.setTheme('umbra')
     expect(JSON.parse(await fs.readFile(filePath, 'utf8'))).not.toHaveProperty('theme')
   })
 

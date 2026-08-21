@@ -146,7 +146,13 @@ export const THEMES: readonly Theme[] = [
   }
 ]
 
-export const DEFAULT_THEME_ID: ThemeId = 'vega'
+/** 설정 파일에 아무것도 없을 때의 테마 — 새로 설치한 사람이 처음 보는 모습이다.
+ *
+ *  AppSettingsStore 는 이 값과 같은 테마를 파일에 쓰지 않으므로(생략 규칙), 이 상수를 바꾸면 **옛
+ *  기본값을 쓰던 기존 설치도 함께 옮겨간다** — 파일에 키가 없어 "고른 적 없음"과 "옛 기본값을 골랐음"이
+ *  구분되지 않기 때문이다. 기존 사용자의 선택을 보존해야 한다면 이 상수만 바꾸는 것으로는 안 되고,
+ *  AppSettingsStore.save() 가 테마를 항상 기록하도록 함께 바꿔야 한다. */
+export const DEFAULT_THEME_ID: ThemeId = 'umbra'
 
 /** localStorage 와 설정 파일에서 온 값의 신뢰 경계 — isMdViewMode 와 같은 역할. */
 export function isThemeId(v: unknown): v is ThemeId {

@@ -77,6 +77,11 @@
   font-display: block;
 }
 
+/* Vega's palette, kept here as the fallback for when the theme provider does not run (bootTheme in
+   renderer/lib/theme.tsx sets these same variables from the stored theme before the first paint). It is
+   **not** the default theme — that is DEFAULT_THEME_ID in core/theme/themes.ts, which is Umbra. The
+   literals are left as Vega's because the contrast figures written into the comments below were measured
+   against these exact values; re-pointing the block at another theme would invalidate them. */
 :root {
   --bg: #17171a; /* main background */
   --rail: #101013; /* activity rail */

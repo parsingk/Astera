@@ -7,9 +7,9 @@ describe('THEMES', () => {
     expect(new Set(THEMES.map((t) => t.id)).size).toBe(6)
   })
 
-  it('기본값은 vega — 지금 앱의 모습이다', () => {
-    expect(DEFAULT_THEME_ID).toBe('vega')
-    expect(themeById('vega').name).toBe('Vega')
+  it('기본값은 umbra — 새로 설치한 사람이 처음 보는 모습이다', () => {
+    expect(DEFAULT_THEME_ID).toBe('umbra')
+    expect(themeById('umbra').name).toBe('Umbra')
   })
 
   // 하나라도 빠지면 그 테마에서 CSS 변수가 미정의가 되어 상속된 엉뚱한 값이 나온다.
