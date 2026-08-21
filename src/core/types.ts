@@ -85,7 +85,10 @@ export interface ResumeDefaults {
   schedule: ScheduleConfig | null
 }
 
-export type WorktreeStatus = 'ok' | 'orphan-dir' | 'missing'
+/** 워크트리 항목의 상태. **'missing' 은 없다** — 폴더가 사라진 항목은 listWithStatus 가 목록을
+ *  만들면서 레지스트리에서 걷으므로(그쪽 주석) 화면까지 오지 않는다. 남는 질문은 "git 이 이 폴더를
+ *  아는가" 하나다. */
+export type WorktreeStatus = 'ok' | 'orphan-dir'
 
 /** A git worktree record the app created — persisted in worktrees.json */
 export interface WorktreeInfo {
