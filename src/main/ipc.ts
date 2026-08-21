@@ -68,6 +68,7 @@ import { GitWatcher } from './gitWatcher'
 import { createWorktree } from '../core/worktrees/create'
 import { nameForTask } from '../core/worktrees/naming'
 import { listBranches, detectBaseRef } from '../core/worktrees/git'
+import { goneWorktreeProjects } from '../core/worktrees/hiddenHistory'
 import { removeWorktree } from '../core/worktrees/remove'
 import { listWithStatus } from '../core/worktrees/list'
 import { git, repoRoot, gitDir, gitVersionAtLeast, listGitWorktrees } from '../core/worktrees/git'
@@ -1756,9 +1757,28 @@ export function registerIpc(
 
   // history
   ipcMain.handle('history.page', (_e, req?: HistoryPageRequest) => core.history.page(req))
-  ipcMain.handle('history.projectsPage', (_e, req?: HistoryProjectsPageRequest) =>
-    core.history.projectsPage(req)
-  )
+  // 히스토리 목록에서 **사라진 워크트리의 스크래치를 감춘다.** 예약 작업이 회차마다 워커 수만큼
+  // 워크트리를 만들고 병합 뒤 그것을 지우므로, 그냥 두면 히스토리가 존재하지 않는 폴더로 채워진다.
+  //
+  // **hiddenPaths 에 합쳐 보낸다** — 새 필터를 만들지 않는다. projectsPage 의 그 필터는 페이지네이션
+  // *앞*에서 걸러 total 까지 맞춰 주고(그쪽 주석: 렌더러에서 걸면 total 이 감춘 줄을 세어 무한
+  // 스크롤이 끝나지 않는다), 이미 테스트가 붙어 있다.
+  //
+  // **사용자의 수동 숨김 목록은 건드리지 않는다.** 그 목록은 렌더러가 갖고 설정 화면이 보여 주는
+  // 것이라, 여기서 스물여덟 줄을 밀어 넣으면 사람이 지우지도 않은 항목이 그 화면에 쌓인다.
+  //
+  // 판정은 core 의 goneWorktreeProjects 가 한다(루트 밑인가 + 없는가). 후보 목록은
+  // knownProjectPaths 가 projectsPage 와 **같은 캐시**에서 주므로 디렉터리를 다시 훑지 않는다.
+  ipcMain.handle('history.projectsPage', async (_e, req?: HistoryProjectsPageRequest) => {
+    const gone = goneWorktreeProjects(
+      await core.history.knownProjectPaths(),
+      core.worktrees.getRoot(),
+      existsSync
+    )
+    return core.history.projectsPage(
+      gone.length === 0 ? req : { ...req, hiddenPaths: [...(req?.hiddenPaths ?? []), ...gone] }
+    )
+  })
   ipcMain.handle('history.preview', (_e, entryId) => core.history.preview(entryId))
   ipcMain.handle('history.refresh', () => core.history.refresh())
 
