@@ -35,6 +35,7 @@ import {
   type TaskStatus
 } from '../../core/orchestration/types'
 import type { Provider } from '../../core/providers/meta'
+import { isValidRule, type ScheduleRule } from '../../core/scheduler/rule'
 
 export interface OrchServerDeps {
   getState(): OrchState
@@ -254,6 +255,13 @@ export async function handleCommand(
       const concurrency = args.concurrency === undefined ? null : posInt(args.concurrency)
       if (args.concurrency !== undefined && concurrency === null)
         return bad('--concurrency must be an integer >= 1')
+      // 예약. **규칙만 받는다**(command 없는 반쪽) — Job 에는 타이핑할 명령이 없다(Run.schedule).
+      // 지역 변수로 좁히는 이유는 타입이다: `if (a && !guard) return` 은 블록 밖에서 좁혀지지 않는다.
+      let schedule: ScheduleRule | undefined
+      if (args.schedule !== undefined) {
+        if (!isValidRule(args.schedule)) return bad('--schedule must be a valid schedule rule')
+        schedule = args.schedule
+      }
       // process.cwd() is evaluated in the Electron main process — a different process from the CLI
       // (src/cli/run.ts), so this fallback has nothing to do with the CLI's actual working directory.
       // The CLI already fills in its own process.cwd() in buildRequest when --cwd is omitted, so in
@@ -299,8 +307,11 @@ export async function handleCommand(
             cwd,
             ...(providerArg ? { provider: providerArg } : {}),
             ...(concurrency !== null ? { concurrency } : {}),
-            // `--auto` 는 값이 없는 플래그다(task-create --review 와 같은 모양)
-            ...(args.auto === true ? { autoDispatch: true } : {})
+            // `--auto` 는 값이 없는 플래그다(task-create --review 와 같은 모양). **예약이면 켜지
+            // 않는다** — 템플릿은 자신이 돌지 않고, 발화가 만든 자식 Run 이 돈다(그 자식은
+            // spawnScheduledRun 이 autoDispatch 를 켠다).
+            ...(args.auto === true && schedule === undefined ? { autoDispatch: true } : {}),
+            ...(schedule !== undefined ? { schedule } : {})
           },
           now
         )

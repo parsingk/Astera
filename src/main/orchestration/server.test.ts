@@ -101,6 +101,46 @@ describe('handleCommand — 기본', () => {
     const r = await call(makeDeps(), 'run-create', { objective: 'x', cwd: '/p', provider: 'gpt' })
     expect(r.status).toBe(400)
   })
+  it('run-create 가 schedule 을 담아 템플릿을 만든다', async () => {
+    const deps = makeDeps()
+    const r = await call(deps, 'run-create', {
+      objective: '매일 점검',
+      cwd: 'D:/p',
+      provider: 'claude',
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    expect(r.status).toBe(200)
+    expect(deps.getState().runs[0].schedule).toEqual({ kind: 'daily', time: '09:00' })
+  })
+
+  // 예약은 자신이 돌지 않는다. auto 를 함께 받았더라도 템플릿에는 켜지 않는다 — 켜면
+  // slotsToFill 의 방어에 기대게 되고, 그 방어는 손으로 고친 파일을 위한 것이다
+  it('예약 Run 에는 autoDispatch 를 켜지 않는다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      auto: true,
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    expect(deps.getState().runs[0].autoDispatch).toBeUndefined()
+  })
+
+  it('잘못된 schedule 은 400 으로 거절한다', async () => {
+    const r = await call(makeDeps(), 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      schedule: { kind: 'daily', time: '25:00' }
+    })
+    expect(r.status).toBe(400)
+  })
+
+  it('schedule 이 없으면 평범한 Run 이다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true })
+    expect(deps.getState().runs[0].schedule).toBeUndefined()
+    expect(deps.getState().runs[0].autoDispatch).toBe(true)
+  })
 })
 
 describe('handleCommand — 역할 인가', () => {
