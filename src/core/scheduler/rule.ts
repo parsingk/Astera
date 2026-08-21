@@ -103,6 +103,21 @@ export function buildScheduleRule(input: ScheduleRuleInput): ScheduleRule | null
 }
 
 /**
+ * 이미 만들어진 규칙(또는 null)과 원본 명령을 합쳐 ScheduleConfig 판정을 낸다.
+ *
+ * 규칙(ScheduleRuleFields)과 명령(ScheduleFields)이 서로 다른 컴포넌트에 나뉘어 있어, 그 둘을
+ * 합치는 지점을 단독으로 불러야 한다 — core 에 두는 이유는 buildScheduleConfig 와 같다: .tsx
+ * 안에 있으면 vitest 가 닿지 못해 회귀 검출기가 없어진다.
+ *
+ * 판정은 isValidScheduleConfig 에 맡긴다 — UI 가 판정의 사본을 들면 둘이 갈라진다.
+ */
+export function scheduleConfigOf(rule: ScheduleRule | null, command: string): ScheduleConfig | null {
+  if (!rule) return null
+  const candidate: ScheduleConfig = { rule, command: command.trim() }
+  return isValidScheduleConfig(candidate) ? candidate : null
+}
+
+/**
  * Assembles the UI input into the ScheduleConfig handed to spawn (a pure function).
  * null = the input is incomplete → the caller disables the start button.
  *
@@ -114,10 +129,7 @@ export function buildScheduleRule(input: ScheduleRuleInput): ScheduleRule | null
  * the two would drift apart.
  */
 export function buildScheduleConfig(input: ScheduleInput): ScheduleConfig | null {
-  const rule = buildScheduleRule(input)
-  if (!rule) return null
-  const candidate: ScheduleConfig = { rule, command: input.command.trim() }
-  return isValidScheduleConfig(candidate) ? candidate : null
+  return scheduleConfigOf(buildScheduleRule(input), input.command)
 }
 
 /**

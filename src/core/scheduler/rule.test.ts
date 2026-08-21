@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { nextFireAt, isValidRule, isValidScheduleConfig, buildScheduleConfig, buildScheduleRule, type ScheduleRuleInput } from './rule'
+import { nextFireAt, isValidRule, isValidScheduleConfig, buildScheduleConfig, buildScheduleRule, scheduleConfigOf, type ScheduleRuleInput } from './rule'
 
 // 로컬 타임존 기준 시각 헬퍼. 2026-07-31은 금요일(getDay()=5).
 const at = (y: number, mo: number, d: number, h = 0, mi = 0): number =>
@@ -105,6 +105,26 @@ describe('isValidScheduleConfig', () => {
   it('command가 비면 거부한다', () => {
     expect(isValidScheduleConfig({ rule: { kind: 'interval', minutes: 5 }, command: '  ' })).toBe(false)
     expect(isValidScheduleConfig({ rule: { kind: 'interval', minutes: 5 }, command: '점검' })).toBe(true)
+  })
+})
+
+// scheduleConfigOf — 규칙(ScheduleRuleFields)과 명령(ScheduleFields)이 나뉘어 있는 새-Job 모달이
+// 그 둘을 합치는 지점. buildScheduleConfig 도 내부에서 이것을 쓴다.
+describe('scheduleConfigOf', () => {
+  it('규칙이 null 이면 null', () => {
+    expect(scheduleConfigOf(null, '점검')).toBeNull()
+  })
+
+  it('명령이 비었거나 공백뿐이면 null (규칙이 유효해도)', () => {
+    expect(scheduleConfigOf({ kind: 'interval', minutes: 5 }, '')).toBeNull()
+    expect(scheduleConfigOf({ kind: 'interval', minutes: 5 }, '   ')).toBeNull()
+  })
+
+  it('유효한 규칙과 명령이면 명령의 앞뒤 공백을 잘라 담는다', () => {
+    expect(scheduleConfigOf({ kind: 'interval', minutes: 5 }, '  점검  ')).toEqual({
+      rule: { kind: 'interval', minutes: 5 },
+      command: '점검'
+    })
   })
 })
 

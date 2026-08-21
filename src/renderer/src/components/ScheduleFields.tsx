@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ScheduleConfig, ScheduleRule } from '../../../core/types'
+import { scheduleConfigOf } from '../../../core/scheduler/rule'
 import { useI18n } from '../i18n/I18nProvider'
 import { ScheduleRuleFields } from './ScheduleRuleFields'
 
@@ -24,11 +25,10 @@ export function ScheduleFields({
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
 
-  // 규칙이 유효하고 명령이 비어 있지 않을 때만 값이 선다. 판정을 여기서 손으로 쓰지 않는 이유는
-  // core 의 주석과 같다 — UI 가 판정의 사본을 들면 둘이 갈라진다
+  // 규칙과 명령을 합치는 판정은 core 의 scheduleConfigOf 에 맡긴다 — UI 가 판정의 사본을
+  // 들면 둘이 갈라진다
   useEffect(() => {
-    const trimmed = command.trim()
-    onChangeRef.current(rule && trimmed ? { rule, command: trimmed } : null)
+    onChangeRef.current(scheduleConfigOf(rule, command))
   }, [rule, command])
 
   return (
