@@ -93,6 +93,64 @@ export function createRun(
   return ok({ ...s, runs: [...s.runs, run] }, run)
 }
 
+/**
+ * 템플릿의 한 회차를 만든다 — 자식 Run 하나와 그 Task 사본들.
+ *
+ * **정의는 옮기고 결과는 옮기지 않는다.** result·filesModified·consecutiveFailures 를 물려주면
+ * 지난 회차의 결과가 새 회차의 진행률과 회로 차단에 섞인다.
+ *
+ * **deps 와 parentId 는 새 id 로 다시 매핑한다.** 옛 id 를 그대로 두면 자식의 의존이 템플릿의
+ * Task 를 가리키는데, 템플릿의 Task 는 배치되지 않으므로 영원히 completed 가 되지 않는다 — 자식의
+ * Task 전부가 pending 에 갇히고, graph.ts 는 그 의존을 Run 밖의 id 로 보게 된다. 표에 없는
+ * id(템플릿 밖을 가리키는, 손으로 고친 값)는 떨어뜨린다: 자식이 무엇을 기다리는지 모르는 채로
+ * 두는 것보다 낫다.
+ *
+ * status 는 createTask 와 **같은 방식**으로 정한다 — 전부 pending 으로 만든 뒤 recomputeReady 에
+ * 맡긴다. 그래야 "deps 없는 Task 가 ready" 라는 규칙이 한 곳에만 있다. 템플릿의 Task 는 이 호출로
+ * 바뀌지 않는다: 이미 recomputeReady 를 지난 상태라 다시 통과시켜도 같은 값이다.
+ */
+export function spawnScheduledRun(s: OrchState, templateId: string, now: string): Res<Run> {
+  const template = s.runs.find((r) => r.id === templateId)
+  if (!template) return err(`unknown run: ${templateId}`)
+  if (!template.schedule) return err(`run is not scheduled: ${templateId}`)
+  const child: Run = {
+    id: newId('run'),
+    objective: template.objective,
+    cwd: template.cwd,
+    createdAt: now,
+    ...(template.provider ? { provider: template.provider } : {}),
+    ...(template.concurrency !== undefined ? { concurrency: template.concurrency } : {}),
+    autoDispatch: true,
+    templateId
+  }
+  // createdAt 오름차순 — snapshotFor 가 쓰는 순서이고, 의존 사슬을 읽는 순서다
+  const source = s.tasks
+    .filter((t) => t.runId === templateId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  const idMap = new Map(source.map((t) => [t.id, newId('tsk')]))
+  const copies: Task[] = source.map((t) => ({
+    id: idMap.get(t.id)!,
+    runId: child.id,
+    title: t.title,
+    spec: t.spec,
+    deps: t.deps.map((d) => idMap.get(d)).filter((d): d is string => d !== undefined),
+    ...(t.parentId !== undefined && idMap.has(t.parentId)
+      ? { parentId: idMap.get(t.parentId)! }
+      : {}),
+    ...(t.accountId !== undefined ? { accountId: t.accountId } : {}),
+    ...(t.validateConfigId !== undefined ? { validateConfigId: t.validateConfigId } : {}),
+    ...(t.reviewRequested ? { reviewRequested: true } : {}),
+    status: 'pending',
+    consecutiveFailures: 0,
+    createdAt: now,
+    updatedAt: now
+  }))
+  return ok(
+    { ...s, runs: [...s.runs, child], tasks: recomputeReady([...s.tasks, ...copies]) },
+    child
+  )
+}
+
 export function createTask(
   s: OrchState,
   a: {

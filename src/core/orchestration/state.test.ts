@@ -18,6 +18,7 @@ import {
   createGate,
   resolveGate,
   deleteRuns,
+  spawnScheduledRun,
   type OrchState
 } from './state'
 import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task } from './types'
@@ -1557,5 +1558,128 @@ describe('deleteRuns', () => {
   it('빈 집합이면 상태가 그대로다', () => {
     const { s } = seed()
     expect(deleteRuns(s, new Set())).toEqual(s)
+  })
+})
+
+const FIRE = '2026-08-21T09:00:00.000Z'
+
+/** Task 둘(A, 그리고 A 에 의존하는 B)을 가진 예약 템플릿 */
+const template = (): { s: OrchState; templateId: string; aId: string; bId: string } => {
+  const r = unwrap<{ id: string }>(
+    createRun(
+      emptyState(),
+      {
+        objective: '매일 점검',
+        cwd: 'D:/p',
+        provider: 'claude',
+        concurrency: 2,
+        schedule: { kind: 'daily', time: '09:00' }
+      },
+      NOW
+    ) as never
+  )
+  const a = unwrap<{ id: string }>(
+    createTask(r.state, { runId: r.value.id, title: 'A', spec: 'do a', deps: [] }, NOW) as never
+  )
+  const b = unwrap<{ id: string }>(
+    createTask(
+      a.state,
+      { runId: r.value.id, title: 'B', spec: 'do b', deps: [a.value.id] },
+      NOW
+    ) as never
+  )
+  return { s: b.state, templateId: r.value.id, aId: a.value.id, bId: b.value.id }
+}
+
+describe('spawnScheduledRun', () => {
+  it('템플릿의 값을 물려받은 자식 Run 을 만든다', () => {
+    const { s, templateId } = template()
+    const { state, value: child } = unwrap<{ id: string }>(
+      spawnScheduledRun(s, templateId, FIRE) as never
+    )
+    const saved = state.runs.find((r) => r.id === child.id)!
+    expect(saved.objective).toBe('매일 점검')
+    expect(saved.cwd).toBe('D:/p')
+    expect(saved.provider).toBe('claude')
+    expect(saved.concurrency).toBe(2)
+    expect(saved.autoDispatch).toBe(true)
+    expect(saved.templateId).toBe(templateId)
+    expect(saved.createdAt).toBe(FIRE)
+  })
+
+  // 자식이 schedule 을 물려받으면 자식이 또 발화해 회차가 무한히 증식한다
+  it('자식에는 schedule 이 없다', () => {
+    const { s, templateId } = template()
+    const { value: child } = unwrap<{ id: string; schedule?: unknown }>(
+      spawnScheduledRun(s, templateId, FIRE) as never
+    )
+    expect(child.schedule).toBeUndefined()
+  })
+
+  // 이 파일에서 조용히 틀리기 가장 쉬운 곳이다. 옛 id 를 그대로 두면 자식의 의존이 템플릿의 Task 를
+  // 가리키고, 그 Task 는 배치되지 않으니 영원히 completed 가 되지 않아 자식이 pending 에 갇힌다
+  it('deps 를 자식의 새 id 로 다시 매핑한다', () => {
+    const { s, templateId, aId } = template()
+    const { state, value: child } = unwrap<{ id: string }>(
+      spawnScheduledRun(s, templateId, FIRE) as never
+    )
+    const copies = state.tasks.filter((t) => t.runId === child.id)
+    const copyA = copies.find((t) => t.title === 'A')!
+    const copyB = copies.find((t) => t.title === 'B')!
+    expect(copyB.deps).toEqual([copyA.id])
+    expect(copyB.deps).not.toContain(aId)
+  })
+
+  it('deps 없는 사본은 ready, deps 있는 사본은 pending', () => {
+    const { s, templateId } = template()
+    const { state, value: child } = unwrap<{ id: string }>(
+      spawnScheduledRun(s, templateId, FIRE) as never
+    )
+    const copies = state.tasks.filter((t) => t.runId === child.id)
+    expect(copies.find((t) => t.title === 'A')!.status).toBe('ready')
+    expect(copies.find((t) => t.title === 'B')!.status).toBe('pending')
+  })
+
+  // 지난 회차의 결과가 새 회차에 붙으면 진행률과 회로 차단이 거짓말을 한다
+  it('결과 필드는 물려주지 않는다', () => {
+    const { s, templateId, aId } = template()
+    const dirty: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) =>
+        t.id === aId
+          ? { ...t, result: '지난 회차 결과', filesModified: ['a.ts'], consecutiveFailures: 2 }
+          : t
+      )
+    }
+    const { state, value: child } = unwrap<{ id: string }>(
+      spawnScheduledRun(dirty, templateId, FIRE) as never
+    )
+    const copyA = state.tasks.find((t) => t.runId === child.id && t.title === 'A')!
+    expect(copyA.result).toBeUndefined()
+    expect(copyA.filesModified).toBeUndefined()
+    expect(copyA.consecutiveFailures).toBe(0)
+  })
+
+  it('템플릿과 그 Task 는 그대로다', () => {
+    const { s, templateId } = template()
+    const { state } = unwrap<{ id: string }>(spawnScheduledRun(s, templateId, FIRE) as never)
+    expect(state.runs.find((r) => r.id === templateId)).toEqual(
+      s.runs.find((r) => r.id === templateId)
+    )
+    expect(state.tasks.filter((t) => t.runId === templateId)).toEqual(
+      s.tasks.filter((t) => t.runId === templateId)
+    )
+  })
+
+  it('예약이 아닌 Run 은 거절한다', () => {
+    const r = unwrap<{ id: string }>(
+      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
+    )
+    const res = spawnScheduledRun(r.state, r.value.id, FIRE)
+    expect(res.ok).toBe(false)
+  })
+
+  it('없는 Run 은 거절한다', () => {
+    expect(spawnScheduledRun(emptyState(), 'run_nope', FIRE).ok).toBe(false)
   })
 })
