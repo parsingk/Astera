@@ -19,6 +19,7 @@ import {
   resolveGate,
   deleteRuns,
   spawnScheduledRun,
+  latestOrdinaryRun,
   type OrchState
 } from './state'
 import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task } from './types'
@@ -1731,5 +1732,67 @@ describe('spawnScheduledRun', () => {
     )
     const copyB = state.tasks.find((t) => t.runId === child.id && t.title === 'B')!
     expect('parentId' in copyB).toBe(false)
+  })
+})
+
+describe('latestOrdinaryRun', () => {
+  const plain = (state: OrchState, objective: string): { state: OrchState; id: string } => {
+    const r = unwrap<{ id: string }>(
+      createRun(state, { objective, cwd: 'D:/p' }, NOW) as never
+    )
+    return { state: r.state, id: r.value.id }
+  }
+
+  it('평범한 Run 중 가장 나중에 만든 것을 준다', () => {
+    const first = plain(emptyState(), 'A')
+    const second = plain(first.state, 'B')
+    expect(latestOrdinaryRun(second.state)?.id).toBe(second.id)
+  })
+
+  // 템플릿은 정의를 담는 그릇이고 그 편집은 지목해서만 되어야 한다 — 여기서 집히면 --run 없는
+  // task-create 가 템플릿에 떨어져 그 뒤 모든 회차로 복사된다
+  it('예약 템플릿은 건너뛴다', () => {
+    const first = plain(emptyState(), 'A')
+    const tmpl = unwrap<{ id: string }>(
+      createRun(
+        first.state,
+        { objective: '매일 점검', cwd: 'D:/p', schedule: { kind: 'daily', time: '09:00' } },
+        NOW
+      ) as never
+    )
+    expect(latestOrdinaryRun(tmpl.state)?.id).toBe(first.id)
+  })
+
+  // 회차는 15초 ticker 가 만들고 배열의 끝에 붙는다 — 사람의 동작 없이 이 답이 움직이면
+  // check --wait 가 방금 생긴 회차의 배달을 기다리며 영원히 선다
+  it('예약 회차는 건너뛴다', () => {
+    const first = plain(emptyState(), 'A')
+    const tmpl = unwrap<{ id: string }>(
+      createRun(
+        first.state,
+        { objective: '매일 점검', cwd: 'D:/p', schedule: { kind: 'daily', time: '09:00' } },
+        NOW
+      ) as never
+    )
+    const spawned = unwrap<{ id: string }>(
+      spawnScheduledRun(tmpl.state, tmpl.value.id, FIRE) as never
+    )
+    expect(latestOrdinaryRun(spawned.state)?.id).toBe(first.id)
+  })
+
+  // 부르는 쪽의 "Run 이 없다" 오류 경로가 그대로 살아 있어야 한다
+  it('템플릿과 회차뿐이면 undefined', () => {
+    const tmpl = unwrap<{ id: string }>(
+      createRun(
+        emptyState(),
+        { objective: '매일 점검', cwd: 'D:/p', schedule: { kind: 'daily', time: '09:00' } },
+        NOW
+      ) as never
+    )
+    const spawned = unwrap<{ id: string }>(
+      spawnScheduledRun(tmpl.state, tmpl.value.id, FIRE) as never
+    )
+    expect(latestOrdinaryRun(spawned.state)).toBeUndefined()
+    expect(latestOrdinaryRun(emptyState())).toBeUndefined()
   })
 })

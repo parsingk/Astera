@@ -16,6 +16,7 @@ import {
   createRun,
   createTask,
   emptyState,
+  latestOrdinaryRun,
   nextDelivery,
   openDispatch,
   resolveGate,
@@ -325,7 +326,7 @@ export async function handleCommand(
     // 가 아니다 — 워커도 자기가 무엇으로 검증될지 볼 수 있어야 한다.
     case 'run-configs': {
       if (!deps.listRunConfigs) return okBody([])
-      const run = s.runs[s.runs.length - 1]
+      const run = latestOrdinaryRun(s)
       if (!run) return bad('no run exists')
       return okBody(await deps.listRunConfigs(run.cwd))
     }
@@ -381,7 +382,11 @@ export async function handleCommand(
       return commit(spawnScheduledRun(s, id, now))
     }
     case 'task-create': {
-      const runId = str(args.runId) ?? s.runs[s.runs.length - 1]?.id
+      // `--run` 이 없으면 "가장 최근 Run" 이다. **그 뜻을 latestOrdinaryRun 이 정한다** — 예약
+      // 템플릿과 그 회차는 배열의 끝에 붙지만 사람이 만든 것이 아니고(회차는 ticker 가 만든다),
+      // 여기서 그것을 집으면 Task 가 템플릿에 떨어져 그 뒤 모든 회차로 복사된다. 나머지 세 자리
+      // (run-configs·send·check)도 같은 함수를 쓴다.
+      const runId = str(args.runId) ?? latestOrdinaryRun(s)?.id
       const spec = str(args.spec)
       if (!runId) return bad('--run is required (no run exists)')
       if (!spec) return bad('--spec is required')
@@ -850,7 +855,7 @@ export async function handleCommand(
           return denied('cannot send for another task')
       }
       const task = s.tasks.find((t) => t.id === str(args.taskId))
-      const runId = task?.runId ?? s.runs[s.runs.length - 1]?.id
+      const runId = task?.runId ?? latestOrdinaryRun(s)?.id
       if (!runId) return bad('no run to post into')
       const next: OrchState = {
         ...s,
@@ -881,7 +886,7 @@ export async function handleCommand(
       return commit(applyReply(s, { messageId: id, body }, now))
     }
     case 'check': {
-      const runId = str(args.run) ?? s.runs[s.runs.length - 1]?.id
+      const runId = str(args.run) ?? latestOrdinaryRun(s)?.id
       if (!runId) return bad('no run exists')
       if (str(args.ack)) {
         const acked = ackDelivery(s, { deliveryId: str(args.ack)! }, now)

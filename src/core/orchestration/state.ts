@@ -151,6 +151,24 @@ export function spawnScheduledRun(s: OrchState, templateId: string, now: string)
   )
 }
 
+/**
+ * 인자로 Run 을 지목하지 않은 명령이 뜻하는 "가장 최근 Run" — **템플릿도 회차도 아닌 것 중에서**
+ * 가장 나중에 만들어진 것. 없으면 undefined 이고, 그때 부르는 쪽은 자기 "Run 이 없다" 오류를 낸다.
+ *
+ * 이 함수가 필요한 이유는 위의 두 함수다. `s.runs[s.runs.length - 1]` 은 **사람의 동작 없이도
+ * 움직이는 값**이 되었다 — createRun 이 만든 템플릿과 spawnScheduledRun 이 15초 ticker 에서 만드는
+ * 회차가 둘 다 이 배열의 끝에 붙는다. 그러면 Run A 를 몰던 코디네이터의 `check --wait` 가 조용히
+ * 방금 생긴 회차의 배달을 기다리며 영원히 서고, `--run` 없는 task-create 는 템플릿에 떨어져 그 뒤
+ * 모든 회차로 복사된다.
+ *
+ * 템플릿을 빼는 것은 "템플릿은 정의를 담는 그릇이고 그 편집은 명시적이어야 한다"이고, 회차를 빼는
+ * 것은 "회차는 읽기 전용 실행 기록"이다(설계 2절). 둘 다 지목해서만 닿게 한다 — `--run` 을 주면
+ * 그대로 된다.
+ */
+export function latestOrdinaryRun(s: OrchState): Run | undefined {
+  return [...s.runs].reverse().find((r) => r.schedule === undefined && r.templateId === undefined)
+}
+
 export function createTask(
   s: OrchState,
   a: {
