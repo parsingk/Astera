@@ -956,6 +956,10 @@ export function registerIpc(
      *  허용되지만, 지켜야 하는 것이 하나 있다: **어떤 실패 경로에서도 프로젝트 폴더를 병합 중간
      *  상태로 남기지 않는다.** 아래의 순서(미리 검사 → 진짜 병합 → 실패하면 되돌리고 되돌아갔는지
      *  확인)가 전부 그것을 위한 것이다. */
+    /** 워크트리의 세션이 닫히기를 기다리는 상한. pty.kill 은 비동기이고 상태는 exit 이벤트가 와야
+     *  바뀐다 — 고정 대기가 아니라 조건을 폴링하고(coordinator 의 waitUntilIdle 과 같은 관례) 이
+     *  시간을 넘기면 정리를 건너뛴다. 살아 있는 프로세스 밑의 폴더는 지우지 않는다. */
+    const WORKTREE_CLOSE_TIMEOUT_MS = 5_000
     const integrateWorktrees = async (runCwd: string, paths: string[]): Promise<Integration> => {
       // 1. **저장소가 무언가의 중간이면 아무것도 하지 않는다.** 아래 2의 porcelain 검사는 경로 항목만
       //    내므로 브랜치·상태를 전혀 말하지 않는다 — 작업 트리가 깨끗한 채로 rebase·bisect 중인
@@ -1145,6 +1149,70 @@ export function registerIpc(
           }
         }
         orchLog(`scheduler: merged ${ref} into ${runCwd}`)
+        // 합친 워크트리는 여기서 지운다 — **폴더까지.** 예약이 이것을 필수로 만들었다: 회차마다
+        // 워커 수만큼 워크트리가 생기므로 사람이 손으로 지우는 것은 현실적이지 않다.
+        //
+        // 지우는 방법은 removeWorktree(core/worktrees/remove.ts)가 안다 — 탐색기의 워크트리 패널이
+        // 쓰는 **같은 함수**다. 두 번째 제거 경로를 만들면 위험 경로 검사·사용 중 검사·브랜치 처리가
+        // 두 벌이 되고, 한쪽만 고쳐지는 날 이쪽이 폴더를 잘못 지운다. 그 함수가 폴더 자체를
+        // (`git worktree remove --force`) 지우고, 비게 된 저장소별 상위 폴더도 rmdir 하고,
+        // 레지스트리 항목까지 걷는다.
+        //
+        // force: true — 합친 뒤 워크트리에 남는 것은 커밋되지 않은 변경과 추적되지 않는 파일뿐이고,
+        // 커밋된 일은 방금 프로젝트 폴더로 들어갔다. 그 대가를 알고 고른 동작이다.
+        //
+        // **정리 실패가 병합을 망치지 않는다.** 병합은 이미 성공했고 결과물은 프로젝트 폴더에 있다 —
+        // 정리가 안 됐다고 Gate 를 열면 사람이 손쓸 것도 없는 자리에서 파이프라인이 선다. 도는
+        // 세션이 그 폴더를 쓰고 있으면 removeWorktree 가 IN_USE 로 던지고 **그것이 맞다**: 살아 있는
+        // 프로세스 밑의 폴더는 지우지 않는다. 그때 그 워크트리는 남고 이유는 로그에 남는다.
+        // **세션을 먼저 닫는다.** 끝난 워커의 세션은 스스로 죽지 않는다 — worker-release 는
+        // 코디네이터가 부르는 명령이고 앱이 자동으로 부르는 자리가 없다. 닫지 않으면 아래
+        // removeWorktree 의 isPathInUse 가 늘 IN_USE 를 내고, 이 정리는 사실상 한 번도 돌지 않는다.
+        //
+        // **닫지 않는 두 경우.** 붙잡아 둔 세션(worker-retain — 사람이 살려 두라고 말한 것)과 아직
+        // 열려 있는 Dispatch 의 세션(지금 일하는 중이다)이다. 그때는 아무것도 닫지 않고 그 워크트리를
+        // 그대로 둔다 — removeWorktree 가 IN_USE 로 거절하는 것이 그 결과다. run-delete 가 retained
+        // 에 대해 같은 예외를 둔다.
+        const inTree = core.sessions
+          .list()
+          .filter((x) => x.status === 'running' && isPathWithin(target.path, x.cwd))
+        const held = (orch?.deps.getState().dispatches ?? []).some(
+          (d) =>
+            (d.retained || (!d.outcome && !d.endedAt)) &&
+            inTree.some((x) => x.id === d.sessionId)
+        )
+        if (held) {
+          orchLog(`scheduler: worktree ${target.path} has a held or working session — left alone`)
+        } else {
+          for (const x of inTree) core.sessions.kill(x.id)
+          // 조건 폴링. 상태가 바뀌는 것을 기다리는 것이지 정해진 시간을 자는 것이 아니다
+          const deadline = Date.now() + WORKTREE_CLOSE_TIMEOUT_MS
+          while (
+            Date.now() < deadline &&
+            core.sessions
+              .list()
+              .some((x) => x.status === 'running' && isPathWithin(target.path, x.cwd))
+          )
+            await new Promise((r) => setTimeout(r, 50))
+        }
+        const entry = core.worktrees.list().find((w) => isSamePath(w.path, target.path))
+        if (!entry) {
+          orchLog(`scheduler: ${target.path} is not an app worktree — left alone`)
+        } else {
+          try {
+            const removed = await removeWorktree({
+              id: entry.id,
+              force: true,
+              registry: core.worktrees,
+              isPathInUse: isWorktreeInUse
+            })
+            orchLog(
+              `scheduler: removed worktree ${target.path} (branch=${target.branch} deleted=${removed.branchDeleted})`
+            )
+          } catch (e) {
+            orchLog(`scheduler: worktree cleanup skipped for ${target.path}: ${String(e)}`)
+          }
+        }
       }
       return { kind: 'merged' }
     }

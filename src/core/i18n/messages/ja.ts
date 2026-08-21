@@ -733,7 +733,7 @@ export const ja: Catalog = {
   'jobs.state.blocked': '人を待っている',
   'jobs.run.running': '進行中',
   'jobs.run.delete': '作業を削除',
-  'jobs.run.deleteBody': '「{objective}」を削除します — Task {tasks} 件とイベント {events} 件も一緒に消え、元に戻せません。\n\nこの作業が作ったワークトリーとブランチは削除しません（ファイルエクスプローラのワークトリーパネルから削除できます）。',
+  'jobs.run.deleteBody': '「{objective}」を削除します — Task {tasks} 件とイベント {events} 件も一緒に消え、元に戻せません。\n\nまだマージされていないワークツリーとブランチは削除しません(マージ済みのものはマージ時にすでに削除されています — 残ったものはファイルエクスプローラーのワークツリーパネルから削除できます)。',
   'jobs.run.deleteStopsWorkers': '実行中のワーカー {workers} 個を停止します。ワークツリーにあり、まだプロジェクトフォルダーへマージされていない作業は失われます。',
   'jobs.run.deleteRetained': 'worker-retain で保持中のセッションがあるため削除できません — まず解放してください',
   'jobs.run.deleteBusy': 'この作業でワーカーが動いているため削除できません — 先に停止してください',

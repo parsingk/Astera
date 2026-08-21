@@ -639,7 +639,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.state.blocked': 'Waiting for a person',
   'jobs.run.running': 'in progress',
   'jobs.run.delete': 'Delete job',
-  'jobs.run.deleteBody': 'Deleting "{objective}" — {tasks} Task(s) and {events} event(s) go with it, and it cannot be undone.\n\nThe worktrees and branches this job created are left alone (remove them from the worktree panel in the file explorer).',
+  'jobs.run.deleteBody': 'Deleting "{objective}" — {tasks} Task(s) and {events} event(s) go with it, and it cannot be undone.\n\nWorktrees and branches that have not been merged yet are left alone (merged ones were already removed at merge time — what remains can be deleted from the worktree panel in the file explorer).',
   'jobs.run.deleteStopsWorkers': 'Stops {workers} running worker(s). Work sitting in a worktree that has not been merged into the project folder goes with them.',
   'jobs.run.deleteRetained': 'A session is held by worker-retain, so this cannot be deleted — release it first',
   'jobs.run.deleteBusy': 'A worker is running in this job, so it cannot be deleted — stop it first',

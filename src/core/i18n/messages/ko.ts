@@ -768,7 +768,7 @@ export const ko = {
   // 모든 Task 가 끝난 Run 만, 그것도 30일 뒤에 버린다. 중단한 작업이나 워커가 죽어 dispatched 에
   // 멈춘 Task 를 가진 Run 은 영원히 남는다
   'jobs.run.delete': '작업 지우기',
-  'jobs.run.deleteBody': '"{objective}" 를 지웁니다 — Task {tasks}개와 이벤트 {events}개가 함께 사라지고 되돌릴 수 없습니다.\n\n이 작업이 만든 워크트리와 브랜치는 지우지 않습니다(파일 탐색기의 워크트리 패널에서 지울 수 있습니다).',
+  'jobs.run.deleteBody': '"{objective}" 를 지웁니다 — Task {tasks}개와 이벤트 {events}개가 함께 사라지고 되돌릴 수 없습니다.\n\n아직 합쳐지지 않은 워크트리와 브랜치는 지우지 않습니다(합친 것은 병합할 때 이미 지워졌습니다 — 남은 것은 파일 탐색기의 워크트리 패널에서 지울 수 있습니다).',
   'jobs.run.deleteStopsWorkers': '도는 워커 {workers}개를 정지시킵니다. 워크트리에 있고 아직 프로젝트 폴더로 병합되지 않은 작업은 함께 사라집니다.',
   'jobs.run.deleteRetained': 'worker-retain 으로 붙잡아 둔 세션이 있어 지울 수 없습니다 — 먼저 놓아 주세요',
   'jobs.run.deleteBusy': '이 작업에 도는 워커가 있어 지울 수 없습니다 — 먼저 멈춰 주세요',
