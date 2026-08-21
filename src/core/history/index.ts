@@ -1,15 +1,30 @@
-import { promises as fs } from 'node:fs'
+import { promises as fs, watch as fsWatch } from 'node:fs'
 import path from 'node:path'
-import chokidar, { type FSWatcher } from 'chokidar'
+import chokidar from 'chokidar'
 import type { Account, HistoryEntry, ProjectSummary, Provider, TranscriptPreview } from '../types'
 import { parseTranscriptMeta } from './parser'
 import { metaOf } from '../providers/meta'
 import { descriptorOf, makeDescriptors, type ProviderDescriptor } from '../providers/descriptor'
 import type { HistoryIo, HistoryStrategy } from './strategies/types'
+import type { SessionCwdCache } from './sessionCwdCache'
 
 // win32 first: ignore path case and separator differences (the same rule as normalizePath in
 // sessions/manager.ts)
 const norm = (p: string): string => path.resolve(p).toLowerCase()
+
+/** The renderer is notified this long after the last file event. A transcript is appended to
+ *  continuously while a session runs, so coalescing is what keeps the sidebar from rebuilding the
+ *  whole project list on every write. */
+const UPDATE_DEBOUNCE_MS = 150
+/** ...but a debounce that only ever resets never fires at all while a session keeps writing.
+ *  chokidar's awaitWriteFinish used to hide that by staying silent mid-write; a native watcher emits
+ *  per append, so the ceiling has to be stated. */
+const UPDATE_MAX_WAIT_MS = 1000
+
+/** Either watcher kind behind the one thing this file does with them. */
+interface WatchHandle {
+  close(): void | Promise<void>
+}
 
 /** Group resume forks (same rootUuid) — keep only the newest one per conversation. A null rootUuid
  *  is excluded from grouping */
@@ -75,18 +90,34 @@ export class HistoryIndex {
   private dirCache = new Map<string, { entries: HistoryEntry[]; sig: string }>()
   // projectPath(cwd) → slug directory (projectsPage fills it so page does not re-resolve directories)
   private dirByProject = new Map<string, string>()
+  // The inverse: dirKey → projectPath. A changed directory has to be able to say which row it used to
+  // represent, or a directory whose cwd moved would leave its old row behind forever.
+  private projectByDir = new Map<string, string>()
   // entryId → entry (for preview lookups; page/preview fill it)
   private entryById = new Map<string, HistoryEntry>()
-  // Cache of the project summary list (all accounts, sorted). Invalidated on a watcher event/refresh/reload
+  // Per-account project rows. The unit of invalidation is one account (or one directory inside it, see
+  // flushPendingDirs) rather than the whole list — one changed transcript used to discard every row,
+  // and a running session changes one about once a second.
+  private projectsByAccount = new Map<string, ProjectSummary[]>()
+  // Directories whose row needs recomputing before the next notification: dirKey → what to recompute
+  private pendingDirs = new Map<string, { account: Account; dir: string }>()
+  // Cache of the project summary list (all accounts, sorted). Rebuilt from projectsByAccount, so
+  // dropping it costs a concat and a sort, not a disk pass
   private projectsCache: ProjectSummary[] | null = null
-  private watcher: FSWatcher | null = null
+  // Bumped by every invalidate, so a build that started before it does not write its stale result back
+  private generation = 0
+  // One handle per scan root (native), or one chokidar watcher per root on the fallback path
+  private watchers: WatchHandle[] = []
   private updateTimer: ReturnType<typeof setTimeout> | null = null
+  private updateDeadline = 0
   private reloading: Promise<void> = Promise.resolve()
   onUpdated?: () => void
 
   constructor(
     private getAccounts: () => Account[],
-    private descriptors: Record<Provider, ProviderDescriptor> = makeDescriptors(process.platform)
+    private descriptors: Record<Provider, ProviderDescriptor> = makeDescriptors(process.platform),
+    // Absent (tests, and any caller that has no userData) simply means every cwd is parsed each pass
+    private cwdCache?: SessionCwdCache
   ) {}
 
   // The narrow interface handed to a strategy — ownership of the cache and file traversal stays here
@@ -95,26 +126,35 @@ export class HistoryIndex {
     jsonlByMtimeDesc: (dir) => this.jsonlFilesByMtimeDesc(dir),
     subdirs: (dir) => this.subdirs(dir),
     resolveProjectCwd: (dir, files) => this.resolveProjectCwd(dir, files),
+    cwdMemo: (files, parse) => this.cwdMemo(files, parse),
     samePath: (a, b) => norm(a) === norm(b),
     pathKey: (p) => norm(p),
-    cacheDirForProject: (accountId, projectPath, dir) =>
+    cacheDirForProject: (accountId, projectPath, dir) => {
       this.dirByProject.set(accountId + '\0' + norm(projectPath), dir)
+      this.projectByDir.set(accountId + '\0' + norm(dir), projectPath)
+    }
+  }
+
+  /** The account a path under a scan root belongs to. */
+  private ownerOf(filePath: string): Account | undefined {
+    return this.getAccounts().find((a) => filePath.startsWith(this.scanRoot(a)))
   }
 
   private strategyFor(account: { provider?: Provider }): HistoryStrategy {
     return descriptorOf(this.descriptors, account).history
   }
 
-  /** Heavy init — turns on the file watcher only (no full scan). Call in the background after the
-   *  window and IPC are ready. */
+  /** Turns on the file watcher (no scan). Cheap on the native path — a handle per scan root — but
+   *  still called in the background after the window and IPC are ready, because the chokidar fallback
+   *  is not. */
   async startBackground(): Promise<void> {
     await this.startWatcher()
   }
 
   async stop(): Promise<void> {
-    await this.watcher?.close()
-    this.watcher = null
+    await this.closeWatchers()
     if (this.updateTimer) clearTimeout(this.updateTimer)
+    this.updateTimer = null
   }
 
   /** On adding/removing an account — clears the caches and rebuilds the watcher. Serialized even
@@ -125,8 +165,7 @@ export class HistoryIndex {
   }
 
   private async doReload(): Promise<void> {
-    await this.watcher?.close()
-    this.watcher = null
+    await this.closeWatchers()
     this.invalidate()
     await this.startWatcher()
     this.emitUpdated()
@@ -140,9 +179,13 @@ export class HistoryIndex {
   }
 
   private invalidate(): void {
+    this.generation++
     this.dirCache.clear()
     this.dirByProject.clear()
+    this.projectByDir.clear()
     this.entryById.clear()
+    this.projectsByAccount.clear()
+    this.pendingDirs.clear() // the whole list is being reread, so a per-directory patch is moot
     this.projectsCache = null
   }
 
@@ -199,12 +242,24 @@ export class HistoryIndex {
    *  or refresh invalidates it. */
   private async buildProjects(): Promise<ProjectSummary[]> {
     if (this.projectsCache) return this.projectsCache
+    const gen = this.generation
     const projects: ProjectSummary[] = []
     for (const account of this.getAccounts()) {
-      projects.push(...(await this.strategyFor(account).projectSummaries(account, this.io)))
+      // Only an account whose rows are actually gone is read from disk again
+      const cached = this.projectsByAccount.get(account.id)
+      if (cached) {
+        projects.push(...cached)
+        continue
+      }
+      const rows = await this.strategyFor(account).projectSummaries(account, this.io)
+      if (gen === this.generation) this.projectsByAccount.set(account.id, rows)
+      projects.push(...rows)
     }
     projects.sort(byUpdatedDesc)
-    this.projectsCache = projects
+    // A build that started before an invalidate must not write its result back. At startup the first
+    // projectsPage is still in flight when the ghost scan lands, and caching that ghost-less list here
+    // made the history:updated re-query hand back exactly the list it was meant to replace.
+    if (gen === this.generation) this.projectsCache = projects
     return projects
   }
 
@@ -271,8 +326,11 @@ export class HistoryIndex {
 
   // ---- internal helpers ------------------------------------------------
 
-  /** The directory's .jsonl files in descending mtime order. Files whose stat fails are excluded. */
-  private async jsonlFilesByMtimeDesc(dir: string): Promise<{ name: string; mtimeMs: number }[]> {
+  /** The directory's .jsonl files in descending mtime order. Files whose stat fails are excluded.
+   *  size rides along because the stat is already being paid for and cwdMemo keys on it. */
+  private async jsonlFilesByMtimeDesc(
+    dir: string
+  ): Promise<{ name: string; mtimeMs: number; size: number }[]> {
     let names: string[]
     try {
       names = (await fs.readdir(dir)).filter((f) => f.endsWith('.jsonl'))
@@ -282,13 +340,40 @@ export class HistoryIndex {
     const stats = await Promise.all(
       names.map(async (name) => {
         try {
-          return { name, mtimeMs: (await fs.stat(path.join(dir, name))).mtimeMs }
+          const st = await fs.stat(path.join(dir, name))
+          return { name, mtimeMs: st.mtimeMs, size: st.size }
         } catch {
           return null
         }
       })
     )
-    return stats.filter((s): s is { name: string; mtimeMs: number } => s !== null).sort((a, b) => b.mtimeMs - a.mtimeMs)
+    return stats
+      .filter((s): s is { name: string; mtimeMs: number; size: number } => s !== null)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+  }
+
+  /** Resolves the cwd of many session files at once. A hit in the persisted memo skips the parse
+   *  entirely, which is what takes the codex project list off the startup path from the second run
+   *  on — see sessionCwdCache.ts for why only codex needs it. Runs at the same concurrency as
+   *  parseDir; the codex summary loop used to be sequential. */
+  private async cwdMemo(
+    files: { path: string; mtimeMs: number; size: number }[],
+    parse: (filePath: string) => Promise<string | null>
+  ): Promise<(string | null)[]> {
+    const out = await mapWithConcurrency(files, 24, async (f) => {
+      const hit = this.cwdCache?.get(f.path, f.mtimeMs, f.size)
+      if (hit !== undefined) return hit
+      let cwd: string | null = null
+      try {
+        cwd = await parse(f.path)
+      } catch {
+        cwd = null // unreadable or broken = no project, the same rule buildEntry applies
+      }
+      this.cwdCache?.set(f.path, f.mtimeMs, f.size, cwd)
+      return cwd
+    })
+    await this.cwdCache?.flush()
+    return out
   }
 
   /** Reads the meta of up to 8 files, newest first, to find the real cwd. On a helper/sidechain or a
@@ -358,48 +443,150 @@ export class HistoryIndex {
     return entry
   }
 
-  /** Resolves once watch registration is done (chokidar `ready`). A failure before ready does not
-   *  wait forever either. */
-  private startWatcher(): Promise<void> {
-    const dirs = this.getAccounts().map((a) => this.scanRoot(a))
-    if (dirs.length === 0) return Promise.resolve()
-    this.watcher = chokidar.watch(dirs, {
+  /**
+   * Registers the watch on every scan root — one native recursive handle each.
+   *
+   * This used to be a single chokidar watcher at depth 3, and it was the reason the first history
+   * list felt slow. chokidar walks the tree and tracks every file individually: on a 3400-file
+   * history that measured 5.5s and 6944 tracked entries, against 2.5ms here for the same roots. The
+   * walk is fully async, but it runs on the same event loop and libuv threadpool as the first
+   * `projectsPage` — which went from 197ms to 5576ms next to it. Nothing about awaiting it differently
+   * helps; the fix is not doing the work.
+   *
+   * chokidar stays as the fallback for a platform without recursive support, where the per-directory
+   * cost is unavoidable either way.
+   *
+   * A root that does not exist yet is skipped. chokidar did not pick up files created under a missing
+   * root either (measured), so no behaviour is lost, and reload() re-registers whenever accounts change.
+   */
+  private async startWatcher(): Promise<void> {
+    // Two accounts can share a configDir; chokidar deduped its own paths, a handle per root does not
+    const roots = [...new Set(this.getAccounts().map((a) => this.scanRoot(a)))]
+    for (const root of roots) {
+      try {
+        const w = fsWatch(root, { recursive: true }, (_type, filename) => {
+          // filename is relative to the root, and null when the platform cannot name the entry
+          if (filename !== null) this.onFileEvent(path.join(root, String(filename)))
+        })
+        w.on('error', () => {
+          /* watcher failure → fall back to the UI's manual refresh. The app keeps working */
+        })
+        this.watchers.push(w)
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue // no history yet
+        await this.startChokidarWatcher(root) // no recursive support (older linux), EMFILE, EPERM…
+      }
+    }
+  }
+
+  /** The fallback path. Resolves once registration is done (chokidar `ready`); a failure before ready
+   *  does not wait forever either. */
+  private startChokidarWatcher(root: string): Promise<void> {
+    const w = chokidar.watch(root, {
       ignoreInitial: true,
       // claude projects/<slug>/<file>=2, codex sessions/YYYY/MM/DD/<file>=3
       depth: 3,
       awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 }
     })
-    const onChange = (filePath: string): void => {
-      if (!filePath.endsWith('.jsonl')) return
-      // Invalidate only the changed file's project cache, plus the project list cache (the next
-      // lookup reads again)
-      this.dirCache.delete(this.dirCacheKeyForFile(filePath))
-      this.projectsCache = null
-      this.emitUpdated()
-    }
-    this.watcher.on('add', onChange)
-    this.watcher.on('change', onChange)
-    this.watcher.on('unlink', onChange)
-    this.watcher.on('error', () => {
+    const onChange = (filePath: string): void => this.onFileEvent(filePath)
+    w.on('add', onChange)
+    w.on('change', onChange)
+    w.on('unlink', onChange)
+    w.on('error', () => {
       /* watcher failure → fall back to the UI's manual refresh. The app keeps working */
     })
+    this.watchers.push(w)
     return new Promise<void>((resolve) => {
-      this.watcher?.once('ready', () => resolve())
-      this.watcher?.once('error', () => resolve())
+      w.once('ready', () => resolve())
+      w.once('error', () => resolve())
     })
   }
 
-  private dirCacheKeyForFile(filePath: string): string {
+  /** A file event under a scan root. Non-.jsonl entries (and the directory names a native watcher also
+   *  reports) drop out here. */
+  private onFileEvent(filePath: string): void {
+    if (!filePath.endsWith('.jsonl')) return
     const dir = path.dirname(filePath)
-    const account = this.getAccounts().find((a) => filePath.startsWith(this.scanRoot(a)))
-    return (account?.id ?? '') + '\0' + norm(dir)
+    const account = this.ownerOf(filePath)
+    // The session cache is per directory and keyed on the file mtimes, so dropping the one directory
+    // is all it needs
+    this.dirCache.delete((account?.id ?? '') + '\0' + norm(dir))
+    // The project row is repaired in flushPendingDirs, just before the notification goes out. Doing it
+    // here would mean a disk read per event, and a busy session emits one per append.
+    if (account) this.pendingDirs.set(account.id + '\0' + norm(dir), { account, dir })
+    else this.projectsCache = null // outside every scan root: no idea what to patch, so reread it all
+    this.emitUpdated()
   }
 
+  /**
+   * Repairs the project rows the pending directories affect, then lets the notification go out.
+   *
+   * This is what stops one changed transcript from costing a whole disk pass. A row is derived from a
+   * single directory, so for a provider whose directory maps 1:1 to a project (claude) only that
+   * directory is reread — a few milliseconds against a rebuild that grows with the entire history, once
+   * a second for as long as a session is writing. codex offers no per-directory recompute (its folder
+   * is a date, and the newest mtime for one cwd can live in another folder), so its rows are dropped
+   * per account — still leaving the other accounts' rows standing.
+   */
+  private async flushPendingDirs(): Promise<void> {
+    if (this.pendingDirs.size === 0) return
+    const pending = [...this.pendingDirs.values()]
+    this.pendingDirs.clear()
+    const gen = this.generation
+    for (const { account, dir } of pending) {
+      const rows = this.projectsByAccount.get(account.id)
+      if (!rows) continue // nothing cached for this account: the next build reads it whole anyway
+      const forDir = this.strategyFor(account).projectSummaryForDir
+      if (!forDir) {
+        this.projectsByAccount.delete(account.id)
+        continue
+      }
+      const dirKey = account.id + '\0' + norm(dir)
+      const was = this.projectByDir.get(dirKey)
+      const next = await forDir(account, dir, this.io)
+      if (gen !== this.generation) return // a full invalidate cut in; its reread wins
+      // The row this directory used to stand for goes first — its cwd may have moved, or the directory
+      // may have stopped being a project at all
+      let updated = was ? rows.filter((p) => norm(p.projectPath) !== norm(was)) : rows
+      if (next) {
+        updated = [...updated, next] // forDir already refreshed both directory maps
+      } else {
+        // Drop both directions, or dirsForProject would keep handing page() a directory that no
+        // longer holds that project
+        this.projectByDir.delete(dirKey)
+        if (was) this.dirByProject.delete(account.id + '\0' + norm(was))
+      }
+      this.projectsByAccount.set(account.id, updated)
+    }
+    this.projectsCache = null // a concat and a sort over the rows already in memory
+  }
+
+  private async closeWatchers(): Promise<void> {
+    const open = this.watchers
+    this.watchers = []
+    for (const w of open) {
+      try {
+        await w.close()
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+
+  /** Coalesces a burst of file events into one notification, but never past UPDATE_MAX_WAIT_MS from
+   *  the first one — a plain resetting debounce would stay silent for as long as a session keeps
+   *  appending, which is exactly when the sidebar most needs to move. */
   private emitUpdated(): void {
-    if (this.updateTimer) clearTimeout(this.updateTimer)
-    this.updateTimer = setTimeout(() => {
-      this.updateTimer = null
-      this.onUpdated?.()
-    }, 150)
+    const now = Date.now()
+    if (this.updateTimer === null) this.updateDeadline = now + UPDATE_MAX_WAIT_MS
+    else clearTimeout(this.updateTimer)
+    this.updateTimer = setTimeout(
+      () => {
+        this.updateTimer = null
+        // The rows are repaired before the renderer is told to re-query, so its fetch is a cache hit
+        void this.flushPendingDirs().then(() => this.onUpdated?.())
+      },
+      Math.max(0, Math.min(UPDATE_DEBOUNCE_MS, this.updateDeadline - now))
+    )
   }
 }

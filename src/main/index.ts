@@ -601,11 +601,16 @@ app.whenReady().then(async () => {
 
   // Start the history file watcher in the background once the window is shown (live updates). Not
   // awaited, so it does not block window creation.
-  // The unregistered-dir scan rides along for the same reason — it reads the home directory, and the
-  // sidebar is allowed to show registered accounts first and gain the rest a moment later. reload()
-  // afterwards is what makes the renderer re-query with the ghosts included.
-  void core.refreshGhostAccounts().then(() => core!.history.reload())
-  void core.history.startBackground()
+  // The unregistered-dir scan comes first, and the watcher is started after it rather than alongside:
+  // both of these used to run in parallel, and reload() then closed the watcher startBackground() was
+  // still registering — so the watcher was built twice and startBackground()'s promise never settled
+  // (nothing awaited it, so the leak was invisible). The scan reads only the home directory, so the
+  // sidebar shows registered accounts first and gains the ghosts a moment later; refresh() is what
+  // makes the renderer re-query with them included.
+  void core
+    .refreshGhostAccounts()
+    .then(() => core!.history.refresh())
+    .then(() => core!.history.startBackground())
 
   // Auto-update: pulled from public GitHub Releases with no credentials. Progress is surfaced both
   // to a file log (userData/updater.log) and to the renderer (shown in the title bar).

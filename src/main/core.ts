@@ -9,6 +9,7 @@ import { makeDescriptors, descriptorOf, isAmbientDir, type ProviderDescriptor } 
 import { SessionManager } from '../core/sessions/manager'
 import { nodePtyFactory } from '../core/sessions/nodePtyFactory'
 import { HistoryIndex } from '../core/history/index'
+import { SessionCwdCache } from '../core/history/sessionCwdCache'
 import { ProjectSettings } from '../core/projects/settings'
 import { StatusLineManager, resolveNodePath } from './statusline'
 import { parseStatusLinePayload } from '../core/usage/statusline'
@@ -155,8 +156,16 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   )
   // Lazy history: nothing is scanned at startup. The project list comes from a directory listing; sessions are
   // parsed when expanded. index.ts starts the file watcher with startBackground() after the window is up, so window creation never blocks on a scan.
-  // Ghosts join the sources so an unregistered account's transcripts stay in the sidebar
-  const history = new HistoryIndex(() => [...accounts.list(), ...ghostAccountList()], descriptors)
+  // Ghosts join the sources so an unregistered account's transcripts stay in the sidebar.
+  // The cwd memo is what keeps codex — whose folder is a date, so its project list can only be built by
+  // opening every rollout file — off that startup path from the second run on
+  const sessionCwd = new SessionCwdCache(path.join(userDataDir, 'session-cwd.json'))
+  await sessionCwd.load()
+  const history = new HistoryIndex(
+    () => [...accounts.list(), ...ghostAccountList()],
+    descriptors,
+    sessionCwd
+  )
   const projects = new ProjectSettings(path.join(userDataDir, 'projects.json'))
   await projects.load()
   const rollConfig = new RollConfigStore(path.join(userDataDir, 'rolling.json'))

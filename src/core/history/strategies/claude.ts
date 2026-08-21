@@ -2,10 +2,35 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { Account, HistoryEntry, ProjectSummary } from '../../types'
 import { parseTranscriptMeta, parseTranscriptPreview, parseTranscriptTail } from '../parser'
-import type { HistoryStrategy } from './types'
+import type { HistoryIo, HistoryStrategy } from './types'
 
 /** Scan root for claude session files — this file is the only place that knows about `projects` */
 const root = (configDir: string): string => path.join(configDir, 'projects')
+
+/** One slug directory → its project row. A directory maps 1:1 to a project here, so this is both the
+ *  body of the full listing and what a single file event needs to repair. Sessions are not parsed:
+ *  only the newest file's mtime and the real cwd are read. */
+const projectSummaryForDir = async (
+  account: Account,
+  dir: string,
+  io: HistoryIo
+): Promise<ProjectSummary | null> => {
+  const files = await io.jsonlByMtimeDesc(dir)
+  if (files.length === 0) return null
+  // The real cwd = the cwd of the newest non-helper session. Noise-only folders (no cwd) are skipped.
+  const cwd = await io.resolveProjectCwd(
+    dir,
+    files.map((f) => f.name)
+  )
+  if (!cwd) return null
+  io.cacheDirForProject(account.id, cwd, dir)
+  return {
+    accountId: account.id,
+    projectPath: cwd,
+    name: cwd.split(/[\\/]/).filter(Boolean).pop() ?? cwd,
+    updatedAt: new Date(files[0].mtimeMs).toISOString()
+  }
+}
 
 /** claude history: <configDir>/projects/<slug>/*.jsonl — directory↔project 1:1 */
 export const claudeHistoryStrategy: HistoryStrategy = {
@@ -44,6 +69,7 @@ export const claudeHistoryStrategy: HistoryStrategy = {
     }
     return matches
   },
+  projectSummaryForDir,
   /** Project summary list — one row per slug directory (for claude a directory maps 1:1 to a
    *  project). Sessions are not parsed; built cheaply by reading only the newest file's mtime +
    *  meta (cwd). */
@@ -57,19 +83,8 @@ export const claudeHistoryStrategy: HistoryStrategy = {
     }
     const projects: ProjectSummary[] = []
     for (const slug of slugs) {
-      const dir = path.join(base, slug)
-      const files = await io.jsonlByMtimeDesc(dir)
-      if (files.length === 0) continue
-      // The real cwd = the cwd of the newest non-helper session. Noise-only folders (no cwd) are skipped.
-      const cwd = await io.resolveProjectCwd(dir, files.map((f) => f.name))
-      if (!cwd) continue
-      io.cacheDirForProject(account.id, cwd, dir)
-      projects.push({
-        accountId: account.id,
-        projectPath: cwd,
-        name: cwd.split(/[\\/]/).filter(Boolean).pop() ?? cwd,
-        updatedAt: new Date(files[0].mtimeMs).toISOString()
-      })
+      const row = await projectSummaryForDir(account, path.join(base, slug), io)
+      if (row) projects.push(row)
     }
     return projects
   },

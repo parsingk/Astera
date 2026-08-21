@@ -1,9 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { promises as fs } from 'node:fs'
+import { promises as fs, watch as fsWatch } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Account } from '../types'
 import { HistoryIndex } from './index'
+import { SessionCwdCache } from './sessionCwdCache'
+
+/** 워처의 디바운스 상한 테스트는 이벤트가 append마다 오는 native 경로에서만 뜻이 있다. chokidar
+ *  폴백은 awaitWriteFinish 로 쓰는 중에는 아예 조용하므로(그것이 폴백인 이유이기도 하다) 건너뛴다. */
+const nativeRecursiveWatch = ((): boolean => {
+  try {
+    fsWatch(os.tmpdir(), { recursive: true }, () => {}).close()
+    return true
+  } catch {
+    return false
+  }
+})()
 
 let tmp: string
 let index: HistoryIndex | null = null
@@ -107,6 +119,155 @@ describe('HistoryIndex (lazy)', () => {
     await writeTranscript(a, 'p', 'second.jsonl', 'second')
     await vi.waitFor(() => expect(updated).toHaveBeenCalled(), { timeout: 5000 })
     expect(await sessionIds()).toEqual(['first', 'second'])
+  })
+
+  it.skipIf(!nativeRecursiveWatch)(
+    '세션이 계속 append되는 중에도 갱신 알림이 온다 (디바운스 상한)',
+    async () => {
+      const a = account('acc-a')
+      await writeTranscript(a, 'p', 'live.jsonl', 'live')
+      index = new HistoryIndex(() => [a])
+      await index.startBackground()
+      const updated = vi.fn()
+      index.onUpdated = updated
+      const file = path.join(a.configDir, 'projects', 'p', 'live.jsonl')
+      // 150ms 디바운스보다 빠르게 계속 쓴다 — 상한이 없으면 타이머가 무한히 밀려 알림이 안 온다
+      let stop = false
+      const writing = (async (): Promise<void> => {
+        while (!stop) {
+          await fs.appendFile(
+            file,
+            '\n' + JSON.stringify({ type: 'user', message: { role: 'user', content: 'tick' } })
+          )
+          await new Promise((r) => setTimeout(r, 40))
+        }
+      })()
+      try {
+        await vi.waitFor(() => expect(updated).toHaveBeenCalled(), { timeout: 8000 })
+      } finally {
+        stop = true
+        await writing
+      }
+    },
+    20_000
+  )
+
+  it('invalidate 이후에 끝난 빌드는 프로젝트 캐시를 오염시키지 않는다', async () => {
+    const a = account('acc-a')
+    const b = account('acc-b')
+    await writeTranscript(a, 'proj-a', 's1.jsonl', 's1')
+    await writeTranscript(b, 'proj-b', 's2.jsonl', 's2')
+    let accounts = [a]
+    index = new HistoryIndex(() => accounts)
+    // 시작 시점 재현: 첫 projectsPage가 아직 돌고 있는데 ghost 스캔이 끝나 목록이 무효화된다
+    const inflight = index.projectsPage()
+    await index.refresh()
+    accounts = [a, b]
+    await inflight
+    const { projects } = await index.projectsPage()
+    expect(projects.map((p) => p.name).sort()).toEqual(['proj-a', 'proj-b'])
+  })
+
+  describe('증분 무효화', () => {
+    /** 워처를 켜기 **전에** 디스크를 바꿔 두면 그 변경은 이벤트를 내지 않는다. 그 상태로 다른
+     *  프로젝트를 건드려서, 재빌드가 건드린 쪽에만 미쳤는지를 관찰한다. */
+    const projectNames = async (): Promise<string[]> =>
+      (await index!.projectsPage()).projects.map((p) => p.name).sort()
+
+    it('파일 하나가 바뀌면 그 프로젝트 행만 다시 계산한다', async () => {
+      const a = account('acc-a')
+      await writeTranscript(a, 'proj-a', 's1.jsonl', 's1')
+      await writeTranscript(a, 'proj-b', 's2.jsonl', 's2')
+      index = new HistoryIndex(() => [a])
+      expect(await projectNames()).toEqual(['proj-a', 'proj-b'])
+
+      // 워처가 아직 없으므로 이 삭제는 이벤트를 내지 않는다
+      await fs.rm(path.join(a.configDir, 'projects', 'proj-b'), { recursive: true, force: true })
+      await index.startBackground()
+      const updated = vi.fn()
+      index.onUpdated = updated
+      await writeTranscript(a, 'proj-a', 's3.jsonl', 's3')
+      await vi.waitFor(() => expect(updated).toHaveBeenCalled(), { timeout: 5000 })
+
+      // proj-a 는 갱신되고(새 세션이 보인다), proj-b 행은 다시 읽히지 않아 그대로 남아 있다
+      expect((await index.page({ projectPath: 'D:\\work\\proj-a' })).entries).toHaveLength(2)
+      expect(await projectNames()).toEqual(['proj-a', 'proj-b'])
+      // 대조군: 전량 무효화는 여전히 전부 다시 읽는다
+      await index.refresh()
+      expect(await projectNames()).toEqual(['proj-a'])
+    })
+
+    it('codex 계정의 이벤트는 그 계정만 무효화한다', async () => {
+      const a = account('acc-a')
+      const cx: Account = { ...account('cx'), provider: 'codex' }
+      await writeTranscript(a, 'proj-a', 's1.jsonl', 's1')
+      await writeTranscript(a, 'proj-b', 's2.jsonl', 's2')
+      const dir = path.join(cx.configDir, 'sessions', '2026', '07', '09')
+      await fs.mkdir(dir, { recursive: true })
+      const rollout = path.join(dir, 'rollout-2026-07-09T00-00-00-019f4524-e0ac-7571-a8af-5585504f0d40.jsonl')
+      const meta = {
+        type: 'session_meta',
+        payload: { session_id: '019f4524-e0ac-7571-a8af-5585504f0d40', cwd: 'D:\\proj\\cx' }
+      }
+      await fs.writeFile(rollout, JSON.stringify(meta) + '\n', 'utf8')
+      index = new HistoryIndex(() => [a, cx])
+      expect(await projectNames()).toEqual(['cx', 'proj-a', 'proj-b'])
+
+      await fs.rm(path.join(a.configDir, 'projects', 'proj-b'), { recursive: true, force: true })
+      await index.startBackground()
+      const updated = vi.fn()
+      index.onUpdated = updated
+      await fs.appendFile(rollout, JSON.stringify(meta) + '\n', 'utf8')
+      await vi.waitFor(() => expect(updated).toHaveBeenCalled(), { timeout: 5000 })
+
+      // codex 쪽만 다시 읽혔으므로 claude 계정의 proj-b 행은 살아 있다
+      expect(await projectNames()).toEqual(['cx', 'proj-a', 'proj-b'])
+    })
+
+    it('새 폴더가 생기면 행이 추가된다', async () => {
+      const a = account('acc-a')
+      await writeTranscript(a, 'proj-a', 's1.jsonl', 's1')
+      index = new HistoryIndex(() => [a])
+      expect(await projectNames()).toEqual(['proj-a'])
+      await index.startBackground()
+      const updated = vi.fn()
+      index.onUpdated = updated
+      await writeTranscript(a, 'proj-new', 's2.jsonl', 's2')
+      await vi.waitFor(() => expect(updated).toHaveBeenCalled(), { timeout: 5000 })
+      expect(await projectNames()).toEqual(['proj-a', 'proj-new'])
+    })
+
+    it('폴더의 세션이 모두 사라지면 행이 빠진다', async () => {
+      const a = account('acc-a')
+      await writeTranscript(a, 'proj-a', 's1.jsonl', 's1')
+      await writeTranscript(a, 'proj-b', 's2.jsonl', 's2')
+      index = new HistoryIndex(() => [a])
+      expect(await projectNames()).toEqual(['proj-a', 'proj-b'])
+      await index.startBackground()
+      const updated = vi.fn()
+      index.onUpdated = updated
+      await fs.rm(path.join(a.configDir, 'projects', 'proj-b', 's2.jsonl'))
+      await vi.waitFor(() => expect(updated).toHaveBeenCalled(), { timeout: 5000 })
+      expect(await projectNames()).toEqual(['proj-a'])
+    })
+
+    it('폴더가 대표하는 cwd가 바뀌면 옛 행이 남지 않는다', async () => {
+      const a = account('acc-a')
+      await writeLines(a, 'moving', 'old.jsonl', [
+        { type: 'user', sessionId: 'old', cwd: 'D:\\work\\before', message: { role: 'user', content: '옛 질문' } }
+      ])
+      index = new HistoryIndex(() => [a])
+      expect(await projectNames()).toEqual(['before'])
+      await index.startBackground()
+      const updated = vi.fn()
+      index.onUpdated = updated
+      // 같은 폴더에 더 새로운 파일이 다른 cwd로 들어온다 — resolveProjectCwd 는 최신부터 읽는다
+      await writeLines(a, 'moving', 'new.jsonl', [
+        { type: 'user', sessionId: 'new', cwd: 'D:\\work\\after', message: { role: 'user', content: '새 질문' } }
+      ])
+      await vi.waitFor(() => expect(updated).toHaveBeenCalled(), { timeout: 5000 })
+      expect(await projectNames()).toEqual(['after'])
+    })
   })
 
   it('디렉터리를 .jsonl로 위장해도(파싱 실패) 죽지 않고 제외한다', async () => {
@@ -499,6 +660,52 @@ describe('HistoryIndex (lazy)', () => {
       expect(preview.messages).toEqual([
         { role: 'user', text: '베타 질문', timestamp: '2026-07-09T01:00:00Z' }
       ])
+    })
+
+    it('cwd 메모가 히트하면 rollout 파일을 다시 읽지 않는다', async () => {
+      const cx = codexAccount('cx-memo')
+      const file = await writeRollout(cx, '019f4524-e0ac-7571-a8af-5585504f0d36', 'D:\\proj\\ondisk', [
+        cxUser('질문')
+      ])
+      const st = await fs.stat(file)
+      const cache = new SessionCwdCache(path.join(tmp, 'session-cwd.json'))
+      await cache.load()
+      // 파일 내용과 **다른** cwd를 심는다 — 목록에 이것이 나오면 파일을 열지 않았다는 뜻이다
+      cache.set(file, st.mtimeMs, st.size, 'D:\\proj\\memoized')
+      index = new HistoryIndex(() => [cx], undefined, cache)
+      const { projects } = await index.projectsPage()
+      expect(projects.map((p) => p.projectPath)).toEqual(['D:\\proj\\memoized'])
+    })
+
+    it('메모가 없거나 (mtime,size)가 어긋나면 다시 읽고 결과를 메모에 남긴다', async () => {
+      const cx = codexAccount('cx-memo2')
+      const file = await writeRollout(cx, '019f4524-e0ac-7571-a8af-5585504f0d37', 'D:\\proj\\ondisk', [
+        cxUser('질문')
+      ])
+      const st = await fs.stat(file)
+      const cache = new SessionCwdCache(path.join(tmp, 'session-cwd.json'))
+      await cache.load()
+      cache.set(file, st.mtimeMs, st.size + 1, 'D:\\proj\\stale') // size 어긋남 = miss
+      index = new HistoryIndex(() => [cx], undefined, cache)
+      const { projects } = await index.projectsPage()
+      expect(projects.map((p) => p.projectPath)).toEqual(['D:\\proj\\ondisk'])
+      expect(cache.get(file, st.mtimeMs, st.size)).toBe('D:\\proj\\ondisk')
+    })
+
+    it('메모를 써도 프로젝트를 펼치면 세션이 정상적으로 파싱된다', async () => {
+      const cx = codexAccount('cx-memo3')
+      const file = await writeRollout(cx, '019f4524-e0ac-7571-a8af-5585504f0d38', 'D:\\proj\\delta', [
+        cxUser('델타 질문')
+      ])
+      const st = await fs.stat(file)
+      const cache = new SessionCwdCache(path.join(tmp, 'session-cwd.json'))
+      await cache.load()
+      cache.set(file, st.mtimeMs, st.size, 'D:\\proj\\delta')
+      index = new HistoryIndex(() => [cx], undefined, cache)
+      await index.projectsPage()
+      const { entries } = await index.page({ projectPath: 'D:\\proj\\delta' })
+      expect(entries).toHaveLength(1)
+      expect(entries[0].title).toBe('델타 질문')
     })
 
     it('claude 계정과 섞여도 각자의 파서·경로로 통합된다', async () => {

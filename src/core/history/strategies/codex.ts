@@ -22,23 +22,39 @@ export const codexHistoryStrategy: HistoryStrategy = {
   // through silently, it returns the same result as allDirs — too wide is safer than a truncated list
   dirsMatchingProject: (account, _projectPath, io) => codexHistoryStrategy.allDirs(account, io),
   /** Project summary list — for codex the folder is a date, so it is one row per cwd rather than one
-   *  row per folder. It parses the entries of every date folder and groups them by cwd (among the
-   *  same cwd, the newest updatedAt represents them). Map keys are normalized with io.pathKey. */
+   *  row per folder, and the cwd can only be read from inside the file. Grouped by cwd (among the
+   *  same cwd, the newest updatedAt represents them). Map keys are normalized with io.pathKey.
+   *
+   *  This used to call io.parseDir, which builds a full HistoryEntry per file — a head parse *and* a
+   *  256KB tail read (the tail was 39% of the cost, measured). A summary needs neither the title nor
+   *  awaitingReply, so only the head is read here, and io.cwdMemo keeps even that from being repeated
+   *  across restarts. The session list is built when a project is expanded, as it already is for claude.
+   *
+   *  The exclusion rule stays "no cwd = not a project", the same one buildEntry applies. */
   projectSummaries: async (account, io): Promise<ProjectSummary[]> => {
-    const byPath = new Map<string, ProjectSummary>()
+    const files: { path: string; mtimeMs: number; size: number }[] = []
     for (const dir of await codexHistoryStrategy.allDirs(account, io)) {
-      for (const e of await io.parseDir(account, dir)) {
-        const key = io.pathKey(e.projectPath)
-        const cur = byPath.get(key)
-        if (!cur || e.updatedAt > cur.updatedAt)
-          byPath.set(key, {
-            accountId: account.id,
-            projectPath: e.projectPath,
-            name: e.projectPath.split(/[\\/]/).filter(Boolean).pop() ?? e.projectPath,
-            updatedAt: e.updatedAt
-          })
+      for (const f of await io.jsonlByMtimeDesc(dir)) {
+        files.push({ path: path.join(dir, f.name), mtimeMs: f.mtimeMs, size: f.size })
       }
     }
+    const cwds = await io.cwdMemo(files, async (p) => (await parseCodexMeta(p)).cwd)
+    const byPath = new Map<string, ProjectSummary>()
+    files.forEach((f, i) => {
+      const cwd = cwds[i]
+      if (!cwd) return
+      const key = io.pathKey(cwd)
+      const updatedAt = new Date(f.mtimeMs).toISOString()
+      const cur = byPath.get(key)
+      if (!cur || updatedAt > cur.updatedAt) {
+        byPath.set(key, {
+          accountId: account.id,
+          projectPath: cwd,
+          name: cwd.split(/[\\/]/).filter(Boolean).pop() ?? cwd,
+          updatedAt
+        })
+      }
+    })
     return [...byPath.values()]
   },
   /** One codex rollout file → HistoryEntry. Treated as noise and null when cwd or sessionId is missing. */

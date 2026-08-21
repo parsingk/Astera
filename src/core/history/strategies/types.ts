@@ -9,7 +9,16 @@ import type { Account, HistoryEntry, ProjectSummary, TranscriptPreview } from '.
 export interface HistoryIo {
   /** Owns the mtime signature cache (dirCache), entryById registration, and parsing in parallel at concurrency 24 */
   parseDir(account: Account, dir: string): Promise<HistoryEntry[]>
-  jsonlByMtimeDesc(dir: string): Promise<{ name: string; mtimeMs: number }[]>
+  jsonlByMtimeDesc(dir: string): Promise<{ name: string; mtimeMs: number; size: number }[]>
+  /** Resolves the cwd of many session files at once, reusing a persisted memo where (mtimeMs, size)
+   *  still match; `parse` is called only on a miss. For a provider whose folder name does not carry
+   *  the project (codex: the folder is a date), the project list can only be built by opening every
+   *  session file, and this is what keeps that off the startup path from the second run on.
+   *  Called once per pass with the pass's whole live file set. Input order is preserved. */
+  cwdMemo(
+    files: { path: string; mtimeMs: number; size: number }[],
+    parse: (filePath: string) => Promise<string | null>
+  ): Promise<(string | null)[]>
   /** Absolute paths of the subdirectories. The codex strategy assembles the three-level date walk
    *  (y/m/d) out of this itself — the knowledge that "the date is three levels" belongs to the side
    *  that knows the layout */
@@ -39,6 +48,15 @@ export interface HistoryStrategy {
   /** The directories corresponding to projectPath. Not called when filtersByProject is false */
   dirsMatchingProject(account: Account, projectPath: string, io: HistoryIo): Promise<string[]>
   projectSummaries(account: Account, io: HistoryIo): Promise<ProjectSummary[]>
+  /** The one row a single directory stands for — the incremental counterpart of projectSummaries, used
+   *  when a file event says only that directory changed. Null means the directory contributes no row
+   *  any more (emptied, or noise only).
+   *
+   *  Present only for a provider whose directory maps 1:1 to a project (claude). codex leaves it out
+   *  on purpose: its folder is a date, so one folder holds several projects and the newest mtime for a
+   *  cwd can sit in a different folder — a row cannot be recomputed from one directory alone. The
+   *  caller falls back to invalidating that account when it is absent. */
+  projectSummaryForDir?(account: Account, dir: string, io: HistoryIo): Promise<ProjectSummary | null>
   buildEntry(
     account: Account,
     filePath: string,
