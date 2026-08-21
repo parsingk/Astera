@@ -38,6 +38,7 @@ import {
 } from '../core/orchestration/state'
 import { pickReviewer } from '../core/orchestration/reviewer'
 import { slotsToFill } from '../core/orchestration/schedule'
+import { firesDue } from '../core/orchestration/fire'
 import {
   buildIntegrationSpec,
   integrationTaskFor,
@@ -155,6 +156,11 @@ export function registerIpc(
   } | null = null
   /** 검증기. startOrchestration 이 만들 때까지, 그리고 오케스트레이션이 꺼져 있으면 null 이다 */
   let orchValidator: TaskValidator | null = null
+  /** 예약 템플릿의 다음 발화 시각. **상태에 저장하지 않는다** — 재시작하면 비어 있고, 그때
+   *  firesDue 가 nextFireAt(rule, now) 으로 다시 무장한다. 그것이 곧 "앱이 꺼져 있던 동안의
+   *  발화는 버린다"는 규칙의 구현이다(main/scheduler.ts 가 같은 이유로 같은 선택을 했다). */
+  let orchArmed = new Map<string, number>()
+  let orchFireTimer: ReturnType<typeof setInterval> | null = null
   /** A bounded per-dispatch tail of worker output — what worker-read reads. The append, cap, eviction,
    *  and limit rules, along with "when does it get cleared", live in orchestration/tail.ts (its tests
    *  pin them down). Eviction is the only path that clears it — not a dead session, not a
@@ -199,8 +205,13 @@ export function registerIpc(
     // The registry lives here, and runsForProject maps each Run.cwd through it — a Run created inside
     // a registered worktree is owned by the worktree's repository, which is the same mapping this
     // handler applies to the path the renderer sent (repoPathOf, in orch.list below).
-    // 무장은 Task 9 의 ticker 가 들고 있다. 지금은 아직 그 Map 이 없으므로 늘 null 이다.
-    return snapshotFor(state, projectPath, (id) => known.has(id), core.worktrees.list(), () => null)
+    return snapshotFor(
+      state,
+      projectPath,
+      (id) => known.has(id),
+      core.worktrees.list(),
+      (runId) => orchArmed.get(runId) ?? null
+    )
   }
   const pushOrchState = (state: OrchState): void => {
     if (orchProject === null) return // the renderer has not asked for a project, or it unwatched
@@ -1397,6 +1408,35 @@ export function registerIpc(
       }
     }
 
+    /** 15초 — 세션 스케줄러의 TICK_MS 와 같은 값이다 */
+    const ORCH_FIRE_TICK_MS = 15_000
+    /** 예약 템플릿의 발화. 판정은 core 의 firesDue 가 하고(그쪽에 테스트가 있다) 여기는 그 답대로
+     *  명령을 부른다. */
+    const orchFireTick = async (): Promise<void> => {
+      // 꺼져 있으면 아무 일도 하지 않는다. **끄는 것이 서버를 닫지는 않는다** —
+      // settings.setOrchestrationEnabled 는 enabled() 로 거절하게만 하므로, 이 확인이 없으면 꺼진
+      // 채로 회차가 계속 생긴다. runScheduler 의 같은 가드와 같은 이유다.
+      const o = orch
+      if (!o || !o.deps.enabled()) return
+      const { fire, arm } = firesDue(o.deps.getState(), orchArmed, Date.now())
+      // **아래 await 들보다 먼저 갈아 끼운다.** 회차를 만드는 데 15초가 넘게 걸리면 다음 tick 이
+      // 겹쳐 도는데, 그때 무장이 아직 옛 값이면 같은 템플릿이 한 번 더 발화한다.
+      orchArmed = arm
+      // **순차로 부른다.** 병렬로 띄우면 각 run-spawn 이 자기 진입 시점의 상태에 커밋해서 나중
+      // 것이 앞선 것의 자식 Run 을 덮는다 — run-create 가 await 뒤에 getState() 를 다시 읽는 것과
+      // 같은 위험이고, 그쪽은 한 명령 안의 await 를 다루지만 이쪽은 명령 사이의 await 다.
+      for (const runId of fire) {
+        const reply = await orchHandleCommand(o.deps, { sessionId: UI_CALLER }, 'run-spawn', {
+          run: runId
+        })
+        // 실패한 발화는 잃는다 — 무장은 이미 다음 시각으로 옮겨졌으므로 다음 시각에 다시 시도한다.
+        // 디스크가 찼거나 win32 에서 rename 이 잠긴 경우가 이 갈래다.
+        if (reply.status >= 400)
+          orchLog(`scheduled spawn failed run=${runId} status=${reply.status}`)
+        else orchLog(`scheduled spawn run=${runId} child=${JSON.stringify(reply.body)}`)
+      }
+    }
+
     const deps: OrchServerDeps = {
       getState: () => store.get(),
       // Passed in a form that is definitely awaited — the caller's await contract stays. save() itself
@@ -1563,6 +1603,11 @@ export function registerIpc(
     // 아무 일도 일어나지 않고, 그 이유는 화면 어디에도 없다.
     // **orch 대입 뒤에 있어야 한다** — 앞에 두면 orch 가 아직 null 이라 아무 일도 하지 않는다.
     void runScheduler().catch((e) => orchLog(`scheduler failed at startup: ${String(e)}`))
+    // 예약 템플릿의 발화. **첫 바퀴는 무장만 한다**(firesDue) — 앱을 켤 때마다 한 회차가 도는
+    // 것을 막는 장치가 그것이고, 그래서 여기서 즉시 한 번 부르지 않는다.
+    orchFireTimer = setInterval(() => {
+      void orchFireTick().catch((e) => orchLog(`fire tick failed: ${String(e)}`))
+    }, ORCH_FIRE_TICK_MS)
     // Installing the discovery stub — without it there is no path by which an agent finds this feature.
     // **Done for every claude and codex account**: the path is the same
     // (<configDir>/skills/astera-orchestration/SKILL.md), and there is evidence that codex also treats
@@ -1587,6 +1632,10 @@ export function registerIpc(
       .catch((err) => orchLog(`stub install failed: ${String(err)}`))
     orchWiring?.onStarted({
       stop: () => {
+        if (orchFireTimer) {
+          clearInterval(orchFireTimer)
+          orchFireTimer = null
+        }
         // Delete the token file. unlinkSync because this is called from will-quit, where an asynchronous
         // delete has no guarantee of completing before the process ends. Leaving the shuttle behind is
         // harmless (it holds no token).
