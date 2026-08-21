@@ -10,7 +10,13 @@ export interface FileChange {
 }
 
 /** Recursively watches one explorer root and emits changes. The watch exclusions are language-neutral
- *  (buildIgnoreMatcher). Follows HistoryIndex's chokidar usage pattern. */
+ *  (buildIgnoreMatcher).
+ *
+ *  chokidar, not the native recursive fs.watch HistoryIndex moved to. That move was worth 5.5s of
+ *  startup there because the index only needs to know *that* some .jsonl changed; this has to tell
+ *  add/change/unlink/addDir/unlinkDir apart and drop the ignored paths, and a native watcher reports
+ *  only rename/change — no file-or-directory distinction, no filtering. The per-file walk that made
+ *  chokidar expensive is exactly what lets it answer that, so it stays. */
 export class FileWatcher {
   private watcher: FSWatcher | null = null
   private root: string | null = null
