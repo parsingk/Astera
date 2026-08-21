@@ -20,6 +20,7 @@ import {
   openDispatch,
   resolveGate,
   deleteRuns,
+  spawnScheduledRun,
   type OrchState,
   type Res
 } from '../../core/orchestration/state'
@@ -145,6 +146,7 @@ const COORDINATOR_ONLY = new Set([
   'run-create',
   'run-use',
   'run-delete',
+  'run-spawn',
   'task-create',
   'task-update',
   'worker-start',
@@ -364,6 +366,14 @@ export async function handleCommand(
       const before = s.tasks.filter((t) => t.runId === id).length
       await deps.setState(deleteRuns(deps.getState(), new Set([id])))
       return okBody({ deleted: id, tasks: before })
+    }
+    // 예약 템플릿의 한 회차를 만든다. **부르는 것은 앱의 ticker 뿐이다**(src/main/ipc.ts) —
+    // 코디네이터에게 이 명령을 광고하지 않는다. 그래도 명령으로 두는 이유는 이 파일이 지키는
+    // 규율이다: 상태를 쓰는 문은 하나이고, 그 문이 검증·커밋·감사 로그를 함께 지난다.
+    case 'run-spawn': {
+      const id = str(args.run)
+      if (!id) return bad('--run is required')
+      return commit(spawnScheduledRun(s, id, now))
     }
     case 'task-create': {
       const runId = str(args.runId) ?? s.runs[s.runs.length - 1]?.id

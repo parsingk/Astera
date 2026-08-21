@@ -2206,3 +2206,66 @@ describe('run-delete', () => {
     expect(r.status).toBe(403)
   })
 })
+
+describe('run-spawn — 예약 회차', () => {
+  const withTemplate = async (): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    templateId: string
+  }> => {
+    const deps = makeDeps()
+    const r = await call(deps, 'run-create', {
+      objective: '매일 점검',
+      cwd: 'D:/p',
+      provider: 'claude',
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    return { deps, templateId: (r.body as { id: string }).id }
+  }
+
+  it('템플릿의 회차를 만들고 자식 Run 을 돌려준다', async () => {
+    const { deps, templateId } = await withTemplate()
+    const r = await call(deps, 'run-spawn', { run: templateId })
+    expect(r.status).toBe(200)
+    const child = r.body as { id: string; templateId?: string; autoDispatch?: boolean }
+    expect(child.templateId).toBe(templateId)
+    expect(child.autoDispatch).toBe(true)
+    expect(deps.getState().runs).toHaveLength(2)
+  })
+
+  it('--run 이 없으면 400', async () => {
+    const { deps } = await withTemplate()
+    expect((await call(deps, 'run-spawn', {})).status).toBe(400)
+  })
+
+  it('예약이 아닌 Run 은 400', async () => {
+    const deps = makeDeps()
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const plain = (r.body as { id: string }).id
+    expect((await call(deps, 'run-spawn', { run: plain })).status).toBe(400)
+  })
+
+  // 워커가 회차를 만들 수 있으면 워커가 자기 일을 무한히 복제할 수 있다
+  it('워커 세션은 부를 수 없다', async () => {
+    const { deps, templateId } = await withTemplate()
+    const withDispatch: OrchState = {
+      ...deps.getState(),
+      dispatches: [
+        {
+          id: 'dsp1',
+          taskId: 'tsk1',
+          provider: 'claude',
+          accountId: 'acc1',
+          sessionId: 'worker1',
+          cwd: 'D:/p',
+          specPath: 'D:/p/spec.md',
+          startedAt: NOW,
+          workerState: 'ready',
+          retained: false
+        }
+      ]
+    }
+    await deps.setState(withDispatch)
+    const r = await call(deps, 'run-spawn', { run: templateId }, 'worker1')
+    expect(r.status).toBe(403)
+  })
+})
