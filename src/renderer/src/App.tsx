@@ -40,6 +40,7 @@ import type {
   TerminalBuffer
 } from '../../core/types'
 import { slackMode } from '../../core/slack/ready'
+import { findRun } from '../../core/orchestration/snapshot'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
 import {
@@ -1646,7 +1647,9 @@ export default function App(): React.JSX.Element {
     // 프로젝트는 그대로인데 main 은 접근 위반과 똑같이 생긴 `run X does not belong to Y` 를 로그에
     // 남긴다. orchSnapshot 이 아직 null 이면(안 왔다) 없다고 단정하지 않는다 — 그때는 부르는 쪽이
     // 맞다. Run 이 사라진 뒤에 창을 닫는 것은 아래의 새 효과다.
-    if (orchSnapshot !== null && !orchSnapshot.runs.some((r) => r.id === openRun.runId)) return
+    // **findRun 이어야 한다**(snapshot.ts): 예약 회차는 최상위 runs 에서 빠져 children 에 있으므로
+    // `runs.some` 은 회차를 늘 "없다"고 답하고, 그러면 상세 창이 영원히 비어 있다.
+    if (orchSnapshot !== null && !findRun(orchSnapshot, openRun.runId)) return
     let cancelled = false
     // 거부 팔을 반드시 둔다 — 위의 가드가 걸러도 main 은 저장소를 읽다 던질 수 있고, 그러면
     // DevTools 에 Uncaught (in promise) 가 뜬다. 빈 모양으로 접으면 모달은 빈 상태를 그린다.
@@ -1675,7 +1678,8 @@ export default function App(): React.JSX.Element {
   // 아니다 — 아직 첫 조회가 오지 않았을 뿐이면 닫지 않는다.
   useEffect(() => {
     if (!openRun || openRun.projectPath !== currentProject || orchSnapshot === null) return
-    if (!orchSnapshot.runs.some((r) => r.id === openRun.runId)) setOpenRun(null)
+    // 위와 같은 이유로 findRun 이다 — `runs.some` 이면 회차의 상세 창이 열린 다음 프레임에 닫힌다.
+    if (!findRun(orchSnapshot, openRun.runId)) setOpenRun(null)
   }, [openRun, currentProject, orchSnapshot])
 
   // Whether RunConfigManager is actually on screen — gates both its render below and the shortcut
@@ -2393,7 +2397,9 @@ export default function App(): React.JSX.Element {
                 onDeleteRun={(runId) => {
                   void (async () => {
                     if (!currentProject) return
-                    const run = orchSnapshot?.runs.find((r) => r.id === runId)
+                    // findRun: 회차는 최상위 runs 에 없다(snapshot.ts). `runs.find` 였을 때
+                    // 회차의 휴지통은 눌려도 이 자리에서 조용히 되돌아갔다.
+                    const run = orchSnapshot ? findRun(orchSnapshot, runId) : undefined
                     if (!run) return
                     const ok = await confirmModal({
                       title: t('jobs.run.delete'),
@@ -3104,7 +3110,8 @@ export default function App(): React.JSX.Element {
         <RunDetail
           // 그래프의 노드는 제목·상태·세션을 스냅샷에서 읽는다(detail 의 layers 는 id 뿐이다).
           // 그 Run 이 스냅샷에서 사라졌으면(다른 프로젝트로 갔거나 지워졌다) undefined 다.
-          run={orchSnapshot?.runs.find((r) => r.id === openRun.runId)}
+          // findRun 인 이유는 위 두 효과와 같다 — 예약 회차는 children 안에 있다(snapshot.ts).
+          run={orchSnapshot ? findRun(orchSnapshot, openRun.runId) : undefined}
           detail={detail}
           // Task 짓기(task-create)와 검증 구성 조회(run.list)가 쓴다 — run 이 undefined 인 동안에도
           // openRun 이 이 짝을 그대로 들고 있으므로 run?.id 를 대신 넘길 이유가 없다.
