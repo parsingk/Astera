@@ -565,6 +565,26 @@ describe('snapshotFor — 예약 템플릿과 회차', () => {
     expect(snap.runs[0].children?.map((r) => r.id)).toEqual(['c2', 'c1'])
   })
 
+  // 사이드바가 "N회 실행" 으로 적는 값. 자식 개수가 아니라 이 값이어야 기록을 지워도 뒤로 가지 않는다
+  it('템플릿의 fireCount 와 회차의 fireOrdinal 을 그대로 싣는다', () => {
+    const t = { ...scheduled('t1', absPath('proj')), fireCount: 9 }
+    const k = { ...child('c1', absPath('proj'), 't1'), fireOrdinal: 9 }
+    const snap = snapshotFor(withRuns([t, k]), absPath('proj'), anySession, noWorktrees, noFires)
+    expect(snap.runs[0].fireCount).toBe(9)
+    expect(snap.runs[0].children?.[0].fireOrdinal).toBe(9)
+  })
+
+  it('값이 없으면 칸도 없다 — 이 필드가 생기기 전의 템플릿', () => {
+    const snap = snapshotFor(
+      withRuns([scheduled('t1', absPath('proj'))]),
+      absPath('proj'),
+      anySession,
+      noWorktrees,
+      noFires
+    )
+    expect('fireCount' in snap.runs[0]).toBe(false)
+  })
+
   it('템플릿의 규칙을 그대로 싣는다', () => {
     const s = withRuns([scheduled('t1', absPath('proj'))])
     const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires)

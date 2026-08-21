@@ -775,7 +775,9 @@ export const ko = {
   'jobs.run.sharedFolderHint': '다른 작업의 워커와 같은 폴더에서 돌고 있습니다 — 서로의 편집이 섞일 수 있고, 앱은 그것을 막지도 알아채지도 못합니다',
   'jobs.run.scheduled': '예약',
   'jobs.run.scheduleNext': '다음 {time}',
-  'jobs.run.scheduleRuns': '회차 {count}',
+  'jobs.run.scheduleRuns': '{count}회 실행',
+  // 회차 줄의 번호. 발화 시점에 찍힌 서수라 기록을 지워도 남은 번호가 바뀌지 않는다
+  'jobs.run.scheduleOrdinal': '{n}회차',
   'jobs.run.scheduleEmpty': '대기 중',
   'jobs.gates.more': '외 {count}건',
   // RunDetail.tsx 의 아래 칸 — 이벤트 목록. 종류 배지는 이벤트 종류(또는 메시지 종류)가 고른다.

@@ -40,6 +40,15 @@ export interface Run {
    *  command 를 필수로 요구하는데(isValidScheduleConfig) Job 에는 타이핑할 명령이 없다 —
    *  Task 가 곧 일이다. */
   schedule?: ScheduleRule
+  /** 이 템플릿이 지금까지 발화한 횟수. **템플릿만 갖는다.**
+   *
+   *  자식 개수로 세지 않는 이유가 이 필드의 존재 이유다 — 회차 기록은 사람이 지우고 30일 TTL 도
+   *  지우므로(store.ts), 개수로 세면 "N회차"가 뒤로 간다. 실제로 그렇게 보고됐다.
+   *  없으면 0 으로 읽는다(이 필드가 생기기 전에 만들어진 템플릿). */
+  fireCount?: number
+  /** 이 회차가 몇 번째 발화인가. **자식만 갖는다.** 위 fireCount 를 발화 시점에 찍어 둔 값이라
+   *  기록을 지워도 남은 회차의 번호가 바뀌지 않는다. */
+  fireOrdinal?: number
   /** 이 Run 이 어느 템플릿의 한 회차인가. 있으면 실행 기록이다.
    *
    *  **schedule 과 배타적이다.** 자식에 schedule 을 복사하면 자식이 또 발화해 무한히 증식한다. */

@@ -1661,15 +1661,67 @@ describe('spawnScheduledRun', () => {
     expect(copyA.consecutiveFailures).toBe(0)
   })
 
-  it('템플릿과 그 Task 는 그대로다', () => {
+  // 템플릿에서 **fireCount 하나만** 움직인다. 발화 횟수는 템플릿에 새기는 값이라 여기서 늘어나는
+  // 것이 맞고, 나머지는 그대로여야 한다 — 특히 Task 는 정의이므로 손대면 다음 회차가 달라진다.
+  it('템플릿은 fireCount 만 늘고 나머지와 Task 는 그대로다', () => {
     const { s, templateId } = template()
+    const before = s.runs.find((r) => r.id === templateId)!
     const { state } = unwrap<{ id: string }>(spawnScheduledRun(s, templateId, FIRE) as never)
-    expect(state.runs.find((r) => r.id === templateId)).toEqual(
-      s.runs.find((r) => r.id === templateId)
-    )
+    const after = state.runs.find((r) => r.id === templateId)!
+    expect(after).toEqual({ ...before, fireCount: 1 })
     expect(state.tasks.filter((t) => t.runId === templateId)).toEqual(
       s.tasks.filter((t) => t.runId === templateId)
     )
+  })
+
+  // 사이드바가 적는 "N회 실행" 이 이 값이다. **기록을 지워도 줄지 않는 것**이 이 필드가 있는 이유고,
+  // 그것을 자식 개수로 세던 동안 회차를 지우면 숫자가 뒤로 갔다.
+  it('발화마다 fireCount 가 1씩 늘고 자식이 그 서수를 갖는다', () => {
+    const { s, templateId } = template()
+    let st = s
+    const ordinals: (number | undefined)[] = []
+    for (let i = 0; i < 3; i++) {
+      const r = unwrap<{ id: string; fireOrdinal?: number }>(
+        spawnScheduledRun(st, templateId, FIRE) as never
+      )
+      st = r.state
+      ordinals.push(r.value.fireOrdinal)
+    }
+    expect(ordinals).toEqual([1, 2, 3])
+    expect(st.runs.find((r) => r.id === templateId)!.fireCount).toBe(3)
+  })
+
+  // 이 필드가 생기기 전에 만들어진 템플릿 — fireCount 가 없다. 1 부터 세기 시작해야 한다
+  it('fireCount 가 없는 템플릿은 1 부터 센다', () => {
+    const { s, templateId } = template()
+    const stripped: OrchState = {
+      ...s,
+      runs: s.runs.map((r) => {
+        if (r.id !== templateId) return r
+        const { fireCount: _drop, ...rest } = r
+        return rest
+      })
+    }
+    const { state, value: child } = unwrap<{ id: string; fireOrdinal?: number }>(
+      spawnScheduledRun(stripped, templateId, FIRE) as never
+    )
+    expect(child.fireOrdinal).toBe(1)
+    expect(state.runs.find((r) => r.id === templateId)!.fireCount).toBe(1)
+  })
+
+  // 회차를 지워도 발화 횟수는 그대로여야 한다 — 이 결함의 재현이다
+  it('회차를 지워도 fireCount 는 줄지 않는다', () => {
+    const { s, templateId } = template()
+    let st = s
+    const kids: string[] = []
+    for (let i = 0; i < 3; i++) {
+      const r = unwrap<{ id: string }>(spawnScheduledRun(st, templateId, FIRE) as never)
+      st = r.state
+      kids.push(r.value.id)
+    }
+    const pruned = deleteRuns(st, new Set(kids.slice(0, 2)))
+    expect(pruned.runs.filter((r) => r.templateId === templateId)).toHaveLength(1)
+    expect(pruned.runs.find((r) => r.id === templateId)!.fireCount).toBe(3)
   })
 
   it('예약이 아닌 Run 은 거절한다', () => {

@@ -66,6 +66,7 @@ function RunCard({
   run,
   open,
   onToggle,
+  ordinal,
   nowMs,
   canOpenSession,
   onOpenSession,
@@ -75,6 +76,8 @@ function RunCard({
   run: JobRun
   open: boolean
   onToggle: () => void
+  /** 예약 회차라면 그 번호. 평범한 Run 에는 없다 */
+  ordinal?: number
   nowMs: number
   canOpenSession: (sessionId: string) => boolean
   onOpenSession: (sessionId: string) => void
@@ -102,6 +105,12 @@ function RunCard({
     >
       <div className="jobs-run-head" onClick={() => onToggle()}>
         <span className="jobs-caret">{open ? '▾' : '▸'}</span>
+        {/* 예약 회차의 번호. 한 템플릿의 회차들은 목표가 같아서(spawnScheduledRun 이 복사한다)
+            제목만으로는 서로 구별되지 않는다 — 이 칩이 그것을 구별하는 유일한 표시다.
+            평범한 Run 은 이 프롭을 받지 않으므로 그대로다. */}
+        {ordinal !== undefined && (
+          <span className="jobs-ordinal">{t('jobs.run.scheduleOrdinal', { n: ordinal })}</span>
+        )}
         <span className={`jobs-objective${kind === 'done' ? ' done' : ''}`} title={run.objective}>
           {run.objective}
         </span>
@@ -310,7 +319,12 @@ function ScheduleCard({
         {run.nextFireAt !== undefined && (
           <span>{t('jobs.run.scheduleNext', { time: fmtNext(run.nextFireAt) })}</span>
         )}
-        <span>{t('jobs.run.scheduleRuns', { count: children.length })}</span>
+        {/* **children.length 가 아니라 fireCount 다.** 회차 기록은 사람이 지우고 30일 TTL 도
+            지우므로, 개수로 적으면 이 숫자가 뒤로 간다 — 실제로 그렇게 보고됐다. 아래 회차 목록의
+            길이는 "보관된 기록"이고 이 숫자는 "지금까지 몇 번 돌았나"로, 서로 다른 질문이다.
+            fireCount 가 없는 것은 이 필드가 생기기 전의 템플릿이다 — 아직 한 번도 안 돈 것과 같이
+            0 으로 읽는다(그 둘을 구별할 근거가 상태에 없다). */}
+        <span>{t('jobs.run.scheduleRuns', { count: run.fireCount ?? 0 })}</span>
       </div>
       {open &&
         (children.length === 0 ? (
@@ -323,6 +337,7 @@ function ScheduleCard({
                 run={kid}
                 open={!collapsed.has(kid.id)}
                 onToggle={() => onToggleChild(kid.id)}
+                ordinal={kid.fireOrdinal}
                 nowMs={nowMs}
                 canOpenSession={canOpenSession}
                 onOpenSession={onOpenSession}

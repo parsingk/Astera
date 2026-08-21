@@ -390,6 +390,11 @@ export interface JobRun {
    *  (snapshotFor 의 nextFireOf). 렌더러가 스스로 계산할 수 없는 이유는 interval 이다:
    *  "무장 시각 + N분" 이라 그 앵커를 렌더러가 모른다. */
   nextFireAt?: number
+  /** 이 템플릿이 지금까지 발화한 횟수 — Run 이 들고 있는 값을 그대로 옮긴 것이다.
+   *  **children.length 와 다른 질문이다**: 기록을 지우거나 TTL 이 정리해도 이 값은 줄지 않는다. */
+  fireCount?: number
+  /** 이 회차가 몇 번째 발화인가. 자식만 갖는다. */
+  fireOrdinal?: number
   /** 이 템플릿의 회차들, 최신순. 접힌 회차는 OrchSnapshot.runs 의 최상위에서 빠진다.
    *
    *  **예약이 아닌 Run 에는 이 칸이 아예 없다.** 빈 배열을 달면 sameSnapshot 의 문자열이 이유

@@ -113,6 +113,9 @@ export function spawnScheduledRun(s: OrchState, templateId: string, now: string)
   const template = s.runs.find((r) => r.id === templateId)
   if (!template) return err(`unknown run: ${templateId}`)
   if (!template.schedule) return err(`run is not scheduled: ${templateId}`)
+  // 몇 번째 발화인가. **자식 개수가 아니라 템플릿에 새긴 카운터에서 온다** — 개수로 세면 회차를
+  // 지우거나 TTL 이 정리할 때 번호가 뒤로 간다(Run.fireCount 의 주석).
+  const ordinal = (template.fireCount ?? 0) + 1
   const child: Run = {
     id: newId('run'),
     objective: template.objective,
@@ -121,7 +124,8 @@ export function spawnScheduledRun(s: OrchState, templateId: string, now: string)
     ...(template.provider ? { provider: template.provider } : {}),
     ...(template.concurrency !== undefined ? { concurrency: template.concurrency } : {}),
     autoDispatch: true,
-    templateId
+    templateId,
+    fireOrdinal: ordinal
   }
   // createdAt 오름차순 — snapshotFor 가 쓰는 순서이고, 의존 사슬을 읽는 순서다
   const source = s.tasks
@@ -146,7 +150,12 @@ export function spawnScheduledRun(s: OrchState, templateId: string, now: string)
     updatedAt: now
   }))
   return ok(
-    { ...s, runs: [...s.runs, child], tasks: recomputeReady([...s.tasks, ...copies]) },
+    {
+      ...s,
+      // 템플릿에서 움직이는 것은 이 카운터 하나다 — Task 는 정의이므로 손대면 다음 회차가 달라진다
+      runs: [...s.runs.map((r) => (r.id === templateId ? { ...r, fireCount: ordinal } : r)), child],
+      tasks: recomputeReady([...s.tasks, ...copies])
+    },
     child
   )
 }

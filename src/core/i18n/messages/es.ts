@@ -752,7 +752,8 @@ export const es: Catalog = {
   'jobs.run.sharedFolderHint': 'Corre en la misma carpeta que el worker de otro trabajo — sus ediciones pueden mezclarse, y la app ni lo impide ni lo detecta',
   'jobs.run.scheduled': 'Programado',
   'jobs.run.scheduleNext': 'siguiente {time}',
-  'jobs.run.scheduleRuns': '{count} ejecuciones',
+  'jobs.run.scheduleRuns': '{count} ejecuciones en total',
+  'jobs.run.scheduleOrdinal': 'ejecución n.º {n}',
   'jobs.run.scheduleEmpty': 'En espera',
   'jobs.gates.more': '+{count} más',
   // RunDetail.tsx, panel inferior — la lista de eventos. La insignia la elige el tipo de evento (o el tipo

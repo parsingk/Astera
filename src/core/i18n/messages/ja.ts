@@ -740,7 +740,8 @@ export const ja: Catalog = {
   'jobs.run.sharedFolderHint': '別の作業のワーカーと同じフォルダで動いています — 互いの編集が混ざることがあり、アプリはそれを防ぐことも気づくこともできません',
   'jobs.run.scheduled': '予約',
   'jobs.run.scheduleNext': '次回 {time}',
-  'jobs.run.scheduleRuns': '{count} 回',
+  'jobs.run.scheduleRuns': '{count} 回実行',
+  'jobs.run.scheduleOrdinal': '{n} 回目',
   'jobs.run.scheduleEmpty': '待機中',
   'jobs.gates.more': '他 {count} 件',
   // RunDetail.tsx の下カラム — イベント一覧。種別バッジはイベント種別（またはメッセージ種別）が決める。
