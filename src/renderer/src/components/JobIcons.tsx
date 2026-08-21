@@ -236,8 +236,10 @@ function shapeOf(status: TaskStatus, still: boolean): React.JSX.Element {
     // 도는 셋. 회색 테두리 위를 4분의 1 호가 돈다 — 호만 있으면 작은 크기에서 무엇이 도는지
     // 읽히지 않아서, 도는 자리를 테두리가 먼저 그려 준다.
     // still 이면 같은 그림이 멈춘다. 클래스를 떼는 것만으로 되는 이유는 회전이 CSS 에 있기
-    // 때문이고(.job-arc), 그래서 reduced-motion 인 사람이 이미 보고 있던 그림과 같아진다 —
-    // 움직임으로 말하는 신호는 애초에 그쪽에 닿지 않는다
+    // 때문이다(.job-arc).
+    // **멈춤은 이 글리프에서 오직 still 만 뜻한다.** 한때 styles.css 가 reduced-motion 에서도 그
+    // 회전을 껐는데, 그러면 도는 Task 와 워커가 멈춘 Task 가 똑같이 그려져 이 구별 자체가 사라진다 —
+    // 그래서 그 예외를 걷었다(styles.css 의 .job-arc 주석, core/orchestration/spinnerCss.test.ts)
     case 'dispatched':
     case 'validating':
     case 'reviewing':
