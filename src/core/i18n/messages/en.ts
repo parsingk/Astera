@@ -647,7 +647,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.run.scheduled': 'Scheduled',
   'jobs.run.scheduleNext': 'next {time}',
   'jobs.run.scheduleRuns': '{count} runs',
-  'jobs.run.scheduleEmpty': 'No runs yet',
+  'jobs.run.scheduleEmpty': 'Waiting',
   'jobs.gates.more': '+{count} more',
   // RunDetail.tsx, lower pane — the event list. The badge is chosen by the event kind (or the message
   // type). The jobs.timeline.* names stay because that pane is the timeline. The sidebar's way in is

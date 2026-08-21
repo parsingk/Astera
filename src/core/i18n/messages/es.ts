@@ -753,7 +753,7 @@ export const es: Catalog = {
   'jobs.run.scheduled': 'Programado',
   'jobs.run.scheduleNext': 'siguiente {time}',
   'jobs.run.scheduleRuns': '{count} ejecuciones',
-  'jobs.run.scheduleEmpty': 'Aún no hay ejecuciones',
+  'jobs.run.scheduleEmpty': 'En espera',
   'jobs.gates.more': '+{count} más',
   // RunDetail.tsx, panel inferior — la lista de eventos. La insignia la elige el tipo de evento (o el tipo
   // de mensaje). Los nombres jobs.timeline.* se mantienen: ese panel es la línea de tiempo, y

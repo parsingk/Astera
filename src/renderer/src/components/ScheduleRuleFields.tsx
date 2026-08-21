@@ -91,7 +91,12 @@ export function ScheduleRuleFields({
           </>
         )}
         {kind !== 'interval' && (
-          <input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+          <input
+            type="time"
+            className="sched-time"
+            value={time}
+            onChange={(e) => setTime(e.target.value)}
+          />
         )}
       </div>
       {kind === 'weekly' && (

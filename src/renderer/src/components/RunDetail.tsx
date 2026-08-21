@@ -137,10 +137,11 @@ export function RunDetail({
   /** Task 짓기 폼의 검증 구성 목록. null 은 아직 안 온 것 — NewTaskModal 의 prop 문서와 같은 뜻이다.
    *
    *  **run.list 로 받는다. orch.command(..., 'run-configs', ...) 가 아니다.** run-configs 명령은
-   *  `s.runs[s.runs.length - 1]` — 가장 최근에 만들어진 Run — 을 위해 답하고 어느 Run 을 위한 것인지
-   *  받는 인자가 아예 없다(server.ts 의 'run-configs' case). 이 창은 프로젝트마다 열릴 수 있고 그
-   *  프로젝트가 반드시 "가장 최근 Run"의 프로젝트라는 보장이 없으므로, 그 명령을 쓰면 다른
-   *  프로젝트의 실행 구성 목록이 뜰 수 있다. run.list(projectPath) 는 프로젝트로 직접 물어보고
+   *  latestOrdinaryRun(s) — 템플릿도 예약 회차도 아닌 것 중 가장 최근 Run — 을 위해 답하고 어느 Run
+   *  을 위한 것인지 받는 인자가 아예 없다(server.ts 의 'run-configs' case). 이 창은 프로젝트마다
+   *  열릴 수 있고 그 Run 이 이 창의 프로젝트에 속한다는 보장이 없으므로, 그 명령을 쓰면 다른
+   *  프로젝트의 실행 구성 목록이 뜰 수 있다. **예약이 생긴 뒤로는 더 그렇다** — 발화가 Run 을
+   *  만들므로 그 "가장 최근"이 사람의 동작 없이도 움직인다. run.list(projectPath) 는 프로젝트로 직접 물어보고
    *  (assertAllowedPath 를 거친다) 오케스트레이션 상태를 바꾸지 않는 프로젝트 설정 조회이므로 "UI 는
    *  orch.command 만 부른다" 규칙과 부딪히지 않는다 — 그 규칙은 오케스트레이션 상태를 바꾸는
    *  통로에 대한 것이다. listRunConfigs(ipc.ts, run-configs 가 쓰는 것)와 run.list 핸들러는 똑같이

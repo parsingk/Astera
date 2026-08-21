@@ -704,7 +704,14 @@ export async function handleCommand(
     }
     case 'run-use': {
       // Run binding. For now this assumes real use has exactly one Run and is left as a no-op
-      // success — check uses "the most recent Run" anyway, so the result is the same.
+      // success — check falls back to latestOrdinaryRun(s) anyway, so for an ordinary Run the
+      // result is the same.
+      //
+      // **That equivalence stopped being unconditional once schedules existed.** Bind a template
+      // or one of its executions and check still resolves to the most recent *ordinary* Run, so
+      // the two disagree. Not guarded here because this command already changes nothing; the note
+      // is here so the next reader does not carry the old "the result is the same" any further
+      // than it now reaches.
       const id = str(args.id)
       if (!s.runs.some((r) => r.id === id)) return bad(`unknown run: ${String(id)}`)
       return okBody({ bound: id })

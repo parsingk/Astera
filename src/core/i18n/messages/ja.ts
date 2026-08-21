@@ -741,7 +741,7 @@ export const ja: Catalog = {
   'jobs.run.scheduled': '予約',
   'jobs.run.scheduleNext': '次回 {time}',
   'jobs.run.scheduleRuns': '{count} 回',
-  'jobs.run.scheduleEmpty': 'まだ実行された回はありません',
+  'jobs.run.scheduleEmpty': '待機中',
   'jobs.gates.more': '他 {count} 件',
   // RunDetail.tsx の下カラム — イベント一覧。種別バッジはイベント種別（またはメッセージ種別）が決める。
   // jobs.timeline.* の名前が残るのは、このカラムがタイムラインそのものだからだ。ウィンドウを開く

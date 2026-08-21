@@ -691,6 +691,44 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* Same ring-plus-brightened-border as .sel-trigger:focus-visible, on :focus rather than :focus-visible —
    a text box is focused to be typed in, so there is no pointer-versus-keyboard distinction to make. */
 .jobs-concurrency:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
+/* 예약 규칙 줄의 입력칸 셋. 위의 팔레트 규칙이 잡는 것은 `1,15`(일자) 하나뿐이다 — 이 줄에서 type 이
+   text 인 유일한 칸이라서다. 나머지 둘, 분 입력(number)과 시각 입력(time)은 브라우저 기본값으로
+   남아 흰 상자로 그려졌다. 셋 다 같은 줄에서 .sel-trigger 옆에 서므로 그 트리거의 값으로 맞춘다 —
+   같은 바탕·테두리·둥근 정도, 그리고 **같은 높이(--sel-h)**: 높이가 어긋나면 한 줄로 읽히지 않는다.
+   `.field input.` 로 적는 이유는 특이도다 — 위 팔레트 규칙이 (0,2,1)이라 `.sched-days` 만으로는
+   padding 을 이기지 못한다. 클래스만으로 쓰면 일자 칸의 글자 들여쓰기가 형제들과 2px 어긋난다.
+   **두 모달이 함께 바뀐다.** 이 칸들은 ScheduleRuleFields 하나에서 나오고 세션 예약 모달도 같은
+   컴포넌트를 쓴다 — 한 위젯이 두 자리에서 다르게 보이는 것이 더 나쁘다. */
+.field input.sched-minutes, .field input.sched-days, .field input.sched-time {
+  height: var(--sel-h);
+  padding: 0 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  font-family: var(--sans);
+  font-size: 12px;
+  transition: border-color var(--ease), box-shadow var(--ease);
+}
+.field input.sched-minutes:focus, .field input.sched-days:focus, .field input.sched-time:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--ring);
+}
+/* .jobs-concurrency 와 같은 이유로 스피너를 없앤다 — 색을 받지 않아 어떤 테마에서도 밝은 회색으로
+   남는 유일한 조각이 된다(그쪽 주석에 실측이 적혀 있다). */
+.field input.sched-minutes::-webkit-inner-spin-button { appearance: none; }
+/* 시각 칸의 네이티브 부분들 — 시계 아이콘과, 그 아이콘이 여는 **선택기 팝업**.
+   `color-scheme: dark` 가 이 둘에 닿는 **유일한 레버**다. 팝업은 페이지가 아니라 브라우저가 페이지
+   밖에 그리는 창이라 CSS 선택자로는 잡을 수 없다 — 배경도 글자색도 지정할 방법이 없고, 이 선언이
+   Chromium 에게 "어두운 쪽으로 그려라"라고 말하는 전부다.
+   아이콘도 이것으로 밝아진다(실측). 그래서 filter: invert 로 뒤집던 방식을 버렸다 — 둘을 함께 쓰면
+   이미 밝아진 아이콘을 다시 뒤집어 어두워진다.
+   여섯 테마가 모두 어두우므로(core/theme/themes.ts) dark 로 고정해도 테마와 어긋나지 않는다.
+   **주의**: 같은 선언이 number 스피너에는 듣지 않는다 — .jobs-concurrency 주석의 실측 그대로다.
+   위젯마다 다르다는 뜻이고, 그래서 스피너는 없애고 이쪽은 이 선언을 쓴다. */
+.field input.sched-time { color-scheme: dark; }
+.field input.sched-time::-webkit-calendar-picker-indicator { cursor: pointer; }
 /* 예약 실행이 켜졌을 때 규칙 칸들이 들어가는 자리. ScheduleRuleFields 는 .row 둘을 내놓을 뿐이라
    묶어 줄 상자가 필요하다 — .sched-field 를 빌리지 않는 이유는 그것이 명령 칸까지 있는 세션 쪽
    폼의 간격이라서다. */
@@ -950,6 +988,17 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .roll-prompt-field { display: flex; flex-direction: column; gap: 3px; margin-top: -2px; }
 .roll-prompt-input { width: 100%; font-size: 12px; }
 .roll-prompt-hint { font-size: 10.5px; color: var(--text-faint); }
+/* 체크박스와 글자 사이의 간격을 **이 한 규칙이 정한다.** 지금까지는 자리마다 달랐다: 이 라벨들
+   중 여럿이 `.field` 안에 있어 `.field label { display: block }`(0,1,1)이 `.row`(0,1,0)의 flex 를
+   이기고, 그러면 `.row` 의 gap 은 적용되지 않아 네이티브 체크박스가 주는 3px 만 남는다 —
+   `row` 를 붙였는데도 붙어 보이던 이유가 그것이다. 여기서 0,1,1 로 같은 특이도를 가지고 뒤에
+   오므로 `.field label` 을 이기고, 조상이 무엇이든 같은 간격이 된다.
+   inline-flex 인 이유: 라벨은 글의 흐름 안에 있는 것이라 블록으로 만들면 앞뒤 여백이 달라진다. */
+label.check-small {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .modal label.check-small {
   font-size: 11px;
   opacity: 0.85;
@@ -957,6 +1006,49 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .modal label.check-small .check-note {
   margin-left: 4px;
   opacity: 0.6;
+}
+/* 이 앱의 체크박스. 네이티브 상자는 어느 테마에서도 브라우저 기본 파란색과 흰 바탕으로 그려져
+   테마 밖으로 튄다 — appearance:none 으로 지우고 .sel-trigger 의 바탕·테두리로 다시 그린다.
+   **`label.check-small` 에만 건다.** 이 클래스가 모달들이 공유하는 체크박스 관례이고(12곳),
+   그 밖의 체크박스는 다른 문맥에 산다 — 설정의 .settings-row, 계정 쪽 .toggle-row, 그리고
+   마크다운 프리뷰가 그리는 작업 목록. 마지막 것은 사용자 문서의 일부라 앱 크롬의 색을 입히면
+   틀린 말이 된다. */
+label.check-small input[type="checkbox"] {
+  appearance: none;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  /* inline-grid, grid 가 아니다 — grid 는 상자를 블록으로 만들어 라벨 글자를 다음 줄로 밀어낸다.
+     네이티브 체크박스가 inline-block 이었으므로 인라인 레벨을 지켜야 그 줄이 유지된다. place-items
+     는 아래 체크 표시를 가운데 두기 위한 것이다. */
+  display: inline-grid;
+  place-items: center;
+  margin: 0;
+  background: var(--bg);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color var(--ease), background var(--ease);
+}
+label.check-small input[type="checkbox"]:hover { border-color: var(--text-faint); }
+label.check-small input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+/* 체크 표시는 가상 요소로 그린다 — appearance:none 이 네이티브 표시까지 지웠다. 두 변만 남긴
+   사각형을 45도 돌린 것이 갈고리다 */
+label.check-small input[type="checkbox"]:checked::after {
+  content: '';
+  width: 7px;
+  height: 3.5px;
+  border-left: 1.5px solid var(--accent-ink);
+  border-bottom: 1.5px solid var(--accent-ink);
+  transform: rotate(-45deg) translate(0, -1px);
+}
+label.check-small input[type="checkbox"]:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--ring);
 }
 
 /* ---------- history ---------- */

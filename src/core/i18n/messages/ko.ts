@@ -776,7 +776,7 @@ export const ko = {
   'jobs.run.scheduled': '예약',
   'jobs.run.scheduleNext': '다음 {time}',
   'jobs.run.scheduleRuns': '회차 {count}',
-  'jobs.run.scheduleEmpty': '아직 돈 회차가 없다',
+  'jobs.run.scheduleEmpty': '대기 중',
   'jobs.gates.more': '외 {count}건',
   // RunDetail.tsx 의 아래 칸 — 이벤트 목록. 종류 배지는 이벤트 종류(또는 메시지 종류)가 고른다.
   // Run 을 '작업'이라 부르는 것은 위의 jobs.empty 와 같고, 그 안의 Task 는 'Task' 로 적는다 —
