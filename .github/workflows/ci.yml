@@ -38,6 +38,17 @@ jobs:
           node-version: 22
           cache: npm
 
+      # What machine this actually ran on. The "Runner Image" group above names the image but not its
+      # size, and the size is what the suite's timing-sensitive tests care about: rolling.test.ts and
+      # codexRolling.test.ts read real files under fake timers, so a slow enough runner makes an fs
+      # callback miss its window (see settleIo). Core count also decides how many vitest workers
+      # compete for the machine. When one of those tests fails here, this line is the difference
+      # between knowing and guessing. node is used rather than nproc/sysctl because it is the one
+      # thing already installed on all three.
+      - name: Runner spec
+        shell: bash
+        run: node -e 'const os = require("node:os"); console.log(os.platform(), os.arch(), "|", os.cpus().length, "vCPU |", Math.round(os.totalmem() / 1024 ** 3), "GB RAM")'
+
       - run: npm ci
 
       - run: npm run typecheck
