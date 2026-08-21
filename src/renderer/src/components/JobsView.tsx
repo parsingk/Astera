@@ -3,6 +3,7 @@ import type { JobRun, JobTask, OrchSnapshot, Provider, TaskStatus } from '../../
 import type { MessageKey } from '../../../core/i18n'
 import { formatElapsed } from '../../../core/orchestration/elapsed'
 import { runningCount } from '../../../core/orchestration/running'
+import { schedRuleSummary } from '../../../core/scheduler/summary'
 import { useI18n } from '../i18n/I18nProvider'
 import { RunIcon, STATE_KEY, STATUS_COLOR, TaskGlyph, TaskIcon, TrashIcon } from './JobIcons'
 import type { RunIconKind } from './JobIcons'
@@ -238,6 +239,103 @@ function RunCard({
   )
 }
 
+/** 다음 발화 시각. TerminalView 의 fmtDateTime 과 같은 형식이다 — 주는 값이 epoch ms 라
+ *  (JobRun.nextFireAt) 그쪽처럼 ISO 를 받지 않는다. */
+const fmtNext = (ms: number): string =>
+  new Date(ms).toLocaleString([], {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+
+/** 예약 템플릿의 카드 — 규칙과 다음 시각, 그리고 펼치면 회차 목록.
+ *
+ *  **RunCard 를 쓰지 않는다.** 템플릿은 돌지 않으므로 띠와 도는 줄과 진행률이 말할 것이 없고,
+ *  무엇보다 outcome 을 빌릴 수 없다: outcomeOf 는 배치되지 않는 Task 를 terminal 로 보지 않아
+ *  템플릿에 늘 'running' 을 준다 — 그것을 그리면 안 도는 것에 도는 점이 붙는다. 회차는 평범한
+ *  Run 이므로 그 안에서 RunCard 를 그대로 쓴다. */
+function ScheduleCard({
+  run,
+  open,
+  onToggle,
+  collapsed,
+  onToggleChild,
+  nowMs,
+  canOpenSession,
+  onOpenSession,
+  onOpenRun,
+  onDeleteRun
+}: {
+  run: JobRun
+  open: boolean
+  onToggle: () => void
+  collapsed: Set<string>
+  onToggleChild: (runId: string) => void
+  nowMs: number
+  canOpenSession: (sessionId: string) => boolean
+  onOpenSession: (sessionId: string) => void
+  onOpenRun: (runId: string) => void
+  onDeleteRun: (runId: string) => void
+}): React.JSX.Element {
+  const { t } = useI18n()
+  const children = run.children ?? []
+  return (
+    <div className={`jobs-run jobs-tmpl${open ? '' : ' collapsed'}`}>
+      <div className="jobs-run-head" onClick={onToggle}>
+        <span className="jobs-caret">{open ? '▾' : '▸'}</span>
+        <span className="jobs-objective" title={run.objective}>
+          {run.objective}
+        </span>
+        <span className="jobs-tmpl-badge" title={t('jobs.new.scheduleHint')}>
+          {t('jobs.run.scheduled')}
+        </span>
+        {/* 상세 창으로 가는 입구 — 템플릿에서는 **Task 를 짜는 자리**다. 정의를 고치는 곳이
+            여기뿐이라(회차는 읽기 전용 기록) 이 버튼이 회차보다 더 중요하다.
+            stopPropagation: 이 줄 자체가 접기·펴기라서, 없으면 창을 열면서 동시에 접는다 */}
+        <button
+          className="jobs-more"
+          title={t('jobs.detail.open')}
+          aria-label={t('jobs.detail.open')}
+          onClick={(e) => {
+            e.stopPropagation()
+            onOpenRun(run.id)
+          }}
+        >
+          ›
+        </button>
+      </div>
+      <div className="jobs-tmpl-meta">
+        <span>{schedRuleSummary(t, run.schedule)}</span>
+        {run.nextFireAt !== undefined && (
+          <span>{t('jobs.run.scheduleNext', { time: fmtNext(run.nextFireAt) })}</span>
+        )}
+        <span>{t('jobs.run.scheduleRuns', { count: children.length })}</span>
+      </div>
+      {open &&
+        (children.length === 0 ? (
+          <p className="jobs-tmpl-empty">{t('jobs.run.scheduleEmpty')}</p>
+        ) : (
+          <div className="jobs-tmpl-kids">
+            {children.map((kid) => (
+              <RunCard
+                key={kid.id}
+                run={kid}
+                open={!collapsed.has(kid.id)}
+                onToggle={() => onToggleChild(kid.id)}
+                nowMs={nowMs}
+                canOpenSession={canOpenSession}
+                onOpenSession={onOpenSession}
+                onOpenRun={onOpenRun}
+                onDeleteRun={onDeleteRun}
+              />
+            ))}
+          </div>
+        ))}
+    </div>
+  )
+}
+
 /** Read-only Jobs sidebar — the orchestration Runs and Tasks of the open project.
  *
  *  상태를 말로 적지 않는다: **움직임이 "일하는 중"을, 색이 "어떤 일"을** 말한다(JobIcons.tsx).
@@ -302,7 +400,12 @@ export function JobsView({
 
   // 도는 것이 없으면 타이머도 없다 — 아무것도 안 변하는 화면을 1초마다 다시 그릴 이유가 없다.
   // 조건을 스냅샷에서 뽑는 덕분에 마지막 워커가 끝나면 다음 푸시에서 저절로 꺼진다.
-  const anyRunning = snapshot?.runs.some((r) => r.tasks.some((tk) => tk.startedAt)) ?? false
+  const anyRunning =
+    snapshot?.runs.some(
+      (r) =>
+        r.tasks.some((tk) => tk.startedAt) ||
+        (r.children ?? []).some((kid) => kid.tasks.some((tk) => tk.startedAt))
+    ) ?? false
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {
     if (!anyRunning) return
@@ -344,19 +447,35 @@ export function JobsView({
       <button className="jobs-new" onClick={onNewRun}>
         + {t('jobs.new.open')}
       </button>
-      {snapshot.runs.map((run) => (
-        <RunCard
-          key={run.id}
-          run={run}
-          open={!collapsed.has(run.id)}
-          onToggle={() => toggle(run.id)}
-          nowMs={nowMs}
-          canOpenSession={canOpenSession}
-          onOpenSession={onOpenSession}
-          onOpenRun={onOpenRun}
-          onDeleteRun={onDeleteRun}
-        />
-      ))}
+      {snapshot.runs.map((run) =>
+        run.schedule ? (
+          <ScheduleCard
+            key={run.id}
+            run={run}
+            open={!collapsed.has(run.id)}
+            onToggle={() => toggle(run.id)}
+            collapsed={collapsed}
+            onToggleChild={toggle}
+            nowMs={nowMs}
+            canOpenSession={canOpenSession}
+            onOpenSession={onOpenSession}
+            onOpenRun={onOpenRun}
+            onDeleteRun={onDeleteRun}
+          />
+        ) : (
+          <RunCard
+            key={run.id}
+            run={run}
+            open={!collapsed.has(run.id)}
+            onToggle={() => toggle(run.id)}
+            nowMs={nowMs}
+            canOpenSession={canOpenSession}
+            onOpenSession={onOpenSession}
+            onOpenRun={onOpenRun}
+            onDeleteRun={onDeleteRun}
+          />
+        )
+      )}
     </section>
   )
 }

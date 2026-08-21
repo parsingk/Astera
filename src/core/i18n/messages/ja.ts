@@ -738,6 +738,10 @@ export const ja: Catalog = {
   'jobs.run.deleteFailed': '作業を削除できませんでした',
   'jobs.run.sharedFolder': 'フォルダ共有',
   'jobs.run.sharedFolderHint': '別の作業のワーカーと同じフォルダで動いています — 互いの編集が混ざることがあり、アプリはそれを防ぐことも気づくこともできません',
+  'jobs.run.scheduled': '予約',
+  'jobs.run.scheduleNext': '次回 {time}',
+  'jobs.run.scheduleRuns': '{count} 回',
+  'jobs.run.scheduleEmpty': 'まだ実行された回はありません',
   'jobs.gates.more': '他 {count} 件',
   // RunDetail.tsx の下カラム — イベント一覧。種別バッジはイベント種別（またはメッセージ種別）が決める。
   // jobs.timeline.* の名前が残るのは、このカラムがタイムラインそのものだからだ。ウィンドウを開く

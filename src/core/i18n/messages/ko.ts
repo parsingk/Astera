@@ -773,6 +773,10 @@ export const ko = {
   'jobs.run.deleteFailed': '작업을 지우지 못했습니다',
   'jobs.run.sharedFolder': '폴더 공유',
   'jobs.run.sharedFolderHint': '다른 작업의 워커와 같은 폴더에서 돌고 있습니다 — 서로의 편집이 섞일 수 있고, 앱은 그것을 막지도 알아채지도 못합니다',
+  'jobs.run.scheduled': '예약',
+  'jobs.run.scheduleNext': '다음 {time}',
+  'jobs.run.scheduleRuns': '회차 {count}',
+  'jobs.run.scheduleEmpty': '아직 돈 회차가 없다',
   'jobs.gates.more': '외 {count}건',
   // RunDetail.tsx 의 아래 칸 — 이벤트 목록. 종류 배지는 이벤트 종류(또는 메시지 종류)가 고른다.
   // Run 을 '작업'이라 부르는 것은 위의 jobs.empty 와 같고, 그 안의 Task 는 'Task' 로 적는다 —

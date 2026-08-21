@@ -644,6 +644,10 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.run.deleteFailed': 'Could not delete the job',
   'jobs.run.sharedFolder': 'shared folder',
   'jobs.run.sharedFolderHint': 'Running in the same folder as another job worker — their edits can mix, and the app neither prevents it nor notices it',
+  'jobs.run.scheduled': 'Scheduled',
+  'jobs.run.scheduleNext': 'next {time}',
+  'jobs.run.scheduleRuns': '{count} runs',
+  'jobs.run.scheduleEmpty': 'No runs yet',
   'jobs.gates.more': '+{count} more',
   // RunDetail.tsx, lower pane — the event list. The badge is chosen by the event kind (or the message
   // type). The jobs.timeline.* names stay because that pane is the timeline. The sidebar's way in is
