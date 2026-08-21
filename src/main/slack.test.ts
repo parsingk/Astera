@@ -148,6 +148,54 @@ describe('SlackNotifier 훅 이벤트', () => {
     expect(h.sent).toEqual(['[myproj · work1] ✅ 응답 완료'])
   })
 
+  // 실사용에서 첫 턴 알림이 발췌 없이 `✅ 응답 완료` 만으로 온 일이 있다. 그 시점 트랜스크립트를
+  // 잘라가며 추출기를 돌려 보니 마지막 assistant 텍스트 줄이 파일에 없을 때만 null 이 됐고, 같은
+  // Stop payload 에는 그 텍스트가 last_assistant_message 로 실려 있었다. 읽기가 OS 오류로 실패한
+  // 것인지 그 줄이 아직 flush 되지 않은 것인지는 남은 기록으로 가릴 수 없다 — 어느 쪽이든 결과가
+  // 맞도록 payload 를 폴백으로 쓴다.
+  it('Stop 훅: 꼬리에서 못 찾으면 payload 의 last_assistant_message 로 채운다', async () => {
+    const h = setup({ readFileTail: async () => null })
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', {
+      hook_event_name: 'Stop',
+      transcript_path: 'D:\\t.jsonl',
+      last_assistant_message: '서브에이전트를 띄웠습니다.'
+    })
+    await flush()
+    expect(h.sent).toEqual(['[myproj · work1] ✅ 응답 완료\n> 서브에이전트를 띄웠습니다.'])
+  })
+
+  it('Stop 훅: 꼬리에 텍스트가 있으면 payload 보다 꼬리가 이긴다 — 턴 전체가 담기는 쪽이다', async () => {
+    const tail = [
+      JSON.stringify({ type: 'user', message: { content: '지시' } }),
+      assistantLine('앞 세그먼트'),
+      assistantLine('뒤 세그먼트')
+    ].join('\n')
+    const h = setup({ readFileTail: async () => tail })
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', {
+      hook_event_name: 'Stop',
+      transcript_path: 'D:\\t.jsonl',
+      last_assistant_message: '뒤 세그먼트'
+    })
+    await flush()
+    expect(h.sent[0]).toBe('[myproj · work1] ✅ 응답 완료\n> 앞 세그먼트\n> \n> 뒤 세그먼트')
+  })
+
+  it('Stop 훅: 발췌가 비면 이유를 로그로 남긴다 — 읽기 실패와 텍스트 없음을 구분한다', async () => {
+    const failed = setup({ readFileTail: async () => null })
+    failed.notifier.register(info())
+    failed.notifier.onHookEvent('s-1', { hook_event_name: 'Stop', transcript_path: 'D:\\t.jsonl' })
+    await flush()
+    expect(failed.logs.some((l) => l.includes('transcript read failed'))).toBe(true)
+
+    const empty = setup({ readFileTail: async () => '{"type":"user","message":{"content":"지시"}}' })
+    empty.notifier.register(info())
+    empty.notifier.onHookEvent('s-1', { hook_event_name: 'Stop', transcript_path: 'D:\\t.jsonl' })
+    await flush()
+    expect(empty.logs.some((l) => l.includes('no assistant text'))).toBe(true)
+  })
+
   // 종전에는 EXCERPT_MAX(500)에서 잘랐다. 사용자가 잘린 내용을 다 보고 싶다고 해서 Slack `text`
   // 한계까지 열었다 — 그 한계를 넘는 경우는 아래 send() 절단 테스트가 지킨다.
   it('발췌가 종전 상한(500자)을 넘어도 온전히 나간다', async () => {

@@ -430,13 +430,14 @@ export class SlackNotifier {
       tool_name?: unknown
       tool_input?: unknown
       tool_use_id?: unknown // PreToolUse's call identifier — the basis for the pending verdict
+      last_assistant_message?: unknown // Stop's own copy of the closing text — the excerpt fallback
     } & NotificationPayload
     const transcriptPath = typeof p.transcript_path === 'string' ? p.transcript_path : null
     if (p.hook_event_name === 'Stop') {
       // If the turn has ended there is no call waiting for an answer either. Even the cases the id
       // cross-check misses are cleaned up here for certain.
       record.pendingTool = null
-      void this.sendStopSummary(record, transcriptPath)
+      void this.sendStopSummary(record, transcriptPath, p.last_assistant_message)
     } else if (p.hook_event_name === 'Notification') {
       void this.sendNotification(record, p, transcriptPath)
     } else if (p.hook_event_name === 'PreToolUse') {
@@ -658,12 +659,39 @@ export class SlackNotifier {
     }, EXIT_DELAY_MS)
   }
 
-  private async sendStopSummary(record: SlackRecord, transcriptPath: string | null): Promise<void> {
+  /**
+   * Stop → the turn-completion notification, with the turn's text as an excerpt.
+   *
+   * The transcript is the primary source because it holds the **whole** turn (see
+   * extractLastTurnAssistantText). The hook payload's own last_assistant_message is only the closing
+   * segment, so it is used solely as a fallback for when the transcript yields nothing.
+   *
+   * That fallback exists because of a measured case: a turn-completion notification arrived carrying no
+   * excerpt at all, and replaying that transcript through the extractor showed it returns null only when
+   * the closing assistant line is absent from the file — while the same Stop payload did carry the text.
+   * Which of the two possible causes it was (readFileTail swallowing an OS error, or the line not yet
+   * flushed) could not be told apart from what was kept, so the fallback is written to be right under
+   * either, and the two are logged apart from here on so the next occurrence is diagnosable.
+   */
+  private async sendStopSummary(
+    record: SlackRecord,
+    transcriptPath: string | null,
+    lastMessage: unknown
+  ): Promise<void> {
     let excerpt: string | null = null
     if (transcriptPath) {
       const tail = await this.readTail(transcriptPath, TAIL_BYTES)
-      if (tail) excerpt = extractLastTurnAssistantText(tail)
+      if (tail === null) this.deps.log(`slack Stop: transcript read failed session=${record.info.id}`)
+      else {
+        excerpt = extractLastTurnAssistantText(tail)
+        if (excerpt === null)
+          this.deps.log(
+            `slack Stop: no assistant text in ${tail.length}B tail session=${record.info.id}`
+          )
+      }
     }
+    if (excerpt === null && typeof lastMessage === 'string' && lastMessage.trim() !== '')
+      excerpt = lastMessage.trim()
     if (excerpt && excerpt.length > EXCERPT_MAX) excerpt = excerpt.slice(0, EXCERPT_MAX) + '…'
     // Completion is announced even when the excerpt fails (no transcript record, or a parse failure)
     const done = t(this.deps.lang(), 'slack.turnDone')
