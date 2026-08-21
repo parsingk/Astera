@@ -58,6 +58,186 @@ type RunningTask = JobTask & { provider: Provider; startedAt: string }
 const isRunning = (t: JobTask): t is RunningTask =>
   t.provider !== undefined && t.startedAt !== undefined
 
+/** Run 하나의 카드 — 머리말·띠·도는 줄·Gate 줄·아래 한 줄. **JobsView 에서 뽑아낸 것이고 그리는
+ *  것이 달라지지 않았다.** 뽑은 이유는 예약 템플릿의 회차를 같은 모양으로 그려야 해서다: 한 벌을
+ *  두 자리에서 쓰지 않으면 두 벌이 갈라진다. */
+function RunCard({
+  run,
+  open,
+  onToggle,
+  nowMs,
+  canOpenSession,
+  onOpenSession,
+  onOpenRun,
+  onDeleteRun
+}: {
+  run: JobRun
+  open: boolean
+  onToggle: () => void
+  nowMs: number
+  canOpenSession: (sessionId: string) => boolean
+  onOpenSession: (sessionId: string) => void
+  onOpenRun: (runId: string) => void
+  onDeleteRun: (runId: string) => void
+}): React.JSX.Element {
+  const { t } = useI18n()
+  const kind = runKind(run)
+  // 줄은 열린 Dispatch 기반이다 — 줄에는 provider 배지와 경과 시간이 있고 둘 다 열린
+  // Dispatch 에서만 온다. 숫자는 그것과 다른 질문이라 core 의 runningCount 가 답한다
+  // (running.ts — 상태와 열린 Dispatch 중 어느 하나로도 답이 안 되는 이유가 거기 있다).
+  const rows = run.tasks.filter(isRunning).slice(0, MAX_ROWS)
+  const running = runningCount(run.tasks)
+  // 줄을 세우지 못한 것도 여기 접힌다 — 넷째부터 넘친 것뿐 아니라, validating 처럼 애초에 줄로
+  // 세울 수 없는 것도 folded 로만 나타난다.
+  const folded = running - rows.length
+  const gates = run.tasks.filter((tk) => tk.status === 'blocked' && tk.gate)
+  const counts = FOOT_STATES.map(
+    (status) => [status, run.tasks.filter((tk) => tk.status === status).length] as const
+  ).filter(([, n]) => n > 0)
+  return (
+    <div
+      key={run.id}
+      className={`jobs-run${open ? '' : ' collapsed'}${run.sharesProjectFolder ? ' shared-folder' : ''}`}
+    >
+      <div className="jobs-run-head" onClick={() => onToggle()}>
+        <span className="jobs-caret">{open ? '▾' : '▸'}</span>
+        <span className={`jobs-objective${kind === 'done' ? ' done' : ''}`} title={run.objective}>
+          {run.objective}
+        </span>
+        {/* 이 Run 의 워커가 프로젝트 폴더를 다른 Run 과 나눠 쓰고 있다. **막힌 것이 아니라
+            얽힌 것**이라 Gate 글리프(주황 `!`)를 빌리지 않는다 — 그것은 사람을 기다리는
+            자리의 모양이고, 여기서는 기다리는 것이 없다. 경고 톤의 테두리(styles.css)와 이
+            글자 하나로 말하고, 무엇이 위험한지는 툴팁이 적는다. */}
+        {run.sharesProjectFolder && (
+          <span className="jobs-shared" title={t('jobs.run.sharedFolderHint')}>
+            {t('jobs.run.sharedFolder')}
+          </span>
+        )}
+        <span className="jobs-count">
+          <RunIcon kind={kind} label={t(RUN_KIND_KEY[kind])} />
+          {kind === 'running' && running > 0 ? <span>{running}</span> : null}
+        </span>
+        {/* 상세 창으로 가는 입구. **제목 줄에 있는 이유는 접기 때문이다** — 아래 한 줄은
+            접으면 사라지는데, 접기는 세로를 아끼는 장치이지 유일한 문을 잠그는 장치가 아니다
+            (같은 판단을 Gate 줄이 이미 하고 있다). 그리고 Run 이 쌓여 접어 두게 될 때가
+            상세 창이 가장 필요한 때다.
+            stopPropagation: 이 줄 자체가 접기·펴기라서, 없으면 창을 열면서 동시에 접는다 */}
+        <button
+          className="jobs-more"
+          title={t('jobs.detail.open')}
+          aria-label={t('jobs.detail.open')}
+          onClick={(e) => {
+            e.stopPropagation()
+            onOpenRun(run.id)
+          }}
+        >
+          ›
+        </button>
+      </div>
+      {/* 띠 — Task 하나가 칸 하나다. **클릭 대상이 아니다**: 6px 은 정확히 누를 수 없고,
+          누를 수 있어 보이면 누르고 아무 일도 없는 자리가 된다.
+          **툴팁은 제목뿐이다.** 한때 상태 문구를 붙여 `제목 — 끝났다` 처럼 적었는데, 그
+          문구들은 글리프를 처음 보는 사람에게 아이콘을 가르치려고 문장으로 쓴 것이라
+          (`jobs.state.*`) 제목 뒤에 이어 붙으면 길고 어색하다. 이 칸이 답해야 하는 질문은
+          "이게 어느 Task 인가" 하나이고, 어떤 일인지는 칸의 색이 말한다 — 이 화면의 규칙
+          그대로다. 상태를 말로 읽어야 하는 자리에는 글리프가 자기 툴팁을 갖고 있다 */}
+      <div className="jobs-bar">
+        {run.tasks.map((task) => (
+          <span
+            key={task.id}
+            className="jobs-seg"
+            style={{ background: segColor(task.status) }}
+            title={task.title}
+          />
+        ))}
+      </div>
+      {open && (rows.length > 0 || folded > 0) && (
+        <div className="jobs-rows">
+          {rows.map((task) => {
+            // Both conditions or neither — the row's appearance and its click have to be
+            // decided by the same value, or it looks clickable and silently does nothing.
+            const sessionId =
+              task.sessionId && canOpenSession(task.sessionId) ? task.sessionId : undefined
+            return (
+              <div
+                key={task.id}
+                className={`jobs-task jobs-task--${task.status}${sessionId ? '' : ' no-session'}`}
+                onClick={sessionId ? () => onOpenSession(sessionId) : undefined}
+              >
+                <span className="jobs-av">{PROVIDER_ABBR[task.provider]}</span>
+                <span className="jobs-task-body">
+                  <span className="jobs-task-title" title={task.title}>
+                    {task.title}
+                  </span>
+                  <span className="jobs-task-meta">
+                    {task.provider} · {formatElapsed(task.startedAt, nowMs)}
+                  </span>
+                </span>
+                <TaskGlyph task={task} />
+                {sessionId ? (
+                  <span className="jobs-jump" aria-hidden="true">
+                    ↗
+                  </span>
+                ) : null}
+              </div>
+            )
+          })}
+          {/* 접힌 줄 — 넷째부터 넘친 것과, validating 처럼 열린 Dispatch 가 없어 애초에 줄을
+              세울 수 없는 것이 함께 접힌다. 글리프가 회전이 아니라 채워진 점인 이유는 Run
+              헤더와 같다 — 이 한 줄은 Task 여럿을 가리키고, 묶음은 돌지 않는다 */}
+          {folded > 0 && (
+            <div className="jobs-task jobs-fold">
+              <RunIcon kind="running" />
+              <span>+{folded}</span>
+            </div>
+          )}
+        </div>
+      )}
+      {/* Gate 는 접힌 Run 에서도 남는다 — 사람을 기다리는 줄이고, 접혀서 안 보이면 그 Run 은
+          아무도 모르는 채로 선다. 접기는 세로를 아끼는 장치이지 알림을 끄는 장치가 아니다 */}
+      {gates.map((task) => (
+        <div key={task.id} className="jobs-gate">
+          <TaskIcon status="blocked" label={t(STATE_KEY.blocked)} />
+          <span>
+            {task.gate?.question}
+            {task.openGates > 1
+              ? ` ${t('jobs.gates.more', { count: task.openGates - 1 })}`
+              : ''}
+          </span>
+        </div>
+      ))}
+      {open && (
+        <div className="jobs-foot">
+          {counts.map(([status, n]) => (
+            <span key={status} className="jobs-count">
+              <TaskIcon status={status} label={t(STATE_KEY[status])} />
+              <span>{n}</span>
+            </span>
+          ))}
+          {/* 물러나게 하기. **자동 정리가 손대지 못하는 것을 위해 있다** — store.ts 의 TTL 은
+              모든 Task 가 끝난 Run 만, 그것도 30일 뒤에 버리므로 중단한 작업이나 워커가 죽어
+              dispatched 에 멈춘 Task 를 가진 Run 은 영원히 남는다.
+              **제목 줄이 아니라 이 줄에 있다.** 되돌릴 수 없는 동작을 상세 창으로 가는 `›`
+              바로 옆에 두면 둘 다 작은 표적이라 오클릭이 값비싸진다. 그리고 이 줄은 펼쳤을
+              때만 보이므로 그 Run 을 열어 본 사람만 지우게 된다 — Gate 줄이 접혀도 남는 규칙과
+              어긋나지 않는다: 그것은 알림이고 이것은 알림이 아니다.
+              누르면 App 이 확인 창을 먼저 띄운다(onDeleteRun). 도는 워커가 있으면 명령이
+              409 로 거절하고 그것을 토스트로 말한다 — 버튼을 감추지 않는 것은 왜 못 지우는지가
+              화면에 남아야 하기 때문이다. */}
+          <button
+            className="jobs-delete"
+            title={t('jobs.run.delete')}
+            aria-label={t('jobs.run.delete')}
+            onClick={() => onDeleteRun(run.id)}
+          >
+            <TrashIcon />
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** Read-only Jobs sidebar — the orchestration Runs and Tasks of the open project.
  *
  *  상태를 말로 적지 않는다: **움직임이 "일하는 중"을, 색이 "어떤 일"을** 말한다(JobIcons.tsx).
@@ -164,164 +344,19 @@ export function JobsView({
       <button className="jobs-new" onClick={onNewRun}>
         + {t('jobs.new.open')}
       </button>
-      {snapshot.runs.map((run) => {
-        const open = !collapsed.has(run.id)
-        const kind = runKind(run)
-        // 줄은 열린 Dispatch 기반이다 — 줄에는 provider 배지와 경과 시간이 있고 둘 다 열린
-        // Dispatch 에서만 온다. 숫자는 그것과 다른 질문이라 core 의 runningCount 가 답한다
-        // (running.ts — 상태와 열린 Dispatch 중 어느 하나로도 답이 안 되는 이유가 거기 있다).
-        const rows = run.tasks.filter(isRunning).slice(0, MAX_ROWS)
-        const running = runningCount(run.tasks)
-        // 줄을 세우지 못한 것도 여기 접힌다 — 넷째부터 넘친 것뿐 아니라, validating 처럼 애초에 줄로
-        // 세울 수 없는 것도 folded 로만 나타난다.
-        const folded = running - rows.length
-        const gates = run.tasks.filter((tk) => tk.status === 'blocked' && tk.gate)
-        const counts = FOOT_STATES.map(
-          (status) => [status, run.tasks.filter((tk) => tk.status === status).length] as const
-        ).filter(([, n]) => n > 0)
-        return (
-          <div
-            key={run.id}
-            className={`jobs-run${open ? '' : ' collapsed'}${run.sharesProjectFolder ? ' shared-folder' : ''}`}
-          >
-            <div className="jobs-run-head" onClick={() => toggle(run.id)}>
-              <span className="jobs-caret">{open ? '▾' : '▸'}</span>
-              <span className={`jobs-objective${kind === 'done' ? ' done' : ''}`} title={run.objective}>
-                {run.objective}
-              </span>
-              {/* 이 Run 의 워커가 프로젝트 폴더를 다른 Run 과 나눠 쓰고 있다. **막힌 것이 아니라
-                  얽힌 것**이라 Gate 글리프(주황 `!`)를 빌리지 않는다 — 그것은 사람을 기다리는
-                  자리의 모양이고, 여기서는 기다리는 것이 없다. 경고 톤의 테두리(styles.css)와 이
-                  글자 하나로 말하고, 무엇이 위험한지는 툴팁이 적는다. */}
-              {run.sharesProjectFolder && (
-                <span className="jobs-shared" title={t('jobs.run.sharedFolderHint')}>
-                  {t('jobs.run.sharedFolder')}
-                </span>
-              )}
-              <span className="jobs-count">
-                <RunIcon kind={kind} label={t(RUN_KIND_KEY[kind])} />
-                {kind === 'running' && running > 0 ? <span>{running}</span> : null}
-              </span>
-              {/* 상세 창으로 가는 입구. **제목 줄에 있는 이유는 접기 때문이다** — 아래 한 줄은
-                  접으면 사라지는데, 접기는 세로를 아끼는 장치이지 유일한 문을 잠그는 장치가 아니다
-                  (같은 판단을 Gate 줄이 이미 하고 있다). 그리고 Run 이 쌓여 접어 두게 될 때가
-                  상세 창이 가장 필요한 때다.
-                  stopPropagation: 이 줄 자체가 접기·펴기라서, 없으면 창을 열면서 동시에 접는다 */}
-              <button
-                className="jobs-more"
-                title={t('jobs.detail.open')}
-                aria-label={t('jobs.detail.open')}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onOpenRun(run.id)
-                }}
-              >
-                ›
-              </button>
-            </div>
-            {/* 띠 — Task 하나가 칸 하나다. **클릭 대상이 아니다**: 6px 은 정확히 누를 수 없고,
-                누를 수 있어 보이면 누르고 아무 일도 없는 자리가 된다.
-                **툴팁은 제목뿐이다.** 한때 상태 문구를 붙여 `제목 — 끝났다` 처럼 적었는데, 그
-                문구들은 글리프를 처음 보는 사람에게 아이콘을 가르치려고 문장으로 쓴 것이라
-                (`jobs.state.*`) 제목 뒤에 이어 붙으면 길고 어색하다. 이 칸이 답해야 하는 질문은
-                "이게 어느 Task 인가" 하나이고, 어떤 일인지는 칸의 색이 말한다 — 이 화면의 규칙
-                그대로다. 상태를 말로 읽어야 하는 자리에는 글리프가 자기 툴팁을 갖고 있다 */}
-            <div className="jobs-bar">
-              {run.tasks.map((task) => (
-                <span
-                  key={task.id}
-                  className="jobs-seg"
-                  style={{ background: segColor(task.status) }}
-                  title={task.title}
-                />
-              ))}
-            </div>
-            {open && (rows.length > 0 || folded > 0) && (
-              <div className="jobs-rows">
-                {rows.map((task) => {
-                  // Both conditions or neither — the row's appearance and its click have to be
-                  // decided by the same value, or it looks clickable and silently does nothing.
-                  const sessionId =
-                    task.sessionId && canOpenSession(task.sessionId) ? task.sessionId : undefined
-                  return (
-                    <div
-                      key={task.id}
-                      className={`jobs-task jobs-task--${task.status}${sessionId ? '' : ' no-session'}`}
-                      onClick={sessionId ? () => onOpenSession(sessionId) : undefined}
-                    >
-                      <span className="jobs-av">{PROVIDER_ABBR[task.provider]}</span>
-                      <span className="jobs-task-body">
-                        <span className="jobs-task-title" title={task.title}>
-                          {task.title}
-                        </span>
-                        <span className="jobs-task-meta">
-                          {task.provider} · {formatElapsed(task.startedAt, nowMs)}
-                        </span>
-                      </span>
-                      <TaskGlyph task={task} />
-                      {sessionId ? (
-                        <span className="jobs-jump" aria-hidden="true">
-                          ↗
-                        </span>
-                      ) : null}
-                    </div>
-                  )
-                })}
-                {/* 접힌 줄 — 넷째부터 넘친 것과, validating 처럼 열린 Dispatch 가 없어 애초에 줄을
-                    세울 수 없는 것이 함께 접힌다. 글리프가 회전이 아니라 채워진 점인 이유는 Run
-                    헤더와 같다 — 이 한 줄은 Task 여럿을 가리키고, 묶음은 돌지 않는다 */}
-                {folded > 0 && (
-                  <div className="jobs-task jobs-fold">
-                    <RunIcon kind="running" />
-                    <span>+{folded}</span>
-                  </div>
-                )}
-              </div>
-            )}
-            {/* Gate 는 접힌 Run 에서도 남는다 — 사람을 기다리는 줄이고, 접혀서 안 보이면 그 Run 은
-                아무도 모르는 채로 선다. 접기는 세로를 아끼는 장치이지 알림을 끄는 장치가 아니다 */}
-            {gates.map((task) => (
-              <div key={task.id} className="jobs-gate">
-                <TaskIcon status="blocked" label={t(STATE_KEY.blocked)} />
-                <span>
-                  {task.gate?.question}
-                  {task.openGates > 1
-                    ? ` ${t('jobs.gates.more', { count: task.openGates - 1 })}`
-                    : ''}
-                </span>
-              </div>
-            ))}
-            {open && (
-              <div className="jobs-foot">
-                {counts.map(([status, n]) => (
-                  <span key={status} className="jobs-count">
-                    <TaskIcon status={status} label={t(STATE_KEY[status])} />
-                    <span>{n}</span>
-                  </span>
-                ))}
-                {/* 물러나게 하기. **자동 정리가 손대지 못하는 것을 위해 있다** — store.ts 의 TTL 은
-                    모든 Task 가 끝난 Run 만, 그것도 30일 뒤에 버리므로 중단한 작업이나 워커가 죽어
-                    dispatched 에 멈춘 Task 를 가진 Run 은 영원히 남는다.
-                    **제목 줄이 아니라 이 줄에 있다.** 되돌릴 수 없는 동작을 상세 창으로 가는 `›`
-                    바로 옆에 두면 둘 다 작은 표적이라 오클릭이 값비싸진다. 그리고 이 줄은 펼쳤을
-                    때만 보이므로 그 Run 을 열어 본 사람만 지우게 된다 — Gate 줄이 접혀도 남는 규칙과
-                    어긋나지 않는다: 그것은 알림이고 이것은 알림이 아니다.
-                    누르면 App 이 확인 창을 먼저 띄운다(onDeleteRun). 도는 워커가 있으면 명령이
-                    409 로 거절하고 그것을 토스트로 말한다 — 버튼을 감추지 않는 것은 왜 못 지우는지가
-                    화면에 남아야 하기 때문이다. */}
-                <button
-                  className="jobs-delete"
-                  title={t('jobs.run.delete')}
-                  aria-label={t('jobs.run.delete')}
-                  onClick={() => onDeleteRun(run.id)}
-                >
-                  <TrashIcon />
-                </button>
-              </div>
-            )}
-          </div>
-        )
-      })}
+      {snapshot.runs.map((run) => (
+        <RunCard
+          key={run.id}
+          run={run}
+          open={!collapsed.has(run.id)}
+          onToggle={() => toggle(run.id)}
+          nowMs={nowMs}
+          canOpenSession={canOpenSession}
+          onOpenSession={onOpenSession}
+          onOpenRun={onOpenRun}
+          onDeleteRun={onDeleteRun}
+        />
+      ))}
     </section>
   )
 }
