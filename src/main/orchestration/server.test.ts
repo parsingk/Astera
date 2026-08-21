@@ -2290,4 +2290,44 @@ describe('run-spawn — 예약 회차', () => {
     expect(ids).not.toContain(child.id)
     expect(ids).toHaveLength(2)
   })
+
+  it('회차에 도는 Dispatch 가 있으면 템플릿째 지우는 것을 막는다', async () => {
+    const { deps, templateId } = await withTemplate()
+    const child = (await call(deps, 'run-spawn', { run: templateId })).body as { id: string }
+    const withOpenChildDispatch: OrchState = {
+      ...deps.getState(),
+      tasks: [
+        ...deps.getState().tasks,
+        {
+          id: 'tsk1',
+          runId: child.id,
+          title: 't',
+          spec: 's',
+          deps: [],
+          status: 'dispatched',
+          consecutiveFailures: 0,
+          createdAt: NOW,
+          updatedAt: NOW
+        }
+      ],
+      dispatches: [
+        {
+          id: 'dsp1',
+          taskId: 'tsk1',
+          provider: 'claude',
+          accountId: 'acc1',
+          sessionId: 'worker1',
+          cwd: 'D:/p',
+          specPath: 'D:/p/spec.md',
+          startedAt: NOW,
+          workerState: 'ready',
+          retained: false
+        }
+      ]
+    }
+    await deps.setState(withOpenChildDispatch)
+    const r = await call(deps, 'run-delete', { id: templateId })
+    expect(r.status).toBe(409)
+    expect(deps.getState().runs).toHaveLength(2)
+  })
 })
