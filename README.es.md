@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/github/license/parsingk/Astera?color=blue)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-555)
 
-[Descargar](#instalación) · [Qué hace](#qué-hace) · [Documentación](#documentación) · [Reportar un error](https://github.com/parsingk/Astera/issues/new)
+[Descargar](#instalación) · [Qué hace](#qué-hace) · [Jobs](#jobs) · [Documentación](#documentación) · [Reportar un error](https://github.com/parsingk/Astera/issues/new)
 
 [English](README.md) · [한국어](README.ko.md) · [日本語](README.ja.md) · **Español**
 
@@ -20,9 +20,10 @@ Astera ejecuta tus sesiones de agente cuando no estás en el escritorio. Program
 a las 3 de la mañana y arrancará sin ti. Cuando cualquier sesión alcanza un límite de uso —programada
 o no—, Astera lee la hora de reinicio en la transcripción, cambia a tu siguiente cuenta y retoma el
 *mismo* trabajo. Slack te avisa cuando termina un turno o se alcanza un límite. Las sesiones conviven
-en una sola ventana, cada una aislada en su propio worktree de git. Un agente puede iniciar otras
-sesiones, repartirles tareas y esperar bloqueado hasta que informen: lo hace él mismo a través de una
-CLI incluida, así que no vas despachando cada paso a mano.
+en una sola ventana, cada una aislada en su propio worktree de git. Y un trabajo de una docena de
+pasos no te obliga a despachar cada uno: dibuja las tareas y qué espera a qué, y Astera recorre el
+grafo sola — o deja que un agente inicie las demás sesiones, les reparta tareas y espere bloqueado
+hasta que informen a través de una CLI incluida.
 
 > **Estado:** Windows, macOS y Linux. Ejecuta las CLI de `claude` y `codex`, así que solo llega tan lejos
 > como la que tengas instalada.
@@ -135,50 +136,61 @@ También necesitarás:
 <img src="assets/schedule.gif" width="820" alt="Diagrama: a las 03:00 una sesión programada arranca sola, ejecuta el comando que le dejaste, termina, y Slack informa del resultado" />
 </div>
 
-**Orquestación entre proveedores**
-- Una sesión coordinadora reparte tareas a sesiones trabajadoras — incluidas las del *otro* proveedor
-- Las trabajadoras informan a través de la CLI `astera` incluida; la coordinadora espera
-  finalizaciones, dependencias, preguntas y escalaciones
-- Cada tarea puede ejecutarse en su propio worktree de git para que las trabajadoras en paralelo no
-  choquen
-- **Una tarea puede demostrarse terminada en vez de declararse terminada:** asóciale una de las
-  configuraciones de ejecución del proyecto y solo se completa si esa compilación o esa batería de
-  pruebas termina en `0`
-- Lo que ningún código de salida resuelve — si el trabajo hace lo que se pidió — puede pasar a un
-  revisor del *otro* proveedor, y la tarea espera ese veredicto
-- Todo agente iniciado así recibe la ubicación de las decisiones del propio proyecto, lo que haya en
-  `knowledge/`, `docs/adr/`, `docs/decisions/` y similares, para no reabrir lo que ya está cerrado
-- **O prescinde de la coordinadora:** describe el trabajo en la app y Astera lo lleva sola — cada
-  tarea arranca cuando sus dependencias están hechas, solo tantas a la vez como permitas, y los
-  worktrees terminados se fusionan de vuelta antes de que empiecen las tareas que los siguen, con
-  cualquier conflicto en manos de un agente en vez de en las tuyas
-- Una decisión que el trabajo no puede tomar por su cuenta se detiene y espera a una persona
-
-**Jobs**
-- Todos los trabajos del proyecto abierto en la barra lateral, sus tareas dibujadas como un grafo de
-  dependencias y lo ocurrido como una línea de tiempo
-- Qué proveedor trabaja en qué tarea, y desde hace cuánto
-- Iniciar una tarea, detenerla, reintentarla o plantear una pregunta a una persona — desde el nodo de
-  la propia tarea, donde también se responde la decisión que está esperando
-
 **Además**
 - Interfaz en coreano, inglés, japonés y español, más una opción System que sigue la configuración
   regional del sistema
 - Actualización automática desde GitHub Releases
 
-## Orquestación: primeros pasos
+## Jobs
 
-Activa la orquestación en los ajustes y luego inicia una sesión. Esa sesión recibe la CLI `astera` en
-su `PATH` y una skill que describe cómo usarla, así que basta con pedirle que coordine el trabajo.
-Para leer la referencia completa tú mismo:
+Todo esto depende de un solo ajuste: **Orquestación de agentes**, en los ajustes. Actívalo y la barra
+lateral de Jobs viene con él — un trabajo que dibujes ahí no necesita nada más: nombra las tareas, di
+qué espera a qué, y arráncalo.
+
+Un trabajo es un conjunto de tareas con dependencias entre ellas, y se reparte entre los dos
+proveedores. Hay dos maneras de ejecutarlo:
+
+- **Astera lo lleva.** Dibuja el trabajo en la app — las tareas, qué espera a qué, cuántas pueden ir
+  a la vez — y echa a andar: cada tarea arranca cuando sus dependencias están hechas, y los worktrees
+  terminados se fusionan de vuelta antes de que empiecen las tareas que los siguen, con cualquier
+  conflicto en manos de un agente en vez de en las tuyas
+- **O lo lleva un agente.** Una sesión coordinadora reparte tareas a sesiones trabajadoras —
+  incluidas las del *otro* proveedor — y espera finalizaciones, dependencias, preguntas y
+  escalaciones. Las trabajadoras informan a través de la CLI `astera` incluida
+
+En cualquiera de los dos casos:
+
+- **Una tarea puede demostrarse terminada en vez de declararse terminada:** asóciale una de las
+  configuraciones de ejecución del proyecto y solo se completa si esa compilación o esa batería de
+  pruebas termina en `0`
+- Lo que ningún código de salida resuelve — si el trabajo hace lo que se pidió — puede pasar a un
+  revisor del *otro* proveedor, y la tarea espera ese veredicto
+- Cada tarea puede ejecutarse en su propio worktree de git para que las trabajadoras en paralelo no
+  choquen
+- Una decisión que el trabajo no puede tomar por su cuenta se detiene y espera a una persona
+- Todo agente iniciado así recibe la ubicación de las decisiones del propio proyecto, lo que haya en
+  `knowledge/`, `docs/adr/`, `docs/decisions/` y similares, para no reabrir lo que ya está cerrado
+
+<div align="center">
+<img src="assets/jobs.gif" width="820" alt="Diagrama: las tareas de un trabajo dibujadas como un grafo de dependencias — Astera arranca a la vez las dos que están listas, cada una en un proveedor distinto, una batería de pruebas demuestra terminada una de ellas, los worktrees terminados se fusionan de vuelta, y una decisión que el trabajo no puede tomar espera a una persona" />
+</div>
+
+Y lo ves ocurrir: todos los trabajos del proyecto abierto en la barra lateral, sus tareas dibujadas
+como un grafo de dependencias y lo ocurrido como una línea de tiempo. Qué proveedor trabaja en qué
+tarea, y desde hace cuánto. Iniciar una tarea, detenerla, reintentarla, plantear una pregunta a una
+persona o responder la decisión que está esperando — desde el nodo de la propia tarea.
+
+Para un trabajo que coordine un agente, inicia una sesión después de activar ese ajuste. Esa sesión
+recibe la CLI `astera` en su `PATH` y una skill que describe cómo usarla, así que basta con pedirle
+que coordine el trabajo. Para leer la referencia completa tú mismo:
 
 ```bash
 astera help
 ```
 
 Si `astera` responde `command not found`, la ruta absoluta está en `$ASTERA_CLI`: son el mismo
-programa. Un `$ASTERA_CLI` vacío significa que la sesión no la inició Astera, o que la orquestación
-está desactivada.
+programa. Un `$ASTERA_CLI` vacío significa que la sesión no la inició Astera, o que la Orquestación
+de agentes está desactivada.
 
 ## Compilar desde el código fuente
 

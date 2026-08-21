@@ -5,7 +5,7 @@
 //
 //   npx electron scripts/gen-diagram.js
 //
-// Needs `ffmpeg` on PATH for the encode. Writes assets/rolling.gif and assets/schedule.gif.
+// Needs `ffmpeg` on PATH for the encode. Writes one GIF per entry in DIAGRAMS into assets/.
 //
 // Why the pixel size is doubled: the README shows these at 820 CSS px. The first version was rendered
 // at the page's own 900px, which is a shade over 1:1 on a 1x display and a 1.8x upscale on the HiDPI
@@ -30,7 +30,8 @@ const H = PAGE_H * SCALE
 const DURATIONS = [2.4, 2.6, 2.6, 2.6, 2.4, 2.8]
 const DIAGRAMS = [
   { set: 'rolling', out: 'rolling.gif' },
-  { set: 'schedule', out: 'schedule.gif' }
+  { set: 'schedule', out: 'schedule.gif' },
+  { set: 'jobs', out: 'jobs.gif' }
 ]
 
 const repoRoot = path.join(__dirname, '..')

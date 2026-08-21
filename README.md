@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/github/license/parsingk/Astera?color=blue)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-555)
 
-[Download](#install) · [What it does](#what-it-does) · [Documentation](#documentation) · [Report a bug](https://github.com/parsingk/Astera/issues/new)
+[Download](#install) · [What it does](#what-it-does) · [Jobs](#jobs) · [Documentation](#documentation) · [Report a bug](https://github.com/parsingk/Astera/issues/new)
 
 **English** · [한국어](README.ko.md) · [日本語](README.ja.md) · [Español](README.es.md)
 
@@ -20,8 +20,9 @@ Astera runs your agent sessions when you are not at the desk. Schedule one to st
 starts without you. When any session hits a usage limit — scheduled or not — Astera reads the reset
 time out of the transcript, switches to your next account, and resumes the *same* work. Slack tells
 you when a turn lands or a limit hits. Sessions sit side by side in one window, each isolated in its
-own git worktree. One agent can start others, hand them tasks, and block until they report — it
-drives that itself through a bundled CLI, so you are not dispatching each step by hand.
+own git worktree. And work that takes a dozen steps does not need you to dispatch each one: draw the
+tasks and what waits on what, and Astera works down the graph itself — or let one agent start the
+others, hand them tasks, and block until they report through a bundled CLI.
 
 > **Status:** Windows, macOS and Linux. It drives the `claude` and `codex` CLIs, so it is only as
 > capable as whichever of those you have installed.
@@ -128,46 +129,57 @@ You will also need:
 <img src="assets/schedule.gif" width="820" alt="Diagram: at 03:00 a scheduled session starts on its own, runs the command left for it, finishes, and Slack reports the result" />
 </div>
 
-**Cross-vendor orchestration**
-- A coordinator session dispatches tasks to worker sessions — including workers on the *other* vendor
-- Workers report back through the bundled `astera` CLI; the coordinator waits on completion,
-  dependencies, questions, and escalations
-- Each task can run in its own git worktree so parallel workers do not collide
-- **A task can be proven done rather than reported done:** attach one of the project's run
-  configurations and it completes only when that build or test suite exits `0`
-- What no exit code settles — whether the work does what was asked — can go to a reviewer on the
-  *other* vendor, and the task waits on that verdict
-- Every agent started this way is pointed at the project's own decision records, whatever sits in
-  `knowledge/`, `docs/adr/`, `docs/decisions/` and the like, so a settled question is not reopened
-- **Or leave the coordinator out:** describe the job in the app and Astera drives it itself — each
-  task starts once its dependencies are done, only as many at a time as you allow, and the finished
-  worktrees are merged back before the tasks that follow them start, with a conflict handed to an
-  agent rather than left for you
-- A decision the job cannot take on its own stops and waits for a person to answer it
-
-**Jobs**
-- Every job of the open project in the sidebar, its tasks drawn as a dependency graph, and what
-  happened as a timeline
-- Which vendor is working on which task, and for how long
-- Start a task, stop it, retry it, or raise a question for a person — from the task's own node in
-  the graph, where a waiting decision is answered too
-
 **Also**
 - Korean, English, Japanese, and Spanish UI, plus a System option that follows the OS locale
 - Auto-update from GitHub Releases
 
-## Orchestration quickstart
+## Jobs
 
-Turn orchestration on in settings, then start a session. That session gets the `astera` CLI on its
-`PATH` and a skill describing how to use it, so you can simply ask it to coordinate work. To read the
-full reference yourself:
+All of this is behind one setting: **Agent orchestration**, in settings. Turn it on and the Jobs
+sidebar comes with it — a job you draw there needs nothing else: name the tasks, say what waits on
+what, and start it.
+
+A job is a set of tasks with dependencies between them, run across both vendors. There are two ways
+to run one:
+
+- **Astera drives it.** Draw the job in the app — the tasks, what waits on what, how many may run
+  at once — and it goes: each task starts once its dependencies are done, and the finished worktrees
+  are merged back before the tasks that follow them start, with a conflict handed to an agent rather
+  than left for you
+- **Or an agent drives it.** A coordinator session dispatches tasks to worker sessions — including
+  workers on the *other* vendor — and waits on completion, dependencies, questions and escalations.
+  Workers report back through the bundled `astera` CLI
+
+Either way:
+
+- **A task can be proven done rather than reported done:** attach one of the project's run
+  configurations and it completes only when that build or test suite exits `0`
+- What no exit code settles — whether the work does what was asked — can go to a reviewer on the
+  *other* vendor, and the task waits on that verdict
+- Each task can run in its own git worktree, so parallel workers do not collide
+- A decision the job cannot take on its own stops and waits for a person to answer it
+- Every agent started this way is pointed at the project's own decision records, whatever sits in
+  `knowledge/`, `docs/adr/`, `docs/decisions/` and the like, so a settled question is not reopened
+
+<div align="center">
+<img src="assets/jobs.gif" width="820" alt="Diagram: a job's tasks drawn as a dependency graph — Astera starts the two that are ready on both vendors at once, a test suite proves one of them done, the finished worktrees merge back, and a decision the job cannot take waits for a person" />
+</div>
+
+And you watch it happen: every job of the open project in the sidebar, its tasks drawn as a
+dependency graph, and what happened as a timeline. Which vendor is working on which task, and for
+how long. Start a task, stop it, retry it, raise a question for a person, or answer a waiting
+decision — from the task's own node in the graph.
+
+For a job an agent coordinates, start a session after turning that setting on. The session gets the
+`astera` CLI on its `PATH` and a skill describing how to use it, so you can simply ask it to
+coordinate work. To read the full reference yourself:
 
 ```bash
 astera help
 ```
 
 If `astera` comes back as `command not found`, the absolute path is in `$ASTERA_CLI` — the two are
-the same program. An empty `$ASTERA_CLI` means the session was not started by Astera, or
+the same program. An empty `$ASTERA_CLI` means the session was not started by Astera, or Agent
 orchestration is off.
 
 ## Build from source

@@ -115,16 +115,86 @@
       session: 'done', st: 'done · 12/12 passing', bi: 100, bw: 'g', slack: '', sl: '✅ turn finished' }
   ];
 
+  // ── Jobs: a job Astera drives itself. Nothing here depends on the other two. ─
+  //
+  // The graph reads left to right, where the app's own graph (RunDetail.tsx, graphLayout.ts) stacks
+  // its layers top to bottom. The canvas decides that: 900×330 is wide and short, and three layers of
+  // the app's 148×32 nodes would leave the width empty while the boxes stayed too small to carry the
+  // vendor and the elapsed time — which is half of what this diagram is for. These are illustrations
+  // of the mechanism, the same as the other two sets, not pictures of the window.
+  //
+  // Why `Add the --json flag` sits above rather than beside `Split the parser`, when both are tasks
+  // with nothing to wait on: the arrow into a shared child has to be either horizontal or vertical
+  // (the stylesheet has no elbow), so two siblings side by side cannot both point at one node. One
+  // above it and one beside it costs a row and buys plain arrows — and frame 2 lights both at once,
+  // which is what says they are parallel.
+  const jobsHtml = `
+    <div class="box" id="t2" style="left:300px; top:62px; width:250px">
+      <div class="t">Add the --json flag</div><div class="s" id="m2">ready</div>
+    </div>
+    <div class="box" id="t1" style="left:20px; top:152px; width:230px">
+      <div class="t">Split the parser</div><div class="s" id="m1">ready</div>
+      <div class="s" id="p1">proof · npm test</div>
+    </div>
+    <div class="box" id="t3" style="left:300px; top:152px; width:250px">
+      <div class="t">Wire them together</div><div class="s" id="m3">waiting on 2</div>
+      <div class="s" id="p3">merge · 2 worktrees</div>
+    </div>
+    <div class="box" id="t4" style="left:610px; top:112px; width:250px">
+      <div class="t">Update the docs</div><div class="s" id="m4">waiting on 1</div>
+    </div>
+    <div class="box hide" id="gate" style="left:610px; top:200px; width:250px">
+      <div class="t">Waiting on you</div><div class="s" id="gq">&mdash;</div>
+      <div class="s">answered on the node</div>
+    </div>
+    <div class="arrow" id="j1" style="left:256px; top:190px; width:38px"></div>
+    <div class="arrow v" id="j2" style="left:425px; top:123px; height:25px"></div>
+    <div class="arrow" id="j3" style="left:556px; top:160px; width:48px"></div>
+    <div class="arrow hide" id="j4" style="left:556px; top:215px; width:48px"></div>`;
+
+  // Every frame states every text it shows, so setFrame(i) paints state i whatever ran before it —
+  // the same rule the two sets above follow, and the reason `pa` and `rs` are repeated up there. `gq`
+  // is the exception that proves it: only the one frame with a gate on screen has a question to name.
+  const jobs = [
+    { cap: 'You draw the job once — the tasks, and what waits on what.',
+      m1: 'ready', m2: 'ready', m3: 'waiting on 2', m4: 'waiting on 1', p1: 'proof · npm test', p3: 'merge · 2 worktrees',
+      j1: 'dim', j2: 'dim', j3: 'dim' },
+    { cap: '<b>Astera starts what is ready</b> — two at once, on both vendors.',
+      t1: 'lit', t2: 'lit', m1: 'codex · 2m 10s', m2: 'claude · 1m 04s', m3: 'waiting on 2',
+      m4: 'waiting on 1', p1: 'proof · npm test', p3: 'merge · 2 worktrees', j1: 'dim', j2: 'dim', j3: 'dim' },
+    { cap: 'A task is done when the tests say so, not when the agent says so.',
+      t1: 'done', t2: 'lit', m1: 'codex · 2m 41s', m2: 'claude · 1m 22s', m3: 'waiting on 1',
+      m4: 'waiting on 1', p1: 'npm test · exit 0', p3: 'merge · 2 worktrees', j1: 'lit', j2: 'dim', j3: 'dim' },
+    { cap: '<b>The finished worktrees merge back</b> before what follows them starts.',
+      t1: 'done', t2: 'done', t3: 'lit', m1: 'codex · 2m 41s', m2: 'claude · 1m 58s',
+      m3: 'claude · 0m 12s', m4: 'waiting on 1', p1: 'npm test · exit 0', p3: 'merged 2 worktrees',
+      j1: 'lit', j2: 'lit', j3: 'dim' },
+    { cap: 'A decision it cannot take waits for you — right there on the node.',
+      t1: 'done', t2: 'done', t3: 'warn', gate: 'warn', m1: 'codex · 2m 41s', m2: 'claude · 1m 58s',
+      m3: 'blocked', m4: 'waiting on 1', p1: 'npm test · exit 0', p3: 'merged 2 worktrees',
+      gq: 'Keep --format as an alias?', j1: 'lit', j2: 'lit', j3: 'dim', j4: 'lit' },
+    { cap: 'You answer, and the rest runs out.',
+      t1: 'done', t2: 'done', t3: 'done', t4: 'done', m1: 'codex · 2m 41s', m2: 'claude · 1m 58s',
+      m3: 'claude · 4m 08s', m4: 'codex · 0m 47s', p1: 'npm test · exit 0', p3: 'merged 2 worktrees',
+      j1: 'lit', j2: 'lit', j3: 'lit' }
+  ];
+
   const cfg = SET === 'schedule'
     ? { title: 'Scheduled sessions', html: scheduleHtml, frames: schedule }
-    : { title: 'Account rolling', html: rollingHtml, frames: rolling };
+    : SET === 'jobs'
+      ? { title: 'Jobs', html: jobsHtml, frames: jobs }
+      : { title: 'Account rolling', html: rollingHtml, frames: rolling };
 
   $('title').textContent = cfg.title;
   scene.innerHTML = cfg.html;
 
   const setCls = (id, base, v) => { const e = $(id); if (e) e.className = base + (v ? ' ' + v : '') };
   const setTxt = (id, v) => { const e = $(id); if (e && v !== undefined) e.textContent = v };
-  const setArrow = (id, on) => { const e = $(id); if (!e) return; const v = e.classList.contains('v'); e.className = 'arrow' + (v ? ' v' : '') + (on ? ' lit' : ' hide') };
+  // Three states, not two. 'dim' is a line that is *visible* but not lit — the jobs graph needs it,
+  // because which task waits on which is half of what that diagram says, and an edge hidden until it
+  // fires leaves the first frame with no graph in it. rolling and schedule pass 1 or undefined only,
+  // so nothing changes for them.
+  const setArrow = (id, on) => { const e = $(id); if (!e) return; const v = e.classList.contains('v'); e.className = 'arrow' + (v ? ' v' : '') + (on === 'dim' ? '' : on ? ' lit' : ' hide') };
 
   window.FRAME_COUNT = cfg.frames.length;
   window.setFrame = (i) => {
@@ -139,7 +209,11 @@
     if ($('bi')) $('bi').style.width = (f.bi ?? 0) + '%';
     if ($('mai')) $('mai').style.width = (f.ma ?? 0) + '%';
     if ($('ma') && f.ma === 100) $('ma').className = 'bar w';
-    for (const id of ['aA', 'aB', 'aR', 'a1', 'a2']) setArrow(id, f[id]);
+    for (const id of ['t1', 't2', 't3', 't4']) setCls(id, 'box', f[id] ?? 'off');
+    // The gate is absent, not dimmed, until the task raises it — and gone again once answered.
+    setCls('gate', 'box', f.gate ?? 'hide');
+    for (const id of ['m1', 'm2', 'm3', 'm4', 'p1', 'p3', 'gq']) setTxt(id, f[id]);
+    for (const id of ['aA', 'aB', 'aR', 'a1', 'a2', 'j1', 'j2', 'j3', 'j4']) setArrow(id, f[id]);
     return i;
   };
   window.setFrame(0);
