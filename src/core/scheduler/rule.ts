@@ -52,14 +52,18 @@ export function isValidScheduleConfig(v: unknown): v is ScheduleConfig {
   return typeof o.command === 'string' && o.command.trim().length > 0 && isValidRule(o.rule)
 }
 
-/** The raw schedule input, in exactly the shape the UI holds — minutes, time and day-of-month are input
- *  values so they are strings, and only the weekdays are a number array built by toggle buttons. */
-export interface ScheduleInput {
+/** 규칙만 만드는 입력 — UI 원본 그대로다(분·시각·일자는 input 값이라 문자열이고, 요일만
+ *  토글 버튼이 만든 숫자 배열이다). */
+export interface ScheduleRuleInput {
   kind: ScheduleRule['kind']
   minutes: string // interval minutes
   time: string // 'HH:mm'
   weekdays: number[] // 0 (Sun) to 6 (Sat)
   days: string // day of month — comma-separated, "1,15"
+}
+
+/** 세션 예약의 입력 — 위의 것에 명령 한 칸을 더한 것이다. Job 예약에는 그 칸이 없다(Run.schedule) */
+export interface ScheduleInput extends ScheduleRuleInput {
   command: string
 }
 
@@ -80,6 +84,25 @@ function parseMonthDays(s: string): number[] | null {
 }
 
 /**
+ * 규칙만 조립한다 — Job 예약(Run.schedule)이 쓰는 갈래다.
+ * null = 입력이 불완전하다 → 부르는 쪽이 만들기 버튼을 잠근다.
+ *
+ * 판정은 isValidRule 에 맡긴다. UI 가 판정의 사본을 들면 둘이 갈라진다.
+ * parseMonthDays 의 실패는 빈 배열로 넘겨 isValidRule 이 "비었다"로 자연히 거절하게 한다.
+ * 숫자 변환도 같은 원리다 — Number('')=0, Number('abc')=NaN, Number('1.5')=1.5 가 모두
+ * isValidRule 의 정수·범위 검사에 걸린다.
+ */
+export function buildScheduleRule(input: ScheduleRuleInput): ScheduleRule | null {
+  let rule: ScheduleRule
+  if (input.kind === 'interval') rule = { kind: 'interval', minutes: Number(input.minutes) }
+  else if (input.kind === 'daily') rule = { kind: 'daily', time: input.time }
+  else if (input.kind === 'weekly')
+    rule = { kind: 'weekly', weekdays: input.weekdays, time: input.time }
+  else rule = { kind: 'monthly', days: parseMonthDays(input.days) ?? [], time: input.time }
+  return isValidRule(rule) ? rule : null
+}
+
+/**
  * Assembles the UI input into the ScheduleConfig handed to spawn (a pure function).
  * null = the input is incomplete → the caller disables the start button.
  *
@@ -88,21 +111,12 @@ function parseMonthDays(s: string): number[] | null {
  * (*.test.ts only, environment: 'node'), so the validation rules had no regression detector.
  *
  * The validity verdict is delegated to isValidScheduleConfig — if the UI held its own copy of the verdict,
- * the two would drift apart. Only parseMonthDays is string parsing specific to the UI, and a parse failure
- * is passed on as an empty array so isValidScheduleConfig naturally rejects it as "empty".
- * Number conversion works on the same principle — Number('')=0, Number('abc')=NaN and Number('1.5')=1.5 are
- * all caught by isValidRule's integer and range checks.
+ * the two would drift apart.
  */
 export function buildScheduleConfig(input: ScheduleInput): ScheduleConfig | null {
-  const command = input.command.trim()
-  if (!command) return null
-  let rule: ScheduleRule
-  if (input.kind === 'interval') rule = { kind: 'interval', minutes: Number(input.minutes) }
-  else if (input.kind === 'daily') rule = { kind: 'daily', time: input.time }
-  else if (input.kind === 'weekly')
-    rule = { kind: 'weekly', weekdays: input.weekdays, time: input.time }
-  else rule = { kind: 'monthly', days: parseMonthDays(input.days) ?? [], time: input.time }
-  const candidate: ScheduleConfig = { rule, command }
+  const rule = buildScheduleRule(input)
+  if (!rule) return null
+  const candidate: ScheduleConfig = { rule, command: input.command.trim() }
   return isValidScheduleConfig(candidate) ? candidate : null
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { nextFireAt, isValidRule, isValidScheduleConfig, buildScheduleConfig } from './rule'
+import { nextFireAt, isValidRule, isValidScheduleConfig, buildScheduleConfig, buildScheduleRule, type ScheduleRuleInput } from './rule'
 
 // 로컬 타임존 기준 시각 헬퍼. 2026-07-31은 금요일(getDay()=5).
 const at = (y: number, mo: number, d: number, h = 0, mi = 0): number =>
@@ -215,5 +215,49 @@ describe('buildScheduleConfig — monthly 일자 파싱', () => {
     expect(monthly('')).toBeNull()
     expect(monthly(',')).toBeNull()
     expect(monthly('   ')).toBeNull()
+  })
+})
+
+// buildScheduleRule — Job 예약이 쓰는 반쪽. 세션 예약과 갈라지는 지점은 command 하나뿐이라,
+// 규칙 조립·파싱을 이쪽에 두고 buildScheduleConfig 가 그것을 감싼다
+const ruleInput = (over: Partial<ScheduleRuleInput> = {}): ScheduleRuleInput => ({
+  kind: 'interval',
+  minutes: '30',
+  time: '09:00',
+  weekdays: [],
+  days: '',
+  ...over
+})
+
+describe('buildScheduleRule', () => {
+  it('command 를 요구하지 않는다 — 그것이 이 함수가 있는 이유다', () => {
+    expect(buildScheduleRule(ruleInput({ kind: 'daily' }))).toEqual({
+      kind: 'daily',
+      time: '09:00'
+    })
+  })
+
+  it('interval 의 분을 정수로 바꾼다', () => {
+    expect(buildScheduleRule(ruleInput({ minutes: '45' }))).toEqual({
+      kind: 'interval',
+      minutes: 45
+    })
+  })
+
+  it('범위를 벗어난 분은 null — 시작 버튼을 잠그는 신호다', () => {
+    expect(buildScheduleRule(ruleInput({ minutes: '0' }))).toBeNull()
+    expect(buildScheduleRule(ruleInput({ minutes: '525601' }))).toBeNull()
+  })
+
+  it('monthly 의 일자 목록을 파싱한다', () => {
+    expect(buildScheduleRule(ruleInput({ kind: 'monthly', days: '1, 15' }))).toEqual({
+      kind: 'monthly',
+      days: [1, 15],
+      time: '09:00'
+    })
+  })
+
+  it('weekly 는 요일이 비면 null', () => {
+    expect(buildScheduleRule(ruleInput({ kind: 'weekly', weekdays: [] }))).toBeNull()
   })
 })
