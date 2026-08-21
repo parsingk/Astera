@@ -1682,4 +1682,54 @@ describe('spawnScheduledRun', () => {
   it('없는 Run 은 거절한다', () => {
     expect(spawnScheduledRun(emptyState(), 'run_nope', FIRE).ok).toBe(false)
   })
+
+  // deps 의 id 가 템플릿 밖을 가리키면(손으로 고친 값) 떨어뜨린다
+  it('표에 없는 dep 은 떨어뜨린다', () => {
+    const { s, templateId, bId } = template()
+    const outsideId = 'tsk_outside'
+    const dirty: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === bId ? { ...t, deps: [t.deps[0], outsideId] } : t))
+    }
+    const { state, value: child } = unwrap<{ id: string }>(
+      spawnScheduledRun(dirty, templateId, FIRE) as never
+    )
+    const copyB = state.tasks.find((t) => t.runId === child.id && t.title === 'B')!
+    expect(copyB.deps.length).toBe(1)
+    expect(copyB.deps).not.toContain(outsideId)
+  })
+
+  // parentId 가 템플릿의 다른 Task 를 가리키면 자식의 id 로 매핑한다
+  it('parentId 를 자식의 새 id 로 다시 매핑한다', () => {
+    const { s, templateId, aId } = template()
+    const bTask = s.tasks.find((t) => t.title === 'B')!
+    const dirty: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === bTask.id ? { ...t, parentId: aId } : t))
+    }
+    const { state, value: child } = unwrap<{ id: string }>(
+      spawnScheduledRun(dirty, templateId, FIRE) as never
+    )
+    const copies = state.tasks.filter((t) => t.runId === child.id)
+    const copyA = copies.find((t) => t.title === 'A')!
+    const copyB = copies.find((t) => t.title === 'B')!
+    expect(copyB.parentId).toBe(copyA.id)
+    expect(copyB.parentId).not.toBe(aId)
+  })
+
+  // parentId 가 템플릿 밖을 가리키면 떨어뜨린다
+  it('표에 없는 parentId 는 떨어뜨린다', () => {
+    const { s, templateId } = template()
+    const bTask = s.tasks.find((t) => t.title === 'B')!
+    const outsideParentId = 'tsk_parent_outside'
+    const dirty: OrchState = {
+      ...s,
+      tasks: s.tasks.map((t) => (t.id === bTask.id ? { ...t, parentId: outsideParentId } : t))
+    }
+    const { state, value: child } = unwrap<{ id: string }>(
+      spawnScheduledRun(dirty, templateId, FIRE) as never
+    )
+    const copyB = state.tasks.find((t) => t.runId === child.id && t.title === 'B')!
+    expect('parentId' in copyB).toBe(false)
+  })
 })
