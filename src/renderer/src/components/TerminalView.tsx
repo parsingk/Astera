@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import type { RollStateEvent, SchedStateEvent, ScheduleRule, SessionInfo } from '../../../core/types'
-import type { MessageKey, MessageParams } from '../../../core/i18n'
 import { nextResize, type Dims } from '../../../core/terminal/resize'
 import { xtermThemeOf } from '../../../core/theme/apply'
+import { schedRuleSummary } from '../../../core/scheduler/summary'
 import { fitTerminalToHost } from '../lib/fitTerminal'
 import { pinCursorBlinkOff } from '../lib/cursorBlink'
 import * as sessionBus from '../lib/sessionBus'
@@ -24,37 +24,6 @@ const fmtDateTime = (iso?: string): string =>
         minute: '2-digit'
       })
     : ''
-// Weekday index (0 = Sunday) → catalog key. Shares the session.sched.weekday.* catalog with NewSessionDialog
-const WEEKDAY_KEYS: readonly MessageKey[] = [
-  'session.sched.weekday.sun',
-  'session.sched.weekday.mon',
-  'session.sched.weekday.tue',
-  'session.sched.weekday.wed',
-  'session.sched.weekday.thu',
-  'session.sched.weekday.fri',
-  'session.sched.weekday.sat'
-]
-// Rule summary for the banner. A module-level pure function cannot use the hook's t, so it is taken as
-// an argument (the same convention as fmtTime/fmtDateTime in this file)
-const schedRuleSummary = (
-  t: (key: MessageKey, params?: MessageParams) => string,
-  rule?: ScheduleRule
-): string => {
-  if (!rule) return t('session.terminal.schedFallback')
-  switch (rule.kind) {
-    case 'interval':
-      return t('session.terminal.schedSummary.interval', { minutes: rule.minutes })
-    case 'daily':
-      return t('session.terminal.schedSummary.daily', { time: rule.time })
-    case 'weekly':
-      return t('session.terminal.schedSummary.weekly', {
-        days: rule.weekdays.map((d) => t(WEEKDAY_KEYS[d])).join('·'),
-        time: rule.time
-      })
-    case 'monthly':
-      return t('session.terminal.schedSummary.monthly', { days: rule.days.join('·'), time: rule.time })
-  }
-}
 
 export function TerminalView({
   session,
