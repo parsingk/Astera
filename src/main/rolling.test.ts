@@ -1,3 +1,4 @@
+import { createHook } from 'node:async_hooks'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fsp } from 'node:fs'
 import os from 'node:os'
@@ -1249,29 +1250,60 @@ const realSetTimeout = setTimeout
 const ioProbes: (() => number)[] = []
 const ioActivity = (): number => ioProbes.reduce((n, p) => n + p(), 0)
 
+/** 지금 떠 있는 실제 fs 작업의 수. `settleIo` 가 기다릴 대상이다.
+ *
+ *  **기록 수로는 이것을 알 수 없다.** ioActivity() 는 코디네이터가 남긴 *출력*(이벤트·전송·복사·
+ *  spawn)을 세는데, 읽기가 출력을 만들지 않는 호출이 있다 — 예를 들어 rollout 매핑 폴링은 파일을
+ *  읽어 매핑만 세우므로 어느 배열도 늘어나지 않는다. 그런 자리에서 출력을 기준으로 기다리면
+ *  기다릴 대상이 없어 곧바로 나가고, 정확히 그 읽기가 늦을 때 다음 단언이 무너진다.
+ *
+ *  그래서 출력이 아니라 **I/O 자체**를 본다. fs/promises 의 각 작업은 FSREQPROMISE 비동기 자원을
+ *  만들고, async_hooks 로 그 생성과 완료를 세면 "지금 읽는 중인가"를 직접 물어볼 수 있다. */
+const fsInFlight = new Set<number>()
+createHook({
+  init(id, type) {
+    if (type.startsWith('FSREQ')) fsInFlight.add(id)
+  },
+  after(id) {
+    fsInFlight.delete(id)
+  },
+  destroy(id) {
+    fsInFlight.delete(id)
+  }
+}).enable()
+
 /** 실제 fs I/O가 정착할 때까지 이벤트 루프에 실제 시간을 준다.
  *
- *  종전에는 30ms(5ms×6) 고정이었다. 그 예산은 한가한 머신에서만 충분해서, 전체 스위트를 돌릴 때처럼
- *  워커가 붐비면 폴링이 파일을 못 본 채로 끝났다 — 이 파일과 codexRolling.test.ts가 간헐적으로
- *  실패한 원인이 이것이다(전체 실행 3회 중 1회 재현, 예산을 1ms로 줄이면 같은 계열로 10개가 즉시
- *  실패). 부하에 비례해 늘어나는 값을 상수로 박아 둔 것이 잘못이었다.
+ *  두 번의 처방이 이 자리에서 실패했다. 처음에는 30ms(5ms×6) 고정 예산이었다 — 한가한 머신에서만
+ *  충분해서, 워커가 붐비면 폴링이 파일을 못 본 채로 끝났다. 다음에는 "기록이 늘어나는 동안 더
+ *  기다린다"로 바꿨는데 **아직 시작하지 않은 I/O 는 조용한 것과 구별되지 않아** 첫 콜백 전에 조건이
+ *  차 버렸다. 계측으로 확인했다: 유휴 머신에서 모든 호출이 예외 없이 최소 라운드에서 끝나고, 상한도
+ *  활동 대기도 한 번도 발동하지 않는다 — 없애려던 고정 예산이 그대로 남아 있었다. Windows CI(2코어)에서
+ *  세 테스트가 그렇게 실패했다.
  *
- *  그래서 시간이 아니라 **활동이 멎는 것**을 기다린다. 기록이 계속 늘어나는 동안에는 더 기다리고,
- *  두 라운드 연속 조용하면 나간다. 최소 예산은 종전과 같게 두어, "아무 일도 일어나지 않아야 한다"를
- *  단언하는 테스트가 종전보다 느슨해지지 않게 한다. */
-//  상한을 시간이 아니라 라운드 수로 세는 이유: fake timer가 걸린 동안 Date.now()는 얼어 있어
-//  경과 시간을 물어봐야 늘 0이다. 라운드는 실제 setTimeout으로 도니 실제 시간에 비례한다.
+ *  이제 기다리는 대상은 기록이 아니라 **떠 있는 fs 작업**이다(fsInFlight). 그것이 비어야 나가므로
+ *  대기가 부하에 맞춰 늘어나고, 출력을 만들지 않는 읽기까지 덮는다.
+ *
+ *  **연속으로 비어 있기를 요구하는 이유**는 체인 중간의 일시적 0 이다. open → stat → read → close 는
+ *  각 단계 사이에 떠 있는 작업이 없는 순간이 있고, 그 순간이 라운드 경계와 겹치면 다 끝난 것으로
+ *  보인다. 다음 단계는 같은 턴 안에서 뜨므로 연속 IDLE_ROUNDS 라운드를 요구하면 그 착시가 걸러진다.
+ *
+ *  상한을 시간이 아니라 라운드 수로 세는 이유: fake timer가 걸린 동안 Date.now()는 얼어 있어
+ *  경과 시간을 물어봐야 늘 0이다. 라운드는 실제 setTimeout으로 도니 실제 시간에 비례한다. */
 const SETTLE_MIN_ROUNDS = 6 // 종전의 5ms×6 — 부정 단언의 하한을 유지한다
 const SETTLE_MAX_ROUNDS = 400 // 5ms×400 = 2초. 부하가 아무리 심해도 여기서 멈춘다 — 넘으면 진짜 실패다
+const SETTLE_IDLE_ROUNDS = 3 // 이만큼 연속으로 fs 가 비어 있어야 정말 끝난 것으로 본다
 const settleIo = async (): Promise<void> => {
   let last = ioActivity()
   let quiet = 0
+  let idle = 0
   for (let round = 1; round <= SETTLE_MAX_ROUNDS; round++) {
     await new Promise((r) => realSetTimeout(r, 5))
     const now = ioActivity()
     quiet = now === last ? quiet + 1 : 0
     last = now
-    if (round >= SETTLE_MIN_ROUNDS && quiet >= 2) return
+    idle = fsInFlight.size === 0 ? idle + 1 : 0
+    if (round >= SETTLE_MIN_ROUNDS && quiet >= 2 && idle >= SETTLE_IDLE_ROUNDS) return
   }
 }
 const advanceIo = async (ms: number): Promise<void> => {
