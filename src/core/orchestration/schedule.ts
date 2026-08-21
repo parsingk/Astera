@@ -29,6 +29,11 @@ export function slotsToFill(s: OrchState): Slot[] {
   const slots: Slot[] = []
   for (const run of s.runs) {
     if (!run.autoDispatch) continue
+    // 템플릿은 자신이 돌지 않는다 — 발화마다 자식 Run 이 생기고 그것이 돈다. 위의 autoDispatch
+    // 검사가 이미 걸러내지만(run-create 가 예약이면 켜지 않는다) 그 사실에 기대지 않는다:
+    // orchestration.json 은 프로세스보다 오래 살고 손으로 고쳐진다 — 이 파일 머리말이 provider
+    // 없는 Run 을 건너뛰는 것과 같은 이유다.
+    if (run.schedule) continue
     const provider = run.provider
     if (!provider) continue
     const open = s.dispatches.filter((d) => !d.outcome && !d.endedAt)

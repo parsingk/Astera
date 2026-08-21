@@ -16,6 +16,7 @@ import {
   type Task
 } from './types'
 import type { Provider } from '../providers/meta'
+import type { ScheduleRule } from '../scheduler/rule'
 
 export interface OrchState {
   runs: Run[]
@@ -72,6 +73,9 @@ export function createRun(
     provider?: Provider
     concurrency?: number
     autoDispatch?: boolean
+    /** 있으면 이 Run 은 템플릿이다 — Run.schedule 의 주석을 보라. 규칙의 유효성은 부르는
+     *  쪽(server.ts 의 run-create)이 isValidRule 로 본다, provider·accountId 와 같은 관례다 */
+    schedule?: ScheduleRule
   },
   now: string
 ): Res<Run> {
@@ -83,7 +87,8 @@ export function createRun(
     createdAt: now,
     ...(a.provider ? { provider: a.provider } : {}),
     ...(a.concurrency !== undefined ? { concurrency: a.concurrency } : {}),
-    ...(a.autoDispatch ? { autoDispatch: true } : {})
+    ...(a.autoDispatch ? { autoDispatch: true } : {}),
+    ...(a.schedule ? { schedule: a.schedule } : {})
   }
   return ok({ ...s, runs: [...s.runs, run] }, run)
 }

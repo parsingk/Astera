@@ -195,4 +195,31 @@ describe('slotsToFill', () => {
     expect(pendingMerges(s, 't2')).toEqual(['/p-worktrees/t1']) // 합칠 것이 있는데도
     expect(slotsToFill(s).map((x) => x.taskId)).toEqual(['t2']) // 슬롯으로는 나온다
   })
+
+  // 템플릿은 정의를 담는 그릇이고, 도는 것은 발화가 만든 자식 Run 이다. 이 줄이 없으면 템플릿의
+  // Task 가 직접 배치되어 예약이 곧바로 한 번 돈다
+  it('schedule 을 가진 템플릿은 슬롯을 만들지 않는다', () => {
+    const s = state({
+      runs: [run({ schedule: { kind: 'daily', time: '09:00' } })],
+      tasks: [task('t1')]
+    })
+    expect(slotsToFill(s)).toEqual([])
+  })
+
+  // autoDispatch 와 schedule 을 함께 가진 Run 은 명령으로는 만들 수 없다(run-create 가 예약이면
+  // autoDispatch 를 켜지 않는다). 그래도 거르는 이유는 이 파일 머리말과 같다 — 입력은 명령이 아니라
+  // 파일이고, orchestration.json 은 손으로 고쳐진다
+  it('autoDispatch 와 schedule 을 함께 가진 Run 도 건너뛴다', () => {
+    const s = state({
+      runs: [run({ autoDispatch: true, schedule: { kind: 'interval', minutes: 30 } })],
+      tasks: [task('t1')]
+    })
+    expect(slotsToFill(s)).toEqual([])
+  })
+
+  // 자식은 평범한 Run 이다 — templateId 는 어느 템플릿의 회차인지만 말하고 배치를 막지 않는다
+  it('자식 Run(templateId 만 있는) 은 평소처럼 돈다', () => {
+    const s = state({ runs: [run({ templateId: 'run_tmpl' })], tasks: [task('t1')] })
+    expect(slotsToFill(s)).toEqual([{ runId: 'run_1', taskId: 't1', provider: 'claude' }])
+  })
 })

@@ -2,6 +2,7 @@
 // renderer compilation target, so no fs/path dependency may leak in (the same rule as
 // providers/meta.ts).
 import type { Provider } from '../providers/meta'
+import type { ScheduleRule } from '../scheduler/rule'
 
 export type TaskStatus = 'pending' | 'ready' | 'dispatched' | 'validating' | 'reviewing' | 'completed' | 'failed' | 'blocked'
 export type Outcome = 'succeeded' | 'failed'
@@ -33,6 +34,16 @@ export interface Run {
    *  worker-start 가 `dispatch already open` 을 받는다. 코디네이터 LLM 에게는 자기 명령이 이유
    *  없이 실패하기 시작하는 일이고, 그것을 어떻게 다룰지는 우리가 통제할 수 없다. */
   autoDispatch?: boolean
+  /** 발화 시각마다 이 Run 의 한 회차를 돌리는 규칙. **있으면 이 Run 은 템플릿이다** — 자신은
+   *  한 번도 돌지 않고(run-create 가 autoDispatch 를 켜지 않는다), 발화마다 자식 Run 을 하나
+   *  만든다. 세션 예약의 ScheduleConfig 가 아니라 그 규칙 부분만인 이유: ScheduleConfig 는
+   *  command 를 필수로 요구하는데(isValidScheduleConfig) Job 에는 타이핑할 명령이 없다 —
+   *  Task 가 곧 일이다. */
+  schedule?: ScheduleRule
+  /** 이 Run 이 어느 템플릿의 한 회차인가. 있으면 실행 기록이다.
+   *
+   *  **schedule 과 배타적이다.** 자식에 schedule 을 복사하면 자식이 또 발화해 무한히 증식한다. */
+  templateId?: string
 }
 
 export interface Task {
