@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { BranchRef } from '../types'
-import { orderBranchesForPicker, reconcileBaseRef, resolveInitialBase } from './base'
+import { orderBranchesForPicker, reconcileBaseRef, resolveInitialBase, workerBaseFailure } from './base'
 
 const b = (name: string, over: Partial<BranchRef> = {}): BranchRef => ({
   name,
@@ -126,5 +126,31 @@ describe('reconcileBaseRef', () => {
     expect(reconcileBaseRef({ branches, detected: 'origin/develop', current: 'develop' })).toBe(
       'origin/develop'
     )
+  })
+})
+
+describe('workerBaseFailure', () => {
+  // 이 함수가 있는 이유의 시험대. 폴더가 사라진 것을 "분리된 HEAD" 라고 말하던 것이 그 결함이다
+  it('저장소에 닿을 수 없으면 그 사실을 말한다 — 분리된 HEAD 라고 하지 않는다', () => {
+    const msg = workerBaseFailure({
+      repoPath: 'C:/gone',
+      repoReachable: false,
+      onBranch: false,
+      stderr: "fatal: cannot change to 'C:/gone': No such file or directory"
+    })
+    expect(msg).toContain('NO_REPO')
+    expect(msg).toContain('C:/gone')
+    expect(msg).toContain('No such file or directory')
+    expect(msg).not.toContain('detached')
+  })
+
+  it('저장소에 닿는데 브랜치가 아니면 분리된 HEAD 다', () => {
+    const msg = workerBaseFailure({ repoPath: 'C:/repo', repoReachable: true, onBranch: false })
+    expect(msg).toContain('NO_BASE')
+    expect(msg).toContain('detached')
+  })
+
+  it('브랜치 위에 있으면 실패가 없다', () => {
+    expect(workerBaseFailure({ repoPath: 'C:/repo', repoReachable: true, onBranch: true })).toBeNull()
   })
 })

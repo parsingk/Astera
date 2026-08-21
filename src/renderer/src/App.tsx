@@ -1590,18 +1590,32 @@ export default function App(): React.JSX.Element {
    *  영속 규칙은 lib/stickyProject.ts 에 있다(렌더러에 테스트가 없어 App.tsx 안에서는 확인할 수 없다). */
   const [stickyRoot, setStickyRoot] = useState<string | null>(null)
   useEffect(() => {
-    const stored = sticky.read()
-    if (!stored) return
     // 저장된 값을 그대로 채택하지 않는다. 폴더가 사라졌거나 이름이 바뀌었을 수 있고, main 의 경로
     // 가드가 더는 허용하지 않을 수도 있다 — 메시지를 하나도 남기지 않은 세션의 프로젝트는
     // provider 의 JSONL 이 없어 history 에 없고, 따라서 knownProjectPaths() 에도 없다. files.list 는
     // 탐색기가 이 루트로 어차피 부르는 호출이라, 존재와 허용을 한 번에 답한다. 거부되면 키를 버린다
     // — 그러지 않으면 사이드바의 네 가지가 켤 때마다 '허용되지 않은 경로입니다'를 받는다.
-    void window.api.files.list(stored).then(
-      // 복원이 도착하기 전에 활성 탭이 정한 값이 있으면 그쪽이 이긴다 (탭이 있는 채로 시작한 경우)
-      () => setStickyRoot((prev) => prev ?? stored),
-      () => sticky.clear()
-    )
+    const probe = (): void => {
+      const stored = sticky.read()
+      if (!stored) return
+      void window.api.files.list(stored).then(
+        // 복원이 도착하기 전에 활성 탭이 정한 값이 있으면 그쪽이 이긴다 (탭이 있는 채로 시작한 경우)
+        () => setStickyRoot((prev) => prev ?? stored),
+        () => {
+          // **메모리의 값도 함께 버린다.** 마운트에서만 확인하던 동안, 앱이 켜져 있는 사이에 폴더가
+          // 사라지면 stickyRoot 는 낡은 채로 남았고 currentProject 가 그것을 가리켰다 — 그 상태에서
+          // 만든 Run 은 cwd 가 없는 폴더라 워커를 띄울 때마다 실패했다(실제로 그렇게 보고됐다).
+          sticky.clear()
+          setStickyRoot((prev) => (prev === stored ? null : prev))
+        }
+      )
+    }
+    probe()
+    // **포커스에서 다시 묻는다.** 폴더를 앱 밖에서 지우고 앱으로 돌아오는 순간이 그 계기고, IPC
+    // 한 번이라 값이 싸다. 활성 탭이 루트를 말하는 동안에는 그쪽이 이기므로(currentProject) 이
+    // 확인이 정하는 것은 탭이 없을 때의 기억뿐이다.
+    window.addEventListener('focus', probe)
+    return () => window.removeEventListener('focus', probe)
   }, [])
   // 활성 탭이 루트를 말할 때마다 그것이 다음의 기억이 된다. 탭이 사라져도(null) 지우지 않는 것이
   // 이 슬라이스의 전부다

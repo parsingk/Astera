@@ -68,6 +68,7 @@ import { GitWatcher } from './gitWatcher'
 import { createWorktree } from '../core/worktrees/create'
 import { nameForTask } from '../core/worktrees/naming'
 import { listBranches, detectBaseRef } from '../core/worktrees/git'
+import { workerBaseFailure } from '../core/worktrees/base'
 import { goneWorktreeProjects } from '../core/worktrees/hiddenHistory'
 import { removeWorktree } from '../core/worktrees/remove'
 import { listWithStatus } from '../core/worktrees/list'
@@ -603,8 +604,22 @@ export function registerIpc(
         // same way, for the same reason, elsewhere in this codebase: the pre-merge check further
         // down in this file (`symbolic-ref --quiet HEAD` inside integrateWorktrees) and
         // listBranches (core/worktrees/git.ts) both treat a failing symbolic-ref as "detached".
-        const head = await git(['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: a.repoPath })
-        if (!head.ok)
+        //
+        // **저장소에 닿는지를 먼저 묻는다.** symbolic-ref 는 유효한 저장소에서만 "분리됐는가" 를
+        // 답한다 — 그 경로에서 git 을 돌릴 수 없을 때도 똑같이 실패하므로, 그 실패를 곧 분리로 읽던
+        // 동안 앱은 폴더가 사라진 Run 에도 "HEAD 가 분리됐다"고 말했다(실제로는 `cannot change to
+        // '<경로>'`). 어느 쪽인지 가르는 것은 core 의 workerBaseFailure 이고 문장도 그쪽에 있다.
+        const gitDirProbe = await git(['rev-parse', '--git-dir'], { cwd: a.repoPath })
+        const head = gitDirProbe.ok
+          ? await git(['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: a.repoPath })
+          : { ok: false, stdout: '', stderr: '' }
+        const baseFailure = workerBaseFailure({
+          repoPath: a.repoPath,
+          repoReachable: gitDirProbe.ok,
+          onBranch: head.ok,
+          stderr: gitDirProbe.stderr || gitDirProbe.stdout
+        })
+        if (baseFailure !== null)
           // Fail rather than silently falling back to auto-detection (baseRef undefined): a
           // fallback would recreate the exact bug this check exists to prevent, and the worker
           // would go on to do work that Task 5 can never merge — integrateWorktrees (further down
@@ -616,7 +631,7 @@ export function registerIpc(
           // scheduler's per-slot catch (further down in this file) turns that into a Gate the user
           // sees — the same wiring every other worker-start failure already goes through, so
           // nothing new needs to be built for this one to reach the user.
-          throw new Error(`NO_BASE: HEAD is not on a branch (detached) — cannot fork a worker worktree from ${a.repoPath}`)
+          throw new Error(baseFailure)
         // Known residual risk in the value just read, left as a comment rather than fixed here: if
         // the branch's first path segment (before the first '/') is exactly the name of a
         // configured remote (remoteExists in git.ts) and that remote actually has a branch
@@ -988,6 +1003,18 @@ export function registerIpc(
       //    표시 파일의 자리를 `<runCwd>/.git` 으로 짐작하지 않는다 — 워크트리에서 `.git` 은 파일이고
       //    실제 디렉터리는 <주 저장소>/.git/worktrees/<이름> 이다. 그리고 이 상태들은 워크트리마다
       //    따로다. gitDir()(worktrees/git.ts)이 `--absolute-git-dir` 로 그 자리를 답한다.
+      // **git 디렉터리를 먼저 묻는다.** 아래 symbolic-ref 의 실패는 유효한 저장소에서만 "분리됐다"를
+      // 뜻하고, 폴더가 사라졌거나 저장소가 아닐 때도 똑같이 실패한다 — 순서가 반대였을 때 이 함수는
+      // 그 경우에도 "분리된 HEAD" 라고 말했다. 그 오진이 createWorktree 어댑터 쪽에서 실제로 사람을
+      // 헤매게 했고(그쪽 주석), 같은 질문을 같은 방식으로 묻는 이 자리도 같은 순서여야 한다.
+      const dir = await gitDir(runCwd)
+      if (!dir)
+        return {
+          kind: 'human',
+          reason:
+            `프로젝트 폴더(${runCwd})에서 git 을 돌릴 수 없어 워크트리를 합치지 못했습니다 — 그 폴더가 ` +
+            `사라졌거나 git 저장소가 아닙니다.`
+        }
       const head = await git(['symbolic-ref', '--quiet', 'HEAD'], { cwd: runCwd })
       if (!head.ok)
         return {
@@ -997,12 +1024,6 @@ export function registerIpc(
             `(분리된 HEAD — bisect 나 rebase 중일 수도 있습니다). 그 위에 병합하면 만든 커밋이 어느 ` +
             `브랜치에도 남지 않고, 진행 중인 작업이 있다면 그것이 깨집니다. 브랜치를 체크아웃한 뒤 ` +
             `이 Gate 를 해결해 주세요.`
-        }
-      const dir = await gitDir(runCwd)
-      if (!dir)
-        return {
-          kind: 'human',
-          reason: `프로젝트 폴더(${runCwd})의 git 디렉터리를 찾을 수 없어 워크트리를 합치지 못했습니다.`
         }
       // 표시 파일과 사람에게 보일 이름. rebase-apply 는 `git am` 도 쓴다.
       const busy = (
