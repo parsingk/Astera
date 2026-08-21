@@ -821,6 +821,10 @@ export const ko = {
   'jobs.new.provider': '에이전트',
   'jobs.new.concurrency': '동시 실행',
   'jobs.new.concurrencyHint': '이 작업이 한 번에 열어 둘 워커 수',
+  'jobs.new.schedule': '예약 실행',
+  'jobs.new.scheduleHint': '정한 시각마다 이 작업의 회차를 하나 만들어 돌린다',
+  // 겹침을 막지 않기로 한 결정을 사람에게 알리는 자리 — 도는 워커 수가 상한을 넘을 수 있다
+  'jobs.new.scheduleOverlapHint': '이전 회차가 돌고 있어도 새 회차를 띄운다 — 워커가 겹칠 수 있다',
   'jobs.new.create': '만들기',
   // 동시 실행 1 을 골랐는데 그 폴더에 이미 워커가 있을 때. 막지 않고 알려만 준다 —
   // 파일을 안 건드리는 워커끼리는 충돌할 것이 없고 앱은 그것을 알 수 없다

@@ -691,6 +691,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* Same ring-plus-brightened-border as .sel-trigger:focus-visible, on :focus rather than :focus-visible —
    a text box is focused to be typed in, so there is no pointer-versus-keyboard distinction to make. */
 .jobs-concurrency:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
+/* 예약 실행이 켜졌을 때 규칙 칸들이 들어가는 자리. ScheduleRuleFields 는 .row 둘을 내놓을 뿐이라
+   묶어 줄 상자가 필요하다 — .sched-field 를 빌리지 않는 이유는 그것이 명령 칸까지 있는 세션 쪽
+   폼의 간격이라서다. */
+.jobs-sched { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .field .modal-hint { margin-top: 4px; display: block; }
 .row { display: flex; align-items: center; gap: 8px; }
 .row.right { justify-content: flex-end; }

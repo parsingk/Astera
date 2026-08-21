@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import type { Provider } from '../../../core/types'
+import type { Provider, ScheduleRule } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { Select, type SelectOption } from './Select'
+import { ScheduleRuleFields } from './ScheduleRuleFields'
 
 /** Provider 선택지 — 'Claude'/'Codex'는 번역하지 않는다. ProviderBadge/AccountRow 가 이미 같은
  *  이름을 그대로 쓰고, catalog.test.ts 의 LITERALS 가 네 카탈로그 모두에서 그대로 남도록 강제한다. */
@@ -35,6 +36,8 @@ export function NewRunModal({
   const [objective, setObjective] = useState('')
   const [provider, setProvider] = useState<Provider>('claude')
   const [concurrency, setConcurrency] = useState(3)
+  const [scheduled, setScheduled] = useState(false)
+  const [schedule, setSchedule] = useState<ScheduleRule | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -51,8 +54,10 @@ export function NewRunModal({
         cwd: projectPath,
         provider,
         concurrency,
-        // 이 UI 로 만든 Run 은 언제나 자동이다 — 사용자에게 스위치를 주지 않는다(스펙 5절)
-        auto: true
+        // 예약이면 auto 를 보내지 않는다 — 템플릿은 자신이 돌지 않고, 발화가 만든 자식 Run 이
+        // 돈다(그 자식은 spawnScheduledRun 이 autoDispatch 를 켠다). 예약이 아니면 이 UI 로 만든
+        // Run 은 언제나 자동이다 — 사용자에게 스위치를 주지 않는다(스펙 5절)
+        ...(scheduled && schedule ? { schedule } : { auto: true })
       })
       if (reply.status >= 400) {
         // 실패해도 모달은 닫지 않는다 — 닫으면 사용자는 눌러도 아무 일도 없었다고 여긴다
@@ -115,6 +120,26 @@ export function NewRunModal({
             <p className="warn-text">{t('jobs.new.folderBusy')}</p>
           )}
         </div>
+        <div className="field">
+          <label className="check-small">
+            <input
+              type="checkbox"
+              checked={scheduled}
+              onChange={(e) => setScheduled(e.target.checked)}
+            />
+            {t('jobs.new.schedule')}
+          </label>
+          {scheduled && (
+            <div className="jobs-sched">
+              <ScheduleRuleFields onChange={setSchedule} />
+              <p className="modal-hint">{t('jobs.new.scheduleHint')}</p>
+              {/* 겹침을 막지 않기로 한 결정을 사람에게 알린다 — 상한이 3 인 예약의 회차 둘이
+                  겹치면 워커는 여섯이다. 막지 않는 이유는 폴더 공유 경고와 같다: 파일을 안
+                  건드리는 워커끼리는 충돌할 것이 없고 앱은 그것을 알 수 없다 */}
+              <p className="warn-text">{t('jobs.new.scheduleOverlapHint')}</p>
+            </div>
+          )}
+        </div>
         {error && <p className="warn">{error}</p>}
         <div className="row right">
           <button onClick={onClose} disabled={busy}>
@@ -122,7 +147,7 @@ export function NewRunModal({
           </button>
           <button
             className="primary"
-            disabled={busy || !objective.trim()}
+            disabled={busy || !objective.trim() || (scheduled && schedule === null)}
             onClick={() => void create()}
           >
             {t('jobs.new.create')}
