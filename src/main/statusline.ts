@@ -88,6 +88,10 @@ export function resolveNodePath(
   return 'node'
 }
 
+/** The tools whose calls the Pre/PostToolUse hooks watch. Both events share it so the capture and the
+ *  invalidation cannot cover different sets — see the PostToolUse comment in init(). */
+const TOOL_MATCHER = 'AskUserQuestion|Bash|PowerShell|Write|Edit|NotebookEdit'
+
 export class StatusLineManager {
   private readonly capturePath: string
   private readonly settingsFile: string
@@ -144,12 +148,19 @@ export class StatusLineManager {
         // The cost: a user who configured the read tools to require approval gets only the text in that notification.
         // Hardcoding tool names here is a limitation too — a new tool will be missing from this list. Either way the
         // notification only falls back to the previous behaviour (a one-line message), so it is not a silent failure.
-        PreToolUse: [
-          {
-            matcher: 'AskUserQuestion|Bash|PowerShell|Write|Edit|NotebookEdit',
-            hooks: [{ type: 'command', command: hookCmd }]
-          }
-        ]
+        PreToolUse: [{ matcher: TOOL_MATCHER, hooks: [{ type: 'command', command: hookCmd }] }],
+        // The pair that ends the capture: PostToolUse fires once the tool has actually run, and its
+        // tool_use_id lets SlackNotifier drop the capture for certain. Without it a subagent's tool call
+        // stays "waiting" until Stop — its tool_use is written only to the subagent's own transcript, so the
+        // "has the id shown up in the transcript tail" fallback never sees it (measured; the full account is
+        // in the clearPendingTool comment in slack.ts). The same matcher on purpose: what has to be ended is
+        // exactly what PreToolUse captured, and a narrower list here would silently leave some captures
+        // uncleared.
+        //
+        // The cost is one more node process per write/execute call — the hook count for those tools doubles.
+        // What it buys is removing a false "input needed" that fired repeatedly, and the read tools (called
+        // far more often) stay outside the matcher, so the latency reasoning above is unchanged.
+        PostToolUse: [{ matcher: TOOL_MATCHER, hooks: [{ type: 'command', command: hookCmd }] }]
       }
     }
     await fs.writeFile(this.hooksSettingsFile, JSON.stringify(hooksSettings, null, 2), 'utf8')

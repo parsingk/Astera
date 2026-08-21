@@ -33,6 +33,14 @@ describe('StatusLineManager 훅 주입', () => {
     expect((await fs.stat(mgr.hookEventsDir)).isDirectory()).toBe(true)
   })
 
+  // PreToolUse로 캡처한 대기 내용을 확정 무효화하는 짝이다 — 없으면 서브에이전트가 실행한 도구가
+  // Stop 전까지 "대기 중"으로 남는다(사유는 SlackNotifier.clearPendingTool 주석).
+  it('PostToolUse 훅도 PreToolUse와 같은 matcher로 등록한다', async () => {
+    const settings = JSON.parse(await fs.readFile(path.join(dir, 'astera-hooks-settings.json'), 'utf8'))
+    expect(settings.hooks.PostToolUse[0].matcher).toBe(settings.hooks.PreToolUse[0].matcher)
+    expect(settings.hooks.PostToolUse[0].hooks[0].command).toContain('astera-hook-capture.cjs')
+  })
+
   it('spawnConfig: hooks=true면 hooks 설정 파일 + 세션별 hookOutPath', () => {
     const c = mgr.spawnConfig('sess-1', account, { hooks: true })
     expect(c.settingsFile).toContain('astera-hooks-settings.json')

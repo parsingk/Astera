@@ -12,13 +12,14 @@ import { PROVIDER_META, providerOf, type Provider } from '../core/providers/meta
 import { parseStatusLinePayload } from '../core/usage/statusline'
 import {
   describePendingToolUse,
-  extractLastAssistantText,
+  extractLastTurnAssistantText,
   extractPendingToolUse
 } from '../core/slack/transcript'
 import type { ChoiceShape } from '../core/slack/inbound'
 import { extractLastAgentMessage } from '../core/slack/codexTranscript'
 import {
   isIdleNotification,
+  isNonPromptNotification,
   isUnknownNotificationType,
   type NotificationPayload
 } from '../core/hooks/notification'
@@ -96,14 +97,19 @@ interface SlackRecord {
    *  approval prompt is on screen the transcript does not contain that tool_use (see the countToolUses
    *  comment), so the content has to be held here to be included in the notification.
    *
-   *  id is the payload's tool_use_id. If that id has appeared in the tail by notification time the call has
-   *  run and been recorded, so the cache is discarded. This used to be decided by "has the number of
+   *  id is the payload's tool_use_id, and it is what ends the cache: the PostToolUse hook for the same id
+   *  means the call ran (clearPendingTool), and Stop clears whatever is left. The transcript cross-check in
+   *  sendNotification — has the id appeared in the tail — is only a fallback for a payload with no id or a
+   *  session whose settings file predates the PostToolUse hook; it is blind to a subagent's call, whose
+   *  tool_use is written to the subagent's own transcript and never to this one (measured).
+   *
+   *  Before PostToolUse existed the tail check was the whole verdict, and it in turn replaced "has the number of
    *  tool_uses with the same name grown", which rested on the assumption that the tail window is fixed — a
    *  measured transcript was 3.6MB against a 256KB tail, so only 7% of the file was visible, and as appends
    *  continued the window slid forward: the count stopped growing, or even shrank, and the verdict collapsed.
-   *  The id form counts nothing, so window movement is irrelevant: a call that ran is recorded at the end of
-   *  the file, so one just captured is certainly in the tail, while a call awaiting approval is nowhere in
-   *  the file at all. */
+   *  The id form counts nothing, so window movement is irrelevant — a main-session call that ran is recorded
+   *  at the end of the file, and one awaiting approval is nowhere in it at all. What it still cannot see is
+   *  the subagent case above, and that is what made the PostToolUse hook necessary. */
   pendingTool: { name: string; input: unknown; id: string } | null
 }
 
@@ -413,7 +419,8 @@ export class SlackNotifier {
   }
 
   /** The HookEventWatcher callback. Stop → turn complete (with an excerpt), Notification → input needed,
-   *  PreToolUse → capture the pending question. Other events are ignored. */
+   *  PreToolUse → capture the pending question, PostToolUse → that call ran, so drop the capture. Other
+   *  events are ignored. */
   onHookEvent(sessionId: string, payload: unknown): void {
     const record = this.records.get(sessionId)
     if (!record || typeof payload !== 'object' || payload === null) return
@@ -434,6 +441,8 @@ export class SlackNotifier {
       void this.sendNotification(record, p, transcriptPath)
     } else if (p.hook_event_name === 'PreToolUse') {
       this.capturePendingTool(record, p.tool_name, p.tool_input, p.tool_use_id)
+    } else if (p.hook_event_name === 'PostToolUse') {
+      this.clearPendingTool(record, p.tool_use_id)
     }
   }
 
@@ -496,6 +505,30 @@ export class SlackNotifier {
       return
     }
     record.pendingTool = { name: toolName, input: toolInput, id: toolUseId }
+  }
+
+  /**
+   * PostToolUse → that call actually ran, so the capture is dropped.
+   *
+   * This is the primary invalidation. The transcript cross-check in sendNotification cannot do the job on
+   * its own: **a subagent's tool call is recorded only in the subagent's own transcript**. Measured on the
+   * current Claude Code — a subagent's Write fires PreToolUse with the *parent's* session_id and
+   * transcript_path (only agent_id/agent_type are added), while its tool_use_id appears zero times in that
+   * parent transcript and twice in `<session>/subagents/agent-*.jsonl`. So "has the id shown up in the
+   * tail" was false forever, the capture survived until Stop, and every Notification arriving in between —
+   * idle_prompt included, since a live capture overrides the idle suppression — went out as
+   * "🙋 input needed" plus that tool's arguments. (The same session's main-session Write does appear in the
+   * parent tail, which is why the defect only ever showed on subagent calls.)
+   *
+   * PostToolUse fires only after the tool has actually run, so it cannot fire while an approval prompt is
+   * on screen — the waiting screen that this cache exists to report is left untouched. A denied call gets no
+   * PostToolUse either; Stop clears that one.
+   */
+  private clearPendingTool(record: SlackRecord, toolUseId: unknown): void {
+    // Only the exact id is dropped. With parallel calls, one finishing must not wipe the capture of the one
+    // still waiting — the ids differ, so nothing is cleared here and the waiting screen is still reported.
+    if (typeof toolUseId !== 'string' || toolUseId === '') return
+    if (record.pendingTool?.id === toolUseId) record.pendingTool = null
   }
 
   /** codex turn completion. CodexTurnWatcher detects task_complete in the rollout and calls this.
@@ -629,7 +662,7 @@ export class SlackNotifier {
     let excerpt: string | null = null
     if (transcriptPath) {
       const tail = await this.readTail(transcriptPath, TAIL_BYTES)
-      if (tail) excerpt = extractLastAssistantText(tail)
+      if (tail) excerpt = extractLastTurnAssistantText(tail)
     }
     if (excerpt && excerpt.length > EXCERPT_MAX) excerpt = excerpt.slice(0, EXCERPT_MAX) + '…'
     // Completion is announced even when the excerpt fails (no transcript record, or a parse failure)
@@ -669,14 +702,30 @@ export class SlackNotifier {
       // KNOWN_TYPES comment in core/hooks/notification.ts)
       this.deps.log(`slack notification: unfamiliar notification_type=${String(payload.notification_type)}`)
     }
+    const message = typeof payload.message === 'string' ? payload.message.trim() : ''
+    // A report of something already finished (a worker finished, login succeeded, an elicitation closed) is
+    // not a waiting screen, so it must not be framed as "input needed" and must not drag a pending tool dump
+    // along with it. The wording is still relayed rather than dropped: the user may well need to know, and
+    // dropping cannot be undone at the other end. See NON_PROMPT_TYPES in core/hooks/notification.ts for the
+    // measured list and for why an unfamiliar type deliberately stays on the input-needed path.
+    if (isNonPromptNotification(payload)) {
+      if (message !== '') await this.send(record, message)
+      return
+    }
     // The transcript is read once and used for both verdicts (the cache cross-check and the tool_use search).
     const tail = transcriptPath ? await this.readTail(transcriptPath, TAIL_BYTES) : null
     let pending: string | null = null
     const waiting = record.pendingTool
     if (waiting) {
-      // Checks whether the call captured through PreToolUse is still pending. If its tool_use_id has appeared
-      // in the tail the call ran and got recorded, so it is discarded — otherwise another Notification
-      // slipping in after it finished but before Stop arrives could carry the old content verbatim.
+      // A second check on top of PostToolUse (clearPendingTool), for a call the hook could not report: an
+      // older CLI with no tool_use_id in the payload, or a session whose settings file does not carry the
+      // PostToolUse hook. If its tool_use_id has appeared in the tail the call ran and got recorded, so it is
+      // discarded.
+      //
+      // **It cannot see a subagent's call** — measured: a subagent's tool_use is written only to
+      // `<session>/subagents/agent-*.jsonl`, and its id appears zero times in the parent transcript this tail
+      // comes from, so this verdict stays false forever. That is exactly the defect PostToolUse fixes; this
+      // line is kept as the fallback for the cases above, not as the primary judge.
       //
       // Substring containment rather than parsing: whether the id arrived as a tool_use or a tool_result
       // makes no difference to the verdict (either way it means "recorded"), and it is unaffected by the
@@ -693,15 +742,14 @@ export class SlackNotifier {
       const use = extractPendingToolUse(tail)
       if (use) pending = describePendingToolUse(use, this.deps.lang())
     }
-    const message = typeof payload.message === 'string' ? payload.message.trim() : ''
     if (pending) {
       // message is carried along rather than discarded. pending is only "the last tool_use with no response"
       // in the tail of the transcript — there is no guarantee this Notification refers to exactly that
-      // tool_use. While a subagent (Task) is running, for instance, the outer Task tool_use stays unanswered,
-      // so any Notification arriving in that window (auth_success, say) would have gone out as
-      // "🔧 Task\nprompt: <the subagent prompt>" — and discarding message would leave the user no way to see
-      // the mismatch. The same goes for parallel tool_uses where the one awaiting approval is not last in the
-      // array. Showing message and pending side by side lets the user compare them and judge.
+      // tool_use. While a subagent (Agent/Task) is running, for instance, the outer tool_use stays unanswered,
+      // so a prompt arriving in that window for a different tool (permission_prompt for WebFetch, say) would
+      // have gone out as "🔧 Agent\nprompt: <the subagent prompt>" — and discarding message would leave the
+      // user no way to see the mismatch. The same goes for parallel tool_uses where the one awaiting approval
+      // is not last in the array. Showing message and pending side by side lets the user compare and judge.
       const lang = this.deps.lang()
       const head =
         message !== ''

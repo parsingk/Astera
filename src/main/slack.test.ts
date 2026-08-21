@@ -118,6 +118,28 @@ describe('SlackNotifier 훅 이벤트', () => {
     expect(h.sent[0]).toContain('> 마지막 응답 요약')
   })
 
+  // 실측: 텍스트가 있는 1,159턴 중 49.7%가 세그먼트 2개 이상이고, 마지막 조각만 보내면 턴 전체
+  // 텍스트의 77.8%만 전달됐다(자세한 수치는 extractLastTurnAssistantText 주석). 핵심 결론이 앞
+  // 세그먼트에 있으면 Slack에는 맺음말만 가던 경로를 이 진입점에서 고정한다.
+  it('Stop 훅 → 도구 호출로 쪼개진 앞 세그먼트도 함께 보낸다', async () => {
+    const tail = [
+      JSON.stringify({ type: 'user', message: { content: '작업 지시' } }),
+      assistantLine('커밋이 hook에 막혔습니다'),
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }] }
+      }),
+      JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1' }] } }),
+      assistantLine('무엇을 확인할까요?')
+    ].join('\n')
+    const h = setup({ readFileTail: async () => tail })
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', { hook_event_name: 'Stop', transcript_path: 'D:\\t.jsonl' })
+    await flush()
+    expect(h.sent[0]).toContain('> 커밋이 hook에 막혔습니다')
+    expect(h.sent[0]).toContain('> 무엇을 확인할까요?')
+  })
+
   it('Stop 훅: transcript 읽기 실패여도 완료 사실은 알린다', async () => {
     const h = setup({ readFileTail: async () => null })
     h.notifier.register(info())
@@ -1276,18 +1298,66 @@ describe('SlackNotifier 대기 중 선택지 전송', () => {
     '미응답으로 남는 경우가 그렇다', async () => {
     const h = setup({ readFileTail: async () => PERMISSION_LINE })
     h.notifier.register(info())
-    // auth_success처럼 pending과 무관한 알림이 와도, message를 버리면 사용자가 "지금 이 알림이 pending과
-    // 같은 이야기인지" 대조할 방법이 없어진다.
+    // 이 알림이 pending과 같은 이야기인지 사용자가 대조할 수 있어야 하므로 message를 버리지 않는다.
     h.notifier.onHookEvent('s-1', {
       hook_event_name: 'Notification',
-      notification_type: 'auth_success',
-      message: 'Claude 로그인이 완료됐습니다',
+      notification_type: 'permission_prompt',
+      message: 'Claude needs your permission to use WebFetch',
       transcript_path: 'D:\\t.jsonl'
     })
     await flush()
     expect(h.sent[0]).toBe(
-      '[myproj · work1] 🙋 입력 필요 — Claude 로그인이 완료됐습니다\n🔧 Bash\ncommand: rm -rf build/'
+      '[myproj · work1] 🙋 입력 필요 — Claude needs your permission to use WebFetch\n' +
+        '🔧 Bash\ncommand: rm -rf build/'
     )
+  })
+
+  // 실측(현재 번들의 emit 지점): auth_success = "Claude Code login successful",
+  // agent_completed = "<label> finished/failed", elicitation_complete = "…confirmed elicitation N
+  // complete", elicitation_response = "Elicitation response for server …" — 모두 이미 지나간 일에 대한
+  // 통보이고 답을 기다리는 화면이 아니다. 그런데 종전에는 idle_prompt만 예외였고 나머지는 pending이
+  // 있으면(혹은 message만 있어도) 전부 `🙋 입력 필요`로 나갔다. 문구는 살리고 프레이밍만 걷어낸다 —
+  // 통보 자체는 사용자가 알아야 할 수 있고, 지우는 쪽은 되돌릴 수 없다.
+  it('대기 화면이 아닌 타입은 입력 필요로 보내지 않는다 — 문구만 전달한다', async () => {
+    for (const type of ['auth_success', 'agent_completed', 'elicitation_complete', 'elicitation_response']) {
+      const h = setup({ readFileTail: async () => PERMISSION_LINE })
+      h.notifier.register(info())
+      h.notifier.onHookEvent('s-1', {
+        hook_event_name: 'Notification',
+        notification_type: type,
+        message: '워커 작업이 끝났습니다',
+        transcript_path: 'D:\\t.jsonl'
+      })
+      await flush()
+      expect(h.sent).toEqual(['[myproj · work1] 워커 작업이 끝났습니다'])
+    }
+  })
+
+  it('대기 화면이 아닌 타입은 문구가 비어 있으면 아무것도 보내지 않는다', async () => {
+    const h = setup({ readFileTail: async () => PERMISSION_LINE })
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', {
+      hook_event_name: 'Notification',
+      notification_type: 'agent_completed',
+      message: '',
+      transcript_path: 'D:\\t.jsonl'
+    })
+    await flush()
+    expect(h.sent).toEqual([])
+  })
+
+  it('agent_needs_input은 대기 화면이므로 그대로 입력 필요로 보낸다 (회귀 가드)', async () => {
+    const h = setup({ readFileTail: async () => PERMISSION_LINE })
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', {
+      hook_event_name: 'Notification',
+      notification_type: 'agent_needs_input',
+      message: 'worker-1 needs your input',
+      transcript_path: 'D:\\t.jsonl'
+    })
+    await flush()
+    expect(h.sent[0]).toContain('🙋 입력 필요 — worker-1 needs your input')
+    expect(h.sent[0]).toContain('🔧 Bash')
   })
 
   it('유휴 알림이어도 대기 중 질문이 있으면 보낸다 — 진짜 답을 기다리는 화면이다', async () => {
@@ -1512,5 +1582,73 @@ describe('SlackNotifier PreToolUse 대기 내용 캡처', () => {
     h.notifier.onHookEvent('s-1', { hook_event_name: 'PreToolUse', tool_input: { a: 1 } })
     await flush()
     expect(h.logs.some((l) => l.includes('PreToolUse'))).toBe(false)
+  })
+
+  const post = (id: string, name = 'Write'): Record<string, unknown> => ({
+    hook_event_name: 'PostToolUse',
+    tool_name: name,
+    tool_use_id: id,
+    transcript_path: 'D:\\t.jsonl'
+  })
+
+  // 재현 실측(현재 Claude Code, PreToolUse/Stop 훅 캡처): 서브에이전트가 실행한 Write의 PreToolUse는
+  // **부모의** session_id·transcript_path로 발사되고 agent_id만 덧붙는다. 그런데 그 tool_use_id는
+  // 부모 트랜스크립트에 0회, `<session>/subagents/agent-*.jsonl`에만 2회 기록된다. 그래서
+  // "꼬리에 id가 보이는가"로는 절대 무효화되지 않고, Stop이 오기 전까지 도착한 모든 알림이
+  // `🙋 입력 필요` + `🔧 Write / content: N자`로 나갔다(같은 세션의 메인 Write는 부모 꼬리에 5회
+  // 있어 정상 무효화된다 — 서브에이전트 경로 한정 결함이었다).
+  it('서브에이전트가 실행한 도구는 부모 꼬리에 id가 없어도 PostToolUse로 무효화된다', async () => {
+    const h = setup({ readFileTail: async () => '' }) // 부모 꼬리에는 그 id가 영영 나타나지 않는다
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', {
+      ...pre('Write', { file_path: 'D:\\p\\ep104.md', content: '본문' }, 'toolu_sub'),
+      agent_id: 'aa4d27f27e1051bbb',
+      agent_type: 'general-purpose'
+    })
+    await flush()
+    h.notifier.onHookEvent('s-1', post('toolu_sub'))
+    await flush()
+    h.notifier.onHookEvent('s-1', notify('Claude needs your permission to use WebFetch'))
+    await flush()
+    expect(h.sent).toEqual([
+      '[myproj · work1] 🙋 입력 필요 — Claude needs your permission to use WebFetch'
+    ])
+  })
+
+  it('다른 id의 PostToolUse는 캐시를 지우지 않는다 — 병렬 호출 중 하나만 끝난 경우', async () => {
+    const h = setup({ readFileTail: async () => '' })
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', pre('AskUserQuestion', ASK, 't-wait'))
+    await flush()
+    h.notifier.onHookEvent('s-1', post('t-other'))
+    await flush()
+    h.notifier.onHookEvent('s-1', notify('m'))
+    await flush()
+    expect(h.sent[0]).toContain('뭐 드실래요?')
+  })
+
+  it('승인 대기 중에는 PostToolUse가 오지 않으므로 대기 내용이 그대로 실린다 (회귀 가드)', async () => {
+    // PostToolUse는 도구가 실제로 실행된 뒤에만 발사된다. 승인 프롬프트가 떠 있는 동안에는 오지
+    // 않으므로, 이 수정이 "대기 중인 화면을 알린다"는 본래 기능을 깎지 않는다.
+    const h = setup({ readFileTail: async () => '' })
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', pre('Write', { file_path: 'D:\\p\\a.txt', content: '본문' }, 't-pending'))
+    await flush()
+    h.notifier.onHookEvent('s-1', notify('Claude needs your permission'))
+    await flush()
+    expect(h.sent[0]).toContain('🔧 Write')
+    expect(h.sent[0]).toContain('a.txt')
+  })
+
+  it('tool_use_id 없는 PostToolUse는 캐시를 건드리지 않는다', async () => {
+    const h = setup({ readFileTail: async () => '' })
+    h.notifier.register(info())
+    h.notifier.onHookEvent('s-1', pre('AskUserQuestion', ASK, 't-wait'))
+    await flush()
+    h.notifier.onHookEvent('s-1', { hook_event_name: 'PostToolUse', tool_name: 'AskUserQuestion' })
+    await flush()
+    h.notifier.onHookEvent('s-1', notify('m'))
+    await flush()
+    expect(h.sent[0]).toContain('뭐 드실래요?')
   })
 })

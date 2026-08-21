@@ -1,37 +1,78 @@
 import { describe, it, expect } from 'vitest'
-import { extractLastAssistantText } from './transcript'
+import { extractLastTurnAssistantText } from './transcript'
 
 const line = (obj: unknown): string => JSON.stringify(obj)
 const assistant = (text: string): string =>
   line({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
 const user = (text: string): string => line({ type: 'user', message: { content: text } })
+/** 도구 실행 한 벌 — 이 두 줄이 턴을 끊지 않아야 한다 */
+const toolCall = (id: string): string[] => [
+  line({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: 'Write', input: {} }] } }),
+  line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] } })
+]
 
-describe('extractLastAssistantText', () => {
-  it('마지막 assistant 텍스트를 반환한다', () => {
+describe('extractLastTurnAssistantText', () => {
+  it('마지막 턴의 텍스트를 반환한다', () => {
     const tail = [assistant('첫 응답'), user('질문'), assistant('마지막 응답')].join('\n')
-    expect(extractLastAssistantText(tail)).toBe('마지막 응답')
+    expect(extractLastTurnAssistantText(tail)).toBe('마지막 응답')
+  })
+
+  // 실측(2026-08-19~20 트랜스크립트 367개·텍스트가 있는 1,159턴): 절반(49.7%)이 텍스트 세그먼트를
+  // 2개 이상 남기고, 마지막 한 조각만 보내면 턴 전체 텍스트의 77.8%만 전달됐다. 92턴(7.9%)은 절반도
+  // 못 남았고 최악은 7%였다 — 핵심 결론이 앞 세그먼트에 있으면 Slack에는 맺음말만 갔다.
+  it('도구 호출로 쪼개진 텍스트 세그먼트를 모두 이어 붙인다', () => {
+    const tail = [
+      user('작업 지시'),
+      assistant('커밋이 hook에 막혔습니다'),
+      ...toolCall('t1'),
+      assistant('무엇을 확인할까요?')
+    ].join('\n')
+    expect(extractLastTurnAssistantText(tail)).toBe('커밋이 hook에 막혔습니다\n\n무엇을 확인할까요?')
+  })
+
+  it('이전 턴의 텍스트는 넘어오지 않는다 — 사용자 메시지가 경계다', () => {
+    const tail = [assistant('이전 턴 결론'), user('다음 지시'), assistant('이번 턴')].join('\n')
+    expect(extractLastTurnAssistantText(tail)).toBe('이번 턴')
+  })
+
+  it('한 메시지 안의 text 블록이 여러 개면 그것도 모두 담는다', () => {
+    const tail = line({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: '앞' }, { type: 'tool_use' }, { type: 'text', text: '뒤' }] }
+    })
+    expect(extractLastTurnAssistantText(tail)).toBe('앞\n\n뒤')
+  })
+
+  it('서브에이전트(isSidechain) 줄은 섞지 않는다', () => {
+    const side = line({
+      type: 'assistant', isSidechain: true, message: { content: [{ type: 'text', text: '워커 내부 말' }] }
+    })
+    const tail = [user('지시'), assistant('본 세션 응답'), side].join('\n')
+    expect(extractLastTurnAssistantText(tail)).toBe('본 세션 응답')
   })
 
   it('텍스트 없는 assistant 줄(tool_use 전용)·user 줄은 건너뛰고 이전 텍스트를 찾는다', () => {
+    // 꼬리 끝이 사용자 줄이면(다음 턴이 이미 시작됐거나 `!` 명령이 끼어든 경우) 아직 모은 것이 없으므로
+    // 경계로 보지 않고 계속 거슬러 올라간다 — 발췌가 통째로 사라지는 것보다 낫다.
     const toolOnly = line({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash' }] } })
     const tail = [assistant('실제 텍스트'), toolOnly, user('후속')].join('\n')
-    expect(extractLastAssistantText(tail)).toBe('실제 텍스트')
+    expect(extractLastTurnAssistantText(tail)).toBe('실제 텍스트')
   })
 
   it('string content 형태도 지원한다', () => {
     const tail = line({ type: 'assistant', message: { content: '문자열 응답' } })
-    expect(extractLastAssistantText(tail)).toBe('문자열 응답')
+    expect(extractLastTurnAssistantText(tail)).toBe('문자열 응답')
   })
 
   it('잘린(불완전 JSON) 줄은 역순 스캔에서 건너뛰고 그 앞의 온전한 assistant를 찾는다', () => {
     // 역순 스캔이 깨진 줄을 먼저 만나 catch로 스킵하는 경로를 강제 (parser.test.ts와 동일 패턴)
     const tail = [assistant('온전한 응답'), '{"type":"assist'].join('\n')
-    expect(extractLastAssistantText(tail)).toBe('온전한 응답')
+    expect(extractLastTurnAssistantText(tail)).toBe('온전한 응답')
   })
 
   it('assistant 텍스트가 없으면 null', () => {
-    expect(extractLastAssistantText(user('질문만'))).toBeNull()
-    expect(extractLastAssistantText('')).toBeNull()
+    expect(extractLastTurnAssistantText(user('질문만'))).toBeNull()
+    expect(extractLastTurnAssistantText('')).toBeNull()
   })
 })
 

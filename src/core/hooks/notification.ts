@@ -87,3 +87,38 @@ export function isIdleNotification(p: NotificationPayload): boolean {
 export function isUnknownNotificationType(p: NotificationPayload): boolean {
   return typeof p.notification_type === 'string' && !KNOWN_TYPES.has(p.notification_type)
 }
+
+/** Types that report something that already happened, not a screen waiting for an answer.
+ *
+ *  Read off the emit sites in the installed binary, message text included:
+ *    agent_completed       `${label} finished|failed`
+ *    auth_success          "Claude Code login successful"
+ *    elicitation_complete  `MCP server "X" confirmed elicitation N complete`
+ *    elicitation_response  `Elicitation response for server "X": decline|${action}`
+ *    computer_use_enter    "Claude is using your computer · press Esc to stop"
+ *    computer_use_exit     "Claude is done using your computer"
+ *    push_notification     a plain relay of the message the model passed
+ *
+ *  Not here, because they really are waiting screens: permission_prompt · worker_permission_prompt
+ *  (`${agent_id} needs permission for ${tool_name}`) · agent_needs_input (`${label} needs your input`) ·
+ *  elicitation_dialog. idle_prompt is not here either — it keeps its own rule (isIdleNotification):
+ *  suppressed on its own, but sent when a call really is waiting.
+ *
+ *  A type that is **not** on this list stays on the input-needed path, so a newly added or renamed value
+ *  errs toward notifying. That is the same direction as the rest of this file: a missed notification means
+ *  the user never learns their session is blocked, while a surplus one only costs noise. */
+const NON_PROMPT_TYPES = new Set([
+  'agent_completed',
+  'auth_success',
+  'elicitation_complete',
+  'elicitation_response',
+  'computer_use_enter',
+  'computer_use_exit',
+  'push_notification'
+])
+
+/** Is this notification a report of something finished rather than a prompt awaiting an answer?
+ *  Only the type decides — these messages have no shared wording to match on. */
+export function isNonPromptNotification(p: NotificationPayload): boolean {
+  return typeof p.notification_type === 'string' && NON_PROMPT_TYPES.has(p.notification_type)
+}

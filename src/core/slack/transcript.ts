@@ -1,14 +1,63 @@
-// For Slack turn-completion notifications — pulls the last assistant text out of the transcript
-// (jsonl) tail text. Pure module: reading the file is the caller's job (readFileTail in main
+// For Slack turn-completion notifications — pulls the assistant text of the last turn out of the
+// transcript (jsonl) tail text. Pure module: reading the file is the caller's job (readFileTail in main
 // SlackNotifier).
-import { extractText } from '../history/parser'
 import { t, type Lang } from '../i18n'
 
-/** Returns the text of the last assistant message in a jsonl tail string, or null if there is none.
- *  The tail is read from the middle of the file, so even a truncated first line is ignored by the
- *  JSON.parse-failure skip (defensive parsing). */
-export function extractLastAssistantText(tail: string): string | null {
+/** Is this `type:'user'` line the start of a turn — a message a person (or the injected prompt) wrote?
+ *
+ *  A content array holding only tool_result blocks is the transcript's record of a tool run, not a new
+ *  turn, so it must not end the collection: the very reason the text comes in several pieces is that
+ *  tool runs sit between them. */
+function isTurnBoundary(obj: Record<string, unknown>): boolean {
+  const content = (obj.message as { content?: unknown } | undefined)?.content
+  if (typeof content === 'string') return true
+  if (Array.isArray(content))
+    return content.some((c) => (c as { type?: unknown } | null)?.type === 'text')
+  return false
+}
+
+/** Every text block of one assistant line, in order. Blank ones are dropped.
+ *
+ *  extractText in history/parser.ts is deliberately not reused: it takes only the **first** text block
+ *  (`content.find`), which is right for a list title but drops content here. */
+function assistantTexts(obj: Record<string, unknown>): string[] {
+  const content = (obj.message as { content?: unknown } | undefined)?.content
+  if (typeof content === 'string') return content.trim() ? [content.trim()] : []
+  if (!Array.isArray(content)) return []
+  const out: string[] = []
+  for (const c of content) {
+    const item = c as { type?: unknown; text?: unknown } | null
+    if (item?.type === 'text' && typeof item.text === 'string' && item.text.trim())
+      out.push(item.text.trim())
+  }
+  return out
+}
+
+/**
+ * The assistant text of the last turn in a jsonl tail string, with every segment joined, or null when
+ * there is none. The tail is read from the middle of the file, so even a truncated first line is
+ * ignored by the JSON.parse-failure skip (defensive parsing).
+ *
+ * **Why the whole turn and not the last message.** This used to return the text of the last assistant
+ * message alone, and that is not "the response" — a turn records its text in several pieces with tool
+ * runs in between. Measured over the 367 transcripts of 2026-08-19~20 (1,159 turns that carry text):
+ * **49.7% of turns leave two or more text segments**, and the last segment alone is **77.8%** of the
+ * turn's text; in 92 turns (7.9%) it is under half, the worst being 7%. One real case: of 1,610
+ * characters the conclusion ("the commit was blocked by a hook") sat in the first segment and Slack
+ * received only the closing 486 ("what would you like to check?").
+ *
+ * Walking backwards stops at the first real user message (isTurnBoundary) — but only once something has
+ * been collected. A tail ending on a user line (the next turn already started, or a `!` command slipped
+ * in) then falls back to the previous turn's text instead of losing the excerpt entirely.
+ *
+ * isSidechain lines are skipped. The current Claude Code writes subagent conversations to their own
+ * files (`<session>/subagents/agent-*.jsonl`, measured), so they do not reach this tail, but a
+ * transcript carried over from an older version has them inline and a worker's words must not be
+ * reported as this session's answer.
+ */
+export function extractLastTurnAssistantText(tail: string): string | null {
   const lines = tail.split('\n')
+  const segments: string[] = []
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim()
     if (!line) continue
@@ -19,11 +68,15 @@ export function extractLastAssistantText(tail: string): string | null {
       continue // skip a truncated first line or a corrupted line
     }
     if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) continue
+    if (obj.isSidechain === true) continue
+    if (obj.type === 'user') {
+      if (segments.length > 0 && isTurnBoundary(obj)) break
+      continue
+    }
     if (obj.type !== 'assistant') continue
-    const text = extractText(obj.message)
-    if (text && text.trim()) return text.trim()
+    segments.unshift(...assistantTexts(obj))
   }
-  return null
+  return segments.length > 0 ? segments.join('\n\n') : null
 }
 
 /** A tool call waiting for a response */
