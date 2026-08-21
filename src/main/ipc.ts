@@ -1416,8 +1416,17 @@ export function registerIpc(
       // 꺼져 있으면 아무 일도 하지 않는다. **끄는 것이 서버를 닫지는 않는다** —
       // settings.setOrchestrationEnabled 는 enabled() 로 거절하게만 하므로, 이 확인이 없으면 꺼진
       // 채로 회차가 계속 생긴다. runScheduler 의 같은 가드와 같은 이유다.
+      //
+      // **무장을 들고 있지 않고 버린다.** 들고 있으면 꺼져 있던 동안 지나간 시각이 그대로 남아,
+      // 다시 켜는 순간 그 시각들이 한꺼번에 발화한다 — 09:00 예약이 15:00 에 도는 것이고, 아무도
+      // 그 시각을 잡지 않았다. 놓친 발화는 버리는 것이 이 기능의 결정이므로(설계 2·5절) 끄고
+      // 켜는 것이 재시작과 같아야 한다: 재시작하면 이 Map 은 비어 있고, firesDue 의 첫 바퀴가
+      // nextFireAt(rule, now) 으로 다시 무장하기만 한다.
       const o = orch
-      if (!o || !o.deps.enabled()) return
+      if (!o || !o.deps.enabled()) {
+        orchArmed = new Map()
+        return
+      }
       const { fire, arm } = firesDue(o.deps.getState(), orchArmed, Date.now())
       // **아래 await 들보다 먼저 갈아 끼운다.** 회차를 만드는 데 15초가 넘게 걸리면 다음 tick 이
       // 겹쳐 도는데, 그때 무장이 아직 옛 값이면 같은 템플릿이 한 번 더 발화한다.
