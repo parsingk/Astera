@@ -2,9 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs, watch as fsWatch } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { Account } from '../types'
+import type { Account, Provider } from '../types'
 import { HistoryIndex } from './index'
 import { SessionCwdCache } from './sessionCwdCache'
+import { makeDescriptors, type ProviderDescriptor } from '../providers/descriptor'
 
 /** 워처의 디바운스 상한 테스트는 이벤트가 append마다 오는 native 경로에서만 뜻이 있다. chokidar
  *  폴백은 awaitWriteFinish 로 쓰는 중에는 아예 조용하므로(그것이 폴백인 이유이기도 하다) 건너뛴다. */
@@ -169,32 +170,75 @@ describe('HistoryIndex (lazy)', () => {
   })
 
   describe('증분 무효화', () => {
-    /** 워처를 켜기 **전에** 디스크를 바꿔 두면 그 변경은 이벤트를 내지 않는다. 그 상태로 다른
-     *  프로젝트를 건드려서, 재빌드가 건드린 쪽에만 미쳤는지를 관찰한다. */
     const projectNames = async (): Promise<string[]> =>
       (await index!.projectsPage()).projects.map((p) => p.name).sort()
 
-    it('파일 하나가 바뀌면 그 프로젝트 행만 다시 계산한다', async () => {
+    /**
+     * descriptors 를 갈아끼워 전략 호출을 센다. 무효화가 부분적이었는지를 **호출 횟수**로 관찰하는
+     * 이유는, 디스크 상태로 관찰하려면 "워처를 켜기 전 변경은 이벤트를 내지 않는다"에 기대야 하는데
+     * 그것이 플랫폼 의존이기 때문이다 — macOS 는 FSEvents 라 워치 시작 직전의 변경도 재생될 수 있어
+     * 리눅스·윈도우에서만 통하는 관찰이었다(실제로 그렇게 CI 가 갈렸다).
+     *
+     * claude 의 projectSummaries 는 모듈 내부의 projectSummaryForDir 를 직접 부르므로, 여기서 감싼
+     * projectSummaryForDir 에는 flushPendingDirs 가 전략을 통해 부른 것만 잡힌다 — 정확히 세고 싶은 것.
+     */
+    const countingDescriptors = (): {
+      descriptors: Record<Provider, ProviderDescriptor>
+      full: Record<string, number>
+      dirs: string[]
+    } => {
+      const base = makeDescriptors(process.platform)
+      const full: Record<string, number> = {}
+      const dirs: string[] = []
+      const wrap = (p: Provider): ProviderDescriptor => {
+        const h = base[p].history
+        const forDir = h.projectSummaryForDir
+        return {
+          ...base[p],
+          history: {
+            ...h,
+            projectSummaries: (acc, io) => {
+              full[p] = (full[p] ?? 0) + 1
+              return h.projectSummaries(acc, io)
+            },
+            ...(forDir
+              ? {
+                  projectSummaryForDir: (acc, dir, io) => {
+                    dirs.push(path.basename(dir))
+                    return forDir(acc, dir, io)
+                  }
+                }
+              : {})
+          }
+        }
+      }
+      return { descriptors: { claude: wrap('claude'), codex: wrap('codex') }, full, dirs }
+    }
+
+    it('파일 하나가 바뀌면 그 프로젝트 폴더만 다시 읽는다', async () => {
       const a = account('acc-a')
       await writeTranscript(a, 'proj-a', 's1.jsonl', 's1')
       await writeTranscript(a, 'proj-b', 's2.jsonl', 's2')
-      index = new HistoryIndex(() => [a])
+      const { descriptors, full, dirs } = countingDescriptors()
+      index = new HistoryIndex(() => [a], descriptors)
       expect(await projectNames()).toEqual(['proj-a', 'proj-b'])
+      expect(full.claude).toBe(1) // 최초 1회는 전량
 
-      // 워처가 아직 없으므로 이 삭제는 이벤트를 내지 않는다
-      await fs.rm(path.join(a.configDir, 'projects', 'proj-b'), { recursive: true, force: true })
       await index.startBackground()
       const updated = vi.fn()
       index.onUpdated = updated
       await writeTranscript(a, 'proj-a', 's3.jsonl', 's3')
       await vi.waitFor(() => expect(updated).toHaveBeenCalled(), { timeout: 5000 })
 
-      // proj-a 는 갱신되고(새 세션이 보인다), proj-b 행은 다시 읽히지 않아 그대로 남아 있다
-      expect((await index.page({ projectPath: 'D:\\work\\proj-a' })).entries).toHaveLength(2)
       expect(await projectNames()).toEqual(['proj-a', 'proj-b'])
+      expect(full.claude).toBe(1) // 전량 재읽기는 늘지 않았다
+      expect([...new Set(dirs)]).toEqual(['proj-a']) // 바뀐 폴더만 다시 읽혔다
+      expect((await index.page({ projectPath: 'D:\\work\\proj-a' })).entries).toHaveLength(2)
+
       // 대조군: 전량 무효화는 여전히 전부 다시 읽는다
       await index.refresh()
-      expect(await projectNames()).toEqual(['proj-a'])
+      await projectNames()
+      expect(full.claude).toBe(2)
     })
 
     it('codex 계정의 이벤트는 그 계정만 무효화한다', async () => {
@@ -210,18 +254,21 @@ describe('HistoryIndex (lazy)', () => {
         payload: { session_id: '019f4524-e0ac-7571-a8af-5585504f0d40', cwd: 'D:\\proj\\cx' }
       }
       await fs.writeFile(rollout, JSON.stringify(meta) + '\n', 'utf8')
-      index = new HistoryIndex(() => [a, cx])
+      const { descriptors, full, dirs } = countingDescriptors()
+      index = new HistoryIndex(() => [a, cx], descriptors)
       expect(await projectNames()).toEqual(['cx', 'proj-a', 'proj-b'])
+      expect(full).toEqual({ claude: 1, codex: 1 })
 
-      await fs.rm(path.join(a.configDir, 'projects', 'proj-b'), { recursive: true, force: true })
       await index.startBackground()
       const updated = vi.fn()
       index.onUpdated = updated
       await fs.appendFile(rollout, JSON.stringify(meta) + '\n', 'utf8')
       await vi.waitFor(() => expect(updated).toHaveBeenCalled(), { timeout: 5000 })
 
-      // codex 쪽만 다시 읽혔으므로 claude 계정의 proj-b 행은 살아 있다
       expect(await projectNames()).toEqual(['cx', 'proj-a', 'proj-b'])
+      // codex 는 폴더 단위 재계산이 없으니 그 계정만 전량, claude 는 손대지 않았다
+      expect(full).toEqual({ claude: 1, codex: 2 })
+      expect(dirs).toEqual([])
     })
 
     it('새 폴더가 생기면 행이 추가된다', async () => {
