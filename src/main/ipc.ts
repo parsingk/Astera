@@ -1426,14 +1426,20 @@ export function registerIpc(
       // 것이 앞선 것의 자식 Run 을 덮는다 — run-create 가 await 뒤에 getState() 를 다시 읽는 것과
       // 같은 위험이고, 그쪽은 한 명령 안의 await 를 다루지만 이쪽은 명령 사이의 await 다.
       for (const runId of fire) {
-        const reply = await orchHandleCommand(o.deps, { sessionId: UI_CALLER }, 'run-spawn', {
-          run: runId
-        })
-        // 실패한 발화는 잃는다 — 무장은 이미 다음 시각으로 옮겨졌으므로 다음 시각에 다시 시도한다.
-        // 디스크가 찼거나 win32 에서 rename 이 잠긴 경우가 이 갈래다.
-        if (reply.status >= 400)
-          orchLog(`scheduled spawn failed run=${runId} status=${reply.status}`)
-        else orchLog(`scheduled spawn run=${runId} child=${JSON.stringify(reply.body)}`)
+        // 템플릿 하나의 실패가 나머지를 막아서는 안 된다 — 무장은 이미 다음 시각으로 넘어갔으므로,
+        // 여기서 멈추면 뒤의 템플릿들은 이번 tick 에서 조용히 건너뛰어진다(재시도가 아니라 누락이다).
+        try {
+          const reply = await orchHandleCommand(o.deps, { sessionId: UI_CALLER }, 'run-spawn', {
+            run: runId
+          })
+          // 실패한 발화는 잃는다 — 무장은 이미 다음 시각으로 옮겨졌으므로 다음 시각에 다시 시도한다.
+          // 디스크가 찼거나 win32 에서 rename 이 잠긴 경우가 이 갈래다.
+          if (reply.status >= 400)
+            orchLog(`scheduled spawn failed run=${runId} status=${reply.status}`)
+          else orchLog(`scheduled spawn run=${runId} child=${JSON.stringify(reply.body)}`)
+        } catch (e) {
+          orchLog(`scheduled spawn failed run=${runId}: ${String(e)}`)
+        }
       }
     }
 
