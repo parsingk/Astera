@@ -97,7 +97,6 @@ Linux는 `astera-<version>-x86_64.AppImage` 또는 `astera-<version>-amd64.deb` 
   되살릴 수 있습니다. 30일간, 프로젝트당 최대 200 MB 보관
 - 모든 단축키는 설정에서 다시 지정할 수 있고, 기본값은 macOS에서 `Cmd`, 그 외에서 `Ctrl`입니다 —
   창 분할, 분할된 창 사이 포커스 이동, 세션 순회, 파일 탭 닫기
-- 터미널 폰트 선택 — CJK 텍스트에 쓰이는 대체 폰트까지
 
 **실행 구성**
 - 실행 구성에는 종류가 있습니다 — Shell·npm·Node.js·Gradle·Maven·cargo·go·Python·pytest·
@@ -127,6 +126,15 @@ Linux는 `astera-<version>-x86_64.AppImage` 또는 `astera-<version>-amd64.deb` 
 <div align="center">
 <img src="assets/schedule.gif" width="820" alt="다이어그램: 03:00에 예약된 세션이 스스로 시작해 남겨 둔 명령을 실행하고, 끝나면 Slack이 결과를 알린다" />
 </div>
+
+**모양새**
+- 테마 여섯 — Vega, Orion, Umbra, Aurora, Antares, Quasar. 카드마다 자기 팔레트로 스스로를 그리므로
+  이름이 아니라 눈으로 고릅니다
+- 테마는 색만이 아닙니다: 모서리 반경, 그림자, UI 서체, 행 밀도가 함께 따라옵니다 — Quasar는 Umbra보다
+  한 화면에 더 많이 담습니다
+- 바꾸면 이미 열려 있는 것도 함께 바뀝니다 — 돌고 있는 터미널은 색만 갈아 끼우므로 스크롤백이
+  그대로 남습니다
+- 터미널 폰트는 따로 고릅니다 — CJK 텍스트에 쓰이는 대체 폰트까지
 
 **그 외**
 - 한국어·영어·일본어·스페인어 UI, 그리고 OS 로케일을 따르는 System 옵션

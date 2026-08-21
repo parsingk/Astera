@@ -98,7 +98,6 @@ You will also need:
   recoverable. Kept 30 days, up to 200 MB per project
 - Every shortcut is remappable in settings, defaulting to `Cmd` on macOS and `Ctrl` elsewhere:
   splitting panes, moving focus between them, cycling sessions, closing a file tab
-- Pick the terminal font, including the fallback for CJK text
 
 **Run**
 - A run configuration has a kind — Shell, npm, Node.js, Gradle, Maven, cargo, go, Python, pytest,
@@ -128,6 +127,15 @@ You will also need:
 <div align="center">
 <img src="assets/schedule.gif" width="820" alt="Diagram: at 03:00 a scheduled session starts on its own, runs the command left for it, finishes, and Slack reports the result" />
 </div>
+
+**Appearance**
+- Six themes — Vega, Orion, Umbra, Aurora, Antares and Quasar — picked from cards that each draw
+  themselves in their own palette, so you choose by looking rather than by name
+- A theme is more than colours: the corner radius, the shadows, the UI typeface and the row density
+  come with it, so Quasar puts more on screen than Umbra does
+- Switching one changes what is already open — a running terminal's colours are swapped in place, so
+  it keeps its scrollback
+- The terminal font is chosen separately, including the fallback for CJK text
 
 **Also**
 - Korean, English, Japanese, and Spanish UI, plus a System option that follows the OS locale

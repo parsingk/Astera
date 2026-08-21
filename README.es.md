@@ -105,7 +105,6 @@ También necesitarás:
   tú— se puede recuperar. Se conserva 30 días, hasta 200 MB por proyecto
 - Todos los atajos se pueden reasignar en los ajustes, con `Cmd` por defecto en macOS y `Ctrl` en el
   resto: dividir paneles, mover el foco entre ellos, recorrer sesiones, cerrar una pestaña de archivo
-- Elige la tipografía de la terminal, incluida la de reserva para texto CJK
 
 **Ejecución**
 - Una configuración de ejecución tiene un tipo — Shell, npm, Node.js, Gradle, Maven, cargo, go,
@@ -135,6 +134,15 @@ También necesitarás:
 <div align="center">
 <img src="assets/schedule.gif" width="820" alt="Diagrama: a las 03:00 una sesión programada arranca sola, ejecuta el comando que le dejaste, termina, y Slack informa del resultado" />
 </div>
+
+**Apariencia**
+- Seis temas — Vega, Orion, Umbra, Aurora, Antares y Quasar — elegidos desde tarjetas que se dibujan
+  cada una con su propia paleta, así que eliges mirando en vez de por el nombre
+- Un tema es más que colores: el radio de las esquinas, las sombras, la tipografía de la interfaz y la
+  densidad de las filas vienen con él, así que Quasar pone más en pantalla que Umbra
+- Cambiarlo altera lo que ya está abierto — a una terminal en marcha se le sustituyen los colores en
+  el sitio, así que conserva su scrollback
+- La tipografía de la terminal se elige aparte, incluida la de reserva para texto CJK
 
 **Además**
 - Interfaz en coreano, inglés, japonés y español, más una opción System que sigue la configuración
