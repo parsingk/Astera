@@ -102,6 +102,9 @@ const timeOf = (at: string): string => {
  *  이 문자열과 같아질 수 없다. UI_CALLER 가 세션 id 와 겹치지 않게 하는 것과 같은 방식이다. */
 const RUN_START = 'run:start'
 
+/** 병합 버튼의 busy 센티넬. RUN_START 와 같은 이유로 Task id 와 겹칠 수 없는 값이다 */
+const RUN_MERGE = 'run:merge'
+
 export function RunDetail({
   run,
   detail,
@@ -361,6 +364,33 @@ export function RunDetail({
     }
   }
 
+  /** 워커들이 워크트리에 남긴 일을 프로젝트 폴더로 합친다.
+   *
+   *  **자동으로 하지 않는 것이 이 버튼의 존재 이유다.** 병합은 사용자가 체크아웃해 둔 브랜치의
+   *  작업 트리를 바꾸고, 사용자가 그 폴더에서 일하는 중일 수도 있다 — 충돌하면 그 트리가 반쯤
+   *  병합된 상태로 남는다. 그래서 그 순간을 사람이 고른다.
+   *
+   *  성공해도 워크트리를 지우지 않는다(명령 쪽 주석). 폴더 정리는 삭제 모달의 체크박스다. */
+  const mergeRunNow = async (): Promise<void> => {
+    setBusy(RUN_MERGE)
+    try {
+      const reply = await window.api.orch.command(projectPath, 'run-merge', { run: runId })
+      if (reply.status >= 400) {
+        const reason =
+          typeof reply.body === 'object' && reply.body !== null && 'error' in reply.body
+            ? String((reply.body as { error: unknown }).error)
+            : String(reply.status)
+        toast.error(t('jobs.run.mergeFailed', { reason }))
+        return
+      }
+      toast.success(t('jobs.run.merged'))
+    } catch {
+      toast.error(t('jobs.run.mergeFailed', { reason: '' }))
+    } finally {
+      setBusy(null)
+    }
+  }
+
   /** 띄우기. ready·pending 에서만 보이고(Graph.node), canManualStart 가 아니면 버튼 자체가 없다.
    *  worktree 는 언제나 'current' 를 명시한다 — 이 버튼이 나오는 것 자체가 이미 한도 1 이하인
    *  Run 으로 좁혀져 있어(canManualStart) worker-start 의 기본값('current')과 결과가 같지만,
@@ -584,6 +614,21 @@ export function RunDetail({
                     {t('jobs.run.start')}
                   </button>
                 )}
+                {/* 워커의 일을 프로젝트 폴더로 가져오는 자리. **예약 템플릿에는 없다** — 템플릿은
+                    돌지 않으므로 합칠 것이 없다(회차의 워크트리는 완료되면 앱이 걷는다). 워크트리를
+                    쓰지 않은 Run 에도 없다 — 삭제 모달의 병합 체크박스와 같은 근거를 쓴다. */}
+                {run !== undefined &&
+                  run.schedule === undefined &&
+                  (run.worktrees ?? []).length > 0 && (
+                    <button
+                      className="jobs-new"
+                      disabled={busy === RUN_MERGE}
+                      title={t('jobs.run.mergeHint', { count: (run.worktrees ?? []).length })}
+                      onClick={() => void mergeRunNow()}
+                    >
+                      {t('jobs.run.merge')}
+                    </button>
+                  )}
               </div>
             )}
             <Graph

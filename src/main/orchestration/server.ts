@@ -163,6 +163,7 @@ const COORDINATOR_ONLY = new Set([
   'run-spawn',
   'run-start',
   'run-worktree-set',
+  'run-merge',
   'task-create',
   'task-update',
   'worker-start',
@@ -459,6 +460,27 @@ export async function handleCommand(
       if (existing !== undefined)
         return conflict(`run ${id} already has a worktree: ${existing}`)
       return commit(setRunWorktree(s, id, worktree))
+    }
+    case 'run-merge': {
+      const id = str(args.run)
+      if (!id) return bad('--run is required')
+      // 없는 Run 은 400 이다 — 이 파일에 notFound 는 없고 404 는 알 수 없는 명령의 자리다
+      // (run-worktree-set 과 같은 이유).
+      const run = s.runs.find((r) => r.id === id)
+      if (!run) return bad(`unknown run: ${id}`)
+      // **run-delete 의 병합과 같은 호출이다.** 대상은 `run.cwd`(프로젝트 폴더)이고 재료는
+      // runWorktrees — Run 워크트리와 아직 합쳐지지 않은 Task 워크트리들이 함께 온다. Task 가
+      // 하나뿐인 병렬 Run(Run 워크트리는 비고 그 Task 워크트리에만 일이 있다)까지 이 한 호출로
+      // 덮이는 것이 `run.worktree` 하나만 합치지 않는 이유다.
+      const worktrees = runWorktrees(s, id)
+      if (worktrees.length === 0) return okBody({ merged: [] })
+      if (!deps.mergeWorktrees) return bad('merging is not available in this build')
+      const merged = await deps.mergeWorktrees(run.cwd, worktrees)
+      if (!merged.ok) return conflict(merged.reason)
+      // **워크트리를 걷지 않는다.** 사람이 결과를 보고 다시 합칠 수도 있고, 폴더 정리는 삭제
+      // 모달의 체크박스가 이미 하는 일이다 — 이 명령이 그것까지 하면 "합치기" 가 "합치고 지우기" 가
+      // 되고, 그 둘을 따로 고를 수 있게 만든 결정이 무의미해진다.
+      return okBody({ merged: worktrees })
     }
     case 'run-spawn': {
       const id = str(args.run)

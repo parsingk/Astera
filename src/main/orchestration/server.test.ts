@@ -2510,67 +2510,67 @@ describe('run-start — 사람이 실행을 누를 때까지 기다린다', () =
   })
 })
 
-describe('run-delete — 병합·워크트리 선택', () => {
-  /** 워크트리에서 끝난 Dispatch 하나를 가진 평범한 Run. 지우기가 거절되지 않도록 Dispatch 는 끝난
-   *  상태로 둔다(열려 있으면 409 다 — 그 규칙은 다른 테스트가 지킨다) */
-  const withFinishedWorktree = async (): Promise<{
-    deps: OrchServerDeps & { state: OrchState }
-    runId: string
-    merged: string[][]
-    removed: string[][]
-    mergeOk: { value: boolean }
-  }> => {
-    const merged: string[][] = []
-    const removed: string[][] = []
-    const mergeOk = { value: true }
-    const base = makeDeps()
-    const deps = Object.assign(base, {
-      mergeWorktrees: async (_cwd: string, paths: string[]) => {
-        merged.push(paths)
-        return mergeOk.value ? { ok: true as const } : { ok: false as const, reason: '프로젝트 폴더가 지저분합니다' }
-      },
-      removeWorktrees: async (paths: string[]) => {
-        removed.push(paths)
-        return { failed: [] as string[] }
+/** 워크트리에서 끝난 Dispatch 하나를 가진 평범한 Run. 지우기가 거절되지 않도록 Dispatch 는 끝난
+ *  상태로 둔다(열려 있으면 409 다 — 그 규칙은 다른 테스트가 지킨다) */
+const withFinishedWorktree = async (): Promise<{
+  deps: OrchServerDeps & { state: OrchState }
+  runId: string
+  merged: string[][]
+  removed: string[][]
+  mergeOk: { value: boolean }
+}> => {
+  const merged: string[][] = []
+  const removed: string[][] = []
+  const mergeOk = { value: true }
+  const base = makeDeps()
+  const deps = Object.assign(base, {
+    mergeWorktrees: async (_cwd: string, paths: string[]) => {
+      merged.push(paths)
+      return mergeOk.value ? { ok: true as const } : { ok: false as const, reason: '프로젝트 폴더가 지저분합니다' }
+    },
+    removeWorktrees: async (paths: string[]) => {
+      removed.push(paths)
+      return { failed: [] as string[] }
+    }
+  })
+  const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', provider: 'claude' })
+  const runId = (c.body as { id: string }).id
+  await deps.setState({
+    ...deps.getState(),
+    tasks: [
+      {
+        id: 'tsk_w',
+        runId,
+        title: 't',
+        spec: 's',
+        deps: [],
+        status: 'completed',
+        consecutiveFailures: 0,
+        createdAt: NOW,
+        updatedAt: NOW
       }
-    })
-    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', provider: 'claude' })
-    const runId = (c.body as { id: string }).id
-    await deps.setState({
-      ...deps.getState(),
-      tasks: [
-        {
-          id: 'tsk_w',
-          runId,
-          title: 't',
-          spec: 's',
-          deps: [],
-          status: 'completed',
-          consecutiveFailures: 0,
-          createdAt: NOW,
-          updatedAt: NOW
-        }
-      ],
-      dispatches: [
-        {
-          id: 'dsp_w',
-          taskId: 'tsk_w',
-          provider: 'claude',
-          accountId: 'acc1',
-          sessionId: 'sess_w',
-          cwd: 'D:/wt/a',
-          specPath: 'D:/wt/a/spec.md',
-          startedAt: NOW,
-          endedAt: NOW,
-          outcome: 'succeeded',
-          workerState: 'ready',
-          retained: false
-        }
-      ]
-    })
-    return { deps, runId, merged, removed, mergeOk }
-  }
+    ],
+    dispatches: [
+      {
+        id: 'dsp_w',
+        taskId: 'tsk_w',
+        provider: 'claude',
+        accountId: 'acc1',
+        sessionId: 'sess_w',
+        cwd: 'D:/wt/a',
+        specPath: 'D:/wt/a/spec.md',
+        startedAt: NOW,
+        endedAt: NOW,
+        outcome: 'succeeded',
+        workerState: 'ready',
+        retained: false
+      }
+    ]
+  })
+  return { deps, runId, merged, removed, mergeOk }
+}
 
+describe('run-delete — 병합·워크트리 선택', () => {
   it('아무것도 고르지 않으면 오늘과 같다 — 병합도 폴더 삭제도 없다', async () => {
     const { deps, runId, merged, removed } = await withFinishedWorktree()
     expect((await call(deps, 'run-delete', { id: runId })).status).toBe(200)
@@ -2626,6 +2626,60 @@ describe('run-delete — 병합·워크트리 선택', () => {
     const id = (c.body as { id: string }).id
     expect((await call(deps, 'run-delete', { id, merge: true })).status).toBe(200)
     expect(merged).toEqual([])
+  })
+})
+
+describe('run-merge', () => {
+  it('워크트리들을 프로젝트 폴더로 합친다', async () => {
+    const { deps, runId, merged } = await withFinishedWorktree()
+    const r = await call(deps, 'run-merge', { run: runId })
+    expect(r.status).toBe(200)
+    expect(merged).toEqual([['D:/wt/a']])
+    expect((r.body as { merged: string[] }).merged).toEqual(['D:/wt/a'])
+  })
+
+  it('합쳐도 Run 은 남는다 — 이 명령은 지우지 않는다', async () => {
+    const { deps, runId } = await withFinishedWorktree()
+    await call(deps, 'run-merge', { run: runId })
+    expect(deps.getState().runs).toHaveLength(1)
+  })
+
+  it('폴더를 지우지 않는다 — 정리는 삭제 모달의 체크박스다', async () => {
+    const { deps, runId, removed } = await withFinishedWorktree()
+    await call(deps, 'run-merge', { run: runId })
+    expect(removed).toEqual([])
+  })
+
+  it('합칠 것이 없으면 병합을 부르지 않는다', async () => {
+    const merged: string[][] = []
+    const deps = Object.assign(makeDeps(), {
+      mergeWorktrees: async (_c: string, p: string[]) => {
+        merged.push(p)
+        return { ok: true as const }
+      }
+    })
+    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const r = await call(deps, 'run-merge', { run: (c.body as { id: string }).id })
+    expect(r.status).toBe(200)
+    expect(merged).toEqual([])
+  })
+
+  it('병합이 실패하면 409 와 그 이유다', async () => {
+    const { deps, runId, mergeOk } = await withFinishedWorktree()
+    mergeOk.value = false
+    const r = await call(deps, 'run-merge', { run: runId })
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toContain('지저분')
+  })
+
+  it('없는 Run 은 400 이다', async () => {
+    expect((await call(makeDeps(), 'run-merge', { run: 'run_nope' })).status).toBe(400)
+  })
+
+  it('병합이 이 빌드에 없으면 400 이다', async () => {
+    const { deps, runId } = await withFinishedWorktree()
+    const noMerge = { ...deps, mergeWorktrees: undefined }
+    expect((await call(noMerge, 'run-merge', { run: runId })).status).toBe(400)
   })
 })
 
