@@ -181,9 +181,13 @@ describe('HistoryIndex (lazy)', () => {
      *  다시 읽혔나" 에 손대지 않은 프로젝트가 섞인다 — macOS CI 에서 실제로 그렇게 실패했다(dirs 에
      *  proj-b 가 들어왔다).
      *
-     *  그래서 재생이 멎을 때까지 기다리고, 남은 pendingDirs 를 한 번의 조회로 소진한 뒤 폴더 계수기만
-     *  0 으로 맞춘다. full 은 건드리지 않는다 — 재생은 전량 재읽기를 만들지 않으므로 그 수는 이미 맞고,
-     *  지우면 뒤의 "전량 재읽기는 늘지 않았다" 가 무엇과 비교하는지 알 수 없게 된다.
+     *  그래서 재생이 멎을 때까지 기다리고, 남은 pendingDirs 를 한 번의 조회로 소진한 뒤 폴더 계수기를
+     *  0 으로 맞춘다.
+     *
+     *  **전량 재읽기 수는 이 소진이 늘릴 수 있다.** 폴더 단위 재계산이 없는 provider(codex)에서는
+     *  pendingDirs 가 그 계정의 행을 지우므로 다음 조회가 전량을 읽는다 — 그래서 그런 테스트는 절대
+     *  개수가 아니라 **이 함수가 끝난 시점을 기준으로 한 증가분**을 단언해야 한다. 이것을 "재생은
+     *  전량 재읽기를 만들지 않는다" 로 잘못 적어 두었다가 macOS CI 가 codex: 3 을 냈다.
      *
      *  기다림을 고정 시간이 아니라 **활동이 멎는 것**으로 판정한다. 고정 예산은 한가한 머신에서만
      *  충분해서 2코어 CI 러너에서 모자랐던 선례가 있다(main/codexRolling.test.ts 의 settleIo). */
@@ -292,14 +296,16 @@ describe('HistoryIndex (lazy)', () => {
 
       await index.startBackground()
       await drainWatcher(dirs)
+      // 재생을 소진한 뒤가 기준이다 — 그 소진이 codex 전량 재읽기를 한 번 쓴다(drainWatcher 의 주석)
+      const base = { ...full }
       const updated = vi.fn()
       index.onUpdated = updated
       await fs.appendFile(rollout, JSON.stringify(meta) + '\n', 'utf8')
       await vi.waitFor(() => expect(updated).toHaveBeenCalled(), { timeout: 5000 })
 
       expect(await projectNames()).toEqual(['cx', 'proj-a', 'proj-b'])
-      // codex 는 폴더 단위 재계산이 없으니 그 계정만 전량, claude 는 손대지 않았다
-      expect(full).toEqual({ claude: 1, codex: 2 })
+      // codex 는 폴더 단위 재계산이 없으니 그 계정만 전량 한 번 더, claude 는 손대지 않았다
+      expect(full).toEqual({ claude: base.claude, codex: base.codex + 1 })
       expect(dirs).toEqual([])
     })
 
