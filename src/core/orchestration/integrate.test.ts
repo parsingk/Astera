@@ -4,6 +4,7 @@ import {
   integrationTaskFor,
   isIntegrationTask,
   pendingMerges,
+  runRootOf,
   runsWorkingIn,
   runWorktrees,
   workingInProjectFolder,
@@ -414,5 +415,15 @@ describe('runWorktrees', () => {
       ]
     })
     expect(runWorktrees(s, 'run_1')).toEqual([WT_A])
+  })
+})
+
+describe('runRootOf', () => {
+  it('워크트리가 없으면 프로젝트 폴더다', () => {
+    expect(runRootOf(run())).toBe(RUN_CWD)
+  })
+
+  it('워크트리가 있으면 그것이다', () => {
+    expect(runRootOf(run({ worktree: WT_A }))).toBe(WT_A)
   })
 })

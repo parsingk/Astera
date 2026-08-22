@@ -8,7 +8,7 @@
 // 조회 앞에서 빠진다).
 import { isSamePath } from '../files/tree'
 import type { OrchState } from './state'
-import type { Task } from './types'
+import type { Run, Task } from './types'
 
 /** 의존 하나가 남긴 워크트리 — 그 의존 Task 의 id 와 그것이 돌았던 폴더 */
 interface WorktreeDep {
@@ -58,6 +58,19 @@ function worktreeDeps(s: OrchState, taskId: string): WorktreeDep[] {
     }
   }
   return found
+}
+
+/** 이 Run 의 워커들이 일하는 뿌리. 워크트리가 있으면 그것, 없으면 프로젝트 폴더다.
+ *
+ *  **이 파일의 판정들이 `run.cwd` 대신 이것을 본다.** `run.cwd` 는 두 가지를 겸하고 있었다 —
+ *  "이 Run 이 속한 프로젝트"와 "워커가 일하는 자리". Run 이 자기 워크트리를 갖게 되면서 그 둘이
+ *  갈라졌고, 앞의 뜻만 `cwd` 에 남는다. 뒤의 뜻을 묻는 자리가 이것을 부른다.
+ *
+ *  한 줄짜리 함수를 두는 이유는 부르는 곳이 넷이라서다(병합 판정·병합 가능 판정·배치·통합 대상).
+ *  `run.worktree ?? run.cwd` 를 네 번 적으면 다섯 번째 자리가 생겼을 때 그것만 빠질 수 있고,
+ *  그 실패는 "워커가 프로젝트 폴더에서 돈다"로 나타나 이 변경 전과 똑같이 보인다. */
+export function runRootOf(run: Run): string {
+  return run.worktree ?? run.cwd
 }
 
 /** 이 Run 의 Dispatch 가 쓴 워크트리 경로들, 중복 없이 — 만난 순서 그대로.
