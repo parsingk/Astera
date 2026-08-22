@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { JobRun, JobTask, OrchSnapshot, Provider, TaskStatus } from '../../../core/types'
 import type { MessageKey } from '../../../core/i18n'
 import { formatElapsed } from '../../../core/orchestration/elapsed'
-import { runningCount } from '../../../core/orchestration/running'
+import { isStoppedWorker, runningCount } from '../../../core/orchestration/running'
 import { schedRuleSummary } from '../../../core/scheduler/summary'
 import { useI18n } from '../i18n/I18nProvider'
 import { PauseIcon, PlayIcon, RunIcon, STATE_KEY, STATUS_COLOR, TaskGlyph, TaskIcon, TrashIcon } from './JobIcons'
@@ -20,11 +20,19 @@ const RUN_KIND_KEY: Record<RunIconKind, MessageKey> = {
   failed: 'jobs.state.failed'
 }
 
-/** 띠 한 칸의 색. 시작하지 않은 둘만 STATUS_COLOR 를 따르지 않는다 — 띠는 "얼마나 갔나"를 말하는
- *  자리라, 아직 안 간 칸이 배경으로 남아야 채워진 칸이 읽힌다. 그 둘을 서로 구별하는 일은 아래
- *  한 줄의 글리프(빈 원과 점선 원)가 한다. */
-const segColor = (status: TaskStatus): string =>
-  status === 'pending' || status === 'ready' ? 'var(--line-soft)' : STATUS_COLOR[status]
+/** 띠 한 칸의 색. **STATUS_COLOR 를 따르지 않는 셋**이 있다 — 띠는 "얼마나 갔나"를 말하는 자리라,
+ *  아직 안 간 칸이 배경으로 남아야 채워진 칸이 읽힌다. 시작하지 않은 둘을 서로 구별하는 일은 아래
+ *  한 줄의 글리프(빈 원과 점선 원)가 한다.
+ *
+ *  **멈춰 세워진 워커의 칸도 채우지 않는다.** 상태는 `dispatched` 로 남지만(멈추는 것이 Task 를
+ *  건드리지 않는다) 그 색은 accent 이고, 그러면 예약을 세운 뒤에도 회차의 띠가 파랗게 남아 도는
+ *  것처럼 읽힌다 — 실제로 그렇게 보고됐다. 이 띠가 묻는 것은 "이 일이 도착했는가" 이고 멈춘 일은
+ *  도착하지 않았다. 글리프는 여전히 자기 색과 모양을 지킨다(TaskIcon 의 still 주석): 그쪽이 묻는
+ *  것은 "지금 어떤 상태인가" 라는 다른 질문이다. */
+const segColor = (task: JobTask): string =>
+  task.status === 'pending' || task.status === 'ready' || isStoppedWorker(task)
+    ? 'var(--line-soft)'
+    : STATUS_COLOR[task.status]
 
 /** provider 배지의 두 글자. 21px 칸에 이름은 들어가지 않고, 바로 아래 줄이 이미 전체 이름을 적는다 */
 const PROVIDER_ABBR: Record<Provider, string> = { claude: 'CL', codex: 'CX' }
@@ -127,6 +135,14 @@ function RunCard({
             {t('jobs.run.notStarted')}
           </span>
         )}
+        {/* 세워 둔 회차. **이 표시가 없으면 멈춘 회차가 도는 회차처럼 읽힌다** — 상태는 dispatched 로
+            남고(멈추는 것이 Task 를 건드리지 않는다) 글리프도 그 색을 지키므로, 말로 적어 주는 자리가
+            여기뿐이다. 재개는 이 회차를 이어받지 않는다: 다음 예약 시각의 새 회차가 돈다. */}
+        {run.paused && (
+          <span className="jobs-ordinal" title={t('jobs.run.roundStoppedHint')}>
+            {t('jobs.run.roundStopped')}
+          </span>
+        )}
         {run.sharesProjectFolder && (
           <span className="jobs-shared" title={t('jobs.run.sharedFolderHint')}>
             {t('jobs.run.sharedFolder')}
@@ -165,7 +181,7 @@ function RunCard({
           <span
             key={task.id}
             className="jobs-seg"
-            style={{ background: segColor(task.status) }}
+            style={{ background: segColor(task) }}
             title={task.title}
           />
         ))}

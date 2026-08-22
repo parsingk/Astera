@@ -737,6 +737,8 @@ export const ja: Catalog = {
   'jobs.run.pauseConfirmTitle': '予約を一時停止',
   'jobs.run.pauseConfirmBody': '実行中のすべての task が停止し、再開すると次の予約時刻から実行されます。',
   'jobs.run.paused': '一時停止中',
+  'jobs.run.roundStopped': '停止',
+  'jobs.run.roundStoppedHint': '予約が一時停止したためこの回は停止しました — 再開すると次の予約時刻に新しい回が実行されます',
   'jobs.run.pauseFailed': '一時停止できませんでした',
   'jobs.run.pauseRetained': 'worker-retain で保持されているセッションがあるため停止できません — 先に解放してください',
   'jobs.run.resume': '再開',

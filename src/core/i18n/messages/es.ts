@@ -749,6 +749,8 @@ export const es: Catalog = {
   'jobs.run.pauseConfirmTitle': 'Pausar la programación',
   'jobs.run.pauseConfirmBody': 'Se detienen todas las tareas en curso y, al reanudar, se ejecuta desde la próxima hora programada.',
   'jobs.run.paused': 'En pausa',
+  'jobs.run.roundStopped': 'Detenida',
+  'jobs.run.roundStoppedHint': 'La programación está en pausa, así que esta ronda se detuvo; al reanudar se ejecuta una nueva ronda a la próxima hora programada',
   'jobs.run.pauseFailed': 'No se pudo pausar',
   'jobs.run.pauseRetained': 'Hay una sesión retenida por worker-retain, así que no se puede detener; suéltala primero',
   'jobs.run.resume': 'Reanudar',

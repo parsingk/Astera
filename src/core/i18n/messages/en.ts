@@ -643,6 +643,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.run.pauseConfirmTitle': 'Pause the schedule',
   'jobs.run.pauseConfirmBody': 'Every task now running stops, and starting again resumes from the next scheduled time.',
   'jobs.run.paused': 'Paused',
+  'jobs.run.roundStopped': 'Stopped',
+  'jobs.run.roundStoppedHint': 'The schedule is paused, so this round stopped — resuming runs a new round at the next scheduled time',
   'jobs.run.pauseFailed': 'Could not pause',
   'jobs.run.pauseRetained': 'A session is held by worker-retain, so it cannot be stopped — release it first',
   'jobs.run.resume': 'Resume',

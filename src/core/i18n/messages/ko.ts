@@ -772,6 +772,8 @@ export const ko = {
   'jobs.run.pauseConfirmTitle': '예약 일시 중지',
   'jobs.run.pauseConfirmBody': '현재 작업 중인 모든 task가 중지되며 다시 실행 시 다음 예약 시간부터 실행됩니다.',
   'jobs.run.paused': '일시 중지됨',
+  'jobs.run.roundStopped': '중지됨',
+  'jobs.run.roundStoppedHint': '예약이 세워져 이 회차는 멈췄습니다 — 다시 실행하면 다음 예약 시각의 새 회차가 돕니다',
   'jobs.run.pauseFailed': '일시 중지하지 못했습니다',
   'jobs.run.pauseRetained': 'worker-retain 으로 붙잡아 둔 세션이 있어 멈출 수 없습니다 — 먼저 놓아 주세요',
   'jobs.run.resume': '다시 실행',
