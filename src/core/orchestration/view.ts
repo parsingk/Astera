@@ -23,8 +23,9 @@ import type { Run, Task } from './types'
  *  끝난 Run 을 아래로 보내는 것은 여기가 아니라 snapshotFor 다 — 그 판정(outcomeOf)이 Task 를
  *  읽어야 하는데 이 함수는 Run 만 돌려준다.
  *
- *  Matching is isSamePath rather than ===: Run.cwd is the project root (worktrees are created per
- *  Dispatch, not per Run — see coordinator.ts), but the same path can arrive with a different drive
+ *  Matching is isSamePath rather than ===: Run.cwd is the project root even when the Run works in
+ *  its own worktree (Run.worktree holds that, and this comparison deliberately does not look at it —
+ *  a Run belongs to the project it was created for), but the same path can arrive with a different drive
  *  letter or casing on win32, and a string compare would silently drop the Run from the list.
  *  isPathWithin (base-or-below) is the wrong shape here, not just a stricter one than needed:
  *  orchestration.json is a single app-wide store, not scoped per project, and nothing constrains

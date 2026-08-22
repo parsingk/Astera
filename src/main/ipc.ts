@@ -44,6 +44,7 @@ import {
   integrationTaskFor,
   isIntegrationTask,
   pendingMerges,
+  runRootOf,
   workingInRunRoot,
   worktreeDepsOf
 } from '../core/orchestration/integrate'
@@ -66,7 +67,7 @@ import { parsePorcelainZ, type GitState } from '../core/git/status'
 import { FileWatcher } from './fileWatcher'
 import { GitWatcher } from './gitWatcher'
 import { createWorktree } from '../core/worktrees/create'
-import { nameForTask } from '../core/worktrees/naming'
+import { nameForRun, nameForTask } from '../core/worktrees/naming'
 import { listBranches, detectBaseRef } from '../core/worktrees/git'
 import { workerBaseFailure } from '../core/worktrees/base'
 import { goneWorktreeProjects } from '../core/worktrees/hiddenHistory'
@@ -533,6 +534,63 @@ export function registerIpc(
           `${loaded.staleReviews} interrupted review(s)`
       )
 
+    /** 프로젝트 폴더가 **서 있는 브랜치**에서 워크트리를 하나 만들고 그 경로를 낸다.
+     *
+     *  워커의 워크트리도 Run 의 워크트리도 프로젝트가 서 있는 브랜치에서 갈라져야 한다.
+     *  createWorktree 의 자동 판정(origin/HEAD → main → master, core/worktrees/git.ts 의
+     *  detectBaseRef)에 맡기면 프로젝트의 기본 브랜치에서 갈라지고 — Run 이 서 있는 브랜치와 다른
+     *  조상이다 — 병합 단계가 무의미해진다: 의존의 워크트리를 이 뿌리로 접어 넣은 뒤 Task 를
+     *  시작하는데, origin/HEAD 에서 갈라진 워커에게는 그 히스토리가 애초에 조상이 아니어서 병합
+     *  때문에 보이는 것이 하나도 바뀌지 않는다.
+     *
+     *  문자열 'HEAD' 를 그대로 넘길 수 없다: baseRef 는 toFullRef 를 지나는데 슬래시 없는 이름을
+     *  refs/heads/<name> 으로만 푼다 — 'HEAD' 는 refs/heads/HEAD 를 찾아 없으므로 NO_BASE 로
+     *  던진다. 그래서 브랜치의 짧은 이름을 먼저 읽는다.
+     *
+     *  `rev-parse --abbrev-ref HEAD` 가 아니라 `symbolic-ref --quiet --short HEAD` 를 쓴다:
+     *  전자는 분리된 HEAD 에서 실패하지 않고 리터럴 'HEAD' 를 돌려주므로, 그 값을 믿는 호출자는
+     *  존재하지 않는 'HEAD' 라는 브랜치에서 갈라지려 한다. symbolic-ref 는 분리된 HEAD 에서
+     *  그냥 실패하고, 그 실패가 정확히 여기 필요한 신호다. 이 저장소의 다른 두 곳도 같은 질문을
+     *  같은 방식으로 묻는다(integrateWorktrees 의 병합 전 확인, git.ts 의 listBranches).
+     *
+     *  **저장소에 닿는지를 먼저 묻는다.** symbolic-ref 는 유효한 저장소에서만 "분리됐는가" 를
+     *  답한다 — 그 경로에서 git 을 돌릴 수 없을 때도 똑같이 실패하므로, 그 실패를 곧 분리로 읽던
+     *  동안 앱은 폴더가 사라진 Run 에도 "HEAD 가 분리됐다"고 말했다. 어느 쪽인지 가르는 것은
+     *  core 의 workerBaseFailure 이고 문장도 그쪽에 있다.
+     *
+     *  **자동 판정으로 조용히 물러나지 않고 던진다.** 물러나면 이 확인이 막으려던 버그가 그대로
+     *  되살아나고, 워커는 나중에 아무 데도 합칠 수 없는 일을 하게 된다 — 워커 세션 하나를 통째로
+     *  태운 뒤에야 문제가 보인다. 여기서 던지면 시작 시점에 보고된다.
+     *
+     *  toFullRef 의 해석 순서에 남은 위험(브랜치 이름의 첫 조각이 원격 이름과 같을 때 원격 추적
+     *  사본에서 갈라진다)은 그대로다 — 이 저장소의 원격은 origin 하나이고 어느 지역 브랜치의 첫
+     *  조각도 그것과 다르다. 그 판단의 전문은 이 헬퍼를 뽑아 온 자리(git.ts 의 fetchBaseRef 주석)에
+     *  있다. */
+    const forkWorktree = async (a: { repoPath: string; name?: string }): Promise<string> => {
+      const gitDirProbe = await git(['rev-parse', '--git-dir'], { cwd: a.repoPath })
+      const head = gitDirProbe.ok
+        ? await git(['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: a.repoPath })
+        : { ok: false, stdout: '', stderr: '' }
+      const baseFailure = workerBaseFailure({
+        repoPath: a.repoPath,
+        repoReachable: gitDirProbe.ok,
+        onBranch: head.ok,
+        stderr: gitDirProbe.stderr || gitDirProbe.stdout
+      })
+      if (baseFailure !== null) throw new Error(baseFailure)
+      const r = await createWorktree({
+        repoPath: a.repoPath,
+        name: a.name,
+        baseRef: head.stdout,
+        registry: core.worktrees
+      })
+      // 경고를 버리지 않는다 — worktree.create.fetchFailed 는 "base 를 가져올 수 없어 낡은 참조에서
+      // 만들었다" 는 뜻이고 워커는 그 위에서 일한다. 이 경로에는 사용자 화면이 없어 로그가 유일한
+      // 흔적이다. 키만 남긴다: 번역은 렌더러의 일이고 여기에는 언어가 없다.
+      for (const w of r.warnings) orchLog(`worktree warning ${w.key} ${JSON.stringify(w.params ?? {})}`)
+      return r.info.path
+    }
+
     // The coordinator never reads or writes OrchState (the server owns state).
     // Worker sessions are not registered with rolling, scheduling, or Slack — spawnSession gates that
     // on its opts, and here those options are simply not passed (orchestration sessions are not subject
@@ -577,106 +635,9 @@ export function registerIpc(
       killSession: (id) => core.sessions.kill(id),
       // Reuses the worktree creation utility the app already has (core/worktrees/create) — that also
       // registers it, so the worktree list and delete paths in settings handle a worker's worktree
-      // exactly like any other.
-      createWorktree: async (a) => {
-        // A worker's worktree must fork from the branch the Run is standing on, not whatever
-        // createWorktree's own auto-detection would pick (origin/HEAD → main → master,
-        // core/worktrees/git.ts detectBaseRef). Left to that default, a worker forks from the
-        // project's default branch — a different ancestor than the branch the Run is actually
-        // running on — and the merge-before-start step (integrateWorktrees, further down in this
-        // file) becomes pointless: it waits for a dependency's worktree to be folded into the
-        // project folder before this Task starts, but a worker that branched from origin/HEAD
-        // never had that project-folder history as an ancestor in the first place, so nothing it
-        // sees changes because of the merge. This only matters when a worktree exists at all,
-        // which is limit >= 2 — at limit 1 the scheduler's placement rule picks
-        // `worktree: 'current'` and never calls this adapter.
-        //
-        // The literal string 'HEAD' cannot be passed as-is: createWorktree's baseRef goes through
-        // toFullRef (core/worktrees/git.ts), which resolves a slash-free name only as
-        // refs/heads/<name> — 'HEAD' would look for refs/heads/HEAD, find nothing, and
-        // createWorktree would throw NO_BASE. So the branch's short name has to be read first.
-        //
-        // `symbolic-ref --quiet --short HEAD` is used rather than `rev-parse --abbrev-ref HEAD`:
-        // the latter returns the literal string 'HEAD' on a detached HEAD instead of failing, so a
-        // caller that trusts its output would silently try to fork from a branch named 'HEAD' that
-        // does not exist. symbolic-ref fails outright on a detached HEAD instead, and that failure
-        // is exactly the signal this needs (see the throw below). The same question is asked the
-        // same way, for the same reason, elsewhere in this codebase: the pre-merge check further
-        // down in this file (`symbolic-ref --quiet HEAD` inside integrateWorktrees) and
-        // listBranches (core/worktrees/git.ts) both treat a failing symbolic-ref as "detached".
-        //
-        // **저장소에 닿는지를 먼저 묻는다.** symbolic-ref 는 유효한 저장소에서만 "분리됐는가" 를
-        // 답한다 — 그 경로에서 git 을 돌릴 수 없을 때도 똑같이 실패하므로, 그 실패를 곧 분리로 읽던
-        // 동안 앱은 폴더가 사라진 Run 에도 "HEAD 가 분리됐다"고 말했다(실제로는 `cannot change to
-        // '<경로>'`). 어느 쪽인지 가르는 것은 core 의 workerBaseFailure 이고 문장도 그쪽에 있다.
-        const gitDirProbe = await git(['rev-parse', '--git-dir'], { cwd: a.repoPath })
-        const head = gitDirProbe.ok
-          ? await git(['symbolic-ref', '--quiet', '--short', 'HEAD'], { cwd: a.repoPath })
-          : { ok: false, stdout: '', stderr: '' }
-        const baseFailure = workerBaseFailure({
-          repoPath: a.repoPath,
-          repoReachable: gitDirProbe.ok,
-          onBranch: head.ok,
-          stderr: gitDirProbe.stderr || gitDirProbe.stdout
-        })
-        if (baseFailure !== null)
-          // Fail rather than silently falling back to auto-detection (baseRef undefined): a
-          // fallback would recreate the exact bug this check exists to prevent, and the worker
-          // would go on to do work that Task 5 can never merge — integrateWorktrees (further down
-          // in this file) opens a Gate instead of merging when the project folder's own HEAD is
-          // detached, which is precisely the state detected here. So a fallback burns an entire
-          // worker session before the problem is visible; throwing here reports it at the start.
-          // The throw propagates through OrchCoordinator.startWorker to server.ts's `worker-start`
-          // catch, which rolls the half-open Dispatch back and returns an error response; the
-          // scheduler's per-slot catch (further down in this file) turns that into a Gate the user
-          // sees — the same wiring every other worker-start failure already goes through, so
-          // nothing new needs to be built for this one to reach the user.
-          throw new Error(baseFailure)
-        // Known residual risk in the value just read, left as a comment rather than fixed here: if
-        // the branch's first path segment (before the first '/') is exactly the name of a
-        // configured remote (remoteExists in git.ts) and that remote actually has a branch
-        // with the matching tail name, toFullRef (in git.ts) tries `refs/remotes/<baseRef>`
-        // before `refs/heads/<baseRef>` for any baseRef containing a slash — so the worktree forks
-        // from the fetched remote-tracking copy instead of the exact local branch this project
-        // folder is on. This is the same trap git.ts's fetchBaseRef comment already
-        // documents; until now it was reachable only when a user deliberately picked such a name
-        // in the base-branch picker. This adapter opens a second, automatic path to it: on every
-        // limit >= 2 worker start, whatever the project folder's local branch happens to be named
-        // flows into baseRef with no one looking at it.
-        //
-        // Not thrown, and not structurally fixed, for three reasons:
-        //  1. It degrades, it does not corrupt. A remote-tracking copy is normally at or behind the
-        //     local branch of the same name, so the worker starts from a slightly stale ancestor of
-        //     the same line of work — its branch is still what integrateWorktrees (further down in
-        //     this file) merges into the project branch, and a wider diff at merge time (or an
-        //     outright conflict) is handled exactly like any other merge conflict already is: handed
-        //     to the agent. No work is lost and no repository is left in a strange state.
-        //  2. Throwing would block a legitimate workflow outright: naming a personal remote after
-        //     yourself and namespacing branches to match it (a 'parsingk' remote alongside a
-        //     'parsingk/maple' branch) is a real pattern, and losing every limit >= 2 Run entirely
-        //     over a name collision is disproportionate to how rarely this fires.
-        //  3. The real fix is toFullRef's resolution order, and that order is deliberate for the
-        //     picker's own callers — choosing 'origin/main' there is supposed to mean the remote
-        //     ref, not a same-named local branch. Changing that policy is a separate decision for a
-        //     separate task, not something to smuggle in here. (A full-ref bypass does not work
-        //     either: passing 'refs/heads/<name>' as baseRef just gets re-wrapped into
-        //     'refs/remotes/refs/heads/<name>' / 'refs/heads/refs/heads/<name>', neither of which
-        //     exists, so it throws NO_BASE instead.)
-        // Unreachable in this repository today: its only remote is 'origin', and every local
-        // branch's first segment (develop, docs, feature, fix, main) differs from it.
-        const r = await createWorktree({
-          repoPath: a.repoPath,
-          name: a.name,
-          baseRef: head.stdout,
-          registry: core.worktrees
-        })
-        // Warnings are not discarded — worktree.create.fetchFailed means "the base could not be fetched,
-        // so this was created from a stale reference", and the worker then works on top of that. There
-        // is no user-facing screen on this path, so the log is the only trace. Only the key is recorded:
-        // translation is the renderer's job and there is no language here.
-        for (const w of r.warnings) orchLog(`worktree warning ${w.key} ${JSON.stringify(w.params ?? {})}`)
-        return { path: r.info.path }
-      },
+      // exactly like any other. 갈라질 자리를 고르는 판단은 forkWorktree 에 있다(위) — Run 워크트리를
+      // 만드는 스케줄러도 같은 것을 쓴다.
+      createWorktree: async (a) => ({ path: await forkWorktree(a) }),
       accountProvider: (id) => {
         try {
           return providerOf(core.accounts.get(id))
@@ -1334,10 +1295,14 @@ export function registerIpc(
               }
               const accountId = picked.accountId
               // **한 Run 은 두 방식 중 하나로만 돈다.** 섞지 않는 이유는 병합 대상이다 — 병합은
-              // 깨끗한 작업 트리에만 적용되고, 워커 하나를 프로젝트 폴더에 띄우면 그 폴더에 커밋 안
-              // 된 변경이 남아 나머지 워크트리를 합칠 자리가 없어진다. 그래서 동시 실행 손잡이 하나가
-              // 두 가지를 정한다: 1 이면 프로젝트 폴더에서 차례대로, 2 이상이면 전부 자기 워크트리에서.
-              // 병렬인데 한 폴더는 고를 수 있어서는 안 되는 조합이다 — 서로를 덮어쓴다.
+              // 깨끗한 작업 트리에만 적용되고, 워커 하나를 합칠 자리에 띄우면 그 폴더에 커밋 안 된
+              // 변경이 남아 나머지 워크트리를 합칠 자리가 없어진다. 그래서 동시 실행 손잡이 하나가
+              // 두 가지를 정한다: 1 이면 **Run 워크트리**에서 차례대로, 2 이상이면 전부 자기
+              // 워크트리에서. 병렬인데 한 폴더는 고를 수 있어서는 안 되는 조합이다 — 서로를 덮어쓴다.
+              //
+              // **프로젝트 폴더에서 도는 워커는 없다.** 한때 1 이하가 그 뜻이었다(그리고 사용자가
+              // 보고 있는 체크아웃에 에이전트가 썼다). 이제 Run 이 자기 워크트리를 갖고, 프로젝트
+              // 폴더로 합치는 것은 사람이 상세 창에서 누른다.
               //
               // run 은 slotsToFill 이 만든 스냅숏이 **아니라** 여기서 새로 읽은 상태에서 찾는다 —
               // 그 사이(위) 계정 로그인 조회가 await 를 하나 두었고, 이 for 문의 앞선 슬롯이 이미
@@ -1348,11 +1313,67 @@ export function registerIpc(
               // 있는 Task 만 후보로 냈으므로 — schedule.ts). **이 루프의 동시성 논증은 모두 이
               // 전제(스냅숏이 아니라 슬롯마다 새로 읽는다) 위에 서 있다** — 여기를 "같은 스냅숏"
               // 이라고 잘못 적으면 다음에 이 루프의 레이스를 따지는 사람이 틀린 전제에서 시작한다.
-              const state = orch.deps.getState()
-              const run = state.runs.find((r) => r.id === slot.runId)!
+              let state = orch.deps.getState()
               // Task 도 같은 이유로 반드시 있다(slotsToFill 이 상태에서 골라낸 id 다) — 위와 같은
               // 새로 읽은 state 에서다
               const task = state.tasks.find((t) => t.id === slot.taskId)!
+
+              // **Run 워크트리를 여기서 만든다 — 게으르게.** Run 을 만들 때가 아닌 이유가 둘이다:
+              // 예약 템플릿은 한 번도 돌지 않으므로 워크트리가 필요 없고, pendingStart Run 은
+              // 사람이 '실행' 을 누르기 전까지 디스크에 아무것도 남기지 않아야 한다. 이 자리는
+              // 둘 다 이미 지난 곳이다(slotsToFill 이 그 둘을 슬롯으로 내지 않는다).
+              //
+              // 병합 블록보다 앞에 두는 이유: 통합 병합의 대상이 Run 뿌리이므로(아래
+              // integrateWorktrees) 그때 이미 있어야 한다. 동시 실행 2 이상인 Run 은 첫 Task 들이
+              // 자기 워크트리로 가므로 Run 워크트리를 아무도 만들지 않는데, 그 Run 의 통합 Task 는
+              // Run 워크트리에서 돌아야 한다.
+              let run = state.runs.find((r) => r.id === slot.runId)!
+              if (run.worktree === undefined) {
+                try {
+                  // forkWorktree 가 프로젝트가 **서 있는 브랜치**에서 갈라 준다(Step 1). raw
+                  // createWorktree 를 부르면 origin/HEAD 에서 갈라져 최종 병합이 엉뚱한 조상을 끌고
+                  // 온다 — 그 판단은 한 곳에만 있어야 한다.
+                  const created = await forkWorktree({
+                    repoPath: run.cwd,
+                    name: nameForRun(run)
+                  })
+                  const set = await orchHandleCommand(
+                    orch.deps,
+                    { sessionId: UI_CALLER },
+                    'run-worktree-set',
+                    { run: run.id, worktree: created }
+                  )
+                  if (set.status >= 400) {
+                    await gateSlot(
+                      orch.deps,
+                      slot.taskId,
+                      `Run 워크트리를 기록하지 못했습니다: ${JSON.stringify(set.body)}`
+                    )
+                    continue
+                  }
+                  orchLog(`scheduler: run=${run.id} works in ${created}`)
+                  // **상태를 다시 읽는다 — run 만이 아니라 state 도.** 아래 병합 판정
+                  // (pendingMerges·workingInRunRoot)이 이제 run.worktree 를 통해 Run 뿌리를 보므로,
+                  // 방금 기록한 값이 없는 스냅숏으로 물으면 그 둘이 프로젝트 폴더를 기준으로 답한다 —
+                  // Task 2 가 막으려던 그 오답이 여기서 되살아난다.
+                  state = orch.deps.getState()
+                  run = state.runs.find((r) => r.id === slot.runId)!
+                } catch (e) {
+                  // 저장소에 닿을 수 없으면 `NO_REPO:`, HEAD 가 분리됐으면 `NO_BASE:` 다 —
+                  // workerBaseFailure 가 그 문장을 만들고 forkWorktree 가 던진다. 저장소가 아니면
+                  // createWorktree 가 `NOT_GIT_REPO:` 로 던진다(create.ts 의 createWorktree). 셋 다
+                  // 읽을 수 있는 접두사가 붙어 오므로 그대로 Gate 에 싣는다. 다음 상태 변경에 다시
+                  // 시도한다(사람이 저장소를 고치는 것 자체가 상태 변경은 아니지만, 그 Gate 를 푸는
+                  // 것이 상태 변경이다).
+                  await gateSlot(
+                    orch.deps,
+                    slot.taskId,
+                    `Run 워크트리를 만들지 못했습니다: ${String(e)}`
+                  )
+                  continue
+                }
+              }
+              const runRoot = runRootOf(run)
 
               // **통합 단계 — worker-start 앞이다.** 의존이 자기 워크트리에서 돌았다면 그 브랜치의
               // 커밋을 프로젝트 폴더로 먼저 합친다. 앱이 직접 합치고 **충돌할 때만 에이전트에게**
@@ -1379,14 +1400,14 @@ export function registerIpc(
                 // 다음 상태 변경에 다시 본다. 그 워커가 끝나는 것 자체가 상태 변경이다.
                 if (workingInRunRoot(state, slot.runId)) {
                   orchLog(
-                    `scheduler: task=${slot.taskId} waits — a worker is still working in ${run.cwd}`
+                    `scheduler: task=${slot.taskId} waits — a worker is still working in ${runRoot}`
                   )
                   continue
                 }
                 // **여기서부터 git 이 돈다.** 위까지는 상태만 본다 — runScheduler 는 모든 저장마다
                 // 불리고 그 대부분은 합칠 것이 없는 저장이므로, 그 바퀴에 git 프로세스를 띄우지 않는다
                 // (슬롯이 없을 때 계정 조회 앞에서 빠지는 것과 같은 성격이다).
-                const integration = await integrateWorktrees(run.cwd, merges)
+                const integration = await integrateWorktrees(runRoot, merges)
                 if (integration.kind === 'human') {
                   await gateSlot(orch.deps, slot.taskId, integration.reason)
                   continue
@@ -1454,23 +1475,28 @@ export function registerIpc(
               // 변경에 다시 본다(앞의 것이 끝나는 것 자체가 상태 변경이다).
               if (isIntegrationTask(task) && workingInRunRoot(state, slot.runId)) {
                 orchLog(
-                  `scheduler: integration task=${slot.taskId} waits — a worker is still working in ${run.cwd}`
+                  `scheduler: integration task=${slot.taskId} waits — a worker is still working in ${runRoot}`
                 )
                 continue
               }
 
               const limit = run.concurrency ?? DEFAULT_CONCURRENCY
-              // **통합 Task 는 프로젝트 폴더에서 돈다 — 위 규칙의 유일한 예외다.** 예외인 이유는 그
-              // Task 의 일 자체가 "프로젝트 폴더로 합치는 것"이라서다: 자기 워크트리에서 돌면 origin
-              // 기준으로 갈라진 다른 브랜치에 합치게 되어 아무 값이 없고, buildSpecFile 이 붙이는 커밋
-              // 의무("이 워크트리에 커밋하라")가 spec 본문("프로젝트 폴더에 합치고 커밋하라")과 정면으로
-              // 부딪힌다(코디네이터가 검토 spec 을 구현자 템플릿으로 감싸지 않는 것과 같은 부류의
-              // 충돌이다). 섞지 않는 원래 이유(프로젝트 폴더에 커밋 안 된 변경이 남으면 합칠 자리가
-              // 없어진다)는 여기서도 지켜진다: 그 spec 이 끝에 작업 트리를 깨끗하게 두라고 요구하고,
-              // 그 Dispatch 가 열려 있는 동안은 workingInRunRoot 가 앱의 병합을 막는다.
+              // **통합 Task 는 Run 워크트리에서 돈다 — Task 별 워크트리 규칙의 예외다.** 예외인
+              // 이유는 그 Task 의 일 자체가 "이 뿌리로 합치는 것" 이라서다: 자기 워크트리에서 돌면
+              // origin 기준으로 갈라진 다른 브랜치에 합치게 되어 아무 값이 없고, buildSpecFile 이
+              // 붙이는 커밋 의무("이 워크트리에 커밋하라")가 spec 본문("이 폴더에 합치고 커밋하라")과
+              // 정면으로 부딪힌다(코디네이터가 검토 spec 을 구현자 템플릿으로 감싸지 않는 것과 같은
+              // 부류의 충돌이다). 섞지 않는 원래 이유(합칠 폴더에 커밋 안 된 변경이 남으면 합칠
+              // 자리가 없어진다)는 여기서도 지켜진다: 그 spec 이 끝에 작업 트리를 깨끗하게 두라고
+              // 요구하고, 그 Dispatch 가 열려 있는 동안은 workingInRunRoot 가 앱의 병합을 막는다.
+              //
+              // **'current' 를 앱이 더 이상 보내지 않는다.** 명시 경로 분기(coordinator.ts)로
+              // 보내는 이유는 그쪽이 fs.stat 으로 존재를 확인해 주기 때문이고, 'current' 는
+              // runCwd(= 프로젝트 폴더)를 뜻하므로 이제 앱이 원하는 자리가 아니다. 그 분기 자체는
+              // 남는다 — `worker-start --worktree current` 는 사람이 부를 수 있는 CLI 명령이다.
               const placement =
                 isIntegrationTask(task) || limit <= 1
-                  ? { worktree: 'current' }
+                  ? { worktree: runRoot }
                   : {
                       // nameForTask 는 이미 slugify 를 거친 값(또는 그것이 던질 때의 Task id)을 낸다 —
                       // 여기서 이미 유일성을 보장하지는 않지만, createWorktree 가 받는 이름에 slugify 를
