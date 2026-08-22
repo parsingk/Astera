@@ -37,6 +37,7 @@ import {
   type Task,
   type TaskStatus
 } from '../../core/orchestration/types'
+import { runWorktrees } from '../../core/orchestration/integrate'
 import type { Provider } from '../../core/providers/meta'
 import { isValidRule, type ScheduleRule } from '../../core/scheduler/rule'
 
@@ -73,6 +74,16 @@ export interface OrchServerDeps {
    *  wiring passes OrchestrationStore.backup. Optional for the same reason as now? and log? — if it
    *  is not injected the backup is skipped (existing tests that do not use the store). */
   backup?(): Promise<void>
+  /** 이 Run 의 워크트리 브랜치들을 프로젝트 폴더에 합친다 — `run-delete --merge` 가 부른다.
+   *  실패하면 사람이 읽을 이유를 돌려주고, 그때 삭제는 일어나지 않는다(그 case 의 주석).
+   *  주입인 이유: 실제 병합은 git 을 돌리고 Gate 문구까지 만드는 배선의 일이라 src/main/ipc.ts 에
+   *  있고, 이 파일은 그것을 호출만 한다 — now?/backup? 과 같은 관례로 optional 이다(주입되지 않으면
+   *  병합을 요청받아도 할 수 없으므로 거절한다). */
+  mergeWorktrees?(runCwd: string, paths: string[]): Promise<{ ok: true } | { ok: false; reason: string }>
+  /** 이 경로들의 워크트리를 폴더째 지운다 — `run-delete --remove-worktrees` 가 부른다. 그 안에서
+   *  도는 세션을 닫는 일까지 배선이 한다(removeWorktree 의 isPathInUse 가 그러지 않으면 거절한다).
+   *  실패한 경로는 돌려준다 — 삭제를 막지는 않지만 응답에 실어 사람이 알 수 있게 한다. */
+  removeWorktrees?(paths: string[]): Promise<{ failed: string[] }>
   listAccounts(provider?: Provider): { id: string; label: string; provider: Provider }[]
   readWorker(a: { dispatchId: string; limit?: number }): Promise<string>
   enabled(): boolean
@@ -359,6 +370,8 @@ export async function handleCommand(
       // **템플릿을 지우면 그 회차도 함께 지운다.** 자식만 남기면 정의가 사라진 회차 기록이
       // 프로젝트 목록에 떠돌고, 사이드바에서 접을 부모가 없다. 자식 하나만 지우는 것은 그대로
       // 된다 — 그것은 기록 하나를 버리는 일이고 정의는 템플릿에 있다.
+      const run = s.runs.find((r) => r.id === id)
+      if (!run) return bad(`unknown run: ${String(id)}`)
       const doomed = new Set([id, ...s.runs.filter((r) => r.templateId === id).map((r) => r.id)])
       // 도는 워커가 있으면 거절한다 — reset 이 같은 판정을 한다. 삭제는 되돌릴 수 없으므로 도는
       // 상태에서 다룰 것을 하나 더 만들지 않는다. 세션을 죽이는 일까지 이 명령이 하게 하면, 커밋
@@ -392,12 +405,31 @@ export async function handleCommand(
         // 사라지는 것은 아래 deleteRuns 가 한꺼번에 한다.
         for (const d of open) await deps.releaseWorker({ dispatchId: d.id })
       }
+      // **병합이 먼저다.** 사람이 병합을 골랐는데 실패한 뒤 지우면 워커의 일이 워크트리 브랜치에
+      // 갇힌 채 그 브랜치까지 사라진다 — 그래서 실패하면 아무것도 지우지 않고 이유를 돌려준다.
+      // 순서도 이래야 한다: 폴더를 먼저 지우면 합칠 대상이 없어진다.
+      const worktrees = runWorktrees(s, id)
+      if (args.merge === true && worktrees.length > 0) {
+        if (!deps.mergeWorktrees) return bad('merging is not available in this build')
+        const merged = await deps.mergeWorktrees(run.cwd, worktrees)
+        if (!merged.ok) return conflict(merged.reason)
+      }
       // 백업은 지우기 전에. reset 과 같은 관례이고 같은 이유다 — 되돌릴 수 없는 삭제에 .bak 하나는
       // 값이 싸다. 실패해도 삭제를 막지 않는다(deps.backup 이 스스로 접는다).
       if (deps.backup) await deps.backup()
+      // 폴더 삭제는 상태를 지우기 전에 한다 — 지운 뒤에는 어느 워크트리였는지 상태에서 읽을 수 없다.
+      // 실패한 경로는 응답에 실어 보낸다: 삭제 자체를 막을 이유는 없고(기록을 지우는 것과 폴더를
+      // 지우는 것은 다른 일이다) 사람이 남은 것을 알아야 한다.
+      let worktreesFailed: string[] = []
+      if (args.removeWorktrees === true && worktrees.length > 0 && deps.removeWorktrees)
+        worktreesFailed = (await deps.removeWorktrees(worktrees)).failed
       const before = s.tasks.filter((t) => doomed.has(t.runId)).length
       await deps.setState(deleteRuns(deps.getState(), doomed))
-      return okBody({ deleted: id, tasks: before })
+      return okBody({
+        deleted: id,
+        tasks: before,
+        ...(worktreesFailed.length > 0 ? { worktreesFailed } : {})
+      })
     }
     // 예약 템플릿의 한 회차를 만든다. **부르는 것은 앱의 ticker 뿐이다**(src/main/ipc.ts) —
     // 코디네이터에게 이 명령을 광고하지 않는다. 그래도 명령으로 두는 이유는 이 파일이 지키는

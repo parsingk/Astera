@@ -467,6 +467,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .provider-badge { flex: none; display: inline-flex; align-items: center; line-height: 1; opacity: 0.85; }
 .provider-badge.claude { color: var(--brand-claude); font-size: 11px; }
 .provider-badge.codex { color: var(--brand-codex); } /* the OpenAI mark — its size is set by the svg attributes */
+/* 확인 창 안의 곁가지 선택들. 본문과 버튼 줄 사이에 서므로 위아래 여백을 스스로 갖는다 */
+.confirm-choices { display: flex; flex-direction: column; gap: 8px; margin: 2px 0; }
+/* 그 선택이 무엇을 잃게 하는지 — 라벨 아래 줄로 내려 붙는다(경고가 아니라 사실이라 톤은 흐리게) */
+.confirm-choice-hint { display: block; margin-top: 2px; font-size: 10.5px; color: var(--text-faint); }
 .confirm-text { font-size: 13px; color: var(--text); line-height: 1.5; margin: 0 0 12px; }
 .toggle-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-dim); cursor: pointer; user-select: none; }
 .warn-text { font-size: 11.5px; color: var(--warn); line-height: 1.5; margin: 8px 0 0; }

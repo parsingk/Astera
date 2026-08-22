@@ -60,6 +60,32 @@ function worktreeDeps(s: OrchState, taskId: string): WorktreeDep[] {
   return found
 }
 
+/** 이 Run 의 Dispatch 가 쓴 워크트리 경로들, 중복 없이 — 만난 순서 그대로.
+ *
+ *  삭제 모달이 "워크트리 N 개" 를 적고, 감추기 체크박스가 이 경로들을 렌더러의 숨김 목록에 넣고,
+ *  폴더 삭제가 이것들을 지운다. 그래서 이 값이 **모달이 세는 것과 앱이 실제로 다루는 것을 같게**
+ *  만드는 자리다.
+ *
+ *  판정은 pendingMerges 와 같은 규칙이다 — `dispatch.cwd` 가 `run.cwd` 가 아니면 워크트리이고,
+ *  비교는 `!==` 가 아니라 isSamePath 다(그 이유는 worktreeDeps 의 주석에 있다: 두 값이 따로 기록되어
+ *  대소문자나 구분자가 다를 수 있다).
+ *
+ *  **끝난 Dispatch 만 보지 않는다.** worktreeDeps 는 "합칠 것이 있는가" 를 묻기 때문에 끝난 것만
+ *  세지만, 여기서 묻는 것은 "이 Run 이 어느 폴더를 썼는가" 이고 그 답은 열려 있는 것도 포함한다 —
+ *  지우려는 사람에게는 그 폴더도 지울 대상이다. */
+export function runWorktrees(s: OrchState, runId: string): string[] {
+  const taskIds = new Set(s.tasks.filter((t) => t.runId === runId).map((t) => t.id))
+  const run = s.runs.find((r) => r.id === runId)
+  if (!run) return []
+  const out: string[] = []
+  for (const d of s.dispatches) {
+    if (!taskIds.has(d.taskId)) continue
+    if (isSamePath(d.cwd, run.cwd)) continue
+    if (!out.some((p) => isSamePath(p, d.cwd))) out.push(d.cwd)
+  }
+  return out
+}
+
 /** 이 Task 를 띄우기 전에 프로젝트 폴더로 합쳐야 하는 워크트리들. 비어 있으면 그대로 띄운다.
  *
  *  **같은 워크트리는 하나로 합친다.** 한 Task 에 Dispatch 가 둘일 수 있다(재시도, 그리고 구현자가

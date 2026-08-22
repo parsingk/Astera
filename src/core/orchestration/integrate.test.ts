@@ -5,6 +5,7 @@ import {
   isIntegrationTask,
   pendingMerges,
   runsWorkingIn,
+  runWorktrees,
   workingInProjectFolder,
   worktreeDepsOf
 } from './integrate'
@@ -369,5 +370,49 @@ describe('buildIntegrationSpec', () => {
   it('되돌리지 말라고 적는다 — 앱은 "합쳤다"와 "포기했다"를 구별할 수 없다', () => {
     expect(spec()).toContain('git merge --abort')
     expect(spec()).toContain('git reset --hard')
+  })
+})
+
+describe('runWorktrees', () => {
+  // 삭제 모달이 "워크트리 N 개" 를 적고, 감추기 체크박스가 그 경로를 렌더러의 숨김 목록에 넣는다.
+  // 판정은 pendingMerges 와 **같은 규칙**이다(dispatch.cwd 가 run.cwd 가 아니면 워크트리) — 두
+  // 번째 정의를 만들면 모달이 세는 것과 앱이 합치는 것이 갈라진다
+  it('이 Run 의 Dispatch 가 쓴 워크트리 경로를 중복 없이 돌려준다', () => {
+    const s = state({
+      tasks: [task('t1'), task('t2'), task('t3')],
+      dispatches: [
+        dispatch('dsp_1', { taskId: 't1', cwd: WT_A }),
+        dispatch('dsp_2', { taskId: 't2', cwd: WT_B }),
+        // 같은 워크트리의 두 번째 Dispatch(재시도·검토) — 한 번만 센다
+        dispatch('dsp_3', { taskId: 't2', cwd: WT_B }),
+        // 프로젝트 폴더에서 돈 것은 워크트리가 아니다
+        dispatch('dsp_4', { taskId: 't3', cwd: RUN_CWD })
+      ]
+    })
+    expect(runWorktrees(s, 'run_1')).toEqual([WT_A, WT_B])
+  })
+
+  it('워크트리를 쓰지 않은 Run 은 빈 배열이다', () => {
+    const s = state({
+      tasks: [task('t1')],
+      dispatches: [dispatch('dsp_1', { taskId: 't1', cwd: RUN_CWD })]
+    })
+    expect(runWorktrees(s, 'run_1')).toEqual([])
+  })
+
+  it('없는 Run 은 빈 배열이다', () => {
+    expect(runWorktrees(state(), 'run_nope')).toEqual([])
+  })
+
+  it('다른 Run 의 워크트리는 세지 않는다', () => {
+    const s = state({
+      runs: [run(), run({ id: 'run_2' })],
+      tasks: [task('t1'), task('t2', { runId: 'run_2' })],
+      dispatches: [
+        dispatch('dsp_1', { taskId: 't1', cwd: WT_A }),
+        dispatch('dsp_2', { taskId: 't2', cwd: WT_B })
+      ]
+    })
+    expect(runWorktrees(s, 'run_1')).toEqual([WT_A])
   })
 })

@@ -10,7 +10,7 @@
 // either fails (files/tree.ts's node:path import has no declarations there) or "succeeds" by adding
 // "types": ["node"], which loosens the guard that keeps Node globals out of the renderer typecheck.
 import { isSamePath } from '../files/tree'
-import { runsWorkingIn } from './integrate'
+import { runsWorkingIn, runWorktrees } from './integrate'
 import type { JobRun, JobTask, OrchSnapshot, RunOutcome, WorktreeInfo } from '../types'
 import { repoPathOf } from '../worktrees/repo'
 import type { OrchState } from './state'
@@ -193,6 +193,7 @@ export function snapshotFor(
   const workingHere = runsWorkingIn(state, projectPath)
   const runs = runsForProject(state, projectPath, worktrees).map((run): JobRun => {
     const { done, total } = progressOf(state, run.id)
+    const worktreesOf = runWorktrees(state, run.id)
     return {
       id: run.id,
       objective: run.objective,
@@ -208,6 +209,9 @@ export function snapshotFor(
       // 내가 그 폴더에 있고, 나 말고도 있는가. 크기만 보면 남의 얽힘까지 내 줄에 그리게 된다
       sharesProjectFolder: workingHere.has(run.id) && workingHere.size > 1,
       ...(run.pendingStart ? { pendingStart: true } : {}),
+      // 빈 배열은 싣지 않는다 — sameSnapshot 의 문자열을 이유 없이 늘리고, "워크트리를 안 썼다" 와
+      // "이 칸이 없다" 가 화면에서 같은 뜻이다(JobRun.children 과 같은 판단)
+      ...(worktreesOf.length > 0 ? { worktrees: worktreesOf } : {}),
       ...(run.schedule ? { schedule: run.schedule } : {}),
       ...(run.fireCount !== undefined ? { fireCount: run.fireCount } : {}),
       ...(run.fireOrdinal !== undefined ? { fireOrdinal: run.fireOrdinal } : {}),

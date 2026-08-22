@@ -58,7 +58,8 @@ import type { UndoEntry } from '../../core/files/undo'
 import * as sessionBus from './lib/sessionBus'
 import * as sticky from './lib/stickyProject'
 import { toast } from './lib/toast'
-import { confirmModal, isConfirmOpen } from './lib/confirm'
+import { confirmModal, confirmModalWithChoices, isConfirmOpen } from './lib/confirm'
+import * as hiddenProjects from './lib/hiddenProjects'
 import { worktreeErrorMessage } from './lib/worktreeErrors'
 import { notifyCreated as notifyWorktreeCreated } from './lib/worktreeBus'
 import { useI18n } from './i18n/I18nProvider'
@@ -2430,7 +2431,11 @@ export default function App(): React.JSX.Element {
                       (n, r) => n + r.tasks.filter((tk) => tk.startedAt !== undefined).length,
                       0
                     )
-                    const ok = await confirmModal({
+                    // **예약이 아니고 워크트리를 쓴 Run 에만 선택지를 준다.** 예약 템플릿은 회차까지
+                    // 지우는 별개 흐름이고, 워크트리를 쓰지 않은 Run(동시 실행 1 의 배치 규칙)에는
+                    // 합칠 것도 지울 폴더도 없다 — 뜻 없는 체크박스를 띄우지 않는다.
+                    const wt = run.schedule ? [] : (run.worktrees ?? [])
+                    const answer = await confirmModalWithChoices({
                       title: t('jobs.run.delete'),
                       // 예약 템플릿을 지우는 것만 워커를 정지시킨다(server.ts 의 run-delete) —
                       // 되돌릴 수 없는 동작이므로 무엇이 함께 사라지는지 여기서 말한다
@@ -2443,12 +2448,37 @@ export default function App(): React.JSX.Element {
                         (run.schedule && workers > 0
                           ? '\n\n' + t('jobs.run.deleteStopsWorkers', { workers })
                           : ''),
-                      confirmLabel: t('jobs.run.delete')
+                      confirmLabel: t('jobs.run.delete'),
+                      ...(wt.length > 0
+                        ? {
+                            choices: [
+                              {
+                                id: 'merge',
+                                label: t('jobs.run.deleteMerge'),
+                                hint: t('jobs.run.deleteMergeHint', { count: wt.length })
+                              },
+                              { id: 'hide', label: t('jobs.run.deleteHide') },
+                              {
+                                id: 'worktrees',
+                                label: t('jobs.run.deleteWorktrees', { count: wt.length }),
+                                // 병합 없이 지우면 합치지 않은 커밋이 그때 사라진다. 조건부로 띄우는
+                                // 대신 늘 적는다 — 그 조합을 고르는 순간에 읽혀야 하는 문장이다
+                                hint: t('jobs.run.deleteWorktreesHint')
+                              }
+                            ]
+                          }
+                        : {})
                     })
-                    if (!ok) return
+                    if (!answer.ok) return
+                    // 감추기는 렌더러가 가진 목록이라 여기서 한다 — 명령이 아니라 표시의 문제다.
+                    // 폴더를 지우면 어차피 자동으로 감춰지지만(hiddenHistory), 폴더는 남기고 목록만
+                    // 치우고 싶을 때가 이 선택이 있는 이유다.
+                    if (answer.checked.includes('hide')) for (const p of wt) hiddenProjects.hide(p)
                     try {
                       const reply = await window.api.orch.command(currentProject, 'run-delete', {
-                        id: runId
+                        id: runId,
+                        ...(answer.checked.includes('merge') ? { merge: true } : {}),
+                        ...(answer.checked.includes('worktrees') ? { removeWorktrees: true } : {})
                       })
                       // 409 의 두 갈래를 가른다. **문구로 가르는 이유**: 양쪽 문장이 모두 우리
                       // server.ts 의 것이고, "멈춰 주세요" 는 붙잡아 둔 세션에 틀린 안내다 —

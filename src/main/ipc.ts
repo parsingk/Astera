@@ -976,6 +976,60 @@ export function registerIpc(
      *  바뀐다 — 고정 대기가 아니라 조건을 폴링하고(coordinator 의 waitUntilIdle 과 같은 관례) 이
      *  시간을 넘기면 정리를 건너뛴다. 살아 있는 프로세스 밑의 폴더는 지우지 않는다. */
     const WORKTREE_CLOSE_TIMEOUT_MS = 5_000
+    /**
+     * 워크트리 하나를 폴더째 지운다 — 그 안에서 도는 세션을 먼저 닫고. true = 지워졌다.
+     *
+     * **두 곳이 이것을 쓴다**: 병합 직후의 자동 정리와 `run-delete --remove-worktrees`. 복제하면
+     * "무엇을 닫아도 되는가" 의 답이 두 벌이 되고, 한쪽만 고쳐지는 날 다른 쪽이 살아 있는 세션 밑의
+     * 폴더를 지운다.
+     *
+     * **세션을 먼저 닫는 이유**: 끝난 워커의 세션은 스스로 죽지 않는다 — worker-release 는 코디네이터가
+     * 부르는 명령이고 앱이 자동으로 부르는 자리가 없다. 닫지 않으면 removeWorktree 의 isPathInUse 가
+     * 늘 IN_USE 를 내고 이 정리는 사실상 한 번도 돌지 않는다.
+     *
+     * **닫지 않는 두 경우**: 붙잡아 둔 세션(worker-retain — 사람이 살려 두라고 말한 것)과 아직 열려
+     * 있는 Dispatch 의 세션(지금 일하는 중이다). 그때는 아무것도 닫지 않고 그 워크트리를 그대로 둔다 —
+     * removeWorktree 가 IN_USE 로 거절하는 것이 그 결과다. run-delete 가 retained 에 같은 예외를 둔다.
+     */
+    const reapWorktree = async (worktreePath: string): Promise<boolean> => {
+      const inTree = core.sessions
+        .list()
+        .filter((x) => x.status === 'running' && isPathWithin(worktreePath, x.cwd))
+      const held = (orch?.deps.getState().dispatches ?? []).some(
+        (d) =>
+          (d.retained || (!d.outcome && !d.endedAt)) && inTree.some((x) => x.id === d.sessionId)
+      )
+      if (held) {
+        orchLog(`worktree ${worktreePath} has a held or working session — left alone`)
+        return false
+      }
+      for (const x of inTree) core.sessions.kill(x.id)
+      // 조건 폴링. 상태가 바뀌는 것을 기다리는 것이지 정해진 시간을 자는 것이 아니다
+      const deadline = Date.now() + WORKTREE_CLOSE_TIMEOUT_MS
+      while (
+        Date.now() < deadline &&
+        core.sessions.list().some((x) => x.status === 'running' && isPathWithin(worktreePath, x.cwd))
+      )
+        await new Promise((r) => setTimeout(r, 50))
+      const entry = core.worktrees.list().find((w) => isSamePath(w.path, worktreePath))
+      if (!entry) {
+        orchLog(`${worktreePath} is not an app worktree — left alone`)
+        return false
+      }
+      try {
+        const removed = await removeWorktree({
+          id: entry.id,
+          force: true,
+          registry: core.worktrees,
+          isPathInUse: isWorktreeInUse
+        })
+        orchLog(`removed worktree ${worktreePath} (branch deleted=${removed.branchDeleted})`)
+        return true
+      } catch (e) {
+        orchLog(`worktree cleanup skipped for ${worktreePath}: ${String(e)}`)
+        return false
+      }
+    }
     const integrateWorktrees = async (runCwd: string, paths: string[]): Promise<Integration> => {
       // 1. **저장소가 무언가의 중간이면 아무것도 하지 않는다.** 아래 2의 porcelain 검사는 경로 항목만
       //    내므로 브랜치·상태를 전혀 말하지 않는다 — 작업 트리가 깨끗한 채로 rebase·bisect 중인
@@ -1187,54 +1241,7 @@ export function registerIpc(
         // 정리가 안 됐다고 Gate 를 열면 사람이 손쓸 것도 없는 자리에서 파이프라인이 선다. 도는
         // 세션이 그 폴더를 쓰고 있으면 removeWorktree 가 IN_USE 로 던지고 **그것이 맞다**: 살아 있는
         // 프로세스 밑의 폴더는 지우지 않는다. 그때 그 워크트리는 남고 이유는 로그에 남는다.
-        // **세션을 먼저 닫는다.** 끝난 워커의 세션은 스스로 죽지 않는다 — worker-release 는
-        // 코디네이터가 부르는 명령이고 앱이 자동으로 부르는 자리가 없다. 닫지 않으면 아래
-        // removeWorktree 의 isPathInUse 가 늘 IN_USE 를 내고, 이 정리는 사실상 한 번도 돌지 않는다.
-        //
-        // **닫지 않는 두 경우.** 붙잡아 둔 세션(worker-retain — 사람이 살려 두라고 말한 것)과 아직
-        // 열려 있는 Dispatch 의 세션(지금 일하는 중이다)이다. 그때는 아무것도 닫지 않고 그 워크트리를
-        // 그대로 둔다 — removeWorktree 가 IN_USE 로 거절하는 것이 그 결과다. run-delete 가 retained
-        // 에 대해 같은 예외를 둔다.
-        const inTree = core.sessions
-          .list()
-          .filter((x) => x.status === 'running' && isPathWithin(target.path, x.cwd))
-        const held = (orch?.deps.getState().dispatches ?? []).some(
-          (d) =>
-            (d.retained || (!d.outcome && !d.endedAt)) &&
-            inTree.some((x) => x.id === d.sessionId)
-        )
-        if (held) {
-          orchLog(`scheduler: worktree ${target.path} has a held or working session — left alone`)
-        } else {
-          for (const x of inTree) core.sessions.kill(x.id)
-          // 조건 폴링. 상태가 바뀌는 것을 기다리는 것이지 정해진 시간을 자는 것이 아니다
-          const deadline = Date.now() + WORKTREE_CLOSE_TIMEOUT_MS
-          while (
-            Date.now() < deadline &&
-            core.sessions
-              .list()
-              .some((x) => x.status === 'running' && isPathWithin(target.path, x.cwd))
-          )
-            await new Promise((r) => setTimeout(r, 50))
-        }
-        const entry = core.worktrees.list().find((w) => isSamePath(w.path, target.path))
-        if (!entry) {
-          orchLog(`scheduler: ${target.path} is not an app worktree — left alone`)
-        } else {
-          try {
-            const removed = await removeWorktree({
-              id: entry.id,
-              force: true,
-              registry: core.worktrees,
-              isPathInUse: isWorktreeInUse
-            })
-            orchLog(
-              `scheduler: removed worktree ${target.path} (branch=${target.branch} deleted=${removed.branchDeleted})`
-            )
-          } catch (e) {
-            orchLog(`scheduler: worktree cleanup skipped for ${target.path}: ${String(e)}`)
-          }
-        }
+        await reapWorktree(target.path)
       }
       return { kind: 'merged' }
     }
@@ -1565,6 +1572,20 @@ export function registerIpc(
       },
       // The .bak for reset — the one documented safety net for a destructive operation
       backup: () => store.backup(),
+      // `run-delete --merge` 가 부른다. integrateWorktrees 의 'agent'(충돌 → 에이전트에게 넘김)도
+      // 여기서는 실패다 — 넘길 Run 을 지우는 중이라 통합 Task 를 붙일 자리가 없다. 두 경우 모두
+      // 이유를 그대로 올려 보내 사람이 무엇을 해야 하는지 읽게 한다.
+      mergeWorktrees: async (runCwd, paths) => {
+        const r = await integrateWorktrees(runCwd, paths)
+        return r.kind === 'merged' ? { ok: true } : { ok: false, reason: r.reason }
+      },
+      // `run-delete --remove-worktrees` 가 부른다. 순차로 지운다 — reapWorktree 가 세션을 닫고
+      // 상태가 바뀌기를 기다리므로, 병렬로 돌리면 서로의 폴링이 남의 세션을 기다린다.
+      removeWorktrees: async (paths) => {
+        const failed: string[] = []
+        for (const p of paths) if (!(await reapWorktree(p))) failed.push(p)
+        return { failed }
+      },
       startWorker: async (a) => {
         const started = await coordinator.startWorker(a)
         // From this point on, that session's output belongs to this dispatch. On reuse (--terminal) the

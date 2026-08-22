@@ -2509,3 +2509,122 @@ describe('run-start — 사람이 실행을 누를 때까지 기다린다', () =
     expect((await call(deps, 'run-start', { run: id }, 'worker1')).status).toBe(403)
   })
 })
+
+describe('run-delete — 병합·워크트리 선택', () => {
+  /** 워크트리에서 끝난 Dispatch 하나를 가진 평범한 Run. 지우기가 거절되지 않도록 Dispatch 는 끝난
+   *  상태로 둔다(열려 있으면 409 다 — 그 규칙은 다른 테스트가 지킨다) */
+  const withFinishedWorktree = async (): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    runId: string
+    merged: string[][]
+    removed: string[][]
+    mergeOk: { value: boolean }
+  }> => {
+    const merged: string[][] = []
+    const removed: string[][] = []
+    const mergeOk = { value: true }
+    const base = makeDeps()
+    const deps = Object.assign(base, {
+      mergeWorktrees: async (_cwd: string, paths: string[]) => {
+        merged.push(paths)
+        return mergeOk.value ? { ok: true as const } : { ok: false as const, reason: '프로젝트 폴더가 지저분합니다' }
+      },
+      removeWorktrees: async (paths: string[]) => {
+        removed.push(paths)
+        return { failed: [] as string[] }
+      }
+    })
+    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', provider: 'claude' })
+    const runId = (c.body as { id: string }).id
+    await deps.setState({
+      ...deps.getState(),
+      tasks: [
+        {
+          id: 'tsk_w',
+          runId,
+          title: 't',
+          spec: 's',
+          deps: [],
+          status: 'completed',
+          consecutiveFailures: 0,
+          createdAt: NOW,
+          updatedAt: NOW
+        }
+      ],
+      dispatches: [
+        {
+          id: 'dsp_w',
+          taskId: 'tsk_w',
+          provider: 'claude',
+          accountId: 'acc1',
+          sessionId: 'sess_w',
+          cwd: 'D:/wt/a',
+          specPath: 'D:/wt/a/spec.md',
+          startedAt: NOW,
+          endedAt: NOW,
+          outcome: 'succeeded',
+          workerState: 'ready',
+          retained: false
+        }
+      ]
+    })
+    return { deps, runId, merged, removed, mergeOk }
+  }
+
+  it('아무것도 고르지 않으면 오늘과 같다 — 병합도 폴더 삭제도 없다', async () => {
+    const { deps, runId, merged, removed } = await withFinishedWorktree()
+    expect((await call(deps, 'run-delete', { id: runId })).status).toBe(200)
+    expect(merged).toEqual([])
+    expect(removed).toEqual([])
+    expect(deps.getState().runs).toHaveLength(0)
+  })
+
+  it('merge 를 고르면 그 Run 의 워크트리를 합친 뒤 지운다', async () => {
+    const { deps, runId, merged } = await withFinishedWorktree()
+    expect((await call(deps, 'run-delete', { id: runId, merge: true })).status).toBe(200)
+    expect(merged).toEqual([['D:/wt/a']])
+    expect(deps.getState().runs).toHaveLength(0)
+  })
+
+  // 이 테스트가 이 기능의 급소다. 병합을 원했는데 실패한 뒤 지우면 워커의 일이 브랜치째 사라진다
+  it('병합이 실패하면 아무것도 지우지 않고 이유를 돌려준다', async () => {
+    const { deps, runId, mergeOk, removed } = await withFinishedWorktree()
+    mergeOk.value = false
+    const r = await call(deps, 'run-delete', { id: runId, merge: true, removeWorktrees: true })
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toContain('지저분')
+    expect(removed).toEqual([])
+    expect(deps.getState().runs).toHaveLength(1)
+  })
+
+  it('removeWorktrees 를 고르면 폴더를 지운다', async () => {
+    const { deps, runId, removed } = await withFinishedWorktree()
+    expect((await call(deps, 'run-delete', { id: runId, removeWorktrees: true })).status).toBe(200)
+    expect(removed).toEqual([['D:/wt/a']])
+  })
+
+  it('폴더 삭제가 실패한 경로는 응답에 실어 보낸다 — 삭제 자체는 막지 않는다', async () => {
+    const { deps, runId } = await withFinishedWorktree()
+    const withFailure = Object.assign(deps, {
+      removeWorktrees: async () => ({ failed: ['D:/wt/a'] })
+    })
+    const r = await call(withFailure, 'run-delete', { id: runId, removeWorktrees: true })
+    expect(r.status).toBe(200)
+    expect((r.body as { worktreesFailed?: string[] }).worktreesFailed).toEqual(['D:/wt/a'])
+    expect(withFailure.getState().runs).toHaveLength(0)
+  })
+
+  it('워크트리를 쓰지 않은 Run 은 merge 를 골라도 병합을 부르지 않는다', async () => {
+    const merged: string[][] = []
+    const deps = Object.assign(makeDeps(), {
+      mergeWorktrees: async (_c: string, p: string[]) => {
+        merged.push(p)
+        return { ok: true as const }
+      }
+    })
+    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', provider: 'claude' })
+    const id = (c.body as { id: string }).id
+    expect((await call(deps, 'run-delete', { id, merge: true })).status).toBe(200)
+    expect(merged).toEqual([])
+  })
+})

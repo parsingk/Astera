@@ -549,6 +549,29 @@ const child = (id: string, cwd: string, templateId: string): Run => ({
   createdAt: '2026-08-19T00:00:00.000Z'
 })
 
+describe('snapshotFor — 이 Run 이 쓴 워크트리', () => {
+  it('워크트리 경로를 싣고, 없으면 칸도 없다', () => {
+    const wtPath = absPath('wt', 'a')
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('proj')), run('r2', absPath('proj'))], [
+        task('t1', 'r1', 'completed'),
+        task('t2', 'r2', 'completed')
+      ]),
+      dispatches: [
+        dispatch('d1', 't1', 'sess1', '2026-08-18T00:00:00.000Z'),
+        dispatch('d2', 't2', 'sess2', '2026-08-18T00:00:00.000Z')
+      ]
+    }
+    // d1 만 워크트리에서 돌았다고 만든다 — dispatch 헬퍼는 cwd 를 absPath('p') 로 준다
+    s.dispatches[0] = { ...s.dispatches[0], cwd: wtPath }
+    s.dispatches[1] = { ...s.dispatches[1], cwd: absPath('proj') }
+    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires)
+    const byId = new Map(snap.runs.map((r) => [r.id, r]))
+    expect(byId.get('r1')!.worktrees).toEqual([wtPath])
+    expect('worktrees' in byId.get('r2')!).toBe(false)
+  })
+})
+
 describe('snapshotFor — 실행 대기', () => {
   it('pendingStart 를 그대로 싣고, 없으면 칸도 없다', () => {
     const waiting = { ...run('r1', absPath('proj')), pendingStart: true }

@@ -384,6 +384,10 @@ export interface JobRun {
    *  병합 단계도(deps 가 같은 폴더에서 돌아 pendingMerges 가 비었다) 지나지 않아 **앱의 어떤
    *  기계도 알아채지 못한다.** 이 화면 말고는 아무도 그것을 말해 주지 않는다. */
   sharesProjectFolder: boolean
+  /** 이 Run 의 Dispatch 가 쓴 워크트리 경로들 — 삭제 모달이 개수를 적고, 감추기 체크박스가 이
+   *  경로들을 히스토리 숨김 목록에 넣는다. 비어 있으면 그 Run 은 프로젝트 폴더에서만 일했다
+   *  (동시 실행 1 의 배치 규칙). */
+  worktrees?: string[]
   /** 사용자가 아직 '실행' 을 누르지 않았다 — Run 이 들고 있는 값을 그대로 옮긴 것이다.
    *  상세 창의 실행 버튼과 사이드바의 표시가 이 값으로 판단한다. */
   pendingStart?: boolean
