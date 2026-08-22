@@ -173,6 +173,34 @@ describe('HistoryIndex (lazy)', () => {
     const projectNames = async (): Promise<string[]> =>
       (await index!.projectsPage()).projects.map((p) => p.name).sort()
 
+    /** 워처가 붙기 직전의 변경까지 흘려보낸다.
+     *
+     *  macOS 의 FSEvents 는 워치 시작 직전의 변경도 첫 배치로 재생한다(아래 countingDescriptors 의
+     *  주석이 그 이유로 관찰을 디스크 상태에서 호출 횟수로 옮겼다). 그런데 **호출 횟수도 오염된다**:
+     *  재생된 이벤트는 전량 재읽기를 일으키지는 않지만 폴더 단위 재계산으로는 처리되므로, "어느 폴더가
+     *  다시 읽혔나" 에 손대지 않은 프로젝트가 섞인다 — macOS CI 에서 실제로 그렇게 실패했다(dirs 에
+     *  proj-b 가 들어왔다).
+     *
+     *  그래서 재생이 멎을 때까지 기다리고, 남은 pendingDirs 를 한 번의 조회로 소진한 뒤 폴더 계수기만
+     *  0 으로 맞춘다. full 은 건드리지 않는다 — 재생은 전량 재읽기를 만들지 않으므로 그 수는 이미 맞고,
+     *  지우면 뒤의 "전량 재읽기는 늘지 않았다" 가 무엇과 비교하는지 알 수 없게 된다.
+     *
+     *  기다림을 고정 시간이 아니라 **활동이 멎는 것**으로 판정한다. 고정 예산은 한가한 머신에서만
+     *  충분해서 2코어 CI 러너에서 모자랐던 선례가 있다(main/codexRolling.test.ts 의 settleIo). */
+    const drainWatcher = async (dirs: string[]): Promise<void> => {
+      let hits = 0
+      index!.onUpdated = (): void => {
+        hits += 1
+      }
+      for (let quiet = 0; quiet < 4; ) {
+        const before = hits
+        await new Promise((r) => setTimeout(r, 25))
+        quiet = hits === before ? quiet + 1 : 0
+      }
+      await projectNames() // 재생이 남긴 pendingDirs 를 여기서 소진한다
+      dirs.length = 0
+    }
+
     /**
      * descriptors 를 갈아끼워 전략 호출을 센다. 무효화가 부분적이었는지를 **호출 횟수**로 관찰하는
      * 이유는, 디스크 상태로 관찰하려면 "워처를 켜기 전 변경은 이벤트를 내지 않는다"에 기대야 하는데
@@ -225,6 +253,7 @@ describe('HistoryIndex (lazy)', () => {
       expect(full.claude).toBe(1) // 최초 1회는 전량
 
       await index.startBackground()
+      await drainWatcher(dirs)
       const updated = vi.fn()
       index.onUpdated = updated
       await writeTranscript(a, 'proj-a', 's3.jsonl', 's3')
@@ -260,6 +289,7 @@ describe('HistoryIndex (lazy)', () => {
       expect(full).toEqual({ claude: 1, codex: 1 })
 
       await index.startBackground()
+      await drainWatcher(dirs)
       const updated = vi.fn()
       index.onUpdated = updated
       await fs.appendFile(rollout, JSON.stringify(meta) + '\n', 'utf8')
