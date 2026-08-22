@@ -97,6 +97,24 @@ export function runWorktrees(s: OrchState, runId: string): string[] {
     if (isSamePath(d.cwd, run.cwd)) continue
     if (!out.some((p) => isSamePath(p, d.cwd))) out.push(d.cwd)
   }
+  // **Run 워크트리는 Dispatch 가 아니라 Run 이 들고 있다.** Dispatch 의 cwd 만 보면 그 폴더가 목록에서
+  // 통째로 빠지는 경우가 있다: 동시 실행 2 이상이면 Task 들은 각자 워크트리로 가고, 접합점이 없으면
+  // 통합 Task 도 만들어지지 않아 **Run 워크트리에서 도는 워커가 하나도 없다.** 그러면 삭제가 Task
+  // 워크트리만 지우고 Run 워크트리를 남기고, 병합도 그 폴더를 보지 못한다 — 사용자가 폴더 삭제를
+  // 체크했는데도 목록에 그것이 그대로 남는 것으로 나타난다(그렇게 보고됐고, 로그에서 "만든 것과 지운
+  // 것이 매번 어긋난다"로 보였다).
+  //
+  // 맨 뒤에 붙인다 — 병합은 이 순서로 일어나고, Run 워크트리는 통합 Task 가 Task 브랜치들을 이미
+  // 접어 넣은 자리일 수 있어서 마지막에 합치는 것이 가장 싸다(앞의 것들이 그 안에 있으면 "Already up
+  // to date" 가 된다).
+  //
+  // `run.cwd` 와 같으면 넣지 않는다. 명령으로는 만들 수 없는 조합이지만 orchestration.json 은
+  // 프로세스보다 오래 살고 손으로 고쳐진다 — 그 값이 프로젝트 폴더면 이 목록이 곧 "지울 폴더" 이므로
+  // 사용자의 프로젝트를 지우라는 뜻이 된다(removeWorktree 의 위험 경로 검사가 막기는 하지만, 막히는
+  // 것에 기대는 것과 애초에 넘기지 않는 것은 다르다).
+  if (run.worktree !== undefined && !isSamePath(run.worktree, run.cwd)) {
+    if (!out.some((p) => isSamePath(p, run.worktree as string))) out.push(run.worktree)
+  }
   return out
 }
 

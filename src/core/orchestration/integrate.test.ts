@@ -508,6 +508,42 @@ describe('runWorktrees 와 Run 워크트리', () => {
     expect(runWorktrees(s, 'run_1')).toEqual([WT_A])
   })
 
+  // **이 테스트가 실제 결함을 고정한다.** 동시 실행 2 이상에서 접합점이 없으면 Run 워크트리에서 도는
+  // 워커가 하나도 없다 — Dispatch 의 cwd 만 보면 그 폴더가 목록에서 빠지고, 삭제가 Task 워크트리만
+  // 지우고 Run 워크트리를 남긴다. 로그에서 "만든 것과 지운 것이 매번 어긋난다"로 나타났다.
+  it('Run 워크트리에서 돈 Dispatch 가 없어도 그 폴더는 이 Run 의 것이다', () => {
+    const s: OrchState = {
+      ...emptyState(),
+      runs: [run({ worktree: WT_A, concurrency: 2 })],
+      tasks: [task('t1')],
+      dispatches: [dispatch('d1', { taskId: 't1', cwd: WT_B })]
+    }
+    expect(runWorktrees(s, 'run_1')).toEqual([WT_B, WT_A])
+  })
+
+  it('같은 폴더를 두 번 내지 않는다 — 동시 실행 1 은 Dispatch 가 그 안에서 돈다', () => {
+    const s: OrchState = {
+      ...emptyState(),
+      runs: [run({ worktree: WT_A, concurrency: 1 })],
+      tasks: [task('t1'), task('t2')],
+      dispatches: [
+        dispatch('d1', { taskId: 't1', cwd: WT_A }),
+        dispatch('d2', { taskId: 't2', cwd: WT_A })
+      ]
+    }
+    expect(runWorktrees(s, 'run_1')).toEqual([WT_A])
+  })
+
+  it('Run 워크트리가 프로젝트 폴더면 넣지 않는다 — 그 목록은 지울 폴더의 목록이다', () => {
+    const s: OrchState = {
+      ...emptyState(),
+      runs: [run({ worktree: RUN_CWD })],
+      tasks: [task('t1')],
+      dispatches: [dispatch('d1', { taskId: 't1', cwd: RUN_CWD })]
+    }
+    expect(runWorktrees(s, 'run_1')).toEqual([])
+  })
+
   it('Run 워크트리와 Task 워크트리가 함께 온다 — 병합이 둘 다 필요하다', () => {
     const s: OrchState = {
       ...emptyState(),
