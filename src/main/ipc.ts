@@ -44,7 +44,7 @@ import {
   integrationTaskFor,
   isIntegrationTask,
   pendingMerges,
-  workingInProjectFolder,
+  workingInRunRoot,
   worktreeDepsOf
 } from '../core/orchestration/integrate'
 import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
@@ -1377,7 +1377,7 @@ export function registerIpc(
                 // 프로젝트 폴더에서 도는 워커가 있으면 합치지 않는다 — 그 워커가 읽은 트리를 그
                 // 아래에서 갈아치우는 일이고, 그 실패는 조용하다(integrate.ts 에 이유가 있다).
                 // 다음 상태 변경에 다시 본다. 그 워커가 끝나는 것 자체가 상태 변경이다.
-                if (workingInProjectFolder(state, slot.runId)) {
+                if (workingInRunRoot(state, slot.runId)) {
                   orchLog(
                     `scheduler: task=${slot.taskId} waits — a worker is still working in ${run.cwd}`
                   )
@@ -1452,7 +1452,7 @@ export function registerIpc(
               // 함께 띄우면 서로의 index.lock 과 서로가 만든 병합을 밟는다 — 한 폴더에 병렬 워커를
               // 두지 않는다는 Task 배치 규칙의 이유가 그대로 여기에도 있다. 뒤의 것은 다음 상태
               // 변경에 다시 본다(앞의 것이 끝나는 것 자체가 상태 변경이다).
-              if (isIntegrationTask(task) && workingInProjectFolder(state, slot.runId)) {
+              if (isIntegrationTask(task) && workingInRunRoot(state, slot.runId)) {
                 orchLog(
                   `scheduler: integration task=${slot.taskId} waits — a worker is still working in ${run.cwd}`
                 )
@@ -1467,7 +1467,7 @@ export function registerIpc(
               // 부딪힌다(코디네이터가 검토 spec 을 구현자 템플릿으로 감싸지 않는 것과 같은 부류의
               // 충돌이다). 섞지 않는 원래 이유(프로젝트 폴더에 커밋 안 된 변경이 남으면 합칠 자리가
               // 없어진다)는 여기서도 지켜진다: 그 spec 이 끝에 작업 트리를 깨끗하게 두라고 요구하고,
-              // 그 Dispatch 가 열려 있는 동안은 workingInProjectFolder 가 앱의 병합을 막는다.
+              // 그 Dispatch 가 열려 있는 동안은 workingInRunRoot 가 앱의 병합을 막는다.
               const placement =
                 isIntegrationTask(task) || limit <= 1
                   ? { worktree: 'current' }

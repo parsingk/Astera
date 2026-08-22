@@ -7,7 +7,7 @@ import {
   runRootOf,
   runsWorkingIn,
   runWorktrees,
-  workingInProjectFolder,
+  workingInRunRoot,
   worktreeDepsOf
 } from './integrate'
 import { emptyState, type OrchState } from './state'
@@ -281,7 +281,7 @@ describe('runsWorkingIn', () => {
   })
 })
 
-describe('workingInProjectFolder', () => {
+describe('workingInRunRoot', () => {
   it('프로젝트 폴더에 열린 Dispatch 가 있으면 참이다', () => {
     const s = state({
       tasks: [task('t1', { status: 'dispatched' })],
@@ -295,7 +295,7 @@ describe('workingInProjectFolder', () => {
         })
       ]
     })
-    expect(workingInProjectFolder(s, 'run_1')).toBe(true)
+    expect(workingInRunRoot(s, 'run_1')).toBe(true)
   })
 
   it('워크트리에 열린 Dispatch 는 거짓이다 — 병합을 막을 이유가 없다', () => {
@@ -311,7 +311,7 @@ describe('workingInProjectFolder', () => {
         })
       ]
     })
-    expect(workingInProjectFolder(s, 'run_1')).toBe(false)
+    expect(workingInRunRoot(s, 'run_1')).toBe(false)
   })
 
   it('끝난 Dispatch 는 거짓이다', () => {
@@ -319,7 +319,7 @@ describe('workingInProjectFolder', () => {
       tasks: [task('t1', { status: 'completed' })],
       dispatches: [dispatch('dsp_1', { taskId: 't1', cwd: RUN_CWD })]
     })
-    expect(workingInProjectFolder(s, 'run_1')).toBe(false)
+    expect(workingInRunRoot(s, 'run_1')).toBe(false)
   })
 
   it('다른 Run 의 Dispatch 라도 같은 폴더에서 돌고 있으면 참이다', () => {
@@ -336,11 +336,11 @@ describe('workingInProjectFolder', () => {
         })
       ]
     })
-    expect(workingInProjectFolder(s, 'run_1')).toBe(true)
+    expect(workingInRunRoot(s, 'run_1')).toBe(true)
   })
 
   it('모르는 Run 은 거짓이다', () => {
-    expect(workingInProjectFolder(state(), 'run_nope')).toBe(false)
+    expect(workingInRunRoot(state(), 'run_nope')).toBe(false)
   })
 })
 
@@ -425,5 +425,99 @@ describe('runRootOf', () => {
 
   it('워크트리가 있으면 그것이다', () => {
     expect(runRootOf(run({ worktree: WT_A }))).toBe(WT_A)
+  })
+})
+
+// 이 묶음이 Task 2 의 요점이다. 순차 Run 은 Task 들이 **같은** 워크트리를 물려받으므로 합칠 것이
+// 없다 — 기준을 run.cwd 로 두면 그 폴더가 run.cwd 와 달라서 매번 병합 대상으로 잡힌다.
+describe('Run 워크트리 안에서의 병합 판정', () => {
+  /** t1 → t2 로 이어지는 순차 Run. 둘 다 Run 워크트리(WT_A)에서 돌았다 */
+  const sequential = (): OrchState => ({
+    ...emptyState(),
+    runs: [run({ worktree: WT_A, concurrency: 1 })],
+    tasks: [task('t1', { status: 'completed' }), task('t2', { deps: ['t1'] })],
+    dispatches: [dispatch('d1', { taskId: 't1', cwd: WT_A })]
+  })
+
+  it('같은 Run 워크트리에서 돈 의존은 합칠 것이 없다', () => {
+    expect(pendingMerges(sequential(), 't2')).toEqual([])
+  })
+
+  it('그래서 통합 Task 의 deps 도 비어 있다', () => {
+    expect(worktreeDepsOf(sequential(), 't2')).toEqual([])
+  })
+
+  it('Task 별 워크트리는 Run 워크트리와 달라 여전히 합칠 대상이다', () => {
+    const s: OrchState = {
+      ...emptyState(),
+      runs: [run({ worktree: WT_A, concurrency: 2 })],
+      tasks: [task('t1', { status: 'completed' }), task('t2', { deps: ['t1'] })],
+      dispatches: [dispatch('d1', { taskId: 't1', cwd: WT_B })]
+    }
+    expect(pendingMerges(s, 't2')).toEqual([WT_B])
+  })
+
+  it('프로젝트 폴더에서 돈 의존도 합칠 대상이다 — Run 뿌리가 아니다', () => {
+    const s: OrchState = {
+      ...emptyState(),
+      runs: [run({ worktree: WT_A })],
+      tasks: [task('t1', { status: 'completed' }), task('t2', { deps: ['t1'] })],
+      dispatches: [dispatch('d1', { taskId: 't1', cwd: RUN_CWD })]
+    }
+    expect(pendingMerges(s, 't2')).toEqual([RUN_CWD])
+  })
+})
+
+describe('workingInRunRoot', () => {
+  const openIn = (cwd: string): OrchState => ({
+    ...emptyState(),
+    runs: [run({ worktree: WT_A })],
+    tasks: [task('t1')],
+    dispatches: [dispatch('d1', { cwd, outcome: undefined, endedAt: undefined })]
+  })
+
+  it('Run 워크트리에서 도는 워커를 본다', () => {
+    expect(workingInRunRoot(openIn(WT_A), 'run_1')).toBe(true)
+  })
+
+  it('프로젝트 폴더에서 도는 워커는 이 Run 의 뿌리가 아니다', () => {
+    expect(workingInRunRoot(openIn(RUN_CWD), 'run_1')).toBe(false)
+  })
+
+  it('워크트리가 없으면 프로젝트 폴더를 본다', () => {
+    const s: OrchState = {
+      ...emptyState(),
+      runs: [run()],
+      tasks: [task('t1')],
+      dispatches: [dispatch('d1', { cwd: RUN_CWD, outcome: undefined, endedAt: undefined })]
+    }
+    expect(workingInRunRoot(s, 'run_1')).toBe(true)
+  })
+})
+
+// runWorktrees 는 이 Task 에서 **바꾸지 않는다**. 그 판정이 Run 워크트리도 낸다는 사실에 Task 7 의
+// 병합 버튼과 삭제 모달이 함께 기대므로, 바꾸지 않았다는 것을 여기서 고정한다.
+describe('runWorktrees 와 Run 워크트리', () => {
+  it('Run 워크트리도 이 Run 이 쓴 폴더다', () => {
+    const s: OrchState = {
+      ...emptyState(),
+      runs: [run({ worktree: WT_A })],
+      tasks: [task('t1')],
+      dispatches: [dispatch('d1', { cwd: WT_A })]
+    }
+    expect(runWorktrees(s, 'run_1')).toEqual([WT_A])
+  })
+
+  it('Run 워크트리와 Task 워크트리가 함께 온다 — 병합이 둘 다 필요하다', () => {
+    const s: OrchState = {
+      ...emptyState(),
+      runs: [run({ worktree: WT_A, concurrency: 2 })],
+      tasks: [task('t1'), task('t2')],
+      dispatches: [
+        dispatch('d1', { taskId: 't1', cwd: WT_B }),
+        dispatch('d2', { taskId: 't2', cwd: WT_A })
+      ]
+    }
+    expect(runWorktrees(s, 'run_1')).toEqual([WT_B, WT_A])
   })
 })

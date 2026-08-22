@@ -18,10 +18,10 @@ interface WorktreeDep {
 
 /** 이 Task 의 의존들이 프로젝트 폴더 밖에 남긴, **끝난** 작업들.
  *
- *  "워크트리에서 돌았다"의 신호는 `dispatch.cwd` 가 `run.cwd` 가 아니라는 것이다. Run 이나 Dispatch 에
- *  따로 표시를 두지 않은 이유는 그것이 이미 사실이기 때문이다 — 두 번째 표시를 두면 둘이 갈라졌을 때
- *  어느 쪽이 맞는지 알 수 없다(coordinator.ts 가 커밋 의무를 a.worktree 가 아니라 확정된 cwd 에서
- *  유도하는 것과 같은 판단이다).
+ *  "합쳐야 한다"의 신호는 `dispatch.cwd` 가 **이 Run 이 일하는 뿌리**(runRootOf)가 아니라는
+ *  것이다. `run.cwd` 가 아니다 — Run 이 자기 워크트리를 가지면 그 워크트리에서 돈 의존은
+ *  `run.cwd` 와 다르지만 합칠 것이 없다(합칠 자리가 곧 그 폴더다). 기준을 `run.cwd` 로 두면
+ *  순차 Run 의 모든 Task 가 자기 직전 Task 를 병합 대상으로 보고 통합 Task 가 Task 마다 생긴다.
  *
  *  비교는 `!==` 가 아니라 `isSamePath` 다. 두 값은 따로 기록된다 — `Run.cwd` 는 run-create 가, 그
  *  Dispatch 의 cwd 는 createWorktree 나 worker-start 가 넣는다 — 그래서 같은 폴더를 대소문자나
@@ -53,7 +53,7 @@ function worktreeDeps(s: OrchState, taskId: string): WorktreeDep[] {
       // "아직 열려 있다"의 판정은 이 저장소의 것을 그대로 쓴다(schedule.ts 의 slotsToFill,
       // server.ts 의 worker-start). 두 번째 정의를 만들면 둘이 갈라진다.
       if (!d.outcome && !d.endedAt) continue
-      if (isSamePath(d.cwd, run.cwd)) continue
+      if (isSamePath(d.cwd, runRootOf(run))) continue
       found.push({ taskId: depId, cwd: d.cwd })
     }
   }
@@ -163,7 +163,7 @@ export function isIntegrationTask(t: Task): boolean {
 /** 지금 그 폴더에서 일하고 있는 워커들의 Run id.
  *
  *  **이 파일의 폴더 판정은 전부 여기서 나온다.** 부르는 쪽의 질문이 셋인데 답의 재료는 하나다:
- *  - 앱이 병합해도 되는가 → 비었는가 (workingInProjectFolder, 아래)
+ *  - 앱이 병합해도 되는가 → 비었는가 (workingInRunRoot, 아래)
  *  - 이 폴더에 이미 누가 있는가 → 비었는가 (새 Run 을 만들 때 — 그 Run 은 아직 없으므로 Run 별로
  *    물을 수 없다)
  *  - 이 Run 이 남과 나눠 쓰는가 → 내가 들어 있고 크기가 2 이상인가
@@ -186,16 +186,21 @@ export function runsWorkingIn(s: OrchState, cwd: string): Set<string> {
   return runIds
 }
 
-/** 지금 프로젝트 폴더에서 일하고 있는 워커가 있는가. 있으면 **앱은 병합하지 않는다.**
+/** 지금 이 Run 이 일하는 뿌리에서 일하고 있는 워커가 있는가. 있으면 **앱은 병합하지 않는다.**
  *
  *  병합은 작업 트리를 바꾼다. 워커가 그 폴더에서 파일을 읽고 고치는 중에 앱이 그 아래에서 파일을
  *  갈아치우면, 그 워커는 자기가 읽은 것과 다른 트리에 편집을 얹는다 — 그 실패는 조용하고 되짚기
- *  어렵다. 통합 Task 자체가 프로젝트 폴더에서 도는 유일한 워커이므로(ipc.ts 의 배치 예외), 실제로
- *  이것이 막는 것은 "통합 에이전트가 합치는 중에 앱이 다른 접합점을 합치는" 경우다. */
-export function workingInProjectFolder(s: OrchState, runId: string): boolean {
+ *  어렵다. 합치는 자리가 곧 그 뿌리이므로(ipc.ts 의 배치), 이것이 막는 것은 "통합 에이전트가
+ *  합치는 중에 앱이 다른 접합점을 합치는" 경우이고 순차 Run 에서는 "앞 Task 가 아직 그 폴더에서
+ *  도는데 다음 Task 를 위한 병합을 시작하는" 경우다.
+ *
+ *  **이름이 `workingInProjectFolder` 였다.** 묻는 자리가 프로젝트 폴더에서 Run 뿌리로 옮겨갔고,
+ *  Run 이 워크트리를 갖게 된 뒤 프로젝트 폴더를 묻는 물음은 언제나 false 다 — 이름을 그대로 두면
+ *  다음에 읽는 사람이 항상 false 인 판정으로 읽는다. */
+export function workingInRunRoot(s: OrchState, runId: string): boolean {
   const run = s.runs.find((r) => r.id === runId)
   if (!run) return false
-  return runsWorkingIn(s, run.cwd).size > 0
+  return runsWorkingIn(s, runRootOf(run)).size > 0
 }
 
 /** 통합 Task 의 spec 본문. **영어다** — 이것을 읽는 것은 사람이 아니라 에이전트이고, 같은 이유로
