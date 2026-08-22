@@ -340,9 +340,12 @@ export async function handleCommand(
             ...(args.auto === true && schedule === undefined ? { autoDispatch: true } : {}),
             ...(schedule !== undefined ? { schedule } : {}),
             // `--auto` 는 "앱이 돌린다" 이고, 그 시작 시점은 사람이 정한다 — Task 를 하나 만드는
-            // 순간 돌기 시작하던 것을 '실행' 버튼 뒤로 미룬다(Run.pendingStart). 예약은 이 게이트를
-            // 쓰지 않는다: 템플릿은 애초에 돌지 않고 회차는 예약 시각이 곧 시작이다.
-            ...(args.auto === true && schedule === undefined ? { pendingStart: true } : {})
+            // 순간 돌기 시작하던 것을 '실행' 버튼 뒤로 미룬다(Run.pendingStart).
+            //
+            // **예약도 이 게이트를 쓴다.** 템플릿 자신은 돌지 않지만 발화는 시작이고, Task 를 다 짜기
+            // 전에 첫 회차가 도는 것은 보통 Run 에서 없앤 바로 그 문제다. 게이트가 걷히는 순간부터
+            // 무장하므로(firesDue), '실행' 을 누른 뒤의 첫 예약 시각이 첫 회차가 된다.
+            ...(args.auto === true ? { pendingStart: true } : {})
           },
           now
         )

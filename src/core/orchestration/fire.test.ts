@@ -21,6 +21,33 @@ const tmpl = (id: string, over: Partial<Run> = {}): Run => ({
 const withRuns = (runs: Run[]): OrchState => ({ ...emptyState(), runs })
 
 describe('firesDue', () => {
+  // **'실행' 을 누르기 전에는 무장조차 하지 않는다.** 무장해 두면 사람이 Task 를 짜는 동안 지나간
+  // 시각이 첫 발화가 되어, 버튼을 누르는 순간 이미 밀린 회차가 돈다
+  it('pendingStart 인 템플릿은 발화도 무장도 하지 않는다', () => {
+    const s = withRuns([tmpl('r1', { pendingStart: true })])
+    const r = firesDue(s, new Map(), at(2026, 8, 21, 10, 0))
+    expect(r.fire).toEqual([])
+    expect(r.arm.has('r1')).toBe(false)
+  })
+
+  // 게이트가 걷힌 뒤에는 **그 순간부터** 무장한다 — 지나간 시각을 물려받지 않는다
+  it('실행을 누른 뒤에는 그때부터 다음 시각을 잡는다', () => {
+    const s = withRuns([tmpl('r1')])
+    const r = firesDue(s, new Map(), at(2026, 8, 21, 8, 59))
+    expect(r.fire).toEqual([])
+    expect(r.arm.get('r1')).toBe(at(2026, 8, 21, 9, 0))
+  })
+
+  // 무장된 채로 게이트가 다시 켜지는 경로는 없지만(startRun 은 걷기만 한다) 상태 파일은 손으로
+  // 고쳐진다 — 그때도 발화하지 않고 무장을 놓는다
+  it('무장돼 있어도 pendingStart 면 발화하지 않는다', () => {
+    const s = withRuns([tmpl('r1', { pendingStart: true })])
+    const armed = new Map([['r1', at(2026, 8, 21, 9, 0)]])
+    const r = firesDue(s, armed, at(2026, 8, 21, 10, 0))
+    expect(r.fire).toEqual([])
+    expect(r.arm.has('r1')).toBe(false)
+  })
+
   // 무장 없이 곧바로 발화시키면 앱을 켤 때마다 한 회차가 돈다 — 재시작이 곧 실행이 되어 버린다
   it('처음 본 템플릿은 발화하지 않고 무장만 한다', () => {
     const s = withRuns([tmpl('r1')])

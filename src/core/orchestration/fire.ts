@@ -29,6 +29,11 @@ export function firesDue(
     // (spawnScheduledRun) 앞의 검사로 충분하지만, 손으로 고친 파일에서 둘 다 가진 Run 이
     // 스스로 회차를 낳는 일은 막는다.
     if (rule === undefined || run.templateId !== undefined) continue
+    // **'실행' 을 누르기 전에는 발화하지 않는다.** 무장도 하지 않는 것이 요점이다 — 여기서 무장해
+    // 두면 사람이 Task 를 짜는 동안 지나간 시각이 그대로 첫 발화가 되어, 버튼을 누르는 순간 이미
+    // 밀린 회차가 돈다. 건너뛰면 arm 맵에서 빠지고(부르는 쪽이 그 맵으로 교체한다), 게이트가 걷힌
+    // 뒤 처음 보이는 순간부터 nowMs 기준으로 다시 무장한다.
+    if (run.pendingStart) continue
     const next = (): void => {
       const at = nextFireAt(rule, nowMs)
       // isValidRule 이 거절할 규칙이 파일에서 들어온 경우 — 무장하지 않으면 영원히 발화하지

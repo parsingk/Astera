@@ -337,7 +337,12 @@ function ScheduleCard({
       </div>
       {open &&
         (children.length === 0 ? (
-          <p className="jobs-tmpl-empty">{t('jobs.run.scheduleEmpty')}</p>
+          <p className="jobs-tmpl-empty">
+            {/* **아직 실행하지 않은 것과 시각을 기다리는 것을 가른다.** 둘 다 회차가 없지만 사람이
+                할 일이 다르다 — 앞의 것은 버튼을 눌러야 하고, 뒤의 것은 기다리면 된다. 한 문구로
+                덮으면 예약을 걸어 뒀다고 믿은 사람이 영원히 기다린다. */}
+            {t(run.pendingStart ? 'jobs.run.schedulePending' : 'jobs.run.scheduleEmpty')}
+          </p>
         ) : (
           <div className="jobs-tmpl-kids">
             {children.map((kid) => (

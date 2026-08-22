@@ -2476,8 +2476,10 @@ describe('run-start — 사람이 실행을 누를 때까지 기다린다', () =
     expect(run.pendingStart).toBe(true)
   })
 
-  // 예약은 이 게이트를 쓰지 않는다 — 템플릿은 애초에 돌지 않고, 회차는 예약 시각이 곧 시작이다
-  it('예약 Run 에는 pendingStart 를 켜지 않는다', async () => {
+  // **예약도 이 게이트를 쓴다.** 템플릿 자신은 돌지 않지만 발화는 시작이고, Task 를 다 짜기 전에
+  // 첫 회차가 도는 것은 보통 Run 에서 없앤 바로 그 문제다. 게이트가 걷히는 순간부터 무장한다
+  // (firesDue) — 그래서 '실행' 뒤의 첫 예약 시각이 첫 회차가 된다.
+  it('예약 Run 에도 pendingStart 를 켠다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', {
       objective: 'o',
@@ -2485,6 +2487,33 @@ describe('run-start — 사람이 실행을 누를 때까지 기다린다', () =
       auto: true,
       schedule: { kind: 'daily', time: '09:00' }
     })
+    expect(deps.getState().runs[0].pendingStart).toBe(true)
+  })
+
+  // autoDispatch 는 여전히 켜지 않는다 — 템플릿이 스스로 배치되면 자기 Task 를 자기가 돌린다.
+  // 두 칸은 다른 질문에 답한다: autoDispatch 는 "누가 돌리는가", pendingStart 는 "시작했는가"
+  it('예약 Run 에는 autoDispatch 를 켜지 않는다', async () => {
+    const deps = makeDeps()
+    await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      auto: true,
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    expect(deps.getState().runs[0].autoDispatch).toBeUndefined()
+  })
+
+  // 게이트를 걷는 명령은 템플릿에도 그대로 듣는다 — startRun 은 Run 종류를 가리지 않는다
+  it('run-start 가 예약 템플릿의 게이트도 걷는다', async () => {
+    const deps = makeDeps()
+    const c = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      auto: true,
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    const id = (c.body as { id: string }).id
+    expect((await call(deps, 'run-start', { run: id })).status).toBe(200)
     expect(deps.getState().runs[0].pendingStart).toBeUndefined()
   })
 
