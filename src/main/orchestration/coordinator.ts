@@ -446,10 +446,14 @@ export class OrchCoordinator {
     specFileContent?: string
     provider: Provider
     accountId: string
-    /** Run.cwd — the project folder. It is the base a new worktree forks from, and the cwd when
-     *  worktree is 'current'. **The app no longer sends 'current'** (it sends the run's worktree as an
-     *  explicit path — src/main/ipc.ts), so that branch now serves the CLI only; the commit obligation
-     *  below derives from `cwd !== runCwd`, which is what makes a worker in the run's worktree commit. */
+    /** Run.cwd — the base cwd when worktree is 'current', and the base a new worktree forks from.
+     *  The commit obligation below derives from `cwd !== runCwd`, which is what makes a worker in a
+     *  worktree commit and a worker standing on runCwd not.
+     *
+     *  **The scheduler's placement no longer sends 'current'** — it sends the run's worktree as an
+     *  explicit path (src/main/ipc.ts). Two callers still do: the review dispatch, which passes the
+     *  implementer's tree as runCwd so 'current' lands the reviewer in exactly that tree with no
+     *  commit obligation, and the CLI, where a person may write `--worktree current` directly. */
     runCwd: string
     worktree: string
     name?: string

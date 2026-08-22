@@ -1330,7 +1330,7 @@ export function registerIpc(
               let run = state.runs.find((r) => r.id === slot.runId)!
               if (run.worktree === undefined) {
                 try {
-                  // forkWorktree 가 프로젝트가 **서 있는 브랜치**에서 갈라 준다(Step 1). raw
+                  // forkWorktree(위)가 프로젝트가 **서 있는 브랜치**에서 갈라 준다. raw
                   // createWorktree 를 부르면 origin/HEAD 에서 갈라져 최종 병합이 엉뚱한 조상을 끌고
                   // 온다 — 그 판단은 한 곳에만 있어야 한다.
                   const created = await forkWorktree({
@@ -1354,8 +1354,9 @@ export function registerIpc(
                   orchLog(`scheduler: run=${run.id} works in ${created}`)
                   // **상태를 다시 읽는다 — run 만이 아니라 state 도.** 아래 병합 판정
                   // (pendingMerges·workingInRunRoot)이 이제 run.worktree 를 통해 Run 뿌리를 보므로,
-                  // 방금 기록한 값이 없는 스냅숏으로 물으면 그 둘이 프로젝트 폴더를 기준으로 답한다 —
-                  // Task 2 가 막으려던 그 오답이 여기서 되살아난다.
+                  // 방금 기록한 값이 없는 스냅숏으로 물으면 —
+                  // 그 둘이 프로젝트 폴더를 기준으로 답하고, 순차 Run 의 모든 Task 가 자기가 서 있는
+                  // 폴더를 병합 대상으로 보는 그 오답이 여기서 되살아난다.
                   state = orch.deps.getState()
                   run = state.runs.find((r) => r.id === slot.runId)!
                 } catch (e) {
@@ -1468,7 +1469,7 @@ export function registerIpc(
                 }
               }
 
-              // 통합 Task 는 프로젝트 폴더에서 도는 유일한 워커이므로(아래 배치 예외), **둘이 겹치지
+              // 통합 Task 는 Run 뿌리에서 도는 유일한 워커이므로(아래 배치 예외), **둘이 겹치지
               // 않게 한다.** 접합점이 둘이면 통합 Task 도 둘이 만들어질 수 있고, 그 둘을 같은 폴더에
               // 함께 띄우면 서로의 index.lock 과 서로가 만든 병합을 밟는다 — 한 폴더에 병렬 워커를
               // 두지 않는다는 Task 배치 규칙의 이유가 그대로 여기에도 있다. 뒤의 것은 다음 상태
