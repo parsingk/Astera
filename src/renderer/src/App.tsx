@@ -2470,16 +2470,21 @@ export default function App(): React.JSX.Element {
                         : {})
                     })
                     if (!answer.ok) return
-                    // 감추기는 렌더러가 가진 목록이라 여기서 한다 — 명령이 아니라 표시의 문제다.
-                    // 폴더를 지우면 어차피 자동으로 감춰지지만(hiddenHistory), 폴더는 남기고 목록만
-                    // 치우고 싶을 때가 이 선택이 있는 이유다.
-                    if (answer.checked.includes('hide')) for (const p of wt) hiddenProjects.hide(p)
                     try {
                       const reply = await window.api.orch.command(currentProject, 'run-delete', {
                         id: runId,
                         ...(answer.checked.includes('merge') ? { merge: true } : {}),
                         ...(answer.checked.includes('worktrees') ? { removeWorktrees: true } : {})
                       })
+                      // 감추기는 렌더러가 가진 목록이라 여기서 한다 — 명령이 아니라 표시의 문제다.
+                      // 폴더를 지우면 어차피 자동으로 감춰지지만(hiddenHistory), 폴더는 남기고 목록만
+                      // 치우고 싶을 때가 이 선택이 있는 이유다.
+                      //
+                      // **명령이 성공한 뒤에 한다.** 앞에서 하면 거절된 삭제가 히스토리를 감춘 채로
+                      // 끝난다 — 도는 워커 때문에 409 를 받는 것은 흔한 경로이고(먼저 멈춰야 한다),
+                      // 그때 사용자는 아무것도 지우지 않았는데 세션 목록이 비어 있는 것을 본다.
+                      if (reply.status < 400 && answer.checked.includes('hide'))
+                        for (const p of wt) hiddenProjects.hide(p)
                       // 409 의 두 갈래를 가른다. **문구로 가르는 이유**: 양쪽 문장이 모두 우리
                       // server.ts 의 것이고, "멈춰 주세요" 는 붙잡아 둔 세션에 틀린 안내다 —
                       // 그쪽은 멈추는 것이 아니라 붙잡음을 놓는 것이 답이다.

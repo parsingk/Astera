@@ -432,8 +432,17 @@ export async function handleCommand(
       // 실패한 경로는 응답에 실어 보낸다: 삭제 자체를 막을 이유는 없고(기록을 지우는 것과 폴더를
       // 지우는 것은 다른 일이다) 사람이 남은 것을 알아야 한다.
       let worktreesFailed: string[] = []
+      // **세 조건이 모두 참이어야 폴더가 지워진다.** 어느 하나가 거짓이면 조용히 아무 일도 일어나지
+      // 않고, 사용자에게는 "체크했는데 폴더가 남았다"로 보인다 — 실제로 그렇게 보고됐고, 그때 로그에
+      // 아무 흔적이 없어서 어느 조건이 걸렸는지 알 수 없었다. reapWorktree 는 자기 결과를 남기지만
+      // 그것은 불린 뒤의 이야기다. 여기서 한 줄을 남기면 그 물음이 로그로 답해진다.
       if (args.removeWorktrees === true && worktrees.length > 0 && deps.removeWorktrees)
         worktreesFailed = (await deps.removeWorktrees(worktrees)).failed
+      else if (args.removeWorktrees === true)
+        deps.log?.(
+          `run-delete ${id}: asked to remove worktrees but did not — ` +
+            `worktrees=${worktrees.length} wired=${deps.removeWorktrees !== undefined}`
+        )
       const before = s.tasks.filter((t) => doomed.has(t.runId)).length
       await deps.setState(deleteRuns(deps.getState(), doomed))
       return okBody({
