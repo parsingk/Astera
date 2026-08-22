@@ -1190,7 +1190,10 @@ label.check-small input[type="checkbox"]:focus-visible {
    다 가져가야 하므로, 이 줄이 늘어나면 안 된다. 짓는 동안에는 이 줄 자체가 그려지지 않는다
    (RunDetail.tsx) — .jobs-new 의 사이드바용 여백(margin: 10px 10px 4px)은 이 자리에 안 맞아
    지운다: 이 줄의 margin-bottom 이 이미 그래프와 사이를 두고 있다 */
-.detail-graph-head { flex: none; display: flex; justify-content: flex-end; margin-bottom: 6px; }
+/* gap 이 필요한 이유: 이 칸은 한 버튼짜리로 시작했고 그때는 붙을 상대가 없었다. 지금은 Task 짓기
+   옆에 실행·병합·일시 중지가 서므로, 없으면 서로 다른 일을 하는 버튼들이 한 덩어리로 읽힌다.
+   6px 은 .jobs-run-head 의 7px 보다 한 단 좁다 — 그쪽은 배지와 글자가 섞인 줄이고 여기는 버튼만 선다 */
+.detail-graph-head { flex: none; display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 6px; }
 .detail-graph-head .jobs-new { margin: 0; }
 /* safe center — 그림이 칸보다 작으면 가운데에 놓이고, 커지면 왼쪽 위부터 놓인다. safe 가 없으면
    넘칠 때도 가운데로 밀어붙여 **위쪽과 왼쪽이 스크롤로 닿지 않는 자리**로 잘려 나간다 */
