@@ -796,6 +796,7 @@ export const ja: Catalog = {
   // jobs.new.concurrency はプロジェクト全体ではなく、この Run 単体が同時に開くワーカー数の上限だ。
   'jobs.new.open': '新しい作業',
   'jobs.new.title': '新しい作業を作る',
+  'jobs.new.gitRequired': 'git リポジトリとして登録されたフォルダーでのみ実行されます',
   'jobs.new.objective': '目標',
   'jobs.new.provider': 'エージェント',
   'jobs.new.concurrency': '同時実行',

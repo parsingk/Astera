@@ -810,6 +810,7 @@ export const es: Catalog = {
   // abiertos a la vez este Run en concreto, distinto de cualquier otro ajuste de concurrencia.
   'jobs.new.open': 'Nuevo trabajo',
   'jobs.new.title': 'Crear un trabajo',
+  'jobs.new.gitRequired': 'Solo se ejecuta en una carpeta que sea un repositorio de git',
   'jobs.new.objective': 'Objetivo',
   'jobs.new.provider': 'Agente',
   'jobs.new.concurrency': 'En paralelo',

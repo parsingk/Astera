@@ -706,6 +706,7 @@ export const en: Record<keyof typeof ko, string> = {
   // once, a different setting from any other concurrency knob in the app.
   'jobs.new.open': 'New job',
   'jobs.new.title': 'Create a job',
+  'jobs.new.gitRequired': 'Runs only in a folder that is a git repository',
   'jobs.new.objective': 'Objective',
   'jobs.new.provider': 'Agent',
   'jobs.new.concurrency': 'Run at once',

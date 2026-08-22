@@ -79,6 +79,12 @@ export function NewRunModal({
     <div className="modal-backdrop" onClick={() => !busy && onClose()}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2>{t('jobs.new.title')}</h2>
+        {/* 전제조건이라 폼보다 앞에 둔다. 워커는 언제나 워크트리에서 일하고 워크트리는 git 의
+            것이므로, 저장소가 아닌 폴더에서는 이 작업을 만들 수는 있어도 시작하지 못한다 — 그
+            사실을 '실행' 을 누른 뒤 Gate 에서 알게 되는 것이 늦다. 막지 않고 알리기만 하는 이유:
+            저장소인지 확인하려면 main 에 물어야 하고, 그 왕복을 모달을 여는 길에 넣는 것은 이
+            한 줄이 사는 값보다 크다(docs/jobs.md 에 같은 사실이 적혀 있다). */}
+        <p className="modal-hint">{t('jobs.new.gitRequired')}</p>
         <div className="field">
           <label>{t('jobs.new.objective')}</label>
           <input

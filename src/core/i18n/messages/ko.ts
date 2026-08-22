@@ -839,6 +839,7 @@ export const ko = {
   // 설정과 자리가 다르므로 섞어 쓰면 안 된다.
   'jobs.new.open': '새 작업',
   'jobs.new.title': '새 작업 만들기',
+  'jobs.new.gitRequired': 'git 저장소로 등록된 폴더에서만 실행됩니다',
   'jobs.new.objective': '목표',
   'jobs.new.provider': '에이전트',
   'jobs.new.concurrency': '동시 실행',
