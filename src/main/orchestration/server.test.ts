@@ -2628,3 +2628,43 @@ describe('run-delete — 병합·워크트리 선택', () => {
     expect(merged).toEqual([])
   })
 })
+
+describe('run-worktree-set', () => {
+  const withRun = async (): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    runId: string
+  }> => {
+    const deps = makeDeps()
+    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    return { deps, runId: (c.body as { id: string }).id }
+  }
+
+  it('워크트리를 기록한다', async () => {
+    const { deps, runId } = await withRun()
+    const r = await call(deps, 'run-worktree-set', { run: runId, worktree: 'D:/wt/a' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().runs.find((x) => x.id === runId)?.worktree).toBe('D:/wt/a')
+  })
+
+  it('이미 있으면 409 다 — 배선이 워크트리를 두 개 만들었다는 뜻이다', async () => {
+    const { deps, runId } = await withRun()
+    await call(deps, 'run-worktree-set', { run: runId, worktree: 'D:/wt/a' })
+    const again = await call(deps, 'run-worktree-set', { run: runId, worktree: 'D:/wt/b' })
+    expect(again.status).toBe(409)
+    // 첫 값이 그대로여야 한다 — 거절이 곧 덮어쓰지 않았다는 뜻이다
+    expect(deps.getState().runs.find((x) => x.id === runId)?.worktree).toBe('D:/wt/a')
+  })
+
+  it('없는 Run 은 400 이다 — commit 이 err 를 그렇게 낸다(run-start 와 같다)', async () => {
+    const r = await call(makeDeps(), 'run-worktree-set', {
+      run: 'run_nope',
+      worktree: 'D:/wt/a'
+    })
+    expect(r.status).toBe(400)
+  })
+
+  it('--worktree 가 없으면 400 이다', async () => {
+    const { deps, runId } = await withRun()
+    expect((await call(deps, 'run-worktree-set', { run: runId })).status).toBe(400)
+  })
+})

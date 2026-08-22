@@ -199,6 +199,24 @@ export function startRun(s: OrchState, id: string): Res<Run> {
   return ok({ ...s, runs: s.runs.map((r) => (r.id === id ? started : r)) }, started)
 }
 
+/**
+ * 배선이 만든 Run 워크트리를 기록한다. 만드는 것은 배선이고(디스크 작업) 여기는 그 사실만 받는다 —
+ * 명령 안에서 git 을 부르면 상태 전이가 디스크 실패로 절반만 일어날 수 있다.
+ *
+ * **이미 있으면 거절한다.** 두 번 불리는 것은 배선이 워크트리를 두 개 만들었다는 뜻이고, 조용히
+ * 덮어쓰면 그중 하나가 아무도 기억하지 못하는 폴더로 디스크에 남는다. 실패가 로그에 남는 것이
+ * 낫다(startRun 이 두 번 불려도 성공인 것과 반대인 이유: 그쪽은 버튼이 두 번 눌린 것이고 요청한
+ * 끝 상태가 이미 그것이지만, 이쪽은 두 번째 호출이 다른 경로를 들고 온다).
+ */
+export function setRunWorktree(s: OrchState, id: string, worktree: string): Res<Run> {
+  const run = s.runs.find((r) => r.id === id)
+  if (!run) return err(`unknown run: ${id}`)
+  if (run.worktree !== undefined)
+    return err(`run ${id} already has a worktree: ${run.worktree}`)
+  const next = { ...run, worktree }
+  return ok({ ...s, runs: s.runs.map((r) => (r.id === id ? next : r)) }, next)
+}
+
 export function createTask(
   s: OrchState,
   a: {

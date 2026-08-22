@@ -3,7 +3,7 @@ import path from 'node:path'
 import { absPath } from '../testPaths'
 import {
   slugify, autoName, branchNameFor, candidateName, repoDirName, worktreePathFor, nameForTask,
-  MAX_SUFFIX_ATTEMPTS
+  nameForRun, MAX_SUFFIX_ATTEMPTS
 } from './naming'
 
 describe('slugify', () => {
@@ -70,5 +70,15 @@ describe('repoDirName / worktreePathFor', () => {
     expect(worktreePathFor(root, absPath('repos', 'my-app'), 'fix')).toBe(
       path.join(root, 'my-app', 'fix')
     )
+  })
+})
+
+describe('nameForRun', () => {
+  it('objective 를 슬러그로 만든다', () => {
+    expect(nameForRun({ id: 'run_1', objective: '로그인 버그 고치기' })).toBe('로그인-버그-고치기')
+  })
+
+  it('쓸 글자가 없으면 id 로 물러난다', () => {
+    expect(nameForRun({ id: 'run_abcd1234', objective: '///' })).toBe('run_abcd1234')
   })
 })

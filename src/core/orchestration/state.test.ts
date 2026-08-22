@@ -20,6 +20,7 @@ import {
   deleteRuns,
   spawnScheduledRun,
   latestOrdinaryRun,
+  setRunWorktree,
   type OrchState
 } from './state'
 import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task } from './types'
@@ -1846,5 +1847,37 @@ describe('latestOrdinaryRun', () => {
     )
     expect(latestOrdinaryRun(spawned.state)).toBeUndefined()
     expect(latestOrdinaryRun(emptyState())).toBeUndefined()
+  })
+})
+
+describe('setRunWorktree', () => {
+  const withRun = (): { s: OrchState; id: string } => {
+    const { state, value } = unwrap<{ id: string }>(
+      createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
+    )
+    return { s: state, id: value.id }
+  }
+
+  it('워크트리를 기록한다', () => {
+    const { s, id } = withRun()
+    const { state } = unwrap<{ worktree?: string }>(
+      setRunWorktree(s, id, 'D:/wt/a') as never
+    )
+    expect(state.runs.find((x) => x.id === id)?.worktree).toBe('D:/wt/a')
+  })
+
+  it('이미 있으면 거절한다 — 두 번째 워크트리가 조용히 버려지지 않게', () => {
+    const { s, id } = withRun()
+    const { state } = unwrap<{ worktree?: string }>(
+      setRunWorktree(s, id, 'D:/wt/a') as never
+    )
+    const second = setRunWorktree(state, id, 'D:/wt/b')
+    expect(second.ok).toBe(false)
+    if (second.ok) return
+    expect(second.error).toContain('already has a worktree')
+  })
+
+  it('없는 Run 은 거절한다', () => {
+    expect(setRunWorktree(emptyState(), 'run_nope', 'D:/wt/a').ok).toBe(false)
   })
 })

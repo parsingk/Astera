@@ -23,6 +23,7 @@ import {
   deleteRuns,
   spawnScheduledRun,
   startRun,
+  setRunWorktree,
   type OrchState,
   type Res
 } from '../../core/orchestration/state'
@@ -440,6 +441,23 @@ export async function handleCommand(
       const id = str(args.run)
       if (!id) return bad('--run is required')
       return commit(startRun(s, id))
+    }
+    case 'run-worktree-set': {
+      const id = str(args.run)
+      if (!id) return bad('--run is required')
+      const worktree = str(args.worktree)
+      if (!worktree) return bad('--worktree is required')
+      // **"이미 있다" 만 409 로 따로 낸다.** setRunWorktree 도 같은 것을 거절하지만 그 층은 HTTP 를
+      // 모르고, commit 은 모든 실패를 400 으로 낸다(위) — 없는 Run 과 두 번 기록하려는 것이 같은
+      // 코드로 나오면 로그에서 구별되지 않는다. 뒤쪽은 배선이 워크트리를 **두 개 만들었다**는 뜻이고
+      // 그중 하나가 아무도 기억하지 못하는 폴더로 디스크에 남는다.
+      //
+      // 순수 층의 거절을 여기서 지우지 않는 이유: 이 명령이 유일한 호출자라는 보장이 없고, 그 함수가
+      // 조용히 덮어쓰게 되면 이 코드가 지키는 불변식이 이 파일에만 있게 된다.
+      const existing = s.runs.find((r) => r.id === id)?.worktree
+      if (existing !== undefined)
+        return conflict(`run ${id} already has a worktree: ${existing}`)
+      return commit(setRunWorktree(s, id, worktree))
     }
     case 'run-spawn': {
       const id = str(args.run)

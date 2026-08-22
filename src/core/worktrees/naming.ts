@@ -41,6 +41,22 @@ export function nameForTask(task: { id: string; title: string }): string {
   }
 }
 
+/** Run 의 워크트리 이름, objective 에서 뽑는다. `nameForTask` 와 같은 규칙이다 — slugify 가
+ *  던지면(쓸 글자가 하나도 없는 objective) id 로 물러난다.
+ *
+ *  `nameForTask({ id, title: run.objective })` 로 대신할 수 있지만 그러면 호출부가 objective 를
+ *  title 이라고 부르게 된다. 두 이름은 다른 것을 가리키고, 세 줄이 그 구별보다 싸지 않다.
+ *
+ *  orchestration 의 Run 타입을 임포트하지 않고 구조만 받는다 — worktrees 는 의존 순서에서
+ *  orchestration 아래에 있고 위를 가리켜서는 안 된다(nameForTask 와 같은 이유). */
+export function nameForRun(run: { id: string; objective: string }): string {
+  try {
+    return slugify(run.objective)
+  } catch {
+    return run.id
+  }
+}
+
 export function branchNameFor(gitUserName: string | null, slug: string): string {
   if (!gitUserName) return slug
   try {
