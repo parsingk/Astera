@@ -170,6 +170,24 @@ export const TrashIcon = (): React.JSX.Element => (
   </svg>
 )
 
+/** 예약을 세우는 자리. TrashIcon 과 같은 뼈대(12px, currentColor)를 쓰므로 같은 줄에 나란히 서도
+ *  무게가 같다. 채워서 그리는 이유: 이 둘은 상태가 아니라 **누르는 것**이라, 획으로 그린 상태
+ *  글리프들과 구별되어야 한다. */
+export const PauseIcon = (): React.JSX.Element => (
+  <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true">
+    <rect x="4.5" y="3.5" width="2.6" height="9" rx="0.8" />
+    <rect x="8.9" y="3.5" width="2.6" height="9" rx="0.8" />
+  </svg>
+)
+
+/** 멈춘 예약을 다시 돌리는 자리. 한 번도 돌리지 않은 템플릿에도 같은 아이콘이 선다 — 시작과 재생은
+ *  같은 동작이다(둘 다 pendingStart 를 걷는다). */
+export const PlayIcon = (): React.JSX.Element => (
+  <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true">
+    <path d="M5 3.6a.8.8 0 0 1 1.2-.7l6 4.4a.8.8 0 0 1 0 1.3l-6 4.4A.8.8 0 0 1 5 12.4z" />
+  </svg>
+)
+
 export type RunIconKind = 'running' | 'blocked' | 'done' | 'failed'
 
 /** 여럿을 묶은 자리(Run 헤더, 접힌 줄)의 글리프. **도는 것은 채워진 점으로 적는다** — 묶음까지

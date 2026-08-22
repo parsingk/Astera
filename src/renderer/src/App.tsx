@@ -1575,6 +1575,54 @@ export default function App(): React.JSX.Element {
   /** Run 콘솔의 자리. 리사이저가 --run-panel-h 를 이 노드에 직접 쓴다 */
   const runHostRef = useRef<HTMLDivElement>(null)
 
+  /** 예약을 세운다. **한 곳에 둔다** — 사이드바의 아이콘과 상세 창의 아이콘이 같은 동작이므로 확인
+   *  문구도 409 의 갈래도 같아야 한다. 두 벌로 두면 한쪽만 고쳐지는 날 같은 버튼이 다른 말을 한다.
+   *
+   *  묻는 이유: 지금 일하는 워커가 멈추고, 멈춘 회차는 이어지지 않는다(다시 실행하면 다음 예약
+   *  시각의 새 회차다). 되돌릴 수 없는 쪽은 아니지만 잃는 것이 있다.
+   *
+   *  409 를 문구로 가른다 — 붙잡아 둔 세션에는 "다시 해 보세요" 가 틀린 안내다(놓아 주는 것이
+   *  답이다). 삭제 흐름이 같은 자리에서 같은 방식으로 가른다. */
+  const pauseScheduleRun = (runId: string): void => {
+    void (async () => {
+      if (!currentProject) return
+      if (
+        !(await confirmModal({
+          title: t('jobs.run.pauseConfirmTitle'),
+          body: t('jobs.run.pauseConfirmBody'),
+          confirmLabel: t('jobs.run.pause')
+        }))
+      )
+        return
+      try {
+        const reply = await window.api.orch.command(currentProject, 'run-pause', { run: runId })
+        if (reply.status === 409)
+          toast.error(
+            JSON.stringify(reply.body).includes('worker-retain')
+              ? t('jobs.run.pauseRetained')
+              : t('jobs.run.pauseFailed')
+          )
+        else if (reply.status >= 400) toast.error(t('jobs.run.pauseFailed'))
+      } catch {
+        toast.error(t('jobs.run.pauseFailed'))
+      }
+    })()
+  }
+
+  /** 멈춘 예약을 다시 돌린다 — 게이트를 걷는 것뿐이라 묻지 않는다(잃는 것이 없다). 무장은 이 순간부터
+   *  다시 잡히므로 첫 회차는 **다음 예약 시각**이다(firesDue). */
+  const resumeScheduleRun = (runId: string): void => {
+    void (async () => {
+      if (!currentProject) return
+      try {
+        const reply = await window.api.orch.command(currentProject, 'run-start', { run: runId })
+        if (reply.status >= 400) toast.error(t('jobs.run.startFailed'))
+      } catch {
+        toast.error(t('jobs.run.startFailed'))
+      }
+    })()
+  }
+
   /** 활성 탭이 말하는 루트 — 파일 탭이면 그 파일의 프로젝트, 세션 탭이면 그 세션의 cwd.
    *  탭이 없으면 null이고, 그 자리는 아래에서 stickyRoot 가 채운다.
    *
@@ -2409,6 +2457,8 @@ export default function App(): React.JSX.Element {
                 // 세어 보여 줄 수 있는 곳이 스냅숏을 든 이 자리다. 워크트리는 건드리지 않으므로
                 // (사용자의 git 저장소다) 몇 개가 남는지도 함께 말한다: 조용히 고아로 두지 않는다.
                 // 거절(도는 워커가 있다)은 토스트로 — 폼이 없는 단발 액션의 실패 관례다.
+                onPauseRun={pauseScheduleRun}
+                onResumeRun={resumeScheduleRun}
                 onDeleteRun={(runId) => {
                   void (async () => {
                     if (!currentProject) return
@@ -3210,6 +3260,8 @@ export default function App(): React.JSX.Element {
             setOpenRun(null) // 탭으로 가면서 닫는다
             selectWorkbenchTab(sessionTab(sessionId))
           }}
+          onPauseRun={pauseScheduleRun}
+          onResumeRun={resumeScheduleRun}
           onClose={() => setOpenRun(null)}
         />
       )}

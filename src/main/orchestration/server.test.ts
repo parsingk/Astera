@@ -2800,6 +2800,137 @@ describe('run-delete — 예약 템플릿의 회차 워크트리', () => {
   })
 })
 
+describe('run-pause', () => {
+  /** 예약 템플릿 + 회차 하나. 그 회차에 열린 Dispatch 가 하나 있다 */
+  const runningSchedule = async (
+    over: Record<string, unknown> = {}
+  ): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    templateId: string
+    released: string[]
+  }> => {
+    const released: string[] = []
+    const deps = Object.assign(makeDeps(), {
+      releaseWorker: async (a: { dispatchId: string }) => {
+        released.push(a.dispatchId)
+      }
+    })
+    const c = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      provider: 'claude',
+      auto: true,
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    const templateId = (c.body as { id: string }).id
+    // 템플릿의 게이트는 걷어 둔다 — 도는 예약을 멈추는 것이 이 명령의 자리다
+    await call(deps, 'run-start', { run: templateId })
+    await deps.setState({
+      ...deps.getState(),
+      runs: [
+        ...deps.getState().runs,
+        {
+          id: 'run_kid',
+          objective: 'o',
+          cwd: 'D:/p',
+          createdAt: NOW,
+          provider: 'claude',
+          autoDispatch: true,
+          templateId,
+          fireOrdinal: 1
+        }
+      ],
+      tasks: [
+        {
+          id: 'tsk_running',
+          runId: 'run_kid',
+          title: 't',
+          spec: 's',
+          deps: [],
+          status: 'dispatched',
+          consecutiveFailures: 0,
+          createdAt: NOW,
+          updatedAt: NOW
+        }
+      ],
+      dispatches: [
+        {
+          id: 'dsp_running',
+          taskId: 'tsk_running',
+          provider: 'claude',
+          accountId: 'acc1',
+          sessionId: 'sess_running',
+          cwd: 'D:/wt/kid',
+          specPath: 'D:/wt/kid/spec.md',
+          startedAt: NOW,
+          workerState: 'ready',
+          retained: false,
+          ...over
+        }
+      ]
+    })
+    return { deps, templateId, released }
+  }
+
+  it('도는 세션을 닫고 Dispatch 를 stopped 로 남긴다', async () => {
+    const { deps, templateId, released } = await runningSchedule()
+    expect((await call(deps, 'run-pause', { run: templateId })).status).toBe(200)
+    expect(released).toEqual(['dsp_running'])
+    const d = deps.getState().dispatches[0]
+    expect(d.workerState).toBe('stopped')
+    expect(d.endedAt).toBe(NOW)
+    // 보고하지 않은 워커에 결과를 적지 않는다 — 그래프가 거짓말을 하게 된다
+    expect(d.outcome).toBeUndefined()
+  })
+
+  // **회차까지 세우는 것이 요점이다.** Dispatch 만 닫으면 그 회차의 다음 ready Task 가 곧바로 뜬다
+  it('템플릿과 회차 모두에 게이트를 세운다', async () => {
+    const { deps, templateId } = await runningSchedule()
+    await call(deps, 'run-pause', { run: templateId })
+    const byId = new Map(deps.getState().runs.map((r) => [r.id, r]))
+    expect(byId.get(templateId)!.pendingStart).toBe(true)
+    expect(byId.get('run_kid')!.pendingStart).toBe(true)
+  })
+
+  // 재생은 기존 명령이다 — 템플릿의 게이트만 걷힌다. 멈춘 회차는 이어지지 않는다
+  it('run-start 가 템플릿만 재개하고 멈춘 회차는 그대로 둔다', async () => {
+    const { deps, templateId } = await runningSchedule()
+    await call(deps, 'run-pause', { run: templateId })
+    expect((await call(deps, 'run-start', { run: templateId })).status).toBe(200)
+    const byId = new Map(deps.getState().runs.map((r) => [r.id, r]))
+    expect(byId.get(templateId)!.pendingStart).toBeUndefined()
+    expect(byId.get('run_kid')!.pendingStart).toBe(true)
+  })
+
+  it('붙잡아 둔 세션이 있으면 409 다 — 아무것도 멈추지 않는다', async () => {
+    const { deps, templateId, released } = await runningSchedule({ retained: true })
+    const r = await call(deps, 'run-pause', { run: templateId })
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toContain('worker-retain')
+    expect(released).toEqual([])
+    expect(deps.getState().runs.find((x) => x.id === templateId)!.pendingStart).toBeUndefined()
+  })
+
+  it('예약이 아닌 Run 은 409 다', async () => {
+    const deps = makeDeps()
+    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true })
+    const r = await call(deps, 'run-pause', { run: (c.body as { id: string }).id })
+    expect(r.status).toBe(409)
+  })
+
+  it('없는 Run 은 400, --run 이 없으면 400', async () => {
+    const deps = makeDeps()
+    expect((await call(deps, 'run-pause', { run: 'run_nope' })).status).toBe(400)
+    expect((await call(deps, 'run-pause', {})).status).toBe(400)
+  })
+
+  it('워커 세션은 부를 수 없다', async () => {
+    const { deps, templateId } = await runningSchedule()
+    const r = await call(deps, 'run-pause', { run: templateId }, 'sess_running')
+    expect(r.status).toBe(403)
+  })
+})
+
 describe('run-merge', () => {
   it('워크트리들을 프로젝트 폴더로 합친다', async () => {
     const { deps, runId, merged } = await withFinishedWorktree()

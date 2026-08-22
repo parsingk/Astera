@@ -767,6 +767,15 @@ export const ko = {
   // 모든 Task 가 끝난 Run 만, 그것도 30일 뒤에 버린다. 중단한 작업이나 워커가 죽어 dispatched 에
   // 멈춘 Task 를 가진 Run 은 영원히 남는다
   'jobs.run.start': '실행',
+  'jobs.run.pause': '일시 중지',
+  'jobs.run.pauseHint': '이 예약을 세웁니다 — 도는 Task 도 함께 멈춥니다',
+  'jobs.run.pauseConfirmTitle': '예약 일시 중지',
+  'jobs.run.pauseConfirmBody': '현재 작업 중인 모든 task가 중지되며 다시 실행 시 다음 예약 시간부터 실행됩니다.',
+  'jobs.run.paused': '일시 중지됨',
+  'jobs.run.pauseFailed': '일시 중지하지 못했습니다',
+  'jobs.run.pauseRetained': 'worker-retain 으로 붙잡아 둔 세션이 있어 멈출 수 없습니다 — 먼저 놓아 주세요',
+  'jobs.run.resume': '다시 실행',
+  'jobs.run.resumeHint': '다음 예약 시각부터 다시 돌기 시작합니다',
   'jobs.run.startHint': 'Task 를 다 짠 뒤 누르면 이 작업이 돌기 시작합니다',
   'jobs.run.startFailed': '작업을 시작하지 못했습니다',
   'jobs.run.merge': '병합',

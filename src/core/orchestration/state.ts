@@ -208,6 +208,48 @@ export function startRun(s: OrchState, id: string): Res<Run> {
  * 낫다(startRun 이 두 번 불려도 성공인 것과 반대인 이유: 그쪽은 버튼이 두 번 눌린 것이고 요청한
  * 끝 상태가 이미 그것이지만, 이쪽은 두 번째 호출이 다른 경로를 들고 온다).
  */
+/**
+ * 예약을 일시 중지한다 — 이 템플릿과 그 회차들을 **모두** 세운다.
+ *
+ * 두 가지를 함께 한다. **열린 Dispatch 를 닫고**(세션을 죽이는 것은 배선이 이 함수 앞에서 한다 —
+ * worker-stop 과 같은 순서다), 템플릿과 회차들에 **pendingStart 를 세운다.**
+ *
+ * **회차까지 세우는 것이 요점이다.** Dispatch 를 닫는 것만으로는 그 회차가 멈추지 않는다 — 닫힌
+ * 자리에 그 회차의 다음 ready Task 가 곧바로 뜬다(회차는 autoDispatch 가 켜져 있다). 게이트가
+ * 없으면 "일시 중지" 가 "지금 도는 Task 하나만 멈춤" 이 된다.
+ *
+ * **새 상태를 만들지 않고 pendingStart 를 다시 세운다.** firesDue 가 이미 그 칸을 보고 발화도 무장도
+ * 건너뛰므로(fire.ts), 재생은 run-start 그대로이고 무장은 그 순간부터 다시 잡힌다 — 요청한
+ * "다음 예약 시각부터" 가 그 규칙에서 그대로 나온다. paused 칸을 따로 두면 "왜 발화하지 않나" 의
+ * 답이 둘이 되고, 갈라졌을 때 어느 쪽이 맞는지 알 수 없다.
+ *
+ * **멈춘 회차는 이어지지 않는다.** 그 회차의 게이트는 걷히지 않으므로(run-start 는 부른 Run 하나만
+ * 걷는다) 남은 Task 는 다시 돌지 않는다. 재생이 만드는 것은 다음 예약 시각의 **새 회차**다.
+ */
+export function pauseSchedule(s: OrchState, templateId: string, now: string): Res<Run> {
+  const template = s.runs.find((r) => r.id === templateId)
+  if (!template) return err(`unknown run: ${templateId}`)
+  if (!template.schedule) return err(`run is not scheduled: ${templateId}`)
+  const family = new Set([templateId, ...s.runs.filter((r) => r.templateId === templateId).map((r) => r.id)])
+  const taskIds = new Set(s.tasks.filter((t) => family.has(t.runId)).map((t) => t.id))
+  const paused = { ...template, pendingStart: true as const }
+  return ok(
+    {
+      ...s,
+      runs: s.runs.map((r) => (family.has(r.id) ? { ...r, pendingStart: true } : r)),
+      // 닫는 방식은 worker-stop 과 같다 — workerState 를 stopped 로, endedAt 을 찍는다. outcome 은
+      // 넣지 않는다: 이 워커는 결과를 보고하지 않았고, 보고하지 않은 것을 성공이나 실패로 적으면
+      // 그래프가 거짓말을 한다(재시작 정리가 그런 Dispatch 를 outcome_unknown 으로 읽는다).
+      dispatches: s.dispatches.map((d) =>
+        taskIds.has(d.taskId) && !d.outcome && !d.endedAt
+          ? { ...d, workerState: 'stopped' as const, endedAt: now }
+          : d
+      )
+    },
+    paused
+  )
+}
+
 export function setRunWorktree(s: OrchState, id: string, worktree: string): Res<Run> {
   const run = s.runs.find((r) => r.id === id)
   if (!run) return err(`unknown run: ${id}`)

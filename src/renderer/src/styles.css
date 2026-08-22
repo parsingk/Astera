@@ -1671,6 +1671,9 @@ label.check-small input[type="checkbox"]:focus-visible {
 .jobs-tmpl-badge { flex: none; font-size: 10px; padding: 1px 5px; border-radius: var(--radius-sm); background: rgba(55, 176, 196, 0.14); color: var(--accent); white-space: nowrap; }
 .jobs-tmpl-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 10px 8px 26px; color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
 .jobs-tmpl-empty { padding: 0 10px 10px 26px; color: var(--text-faint); font-size: 11px; }
+/* 멈춘 예약. **경고가 아니라 상태다** — 사람이 스스로 세운 것이므로 붉게 쓰지 않는다. 다만 그 줄의
+   나머지(규칙 요약, 회차 수)보다는 앞에 읽혀야 해서 흐린 본문색 대신 본문색을 쓰고 무게를 준다 */
+.jobs-tmpl-paused { flex: none; color: var(--text); font-weight: 500; }
 /* 회차 번호 칩. 한 템플릿의 회차는 목표가 같아 제목으로 구별되지 않으므로, 제목 앞에 번호가 먼저
    온다. .jobs-shared 와 같은 크기·모양이지만 경고가 아니라 이름표라 톤은 중립이다 */
 .jobs-ordinal { flex: none; font-size: 10px; padding: 1px 5px; border-radius: var(--radius-sm); background: var(--elevated); color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }

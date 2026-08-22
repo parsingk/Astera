@@ -23,6 +23,7 @@ import {
   deleteRuns,
   spawnScheduledRun,
   startRun,
+  pauseSchedule,
   setRunWorktree,
   type OrchState,
   type Res
@@ -171,6 +172,7 @@ const COORDINATOR_ONLY = new Set([
   'run-spawn',
   'run-start',
   'run-worktree-set',
+  'run-pause',
   'run-merge',
   'task-create',
   'task-update',
@@ -468,6 +470,35 @@ export async function handleCommand(
       const id = str(args.run)
       if (!id) return bad('--run is required')
       return commit(startRun(s, id))
+    }
+    case 'run-pause': {
+      const id = str(args.run)
+      if (!id) return bad('--run is required')
+      const target = s.runs.find((r) => r.id === id)
+      if (!target) return bad(`unknown run: ${id}`)
+      // 일시 중지는 예약에만 있다. 보통 Run 에는 멈출 발화가 없고, 그 Run 의 워커를 멈추는 것은
+      // worker-stop 이 Dispatch 하나씩 하는 일이다 — 같은 일을 두 이름으로 두지 않는다.
+      if (!target.schedule) return conflict(`run ${id} is not scheduled`)
+      // 템플릿과 회차 전부. run-delete 의 doomed 와 같은 집합이다 — 일시 중지도 삭제도 "이 예약에
+      // 딸린 것 전부" 를 대상으로 하므로 같은 방식으로 모은다.
+      const family = new Set([id, ...s.runs.filter((r) => r.templateId === id).map((r) => r.id)])
+      const open = s.dispatches.filter((d) => {
+        if (d.outcome || d.endedAt) return false
+        const runId = s.tasks.find((t) => t.id === d.taskId)?.runId
+        return runId !== undefined && family.has(runId)
+      })
+      // **붙잡아 둔 세션은 죽이지 않는다.** worker-retain 은 사람이 "이 세션을 살려 둬라" 고 말한
+      // 것이고, worker-stop 과 run-delete 가 같은 이유로 같은 거절을 한다. 이 거절은 풀 수 있다:
+      // worker-release 로 붙잡음을 놓으면 된다.
+      const retained = open.filter((d) => d.retained)
+      if (retained.length > 0)
+        return conflict(
+          `refusing to pause while ${retained.length} dispatch(es) are held by worker-retain — release them first`
+        )
+      // 세션을 닫는 것은 부수 효과이고 상태를 쓰지 않는다 — 상태에서 닫히는 것은 아래
+      // pauseSchedule 이 한꺼번에 한다(run-delete 가 releaseWorker 를 쓰는 순서와 같다).
+      for (const d of open) await deps.releaseWorker({ dispatchId: d.id })
+      return commit(pauseSchedule(s, id, now))
     }
     case 'run-worktree-set': {
       const id = str(args.run)

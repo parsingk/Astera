@@ -5,7 +5,7 @@ import { formatElapsed } from '../../../core/orchestration/elapsed'
 import { runningCount } from '../../../core/orchestration/running'
 import { schedRuleSummary } from '../../../core/scheduler/summary'
 import { useI18n } from '../i18n/I18nProvider'
-import { RunIcon, STATE_KEY, STATUS_COLOR, TaskGlyph, TaskIcon, TrashIcon } from './JobIcons'
+import { PauseIcon, PlayIcon, RunIcon, STATE_KEY, STATUS_COLOR, TaskGlyph, TaskIcon, TrashIcon } from './JobIcons'
 import type { RunIconKind } from './JobIcons'
 
 /** Run 헤더 글리프의 툴팁. 끝난·실패·막힘은 줄의 글리프와 같은 모양이고 같은 뜻이라 같은 문구를 쓴다.
@@ -283,6 +283,8 @@ function ScheduleCard({
   canOpenSession,
   onOpenSession,
   onOpenRun,
+  onPauseRun,
+  onResumeRun,
   onDeleteRun
 }: {
   run: JobRun
@@ -294,6 +296,8 @@ function ScheduleCard({
   canOpenSession: (sessionId: string) => boolean
   onOpenSession: (sessionId: string) => void
   onOpenRun: (runId: string) => void
+  onPauseRun: (runId: string) => void
+  onResumeRun: (runId: string) => void
   onDeleteRun: (runId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
@@ -308,6 +312,24 @@ function ScheduleCard({
         <span className="jobs-tmpl-badge" title={t('jobs.new.scheduleHint')}>
           {t('jobs.run.scheduled')}
         </span>
+        {/* **멈추고 싶어지는 순간은 이 줄에서 온다** — 회차가 쌓이는 것도, 워커가 계정 한도를 먹는
+            것도 여기서 보인다. 상세 창을 열어야 멈출 수 있다면 정확히 급한 순간에 마찰이 생긴다.
+            휴지통이 이미 이 줄에 있으므로(그보다 파괴적이다) 밀도의 문제는 아니고, 오클릭은 확인
+            창이 받는다. 회차 줄에는 두지 않는다: 회차는 읽기 전용 기록이고, 거기 두면 "이 회차만
+            멈추나, 예약 전체가 멈추나" 가 모호해진다.
+            stopPropagation: 이 줄 자체가 접기·펴기다 */}
+        <button
+          className="jobs-more"
+          title={run.pendingStart ? t('jobs.run.resumeHint') : t('jobs.run.pauseHint')}
+          aria-label={run.pendingStart ? t('jobs.run.resume') : t('jobs.run.pause')}
+          onClick={(e) => {
+            e.stopPropagation()
+            if (run.pendingStart) onResumeRun(run.id)
+            else onPauseRun(run.id)
+          }}
+        >
+          {run.pendingStart ? <PlayIcon /> : <PauseIcon />}
+        </button>
         {/* 상세 창으로 가는 입구 — 템플릿에서는 **Task 를 짜는 자리**다. 정의를 고치는 곳이
             여기뿐이라(회차는 읽기 전용 기록) 이 버튼이 회차보다 더 중요하다.
             stopPropagation: 이 줄 자체가 접기·펴기라서, 없으면 창을 열면서 동시에 접는다 */}
@@ -325,8 +347,16 @@ function ScheduleCard({
       </div>
       <div className="jobs-tmpl-meta">
         <span>{schedRuleSummary(t, run.schedule)}</span>
-        {run.nextFireAt !== undefined && (
-          <span>{t('jobs.run.scheduleNext', { time: fmtNext(run.nextFireAt) })}</span>
+        {/* **멈춘 것이 보여야 한다.** 일시 중지하면 무장하지 않으므로(firesDue) '다음 …' 줄이 그냥
+            사라진다 — 그러면 멈춘 예약과 도는 예약이 화면에서 거의 같아 보이고, 멈춘 것을 잊은
+            사람이 "왜 안 도는지" 를 찾게 된다. 한 번도 돌리지 않은 것도 같은 자리에 선다: 둘 다
+            버튼을 눌러야 도는 상태이고, 아래 회차 목록의 문구가 그 둘을 이미 구별해 준다. */}
+        {run.pendingStart ? (
+          <span className="jobs-tmpl-paused">{t('jobs.run.paused')}</span>
+        ) : (
+          run.nextFireAt !== undefined && (
+            <span>{t('jobs.run.scheduleNext', { time: fmtNext(run.nextFireAt) })}</span>
+          )
         )}
         {/* **children.length 가 아니라 fireCount 다.** 회차 기록은 사람이 지우고 30일 TTL 도
             지우므로, 개수로 적으면 이 숫자가 뒤로 간다 — 실제로 그렇게 보고됐다. 아래 회차 목록의
@@ -405,6 +435,8 @@ export function JobsView({
   onOpenSession,
   onOpenRun,
   onNewRun,
+  onPauseRun,
+  onResumeRun,
   onDeleteRun
 }: {
   snapshot: OrchSnapshot | null
@@ -432,6 +464,10 @@ export function JobsView({
   /** Opens NewRunModal. This view creates no Run itself — App owns the modal and the project path it
    *  needs, the same split as onOpenRun/onOpenSession above. */
   onNewRun: () => void
+  /** 예약을 세운다·다시 돌린다. **App 이 들고 있다** — 상세 창의 같은 아이콘과 확인 문구·409 의
+   *  갈래를 공유해야 하므로 이 뷰가 자기 사본을 갖지 않는다(onDeleteRun 과 같은 갈래다). */
+  onPauseRun: (runId: string) => void
+  onResumeRun: (runId: string) => void
   /** 이 Run 을 물러나게 한다(`run-delete`). **되돌릴 수 없다** — 확인은 이 뷰가 받고(지워지는 것을
    *  세어 보여 준다) 명령은 App 이 보낸다, onOpenRun 과 같은 갈래다. */
   onDeleteRun: (runId: string) => void
@@ -511,6 +547,8 @@ export function JobsView({
             canOpenSession={canOpenSession}
             onOpenSession={onOpenSession}
             onOpenRun={onOpenRun}
+            onPauseRun={onPauseRun}
+            onResumeRun={onResumeRun}
             onDeleteRun={onDeleteRun}
           />
         ) : (
