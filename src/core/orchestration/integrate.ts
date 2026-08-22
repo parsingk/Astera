@@ -212,8 +212,12 @@ export function workingInRunRoot(s: OrchState, runId: string): boolean {
  *  이어야 한다. 두 곳에 나누어 두면 한쪽만 고쳐졌을 때 에이전트가 합치라고 받은 목록과 앱이 합쳤다고
  *  믿는 목록이 갈라진다. 순수 함수이므로 이 파일의 경계(git 도 fs 도 만지지 않는다)는 그대로다. */
 export function buildIntegrationSpec(a: {
-  /** 병합이 일어나야 하는 프로젝트 폴더. 통합 Task 는 여기서 돈다 */
-  runCwd: string
+  /** 병합이 일어나야 하는 폴더 — Run 이 일하는 뿌리다. 통합 Task 는 여기서 돈다.
+   *
+   *  **프로젝트 폴더가 아니다.** Run 이 자기 워크트리를 가지면 합칠 자리도 그 워크트리이고, 이 문장이
+   *  프로젝트 폴더를 가리키면 에이전트는 자기가 서 있지도 않은 폴더에서 합치라는 말을 듣는다 — 그리고
+   *  buildSpecFile 이 붙이는 커밋 의무("이 워크트리에 커밋하라")와 정면으로 부딪힌다. */
+  mergeInto: string
   /** 앱이 스스로 합치지 않고 멈춘 이유. 영어로 온다(git 의 말이 그대로 실릴 수 있다) */
   reason: string
   /** 합칠 워크트리들. branch 가 null 이면 앱이 그 폴더의 브랜치를 알아내지 못했다는 뜻이다 */
@@ -235,7 +239,7 @@ app does that merge itself when it can — this time it stopped and handed it to
 
 Why the app stopped: ${a.reason}
 
-The repository is at ${a.runCwd} and that is your working directory. The branch it is on right now is
+The repository is at ${a.mergeInto} and that is your working directory. The branch it is on right now is
 the merge target: do not switch branches and do not create a new one.
 
 Merge these, in this order:

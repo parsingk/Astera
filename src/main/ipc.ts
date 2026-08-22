@@ -926,11 +926,13 @@ export function registerIpc(
       | { kind: 'human'; reason: string }
       | { kind: 'agent'; reason: string; worktrees: { path: string; branch: string | null }[] }
 
-    /** 워크트리에서 끝난 일을 **프로젝트 폴더로 실제로 합친다.** 무엇을 합쳐야 하는가의 판정은
-     *  integrate.ts 가 하고(순수하므로 테스트가 있다), 이 함수는 그 답을 git 으로 실행한다.
+    /** 워크트리에서 끝난 일을 **합칠 폴더에 실제로 합친다.** 그 폴더는 부르는 쪽이 정한다 —
+     *  스케줄러는 Run 뿌리를 주고 `run-delete --merge` 는 프로젝트 폴더를 준다. 무엇을 합쳐야
+     *  하는가의 판정은 integrate.ts 가 하고(순수하므로 테스트가 있다), 이 함수는 그 답을 git 으로
+     *  실행한다.
      *
      *  **이것이 사용자의 저장소에 스스로 쓰는 유일한 자동 경로다.** 사용자가 그렇게 결정했으므로
-     *  허용되지만, 지켜야 하는 것이 하나 있다: **어떤 실패 경로에서도 프로젝트 폴더를 병합 중간
+     *  허용되지만, 지켜야 하는 것이 하나 있다: **어떤 실패 경로에서도 합칠 폴더를 병합 중간
      *  상태로 남기지 않는다.** 아래의 순서(미리 검사 → 진짜 병합 → 실패하면 되돌리고 되돌아갔는지
      *  확인)가 전부 그것을 위한 것이다. */
     /** 워크트리의 세션이 닫히기를 기다리는 상한. pty.kill 은 비동기이고 상태는 exit 이벤트가 와야
@@ -991,7 +993,7 @@ export function registerIpc(
         return false
       }
     }
-    const integrateWorktrees = async (runCwd: string, paths: string[]): Promise<Integration> => {
+    const integrateWorktrees = async (mergeInto: string, paths: string[]): Promise<Integration> => {
       // 1. **저장소가 무언가의 중간이면 아무것도 하지 않는다.** 아래 2의 porcelain 검사는 경로 항목만
       //    내므로 브랜치·상태를 전혀 말하지 않는다 — 작업 트리가 깨끗한 채로 rebase·bisect 중인
       //    저장소와 분리된 HEAD 는 **빈 출력을 낸다.** 그것을 안전으로 읽으면 앱이 그 위에 병합을 건다.
@@ -1015,27 +1017,27 @@ export function registerIpc(
       //      트리가 깨끗한 채 CHERRY_PICK_HEAD 만 남는다. git 자신도 wt_status_get_state 에서 같은
       //      파일들을 본다.
       //
-      //    표시 파일의 자리를 `<runCwd>/.git` 으로 짐작하지 않는다 — 워크트리에서 `.git` 은 파일이고
+      //    표시 파일의 자리를 `<mergeInto>/.git` 으로 짐작하지 않는다 — 워크트리에서 `.git` 은 파일이고
       //    실제 디렉터리는 <주 저장소>/.git/worktrees/<이름> 이다. 그리고 이 상태들은 워크트리마다
       //    따로다. gitDir()(worktrees/git.ts)이 `--absolute-git-dir` 로 그 자리를 답한다.
       // **git 디렉터리를 먼저 묻는다.** 아래 symbolic-ref 의 실패는 유효한 저장소에서만 "분리됐다"를
       // 뜻하고, 폴더가 사라졌거나 저장소가 아닐 때도 똑같이 실패한다 — 순서가 반대였을 때 이 함수는
       // 그 경우에도 "분리된 HEAD" 라고 말했다. 그 오진이 createWorktree 어댑터 쪽에서 실제로 사람을
       // 헤매게 했고(그쪽 주석), 같은 질문을 같은 방식으로 묻는 이 자리도 같은 순서여야 한다.
-      const dir = await gitDir(runCwd)
+      const dir = await gitDir(mergeInto)
       if (!dir)
         return {
           kind: 'human',
           reason:
-            `프로젝트 폴더(${runCwd})에서 git 을 돌릴 수 없어 워크트리를 합치지 못했습니다 — 그 폴더가 ` +
+            `합칠 폴더(${mergeInto})에서 git 을 돌릴 수 없어 워크트리를 합치지 못했습니다 — 그 폴더가 ` +
             `사라졌거나 git 저장소가 아닙니다.`
         }
-      const head = await git(['symbolic-ref', '--quiet', 'HEAD'], { cwd: runCwd })
+      const head = await git(['symbolic-ref', '--quiet', 'HEAD'], { cwd: mergeInto })
       if (!head.ok)
         return {
           kind: 'human',
           reason:
-            `프로젝트 폴더(${runCwd})의 HEAD 가 브랜치를 가리키지 않아 워크트리를 합치지 않았습니다` +
+            `합칠 폴더(${mergeInto})의 HEAD 가 브랜치를 가리키지 않아 워크트리를 합치지 않았습니다` +
             `(분리된 HEAD — bisect 나 rebase 중일 수도 있습니다). 그 위에 병합하면 만든 커밋이 어느 ` +
             `브랜치에도 남지 않고, 진행 중인 작업이 있다면 그것이 깨집니다. 브랜치를 체크아웃한 뒤 ` +
             `이 Gate 를 해결해 주세요.`
@@ -1055,7 +1057,7 @@ export function registerIpc(
         return {
           kind: 'human',
           reason:
-            `프로젝트 폴더에서 ${busy[1]} 작업이 진행 중(${busy[0]})이어서 워크트리를 합치지 ` +
+            `합칠 폴더에서 ${busy[1]} 작업이 진행 중(${busy[0]})이어서 워크트리를 합치지 ` +
             `않았습니다. 그 중간에 병합하면 진행 중인 작업이 깨집니다 — 끝내거나 중단한 뒤 이 Gate 를 ` +
             `해결해 주세요.`
         }
@@ -1074,17 +1076,17 @@ export function registerIpc(
       //    `git diff --quiet HEAD` 가 아니라 porcelain 을 읽는 이유는 실패를 구별할 수 있어서다 —
       //    diff 는 "차이가 있다"와 "명령이 실패했다"를 둘 다 0 이 아닌 종료 코드로 내고 git() 은 ok
       //    하나만 준다. 그러면 Gate 의 문장이 사실을 말할 수 없다.
-      const status = await git(['status', '--porcelain', '--untracked-files=no'], { cwd: runCwd })
+      const status = await git(['status', '--porcelain', '--untracked-files=no'], { cwd: mergeInto })
       if (!status.ok)
         return {
           kind: 'human',
-          reason: `프로젝트 폴더(${runCwd})의 git 상태를 읽을 수 없어 워크트리를 합치지 못했습니다: ${status.stderr}`
+          reason: `합칠 폴더(${mergeInto})의 git 상태를 읽을 수 없어 워크트리를 합치지 못했습니다: ${status.stderr}`
         }
       if (status.stdout !== '')
         return {
           kind: 'human',
           reason:
-            `프로젝트 폴더에 커밋되지 않은 변경이 ${status.stdout.split('\n').length}개 있어 워크트리를 ` +
+            `합칠 폴더에 커밋되지 않은 변경이 ${status.stdout.split('\n').length}개 있어 워크트리를 ` +
             `합칠 수 없습니다. 커밋하거나 되돌린 뒤 이 Gate 를 해결해 주세요(추적되지 않는 새 파일은 ` +
             `여기에 세지 않습니다).`
         }
@@ -1093,7 +1095,7 @@ export function registerIpc(
       //    listGitWorktrees 는 git() 과 달리 **실패하면 던진다** — 그래서 감싼다.
       let rows: { path: string; branch: string | null }[]
       try {
-        rows = await listGitWorktrees(runCwd)
+        rows = await listGitWorktrees(mergeInto)
       } catch (e) {
         return { kind: 'human', reason: `워크트리 목록을 읽을 수 없습니다: ${String(e)}` }
       }
@@ -1146,7 +1148,7 @@ export function registerIpc(
       for (const target of targets) {
         // 같은 이름의 태그가 브랜치보다 먼저 잡히는 것을 막으려고 전체 ref 를 쓴다(remove.ts 와 같다)
         const ref = `refs/heads/${target.branch}`
-        const probe = await git(['merge-tree', '--write-tree', 'HEAD', ref], { cwd: runCwd })
+        const probe = await git(['merge-tree', '--write-tree', 'HEAD', ref], { cwd: mergeInto })
         if (!probe.ok)
           return {
             kind: 'agent',
@@ -1167,25 +1169,25 @@ export function registerIpc(
           }
         // `--no-edit` 는 편집기를 막는 것이다. 이 자리에는 사람이 없고, 편집기가 뜨면 그 git 프로세스는
         // git() 의 30초 timeout 까지 서 있다가 죽는다 — 그때 남는 저장소가 곧 병합 중간 상태다.
-        const merged = await git(['merge', '--no-edit', ref], { cwd: runCwd })
+        const merged = await git(['merge', '--no-edit', ref], { cwd: mergeInto })
         if (!merged.ok) {
           // 미리 검사가 통과했는데도 실패했다면 충돌이 아닌 이유다(추적되지 않는 파일과의 겹침,
           // index.lock, 훅, 서명). 되돌린 뒤 사람에게 간다 — 에이전트에게 넘기지 않는 이유는 이것이
           // "합치면 충돌한다"가 아니라 "앱이 병합을 돌릴 수 없다"이기 때문이다.
-          await git(['merge', '--abort'], { cwd: runCwd }) // 병합이 시작되지도 않았으면 실패한다 — 무시한다
+          await git(['merge', '--abort'], { cwd: mergeInto }) // 병합이 시작되지도 않았으면 실패한다 — 무시한다
           // **되돌아갔는지 확인해서 그 사실을 문장에 넣는다.** 앱이 저장소를 어떤 상태로 두었는지를
           // 사용자가 짐작하게 두지 않는다 — 이 경로가 있는 이유가 그것이다.
-          const after = await git(['status', '--porcelain', '--untracked-files=no'], { cwd: runCwd })
+          const after = await git(['status', '--porcelain', '--untracked-files=no'], { cwd: mergeInto })
           const left =
             after.ok && after.stdout === ''
-              ? '프로젝트 폴더는 병합 전 상태로 되돌렸습니다.'
-              : '**프로젝트 폴더가 병합 중간 상태로 남아 있을 수 있습니다 — git status 로 직접 확인해 주세요.**'
+              ? '합칠 폴더는 병합 전 상태로 되돌렸습니다.'
+              : '**합칠 폴더가 병합 중간 상태로 남아 있을 수 있습니다 — git status 로 직접 확인해 주세요.**'
           return {
             kind: 'human',
-            reason: `${target.branch} 브랜치를 프로젝트 폴더에 합치지 못했습니다: ${merged.stderr || merged.stdout}. ${left}`
+            reason: `${target.branch} 브랜치를 합칠 폴더에 합치지 못했습니다: ${merged.stderr || merged.stdout}. ${left}`
           }
         }
-        orchLog(`scheduler: merged ${ref} into ${runCwd}`)
+        orchLog(`scheduler: merged ${ref} into ${mergeInto}`)
         // 합친 워크트리는 여기서 지운다 — **폴더까지.** 예약이 이것을 필수로 만들었다: 회차마다
         // 워커 수만큼 워크트리가 생기므로 사람이 손으로 지우는 것은 현실적이지 않다.
         //
@@ -1196,9 +1198,9 @@ export function registerIpc(
         // 레지스트리 항목까지 걷는다.
         //
         // force: true — 합친 뒤 워크트리에 남는 것은 커밋되지 않은 변경과 추적되지 않는 파일뿐이고,
-        // 커밋된 일은 방금 프로젝트 폴더로 들어갔다. 그 대가를 알고 고른 동작이다.
+        // 커밋된 일은 방금 합칠 폴더로 들어갔다. 그 대가를 알고 고른 동작이다.
         //
-        // **정리 실패가 병합을 망치지 않는다.** 병합은 이미 성공했고 결과물은 프로젝트 폴더에 있다 —
+        // **정리 실패가 병합을 망치지 않는다.** 병합은 이미 성공했고 결과물은 합칠 폴더에 있다 —
         // 정리가 안 됐다고 Gate 를 열면 사람이 손쓸 것도 없는 자리에서 파이프라인이 선다. 도는
         // 세션이 그 폴더를 쓰고 있으면 removeWorktree 가 IN_USE 로 던지고 **그것이 맞다**: 살아 있는
         // 프로세스 밑의 폴더는 지우지 않는다. 그때 그 워크트리는 남고 이유는 로그에 남는다.
@@ -1377,7 +1379,7 @@ export function registerIpc(
               const runRoot = runRootOf(run)
 
               // **통합 단계 — worker-start 앞이다.** 의존이 자기 워크트리에서 돌았다면 그 브랜치의
-              // 커밋을 프로젝트 폴더로 먼저 합친다. 앱이 직접 합치고 **충돌할 때만 에이전트에게**
+              // 커밋을 Run 뿌리로 먼저 합친다. 앱이 직접 합치고 **충돌할 때만 에이전트에게**
               // 넘기는 것이 이 기능의 결정이다: 사람을 부르는 것은 모든 작업이 끝났을 때로 미룬다.
               //
               // 통합 Task 자신은 이 단계를 지나지 않는다. 지나면 그 Task 의 deps(= 그 워크트리 Task
@@ -1396,7 +1398,7 @@ export function registerIpc(
                   )
                   continue
                 }
-                // 프로젝트 폴더에서 도는 워커가 있으면 합치지 않는다 — 그 워커가 읽은 트리를 그
+                // Run 뿌리에서 도는 워커가 있으면 합치지 않는다 — 그 워커가 읽은 트리를 그
                 // 아래에서 갈아치우는 일이고, 그 실패는 조용하다(integrate.ts 에 이유가 있다).
                 // 다음 상태 변경에 다시 본다. 그 워커가 끝나는 것 자체가 상태 변경이다.
                 if (workingInRunRoot(state, slot.runId)) {
@@ -1446,7 +1448,7 @@ export function registerIpc(
                       // 않았을 때 task-create 가 하는 것과 같은 길이다.
                       title: `워크트리 병합: ${task.title}`.slice(0, 80),
                       spec: buildIntegrationSpec({
-                        runCwd: run.cwd,
+                        mergeInto: runRoot,
                         reason: integration.reason,
                         worktrees: integration.worktrees
                       })
@@ -1469,11 +1471,12 @@ export function registerIpc(
                 }
               }
 
-              // 통합 Task 는 Run 뿌리에서 도는 유일한 워커이므로(아래 배치 예외), **둘이 겹치지
-              // 않게 한다.** 접합점이 둘이면 통합 Task 도 둘이 만들어질 수 있고, 그 둘을 같은 폴더에
-              // 함께 띄우면 서로의 index.lock 과 서로가 만든 병합을 밟는다 — 한 폴더에 병렬 워커를
-              // 두지 않는다는 Task 배치 규칙의 이유가 그대로 여기에도 있다. 뒤의 것은 다음 상태
-              // 변경에 다시 본다(앞의 것이 끝나는 것 자체가 상태 변경이다).
+              // 통합 Task 는 동시 실행 손잡이와 상관없이 Run 뿌리에 놓이므로(아래 배치 예외), 그
+              // 자리에 이미 도는 워커와 **겹치지 않게 한다.** 접합점이 둘이면 통합 Task 도 둘이
+              // 만들어질 수 있고, 그 둘을 같은 폴더에 함께 띄우면 서로의 index.lock 과 서로가 만든
+              // 병합을 밟는다 — 한 폴더에 병렬 워커를 두지 않는다는 Task 배치 규칙의 이유가 그대로
+              // 여기에도 있다. 뒤의 것은 다음 상태 변경에 다시 본다(앞의 것이 끝나는 것 자체가 상태
+              // 변경이다).
               if (isIntegrationTask(task) && workingInRunRoot(state, slot.runId)) {
                 orchLog(
                   `scheduler: integration task=${slot.taskId} waits — a worker is still working in ${runRoot}`
@@ -1491,10 +1494,11 @@ export function registerIpc(
               // 자리가 없어진다)는 여기서도 지켜진다: 그 spec 이 끝에 작업 트리를 깨끗하게 두라고
               // 요구하고, 그 Dispatch 가 열려 있는 동안은 workingInRunRoot 가 앱의 병합을 막는다.
               //
-              // **'current' 를 앱이 더 이상 보내지 않는다.** 명시 경로 분기(coordinator.ts)로
-              // 보내는 이유는 그쪽이 fs.stat 으로 존재를 확인해 주기 때문이고, 'current' 는
-              // runCwd(= 프로젝트 폴더)를 뜻하므로 이제 앱이 원하는 자리가 아니다. 그 분기 자체는
-              // 남는다 — `worker-start --worktree current` 는 사람이 부를 수 있는 CLI 명령이다.
+              // **스케줄러의 배치는 'current' 를 더 이상 보내지 않는다.** 명시 경로 분기
+              // (coordinator.ts)로 보내는 이유는 그쪽이 fs.stat 으로 존재를 확인해 주기 때문이다.
+              // 'current' 를 보내는 곳은 둘 남는다: 검토 Dispatch 는 구현자의 트리를 runCwd 로 넘겨
+              // 검토자를 정확히 그 트리에, 커밋 의무 없이 세우고(startReview), CLI 에서는 사람이
+              // `--worktree current` 를 직접 쓸 수 있다.
               const placement =
                 isIntegrationTask(task) || limit <= 1
                   ? { worktree: runRoot }

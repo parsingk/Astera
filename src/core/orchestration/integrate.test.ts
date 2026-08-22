@@ -347,7 +347,7 @@ describe('workingInRunRoot', () => {
 describe('buildIntegrationSpec', () => {
   const spec = (): string =>
     buildIntegrationSpec({
-      runCwd: RUN_CWD,
+      mergeInto: RUN_CWD,
       reason: 'merge-tree reported a conflict',
       worktrees: [
         { path: WT_A, branch: 'me/a' },
