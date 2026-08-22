@@ -54,10 +54,17 @@ export function NewRunModal({
         cwd: projectPath,
         provider,
         concurrency,
-        // 예약이면 auto 를 보내지 않는다 — 템플릿은 자신이 돌지 않고, 발화가 만든 자식 Run 이
-        // 돈다(그 자식은 spawnScheduledRun 이 autoDispatch 를 켠다). 예약이 아니면 이 UI 로 만든
-        // Run 은 언제나 자동이다 — 사용자에게 스위치를 주지 않는다(스펙 5절)
-        ...(scheduled && schedule ? { schedule } : { auto: true })
+        // **`auto` 는 예약에도 보낸다.** 뜻은 "앱이 이것을 돌린다" 이고, 예약도 앱이 돌린다 —
+        // 발화가 앱의 ticker 다. 이 UI 로 만든 Run 은 언제나 자동이므로 사용자에게 스위치를 주지
+        // 않는다(스펙 5절).
+        //
+        // 한때 예약에는 보내지 않았다. 이유는 맞았지만 막는 자리가 틀렸다: 템플릿이 자기 Task 를
+        // 스스로 배치하면 정의 자체를 돌려 버리는데, 그것을 막는 것은 `autoDispatch` 이고
+        // run-create 가 이미 `schedule === undefined` 로 그 칸을 따로 withhold 한다. 그런데
+        // `pendingStart`("아직 시작하지 않았다")도 같은 깃발을 타고 있어서, 보내지 않으면 예약
+        // 템플릿에 **'실행' 버튼이 아예 붙지 않았다** — 실제로 그렇게 보고됐다.
+        ...(scheduled && schedule ? { schedule } : {}),
+        auto: true
       })
       if (reply.status >= 400) {
         // 실패해도 모달은 닫지 않는다 — 닫으면 사용자는 눌러도 아무 일도 없었다고 여긴다
