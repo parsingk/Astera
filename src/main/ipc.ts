@@ -39,6 +39,7 @@ import {
 import { pickReviewer } from '../core/orchestration/reviewer'
 import { slotsToFill } from '../core/orchestration/schedule'
 import { firesDue } from '../core/orchestration/fire'
+import { reapableChildRuns } from '../core/orchestration/reap'
 import {
   buildIntegrationSpec,
   integrationTaskFor,
@@ -1528,6 +1529,27 @@ export function registerIpc(
             }
           }
         } while (scheduleAgain)
+
+        // **끝난 예약 회차의 워크트리를 걷는다.** 발화마다 폴더가 하나씩 쌓이던 것을 막는다.
+        // 판정은 순수 함수가 하고(reapableChildRuns) 여기서는 그 목록을 지운다 — 합치지 않고
+        // 지우지만 회차의 커밋은 브랜치에 남는다(removeWorktree 의 `branch -d` 가 합쳐지지 않은
+        // 브랜치를 거부한다). 그 브랜치가 남았다는 사실은 reapWorktree 가 `branch deleted=false` 로
+        // 로그에 남긴다.
+        //
+        // 슬롯 루프 뒤인 이유: 회차가 끝나는 순간은 마지막 Task 가 completed 되는 저장이고 그 저장
+        // 에는 띄울 슬롯이 없다.
+        //
+        // **순차로 지운다.** reapWorktree 는 세션을 닫고 그 세션이 실제로 사라질 때까지 조건 폴링을
+        // 하므로, 병렬로 부르면 같은 저장소의 git 을 여럿이 동시에 밟는다(run-delete 의
+        // removeWorktrees 가 같은 이유로 순차다).
+        //
+        // **try/catch 를 두지 않는다.** reapWorktree 는 던지지 않는다 — boolean 을 돌려주고 실패는
+        // 스스로 로그에 남긴다(reapWorktree 안의 catch 가 orchLog 를 부른다). 감싸면 절대 실행되지
+        // 않는 catch 가 하나 생기고, 다음에 읽는 사람은 그것을 "여기서 던질 수 있다"는 신호로 읽는다.
+        const isAppWorktree = (p: string): boolean =>
+          core.worktrees.list().some((w) => isSamePath(w.path, p))
+        for (const r of reapableChildRuns(orch.deps.getState(), isAppWorktree))
+          for (const w of r.worktrees) await reapWorktree(w)
       } finally {
         // finally 여야 한다 — 위의 `if (!orch) return` 도, handleCommand 안에서 올라오는 예외(디스크가
         // 찬 store.save 가 그것이다)도 이 자리를 지나간다. 한 번이라도 놓치면 scheduling 이 true 로
