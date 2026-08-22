@@ -2431,10 +2431,16 @@ export default function App(): React.JSX.Element {
                       (n, r) => n + r.tasks.filter((tk) => tk.startedAt !== undefined).length,
                       0
                     )
-                    // **예약이 아니고 워크트리를 쓴 Run 에만 선택지를 준다.** 예약 템플릿은 회차까지
-                    // 지우는 별개 흐름이고, 워크트리를 쓰지 않은 Run(동시 실행 1 의 배치 규칙)에는
-                    // 합칠 것도 지울 폴더도 없다 — 뜻 없는 체크박스를 띄우지 않는다.
-                    const wt = run.schedule ? [] : (run.worktrees ?? [])
+                    // **워크트리를 쓴 Run 에만 선택지를 준다.** 하나도 없으면 합칠 것도 지울 폴더도
+                    // 없어서 뜻 없는 체크박스가 된다.
+                    //
+                    // **예약 템플릿은 회차들의 것을 센다.** 템플릿 자신은 한 번도 돌지 않아 폴더가
+                    // 없지만, 지우면 회차까지 함께 사라지고(server.ts 의 doomed) 폴더를 쓴 것은
+                    // 그 회차들이다. 템플릿을 빈 목록으로 두었더니 체크박스가 아예 안 떠서, 회차마다
+                    // 하나씩 쌓인 폴더를 지울 문이 없었다 — 그렇게 보고됐다.
+                    const wt = run.schedule
+                      ? kids.flatMap((k) => k.worktrees ?? [])
+                      : (run.worktrees ?? [])
                     const answer = await confirmModalWithChoices({
                       title: t('jobs.run.delete'),
                       // 예약 템플릿을 지우는 것만 워커를 정지시킨다(server.ts 의 run-delete) —

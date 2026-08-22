@@ -2700,6 +2700,106 @@ describe('run-delete — 병합·워크트리 선택', () => {
   })
 })
 
+// **예약 템플릿을 지울 때 회차들의 워크트리가 대상이다.** 템플릿 자신은 한 번도 돌지 않아 폴더가
+// 없고, id 하나만 보면 그 목록이 비어서 병합도 폴더 삭제도 조용히 건너뛰어진다
+describe('run-delete — 예약 템플릿의 회차 워크트리', () => {
+  /** 템플릿 + 회차 하나. 그 회차만 워크트리에서 끝난 Dispatch 를 갖는다 */
+  const templateWithRound = async (): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    templateId: string
+    merged: string[][]
+    removed: string[][]
+  }> => {
+    const merged: string[][] = []
+    const removed: string[][] = []
+    const deps = Object.assign(makeDeps(), {
+      mergeWorktrees: async (_c: string, paths: string[]) => {
+        merged.push(paths)
+        return { ok: true as const, merged: paths, uncommitted: 0 }
+      },
+      removeWorktrees: async (paths: string[]) => {
+        removed.push(paths)
+        return { failed: [] as string[] }
+      }
+    })
+    const c = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      provider: 'claude',
+      auto: true,
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    const templateId = (c.body as { id: string }).id
+    // 회차와 그 회차의 Task·Dispatch 를 직접 얹는다 — run-spawn 은 템플릿의 Task 를 복사하므로
+    // 여기서는 Task 를 템플릿에 두지 않고 회차에만 둔다(그것이 이 테스트가 보는 모양이다)
+    await deps.setState({
+      ...deps.getState(),
+      runs: [
+        ...deps.getState().runs,
+        {
+          id: 'run_kid',
+          objective: 'o',
+          cwd: 'D:/p',
+          createdAt: NOW,
+          provider: 'claude',
+          autoDispatch: true,
+          templateId,
+          fireOrdinal: 1
+        }
+      ],
+      tasks: [
+        {
+          id: 'tsk_kid',
+          runId: 'run_kid',
+          title: 't',
+          spec: 's',
+          deps: [],
+          status: 'completed',
+          consecutiveFailures: 0,
+          createdAt: NOW,
+          updatedAt: NOW
+        }
+      ],
+      dispatches: [
+        {
+          id: 'dsp_kid',
+          taskId: 'tsk_kid',
+          provider: 'claude',
+          accountId: 'acc1',
+          sessionId: 'sess_kid',
+          cwd: 'D:/wt/kid',
+          specPath: 'D:/wt/kid/spec.md',
+          startedAt: NOW,
+          endedAt: NOW,
+          outcome: 'succeeded',
+          workerState: 'ready',
+          retained: false
+        }
+      ]
+    })
+    return { deps, templateId, merged, removed }
+  }
+
+  it('회차의 폴더를 지운다 — 템플릿 자신에는 폴더가 없다', async () => {
+    const { deps, templateId, removed } = await templateWithRound()
+    const r = await call(deps, 'run-delete', { id: templateId, removeWorktrees: true })
+    expect(r.status).toBe(200)
+    expect(removed).toEqual([['D:/wt/kid']])
+  })
+
+  it('회차의 일을 합친다', async () => {
+    const { deps, templateId, merged } = await templateWithRound()
+    expect((await call(deps, 'run-delete', { id: templateId, merge: true })).status).toBe(200)
+    expect(merged).toEqual([['D:/wt/kid']])
+  })
+
+  it('템플릿과 회차가 함께 사라진다', async () => {
+    const { deps, templateId } = await templateWithRound()
+    await call(deps, 'run-delete', { id: templateId, removeWorktrees: true })
+    expect(deps.getState().runs).toHaveLength(0)
+  })
+})
+
 describe('run-merge', () => {
   it('워크트리들을 프로젝트 폴더로 합친다', async () => {
     const { deps, runId, merged } = await withFinishedWorktree()

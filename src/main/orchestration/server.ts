@@ -422,7 +422,12 @@ export async function handleCommand(
       // **병합이 먼저다.** 사람이 병합을 골랐는데 실패한 뒤 지우면 워커의 일이 워크트리 브랜치에
       // 갇힌 채 그 브랜치까지 사라진다 — 그래서 실패하면 아무것도 지우지 않고 이유를 돌려준다.
       // 순서도 이래야 한다: 폴더를 먼저 지우면 합칠 대상이 없어진다.
-      const worktrees = runWorktrees(s, id)
+      //
+      // **doomed 전체를 본다, id 하나가 아니라.** 예약 템플릿을 지우면 회차까지 함께 사라지고
+      // (doomed), 워크트리를 쓴 것은 **회차들**이다 — 템플릿 자신은 한 번도 돌지 않으므로 폴더가
+      // 없다. id 만 보면 그 목록이 비어서 병합도 폴더 삭제도 조용히 건너뛰어지고, 회차마다 하나씩
+      // 쌓인 폴더가 그대로 남는다(그렇게 보고됐다).
+      const worktrees = [...doomed].flatMap((r) => runWorktrees(s, r))
       if (args.merge === true && worktrees.length > 0) {
         if (!deps.mergeWorktrees) return bad('merging is not available in this build')
         const merged = await deps.mergeWorktrees(run.cwd, worktrees)

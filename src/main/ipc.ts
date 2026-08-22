@@ -2305,9 +2305,20 @@ export function registerIpc(
     async (_e, projectPath: string, cmd: string, args: Record<string, unknown>) => {
       await assertAllowedPath(projectPath)
       if (!orch) return { status: 409, body: { error: 'orchestration disabled' } }
-      // orch.list/orch.runDetail 과 같은 정규화 — Run.cwd 가 워크트리 안일 수 있으므로, args 의
-      // id 가 이 프로젝트 것인지는 저장소 경로로 정규화한 뒤에야 정확히 답할 수 있다.
-      const project = repoPathOf(core.worktrees.list(), projectPath)
+      // **범위는 렌더러가 지금 보고 있는 것이다.** 소유 판정이 답해야 하는 물음은 "이 렌더러가 남의
+      // 프로젝트 Run 을 부르는가" 이고, 렌더러는 자기가 **보여 준** Run 만 이름 부른다. 무엇을
+      // 보여 줬는지는 orchProject 가 알고 있다 — orch.list 가 정규화해 둔 저장소 경로다.
+      //
+      // 들어온 경로를 그때그때 정규화하면 판정이 흔들린다. 렌더러는 활성 탭의 cwd 로 범위를 잡고
+      // 그것이 워크트리일 수 있는데, 워크트리를 저장소로 되돌리는 것은 **그 순간의 레지스트리 조회**
+      // 이고(repoPathOf), 앱 자신이 그 항목을 회차마다·병합마다 만들고 지운다. 그래서 같은 삭제가
+      // 순간에 따라 통과하거나 403 을 받았다 — 워크트리가 막 걷힌 창에서 그 경로는 아무 저장소로도
+      // 되돌아가지 않는다. 실제로 그렇게 보고됐다.
+      //
+      // 구독이 없을 때만 정규화로 물러난다(렌더러가 아직 목록을 부르지 않았거나 껐다) — 그때는
+      // 비교할 "보여 준 것" 이 없다. assertAllowedPath 는 위에서 **받은 경로 그대로**에 걸린다:
+      // 렌더러가 어떤 경로를 부를 수 있는가는 다른 물음이고, 이 매핑이 그것을 넓혀서는 안 된다.
+      const project = orchProject ?? repoPathOf(core.worktrees.list(), projectPath)
       const mismatch = orchOwnerMismatch(orch.deps.getState(), project, cmd, args ?? {})
       if (mismatch) {
         // 조용히 버려지지 않는다 — orch.runDetail 이 소유권 불일치를 거부할 때 남기는 것과 같은
