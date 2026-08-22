@@ -214,7 +214,10 @@ export function registerIpc(
       projectPath,
       (id) => known.has(id),
       core.worktrees.list(),
-      (runId) => orchArmed.get(runId) ?? null
+      (runId) => orchArmed.get(runId) ?? null,
+      // 폴더가 아직 있는가. 동기 확인인 이유는 이 폴드가 모든 setState 뒤에 돌기 때문이다 — Run 하나에
+      // 워크트리 몇 개이므로 호출 수는 작고, 비동기로 만들면 이 함수와 그 호출자 셋이 전부 async 가 된다.
+      (p) => existsSync(p)
     )
   }
   const pushOrchState = (state: OrchState): void => {
@@ -1688,7 +1691,17 @@ export function registerIpc(
       // 상태가 바뀌기를 기다리므로, 병렬로 돌리면 서로의 폴링이 남의 세션을 기다린다.
       removeWorktrees: async (paths) => {
         const failed: string[] = []
-        for (const p of paths) if (!(await reapWorktree(p))) failed.push(p)
+        for (const p of paths) {
+          // **이미 없는 폴더는 실패가 아니다.** Dispatch 의 cwd 는 워크트리를 지운 뒤에도 상태에 남으므로
+          // 그런 경로가 여기까지 온다 — reapWorktree 는 그것을 "앱 워크트리가 아니다" 로 거절하고 false 를
+          // 내는데, 그것을 failed 에 담으면 사용자에게 "이 폴더를 지우지 못했습니다" 로 보고된다.
+          // 요청한 끝 상태는 이미 그것이다. mergeWorktrees 가 같은 이유로 같은 판정을 한다.
+          if (!existsSync(p)) {
+            orchLog(`remove: skipping already removed worktree ${p}`)
+            continue
+          }
+          if (!(await reapWorktree(p))) failed.push(p)
+        }
         return { failed }
       },
       startWorker: async (a) => {

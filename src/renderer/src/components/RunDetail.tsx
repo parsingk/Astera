@@ -17,6 +17,7 @@ import { edgePath, layoutRows, NODE_H, NODE_W } from '../../../core/orchestratio
 import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/types'
 import { runningCount } from '../../../core/orchestration/running'
 import { useI18n } from '../i18n/I18nProvider'
+import { confirmModal } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import { LockIcon, RunIcon, STATE_KEY, STATUS_COLOR, TaskGlyph, TaskIcon, UnlockIcon } from './JobIcons'
 import { NewTaskModal } from './NewTaskModal'
@@ -386,6 +387,18 @@ export function RunDetail({
    *  눌릴 수 있다 — 그때 명령은 200 을 내지만 `merged: []` 다(server.ts 의 run-merge). 아무것도
    *  합치지 않았는데 "합쳤습니다" 토스트를 보이면 그 자체가 결함이다. */
   const mergeRunNow = async (): Promise<void> => {
+    // **묻고 나서 합친다.** 이것은 사용자가 체크아웃해 둔 브랜치의 작업 트리를 바꾸는 유일한 버튼이고,
+    // 되돌리려면 git 을 직접 써야 한다 — 버튼 하나 거리에 두기에는 너무 먼 결과다. 무엇이 일어나는지
+    // (워크트리 몇 개가, 어느 자리로, 푸시는 하지 않는다는 것)를 그 자리에서 말한다.
+    const count = (run?.worktrees ?? []).length
+    if (
+      !(await confirmModal({
+        title: t('jobs.run.mergeConfirmTitle'),
+        body: t('jobs.run.mergeConfirmBody', { count }),
+        confirmLabel: t('jobs.run.merge')
+      }))
+    )
+      return
     setBusy(RUN_MERGE)
     try {
       const reply = await window.api.orch.command(projectPath, 'run-merge', { run: runId })
@@ -401,8 +414,15 @@ export function RunDetail({
         typeof reply.body === 'object' && reply.body !== null && 'merged' in reply.body
           ? (reply.body as { merged: unknown }).merged
           : undefined
-      const nothingMerged = Array.isArray(merged) && merged.length === 0
-      toast.success(t(nothingMerged ? 'jobs.run.mergeNothing' : 'jobs.run.merged'))
+      // **몇 개를 합쳤는지 말한다.** 병합은 화면에 아무 변화를 남기지 않는다(워크트리도 Run 도 그대로
+      // 다) — "합쳤습니다" 만으로는 눌린 것인지 확인할 수 없어 사람이 같은 버튼을 여러 번 누른다.
+      // 실제로 그랬다. 수는 명령이 돌려준 것이다(사라진 폴더를 건너뛴 뒤의 수), 넘긴 수가 아니다.
+      const mergedCount = Array.isArray(merged) ? merged.length : count
+      toast.success(
+        mergedCount === 0
+          ? t('jobs.run.mergeNothing')
+          : t('jobs.run.merged', { count: mergedCount })
+      )
     } catch {
       toast.error(t('jobs.run.mergeFailed', { reason: '' }))
     } finally {

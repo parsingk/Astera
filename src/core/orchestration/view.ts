@@ -187,14 +187,22 @@ export function snapshotFor(
   worktrees: WorktreeInfo[],
   /** 예약 템플릿의 다음 발화 시각(epoch ms), 없으면 null. **상태에 없는 값이라 주입된다** —
    *  무장은 ticker 의 메모리에 있다(src/main/ipc.ts). isKnownSession 과 같은 갈래다. */
-  nextFireOf: (runId: string) => number | null
+  nextFireOf: (runId: string) => number | null,
+  /** 그 폴더가 아직 있는가. **상태에 없는 값이라 주입된다** — Dispatch 의 cwd 는 워크트리를 지운 뒤에도
+   *  상태에 남으므로 runWorktrees 는 이미 사라진 폴더를 계속 낸다. 걸러내지 않으면 삭제 확인 창이
+   *  "워크트리 3개" 라고 말하면서 실제로는 두 개만 있는 일이 생긴다(그렇게 보고됐다).
+   *
+   *  레지스트리가 아니라 **존재**를 묻는다. 레지스트리는 앱이 만든 것만 알아서, 오케스트레이터가
+   *  직접 만들어 워커를 넣은 워크트리를 빠뜨린다 — 그것도 사람이 지우고 합칠 수 있는 폴더다.
+   *  isKnownSession·nextFireOf 와 같은 갈래로 주입받는다(이 층은 fs 를 만지지 않는다). */
+  exists: (path: string) => boolean
 ): OrchSnapshot {
   // 폴더 사실을 **한 번만** 센다 — Run 마다 다시 세면 같은 순회가 Run 수만큼 돌고, 그보다 나쁜
   // 것은 두 값(폴더 수준과 Run 수준)이 다른 순간의 상태를 볼 수 있다는 것이다.
   const workingHere = runsWorkingIn(state, projectPath)
   const runs = runsForProject(state, projectPath, worktrees).map((run): JobRun => {
     const { done, total } = progressOf(state, run.id)
-    const worktreesOf = runWorktrees(state, run.id)
+    const worktreesOf = runWorktrees(state, run.id).filter(exists)
     return {
       id: run.id,
       objective: run.objective,

@@ -39,6 +39,8 @@ const message = (id: string, runId: string, type: Message['type']): Message => (
 /** 다음 발화 시각은 ticker 의 메모리에 있어 주입된다 — isKnownSession·noWorktrees 와 같은 갈래.
  *  접기 규칙만 보는 테스트에서는 무장이 없다고 본다 */
 const noFires = (): number | null => null
+/** 폴더가 다 있다고 보는 판정 — 사라진 폴더를 보는 테스트만 이것을 바꾼다 */
+const allExist = (): boolean => true
 
 describe('runsForProject', () => {
   it('그 프로젝트의 Run 만 고른다', () => {
@@ -183,7 +185,7 @@ describe('snapshotFor', () => {
     const s = withRuns([run('r1', absPath('p')), run('r2', absPath('other'))], [
       task('t1', 'r1', 'completed'), task('t2', 'r1', 'ready'), task('t3', 'r2', 'ready')
     ])
-    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs).toEqual([
+    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs).toEqual([
       {
         id: 'r1', objective: 'objective r1', outcome: 'running', done: 1, total: 2, eventCount: 3,
         provider: undefined, concurrency: undefined, sharesProjectFolder: false,
@@ -202,7 +204,7 @@ describe('snapshotFor', () => {
     const newer = { ...run('b', absPath('p')), createdAt: '2026-08-18T00:00:00.000Z' }
     const done = { ...run('c', absPath('p')), createdAt: '2026-08-19T00:00:00.000Z' }
     const s = withRuns([older, done, newer], [task('t1', 'c', 'completed')])
-    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs.map((r) => r.id)).toEqual(['b', 'a', 'c'])
+    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs.map((r) => r.id)).toEqual(['b', 'a', 'c'])
   })
 
   it('각 Run 에 outcome 을 실어 보낸다', () => {
@@ -210,7 +212,7 @@ describe('snapshotFor', () => {
       [run('r1', absPath('p')), run('r2', absPath('p'))],
       [task('t1', 'r1', 'completed'), exhausted(task('t2', 'r2', 'failed'))]
     )
-    const byId = new Map(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs.map((r) => [r.id, r.outcome]))
+    const byId = new Map(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs.map((r) => [r.id, r.outcome]))
     expect(byId.get('r1')).toBe('completed')
     expect(byId.get('r2')).toBe('failed')
   })
@@ -220,7 +222,7 @@ describe('snapshotFor', () => {
     const later = { ...task('t1', 'r1', 'ready'), createdAt: '2026-08-18T02:00:00.000Z' }
     const earlier = { ...task('t2', 'r1', 'ready'), createdAt: '2026-08-18T01:00:00.000Z' }
     const s = withRuns([run('r1', absPath('p'))], [later, earlier])
-    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs[0].tasks.map((t) => t.id)).toEqual(['t2', 't1'])
+    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks.map((t) => t.id)).toEqual(['t2', 't1'])
   })
 
   // 재시도는 같은 Task 에 새 Dispatch 를 연다 — 행이 가리켜야 하는 것은 마지막 워커의 세션이다
@@ -232,7 +234,7 @@ describe('snapshotFor', () => {
         dispatch('d1', 't1', 'sess-old', '2026-08-18T01:00:00.000Z')
       ]
     }
-    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs[0].tasks[0].sessionId).toBe('sess-new')
+    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0].sessionId).toBe('sess-new')
   })
 
   // 정리된 세션(worker-release)과 worker-start 가 잠시 커밋하는 `pending:` 자리표시자가 같이 걸러진다 —
@@ -243,12 +245,12 @@ describe('snapshotFor', () => {
       dispatches: [dispatch('d1', 't1', 'pending:ab12cd34', '2026-08-18T01:00:00.000Z')]
     }
     const known = (id: string): boolean => id === 'sess-1'
-    expect(snapshotFor(s, absPath('p'), known, noWorktrees, noFires).runs[0].tasks[0].sessionId).toBeUndefined()
+    expect(snapshotFor(s, absPath('p'), known, noWorktrees, noFires, allExist).runs[0].tasks[0].sessionId).toBeUndefined()
   })
 
   it('Dispatch 가 없으면 sessionId 가 없다', () => {
     const s = withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'ready')])
-    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs[0].tasks[0].sessionId).toBeUndefined()
+    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0].sessionId).toBeUndefined()
   })
 
   // provider·startedAt 은 "지금 도는 중"을 말하는 값이다 — 열린 Dispatch(끝나지 않은 것) 하나면 그대로 실린다
@@ -257,7 +259,7 @@ describe('snapshotFor', () => {
       ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),
       dispatches: [dispatch('d1', 't1', 'sess-1', '2026-08-18T01:00:00.000Z')]
     }
-    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs[0].tasks[0]
+    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
     expect(t.provider).toBe('claude')
     expect(t.startedAt).toBe('2026-08-18T01:00:00.000Z')
   })
@@ -272,7 +274,7 @@ describe('snapshotFor', () => {
         outcome: 'succeeded', endedAt: '2026-08-18T02:00:00.000Z'
       }]
     }
-    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs[0].tasks[0]
+    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
     expect(t.sessionId).toBe('sess-1')
     expect(t.provider).toBeUndefined()
     expect(t.startedAt).toBeUndefined()
@@ -291,7 +293,7 @@ describe('snapshotFor', () => {
         dispatch('d2', 't1', 'sess-new', '2026-08-18T02:00:00.000Z')
       ]
     }
-    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs[0].tasks[0]
+    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
     expect(t.sessionId).toBe('sess-new')
     expect(t.provider).toBe('claude')
     expect(t.startedAt).toBe('2026-08-18T02:00:00.000Z')
@@ -304,13 +306,13 @@ describe('snapshotFor', () => {
     const s: OrchState = {
       ...withRuns([run('r1', absPath('p'))], [{ ...t0, accountId: 'acc_2' }])
     }
-    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs[0].tasks[0]
+    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
     expect(t.accountId).toBe('acc_2')
   })
 
   it('지정이 없으면 그 칸이 없다', () => {
     const s = withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'ready')])
-    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs[0].tasks[0]
+    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
     expect('accountId' in t).toBe(false)
   })
 
@@ -322,7 +324,7 @@ describe('snapshotFor', () => {
         gate('g1', 't1', '먼저 질문', '2026-08-18T01:00:00.000Z')
       ]
     }
-    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs[0].tasks[0]
+    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
     // **id 가 함께 실린다** — gate-resolve 가 그것을 요구하므로, 없으면 화면에서 답할 길이 없다.
     // 질문과 한 묶음인 이유: 셋 다 "가장 이른 열린 Gate" 하나를 가리키는데 따로 실으면 그중 하나만
     // 고쳐지는 날 화면이 A 의 질문을 보여 주고 B 를 푼다
@@ -339,7 +341,7 @@ describe('snapshotFor', () => {
         { ...gate('g1', 't1', '어느 쪽으로 갈까요', '2026-08-18T01:00:00.000Z'), options: ['A', 'B'] }
       ]
     }
-    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs[0].tasks[0]
+    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
     expect(t.gate).toEqual({ id: 'g1', question: '어느 쪽으로 갈까요', options: ['A', 'B'] })
   })
 
@@ -348,7 +350,7 @@ describe('snapshotFor', () => {
       ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'ready')]),
       gates: [gate('g1', 't1', '끝난 질문', '2026-08-18T01:00:00.000Z', 'resolved')]
     }
-    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs[0].tasks[0]
+    const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
     expect(t.gate).toBeUndefined()
     expect(t.openGates).toBe(0)
   })
@@ -358,14 +360,14 @@ describe('snapshotFor', () => {
       ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'ready'), task('t2', 'r1', 'blocked')]),
       gates: [gate('g1', 't2', '질문', '2026-08-18T01:00:00.000Z')]
     }
-    const [t1, t2] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs[0].tasks
+    const [t1, t2] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks
     expect(t1.openGates).toBe(0)
     expect(t2.gate?.question).toBe('질문')
   })
 
   it('그 프로젝트에 Run 이 없으면 빈 목록이다', () => {
     const s = withRuns([run('r1', absPath('other'))])
-    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires)).toEqual({
+    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist)).toEqual({
       runs: [],
       projectFolderBusy: false
     })
@@ -375,7 +377,7 @@ describe('snapshotFor', () => {
     const s = { ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'pending')]),
       messages: [message('m1', 'r1', 'status')] }
     // run-created + task-created + message
-    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs[0].eventCount).toBe(3)
+    expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].eventCount).toBe(3)
   })
 
   // provider·concurrency 는 Run 이 들고 있는 값을 그대로 옮긴 것이다 — 계산도 기본값도 여기서
@@ -384,14 +386,14 @@ describe('snapshotFor', () => {
   it('Run 의 provider·concurrency 를 그대로 싣는다', () => {
     const withBoth: Run = { ...run('r1', absPath('p')), provider: 'codex', concurrency: 2 }
     const s = withRuns([withBoth])
-    const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs
+    const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs
     expect(r.provider).toBe('codex')
     expect(r.concurrency).toBe(2)
   })
 
   it('Run 에 없으면 undefined 다 — 기본값을 여기서 채우지 않는다', () => {
     const s = withRuns([run('r1', absPath('p'))])
-    const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires).runs
+    const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs
     expect(r.provider).toBeUndefined()
     expect(r.concurrency).toBeUndefined()
   })
@@ -412,7 +414,7 @@ describe('스냅숏의 폴더 경합 표시', () => {
       ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),
       dispatches: [openIn('d1', 't1', absPath('p'))]
     }
-    const snap = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires)
+    const snap = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist)
     expect(snap.projectFolderBusy).toBe(true)
     expect(snap.runs[0].sharesProjectFolder).toBe(false)
   })
@@ -426,7 +428,7 @@ describe('스냅숏의 폴더 경합 표시', () => {
       ),
       dispatches: [openIn('d1', 't1', absPath('p')), openIn('d2', 't2', absPath('p'))]
     }
-    const snap = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires)
+    const snap = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist)
     expect(snap.projectFolderBusy).toBe(true)
     expect(snap.runs.map((r) => r.sharesProjectFolder)).toEqual([true, true])
   })
@@ -438,14 +440,14 @@ describe('스냅숏의 폴더 경합 표시', () => {
       ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),
       dispatches: [openIn('d1', 't1', absPath('wt', 'a'))]
     }
-    const snap = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires)
+    const snap = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist)
     expect(snap.projectFolderBusy).toBe(false)
     expect(snap.runs[0].sharesProjectFolder).toBe(false)
   })
 
   it('도는 워커가 없으면 폴더는 비어 있다', () => {
     const s = withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'ready')])
-    const snap = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires)
+    const snap = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist)
     expect(snap.projectFolderBusy).toBe(false)
     expect(snap.runs[0].sharesProjectFolder).toBe(false)
   })
@@ -459,7 +461,7 @@ describe('스냅숏의 폴더 경합 표시', () => {
       ),
       dispatches: [openIn('d2', 't2', absPath('other'))]
     }
-    const snap = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires)
+    const snap = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist)
     expect(snap.projectFolderBusy).toBe(false)
   })
 })
@@ -470,7 +472,7 @@ describe('sameSnapshot', () => {
     dispatches: [dispatch('d1', 't1', 'sess-1', '2026-08-18T01:00:00.000Z')]
   })
   const fold = (s: OrchState): ReturnType<typeof snapshotFor> =>
-    snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires)
+    snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist)
 
   // 하트비트·상태 메시지·Delivery 수령은 전부 상태를 커밋하지만 이 투영은 건드리지 않는다.
   // 그때마다 같은 페이로드를 다시 보내지 않는 것이 이 함수의 존재 이유다
@@ -495,7 +497,7 @@ describe('sameSnapshot', () => {
   // 있던 값이 사라지는 방향 — 직렬화 비교가 키를 통째로 떨어뜨리는 자리라 따로 본다
   it('sessionId 가 사라지면 다르다고 본다', () => {
     const s = base()
-    const gone = snapshotFor(s, absPath('p'), () => false, noWorktrees, noFires)
+    const gone = snapshotFor(s, absPath('p'), () => false, noWorktrees, noFires, allExist)
     expect(sameSnapshot(fold(s), gone)).toBe(false)
   })
 
@@ -523,8 +525,8 @@ describe('sameSnapshot', () => {
     const before = withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')])
     const after = { ...before, messages: [message('m1', 'r1', 'question')] }
     expect(sameSnapshot(
-      snapshotFor(before, absPath('p'), anySession, noWorktrees, noFires),
-      snapshotFor(after, absPath('p'), anySession, noWorktrees, noFires)
+      snapshotFor(before, absPath('p'), anySession, noWorktrees, noFires, allExist),
+      snapshotFor(after, absPath('p'), anySession, noWorktrees, noFires, allExist)
     )).toBe(false)
   })
 
@@ -533,8 +535,8 @@ describe('sameSnapshot', () => {
     const before = withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')])
     const after = { ...before, messages: [message('m1', 'r1', 'heartbeat')] }
     expect(sameSnapshot(
-      snapshotFor(before, absPath('p'), anySession, noWorktrees, noFires),
-      snapshotFor(after, absPath('p'), anySession, noWorktrees, noFires)
+      snapshotFor(before, absPath('p'), anySession, noWorktrees, noFires, allExist),
+      snapshotFor(after, absPath('p'), anySession, noWorktrees, noFires, allExist)
     )).toBe(true)
   })
 })
@@ -565,10 +567,42 @@ describe('snapshotFor — 이 Run 이 쓴 워크트리', () => {
     // d1 만 워크트리에서 돌았다고 만든다 — dispatch 헬퍼는 cwd 를 absPath('p') 로 준다
     s.dispatches[0] = { ...s.dispatches[0], cwd: wtPath }
     s.dispatches[1] = { ...s.dispatches[1], cwd: absPath('proj') }
-    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires)
+    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist)
     const byId = new Map(snap.runs.map((r) => [r.id, r]))
     expect(byId.get('r1')!.worktrees).toEqual([wtPath])
     expect('worktrees' in byId.get('r2')!).toBe(false)
+  })
+
+  // **이 테스트가 실제 결함을 고정한다.** Dispatch 의 cwd 는 워크트리를 지운 뒤에도 상태에 남으므로
+  // runWorktrees 는 사라진 폴더를 계속 낸다. 걸러내지 않으면 삭제 확인 창이 "워크트리 3개" 라고
+  // 말하면서 실제로는 두 개만 있는 일이 생긴다(그렇게 보고됐다).
+  it('사라진 폴더는 싣지 않는다 — 확인 창의 수가 실제와 같아야 한다', () => {
+    const gone = absPath('wt', 'gone')
+    const alive = absPath('wt', 'alive')
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('proj'))], [
+        task('t1', 'r1', 'completed'),
+        task('t2', 'r1', 'completed')
+      ]),
+      dispatches: [
+        dispatch('d1', 't1', 'sess1', '2026-08-18T00:00:00.000Z'),
+        dispatch('d2', 't2', 'sess2', '2026-08-18T00:00:00.000Z')
+      ]
+    }
+    s.dispatches[0] = { ...s.dispatches[0], cwd: gone }
+    s.dispatches[1] = { ...s.dispatches[1], cwd: alive }
+    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, (p) => p === alive)
+    expect(snap.runs[0].worktrees).toEqual([alive])
+  })
+
+  it('하나도 남지 않았으면 칸이 아예 없다 — 병합 버튼과 체크박스가 뜨지 않아야 한다', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('proj'))], [task('t1', 'r1', 'completed')]),
+      dispatches: [dispatch('d1', 't1', 'sess1', '2026-08-18T00:00:00.000Z')]
+    }
+    s.dispatches[0] = { ...s.dispatches[0], cwd: absPath('wt', 'gone') }
+    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, () => false)
+    expect('worktrees' in snap.runs[0]).toBe(false)
   })
 })
 
@@ -581,7 +615,8 @@ describe('snapshotFor — 실행 대기', () => {
       absPath('proj'),
       anySession,
       noWorktrees,
-      noFires
+      noFires,
+      allExist
     )
     const byId = new Map(snap.runs.map((r) => [r.id, r]))
     expect(byId.get('r1')!.pendingStart).toBe(true)
@@ -592,7 +627,7 @@ describe('snapshotFor — 실행 대기', () => {
 describe('snapshotFor — 예약 템플릿과 회차', () => {
   it('회차는 템플릿 밑으로 접히고 최상위에서 빠진다', () => {
     const s = withRuns([scheduled('t1', absPath('proj')), child('c1', absPath('proj'), 't1')])
-    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires)
+    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist)
     expect(snap.runs.map((r) => r.id)).toEqual(['t1'])
     expect(snap.runs[0].children?.map((r) => r.id)).toEqual(['c1'])
   })
@@ -601,7 +636,7 @@ describe('snapshotFor — 예약 템플릿과 회차', () => {
     const c1 = { ...child('c1', absPath('proj'), 't1'), createdAt: '2026-08-19T00:00:00.000Z' }
     const c2 = { ...child('c2', absPath('proj'), 't1'), createdAt: '2026-08-20T00:00:00.000Z' }
     const s = withRuns([scheduled('t1', absPath('proj')), c1, c2])
-    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires)
+    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist)
     expect(snap.runs[0].children?.map((r) => r.id)).toEqual(['c2', 'c1'])
   })
 
@@ -609,7 +644,7 @@ describe('snapshotFor — 예약 템플릿과 회차', () => {
   it('템플릿의 fireCount 와 회차의 fireOrdinal 을 그대로 싣는다', () => {
     const t = { ...scheduled('t1', absPath('proj')), fireCount: 9 }
     const k = { ...child('c1', absPath('proj'), 't1'), fireOrdinal: 9 }
-    const snap = snapshotFor(withRuns([t, k]), absPath('proj'), anySession, noWorktrees, noFires)
+    const snap = snapshotFor(withRuns([t, k]), absPath('proj'), anySession, noWorktrees, noFires, allExist)
     expect(snap.runs[0].fireCount).toBe(9)
     expect(snap.runs[0].children?.[0].fireOrdinal).toBe(9)
   })
@@ -620,21 +655,27 @@ describe('snapshotFor — 예약 템플릿과 회차', () => {
       absPath('proj'),
       anySession,
       noWorktrees,
-      noFires
+      noFires,
+      allExist
     )
     expect('fireCount' in snap.runs[0]).toBe(false)
   })
 
   it('템플릿의 규칙을 그대로 싣는다', () => {
     const s = withRuns([scheduled('t1', absPath('proj'))])
-    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires)
+    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist)
     expect(snap.runs[0].schedule).toEqual({ kind: 'daily', time: '09:00' })
   })
 
   it('다음 발화 시각은 주입된 값이다', () => {
     const s = withRuns([scheduled('t1', absPath('proj'))])
-    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, (id) =>
-      id === 't1' ? 1_800_000_000_000 : null
+    const snap = snapshotFor(
+      s,
+      absPath('proj'),
+      anySession,
+      noWorktrees,
+      (id) => (id === 't1' ? 1_800_000_000_000 : null),
+      allExist
     )
     expect(snap.runs[0].nextFireAt).toBe(1_800_000_000_000)
   })
@@ -643,7 +684,7 @@ describe('snapshotFor — 예약 템플릿과 회차', () => {
   // 알 수 있다. toBeUndefined() 는 생략된 칸과 값이 undefined 인 칸을 구별하지 못한다
   it('회차가 아직 없고 무장도 없는 템플릿은 두 칸이 아예 없다', () => {
     const s = withRuns([scheduled('t1', absPath('proj'))])
-    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires)
+    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist)
     expect('children' in snap.runs[0]).toBe(false)
     expect('nextFireAt' in snap.runs[0]).toBe(false)
   })
@@ -652,7 +693,7 @@ describe('snapshotFor — 예약 템플릿과 회차', () => {
   // "회차가 없는 템플릿"과 "템플릿이 아님"을 구별할 수 없다
   it('평범한 Run 에는 children 칸이 없다', () => {
     const s = withRuns([run('r1', absPath('proj'))])
-    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires)
+    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist)
     expect(snap.runs[0].children).toBeUndefined()
     expect(snap.runs[0].schedule).toBeUndefined()
   })
@@ -661,7 +702,7 @@ describe('snapshotFor — 예약 템플릿과 회차', () => {
   // 삼켜 버리면 목록에서 사라지므로 최상위에 남긴다
   it('이 프로젝트에 부모가 없는 회차는 최상위에 남는다', () => {
     const s = withRuns([child('c1', absPath('proj'), 'gone')])
-    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires)
+    const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist)
     expect(snap.runs.map((r) => r.id)).toEqual(['c1'])
   })
 })
