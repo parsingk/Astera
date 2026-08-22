@@ -162,6 +162,7 @@ const COORDINATOR_ONLY = new Set([
   'run-delete',
   'run-spawn',
   'run-start',
+  'run-worktree-set',
   'task-create',
   'task-update',
   'worker-start',

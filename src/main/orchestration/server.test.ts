@@ -2667,4 +2667,27 @@ describe('run-worktree-set', () => {
     const { deps, runId } = await withRun()
     expect((await call(deps, 'run-worktree-set', { run: runId })).status).toBe(400)
   })
+
+  it('워커 세션은 부를 수 없다 — Run 수준 변경은 워커의 것이 아니다', async () => {
+    const { deps, runId } = await withRun()
+    await deps.setState({
+      ...deps.getState(),
+      dispatches: [
+        {
+          id: 'dsp1',
+          taskId: 'tsk1',
+          provider: 'claude',
+          accountId: 'acc1',
+          sessionId: 'worker1',
+          cwd: 'D:/p',
+          specPath: 'D:/p/spec.md',
+          startedAt: NOW,
+          workerState: 'ready',
+          retained: false
+        }
+      ]
+    })
+    const r = await call(deps, 'run-worktree-set', { run: runId, worktree: 'D:/wt/a' }, 'worker1')
+    expect(r.status).toBe(403)
+  })
 })
