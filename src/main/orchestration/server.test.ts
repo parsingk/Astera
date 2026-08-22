@@ -2884,22 +2884,42 @@ describe('run-pause', () => {
   })
 
   // **회차까지 세우는 것이 요점이다.** Dispatch 만 닫으면 그 회차의 다음 ready Task 가 곧바로 뜬다
-  it('템플릿과 회차 모두에 게이트를 세운다', async () => {
+  it('템플릿과 회차 모두에 paused 를 세운다', async () => {
     const { deps, templateId } = await runningSchedule()
     await call(deps, 'run-pause', { run: templateId })
     const byId = new Map(deps.getState().runs.map((r) => [r.id, r]))
-    expect(byId.get(templateId)!.pendingStart).toBe(true)
-    expect(byId.get('run_kid')!.pendingStart).toBe(true)
+    expect(byId.get(templateId)!.paused).toBe(true)
+    expect(byId.get('run_kid')!.paused).toBe(true)
   })
 
-  // 재생은 기존 명령이다 — 템플릿의 게이트만 걷힌다. 멈춘 회차는 이어지지 않는다
-  it('run-start 가 템플릿만 재개하고 멈춘 회차는 그대로 둔다', async () => {
+  // **pendingStart 를 건드리지 않는다.** 그 칸은 '실행' 의 것이다 — 일시 중지가 그것을 다시 세우면
+  // 세운 뒤에 '실행' 버튼과 '▶' 가 같은 일을 하는 둘로 나란히 뜬다
+  it('pendingStart 는 건드리지 않는다', async () => {
     const { deps, templateId } = await runningSchedule()
     await call(deps, 'run-pause', { run: templateId })
-    expect((await call(deps, 'run-start', { run: templateId })).status).toBe(200)
+    expect(deps.getState().runs.find((r) => r.id === templateId)!.pendingStart).toBeUndefined()
+  })
+
+  // 재개는 템플릿의 것만 걷는다 — 멈춘 회차는 이어지지 않는다
+  it('run-resume 이 템플릿만 재개하고 멈춘 회차는 그대로 둔다', async () => {
+    const { deps, templateId } = await runningSchedule()
+    await call(deps, 'run-pause', { run: templateId })
+    expect((await call(deps, 'run-resume', { run: templateId })).status).toBe(200)
     const byId = new Map(deps.getState().runs.map((r) => [r.id, r]))
-    expect(byId.get(templateId)!.pendingStart).toBeUndefined()
-    expect(byId.get('run_kid')!.pendingStart).toBe(true)
+    expect(byId.get(templateId)!.paused).toBeUndefined()
+    expect(byId.get('run_kid')!.paused).toBe(true)
+  })
+
+  // 버튼이 사라지기 전에 두 번 눌릴 수 있다 — 요청한 끝 상태는 이미 그것이다
+  it('세워 두지 않은 예약에 run-resume 을 불러도 성공이다', async () => {
+    const { deps, templateId } = await runningSchedule()
+    expect((await call(deps, 'run-resume', { run: templateId })).status).toBe(200)
+  })
+
+  it('예약이 아닌 Run 은 run-resume 도 거절한다', async () => {
+    const deps = makeDeps()
+    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true })
+    expect((await call(deps, 'run-resume', { run: (c.body as { id: string }).id })).status).toBe(400)
   })
 
   it('붙잡아 둔 세션이 있으면 409 다 — 아무것도 멈추지 않는다', async () => {

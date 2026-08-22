@@ -21,8 +21,6 @@ import { confirmModal } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import {
   LockIcon,
-  PauseIcon,
-  PlayIcon,
   RunIcon,
   STATE_KEY,
   STATUS_COLOR,
@@ -123,8 +121,6 @@ export function RunDetail({
   runId,
   canOpenSession,
   onOpenSession,
-  onPauseRun,
-  onResumeRun,
   onClose
 }: {
   /** 스냅샷에 있는 그 Run. 노드의 제목·상태·세션은 전부 여기서 온다(detail 은 id 만 준다).
@@ -139,10 +135,6 @@ export function RunDetail({
   runId: string
   canOpenSession: (sessionId: string) => boolean
   onOpenSession: (sessionId: string) => void
-  /** 예약을 세운다·다시 돌린다. **App 이 들고 있다** — 사이드바의 같은 아이콘과 확인 문구·409 의
-   *  갈래를 공유해야 하므로, 이 컴포넌트가 자기 사본을 갖지 않는다. */
-  onPauseRun: (runId: string) => void
-  onResumeRun: (runId: string) => void
   onClose: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
@@ -669,7 +661,7 @@ export function RunDetail({
                     pendingStart 만 걷히고 아무 일도 일어나지 않아, 눌렀는데 아무 반응이 없는
                     자리가 된다. 누르면 게이트가 걷히고 이 버튼도 사라진다(run.pendingStart 가
                     조건이다). */}
-                {run?.schedule === undefined && run?.pendingStart && (
+                {run?.pendingStart && (
                   <button
                     className="jobs-new primary"
                     disabled={busy === RUN_START || tasks.length === 0}
@@ -682,27 +674,6 @@ export function RunDetail({
                 {/* **예약에서는 아이콘 토글 하나가 그 자리를 대신한다.** 시작과 재생이 같은 동작이라
                     (둘 다 pendingStart 를 걷는다) 한 번도 돌리지 않은 템플릿에도 ▶ 가 맞다. 둘을
                     따로 두면 "시작" 과 "재생" 이 다른 일처럼 보이고, 실제로는 같은 명령이다. */}
-                {run?.schedule !== undefined &&
-                  (run.pendingStart ? (
-                    <button
-                      className="jobs-new primary"
-                      disabled={tasks.length === 0}
-                      title={t('jobs.run.resumeHint')}
-                      aria-label={t('jobs.run.resume')}
-                      onClick={() => onResumeRun(runId)}
-                    >
-                      <PlayIcon />
-                    </button>
-                  ) : (
-                    <button
-                      className="jobs-new"
-                      title={t('jobs.run.pauseHint')}
-                      aria-label={t('jobs.run.pause')}
-                      onClick={() => onPauseRun(runId)}
-                    >
-                      <PauseIcon />
-                    </button>
-                  ))}
                 {/* 워커의 일을 프로젝트 폴더로 가져오는 자리. **예약 템플릿에는 없다** — 템플릿은
                     돌지 않으므로 합칠 것이 없다(회차의 워크트리는 완료되면 앱이 걷는다). 워크트리를
                     쓰지 않은 Run 에도 없다 — 삭제 모달의 병합 체크박스와 같은 근거를 쓴다. */}

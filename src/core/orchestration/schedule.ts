@@ -37,6 +37,10 @@ export function slotsToFill(s: OrchState): Slot[] {
     // 사람이 '실행' 을 누르기 전까지는 돌지 않는다. autoDispatch 와 따로 두는 이유는
     // Run.pendingStart 의 주석에 있다 — 그것을 끄는 방식으로는 코디네이터 Run 과 구별되지 않는다.
     if (run.pendingStart) continue
+    // **세워 둔 것도 배치하지 않는다.** 일시 중지가 도는 워커를 닫아도, 그 자리에 그 Run 의 다음
+    // ready Task 가 곧바로 뜨면 "일시 중지" 가 "지금 도는 Task 하나만 멈춤" 이 된다. 예약을 세우면
+    // 그 회차들에도 이 칸이 붙는다(state.ts 의 pauseSchedule).
+    if (run.paused) continue
     const provider = run.provider
     if (!provider) continue
     const open = s.dispatches.filter((d) => !d.outcome && !d.endedAt)

@@ -218,13 +218,12 @@ export function startRun(s: OrchState, id: string): Res<Run> {
  * 자리에 그 회차의 다음 ready Task 가 곧바로 뜬다(회차는 autoDispatch 가 켜져 있다). 게이트가
  * 없으면 "일시 중지" 가 "지금 도는 Task 하나만 멈춤" 이 된다.
  *
- * **새 상태를 만들지 않고 pendingStart 를 다시 세운다.** firesDue 가 이미 그 칸을 보고 발화도 무장도
- * 건너뛰므로(fire.ts), 재생은 run-start 그대로이고 무장은 그 순간부터 다시 잡힌다 — 요청한
- * "다음 예약 시각부터" 가 그 규칙에서 그대로 나온다. paused 칸을 따로 두면 "왜 발화하지 않나" 의
- * 답이 둘이 되고, 갈라졌을 때 어느 쪽이 맞는지 알 수 없다.
+ * **pendingStart 를 쓰지 않고 paused 를 쓴다.** 둘 다 "돌지 않는다" 를 만들지만 사람에게는 다른
+ * 상황이고 다른 버튼이다(Run.paused 의 주석) — 한 칸으로 겸하게 했더니 세운 뒤에 '실행' 버튼과
+ * '▶' 가 같은 일을 하는 두 버튼으로 나란히 떴다.
  *
- * **멈춘 회차는 이어지지 않는다.** 그 회차의 게이트는 걷히지 않으므로(run-start 는 부른 Run 하나만
- * 걷는다) 남은 Task 는 다시 돌지 않는다. 재생이 만드는 것은 다음 예약 시각의 **새 회차**다.
+ * **멈춘 회차는 이어지지 않는다.** resumeSchedule 은 부른 템플릿의 칸만 걷으므로 그 회차의 남은
+ * Task 는 다시 돌지 않는다. 재개가 만드는 것은 다음 예약 시각의 **새 회차**다.
  */
 export function pauseSchedule(s: OrchState, templateId: string, now: string): Res<Run> {
   const template = s.runs.find((r) => r.id === templateId)
@@ -232,11 +231,11 @@ export function pauseSchedule(s: OrchState, templateId: string, now: string): Re
   if (!template.schedule) return err(`run is not scheduled: ${templateId}`)
   const family = new Set([templateId, ...s.runs.filter((r) => r.templateId === templateId).map((r) => r.id)])
   const taskIds = new Set(s.tasks.filter((t) => family.has(t.runId)).map((t) => t.id))
-  const paused = { ...template, pendingStart: true as const }
+  const held = { ...template, paused: true as const }
   return ok(
     {
       ...s,
-      runs: s.runs.map((r) => (family.has(r.id) ? { ...r, pendingStart: true } : r)),
+      runs: s.runs.map((r) => (family.has(r.id) ? { ...r, paused: true } : r)),
       // 닫는 방식은 worker-stop 과 같다 — workerState 를 stopped 로, endedAt 을 찍는다. outcome 은
       // 넣지 않는다: 이 워커는 결과를 보고하지 않았고, 보고하지 않은 것을 성공이나 실패로 적으면
       // 그래프가 거짓말을 한다(재시작 정리가 그런 Dispatch 를 outcome_unknown 으로 읽는다).
@@ -246,8 +245,29 @@ export function pauseSchedule(s: OrchState, templateId: string, now: string): Re
           : d
       )
     },
-    paused
+    held
   )
+}
+
+/**
+ * 세워 둔 예약을 다시 돌린다 — **템플릿의 칸만 걷는다.**
+ *
+ * 회차의 칸은 그대로 둔다. 중단된 회차를 이어 받으면 그 회차는 자기가 멈춘 자리에서 다시 시작하는데,
+ * 사람이 세워 둔 사이에 그 일의 전제가 달라졌을 수 있다. 재개가 뜻하는 것은 **다음 예약 시각의 새
+ * 회차**이고, 그것이 '다시 실행 시 다음 예약 시간부터' 라고 적어 둔 그 약속이다.
+ *
+ * **세워 두지 않은 Run 에 불러도 성공이다.** 버튼이 사라지기 전에 두 번 눌릴 수 있고, 요청한 끝
+ * 상태는 이미 그것이다(startRun 이 같은 이유로 같은 선택을 한다).
+ */
+export function resumeSchedule(s: OrchState, templateId: string): Res<Run> {
+  const template = s.runs.find((r) => r.id === templateId)
+  if (!template) return err(`unknown run: ${templateId}`)
+  if (!template.schedule) return err(`run is not scheduled: ${templateId}`)
+  if (!template.paused) return ok(s, template)
+  // paused 를 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이 코드베이스는
+  // 해당 없는 칸을 아예 두지 않는 관례다(startRun 과 같다)
+  const { paused: _drop, ...resumed } = template
+  return ok({ ...s, runs: s.runs.map((r) => (r.id === templateId ? resumed : r)) }, resumed)
 }
 
 export function setRunWorktree(s: OrchState, id: string, worktree: string): Res<Run> {

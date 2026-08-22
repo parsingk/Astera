@@ -320,15 +320,15 @@ function ScheduleCard({
             stopPropagation: 이 줄 자체가 접기·펴기다 */}
         <button
           className="jobs-more"
-          title={run.pendingStart ? t('jobs.run.resumeHint') : t('jobs.run.pauseHint')}
-          aria-label={run.pendingStart ? t('jobs.run.resume') : t('jobs.run.pause')}
+          title={run.paused ? t('jobs.run.resumeHint') : t('jobs.run.pauseHint')}
+          aria-label={run.paused ? t('jobs.run.resume') : t('jobs.run.pause')}
           onClick={(e) => {
             e.stopPropagation()
-            if (run.pendingStart) onResumeRun(run.id)
+            if (run.paused) onResumeRun(run.id)
             else onPauseRun(run.id)
           }}
         >
-          {run.pendingStart ? <PlayIcon /> : <PauseIcon />}
+          {run.paused ? <PlayIcon /> : <PauseIcon />}
         </button>
         {/* 상세 창으로 가는 입구 — 템플릿에서는 **Task 를 짜는 자리**다. 정의를 고치는 곳이
             여기뿐이라(회차는 읽기 전용 기록) 이 버튼이 회차보다 더 중요하다.
@@ -351,7 +351,7 @@ function ScheduleCard({
             사라진다 — 그러면 멈춘 예약과 도는 예약이 화면에서 거의 같아 보이고, 멈춘 것을 잊은
             사람이 "왜 안 도는지" 를 찾게 된다. 한 번도 돌리지 않은 것도 같은 자리에 선다: 둘 다
             버튼을 눌러야 도는 상태이고, 아래 회차 목록의 문구가 그 둘을 이미 구별해 준다. */}
-        {run.pendingStart ? (
+        {run.paused ? (
           <span className="jobs-tmpl-paused">{t('jobs.run.paused')}</span>
         ) : (
           run.nextFireAt !== undefined && (

@@ -24,6 +24,7 @@ import {
   spawnScheduledRun,
   startRun,
   pauseSchedule,
+  resumeSchedule,
   setRunWorktree,
   type OrchState,
   type Res
@@ -173,6 +174,7 @@ const COORDINATOR_ONLY = new Set([
   'run-start',
   'run-worktree-set',
   'run-pause',
+  'run-resume',
   'run-merge',
   'task-create',
   'task-update',
@@ -499,6 +501,14 @@ export async function handleCommand(
       // pauseSchedule 이 한꺼번에 한다(run-delete 가 releaseWorker 를 쓰는 순서와 같다).
       for (const d of open) await deps.releaseWorker({ dispatchId: d.id })
       return commit(pauseSchedule(s, id, now))
+    }
+    case 'run-resume': {
+      const id = str(args.run)
+      if (!id) return bad('--run is required')
+      // **run-start 와 다른 명령이다.** 그쪽은 pendingStart("아직 시작하지 않았다")를 걷고, 이쪽은
+      // paused("세워 뒀다")를 걷는다 — 사람에게 다른 버튼이고 다른 상황이다(Run.paused 의 주석).
+      // 하나로 겸하게 했더니 세운 뒤에 '실행' 버튼과 '▶' 가 같은 일을 하는 둘로 나란히 떴다.
+      return commit(resumeSchedule(s, id))
     }
     case 'run-worktree-set': {
       const id = str(args.run)

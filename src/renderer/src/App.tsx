@@ -1609,16 +1609,19 @@ export default function App(): React.JSX.Element {
     })()
   }
 
-  /** 멈춘 예약을 다시 돌린다 — 게이트를 걷는 것뿐이라 묻지 않는다(잃는 것이 없다). 무장은 이 순간부터
-   *  다시 잡히므로 첫 회차는 **다음 예약 시각**이다(firesDue). */
+  /** 세워 둔 예약을 다시 돌린다 — 칸을 걷는 것뿐이라 묻지 않는다(잃는 것이 없다). 무장은 이 순간부터
+   *  다시 잡히므로 첫 회차는 **다음 예약 시각**이다(firesDue).
+   *
+   *  run-start 가 아니라 run-resume 다. 그쪽은 "아직 시작하지 않았다" 를 걷고 이쪽은 "세워 뒀다" 를
+   *  걷는다 — 상세 창의 '실행' 과 이 '▶' 는 다른 버튼이다(Run.paused 의 주석). */
   const resumeScheduleRun = (runId: string): void => {
     void (async () => {
       if (!currentProject) return
       try {
-        const reply = await window.api.orch.command(currentProject, 'run-start', { run: runId })
-        if (reply.status >= 400) toast.error(t('jobs.run.startFailed'))
+        const reply = await window.api.orch.command(currentProject, 'run-resume', { run: runId })
+        if (reply.status >= 400) toast.error(t('jobs.run.pauseFailed'))
       } catch {
-        toast.error(t('jobs.run.startFailed'))
+        toast.error(t('jobs.run.pauseFailed'))
       }
     })()
   }
@@ -3260,8 +3263,6 @@ export default function App(): React.JSX.Element {
             setOpenRun(null) // 탭으로 가면서 닫는다
             selectWorkbenchTab(sessionTab(sessionId))
           }}
-          onPauseRun={pauseScheduleRun}
-          onResumeRun={resumeScheduleRun}
           onClose={() => setOpenRun(null)}
         />
       )}

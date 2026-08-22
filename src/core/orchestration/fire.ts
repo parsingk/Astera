@@ -34,6 +34,9 @@ export function firesDue(
     // 밀린 회차가 돈다. 건너뛰면 arm 맵에서 빠지고(부르는 쪽이 그 맵으로 교체한다), 게이트가 걷힌
     // 뒤 처음 보이는 순간부터 nowMs 기준으로 다시 무장한다.
     if (run.pendingStart) continue
+    // **세워 둔 예약도 같다 — 발화도 무장도 하지 않는다.** 무장을 놓으므로 재개하면 그 순간부터 다시
+    // 잡히고, 첫 회차는 그 뒤의 첫 예약 시각이다. 세워 둔 동안 지나간 시각은 따라잡지 않는다.
+    if (run.paused) continue
     const next = (): void => {
       const at = nextFireAt(rule, nowMs)
       // isValidRule 이 거절할 규칙이 파일에서 들어온 경우 — 무장하지 않으면 영원히 발화하지

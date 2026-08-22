@@ -2228,6 +2228,7 @@ export function registerIpc(
     'run-start': 'run',
     'run-merge': 'run',
     'run-pause': 'run',
+    'run-resume': 'run',
     'run-delete': 'id'
   }
   const TASK_ID_ARG: Record<string, string[]> = {

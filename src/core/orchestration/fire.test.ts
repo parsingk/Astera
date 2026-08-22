@@ -30,6 +30,22 @@ describe('firesDue', () => {
     expect(r.arm.has('r1')).toBe(false)
   })
 
+  // 세워 둔 예약도 같다 — pendingStart 와 다른 칸이지만 발화를 막는 결과는 같다
+  it('paused 인 템플릿은 발화도 무장도 하지 않는다', () => {
+    const s = withRuns([tmpl('r1', { paused: true })])
+    const r = firesDue(s, new Map(), at(2026, 8, 21, 10, 0))
+    expect(r.fire).toEqual([])
+    expect(r.arm.has('r1')).toBe(false)
+  })
+
+  it('무장돼 있어도 paused 면 발화하지 않는다', () => {
+    const s = withRuns([tmpl('r1', { paused: true })])
+    const armed = new Map([['r1', at(2026, 8, 21, 9, 0)]])
+    const r = firesDue(s, armed, at(2026, 8, 21, 10, 0))
+    expect(r.fire).toEqual([])
+    expect(r.arm.has('r1')).toBe(false)
+  })
+
   // 게이트가 걷힌 뒤에는 **그 순간부터** 무장한다 — 지나간 시각을 물려받지 않는다
   it('실행을 누른 뒤에는 그때부터 다음 시각을 잡는다', () => {
     const s = withRuns([tmpl('r1')])
