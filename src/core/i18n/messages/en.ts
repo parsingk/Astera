@@ -644,7 +644,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.run.mergeHint': 'Fold what the workers committed in their worktrees into the project folder ({count} worktree(s))',
   'jobs.run.merged': 'Merged {count} worktree(s) into the project folder',
   'jobs.run.mergeConfirmTitle': 'Merge into the project folder',
-  'jobs.run.mergeConfirmBody': 'Folds what the workers committed in their worktrees into the project folder ({count} worktree(s)).\n\nIt lands as commits on the branch the project folder is on. Nothing is pushed.',
+  'jobs.run.mergeConfirmBody': 'Folds what the workers committed in their worktrees into the project folder ({count} worktree(s)).\n\nThe commits are added to the current branch of the project folder. Nothing is pushed to the remote.',
   'jobs.run.mergeNothing': 'Nothing left to merge — the worktree folders are already gone',
   'jobs.run.mergeFailed': 'Could not merge: {reason}',
   'jobs.run.notStarted': 'Not started',

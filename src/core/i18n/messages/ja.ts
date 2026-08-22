@@ -738,7 +738,7 @@ export const ja: Catalog = {
   'jobs.run.mergeHint': 'ワーカーがワークツリーにコミットした作業をプロジェクトフォルダーに取り込みます (ワークツリー {count} 個)',
   'jobs.run.merged': 'ワークツリー {count} 個をプロジェクトフォルダーにマージしました',
   'jobs.run.mergeConfirmTitle': 'プロジェクトフォルダーにマージ',
-  'jobs.run.mergeConfirmBody': 'ワーカーがワークツリーにコミットした作業をプロジェクトフォルダーに取り込みます (ワークツリー {count} 個)。\n\nプロジェクトフォルダーが今いるブランチにコミットとして入ります。プッシュはしません。',
+  'jobs.run.mergeConfirmBody': 'ワーカーがワークツリーにコミットした作業をプロジェクトフォルダーに取り込みます (ワークツリー {count} 個)。\n\nプロジェクトフォルダーの現在のブランチにコミットとして追加されます。リモートへのプッシュは行いません。',
   'jobs.run.mergeNothing': 'マージするものが残っていません — ワークツリーのフォルダーはすでにありません',
   'jobs.run.mergeFailed': 'マージできませんでした: {reason}',
   'jobs.run.notStarted': '実行待ち',
