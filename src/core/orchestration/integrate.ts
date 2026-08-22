@@ -234,8 +234,8 @@ export function buildIntegrationSpec(a: {
     .join('\n')
 
   return `Several tasks in this run finished their work in separate git worktrees, each on its own
-branch. Their commits have to come back into the project folder before the next task can start. The
-app does that merge itself when it can — this time it stopped and handed it to you.
+branch. Their commits have to come back into one folder before the next task can start — the folder
+named below. The app does that merge itself when it can — this time it stopped and handed it to you.
 
 Why the app stopped: ${a.reason}
 
