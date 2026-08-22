@@ -572,6 +572,46 @@ describe('handleCommand — worker-start 사전 검증 (고아 세션 방지)', 
     })
     expect(r.status).toBe(200)
   })
+
+  // 설계 2절: 프로젝트 폴더에서는 워커가 돌지 않는다. app-managed Run(autoDispatch)이 아직
+  // 워크트리를 갖지 못한 동안 --worktree 없이 worker-start 가 들어오면 기본값이 'current' 로
+  // 떨어져 그 금지를 어겼다 — 그래서 이 조합만 거절한다(server.ts 의 새 조건).
+  it('워크트리가 없는 app-managed Run 에 --worktree 없이 worker-start 를 부르면 거부한다', async () => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      provider: 'codex',
+      auto: true
+    })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    const r = await call(deps, 'worker-start', { taskId, agent: 'codex', account: 'acc1' })
+    expect(r.status).toBe(409)
+  })
+
+  // 위 거절이 이 조합에만 닿는다는 증거 — --worktree 를 명시하면(사람이 자리를 골랐다는 뜻) 같은
+  // Run·같은 Task 로도 그대로 된다.
+  it('같은 Run 이라도 --worktree 를 명시하면 그대로 된다', async () => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      provider: 'codex',
+      auto: true
+    })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    const r = await call(deps, 'worker-start', {
+      taskId,
+      agent: 'codex',
+      account: 'acc1',
+      worktree: 'D:/wt'
+    })
+    expect(r.status).toBe(200)
+  })
 })
 
 describe('handleCommand — check', () => {
@@ -2526,7 +2566,9 @@ const withFinishedWorktree = async (): Promise<{
   const deps = Object.assign(base, {
     mergeWorktrees: async (_cwd: string, paths: string[]) => {
       merged.push(paths)
-      return mergeOk.value ? { ok: true as const } : { ok: false as const, reason: '프로젝트 폴더가 지저분합니다' }
+      return mergeOk.value
+        ? { ok: true as const, merged: paths }
+        : { ok: false as const, reason: '프로젝트 폴더가 지저분합니다' }
     },
     removeWorktrees: async (paths: string[]) => {
       removed.push(paths)
@@ -2619,7 +2661,7 @@ describe('run-delete — 병합·워크트리 선택', () => {
     const deps = Object.assign(makeDeps(), {
       mergeWorktrees: async (_c: string, p: string[]) => {
         merged.push(p)
-        return { ok: true as const }
+        return { ok: true as const, merged: p }
       }
     })
     const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', provider: 'claude' })
@@ -2682,7 +2724,7 @@ describe('run-merge', () => {
     const deps = Object.assign(makeDeps(), {
       mergeWorktrees: async (_c: string, p: string[]) => {
         merged.push(p)
-        return { ok: true as const }
+        return { ok: true as const, merged: p }
       }
     })
     const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })

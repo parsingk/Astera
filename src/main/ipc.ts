@@ -1664,27 +1664,25 @@ export function registerIpc(
       //
       // **`reap: false`** — 이 두 호출자는 폴더를 남긴다(그 이유는 integrateWorktrees 의 주석).
       //
-      // **레지스트리에 없는 경로는 걸러 낸다.** 재료는 runWorktrees 이고 그것이 보는 것은
-      // `Dispatch.cwd` — 그 값은 워크트리보다 오래 산다. 통합 병합이 이미 걷어 간 폴더와 끝난 예약
-      // 회차의 폴더가 그래서 목록에 남고, 그중 하나라도 넘기면 integrateWorktrees 는 브랜치를 찾지
-      // 못해 'agent' 를 내며 **아무것도 합치지 않는다**(그 명령은 409 가 된다). 통합 병합을 한 번이라도
-      // 지난 병렬 Run 은 전부 이 자리를 지난다. 판정은 회차 걷기가 reapableChildRuns 에 넘기는
-      // isAppWorktree(runScheduler 안)와 같은 모양이다 — core.worktrees.list() 와 isSamePath 이고,
-      // `===` 가 아니다(대소문자·구분자가 다를 수 있다).
-      // 서버 층에서 고치지 않는 이유: 그쪽에는 레지스트리가 없고, 여기서 고치면 `run-merge` 와
-      // `run-delete --merge` 가 함께 고쳐진다.
+      // **폴더가 있는지로 거른다 — 레지스트리 등록 여부가 아니다.** "합칠 수 있는가"와 "앱이 지워도
+      // 되는가"는 다른 질문이다. 뒤쪽만 레지스트리의 것이다(reapableChildRuns 의 isAppWorktree — 그
+      // 판정은 이 이유로 바뀌지 않는다). integrateWorktrees 는 git 자신의 `worktree list`에서 브랜치를
+      // 찾으므로, 앱이 만들었지만 아직(또는 더 이상) 레지스트리에 없는 워크트리도 git 에게는 멀쩍이
+      // 합칠 수 있는 대상이다 — 오케스트레이터가 스스로 만들어 `worker-start --worktree <path>` 로
+      // 띄워 넣은, 살아서 일하고 있는 워크트리가 레지스트리 필터 때문에 조용히 걸러지던 것이 바로
+      // 그 결함이었다. 재료 `paths`(runWorktrees, `Dispatch.cwd` 를 본다)에 남을 수 있는 건 이제
+      // 하나뿐이다: 폴더 자체가 사라진 경우(통합 병합이 이미 걷어 갔거나 예약 회차가 걷혔다) —
+      // 그것만 거른다. 존재 확인은 동기다: 폴더가 없으면 합칠 것이 없고, 있으면 그 뒤는 git 의 일이다.
       mergeWorktrees: async (runCwd, paths) => {
-        const live = core.worktrees.list()
-        const registered = (p: string): boolean => live.some((w) => isSamePath(w.path, p))
-        const alive = paths.filter(registered)
-        const gone = paths.filter((p) => !registered(p))
+        const alive = paths.filter((p) => existsSync(p))
+        const gone = paths.filter((p) => !existsSync(p))
         if (gone.length > 0)
           orchLog(`merge: skipping ${gone.length} removed worktree(s): ${gone.join(', ')}`)
         // 남은 것이 없으면 성공이다 — 합칠 것이 없는 것은 실패가 아니고, 여기서 실패로 내면 사람이
         // 손쓸 수 없는 이유로 병합 버튼과 삭제가 막힌다.
-        if (alive.length === 0) return { ok: true }
+        if (alive.length === 0) return { ok: true, merged: [] }
         const r = await integrateWorktrees(runCwd, alive, { reap: false })
-        return r.kind === 'merged' ? { ok: true } : { ok: false, reason: r.reason }
+        return r.kind === 'merged' ? { ok: true, merged: alive } : { ok: false, reason: r.reason }
       },
       // `run-delete --remove-worktrees` 가 부른다. 순차로 지운다 — reapWorktree 가 세션을 닫고
       // 상태가 바뀌기를 기다리므로, 병렬로 돌리면 서로의 폴링이 남의 세션을 기다린다.

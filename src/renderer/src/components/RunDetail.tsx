@@ -267,11 +267,20 @@ export function RunDetail({
    *     거절할 동작을 권하는 것이 되고, 무엇보다 그 거절이 없던 동안에는 눌리는 대로 템플릿의
    *     Task 가 terminal 이 되어 TTL 정리가 예약과 모든 회차를 30일 뒤에 지우는 경로가 열려
    *     있었다(store.ts). 이 창은 템플릿에서 **Task 를 짜는 자리**이고 돌리는 자리가 아니다.
-   *     회차에서는 그대로 보인다 — 회차는 templateId 를 갖고 schedule 은 갖지 않는다. */
+   *     회차에서는 그대로 보인다 — 회차는 templateId 를 갖고 schedule 은 갖지 않는다.
+   *
+   *  4) 이 Run 이 **이미 시작했다** (`pendingStart` 가 없다). '실행' 버튼이 지키는 게이트가
+   *     정확히 이것이다 — 사람이 Task 를 다 짜고 누르기 전까지는 아무것도 돌지 않아야 한다.
+   *     pendingStart 인 Run 은 아직 워크트리도 없다(runScheduler 가 첫 슬롯을 채울 때 게으르게
+   *     만든다) — 이 자리에서 버튼이 살아 있으면 `worker-start` 가 `--worktree` 없이 불려
+   *     app-managed Run 을 워크트리 없이 세운 채 거절당하거나(server.ts 의 새 거절), 그 거절이
+   *     없다면 프로젝트 폴더에서 돌았을 것이다 — 두 경우 다 '실행' 을 누르기 전에는 아무 노드
+   *     버튼도 없어야 한다는 이 게이트의 존재 이유를 어긴다. */
   const canManualStart =
     (run?.concurrency ?? DEFAULT_CONCURRENCY) <= 1 &&
     run?.provider !== undefined &&
-    run.schedule === undefined
+    run.schedule === undefined &&
+    run.pendingStart !== true
   const keyOf = (e: JobEvent): string => `${e.kind}:${e.sourceId}`
   const toggle = (key: string): void =>
     setOpen((prev) => {
@@ -370,7 +379,12 @@ export function RunDetail({
    *  작업 트리를 바꾸고, 사용자가 그 폴더에서 일하는 중일 수도 있다 — 충돌하면 그 트리가 반쯤
    *  병합된 상태로 남는다. 그래서 그 순간을 사람이 고른다.
    *
-   *  성공해도 워크트리를 지우지 않는다(명령 쪽 주석). 폴더 정리는 삭제 모달의 체크박스다. */
+   *  성공해도 워크트리를 지우지 않는다(명령 쪽 주석). 폴더 정리는 삭제 모달의 체크박스다.
+   *
+   *  **`merged` 가 비면 다른 문구를 보인다.** 이 버튼은 `run.worktrees`(발행 cwd 를 센 값, 폴더가
+   *  없어져도 줄지 않는다)로 나타나므로, 예약 회차가 걷혔거나 삭제 때 폴더가 이미 지워진 뒤에도
+   *  눌릴 수 있다 — 그때 명령은 200 을 내지만 `merged: []` 다(server.ts 의 run-merge). 아무것도
+   *  합치지 않았는데 "합쳤습니다" 토스트를 보이면 그 자체가 결함이다. */
   const mergeRunNow = async (): Promise<void> => {
     setBusy(RUN_MERGE)
     try {
@@ -383,7 +397,12 @@ export function RunDetail({
         toast.error(t('jobs.run.mergeFailed', { reason }))
         return
       }
-      toast.success(t('jobs.run.merged'))
+      const merged =
+        typeof reply.body === 'object' && reply.body !== null && 'merged' in reply.body
+          ? (reply.body as { merged: unknown }).merged
+          : undefined
+      const nothingMerged = Array.isArray(merged) && merged.length === 0
+      toast.success(t(nothingMerged ? 'jobs.run.mergeNothing' : 'jobs.run.merged'))
     } catch {
       toast.error(t('jobs.run.mergeFailed', { reason: '' }))
     } finally {

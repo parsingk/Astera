@@ -81,8 +81,14 @@ export interface OrchServerDeps {
    *  체크박스가 따로 하는 일이다(배선의 reap 옵션, src/main/ipc.ts).
    *  주입인 이유: 실제 병합은 git 을 돌리고 Gate 문구까지 만드는 배선의 일이라 src/main/ipc.ts 에
    *  있고, 이 파일은 그것을 호출만 한다 — now?/backup? 과 같은 관례로 optional 이다(주입되지 않으면
-   *  병합을 요청받아도 할 수 없으므로 거절한다). */
-  mergeWorktrees?(runCwd: string, paths: string[]): Promise<{ ok: true } | { ok: false; reason: string }>
+   *  병합을 요청받아도 할 수 없으므로 거절한다).
+   *  `merged` 는 넘긴 `paths` 중 폴더가 아직 남아 있던 것들의 부분집합이다(이미 사라진 폴더는
+   *  배선이 조용히 걸러 낸다) — 호출자는 이 값을 그대로 사람에게 보여야 한다, 넘긴 목록을 그대로
+   *  돌려주면 아무것도 합치지 못했을 때도 성공을 알리게 된다. */
+  mergeWorktrees?(
+    runCwd: string,
+    paths: string[]
+  ): Promise<{ ok: true; merged: string[] } | { ok: false; reason: string }>
   /** 이 경로들의 워크트리를 폴더째 지운다 — `run-delete --remove-worktrees` 가 부른다. 그 안에서
    *  도는 세션을 닫는 일까지 배선이 한다(removeWorktree 의 isPathInUse 가 그러지 않으면 거절한다).
    *  실패한 경로는 돌려준다 — 삭제를 막지는 않지만 응답에 실어 사람이 알 수 있게 한다. */
@@ -482,7 +488,10 @@ export async function handleCommand(
       // **워크트리를 걷지 않는다.** 사람이 결과를 보고 다시 합칠 수도 있고, 폴더 정리는 삭제
       // 모달의 체크박스가 이미 하는 일이다 — 이 명령이 그것까지 하면 "합치기" 가 "합치고 지우기" 가
       // 되고, 그 둘을 따로 고를 수 있게 만든 결정이 무의미해진다.
-      return okBody({ merged: worktrees })
+      // **`worktrees` 가 아니라 `merged.merged` 를 돌려준다.** `worktrees` 는 부르기 전의 요청
+      // 목록이라 배선이 걸러 낸 뒤에도 그대로다 — 이걸 돌려주면 실제로는 아무것도 합치지 못했을
+      // 때도(모든 폴더가 이미 사라졌을 때) 응답이 성공을 알리게 된다.
+      return okBody({ merged: merged.merged })
     }
     case 'run-spawn': {
       const id = str(args.run)
@@ -649,6 +658,20 @@ export async function handleCommand(
       // 리터럴 `'current'` 는 **워크트리가 없는 Run** 에만 남는다 — 코디네이터가 끌고 가는 Run 이
       // 그것이다(앱이 워크트리를 만들어 준 적이 없다). 그 분기를 지우지 않는 이유는 설계 9절에
       // 있다: CLI 에서 사람이 `--worktree current` 를 직접 쓸 수 있다.
+      //
+      // **다만 앱이 스스로 돌리는 Run(`run.autoDispatch`) 은 그 분기를 타면 안 된다.** 그런 Run 은
+      // 코디네이터가 없고, 앱이 언젠가 워크트리를 만들어 준다(runScheduler 가 첫 슬롯을 채우기
+      // 직전에) — `run.worktree` 가 아직 없다는 것은 "코디네이터가 원래부터 안 만든다"가 아니라
+      // "아직 시작 전"이라는 뜻이다. 그 상태에서 `--worktree` 없이 이 명령이 들어오면 위 로직대로
+      // `'current'` 로 떨어져 워커가 프로젝트 폴더에서 돌게 된다 — 설계 2절이 금지하는 바로 그것
+      // 이다. 되돌아갈 자리가 없으니 거절한다: `--worktree` 를 **명시적으로** 준 호출(값이 무엇이든,
+      // `'current'` 를 직접 써도)은 이 거절을 지나간다 — 그것은 사람이 자리를 골랐다는 뜻이고, 그
+      // 선택을 막을 이유가 없다.
+      if (str(args.worktree) === null && run.autoDispatch && !run.worktree)
+        return conflict(
+          `run ${run.id} has no worktree yet — there is nowhere to run a worker without writing ` +
+            `into the project folder; the scheduler creates one when the Run starts`
+        )
       const worktree = str(args.worktree) ?? run.worktree ?? 'current'
 
       // For a --terminal reuse the server looks up in advance which dispatch actually owned that

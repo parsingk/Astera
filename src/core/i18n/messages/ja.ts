@@ -737,6 +737,7 @@ export const ja: Catalog = {
   'jobs.run.merge': 'マージ',
   'jobs.run.mergeHint': 'ワーカーがワークツリーにコミットした作業をプロジェクトフォルダーに取り込みます (ワークツリー {count} 個)',
   'jobs.run.merged': 'プロジェクトフォルダーにマージしました',
+  'jobs.run.mergeNothing': 'マージするものが残っていません — ワークツリーのフォルダーはすでにありません',
   'jobs.run.mergeFailed': 'マージできませんでした: {reason}',
   'jobs.run.notStarted': '実行待ち',
   'jobs.run.notStartedHint': 'まだ実行していません — 詳細ウィンドウで実行を押すと開始します',

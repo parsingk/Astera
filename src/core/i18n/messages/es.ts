@@ -749,6 +749,7 @@ export const es: Catalog = {
   'jobs.run.merge': 'Fusionar',
   'jobs.run.mergeHint': 'Integra en la carpeta del proyecto lo que los trabajadores confirmaron en sus árboles de trabajo ({count} árbol(es) de trabajo)',
   'jobs.run.merged': 'Fusionado en la carpeta del proyecto',
+  'jobs.run.mergeNothing': 'No queda nada que fusionar: las carpetas de los árboles de trabajo ya no existen',
   'jobs.run.mergeFailed': 'No se pudo fusionar: {reason}',
   'jobs.run.notStarted': 'Sin iniciar',
   'jobs.run.notStartedHint': 'Aún no se ha iniciado — pulsa Ejecutar en la ventana de detalle para empezar',
