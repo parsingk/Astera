@@ -1681,6 +1681,29 @@ label.check-small input[type="checkbox"]:focus-visible {
    부모의 테두리 안에 또 테두리가 겹치면 어느 것이 묶음의 끝인지 읽을 수 없다(.jobs-run 의 주석과
    같은 판단이다) */
 .jobs-tmpl-kids { padding-left: 16px; }
+/* **회차의 hover 는 테두리가 아니라 왼쪽 마커다.** 회차 카드는 템플릿 카드 **안에** 중첩된
+   .jobs-run 이고, CSS 의 :hover 는 조상에도 걸린다 — 위 .jobs-run:hover 하나로는 회차에 마우스를
+   올렸을 때 템플릿과 회차가 **둘 다 accent 테두리를 그려** 서로 자기가 대상이라고 말한다. 실제로
+   그렇게 보고됐다.
+
+   마우스가 올라간 것은 회차 하나이므로 그것이 대상이고, 템플릿의 테두리는 "이 묶음 안" 을 말하는
+   자리로 남는다 — 둘이 다른 것을 말하면 겹쳐도 경쟁하지 않는다. 네스트된 네박스가 아예 생기지
+   않는 것도 값이다: 테두리 안의 테두리는 어느 쪽이 묶음의 끝인지 읽기 어렵게 한다(.jobs-tmpl-kids
+   가 자기 테두리를 지우는 것과 같은 판단).
+
+   마커 폭은 rail-btn 이 쓰는 그 변수다(--marker-w) — 같은 뜻("이것이 지금 그 줄")에 다른 굵기를
+   만들지 않는다. 배경은 아주 연하게: 마커가 신호이고 배경은 그 줄의 범위를 보이는 보조다. */
+.jobs-tmpl-kids .jobs-run:hover {
+  box-shadow: inset var(--marker-w) 0 0 var(--accent);
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+}
+/* 회차 목록의 페이징 줄. .jobs-fold 와 같은 자리·같은 톤이지만 누르는 것이라 커서와 hover 를 준다 */
+.jobs-tmpl-more {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 10px 8px 26px; color: var(--text-dim); font-size: 11px; cursor: pointer;
+}
+.jobs-tmpl-more:hover { color: var(--accent); }
 .jobs-tmpl-kids .jobs-run { border-bottom: none; }
 .jobs-tmpl-kids .jobs-run:not(:last-child) { border-bottom: 1px solid var(--line-soft); }
 

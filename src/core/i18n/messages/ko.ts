@@ -809,6 +809,7 @@ export const ko = {
   // 회차 줄의 번호. 발화 시점에 찍힌 서수라 기록을 지워도 남은 번호가 바뀌지 않는다
   'jobs.run.scheduleOrdinal': '{n}회차',
   'jobs.run.scheduleEmpty': '대기 중',
+  'jobs.run.scheduleMore': '{count}개 더 보기',
   'jobs.run.schedulePending': '실행을 누르면 예약이 시작됩니다',
   'jobs.gates.more': '외 {count}건',
   // RunDetail.tsx 의 아래 칸 — 이벤트 목록. 종류 배지는 이벤트 종류(또는 메시지 종류)가 고른다.

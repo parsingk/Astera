@@ -45,6 +45,13 @@ const FOOT_STATES: readonly TaskStatus[] = ['completed', 'failed', 'ready', 'pen
  *  넷째부터는 개수로 접는다. */
 const MAX_ROWS = 3
 
+/** 한 번에 그리는 회차 개수. 2분마다 도는 예약은 하루에 720 회차를 만들고, 그것을 다 그리면 한
+ *  템플릿이 사이드바를 통째로 먹는다 — 도는 줄이 MAX_ROWS 로 접는 것과 같은 이유다.
+ *
+ *  '더 보기' 는 이 수만큼씩 늘린다. 한 번에 전부 펼치지 않는 이유: 회차가 수백 개면 "전부" 는
+ *  접기 전과 같은 상태이고, 사람이 찾는 것은 대개 최근 몇 개다(목록은 최신순이다). */
+const ROUNDS_PAGE = 5
+
 /** Run 헤더의 한 글리프가 말하는 것.
  *
  *  blocked 가 가장 세다: 사람을 부르는 것이고, 그것을 놓치면 Run 이 거기서 선다. 그 아래는 Run 자신의
@@ -318,6 +325,10 @@ function ScheduleCard({
 }): React.JSX.Element {
   const { t } = useI18n()
   const children = run.children ?? []
+  /** 지금까지 펼친 회차 수. **접었다 펴도 유지된다** — 이 컴포넌트는 접힘에 언마운트되지 않으므로,
+   *  더 보기를 누른 사람이 접기 한 번에 그 자리를 잃지 않는다. */
+  const [shown, setShown] = useState(ROUNDS_PAGE)
+  const rest = children.length - shown
   return (
     <div className={`jobs-run jobs-tmpl${open ? '' : ' collapsed'}`}>
       <div className="jobs-run-head" onClick={onToggle}>
@@ -391,7 +402,7 @@ function ScheduleCard({
           </p>
         ) : (
           <div className="jobs-tmpl-kids">
-            {children.map((kid) => (
+            {children.slice(0, shown).map((kid) => (
               <RunCard
                 key={kid.id}
                 run={kid}
@@ -405,6 +416,27 @@ function ScheduleCard({
                 onDeleteRun={onDeleteRun}
               />
             ))}
+            {/* **누르면 늘어나는 수를 그대로 적는다.** "+12개 더" 라고 쓰고 5개만 늘리면 그 줄이
+                거짓말을 한다 — 남은 것이 5보다 적으면 그 수가 곧 늘어날 수다.
+                stopPropagation: 이 줄은 템플릿 카드 안이고 그 카드는 클릭이 접기·펴기다 */}
+            {rest > 0 && (
+              <div
+                className="jobs-tmpl-more"
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setShown((n) => n + ROUNDS_PAGE)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter' && e.key !== ' ') return
+                  e.stopPropagation()
+                  setShown((n) => n + ROUNDS_PAGE)
+                }}
+              >
+                + {t('jobs.run.scheduleMore', { count: Math.min(ROUNDS_PAGE, rest) })}
+              </div>
+            )}
           </div>
         ))}
       {open && (
