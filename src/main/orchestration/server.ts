@@ -75,8 +75,10 @@ export interface OrchServerDeps {
    *  wiring passes OrchestrationStore.backup. Optional for the same reason as now? and log? — if it
    *  is not injected the backup is skipped (existing tests that do not use the store). */
   backup?(): Promise<void>
-  /** 이 Run 의 워크트리 브랜치들을 프로젝트 폴더에 합친다 — `run-delete --merge` 가 부른다.
-   *  실패하면 사람이 읽을 이유를 돌려주고, 그때 삭제는 일어나지 않는다(그 case 의 주석).
+  /** 이 Run 의 워크트리 브랜치들을 프로젝트 폴더에 합친다 — `run-merge`(사람이 상세 창에서 누른다)
+   *  와 `run-delete --merge` 가 부른다. 실패하면 사람이 읽을 이유를 돌려주고, 그때 삭제는 일어나지
+   *  않는다(그 case 의 주석). 둘 다 **합친 워크트리를 걷지 않는다** — 폴더 정리는 삭제 모달의
+   *  체크박스가 따로 하는 일이다(배선의 reap 옵션, src/main/ipc.ts).
    *  주입인 이유: 실제 병합은 git 을 돌리고 Gate 문구까지 만드는 배선의 일이라 src/main/ipc.ts 에
    *  있고, 이 파일은 그것을 호출만 한다 — now?/backup? 과 같은 관례로 optional 이다(주입되지 않으면
    *  병합을 요청받아도 할 수 없으므로 거절한다). */
@@ -608,7 +610,6 @@ export async function handleCommand(
       if (agent !== 'claude' && agent !== 'codex') return bad('--agent must be claude|codex')
       if (!account) return bad('--account is required')
       const retryOf = str(args.retryOf) ?? undefined
-      const worktree = str(args.worktree) ?? 'current'
       const name = str(args.name) ?? undefined
       const terminal = str(args.terminal) ?? undefined
 
@@ -637,6 +638,18 @@ export async function handleCommand(
         return bad(
           `run ${run.id} is a schedule template — it does not dispatch its own Tasks; its executions do`
         )
+
+      // **`--worktree` 를 생략한 호출은 "이 Run 이 일하는 자리" 를 뜻한다** — 그것은 Run 이
+      // 워크트리를 가진 뒤에는 그 워크트리다. 기본값이 여기 있는 이유: 배치를 정하는 것은 부르는
+      // 쪽이 아니라 Run 이다. 렌더러의 수동 띄우기 버튼이 `'current'` 를 명시하던 동안 이 기능이
+      // 우회됐다 — 그 버튼이 나오는 조건이 하필 동시 실행 1 이하(= 이 기능이 존재하는 이유인 Run)
+      // 여서, 사람이 누를 때마다 워커가 사용자의 프로젝트 폴더에서 돌고 그 Dispatch 가 Run
+      // 워크트리를 향한 병합 재료로 세어졌다.
+      //
+      // 리터럴 `'current'` 는 **워크트리가 없는 Run** 에만 남는다 — 코디네이터가 끌고 가는 Run 이
+      // 그것이다(앱이 워크트리를 만들어 준 적이 없다). 그 분기를 지우지 않는 이유는 설계 9절에
+      // 있다: CLI 에서 사람이 `--worktree current` 를 직접 쓸 수 있다.
+      const worktree = str(args.worktree) ?? run.worktree ?? 'current'
 
       // For a --terminal reuse the server looks up in advance which dispatch actually owned that
       // session (its cwd, provider and accountId) and passes them to the coordinator as arguments —

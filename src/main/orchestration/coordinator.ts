@@ -186,8 +186,9 @@ export function buildSpecFile(a: {
    *  it from `!isSamePath(cwd, a.runCwd)` at its call site below — see the comment there for
    *  why the derivation lives at that one call site and not here too). **Not** `a.worktree !==
    *  'current'` — that was the original formula, and it is wrong for a --terminal reuse: the
-   *  --terminal branch sets cwd to a.terminalCwd regardless of what a.worktree says (server.ts's
-   *  default fills a.worktree with 'current' on that path), so a worktree session reused through
+   *  --terminal branch sets cwd to a.terminalCwd regardless of what a.worktree says (server.ts
+   *  fills a.worktree in on its own when the caller omits --worktree — the run's worktree, or
+   *  'current' for a run that has none), so a worktree session reused through
    *  --terminal read as committing:false and shipped its work with no commit obligation at all —
    *  a real defect this branch hit and fixed, not a hypothetical one. A worktree is merge material;
    *  an uncommitted change in it is invisible to the merge and is thrown away with the worktree. The
@@ -236,11 +237,11 @@ ${a.knowledge.more > 0 ? `\n  … and ${a.knowledge.more} more file(s) in the pr
 ---
 ## Commit obligation (assembled by the app — do not delete)
 
-This task is running in its own worktree, on its own branch — not in the project folder. When the
-work is finished you must commit it: that is the only way the app can bring this work back together
-with the results of the other tasks running in parallel. Right now this work exists only on this
-worktree's branch; if you do not commit it, it never merges anywhere and it is discarded once this
-worktree is torn down.
+You are working in a git worktree, not in the project folder. When the work is finished you must
+commit it here: committing is the only way this work leaves this folder. Everything the app does with
+it afterwards — merging it into the project, or into the folder a later task works in — reads
+commits, and an uncommitted change is invisible to all of it. Whatever you do not commit is thrown
+away with this worktree, and nothing else is left of it.
 
   git add -A
   git commit -m "<one-line summary of the change>"
@@ -541,11 +542,13 @@ export class OrchCoordinator {
     // cwd above, and the --terminal branch ignores it outright (cwd becomes a.terminalCwd no matter
     // what a.worktree says). Deriving from a.worktree would silently disagree with reality for a
     // --terminal reuse of a worktree session, which is exactly the "call reused, --worktree not
-    // repeated" shape server.ts's default (worktree='current') makes the common case, not a rare
-    // one. cwd !== a.runCwd covers all four branches with one comparison: 'current' sets cwd =
-    // a.runCwd (false), 'new' and an explicit path set cwd to somewhere else (true unless the
-    // explicit path happens to equal runCwd, which is correctly false — it is the project folder
-    // either way), and --terminal carries whatever the original dispatch actually used.
+    // repeated" shape server.ts's default makes the common case, not a rare one (that default is
+    // the run's worktree, or 'current' for a run that has none — either way it is not the tree the
+    // reused session is standing in). cwd !== a.runCwd covers all four branches with one comparison:
+    // 'current' sets cwd = a.runCwd (false), 'new' and an explicit path set cwd to somewhere else
+    // (true unless the explicit path happens to equal runCwd, which is correctly false — it is the
+    // project folder either way), and --terminal carries whatever the original dispatch actually
+    // used.
     //
     // isSamePath (not ===) because a.runCwd and a.terminalCwd are recorded independently (Run.cwd
     // vs a Dispatch's cwd field) and can name the same folder with different casing or separators

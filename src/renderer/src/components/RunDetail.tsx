@@ -242,12 +242,12 @@ export function RunDetail({
    *  보고 고치면 나머지 조건을 깨뜨리기 쉬워서다.
    *
    *  1) 이 Run 의 동시 실행 한도(없으면 DEFAULT_CONCURRENCY, JobRun 의 주석과 같다)가 1 이하다.
-   *     한도가 2 이상인 Run 은 모든 워커가 각자의 워크트리에서 돌고, 사람이 여기서 하나를
-   *     프로젝트 폴더(worker-start 의 기본 worktree='current')에 띄우면 "병렬인데 한 폴더"라는
-   *     금지된 조합이 된다(coordinator/runScheduler 주석) — 나머지 워커들의 워크트리와 달리 이
-   *     워커만 프로젝트 폴더의 커밋 안 된 변경을 남겨 병합 자리를 없앤다. 렌더러는 워크트리
-   *     이름을 지어 줄 수도 없다 — nameForTask(core/worktrees/naming.ts)가 node:path 를 끌고 와
-   *     tsconfig.web.json 에 못 들어간다. 그래서 한도 2 이상인 Run 에서는 버튼 자체를 없앤다
+   *     한도가 2 이상인 Run 은 모든 워커가 각자의 워크트리에서 돌고, 사람이 여기서 하나를 띄우면
+   *     그것은 Run 워크트리로 간다(worker-start 의 기본값) — 통합 Task 가 도는 바로 그 폴더다.
+   *     "병렬인데 한 폴더"라는 금지된 조합이 되고(coordinator/runScheduler 주석), 그 워커가 합칠
+   *     자리에 커밋 안 된 변경을 남기면 나머지 워크트리를 합칠 자리가 없어진다. 렌더러는 Task
+   *     워크트리의 이름을 지어 줄 수도 없다 — nameForTask(core/worktrees/naming.ts)가 node:path 를
+   *     끌고 와 tsconfig.web.json 에 못 들어간다. 그래서 한도 2 이상인 Run 에서는 버튼 자체를 없앤다
    *     (스케줄러가 거기서 띄우는 것을 대신 맡는다). DEFAULT_CONCURRENCY 가 3 이므로 사이드바가
    *     기본값으로 만든 Run 에는 이 버튼이 나오지 않는다 — 대안(프로젝트 폴더로라도 억지로
    *     띄우기)을 만들지 않기로 한 결정이다.
@@ -392,10 +392,8 @@ export function RunDetail({
   }
 
   /** 띄우기. ready·pending 에서만 보이고(Graph.node), canManualStart 가 아니면 버튼 자체가 없다.
-   *  worktree 는 언제나 'current' 를 명시한다 — 이 버튼이 나오는 것 자체가 이미 한도 1 이하인
-   *  Run 으로 좁혀져 있어(canManualStart) worker-start 의 기본값('current')과 결과가 같지만,
-   *  명시하는 것은 그 기본값이 나중에 바뀌어도(그럴 계획은 없지만) 이 버튼의 뜻이 조용히
-   *  달라지지 않게 하기 위해서다. */
+   *  **worktree 를 보내지 않는다** — 이 버튼은 워커가 어디서 도는지를 정하지 않는다. 그 결정은
+   *  Run 의 것이고 worker-start 안에 산다(server.ts 의 기본값: 이 Run 의 워크트리). */
   const startTask = async (taskId: string): Promise<void> => {
     setBusy(taskId)
     try {
@@ -418,8 +416,7 @@ export function RunDetail({
       const reply = await window.api.orch.command(projectPath, 'worker-start', {
         taskId,
         agent: provider,
-        account: accountId,
-        worktree: 'current'
+        account: accountId
       })
       if (reply.status >= 400) toast.error(t('jobs.node.failed'))
     } catch {

@@ -994,7 +994,25 @@ export function registerIpc(
         return false
       }
     }
-    const integrateWorktrees = async (mergeInto: string, paths: string[]): Promise<Integration> => {
+    /**
+     * 워크트리 브랜치들을 `mergeInto` 에 합친다.
+     *
+     * **`reap` 이 두 호출자를 가른다.** 기본값이 참인 것은 스케줄러의 통합 병합이다 — 그 워크트리는
+     * 끝난 의존의 것이고 방금 접어 넣었으므로 다시 쓸 사람이 없다. 회차마다 워커 수만큼 폴더가
+     * 쌓이는 것을 막는 것이 그 자동 정리의 이유다(스물일곱 개까지 갔다).
+     *
+     * `reap: false` 로 부르는 것은 사람이 누르는 병합(`run-merge`)과 `run-delete --merge` 다. 폴더를
+     * 지우는 것은 그 사람의 몫이다 — 삭제 모달에는 그 체크박스가 따로 있고, 사람은 결과를 보고 다시
+     * 합칠 수도 있다. 여기서 걷으면 `run.worktree` 가 사라진 폴더를 가리킨 채 남고(setRunWorktree 는
+     * 두 번째 쓰기를 거절한다) 배치가 그 경로를 fs.stat 하므로, **그 Run 은 다시는 Task 를 띄울 수
+     * 없다.**
+     */
+    const integrateWorktrees = async (
+      mergeInto: string,
+      paths: string[],
+      opts: { reap?: boolean } = {}
+    ): Promise<Integration> => {
+      const reap = opts.reap ?? true
       // 1. **저장소가 무언가의 중간이면 아무것도 하지 않는다.** 아래 2의 porcelain 검사는 경로 항목만
       //    내므로 브랜치·상태를 전혀 말하지 않는다 — 작업 트리가 깨끗한 채로 rebase·bisect 중인
       //    저장소와 분리된 HEAD 는 **빈 출력을 낸다.** 그것을 안전으로 읽으면 앱이 그 위에 병합을 건다.
@@ -1189,7 +1207,8 @@ export function registerIpc(
           }
         }
         orchLog(`scheduler: merged ${ref} into ${mergeInto}`)
-        // 합친 워크트리는 여기서 지운다 — **폴더까지.** 예약이 이것을 필수로 만들었다: 회차마다
+        // 합친 워크트리는 여기서 지운다 — **폴더까지. 단 `reap` 일 때만이다**(위 주석: 사람이 누른
+        // 병합은 폴더를 남긴다). 예약이 이 자동 정리를 필수로 만들었다: 회차마다
         // 워커 수만큼 워크트리가 생기므로 사람이 손으로 지우는 것은 현실적이지 않다.
         //
         // 지우는 방법은 removeWorktree(core/worktrees/remove.ts)가 안다 — 탐색기의 워크트리 패널이
@@ -1205,7 +1224,7 @@ export function registerIpc(
         // 정리가 안 됐다고 Gate 를 열면 사람이 손쓸 것도 없는 자리에서 파이프라인이 선다. 도는
         // 세션이 그 폴더를 쓰고 있으면 removeWorktree 가 IN_USE 로 던지고 **그것이 맞다**: 살아 있는
         // 프로세스 밑의 폴더는 지우지 않는다. 그때 그 워크트리는 남고 이유는 로그에 남는다.
-        await reapWorktree(target.path)
+        if (reap) await reapWorktree(target.path)
       }
       return { kind: 'merged' }
     }
@@ -1317,9 +1336,6 @@ export function registerIpc(
               // 전제(스냅숏이 아니라 슬롯마다 새로 읽는다) 위에 서 있다** — 여기를 "같은 스냅숏"
               // 이라고 잘못 적으면 다음에 이 루프의 레이스를 따지는 사람이 틀린 전제에서 시작한다.
               let state = orch.deps.getState()
-              // Task 도 같은 이유로 반드시 있다(slotsToFill 이 상태에서 골라낸 id 다) — 위와 같은
-              // 새로 읽은 state 에서다
-              const task = state.tasks.find((t) => t.id === slot.taskId)!
 
               // **Run 워크트리를 여기서 만든다 — 게으르게.** Run 을 만들 때가 아닌 이유가 둘이다:
               // 예약 템플릿은 한 번도 돌지 않으므로 워크트리가 필요 없고, pendingStart Run 은
@@ -1355,17 +1371,24 @@ export function registerIpc(
                     continue
                   }
                   orchLog(`scheduler: run=${run.id} works in ${created}`)
-                  // **상태를 다시 읽는다 — run 만이 아니라 state 도.** 아래 병합 판정
-                  // (pendingMerges·workingInRunRoot)이 이제 run.worktree 를 통해 Run 뿌리를 보므로,
-                  // 방금 기록한 값이 없는 스냅숏으로 물으면 —
-                  // 그 둘이 프로젝트 폴더를 기준으로 답하고, 순차 Run 의 모든 Task 가 자기가 서 있는
-                  // 폴더를 병합 대상으로 보는 그 오답이 여기서 되살아난다.
+                  // **상태를 다시 읽는다 — run 만이 아니라 state 도.** run 은 아래 runRoot 와 limit
+                  // 이 그것에서 나오기 때문이다: 방금 기록한 워크트리가 없는 run 을 들고 가면 배치와
+                  // 통합 병합의 대상이 프로젝트 폴더가 되어, 이 블록이 막으려던 바로 그 결과가 된다.
+                  //
+                  // state 는 병합 판정(pendingMerges·workingInRunRoot) 때문이다. 이 자리에서 낡은
+                  // 스냅숏은 병합을 **덜** 센다 — 그 스냅숏의 뿌리는 프로젝트 폴더이므로 프로젝트
+                  // 폴더에서 돈 Dispatch 를 "뿌리에서 돌았다"고 보아 건너뛴다. 중간에 워크트리를
+                  // 갖게 된 Run 은 그런 Dispatch 를 그대로 들고 있고(이 배선 전에 뜬 워커들이다),
+                  // 그것들은 이제 합쳐야 하는 재료다. 낡은 스냅숏으로 물으면 그 일이 조용히 빠진다.
                   state = orch.deps.getState()
                   run = state.runs.find((r) => r.id === slot.runId)!
                 } catch (e) {
                   // 저장소에 닿을 수 없으면 `NO_REPO:`, HEAD 가 분리됐으면 `NO_BASE:` 다 —
-                  // workerBaseFailure 가 그 문장을 만들고 forkWorktree 가 던진다. 저장소가 아니면
-                  // createWorktree 가 `NOT_GIT_REPO:` 로 던진다(create.ts 의 createWorktree). 셋 다
+                  // workerBaseFailure 가 그 문장을 만들고 forkWorktree 가 던진다. **저장소가 아닌
+                  // 폴더도 `NO_REPO:` 다** — forkWorktree 의 `rev-parse --git-dir` 탐침이 먼저
+                  // 실패하므로 createWorktree 까지 가지 않는다. 그쪽의 `NOT_GIT_REPO:`
+                  // (create.ts 의 createWorktree, repoRoot 가 null)는 git 은 돌지만 작업 트리가 없는
+                  // 저장소 — bare 저장소 — 만 남는다. 셋 다
                   // 읽을 수 있는 접두사가 붙어 오므로 그대로 Gate 에 싣는다. 다음 상태 변경에 다시
                   // 시도한다(사람이 저장소를 고치는 것 자체가 상태 변경은 아니지만, 그 Gate 를 푸는
                   // 것이 상태 변경이다).
@@ -1377,6 +1400,13 @@ export function registerIpc(
                   continue
                 }
               }
+              // Task 는 **워크트리 확보 블록 뒤에** 읽는다. 반드시 있는 것은 run 과 같은 이유이고
+              // (slotsToFill 이 상태에서 골라낸 id 다), 여기까지 내려온 것은 이 루프의 "슬롯마다
+              // 새로 읽는다" 전제를 그대로 지키기 위해서다 — 위 블록이 run-worktree-set 으로 쓰기를
+              // 하므로, 그보다 앞에서 읽은 값은 그 쓰기를 못 본 스냅숏이 된다. 지금 읽는 필드가
+              // 바뀌지 않는 것들(title·deps)이라 오늘은 무해하지만, 그 논증이 필요 없는 자리로
+              // 옮기는 것이 전제를 지키는 값싼 방법이다.
+              const task = state.tasks.find((t) => t.id === slot.taskId)!
               const runRoot = runRootOf(run)
 
               // **통합 단계 — worker-start 앞이다.** 의존이 자기 워크트리에서 돌았다면 그 브랜치의
@@ -1497,9 +1527,11 @@ export function registerIpc(
               //
               // **스케줄러의 배치는 'current' 를 더 이상 보내지 않는다.** 명시 경로 분기
               // (coordinator.ts)로 보내는 이유는 그쪽이 fs.stat 으로 존재를 확인해 주기 때문이다.
-              // 'current' 를 보내는 곳은 둘 남는다: 검토 Dispatch 는 구현자의 트리를 runCwd 로 넘겨
+              // 'current' 를 보내는 곳은 **둘뿐이다**: 검토 Dispatch 는 구현자의 트리를 runCwd 로 넘겨
               // 검토자를 정확히 그 트리에, 커밋 의무 없이 세우고(startReview), CLI 에서는 사람이
-              // `--worktree current` 를 직접 쓸 수 있다.
+              // `--worktree current` 를 직접 쓸 수 있다. 상세 창의 수동 띄우기 버튼은 셋째였는데
+              // 이제 아무 배치도 보내지 않는다 — 그 결정은 worker-start 의 기본값이 Run 에게 묻는다
+              // (server.ts).
               const placement =
                 isIntegrationTask(task) || limit <= 1
                   ? { worktree: runRoot }
@@ -1625,11 +1657,33 @@ export function registerIpc(
       },
       // The .bak for reset — the one documented safety net for a destructive operation
       backup: () => store.backup(),
-      // `run-delete --merge` 가 부른다. integrateWorktrees 의 'agent'(충돌 → 에이전트에게 넘김)도
-      // 여기서는 실패다 — 넘길 Run 을 지우는 중이라 통합 Task 를 붙일 자리가 없다. 두 경우 모두
-      // 이유를 그대로 올려 보내 사람이 무엇을 해야 하는지 읽게 한다.
+      // `run-merge`(사람이 상세 창에서 누른다)와 `run-delete --merge` 가 부른다.
+      // integrateWorktrees 의 'agent'(충돌 → 에이전트에게 넘김)도 여기서는 실패다 — 사람이 결과를
+      // 기다리고 있고, 지우는 경로에서는 넘길 Run 자체가 사라지는 중이라 통합 Task 를 붙일 자리가
+      // 없다. 두 경우 모두 이유를 그대로 올려 보내 사람이 무엇을 해야 하는지 읽게 한다.
+      //
+      // **`reap: false`** — 이 두 호출자는 폴더를 남긴다(그 이유는 integrateWorktrees 의 주석).
+      //
+      // **레지스트리에 없는 경로는 걸러 낸다.** 재료는 runWorktrees 이고 그것이 보는 것은
+      // `Dispatch.cwd` — 그 값은 워크트리보다 오래 산다. 통합 병합이 이미 걷어 간 폴더와 끝난 예약
+      // 회차의 폴더가 그래서 목록에 남고, 그중 하나라도 넘기면 integrateWorktrees 는 브랜치를 찾지
+      // 못해 'agent' 를 내며 **아무것도 합치지 않는다**(그 명령은 409 가 된다). 통합 병합을 한 번이라도
+      // 지난 병렬 Run 은 전부 이 자리를 지난다. 판정은 회차 걷기가 reapableChildRuns 에 넘기는
+      // isAppWorktree(runScheduler 안)와 같은 모양이다 — core.worktrees.list() 와 isSamePath 이고,
+      // `===` 가 아니다(대소문자·구분자가 다를 수 있다).
+      // 서버 층에서 고치지 않는 이유: 그쪽에는 레지스트리가 없고, 여기서 고치면 `run-merge` 와
+      // `run-delete --merge` 가 함께 고쳐진다.
       mergeWorktrees: async (runCwd, paths) => {
-        const r = await integrateWorktrees(runCwd, paths)
+        const live = core.worktrees.list()
+        const registered = (p: string): boolean => live.some((w) => isSamePath(w.path, p))
+        const alive = paths.filter(registered)
+        const gone = paths.filter((p) => !registered(p))
+        if (gone.length > 0)
+          orchLog(`merge: skipping ${gone.length} removed worktree(s): ${gone.join(', ')}`)
+        // 남은 것이 없으면 성공이다 — 합칠 것이 없는 것은 실패가 아니고, 여기서 실패로 내면 사람이
+        // 손쓸 수 없는 이유로 병합 버튼과 삭제가 막힌다.
+        if (alive.length === 0) return { ok: true }
+        const r = await integrateWorktrees(runCwd, alive, { reap: false })
         return r.kind === 'merged' ? { ok: true } : { ok: false, reason: r.reason }
       },
       // `run-delete --remove-worktrees` 가 부른다. 순차로 지운다 — reapWorktree 가 세션을 닫고
@@ -2127,14 +2181,25 @@ export function registerIpc(
     return { events: timelineFor(state, runId, (id) => known.has(id)), layers, deps, cyclic }
   })
   // orch.command 의 args 에서 Run id·Task id·Dispatch id 를 읽는 키 — 명령마다 다르고, 짐작이 아니라
-  // server.ts 의 switch 를 다시 열어 확인한 값만 적었다: task-create 는 args.runId, task-update 는
+  // server.ts 의 switch 를 다시 열어 확인한 값만 적었다: task-create 는 args.runId, run-start·
+  // run-merge 는 args.run, run-delete 는 args.id, task-update 는
   // args.id, dispatch-show·gate-create 는 args.task, worker-start 는 args.taskId 를 먼저 보고 없으면
   // args.task 를 본다(server.ts 의 handleCommand, 'worker-start' 분기), worker-stop 은 Task id 가 아니라 args.dispatch — Dispatch id
   // 라 그 Dispatch 의 taskId 로 한 번 더 찾아야 Run 에 닿는다. 이 표들이 담는 것은 "id 를 나르는
   // 모든 명령"이 아니라 지금 렌더러가 실제로 부르는 명령뿐이다 — 여기 없는 명령 중에도 id 를
   // 나르는 것이 있다(task-list 는 args.run, gate-resolve 는 args.id, worker-show 는 args.dispatch
   // 등). 새 호출부가 id 를 나르는 명령을 추가로 부르게 되면 그 키를 여기에 넣는다.
-  const RUN_ID_ARG: Record<string, string> = { 'task-create': 'runId' }
+  //
+  // **run-merge 가 이 문을 통과하는 첫 번째 "남의 프로젝트 폴더에서 git merge 를 돌리는 명령" 이다** —
+  // 그래서 run-start·run-delete 와 함께 여기 들어왔다. 그 셋이 없던 동안 orchOwnerMismatch 는 그
+  // args.run/args.id 를 아예 보지 않았고, 그것은 소유 판정이 있는 이유(다른 프로젝트의 Run 을 이
+  // 문으로 건드리지 못한다)가 가장 무거운 명령들에서만 비어 있었다는 뜻이다.
+  const RUN_ID_ARG: Record<string, string> = {
+    'task-create': 'runId',
+    'run-start': 'run',
+    'run-merge': 'run',
+    'run-delete': 'id'
+  }
   const TASK_ID_ARG: Record<string, string[]> = {
     'task-update': ['id'],
     'dispatch-show': ['task'],
@@ -2152,9 +2217,10 @@ export function registerIpc(
    *  이 명령의 args 에 id 가 없거나(위 세 표에 그 명령이 없다), 있어도 그 id 를 가진 Run·Task·
    *  Dispatch 가 애초에 존재하지 않으면 null 이다 — 그것은 소유 판정이 아니라 '없는 id' 오류이고,
    *  handleCommand 자신이 이미 그 오류를 안다(예: task-update 의 `unknown task`). 여기서 막는 것은
-   *  존재하는데 다른 프로젝트 것인 경우 하나뿐이다 — 그래서 지금 있는 여섯 호출부(NewTaskModal의
-   *  task-create, RunDetail 의 worker-start·dispatch-show·worker-stop·task-update·gate-create)는
-   *  모두 projectPath 와 짝이 맞는 id 를 보내므로 이 판정을 통과한다. */
+   *  존재하는데 다른 프로젝트 것인 경우 하나뿐이다 — 그래서 지금 있는 아홉 호출부(NewTaskModal 의
+   *  task-create, RunDetail 의 run-start·run-merge·worker-start·dispatch-show·worker-stop·
+   *  task-update·gate-create, App 의 run-delete)는 모두 projectPath 와 짝이 맞는 id 를 보내므로 이
+   *  판정을 통과한다. */
   const orchOwnerMismatch = (
     state: OrchState,
     project: string,

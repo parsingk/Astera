@@ -2644,10 +2644,37 @@ describe('run-merge', () => {
     expect(deps.getState().runs).toHaveLength(1)
   })
 
-  it('폴더를 지우지 않는다 — 정리는 삭제 모달의 체크박스다', async () => {
+  // **합친 뒤에도 그 Run 은 계속 돌 수 있어야 한다.** 성공한 병합이 워크트리를 걷어 가면
+  // `run.worktree` 는 사라진 폴더를 가리킨 채 남고(run-worktree-set 은 두 번째 쓰기를 거절한다)
+  // 배치는 그 경로를 fs.stat 하므로, 그 Run 은 다시는 Task 를 띄울 수 없게 된다.
+  //
+  // **이 층이 볼 수 있는 것까지만 본다.** 실제 폴더 삭제는 배선의 integrateWorktrees 안에 있고
+  // (src/main/ipc.ts, 사람이 누른 병합에는 reap 을 끈다) 여기서 mergeWorktrees 는 스텁이므로, 그
+  // 삭제 자체는 이 테스트가 볼 수 없다. 이 자리에서 정직하게 물을 수 있는 것은 둘이다: run-merge 가
+  // 폴더 삭제를 **요청하지 않는다**, 그리고 병합 뒤에도 기록된 Run 워크트리가 그대로 남아 다음
+  // 워커가 거기서 뜬다.
+  it('폴더 삭제를 요청하지 않고, 합친 뒤에도 Run 워크트리가 그대로 쓰인다', async () => {
     const { deps, runId, removed } = await withFinishedWorktree()
-    await call(deps, 'run-merge', { run: runId })
+    const set = await call(deps, 'run-worktree-set', { run: runId, worktree: 'D:/wt/run' })
+    expect(set.status).toBe(200)
+    const placements: string[] = []
+    deps.startWorker = async (a) => {
+      placements.push(a.worktree)
+      return { sessionId: 'sess_after', cwd: a.worktree, specPath: 'D:/wt/run/spec.md' }
+    }
+
+    expect((await call(deps, 'run-merge', { run: runId })).status).toBe(200)
+
     expect(removed).toEqual([])
+    expect(deps.getState().runs.find((r) => r.id === runId)?.worktree).toBe('D:/wt/run')
+    const t = await call(deps, 'task-create', { runId, title: '다음', spec: 's' })
+    const r = await call(deps, 'worker-start', {
+      taskId: (t.body as { id: string }).id,
+      agent: 'codex',
+      account: 'acc1'
+    })
+    expect(r.status).toBe(200)
+    expect(placements).toEqual(['D:/wt/run'])
   })
 
   it('합칠 것이 없으면 병합을 부르지 않는다', async () => {

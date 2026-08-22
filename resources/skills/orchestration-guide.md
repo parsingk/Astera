@@ -267,7 +267,9 @@ accounts [--agent <claude|codex>] [--json]
 - What the server blocks for workers is only `worker-start`, `worker-release`, `worker-retain`,
   `worker-stop`, and `worker-abandon`. `worker-show`, `worker-read`, and `accounts` are not blocked,
   but a worker has no use for them either (section 6).
-- Default: `--worktree` is `current` when omitted.
+- Default: omitting `--worktree` means **wherever that Run works** — the Run's own worktree if the app
+  has given it one, and `current` (the Run's `cwd`) if it has not. A Run you create and dispatch
+  yourself has none, so for those the default is still `current`.
 - **`--name <s>` is required with `--worktree new`** — it becomes the branch and directory name of the
   new worktree. Without it the request is rejected with `400 --name is required for --worktree new`.
   It is unused (ignored) with `--worktree current` or an explicit path.
