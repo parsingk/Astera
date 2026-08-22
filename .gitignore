@@ -11,6 +11,7 @@ dist-installer/
 docs/*
 !docs/releasing.md
 !docs/slack-bot-setup.md
+!docs/jobs.md
 # Published deliberately: the SignPath Foundation requires the code signing policy to be reachable at
 # a public URL, and the README links to it.
 !docs/code-signing.md
