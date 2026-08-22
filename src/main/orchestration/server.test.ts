@@ -2680,6 +2680,22 @@ describe('run-merge', () => {
     expect((r.body as { merged: string[] }).merged).toEqual(['D:/wt/a'])
   })
 
+  // 커밋되지 않은 변경의 수는 배선이 세고 이 명령은 그대로 올린다 — 그 수가 렌더러까지 닿아야
+  // "합쳤습니다" 를 "일이 다 옮겨졌다" 로 읽고 폴더를 지우는 경로가 막힌다
+  it('커밋되지 않은 변경의 수를 그대로 올린다', async () => {
+    const { deps, runId } = await withFinishedWorktree()
+    const withDirty = Object.assign(deps, {
+      mergeWorktrees: async (_c: string, p: string[]) => ({
+        ok: true as const,
+        merged: p,
+        uncommitted: 3
+      })
+    })
+    const r = await call(withDirty, 'run-merge', { run: runId })
+    expect(r.status).toBe(200)
+    expect((r.body as { uncommitted?: number }).uncommitted).toBe(3)
+  })
+
   it('합쳐도 Run 은 남는다 — 이 명령은 지우지 않는다', async () => {
     const { deps, runId } = await withFinishedWorktree()
     await call(deps, 'run-merge', { run: runId })

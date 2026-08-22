@@ -88,7 +88,7 @@ export interface OrchServerDeps {
   mergeWorktrees?(
     runCwd: string,
     paths: string[]
-  ): Promise<{ ok: true; merged: string[] } | { ok: false; reason: string }>
+  ): Promise<{ ok: true; merged: string[]; uncommitted: number } | { ok: false; reason: string }>
   /** 이 경로들의 워크트리를 폴더째 지운다 — `run-delete --remove-worktrees` 가 부른다. 그 안에서
    *  도는 세션을 닫는 일까지 배선이 한다(removeWorktree 의 isPathInUse 가 그러지 않으면 거절한다).
    *  실패한 경로는 돌려준다 — 삭제를 막지는 않지만 응답에 실어 사람이 알 수 있게 한다. */
@@ -500,7 +500,10 @@ export async function handleCommand(
       // **`worktrees` 가 아니라 `merged.merged` 를 돌려준다.** `worktrees` 는 부르기 전의 요청
       // 목록이라 배선이 걸러 낸 뒤에도 그대로다 — 이걸 돌려주면 실제로는 아무것도 합치지 못했을
       // 때도(모든 폴더가 이미 사라졌을 때) 응답이 성공을 알리게 된다.
-      return okBody({ merged: merged.merged })
+      // **커밋되지 않은 변경의 수를 함께 올린다.** git 은 커밋만 옮기므로 그 변경은 합쳐지지 않았고
+      // 그 폴더에만 있다 — 폴더를 지우면 사라진다. 병합이 성공했다는 말만 돌려주면 사람은 그것을
+      // "일이 다 옮겨졌다" 로 읽고 폴더를 지운다.
+      return okBody({ merged: merged.merged, uncommitted: merged.uncommitted })
     }
     case 'run-spawn': {
       const id = str(args.run)

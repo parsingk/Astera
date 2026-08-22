@@ -423,6 +423,19 @@ export function RunDetail({
           ? t('jobs.run.mergeNothing')
           : t('jobs.run.merged', { count: mergedCount })
       )
+      // **커밋되지 않은 변경은 합쳐지지 않았다.** git 은 커밋만 옮긴다 — 워커가 파일을 고쳐 놓고
+      // 커밋하지 않았으면 그 일은 워크트리에만 있고, 병합을 성공으로 읽은 사람이 폴더를 지우는
+      // 순간 사라진다. 앱은 워커에게 커밋을 지시하지만 지켰는지 확인하지 않으므로, 이 자리가 그
+      // 사실이 사람에게 닿는 유일한 곳이다.
+      //
+      // 성공 토스트와 **따로** 띄운다. toast 는 error 만 스스로 사라지지 않으므로(lib/toast) 놓쳐서는
+      // 안 되는 쪽을 그것으로 보낸다 — 문구가 실패가 아니라 남은 것을 말한다.
+      const uncommitted =
+        typeof reply.body === 'object' && reply.body !== null && 'uncommitted' in reply.body
+          ? (reply.body as { uncommitted: unknown }).uncommitted
+          : 0
+      if (typeof uncommitted === 'number' && uncommitted > 0)
+        toast.error(t('jobs.run.mergeUncommitted', { count: uncommitted }))
     } catch {
       toast.error(t('jobs.run.mergeFailed', { reason: '' }))
     } finally {

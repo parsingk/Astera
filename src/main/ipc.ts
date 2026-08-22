@@ -926,7 +926,11 @@ export function registerIpc(
 
     /** 통합의 결과. 셋뿐이다 — 합쳤다, 사람에게 가야 한다, 에이전트에게 넘겨야 한다. */
     type Integration =
-      | { kind: 'merged' }
+      /** uncommitted: 합친 워크트리들에 **커밋되지 않은 채 남은** 변경의 수. git 은 커밋만 옮기므로
+       *  그 변경은 병합되지 않았고 그 폴더에만 있다 — 폴더를 지우면 사라진다. 워커에게 커밋 의무를
+       *  주기는 하지만(coordinator 의 commitObligation) 지켰는지 확인하는 곳은 없어서, 이 수가
+       *  사람에게 그 사실이 닿는 유일한 자리다. */
+      | { kind: 'merged'; uncommitted: number }
       | { kind: 'human'; reason: string }
       | { kind: 'agent'; reason: string; worktrees: { path: string; branch: string | null }[] }
 
@@ -1167,7 +1171,19 @@ export function registerIpc(
       //    그 이름을 다시 문자열로 받아 오면 같은 이름의 태그와 헷갈릴 여지만 생기기 때문이다
       //    (`rev-parse --abbrev-ref HEAD` 는 분리된 HEAD 에서 브랜치 이름이 아니라 `HEAD` 를
       //    돌려주므로, 1의 검사가 없다면 그 문자열을 대상으로 삼는 것 자체가 결함이 된다).
+      // 커밋되지 않고 남은 변경의 수. **합치기 전에 센다** — 병합은 대상 폴더를 바꾸지만 원본
+      // 워크트리는 건드리지 않으므로 값은 같지만, 세는 시점이 앞이면 병합이 중간에 실패해도 이미
+      // 얻은 사실이 남는다.
+      //
+      // `--porcelain` 의 기본값을 쓴다: 추적되지 않는 파일도 센다. 워커가 새 파일을 만들고 add 하지
+      // 않은 것이 정확히 이 경고가 잡아야 하는 경우이고, 커밋 의무의 `git add -A` 도 그것을 담는다.
+      // 무시되는 파일(빌드 산출물, node_modules)은 기본적으로 빠진다.
+      let uncommitted = 0
       for (const target of targets) {
+        const dirty = await git(['status', '--porcelain'], { cwd: target.path })
+        const n = dirty.ok && dirty.stdout !== '' ? dirty.stdout.split('\n').length : 0
+        if (n > 0) orchLog(`merge: ${target.path} has ${n} uncommitted change(s) — not merged`)
+        uncommitted += n
         // 같은 이름의 태그가 브랜치보다 먼저 잡히는 것을 막으려고 전체 ref 를 쓴다(remove.ts 와 같다)
         const ref = `refs/heads/${target.branch}`
         const probe = await git(['merge-tree', '--write-tree', 'HEAD', ref], { cwd: mergeInto })
@@ -1229,7 +1245,7 @@ export function registerIpc(
         // 프로세스 밑의 폴더는 지우지 않는다. 그때 그 워크트리는 남고 이유는 로그에 남는다.
         if (reap) await reapWorktree(target.path)
       }
-      return { kind: 'merged' }
+      return { kind: 'merged', uncommitted }
     }
 
     // 자동 진행. **setState 뒤에 매단다** — 새 Task 가 ready 가 되거나 자리가 비는 경로가 일곱이고
@@ -1683,9 +1699,11 @@ export function registerIpc(
           orchLog(`merge: skipping ${gone.length} removed worktree(s): ${gone.join(', ')}`)
         // 남은 것이 없으면 성공이다 — 합칠 것이 없는 것은 실패가 아니고, 여기서 실패로 내면 사람이
         // 손쓸 수 없는 이유로 병합 버튼과 삭제가 막힌다.
-        if (alive.length === 0) return { ok: true, merged: [] }
+        if (alive.length === 0) return { ok: true, merged: [], uncommitted: 0 }
         const r = await integrateWorktrees(runCwd, alive, { reap: false })
-        return r.kind === 'merged' ? { ok: true, merged: alive } : { ok: false, reason: r.reason }
+        return r.kind === 'merged'
+          ? { ok: true, merged: alive, uncommitted: r.uncommitted }
+          : { ok: false, reason: r.reason }
       },
       // `run-delete --remove-worktrees` 가 부른다. 순차로 지운다 — reapWorktree 가 세션을 닫고
       // 상태가 바뀌기를 기다리므로, 병렬로 돌리면 서로의 폴링이 남의 세션을 기다린다.
