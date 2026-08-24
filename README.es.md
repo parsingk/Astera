@@ -151,20 +151,50 @@ También necesitarás:
 
 ## Jobs
 
-Todo esto depende de un solo ajuste: **Orquestación de agentes**, en los ajustes. Actívalo y la barra
-lateral de Jobs viene con él — un trabajo que dibujes ahí no necesita nada más: nombra las tareas, di
-qué espera a qué, y arráncalo.
+Jobs es opcional. Activa **Orquestación de agentes** en los ajustes para mostrar su barra lateral.
+Un trabajo es un grafo de tareas con dependencias que pueden ejecutarse con cualquiera de los dos
+proveedores, y hay dos formas de ponerlo en marcha.
 
-Un trabajo es un conjunto de tareas con dependencias entre ellas, y se reparte entre los dos
-proveedores. Hay dos maneras de ejecutarlo:
+### 1. Ejecutarlo desde la barra lateral de Jobs — Astera coordina
 
-- **Astera lo lleva.** Dibuja el trabajo en la app — las tareas, qué espera a qué, cuántas pueden ir
-  a la vez — y echa a andar: cada tarea arranca cuando sus dependencias están hechas, y los worktrees
-  terminados se fusionan de vuelta antes de que empiecen las tareas que los siguen, con cualquier
-  conflicto en manos de un agente en vez de en las tuyas
-- **O lo lleva un agente.** Una sesión coordinadora reparte tareas a sesiones trabajadoras —
-  incluidas las del *otro* proveedor — y espera finalizaciones, dependencias, preguntas y
-  escalaciones. Las trabajadoras informan a través de la CLI `astera` incluida
+Esta modalidad la gestiona la aplicación:
+
+1. Comprueba que el proyecto sea un repositorio git con una rama activa.
+2. En la barra lateral de Jobs, pulsa **Nuevo trabajo**, define **Objetivo**, **Agente** y el límite
+   de concurrencia (el campo se llama **En paralelo**), más **Ejecución programada** si la quieres, y
+   pulsa **Crear**.
+3. En la vista detallada, pulsa **Añadir tarea**, ponle un **Título** y sus **Instrucciones**, y
+   marca sus dependencias en **Depende de**. Opcionalmente elige una **Cuenta**, una configuración
+   que pruebe que terminó, o una revisión por otro agente — que siempre se ejecuta en el otro
+   proveedor.
+4. Cuando hayas definido todas las tareas, pulsa **Ejecutar**. Crear el trabajo o añadir una tarea no
+   inicia nada; en un trabajo programado, **Ejecutar** activa la programación en vez de iniciar una
+   ejecución inmediatamente.
+
+Astera solo inicia las tareas cuyas dependencias han terminado. Lo que pasa después depende del
+límite de concurrencia. Con 2 o más —3 es el valor por defecto— cada tarea recibe su propio
+worktree, y antes de arrancar una tarea posterior Astera fusiona los ya terminados en el worktree
+propio del trabajo; si hay un conflicto, se lo entrega a un agente. Con 1, las tareas heredan un
+único worktree por turnos, así que no hay nada que fusionar. En cualquier caso, el trabajo
+terminado no se fusiona automáticamente con la rama activa del proyecto: pulsa **Fusionar** en la
+vista detallada cuando quieras incorporar el resultado.
+El [ciclo de vida completo de un Job](docs/jobs.md) está documentado actualmente en coreano.
+
+### 2. Ejecutarlo con la skill `astera-orchestration` — un agente coordina
+
+Activa **Orquestación de agentes antes de iniciar la sesión coordinadora**. Al arrancar, esa sesión
+recibe la CLI `astera` en su `PATH` y la skill `astera-orchestration`. Puedes pedírselo con lenguaje
+natural, por ejemplo:
+
+> Usa la skill `astera-orchestration` para coordinar este trabajo: refactoriza el módulo de
+> autenticación, añade después pruebas de regresión y verifícalo con la suite de pruebas.
+
+También puedes invocar la skill explícitamente como `/astera-orchestration`. La coordinadora crea el
+Run y las tareas, reparte el trabajo a sesiones trabajadoras —incluidas las del *otro* proveedor— y
+espera finalizaciones, dependencias, preguntas y escalaciones. Las trabajadoras informan a través de
+la CLI `astera` incluida. Un Run cuyo directorio de trabajo coincida con el proyecto abierto también
+aparece en la barra lateral de Jobs, pero es la coordinadora, no el planificador automático de Astera,
+quien decide qué despachar.
 
 En cualquiera de los dos casos:
 
@@ -180,7 +210,7 @@ En cualquiera de los dos casos:
   `knowledge/`, `docs/adr/`, `docs/decisions/` y similares, para no reabrir lo que ya está cerrado
 
 <div align="center">
-<img src="assets/jobs.gif" width="820" alt="Diagrama: las tareas de un trabajo dibujadas como un grafo de dependencias — Astera arranca a la vez las dos que están listas, cada una en un proveedor distinto, una batería de pruebas demuestra terminada una de ellas, los worktrees terminados se fusionan de vuelta, y una decisión que el trabajo no puede tomar espera a una persona" />
+<img src="assets/jobs.gif" width="820" alt="Diagrama: las tareas de un trabajo dibujadas como un grafo de dependencias — Astera arranca a la vez las dos que están listas, cada una en un proveedor distinto, una batería de pruebas demuestra terminada una de ellas, los worktrees de las tareas terminadas se fusionan en el worktree del trabajo, y una decisión que el trabajo no puede tomar espera a una persona" />
 </div>
 
 Y lo ves ocurrir: todos los trabajos del proyecto abierto en la barra lateral, sus tareas dibujadas
@@ -188,9 +218,7 @@ como un grafo de dependencias y lo ocurrido como una línea de tiempo. Qué prov
 tarea, y desde hace cuánto. Iniciar una tarea, detenerla, reintentarla, plantear una pregunta a una
 persona o responder la decisión que está esperando — desde el nodo de la propia tarea.
 
-Para un trabajo que coordine un agente, inicia una sesión después de activar ese ajuste. Esa sesión
-recibe la CLI `astera` en su `PATH` y una skill que describe cómo usarla, así que basta con pedirle
-que coordine el trabajo. Para leer la referencia completa tú mismo:
+Para leer por tu cuenta la referencia completa de la CLI de coordinación:
 
 ```bash
 astera help

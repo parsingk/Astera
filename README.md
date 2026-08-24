@@ -150,18 +150,45 @@ You will also need:
 
 ## Jobs
 
-Jobs is opt-in. Turn on **Agent orchestration** in settings to add the Jobs sidebar, then name the
-tasks, define their dependencies and concurrency, and start the job.
+Jobs is opt-in. Turn on **Agent orchestration** in settings to add the Jobs sidebar. A job is a
+dependency graph whose tasks can run under either vendor, and there are two ways to run one.
 
-A job is a dependency graph whose tasks can run under either vendor. There are two ways to run one:
+### 1. Run it from the Jobs sidebar — Astera coordinates
 
-- **Astera drives it.** Draw the job in the app — the tasks, what waits on what, how many may run
-  at once — and it goes: each task starts once its dependencies are done, and the finished worktrees
-  are merged back before the tasks that follow them start, with a conflict handed to an agent rather
-  than left for you
-- **Or an agent drives it.** A coordinator session dispatches tasks to worker sessions — including
-  workers on the *other* vendor — and waits on completion, dependencies, questions and escalations.
-  Workers report back through the bundled `astera` CLI
+This path is managed by the app:
+
+1. Make sure the project is a git repository with a branch checked out.
+2. In the Jobs sidebar, click **New job**, set **Objective**, **Agent** and the concurrency limit
+   (the field is labelled **Run at once**), plus **Scheduled run** if you want one, then click
+   **Create**.
+3. In the job detail window, click **Add task**, then give the task a **Title** and its
+   **Instructions** and pick what it **Depends on**. Optionally choose an **Account**, a run
+   configuration that proves it done, or a review by an agent — which always runs on the other
+   vendor.
+4. After all tasks are laid out, click **Run**. Creating the job or adding a task does not start any
+   work; for a scheduled job, **Run** arms the schedule instead of starting a round immediately.
+
+Astera starts only tasks whose dependencies are complete. What happens after that depends on the
+concurrency limit. At 2 or more — 3 is the default — every task gets its own worktree, and before a
+downstream task starts Astera merges the finished ones into the job's own worktree; if that merge
+conflicts, it hands the conflict to an agent. At 1 the tasks inherit a single worktree in turn, so
+there is nothing to merge. Either way the completed job is not merged into the project's
+checked-out branch automatically — click **Merge** in the detail window when you are ready to bring
+the result back. The [complete Job lifecycle](docs/jobs.md) is documented in Korean.
+
+### 2. Run it with the `astera-orchestration` skill — an agent coordinates
+
+Turn on **Agent orchestration before starting the coordinator session**. At startup that session
+receives the `astera` CLI on its `PATH` and the `astera-orchestration` skill. You can ask naturally:
+
+> Use the `astera-orchestration` skill to coordinate this work: refactor the authentication module,
+> add regression tests after the refactor, and verify the test suite.
+
+The skill can also be invoked explicitly as `/astera-orchestration`. The coordinator creates the run
+and tasks, starts worker sessions — including workers on the *other* vendor — and waits on completion,
+dependencies, questions and escalations. Workers report through the bundled `astera` CLI. A run whose
+working directory matches the open project is still visible in the Jobs sidebar, but the coordinator,
+not Astera's automatic scheduler, decides what to dispatch.
 
 Either way:
 
@@ -175,7 +202,7 @@ Either way:
   `knowledge/`, `docs/adr/`, `docs/decisions/` and the like, so a settled question is not reopened
 
 <div align="center">
-<img src="assets/jobs.gif" width="820" alt="Diagram: a job's tasks drawn as a dependency graph — Astera starts the two that are ready on both vendors at once, a test suite proves one of them done, the finished worktrees merge back, and a decision the job cannot take waits for a person" />
+<img src="assets/jobs.gif" width="820" alt="Diagram: a job's tasks drawn as a dependency graph — Astera starts the two that are ready on both vendors at once, a test suite proves one of them done, the finished task worktrees merge into the job worktree, and a decision the job cannot take waits for a person" />
 </div>
 
 And you watch it happen: every job of the open project in the sidebar, its tasks drawn as a
@@ -183,9 +210,7 @@ dependency graph, and what happened as a timeline. Which vendor is working on wh
 how long. Start a task, stop it, retry it, raise a question for a person, or answer a waiting
 decision — from the task's own node in the graph.
 
-For a job an agent coordinates, start a session after turning that setting on. The session gets the
-`astera` CLI on its `PATH` and a skill describing how to use it, so you can simply ask it to
-coordinate work. To read the full reference yourself:
+To read the coordinator's full CLI reference yourself:
 
 ```bash
 astera help
