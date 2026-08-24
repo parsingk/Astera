@@ -13,6 +13,7 @@ import {
 } from '../../core/orchestration/state'
 import { TaskValidator } from './validator'
 import { FAILURE_LIMIT } from '../../core/orchestration/types'
+import { parseArgs } from '../../core/orchestration/cliArgs'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 
@@ -3108,5 +3109,72 @@ describe('run-worktree-set', () => {
     })
     const r = await call(deps, 'run-worktree-set', { run: runId, worktree: 'D:/wt/a' }, 'worker1')
     expect(r.status).toBe(403)
+  })
+})
+
+// CLI 로 들어오는 길을 **파서를 거쳐** 확인한다. 여기가 비어 있던 것이 이 결함의 원인이었다 —
+// 앱은 IPC 로 객체를 직접 보내고(NewTaskModal), 다른 테스트도 서버를 직접 부르므로, 파서가 만드는
+// 키와 서버가 읽는 키가 어긋나도 아무 데서도 드러나지 않았다.
+describe('handleCommand — CLI 인자 경로', () => {
+  /** astera <cmd> ... 한 줄을 파서에 통과시켜 서버가 실제로 받는 args 로 만든다 */
+  const cliArgs = (argv: string[]): Record<string, unknown> => {
+    const parsed = parseArgs(argv)
+    if ('error' in parsed) throw new Error(parsed.error)
+    return parsed.args
+  }
+
+  const twoRuns = async (): Promise<{ deps: OrchServerDeps; older: string; newer: string }> => {
+    const deps = makeDeps()
+    const a = await call(deps, 'run-create', { objective: 'first', cwd: 'D:/p' })
+    const b = await call(deps, 'run-create', { objective: 'second', cwd: 'D:/p' })
+    return { deps, older: (a.body as { id: string }).id, newer: (b.body as { id: string }).id }
+  }
+
+  it('task-create 는 --run 이 가리키는 Run 에 붙는다', async () => {
+    const { deps, older } = await twoRuns()
+    const r = await call(
+      deps,
+      'task-create',
+      cliArgs(['task-create', '--run', older, '--title', 't', '--spec', 's'])
+    )
+    expect((r.body as { runId: string }).runId).toBe(older)
+  })
+
+  // 이 결함의 본체. --run 이 무시되면 가장 최근 Run 으로 조용히 흘러가고, 코디네이터가 만든 Task 가
+  // 사람이 방금 만든 Job 에 섞인다 — 오류도 나지 않아 알아챌 방법이 없다.
+  it('--run 이 최신이 아닌 Run 을 가리켜도 그쪽에 붙는다', async () => {
+    const { deps, older, newer } = await twoRuns()
+    await call(
+      deps,
+      'task-create',
+      cliArgs(['task-create', '--run', older, '--title', 't', '--spec', 's'])
+    )
+    const tasks = deps.getState().tasks
+    expect(tasks).toHaveLength(1)
+    expect(tasks[0].runId).toBe(older)
+    expect(tasks[0].runId).not.toBe(newer)
+  })
+
+  it('--run 이 없으면 가장 최근 Run 에 붙는다', async () => {
+    const { deps, newer } = await twoRuns()
+    const r = await call(deps, 'task-create', cliArgs(['task-create', '--title', 't', '--spec', 's']))
+    expect((r.body as { runId: string }).runId).toBe(newer)
+  })
+
+  // 앱은 IPC 로 runId 를 직접 보낸다(NewTaskModal). 그 길이 계속 살아 있어야 한다
+  it('앱이 보내는 runId 도 그대로 받는다', async () => {
+    const { deps, older } = await twoRuns()
+    const r = await call(deps, 'task-create', { runId: older, title: 't', spec: 's' })
+    expect((r.body as { runId: string }).runId).toBe(older)
+  })
+
+  it('없는 Run 을 --run 으로 주면 거절한다', async () => {
+    const { deps } = await twoRuns()
+    const r = await call(
+      deps,
+      'task-create',
+      cliArgs(['task-create', '--run', 'run_nope', '--title', 't', '--spec', 's'])
+    )
+    expect(r.status).toBeGreaterThanOrEqual(400)
   })
 })

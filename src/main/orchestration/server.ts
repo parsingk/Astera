@@ -564,7 +564,12 @@ export async function handleCommand(
       // 템플릿과 그 회차는 배열의 끝에 붙지만 사람이 만든 것이 아니고(회차는 ticker 가 만든다),
       // 여기서 그것을 집으면 Task 가 템플릿에 떨어져 그 뒤 모든 회차로 복사된다. 나머지 세 자리
       // (run-configs·send·check)도 같은 함수를 쓴다.
-      const runId = str(args.runId) ?? latestOrdinaryRun(s)?.id
+      // **두 이름을 함께 받는다.** 앱은 IPC 로 `runId` 를 직접 넣고(NewTaskModal), CLI 는 `--run` 을
+      // 보내는데 파서가 그것을 `run` 으로 만든다(cliArgs 의 camel). 이 자리만 `runId` 를 읽고 있어서
+      // — 다른 여덟 자리는 전부 `args.run` 이다 — CLI 의 `--run` 이 조용히 무시되고 언제나 아래
+      // 기본값으로 흘렀다. 오류도 나지 않으므로, 코디네이터가 만든 Task 가 사람이 방금 만든 Job 에
+      // 섞여도 알아챌 방법이 없었다.
+      const runId = str(args.runId) ?? str(args.run) ?? latestOrdinaryRun(s)?.id
       const spec = str(args.spec)
       if (!runId) return bad('--run is required (no run exists)')
       if (!spec) return bad('--spec is required')

@@ -26,7 +26,14 @@ case it has to be enabled in settings and a new session started.
 In practice there is one Run — `task-create` and `check` use the most recent Run automatically unless
 told otherwise. `run-use --id <run>` only checks that the Run exists and returns success; it binds
 nothing to the session (the current implementation is a no-op). If you plan to keep several Runs going
-at once, pass `--run <run>` explicitly on every command (`task-list` and `check` accept it).
+at once, pass `--run <run>` explicitly on every command (`task-create`, `task-list` and `check`
+accept it).
+
+**Passing `--run` on `task-create` is worth doing even with one Run of your own.** The default is
+whatever Run was created last across the whole app, so a Job someone makes in the sidebar between
+your `run-create` and your `task-create` becomes that default, and every Task you create after it
+lands in their Job. Nothing fails when this happens — the Tasks are simply somewhere else. Take the
+id from `run-create --json` and pass it on every `task-create`.
 
 **"It does no scheduling or batching" above is true only for a Run made through the syntax this
 guide documents.** `run-create`'s server-side handler also reads `--provider`, `--concurrency`, and
@@ -132,14 +139,14 @@ spends quota** — attaching it to a Task like a one-line documentation fix is t
 ## 3. A supervision loop, end to end
 
 ```bash
-# 1) Create the Run — always pass --cwd (see 4.1)
+# 1) Create the Run — always pass --cwd (see 4.1). --json returns its id; every task-create takes it
 astera run-create --objective "refactor the auth module" --cwd "/abs/path/to/repo" --json
 
-# 2) Create N Tasks (no --run flag — they attach to the most recent Run automatically)
-astera task-create --title "consolidate types" --spec - --json <<'EOF'
+# 2) Create N Tasks — pass --run with the id from step 1 (see 4.2; the default is app-wide)
+astera task-create --run run_9f8e7d6c5b4a3210 --title "consolidate types" --spec - --json <<'EOF'
 Consolidate the core/auth types into one place. ...
 EOF
-astera task-create --title "add tests" --spec - --deps '["tsk_1a2b3c4d"]' --json <<'EOF'
+astera task-create --run run_9f8e7d6c5b4a3210 --title "add tests" --spec - --deps '["tsk_1a2b3c4d"]' --json <<'EOF'
 Once the consolidation above is done, add regression tests. ...
 EOF
 
@@ -199,7 +206,7 @@ starts.
 ### 4.2 Task and Gate
 
 ```
-task-create --title <s> --spec <s|-> [--deps <json_array>] [--validate <configId>] [--review] [--json]
+task-create --title <s> --spec <s|-> [--run <run>] [--deps <json_array>] [--validate <configId>] [--review] [--json]
 task-list [--run <run>] [--status <s>] [--ready] [--brief] [--json]
 task-update --id <tsk> --status <s> [--result <s|->] [--json]   # bypasses the transition table — see section 8
 dispatch-show --task <tsk> [--json]        # that Task's Dispatch history as an array (retries and the app's review Dispatch included)
@@ -226,7 +233,8 @@ gate-list [--task <tsk>] [--status <s>] [--json]
   integration Task that already exists, so the real one is never created and the Task waiting on the
   merge waits forever. **This only reaches Runs the app drives itself** — the scheduler ignores every
   other Run — but `task-create` with no explicit run attaches to the most recently created Run, which
-  can be one of those. Use `--deps` to say what a Task follows; that is what the graph is built from.
+  can be one of those — pass `--run <run>` so it cannot. Use `--deps` to say what a Task follows;
+  that is what the graph is built from (`--deps` orders Tasks, it does not choose their Run).
 - **`--validate <configId>` makes this Task's completion depend on a run configuration**, not just the
   worker's own report — the id comes from `run-configs` (4.1). Omit it and nothing changes:
   `worker_done --outcome succeeded` completes the Task exactly as before. With it, that same report
