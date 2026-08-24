@@ -2,7 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { installStub, stubTargetPath, STUB_MARKER } from './stub'
+import {
+  installStub,
+  legacyStubPaths,
+  stubTargetPath,
+  LEGACY_STUB_MARKER,
+  STUB_MARKER
+} from './stub'
 
 let dir: string
 beforeEach(async () => {
@@ -162,7 +168,7 @@ describe('installStub', () => {
     const configDir = path.join(dir, 'work')
     const logs: string[] = []
     const r = await installStub({ stubPath, configDirs: [configDir], log: (m) => logs.push(m) })
-    expect(r).toEqual({ written: [], unchanged: [], skipped: [], failed: [] })
+    expect(r).toEqual({ written: [], unchanged: [], skipped: [], failed: [], removed: [] })
     expect(logs).toHaveLength(1)
     await expect(fs.stat(stubTargetPath(configDir))).rejects.toThrow()
   })
@@ -201,14 +207,14 @@ describe('installStub', () => {
       configDirs: [configDir],
       log: (m) => logs.push(m)
     })
-    expect(r).toEqual({ written: [], unchanged: [], skipped: [], failed: [] })
+    expect(r).toEqual({ written: [], unchanged: [], skipped: [], failed: [], removed: [] })
     expect(logs).toHaveLength(1)
     await expect(fs.stat(stubTargetPath(configDir))).rejects.toThrow()
   })
 
   it('계정이 없으면 아무 일도 없다', async () => {
     const r = await installStub({ stubPath: await writeSource(), configDirs: [] })
-    expect(r).toEqual({ written: [], unchanged: [], skipped: [], failed: [] })
+    expect(r).toEqual({ written: [], unchanged: [], skipped: [], failed: [], removed: [] })
   })
 
   it('배포되는 실제 stub 원본에 소유 표시가 있다', async () => {
@@ -216,5 +222,112 @@ describe('installStub', () => {
     // 멈춘다(위 "원본에 소유 표시가 없으면" 분기로 빠진다)
     const real = path.join(process.cwd(), 'resources', 'skills', 'orchestration-stub.md')
     expect(await fs.readFile(real, 'utf8')).toContain(STUB_MARKER)
+  })
+})
+
+describe('구 경로 정리', () => {
+  /** 리브랜딩 전 앱이 쓴 stub. 마커 문구가 지금과 다르다 — 그때는 앱 이름이 claude-manager 였다. */
+  const writeLegacy = async (configDir: string, marker: string): Promise<string> => {
+    const p = legacyStubPaths(configDir)[0]
+    await fs.mkdir(path.dirname(p), { recursive: true })
+    await fs.writeFile(p, `---\nname: orchestration\n---\n\n<!-- ${marker} — 앱이 소유한다. -->\n\n# 구 stub\n`, 'utf8')
+    return p
+  }
+
+  it('구 경로는 skills/orchestration/SKILL.md 다', () => {
+    // 이 이름이 곧 CM_ORCH_CLI 시절의 스킬이다. 개명(astera-orchestration) 전 경로가 남으면
+    // 두 스킬이 같은 description 으로 동시에 로드되고, 에이전트가 낡은 쪽을 잡으면 존재하지
+    // 않는 환경변수를 확인하고 "orchestration 이 꺼져 있다"고 오진한다 — 실기기에서 관측.
+    expect(legacyStubPaths('C:/cfg')).toEqual([path.join('C:/cfg', 'skills', 'orchestration', 'SKILL.md')])
+  })
+
+  it('앱이 쓴 구 stub 을 지우고, 비게 된 디렉토리도 걷어낸다', async () => {
+    const configDir = path.join(dir, 'work')
+    const legacy = await writeLegacy(configDir, STUB_MARKER)
+    const r = await installStub({ stubPath: await writeSource(), configDirs: [configDir] })
+    expect(r.removed).toEqual([legacy])
+    await expect(fs.stat(legacy)).rejects.toThrow()
+    await expect(fs.stat(path.dirname(legacy))).rejects.toThrow() // 빈 디렉토리도 남기지 않는다
+    expect(await fs.readFile(stubTargetPath(configDir), 'utf8')).toContain('# stub') // 새 경로는 정상 설치
+  })
+
+  it('리브랜딩 전 마커도 앱 소유로 인정한다', async () => {
+    // 현재 마커(STUB_MARKER)만 보면 정리 대상이 하나도 안 잡힌다 — 실기기의 7개가 모두
+    // `managed by claude-manager (SERVER-3004)` 문구를 달고 있다.
+    const configDir = path.join(dir, 'work')
+    const legacy = await writeLegacy(configDir, `${LEGACY_STUB_MARKER} (SERVER-3004)`)
+    const r = await installStub({ stubPath: await writeSource(), configDirs: [configDir] })
+    expect(r.removed).toEqual([legacy])
+    await expect(fs.stat(legacy)).rejects.toThrow()
+  })
+
+  it('소유 표시가 없는 구 경로 파일은 남긴다 — 사용자 스킬을 지우지 않는다', async () => {
+    // 새 경로의 판정과 같은 경계다. 기본 계정의 configDir 은 실제 ~/.claude 이고, 사용자가
+    // `orchestration` 이라는 스킬을 직접 만들어 뒀을 수 있다.
+    const configDir = path.join(dir, 'work')
+    const legacy = legacyStubPaths(configDir)[0]
+    const mine = '---\nname: orchestration\n---\n# 사용자가 직접 쓴 스킬\n'
+    await fs.mkdir(path.dirname(legacy), { recursive: true })
+    await fs.writeFile(legacy, mine, 'utf8')
+    const logs: string[] = []
+    const r = await installStub({
+      stubPath: await writeSource(),
+      configDirs: [configDir],
+      log: (m) => logs.push(m)
+    })
+    expect(r.removed).toEqual([])
+    expect(await fs.readFile(legacy, 'utf8')).toBe(mine) // 한 글자도 바뀌지 않았다
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toContain(legacy) // 사용자가 판단할 근거
+  })
+
+  it('구 디렉토리에 다른 파일이 남아 있으면 디렉토리는 남긴다', async () => {
+    const configDir = path.join(dir, 'work')
+    const legacy = await writeLegacy(configDir, STUB_MARKER)
+    const sibling = path.join(path.dirname(legacy), 'NOTES.md')
+    await fs.writeFile(sibling, '사용자 메모', 'utf8')
+    const r = await installStub({ stubPath: await writeSource(), configDirs: [configDir] })
+    expect(r.removed).toEqual([legacy])
+    expect(await fs.readFile(sibling, 'utf8')).toBe('사용자 메모') // 남의 파일은 그대로
+  })
+
+  it('새 경로 설치가 실패하면 구 경로를 지우지 않는다 — 스킬이 0개인 상태를 만들지 않는다', async () => {
+    const configDir = path.join(dir, 'work')
+    const legacy = await writeLegacy(configDir, STUB_MARKER)
+    // 타겟 자리를 디렉토리로 막아 writeFile 을 실패시킨다
+    await fs.mkdir(stubTargetPath(configDir), { recursive: true })
+    const r = await installStub({ stubPath: await writeSource(), configDirs: [configDir] })
+    expect(r.failed).toEqual([stubTargetPath(configDir)])
+    expect(r.removed).toEqual([])
+    await expect(fs.stat(legacy)).resolves.toBeTruthy() // 낡았어도 없는 것보다는 낫다
+  })
+
+  it('새 경로가 이미 최신이어도 구 경로는 정리한다', async () => {
+    // 두 번째 기동 경로다. unchanged 로 빠지면서 정리를 건너뛰면 유령 스킬이 영구히 남는다.
+    const stubPath = await writeSource()
+    const configDir = path.join(dir, 'work')
+    await installStub({ stubPath, configDirs: [configDir] })
+    const legacy = await writeLegacy(configDir, STUB_MARKER)
+    const r = await installStub({ stubPath, configDirs: [configDir] })
+    expect(r.unchanged).toEqual([stubTargetPath(configDir)])
+    expect(r.removed).toEqual([legacy])
+  })
+
+  it('구 경로가 없으면 아무 일도 없다', async () => {
+    const configDir = path.join(dir, 'work')
+    const r = await installStub({ stubPath: await writeSource(), configDirs: [configDir] })
+    expect(r.removed).toEqual([])
+  })
+
+  it('원본에 소유 표시가 없으면 정리도 하지 않는다', async () => {
+    // 원본이 깨진 상태에서는 아무것도 쓰지 않는다는 기존 규칙과 같은 이유다 — 그 상태에서
+    // 파일을 지우는 것은 더 나쁘다.
+    const configDir = path.join(dir, 'work')
+    const legacy = await writeLegacy(configDir, STUB_MARKER)
+    const stubPath = path.join(dir, 'no-marker.md')
+    await fs.writeFile(stubPath, '# stub without marker\n', 'utf8')
+    const r = await installStub({ stubPath, configDirs: [configDir] })
+    expect(r.removed).toEqual([])
+    await expect(fs.stat(legacy)).resolves.toBeTruthy()
   })
 })

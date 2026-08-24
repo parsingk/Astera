@@ -1889,7 +1889,7 @@ export function registerIpc(
     })
       .then((r) =>
         orchLog(
-          `stub install — ${r.written.length} written, ${r.unchanged.length} unchanged, ${r.skipped.length} skipped (no ownership marker and differs from the current stub), ${r.failed.length} failed`
+          `stub install — ${r.written.length} written, ${r.unchanged.length} unchanged, ${r.skipped.length} skipped (no ownership marker and differs from the current stub), ${r.failed.length} failed, ${r.removed.length} legacy removed`
         )
       )
       .catch((err) => orchLog(`stub install failed: ${String(err)}`))

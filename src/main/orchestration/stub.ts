@@ -34,6 +34,27 @@ import path from 'node:path'
  *  position, so the first line of the body is enough. */
 export const STUB_MARKER = 'managed by Astera'
 
+/** The marker the app wrote before the claude-manager → Astera rebrand (`managed by claude-manager
+ *  (SERVER-3004)`). Only ever used to recognise a file as **ours to remove** — nothing is written with
+ *  it. Matching on `STUB_MARKER` alone would find none of the leftovers: every stub installed before
+ *  the rebrand carries this wording instead (seven of them on the machine this was diagnosed on). */
+export const LEGACY_STUB_MARKER = 'managed by claude-manager'
+
+/** Skill directory names this app installed the stub under in earlier versions. `orchestration` is
+ *  the pre-rebrand name, from when the CLI was `cm-orch` and the environment variable `CM_ORCH_CLI`.
+ *
+ *  Why they have to be cleaned up rather than just left: the front matter of the old and the new stub
+ *  carry the **same `description`**, so both load as skills and the agent picks one of the two. When
+ *  it picks the old one it follows that file's first step — `echo "$CM_ORCH_CLI"` and `cm-orch help` —
+ *  and both come back empty, because the app now plants `ASTERA_CLI` and names the shuttle `astera`.
+ *  The agent then reports that orchestration is off while it is running perfectly. Renaming without
+ *  removing turns a rename into a permanent misdiagnosis. */
+const LEGACY_STUB_DIRS = ['orchestration']
+
+/** Where earlier versions installed the stub under a configDir. Cleanup targets, one per old name. */
+export const legacyStubPaths = (configDir: string): string[] =>
+  LEGACY_STUB_DIRS.map((name) => path.join(configDir, 'skills', name, 'SKILL.md'))
+
 /** The content with the **whole marker comment block** removed. **Deciding ownership from the marker
  *  alone makes the app lock itself out of its own files** — a stub written by a build from before the
  *  marker existed has none, and treating that file as a user skill blocks the update path forever
@@ -90,6 +111,12 @@ export const stubTargetPath = (configDir: string): string =>
  *   without the skill as long as the user gives directions). One account failing does not stop the rest.
  * - Nothing is deleted when the toggle goes off — that would be deleting a user file, and leaving it
  *   is harmless because the stub's "check the tooling" step reports that `$ASTERA_CLI` is empty.
+ * - **The stub this app installed under an old name is removed** (see LEGACY_STUB_DIRS for why a
+ *   leftover is worse than harmless). Ownership is judged the same way, widened by
+ *   `LEGACY_STUB_MARKER`; a file without either marker is left alone and only logged. Removal happens
+ *   **only once the current stub is confirmed in place** for that account — deleting the old one after
+ *   a failed install would leave the account with no orchestration skill at all, which is worse than
+ *   a stale one.
  */
 export async function installStub(a: {
   /** Absolute path to resources/skills/orchestration-stub.md */
@@ -97,12 +124,19 @@ export async function installStub(a: {
   /** configDirs of the target accounts (both claude and codex) */
   configDirs: string[]
   log?: (message: string) => void
-}): Promise<{ written: string[]; unchanged: string[]; skipped: string[]; failed: string[] }> {
+}): Promise<{
+  written: string[]
+  unchanged: string[]
+  skipped: string[]
+  failed: string[]
+  removed: string[]
+}> {
   const result = {
     written: [] as string[],
     unchanged: [] as string[],
     skipped: [] as string[],
-    failed: [] as string[]
+    failed: [] as string[],
+    removed: [] as string[]
   }
   let content: string
   try {
@@ -120,6 +154,10 @@ export async function installStub(a: {
   }
   for (const configDir of a.configDirs) {
     const target = stubTargetPath(configDir)
+    // Whether this account ends the round with the current stub on disk — the precondition for
+    // touching the old one. `continue` is deliberately not used below: `unchanged` is the second-launch
+    // path and has to reach the cleanup too, or a leftover would survive every launch after the first.
+    let inPlace = false
     try {
       const existing = await fs.readFile(target, 'utf8').catch(() => null)
       const appOwned =
@@ -133,19 +171,54 @@ export async function installStub(a: {
         a.log?.(
           `stub install skipped — no ownership marker and content differs from the current stub ${target}`
         )
-        continue
-      }
-      if (existing === content) {
+      } else if (existing === content) {
         result.unchanged.push(target)
-        continue
+        inPlace = true
+      } else {
+        await fs.mkdir(path.dirname(target), { recursive: true })
+        await fs.writeFile(target, content, 'utf8')
+        result.written.push(target)
+        inPlace = true
       }
-      await fs.mkdir(path.dirname(target), { recursive: true })
-      await fs.writeFile(target, content, 'utf8')
-      result.written.push(target)
     } catch (err) {
       result.failed.push(target)
       a.log?.(`stub install failed ${target}: ${String(err)}`)
     }
+    if (inPlace) result.removed.push(...(await removeLegacyStubs(configDir, a.log)))
   }
   return result
+}
+
+/**
+ * Deletes the stubs this app installed under an old name in one account, and returns what was deleted.
+ *
+ * Never throws — a failed removal is logged and the round continues, the same rule the install path
+ * follows. A file carrying neither marker is somebody else's and is left alone; unlike the install
+ * path there is no content-comparison fallback, because the content to compare against would be the
+ * old stub's, and carrying the stub's history around is what that path already refused to do. An
+ * unmarked leftover therefore stays — visible, and reported.
+ */
+async function removeLegacyStubs(
+  configDir: string,
+  log?: (message: string) => void
+): Promise<string[]> {
+  const removed: string[] = []
+  for (const p of legacyStubPaths(configDir)) {
+    const existing = await fs.readFile(p, 'utf8').catch(() => null)
+    if (existing === null) continue // nothing there — the normal case after the first cleanup
+    if (!existing.includes(STUB_MARKER) && !existing.includes(LEGACY_STUB_MARKER)) {
+      log?.(`legacy stub kept — no ownership marker ${p}`)
+      continue
+    }
+    try {
+      await fs.unlink(p)
+      removed.push(p)
+      // rmdir, not rm -r: it fails on a non-empty directory, which is exactly the guard we want —
+      // anything else the user left in there keeps the directory alive.
+      await fs.rmdir(path.dirname(p)).catch(() => {})
+    } catch (err) {
+      log?.(`legacy stub removal failed ${p}: ${String(err)}`)
+    }
+  }
+  return removed
 }
