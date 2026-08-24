@@ -3,15 +3,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // 모듈 싱글턴이라 테스트마다 새로 import해 상태를 격리한다 (worktreeBus.test.ts와 같은 방식)
 let mod: typeof import('./hiddenProjects')
 let store: Record<string, string>
+let writes = 0
 
 /** vitest는 environment: 'node'로 돌아 localStorage가 없다. 모듈이 첫 사용 시점에 읽으므로
  *  import 전에 최소 구현을 심어 둔다. */
 function installStorage(initial: Record<string, string> = {}, opts: { failSetItem?: boolean } = {}): void {
   store = { ...initial }
+  writes = 0
   ;(globalThis as { localStorage?: unknown }).localStorage = {
     getItem: (k: string): string | null => (k in store ? store[k] : null),
     setItem: (k: string, v: string): void => {
       if (opts.failSetItem) throw new Error('quota exceeded')
+      writes++
       store[k] = v
     },
     removeItem: (k: string): void => {
@@ -116,4 +119,64 @@ describe('hiddenProjects', () => {
     expect(mod.list()).toEqual(['D:\\work\\a'])
     expect(calls).toBe(1)
   })
+
+  // 정리 기능은 한 번에 수십 개를 지운다. unhide 를 그만큼 돌리면 localStorage 쓰기와 리렌더가
+  // 그 횟수만큼 일어나므로, 한 번에 지우고 한 번만 알리는 경로를 따로 둔다.
+  it('unhideMany는 여러 경로를 한 번에 제거한다', () => {
+    mod.hide('D:\\work\\a')
+    mod.hide('D:\\work\\b')
+    mod.hide('D:\\work\\c')
+    mod.unhideMany(['D:\\work\\a', 'D:\\work\\c'])
+    expect(mod.list()).toEqual(['D:\\work\\b'])
+  })
+
+  it('unhideMany는 지운 개수와 무관하게 한 번만 통지한다', () => {
+    mod.hide('D:\\work\\a')
+    mod.hide('D:\\work\\b')
+    let calls = 0
+    mod.subscribe(() => calls++)
+    mod.unhideMany(['D:\\work\\a', 'D:\\work\\b'])
+    expect(calls).toBe(1)
+  })
+
+  it('unhideMany는 지운 개수와 무관하게 한 번만 저장한다', () => {
+    mod.hide('D:\\work\\a')
+    mod.hide('D:\\work\\b')
+    writes = 0
+    mod.unhideMany(['D:\\work\\a', 'D:\\work\\b'])
+    expect(writes).toBe(1)
+  })
+
+  it('unhideMany에 없는 경로가 섞여 있어도 있는 것만 지운다', () => {
+    mod.hide('D:\\work\\a')
+    mod.unhideMany(['D:\\work\\a', 'D:\\work\\nope'])
+    expect(mod.list()).toEqual([])
+  })
+
+  it('unhideMany가 아무것도 지우지 못하면 통지하지 않는다', () => {
+    mod.hide('D:\\work\\a')
+    let calls = 0
+    mod.subscribe(() => calls++)
+    mod.unhideMany(['D:\\work\\nope'])
+    expect(calls).toBe(0)
+    expect(mod.list()).toEqual(['D:\\work\\a'])
+  })
+
+  it('unhideMany에 빈 목록을 주면 아무 일도 하지 않는다', () => {
+    mod.hide('D:\\work\\a')
+    let calls = 0
+    mod.subscribe(() => calls++)
+    mod.unhideMany([])
+    expect(calls).toBe(0)
+    expect(mod.list()).toEqual(['D:\\work\\a'])
+  })
+
+  it('unhideMany는 남은 항목의 순서를 유지한다', () => {
+    mod.hide('D:\\z\\last')
+    mod.hide('D:\\m\\mid')
+    mod.hide('D:\\a\\first')
+    mod.unhideMany(['D:\\m\\mid'])
+    expect(mod.list()).toEqual(['D:\\z\\last', 'D:\\a\\first'])
+  })
+
 })

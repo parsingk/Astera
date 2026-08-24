@@ -840,6 +840,28 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 검색창은 .rtp-search(런 타입 고르기)와 같은 생김새다. 클래스를 공유하지 않는 이유는 그쪽이
+   드롭다운 메뉴 안에서만 쓰이는 폭·여백을 함께 갖고 있어서다 — 여기서 그 여백을 다시 덮는 것보다
+   같은 값 몇 줄을 적는 편이 나중에 한쪽만 바꿀 때 안전하다. */
+.settings-history-search { background: var(--bg); color: var(--text); border: 1px solid var(--line-soft);
+  padding: 5px 7px; border-radius: var(--radius); font-size: 12px; }
+/* 페이지 이동 줄. 전체 개수는 오른쪽 끝으로 밀어 두어(margin-left:auto) 가운데의 '2 / 3'과 섞이지 않는다.
+   목록이 한 페이지뿐이면 이 줄 자체가 렌더되지 않는다. */
+.settings-history-nav { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+.settings-history-nav > .settings-hint { margin-left: auto; }
+.settings-history-nav button { padding: 2px 8px; line-height: 1.4; }
+.settings-history-nav button:disabled { opacity: 0.4; cursor: default; }
+.settings-history-page { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+/* 고르기 줄 — 왼쪽에 '보이는 것 모두', 오른쪽 끝에 삭제 버튼. 목록에 보이는 것이 하나도 없으면
+   이 줄 자체가 렌더되지 않는다. */
+.settings-history-bulk { display: flex; align-items: center; gap: 8px; }
+.settings-history-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); cursor: pointer; }
+/* 되돌릴 수 없는 버튼이라 색으로 구분한다. 다른 danger 규칙(button.ghost.danger)은 ghost 전용이라
+   여기서 다시 적는다 — 그쪽에 클래스를 얹으면 그 규칙의 뜻이 바뀐다. */
+.settings-history-bulk button.danger { margin-left: auto; color: var(--danger); border-color: var(--danger); }
+.settings-history-bulk button.danger:disabled { opacity: 0.45; cursor: default; color: var(--text-dim); border-color: var(--line-soft); }
+/* 행 맨 앞의 체크박스가 경로 텍스트에 눌려 줄어들지 않게 한다 */
+.settings-row > input[type='checkbox'] { flex: none; margin: 0; }
 .settings-field-label { font-size: 13.5px; color: var(--text-dim); }
 .settings-hint { font-size: 12px; color: var(--text-faint); }
 

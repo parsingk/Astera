@@ -173,6 +173,23 @@ export const ko = {
   'settings.history.hiddenProjects': '숨긴 프로젝트',
   'settings.history.unhide': '해제',
   'settings.history.empty': '숨긴 프로젝트가 없습니다.',
+  // 목록이 한 페이지를 넘길 때만 붙는 검색·페이지 이동. 전체 개수는 검색으로 걸러도 그대로 둔다 —
+  // 검색 결과만 보이면 몇 개를 숨겨 뒀는지 알 길이 없다
+  'settings.history.search': '경로 검색…',
+  'settings.history.noMatch': '검색과 일치하는 항목이 없습니다.',
+  'settings.history.total': '전체 {count}개',
+  'settings.history.prevPage': '이전 페이지',
+  'settings.history.nextPage': '다음 페이지',
+  // 기록 삭제 — 되돌릴 수 없는 쪽이라 무엇이 남는지까지 문구에 적는다
+  'settings.history.selectAll': '전체 선택',
+  'settings.history.deleteSelected': '기록 삭제 ({count})',
+  'settings.history.deleteTitle': '선택한 프로젝트의 기록을 지울까요?',
+  'settings.history.deleteBody':
+    '대화 기록 {count}개를 휴지통으로 보냅니다. 프로젝트 폴더와 그 안의 파일은 지우지 않습니다.\n\n{list}',
+  'settings.history.deleteConfirm': '휴지통으로 보내기',
+  'settings.history.deleteDone': '기록 {count}개를 휴지통으로 보냈습니다.',
+  'settings.history.deleteBusy': '{name} 이(가) 실행 중이라 {count}개를 건너뛰었습니다.',
+  'settings.history.deleteFailed': '{count}개는 지우지 못했습니다.',
   // ThemeSettings.tsx — the theme card grid
   'settings.theme.label': '테마',
   'settings.theme.hint': '색과 모서리, 서체가 함께 바뀝니다. 터미널 폰트는 아래에서 따로 고릅니다.',

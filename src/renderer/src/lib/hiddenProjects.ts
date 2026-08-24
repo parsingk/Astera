@@ -49,6 +49,17 @@ export function unhide(projectPath: string): void {
   write(cur.filter((p) => p !== projectPath))
 }
 
+/** 여러 경로를 한 번에 해제한다 — 설정 화면의 정리가 수십 개를 함께 지우기 때문이다. unhide 를
+ *  그 횟수만큼 부르면 localStorage 쓰기와 구독자 통지가 매번 일어나고, 통지마다 목록이 다시 그려진다.
+ *  지울 것이 하나도 없으면 쓰지도 알리지도 않는다(unhide 의 규칙과 같다). */
+export function unhideMany(projectPaths: string[]): void {
+  const drop = new Set(projectPaths)
+  const cur = read()
+  const next = cur.filter((p) => !drop.has(p))
+  if (next.length === cur.length) return
+  write(next)
+}
+
 export function subscribe(listener: () => void): () => void {
   listeners.add(listener)
   return () => {

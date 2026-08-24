@@ -63,7 +63,8 @@ const api = {
     page: invoke('history.page'),
     projectsPage: invoke('history.projectsPage'),
     preview: invoke('history.preview'),
-    refresh: invoke('history.refresh')
+    refresh: invoke('history.refresh'),
+    deleteProjects: invoke('history.deleteProjects')
   },
   projects: {
     getDefaultAccount: invoke('projects.getDefaultAccount'),

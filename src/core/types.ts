@@ -172,6 +172,13 @@ export interface ProjectSummary {
   updatedAt: string // ISO — mtime of that project's newest file
 }
 
+/** history.deleteProjects 의 결과. reason 은 SESSION:<제목> / RUN:<이름> / FAILED 중 하나다 —
+ *  문장이 아니라 태그로 오는 이유는 worktrees 쪽과 같다(번역은 렌더러의 몫). */
+export interface HistoryDeletionResult {
+  deleted: string[]
+  skipped: { projectPath: string; reason: string }[]
+}
+
 export interface HistoryProjectsPageRequest {
   accountId?: string
   offset?: number
@@ -501,6 +508,9 @@ export interface CoreApi {
     projectsPage(req?: HistoryProjectsPageRequest): Promise<HistoryProjectsPage> // a page of projects
     preview(entryId: string): Promise<TranscriptPreview>
     refresh(): Promise<void> // manual fallback when the watcher fails
+    /** Deletes those projects transcripts (to the bin). Never touches the project folders themselves.
+     *  skipped carries a reason tag per path — the renderer turns it into a sentence. */
+    deleteProjects(projectPaths: string[]): Promise<HistoryDeletionResult>
   }
   projects: {
     getDefaultAccount(projectPath: string): Promise<string | null>

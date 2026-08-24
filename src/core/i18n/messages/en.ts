@@ -154,6 +154,22 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.history.hiddenProjects': 'Hidden projects',
   'settings.history.unhide': 'Unhide',
   'settings.history.empty': 'No hidden projects.',
+  // Search and paging, shown only once the list outgrows a single page. The total stays the full
+  // count even while a search narrows the rows — otherwise there is no way to tell how many are hidden
+  'settings.history.search': 'Search paths…',
+  'settings.history.noMatch': 'No matching projects.',
+  'settings.history.total': '{count} total',
+  'settings.history.prevPage': 'Previous page',
+  'settings.history.nextPage': 'Next page',
+  'settings.history.selectAll': 'Select all',
+  'settings.history.deleteSelected': 'Delete history ({count})',
+  'settings.history.deleteTitle': 'Delete history for the selected projects?',
+  'settings.history.deleteBody':
+    'Moves {count} conversation histories to the bin. The project folders and their files are not deleted.\n\n{list}',
+  'settings.history.deleteConfirm': 'Move to bin',
+  'settings.history.deleteDone': 'Moved {count} histories to the bin.',
+  'settings.history.deleteBusy': 'Skipped {count} — {name} is running.',
+  'settings.history.deleteFailed': 'Could not delete {count}.',
   // ThemeSettings.tsx — the theme card grid
   'settings.theme.label': 'Theme',
   'settings.theme.hint':

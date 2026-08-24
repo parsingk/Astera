@@ -801,5 +801,105 @@ describe('HistoryIndex (lazy)', () => {
       index = new HistoryIndex(() => [a, cx])
       expect(await sessionIds()).toEqual(['019f4524-e0ac-7571-a8af-5585504f0d35', 's1'].sort())
     })
+
+    // 지우는 쪽에서 가장 위험한 자리다. codex 는 날짜 디렉터리 하나에 그날의 **모든** 프로젝트
+    // 세션이 섞여 있어서, 디렉터리 단위로 지우면 남의 기록이 함께 사라진다.
+    it('deletionTargets()는 같은 날짜 폴더의 다른 프로젝트 rollout을 주지 않는다', async () => {
+      const cx = codexAccount('cx-del')
+      const mine = await writeRollout(cx, '019f4524-e0ac-7571-a8af-5585504f0d01', 'D:\\proj\\mine', [
+        cxUser('내 것')
+      ])
+      await writeRollout(cx, '019f4524-e0ac-7571-a8af-5585504f0d02', 'D:\\proj\\other', [cxUser('남의 것')])
+      index = new HistoryIndex(() => [cx])
+      const t = await index.deletionTargets('D:\\proj\\mine')
+      expect(t.files).toEqual([mine])
+    })
+
+    it('deletionTargets()의 scanRoots는 codex 계정의 sessions 루트다', async () => {
+      const cx = codexAccount('cx-root')
+      await writeRollout(cx, '019f4524-e0ac-7571-a8af-5585504f0d03', 'D:\\proj\\mine', [cxUser('질문')])
+      index = new HistoryIndex(() => [cx])
+      const t = await index.deletionTargets('D:\\proj\\mine')
+      expect(t.scanRoots).toEqual([path.join(cx.configDir, 'sessions')])
+    })
+
   })
+
+  describe('deletionTargets', () => {
+    it('그 프로젝트의 트랜스크립트 파일을 모두 준다', async () => {
+      const a = account('acc-a')
+      const f1 = await writeTranscript(a, 'p', 's1.jsonl', 's1')
+      const f2 = await writeTranscript(a, 'p', 's2.jsonl', 's2')
+      index = new HistoryIndex(() => [a])
+      const t = await index.deletionTargets('D:\\work\\p')
+      expect(t.files.sort()).toEqual([f1, f2].sort())
+    })
+
+    // page() 는 같은 rootUuid 의 포크를 최신 하나로 합친다. 그 목록으로 지우면 원본 파일이 남아
+    // 지웠는데도 히스토리에 그대로 보인다.
+    it('포크로 합쳐지는 파일까지 남김없이 준다', async () => {
+      const a = account('acc-a')
+      const f1 = await writeLines(a, 'p', 'fork1.jsonl', [
+        { type: 'user', sessionId: 'fork1', cwd: 'D:\\work\\p', uuid: 'root-x', message: { role: 'user', content: '원본' } }
+      ])
+      const f2 = await writeLines(a, 'p', 'fork2.jsonl', [
+        { type: 'user', sessionId: 'fork2', cwd: 'D:\\work\\p', uuid: 'root-x', message: { role: 'user', content: '포크' } }
+      ])
+      index = new HistoryIndex(() => [a])
+      expect((await index.page()).total).toBe(1) // page 는 하나로 합친다
+      expect((await index.deletionTargets('D:\\work\\p')).files.sort()).toEqual([f1, f2].sort())
+    })
+
+    // 계정 롤링을 거친 세션은 계정마다 같은 sessionId 의 복사본을 남긴다. page 는 최신 하나만
+    // 보여주지만, 지울 때는 복사본도 함께 지워야 한다.
+    it('여러 계정에 흩어진 같은 세션의 복사본을 모두 준다', async () => {
+      const a = account('acc-a')
+      const b = account('acc-b')
+      const f1 = await writeTranscript(a, 'p', 'same.jsonl', 'same-id')
+      const f2 = await writeTranscript(b, 'p', 'same.jsonl', 'same-id')
+      index = new HistoryIndex(() => [a, b])
+      expect((await index.page()).total).toBe(1) // page 는 최신 하나만 보여준다
+      expect((await index.deletionTargets('D:\\work\\p')).files.sort()).toEqual([f1, f2].sort())
+    })
+
+    it('다른 프로젝트의 파일은 주지 않는다', async () => {
+      const a = account('acc-a')
+      const mine = await writeTranscript(a, 'mine', 's1.jsonl', 's1')
+      await writeTranscript(a, 'other', 's2.jsonl', 's2')
+      index = new HistoryIndex(() => [a])
+      expect((await index.deletionTargets('D:\\work\\mine')).files).toEqual([mine])
+    })
+
+    it('파일을 담은 디렉터리를 dirs 로 준다', async () => {
+      const a = account('acc-a')
+      await writeTranscript(a, 'p', 's1.jsonl', 's1')
+      await writeTranscript(a, 'p', 's2.jsonl', 's2')
+      index = new HistoryIndex(() => [a])
+      const t = await index.deletionTargets('D:\\work\\p')
+      expect(t.dirs).toEqual([path.join(a.configDir, 'projects', 'p')])
+    })
+
+    it('scanRoots 는 계정마다 하나씩 준다', async () => {
+      const a = account('acc-a')
+      const b = account('acc-b')
+      await writeTranscript(a, 'p', 's1.jsonl', 's1')
+      index = new HistoryIndex(() => [a, b])
+      const t = await index.deletionTargets('D:\\work\\p')
+      expect(t.scanRoots.sort()).toEqual(
+        [path.join(a.configDir, 'projects'), path.join(b.configDir, 'projects')].sort()
+      )
+    })
+
+    // 목록에 남아 있지만 파일은 이미 없는 경우 — 지울 것이 없다고 답해야 하고, 빈 목록으로 삭제를
+    // 부르는 쪽이 '전부 지웠다'고 오해하지 않게 한다
+    it('기록이 없는 프로젝트에는 빈 목록을 준다', async () => {
+      const a = account('acc-a')
+      await writeTranscript(a, 'p', 's1.jsonl', 's1')
+      index = new HistoryIndex(() => [a])
+      const t = await index.deletionTargets('D:\\work\\nothing-here')
+      expect(t.files).toEqual([])
+      expect(t.dirs).toEqual([])
+    })
+  })
+
 })

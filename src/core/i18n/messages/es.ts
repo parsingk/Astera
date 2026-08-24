@@ -188,6 +188,20 @@ export const es: Catalog = {
   'settings.history.hiddenProjects': 'Proyectos ocultos',
   'settings.history.unhide': 'Mostrar',
   'settings.history.empty': 'No hay proyectos ocultos.',
+  'settings.history.search': 'Buscar rutas…',
+  'settings.history.noMatch': 'No hay proyectos que coincidan.',
+  'settings.history.total': '{count} en total',
+  'settings.history.prevPage': 'Página anterior',
+  'settings.history.nextPage': 'Página siguiente',
+  'settings.history.selectAll': 'Seleccionar todo',
+  'settings.history.deleteSelected': 'Eliminar historial ({count})',
+  'settings.history.deleteTitle': '¿Eliminar el historial de los proyectos seleccionados?',
+  'settings.history.deleteBody':
+    'Mueve {count} historiales de conversación a la papelera. Las carpetas del proyecto y sus archivos no se eliminan.\n\n{list}',
+  'settings.history.deleteConfirm': 'Mover a la papelera',
+  'settings.history.deleteDone': 'Se movieron {count} historiales a la papelera.',
+  'settings.history.deleteBusy': 'Se omitieron {count}: {name} está en ejecución.',
+  'settings.history.deleteFailed': 'No se pudieron eliminar {count}.',
   // ThemeSettings.tsx — the theme card grid
   'settings.theme.label': 'Tema',
   'settings.theme.hint':

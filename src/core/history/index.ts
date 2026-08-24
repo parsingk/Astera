@@ -275,28 +275,60 @@ export class HistoryIndex {
     return [...byPath.values()].sort(byUpdatedDesc)
   }
 
+  /** Every entry matching the filters, **before** forks and rolling copies are merged — one per file
+   *  on disk. page() merges this down for display; deletionTargets() must not, because a merged-away
+   *  entry is still a file that would survive the delete and reappear in the list. */
+  private async rawEntries(accountId?: string, projectPath?: string): Promise<HistoryEntry[]> {
+    const accounts = this.getAccounts().filter((a) => !accountId || a.id === accountId)
+    const all: HistoryEntry[] = []
+    for (const account of accounts) {
+      for (const dir of await this.dirsForProject(account, projectPath)) {
+        const entries = await this.parseDir(account, dir)
+        all.push(
+          ...(projectPath ? entries.filter((e) => norm(e.projectPath) === norm(projectPath)) : entries)
+        )
+      }
+    }
+    return all
+  }
+
   /** On expanding a project — parses only that project's (or those projects') transcripts to build
    *  the session list. */
   async page(req?: { accountId?: string; projectPath?: string; offset?: number; limit?: number }): Promise<{
     entries: HistoryEntry[]
     total: number
   }> {
-    const accounts = this.getAccounts().filter((a) => !req?.accountId || a.id === req.accountId)
-    let all: HistoryEntry[] = []
-    for (const account of accounts) {
-      for (const dir of await this.dirsForProject(account, req?.projectPath)) {
-        const entries = await this.parseDir(account, dir)
-        all.push(
-          ...(req?.projectPath
-            ? entries.filter((e) => norm(e.projectPath) === norm(req.projectPath as string))
-            : entries)
-        )
-      }
-    }
-    all = dedupeBySessionId(groupForks(all)).sort(byUpdatedDesc)
+    const all = dedupeBySessionId(groupForks(await this.rawEntries(req?.accountId, req?.projectPath))).sort(
+      byUpdatedDesc
+    )
     const offset = req?.offset ?? 0
     const limit = req?.limit ?? 50
     return { entries: all.slice(offset, offset + limit), total: all.length }
+  }
+
+  /**
+   * What deleting one project's history would have to touch — every transcript file, the directories
+   * holding them, and each account's scan root.
+   *
+   * **Only reports; deletes nothing.** The verdict on what may be removed lives in deletion.ts and
+   * the removal itself in main (shell.trashItem), because this layer reaches disk through io alone.
+   * scanRoots travels with the list so the caller can check each path against the boundary rather
+   * than trusting these paths — a wrong path here is a file in the bin that cannot be reasoned back.
+   *
+   * Built from rawEntries, so forks and per-account rolling copies are all present: page() would have
+   * merged them away, and each merged-away entry is a file that would outlive the delete.
+   */
+  async deletionTargets(projectPath: string): Promise<{
+    files: string[]
+    dirs: string[]
+    scanRoots: string[]
+  }> {
+    const files = [...new Set((await this.rawEntries(undefined, projectPath)).map((e) => e.filePath))]
+    return {
+      files,
+      dirs: [...new Set(files.map((f) => path.dirname(f)))],
+      scanRoots: [...new Set(this.getAccounts().map((a) => this.scanRoot(a)))]
+    }
   }
 
   async preview(entryId: string): Promise<TranscriptPreview> {

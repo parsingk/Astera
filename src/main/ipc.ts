@@ -72,6 +72,7 @@ import { nameForRun, nameForTask } from '../core/worktrees/naming'
 import { listBranches, detectBaseRef } from '../core/worktrees/git'
 import { workerBaseFailure } from '../core/worktrees/base'
 import { goneWorktreeProjects } from '../core/worktrees/hiddenHistory'
+import { deleteProjectHistory } from './historyDeletion'
 import { removeWorktree } from '../core/worktrees/remove'
 import { listWithStatus } from '../core/worktrees/list'
 import { git, repoRoot, gitDir, gitVersionAtLeast, listGitWorktrees } from '../core/worktrees/git'
@@ -992,7 +993,7 @@ export function registerIpc(
           id: entry.id,
           force: true,
           registry: core.worktrees,
-          isPathInUse: isWorktreeInUse
+          isPathInUse
         })
         orchLog(`removed worktree ${worktreePath} (branch deleted=${removed.branchDeleted})`)
         return true
@@ -1959,16 +1960,36 @@ export function registerIpc(
   })
   ipcMain.handle('history.preview', (_e, entryId) => core.history.preview(entryId))
   ipcMain.handle('history.refresh', () => core.history.refresh())
+  // 숨긴 프로젝트의 **기록을 지운다** — 설정 화면의 정리. 지우는 것은 세션 트랜스크립트뿐이고
+  // 사용자의 프로젝트 폴더에는 어떤 경로로도 닿지 않는다.
+  //
+  // **휴지통으로 보낸다.** 영구 삭제와 비용이 같은데, 잘못 눌렀을 때 되돌릴 수 있는 것은 이쪽뿐이다.
+  //
+  // 순서와 규칙은 historyDeletion.ts 가 갖는다(그쪽이 fs·shell 을 주입받는 이유는 그 파일의 주석에
+  // 있다). 여기는 그 주입만 한다 — 무엇을 지워도 되는지 고르는 판정은 core 의 deletion.ts 다.
+  //
+  // isPathInUse 는 아래 worktrees 절에서 선언되지만, 이 콜백이 도는 것은 앱이 뜬 뒤라 초기화가 끝나 있다.
+  ipcMain.handle('history.deleteProjects', async (_e, projectPaths: string[]) => {
+    const result = await deleteProjectHistory(projectPaths ?? [], {
+      inUse: isPathInUse,
+      targetsOf: (p) => core.history.deletionTargets(p),
+      trash: (p) => shell.trashItem(p),
+      isEmptyDir: async (p) => (await fs.readdir(p)).length === 0
+    })
+    // 목록이 지운 기록을 계속 들고 있지 않게. 아무것도 못 지웠으면 훑을 이유도 없다
+    if (result.deleted.length > 0) await core.history.refresh()
+    return result
+  })
 
   // projects
   ipcMain.handle('projects.getDefaultAccount', (_e, p) => core.projects.getDefaultAccount(p))
   ipcMain.handle('projects.setDefaultAccount', (_e, p, id) => core.projects.setDefaultAccount(p, id))
 
-  // worktrees: the in-use verdict before a delete is settled from the sessions and run processes the
-  // app owns.
+  // The in-use verdict before a delete — settled from the sessions and run processes the app owns.
+  // Used for worktrees and, in the history tab, for the project whose transcripts are being removed.
   // The reason travels as a tag plus values rather than a sentence — the renderer translates it into
   // the current language.
-  const isWorktreeInUse = (p: string): string | null => {
+  const isPathInUse = (p: string): string | null => {
     const s = core.sessions.list().find((x) => x.status === 'running' && isPathWithin(p, x.cwd))
     if (s) return `SESSION:${s.title}`
     const r = core.run.listActive().find((x) => x.status === 'running' && isPathWithin(p, x.projectPath))
@@ -1991,7 +2012,7 @@ export function registerIpc(
     detected: await detectBaseRef(repoPath)
   }))
   ipcMain.handle('worktrees.remove', (_e, id: string, opts?: { force?: boolean }) =>
-    removeWorktree({ id, force: opts?.force === true, registry: core.worktrees, isPathInUse: isWorktreeInUse })
+    removeWorktree({ id, force: opts?.force === true, registry: core.worktrees, isPathInUse })
   )
   ipcMain.handle('worktrees.isGitRepo', (_e, dir: string) => repoRoot(dir))
   ipcMain.handle('worktrees.getRoot', () => core.worktrees.getRoot())
