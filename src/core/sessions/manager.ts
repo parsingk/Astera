@@ -54,6 +54,26 @@ const RESUME_FAILSAFE_MS = 5_000
  * pin down the casing behavior — the same convention as `makeDescriptors` and `buildClaudeCommand`,
  * which take the platform as an argument.
  */
+/** Every environment variable this app plants into a spawned session. spawn clears all of them before
+ *  deciding which to plant, so an inherited value can never pass through — see the comment at that
+ *  call. **A new ASTERA_* injected into a session belongs in this list**; leaving it out reintroduces
+ *  the leak for that one variable, and the absence of it is invisible until two app instances are
+ *  running.
+ *
+ *  PATH is not here: it is the shell's, not ours, and spawn only prepends to it. An inherited shuttle
+ *  directory can therefore still leave `astera` resolvable in a session with orchestration off, but
+ *  with ASTERA_INFO cleared the CLI has no token to reach any server with and says so, which is the
+ *  diagnosis the stub's tool check expects. */
+const MANAGED_ENV_KEYS = [
+  'ASTERA_STATUSLINE_OUT',
+  'ASTERA_STATUSLINE_ORIGINAL',
+  'ASTERA_HOOK_OUT',
+  'ASTERA_CLI',
+  'ASTERA_INFO',
+  'ASTERA_SKILLS',
+  'ASTERA_SESSION'
+] as const
+
 export function prependToPath(env: Record<string, string | undefined>, dir: string): void {
   const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH'
   const current = env[key]
@@ -153,6 +173,16 @@ export class SessionManager {
     const env: Record<string, string | undefined> = { ...process.env }
     if (isAmbientDir(d, this.homeDir, opts.account.configDir)) delete env[d.configDirEnv]
     else env[d.configDirEnv] = opts.account.configDir
+    // Every variable this app plants into a session is cleared before the branches below decide which
+    // ones to plant. **Not setting one is not the same as clearing it**: this env starts as a copy of
+    // the app process's, and launching Astera from the shell of an Astera session — which is what
+    // `npm run dev` from a session terminal is — means the app itself inherits another instance's
+    // ASTERA_*. Passed on, a session spawned with orchestration off hands its agent a live CLI path
+    // and token aimed at that other instance, an inherited ASTERA_SESSION makes it report under
+    // another session's identity, and inherited capture paths mix this session's statusLine and hook
+    // output into another instance's files. Same rule as configDirEnv on the line above, and as
+    // runAccountLogout in main/core.ts.
+    for (const k of MANAGED_ENV_KEYS) delete env[k]
     if (sl) {
       env.ASTERA_STATUSLINE_OUT = sl.outPath
       env.ASTERA_STATUSLINE_ORIGINAL = sl.originalCommand ?? ''

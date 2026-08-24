@@ -373,6 +373,29 @@ describe('SessionManager', () => {
     expect(info.slackNotify).toBeUndefined()
   })
 
+  // 위 단정과 같은 구멍이 여기에도 있다 — 상속 환경에 ASTERA_HOOK_OUT이 있으면 `in === false`가
+  // 깨진다. 지금은 이 변수가 개발 환경에 보통 없어서 드러나지 않았을 뿐이다(orchEnv 블록의
+  // ASTERA_CLI는 실제로 그렇게 깨졌다). 상속값을 심어 프로덕션이 지우는지 본다.
+  it('상속된 ASTERA_HOOK_OUT·STATUSLINE 경로는 세션으로 넘기지 않는다', () => {
+    // 남의 인스턴스의 캡처 파일을 가리키는 값이 새 세션에 그대로 흐르면, 이 세션의 hook·statusline
+    // 출력이 다른 인스턴스의 파일에 섞여 들어간다
+    vi.stubEnv('ASTERA_HOOK_OUT', 'C:/other-instance/hook-events/xxx.jsonl')
+    vi.stubEnv('ASTERA_STATUSLINE_OUT', 'C:/other-instance/statusline/xxx.json')
+    vi.stubEnv('ASTERA_STATUSLINE_ORIGINAL', 'other-hud --json')
+    const spawned: { opts: PtySpawnOptions }[] = []
+    const factory: PtyFactory = (_f, _a, opts) => {
+      spawned.push({ opts })
+      return new FakePty()
+    }
+    // statusLineProvider 없음 = sl이 null이라 주입 분기를 타지 않는다 (codex 세션과 같은 상태)
+    const manager = new SessionManager(factory, makeDescriptors('win32'), 100, 20)
+    manager.spawn({ account, cwd: process.cwd() })
+    expect('ASTERA_HOOK_OUT' in spawned[0].opts.env).toBe(false)
+    expect('ASTERA_STATUSLINE_OUT' in spawned[0].opts.env).toBe(false)
+    expect('ASTERA_STATUSLINE_ORIGINAL' in spawned[0].opts.env).toBe(false)
+    vi.unstubAllEnvs()
+  })
+
   // idle nudge가 Notification 훅을 신호로 쓰므로 롤링 세션에도 훅이 필요하다.
   // 종전에는 slackNotify 세션에만 주입돼 슬랙을 끈 롤링 세션은 신호를 받을 수 없었다.
   it('롤링 세션은 slackNotify가 꺼져 있어도 hooks=true로 주입한다', () => {
@@ -571,11 +594,46 @@ describe('SessionManager', () => {
       expect(spawned[1].opts.env.ASTERA_CLI).toBe(spawned[0].opts.env.ASTERA_CLI)
     })
 
-    it('orchEnv가 없으면 ASTERA_*를 넣지 않는다', () => {
+    /* 상속 환경을 세우지 않으면 이 아래 "지운다" 단정이 양방향으로 무의미해진다 —
+     *  main/core.test.ts 상단이 같은 함정을 이미 문서화했다. spawn은 `{ ...process.env }`로
+     *  시작하므로:
+     *   - 상속 환경에 값이 **없으면** manager.ts의 delete 줄을 지워도 초록불이다(CI가 그렇다).
+     *   - 값이 **있으면** 늘 빨간불이었다 — Astera 세션 안에서 테스트를 돌리는 개발자의 일상이고,
+     *     실제로 이 파일이 그렇게 깨져 있었다.
+     *  그래서 상속 값을 직접 심고 "지워지는지"까지 본다. */
+    const INHERITED = {
+      ASTERA_CLI: 'C:/other-instance/orch/astera.cmd',
+      ASTERA_INFO: 'C:/other-instance/orch/orch-info.json',
+      ASTERA_SKILLS: 'C:/other-instance/skills',
+      ASTERA_SESSION: 'inherited-session-id'
+    }
+    const stubInherited = (): void => {
+      for (const [k, v] of Object.entries(INHERITED)) vi.stubEnv(k, v)
+    }
+    afterEach(() => vi.unstubAllEnvs())
+
+    it('orchEnv가 없으면 상속된 ASTERA_*까지 지운다', () => {
+      // 앱을 Astera 세션의 셸에서 띄우면(`npm run dev`가 그 경로다) 앱 프로세스가 **다른
+      // 인스턴스의** ASTERA_CLI·INFO를 물고 시작한다. 그것이 그대로 새 세션에 상속되면
+      // orchestration을 끈 세션의 에이전트가 남의 인스턴스 서버와 토큰을 쥐게 되고,
+      // 상속된 ASTERA_SESSION은 남의 세션 신원으로 보고하게 만든다.
+      // 넣지 않는 것으로는 부족하고 지워야 한다 — configDirEnv와 main/core.ts의 규약이 같다.
+      stubInherited()
       const { manager, spawned } = setup()
       manager.spawn({ account, cwd: process.cwd() })
-      expect('ASTERA_CLI' in spawned[0].opts.env).toBe(false)
-      expect('ASTERA_SKILLS' in spawned[0].opts.env).toBe(false)
+      for (const k of Object.keys(INHERITED)) {
+        expect(k in spawned[0].opts.env).toBe(false)
+      }
+    })
+
+    it('orchEnv가 있으면 상속값이 아니라 orchEnv 값이 이긴다', () => {
+      stubInherited()
+      const { manager, spawned } = setup()
+      const info = manager.spawn({ account, cwd: process.cwd(), orchEnv })
+      expect(spawned[0].opts.env.ASTERA_CLI).toBe('C:/cli/astera.cmd')
+      expect(spawned[0].opts.env.ASTERA_INFO).toBe('C:/u/info.json')
+      expect(spawned[0].opts.env.ASTERA_SKILLS).toBe('C:/u/skills')
+      expect(spawned[0].opts.env.ASTERA_SESSION).toBe(info.id) // 상속된 남의 세션 id가 아니다
     })
 
     it('ASTERA_SESSION은 그 세션의 id와 같다', () => {
