@@ -37,6 +37,7 @@ import {
 const GATE_PCT = 90 // the bar for choosing which window's reset to show — no longer used as a gate for accepting a limit phrase
 const DEDUP_MS = 10 * 60_000 // the window in which identical text is not re-sent (guards against a repeated excerpt or state)
 const EXIT_DELAY_MS = 3_000 // the exit notification delay — so a rolling kill→exit is not mistaken for a real exit
+// EXIT_DEFER_MS in main/orchestration/rollTap.ts deliberately mirrors this value — tune them together.
 // Slack's cap on the `text` field — see the same constant in core/slack/transcript.ts for why every
 // display cap is opened to it rather than kept narrow.
 const SLACK_TEXT_MAX = 40_000

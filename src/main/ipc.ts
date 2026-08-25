@@ -98,7 +98,8 @@ export interface OrchHandle {
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
  *  in this file — the two values the coordinator needs (spawnSession, busyState) are owned here, so
  *  moving that into index.ts would only create roundabout wiring. index.ts gets the same share as it
- *  does for any other subsystem: the log file and shutdown cleanup. */
+ *  does for any other subsystem: the log file and shutdown cleanup, plus — now — the rolling seam
+ *  (onRolled), since index.ts is where rolling's own send tap lives. */
 export interface OrchWiring {
   log: (message: string) => void
   /** Hands over the shutdown cleanup handle once the server is up. Called from will-quit — and it is

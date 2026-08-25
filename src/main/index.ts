@@ -542,6 +542,17 @@ app.whenReady().then(async () => {
       } catch {
         /* a tap failure must not block rolling */
       }
+      // 오케스트레이션도 롤링 이벤트를 탭한다. 워커 세션이 롤되면 그 Dispatch 의 sessionId 를 새
+      // 세션으로 옮겨야 한다 — 그 값이 worker_done 을 되돌려 묶는 유일한 키다. 다른 탭들과 같은
+      // 이유로 자기 try 안에 격리한다.
+      try {
+        if (channel === 'session:rolled') {
+          const p = payload as { oldSessionId: string; info: SessionInfo }
+          orchRef?.onRolled(p.oldSessionId, p.info)
+        }
+      } catch {
+        /* an orchestration tap failure must not block rolling */
+      }
       // Slack notifications tap codex rolling events too (mirroring the claude side) — isolated so a
       // tap exception does not block rolling. Without this the SlackNotifier record stays on the old
       // id, so turn notifications stop after the switch, onRolled cannot cancel the scheduled exit
@@ -556,14 +567,6 @@ app.whenReady().then(async () => {
         }
       } catch {
         /* a Slack tap failure must not block rolling */
-      }
-      try {
-        if (channel === 'session:rolled') {
-          const p = payload as { oldSessionId: string; info: SessionInfo }
-          orchRef?.onRolled(p.oldSessionId, p.info)
-        }
-      } catch {
-        /* an orchestration tap failure must not block rolling */
       }
     },
     log: (m) => {
