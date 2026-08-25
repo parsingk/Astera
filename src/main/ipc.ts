@@ -24,7 +24,6 @@ import {
 } from './orchestration/coordinator'
 import {
   handleCommand as orchHandleCommand,
-  handleExit as orchHandleExit,
   startOrchServer,
   type OrchServer,
   type OrchServerDeps
@@ -297,13 +296,12 @@ export function registerIpc(
     // Handling Dispatch termination for orchestration. **곧바로 부르지 않는다** — 롤링의 kill 이 만든
     // exit 가 살아 있는 워커의 Dispatch 를 닫는 것을 막기 위해 OrchRollTap 이 EXIT_DEFER_MS 만큼
     // 미뤄 두고, 그 창 안에 session:rolled 가 오면 취소한다(rollTap.ts 머리말).
-    // 탭이 없을 때만(오케스트레이션이 켜지기 전) 예전 경로로 곧바로 부른다 — 그 시점에는 Dispatch 가
-    // 존재할 수 없으므로 미룰 이유도 없다.
+    // **탭이 유일한 경로다.** orch 와 orchRollTap 은 바로 이어지는 두 줄에서 함께 대입되므로(시작
+    // 전에는 둘 다 null), 탭이 없는데 orch 만 있는 상태는 시작 전에는 존재하지 않는다 — 도달하는
+    // 유일한 경우는 stop() 이 탭을 null 로 되돌린 **뒤**, 즉 종료(quit) 중이다. 그때 도착한 exit 는
+    // 일부러 버린다 — dispose() 의 정책과 같다: 열린 채 남은 Dispatch 는 다음 실행에서 store.load 의
+    // 재시작 정리가 outcome_unknown 으로 처리하며 Task 는 건드리지 않는다.
     if (orchRollTap) orchRollTap.onExit(e)
-    else if (orch)
-      void orchHandleExit(orch.deps, e).catch((err) =>
-        orchLog(`handleExit failed session=${e.sessionId}: ${String(err)}`)
-      )
   }
   // run output and status to the renderer
   core.run.onData = (e) => send('run:data', e)
