@@ -1929,7 +1929,20 @@ export function registerIpc(
       onRolled: (oldSessionId, newInfo) => {
         // 롤링의 send 탭은 동기다 — 기다릴 자리가 없어 던져 놓고 간다. onRolled 는 스스로 예외를
         // 삼키므로(rollTap.ts) 여기서 catch 를 더하지 않는다.
-        void orchRollTap?.onRolled(oldSessionId, newInfo)
+        //
+        // 재키잉된 Dispatch 가 나오면 orchTails 의 소유권도 새 세션으로 옮긴다 — 옮기지 않으면
+        // worker-read --dispatch 가 롤 이전 시점에서 얼어붙은 꼬리를 계속 돌려주고, 코디네이터는
+        // 그것을 보고 "워커가 멈췄다"고 잘못 판단할 수 있다(꼬리가 코디네이터의 유일한 창이다).
+        void orchRollTap?.onRolled(oldSessionId, newInfo).then((dispatch) => {
+          if (!dispatch) return
+          orchTails.start(
+            { dispatchId: dispatch.id, sessionId: newInfo.id, previousSessionId: oldSessionId },
+            (id) => {
+              const d = store.get().dispatches.find((x) => x.id === id)
+              return d === undefined || d.endedAt !== undefined || d.outcome !== undefined
+            }
+          )
+        })
       }
     })
   }

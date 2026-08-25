@@ -60,6 +60,10 @@ export class WorkerTails {
    * This dispatch starts receiving that session's output. On session reuse the previous dispatch's
    * buffer stops growing and freezes in place.
    *
+   * @param a.previousSessionId set only when a roll rekeyed this dispatch onto a new session id
+   *   (main/orchestration/rollTap.ts) — the owner entry for the old id is dropped so a dead session
+   *   id does not sit in the map forever. Harmless to skip in practice (a dead id never sees another
+   *   push), but there is no reason to leave it either.
    * @param isEnded whether that dispatch reached a terminal state (endedAt or outcome). Used only
    *   for the eviction decision — **the tail of a live worker is never dropped** (the eviction
    *   criterion used to be the app's lifetime cumulative worker-start count rather than the number
@@ -68,9 +72,13 @@ export class WorkerTails {
    *   even if that means exceeding the ceiling — 32 workers running at once does not happen in
    *   practice, and dropping the wrong one is worse.
    */
-  start(a: { dispatchId: string; sessionId: string }, isEnded: (dispatchId: string) => boolean): void {
+  start(
+    a: { dispatchId: string; sessionId: string; previousSessionId?: string },
+    isEnded: (dispatchId: string) => boolean
+  ): void {
     if (!this.buffers.has(a.dispatchId)) this.buffers.set(a.dispatchId, '')
     this.owner.set(a.sessionId, a.dispatchId)
+    if (a.previousSessionId !== undefined) this.owner.delete(a.previousSessionId)
     for (const id of [...this.buffers.keys()]) {
       if (this.buffers.size <= this.maxDispatches) break
       if (id === a.dispatchId) continue // do not drop the one just created

@@ -98,6 +98,19 @@ describe('WorkerTails', () => {
     })
   })
 
+  describe('세션 rekey — 롤링이 같은 dispatch를 새 세션으로 옮길 때 (worker-rolling-phase-1a)', () => {
+    it('previousSessionId를 주면 옛 세션 id의 소유권 항목이 지워진다', () => {
+      const t = new WorkerTails()
+      t.start({ dispatchId: 'dsp_A', sessionId: 'sess_old' }, never)
+      // 롤링의 rekeyDispatch가 dsp_A를 sess_old에서 sess_new로 옮긴 뒤 벌어지는 일
+      t.start({ dispatchId: 'dsp_A', sessionId: 'sess_new', previousSessionId: 'sess_old' }, never)
+      t.push('sess_new', 'after roll\n')
+      // 죽은 옛 id — 지워졌으므로 이제 어떤 dispatch에도 걸리지 않는다
+      t.push('sess_old', 'should not land anywhere')
+      expect(t.read('dsp_A')).toBe('after roll')
+    })
+  })
+
   describe('축출 — 종단 dispatch만 (리뷰 I3)', () => {
     it('상한을 넘기면 가장 오래된 종단 dispatch를 버린다', () => {
       const t = new WorkerTails(1024, 2)

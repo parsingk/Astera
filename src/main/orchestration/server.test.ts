@@ -9,6 +9,7 @@ import {
   applyValidationResult,
   blockForValidation,
   emptyState,
+  rekeyDispatch,
   type OrchState
 } from '../../core/orchestration/state'
 import { TaskValidator } from './validator'
@@ -211,6 +212,81 @@ describe('handleCommand — 역할 인가', () => {
     const deps = await seedWorker()
     expect((await call(deps, 'task-list', {})).status).toBe(200)
     expect((await call(deps, 'accounts', {})).status).toBe(200)
+  })
+})
+
+describe('handleCommand — 롤링이 세션을 rekey 한 뒤 (worker-rolling-phase-1a)', () => {
+  /** worker-start까지 진행해 sess1이 워커인 상태를 만든다 (위 seedWorker와 동일한 절차) */
+  const seedWorker = async (): Promise<OrchServerDeps> => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    await call(deps, 'worker-start', {
+      taskId,
+      agent: 'codex',
+      account: 'acc1',
+      worktree: 'current'
+    })
+    return deps
+  }
+
+  it('rekey 된 세션의 worker_done 이 Task 를 정상적으로 마무리한다 — 이 브랜치의 존재 이유', async () => {
+    const deps = await seedWorker()
+    const d = deps.getState().dispatches[0]
+    // sess1 -> sess2 로 롤 — OrchRollTap.onRolled 가 실제로 하는 일을 여기서는 직접 부른다
+    // (rollTap.test.ts 가 그 함수 자체를 이미 pin 한다. 여기서는 그 결과가 handleCommand 의
+    // send/worker_done 경로와 맞물리는지를 본다).
+    const rekeyed = rekeyDispatch(
+      deps.getState(),
+      { oldSessionId: 'sess1', newSessionId: 'sess2', accountId: 'acc2' },
+      NOW
+    )
+    if (!rekeyed.ok) throw new Error(`expected ok, got ${rekeyed.error}`)
+    await deps.setState(rekeyed.state)
+
+    const r = await call(
+      deps,
+      'send',
+      {
+        type: 'worker_done',
+        taskId: d.taskId,
+        dispatchId: d.id,
+        outcome: 'succeeded',
+        subject: 'a',
+        body: 'b'
+      },
+      'sess2' // 옛 sessionId(sess1)가 아니라 rekey 된 새 세션으로 보고한다
+    )
+    expect(r.status).toBe(200)
+    const closed = deps.getState().dispatches.find((x) => x.id === d.id)
+    expect(closed?.outcome).toBe('succeeded')
+    expect(closed?.endedAt).toBeDefined()
+    const task = deps.getState().tasks.find((t) => t.id === d.taskId)
+    expect(task?.status).toBe('completed')
+  })
+
+  it('rekey 되지 않은 새 세션 id는 워커로 인식되지 않는다 — COORDINATOR_ONLY 를 부를 수 있다(해저드)', async () => {
+    const deps = await seedWorker()
+    // handleCommand 는 caller.sessionId 가 dispatches.find(d => d.sessionId === caller.sessionId) 로
+    // 걸리는지로 워커 여부를 정한다. 'sess2'는 롤이 만든 새 세션 id 라고 해도, rekeyDispatch 가 아직
+    // 부르지 않았으면 어떤 Dispatch 도 그 값을 sessionId 로 갖지 않는다 — 즉 워커로 인식되지 않고
+    // COORDINATOR_ONLY 가드가 적용되지 않는다.
+    const before = await call(deps, 'run-create', { objective: 'o2', cwd: 'D:/p' }, 'sess2')
+    expect(before.status).toBe(200) // 거부되지 않는다 — 이것이 이 브랜치가 막으려는 결함이다
+
+    const rekeyed = rekeyDispatch(
+      deps.getState(),
+      { oldSessionId: 'sess1', newSessionId: 'sess2', accountId: 'acc2' },
+      NOW
+    )
+    if (!rekeyed.ok) throw new Error(`expected ok, got ${rekeyed.error}`)
+    await deps.setState(rekeyed.state)
+
+    // rekey 된 뒤에는 'sess2'가 그 Dispatch의 sessionId이므로 워커로 인식되어 같은 명령이 막힌다
+    const after = await call(deps, 'run-create', { objective: 'o3', cwd: 'D:/p' }, 'sess2')
+    expect(after.status).toBe(403)
   })
 })
 

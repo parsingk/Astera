@@ -15,6 +15,7 @@
 // core/rolling/retry.ts 머리말이 "타이머 수명을 공통 부모로 올리는 것은 이 앱에서 버그를 가장 많이
 // 낸 축" 이라고 적어 두었고, 두 구독자가 각자 자기 타이머를 갖는 것이 그 경고를 지키는 모양이다.
 import { rekeyDispatch } from '../../core/orchestration/state'
+import type { Dispatch } from '../../core/orchestration/types'
 import { handleExit, type OrchServerDeps } from './server'
 
 /** exit 처리를 미뤄 두는 창.
@@ -54,14 +55,27 @@ export class OrchRollTap {
     )
   }
 
-  /** 롤링 전환. 미뤄 둔 exit 를 취소하고 열린 Dispatch 를 새 세션·계정으로 옮긴다.
+  /** 롤링 전환. 열린 Dispatch 를 새 세션·계정으로 옮기고, **그것이 실제로 성공했을 때만** 미뤄 둔
+   *  exit 를 취소한다. 반환값은 재키잉된 Dispatch — 옮길 것이 없었거나 실패했으면 null 이다.
+   *
+   *  **취소를 rekeyDispatch 성공 뒤로 미루는 이유.** 거절 경로(다른 열린 Dispatch 가 이미 그
+   *  세션 id 를 쓰고 있는 경우)에서 먼저 취소해 버리면 Dispatch 는 죽은 옛 세션 id 에 묶인 채
+   *  남고, 그것을 닫을 유일한 길(미뤄 둔 exit)까지 함께 버려진다 — 열려 있는데 아무도 닫지 않는
+   *  Dispatch 가 영원히 남는다. 거절 경로와 "옮길 Dispatch 가 없었다" 경로 모두 이 함수는 타이머를
+   *  건드리지 않고 그대로 반환한다: 옛 세션은 어차피 죽었으므로, 미뤄 둔 exit 가 창 끝에 도착해
+   *  (열려 있던 경우) Dispatch 를 정상적으로 닫아 준다.
+   *
+   *  **취소는 rekeyDispatch 가 ok 를 낸 뒤, setState 커밋 *전*에 한다.** 커밋이 실패해도 타이머를
+   *  되살리지 않는다 — 되살려도 다시 올 exit 가 없다(옛 세션은 이미 죽었고, 그 죽음이 만든 exit는
+   *  이 함수를 부르기 전에 이미 소비됐다). setState 실패는 로그로만 남고, 그 Dispatch 는 열린
+   *  채(옛 세션 id 로) 남아 다음 앱 재시작의 outcome_unknown 정리(store.load)가 맡는다 — dispose()
+   *  가 미뤄 둔 exit 를 버릴 때와 같은 결말이다.
+   *
    *  **던지지 않는다** — 부르는 쪽은 롤링의 send 탭이고, 거기서 예외가 새면 롤 자체가 막힌다. */
-  async onRolled(oldSessionId: string, newInfo: { id: string; accountId: string }): Promise<void> {
-    const timer = this.timers.get(oldSessionId)
-    if (timer) {
-      clearTimeout(timer)
-      this.timers.delete(oldSessionId)
-    }
+  async onRolled(
+    oldSessionId: string,
+    newInfo: { id: string; accountId: string }
+  ): Promise<Dispatch | null> {
     const now = this.deps.now?.() ?? new Date().toISOString()
     const r = rekeyDispatch(
       this.deps.getState(),
@@ -70,18 +84,27 @@ export class OrchRollTap {
     )
     if (!r.ok) {
       this.deps.log?.(`dispatch rekey rejected ${oldSessionId} -> ${newInfo.id}: ${r.error}`)
-      return
+      return null
     }
-    if (r.value === null) return // 워커 세션이 아니었다 — 사용자 탭 세션의 롤이 그렇다
+    if (r.value === null) return null // 워커 세션이 아니었다 — 사용자 탭 세션의 롤이 그렇다
+    // 여기서부터는 재키잉이 확정이다 — 미뤄 둔 exit 를 지금 취소한다. setState 가 실패해도(아래
+    // catch) 되돌리지 않는다: 커밋이 안 됐다고 다시 무장하면, 그 사이에 도착한 exit 가 옛 id 로
+    // Dispatch 를 찾아 닫아 버려 재키잉 재시도와 경합한다.
+    const timer = this.timers.get(oldSessionId)
+    if (timer) {
+      clearTimeout(timer)
+      this.timers.delete(oldSessionId)
+    }
     try {
       await this.deps.setState(r.state)
     } catch (err) {
       this.deps.log?.(`dispatch rekey commit failed dispatch=${r.value.id}: ${String(err)}`)
-      return
+      return null
     }
     this.deps.log?.(
       `dispatch ${r.value.id} rekeyed ${oldSessionId} -> ${newInfo.id} account=${newInfo.accountId}`
     )
+    return r.value
   }
 
   /** 오케스트레이션/앱 종료. 미뤄 둔 exit 는 **버린다** — 열린 채 남은 Dispatch 는 다음 실행에서
