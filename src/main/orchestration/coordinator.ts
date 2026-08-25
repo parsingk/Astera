@@ -37,8 +37,14 @@ export interface CoordinatorDeps {
      *  한도 선택지 목록이 아직 화면에 남아 있으면(choicePending) 예외적으로 codex 와 같은 경로를
      *  탄다. codex 에는 resumeInPlace 가 없다 — 한 원소 체인이어도 항상 roll() 로 가서 세션을
      *  죽이고 새 세션 id 로 재기동한다(검증됨). 어느 쪽이든 이 값을 넘기는 것 자체가, 한도에 걸린
-     *  워커를 사람이 다시 띄우지 않고도 스스로 이어지게 만든다. 순서 있는 목록은 Phase 1c 가 만든다. */
-    rollAccountIds?: string[]
+     *  워커를 사람이 다시 띄우지 않고도 스스로 이어지게 만든다. 순서 있는 목록은 Phase 1c 가 만든다.
+     *
+     *  **위 title 과 같은 이유로 optional 이 아니다.** 이 기능의 on 스위치는 startWorker 의 한
+     *  줄(`rollAccountIds: [a.accountId]`)이고, optional 이면 그 줄을 지워도 typecheck 와 전체
+     *  테스트가 그대로 통과한다 — 기능만 조용히 꺼진다. `satisfies typeof o`(ipc.ts 의 배선)는
+     *  **철자 오류를 잡을 뿐 누락은 잡지 못한다**: optional 필드가 없는 객체도 그 타입을 만족한다.
+     *  required 로 두면 지운 자리가 곧 컴파일 오류다. */
+    rollAccountIds: string[]
   }): Promise<{ id: string }>
   writeToSession(sessionId: string, data: string): void
   /** Is that session working. **null = it cannot be decided for this provider** (codex — a
