@@ -319,8 +319,11 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
+  // 워커의 구성이 바로 이것이다 — 한 원소 체인. orchEnv 단언이 여기 붙어 있는 이유: 위의 orchEnv
+  // 테스트 둘은 계정을 갈아타는 여러 원소 체인을 지나가고, 워커가 실제로 타는 경로는 이쪽이다.
   it('단일 계정은 전환 없이 reset 시각까지 대기 후 같은 계정으로 재개한다', async () => {
-    const h = harness()
+    const env = { cliPath: 'C:/astera/cli.js', infoPath: 'C:/astera/info.json', skillsPath: 'C:/astera/skills' }
+    const h = harness({ orchEnv: () => env })
     const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
     const resetSec = Math.floor((Date.now() + 300_000) / 1000) // 5분 뒤
     await writeRollout({
@@ -334,6 +337,7 @@ describe('CodexRollingCoordinator', () => {
     expect(h.events).toEqual([]) // 아직 롤 안 함
     await advance(400_000) // reset + 여유 경과
     expect(h.events).toContain('spawn:s2:c1') // 같은 계정으로 재개
+    expect(h.spawned[0].orchEnv).toEqual(env) // 그 세션에서 astera 로 보고할 수 있어야 한다
     h.coord.stop()
   })
 

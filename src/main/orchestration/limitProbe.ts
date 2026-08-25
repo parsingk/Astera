@@ -9,10 +9,11 @@
 // Worker sessions are attached to those coordinators now (ipc.ts's spawnSession passes
 // rollAccountIds through), and the two do not collide: rolling owns the session's lifetime end to
 // end, and orchestration only listens for session:rolled to move the Dispatch to follow the new
-// session id (Phase 1a's OrchRollTap in ipc.ts), never re-keying anything itself. probeLimit stays
-// a separate, post-mortem verdict — it runs on a Dispatch exit that rolling did not turn into a
-// roll (a real death, not a rolled-away one), to answer "did this end on a limit, and when does
-// that lift" for the orchestrator's own retry/backoff decision.
+// session id (Phase 1a's OrchRollTap in ipc.ts) — it re-keys that Dispatch and nothing else, never
+// the session itself, which is rolling's to re-key. probeLimit stays a separate, post-mortem verdict
+// — it runs on a Dispatch exit that rolling did not turn into a roll (a real death, not a
+// rolled-away one), to answer "did this end on a limit, and when does that lift" for the
+// orchestrator's own retry/backoff decision.
 import { open } from 'node:fs/promises'
 import type { Dispatch } from '../../core/orchestration/types'
 import { parseClaudeLimitLine, type ClaudeLimitHit } from '../../core/rolling/claudeSignal'

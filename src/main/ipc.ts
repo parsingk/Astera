@@ -617,6 +617,22 @@ export function registerIpc(
     // 넘긴다. 스케줄·Slack 은 여전히 등록되지 않는다: 그 옵션들은 여기서 전달되지 않기 때문이다.
     // 롤링만 붙이는 이유는 한도에 걸린 워커가 사람 없이도 스스로 이어지게 하는 것이고, 예약 발화와
     // Slack 알림은 워커의 일이 아니다.
+    //
+    // **체인과 함께 훅 번들도 켜진다 — 아무도 결정하지 않았으므로 여기에 적어 둔다.**
+    // SessionManager.spawn 의 wantHooks 는 `slackNotify || rollAccountIds.length >= 1` 이다
+    // (core/sessions/manager.ts). 워커 세션은 그때까지 둘 다 없었으므로, 체인을 넘기는 이 배선이
+    // 모든 워커에게 Stop·Notification·PreToolUse·PostToolUse 훅까지 함께 설치한다 — 훅은 체인에
+    // 딸려 온다.
+    //
+    // 값은 statusLine.ts 의 그 훅 주석이 매겨 두었다: **write/execute 도구 호출마다 node 프로세스가
+    // 하나 더 뜨고 Claude Code 는 그것이 끝날 때까지 기다린다**(matcher 는 Bash·PowerShell·Write·
+    // Edit·NotebookEdit·AskUserQuestion). 그래서 이 비용은 정확히 이 앱에서 도구를 가장 많이 쓰는
+    // 쪽에 떨어진다 — 하루 종일 파일을 고치고 명령을 돌리는 워커다. 읽기 도구는 matcher 밖이라
+    // 그쪽 지연은 그대로다.
+    //
+    // 그래도 지금 이 조합을 그대로 두는 이유: 롤링의 idle nudge 는 Notification 훅을 정지 신호로
+    // 쓴다(rolling.ts 의 onHookEvent) — 훅을 떼면 그 갈래가 워커에게만 사라진다.
+    // **wantHooks 에 체인과 별개인 자기 입력을 주는 일은 나중으로 남긴다.**
     const coordinator = new OrchCoordinator({
       // This is the only place session:created is emitted. On the user path (the 'sessions.spawn'
       // ipcMain.handle) the return value goes to the renderer and App.tsx builds the tab from it, but

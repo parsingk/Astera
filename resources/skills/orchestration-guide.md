@@ -460,7 +460,7 @@ it is in 4.3.
 
 ### A worker killed by a quota limit — `limitResetsAt`
 
-**Running into a quota wall is the app's problem now, not the coordinator's.** Every worker session
+**Running into a quota limit is the app's problem now, not the coordinator's.** Every worker session
 runs on a one-account rolling chain — its own account, alone. When that account's quota runs out, the
 app reads the reset time out of the transcript, waits it out, and carries the work forward by itself.
 The coordinator does not wait for it and does not retry; for a chain that recovers on its own, there
@@ -479,7 +479,7 @@ onto the new one, so `worker-show --dispatch <dsp>` keeps resolving without the 
 finger.
 
 Because of that, seeing `limitResetsAt` on a `worker-show` response is no longer the ordinary shape of
-running into a quota wall — it is now the narrower, rarer case where this worker's session genuinely
+running into a quota limit — it is now the narrower, rarer case where this worker's session genuinely
 died and rolling did not carry it through. The app parsed that fact out of the session transcript, and
 it also arrives in the inbox as a `status` message.
 
@@ -512,7 +512,9 @@ automatically. After receiving `worker_done`, pick one of these **yourself**:
   astera worker-start --task <next> --agent <same agent> --account <same account> --terminal <sessionId> --json
   ```
   (Even with `--terminal`, `--agent`, `--account`, and `--worktree` must be given again — placement is
-  not inherited.)
+  not inherited. **Re-read `sessionId` from `worker-show --dispatch <dsp>` right before you reuse it**
+  — a roll changes it, and on codex a roll always does (section 7), so the id you were given when the
+  worker started may name a session that no longer exists.)
 - **If there is no follow-up**, clean up with `worker-release --dispatch <dsp>`. Call it after both
   success and failure reports — it is after-the-fact cleanup, not cancellation. Only the session that
   Dispatch owns is closed; a reused session, a session the user took over, and a session whose
