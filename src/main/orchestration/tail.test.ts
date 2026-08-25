@@ -109,6 +109,18 @@ describe('WorkerTails', () => {
       t.push('sess_old', 'should not land anywhere')
       expect(t.read('dsp_A')).toBe('after roll')
     })
+
+    it('previousSessionId가 현재 sessionId와 같으면 소유권이 유지된다', () => {
+      // 롤링이 세션 id는 그대로 두고 계정만 바꾸는 경우 — rekeyDispatch의 동일성 예외 참고.
+      // 삭제 가드 없으면 방금 설정한 항목을 지우므로 push가 조용히 건너뛴다.
+      const t = new WorkerTails()
+      t.start({ dispatchId: 'dsp_A', sessionId: 'sess_S' }, never)
+      t.push('sess_S', 'before\n')
+      // 계정만 바뀌는 롤링이 발생 — 세션 id는 그대로다
+      t.start({ dispatchId: 'dsp_A', sessionId: 'sess_S', previousSessionId: 'sess_S' }, never)
+      t.push('sess_S', 'after\n')
+      expect(t.read('dsp_A')).toBe('before\nafter')
+    })
   })
 
   describe('축출 — 종단 dispatch만 (리뷰 I3)', () => {

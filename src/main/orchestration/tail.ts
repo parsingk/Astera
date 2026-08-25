@@ -78,7 +78,9 @@ export class WorkerTails {
   ): void {
     if (!this.buffers.has(a.dispatchId)) this.buffers.set(a.dispatchId, '')
     this.owner.set(a.sessionId, a.dispatchId)
-    if (a.previousSessionId !== undefined) this.owner.delete(a.previousSessionId)
+    // 롤링이 계정만 바꾸고 세션 id는 그대로일 수 있다 (rekeyDispatch의 동일성 예외 참고).
+    // 이 경우 삭제하면 방금 설정한 항목을 지워버린다.
+    if (a.previousSessionId !== undefined && a.previousSessionId !== a.sessionId) this.owner.delete(a.previousSessionId)
     for (const id of [...this.buffers.keys()]) {
       if (this.buffers.size <= this.maxDispatches) break
       if (id === a.dispatchId) continue // do not drop the one just created
