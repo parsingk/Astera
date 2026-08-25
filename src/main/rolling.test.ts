@@ -36,7 +36,7 @@ function harness(overrides: Partial<RollingDeps> = {}): {
   written: { id: string; data: string }[]
   sent: { channel: string; payload: Record<string, unknown> }[]
   copied: { src: string; dest: string }[]
-  spawned: SessionInfo[]
+  spawned: (SessionInfo & { orchEnv?: { cliPath: string; infoPath: string; skillsPath: string } })[]
   payloads: Map<string, unknown>
   info1: SessionInfo
 } {
@@ -49,7 +49,7 @@ function harness(overrides: Partial<RollingDeps> = {}): {
   const written: { id: string; data: string }[] = []
   const sent: { channel: string; payload: Record<string, unknown> }[] = []
   const copied: { src: string; dest: string }[] = []
-  const spawned: SessionInfo[] = []
+  const spawned: (SessionInfo & { orchEnv?: { cliPath: string; infoPath: string; skillsPath: string } })[] = []
   const payloads = new Map<string, unknown>()
   let seq = 1
   const coord = new RollingCoordinator({
@@ -66,7 +66,7 @@ function harness(overrides: Partial<RollingDeps> = {}): {
         slackNotify: opts.slackNotify,
         bypassPermissions: opts.bypassPermissions
       }
-      spawned.push(info)
+      spawned.push({ ...info, orchEnv: opts.orchEnv })
       events.push(`spawn:${info.id}:${opts.account.id}`)
       return info
     },
@@ -125,6 +125,25 @@ describe('RollingCoordinator', () => {
     expect(h.copied[0].dest).toBe(path.join('D:\\cfg', 'a2', 'projects', 'D--work-p', 'claude-sess.jsonl'))
     expect(h.spawned[0].resumeSessionId).toBe('claude-sess')
     expect(h.sent.some((s) => s.channel === 'session:rolled')).toBe(true)
+  })
+
+  it('롤로 띄운 세션에 orchEnv를 실어 보낸다', async () => {
+    const env = { cliPath: 'C:/astera/cli.js', infoPath: 'C:/astera/info.json', skillsPath: 'C:/astera/skills' }
+    const h = harness({ orchEnv: () => env })
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned[0].orchEnv).toEqual(env)
+  })
+
+  it('orchEnv dep이 주입되지 않으면 실리지 않는다', async () => {
+    const h = harness() // 주입 없음
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned[0].orchEnv).toBeUndefined()
   })
 
   // 게이트를 제거했다. 한도로 막힌 순간 statusLine은 이미 멈춰 있어 낡은 스냅샷만

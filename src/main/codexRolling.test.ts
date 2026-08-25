@@ -69,14 +69,24 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
   events: string[]
   sent: { channel: string; payload: Record<string, unknown> }[]
   copied: { src: string; dest: string }[]
-  spawned: { info: SessionInfo; resumePrompt?: string; resumeSessionId?: string }[]
+  spawned: {
+    info: SessionInfo
+    resumePrompt?: string
+    resumeSessionId?: string
+    orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
+  }[]
   info1: SessionInfo
 } {
   const accounts: Record<string, Account> = { c1: acc('c1', 'Codex A'), c2: acc('c2', 'Codex B') }
   const events: string[] = []
   const sent: { channel: string; payload: Record<string, unknown> }[] = []
   const copied: { src: string; dest: string }[] = []
-  const spawned: { info: SessionInfo; resumePrompt?: string; resumeSessionId?: string }[] = []
+  const spawned: {
+    info: SessionInfo
+    resumePrompt?: string
+    resumeSessionId?: string
+    orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
+  }[] = []
   let seq = 1
   const coord = new CodexRollingCoordinator({
     spawn: (opts) => {
@@ -92,7 +102,12 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
         slackNotify: opts.slackNotify,
         bypassPermissions: opts.bypassPermissions
       }
-      spawned.push({ info, resumePrompt: opts.resumePrompt, resumeSessionId: opts.resumeSessionId })
+      spawned.push({
+        info,
+        resumePrompt: opts.resumePrompt,
+        resumeSessionId: opts.resumeSessionId,
+        orchEnv: opts.orchEnv
+      })
       events.push(`spawn:${info.id}:${opts.account.id}`)
       return info
     },
@@ -223,6 +238,29 @@ describe('CodexRollingCoordinator', () => {
     expect(h.spawned[0].resumeSessionId).toBe('cx-1')
     expect(h.spawned[0].resumePrompt).toBe('이어서 작업 진행해 줘')
     expect(h.sent.some((s) => s.channel === 'session:rolled')).toBe(true)
+    h.coord.stop()
+  })
+
+  it('롤로 띄운 세션에 orchEnv를 실어 보낸다', async () => {
+    const env = { cliPath: 'C:/astera/cli.js', infoPath: 'C:/astera/info.json', skillsPath: 'C:/astera/skills' }
+    const h = harness({ orchEnv: () => env })
+    await writeRollout({ accountId: 'c1', uuid: 'cx-orchenv', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(h.info1)
+    await advance(1_500) // 매핑 폴링
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.spawned[0].orchEnv).toEqual(env)
+    h.coord.stop()
+  })
+
+  it('orchEnv dep이 주입되지 않으면 실리지 않는다', async () => {
+    const h = harness() // 주입 없음
+    await writeRollout({ accountId: 'c1', uuid: 'cx-noorchenv', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(h.info1)
+    await advance(1_500) // 매핑 폴링
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.spawned[0].orchEnv).toBeUndefined()
     h.coord.stop()
   })
 

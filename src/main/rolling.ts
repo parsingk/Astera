@@ -72,6 +72,8 @@ export interface RollingDeps {
     rollAccountIds?: string[]
     slackNotify?: boolean
     bypassPermissions?: boolean
+    /** astera CLI 환경. 배선이 넘긴다 — 없으면 세션은 CLI 없이 뜬다 */
+    orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
   }): SessionInfo
   write(sessionId: string, data: string): void
   kill(sessionId: string): void
@@ -90,6 +92,19 @@ export interface RollingDeps {
    *  the electron net module, and this file has to stay free of electron to be testable under vitest.
    *  index.ts does the wiring. */
   readUsage?: (configDir: string) => Promise<number | null>
+  /** 롤로 띄우는 세션에 실을 astera CLI 환경.
+   *
+   *  **왜 dep 이고 왜 getter 인가.** 롤링 코디네이터는 `ipc.ts` 의 `spawnSession` 을 우회해
+   *  `core.sessions.spawn` 을 직접 부른다(index.ts 의 배선). 그 우회로에는 `ASTERA_CLI`·`ASTERA_INFO`·
+   *  `ASTERA_SKILLS` 와 PATH 주입이 붙지 않아서, **롤 뒤의 워커는 `astera` 로 아무것도 보고할 수
+   *  없었다** — 조용히 끝나지 않는 Task 가 된다. `ipc.ts` 의 그 함수를 그대로 넘길 수는 없다: 그것이
+   *  롤링 등록까지 하므로 재귀한다. 그래서 값만 따로 받는다.
+   *
+   *  getter 인 이유는 값이 앱 수명 중간에 생기고 사라지기 때문이다 — 오케스트레이션은 설정으로
+   *  켜지고 꺼지며, 롤링 코디네이터는 그보다 먼저 만들어진다.
+   *
+   *  주입되지 않으면 아무것도 실리지 않는다(기존 동작) — now?/log? 와 같은 관례다. */
+  orchEnv?(): { cliPath: string; infoPath: string; skillsPath: string } | undefined
 }
 
 interface Chain {
@@ -727,7 +742,8 @@ export class RollingCoordinator {
         resumeSessionId: chain.claudeSessionId,
         rollAccountIds: chain.accountIds,
         slackNotify: chain.liveInfo.slackNotify, // Slack notifications are kept per chain
-        bypassPermissions: chain.liveInfo.bypassPermissions // bypass is kept per chain
+        bypassPermissions: chain.liveInfo.bypassPermissions, // bypass is kept per chain
+        orchEnv: this.deps.orchEnv?.()
       })
       this.chains.delete(oldId)
       chain.liveId = info.id
