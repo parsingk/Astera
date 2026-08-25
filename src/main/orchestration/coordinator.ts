@@ -31,6 +31,10 @@ export interface CoordinatorDeps {
      *  a title (it is a required argument of startWorker), and if it were optional the wiring could
      *  omit it and still compile. */
     title: string
+    /** 이 워커 세션의 롤링 체인. **한 원소** 다 — 그 Dispatch 가 실제로 쓰는 계정 하나.
+     *  한 원소 체인에서 롤링은 계정을 갈아타지 않고 리셋까지 기다린 뒤 같은 세션에서 재개한다
+     *  (rolling.ts 의 resumeInPlace). 순서 있는 목록은 Phase 1c 가 만든다. */
+    rollAccountIds?: string[]
   }): Promise<{ id: string }>
   writeToSession(sessionId: string, data: string): void
   /** Is that session working. **null = it cannot be decided for this provider** (codex — a
@@ -591,7 +595,12 @@ export class OrchCoordinator {
         initialPrompt: prompt,
         // The tab title is task.title (no UI change, only the title) — without it the worker tab
         // comes up under the worktree basename and the user cannot tell which task it is
-        title: a.title
+        title: a.title,
+        // **한도에 걸린 워커가 스스로 이어지게 하는 것이 이 한 줄이다.** 이 값을 넘기면 배선의
+        // spawnSession 이 그 세션을 롤링 코디네이터에 등록하고(ipc.ts), 롤링은 계정이 하나뿐인
+        // 체인에 대해 "리셋까지 기다린 뒤 죽이지 않고 같은 세션에서 재개" 를 한다. 넘기지 않던
+        // 동안 한도에 걸린 워커는 살아 있지만 멈춘 채 남았고, 사람이 다시 띄워야 했다.
+        rollAccountIds: [a.accountId]
       })
       finalSessionId = spawned.id
     }

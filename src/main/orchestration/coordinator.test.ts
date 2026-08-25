@@ -399,6 +399,15 @@ describe('OrchCoordinator.startWorker', () => {
     await co.startWorker({ ...baseArgs(), runCwd: dir })
     expect((deps.spawned[0] as { title: string }).title).toBe('인증 리팩터')
   })
+  // 한도에 걸린 워커가 스스로 이어지게 하려면 spawnSession이 롤링 코디네이터에 등록할 체인을
+  // 받아야 한다. 체인은 그 Dispatch가 실제로 쓰는 계정 하나뿐이다(baseArgs의 accountId: 'acc1') —
+  // 순서 있는 여러 계정 목록은 이 태스크의 범위 밖이다(Phase 1c).
+  it('워커를 자기 계정 한 개짜리 롤링 체인으로 띄운다', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    await co.startWorker({ ...baseArgs(), runCwd: dir })
+    expect((deps.spawned[0] as { rollAccountIds?: string[] }).rollAccountIds).toEqual(['acc1'])
+  })
   it('--terminal 재사용 경로는 세션을 새로 띄우지 않고 PTY로 주입한다', async () => {
     const deps = makeDeps()
     const co = new OrchCoordinator(deps)
