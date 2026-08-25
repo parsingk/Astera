@@ -771,6 +771,51 @@ export function closeDispatch(
   return ok(state, next)
 }
 
+/** 롤링이 세션을 갈아탈 때 열린 Dispatch 를 새 세션 id·계정으로 옮긴다.
+ *
+ *  **왜 필요한가.** `Dispatch.sessionId` 는 worker_done 을 되돌려 묶는 **유일한** 키다 —
+ *  closeDispatch 가 그것으로 Dispatch 를 찾고, handleCommand 의 호출자 식별과 사이드바가 탭을 여는
+ *  값(JobTask.sessionId)도 같은 값에 걸려 있다. 롤은 세션을 죽이고 새 id 로 다시 띄우므로
+ *  (rolling.ts 의 liveId: "changes on every roll"), 옮겨 주지 않으면 살아 있는 워커의 보고가 갈 곳을
+ *  잃는다.
+ *
+ *  **Task 는 건드리지 않는다.** 상태도 consecutiveFailures 도 그대로다 — 세션이 죽은 것이 아니라
+ *  계정만 갈린 것이고, 그것은 실패가 아니다. updatedAt 만 새로 찍는다: 롤은 활동이고, store 의 TTL 이
+ *  Run 의 마지막 활동 시각을 그 값에서 끌어온다(closeDispatch 가 같은 이유로 같은 선택을 한다).
+ *
+ *  **Dispatch 를 닫지 않는다.** 이 함수의 존재 이유가 그것이다 — 롤의 kill 이 만든 exit 가
+ *  closeDispatch 에 도달해 살아 있는 워커의 Dispatch 를 닫는 것을 막으려고, 그 전에 키를 옮긴다.
+ *
+ *  열린 Dispatch 가 없으면 `ok(state, null)` 이다. 롤된 세션이 워커가 아닌 것은 흔한 경우이고
+ *  (사용자 탭 세션이 그렇다), closeDispatch 가 같은 상황에 같은 답을 낸다. */
+export function rekeyDispatch(
+  s: OrchState,
+  a: { oldSessionId: string; newSessionId: string; accountId: string },
+  now: string
+): Res<Dispatch | null> {
+  const dispatch = s.dispatches.find((d) => d.sessionId === a.oldSessionId && !d.endedAt)
+  if (!dispatch) return ok(s, null)
+  // openDispatch 의 sessionId 검사와 같은 것이다 — 같은 세션 id 를 쓰는 열린 Dispatch 가 둘이면
+  // closeDispatch 가 어느 것을 닫을지 알 수 없게 된다. 자기 자신은 뺀다(두 id 가 같게 불린 경우).
+  const taken = s.dispatches.find(
+    (d) => d.sessionId === a.newSessionId && !d.outcome && !d.endedAt && d.id !== dispatch.id
+  )
+  if (taken) return err(`sessionId already in use by an open dispatch: ${taken.id}`)
+  const next: Dispatch = { ...dispatch, sessionId: a.newSessionId, accountId: a.accountId }
+  const task = s.tasks.find((t) => t.id === dispatch.taskId)
+  return ok(
+    {
+      ...s,
+      dispatches: replace(s.dispatches, next),
+      // Task 가 없는 Dispatch 는 손으로 고친 orchestration.json 에서만 나올 수 있다. 그 경우
+      // 재키잉 자체는 성공시킨다 — 워커의 보고 경로를 지키는 것이 이 함수의 일이고, 그것은 Task
+      // 없이도 유효하다.
+      tasks: task ? replace(s.tasks, { ...task, updatedAt: now }) : s.tasks
+    },
+    next
+  )
+}
+
 /** Returns the oldest unacknowledged Delivery. If there is none, builds a new batch from the
  *  undelivered messages. types only decides the "wake condition"; the batch content is always
  *  everything. */

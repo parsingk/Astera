@@ -11,6 +11,7 @@ import {
   applyReviewResult,
   blockForReview,
   closeDispatch,
+  rekeyDispatch,
   nextDelivery,
   ackDelivery,
   createQuestion,
@@ -26,6 +27,7 @@ import {
 import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task } from './types'
 
 const NOW = '2026-08-04T00:00:00.000Z'
+const LATER = '2026-08-04T01:00:00.000Z'
 const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchState; value: T } => {
   if (!r.ok) throw new Error(`expected ok, got ${String(r.error)}`)
   return { state: r.state as OrchState, value: r.value as T }
@@ -1879,5 +1881,99 @@ describe('setRunWorktree', () => {
 
   it('없는 Run 은 거절한다', () => {
     expect(setRunWorktree(emptyState(), 'run_nope', 'D:/wt/a').ok).toBe(false)
+  })
+})
+
+describe('rekeyDispatch — 롤링이 세션을 갈아탈 때', () => {
+  it('열린 Dispatch 의 sessionId·accountId 를 옮긴다', () => {
+    const { s, dispatchId } = seed()
+    const r = unwrap<{ id: string; sessionId: string; accountId: string }>(
+      rekeyDispatch(s, { oldSessionId: 'sess1', newSessionId: 'sess2', accountId: 'acc2' }, NOW) as never
+    )
+    expect(r.value.id).toBe(dispatchId)
+    expect(r.value.sessionId).toBe('sess2')
+    expect(r.value.accountId).toBe('acc2')
+    // 상태에도 반영돼 있어야 한다 — 반환값만 고친 것이 아니다
+    const inState = r.state.dispatches.find((d) => d.id === dispatchId)
+    expect(inState?.sessionId).toBe('sess2')
+    expect(inState?.accountId).toBe('acc2')
+  })
+
+  it('Task 의 상태와 실패 카운터를 건드리지 않는다', () => {
+    const { s, taskId } = seed()
+    const before = s.tasks.find((t) => t.id === taskId)
+    const r = unwrap<unknown>(
+      rekeyDispatch(s, { oldSessionId: 'sess1', newSessionId: 'sess2', accountId: 'acc2' }, LATER) as never
+    )
+    const after = r.state.tasks.find((t) => t.id === taskId)
+    expect(after?.status).toBe(before?.status)
+    expect(after?.consecutiveFailures).toBe(before?.consecutiveFailures)
+    // updatedAt 만 새로 찍힌다 — store 의 TTL 이 이 값을 마지막 활동 시각으로 읽는다
+    expect(after?.updatedAt).toBe(LATER)
+  })
+
+  it('Dispatch 를 닫지 않는다', () => {
+    const { s, dispatchId } = seed()
+    const r = unwrap<unknown>(
+      rekeyDispatch(s, { oldSessionId: 'sess1', newSessionId: 'sess2', accountId: 'acc2' }, NOW) as never
+    )
+    const d = r.state.dispatches.find((x) => x.id === dispatchId)
+    expect(d?.endedAt).toBeUndefined()
+    expect(d?.outcome).toBeUndefined()
+    expect(d?.workerState).toBe('ready')
+  })
+
+  it('그 세션에 열린 Dispatch 가 없으면 null 이고 상태는 그대로다', () => {
+    const { s } = seed()
+    const r = rekeyDispatch(s, { oldSessionId: 'nope', newSessionId: 'sess2', accountId: 'acc2' }, NOW)
+    expect(r.ok).toBe(true)
+    if (!r.ok) throw new Error('expected ok')
+    expect(r.value).toBeNull()
+    expect(r.state).toBe(s) // 같은 객체 — 아무것도 바꾸지 않았다
+  })
+
+  it('이미 닫힌 Dispatch 는 옮기지 않는다', () => {
+    const { s } = seed()
+    const closed = unwrap<unknown>(
+      closeDispatch(s, { sessionId: 'sess1', exitCode: 1 }, NOW) as never
+    )
+    const r = rekeyDispatch(
+      closed.state,
+      { oldSessionId: 'sess1', newSessionId: 'sess2', accountId: 'acc2' },
+      NOW
+    )
+    expect(r.ok).toBe(true)
+    if (!r.ok) throw new Error('expected ok')
+    expect(r.value).toBeNull()
+  })
+
+  it('새 sessionId 를 이미 다른 열린 Dispatch 가 쓰고 있으면 거절한다', () => {
+    const { s, runId } = seed()
+    // 같은 Run 에 두 번째 Task + Dispatch 를 열어 sessionId 'sess2' 를 선점시킨다
+    const t2 = unwrap<{ id: string }>(
+      createTask(s, { runId, title: 't2', spec: 'do it too', deps: [] }, NOW) as never
+    )
+    const d2 = unwrap<unknown>(
+      openDispatch(
+        t2.state,
+        {
+          taskId: t2.value.id,
+          provider: 'codex',
+          accountId: 'acc1',
+          sessionId: 'sess2',
+          cwd: 'D:/p',
+          specPath: 'D:/p/orch/specs/y.md'
+        },
+        NOW
+      ) as never
+    )
+    const r = rekeyDispatch(
+      d2.state,
+      { oldSessionId: 'sess1', newSessionId: 'sess2', accountId: 'acc2' },
+      NOW
+    )
+    expect(r.ok).toBe(false)
+    if (r.ok) throw new Error('expected err')
+    expect(r.error).toContain('already in use')
   })
 })
