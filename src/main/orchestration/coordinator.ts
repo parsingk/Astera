@@ -32,8 +32,11 @@ export interface CoordinatorDeps {
      *  omit it and still compile. */
     title: string
     /** 이 워커 세션의 롤링 체인. **한 원소** 다 — 그 Dispatch 가 실제로 쓰는 계정 하나.
-     *  한 원소 체인에서 롤링은 계정을 갈아타지 않고 리셋까지 기다린 뒤 같은 세션에서 재개한다
-     *  (rolling.ts 의 resumeInPlace). 순서 있는 목록은 Phase 1c 가 만든다. */
+     *  이 필드는 프로바이더에 무관하다 — 둘의 동작은 다르다. claude 는 한 원소 체인에서 계정을
+     *  갈아타지 않고 리셋까지 기다린 뒤 같은 세션에서 재개한다(rolling.ts 의 resumeInPlace). codex
+     *  에는 resumeInPlace 가 없다 — 한 원소 체인이어도 항상 roll() 로 가서 세션을 죽이고 새 세션
+     *  id 로 재기동한다(검증됨). 어느 쪽이든 이 값을 넘기는 것 자체가, 한도에 걸린 워커를 사람이
+     *  다시 띄우지 않고도 스스로 이어지게 만든다. 순서 있는 목록은 Phase 1c 가 만든다. */
     rollAccountIds?: string[]
   }): Promise<{ id: string }>
   writeToSession(sessionId: string, data: string): void

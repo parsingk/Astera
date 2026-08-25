@@ -5,9 +5,14 @@
 //   - claude: the lift time sits inside the limit phrase text (the phrase is pulled out of a transcript
 //     entry and parsed).
 // Both reuse only pieces of the pure verdict modules (claudeSignal, codexSignal, resetTime,
-// codexLocate) — RollingCoordinator, rolling.ts and codexRolling.ts are not used (orchestration
-// sessions are not rolling targets — two coordinators managing the same session lifetime differently
-// would collide over re-keying the session id).
+// codexLocate) — RollingCoordinator, rolling.ts and codexRolling.ts are not used directly here.
+// Worker sessions are attached to those coordinators now (ipc.ts's spawnSession passes
+// rollAccountIds through), and the two do not collide: rolling owns the session's lifetime end to
+// end, and orchestration only listens for session:rolled to move the Dispatch to follow the new
+// session id (Phase 1a's OrchRollTap in ipc.ts), never re-keying anything itself. probeLimit stays
+// a separate, post-mortem verdict — it runs on a Dispatch exit that rolling did not turn into a
+// roll (a real death, not a rolled-away one), to answer "did this end on a limit, and when does
+// that lift" for the orchestrator's own retry/backoff decision.
 import { open } from 'node:fs/promises'
 import type { Dispatch } from '../../core/orchestration/types'
 import { parseClaudeLimitLine, type ClaudeLimitHit } from '../../core/rolling/claudeSignal'

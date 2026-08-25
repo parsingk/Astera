@@ -498,7 +498,8 @@ app.whenReady().then(async () => {
     persistConfig: (sid, cfg) => {
       // fire-and-forget — a persist failure must not block rolling
       void core!.rollConfig.set(sid, cfg).catch(() => {})
-    }
+    },
+    orchEnv: () => orchRef?.orchEnv()
   })
   rollingRef = rolling
 
@@ -579,7 +580,8 @@ app.whenReady().then(async () => {
     lang: () => core!.lang,
     persistConfig: (sid, cfg) => {
       void core!.rollConfig.set(sid, cfg).catch(() => {}) // fire-and-forget
-    }
+    },
+    orchEnv: () => orchRef?.orchEnv()
   })
   codexRollingRef = codexRolling
   // Agent orchestration: an HTTP server embedded in the app plus the astera CLI let an agent spawn

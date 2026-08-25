@@ -89,10 +89,12 @@ import { loadRunConfigs, prepareRun } from './run/prepare'
 /** startOrchestration 이 배선에게 돌려주는 손잡이. index.ts 가 이것을 들고 있는다.
  *  **stop 은 동기다** — will-quit 에서 불리므로 비동기 정리는 프로세스가 끝나기 전에 완료될 보장이
  *  없다. onRolled 도 같은 이유로 void 를 돌려준다: 롤링의 send 탭은 동기이고, 그 자리에서 기다릴 수
- *  없다. */
+ *  없다. orchEnv 는 두 롤링 코디네이터가 읽는 세 번째 값이다 — 롤로 띄우는 워커 세션에 astera CLI
+ *  환경을 실어야 롤 뒤의 워커가 완료를 보고할 수 있다(rolling.ts/codexRolling.ts 의 orchEnv dep). */
 export interface OrchHandle {
   stop: () => void
   onRolled: (oldSessionId: string, newInfo: { id: string; accountId: string }) => void
+  orchEnv: () => { cliPath: string; infoPath: string; skillsPath: string } | undefined
 }
 
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
@@ -611,9 +613,10 @@ export function registerIpc(
     }
 
     // The coordinator never reads or writes OrchState (the server owns state).
-    // Worker sessions are not registered with rolling, scheduling, or Slack — spawnSession gates that
-    // on its opts, and here those options are simply not passed (orchestration sessions are not subject
-    // to rolling).
+    // 워커 세션은 이제 롤링에 등록된다 — 아래 spawnSession 클로저가 o.rollAccountIds 를 그대로
+    // 넘긴다. 스케줄·Slack 은 여전히 등록되지 않는다: 그 옵션들은 여기서 전달되지 않기 때문이다.
+    // 롤링만 붙이는 이유는 한도에 걸린 워커가 사람 없이도 스스로 이어지게 하는 것이고, 예약 발화와
+    // Slack 알림은 워커의 일이 아니다.
     const coordinator = new OrchCoordinator({
       // This is the only place session:created is emitted. On the user path (the 'sessions.spawn'
       // ipcMain.handle) the return value goes to the renderer and App.tsx builds the tab from it, but
@@ -634,7 +637,8 @@ export function registerIpc(
           cwd: o.cwd,
           bypassPermissions: o.bypassPermissions,
           initialPrompt: o.initialPrompt,
-          title: o.title // the worker tab title is task.title
+          title: o.title, // the worker tab title is task.title
+          rollAccountIds: o.rollAccountIds // 한 원소 체인 — 이 세션을 롤링에 등록시킨다
         } satisfies typeof o)
         try {
           send('session:created', info)
@@ -1944,7 +1948,10 @@ export function registerIpc(
             }
           )
         })
-      }
+      },
+      // 롤링 배선이 읽는다. 오케스트레이션이 꺼져 있으면 undefined — 그러면 롤된 세션은 예전처럼
+      // CLI 없이 뜨고, 그 상태에서 워커가 존재할 일도 없다.
+      orchEnv: () => orchEnvOf()
     })
   }
   if (orchWiring && core.appSettings.getOrchestrationEnabled())
