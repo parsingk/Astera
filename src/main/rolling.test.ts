@@ -1292,6 +1292,44 @@ describe('idle nudge', () => {
 
 // 코디네이터는 진짜 transcript 파일을 읽는다(ClaudeTranscriptTail → JsonlTail). fake timer가 걸린
 // 동안에는 실제 fs I/O 완료 콜백이 돌지 않아, 타이머만 진행시키면 폴링이 파일을 못 본 채로 끝난다 —
+// 롤 복사 진행 중 dispose 가드. 복사 await 중에 unregister가 체인을 폐기했으면 roll은
+// kill과 respawn을 하지 않고 반환한다. 폐기된 체인을 맵에 다시 집어넣지 않으므로 좀비 프로세스가 생기지 않는다.
+describe('roll() disposed 가드', () => {
+  it('복사 진행 중 unregister 호출하면 kill·spawn하지 않고 반환한다', async () => {
+    let copyResolve: () => void = () => {}
+    const copyPromise = new Promise<void>((r) => (copyResolve = r))
+    let copied = false
+    const h = harness({
+      copy: () => {
+        copied = true
+        return copyPromise
+      },
+      probeActivity: () => Promise.resolve(null) // 무출력 폴백 회피
+    })
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    // 롤 시작 — copy await에 진입한다
+    void h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    // 이벤트 루프가 진행되면 handleData가 비동기 경로(onLimitCandidate)를 시작하고
+    // 그것이 roll을 차이기에 roll도 들어간다. copy가 pending이므로 거기서 멈춘다.
+    await flush()
+    expect(copied).toBe(true) // copy는 호출됐다
+    expect(h.events).not.toContain('kill:s1') // 아직 kill은 없다
+    expect(h.spawned).toEqual([]) // respawn도 없다
+    // 복사 진행 중에 unregister 호출
+    h.coord.unregister('s1')
+    expect(h.events).not.toContain('kill:s1') // 이 시점에도 kill은 여전히 없다
+    // 복사가 마지막으로 완료된다
+    copyResolve()
+    await flush()
+    // kill과 spawn이 없다 — disposed 가드가 kill을 막았다
+    expect(h.events).not.toContain('kill:s1')
+    expect(h.spawned).toEqual([])
+    // 새 세션 id를 받지 않으므로 s1은 여전히 live (다만 폐기됨으로 표시)
+    expect(h.coord.findLiveByClaudeSession('claude-sess')).toBeNull()
+  })
+})
+
 // codexRolling.test.ts가 같은 문제(진짜 rollout 파일 + fake timer)에서 쓴 것과 동일한 처방이다.
 // fake 타이머를 진행시킨 뒤 실제 타이머로 이벤트 루프에 시간을 줘서 I/O를 정착시킨다.
 const realSetTimeout = setTimeout

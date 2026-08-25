@@ -377,12 +377,8 @@ export class RollingCoordinator {
    *  id 는 아무 일도 하지 않는다(handleExit 과 같다) — 배선은 provider 를 가리지 않고 두 코디네이터
    *  모두에게 부르므로, 무해한 것이 이 메서드의 계약이다.
    *
-   *  **handleExit 의 `!chain.rolling` 가드를 두지 않는다.** 그 가드는 kill 과 맵 교체 사이에 끼어든
-   *  종료가 재키잉을 깨뜨리는 것을 막지만, 여기서 그것을 따라 하면 롤 도중에 닫힌 Dispatch 의 체인이
-   *  살아남아 — 그 뒤에는 새 세션 id 를 들고 있고 그 id 와 짝지을 Dispatch 가 없으니 — 아무도 다시
-   *  버리지 못한다. 즉 이 메서드가 막으려는 상태 그 자체가 된다. 반대로 롤 도중에 버리면 최악이
-   *  맵 항목 하나와 도는 티커 하나가 남는 것이고(disposed 체인은 모든 경로가 건너뛴다) 원치 않은
-   *  타이핑은 일어나지 않는다 — 두 실패의 값이 다르다. */
+   *  복사 진행 중 폐기되면 roll() 의 disposed 가드(복사 await 뒤, kill 앞)가 kill 과 respawn 을 막고
+   *  폐기된 체인이 맵에 재삽입되지 않도록 하므로 — codex 와 일치하게 — 진정으로 깨끗하다. */
   unregister(sessionId: string): void {
     const chain = this.chains.get(sessionId)
     if (chain) this.disposeChain(chain)
@@ -755,6 +751,13 @@ export class RollingCoordinator {
       // ① copy — a claude blocked by a limit is idle, so there is no write contention
       const dest = claudeHistoryStrategy.mapTargetPath(chain.transcriptPath, target.configDir)
       await this.copy(chain.transcriptPath, dest)
+      // 복사 대기 중에 unregister()가 체인을 폐기했으면 여기서 멈춘다 — ② kill·③ spawn을 하지 않고,
+      // 폐기된 체인이 맵에 다시 들어가지 않도록 한다. 아래로 진행하면 새로 띄운 세션이 좀비가 되고
+      // 어떤 코디네이터도 다시 수거하지 못한다.
+      if (chain.disposed) {
+        this.deps.log(`roll aborted — chain disposed during the copy session=${chain.liveId}`)
+        return
+      }
       // ② kill the existing PTY → ③ respawn under the same ID. There is no await from here until
       // re-keying — even if the exit event arrives under the old key, the chain has already moved to the
       // new one, so disposeChain does not misfire.
