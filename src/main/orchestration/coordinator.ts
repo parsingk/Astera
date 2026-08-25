@@ -33,10 +33,11 @@ export interface CoordinatorDeps {
     title: string
     /** 이 워커 세션의 롤링 체인. **한 원소** 다 — 그 Dispatch 가 실제로 쓰는 계정 하나.
      *  이 필드는 프로바이더에 무관하다 — 둘의 동작은 다르다. claude 는 한 원소 체인에서 계정을
-     *  갈아타지 않고 리셋까지 기다린 뒤 같은 세션에서 재개한다(rolling.ts 의 resumeInPlace). codex
-     *  에는 resumeInPlace 가 없다 — 한 원소 체인이어도 항상 roll() 로 가서 세션을 죽이고 새 세션
-     *  id 로 재기동한다(검증됨). 어느 쪽이든 이 값을 넘기는 것 자체가, 한도에 걸린 워커를 사람이
-     *  다시 띄우지 않고도 스스로 이어지게 만든다. 순서 있는 목록은 Phase 1c 가 만든다. */
+     *  갈아타지 않고 리셋까지 기다린 뒤 같은 세션에서 재개한다(rolling.ts 의 resumeInPlace) — 다만
+     *  한도 선택지 목록이 아직 화면에 남아 있으면(choicePending) 예외적으로 codex 와 같은 경로를
+     *  탄다. codex 에는 resumeInPlace 가 없다 — 한 원소 체인이어도 항상 roll() 로 가서 세션을
+     *  죽이고 새 세션 id 로 재기동한다(검증됨). 어느 쪽이든 이 값을 넘기는 것 자체가, 한도에 걸린
+     *  워커를 사람이 다시 띄우지 않고도 스스로 이어지게 만든다. 순서 있는 목록은 Phase 1c 가 만든다. */
     rollAccountIds?: string[]
   }): Promise<{ id: string }>
   writeToSession(sessionId: string, data: string): void
@@ -601,8 +602,10 @@ export class OrchCoordinator {
         title: a.title,
         // **한도에 걸린 워커가 스스로 이어지게 하는 것이 이 한 줄이다.** 이 값을 넘기면 배선의
         // spawnSession 이 그 세션을 롤링 코디네이터에 등록하고(ipc.ts), 롤링은 계정이 하나뿐인
-        // 체인에 대해 "리셋까지 기다린 뒤 죽이지 않고 같은 세션에서 재개" 를 한다. 넘기지 않던
-        // 동안 한도에 걸린 워커는 살아 있지만 멈춘 채 남았고, 사람이 다시 띄워야 했다.
+        // 체인에 대해 리셋까지 기다린 뒤 이어간다 — 다만 그 방식은 런타임마다 다르다: claude 는
+        // 죽이지 않고 같은 세션에서 재개하고, codex 는 항상 죽이고 새 세션으로 재기동한다
+        // (rollAccountIds 필드의 JSDoc 참고). 넘기지 않던 동안 한도에 걸린 워커는 살아 있지만
+        // 멈춘 채 남았고, 사람이 다시 띄워야 했다.
         rollAccountIds: [a.accountId]
       })
       finalSessionId = spawned.id

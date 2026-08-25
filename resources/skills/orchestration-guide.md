@@ -460,9 +460,28 @@ it is in 4.3.
 
 ### A worker killed by a quota limit — `limitResetsAt`
 
-When a `worker-show` response carries `limitResetsAt` (epoch ms), it means **that worker ended because
-of an account usage limit, and the same account can be used again after that moment**. The app parsed
-that fact out of the session transcript, and it also arrives in the inbox as a `status` message.
+**Running into a quota wall is the app's problem now, not the coordinator's.** Every worker session
+runs on a one-account rolling chain — its own account, alone. When that account's quota runs out, the
+app reads the reset time out of the transcript, waits it out, and carries the work forward by itself.
+The coordinator does not wait for it and does not retry; for a chain that recovers on its own, there
+is nothing for the coordinator to do at all.
+
+"Carries forward" is not "the same session" for every runtime — that has to be said per runtime, not
+as a blanket fact:
+
+| runtime | at the reset |
+|---|---|
+| `claude` | resumes in the **same live session** — no kill, no respawn, session id unchanged. The one exception: if the limit's choice list is still on screen when the reset arrives, it takes the codex row's path instead. |
+| `codex` | kills the session and restarts it under a **new** session id |
+
+Either way the Task and its Dispatch survive: when the session id changes, the app moves the Dispatch
+onto the new one, so `worker-show --dispatch <dsp>` keeps resolving without the coordinator lifting a
+finger.
+
+Because of that, seeing `limitResetsAt` on a `worker-show` response is no longer the ordinary shape of
+running into a quota wall — it is now the narrower, rarer case where this worker's session genuinely
+died and rolling did not carry it through. The app parsed that fact out of the session transcript, and
+it also arrives in the inbox as a `status` message.
 
 ```
 worker-start --task <t> --retry-of <dsp> --agent <same runtime> --account <same account> --worktree …
@@ -475,8 +494,13 @@ worker-start --task <t> --retry-of <dsp> --agent <same runtime> --account <same 
   counts toward the circuit breaker's three.
 - **No** `limitResetsAt` means either it was not a limit or the app could not tell. The two are not
   distinguished, so treat it as an ordinary failure.
-- **The app does not wait on your behalf.** Whether to wait, give up, or ask the user is your
-  judgement. If a long wait is needed, tell the user and work another `ready` Task in the meantime.
+- **Silence matters more here than anywhere else in this guide.** The rule directly above — heartbeats,
+  terminal activity, a `check --wait` timeout, and an idle TUI are not failure signals — is now
+  load-bearing: a chain riding out a reset can go quiet for hours, and that quiet is exactly what
+  waiting looks like from outside.
+- **`worker-stop` cancels the app's own wait, too.** Stop a worker that is riding one out and the
+  coordinator is back to owning the timing itself: retry with `--retry-of` only after the reset time,
+  or the early attempt counts as one of the circuit breaker's three strikes.
 
 ## 8. Cleanup after completion — the orchestrator decides
 
