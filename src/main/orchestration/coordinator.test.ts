@@ -408,6 +408,19 @@ describe('OrchCoordinator.startWorker', () => {
     await co.startWorker({ ...baseArgs(), runCwd: dir })
     expect((deps.spawned[0] as { rollAccountIds?: string[] }).rollAccountIds).toEqual(['acc1'])
   })
+  // 재개 문구. 넘기지 않으면 롤링이 앱의 **UI 언어** 기본값을 타이핑한다 — 영어로 지시받은 워커가
+  // 다른 언어로 재개되고, 그 문구는 "계속하라"라서 보고 의무를 상기시키지 않는다.
+  it('워커 세션에 워커용 재개 문구를 넘긴다 — 보고 명령과 식별자를 담는다', async () => {
+    const deps = makeDeps()
+    const co = new OrchCoordinator(deps)
+    await co.startWorker({ ...baseArgs(), runCwd: dir })
+    const p = (deps.spawned[0] as { rollPrompt?: string }).rollPrompt ?? ''
+    expect(p).toContain('worker_done')
+    expect(p).toContain('--task-id tsk_1')
+    expect(p).toContain('--dispatch-id dsp_1')
+    // codex 는 이 문구를 CLI 인자로 넘긴다 — 론치 프롬프트와 같은 금지 문자 규칙을 받는다
+    expect(p).not.toMatch(LAUNCH_FORBIDDEN)
+  })
   it('--terminal 재사용 경로는 세션을 새로 띄우지 않고 PTY로 주입한다', async () => {
     const deps = makeDeps()
     const co = new OrchCoordinator(deps)

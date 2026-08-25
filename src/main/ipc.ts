@@ -638,7 +638,8 @@ export function registerIpc(
           bypassPermissions: o.bypassPermissions,
           initialPrompt: o.initialPrompt,
           title: o.title, // the worker tab title is task.title
-          rollAccountIds: o.rollAccountIds // 한 원소 체인 — 이 세션을 롤링에 등록시킨다
+          rollAccountIds: o.rollAccountIds, // 한 원소 체인 — 이 세션을 롤링에 등록시킨다
+          rollPrompt: o.rollPrompt // 워커용 재개 문구 — 없으면 롤링이 UI 언어 기본값을 쓴다
         } satisfies typeof o)
         try {
           send('session:created', info)

@@ -45,6 +45,12 @@ export interface CoordinatorDeps {
      *  **철자 오류를 잡을 뿐 누락은 잡지 못한다**: optional 필드가 없는 객체도 그 타입을 만족한다.
      *  required 로 두면 지운 자리가 곧 컴파일 오류다. */
     rollAccountIds: string[]
+    /** 롤링이 재개할 때 이 세션에 보낼 문구. 넘기지 않으면 롤링이 **앱의 UI 언어** 기본값
+     *  (`rolling.continuePrompt`)을 쓴다 — 영어로 쓰인 spec 을 받은 워커가 한국어로 재개될 수 있고,
+     *  그 문구("이어서 작업 진행해 줘")는 끝내고 보고하라는 말이 아니라 계속하라는 말이다. 그래서
+     *  워커에게는 워커용 문구를 준다(startWorker 의 호출 자리). optional 인 이유는 넘기지 않아도
+     *  롤링이 기본값으로 돌기 때문이다 — rollAccountIds 처럼 지우면 기능이 꺼지는 값이 아니다. */
+    rollPrompt?: string
   }): Promise<{ id: string }>
   writeToSession(sessionId: string, data: string): void
   /** Is that session working. **null = it cannot be decided for this provider** (codex — a
@@ -612,7 +618,16 @@ export class OrchCoordinator {
         // 죽이지 않고 같은 세션에서 재개하고, codex 는 항상 죽이고 새 세션으로 재기동한다
         // (rollAccountIds 필드의 JSDoc 참고). 넘기지 않던 동안 한도에 걸린 워커는 살아 있지만
         // 멈춘 채 남았고, 사람이 다시 띄워야 했다.
-        rollAccountIds: [a.accountId]
+        rollAccountIds: [a.accountId],
+        // 재개 문구도 워커의 것을 준다. 넘기지 않으면 롤링은 앱의 UI 언어 문구를 타이핑하는데,
+        // 그것은 워커에게 두 가지로 틀리다: 영어로 지시받은 워커가 다른 언어로 재개되고, 문구가
+        // "계속하라" 여서 끝내고 보고하라는 의무(buildSpecFile 의 Reporting obligation)를 상기시키지
+        // 않는다. 명령의 모양과 식별자는 그 spec 절과 같은 것을 쓴다 — 워커가 이미 읽은 문장이다.
+        // 금지 문자를 넣지 않는다: codex 는 이 문구를 CLI 인자로 넘긴다(LAUNCH_FORBIDDEN).
+        rollPrompt:
+          `Continue the work. When it is finished, report exactly once as the reporting obligation ` +
+          `in your spec file says, with astera send --type worker_done --task-id ${a.taskId} ` +
+          `--dispatch-id ${a.dispatchId}.`
       })
       finalSessionId = spawned.id
     }
