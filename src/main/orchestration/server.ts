@@ -73,6 +73,19 @@ export interface OrchServerDeps {
     terminalAccountId?: string
   }): Promise<{ sessionId: string; cwd: string; specPath: string }>
   releaseWorker(a: { dispatchId: string }): Promise<void>
+  /** 그 세션의 롤링 체인을 버린다 — **세션은 죽이지 않는다**(releaseWorker 와 그 점이 다르다).
+   *
+   *  **Dispatch 가 닫혔는데 세션이 살아 있는 자리에서만 부른다.** 워커는 보고한 뒤에도 일부러 살아
+   *  있고(가이드 8절), 롤링 체인은 세션이 죽을 때만 버려졌다. 그 사이의 창에서 롤링은 이미 끝난 일의
+   *  세션에 재개 프롬프트를 타이핑하거나(claude 의 idle nudge) 그 세션을 죽이고 다시 띄운다(codex 의
+   *  maxed+silent 폴백) — 아무도 요청하지 않은 작업이고, 워크트리 워커라면 커밋 의무까지 딸린다.
+   *
+   *  **세션을 죽이는 경로에서는 부르지 않는다**(worker-stop, run-delete, run-pause, 그리고
+   *  handleExit). 그쪽은 세션 종료가 알아서 체인을 버린다.
+   *
+   *  주입되지 않으면 아무것도 하지 않는다 — probeLimit?/startValidation? 과 같은 "주입되지 않으면
+   *  그 기능이 없다" 관례다. 모르는 sessionId 도 무해하다(코디네이터 쪽 계약). */
+  unregisterRolling?(sessionId: string): void
   /** Copies the current `orchestration.json` to `.bak` right before a destructive operation. The
    *  wiring passes OrchestrationStore.backup. Optional for the same reason as now? and log? — if it
    *  is not injected the backup is skipped (existing tests that do not use the store). */
@@ -908,6 +921,11 @@ export async function handleCommand(
           x.id === d.id ? { ...x, workerState: 'outcome_unknown' as const, endedAt: now } : x
         )
       })
+      // 이 명령은 아무 프로세스도 건드리지 않으므로 그 세션은 살아 있을 수 있다 — Dispatch 는 닫혔고
+      // 세션은 살아 있는, unregisterRolling 이 다루는 바로 그 조합이다. 추적을 포기한 일에 롤링이
+      // 재개 프롬프트를 밀어 넣거나(claude) 그 세션을 죽이고 다시 띄우는(codex) 것은 이 명령이
+      // 약속한 "아무것도 하지 않는다" 와 어긋난다. 이미 죽은 세션이면 무해한 no-op 이다.
+      deps.unregisterRolling?.(d.sessionId)
       return okBody({ abandoned: d.id, note: 'resources may still be live' })
     }
     case 'run-use': {
@@ -997,6 +1015,18 @@ export async function handleCommand(
               : next.messages
           }
         }
+        /** 방금 닫힌 Dispatch 의 세션에서 롤링 체인을 걷는다. **세션은 죽이지 않는다** — 워커는
+         *  보고 뒤에도 프롬프트에서 기다리는 것이 규칙이고(가이드 8절), 체인만 남으면 롤링이 끝난
+         *  일의 세션에 손을 댄다(unregisterRolling 의 JSDoc). 두 보고 경로(검토·구현)가 같은 일을
+         *  해야 하므로 withLimit 과 같은 이유로 한 군데에 둔다.
+         *
+         *  **방금 커밋한 상태에서 sessionId 를 다시 읽는다.** 위 탐침의 await 동안 롤이 일어나
+         *  Dispatch 가 새 세션으로 옮겨 갔을 수 있고(ipc.ts 의 OrchRollTap), 진입 스냅숏의 값은 그때
+         *  이미 죽은 세션을 가리킨다 — 그러면 살아 있는 체인은 그대로 남는다. */
+        const dropRollingChain = (): void => {
+          const closed = deps.getState().dispatches.find((d) => d.id === dispatchId)
+          if (closed) deps.unregisterRolling?.(closed.sessionId)
+        }
         // 검토 Dispatch 의 보고는 다른 판정으로 간다. applyWorkerDone 으로 보내면 dispatched 에서만
         // 나가는 전이를 reviewing 인 Task 에 적용하려다 거절되고, 검토 결과가 어디에도 반영되지 않는다.
         if (reporting?.review) {
@@ -1015,6 +1045,8 @@ export async function handleCommand(
           )
           if (!r.ok) return bad(r.error)
           await deps.setState(withLimit(r.state))
+          // 'alreadyReported' 는 아무것도 닫지 않았다(재전송) — 그때 이미 걷혔다
+          if (r.value === 'accepted') dropRollingChain()
           return okBody(r.value)
         }
         // getState is read again here — the state may have changed during the probeLimit await
@@ -1043,6 +1075,7 @@ export async function handleCommand(
         )
         if (!result.ok) return bad(result.error)
         await deps.setState(withLimit(result.state))
+        if (result.value === 'accepted') dropRollingChain() // 위 검토 경로와 같은 이유·같은 조건
         // 커밋 뒤에 부른다 — 검증이 먼저 끝나면 아직 validating 이 아닌 Task 에 결과를 쓰게 된다.
         // result.value가 'alreadyReported'인 재전송은 상태를 바꾸지 않았다(첫 호출의 커밋을 그대로
         // 다시 읽을 뿐이다) — 걸러내지 않으면 재전송마다 검증이 다시 큐에 들어가고, 그 사이 Task가

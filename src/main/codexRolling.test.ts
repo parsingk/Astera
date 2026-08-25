@@ -348,6 +348,45 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
+  // 아래 unregister 테스트의 대조군. 그 테스트와 setup 이 같고 unregister 한 줄만 없다 — 그것이
+  // 부정 단언의 근거다(이 테스트가 통과하는 동안에만 아래가 무언가를 증명한다).
+  // **하네스마다 테스트를 나눈다**: findRollout 은 파일의 실제 생성 시각을 register 시각(가짜 시계)과
+  // 비교하므로, 한 테스트 안에서 가짜 시간을 45초 흘린 뒤 두 번째 체인을 등록하면 그 체인은 rollout
+  // 을 영원히 못 찾는다(그러면 부정 단언이 헛돈다 — 실제로 그렇게 한 번 헛돌았다).
+  it('maxed+silent 폴백 틱은 100%+30초 침묵으로 롤한다', async () => {
+    const h = harness()
+    await writeRollout({ accountId: 'c1', uuid: 'cx-unreg-ctl', cwd: h.info1.cwd, primary: 100 })
+    h.coord.register(h.info1)
+    await advance(1_500) // 매핑 폴링
+    await advance(45_000) // 100% + 30초 침묵 → 폴백 판정 ③
+    expect(h.events).toContain('spawn:s2:c2')
+    h.coord.stop()
+  })
+
+  // Dispatch 가 닫힌 워커 세션. 워커에게 유휴 알림 같은 입력은 필요 없다 — codex 쪽 진입점은
+  // 100%로 굳은 스냅숏과 30초 침묵만으로 도는 틱의 폴백 판정이고, 그 끝은 kill + 재spawn 이다.
+  it('unregister한 세션은 maxed+silent 틱에도 롤하지 않는다', async () => {
+    const h = harness()
+    await writeRollout({ accountId: 'c1', uuid: 'cx-unreg', cwd: h.info1.cwd, primary: 100 })
+    h.coord.register(h.info1)
+    await advance(1_500)
+    h.coord.unregister('s1') // Dispatch 가 닫혔다 — 세션은 살아 있다
+    await advance(45_000)
+    expect(h.events).toEqual([]) // kill 도 spawn 도 없다
+    h.coord.stop()
+  })
+
+  it('unregister는 등록되지 않은 id에 무해하다 — 다른 체인도 건드리지 않는다', async () => {
+    const h = harness()
+    await writeRollout({ accountId: 'c1', uuid: 'cx-unreg-2', cwd: h.info1.cwd, primary: 100 })
+    h.coord.register(h.info1)
+    await advance(1_500)
+    expect(() => h.coord.unregister('s-nope')).not.toThrow()
+    await advance(45_000)
+    expect(h.events).toContain('spawn:s2:c2') // s1 의 체인은 그대로 살아 있다
+    h.coord.stop()
+  })
+
   it('handleExit은 체인을 정리한다', async () => {
     const h = harness()
     await writeRollout({ accountId: 'c1', uuid: 'cx-6', cwd: h.info1.cwd, primary: 95 })

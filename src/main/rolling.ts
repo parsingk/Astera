@@ -364,6 +364,30 @@ export class RollingCoordinator {
     if (chain && !chain.rolling) this.disposeChain(chain)
   }
 
+  /** 세션은 살려 둔 채 그 세션의 체인만 버린다 — **kill 하지 않는다.**
+   *
+   *  오케스트레이션 배선이 부른다. 워커 세션은 `worker_done` 을 보고한 뒤에도 일부러 살아 있고
+   *  (가이드 8절: 보고하고 프롬프트에서 대기, 정리는 코디네이터의 나중 판단이다), 체인은 세션이
+   *  죽을 때만 버려졌다. 그 사이 — Dispatch 는 닫혔고 체인은 살아 있는 창 — 에서 이 파일의 두
+   *  경로가 그 세션에 재개 프롬프트를 타이핑할 수 있었다(idleNudgeCheck 와 resetAnchorCheck). 방금
+   *  한도를 태운 워커는 그 게이트(사용률 ≥ GATE_PCT)를 지나기 쉽고, 그렇게 들어간 프롬프트는
+   *  **아무도 요청하지 않은 작업**이 된다 — 워크트리라면 커밋 의무까지 딸린 작업이다.
+   *
+   *  그래서 체인의 수명을 일의 수명에 묶는다: Dispatch 가 닫히면 체인도 사라진다. 등록되지 않은
+   *  id 는 아무 일도 하지 않는다(handleExit 과 같다) — 배선은 provider 를 가리지 않고 두 코디네이터
+   *  모두에게 부르므로, 무해한 것이 이 메서드의 계약이다.
+   *
+   *  **handleExit 의 `!chain.rolling` 가드를 두지 않는다.** 그 가드는 kill 과 맵 교체 사이에 끼어든
+   *  종료가 재키잉을 깨뜨리는 것을 막지만, 여기서 그것을 따라 하면 롤 도중에 닫힌 Dispatch 의 체인이
+   *  살아남아 — 그 뒤에는 새 세션 id 를 들고 있고 그 id 와 짝지을 Dispatch 가 없으니 — 아무도 다시
+   *  버리지 못한다. 즉 이 메서드가 막으려는 상태 그 자체가 된다. 반대로 롤 도중에 버리면 최악이
+   *  맵 항목 하나와 도는 티커 하나가 남는 것이고(disposed 체인은 모든 경로가 건너뛴다) 원치 않은
+   *  타이핑은 일어나지 않는다 — 두 실패의 값이 다르다. */
+  unregister(sessionId: string): void {
+    const chain = this.chains.get(sessionId)
+    if (chain) this.disposeChain(chain)
+  }
+
   /** A dev hook — forces a roll as if a real limit had hit, bypassing the gates (for manual end-to-end checks) */
   async forceRoll(sessionId?: string): Promise<void> {
     const chain = sessionId ? this.chains.get(sessionId) : [...this.chains.values()][0]

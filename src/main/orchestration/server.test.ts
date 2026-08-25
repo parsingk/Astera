@@ -1671,6 +1671,84 @@ describe("send --type worker_done --outcome failed: 한도 탐침", () => {
   })
 })
 
+describe('unregisterRolling — Dispatch 가 닫히는데 세션은 살아 있는 자리', () => {
+  /** run + task + 열린 dispatch(sessionId='sess1') + unregisterRolling 기록 */
+  const seed = async (): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    taskId: string
+    dispatchId: string
+    dropped: string[]
+  }> => {
+    const deps = makeDeps()
+    const dropped: string[] = []
+    deps.unregisterRolling = (sessionId) => dropped.push(sessionId)
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    await call(deps, 'worker-start', { taskId, agent: 'codex', account: 'acc1', worktree: 'current' })
+    return { deps, taskId, dispatchId: deps.getState().dispatches[0].id, dropped }
+  }
+
+  it('worker_done 이 그 세션의 롤링 체인을 걷는다', async () => {
+    const { deps, taskId, dispatchId, dropped } = await seed()
+    const r = await call(
+      deps,
+      'send',
+      { type: 'worker_done', taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' },
+      'sess1'
+    )
+    expect(r.status).toBe(200)
+    expect(dropped).toEqual(['sess1'])
+  })
+
+  // 재전송은 아무것도 닫지 않는다(alreadyReported) — 그때 걷는 것은 이미 걷힌 것을 또 부르는 일이다
+  it('worker_done 재전송에서는 다시 걷지 않는다', async () => {
+    const { deps, taskId, dispatchId, dropped } = await seed()
+    const done = { type: 'worker_done', taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' }
+    await call(deps, 'send', done, 'sess1')
+    const again = await call(deps, 'send', done, 'sess1')
+    expect(again.body).toBe('alreadyReported')
+    expect(dropped).toEqual(['sess1'])
+  })
+
+  // 이 명령은 어떤 프로세스도 건드리지 않는다 — Dispatch 만 닫히고 세션은 살아 있을 수 있다
+  it('worker-abandon 도 걷는다', async () => {
+    const { deps, dispatchId, dropped } = await seed()
+    const r = await call(deps, 'worker-abandon', { dispatch: dispatchId })
+    expect(r.status).toBe(200)
+    expect(dropped).toEqual(['sess1'])
+  })
+
+  // 세션을 죽이는 경로에서는 부르지 않는다 — 종료가 스스로 체인을 버린다(handleExit → disposeChain)
+  it('worker-stop 은 걷지 않는다 — 세션을 죽이는 경로다', async () => {
+    const { deps, dispatchId, dropped } = await seed()
+    const r = await call(deps, 'worker-stop', { dispatch: dispatchId })
+    expect(r.status).toBe(200)
+    expect(dropped).toEqual([])
+  })
+
+  it('세션 종료(handleExit)도 걷지 않는다 — 롤링이 이미 버렸다', async () => {
+    const { deps, dropped } = await seed()
+    await handleExit(deps, { sessionId: 'sess1', exitCode: 0 })
+    expect(deps.getState().dispatches[0].endedAt).toBeDefined()
+    expect(dropped).toEqual([])
+  })
+
+  // 주입되지 않은 배선(기존 테스트 포함)에서 보고 경로가 그대로 도는지 — 선택적 dep 관례
+  it('주입되지 않아도 worker_done 은 그대로 200 이다', async () => {
+    const { deps, taskId, dispatchId } = await seed()
+    deps.unregisterRolling = undefined
+    const r = await call(
+      deps,
+      'send',
+      { type: 'worker_done', taskId, dispatchId, outcome: 'succeeded', subject: 's', body: 'b' },
+      'sess1'
+    )
+    expect(r.status).toBe(200)
+  })
+})
+
 describe('run-create — cwd 정규화', () => {
   it('해석기가 주입되면 그것이 돌려준 값을 cwd로 저장한다', async () => {
     const deps = makeDeps()

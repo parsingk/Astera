@@ -1124,6 +1124,36 @@ describe('idle nudge', () => {
     expect(h.written.map((w) => w.data)).toEqual(['이어서 작업 진행해 줘', '\r'])
   })
 
+  // Dispatch 가 닫힌 워커 세션. 위 테스트와 setup 이 같고 unregister 한 줄만 다르다 — 그것이
+  // 이 부정 단언의 근거다(위가 통과하는 동안에만 이 테스트가 무언가를 증명한다).
+  it('unregister한 세션은 유휴 알림에도 프롬프트를 받지 않는다', async () => {
+    const h = harness({
+      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
+      readPending: () => Promise.resolve(null)
+    })
+    h.payloads.set('s1', payload(95))
+    h.coord.register(h.info1)
+    h.coord.unregister('s1') // Dispatch 가 닫혔다 — 세션은 살아 있다
+    h.coord.onHookEvent('s1', idleHook)
+    await advanceIo(11 * MIN)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(h.written).toEqual([])
+  })
+
+  it('unregister는 등록되지 않은 id에 무해하다 — 다른 체인도 건드리지 않는다', async () => {
+    const h = harness({
+      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
+      readPending: () => Promise.resolve(null)
+    })
+    h.payloads.set('s1', payload(95))
+    h.coord.register(h.info1)
+    expect(() => h.coord.unregister('s-nope')).not.toThrow()
+    h.coord.onHookEvent('s1', idleHook)
+    await advanceIo(11 * MIN)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(h.written.map((w) => w.data)).toEqual(['이어서 작업 진행해 줘', '\r'])
+  })
+
   it('같은 스톨에서 두 번 nudge하지 않고 stalled로 사람을 부른다', async () => {
     const h = harness({
       probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),

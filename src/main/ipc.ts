@@ -1768,6 +1768,14 @@ export function registerIpc(
         }
         await coordinator.releaseWorker(args)
       },
+      // Dispatch 가 닫혔는데 세션은 살아 있는 자리에서 서버가 부른다(server.ts 의 JSDoc). provider 를
+      // 가리지 않고 둘 다 부른다 — 등록은 계정의 provider 로 갈리지만(spawnSession) 여기서 그것을
+      // 다시 알아내면 판정이 두 곳으로 갈라진다. 각 unregister 는 모르는 id 에 무해하고, 이것은
+      // onData/onExit 이 두 코디네이터를 함께 부르는 것과 같은 관례다.
+      unregisterRolling: (sessionId) => {
+        rolling?.unregister(sessionId)
+        codexRolling?.unregister(sessionId)
+      },
       listAccounts: (provider) =>
         core.accounts
           .list()

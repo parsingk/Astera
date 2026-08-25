@@ -161,6 +161,17 @@ export class CodexRollingCoordinator {
     if (chain && !chain.rolling) this.disposeChain(chain)
   }
 
+  /** 세션은 살려 둔 채 그 세션의 체인만 버린다 — **kill 하지 않는다.** rolling.ts 의 같은 이름과
+   *  같은 계약이다(그 JSDoc 이 이유를 적고 있다). codex 쪽 위험은 더 넓다: 여기서 닫힌 Dispatch 의
+   *  세션을 집어 가는 것은 유휴 알림이 필요 없는 tick 의 폴백 판정(maxed+silent — 100% 로 굳은
+   *  스냅숏과 30초 침묵만으로 충분하다)이고, 그 끝은 프롬프트 한 줄이 아니라 kill + 재spawn 이다.
+   *
+   *  등록되지 않은 id 는 아무 일도 하지 않는다 — 배선은 두 코디네이터 모두에게 부른다. */
+  unregister(sessionId: string): void {
+    const chain = this.chains.get(sessionId)
+    if (chain) this.disposeChain(chain)
+  }
+
   /** A dev hook — forces a roll as if a real limit had hit, bypassing the gates (mirrors forceRoll in rolling.ts) */
   async forceRoll(sessionId?: string): Promise<void> {
     const chain = sessionId ? this.chains.get(sessionId) : [...this.chains.values()][0]
