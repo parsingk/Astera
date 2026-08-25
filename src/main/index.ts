@@ -8,7 +8,7 @@ import trayAsset from '../../resources/tray.png?asset'
 import { createCore, type Core } from './core'
 import { applyLoginPath } from './loginPath'
 import { shouldForceWaylandOzone } from './ozone'
-import { registerIpc, parseAllowedExternalUrl } from './ipc'
+import { registerIpc, parseAllowedExternalUrl, type OrchHandle } from './ipc'
 import { isOwnDocument } from './navigationGuard'
 import { RollingCoordinator } from './rolling'
 import { SchedulerCoordinator } from './scheduler'
@@ -52,7 +52,7 @@ let schedulerRef: SchedulerCoordinator | null = null
 let codexTurnsRef: CodexTurnWatcher | null = null
 let slackInboxControllerRef: SlackInboxController | null = null // Slack inbound socket rebuilder — cut on quit
 let rollingRef: RollingCoordinator | null = null // lets the hook callback reach a coordinator created later
-let orchRef: { stop: () => void } | null = null // orchestration server shutdown cleanup
+let orchRef: OrchHandle | null = null // orchestration shutdown cleanup + the rolling seam
 let tray: Tray | null = null
 let quitting = false
 let mainWindow: BrowserWindow | null = null // focus target for the single-instance second-instance event
@@ -464,6 +464,17 @@ app.whenReady().then(async () => {
       } catch {
         /* a schedule tap failure must not block rolling or the Slack notification */
       }
+      // 오케스트레이션도 롤링 이벤트를 탭한다. 워커 세션이 롤되면 그 Dispatch 의 sessionId 를 새
+      // 세션으로 옮겨야 한다 — 그 값이 worker_done 을 되돌려 묶는 유일한 키다. 다른 탭들과 같은
+      // 이유로 자기 try 안에 격리한다.
+      try {
+        if (channel === 'session:rolled') {
+          const p = payload as { oldSessionId: string; info: SessionInfo }
+          orchRef?.onRolled(p.oldSessionId, p.info)
+        }
+      } catch {
+        /* an orchestration tap failure must not block rolling */
+      }
       // Slack notifications tap rolling events too. Isolated so a tap exception does not block rolling.
       try {
         if (channel === 'session:rolled') {
@@ -545,6 +556,14 @@ app.whenReady().then(async () => {
         }
       } catch {
         /* a Slack tap failure must not block rolling */
+      }
+      try {
+        if (channel === 'session:rolled') {
+          const p = payload as { oldSessionId: string; info: SessionInfo }
+          orchRef?.onRolled(p.oldSessionId, p.info)
+        }
+      } catch {
+        /* an orchestration tap failure must not block rolling */
       }
     },
     log: (m) => {

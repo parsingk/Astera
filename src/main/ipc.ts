@@ -29,6 +29,7 @@ import {
   type OrchServer,
   type OrchServerDeps
 } from './orchestration/server'
+import { OrchRollTap } from './orchestration/rollTap'
 import { TaskValidator, ValidatorBusyError } from './orchestration/validator'
 import {
   applyValidationResult,
@@ -86,6 +87,15 @@ import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
 import { loadRunConfigs, prepareRun } from './run/prepare'
 
+/** startOrchestration 이 배선에게 돌려주는 손잡이. index.ts 가 이것을 들고 있는다.
+ *  **stop 은 동기다** — will-quit 에서 불리므로 비동기 정리는 프로세스가 끝나기 전에 완료될 보장이
+ *  없다. onRolled 도 같은 이유로 void 를 돌려준다: 롤링의 send 탭은 동기이고, 그 자리에서 기다릴 수
+ *  없다. */
+export interface OrchHandle {
+  stop: () => void
+  onRolled: (oldSessionId: string, newInfo: { id: string; accountId: string }) => void
+}
+
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
  *  in this file — the two values the coordinator needs (spawnSession, busyState) are owned here, so
  *  moving that into index.ts would only create roundabout wiring. index.ts gets the same share as it
@@ -95,7 +105,7 @@ export interface OrchWiring {
   /** Hands over the shutdown cleanup handle once the server is up. Called from will-quit — and it is
    *  synchronous: asynchronous cleanup may not finish before the process ends, and deleting the token
    *  file has to happen (OS permissions on the token file are the access control). */
-  onStarted: (h: { stop: () => void }) => void
+  onStarted: (h: OrchHandle) => void
 }
 
 /** 앱 자신이 명령을 부를 때의 호출자 id. **어떤 세션 id 와도 겹칠 수 없는 모양**이어야 한다 —
@@ -159,6 +169,10 @@ export function registerIpc(
     infoPath: string
     skillsPath: string
   } | null = null
+  /** 롤링↔Dispatch 이음매. startOrchestration 이 만들고 stop 이 버린다. orch 와 생명주기가 같지만
+   *  따로 두는 이유는 onExit 이 orch 대입보다 훨씬 먼저 배선되기 때문이다 — 그 콜백은 호출 시점에
+   *  이 변수를 읽는다. */
+  let orchRollTap: OrchRollTap | null = null
   /** 검증기. startOrchestration 이 만들 때까지, 그리고 오케스트레이션이 꺼져 있으면 null 이다 */
   let orchValidator: TaskValidator | null = null
   /** 예약 템플릿의 다음 발화 시각. **상태에 저장하지 않는다** — 재시작하면 비어 있고, 그때
@@ -280,12 +294,13 @@ export function registerIpc(
     } catch {
       /* A Slack failure does not block the session */
     }
-    // Handling Dispatch termination for orchestration. Unlike the taps above this one is async — it
-    // awaits the limit probe (a file read) and setState (a disk write). That is why it has to be a
-    // .catch() chain rather than try/catch: a synchronous try/catch cannot catch an async function's
-    // rejection, and an uncaught one kills the process. handleExit is a module function in server.ts
-    // and takes the server deps (the coordinator does not know about state).
-    if (orch)
+    // Handling Dispatch termination for orchestration. **곧바로 부르지 않는다** — 롤링의 kill 이 만든
+    // exit 가 살아 있는 워커의 Dispatch 를 닫는 것을 막기 위해 OrchRollTap 이 EXIT_DEFER_MS 만큼
+    // 미뤄 두고, 그 창 안에 session:rolled 가 오면 취소한다(rollTap.ts 머리말).
+    // 탭이 없을 때만(오케스트레이션이 켜지기 전) 예전 경로로 곧바로 부른다 — 그 시점에는 Dispatch 가
+    // 존재할 수 없으므로 미룰 이유도 없다.
+    if (orchRollTap) orchRollTap.onExit(e)
+    else if (orch)
       void orchHandleExit(orch.deps, e).catch((err) =>
         orchLog(`handleExit failed session=${e.sessionId}: ${String(err)}`)
       )
@@ -1856,6 +1871,7 @@ export function registerIpc(
       throw err
     }
     orch = { server, deps, cliPath, infoPath, skillsPath }
+    orchRollTap = new OrchRollTap(deps)
     orchLog(`started — port=${server.port} cli=${cliPath} skills=${skillsPath}`)
     // One push for the state that was just loaded off disk. Startup races the renderer's first
     // orch.list (both happen at app start) and the settings toggle boots this long after it, and in
@@ -1895,6 +1911,9 @@ export function registerIpc(
       .catch((err) => orchLog(`stub install failed: ${String(err)}`))
     orchWiring?.onStarted({
       stop: () => {
+        // 미뤄 둔 exit 를 버린다. 남겨 두면 서버가 내려간 뒤에 setState 가 돌 수 있다.
+        orchRollTap?.dispose()
+        orchRollTap = null
         if (orchFireTimer) {
           clearInterval(orchFireTimer)
           orchFireTimer = null
@@ -1908,6 +1927,11 @@ export function registerIpc(
           /* Already gone — ignore */
         }
         void server.close()
+      },
+      onRolled: (oldSessionId, newInfo) => {
+        // 롤링의 send 탭은 동기다 — 기다릴 자리가 없어 던져 놓고 간다. onRolled 는 스스로 예외를
+        // 삼키므로(rollTap.ts) 여기서 catch 를 더하지 않는다.
+        void orchRollTap?.onRolled(oldSessionId, newInfo)
       }
     })
   }
