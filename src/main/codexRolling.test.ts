@@ -469,6 +469,25 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
+  it('응답 못한 선택 목록이 남아 있으면 제자리 재개 대신 kill 경로로 간다', async () => {
+    const h = harness()
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 300_000) / 1000)
+    await writeRollout({
+      accountId: 'c1', uuid: 'cx-inplace-5', cwd: single.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register(single)
+    await advance(1_500)
+    // 머리말만 온 프롬프트 — 번호가 없어 응답할 수 없다(화면에 남는다)
+    h.coord.handleData({ sessionId: 's1', data: '  Approaching rate ' + 'limits\n  Switch?\n' })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    await advance(400_000)
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c1']) // 화면을 지우는 경로
+    expect(h.written).toEqual([]) // 목록 위에 문장을 타이핑하지 않는다
+    h.coord.stop()
+  })
+
   it('forceRoll은 게이트를 건너뛰고 즉시 롤한다 (dev 훅)', async () => {
     const h = harness()
     await writeRollout({ accountId: 'c1', uuid: 'cx-5', cwd: h.info1.cwd, primary: 3 })

@@ -340,6 +340,19 @@ describe('CodexModelChoiceScanner', () => {
     expect(s.push(CHUNK_A + CHUNK_B)).toBe(2)
     expect(s.push('그 뒤 이어지는 평범한 출력\n')).toBeNull()
   })
+
+  it('번호를 못 찾아 응답하지 못한 프롬프트는 pending 으로 남는다', () => {
+    const s = new CodexModelChoiceScanner()
+    expect(s.push(CHUNK_A)).toBeNull()
+    expect(s.pending()).toBe(true)
+  })
+
+  it('응답한 프롬프트는 pending 이 아니다', () => {
+    const s = new CodexModelChoiceScanner()
+    expect(s.push(CHUNK_A)).toBeNull()
+    expect(s.push(CHUNK_B)).toBe(2) // 응답과 함께 tail 이 비워진다
+    expect(s.pending()).toBe(false)
+  })
 })
 
 const state = (o: Partial<CodexLimitState>): CodexLimitState => ({

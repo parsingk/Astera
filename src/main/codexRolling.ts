@@ -472,6 +472,14 @@ export class CodexRollingCoordinator {
   private resumeAfterWait(chain: Chain, toIndex: number): Promise<void> {
     if (chain.disposed || chain.rolling) return Promise.resolve()
     if (toIndex !== chain.cycle.currentIndex) return this.roll(chain, toIndex) // 계정이 바뀐다
+    if (chain.modelChoice.pending()) {
+      // 목록이 열린 채라면 Enter 가 하이라이트된 항목을 승인한다. kill 은 화면을 통째로 지우므로
+      // 그쪽이 안전하다 — claude 쪽 choicePending 과 같은 판단이다.
+      this.deps.log(
+        `codex resume in place skipped — model prompt still on screen session=${chain.liveId}`
+      )
+      return this.roll(chain, toIndex)
+    }
     return this.resumeInPlace(chain)
   }
 
