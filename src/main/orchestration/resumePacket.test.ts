@@ -304,12 +304,45 @@ describe('buildResumeNote', () => {
     expect(note).not.toContain('astera send')
   })
 
-  it('git 을 읽을 수 없으면 null — 확인한 것이 없으므로 할 말이 없다', async () => {
+  it('git 을 읽을 수 없으면 null — 확인한 것이 없으므로 할 말이 없다, 그리고 로그를 남긴다', async () => {
     const specPath = path.join(specDir, 'spec.md')
     await fs.writeFile(specPath, '# do the thing\n\nimplement it\n', 'utf8')
     const { s } = seed(specPath)
+    const log = vi.fn()
 
-    expect(await buildResumeNote('sess1', s, { git: UNREADABLE_GIT, now: () => NOW })).toBeNull()
+    const note = await buildResumeNote('sess1', s, { git: UNREADABLE_GIT, now: () => NOW, log })
+
+    expect(note).toBeNull()
+    // follow-up round: 소리 없이 사라지는 노트가 이 함수의 실제 사고였다 — 유일하게 남은 폐기
+    // 경로는 반드시 이유를 남긴다.
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(log.mock.calls[0]?.[0]).toContain('resume note skipped')
+  })
+
+  // follow-up round — Fix A: 이 문자열은 packet 쪽 한 줄과 달리 **파일 이름을 담는다.** 노트 전체를
+  // LAUNCH_FORBIDDEN 으로 검사하던 동안, 저장소에 `docs/R&D notes.md` 하나만 있어도 `&` 때문에
+  // 노트가 통째로 버려졌다 — 로그도 없이. 그 저장소에서는 이 Phase 의 claude 쪽 가치 전부가 사라진다.
+  // 'update' 를 묻는 세 자리는 모두 살아 있는 PTY 에 타이핑하므로 codex 의 인자 sanitizer 가 도는
+  // 자리가 아니고, 검사는 지킬 것 없이 기능을 껐다.
+  it('파일 이름에 금지 문자가 있어도 노트는 그대로 도착한다', async () => {
+    const specPath = path.join(specDir, 'spec.md')
+    await fs.writeFile(specPath, '# do the thing\n\nimplement it\n', 'utf8')
+    const { s } = seed(specPath)
+    const log = vi.fn()
+    const gitWithAmpersand = fakeGit({
+      'rev-parse HEAD': { ok: true, stdout: 'head-now', stderr: '' },
+      '-c core.quotepath=false status --short': {
+        ok: true,
+        stdout: ' M "docs/R&D notes.md"\n?? src/b.ts\n',
+        stderr: ''
+      }
+    })
+
+    const note = await buildResumeNote('sess1', s, { git: gitWithAmpersand, now: () => NOW, log })
+
+    expect(note).not.toBeNull()
+    expect(note).toContain('docs/R&D notes.md')
+    expect(log).not.toHaveBeenCalled()
   })
 
   it('Job 워커가 아니면 null', async () => {
@@ -320,13 +353,4 @@ describe('buildResumeNote', () => {
     expect(await buildResumeNote('plain-tab', s, { git: withChanges(), now: () => NOW })).toBeNull()
   })
 
-  it('돌려준 문장에 LAUNCH_FORBIDDEN 이 걸리는 문자가 없다', async () => {
-    const specPath = path.join(specDir, 'spec.md')
-    await fs.writeFile(specPath, '# do the thing\n\nimplement it\n', 'utf8')
-    const { s } = seed(specPath)
-
-    const note = (await buildResumeNote('sess1', s, { git: withChanges(), now: () => NOW }))!
-
-    expect(LAUNCH_FORBIDDEN.test(note)).toBe(false)
-  })
 })

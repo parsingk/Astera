@@ -194,7 +194,8 @@ export async function buildResumePacket(
  * `resumeText(sessionId, form)` 두 번째 인자가 그 선택이고, 이 파일은 form 을 해석하지 않는다.
  *
  * 실패는 전부 `null` 이다 — 그러면 부르는 쪽은 덧붙이지 않고 기존 문장만 쓴다. git 을 못 읽으면
- * 확인한 것이 하나도 없으므로 `formatResumeNote` 자체가 `null` 을 낸다.
+ * 확인한 것이 하나도 없으므로 `formatResumeNote` 자체가 `null` 을 내고, **그 폐기는 로그로 남는다**
+ * (아래 주석 — 소리 없이 사라지는 노트가 이 함수의 실제 사고였다).
  */
 export async function buildResumeNote(
   sessionId: string,
@@ -213,10 +214,24 @@ export async function buildResumeNote(
     const checkpoint = buildCheckpoint(state, { dispatchId: dispatch.id, git, now })
     if (!checkpoint) return null
     const note = formatResumeNote(checkpoint)
-    // 이 노트는 claude 의 PTY 로만 가지만(위 주석의 세 자리는 전부 rolling.ts 다) 금지 문자 검사는
-    // 그대로 한다 — 같은 dep 을 통해 나가는 두 모양이 서로 다른 계약을 갖게 두면, 나중에 누가 이
-    // 모양을 codex 쪽에 쓰는 순간 sanitizer 가 조용히 파일 이름을 훼손한다.
-    if (note === null || LAUNCH_FORBIDDEN.test(note)) return null
+    if (note === null) {
+      // 유일하게 남은 폐기 경로다 — **소리 없이 버리지 않는다.** git 을 못 읽었다는 뜻이고,
+      // 그러면 확인한 것이 하나도 없어 할 말도 없다(formatResumeNote 의 계약).
+      deps.log?.(`resume note skipped dispatch=${dispatch.id}: no git summary to report`)
+      return null
+    }
+    // **여기서 LAUNCH_FORBIDDEN 을 검사하지 않는다.** packet 쪽 한 줄과 달리 이 문자열은 **파일
+    // 이름을 담는다** — `docs/R&D notes.md` 하나가 저장소에 있으면 `&` 때문에 검사가 걸리고, 노트가
+    // 통째로 버려진다. 그 저장소에서는 이 Phase 의 claude 쪽 가치 전부가 흔적도 없이 사라진다.
+    //
+    // 검사가 지킬 것도 이 경로에는 없다: 'update' 를 묻는 세 자리는 전부 rolling.ts 이고
+    // (resumeInPlace · idle nudge · 리셋 앵커) 셋 다 살아 있는 PTY 에 타이핑한다 — codex 의 인자
+    // sanitizer(sanitizeResumePrompt)가 도는 자리가 아니다. 지키는 것 없이 파일 이름 한 글자로
+    // 기능을 끄는 검사는 순손실이다.
+    //
+    // **이 모양을 codex 경로에 쓰게 되는 날의 처방을 여기 적어 둔다:** 그때도 노트를 버리는 것이
+    // 아니라 걸리는 **파일 이름만** 목록에서 걸러야 한다. 노트를 버리면 아무것도 남지 않고, 이름을
+    // 걸러내면 나머지 증거는 남는다.
     return note
   } catch (err) {
     deps.log?.(`resume note failed dispatch=${dispatch.id}: ${String(err)}`)
