@@ -241,6 +241,27 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
+  // fix round 2: 배선 계층에 테스트가 없어서, 훅이 실제로 무엇을 묻고 그 값이 정말 spawn 인자로
+  // 가는지가 미검증이었다(기존 테스트는 전부 `?? chain.prompt` 폴백만 지나간다).
+  it('resumeText 에 handover 를 묻고 그 값을 resumePrompt 로 실어 보낸다', async () => {
+    const forms: string[] = []
+    const h = harness({
+      resumeText: (_sessionId, form) => {
+        forms.push(form)
+        return Promise.resolve('RE-READ YOUR SPEC FILE')
+      }
+    })
+    await writeRollout({ accountId: 'c1', uuid: 'cx-hook', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(h.info1)
+    await advance(1_500) // 매핑 폴링
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    // codex 롤은 계정 수와 무관하게 항상 kill + --resume 이므로 늘 전체 인계다(SPEC §11.5)
+    expect(forms).toEqual(['handover'])
+    expect(h.spawned[0].resumePrompt).toBe('RE-READ YOUR SPEC FILE')
+    h.coord.stop()
+  })
+
   // fix round 2: 이 호출은 roll() 바깥 try 안에 있고 그 catch 는 kill·respawn 앞에서 돈다 —
   // 가드가 없으면 깨진 packet 계약이 롤 자체를 중단시켜 워커를 한도에 멈춘 채로 남긴다.
   it('resumeText 가 던져도 롤은 계속되고 기존 문장으로 재개한다', async () => {

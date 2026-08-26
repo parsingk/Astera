@@ -13,7 +13,7 @@
 import { promises as fs } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { buildCheckpoint } from '../../core/orchestration/checkpoint'
-import { formatResumeSection } from '../../core/orchestration/resumeSection'
+import { formatResumeNote, formatResumeSection } from '../../core/orchestration/resumeSection'
 import type { OrchState } from '../../core/orchestration/state'
 import { readGitSummary, type GitSummaryDeps } from '../gitSummary'
 import { LAUNCH_FORBIDDEN } from './coordinator'
@@ -155,6 +155,52 @@ export async function buildResumePacket(
     return RESUME_LINE
   } catch (err) {
     deps.log?.(`resume packet failed dispatch=${dispatch.id}: ${String(err)}`)
+    return null
+  }
+}
+
+/**
+ * 살아 있는 세션에 덧붙일 한 줄. **spec 파일을 건드리지 않는다.**
+ *
+ * **왜 모양이 둘인가.** `SPEC §11.5` 의 기준은 `--resume` 이 호출되는가 하나다: 호출되면 프로세스가
+ * 새것이고 작업을 이어 주는 것이 transcript 파일 하나뿐이므로 구조화된 인계가 값을 낸다. 호출되지
+ * 않으면 같은 프로세스가 계속 도는 것이고 **떨어뜨린 것이 없으니 인계할 것도 없다.** 이 앱에서
+ * `--resume` 을 부르는 재개는 두 자리(codex 의 `roll()`, claude 의 `roll()`)이고, 부르지 않는
+ * 재개는 세 자리(claude 의 `resumeInPlace`·idle nudge·리셋 앵커)다 — 그리고 **Job 워커의 체인은
+ * 계정이 하나라서 claude 워커는 언제나 `resumeInPlace` 를 탄다.** 즉 이 함수가 claude 워커의
+ * 정상 경로다. 그쪽에 전체 packet 을 주면 대화가 온전한 에이전트에게 방금 리셋된 할당량으로 이미
+ * 아는 것을 재구성시키는 일이 된다.
+ *
+ * 어느 모양을 쓸지는 **코디네이터가 고른다**(자기가 어느 경로인지 아는 유일한 쪽이다) — 배선의
+ * `resumeText(sessionId, form)` 두 번째 인자가 그 선택이고, 이 파일은 form 을 해석하지 않는다.
+ *
+ * 실패는 전부 `null` 이다 — 그러면 부르는 쪽은 덧붙이지 않고 기존 문장만 쓴다. git 을 못 읽으면
+ * 확인한 것이 하나도 없으므로 `formatResumeNote` 자체가 `null` 을 낸다.
+ */
+export async function buildResumeNote(
+  sessionId: string,
+  state: OrchState,
+  deps: ResumePacketDeps = {}
+): Promise<string | null> {
+  const dispatch = state.dispatches.find((d) => d.sessionId === sessionId && !d.endedAt)
+  if (!dispatch) return null // Job 워커가 아니다(사용자 탭 세션)
+
+  try {
+    const git = await readGitSummary(
+      dispatch.cwd,
+      deps.git ? { git: deps.git } : undefined
+    ).catch(() => null)
+    const now = deps.now?.() ?? new Date().toISOString()
+    const checkpoint = buildCheckpoint(state, { dispatchId: dispatch.id, git, now })
+    if (!checkpoint) return null
+    const note = formatResumeNote(checkpoint)
+    // 이 노트는 claude 의 PTY 로만 가지만(위 주석의 세 자리는 전부 rolling.ts 다) 금지 문자 검사는
+    // 그대로 한다 — 같은 dep 을 통해 나가는 두 모양이 서로 다른 계약을 갖게 두면, 나중에 누가 이
+    // 모양을 codex 쪽에 쓰는 순간 sanitizer 가 조용히 파일 이름을 훼손한다.
+    if (note === null || LAUNCH_FORBIDDEN.test(note)) return null
+    return note
+  } catch (err) {
+    deps.log?.(`resume note failed dispatch=${dispatch.id}: ${String(err)}`)
     return null
   }
 }

@@ -1926,3 +1926,119 @@ describe('같은 계정 재개는 kill 하지 않는다', () => {
     expect(h.sent.slice(sentBefore).some((s) => s.payload.state === 'nudged')).toBe(false)
   })
 })
+
+// fix round 2 — 이 describe 가 없던 동안 배선 계층에 테스트가 아예 없었다. 기존 테스트는 전부
+// `?? chain.prompt` 폴백(주입 없음)만 지나가므로, 훅이 실제로 무엇을 물어보고 그 값이 정말 세션에
+// 써지는지는 검증되지 않았다 — 즉 성공 경로가 미검증이었다.
+describe('resumeText 훅 배선 — 어느 모양을 묻고 그 값이 어디로 가는가', () => {
+  const MIN = 60_000
+  /** 물어본 form 을 모두 기록하고 지정한 텍스트를 돌려주는 훅 */
+  const hook = (
+    text: string | null
+  ): { fn: RollingDeps['resumeText']; forms: string[] } => {
+    const forms: string[] = []
+    return {
+      fn: (_sessionId, form) => {
+        forms.push(form)
+        return Promise.resolve(text)
+      },
+      forms
+    }
+  }
+
+  it('롤 뒤의 auto-prompt 는 handover 를 묻고 그 값을 그대로 세션에 쓴다', async () => {
+    const h0 = hook('RE-READ YOUR SPEC FILE')
+    const h = harness({ resumeText: h0.fn })
+    h.payloads.set('s1', payload(97))
+    h.payloads.set('s2', payload(20))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await settle()
+    expect(h0.forms).toEqual(['handover'])
+    // handover 는 **대체**다 — 전체 인계가 chain.prompt 자리를 차지한다
+    expect(h.written.some((w) => w.id === 's2' && w.data === 'RE-READ YOUR SPEC FILE')).toBe(true)
+    expect(h.written.some((w) => w.data === '이어서 작업 진행해 줘')).toBe(false)
+  })
+
+  it('같은 계정 in-place 재개는 update 를 묻고 기존 문장에 덧붙인다', async () => {
+    const h0 = hook('While you waited the worktree did not move.')
+    const h = harness({ resumeText: h0.fn })
+    h.payloads.set(
+      's1',
+      payloadEx({ five: 100, weekly: 20, fiveReset: new Date(Date.now() + 10 * MIN).toISOString() })
+    )
+    h.coord.register(infoSelf())
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await vi.advanceTimersByTimeAsync(10 * MIN + 2 * MIN)
+    expect(h0.forms).toEqual(['update'])
+    expect(h.spawned).toEqual([]) // 죽이지도 다시 띄우지도 않는다
+    // update 는 **덧붙임**이다 — 사용자가 지정할 수 있는 chain.prompt 를 버리지 않는다
+    expect(h.written[0]?.data).toBe(
+      '이어서 작업 진행해 줘 While you waited the worktree did not move.'
+    )
+  })
+
+  it('idle nudge 도 update 를 묻는다 — 세션이 살아 있다', async () => {
+    const h0 = hook('While you waited the worktree did not move.')
+    const h = harness({
+      resumeText: h0.fn,
+      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
+      readPending: () => Promise.resolve(null)
+    })
+    h.payloads.set('s1', payload(95))
+    h.coord.register(h.info1)
+    h.coord.onHookEvent('s1', { hook_event_name: 'Notification', notification_type: 'idle_prompt' })
+    await advanceIo(11 * MIN)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(h0.forms).toEqual(['update'])
+    expect(h.written[0]?.data).toBe(
+      '이어서 작업 진행해 줘 While you waited the worktree did not move.'
+    )
+  })
+
+  it('리셋 앵커 재개도 update 를 묻는다 — 세션이 살아 있다', async () => {
+    const start = Date.now()
+    const resetSec = Math.floor(start / 1000) + 600
+    const h0 = hook('While you waited the worktree did not move.')
+    const h = harness({
+      resumeText: h0.fn,
+      probeActivity: () => Promise.resolve(start - 60_000),
+      readPending: () => Promise.resolve(1)
+    })
+    h.payloads.set('s1', payloadReset(95, resetSec))
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    await vi.advanceTimersByTimeAsync(15 * MIN + 200)
+    expect(h0.forms).toEqual(['update'])
+    expect(h.written[0]?.data).toBe(
+      '이어서 작업 진행해 줘 While you waited the worktree did not move.'
+    )
+  })
+
+  it('훅이 null 을 돌리면 덧붙이지 않고 기존 문장만 쓴다', async () => {
+    const h0 = hook(null)
+    const h = harness({ resumeText: h0.fn })
+    h.payloads.set(
+      's1',
+      payloadEx({ five: 100, weekly: 20, fiveReset: new Date(Date.now() + 10 * MIN).toISOString() })
+    )
+    h.coord.register(infoSelf())
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await vi.advanceTimersByTimeAsync(10 * MIN + 2 * MIN)
+    expect(h.written[0]?.data).toBe('이어서 작업 진행해 줘')
+  })
+
+  it('훅이 던져도 재개는 기존 문장으로 계속된다', async () => {
+    const h = harness({ resumeText: () => Promise.reject(new Error('packet contract broke')) })
+    h.payloads.set(
+      's1',
+      payloadEx({ five: 100, weekly: 20, fiveReset: new Date(Date.now() + 10 * MIN).toISOString() })
+    )
+    h.coord.register(infoSelf())
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    await vi.advanceTimersByTimeAsync(10 * MIN + 2 * MIN)
+    expect(h.written[0]?.data).toBe('이어서 작업 진행해 줘')
+  })
+})

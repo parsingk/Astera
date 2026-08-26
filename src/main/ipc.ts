@@ -61,7 +61,7 @@ import { writeInfo, writeShuttle } from './orchestration/shuttle'
 import { WorkerTails } from './orchestration/tail'
 import { releaseArgsFor } from './orchestration/release'
 import { installStub } from './orchestration/stub'
-import { buildResumePacket } from './orchestration/resumePacket'
+import { buildResumeNote, buildResumePacket } from './orchestration/resumePacket'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
 import { imageMime } from '../core/files/imageMime'
@@ -108,7 +108,7 @@ export interface OrchHandle {
   onRolled: (oldSessionId: string, newInfo: { id: string; accountId: string }) => void
   onRollState: (e: RollStateEvent) => void
   orchEnv: () => { cliPath: string; infoPath: string; skillsPath: string } | undefined
-  resumeText: (sessionId: string) => Promise<string | null>
+  resumeText: (sessionId: string, form: 'handover' | 'update') => Promise<string | null>
 }
 
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
@@ -1995,9 +1995,19 @@ export function registerIpc(
       // 롤링 배선이 읽는다. 오케스트레이션이 꺼져 있으면 undefined — 그러면 롤된 세션은 예전처럼
       // CLI 없이 뜨고, 그 상태에서 워커가 존재할 일도 없다.
       orchEnv: () => orchEnvOf(),
-      // 두 롤링 코디네이터의 resumeText dep 구현. Job 워커가 아니거나 packet 을 못 만들면 null 이고,
+      // 두 롤링 코디네이터의 resumeText dep 구현. Job 워커가 아니거나 만들지 못하면 null 이고,
       // 그때 부르는 쪽은 기존 고정 문장으로 저하한다(main/orchestration/resumePacket.ts 의 계약).
-      resumeText: (sessionId) => buildResumePacket(sessionId, deps.getState(), { log: orchLog })
+      //
+      // **모양이 둘이고, 고르는 자리가 여기다.** 기준은 `SPEC §11.5` — 그 재개 경로가 `--resume` 을
+      // 부르는가. 부르면 프로세스가 새것이라 전체 인계가 값을 내고(buildResumePacket), 부르지 않으면
+      // 같은 프로세스가 계속 도는 것이므로 떨어뜨린 것이 없어 인계할 것도 없다: 기다리는 동안 무엇이
+      // 바뀌었는지 한 줄만 덧붙인다(buildResumeNote). 어느 경로인지 아는 쪽은 코디네이터뿐이라
+      // form 을 그쪽이 넘기고, 이 배선은 그 값으로 함수만 고른다 — 두 함수 중 어느 것도 form 을
+      // 해석하지 않는다.
+      resumeText: (sessionId, form) =>
+        form === 'update'
+          ? buildResumeNote(sessionId, deps.getState(), { log: orchLog })
+          : buildResumePacket(sessionId, deps.getState(), { log: orchLog })
     })
   }
   if (orchWiring && core.appSettings.getOrchestrationEnabled())

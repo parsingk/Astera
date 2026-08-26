@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatResumeSection, MAX_PACKET_CHARS } from './resumeSection'
+import { formatResumeNote, formatResumeSection, MAX_PACKET_CHARS } from './resumeSection'
 import type { Checkpoint } from './checkpoint'
 
 const base: Checkpoint = {
@@ -126,5 +126,58 @@ describe('formatResumeSection', () => {
     expect(out).toContain('src/auth/AuthService.ts')
     // Trimming itself must stay deterministic.
     expect(formatResumeSection(big)).toBe(out)
+  })
+})
+
+// fix round 2 — SPEC §11.5: `--resume` 을 부르지 않는 재개 경로는 살아 있는 세션이고, 떨어뜨린 것이
+// 없으니 인계할 것도 없다. 그 자리에는 전체 Packet 이 아니라 "기다리는 동안 바뀐 것" 한 줄만 간다.
+describe('formatResumeNote', () => {
+  it('says the worktree moved, lists the changed files, and stays one line', () => {
+    const out = formatResumeNote(base)!
+    expect(out).toContain('the worktree moved to def456')
+    expect(out).toContain('src/auth/AuthService.ts')
+    expect(out).toContain('Check the current git diff before editing.')
+    expect(out).not.toContain('\n')
+  })
+
+  it('does not carry the full packet — no scratch warning, no task spec, no dependencies', () => {
+    const out = formatResumeNote(base)!
+    expect(out).not.toContain('start the task from scratch')
+    expect(out).not.toContain(base.taskSpec)
+    expect(out).not.toContain(base.dependencies[0].title)
+    expect(out).not.toContain('BEFORE EDITING')
+    expect(out).not.toContain('astera send')
+  })
+
+  it('is null when git could not be read — nothing was verified, so nothing is claimed', () => {
+    expect(formatResumeNote({ ...base, git: null, worktreeMoved: null })).toBeNull()
+  })
+
+  it('says nothing about the worktree when there is no baseline to compare against', () => {
+    const out = formatResumeNote({ ...base, worktreeMoved: null })!
+    expect(out).not.toContain('the worktree')
+  })
+
+  it('reports a clean worktree as such', () => {
+    const out = formatResumeNote({
+      ...base,
+      worktreeMoved: false,
+      git: { branch: 'main', head: 'def456', changed: [], diffstat: null }
+    })!
+    expect(out).toContain('did not move')
+    expect(out).toContain('no uncommitted changes')
+  })
+
+  it('caps a long changed-file list and reports the remainder as a count', () => {
+    const changed = Array.from({ length: 45 }, (_, i) => `src/f${i}.ts`)
+    const out = formatResumeNote({
+      ...base,
+      filesModified: [],
+      git: { branch: 'main', head: 'def456', changed, diffstat: null }
+    })!
+    expect(out).toContain('src/f0.ts')
+    expect(out).not.toContain('src/f20.ts')
+    expect(out).toContain('and 25 more')
+    expect(out).not.toContain('\n')
   })
 })

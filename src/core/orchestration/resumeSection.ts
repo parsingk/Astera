@@ -138,6 +138,49 @@ function sectionsFor(c: Checkpoint, reports: CheckpointReport[]): Array<string |
   ]
 }
 
+/** 한 줄 노트에 실을 변경 파일 수의 상한. 이 노트는 살아 있는 PTY 에 **한 줄로** 타이핑되므로
+ *  (줄바꿈이 곧 Enter 다) 목록이 길어지면 한 줄이 화면을 뒤덮는다. 넘치는 개수는 숫자로 알린다 —
+ *  전체 목록은 어차피 `git status` 로 직접 볼 수 있고, 그것을 하라고 말하는 것이 이 노트다. */
+const NOTE_FILES_MAX = 20
+
+/**
+ * **살아 있는 세션**에 덧붙이는 한 줄. 전체 Packet 이 아니다.
+ *
+ * `SPEC §11.5` 가 정한 대로, `--resume` 을 부르지 않는 재개 경로(claude 의 `resumeInPlace`·idle
+ * nudge·리셋 앵커)는 같은 프로세스가 계속 도는 것이고 **떨어뜨린 것이 없으니 인계할 것도 없다.**
+ * 그 자리에 전체 Packet 을 주면 대화가 온전한 에이전트에게 "처음부터 다시 하지 말라"·Task 지시문·
+ * 의존성 목록·재정렬 의식을 다시 읽히는 것이 되고, 그것은 방금 리셋된 할당량을 이미 아는 것을
+ * 재구성하는 데 쓰는 일이다. 그래서 여기서는 §11.5 (a) 가 말한 **대체가 아닌 덧붙임** 형태만
+ * 만든다: 기다리는 동안 무엇이 바뀌었는가.
+ *
+ * 아이러니를 적어 둔다 — 이 경로가 HEAD 기준점을 **가장 믿을 수 있는** 자리다. reattach 게시가
+ * 없어 정지 시점 스냅샷을 덮어쓸 것이 애초에 없다.
+ *
+ * git 을 못 읽었으면(`git === null`) `null` 이다. 그때 확인한 것이 하나도 없으므로 할 말이 없고,
+ * **모르는 것을 말하지 않는 것**이 이 기능의 하드 제약이다(DESIGN §19). 반환 문자열에는 줄바꿈이
+ * 없다 — 조각을 공백으로만 잇는다.
+ */
+export function formatResumeNote(c: Checkpoint): string | null {
+  if (!c.git) return null
+  const parts: string[] = []
+  // worktreeMoved 가 null 이면(정지 시점 HEAD 가 없어 비교가 불가능하면) 이 문장을 아예 만들지
+  // 않는다 — "바뀌지 않았다"를 확인 없이 단정하는 것이 이 라운드가 고친 사고 그 자체다.
+  if (c.worktreeMoved === true)
+    parts.push(`While you waited the worktree moved to ${c.git.head ?? 'a new commit'}.`)
+  else if (c.worktreeMoved === false) parts.push('While you waited the worktree did not move.')
+  const changed = c.git.changed
+  if (changed.length === 0) parts.push('There are no uncommitted changes right now.')
+  else {
+    const shown = changed.slice(0, NOTE_FILES_MAX)
+    const more = changed.length - shown.length
+    parts.push(
+      `Uncommitted changes right now: ${shown.join(', ')}${more > 0 ? ` and ${more} more` : ''}.`
+    )
+  }
+  parts.push('Check the current git diff before editing.')
+  return parts.join(' ')
+}
+
 /** Checkpoint -> Packet 문자열. 같은 Checkpoint 는 항상 같은 문자열을 낸다 — 시계도, map/set
  *  순회 순서도 읽지 않는다(Checkpoint.reports 는 이미 배열이고, 이 함수는 그 순서를 그대로 쓴다).
  *

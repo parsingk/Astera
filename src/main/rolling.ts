@@ -105,15 +105,21 @@ export interface RollingDeps {
    *
    *  주입되지 않으면 아무것도 실리지 않는다(기존 동작) — now?/log? 와 같은 관례다. */
   orchEnv?(): { cliPath: string; infoPath: string; skillsPath: string } | undefined
-  /** 재개 직전에 쓸 프롬프트를 물어본다. **`chain.prompt` 가 정적이라서 필요하다** — 그 값은
-   *  register 시점에 고정되는데, 재개 packet 은 재개 직전의 상태(git·보고·결정)에서 조립해야
+  /** 재개 직전에 쓸 텍스트를 물어본다. **`chain.prompt` 가 정적이라서 필요하다** — 그 값은
+   *  register 시점에 고정되는데, 재개 자료는 재개 직전의 상태(git·보고·결정)에서 조립해야
    *  정확하다. sessionId 로 열린 Job Dispatch 를 찾을 수 없으면(사용자 탭 세션) `null` 을 돌린다.
    *  `null` 이면 `chain.prompt` 를 그대로 쓴다 — 주입되지 않아도 기존 동작 그대로다. 구현은
    *  `main/orchestration/resumePacket.ts`, 그 자체는 절대 던지지 않는다(계약). 그래도 이 dep 을
-   *  부르는 네 자리 전부는 그 위에 자기 자신의 try/catch 를 또 두른다 — 이 자리를 부르는 쪽이 전부
-   *  fire-and-forget 이라, 언젠가 이 계약이 깨지면 처리되지 않는 예외가 되는 대신 로그로만 남고
-   *  고정 문장으로 저하하게 하려는 것이다(server.ts 가 probeLimit 을 부르는 것과 같은 태도). */
-  resumeText?(sessionId: string): Promise<string | null>
+   *  부르는 자리는 그 위에 자기 자신의 try/catch 를 또 두른다(`resumePromptFor`) — 이 자리를
+   *  부르는 쪽이 전부 fire-and-forget 이라, 언젠가 이 계약이 깨지면 처리되지 않는 예외가 되는
+   *  대신 로그로만 남고 고정 문장으로 저하하게 하려는 것이다(server.ts 가 probeLimit 을 부르는
+   *  것과 같은 태도).
+   *
+   *  **`form` 이 어느 모양을 원하는지 말한다** — 이 코디네이터가 자기가 어느 재개 경로에 있는지
+   *  아는 유일한 쪽이기 때문이다(packet 을 만드는 쪽은 모른다). 'handover' 는 전체 인계이고
+   *  'update' 는 덧붙일 한 줄이다. 가르는 기준은 `SPEC §11.5`: `--resume` 을 부르는가.
+   *  `resumePromptFor` 의 주석에 이 파일의 어느 자리가 어느 쪽인지 적어 두었다. */
+  resumeText?(sessionId: string, form: 'handover' | 'update'): Promise<string | null>
 }
 
 interface Chain {
@@ -711,6 +717,40 @@ export class RollingCoordinator {
     return this.resumeInPlace(chain)
   }
 
+  /** 재개 자리에 실을 텍스트를 정한다. **어느 모양을 물을지는 이 함수를 부르는 자리가 정한다** —
+   *  가르는 기준은 `SPEC §11.5` 하나다: 그 경로가 `--resume` 을 부르는가.
+   *   - 'handover'(전체 인계): `scheduleAutoPrompt` 의 sendPrompt 뿐이다. 그 앞에서 roll() 이
+   *     kill 하고 `--resume` 으로 다시 띄웠으므로 프로세스가 새것이고, 작업을 이어 주는 것은
+   *     transcript 파일 하나다.
+   *   - 'update'(덧붙일 한 줄): `resumeInPlace` · idle nudge · 리셋 앵커. **세션이 살아 있다** —
+   *     떨어뜨린 것이 없으니 인계할 것도 없고(§11.5), 대화가 온전한 에이전트에게 Task 지시문과
+   *     의존성 목록을 다시 읽히는 것은 방금 리셋된 할당량을 이미 아는 것에 쓰는 일이다. 그래서
+   *     기다리는 동안 무엇이 바뀌었는지만 덧붙인다.
+   *
+   *  'update' 를 **덧붙이는** 이유: 이 경로에서 `chain.prompt` 는 잃을 것이 없는 값이고, 사용자가
+   *  직접 지정한 문구일 수도 있다(register 의 prompt). 대체하면 그것을 버린다.
+   *
+   *  `resumeText` 는 던지지 않는다는 계약이지만(resumePacket.ts) 이 함수를 부르는 자리는 전부
+   *  fire-and-forget 이라 예외가 새면 잡아 줄 곳이 없다 — 그래서 여기서 한 번 감싸고 로그만 남긴
+   *  뒤 고정 문장으로 저하한다. 이 파일에 같은 try/catch 가 네 벌 있었는데, 이유가 적힌 자리는
+   *  `RollingDeps.resumeText` 의 JSDoc 뿐이고 네 벌의 주석은 서로를 가리키고만 있었다. */
+  private async resumePromptFor(
+    chain: Chain,
+    liveId: string,
+    form: 'handover' | 'update'
+  ): Promise<string> {
+    try {
+      const text = await this.deps.resumeText?.(liveId, form)
+      if (text === null || text === undefined) return chain.prompt
+      return form === 'update' ? `${chain.prompt} ${text}` : text
+    } catch (err) {
+      this.deps.log(
+        `resume packet hook failed session=${liveId}: ${err instanceof Error ? err.message : String(err)}`
+      )
+      return chain.prompt
+    }
+  }
+
   /** Resuming on the same account — the prompt goes into the live PTY with no kill, no spawn and no
    *  transcript copy. Everything roll() does that belongs to switching accounts (publishing 'switching',
    *  the copy, re-keying, auto-accepting trust, the ready polling, the replay grace) does not apply here
@@ -735,15 +775,7 @@ export class RollingCoordinator {
     this.deps.log(`limit reset → resume in place session=${chain.liveId}`)
     const liveId = chain.liveId
     const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same convention as elsewhere
-    // Same try/catch shape as resumeInPlace above — see its comment for why.
-    let prompt = chain.prompt
-    try {
-      prompt = (await this.deps.resumeText?.(liveId)) ?? chain.prompt
-    } catch (err) {
-      this.deps.log(
-        `resume packet hook failed session=${liveId}: ${err instanceof Error ? err.message : String(err)}`
-      )
-    }
+    const prompt = await this.resumePromptFor(chain, liveId, 'update')
     if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
     this.deps.write(liveId, prompt)
     setTimeout(() => {
@@ -857,15 +889,7 @@ export class RollingCoordinator {
     const startedAt = this.now()
     const sendPrompt = async (): Promise<void> => {
       if (chain.disposed || chain.liveId !== liveId) return
-      // Same try/catch shape as resumeInPlace above — see its comment for why.
-      let prompt = chain.prompt
-      try {
-        prompt = (await this.deps.resumeText?.(liveId)) ?? chain.prompt
-      } catch (err) {
-        this.deps.log(
-          `resume packet hook failed session=${liveId}: ${err instanceof Error ? err.message : String(err)}`
-        )
-      }
+      const prompt = await this.resumePromptFor(chain, liveId, 'handover')
       if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
       this.deps.write(liveId, prompt)
       const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same place and convention as liveId
@@ -1167,15 +1191,7 @@ export class RollingCoordinator {
     this.pushState(chain, 'nudged')
     const liveId = chain.liveId
     const stateSeq = chain.stateSeq // captures the generation at scheduling time
-    // Same try/catch shape as resumeInPlace above — see its comment for why.
-    let prompt = chain.prompt
-    try {
-      prompt = (await this.deps.resumeText?.(liveId)) ?? chain.prompt
-    } catch (err) {
-      this.deps.log(
-        `resume packet hook failed session=${liveId}: ${err instanceof Error ? err.message : String(err)}`
-      )
-    }
+    const prompt = await this.resumePromptFor(chain, liveId, 'update')
     if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
     this.deps.write(liveId, prompt)
     setTimeout(() => {
@@ -1281,15 +1297,7 @@ export class RollingCoordinator {
     this.pushState(chain, 'nudged') // a momentary event for the Slack notification — the renderer leaves it out of the banner
     const liveId = chain.liveId
     const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same place and convention as liveId
-    // Same try/catch shape as resumeInPlace above — see its comment for why.
-    let prompt = chain.prompt
-    try {
-      prompt = (await this.deps.resumeText?.(liveId)) ?? chain.prompt
-    } catch (err) {
-      this.deps.log(
-        `resume packet hook failed session=${liveId}: ${err instanceof Error ? err.message : String(err)}`
-      )
-    }
+    const prompt = await this.resumePromptFor(chain, liveId, 'update')
     if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
     this.deps.write(liveId, prompt)
     setTimeout(() => {

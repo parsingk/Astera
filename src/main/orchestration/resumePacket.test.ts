@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { buildResumePacket } from './resumePacket'
+import { buildResumeNote, buildResumePacket } from './resumePacket'
 import { LAUNCH_FORBIDDEN } from './coordinator'
 import * as checkpointModule from '../../core/orchestration/checkpoint'
 import { emptyState, createRun, createTask, openDispatch } from '../../core/orchestration/state'
@@ -246,5 +246,72 @@ describe('buildResumePacket', () => {
 
     expect(line).not.toBeNull()
     expect(LAUNCH_FORBIDDEN.test(line as string)).toBe(false)
+  })
+})
+
+// fix round 2 — SPEC §11.5: `--resume` 없이 이어가는 재개 경로(claude 의 resumeInPlace·idle nudge·
+// 리셋 앵커)는 살아 있는 세션이다. Job 워커의 체인은 계정이 하나라서 claude 워커는 언제나 그쪽으로
+// 가므로, 이 함수가 claude 워커의 정상 경로다 — spec 파일을 건드리면 안 된다.
+describe('buildResumeNote', () => {
+  const withChanges = (): typeof git =>
+    fakeGit({
+      'rev-parse HEAD': { ok: true, stdout: 'head-now', stderr: '' },
+      '-c core.quotepath=false status --short': {
+        ok: true,
+        stdout: ' M src/a.ts\n?? src/b.ts\n',
+        stderr: ''
+      }
+    })
+
+  it('한 줄을 돌려주고 spec 파일은 손대지 않는다', async () => {
+    const specPath = path.join(specDir, 'spec.md')
+    const original = '# do the thing\n\nimplement it\n'
+    await fs.writeFile(specPath, original, 'utf8')
+    const { s } = seed(specPath)
+
+    const note = await buildResumeNote('sess1', s, { git: withChanges(), now: () => NOW })
+
+    expect(note).not.toBeNull()
+    expect(note).toContain('src/a.ts')
+    expect(note).not.toContain('\n')
+    expect(await fs.readFile(specPath, 'utf8')).toBe(original)
+  })
+
+  it('전체 packet 을 담지 않는다 — Task 지시문도, 보고 명령도', async () => {
+    const specPath = path.join(specDir, 'spec.md')
+    await fs.writeFile(specPath, '# do the thing\n\nimplement it\n', 'utf8')
+    const { s } = seed(specPath)
+
+    const note = (await buildResumeNote('sess1', s, { git: withChanges(), now: () => NOW }))!
+
+    expect(note).not.toContain('implement it')
+    expect(note).not.toContain('start the task from scratch')
+    expect(note).not.toContain('astera send')
+  })
+
+  it('git 을 읽을 수 없으면 null — 확인한 것이 없으므로 할 말이 없다', async () => {
+    const specPath = path.join(specDir, 'spec.md')
+    await fs.writeFile(specPath, '# do the thing\n\nimplement it\n', 'utf8')
+    const { s } = seed(specPath)
+
+    expect(await buildResumeNote('sess1', s, { git: UNREADABLE_GIT, now: () => NOW })).toBeNull()
+  })
+
+  it('Job 워커가 아니면 null', async () => {
+    const specPath = path.join(specDir, 'spec.md')
+    await fs.writeFile(specPath, '# do the thing\n\nimplement it\n', 'utf8')
+    const { s } = seed(specPath)
+
+    expect(await buildResumeNote('plain-tab', s, { git: withChanges(), now: () => NOW })).toBeNull()
+  })
+
+  it('돌려준 문장에 LAUNCH_FORBIDDEN 이 걸리는 문자가 없다', async () => {
+    const specPath = path.join(specDir, 'spec.md')
+    await fs.writeFile(specPath, '# do the thing\n\nimplement it\n', 'utf8')
+    const { s } = seed(specPath)
+
+    const note = (await buildResumeNote('sess1', s, { git: withChanges(), now: () => NOW }))!
+
+    expect(LAUNCH_FORBIDDEN.test(note)).toBe(false)
   })
 })

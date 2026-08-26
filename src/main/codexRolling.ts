@@ -66,8 +66,13 @@ export interface CodexRollingDeps {
    *  register 시점에 고정되는 정적 값이라서 필요하다. sessionId 로 열린 Job Dispatch 를 찾을 수
    *  없으면(사용자 탭 세션) `null` 을 돌린다. `null` 이면 `chain.prompt` 를 그대로 쓴다. codex 는
    *  이 프롬프트를 spawn 인자로 넘기므로 **kill·spawn 전에** 물어야 한다(roll() 의 호출 자리 참고).
-   *  구현은 `main/orchestration/resumePacket.ts`. */
-  resumeText?(sessionId: string): Promise<string | null>
+   *  구현은 `main/orchestration/resumePacket.ts`.
+   *
+   *  **이 코디네이터는 언제나 'handover' 를 묻는다.** 여기에는 `resumeInPlace` 가 없다 — codex 롤은
+   *  계정 수와 무관하게 항상 kill 하고 `--resume` 으로 다시 띄우므로, `SPEC §11.5` 의 기준
+   *  ("`--resume` 을 부르는가")에 늘 걸린다. form 인자를 그래도 받는 것은 rolling.ts 의 dep 과 같은
+   *  계약을 유지하려는 것이다(배선이 한 함수를 두 코디네이터에 넘긴다). */
+  resumeText?(sessionId: string, form: 'handover' | 'update'): Promise<string | null>
 }
 
 interface Chain {
@@ -394,7 +399,7 @@ export class CodexRollingCoordinator {
       // 여기에도 둔다: 로그를 남기고 기존 고정 문장으로 저하한다.
       let prompt = chain.prompt
       try {
-        prompt = (await this.deps.resumeText?.(chain.liveId)) ?? chain.prompt
+        prompt = (await this.deps.resumeText?.(chain.liveId, 'handover')) ?? chain.prompt
       } catch (err) {
         this.deps.log(
           `resume packet hook failed session=${chain.liveId}: ${err instanceof Error ? err.message : String(err)}`
