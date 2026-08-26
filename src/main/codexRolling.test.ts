@@ -488,6 +488,33 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
+  it('제자리 재개가 회복시키지 못하면 두 번째에는 kill 경로로 간다', async () => {
+    const h = harness()
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 120_000) / 1000)
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-inplace-6', cwd: single.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register(single)
+    await advance(1_500)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    // planRetry는 실측 reset에 RETRY_MARGIN_MS(60초)를 더하므로 첫 대기는 120초가 아니라 실제로는
+    // ~180초(120+60) 뒤에 만료된다 — 그 지점을 지나 healthy 구간(60초) 안쪽 ~10초까지 진행한다.
+    // 첫 대기 만료 → 제자리 재개
+    await advance(188_400)
+    expect(h.events).toEqual([]) // 첫 번째는 죽이지 않는다
+    expect(h.written.length).toBe(2)
+    // healthy 구간 안에서 다시 한도 — 즉 제자리 재개가 회복시키지 못했다. onLimit은 healthyTimer를
+    // 먼저 지우므로(자체 clearTimeout) inPlaceUsed 플래그는 여기까지 살아남는다.
+    await appendTokenCount(file, { primary: 99, primaryReset: resetSec })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    await advance(70_000) // 두 번째 대기 만료(reset이 이미 과거라 planRetry의 60초 하한이 적용된다)
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c1']) // 이번에는 프로세스를 새로 띄운다
+    h.coord.stop()
+  })
+
   it('forceRoll은 게이트를 건너뛰고 즉시 롤한다 (dev 훅)', async () => {
     const h = harness()
     await writeRollout({ accountId: 'c1', uuid: 'cx-5', cwd: h.info1.cwd, primary: 3 })

@@ -104,6 +104,7 @@ interface Chain {
   healthyTimer: ReturnType<typeof setTimeout> | null
   disposed: boolean
   recovery: (BlockRecord | null)[]
+  inPlaceUsed: boolean // whether an in-place resume was already used for this blocked episode (cleared by healthyTimer)
 }
 
 /** Extracts just the part of a Chain the retry verdict needs (the input of core/rolling/retry.ts) */
@@ -156,7 +157,8 @@ export class CodexRollingCoordinator {
       waitTimer: null,
       healthyTimer: null,
       disposed: false,
-      recovery: ids.map(() => null)
+      recovery: ids.map(() => null),
+      inPlaceUsed: false
     }
     this.chains.set(info.id, chain)
     if (info.resumeSessionId && rolloutPath) {
@@ -475,6 +477,17 @@ export class CodexRollingCoordinator {
   private resumeAfterWait(chain: Chain, toIndex: number): Promise<void> {
     if (chain.disposed || chain.rolling) return Promise.resolve()
     if (toIndex !== chain.cycle.currentIndex) return this.roll(chain, toIndex) // the account changes
+    if (chain.inPlaceUsed) {
+      // The last in-place resume never reached the healthy window — that means the reset input line
+      // did not actually recover the session, so this time a fresh process is spawned instead. This
+      // guards the one premise in this plan that has never been measured: whether codex's composer
+      // really accepts a new turn after the reset. onLimit clears healthyTimer before it decides, so
+      // this flag survives a second limit that lands inside the healthy window.
+      this.deps.log(
+        `codex resume in place did not recover — falling back to respawn session=${chain.liveId}`
+      )
+      return this.roll(chain, toIndex)
+    }
     if (chain.modelChoice.pending()) {
       // If the list is still open, Enter would approve the highlighted item. kill wipes the whole
       // screen, so that path is safe — the same judgment as the claude side's choicePending.
@@ -506,6 +519,7 @@ export class CodexRollingCoordinator {
     chain.textHit = false // ③
     chain.scanner = new CodexLimitScanner()
     chain.lastOutputAt = this.now()
+    chain.inPlaceUsed = true
     // 'nudged' is the right state — this is a reset resume, not an account switch, the renderer
     // treats it as a momentary event, and the Slack mapping (slack.limitReset) already exists. Same
     // choice as the claude-side resumeInPlace.
@@ -528,6 +542,7 @@ export class CodexRollingCoordinator {
       chain.healthyTimer = null
       chain.cycle.onHealthy()
       chain.recovery[chain.cycle.currentIndex] = null
+      chain.inPlaceUsed = false
     }, HEALTHY_MS)
   }
 
@@ -608,6 +623,7 @@ export class CodexRollingCoordinator {
         chain.healthyTimer = null
         chain.cycle.onHealthy()
         chain.recovery[chain.cycle.currentIndex] = null
+        chain.inPlaceUsed = false
       }, HEALTHY_MS)
       this.pushState(chain, 'none')
     } catch (err) {
