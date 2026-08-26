@@ -71,7 +71,10 @@ export interface Checkpoint {
    *  **이것이 없으면 CURRENT STATE 절이 거짓을 말한다.** 롤 경로에서 Dispatch 는 닫히지 않으므로
    *  `workerState` 는 'ready' 로 남고 `limitResetsAt` 은 비어 있다 — 즉 "왜 여기 있는가" 를 답해야
    *  하는 절이 "아직 기록된 정지가 없다" 를 낸다. 스냅샷이 없으면(스냅샷 이전에 만들어진 Dispatch,
-   *  또는 롤링이 아닌 경로) 비워 둔다. */
+   *  또는 롤링이 아닌 경로) 비워 둔다.
+   *
+   *  `resetsAt` 은 **아직 오지 않은 경우에만** 담긴다(upcomingResetsAt) — 지난 시각을
+   *  "expected at …" 으로 렌더하면 과거를 기대인 척 말하는 것이 된다. */
   stop?: { reason: 'waiting' | 'switching'; resetsAt?: string }
 
   /** Task.filesModified + Message.filesModified + git 의 changed, 중복 없이 합친 것. */
@@ -99,6 +102,29 @@ const REPORTS_MAX = 6
  *  같은 문제(대량의 원본 텍스트)가 생긴다. */
 const REPORT_BODY_MAX = 400
 const VALIDATION_SUMMARY_MAX = 200
+
+/** 리셋 시각을 **아직 오지 않은 경우에만** 통과시킨다. 이미 지난 값은 없는 것으로 본다.
+ *
+ *  **왜 버리는가.** 이 값은 서식 쪽에서 "expected at <시각>" 으로 렌더된다 — 지난 시각을 그렇게
+ *  적으면 **기대가 아니라 과거를 기대인 척 말하는 것**이 되고, 이 리뷰 사이클 전체가 존재한 이유가
+ *  바로 확인하지 않은 것을 사실로 말하는 문장이었다. 같은 결함의 축소판을 남길 이유가 없다.
+ *
+ *  대기가 정상적으로 끝난 뒤의 재개(리셋을 기다렸다가 이어가는 흔한 경로)에서는 이 값이 거의 항상
+ *  지나 있다 — 그때 CURRENT STATE 는 "리셋을 기다렸다" 까지만 말하고 시각을 붙이지 않는다. 값이
+ *  남는 것은 **리셋이 오기 전에 재개한 경우**뿐이다: 계정을 바꿨거나 사람이 강제로 롤을 일으켰을
+ *  때이고, 그때는 "그 계정의 회복은 아직 <시각>" 이 참인 정보다.
+ *
+ *  판정을 여기서 하는 이유는 서식(resumeSection.ts)이 순수하고 **시계를 읽을 수 없기** 때문이다.
+ *  이 함수도 시계를 읽지 않는다 — `now` 는 인자로 받은 값이고, 같은 입력은 같은 결과를 낸다.
+ *  파싱할 수 없는 값은(둘 중 어느 쪽이든) 통과시키지 않는다: 판정할 수 없는 시각을 기대로 내놓는
+ *  것이 이 함수가 막으려는 것과 같은 일이다. */
+function upcomingResetsAt(resetsAt: string | undefined, now: string): string | undefined {
+  if (resetsAt === undefined) return undefined
+  const at = Date.parse(resetsAt)
+  const nowMs = Date.parse(now)
+  if (!Number.isFinite(at) || !Number.isFinite(nowMs)) return undefined
+  return at > nowMs ? resetsAt : undefined
+}
 
 export function buildCheckpoint(
   s: OrchState,
@@ -143,6 +169,8 @@ export function buildCheckpoint(
       ...(g.resolution ? { resolution: sanitize(g.resolution) } : {})
     }))
 
+  const upcoming = upcomingResetsAt(dispatch.stopSnapshot?.resetsAt, a.now)
+
   const headAtStop = dispatch.stopSnapshot?.headCommit ?? null
   const headNow = a.git?.head ?? null
   const worktreeMoved = headAtStop !== null && headNow !== null ? headAtStop !== headNow : null
@@ -165,9 +193,7 @@ export function buildCheckpoint(
       ? {
           stop: {
             reason: dispatch.stopSnapshot.reason,
-            ...(dispatch.stopSnapshot.resetsAt !== undefined
-              ? { resetsAt: dispatch.stopSnapshot.resetsAt }
-              : {})
+            ...(upcoming !== undefined ? { resetsAt: upcoming } : {})
           }
         }
       : {}),

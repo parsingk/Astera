@@ -348,6 +348,24 @@ describe('OrchRollTap 정지 스냅샷', () => {
     expect(g.calls).toBe(2)
   })
 
+  // follow-up round — Fix B: 'stalled' 는 회복 시도가 실패했다는 판정이고 **뒤에 'none' 이 오지
+  // 않는다**(게시하고 곧바로 return 한다). 그것을 끝으로 세지 않으면 표시가 영구히 남아 그 세션의
+  // 다음 정지가 전부 건너뛰어지고, Checkpoint 는 몇 시간 전 기준점을 계속 재사용한다.
+  it("'stalled' 로 끝난 에피소드 뒤의 다음 정지는 새로 남긴다", async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    const g = fakeGit(['first-stop', 'second-stop'])
+    const tap = new OrchRollTap(deps, { git: g.git })
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'waiting' }))
+    await vi.advanceTimersByTimeAsync(0)
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'nudged' })) // 재개 프롬프트를 보낸다
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'stalled' })) // 듣지 않았다 — 'none' 은 오지 않는다
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'waiting' })) // 다음 한도
+    await vi.advanceTimersByTimeAsync(0)
+    expect(snapshotOf(deps, dispatchId)?.headCommit).toBe('second-stop')
+    expect(g.calls).toBe(2)
+  })
+
   it('워커가 아닌 세션의 정지는 상태를 바꾸지 않는다', async () => {
     const { s } = seed()
     const deps = makeDeps(s)

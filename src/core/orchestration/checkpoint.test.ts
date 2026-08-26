@@ -12,6 +12,7 @@ import {
   type OrchState
 } from './state'
 import { buildCheckpoint, type GitSummary } from './checkpoint'
+import { formatResumeSection } from './resumeSection'
 
 const NOW = '2026-08-26T00:00:00.000Z'
 
@@ -225,6 +226,30 @@ describe('buildCheckpoint', () => {
     const { s, dispatchId } = seed()
     const c = buildCheckpoint(s, { dispatchId, git, now: NOW })!
     expect(c.stop).toEqual({ reason: 'waiting', resetsAt: '2026-08-26T06:00:00.000Z' })
+  })
+
+  // follow-up round — Fix B: a latched episode can hand an already-elapsed reset time to the
+  // formatter, which renders it as "expected at <a time in the past>". This whole review cycle
+  // existed because the packet asserted things it had not verified; a stale timestamp presented as
+  // an expectation is the same defect in miniature. The formatter is pure and has no clock, so the
+  // decision has to be made here, where `now` is an argument.
+  it('drops a reset time that has already passed, and it never reaches the rendered text', () => {
+    const { s, dispatchId } = seed()
+    const afterTheReset = '2026-08-26T09:00:00.000Z' // the recorded resetsAt is 06:00
+    const c = buildCheckpoint(s, { dispatchId, git, now: afterTheReset })!
+    expect(c.stop).toEqual({ reason: 'waiting' })
+    // The rendered text still mentions the reset time elsewhere — closeDispatch records it in the
+    // body of its own status message, and that is evidence the app really wrote, not a claim about
+    // the future. What must not survive is the timestamp presented as an expectation.
+    expect(formatResumeSection(c)).not.toContain('expected at')
+    expect(formatResumeSection(c)).toContain('the app waited for that account to recover.')
+  })
+
+  it('keeps a reset time that has not arrived yet — resuming early makes it true information', () => {
+    const { s, dispatchId } = seed()
+    const c = buildCheckpoint(s, { dispatchId, git, now: NOW })! // NOW is 00:00, resetsAt is 06:00
+    expect(c.stop).toEqual({ reason: 'waiting', resetsAt: '2026-08-26T06:00:00.000Z' })
+    expect(formatResumeSection(c)).toContain('expected at 2026-08-26T06:00:00.000Z')
   })
 
   it('leaves the stop field out when no stop was ever recorded', () => {
