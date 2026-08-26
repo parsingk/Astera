@@ -816,6 +816,33 @@ export function rekeyDispatch(
   )
 }
 
+/** 정지 시점 스냅샷을 열린 Dispatch 에 남긴다. **Task 도 Dispatch 의 종료 상태도 건드리지 않는다** —
+ *  이것은 관측 기록이고, 무엇이 일어났는지에 대한 주장이 아니다.
+ *
+ *  열린 Dispatch 가 없으면 `ok(state, null)` 이다(`closeDispatch`·`rekeyDispatch` 와 같은 관례).
+ *  두 번째 정지는 덮어쓴다 — Checkpoint 가 필요한 기준점은 **마지막** 정지의 것이다. */
+export function recordStopSnapshot(
+  s: OrchState,
+  a: { sessionId: string; headCommit: string | null; transcriptBytes: number | null },
+  now: string
+): Res<Dispatch | null> {
+  const dispatch = s.dispatches.find((d) => d.sessionId === a.sessionId && !d.endedAt)
+  if (!dispatch) return ok(s, null)
+  const next: Dispatch = {
+    ...dispatch,
+    stopSnapshot: { headCommit: a.headCommit, transcriptBytes: a.transcriptBytes }
+  }
+  const task = s.tasks.find((t) => t.id === dispatch.taskId)
+  return ok(
+    {
+      ...s,
+      dispatches: replace(s.dispatches, next),
+      tasks: task ? replace(s.tasks, { ...task, updatedAt: now }) : s.tasks
+    },
+    next
+  )
+}
+
 /** Returns the oldest unacknowledged Delivery. If there is none, builds a new batch from the
  *  undelivered messages. types only decides the "wake condition"; the batch content is always
  *  everything. */

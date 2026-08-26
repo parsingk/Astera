@@ -141,6 +141,14 @@ export interface Dispatch {
    * and the two are not distinguished (section 7 of the orchestration guide).
    */
   limitResetsAt?: number
+  /** 정지 시점에만 측정 가능한 값들. **나머지 Checkpoint 재료는 여기 담지 않는다** — Job 상태·git·
+   *  검증 결과는 대기가 몇 시간이어도 디스크에 그대로 있고, 재개 직전에 읽는 것이 더 정확하다
+   *  (그 사이 브랜치와 파일이 움직인다). 여기 있는 것은 그때 읽으면 **이미 늦은** 것뿐이다:
+   *  - headCommit: 기다리는 동안 워크트리가 바뀌었는지 판정할 기준점. 비교 대상이 없으면 판정 자체가
+   *    불가능하다(spec §13).
+   *  - transcriptBytes: tail 을 "정지 이전" 으로 자르는 기준.
+   *  정지 이유는 여기 두지 않는다 — `workerState` 와 `limitResetsAt` 이 이미 표현한다. */
+  stopSnapshot?: { headCommit: string | null; transcriptBytes: number | null }
   /** Cleanup held back at the user's request (worker-retain) */
   retained: boolean
   /** 이 Dispatch 가 구현이 아니라 검토인가. 한 Task 에 구현 Dispatch 와 검토 Dispatch 가 함께
