@@ -103,7 +103,12 @@ function seed() {
   const snap = unwrap<unknown>(
     recordStopSnapshot(
       s,
-      { sessionId: d2.value.sessionId, headCommit: 'abc123', transcriptBytes: 4096 },
+      {
+        sessionId: d2.value.sessionId,
+        headCommit: 'abc123',
+        reason: 'waiting',
+        resetsAt: '2026-08-26T06:00:00.000Z'
+      },
       NOW
     ) as never
   )
@@ -212,6 +217,20 @@ describe('buildCheckpoint', () => {
     expect(c.filesModified).toEqual(
       expect.arrayContaining(['src/auth/AuthService.ts', 'src/auth/GoogleOAuthProvider.ts'])
     )
+  })
+
+  // fix round 2: 롤된 Dispatch 는 닫히지 않으므로 workerState/limitResetsAt 만으로는 "왜 멈췄나"를
+  // 답할 수 없다. 정지 스냅샷이 그 답을 들고 있어야 하고, Checkpoint 가 그것을 실어야 한다.
+  it('carries the stop reason and reset time recorded at the stop', () => {
+    const { s, dispatchId } = seed()
+    const c = buildCheckpoint(s, { dispatchId, git, now: NOW })!
+    expect(c.stop).toEqual({ reason: 'waiting', resetsAt: '2026-08-26T06:00:00.000Z' })
+  })
+
+  it('leaves the stop field out when no stop was ever recorded', () => {
+    const { s, dispatchId } = seedWithReport('nothing recorded')
+    const c = buildCheckpoint(s, { dispatchId, git: null, now: NOW })!
+    expect(c.stop).toBeUndefined()
   })
 
   it('returns null for an unknown dispatchId', () => {

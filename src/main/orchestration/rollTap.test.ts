@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { OrchRollTap, EXIT_DEFER_MS } from './rollTap'
 import type { OrchServerDeps } from './server'
+import type { RollStateEvent } from '../../core/types'
+import type { git } from '../../core/worktrees/git'
+import { buildCheckpoint } from '../../core/orchestration/checkpoint'
 import {
   createRun,
   createTask,
@@ -234,5 +237,156 @@ describe('OrchRollTap', () => {
     const d = deps.state().dispatches.find((x) => x.id === dispatchId)
     expect(d?.sessionId).toBe('sess1')
     expect(d?.accountId).toBe('acc2')
+  })
+})
+
+// fix round 2 — 이 describe 가 막는 사고: 스냅샷을 롤 상태 게시마다 남기면 기준점이 정지 시점에서
+// 재개 직전으로 밀리고, 그러면 브리핑이 "네가 멈춘 뒤로 워크트리는 바뀌지 않았다" 를 **확인하지
+// 않은 채** 사실로 단정한다. 한 번의 정지에 한 번만 남아야 한다.
+
+/** 그 순간의 HEAD 를 돌려주는 git 이중체. 값을 테스트가 정하므로 실제 저장소가 필요 없다 —
+ *  gitSummary.test.ts 의 fakeGit 과 같은 관례다(호출 목록도 함께 남긴다). */
+function fakeGit(heads: string[]): { git: typeof git; calls: number } {
+  const box = { calls: 0 }
+  const fn = (async () => {
+    const stdout = heads[Math.min(box.calls, heads.length - 1)]
+    box.calls++
+    return { ok: true, stdout, stderr: '' }
+  }) as unknown as typeof git
+  return {
+    git: fn,
+    get calls() {
+      return box.calls
+    }
+  }
+}
+
+const rollState = (e: Partial<RollStateEvent> & { sessionId: string }): RollStateEvent => ({
+  state: 'waiting',
+  ...e
+})
+
+const snapshotOf = (deps: { state: () => OrchState }, dispatchId: string) =>
+  deps.state().dispatches.find((d) => d.id === dispatchId)?.stopSnapshot
+
+describe('OrchRollTap 정지 스냅샷', () => {
+  it("'waiting' 은 HEAD·정지 사유·리셋 시각을 남긴다", async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    const g = fakeGit(['head-at-limit'])
+    new OrchRollTap(deps, { git: g.git }).onRollState(
+      rollState({ sessionId: 'sess1', state: 'waiting', nextRetryAt: '2026-08-25T03:00:00.000Z' })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    expect(snapshotOf(deps, dispatchId)).toEqual({
+      headCommit: 'head-at-limit',
+      reason: 'waiting',
+      resetsAt: '2026-08-25T03:00:00.000Z'
+    })
+  })
+
+  it("같은 정지의 kill 앞 'switching' 은 앞선 'waiting' 을 덮어쓰지 않는다", async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    // 두 번째 호출이 있었다면 HEAD 는 'head-now' 가 됐을 것이다 — 그 값이 나오면 덮어썼다는 뜻이다
+    const g = fakeGit(['head-at-limit', 'head-now'])
+    const tap = new OrchRollTap(deps, { git: g.git })
+    tap.onRollState(
+      rollState({ sessionId: 'sess1', state: 'waiting', nextRetryAt: '2026-08-25T03:00:00.000Z' })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'switching', accountLabel: 'B' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(snapshotOf(deps, dispatchId)).toEqual({
+      headCommit: 'head-at-limit',
+      reason: 'waiting',
+      resetsAt: '2026-08-25T03:00:00.000Z'
+    })
+    expect(g.calls).toBe(1) // git 을 두 번 읽지도 않는다
+  })
+
+  it("respawn 뒤의 reattach 'switching' 은 스냅샷을 남기지 않는다", async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    const g = fakeGit(['head-now'])
+    new OrchRollTap(deps, { git: g.git }).onRollState(
+      rollState({ sessionId: 'sess1', state: 'switching', accountLabel: 'B', reattach: true })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    expect(snapshotOf(deps, dispatchId)).toBeUndefined()
+    expect(g.calls).toBe(0)
+  })
+
+  it('롤 뒤 새 세션 id 로 오는 게시도 같은 에피소드로 본다', async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    const g = fakeGit(['head-at-limit', 'head-now'])
+    const tap = new OrchRollTap(deps, { git: g.git })
+    // 계정을 바꾸는 롤의 실제 순서: switching(옛 id) → rolled → switching(reattach, 새 id) → none
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'switching', accountLabel: 'B' }))
+    await vi.advanceTimersByTimeAsync(0)
+    await tap.onRolled('sess1', { id: 'sess2', accountId: 'acc2' })
+    tap.onRollState(
+      rollState({ sessionId: 'sess2', state: 'switching', accountLabel: 'B', reattach: true })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    expect(snapshotOf(deps, dispatchId)).toEqual({ headCommit: 'head-at-limit', reason: 'switching' })
+    expect(g.calls).toBe(1)
+  })
+
+  it("에피소드가 'none' 으로 끝난 뒤의 다음 정지는 새로 남긴다", async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    const g = fakeGit(['first-stop', 'second-stop'])
+    const tap = new OrchRollTap(deps, { git: g.git })
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'waiting' }))
+    await vi.advanceTimersByTimeAsync(0)
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'none' })) // 재개가 실제로 이뤄졌다
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'waiting' })) // 다음 한도
+    await vi.advanceTimersByTimeAsync(0)
+    expect(snapshotOf(deps, dispatchId)?.headCommit).toBe('second-stop')
+    expect(g.calls).toBe(2)
+  })
+
+  it('워커가 아닌 세션의 정지는 상태를 바꾸지 않는다', async () => {
+    const { s } = seed()
+    const deps = makeDeps(s)
+    const g = fakeGit(['x'])
+    new OrchRollTap(deps, { git: g.git }).onRollState(
+      rollState({ sessionId: 'plain-tab-session', state: 'waiting' })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deps.state()).toBe(s)
+    expect(g.calls).toBe(0)
+  })
+
+  it('기록한 리셋 시각이 Checkpoint 까지 도달한다', async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    const g = fakeGit(['head-at-limit'])
+    new OrchRollTap(deps, { git: g.git }).onRollState(
+      rollState({ sessionId: 'sess1', state: 'waiting', nextRetryAt: '2026-08-25T03:00:00.000Z' })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    const c = buildCheckpoint(deps.state(), { dispatchId, git: null, now: NOW })
+    expect(c?.stop).toEqual({ reason: 'waiting', resetsAt: '2026-08-25T03:00:00.000Z' })
+  })
+
+  it('워크트리가 움직였는지를 정지 시점 HEAD 로 판정한다 — respawn 시점이 아니라', async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    const g = fakeGit(['head-at-limit', 'head-at-respawn'])
+    const tap = new OrchRollTap(deps, { git: g.git })
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'waiting' }))
+    await vi.advanceTimersByTimeAsync(0)
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'switching', accountLabel: 'B' }))
+    await vi.advanceTimersByTimeAsync(0)
+    // 재개 직전에 읽은 HEAD 는 respawn 시점의 것과 같다 — 정지 시점 값이 살아 있어야만 "움직였다"가 나온다
+    const c = buildCheckpoint(deps.state(), {
+      dispatchId,
+      git: { branch: 'main', head: 'head-at-respawn', changed: [], diffstat: null },
+      now: NOW
+    })
+    expect(c?.worktreeMoved).toBe(true)
   })
 })

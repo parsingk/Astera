@@ -10,12 +10,19 @@
 // 키를 새 세션으로 옮긴다(rekeyDispatch). 미룬 뒤에 도착한 exit 는 옛 id 로 열린 Dispatch 를 찾지
 // 못하므로 저절로 no-op 이 된다(closeDispatch 가 ok(state, null) 을 낸다).
 //
+// **두 번째 책임: 정지 시점 스냅샷.** 이것도 같은 이음매의 일이다 — 정지 스냅샷은 "한 번의 정지에
+// 한 번" 이어야 하는데, 한 번의 정지는 롤 상태를 여러 번 게시하므로 세션별 기억이 필요하다. 그
+// 기억을 가질 수 있는 자리가 여기다(onRollState 의 주석에 자세히). ipc.ts 에 있던 동안은 이벤트마다
+// 새로 시작하는 클로저였고, 그래서 마지막 게시가 정지 시점의 기준점을 덮어썼다.
+//
 // **이 구조는 Slack 에서 빌려 왔다.** main/slack.ts 가 같은 사건에 같은 방법을 쓴다 — EXIT_DELAY_MS
 // 만큼 종료 알림을 미루고 onRolled 에서 그 타이머를 취소한다. 공통 층은 세우지 않는다:
 // core/rolling/retry.ts 머리말이 "타이머 수명을 공통 부모로 올리는 것은 이 앱에서 버그를 가장 많이
 // 낸 축" 이라고 적어 두었고, 두 구독자가 각자 자기 타이머를 갖는 것이 그 경고를 지키는 모양이다.
-import { rekeyDispatch } from '../../core/orchestration/state'
+import { recordStopSnapshot, rekeyDispatch } from '../../core/orchestration/state'
 import type { Dispatch } from '../../core/orchestration/types'
+import type { RollStateEvent } from '../../core/types'
+import { git } from '../../core/worktrees/git'
 import { handleExit, type OrchServerDeps } from './server'
 
 /** exit 처리를 미뤄 두는 창.
@@ -30,11 +37,30 @@ import { handleExit, type OrchServerDeps } from './server'
  *  (DEFAULT_CHECK_TIMEOUT_MS). */
 export const EXIT_DEFER_MS = 3_000
 
+export interface OrchRollTapDeps {
+  /** git 실행 어댑터. gitSummary.ts 의 `GitSummaryDeps.git` 과 같은 관례 — 테스트 주입용이고,
+   *  넘기지 않으면 실제 git(core/worktrees/git.ts)을 쓴다. */
+  git?: typeof git
+}
+
 export class OrchRollTap {
   /** 미뤄 둔 exit. 키는 **옛** 세션 id 다 */
   private timers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** 지금 정지 에피소드 안에 있는 세션들. 정지 스냅샷을 **에피소드에 들어갈 때 한 번만** 남기기
+   *  위한 기억이고, 이 클래스가 그것을 가질 수 있는 유일한 자리다(ipc.ts 의 탭은 이벤트마다 새로
+   *  시작하는 클로저였다).
+   *
+   *  키가 롤과 함께 옮겨 다닌다 — onRolled 에서 옛 id 의 표시를 새 id 로 이관한다. 한 에피소드는
+   *  옛 세션에서 시작해 새 세션에서 끝나기 때문이다(정지→kill→respawn→재개). */
+  private stopped = new Set<string>()
+  private readonly git: typeof git
 
-  constructor(private deps: OrchServerDeps) {}
+  constructor(
+    private deps: OrchServerDeps,
+    tapDeps: OrchRollTapDeps = {}
+  ) {
+    this.git = tapDeps.git ?? git
+  }
 
   /** 세션 종료. 곧바로 처리하지 않고 EXIT_DEFER_MS 뒤에 handleExit 을 부른다. */
   onExit(e: { sessionId: string; exitCode: number }): void {
@@ -76,6 +102,11 @@ export class OrchRollTap {
     oldSessionId: string,
     newInfo: { id: string; accountId: string }
   ): Promise<Dispatch | null> {
+    // 정지 에피소드 표시를 새 세션 id 로 옮긴다. **재키잉 성공 여부와 무관하다** — 이 표시는
+    // Dispatch 가 아니라 *이벤트 흐름*을 따라가는 것이고, 롤 뒤의 'switching'(reattach)·'none' 은
+    // 재키잉이 어떻게 됐든 새 id 로 온다. 옮기지 않으면 옛 id 의 표시가 그것을 지울 'none' 을
+    // 영원히 못 만나고, 새 id 는 표시가 없어 respawn 직후의 게시를 새 정지로 오인한다.
+    if (this.stopped.delete(oldSessionId)) this.stopped.add(newInfo.id)
     const now = this.deps.now?.() ?? new Date().toISOString()
     const r = rekeyDispatch(
       this.deps.getState(),
@@ -107,11 +138,78 @@ export class OrchRollTap {
     return r.value
   }
 
+  /** 롤 상태 게시. **정지 에피소드에 들어갈 때 한 번만** 정지 스냅샷을 남긴다.
+   *
+   *  **왜 필터가 이렇게 촘촘한가.** 한 번의 정지는 롤 상태를 여러 번 게시한다. 계정을 바꾸는 롤은
+   *  'switching' 을 **두 번** 낸다 — kill 앞에서 한 번(옛 세션 id), respawn 뒤에 배너를 새 세션에
+   *  다시 붙이며 한 번(`reattach: true`). 리셋을 기다리는 정지는 'waiting' 을 먼저 내고, 그
+   *  대기가 끝나 계정을 바꾸게 되면 그 뒤에 'switching' 을 또 낸다. 이 게시마다 스냅샷을 남기면
+   *  기준점이 **정지 시점에서 재개 직전으로 밀린다** — 그러면 `worktreeMoved` 는 "respawn 몇 초
+   *  전의 HEAD" 를 "지금의 HEAD" 와 비교하고, 그 둘은 당연히 같아서 브리핑이 "네가 멈춘 뒤로
+   *  워크트리는 바뀌지 않았다" 를 **확인하지 않은 채 사실로 단정한다**. 몇 시간을 기다리는 동안
+   *  사람이 같은 디렉터리에서 편집하는 것이 흔한, 바로 그 경우에.
+   *
+   *  `reattach` 만 걸러서는 부족하다 — kill 앞의 'switching' 은 reattach 가 아니면서 앞선
+   *  'waiting' 을 덮어쓴다. 그래서 세션별 기억(`stopped`)이 필요하다.
+   *
+   *  **에피소드의 끝은 'none' 이다.** 두 코디네이터 모두 재개가 실제로 이뤄진 뒤에 그것을 게시한다
+   *  (in-place 재개·idle nudge·리셋 앵커는 Enter 뒤, claude 롤은 auto-prompt 뒤, codex 롤은 롤
+   *  끝에서) — 그리고 포기하는 갈래에서도 게시한다(롤 중단·롤 실패·체인 dispose). 즉 "이 체인은
+   *  더 이상 정지 중이 아니다" 를 뜻하는 상태는 이것뿐이다. 나머지는 전부 에피소드 *안*에서
+   *  일어난다: 'trust' 는 respawn 뒤 신뢰 프롬프트를 받는 중이고, 'nudged' 는 재개 프롬프트를
+   *  보내기 직전이고, 'stalled' 는 재개가 듣지 않았다는 판정이다.
+   *
+   *  **던지지 않는다** — 부르는 쪽은 롤링의 send 탭이고, 거기서 예외가 새면 롤 자체가 막힌다.
+   *  스냅샷 기록은 비동기라 던져 놓고 간다(그 자리에서 기다릴 수 없다). 실패해도 로그만 남긴다:
+   *  스냅샷이 없으면 `worktreeMoved` 가 null(모른다)이 되고, 그것이 정확히 옳은 결과다. */
+  onRollState(e: RollStateEvent): void {
+    if (e.state === 'none') {
+      this.stopped.delete(e.sessionId)
+      return
+    }
+    if (e.state !== 'waiting' && e.state !== 'switching') return
+    if (e.reattach) return
+    if (this.stopped.has(e.sessionId)) return
+    this.stopped.add(e.sessionId)
+    void this.recordStop(e.sessionId, e.state, e.nextRetryAt).catch((err) =>
+      this.deps.log?.(`stop snapshot failed session=${e.sessionId}: ${String(err)}`)
+    )
+  }
+
+  /** 정지 시점의 HEAD 를 읽어 열린 Dispatch 에 남긴다. HEAD 하나만 읽는 이유는 SPEC §8 에 있다 —
+   *  나머지 Checkpoint 재료는 대기가 몇 시간이어도 디스크에 그대로 있고 재개 직전에 읽는 것이 더
+   *  정확하다. 정지 사유와 리셋 시각은 읽는 것이 아니라 이 이벤트가 들고 온 것이다. */
+  private async recordStop(
+    sessionId: string,
+    reason: 'waiting' | 'switching',
+    nextRetryAt: string | undefined
+  ): Promise<void> {
+    const dispatch = this.deps
+      .getState()
+      .dispatches.find((d) => d.sessionId === sessionId && !d.endedAt)
+    if (!dispatch) return // Job 워커가 아니다(사용자 탭 세션) — 잡을 것이 없다
+    const head = await this.git(['rev-parse', 'HEAD'], { cwd: dispatch.cwd })
+    // 위 await 사이에 다른 커밋이 있었을 수 있다 — 반영할 상태는 다시 읽는다(onRolled 와 같은 관례).
+    const r = recordStopSnapshot(
+      this.deps.getState(),
+      {
+        sessionId,
+        headCommit: head.ok && head.stdout !== '' ? head.stdout : null,
+        reason,
+        ...(nextRetryAt !== undefined ? { resetsAt: nextRetryAt } : {})
+      },
+      this.deps.now?.() ?? new Date().toISOString()
+    )
+    if (!r.ok || r.value === null) return
+    await this.deps.setState(r.state)
+  }
+
   /** 오케스트레이션/앱 종료. 미뤄 둔 exit 는 **버린다** — 열린 채 남은 Dispatch 는 다음 실행에서
    *  store.load 가 outcome_unknown 으로 정리한다. 그것이 이미 정해진 정책이므로 여기서 서둘러
    *  닫으려 하지 않는다(닫으려 해도 setState 가 끝날 보장이 없다 — will-quit 는 동기다). */
   dispose(): void {
     for (const t of this.timers.values()) clearTimeout(t)
     this.timers.clear()
+    this.stopped.clear()
   }
 }

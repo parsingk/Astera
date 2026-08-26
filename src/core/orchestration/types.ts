@@ -141,14 +141,30 @@ export interface Dispatch {
    * and the two are not distinguished (section 7 of the orchestration guide).
    */
   limitResetsAt?: number
-  /** 정지 시점에만 측정 가능한 값들. **나머지 Checkpoint 재료는 여기 담지 않는다** — Job 상태·git·
+  /** 정지 시점에만 잡을 수 있는 값들. **나머지 Checkpoint 재료는 여기 담지 않는다** — Job 상태·git·
    *  검증 결과는 대기가 몇 시간이어도 디스크에 그대로 있고, 재개 직전에 읽는 것이 더 정확하다
    *  (그 사이 브랜치와 파일이 움직인다). 여기 있는 것은 그때 읽으면 **이미 늦은** 것뿐이다:
    *  - headCommit: 기다리는 동안 워크트리가 바뀌었는지 판정할 기준점. 비교 대상이 없으면 판정 자체가
    *    불가능하다(spec §13).
-   *  - transcriptBytes: tail 을 "정지 이전" 으로 자르는 기준.
-   *  정지 이유는 여기 두지 않는다 — `workerState` 와 `limitResetsAt` 이 이미 표현한다. */
-  stopSnapshot?: { headCommit: string | null; transcriptBytes: number | null }
+   *  - reason·resetsAt: 이 정지를 일으킨 `RollStateEvent` 가 들고 있던 값. **`workerState` 와
+   *    `limitResetsAt` 이 이것을 대신하지 못한다** — 롤된 Dispatch 는 닫히지 않으므로
+   *    (rollTap.ts 의 `rekeyDispatch`) `workerState` 는 'ready' 로 남고, `limitResetsAt` 은
+   *    `closeDispatch` 와 실패 보고 probe 만 쓴다. 즉 롤 경로에서는 둘 다 비어 있고, 그 상태로
+   *    조립한 브리핑은 "왜 여기 있는가" 를 말해야 하는 절에서 "아직 기록된 정지가 없다" 를 낸다.
+   *    리셋 시각은 그 이벤트(`RollStateEvent.nextRetryAt`)에만 있어서, 여기 옮겨 두지 않으면
+   *    그대로 사라진다.
+   *
+   *  transcript 끝 위치는 **한동안 여기 있었고 지웠다** — 조립기(checkpoint.ts)가 순수 모듈이라
+   *  transcript 파일을 열 방법이 없어 그 값을 읽는 코드가 아예 없었다(SPEC §8, DESIGN §22). */
+  stopSnapshot?: {
+    headCommit: string | null
+    /** 정지를 일으킨 롤 상태 그대로 — 'waiting'(같은 계정의 리셋을 기다린다) 또는
+     *  'switching'(다른 계정으로 넘어간다). */
+    reason: 'waiting' | 'switching'
+    /** ISO. 'waiting' 일 때만 있다(`RollStateEvent.nextRetryAt`) — 계정을 바꾸는 쪽은 기다리지
+     *  않으므로 리셋 시각이라는 값 자체가 없다. */
+    resetsAt?: string
+  }
   /** Cleanup held back at the user's request (worker-retain) */
   retained: boolean
   /** 이 Dispatch 가 구현이 아니라 검토인가. 한 Task 에 구현 Dispatch 와 검토 Dispatch 가 함께

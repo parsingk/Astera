@@ -66,6 +66,13 @@ export interface Checkpoint {
   /** ISO 문자열로 미리 바꿔 둔다. epoch ms 를 그대로 남기면 서식 쪽이 다시 Date 로 바꿔야 하고,
    *  그러면 "같은 Checkpoint 는 같은 문자열" 이 실행 시각(타임존 등)에 기대게 된다. */
   limitResetsAt?: string
+  /** 정지 스냅샷이 기록한 정지 사유와 리셋 시각(`Dispatch.stopSnapshot`).
+   *
+   *  **이것이 없으면 CURRENT STATE 절이 거짓을 말한다.** 롤 경로에서 Dispatch 는 닫히지 않으므로
+   *  `workerState` 는 'ready' 로 남고 `limitResetsAt` 은 비어 있다 — 즉 "왜 여기 있는가" 를 답해야
+   *  하는 절이 "아직 기록된 정지가 없다" 를 낸다. 스냅샷이 없으면(스냅샷 이전에 만들어진 Dispatch,
+   *  또는 롤링이 아닌 경로) 비워 둔다. */
+  stop?: { reason: 'waiting' | 'switching'; resetsAt?: string }
 
   /** Task.filesModified + Message.filesModified + git 의 changed, 중복 없이 합친 것. */
   filesModified: string[]
@@ -153,6 +160,16 @@ export function buildCheckpoint(
     workerState: dispatch.workerState,
     ...(dispatch.limitResetsAt !== undefined
       ? { limitResetsAt: new Date(dispatch.limitResetsAt).toISOString() }
+      : {}),
+    ...(dispatch.stopSnapshot
+      ? {
+          stop: {
+            reason: dispatch.stopSnapshot.reason,
+            ...(dispatch.stopSnapshot.resetsAt !== undefined
+              ? { resetsAt: dispatch.stopSnapshot.resetsAt }
+              : {})
+          }
+        }
       : {}),
     filesModified,
     reports,

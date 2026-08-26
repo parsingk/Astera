@@ -65,6 +65,44 @@ describe('formatResumeSection', () => {
     expect(out).toContain(`--dispatch-id ${base.dispatchId}`)
   })
 
+  // fix round 2: the one section whose job is to say why this session is here used to say "no
+  // recorded stop yet" on the very path this feature exists for — a rolled Dispatch is never closed,
+  // so workerState stays 'ready' and limitResetsAt is never written. The stop snapshot answers it.
+  it('states why the previous worker stopped from the stop snapshot', () => {
+    const waited: Checkpoint = {
+      ...base,
+      workerState: 'ready',
+      limitResetsAt: undefined,
+      stop: { reason: 'waiting', resetsAt: '2026-08-26T06:00:00.000Z' }
+    }
+    const out = formatResumeSection(waited)
+    expect(out).toContain('stopped on a usage limit')
+    expect(out).toContain('2026-08-26T06:00:00.000Z')
+    expect(out).not.toContain('no recorded stop yet')
+  })
+
+  it('says an account switch happened when that is what the snapshot recorded', () => {
+    const switched: Checkpoint = {
+      ...base,
+      workerState: 'ready',
+      limitResetsAt: undefined,
+      stop: { reason: 'switching' }
+    }
+    const out = formatResumeSection(switched)
+    expect(out).toContain('moved it to another account')
+    expect(out).not.toContain('no recorded stop yet')
+  })
+
+  it('falls back to workerState when no stop was recorded', () => {
+    const none: Checkpoint = {
+      ...base,
+      workerState: 'ready',
+      limitResetsAt: undefined,
+      stop: undefined
+    }
+    expect(formatResumeSection(none)).toContain('no recorded stop yet')
+  })
+
   it('never leaks a diff body, only a diffstat', () => {
     const out = formatResumeSection(base)
     expect(out).toContain(base.git!.diffstat!)

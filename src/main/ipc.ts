@@ -34,11 +34,9 @@ import {
   applyValidationResult,
   blockForValidation,
   blockForReview,
-  openReviewDispatch,
-  recordStopSnapshot
+  openReviewDispatch
 } from '../core/orchestration/state'
 import { pickReviewer } from '../core/orchestration/reviewer'
-import { extractStatusLineSession } from '../core/usage/statusline'
 import { slotsToFill } from '../core/orchestration/schedule'
 import { firesDue } from '../core/orchestration/fire'
 import { reapableChildRuns } from '../core/orchestration/reap'
@@ -95,11 +93,11 @@ import { loadRunConfigs, prepareRun } from './run/prepare'
  *  없다. orchEnv 는 두 롤링 코디네이터가 읽는 세 번째 값이다 — 롤로 띄우는 워커 세션에 astera CLI
  *  환경을 실어야 롤 뒤의 워커가 완료를 보고할 수 있다(rolling.ts/codexRolling.ts 의 orchEnv dep).
  *
- *  **onRollState 도 롤링의 send 탭에서 부른다 — 그래서 역시 void 다.** 'waiting'(한 계정 체인이
- *  리셋을 기다린다)이나 'switching'(다른 계정으로 넘어간다) 일 때만 정지 시점 스냅샷을 남긴다
- *  (recordStopSnapshot, core/orchestration/state.ts) — 롤링이 실제로 세션을 세우거나 바꾸는 시점은
- *  이 둘뿐이고, 나머지 상태('trust'·'nudged'·'stalled'·'none')는 세션이 계속 살아 있으므로 그 시점의
- *  HEAD 가 "정지 시점"의 의미를 갖지 않는다.
+ *  **onRollState 도 롤링의 send 탭에서 부른다 — 그래서 역시 void 다.** `RollStateEvent` 를 통째로
+ *  넘기고, 그 중 어떤 게시가 정지 에피소드의 시작인지 가르는 일과 정지 스냅샷을 남기는 일은
+ *  `OrchRollTap` 이 한다(main/orchestration/rollTap.ts 의 onRollState). 통째로 넘기는 이유는 둘이다:
+ *  같은 정지가 'switching' 을 두 번 게시하므로 `reattach` 를 봐야 하고, 리셋 시각(`nextRetryAt`)은
+ *  이 이벤트에만 있어 여기서 버리면 브리핑이 그것을 되찾을 방법이 없다.
  *
  *  **resumeText 는 두 롤링 코디네이터가 읽는 네 번째 값이다** — RollingDeps/CodexRollingDeps 의
  *  resumeText dep 구현이고, sessionId 로 열린 Job Dispatch 를 찾아 재개 packet 을 spec 파일에 적어
@@ -108,7 +106,7 @@ import { loadRunConfigs, prepareRun } from './run/prepare'
 export interface OrchHandle {
   stop: () => void
   onRolled: (oldSessionId: string, newInfo: { id: string; accountId: string }) => void
-  onRollState: (sessionId: string, state: RollStateEvent['state']) => void
+  onRollState: (e: RollStateEvent) => void
   orchEnv: () => { cliPath: string; infoPath: string; skillsPath: string } | undefined
   resumeText: (sessionId: string) => Promise<string | null>
 }
@@ -1953,39 +1951,6 @@ export function registerIpc(
         )
       )
       .catch((err) => orchLog(`stub install failed: ${String(err)}`))
-    // Task 4a: 정지 시점 스냅샷. session:rollState 가 'waiting'(한 계정 체인이 리셋을 기다린다) 또는
-    // 'switching'(다른 계정으로 넘어간다)일 때만 부른다(onRollState 의 필터) — 롤링이 실제로 세션을
-    // 세우거나 바꾸는 시점이 그 둘뿐이고, 그때 읽은 HEAD 가 재개 시점에 "그 사이 워크트리가 움직였는가"
-    // 를 비교할 기준점이 된다(core/orchestration/checkpoint.ts 의 worktreeMoved). 롤링은 세션만
-    // 건드리고 워크트리는 건드리지 않으므로, 이 시점과 실제 정지 사이에 HEAD 가 갈릴 걱정은 없다 —
-    // 있다면 그것이 바로 이 기능이 잡으려는 변화다.
-    const recordStopSnapshotFor = async (sessionId: string): Promise<void> => {
-      const before = deps.getState()
-      const dispatch = before.dispatches.find((d) => d.sessionId === sessionId && !d.endedAt)
-      if (!dispatch) return // Job 워커가 아니다(사용자 탭 세션) — 잡을 것이 없다
-      const head = await git(['rev-parse', 'HEAD'], { cwd: dispatch.cwd })
-      const headCommit = head.ok && head.stdout !== '' ? head.stdout : null
-      // transcriptBytes: statusLine 이 실어 주는 transcript_path(claude 전용)의 그 순간 파일 크기.
-      // codex 세션에는 statusLine 이 없으므로 여기서는 늘 null 이다 — 필드가 애초에 nullable 인
-      // 이유이자(types.ts 의 stopSnapshot 주석), 다른 필드들과 같은 "모르면 null" 관례다.
-      let transcriptBytes: number | null = null
-      try {
-        const payload = await core.statusLinePayload(sessionId)
-        const { transcriptPath } = extractStatusLineSession(payload)
-        if (transcriptPath) transcriptBytes = (await fs.stat(transcriptPath)).size
-      } catch {
-        transcriptBytes = null
-      }
-      // 위 두 await 사이에 다른 커밋이 있었을 수 있다 — 반영할 상태는 다시 읽는다(worker-start 의
-      // 같은 관례: 입구의 상태가 아니라 여기서 다시 읽은 상태를 넘긴다).
-      const r = recordStopSnapshot(
-        deps.getState(),
-        { sessionId, headCommit, transcriptBytes },
-        new Date().toISOString()
-      )
-      if (!r.ok || r.value === null) return
-      await deps.setState(r.state)
-    }
     orchWiring?.onStarted({
       stop: () => {
         // 미뤄 둔 exit 를 버린다. 남겨 두면 서버가 내려간 뒤에 setState 가 돌 수 있다.
@@ -2023,14 +1988,10 @@ export function registerIpc(
           )
         })
       },
-      onRollState: (sessionId, state) => {
-        // 롤링의 send 탭은 동기다 — 기다릴 자리가 없어 던져 놓고 간다. 실패는 로그만 남기고
-        // 삼킨다: 스냅샷을 못 남겨도 롤링 자체를 막을 이유가 아니다(다른 탭들과 같은 태도).
-        if (state !== 'waiting' && state !== 'switching') return
-        void recordStopSnapshotFor(sessionId).catch((e) =>
-          orchLog(`stop snapshot failed session=${sessionId}: ${String(e)}`)
-        )
-      },
+      // 이벤트를 통째로 넘긴다 — 어떤 게시가 정지 에피소드의 시작인지 가르는 데 state 만으로는
+      // 부족하고(reattach 를 봐야 한다), 리셋 시각도 이 이벤트에만 있다. 판단과 세션별 기억은
+      // OrchRollTap 이 갖는다(rollTap.ts 의 onRollState).
+      onRollState: (e) => orchRollTap?.onRollState(e),
       // 롤링 배선이 읽는다. 오케스트레이션이 꺼져 있으면 undefined — 그러면 롤된 세션은 예전처럼
       // CLI 없이 뜨고, 그 상태에서 워커가 존재할 일도 없다.
       orchEnv: () => orchEnvOf(),

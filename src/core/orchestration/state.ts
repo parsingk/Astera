@@ -820,17 +820,29 @@ export function rekeyDispatch(
  *  이것은 관측 기록이고, 무엇이 일어났는지에 대한 주장이 아니다.
  *
  *  열린 Dispatch 가 없으면 `ok(state, null)` 이다(`closeDispatch`·`rekeyDispatch` 와 같은 관례).
- *  두 번째 정지는 덮어쓴다 — Checkpoint 가 필요한 기준점은 **마지막** 정지의 것이다. */
+ *  두 번째 정지는 덮어쓴다 — Checkpoint 가 필요한 기준점은 **마지막** 정지의 것이다. 무엇이
+ *  "두 번째 정지" 인지 가르는 것은 이 함수가 아니라 부르는 쪽이다(main/orchestration/rollTap.ts):
+ *  한 번의 정지는 롤 상태를 여러 번 게시하므로, 그 안에서 이 함수를 다시 부르면 기준점이 정지
+ *  시점에서 재개 직전으로 밀려 worktreeMoved 가 아무것도 판정하지 못한다. */
 export function recordStopSnapshot(
   s: OrchState,
-  a: { sessionId: string; headCommit: string | null; transcriptBytes: number | null },
+  a: {
+    sessionId: string
+    headCommit: string | null
+    reason: 'waiting' | 'switching'
+    resetsAt?: string
+  },
   now: string
 ): Res<Dispatch | null> {
   const dispatch = s.dispatches.find((d) => d.sessionId === a.sessionId && !d.endedAt)
   if (!dispatch) return ok(s, null)
   const next: Dispatch = {
     ...dispatch,
-    stopSnapshot: { headCommit: a.headCommit, transcriptBytes: a.transcriptBytes }
+    stopSnapshot: {
+      headCommit: a.headCommit,
+      reason: a.reason,
+      ...(a.resetsAt !== undefined ? { resetsAt: a.resetsAt } : {})
+    }
   }
   const task = s.tasks.find((t) => t.id === dispatch.taskId)
   return ok(

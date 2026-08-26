@@ -472,9 +472,9 @@ app.whenReady().then(async () => {
           const p = payload as { oldSessionId: string; info: SessionInfo }
           orchRef?.onRolled(p.oldSessionId, p.info)
         } else if (channel === 'session:rollState') {
-          // 정지 시점 스냅샷(Task 4a) — waiting/switching 일 때만 실제로 기록한다(ipc.ts 의 필터).
-          const p = payload as RollStateEvent
-          orchRef?.onRollState(p.sessionId, p.state)
+          // 정지 시점 스냅샷 — 이벤트를 통째로 넘긴다. 어떤 게시가 정지 에피소드의 시작인지
+          // 가르는 일과 세션별 기억은 OrchRollTap 이 갖는다(main/orchestration/rollTap.ts).
+          orchRef?.onRollState(payload as RollStateEvent)
         }
       } catch {
         /* an orchestration tap failure must not block rolling */
@@ -558,9 +558,9 @@ app.whenReady().then(async () => {
           const p = payload as { oldSessionId: string; info: SessionInfo }
           orchRef?.onRolled(p.oldSessionId, p.info)
         } else if (channel === 'session:rollState') {
-          // 정지 시점 스냅샷(Task 4a) — waiting/switching 일 때만 실제로 기록한다(ipc.ts 의 필터).
-          const p = payload as RollStateEvent
-          orchRef?.onRollState(p.sessionId, p.state)
+          // 정지 시점 스냅샷 — 이벤트를 통째로 넘긴다. 어떤 게시가 정지 에피소드의 시작인지
+          // 가르는 일과 세션별 기억은 OrchRollTap 이 갖는다(main/orchestration/rollTap.ts).
+          orchRef?.onRollState(payload as RollStateEvent)
         }
       } catch {
         /* an orchestration tap failure must not block rolling */

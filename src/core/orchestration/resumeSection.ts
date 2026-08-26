@@ -34,13 +34,28 @@ function dependenciesSection(c: Checkpoint): string | null {
   return `DEPENDENCIES\n${lines.join('\n')}`
 }
 
+/** 왜 이 세션이 여기 있는가 — 이 절의 첫 줄이 그 답이다.
+ *
+ *  **정지 스냅샷이 1순위다.** 롤 경로에서 Dispatch 는 닫히지 않으므로 `workerState` 는 'ready' 로,
+ *  `limitResetsAt` 은 비어 있는 채로 남는다(checkpoint.ts 의 `stop` 주석) — 그 둘만 보면 이 절이
+ *  항상 "아직 기록된 정지가 없다" 를 낸다. 스냅샷이 없을 때만 예전 두 값으로 내려간다: 스냅샷이
+ *  생기기 전에 만들어진 Dispatch 와, 롤링이 아닌 경로로 닫힌 Dispatch 가 그쪽이다. */
+function stopReasonText(c: Checkpoint): string {
+  if (c.stop) {
+    if (c.stop.reason === 'switching')
+      return 'The previous worker session stopped on a usage limit and the app moved it to another account.'
+    return c.stop.resetsAt
+      ? `The previous worker session stopped on a usage limit and the app waited for that account to recover (expected at ${c.stop.resetsAt}).`
+      : 'The previous worker session stopped on a usage limit and the app waited for that account to recover.'
+  }
+  return c.limitResetsAt
+    ? `The previous worker session stopped on a usage limit. It resets at ${c.limitResetsAt}.`
+    : WORKER_STATE_TEXT[c.workerState]
+}
+
 function stateSection(c: Checkpoint): string {
   const bullets: string[] = []
-  bullets.push(
-    c.limitResetsAt
-      ? `The previous worker stopped because of a usage limit. It resets at ${c.limitResetsAt}.`
-      : WORKER_STATE_TEXT[c.workerState]
-  )
+  bullets.push(stopReasonText(c))
   if (c.worktreeMoved !== null) {
     bullets.push(
       c.worktreeMoved

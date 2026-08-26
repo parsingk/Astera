@@ -1979,21 +1979,34 @@ describe('rekeyDispatch — 롤링이 세션을 갈아탈 때', () => {
   })
 })
 
-describe('recordStopSnapshot — 정지 시점에만 잡을 수 있는 값', () => {
-  it('HEAD 와 transcript 위치를 열린 Dispatch 에 남긴다', () => {
+describe('recordStopSnapshot — 정지 시점에만 잡을 수 있는 것', () => {
+  it('HEAD 와 정지 사유를 열린 Dispatch 에 남긴다', () => {
     const { s, dispatchId } = seed()
     const r = unwrap<{ id: string }>(
-      recordStopSnapshot(s, { sessionId: 'sess1', headCommit: 'abc1234', transcriptBytes: 4096 }, NOW) as never
+      recordStopSnapshot(
+        s,
+        { sessionId: 'sess1', headCommit: 'abc1234', reason: 'waiting', resetsAt: LATER },
+        NOW
+      ) as never
     )
     const d = r.state.dispatches.find((x) => x.id === dispatchId)
-    expect(d?.stopSnapshot).toEqual({ headCommit: 'abc1234', transcriptBytes: 4096 })
+    expect(d?.stopSnapshot).toEqual({ headCommit: 'abc1234', reason: 'waiting', resetsAt: LATER })
+  })
+
+  it('리셋 시각이 없는 정지(계정 전환)는 resetsAt 칸을 만들지 않는다', () => {
+    const { s, dispatchId } = seed()
+    const r = unwrap<unknown>(
+      recordStopSnapshot(s, { sessionId: 'sess1', headCommit: 'abc1234', reason: 'switching' }, NOW) as never
+    )
+    const d = r.state.dispatches.find((x) => x.id === dispatchId)
+    expect(d?.stopSnapshot).toEqual({ headCommit: 'abc1234', reason: 'switching' })
   })
 
   it('Task 를 건드리지 않는다 — 상태도 실패 카운터도', () => {
     const { s, taskId } = seed()
     const before = s.tasks.find((t) => t.id === taskId)
     const r = unwrap<unknown>(
-      recordStopSnapshot(s, { sessionId: 'sess1', headCommit: 'abc1234', transcriptBytes: 1 }, NOW) as never
+      recordStopSnapshot(s, { sessionId: 'sess1', headCommit: 'abc1234', reason: 'waiting' }, NOW) as never
     )
     const after = r.state.tasks.find((t) => t.id === taskId)
     expect(after?.status).toBe(before?.status)
@@ -2003,7 +2016,7 @@ describe('recordStopSnapshot — 정지 시점에만 잡을 수 있는 값', () 
   it('Dispatch 를 닫지 않는다', () => {
     const { s, dispatchId } = seed()
     const r = unwrap<unknown>(
-      recordStopSnapshot(s, { sessionId: 'sess1', headCommit: null, transcriptBytes: null }, NOW) as never
+      recordStopSnapshot(s, { sessionId: 'sess1', headCommit: null, reason: 'switching' }, NOW) as never
     )
     const d = r.state.dispatches.find((x) => x.id === dispatchId)
     expect(d?.endedAt).toBeUndefined()
@@ -2011,22 +2024,30 @@ describe('recordStopSnapshot — 정지 시점에만 잡을 수 있는 값', () 
 
   it('그 세션에 열린 Dispatch 가 없으면 null 이고 상태는 그대로다', () => {
     const { s } = seed()
-    const r = recordStopSnapshot(s, { sessionId: 'nope', headCommit: 'x', transcriptBytes: 1 }, NOW)
+    const r = recordStopSnapshot(s, { sessionId: 'nope', headCommit: 'x', reason: 'waiting' }, NOW)
     expect(r.ok).toBe(true)
     if (!r.ok) throw new Error('expected ok')
     expect(r.value).toBeNull()
     expect(r.state).toBe(s)
   })
 
-  it('두 번째 정지는 스냅샷을 덮어쓴다 — 마지막 정지가 기준점이다', () => {
+  it('다음 정지는 스냅샷을 덮어쓴다 — 마지막 정지가 기준점이다', () => {
     const { s, dispatchId } = seed()
     const first = unwrap<unknown>(
-      recordStopSnapshot(s, { sessionId: 'sess1', headCommit: 'aaa', transcriptBytes: 1 }, NOW) as never
+      recordStopSnapshot(
+        s,
+        { sessionId: 'sess1', headCommit: 'aaa', reason: 'waiting', resetsAt: NOW },
+        NOW
+      ) as never
     )
     const second = unwrap<unknown>(
-      recordStopSnapshot(first.state, { sessionId: 'sess1', headCommit: 'bbb', transcriptBytes: 2 }, LATER) as never
+      recordStopSnapshot(
+        first.state,
+        { sessionId: 'sess1', headCommit: 'bbb', reason: 'switching' },
+        LATER
+      ) as never
     )
     const d = second.state.dispatches.find((x) => x.id === dispatchId)
-    expect(d?.stopSnapshot?.headCommit).toBe('bbb')
+    expect(d?.stopSnapshot).toEqual({ headCommit: 'bbb', reason: 'switching' })
   })
 })
