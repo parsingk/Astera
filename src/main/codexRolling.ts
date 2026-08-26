@@ -16,6 +16,7 @@ import {
   CodexRolloutTail,
   limitReached,
   maxedOut,
+  rolloutSize,
   worstResetAt,
   type CodexLimitState
 } from '../core/rolling/codexSignal'
@@ -55,6 +56,10 @@ export interface CodexRollingDeps {
   lang: () => Lang // taken as a getter rather than a value so the latest language is used even after setLang
   persistConfig?: (codexSessionId: string, config: RollConfig) => void
   copy?: (src: string, dest: string) => Promise<void> // for test injection — defaults to copyTranscript
+  /** The rollout's byte size, `null` when it cannot be read. Injected the same way `copy` is, and for
+   *  the same reason: the default is the real thing (rolloutSize). The in-place resume deadline is the
+   *  only caller — see settleInPlace. */
+  rolloutSize?: (filePath: string) => Promise<number | null>
   now?: () => number
   /** 롤로 띄우는 세션에 실을 astera CLI 환경.
    *
@@ -105,6 +110,12 @@ interface Chain {
   disposed: boolean
   recovery: (BlockRecord | null)[]
   inPlaceUsed: boolean // whether an in-place resume was already used for this blocked episode (cleared by healthyTimer)
+  // The state-publication generation counter, incremented on every pushState. The deferred 'none' of
+  // resumeInPlace (its 150ms Enter timer) captures the generation at scheduling time; on firing it
+  // publishes only if the generation is unchanged, and skips as stale if a 'waiting' or 'switching'
+  // has published something more recent in the meantime. Same mechanism and same reason as the claude
+  // side (rolling.ts) — codex got its first deferred publish with the in-place resume.
+  stateSeq: number
 }
 
 /** Extracts just the part of a Chain the retry verdict needs (the input of core/rolling/retry.ts) */
@@ -118,10 +129,12 @@ export class CodexRollingCoordinator {
   private chains = new Map<string, Chain>() // liveId → chain
   private ticker: ReturnType<typeof setInterval> | null = null
   private readonly copy: (src: string, dest: string) => Promise<void>
+  private readonly rolloutSize: (filePath: string) => Promise<number | null>
   private readonly now: () => number
 
   constructor(private deps: CodexRollingDeps) {
     this.copy = deps.copy ?? copyTranscript
+    this.rolloutSize = deps.rolloutSize ?? rolloutSize
     this.now = deps.now ?? Date.now
   }
 
@@ -158,7 +171,8 @@ export class CodexRollingCoordinator {
       healthyTimer: null,
       disposed: false,
       recovery: ids.map(() => null),
-      inPlaceUsed: false
+      inPlaceUsed: false,
+      stateSeq: 0
     }
     this.chains.set(info.id, chain)
     if (info.resumeSessionId && rolloutPath) {
@@ -482,7 +496,9 @@ export class CodexRollingCoordinator {
       // did not actually recover the session, so this time a fresh process is spawned instead. This
       // guards the one premise in this plan that has never been measured: whether codex's composer
       // really accepts a new turn after the reset. onLimit clears healthyTimer before it decides, so
-      // this flag survives a second limit that lands inside the healthy window.
+      // this flag survives a second limit that lands inside the healthy window. The case where the
+      // composer swallows the line and *no* second limit ever arrives cannot reach this branch at all
+      // — settleInPlace is what covers that one.
       this.deps.log(
         `codex resume in place did not recover — falling back to respawn session=${chain.liveId}`
       )
@@ -511,39 +527,110 @@ export class CodexRollingCoordinator {
    *      it writes the same function (attachRollout) to the same file again.
    *   ② **Clear state.** The last snapshot is 100% — leaving it would fire the maxed+silent fallback
    *      again right after the resume. roll() does the same thing at the respawn point.
-   *   ③ **Reset the textHit latch and the phrase scanner.** Same reason. */
+   *   ③ **Reset the textHit latch and the phrase scanner.** Same reason.
+   *
+   *  The timer it arms last is not a plain healthy timer — it is a deadline that has to decide whether
+   *  the typed line started a turn at all. See settleInPlace.
+   *
+   *  **The try/catch is here for the same reason roll() has one.** This function is void-called (the
+   *  wait timer in onLimit), so a rejection escaping it would be an unhandled rejection and the chain
+   *  would be left published as 'nudged' with the scheduler's suppression still on. The realistic case
+   *  is deps.write throwing on a PTY that died during the wait. */
   private async resumeInPlace(chain: Chain): Promise<void> {
-    if (chain.rolloutPath && chain.codexSessionId)
-      this.attachRollout(chain, chain.codexSessionId, chain.rolloutPath) // ①
-    chain.state = null // ②
-    chain.textHit = false // ③
-    chain.scanner = new CodexLimitScanner()
-    chain.lastOutputAt = this.now()
-    chain.inPlaceUsed = true
-    // 'nudged' is the right state — this is a reset resume, not an account switch, the renderer
-    // treats it as a momentary event, and the Slack mapping (slack.limitReset) already exists. Same
-    // choice as the claude-side resumeInPlace.
-    this.pushState(chain, 'nudged')
-    const liveId = chain.liveId
-    this.deps.log(`codex limit reset → resume in place session=${liveId}`)
-    const prompt = await this.resumePromptFor(chain, liveId, 'update')
-    if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
-    this.deps.write(liveId, prompt)
-    setTimeout(() => {
-      if (chain.disposed || chain.liveId !== liveId) return
-      this.deps.write(liveId, '\r')
-      // 'none' has to be published after Enter for the scheduler's suppression to lift (same order
-      // as the claude side)
+    try {
+      if (chain.rolloutPath && chain.codexSessionId)
+        this.attachRollout(chain, chain.codexSessionId, chain.rolloutPath) // ①
+      chain.state = null // ②
+      chain.textHit = false // ③
+      chain.scanner = new CodexLimitScanner()
+      chain.lastOutputAt = this.now()
+      chain.inPlaceUsed = true
+      // 'nudged' is the right state — this is a reset resume, not an account switch, the renderer
+      // treats it as a momentary event, and the Slack mapping (slack.limitReset) already exists. Same
+      // choice as the claude-side resumeInPlace.
+      this.pushState(chain, 'nudged')
+      const liveId = chain.liveId
+      this.deps.log(`codex limit reset → resume in place session=${liveId}`)
+      const prompt = await this.resumePromptFor(chain, liveId, 'update')
+      if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
+      // Started **before** the write, so the record codex appends for the message we are about to
+      // submit counts as growth, and deliberately **not awaited** here: the Enter that follows is on a
+      // 150ms timer, and putting a file-system round trip in front of it would push the submission out
+      // by an unbounded I/O. settleInPlace awaits it at the deadline instead. Same shape as JsonlTail's
+      // startAtEnd offset — start the stat now, read the answer later — including the `.catch` that
+      // turns a failure into "no measurement" right where the promise is created (an unawaited
+      // rejection would otherwise be reported as unhandled long before the deadline reads it).
+      const sizeBefore = chain.rolloutPath
+        ? this.rolloutSize(chain.rolloutPath).catch(() => null)
+        : Promise.resolve(null)
+      const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same convention as the claude side
+      this.deps.write(liveId, prompt)
+      setTimeout(() => {
+        if (chain.disposed || chain.liveId !== liveId) return
+        this.deps.write(liveId, '\r')
+        // 'none' has to be published after Enter for the scheduler's suppression to lift (same order
+        // as the claude side). If a more recent state was published in between, ours is stale and is
+        // skipped — publishing it anyway would lift the suppression and clear the orchestration stop
+        // marker while the chain is in fact waiting or switching again.
+        if (chain.stateSeq === stateSeq) this.pushState(chain, 'none')
+      }, ENTER_DELAY_MS)
+      chain.healthyTimer = setTimeout(() => {
+        void this.settleInPlace(chain, liveId, sizeBefore)
+      }, HEALTHY_MS)
+    } catch (err) {
+      this.deps.log(
+        `codex resume in place failed: ${err instanceof Error ? err.message : String(err)}`
+      )
       this.pushState(chain, 'none')
-    }, ENTER_DELAY_MS)
-    // On the roll() path this timer is armed by sendPrompt. Without it, recovery[current] stays set
+    }
+  }
+
+  /** The deadline of an in-place resume: HEALTHY_MS after the line went in, did a turn actually run?
+   *
+   *  **Why this exists.** If the composer ignores the line we typed, the session prints nothing and
+   *  writes nothing. Nothing printed means no limit is ever detected again, so onLimit and therefore
+   *  resumeAfterWait are never reached again, and nothing respawns: the worker sits idle forever with
+   *  no notification. The 15-second tick cannot catch it either — resumeInPlace just nulled the state,
+   *  so both limitReached and maxedOut are false and there is no idle detector on this side. So the
+   *  timer that used to only reset the block count now also has to answer the question, and roll when
+   *  the answer is no. That respawn is the one this chain should have had.
+   *
+   *  **Why the rollout file and not PTY output.** The TUI echoes our own keystrokes back through
+   *  handleData, so chain.lastOutputAt advances even when the input was swallowed — output cannot tell
+   *  the two apart. The rollout can: codex appends a record for the submitted message as soon as it
+   *  accepts it (see rolloutSize).
+   *
+   *  **A size we cannot read counts as no growth.** A spurious respawn is recoverable — `codex resume`
+   *  reconstructs the conversation — while an eternal stall is not. rolloutSize swallows its own errors
+   *  for that reason, and the `.catch(() => null)` on both reads covers an injected implementation that
+   *  does not — nothing here may throw out of the timer callback. */
+  private async settleInPlace(
+    chain: Chain,
+    liveId: string,
+    before: Promise<number | null>
+  ): Promise<void> {
+    chain.healthyTimer = null
+    if (chain.disposed || chain.liveId !== liveId) return
+    const sizeBefore = await before
+    const sizeAfter = chain.rolloutPath
+      ? await this.rolloutSize(chain.rolloutPath).catch(() => null)
+      : null
+    if (chain.disposed || chain.liveId !== liveId) return
+    if (sizeBefore === null || sizeAfter === null || sizeAfter <= sizeBefore) {
+      // roll() arms the healthy timer itself and has its own `rolling` guard, so there is nothing to
+      // clear or coordinate here beyond having nulled healthyTimer above.
+      this.deps.log(
+        `codex resume in place produced no turn (rollout ${sizeBefore ?? 'unreadable'} → ` +
+          `${sizeAfter ?? 'unreadable'} bytes) — respawning session=${liveId}`
+      )
+      await this.roll(chain, chain.cycle.currentIndex)
+      return
+    }
+    // A turn ran — what the plain healthy timer always did. Without this, recovery[current] stays set
     // and the next limit is misread as a whole lap being blocked.
-    chain.healthyTimer = setTimeout(() => {
-      chain.healthyTimer = null
-      chain.cycle.onHealthy()
-      chain.recovery[chain.cycle.currentIndex] = null
-      chain.inPlaceUsed = false
-    }, HEALTHY_MS)
+    chain.cycle.onHealthy()
+    chain.recovery[chain.cycle.currentIndex] = null
+    chain.inPlaceUsed = false
   }
 
   /** Runs the roll: copy the rollout → kill → respawn in the same slot with codex resume */
@@ -659,6 +746,7 @@ export class CodexRollingCoordinator {
     state: RollStateEvent['state'],
     extra?: Partial<RollStateEvent>
   ): void {
+    chain.stateSeq++ // the generation advances on every publication — the basis for deciding whether a deferred publication is stale
     this.deps.send('session:rollState', { sessionId: chain.liveId, state, ...extra })
   }
 

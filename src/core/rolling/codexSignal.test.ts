@@ -9,6 +9,7 @@ import {
   findKeepModelChoice,
   limitReached,
   maxedOut,
+  rolloutSize,
   worstResetAt,
   type CodexLimitState
 } from './codexSignal'
@@ -430,5 +431,19 @@ describe('worstResetAt', () => {
   it('해당 창이 없으면 at=null', () => {
     expect(worstResetAt(state({}))).toEqual({ at: null, weekly: false })
     expect(worstResetAt(null)).toEqual({ at: null, weekly: false })
+  })
+})
+
+describe('rolloutSize', () => {
+  // 제자리 재개가 턴을 만들었는지 판정하는 근거다(codexRolling.ts 의 settleInPlace). 크기를 못 읽는
+  // 것과 자라지 않은 것을 부르는 쪽이 같게 다루므로, 못 읽을 때 던지지 않고 null 을 내는 것이 계약이다.
+  it('파일 크기를 바이트로 돌린다', async () => {
+    const p = await write('size.jsonl', [tokenCount({ primary: 1 })])
+    const bytes = await rolloutSize(p)
+    expect(bytes).toBe((await fs.stat(p)).size)
+  })
+
+  it('없는 파일은 던지지 않고 null 이다', async () => {
+    expect(await rolloutSize(path.join(dir, 'nope.jsonl'))).toBeNull()
   })
 })

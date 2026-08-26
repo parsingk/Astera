@@ -2,6 +2,7 @@
 // For Claude we read the whole statusLine capture file (small, overwritten every time), but a rollout
 // is an append-only file that accumulates for the entire session, so we parse it incrementally with a
 // byte-offset tail.
+import { stat } from 'node:fs/promises'
 import { JsonlTail, type JsonlTailOptions } from './jsonlTail'
 import { tailLines } from './tailLines'
 import { stripAnsi, findChoiceNumber } from './detect'
@@ -196,6 +197,22 @@ export class CodexRolloutTail {
     const next = limitStateFromLines(r.lines, this.now(), this.last)
     if (next) this.last = { ...next, priorReset: next.priorReset ?? this.priorReset }
     return this.last
+  }
+}
+
+/** The rollout's size in bytes, or `null` when it cannot be read (missing file, permission error).
+ *
+ *  **What it is for: answering "did a turn actually run".** codex appends a record for a submitted
+ *  message as soon as it accepts it, so a rollout that did not grow after we typed a line means the
+ *  composer swallowed the input. PTY output cannot answer the same question — the TUI echoes our own
+ *  keystrokes straight back, so the output clock advances either way. Read as a size rather than a
+ *  parse because the question is only "did anything get appended"; which record it was does not
+ *  matter. The caller decides what `null` means (codexRolling treats it as no growth). */
+export async function rolloutSize(filePath: string): Promise<number | null> {
+  try {
+    return (await stat(filePath)).size
+  } catch {
+    return null
   }
 }
 

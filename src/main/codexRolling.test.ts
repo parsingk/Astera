@@ -44,6 +44,27 @@ const tokenCountLine = (opts: Snapshot): string =>
 const appendTokenCount = (file: string, opts: Snapshot): Promise<void> =>
   fs.appendFile(file, tokenCountLine(opts) + '\n', 'utf8')
 
+/** 실제로 발화하는 한도 신호 한 줄 — `task_complete` 이 싣는 구조 에러다(codexSignal.ts 의
+ *  limitErrorOf). reachedType 은 실측 1288건 전부 null 이라 화면 문구 없이 판정을 내는 것은 이
+ *  레코드뿐이고, **CodexRolloutTail 의 캐시에 남는 것도 이것**이다. 문구는 LIMIT_TEXT 와 같은
+ *  이유로 접합한다 — 통짜면 이 파일이 롤링 세션의 화면으로 흐를 때 스캐너가 문다. */
+const appendLimitError = (file: string): Promise<void> =>
+  fs.appendFile(
+    file,
+    JSON.stringify({
+      timestamp: new Date(Date.now()).toISOString(),
+      type: 'event_msg',
+      payload: {
+        type: 'task_complete',
+        error: {
+          message: "You've hit your " + 'usage limit.',
+          codex_error_info: 'usage_limit_exceeded'
+        }
+      }
+    }) + '\n',
+    'utf8'
+  )
+
 /** 실제 rollout 파일을 만든다 — 코디네이터가 findRollout·CodexRolloutTail로 진짜 읽는다 */
 async function writeRollout(opts: {
   accountId: string
@@ -430,31 +451,46 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
-  it('제자리 재개 뒤 두 번째 한도도 감지한다 (tail 을 파일 끝으로 다시 붙인다)', async () => {
+  // 이 테스트의 픽스처는 화면 문구가 아니라 **rollout 의 구조 에러**로 대기를 만든다. 그것이 실제로
+  // 발화하는 신호이고(appendLimitError), 동시에 resumeInPlace 의 ①·② 가 막는 재발화의 재료다:
+  // CodexRolloutTail.read() 는 새 줄이 없으면 **캐시된 상태를 그대로 돌려주고** refresh 는 non-null
+  // 일 때만 대입한다. 그래서 ①(tail 재부착)이나 ②(state=null) 어느 하나만 지워도 재개 직후 첫 틱이
+  // 그 판정을 다시 읽어 두 번째 'waiting' 을 게시한다. 사용률 스냅숏만으로 만든 픽스처
+  // (primary=99, reached=null)는 error 판정이 없고 maxedOut(99<100)도 아니라서 두 줄을 다 지워도
+  // 통과했다 — 그것이 이 테스트가 다시 쓰인 이유다.
+  it('제자리 재개 뒤 캐시된 한도 판정을 다시 읽지 않는다 (tail 재부착 + state 초기화)', async () => {
     const h = harness()
     const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
-    const resetSec = Math.floor((Date.now() + 300_000) / 1000)
+    const resetSec = Math.floor((Date.now() + 120_000) / 1000)
     const file = await writeRollout({
       accountId: 'c1', uuid: 'cx-inplace-3', cwd: single.cwd, primary: 99, primaryReset: resetSec
     })
     h.coord.register(single)
     await advance(1_500)
-    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
-    await advance(100)
-    await advance(400_000)
+    await appendLimitError(file)
+    await advance(15_000) // 틱 → 구조 에러로 판정 → 대기
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
     const waitingBefore = h.sent.filter((s) => s.payload.state === 'waiting').length
-    // 재개 직후에는 다시 대기하지 않는다 — 대기를 만든 그 레코드를 다시 읽으면 여기서 무너진다
-    await advance(60_000)
+    await advance(180_000) // 대기 만료(reset+60초) → 제자리 재개, 그리고 그 뒤의 틱들
+    expect(h.written.length).toBe(2) // 살아 있는 세션에 문장+엔터가 들어갔다
+    // 재개 직후의 틱이 대기를 만든 그 레코드를 다시 읽으면 여기서 무너진다
+    expect(h.sent.filter((s) => s.payload.state === 'waiting').length).toBe(waitingBefore)
+    // 재개된 세션이 턴을 돌린 흔적 — settleInPlace 의 마감 시각 판정이 성장으로 읽는 바이트다
+    await appendTokenCount(file, { primary: 50 })
+    await advance(15_000)
     expect(h.sent.filter((s) => s.payload.state === 'waiting').length).toBe(waitingBefore)
     // 이어서 진짜 두 번째 한도가 오면 감지한다
-    await appendTokenCount(file, { primary: 99, primaryReset: resetSec })
-    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
-    await advance(100)
+    await appendLimitError(file)
+    await advance(15_000)
     expect(h.sent.filter((s) => s.payload.state === 'waiting').length).toBe(waitingBefore + 1)
     h.coord.stop()
   })
 
-  it('계정이 바뀌는 재개는 여전히 복사→kill→spawn 이다 (회귀 방지)', async () => {
+  // 첫 한도는 다른 계정이 비어 있어 pickAvailable 이 즉시 전환한다 — 즉 이 테스트는 resumeAfterWait
+  // 까지 가지 않고, 그 앞의 즉시 전환 경로가 제자리 재개로 바뀌지 않았음을 지킨다. 대기가 만료된
+  // 뒤 계정이 바뀌는 갈래(resumeAfterWait 의 전환 분기)는 아래 '롤 이후에도 재개된 세션의 두 번째
+  // 한도를 감지한다' 가 지난다 — 두 계정이 한 바퀴 막힌 뒤의 spawn:s3:c1 이 그것이다.
+  it('다계정 체인의 첫 한도는 제자리 재개가 아니라 즉시 복사→kill→spawn 이다 (회귀 방지)', async () => {
     const h = harness()
     const resetSec = Math.floor((Date.now() + 120_000) / 1000)
     await writeRollout({
@@ -512,6 +548,120 @@ describe('CodexRollingCoordinator', () => {
     await advance(100)
     await advance(70_000) // 두 번째 대기 만료(reset이 이미 과거라 planRetry의 60초 하한이 적용된다)
     expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c1']) // 이번에는 프로세스를 새로 띄운다
+    h.coord.stop()
+  })
+
+  // 위 테스트가 막는 것은 "두 번째 한도가 오는" 경우뿐이다. composer 가 우리 한 줄을 그냥 먹으면
+  // 세션은 아무것도 출력하지 않고 rollout 에도 아무것도 쓰지 않는다 → 한도가 다시 감지될 일이
+  // 없으므로 resumeAfterWait 에 다시 오지도 않고, 워커는 알림 하나 없이 영원히 유휴가 된다.
+  // **출력으로는 이것을 알 수 없다** — TUI 가 우리 키 입력을 그대로 에코해서 lastOutputAt 이 전진한다.
+  // 그래서 마감 시각의 판정 근거는 rollout 파일의 성장이다.
+  it('제자리 재개가 턴을 만들지 못하면 마감 시각에 재spawn 한다 (영구 유휴 방지)', async () => {
+    const h = harness()
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 120_000) / 1000)
+    await writeRollout({
+      accountId: 'c1', uuid: 'cx-inplace-stall', cwd: single.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register(single)
+    await advance(1_500)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    await advance(188_400) // 첫 대기 만료(reset+60초) → 제자리 재개, 마감 시각까지 ~50초 남았다
+    expect(h.written.length).toBe(2) // 문장+엔터는 들어갔다
+    expect(h.events).toEqual([]) // 아직 아무것도 죽이지 않았다
+    // rollout 은 자라지 않는다 — 세션이 그 한 줄을 받아들이지 않았다는 뜻이다
+    await advance(60_000) // 마감 시각 경과
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c1']) // 체인이 받아야 했던 재spawn
+    h.coord.stop()
+  })
+
+  it('제자리 재개가 턴을 만들면 재spawn 하지 않고, 다음 한도는 다시 제자리 재개를 받는다', async () => {
+    const h = harness()
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 120_000) / 1000)
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-inplace-ok', cwd: single.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register(single)
+    await advance(1_500)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    await advance(188_400) // 첫 대기 만료 → 제자리 재개
+    expect(h.written.length).toBe(2)
+    // 재개된 세션이 실제로 턴을 돌렸다 — codex 는 받아들인 메시지의 레코드를 즉시 append 한다
+    await appendTokenCount(file, { primary: 50 })
+    await advance(60_000) // 마감 시각 경과 → 성장했으므로 건강 판정
+    expect(h.events).toEqual([]) // 죽이지 않는다
+    // 그리고 '에피소드당 한 번' 플래그가 풀렸다 — 다음 한도는 다시 제자리 재개를 받는다
+    await appendTokenCount(file, { primary: 99, primaryReset: Math.floor((Date.now() + 120_000) / 1000) })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    await advance(188_400) // 두 번째 대기 만료
+    expect(h.events).toEqual([]) // 여전히 프로세스를 죽이지 않는다
+    expect(h.written.length).toBe(4) // 두 번째 제자리 재개
+    h.coord.stop()
+  })
+
+  // roll() 의 healthy 타이머도 같은 플래그를 푼다. 그 한 줄이 없으면 롤 뒤 정상 동작한 세션이 다음
+  // 한도에서도 제자리 재개 자격을 못 받아, 계정이 하나인 워커는 리셋마다 프로세스를 새로 띄운다.
+  it('롤 뒤 60초 무사하면 제자리 재개 자격이 돌아온다 (에피소드당 한 번 규칙의 해제)', async () => {
+    const h = harness()
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 120_000) / 1000)
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-inplace-8', cwd: single.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register(single)
+    await advance(1_500)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    await advance(188_400) // 첫 대기 만료 → 제자리 재개(플래그가 선다)
+    // healthy 구간 안의 두 번째 한도 → 위 테스트가 지키는 성질에 따라 이번에는 kill 경로다
+    await appendTokenCount(file, { primary: 99, primaryReset: resetSec })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    await advance(70_000)
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c1'])
+    await advance(60_000) // 롤의 healthy 타이머 만료 — 여기서 플래그가 풀린다
+    // 세 번째 한도. 단일 계정 체인은 dest === src 라 롤 뒤에도 같은 파일을 읽는다
+    await appendTokenCount(file, { primary: 99, primaryReset: Math.floor((Date.now() + 120_000) / 1000) })
+    h.coord.handleData({ sessionId: 's2', data: LIMIT_TEXT })
+    await advance(100)
+    await advance(188_400) // 세 번째 대기 만료
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c1']) // 두 번째 롤은 없다
+    expect(h.written.length).toBe(4) // 첫 제자리 재개 2 + 이번 제자리 재개 2
+    h.coord.stop()
+  })
+
+  // rolling.test.ts 의 '상태 세대 가드' 두 테스트와 같은 성질. codex 는 제자리 재개가 생기면서
+  // 처음으로 **지연 게시**를 갖게 됐다 — 엔터 뒤의 'none' 이 150ms 타이머 안에 있으므로, 그 사이에
+  // 게시된 'waiting'·'switching' 을 덮어쓴다. 덮으면 스케줄러의 억제가 풀리고 오케스트레이션 정지
+  // 표식이 일찍 지워진다.
+  it('제자리 재개 엔터 대기(150ms) 중 방해가 있으면 지연된 none을 건너뛴다', async () => {
+    const h = harness()
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 120_000) / 1000)
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-inplace-seq', cwd: single.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register(single)
+    await advance(1_500)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    // 대기 만료 시각으로 **정확히** 이동한다 — 그러면 문장은 들어갔고 엔터 타이머는 아직 예약 상태다
+    const retryAt = Date.parse(String(h.sent.at(-1)?.payload.nextRetryAt))
+    await advance(retryAt - Date.now())
+    expect(h.written).toEqual([['s1', '이어서 작업 진행해 줘']]) // 엔터는 아직이다
+    // 엔터 대기 중 방해: rollout 에 구조 에러가 도착해 두 번째 한도가 잡힌다 → 'waiting' (세대 전진)
+    await appendLimitError(file)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100) // 150ms 전 — 판정은 끝났고 엔터는 아직이다
+    const waiting = h.sent.at(-1)
+    expect(waiting?.payload.state).toBe('waiting')
+    await advance(100) // 원래 엔터 타이머 발화 시점 통과
+    expect(h.written.at(-1)).toEqual(['s1', '\r']) // 엔터는 세대와 무관하게 그대로 전송된다
+    expect(h.sent.at(-1)).toBe(waiting) // 지연된 none 이 최신 'waiting' 을 덮지 않았다
     h.coord.stop()
   })
 

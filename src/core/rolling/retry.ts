@@ -2,10 +2,11 @@
 // and codex coordinators — where RollCycle decides "what to do next", this decides "which account is
 // usable right now". Timers and state publishing stay owned by each coordinator.
 //
-// There is deliberately no coordinator base class (it was estimated and then closed): it is correct
-// that only claude uses the stateSeq generation guard in pushState and codex does not, and the timer
-// sets in disposeChain differ too (5 for claude / 3 for codex). Lifting timer lifetimes up into a
-// common parent is the axis of this app that has produced the most bugs.
+// There is deliberately no coordinator base class (it was estimated and then closed). Both
+// coordinators now carry the stateSeq generation guard in pushState — codex gained one the moment its
+// in-place resume gave it a deferred publish of its own — but the timer sets in disposeChain still
+// differ (5 for claude / 3 for codex), and lifting timer lifetimes up into a common parent is the axis
+// of this app that has produced the most bugs.
 
 /** Record of one account being blocked. at=reset time; if unknown (null), treat it as blocked until since+RETRY_FALLBACK_MS. */
 export interface BlockRecord {
