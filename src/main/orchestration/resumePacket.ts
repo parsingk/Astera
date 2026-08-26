@@ -1,0 +1,98 @@
+// 롤링이 재개 직전에 물어보는 훅(RollingDeps.resumeText/CodexRollingDeps.resumeText)의 구현.
+//
+// **packet 을 프롬프트 자리에 직접 실을 수 없는 이유는 배선(rolling.ts/codexRolling.ts) 쪽에 있다.**
+// codex 는 프롬프트를 CLI 인자로 넘기고 sanitizeResumePrompt(core/sessions/commands.ts)가
+// `["&|<>^%]`를 지운 뒤 모든 공백을 하나로 접어, 여러 줄 packet 이 뭉개진 한 줄이 된다. claude 는
+// PTY 에 타이핑하므로 줄바꿈마다 Enter 가 눌려 packet 이 중간에 스스로 제출된다. 그래서 packet 은
+// 워커가 이미 아는 spec 파일(Dispatch.specPath)에 적어 두고, 프롬프트는 그 파일을 다시 읽으라는
+// 한 줄로 좁힌다 — 경로를 담지 않으므로 따옴표 문제가 아예 없다.
+//
+// 이 파일은 순수하지 않다(fs 를 쓴다) — 그래서 main 쪽에 있다. 조립 자체(Checkpoint, 서식)는
+// core/orchestration 의 순수 모듈(checkpoint.ts, resumeSection.ts)이 이미 하고, 여기는 그 결과를
+// 어디서 읽고(OrchState 에서 열린 Dispatch를 찾고, git 을 읽고) 어디에 쓰는지(spec 파일)만 맡는다.
+import { promises as fs } from 'node:fs'
+import { buildCheckpoint } from '../../core/orchestration/checkpoint'
+import { formatResumeSection } from '../../core/orchestration/resumeSection'
+import type { OrchState } from '../../core/orchestration/state'
+import { readGitSummary, type GitSummaryDeps } from '../gitSummary'
+import { LAUNCH_FORBIDDEN } from './coordinator'
+
+export interface ResumePacketDeps {
+  /** git 실행 어댑터. readGitSummary(main/gitSummary.ts)의 GitSummaryDeps.git 을 그대로 통과시킨다 —
+   *  테스트 주입용이고, 넘기지 않으면 실제 git 을 쓴다. */
+  git?: GitSummaryDeps['git']
+  /** 현재 시각(ISO). 넘기지 않으면 실제 시계를 쓴다 — 결정론이 필요한 테스트만 주입한다. */
+  now?(): string
+  /** 쓰기 실패 진단 로그. 넘기지 않으면 아무 것도 하지 않는다(다른 모듈들의 log? 와 같은 관례) —
+   *  packet 을 못 만들어도 재개 자체는 막지 않으므로, 이 로그가 없어도 기능은 그대로 동작한다. */
+  log?(message: string): void
+}
+
+/** spec 파일에 붙이는 절의 표제. buildSpecFile(coordinator.ts)의 "## Project knowledge"·
+ *  "## Commit obligation"·"## Reporting obligation" 과 같은 모양(H2 + "assembled by the app —
+ *  do not delete")을 따른다 — 이 절도 앱이 조립해 붙인 것이고 지우면 안 된다는 뜻이 같다. */
+const HEADING = '## Resume briefing (assembled by the app — do not delete)'
+
+/** 재개가 반복되어도 절이 쌓이지 않게 한다. **이 절은 항상 파일의 마지막**이라는 전제로,
+ *  이전에 붙은 적이 있으면(표제가 있으면) 그 지점부터 끝까지를 잘라내고 새 절로 바꿔 끼운다.
+ *  buildSpecFile 이 쓰는 것과 같은 `\n---\n## <표제>` 구분자를 찾는 표시로 쓴다. */
+function upsertResumeSection(existing: string, section: string): string {
+  const marker = `\n---\n${HEADING}`
+  const idx = existing.indexOf(marker)
+  const base = (idx === -1 ? existing : existing.slice(0, idx)).replace(/\n+$/, '')
+  const block = `---\n${HEADING}\n\n${section}\n`
+  return base === '' ? block : `${base}\n\n${block}`
+}
+
+/** 재개 프롬프트 자리에 실을 한 줄. 정적이다 — 경로도, Task 마다 달라지는 값도 담지 않는다(위 헤더의
+ *  이유). 보고 의무를 여기서 다시 서술하지 않고 spec 파일을 가리키기만 하는 것은 의도된 선택이다:
+ *  buildSpecFile 의 Reporting obligation 과 formatResumeSection 의 REPORT WHEN DONE 이 이미 같은
+ *  명령 모양으로 그 의무를 적어 두었으므로(resumeSection.ts 의 reportSection 주석), 여기서 세 번째
+ *  표현을 만들면 같은 의무에 대해 서로 다른 두 문구를 주는 것이 된다. */
+const RESUME_LINE =
+  'Continue this task: re-read your spec file for a resume briefing the app just appended, then carry on and report exactly as it instructs when the work is finished.'
+
+/**
+ * sessionId 로 열린 Dispatch 를 찾아 Checkpoint 를 조립하고, 그 spec 파일에 재개 절을 적어 넣은 뒤
+ * 프롬프트 자리에 실을 한 줄을 돌려준다.
+ *
+ * **실패는 전부 null 로 저하한다.** 이 함수가 null 을 돌리면 부르는 쪽(rolling.ts/codexRolling.ts)은
+ * 그 자리에서 이미 쓰던 고정 문장(chain.prompt)으로 재개한다 — packet 을 못 만들었다고 재개 자체를
+ * 막지 않는다: 인계가 얇은 것은 작은 손해이고, 재개가 죽는 것은 큰 손해다.
+ *   - 그 세션에 열린 Dispatch 가 없다(사용자 탭 세션 — Job 워커가 아니다), 또는 specPath 가 없다:
+ *     조용히 null. 이것은 실패가 아니라 "이 기능이 적용될 자리가 아니다"이므로 로그를 남기지 않는다.
+ *   - git 을 읽을 수 없다: readGitSummary 자체가 null 을 돌리고, buildCheckpoint 는 그 null 을 받아
+ *     git 관련 칸만 비운 채 나머지를 그대로 조립한다 — packet 은 계속 만들어진다.
+ *   - spec 파일을 쓸 수 없다(디스크가 찼다, 경로가 사라졌다): 로그를 남기고 null.
+ *   - 반환할 문장이 LAUNCH_FORBIDDEN 에 걸린다: null. RESUME_LINE 은 정적 문자열이라 오늘은 걸릴 수
+ *     없지만, codex 의 sanitizer 가 지우는 문자를 스스로도 검사해 두는 것은 이 함수의 계약이다.
+ */
+export async function buildResumePacket(
+  sessionId: string,
+  state: OrchState,
+  deps: ResumePacketDeps = {}
+): Promise<string | null> {
+  const dispatch = state.dispatches.find((d) => d.sessionId === sessionId && !d.endedAt)
+  if (!dispatch || !dispatch.specPath) return null
+
+  const git = await readGitSummary(
+    dispatch.cwd,
+    deps.git ? { git: deps.git } : undefined
+  ).catch(() => null)
+  const now = deps.now?.() ?? new Date().toISOString()
+  const checkpoint = buildCheckpoint(state, { dispatchId: dispatch.id, git, now })
+  if (!checkpoint) return null // Task 나 Run 이 사라졌다 — 열린 Dispatch 라면 있을 수 없지만 방어적으로
+
+  const section = formatResumeSection(checkpoint)
+
+  try {
+    const existing = await fs.readFile(dispatch.specPath, 'utf8').catch(() => '')
+    await fs.writeFile(dispatch.specPath, upsertResumeSection(existing, section), 'utf8')
+  } catch (err) {
+    deps.log?.(`resume packet write failed dispatch=${dispatch.id}: ${String(err)}`)
+    return null
+  }
+
+  if (LAUNCH_FORBIDDEN.test(RESUME_LINE)) return null
+  return RESUME_LINE
+}
