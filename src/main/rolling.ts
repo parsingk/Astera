@@ -105,6 +105,12 @@ export interface RollingDeps {
    *
    *  주입되지 않으면 아무것도 실리지 않는다(기존 동작) — now?/log? 와 같은 관례다. */
   orchEnv?(): { cliPath: string; infoPath: string; skillsPath: string } | undefined
+  /** 재개 직전에 쓸 프롬프트를 물어본다. **`chain.prompt` 가 정적이라서 필요하다** — 그 값은
+   *  register 시점에 고정되는데, 재개 packet 은 재개 직전의 상태(git·보고·결정)에서 조립해야
+   *  정확하다. sessionId 로 열린 Job Dispatch 를 찾을 수 없으면(사용자 탭 세션) `null` 을 돌린다.
+   *  `null` 이면 `chain.prompt` 를 그대로 쓴다 — 주입되지 않아도 기존 동작 그대로다. 구현은
+   *  `main/orchestration/resumePacket.ts`. */
+  resumeText?(sessionId: string): Promise<string | null>
 }
 
 interface Chain {
@@ -699,15 +705,14 @@ export class RollingCoordinator {
       this.deps.log(`resume in place skipped — limit choice still on screen session=${chain.liveId}`)
       return this.roll(chain, toIndex)
     }
-    this.resumeInPlace(chain)
-    return Promise.resolve()
+    return this.resumeInPlace(chain)
   }
 
   /** Resuming on the same account — the prompt goes into the live PTY with no kill, no spawn and no
    *  transcript copy. Everything roll() does that belongs to switching accounts (publishing 'switching',
    *  the copy, re-keying, auto-accepting trust, the ready polling, the replay grace) does not apply here
    *  and is therefore not done. */
-  private resumeInPlace(chain: Chain): void {
+  private async resumeInPlace(chain: Chain): Promise<void> {
     // Through the wait, tick() skipped this chain (the waitTimer guard) so limitTailCheck never ran.
     // JsonlTail hands the bytes accumulated in the meantime to the next read, and since is the tail's
     // creation time (much earlier), so the first tick after the resume would read the very record that
@@ -727,7 +732,9 @@ export class RollingCoordinator {
     this.deps.log(`limit reset → resume in place session=${chain.liveId}`)
     const liveId = chain.liveId
     const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same convention as elsewhere
-    this.deps.write(liveId, chain.prompt)
+    const prompt = (await this.deps.resumeText?.(liveId)) ?? chain.prompt
+    if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
+    this.deps.write(liveId, prompt)
     setTimeout(() => {
       if (!chain.disposed && chain.liveId === liveId) {
         this.deps.write(liveId, '\r')
@@ -837,9 +844,11 @@ export class RollingCoordinator {
   private scheduleAutoPrompt(chain: Chain): void {
     const liveId = chain.liveId
     const startedAt = this.now()
-    const sendPrompt = (): void => {
+    const sendPrompt = async (): Promise<void> => {
       if (chain.disposed || chain.liveId !== liveId) return
-      this.deps.write(liveId, chain.prompt)
+      const prompt = (await this.deps.resumeText?.(liveId)) ?? chain.prompt
+      if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
+      this.deps.write(liveId, prompt)
       const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same place and convention as liveId
       setTimeout(() => {
         if (!chain.disposed && chain.liveId === liveId) {
@@ -872,7 +881,7 @@ export class RollingCoordinator {
       const payload = await this.deps.readStatusPayload(liveId)
       if (payload) {
         this.applyMeta(chain, payload)
-        sendPrompt()
+        await sendPrompt()
         return
       }
       const elapsed = this.now() - startedAt
@@ -921,7 +930,7 @@ export class RollingCoordinator {
         this.deps.log(
           `auto-prompt fallback — no statusline session=${liveId} tail=${maskLimitPhrase(chain.lastScreen.slice(-400))}`
         )
-        sendPrompt()
+        await sendPrompt()
         return
       }
       chain.promptTimer = setTimeout(() => void tick(), READY_POLL_MS)
@@ -1139,7 +1148,9 @@ export class RollingCoordinator {
     this.pushState(chain, 'nudged')
     const liveId = chain.liveId
     const stateSeq = chain.stateSeq // captures the generation at scheduling time
-    this.deps.write(liveId, chain.prompt)
+    const prompt = (await this.deps.resumeText?.(liveId)) ?? chain.prompt
+    if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
+    this.deps.write(liveId, prompt)
     setTimeout(() => {
       if (!chain.disposed && chain.liveId === liveId) {
         this.deps.write(liveId, '\r')
@@ -1243,7 +1254,9 @@ export class RollingCoordinator {
     this.pushState(chain, 'nudged') // a momentary event for the Slack notification — the renderer leaves it out of the banner
     const liveId = chain.liveId
     const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same place and convention as liveId
-    this.deps.write(liveId, chain.prompt)
+    const prompt = (await this.deps.resumeText?.(liveId)) ?? chain.prompt
+    if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
+    this.deps.write(liveId, prompt)
     setTimeout(() => {
       if (!chain.disposed && chain.liveId === liveId) {
         this.deps.write(liveId, '\r')

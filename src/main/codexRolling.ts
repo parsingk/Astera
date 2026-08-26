@@ -62,6 +62,12 @@ export interface CodexRollingDeps {
    *
    *  주입되지 않으면 아무것도 실리지 않는다(기존 동작) — now?/log? 와 같은 관례다. */
   orchEnv?(): { cliPath: string; infoPath: string; skillsPath: string } | undefined
+  /** 재개 직전에 쓸 프롬프트를 물어본다. rolling.ts 의 같은 필드와 동일한 계약 — `chain.prompt` 가
+   *  register 시점에 고정되는 정적 값이라서 필요하다. sessionId 로 열린 Job Dispatch 를 찾을 수
+   *  없으면(사용자 탭 세션) `null` 을 돌린다. `null` 이면 `chain.prompt` 를 그대로 쓴다. codex 는
+   *  이 프롬프트를 spawn 인자로 넘기므로 **kill·spawn 전에** 물어야 한다(roll() 의 호출 자리 참고).
+   *  구현은 `main/orchestration/resumePacket.ts`. */
+  resumeText?(sessionId: string): Promise<string | null>
 }
 
 interface Chain {
@@ -376,6 +382,17 @@ export class CodexRollingCoordinator {
         this.deps.log(`codex roll aborted — chain disposed during the copy session=${chain.liveId}`)
         return
       }
+      // resumeText 는 spec 파일에 쓰는 부수 효과가 있는 await 이므로, kill 과 재키잉 사이에는 두지
+      // 않는다 — 그 구간에 await 를 두지 않는다는 것이 아래 kill/spawn 의 불변이다(exit 가 옛 id 로
+      // 도착해도 disposeChain 이 오작동하지 않는 이유). 그래서 kill 앞에서, 세션이 아직 살아 있을
+      // 때 물어 둔다.
+      const prompt = (await this.deps.resumeText?.(chain.liveId)) ?? chain.prompt
+      if (chain.disposed) {
+        this.deps.log(
+          `codex roll aborted — chain disposed while building the resume prompt session=${chain.liveId}`
+        )
+        return
+      }
       // ② kill → ③ respawn in the same slot. The prompt is a CLI argument, so there is no PTY typing
       this.deps.kill(chain.liveId)
       const oldId = chain.liveId
@@ -383,7 +400,7 @@ export class CodexRollingCoordinator {
         account: target,
         cwd: chain.cwd,
         resumeSessionId: chain.codexSessionId,
-        resumePrompt: chain.prompt,
+        resumePrompt: prompt,
         rollAccountIds: chain.accountIds,
         slackNotify: chain.liveInfo.slackNotify, // the Slack notification is kept per chain (mirrors rolling.ts)
         bypassPermissions: chain.liveInfo.bypassPermissions,
