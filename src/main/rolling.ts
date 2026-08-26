@@ -109,7 +109,10 @@ export interface RollingDeps {
    *  register 시점에 고정되는데, 재개 packet 은 재개 직전의 상태(git·보고·결정)에서 조립해야
    *  정확하다. sessionId 로 열린 Job Dispatch 를 찾을 수 없으면(사용자 탭 세션) `null` 을 돌린다.
    *  `null` 이면 `chain.prompt` 를 그대로 쓴다 — 주입되지 않아도 기존 동작 그대로다. 구현은
-   *  `main/orchestration/resumePacket.ts`. */
+   *  `main/orchestration/resumePacket.ts`, 그 자체는 절대 던지지 않는다(계약). 그래도 이 dep 을
+   *  부르는 네 자리 전부는 그 위에 자기 자신의 try/catch 를 또 두른다 — 이 자리를 부르는 쪽이 전부
+   *  fire-and-forget 이라, 언젠가 이 계약이 깨지면 처리되지 않는 예외가 되는 대신 로그로만 남고
+   *  고정 문장으로 저하하게 하려는 것이다(server.ts 가 probeLimit 을 부르는 것과 같은 태도). */
   resumeText?(sessionId: string): Promise<string | null>
 }
 
@@ -732,7 +735,15 @@ export class RollingCoordinator {
     this.deps.log(`limit reset → resume in place session=${chain.liveId}`)
     const liveId = chain.liveId
     const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same convention as elsewhere
-    const prompt = (await this.deps.resumeText?.(liveId)) ?? chain.prompt
+    // Same try/catch shape as resumeInPlace above — see its comment for why.
+    let prompt = chain.prompt
+    try {
+      prompt = (await this.deps.resumeText?.(liveId)) ?? chain.prompt
+    } catch (err) {
+      this.deps.log(
+        `resume packet hook failed session=${liveId}: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
     if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
     this.deps.write(liveId, prompt)
     setTimeout(() => {
@@ -846,7 +857,15 @@ export class RollingCoordinator {
     const startedAt = this.now()
     const sendPrompt = async (): Promise<void> => {
       if (chain.disposed || chain.liveId !== liveId) return
-      const prompt = (await this.deps.resumeText?.(liveId)) ?? chain.prompt
+      // Same try/catch shape as resumeInPlace above — see its comment for why.
+      let prompt = chain.prompt
+      try {
+        prompt = (await this.deps.resumeText?.(liveId)) ?? chain.prompt
+      } catch (err) {
+        this.deps.log(
+          `resume packet hook failed session=${liveId}: ${err instanceof Error ? err.message : String(err)}`
+        )
+      }
       if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
       this.deps.write(liveId, prompt)
       const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same place and convention as liveId
@@ -1148,7 +1167,15 @@ export class RollingCoordinator {
     this.pushState(chain, 'nudged')
     const liveId = chain.liveId
     const stateSeq = chain.stateSeq // captures the generation at scheduling time
-    const prompt = (await this.deps.resumeText?.(liveId)) ?? chain.prompt
+    // Same try/catch shape as resumeInPlace above — see its comment for why.
+    let prompt = chain.prompt
+    try {
+      prompt = (await this.deps.resumeText?.(liveId)) ?? chain.prompt
+    } catch (err) {
+      this.deps.log(
+        `resume packet hook failed session=${liveId}: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
     if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
     this.deps.write(liveId, prompt)
     setTimeout(() => {
@@ -1254,7 +1281,15 @@ export class RollingCoordinator {
     this.pushState(chain, 'nudged') // a momentary event for the Slack notification — the renderer leaves it out of the banner
     const liveId = chain.liveId
     const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same place and convention as liveId
-    const prompt = (await this.deps.resumeText?.(liveId)) ?? chain.prompt
+    // Same try/catch shape as resumeInPlace above — see its comment for why.
+    let prompt = chain.prompt
+    try {
+      prompt = (await this.deps.resumeText?.(liveId)) ?? chain.prompt
+    } catch (err) {
+      this.deps.log(
+        `resume packet hook failed session=${liveId}: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
     if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
     this.deps.write(liveId, prompt)
     setTimeout(() => {

@@ -26,6 +26,10 @@ export interface ResumePacketDeps {
   /** 쓰기 실패 진단 로그. 넘기지 않으면 아무 것도 하지 않는다(다른 모듈들의 log? 와 같은 관례) —
    *  packet 을 못 만들어도 재개 자체는 막지 않으므로, 이 로그가 없어도 기능은 그대로 동작한다. */
   log?(message: string): void
+  /** spec 파일을 읽는 방법. 테스트 전용 주입점이다 — ENOENT 가 아닌 읽기 실패(파일 잠금, EMFILE 등)
+   *  는 실제 OS 조건으로 결정론적으로 재현할 수 없어서 여기로 갈아끼운다. 넘기지 않으면 실제
+   *  fs.readFile 을 쓴다. */
+  readFile?(path: string): Promise<string>
 }
 
 /** spec 파일에 붙이는 절의 표제. buildSpecFile(coordinator.ts)의 "## Project knowledge"·
@@ -56,14 +60,26 @@ const RESUME_LINE =
  * sessionId 로 열린 Dispatch 를 찾아 Checkpoint 를 조립하고, 그 spec 파일에 재개 절을 적어 넣은 뒤
  * 프롬프트 자리에 실을 한 줄을 돌려준다.
  *
- * **실패는 전부 null 로 저하한다.** 이 함수가 null 을 돌리면 부르는 쪽(rolling.ts/codexRolling.ts)은
- * 그 자리에서 이미 쓰던 고정 문장(chain.prompt)으로 재개한다 — packet 을 못 만들었다고 재개 자체를
- * 막지 않는다: 인계가 얇은 것은 작은 손해이고, 재개가 죽는 것은 큰 손해다.
+ * **실패는 전부 null 로 저하한다 — 절대 던지지 않는다.** 이 함수가 null 을 돌리면 부르는 쪽
+ * (rolling.ts/codexRolling.ts)은 그 자리에서 이미 쓰던 고정 문장(chain.prompt)으로 재개한다 —
+ * packet 을 못 만들었다고 재개 자체를 막지 않는다: 인계가 얇은 것은 작은 손해이고, 재개가 죽는 것은
+ * 큰 손해다. `readGitSummary` 뒤부터 반환까지 전체를 하나의 try 로 감싸는 이유가 이것이다 —
+ * `buildCheckpoint`·`formatResumeSection`(core/orchestration 의 순수 모듈)이 오늘 던지지 않는다는
+ * 것을 이 파일이 신뢰하고 그 경계를 얇게 두면, 그 모듈이 나중에 바뀌었을 때 이 함수가 거부된
+ * Promise 를 돌려 부르는 쪽의 fire-and-forget 호출(`void this.resumeInPlace(...)` 등)에서 처리되지
+ * 않는 예외가 될 수 있다.
  *   - 그 세션에 열린 Dispatch 가 없다(사용자 탭 세션 — Job 워커가 아니다), 또는 specPath 가 없다:
  *     조용히 null. 이것은 실패가 아니라 "이 기능이 적용될 자리가 아니다"이므로 로그를 남기지 않는다.
  *   - git 을 읽을 수 없다: readGitSummary 자체가 null 을 돌리고, buildCheckpoint 는 그 null 을 받아
  *     git 관련 칸만 비운 채 나머지를 그대로 조립한다 — packet 은 계속 만들어진다.
+ *   - spec 파일이 **아직 없다**(ENOENT) — 이번이 첫 재개이거나 아직 한 번도 쓰이지 않았다: 기존
+ *     내용이 없는 것으로 보고 새 절만 담아 만든다.
+ *   - spec 파일 읽기가 **다른 이유로** 실패한다(파일 잠금, EMFILE, 클라우드 동기화 recall 등): 이건
+ *     "내용이 없다"가 아니다 — 있는 내용을 모른 채 덮어쓰면 원래 Task 지시문을 통째로 지운다. 그래서
+ *     이 경우는 쓰기를 시도하지 않고 곧바로 null 로 저하한다(파일은 손대지 않는다).
  *   - spec 파일을 쓸 수 없다(디스크가 찼다, 경로가 사라졌다): 로그를 남기고 null.
+ *   - Checkpoint 조립이나 서식화가 던진다(오늘은 일어나지 않지만, 위 이유로 대비해 둔다): 로그를
+ *     남기고 null.
  *   - 반환할 문장이 LAUNCH_FORBIDDEN 에 걸린다: null. RESUME_LINE 은 정적 문자열이라 오늘은 걸릴 수
  *     없지만, codex 의 sanitizer 가 지우는 문자를 스스로도 검사해 두는 것은 이 함수의 계약이다.
  */
@@ -75,24 +91,33 @@ export async function buildResumePacket(
   const dispatch = state.dispatches.find((d) => d.sessionId === sessionId && !d.endedAt)
   if (!dispatch || !dispatch.specPath) return null
 
-  const git = await readGitSummary(
-    dispatch.cwd,
-    deps.git ? { git: deps.git } : undefined
-  ).catch(() => null)
-  const now = deps.now?.() ?? new Date().toISOString()
-  const checkpoint = buildCheckpoint(state, { dispatchId: dispatch.id, git, now })
-  if (!checkpoint) return null // Task 나 Run 이 사라졌다 — 열린 Dispatch 라면 있을 수 없지만 방어적으로
-
-  const section = formatResumeSection(checkpoint)
-
   try {
-    const existing = await fs.readFile(dispatch.specPath, 'utf8').catch(() => '')
+    const git = await readGitSummary(
+      dispatch.cwd,
+      deps.git ? { git: deps.git } : undefined
+    ).catch(() => null)
+    const now = deps.now?.() ?? new Date().toISOString()
+    const checkpoint = buildCheckpoint(state, { dispatchId: dispatch.id, git, now })
+    if (!checkpoint) return null // Task 나 Run 이 사라졌다 — 열린 Dispatch 라면 있을 수 없지만 방어적으로
+
+    const section = formatResumeSection(checkpoint)
+
+    // "파일이 없다"(ENOENT — 첫 재개)만 "기존 내용 없음"으로 본다. 그 밖의 읽기 실패는 내용을 모르는
+    // 것이지 없는 것이 아니므로, 여기서 던져 아래 catch 로 보내 쓰기 자체를 건너뛴다 — 알 수 없는
+    // 상태 위에 덮어써서 원본 지시문을 지우는 것보다 재개 한 번을 저하시키는 편이 훨씬 싸다.
+    const readFile = deps.readFile ?? ((p: string) => fs.readFile(p, 'utf8'))
+    let existing = ''
+    try {
+      existing = await readFile(dispatch.specPath)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err
+    }
     await fs.writeFile(dispatch.specPath, upsertResumeSection(existing, section), 'utf8')
+
+    if (LAUNCH_FORBIDDEN.test(RESUME_LINE)) return null
+    return RESUME_LINE
   } catch (err) {
-    deps.log?.(`resume packet write failed dispatch=${dispatch.id}: ${String(err)}`)
+    deps.log?.(`resume packet failed dispatch=${dispatch.id}: ${String(err)}`)
     return null
   }
-
-  if (LAUNCH_FORBIDDEN.test(RESUME_LINE)) return null
-  return RESUME_LINE
 }
