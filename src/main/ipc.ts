@@ -50,7 +50,7 @@ import {
   worktreeDepsOf
 } from '../core/orchestration/integrate'
 import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
-import { accountToDispatchOn } from '../core/accounts/dispatchAccount'
+import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, runsForProject } from '../core/orchestration/view'
 import { timelineFor } from '../core/orchestration/timeline'
 import { layersOf } from '../core/orchestration/graph'
@@ -1794,40 +1794,56 @@ export function registerIpc(
         // worker-start 도 같은 핸들러이며(server.ts 의 deps.startWorker), 검토 Dispatch 도 이 함수를
         // 지난다. 체인을 그중 한 곳에서 넘기면 나머지 경로는 갈아탈 곳 없는 워커를 띄운다.
         //
-        // 규칙 하나로 셋을 덮는다: **요청된 계정이 첫 칸**이고 그 뒤에 이 Task 에 지정된 계정들이
-        // 사람이 적은 순서로 붙는다. 중복·provider 어긋남·로그아웃은 core 가 걸러 준다
-        // (accountToDispatchOn). **검토자 경로도 이 규칙으로 안전하다** — 검토자는 다른 provider 로
-        // 도므로 Task 의 계정들이 전부 그 필터에서 빠지고 요청된 계정만 남는다(지금과 같은 한 원소
-        // 체인이다). 로그인 조회는 자동 배치 루프와 같은 모양으로 병렬로 편다.
-        //
-        // **계산이 어긋나면 요청된 계정 하나로 저하한다 — 갈아타지 못하는 워커는 아예 뜨지 않는
-        // 워커보다 낫다.** 그 한 원소 체인이 오늘까지의 동작이므로 잃는 것은 갈아타기뿐이다. 세 갈래를
-        // 모두 그렇게 다룬다: 로그인 조회가 던지는 것(계정 파일·Keychain 읽기다), 하나도 남지 않는
-        // 것, 그리고 첫 칸이 요청된 계정이 아닌 것 — 마지막은 그 계정이 필터에서 빠졌다는 뜻이고,
-        // 그대로 넘기면 이 Dispatch 가 기록한 계정과 롤링이 아는 첫 계정이 어긋난다.
+        // **규칙 자체는 core 에 있다**(rollChainFor) — 이 파일에는 테스트가 닿지 않으므로(위
+        // accountToDispatchOn 호출부의 주석) 규칙을 여기 두면 다음 편집을 막아 줄 것이 없다. 여기
+        // 남는 것은 순수 함수가 가질 수 없는 것뿐이다: Task 를 읽고, 로그인 여부를 조회하고,
+        // 그 조회의 예외를 삼키고, 저하한 이유를 로그에 남긴다.
         let rollAccountIds = [a.accountId]
-        try {
-          const task = store.get().tasks.find((t) => t.id === a.taskId)
-          const accountList = core.accounts.list()
-          const loggedInHere = new Set(
-            (
-              await Promise.all(
-                accountList.map(async (x) =>
-                  (await core.accounts.loginStatus(x.id)) ? x.id : null
+        const task = store.get().tasks.find((t) => t.id === a.taskId)
+        // **지정이 없으면 로그인 조회를 하지 않는다.** 그때 답은 요청된 계정 하나로 확정이고
+        // (rollChainFor), 그 조회는 계정마다 파일 읽기 — macOS 의 claude 계정은 `security` 프로세스 —
+        // 를 붙인다. 워커를 띄우는 모든 자리가 이 래퍼를 지나므로 그 값을 지정 없는 Task 와 검토
+        // Dispatch 에까지 물릴 이유가 없다(자동 배치 루프가 바퀴마다 한 번만 조회하는 것과 같은 이유).
+        if (task?.accountIds?.length) {
+          try {
+            const accountList = core.accounts.list()
+            const loggedInHere = new Set(
+              (
+                await Promise.all(
+                  accountList.map(async (x) =>
+                    (await core.accounts.loginStatus(x.id)) ? x.id : null
+                  )
                 )
+              ).filter((id): id is string => id !== null)
+            )
+            const picked = rollChainFor({
+              requested: a.accountId,
+              taskAccountIds: task.accountIds,
+              provider: a.provider,
+              accounts: accountList,
+              loggedInIds: loggedInHere
+            })
+            rollAccountIds = picked.chain
+            // 저하한 두 갈래를 갈라 적는다 — 사람이 할 일이 다르다: 앞은 이 Task 의 계정을 아무것도
+            // 못 쓴다는 뜻(로그인이 필요하다), 뒤는 하필 이 Dispatch 의 계정만 걸러졌다는 뜻이다.
+            if (picked.degraded === 'nothing-usable')
+              orchLog(
+                `worker-start: no usable account among ${a.accountId},${task.accountIds.join(',')} ` +
+                  `for ${a.provider} — rolling chain falls back to ${a.accountId} alone`
               )
-            ).filter((id): id is string => id !== null)
-          )
-          const picked = accountToDispatchOn({
-            assigned: [a.accountId, ...(task?.accountIds ?? [])],
-            provider: a.provider,
-            accounts: accountList,
-            loggedInIds: loggedInHere
-          })
-          if (picked.ok && picked.chain[0] === a.accountId) rollAccountIds = picked.chain
-          else orchLog(`worker-start: rolling chain falls back to ${a.accountId}`)
-        } catch (e) {
-          orchLog(`worker-start: rolling chain falls back to ${a.accountId} — ${String(e)}`)
+            else if (picked.degraded === 'requested-unusable')
+              orchLog(
+                `worker-start: the dispatch account ${a.accountId} is not usable, so the chain ` +
+                  `${task.accountIds.join(',')} is dropped — falls back to ${a.accountId} alone`
+              )
+          } catch (e) {
+            // 로그인 조회는 계정 파일과 Keychain 을 읽으므로 던질 수 있다. 그것이 워커를 못 띄우는
+            // 이유가 되어서는 안 된다 — 체인 없이 띄우는 것은 이 목록이 생기기 전의 동작이다.
+            orchLog(
+              `worker-start: could not read login status — rolling chain falls back to ` +
+                `${a.accountId} alone: ${String(e)}`
+            )
+          }
         }
         const started = await coordinator.startWorker({ ...a, rollAccountIds })
         // From this point on, that session's output belongs to this dispatch. On reuse (--terminal) the

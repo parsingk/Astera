@@ -109,6 +109,29 @@ describe('OrchestrationStore', () => {
     expect((store.get().tasks[0] as unknown as Record<string, unknown>).accountId).toBeUndefined()
   })
 
+  it('옛 accountId 아래 목록이 들어 있으면 그 순서째 옮긴다 (이름만 옛것인 손질)', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    ;(s.tasks[0] as unknown as Record<string, unknown>).accountId = ['acc-1', 'acc-2']
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    expect(store.get().tasks[0].accountIds).toEqual(['acc-1', 'acc-2'])
+  })
+
+  // 지정으로 읽을 수 없는 값은 버린다 — 빈 칸을 실으면 "지정 없음"과 갈라지고, 그것을 체인으로
+  // 넘기면 롤링이 계정 아닌 것으로 갈아타려 한다
+  it('지정으로 읽을 수 없는 옛 값은 버린다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    ;(s.tasks[0] as unknown as Record<string, unknown>).accountId = ['acc-1', '']
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    expect(store.get().tasks[0].accountIds).toBeUndefined()
+    expect((store.get().tasks[0] as unknown as Record<string, unknown>).accountId).toBeUndefined()
+  })
+
   it('재시작 정리가 Task를 failed로 옮기지 않는다', async () => {
     const file = path.join(dir, 'orchestration.json')
     await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')

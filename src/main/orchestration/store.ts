@@ -80,8 +80,18 @@ export class OrchestrationStore {
     // 옛 칸은 지운다: 두 칸을 함께 두면 어느 쪽이 정본인지 코드마다 달라진다.
     for (const t of st.tasks as unknown as Record<string, unknown>[]) {
       const legacy = t.accountId
-      if (t.accountIds === undefined && typeof legacy === 'string' && legacy !== '')
-        t.accountIds = [legacy]
+      if (t.accountIds === undefined) {
+        if (typeof legacy === 'string' && legacy !== '') t.accountIds = [legacy]
+        // **옛 이름 아래 목록이 들어 있으면 그것도 받는다** — 값은 맞고 이름만 옛것인, 있을 수 있는
+        // 손질이다(이 파일은 손으로 고쳐진다). 버리면 사람이 적어 둔 순서가 조용히 사라진다.
+        // 그 밖의 값(빈 문자열, 숫자, 빈 배열, 문자열이 아닌 원소)은 지정으로 읽을 수 없으므로 버린다.
+        else if (
+          Array.isArray(legacy) &&
+          legacy.length > 0 &&
+          legacy.every((x) => typeof x === 'string' && x !== '')
+        )
+          t.accountIds = [...(legacy as string[])]
+      }
       delete t.accountId
     }
 

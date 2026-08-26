@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { accountToDispatchOn } from './dispatchAccount'
+import { accountToDispatchOn, rollChainFor } from './dispatchAccount'
 import type { Account } from '../types'
 
 const acc = (id: string, createdAt: string, provider?: Account['provider']): Account => ({
@@ -136,5 +136,111 @@ describe('accountToDispatchOn', () => {
       loggedInIds: loggedIn('a', 'b')
     })
     expect(r).toEqual({ ok: true, accountId: 'a', chain: ['a'] })
+  })
+})
+
+// 이 규칙이 순수 함수로 나와 있는 이유: 워커를 띄우는 세 길(자동 배치·CLI·검토)이 전부 배선의 한
+// 래퍼로 모이는데 그 파일에는 테스트가 닿지 않는다(src/main/ipc.ts). 규칙이 그 안에만 있으면 다음
+// 편집을 막아 줄 것이 아무것도 없다
+describe('rollChainFor', () => {
+  it('둘 다 로그인돼 있으면 요청된 계정 뒤에 적은 순서로 붙인다', () => {
+    expect(
+      rollChainFor({
+        requested: 'a',
+        taskAccountIds: ['b'],
+        provider: 'claude',
+        accounts: all,
+        loggedInIds: loggedIn('a', 'b')
+      })
+    ).toEqual({ chain: ['a', 'b'] })
+  })
+
+  it('로그인 안 된 계정은 체인에서 빠진다 — 남은 순서로 돈다', () => {
+    expect(
+      rollChainFor({
+        requested: 'a',
+        taskAccountIds: ['b'],
+        provider: 'claude',
+        accounts: all,
+        loggedInIds: loggedIn('a')
+      })
+    ).toEqual({ chain: ['a'] })
+  })
+
+  it('provider 가 다른 계정은 체인에서 빠진다 — 검토 경로가 지금과 같이 도는 이유다', () => {
+    expect(
+      rollChainFor({
+        requested: 'c',
+        taskAccountIds: ['a', 'b'],
+        provider: 'codex',
+        accounts: all,
+        loggedInIds: loggedIn('a', 'b', 'c')
+      })
+    ).toEqual({ chain: ['c'] })
+  })
+
+  // 요청된 계정이 첫 칸이 아니면 롤링이 아는 "지금 계정"과 Dispatch 에 기록된 계정이 어긋난다.
+  // 그래서 다른 계정이 남아 있어도 그것으로 갈아타지 않고 요청된 계정 하나로 저하한다
+  it('요청된 계정을 못 쓰면 남은 계정으로 갈아타지 않고 요청된 계정 하나로 저하한다', () => {
+    expect(
+      rollChainFor({
+        requested: 'a',
+        taskAccountIds: ['b'],
+        provider: 'claude',
+        accounts: all,
+        loggedInIds: loggedIn('b')
+      })
+    ).toEqual({ chain: ['a'], degraded: 'requested-unusable' })
+  })
+
+  it('하나도 쓸 수 없으면 요청된 계정 하나로 저하한다', () => {
+    expect(
+      rollChainFor({
+        requested: 'a',
+        taskAccountIds: ['gone'],
+        provider: 'claude',
+        accounts: all,
+        loggedInIds: loggedIn('b')
+      })
+    ).toEqual({ chain: ['a'], degraded: 'nothing-usable' })
+  })
+
+  // Task 에 지정이 없는 것이 보통이다 — 그때 답은 요청된 계정 하나로 확정이고, 배선은 이 갈래에서
+  // 로그인 조회를 아예 하지 않는다(계정마다 파일·Keychain 읽기가 붙는다)
+  it('Task 에 지정이 없으면 요청된 계정 하나다', () => {
+    expect(
+      rollChainFor({
+        requested: 'a',
+        provider: 'claude',
+        accounts: all,
+        loggedInIds: loggedIn('a', 'b')
+      })
+    ).toEqual({ chain: ['a'] })
+  })
+
+  it('빈 목록도 지정 없음과 같다', () => {
+    expect(
+      rollChainFor({
+        requested: 'a',
+        taskAccountIds: [],
+        provider: 'claude',
+        accounts: all,
+        loggedInIds: loggedIn('a', 'b')
+      })
+    ).toEqual({ chain: ['a'] })
+  })
+
+  // 요청된 계정이 Task 목록에도 적혀 있는 것은 보통이다(자동 배치가 그 목록의 첫 계정을 요청한다) —
+  // 두 칸으로 세면 RollCycle 이 두 계정인 줄 알고 같은 계정으로 "갈아탄다"
+  it('요청된 계정이 Task 목록에 또 적혀 있으면 한 칸으로 접는다', () => {
+    expect(
+      rollChainFor({
+        requested: 'a',
+        taskAccountIds: ['a', 'b'],
+        provider: 'claude',
+        accounts: all,
+        loggedInIds: loggedIn('a', 'b')
+      })
+    ).toEqual({ chain: ['a', 'b'] })
   })
 })

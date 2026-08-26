@@ -19,9 +19,10 @@ export type NoDispatchAccount = 'assigned-unusable' | 'none-logged-in'
  * 않은 것보다 나쁘다. 실패로 답하고, 부르는 쪽이 Gate 를 연다(ipc.ts 의 gateSlot — 스케줄러가
  * "로그인된 계정이 없다"에 이미 그렇게 한다).
  *
- * **provider 가 어긋난 지정도 실패다.** task-create 가 그 조합을 거절하지만 입력은 명령이 아니라
- * 파일이다 — orchestration.json 은 프로세스보다 오래 살고 손으로 고쳐진다(schedule.ts 가 provider
- * 없는 Run 을 다루는 것, graph.ts 가 순환을 다루는 것과 같은 이유).
+ * **provider 가 어긋난 지정은 체인에서 빠지고, 하나도 남지 않을 때만 실패다.** task-create 가 그
+ * 조합을 거절하지만 입력은 명령이 아니라 파일이다 — orchestration.json 은 프로세스보다 오래 살고
+ * 손으로 고쳐진다(schedule.ts 가 provider 없는 Run 을 다루는 것, graph.ts 가 순환을 다루는 것과
+ * 같은 이유).
  *
  * **지정은 하나가 아니라 순서 있는 목록이다.** 첫 계정으로 띄우고, 나머지는 한도에 걸렸을 때
  * 갈아탈 순서다 — 이 답의 `chain` 이 그 순서이고 배선이 그것을 세션의 롤링 체인(rollAccountIds)
@@ -63,4 +64,53 @@ export function accountToDispatchOn(a: {
   return fallback
     ? { ok: true, accountId: fallback, chain: [fallback] }
     : { ok: false, reason: 'none-logged-in' }
+}
+
+/**
+ * 이 워커의 롤링 체인 — 첫 원소가 이 Dispatch 의 계정이고, 나머지는 한도에 걸렸을 때 갈아탈
+ * 순서다. 배선이 세션을 띄우기 직전에 이것을 물어 spawnSession 의 rollAccountIds 로 넘긴다.
+ *
+ * **요청된 계정과 Task 의 계정들을 합치는 규칙이 여기 하나로 있다.** 워커를 띄우는 길은 셋인데
+ * (자동 배치, CLI 의 worker-start, 검토 Dispatch) 전부 배선의 한 래퍼로 모이고, 그 래퍼는 테스트가
+ * 닿지 않는 파일에 있다(src/main/ipc.ts). 규칙이 그 안에 있으면 기계가 지킬 수 없으므로 순수 함수로
+ * 꺼내 둔다 — accountToDispatchOn 과 같은 모양으로 계정 목록과 로그인 여부를 받는다.
+ *
+ * **요청된 계정이 언제나 첫 칸이다.** Dispatch 에 기록된 계정이 그것이므로, 체인의 첫 칸이 다른
+ * 계정이면 롤링이 아는 "지금 계정"과 상태에 적힌 계정이 어긋난다.
+ *
+ * **거를 일은 accountToDispatchOn 이 한다** — 중복 접기, provider 어긋남, 로그아웃, 지워진 계정.
+ * 그 판정을 여기서 다시 쓰지 않는 이유는 두 벌이 갈라지면 워커가 띄워진 계정과 갈아탈 계정의
+ * 규칙이 서로 달라지기 때문이다.
+ *
+ * **못 고르면 요청된 계정 하나로 저하한다.** 그 한 원소 체인은 이 목록이 생기기 전의 동작이므로
+ * 잃는 것은 갈아타기뿐이다 — 체인을 못 만드는 것이 워커를 못 띄우는 이유가 되어서는 안 된다.
+ * 저하한 이유는 부르는 쪽이 로그로 남긴다(`degraded`): 하나도 못 쓰는 것과 요청된 계정만 걸러진
+ * 것은 사람이 할 일이 다르다.
+ */
+export function rollChainFor(a: {
+  /** 이 Dispatch 가 실제로 쓰는 계정 — worker-start 가 정해 이미 상태에 기록했다 */
+  requested: string
+  /** Task.accountIds. 없거나 비면 체인은 요청된 계정 하나다 */
+  taskAccountIds?: readonly string[]
+  /** 이 워커를 띄우는 provider. 검토자는 구현자와 다른 provider 이므로, 이것 때문에 Task 의
+   *  계정들이 전부 걸러지고 요청된 계정만 남는다 — 검토 경로가 지금과 같이 도는 이유다. */
+  provider: Provider
+  accounts: readonly Account[]
+  loggedInIds: ReadonlySet<string>
+}): {
+  chain: string[]
+  /** 저하했을 때만. 'nothing-usable' = 합친 목록에 쓸 수 있는 계정이 하나도 없다,
+   *  'requested-unusable' = 다른 계정은 남았지만 요청된 계정이 걸러졌다. */
+  degraded?: 'nothing-usable' | 'requested-unusable'
+} {
+  const picked = accountToDispatchOn({
+    assigned: [a.requested, ...(a.taskAccountIds ?? [])],
+    provider: a.provider,
+    accounts: a.accounts,
+    loggedInIds: a.loggedInIds
+  })
+  if (!picked.ok) return { chain: [a.requested], degraded: 'nothing-usable' }
+  if (picked.chain[0] !== a.requested)
+    return { chain: [a.requested], degraded: 'requested-unusable' }
+  return { chain: picked.chain }
 }
