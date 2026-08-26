@@ -291,6 +291,11 @@ accounts [--agent <claude|codex>] [--json]
   again — omitting them can retry with a different combination than the original attempt.
 - `--terminal <sessionId>` reuses an existing worker session. This is the only case where a new Task
   can be handed to the same session without `--retry-of` (see the example in section 5).
+  **A Task placed into an existing session inherits that session's account chain, not its own.** The
+  chain is fixed when a session starts, so a Task whose `--account` list differs from the list the
+  session was started with can be moved onto an account it was never given — or have nowhere to move
+  when the session was started on a single account. Per-Task account lists and `--terminal` do not
+  mix: reuse a session only for Tasks that carry the same account list it was started with.
 - A successful `worker-start` responds with `{ sessionId, cwd, specPath, dispatchId }`. That is where
   the `dispatchId` used by later commands comes from — record it.
 - **The app does not close a Dispatch that has been `worker-retain`ed.** After that, `worker-stop` is
@@ -528,6 +533,9 @@ automatically. After receiving `worker_done`, pick one of these **yourself**:
   not inherited. **Re-read `sessionId` from `worker-show --dispatch <dsp>` right before you reuse it**
   — a roll changes it, and on codex a roll always does (section 7), so the id you were given when the
   worker started may name a session that no longer exists.)
+  **The account chain is the one thing a reuse does inherit** (4.3): the follow-up Task rolls along the
+  list the session was started with, whatever its own `--account` says. Reuse a session only for Tasks
+  that were given the same account list; otherwise start a fresh worker.
 - **If there is no follow-up**, clean up with `worker-release --dispatch <dsp>`. Call it after both
   success and failure reports — it is after-the-fact cleanup, not cancellation. Only the session that
   Dispatch owns is closed; a reused session, a session the user took over, and a session whose

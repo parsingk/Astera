@@ -603,6 +603,22 @@ export class OrchCoordinator {
 
     let finalSessionId = a.terminal ?? ''
     if (a.terminal) {
+      // **A reuse inherits the rolling chain of the session it lands in — a.rollAccountIds is not
+      // applied here.** A chain is registered when a session is spawned (the rollAccountIds argument in
+      // the else branch below), and this branch never spawns: it types the prompt into a session that is
+      // already running, so the chain the rolling coordinator holds for that session stays whatever the
+      // dispatch that created it was given.
+      //
+      // While every chain had one entry this was harmless. With a per-Task account list it is not: a
+      // Task placed into a session that was started for the list [max, pro] can be moved onto pro when
+      // that session runs out on max, even though its own list names max alone — an account this Task
+      // was never assigned. The reverse also holds: a Task with two accounts placed into a
+      // single-account session has nowhere to move and waits instead.
+      //
+      // **Not fixed here on purpose.** Retargeting a live chain means rebuilding the rolling
+      // coordinators' cycle and recovery state (which account the session sits on, how far around the
+      // cycle it is, what a restart may resume), which needs its own review. The orchestration guide
+      // says the same thing where it describes --terminal, so a coordinator is told not to mix the two.
       await this.waitUntilIdle(a.terminal)
       this.deps.writeToSession(a.terminal, prompt)
       await sleep(ENTER_DELAY_MS)
