@@ -60,8 +60,8 @@ function fakeGit(overrides: Record<string, GitResult> = {}): typeof git {
   const defaults: Record<string, GitResult> = {
     'rev-parse HEAD': { ok: true, stdout: 'abc123', stderr: '' },
     'branch --show-current': { ok: true, stdout: 'main', stderr: '' },
-    'status --short': { ok: true, stdout: '', stderr: '' },
-    'diff --stat': { ok: true, stdout: '', stderr: '' }
+    '-c core.quotepath=false status --short': { ok: true, stdout: '', stderr: '' },
+    '-c core.quotepath=false diff HEAD --stat': { ok: true, stdout: '', stderr: '' }
   }
   const table = { ...defaults, ...overrides }
   return (async (args: string[]) => {

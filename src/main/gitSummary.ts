@@ -14,6 +14,16 @@ export interface GitSummaryDeps {
   git?: typeof git
 }
 
+/** 경로에 든 ASCII 밖 바이트를 8진 이스케이프로 바꾸지 않게 한다. git 의 기본값(core.quotepath=true)
+ *  이면 `한글파일.txt` 가 `"\355\225\234..."` 로 나오고, 그 문자열은 **존재하지 않는 경로**다 —
+ *  브리핑을 읽는 에이전트가 그것을 열려 하면 실패한다. 이 저장소의 작성자는 한국어로 일하므로
+ *  드문 경우가 아니라 기본 경우다. status 와 diffstat **양쪽**에 붙인다(둘 다 같은 규칙으로
+ *  이스케이프한다).
+ *
+ *  **공백이 든 이름의 큰따옴표는 이것으로 없어지지 않는다** — 실측으로 `-c core.quotepath=false`
+ *  에서도 `?? "with space.txt"` 로 나온다. unquotePath 가 계속 필요한 이유다. */
+const QUOTEPATH_OFF = ['-c', 'core.quotepath=false']
+
 /** 큰따옴표 한 쌍만 벗긴다 — 그 안의 백슬래시 이스케이프(제어문자·따옴표 자체가 이름에 든 경우)는
  *  풀지 않는다. git status --short(비 -z)는 공백이 든 이름을 큰따옴표로 감싼다 — core.quotePath
  *  문서가 말하는 "unusual byte(0x80 이상)" 대상이 아닌데도 실측상 그렇다(-z를 쓰지 않는 한 끌
@@ -73,8 +83,12 @@ export async function readGitSummary(
     run(['branch', '--show-current'], { cwd }),
     // porcelain: 상태 코드 두 글자가 앞쪽 공백일 수 있다(" M f.txt") — trim:true(기본값)면 그
     // 선행 공백이 통째로 날아가 changedPaths의 고정폭 slice(3)가 어긋난다.
-    run(['status', '--short'], { cwd, trim: false }),
-    run(['diff', '--stat'], { cwd })
+    run(QUOTEPATH_OFF.concat('status', '--short'), { cwd, trim: false }),
+    // `diff HEAD`: 인덱스와 워크트리를 **함께** 본다. 그냥 `diff` 는 인덱스를 무시하므로,
+    // `git add -A` 와 `git commit` 사이에서 죽은 워커 — 즉 자기 커밋 의무의 두 단계 사이에서
+    // 멈춘 워커 — 는 changed 에 파일이 있는데 diffstat 은 비는 모순된 브리핑을 만든다.
+    // HEAD 가 있는 것은 위에서 이미 확인했다(rev-parse 가 성공했다).
+    run(QUOTEPATH_OFF.concat('diff', 'HEAD', '--stat'), { cwd })
   ])
 
   return {

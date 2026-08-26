@@ -47,8 +47,8 @@ function fakeGit(overrides: Record<string, GitResult>): typeof git {
   const defaults: Record<string, GitResult> = {
     'rev-parse HEAD': { ok: true, stdout: 'abc123', stderr: '' },
     'branch --show-current': { ok: true, stdout: 'main', stderr: '' },
-    'status --short': { ok: true, stdout: '', stderr: '' },
-    'diff --stat': { ok: true, stdout: '', stderr: '' }
+    '-c core.quotepath=false status --short': { ok: true, stdout: '', stderr: '' },
+    '-c core.quotepath=false diff HEAD --stat': { ok: true, stdout: '', stderr: '' }
   }
   const table = { ...defaults, ...overrides }
   return (async (args: string[]) => {
@@ -134,6 +134,36 @@ describe('readGitSummary', () => {
     expect(summary?.diffstat).toContain('f.txt')
   })
 
+  // fix round 2: git 은 기본값(core.quotepath=true)에서 ASCII 밖 바이트를 8진 이스케이프로
+  // 내보낸다 — `"\355\225\234..."` 는 **존재하지 않는 경로**이고, 브리핑을 읽는 에이전트가 그것을
+  // 열려 하면 실패한다. 이 저장소의 작성자는 한국어로 일하므로 드문 경우가 아니라 기본 경우다.
+  it('ASCII 밖 파일 이름을 8진 이스케이프가 아니라 그대로 담는다 — status 와 diffstat 양쪽', async () => {
+    dir = await makeRepo()
+    const name = '한글파일.txt'
+    await fs.writeFile(path.join(dir, name), 'x\n', 'utf8')
+    run(dir, ['add', name])
+
+    const summary = await readGitSummary(dir)
+
+    expect(summary?.changed).toEqual([name])
+    expect(summary?.diffstat).toContain(name)
+    expect(summary?.diffstat ?? '').not.toContain('\\355')
+  })
+
+  // fix round 2: `git diff` 는 인덱스를 무시한다. 워커가 `git add -A` 와 `git commit` 사이 —
+  // 자기 커밋 의무의 두 단계 사이 — 에서 한도에 걸리면 changed 에는 파일이 있는데 diffstat 은
+  // 비어, 브리핑이 스스로 모순된다.
+  it('스테이지만 되고 커밋되지 않은 변경도 diffstat 에 담긴다', async () => {
+    dir = await makeRepo()
+    await fs.writeFile(path.join(dir, 'staged.txt'), 'staged\n', 'utf8')
+    run(dir, ['add', 'staged.txt'])
+
+    const summary = await readGitSummary(dir)
+
+    expect(summary?.changed).toEqual(['staged.txt'])
+    expect(summary?.diffstat).toContain('staged.txt')
+  })
+
   it('변경이 없는 clean 저장소의 diffstat은 null', async () => {
     dir = await makeRepo()
 
@@ -160,7 +190,7 @@ describe('필드 단위 실패 흡수 (rev-parse HEAD 성공 뒤)', () => {
 
   it('status 조회가 exit 실패(부분 stdout 포함)여도 changed는 빈 배열, 나머지는 정상', async () => {
     const summary = await readGitSummary('/fake/cwd', {
-      git: fakeGit({ 'status --short': { ok: false, stdout: 'partial', stderr: 'boom' } })
+      git: fakeGit({ '-c core.quotepath=false status --short': { ok: false, stdout: 'partial', stderr: 'boom' } })
     })
 
     expect(summary?.changed).toEqual([])
@@ -171,7 +201,7 @@ describe('필드 단위 실패 흡수 (rev-parse HEAD 성공 뒤)', () => {
 
   it('diffstat 조회가 exit 실패(부분 stdout 포함)여도 diffstat만 null, 나머지는 정상', async () => {
     const summary = await readGitSummary('/fake/cwd', {
-      git: fakeGit({ 'diff --stat': { ok: false, stdout: 'partial', stderr: 'boom' } })
+      git: fakeGit({ '-c core.quotepath=false diff HEAD --stat': { ok: false, stdout: 'partial', stderr: 'boom' } })
     })
 
     expect(summary?.diffstat).toBeNull()
