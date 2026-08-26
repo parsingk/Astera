@@ -206,7 +206,7 @@ starts.
 ### 4.2 Task and Gate
 
 ```
-task-create --title <s> --spec <s|-> [--run <run>] [--deps <json_array>] [--validate <configId>] [--review] [--json]
+task-create --title <s> --spec <s|-> [--run <run>] [--deps <json_array>] [--account <id,…>] [--validate <configId>] [--review] [--json]
 task-list [--run <run>] [--status <s>] [--ready] [--brief] [--json]
 task-update --id <tsk> --status <s> [--result <s|->] [--json]   # bypasses the transition table — see section 8
 dispatch-show --task <tsk> [--json]        # that Task's Dispatch history as an array (retries and the app's review Dispatch included)
@@ -235,6 +235,12 @@ gate-list [--task <tsk>] [--status <s>] [--json]
   other Run — but `task-create` with no explicit run attaches to the most recently created Run, which
   can be one of those — pass `--run <run>` so it cannot. Use `--deps` to say what a Task follows;
   that is what the graph is built from (`--deps` orders Tasks, it does not choose their Run).
+- **`--account <id>` or `--account <id>,<id>,…` sets the accounts this Task's worker runs on, in
+  order** — the ids come from `accounts` (4.3). Omit it and the worker starts on that provider's
+  default account instead. With more than one id, running into a usage limit moves the worker to the
+  next account in the order given; with only one, there is nowhere to move, so it waits out the limit
+  instead. Every account has to belong to that Run's provider — `task-create` rejects the whole list
+  otherwise, the same way it rejects an empty entry (`a,,b`) or a repeated id (`a,a`).
 - **`--validate <configId>` makes this Task's completion depend on a run configuration**, not just the
   worker's own report — the id comes from `run-configs` (4.1). Omit it and nothing changes:
   `worker_done --outcome succeeded` completes the Task exactly as before. With it, that same report

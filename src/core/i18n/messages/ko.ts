@@ -902,8 +902,9 @@ export const ko = {
   // 거짓이 됐다. 대신 고른 것이 무엇을 뜻하는지 적는다(recomputeReady 의 규칙 그대로다)
   'jobs.task.depsHint': '고른 Task 가 모두 끝나야 시작합니다',
   'jobs.task.depsAdd': '선행 Task 고르기',
-  // 계정 칸. **고를 계정이 둘 이상일 때만 그려진다** — 하나뿐이면 기본 계정이 그 하나다.
-  // 안 고르면 그 provider 의 기본 계정으로 간다(core/accounts/dispatchAccount.ts)
+  // 계정 칸. **계정이 하나도 없을 때만 접힌다** — 하나여도 그린다: "지정 안 함"과 "이 계정으로
+  // 못박음"은 계정이 하나뿐이어도 뜻이 다르다(로그아웃되고 둘째가 등록되면 갈리는 동작이
+  // NewTaskModal.tsx 에 있다). 안 고르면 그 provider 의 기본 계정으로 간다(core/accounts/dispatchAccount.ts)
   'jobs.task.account': '계정',
   'jobs.task.accountDefault': '기본 계정',
   'jobs.task.accountNone': '추가 안 함',
