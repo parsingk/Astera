@@ -471,6 +471,10 @@ app.whenReady().then(async () => {
         if (channel === 'session:rolled') {
           const p = payload as { oldSessionId: string; info: SessionInfo }
           orchRef?.onRolled(p.oldSessionId, p.info)
+        } else if (channel === 'session:rollState') {
+          // 정지 시점 스냅샷(Task 4a) — waiting/switching 일 때만 실제로 기록한다(ipc.ts 의 필터).
+          const p = payload as RollStateEvent
+          orchRef?.onRollState(p.sessionId, p.state)
         }
       } catch {
         /* an orchestration tap failure must not block rolling */
@@ -550,6 +554,10 @@ app.whenReady().then(async () => {
         if (channel === 'session:rolled') {
           const p = payload as { oldSessionId: string; info: SessionInfo }
           orchRef?.onRolled(p.oldSessionId, p.info)
+        } else if (channel === 'session:rollState') {
+          // 정지 시점 스냅샷(Task 4a) — waiting/switching 일 때만 실제로 기록한다(ipc.ts 의 필터).
+          const p = payload as RollStateEvent
+          orchRef?.onRollState(p.sessionId, p.state)
         }
       } catch {
         /* an orchestration tap failure must not block rolling */
