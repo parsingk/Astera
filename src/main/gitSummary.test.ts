@@ -4,6 +4,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { readGitSummary } from './gitSummary'
+import { git, type GitResult } from '../core/worktrees/git'
 
 // git.test.ts(src/core/worktrees)의 makeRepo와 같은 문제를 겪는다 — 전역 user.email/user.name에
 // 기대면 CI/새 머신에서 커밋이 실패한다. 그래서 매 저장소마다 로컬 config를 직접 심는다.
@@ -38,6 +39,26 @@ async function makeRepo(): Promise<string> {
   return d
 }
 
+/** fix round 1 — Finding 1: 실제 git으로는 "exit 실패인데 stdout에 내용이 남는" 상태를 안정적으로
+ *  재현할 방법이 없다. readGitSummary의 필드 단위 가드(`ok && ...`)가 실제로 그 partial stdout을
+ *  버리는지 확인하려면 git 자체를 이중체로 바꿔치기해야 한다 — 그래서 DI를 추가했다(GitSummaryDeps).
+ *  네 호출 중 지정한 것만 overrides로 갈아끼우고 나머지는 정상값을 돌려주는 정직한 성공 상태다. */
+function fakeGit(overrides: Record<string, GitResult>): typeof git {
+  const defaults: Record<string, GitResult> = {
+    'rev-parse HEAD': { ok: true, stdout: 'abc123', stderr: '' },
+    'branch --show-current': { ok: true, stdout: 'main', stderr: '' },
+    'status --short': { ok: true, stdout: '', stderr: '' },
+    'diff --stat': { ok: true, stdout: '', stderr: '' }
+  }
+  const table = { ...defaults, ...overrides }
+  return (async (args: string[]) => {
+    const key = args.join(' ')
+    const r = table[key]
+    if (!r) throw new Error(`fakeGit: unexpected invocation "${key}"`)
+    return r
+  }) as typeof git
+}
+
 describe('readGitSummary', () => {
   it('clean 저장소: head/branch가 채워지고 changed는 빈 배열', async () => {
     dir = await makeRepo()
@@ -67,6 +88,24 @@ describe('readGitSummary', () => {
     const summary = await readGitSummary(dir)
 
     expect(summary?.changed).toEqual(['new.txt'])
+  })
+
+  it('rename된 파일은 changed에 새 경로만 담긴다("old -> new" 원문이 아니라) — fix round 1', async () => {
+    dir = await makeRepo()
+    run(dir, ['mv', 'f.txt', 'renamed.txt'])
+
+    const summary = await readGitSummary(dir)
+
+    expect(summary?.changed).toEqual(['renamed.txt'])
+  })
+
+  it('rename된 새 경로에 공백이 있으면 git이 감싼 큰따옴표를 벗기고 담는다 — fix round 1', async () => {
+    dir = await makeRepo()
+    run(dir, ['mv', 'f.txt', 'renamed with space.txt'])
+
+    const summary = await readGitSummary(dir)
+
+    expect(summary?.changed).toEqual(['renamed with space.txt'])
   })
 
   it('저장소가 아닌 디렉터리는 null', async () => {
@@ -101,5 +140,43 @@ describe('readGitSummary', () => {
     const summary = await readGitSummary(dir)
 
     expect(summary?.diffstat).toBeNull()
+  })
+})
+
+// fix round 1 — Finding 1: rev-parse HEAD가 성공한 뒤로는 나머지 세 호출이 필드 단위로만 실패를
+// 흡수해야 한다(하나가 exit 실패해도 나머지 필드는 정상값을 유지). 실제 git으로는 재현할 수 없는
+// 상태라 git을 주입해 고정한다 — 이 describe 는 실제 저장소를 만들지 않는다.
+describe('필드 단위 실패 흡수 (rev-parse HEAD 성공 뒤)', () => {
+  it('branch 조회가 exit 실패(부분 stdout 포함)여도 branch만 null, 나머지는 정상', async () => {
+    const summary = await readGitSummary('/fake/cwd', {
+      git: fakeGit({ 'branch --show-current': { ok: false, stdout: 'partial', stderr: 'boom' } })
+    })
+
+    expect(summary?.branch).toBeNull()
+    expect(summary?.head).toBe('abc123')
+    expect(summary?.changed).toEqual([])
+    expect(summary?.diffstat).toBeNull()
+  })
+
+  it('status 조회가 exit 실패(부분 stdout 포함)여도 changed는 빈 배열, 나머지는 정상', async () => {
+    const summary = await readGitSummary('/fake/cwd', {
+      git: fakeGit({ 'status --short': { ok: false, stdout: 'partial', stderr: 'boom' } })
+    })
+
+    expect(summary?.changed).toEqual([])
+    expect(summary?.head).toBe('abc123')
+    expect(summary?.branch).toBe('main')
+    expect(summary?.diffstat).toBeNull()
+  })
+
+  it('diffstat 조회가 exit 실패(부분 stdout 포함)여도 diffstat만 null, 나머지는 정상', async () => {
+    const summary = await readGitSummary('/fake/cwd', {
+      git: fakeGit({ 'diff --stat': { ok: false, stdout: 'partial', stderr: 'boom' } })
+    })
+
+    expect(summary?.diffstat).toBeNull()
+    expect(summary?.head).toBe('abc123')
+    expect(summary?.branch).toBe('main')
+    expect(summary?.changed).toEqual([])
   })
 })
