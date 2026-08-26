@@ -1905,10 +1905,19 @@ describe('task-create --account', () => {
     const deps = accountDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    expect((await call(deps, 'task-create', { runId, spec: 's', account: ',' })).status).toBe(400)
-    expect(
-      (await call(deps, 'task-create', { runId, spec: 's', account: 'acc1,,acc2' })).status
-    ).toBe(400)
+    // 상태 코드만으로는 이 검사를 못 박지 못한다 — 빈 칸은 언제나 동시에 "모르는 계정"이거나
+    // (트림하면 빈 문자열은 목록에 없다) 중복(빈 문자열끼리는 서로 같다)이기도 해서, 이 검사를
+    // 지워도 다른 두 검사 중 하나가 대신 400 을 낸다. 메시지까지 맞춰야 이 검사 자체를 본다.
+    const commaOnly = await call(deps, 'task-create', { runId, spec: 's', account: ',' })
+    expect(commaOnly.status).toBe(400)
+    expect((commaOnly.body as { error: string }).error).toBe(
+      '--account must not contain an empty entry'
+    )
+    const mixedEmpty = await call(deps, 'task-create', { runId, spec: 's', account: 'acc1,,acc2' })
+    expect(mixedEmpty.status).toBe(400)
+    expect((mixedEmpty.body as { error: string }).error).toBe(
+      '--account must not contain an empty entry'
+    )
   })
 })
 
