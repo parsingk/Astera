@@ -763,8 +763,11 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.task.depsAdd': 'Pick a Task',
   'jobs.task.account': 'Account',
   'jobs.task.accountDefault': 'Default account',
-  'jobs.task.accountHint': 'The account this Task runs its worker on — the default account when left unset',
-  'jobs.task.accountTrust': 'The first time this account opens this folder the session tab asks you to trust it — the worker starts only once you answer',
+  'jobs.task.accountNone': 'Not used',
+  'jobs.task.accountHint':
+    'The accounts this Task runs its worker on — the default account when left unset. With more than one, a usage limit moves the worker to the next in the order you list them',
+  'jobs.task.accountTrust':
+    'The first time a chosen account opens this folder the session tab asks you to trust it — the worker starts only once you answer',
   'jobs.task.validate': 'Run configuration that proves it done',
   'jobs.task.validateNone': 'No validation',
   'jobs.task.review': 'Review by another agent',

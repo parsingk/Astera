@@ -4,6 +4,12 @@ import { useI18n } from '../i18n/I18nProvider'
 import { AccountSelect } from './AccountSelect'
 import { Select, type SelectOption } from './Select'
 
+/** 계정 슬롯 최대 개수. 새 세션 대화상자의 MAX_ROLL_ACCOUNTS 와 같은 값이지만 **상수를 공유하지
+ *  않는다** — 저쪽은 탭 세션의 롤링이고 이쪽은 Task 의 체인이다. 한쪽을 늘릴 때 다른 쪽이 따라
+ *  움직이면 안 된다. core·CLI 에는 상한이 없다(롤링 코디네이터에 상한이 없다) — 이것은 레이아웃
+ *  사정이고, 이 폼은 만들기 전용이라 CLI 로 넷 이상 지정한 Task 를 여기서 보여 줄 일이 없다. */
+const MAX_TASK_ACCOUNTS = 3
+
 /** RunDetail 의 그래프가 Task 를 짓는 동안 상세 창의 아래 칸(.detail-events)이 통째로 바뀌는 폼.
  *  이름은 NewRunModal 을 따랐지만 그 컴포넌트처럼 `.modal-backdrop` 을 새로 세우지 않는다 — 그 배경은
  *  화면 전체의 클릭을 삼킨다. **예전 이유는 "위의 그래프가 계속 눌려야 한다"였다** — 의존을 그래프
@@ -43,10 +49,12 @@ export function NewTaskModal({
   const [deps, setDeps] = useState<string[]>([])
   // '검증 없음'을 값 '' 으로 표현한다 — RunConfig.id 는 seed:* 접두사이거나 저장된 uuid라 절대 빈
   // 문자열이 될 수 없으므로 이 값과 겹칠 일이 없다.
-  /** 이 Task 를 띄울 계정. **'' 는 "지정 안 함"이고 그것이 기본이다** — 그때는 그 provider 의 기본
-   *  계정으로 간다(core/accounts/dispatchAccount.ts). validateConfigId 가 '' 로 "검증 없음"을
-   *  적는 것과 같은 관례다: 계정 id 는 절대 빈 문자열이 아니므로 겹칠 일이 없다. */
-  const [accountId, setAccountId] = useState('')
+  /** 이 Task 를 띄울 계정들, 순서대로. **빈 배열이 "지정 안 함"이고 그것이 기본이다** — 그때는 그
+   *  provider 의 기본 계정으로 간다(core/accounts/dispatchAccount.ts). 첫 계정으로 띄우고 나머지는
+   *  한도에 걸렸을 때 갈아탈 순서다.
+   *
+   *  **첫 칸을 비우면 뒤 칸도 함께 사라진다** — 지정 없이 "두 번째 계정" 만 있는 상태는 뜻이 없다. */
+  const [accountIds, setAccountIds] = useState<string[]>([])
   const [validateConfigId, setValidateConfigId] = useState('')
   const [review, setReview] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -81,7 +89,8 @@ export function NewTaskModal({
         title: title.trim(),
         spec: trimmedSpec,
         deps,
-        ...(accountId ? { account: accountId } : {}),
+        // 쉼표로 보낸다 — task-create 의 문법이다(server.ts). 빈 배열이면 칸 자체를 보내지 않는다.
+        ...(accountIds.length > 0 ? { account: accountIds.join(',') } : {}),
         ...(validateConfigId ? { validate: validateConfigId } : {}),
         ...(review ? { review: true } : {})
         // parent 는 보내지 않는다 — parentId 는 통합(integration) Task 의 표식이라, 이 폼에서 보내면
@@ -174,20 +183,31 @@ export function NewTaskModal({
         {(accounts?.length ?? 0) > 0 && (
           <div className="field">
             <label>{t('jobs.task.account')}</label>
-            <AccountSelect
-              accounts={accounts ?? []}
-              value={accountId}
-              onChange={setAccountId}
-              allLabel={t('jobs.task.accountDefault')}
-            />
+            {/* 슬롯 하나씩. 첫 칸은 '지정 안 함'(빈 값)을 가질 수 있고, 뒤 칸은 고른 것만 남는다 —
+                빈 뒤 칸은 뜻이 없으므로 값을 비우면 그 칸이 사라진다. 이미 고른 계정은 다른 칸의
+                항목에서 빠진다(같은 계정을 두 칸에 넣으면 롤링이 두 계정인 줄 알고 같은 계정으로
+                "갈아탄다" — task-create 도 그 조합을 거절한다). */}
+            {[...accountIds, ''].slice(0, MAX_TASK_ACCOUNTS).map((slot, i) => (
+              <AccountSelect
+                key={i}
+                className="stack-item"
+                accounts={(accounts ?? []).filter(
+                  (a) => a.id === slot || !accountIds.includes(a.id)
+                )}
+                value={slot}
+                onChange={(id) =>
+                  setAccountIds((prev) => {
+                    const next = [...prev]
+                    if (id === '') next.splice(i) // 이 칸부터 뒤를 버린다 — 위 주석
+                    else next[i] = id
+                    return next.filter((x) => x !== '')
+                  })
+                }
+                allLabel={i === 0 ? t('jobs.task.accountDefault') : t('jobs.task.accountNone')}
+              />
+            ))}
             <p className="modal-hint">{t('jobs.task.accountHint')}</p>
-            {/* 고른 경우에만 띄운다. 기본 계정은 이 프로젝트에서 이미 써 온 계정일 가능성이 높고,
-                모든 Task 마다 이 문장을 보여 주면 읽히지 않는 줄이 된다.
-                **앱이 대신 눌러 주지 않는다** — 롤링은 신뢰 확인을 자동 승인하지만(rolling.ts) 그것은
-                같은 사람이 이미 이 폴더를 신뢰한 뒤 같은 일을 이어가는 자리다. 처음 쓰는 계정의 보안
-                확인은 성격이 다르므로 사람에게 넘긴다. 대신 언제·어디서 뜨는지는 미리 말한다 —
-                모르면 워커가 도는 것처럼 보이면서 아무것도 안 한다(그 화면에는 이유가 없다). */}
-            {accountId !== '' && <p className="warn-text">{t('jobs.task.accountTrust')}</p>}
+            {accountIds.length > 0 && <p className="warn-text">{t('jobs.task.accountTrust')}</p>}
           </div>
         )}
         <div className="field">

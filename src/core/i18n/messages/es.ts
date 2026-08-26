@@ -865,8 +865,11 @@ export const es: Catalog = {
   'jobs.task.depsAdd': 'Elegir una Task',
   'jobs.task.account': 'Cuenta',
   'jobs.task.accountDefault': 'Cuenta por defecto',
-  'jobs.task.accountHint': 'La cuenta en la que esta Task levanta su worker — la cuenta por defecto si no eliges',
-  'jobs.task.accountTrust': 'La primera vez que esta cuenta abre esta carpeta, la pestaña de sesión pide confirmar que confías en ella — el worker no empieza hasta que respondas',
+  'jobs.task.accountNone': 'Sin usar',
+  'jobs.task.accountHint':
+    'Las cuentas en las que esta tarea ejecuta su worker — la cuenta predeterminada si se deja sin definir. Con más de una, al alcanzar el límite de uso el worker pasa a la siguiente en el orden indicado',
+  'jobs.task.accountTrust':
+    'La primera vez que una cuenta elegida abre esta carpeta, la pestaña de sesión pide confirmar que confías en ella — el worker no empieza hasta que respondas',
   'jobs.task.validate': 'Configuración que prueba que terminó',
   'jobs.task.validateNone': 'Sin validación',
   'jobs.task.review': 'Revisión por otro agente',

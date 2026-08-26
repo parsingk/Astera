@@ -738,6 +738,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    폼의 간격이라서다. */
 .jobs-sched { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .field .modal-hint { margin-top: 4px; display: block; }
+/* NewTaskModal 의 계정 슬롯(Task 3) — 감싸는 div 없이 AccountSelect 를 필드 안에 그대로 쌓는다.
+   기본 여백이 없는 블록이라 그냥 두면 테두리가 맞붙는다 — .jobs-sched 가 자기 줄들에 주는 것과
+   같은 6px 를 형제 사이에 준다. */
+.stack-item + .stack-item { margin-top: 6px; }
 .row { display: flex; align-items: center; gap: 8px; }
 .row.right { justify-content: flex-end; }
 /* Truncates a path or conversation summary to one line. display:block is essential — left inline, a
