@@ -890,7 +890,8 @@ export const ko = {
   // 있던 경우(그 provider 에 로그인된 계정이 없다), 둘째는 사람이 이 Task 에 지정한 계정을
   // 쓸 수 없는 경우다 — 지정을 무시하고 기본 계정으로 갈아타지 않으므로 사람에게 말해야 한다
   'jobs.gate.noAccount': '{provider} 계정에 로그인되어 있지 않아 이 Task 를 시작할 수 없습니다',
-  'jobs.gate.assignedAccountUnusable': '이 Task 에 지정된 계정을 쓸 수 없습니다 — 로그인되어 있지 않거나 지워졌거나 다른 에이전트의 계정입니다',
+  'jobs.gate.assignedAccountUnusable':
+    '이 Task 에 지정된 첫 계정을 쓸 수 없고, 그 뒤의 계정들은 나중에 갈아탈 순서일 뿐입니다 — 그 계정에 다시 로그인하거나 이 Task 의 계정 목록을 고치세요',
   // NewTaskModal.tsx — Task 를 짜는 동안 상세 창의 아래 칸(.detail-events)이 바뀌는 폼. deps 는
   // 이 폼이 아니라 그래프가 쥐고 있다(고르는 자리가 그래프이므로) — 그래서 이 카탈로그에는 deps
   // 자체의 값이 아니라 그것을 고르라고 안내하는 문구(depsHint)만 있다.

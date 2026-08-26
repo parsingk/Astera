@@ -852,7 +852,8 @@ export const es: Catalog = {
   'jobs.new.folderBusy': 'Ya hay un worker trabajando en esta carpeta — con límite 1 el worker de este trabajo también corre ahí, así que sus ediciones pueden mezclarse',
   'jobs.new.failed': 'No se pudo crear el trabajo',
   'jobs.gate.noAccount': 'Ninguna cuenta de {provider} tiene la sesión iniciada, así que esta Task no puede empezar',
-  'jobs.gate.assignedAccountUnusable': 'La cuenta asignada a esta Task no se puede usar — no tiene la sesión iniciada, fue eliminada o pertenece a otro agente',
+  'jobs.gate.assignedAccountUnusable':
+    'No se puede usar la primera cuenta asignada a esta Task, y las siguientes solo están ahí para pasar a ellas más tarde — vuelve a iniciar sesión en esa cuenta o cambia la lista de cuentas de esta Task',
   // NewTaskModal.tsx — el formulario en el que se convierte el panel inferior de RunDetail
   // (.detail-events) mientras se está creando una Task. deps pertenece al grafo, no a este formulario
   // (el grafo es donde se eligen las dependencias) — por eso este catálogo solo tiene el texto que

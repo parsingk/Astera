@@ -838,7 +838,8 @@ export const ja: Catalog = {
   'jobs.new.folderBusy': 'このフォルダではすでにワーカーが動いています — 同時実行が 1 だとこの作業のワーカーも同じフォルダで回るため、互いの編集が混ざることがあります',
   'jobs.new.failed': '作業を作れませんでした',
   'jobs.gate.noAccount': '{provider} アカウントにログインしていないため、この Task を開始できません',
-  'jobs.gate.assignedAccountUnusable': 'この Task に指定されたアカウントは使用できません — ログインしていない、削除された、または別のエージェントのアカウントです',
+  'jobs.gate.assignedAccountUnusable':
+    'この Task に指定された最初のアカウントが使用できず、その後ろのアカウントは後で切り替えるための順番にすぎません — そのアカウントに再ログインするか、この Task のアカウント一覧を変更してください',
   // NewTaskModal.tsx — Task を組み立てている間、詳細ウィンドウの下段(.detail-events)が変わるフォーム。
   // deps はこのフォームではなくグラフが持つ(選ぶ場所がグラフだから) — このカタログには deps の値
   // 自体ではなく、グラフを指すヒント文言(depsHint)だけがある。

@@ -750,7 +750,14 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.new.folderBusy': 'A worker is already running in this folder — at a limit of 1 this job runs its worker there too, so their edits can mix',
   'jobs.new.failed': 'Could not create the job',
   'jobs.gate.noAccount': 'No {provider} account is logged in, so this Task cannot start',
-  'jobs.gate.assignedAccountUnusable': 'The account assigned to this Task cannot be used — it is not logged in, has been removed, or belongs to another agent',
+  // Fires when the **first** account in this Task's list cannot be used, and when nothing in the list
+  // can — the first one is unusable either way, so one message covers both. The accounts after it are
+  // never promoted into its place (dispatchAccount.ts: listing one later is consent to roll onto it
+  // after exhaustion, not consent to start on it), which is the part the user cannot guess, so it is
+  // said out loud. No account is named: the call site holds ids, and an id is not the name the user
+  // picked the account by — the sibling above names only the provider for the same reason.
+  'jobs.gate.assignedAccountUnusable':
+    "The first account assigned to this Task cannot be used, and the accounts after it are only there to move onto later — log that account back in, or change this Task's account list",
   // NewTaskModal.tsx — the form RunDetail's bottom pane (.detail-events) turns into while a Task is
   // being authored. deps belongs to the graph, not this form (the graph is where dependencies get
   // picked) — that is why this catalog only has the hint text pointing at the graph, not the deps

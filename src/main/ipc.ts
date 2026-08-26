@@ -1389,8 +1389,10 @@ export function registerIpc(
               if (!picked.ok) {
                 // 조용히 넘기면 Run 이 이유 없이 서 있다 — 이 슬라이스가 없애려는 증상 그대로다.
                 // Reviewer 슬라이스가 "쓸 수 있는 다른 provider 계정이 없다"에 내린 것과 같은 판단이다.
-                // **지정한 계정을 못 쓰는 경우도 여기로 온다.** 기본 계정으로 갈아타지 않는 이유는
-                // accountToDispatchOn 의 주석에 있다: 그가 아끼려던 계정에 일이 간다.
+                // **지정한 계정을 못 쓰는 경우도 여기로 온다** — 목록의 첫 칸을 못 쓰는 것과 목록에
+                // 쓸 것이 아예 없는 것, 둘 다다. 기본 계정으로도 뒤 칸으로도 갈아타지 않는 이유는
+                // accountToDispatchOn 의 주석에 있다: 그가 아끼려던 계정에 일이 간다. 그러니 이
+                // Gate 가 사람이 그 사실을 아는 유일한 자리다.
                 await gateSlot(
                   orch.deps,
                   slot.taskId,
