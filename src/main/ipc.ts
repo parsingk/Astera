@@ -537,11 +537,18 @@ export function registerIpc(
     // committed, and leak. Files this app owns live in userData without exception —
     // statusline/<sessionId>.json is the precedent of the same shape.
     const specsDir = path.join(app.getPath('userData'), 'orch', 'specs')
-    // Old specs are cleared at startup — the same convention statusline.ts follows. After a restart
-    // every open Dispatch is closed as outcome_unknown (store.load), so those specs are dead anyway.
-    // Dispatch.specPath is left pointing at a file that no longer exists, but no code reads a file back
-    // from that value (verified by grep: neither state, server, nor coordinator reads it) — the same
-    // situation as a user having deleted the old in-repo spec directory.
+    // Old specs are cleared at startup — the same convention statusline.ts follows. Dispatch.specPath
+    // is left pointing at a file that no longer exists, and **there is now code that reads and writes
+    // a file back from that value**: buildResumePacket (orchestration/resumePacket.ts) rewrites the
+    // spec file to append the resume briefing. The earlier version of this comment claimed nothing did,
+    // which stopped being true when that landed.
+    //
+    // What makes the deletion safe is a different invariant, so it is named here rather than left
+    // implied: **buildResumePacket only ever acts on an *open* Dispatch** (it looks up `!d.endedAt`),
+    // and store.load closes every open Dispatch as outcome_unknown on restart. So by the time this
+    // rm has run, no Dispatch that could reach these paths is still open. If either half of that
+    // changes — a resume path that accepts a closed Dispatch, or a restart policy that leaves
+    // Dispatches open — this rm starts destroying live workers' instructions.
     // Both force: true and .catch() are here — a failed cleanup must not block startup.
     await fs.rm(specsDir, { recursive: true, force: true }).catch(() => {})
     await fs.mkdir(specsDir, { recursive: true })

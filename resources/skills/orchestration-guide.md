@@ -502,9 +502,12 @@ worker-start --task <t> --retry-of <dsp> --agent <same runtime> --account <same 
   coordinator is back to owning the timing itself: retry with `--retry-of` only after the reset time,
   or the early attempt counts as one of the circuit breaker's three strikes.
 - **The app appends a `## Resume briefing (assembled by the app — do not delete)` section to the
-  worker's own spec file each time a chain carries the work through a quota-limit reset.** It replaces
-  any earlier one instead of stacking, so the spec file never grows a history of them. That section is
-  the app's, not yours — do not write it, edit it, or delete it.
+  worker's own spec file whenever riding out a quota limit costs the worker its process** — always on
+  codex, and on claude when the chain moves to a different account. It replaces any earlier one
+  instead of stacking, so the spec file never grows a history of them. That section is the app's, not
+  yours — do not write it, edit it, or delete it. When the process survives the wait (the usual case
+  for a single-account claude worker) the app adds nothing to the file; it just tells the worker what
+  changed while it waited, because the worker's own conversation is still intact.
 
 ## 8. Cleanup after completion — the orchestrator decides
 
