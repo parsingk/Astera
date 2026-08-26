@@ -195,21 +195,45 @@ function truncate(text: string, max: number): string {
  *
  *  Message.body·Gate 의 question/resolution 처럼 사람이나 에이전트가 자유 형식으로 쓴 텍스트에만
  *  적용한다 — git 요약이나 파일 경로처럼 앱이 구조로 만든 값에는 자격 증명이 섞일 자리가 없다. */
+/** 값이 자격 증명처럼 **보이는가**. 두 조건을 함께 요구한다: 공백 없는 16자 이상의 긴 런이고,
+ *  영어 낱말과 구별되는 신호(숫자·구분자·대소문자 혼용) 중 하나가 있어야 한다.
+ *
+ *  **이 게이트가 없으면 redaction 이 워커의 산문을 망친다.** `key[:=]value` 규칙이 값 자리에
+ *  `\S+` 를 받던 동안 "Fixed the token: it was being dropped by the interceptor." 가
+ *  "Fixed the token=[REDACTED] was being dropped by the interceptor." 가 됐다 — 문장이 뭉개지는
+ *  것보다 나쁜 것은, 없던 자격 증명이 있었던 것처럼 **보이게 만드는** 것이다(재개된 에이전트가
+ *  존재하지 않는 유출을 쫓는다). 그리고 report body 는 이 Phase 의 중심 자산이다(DESIGN §20).
+ *
+ *  **대가를 적어 둔다:** `password: hunter2` 같은 짧은 사람 암호는 이제 가려지지 않는다. 그쪽을
+ *  잡으려면 값 자리를 다시 넓혀야 하고, 그러면 위의 산문 훼손이 그대로 돌아온다 — 이 기능이 담는
+ *  텍스트(워커가 쓴 보고 body)에서 실제로 마주치는 자격 증명은 API 키 모양이므로 그쪽을 택했다. */
+function looksLikeSecret(value: string): boolean {
+  if (value.length < 16) return false
+  return /\d/.test(value) || /[-_+/=]/.test(value) || (/[a-z]/.test(value) && /[A-Z]/.test(value))
+}
+
 function sanitize(text: string): string {
   // key=value / key: value 형태 — 키 이름에 token/key/secret/password/credential 이 있으면 값을
   // 가린다. 값이 실제로 시작하기 전까지("Credential in use:" 처럼 콜론 뒤에 다른 말이 이어지는
-  // 경우) 매치되지 않도록 키 이름과 구분자 사이에는 공백만 허용한다.
+  // 경우) 매치되지 않도록 키 이름과 구분자 사이에는 공백만 허용하고, 값은 looksLikeSecret 을
+  // 통과해야 한다 — 통과하지 못하면 매치 전체를 원문 그대로 되돌린다.
   let out = text.replace(
-    /\b([\w.-]*(?:api[-_]?key|access[-_]?key|secret|token|password|credential)[\w.-]*)\s*[:=]\s*("[^"]*"|'[^']*'|\S+)/gi,
-    (_m, key: string) => `${key}=[REDACTED]`
+    /\b([\w.-]*(?:api[-_]?key|access[-_]?key|secret|token|password|credential)[\w.-]*)\s*[:=]\s*["']?([A-Za-z0-9_\-+/=.]{16,})["']?/gi,
+    (m, key: string, value: string) => (looksLikeSecret(value) ? `${key}=[REDACTED]` : m)
   )
-  // key=value 모양이 아니어도 알아볼 수 있는 벤더 토큰 접두어.
+  // Bearer 도 같은 게이트를 쓴다 — 길이만 보면 "Bearer authentication" 이 걸린다.
+  out = out.replace(/\bBearer\s+([A-Za-z0-9._\-+/=]{16,})\b/gi, (m, token: string) =>
+    looksLikeSecret(token) ? '[REDACTED]' : m
+  )
+  // key=value 모양이 아니어도 알아볼 수 있는 벤더 토큰 접두어. **접두어만으로는 부족한 것이
+  // `sk-` 하나다** — 그 모양은 소문자 Jira 브랜치 이름(`sk-1042-fix-login`)과 구별되지 않아서,
+  // 실제 키 길이(sk-ant-…/sk-proj-… 는 40자를 넘는다)를 요구하는 쪽으로 좁혔다. 나머지 셋은
+  // 접두어 자체가 산문에 나올 수 없는 모양이라 그대로 둔다.
   for (const re of [
-    /\bsk-[A-Za-z0-9_-]{8,}\b/g,
+    /\bsk-[A-Za-z0-9_-]{32,}\b/g,
     /\bgh[oprsu]_[A-Za-z0-9]{16,}\b/g,
     /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/g,
-    /\bAKIA[0-9A-Z]{12,}\b/g,
-    /\bBearer\s+[A-Za-z0-9._-]{10,}\b/gi
+    /\bAKIA[0-9A-Z]{12,}\b/g
   ]) {
     out = out.replace(re, '[REDACTED]')
   }

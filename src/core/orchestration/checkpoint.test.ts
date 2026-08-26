@@ -117,6 +117,39 @@ function seed() {
   return { s, runId: run.id, taskId: main.value.id, depTaskId: dep.value.id, dispatchId: d2.value.id }
 }
 
+/** 보고 body 하나만 다른, 위 seed() 와 같은 조립. redaction 이 그 body 를 어떻게 다루는지만
+ *  보려는 테스트가 쓴다 — seed() 는 이미 CREDENTIAL_BODY 를 심어 두므로 재사용할 수 없다. */
+function seedWithReport(body: string): { s: OrchState; dispatchId: string } {
+  const run = unwrap<{ id: string }>(
+    createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW) as never
+  )
+  const t = unwrap<{ id: string }>(
+    createTask(run.state, { runId: run.value.id, title: 't', spec: 'do it', deps: [] }, NOW) as never
+  )
+  const d = unwrap<{ id: string }>(
+    openDispatch(
+      t.state,
+      {
+        taskId: t.value.id,
+        provider: 'codex',
+        accountId: 'acc1',
+        sessionId: 'sess1',
+        cwd: 'D:/p/wt',
+        specPath: 'D:/p/orch/specs/x.md'
+      },
+      NOW
+    ) as never
+  )
+  const done = unwrap<unknown>(
+    applyWorkerDone(
+      d.state,
+      { taskId: t.value.id, dispatchId: d.value.id, outcome: 'failed', subject: 'progress', body },
+      NOW
+    ) as never
+  )
+  return { s: done.state, dispatchId: d.value.id }
+}
+
 const git: GitSummary = {
   branch: 'main',
   head: 'def456',
@@ -192,6 +225,28 @@ describe('buildCheckpoint', () => {
     const serialized = JSON.stringify(c)
     expect(serialized).not.toContain('sk-ant-api03-FAKESECRETVALUE1234567890')
     expect(serialized).not.toContain('ANTHROPIC_API_KEY=sk-ant-api03-FAKESECRETVALUE1234567890')
+  })
+
+  // fix round 2: redaction 이 자격 증명이 아닌 것에 손대면 안 된다. report body 는 이 Phase 의
+  // 중심 자산이고(DESIGN §20), 아래 문장은 워커가 실제로 쓰는 모양이다.
+  it('leaves ordinary prose that merely mentions a token byte-identical', () => {
+    const prose =
+      'Fixed the token: it was being dropped by the interceptor. Branch sk-1042-fix-login is green.'
+    const { s, dispatchId } = seedWithReport(prose)
+    const c = buildCheckpoint(s, { dispatchId, git: null, now: NOW })!
+    expect(c.reports.at(-1)?.body).toBe(prose)
+  })
+
+  it('still redacts a value that actually looks like a credential', () => {
+    const body =
+      'Left a note: token=sk-ant-api03-FAKESECRETVALUE1234567890 and a bare ' +
+      'sk-ant-api03-OTHERFAKESECRETVALUE0987654321 plus Bearer eyJhbGciOiJIUzI1NiJ9fakejwt.';
+    const { s, dispatchId } = seedWithReport(body)
+    const serialized = JSON.stringify(buildCheckpoint(s, { dispatchId, git: null, now: NOW }))
+    expect(serialized).not.toContain('sk-ant-api03-FAKESECRETVALUE1234567890')
+    expect(serialized).not.toContain('sk-ant-api03-OTHERFAKESECRETVALUE0987654321')
+    expect(serialized).not.toContain('eyJhbGciOiJIUzI1NiJ9fakejwt')
+    expect(serialized).toContain('[REDACTED]')
   })
 
   it('carries a resolved human decision from Gate.question/Gate.resolution', () => {
