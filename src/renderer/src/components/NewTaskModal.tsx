@@ -74,6 +74,15 @@ export function NewTaskModal({
     .map((tk) => ({ value: tk.id, label: tk.title }))
   const titleOf = (id: string): string => tasks.find((tk) => tk.id === id)?.title ?? id
 
+  /** 뒤에 빈 칸을 하나 더 세울지 — **그 칸에서 고를 것이 남았을 때만 세운다.** 이미 고른 계정은 다른
+   *  칸의 항목에서 빠지므로(아래 filter), 계정이 하나뿐인 사람이 그것을 고르면 둘째 칸의 목록이 비고
+   *  '추가 안 함' 한 줄만 있는 죽은 드롭다운이 남는다 — 계정이 하나인 사람이 가장 흔한 경우다.
+   *  새 세션 대화상자가 '계정 추가' 버튼에 같은 판단을 쓴다(NewSessionDialog.tsx 의 canAdd).
+   *  상한도 여기서 본다: 이것이 칸을 늘리는 유일한 길이므로 accountIds 는 상한을 넘을 수 없다. */
+  const canAddSlot =
+    accountIds.length < MAX_TASK_ACCOUNTS &&
+    (accounts ?? []).some((a) => !accountIds.includes(a.id))
+
   const create = async (): Promise<void> => {
     const trimmedSpec = spec.trim()
     // busy 로 다시 걸러 이중 클릭이 Task 를 두 개 만들지 못하게 한다 — NewRunModal.create 와 같은
@@ -186,8 +195,9 @@ export function NewTaskModal({
             {/* 슬롯 하나씩. 첫 칸은 '지정 안 함'(빈 값)을 가질 수 있고, 뒤 칸은 고른 것만 남는다 —
                 빈 뒤 칸은 뜻이 없으므로 값을 비우면 그 칸이 사라진다. 이미 고른 계정은 다른 칸의
                 항목에서 빠진다(같은 계정을 두 칸에 넣으면 롤링이 두 계정인 줄 알고 같은 계정으로
-                "갈아탄다" — task-create 도 그 조합을 거절한다). */}
-            {[...accountIds, ''].slice(0, MAX_TASK_ACCOUNTS).map((slot, i) => (
+                "갈아탄다" — task-create 도 그 조합을 거절한다). 맨 뒤의 빈 칸은 고를 것이 남았을
+                때만 붙는다(canAddSlot). */}
+            {(canAddSlot ? [...accountIds, ''] : accountIds).map((slot, i) => (
               <AccountSelect
                 key={i}
                 className="stack-item"
