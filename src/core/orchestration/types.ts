@@ -108,8 +108,9 @@ export interface Task {
    *
    *  provider 는 Run 이 정하므로(Run.provider) 이 계정들은 그것과 같은 provider 여야 한다.
    *  task-create 가 그 조합을 거절하지만, 못 쓰는 지정이 실제로 도달했을 때 무엇을 하는지는
-   *  accountToDispatchOn(core/accounts/dispatchAccount.ts)이 정한다 — 쓸 수 있는 것만 남기고,
-   *  하나도 남지 않으면 조용히 기본 계정으로 갈아타지 않고 Gate 를 연다. */
+   *  accountToDispatchOn(core/accounts/dispatchAccount.ts)이 정한다 — **첫 계정**을 못 쓰면 뒤
+   *  계정을 올려세우지 않고 그대로 실패해 Gate 를 열고, 첫 계정을 쓸 수 있으면 **뒤 계정** 중
+   *  못 쓰는 것만 순서를 지키며 제자리에서 빠진다. */
   accountIds?: string[]
   /** 이 Task 를 완료로 판정할 실행 구성의 id. 없으면 worker_done 을 그대로 믿는다 —
    *  "문서를 고친다" 같은 Task 에 빌드를 거는 것은 틀린 판정이므로 검증 없음이 기본이다. */

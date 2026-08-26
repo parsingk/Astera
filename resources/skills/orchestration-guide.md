@@ -240,7 +240,11 @@ gate-list [--task <tsk>] [--status <s>] [--json]
   default account instead. With more than one id, running into a usage limit moves the worker to the
   next account in the order given; with only one, there is nowhere to move, so it waits out the limit
   instead. Every account has to belong to that Run's provider — `task-create` rejects the whole list
-  otherwise, the same way it rejects an empty entry (`a,,b`) or a repeated id (`a,a`).
+  otherwise, the same way it rejects an empty entry (`a,,b`) or a repeated id (`a,a`). If the first
+  account in the list turns out unusable when the worker actually starts — unknown id, wrong provider,
+  or not logged in — the Task does not fall back to the next one: dispatch fails and a Gate opens for
+  you to resolve, the same as an unrunnable validation or review (section 2). Only accounts after the
+  first are dropped in place like that.
 - **`--validate <configId>` makes this Task's completion depend on a run configuration**, not just the
   worker's own report — the id comes from `run-configs` (4.1). Omit it and nothing changes:
   `worker_done --outcome succeeded` completes the Task exactly as before. With it, that same report
