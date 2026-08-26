@@ -1855,6 +1855,63 @@ describe('task-create --validate 와 run-configs', () => {
   })
 })
 
+describe('task-create --account', () => {
+  // 기본 makeDeps 는 계정을 하나만 준다 — 목록 문법을 보려면 같은 provider 의 계정이 둘 있어야 한다
+  const accountDeps = () => ({
+    ...makeDeps(),
+    listAccounts: () => [
+      { id: 'acc1', label: '계정1', provider: 'codex' as const },
+      { id: 'acc2', label: '계정2', provider: 'codex' as const }
+    ]
+  })
+
+  it('--account 는 쉼표로 순서 있는 목록을 받는다', async () => {
+    const deps = accountDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const r = await call(deps, 'task-create', { runId, spec: 's', account: 'acc2,acc1' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().tasks.at(-1)?.accountIds).toEqual(['acc2', 'acc1'])
+  })
+
+  it('--account 하나는 원소 하나인 목록이다 (기존 호출)', async () => {
+    const deps = accountDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const r = await call(deps, 'task-create', { runId, spec: 's', account: 'acc1' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().tasks.at(-1)?.accountIds).toEqual(['acc1'])
+  })
+
+  it('목록의 어느 한 칸이라도 모르는 계정이면 거절한다', async () => {
+    const deps = accountDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const r = await call(deps, 'task-create', { runId, spec: 's', account: 'acc1,nope' })
+    expect(r.status).toBe(400)
+    expect((r.body as { error: string }).error).toMatch(/nope/)
+  })
+
+  it('같은 계정을 두 번 적으면 거절한다', async () => {
+    const deps = accountDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const r = await call(deps, 'task-create', { runId, spec: 's', account: 'acc1,acc1' })
+    expect(r.status).toBe(400)
+    expect((r.body as { error: string }).error).toMatch(/acc1/)
+  })
+
+  it('쉼표만 있거나 빈 칸이 섞이면 거절한다', async () => {
+    const deps = accountDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    expect((await call(deps, 'task-create', { runId, spec: 's', account: ',' })).status).toBe(400)
+    expect(
+      (await call(deps, 'task-create', { runId, spec: 's', account: 'acc1,,acc2' })).status
+    ).toBe(400)
+  })
+})
+
 describe('worker_done 이 검증을 시작한다', () => {
   it('검증이 걸린 Task 가 끝나면 startValidation 을 부른다', async () => {
     const deps = makeDeps()

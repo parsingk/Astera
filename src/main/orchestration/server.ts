@@ -586,24 +586,37 @@ export async function handleCommand(
       const spec = str(args.spec)
       if (!runId) return bad('--run is required (no run exists)')
       if (!spec) return bad('--spec is required')
-      // `--account` 는 이 Task 를 띄울 계정이다. 없으면 그 provider 의 기본 계정으로 간다
-      // (core/accounts/dispatchAccount.ts). **여기서 거절하는 이유**: 지정이 잘못돼 있으면
-      // dispatch 시점에 Gate 가 열리는데, 그때는 사람이 이미 Task 를 만들어 둔 뒤라 왜 안 도는지
-      // 되짚어야 한다. 만들 때 거절하면 그 자리에서 알 수 있다. 다만 **거절이 유일한 방어는 아니다** —
-      // orchestration.json 은 프로세스보다 오래 살고 손으로 고쳐지므로 dispatch 시점 검사도 남는다.
-      const account = str(args.account)
-      if (account !== null) {
+      // `--account` 는 이 Task 를 띄울 계정들이다 — **쉼표로 순서 있는 목록**을 받는다(`a,b,c`).
+      // 첫 계정으로 띄우고 나머지는 한도에 걸렸을 때 갈아탈 순서다. 없으면 그 provider 의 기본
+      // 계정으로 간다(core/accounts/dispatchAccount.ts).
+      // **쉼표인 이유**: parseArgs 는 같은 플래그를 두 번 주면 뒤가 앞을 덮고, 배열은 JSON_ARRAY 로만
+      // 받는다. `ask --options` 가 이미 CSV 이므로 그 관례를 쓴다 — 계정 하나만 주는 기존 호출은
+      // 쉼표가 없으므로 그대로 흐른다.
+      const accountArg = str(args.account)
+      let accountIds: string[] | undefined
+      if (accountArg !== null) {
+        const parts = accountArg.split(',').map((x) => x.trim())
+        // 빈 칸을 조용히 버리지 않고 거절한다 — `a,,b` 나 `a,` 는 손이 미끄러진 것이고, 버리면
+        // 사람이 적은 것과 도는 것이 달라진다. 그것을 알 방법은 화면에 없다.
+        if (parts.some((x) => x === '')) return bad('--account must not contain an empty entry')
+        const dup = parts.find((x, i) => parts.indexOf(x) !== i)
+        // 중복을 거절하는 이유: 같은 계정이 두 칸이면 RollCycle 은 두 계정인 줄 알고 한 바퀴를 세고,
+        // "갈아탄" 결과가 같은 계정이 된다. 판정 쪽에서도 접지만(dispatchAccount.ts) 명령은 그 전에
+        // 사람에게 말해 주는 자리다.
+        if (dup !== undefined) return bad(`--account lists ${dup} twice`)
         const run = s.runs.find((r) => r.id === runId)
         // Run 의 provider 로 좁혀 묻는다. provider 가 없는 Run(명령으로는 만들 수 없는 조합이지만
         // 파일은 손으로 고쳐진다)에서는 좁힐 기준이 없어 존재만 본다 — 그런 Run 은 애초에
         // slotsToFill 이 건너뛴다.
         const known = deps.listAccounts(run?.provider)
-        if (!known.some((x) => x.id === account))
+        const unknown = parts.find((x) => !known.some((k) => k.id === x))
+        if (unknown !== undefined)
           return bad(
             run?.provider
-              ? `unknown ${run.provider} account: ${account}`
-              : `unknown account: ${account}`
+              ? `unknown ${run.provider} account: ${unknown}`
+              : `unknown account: ${unknown}`
           )
+        accountIds = parts
       }
       return commit(
         createTask(
@@ -614,7 +627,7 @@ export async function handleCommand(
             spec,
             deps: Array.isArray(args.deps) ? (args.deps as string[]) : [],
             parentId: str(args.parent) ?? undefined,
-            accountIds: account !== null ? [account] : undefined,
+            ...(accountIds ? { accountIds } : {}),
             validateConfigId: str(args.validate) ?? undefined,
             // `--review` 는 값이 없는 플래그다(task-list --ready 와 같은 모양). 어느 provider 가
             // 읽을지는 앱이 고른다 — 계정 풀을 아는 것은 앱이다.
