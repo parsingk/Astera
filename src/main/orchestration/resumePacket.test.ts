@@ -247,6 +247,21 @@ describe('buildResumePacket', () => {
     expect(line).not.toBeNull()
     expect(LAUNCH_FORBIDDEN.test(line as string)).toBe(false)
   })
+
+  // fix round 2: 이 줄은 파일을 다시 읽으라고 요청할 수 있을 뿐 강제할 수 없다. 기억으로 이어가기로
+  // 한 에이전트가 보고 명령을 어디서도 다시 보지 못하면 그 Task 는 영원히 닫히지 않는다(SPEC §9.2).
+  it('보고 명령을 인라인으로 들고 있다 — 파일을 다시 읽지 않아도 보고할 수 있게', async () => {
+    const specPath = path.join(specDir, 'spec.md')
+    await fs.writeFile(specPath, '# do the thing\n\nimplement it\n', 'utf8')
+    const { s, taskId, dispatchId } = seed(specPath)
+
+    const line = (await buildResumePacket('sess1', s, { git: fakeGit(), now: () => NOW }))!
+
+    expect(line).toContain('astera send --type worker_done')
+    expect(line).toContain(`--task-id ${taskId}`)
+    expect(line).toContain(`--dispatch-id ${dispatchId}`)
+    expect(line).not.toContain('\n') // 한 줄이어야 한다 — claude 는 PTY 에 타이핑한다
+  })
 })
 
 // fix round 2 — SPEC §11.5: `--resume` 없이 이어가는 재개 경로(claude 의 resumeInPlace·idle nudge·

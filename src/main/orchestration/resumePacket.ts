@@ -82,13 +82,31 @@ async function writeAtomic(
   }
 }
 
-/** 재개 프롬프트 자리에 실을 한 줄. 정적이다 — 경로도, Task 마다 달라지는 값도 담지 않는다(위 헤더의
- *  이유). 보고 의무를 여기서 다시 서술하지 않고 spec 파일을 가리키기만 하는 것은 의도된 선택이다:
- *  buildSpecFile 의 Reporting obligation 과 formatResumeSection 의 REPORT WHEN DONE 이 이미 같은
- *  명령 모양으로 그 의무를 적어 두었으므로(resumeSection.ts 의 reportSection 주석), 여기서 세 번째
- *  표현을 만들면 같은 의무에 대해 서로 다른 두 문구를 주는 것이 된다. */
-const RESUME_LINE =
-  'Continue this task: re-read your spec file for a resume briefing the app just appended, then carry on and report exactly as it instructs when the work is finished.'
+/** 재개 프롬프트 자리에 실을 한 줄. **경로는 담지 않는다**(위 헤더의 이유 — sanitizer 가 따옴표를
+ *  지운다) 대신 보고 명령은 담는다.
+ *
+ *  **보고 명령을 인라인으로 다시 적는 이유.** 이 줄이 정적 문자열이던 동안은 spec 파일을 가리키기만
+ *  했다 — 같은 의무를 세 곳에 다른 문구로 적지 않으려는 선택이었다. 그런데 이 줄은 파일을 다시
+ *  읽으라고 **요청**할 수 있을 뿐 강제할 수 없다: 재개된 에이전트가 기억으로 이어가기로 하면 보고
+ *  명령을 어디서도 다시 보지 못하고, 그러면 그 Task 는 영원히 닫히지 않는다(SPEC §9.2 의 네 번째
+ *  줄). 이 자리에 있던 Phase 1b 의 프롬프트(coordinator.ts 의 `rollPrompt`)는 그 명령을 인라인으로
+ *  들고 있었으므로, 그것을 빼는 것은 순손실이었다.
+ *
+ *  세 곳의 문구가 갈리는 문제는 **명령의 모양**을 같게 유지해 해결한다 — SPEC §9.2 가 요구하는 것도
+ *  낱말이 아니라 그것이다(같은 커맨드, 같은 인자). `buildSpecFile` 의 Reporting obligation 과
+ *  `formatResumeSection` 의 REPORT WHEN DONE 과 `rollPrompt` 가 모두 같은
+ *  `astera send --type worker_done --task-id … --dispatch-id …` 를 쓴다.
+ *
+ *  taskId·dispatchId 는 재개 뒤에도 유효하다 — `rekeyDispatch` 는 sessionId·accountId 만 옮기고
+ *  Dispatch.id 는 바꾸지 않는다. 둘 다 앱이 만든 hex id 라 `LAUNCH_FORBIDDEN` 에 걸릴 문자가 없지만,
+ *  그래도 반환 전에 검사한다(아래 계약). */
+function resumeLine(a: { taskId: string; dispatchId: string }): string {
+  return (
+    'Continue this task: re-read your spec file for the resume briefing the app just appended, ' +
+    'then carry on from where the work already stands. When it is finished, report exactly once ' +
+    `with astera send --type worker_done --task-id ${a.taskId} --dispatch-id ${a.dispatchId}.`
+  )
+}
 
 /**
  * sessionId 로 열린 Dispatch 를 찾아 Checkpoint 를 조립하고, 그 spec 파일에 재개 절을 적어 넣은 뒤
@@ -116,8 +134,8 @@ const RESUME_LINE =
  *     (writeAtomic).
  *   - Checkpoint 조립이나 서식화가 던진다(오늘은 일어나지 않지만, 위 이유로 대비해 둔다): 로그를
  *     남기고 null.
- *   - 반환할 문장이 LAUNCH_FORBIDDEN 에 걸린다: null. RESUME_LINE 은 정적 문자열이라 오늘은 걸릴 수
- *     없지만, codex 의 sanitizer 가 지우는 문자를 스스로도 검사해 두는 것은 이 함수의 계약이다.
+ *   - 반환할 문장이 LAUNCH_FORBIDDEN 에 걸린다: null. 담기는 값은 앱이 만든 hex id 둘뿐이라 오늘은
+ *     걸릴 수 없지만, codex 의 sanitizer 가 지우는 문자를 스스로도 검사해 두는 것은 이 함수의 계약이다.
  */
 export async function buildResumePacket(
   sessionId: string,
@@ -151,8 +169,9 @@ export async function buildResumePacket(
     const writeFile = deps.writeFile ?? ((p: string, c: string) => fs.writeFile(p, c, 'utf8'))
     await writeAtomic(dispatch.specPath, upsertResumeSection(existing, section), writeFile)
 
-    if (LAUNCH_FORBIDDEN.test(RESUME_LINE)) return null
-    return RESUME_LINE
+    const line = resumeLine({ taskId: checkpoint.taskId, dispatchId: checkpoint.dispatchId })
+    if (LAUNCH_FORBIDDEN.test(line)) return null
+    return line
   } catch (err) {
     deps.log?.(`resume packet failed dispatch=${dispatch.id}: ${String(err)}`)
     return null
