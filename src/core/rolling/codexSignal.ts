@@ -290,11 +290,11 @@ export class CodexModelChoiceScanner {
     return n
   }
 
-  /** 프롬프트가 화면에 뜬 채 응답되지 않았는가. **별도의 화면 버퍼가 필요하지 않은 이유**는 이 tail
-   *  이 정확히 그 상태를 들고 있기 때문이다: 응답한 순간 push 가 tail 을 비우므로, 머리말이 아직
-   *  tail 에 남아 있다는 것은 곧 "떴는데 답하지 못했다" 는 뜻이다(번호를 못 찾은 경우).
-   *  살아 있는 세션에 문장을 타이핑하기 전에 이것을 물어야 한다 — Enter 가 하이라이트된 항목을
-   *  승인하기 때문이다. */
+  /** Is the prompt still on screen, unanswered? **Why no second screen buffer is needed**: this
+   *  tail already holds exactly that state — push clears the tail the instant it answers the prompt,
+   *  so a header still sitting in the tail means exactly "it appeared and could not be answered" (no
+   *  item number was found). This has to be asked before typing into a live session — Enter approves
+   *  whatever item is highlighted. */
   pending(): boolean {
     return APPROACHING_RE.test(this.tail)
   }

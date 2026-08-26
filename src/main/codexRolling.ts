@@ -459,22 +459,25 @@ export class CodexRollingCoordinator {
     }
   }
 
-  /** 대기가 끝났을 때 무엇으로 재개할지 — claude 쪽 `resumeAfterWait`(rolling.ts) 의 codex 대응물.
+  /** What to resume with once the wait ends — the codex counterpart of the claude side's
+   *  `resumeAfterWait` (rolling.ts).
    *
-   *  계정이 바뀌면 새 프로세스가 불가피하다. 바뀌지 않으면 죽일 이유가 없다 — 세션 id 가 유지되므로
-   *  일정·Slack·턴 알림·오케스트레이션 Dispatch 를 새 id 로 옮기는 일이 전부 없어지고, rollout 복사도
-   *  필요 없다.
+   *  If the account changes, a new process is unavoidable. If it does not change, there is no reason
+   *  to kill — the session id is kept, so moving the schedule, Slack, turn notifications and
+   *  orchestration Dispatch onto a new id all become unnecessary, and no rollout copy is needed
+   *  either.
    *
-   *  **"지금 세션이 일하고 있는가" 를 묻지 않는다.** 한도 판정을 통과한 대기이므로 이 순간 세션은
-   *  필연적으로 멈춰 있고, codex 는 한도가 풀려도 스스로 이어가지 않는다(실측 화면이 그때 다시
-   *  시도하라고 안내한다 — docs/codex_usage_limit2.png). claude 쪽 설계가 그 판정을 세 겹으로
-   *  쌓으려다 매번 새 결함을 만든 자리다. */
+   *  **It deliberately does not ask "is the session working right now".** This wait only happens
+   *  once the limit verdict has passed, so at this moment the session is necessarily halted, and
+   *  codex does not carry on by itself once the limit lifts (the measured screen tells it to retry
+   *  at that point — docs/codex_usage_limit2.png). This is the spot where the claude-side design
+   *  tried to stack that verdict three ways and produced a fresh defect every time. */
   private resumeAfterWait(chain: Chain, toIndex: number): Promise<void> {
     if (chain.disposed || chain.rolling) return Promise.resolve()
-    if (toIndex !== chain.cycle.currentIndex) return this.roll(chain, toIndex) // 계정이 바뀐다
+    if (toIndex !== chain.cycle.currentIndex) return this.roll(chain, toIndex) // the account changes
     if (chain.modelChoice.pending()) {
-      // 목록이 열린 채라면 Enter 가 하이라이트된 항목을 승인한다. kill 은 화면을 통째로 지우므로
-      // 그쪽이 안전하다 — claude 쪽 choicePending 과 같은 판단이다.
+      // If the list is still open, Enter would approve the highlighted item. kill wipes the whole
+      // screen, so that path is safe — the same judgment as the claude side's choicePending.
       this.deps.log(
         `codex resume in place skipped — model prompt still on screen session=${chain.liveId}`
       )
@@ -483,17 +486,19 @@ export class CodexRollingCoordinator {
     return this.resumeInPlace(chain)
   }
 
-  /** 같은 계정으로 이어가기 — kill 도 spawn 도 복사도 하지 않고, 살아 있는 PTY 에 한 줄과 Enter 만
-   *  넣는다. `answerModelChoice` 가 이미 쓰는 통로이고 상수도 같다(ENTER_DELAY_MS).
+  /** Continuing on the same account — no kill, no spawn, no copy; only one line plus Enter go into
+   *  the live PTY. This is the same channel `answerModelChoice` already uses, and the same constant
+   *  (ENTER_DELAY_MS).
    *
-   *  세 가지를 되돌려야 하는 것이 이 함수의 실질이다.
-   *   ① **tail 을 파일 끝으로 다시 붙인다.** 대기 동안 tick 은 이 체인을 건너뛰었으므로(waitTimer
-   *      가드) tail 은 마지막으로 읽은 위치를 들고 있고, 재개 후 첫 tick 이 **이 대기를 만든 그
-   *      레코드를 다시 읽어** 곧바로 같은 한도를 올린다. roll() 이 복사본에 startAtEnd 를 쓰는 것과
-   *      같은 이유이고, 같은 함수(attachRollout)를 같은 파일에 다시 쓴다.
-   *   ② **state 를 비운다.** 지난 스냅샷은 100% 다 — 남겨 두면 maxed+silent 폴백이 재개 직후에
-   *      다시 발화한다. roll() 도 respawn 자리에서 같은 일을 한다.
-   *   ③ **textHit 래치와 문구 스캐너를 초기화한다.** 같은 이유다. */
+   *  What this function actually does is undo three things.
+   *   ① **Re-attach the tail at the end of the file.** Through the wait, tick skipped this chain
+   *      (the waitTimer guard), so the tail still holds the position it last read from, and the
+   *      first tick after the resume would **read that very record that caused this wait again**
+   *      and raise the same limit immediately. Same reason roll() uses startAtEnd on the copy, and
+   *      it writes the same function (attachRollout) to the same file again.
+   *   ② **Clear state.** The last snapshot is 100% — leaving it would fire the maxed+silent fallback
+   *      again right after the resume. roll() does the same thing at the respawn point.
+   *   ③ **Reset the textHit latch and the phrase scanner.** Same reason. */
   private async resumeInPlace(chain: Chain): Promise<void> {
     if (chain.rolloutPath && chain.codexSessionId)
       this.attachRollout(chain, chain.codexSessionId, chain.rolloutPath) // ①
@@ -501,22 +506,24 @@ export class CodexRollingCoordinator {
     chain.textHit = false // ③
     chain.scanner = new CodexLimitScanner()
     chain.lastOutputAt = this.now()
-    // 'nudged' 가 맞는 상태다 — 계정 전환이 아니라 리셋 재개이고, 렌더러는 순간 이벤트로 다루며
-    // Slack 매핑(slack.limitReset)이 이미 있다. claude 쪽 resumeInPlace 와 같은 선택이다.
+    // 'nudged' is the right state — this is a reset resume, not an account switch, the renderer
+    // treats it as a momentary event, and the Slack mapping (slack.limitReset) already exists. Same
+    // choice as the claude-side resumeInPlace.
     this.pushState(chain, 'nudged')
     const liveId = chain.liveId
     this.deps.log(`codex limit reset → resume in place session=${liveId}`)
     const prompt = await this.resumePromptFor(chain, liveId, 'update')
-    if (chain.disposed || chain.liveId !== liveId) return // await 를 건너뛴 상태 가드
+    if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
     this.deps.write(liveId, prompt)
     setTimeout(() => {
       if (chain.disposed || chain.liveId !== liveId) return
       this.deps.write(liveId, '\r')
-      // 'none' 은 Enter 뒤에 게시해야 스케줄러의 억제가 풀린다(claude 쪽과 같은 순서)
+      // 'none' has to be published after Enter for the scheduler's suppression to lift (same order
+      // as the claude side)
       this.pushState(chain, 'none')
     }, ENTER_DELAY_MS)
-    // roll() 에서는 sendPrompt 가 잡아 주는 타이머. 없으면 recovery[current] 가 남아 다음 한도가
-    // 한 바퀴 막힌 것으로 오독된다.
+    // On the roll() path this timer is armed by sendPrompt. Without it, recovery[current] stays set
+    // and the next limit is misread as a whole lap being blocked.
     chain.healthyTimer = setTimeout(() => {
       chain.healthyTimer = null
       chain.cycle.onHealthy()
