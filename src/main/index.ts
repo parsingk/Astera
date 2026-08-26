@@ -515,6 +515,13 @@ app.whenReady().then(async () => {
   const codexRolling = new CodexRollingCoordinator({
     spawn: (opts) => core!.sessions.spawn(opts),
     kill: (id) => core!.sessions.kill(id),
+    write: (id, d) => {
+      try {
+        core!.sessions.write(id, d)
+      } catch {
+        /* a write failure must not break the chain — the prompt just stays up */
+      }
+    },
     getAccount: (id) => {
       try {
         return core!.accounts.get(id)
@@ -531,9 +538,10 @@ app.whenReady().then(async () => {
       try {
         if (channel === 'session:rolled') {
           // dest: the rollout path copied into the target account just before the roll
-          // (codexRolling.roll() carries it along). If that copy is the only candidate on the first
-          // polling tick right after re-registering, the watcher latches onto it and misfires on the
-          // last turn from before the roll — excludePaths keeps it out.
+          // (codexRolling.roll() carries it along). The respawn resumes, so codex appends to that very
+          // file instead of creating a new one — it is what the watcher has to tail, and searching for a
+          // newly created file would find nothing at all. It is handed over directly; the watcher starts
+          // at the end of it so the turns from before the roll are not reported again.
           const p = payload as { oldSessionId: string; info: SessionInfo; dest?: string }
           scheduler.rekey(p.oldSessionId, p.info.id) // the schedule follows the roll chain
           // When rolling switches accounts the session respawns under a new sessionId and a new
@@ -542,7 +550,7 @@ app.whenReady().then(async () => {
           // already splits on provider), so every session reaching here is codex — re-checking the
           // provider is unnecessary.
           codexTurns.unregister(p.oldSessionId)
-          if (p.info.slackNotify) codexTurns.register(p.info, p.dest ? [p.dest] : undefined)
+          if (p.info.slackNotify) codexTurns.register(p.info, p.dest)
         } else if (channel === 'session:rollState') {
           // codex rolling sends session:rollState too (switching/waiting/none) — suppress the resume window
           scheduler.handleRollState(payload as RollStateEvent)

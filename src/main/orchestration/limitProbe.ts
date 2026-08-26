@@ -14,57 +14,13 @@
 // — it runs on a Dispatch exit that rolling did not turn into a roll (a real death, not a
 // rolled-away one), to answer "did this end on a limit, and when does that lift" for the
 // orchestrator's own retry/backoff decision.
-import { open } from 'node:fs/promises'
 import type { Dispatch } from '../../core/orchestration/types'
 import { parseClaudeLimitLine, type ClaudeLimitHit } from '../../core/rolling/claudeSignal'
 import { limitReached, limitStateFromLines, worstResetAt } from '../../core/rolling/codexSignal'
 import { findRollout } from '../../core/rolling/codexLocate'
 import { parseResetTime } from '../../core/rolling/resetTime'
+import { tailLines } from '../../core/rolling/tailLines'
 import { extractStatusLineSession } from '../../core/usage/statusline'
-
-const TAIL_CAP = 512 * 1024 // the maximum number of bytes to read from the end
-
-/** Reads at most cap bytes from the end of the file and returns the complete lines.
- *  The first line, which the cap boundary may have cut off at the front, is dropped — parsing half a
- *  JSON object is meaningless.
- *  A failure of **the read itself** (a missing file, a permission error and so on) gives `null` — kept
- *  distinct from the case where the file was read but has no complete lines ([]). This is the same
- *  convention as `JsonlTail.read()`: null means missing or errored, [] means no new lines.
- *  The caller has to log the null, otherwise failures disappear without a trace.
- *
- *  Why not read the whole thing: a claude transcript measured up to 37MB. Reading that on the Electron
- *  main thread and running split and JSON.parse over it freezes the UI for seconds (the same reason as in
- *  claudeSignal.ts). The limit entry that ended the session is by definition at the end of the file, so a
- *  bounded read from the end is enough. */
-async function tailLines(filePath: string, cap = TAIL_CAP): Promise<string[] | null> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined
-  try {
-    handle = await open(filePath, 'r')
-    const { size } = await handle.stat()
-    const start = Math.max(0, size - cap)
-    const length = size - start
-    if (length <= 0) return [] // an empty file — the read succeeded, this is not a failure
-    const buffer = Buffer.alloc(length)
-    // bytesRead is honoured — on a short read (rare but possible) the tail of the buffer is left holding
-    // uninitialised zero bytes, which breaks JSON.parse on the last line, the very line that may hold the
-    // limit entry.
-    const { bytesRead } = await handle.read(buffer, 0, length, start)
-    const lines = buffer.subarray(0, bytesRead).toString('utf8').split('\n')
-    // If start === 0 (the file is smaller than cap) the first line is intact, so it is kept. If start > 0
-    // it may have been cut at the cap boundary, so it is dropped — miss this branch and a small file's only
-    // entry is lost.
-    if (start > 0) lines.shift()
-    return lines.filter((l) => l.trim() !== '')
-  } catch {
-    return null // open, stat or read failed — missing, permissions, EBUSY and so on. The caller has to log it.
-  } finally {
-    try {
-      await handle?.close()
-    } catch {
-      /* a failure cleaning up the fd is ignored */
-    }
-  }
-}
 
 export interface LimitProbeDeps {
   /** The session's raw statusLine payload. The claude transcript path comes only from here */
@@ -122,7 +78,7 @@ async function probeClaudeLimit(d: Dispatch, deps: LimitProbeDeps): Promise<numb
 
 /** The codex path: finds this worker's rollout in the account's configDir, assembles the last rate_limits
  *  snapshot from the tail, and decides the limit was hit from the structured signal
- *  (rate_limit_reached_type) alone. */
+ *  (usage_limit_exceeded first — reachedType has never been observed non-null). */
 async function probeCodexLimit(d: Dispatch, deps: LimitProbeDeps): Promise<number | null> {
   const configDir = deps.configDirOf(d.accountId)
   if (!configDir) {
@@ -140,11 +96,17 @@ async function probeCodexLimit(d: Dispatch, deps: LimitProbeDeps): Promise<numbe
     deps.log(`limit probe (codex): failed to read rollout tail dispatch=${d.id} path=${found.path}`)
     return null
   }
-  const state = limitStateFromLines(lines, deps.now?.() ?? Date.now())
+  const since = Date.parse(d.startedAt)
+  const read = limitStateFromLines(lines, deps.now?.() ?? Date.now())
+  // A limit error older than this Dispatch belongs to an earlier turn of a conversation this worker
+  // resumed — the same rule the claude path applies to hit.at above. Without it every worker that ever
+  // resumed a conversation that once hit a limit would be judged to have died of one. The windows are
+  // left alone: they describe the account, not this turn.
+  const state = read && read.error && read.error.at <= since ? { ...read, error: null } : read
   // textHit is always false — that is the input of the PTY output scanner (CodexLimitScanner), and the
-  // probe does not look at the PTY stream. So codex is decided from the structured signal
-  // (rate_limit_reached_type) alone — a limit that produces only the phrase without the structured field
-  // is missed by this probe. Widening that needs a separate decision.
+  // probe does not look at the PTY stream. So codex is decided from the structured signals alone
+  // (usage_limit_exceeded, rate_limit_reached_type) — a limit that produces only the phrase is missed by
+  // this probe. Widening that needs a separate decision.
   if (!limitReached(state, { textHit: false })) return null
   const reset = worstResetAt(state)
   if (reset.at === null) {
@@ -159,7 +121,7 @@ async function probeCodexLimit(d: Dispatch, deps: LimitProbeDeps): Promise<numbe
     // where the next person will want to "just lower the gate", so we only log it and return null as is —
     // whether this combination actually occurs in practice is what this log determines.
     deps.log(
-      `limit probe (codex): reached but no window met gate dispatch=${d.id} reachedType=${state?.reachedType ?? 'null'} primaryPct=${state?.primary?.usedPercent ?? 'n/a'} secondaryPct=${state?.secondary?.usedPercent ?? 'n/a'}`
+      `limit probe (codex): reached but no window met gate dispatch=${d.id} reachedType=${state?.reachedType ?? 'null'} error=${state?.error ? 'usage_limit_exceeded' : 'null'} primaryPct=${state?.primary?.usedPercent ?? 'n/a'} secondaryPct=${state?.secondary?.usedPercent ?? 'n/a'}`
     )
     return null
   }

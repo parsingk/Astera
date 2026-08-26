@@ -17,6 +17,33 @@ const acc = (id: string, label: string): Account => ({
   provider: 'codex'
 })
 
+interface Snapshot {
+  primary?: number
+  secondary?: number
+  reached?: string | null
+  primaryReset?: number // epoch 초
+}
+
+/** 실측 형태를 본뜬 token_count 한 줄 — rate_limits 는 payload 바로 아래다 (codexSignal.ts 의 rateLimitsOf 주석) */
+const tokenCountLine = (opts: Snapshot): string =>
+  JSON.stringify({
+    timestamp: new Date(Date.now()).toISOString(),
+    type: 'event_msg',
+    payload: {
+      type: 'token_count',
+      info: { total_token_usage: { total_tokens: 100 } },
+      rate_limits: {
+        primary: { used_percent: opts.primary ?? 0, window_minutes: 300, resets_at: opts.primaryReset ?? 0 },
+        secondary: { used_percent: opts.secondary ?? 0, window_minutes: 10080, resets_at: 0 },
+        rate_limit_reached_type: opts.reached ?? null
+      }
+    }
+  })
+
+/** 이미 있는 rollout에 스냅숏 한 줄을 덧붙인다 — 재개된 codex가 기존 파일에 이어 쓰는 상황 */
+const appendTokenCount = (file: string, opts: Snapshot): Promise<void> =>
+  fs.appendFile(file, tokenCountLine(opts) + '\n', 'utf8')
+
 /** 실제 rollout 파일을 만든다 — 코디네이터가 findRollout·CodexRolloutTail로 진짜 읽는다 */
 async function writeRollout(opts: {
   accountId: string
@@ -38,23 +65,7 @@ async function writeRollout(opts: {
   const lines = [
     JSON.stringify({ type: 'session_meta', payload: { session_id: opts.uuid, cwd: opts.cwd } })
   ]
-  if (opts.primary !== undefined || opts.reached !== undefined) {
-    lines.push(
-      JSON.stringify({
-        type: 'event_msg',
-        payload: {
-          type: 'token_count',
-          info: {
-            rate_limits: {
-              primary: { used_percent: opts.primary ?? 0, window_minutes: 300, resets_at: opts.primaryReset ?? 0 },
-              secondary: { used_percent: opts.secondary ?? 0, window_minutes: 10080, resets_at: 0 },
-              rate_limit_reached_type: opts.reached ?? null
-            }
-          }
-        }
-      })
-    )
-  }
+  if (opts.primary !== undefined || opts.reached !== undefined) lines.push(tokenCountLine(opts))
   await fs.writeFile(file, lines.join('\n') + '\n', 'utf8')
   // fake timer의 Date.now()(고정)와 실제 파일시스템 시계가 섞이는 지점 — findRollout은 생성 시각이
   // since(=register 시각) 이후인 파일만 본다. birthtime은 조작할 수 없고 실제 '지금'이라 통과하지만,
@@ -75,6 +86,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
     resumeSessionId?: string
     orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
   }[]
+  written: [string, string][]
   info1: SessionInfo
 } {
   const accounts: Record<string, Account> = { c1: acc('c1', 'Codex A'), c2: acc('c2', 'Codex B') }
@@ -87,6 +99,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
     resumeSessionId?: string
     orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
   }[] = []
+  const written: [string, string][] = []
   let seq = 1
   const coord = new CodexRollingCoordinator({
     spawn: (opts) => {
@@ -112,6 +125,9 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
       return info
     },
     kill: (id) => events.push(`kill:${id}`),
+    write: (id, data) => {
+      written.push([id, data])
+    },
     getAccount: (id) => accounts[id] ?? null,
     send: (channel, p) => sent.push({ channel, payload: p as Record<string, unknown> }),
     log: () => {},
@@ -132,14 +148,25 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
     rollAccountIds: ['c1', 'c2']
   }
   // settleIo가 "아직 뭔가 도착하는 중인가"를 판단할 근거 — 자세한 이유는 settleIo 위 주석에
-  ioProbes.push(() => events.length + sent.length + copied.length + spawned.length)
-  return { coord, events, sent, copied, spawned, info1 }
+  ioProbes.push(() => events.length + sent.length + copied.length + spawned.length + written.length)
+  return { coord, events, sent, copied, spawned, written, info1 }
 }
 
 // codex 0.146.0에서 관찰한 한도 문구.
 // 접합으로 쪼갠다 — 통짜면 이 파일이 롤링 세션의 화면으로 흐를 때 CodexLimitScanner가 물어
 // 실제 롤을 유발한다. 런타임 값은 같다.
 const LIMIT_TEXT = "You’ve hit your " + 'usage limit. Upgrade to Plus to continue'
+
+// 한도 임박 모델 전환 프롬프트(codex 0.149.1). 머리말은 같은 이유로 접합한다 — 이쪽은 발화하면
+// 롤이 아니라 세션에 키 입력이 들어간다.
+const MODEL_PROMPT = [
+  '  Approaching rate ' + 'limits',
+  '  Switch to gpt-5.6-luna for lower credit usage?',
+  '  1. Switch to gpt-5.6-luna              Fast and affordable agentic coding model.',
+  '❯ 2. Keep current model',
+  '  3. Keep current model (never show again)',
+  '  Press enter to confirm or esc to go back'
+].join('\n')
 
 // 코디네이터는 진짜 파일을 읽는다(findRollout·CodexRolloutTail). fake timer가 걸린 동안에는 실제
 // fs I/O 완료 콜백이 돌지 않아, 타이머만 진행시키면 폴링이 파일을 못 본 채로 끝난다. 그래서 fake
@@ -540,6 +567,35 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
+  // reachedType 은 실측 1288건 전부 null 이라 이 판정으로 잡히는 일이 없다. 실제로 잡히는 것은
+  // task_complete 의 usage_limit_exceeded 이고, 로그가 그것을 'text+gate'(=화면 문구)로 적으면
+  // 다음 사람이 신호를 잘못 짚는다.
+  it('구조 에러로 잡힌 한도는 판정 근거를 errorInfo로 남긴다', async () => {
+    const logs: string[] = []
+    const h = harness({ log: (m) => logs.push(m) })
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-errreason', cwd: h.info1.cwd, primary: 40
+    })
+    h.coord.register(h.info1)
+    await advance(1_500)
+    await fs.appendFile(
+      file,
+      JSON.stringify({
+        timestamp: new Date(Date.now()).toISOString(),
+        type: 'event_msg',
+        payload: {
+          type: 'task_complete',
+          error: { message: "You've hit your " + 'usage limit.', codex_error_info: 'usage_limit_exceeded' }
+        }
+      }) + '\n',
+      'utf8'
+    )
+    await advance(15_000) // 틱 — 화면 문구 없이 구조 신호만으로 판정
+    const line = logs.find((l) => l.includes('codex limit detected'))
+    expect(line).toContain('reason=errorInfo')
+    h.coord.stop()
+  })
+
   it('한도 감지 로그에 판정 근거와 reachedType 원값을 남긴다 (미실측 전제 캘리브레이션)', async () => {
     const logs: string[] = []
     const h = harness({ log: (m) => logs.push(m) })
@@ -555,15 +611,93 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
-  it('롤 이후 재-locate는 방금 복사한 옛 rollout을 물지 않는다 (오탐 재롤 방지)', async () => {
+  // 크레딧이 얼마 안 남으면 codex 가 턴 사이에 "모델 바꿀래?" 선택지를 띄우고 입력을 기다린다.
+  // 답하지 않으면 세션이 그 자리에서 멈춘다 — 무인 워커에게는 영구 정지다. 모델을 바꾸면 사용자가
+  // 고른 모델이 아닌 것이 일하게 되고, 3번은 codex 설정을 영구히 바꾸므로 2번을 누른다.
+  it('한도 임박 모델 전환 프롬프트에 "현재 모델 유지"로 답한다', async () => {
+    const h = harness()
+    await writeRollout({ accountId: 'c1', uuid: 'cx-choice', cwd: h.info1.cwd, primary: 80 })
+    h.coord.register(h.info1)
+    await advance(1_500) // 매핑
+    h.coord.handleData({ sessionId: 's1', data: MODEL_PROMPT })
+    await advance(300) // 숫자 → (150ms) → Enter
+    expect(h.written).toEqual([
+      ['s1', '2'],
+      ['s1', '\r']
+    ])
+    expect(h.events).toEqual([]) // 한도가 아니라 경고다 — 롤하지 않는다
+    h.coord.stop()
+  })
+
+  it('선택지 화면이 아닌 출력에는 아무것도 쓰지 않는다', async () => {
+    const h = harness()
+    await writeRollout({ accountId: 'c1', uuid: 'cx-choice-2', cwd: h.info1.cwd, primary: 80 })
+    h.coord.register(h.info1)
+    await advance(1_500)
+    h.coord.handleData({ sessionId: 's1', data: '2. Keep current model 이라고 문서에 적혀 있다\n' })
+    await advance(300)
+    expect(h.written).toEqual([])
+    h.coord.stop()
+  })
+
+  // codex 0.149.1 실측: `codex resume <id>` 는 새 rollout 을 만들지 않고 **기존 파일에 이어 쓴다**.
+  // 그래서 '생성 시각이 spawn 이후'로 후보를 거르는 findRollout 은 재개 세션의 rollout 을 영원히 못
+  // 찾는다 — 실측 로그가 그대로다: `limit-text ignored (rollout unmapped)` 두 번 뒤 `rollout not
+  // found within 60000ms — rolling disabled`. 배선(ipc)은 재개할 파일을 이미 알고 있으므로 그 경로를
+  // 넘겨 붙이면 탐색 자체가 필요 없다.
+  it('resume 스폰은 넘겨받은 rollout 경로에 바로 붙는다 (findRollout이 못 찾는 파일)', async () => {
+    const h = harness()
+    // 스냅숏 없이 meta 만 — 재개된 세션이 쓰기 전의 상태다
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-resume', cwd: h.info1.cwd })
+    h.coord.register({ ...h.info1, resumeSessionId: 'cx-resume' }, file)
+    await advance(100) // 매핑 폴링(1초)을 기다리지 않는다 — 이미 붙어 있어야 한다
+    await appendTokenCount(file, { primary: 95 }) // 재개된 세션이 이어 쓴 스냅숏
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+    expect(h.spawned[0].resumeSessionId).toBe('cx-resume')
+    h.coord.stop()
+  })
+
+  // 실측 로그(dev): `codex rolled …` 바로 뒤에 `codex rollout not found within 60000ms — rolling
+  // disabled`. 롤의 respawn 도 `codex resume` 이라 새 rollout 이 생기지 않으니 재-locate 는 실패할
+  // 수밖에 없고, 그 순간부터 그 체인은 두 번째 한도를 영영 보지 못한다. 단일 계정 체인에서는
+  // dest === src 라 excludePaths 가 '지금 codex 가 쓰고 있는 바로 그 파일'을 후보에서 빼는 이중
+  // 차단까지 걸린다.
+  it('롤 이후에도 재개된 세션의 두 번째 한도를 감지한다 (재-locate 불필요)', async () => {
+    let dest = ''
+    const h = harness({
+      copy: async (src, to) => {
+        dest = to
+        await fs.mkdir(path.dirname(to), { recursive: true })
+        await fs.copyFile(src, to)
+      }
+    })
+    await writeRollout({ accountId: 'c1', uuid: 'cx-2nd', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(h.info1)
+    await advance(1_500) // 매핑 폴링
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events).toContain('spawn:s2:c2')
+
+    // 재개된 codex 는 새 파일을 만들지 않고 복사본(dest)에 이어 쓴다
+    await appendTokenCount(dest, { primary: 96 })
+    h.coord.handleData({ sessionId: 's2', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting') // 두 계정이 한 바퀴 막혔다 → 대기
+    await advance(120_000) // planRetry 하한(60초) 경과
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual(['spawn:s2:c2', 'spawn:s3:c1'])
+    h.coord.stop()
+  })
+
+  // 롤은 이제 복사본에 그대로 붙는다(재-locate 없음). 그 복사본은 **옛 계정의** rate_limits 를
+  // 담고 있으므로, 붙자마자 그것을 읽으면 새 계정이 멀쩡한데도 즉시 다시 롤한다. 그 오판을 막는
+  // 것은 이제 후보 제외가 아니라 tail 의 startAtEnd 다 — 이 테스트가 지키는 성질은 그대로다.
+  it('롤 직후 붙은 복사본의 옛 rate_limits로 오판하지 않는다 (오탐 재롤 방지)', async () => {
     const h = harness({
       copy: async (src, dest) => {
         await fs.mkdir(path.dirname(dest), { recursive: true })
         await fs.copyFile(src, dest)
-        // 실제로는 copy 직후(kill+spawn 몇 ms 뒤)에 재-locate가 돌아 복사본의 생성 시각≈since다 —
-        // 시각 비교로 우연히 걸러지지 않도록 최악 조건을 만든다
-        const t = (Date.now() + 1_000) / 1000
-        await fs.utimes(dest, t, t)
       }
     })
     await writeRollout({
@@ -575,8 +709,7 @@ describe('CodexRollingCoordinator', () => {
     expect(h.events).toContain('spawn:s2:c2')
     const sentBefore = h.sent.length
 
-    await advance(2_000) // 재-locate 폴링
-    await advance(15_000) // 다음 틱 — 복사본을 물었다면 여기서 옛 계정 데이터로 오판한다
+    await advance(15_000) // 다음 틱 — 복사본의 옛 스냅숏을 읽었다면 여기서 오판한다
     expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual(['spawn:s2:c2'])
     expect(h.sent.slice(sentBefore).filter((s) => s.payload.state === 'waiting')).toEqual([])
     h.coord.stop()

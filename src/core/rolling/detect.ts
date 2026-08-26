@@ -154,8 +154,17 @@ const WAIT_LABEL_RE = new RegExp(WAIT_LABEL, 'i')
  *  rendered on one line it would have returned the *first* number, i.e. pressed adjust (raise the
  *  spend limit) instead of wait. */
 export function findWaitChoice(text: string): number | null {
+  return findChoiceNumber(text, WAIT_LABEL_RE)
+}
+
+/** The rule above, with the label left to the caller. Shared with the codex side (findKeepModelChoice
+ *  in codexSignal.ts), which needs the same "nearest N. to the left of the label" reading of a menu.
+ *  `exclude` skips a line even when it carries the label — codex renders two items whose labels are
+ *  prefixes of each other, and only one of them may be pressed. */
+export function findChoiceNumber(text: string, labelRe: RegExp, exclude?: RegExp): number | null {
   for (const line of stripAnsi(text).split('\n')) {
-    const at = line.search(WAIT_LABEL_RE)
+    if (exclude?.test(line)) continue
+    const at = line.search(labelRe)
     if (at < 0) continue
     const numbered = line.slice(0, at).match(/\d+[ \t]*[.)]/g)
     if (!numbered) continue

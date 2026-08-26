@@ -4,7 +4,9 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   CodexLimitScanner,
+  CodexModelChoiceScanner,
   CodexRolloutTail,
+  findKeepModelChoice,
   limitReached,
   maxedOut,
   worstResetAt,
@@ -33,28 +35,50 @@ function tokenCount(opts: {
     type: 'event_msg',
     payload: {
       type: 'token_count',
-      info: {
-        total_token_usage: { total_tokens: 100 },
-        rate_limits: {
-          limit_id: 'codex',
-          limit_name: null,
-          primary:
-            opts.primary === undefined
-              ? null
-              : { used_percent: opts.primary, window_minutes: 300, resets_at: opts.primaryReset ?? 1783589526 },
-          secondary:
-            opts.secondary === undefined
-              ? null
-              : { used_percent: opts.secondary, window_minutes: 10080, resets_at: opts.secondaryReset ?? 1784075012 },
-          credits: null,
-          individual_limit: null,
-          plan_type: 'plus',
-          rate_limit_reached_type: opts.reached ?? null
-        }
+      info: { total_token_usage: { total_tokens: 100 } },
+      // payload 바로 아래다 — payload.info 안이 아니다 (MEASURED_TOKEN_COUNT 위 주석의 실측 근거)
+      rate_limits: {
+        limit_id: 'codex',
+        limit_name: null,
+        primary:
+          opts.primary === undefined
+            ? null
+            : { used_percent: opts.primary, window_minutes: 300, resets_at: opts.primaryReset ?? 1783589526 },
+        secondary:
+          opts.secondary === undefined
+            ? null
+            : { used_percent: opts.secondary, window_minutes: 10080, resets_at: opts.secondaryReset ?? 1784075012 },
+        credits: null,
+        individual_limit: null,
+        plan_type: 'plus',
+        rate_limit_reached_type: opts.reached ?? null
       }
     }
   })
 }
+
+// 한도가 났을 때 실제로 나오는 유일한 구조 신호. 실측 메시지 그대로이며, 접합해 둔 이유는 이 파일이
+// 롤링 세션 화면으로 흘렀을 때 CodexLimitScanner 가 물지 않게 하기 위해서다(아래 HIT 와 같은 처방).
+const LIMIT_MESSAGE =
+  "You've hit your " +
+  'usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit ' +
+  'https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 7:17 PM.'
+
+/** 턴이 한도로 끝났을 때의 task_complete 줄 (실측 형태) */
+const taskComplete = (opts: { timestamp?: string; info?: string | null } = {}): string =>
+  JSON.stringify({
+    timestamp: opts.timestamp ?? '2026-08-26T08:31:22.224Z',
+    type: 'event_msg',
+    payload: {
+      type: 'task_complete',
+      turn_id: '01a03d31-f058-7880-bb3f-95e64248af91',
+      last_agent_message: null,
+      error:
+        opts.info === null
+          ? null
+          : { message: LIMIT_MESSAGE, codex_error_info: opts.info ?? 'usage_limit_exceeded' }
+    }
+  })
 
 const noise = JSON.stringify({ timestamp: 't', type: 'response_item', payload: { type: 'reasoning' } })
 
@@ -64,7 +88,38 @@ async function write(name: string, lines: string[]): Promise<string> {
   return p
 }
 
+// rollout 에서 그대로 떠 온 줄(URL·토큰 수치만 줄임). rate_limits 는 payload.info 안이 아니라
+// **payload 바로 아래**에 있다 — 로컬 rollout 108개(codex 0.142.5~0.149.1)에서
+// payload.rate_limits 1338건, payload.info.rate_limits 0건이었다.
+const MEASURED_TOKEN_COUNT = JSON.stringify({
+  timestamp: '2026-08-26T07:41:29.596Z',
+  type: 'event_msg',
+  payload: {
+    type: 'token_count',
+    info: { total_token_usage: { total_tokens: 8696910 }, model_context_window: 258400 },
+    rate_limits: {
+      limit_id: 'codex',
+      limit_name: null,
+      primary: { used_percent: 99.0, window_minutes: 300, resets_at: 1787739458 },
+      secondary: { used_percent: 15.0, window_minutes: 10080, resets_at: 1788326258 },
+      credits: { has_credits: false, unlimited: false, balance: '0' },
+      individual_limit: null,
+      plan_type: 'plus',
+      rate_limit_reached_type: null
+    }
+  }
+})
+
 describe('CodexRolloutTail', () => {
+  // 실측 형태를 그대로 넣는 회귀 테스트. 이 자리를 잘못 짚고 있던 동안 rate_limits 는 늘 null 이었고,
+  // 그 결과 판정 ①·②·③ 이 전부 죽어 있었다(limitReached 는 state 가 null 이면 문구도 무시한다).
+  it('실측 rollout 줄에서 rate_limits를 읽는다 (payload 바로 아래)', async () => {
+    const p = await write('measured.jsonl', [MEASURED_TOKEN_COUNT])
+    const state = await new CodexRolloutTail(p).read()
+    expect(state?.primary).toEqual({ usedPercent: 99, resetsAt: 1787739458_000 })
+    expect(state?.secondary?.usedPercent).toBe(15)
+  })
+
   it('마지막 token_count의 rate_limits를 읽고 resets_at을 epoch ms로 정규화한다', async () => {
     const p = await write('a.jsonl', [
       noise,
@@ -96,6 +151,77 @@ describe('CodexRolloutTail', () => {
     const p = await write('d.jsonl', ['{broken', tokenCount({ primary: 5 })])
     expect((await new CodexRolloutTail(p).read())?.primary?.usedPercent).toBe(5)
     expect(await new CodexRolloutTail(path.join(dir, 'nope.jsonl')).read()).toBeNull()
+  })
+
+  // codex 0.149.1 실측: `codex resume <id>` 는 새 rollout 을 만들지 않고 **기존 파일에 이어 쓴다**.
+  // 재개된 세션이 그 파일에 붙을 때 이전 대화가 남긴 rate_limits 까지 읽으면, 지난 한도 스냅숏
+  // (reachedType 이 박힌)을 이 세션의 판정으로 오해해 붙자마자 롤한다.
+  it('startAtEnd면 붙기 전에 이미 있던 rate_limits는 읽지 않는다 (resume이 이어 쓰는 rollout)', async () => {
+    const p = await write('f.jsonl', [tokenCount({ primary: 99, reached: 'primary' })])
+    const tail = new CodexRolloutTail(p, Date.now, { startAtEnd: true })
+    expect(await tail.read()).toBeNull() // 이전 대화의 스냅숏은 이 세션의 것이 아니다
+    await fs.appendFile(p, tokenCount({ primary: 12 }) + '\n', 'utf8')
+    expect((await tail.read())?.primary?.usedPercent).toBe(12) // 붙은 뒤 쓰인 것만 읽는다
+  })
+
+  // 실측: rate_limit_reached_type 은 로컬 rollout 1288건 전부 null 이다 — 한도가 난 순간에도.
+  // 0.149 가 한도를 알려 주는 유일한 구조 신호가 이 task_complete 의 codex_error_info 다.
+  it('task_complete의 usage_limit_exceeded를 한도 신호로 읽는다', async () => {
+    const p = await write('err.jsonl', [tokenCount({ primary: 40 }), taskComplete()])
+    const s = await new CodexRolloutTail(p).read()
+    expect(s?.error?.at).toBe(Date.parse('2026-08-26T08:31:22.224Z')) // 판정은 배치 시각이 아니라 기록 자신의 시각에 붙는다
+    expect(limitReached(s, { textHit: false })).toBe(true)
+  })
+
+  it('한도가 아닌 task_complete는 신호가 아니다', async () => {
+    const p = await write('ok.jsonl', [tokenCount({ primary: 40 }), taskComplete({ info: null })])
+    const s = await new CodexRolloutTail(p).read()
+    expect(s?.error).toBeNull()
+    expect(limitReached(s, { textHit: false })).toBe(false)
+  })
+
+  // 실측: 한도가 난 0.8초 뒤 codex 는 창이 전부 null 인 크레딧 기록(limit_id "premium")을 내보낸다.
+  // 마지막 기록을 통째로 취하면 방금 알아낸 리셋 시각이 지워져, 15분 눈감기 재시도로 떨어진다.
+  it('창 없는 기록이 뒤따라도 마지막으로 알던 창을 유지한다 (한도 직후의 크레딧 기록)', async () => {
+    const p = await write('keep.jsonl', [
+      tokenCount({ primary: 99, primaryReset: 1787739458 }),
+      tokenCount({}) // 창이 전부 null — 크레딧 기록
+    ])
+    const s = await new CodexRolloutTail(p).read()
+    expect(s?.primary?.usedPercent).toBe(99)
+    expect(worstResetAt(s).at).toBe(1787739458_000)
+  })
+
+  it('창은 read를 건너서도 유지된다 (틱이 갈리면 두 기록이 다른 배치에 들어온다)', async () => {
+    const p = await write('keep2.jsonl', [tokenCount({ primary: 99, primaryReset: 1787739458 })])
+    const tail = new CodexRolloutTail(p)
+    expect((await tail.read())?.primary?.usedPercent).toBe(99)
+    await fs.appendFile(p, tokenCount({}) + '\n', 'utf8') // 다음 틱에 크레딧 기록만 도착
+    const s = await tail.read()
+    expect(s?.primary?.usedPercent).toBe(99)
+    expect(worstResetAt(s).at).toBe(1787739458_000)
+  })
+
+  // 재개 세션의 딜레마: 리셋 시각을 실은 창 기록은 **붙기 전에** 쓰였고, 붙은 뒤 오는 것은 창이 없는
+  // 크레딧 기록뿐이다(실측). 그래서 붙는 시점에 파일 뒷부분에서 리셋 시각만 회수한다 — 사용률은
+  // 회수하지 않는다. 리셋 전에 찍힌 100% 를 되살리면 폴백 판정 ③(100%+30초 침묵)이 멀쩡한 세션을 롤한다.
+  it('startAtEnd로 붙어도 이전 턴의 리셋 시각은 회수한다 (사용률은 회수하지 않는다)', async () => {
+    const p = await write('seed.jsonl', [tokenCount({ primary: 100, primaryReset: 1787739458 })])
+    const tail = new CodexRolloutTail(p, Date.now, { startAtEnd: true })
+    expect(await tail.read()).toBeNull() // 붙은 시점 이전 내용은 상태가 되지 않는다
+    await fs.appendFile(p, taskComplete() + '\n', 'utf8') // 재개하자마자 다시 한도
+    const s = await tail.read()
+    expect(limitReached(s, { textHit: false })).toBe(true)
+    expect(worstResetAt(s).at).toBe(1787739458_000) // 리셋은 회수했다
+    expect(maxedOut(s)).toBe(false) // 낡은 100%는 판정에 쓰이지 않는다
+  })
+
+  it('회수할 리셋이 없으면 at=null 그대로 (없는 시각을 지어내지 않는다)', async () => {
+    const p = await write('seed-none.jsonl', [tokenCount({ primary: 40 })]) // 게이트 미만
+    const tail = new CodexRolloutTail(p, Date.now, { startAtEnd: true })
+    expect(await tail.read()).toBeNull()
+    await fs.appendFile(p, taskComplete() + '\n', 'utf8')
+    expect(worstResetAt(await tail.read()).at).toBeNull()
   })
 
   it('파일이 잘리면(재생성) 오프셋을 리셋해 처음부터 다시 읽는다', async () => {
@@ -160,10 +286,68 @@ describe('CodexLimitScanner', () => {
   })
 })
 
+describe('findKeepModelChoice', () => {
+  // codex 0.149.1 화면 그대로. 크레딧이 얼마 안 남으면 턴 사이에 끼어들어 입력을 기다린다 —
+  // 답하지 않으면 세션이 그 자리에서 멈춘다(무인 워커에게는 영구 정지다).
+  // 머리말은 접합한다 — 통짜면 이 파일이 롤링 세션 화면으로 흘렀을 때 스캐너가 물어 세션에
+  // 실제로 '2'와 Enter를 쓴다 (repoSelfTrigger.test.ts 가 저장소 전체를 이 스캐너로 훑는다).
+  const APPROACHING = '  Approaching rate ' + 'limits'
+  const SCREEN = [
+    APPROACHING,
+    '  Switch to gpt-5.6-luna for lower credit usage?',
+    '',
+    '  1. Switch to gpt-5.6-luna              Fast and affordable agentic coding model.',
+    '❯ 2. Keep current model',
+    '  3. Keep current model (never show again)   Hide future rate limit reminders about switching models.',
+    '',
+    '  Press enter to confirm or esc to go back'
+  ].join('\n')
+
+  it('현재 모델 유지 항목의 번호를 찾는다', () => {
+    expect(findKeepModelChoice(SCREEN)).toBe(2)
+  })
+
+  // 3번은 codex 설정을 영구히 바꾼다 — 사용자가 요청한 적 없는 변경이므로 고르지 않는다.
+  // 2번이 없으면 아무것도 누르지 않고 사용자에게 남긴다.
+  it("'never show again' 항목만 있으면 아무것도 고르지 않는다", () => {
+    const without2 = SCREEN.split('\n')
+      .filter((l) => !l.includes('❯ 2.'))
+      .join('\n')
+    expect(findKeepModelChoice(without2)).toBeNull()
+  })
+
+  it('경고 머리말이 없으면 무시한다 (평범한 출력의 오탐 방지)', () => {
+    expect(findKeepModelChoice('2. Keep current model')).toBeNull()
+  })
+
+  it('번호 없는 렌더링이면 null (커서 위치를 알 수 없어 아무것도 누르지 않는다)', () => {
+    expect(findKeepModelChoice('Approaching rate ' + 'limits\n  Keep current model')).toBeNull()
+  })
+})
+
+describe('CodexModelChoiceScanner', () => {
+  const CHUNK_A = 'Approaching rate ' + 'limits\n  1. Switch to gpt-5.6-luna\n❯ 2. Keep cur'
+  const CHUNK_B = 'rent model\n  Press enter to confirm or esc to go back\n'
+
+  it('청크 경계로 쪼개져 와도 번호를 찾는다', () => {
+    const s = new CodexModelChoiceScanner()
+    expect(s.push(CHUNK_A)).toBeNull()
+    expect(s.push(CHUNK_B)).toBe(2)
+  })
+
+  it('한 번 답한 화면을 반복해서 답하지 않는다', () => {
+    const s = new CodexModelChoiceScanner()
+    expect(s.push(CHUNK_A + CHUNK_B)).toBe(2)
+    expect(s.push('그 뒤 이어지는 평범한 출력\n')).toBeNull()
+  })
+})
+
 const state = (o: Partial<CodexLimitState>): CodexLimitState => ({
   primary: null,
   secondary: null,
   reachedType: null,
+  error: null,
+  priorReset: null,
   at: 1_000,
   ...o
 })
@@ -171,6 +355,11 @@ const state = (o: Partial<CodexLimitState>): CodexLimitState => ({
 describe('limitReached', () => {
   it('① reachedType이 non-null이면 문구 없이도 도달로 본다', () => {
     expect(limitReached(state({ reachedType: 'primary' }), { textHit: false })).toBe(true)
+  })
+
+  it('① 한도 에러가 있으면 문구 없이도 도달로 본다 (0.149가 실제로 내보내는 신호)', () => {
+    const s = state({ error: { message: LIMIT_MESSAGE, at: 2_000 } })
+    expect(limitReached(s, { textHit: false })).toBe(true)
   })
 
   it('② 확정 문구가 오면 사용률과 무관하게 도달로 본다', () => {

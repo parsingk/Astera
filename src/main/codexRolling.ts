@@ -12,6 +12,7 @@ import { codexHistoryStrategy } from '../core/history/strategies/codex'
 import { findRollout } from '../core/rolling/codexLocate'
 import {
   CodexLimitScanner,
+  CodexModelChoiceScanner,
   CodexRolloutTail,
   limitReached,
   maxedOut,
@@ -24,10 +25,14 @@ const TICK_MS = 15_000 // how often state is refreshed and the fallback trigger 
 const LOCATE_POLL_MS = 1_000 // how often we poll to map the rollout
 const LOCATE_TIMEOUT_MS = 60_000 // the deadline for giving up on mapping — after this the chain has rolling disabled
 const FALLBACK_SILENCE_MS = 30_000 // the fallback verdict ③: 100% plus this long with no output
+const ENTER_DELAY_MS = 150 // the gap between the choice number and Enter (same as rolling.ts)
 const HEALTHY_MS = 60_000 // no limit detected for this long after a switch → reset the consecutive block count
 
-/** Which grounds the limit verdict fired on — a log label for calibrating the assumptions we have not measured yet (the phrase, reachedType, replay) */
-type LimitReason = 'reachedType' | 'text+gate' | 'maxed+silent' | 'force'
+/** Which grounds the limit verdict fired on — a log label. `errorInfo` is the one that actually fires
+ *  on codex 0.14x (usage_limit_exceeded); `reachedType` has never been observed non-null, so seeing it
+ *  in the log would itself be news. Recording the two separately is what keeps the next person from
+ *  reading a structured hit as a screen-text hit. */
+type LimitReason = 'reachedType' | 'errorInfo' | 'text+gate' | 'maxed+silent' | 'force'
 
 export interface CodexRollingDeps {
   spawn(opts: {
@@ -42,6 +47,8 @@ export interface CodexRollingDeps {
     orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
   }): SessionInfo
   kill(sessionId: string): void
+  /** Writes into a live session's PTY. Used only to dismiss the model-switch prompt (answerModelChoice). */
+  write(sessionId: string, data: string): void
   getAccount(id: string): Account | null
   send(channel: 'session:rolled' | 'session:rollState', payload: unknown): void
   log(message: string): void
@@ -87,6 +94,7 @@ interface Chain {
   tail: CodexRolloutTail | null
   state: CodexLimitState | null // the last rate_limits read
   scanner: CodexLimitScanner // detects the limit phrase in PTY output (corrects for chunk boundaries)
+  modelChoice: CodexModelChoiceScanner // detects codex's approaching-limit model-switch prompt in the same stream
   textHit: boolean // whether the limit phrase was seen in this window (the tick combines it with the state to decide)
   unmappedWarned: boolean // whether the rollout-unmapped skip has already been logged (suppresses repeats of the same line)
   preemptWarned: boolean // whether the preemption has already been logged — keeps it from piling up on every 1-second poll
@@ -117,8 +125,14 @@ export class CodexRollingCoordinator {
     this.now = deps.now ?? Date.now
   }
 
-  /** Called by ipc right after spawning a codex session that has rollAccountIds. One id means single-account auto-resume. */
-  register(info: SessionInfo): void {
+  /** Called by ipc right after spawning a codex session that has rollAccountIds. One id means single-account auto-resume.
+   *
+   *  rolloutPath is the file the resumed codex will write to — ipc knows it because it is the target of
+   *  the transcript copy it just made. Passing it skips the locate poll entirely, which is not an
+   *  optimisation but the only way a resumed session gets mapped at all: see attachRollout. It is
+   *  ignored unless the session really is a resume (info.resumeSessionId), because a fresh spawn's
+   *  rollout does not exist yet and has to be found. */
+  register(info: SessionInfo, rolloutPath?: string): void {
     const ids = info.rollAccountIds ?? []
     if (ids.length < 1) return
     const chain: Chain = {
@@ -133,6 +147,7 @@ export class CodexRollingCoordinator {
       tail: null,
       state: null,
       scanner: new CodexLimitScanner(),
+      modelChoice: new CodexModelChoiceScanner(),
       textHit: false,
       unmappedWarned: false,
       preemptWarned: false,
@@ -145,7 +160,18 @@ export class CodexRollingCoordinator {
       recovery: ids.map(() => null)
     }
     this.chains.set(info.id, chain)
-    this.startLocate(chain, this.deps.getAccount(ids[this.cycleIndexOf(chain)]))
+    if (info.resumeSessionId && rolloutPath) {
+      this.attachRollout(chain, info.resumeSessionId, rolloutPath)
+      // The locate path persists the config on success; the resume path knows the id up front, so it
+      // does the same here — otherwise resuming a chain would never refresh its stored roll config.
+      this.deps.persistConfig?.(info.resumeSessionId, {
+        accountIds: chain.accountIds,
+        prompt: chain.prompt
+      })
+      this.deps.log(`codex rollout attached on resume session=${info.id} id=${info.resumeSessionId}`)
+    } else {
+      this.startLocate(chain, this.deps.getAccount(ids[this.cycleIndexOf(chain)]))
+    }
     this.ensureTicker()
     this.deps.log(`codex chain registered session=${info.id} accounts=${ids.join(',')}`)
   }
@@ -161,10 +187,25 @@ export class CodexRollingCoordinator {
     const chain = this.chains.get(e.sessionId)
     if (!chain || chain.disposed) return
     chain.lastOutputAt = this.now()
+    // The model-switch prompt is a *warning*, not a limit — it has its own scanner and its own answer,
+    // and it must be handled even when no limit ever arrives (an unanswered prompt stops the session)
+    const keep = chain.modelChoice.push(e.data)
+    if (keep !== null) this.answerModelChoice(chain, keep)
     if (chain.scanner.push(e.data)) {
       chain.textHit = true
       void this.evaluate(chain)
     }
+  }
+
+  /** Presses "keep current model" on codex's approaching-limit prompt, so the session does not sit at an
+   *  input prompt forever. Which item and why: see the comment above findKeepModelChoice. */
+  private answerModelChoice(chain: Chain, n: number): void {
+    const liveId = chain.liveId // captured so a roll finishing within the delay cannot redirect the Enter
+    this.deps.log(`codex model-switch prompt → keep(${n}) session=${liveId}`)
+    this.deps.write(liveId, String(n))
+    setTimeout(() => {
+      if (!chain.disposed) this.deps.write(liveId, '\r')
+    }, ENTER_DELAY_MS)
   }
 
   handleExit(e: { sessionId: string }): void {
@@ -216,14 +257,32 @@ export class CodexRollingCoordinator {
     return out
   }
 
+  /** Attaches the tail to a rollout path we already know, instead of searching for one.
+   *
+   *  **Why the search cannot find a resumed session's rollout.** findRollout only accepts a file
+   *  *created* after the spawn, because mtime would let a different session that is already running in
+   *  the same folder become a candidate. That rule holds for a fresh spawn, where codex really does
+   *  create the file. But `codex resume <id>` creates nothing — it appends to the existing rollout
+   *  (measured on 0.149.1), whose creation time is by definition older than the spawn. So every resumed
+   *  session — the user reopening a conversation, and the respawn at the end of a roll — searched until
+   *  the 60-second deadline and then had rolling disabled. The measured log reads: `limit-text ignored
+   *  (rollout unmapped)` … `rollout not found within 60000ms — rolling disabled`.
+   *
+   *  Both resume paths know the file up front (ipc: the transcript copy target; roll: the copy it just
+   *  made), so there is nothing to search for. startAtEnd is what keeps the file's existing content —
+   *  the previous conversation's rate_limits, and after a roll the *other account's* — from being read
+   *  as this session's verdict. */
+  private attachRollout(chain: Chain, codexSessionId: string, rolloutPath: string): void {
+    chain.rolloutPath = rolloutPath
+    chain.codexSessionId = codexSessionId
+    chain.tail = new CodexRolloutTail(rolloutPath, this.now, { startAtEnd: true })
+    chain.unmappedWarned = false // it is mapped now — a future unmapped state gets to report itself again
+  }
+
   /** Polls until the rollout file appears. On finding it, tailing starts; past the deadline rolling is
-   *  disabled.
-   *  exclude: on the re-locate right after a roll, it removes the old rollout we just copied in from the
-   *  candidates — the copy has the same cwd and session_id and its creation time is effectively
-   *  simultaneous with since, so biting on it would tail a file codex no longer writes to and would
-   *  immediately produce a false re-verdict from the old account's rate_limits. On the first register
-   *  there is nothing to exclude. */
-  private startLocate(chain: Chain, account: Account | null, exclude: string[] = []): void {
+   *  disabled. This is the fresh-spawn path only — a resume knows its file already (attachRollout), and
+   *  the exclude list the re-locate after a roll used to need went away with it. */
+  private startLocate(chain: Chain, account: Account | null): void {
     if (!account) {
       this.deps.log(`codex locate aborted — no such account session=${chain.liveId}`)
       return
@@ -237,7 +296,7 @@ export class CodexRollingCoordinator {
         cwd: chain.cwd,
         since,
         now: this.now,
-        excludePaths: [...exclude, ...this.claimedRollouts(chain)]
+        excludePaths: this.claimedRollouts(chain)
       })
       if (chain.disposed || chain.liveId !== liveId) return
       // When two chains poll side by side, the other one can bite first while the findRollout above is in
@@ -256,7 +315,7 @@ export class CodexRollingCoordinator {
         chain.codexSessionId = found.sessionId
         chain.tail = new CodexRolloutTail(found.path, this.now)
         chain.unmappedWarned = false
-        chain.preemptWarned = false // the next roll's re-mapping gets to report it once again
+        chain.preemptWarned = false
         this.deps.persistConfig?.(found.sessionId, {
           accountIds: chain.accountIds,
           prompt: chain.prompt
@@ -295,7 +354,15 @@ export class CodexRollingCoordinator {
       return
     }
     this.recordRecovery(chain)
-    this.onLimit(chain, chain.state?.reachedType ? 'reachedType' : 'text+gate')
+    this.onLimit(chain, this.reasonOf(chain, 'text+gate'))
+  }
+
+  /** Which signal carried the verdict. `fallback` is what to report when neither structured signal is
+   *  present — the phrase on the caller's path, reachedType on the tick's (where no phrase is possible). */
+  private reasonOf(chain: Chain, fallback: LimitReason): LimitReason {
+    if (chain.state?.reachedType) return 'reachedType'
+    if (chain.state?.error) return 'errorInfo'
+    return fallback
   }
 
   /** Why the phrase was ignored — distinguishes unmapped, no state received, and usage below the gate */
@@ -376,6 +443,7 @@ export class CodexRollingCoordinator {
         this.pushState(chain, 'none')
         return
       }
+      const codexSessionId = chain.codexSessionId // pinned before the awaits below — attachRollout needs it non-null
       this.pushState(chain, 'switching', { accountLabel: target.label })
       // ① The copy — a codex blocked by a limit is idle, so there is no write contention
       const dest = codexHistoryStrategy.mapTargetPath(chain.rolloutPath, target.configDir)
@@ -431,14 +499,13 @@ export class CodexRollingCoordinator {
       chain.state = null
       chain.textHit = false
       chain.scanner = new CodexLimitScanner() // so the dead session's tail does not get glued onto the new session's output
+      chain.modelChoice = new CodexModelChoiceScanner() // same reason — a half-drawn prompt must not join the new session's output
       chain.cycle.advanceTo(toIndex)
       this.chains.set(info.id, chain)
-      // The respawned codex creates a new rollout file (with the same session_id) — find it again and
-      // attach a tail. The dest we just copied in is excluded (same cwd and session_id, so it looks like a
-      // legitimate candidate)
-      chain.rolloutPath = null
-      chain.tail = null
-      this.startLocate(chain, target, [dest])
+      // The respawned codex resumes, so it appends to dest rather than creating a new rollout — there is
+      // nothing to search for, and searching was exactly what broke here (see attachRollout). dest holds
+      // the old account's rate_limits, which is why attachRollout starts the tail at the end.
+      this.attachRollout(chain, codexSessionId, dest)
       // dest is sent along too, so the CodexTurnWatcher re-registration (index.ts) can drop this copy from
       // its candidates. CoreEvents['session:rolled'] does not declare this field, but send()'s payload is
       // unknown so the extra field rides along safely — the renderer just ignores it.
@@ -468,7 +535,8 @@ export class CodexRollingCoordinator {
         if (chain.disposed || chain.rolling || chain.waitTimer) return
         if (limitReached(chain.state, { textHit: false })) {
           this.recordRecovery(chain)
-          this.onLimit(chain, 'reachedType') // passing with no phrase can only be ①
+          // No phrase was involved, so this can only be one of the two structured signals
+          this.onLimit(chain, this.reasonOf(chain, 'reachedType'))
           return
         }
         if (maxedOut(chain.state) && this.now() - chain.lastOutputAt > FALLBACK_SILENCE_MS) {

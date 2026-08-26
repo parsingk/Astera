@@ -18,7 +18,6 @@ interface Entry {
   accountId: string
   cwd: string
   since: number // Spawn time — the cutoff findRollout uses to filter out earlier sessions' files
-  excludePaths: string[] // Exclusion paths supplied by the register() caller (e.g. an old rollout copied over right after a roll)
   rolloutPath: string | null
   tail: JsonlTail | null
   disposed: boolean
@@ -57,10 +56,15 @@ export class CodexTurnWatcher {
   }
 
   /** Registers only codex sessions that have Slack notifications enabled. The caller determines the provider and passes it in.
-   *  excludePaths: on re-registration right after a rolling switch, this drops files from findRollout's candidates that
-   *  look like legitimate candidates but are actually dead — such as the old rollout copied into the target account
-   *  just before the roll (same reason as the startLocate exclude in codexRolling). */
-  register(info: SessionInfo, excludePaths: string[] = []): void {
+   *
+   *  rolloutPath: the file a resumed session will write to, when the caller already knows it (ipc for a
+   *  history resume, index.ts for the respawn after a roll). It is not an optimisation — `codex resume`
+   *  appends to the existing rollout instead of creating one, so findRollout, which only accepts a file
+   *  created after the spawn, can never find it and turn notifications simply stopped after any resume
+   *  (the same defect as codexRolling's, see attachRollout there). The tail starts at the end of that
+   *  file: it is full of turns that finished before this session existed, and reporting those is the
+   *  misfire the old excludePaths argument was there to prevent. */
+  register(info: SessionInfo, rolloutPath?: string): void {
     if (!this.deps.getAccount(info.accountId)) {
       this.deps.log(`codex turn watch registration cancelled — no such account session=${info.id}`)
       return
@@ -70,9 +74,8 @@ export class CodexTurnWatcher {
       accountId: info.accountId,
       cwd: info.cwd,
       since: this.now(),
-      excludePaths,
-      rolloutPath: null,
-      tail: null,
+      rolloutPath: rolloutPath ?? null,
+      tail: rolloutPath ? new JsonlTail(rolloutPath, { startAtEnd: true }) : null,
       disposed: false
     })
     this.ensureTicker()
@@ -134,7 +137,7 @@ export class CodexTurnWatcher {
         cwd: entry.cwd,
         since: entry.since,
         now: this.now,
-        excludePaths: [...entry.excludePaths, ...this.claimed(entry)]
+        excludePaths: this.claimed(entry)
       })
       if (entry.disposed || !found) return
       // Another session can claim it first across the await — re-check so one rollout ends up owned by exactly one
