@@ -32,11 +32,12 @@ export interface CoordinatorDeps {
      *  omit it and still compile. */
     title: string
     /** 이 워커 세션의 롤링 체인. **한 원소** 다 — 그 Dispatch 가 실제로 쓰는 계정 하나.
-     *  이 필드는 프로바이더에 무관하다 — 둘의 동작은 다르다. claude 는 한 원소 체인에서 계정을
-     *  갈아타지 않고 리셋까지 기다린 뒤 같은 세션에서 재개한다(rolling.ts 의 resumeInPlace) — 다만
-     *  한도 선택지 목록이 아직 화면에 남아 있으면(choicePending) 예외적으로 codex 와 같은 경로를
-     *  탄다. codex 에는 resumeInPlace 가 없다 — 한 원소 체인이어도 항상 roll() 로 가서 세션을
-     *  죽이고 새 세션 id 로 재기동한다(검증됨). 어느 쪽이든 이 값을 넘기는 것 자체가, 한도에 걸린
+     *  이 필드는 프로바이더에 무관하고, 이제 둘의 동작도 같은 모양이다. 양쪽 다 한 원소 체인에서는
+     *  계정을 갈아타지 않고 리셋까지 기다린 뒤 같은 세션에서 재개한다(rolling.ts·codexRolling.ts 의
+     *  resumeInPlace). 각각 세션을 죽이는 경로로 되돌아가는 예외가 있다 — claude 는 한도 선택지
+     *  목록이 아직 화면에 남아 있을 때(choicePending), codex 는 응답 못한 모델 전환 목록이 남아
+     *  있을 때와 직전 제자리 재개가 턴을 만들지 못했을 때다. 계정이 바뀌는 재개는 양쪽 다 세션을
+     *  죽이고 새 세션 id 로 재기동한다. 어느 쪽이든 이 값을 넘기는 것 자체가, 한도에 걸린
      *  워커를 사람이 다시 띄우지 않고도 스스로 이어지게 만든다. 순서 있는 목록은 Phase 1c 가 만든다.
      *
      *  **위 title 과 같은 이유로 optional 이 아니다.** 이 기능의 on 스위치는 startWorker 의 한
