@@ -143,16 +143,36 @@ describe('accountToDispatchOn', () => {
 // 래퍼로 모이는데 그 파일에는 테스트가 닿지 않는다(src/main/ipc.ts). 규칙이 그 안에만 있으면 다음
 // 편집을 막아 줄 것이 아무것도 없다
 describe('rollChainFor', () => {
-  it('둘 다 로그인돼 있으면 요청된 계정 뒤에 적은 순서로 붙인다', () => {
+  // **기대 체인이 사전순과 어긋나야 이 테스트가 순서를 지킨다.** 이 기능이 있는 이유가 그 순서이므로
+  // (사람이 적은 대로 갈아탄다) 정렬하거나 뒤집는 구현이 통과하면 안 된다 — 요청된 계정을 'b' 로
+  // 두면 기대값 ['b','a'] 가 정렬(['a','b'])·역정렬(['a','b'])과 모두 다르다
+  it('둘 다 로그인돼 있으면 요청된 계정 뒤에 적은 순서로 붙인다 — 사전순이 아니다', () => {
     expect(
       rollChainFor({
-        requested: 'a',
-        taskAccountIds: ['b'],
+        requested: 'b',
+        taskAccountIds: ['a'],
         provider: 'claude',
         accounts: all,
         loggedInIds: loggedIn('a', 'b')
       })
-    ).toEqual({ chain: ['a', 'b'] })
+    ).toEqual({ chain: ['b', 'a'] })
+  })
+
+  // 세 칸을 따로 보는 이유: 두 칸은 **꼬리만** 정렬하는 구현을 잡지 못한다. 이 파일의 계정
+  // 픽스처에는 claude 가 둘뿐이라(claudeA·claudeB) 같은 헬퍼로 하나를 더 만들어 쓴다.
+  // 기대값 ['b','d','a'] 는 정렬(['a','b','d'])·역정렬(['a','d','b'])·꼬리 정렬(['b','a','d'])과
+  // 모두 다르다
+  it('세 칸도 적은 순서 그대로다 — 부분 정렬도 아니다', () => {
+    const claudeD = acc('d', '2026-03-01T00:00:00.000Z')
+    expect(
+      rollChainFor({
+        requested: 'b',
+        taskAccountIds: ['d', 'a'],
+        provider: 'claude',
+        accounts: [...all, claudeD],
+        loggedInIds: loggedIn('a', 'b', 'd')
+      })
+    ).toEqual({ chain: ['b', 'd', 'a'] })
   })
 
   it('로그인 안 된 계정은 체인에서 빠진다 — 남은 순서로 돈다', () => {
@@ -218,16 +238,18 @@ describe('rollChainFor', () => {
     ).toEqual({ chain: ['a'] })
   })
 
-  it('빈 목록도 지정 없음과 같다', () => {
-    expect(
-      rollChainFor({
-        requested: 'a',
-        taskAccountIds: [],
-        provider: 'claude',
-        accounts: all,
-        loggedInIds: loggedIn('a', 'b')
-      })
-    ).toEqual({ chain: ['a'] })
+  // 빈 배열과 없음이 **같은 답**이라는 것을 값으로 못박는다 — 위 테스트와 같은 길을 지나므로
+  // 값만 다시 단정하면 겹치는 테스트다. 이 등식은 이 함수 밖에서도 규칙이다: state.ts 의
+  // createTask 가 빈 배열을 아예 싣지 않고, Task.accountIds 의 JSDoc 이 "없거나 비면" 이라고 적는다
+  it('빈 목록과 지정 없음은 같은 답이다', () => {
+    const base = {
+      requested: 'a',
+      provider: 'claude' as const,
+      accounts: all,
+      loggedInIds: loggedIn('a', 'b')
+    }
+    expect(rollChainFor({ ...base, taskAccountIds: [] })).toEqual(rollChainFor(base))
+    expect(rollChainFor({ ...base, taskAccountIds: [] })).toEqual({ chain: ['a'] })
   })
 
   // 요청된 계정이 Task 목록에도 적혀 있는 것은 보통이다(자동 배치가 그 목록의 첫 계정을 요청한다) —
