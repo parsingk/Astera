@@ -241,6 +241,20 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
+  // fix round 2: 이 호출은 roll() 바깥 try 안에 있고 그 catch 는 kill·respawn 앞에서 돈다 —
+  // 가드가 없으면 깨진 packet 계약이 롤 자체를 중단시켜 워커를 한도에 멈춘 채로 남긴다.
+  it('resumeText 가 던져도 롤은 계속되고 기존 문장으로 재개한다', async () => {
+    const h = harness({ resumeText: () => Promise.reject(new Error('packet contract broke')) })
+    await writeRollout({ accountId: 'c1', uuid: 'cx-throw', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(h.info1)
+    await advance(1_500) // 매핑 폴링
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+    expect(h.spawned[0].resumePrompt).toBe('이어서 작업 진행해 줘')
+    h.coord.stop()
+  })
+
   it('롤로 띄운 세션에 orchEnv를 실어 보낸다', async () => {
     const env = { cliPath: 'C:/astera/cli.js', infoPath: 'C:/astera/info.json', skillsPath: 'C:/astera/skills' }
     const h = harness({ orchEnv: () => env })

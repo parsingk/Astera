@@ -386,7 +386,20 @@ export class CodexRollingCoordinator {
       // 않는다 — 그 구간에 await 를 두지 않는다는 것이 아래 kill/spawn 의 불변이다(exit 가 옛 id 로
       // 도착해도 disposeChain 이 오작동하지 않는 이유). 그래서 kill 앞에서, 세션이 아직 살아 있을
       // 때 물어 둔다.
-      const prompt = (await this.deps.resumeText?.(chain.liveId)) ?? chain.prompt
+      // **이 자리에 try/catch 가 필요한 이유는 이 roll() 의 catch 가 있는 자리다.** 이 호출은
+      // roll() 바깥 try 안에 있고, 그 catch 는 kill·respawn **앞에서** 돌아 'none' 을 게시하고
+      // 끝난다 — 즉 깨진 packet 계약이 인계를 얇게 만드는 것이 아니라 **롤 자체를 중단시켜 워커를
+      // 한도에 멈춘 채로 남긴다.** resumeText 는 던지지 않는다는 계약이지만(resumePacket.ts) 그
+      // 계약이 깨질 때 잃는 것이 이만큼 크므로, rolling.ts 가 자기 네 자리에 두른 것과 같은 모양을
+      // 여기에도 둔다: 로그를 남기고 기존 고정 문장으로 저하한다.
+      let prompt = chain.prompt
+      try {
+        prompt = (await this.deps.resumeText?.(chain.liveId)) ?? chain.prompt
+      } catch (err) {
+        this.deps.log(
+          `resume packet hook failed session=${chain.liveId}: ${err instanceof Error ? err.message : String(err)}`
+        )
+      }
       if (chain.disposed) {
         this.deps.log(
           `codex roll aborted — chain disposed while building the resume prompt session=${chain.liveId}`
