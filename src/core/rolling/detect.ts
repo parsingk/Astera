@@ -120,26 +120,51 @@ export class OutputScanner {
 //    {id:"upgrade", label:`Upgrade to ${Max|Max 20x} …`}]  <- upgrade is conditional
 // and the number of items varies with the account state. Pinning the number could press adjust
 // (adjust the spend limit) by mistake, so we find it by label and use only the number on that line.
-// The inner whitespace is [ \t]* rather than \s* — \s* skips newlines too, so if the preceding line
-// of an arrow-key-only UI ends in a digit, e.g. "…: $50.", that number gets wrongly picked up as the
-// item number of the Wait entry on the next line. The number must be on the same line as the label.
+// **The label is no longer the first thing after the number.** Observed 2026-08-26 on a managed
+// (admin-controlled) plan, the list reads:
+//   1. Stop and wait for limit to reset
+//   2. Wait here, then continue automatically shortly
+//   3. Ask your admin for more usage
+// The old form required the label immediately after "N." and so found no number at all on that screen
+// — measured in rolling.log as `limit choice not found` with waitPhrase=true, after which nothing is
+// pressed and the dialog stays up forever.
+//
+// Note item 2: **the CLI now offers to wait and continue by itself.** Whether to prefer that over
+// pressing the wait item is a product decision and is deliberately not made here — this code keeps
+// pressing the wait item, which is the choice the app's own waiting and resuming is built around.
 const WAIT_LABEL = 'Wait for limit to reset'
-const WAIT_CHOICE_RE = new RegExp(`(\\d+)[ \\t]*[.)][ \\t]*${WAIT_LABEL}`, 'i')
 // The label-only variant — it exists to separate "the list was on screen but the numbering differs"
 // from "the list had not arrived yet" in the log when no number is found. Sharing WAIT_LABEL removes
 // any room for the two regexes to drift apart — the same convention as maskLimitPhrase reusing
 // LIMIT_RE.source.
 const WAIT_LABEL_RE = new RegExp(WAIT_LABEL, 'i')
 
-/** Finds the number of the "Wait for limit to reset" item on the limit choice screen.
+/** Finds the number of the wait item on the limit choice screen.
  *  null for a rendering with no numbers (an arrow-key-only UI) — the caller then types nothing,
  *  because we cannot know the cursor position and so cannot judge how many steps to move with the
- *  arrow keys. */
+ *  arrow keys.
+ *
+ *  **The number is taken from the item the label belongs to, not from the label's neighbourhood.**
+ *  It walks the line carrying the label and uses the *nearest* "N." to its left. That is what makes
+ *  it survive a prefix ("1. Stop and wait for limit to reset") while still refusing the two cases the
+ *  old form was written to refuse:
+ *    - the label with no number on its line (an arrow-key-only UI) — nothing to the left, so null;
+ *    - a number on the *preceding* line, e.g. "…spend limit: $50." — a different line, never read.
+ *  Taking the nearest rather than the first also fixes a case the old regex got wrong: with two items
+ *  rendered on one line it would have returned the *first* number, i.e. pressed adjust (raise the
+ *  spend limit) instead of wait. */
 export function findWaitChoice(text: string): number | null {
-  const m = WAIT_CHOICE_RE.exec(stripAnsi(text))
-  if (!m) return null
-  const n = Number(m[1])
-  return Number.isInteger(n) && n > 0 ? n : null
+  for (const line of stripAnsi(text).split('\n')) {
+    const at = line.search(WAIT_LABEL_RE)
+    if (at < 0) continue
+    const numbered = line.slice(0, at).match(/\d+[ \t]*[.)]/g)
+    if (!numbered) continue
+    const digits = /\d+/.exec(numbered[numbered.length - 1])
+    if (!digits) continue
+    const n = Number(digits[0])
+    if (Number.isInteger(n) && n > 0) return n
+  }
+  return null
 }
 
 /** Does this text carry the "wait" choice label — the number is not considered.

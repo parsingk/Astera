@@ -199,6 +199,22 @@ describe('findWaitChoice', () => {
     expect(findWaitChoice('  1. Adjust monthly spend limit: $50.\n❯ Wait for limit to reset')).toBeNull()
   })
 
+  // 2026-08-26 실측(관리자 통제 플랜): 라벨 앞에 'Stop and ' 가 붙었다. 번호가 라벨에 붙어 있어야 했던
+  // 예전 형태는 이 화면에서 번호를 아예 못 찾았고(rolling.log 의 `limit choice not found`),
+  // 그러면 아무 키도 누르지 못해 대화상자가 화면에 영원히 남는다.
+  it('라벨 앞에 접두어가 붙어도 그 항목의 번호를 찾는다', () => {
+    const screen =
+      '> 1. Stop and wait for ' +
+      'limit to reset\n  2. Wait here, then continue automatically shortly\n  3. Ask your admin for more usage'
+    expect(findWaitChoice(screen)).toBe(1)
+  })
+
+  // 라벨에 **가장 가까운** 번호를 쓰는 이유. 예전 형태는 이 줄에서 첫 번호(1=adjust)를 집어
+  // 지출 한도 인상을 누를 수 있었다.
+  it('한 줄에 두 항목이 있으면 라벨에 가까운 번호를 쓴다', () => {
+    expect(findWaitChoice('1. Adjust monthly spend limit: $50.  2. Wait for ' + 'limit to reset')).toBe(2)
+  })
+
   it('앞 줄 금액의 숫자를 줍지 않는다 — [ \\t]*가 줄바꿈을 넘지 못하는지 검증', () => {
     // 커서 글리프 없는 형태. ❯ 가 있는 위 테스트는 글리프 자체가 매치를 막아 이 변경의
     // 판별 근거가 되지 못한다 — 이쪽이 \s* 시절 '50'을 반환하던 실제 회귀다.

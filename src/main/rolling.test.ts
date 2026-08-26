@@ -101,6 +101,12 @@ function harness(overrides: Partial<RollingDeps> = {}): {
 // 이 리터럴이 통짜면 이 테스트 파일 자체가 롤링 세션의 PTY로 흘러갈 때(예: cat/read) 스캐너가
 // 물어 실제 롤을 유발한다 — 접합으로 쪼개 소스에 트리거를 두지 않는다. 런타임 값은 동일하다.
 const LIMIT_TEXT = 'Claude usage limit ' + 'reached ∙ resets 3am'
+// 관리자 통제 플랜에서 실측한 한도 선택 목록(2026-08-26). 항목 1의 라벨 앞에 'Stop and ' 가 붙어 있는
+// 것과, 항목 2가 **CLI 자신의 자동 대기** 라는 것이 요점이다. 통짜 금지 관례는 LIMIT_TEXT 와 동일.
+const WAIT_DIALOG =
+  'What do you want to do?\n\n> 1. Stop and wait for ' +
+  'limit to reset\n  2. Wait here, then continue automatically shortly\n' +
+  '  3. Ask your admin for more usage\n\nEnter to confirm · Esc to cancel'
 // 문구에 reset 시각까지 담은 픽스처. 통짜 금지 관례는 LIMIT_TEXT와 동일.
 const limitWithReset = (kind: 'session' | 'weekly', tail: string): string =>
   "You've hit your " + kind + ` limit · resets ${tail} (Asia/Seoul)`
@@ -1730,6 +1736,36 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await flush()
     expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a2'])
+  })
+
+  // **대화상자는 CLI 자신의 판정이다.** 게이트가 막으려는 것(문서·도구 출력에 우연히 든 문구)은
+  // 대화상자를 그리지 않으므로, 대화상자의 존재는 계정 조회 수치보다 강한 증거다.
+  //
+  // 실측이 이 예외를 요구했다(2026-08-26): 관리자 통제 플랜의 한도가 5시간·주간 창에 나타나지 않아
+  // `maxPercent` 가 73% 로 읽혔고, 문구가 두 번 기각되어 세션이 대화상자 앞에서 밤새 멈춰 있었다.
+  it('사용량이 100% 미만이어도 한도 선택 대화상자가 떠 있으면 인정한다', async () => {
+    const logs: string[] = []
+    const h = harness({ readUsage: () => Promise.resolve(40), log: (m) => logs.push(m) })
+    h.payloads.set('s1', payload(3))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: `${LIMIT_TEXT}\n${WAIT_DIALOG}` })
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a2'])
+    // 어느 증거로 통과했는지 로그가 말해야 한다 — 수치로 적으면 게이트가 고장 난 것으로 읽힌다
+    expect(logs.some((l) => l.includes('wait-choice dialog on screen (usage 40%)'))).toBe(true)
+  })
+
+  // 예외를 좁게 유지한다: 라벨만으로는 부족하고 실제로 입력을 기다리는 목록이어야 한다.
+  it('라벨만 인용됐고 입력 대기 목록이 아니면 기각을 유지한다', async () => {
+    const h = harness({ readUsage: () => Promise.resolve(40) })
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.handleData({
+      sessionId: 's1',
+      data: `${LIMIT_TEXT}\n문서 인용: Wait for ` + 'limit to reset'
+    })
+    await flush()
+    expect(h.events).toEqual([])
   })
 
   it('조회가 불가하면 종전 동작으로 폴백해 인정한다 — 감지를 죽이지 않는다', async () => {

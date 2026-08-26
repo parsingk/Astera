@@ -522,7 +522,21 @@ export class RollingCoordinator {
     // session from the old phrase and roll again immediately.
     if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) return
     if (chain.liveId !== liveId) return
-    if (usage !== null && usage < LIMIT_PCT) {
+    // **화면에 한도 선택 대화상자가 떠 있으면 사용량 수치로 기각하지 않는다.**
+    //
+    // 게이트가 막으려는 것은 "문서나 도구 출력에 우연히 한도 문구가 있는 것" 이다. 그런 텍스트는
+    // 대화상자를 그리지 않는다 — 그래서 대화상자의 존재는 CLI 자신의 판정이고, 계정 API 수치보다
+    // 강한 증거다. 두 조건을 함께 요구해 좁게 잡는다: 대기 항목의 라벨이 있고(hasWaitChoiceLabel),
+    // 실제로 입력을 기다리는 선택 목록이다(looksLikeChoicePrompt).
+    //
+    // **실측이 이 예외를 요구했다(2026-08-26).** 관리자 통제 플랜에서 한도에 걸렸는데 계정 조회는
+    // 73% 였다 — `maxPercent` 는 5시간·주간 창만 보고, 그 한도는 그 창들의 것이 아니었다. 그래서
+    // 문구가 두 번 기각되고(rolling.log: `limit phrase rejected — account usage 73%`) 대기도 재개도
+    // 일어나지 않아, 세션이 대화상자 앞에서 밤새 멈춰 있었다. 같은 날 5시간 창에 걸린 건은 정상
+    // 동작했다(`limit confirmed via usage 100%` → `limit reset → resume in place`).
+    const dialogOnScreen =
+      hasWaitChoiceLabel(chain.lastScreen) && looksLikeChoicePrompt(chain.lastScreen)
+    if (usage !== null && usage < LIMIT_PCT && !dialogOnScreen) {
       // Rejection happens only on positive evidence that the account is fine, and it changes no state at
       // all (no recordRecovery, no pushState, no waitTimer) — half the cost of a false positive is not
       // the verdict itself but being stuck in 'waiting' afterwards, where tick() skips the chain and
@@ -536,9 +550,15 @@ export class RollingCoordinator {
     // usage=null (the lookup failed) falls back to the old behaviour and accepts. Rejecting on "we do
     // not know" would kill detection, and detection dying quietly is a far more expensive failure in
     // this app than a false positive.
-    this.deps.log(
-      `limit confirmed via ${usage === null ? 'phrase (usage unavailable)' : `usage ${usage}%`} session=${chain.liveId}`
-    )
+    // 어느 증거가 이겼는지 로그에 남긴다 — 대화상자로 통과한 건을 `usage 73%` 로 적으면 읽는 사람이
+    // 게이트가 고장 난 것으로 읽는다.
+    const evidence =
+      usage === null
+        ? 'phrase (usage unavailable)'
+        : usage < LIMIT_PCT
+          ? `wait-choice dialog on screen (usage ${usage}%)`
+          : `usage ${usage}%`
+    this.deps.log(`limit confirmed via ${evidence} session=${chain.liveId}`)
     // Called even with no payload — when the phrase itself carries the time, an accurate wait can be
     // recorded regardless of a missing capture file. With payload=null the snapshot candidates are empty
     // and at becomes null, which is the same outcome as previously skipping the record entirely.
