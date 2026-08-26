@@ -63,6 +63,7 @@ import { writeInfo, writeShuttle } from './orchestration/shuttle'
 import { WorkerTails } from './orchestration/tail'
 import { releaseArgsFor } from './orchestration/release'
 import { installStub } from './orchestration/stub'
+import { buildResumePacket } from './orchestration/resumePacket'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
 import { imageMime } from '../core/files/imageMime'
@@ -98,12 +99,18 @@ import { loadRunConfigs, prepareRun } from './run/prepare'
  *  리셋을 기다린다)이나 'switching'(다른 계정으로 넘어간다) 일 때만 정지 시점 스냅샷을 남긴다
  *  (recordStopSnapshot, core/orchestration/state.ts) — 롤링이 실제로 세션을 세우거나 바꾸는 시점은
  *  이 둘뿐이고, 나머지 상태('trust'·'nudged'·'stalled'·'none')는 세션이 계속 살아 있으므로 그 시점의
- *  HEAD 가 "정지 시점"의 의미를 갖지 않는다. */
+ *  HEAD 가 "정지 시점"의 의미를 갖지 않는다.
+ *
+ *  **resumeText 는 두 롤링 코디네이터가 읽는 네 번째 값이다** — RollingDeps/CodexRollingDeps 의
+ *  resumeText dep 구현이고, sessionId 로 열린 Job Dispatch 를 찾아 재개 packet 을 spec 파일에 적어
+ *  넣은 뒤 그 자리에 쓸 한 줄을 돌려준다(main/orchestration/resumePacket.ts). Job 워커가 아니거나
+ *  packet 을 못 만들면 null 이고, 그때 두 코디네이터는 기존 고정 문장으로 저하한다. */
 export interface OrchHandle {
   stop: () => void
   onRolled: (oldSessionId: string, newInfo: { id: string; accountId: string }) => void
   onRollState: (sessionId: string, state: RollStateEvent['state']) => void
   orchEnv: () => { cliPath: string; infoPath: string; skillsPath: string } | undefined
+  resumeText: (sessionId: string) => Promise<string | null>
 }
 
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
@@ -2026,7 +2033,10 @@ export function registerIpc(
       },
       // 롤링 배선이 읽는다. 오케스트레이션이 꺼져 있으면 undefined — 그러면 롤된 세션은 예전처럼
       // CLI 없이 뜨고, 그 상태에서 워커가 존재할 일도 없다.
-      orchEnv: () => orchEnvOf()
+      orchEnv: () => orchEnvOf(),
+      // 두 롤링 코디네이터의 resumeText dep 구현. Job 워커가 아니거나 packet 을 못 만들면 null 이고,
+      // 그때 부르는 쪽은 기존 고정 문장으로 저하한다(main/orchestration/resumePacket.ts 의 계약).
+      resumeText: (sessionId) => buildResumePacket(sessionId, deps.getState(), { log: orchLog })
     })
   }
   if (orchWiring && core.appSettings.getOrchestrationEnabled())
