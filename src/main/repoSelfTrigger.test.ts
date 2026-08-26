@@ -25,7 +25,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { OutputScanner, findWaitChoice } from '../core/rolling/detect'
-import { CodexLimitScanner } from '../core/rolling/codexSignal'
+import { CodexLimitScanner, CodexModelChoiceScanner } from '../core/rolling/codexSignal'
 
 const ROOT = process.cwd()
 // .superpowers는 git-ignored 작업 공간이다 — SDD 진행 중 리뷰 diff가 그 안에 있고 diff는 당연히
@@ -69,14 +69,18 @@ function collect(dir: string, out: string[]): string[] {
 /** 한 청크를 흘리고 한도가 발화했는지 본다. 발화하면 그 시점 누적 텍스트(선택지 파싱용),
  *  아니면 null. codex 스캐너는 boolean만 주므로 텍스트가 빈 문자열이다 — 선택지 해제는
  *  claude 전용 기능이라 codex 경로에서는 필요하지 않다. */
+type ScannerLabel = 'claude' | 'codex' | 'codex-model'
+
 interface Probe {
-  label: 'claude' | 'codex'
-  feed(chunk: string): { text: string } | null
+  label: ScannerLabel
+  /** presses: 스캐너가 이미 번호를 알고 있을 때(모델 전환 프롬프트). 그 외에는 text 에서 찾는다. */
+  feed(chunk: string): { text: string; presses?: number } | null
 }
 
 function makeProbes(): Probe[] {
   const claude = new OutputScanner()
   const codex = new CodexLimitScanner()
+  const model = new CodexModelChoiceScanner()
   return [
     {
       label: 'claude',
@@ -88,13 +92,22 @@ function makeProbes(): Probe[] {
     {
       label: 'codex',
       feed: (c) => (codex.push(c) ? { text: '' } : null)
+    },
+    // 세 번째 스캐너. 한도 문구와 무관하게 "한도 임박 — 모델 바꿀래?" 화면만으로 세션에 번호를 쓰므로
+    // (codexRolling 의 answerModelChoice) 앞의 두 스캐너가 깨끗해도 이쪽은 따로 막아야 한다.
+    {
+      label: 'codex-model',
+      feed: (c) => {
+        const n = model.push(c)
+        return n === null ? null : { text: '', presses: n }
+      }
     }
   ]
 }
 
 interface Violation {
   file: string
-  scanner: 'claude' | 'codex'
+  scanner: ScannerLabel
   /** 문구가 발화한 지점까지 흘린 바이트 오프셋 — 대략의 위치 */
   atOffset: number
   /** 같은 창에서 선택지 번호까지 잡혔다면 그 번호. null이면 롤 오발화만. */
@@ -119,7 +132,7 @@ function scan(file: string): Violation[] {
         file: rel,
         scanner: probe.label,
         atOffset: Math.min(i + CHUNK, text.length),
-        pressesChoice: findWaitChoice(hit.text)
+        pressesChoice: hit.presses ?? findWaitChoice(hit.text)
       })
     }
   }

@@ -126,28 +126,27 @@ function tokenCount(opts: {
     type: 'event_msg',
     payload: {
       type: 'token_count',
-      info: {
-        total_token_usage: { total_tokens: 100 },
-        rate_limits: {
-          limit_id: 'codex',
-          limit_name: null,
-          primary:
-            opts.primary === undefined
-              ? null
-              : { used_percent: opts.primary, window_minutes: 300, resets_at: opts.primaryReset ?? 1_999_999_999 },
-          secondary:
-            opts.secondary === undefined
-              ? null
-              : {
-                  used_percent: opts.secondary,
-                  window_minutes: 10080,
-                  resets_at: opts.secondaryReset ?? 1_999_999_999
-                },
-          credits: null,
-          individual_limit: null,
-          plan_type: 'plus',
-          rate_limit_reached_type: opts.reached ?? null
-        }
+      info: { total_token_usage: { total_tokens: 100 } },
+      // payload 바로 아래다 — payload.info 안이 아니다 (codexSignal.ts 의 rateLimitsOf 주석)
+      rate_limits: {
+        limit_id: 'codex',
+        limit_name: null,
+        primary:
+          opts.primary === undefined
+            ? null
+            : { used_percent: opts.primary, window_minutes: 300, resets_at: opts.primaryReset ?? 1_999_999_999 },
+        secondary:
+          opts.secondary === undefined
+            ? null
+            : {
+                used_percent: opts.secondary,
+                window_minutes: 10080,
+                resets_at: opts.secondaryReset ?? 1_999_999_999
+              },
+        credits: null,
+        individual_limit: null,
+        plan_type: 'plus',
+        rate_limit_reached_type: opts.reached ?? null
       }
     }
   })
@@ -175,6 +174,21 @@ async function writeRollout(
   return file
 }
 
+/** 한도로 끝난 턴의 task_complete (실측 형태). 메시지는 접합해 둔다 — 통짜면 이 파일이 롤링 세션
+ *  화면으로 흐를 때 CodexLimitScanner 가 물어 실제 롤을 유발한다 (codexSignal.test.ts 와 같은 처방). */
+const taskComplete = (timestamp: string): string =>
+  JSON.stringify({
+    timestamp,
+    type: 'event_msg',
+    payload: {
+      type: 'task_complete',
+      error: {
+        message: "You've hit your " + 'usage limit. Upgrade to Pro or try again at 7:17 PM.',
+        codex_error_info: 'usage_limit_exceeded'
+      }
+    }
+  })
+
 describe('makeLimitProbe — codex', () => {
   it('rate_limit_reached_type이 non-null이고 resets_at이 있으면 그 시각', async () => {
     const cwd = 'D:/work/codexp'
@@ -185,6 +199,36 @@ describe('makeLimitProbe — codex', () => {
     const deps = makeDeps({ configDirOf: () => dir })
     const result = await makeLimitProbe(deps)(baseDispatch({ provider: 'codex', cwd, startedAt }))
     expect(result).toBe(1_999_999_999_000)
+  })
+
+  // 실측: reachedType 은 rollout 1288건 전부 null 이다. 한도가 났을 때 실제로 나오는 신호는
+  // task_complete 의 codex_error_info 이며, 그때 창을 실은 기록은 그 직전 것이다.
+  it('usage_limit_exceeded면 직전 창 스냅숏의 resets_at을 돌려준다', async () => {
+    const cwd = 'D:/work/codexp-err'
+    const startedAt = new Date(Date.now() - 60_000).toISOString()
+    await writeRollout(dir, cwd, 'uuid-err', [
+      tokenCount({ primary: 99, primaryReset: 1_999_999_999 }),
+      tokenCount({}), // 한도 직후의 크레딧 기록 — 창이 전부 null
+      taskComplete(new Date().toISOString())
+    ])
+    const deps = makeDeps({ configDirOf: () => dir })
+    const result = await makeLimitProbe(deps)(baseDispatch({ provider: 'codex', cwd, startedAt }))
+    expect(result).toBe(1_999_999_999_000)
+  })
+
+  // 재개된 대화의 rollout 에는 이전 턴들이 남긴 한도 에러가 그대로 들어 있다. 그것까지 이 Dispatch 의
+  // 사망 원인으로 세면 멀쩡히 끝난 워커가 전부 '한도로 죽었다'가 된다 — claude 쪽 probe 가 hit.at 으로
+  // 거르는 것과 같은 규칙이다.
+  it('Dispatch 시작 이전의 한도 에러는 이 Dispatch의 것이 아니다', async () => {
+    const cwd = 'D:/work/codexp-old'
+    const startedAt = new Date(Date.now() - 60_000).toISOString()
+    await writeRollout(dir, cwd, 'uuid-old', [
+      tokenCount({ primary: 99, primaryReset: 1_999_999_999 }),
+      taskComplete(new Date(Date.now() - 3_600_000).toISOString()) // 한 시간 전 턴의 에러
+    ])
+    const deps = makeDeps({ configDirOf: () => dir })
+    const result = await makeLimitProbe(deps)(baseDispatch({ provider: 'codex', cwd, startedAt }))
+    expect(result).toBeNull()
   })
 
   it('reachedType이 null이면 null — 사용률이 높아도 (textHit:false이므로)', async () => {

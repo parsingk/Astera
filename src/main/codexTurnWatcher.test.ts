@@ -98,10 +98,16 @@ describe('CodexTurnWatcher', () => {
     w.stop()
   })
 
-  it('register의 excludePaths로 넘긴 rollout은 후보에서 빠진다', async () => {
+  // `codex resume` 은 새 rollout 을 만들지 않고 기존 파일에 이어 쓴다(codexRolling 의 attachRollout
+  // 주석에 실측 근거). 그래서 '생성 시각이 spawn 이후'로 후보를 거르는 findRollout 은 재개 세션의
+  // rollout 을 영원히 못 찾고 — 히스토리 재개도, 롤 직후 재등록도 — 턴 알림이 조용히 죽는다.
+  // 배선이 아는 경로를 넘겨 붙이면 탐색이 필요 없다. 다만 그 파일에는 이미 끝난 턴이 들어 있으므로
+  // 붙은 시점 이후에 쓰인 것만 알려야 한다(예전에 excludePaths 가 막으려던 바로 그 오발이다).
+  it('넘겨받은 rollout 경로에 바로 붙고, 붙기 전 턴으로는 오발하지 않는다', async () => {
     const cwd = path.join(dir, 'proj')
     const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
-    await appendFile(p, JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } }) + '\n')
+    const turn = JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } })
+    await appendFile(p, turn + '\n') // 재개 전에 이미 끝나 있던 턴
     const onTurnComplete = vi.fn()
     const w = new CodexTurnWatcher({
       getAccount: () => account(dir),
@@ -109,11 +115,37 @@ describe('CodexTurnWatcher', () => {
       log: () => {},
       now: () => now
     })
-    // 롤 직후 재등록 시나리오를 흉내낸다 — 유일한 후보(p)가 복사된 옛 rollout이라 제외 대상이면
-    // 워쳐는 매핑할 게 없어 콜백도 없다 (excludePaths 없이 등록했다면 p를 물어 오발했을 것).
-    w.register(session('live-1', cwd), [p])
-    await advance(TICK * 3)
+    w.register(session('live-1', cwd), p)
+    // 한 번에 2틱을 흘리면 그 사이 fs I/O 가 정착하지 않아 매핑만 두 번 돌고 읽기가 없다 —
+    // 오발할 기회를 실제로 주려면 틱마다 나눠 흘려야 한다
+    await advance(TICK) // 매핑
+    await advance(TICK) // 읽기
     expect(onTurnComplete).not.toHaveBeenCalled()
+    await appendFile(p, turn + '\n') // 재개된 세션이 끝낸 턴
+    await advance(TICK)
+    expect(onTurnComplete).toHaveBeenCalledWith('live-1', p)
+    w.stop()
+  })
+
+  // 위 테스트만으로는 '탐색해서 찾았을 뿐'인 경우와 구분되지 않는다. 탐색이 절대 닿지 않는 자리에
+  // 파일을 두면, 알림이 온다는 것 자체가 직접 붙었다는 증거다.
+  it('탐색으로는 닿지 않는 경로도 넘겨받으면 붙는다', async () => {
+    const cwd = path.join(dir, 'proj')
+    const outside = path.join(dir, 'elsewhere', 'rollout-x.jsonl') // sessions/ 트리 밖
+    await mkdir(path.dirname(outside), { recursive: true })
+    await writeFile(outside, '')
+    const onTurnComplete = vi.fn()
+    const w = new CodexTurnWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete,
+      log: () => {},
+      now: () => now
+    })
+    w.register(session('live-1', cwd), outside)
+    await advance(TICK)
+    await appendFile(outside, JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } }) + '\n')
+    await advance(TICK)
+    expect(onTurnComplete).toHaveBeenCalledWith('live-1', outside)
     w.stop()
   })
 

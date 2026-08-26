@@ -393,6 +393,10 @@ export function registerIpc(
     // worst case the session is not found and a new one starts, with no data loss. Cross-provider
     // combinations are blocked by ResumeDialog (resumeAccountOptions), so only same-provider ones
     // reach here.
+    // Where the resumed session's transcript ends up. Kept beyond the copy because codexRolling needs
+    // it: `codex resume` appends to this file instead of creating a new rollout, so the coordinator's
+    // creation-time search can never find it and the path has to be handed over (see attachRollout).
+    let resumeTranscriptDest: string | undefined
     if (opts.resumeSessionId && typeof opts.resumeTranscriptPath === 'string' && opts.resumeTranscriptPath) {
       try {
         // Assembling the target path is the job of the per-provider history strategy — whoever knows
@@ -401,6 +405,7 @@ export function registerIpc(
           opts.resumeTranscriptPath,
           account.configDir
         )
+        resumeTranscriptDest = dest
         await copyTranscript(opts.resumeTranscriptPath, dest)
       } catch {
         /* A failed copy is ignored */
@@ -415,7 +420,7 @@ export function registerIpc(
       // The rolling coordinators are separate per-provider implementations and are deliberately not
       // folded behind the descriptor. Limit detection and session identification differ enough that
       // they only share the skeleton.
-      if (providerOf(account) === 'codex') codexRolling?.register(info)
+      if (providerOf(account) === 'codex') codexRolling?.register(info, resumeTranscriptDest)
       else rolling?.register(info)
     }
     if (info.schedule) {
@@ -436,7 +441,9 @@ export function registerIpc(
     // codex has no hooks, so turn completion is detected from task_complete in the rollout
     if (info.slackNotify && providerOf(account) === 'codex') {
       try {
-        codexTurns?.register(info)
+        // On a resume the rollout is the copy target, not a file codex is about to create (see the
+        // resumeTranscriptDest comment above) — the watcher cannot find that one by searching either
+        codexTurns?.register(info, resumeTranscriptDest)
       } catch {
         /* A failed codex turn-watcher registration does not block session creation */
       }
