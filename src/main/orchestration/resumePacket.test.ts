@@ -207,6 +207,36 @@ describe('buildResumePacket', () => {
     }
   })
 
+  it('쓰다가 끊겨도 원본은 잘리지 않는다 — 임시 파일에 쓰고 rename 한다', async () => {
+    // fix round 2: 이전 구현은 fs.writeFile 로 spec 파일을 제자리에서 truncate 했다. 그 사이에
+    // 쓰기가 끊기면(디스크가 차거나 프로세스가 죽으면) 파일은 잘린 채 남고 되돌릴 사람이 없다 —
+    // 보고 의무·커밋 의무·Task 지시문이 함께 사라진다. 끊긴 쓰기는 실제 fs 로 결정론적으로 만들
+    // 수 없으므로 writeFile 을 갈아끼워 재현한다: 준 경로에 앞 10자만 쓰고 던진다. 임시 파일에
+    // 쓰는 구현에서는 원본이 무사하고, 대상에 직접 쓰는 구현에서는 원본이 잘린다.
+    const specPath = path.join(specDir, 'spec.md')
+    const original = '# do the thing\n\nimplement it\n\n## Reporting obligation\n\nreport once.\n'
+    await fs.writeFile(specPath, original, 'utf8')
+    const { s } = seed(specPath)
+    const log = vi.fn()
+    const writeFile = vi.fn(async (p: string, c: string) => {
+      await fs.writeFile(p, c.slice(0, 10), 'utf8')
+      throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' })
+    })
+
+    const line = await buildResumePacket('sess1', s, {
+      git: fakeGit(),
+      now: () => NOW,
+      log,
+      writeFile
+    })
+
+    expect(line).toBeNull()
+    expect(await fs.readFile(specPath, 'utf8')).toBe(original)
+    // 끊긴 쓰기가 남긴 임시 파일은 치운다 — spec 디렉터리에 spec.md 만 남아야 한다
+    expect(await fs.readdir(specDir)).toEqual(['spec.md'])
+    expect(log.mock.calls[0]?.[0]).toContain('resume packet failed')
+  })
+
   it('반환된 문장에는 LAUNCH_FORBIDDEN 이 걸리는 문자가 없다', async () => {
     const specPath = path.join(specDir, 'spec.md')
     await fs.writeFile(specPath, '# do the thing\n\nimplement it\n', 'utf8')

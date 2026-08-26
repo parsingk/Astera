@@ -11,6 +11,7 @@
 // core/orchestration 의 순수 모듈(checkpoint.ts, resumeSection.ts)이 이미 하고, 여기는 그 결과를
 // 어디서 읽고(OrchState 에서 열린 Dispatch를 찾고, git 을 읽고) 어디에 쓰는지(spec 파일)만 맡는다.
 import { promises as fs } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { buildCheckpoint } from '../../core/orchestration/checkpoint'
 import { formatResumeSection } from '../../core/orchestration/resumeSection'
 import type { OrchState } from '../../core/orchestration/state'
@@ -30,6 +31,11 @@ export interface ResumePacketDeps {
    *  는 실제 OS 조건으로 결정론적으로 재현할 수 없어서 여기로 갈아끼운다. 넘기지 않으면 실제
    *  fs.readFile 을 쓴다. */
   readFile?(path: string): Promise<string>
+  /** spec 파일을 쓰는 방법. readFile? 과 같은 이유의 테스트 전용 주입점이다 — **중간에 끊긴
+   *  쓰기**(디스크가 차거나 프로세스가 죽는 순간)는 실제 fs 로 결정론적으로 만들 수 없는데,
+   *  writeAtomic 이 막으려는 사고가 바로 그것이다. 넘기지 않으면 실제 fs.writeFile 을 쓴다.
+   *  받는 경로는 **임시 파일 경로**다(writeAtomic 이 rename 으로 갈아 끼운다). */
+  writeFile?(path: string, content: string): Promise<void>
 }
 
 /** spec 파일에 붙이는 절의 표제. buildSpecFile(coordinator.ts)의 "## Project knowledge"·
@@ -46,6 +52,34 @@ function upsertResumeSection(existing: string, section: string): string {
   const base = (idx === -1 ? existing : existing.slice(0, idx)).replace(/\n+$/, '')
   const block = `---\n${HEADING}\n\n${section}\n`
   return base === '' ? block : `${base}\n\n${block}`
+}
+
+/** spec 파일을 통째로 갈아 끼운다. **임시 파일에 쓴 뒤 rename 한다** — `fs.writeFile` 은 대상을
+ *  제자리에서 truncate 하므로, 그 사이에 쓰기가 실패하거나 프로세스가 죽으면 파일은 잘린 채로
+ *  남고 되돌려 줄 사람이 없다: 보고 의무·커밋 의무·Task 지시문이 한꺼번에 사라지고, 이 함수의
+ *  catch 는 로그만 남긴다. 앞선 fix round 가 **읽는 쪽**에서 막은 것과 같은 사고가 쓰는 쪽으로
+ *  들어온 것이다.
+ *
+ *  모양은 이 저장소가 망가지면 안 되는 파일에 이미 쓰는 것을 그대로 따른다 —
+ *  `OrchestrationStore.writeNow`(main/orchestration/store.ts)와 `RunConfigStore.save`
+ *  (main/runConfigStore.ts)의 `<파일>.<uuid>.tmp` → rename 이다. uuid 를 끼우는 이유도 같다:
+ *  두 쓰기가 겹쳐도 서로의 임시 파일을 밟지 않는다.
+ *
+ *  rename 이 실패하면 임시 파일이 남는다 — 지우려 시도하되 그 실패는 삼킨다(원래 오류를 가리면
+ *  안 된다). 남더라도 spec 디렉터리는 앱 시작마다 비워지므로(ipc.ts) 누적되지 않는다. */
+async function writeAtomic(
+  filePath: string,
+  content: string,
+  writeFile: (path: string, content: string) => Promise<void>
+): Promise<void> {
+  const tmp = `${filePath}.${randomUUID()}.tmp`
+  try {
+    await writeFile(tmp, content)
+    await fs.rename(tmp, filePath)
+  } catch (err) {
+    await fs.rm(tmp, { force: true }).catch(() => {})
+    throw err
+  }
 }
 
 /** 재개 프롬프트 자리에 실을 한 줄. 정적이다 — 경로도, Task 마다 달라지는 값도 담지 않는다(위 헤더의
@@ -77,7 +111,9 @@ const RESUME_LINE =
  *   - spec 파일 읽기가 **다른 이유로** 실패한다(파일 잠금, EMFILE, 클라우드 동기화 recall 등): 이건
  *     "내용이 없다"가 아니다 — 있는 내용을 모른 채 덮어쓰면 원래 Task 지시문을 통째로 지운다. 그래서
  *     이 경우는 쓰기를 시도하지 않고 곧바로 null 로 저하한다(파일은 손대지 않는다).
- *   - spec 파일을 쓸 수 없다(디스크가 찼다, 경로가 사라졌다): 로그를 남기고 null.
+ *   - spec 파일을 쓸 수 없다(디스크가 찼다, 경로가 사라졌다, 쓰다가 끊겼다): 로그를 남기고 null.
+ *     **원본은 어느 경우에도 잘리지 않는다** — 쓰기는 임시 파일에 하고 rename 으로 갈아 끼운다
+ *     (writeAtomic).
  *   - Checkpoint 조립이나 서식화가 던진다(오늘은 일어나지 않지만, 위 이유로 대비해 둔다): 로그를
  *     남기고 null.
  *   - 반환할 문장이 LAUNCH_FORBIDDEN 에 걸린다: null. RESUME_LINE 은 정적 문자열이라 오늘은 걸릴 수
@@ -112,7 +148,8 @@ export async function buildResumePacket(
     } catch (err) {
       if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err
     }
-    await fs.writeFile(dispatch.specPath, upsertResumeSection(existing, section), 'utf8')
+    const writeFile = deps.writeFile ?? ((p: string, c: string) => fs.writeFile(p, c, 'utf8'))
+    await writeAtomic(dispatch.specPath, upsertResumeSection(existing, section), writeFile)
 
     if (LAUNCH_FORBIDDEN.test(RESUME_LINE)) return null
     return RESUME_LINE
