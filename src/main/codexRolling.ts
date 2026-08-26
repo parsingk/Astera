@@ -75,10 +75,9 @@ export interface CodexRollingDeps {
    *  이 프롬프트를 spawn 인자로 넘기므로 **kill·spawn 전에** 물어야 한다(roll() 의 호출 자리 참고).
    *  구현은 `main/orchestration/resumePacket.ts`.
    *
-   *  **이 코디네이터는 언제나 'handover' 를 묻는다.** 여기에는 `resumeInPlace` 가 없다 — codex 롤은
-   *  계정 수와 무관하게 항상 kill 하고 `--resume` 으로 다시 띄우므로, `SPEC §11.5` 의 기준
-   *  ("`--resume` 을 부르는가")에 늘 걸린다. form 인자를 그래도 받는 것은 rolling.ts 의 dep 과 같은
-   *  계약을 유지하려는 것이다(배선이 한 함수를 두 코디네이터에 넘긴다). */
+   *  **이 코디네이터는 두 모양을 다 묻는다.** 계정이 바뀌는 재개는 kill 하고 `--resume` 으로 다시
+   *  띄우므로 'handover' 이고(roll), 같은 계정으로 이어가는 재개는 세션을 살려 두므로 'update' 다
+   *  (resumeInPlace). 가르는 기준은 `SPEC §11.5` 하나 — 그 경로가 `--resume` 을 부르는가다. */
   resumeText?(sessionId: string, form: 'handover' | 'update'): Promise<string | null>
 }
 
@@ -418,13 +417,103 @@ export class CodexRollingCoordinator {
       chain.waitTimer = setTimeout(
         () => {
           chain.waitTimer = null
-          void this.roll(chain, plan.target)
+          void this.resumeAfterWait(chain, plan.target)
         },
         Math.max(0, plan.retryAt - this.now())
       )
     } else {
       void this.roll(chain, target)
     }
+  }
+
+  /** 재개 자리에 실을 텍스트를 정한다. **어느 모양을 물을지는 이 함수를 부르는 자리가 정한다** —
+   *  가르는 기준은 `SPEC §11.5` 하나다: 그 경로가 `--resume` 을 부르는가.
+   *   - 'handover'(전체 인계): `roll()`. kill 하고 `--resume` 으로 다시 띄우므로 프로세스가 새것이고,
+   *     작업을 이어 주는 것은 rollout 파일 하나다.
+   *   - 'update'(덧붙일 한 줄): `resumeInPlace`. **세션이 살아 있다** — 떨어뜨린 것이 없으니 인계할
+   *     것도 없고, 대화가 온전한 에이전트에게 Task 지시문을 다시 읽히는 것은 방금 리셋된 할당량을
+   *     이미 아는 것에 쓰는 일이다. 그래서 기다리는 동안 무엇이 바뀌었는지만 덧붙인다.
+   *
+   *  'update' 를 **덧붙이는** 이유: 이 경로에서 `chain.prompt` 는 잃을 것이 없는 값이고, 사용자가
+   *  직접 지정한 문구일 수도 있다(register 의 prompt). 대체하면 그것을 버린다.
+   *
+   *  **try/catch 가 여기 있는 이유는 `roll()` 의 catch 가 있는 자리다.** 그 호출은 roll() 바깥 try
+   *  안에 있고 그 catch 는 kill·respawn **앞에서** 돌아 'none' 을 게시하고 끝난다 — 즉 깨진 packet
+   *  계약이 인계를 얇게 만드는 것이 아니라 **롤 자체를 중단시켜 워커를 한도에 멈춘 채로 남긴다.**
+   *  resumeText 는 던지지 않는다는 계약이지만(resumePacket.ts) 그 계약이 깨질 때 잃는 것이 이만큼
+   *  크므로 로그를 남기고 기존 고정 문장으로 저하한다. rolling.ts 의 같은 이름 함수와 같은 모양이다. */
+  private async resumePromptFor(
+    chain: Chain,
+    liveId: string,
+    form: 'handover' | 'update'
+  ): Promise<string> {
+    try {
+      const text = await this.deps.resumeText?.(liveId, form)
+      if (text === null || text === undefined) return chain.prompt
+      return form === 'update' ? `${chain.prompt} ${text}` : text
+    } catch (err) {
+      this.deps.log(
+        `resume packet hook failed session=${liveId}: ${err instanceof Error ? err.message : String(err)}`
+      )
+      return chain.prompt
+    }
+  }
+
+  /** 대기가 끝났을 때 무엇으로 재개할지 — claude 쪽 `resumeAfterWait`(rolling.ts) 의 codex 대응물.
+   *
+   *  계정이 바뀌면 새 프로세스가 불가피하다. 바뀌지 않으면 죽일 이유가 없다 — 세션 id 가 유지되므로
+   *  일정·Slack·턴 알림·오케스트레이션 Dispatch 를 새 id 로 옮기는 일이 전부 없어지고, rollout 복사도
+   *  필요 없다.
+   *
+   *  **"지금 세션이 일하고 있는가" 를 묻지 않는다.** 한도 판정을 통과한 대기이므로 이 순간 세션은
+   *  필연적으로 멈춰 있고, codex 는 한도가 풀려도 스스로 이어가지 않는다(실측 화면이 그때 다시
+   *  시도하라고 안내한다 — docs/codex_usage_limit2.png). claude 쪽 설계가 그 판정을 세 겹으로
+   *  쌓으려다 매번 새 결함을 만든 자리다. */
+  private resumeAfterWait(chain: Chain, toIndex: number): Promise<void> {
+    if (chain.disposed || chain.rolling) return Promise.resolve()
+    if (toIndex !== chain.cycle.currentIndex) return this.roll(chain, toIndex) // 계정이 바뀐다
+    return this.resumeInPlace(chain)
+  }
+
+  /** 같은 계정으로 이어가기 — kill 도 spawn 도 복사도 하지 않고, 살아 있는 PTY 에 한 줄과 Enter 만
+   *  넣는다. `answerModelChoice` 가 이미 쓰는 통로이고 상수도 같다(ENTER_DELAY_MS).
+   *
+   *  세 가지를 되돌려야 하는 것이 이 함수의 실질이다.
+   *   ① **tail 을 파일 끝으로 다시 붙인다.** 대기 동안 tick 은 이 체인을 건너뛰었으므로(waitTimer
+   *      가드) tail 은 마지막으로 읽은 위치를 들고 있고, 재개 후 첫 tick 이 **이 대기를 만든 그
+   *      레코드를 다시 읽어** 곧바로 같은 한도를 올린다. roll() 이 복사본에 startAtEnd 를 쓰는 것과
+   *      같은 이유이고, 같은 함수(attachRollout)를 같은 파일에 다시 쓴다.
+   *   ② **state 를 비운다.** 지난 스냅샷은 100% 다 — 남겨 두면 maxed+silent 폴백이 재개 직후에
+   *      다시 발화한다. roll() 도 respawn 자리에서 같은 일을 한다.
+   *   ③ **textHit 래치와 문구 스캐너를 초기화한다.** 같은 이유다. */
+  private async resumeInPlace(chain: Chain): Promise<void> {
+    if (chain.rolloutPath && chain.codexSessionId)
+      this.attachRollout(chain, chain.codexSessionId, chain.rolloutPath) // ①
+    chain.state = null // ②
+    chain.textHit = false // ③
+    chain.scanner = new CodexLimitScanner()
+    chain.lastOutputAt = this.now()
+    // 'nudged' 가 맞는 상태다 — 계정 전환이 아니라 리셋 재개이고, 렌더러는 순간 이벤트로 다루며
+    // Slack 매핑(slack.limitReset)이 이미 있다. claude 쪽 resumeInPlace 와 같은 선택이다.
+    this.pushState(chain, 'nudged')
+    const liveId = chain.liveId
+    this.deps.log(`codex limit reset → resume in place session=${liveId}`)
+    const prompt = await this.resumePromptFor(chain, liveId, 'update')
+    if (chain.disposed || chain.liveId !== liveId) return // await 를 건너뛴 상태 가드
+    this.deps.write(liveId, prompt)
+    setTimeout(() => {
+      if (chain.disposed || chain.liveId !== liveId) return
+      this.deps.write(liveId, '\r')
+      // 'none' 은 Enter 뒤에 게시해야 스케줄러의 억제가 풀린다(claude 쪽과 같은 순서)
+      this.pushState(chain, 'none')
+    }, ENTER_DELAY_MS)
+    // roll() 에서는 sendPrompt 가 잡아 주는 타이머. 없으면 recovery[current] 가 남아 다음 한도가
+    // 한 바퀴 막힌 것으로 오독된다.
+    chain.healthyTimer = setTimeout(() => {
+      chain.healthyTimer = null
+      chain.cycle.onHealthy()
+      chain.recovery[chain.cycle.currentIndex] = null
+    }, HEALTHY_MS)
   }
 
   /** Runs the roll: copy the rollout → kill → respawn in the same slot with codex resume */
@@ -459,20 +548,7 @@ export class CodexRollingCoordinator {
       // 않는다 — 그 구간에 await 를 두지 않는다는 것이 아래 kill/spawn 의 불변이다(exit 가 옛 id 로
       // 도착해도 disposeChain 이 오작동하지 않는 이유). 그래서 kill 앞에서, 세션이 아직 살아 있을
       // 때 물어 둔다.
-      // **이 자리에 try/catch 가 필요한 이유는 이 roll() 의 catch 가 있는 자리다.** 이 호출은
-      // roll() 바깥 try 안에 있고, 그 catch 는 kill·respawn **앞에서** 돌아 'none' 을 게시하고
-      // 끝난다 — 즉 깨진 packet 계약이 인계를 얇게 만드는 것이 아니라 **롤 자체를 중단시켜 워커를
-      // 한도에 멈춘 채로 남긴다.** resumeText 는 던지지 않는다는 계약이지만(resumePacket.ts) 그
-      // 계약이 깨질 때 잃는 것이 이만큼 크므로, rolling.ts 가 자기 네 자리에 두른 것과 같은 모양을
-      // 여기에도 둔다: 로그를 남기고 기존 고정 문장으로 저하한다.
-      let prompt = chain.prompt
-      try {
-        prompt = (await this.deps.resumeText?.(chain.liveId, 'handover')) ?? chain.prompt
-      } catch (err) {
-        this.deps.log(
-          `resume packet hook failed session=${chain.liveId}: ${err instanceof Error ? err.message : String(err)}`
-        )
-      }
+      const prompt = await this.resumePromptFor(chain, chain.liveId, 'handover')
       if (chain.disposed) {
         this.deps.log(
           `codex roll aborted — chain disposed while building the resume prompt session=${chain.liveId}`

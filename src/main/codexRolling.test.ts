@@ -381,25 +381,91 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
-  // 워커의 구성이 바로 이것이다 — 한 원소 체인. orchEnv 단언이 여기 붙어 있는 이유: 위의 orchEnv
-  // 테스트 둘은 계정을 갈아타는 여러 원소 체인을 지나가고, 워커가 실제로 타는 경로는 이쪽이다.
-  it('단일 계정은 전환 없이 reset 시각까지 대기 후 같은 계정으로 재개한다', async () => {
-    const env = { cliPath: 'C:/astera/cli.js', infoPath: 'C:/astera/info.json', skillsPath: 'C:/astera/skills' }
-    const h = harness({ orchEnv: () => env })
+  it('단일 계정은 reset 뒤 세션을 죽이지 않고 PTY 로 이어간다 (제자리 재개)', async () => {
+    const h = harness()
     const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
     const resetSec = Math.floor((Date.now() + 300_000) / 1000) // 5분 뒤
     await writeRollout({
-      accountId: 'c1', uuid: 'cx-4', cwd: single.cwd, primary: 99, primaryReset: resetSec
+      accountId: 'c1', uuid: 'cx-inplace-1', cwd: single.cwd, primary: 99, primaryReset: resetSec
     })
     h.coord.register(single)
     await advance(1_500)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.sent.at(-1)?.payload.state).toBe('waiting')
-    expect(h.events).toEqual([]) // 아직 롤 안 함
     await advance(400_000) // reset + 여유 경과
-    expect(h.events).toContain('spawn:s2:c1') // 같은 계정으로 재개
-    expect(h.spawned[0].orchEnv).toEqual(env) // 그 세션에서 astera 로 보고할 수 있어야 한다
+    // 죽이지도 띄우지도 않는다 — 복사도 없다(복사는 다른 계정으로 옮길 때만 필요하다)
+    expect(h.events).toEqual([])
+    // 살아 있는 세션에 문장과 엔터가 들어간다
+    expect(h.written).toEqual([['s1', '이어서 작업 진행해 줘'], ['s1', '\r']])
+    // 계정 전환이 아니라 순간 이벤트다 — 렌더러 배너는 이것을 남기지 않는다
+    expect(h.sent.map((s) => s.payload.state)).toContain('nudged')
+    expect(h.sent.at(-1)?.payload.state).toBe('none')
+    h.coord.stop()
+  })
+
+  it('제자리 재개는 update 형태로 물어 기존 문장에 덧붙인다 (SPEC §11.5)', async () => {
+    const forms: string[] = []
+    const h = harness({
+      resumeText: (_sessionId, form) => {
+        forms.push(form)
+        return Promise.resolve('git: 3 files changed on branch feature/x')
+      }
+    })
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 300_000) / 1000)
+    await writeRollout({
+      accountId: 'c1', uuid: 'cx-inplace-2', cwd: single.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register(single)
+    await advance(1_500)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    await advance(400_000)
+    expect(forms).toEqual(['update']) // 세션이 살아 있으므로 인계가 아니다
+    expect(h.written[0]).toEqual([
+      's1',
+      '이어서 작업 진행해 줘 git: 3 files changed on branch feature/x'
+    ])
+    h.coord.stop()
+  })
+
+  it('제자리 재개 뒤 두 번째 한도도 감지한다 (tail 을 파일 끝으로 다시 붙인다)', async () => {
+    const h = harness()
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 300_000) / 1000)
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-inplace-3', cwd: single.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register(single)
+    await advance(1_500)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    await advance(400_000)
+    const waitingBefore = h.sent.filter((s) => s.payload.state === 'waiting').length
+    // 재개 직후에는 다시 대기하지 않는다 — 대기를 만든 그 레코드를 다시 읽으면 여기서 무너진다
+    await advance(60_000)
+    expect(h.sent.filter((s) => s.payload.state === 'waiting').length).toBe(waitingBefore)
+    // 이어서 진짜 두 번째 한도가 오면 감지한다
+    await appendTokenCount(file, { primary: 99, primaryReset: resetSec })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.sent.filter((s) => s.payload.state === 'waiting').length).toBe(waitingBefore + 1)
+    h.coord.stop()
+  })
+
+  it('계정이 바뀌는 재개는 여전히 복사→kill→spawn 이다 (회귀 방지)', async () => {
+    const h = harness()
+    const resetSec = Math.floor((Date.now() + 120_000) / 1000)
+    await writeRollout({
+      accountId: 'c1', uuid: 'cx-inplace-4', cwd: h.info1.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register(h.info1)
+    await advance(1_500)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2']) // 첫 한도는 즉시 전환
+    expect(h.written).toEqual([]) // PTY 로 아무것도 쓰지 않는다
     h.coord.stop()
   })
 
