@@ -234,7 +234,7 @@ describe('rollChainFor', () => {
     ).toEqual({ chain: ['a'] })
   })
 
-  it('provider 가 다른 계정은 체인에서 빠진다 — 검토 경로가 지금과 같이 도는 이유다', () => {
+  it('provider 가 다른 계정은 체인에서 빠진다 — 검토 Dispatch 가 그 모양이다', () => {
     expect(
       rollChainFor({
         requested: 'c',

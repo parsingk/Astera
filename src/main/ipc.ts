@@ -682,7 +682,10 @@ export function registerIpc(
           bypassPermissions: o.bypassPermissions,
           initialPrompt: o.initialPrompt,
           title: o.title, // the worker tab title is task.title
-          rollAccountIds: o.rollAccountIds, // 한 원소 체인 — 이 세션을 롤링에 등록시킨다
+          // 이 워커의 롤링 체인 — 첫 원소가 이 Dispatch 의 계정이고 나머지는 갈아탈 순서다
+          // (Task.accountIds 에서 온다; 아래 startWorker 래퍼가 rollChainFor 로 만든다). 지정이 없는
+          // Task 에서는 그대로 한 원소다. **넘기는 것 자체가 이 세션을 롤링에 등록시킨다.**
+          rollAccountIds: o.rollAccountIds,
           rollPrompt: o.rollPrompt // 워커용 재개 문구 — 없으면 롤링이 UI 언어 기본값을 쓴다
         } satisfies typeof o)
         try {
@@ -1801,12 +1804,23 @@ export function registerIpc(
         // 남는 것은 순수 함수가 가질 수 없는 것뿐이다: Task 를 읽고, 로그인 여부를 조회하고,
         // 그 조회의 예외를 삼키고, 저하한 이유를 로그에 남긴다.
         let rollAccountIds = [a.accountId]
-        const task = store.get().tasks.find((t) => t.id === a.taskId)
-        // **지정이 없으면 로그인 조회를 하지 않는다.** 그때 답은 요청된 계정 하나로 확정이고
-        // (rollChainFor), 그 조회는 계정마다 파일 읽기 — macOS 의 claude 계정은 `security` 프로세스 —
-        // 를 붙인다. 워커를 띄우는 모든 자리가 이 래퍼를 지나므로 그 값을 지정 없는 Task 와 검토
-        // Dispatch 에까지 물릴 이유가 없다(자동 배치 루프가 바퀴마다 한 번만 조회하는 것과 같은 이유).
-        if (task?.accountIds?.length) {
+        const stateHere = store.get()
+        const task = stateHere.tasks.find((t) => t.id === a.taskId)
+        // Task 의 provider — Run 이 정한다(Run.provider). 없는 Run 도 있다: 코디네이터가 만든 Run 은
+        // provider 를 안 들고, 자동 배치는 그런 Run 을 아예 건너뛴다(schedule.ts).
+        const taskProvider = stateHere.runs.find((r) => r.id === task?.runId)?.provider
+        // **두 경우에 로그인 조회를 하지 않는다.**
+        // (1) 지정이 없을 때 — 답은 요청된 계정 하나로 확정이고(rollChainFor), 그 조회는 계정마다 파일
+        //     읽기(macOS 의 claude 계정은 `security` 프로세스)를 붙인다. 워커를 띄우는 모든 자리가 이
+        //     래퍼를 지나므로 그 값을 헛되이 물릴 이유가 없다(자동 배치 루프가 바퀴마다 한 번만
+        //     조회하는 것과 같은 이유).
+        // (2) **띄우는 provider 가 이 Task 의 provider 와 다를 때** — 검토 Dispatch 가 그 자리다.
+        //     검토자는 구현자와 다른 provider 이므로 Task 의 계정은 rollChainFor 안에서 전부 걸러지고,
+        //     남는 것은 조회 비용과 "쓸 수 있는 계정이 하나도 없다"는 어긋난 로그뿐이다 — 사실은 그
+        //     계정들이 다른 provider 의 것일 뿐이고 사람이 할 일은 없다. 검토 경로는 이 앞에서 이미
+        //     같은 조회를 한 번 했다(startReview). Run 이 provider 를 안 들고 있으면 어긋났다고 말할
+        //     수 없으므로 건너뛰지 않는다.
+        if (task?.accountIds?.length && (taskProvider === undefined || taskProvider === a.provider)) {
           try {
             const accountList = core.accounts.list()
             const loggedInHere = new Set(

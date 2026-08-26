@@ -124,8 +124,10 @@ export function rollChainFor(a: {
   requested: string
   /** Task.accountIds. 없거나 비면 체인은 요청된 계정 하나다 */
   taskAccountIds?: readonly string[]
-  /** 이 워커를 띄우는 provider. 검토자는 구현자와 다른 provider 이므로, 이것 때문에 Task 의
-   *  계정들이 전부 걸러지고 요청된 계정만 남는다 — 검토 경로가 지금과 같이 도는 이유다. */
+  /** 이 워커를 띄우는 provider. 이것과 어긋나는 Task 계정은 전부 걸러지고 요청된 계정만 남는다 —
+   *  검토자는 구현자와 다른 provider 이므로 검토 Dispatch 가 그 모양이다. 배선은 그 경우 이 함수를
+   *  아예 부르지 않으려 하지만(ipc.ts 의 startWorker 래퍼: 띄우는 provider 가 Task 의 것과 다르면
+   *  건너뛴다) provider 를 안 들고 있는 Run 에서는 가릴 수 없어 여기까지 온다. */
   provider: Provider
   accounts: readonly Account[]
   loggedInIds: ReadonlySet<string>
