@@ -551,18 +551,20 @@ export class CodexRollingCoordinator {
       this.pushState(chain, 'nudged')
       const liveId = chain.liveId
       this.deps.log(`codex limit reset → resume in place session=${liveId}`)
+      // The baseline the deadline compares against, read **before** anything is submitted. An earlier
+      // version only *started* this read here and let settleInPlace await it, to keep a file-system
+      // round trip out of the way of the 150ms Enter. That is not safe: if the stat resolved after
+      // codex had already appended the record for the line we submitted, the baseline would contain
+      // that record, the deadline would see no growth against it — and a swallowed line would look
+      // like a session that is working, which is exactly the eternal stall settleInPlace exists to
+      // end. One late append is enough. So it is awaited, and it is read before the prompt build so
+      // that the single across-await guard below covers both awaits. Delaying the submission costs
+      // nothing here: the line above already awaits resumePromptFor, which reads git.
+      const sizeBefore = chain.rolloutPath
+        ? await this.rolloutSize(chain.rolloutPath).catch(() => null)
+        : null
       const prompt = await this.resumePromptFor(chain, liveId, 'update')
       if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
-      // Started **before** the write, so the record codex appends for the message we are about to
-      // submit counts as growth, and deliberately **not awaited** here: the Enter that follows is on a
-      // 150ms timer, and putting a file-system round trip in front of it would push the submission out
-      // by an unbounded I/O. settleInPlace awaits it at the deadline instead. Same shape as JsonlTail's
-      // startAtEnd offset — start the stat now, read the answer later — including the `.catch` that
-      // turns a failure into "no measurement" right where the promise is created (an unawaited
-      // rejection would otherwise be reported as unhandled long before the deadline reads it).
-      const sizeBefore = chain.rolloutPath
-        ? this.rolloutSize(chain.rolloutPath).catch(() => null)
-        : Promise.resolve(null)
       const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same convention as the claude side
       this.deps.write(liveId, prompt)
       setTimeout(() => {
@@ -602,16 +604,16 @@ export class CodexRollingCoordinator {
    *
    *  **A size we cannot read counts as no growth.** A spurious respawn is recoverable — `codex resume`
    *  reconstructs the conversation — while an eternal stall is not. rolloutSize swallows its own errors
-   *  for that reason, and the `.catch(() => null)` on both reads covers an injected implementation that
-   *  does not — nothing here may throw out of the timer callback. */
+   *  for that reason, and the `.catch(() => null)` on both reads (the baseline resumeInPlace awaits and
+   *  the one here) covers an injected implementation that does not — nothing here may throw out of the
+   *  timer callback. */
   private async settleInPlace(
     chain: Chain,
     liveId: string,
-    before: Promise<number | null>
+    sizeBefore: number | null
   ): Promise<void> {
     chain.healthyTimer = null
     if (chain.disposed || chain.liveId !== liveId) return
-    const sizeBefore = await before
     const sizeAfter = chain.rolloutPath
       ? await this.rolloutSize(chain.rolloutPath).catch(() => null)
       : null

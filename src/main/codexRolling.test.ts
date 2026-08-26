@@ -262,6 +262,18 @@ const advance = async (ms: number): Promise<void> => {
   await settleIo()
 }
 
+/** 대기 만료가 **제자리 재개**로 이어지는 자리에서 advance 대신 쓴다.
+ *
+ *  `resumeInPlace` 는 rollout 기준 크기를 await 한 뒤에야 ENTER_DELAY_MS 엔터 타이머를 건다. 그 순서가
+ *  안전의 핵심이다 — 기준선이 제출 기록보다 늦게 읽히면 삼켜진 입력이 살아 있는 것처럼 보인다. 대신 그
+ *  await 는 advance 의 마지막 `advanceTimersByTimeAsync(0)` 뒤에 풀릴 수 있어, 엔터 타이머가 그 라운드
+ *  밖에 걸린다. 한 라운드를 더 줘야 엔터까지 관찰된다 — 없으면 `written` 이 문장 하나로 끝나고, 그것도
+ *  부하에 따라 들쭉날쭉해진다(같은 커밋에서 6건과 5건이 번갈아 실패했다). */
+const advanceIntoResume = async (ms: number): Promise<void> => {
+  await advance(ms)
+  await advance(200) // 150ms 엔터 타이머 + 여유
+}
+
 beforeEach(async () => {
   tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-cxroll-'))
   vi.useFakeTimers()
@@ -414,7 +426,7 @@ describe('CodexRollingCoordinator', () => {
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.sent.at(-1)?.payload.state).toBe('waiting')
-    await advance(400_000) // reset + 여유 경과
+    await advanceIntoResume(400_000) // reset + 여유 경과
     // 죽이지도 띄우지도 않는다 — 복사도 없다(복사는 다른 계정으로 옮길 때만 필요하다)
     expect(h.events).toEqual([])
     // 살아 있는 세션에 문장과 엔터가 들어간다
@@ -442,7 +454,7 @@ describe('CodexRollingCoordinator', () => {
     await advance(1_500)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
-    await advance(400_000)
+    await advanceIntoResume(400_000)
     expect(forms).toEqual(['update']) // 세션이 살아 있으므로 인계가 아니다
     expect(h.written[0]).toEqual([
       's1',
@@ -471,7 +483,7 @@ describe('CodexRollingCoordinator', () => {
     await advance(15_000) // 틱 → 구조 에러로 판정 → 대기
     expect(h.sent.at(-1)?.payload.state).toBe('waiting')
     const waitingBefore = h.sent.filter((s) => s.payload.state === 'waiting').length
-    await advance(180_000) // 대기 만료(reset+60초) → 제자리 재개, 그리고 그 뒤의 틱들
+    await advanceIntoResume(180_000) // 대기 만료(reset+60초) → 제자리 재개, 그리고 그 뒤의 틱들
     expect(h.written.length).toBe(2) // 살아 있는 세션에 문장+엔터가 들어갔다
     // 재개 직후의 틱이 대기를 만든 그 레코드를 다시 읽으면 여기서 무너진다
     expect(h.sent.filter((s) => s.payload.state === 'waiting').length).toBe(waitingBefore)
@@ -538,7 +550,7 @@ describe('CodexRollingCoordinator', () => {
     // planRetry는 실측 reset에 RETRY_MARGIN_MS(60초)를 더하므로 첫 대기는 120초가 아니라 실제로는
     // ~180초(120+60) 뒤에 만료된다 — 그 지점을 지나 healthy 구간(60초) 안쪽 ~10초까지 진행한다.
     // 첫 대기 만료 → 제자리 재개
-    await advance(188_400)
+    await advanceIntoResume(188_400)
     expect(h.events).toEqual([]) // 첫 번째는 죽이지 않는다
     expect(h.written.length).toBe(2)
     // healthy 구간 안에서 다시 한도 — 즉 제자리 재개가 회복시키지 못했다. onLimit은 healthyTimer를
@@ -567,7 +579,7 @@ describe('CodexRollingCoordinator', () => {
     await advance(1_500)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
-    await advance(188_400) // 첫 대기 만료(reset+60초) → 제자리 재개, 마감 시각까지 ~50초 남았다
+    await advanceIntoResume(188_400) // 첫 대기 만료(reset+60초) → 제자리 재개, 마감 시각까지 ~50초 남았다
     expect(h.written.length).toBe(2) // 문장+엔터는 들어갔다
     expect(h.events).toEqual([]) // 아직 아무것도 죽이지 않았다
     // rollout 은 자라지 않는다 — 세션이 그 한 줄을 받아들이지 않았다는 뜻이다
@@ -587,7 +599,7 @@ describe('CodexRollingCoordinator', () => {
     await advance(1_500)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
-    await advance(188_400) // 첫 대기 만료 → 제자리 재개
+    await advanceIntoResume(188_400) // 첫 대기 만료 → 제자리 재개
     expect(h.written.length).toBe(2)
     // 재개된 세션이 실제로 턴을 돌렸다 — codex 는 받아들인 메시지의 레코드를 즉시 append 한다
     await appendTokenCount(file, { primary: 50 })
@@ -597,7 +609,7 @@ describe('CodexRollingCoordinator', () => {
     await appendTokenCount(file, { primary: 99, primaryReset: Math.floor((Date.now() + 120_000) / 1000) })
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
-    await advance(188_400) // 두 번째 대기 만료
+    await advanceIntoResume(188_400) // 두 번째 대기 만료
     expect(h.events).toEqual([]) // 여전히 프로세스를 죽이지 않는다
     expect(h.written.length).toBe(4) // 두 번째 제자리 재개
     h.coord.stop()
@@ -616,7 +628,7 @@ describe('CodexRollingCoordinator', () => {
     await advance(1_500)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
-    await advance(188_400) // 첫 대기 만료 → 제자리 재개(플래그가 선다)
+    await advanceIntoResume(188_400) // 첫 대기 만료 → 제자리 재개(플래그가 선다)
     // healthy 구간 안의 두 번째 한도 → 위 테스트가 지키는 성질에 따라 이번에는 kill 경로다
     await appendTokenCount(file, { primary: 99, primaryReset: resetSec })
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
@@ -628,7 +640,7 @@ describe('CodexRollingCoordinator', () => {
     await appendTokenCount(file, { primary: 99, primaryReset: Math.floor((Date.now() + 120_000) / 1000) })
     h.coord.handleData({ sessionId: 's2', data: LIMIT_TEXT })
     await advance(100)
-    await advance(188_400) // 세 번째 대기 만료
+    await advanceIntoResume(188_400) // 세 번째 대기 만료
     expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c1']) // 두 번째 롤은 없다
     expect(h.written.length).toBe(4) // 첫 제자리 재개 2 + 이번 제자리 재개 2
     h.coord.stop()
