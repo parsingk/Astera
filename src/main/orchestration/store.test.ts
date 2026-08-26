@@ -96,6 +96,19 @@ describe('OrchestrationStore', () => {
     expect(store.get().dispatches[0].endedAt).toBeTruthy()
   })
 
+  it('옛 accountId 하나짜리 Task 를 accountIds 로 옮긴다 (이 칸이 생기기 전에 만든 Job)', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    // 손으로 만든 옛 모양 — accountId 는 이제 스키마에 없다
+    ;(s.tasks[0] as unknown as Record<string, unknown>).accountId = 'acc-1'
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    expect(store.get().tasks[0].accountIds).toEqual(['acc-1'])
+    // 옛 칸은 남기지 않는다 — 두 칸이 어긋나면 어느 쪽이 정본인지 코드마다 달라진다
+    expect((store.get().tasks[0] as unknown as Record<string, unknown>).accountId).toBeUndefined()
+  })
+
   it('재시작 정리가 Task를 failed로 옮기지 않는다', async () => {
     const file = path.join(dir, 'orchestration.json')
     await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')

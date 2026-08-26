@@ -344,7 +344,10 @@ export function RunDetail({
   /** 계정을 고른다 — 스케줄러(src/main/ipc.ts 의 runScheduler)와 같은 방법이다: 계정 목록과
    *  로그인 여부를 병렬로 확인한 뒤 defaultAccountIdOf(그 규칙을 정하는 단 하나의 함수)에게
    *  넘긴다. 로그인 조회를 계정마다 차례로 기다리면 계정 수만큼 느려지므로 Promise.all 로 편다. */
-  const accountFor = async (provider: Provider, assigned?: string): Promise<string | null> => {
+  const accountFor = async (
+    provider: Provider,
+    assigned?: readonly string[]
+  ): Promise<string | null> => {
     const list = await window.api.accounts.list()
     const loggedIn = new Set(
       (
@@ -463,7 +466,9 @@ export function RunDetail({
       // 스냅샷이 바뀌는 좁은 창에 대한 방어일 뿐이다(canManualStart 의 주석).
       // **이 Task 에 지정된 계정을 지킨다.** 스케줄러와 같은 판정을 쓴다(accountToDispatchOn) —
       // 두 경로가 다른 계정을 고르면 같은 Task 가 누가 띄웠는지에 따라 다른 계정에서 돌게 된다.
-      const assigned = tasks.find((tk) => tk.id === taskId)?.accountId
+      // 지정이 목록이면 그 첫 계정으로 띄운다(판정이 그렇게 답한다) — 갈아탈 순서는 이 명령이
+      // 정하지 않는다: worker-start 를 받은 배선이 Task.accountIds 로 체인을 만든다(ipc.ts).
+      const assigned = tasks.find((tk) => tk.id === taskId)?.accountIds
       const accountId = provider
         ? await accountFor(provider, assigned ?? undefined)
         : null
@@ -848,14 +853,17 @@ export function RunDetail({
                         늘 적으면 이 줄이 그 낱말로 채워지고, 정작 지정된 Task 가 눈에 안 띈다.
                         그래서 이 칩이 있다는 것 자체가 "이 Task 는 계정이 못박혀 있다"는 뜻이다.
                         이름을 못 찾으면 id 를 적는다 — 지워진 계정을 가리키는 지정이고, 그것을
-                        감추면 왜 이 Task 가 Gate 로 가는지 화면에 남지 않는다. */}
-                    {selectedTask.accountId !== undefined && (
+                        감추면 왜 이 Task 가 Gate 로 가는지 화면에 남지 않는다.
+                        여럿이면 적은 순서대로 ' → ' 로 잇는다 — 그것이 한도에 걸렸을 때 갈아탈
+                        순서이고, 세션 탭의 롤링 툴팁이 같은 모양으로 그 순서를 적는다. */}
+                    {selectedTask.accountIds !== undefined && (
                       <span
                         className="detail-chip"
                         title={t('jobs.task.accountHint')}
                       >
-                        {accounts?.find((a) => a.id === selectedTask.accountId)?.label ??
-                          selectedTask.accountId}
+                        {selectedTask.accountIds
+                          .map((id) => accounts?.find((a) => a.id === id)?.label ?? id)
+                          .join(' → ')}
                       </span>
                     )}
                     <button

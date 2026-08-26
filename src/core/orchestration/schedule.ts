@@ -8,11 +8,11 @@ export interface Slot {
   runId: string
   taskId: string
   provider: Provider
-  /** 사람이 이 Task 에 지정해 둔 계정(Task.accountId). **여기서 판정하지 않고 그대로 실어 보낸다** —
-   *  쓸 수 있는지는 계정 목록과 로그인 여부를 봐야 알고, 그 둘은 앱이 아는 것이다(위 주석).
-   *  배선이 accountToDispatchOn 에 넘긴다. 없으면 이 칸 자체가 없다: undefined 를 실으면 Slot 을
-   *  값으로 비교하는 자리에서 "지정 없음"과 갈라진다. */
-  accountId?: string
+  /** 사람이 이 Task 에 지정해 둔 계정들, 순서대로(Task.accountIds). **여기서 판정하지 않고 그대로
+   *  실어 보낸다** — 쓸 수 있는지는 계정 목록과 로그인 여부를 봐야 알고, 그 둘은 앱이 아는
+   *  것이다(위 주석). 배선이 accountToDispatchOn 에 넘긴다. 없으면 이 칸 자체가 없다: undefined 를
+   *  실으면 Slot 을 값으로 비교하는 자리에서 "지정 없음"과 갈라진다. */
+  accountIds?: string[]
 }
 
 /** 지금 띄워야 할 것들. **부수 효과가 없고 같은 입력에 같은 답을 준다** — 이 판정이 순수해야
@@ -66,7 +66,7 @@ export function slotsToFill(s: OrchState): Slot[] {
         runId: run.id,
         taskId: t.id,
         provider,
-        ...(t.accountId !== undefined ? { accountId: t.accountId } : {})
+        ...(t.accountIds !== undefined ? { accountIds: t.accountIds } : {})
       })
     }
   }

@@ -614,7 +614,7 @@ export async function handleCommand(
             spec,
             deps: Array.isArray(args.deps) ? (args.deps as string[]) : [],
             parentId: str(args.parent) ?? undefined,
-            accountId: account ?? undefined,
+            accountIds: account !== null ? [account] : undefined,
             validateConfigId: str(args.validate) ?? undefined,
             // `--review` 는 값이 없는 플래그다(task-list --ready 와 같은 모양). 어느 provider 가
             // 읽을지는 앱이 고른다 — 계정 풀을 아는 것은 앱이다.

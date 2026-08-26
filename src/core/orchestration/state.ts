@@ -144,7 +144,7 @@ export function spawnScheduledRun(s: OrchState, templateId: string, now: string)
     ...(t.parentId !== undefined && idMap.has(t.parentId)
       ? { parentId: idMap.get(t.parentId)! }
       : {}),
-    ...(t.accountId !== undefined ? { accountId: t.accountId } : {}),
+    ...(t.accountIds !== undefined ? { accountIds: [...t.accountIds] } : {}),
     ...(t.validateConfigId !== undefined ? { validateConfigId: t.validateConfigId } : {}),
     ...(t.reviewRequested ? { reviewRequested: true } : {}),
     status: 'pending',
@@ -287,10 +287,10 @@ export function createTask(
     spec: string
     deps: string[]
     parentId?: string
-    /** 이 Task 를 띄울 계정. **여기서 확인하지 않는다** — 계정 목록은 core 가 아니라 앱이 아는
-     *  것이고(schedule.ts 머리말과 같은 이유), 부르는 쪽(server.ts 의 task-create)이 그 Run 의
-     *  provider 계정인지 보고 거절한다. validateConfigId 도 같은 관례다. */
-    accountId?: string
+    /** 이 Task 를 띄울 계정들, 순서대로. **여기서 확인하지 않는다** — 계정 목록은 core 가 아니라
+     *  앱이 아는 것이고(schedule.ts 머리말과 같은 이유), 부르는 쪽(server.ts 의 task-create)이 그
+     *  Run 의 provider 계정인지 보고 거절한다. validateConfigId 도 같은 관례다. */
+    accountIds?: string[]
     validateConfigId?: string
     reviewRequested?: boolean
   },
@@ -309,7 +309,9 @@ export function createTask(
     spec: a.spec,
     deps: a.deps,
     parentId: a.parentId,
-    ...(a.accountId ? { accountId: a.accountId } : {}),
+    // 빈 배열은 **지정 없음**이다 — 그것도 실으면 Task 를 값으로 비교하는 자리에서 지정이 없는
+    // Task 와 갈라진다(조건부 전개를 쓰는 이유 그대로).
+    ...(a.accountIds?.length ? { accountIds: a.accountIds } : {}),
     ...(a.validateConfigId ? { validateConfigId: a.validateConfigId } : {}),
     ...(a.reviewRequested ? { reviewRequested: a.reviewRequested } : {}),
     status: 'pending',

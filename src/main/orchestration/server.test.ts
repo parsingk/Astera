@@ -1225,7 +1225,9 @@ describe('handleCommand — worker-start × OrchCoordinator 통합 배선', () =
       setState: async (next) => {
         box.state = next
       },
-      startWorker: (a) => coordinator.startWorker(a),
+      // 실제 배선은 여기서 Task.accountIds 를 읽어 롤링 체인을 만든다(ipc.ts의 deps.startWorker) —
+      // 이 테스트 배선은 그 계정 하나짜리 체인으로 충분하다(서버는 체인을 보지 않는다).
+      startWorker: (a) => coordinator.startWorker({ ...a, rollAccountIds: [a.accountId] }),
       releaseWorker: async () => {},
       listAccounts: () => [{ id: 'acc1', label: '계정1', provider: 'codex' }],
       readWorker: async () => 'output',

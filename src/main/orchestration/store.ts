@@ -74,6 +74,17 @@ export class OrchestrationStore {
     // from files such as accounts.json, where a bad shape risks corrupting an account.
     const st = parsed as OrchState
 
+    // **이 칸이 목록이 되기 전에 만든 Task 를 옮긴다.** 이 파일은 프로세스보다 오래 살고, Run 은
+    // 30일(RUN_TTL_MS)까지 남는다 — 옮기지 않으면 앱을 올리는 순간 그 Task 들의 계정 지정이 조용히
+    // 사라지고, 사람이 아끼려던 계정에 일이 간다(dispatchAccount.ts 가 막으려는 바로 그것이다).
+    // 옛 칸은 지운다: 두 칸을 함께 두면 어느 쪽이 정본인지 코드마다 달라진다.
+    for (const t of st.tasks as unknown as Record<string, unknown>[]) {
+      const legacy = t.accountId
+      if (t.accountIds === undefined && typeof legacy === 'string' && legacy !== '')
+        t.accountIds = [legacy]
+      delete t.accountId
+    }
+
     const now = new Date().toISOString()
     // Restart cleanup: for an open Dispatch, the session died along with the app. The outcome
     // cannot be proven, so leave it as outcome_unknown and do not touch the Task (section 7 of the

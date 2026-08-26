@@ -99,14 +99,18 @@ export interface Task {
   status: TaskStatus
   result?: string
   filesModified?: string[]
-  /** 이 Task 의 워커를 띄울 계정. **없으면 그 provider 의 기본 계정으로 간다** — 명령으로 만든
-   *  Task 와 이 칸이 생기기 전의 Task 가 모두 그 갈래다.
+  /** 이 Task 의 워커를 띄울 계정들, **순서대로**. **없거나 비면 그 provider 의 기본 계정으로 간다** —
+   *  명령으로 만든 Task 와 이 칸이 생기기 전의 Task 가 모두 그 갈래다.
    *
-   *  provider 는 Run 이 정하므로(Run.provider) 이 계정은 그것과 같은 provider 여야 한다.
+   *  첫 계정으로 띄우고, 나머지는 **한도에 걸렸을 때 갈아탈 순서**다 — 배선이 이 목록을 그대로
+   *  세션의 롤링 체인(rollAccountIds)으로 넘긴다. 계정이 하나면 갈아탈 곳이 없어 리셋까지 기다린다
+   *  (RollCycle.onLimit 은 계정 수가 1이면 언제나 대기를 낸다).
+   *
+   *  provider 는 Run 이 정하므로(Run.provider) 이 계정들은 그것과 같은 provider 여야 한다.
    *  task-create 가 그 조합을 거절하지만, 못 쓰는 지정이 실제로 도달했을 때 무엇을 하는지는
-   *  accountToDispatchOn(core/accounts/dispatchAccount.ts)이 정한다 — 조용히 기본 계정으로
-   *  갈아타지 않고 Gate 를 연다. */
-  accountId?: string
+   *  accountToDispatchOn(core/accounts/dispatchAccount.ts)이 정한다 — 쓸 수 있는 것만 남기고,
+   *  하나도 남지 않으면 조용히 기본 계정으로 갈아타지 않고 Gate 를 연다. */
+  accountIds?: string[]
   /** 이 Task 를 완료로 판정할 실행 구성의 id. 없으면 worker_done 을 그대로 믿는다 —
    *  "문서를 고친다" 같은 Task 에 빌드를 거는 것은 틀린 판정이므로 검증 없음이 기본이다. */
   validateConfigId?: string

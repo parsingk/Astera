@@ -301,19 +301,19 @@ describe('snapshotFor', () => {
 
   // 상세 창의 `띄우기` 가 스케줄러와 같은 계정을 고르려면 이 값이 투영에 실려야 한다 — 안 실리면
   // 그 버튼이 기본 계정으로 띄워, 같은 Task 가 누가 띄웠는지에 따라 다른 계정에서 돈다
-  it('Task 에 지정된 계정을 싣는다', () => {
+  it('Task 에 지정된 계정을 순서대로 싣는다', () => {
     const t0 = task('t1', 'r1', 'ready')
     const s: OrchState = {
-      ...withRuns([run('r1', absPath('p'))], [{ ...t0, accountId: 'acc_2' }])
+      ...withRuns([run('r1', absPath('p'))], [{ ...t0, accountIds: ['acc_2', 'acc_1'] }])
     }
     const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
-    expect(t.accountId).toBe('acc_2')
+    expect(t.accountIds).toEqual(['acc_2', 'acc_1'])
   })
 
   it('지정이 없으면 그 칸이 없다', () => {
     const s = withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'ready')])
     const t = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
-    expect('accountId' in t).toBe(false)
+    expect('accountIds' in t).toBe(false)
   })
 
   it('gateQuestion 은 열린 Gate 중 가장 이른 것이고 openGates 는 그 개수다', () => {

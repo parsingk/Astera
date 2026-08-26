@@ -271,10 +271,10 @@ export interface JobTask {
    *  unclickable: the Task was never dispatched, or its Dispatch is from a previous app run, or the
    *  worker is mid-launch and its real session id does not exist yet. */
   sessionId?: string
-  /** 사람이 이 Task 에 지정해 둔 계정(Task.accountId). 상세 창의 `띄우기` 가 스케줄러와 **같은
-   *  계정**을 고르려면 이 값이 필요하다 — 없으면 그 버튼이 기본 계정으로 띄워, 같은 Task 가 누가
-   *  띄웠는지에 따라 다른 계정에서 돌게 된다. */
-  accountId?: string
+  /** 사람이 이 Task 에 지정해 둔 계정들, 순서대로(Task.accountIds). 상세 창의 `띄우기` 가
+   *  스케줄러와 **같은 계정**을 고르려면 이 값이 필요하다 — 없으면 그 버튼이 기본 계정으로 띄워,
+   *  같은 Task 가 누가 띄웠는지에 따라 다른 계정에서 돌게 된다. */
+  accountIds?: string[]
   /** 가장 이른 열린 Gate. 없으면 이 칸이 없다.
    *
    *  **셋을 한 묶음으로 싣는다.** 한때 질문만 따로 실었는데, 화면에서 답하려면 `gate-resolve` 가

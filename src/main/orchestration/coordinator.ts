@@ -31,17 +31,18 @@ export interface CoordinatorDeps {
      *  a title (it is a required argument of startWorker), and if it were optional the wiring could
      *  omit it and still compile. */
     title: string
-    /** 이 워커 세션의 롤링 체인. **한 원소** 다 — 그 Dispatch 가 실제로 쓰는 계정 하나.
+    /** 이 워커 세션의 롤링 체인 — **첫 원소가 그 Dispatch 가 실제로 쓰는 계정**이고, 나머지는
+     *  한도에 걸렸을 때 갈아탈 순서다(원천은 Task.accountIds).
      *  이 필드는 프로바이더에 무관하고, 이제 둘의 동작도 같은 모양이다. 양쪽 다 한 원소 체인에서는
      *  계정을 갈아타지 않고 리셋까지 기다린 뒤 같은 세션에서 재개한다(rolling.ts·codexRolling.ts 의
      *  resumeInPlace). 각각 세션을 죽이는 경로로 되돌아가는 예외가 있다 — claude 는 한도 선택지
      *  목록이 아직 화면에 남아 있을 때(choicePending), codex 는 응답 못한 모델 전환 목록이 남아
      *  있을 때와 직전 제자리 재개가 턴을 만들지 못했을 때다. 계정이 바뀌는 재개는 양쪽 다 세션을
      *  죽이고 새 세션 id 로 재기동한다. 어느 쪽이든 이 값을 넘기는 것 자체가, 한도에 걸린
-     *  워커를 사람이 다시 띄우지 않고도 스스로 이어지게 만든다. 순서 있는 목록은 Phase 1c 가 만든다.
+     *  워커를 사람이 다시 띄우지 않고도 스스로 이어지게 만든다.
      *
      *  **위 title 과 같은 이유로 optional 이 아니다.** 이 기능의 on 스위치는 startWorker 의 한
-     *  줄(`rollAccountIds: [a.accountId]`)이고, optional 이면 그 줄을 지워도 typecheck 와 전체
+     *  줄(`rollAccountIds: a.rollAccountIds`)이고, optional 이면 그 줄을 지워도 typecheck 와 전체
      *  테스트가 그대로 통과한다 — 기능만 조용히 꺼진다. `satisfies typeof o`(ipc.ts 의 배선)는
      *  **철자 오류를 잡을 뿐 누락은 잡지 못한다**: optional 필드가 없는 객체도 그 타입을 만족한다.
      *  required 로 두면 지운 자리가 곧 컴파일 오류다. */
@@ -468,6 +469,11 @@ export class OrchCoordinator {
     specFileContent?: string
     provider: Provider
     accountId: string
+    /** 이 워커의 롤링 체인 — 첫 원소가 이 Dispatch 의 계정이고, 나머지는 한도에 걸렸을 때 갈아탈
+     *  순서다. 배선이 accountToDispatchOn 에서 받아 그대로 넘긴다(Task.accountIds 가 원천).
+     *  **required 인 이유는 rollAccountIds 와 같다** — optional 이면 넘기지 않아도 typecheck 가
+     *  통과하고, 그때 워커는 조용히 계정 하나짜리 체인으로 돌아간다. */
+    rollAccountIds: string[]
     /** Run.cwd — the base cwd when worktree is 'current', and the base a new worktree forks from.
      *  The commit obligation below derives from `cwd !== runCwd`, which is what makes a worker in a
      *  worktree commit and a worker standing on runCwd not.
@@ -614,12 +620,13 @@ export class OrchCoordinator {
         // comes up under the worktree basename and the user cannot tell which task it is
         title: a.title,
         // **한도에 걸린 워커가 스스로 이어지게 하는 것이 이 한 줄이다.** 이 값을 넘기면 배선의
-        // spawnSession 이 그 세션을 롤링 코디네이터에 등록하고(ipc.ts), 롤링은 계정이 하나뿐인
-        // 체인에 대해 리셋까지 기다린 뒤 이어간다 — 다만 그 방식은 런타임마다 다르다: claude 는
-        // 죽이지 않고 같은 세션에서 재개하고, codex 는 항상 죽이고 새 세션으로 재기동한다
-        // (rollAccountIds 필드의 JSDoc 참고). 넘기지 않던 동안 한도에 걸린 워커는 살아 있지만
-        // 멈춘 채 남았고, 사람이 다시 띄워야 했다.
-        rollAccountIds: [a.accountId],
+        // spawnSession 이 그 세션을 롤링 코디네이터에 등록하고(ipc.ts), 롤링은 계정이 둘 이상인
+        // 체인에서는 다음 계정으로 갈아타고, 하나뿐인 체인에서는 갈아탈 곳이 없어 리셋까지 기다린
+        // 뒤 이어간다 — 다만 기다린 뒤의 방식은 런타임마다 다르다: claude 는 죽이지 않고 같은
+        // 세션에서 재개하고, codex 는 항상 죽이고 새 세션으로 재기동한다(rollAccountIds 필드의
+        // JSDoc 참고). 넘기지 않던 동안 한도에 걸린 워커는 살아 있지만 멈춘 채 남았고, 사람이
+        // 다시 띄워야 했다.
+        rollAccountIds: a.rollAccountIds,
         // 재개 문구도 워커의 것을 준다. 넘기지 않으면 롤링은 앱의 UI 언어 문구를 타이핑하는데,
         // 그것은 워커에게 두 가지로 틀리다: 영어로 지시받은 워커가 다른 언어로 재개되고, 문구가
         // "계속하라" 여서 끝내고 보고하라는 의무(buildSpecFile 의 Reporting obligation)를 상기시키지

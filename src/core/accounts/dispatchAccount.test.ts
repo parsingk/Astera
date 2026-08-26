@@ -23,7 +23,7 @@ describe('accountToDispatchOn', () => {
   // Task 가 전부 이 갈래로 온다
   it('지정이 없으면 그 provider 의 기본 계정이다', () => {
     const r = accountToDispatchOn({ provider: 'claude', accounts: all, loggedInIds: loggedIn('a', 'b') })
-    expect(r).toEqual({ ok: true, accountId: 'a' })
+    expect(r).toEqual({ ok: true, accountId: 'a', chain: ['a'] })
   })
 
   it('지정이 없고 그 provider 에 로그인된 계정이 없으면 실패다', () => {
@@ -33,19 +33,19 @@ describe('accountToDispatchOn', () => {
 
   it('지정이 있고 로그인돼 있으면 그것이다 — 기본 계정보다 우선한다', () => {
     const r = accountToDispatchOn({
-      assigned: 'b',
+      assigned: ['b'],
       provider: 'claude',
       accounts: all,
       loggedInIds: loggedIn('a', 'b')
     })
-    expect(r).toEqual({ ok: true, accountId: 'b' })
+    expect(r).toEqual({ ok: true, accountId: 'b', chain: ['b'] })
   })
 
   // **기본 계정으로 조용히 넘기지 않는다.** 사용자가 이 계정을 고른 것은 다른 계정을 피하려는
   // 뜻일 수 있고, 말없이 갈아타면 그가 아끼려던 계정에 일이 간다. 부르는 쪽이 Gate 를 연다
   it('지정한 계정이 로그인 안 돼 있으면 실패다 — 기본 계정으로 넘기지 않는다', () => {
     const r = accountToDispatchOn({
-      assigned: 'b',
+      assigned: ['b'],
       provider: 'claude',
       accounts: all,
       loggedInIds: loggedIn('a')
@@ -55,7 +55,7 @@ describe('accountToDispatchOn', () => {
 
   it('지정한 계정이 지워졌으면 실패다', () => {
     const r = accountToDispatchOn({
-      assigned: 'gone',
+      assigned: ['gone'],
       provider: 'claude',
       accounts: all,
       loggedInIds: loggedIn('a', 'b')
@@ -68,11 +68,73 @@ describe('accountToDispatchOn', () => {
   // 다루는 것과, graph.ts 가 순환을 다루는 것과 같은 이유다
   it('지정한 계정이 다른 provider 면 실패다 — 파일이 손으로 고쳐질 수 있다', () => {
     const r = accountToDispatchOn({
-      assigned: 'c',
+      assigned: ['c'],
       provider: 'claude',
       accounts: all,
       loggedInIds: loggedIn('a', 'b', 'c')
     })
     expect(r).toEqual({ ok: false, reason: 'assigned-unusable' })
+  })
+
+  it('지정한 순서대로 체인을 돌려주고 첫 계정으로 띄운다', () => {
+    const r = accountToDispatchOn({
+      assigned: ['b', 'a'],
+      provider: 'claude',
+      accounts: all,
+      loggedInIds: loggedIn('a', 'b')
+    })
+    expect(r).toEqual({ ok: true, accountId: 'b', chain: ['b', 'a'] })
+  })
+
+  it('쓸 수 없는 계정만 빼고 나머지 순서로 진행한다 (Gate 를 열지 않는다)', () => {
+    const r = accountToDispatchOn({
+      assigned: ['a', 'gone', 'b'],
+      provider: 'claude',
+      accounts: all,
+      loggedInIds: loggedIn('a', 'b')
+    })
+    // 'gone' 은 목록에 없다 — 사람이 고른 것 중 남은 것으로 돈다
+    expect(r).toEqual({ ok: true, accountId: 'a', chain: ['a', 'b'] })
+  })
+
+  it('provider 가 다른 계정은 체인에서 빠진다', () => {
+    const r = accountToDispatchOn({
+      assigned: ['a', 'c'],
+      provider: 'claude',
+      accounts: all,
+      loggedInIds: loggedIn('a', 'c')
+    })
+    expect(r).toEqual({ ok: true, accountId: 'a', chain: ['a'] })
+  })
+
+  it('하나도 쓸 수 없으면 기본 계정으로 갈아타지 않고 실패한다', () => {
+    const r = accountToDispatchOn({
+      assigned: ['gone', 'c'],
+      provider: 'claude',
+      accounts: all,
+      loggedInIds: loggedIn('a', 'c')
+    })
+    expect(r).toEqual({ ok: false, reason: 'assigned-unusable' })
+  })
+
+  it('같은 계정이 두 번 적혀 있으면 한 번으로 접는다 (손으로 고친 파일)', () => {
+    const r = accountToDispatchOn({
+      assigned: ['a', 'a', 'b'],
+      provider: 'claude',
+      accounts: all,
+      loggedInIds: loggedIn('a', 'b')
+    })
+    // 같은 계정이 두 칸이면 RollCycle 은 두 계정인 줄 알고 "갈아탄다" — 같은 계정으로
+    expect(r).toEqual({ ok: true, accountId: 'a', chain: ['a', 'b'] })
+  })
+
+  it('빈 목록은 지정 없음과 같다 — 기본 계정으로 간다', () => {
+    const r = accountToDispatchOn({
+      assigned: [],
+      provider: 'claude',
+      accounts: all,
+      loggedInIds: loggedIn('a', 'b')
+    })
+    expect(r).toEqual({ ok: true, accountId: 'a', chain: ['a'] })
   })
 })

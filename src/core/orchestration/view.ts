@@ -148,7 +148,7 @@ function jobTaskOf(
     id: task.id,
     title: task.title,
     status: task.status,
-    ...(task.accountId !== undefined ? { accountId: task.accountId } : {}),
+    ...(task.accountIds !== undefined ? { accountIds: task.accountIds } : {}),
     sessionId: latest && isKnownSession(latest.sessionId) ? latest.sessionId : undefined,
     // The oldest open Gate is the one the orchestrator has to answer first, so that is the one the
     // row shows and the one the answer form resolves. openGates carries the rest as a count rather

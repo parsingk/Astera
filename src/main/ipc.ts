@@ -1376,10 +1376,12 @@ export function registerIpc(
             // **남은 슬롯이 통째로 버려진다** — 상관없는 다른 프로젝트의 Run 이 남의 실패 때문에
             // 서 있게 되고, 하나의 문제가 전부를 세우지 않는다는 이 루프의 전제가 거짓이 된다.
             try {
-              // 사람이 이 Task 에 계정을 지정했으면 그것, 아니면 그 provider 의 기본 계정.
-              // 판정은 core 에 있다(accountToDispatchOn) — 이 파일에는 테스트가 닿지 않는다.
+              // 사람이 이 Task 에 계정을 지정했으면 그 목록의 첫 계정, 아니면 그 provider 의 기본
+              // 계정. 판정은 core 에 있다(accountToDispatchOn) — 이 파일에는 테스트가 닿지 않는다.
+              // **갈아탈 순서(체인)는 여기서 넘기지 않는다** — worker-start 를 거쳐 가므로 그 체인은
+              // deps.startWorker 래퍼가 다시 계산한다(그래야 CLI 로 띄운 워커도 같은 체인을 받는다).
               const picked = accountToDispatchOn({
-                ...(slot.accountId !== undefined ? { assigned: slot.accountId } : {}),
+                ...(slot.accountIds !== undefined ? { assigned: slot.accountIds } : {}),
                 provider: slot.provider,
                 accounts,
                 loggedInIds: loggedIn
@@ -1787,7 +1789,47 @@ export function registerIpc(
         return { failed }
       },
       startWorker: async (a) => {
-        const started = await coordinator.startWorker(a)
+        // **이 워커의 롤링 체인을 여기서 정한다 — 워커를 띄우는 길이 전부 이 래퍼로 모이기
+        // 때문이다.** 자동 배치 루프도 orchHandleCommand('worker-start') 를 부르고, CLI 의
+        // worker-start 도 같은 핸들러이며(server.ts 의 deps.startWorker), 검토 Dispatch 도 이 함수를
+        // 지난다. 체인을 그중 한 곳에서 넘기면 나머지 경로는 갈아탈 곳 없는 워커를 띄운다.
+        //
+        // 규칙 하나로 셋을 덮는다: **요청된 계정이 첫 칸**이고 그 뒤에 이 Task 에 지정된 계정들이
+        // 사람이 적은 순서로 붙는다. 중복·provider 어긋남·로그아웃은 core 가 걸러 준다
+        // (accountToDispatchOn). **검토자 경로도 이 규칙으로 안전하다** — 검토자는 다른 provider 로
+        // 도므로 Task 의 계정들이 전부 그 필터에서 빠지고 요청된 계정만 남는다(지금과 같은 한 원소
+        // 체인이다). 로그인 조회는 자동 배치 루프와 같은 모양으로 병렬로 편다.
+        //
+        // **계산이 어긋나면 요청된 계정 하나로 저하한다 — 갈아타지 못하는 워커는 아예 뜨지 않는
+        // 워커보다 낫다.** 그 한 원소 체인이 오늘까지의 동작이므로 잃는 것은 갈아타기뿐이다. 세 갈래를
+        // 모두 그렇게 다룬다: 로그인 조회가 던지는 것(계정 파일·Keychain 읽기다), 하나도 남지 않는
+        // 것, 그리고 첫 칸이 요청된 계정이 아닌 것 — 마지막은 그 계정이 필터에서 빠졌다는 뜻이고,
+        // 그대로 넘기면 이 Dispatch 가 기록한 계정과 롤링이 아는 첫 계정이 어긋난다.
+        let rollAccountIds = [a.accountId]
+        try {
+          const task = store.get().tasks.find((t) => t.id === a.taskId)
+          const accountList = core.accounts.list()
+          const loggedInHere = new Set(
+            (
+              await Promise.all(
+                accountList.map(async (x) =>
+                  (await core.accounts.loginStatus(x.id)) ? x.id : null
+                )
+              )
+            ).filter((id): id is string => id !== null)
+          )
+          const picked = accountToDispatchOn({
+            assigned: [a.accountId, ...(task?.accountIds ?? [])],
+            provider: a.provider,
+            accounts: accountList,
+            loggedInIds: loggedInHere
+          })
+          if (picked.ok && picked.chain[0] === a.accountId) rollAccountIds = picked.chain
+          else orchLog(`worker-start: rolling chain falls back to ${a.accountId}`)
+        } catch (e) {
+          orchLog(`worker-start: rolling chain falls back to ${a.accountId} — ${String(e)}`)
+        }
+        const started = await coordinator.startWorker({ ...a, rollAccountIds })
         // From this point on, that session's output belongs to this dispatch. On reuse (--terminal) the
         // previous dispatch's tail freezes where it is. Only a dispatch that has reached a terminal
         // state is eligible for eviction — a live worker's tail is not dropped even past the cap (see
