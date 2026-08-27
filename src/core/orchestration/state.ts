@@ -886,11 +886,16 @@ export function recordStopSnapshot(
  *  **세션 id 가 아니라 Dispatch id 로 찾는 이유가 바로 그것이다.** 재키잉을 지나도 Dispatch id 는
  *  같다(`rekeyDispatch` 는 sessionId·accountId 만 고쳐 쓴다).
  *
- *  **비워 둔 칸만 메운다.** 이미 값이 있으면 그 사이 다음 정지가 스냅샷을 덮어썼다는 뜻이고, 그
- *  자리에 옛 HEAD 를 써 넣으면 기준점이 거짓이 된다 — worktreeMoved 가 "바뀌지 않았다" 를 확인하지
- *  않은 채 단정하는, 스냅샷이 막으려는 바로 그 결말이다. Task 의 updatedAt 도 올리지 않는다: 이 값은
- *  화면에 그리는 것이 아니라 Checkpoint 조립기만 읽고(checkpoint.ts 의 worktreeMoved), 정지 자체는
- *  이미 앞 걸음이 알렸다. */
+ *  **비워 둔 칸만 메운다 — 정확히는, 지금 그 칸이 null 일 때만 메운다.** 이것이 "다른 에피소드의
+ *  스냅샷에는 못 쓴다" 는 것까지 보장하지는 않는다: 새 스냅샷도 매번 `headCommit: null` 로
+ *  시작하기 때문이다(main/orchestration/rollTap.ts 의 recordStop, ~286행). 이 함수를 부르게 한 git
+ *  읽기가 다음 정지가 이미 커밋되고도 그 정지 자신의 git 읽기가 아직 답하기 전인 순간까지 늦게
+ *  걸리면, 그 늦은 답은 다음 에피소드의(아직 비어 있는) 스냅샷에 옛 HEAD 를 써 넣는다 — git 이 한
+ *  에피소드 전체를 건너뛸 만큼 멈춰 서야 하는 드문 경합이다. 방향은 안전한 쪽이다: 기준점이 실제보다
+ *  오래된 커밋이 되므로 worktreeMoved 는 "바뀌었다" 쪽으로만 틀릴 수 있다 — "바뀌지 않았다" 를
+ *  확인하지 않은 채 단정하는, 스냅샷이 막으려는 결말은 여전히 일어나지 않는다. Task 의 updatedAt 도
+ *  올리지 않는다: 이 값은 화면에 그리는 것이 아니라 Checkpoint 조립기만 읽고(checkpoint.ts 의
+ *  worktreeMoved), 정지 자체는 이미 앞 걸음이 알렸다. */
 export function recordStopHead(
   s: OrchState,
   a: { dispatchId: string; headCommit: string }

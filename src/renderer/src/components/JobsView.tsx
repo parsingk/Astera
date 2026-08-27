@@ -241,7 +241,7 @@ function RunCard({
                   <span className="jobs-task-title" title={task.title}>
                     {task.title}
                   </span>
-                  <span className="jobs-task-meta">
+                  <span className="jobs-task-meta" title={`${task.provider} · ${taskMeta(task, nowMs, t)}`}>
                     {task.provider} · {taskMeta(task, nowMs, t)}
                   </span>
                 </span>
