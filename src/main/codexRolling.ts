@@ -23,6 +23,7 @@ import {
   CodexRolloutTail,
   limitReached,
   maxedOut,
+  priorLimitVerdict,
   rolloutSize,
   worstResetAt,
   type CodexLimitState
@@ -38,9 +39,17 @@ const HEALTHY_MS = 60_000 // no limit detected for this long after a switch → 
 
 /** Which grounds the limit verdict fired on — a log label. `errorInfo` is the one that actually fires
  *  on codex 0.14x (usage_limit_exceeded); `reachedType` has never been observed non-null, so seeing it
- *  in the log would itself be news. Recording the two separately is what keeps the next person from
- *  reading a structured hit as a screen-text hit. */
-type LimitReason = 'reachedType' | 'errorInfo' | 'text+gate' | 'maxed+silent' | 'force'
+ *  in the log would itself be news. `priorBlock` is the reopened-conversation case: the session has no
+ *  snapshot of its own and the block came out of the rollout it attached to (measured 2026-08-27, three
+ *  resumes of one conversation). Recording them separately is what keeps the next person from reading a
+ *  structured hit as a screen-text hit, or either of those as the file's own record. */
+type LimitReason =
+  | 'reachedType'
+  | 'errorInfo'
+  | 'text+gate'
+  | 'maxed+silent'
+  | 'priorBlock'
+  | 'force'
 
 export interface CodexRollingDeps {
   spawn(opts: {
@@ -112,6 +121,12 @@ interface Chain {
   rolloutPath: string | null
   tail: CodexRolloutTail | null
   state: CodexLimitState | null // the last rate_limits read
+  /** The block this conversation already had on record when we attached, or null when it records none.
+   *  Only consulted while `state` is still null — see priorLimitVerdict. `undefined` means the answer
+   *  has not arrived yet, and is deliberately distinct from null: reading "not yet known" as "no block
+   *  on record" would let a phrase fire without the evidence that decides whether it is a replay.
+   *  Only register()'s resume branch ever fills it — attachRollout clears it (the reasons are there). */
+  priorReset: { at: number; weekly: boolean } | null | undefined
   scanner: CodexLimitScanner // detects the limit phrase in PTY output (corrects for chunk boundaries)
   modelChoice: CodexModelChoiceScanner // detects codex's approaching-limit model-switch prompt in the same stream
   textHit: boolean // whether the limit phrase was seen in this window (the tick combines it with the state to decide)
@@ -192,6 +207,7 @@ export class CodexRollingCoordinator {
       rolloutPath: null,
       tail: null,
       state: null,
+      priorReset: undefined,
       scanner: new CodexLimitScanner(),
       modelChoice: new CodexModelChoiceScanner(),
       textHit: false,
@@ -210,6 +226,10 @@ export class CodexRollingCoordinator {
     this.chains.set(info.id, chain)
     if (info.resumeSessionId && rolloutPath) {
       this.attachRollout(chain, info.resumeSessionId, rolloutPath)
+      // **This is the one attach site that gets to recover the reset from the file.** The user reopened
+      // a conversation, so whatever block it ended on is still the block it is under, and the tail
+      // starts at the end — so the file's own record is the only evidence this session will ever have.
+      this.askPriorReset(chain)
       // The locate path persists the config on success; the resume path knows the id up front, so it
       // does the same here — otherwise resuming a chain would never refresh its stored roll config.
       this.deps.persistConfig?.(info.resumeSessionId, {
@@ -325,6 +345,33 @@ export class CodexRollingCoordinator {
     chain.codexSessionId = codexSessionId
     chain.tail = new CodexRolloutTail(rolloutPath, this.now, { startAtEnd: true })
     chain.unmappedWarned = false // it is mapped now — a future unmapped state gets to report itself again
+    // **Attaching never seeds the recovered reset; only register()'s resume branch asks for it.** The
+    // other two callers attach to a file whose limit record must not be believed. resumeInPlace
+    // re-anchors on the very file whose record produced the wait we have just served, so recovering it
+    // would judge the session limited again the instant it resumes; roll() attaches to the copy, which
+    // holds the *previous account's* record — the reason the tail starts at the end in the first place.
+    chain.priorReset = null
+  }
+
+  /** Asks the rollout what block this conversation already had on record, and hands the answer to the
+   *  chain. Called from the history-resume path alone (see attachRollout for why the other two sites
+   *  must not).
+   *
+   *  Fire-and-forget: a failed read leaves it null, which reads as "no block on record" — the
+   *  conservative side, since the verdict then needs a confirmed phrase before it acts. Until the answer
+   *  lands the field stays undefined and the verdict is not consulted at all (judgedByPriorBlock). */
+  private askPriorReset(chain: Chain): void {
+    const tail = chain.tail
+    if (!tail) return
+    chain.priorReset = undefined
+    void tail
+      .priorResetAt()
+      .then((r) => {
+        chain.priorReset = r
+      })
+      .catch(() => {
+        chain.priorReset = null
+      })
   }
 
   /** Polls until the rollout file appears. On finding it, tailing starts; past the deadline rolling is
@@ -388,11 +435,13 @@ export class CodexRollingCoordinator {
     if (s) chain.state = s
   }
 
-  /** Refreshes the state and applies verdicts ① and ② */
+  /** Refreshes the state and applies verdicts ① and ② — or, while this session has no snapshot of its
+   *  own, what the rollout already recorded (judgedByPriorBlock) */
   private async evaluate(chain: Chain): Promise<void> {
     if (chain.rolling || chain.waitTimer || chain.disposed) return
     await this.refresh(chain)
     if (chain.rolling || chain.waitTimer || chain.disposed) return // the across-await state guard
+    if (this.judgedByPriorBlock(chain)) return
     if (!limitReached(chain.state, { textHit: chain.textHit })) {
       // Record exactly why it was ignored — logging an unmapped rollout as "usage below the gate" (the old
       // log printed undefined%) destroys the evidence for calibrating the phrase regex on the first real
@@ -429,6 +478,43 @@ export class CodexRollingCoordinator {
       weekly: worst.weekly,
       since: this.now()
     }
+  }
+
+  /** The verdict for a session that has not written a rate_limits record of its own yet. Returns true
+   *  when it has handled the chain and the caller must stop.
+   *
+   *  The state is still null: no rate_limits record has been written since we attached. That is the
+   *  normal shape right after a resume, and a session already at its limit can never leave it — those
+   *  records ride on turn completion, and a blocked turn never completes. So the file's own record is
+   *  the only evidence available, and both directions matter: it lets a limit fire with no phrase at
+   *  all, and it lets a phrase be dismissed as the redraw of a block that has already cleared. See
+   *  priorLimitVerdict for the reasoning; the moment the session writes its own record this stops
+   *  answering and the ordinary verdicts take over unchanged.
+   *
+   *  Called from both the phrase path (evaluate) and the tick — the firing-without-a-phrase case can
+   *  only arrive on the tick, so one copy per caller would drift. */
+  private judgedByPriorBlock(chain: Chain): boolean {
+    if (chain.state !== null || chain.priorReset === undefined) return false
+    const now = this.now()
+    const v = priorLimitVerdict(chain.priorReset, { textHit: chain.textHit }, now)
+    if (v.kind === 'limited') {
+      // recordRecovery cannot be reused here — it reads worstResetAt(chain.state) and that state is
+      // null. The verdict already carries the reset, so it is recorded as it stands. Writing it into
+      // chain.recovery *before* onLimit is what hands it to the shared registry too (SPEC §11.2/6):
+      // onLimit re-reads this slot and broadcasts it, but only once its own guards have passed.
+      chain.recovery[chain.cycle.currentIndex] = { at: v.at, weekly: v.weekly, since: now }
+      chain.textHit = false // spent either way — the next tick must not fire on the same phrase again
+      this.onLimit(chain, 'priorBlock')
+      return true
+    }
+    if (v.kind === 'replay') {
+      chain.textHit = false
+      this.deps.log(
+        `codex limit-text ignored (replay of a block that already cleared) session=${chain.liveId}`
+      )
+      return true
+    }
+    return false
   }
 
   private onLimit(chain: Chain, reason: LimitReason): void {
@@ -793,12 +879,15 @@ export class CodexRollingCoordinator {
     }
   }
 
-  /** The 15-second tick — refreshes the state, applies verdict ① (reachedType with no phrase) and fallback ③ (100% plus 30 seconds of no output) */
+  /** The 15-second tick — refreshes the state, applies verdict ① (reachedType with no phrase), the
+   *  recovered block of a session that has no snapshot yet (judgedByPriorBlock — the only place that
+   *  verdict can fire without a phrase) and fallback ③ (100% plus 30 seconds of no output) */
   private tick(): void {
     for (const chain of this.chains.values()) {
       if (chain.disposed || chain.rolling || chain.waitTimer || !chain.tail) continue
       void this.refresh(chain).then(() => {
         if (chain.disposed || chain.rolling || chain.waitTimer) return
+        if (this.judgedByPriorBlock(chain)) return
         if (limitReached(chain.state, { textHit: false })) {
           this.recordRecovery(chain)
           // No phrase was involved, so this can only be one of the two structured signals
