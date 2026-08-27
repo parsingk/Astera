@@ -2430,4 +2430,27 @@ describe('제자리 재개의 정착 판정', () => {
     await vi.advanceTimersByTimeAsync(retryAtOf(h) - Date.now() + 1_000)
     expect(resumeCount(h)).toBe(2)
   })
+
+  // 재현 시나리오: 페이로드가 전혀 없다가 정착 창(60초)이 끝나기 몇 초 전에야 도착한다 — tickChain은
+  // 15초마다만 캐시를 새로 쓰므로 이 몇 초는 마지막 tick 간격 안에 들어가 그 tick으로는 못 본다.
+  // settleInPlace가 스스로 refreshMeta 하지 않으면 낡은 캐시만 보고 kill·spawn(respawn)해 버린다.
+  it('정착 창 막바지에 도착한 메타는 kill·spawn 없이 정착된다', async () => {
+    // 초 단위를 어긋나게 둬 정착 마감이 정기 tick 경계와 겹치지 않게 한다 — 겹치면 그 tick이 먼저
+    // 캐시를 새로 써서 이 테스트가 재현하려는 "마지막 tick 간격 안" 자체가 사라진다.
+    vi.setSystemTime(new Date(T0 + 8_000))
+    const h = harness() // 페이로드 없음 → 초기에는 메타를 못 배운다
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    const firstRetry = retryAtOf(h)
+    await vi.advanceTimersByTimeAsync(firstRetry - Date.now() + 1_000)
+    expect(resumeCount(h)).toBe(1) // 제자리 재개가 일어났다
+    const eventsBefore = h.events.length
+    // 정착 마감(제자리 재개 + 60초) 6초 전, 마지막 정기 tick이 지나간 직후에야 페이로드가 도착한다.
+    await vi.advanceTimersByTimeAsync(53_000)
+    h.payloads.set('s1', payload(20))
+    await vi.advanceTimersByTimeAsync(7_000)
+    await flush()
+    expect(h.events.slice(eventsBefore).filter((e) => e.startsWith('spawn') || e.startsWith('kill'))).toEqual([])
+  })
 })

@@ -879,14 +879,33 @@ export class RollingCoordinator {
    *  한 번 더 집어 준다. 그래도 없으면 rescheduleAbortedRoll 로 넘어가 **보이는 대기**가 예약된다 —
    *  고치기 전의 침묵 대신. 그 대기의 재시도가 다시 이 함수에 닿는 루프는 inPlaceUsed 가 묶는다.
    *
+   *  **왜 판정 전에 refreshMeta 를 또 부르는가.** chain.claudeSessionId·chain.transcriptPath 는
+   *  tickChain 이 15초마다만 새로 쓰는 캐시값이라 최대 한 tick 만큼 낡아 있을 수 있다. 그 마지막 tick
+   *  간격 안에 statusLine 페이로드가 돌아오면 이 판정은 그것을 못 보는데 roll() 은 스스로 부르는
+   *  refreshMeta 로 그것을 본다 — 판정과 행동이 서로 다른 신선도를 보고 판정만 낡은 값으로 respawn
+   *  을 고르는 비대칭이 생긴다. 대가는 resumeAfterWait 의 JSDoc 이 kill 을 피하는 바로 그것이다:
+   *  막 되살아난 세션을 배경 작업째 죽이는 것. 그래서 여기서도 roll() 과 같은 것을 먼저 새로고친
+   *  뒤에 같은 값을 본다.
+   *
    *  타이머 콜백에서 예외가 새면 잡아 줄 곳이 없다. roll() 은 스스로 try/catch 하고 rolling 가드도
-   *  자체로 갖고 있으므로, 여기서는 위에서 healthyTimer 를 null 로 만든 것 외에 조정할 것이 없다. */
+   *  자체로 갖고 있지만, refreshMeta 자체는 재던지지 않는다는 계약이 없다(this.deps.readStatusPayload
+   *  를 그대로 감쌀 뿐이다). 그래서 resumePromptFor 가 deps.resumeText 를 감싸는 것과 같은 자리에서
+   *  직접 감싸 로그만 남기고 넘어간다. 그 await 뒤에는 disposed·liveId 가드를 다시 확인한다 — 새로
+   *  연 await 창이기 때문이다(위 첫 가드와 같은 이유). */
   private async settleInPlace(chain: Chain, liveId: string): Promise<void> {
     chain.healthyTimer = null
     if (chain.disposed || chain.liveId !== liveId) return
+    try {
+      await this.refreshMeta(chain)
+    } catch (err) {
+      this.deps.log(
+        `resume in place metadata refresh failed session=${liveId}: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+    if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard, again after the new await
     if (!chain.claudeSessionId || !chain.transcriptPath) {
       this.deps.log(
-        `resume in place produced no session metadata — respawning session=${liveId}`
+        `resume in place produced no session metadata — attempting a respawn session=${liveId}`
       )
       await this.roll(chain, chain.cycle.currentIndex)
       return
