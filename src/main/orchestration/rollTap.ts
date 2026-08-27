@@ -19,7 +19,12 @@
 // 만큼 종료 알림을 미루고 onRolled 에서 그 타이머를 취소한다. 공통 층은 세우지 않는다:
 // core/rolling/retry.ts 머리말이 "타이머 수명을 공통 부모로 올리는 것은 이 앱에서 버그를 가장 많이
 // 낸 축" 이라고 적어 두었고, 두 구독자가 각자 자기 타이머를 갖는 것이 그 경고를 지키는 모양이다.
-import { recordResume, recordStopSnapshot, rekeyDispatch } from '../../core/orchestration/state'
+import {
+  recordResume,
+  recordStopHead,
+  recordStopSnapshot,
+  rekeyDispatch
+} from '../../core/orchestration/state'
 import type { Dispatch } from '../../core/orchestration/types'
 import type { RollStateEvent } from '../../core/types'
 import { git } from '../../core/worktrees/git'
@@ -229,23 +234,40 @@ export class OrchRollTap {
 
   /** 정지 시점의 HEAD 를 읽어 열린 Dispatch 에 남긴다. HEAD 하나만 읽는 이유는 SPEC §8 에 있다 —
    *  나머지 Checkpoint 재료는 대기가 몇 시간이어도 디스크에 그대로 있고 재개 직전에 읽는 것이 더
-   *  정확하다. 정지 사유와 리셋 시각은 읽는 것이 아니라 이 이벤트가 들고 온 것이다. */
+   *  정확하다. 정지 사유와 리셋 시각은 읽는 것이 아니라 이 이벤트가 들고 온 것이다.
+   *
+   *  **두 걸음이다: 항목과 스냅샷을 먼저 커밋하고, git 이 답하면 headCommit 만 메운다.** 한 걸음으로
+   *  쓰던 동안 계정 전환에서는 아무것도 기록되지 않았다. 그 경합은 이렇다 — `rev-parse HEAD` 는
+   *  프로세스를 띄우는 일이라 Windows 에서 20~60ms 가 걸리는데, 롤이 'switching' 게시와
+   *  `session:rolled` 사이에 갖는 유일한 await 는 전사 복사이고 **원본과 목적지가 같은 경로면 그것은
+   *  곧바로 no-op 으로 돌아온다**(같은 계정으로 다시 띄우는 respawn 이 그 갈래다: codex 의
+   *  settleInPlace, claude 의 선택지 대기 폴백). 그래서 재키잉이 먼저 커밋되고, git 을 기다린 뒤에
+   *  옛 세션 id 로 Dispatch 를 찾으면 아무것도 찾지 못한다 — 이력도 스냅샷도 남지 않고, 이미 지나간
+   *  `onRolled` 의 recordResume 은 닫을 항목을 못 찾아 함께 no-op 이 된다.
+   *
+   *  **id 로 다시 찾는 것만으로는 부족하다.** Dispatch id 는 재키잉을 지나도 같아서 스냅샷은 되살릴
+   *  수 있지만, 그렇게 늦게 쌓은 항목은 **닫아 줄 재개가 이미 지나가 버렸다** — 그 항목은 영원히 열린
+   *  채 남아 화면이 도는 워커를 "기다리는 중" 으로 그린다. 그러니 순서를 바꾼다: 게시가 온 그 자리에서
+   *  (아직 await 를 하나도 지나지 않은 채) 항목과 스냅샷을 커밋한다. store.save 는 메모리를 동기로
+   *  갱신하므로(main/orchestration/store.ts), 뒤이어 오는 재키잉과 recordResume 은 이 항목을 본다.
+   *  게시 시점의 계정이 `fromAccountId` 로 들어가는 것도 이 순서라야 한다.
+   *
+   *  headCommit 만 뒤로 미루는 이유: 그 값이 없다는 것은 이미 뜻이 정해져 있다(null = 모른다 →
+   *  worktreeMoved 가 null). git 이 느리거나 실패해도 나머지 — 정지 사유와 리셋 시각, 그리고 화면이
+   *  읽는 이력 항목 — 는 제 시각에 남는다. */
   private async recordStop(
     sessionId: string,
     reason: 'waiting' | 'switching',
     nextRetryAt: string | undefined
   ): Promise<void> {
-    const dispatch = this.deps
-      .getState()
-      .dispatches.find((d) => d.sessionId === sessionId && !d.endedAt)
+    const state = this.deps.getState()
+    const dispatch = state.dispatches.find((d) => d.sessionId === sessionId && !d.endedAt)
     if (!dispatch) return // Job 워커가 아니다(사용자 탭 세션) — 잡을 것이 없다
-    const head = await this.git(['rev-parse', 'HEAD'], { cwd: dispatch.cwd })
-    // 위 await 사이에 다른 커밋이 있었을 수 있다 — 반영할 상태는 다시 읽는다(onRolled 와 같은 관례).
     const r = recordStopSnapshot(
-      this.deps.getState(),
+      state,
       {
         sessionId,
-        headCommit: head.ok && head.stdout !== '' ? head.stdout : null,
+        headCommit: null, // 아래 git 이 답하면 메운다
         reason,
         ...(nextRetryAt !== undefined ? { resetsAt: nextRetryAt } : {})
       },
@@ -253,6 +275,16 @@ export class OrchRollTap {
     )
     if (!r.ok || r.value === null) return
     await this.deps.setState(r.state)
+    const head = await this.git(['rev-parse', 'HEAD'], { cwd: dispatch.cwd })
+    if (!head.ok || head.stdout === '') return // 모르는 채로 둔다 — headCommit=null 이 그 뜻이다
+    // 위 await 사이에 롤이 세션 id 를 바꿨을 수 있다. Dispatch id 는 그대로이므로 그것으로 찾고,
+    // 반영할 상태는 다시 읽는다(onRolled 와 같은 관례).
+    const patched = recordStopHead(this.deps.getState(), {
+      dispatchId: r.value.id,
+      headCommit: head.stdout
+    })
+    if (!patched.ok || patched.value === null) return
+    await this.deps.setState(patched.state)
   }
 
   /** `'nudged'` 재개를 이력의 마지막 항목에 닫는다. 계정은 바뀌지 않았으므로 지금 Dispatch 가

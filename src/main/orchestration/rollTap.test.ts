@@ -477,3 +477,72 @@ describe('OrchRollTap 재개 기록', () => {
     expect(resumes?.[0].resumedAt).toBeUndefined()
   })
 })
+
+// final round — C1: HEAD 읽기는 프로세스를 띄우는 일(Windows 에서 20~60ms)이고, 롤이 'switching'
+// 게시와 session:rolled 사이에 갖는 유일한 await 는 원본과 목적지가 같으면 곧바로 돌아오는 전사
+// 복사다. 그래서 재키잉이 먼저 커밋되고, git 을 기다린 뒤 **옛 세션 id** 로 Dispatch 를 찾던 동안은
+// 이력도 스냅샷도 남지 않았다(계정 전환에서 대개, 같은 계정 respawn 에서는 항상).
+
+/** 테스트가 풀어 줄 때까지 답하지 않는 git 이중체. fakeGit 과 같은 관례지만, 이것으로만 만들 수 있는
+ *  순서가 있다: 재키잉이 git 보다 먼저 커밋되는 순서. */
+function gatedGit(head: string): { git: typeof git; release: () => void } {
+  let release = (): void => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const fn = (async () => {
+    await gate
+    return { ok: true, stdout: head, stderr: '' }
+  }) as unknown as typeof git
+  return { git: fn, release: () => release() }
+}
+
+describe('OrchRollTap 정지 기록과 재키잉의 경합', () => {
+  it('재키잉이 git 보다 먼저 커밋돼도 이력과 스냅샷이 남고, 재개가 그 항목을 닫는다', async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    const g = gatedGit('head-at-limit')
+    const tap = new OrchRollTap(deps, { git: g.git })
+    // 계정 전환의 실제 순서: switching(옛 id) → 전사 복사(no-op) → kill·spawn → 재키잉 → rolled
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'switching', accountLabel: 'B' }))
+    await vi.advanceTimersByTimeAsync(0) // git 은 아직 잠겨 있다
+    await tap.onRolled('sess1', { id: 'sess2', accountId: 'acc2' })
+    const rekeyed = deps.state().dispatches.find((d) => d.id === dispatchId)
+    expect(rekeyed?.sessionId).toBe('sess2') // 재키잉이 이겼다 — 옛 id 로는 이제 찾지 못한다
+    // 그래도 항목은 정지 시점의 계정으로 열렸고, 뒤이은 재개가 그것을 닫았다
+    expect(rekeyed?.resumes).toEqual([
+      {
+        stoppedAt: NOW,
+        reason: 'switching',
+        fromAccountId: 'acc1',
+        resumedAt: NOW,
+        toAccountId: 'acc2'
+      }
+    ])
+    // 스냅샷의 정지 사유도 남았다 — 재개 브리핑의 "왜 여기 있는가" 가 이것을 읽는다
+    expect(rekeyed?.stopSnapshot).toEqual({ headCommit: null, reason: 'switching' })
+    // 늦게 답한 git 은 비워 둔 칸만 메운다 — 이력은 건드리지 않는다
+    g.release()
+    await vi.advanceTimersByTimeAsync(0)
+    const after = deps.state().dispatches.find((d) => d.id === dispatchId)
+    expect(after?.stopSnapshot).toEqual({ headCommit: 'head-at-limit', reason: 'switching' })
+    expect(after?.resumes).toHaveLength(1)
+    expect(after?.resumes?.[0].resumedAt).toBe(NOW)
+  })
+
+  it('리셋 시각도 재키잉보다 먼저 커밋된다 — 대기 뒤 계정을 바꾸는 갈래', async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    const g = gatedGit('head-at-limit')
+    const tap = new OrchRollTap(deps, { git: g.git })
+    tap.onRollState(
+      rollState({ sessionId: 'sess1', state: 'waiting', nextRetryAt: '2026-08-25T03:00:00.000Z' })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    await tap.onRolled('sess1', { id: 'sess2', accountId: 'acc2' })
+    const d = deps.state().dispatches.find((x) => x.id === dispatchId)
+    expect(d?.resumes?.[0].resetsAt).toBe('2026-08-25T03:00:00.000Z')
+    expect(d?.stopSnapshot?.resetsAt).toBe('2026-08-25T03:00:00.000Z')
+    g.release()
+  })
+})

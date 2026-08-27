@@ -878,6 +878,32 @@ export function recordStopSnapshot(
   )
 }
 
+/** 정지 스냅샷의 `headCommit` 을 뒤늦게 채운다. **정지 자체는 이미 기록돼 있다** — 이 함수는 그때
+ *  비워 둔 칸 하나만 메운다. 왜 두 걸음으로 나눠 기록하는지는 부르는 쪽에 적었다
+ *  (main/orchestration/rollTap.ts 의 recordStop): HEAD 를 읽는 것은 프로세스 하나를 띄우는 일이고,
+ *  그것을 기다리는 사이에 롤이 Dispatch 의 세션 id 를 바꿔 치운다.
+ *
+ *  **세션 id 가 아니라 Dispatch id 로 찾는 이유가 바로 그것이다.** 재키잉을 지나도 Dispatch id 는
+ *  같다(`rekeyDispatch` 는 sessionId·accountId 만 고쳐 쓴다).
+ *
+ *  **비워 둔 칸만 메운다.** 이미 값이 있으면 그 사이 다음 정지가 스냅샷을 덮어썼다는 뜻이고, 그
+ *  자리에 옛 HEAD 를 써 넣으면 기준점이 거짓이 된다 — worktreeMoved 가 "바뀌지 않았다" 를 확인하지
+ *  않은 채 단정하는, 스냅샷이 막으려는 바로 그 결말이다. Task 의 updatedAt 도 올리지 않는다: 이 값은
+ *  화면에 그리는 것이 아니라 Checkpoint 조립기만 읽고(checkpoint.ts 의 worktreeMoved), 정지 자체는
+ *  이미 앞 걸음이 알렸다. */
+export function recordStopHead(
+  s: OrchState,
+  a: { dispatchId: string; headCommit: string }
+): Res<Dispatch | null> {
+  const dispatch = s.dispatches.find((d) => d.id === a.dispatchId && !d.endedAt)
+  if (!dispatch?.stopSnapshot || dispatch.stopSnapshot.headCommit !== null) return ok(s, null)
+  const next: Dispatch = {
+    ...dispatch,
+    stopSnapshot: { ...dispatch.stopSnapshot, headCommit: a.headCommit }
+  }
+  return ok({ ...s, dispatches: replace(s.dispatches, next) }, next)
+}
+
 /** 재개가 일어났다고 이력의 마지막 항목을 닫는다.
  *
  *  **정지가 기록돼 있지 않으면 아무것도 하지 않는다.** 항목을 지어내면 화면이 "0 번 멈추고 1 번
