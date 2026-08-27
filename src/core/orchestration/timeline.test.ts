@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { timelineFor, eventCountFor } from './timeline'
 import { emptyState } from './state'
 import type { OrchState } from './state'
-import type { Dispatch, Gate, Message, Run, Task } from './types'
+import type { Dispatch, Gate, Message, ResumeEntry, Run, Task } from './types'
 import { absPath } from '../testPaths'
 
 const T = (n: number): string => `2026-08-18T00:0${n}:00.000Z`
@@ -72,6 +72,32 @@ describe('timelineFor', () => {
     })
     const e = timelineFor(s, 'r1', anySession).find((x) => x.kind === 'dispatch-started')
     expect(e?.review).toBe(true)
+  })
+
+  // Dispatch.resumes 의 한 항목(정지+재개)이 이벤트 둘로 펼쳐진다
+  it('정지와 재개가 타임라인에 각각 한 줄이 된다', () => {
+    const resumes: ResumeEntry[] = [
+      { stoppedAt: T(2), reason: 'waiting', fromAccountId: 'acc-1', resumedAt: T(3), toAccountId: 'acc-1' }
+    ]
+    const s = state({
+      runs: [run('r1')], tasks: [task('t1', 'r1')],
+      dispatches: [{ ...dispatch('d1', 't1'), resumes }]
+    })
+    const evts = timelineFor(s, 'r1', anySession).filter((e) => e.kind === 'limit-hit' || e.kind === 'resumed')
+    expect(evts.map((e) => e.kind)).toEqual(['limit-hit', 'resumed'])
+    // sourceId 는 종류 안에서만 유일하면 되므로 정지·재개가 같은 이력 색인을 나눠 쓴다
+    expect(evts.map((e) => e.sourceId)).toEqual(['d1:0', 'd1:0'])
+  })
+
+  // 아직 resumedAt 이 없는 이력 — 재개 줄은 아직 없다
+  it('아직 기다리는 항목은 정지 줄만 만든다', () => {
+    const resumes: ResumeEntry[] = [{ stoppedAt: T(2), reason: 'waiting', fromAccountId: 'acc-1' }]
+    const s = state({
+      runs: [run('r1')], tasks: [task('t1', 'r1')],
+      dispatches: [{ ...dispatch('d1', 't1'), resumes }]
+    })
+    const evts = timelineFor(s, 'r1', anySession).filter((e) => e.kind === 'limit-hit' || e.kind === 'resumed')
+    expect(evts.map((e) => e.kind)).toEqual(['limit-hit'])
   })
 
   // Dispatch 는 runId 를 갖지 않는다 — 이 Run 의 Task 를 통해서만 골라야 한다

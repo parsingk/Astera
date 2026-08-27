@@ -804,6 +804,8 @@ export const ja: Catalog = {
   'jobs.event.dispatchStarted': 'ワーカー開始',
   'jobs.event.gateOpened': '判断待ち',
   'jobs.event.gateResolved': '判断済み',
+  'jobs.event.limitHit': '上限停止',
+  'jobs.event.resumed': 'ワーカー再開',
   'jobs.event.status': '状況',
   'jobs.event.workerDone': 'ワーカー報告',
   'jobs.event.question': '質問',

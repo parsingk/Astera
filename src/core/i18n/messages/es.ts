@@ -817,6 +817,8 @@ export const es: Catalog = {
   'jobs.event.dispatchStarted': 'worker iniciado',
   'jobs.event.gateOpened': 'esperando decisión',
   'jobs.event.gateResolved': 'decidido',
+  'jobs.event.limitHit': 'límite alcanzado',
+  'jobs.event.resumed': 'worker reanudado',
   'jobs.event.status': 'estado',
   'jobs.event.workerDone': 'informe del worker',
   'jobs.event.question': 'pregunta',

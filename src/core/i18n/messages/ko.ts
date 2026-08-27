@@ -845,6 +845,8 @@ export const ko = {
   'jobs.event.dispatchStarted': '워커 시작',
   'jobs.event.gateOpened': '결정 대기',
   'jobs.event.gateResolved': '결정 완료',
+  'jobs.event.limitHit': '한도 정지',
+  'jobs.event.resumed': '워커 재개',
   'jobs.event.status': '소식',
   'jobs.event.workerDone': '워커 보고',
   'jobs.event.question': '질문',

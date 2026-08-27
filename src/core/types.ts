@@ -292,6 +292,16 @@ export interface JobTask {
   provider?: Provider
   /** That Dispatch's startedAt. The renderer counts elapsed time from this with formatElapsed. */
   startedAt?: string
+  /** 지금 리셋을 기다리는 중이면 그 계정과 리셋 시각. **열린 Dispatch 의 마지막 이력 항목에
+   *  `resumedAt` 이 없을 때만 있다** — 끝난 Dispatch 의 열린 항목은 아무도 기다리지 않는 것이다
+   *  (앱이 꺼져 outcome_unknown 으로 닫힌 경우가 그 갈래다).
+   *
+   *  `resetsAt` 이 없는 대기도 있다 — 계정을 바꾸는 정지는 리셋 시각이라는 값 자체가 없고,
+   *  `'waiting'` 이어도 provider 가 시각을 주지 않는 경우가 있다. 화면은 시각 없이 "기다리는 중"
+   *  만 그린다. */
+  waiting?: { accountId: string; resetsAt?: string }
+  /** 이 Task 가 몇 번 이어졌는가 — **닫힌** 이력 항목의 수. 0 이면 이 칸이 없다. */
+  resumes?: number
 }
 
 export type JobEventKind =
@@ -301,6 +311,8 @@ export type JobEventKind =
   | 'message'
   | 'gate-opened'
   | 'gate-resolved'
+  | 'limit-hit'
+  | 'resumed'
 
 /** 타임라인 한 줄. 저장된 레코드가 아니라 core/orchestration/timeline.ts 가 파생한 값이다.
  *  Jobs 사이드바의 JobTask 와 같은 자리에 있는 이유도 같다 — 렌더러가 그리는 투영이다. */

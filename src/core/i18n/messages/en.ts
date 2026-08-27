@@ -712,6 +712,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.event.dispatchStarted': 'worker started',
   'jobs.event.gateOpened': 'awaiting decision',
   'jobs.event.gateResolved': 'decided',
+  'jobs.event.limitHit': 'usage limit hit',
+  'jobs.event.resumed': 'worker resumed',
   'jobs.event.status': 'status',
   'jobs.event.workerDone': 'worker report',
   'jobs.event.question': 'question',

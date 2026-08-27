@@ -144,6 +144,15 @@ function jobTaskOf(
   const open = state.gates
     .filter((g) => g.taskId === task.id && g.status === 'open')
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  // waiting 은 running 에서만 읽는다 — latest 를 쓰면 끝난 Dispatch 의 열린 항목(앱이 꺼져
+  // outcome_unknown 으로 닫힌 경우)이 "아직 기다리는 중"으로 보인다. 그 Dispatch 는 이미 끝났으므로
+  // 아무도 그 리셋을 기다리지 않는다.
+  const entries = running?.resumes ?? []
+  const openEntry =
+    entries.length > 0 && entries[entries.length - 1].resumedAt === undefined
+      ? entries[entries.length - 1]
+      : null
+  const done = entries.filter((e) => e.resumedAt !== undefined).length
   return {
     id: task.id,
     title: task.title,
@@ -164,7 +173,16 @@ function jobTaskOf(
         }
       : {}),
     openGates: open.length,
-    ...(running ? { provider: running.provider, startedAt: running.startedAt } : {})
+    ...(running ? { provider: running.provider, startedAt: running.startedAt } : {}),
+    ...(openEntry
+      ? {
+          waiting: {
+            accountId: openEntry.fromAccountId,
+            ...(openEntry.resetsAt !== undefined ? { resetsAt: openEntry.resetsAt } : {})
+          }
+        }
+      : {}),
+    ...(done > 0 ? { resumes: done } : {})
   }
 }
 
