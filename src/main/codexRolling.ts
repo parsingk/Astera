@@ -938,6 +938,7 @@ export class CodexRollingCoordinator {
       }
       if (!chain.codexSessionId || !chain.rolloutPath) {
         this.deps.log(`codex roll aborted — rollout unmapped session=${chain.liveId}`)
+        chain.unmappedWarned = false // let a still-unmapped state report itself again on the next retry round
         this.rescheduleAbortedRoll(chain, 'rollout unmapped')
         return
       }
