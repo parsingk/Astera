@@ -496,17 +496,19 @@ export class CodexRollingCoordinator {
       return
     }
     this.recordRecovery(chain)
-    // Unreachable: limitReached already requires reachedType or error, so reasonOf never falls back
-    // here — the argument stays only because the type still asks for one.
-    this.onLimit(chain, this.reasonOf(chain, 'errorInfo'))
+    this.onLimit(chain, this.reasonOf(chain))
   }
 
-  /** Which signal carried the verdict. `fallback` is what to report when neither structured signal is
-   *  present — the phrase on the caller's path, reachedType on the tick's (where no phrase is possible). */
-  private reasonOf(chain: Chain, fallback: LimitReason): LimitReason {
+  /** Which of the two structured signals carried the verdict.
+   *
+   *  **It no longer takes a fallback.** Both callers reach it only after `limitReached` has returned
+   *  true, and that now requires `reachedType` or `error` — the same two this function tests. So the
+   *  third branch was unreachable, and a parameter that can never be used is a parameter the next
+   *  reader has to disprove. `reachedType` is checked first because it is the more specific claim; in
+   *  practice it has never been observed non-null (see limitErrorOf), so the last line is what runs. */
+  private reasonOf(chain: Chain): LimitReason {
     if (chain.state?.reachedType) return 'reachedType'
-    if (chain.state?.error) return 'errorInfo'
-    return fallback
+    return 'errorInfo'
   }
 
   /** Why the phrase failed to carry a verdict — distinguishes four branches: rollout unmapped, the
@@ -1041,8 +1043,7 @@ export class CodexRollingCoordinator {
         if (this.judgedByPriorBlock(chain)) return
         if (limitReached(chain.state)) {
           this.recordRecovery(chain)
-          // No phrase was involved, so this can only be one of the two structured signals
-          this.onLimit(chain, this.reasonOf(chain, 'reachedType'))
+          this.onLimit(chain, this.reasonOf(chain))
           return
         }
         if (maxedOut(chain.state) && this.now() - chain.lastOutputAt > FALLBACK_SILENCE_MS) {
