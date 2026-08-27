@@ -42,12 +42,11 @@ const HEALTHY_MS = 60_000 // no limit detected for this long after a switch → 
  *  on codex 0.14x (usage_limit_exceeded); `reachedType` has never been observed non-null, so seeing it
  *  in the log would itself be news. `priorBlock` is the reopened-conversation case: the session has no
  *  snapshot of its own and the block came out of the rollout it attached to (measured 2026-08-27, three
- *  resumes of one conversation). Recording them separately is what keeps the next person from reading a
- *  structured hit as a screen-text hit, or either of those as the file's own record. */
+ *  resumes of one conversation). Recording it separately is what keeps the next person from reading a
+ *  structured hit as the file's own record. */
 type LimitReason =
   | 'reachedType'
   | 'errorInfo'
-  | 'text+gate'
   | 'maxed+silent'
   | 'priorBlock'
   | 'force'
@@ -480,8 +479,9 @@ export class CodexRollingCoordinator {
     if (s) chain.state = s
   }
 
-  /** Refreshes the state and applies verdicts ① and ② — or, while this session has no snapshot of its
-   *  own, what the rollout already recorded (judgedByPriorBlock) */
+  /** Refreshes the state and applies the verdict `limitReached` sees from the structured signal — or,
+   *  while this session has no snapshot of its own, priorLimitVerdict's reading of what the rollout
+   *  already recorded (judgedByPriorBlock) */
   private async evaluate(chain: Chain): Promise<void> {
     if (chain.rolling || chain.waitTimer || chain.disposed) return
     await this.refresh(chain)
@@ -496,7 +496,9 @@ export class CodexRollingCoordinator {
       return
     }
     this.recordRecovery(chain)
-    this.onLimit(chain, this.reasonOf(chain, 'text+gate'))
+    // Unreachable: limitReached already requires reachedType or error, so reasonOf never falls back
+    // here — the argument stays only because the type still asks for one.
+    this.onLimit(chain, this.reasonOf(chain, 'errorInfo'))
   }
 
   /** Which signal carried the verdict. `fallback` is what to report when neither structured signal is
@@ -507,8 +509,9 @@ export class CodexRollingCoordinator {
     return fallback
   }
 
-  /** Why the phrase was ignored — distinguishes unmapped, the file not having answered yet, no state
-   *  received, and usage below the gate.
+  /** Why the phrase failed to carry a verdict — distinguishes four branches: rollout unmapped, the
+   *  file's own record not read yet, no snapshot received, and the snapshot's usage numbers when neither
+   *  structured signal fired.
    *
    *  The in-flight case gets its own name because it is a different situation with the same symptom: on
    *  a history resume the verdict is waiting on the file's own record (askPriorReset), and the phrase
