@@ -365,9 +365,9 @@ export class CodexRollingCoordinator {
   /** Asks the rollout what block this conversation already ended on, and hands the answer to the chain.
    *  Called from the history-resume path alone (see attachRollout for why the other two sites must not).
    *
-   *  priorBlockAt, not the tail's looser priorResetAt: deciding *whether* the file records a block needs
-   *  the structured limit signal, because the reset alone is reported for any window at or above 90% —
-   *  a merely busy conversation. The reasoning is on priorBlockAt.
+   *  priorBlockAt, not the looser readPriorReset the tail seeds itself with: deciding *whether* the
+   *  file records a block needs the structured limit signal, because a reset on its own is reported for
+   *  any window at or above 90% — a merely busy conversation. The reasoning is on priorBlockAt.
    *
    *  Fire-and-forget: a failed read leaves it null, which reads as "no block on record" — the
    *  conservative side, since the verdict then needs a confirmed phrase before it acts. Until the answer

@@ -220,19 +220,6 @@ export class CodexRolloutTail {
     if (opts.startAtEnd) this.seed = readPriorReset(filePath)
   }
 
-  /** The reset recovered from the file at attach time, or null when no window at or above the gate
-   *  carries one. Awaits the seed the constructor started, so the first caller may wait on one file
-   *  read. This is the loose reading (readPriorReset): it answers "when would a block clear", never
-   *  "is there a block" — for that the coordinator calls priorBlockAt instead. read() consumes the
-   *  same seed to fill CodexLimitState.priorReset, which is what worstResetAt falls back to. */
-  async priorResetAt(): Promise<{ at: number; weekly: boolean } | null> {
-    if (this.seed) {
-      this.priorReset = await this.seed
-      this.seed = null
-    }
-    return this.priorReset
-  }
-
   /** With no new lines, returns the previous state unchanged (state does not disappear). Missing file or error gives null. */
   async read(): Promise<CodexLimitState | null> {
     if (this.seed) {
