@@ -398,10 +398,11 @@ const windows = (s: CodexLimitState): CodexWindow[] =>
   [s.primary, s.secondary].filter((w): w is CodexWindow => w !== null)
 
 /** Limit-reached decision (1) — the structured signal. Decision (2), the confirmed phrase taken on its
- *  own, is retired (2026-08-28): counted over the 9 field detections in one day of rolling.log, the
- *  phrase-only branch never caught a real limit (0 of 5) — every real limit came through the structured
- *  signal at 99-100% usage — while it produced every false positive (5 of 5), each a redraw of an
- *  earlier episode's screen text at 0-1% usage. (3) (100% + no output) needs a time condition, so the
+ *  own, is retired (2026-08-28): over one day of rolling.log the phrase-only branch never caught a real
+ *  limit — **every** phrase-only detection was false (5 of 5), each a redraw of an earlier episode's
+ *  screen text at 0-1% usage, while every real limit came through the structured signal at 99-100%.
+ *  (The log is live and its structured count keeps growing; the load-bearing figure is that the
+ *  phrase-only tally was 0 for 5, not the day's total.) (3) (100% + no output) needs a time condition, so the
  *  coordinator handles that one via maxedOut.
  *
  *  **What a false positive cost, measured.** Three of the five landed within two minutes of a legitimate
@@ -416,7 +417,9 @@ const windows = (s: CodexLimitState): CodexWindow[] =>
  *  signal at exactly that moment. Claude's statusLine is no different: the instant the limit blocks,
  *  statusLine itself stops updating (measured: 0 updates over 88s of idle). GATE_PCT in rolling.ts was
  *  removed as a phrase gate for that same reason. The two providers are **no longer symmetric** on the
- *  phrase, though: claude still accepts one, codex does not accept one at all.
+ *  phrase, though: codex does not accept one at all, while claude still does — gated on a direct
+ *  account-usage lookup rather than on a snapshot (see onLimitCandidate in rolling.ts, which explains
+ *  why claude cannot retire the phrase: a subagent limit has no structured field to fall back on).
  *
  *  What is no longer true is the old closing claim that false-positive defence was carried by the
  *  scanner's narrowed LIMIT_RE rather than a gate — the field data falsified that: all 5 false positives
@@ -424,7 +427,7 @@ const windows = (s: CodexLimitState): CodexWindow[] =>
  *
  *  **A grace window was measured, not assumed, and it does not fit.** Anchoring a 60-second window on
  *  the resume (the size of rolling.ts's REPLAY_GRACE_MS) would have suppressed 2 of the 5: the two that
- *  arrived 27 and 36 seconds after an in-place resume. It would have missed the third resume-adjacent
+ *  arrived 27 and 37 seconds after an in-place resume. It would have missed the third resume-adjacent
  *  one at 118 seconds, and both of the two that followed a rollout *attach* rather than a resume (44
  *  seconds and ~18 minutes) — a window anchored on a resume never opens for those. inReplayGrace's
  *  usage escape hatch would not have rescued any of them either: all five read 0-1%. Widening the

@@ -548,10 +548,13 @@ export class RollingCoordinator {
    *  codexSignal.ts reached the same conclusion for codex first, and its comment assumed "Claude keeps
    *  statusLine updating, so the gate is safe" — which this measurement disproved.
    *
-   *  **The two providers are no longer symmetric here.** codex retired the phrase as a verdict outright
-   *  (2026-08-28, limitReached) after the field log showed it produced 5 false positives and 0 real
-   *  hits there. This path keeps the phrase, and keeps it ungated, because claude has no equivalent of
-   *  codex's structured refusal record — the phrase and the transcript are the direct evidence it has. */
+   *  **The two providers diverged here, and the reason is worth knowing.** codex retired the screen
+   *  phrase as a verdict outright (2026-08-28, limitReached) once its field log showed the phrase-only
+   *  branch producing every false positive and no real hit. This path cannot do the same: claude's
+   *  structured coverage is only partial — parseClaudeLimitLine reads a structured error for the main
+   *  loop, but a subagent limit has no structured field at all and is sifted by the phrase. So the
+   *  phrase stays, and what does the job a retirement would have done is the evidence gate below,
+   *  which asks the account directly instead of trusting a snapshot that freezes the moment it matters. */
   private async onLimitCandidate(chain: Chain, text?: string): Promise<void> {
     if (chain.rolling || chain.waitTimer) return // ignore a re-trigger while rolling or waiting
     const payload = await this.deps.readStatusPayload(chain.liveId)
