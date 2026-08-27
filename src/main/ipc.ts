@@ -419,9 +419,11 @@ export function registerIpc(
     // What is checked is only the provider mix. An id that no longer resolves keeps its place in the
     // chain — neither coordinator's register() filters unknown ids out — and where that surfaces is the
     // roll: pickAvailable sees ids only, so a chain whose only usable index is a removed account reaches
-    // roll(), which aborts with a 'none' state push and schedules nothing, leaving the worker idle until a
-    // human notices. Adding that filter is a behaviour change and its own follow-up, not a thing this line
-    // does.
+    // roll(), which cannot resolve it and gives up on that attempt. What now happens instead of going
+    // quiet: that abort schedules its next attempt, so the worker stays visible as waiting and retries
+    // rather than sitting idle. The worker will keep failing for as long as the id is unresolvable, and
+    // the log line per retry is what tells someone to re-add the account or close the session. Adding
+    // that filter is a behaviour change and its own follow-up, not a thing this line does.
     const rollProviders = opts.rollAccountIds?.map((rid: string) => {
       try {
         return providerOf(core.accounts.get(rid))
