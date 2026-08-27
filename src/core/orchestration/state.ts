@@ -838,13 +838,63 @@ export function recordStopSnapshot(
 ): Res<Dispatch | null> {
   const dispatch = s.dispatches.find((d) => d.sessionId === a.sessionId && !d.endedAt)
   if (!dispatch) return ok(s, null)
+  // 스냅샷은 덮어쓰고(조립기가 직전 정지만 읽는다) 이력은 쌓는다 — 두 값이 답하는 질문이 다르다.
+  // 이미 열려 있는 항목(resumedAt 이 없는 것)이 있으면 새로 열지 않는다: 같은 정지가 'switching' 을
+  // 두 번 게시하는 경우가 있고(reattach), 탭이 그것을 거르지만 그 거름망이 이 함수의 계약은 아니다.
+  const held = dispatch.resumes ?? []
+  const open = held.length > 0 && held[held.length - 1].resumedAt === undefined
+  const resumes = open
+    ? held
+    : [
+        ...held,
+        {
+          stoppedAt: now,
+          reason: a.reason,
+          ...(a.resetsAt !== undefined ? { resetsAt: a.resetsAt } : {}),
+          fromAccountId: dispatch.accountId
+        }
+      ]
   const next: Dispatch = {
     ...dispatch,
     stopSnapshot: {
       headCommit: a.headCommit,
       reason: a.reason,
       ...(a.resetsAt !== undefined ? { resetsAt: a.resetsAt } : {})
-    }
+    },
+    ...(resumes.length > 0 ? { resumes } : {})
+  }
+  const task = s.tasks.find((t) => t.id === dispatch.taskId)
+  return ok(
+    {
+      ...s,
+      dispatches: replace(s.dispatches, next),
+      tasks: task ? replace(s.tasks, { ...task, updatedAt: now }) : s.tasks
+    },
+    next
+  )
+}
+
+/** 재개가 일어났다고 이력의 마지막 항목을 닫는다.
+ *
+ *  **정지가 기록돼 있지 않으면 아무것도 하지 않는다.** 항목을 지어내면 화면이 "0 번 멈추고 1 번
+ *  이어졌다" 를 그린다. 사용자 탭 세션(열린 Dispatch 가 없다)도 같은 이유로 조용히 넘어간다 —
+ *  `recordStopSnapshot` 과 같은 관례다.
+ *
+ *  **계정이 같아도 재개다.** claude 의 계정 하나짜리와 codex 의 제자리 재개는 세션 id 가 바뀌지 않아
+ *  `rekeyDispatch` 를 타지 않으므로, 그 경로는 `'nudged'` 로 여기 온다(rollTap.ts). */
+export function recordResume(
+  s: OrchState,
+  a: { sessionId: string; accountId: string },
+  now: string
+): Res<Dispatch | null> {
+  const dispatch = s.dispatches.find((d) => d.sessionId === a.sessionId && !d.endedAt)
+  if (!dispatch) return ok(s, null)
+  const held = dispatch.resumes ?? []
+  const last = held[held.length - 1]
+  if (!last || last.resumedAt !== undefined) return ok(s, null)
+  const next: Dispatch = {
+    ...dispatch,
+    resumes: [...held.slice(0, -1), { ...last, resumedAt: now, toAccountId: a.accountId }]
   }
   const task = s.tasks.find((t) => t.id === dispatch.taskId)
   return ok(

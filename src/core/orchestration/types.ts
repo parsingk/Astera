@@ -125,6 +125,28 @@ export interface Task {
   updatedAt: string
 }
 
+/** 한 번의 정지와 그 재개. **이 배열이 없으면 "몇 번 이어졌는가" 를 되살릴 방법이 아예 없다** —
+ *  롤은 Dispatch 를 닫지 않고 `sessionId`·`accountId` 만 고쳐 쓰고(rollTap 의 rekeyDispatch),
+ *  `stopSnapshot` 은 정지마다 덮어써서 직전 하나만 남는다.
+ *
+ *  **정지와 재개를 한 항목에 담는다.** 둘을 따로 두면 짝을 맞추는 규칙이 하나 더 생기고, 그 규칙이
+ *  어긋나는 날 화면이 "세 번 멈추고 두 번 이어졌다" 를 그린다. `resumedAt` 의 부재가 곧 "지금
+ *  기다리는 중" 이다 — 화면이 그것으로 판정한다. */
+export interface ResumeEntry {
+  /** ISO. 정지가 감지된 시각 */
+  stoppedAt: string
+  /** 정지를 일으킨 롤 상태 그대로 — `stopSnapshot.reason` 과 같은 값이다 */
+  reason: 'waiting' | 'switching'
+  /** ISO. `'waiting'` 일 때만(`RollStateEvent.nextRetryAt`). 계정을 바꾸는 쪽은 기다리지 않는다 */
+  resetsAt?: string
+  /** 정지 시점의 계정 */
+  fromAccountId: string
+  /** ISO. 재개가 실제로 일어난 시각. **없으면 아직 기다리는 중이다** */
+  resumedAt?: string
+  /** 재개 후의 계정. 같은 계정에서 이어갔으면 `fromAccountId` 와 같다 — 제자리 재개가 그 갈래다 */
+  toAccountId?: string
+}
+
 export interface Dispatch {
   id: string
   taskId: string
@@ -170,6 +192,9 @@ export interface Dispatch {
      *  않으므로 리셋 시각이라는 값 자체가 없다. */
     resetsAt?: string
   }
+  /** 이 Dispatch 가 멈추고 이어진 이력. 화면의 "기다리는 중" 과 "N 번 이어졌다" 가 이것을 읽는다
+   *  (`core/orchestration/view.ts`). 항목이 없으면 이 칸 자체가 없다. */
+  resumes?: ResumeEntry[]
   /** Cleanup held back at the user's request (worker-retain) */
   retained: boolean
   /** 이 Dispatch 가 구현이 아니라 검토인가. 한 Task 에 구현 Dispatch 와 검토 Dispatch 가 함께

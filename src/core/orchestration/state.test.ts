@@ -13,6 +13,7 @@ import {
   closeDispatch,
   rekeyDispatch,
   recordStopSnapshot,
+  recordResume,
   nextDelivery,
   ackDelivery,
   createQuestion,
@@ -29,6 +30,7 @@ import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task } from './types'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 const LATER = '2026-08-04T01:00:00.000Z'
+const EVEN_LATER = '2026-08-04T02:00:00.000Z'
 const unwrap = <T>(r: { ok: boolean } & Record<string, unknown>): { state: OrchState; value: T } => {
   if (!r.ok) throw new Error(`expected ok, got ${String(r.error)}`)
   return { state: r.state as OrchState, value: r.value as T }
@@ -2049,5 +2051,97 @@ describe('recordStopSnapshot — 정지 시점에만 잡을 수 있는 것', () 
     )
     const d = second.state.dispatches.find((x) => x.id === dispatchId)
     expect(d?.stopSnapshot).toEqual({ headCommit: 'bbb', reason: 'switching' })
+  })
+
+  it('정지가 이력에 항목을 하나 남긴다 (스냅샷과 함께)', () => {
+    // 열린 Dispatch 하나가 있는 상태에서 시작한다
+    const { s, dispatchId } = seed()
+    const r = unwrap<unknown>(
+      recordStopSnapshot(
+        s,
+        { sessionId: 'sess1', headCommit: 'abc', reason: 'waiting', resetsAt: LATER },
+        NOW
+      ) as never
+    )
+    const d = r.state.dispatches.find((x) => x.id === dispatchId)
+    expect(d?.resumes).toEqual([
+      { stoppedAt: NOW, reason: 'waiting', resetsAt: LATER, fromAccountId: 'acc1' }
+    ])
+    // 기존 필드는 그대로다 — Phase 2 의 조립기가 이것을 읽는다
+    expect(d?.stopSnapshot).toEqual({ headCommit: 'abc', reason: 'waiting', resetsAt: LATER })
+  })
+})
+
+describe('recordResume — 정지 이력의 마지막 항목을 닫는다', () => {
+  it('재개가 그 항목을 닫는다 — 계정이 바뀌면 새 계정이 함께 적힌다', () => {
+    const { s, dispatchId } = seed()
+    const stopped = unwrap<unknown>(
+      recordStopSnapshot(s, { sessionId: 'sess1', headCommit: null, reason: 'switching' }, NOW) as never
+    )
+    const r = unwrap<unknown>(
+      recordResume(stopped.state, { sessionId: 'sess1', accountId: 'acc2' }, LATER) as never
+    )
+    const d = r.state.dispatches.find((x) => x.id === dispatchId)
+    expect(d?.resumes?.at(-1)).toEqual({
+      stoppedAt: NOW,
+      reason: 'switching',
+      fromAccountId: 'acc1',
+      resumedAt: LATER,
+      toAccountId: 'acc2'
+    })
+  })
+
+  it('같은 계정으로 이어가도 재개다 (제자리 재개)', () => {
+    const { s, dispatchId } = seed()
+    const stopped = unwrap<unknown>(
+      recordStopSnapshot(
+        s,
+        { sessionId: 'sess1', headCommit: null, reason: 'waiting', resetsAt: LATER },
+        NOW
+      ) as never
+    )
+    const r = unwrap<unknown>(
+      recordResume(stopped.state, { sessionId: 'sess1', accountId: 'acc1' }, LATER) as never
+    )
+    const d = r.state.dispatches.find((x) => x.id === dispatchId)
+    expect(d?.resumes?.at(-1)?.toAccountId).toBe('acc1')
+  })
+
+  it('열려 있는 항목이 없으면 재개는 아무것도 하지 않는다', () => {
+    // 정지 없이 재개 신호만 온 경우 — 항목을 지어내면 "0번 멈추고 1번 이어졌다" 가 된다
+    const { s, dispatchId } = seed()
+    const r = recordResume(s, { sessionId: 'sess1', accountId: 'acc1' }, LATER)
+    expect(r.ok).toBe(true)
+    if (!r.ok) throw new Error('expected ok')
+    const d = r.state.dispatches.find((x) => x.id === dispatchId)
+    expect(d?.resumes).toBeUndefined()
+  })
+
+  it('두 번 정지하면 항목이 둘이다 (스냅샷은 덮어써도 이력은 남는다)', () => {
+    const { s, dispatchId } = seed()
+    const a = unwrap<unknown>(
+      recordStopSnapshot(
+        s,
+        { sessionId: 'sess1', headCommit: null, reason: 'waiting', resetsAt: LATER },
+        NOW
+      ) as never
+    )
+    const b = unwrap<unknown>(
+      recordResume(a.state, { sessionId: 'sess1', accountId: 'acc1' }, LATER) as never
+    )
+    const c = unwrap<unknown>(
+      recordStopSnapshot(
+        b.state,
+        { sessionId: 'sess1', headCommit: null, reason: 'switching' },
+        EVEN_LATER
+      ) as never
+    )
+    const d = c.state.dispatches.find((x) => x.id === dispatchId)
+    expect(d?.resumes).toHaveLength(2)
+  })
+
+  it('알 수 없는 세션은 조용히 넘어간다 (사용자 탭 세션)', () => {
+    const { s } = seed()
+    expect(recordResume(s, { sessionId: 'nope', accountId: 'acc1' }, LATER).ok).toBe(true)
   })
 })
