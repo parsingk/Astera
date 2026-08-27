@@ -33,6 +33,18 @@ export function blockedUntil(rec: BlockRecord): number {
   return rec.at ?? rec.since + RETRY_FALLBACK_MS
 }
 
+/** The one that keeps the account unusable for longer. Used both when two chains record a block on
+ *  the same account and when a chain's own record is merged with what another chain found.
+ *
+ *  Why "longer" and not "newer": a record whose reset time is unknown (at === null) expires after
+ *  RETRY_FALLBACK_MS, so a newer but blind record would shorten a block another chain has real
+ *  evidence for. The account is unusable until the latest time anyone can justify. */
+export function laterBlock(a: BlockRecord | null, b: BlockRecord | null): BlockRecord | null {
+  if (!a) return b
+  if (!b) return a
+  return blockedUntil(b) > blockedUntil(a) ? b : a
+}
+
 /** Walks once around from fromIndex for an account usable right now. Skips the current account. null if there is none. */
 export function pickAvailable(state: RetryState, fromIndex: number, now: number): number | null {
   const n = state.accountIds.length
