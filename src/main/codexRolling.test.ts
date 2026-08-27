@@ -292,6 +292,10 @@ describe('CodexRollingCoordinator', () => {
     const src = await writeRollout({ accountId: 'c1', uuid: 'cx-1', cwd: h.info1.cwd, primary: 95 })
     h.coord.register(h.info1)
     await advance(1_500) // 매핑 폴링
+    // 구조화 신호를 setup 이 아니라 문구 바로 앞에 덧붙이는 이유: tick 도 limitReached 를 부르고 구조화
+    // 신호는 문구 없이도 참이므로, setup 에 두면 15초 tick 이 문구보다 먼저 발화해 이 테스트의 타이밍이
+    // 달라진다. 문구가 방아쇠라는 이 테스트의 성격을 유지하려면 덧붙이는 시점이 그 직전이어야 한다.
+    await appendLimitError(src)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
@@ -313,9 +317,10 @@ describe('CodexRollingCoordinator', () => {
         return Promise.resolve('RE-READ YOUR SPEC FILE')
       }
     })
-    await writeRollout({ accountId: 'c1', uuid: 'cx-hook', cwd: h.info1.cwd, primary: 95 })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-hook', cwd: h.info1.cwd, primary: 95 })
     h.coord.register(h.info1)
     await advance(1_500) // 매핑 폴링
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     // codex 롤은 계정 수와 무관하게 항상 kill + --resume 이므로 늘 전체 인계다(SPEC §11.5)
@@ -328,9 +333,10 @@ describe('CodexRollingCoordinator', () => {
   // 가드가 없으면 깨진 packet 계약이 롤 자체를 중단시켜 워커를 한도에 멈춘 채로 남긴다.
   it('resumeText 가 던져도 롤은 계속되고 기존 문장으로 재개한다', async () => {
     const h = harness({ resumeText: () => Promise.reject(new Error('packet contract broke')) })
-    await writeRollout({ accountId: 'c1', uuid: 'cx-throw', cwd: h.info1.cwd, primary: 95 })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-throw', cwd: h.info1.cwd, primary: 95 })
     h.coord.register(h.info1)
     await advance(1_500) // 매핑 폴링
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
@@ -341,9 +347,10 @@ describe('CodexRollingCoordinator', () => {
   it('롤로 띄운 세션에 orchEnv를 실어 보낸다', async () => {
     const env = { cliPath: 'C:/astera/cli.js', infoPath: 'C:/astera/info.json', skillsPath: 'C:/astera/skills' }
     const h = harness({ orchEnv: () => env })
-    await writeRollout({ accountId: 'c1', uuid: 'cx-orchenv', cwd: h.info1.cwd, primary: 95 })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-orchenv', cwd: h.info1.cwd, primary: 95 })
     h.coord.register(h.info1)
     await advance(1_500) // 매핑 폴링
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.spawned[0].orchEnv).toEqual(env)
@@ -352,9 +359,10 @@ describe('CodexRollingCoordinator', () => {
 
   it('orchEnv dep이 주입되지 않으면 실리지 않는다', async () => {
     const h = harness() // 주입 없음
-    await writeRollout({ accountId: 'c1', uuid: 'cx-noorchenv', cwd: h.info1.cwd, primary: 95 })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-noorchenv', cwd: h.info1.cwd, primary: 95 })
     h.coord.register(h.info1)
     await advance(1_500) // 매핑 폴링
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.spawned[0].orchEnv).toBeUndefined()
@@ -363,9 +371,10 @@ describe('CodexRollingCoordinator', () => {
 
   it('롤 respawn 시 slackNotify를 그대로 전달한다', async () => {
     const h = harness()
-    await writeRollout({ accountId: 'c1', uuid: 'cx-slack', cwd: h.info1.cwd, primary: 95 })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-slack', cwd: h.info1.cwd, primary: 95 })
     h.coord.register({ ...h.info1, slackNotify: true })
     await advance(1_500) // 매핑 폴링
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.spawned[0].info.slackNotify).toBe(true)
@@ -420,11 +429,12 @@ describe('CodexRollingCoordinator', () => {
     const h = harness()
     const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
     const resetSec = Math.floor((Date.now() + 300_000) / 1000) // 5분 뒤
-    await writeRollout({
+    const file = await writeRollout({
       accountId: 'c1', uuid: 'cx-inplace-1', cwd: single.cwd, primary: 99, primaryReset: resetSec
     })
     h.coord.register(single)
     await advance(1_500)
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.sent.at(-1)?.payload.state).toBe('waiting')
@@ -449,11 +459,12 @@ describe('CodexRollingCoordinator', () => {
     })
     const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
     const resetSec = Math.floor((Date.now() + 300_000) / 1000)
-    await writeRollout({
+    const file = await writeRollout({
       accountId: 'c1', uuid: 'cx-inplace-2', cwd: single.cwd, primary: 99, primaryReset: resetSec
     })
     h.coord.register(single)
     await advance(1_500)
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     await advanceIntoResume(400_000)
@@ -507,11 +518,12 @@ describe('CodexRollingCoordinator', () => {
   it('다계정 체인의 첫 한도는 제자리 재개가 아니라 즉시 복사→kill→spawn 이다 (회귀 방지)', async () => {
     const h = harness()
     const resetSec = Math.floor((Date.now() + 120_000) / 1000)
-    await writeRollout({
+    const file = await writeRollout({
       accountId: 'c1', uuid: 'cx-inplace-4', cwd: h.info1.cwd, primary: 99, primaryReset: resetSec
     })
     h.coord.register(h.info1)
     await advance(1_500)
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2']) // 첫 한도는 즉시 전환
@@ -523,13 +535,14 @@ describe('CodexRollingCoordinator', () => {
     const h = harness()
     const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
     const resetSec = Math.floor((Date.now() + 300_000) / 1000)
-    await writeRollout({
+    const file = await writeRollout({
       accountId: 'c1', uuid: 'cx-inplace-5', cwd: single.cwd, primary: 99, primaryReset: resetSec
     })
     h.coord.register(single)
     await advance(1_500)
     // 머리말만 온 프롬프트 — 번호가 없어 응답할 수 없다(화면에 남는다)
     h.coord.handleData({ sessionId: 's1', data: '  Approaching rate ' + 'limits\n  Switch?\n' })
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     await advance(400_000)
@@ -547,6 +560,7 @@ describe('CodexRollingCoordinator', () => {
     })
     h.coord.register(single)
     await advance(1_500)
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     // planRetry는 실측 reset에 RETRY_MARGIN_MS(60초)를 더하므로 첫 대기는 120초가 아니라 실제로는
@@ -558,6 +572,7 @@ describe('CodexRollingCoordinator', () => {
     // healthy 구간 안에서 다시 한도 — 즉 제자리 재개가 회복시키지 못했다. onLimit은 healthyTimer를
     // 먼저 지우므로(자체 clearTimeout) inPlaceUsed 플래그는 여기까지 살아남는다.
     await appendTokenCount(file, { primary: 99, primaryReset: resetSec })
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     await advance(70_000) // 두 번째 대기 만료(reset이 이미 과거라 planRetry의 60초 하한이 적용된다)
@@ -574,11 +589,12 @@ describe('CodexRollingCoordinator', () => {
     const h = harness()
     const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
     const resetSec = Math.floor((Date.now() + 120_000) / 1000)
-    await writeRollout({
+    const file = await writeRollout({
       accountId: 'c1', uuid: 'cx-inplace-stall', cwd: single.cwd, primary: 99, primaryReset: resetSec
     })
     h.coord.register(single)
     await advance(1_500)
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     await advanceIntoResume(188_400) // 첫 대기 만료(reset+60초) → 제자리 재개, 마감 시각까지 ~50초 남았다
@@ -599,6 +615,7 @@ describe('CodexRollingCoordinator', () => {
     })
     h.coord.register(single)
     await advance(1_500)
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     await advanceIntoResume(188_400) // 첫 대기 만료 → 제자리 재개
@@ -609,6 +626,7 @@ describe('CodexRollingCoordinator', () => {
     expect(h.events).toEqual([]) // 죽이지 않는다
     // 그리고 '에피소드당 한 번' 플래그가 풀렸다 — 다음 한도는 다시 제자리 재개를 받는다
     await appendTokenCount(file, { primary: 99, primaryReset: Math.floor((Date.now() + 120_000) / 1000) })
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     await advanceIntoResume(188_400) // 두 번째 대기 만료
@@ -628,11 +646,13 @@ describe('CodexRollingCoordinator', () => {
     })
     h.coord.register(single)
     await advance(1_500)
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     await advanceIntoResume(188_400) // 첫 대기 만료 → 제자리 재개(플래그가 선다)
     // healthy 구간 안의 두 번째 한도 → 위 테스트가 지키는 성질에 따라 이번에는 kill 경로다
     await appendTokenCount(file, { primary: 99, primaryReset: resetSec })
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     await advance(70_000)
@@ -640,6 +660,7 @@ describe('CodexRollingCoordinator', () => {
     await advance(60_000) // 롤의 healthy 타이머 만료 — 여기서 플래그가 풀린다
     // 세 번째 한도. 단일 계정 체인은 dest === src 라 롤 뒤에도 같은 파일을 읽는다
     await appendTokenCount(file, { primary: 99, primaryReset: Math.floor((Date.now() + 120_000) / 1000) })
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's2', data: LIMIT_TEXT })
     await advance(100)
     await advanceIntoResume(188_400) // 세 번째 대기 만료
@@ -665,29 +686,32 @@ describe('CodexRollingCoordinator', () => {
     h.coord.register(single)
     // 체인 2: 같은 c1 에서 60분짜리 기록을 적는다 — 체인 1 의 대기(3분)보다 오래 남는다
     const cwd2 = path.join(tmp, 'work', 'q')
-    await writeRollout({
+    const file2 = await writeRollout({
       accountId: 'c1', uuid: 'cx-clear-b', cwd: cwd2, primary: 99, primaryReset: sec(3_600_000)
     })
     h.coord.register({ ...h.info1, id: 's10', cwd: cwd2, rollAccountIds: ['c1', 'c2'] })
     // 체인 3(체크포인트)과 체인 4(마지막 판정): c2 에서 시작하고 c1 은 한 번도 만진 적이 없다
     const cwd3 = path.join(tmp, 'work', 'r')
-    await writeRollout({
+    const file3 = await writeRollout({
       accountId: 'c2', uuid: 'cx-clear-c', cwd: cwd3, primary: 99, primaryReset: sec(600_000)
     })
     h.coord.register({ ...h.info1, id: 's20', accountId: 'c2', cwd: cwd3, rollAccountIds: ['c2', 'c1'] })
     const cwd4 = path.join(tmp, 'work', 's')
-    await writeRollout({
+    const file4 = await writeRollout({
       accountId: 'c2', uuid: 'cx-clear-d', cwd: cwd4, primary: 99, primaryReset: sec(600_000)
     })
     h.coord.register({ ...h.info1, id: 's30', accountId: 'c2', cwd: cwd4, rollAccountIds: ['c2', 'c1'] })
     await advance(1_500) // 네 체인의 매핑 폴링
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
+    await appendLimitError(file2)
     h.coord.handleData({ sessionId: 's10', data: LIMIT_TEXT }) // 체인 1 판정 뒤에 적힌다
     await advance(100)
     // 중간 체크포인트: 지금은 기록이 살아 있어야 한다. 체인 3 은 c1 을 만진 적이 없는데도 갈 곳이
     // 없어 대기한다 — 이 단언이 없으면 마지막 단언이 "애초에 공유가 없었다"로도 통과한다.
     const spawnedBefore = h.spawned.length
+    await appendLimitError(file3)
     h.coord.handleData({ sessionId: 's20', data: LIMIT_TEXT })
     await advance(100)
     expect(h.spawned.length).toBe(spawnedBefore) // c1 으로 옮기지 않았다
@@ -699,6 +723,7 @@ describe('CodexRollingCoordinator', () => {
     await advance(60_000) // 마감 시각 경과
     // 체인 4: c1 이 다시 후보다. 기록이 남아 있었다면 여기서도 대기한다
     const spawnedBeforeLast = h.spawned.length
+    await appendLimitError(file4)
     h.coord.handleData({ sessionId: 's30', data: LIMIT_TEXT })
     await advance(100)
     // 개수까지 본다 — 마지막 항목만 보면 이전 체인이 남긴 spawn 으로 헛도는 단언이 된다.
@@ -715,39 +740,43 @@ describe('CodexRollingCoordinator', () => {
     const t0 = Date.now()
     const sec = (ms: number): number => Math.floor((t0 + ms) / 1000)
     // 체인 1: [c2, c1] — c2 에서 한도 → c1 로 롤. 이제 c1 에서 정상으로 돌고, healthy 타이머가 걸린다
-    await writeRollout({
+    const file1 = await writeRollout({
       accountId: 'c2', uuid: 'cx-roll-a', cwd: h.info1.cwd, primary: 99, primaryReset: sec(600_000)
     })
     h.coord.register({ ...h.info1, accountId: 'c2', rollAccountIds: ['c2', 'c1'] })
     // 체인 2: c1 에서 60분짜리 기록을 적는다(오탐이든 진짜든). 갈 곳이 없어 대기로 끝난다
     const cwd2 = path.join(tmp, 'work', 'q')
-    await writeRollout({
+    const file2 = await writeRollout({
       accountId: 'c1', uuid: 'cx-roll-b', cwd: cwd2, primary: 99, primaryReset: sec(3_600_000)
     })
     h.coord.register({ ...h.info1, id: 's10', cwd: cwd2, rollAccountIds: ['c1', 'c2'] })
     // 체인 3(체크포인트)과 체인 4(마지막 판정)
     const cwd3 = path.join(tmp, 'work', 'r')
-    await writeRollout({
+    const file3 = await writeRollout({
       accountId: 'c2', uuid: 'cx-roll-c', cwd: cwd3, primary: 99, primaryReset: sec(600_000)
     })
     h.coord.register({ ...h.info1, id: 's20', accountId: 'c2', cwd: cwd3, rollAccountIds: ['c2', 'c1'] })
     const cwd4 = path.join(tmp, 'work', 's')
-    await writeRollout({
+    const file4 = await writeRollout({
       accountId: 'c2', uuid: 'cx-roll-d', cwd: cwd4, primary: 99, primaryReset: sec(600_000)
     })
     h.coord.register({ ...h.info1, id: 's30', accountId: 'c2', cwd: cwd4, rollAccountIds: ['c2', 'c1'] })
     await advance(1_500) // 네 체인의 매핑 폴링
+    await appendLimitError(file1)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.spawned.at(-1)?.info.accountId).toBe('c1') // 체인 1 이 c1 에 도착했다
+    await appendLimitError(file2)
     h.coord.handleData({ sessionId: 's10', data: LIMIT_TEXT }) // c1 을 공유 기록에 올린다
     await advance(100)
     const spawnedBefore = h.spawned.length
+    await appendLimitError(file3)
     h.coord.handleData({ sessionId: 's20', data: LIMIT_TEXT })
     await advance(100)
     expect(h.spawned.length).toBe(spawnedBefore) // 체크포인트: c1 으로 옮기지 않고 대기한다
     await advance(65_000) // 체인 1 의 롤 healthy 타이머 만료 → 공유 기록이 지워진다
     const spawnedBeforeLast = h.spawned.length
+    await appendLimitError(file4)
     h.coord.handleData({ sessionId: 's30', data: LIMIT_TEXT })
     await advance(100)
     // **개수가 핵심이다.** 이 하네스의 마지막 spawn 은 체인 1 이 c1 으로 롤한 그것이므로,
@@ -773,6 +802,7 @@ describe('CodexRollingCoordinator', () => {
     })
     h.coord.register(single)
     await advance(1_500)
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     // 대기 만료 시각으로 **정확히** 이동한다 — 그러면 문장은 들어갔고 엔터 타이머는 아직 예약 상태다
@@ -899,9 +929,10 @@ describe('CodexRollingCoordinator', () => {
       release = r
     })
     const h = harness({ copy: () => gate }) // 수동으로 풀 때까지 롤이 copy에서 멈춘다
-    await writeRollout({ accountId: 'c1', uuid: 'cx-8', cwd: h.info1.cwd, primary: 95 })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-8', cwd: h.info1.cwd, primary: 95 })
     h.coord.register(h.info1)
     await advance(1_500)
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     // 롤에 진입해 copy에서 대기 중 — switching 배너는 이미 나갔고 kill/spawn 전이다
@@ -919,10 +950,11 @@ describe('CodexRollingCoordinator', () => {
   // 한 대화를 두 체인이 물면 둘 다 롤하고 findLiveByCodexSession도 엉뚱한 탭을 돌려준다.
   it('다른 활성 체인이 점유한 rollout은 물지 않는다 (같은 cwd·계정 동시 세션)', async () => {
     const h = harness()
-    await writeRollout({ accountId: 'c1', uuid: 'cx-10', cwd: h.info1.cwd, primary: 95 })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-10', cwd: h.info1.cwd, primary: 95 })
     h.coord.register(h.info1)
     h.coord.register({ ...h.info1, id: 's10' }) // 같은 폴더에서 띄운 두 번째 롤링 탭
     await advance(1_500) // 두 체인이 같은 rollout을 두고 경쟁한다
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     h.coord.handleData({ sessionId: 's10', data: LIMIT_TEXT })
     await advance(100)
@@ -943,7 +975,7 @@ describe('CodexRollingCoordinator', () => {
     const h = harness({ getAccount: (id) => accounts[id] ?? null })
     const resetSec = Math.floor((Date.now() + 300_000) / 1000) // 5분 뒤 — 기록이 살아 있는 창
     // 체인 1: [c1, c2, c3] — c1 에서 한도 → c2 로 롤. 그 순간 c1 이 공유 기록에 올라간다
-    await writeRollout({
+    const file1 = await writeRollout({
       accountId: 'c1', uuid: 'cx-share-1', cwd: h.info1.cwd, primary: 99, primaryReset: resetSec
     })
     h.coord.register({ ...h.info1, rollAccountIds: ['c1', 'c2', 'c3'] })
@@ -951,7 +983,7 @@ describe('CodexRollingCoordinator', () => {
     // c2 에서 한도를 만나면 라운드 로빈이 가리키는 다음 계정은 c1 이다 — 공유가 없으면 방금 막힌
     // 그 계정으로 그대로 옮겨 간다.
     const cwd2 = path.join(tmp, 'work', 'q')
-    await writeRollout({
+    const file2 = await writeRollout({
       accountId: 'c2', uuid: 'cx-share-2', cwd: cwd2, primary: 99, primaryReset: resetSec
     })
     h.coord.register({
@@ -962,9 +994,11 @@ describe('CodexRollingCoordinator', () => {
       rollAccountIds: ['c2', 'c1', 'c3']
     })
     await advance(1_500) // 두 체인의 매핑 폴링
+    await appendLimitError(file1)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.spawned.at(-1)?.info.accountId).toBe('c2')
+    await appendLimitError(file2)
     h.coord.handleData({ sessionId: 's10', data: LIMIT_TEXT })
     await advance(100)
     expect(h.spawned.at(-1)?.info.accountId).toBe('c3')
@@ -974,10 +1008,11 @@ describe('CodexRollingCoordinator', () => {
   // 리뷰 지적: PTY 청크는 임의 위치에서 잘린다 (detect.ts OutputScanner와 같은 이유)
   it('한도 문구가 두 청크로 쪼개져 와도 감지한다 (청크 경계)', async () => {
     const h = harness()
-    await writeRollout({ accountId: 'c1', uuid: 'cx-11', cwd: h.info1.cwd, primary: 95 })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-11', cwd: h.info1.cwd, primary: 95 })
     h.coord.register(h.info1)
     await advance(1_500)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT.slice(0, 12) })
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT.slice(12) + '\n' })
     await advance(100)
     expect(h.events).toContain('spawn:s2:c2')
@@ -1081,6 +1116,7 @@ describe('CodexRollingCoordinator', () => {
     h.coord.register({ ...h.info1, resumeSessionId: 'cx-resume' }, file)
     await advance(100) // 매핑 폴링(1초)을 기다리지 않는다 — 이미 붙어 있어야 한다
     await appendTokenCount(file, { primary: 95 }) // 재개된 세션이 이어 쓴 스냅숏
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
@@ -1102,15 +1138,17 @@ describe('CodexRollingCoordinator', () => {
         await fs.copyFile(src, to)
       }
     })
-    await writeRollout({ accountId: 'c1', uuid: 'cx-2nd', cwd: h.info1.cwd, primary: 95 })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-2nd', cwd: h.info1.cwd, primary: 95 })
     h.coord.register(h.info1)
     await advance(1_500) // 매핑 폴링
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.events).toContain('spawn:s2:c2')
 
     // 재개된 codex 는 새 파일을 만들지 않고 복사본(dest)에 이어 쓴다
     await appendTokenCount(dest, { primary: 96 })
+    await appendLimitError(dest)
     h.coord.handleData({ sessionId: 's2', data: LIMIT_TEXT })
     await advance(100)
     expect(h.sent.at(-1)?.payload.state).toBe('waiting') // 두 계정이 한 바퀴 막혔다 → 대기
@@ -1347,9 +1385,10 @@ describe('CodexRollingCoordinator', () => {
   it('전환 직후의 문구 한 줄은 아무것도 바꾸지 않는다 (복구값은 undefined 로 지운다)', async () => {
     const blocks = new BlockRegistry()
     const h = harness({ blocks })
-    await writeRollout({ accountId: 'c1', uuid: 'cx-prior-afterroll', cwd: h.info1.cwd, primary: 95 })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-prior-afterroll', cwd: h.info1.cwd, primary: 95 })
     h.coord.register(h.info1) // 두 계정 체인
     await advance(1_500) // 매핑 폴링
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
@@ -1445,12 +1484,13 @@ describe('중단된 롤이 다음 시도를 예약한다', () => {
 
   it('계정이 사라져 롤을 포기하면 다시 시도할 시각을 잡는다 (영구 유휴 방지)', async () => {
     const h = harness({ getAccount: (id) => (id === 'c1' ? acc('c1', 'Codex A') : null) })
-    await writeRollout({
+    const file = await writeRollout({
       accountId: 'c1', uuid: 'cx-gone', cwd: h.info1.cwd,
       primary: 95, primaryReset: Math.floor((Date.now() + 30 * 60_000) / 1000)
     })
     h.coord.register(h.info1)
     await advance(1_500) // 매핑 폴링
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.events).toEqual([]) // 롤 중단 — copy/kill/spawn 없음
@@ -1465,12 +1505,13 @@ describe('중단된 롤이 다음 시도를 예약한다', () => {
 
   it('롤이 예외로 실패해도 다시 시도할 시각을 잡는다', async () => {
     const h = harness({ copy: () => Promise.reject(new Error('rollout copy blew up')) })
-    await writeRollout({
+    const file = await writeRollout({
       accountId: 'c1', uuid: 'cx-copy-throw', cwd: h.info1.cwd,
       primary: 95, primaryReset: Math.floor((Date.now() + 30 * 60_000) / 1000)
     })
     h.coord.register(h.info1)
     await advance(1_500) // 매핑 폴링
+    await appendLimitError(file)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.events).toEqual([]) // 복사가 던졌으므로 kill·spawn 은 없다
