@@ -411,8 +411,12 @@ const windows = (s: CodexLimitState): CodexWindow[] =>
  *  rolling.ts is no longer a gate for accepting the phrase either (it was removed). So both providers
  *  decide without a gate. What is no longer true is the old closing claim that false-positive defence was
  *  carried by the scanner's narrowed LIMIT_RE rather than a gate — the field data falsified that: all 4
- *  false positives came through the scanner. A grace window is not the answer either — the measured false
- *  positives arrived 118 seconds after resume, inside any window short enough to still be useful.
+ *  false positives came through the scanner. A grace window is not the answer either, and the field data
+ *  says so twice: the one false positive that did follow an in-place resume arrived 118 seconds after it —
+ *  **outside** a window the size of rolling.ts's REPLAY_GRACE_MS, and a window long enough to cover it
+ *  would also swallow a genuine limit landing soon after a switch, which is the case inReplayGrace's own
+ *  comment records as measured. The other three did not follow a resume at all, so a window anchored on
+ *  one could never have covered them.
  *
  *  The phrase is not gone. priorLimitVerdict — the verdict for a resumed session before it has written a
  *  rate_limits record of its own — still reads it, there only to corroborate a structured record

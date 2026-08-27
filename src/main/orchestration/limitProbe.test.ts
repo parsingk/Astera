@@ -231,7 +231,7 @@ describe('makeLimitProbe — codex', () => {
     expect(result).toBeNull()
   })
 
-  it('reachedType이 null이면 null — 사용률이 높아도 (textHit:false이므로)', async () => {
+  it('구조화 신호가 없으면 null — 사용률이 99%여도', async () => {
     const cwd = 'D:/work/codexp2'
     const startedAt = new Date(Date.now() - 60_000).toISOString()
     await writeRollout(dir, cwd, 'uuid-2', [tokenCount({ primary: 99, reached: null })])
