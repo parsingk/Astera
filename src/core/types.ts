@@ -300,7 +300,10 @@ export interface JobTask {
    *  `'waiting'` 이어도 provider 가 시각을 주지 않는 경우가 있다. 화면은 시각 없이 "기다리는 중"
    *  만 그린다. */
   waiting?: { accountId: string; resetsAt?: string }
-  /** 이 Task 가 몇 번 이어졌는가 — **닫힌** 이력 항목의 수. 0 이면 이 칸이 없다. */
+  /** **지금 도는 Dispatch** 가 몇 번 이어졌는가 — 그 Dispatch 의 **닫힌** 이력 항목의 수다. 0 이면
+   *  이 칸이 없다. Task 전체의 합이 아니다: 재시도는 새 Dispatch 를 열므로 이 숫자가 0 으로
+   *  돌아가고, 그때도 앞선 Dispatch 의 정지·재개는 상세 창의 타임라인에 그대로 남는다
+   *  (core/orchestration/timeline.ts 는 Dispatch 마다 이력을 편다). */
   resumes?: number
 }
 
