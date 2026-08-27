@@ -2901,12 +2901,15 @@ export default function App(): React.JSX.Element {
                       />
                     </label>
                     <span className="settings-hint">{t('settings.orchestration.hint')}</span>
+                    {/* 재개 전략 — 한도에 걸린 세션을 어떻게 이어갈지. Appearance 가 아니라 여기 있는
+                        이유: 이것은 보이는 방식이 아니라 동작이고, 바로 위 오케스트레이션 토글과 같은
+                        갈래(롤링·워커)를 건드린다. */}
+                    <ResumeStrategySettings />
                   </>
                 )}
                 {settingsTab === 'appearance' && (
                   <>
                     <ThemeSettings />
-                    <ResumeStrategySettings />
                     <TerminalFontSettings />
                   </>
                 )}
