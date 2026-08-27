@@ -772,7 +772,7 @@ export class RollingCoordinator {
       // 새 프로세스를 띄운다. onLimit 은 판정 전에 healthyTimer 를 지우므로 이 플래그는 건강
       // 창 안에 들어온 두 번째 한도를 넘어 살아남는다. 줄이 삼켜지고 두 번째 한도가 아예 오지 않는
       // 경우는 이 분기에 닿지 못한다 — 그쪽을 덮는 것이 settleInPlace 다. codex 쪽과 같은 설계.
-      this.deps.log(`resume in place did not recover — falling back to respawn session=${chain.liveId}`)
+      this.deps.log(`resume in place did not recover — falling back to attempt a respawn session=${chain.liveId}`)
       return this.roll(chain, toIndex)
     }
     if (chain.choicePending) {
@@ -943,12 +943,17 @@ export class RollingCoordinator {
    *  **Why retrying an abort that will abort again is right, and what the loop costs.** If the account
    *  is gone for good this repeats at the interval planRetry computes — the recorded reset plus the
    *  margin, or the 15-minute fallback when no reset is known. (The 60-second floor only applies when
-   *  that time has already passed, so it is not the loop's normal period.) Each round logs. And a round
-   *  is not always only a log line: when planRetry's target resolves to the account this chain is
-   *  already on, resumeAfterWait resumes in place, which types the prompt and Enter into the live PTY.
-   *  That is the same loop shape the ordinary wait path has always had, so none of it is new behaviour
-   *  — and it is still better than silence, because the log is the only thing that can tell someone to
-   *  re-add the account or close the session. */
+   *  that time has already passed, so it is not the loop's normal period for the 'no such account' and
+   *  'roll failed' aborts — but the 'no session metadata' abort settleInPlace feeds always arrives
+   *  after its own reset has already passed, so there the floor *is* the period: measured 45 rounds in
+   *  45 minutes.) Each round logs. And a round is not always only a log line: when planRetry's target
+   *  resolves to the account this chain is already on, resumeAfterWait resumes in place, which types
+   *  the prompt and Enter into the live PTY — but inPlaceUsed limits that to the first such round in a
+   *  blocked episode; every round after it goes through roll() instead, which finds the same metadata
+   *  still missing and aborts before the PTY is touched at all. That is the same loop shape the
+   *  ordinary wait path has always had, so none of it is new behaviour — and it is still better than
+   *  silence, because the log is the only thing that can tell someone to re-add the account or close
+   *  the session. */
   private rescheduleAbortedRoll(chain: Chain, why: string): void {
     // Defensive. No caller can actually reach here with a wait already armed — onLimit's wait branch
     // does not call roll() — but it is checked because being wrong once costs a second timer on the
