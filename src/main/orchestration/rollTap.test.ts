@@ -600,4 +600,26 @@ describe('OrchRollTap 정지 표시의 수명', () => {
     expect(resumesOf(deps, dispatchId)).toHaveLength(1)
     expect(g.calls).toBe(1)
   })
+
+  it('한 에피소드 안의 두 번째 waiting 게시는 이미 있는 항목의 리셋 시각을 갱신한다', async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    const g = fakeGit(['head-at-limit'])
+    const tap = new OrchRollTap(deps, { git: g.git })
+    tap.onRollState(
+      rollState({ sessionId: 'sess1', state: 'waiting', nextRetryAt: '2026-08-25T03:00:00.000Z' })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    // 중단된 롤의 재시도 루프가 다음 회차의 새 리셋 시각으로 같은 에피소드에 다시 'waiting' 을 낸다
+    tap.onRollState(
+      rollState({ sessionId: 'sess1', state: 'waiting', nextRetryAt: '2026-08-25T03:15:00.000Z' })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    const resumes = resumesOf(deps, dispatchId)
+    expect(resumes).toHaveLength(1) // 새 항목을 쌓지 않는다 — 에피소드는 여전히 하나다
+    expect(resumes?.[0].resetsAt).toBe('2026-08-25T03:15:00.000Z') // 두 번째 시각으로 갱신됐다
+    expect(resumes?.[0].resumedAt).toBeUndefined() // 재개 횟수는 그대로다 — 아직 기다리는 중이다
+    expect(snapshotOf(deps, dispatchId)?.resetsAt).toBe('2026-08-25T03:15:00.000Z')
+    expect(g.calls).toBe(1) // 리셋 시각 갱신은 HEAD 를 다시 읽지 않는다
+  })
 })

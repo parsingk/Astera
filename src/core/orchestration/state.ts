@@ -909,6 +909,35 @@ export function recordStopHead(
   return ok({ ...s, dispatches: replace(s.dispatches, next) }, next)
 }
 
+/** A later `'waiting'` publication inside a stop episode already on record carries a fresher retry
+ *  time than the one on file — the retry loop that follows an aborted roll (rolling.ts,
+ *  codexRolling.ts) republishes `'waiting'` every round, each with its own `nextRetryAt`. The
+ *  episode itself is deduped by the caller (main/orchestration/rollTap.ts's `stopped`), so this only
+ *  ever runs for a dispatch that already has an open entry — dropping the new time instead of
+ *  recording it left the Jobs row and Checkpoint quoting the very first retry forever.
+ *
+ *  **Patches the open entry in place; does not open a second one.** The episode is still one stop —
+ *  `resumes` keeps its length and its resume count, and `headCommit`/`reason`/`stoppedAt`/
+ *  `fromAccountId` are untouched (same convention as `recordStopHead`, which patches one field of an
+ *  existing record rather than writing a new one). No open entry — already resumed, or no stop on
+ *  record at all — is a no-op. */
+export function updateStopReset(
+  s: OrchState,
+  a: { sessionId: string; resetsAt: string }
+): Res<Dispatch | null> {
+  const dispatch = s.dispatches.find((d) => d.sessionId === a.sessionId && !d.endedAt)
+  if (!dispatch?.stopSnapshot) return ok(s, null)
+  const resumes = dispatch.resumes ?? []
+  const last = resumes[resumes.length - 1]
+  if (!last || last.resumedAt !== undefined) return ok(s, null)
+  const next: Dispatch = {
+    ...dispatch,
+    stopSnapshot: { ...dispatch.stopSnapshot, resetsAt: a.resetsAt },
+    resumes: [...resumes.slice(0, -1), { ...last, resetsAt: a.resetsAt }]
+  }
+  return ok({ ...s, dispatches: replace(s.dispatches, next) }, next)
+}
+
 /** 재개가 일어났다고 이력의 마지막 항목을 닫는다.
  *
  *  **정지가 기록돼 있지 않으면 아무것도 하지 않는다.** 항목을 지어내면 화면이 "0 번 멈추고 1 번

@@ -23,7 +23,8 @@ import {
   recordResume,
   recordStopHead,
   recordStopSnapshot,
-  rekeyDispatch
+  rekeyDispatch,
+  updateStopReset
 } from '../../core/orchestration/state'
 import type { Dispatch } from '../../core/orchestration/types'
 import type { RollStateEvent } from '../../core/types'
@@ -251,7 +252,18 @@ export class OrchRollTap {
     }
     if (e.state !== 'waiting' && e.state !== 'switching') return
     if (e.reattach) return
-    if (this.stopped.has(e.sessionId)) return
+    if (this.stopped.has(e.sessionId)) {
+      // Still the same episode. A repeat 'switching' carries nothing new (no reset time) and stays
+      // dropped, same as before. A repeat 'waiting' can carry a fresher nextRetryAt — the aborted-roll
+      // retry loop (rolling.ts/codexRolling.ts) republishes 'waiting' every round — so patch the reset
+      // time already on record instead of losing it; the episode is still one stop, not a second one.
+      if (e.state === 'waiting' && e.nextRetryAt !== undefined) {
+        void this.recordStopReset(e.sessionId, e.nextRetryAt).catch((err) =>
+          this.deps.log?.(`stop reset update failed session=${e.sessionId}: ${String(err)}`)
+        )
+      }
+      return
+    }
     this.stopped.add(e.sessionId)
     void this.recordStop(e.sessionId, e.state, e.nextRetryAt).catch((err) =>
       this.deps.log?.(`stop snapshot failed session=${e.sessionId}: ${String(err)}`)
@@ -311,6 +323,14 @@ export class OrchRollTap {
     })
     if (!patched.ok || patched.value === null) return
     await this.deps.setState(patched.state)
+  }
+
+  /** 같은 에피소드 안에서 갱신된 리셋 시각을 이미 있는 항목에 적어 넣는다 — 새 항목을 쌓지 않는다.
+   *  updateStopReset(core/orchestration/state.ts) 의 머리말에 이유가 있다. */
+  private async recordStopReset(sessionId: string, resetsAt: string): Promise<void> {
+    const r = updateStopReset(this.deps.getState(), { sessionId, resetsAt })
+    if (!r.ok || r.value === null) return
+    await this.deps.setState(r.state)
   }
 
   /** `'nudged'` 재개를 이력의 마지막 항목에 닫는다. 계정은 바뀌지 않았으므로 지금 Dispatch 가
