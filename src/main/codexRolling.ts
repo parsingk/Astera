@@ -6,7 +6,14 @@
 import type { Account, RollStateEvent, SessionInfo } from '../core/types'
 import type { RollConfig } from '../core/rolling/config'
 import { RollCycle } from '../core/rolling/cycle'
-import { pickAvailable, planRetry, type BlockRecord, type RetryState } from '../core/rolling/retry'
+import {
+  laterBlock,
+  pickAvailable,
+  planRetry,
+  type BlockRecord,
+  type RetryState
+} from '../core/rolling/retry'
+import { BlockRegistry } from '../core/rolling/blockRegistry'
 import { copyTranscript } from '../core/rolling/transcript'
 import { codexHistoryStrategy } from '../core/history/strategies/codex'
 import { findRollout } from '../core/rolling/codexLocate'
@@ -54,6 +61,14 @@ export interface CodexRollingDeps {
   send(channel: 'session:rolled' | 'session:rollState', payload: unknown): void
   log(message: string): void
   lang: () => Lang // taken as a getter rather than a value so the latest language is used even after setLang
+  /** Block records shared with every other rolling chain, in both coordinators (SPEC §11.2/6).
+   *
+   *  **The wiring passes one instance to both.** That is the whole point: three workers rolling through
+   *  the same accounts used to each rediscover every block themselves, wasting a kill+respawn per
+   *  worker per account. It is **required, not optional**, because an optional field can be dropped
+   *  from the wiring without a single test failing — and the failure mode is this feature silently
+   *  reverting to per-chain isolation. The same reasoning made rollAccountIds required. */
+  blocks: BlockRegistry
   persistConfig?: (codexSessionId: string, config: RollConfig) => void
   copy?: (src: string, dest: string) => Promise<void> // for test injection — defaults to copyTranscript
   /** The rollout's byte size, `null` when it cannot be read. Injected the same way `copy` is, and for
@@ -118,11 +133,18 @@ interface Chain {
   stateSeq: number
 }
 
-/** Extracts just the part of a Chain the retry verdict needs (the input of core/rolling/retry.ts) */
-const retryState = (chain: Chain): RetryState => ({
+/** Extracts just the part of a Chain the retry verdict needs (the input of core/rolling/retry.ts).
+ *
+ *  The recovery array is the chain's own record **merged with what other chains found** — a block on
+ *  an account is a fact about the account, so a chain that has not hit it yet should still skip it
+ *  (SPEC §11.2/6). laterBlock keeps whichever side justifies the longer block. `chain.recovery` is left
+ *  untouched: it still answers the per-chain question this coordinator asks it. */
+const retryState = (chain: Chain, blocks: BlockRegistry, now: number): RetryState => ({
   accountIds: chain.accountIds,
   currentIndex: chain.cycle.currentIndex,
-  recovery: chain.recovery
+  recovery: chain.accountIds.map((id, i) =>
+    laterBlock(chain.recovery[i] ?? null, blocks.get(id, now))
+  )
 })
 
 export class CodexRollingCoordinator {
@@ -391,11 +413,12 @@ export class CodexRollingCoordinator {
   /** The block record for the current account — the latest reset among the windows at or above the gate (mirrors recordRecovery in rolling.ts) */
   private recordRecovery(chain: Chain): void {
     const worst = worstResetAt(chain.state)
-    chain.recovery[chain.cycle.currentIndex] = {
-      at: worst.at,
-      weekly: worst.weekly,
-      since: this.now()
-    }
+    const now = this.now()
+    const record: BlockRecord = { at: worst.at, weekly: worst.weekly, since: now }
+    chain.recovery[chain.cycle.currentIndex] = record
+    // The same fact goes to the shared registry so the other chains skip this account instead of
+    // rediscovering the block themselves (SPEC §11.2/6).
+    this.deps.blocks.record(chain.accountIds[chain.cycle.currentIndex], record, now)
   }
 
   private onLimit(chain: Chain, reason: LimitReason): void {
@@ -414,8 +437,14 @@ export class CodexRollingCoordinator {
     }
     chain.textHit = false
     const action = chain.cycle.onLimit()
+    // One clock reading for the whole verdict. pickAvailable and planRetry below have to judge the same
+    // instant — if time moves between them, an account pickAvailable called unusable can look usable to
+    // planRetry microseconds later, and the wait would target an account it had just refused.
+    const now = this.now()
     const target =
-      action.type === 'roll' ? pickAvailable(retryState(chain), action.toIndex, this.now()) : null
+      action.type === 'roll'
+        ? pickAvailable(retryState(chain, this.deps.blocks, now), action.toIndex, now)
+        : null
     // reason and the raw reachedType are the only evidence for calibrating the assumptions we have not
     // measured yet (the limit phrase, the reachedType values, replay behaviour) on the first real hit — so
     // what fired and the raw value are recorded together
@@ -425,7 +454,7 @@ export class CodexRollingCoordinator {
         `action=${JSON.stringify(action)}`
     )
     if (target === null) {
-      const plan = planRetry(retryState(chain), this.now())
+      const plan = planRetry(retryState(chain, this.deps.blocks, now), now)
       this.pushState(chain, 'waiting', {
         nextRetryAt: new Date(plan.retryAt).toISOString(),
         scope: plan.weekly ? 'weekly' : 'session'
@@ -632,6 +661,9 @@ export class CodexRollingCoordinator {
     // and the next limit is misread as a whole lap being blocked.
     chain.cycle.onHealthy()
     chain.recovery[chain.cycle.currentIndex] = null
+    // The account demonstrably works, so the shared record must go too — otherwise one bad reading
+    // keeps every other chain off it until its recorded reset time passes (blockRegistry.clear).
+    this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
     chain.inPlaceUsed = false
   }
 
@@ -712,6 +744,9 @@ export class CodexRollingCoordinator {
         chain.healthyTimer = null
         chain.cycle.onHealthy()
         chain.recovery[chain.cycle.currentIndex] = null
+        // The account demonstrably works, so the shared record must go too — otherwise one bad reading
+        // keeps every other chain off it until its recorded reset time passes (blockRegistry.clear).
+        this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
         chain.inPlaceUsed = false
       }, HEALTHY_MS)
       this.pushState(chain, 'none')

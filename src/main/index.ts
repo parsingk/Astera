@@ -13,6 +13,7 @@ import { isOwnDocument } from './navigationGuard'
 import { RollingCoordinator } from './rolling'
 import { SchedulerCoordinator } from './scheduler'
 import { CodexRollingCoordinator } from './codexRolling'
+import { BlockRegistry } from '../core/rolling/blockRegistry'
 import { SlackNotifier, SlackConfigStore } from './slack'
 import { SlackInboxController, createSocketClient } from './slackInbox'
 import { HookEventWatcher } from './hookEvents'
@@ -417,6 +418,9 @@ app.whenReady().then(async () => {
   // a limit phrase re-matching on every chunk still produces very few real requests. The token never
   // leaves this process.
   const usageFetcher = new RateLimitFetcher()
+  // One registry for both coordinators — the sharing is the feature (SPEC §11.2/6). Two instances
+  // would compile and pass every test while sharing nothing.
+  const blocks = new BlockRegistry()
   const rolling = new RollingCoordinator({
     spawn: (opts) => core!.sessions.spawn(opts),
     write: (id, d) => core!.sessions.write(id, d),
@@ -499,6 +503,7 @@ app.whenReady().then(async () => {
       }
     },
     lang: () => core!.lang,
+    blocks,
     persistConfig: (sid, cfg) => {
       // fire-and-forget — a persist failure must not block rolling
       void core!.rollConfig.set(sid, cfg).catch(() => {})
@@ -597,6 +602,7 @@ app.whenReady().then(async () => {
       }
     },
     lang: () => core!.lang,
+    blocks,
     persistConfig: (sid, cfg) => {
       void core!.rollConfig.set(sid, cfg).catch(() => {}) // fire-and-forget
     },

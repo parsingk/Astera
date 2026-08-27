@@ -7,6 +7,7 @@ import type { Account, SessionInfo } from '../core/types'
 import { claudeHistoryStrategy } from '../core/history/strategies/claude'
 import { matchesLimitPhrase } from '../core/rolling/detect'
 import { parseResetTime } from '../core/rolling/resetTime'
+import { BlockRegistry } from '../core/rolling/blockRegistry'
 import { RollingCoordinator, type RollingDeps } from './rolling'
 
 const acc = (id: string, label: string): Account => ({
@@ -77,6 +78,7 @@ function harness(overrides: Partial<RollingDeps> = {}): {
     send: (channel, p) => sent.push({ channel, payload: p as Record<string, unknown> }),
     log: () => {},
     lang: () => 'ko', // 기존 한국어 기대값을 유지
+    blocks: new BlockRegistry(), // 하네스마다 새 인스턴스 — 앞 테스트의 차단이 뒤 테스트를 막지 않게
     copy: (src, dest) => {
       copied.push({ src, dest })
       events.push('copy')
@@ -365,6 +367,7 @@ describe('RollingCoordinator', () => {
       send: () => {},
       log: () => {},
       lang: () => 'ko',
+      blocks: new BlockRegistry(),
       copy: () => Promise.resolve()
     } satisfies RollingDeps)
     const info1: SessionInfo = {
@@ -745,6 +748,83 @@ describe('RollingCoordinator 차단 계정 회피', () => {
     h.coord.handleData({ sessionId: 's2', data: LIMIT_TEXT })
     await flush()
     expect(h.spawned.at(-1)?.accountId).toBe('a1') // 차단이 풀렸으므로 정상 전환
+  })
+
+  // 세 워커가 같은 계정들을 돌면 각자 모든 계정에서 한도를 다시 맞아야 했다 — 워커마다 계정마다
+  // kill+respawn 한 번이 낭비였고, 그 낭비를 없애는 것이 공유 기록이다(SPEC §11.2/6).
+  it('다른 체인이 막힌 계정을 알려 주면 그 계정을 건너뛴다 (몰림 방지)', async () => {
+    const h = harness()
+    // 체인 1: [a1, a2, a3] — a1 에서 한도 → a2 로 롤. 그 순간 a1 이 공유 기록에 올라간다
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned.at(-1)?.accountId).toBe('a2')
+    // 체인 2: 같은 계정들을 다른 순서로 도는 둘째 워커. a2 에서 한도를 만나면 라운드 로빈이 가리키는
+    // 다음 계정이 a1 이다 — 공유가 없으면 방금 막힌 그 계정으로 그대로 옮겨 간다.
+    h.payloads.set('s10', payload(97, 'claude-sess-2', 'D--work-q'))
+    h.coord.register({
+      ...h.info1,
+      id: 's10',
+      accountId: 'a2',
+      cwd: 'D:\\work\\q',
+      rollAccountIds: ['a2', 'a1', 'a3']
+    })
+    h.coord.handleData({ sessionId: 's10', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned.at(-1)?.accountId).toBe('a3')
+  })
+
+  // 오탐 안전 밸브. 공유 기록은 계정에 관한 사실이라 잘못 적히면 그 계정을 도는 모든 체인을 막는다 —
+  // 어떤 체인이 그 계정에서 HEALTHY_MS 를 무사히 넘기면 기록을 걷어낸다.
+  it('어떤 체인이 그 계정으로 무사히 돌면 공유 기록이 풀린다 (오탐 안전 밸브)', async () => {
+    const h = harness()
+    // 체인 1: [a2, a1] — a2 에서 한도 → a1 로 롤. 이제 a1 에서 정상으로 돌고 있다
+    h.payloads.set('s1', payload(97))
+    h.coord.register({ ...h.info1, accountId: 'a2', rollAccountIds: ['a2', 'a1'] })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned.at(-1)?.accountId).toBe('a1')
+    h.payloads.set('s2', payload(5)) // 준비 신호 → 자동 프롬프트 → healthy 타이머 무장
+    await settle()
+    // 체인 2: a1 에서 한도를 보고 그 계정을 공유 기록에 올린다(진짜든 오탐이든)
+    h.payloads.set('s10', payload(97, 'claude-sess-2', 'D--work-q'))
+    h.coord.register({
+      ...h.info1,
+      id: 's10',
+      accountId: 'a1',
+      cwd: 'D:\\work\\q',
+      rollAccountIds: ['a1', 'a3']
+    })
+    h.coord.handleData({ sessionId: 's10', data: LIMIT_TEXT })
+    await flush()
+    // 중간 체크포인트: 이 시점에는 기록이 살아 있어야 한다. 없으면 아래 마지막 단언이 "기록이
+    // 지워졌다"가 아니라 "애초에 공유가 없었다"로도 통과해 버린다.
+    h.payloads.set('s30', payload(97, 'claude-sess-4', 'D--work-s'))
+    h.coord.register({
+      ...h.info1,
+      id: 's30',
+      accountId: 'a2',
+      cwd: 'D:\\work\\s',
+      rollAccountIds: ['a2', 'a1', 'a3']
+    })
+    h.coord.handleData({ sessionId: 's30', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned.at(-1)?.accountId).toBe('a3')
+    // 체인 1 이 a1 에서 HEALTHY_MS(60초)를 무사히 넘긴다 → 공유 기록이 지워진다
+    await vi.advanceTimersByTimeAsync(65_000)
+    // 체인 3: a1 이 다시 후보다. 기록이 남아 있었다면 a3 로 우회한다
+    h.payloads.set('s20', payload(97, 'claude-sess-3', 'D--work-r'))
+    h.coord.register({
+      ...h.info1,
+      id: 's20',
+      accountId: 'a2',
+      cwd: 'D:\\work\\r',
+      rollAccountIds: ['a2', 'a1', 'a3']
+    })
+    h.coord.handleData({ sessionId: 's20', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned.at(-1)?.accountId).toBe('a1')
   })
 
   it('respawn 후 재부착 switching 이벤트에는 reattach 표시가 붙는다 (Slack 중복 방지)', async () => {

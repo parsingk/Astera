@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import path from 'node:path'
 import type { Account, SessionInfo } from '../core/types'
+import { BlockRegistry } from '../core/rolling/blockRegistry'
 import { RollingCoordinator, type RollingDeps } from './rolling'
 
 const MIN = 60_000
@@ -94,6 +95,7 @@ function world(overrides: Partial<RollingDeps> = {}) {
     },
     log: (m) => rec('LOG', m),
     lang: () => 'en',
+    blocks: new BlockRegistry(),
     copy: (src, dest) => {
       rec('COPY', `${short(src)}  →  ${short(dest)}`)
       return Promise.resolve()

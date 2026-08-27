@@ -4,6 +4,7 @@ import path from 'node:path'
 import { createHook } from 'node:async_hooks'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { Account, SessionInfo } from '../core/types'
+import { BlockRegistry } from '../core/rolling/blockRegistry'
 import { CodexRollingCoordinator, type CodexRollingDeps } from './codexRolling'
 
 let tmp: string
@@ -153,6 +154,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
     send: (channel, p) => sent.push({ channel, payload: p as Record<string, unknown> }),
     log: () => {},
     lang: () => 'ko', // 기존 한국어 기대값을 유지
+    blocks: new BlockRegistry(), // 하네스마다 새 인스턴스 — 앞 테스트의 차단이 뒤 테스트를 막지 않게
     copy: (src, dest) => {
       copied.push({ src, dest })
       events.push('copy')
@@ -813,6 +815,47 @@ describe('CodexRollingCoordinator', () => {
     h.coord.handleData({ sessionId: 's10', data: LIMIT_TEXT })
     await advance(100)
     expect(h.events.filter((e) => e.startsWith('spawn:'))).toHaveLength(1)
+    h.coord.stop()
+  })
+
+  // 세 워커가 같은 계정들을 돌면 각자 모든 계정에서 한도를 다시 맞아야 했다 — 워커마다 계정마다
+  // kill+respawn 한 번이 낭비였고, 그 낭비를 없애는 것이 공유 기록이다(SPEC §11.2/6).
+  it('다른 체인이 막힌 계정을 알려 주면 그 계정을 건너뛴다 (몰림 방지)', async () => {
+    // 세 계정이 필요하다 — 두 개면 "막힌 계정을 건너뛴 결과"와 "라운드 로빈이 원래 가리키던 계정"이
+    // 같아서 무엇을 검증했는지 알 수 없다. 하네스의 계정 맵은 c1·c2뿐이므로 getAccount만 갈아 준다.
+    const accounts: Record<string, Account> = {
+      c1: acc('c1', 'Codex A'),
+      c2: acc('c2', 'Codex B'),
+      c3: acc('c3', 'Codex C')
+    }
+    const h = harness({ getAccount: (id) => accounts[id] ?? null })
+    const resetSec = Math.floor((Date.now() + 300_000) / 1000) // 5분 뒤 — 기록이 살아 있는 창
+    // 체인 1: [c1, c2, c3] — c1 에서 한도 → c2 로 롤. 그 순간 c1 이 공유 기록에 올라간다
+    await writeRollout({
+      accountId: 'c1', uuid: 'cx-share-1', cwd: h.info1.cwd, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register({ ...h.info1, rollAccountIds: ['c1', 'c2', 'c3'] })
+    // 체인 2: 같은 계정들을 다른 순서로 도는 둘째 워커. 다른 폴더이므로 rollout 을 서로 물지 않는다.
+    // c2 에서 한도를 만나면 라운드 로빈이 가리키는 다음 계정은 c1 이다 — 공유가 없으면 방금 막힌
+    // 그 계정으로 그대로 옮겨 간다.
+    const cwd2 = path.join(tmp, 'work', 'q')
+    await writeRollout({
+      accountId: 'c2', uuid: 'cx-share-2', cwd: cwd2, primary: 99, primaryReset: resetSec
+    })
+    h.coord.register({
+      ...h.info1,
+      id: 's10',
+      accountId: 'c2',
+      cwd: cwd2,
+      rollAccountIds: ['c2', 'c1', 'c3']
+    })
+    await advance(1_500) // 두 체인의 매핑 폴링
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.spawned.at(-1)?.info.accountId).toBe('c2')
+    h.coord.handleData({ sessionId: 's10', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.spawned.at(-1)?.info.accountId).toBe('c3')
     h.coord.stop()
   })
 
