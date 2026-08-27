@@ -895,30 +895,56 @@ export class RollingCoordinator {
    *  한 번 더 집어 준다. 그래도 없으면 rescheduleAbortedRoll 로 넘어가 **보이는 대기**가 예약된다 —
    *  고치기 전의 침묵 대신. 그 대기의 재시도가 다시 이 함수에 닿는 루프는 inPlaceUsed 가 묶는다.
    *
-   *  **왜 판정 전에 refreshMeta 를 또 부르는가.** chain.claudeSessionId·chain.transcriptPath 는
+   *  **왜 판정 전에 메타를 다시 읽는가.** chain.claudeSessionId·chain.transcriptPath 는
    *  tickChain 이 15초마다만 새로 쓰는 캐시값이라 최대 한 tick 만큼 낡아 있을 수 있다. 그 마지막 tick
    *  간격 안에 statusLine 페이로드가 돌아오면 이 판정은 그것을 못 보는데 roll() 은 스스로 부르는
    *  refreshMeta 로 그것을 본다 — 판정과 행동이 서로 다른 신선도를 보고 판정만 낡은 값으로 respawn
    *  을 고르는 비대칭이 생긴다. 대가는 resumeAfterWait 의 JSDoc 이 kill 을 피하는 바로 그것이다:
-   *  막 되살아난 세션을 배경 작업째 죽이는 것. 그래서 여기서도 roll() 과 같은 것을 먼저 새로고친
-   *  뒤에 같은 값을 본다.
+   *  막 되살아난 세션을 배경 작업째 죽이는 것. 그래서 여기서도 같은 것을 먼저 새로고친 뒤에 같은
+   *  값을 본다.
+   *
+   *  **왜 refreshMeta 를 그대로 부르지 않고 페이로드를 직접 읽어 적용을 미루는가.** refreshMeta 는
+   *  읽은 페이로드를 자신의 프로미스 체인 안에서 곧바로 applyMeta 에 넘긴다 — 그 적용은 이 함수의
+   *  가드보다 먼저, await 이 여기로 돌아오기도 전에 이미 끝나 버린다. fix wave 전에는 settleInPlace
+   *  에 await 이 하나도 없어 원자적으로 실행됐으므로 이 창은 없었다. 그 창 안에서 다른 곳이
+   *  chain.liveId 를 재키하면(roll) 방금 읽은 옛 계정의 값이 새로 세운 transcriptPath·limitTail 을
+   *  덮어쓸 수 있고, liveId 를 바꾸지 않는 판정(onLimit 이 재키 없이 waitTimer 만 세운 경우)이
+   *  끼어들면 이 함수의 건강 판정이 그 판정이 막 남긴 차단 기록을 지워 버릴 수 있다. 그래서 여기서는
+   *  읽기만 하고, 가드를 다시 확인한 뒤에만 applyMeta 를 부른다 — 그 가드는 tickChain 의
+   *  across-await 가드와 같은 집합(rolling·waitTimer·awaitingReady)에 liveId 비교를 더한 것이다:
+   *  liveId 비교는 재키가 이미 끝나 그 세 플래그마저 원래대로 돌아온 뒤에도 옛 페이로드가 새 체인에
+   *  적용되는 것을 막는다.
    *
    *  타이머 콜백에서 예외가 새면 잡아 줄 곳이 없다. roll() 은 스스로 try/catch 하고 rolling 가드도
-   *  자체로 갖고 있지만, refreshMeta 자체는 재던지지 않는다는 계약이 없다(this.deps.readStatusPayload
-   *  를 그대로 감쌀 뿐이다). 그래서 resumePromptFor 가 deps.resumeText 를 감싸는 것과 같은 자리에서
-   *  직접 감싸 로그만 남기고 넘어간다. 그 await 뒤에는 disposed·liveId 가드를 다시 확인한다 — 새로
-   *  연 await 창이기 때문이다(위 첫 가드와 같은 이유). */
+   *  자체로 갖고 있지만, deps.readStatusPayload 자체는 재던지지 않는다는 계약이 없다. 그래서
+   *  resumePromptFor 가 deps.resumeText 를 감싸는 것과 같은 자리에서 직접 감싸 로그만 남기고
+   *  넘어간다. 그 await 뒤에는 이 넓어진 가드를 다시 확인한다 — 새로 연 await 창이기 때문이다(위
+   *  첫 가드와 같은 이유이나, 이번에는 적용 자체를 아직 하지 않았다는 점이 다르다). */
   private async settleInPlace(chain: Chain, liveId: string): Promise<void> {
     chain.healthyTimer = null
     if (chain.disposed || chain.liveId !== liveId) return
+    let payload: unknown | null = null
     try {
-      await this.refreshMeta(chain)
+      payload = await this.deps.readStatusPayload(chain.liveId)
     } catch (err) {
       this.deps.log(
         `resume in place metadata refresh failed session=${liveId}: ${err instanceof Error ? err.message : String(err)}`
       )
     }
-    if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard, again after the new await
+    // The across-await state guard, widened to the same set tickChain uses for exactly this question (a
+    // roll may have re-keyed the chain, or onLimit may have armed a wait without re-keying) — plus the
+    // liveId comparison this function already had, which is what still catches a re-key once it has
+    // finished and cleared those three flags again. Only once this passes is the payload applied — see
+    // the JSDoc above for why the apply itself has to wait for this check rather than run inside the read.
+    if (
+      chain.disposed ||
+      chain.liveId !== liveId ||
+      chain.rolling ||
+      chain.waitTimer ||
+      chain.awaitingReady
+    )
+      return
+    if (payload) this.applyMeta(chain, payload)
     if (!chain.claudeSessionId || !chain.transcriptPath) {
       this.deps.log(
         `resume in place produced no session metadata — attempting a respawn session=${liveId}`

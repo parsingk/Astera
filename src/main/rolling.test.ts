@@ -2453,6 +2453,65 @@ describe('제자리 재개의 정착 판정', () => {
     await flush()
     expect(h.events.slice(eventsBefore).filter((e) => e.startsWith('spawn') || e.startsWith('kill'))).toEqual([])
   })
+
+  // 레이스 재현: 정착 판정이 메타를 다시 읽는 동안, 같은 세션에서 진짜 한도가 다시 걸려 liveId 를
+  // 바꾸지 않는 대기를 세운다(onLimit 의 재키 없는 갈래 — 단일 계정 체인이라 그 갈래만 존재한다).
+  // 고치기 전에는 그 읽기가 refreshMeta 안에서 곧바로 적용되어(가드보다 먼저) 건강하다고 선언하고,
+  // 방금 세운 대기가 막 남긴 차단 기록을 지웠다.
+  it('정착 판정의 늦은 메타 읽기가 그 사이에 다시 걸린 한도의 대기를 지우지 않는다', async () => {
+    // 정착 마감이 정기 tick 경계와 겹치지 않도록 초 단위를 어긋나게 둔다 — 위 테스트와 같은 이유.
+    vi.setSystemTime(new Date(T0 + 8_000))
+    const blocks = new BlockRegistry()
+    const payloads = new Map<string, unknown>()
+    let armed = false
+    // 객체에 담는다 — 클로저 안에서 대입된 let 변수를 나중에 호출하면 TS 의 흐름 분석이 그 사이의
+    // 다른 호출(같은 클로저를 다시 태울 수 있는 handleData 등)을 반영하지 못해 타입을 never 로
+    // 좁혀 버린다.
+    const late: { resolve: ((v: unknown) => void) | null } = { resolve: null }
+    const h = harness({
+      blocks,
+      readStatusPayload: (id) => {
+        if (armed) {
+          armed = false // 다음 한 번만 붙잡는다 — 정착 판정 자신의 읽기여야 한다
+          return new Promise<unknown>((resolve) => {
+            late.resolve = resolve
+          })
+        }
+        return Promise.resolve(payloads.get(id) ?? null)
+      }
+    })
+    // 페이로드 없음 — statusLine 을 못 배운 채로 대기·정착 창을 지난다("메타를 여전히 못 배웠으면"
+    // 테스트와 같은 조건). limitTail 이 생기지 않으므로 정기 tick 이 실제 fs 를 건드리지 않고, 그
+    // 사이의 tick 이 언제 정착 판정 자신의 읽기와 같은 순간에 겹칠지 신경 쓸 필요가 없어진다.
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    const firstRetry = retryAtOf(h)
+    await vi.advanceTimersByTimeAsync(firstRetry - Date.now() + 1_000)
+    expect(resumeCount(h)).toBe(1) // 제자리 재개가 일어났다
+
+    // 정착 마감(60초) 6초 전까지는 정상 진행.
+    await vi.advanceTimersByTimeAsync(53_000)
+    armed = true
+    await vi.advanceTimersByTimeAsync(7_000) // healthyTimer 발화 — 이 읽기만 붙잡아 둔다
+    expect(late.resolve).not.toBeNull() // 정착 판정 자신의 읽기가 실제로 붙잡혔다는 확인
+
+    // 같은 세션에서 진짜 한도가 다시 걸린다. 이번에는 statusLine 이 살아 있다 — liveId 는 그대로다
+    // (재키 없음) — onLimit 이 대기를 세우고 차단 기록을 남긴다.
+    payloads.set('s1', payload(20))
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    expect(lastWaiting(h.sent)).toBeTruthy() // 대기가 실제로 섰다
+    expect(blocks.get('a1', Date.now())).not.toBeNull() // 그 대기가 막 남긴 차단 기록
+
+    // 붙잡아 둔 읽기가 이제야 돌아온다 — 세션이 이미 다른 판정으로 넘어간 뒤에 도착한 낡은 메타다.
+    // 고치기 전에는 이 적용이 정착 판정의 가드보다 먼저 끝나 버려, 방금 세운 차단 기록을
+    // blocks.clear 가 지웠다 — pushState 를 부르지 않는 갈래라 h.sent 로는 드러나지 않으므로
+    // 판별은 공유 차단 레지스트리(blocks)로만 가능하다.
+    late.resolve?.(payload(20))
+    await flush()
+    expect(blocks.get('a1', Date.now())).not.toBeNull()
+  })
 })
 
 // 히스토리에서 이미 한도에 걸린 대화를 다시 열면 statusLine 이 오지 않는다(한도가 그 호출을 멈춘다).
