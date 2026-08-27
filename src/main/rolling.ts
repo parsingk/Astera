@@ -845,16 +845,51 @@ export class RollingCoordinator {
     // limitEvidence() latches true (leaving the idle nudge and the reset anchor permanently armed), and
     // with several accounts cycle.streak never resets so the next limit is misread as a whole lap blocked.
     chain.healthyTimer = setTimeout(() => {
-      chain.healthyTimer = null
-      chain.cycle.onHealthy()
-      chain.recovery[chain.cycle.currentIndex] = null
-      // What this timer observed is 60 seconds in which **no limit was detected** — not evidence that a
-      // turn actually ran (only codex's settleInPlace has that). The shared record goes with it because a
-      // false one keeps every other chain off the account until its recorded reset time passes; the price
-      // is that a *true* record another chain wrote inside this window is erased by a session that has not
-      // produced any work of its own yet (blockRegistry.clear).
-      this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
+      void this.settleInPlace(chain, liveId)
     }, HEALTHY_MS)
+  }
+
+  /** 제자리 재개의 마감 시각: 줄을 넣고 HEALTHY_MS 뒤, 그 줄이 정말 턴을 시작했는가?
+   *
+   *  **왜 필요한가.** 이 자리는 예전에 무조건 "건강하다"를 선언했다. 그런데 세션 메타를 못 배운
+   *  체인(히스토리에서 다시 연 대화 — 한도에 걸린 claude 는 statusLine 훅을 아예 부르지 않는다)은
+   *  그 뒤로 잡아낼 방법이 하나도 없다: limitTail 이 없어 ①이 즉시 반환하고, 페이로드가 없어
+   *  fallback 트리거가 발화할 수 없고, Notification 이 없어 idle nudge 도 뜨지 않는다. 실측하면
+   *  선언 뒤 45분 동안 이벤트·입력·게시가 모두 0이었다(2026-08-27).
+   *
+   *  **왜 증거가 codex 와 다른가.** codex 의 같은 판정(settleInPlace)은 rollout 의 바이트 증가를
+   *  본다 — codex 는 그 경로를 파일시스템 스캔으로 스스로 찾으므로 훅과 무관하게 안다. claude 의
+   *  transcript 경로는 statusLine 페이로드에서만 오고, 침묵하는 바로 그 경우에 그 페이로드가 없다.
+   *  그래서 여기서 묻는 증거는 "그동안 세션 메타가 도착했는가" 하나다. 도착했다면 statusLine 이
+   *  돌아왔다는 뜻이고, 메타를 배운 경우는 얼어붙은 페이로드가 fallback 트리거를 다시 살려 스스로
+   *  복구된다는 것도 같은 실측에서 확인됐다 — 그 갈래를 여기서 또 판정할 이유가 없다.
+   *
+   *  **왜 행동이 roll() 하나인가.** roll() 은 먼저 refreshMeta 를 부르므로 늦게 도착한 페이로드를
+   *  한 번 더 집어 준다. 그래도 없으면 rescheduleAbortedRoll 로 넘어가 **보이는 대기**가 예약된다 —
+   *  고치기 전의 침묵 대신. 그 대기의 재시도가 다시 이 함수에 닿는 루프는 inPlaceUsed 가 묶는다.
+   *
+   *  타이머 콜백에서 예외가 새면 잡아 줄 곳이 없다. roll() 은 스스로 try/catch 하고 rolling 가드도
+   *  자체로 갖고 있으므로, 여기서는 위에서 healthyTimer 를 null 로 만든 것 외에 조정할 것이 없다. */
+  private async settleInPlace(chain: Chain, liveId: string): Promise<void> {
+    chain.healthyTimer = null
+    if (chain.disposed || chain.liveId !== liveId) return
+    if (!chain.claudeSessionId || !chain.transcriptPath) {
+      this.deps.log(
+        `resume in place produced no session metadata — respawning session=${liveId}`
+      )
+      await this.roll(chain, chain.cycle.currentIndex)
+      return
+    }
+    // 메타가 있다 — 예전 healthyTimer 가 하던 것 그대로. 이것을 하지 않으면 recovery[current] 가
+    // 남아 limitEvidence 가 계속 참이고(idle nudge·리셋 앵커가 영구 무장), 계정이 여럿이면
+    // cycle.streak 가 리셋되지 않아 다음 한도가 "한 바퀴 전체 차단"으로 잘못 읽힌다.
+    chain.cycle.onHealthy()
+    chain.recovery[chain.cycle.currentIndex] = null
+    // 이 판정이 본 것은 "60초 동안 한도가 감지되지 않았다"에 "statusLine 이 돌아왔다"가 더해진
+    // 것이다. 공유 기록도 함께 지운다 — 거짓 기록 하나가 기록된 리셋 시각까지 다른 모든 체인을
+    // 그 계정에서 막아 두기 때문이고, 대가는 이 창 안에 다른 체인이 쓴 *참* 기록이 지워지는
+    // 것이다(blockRegistry.clear).
+    this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
   }
 
   /** A roll gave up. Schedule the next attempt instead of leaving the chain idle.

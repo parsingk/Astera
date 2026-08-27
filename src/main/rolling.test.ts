@@ -2336,3 +2336,54 @@ describe('중단된 롤이 다음 시도를 예약한다', () => {
     expect(retryAtOf(h)).toBeGreaterThan(first)
   })
 })
+
+// 제자리 재개가 실제로 턴을 시작했는지 판정하는 자리. 여기서 판정을 하지 않으면 — 실측(2026-08-27):
+// 세션 메타를 못 배운 단일 계정이 대기 뒤 제자리 재개를 하고, 60초 뒤 healthyTimer 가 무조건
+// "건강하다"를 선언한 다음, **45분 동안 아무 일도 일어나지 않았다**. limitTail 이 없어 ①이 죽고,
+// 페이로드가 없어 fallback 트리거가 죽고, Notification 이 없어 idle nudge 도 뜨지 않는다.
+// 메타를 배운 경우는 얼어붙은 페이로드가 fallback 을 다시 살려 스스로 복구되므로(실측) 여기서
+// 묻는 것은 "그동안 메타가 도착했는가" 하나다.
+describe('제자리 재개의 정착 판정', () => {
+  const T0 = Date.UTC(2026, 7, 3, 0, 0) // 문구의 11am(Asia/Seoul)이 5시간 창 안에 들어오도록 고정
+  const LIMIT_WITH_RESET = limitWithReset('session', '11am')
+  const retryAtOf = (h: { sent: { channel: string; payload: Record<string, unknown> }[] }): number =>
+    Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+
+  it('메타를 여전히 못 배웠으면 respawn 으로 넘겨 영구 침묵을 끝낸다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness() // 페이로드 없음 → claudeSessionId·transcriptPath 를 못 배운다
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] }) // 단일 계정 — 대기 뒤 제자리 재개 경로
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    const firstRetry = retryAtOf(h)
+    await vi.advanceTimersByTimeAsync(firstRetry - Date.now() + 1_000)
+    expect(resumeCount(h)).toBe(1) // 제자리 재개가 일어났다
+    const sentBefore = h.sent.length
+    // 정착 판정까지 이동한다. 메타는 여전히 없으므로 roll 로 넘어가고, roll 은 메타 부재로 중단한 뒤
+    // 다시 대기를 예약한다 — 새 'waiting' 이 더 뒤의 시각으로 게시되는 것이 침묵이 끝났다는 증거다.
+    await vi.advanceTimersByTimeAsync(61_000)
+    await flush()
+    expect(h.sent.slice(sentBefore).map((s) => s.payload.state)).toContain('waiting')
+    expect(retryAtOf(h)).toBeGreaterThan(firstRetry)
+  })
+
+  // **페이로드를 100 이 아니라 20 으로 두는 이유.** 100 이면 제자리 재개 30초 뒤 fallback 트리거가
+  // 먼저 발화하고, onLimit 이 판정 전에 healthyTimer 를 지우므로 정착 판정이 아예 실행되지
+  // 않는다 — 그 갈래는 이 테스트가 확인하려는 것이 아니다. 20 은 "statusLine 이 신선한 낮은 값으로
+  // 돌아왔다" 는 정상 복구를 나타내고, 한도 문구 자체는 사용량 게이트 없이 감지되므로(detect 경로에서
+  // 게이트가 제거된 이유) 첫 한도는 그대로 잡힌다.
+  it('메타를 배운 뒤라면 정착 판정이 respawn 하지 않는다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness()
+    h.payloads.set('s1', payload(20))
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    await vi.advanceTimersByTimeAsync(retryAtOf(h) - Date.now() + 1_000)
+    expect(resumeCount(h)).toBe(1)
+    const eventsBefore = h.events.length
+    await vi.advanceTimersByTimeAsync(61_000)
+    await flush()
+    expect(h.events.slice(eventsBefore).filter((e) => e.startsWith('spawn') || e.startsWith('kill'))).toEqual([])
+  })
+})
