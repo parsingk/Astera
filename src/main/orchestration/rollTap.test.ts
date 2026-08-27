@@ -546,3 +546,58 @@ describe('OrchRollTap 정지 기록과 재키잉의 경합', () => {
     g.release()
   })
 })
+
+// final round — I2: 정지 표시는 'none'/'stalled' 로만 지워졌고, 롤 뒤 auto-prompt 의 'none' 은
+// 150ms Enter 창 안에 다른 게시가 끼면 건너뛰어진다(전사 재생이 옛 한도 문구를 되울리는 것이 그
+// 갈래다). 그러면 표시가 새 세션에 남아 그 뒤의 정지가 전부 건너뛰어졌다.
+
+describe('OrchRollTap 정지 표시의 수명', () => {
+  it("롤 뒤 'none' 이 오지 않아도 다음 정지는 기록된다", async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    const g = fakeGit(['first-stop', 'second-stop'])
+    const tap = new OrchRollTap(deps, { git: g.git })
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'switching', accountLabel: 'B' }))
+    await vi.advanceTimersByTimeAsync(0)
+    await tap.onRolled('sess1', { id: 'sess2', accountId: 'acc2' })
+    tap.onRollState(
+      rollState({ sessionId: 'sess2', state: 'switching', accountLabel: 'B', reattach: true })
+    )
+    // 'none' 은 오지 않는다 — Enter 창 안에 다른 게시가 끼어 건너뛰어졌다. 그리고 새 계정에서
+    // 진짜 한도에 걸린다
+    tap.onRollState(
+      rollState({ sessionId: 'sess2', state: 'waiting', nextRetryAt: '2026-08-25T05:00:00.000Z' })
+    )
+    await vi.advanceTimersByTimeAsync(0)
+    const resumes = resumesOf(deps, dispatchId)
+    expect(resumes).toHaveLength(2)
+    expect(resumes?.[0].resumedAt).toBe(NOW) // 첫 정지는 롤로 닫혔다
+    expect(resumes?.[1]).toEqual({
+      stoppedAt: NOW,
+      reason: 'waiting',
+      resetsAt: '2026-08-25T05:00:00.000Z',
+      fromAccountId: 'acc2'
+    })
+    // 리셋 시각이 스냅샷까지 갱신됐다 — 브리핑이 옛 에피소드의 시각을 재사용하지 않는다
+    expect(snapshotOf(deps, dispatchId)).toEqual({
+      headCommit: 'second-stop',
+      reason: 'waiting',
+      resetsAt: '2026-08-25T05:00:00.000Z'
+    })
+    expect(g.calls).toBe(2)
+  })
+
+  it('한 에피소드 안의 두 번째 게시는 여전히 한 번만 기록된다', async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    const g = fakeGit(['head-at-limit', 'head-now'])
+    const tap = new OrchRollTap(deps, { git: g.git })
+    // 리셋을 기다리다가 계정을 바꾸게 된 정지 — 한 에피소드가 'waiting' 뒤에 'switching' 을 낸다
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'waiting' }))
+    await vi.advanceTimersByTimeAsync(0)
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'switching', accountLabel: 'B' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(resumesOf(deps, dispatchId)).toHaveLength(1)
+    expect(g.calls).toBe(1)
+  })
+})
