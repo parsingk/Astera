@@ -29,6 +29,7 @@ import { UpdateGate } from './components/UpdateGate'
 import { ShortcutSettings } from './components/ShortcutSettings'
 import { TerminalFontSettings } from './components/TerminalFontSettings'
 import { ThemeSettings } from './components/ThemeSettings'
+import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import type {
   OrchSnapshot,
@@ -2905,6 +2906,7 @@ export default function App(): React.JSX.Element {
                 {settingsTab === 'appearance' && (
                   <>
                     <ThemeSettings />
+                    <ResumeStrategySettings />
                     <TerminalFontSettings />
                   </>
                 )}

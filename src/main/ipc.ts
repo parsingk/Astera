@@ -3037,6 +3037,15 @@ export function registerIpc(
     if (enabled && orchWiring) await startOrch()
   })
 
+  // How a session that hits its limit gets continued. The same trust-boundary check as setLang — the
+  // value the renderer sent is validated before being written to disk.
+  ipcMain.handle('settings.getResumeStrategy', () => core.appSettings.getResumeStrategy())
+  ipcMain.handle('settings.setResumeStrategy', async (_e, strategy: unknown) => {
+    if (strategy !== 'smart' && strategy !== 'original')
+      throw new Error(`INVALID_RESUME_STRATEGY: ${String(strategy)}`)
+    await core.appSettings.setResumeStrategy(strategy)
+  })
+
   // The terminal font pair. The same trust-boundary check as setLang: the shape is validated here, and
   // the names themselves are sanitised inside setTerminalFont before they reach disk.
   ipcMain.handle('settings.getTerminalFont', () => core.appSettings.getTerminalFont())

@@ -194,6 +194,14 @@ export const ko = {
   'settings.theme.label': '테마',
   'settings.theme.hint': '색과 모서리, 서체가 함께 바뀝니다. 터미널 폰트는 아래에서 따로 고릅니다.',
   'settings.theme.saveFailed': '테마 저장 실패: {detail}',
+  // ResumeStrategySettings.tsx — the two-way resume strategy picker
+  'settings.resumeStrategy.label': '이어하기 방식',
+  'settings.resumeStrategy.smart.label': '스마트 이어하기',
+  'settings.resumeStrategy.smart.hint': '간결한 체크포인트만으로 새 세션을 시작합니다.',
+  'settings.resumeStrategy.original.label': '원래 세션 이어하기',
+  'settings.resumeStrategy.original.hint': '기존 Claude/Codex 대화를 이어갑니다.',
+  'settings.resumeStrategy.recommended': '(권장)',
+  'settings.resumeStrategy.saveFailed': '이어하기 방식을 저장하지 못했습니다: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': '터미널 영문 폰트',
   'settings.font.hangul': '터미널 한글 폰트',
