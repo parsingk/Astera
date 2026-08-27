@@ -14,7 +14,7 @@ import { BusyScanner } from '../core/terminal/busy'
 import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, RollStateEvent, RunConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
-import { copyTranscript } from '../core/rolling/transcript'
+import { copyTranscript, samePath } from '../core/rolling/transcript'
 import { OrchestrationStore } from './orchestration/store'
 import {
   OrchCoordinator,
@@ -439,6 +439,12 @@ export function registerIpc(
     // it: `codex resume` appends to this file instead of creating a new rollout, so the coordinator's
     // creation-time search can never find it and the path has to be handed over (see attachRollout).
     let resumeTranscriptDest: string | undefined
+    // Whether that file was written by the account we are about to resume it under. codex rolling needs
+    // it and this is the only side that can answer: the destination was built from the target account's
+    // own configDir, so it equals the source exactly when the account did not change. See
+    // CodexRollingCoordinator.register — a reopened conversation's own limit records may only be
+    // believed for the account that produced them.
+    let resumeSameAccount = false
     if (opts.resumeSessionId && typeof opts.resumeTranscriptPath === 'string' && opts.resumeTranscriptPath) {
       try {
         // Assembling the target path is the job of the per-provider history strategy — whoever knows
@@ -448,6 +454,7 @@ export function registerIpc(
           account.configDir
         )
         resumeTranscriptDest = dest
+        resumeSameAccount = samePath(opts.resumeTranscriptPath, dest)
         await copyTranscript(opts.resumeTranscriptPath, dest)
       } catch {
         /* A failed copy is ignored */
@@ -462,7 +469,8 @@ export function registerIpc(
       // The rolling coordinators are separate per-provider implementations and are deliberately not
       // folded behind the descriptor. Limit detection and session identification differ enough that
       // they only share the skeleton.
-      if (providerOf(account) === 'codex') codexRolling?.register(info, resumeTranscriptDest)
+      if (providerOf(account) === 'codex')
+        codexRolling?.register(info, resumeTranscriptDest, resumeSameAccount)
       else rolling?.register(info)
     }
     if (info.schedule) {

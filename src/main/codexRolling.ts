@@ -129,6 +129,10 @@ interface Chain {
    *  Only register()'s resume branch ever fills it — attachRollout clears it back to undefined for all
    *  three of its callers, and that comment is where the reasons are. */
   priorReset: { at: number; weekly: boolean } | null | undefined
+  /** Whether the file has been asked at all. It exists for the log: "the answer has not arrived yet"
+   *  and "there was never a question" both leave priorReset undefined, and the first is the line the
+   *  incident log of 2026-08-27 was full of, indistinguishable from an ordinary missing snapshot (why). */
+  priorAsked: boolean
   scanner: CodexLimitScanner // detects the limit phrase in PTY output (corrects for chunk boundaries)
   modelChoice: CodexModelChoiceScanner // detects codex's approaching-limit model-switch prompt in the same stream
   textHit: boolean // whether the limit phrase was seen in this window (the tick combines it with the state to decide)
@@ -194,8 +198,15 @@ export class CodexRollingCoordinator {
    *  the transcript copy it just made. Passing it skips the locate poll entirely, which is not an
    *  optimisation but the only way a resumed session gets mapped at all: see attachRollout. It is
    *  ignored unless the session really is a resume (info.resumeSessionId), because a fresh spawn's
-   *  rollout does not exist yet and has to be found. */
-  register(info: SessionInfo, rolloutPath?: string): void {
+   *  rollout does not exist yet and has to be found.
+   *
+   *  `sameAccount` says whether that file was written by the account this session is spawning under.
+   *  ipc is the only side that can answer it — it holds both ends of the copy, and the target it built
+   *  from the target account's own configDir equals the source exactly when the resume did not cross
+   *  accounts. It gates one thing, the recovery read below; everything else here is account-independent.
+   *  The default is the conservative answer, so a caller that cannot tell gets the behaviour this
+   *  coordinator had before the recovery existed. */
+  register(info: SessionInfo, rolloutPath?: string, sameAccount = false): void {
     const ids = info.rollAccountIds ?? []
     if (ids.length < 1) return
     const chain: Chain = {
@@ -210,6 +221,7 @@ export class CodexRollingCoordinator {
       tail: null,
       state: null,
       priorReset: undefined,
+      priorAsked: false,
       scanner: new CodexLimitScanner(),
       modelChoice: new CodexModelChoiceScanner(),
       textHit: false,
@@ -228,10 +240,21 @@ export class CodexRollingCoordinator {
     this.chains.set(info.id, chain)
     if (info.resumeSessionId && rolloutPath) {
       this.attachRollout(chain, info.resumeSessionId, rolloutPath)
-      // **This is the one attach site that gets to recover the reset from the file.** The user reopened
-      // a conversation, so whatever block it ended on is still the block it is under, and the tail
-      // starts at the end — so the file's own record is the only evidence this session will ever have.
-      this.askPriorReset(chain)
+      // **This is the one attach site that gets to recover the reset from the file — and only when the
+      // account matches.** The user reopened a conversation, so whatever block it ended on is still the
+      // block it is under, and the tail starts at the end — so the file's own record is the only
+      // evidence this session will ever have.
+      //
+      // **Why the account has to match.** The resume picker offers every logged-in account of the same
+      // provider and picking a different one is an ordinary thing to do. The wiring then copies the
+      // rollout into *that* account's folder and this chain starts on it, while the records inside the
+      // copy belong to the account that was refused. Recovering them would attribute the block to an
+      // account that is perfectly healthy, and onLimit broadcasts whatever it finds in chain.recovery to
+      // the shared registry — so every other chain is steered off that account too, until a reset that
+      // can be a week away. A two-account chain also kills the fresh session and respawns on the
+      // exhausted one. None of it needs a limit phrase, and none of it happened before the recovery
+      // existed. So for a cross-account reopen nothing is asked and the verdict is never consulted.
+      if (sameAccount) this.askPriorReset(chain)
       // The locate path persists the config on success; the resume path knows the id up front, so it
       // does the same here — otherwise resuming a chain would never refresh its stored roll config.
       this.deps.persistConfig?.(info.resumeSessionId, {
@@ -360,10 +383,13 @@ export class CodexRollingCoordinator {
     // perfectly healthy account into the shared registry, where every other chain then honours it.
     // `undefined` leaves the verdict unconsulted, which is exactly the previous behaviour of both paths.
     chain.priorReset = undefined
+    chain.priorAsked = false
   }
 
   /** Asks the rollout what block this conversation already ended on, and hands the answer to the chain.
-   *  Called from the history-resume path alone (see attachRollout for why the other two sites must not).
+   *  Called from the history-resume path alone, and there only when the file's records were written by
+   *  the account we are resuming under (see register for that gate, and attachRollout for why the other
+   *  two attach sites must not ask at all).
    *
    *  priorBlockAt, not the looser readPriorReset the tail seeds itself with: deciding *whether* the
    *  file records a block needs the structured limit signal, because a reset on its own is reported for
@@ -383,6 +409,7 @@ export class CodexRollingCoordinator {
     const rolloutPath = chain.rolloutPath
     if (!tail || !rolloutPath) return
     chain.priorReset = undefined
+    chain.priorAsked = true
     void priorBlockAt(rolloutPath)
       .then((r) => {
         if (chain.tail === tail) chain.priorReset = r
@@ -480,9 +507,18 @@ export class CodexRollingCoordinator {
     return fallback
   }
 
-  /** Why the phrase was ignored — distinguishes unmapped, no state received, and usage below the gate */
+  /** Why the phrase was ignored — distinguishes unmapped, the file not having answered yet, no state
+   *  received, and usage below the gate.
+   *
+   *  The in-flight case gets its own name because it is a different situation with the same symptom: on
+   *  a history resume the verdict is waiting on the file's own record (askPriorReset), and the phrase
+   *  that arrives before that read lands is not being ignored for lack of a snapshot — it will be judged
+   *  a moment later. Reporting both as "rate_limits not received" is what made the 2026-08-27 log
+   *  unreadable. Once the answer is in, priorReset is null or a value and this falls through. */
   private why(chain: Chain): string {
     if (!chain.tail) return 'rollout unmapped'
+    if (!chain.state && chain.priorAsked && chain.priorReset === undefined)
+      return 'prior block not read yet'
     if (!chain.state) return 'rate_limits not received'
     const { primary, secondary } = chain.state
     return `primary=${primary?.usedPercent ?? 'n/a'}%, secondary=${secondary?.usedPercent ?? 'n/a'}%`
@@ -521,13 +557,27 @@ export class CodexRollingCoordinator {
       // chain.recovery *before* onLimit is what hands it to the shared registry too (SPEC §11.2/6):
       // onLimit re-reads this slot and broadcasts it, but only once its own guards have passed.
       //
-      // **Known imprecision: the slot is currentIndex, which on a fresh register is always 0.** If the
-      // conversation was closed right after a roll, its rollout holds the *previous* account's records,
-      // so the reset can be attributed to the account this chain starts on rather than the one that was
-      // actually refused. Not restructured, because the rollout does not say which account wrote which
-      // record — and the cost is bounded: it is a real reset time on the wrong slot, and the healthy
-      // timer of the first arrival on that account tears it up (blockRegistry.clear).
-      chain.recovery[chain.cycle.currentIndex] = { at: v.at, weekly: v.weekly, since: now }
+      // **Known imprecision, and nothing tears it up.** register only asks the file when the reopen
+      // stays on the account that wrote it, so the slot (currentIndex, always 0 on a fresh register) is
+      // that account. The shape that still slips through is a rollout a *roll* copied into this
+      // account's folder: the copy carries the previous account's records, yet reopening it here is a
+      // same-account resume by every test we have — the rollout does not say which account wrote which
+      // record, which is why this is documented rather than restructured. Do not expect the healthy
+      // timer to cover it: that timer is armed by an *arrival* on an account (blockRegistry.clear), and
+      // this session is already sitting on it, going straight into a wait — so a wrong reset here holds
+      // for its full length, for every chain.
+      //
+      // **The reset is recorded only when the file supplied one.** at === null is priorLimitVerdict's
+      // phrase-only branch — the weakest evidence in the design: no record in the file, so the screen
+      // text is all there is, and the scanner reads the whole redraw, so an agent's own output, a quoted
+      // log or a pasted document carrying a limit-shaped sentence reaches it too. Leaving the slot empty
+      // keeps that evidence inside this chain. planRetry reads an empty slot as now + RETRY_FALLBACK_MS,
+      // the very value blockedUntil computes from { at: null, since: now }, so this wait is unchanged —
+      // while onLimit, which broadcasts whatever this slot holds, then has nothing to say and no other
+      // chain is steered off a healthy account by one line of text. The one further effect is wanted
+      // too: with the slot empty, a later pass of this chain does not skip the account either.
+      if (v.at !== null)
+        chain.recovery[chain.cycle.currentIndex] = { at: v.at, weekly: v.weekly, since: now }
       chain.textHit = false // spent either way — the next tick must not fire on the same phrase again
       this.onLimit(chain, 'priorBlock')
       return true

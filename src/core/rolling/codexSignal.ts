@@ -493,6 +493,10 @@ export function priorLimitVerdict(
   if (prior) return opts.textHit ? { kind: 'replay' } : { kind: 'none' }
   // No prior block on record: this conversation has never been limited here, so there is no old error
   // line to redraw and a confirmed phrase is the only evidence there is. The reset time is unknown —
-  // planRetry's fallback interval covers that.
+  // planRetry's fallback interval covers that. **This branch is the weakest evidence in the design**:
+  // the premise covers codex's own error line, but the scanner reads the whole redraw, so an agent's own
+  // output or a quoted log carrying a limit-shaped sentence lands here too. That is why its consumer
+  // keeps a verdict with at === null out of the shared block registry — the wait is this chain's alone
+  // (judgedByPriorBlock in codexRolling.ts).
   return opts.textHit ? { kind: 'limited', at: null, weekly: false } : { kind: 'none' }
 }

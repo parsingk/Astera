@@ -1144,6 +1144,10 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
+  // 아래 재개 테스트들이 register 에 넘기는 세 번째 인자는 "파일을 쓴 계정으로 다시 열었다"는 배선의
+  // 답이다(ipc 의 resumeSameAccount). 파일에 물어도 되는 조건이 그것뿐이므로, 여기서 true 를 빼면
+  // 픽스처가 검사하려는 판정 자체가 실행되지 않는다 — 계정이 바뀐 재개는 아래 전용 테스트가 맡는다.
+  //
   // 실측(2026-08-27): 히스토리에서 대화를 다시 열면 코디네이터는 그 rollout 파일 **끝**에 붙으므로
   // 자기 사용량 스냅숏이 없다. 그런데 rate_limits 는 턴 완료에 실려서만 나오고 한도에 걸린 세션은
   // 턴을 끝낼 수 없다 — 자기 한도를 믿게 해 줄 증거를 영원히 만들 수 없다는 뜻이다. 로그에는 같은
@@ -1161,7 +1165,7 @@ describe('CodexRollingCoordinator', () => {
       accountId: 'c1', uuid: 'cx-prior-1', cwd: single.cwd, primary: 99, primaryReset: resetSec
     })
     await appendLimitError(file)
-    h.coord.register({ ...single, resumeSessionId: 'cx-prior-1' }, file)
+    h.coord.register({ ...single, resumeSessionId: 'cx-prior-1' }, file, true)
     await advance(100) // 파일에 물어본 답이 도착한다 — 도착 전에는 판정을 묻지 않는다
     await advance(15_000) // 첫 틱. 화면 문구는 한 번도 흘리지 않았다
     expect(h.sent.at(-1)?.payload.state).toBe('waiting')
@@ -1171,6 +1175,34 @@ describe('CodexRollingCoordinator', () => {
     expect(logs.find((l) => l.includes('codex limit detected'))).toContain('reason=priorBlock')
     // Phase 1d: 같은 계정을 쓰는 다른 체인도 이 차단을 알아야 한다(SPEC §11.2/6)
     expect(blocks.get('c1', Date.now())).not.toBeNull()
+    h.coord.stop()
+  })
+
+  // 같은 복구가 **다른 계정으로** 다시 열 때에는 재앙이 된다. 재개 화면은 같은 provider 의 로그인된
+  // 계정을 모두 내놓고 다른 것을 고르는 것은 평범한 조작인데, 그러면 배선이 rollout 을 그 계정 폴더로
+  // 복사하고 체인은 그 계정에서 시작한다 — 파일 안의 거부 기록은 **다른 계정의** 것이다. 그것을 믿으면
+  // 멀쩡한 계정에 차단이 붙고, onLimit 이 그것을 공유 레지스트리로 방송해 다른 체인 전부가 리셋(주간이면
+  // 며칠)까지 그 계정을 피한다. 두 계정 체인이라면 방금 띄운 멀쩡한 세션을 죽여 소진된 계정으로
+  // 되돌리기까지 한다. 문구는 한 줄도 필요 없고, 이 브랜치 전에는 아무 일도 없던 재개다.
+  it('다른 계정으로 다시 열면 파일의 차단을 복구하지 않는다 (멀쩡한 계정을 재우지 않는다)', async () => {
+    const blocks = new BlockRegistry()
+    const logs: string[] = []
+    const h = harness({ blocks, log: (m) => logs.push(m) })
+    // 사용자가 재개 계정으로 c2 를 골랐다 — 체인은 c2 에서 시작하고 파일은 c2 폴더에 복사돼 있다
+    const cross: SessionInfo = { ...h.info1, accountId: 'c2', rollAccountIds: ['c2', 'c1'] }
+    const resetSec = Math.floor((Date.now() + 3_600_000) / 1000)
+    const file = await writeRollout({
+      accountId: 'c2', uuid: 'cx-prior-cross', cwd: cross.cwd, primary: 99, primaryReset: resetSec
+    })
+    await appendLimitError(file) // 복사본이 담고 온 c1 의 거부 기록이다
+    h.coord.register({ ...cross, resumeSessionId: 'cx-prior-cross' }, file, false) // 계정이 바뀌었다
+    await advance(100) // 물어봤다면 답이 도착할 시간
+    await advance(15_000)
+    await advance(15_000)
+    expect(h.sent.filter((s) => s.payload.state === 'waiting')).toEqual([]) // 대기하지 않는다
+    expect(blocks.get('c2', Date.now())).toBeNull() // 공유 레지스트리에 아무것도 쓰지 않았다
+    expect(h.events).toEqual([]) // 멀쩡한 세션을 죽여 소진된 계정으로 되돌리지도 않았다
+    expect(logs.filter((l) => l.includes('codex limit detected'))).toEqual([])
     h.coord.stop()
   })
 
@@ -1187,7 +1219,7 @@ describe('CodexRollingCoordinator', () => {
       accountId: 'c1', uuid: 'cx-prior-2', cwd: single.cwd, primary: 99, primaryReset: resetSec
     })
     await appendLimitError(file) // 그때는 정말 막혔다 — 지금은 풀렸다
-    h.coord.register({ ...single, resumeSessionId: 'cx-prior-2' }, file)
+    h.coord.register({ ...single, resumeSessionId: 'cx-prior-2' }, file, true)
     await advance(100)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT }) // 재개가 다시 그린 옛 줄
     await advance(100)
@@ -1202,18 +1234,24 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
-  it('한도 기록이 없는 대화는 문구만으로 대기한다 (사용량 스냅숏 없이)', async () => {
-    const h = harness()
+  // 이 갈래는 설계에서 가장 약한 증거다 — 스캐너는 재개 화면 전체를 읽으므로 에이전트 자신의 출력이나
+  // 인용된 로그에 한도 모양의 문장이 있으면 여기까지 온다. 그래서 대기는 이 체인 안에서만 하고 공유
+  // 레지스트리에는 아무것도 쓰지 않는다(judgedByPriorBlock): 방송하면 그 한 줄로 다른 체인 전부가 15분간
+  // 그 계정을 피한다. 대기 간격은 그대로다 — planRetry 는 빈 슬롯을 now+폴백으로 읽는다.
+  it('한도 기록이 없는 대화는 문구만으로 대기한다 (사용량 스냅숏 없이, 공유 기록 없이)', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
     const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
     // rate_limits 가 한 줄도 없는 파일 — 이 대화는 여기서 한 번도 막힌 적이 없다. 그러면 다시 그릴
     // 옛 줄도 없으므로 확정 문구가 유일한 증거고, 리셋 시각은 모른다
     const file = await writeRollout({ accountId: 'c1', uuid: 'cx-prior-3', cwd: single.cwd })
-    h.coord.register({ ...single, resumeSessionId: 'cx-prior-3' }, file)
+    h.coord.register({ ...single, resumeSessionId: 'cx-prior-3' }, file, true)
     await advance(100)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
     expect(h.sent.at(-1)?.payload.state).toBe('waiting')
     expect(h.sent.at(-1)?.payload.scope).toBe('session')
+    expect(blocks.get('c1', Date.now())).toBeNull() // 문구 한 줄은 다른 체인의 계정 선택을 바꾸지 못한다
     // 리셋을 모르므로 planRetry 의 폴백 간격(15분)이 덮는다
     await advance(14 * 60_000)
     expect(h.written).toEqual([]) // 아직 기다린다
@@ -1234,7 +1272,7 @@ describe('CodexRollingCoordinator', () => {
       accountId: 'c1', uuid: 'cx-prior-4', cwd: single.cwd, primary: 99, primaryReset: resetSec
     })
     await appendLimitError(file)
-    h.coord.register({ ...single, resumeSessionId: 'cx-prior-4' }, file)
+    h.coord.register({ ...single, resumeSessionId: 'cx-prior-4' }, file, true)
     await advance(100)
     await appendTokenCount(file, { primary: 20 }) // 재개된 세션이 턴을 끝냈다 — 한도가 아니다
     await advance(15_000) // 자기 스냅숏이 들어온 뒤의 틱
@@ -1262,7 +1300,7 @@ describe('CodexRollingCoordinator', () => {
     const file = await writeRollout({
       accountId: 'c1', uuid: 'cx-prior-busy', cwd: single.cwd, primary: 91, primaryReset: resetSec
     })
-    h.coord.register({ ...single, resumeSessionId: 'cx-prior-busy' }, file)
+    h.coord.register({ ...single, resumeSessionId: 'cx-prior-busy' }, file, true)
     await advance(100)
     await advance(15_000)
     await advance(15_000)
@@ -1288,7 +1326,7 @@ describe('CodexRollingCoordinator', () => {
     await appendTokenCount(file, {
       primary: 95, primaryReset: Math.floor((Date.now() + 3 * 3_600_000) / 1000)
     })
-    h.coord.register({ ...single, resumeSessionId: 'cx-prior-recovered' }, file)
+    h.coord.register({ ...single, resumeSessionId: 'cx-prior-recovered' }, file, true)
     await advance(100)
     await advance(15_000)
     await advance(15_000)
