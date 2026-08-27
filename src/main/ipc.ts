@@ -473,7 +473,7 @@ export function registerIpc(
       // they only share the skeleton.
       if (providerOf(account) === 'codex')
         codexRolling?.register(info, resumeTranscriptDest, resumeSameAccount)
-      else rolling?.register(info)
+      else rolling?.register(info, resumeTranscriptDest)
     }
     if (info.schedule) {
       try {

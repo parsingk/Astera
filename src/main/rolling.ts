@@ -147,6 +147,13 @@ interface Chain {
   scanner: OutputScanner
   claudeSessionId: string | null // the statusline session_id — the same throughout the relay
   transcriptPath: string | null // the path of the current live transcript
+  // 히스토리에서 대화를 다시 열 때 ipc 가 이미 알던 두 값 — 그 대화의 claude 세션 id 와, 대상 계정
+  // 폴더로 복사해 둔 파일 경로. **roll() 의 폴백으로만 쓴다.** claudeSessionId·transcriptPath 가
+  // null 인지로 "statusLine 이 아직 안 왔는가" 를 묻는 자리(findLiveByClaudeSession, applyMeta 의
+  // 저장 게이트, settleInPlace 의 건강 판정, idleNudgeCheck 와 blind-spot 프로브)는 이 값을 절대
+  // 읽어서는 안 된다 — 그 물음에 미리 답을 채워 넣으면 그 판정 자체가 항상 참이 되어 무의미해진다.
+  resumeSeedSessionId: string | null
+  resumeSeedTranscriptPath: string | null
   lastOutputAt: number
   rolling: boolean // the re-trigger guard while a roll is running
   awaitingReady: boolean // true from a respawn until the automatic prompt (auto-accepting trust is limited to this window too)
@@ -254,8 +261,15 @@ export class RollingCoordinator {
 
   /** Called by ipc right after a spawn that has rollAccountIds (rolling active) — starts tracking the
    *  chain. One account means single-account auto-resume (count=1: on detecting a limit, wait until the
-   *  reset and resume on the same account); two or more means switching accounts. */
-  register(info: SessionInfo): void {
+   *  reset and resume on the same account); two or more means switching accounts.
+   *
+   *  resumeTranscriptPath: when info is a history resume, the path ipc already copied the conversation to
+   *  under the target account. Together with info.resumeSessionId it seeds resumeSeedSessionId /
+   *  resumeSeedTranscriptPath below — **not** claudeSessionId / transcriptPath, which stay null until a
+   *  real statusLine reports them. A conversation reopened from history while already limited never calls
+   *  that hook, so roll() falls back to the seed when it has nothing else — see the Chain fields' comment
+   *  for why nothing else may. codex's register already takes the equivalent path. */
+  register(info: SessionInfo, resumeTranscriptPath?: string): void {
     const ids = info.rollAccountIds ?? []
     if (ids.length < 1) return
     this.chains.set(info.id, {
@@ -268,6 +282,8 @@ export class RollingCoordinator {
       scanner: new OutputScanner(),
       claudeSessionId: null,
       transcriptPath: null,
+      resumeSeedSessionId: info.resumeSessionId ?? null,
+      resumeSeedTranscriptPath: resumeTranscriptPath ?? null,
       lastOutputAt: this.now(),
       rolling: false,
       awaitingReady: false, // the first session — the user answers the trust prompt themselves
@@ -996,7 +1012,12 @@ export class RollingCoordinator {
         return
       }
       if (!chain.claudeSessionId || !chain.transcriptPath) await this.refreshMeta(chain)
-      if (!chain.claudeSessionId || !chain.transcriptPath) {
+      // The learned value wins when it exists; the register-time seed (a history resume's own id and the
+      // path ipc already copied it to) only fills the gap for a chain a limited claude's statusLine never
+      // reported to. Nothing upstream of this line may fall back the same way — see the Chain fields' comment.
+      const sessionId = chain.claudeSessionId ?? chain.resumeSeedSessionId
+      const transcriptPath = chain.transcriptPath ?? chain.resumeSeedTranscriptPath
+      if (!sessionId || !transcriptPath) {
         this.deps.log(`roll aborted — no session metadata (statusline never recorded) session=${chain.liveId}`)
         this.rescheduleAbortedRoll(chain, 'no session metadata')
         return
@@ -1007,8 +1028,8 @@ export class RollingCoordinator {
       // own 'waiting' publication just below was then ignored as a repeat of the same stop.
       this.pushState(chain, 'switching', { accountLabel: target.label })
       // ① copy — a claude blocked by a limit is idle, so there is no write contention
-      const dest = claudeHistoryStrategy.mapTargetPath(chain.transcriptPath, target.configDir)
-      await this.copy(chain.transcriptPath, dest)
+      const dest = claudeHistoryStrategy.mapTargetPath(transcriptPath, target.configDir)
+      await this.copy(transcriptPath, dest)
       // 복사 대기 중에 unregister()가 체인을 폐기했으면 여기서 멈춘다 — ② kill·③ spawn을 하지 않고,
       // 폐기된 체인이 맵에 다시 들어가지 않도록 한다. 아래로 진행하면 새로 띄운 세션이 좀비가 되고
       // 어떤 코디네이터도 다시 수거하지 못한다.
@@ -1024,7 +1045,7 @@ export class RollingCoordinator {
       const info = this.deps.spawn({
         account: target,
         cwd: chain.cwd,
-        resumeSessionId: chain.claudeSessionId,
+        resumeSessionId: sessionId,
         rollAccountIds: chain.accountIds,
         slackNotify: chain.liveInfo.slackNotify, // Slack notifications are kept per chain
         bypassPermissions: chain.liveInfo.bypassPermissions, // bypass is kept per chain

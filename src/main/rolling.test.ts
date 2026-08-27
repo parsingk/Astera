@@ -2454,3 +2454,76 @@ describe('제자리 재개의 정착 판정', () => {
     expect(h.events.slice(eventsBefore).filter((e) => e.startsWith('spawn') || e.startsWith('kill'))).toEqual([])
   })
 })
+
+// 히스토리에서 이미 한도에 걸린 대화를 다시 열면 statusLine 이 오지 않는다(한도가 그 호출을 멈춘다).
+// 예전에는 그래서 계정을 갈아탈 수 없었다 — 넘길 대화 파일이 무엇인지 몰라 roll 이 중단됐다.
+// 그런데 앱은 그 두 값을 이미 알고 있다: 사용자가 목록에서 고른 대화 id, 그리고 대상 계정 폴더로
+// 복사해 둔 경로. 등록할 때 그것을 받아 두면 statusLine 없이도 전환이 성립한다.
+describe('등록 시점의 재개 정보', () => {
+  const T0 = Date.UTC(2026, 7, 3, 0, 0)
+  const LIMIT_WITH_RESET = limitWithReset('session', '11am')
+  const DEST = path.join('D:\\cfg', 'a1', 'projects', 'D--work-p', 'hist-sess.jsonl')
+
+  it('statusLine 이 없어도 히스토리 재개 정보로 계정을 갈아탄다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness() // 페이로드 없음 — statusLine 은 끝내 오지 않는다
+    h.coord.register({ ...h.info1, resumeSessionId: 'hist-sess' }, DEST)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    // 예전에는 여기서 events 가 비어 있었다(중단). 이제 복사하고 갈아탄다.
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a2'])
+    expect(h.copied[0]?.src).toBe(DEST)
+    expect(h.spawned.at(-1)?.resumeSessionId).toBe('hist-sess')
+  })
+
+  it('재개 정보가 없으면 예전처럼 빈 칸으로 시작한다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness()
+    h.coord.register(h.info1) // 새 세션 — 재개가 아니다
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    expect(h.events).toEqual([]) // statusLine 을 못 배웠으므로 중단
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+  })
+
+  // register 는 학습된 값이 아니라 별도의 시드 필드(resumeSeedSessionId/resumeSeedTranscriptPath)를
+  // 채운다 — claudeSessionId·transcriptPath 는 여기서 여전히 null 로 시작한다. statusLine 이 tick
+  // 한 번을 통해 진짜 값을 배우면, roll() 은 그 학습된 값을 쓰고 시드는 쓰지 않는다.
+  it('statusLine 이 학습되면 roll 은 시드가 아니라 학습된 값을 쓴다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness()
+    h.coord.register({ ...h.info1, resumeSessionId: 'hist-sess' }, DEST)
+    h.payloads.set('s1', payload(20)) // statusLine 이 살아났다 — 다른 세션 id 를 싣는다
+    await vi.advanceTimersByTimeAsync(16_000) // tick 한 번 — claudeSessionId·transcriptPath 를 학습한다
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    // payload() 가 싣는 값이 쓰인다 — 시드 'hist-sess' 가 아니다
+    expect(h.spawned.at(-1)?.resumeSessionId).toBe('claude-sess')
+  })
+
+  // 이 재설계의 이유. 시드는 roll() 의 폴백일 뿐 "statusLine 이 돌아왔는가"의 증거가 아니다 —
+  // settleInPlace 는 claudeSessionId·transcriptPath 만 보고, 시드는 절대 읽지 않는다. 그래서
+  // 히스토리 재개 정보가 있어도 statusLine 이 끝내 오지 않으면 정착 판정은 여전히 "메타 없음"으로
+  // 읽어 respawn 시도(roll)로 넘어가야 한다 — 건강하다고 잘못 선언해 아무 일도 하지 않으면 안 된다.
+  // 누군가 나중에 학습된 필드를 시드로 미리 채우면 이 테스트가 깨진다.
+  it('시드는 정착 판정의 건강 증거로 쓰이지 않는다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const logs: string[] = []
+    const h = harness({ log: (m) => logs.push(m) })
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'], resumeSessionId: 'hist-sess' }, DEST)
+    // 페이로드 없음 — statusLine 은 끝내 오지 않는다. 단일 계정이므로 대기 → 제자리 재개 경로.
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    const firstRetry = Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+    await vi.advanceTimersByTimeAsync(firstRetry - Date.now() + 1_000)
+    expect(resumeCount(h)).toBe(1) // 제자리 재개가 일어났다
+    logs.length = 0
+    // 정착 마감(60초). 시드가 있어도 statusLine 이 오지 않았으므로 판정은 "메타 없음" 그대로다.
+    await vi.advanceTimersByTimeAsync(61_000)
+    await flush()
+    expect(logs.some((l) => l.includes('no session metadata'))).toBe(true)
+    // roll() 은 그 시드를 폴백으로 써서 실제로 전환한다(같은 계정으로 재개) — 판정이 "건강하다"로
+    // 잘못 선언해 아무 일도 하지 않는 것과는 다른 결과다.
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a1'])
+  })
+})
