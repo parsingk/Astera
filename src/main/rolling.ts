@@ -874,12 +874,20 @@ export class RollingCoordinator {
    *  **Why 'waiting' replaces the 'none' rather than following it.** Publishing 'none' first lifts the
    *  scheduler's suppression and clears the banner, and then puts it straight back.
    *
-   *  **Why retrying an abort that will abort again is right.** If the account is gone for good this
-   *  loops at planRetry's floor, logging each time. That is better than silence: the log is the only
-   *  thing that can tell someone to re-add the account or close the session. */
+   *  **Why retrying an abort that will abort again is right, and what the loop costs.** If the account
+   *  is gone for good this repeats at the interval planRetry computes — the recorded reset plus the
+   *  margin, or the 15-minute fallback when no reset is known. (The 60-second floor only applies when
+   *  that time has already passed, so it is not the loop's normal period.) Each round logs. And a round
+   *  is not always only a log line: when planRetry's target resolves to the account this chain is
+   *  already on, resumeAfterWait resumes in place, which types the prompt and Enter into the live PTY.
+   *  That is the same loop shape the ordinary wait path has always had, so none of it is new behaviour
+   *  — and it is still better than silence, because the log is the only thing that can tell someone to
+   *  re-add the account or close the session. */
   private rescheduleAbortedRoll(chain: Chain, why: string): void {
-    // A wait already armed means the caller is onLimit's own wait branch — do not arm a second one.
-    // Two timers means one leaks and that session resumes twice.
+    // Defensive. No caller can actually reach here with a wait already armed — onLimit's wait branch
+    // does not call roll() — but it is checked because being wrong once costs a second timer on the
+    // same chain: one of the two leaks with nothing left holding its handle, and the session resumes
+    // twice.
     if (chain.waitTimer || chain.disposed) return
     // One clock reading, for the same reason onLimit takes one: the block records retryState merges and
     // the instant planRetry judges them against have to be the same moment.
@@ -982,6 +990,13 @@ export class RollingCoordinator {
       this.scheduleAutoPrompt(chain)
     } catch (err) {
       this.deps.log(`roll failed: ${err instanceof Error ? err.message : String(err)}`)
+      // **The state published here can be optimistic.** If the throw landed between the kill and the
+      // re-key, this 'waiting' — and the resume the timer eventually fires — is addressed to a session
+      // id that no longer exists; 'none' was the more honest state for that one window. The session was
+      // already lost at that point and that fatality is pre-existing, not something the reschedule adds.
+      // It is deliberately not distinguished: a flag saying "the kill already happened" would have to be
+      // threaded through the whole kill→spawn→re-key sequence to be correct, and a wrong flag would
+      // silence the reschedule on the aborts that need it.
       this.rescheduleAbortedRoll(chain, 'roll failed')
     } finally {
       chain.rolling = false

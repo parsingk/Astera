@@ -1405,11 +1405,12 @@ describe('idle nudge', () => {
   // 끼어들면 예약된 재시도와 두 번 개입한다), 예약된 시각에 재개 문장이 들어간다. 종전 기대값과
   // 같은 문장이 같은 세션에 들어가는 것이고, 다른 것은 그것을 넣는 경로와 시각이다.
   it('롤이 실패해 멈춘 세션은 예약된 재시도가 되살린다 — 대기 중에는 nudge하지 않는다', async () => {
+    // probeActivity·readPending 오버라이드가 없다: 대기의 억제는 **틱 자체**에서 걸려
+    // (tick 의 waitTimer 가드) idleNudgeCheck 가 아예 호출되지 않으므로, nudge 의 전제 조건을
+    // 차려 놓아도 이 테스트에서는 아무것도 달라지지 않는다.
     const h = harness({
       // a2를 못 찾게 해 롤을 중단시킨다 → 중단이 재시도를 예약한다(rolling.ts 의 rescheduleAbortedRoll)
-      getAccount: (id) => (id === 'a1' ? acc('a1', '계정A') : null),
-      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
-      readPending: () => Promise.resolve(null)
+      getAccount: (id) => (id === 'a1' ? acc('a1', '계정A') : null)
     })
     h.payloads.set('s1', payload(30)) // 스냅샷은 게이트 미달 — 차단 기록만이 증거다
     h.coord.register(h.info1)
@@ -1426,6 +1427,53 @@ describe('idle nudge', () => {
     await vi.advanceTimersByTimeAsync(200) // 150ms 엔터 타이머
     expect(h.written.map((w) => w.data)).toEqual(['이어서 작업 진행해 줘', '\r'])
     expect(h.events).toEqual([]) // 같은 계정이므로 kill·spawn 없이 제자리 재개다
+  })
+
+  // `limitEvidence` 의 분기 ①(현재 계정에 차단 기록이 있으면 사용률이 낮아도 nudge 한다)을 위한
+  // 테스트. 위의 테스트가 종전에 이 분기를 덮고 있었고, 중단이 재시도를 예약하게 되면서 그 경로로는
+  // 더 이상 이 상태에 닿을 수 없다 — 그래서 **살아 있는 생산자**로 다시 덮는다.
+  //
+  // 살아 있는 생산자는 이것이다: `roll()` 은 `chain.recovery` 를 지우지 않고, healthy 타이머는
+  // **현재 칸만** 지운다(다른 계정의 기록은 남긴다). 그래서 기록이 남은 계정으로 되돌아오면 그 기록이
+  // 현재 칸의 기록이 된다. 그 뒤 자동 프롬프트가 120초 만료로 'stalled' 로 끝나면 — 그 경로는
+  // awaitingReady 만 풀고 프롬프트를 보내지 않으므로 **healthy 타이머가 걸리지 않는다** — 기록은
+  // 지워지지 않은 채 체인이 다시 틱 대상이 된다. 스냅숏은 없으니(분기 ②는 false) nudge 를 내는 것은
+  // 분기 ① 하나뿐이고, 관측되는 결과는 살아 있는 PTY 로 나가는 재개 문장이다.
+  it('되돌아온 계정에 차단 기록이 남아 있으면 사용률 근거 없이도 nudge한다', async () => {
+    const T0 = Date.UTC(2026, 7, 3, 0, 0)
+    vi.setSystemTime(new Date(T0))
+    const h = harness({
+      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN), // 서브에이전트 활동 없음
+      readPending: () => Promise.resolve(null)
+    })
+    const twoAccounts = { ...h.info1, rollAccountIds: ['a1', 'a2'] }
+    // a1 의 차단은 2분 뒤 풀린다 — 그래야 아래에서 a1 으로 되돌아올 수 있다
+    h.payloads.set('s1', payloadReset(97, Math.floor((T0 + 2 * MIN) / 1000)))
+    h.payloads.set('s2', payloadEx({ five: 20 })) // a2 는 멀쩡하다 → 자동 프롬프트가 정상 발화해 healthy 타이머를 건다
+    h.coord.register(twoAccounts)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advanceIo(3 * MIN) // a1 → a2 롤 + healthy 타이머(60초)로 recovery[a2] 정리. recovery[a1] 은 남는다
+    expect(h.spawned.at(-1)?.accountId).toBe('a2')
+    // a2 도 한도에 걸린다 → a1 의 차단은 이미 풀렸으므로 a1 으로 되돌아간다
+    h.coord.handleData({ sessionId: 's2', data: LIMIT_TEXT })
+    await advanceIo(1_000)
+    expect(h.spawned.at(-1)?.accountId).toBe('a1') // 기록이 남아 있는 칸으로 돌아왔다
+    const liveId = h.spawned.at(-1)!.id
+    // 자동 프롬프트를 30초 폴백에서 붙잡아 둔다(화면에 인식 못한 대화상자가 떠 있는 모양) → 120초
+    // 만료가 'stalled' 로 끝나고 프롬프트도 healthy 타이머도 없다. s3 의 statusLine 은 주지 않으므로
+    // lastUsagePct 는 null 로 남는다 — 분기 ② 는 성립하지 않는다.
+    h.coord.handleData({ sessionId: liveId, data: WAIT_DIALOG })
+    await advanceIo(2 * MIN + 10_000)
+    expect(h.sent.at(-1)?.payload.state).toBe('stalled')
+    expect(h.written.filter((w) => w.id === liveId)).toEqual([]) // 자동 프롬프트는 나가지 않았다
+    // 이제 정지가 이어진다 → 근거는 남은 차단 기록 하나뿐이다
+    h.coord.onHookEvent(liveId, idleHook)
+    await advanceIo(11 * MIN)
+    await vi.advanceTimersByTimeAsync(200) // 150ms 엔터 타이머
+    expect(h.written.filter((w) => w.id === liveId).map((w) => w.data)).toEqual([
+      '이어서 작업 진행해 줘',
+      '\r'
+    ])
   })
 })
 

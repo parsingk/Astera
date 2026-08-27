@@ -679,8 +679,12 @@ export class CodexRollingCoordinator {
    *  직접 지정한 문구일 수도 있다(register 의 prompt). 대체하면 그것을 버린다.
    *
    *  **try/catch 가 여기 있는 이유는 `roll()` 의 catch 가 있는 자리다.** 그 호출은 roll() 바깥 try
-   *  안에 있고 그 catch 는 kill·respawn **앞에서** 돌아 'none' 을 게시하고 끝난다 — 즉 깨진 packet
-   *  계약이 인계를 얇게 만드는 것이 아니라 **롤 자체를 중단시켜 워커를 한도에 멈춘 채로 남긴다.**
+   *  안에 있고 그 catch 는 kill·respawn **앞에서** 돈다 — 즉 깨진 packet 계약이 인계 문장을 얇게
+   *  만드는 것이 아니라 **롤 자체를 중단시킨다.** 그 catch 는 이제 'none' 으로 끝내지 않고 다음
+   *  시도를 예약하므로(rescheduleAbortedRoll) 워커가 영구히 멈추지는 않는다. 그래도 이 가드는
+   *  그대로 필요하다: 깨진 packet 계약이 **이번 롤이 일어나는지를 결정해서는 안 된다.** 그것이
+   *  결정해도 되는 것은 인계 문장의 내용까지고, 가드가 없으면 대신 소진된 계정에 앉은 채 재시도
+   *  간격(리셋 시각, 모르면 15분)을 한 번 더 기다린다 — 그것이 이 함수가 막는 실제 대가다.
    *  resumeText 는 던지지 않는다는 계약이지만(resumePacket.ts) 그 계약이 깨질 때 잃는 것이 이만큼
    *  크므로 로그를 남기고 기존 고정 문장으로 저하한다. rolling.ts 의 같은 이름 함수와 같은 모양이다. */
   private async resumePromptFor(
@@ -882,16 +886,24 @@ export class CodexRollingCoordinator {
    *  **Why 'waiting' replaces the 'none' rather than following it.** Publishing 'none' first lifts the
    *  scheduler's suppression and clears the banner, and then puts it straight back.
    *
-   *  **Why retrying an abort that will abort again is right.** If the account is gone for good this
-   *  loops at planRetry's floor, logging each time. That is better than silence: the log is the only
-   *  thing that can tell someone to re-add the account or close the session.
+   *  **Why retrying an abort that will abort again is right, and what the loop costs.** If the account
+   *  is gone for good this repeats at the interval planRetry computes — the recorded reset plus the
+   *  margin, or the 15-minute fallback when no reset is known. (The 60-second floor only applies when
+   *  that time has already passed, so it is not the loop's normal period.) Each round logs. And a round
+   *  is not always only a log line: when planRetry's target resolves to the account this chain is
+   *  already on, resumeAfterWait resumes in place, which types the prompt and Enter into the live PTY.
+   *  That is the same loop shape the ordinary wait path has always had, so none of it is new behaviour
+   *  — and it is still better than silence, because the log is the only thing that can tell someone to
+   *  re-add the account or close the session.
    *
    *  This is a second copy of the claude side's function of the same name, deliberately — lifting timer
    *  lifetimes into a common parent is the axis of this app that has produced the most bugs
    *  (core/rolling/retry.ts's header records that decision). */
   private rescheduleAbortedRoll(chain: Chain, why: string): void {
-    // A wait already armed means the caller is onLimit's own wait branch — do not arm a second one.
-    // Two timers means one leaks and that session resumes twice.
+    // Defensive. No caller can actually reach here with a wait already armed — onLimit's wait branch
+    // does not call roll() — but it is checked because being wrong once costs a second timer on the
+    // same chain: one of the two leaks with nothing left holding its handle, and the session resumes
+    // twice.
     if (chain.waitTimer || chain.disposed) return
     // One clock reading, for the same reason onLimit takes one: the block records retryState merges and
     // the instant planRetry judges them against have to be the same moment.
@@ -1001,6 +1013,13 @@ export class CodexRollingCoordinator {
       this.pushState(chain, 'none')
     } catch (err) {
       this.deps.log(`codex roll failed: ${err instanceof Error ? err.message : String(err)}`)
+      // **The state published here can be optimistic.** If the throw landed between the kill and the
+      // re-key, this 'waiting' — and the resume the timer eventually fires — is addressed to a session
+      // id that no longer exists; 'none' was the more honest state for that one window. The session was
+      // already lost at that point and that fatality is pre-existing, not something the reschedule adds.
+      // It is deliberately not distinguished: a flag saying "the kill already happened" would have to be
+      // threaded through the whole kill→spawn→re-key sequence to be correct, and a wrong flag would
+      // silence the reschedule on the aborts that need it.
       this.rescheduleAbortedRoll(chain, 'roll failed')
     } finally {
       chain.rolling = false
