@@ -462,7 +462,7 @@ describe('priorBlockAt', () => {
     expect(await priorBlockAt(p)).toEqual({ at: 1787739458_000, weekly: false })
   })
 
-  it('막힌 채 끝났어도 리셋을 못 읽으면 null (없는 시각을 지어내지 않는다)', async () => {
+  it('막힌 채 끝났어도 그 창의 사용률이 게이트 미만이면 null (리셋이 없어서가 아니라 게이트 미달로 제외된다)', async () => {
     const p = await write('pb-noreset.jsonl', [tokenCount({ primary: 40 }), taskComplete()])
     expect(await priorBlockAt(p)).toBeNull()
   })

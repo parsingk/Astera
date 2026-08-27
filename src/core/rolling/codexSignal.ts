@@ -406,7 +406,16 @@ const windows = (s: CodexLimitState): CodexWindow[] =>
  *  updating (measured: 0 updates over 88s of idle). That is why GATE_PCT in rolling.ts is no longer a
  *  gate for accepting the phrase either (it was removed). So both providers decide without a gate, and
  *  false-positive defence is carried not by a gate but by the scanner, which narrows LIMIT_RE down to
- *  the measured phrasing. */
+ *  the measured phrasing.
+ *
+ *  **A null state means "unknown," not "not limited."** That is the normal condition of a session
+ *  reopened from history, before its own tail has written a rate_limits record of its own, and a
+ *  session that is already at its limit can never leave it — the record that would clear the null comes
+ *  from a turn completing, and a blocked turn never completes. `if (!state) return false` below stays
+ *  exactly as it is: it was never wrong, it simply has nothing of its own to decide the reopened-session
+ *  case with, and it no longer has to — the coordinator now branches before ever reaching this function,
+ *  consulting priorLimitVerdict instead for as long as state is null. This function's own contract —
+ *  decide only from this session's own recorded state — is unchanged. */
 export function limitReached(state: CodexLimitState | null, opts: { textHit: boolean }): boolean {
   if (!state) return false
   if (state.reachedType !== null) return true // (1) structured primary signal — never observed firing (see limitErrorOf)
