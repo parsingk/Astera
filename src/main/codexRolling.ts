@@ -134,7 +134,7 @@ interface Chain {
   priorAsked: boolean
   scanner: CodexLimitScanner // detects the limit phrase in PTY output (corrects for chunk boundaries)
   modelChoice: CodexModelChoiceScanner // detects codex's approaching-limit model-switch prompt in the same stream
-  textHit: boolean // whether the limit phrase was seen in this window (the tick combines it with the state to decide)
+  textHit: boolean // whether the limit phrase was seen in this window — read only by judgedByPriorBlock and the ignored-phrase log now that the phrase-only verdict is retired
   unmappedWarned: boolean // whether the rollout-unmapped skip has already been logged (suppresses repeats of the same line)
   preemptWarned: boolean // whether the preemption has already been logged — keeps it from piling up on every 1-second poll
   lastOutputAt: number
@@ -761,7 +761,9 @@ export class CodexRollingCoordinator {
    *      it writes the same function (attachRollout) to the same file again.
    *   ② **Clear state.** The last snapshot is 100% — leaving it would fire the maxed+silent fallback
    *      again right after the resume. roll() does the same thing at the respawn point.
-   *   ③ **Reset the textHit latch and the phrase scanner.** Same reason.
+   *   ③ **Reset the textHit latch and the phrase scanner.** Once the same reason as ①·②; since the
+   *      phrase-only verdict was retired the latch can no longer re-raise a verdict, so clearing it now
+   *      only keeps the ignored-phrase log honest about which episode a phrase belongs to.
    *
    *  The timer it arms last is not a plain healthy timer — it is a deadline that has to decide whether
    *  the typed line started a turn at all. See settleInPlace.

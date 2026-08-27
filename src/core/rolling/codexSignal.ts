@@ -317,7 +317,8 @@ export async function rolloutSize(filePath: string): Promise<number | null> {
 const LIMIT_RE = /you(?:['’ʼ`])?ve\s+(?:hit|reached)\s+your\s+usage\s+limit|usage\s+limit\s+reached/i
 const TAIL_MAX = 2000 // same width as OutputScanner in detect.ts
 
-/** Finds the limit phrase in PTY output (the input to decision (2)). Chunks are cut at arbitrary
+/** Finds the limit phrase in PTY output. Decision (2) — the phrase on its own — is retired, so what
+ *  reads this now is the ignored-phrase log and priorLimitVerdict (see limitReached). Chunks are cut at arbitrary
  *  positions, so we keep a tail of the stripped text and test the concatenation — testing each chunk
  *  statelessly would miss a phrase that is split across two writes. Same idea as OutputScanner in
  *  detect.ts, but that one has the Claude-only regex baked in, so it is not shared.
@@ -397,30 +398,45 @@ const windows = (s: CodexLimitState): CodexWindow[] =>
   [s.primary, s.secondary].filter((w): w is CodexWindow => w !== null)
 
 /** Limit-reached decision (1) — the structured signal. Decision (2), the confirmed phrase taken on its
- *  own, is retired (2026-08-28): counted over 8 field detections, the phrase-only branch never caught a
- *  real limit (0 of 4) — every real limit came through the structured signal at 99-100% usage — while it
- *  produced every false positive (4 of 4), each a redraw of an earlier episode's screen text at 0-1%
- *  usage. (3) (100% + no output) needs a time condition, so the coordinator handles that one via
- *  maxedOut.
+ *  own, is retired (2026-08-28): counted over the 9 field detections in one day of rolling.log, the
+ *  phrase-only branch never caught a real limit (0 of 5) — every real limit came through the structured
+ *  signal at 99-100% usage — while it produced every false positive (5 of 5), each a redraw of an
+ *  earlier episode's screen text at 0-1% usage. (3) (100% + no output) needs a time condition, so the
+ *  coordinator handles that one via maxedOut.
+ *
+ *  **What a false positive cost, measured.** Three of the five landed within two minutes of a legitimate
+ *  in-place resume. Two of those had to respawn: the resume just before them had already spent that
+ *  episode's one in-place attempt (inPlaceUsed in codexRolling.ts), so resumeAfterWait took the kill
+ *  path and the log reads `did not recover — falling back to respawn` then `codex rolled`. The other
+ *  three typed the resume line into a session that was working. So the cost was not a wasted timer.
  *
  *  Why the structured signal still has no usage gate: rate_limits rides only on `token_count` events, and
  *  those are recorded only once a turn completes. When the limit rejects a request no new token_count
  *  comes out, so usage stops at a low value — and a gate would then block the legitimate structured
  *  signal at exactly that moment. Claude's statusLine is no different: the instant the limit blocks,
- *  statusLine itself stops updating (measured: 0 updates over 88s of idle). That is why GATE_PCT in
- *  rolling.ts is no longer a gate for accepting the phrase either (it was removed). So both providers
- *  decide without a gate. What is no longer true is the old closing claim that false-positive defence was
- *  carried by the scanner's narrowed LIMIT_RE rather than a gate — the field data falsified that: all 4
- *  false positives came through the scanner. A grace window is not the answer either, and the field data
- *  says so twice: the one false positive that did follow an in-place resume arrived 118 seconds after it —
- *  **outside** a window the size of rolling.ts's REPLAY_GRACE_MS, and a window long enough to cover it
- *  would also swallow a genuine limit landing soon after a switch, which is the case inReplayGrace's own
- *  comment records as measured. The other three did not follow a resume at all, so a window anchored on
- *  one could never have covered them.
+ *  statusLine itself stops updating (measured: 0 updates over 88s of idle). GATE_PCT in rolling.ts was
+ *  removed as a phrase gate for that same reason. The two providers are **no longer symmetric** on the
+ *  phrase, though: claude still accepts one, codex does not accept one at all.
+ *
+ *  What is no longer true is the old closing claim that false-positive defence was carried by the
+ *  scanner's narrowed LIMIT_RE rather than a gate — the field data falsified that: all 5 false positives
+ *  came through the scanner.
+ *
+ *  **A grace window was measured, not assumed, and it does not fit.** Anchoring a 60-second window on
+ *  the resume (the size of rolling.ts's REPLAY_GRACE_MS) would have suppressed 2 of the 5: the two that
+ *  arrived 27 and 36 seconds after an in-place resume. It would have missed the third resume-adjacent
+ *  one at 118 seconds, and both of the two that followed a rollout *attach* rather than a resume (44
+ *  seconds and ~18 minutes) — a window anchored on a resume never opens for those. inReplayGrace's
+ *  usage escape hatch would not have rescued any of them either: all five read 0-1%. Widening the
+ *  window until it covers 118 seconds and an attach would also swallow a genuine limit landing soon
+ *  after a switch, which is the case inReplayGrace's own comment records as measured.
  *
  *  The phrase is not gone. priorLimitVerdict — the verdict for a resumed session before it has written a
- *  rate_limits record of its own — still reads it, there only to corroborate a structured record
- *  recovered from the rollout file, never to stand alone. And an ignored phrase still logs (see
+ *  rate_limits record of its own — still reads it. Usually to corroborate a structured record recovered
+ *  from the rollout file; but **one branch there does let the phrase stand alone** — a reopened
+ *  conversation whose file records no block at all has nothing else to go on, and that function's own
+ *  comment already calls it the weakest evidence in the design. Retiring decision (2) did not touch it,
+ *  and it is the one remaining way a phrase can reach onLimit. And an ignored phrase still logs (see
  *  evaluate's `if (chain.textHit)` branch in codexRolling.ts), so the distribution stays visible to
  *  whoever next has reason to revisit this.
  *
@@ -489,7 +505,9 @@ export function worstResetAt(
  *  **The reach of this rule is narrow, deliberately.** It covers only the window before the resumed
  *  session's first snapshot of its own. A false positive that logs a usage figure (`primary=0%`) is by
  *  definition past that window — a figure only prints when the state is non-null — so it came through
- *  the ordinary phrase path, which has no usage gate and is not touched here.
+ *  the ordinary phrase path — retired in 2026-08-28 (see limitReached), which is why that variant
+ *  cannot recur. All five measured false positives printed a figure, which is the evidence they came
+ *  from there and not from here. This branch was deliberately left standing.
  *
  *  Once the session writes its own record the coordinator stops asking this — the normal verdicts take
  *  over, unchanged. */

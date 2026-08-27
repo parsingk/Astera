@@ -546,7 +546,12 @@ export class RollingCoordinator {
    *  updates across 88 idle seconds), so what the gate sees is a stale snapshot from just before the limit.
    *  In other words the gate was filtering out legitimate limit phrases, not false positives.
    *  codexSignal.ts reached the same conclusion for codex first, and its comment assumed "Claude keeps
-   *  statusLine updating, so the gate is safe" — which this measurement disproved. */
+   *  statusLine updating, so the gate is safe" — which this measurement disproved.
+   *
+   *  **The two providers are no longer symmetric here.** codex retired the phrase as a verdict outright
+   *  (2026-08-28, limitReached) after the field log showed it produced 5 false positives and 0 real
+   *  hits there. This path keeps the phrase, and keeps it ungated, because claude has no equivalent of
+   *  codex's structured refusal record — the phrase and the transcript are the direct evidence it has. */
   private async onLimitCandidate(chain: Chain, text?: string): Promise<void> {
     if (chain.rolling || chain.waitTimer) return // ignore a re-trigger while rolling or waiting
     const payload = await this.deps.readStatusPayload(chain.liveId)
