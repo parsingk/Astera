@@ -74,10 +74,17 @@ type RunningTask = JobTask & { provider: Provider; startedAt: string }
 const isRunning = (t: JobTask): t is RunningTask =>
   t.provider !== undefined && t.startedAt !== undefined
 
-/** provider 뒤에 오는 문구. **대기 중이면 경과 대신 이것을 적는다** — `startedAt` 이 있어도 그
- *  경과는 지금 벌어지는 일(한도에 걸려 멈춰 있다)을 말해 주지 않는다. `waiting`·`resumes` 는
- *  서로 다른 이력 항목에서 오므로(view.ts 의 jobTaskOf) 함께 올 수 있다 — 두 번 이어진 뒤에 다시
+/** provider 뒤에 오는 문구. **리셋을 기다리는 중이면 경과 대신 이것을 적는다** — `startedAt` 이
+ *  있어도 그 경과는 지금 벌어지는 일(한도에 걸려 멈춰 있다)을 말해 주지 않는다. `waiting`·`resumes`
+ *  는 서로 다른 이력 항목에서 오므로(view.ts 의 jobTaskOf) 함께 올 수 있다 — 두 번 이어진 뒤에 다시
  *  대기 중일 수 있고, 그때는 재개 횟수를 뒤에 이어 붙인다.
+ *
+ *  **계정을 바꾸는 정지는 일부러 그리지 않는다.** `waiting` 은 그쪽에서도 채워지지만
+ *  (JobTask.waiting 의 주석) 그것은 기다리는 것이 아니고 리셋 시각도 없어서, 사유를 보지 않으면 이
+ *  줄이 "리셋 대기" 로 읽힌다 — 보통 1초도 안 되는 전환에. 그 대신 아무 말도 하지 않는다: 줄은 이미
+ *  provider 와 경과 시간을 적고 있고, 전환에 걸려 멈춘 것을 알리는 것은 **새로운 표시 상태**여서
+ *  이 물결에서 정할 일이 아니다(전환이 실패해 그 항목이 끝내 닫히지 않는 갈래가 실제로 있다 —
+ *  SPEC §21 의 알려진 한계).
  *
  *  **리셋 시각이 있어도 이미 지났으면 시각 없는 문구로 떨어진다** — formatRemaining 이 그 경계를
  *  undefined 로 답한다(elapsed.ts). 지난 시각을 "앞으로 남았다"로 그리는 것이 시각을 안 그리는
@@ -87,9 +94,9 @@ function taskMeta(
   nowMs: number,
   t: (key: MessageKey, params?: MessageParams) => string
 ): string {
-  const left =
-    task.waiting?.resetsAt !== undefined ? formatRemaining(task.waiting.resetsAt, nowMs) : undefined
-  const base = task.waiting
+  const wait = task.waiting?.reason === 'waiting' ? task.waiting : undefined
+  const left = wait?.resetsAt !== undefined ? formatRemaining(wait.resetsAt, nowMs) : undefined
+  const base = wait
     ? left !== undefined
       ? t('jobs.task.waitingReset', { left })
       : t('jobs.task.waitingNoTime')

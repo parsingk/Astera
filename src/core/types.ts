@@ -292,14 +292,18 @@ export interface JobTask {
   provider?: Provider
   /** That Dispatch's startedAt. The renderer counts elapsed time from this with formatElapsed. */
   startedAt?: string
-  /** 지금 리셋을 기다리는 중이면 그 계정과 리셋 시각. **열린 Dispatch 의 마지막 이력 항목에
+  /** 지금 멈춰 있으면 그 계정과 정지 사유, 그리고 리셋 시각. **열린 Dispatch 의 마지막 이력 항목에
    *  `resumedAt` 이 없을 때만 있다** — 끝난 Dispatch 의 열린 항목은 아무도 기다리지 않는 것이다
    *  (앱이 꺼져 outcome_unknown 으로 닫힌 경우가 그 갈래다).
    *
-   *  `resetsAt` 이 없는 대기도 있다 — 계정을 바꾸는 정지는 리셋 시각이라는 값 자체가 없고,
-   *  `'waiting'` 이어도 provider 가 시각을 주지 않는 경우가 있다. 화면은 시각 없이 "기다리는 중"
-   *  만 그린다. */
-  waiting?: { accountId: string; resetsAt?: string }
+   *  **`reason` 이 함께 오는 이유.** 이 칸이 있다는 것과 "리셋을 기다린다" 는 같은 말이 아니다 —
+   *  계정을 바꾸는 정지(`'switching'`)도 이 칸을 채우지만 그쪽은 기다리는 것이 아니고 리셋 시각도
+   *  없다. 사유 없이 그리면 계정 전환이 "리셋 대기" 로 읽히고, 전환이 실패해 그 항목이 끝내 닫히지
+   *  않으면 그 거짓말이 영구히 남는다.
+   *
+   *  `resetsAt` 이 없는 대기도 있다 — `'waiting'` 이어도 provider 가 시각을 주지 않는 경우가 있다.
+   *  화면은 시각 없이 "기다리는 중" 만 그린다. */
+  waiting?: { accountId: string; reason: 'waiting' | 'switching'; resetsAt?: string }
   /** **지금 도는 Dispatch** 가 몇 번 이어졌는가 — 그 Dispatch 의 **닫힌** 이력 항목의 수다. 0 이면
    *  이 칸이 없다. Task 전체의 합이 아니다: 재시도는 새 Dispatch 를 열므로 이 숫자가 0 으로
    *  돌아가고, 그때도 앞선 Dispatch 의 정지·재개는 상세 창의 타임라인에 그대로 남는다

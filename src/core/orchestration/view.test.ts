@@ -730,7 +730,25 @@ describe('snapshotFor — 기다리는 중과 재개 횟수', () => {
         ])
       ]
     }
-    expect(taskOf(s).waiting).toEqual({ accountId: 'acc-1', resetsAt: '2026-08-19T00:00:00.000Z' })
+    expect(taskOf(s).waiting).toEqual({
+      accountId: 'acc-1',
+      reason: 'waiting',
+      resetsAt: '2026-08-19T00:00:00.000Z'
+    })
+  })
+
+  // 사유가 함께 가지 않으면 계정 전환이 "리셋 대기" 로 그려진다 — 기다리는 것이 아닌데도, 그리고
+  // 전환이 실패해 항목이 끝내 닫히지 않으면 영구히
+  it('계정을 바꾸는 정지는 사유와 함께 투영한다 — 리셋 시각은 없다', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),
+      dispatches: [
+        openWith('d1', 't1', [
+          { stoppedAt: '2026-08-18T02:00:00.000Z', reason: 'switching', fromAccountId: 'acc-1' }
+        ])
+      ]
+    }
+    expect(taskOf(s).waiting).toEqual({ accountId: 'acc-1', reason: 'switching' })
   })
 
   it('닫힌 항목만 있으면 기다리는 중이 아니고 횟수만 남는다', () => {

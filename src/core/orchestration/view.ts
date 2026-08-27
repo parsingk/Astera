@@ -178,6 +178,9 @@ function jobTaskOf(
       ? {
           waiting: {
             accountId: openEntry.fromAccountId,
+            // 사유를 함께 보낸다 — 리셋을 기다리는 정지와 계정을 바꾸는 정지는 그리는 것이 다르고,
+            // 화면에는 그것을 되살릴 다른 재료가 없다(JobTask.waiting 의 주석).
+            reason: openEntry.reason,
             ...(openEntry.resetsAt !== undefined ? { resetsAt: openEntry.resetsAt } : {})
           }
         }
