@@ -752,6 +752,29 @@ describe('snapshotFor — 기다리는 중과 재개 횟수', () => {
     expect(taskOf(s).resumes).toBe(1)
   })
 
+  // 재개 없이 끝난 에피소드가 앞에 남을 수 있다('stalled' 로 끝난 경우) — recordStopSnapshot 이
+  // 그때도 새 항목을 쌓기 때문이다(state.ts). 살아 있는 것은 **마지막** 항목뿐이고, 횟수는 닫힌
+  // 항목만 센다: 옛 열린 항목을 대기로 읽으면 도는 워커가 영원히 "기다리는 중"으로 그려진다
+  it('앞에 열린 채 남은 항목이 있어도 마지막 항목이 닫혔으면 기다리는 중이 아니다', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),
+      dispatches: [
+        openWith('d1', 't1', [
+          { stoppedAt: '2026-08-18T02:00:00.000Z', reason: 'waiting', fromAccountId: 'acc-1' },
+          {
+            stoppedAt: '2026-08-18T05:00:00.000Z',
+            reason: 'switching',
+            fromAccountId: 'acc-1',
+            resumedAt: '2026-08-18T05:00:30.000Z',
+            toAccountId: 'acc-2'
+          }
+        ])
+      ]
+    }
+    expect(taskOf(s).waiting).toBeUndefined()
+    expect(taskOf(s).resumes).toBe(1) // 닫힌 것 하나만 센다
+  })
+
   it('이력이 없으면 두 칸 다 없다 (조건부 전개 관례)', () => {
     const s: OrchState = {
       ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),

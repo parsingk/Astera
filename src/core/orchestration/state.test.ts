@@ -2091,6 +2091,58 @@ describe('recordStopSnapshot — 정지 시점에만 잡을 수 있는 것', () 
     // 기존 필드는 그대로다 — Phase 2 의 조립기가 이것을 읽는다
     expect(d?.stopSnapshot).toEqual({ headCommit: 'abc', reason: 'waiting', resetsAt: LATEST })
   })
+
+  // 이 두 테스트가 막는 사고: 열린 항목이 있을 때 새로 쌓지 않으면, 재개 없이 끝난 에피소드 하나가
+  // 그 뒤의 정지를 전부 삼킨다 — 리셋 시각이 화면까지 오지 못하고, 다음 재개가 몇 시간 전의 항목을
+  // 닫아 타임라인이 그 사이의 실제 작업 시간을 통째로 한 번의 정지 구간으로 그린다.
+  it('마지막 항목이 열린 채여도 다음 정지는 새 항목을 쌓는다', () => {
+    const { s, dispatchId } = seed()
+    const first = unwrap<unknown>(
+      recordStopSnapshot(
+        s,
+        { sessionId: 'sess1', headCommit: null, reason: 'waiting', resetsAt: LATER },
+        NOW
+      ) as never
+    )
+    // 재개 없이 다음 정지가 온다 — 'stalled' 로 끝난 에피소드가 그 갈래다
+    const second = unwrap<unknown>(
+      recordStopSnapshot(
+        first.state,
+        { sessionId: 'sess1', headCommit: null, reason: 'waiting', resetsAt: LATEST },
+        EVEN_LATER
+      ) as never
+    )
+    const d = second.state.dispatches.find((x) => x.id === dispatchId)
+    expect(d?.resumes).toHaveLength(2)
+    expect(d?.resumes?.[0].resumedAt).toBeUndefined() // 끝내 이어지지 않은 정지로 남는다
+    expect(d?.resumes?.[1]).toEqual({
+      stoppedAt: EVEN_LATER,
+      reason: 'waiting',
+      resetsAt: LATEST,
+      fromAccountId: 'acc1'
+    })
+  })
+
+  it('그 뒤의 재개는 옛 항목이 아니라 마지막 항목을 닫는다', () => {
+    const { s, dispatchId } = seed()
+    const first = unwrap<unknown>(
+      recordStopSnapshot(s, { sessionId: 'sess1', headCommit: null, reason: 'waiting' }, NOW) as never
+    )
+    const second = unwrap<unknown>(
+      recordStopSnapshot(
+        first.state,
+        { sessionId: 'sess1', headCommit: null, reason: 'switching' },
+        EVEN_LATER
+      ) as never
+    )
+    const resumed = unwrap<unknown>(
+      recordResume(second.state, { sessionId: 'sess1', accountId: 'acc2' }, LATEST) as never
+    )
+    const d = resumed.state.dispatches.find((x) => x.id === dispatchId)
+    expect(d?.resumes?.[0].resumedAt).toBeUndefined()
+    expect(d?.resumes?.[1].resumedAt).toBe(LATEST)
+    expect(d?.resumes?.[1].toAccountId).toBe('acc2')
+  })
 })
 
 describe('recordResume — 정지 이력의 마지막 항목을 닫는다', () => {

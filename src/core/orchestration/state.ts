@@ -839,21 +839,25 @@ export function recordStopSnapshot(
   const dispatch = s.dispatches.find((d) => d.sessionId === a.sessionId && !d.endedAt)
   if (!dispatch) return ok(s, null)
   // 스냅샷은 덮어쓰고(조립기가 직전 정지만 읽는다) 이력은 쌓는다 — 두 값이 답하는 질문이 다르다.
-  // 이미 열려 있는 항목(resumedAt 이 없는 것)이 있으면 새로 열지 않는다: 같은 정지가 'switching' 을
-  // 두 번 게시하는 경우가 있고(reattach), 탭이 그것을 거르지만 그 거름망이 이 함수의 계약은 아니다.
-  const held = dispatch.resumes ?? []
-  const open = held.length > 0 && held[held.length - 1].resumedAt === undefined
-  const resumes = open
-    ? held
-    : [
-        ...held,
-        {
-          stoppedAt: now,
-          reason: a.reason,
-          ...(a.resetsAt !== undefined ? { resetsAt: a.resetsAt } : {}),
-          fromAccountId: dispatch.accountId
-        }
-      ]
+  //
+  // **마지막 항목이 아직 열려 있어도 새 항목을 쌓는다.** 한동안은 그 경우 쌓지 않았다. 그 가드가
+  // 막으려던 것(한 번의 정지가 롤 상태를 여러 번 게시하는 것)은 부르는 쪽에서 이미 걸러지고
+  // (main/orchestration/rollTap.ts 의 세션별 표식), 가드가 만든 해악이 더 컸다: 재개 없이 끝난
+  // 에피소드가 하나라도 있으면 **그 뒤의 진짜 정지가 아무것도 남기지 못하고** — 리셋 시각이 화면까지
+  // 오지 못한다 — 다음 재개가 몇 시간 전의 항목을 닫아, 타임라인이 그 사이의 실제 작업 시간을 통째로
+  // 한 번의 정지 구간으로 그리고 횟수도 둘이 아니라 하나로 읽힌다. 열린 항목을 그대로 두고 새로
+  // 쌓는 것이 정직한 모양이다 — 그러면 타임라인은 "끝내 이어지지 않은 정지" 를 그리고, 그것이 실제로
+  // 일어난 일이다. 투영은 **마지막** 항목만 살아 있는 것으로 보고 횟수는 닫힌 항목만 센다
+  // (core/orchestration/view.ts 의 jobTaskOf).
+  const resumes = [
+    ...(dispatch.resumes ?? []),
+    {
+      stoppedAt: now,
+      reason: a.reason,
+      ...(a.resetsAt !== undefined ? { resetsAt: a.resetsAt } : {}),
+      fromAccountId: dispatch.accountId
+    }
+  ]
   const next: Dispatch = {
     ...dispatch,
     stopSnapshot: {
@@ -861,7 +865,7 @@ export function recordStopSnapshot(
       reason: a.reason,
       ...(a.resetsAt !== undefined ? { resetsAt: a.resetsAt } : {})
     },
-    ...(resumes.length > 0 ? { resumes } : {})
+    resumes
   }
   const task = s.tasks.find((t) => t.id === dispatch.taskId)
   return ok(
