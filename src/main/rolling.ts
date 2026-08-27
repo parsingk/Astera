@@ -157,6 +157,7 @@ interface Chain {
   lastScreen: string
   waitTimer: ReturnType<typeof setTimeout> | null
   healthyTimer: ReturnType<typeof setTimeout> | null
+  inPlaceUsed: boolean // 이 차단 에피소드에서 제자리 재개를 이미 썼는가 (정착 성공 시 해제)
   promptTimer: ReturnType<typeof setTimeout> | null
   trustTimer: ReturnType<typeof setTimeout> | null
   disposed: boolean
@@ -274,6 +275,7 @@ export class RollingCoordinator {
       lastScreen: '',
       waitTimer: null,
       healthyTimer: null,
+      inPlaceUsed: false,
       promptTimer: null,
       trustTimer: null,
       disposed: false,
@@ -765,6 +767,14 @@ export class RollingCoordinator {
     if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady)
       return Promise.resolve()
     if (toIndex !== chain.cycle.currentIndex) return this.roll(chain, toIndex) // the account changes — a new process is unavoidable
+    if (chain.inPlaceUsed) {
+      // 지난 제자리 재개가 정착 판정에 닿지 못했다 = 그 줄이 세션을 되살리지 못했다. 그래서 이번에는
+      // 새 프로세스를 띄운다. onLimit 은 판정 전에 healthyTimer 를 지우므로 이 플래그는 건강
+      // 창 안에 들어온 두 번째 한도를 넘어 살아남는다. 줄이 삼켜지고 두 번째 한도가 아예 오지 않는
+      // 경우는 이 분기에 닿지 못한다 — 그쪽을 덮는 것이 settleInPlace 다. codex 쪽과 같은 설계.
+      this.deps.log(`resume in place did not recover — falling back to respawn session=${chain.liveId}`)
+      return this.roll(chain, toIndex)
+    }
     if (chain.choicePending) {
       this.deps.log(`resume in place skipped — limit choice still on screen session=${chain.liveId}`)
       return this.roll(chain, toIndex)
@@ -823,6 +833,7 @@ export class RollingCoordinator {
     // "30 seconds of silence plus a 100% snapshot that has not refreshed yet", fires the fallback trigger
     // again and pushes the session we just resumed straight back into a wait.
     chain.lastOutputAt = this.now()
+    chain.inPlaceUsed = true
     // 'nudged' is the right state: this is a reset resume rather than an account switch, the renderer
     // treats it as a momentary event, and the Slack mapping (slack.limitReset) already exists. It is the
     // same sequence resetAnchorCheck uses.
@@ -890,6 +901,7 @@ export class RollingCoordinator {
     // 그 계정에서 막아 두기 때문이고, 대가는 이 창 안에 다른 체인이 쓴 *참* 기록이 지워지는
     // 것이다(blockRegistry.clear).
     this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
+    chain.inPlaceUsed = false
   }
 
   /** A roll gave up. Schedule the next attempt instead of leaving the chain idle.
@@ -1077,11 +1089,15 @@ export class RollingCoordinator {
         // The only account this timer says anything about is the current one — the block records of other accounts (a weekly exhaustion, say) are kept
         chain.recovery[chain.cycle.currentIndex] = null
         // And what it says is that 60 seconds passed with **no limit detected** — not that a turn actually
-        // ran (only codex's settleInPlace has that evidence). The shared record goes with it because a false
-        // one keeps every other chain off the account until its recorded reset time passes; the price is that
-        // a *true* record another chain wrote inside this window is erased by a session that has not
-        // produced any work of its own yet (blockRegistry.clear).
+        // ran (codex's settleInPlace is the only site with that evidence; the claude-side settleInPlace
+        // asks a weaker question — whether the statusLine came back). The shared record goes with it
+        // because a false one keeps every other chain off the account until its recorded reset time passes;
+        // the price is that a *true* record another chain wrote inside this window is erased by a session
+        // that has not produced any work of its own yet (blockRegistry.clear).
         this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
+        // 플래그는 *이전* 계정의 차단 에피소드를 가리킨다. 남겨 두면 새 계정에서의 첫 대기가
+        // 제자리 재개를 건너뛰고 쓸데없이 respawn 한다. codex 쪽도 같은 자리에서 무조건 해제한다.
+        chain.inPlaceUsed = false
       }, HEALTHY_MS)
     }
     const tick = async (): Promise<void> => {

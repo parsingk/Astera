@@ -2386,4 +2386,48 @@ describe('제자리 재개의 정착 판정', () => {
     await flush()
     expect(h.events.slice(eventsBefore).filter((e) => e.startsWith('spawn') || e.startsWith('kill'))).toEqual([])
   })
+
+  // 정착 판정만 있으면 이렇게 돈다: 대기 → 제자리 재개(입력) → 60초 → 메타 없음 → roll 중단 →
+  // 대기(리셋이 지났으므로 60초 바닥) → 제자리 재개(또 입력) → … 약 2분마다 PTY 로 영구히
+  // 타이핑한다. codex 는 같은 것을 inPlaceUsed 로 묶는다 — 한 차단 에피소드에 제자리 재개는 한 번.
+  it('정착에 실패한 에피소드는 두 번째부터 제자리 재개를 쓰지 않는다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness()
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    await vi.advanceTimersByTimeAsync(retryAtOf(h) - Date.now() + 1_000)
+    expect(resumeCount(h)).toBe(1)
+    // 정착 실패 → roll 중단 → 재예약. 그 뒤 세 라운드를 더 돈다.
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(61_000)
+      await flush()
+      await vi.advanceTimersByTimeAsync(retryAtOf(h) - Date.now() + 1_000)
+      await flush()
+    }
+    // 라운드가 실제로 돌았다(재예약이 계속된다)…
+    expect(retryAtOf(h)).toBeGreaterThan(T0)
+    // …그러나 프롬프트는 첫 라운드의 한 번뿐이다
+    expect(resumeCount(h)).toBe(1)
+  })
+
+  // payload(20) 인 이유는 바로 위 테스트의 주석과 같다 — 100 이면 fallback 이 정착 판정보다 먼저
+  // 발화해 healthyTimer 를 지우고, inPlaceUsed 가 해제되지 않아 이 테스트가 확인하려는 것이 사라진다.
+  it('정착에 성공하면 다음 에피소드는 다시 제자리 재개를 쓴다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness()
+    h.payloads.set('s1', payload(20))
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    await vi.advanceTimersByTimeAsync(retryAtOf(h) - Date.now() + 1_000)
+    expect(resumeCount(h)).toBe(1)
+    await vi.advanceTimersByTimeAsync(61_000) // 정착 성공 → inPlaceUsed 해제
+    await flush()
+    // 두 번째 에피소드: 새 한도 → 대기 → 제자리 재개가 다시 쓰인다
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    await vi.advanceTimersByTimeAsync(retryAtOf(h) - Date.now() + 1_000)
+    expect(resumeCount(h)).toBe(2)
+  })
 })
