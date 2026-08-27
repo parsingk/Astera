@@ -391,16 +391,20 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
-  // 예전에는 사용률 <90%면 문구를 무시했다. rate_limits는 턴이 완료돼야 갱신되므로
-  // 한도로 요청이 거부된 순간에는 사용률이 낮은 값에 멈춰 있고, 그 게이트가 정당한 롤을 막았다.
-  it('사용률 스냅샷이 낮아도 확정 한도 문구면 롤한다 (게이트 제거)', async () => {
-    const h = harness()
+  // 폐지(2026-08-28): 문구 단독 분기는 실측 8건에서 진짜를 한 번도 잡지 못했다(0/4) — 진짜 4건은
+  // 전부 구조화 신호 + 사용량 99~100% 였고, 문구 단독 4건은 전부 사용량 0~1% 의 화면 재생이었다.
+  it('사용률 스냅샷이 낮고 구조화 신호가 없으면 문구가 와도 롤하지 않는다', async () => {
+    const logs: string[] = []
+    const h = harness({ log: (m) => logs.push(m) })
     await writeRollout({ accountId: 'c1', uuid: 'cx-3', cwd: h.info1.cwd, primary: 42, secondary: 7 })
     h.coord.register(h.info1)
     await advance(1_500)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
-    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+    expect(h.events).toEqual([])
+    expect(logs.some((l) => l.includes('limit-text ignored') && l.includes('primary=42%, secondary=7%'))).toBe(
+      true
+    )
     h.coord.stop()
   })
 
@@ -1317,11 +1321,15 @@ describe('CodexRollingCoordinator', () => {
     await advance(15_000)
     expect(h.sent.filter((s) => s.payload.state === 'waiting')).toEqual([])
     expect(logs.filter((l) => l.includes('codex limit detected'))).toEqual([])
-    // 그리고 판정은 예전 그대로다 — 문구가 오면 기존 경로가 발화한다(복구된 리셋이 아니다)
+    // 스냅숏이 생긴 뒤로는 문구만으로는 더 이상 롤이 나지 않는다 (문구 단독 판정 폐지)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await advance(100)
+    expect(h.sent.filter((s) => s.payload.state === 'waiting')).toEqual([])
+    // 그리고 판정은 예전 그대로다 — 구조화 신호가 오면 일반 경로가 발화한다(복구된 리셋이 아니다)
+    await appendLimitError(file)
+    await advance(15_000)
     expect(h.sent.at(-1)?.payload.state).toBe('waiting')
-    expect(logs.find((l) => l.includes('codex limit detected'))).toContain('reason=text+gate')
+    expect(logs.find((l) => l.includes('codex limit detected'))).toContain('reason=errorInfo')
     h.coord.stop()
   })
 

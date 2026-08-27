@@ -487,7 +487,7 @@ export class CodexRollingCoordinator {
     await this.refresh(chain)
     if (chain.rolling || chain.waitTimer || chain.disposed) return // the across-await state guard
     if (this.judgedByPriorBlock(chain)) return
-    if (!limitReached(chain.state, { textHit: chain.textHit })) {
+    if (!limitReached(chain.state)) {
       // Record exactly why it was ignored — logging an unmapped rollout as "usage below the gate" (the old
       // log printed undefined%) destroys the evidence for calibrating the phrase regex on the first real
       // limit hit
@@ -1036,7 +1036,7 @@ export class CodexRollingCoordinator {
       void this.refresh(chain).then(() => {
         if (chain.disposed || chain.rolling || chain.waitTimer) return
         if (this.judgedByPriorBlock(chain)) return
-        if (limitReached(chain.state, { textHit: false })) {
+        if (limitReached(chain.state)) {
           this.recordRecovery(chain)
           // No phrase was involved, so this can only be one of the two structured signals
           this.onLimit(chain, this.reasonOf(chain, 'reachedType'))

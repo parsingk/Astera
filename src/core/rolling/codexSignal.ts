@@ -396,17 +396,29 @@ export class CodexModelChoiceScanner {
 const windows = (s: CodexLimitState): CodexWindow[] =>
   [s.primary, s.secondary].filter((w): w is CodexWindow => w !== null)
 
-/** Limit-reached decisions (1) and (2). (3) (100% + no output) needs a time condition, so the
- *  coordinator handles that one via maxedOut.
+/** Limit-reached decision (1) — the structured signal. Decision (2), the confirmed phrase taken on its
+ *  own, is retired (2026-08-28): counted over 8 field detections, the phrase-only branch never caught a
+ *  real limit (0 of 4) — every real limit came through the structured signal at 99-100% usage — while it
+ *  produced every false positive (4 of 4), each a redraw of an earlier episode's screen text at 0-1%
+ *  usage. (3) (100% + no output) needs a time condition, so the coordinator handles that one via
+ *  maxedOut.
  *
- *  Why (2) has no usage gate: rate_limits rides only on `token_count` events, and those are recorded
- *  only once a turn completes. When the limit rejects a request no new token_count comes out, so usage
- *  stops at a low value — and a gate would then block the legitimate limit phrase at exactly that
- *  moment. Claude's statusLine is no different: the instant the limit blocks, statusLine itself stops
- *  updating (measured: 0 updates over 88s of idle). That is why GATE_PCT in rolling.ts is no longer a
- *  gate for accepting the phrase either (it was removed). So both providers decide without a gate, and
- *  false-positive defence is carried not by a gate but by the scanner, which narrows LIMIT_RE down to
- *  the measured phrasing.
+ *  Why the structured signal still has no usage gate: rate_limits rides only on `token_count` events, and
+ *  those are recorded only once a turn completes. When the limit rejects a request no new token_count
+ *  comes out, so usage stops at a low value — and a gate would then block the legitimate structured
+ *  signal at exactly that moment. Claude's statusLine is no different: the instant the limit blocks,
+ *  statusLine itself stops updating (measured: 0 updates over 88s of idle). That is why GATE_PCT in
+ *  rolling.ts is no longer a gate for accepting the phrase either (it was removed). So both providers
+ *  decide without a gate. What is no longer true is the old closing claim that false-positive defence was
+ *  carried by the scanner's narrowed LIMIT_RE rather than a gate — the field data falsified that: all 4
+ *  false positives came through the scanner. A grace window is not the answer either — the measured false
+ *  positives arrived 118 seconds after resume, inside any window short enough to still be useful.
+ *
+ *  The phrase is not gone. priorLimitVerdict — the verdict for a resumed session before it has written a
+ *  rate_limits record of its own — still reads it, there only to corroborate a structured record
+ *  recovered from the rollout file, never to stand alone. And an ignored phrase still logs (see
+ *  evaluate's `if (chain.textHit)` branch in codexRolling.ts), so the distribution stays visible to
+ *  whoever next has reason to revisit this.
  *
  *  **A null state means "unknown," not "not limited."** That is the normal condition of a session
  *  reopened from history, before its own tail has written a rate_limits record of its own, and a
@@ -416,11 +428,10 @@ const windows = (s: CodexLimitState): CodexWindow[] =>
  *  case with, and it no longer has to — the coordinator now branches before ever reaching this function,
  *  consulting priorLimitVerdict instead for as long as state is null. This function's own contract —
  *  decide only from this session's own recorded state — is unchanged. */
-export function limitReached(state: CodexLimitState | null, opts: { textHit: boolean }): boolean {
+export function limitReached(state: CodexLimitState | null): boolean {
   if (!state) return false
   if (state.reachedType !== null) return true // (1) structured primary signal — never observed firing (see limitErrorOf)
-  if (state.error !== null) return true // (1b) the structured signal codex actually emits
-  return opts.textHit // (2) confirmed phrase — independent of usage
+  return state.error !== null // (1b) the structured signal codex actually emits — the only one measured to fire
 }
 
 /** Any window at 100% or above — the usage condition of fallback decision (3) */

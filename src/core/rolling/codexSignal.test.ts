@@ -173,14 +173,14 @@ describe('CodexRolloutTail', () => {
     const p = await write('err.jsonl', [tokenCount({ primary: 40 }), taskComplete()])
     const s = await new CodexRolloutTail(p).read()
     expect(s?.error?.at).toBe(Date.parse('2026-08-26T08:31:22.224Z')) // 판정은 배치 시각이 아니라 기록 자신의 시각에 붙는다
-    expect(limitReached(s, { textHit: false })).toBe(true)
+    expect(limitReached(s)).toBe(true)
   })
 
   it('한도가 아닌 task_complete는 신호가 아니다', async () => {
     const p = await write('ok.jsonl', [tokenCount({ primary: 40 }), taskComplete({ info: null })])
     const s = await new CodexRolloutTail(p).read()
     expect(s?.error).toBeNull()
-    expect(limitReached(s, { textHit: false })).toBe(false)
+    expect(limitReached(s)).toBe(false)
   })
 
   // 실측: 한도가 난 0.8초 뒤 codex 는 창이 전부 null 인 크레딧 기록(limit_id "premium")을 내보낸다.
@@ -214,7 +214,7 @@ describe('CodexRolloutTail', () => {
     expect(await tail.read()).toBeNull() // 붙은 시점 이전 내용은 상태가 되지 않는다
     await fs.appendFile(p, taskComplete() + '\n', 'utf8') // 재개하자마자 다시 한도
     const s = await tail.read()
-    expect(limitReached(s, { textHit: false })).toBe(true)
+    expect(limitReached(s)).toBe(true)
     expect(worstResetAt(s).at).toBe(1787739458_000) // 리셋은 회수했다
     expect(maxedOut(s)).toBe(false) // 낡은 100%는 판정에 쓰이지 않는다
   })
@@ -370,38 +370,47 @@ const state = (o: Partial<CodexLimitState>): CodexLimitState => ({
 
 describe('limitReached', () => {
   it('① reachedType이 non-null이면 문구 없이도 도달로 본다', () => {
-    expect(limitReached(state({ reachedType: 'primary' }), { textHit: false })).toBe(true)
+    expect(limitReached(state({ reachedType: 'primary' }))).toBe(true)
   })
 
   it('① 한도 에러가 있으면 문구 없이도 도달로 본다 (0.149가 실제로 내보내는 신호)', () => {
     const s = state({ error: { message: LIMIT_MESSAGE, at: 2_000 } })
-    expect(limitReached(s, { textHit: false })).toBe(true)
+    expect(limitReached(s)).toBe(true)
   })
 
-  it('② 확정 문구가 오면 사용률과 무관하게 도달로 본다', () => {
+  // 폐지(2026-08-28). 실측 8건에서 문구 단독 분기는 진짜를 한 번도 잡지 못했다(0/4): 진짜 4건은
+  // 전부 구조화 신호 + 사용량 99~100% 였고, 문구 단독 4건은 전부 사용량 0~1% 의 화면 재생이었다.
+  // 오탐의 비용은 타이머가 아니라 **일하는 세션의 입력창에 재개 문장이 들어가는 것**이다.
+  it('문구는 더 이상 단독으로 도달을 만들지 못한다 (사용량이 높아도)', () => {
     const s = state({ primary: { usedPercent: 93, resetsAt: null } })
-    expect(limitReached(s, { textHit: true })).toBe(true)
+    expect(limitReached(s)).toBe(false)
   })
 
-  // rate_limits는 턴이 완료돼야 갱신된다. 한도로 요청이 거부되면 새 token_count가
-  // 안 나와 사용률이 낮은 값에 멈추는데, 예전 90% 게이트는 그때 정당한 한도 문구를 막아버렸다.
-  it('② 사용률 스냅샷이 낮은 값에 멈춰 있어도 확정 문구면 도달로 본다', () => {
+  it('문구가 있어도 구조화 신호가 없으면 도달이 아니다 (낮은 스냅샷 — 실측 오탐의 모양)', () => {
     const s = state({
-      primary: { usedPercent: 42, resetsAt: null },
-      secondary: { usedPercent: 7, resetsAt: null }
+      primary: { usedPercent: 0, resetsAt: null },
+      secondary: { usedPercent: 63, resetsAt: null }
     })
-    expect(limitReached(s, { textHit: true })).toBe(true)
+    expect(limitReached(s)).toBe(false)
+  })
+
+  it('구조화 신호가 있으면 사용량이 낮아도 도달이다 (거부된 턴은 스냅샷을 갱신하지 못한다)', () => {
+    const s = state({
+      primary: { usedPercent: 0, resetsAt: null },
+      error: { message: LIMIT_MESSAGE, at: 2_000 }
+    })
+    expect(limitReached(s)).toBe(true)
   })
 
   it('문구가 없고 reachedType도 없으면 사용률이 높아도 도달이 아니다 (③은 별도 판정)', () => {
     const s = state({ primary: { usedPercent: 99, resetsAt: null } })
-    expect(limitReached(s, { textHit: false })).toBe(false)
+    expect(limitReached(s)).toBe(false)
   })
 
   // 상태가 없다 = rollout 미매핑. 롤은 rolloutPath·codexSessionId가 있어야 하므로 코디네이터가
-  // 별도로 막지만, 판정 자체도 문구만으로 도달을 선언하지 않는다.
-  it('상태가 없으면 문구만으로는 도달로 보지 않는다', () => {
-    expect(limitReached(null, { textHit: true })).toBe(false)
+  // 별도로 막지만, 판정 자체도 상태 없이는 도달을 선언하지 않는다.
+  it('상태가 없으면 도달로 보지 않는다', () => {
+    expect(limitReached(null)).toBe(false)
   })
 })
 
