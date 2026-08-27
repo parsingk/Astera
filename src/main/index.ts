@@ -17,7 +17,7 @@ import { BlockRegistry } from '../core/rolling/blockRegistry'
 import { SlackNotifier, SlackConfigStore } from './slack'
 import { SlackInboxController, createSocketClient } from './slackInbox'
 import { HookEventWatcher } from './hookEvents'
-import { CodexTurnWatcher } from './codexTurnWatcher'
+import { CodexRolloutWatcher } from './codexRolloutWatcher'
 import { RateLimitFetcher } from './usage'
 import { t } from '../core/i18n'
 import { loadPolicy, nextCheckDelayMs, parsePolicyUrl, shouldApplyCampaign } from './updatePolicy'
@@ -50,7 +50,7 @@ const USAGE_GATE_MAX_AGE_MS = 10_000
 let core: Core | null = null
 let codexRollingRef: CodexRollingCoordinator | null = null
 let schedulerRef: SchedulerCoordinator | null = null
-let codexTurnsRef: CodexTurnWatcher | null = null
+let codexRolloutRef: CodexRolloutWatcher | null = null
 let slackInboxControllerRef: SlackInboxController | null = null // Slack inbound socket rebuilder — cut on quit
 let rollingRef: RollingCoordinator | null = null // lets the hook callback reach a coordinator created later
 let orchRef: OrchHandle | null = null // orchestration shutdown cleanup + the rolling seam
@@ -334,11 +334,13 @@ app.whenReady().then(async () => {
     slack.applyConfig(c)
     void slackInboxController.apply(c)
   })
-  // codex turn-completion detection: codex has no hooks, so this reads task_complete out of the
-  // rollout jsonl. Independent of rolling, only codex sessions with Slack notifications on are
-  // watched (the caller decides that at register time) — the watcher's own logs share slack.log,
-  // since turn-completion notifications end up on Slack anyway.
-  const codexTurns = new CodexTurnWatcher({
+  // codex rollout watcher: codex has neither hooks nor a statusLine mechanism, so this one tail of
+  // the rollout jsonl answers both questions — task_complete for turn completion, and the token_count
+  // records the usage chips draw. Independent of rolling. Every codex session is watched (the caller
+  // registers them all, because the chips follow the active session) and the watcher reports turn
+  // completion only for those that asked for Slack. Its logs share slack.log: turn-completion
+  // notifications end up on Slack anyway, and the usage side is quiet in normal operation.
+  const codexRollout = new CodexRolloutWatcher({
     getAccount: (id) => {
       try {
         return core!.accounts.get(id)
@@ -349,7 +351,7 @@ app.whenReady().then(async () => {
     onTurnComplete: (sessionId, rolloutPath) => slack.onCodexTurnComplete(sessionId, rolloutPath),
     log: slackLog
   })
-  codexTurnsRef = codexTurns
+  codexRolloutRef = codexRollout
   const hookWatcher = new HookEventWatcher(
     core.hookEventsDir,
     (sid, payload) => {
@@ -550,12 +552,14 @@ app.whenReady().then(async () => {
           const p = payload as { oldSessionId: string; info: SessionInfo; dest?: string }
           scheduler.rekey(p.oldSessionId, p.info.id) // the schedule follows the roll chain
           // When rolling switches accounts the session respawns under a new sessionId and a new
-          // rollout file appears — without re-registering, turn-completion notifications stop for
-          // good after the switch. codexRolling is the codex-only coordinator (ipc.ts's spawn branch
-          // already splits on provider), so every session reaching here is codex — re-checking the
-          // provider is unnecessary.
-          codexTurns.unregister(p.oldSessionId)
-          if (p.info.slackNotify) codexTurns.register(p.info, p.dest)
+          // rollout file appears — without re-registering, both turn-completion notifications and the
+          // usage chips stop for good after the switch. codexRolling is the codex-only coordinator
+          // (ipc.ts's spawn branch already splits on provider), so every session reaching here is
+          // codex — re-checking the provider is unnecessary. Unconditional, matching the spawn path:
+          // the chips are needed whether or not this session asked for Slack, and the watcher gates
+          // the turn callback on info.slackNotify itself.
+          codexRollout.unregister(p.oldSessionId)
+          codexRollout.register(p.info, p.dest)
         } else if (channel === 'session:rollState') {
           // codex rolling sends session:rollState too (switching/waiting/none) — suppress the resume window
           scheduler.handleRollState(payload as RollStateEvent)
@@ -635,7 +639,7 @@ app.whenReady().then(async () => {
     },
     codexRolling,
     scheduler,
-    codexTurns,
+    codexRollout,
     {
       log: orchLog,
       onStarted: (h) => {
@@ -847,7 +851,7 @@ app.on('will-quit', () => {
     /* shutdown cleanup failures are ignored */
   }
   try {
-    codexTurnsRef?.stop() // codex turn watcher polling cleanup
+    codexRolloutRef?.stop() // codex rollout watcher polling cleanup
   } catch {
     /* shutdown cleanup failures are ignored */
   }

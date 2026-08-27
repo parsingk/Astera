@@ -2202,9 +2202,10 @@ export default function App(): React.JSX.Element {
     setBottomTab((cur) => (cur === id ? 'run' : cur))
   }
 
-  // Usage for the active session (context, 5-hour, weekly) — read from the statusLine capture file.
-  // Claude refreshes it every turn, so it is re-queried periodically (cheap, being a file read), and
-  // immediately on a session switch.
+  // Usage for the active session (context, 5-hour, weekly). One question for both providers — main
+  // picks the source (claude: statusLine capture file, codex: rollout tail). Either way it is a value
+  // that only changes when a turn completes, so it is re-queried periodically (cheap, no CLI or
+  // network involved) and immediately on a session switch.
   // (Separate from the activeSessionId state — only an id whose session existence was confirmed by
   // active is used.)
   const usageSessionId = active?.id

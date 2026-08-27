@@ -8,10 +8,10 @@ import type { RollingCoordinator } from './rolling'
 import type { CodexRollingCoordinator } from './codexRolling'
 import type { SchedulerCoordinator } from './scheduler'
 import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
-import type { CodexTurnWatcher } from './codexTurnWatcher'
+import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
-import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, RollStateEvent, RunConfig, SessionInfo } from '../core/types'
+import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, RollStateEvent, RunConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
 import { copyTranscript } from '../core/rolling/transcript'
@@ -148,6 +148,27 @@ export function parseAllowedExternalUrl(url: string): URL | null {
   return parsed
 }
 
+/** Which CLI a live session is running, or null when that cannot be decided (the session is gone, or
+ *  its account has been deleted while the tab stayed open).
+ *
+ *  usage.session picks its source with this — codex reads the rollout watcher, claude the statusLine
+ *  capture file. Exported and taking its inputs as plain arguments for the same reason
+ *  parseAllowedExternalUrl is: the handler itself cannot be reached without an electron harness, so
+ *  the branching lives where a test can call it. */
+export function providerOfSession(
+  sessionId: string,
+  sessions: readonly Pick<SessionInfo, 'id' | 'accountId'>[],
+  getAccount: (id: string) => Account
+): Provider | null {
+  const s = sessions.find((x) => x.id === sessionId)
+  if (!s) return null
+  try {
+    return providerOf(getAccount(s.accountId))
+  } catch {
+    return null // the account is gone — core.accounts.get throws, and the 3-second poll must not
+  }
+}
+
 export function registerIpc(
   core: Core,
   win: BrowserWindow,
@@ -162,7 +183,7 @@ export function registerIpc(
   }, // Slack notifications
   codexRolling?: CodexRollingCoordinator, // Codex rolling
   scheduler?: SchedulerCoordinator, // session scheduler
-  codexTurns?: CodexTurnWatcher, // codex turn-completion watcher
+  codexRollout?: CodexRolloutWatcher, // codex rollout watcher — turn completion and usage
   orchWiring?: OrchWiring, // agent orchestration
   onLangChanged?: () => void // rebuilds anything (the tray menu) built with a fixed language
 ): void {
@@ -299,7 +320,7 @@ export function registerIpc(
     send('session:exit', e)
     rolling?.handleExit(e)
     codexRolling?.handleExit(e)
-    codexTurns?.unregister(e.sessionId) // stop polling the rollout of a dead session
+    codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
     // An exited session clears busy and disposes its scanner
     busyScanners.delete(e.sessionId)
@@ -459,14 +480,17 @@ export function registerIpc(
         /* A failed Slack registration does not block session creation */
       }
     }
-    // codex has no hooks, so turn completion is detected from task_complete in the rollout
-    if (info.slackNotify && providerOf(account) === 'codex') {
+    // codex keeps both of its own signals in the rollout: turn completion (it has no hook system)
+    // and the usage figures the chips draw (it has no statusLine mechanism either). So **every** codex
+    // session is registered, not only the Slack ones — the chips are drawn for whichever session is
+    // active — and the watcher gates the turn callback on info.slackNotify itself.
+    if (providerOf(account) === 'codex') {
       try {
         // On a resume the rollout is the copy target, not a file codex is about to create (see the
         // resumeTranscriptDest comment above) — the watcher cannot find that one by searching either
-        codexTurns?.register(info, resumeTranscriptDest)
+        codexRollout?.register(info, resumeTranscriptDest)
       } catch {
-        /* A failed codex turn-watcher registration does not block session creation */
+        /* A failed codex rollout-watcher registration does not block session creation */
       }
     }
     return info
@@ -2111,7 +2135,7 @@ export function registerIpc(
   ipcMain.on('sessions.resize', (_e, id, cols, rows) => core.sessions.resize(id, cols, rows))
   ipcMain.on('sessions.ack', (_e, id, bytes) => core.sessions.ack(id, bytes))
   ipcMain.handle('sessions.kill', (_e, id) => {
-    codexTurns?.unregister(id) // also unregister on the tab-close path, which arrives before the exit event
+    codexRollout?.unregister(id) // also unregister on the tab-close path, which arrives before the exit event
     return core.sessions.kill(id)
   })
   ipcMain.handle('sessions.list', () => core.sessions.list())
@@ -2212,8 +2236,17 @@ export function registerIpc(
   ipcMain.handle('worktrees.getRoot', () => core.worktrees.getRoot())
   ipcMain.handle('worktrees.setRoot', (_e, root: string | null) => core.worktrees.setRoot(root))
 
-  // usage — reads an active session's context, 5-hour, and weekly % out of the statusLine capture file
-  ipcMain.handle('usage.session', (_e, sessionId: string) => core.usageSession(sessionId))
+  // usage — an active session's context, 5-hour and weekly %. The two CLIs keep those figures in
+  // different places, so the source is picked per session: claude writes them into the statusLine
+  // capture file every turn, codex records them in its rollout jsonl, which CodexRolloutWatcher tails.
+  // Both answer as SessionUsage, so the renderer asks one question for every session.
+  // A provider that cannot be decided (session or account gone) answers null, same as having no data.
+  ipcMain.handle('usage.session', (_e, sessionId: string) => {
+    const provider = providerOfSession(sessionId, core.sessions.list(), (id) => core.accounts.get(id))
+    if (provider === 'codex') return codexRollout?.usage(sessionId) ?? null
+    if (provider === 'claude') return core.usageSession(sessionId)
+    return null
+  })
 
   // File explorer: only paths under a registered session cwd are accessible, which keeps arbitrary
   // paths from being exposed.

@@ -765,7 +765,7 @@ export class CodexRollingCoordinator {
       // nothing to search for, and searching was exactly what broke here (see attachRollout). dest holds
       // the old account's rate_limits, which is why attachRollout starts the tail at the end.
       this.attachRollout(chain, codexSessionId, dest)
-      // dest is sent along too, so the CodexTurnWatcher re-registration (index.ts) can drop this copy from
+      // dest is sent along too, so the CodexRolloutWatcher re-registration (index.ts) can drop this copy from
       // its candidates. CoreEvents['session:rolled'] does not declare this field, but send()'s payload is
       // unknown so the extra field rides along safely — the renderer just ignores it.
       this.deps.send('session:rolled', { oldSessionId: oldId, info, dest })
