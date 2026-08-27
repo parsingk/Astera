@@ -558,14 +558,19 @@ export class CodexRollingCoordinator {
       // onLimit re-reads this slot and broadcasts it, but only once its own guards have passed.
       //
       // **Known imprecision, and nothing tears it up.** register only asks the file when the reopen
-      // stays on the account that wrote it, so the slot (currentIndex, always 0 on a fresh register) is
-      // that account. The shape that still slips through is a rollout a *roll* copied into this
+      // stays on the account that wrote it, so the slot (currentIndex, always 0 on a fresh register)
+      // is that account. The shape that still slips through is a rollout a *roll* copied into this
       // account's folder: the copy carries the previous account's records, yet reopening it here is a
-      // same-account resume by every test we have — the rollout does not say which account wrote which
-      // record, which is why this is documented rather than restructured. Do not expect the healthy
-      // timer to cover it: that timer is armed by an *arrival* on an account (blockRegistry.clear), and
-      // this session is already sitting on it, going straight into a wait — so a wrong reset here holds
-      // for its full length, for every chain.
+      // same-account resume by every test we have — not because the two cases cannot be told apart,
+      // but because nothing here currently tries. RollConfigStore is already keyed by the codex
+      // session id and written on every attach, so recording which account last ran that session would
+      // answer it, and would survive a restart; the copy's own file creation time is the roll instant,
+      // so a record predating it was written elsewhere — with the caveat this repo already knows, that
+      // creation time is unreliable on some filesystems. Neither is wired up, which is why this stays
+      // documented rather than restructured. Do not expect the healthy timer to cover it: that timer
+      // is armed by an *arrival* on an account (blockRegistry.clear), and this session is already
+      // sitting on it, going straight into a wait — so a wrong reset here holds for its full length,
+      // for every chain.
       //
       // **The reset is recorded only when the file supplied one.** at === null is priorLimitVerdict's
       // phrase-only branch — the weakest evidence in the design: no record in the file, so the screen

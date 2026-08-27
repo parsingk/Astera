@@ -35,4 +35,16 @@ describe('codexHistoryStrategy.mapTargetPath', () => {
       )
     )
   })
+
+  it('같은 계정의 configDir로 매핑하면 원본 경로와 정확히 같은 값이 나온다', () => {
+    const src = path.join(
+      'C:\\Users\\me\\.codex',
+      'sessions',
+      '2026',
+      '07',
+      '09',
+      'rollout-2026-07-09T00-00-00-019f4524-e0ac-7571-a8af-5585504f0d32.jsonl'
+    )
+    expect(codexHistoryStrategy.mapTargetPath(src, 'C:\\Users\\me\\.codex')).toBe(src)
+  })
 })
