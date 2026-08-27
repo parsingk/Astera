@@ -47,7 +47,9 @@ const KIND_LABEL: Record<Exclude<JobEvent['kind'], 'message'>, MessageKey> = {
   'task-created': 'jobs.event.taskCreated',
   'dispatch-started': 'jobs.event.dispatchStarted',
   'gate-opened': 'jobs.event.gateOpened',
-  'gate-resolved': 'jobs.event.gateResolved'
+  'gate-resolved': 'jobs.event.gateResolved',
+  'limit-hit': 'jobs.event.limitHit',
+  resumed: 'jobs.event.resumed'
 }
 
 /** 사람을 부르는 메시지. 이 셋만 이벤트 표식으로 blocked 글리프(사람을 기다린다)를 빌린다 —
@@ -887,7 +889,15 @@ export function RunDetail({
                       e.sessionId && canOpenSession(e.sessionId) ? e.sessionId : undefined
                     // dispatch-started 의 요약은 provider 이름 그대로다(timeline.ts) — 배지가 이미
                     // 그것을 적고 있으므로 아래 줄을 비운다
-                    const summary = e.kind === 'dispatch-started' ? '' : e.summary
+                    // limit-hit·resumed 의 요약은 원시 계정 id 다(timeline.ts — core 는 계정 라벨을
+                    // 모르므로 id 만 실었다). 지워진 계정이면 accounts 에 없고, 그때 id 를 그대로
+                    // 그리면 uuid 가 보인다 — 라벨을 못 찾으면 아무것도 그리지 않는다(uuid 보다 낫다).
+                    const summary =
+                      e.kind === 'dispatch-started'
+                        ? ''
+                        : e.kind === 'limit-hit' || e.kind === 'resumed'
+                          ? (accounts?.find((a) => a.id === e.summary)?.label ?? '')
+                          : e.summary
                     return (
                       <div key={key} className="detail-event">
                         <div

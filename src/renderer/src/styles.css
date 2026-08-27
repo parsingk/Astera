@@ -1663,7 +1663,10 @@ label.check-small input[type="checkbox"]:focus-visible {
 .jobs-task--reviewing .jobs-av { background: rgba(169, 142, 222, 0.18); color: var(--fi-purple); }
 .jobs-task-body { flex: 1; min-width: 0; }
 .jobs-task-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.jobs-task-meta { display: block; color: var(--text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+/* 제목 줄과 같은 세 규칙을 쓴다 — 이 줄도 길어질 수 있다. 사이드바는 280px, 줄 본문은 약 199px
+   인데 가장 긴 문구("claude · 리셋 대기 · 2:14:00 · 2번 이어짐", 스페인어는 더 길다)는 250px 쯤을
+   요구해서, 자르지 않으면 둘째 줄로 넘어가며 줄 높이가 늘어난다 */
+.jobs-task-meta { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
 .jobs-jump { flex: none; color: var(--text-faint); font-size: 12px; }
 /* 넷째부터를 접은 줄. 여는 곳이 없으므로 눌리지 않는다 */
 .jobs-fold { cursor: default; color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }

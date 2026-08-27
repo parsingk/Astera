@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { runsForProject, progressOf, outcomeOf, snapshotFor, sameSnapshot } from './view'
 import { emptyState } from './state'
 import type { OrchState } from './state'
-import type { Dispatch, Gate, Message, Run, Task } from './types'
+import type { Dispatch, Gate, Message, ResumeEntry, Run, Task } from './types'
 import { FAILURE_LIMIT } from './types'
-import type { WorktreeInfo } from '../types'
+import type { JobTask, WorktreeInfo } from '../types'
 import { absPath } from '../testPaths'
 
 const run = (id: string, cwd: string): Run => ({
@@ -704,5 +704,120 @@ describe('snapshotFor — 예약 템플릿과 회차', () => {
     const s = withRuns([child('c1', absPath('proj'), 'gone')])
     const snap = snapshotFor(s, absPath('proj'), anySession, noWorktrees, noFires, allExist)
     expect(snap.runs.map((r) => r.id)).toEqual(['c1'])
+  })
+})
+
+describe('snapshotFor — 기다리는 중과 재개 횟수', () => {
+  const openWith = (id: string, taskId: string, resumes: ResumeEntry[]): Dispatch => ({
+    ...dispatch(id, taskId, `sess-${id}`, '2026-08-18T01:00:00.000Z'),
+    resumes
+  })
+  const taskOf = (s: OrchState): JobTask =>
+    snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].tasks[0]
+
+  // running(열린 Dispatch)의 마지막 이력 항목에 resumedAt 이 없으면 지금 기다리는 중이다
+  it('열린 항목이 있으면 기다리는 중으로 투영한다', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),
+      dispatches: [
+        openWith('d1', 't1', [
+          {
+            stoppedAt: '2026-08-18T02:00:00.000Z',
+            reason: 'waiting',
+            resetsAt: '2026-08-19T00:00:00.000Z',
+            fromAccountId: 'acc-1'
+          }
+        ])
+      ]
+    }
+    expect(taskOf(s).waiting).toEqual({
+      accountId: 'acc-1',
+      reason: 'waiting',
+      resetsAt: '2026-08-19T00:00:00.000Z'
+    })
+  })
+
+  // 사유가 함께 가지 않으면 계정 전환이 "리셋 대기" 로 그려진다 — 기다리는 것이 아닌데도, 그리고
+  // 전환이 실패해 항목이 끝내 닫히지 않으면 영구히
+  it('계정을 바꾸는 정지는 사유와 함께 투영한다 — 리셋 시각은 없다', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),
+      dispatches: [
+        openWith('d1', 't1', [
+          { stoppedAt: '2026-08-18T02:00:00.000Z', reason: 'switching', fromAccountId: 'acc-1' }
+        ])
+      ]
+    }
+    expect(taskOf(s).waiting).toEqual({ accountId: 'acc-1', reason: 'switching' })
+  })
+
+  it('닫힌 항목만 있으면 기다리는 중이 아니고 횟수만 남는다', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),
+      dispatches: [
+        openWith('d1', 't1', [
+          {
+            stoppedAt: '2026-08-18T02:00:00.000Z',
+            reason: 'switching',
+            fromAccountId: 'acc-1',
+            resumedAt: '2026-08-18T03:00:00.000Z',
+            toAccountId: 'acc-2'
+          }
+        ])
+      ]
+    }
+    expect(taskOf(s).waiting).toBeUndefined()
+    expect(taskOf(s).resumes).toBe(1)
+  })
+
+  // 재개 없이 끝난 에피소드가 앞에 남을 수 있다('stalled' 로 끝난 경우) — recordStopSnapshot 이
+  // 그때도 새 항목을 쌓기 때문이다(state.ts). 살아 있는 것은 **마지막** 항목뿐이고, 횟수는 닫힌
+  // 항목만 센다: 옛 열린 항목을 대기로 읽으면 도는 워커가 영원히 "기다리는 중"으로 그려진다
+  it('앞에 열린 채 남은 항목이 있어도 마지막 항목이 닫혔으면 기다리는 중이 아니다', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),
+      dispatches: [
+        openWith('d1', 't1', [
+          { stoppedAt: '2026-08-18T02:00:00.000Z', reason: 'waiting', fromAccountId: 'acc-1' },
+          {
+            stoppedAt: '2026-08-18T05:00:00.000Z',
+            reason: 'switching',
+            fromAccountId: 'acc-1',
+            resumedAt: '2026-08-18T05:00:30.000Z',
+            toAccountId: 'acc-2'
+          }
+        ])
+      ]
+    }
+    expect(taskOf(s).waiting).toBeUndefined()
+    expect(taskOf(s).resumes).toBe(1) // 닫힌 것 하나만 센다
+  })
+
+  it('이력이 없으면 두 칸 다 없다 (조건부 전개 관례)', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'dispatched')]),
+      dispatches: [dispatch('d1', 't1', 'sess-1', '2026-08-18T01:00:00.000Z')]
+    }
+    const t = taskOf(s)
+    expect('waiting' in t).toBe(false)
+    expect('resumes' in t).toBe(false)
+  })
+
+  // 앱이 꺼져 outcome_unknown 으로 닫힌 경우 — closeDispatch 는 endedAt 만 찍고 outcome 은 비워
+  // 둔다(state.ts). 그 Dispatch 는 더 이상 running 이 아니므로, 열어 둔 채 남은 이력이 있어도
+  // 아무도 그 리셋을 기다리지 않는다
+  it('끝난 Dispatch 의 열린 항목은 기다리는 중이 아니다', () => {
+    const s: OrchState = {
+      ...withRuns([run('r1', absPath('p'))], [task('t1', 'r1', 'completed')]),
+      dispatches: [
+        {
+          ...openWith('d1', 't1', [
+            { stoppedAt: '2026-08-18T02:00:00.000Z', reason: 'waiting', fromAccountId: 'acc-1' }
+          ]),
+          endedAt: '2026-08-18T04:00:00.000Z'
+        }
+      ]
+    }
+    expect(taskOf(s).waiting).toBeUndefined()
   })
 })

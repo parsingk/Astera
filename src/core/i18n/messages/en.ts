@@ -712,6 +712,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.event.dispatchStarted': 'worker started',
   'jobs.event.gateOpened': 'awaiting decision',
   'jobs.event.gateResolved': 'decided',
+  'jobs.event.limitHit': 'usage limit hit',
+  'jobs.event.resumed': 'worker resumed',
   'jobs.event.status': 'status',
   'jobs.event.workerDone': 'worker report',
   'jobs.event.question': 'question',
@@ -780,6 +782,11 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.task.review': 'Review by another agent',
   'jobs.task.create': 'Add',
   'jobs.task.failed': 'Could not create the task',
+  // JobsView.tsx — after the provider on a running row. Waiting draws this instead of elapsed, and a
+  // resume history appends after it.
+  'jobs.task.waitingReset': 'Waiting for reset · {left}',
+  'jobs.task.waitingNoTime': 'Waiting for reset',
+  'jobs.task.resumedCount': 'resumed {n}×',
   'jobs.node.start': 'Start',
   'jobs.node.stop': 'Stop',
   'jobs.node.restart': 'Start again',
