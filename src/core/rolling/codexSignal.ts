@@ -164,8 +164,46 @@ async function readPriorReset(filePath: string): Promise<{ at: number; weekly: b
   return reset.at === null ? null : { at: reset.at, weekly: reset.weekly }
 }
 
+/** Index of the limit record the tail **ends** on, or null when it does not end on one.
+ *
+ *  **Why this walks backwards instead of asking the accumulated parse.** limitStateFromLines never
+ *  clears `error` within one batch, so parsing the whole tail and then reading `error` answers "a block
+ *  appears somewhere in these 512KB", which is a different question. A conversation that hit its limit
+ *  in the morning, waited it out and worked back up to 91% would answer yes — and reopening it would
+ *  park a healthy session in a phraseless wait of up to a window's length, and write a block for a
+ *  healthy account into the shared registry where every other chain honours it. Measured on a probe:
+ *  `[100% with a past reset, usage_limit_exceeded, 95% with a future reset]` handed back the future
+ *  reset. The rule this implements is "accept the limit signal only when no ordinary windowed snapshot
+ *  follows it", and walking from the end is simply the cheap way to evaluate it.
+ *
+ *  Three record shapes matter, and the parser above is what decides which is which:
+ *   - a `usage_limit_exceeded` on task_complete (limitErrorOf), or a token_count whose
+ *     rate_limit_reached_type is a string — **the turn was refused**, so the tail ends blocked.
+ *   - a token_count carrying at least one real window (parseWindow) — rate_limits ride only on
+ *     token_count and those are written when a turn *completes*, so the conversation worked after
+ *     whatever came before it, and any earlier block is over.
+ *   - anything else says nothing either way and is skipped. **The windowless credit-balance snapshot
+ *     lives here, and that is the trap**: codex emits it (`limit_id: "premium"`, every window null)
+ *     0.8s after the plan snapshot at the very moment a limit hits — measured, and the same record
+ *     limitStateFromLines carries windows forward across. It is therefore often the *last* line in a
+ *     blocked rollout, and reading it as "an ordinary snapshot" would answer "not blocked" for exactly
+ *     the conversations this exists for. Ordinary noise (reasoning items, messages, session_meta, a
+ *     clean task_complete) is skipped by the same clause. */
+function lastBlockIndex(lines: string[]): number | null {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = parseLine(lines[i])
+    if (!line) continue
+    if (limitErrorOf(line, 0)) return i // the `at` is discarded — only "is this the signal" is asked
+    const rl = rateLimitsOf(line.payload)
+    if (!rl) continue
+    if (typeof rl.rate_limit_reached_type === 'string') return i
+    if (parseWindow(rl.primary) || parseWindow(rl.secondary)) return null // a turn completed after it
+  }
+  return null
+}
+
 /** The block a rollout **ended on**, for the verdict a resumed session has to make before it has
- *  written anything of its own (priorLimitVerdict). null when the tail carries no such block.
+ *  written anything of its own (priorLimitVerdict). null when the tail does not end on one.
  *
  *  **Why a usage percentage cannot answer this question, in either direction.** readPriorReset above
  *  reports the reset of any window at or above GATE_PCT, and that gate is 90, not 100 — so a
@@ -176,9 +214,11 @@ async function readPriorReset(filePath: string): Promise<{ at: number; weekly: b
  *  *completed* turn left it, which can be well under 100. A percentage is a fact about consumption;
  *  "the turn was refused" is an event, and only the event answers "did this conversation end blocked".
  *
- *  So the tail has to carry one of the two structured signals — the `usage_limit_exceeded` error codex
- *  actually emits (limitErrorOf) or the never-observed-but-handled reachedType — and the reset is then
- *  taken from that same parse, i.e. from the windows that error was recorded alongside.
+ *  So the answer comes from the structured signals, and from the **end** of the tail — see
+ *  lastBlockIndex for which record shapes decide and why the position matters as much as the presence.
+ *  The reset is then read off the records up to and including that one, through the shared assembly
+ *  rule, so the windows the refusal was recorded alongside are the ones that answer (and the credit
+ *  snapshot riding behind it cannot erase them).
  *
  *  A block whose reset cannot be read answers null, exactly as no block does: with no reset instant
  *  there is nothing to wait for and no way to tell a live block from a redraw, so the verdict falls
@@ -188,9 +228,9 @@ export async function priorBlockAt(
 ): Promise<{ at: number; weekly: boolean } | null> {
   const lines = await tailLines(filePath)
   if (!lines) return null
-  const ended = limitStateFromLines(lines, 0)
-  if (!ended || (ended.error === null && ended.reachedType === null)) return null
-  const reset = worstResetAt(ended)
+  const end = lastBlockIndex(lines)
+  if (end === null) return null
+  const reset = worstResetAt(limitStateFromLines(lines.slice(0, end + 1), 0))
   return reset.at === null ? null : { at: reset.at, weekly: reset.weekly }
 }
 

@@ -475,6 +475,40 @@ describe('priorBlockAt', () => {
     expect(await priorBlockAt(p)).toBeNull()
   })
 
+  // 구조 기록이 '어딘가에' 있는 것과 '거기서 끝난' 것은 다른 질문이다. 아침에 한도에 걸렸다가 기다려
+  // 풀린 뒤 다시 91% 까지 일한 대화는 앞의 질문에 yes 를 준다 — 그것을 믿으면 멀쩡한 세션이 창 길이만큼
+  // 문구 없이 대기에 처박히고, 건강한 계정에 공유 차단까지 붙는다.
+  it('막혔다가 회복한 대화는 null (구조 기록이 뒤에 남아 있어도)', async () => {
+    const p = await write('pb-recovered.jsonl', [
+      tokenCount({ primary: 100, primaryReset: 1787000000 }), // 그때 막혔고
+      taskComplete(),
+      tokenCount({ primary: 95, primaryReset: 1787739458 }) // 그 뒤로 턴을 돌렸다 — 지금은 안 막혔다
+    ])
+    expect(await priorBlockAt(p)).toBeNull()
+  })
+
+  it('회복한 뒤 다시 막혔으면 마지막 차단의 리셋을 돌려준다', async () => {
+    const p = await write('pb-again.jsonl', [
+      tokenCount({ primary: 100, primaryReset: 1787000000 }),
+      taskComplete(),
+      tokenCount({ primary: 95, primaryReset: 1787739458 }),
+      taskComplete()
+    ])
+    expect(await priorBlockAt(p)).toEqual({ at: 1787739458_000, weekly: false })
+  })
+
+  // 한도가 나는 순간 codex 는 창이 전부 null 인 크레딧 기록을 0.8초 뒤에 함께 적는다(실측). 즉 막힌
+  // rollout 의 **마지막 줄**이 그것일 수 있다. 그것을 '평범한 스냅숏'으로 읽으면 막힌 대화에 대해
+  // '안 막혔다'고 답한다 — 이 함수가 존재하는 바로 그 경우다.
+  it('구조 신호 뒤에 온 창 없는 크레딧 기록은 차단을 취소하지 않는다', async () => {
+    const p = await write('pb-credit.jsonl', [
+      tokenCount({ primary: 99, primaryReset: 1787739458 }),
+      taskComplete(),
+      tokenCount({}) // limit_id: premium — 창이 전부 null 인 그 기록
+    ])
+    expect(await priorBlockAt(p)).toEqual({ at: 1787739458_000, weekly: false })
+  })
+
   it('파일이 없으면 null', async () => {
     expect(await priorBlockAt(path.join(dir, 'nope.jsonl'))).toBeNull()
   })

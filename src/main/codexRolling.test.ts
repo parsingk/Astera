@@ -1271,6 +1271,33 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
+  // 같은 해악의 더 좁은 모양: 구조 기록이 파일 '어딘가에' 있는 것과 '거기서 끝난' 것은 다른 질문이다.
+  // 오전에 한도에 걸렸다가 리셋을 기다려 풀린 뒤 다시 95% 까지 일한 대화 — 그 파일에는 옛 거부 기록이
+  // 그대로 남아 있다. 그것을 차단으로 읽으면 다시 여는 순간 문구 한 줄 없이 창 길이만큼 대기에
+  // 처박히고, 건강한 계정에 공유 차단까지 붙는다.
+  it('막혔다가 회복한 뒤 닫힌 대화는 다시 열어도 대기하지 않는다 (옛 거부 기록)', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-prior-recovered', cwd: single.cwd,
+      primary: 100, primaryReset: Math.floor((Date.now() - 3_600_000) / 1000) // 그때 막혔다
+    })
+    await appendLimitError(file)
+    // 리셋이 지난 뒤 다시 일했다 — 턴이 완료됐다는 뜻이고, 창은 다시 게이트 위로 올라갔다
+    await appendTokenCount(file, {
+      primary: 95, primaryReset: Math.floor((Date.now() + 3 * 3_600_000) / 1000)
+    })
+    h.coord.register({ ...single, resumeSessionId: 'cx-prior-recovered' }, file)
+    await advance(100)
+    await advance(15_000)
+    await advance(15_000)
+    expect(h.sent.filter((s) => s.payload.state === 'waiting')).toEqual([])
+    expect(h.events).toEqual([])
+    expect(blocks.get('c1', Date.now())).toBeNull()
+    h.coord.stop()
+  })
+
   // attachRollout 은 세 곳에서 불리고 **파일에 물어도 되는 곳은 히스토리 재개 하나뿐**이다.
   // 아래 세 테스트가 나머지 둘을 못박는다.
   //
@@ -1327,9 +1354,12 @@ describe('CodexRollingCoordinator', () => {
   })
 
   // 셋째, 제자리 재개의 재부착. 그 대기를 만든 한도 기록이 바로 그 파일에 있으므로, 그 자리에서 파일에
-  // 물으면 방금 리셋을 기다린 세션을 그 즉시 다시 한도로 판정한다 — 대기가 스스로를 재생한다. 5시간
-  // 창의 resets_at 은 시간이 가면 뒤로 밀리므로, 막힌 동안 append 된 스냅숏은 이 대기가 끝난 뒤에도
-  // 미래인 리셋을 담는다.
+  // 물으면 방금 리셋을 기다린 세션을 그 즉시 다시 한도로 판정한다 — 대기가 스스로를 재생한다.
+  //
+  // 픽스처: 막혀 있는 동안 다시 제출했다가 또 거부당한다. 그러면 새 plan 스냅숏(5시간 창의 resets_at
+  // 은 시간이 가면 뒤로 밀린다)과 두 번째 구조 에러가 함께 붙어, 파일은 **이 대기가 끝난 뒤에도 미래인
+  // 리셋으로 막힌 채 끝난** 모양이 된다. 거부 없이 스냅숏만 붙이면 그것은 '턴이 완료됐다'는 뜻이라
+  // priorBlockAt 이 애초에 차단으로 읽지 않는다 — 그것이 이 픽스처가 이 모양이어야 하는 이유다.
   it('제자리 재개의 재부착이 그 파일의 차단을 복구하지 않는다 (대기 재생 방지)', async () => {
     const h = harness()
     const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
@@ -1344,8 +1374,9 @@ describe('CodexRollingCoordinator', () => {
     await advance(15_000) // 틱 → 구조 에러로 판정 → 대기(reset+60초)
     const waiting = (): number => h.sent.filter((s) => s.payload.state === 'waiting').length
     expect(waiting()).toBe(1)
-    // 막힌 채로 codex 가 스냅숏을 더 적는다 — 창이 밀려 리셋이 더 멀어졌다
+    // 막힌 채로 다시 제출했다가 또 거부당한다 — 창이 밀려 리셋이 더 멀어진 스냅숏 + 두 번째 구조 에러
     await appendTokenCount(file, { primary: 99, primaryReset: Math.floor((t0 + 7_200_000) / 1000) })
+    await appendLimitError(file)
     await advanceIntoResume(180_000) // 대기 만료 → 제자리 재개
     expect(h.written.length).toBe(2)
     await advance(15_000) // 재개 뒤 첫 틱 — 파일에 다시 물었다면 여기서 두 번째 대기가 게시된다
