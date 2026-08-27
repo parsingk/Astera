@@ -924,13 +924,17 @@ export class RollingCoordinator {
         this.rescheduleAbortedRoll(chain, 'no such account')
         return
       }
-      this.pushState(chain, 'switching', { accountLabel: target.label })
       if (!chain.claudeSessionId || !chain.transcriptPath) await this.refreshMeta(chain)
       if (!chain.claudeSessionId || !chain.transcriptPath) {
         this.deps.log(`roll aborted — no session metadata (statusline never recorded) session=${chain.liveId}`)
         this.rescheduleAbortedRoll(chain, 'no session metadata')
         return
       }
+      // Published only once both aborts above are behind us — matches codexRolling.ts. Publishing this
+      // before the metadata check announced a switch to Slack that never happens, and it also claimed the
+      // stop episode in the orchestration tap with reason 'switching' (no reset time), so the reschedule's
+      // own 'waiting' publication just below was then ignored as a repeat of the same stop.
+      this.pushState(chain, 'switching', { accountLabel: target.label })
       // ① copy — a claude blocked by a limit is idle, so there is no write contention
       const dest = claudeHistoryStrategy.mapTargetPath(chain.transcriptPath, target.configDir)
       await this.copy(chain.transcriptPath, dest)
