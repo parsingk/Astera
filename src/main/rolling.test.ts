@@ -591,9 +591,16 @@ const payloadEx = (o: {
   weekly?: number
   fiveReset?: string
   weeklyReset?: string
+  sid?: string // 한 하네스에 체인이 둘 이상일 때 — 안 주면 종전 그대로 'claude-sess'
 }): unknown => ({
-  session_id: 'claude-sess',
-  transcript_path: path.join('D:\\cfg', 'live', 'projects', 'D--work-p', 'claude-sess.jsonl'),
+  session_id: o.sid ?? 'claude-sess',
+  transcript_path: path.join(
+    'D:\\cfg',
+    'live',
+    'projects',
+    'D--work-p',
+    `${o.sid ?? 'claude-sess'}.jsonl`
+  ),
   rate_limits: {
     ...(o.five != null ? { five_hour: win(o.five, o.fiveReset) } : {}),
     ...(o.weekly != null ? { seven_day: win(o.weekly, o.weeklyReset) } : {})
@@ -2004,6 +2011,47 @@ describe('같은 계정 재개는 kill 하지 않는다', () => {
     h.coord.onHookEvent('s1', { hook_event_name: 'Notification', notification_type: 'idle_prompt' })
     await vi.advanceTimersByTimeAsync(11 * MIN)
     expect(h.sent.slice(sentBefore).some((s) => s.payload.state === 'nudged')).toBe(false)
+  })
+
+  // 네 지우는 자리 중 **제자리 재개 쪽**을 못박는다. 위 테스트는 자기 체인의 기록만 보므로 그 한 줄을
+  // 지워도 통과한다 — 공유 기록까지 함께 풀리는지는 다른 체인이 적은 기록으로만 볼 수 있다.
+  it('제자리 재개 60초 뒤 다른 체인이 적은 공유 기록도 함께 풀린다 (오탐 안전 밸브)', async () => {
+    // resetAnchorCheck(단일 계정 3-b)가 실제 fs를 stat한다 — fake timer 아래서 그 완료 콜백은 안 돈다
+    const h = harness({ probeActivity: () => Promise.resolve(null) })
+    const t0 = Date.now()
+    // 체인 1: 단일 계정 a1, reset은 2분 뒤 → 판정 시점의 계획은 3분 뒤 제자리 재개다
+    h.payloads.set('s1', payloadEx({ five: 95, weekly: 20, fiveReset: new Date(t0 + 2 * MIN).toISOString() }))
+    h.coord.register(infoSelf())
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(lastWaiting(h.sent)).toBeDefined()
+    // 체인 2: 같은 a1 에서 주간 소진(60분)을 적는다 — 체인 1 의 대기(3분)보다 오래 남는 기록이다.
+    // 체인 1 의 판정 **뒤에** 적히므로 그 대기 시각은 늘어나지 않는다.
+    h.payloads.set('s10', payloadEx({
+      sid: 'claude-sess-2', five: 20, weekly: 97, weeklyReset: new Date(t0 + 60 * MIN).toISOString()
+    }))
+    h.coord.register({ ...h.info1, id: 's10', cwd: 'D:\\work\\q', rollAccountIds: ['a1', 'a2'] })
+    h.coord.handleData({ sessionId: 's10', data: LIMIT_TEXT })
+    await flush()
+    // 중간 체크포인트: 지금은 기록이 살아 있어야 한다. 체인 3 은 a1 을 한 번도 만진 적이 없는데도
+    // 갈 곳이 없어 대기한다 — 이 단언이 없으면 마지막 단언이 "애초에 공유가 없었다"로도 통과한다.
+    h.payloads.set('s20', payloadEx({ sid: 'claude-sess-3', five: 95, weekly: 20 }))
+    h.coord.register({ ...h.info1, id: 's20', accountId: 'a2', cwd: 'D:\\work\\r', rollAccountIds: ['a2', 'a1'] })
+    const spawnedBefore = h.spawned.length
+    h.coord.handleData({ sessionId: 's20', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned.length).toBe(spawnedBefore) // a1 으로 옮기지 않았다
+    // 체인 1 의 대기 만료 → 제자리 재개 → 그 뒤 60초 무사 → 공유 기록이 지워진다
+    await vi.advanceTimersByTimeAsync(3 * MIN + 70_000)
+    // resumeCount 는 모든 체인의 문장을 셀다(롤의 자동 프롬팜토도 같은 문장이다) — 체인 1 은
+    // kill 되지 않으니 여전히 s1 이다. 그 섬생에 들어간 문장만 세서 제자리 재개를 확인한다.
+    expect(h.written.filter((w) => w.id === 's1' && w.data === RESUME_PROMPT)).toHaveLength(1)
+    // 체인 4: a1 이 다시 후보다. 기록이 남아 있었다면 갈 곳이 없어 대기한다
+    h.payloads.set('s30', payloadEx({ sid: 'claude-sess-4', five: 95, weekly: 20 }))
+    h.coord.register({ ...h.info1, id: 's30', accountId: 'a2', cwd: 'D:\\work\\s', rollAccountIds: ['a2', 'a1'] })
+    h.coord.handleData({ sessionId: 's30', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned.at(-1)?.accountId).toBe('a1')
   })
 })
 

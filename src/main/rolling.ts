@@ -666,9 +666,6 @@ export class RollingCoordinator {
       since: now
     }
     chain.recovery[chain.cycle.currentIndex] = record
-    // The same fact goes to the shared registry so the other chains skip this account instead of
-    // rediscovering the block themselves (SPEC §11.2/6).
-    this.deps.blocks.record(chain.accountIds[chain.cycle.currentIndex], record, now)
   }
 
   private onLimit(chain: Chain): void {
@@ -690,6 +687,13 @@ export class RollingCoordinator {
     // instant — if time moves between them, an account pickAvailable called unusable can look usable to
     // planRetry microseconds later, and the wait would target an account it had just refused.
     const now = this.now()
+    // The shared write is here rather than in recordRecovery because recordRecovery runs at three call
+    // sites and every one of them is ahead of the guards above — writing there would broadcast to every
+    // other chain a verdict this coordinator has just declined to act on. It re-reads the record
+    // recordRecovery stored instead of building a second one, so the two stores hold the same object and
+    // cannot drift (SPEC §11.2/6). forceRoll reaches here without a record; there is then nothing to say.
+    const record = chain.recovery[chain.cycle.currentIndex]
+    if (record) this.deps.blocks.record(chain.accountIds[chain.cycle.currentIndex], record, now)
     // Skips an account the round robin suggests if it is already exhausted (weekly at 100%, say). With
     // nowhere to go, it waits — switching to an exhausted account only blocks again immediately and wastes
     // a transcript copy and a respawn.
@@ -697,9 +701,17 @@ export class RollingCoordinator {
       action.type === 'roll'
         ? pickAvailable(retryState(chain, this.deps.blocks, now), action.toIndex, now)
         : null
+    // 'shared' marks a detour around an account **this chain never touched** — the block came from another
+    // chain's record. Without it the log cannot answer "why did this worker skip an account it had no
+    // history with", which is the first question an incident asks now that a block can arrive from
+    // elsewhere (SPEC §11.2/6).
+    const skipShared =
+      action.type === 'roll' &&
+      !chain.recovery[action.toIndex] &&
+      this.deps.blocks.get(chain.accountIds[action.toIndex], now) !== null
     const detour =
       action.type === 'roll' && target !== action.toIndex
-        ? ` blocked(${action.toIndex})→${target === null ? 'wait' : target}`
+        ? ` blocked(${action.toIndex}${skipShared ? ',shared' : ''})→${target === null ? 'wait' : target}`
         : ''
     this.deps.log(`limit detected session=${chain.liveId} action=${JSON.stringify(action)}${detour}`)
     if (target === null) {

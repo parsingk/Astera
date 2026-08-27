@@ -648,6 +648,112 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
+  // 아래 두 테스트가 codex 의 **지우는 자리 두 곳**을 각각 못박는다. 위 테스트들은 자기 체인의 기록만
+  // 보므로 그 한 줄을 지워도 통과한다 — 공유 기록까지 함께 풀리는지는 다른 체인이 적은 기록으로만
+  // 볼 수 있다. 네 체인을 **등록만 먼저** 해 두는 이유: findRollout 은 register 시각 이후에 만들어진
+  // 파일만 후보로 보는데, fake 시계를 몇 분 진행시킨 뒤 등록하면 실제 birthtime 이 그보다 앞서서
+  // 매핑이 영구히 실패한다(codexLocate 의 since 규칙).
+  it('제자리 재개가 턴을 만들면 다른 체인이 적은 공유 기록도 함께 풀린다 (settleInPlace 안전 밸브)', async () => {
+    const h = harness()
+    const t0 = Date.now()
+    const sec = (ms: number): number => Math.floor((t0 + ms) / 1000)
+    // 체인 1: 단일 계정 c1, reset 2분 뒤 → 판정 시점의 계획은 3분 뒤 제자리 재개다
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-clear-a', cwd: single.cwd, primary: 99, primaryReset: sec(120_000)
+    })
+    h.coord.register(single)
+    // 체인 2: 같은 c1 에서 60분짜리 기록을 적는다 — 체인 1 의 대기(3분)보다 오래 남는다
+    const cwd2 = path.join(tmp, 'work', 'q')
+    await writeRollout({
+      accountId: 'c1', uuid: 'cx-clear-b', cwd: cwd2, primary: 99, primaryReset: sec(3_600_000)
+    })
+    h.coord.register({ ...h.info1, id: 's10', cwd: cwd2, rollAccountIds: ['c1', 'c2'] })
+    // 체인 3(체크포인트)과 체인 4(마지막 판정): c2 에서 시작하고 c1 은 한 번도 만진 적이 없다
+    const cwd3 = path.join(tmp, 'work', 'r')
+    await writeRollout({
+      accountId: 'c2', uuid: 'cx-clear-c', cwd: cwd3, primary: 99, primaryReset: sec(600_000)
+    })
+    h.coord.register({ ...h.info1, id: 's20', accountId: 'c2', cwd: cwd3, rollAccountIds: ['c2', 'c1'] })
+    const cwd4 = path.join(tmp, 'work', 's')
+    await writeRollout({
+      accountId: 'c2', uuid: 'cx-clear-d', cwd: cwd4, primary: 99, primaryReset: sec(600_000)
+    })
+    h.coord.register({ ...h.info1, id: 's30', accountId: 'c2', cwd: cwd4, rollAccountIds: ['c2', 'c1'] })
+    await advance(1_500) // 네 체인의 매핑 폴링
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    h.coord.handleData({ sessionId: 's10', data: LIMIT_TEXT }) // 체인 1 판정 뒤에 적힌다
+    await advance(100)
+    // 중간 체크포인트: 지금은 기록이 살아 있어야 한다. 체인 3 은 c1 을 만진 적이 없는데도 갈 곳이
+    // 없어 대기한다 — 이 단언이 없으면 마지막 단언이 "애초에 공유가 없었다"로도 통과한다.
+    const spawnedBefore = h.spawned.length
+    h.coord.handleData({ sessionId: 's20', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.spawned.length).toBe(spawnedBefore) // c1 으로 옮기지 않았다
+    // 체인 1 의 대기 만료 → 제자리 재개
+    await advanceIntoResume(188_400)
+    expect(h.written.filter(([id]) => id === 's1')).toHaveLength(2) // 문장 + 엔터
+    // 재개된 세션이 실제로 턴을 돌렸다 → settleInPlace 가 건강 판정을 내리고 공유 기록을 지운다
+    await appendTokenCount(file, { primary: 50 })
+    await advance(60_000) // 마감 시각 경과
+    // 체인 4: c1 이 다시 후보다. 기록이 남아 있었다면 여기서도 대기한다
+    const spawnedBeforeLast = h.spawned.length
+    h.coord.handleData({ sessionId: 's30', data: LIMIT_TEXT })
+    await advance(100)
+    // 개수까지 본다 — 마지막 항목만 보면 이전 체인이 남긴 spawn 으로 헛도는 단언이 된다
+    expect(h.spawned.length).toBe(spawnedBeforeLast + 1)
+    expect(h.spawned.at(-1)?.info.accountId).toBe('c1')
+    h.coord.stop()
+  })
+
+  it('롤 뒤 60초 무사하면 다른 체인이 적은 공유 기록도 함께 풀린다 (roll 안전 밸브)', async () => {
+    const h = harness()
+    const t0 = Date.now()
+    const sec = (ms: number): number => Math.floor((t0 + ms) / 1000)
+    // 체인 1: [c2, c1] — c2 에서 한도 → c1 로 롤. 이제 c1 에서 정상으로 돌고, healthy 타이머가 걸린다
+    await writeRollout({
+      accountId: 'c2', uuid: 'cx-roll-a', cwd: h.info1.cwd, primary: 99, primaryReset: sec(600_000)
+    })
+    h.coord.register({ ...h.info1, accountId: 'c2', rollAccountIds: ['c2', 'c1'] })
+    // 체인 2: c1 에서 60분짜리 기록을 적는다(오탐이든 진짜든). 갈 곳이 없어 대기로 끝난다
+    const cwd2 = path.join(tmp, 'work', 'q')
+    await writeRollout({
+      accountId: 'c1', uuid: 'cx-roll-b', cwd: cwd2, primary: 99, primaryReset: sec(3_600_000)
+    })
+    h.coord.register({ ...h.info1, id: 's10', cwd: cwd2, rollAccountIds: ['c1', 'c2'] })
+    // 체인 3(체크포인트)과 체인 4(마지막 판정)
+    const cwd3 = path.join(tmp, 'work', 'r')
+    await writeRollout({
+      accountId: 'c2', uuid: 'cx-roll-c', cwd: cwd3, primary: 99, primaryReset: sec(600_000)
+    })
+    h.coord.register({ ...h.info1, id: 's20', accountId: 'c2', cwd: cwd3, rollAccountIds: ['c2', 'c1'] })
+    const cwd4 = path.join(tmp, 'work', 's')
+    await writeRollout({
+      accountId: 'c2', uuid: 'cx-roll-d', cwd: cwd4, primary: 99, primaryReset: sec(600_000)
+    })
+    h.coord.register({ ...h.info1, id: 's30', accountId: 'c2', cwd: cwd4, rollAccountIds: ['c2', 'c1'] })
+    await advance(1_500) // 네 체인의 매핑 폴링
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.spawned.at(-1)?.info.accountId).toBe('c1') // 체인 1 이 c1 에 도착했다
+    h.coord.handleData({ sessionId: 's10', data: LIMIT_TEXT }) // c1 을 공유 기록에 올린다
+    await advance(100)
+    const spawnedBefore = h.spawned.length
+    h.coord.handleData({ sessionId: 's20', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.spawned.length).toBe(spawnedBefore) // 체크포인트: c1 으로 옮기지 않고 대기한다
+    await advance(65_000) // 체인 1 의 롤 healthy 타이머 만료 → 공유 기록이 지워진다
+    const spawnedBeforeLast = h.spawned.length
+    h.coord.handleData({ sessionId: 's30', data: LIMIT_TEXT })
+    await advance(100)
+    // **개수가 핵심이다.** 이 하네스의 마지막 spawn 은 체인 1 이 c1 으로 롤한 그것이므로,
+    // 마지막 항목의 계정만 보면 체인 4 가 아무 도 모 안 가고 대기해도 그대로 통지난다.
+    expect(h.spawned.length).toBe(spawnedBeforeLast + 1)
+    expect(h.spawned.at(-1)?.info.accountId).toBe('c1')
+    h.coord.stop()
+  })
+
   // rolling.test.ts 의 '상태 세대 가드' 두 테스트와 같은 성질. codex 는 제자리 재개가 생기면서
   // 처음으로 **지연 게시**를 갖게 됐다 — 엔터 뒤의 'none' 이 150ms 타이머 안에 있으므로, 그 사이에
   // 게시된 'waiting'·'switching' 을 덮어쓴다. 덮으면 스케줄러의 억제가 풀리고 오케스트레이션 정지

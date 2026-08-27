@@ -413,12 +413,11 @@ export class CodexRollingCoordinator {
   /** The block record for the current account — the latest reset among the windows at or above the gate (mirrors recordRecovery in rolling.ts) */
   private recordRecovery(chain: Chain): void {
     const worst = worstResetAt(chain.state)
-    const now = this.now()
-    const record: BlockRecord = { at: worst.at, weekly: worst.weekly, since: now }
-    chain.recovery[chain.cycle.currentIndex] = record
-    // The same fact goes to the shared registry so the other chains skip this account instead of
-    // rediscovering the block themselves (SPEC §11.2/6).
-    this.deps.blocks.record(chain.accountIds[chain.cycle.currentIndex], record, now)
+    chain.recovery[chain.cycle.currentIndex] = {
+      at: worst.at,
+      weekly: worst.weekly,
+      since: this.now()
+    }
   }
 
   private onLimit(chain: Chain, reason: LimitReason): void {
@@ -441,17 +440,37 @@ export class CodexRollingCoordinator {
     // instant — if time moves between them, an account pickAvailable called unusable can look usable to
     // planRetry microseconds later, and the wait would target an account it had just refused.
     const now = this.now()
+    // The shared write is here rather than in recordRecovery because recordRecovery runs at three call
+    // sites and every one of them is ahead of the guards above (the rollout-unmapped one especially) —
+    // writing there would broadcast to every other chain a verdict this coordinator has just declined to
+    // act on. It re-reads the record recordRecovery stored instead of building a second one, so the two
+    // stores hold the same object and cannot drift (SPEC §11.2/6). forceRoll reaches here without a
+    // record; there is then nothing to say.
+    const record = chain.recovery[chain.cycle.currentIndex]
+    if (record) this.deps.blocks.record(chain.accountIds[chain.cycle.currentIndex], record, now)
     const target =
       action.type === 'roll'
         ? pickAvailable(retryState(chain, this.deps.blocks, now), action.toIndex, now)
         : null
+    // The detour, in the same shape as the claude side. 'shared' marks a skip around an account **this
+    // chain never touched** — the block came from another chain's record. Without it the log cannot answer
+    // "why did this worker skip an account it had no history with", which is the first question an
+    // incident asks now that a block can arrive from elsewhere (SPEC §11.2/6).
+    const skipShared =
+      action.type === 'roll' &&
+      !chain.recovery[action.toIndex] &&
+      this.deps.blocks.get(chain.accountIds[action.toIndex], now) !== null
+    const detour =
+      action.type === 'roll' && target !== action.toIndex
+        ? ` blocked(${action.toIndex}${skipShared ? ',shared' : ''})→${target === null ? 'wait' : target}`
+        : ''
     // reason and the raw reachedType are the only evidence for calibrating the assumptions we have not
     // measured yet (the limit phrase, the reachedType values, replay behaviour) on the first real hit — so
     // what fired and the raw value are recorded together
     this.deps.log(
       `codex limit detected session=${chain.liveId} reason=${reason} ` +
         `reachedType=${chain.state?.reachedType ?? 'null'} ${this.why(chain)} ` +
-        `action=${JSON.stringify(action)}`
+        `action=${JSON.stringify(action)}${detour}`
     )
     if (target === null) {
       const plan = planRetry(retryState(chain, this.deps.blocks, now), now)

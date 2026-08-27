@@ -39,9 +39,26 @@ export class BlockRegistry {
     return blockedUntil(rec) <= now ? null : rec
   }
 
-  /** The account was observed working, so whatever was recorded about it is wrong or spent. This is
-   *  the safety valve for a false positive: without it, one bad reading would keep every other chain
-   *  off an account that is demonstrably fine until its recorded reset time passed. */
+  /** The account was observed working, so whatever was recorded about it is wrong or spent.
+   *
+   *  **Exactly how far this valve reaches.** The coordinators call it from their healthy timers, and a
+   *  healthy timer is armed once per arrival on an account (a roll, or an in-place resume) and never
+   *  re-armed afterwards. So a false record is torn up only when it lands while some chain is inside its
+   *  ~60-second window right after arriving on that account. That is the window in which a replayed or
+   *  misread limit phrase actually fires, which is why the valve is placed there.
+   *
+   *  **What it does not reach:** a chain that has been working on the account for an hour. Its healthy
+   *  timer fired long ago, and once a false record stands, pickAvailable steers every chain away from the
+   *  account — so nobody arrives on it, nobody's healthy timer covers it, and the record survives to its
+   *  recorded reset time for *every* chain. Widening the valve (clearing on the 15-second tick, say) is a
+   *  separate design decision, not an oversight: the same sweep would erase records that are legitimate
+   *  and bring the pile-up back, so it needs its own measurement.
+   *
+   *  **What bounds the damage meanwhile.** Two things, both outside this class. A record whose reset time
+   *  could not be parsed carries at=null and expires after RETRY_FALLBACK_MS (15 minutes, see
+   *  blockedUntil) — the blind case is the short case. And this registry is memory only, so restarting
+   *  the app drops every record. What is unbounded is a false record carrying a real weekly reset: days,
+   *  for every chain, unless one of them happens to arrive on that account. */
   clear(accountId: string): void {
     this.byAccount.delete(accountId)
   }
