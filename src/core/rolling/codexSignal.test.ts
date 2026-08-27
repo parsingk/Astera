@@ -9,6 +9,7 @@ import {
   findKeepModelChoice,
   limitReached,
   maxedOut,
+  priorLimitVerdict,
   rolloutSize,
   worstResetAt,
   type CodexLimitState
@@ -431,6 +432,51 @@ describe('worstResetAt', () => {
   it('해당 창이 없으면 at=null', () => {
     expect(worstResetAt(state({}))).toEqual({ at: null, weekly: false })
     expect(worstResetAt(null)).toEqual({ at: null, weekly: false })
+  })
+})
+
+describe('priorLimitVerdict', () => {
+  const NOW = 1_000_000
+
+  it('복구된 리셋이 미래면 문구 없이도 한도다', () => {
+    expect(priorLimitVerdict({ at: NOW + 60_000, weekly: false }, { textHit: false }, NOW)).toEqual({
+      kind: 'limited',
+      at: NOW + 60_000,
+      weekly: false
+    })
+  })
+
+  it('복구된 리셋이 과거면 문구는 재생이다', () => {
+    expect(priorLimitVerdict({ at: NOW - 1, weekly: false }, { textHit: true }, NOW)).toEqual({
+      kind: 'replay'
+    })
+  })
+
+  it('복구된 리셋이 과거이고 문구도 없으면 아무것도 아니다', () => {
+    expect(priorLimitVerdict({ at: NOW - 1, weekly: false }, { textHit: false }, NOW)).toEqual({
+      kind: 'none'
+    })
+  })
+
+  it('복구된 리셋이 없고 문구가 있으면 한도다 — 리셋 시각은 모른다', () => {
+    expect(priorLimitVerdict(null, { textHit: true }, NOW)).toEqual({ kind: 'limited', at: null, weekly: false })
+  })
+
+  it('복구된 리셋도 문구도 없으면 아무것도 아니다', () => {
+    expect(priorLimitVerdict(null, { textHit: false }, NOW)).toEqual({ kind: 'none' })
+  })
+
+  it('리셋 시각이 정확히 지금이면 지난 것으로 본다 (경계)', () => {
+    // pickAvailable·blockedUntil 과 같은 관례 — `<= now` 는 만료다
+    expect(priorLimitVerdict({ at: NOW, weekly: false }, { textHit: true }, NOW)).toEqual({ kind: 'replay' })
+  })
+
+  it('주간 한도면 그 표시가 함께 나온다', () => {
+    expect(priorLimitVerdict({ at: NOW + 1, weekly: true }, { textHit: false }, NOW)).toEqual({
+      kind: 'limited',
+      at: NOW + 1,
+      weekly: true
+    })
   })
 })
 

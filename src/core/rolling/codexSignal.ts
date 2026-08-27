@@ -184,6 +184,17 @@ export class CodexRolloutTail {
     if (opts.startAtEnd) this.seed = readPriorReset(filePath)
   }
 
+  /** The reset recovered from the file at attach time, or null when this file records no block.
+   *  Awaits the seed the constructor started, so the first caller may wait on one file read.
+   *  The coordinator asks this while its own state is still null — see priorLimitVerdict. */
+  async priorResetAt(): Promise<{ at: number; weekly: boolean } | null> {
+    if (this.seed) {
+      this.priorReset = await this.seed
+      this.seed = null
+    }
+    return this.priorReset
+  }
+
   /** With no new lines, returns the previous state unchanged (state does not disappear). Missing file or error gives null. */
   async read(): Promise<CodexLimitState | null> {
     if (this.seed) {
@@ -363,4 +374,44 @@ export function worstResetAt(
   if (!cand.length) return state.priorReset ?? { at: null, weekly: false }
   const worst = cand.reduce((a, b) => (b.at > a.at ? b : a))
   return { at: worst.at, weekly: worst.weekly }
+}
+
+/** What the file already told us, for a session that has not written anything of its own yet.
+ *
+ *  **Why this exists.** limitReached returns false on a null state — a resumed session's state is null
+ *  until codex appends a rate_limits record, and those ride on turn completion. A session that is
+ *  *already* at its limit can never finish a turn, so it can never produce the snapshot that would let
+ *  its own limit be believed: rolling dies for exactly the sessions that need it (measured 2026-08-27,
+ *  three resumes of one conversation, every one logging that the phrase was ignored).
+ *
+ *  **Why the recovered reset is the right evidence.** readPriorReset takes it through worstResetAt,
+ *  which only reads the reset of a window at or above the gate. A session that was working never
+ *  contributes one. So the value's presence already means "this conversation ended blocked, and it
+ *  clears at T" — no timer guess is needed to tell that from a redraw.
+ *
+ *  **Why a past reset makes a phrase a replay.** `codex resume` redraws the previous conversation
+ *  through the PTY, old limit error line included. If the reset we recovered has passed, the block is
+ *  over and the phrase on screen is that old line — believing it rolls a session that is fine (measured:
+ *  a detection at primary=0% right after a resume, then an unneeded in-place resume 60s later). This is
+ *  what claude's inReplayGrace does with a timer; here the file answers it.
+ *
+ *  Once the session writes its own record the coordinator stops asking this — the normal verdicts take
+ *  over, unchanged. */
+export type PriorLimitVerdict =
+  | { kind: 'limited'; at: number | null; weekly: boolean }
+  | { kind: 'replay' }
+  | { kind: 'none' }
+
+export function priorLimitVerdict(
+  prior: { at: number; weekly: boolean } | null,
+  opts: { textHit: boolean },
+  now: number
+): PriorLimitVerdict {
+  // `<= now` is expiry — the same convention blockedUntil/pickAvailable use in retry.ts
+  if (prior && prior.at > now) return { kind: 'limited', at: prior.at, weekly: prior.weekly }
+  if (prior) return opts.textHit ? { kind: 'replay' } : { kind: 'none' }
+  // No prior block on record: this conversation has never been limited here, so there is no old error
+  // line to redraw and a confirmed phrase is the only evidence there is. The reset time is unknown —
+  // planRetry's fallback interval covers that.
+  return opts.textHit ? { kind: 'limited', at: null, weekly: false } : { kind: 'none' }
 }
