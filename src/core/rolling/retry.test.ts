@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   blockedUntil,
+  laterBlock,
   pickAvailable,
   planRetry,
   RETRY_FALLBACK_MS,
@@ -31,6 +32,55 @@ describe('blockedUntil', () => {
 
   it('reset 미상이면 기록 시각 + 폴백 간격까지 막힌 것으로 본다', () => {
     expect(blockedUntil(rec({ at: null, since: NOW }))).toBe(NOW + RETRY_FALLBACK_MS)
+  })
+})
+
+describe('laterBlock', () => {
+  it('둘 다 없으면 null', () => {
+    expect(laterBlock(null, null)).toBeNull()
+  })
+
+  it('a만 있으면 a', () => {
+    const a = rec({ at: NOW + 1_000 })
+    expect(laterBlock(a, null)).toBe(a)
+  })
+
+  it('b만 있으면 b', () => {
+    const b = rec({ at: NOW + 1_000 })
+    expect(laterBlock(null, b)).toBe(b)
+  })
+
+  it('b가 더 늦게까지 막으면 b가 이긴다', () => {
+    const a = rec({ at: NOW + 1_000 })
+    const b = rec({ at: NOW + 2_000 })
+    expect(laterBlock(a, b)).toBe(b)
+  })
+
+  it('a가 더 늦게까지 막으면 b가 진다', () => {
+    const a = rec({ at: NOW + 2_000 })
+    const b = rec({ at: NOW + 1_000 })
+    expect(laterBlock(a, b)).toBe(a)
+  })
+
+  // 동률(같은 시각까지 막음)이면 a를 지킨다. BlockRegistry.record()에서 a는 이미 갖고 있던
+  // 기록이고 b는 방금 들어온 새 기록이다 — 더 늦게까지 막지 못하는 새 기록으로 바꿀 이유가 없다.
+  // retryState()(다음 태스크)에서는 a가 이 체인이 직접 겪은 기록이고 b는 레지스트리가 공유한
+  // 기록이다 — 같은 시각까지만 막는다면 공유된 기록은 새 정보를 주지 못하므로 체인 자신의
+  // 1차 증거를 지킨다. 두 호출부 모두에서 "새 정보가 없으면 안 바꾼다"는 같은 답이 맞다.
+  it('동률이면 a를 지킨다 (새 정보를 주지 못하는 쪽으로 바꾸지 않는다)', () => {
+    const a = rec({ at: NOW + 1_000, weekly: true })
+    const b = rec({ at: NOW + 1_000, weekly: false })
+    expect(laterBlock(a, b)).toBe(a)
+  })
+
+  // 이긴 기록을 통째로 쓴다는 것을 보인다 — weekly만 따로 합치지 않는다. b가 더 늦게까지
+  // 막으므로 b가 이기고, weekly도 (진 a의 true가 아니라) 이긴 b의 false가 그대로 남는다.
+  it('둘이 weekly를 다르게 말하면 이긴 기록의 weekly가 그대로 남는다', () => {
+    const a = rec({ at: NOW + 1_000, weekly: true })
+    const b = rec({ at: NOW + 5_000, weekly: false })
+    const result = laterBlock(a, b)
+    expect(result).toBe(b)
+    expect(result?.weekly).toBe(false)
   })
 })
 
