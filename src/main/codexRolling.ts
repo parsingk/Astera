@@ -23,6 +23,7 @@ import {
   CodexRolloutTail,
   limitReached,
   maxedOut,
+  priorBlockAt,
   priorLimitVerdict,
   rolloutSize,
   worstResetAt,
@@ -125,7 +126,8 @@ interface Chain {
    *  Only consulted while `state` is still null — see priorLimitVerdict. `undefined` means the answer
    *  has not arrived yet, and is deliberately distinct from null: reading "not yet known" as "no block
    *  on record" would let a phrase fire without the evidence that decides whether it is a replay.
-   *  Only register()'s resume branch ever fills it — attachRollout clears it (the reasons are there). */
+   *  Only register()'s resume branch ever fills it — attachRollout clears it back to undefined for all
+   *  three of its callers, and that comment is where the reasons are. */
   priorReset: { at: number; weekly: boolean } | null | undefined
   scanner: CodexLimitScanner // detects the limit phrase in PTY output (corrects for chunk boundaries)
   modelChoice: CodexModelChoiceScanner // detects codex's approaching-limit model-switch prompt in the same stream
@@ -345,32 +347,48 @@ export class CodexRollingCoordinator {
     chain.codexSessionId = codexSessionId
     chain.tail = new CodexRolloutTail(rolloutPath, this.now, { startAtEnd: true })
     chain.unmappedWarned = false // it is mapped now — a future unmapped state gets to report itself again
-    // **Attaching never seeds the recovered reset; only register()'s resume branch asks for it.** The
-    // other two callers attach to a file whose limit record must not be believed. resumeInPlace
-    // re-anchors on the very file whose record produced the wait we have just served, so recovering it
-    // would judge the session limited again the instant it resumes; roll() attaches to the copy, which
-    // holds the *previous account's* record — the reason the tail starts at the end in the first place.
-    chain.priorReset = null
+    // **Attaching never recovers the block; only register()'s resume branch asks for it.** The other
+    // two callers attach to a file whose limit record must not be believed. resumeInPlace re-anchors on
+    // the very file whose record produced the wait we have just served, so recovering it would judge
+    // the session limited again the instant it resumes; roll() attaches to the copy, which holds the
+    // *previous account's* record — the reason the tail starts at the end in the first place.
+    //
+    // **It clears to `undefined`, not to null, and the difference is the whole point.** null is a value
+    // in this design — "no block on record" — and that is precisely the input that makes a phrase alone
+    // sufficient (see priorLimitVerdict's last branch). Clearing to null would therefore mean that one
+    // redrawn phrase after a roll produces a wait *and* writes a block against the freshly switched,
+    // perfectly healthy account into the shared registry, where every other chain then honours it.
+    // `undefined` leaves the verdict unconsulted, which is exactly the previous behaviour of both paths.
+    chain.priorReset = undefined
   }
 
-  /** Asks the rollout what block this conversation already had on record, and hands the answer to the
-   *  chain. Called from the history-resume path alone (see attachRollout for why the other two sites
-   *  must not).
+  /** Asks the rollout what block this conversation already ended on, and hands the answer to the chain.
+   *  Called from the history-resume path alone (see attachRollout for why the other two sites must not).
+   *
+   *  priorBlockAt, not the tail's looser priorResetAt: deciding *whether* the file records a block needs
+   *  the structured limit signal, because the reset alone is reported for any window at or above 90% —
+   *  a merely busy conversation. The reasoning is on priorBlockAt.
    *
    *  Fire-and-forget: a failed read leaves it null, which reads as "no block on record" — the
    *  conservative side, since the verdict then needs a confirmed phrase before it acts. Until the answer
-   *  lands the field stays undefined and the verdict is not consulted at all (judgedByPriorBlock). */
+   *  lands the field stays undefined and the verdict is not consulted at all (judgedByPriorBlock).
+   *
+   *  Both callbacks are gated on the tail still being this chain's tail, the same across-await guard as
+   *  `chain.liveId !== liveId` elsewhere in this file. Without it a read still in flight when the chain
+   *  rolls or re-anchors would write the old file's block over the value attachRollout had just
+   *  cleared — the trap above, arriving by race. Every re-attach builds a new tail, so identity of the
+   *  object is identity of the attachment. */
   private askPriorReset(chain: Chain): void {
     const tail = chain.tail
-    if (!tail) return
+    const rolloutPath = chain.rolloutPath
+    if (!tail || !rolloutPath) return
     chain.priorReset = undefined
-    void tail
-      .priorResetAt()
+    void priorBlockAt(rolloutPath)
       .then((r) => {
-        chain.priorReset = r
+        if (chain.tail === tail) chain.priorReset = r
       })
       .catch(() => {
-        chain.priorReset = null
+        if (chain.tail === tail) chain.priorReset = null
       })
   }
 
@@ -502,6 +520,13 @@ export class CodexRollingCoordinator {
       // null. The verdict already carries the reset, so it is recorded as it stands. Writing it into
       // chain.recovery *before* onLimit is what hands it to the shared registry too (SPEC §11.2/6):
       // onLimit re-reads this slot and broadcasts it, but only once its own guards have passed.
+      //
+      // **Known imprecision: the slot is currentIndex, which on a fresh register is always 0.** If the
+      // conversation was closed right after a roll, its rollout holds the *previous* account's records,
+      // so the reset can be attributed to the account this chain starts on rather than the one that was
+      // actually refused. Not restructured, because the rollout does not say which account wrote which
+      // record — and the cost is bounded: it is a real reset time on the wrong slot, and the healthy
+      // timer of the first arrival on that account tears it up (blockRegistry.clear).
       chain.recovery[chain.cycle.currentIndex] = { at: v.at, weekly: v.weekly, since: now }
       chain.textHit = false // spent either way — the next tick must not fire on the same phrase again
       this.onLimit(chain, 'priorBlock')

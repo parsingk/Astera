@@ -1147,18 +1147,20 @@ describe('CodexRollingCoordinator', () => {
   // 실측(2026-08-27): 히스토리에서 대화를 다시 열면 코디네이터는 그 rollout 파일 **끝**에 붙으므로
   // 자기 사용량 스냅숏이 없다. 그런데 rate_limits 는 턴 완료에 실려서만 나오고 한도에 걸린 세션은
   // 턴을 끝낼 수 없다 — 자기 한도를 믿게 해 줄 증거를 영원히 만들 수 없다는 뜻이다. 로그에는 같은
-  // 대화를 세 번 다시 열 때마다 문구가 무시된 기록이 남았다. 그래서 파일이 이미 적고 있는 리셋이
-  // 유일한 증거다(codexSignal 의 priorLimitVerdict).
+  // 대화를 세 번 다시 열 때마다 문구가 무시된 기록이 남았다. 그래서 파일이 이미 적고 있는 것이 유일한
+  // 증거다(codexSignal 의 priorLimitVerdict).
   it('다시 열린 세션이 한도에 걸린 상태였으면 문구 없이도 대기한다 (실측 2026-08-27)', async () => {
     const blocks = new BlockRegistry()
     const logs: string[] = []
     const h = harness({ blocks, log: (m) => logs.push(m) })
     const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
     const resetSec = Math.floor((Date.now() + 3_600_000) / 1000) // 1시간 뒤 — 아직 막혀 있다
-    // 소진된 창과 미래 리셋이 적힌 채로 끝난 대화. 재개 등록이라 tail 은 파일 끝에서 시작한다
+    // 한도에 걸린 채 끝난 대화 = 소진된 창과 미래 리셋에 **구조 신호**까지 남아 있는 파일이다.
+    // 사용률만으로는 "막힌 채 끝났다"를 알 수 없다(priorBlockAt 주석) — 거부된 턴의 기록이 있어야 한다
     const file = await writeRollout({
       accountId: 'c1', uuid: 'cx-prior-1', cwd: single.cwd, primary: 99, primaryReset: resetSec
     })
+    await appendLimitError(file)
     h.coord.register({ ...single, resumeSessionId: 'cx-prior-1' }, file)
     await advance(100) // 파일에 물어본 답이 도착한다 — 도착 전에는 판정을 묻지 않는다
     await advance(15_000) // 첫 틱. 화면 문구는 한 번도 흘리지 않았다
@@ -1173,8 +1175,9 @@ describe('CodexRollingCoordinator', () => {
   })
 
   // `codex resume` 은 지난 대화를 PTY 로 다시 그리므로 옛 한도 에러 줄이 화면에 흐른다. 파일이 적고
-  // 있는 리셋이 이미 지났으면 그 줄은 재생이지 지금의 한도가 아니다 — 믿으면 멀쩡한 세션을 롤한다
-  // (실측: 재개 직후 primary=0% 에서 감지, 60초 뒤 불필요한 제자리 재개).
+  // 있는 리셋이 이미 지났으면 그 줄은 재생이지 지금의 한도가 아니다 — 믿으면 멀쩡한 세션을 롤한다.
+  // (이 규칙이 덮는 것은 첫 스냅숏 이전 구간뿐이다. 사용률이 찍힌 오탐은 state 가 이미 non-null 이라는
+  //  뜻이므로 게이트 없는 기존 문구 경로에서 나온 것이고, 여기서 막히지 않는다.)
   it('다시 열린 세션의 리셋이 이미 지났으면 재생된 문구를 무시한다', async () => {
     const logs: string[] = []
     const h = harness({ log: (m) => logs.push(m) })
@@ -1183,6 +1186,7 @@ describe('CodexRollingCoordinator', () => {
     const file = await writeRollout({
       accountId: 'c1', uuid: 'cx-prior-2', cwd: single.cwd, primary: 99, primaryReset: resetSec
     })
+    await appendLimitError(file) // 그때는 정말 막혔다 — 지금은 풀렸다
     h.coord.register({ ...single, resumeSessionId: 'cx-prior-2' }, file)
     await advance(100)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT }) // 재개가 다시 그린 옛 줄
@@ -1225,10 +1229,11 @@ describe('CodexRollingCoordinator', () => {
     const logs: string[] = []
     const h = harness({ log: (m) => logs.push(m) })
     const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
-    const resetSec = Math.floor((Date.now() + 3_600_000) / 1000) // 파일에는 미래 리셋이 적혀 있다
+    const resetSec = Math.floor((Date.now() + 3_600_000) / 1000) // 파일에는 미래의 차단이 적혀 있다
     const file = await writeRollout({
       accountId: 'c1', uuid: 'cx-prior-4', cwd: single.cwd, primary: 99, primaryReset: resetSec
     })
+    await appendLimitError(file)
     h.coord.register({ ...single, resumeSessionId: 'cx-prior-4' }, file)
     await advance(100)
     await appendTokenCount(file, { primary: 20 }) // 재개된 세션이 턴을 끝냈다 — 한도가 아니다
@@ -1244,13 +1249,59 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
-  // attachRollout 은 세 곳에서 불리고 **리셋을 복구해도 되는 곳은 히스토리 재개 하나뿐**이다.
-  // 아래 두 테스트가 나머지 둘을 각각 못박는다.
+  // **이 판정의 근거는 사용률이 될 수 없다.** worstResetAt 의 게이트는 100 이 아니라 90 이라서,
+  // 마지막 스냅숏이 91% 인 대화 — 막힌 게 아니라 바쁘던 대화 — 도 리셋을 돌려준다. 그것을 믿으면 다시
+  // 여는 순간 문구 한 줄 없이 세션이 세 시간 대기에 처박힌다. 이 파일의 다른 픽스처들이 95% 를
+  // '막히지 않음'으로 다루는 것과 같은 이유다. 게이트를 100 으로 올리는 반대 방향도 틀리다(한도로
+  // 요청이 거부되면 새 token_count 가 안 나와 사용률이 낮은 값에 멈춘다) — 그래서 구조 신호를 쓴다.
+  it('바쁘게 일하다 닫힌 대화(91%)는 다시 열어도 대기하지 않는다 (사용률은 근거가 아니다)', async () => {
+    const h = harness()
+    const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
+    const resetSec = Math.floor((Date.now() + 3 * 3_600_000) / 1000) // 3시간 뒤
+    // 게이트(90)는 넘지만 거부된 턴의 기록은 없다 — 그냥 많이 쓴 대화다
+    const file = await writeRollout({
+      accountId: 'c1', uuid: 'cx-prior-busy', cwd: single.cwd, primary: 91, primaryReset: resetSec
+    })
+    h.coord.register({ ...single, resumeSessionId: 'cx-prior-busy' }, file)
+    await advance(100)
+    await advance(15_000)
+    await advance(15_000)
+    expect(h.sent.filter((s) => s.payload.state === 'waiting')).toEqual([])
+    expect(h.events).toEqual([])
+    h.coord.stop()
+  })
+
+  // attachRollout 은 세 곳에서 불리고 **파일에 물어도 되는 곳은 히스토리 재개 하나뿐**이다.
+  // 아래 세 테스트가 나머지 둘을 못박는다.
   //
-  // 롤의 respawn 은 **복사본**에 붙고 그 복사본은 옛 계정의 한도 기록을 담고 있다 — tail 이 파일
-  // 끝에서 시작하는 이유가 그것이다. 그 자리에서 파일에 리셋을 물어 심으면 방금 계정을 바꾼 세션이
-  // 첫 틱에 그대로 대기로 빠진다.
-  it('롤 직후 붙은 복사본의 옛 리셋을 복구하지 않는다 (대기로 빠지지 않는다)', async () => {
+  // 첫째, 지우는 값이 무엇이어야 하는가. 전환 직후의 세션은 자기 스냅숏이 없고, 그 상태에서 재개
+  // 화면이 옛 한도 줄을 다시 그린다. 복구값을 null("차단 기록 없음")로 지워 두면 그 값 자체가
+  // "문구만으로 충분하다"는 입력이 되어(priorLimitVerdict 의 마지막 갈래), 방금 옮겨 온 멀쩡한 계정에
+  // 15분 대기와 **공유 차단 기록**이 붙는다 — 그 기록은 다른 체인 전부가 존중한다. 그래서 지우는 값은
+  // undefined 여야 한다: 판정 자체를 묻지 않는다.
+  it('전환 직후의 문구 한 줄은 아무것도 바꾸지 않는다 (복구값은 undefined 로 지운다)', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    await writeRollout({ accountId: 'c1', uuid: 'cx-prior-afterroll', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(h.info1) // 두 계정 체인
+    await advance(1_500) // 매핑 폴링
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+    const sentBefore = h.sent.length
+    h.coord.handleData({ sessionId: 's2', data: LIMIT_TEXT }) // 재개 화면이 다시 그린 옛 줄
+    await advance(100)
+    await advance(15_000)
+    expect(h.sent.slice(sentBefore).filter((s) => s.payload.state === 'waiting')).toEqual([])
+    expect(h.events.filter((e) => e.startsWith('spawn:'))).toEqual(['spawn:s2:c2'])
+    expect(blocks.get('c2', Date.now())).toBeNull() // 멀쩡한 새 계정에 차단이 붙지 않았다
+    h.coord.stop()
+  })
+
+  // 둘째, 롤의 respawn 은 **복사본**에 붙고 그 복사본은 옛 계정의 한도 기록을 담고 있다 — tail 이 파일
+  // 끝에서 시작하는 이유가 그것이다. 그 자리에서 파일에 물으면 방금 계정을 바꾼 세션이 첫 틱에 그대로
+  // 대기로 빠진다.
+  it('롤 직후 붙은 복사본의 옛 차단을 복구하지 않는다 (대기로 빠지지 않는다)', async () => {
     const h = harness({
       copy: async (src, dest) => {
         await fs.mkdir(path.dirname(dest), { recursive: true })
@@ -1258,13 +1309,13 @@ describe('CodexRollingCoordinator', () => {
       }
     })
     const resetSec = Math.floor((Date.now() + 3_600_000) / 1000) // 옛 계정은 1시간 뒤에 풀린다
-    await writeRollout({
+    const file = await writeRollout({
       accountId: 'c1', uuid: 'cx-prior-roll', cwd: h.info1.cwd, primary: 99, primaryReset: resetSec
     })
     h.coord.register(h.info1) // 두 계정 체인
     await advance(1_500) // 매핑 폴링
-    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
-    await advance(100)
+    await appendLimitError(file) // 옛 계정이 한도로 턴을 거부당했다 — 복사본이 담고 갈 기록이다
+    await advance(15_000) // 틱 → 구조 에러로 판정 → c2 로 롤
     expect(h.events).toContain('spawn:s2:c2')
     const sentBefore = h.sent.length
     // 새 계정에서의 첫 두 틱 — healthy 타이머(60초)가 기록을 풀기 전이다
@@ -1275,11 +1326,11 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
-  // 제자리 재개의 재부착. 그 대기를 만든 한도 기록이 바로 그 파일에 있으므로, 그 자리에서 파일에
-  // 물으면 방금 리셋을 기다린 세션을 그 즉시 다시 한도로 판정한다 — 대기가 스스로를 재생한다.
-  // 5시간 창의 resets_at 은 시간이 가면 뒤로 밀리므로, 막힌 동안 append 된 스냅숏은 이 대기가 끝난
-  // 뒤에도 미래인 리셋을 담는다.
-  it('제자리 재개의 재부착이 그 파일의 리셋을 복구하지 않는다 (대기 재생 방지)', async () => {
+  // 셋째, 제자리 재개의 재부착. 그 대기를 만든 한도 기록이 바로 그 파일에 있으므로, 그 자리에서 파일에
+  // 물으면 방금 리셋을 기다린 세션을 그 즉시 다시 한도로 판정한다 — 대기가 스스로를 재생한다. 5시간
+  // 창의 resets_at 은 시간이 가면 뒤로 밀리므로, 막힌 동안 append 된 스냅숏은 이 대기가 끝난 뒤에도
+  // 미래인 리셋을 담는다.
+  it('제자리 재개의 재부착이 그 파일의 차단을 복구하지 않는다 (대기 재생 방지)', async () => {
     const h = harness()
     const single: SessionInfo = { ...h.info1, rollAccountIds: ['c1'] }
     const t0 = Date.now()
@@ -1289,13 +1340,13 @@ describe('CodexRollingCoordinator', () => {
     })
     h.coord.register(single)
     await advance(1_500) // 매핑 폴링
-    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
-    await advance(100)
+    await appendLimitError(file)
+    await advance(15_000) // 틱 → 구조 에러로 판정 → 대기(reset+60초)
     const waiting = (): number => h.sent.filter((s) => s.payload.state === 'waiting').length
     expect(waiting()).toBe(1)
     // 막힌 채로 codex 가 스냅숏을 더 적는다 — 창이 밀려 리셋이 더 멀어졌다
     await appendTokenCount(file, { primary: 99, primaryReset: Math.floor((t0 + 7_200_000) / 1000) })
-    await advanceIntoResume(188_400) // 대기 만료(reset+60초) → 제자리 재개
+    await advanceIntoResume(180_000) // 대기 만료 → 제자리 재개
     expect(h.written.length).toBe(2)
     await advance(15_000) // 재개 뒤 첫 틱 — 파일에 다시 물었다면 여기서 두 번째 대기가 게시된다
     expect(waiting()).toBe(1)

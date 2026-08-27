@@ -149,12 +149,48 @@ export function limitStateFromLines(
 
 /** Reads the reset the conversation already knew about, out of the tail of the rollout as it stands.
  *  Used to fill CodexLimitState.priorReset when a tail attaches at the end of an existing file. Only
- *  the reset is taken — see the field's doc comment for why the usage figures are left behind. */
+ *  the reset is taken — see the field's doc comment for why the usage figures are left behind.
+ *
+ *  **This one is deliberately loose and must stay that way.** Its consumer is worstResetAt's fallback,
+ *  which answers "if this session turns out to be blocked, when does the block clear" — a question only
+ *  asked once some other signal has already decided that it *is* blocked. So reporting the reset of any
+ *  window at or above the gate is right here. It is **not** enough to decide the "is it blocked" part;
+ *  priorBlockAt below is the one for that, and the two are kept separate so neither bends to the other. */
 async function readPriorReset(filePath: string): Promise<{ at: number; weekly: boolean } | null> {
   const lines = await tailLines(filePath)
   if (!lines) return null
   const seeded = limitStateFromLines(lines, 0)
   const reset = worstResetAt(seeded)
+  return reset.at === null ? null : { at: reset.at, weekly: reset.weekly }
+}
+
+/** The block a rollout **ended on**, for the verdict a resumed session has to make before it has
+ *  written anything of its own (priorLimitVerdict). null when the tail carries no such block.
+ *
+ *  **Why a usage percentage cannot answer this question, in either direction.** readPriorReset above
+ *  reports the reset of any window at or above GATE_PCT, and that gate is 90, not 100 — so a
+ *  conversation whose last snapshot read 91% (busy, not blocked) hands one back, and reopening it would
+ *  park the session in a wait with no phrase at all. Raising the gate to 100 fails the other way, for
+ *  the reason limitReached's comment already records: when the limit refuses a request no new
+ *  token_count comes out, so a genuinely blocked account's last snapshot sits wherever the last
+ *  *completed* turn left it, which can be well under 100. A percentage is a fact about consumption;
+ *  "the turn was refused" is an event, and only the event answers "did this conversation end blocked".
+ *
+ *  So the tail has to carry one of the two structured signals — the `usage_limit_exceeded` error codex
+ *  actually emits (limitErrorOf) or the never-observed-but-handled reachedType — and the reset is then
+ *  taken from that same parse, i.e. from the windows that error was recorded alongside.
+ *
+ *  A block whose reset cannot be read answers null, exactly as no block does: with no reset instant
+ *  there is nothing to wait for and no way to tell a live block from a redraw, so the verdict falls
+ *  back to needing a confirmed phrase, and planRetry's blind interval covers the wait. */
+export async function priorBlockAt(
+  filePath: string
+): Promise<{ at: number; weekly: boolean } | null> {
+  const lines = await tailLines(filePath)
+  if (!lines) return null
+  const ended = limitStateFromLines(lines, 0)
+  if (!ended || (ended.error === null && ended.reachedType === null)) return null
+  const reset = worstResetAt(ended)
   return reset.at === null ? null : { at: reset.at, weekly: reset.weekly }
 }
 
@@ -184,9 +220,11 @@ export class CodexRolloutTail {
     if (opts.startAtEnd) this.seed = readPriorReset(filePath)
   }
 
-  /** The reset recovered from the file at attach time, or null when this file records no block.
-   *  Awaits the seed the constructor started, so the first caller may wait on one file read.
-   *  The coordinator asks this while its own state is still null — see priorLimitVerdict. */
+  /** The reset recovered from the file at attach time, or null when no window at or above the gate
+   *  carries one. Awaits the seed the constructor started, so the first caller may wait on one file
+   *  read. This is the loose reading (readPriorReset): it answers "when would a block clear", never
+   *  "is there a block" — for that the coordinator calls priorBlockAt instead. read() consumes the
+   *  same seed to fill CodexLimitState.priorReset, which is what worstResetAt falls back to. */
   async priorResetAt(): Promise<{ at: number; weekly: boolean } | null> {
     if (this.seed) {
       this.priorReset = await this.seed
@@ -384,16 +422,23 @@ export function worstResetAt(
  *  its own limit be believed: rolling dies for exactly the sessions that need it (measured 2026-08-27,
  *  three resumes of one conversation, every one logging that the phrase was ignored).
  *
- *  **Why the recovered reset is the right evidence.** readPriorReset takes it through worstResetAt,
- *  which only reads the reset of a window at or above the gate. A session that was working never
- *  contributes one. So the value's presence already means "this conversation ended blocked, and it
- *  clears at T" — no timer guess is needed to tell that from a redraw.
+ *  **Why the recovered block is the right evidence — and what it must be read from.** `prior` has to
+ *  come from priorBlockAt, which reports a reset only when the tail carries a structured limit signal.
+ *  A usage percentage cannot stand in for that: the gate readPriorReset uses is 90, so a conversation
+ *  that was merely busy at 91% would hand back a reset and park the reopened session in a wait with no
+ *  phrase at all. With the structured signal required, the value's presence means "this conversation
+ *  ended on a refused turn, and the window it was refused in clears at T" — no timer guess is needed to
+ *  tell that from a redraw.
  *
  *  **Why a past reset makes a phrase a replay.** `codex resume` redraws the previous conversation
  *  through the PTY, old limit error line included. If the reset we recovered has passed, the block is
- *  over and the phrase on screen is that old line — believing it rolls a session that is fine (measured:
- *  a detection at primary=0% right after a resume, then an unneeded in-place resume 60s later). This is
+ *  over and the phrase on screen is that old line — believing it rolls a session that is fine. This is
  *  what claude's inReplayGrace does with a timer; here the file answers it.
+ *
+ *  **The reach of this rule is narrow, deliberately.** It covers only the window before the resumed
+ *  session's first snapshot of its own. A false positive that logs a usage figure (`primary=0%`) is by
+ *  definition past that window — a figure only prints when the state is non-null — so it came through
+ *  the ordinary phrase path, which has no usage gate and is not touched here.
  *
  *  Once the session writes its own record the coordinator stops asking this — the normal verdicts take
  *  over, unchanged. */

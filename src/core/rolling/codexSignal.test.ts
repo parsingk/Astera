@@ -9,6 +9,7 @@ import {
   findKeepModelChoice,
   limitReached,
   maxedOut,
+  priorBlockAt,
   priorLimitVerdict,
   rolloutSize,
   worstResetAt,
@@ -432,6 +433,50 @@ describe('worstResetAt', () => {
   it('해당 창이 없으면 at=null', () => {
     expect(worstResetAt(state({}))).toEqual({ at: null, weekly: false })
     expect(worstResetAt(null)).toEqual({ at: null, weekly: false })
+  })
+})
+
+// worstResetAt 의 게이트는 90 이므로 "리셋이 회수된다"와 "막힌 채 끝났다"는 다른 질문이다. 91% 는
+// 바쁘던 대화지 막힌 대화가 아닌데 리셋을 돌려준다 — 그것을 재개 판정의 근거로 쓰면 문구 한 줄 없이
+// 멀쩡한 세션이 대기에 처박힌다. 그래서 이쪽은 거부된 턴의 구조 기록을 요구한다.
+describe('priorBlockAt', () => {
+  it('구조 에러가 있으면 같은 파싱의 리셋을 돌려준다', async () => {
+    const p = await write('pb-hit.jsonl', [
+      tokenCount({ primary: 99, primaryReset: 1787739458 }),
+      taskComplete()
+    ])
+    expect(await priorBlockAt(p)).toEqual({ at: 1787739458_000, weekly: false })
+  })
+
+  // 같은 파일을 느슨한 쪽으로 읽으면 리셋이 회수된다 — 위 'startAtEnd로 붙어도 이전 턴의 리셋
+  // 시각은 회수한다' 가 그 성질을 지킨다. 두 질문이 갈리는 지점이 바로 이 픽스처다.
+  it('사용률이 게이트를 넘어도 구조 기록이 없으면 null (바쁘던 대화)', async () => {
+    const p = await write('pb-busy.jsonl', [tokenCount({ primary: 91, primaryReset: 1787739458 })])
+    expect(await priorBlockAt(p)).toBeNull()
+  })
+
+  it('reachedType 만 있어도 인정한다 (실측된 적 없지만 다루는 신호)', async () => {
+    const p = await write('pb-reached.jsonl', [
+      tokenCount({ primary: 99, primaryReset: 1787739458, reached: 'primary' })
+    ])
+    expect(await priorBlockAt(p)).toEqual({ at: 1787739458_000, weekly: false })
+  })
+
+  it('막힌 채 끝났어도 리셋을 못 읽으면 null (없는 시각을 지어내지 않는다)', async () => {
+    const p = await write('pb-noreset.jsonl', [tokenCount({ primary: 40 }), taskComplete()])
+    expect(await priorBlockAt(p)).toBeNull()
+  })
+
+  it('한도 기록이 아닌 종료(error: null)는 차단이 아니다', async () => {
+    const p = await write('pb-clean.jsonl', [
+      tokenCount({ primary: 99, primaryReset: 1787739458 }),
+      taskComplete({ info: null })
+    ])
+    expect(await priorBlockAt(p)).toBeNull()
+  })
+
+  it('파일이 없으면 null', async () => {
+    expect(await priorBlockAt(path.join(dir, 'nope.jsonl'))).toBeNull()
   })
 })
 
