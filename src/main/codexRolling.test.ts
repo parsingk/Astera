@@ -701,9 +701,12 @@ describe('CodexRollingCoordinator', () => {
     const spawnedBeforeLast = h.spawned.length
     h.coord.handleData({ sessionId: 's30', data: LIMIT_TEXT })
     await advance(100)
-    // 개수까지 본다 — 마지막 항목만 보면 이전 체인이 남긴 spawn 으로 헛도는 단언이 된다
+    // 개수까지 본다 — 마지막 항목만 보면 이전 체인이 남긴 spawn 으로 헛도는 단언이 된다.
+    // cwd 까지 보는 이유: 개수는 "누가" 띄웠는지를 말해 주지 않는다. 지금 그 귀속이 맞는 것은 다른
+    // 체인들의 재시도가 이 창 밖에 있기 때문일 뿐이라, 픽스처를 손대면 조용히 풀린다.
     expect(h.spawned.length).toBe(spawnedBeforeLast + 1)
     expect(h.spawned.at(-1)?.info.accountId).toBe('c1')
+    expect(h.spawned.at(-1)?.info.cwd).toBe(cwd4) // 체인 4 가 띄운 것이다
     h.coord.stop()
   })
 
@@ -748,9 +751,12 @@ describe('CodexRollingCoordinator', () => {
     h.coord.handleData({ sessionId: 's30', data: LIMIT_TEXT })
     await advance(100)
     // **개수가 핵심이다.** 이 하네스의 마지막 spawn 은 체인 1 이 c1 으로 롤한 그것이므로,
-    // 마지막 항목의 계정만 보면 체인 4 가 아무 도 모 안 가고 대기해도 그대로 통지난다.
+    // 마지막 항목의 계정만 보면 체인 4 가 아무 데도 가지 않고 대기해도 그대로 통과한다.
+    // 그래도 개수는 "누가" 띄웠는지를 말해 주지 않는다 — 지금 그 귀속이 맞는 것은 다른 체인들의
+    // 재시도가 이 창 밖에 있기 때문일 뿐이라, cwd 까지 못박는다.
     expect(h.spawned.length).toBe(spawnedBeforeLast + 1)
     expect(h.spawned.at(-1)?.info.accountId).toBe('c1')
+    expect(h.spawned.at(-1)?.info.cwd).toBe(cwd4) // 체인 4 가 띄운 것이다
     h.coord.stop()
   })
 

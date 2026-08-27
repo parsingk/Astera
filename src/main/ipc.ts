@@ -394,11 +394,18 @@ export function registerIpc(
     const account = core.accounts.get(opts.accountId)
     // Resolves and passes the provider of every account in the roll chain — the manager rejects a mix.
     // The rollAccountIds combination the modal settled on is checked here as well.
+    //
+    // What is checked is only the provider mix. An id that no longer resolves keeps its place in the
+    // chain — neither coordinator's register() filters unknown ids out — and where that surfaces is the
+    // roll: pickAvailable sees ids only, so a chain whose only usable index is a removed account reaches
+    // roll(), which aborts with a 'none' state push and schedules nothing, leaving the worker idle until a
+    // human notices. Adding that filter is a behaviour change and its own follow-up, not a thing this line
+    // does.
     const rollProviders = opts.rollAccountIds?.map((rid: string) => {
       try {
         return providerOf(core.accounts.get(rid))
       } catch {
-        return providerOf(account) // an account id that is gone — treated as the primary's and filtered out at the rolling registration step
+        return providerOf(account) // an account id that is gone — counted as the primary's so a stale id alone does not read as a mix
       }
     })
     // Resuming under a different account: copy the session file into the target account's folder, then

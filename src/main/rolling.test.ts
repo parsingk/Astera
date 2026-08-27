@@ -834,6 +834,38 @@ describe('RollingCoordinator 차단 계정 회피', () => {
     expect(h.spawned.at(-1)?.accountId).toBe('a1')
   })
 
+  // 합쳐진 기록은 pickAvailable 만 먹이는 것이 아니다. planRetry 는 currentIndex 까지 포함해 전부
+  // 훑으므로, 남이 적은 기록이 **이 체인이 지금 앉아 있는 계정**의 재시도 시각과 scope 라벨까지
+  // 바꾼다. 기록이 맞을 때는 그것이 맞는 동작이고(주간 소진 계정은 5시간 창이 뭐라 하든 못 쓴다),
+  // 틀릴 때는 여기가 대가가 가장 큰 자리다 — 대기하는 체인은 그 계정에 도착하지 않으니 healthy
+  // 타이머 밸브가 걸리지 않는다.
+  //
+  // **순서가 핵심이다.** 위 두 테스트는 남의 기록을 자기 판정 **뒤에** 적으므로 이 자리를 지나가지
+  // 않는다. 여기서는 먼저 적는다.
+  it('다른 체인이 먼저 적은 더 긴 기록이 자기 계정의 대기까지 늘리고 라벨도 바꾼다', async () => {
+    const h = harness()
+    const t0 = Date.now()
+    // 체인 2: 같은 a1 에서 주간 소진 — 60분짜리 기록을 공유 기록에 먼저 올린다
+    h.payloads.set('s10', payloadEx({
+      sid: 'claude-sess-2', five: 20, weekly: 100, weeklyReset: new Date(t0 + 60 * MIN).toISOString()
+    }))
+    h.coord.register({ ...h.info1, id: 's10', cwd: 'D:\\work\\q', rollAccountIds: ['a1', 'a2'] })
+    // 체인 1: 단일 계정 a1. 자기 증거는 "5시간 창이 2분 뒤 풀린다" 뿐이다
+    h.payloads.set('s1', payloadEx({ five: 100, weekly: 20, fiveReset: new Date(t0 + 2 * MIN).toISOString() }))
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    h.coord.handleData({ sessionId: 's10', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned.at(-1)?.accountId).toBe('a2') // 판정이 인정됐다 = a1 이 공유 기록에 올라갔다
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    const w = lastWaiting(h.sent)
+    expect(w?.sessionId).toBe('s1') // 체인 1 의 대기다 — 체인 2 는 롤했으므로 대기를 게시하지 않는다
+    // 공유가 없으면 자기 증거만 보고 t0+3분(2분 + 여유 1분)·session 이다. 합쳐지면 더 긴 쪽이
+    // 이겨 t0+61분·weekly 로 바뀐다 — 시각뿐 아니라 라벨도 남의 기록을 따른다.
+    expect(w?.nextRetryAt).toBe(new Date(t0 + 61 * MIN).toISOString())
+    expect(w?.scope).toBe('weekly')
+  })
+
   it('respawn 후 재부착 switching 이벤트에는 reattach 표시가 붙는다 (Slack 중복 방지)', async () => {
     const h = harness()
     h.payloads.set('s1', payload(97))
@@ -2043,8 +2075,8 @@ describe('같은 계정 재개는 kill 하지 않는다', () => {
     expect(h.spawned.length).toBe(spawnedBefore) // a1 으로 옮기지 않았다
     // 체인 1 의 대기 만료 → 제자리 재개 → 그 뒤 60초 무사 → 공유 기록이 지워진다
     await vi.advanceTimersByTimeAsync(3 * MIN + 70_000)
-    // resumeCount 는 모든 체인의 문장을 셀다(롤의 자동 프롬팜토도 같은 문장이다) — 체인 1 은
-    // kill 되지 않으니 여전히 s1 이다. 그 섬생에 들어간 문장만 세서 제자리 재개를 확인한다.
+    // resumeCount 는 모든 체인의 문장을 센다(롤의 자동 프롬프트도 같은 문장이다) — 체인 1 은
+    // kill 되지 않으니 여전히 s1 이다. 그 세션에 들어간 문장만 세서 제자리 재개를 확인한다.
     expect(h.written.filter((w) => w.id === 's1' && w.data === RESUME_PROMPT)).toHaveLength(1)
     // 체인 4: a1 이 다시 후보다. 기록이 남아 있었다면 갈 곳이 없어 대기한다
     h.payloads.set('s30', payloadEx({ sid: 'claude-sess-4', five: 95, weekly: 20 }))

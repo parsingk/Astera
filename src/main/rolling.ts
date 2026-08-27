@@ -214,7 +214,18 @@ interface Chain {
  *  The recovery array is the chain's own record **merged with what other chains found** — a block on
  *  an account is a fact about the account, so a chain that has not hit it yet should still skip it
  *  (SPEC §11.2/6). laterBlock keeps whichever side justifies the longer block. `chain.recovery` is left
- *  untouched: it still answers the per-chain question limitEvidence asks. */
+ *  untouched: it still answers the per-chain question limitEvidence asks.
+ *
+ *  **This feeds planRetry as well as pickAvailable, and that is the expensive half.** planRetry walks
+ *  every index including currentIndex, so a record another chain wrote about the account this chain is
+ *  sitting on does not only steer this chain away from an account — it can extend and relabel this
+ *  chain's own wait on the account it currently holds. Measured on a single-account chain whose own
+ *  evidence said "session window resets in 2 minutes": t0+3min/session on its own, t0+61min/weekly
+ *  once another chain had recorded that same account weekly-exhausted first (a real weekly reset is
+ *  days). That is correct when the record is right — a weekly-exhausted account is unusable whatever
+ *  its session window says — and it is where a wrong record costs the most: the chain is now waiting
+ *  rather than arriving, and only an arrival arms the healthy timer that would tear the record up
+ *  (blockRegistry.clear). */
 const retryState = (chain: Chain, blocks: BlockRegistry, now: number): RetryState => ({
   accountIds: chain.accountIds,
   currentIndex: chain.cycle.currentIndex,
@@ -837,8 +848,11 @@ export class RollingCoordinator {
       chain.healthyTimer = null
       chain.cycle.onHealthy()
       chain.recovery[chain.cycle.currentIndex] = null
-      // The account demonstrably works, so the shared record must go too — otherwise one bad reading
-      // keeps every other chain off it until its recorded reset time passes (blockRegistry.clear).
+      // What this timer observed is 60 seconds in which **no limit was detected** — not evidence that a
+      // turn actually ran (only codex's settleInPlace has that). The shared record goes with it because a
+      // false one keeps every other chain off the account until its recorded reset time passes; the price
+      // is that a *true* record another chain wrote inside this window is erased by a session that has not
+      // produced any work of its own yet (blockRegistry.clear).
       this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
     }, HEALTHY_MS)
   }
@@ -962,10 +976,13 @@ export class RollingCoordinator {
       chain.healthyTimer = setTimeout(() => {
         chain.healthyTimer = null
         chain.cycle.onHealthy()
-        // The only account confirmed to be working is the current one — the block records of other accounts (a weekly exhaustion, say) are kept
+        // The only account this timer says anything about is the current one — the block records of other accounts (a weekly exhaustion, say) are kept
         chain.recovery[chain.cycle.currentIndex] = null
-        // The account demonstrably works, so the shared record must go too — otherwise one bad reading
-        // keeps every other chain off it until its recorded reset time passes (blockRegistry.clear).
+        // And what it says is that 60 seconds passed with **no limit detected** — not that a turn actually
+        // ran (only codex's settleInPlace has that evidence). The shared record goes with it because a false
+        // one keeps every other chain off the account until its recorded reset time passes; the price is that
+        // a *true* record another chain wrote inside this window is erased by a session that has not
+        // produced any work of its own yet (blockRegistry.clear).
         this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
       }, HEALTHY_MS)
     }

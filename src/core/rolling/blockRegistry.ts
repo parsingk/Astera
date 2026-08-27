@@ -47,6 +47,11 @@ export class BlockRegistry {
    *  ~60-second window right after arriving on that account. That is the window in which a replayed or
    *  misread limit phrase actually fires, which is why the valve is placed there.
    *
+   *  **What "observed working" is worth at each caller.** Only codex's settleInPlace checks evidence of
+   *  work (the rollout grew, so a turn ran). The other three fire after 60 seconds in which no limit was
+   *  detected, which is the weaker claim — so a *true* record can be erased by a chain that arrived on the
+   *  account and has not done anything on it yet, and the chains behind it each pay a respawn there.
+   *
    *  **What it does not reach:** a chain that has been working on the account for an hour. Its healthy
    *  timer fired long ago, and once a false record stands, pickAvailable steers every chain away from the
    *  account — so nobody arrives on it, nobody's healthy timer covers it, and the record survives to its
