@@ -533,7 +533,7 @@ export class SlackNotifier {
     if (record.pendingTool?.id === toolUseId) record.pendingTool = null
   }
 
-  /** codex turn completion. CodexTurnWatcher detects task_complete in the rollout and calls this.
+  /** codex turn completion. CodexRolloutWatcher detects task_complete in the rollout and calls this.
    *  It is the counterpart to claude's Stop hook — the signal sources of the two providers (a hook payload
    *  versus a rollout line) are fundamentally different, so the entry points are separate rather than
    *  normalised into a common shape.

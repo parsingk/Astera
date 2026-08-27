@@ -131,7 +131,7 @@ export function parseClaudeLimitLine(raw: string): ClaudeLimitHit | null {
  *  37MB (the largest transcript measured) in one go and stringify, split and JSON.parse all of it — on the
  *  Electron main thread, every time a tail is created, and again on every roll. Skipping that read with
  *  `startAtEnd` is a pure optimisation that does not change the result (no pre-existing entry could pass
- *  since). The default (false) is left alone — CodexRolloutTail and CodexTurnWatcher do not use this
+ *  since). The default (false) is left alone — CodexRolloutTail and CodexRolloutWatcher do not use this
  *  option, so they are unaffected, and the `restarted` path is already made safe by the since filter and
  *  needs no changes. */
 export class ClaudeTranscriptTail {

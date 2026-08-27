@@ -533,7 +533,7 @@ export interface CoreApi {
     setRoot(root: string | null): Promise<void>
   }
   usage: {
-    session(sessionId: string): Promise<SessionUsage | null> // context, 5-hour, and weekly % for an active session (from statusLine)
+    session(sessionId: string): Promise<SessionUsage | null> // context, 5-hour, and weekly % for an active session (claude: statusLine capture, codex: rollout tail)
   }
   localHistory: {
     // Browsing and restoring the snapshot taken just before a deletion. projectPath uses the same

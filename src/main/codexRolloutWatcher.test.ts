@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm, mkdir, writeFile, appendFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { CodexTurnWatcher } from './codexTurnWatcher'
+import { CodexRolloutWatcher } from './codexRolloutWatcher'
 import type { Account, SessionInfo } from '../core/types'
 
 const TICK = 1_000
@@ -19,8 +19,31 @@ const account = (configDir: string): Account => ({
   provider: 'codex'
 })
 
-const session = (id: string, cwd: string): SessionInfo =>
-  ({ id, accountId: 'acc1', cwd, title: 't', status: 'running', slackNotify: true }) as SessionInfo
+const session = (id: string, cwd: string, slackNotify = true): SessionInfo =>
+  ({ id, accountId: 'acc1', cwd, title: 't', status: 'running', slackNotify }) as SessionInfo
+
+/** 실측한 token_count 레코드 (codex 0.149.1). info(토큰)와 rate_limits(한도)가 payload 의 서로 다른
+ *  레벨에 있으므로 둘 다 실제 모양대로 담는다. */
+const tokenCountLine = (opts: { last: number; window: number; primaryPct: number }): string =>
+  JSON.stringify({
+    timestamp: '2026-08-27T01:40:32.182Z',
+    type: 'event_msg',
+    payload: {
+      type: 'token_count',
+      info: {
+        total_token_usage: { total_tokens: opts.last },
+        last_token_usage: { total_tokens: opts.last },
+        model_context_window: opts.window
+      },
+      rate_limits: {
+        limit_id: 'codex',
+        primary: { used_percent: opts.primaryPct, window_minutes: 300, resets_at: 1_787_808_468 },
+        secondary: { used_percent: 31, window_minutes: 10_080, resets_at: 1_788_326_258 },
+        credits: { has_credits: false, unlimited: false, balance: '0' },
+        rate_limit_reached_type: null
+      }
+    }
+  }) + '\n'
 
 /** <configDir>/sessions/<y>/<m>/<d>/rollout-<ts>-<uuid>.jsonl 하나를 만든다 */
 async function makeRollout(configDir: string, uuid: string, sessionId: string, cwd: string): Promise<string> {
@@ -63,12 +86,12 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
-describe('CodexTurnWatcher', () => {
+describe('CodexRolloutWatcher', () => {
   it('task_complete를 만나면 콜백한다', async () => {
     const cwd = path.join(dir, 'proj')
     const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
     const onTurnComplete = vi.fn()
-    const w = new CodexTurnWatcher({
+    const w = new CodexRolloutWatcher({
       getAccount: () => account(dir),
       onTurnComplete,
       log: () => {},
@@ -88,7 +111,7 @@ describe('CodexTurnWatcher', () => {
     const cwd = path.join(dir, 'proj')
     const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
     const onTurnComplete = vi.fn()
-    const w = new CodexTurnWatcher({ getAccount: () => account(dir), onTurnComplete, log: () => {}, now: () => now })
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete, log: () => {}, now: () => now })
     w.register(session('live-1', cwd))
     await advance(TICK)
     await appendFile(p, JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } }) + '\n')
@@ -109,7 +132,7 @@ describe('CodexTurnWatcher', () => {
     const turn = JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } })
     await appendFile(p, turn + '\n') // 재개 전에 이미 끝나 있던 턴
     const onTurnComplete = vi.fn()
-    const w = new CodexTurnWatcher({
+    const w = new CodexRolloutWatcher({
       getAccount: () => account(dir),
       onTurnComplete,
       log: () => {},
@@ -135,7 +158,7 @@ describe('CodexTurnWatcher', () => {
     await mkdir(path.dirname(outside), { recursive: true })
     await writeFile(outside, '')
     const onTurnComplete = vi.fn()
-    const w = new CodexTurnWatcher({
+    const w = new CodexRolloutWatcher({
       getAccount: () => account(dir),
       onTurnComplete,
       log: () => {},
@@ -154,7 +177,7 @@ describe('CodexTurnWatcher', () => {
     const a = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
     const b = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd3', 'sess-b', cwd)
     const seen: string[] = []
-    const w = new CodexTurnWatcher({
+    const w = new CodexRolloutWatcher({
       getAccount: () => account(dir),
       onTurnComplete: (_id, p) => seen.push(p),
       log: () => {},
@@ -174,7 +197,7 @@ describe('CodexTurnWatcher', () => {
     const cwd = path.join(dir, 'proj')
     const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
     const onTurnComplete = vi.fn()
-    const w = new CodexTurnWatcher({ getAccount: () => account(dir), onTurnComplete, log: () => {}, now: () => now })
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete, log: () => {}, now: () => now })
     w.register(session('live-1', cwd))
     await advance(TICK)
     w.unregister('live-1')
@@ -186,7 +209,7 @@ describe('CodexTurnWatcher', () => {
 
   it('계정이 없으면 등록하지 않는다 (크래시 금지)', async () => {
     const onTurnComplete = vi.fn()
-    const w = new CodexTurnWatcher({ getAccount: () => null, onTurnComplete, log: () => {}, now: () => now })
+    const w = new CodexRolloutWatcher({ getAccount: () => null, onTurnComplete, log: () => {}, now: () => now })
     w.register(session('live-1', path.join(dir, 'proj')))
     await advance(TICK * 3)
     expect(onTurnComplete).not.toHaveBeenCalled()
@@ -197,12 +220,147 @@ describe('CodexTurnWatcher', () => {
     const cwd = path.join(dir, 'proj')
     const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
     const onTurnComplete = vi.fn()
-    const w = new CodexTurnWatcher({ getAccount: () => account(dir), onTurnComplete, log: () => {}, now: () => now })
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete, log: () => {}, now: () => now })
     w.register(session('live-1', cwd))
     await advance(TICK)
     w.stop()
     await appendFile(p, JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } }) + '\n')
     await advance(TICK * 3)
     expect(onTurnComplete).not.toHaveBeenCalled()
+  })
+
+  // ── 사용량 (하단 바의 Context·5시간·주간) ──────────────────────────────────────
+  // 알림이 아니라 화면을 먹이는 쪽이므로, Slack 여부와 무관하게 모든 codex 세션이 대상이다.
+  it('Slack 을 끈 세션도 사용량을 낸다', async () => {
+    const cwd = path.join(dir, 'proj')
+    const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    await appendFile(p, tokenCountLine({ last: 20_924, window: 258_400, primaryPct: 12 }))
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: () => {},
+      log: () => {},
+      now: () => now
+    })
+    w.register(session('live-1', cwd, false))
+    await advance(TICK) // 매핑
+    await advance(TICK) // 읽기
+    expect(w.usage('live-1')).toEqual({
+      context: { usedPercent: 4, usedTokens: 20_924, windowSize: 258_400 },
+      session: { usedPercent: 12, resetsAt: '2026-08-27T05:27:48.000Z' },
+      weekly: { usedPercent: 31, resetsAt: '2026-09-02T05:17:38.000Z' }
+    })
+    w.stop()
+  })
+
+  // 등록 조건을 넓힌 대가로, 알림 쪽 게이트는 반드시 남아 있어야 한다
+  it('Slack 을 끈 세션의 턴 완료는 알리지 않는다', async () => {
+    const cwd = path.join(dir, 'proj')
+    const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    const onTurnComplete = vi.fn()
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete,
+      log: () => {},
+      now: () => now
+    })
+    w.register(session('live-1', cwd, false))
+    await advance(TICK)
+    await appendFile(p, JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } }) + '\n')
+    await advance(TICK)
+    expect(onTurnComplete).not.toHaveBeenCalled()
+    w.stop()
+  })
+
+  // 계정 롤링 후에는 이전 계정이 쓴 한도 스냅샷이 그 파일에 남아 있다. 그것을 그리면 새 계정의
+  // 사용량을 거짓으로 표시한다 — 새 token_count 가 올 때까지 비어 있어야 한다.
+  it('넘겨받은 rollout 의 이전 계정 한도는 표시하지 않는다', async () => {
+    const cwd = path.join(dir, 'proj')
+    const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    await appendFile(p, tokenCountLine({ last: 50_000, window: 258_400, primaryPct: 98 }))
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: () => {},
+      log: () => {},
+      now: () => now
+    })
+    w.register(session('live-1', cwd), p)
+    await advance(TICK)
+    await advance(TICK)
+    expect(w.usage('live-1')?.session).toBeNull()
+    expect(w.usage('live-1')?.weekly).toBeNull()
+    w.stop()
+  })
+
+  // 한도와 달리 컨텍스트는 재개·롤 뒤에도 여전히 참이다 — 대화 내용이 그대로이기 때문이다.
+  // 첫 턴이 끝날 때까지 Context 칩을 비워두지 않으려면 기존 기록에서 시드해야 한다.
+  it('넘겨받은 rollout 에서 컨텍스트는 시드한다', async () => {
+    const cwd = path.join(dir, 'proj')
+    const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    await appendFile(p, tokenCountLine({ last: 50_000, window: 258_400, primaryPct: 98 }))
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: () => {},
+      log: () => {},
+      now: () => now
+    })
+    w.register(session('live-1', cwd), p)
+    await advance(TICK)
+    await advance(TICK)
+    expect(w.usage('live-1')?.context).toEqual({
+      usedPercent: 15,
+      usedTokens: 50_000,
+      windowSize: 258_400
+    })
+    w.stop()
+  })
+
+  it('붙은 뒤 새 token_count 가 오면 한도가 채워진다', async () => {
+    const cwd = path.join(dir, 'proj')
+    const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    await appendFile(p, tokenCountLine({ last: 50_000, window: 258_400, primaryPct: 98 }))
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: () => {},
+      log: () => {},
+      now: () => now
+    })
+    w.register(session('live-1', cwd), p)
+    await advance(TICK)
+    await advance(TICK)
+    await appendFile(p, tokenCountLine({ last: 20_924, window: 258_400, primaryPct: 7 }))
+    await advance(TICK)
+    expect(w.usage('live-1')?.session?.usedPercent).toBe(7)
+    expect(w.usage('live-1')?.context?.usedPercent).toBe(4)
+    w.stop()
+  })
+
+  it('등록되지 않은 세션의 사용량은 null', () => {
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: () => {},
+      log: () => {},
+      now: () => now
+    })
+    expect(w.usage('nope')).toBeNull()
+    w.stop()
+  })
+
+  it('unregister 후 사용량은 null', async () => {
+    const cwd = path.join(dir, 'proj')
+    const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    await appendFile(p, tokenCountLine({ last: 20_924, window: 258_400, primaryPct: 12 }))
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: () => {},
+      log: () => {},
+      now: () => now
+    })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    await advance(TICK)
+    expect(w.usage('live-1')).not.toBeNull()
+    w.unregister('live-1')
+    expect(w.usage('live-1')).toBeNull()
+    w.stop()
   })
 })

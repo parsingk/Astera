@@ -1,6 +1,6 @@
 // Primitive module that reads a jsonl file incrementally by byte offset.
 // For append-only files that accumulate over a whole session, like a codex rollout — it does not read
-// the entire file every time. Shared by CodexRolloutTail (limits) and CodexTurnWatcher (turn
+// the entire file every time. Shared by CodexRolloutTail (limits) and CodexRolloutWatcher (turn
 // completion). The carry logic that hands a line cut at a chunk boundary over to the next read is this
 // module's reason to exist — duplicating it means missing events that straddle a boundary.
 import { open, stat } from 'node:fs/promises'
@@ -8,7 +8,7 @@ import { open, stat } from 'node:fs/promises'
 export interface JsonlTailOptions {
   /** When true, start from the end of the file **as of construction time** — content that was there
    *  before is never read. The default is false (offset 0, read everything) — CodexRolloutTail and
-   *  CodexTurnWatcher do not use this option, so their existing behaviour is unchanged. If the file
+   *  CodexRolloutWatcher do not use this option, so their existing behaviour is unchanged. If the file
    *  does not exist yet, start at 0 (there is no "existing content" to skip).
    *  It does not interact with restarted handling: this option only changes the "initial value" of the
    *  start offset, and after that the ordinary offset increment and recreation detection behave as
