@@ -863,6 +863,11 @@ export const ja: Catalog = {
   'jobs.task.review': '別のエージェントが確認',
   'jobs.task.create': '追加',
   'jobs.task.failed': 'Task を作れませんでした',
+  // JobsView.tsx — 動いている行の provider の後ろ。待機中は経過時間の代わりにこれを書き、
+  // 再開歴があれば後ろに続ける（{left}・{n} は core/i18n/index.ts の {name} 置換）。
+  'jobs.task.waitingReset': 'リセット待ち · {left}',
+  'jobs.task.waitingNoTime': 'リセット待ち',
+  'jobs.task.resumedCount': '{n} 回再開',
   'jobs.node.start': '起動',
   'jobs.node.stop': '停止',
   'jobs.node.restart': 'もう一度起動',

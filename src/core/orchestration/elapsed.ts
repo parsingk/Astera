@@ -14,3 +14,20 @@ export function formatElapsed(fromIso: string, nowMs: number): string {
   const h = Math.floor(total / 3600)
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`
 }
+
+/** 남은 시간의 표시 형태. formatElapsed 의 짝이다 — 자리(h:mm:ss / m:ss)는 같고, 방향만 미래를
+ *  향한다. **이미 지난 시각은 undefined 로 돌려준다** — 지난 시각을 "앞으로 남았다"로 보여 주는
+ *  것이 시간을 안 보여 주는 것보다 나쁘다(재개 브리핑에서 같은 판단을 내렸다). 호출부는 undefined 를
+ *  시각 없는 문구로 받는다. */
+export function formatRemaining(toIso: string, nowMs: number): string | undefined {
+  const target = Date.parse(toIso)
+  if (Number.isNaN(target)) return undefined
+  const ms = target - nowMs
+  if (ms <= 0) return undefined
+  const total = Math.floor(ms / 1000)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  const s = total % 60
+  const m = Math.floor(total / 60) % 60
+  const h = Math.floor(total / 3600)
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`
+}
