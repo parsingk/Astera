@@ -408,3 +408,72 @@ describe('OrchRollTap 정지 스냅샷', () => {
     expect(c?.worktreeMoved).toBe(true)
   })
 })
+
+// task 2 — 재개의 두 경로: 계정을 유지하는 'nudged' 와 계정이 바뀌는 rekey. 둘 다 정지가 기록돼
+// 있을 때만 이력의 마지막 항목을 닫는다(recordResume 자신의 no-op 규칙). 'nudged' 쪽은 추가로
+// `stopped` 판별자가 필요하다 — 그 이벤트는 idle stall nudge·reset anchor 에서도 오는데, 그 둘은
+// 이 세션에 정지를 남기지 않았기 때문이다.
+
+const resumesOf = (deps: { state: () => OrchState }, dispatchId: string) =>
+  deps.state().dispatches.find((d) => d.id === dispatchId)?.resumes
+
+describe('OrchRollTap 재개 기록', () => {
+  it("'nudged' 는 제자리 재개다 — 이력의 마지막 항목이 같은 계정으로 닫힌다", async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    const g = fakeGit(['head-at-limit'])
+    const tap = new OrchRollTap(deps, { git: g.git })
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'waiting' }))
+    await vi.advanceTimersByTimeAsync(0)
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'nudged' }))
+    await vi.advanceTimersByTimeAsync(0)
+    const resumes = resumesOf(deps, dispatchId)
+    expect(resumes).toHaveLength(1)
+    expect(resumes?.[0].resumedAt).toBe(NOW)
+    expect(resumes?.[0].toAccountId).toBe('acc1')
+  })
+
+  it('rekey 성공 뒤 새 계정으로 재개가 기록된다', async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    const g = fakeGit(['head-at-limit'])
+    const tap = new OrchRollTap(deps, { git: g.git })
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'waiting' }))
+    await vi.advanceTimersByTimeAsync(0)
+    const rekeyed = await tap.onRolled('sess1', { id: 'sess2', accountId: 'acc2' })
+    expect(rekeyed?.id).toBe(dispatchId)
+    const resumes = resumesOf(deps, dispatchId)
+    expect(resumes).toHaveLength(1)
+    expect(resumes?.[0].resumedAt).toBe(NOW)
+    expect(resumes?.[0].toAccountId).toBe('acc2')
+  })
+
+  it("정지 기록이 없으면 'nudged' 는 아무것도 만들지 않는다", async () => {
+    const { s } = seed()
+    const deps = makeDeps(s)
+    new OrchRollTap(deps).onRollState(rollState({ sessionId: 'sess1', state: 'nudged' }))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(deps.state()).toBe(s)
+  })
+
+  // 이 테스트가 판별자(stopped)를 고정한다 — 'nudged' 를 stopped 검사 없이 무조건 재개로 기록하면
+  // 이 테스트는 깨진다(레포에서 직접 확인함: 표식 검사를 지우고 이 파일을 돌리면 아래
+  // resumedAt 이 정의돼 실패한다).
+  it("'nudged' 가 정지 표식 없이 오면 이력의 열린 항목을 건드리지 않는다", async () => {
+    const { s, dispatchId } = seed()
+    const deps = makeDeps(s)
+    const g = fakeGit(['head-at-limit'])
+    const tap = new OrchRollTap(deps, { git: g.git })
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'waiting' })) // 정지 기록 + 표식
+    await vi.advanceTimersByTimeAsync(0)
+    // 회복이 듣지 않았다는 판정 — 표식만 지운다, 이력의 항목은 열린 채 남는다(recordStopSnapshot 의
+    // "'stalled' 로 끝난 에피소드" 규칙과 같다)
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'stalled' }))
+    // 표식이 없는 'nudged' — idle stall nudge 나 reset anchor 처럼 이 정지와 무관한 것일 수 있다
+    tap.onRollState(rollState({ sessionId: 'sess1', state: 'nudged' }))
+    await vi.advanceTimersByTimeAsync(0)
+    const resumes = resumesOf(deps, dispatchId)
+    expect(resumes).toHaveLength(1)
+    expect(resumes?.[0].resumedAt).toBeUndefined()
+  })
+})

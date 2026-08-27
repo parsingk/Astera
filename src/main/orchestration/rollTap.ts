@@ -19,7 +19,7 @@
 // 만큼 종료 알림을 미루고 onRolled 에서 그 타이머를 취소한다. 공통 층은 세우지 않는다:
 // core/rolling/retry.ts 머리말이 "타이머 수명을 공통 부모로 올리는 것은 이 앱에서 버그를 가장 많이
 // 낸 축" 이라고 적어 두었고, 두 구독자가 각자 자기 타이머를 갖는 것이 그 경고를 지키는 모양이다.
-import { recordStopSnapshot, rekeyDispatch } from '../../core/orchestration/state'
+import { recordResume, recordStopSnapshot, rekeyDispatch } from '../../core/orchestration/state'
 import type { Dispatch } from '../../core/orchestration/types'
 import type { RollStateEvent } from '../../core/types'
 import { git } from '../../core/worktrees/git'
@@ -51,7 +51,10 @@ export class OrchRollTap {
    *  시작하는 클로저였다).
    *
    *  키가 롤과 함께 옮겨 다닌다 — onRolled 에서 옛 id 의 표시를 새 id 로 이관한다. 한 에피소드는
-   *  옛 세션에서 시작해 새 세션에서 끝나기 때문이다(정지→kill→respawn→재개). */
+   *  옛 세션에서 시작해 새 세션에서 끝나기 때문이다(정지→kill→respawn→재개).
+   *
+   *  **`'nudged'` 를 재개로 볼지 가르는 판별자도 겸한다** — onRollState 의 'nudged' 처리를 보라.
+   *  이 세션에 정지가 기록돼 있을 때만 재개도 기록한다. */
   private stopped = new Set<string>()
   private readonly git: typeof git
 
@@ -135,6 +138,22 @@ export class OrchRollTap {
     this.deps.log?.(
       `dispatch ${r.value.id} rekeyed ${oldSessionId} -> ${newInfo.id} account=${newInfo.accountId}`
     )
+    // 계정이 바뀌는 재개다 — 세션 id 도 새것으로 옮겨졌으므로 이력은 새 세션 id·새 계정으로 닫는다.
+    // recordResume 안에 넣지 않은 이유는 이 함수의 머리말과 같다: 그 함수는 순수 core 이고 시각을
+    // 모른다. 정지가 기록돼 있지 않으면(사용자 탭 세션이거나, 정지 없이 롤된 경우) recordResume 이
+    // 조용히 no-op 한다 — rekeyDispatch 자신과 같은 관례라 여기서 따로 가를 필요가 없다.
+    const resumed = recordResume(
+      this.deps.getState(),
+      { sessionId: newInfo.id, accountId: newInfo.accountId },
+      now
+    )
+    if (resumed.ok && resumed.value !== null) {
+      try {
+        await this.deps.setState(resumed.state)
+      } catch (err) {
+        this.deps.log?.(`resume record commit failed dispatch=${r.value.id}: ${String(err)}`)
+      }
+    }
     return r.value
   }
 
@@ -182,6 +201,23 @@ export class OrchRollTap {
       this.stopped.delete(e.sessionId)
       return
     }
+    // 'nudged' = 같은 계정에서 제자리 재개했다(claude 의 resumeInPlace, codex 의 resumeInPlace).
+    // 세션 id 가 바뀌지 않아 `session:rolled` 가 오지 않으므로, 계정을 유지하는 재개에서는 **이
+    // 이벤트가 유일한 신호다.** 여기서 버리면 계정 하나짜리 워커는 몇 번 이어졌는지가 영원히
+    // 기록되지 않는다.
+    //
+    // **`stopped` 로 가른다.** `'nudged'` 는 이 경로 말고도 두 곳에서 더 온다 — idle stall nudge
+    // (한도와 무관한 재촉)와 reset anchor(그 가드가 대기 중이 아닐 때만 닿으므로, 여기 온 것은
+    // 'waiting'/'switching' 없이 온 것이다). 그 둘은 이 세션에 정지를 남기지 않았으므로 `stopped`
+    // 에 없다 — 표식이 없으면 이력을 지어내지 않고 조용히 넘긴다. `Set.delete` 는 지우면서 있었는지도
+    // 함께 알려 주므로 그 반환값을 판별자로 쓴다.
+    if (e.state === 'nudged') {
+      if (!this.stopped.delete(e.sessionId)) return
+      void this.recordResumed(e.sessionId).catch((err) =>
+        this.deps.log?.(`resume record failed session=${e.sessionId}: ${String(err)}`)
+      )
+      return
+    }
     if (e.state !== 'waiting' && e.state !== 'switching') return
     if (e.reattach) return
     if (this.stopped.has(e.sessionId)) return
@@ -213,6 +249,21 @@ export class OrchRollTap {
         reason,
         ...(nextRetryAt !== undefined ? { resetsAt: nextRetryAt } : {})
       },
+      this.deps.now?.() ?? new Date().toISOString()
+    )
+    if (!r.ok || r.value === null) return
+    await this.deps.setState(r.state)
+  }
+
+  /** `'nudged'` 재개를 이력의 마지막 항목에 닫는다. 계정은 바뀌지 않았으므로 지금 Dispatch 가
+   *  들고 있는 계정을 그대로 쓴다 — recordStop 이 Dispatch 를 찾는 것과 같은 관례다. */
+  private async recordResumed(sessionId: string): Promise<void> {
+    const state = this.deps.getState()
+    const dispatch = state.dispatches.find((d) => d.sessionId === sessionId && !d.endedAt)
+    if (!dispatch) return // Job 워커가 아니다(사용자 탭 세션) — 잡을 것이 없다
+    const r = recordResume(
+      state,
+      { sessionId, accountId: dispatch.accountId },
       this.deps.now?.() ?? new Date().toISOString()
     )
     if (!r.ok || r.value === null) return
