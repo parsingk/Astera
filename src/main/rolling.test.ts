@@ -166,13 +166,16 @@ describe('RollingCoordinator', () => {
     expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a2'])
   })
 
-  it('statusline 메타가 아예 없으면 롤을 중단하고 none 상태를 알린다', async () => {
+  // 종전 기대값은 'none' 이었다 — 중단이 아무것도 예약하지 않는다는, 지금 고친 그 동작이다.
+  // 중단 자체(copy/kill/spawn 없음)는 그대로 검사하고, 그 뒤에 무엇이 게시되는지는 아래의
+  // '중단된 롤이 다음 시도를 예약한다' describe 가 재시도까지 함께 못박는다.
+  it('statusline 메타가 아예 없으면 롤을 중단하고 대기 상태를 알린다', async () => {
     const h = harness()
     h.coord.register(h.info1)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await flush()
     expect(h.events).toEqual([])
-    expect(h.sent.at(-1)?.payload.state).toBe('none')
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
   })
 
   it('respawn 후 신뢰 다이얼로그를 자동 수락한다 (Enter 400ms)', async () => {
@@ -1393,12 +1396,17 @@ describe('idle nudge', () => {
     expect(h.written).toEqual([])
   })
 
-  // 게이트를 사용률 단독으로 두면 막히는 조합이 실측된다: 한도 문구를 실제로 물었는데 스냅샷은
-  // 한도 직전이 아니라 낮은 값에 얼어 있는 경우 — 게이트가 걸러낸 것은 오탐이 아니라 정당한 한도
-  // 문구였다. 그 세션에서 롤까지 실패하면 세션은 멈춘 채 남고, 차단 기록이 유일한 증거다.
-  it('한도 감지 이력이 남아 있으면 사용률이 낮아도 nudge한다 — 롤이 실패해 멈춘 세션', async () => {
+  // 이 테스트는 종전에 **idle nudge 가** 멈춘 세션을 되살리는 것을 검사했다(롤이 중단되면 체인이
+  // 대기도 아니고 롤링도 아닌 상태로 남았으므로 틱이 그 체인을 계속 봤다). 중단이 이제 재시도를
+  // 예약하므로 그 전제가 사라졌다 — 대기가 걸린 체인은 틱이 건너뛰고(waitTimer 가드), 그와 함께
+  // 감지·폴백·nudge 가 모두 멈춘다. 되살리는 것은 이제 nudge 가 아니라 그 예약된 재시도다.
+  //
+  // 그래서 검사 대상을 그 우선순위로 바꾼다: 대기 중에는 아무것도 세션에 쓰지 않고(nudge 가
+  // 끼어들면 예약된 재시도와 두 번 개입한다), 예약된 시각에 재개 문장이 들어간다. 종전 기대값과
+  // 같은 문장이 같은 세션에 들어가는 것이고, 다른 것은 그것을 넣는 경로와 시각이다.
+  it('롤이 실패해 멈춘 세션은 예약된 재시도가 되살린다 — 대기 중에는 nudge하지 않는다', async () => {
     const h = harness({
-      // a2를 못 찾게 해 롤을 중단시킨다 → "한도는 감지됐고 세션은 그대로 멈춘" 상태가 남는다
+      // a2를 못 찾게 해 롤을 중단시킨다 → 중단이 재시도를 예약한다(rolling.ts 의 rescheduleAbortedRoll)
       getAccount: (id) => (id === 'a1' ? acc('a1', '계정A') : null),
       probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
       readPending: () => Promise.resolve(null)
@@ -1408,10 +1416,16 @@ describe('idle nudge', () => {
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await flush()
     expect(h.events).toEqual([]) // 롤 중단 — copy/kill/spawn 없음
+    const retryAt = Date.parse(String(h.sent.at(-1)?.payload.nextRetryAt))
+    expect(retryAt).toBeGreaterThan(Date.now())
     h.coord.onHookEvent('s1', idleHook)
     await advanceIo(11 * MIN)
     await vi.advanceTimersByTimeAsync(200)
+    expect(h.written).toEqual([]) // 대기 중 — nudge 가 끼어들지 않는다
+    await advanceIo(retryAt - Date.now() + 1_000) // 예약된 시각
+    await vi.advanceTimersByTimeAsync(200) // 150ms 엔터 타이머
     expect(h.written.map((w) => w.data)).toEqual(['이어서 작업 진행해 줘', '\r'])
+    expect(h.events).toEqual([]) // 같은 계정이므로 kill·spawn 없이 제자리 재개다
   })
 })
 
@@ -2200,5 +2214,77 @@ describe('resumeText 훅 배선 — 어느 모양을 묻고 그 값이 어디로
     await flush()
     await vi.advanceTimersByTimeAsync(10 * MIN + 2 * MIN)
     expect(h.written[0]?.data).toBe('이어서 작업 진행해 줘')
+  })
+})
+
+// 롤이 중간에 포기하면 예전에는 'none' 을 게시하고 반환했다 — 아무것도 예약하지 않는다. 세션은
+// 한도에 그대로 막혀 있고 그 한도는 신호로 이미 소비됐으므로 다시 감지될 일이 없어, 사람이
+// 알아챌 때까지 워커가 유휴로 남는다. 두 경로가 실측됐다: 체인의 계정이 돌아가는 중에 삭제된 것
+// (가용성 판정은 id 만 보므로 해결되지 않는 계정을 roll() 에 넘긴다), 그리고 히스토리에서 다시 연
+// 대화가 세션 메타를 배우지 못한 것(한도에 걸린 claude 는 statusLine 훅을 아예 부르지 않는다 —
+// 88초 동안 0회 실측). 그래서 여기 단언의 핵심은 셋이다: 'waiting' 이 게시된다, nextRetryAt 이
+// 실려 있다, **그 시각에 실제로 다시 시도한다**. 세 번째가 요점이다 — 상태만 게시하고 타이머를
+// 안 걸면 고치기 전과 똑같다.
+describe('중단된 롤이 다음 시도를 예약한다', () => {
+  // 계정을 가릴 수 있게 문구가 reset 시각을 싣는다. 그래야 recovery[a1] 이 15분 폴백보다 뒤로
+  // 밀려 planRetry 가 a2 를 겨냥하고, 재시도가 실제로 roll() 을 다시 부른다 — statusLine 이 얼어
+  // 있어도 문구는 시각을 담는다는 것이 실측이고(resetTime.ts), 이 파일의 선례도 그것이다.
+  // 문구의 11am 이 5시간 창 안에 들어오도록 시계를 고정한다.
+  const T0 = Date.UTC(2026, 7, 3, 0, 0) // 11am(Asia/Seoul) = 02:00Z → +2시간
+  const LIMIT_WITH_RESET = limitWithReset('session', '11am')
+
+  /** 게시된 대기의 재시도 시각까지 이동한다. 반환값은 그 시각. */
+  const jumpToRetry = async (h: {
+    sent: { channel: string; payload: Record<string, unknown> }[]
+  }): Promise<number> => {
+    const at = Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+    await vi.advanceTimersByTimeAsync(at - Date.now() + 1_000)
+    return at
+  }
+  const retryAtOf = (h: { sent: { channel: string; payload: Record<string, unknown> }[] }): number =>
+    Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+
+  it('계정이 사라져 롤을 포기하면 다시 시도할 시각을 잡는다 (영구 유휴 방지)', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness({ getAccount: (id) => (id === 'a1' ? acc('a1', '계정A') : null) })
+    h.payloads.set('s1', payload(97)) // 세션 메타는 배웠다 — 중단 사유는 사라진 계정이다
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    expect(h.events).toEqual([]) // 롤 중단 — copy/kill/spawn 없음
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting') // 'none' 이 아니다
+    expect(retryAtOf(h)).toBeGreaterThan(Date.now())
+    // (c) 그 시각에 실제로 다시 시도한다. 계정은 여전히 없으므로 또 포기하고 또 예약한다 —
+    // 새 'waiting' 이 더 뒤의 시각으로 게시되는 것이 재시도가 돌았다는 증거다.
+    const first = await jumpToRetry(h)
+    expect(retryAtOf(h)).toBeGreaterThan(first)
+  })
+
+  it('statusLine 을 못 배워 롤을 포기해도 다시 시도할 시각을 잡는다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness() // payload 없음 → claudeSessionId·transcriptPath 를 배우지 못한다
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    expect(h.events).toEqual([])
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+    expect(retryAtOf(h)).toBeGreaterThan(Date.now())
+    // (c) 그 사이에 statusLine 이 도착하면 그 시각의 재시도는 성공한다
+    h.payloads.set('s1', payload(97))
+    await jumpToRetry(h)
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a2'])
+  })
+
+  it('롤이 예외로 실패해도 다시 시도할 시각을 잡는다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness({ copy: () => Promise.reject(new Error('transcript copy blew up')) })
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    expect(h.events).toEqual([]) // 복사가 던졌으므로 kill·spawn 은 없다
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+    const first = await jumpToRetry(h)
+    expect(retryAtOf(h)).toBeGreaterThan(first)
   })
 })

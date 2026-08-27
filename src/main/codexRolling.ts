@@ -865,6 +865,54 @@ export class CodexRollingCoordinator {
     chain.inPlaceUsed = false
   }
 
+  /** A roll gave up. Schedule the next attempt instead of leaving the chain idle.
+   *
+   *  **Why this exists.** These abort paths used to publish 'none' and return, which schedules nothing:
+   *  the session is still blocked by its limit, nothing else will detect it (the limit was already
+   *  consumed), and the worker sits idle until a human notices. It surfaced twice — an account removed
+   *  from the chain while it ran (pickAvailable sees ids only, so it hands roll() an account that cannot
+   *  be resolved), and a conversation reopened from history whose session metadata was never learned
+   *  because the limit stops the statusLine from being called at all.
+   *
+   *  **Why the wait machinery and not a new timer.** onLimit's "no usable account" branch already
+   *  publishes 'waiting' with a retry time and arms waitTimer. Reusing it means the renderer's waiting
+   *  row, the scheduler's suppression and the Slack mapping all keep working here — a new state or a
+   *  private timer would have to be taught to each of them.
+   *
+   *  **Why 'waiting' replaces the 'none' rather than following it.** Publishing 'none' first lifts the
+   *  scheduler's suppression and clears the banner, and then puts it straight back.
+   *
+   *  **Why retrying an abort that will abort again is right.** If the account is gone for good this
+   *  loops at planRetry's floor, logging each time. That is better than silence: the log is the only
+   *  thing that can tell someone to re-add the account or close the session.
+   *
+   *  This is a second copy of the claude side's function of the same name, deliberately — lifting timer
+   *  lifetimes into a common parent is the axis of this app that has produced the most bugs
+   *  (core/rolling/retry.ts's header records that decision). */
+  private rescheduleAbortedRoll(chain: Chain, why: string): void {
+    // A wait already armed means the caller is onLimit's own wait branch — do not arm a second one.
+    // Two timers means one leaks and that session resumes twice.
+    if (chain.waitTimer || chain.disposed) return
+    // One clock reading, for the same reason onLimit takes one: the block records retryState merges and
+    // the instant planRetry judges them against have to be the same moment.
+    const now = this.now()
+    const plan = planRetry(retryState(chain, this.deps.blocks, now), now)
+    this.deps.log(
+      `codex roll retry scheduled after abort (${why}) at=${new Date(plan.retryAt).toISOString()} session=${chain.liveId}`
+    )
+    this.pushState(chain, 'waiting', {
+      nextRetryAt: new Date(plan.retryAt).toISOString(),
+      scope: plan.weekly ? 'weekly' : 'session'
+    })
+    chain.waitTimer = setTimeout(
+      () => {
+        chain.waitTimer = null
+        void this.resumeAfterWait(chain, plan.target)
+      },
+      Math.max(0, plan.retryAt - this.now())
+    )
+  }
+
   /** Runs the roll: copy the rollout → kill → respawn in the same slot with codex resume */
   private async roll(chain: Chain, toIndex: number): Promise<void> {
     if (chain.rolling || chain.disposed) return
@@ -873,12 +921,12 @@ export class CodexRollingCoordinator {
       const target = this.deps.getAccount(chain.accountIds[toIndex])
       if (!target) {
         this.deps.log(`codex roll aborted — no such account id=${chain.accountIds[toIndex]}`)
-        this.pushState(chain, 'none')
+        this.rescheduleAbortedRoll(chain, 'no such account')
         return
       }
       if (!chain.codexSessionId || !chain.rolloutPath) {
         this.deps.log(`codex roll aborted — rollout unmapped session=${chain.liveId}`)
-        this.pushState(chain, 'none')
+        this.rescheduleAbortedRoll(chain, 'rollout unmapped')
         return
       }
       const codexSessionId = chain.codexSessionId // pinned before the awaits below — attachRollout needs it non-null
@@ -953,7 +1001,7 @@ export class CodexRollingCoordinator {
       this.pushState(chain, 'none')
     } catch (err) {
       this.deps.log(`codex roll failed: ${err instanceof Error ? err.message : String(err)}`)
-      this.pushState(chain, 'none')
+      this.rescheduleAbortedRoll(chain, 'roll failed')
     } finally {
       chain.rolling = false
     }

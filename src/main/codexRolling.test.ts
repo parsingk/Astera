@@ -1422,3 +1422,61 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 })
+
+// 롤이 중간에 포기하면 예전에는 'none' 을 게시하고 반환했다 — 아무것도 예약하지 않는다. 세션은
+// 한도에 그대로 막혀 있고 그 한도는 신호로 이미 소비됐으므로 다시 감지될 일이 없어, 사람이
+// 알아챌 때까지 워커가 유휴로 남는다. rolling.ts 의 같은 이름 describe 와 같은 성질이며, 단언의
+// 핵심도 같은 셋이다: 'waiting' 이 게시된다, nextRetryAt 이 실려 있다, **그 시각에 실제로 다시
+// 시도한다**. 세 번째가 요점이다 — 상태만 게시하고 타이머를 안 걸면 고치기 전과 똑같다.
+//
+// roll() 의 세 번째 중단(`rollout unmapped`)에는 테스트가 없다. onLimit 이 같은 조건을 먼저 막고
+// roll() 로 오는 모든 경로가 그 뒤에 있어, 공개 표면으로는 그 분기에 닿을 수 없다.
+describe('중단된 롤이 다음 시도를 예약한다', () => {
+  /** 게시된 대기의 재시도 시각까지 이동한다. 반환값은 그 시각. */
+  const jumpToRetry = async (h: {
+    sent: { channel: string; payload: Record<string, unknown> }[]
+  }): Promise<number> => {
+    const at = Date.parse(String(h.sent.filter((s) => s.payload.state === 'waiting').at(-1)?.payload.nextRetryAt))
+    await advance(at - Date.now() + 1_000)
+    return at
+  }
+  const lastRetryAt = (h: { sent: { channel: string; payload: Record<string, unknown> }[] }): number =>
+    Date.parse(String(h.sent.filter((s) => s.payload.state === 'waiting').at(-1)?.payload.nextRetryAt))
+
+  it('계정이 사라져 롤을 포기하면 다시 시도할 시각을 잡는다 (영구 유휴 방지)', async () => {
+    const h = harness({ getAccount: (id) => (id === 'c1' ? acc('c1', 'Codex A') : null) })
+    await writeRollout({
+      accountId: 'c1', uuid: 'cx-gone', cwd: h.info1.cwd,
+      primary: 95, primaryReset: Math.floor((Date.now() + 30 * 60_000) / 1000)
+    })
+    h.coord.register(h.info1)
+    await advance(1_500) // 매핑 폴링
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events).toEqual([]) // 롤 중단 — copy/kill/spawn 없음
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting') // 'none' 이 아니다
+    expect(lastRetryAt(h)).toBeGreaterThan(Date.now())
+    // (c) 그 시각에 실제로 다시 시도한다. 계정은 여전히 없으므로 또 포기하고 또 예약한다 —
+    // 새 'waiting' 이 더 뒤의 시각으로 게시되는 것이 재시도가 돌았다는 증거다.
+    const first = await jumpToRetry(h)
+    expect(lastRetryAt(h)).toBeGreaterThan(first)
+    h.coord.stop()
+  })
+
+  it('롤이 예외로 실패해도 다시 시도할 시각을 잡는다', async () => {
+    const h = harness({ copy: () => Promise.reject(new Error('rollout copy blew up')) })
+    await writeRollout({
+      accountId: 'c1', uuid: 'cx-copy-throw', cwd: h.info1.cwd,
+      primary: 95, primaryReset: Math.floor((Date.now() + 30 * 60_000) / 1000)
+    })
+    h.coord.register(h.info1)
+    await advance(1_500) // 매핑 폴링
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(h.events).toEqual([]) // 복사가 던졌으므로 kill·spawn 은 없다
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+    const first = await jumpToRetry(h)
+    expect(lastRetryAt(h)).toBeGreaterThan(first)
+    h.coord.stop()
+  })
+})
