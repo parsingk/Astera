@@ -513,7 +513,11 @@ app.whenReady().then(async () => {
     orchEnv: () => orchRef?.orchEnv(),
     // Job 워커의 재개 packet(Task 4b/4c). 오케스트레이션이 꺼져 있으면(orchRef === null) 물어볼
     // 곳이 없다 — 그때는 null 로, RollingCoordinator 가 기존 고정 문장으로 저하한다.
-    resumeText: (sessionId, form) => orchRef?.resumeText(sessionId, form) ?? Promise.resolve(null)
+    resumeText: (sessionId, form) => orchRef?.resumeText(sessionId, form) ?? Promise.resolve(null),
+    // 한도에 걸린 세션을 어떻게 이어갈지(Task 1 의 설정) — orchEnv 와 같은 이유로 getter 다: 값이
+    // 설정 화면에서 앱 수명 중간에 바뀌고, 이 코디네이터는 그보다 먼저 만들어진다. codexRolling 의
+    // 같은 배선과 같은 자리, 같은 값이다.
+    resumeStrategy: () => core!.appSettings.getResumeStrategy()
   })
   rollingRef = rolling
 

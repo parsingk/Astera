@@ -2265,6 +2265,113 @@ describe('resumeText 훅 배선 — 어느 모양을 묻고 그 값이 어디로
   })
 })
 
+// Task 4 (Phase 2c): resumeStrategy 가 'smart' 이고 브리핑을 실제로 만들 수 있을 때만 백지 재개다 —
+// transcript 복사도 `--resume` 도 하지 않고 새 claude 프로세스를 respawn 한 뒤, 그 살아난 창에
+// 브리핑을 타이핑한다(codex 처럼 argv 로 싣지 않는다 — sendPrompt 가 이미 쓰는 채널 그대로다).
+// 브리핑을 못 만들면(dep 이 없거나 null/빈 문자열을 돌리면) 이 스위치가 켜져 있어도 오늘의 경로
+// 그대로다(계획의 지배 제약).
+describe('Smart Resume — 백지 재개', () => {
+  it('전략이 smart 이고 브리핑이 있으면 복사 없이 --resume 없이 백지로 띄우고, 살아난 창에 브리핑을 타이핑한다', async () => {
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: () => Promise.resolve('BRIEFING TEXT')
+    })
+    h.payloads.set('s1', payload(97))
+    h.payloads.set('s2', payload(20)) // respawn 뒤 statusline 이 도착해야 auto-prompt 가 나간다
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await settle()
+    expect(h.copied).toEqual([]) // 복사가 없다
+    expect(h.events).toEqual(['kill:s1', 'spawn:s2:a2']) // 'copy' 가 없다
+    expect(h.spawned.at(-1)?.resumeSessionId).toBeUndefined()
+    expect(h.written.some((w) => w.id === 's2' && w.data === 'BRIEFING TEXT')).toBe(true)
+  })
+
+  // 이 테스트가 계획의 지배 제약("브리핑을 만들 수 없으면 백지 재개를 하지 않는다")을 지키는 자리다.
+  it('전략이 smart 이어도 브리핑이 없으면(null) 기존 경로로 롤한다', async () => {
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: () => Promise.resolve(null)
+    })
+    h.payloads.set('s1', payload(97))
+    h.payloads.set('s2', payload(20))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await settle()
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a2'])
+    expect(h.copied[0]?.src).toBe(
+      path.join('D:\\cfg', 'a1', 'projects', 'D--work-p', 'claude-sess.jsonl')
+    )
+    expect(h.spawned.at(-1)?.resumeSessionId).toBe('claude-sess')
+    expect(h.written.some((w) => w.id === 's2' && w.data === RESUME_PROMPT)).toBe(true)
+  })
+
+  it('전략이 original 이면 브리핑이 있어도 기존 경로로 롤한다', async () => {
+    const h = harness({
+      resumeStrategy: () => 'original',
+      resumeText: () => Promise.resolve('BRIEFING TEXT')
+    })
+    h.payloads.set('s1', payload(97))
+    h.payloads.set('s2', payload(20))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await settle()
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a2'])
+    expect(h.spawned.at(-1)?.resumeSessionId).toBe('claude-sess')
+    expect(h.written.some((w) => w.id === 's2' && w.data === 'BRIEFING TEXT')).toBe(true)
+  })
+
+  // fix round 2 의 관례(codexRolling.test.ts)와 같은 이유: resumeText 는 spec 파일에 쓰는 부수
+  // 효과가 있으므로, roll() 이 smart 여부를 가리려고 미리 물은 값을 sendPrompt 가 다시 묻는다면
+  // 매 롤마다 두 번 쓰는 것이 된다. 이 테스트는 그 값이 실제로 아래로 전달되어 다시 묻지 않는지를
+  // 호출 횟수로 확인한다.
+  it('브리핑은 handover 형태로 한 번만 요청된다', async () => {
+    const forms: string[] = []
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: (_sessionId, form) => {
+        forms.push(form)
+        return Promise.resolve('BRIEFING TEXT')
+      }
+    })
+    h.payloads.set('s1', payload(97))
+    h.payloads.set('s2', payload(20))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await settle()
+    expect(forms).toEqual(['handover'])
+  })
+
+  // 백지 재개 뒤 신원 필드(claudeSessionId·transcriptPath, 그리고 두 시드)가 비지 않으면, 다음 롤이
+  // 지금 일부러 두고 온 대화를 되살린다("백지 재개에서 반드시 지워야 하는 것" — 계획 문서). 필드를
+  // 직접 읽는 대신 그 결과를 관측한다: respawn 한 새 세션이 자기 statusline 을 한 번도 보고하지
+  // 않은 채(신원이 채워지지 않은 채) 두 번째 한도를 맞으면, 신원이 비어 있어야 roll() 이 "세션
+  // 메타 없음"으로 중단하고 재시도를 예약한다 — 비지 않았다면 옛 계정의 옛 transcript 를 그대로
+  // 복사해 다시 spawn 했을 것이다.
+  it('백지 재개 뒤에는 신원 필드가 비어, 새 세션이 자기 statusline 을 배우기 전의 두 번째 한도가 옛 대화를 되살리지 않는다', async () => {
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: () => Promise.resolve('BRIEFING TEXT')
+    })
+    h.payloads.set('s1', payload(97)) // s2 에는 payload 를 두지 않는다 — statusline 이 끝내 오지 않는다
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush() // 백지 재개(kill:s1 → spawn:s2:a2) 완료
+    expect(h.events).toEqual(['kill:s1', 'spawn:s2:a2'])
+    // statusline 이 끝내 오지 않아 auto-prompt 의 30초 무-statusline 폴백이 브리핑을 타이핑하고
+    // awaitingReady 를 해제한다 — applyMeta 는 한 번도 불리지 않으므로 신원은 계속 비어 있다.
+    await vi.advanceTimersByTimeAsync(32_000)
+    expect(h.written.some((w) => w.id === 's2' && w.data === 'BRIEFING TEXT')).toBe(true)
+    const eventsBefore = h.events.length
+    const spawnedBefore = h.spawned.length
+    await h.coord.forceRoll('s2')
+    await flush() // onLimit이 fire-and-forget으로 시작한 roll()의 abort 분기가 마저 돈다
+    expect(h.events.length).toBe(eventsBefore) // copy/kill/spawn 이 새로 일어나지 않았다
+    expect(h.spawned.length).toBe(spawnedBefore)
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting') // "세션 메타 없음"으로 중단하고 재시도를 예약한다
+  })
+})
+
 // 롤이 중간에 포기하면 예전에는 'none' 을 게시하고 반환했다 — 아무것도 예약하지 않는다. 세션은
 // 한도에 그대로 막혀 있고 그 한도는 신호로 이미 소비됐으므로 다시 감지될 일이 없어, 사람이
 // 알아챌 때까지 워커가 유휴로 남는다. 두 경로가 실측됐다: 체인의 계정이 돌아가는 중에 삭제된 것
