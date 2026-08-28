@@ -122,7 +122,9 @@ export interface OrchServerDeps {
     runId: string
     cwd: string
     accountId: string
-    prompt: string
+    /** 인계 브리핑의 **본문**. 배선이 이것을 파일로 쓰고, 세션에는 그 파일을 가리키는 한 줄만
+     *  넣는다(handover.ts 의 coordinatorLaunchPrompt) — 여러 줄은 argv 를 지나갈 수 없다. */
+    brief: string
   }): Promise<{ sessionId: string }>
   /** 이 Run 이 일할 워크트리를 하나 만들고 그 경로를 낸다. **`startCoordinator` 와 같은 꼴** —
    *  배선이 채우고, 디스크만 만들고 OrchState 는 건드리지 않는다(기록은 setRunWorktree 가 한다).
@@ -595,7 +597,7 @@ export async function handleCommand(
           runId: id,
           cwd: target.cwd,
           accountId,
-          prompt: buildHandoverPrompt({
+          brief: buildHandoverPrompt({
             runId: id,
             objective: target.objective,
             concurrency: target.concurrency ?? DEFAULT_CONCURRENCY,

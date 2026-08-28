@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildHandoverPrompt } from './handover'
+import { buildHandoverPrompt, coordinatorLaunchPrompt } from './handover'
 
 const prompt = (over: Partial<Parameters<typeof buildHandoverPrompt>[0]> = {}): string =>
   buildHandoverPrompt({
@@ -74,5 +74,31 @@ describe('buildHandoverPrompt', () => {
     expect(p).toContain('run_zzz')
     expect(p).toContain('숫자를 센다')
     expect(p).toContain('tasks already defined: 7')
+  })
+})
+
+// **이 계약이 깨지면 코디네이터는 빈 화면으로 선다.** 이 문구는 세션의 argv 로 가고 win32 에서
+// 세션은 `cmd.exe /c` 로 뜨므로 줄바꿈이 명령을 끊는다 — 실측으로 그렇게 잡혔다(2026-08-28:
+// 코디네이터는 떴지만 Task 가 돌지 않았고 그 세션에 트랜스크립트가 없었다).
+describe('coordinatorLaunchPrompt', () => {
+  it('한 줄이다', () => {
+    const line = coordinatorLaunchPrompt('C:/x/orch/specs/coordinator-run_1.md')
+    expect(line.split('\n')).toHaveLength(1)
+    expect(line).not.toMatch(/[\r\n]/)
+  })
+
+  it('그 파일을 가리키고, 무엇인지 말한다', () => {
+    const line = coordinatorLaunchPrompt('C:/x/brief.md')
+    expect(line).toContain('C:/x/brief.md')
+    expect(line).toContain('Job you are managing')
+  })
+
+  // 브리핑 본문은 여러 줄이어도 된다 — 파일로 가기 때문이다. 그 사실을 못박아 두지 않으면
+  // 다음 사람이 "한 줄" 규칙을 브리핑 쪽으로 옮겨 읽는다
+  it('브리핑 본문은 여러 줄이다 — 그것이 파일로 가는 이유다', () => {
+    expect(
+      buildHandoverPrompt({ runId: 'run_1', objective: 'o', concurrency: 1, taskCount: 1 }).split('\n')
+        .length
+    ).toBeGreaterThan(10)
   })
 })
