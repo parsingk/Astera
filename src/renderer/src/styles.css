@@ -910,8 +910,6 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    여기서 다시 적는다 — 그쪽에 클래스를 얹으면 그 규칙의 뜻이 바뀐다. */
 .settings-history-bulk button.danger { margin-left: auto; color: var(--danger); border-color: var(--danger); }
 .settings-history-bulk button.danger:disabled { opacity: 0.45; cursor: default; color: var(--text-dim); border-color: var(--line-soft); }
-/* 행 맨 앞의 체크박스가 경로 텍스트에 눌려 줄어들지 않게 한다 */
-.settings-row > input[type='checkbox'] { flex: none; margin: 0; }
 .settings-field-label { font-size: 13.5px; color: var(--text-dim); }
 .settings-hint { font-size: 12px; color: var(--text-faint); }
 
@@ -1092,11 +1090,13 @@ label.check-small {
 }
 /* 이 앱의 체크박스. 네이티브 상자는 어느 테마에서도 브라우저 기본 파란색과 흰 바탕으로 그려져
    테마 밖으로 튄다 — appearance:none 으로 지우고 .sel-trigger 의 바탕·테두리로 다시 그린다.
-   **`label.check-small` 에만 건다.** 이 클래스가 모달들이 공유하는 체크박스 관례이고(12곳),
-   그 밖의 체크박스는 다른 문맥에 산다 — 설정의 .settings-row, 계정 쪽 .toggle-row, 그리고
-   마크다운 프리뷰가 그리는 작업 목록. 마지막 것은 사용자 문서의 일부라 앱 크롬의 색을 입히면
-   틀린 말이 된다. */
-label.check-small input[type="checkbox"] {
+   **모든 체크박스에 건다.** 한동안 `label.check-small` 에만 걸었는데, 그 관례를 쓰지 않는 자리
+   다섯 곳이 파란 네이티브 상자로 남아 있었다 — 설정의 .settings-row, 계정 쪽 .toggle-row 와
+   .detect-row, 히스토리의 .settings-history-check. 거는 선택자를 열거해서 늘리면 다음에 추가되는
+   체크박스가 같은 방식으로 또 빠지므로, 거는 쪽이 아니라 **빠지는 쪽**을 적는다.
+   빠지는 것은 마크다운 프리뷰의 작업 목록뿐이다(li.md-task) — 그건 사용자 문서의 일부라 앱 크롬의
+   색을 입히면 틀린 말이 된다. */
+input[type="checkbox"]:not(.md-task input) {
   appearance: none;
   flex: none;
   width: 14px;
@@ -1113,14 +1113,14 @@ label.check-small input[type="checkbox"] {
   cursor: pointer;
   transition: border-color var(--ease), background var(--ease);
 }
-label.check-small input[type="checkbox"]:hover { border-color: var(--text-faint); }
-label.check-small input[type="checkbox"]:checked {
+input[type="checkbox"]:not(.md-task input):hover { border-color: var(--text-faint); }
+input[type="checkbox"]:not(.md-task input):checked {
   background: var(--accent);
   border-color: var(--accent);
 }
 /* 체크 표시는 가상 요소로 그린다 — appearance:none 이 네이티브 표시까지 지웠다. 두 변만 남긴
    사각형을 45도 돌린 것이 갈고리다 */
-label.check-small input[type="checkbox"]:checked::after {
+input[type="checkbox"]:not(.md-task input):checked::after {
   content: '';
   width: 7px;
   height: 3.5px;
@@ -1128,7 +1128,7 @@ label.check-small input[type="checkbox"]:checked::after {
   border-bottom: 1.5px solid var(--accent-ink);
   transform: rotate(-45deg) translate(0, -1px);
 }
-label.check-small input[type="checkbox"]:focus-visible {
+input[type="checkbox"]:not(.md-task input):focus-visible {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--ring);
