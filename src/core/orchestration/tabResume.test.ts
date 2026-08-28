@@ -50,14 +50,38 @@ describe('formatTabResume — handover', () => {
     expect(out.toLowerCase()).not.toContain('report when done')
   })
 
-  it('git 도 꼬리도 없으면 null — 할 말이 없으면 아무 말도 하지 않는다', () => {
-    const out = formatTabResume({ ...base, git: null, tail: [] }, 'handover')
+  // fix wave 최종, F2: 대화 증거(꼬리·요청·마지막 명령)가 하나도 없으면 null 이다 — git 만으로는
+  // "대화를 읽었다"고 말할 수 없다(formatHandover 의 계약, 실측 2026-08-28). 이 테스트는 예전에
+  // "git 도 꼬리도 없으면 null"만 확인했는데, base 의 requests 가 채워진 채였다면 그 낡은 조건으로도
+  // 통과했을 것이다 — 그래서 이번엔 셋 다 명시적으로 비운다.
+  it('대화 증거가 하나도 없으면 null — 할 말이 없으면 아무 말도 하지 않는다', () => {
+    const out = formatTabResume(
+      { ...base, git: null, tail: [], requests: [], lastCommand: null },
+      'handover'
+    )
     expect(out).toBeNull()
   })
 
-  it('git 이나 꼬리 중 하나만 있어도 null 이 아니다', () => {
-    expect(formatTabResume({ ...base, tail: [] }, 'handover')).not.toBeNull()
-    expect(formatTabResume({ ...base, git: null }, 'handover')).not.toBeNull()
+  it('git 만 있고 대화 증거가 없으면 여전히 null 이다 — git 은 대화를 읽었다는 증거가 아니다', () => {
+    const out = formatTabResume({ ...base, tail: [], requests: [], lastCommand: null }, 'handover')
+    expect(out).toBeNull()
+  })
+
+  it('꼬리·요청·마지막 명령 중 하나만 있어도(git 이 없어도) null 이 아니다', () => {
+    expect(formatTabResume({ ...base, git: null, requests: [], lastCommand: null }, 'handover')).not.toBeNull() // 꼬리만
+    expect(formatTabResume({ ...base, git: null, tail: [], lastCommand: null }, 'handover')).not.toBeNull() // 요청만
+    expect(
+      formatTabResume(
+        {
+          ...base,
+          git: null,
+          tail: [],
+          requests: [],
+          lastCommand: { command: 'npm test', failed: false, excerpt: '' }
+        },
+        'handover'
+      )
+    ).not.toBeNull() // 마지막 명령만
   })
 
   it('꼬리가 있으면 메시지들이 들어가되 개수 상한을 넘지 않는다', () => {

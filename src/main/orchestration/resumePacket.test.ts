@@ -515,8 +515,13 @@ describe('buildTabResumeText', () => {
     expect(await fs.readFile(tabFile('sess1'), 'utf8')).toContain('src/from-git.ts')
   })
 
-  it('transcriptPath 를 모르면 git 만으로 시도한다', async () => {
+  // fix wave 최종, F2: transcriptPath 를 모르면(대화를 못 읽었다는 뜻) git 만으로 handover 를
+  // 내면 안 된다 — git 은 "지금 코드 상태"의 증거일 뿐 "대화에서 무엇을 하고 있었는가"의 증거가
+  // 아니다(formatHandover 의 계약, tabResume.ts). 이 테스트는 예전에 "git 만으로 시도한다"고
+  // 반대로 확인했는데, 그 시도 자체가 대화가 통째로 사라지는 백지 handover 를 골랐다.
+  it('transcriptPath 를 모르면 null 이다 — git 만으로는 handover 를 만들지 않는다', async () => {
     const readTranscript = vi.fn().mockResolvedValue(material)
+    const log = vi.fn()
 
     const line = await buildTabResumeText('sess1', 'handover', {
       cwd: CWD,
@@ -527,14 +532,15 @@ describe('buildTabResumeText', () => {
         '-c core.quotepath=false status --short': { ok: true, stdout: '?? src/only-git.ts\n', stderr: '' }
       }),
       readTranscript,
+      log,
       dir: specDir
     })
 
-    expect(line).not.toBeNull()
-    const content = await fs.readFile(tabFile('sess1'), 'utf8')
-    expect(content).toContain('src/only-git.ts')
-    expect(content).not.toContain('fix-flaky-ci') // 못 읽었으니 제목도 없다
+    expect(line).toBeNull()
     expect(readTranscript).not.toHaveBeenCalled()
+    await expect(fs.access(tabFile('sess1'))).rejects.toThrow() // 파일도 쓰지 않는다
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(log.mock.calls[0]?.[0]).toContain('tab resume skipped')
   })
 
   it('git 도 없고 transcriptPath 도 없으면 null 이고 폐기가 로그로 남는다', async () => {

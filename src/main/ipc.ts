@@ -587,12 +587,17 @@ export function registerIpc(
    *  rolloutPathFor 를 대신 묻는다. 어느 쪽도 찾지 못하면(등록되지 않은 체인, 매핑 전) null 이고,
    *  buildTabResumeText 는 git 만으로 시도한다.
    *
-   *  **계정은 provider 를 가리는 데만 쓰고, 계정이 없어도 claude 경로는 막히지 않는다.**
-   *  providerOfSession(위) 을 그대로 재사용한다 — 세션이 사라졌을 때 이미 null 을 돌리도록 되어
-   *  있는 함수라 여기서 다시 만들 이유가 없다. 다만 그 null 을 "물을 수 없다"로 반환하지 않고
-   *  "claude 로 본다"로 받는다: claude 쪽 조회(statusLine 페이로드)는 애초에 계정을 보지 않으므로
-   *  계정이 지워졌다고 그 경로를 막을 이유가 없다 — 계정이 탭 세션 도중 Settings 에서 지워지면
-   *  이 함수가 (계정을 아예 조회하지 않던 예전처럼) 여전히 브리핑을 만들어야 한다는 뜻이다. */
+   *  **provider 를 못 가리면 null 로 저하한다 — 'claude'로 보지 않는다.** 예전에는 여기서 null 을
+   *  "claude 로 본다"로 받았다: providerOfSession(위)이 null 을 돌리는 것은 계정이 지워진 경우뿐이고,
+   *  claude 쪽 조회(statusLine 페이로드)는 애초에 계정을 보지 않으니 막힐 이유가 없다는 논리였다.
+   *  그런데 이 provider 값은 조회가 아니라 **어느 파일을 읽을지** 자체를 가른다 — codex 계정이
+   *  지워지면 실제 provider 는 codex 인데 'claude'로 보아 statusLine 페이로드(codex 는 절대 쓰지
+   *  않는다)를 물으므로 transcriptPath 가 null 이 되고, 진짜 경로를 아는 rolloutPathFor 는 애초에
+   *  불리지도 않는다. 그 결과 대화는 하나도 못 읽었는데 git 만으로 handover 가 만들어질 뻔한
+   *  경로였다(fix wave 최종, F2) — formatHandover 가 이제 대화 증거 없이는 null 을 돌리므로 그
+   *  최악은 막혔지만, 그렇다고 틀린 provider 로 넘어갈 이유는 없다. 판단이 안 서면 아무것도
+   *  시도하지 않고 null 을 돌린다 — 부르는 쪽(resumeText 배선)은 그러면 기존 고정 문장으로
+   *  저하한다. 그것이 이 자리에서 낼 수 있는 가장 안전한 결과다. */
   const tabResumeTextFor = async (
     sessionId: string,
     form: 'handover' | 'update'
@@ -600,7 +605,8 @@ export function registerIpc(
     const sessions = core.sessions.list()
     const info = sessions.find((s) => s.id === sessionId)
     if (!info) return null
-    const provider = providerOfSession(sessionId, sessions, (id) => core.accounts.get(id)) ?? 'claude'
+    const provider = providerOfSession(sessionId, sessions, (id) => core.accounts.get(id))
+    if (!provider) return null
     const transcriptPath =
       provider === 'codex'
         ? (codexRolling?.rolloutPathFor(sessionId) ?? null)

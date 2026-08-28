@@ -204,11 +204,17 @@ function assemble(evidence: Array<string | null>, instructions: string): string 
 /** 새 프로세스로 이어받을 전체 메모. `--resume`을 부르는 재개(프로세스가 새것이라 대화를 통째로
  *  잃는다) 자리에 쓴다 — resumeSection.ts 의 formatResumeSection 과 같은 자리다.
  *
- *  git 도 꼬리도 없으면 null — 확인한 것도 대화 흔적도 없다는 뜻이고, `formatResumeNote`와 같은
- *  계약으로 할 말이 없으면 아무 말도 하지 않는다. title·requests·editedFiles 만으로는 이 계약을
- *  채우지 못한다 — 그것들은 "지금 상태"의 증거가 아니라 대화의 흔적일 뿐이다. */
+ *  **대화 증거(꼬리·요청·마지막 명령) 중 하나도 없으면 null — git 만으로는 이 계약을 채우지
+ *  못한다.** git 은 "지금 코드가 어떤 상태인가"의 증거일 뿐 "이 대화에서 무엇을 하고 있었는가"의
+ *  증거가 아니다. 대화 파일을 못 읽었을 때(transcriptPath 를 모르거나 provider 를 잘못 짚었을
+ *  때) tail·requests·lastCommand 는 셋 다 비어서 돌아오고 git 만 채워지는데, 그때 git 만으로
+ *  메모를 냈다가 실측으로 잡혔다(2026-08-28) — `briefed` 가 참이 되어 buildTabResumeText 가 이
+ *  메모를 파일에 쓰고 재개는 대화를 통째로 버린 채(계획이 금지하는 자리에서) 백지나 다름없는
+ *  handover 를 골랐다. title·editedFiles 도 이 계약을 채우지 못한다 — title 은 대화의 흔적일
+ *  뿐 확인이 아니고, editedFiles 는 대화 기록이 없으면 git 변경 목록으로 그대로 채워지므로
+ *  (buildTabResumeText) "대화를 읽었다"는 증거가 되지 못한다. */
 function formatHandover(input: TabResumeInput): string | null {
-  if (!input.git && input.tail.length === 0) return null
+  if (input.tail.length === 0 && input.requests.length === 0 && input.lastCommand === null) return null
   return assemble(
     [
       HEADER,
