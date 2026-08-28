@@ -106,6 +106,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
     info: SessionInfo
     resumePrompt?: string
     resumeSessionId?: string
+    initialPrompt?: string
     orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
   }[]
   written: [string, string][]
@@ -119,6 +120,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
     info: SessionInfo
     resumePrompt?: string
     resumeSessionId?: string
+    initialPrompt?: string
     orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
   }[] = []
   const written: [string, string][] = []
@@ -141,6 +143,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
         info,
         resumePrompt: opts.resumePrompt,
         resumeSessionId: opts.resumeSessionId,
+        initialPrompt: opts.initialPrompt,
         orchEnv: opts.orchEnv
       })
       events.push(`spawn:${info.id}:${opts.account.id}`)
@@ -311,9 +314,11 @@ describe('CodexRollingCoordinator', () => {
   // 가는지가 미검증이었다(기존 테스트는 전부 `?? chain.prompt` 폴백만 지나간다).
   it('resumeText 에 handover 를 묻고 그 값을 resumePrompt 로 실어 보낸다', async () => {
     const forms: string[] = []
+    const tabFallbacks: boolean[] = []
     const h = harness({
-      resumeText: (_sessionId, form) => {
+      resumeText: (_sessionId, form, tabFallback) => {
         forms.push(form)
+        tabFallbacks.push(tabFallback)
         return Promise.resolve('RE-READ YOUR SPEC FILE')
       }
     })
@@ -325,7 +330,34 @@ describe('CodexRollingCoordinator', () => {
     await advance(100)
     // codex 롤은 계정 수와 무관하게 항상 kill + --resume 이므로 늘 전체 인계다(SPEC §11.5)
     expect(forms).toEqual(['handover'])
+    // fix wave 최종, F3: 전략이 (기본값인) 'original' 이므로 tabFallback 은 거짓이다 — 탭 세션이면
+    // 이 요청이 null 로 저하해 chain.prompt 가 그대로 살아남는다(이 테스트는 Job 워커 경로라 훅이
+    // 텍스트를 돌려주지만, 그 텍스트가 resumePrompt 로 가는 것은 이 branch 이전부터의 동작이다).
+    expect(tabFallbacks).toEqual([false])
     expect(h.spawned[0].resumePrompt).toBe('RE-READ YOUR SPEC FILE')
+    h.coord.stop()
+  })
+
+  // fix wave 최종, F3: 전략이 'smart' 일 때만 tabFallback 이 참이다 — codex 는 이 dep 을 롤당 한
+  // 번만 묻고 그 결과를 백지 판정과 --resume 프롬프트 양쪽에 그대로 쓰므로, 강도가 'smart' 가
+  // 아닌 한 탭 브리핑을 시도했다가는 그 결과가 그대로 --resume 프롬프트 자리로 흘러 탭 세션의
+  // chain.prompt 를 지운다.
+  it('전략이 smart 면 tabFallback 도 참으로 묻는다', async () => {
+    const tabFallbacks: boolean[] = []
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: (_sessionId, _form, tabFallback) => {
+        tabFallbacks.push(tabFallback)
+        return Promise.resolve('BRIEFING TEXT')
+      }
+    })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-hook-smart', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(h.info1)
+    await advance(1_500)
+    await appendLimitError(file)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(tabFallbacks).toEqual([true])
     h.coord.stop()
   })
 
@@ -342,6 +374,204 @@ describe('CodexRollingCoordinator', () => {
     expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
     expect(h.spawned[0].resumePrompt).toBe('이어서 작업 진행해 줘')
     h.coord.stop()
+  })
+
+  // Task 3 (Phase 2c): resumeStrategy 가 'smart' 이고 브리핑을 실제로 만들 수 있을 때만 백지
+  // 재개다 — rollout 복사도 `--resume` 도 하지 않고 새 codex 프로세스를 브리핑 하나만 들려 띄운다.
+  // 브리핑을 못 만들면(dep 이 없거나 null 을 돌리면) 이 스위치가 켜져 있어도 오늘의 경로 그대로다
+  // (계획의 지배 제약). resumePrompt 가 아니라 initialPrompt 로 싣는 이유는 spawn dep 의 JSDoc 참고
+  // — resumePrompt 는 `codex resume <id>` 뒤에만 붙는 인자라 resumeSessionId 없이는 조용히
+  // 버려진다(commands.ts 의 buildCodexCommand).
+  describe('Smart Resume — 백지 재개', () => {
+    it('전략이 smart 이고 브리핑이 있으면 복사 없이 --resume 없이 백지로 띄운다', async () => {
+      const logs: string[] = []
+      const h = harness({
+        resumeStrategy: () => 'smart',
+        resumeText: () => Promise.resolve('BRIEFING TEXT'),
+        log: (m) => logs.push(m)
+      })
+      const file = await writeRollout({ accountId: 'c1', uuid: 'cx-smart-1', cwd: h.info1.cwd, primary: 95 })
+      h.coord.register(h.info1)
+      await advance(1_500) // 매핑 폴링
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      await advance(100)
+      expect(h.copied).toEqual([])
+      expect(h.events).toEqual(['kill:s1', 'spawn:s2:c2']) // 'copy' 가 없다
+      expect(h.spawned.at(-1)?.resumeSessionId).toBeUndefined()
+      expect(h.spawned.at(-1)?.resumePrompt).toBeUndefined()
+      expect(h.spawned.at(-1)?.initialPrompt).toBe('BRIEFING TEXT')
+      // F6 의 거부 로그는 실제로 거부됐을 때만 난다 — sanitizer 가 아무것도 바꾸지 않은 이 경우엔
+      // 없어야 한다(반대로 뒤집혀도 통과하는 어설션을 남기지 않기 위해).
+      expect(logs.some((l) => l.includes('smart resume refused'))).toBe(false)
+      h.coord.stop()
+    })
+
+    // fix wave 7, finding 2 (HIGH): a mangled pointer path has no fallback of its own — the app never
+    // learns the sanitizer changed anything, and the new blank-slate session just gets an ENOENT trying
+    // to read a path that no longer matches what the sanitizer produced. So the decision now runs
+    // *before* the blank-slate branch is chosen: a briefing sanitizeResumePrompt would change refuses
+    // Smart Resume, and the roll falls back to the ordinary copy + `--resume` path, where
+    // buildCodexCommand still applies the same sanitizer to resumePrompt as it always did.
+    it('브리핑을 sanitizeResumePrompt 가 바꾸면 백지 재개를 포기하고 기존 경로로 롤한다', async () => {
+      const logs: string[] = []
+      const h = harness({
+        resumeStrategy: () => 'smart',
+        resumeText: () => Promise.resolve('Fix the "quote" bug & the pipe | issue'),
+        log: (m) => logs.push(m)
+      })
+      const file = await writeRollout({
+        accountId: 'c1',
+        uuid: 'cx-smart-sanitize',
+        cwd: h.info1.cwd,
+        primary: 95
+      })
+      h.coord.register(h.info1)
+      await advance(1_500)
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      await advance(100)
+      expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+      expect(h.copied[0]?.src).toBe(file)
+      expect(h.spawned.at(-1)?.resumeSessionId).toBe('cx-smart-sanitize')
+      expect(h.spawned.at(-1)?.resumePrompt).toBe('Fix the "quote" bug & the pipe | issue')
+      expect(h.spawned.at(-1)?.initialPrompt).toBeUndefined()
+      // fix wave 최종, F6: 이 거부는 조용히 일어나지 않는다 — userData 경로에 금지 문자가 있으면
+      // 이 계정의 Smart Resume 은 매 롤마다 여기서 거부되는데, 그 사실이 로그 한 줄도 없이 영구히
+      // 반복되던 것이 이 finding 이 잡은 결함이다.
+      expect(logs.some((l) => l.includes('smart resume refused'))).toBe(true)
+      h.coord.stop()
+    })
+
+    // The other half of sanitizeResumePrompt: no forbidden character at all, but a run of two or more
+    // spaces (plausible inside a real filesystem path, e.g. a Windows folder name) still collapses to
+    // one and changes the string — the same refusal has to fire on that case too.
+    it('브리핑에 연속 공백만 있어도 백지 재개를 포기한다', async () => {
+      const logs: string[] = []
+      const h = harness({
+        resumeStrategy: () => 'smart',
+        resumeText: () => Promise.resolve('C:\\Users\\Jane  Doe\\AppData\\tab-resume\\abc123.md'),
+        log: (m) => logs.push(m)
+      })
+      const file = await writeRollout({
+        accountId: 'c1',
+        uuid: 'cx-smart-doublespace',
+        cwd: h.info1.cwd,
+        primary: 95
+      })
+      h.coord.register(h.info1)
+      await advance(1_500)
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      await advance(100)
+      expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+      expect(h.spawned.at(-1)?.resumeSessionId).toBe('cx-smart-doublespace')
+      expect(h.spawned.at(-1)?.initialPrompt).toBeUndefined()
+      expect(logs.some((l) => l.includes('smart resume refused'))).toBe(true) // F6
+      h.coord.stop()
+    })
+
+    // 이 테스트가 계획의 지배 제약("브리핑을 만들 수 없으면 백지 재개를 하지 않는다")을 지키는 자리다.
+    it('전략이 smart 이어도 브리핑이 null 이면 기존 경로로 롤한다', async () => {
+      const h = harness({
+        resumeStrategy: () => 'smart',
+        resumeText: () => Promise.resolve(null)
+      })
+      const file = await writeRollout({ accountId: 'c1', uuid: 'cx-smart-2', cwd: h.info1.cwd, primary: 95 })
+      h.coord.register(h.info1)
+      await advance(1_500)
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      await advance(100)
+      expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+      expect(h.copied[0]?.src).toBe(file)
+      expect(h.spawned.at(-1)?.resumeSessionId).toBe('cx-smart-2')
+      expect(h.spawned.at(-1)?.initialPrompt).toBeUndefined()
+      h.coord.stop()
+    })
+
+    // fix wave 3, finding 3 (LOW): '' is not null/undefined, so briefed used to read true for it — a
+    // blank-slate roll with an empty prompt, worse than falling back. No producer returns '' today, but
+    // the guard in resumePromptFor should still treat it the same as no briefing at all.
+    it('브리핑이 빈 문자열이면 브리핑이 없던 것처럼 기존 경로로 롤한다', async () => {
+      const h = harness({
+        resumeStrategy: () => 'smart',
+        resumeText: () => Promise.resolve('')
+      })
+      const file = await writeRollout({ accountId: 'c1', uuid: 'cx-smart-empty', cwd: h.info1.cwd, primary: 95 })
+      h.coord.register(h.info1)
+      await advance(1_500)
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      await advance(100)
+      expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+      expect(h.copied[0]?.src).toBe(file)
+      expect(h.spawned.at(-1)?.resumeSessionId).toBe('cx-smart-empty')
+      expect(h.spawned.at(-1)?.initialPrompt).toBeUndefined()
+      h.coord.stop()
+    })
+
+    it('전략이 original 이면 브리핑이 있어도 기존 경로로 롤한다', async () => {
+      const h = harness({
+        resumeStrategy: () => 'original',
+        resumeText: () => Promise.resolve('BRIEFING TEXT')
+      })
+      const file = await writeRollout({ accountId: 'c1', uuid: 'cx-smart-3', cwd: h.info1.cwd, primary: 95 })
+      h.coord.register(h.info1)
+      await advance(1_500)
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      await advance(100)
+      expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+      expect(h.spawned.at(-1)?.resumeSessionId).toBe('cx-smart-3')
+      expect(h.spawned.at(-1)?.resumePrompt).toBe('BRIEFING TEXT')
+      expect(h.spawned.at(-1)?.initialPrompt).toBeUndefined()
+      h.coord.stop()
+    })
+
+    // fix wave 최종, F4: 예전 버전은 계정이 둘뿐이었다. RollCycle.onLimit 은 연속 한도 횟수가
+    // 계정 수의 배수가 되면 그 자체로 wait 를 돌려준다(streak % count === 0) — 계정이 둘이면
+    // 바로 이 두 번째 한도에서 그 조건에 걸려 onLimit 이 roll() 을 부르기도 전에 통째로 wait 로
+    // 빠진다. 그러면 신원을 지우는 세 줄(chain.codexSessionId·rolloutPath·tail = null)을 지우든
+    // 안 지우든 애초에 roll() 근처에도 못 가므로 무엇을 구분했는지 알 수 없다(뮤테이션 검증,
+    // 2026-08-28: 그 세 줄을 지워도 이 테스트만 그대로 통과했다 — 원인은 브리핑이 아니라 이
+    // 계정 수 자체였다). 계정을 셋으로 늘리면 이 두 번째 한도도 여전히 roll 판정이라(streak=2,
+    // 2 % 3 ≠ 0) 실제로 onLimit → roll() 을 다시 탄다. 그리고 두 번째 호출부터 resumeText 가
+    // null 을 돌리게 해 그 롤이 반드시 ordinary(복사) 경로를 타게 만든다 — 신원이 비어 있지
+    // 않으면 그 경로가 옛(버려진) rolloutPath 를 실제로 복사한다.
+    it('백지 재개 뒤에는 신원 필드가 비어, 재-locate 전 두 번째 한도가 옛 rollout 을 복사하지 않는다', async () => {
+      const accounts: Record<string, Account> = {
+        c1: acc('c1', 'Codex A'),
+        c2: acc('c2', 'Codex B'),
+        c3: acc('c3', 'Codex C')
+      }
+      let calls = 0
+      const h = harness({
+        getAccount: (id) => accounts[id] ?? null,
+        resumeStrategy: () => 'smart',
+        resumeText: () => Promise.resolve(calls++ === 0 ? 'BRIEFING TEXT' : null)
+      })
+      const file = await writeRollout({ accountId: 'c1', uuid: 'cx-smart-4', cwd: h.info1.cwd, primary: 95 })
+      h.coord.register({ ...h.info1, rollAccountIds: ['c1', 'c2', 'c3'] })
+      await advance(1_500)
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      await advance(100)
+      expect(h.copied).toEqual([]) // 백지 재개 자체는 아무것도 복사하지 않는다
+      const newLiveId = h.spawned.at(-1)?.info.id
+      expect(newLiveId).toBeDefined()
+      // 관측 방법: 새 rollout 파일은 아직 없다(재-locate 가 아직 끝나지 않았다). 이 상태에서 옛
+      // (버려진) 파일에 두 번째 한도 기록을 남기고 새 liveId 로 같은 문구를 흘려 본다. 이번 롤은
+      // resumeText 가 null 을 돌리므로 반드시 복사 경로를 탄다 — 신원 필드(codexSessionId·
+      // rolloutPath·tail)가 정말 비었다면 onLimit 이 그 값들이 없다는 이유로 roll() 을 부르기도
+      // 전에 멈춘다. 비지 않았다면 onLimit 을 통과해 roll() 이 옛 rolloutPath 를 그대로 복사한다
+      // — 그래서 이 어설션은 "옛(버려진) 파일을 소스로 하는 복사가 없다"를 직접 확인한다.
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: newLiveId!, data: LIMIT_TEXT })
+      await advance(15_000) // tick 한 바퀴 — 매핑 타임아웃(60초)에는 못 미친다
+      expect(h.copied.some((c) => c.src === file)).toBe(false)
+      h.coord.stop()
+    })
   })
 
   it('롤로 띄운 세션에 orchEnv를 실어 보낸다', async () => {

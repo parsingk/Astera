@@ -11,12 +11,17 @@
 // core/orchestration 의 순수 모듈(checkpoint.ts, resumeSection.ts)이 이미 하고, 여기는 그 결과를
 // 어디서 읽고(OrchState 에서 열린 Dispatch를 찾고, git 을 읽고) 어디에 쓰는지(spec 파일)만 맡는다.
 import { promises as fs } from 'node:fs'
+import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { buildCheckpoint } from '../../core/orchestration/checkpoint'
 import { formatResumeNote, formatResumeSection } from '../../core/orchestration/resumeSection'
+import { formatTabResume } from '../../core/orchestration/tabResume'
 import type { OrchState } from '../../core/orchestration/state'
+import type { LastCommand, Provider, TranscriptMessage } from '../../core/types'
 import { readGitSummary, type GitSummaryDeps } from '../gitSummary'
 import { LAUNCH_FORBIDDEN } from './coordinator'
+import { parseTranscriptForResume, type TranscriptResumeMaterial } from '../../core/history/parser'
+import { parseCodexForResume } from '../../core/history/codexParser'
 
 export interface ResumePacketDeps {
   /** git 실행 어댑터. readGitSummary(main/gitSummary.ts)의 GitSummaryDeps.git 을 그대로 통과시킨다 —
@@ -66,7 +71,8 @@ function upsertResumeSection(existing: string, section: string): string {
  *  두 쓰기가 겹쳐도 서로의 임시 파일을 밟지 않는다.
  *
  *  rename 이 실패하면 임시 파일이 남는다 — 지우려 시도하되 그 실패는 삼킨다(원래 오류를 가리면
- *  안 된다). 남더라도 spec 디렉터리는 앱 시작마다 비워지므로(ipc.ts) 누적되지 않는다. */
+ *  안 된다). 남더라도 이 함수를 쓰는 두 디렉터리 — spec 디렉터리와 tab-resume 디렉터리 —
+ *  모두 앱 시작마다 통째로 비워지므로(ipc.ts) 누적되지 않는다. */
 async function writeAtomic(
   filePath: string,
   content: string,
@@ -236,6 +242,172 @@ export async function buildResumeNote(
     return note
   } catch (err) {
     deps.log?.(`resume note failed dispatch=${dispatch.id}: ${String(err)}`)
+    return null
+  }
+}
+
+/** buildTabResumeText 의 의존성. buildResumePacket/buildResumeNote 와 달리 OrchState 를 보지
+ *  않는다 — 탭 세션은 Dispatch 가 없으므로 볼 State 가 없다. 대신 cwd 와 transcript 경로를 직접
+ *  받는다. */
+export interface TabResumeDeps {
+  /** 그 세션의 작업 폴더. **코디네이터가 아는 값이므로 인자로 받는다** — 이 함수가 체인 내부를
+   *  들여다보게 하면 core/main 경계가 흐려지고, claude·codex 두 코디네이터가 각자 다른 방법으로
+   *  같은 값을 넘길 여지가 생긴다. */
+  cwd: string
+  /** 그 세션의 현재 대화 파일 경로. 모르면(아직 못 찾았거나 이 provider 가 그런 파일을 남기지
+   *  않으면) null — 그때는 git 만으로 시도한다(아래 buildTabResumeText 의 계약). */
+  transcriptPath: string | null
+  /** 그 대화 파일이 어느 provider 의 형식인지. `readTranscript` 의 기본값을 고르는 데만 쓴다
+   *  (아래) — claude·codex 두 코디네이터가 각자 자기 형식의 경로를 넘기므로, 어느 파서로 읽을지는
+   *  호출하는 쪽이 이미 안다. 이 값 자체를 판정하는 것은 이 함수의 일이 아니다. */
+  provider: Provider
+  /** git 실행 어댑터. ResumePacketDeps.git 과 같은 관례 — 테스트 주입용이고, 넘기지 않으면 실제
+   *  git 을 쓴다. */
+  git?: GitSummaryDeps['git']
+  /** 폐기 진단 로그. 넘기지 않으면 아무 것도 하지 않는다. **폐기를 소리 없이 버리지 않는다** —
+   *  buildResumeNote 의 JSDoc 이 적어 둔 이유와 같다: 소리 없이 사라지는 브리핑이 이 기능의
+   *  실제 사고다. */
+  log?(message: string): void
+  /** 대화 파일을 한 번 읽어 다섯(제목·요청·손댄 파일·꼬리·마지막 명령)을 뽑는 방법. 테스트 전용 주입점이다.
+   *  넘기지 않으면 `provider` 에 따라 parseTranscriptForResume(claude, core/history/parser.ts) 나
+   *  parseCodexForResume(codex, core/history/codexParser.ts)를 쓴다 — codex rollout 은 claude
+   *  transcript 와 레코드 모양이 달라 같은 파서로 읽을 수 없다(제목·손댄 파일 레코드가 없다: 그
+   *  둘은 항상 비어 온다). */
+  readTranscript?(path: string): Promise<TranscriptResumeMaterial>
+  /** Task 7 — 'handover' 브리핑을 적을 디렉터리. **'update' 에는 쓰이지 않는다**(그 폼은 파일을
+   *  건드리지 않는다 — 아래 buildTabResumeText 의 계약). Job 워커의 spec 파일과 달리 탭 세션에는
+   *  기존에 쓰던 파일이 없으므로 어디에 쓸지 자체가 이 함수 밖에서 결정되는 값이다 — 코디네이터가
+   *  cwd 를 넘기는 것과 같은 이유(위 cwd 필드의 JSDoc): 이 함수가 main 배선(userData 경로 등)을
+   *  들여다보게 하면 core/main 경계가 흐려진다. 실제 값은 main/ipc.ts 가 정한다(프로젝트 폴더가
+   *  아니라 앱 데이터 폴더 — 그 이유는 이 파일 아래 buildTabResumeText 의 JSDoc). */
+  dir: string
+  /** 파일을 쓰는 방법. ResumePacketDeps.writeFile 과 같은 이유의 테스트 전용 주입점이다 — 중간에
+   *  끊긴 쓰기를 결정론적으로 재현한다. 넘기지 않으면 실제 fs.writeFile 을 쓴다. 받는 경로는
+   *  임시 파일 경로다(writeAtomic 이 rename 으로 갈아 끼운다). 'update' 폼에서는 쓰이지 않는다. */
+  writeFile?(path: string, content: string): Promise<void>
+}
+
+/**
+ * 탭 세션(Job Dispatch 가 없는 일반 세션)용 재개 프롬프트 문자열. buildResumePacket/buildResumeNote
+ * 가 Job 워커를 위해 하는 일과 같은 자리다.
+ *
+ * **Task 7 — 'handover' 는 이제 파일에 쓰고 한 줄만 돌려준다.** 계획 문서는 원래 "탭용 브리핑은
+ * 파일을 만들지 않고 프롬프트에 인라인으로 싣는다"고 정했었지만, 그 선택은 이 파일 머리말이 이미
+ * 반대로 정해 둔 것과 충돌했다 — claude 는 PTY 에 타이핑하므로 여러 줄 브리핑의 줄바꿈마다 Enter가
+ * 눌려 브리핑이 스스로 조각조각 제출되고, codex 는 CLI 인자를 sanitizeResumePrompt 가 한 줄로
+ * 접어 구조를 뭉갠다. 그래서 이제 Job 워커와 같은 모양을 쓴다: 조립된 브리핑은 `deps.dir` 아래
+ * `<sessionId>.md` 하나에 통째로 쓰고(세션당 파일 하나, 재개할 때마다 덮어쓴다 — 이력을 쌓지
+ * 않는다), 프롬프트 자리에는 그 파일을 가리키는 한 줄만 싣는다. spec 파일과 달리 보존할 기존
+ * 내용이 없으므로(Job 의 Task 지시문에 해당하는 것이 탭 세션에는 없다) upsertResumeSection 같은
+ * 절 관리 없이 매번 그대로 갈아 끼운다. **'update' 는 그대로다** — 살아 있는 세션에 얹는 한 줄이라
+ * 파일을 전혀 건드리지 않는다.
+ *
+ * **대화 파일은 한 번만 읽는다.** 제목·최근 요청·손댄 파일·꼬리·마지막 명령 다섯을 각각 다른
+ * 함수로 읽으면 같은(수십 MB 일 수 있는) 파일을 다섯 번 훑는다 — parseTranscriptForResume(claude)
+ * 나 parseCodexForResume(codex) 하나가 그 다섯을 한 번의 스트리밍으로 뽑는다.
+ *
+ * **읽는 파서는 `deps.provider` 가 고른다.** codex rollout 은 claude transcript 와 레코드 모양이
+ * 달라 같은 파서로 읽을 수 없다 — codex 쪽은 대화 제목·손댄 파일·마지막 명령 레코드가 아예 없어
+ * 그 셋을 항상 비운 채로 돌아온다(parseCodexForResume 의 JSDoc). 손댄 파일이 비면 아래에서 git
+ * 변경 목록으로 내려가므로 손실은 없다.
+ *
+ * **'update' 는 대화 파일을 아예 읽지 않는다.** formatTabResume 의 'update' 모양은 git 상태만
+ * 쓰고 title·requests·editedFiles·tail 은 버린다(§11.5 — 대화가 온전한 세션에는 꼬리를 다시 실을
+ * 필요가 없다) — 그럴 값을 위해 큰 파일을 훑는 것은 순수 낭비다.
+ *
+ * 손댄 파일은 대화의 `file-history-snapshot` 레코드에서 먼저 찾고, 그 레코드가 한 번도 없으면(구
+ * 버전 세션, 혹은 아직 파일을 건드리지 않은 세션) git 의 변경 목록으로 내려간다 — 계획 문서의
+ * 재료 표가 정한 순서다.
+ *
+ * **LAUNCH_FORBIDDEN 을 여기서 검사하지 않는다 — 두 폼의 이유가 갈린다.** 'update' 가 돌려주는
+ * 것은 여전히 **사용자가 실제로 쓴 텍스트와 파일 경로**를 담은 문장이다 — 제목·요청 하나에
+ * 따옴표나 `&`가 있는 것은 예삿일이고, 그때마다 버리면 buildResumeNote 의 JSDoc 이 "순손실"이라
+ * 부른 바로 그 사고를 반복하는 것이다. 'handover' 가 돌려주는 것은 이제(Task 7) 그 텍스트가 아니라
+ * `dir`·`sessionId` 로 지은 파일 경로 하나뿐인 짧은 포인터 한 줄이다 — buildResumePacket 의
+ * resumeLine 과 같은 모양이지만, resumeLine 은 앱이 만든 hex id 만 담아 걸릴 문자가 없는 반면 이
+ * 줄은 실제 파일시스템 경로를 담는다. 검사하지 않는 이유는 그래도 같다: 드문 사용자 이름
+ * 문자(`&` 등) 하나 때문에 브리핑 전체를 버리는 대가가, 지키는 이득보다 크다.
+ *
+ * **이 문자열이 argv 로 가는 자리는 이미 둘이다, 그리고 둘의 처방이 다르다.** `resumePrompt`
+ * 자리(codex 의 `--resume` 뒤)는 buildCodexCommand 가 sanitizeResumePrompt 를 스스로 돌려 왔다 —
+ * 이 함수가 그 경계를 미리 검사할 이유가 없었던 것이 그래서다. Smart Resume 의 백지 재개가 같은
+ * 문자열을 `initialPrompt` 로도 실어 보내면서 두 번째 자리가 생겼는데, `buildCodexCommand` 는
+ * `initialPrompt` 를 스스로 sanitize 하지 않는다(그 필드의 JSDoc 이 이유를 적어 둔다 — 다른
+ * caller 인 오케스트레이션 코디네이터는 자신이 만든 spec 파일 포인터가 조용히 망가지지 않도록
+ * 거부로 그 경계를 지킨다). 그래서 그 자리의 호출부(codexRolling.ts 의 백지 재개)가 넘기기
+ * 직전에 sanitizeResumePrompt 를 스스로 적용한다 — "이미 갖고 있다"가 아니라 그 호출부가 새로
+ * 갖췄다는 차이는 있지만, 이 함수가 미리 검사해 통째로 버릴 이유가 아니라는 결론은 그대로다.
+ * **'handover' 의 새 포인터 한 줄에서 이 sanitize 가 실제로 하는 일은 연속 공백을 하나로 접는
+ * 것뿐이다** — 사용자 이름에 연속된 공백이 있는 드문 경우가 아니면 경로는 그대로 살아남는다.
+ *
+ * 실패는 전부 `null` 이다 — 부르는 쪽은 기존 고정 문장으로 저하한다. 폐기는 항상 로그로 남는다.
+ */
+
+/** 재개 프롬프트 자리에 실을 한 줄. resumeLine(Job 쪽, 위)과 같은 어투이되, 가리킬 taskId·
+ *  dispatchId 가 없으므로(탭 세션에는 Dispatch 가 없다) 대신 방금 쓴 파일 경로를 담는다. 보고
+ *  명령이 없는 이유도 같다 — worker_done 을 기다리는 Task 가 탭 세션에는 없다. */
+function tabResumeLine(filePath: string): string {
+  return (
+    'Continue this session: re-read the resume briefing the app just wrote to ' +
+    `${filePath}, then carry on from where the work already stands.`
+  )
+}
+
+export async function buildTabResumeText(
+  sessionId: string,
+  form: 'handover' | 'update',
+  deps: TabResumeDeps
+): Promise<string | null> {
+  try {
+    const git = await readGitSummary(deps.cwd, deps.git ? { git: deps.git } : undefined).catch(() => null)
+
+    let title: string | null = null
+    let requests: string[] = []
+    let editedFiles: string[] = []
+    let tail: TranscriptMessage[] = []
+    let lastCommand: LastCommand | null = null
+    if (form === 'handover' && deps.transcriptPath) {
+      const read =
+        deps.readTranscript ??
+        (deps.provider === 'codex' ? parseCodexForResume : parseTranscriptForResume)
+      const material = await read(deps.transcriptPath)
+      title = material.title
+      requests = material.requests
+      editedFiles = material.editedFiles
+      tail = material.tail
+      lastCommand = material.lastCommand
+    }
+    // fix wave 최종, F9: 어느 쪽으로 채웠는지를 함께 넘긴다 — filesSection 이 그 출처에 따라 다른
+    // 표제를 고른다(editedFilesSource 의 JSDoc, tabResume.ts). 대화 기록에서 이미 채웠으면(길이가
+    // 0 이 아니면) 그대로 'transcript' 다.
+    let editedFilesSource: 'transcript' | 'git' = 'transcript'
+    if (editedFiles.length === 0 && git) {
+      editedFiles = git.changed
+      editedFilesSource = 'git'
+    }
+
+    const text = formatTabResume(
+      { cwd: deps.cwd, title, requests, editedFiles, editedFilesSource, git, tail, lastCommand },
+      form
+    )
+    if (text === null) {
+      // formatTabResume 이 null 을 돌리는 유일한 이유는 "확인한 것도 대화 흔적도 없다"다(그 함수의
+      // 계약) — buildResumeNote 와 같은 이유로 여기서도 소리 없이 버리지 않는다.
+      deps.log?.(`tab resume skipped session=${sessionId} form=${form}: nothing to report`)
+      return null
+    }
+    if (form === 'update') return text // 살아 있는 세션에 얹는 한 줄 — 파일을 건드리지 않는다
+
+    // 'handover': 조립된 브리핑을 세션당 파일 하나(<sessionId>.md)에 통째로 갈아 끼우고(재개마다
+    // 덮어쓴다 — 이력을 쌓지 않는다), 프롬프트 자리에는 그 파일을 가리키는 한 줄만 싣는다(위
+    // 함수 JSDoc — Task 7). 쓰기 실패는 이 try 블록의 catch 로 떨어져 다른 실패와 같은 방식으로
+    // null 로 저하하고 로그를 남긴다 — 새 세션이 백지 재개로 가지 않도록.
+    const filePath = path.join(deps.dir, `${sessionId}.md`)
+    const writeFile = deps.writeFile ?? ((p: string, c: string) => fs.writeFile(p, c, 'utf8'))
+    await writeAtomic(filePath, text, writeFile)
+    return tabResumeLine(filePath)
+  } catch (err) {
+    deps.log?.(`tab resume failed session=${sessionId} form=${form}: ${String(err)}`)
     return null
   }
 }

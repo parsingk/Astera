@@ -822,6 +822,19 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .theme-card-bars { display: flex; width: 100%; height: 18px; border-radius: inherit; overflow: hidden; }
 .theme-card-bars i { flex: 1; }
 .theme-card-name { font-weight: 600; }
+/* ---------- 일반 탭: 재개 방식 카드 ---------- */
+/* .theme-grid/.theme-card와 같은 두 열 카드 배치다. 다만 팔레트 미리보기가 없어 인라인 스타일이
+   필요 없으므로 색은 앱 토큰(--line 등)에서 그대로 가져온다. */
+.settings-resume-strategy { display: flex; flex-direction: column; gap: 8px; }
+.resume-strategy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.resume-strategy-card { display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+  padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg);
+  color: var(--text); cursor: pointer; text-align: left; font-size: 12.5px; }
+.resume-strategy-card.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.resume-strategy-card:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.resume-strategy-card-name { font-weight: 600; }
+.resume-strategy-card-desc { color: var(--text-dim); }
+.resume-strategy-recommended { margin-left: 6px; font-weight: 400; font-size: 11px; color: var(--text-faint); }
 /* worktree 기준 브랜치 — 라벨 문구를 위, 셀렉트를 아래에 둔다(.field label 들과 같은 관례).
    컨테이너가 <label>이 아니라 <div>인 이유는 컴포넌트 쪽 주석에 있다(라벨은 클릭을 컨트롤로 한 번 더
    전달해서 드롭다운이 닫히자마자 다시 열렸다). div 라서 `.field label`(0,1,1)과 경쟁하지 않으므로

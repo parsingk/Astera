@@ -61,7 +61,8 @@ import { writeInfo, writeShuttle } from './orchestration/shuttle'
 import { WorkerTails } from './orchestration/tail'
 import { releaseArgsFor } from './orchestration/release'
 import { installStub } from './orchestration/stub'
-import { buildResumeNote, buildResumePacket } from './orchestration/resumePacket'
+import { buildResumeNote, buildResumePacket, buildTabResumeText } from './orchestration/resumePacket'
+import { extractStatusLineSession } from '../core/usage/statusline'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
 import { imageMime } from '../core/files/imageMime'
@@ -101,14 +102,18 @@ import { loadRunConfigs, prepareRun } from './run/prepare'
  *
  *  **resumeText 는 두 롤링 코디네이터가 읽는 네 번째 값이다** — RollingDeps/CodexRollingDeps 의
  *  resumeText dep 구현이고, sessionId 로 열린 Job Dispatch 를 찾아 재개 packet 을 spec 파일에 적어
- *  넣은 뒤 그 자리에 쓸 한 줄을 돌려준다(main/orchestration/resumePacket.ts). Job 워커가 아니거나
- *  packet 을 못 만들면 null 이고, 그때 두 코디네이터는 기존 고정 문장으로 저하한다. */
+ *  넣은 뒤 그 자리에 쓸 한 줄을 돌려준다(main/orchestration/resumePacket.ts). Job 워커가 아니면(그리고
+ *  `tabFallback` 이 참이면) 탭 브리핑으로 저하한다 — 그 저하는 `tabResumeTextFor` 를 그대로 감쌀
+ *  뿐이라 오케스트레이션이 켜져 있을 때만 쓸 수 있는 자원(OrchState)에 기대지 않는다. **이 handle
+ *  자체가 오케스트레이션이 켜져 있을 때만 존재한다는 점은 그대로다** — `orchRef` 가 null 인 경우의
+ *  탭 폴백은 index.ts 가 별도로 받는 `tabResumeTextFor` 참조로 처리한다(fix wave 최종, F1 —
+ *  `OrchWiring.onTabResumeReady`). */
 export interface OrchHandle {
   stop: () => void
   onRolled: (oldSessionId: string, newInfo: { id: string; accountId: string }) => void
   onRollState: (e: RollStateEvent) => void
   orchEnv: () => { cliPath: string; infoPath: string; skillsPath: string } | undefined
-  resumeText: (sessionId: string, form: 'handover' | 'update') => Promise<string | null>
+  resumeText: (sessionId: string, form: 'handover' | 'update', tabFallback: boolean) => Promise<string | null>
 }
 
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
@@ -122,6 +127,16 @@ export interface OrchWiring {
    *  synchronous: asynchronous cleanup may not finish before the process ends, and deleting the token
    *  file has to happen (OS permissions on the token file are the access control). */
   onStarted: (h: OrchHandle) => void
+  /** fix wave 최종, F1: hands over the tab-briefing function (`tabResumeTextFor` below) once,
+   *  unconditionally — called synchronously from inside `registerIpc`, not from `bootOrch`. That is the
+   *  whole point of a separate callback: `onStarted`/`OrchHandle` exist only once orchestration has
+   *  actually booted (the toggle is on), but a plain tab session's briefing has nothing to do with that
+   *  toggle — it reads a transcript and git, not `OrchState`. Before this, index.ts's two rolling
+   *  coordinators reached the tab fallback only through `orchRef?.resumeText`, so on a default install
+   *  (orchestration off) `orchRef` was always null and Smart Resume was inert regardless of its own
+   *  setting. index.ts stores the function this hands over separately from `orchRef` and calls it
+   *  directly when `orchRef` is null. */
+  onTabResumeReady: (fn: (sessionId: string, form: 'handover' | 'update') => Promise<string | null>) => void
 }
 
 /** 앱 자신이 명령을 부를 때의 호출자 id. **어떤 세션 id 와도 겹칠 수 없는 모양**이어야 한다 —
@@ -199,6 +214,47 @@ export function registerIpc(
   // ── Agent orchestration ────────────────────────────────────────────
   // The pure layers, the store, the server, the coordinator, and the CLI are first connected here.
   const orchLog = orchWiring?.log ?? ((): void => {})
+  /** Task 7 — the directory a tab session's 'handover' briefing is written into (see
+   *  buildTabResumeText's JSDoc, main/orchestration/resumePacket.ts). Same convention as
+   *  `specsDir` below (userData, never the project folder — the briefing's own "inspect git status"
+   *  instruction would otherwise pick up this app-owned file as evidence). Declared at this outer
+   *  scope, not inside bootOrch the way specsDir is, because `tabResumeTextFor` (below) closes over
+   *  it and is itself declared here, ahead of bootOrch.
+   *
+   *  **Wiped and recreated at startup, the same shape as specsDir below.** Nothing under either
+   *  directory needs to survive a restart, and neither needs an age rule to tell a stale file from a
+   *  fresh one — both are wiped wholesale, so there is nothing left to date. (An earlier version of
+   *  this comment reasoned specsDir got to skip an age rule because "every Dispatch closes on
+   *  restart" — that was the wrong reason: wiping everything needs no age rule regardless of what
+   *  produced the files, and this directory needed the same wipe from the start.)
+   *
+   *  fix wave 7, finding 1 (CRITICAL): deletion used to run per session exit instead
+   *  (`core.sessions.onExit`), keyed to the id that was actually exiting — that was the bug this
+   *  startup sweep replaces. A smart-resume roll writes the briefing under the *old*,
+   *  about-to-die session's id and hands the *new* session a pointer to that exact path before the
+   *  kill (roll() in rolling.ts/codexRolling.ts). The producer's id and the consumer's id are never
+   *  the same id, so deleting the file the moment the producer exits removed it out from under a
+   *  consumer that had not even booted yet — not as a rare race, but as the expected outcome of every
+   *  smart resume. A startup sweep has no such mismatch: it runs before any session of this app run
+   *  exists, so a file written during the run is never in flight when it fires.
+   *
+   *  Accepted consequence: a briefing file accumulates for the lifetime of the app run — one per
+   *  smart resume, reclaimed only at the next restart. specsDir already carries the same shape. */
+  const tabResumeDir = path.join(app.getPath('userData'), 'tab-resume')
+  void (async (): Promise<void> => {
+    await fs.rm(tabResumeDir, { recursive: true, force: true }).catch(() => {})
+    await fs.mkdir(tabResumeDir, { recursive: true })
+  })().catch((err) => orchLog(`tab resume dir create failed: ${String(err)}`))
+  // fix wave 최종, F6: specsDir 아래의 같은 검사(이 파일 뒤쪽, bootOrch)와 같은 이유다. 탭
+  // handover 의 포인터 한 줄은 이 디렉터리 아래 파일을 가리키므로, 이 경로에 금지 문자가 있으면
+  // codex 의 인자 sanitizer(sanitizeResumePrompt, codexRolling.ts 의 roll())가 그 포인터를
+  // 영구히 망가뜨린다 — 매 롤마다 codexRolling.ts 가 로그를 남기긴 하지만(F6 의 나머지 절반),
+  // 그 로그는 실제로 롤이 일어나야만 나온다. 시작하자마자 원인을 알 수 있도록 여기서도 한 번
+  // 경고한다. 시작은 막지 않는다 — specsDir 과 같은 태도.
+  if (LAUNCH_FORBIDDEN.test(tabResumeDir))
+    orchLog(
+      `warning — the tab-resume directory path contains characters forbidden in a launch prompt (" & | < > ^ %): ${tabResumeDir} — codex Smart Resume will be refused for every tab session in this state`
+    )
   let orch: {
     server: OrchServer
     deps: OrchServerDeps
@@ -322,6 +378,10 @@ export function registerIpc(
     codexRolling?.handleExit(e)
     codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
+    // Task 7's tab-resume briefing file is no longer deleted here — see tabResumeDir's own comment
+    // above (fix wave 7, finding 1 (CRITICAL)) for why a per-exit delete keyed to this id was wrong:
+    // it fired for the *old* session a smart resume had just written the briefing under, while the
+    // *new* session that needs to read it was still booting.
     // An exited session clears busy and disposes its scanner
     busyScanners.delete(e.sessionId)
     if (busyState.get(e.sessionId)) send('session:busy', { sessionId: e.sessionId, busy: false })
@@ -528,6 +588,55 @@ export function registerIpc(
     if (!descriptorOf(core.descriptors, account).busyTitleReliable) return null
     return busyState.get(sessionId) ?? false
   }
+
+  /** resumeText 가 Dispatch 를 못 찾았을 때(탭 세션 — Job 워커가 아니다) 저하하는 자리.
+   *  buildTabResumeText(main/orchestration/resumePacket.ts) 자신은 cwd·provider·transcript 경로를
+   *  인자로만 받는다 — 코디네이터 체인을 들여다보지 않기 위해서다(그 함수의 JSDoc). 그 값을 실제로
+   *  찾는 것은 이 배선의 몫이다: cwd 는 core.sessions.list() 에서 얻는다.
+   *
+   *  **대화 파일 경로는 provider 마다 자리가 다르다.** claude 는 statusLine 페이로드에서 얻는다
+   *  (rolling.ts 의 refreshMeta·scheduler.ts·slack.ts 가 이미 같은 페이로드로 같은 값을 얻는 것과
+   *  같은 자리). codex 는 statusLine 이 없다(usesStatusLine=false) — 그 값을 아는 유일한 쪽은
+   *  rollout 파일을 파일시스템 스캔으로 찾아 둔 codexRolling 코디네이터뿐이라, 그쪽의
+   *  rolloutPathFor 를 대신 묻는다. 어느 쪽도 찾지 못하면(등록되지 않은 체인, 매핑 전) null 이고,
+   *  buildTabResumeText 는 git 만으로 시도한다.
+   *
+   *  **provider 를 못 가리면 null 로 저하한다 — 'claude'로 보지 않는다.** 예전에는 여기서 null 을
+   *  "claude 로 본다"로 받았다: providerOfSession(위)이 null 을 돌리는 것은 계정이 지워진 경우뿐이고,
+   *  claude 쪽 조회(statusLine 페이로드)는 애초에 계정을 보지 않으니 막힐 이유가 없다는 논리였다.
+   *  그런데 이 provider 값은 조회가 아니라 **어느 파일을 읽을지** 자체를 가른다 — codex 계정이
+   *  지워지면 실제 provider 는 codex 인데 'claude'로 보아 statusLine 페이로드(codex 는 절대 쓰지
+   *  않는다)를 물으므로 transcriptPath 가 null 이 되고, 진짜 경로를 아는 rolloutPathFor 는 애초에
+   *  불리지도 않는다. 그 결과 대화는 하나도 못 읽었는데 git 만으로 handover 가 만들어질 뻔한
+   *  경로였다(fix wave 최종, F2) — formatHandover 가 이제 대화 증거 없이는 null 을 돌리므로 그
+   *  최악은 막혔지만, 그렇다고 틀린 provider 로 넘어갈 이유는 없다. 판단이 안 서면 아무것도
+   *  시도하지 않고 null 을 돌린다 — 부르는 쪽(resumeText 배선)은 그러면 기존 고정 문장으로
+   *  저하한다. 그것이 이 자리에서 낼 수 있는 가장 안전한 결과다. */
+  const tabResumeTextFor = async (
+    sessionId: string,
+    form: 'handover' | 'update'
+  ): Promise<string | null> => {
+    const sessions = core.sessions.list()
+    const info = sessions.find((s) => s.id === sessionId)
+    if (!info) return null
+    const provider = providerOfSession(sessionId, sessions, (id) => core.accounts.get(id))
+    if (!provider) return null
+    const transcriptPath =
+      provider === 'codex'
+        ? (codexRolling?.rolloutPathFor(sessionId) ?? null)
+        : extractStatusLineSession(await core.statusLinePayload(sessionId)).transcriptPath
+    return buildTabResumeText(sessionId, form, {
+      cwd: info.cwd,
+      provider,
+      transcriptPath,
+      log: orchLog,
+      dir: tabResumeDir
+    })
+  }
+  // fix wave 최종, F1: handed over here, unconditionally — not inside bootOrch below, which only runs
+  // when orchestration is enabled. index.ts keeps this apart from `orchRef` (set by `onStarted`, further
+  // down) so the two rolling coordinators can reach a tab session's briefing even with the toggle off.
+  orchWiring?.onTabResumeReady(tabResumeTextFor)
 
   let orchStarting = false
   /** Starts orchestration. Called only when the toggle is on — with it off, the store is not even read
@@ -2124,19 +2233,31 @@ export function registerIpc(
       // 롤링 배선이 읽는다. 오케스트레이션이 꺼져 있으면 undefined — 그러면 롤된 세션은 예전처럼
       // CLI 없이 뜨고, 그 상태에서 워커가 존재할 일도 없다.
       orchEnv: () => orchEnvOf(),
-      // 두 롤링 코디네이터의 resumeText dep 구현. Job 워커가 아니거나 만들지 못하면 null 이고,
-      // 그때 부르는 쪽은 기존 고정 문장으로 저하한다(main/orchestration/resumePacket.ts 의 계약).
+      // 두 롤링 코디네이터의 resumeText dep 구현.
       //
       // **모양이 둘이고, 고르는 자리가 여기다.** 기준은 `SPEC §11.5` — 그 재개 경로가 `--resume` 을
-      // 부르는가. 부르면 프로세스가 새것이라 전체 인계가 값을 내고(buildResumePacket), 부르지 않으면
-      // 같은 프로세스가 계속 도는 것이므로 떨어뜨린 것이 없어 인계할 것도 없다: 기다리는 동안 무엇이
-      // 바뀌었는지 한 줄만 덧붙인다(buildResumeNote). 어느 경로인지 아는 쪽은 코디네이터뿐이라
-      // form 을 그쪽이 넘기고, 이 배선은 그 값으로 함수만 고른다 — 두 함수 중 어느 것도 form 을
-      // 해석하지 않는다.
-      resumeText: (sessionId, form) =>
-        form === 'update'
+      // 부르는가. 부르면 프로세스가 새것이라 전체 인계가 값을 내고(buildResumePacket/
+      // buildTabResumeText 의 'handover'), 부르지 않으면 같은 프로세스가 계속 도는 것이므로
+      // 떨어뜨린 것이 없어 인계할 것도 없다: 기다리는 동안 무엇이 바뀌었는지 한 줄만 덧붙인다
+      // (buildResumeNote/buildTabResumeText 의 'update'). 어느 경로인지 아는 쪽은 코디네이터뿐이라
+      // form 을 그쪽이 넘기고, 이 배선은 그 값으로 함수만 고른다 — 어느 함수도 form 을 해석하지
+      // 않는다.
+      //
+      // **Job 워커용 함수가 null 이면, `tabFallback` 이 참일 때만 탭 세션용으로 저하한다(Task 2,
+      // fix wave 최종 F3).** Dispatch 를 못 찾으면(= 일반 탭 세션) buildResumeNote/buildResumePacket
+      // 은 무조건 null 이고, tabResumeTextFor 가 그 자리를 대신 채운다. **§11.5 가 가르는 것은
+      // "어느 모양인가"이지 "데이터를 줄 것인가"가 아니다** — 'update' 자리에 주는 것은 그 절이
+      // 금지한 전체 인계가 아니라, 그 절이 이미 허용한 한 줄이다. Job 워커의 함수가 다른 이유(spec
+      // 쓰기 실패 등)로 null 을 돌린 경우도 `tabFallback` 이 참이면 같은 이유로 이쪽으로 내려간다 —
+      // 구조화된 Job 인계를 못 만들었다고 git+대화 기반의 일반 브리핑까지 포기할 이유는 없다.
+      // `tabFallback` 이 거짓이면(rolling.ts/codexRolling.ts 의 ordinary-path 'handover' 호출,
+      // F3) 탭 세션에 대해서는 Job 과 마찬가지로 그냥 `null` 이다 — 부르는 쪽이 `chain.prompt` 로
+      // 저하한다.
+      resumeText: (sessionId, form, tabFallback) =>
+        (form === 'update'
           ? buildResumeNote(sessionId, deps.getState(), { log: orchLog })
           : buildResumePacket(sessionId, deps.getState(), { log: orchLog })
+        ).then((text) => text ?? (tabFallback ? tabResumeTextFor(sessionId, form) : null))
     })
   }
   if (orchWiring && core.appSettings.getOrchestrationEnabled())
@@ -3038,6 +3159,15 @@ export function registerIpc(
     await core.appSettings.setOrchestrationEnabled(enabled)
     // Turning it on starts it immediately (a no-op if already up). Why turning it off does not close it is in the startOrch comment.
     if (enabled && orchWiring) await startOrch()
+  })
+
+  // How a session that hits its limit gets continued. The same trust-boundary check as setLang — the
+  // value the renderer sent is validated before being written to disk.
+  ipcMain.handle('settings.getResumeStrategy', () => core.appSettings.getResumeStrategy())
+  ipcMain.handle('settings.setResumeStrategy', async (_e, strategy: unknown) => {
+    if (strategy !== 'smart' && strategy !== 'original')
+      throw new Error(`INVALID_RESUME_STRATEGY: ${String(strategy)}`)
+    await core.appSettings.setResumeStrategy(strategy)
   })
 
   // The terminal font pair. The same trust-boundary check as setLang: the shape is validated here, and

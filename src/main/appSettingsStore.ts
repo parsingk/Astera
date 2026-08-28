@@ -4,9 +4,10 @@ import { isLang, type Lang } from '../core/i18n'
 import { sanitizeFontFamily } from '../core/terminal/font'
 import type { TerminalFont } from '../core/terminal/font'
 import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from '../core/theme/themes'
+import type { ResumeStrategy } from '../core/types'
 
 /** App-wide settings persistence. Holds the language, the id of the dismissed update campaign, the
- *  orchestration toggle, the terminal font, and the theme.
+ *  orchestration toggle, the resume strategy, the terminal font, and the theme.
  *  A null lang means the user has never picked one explicitly — the caller derives it with
  *  pickInitialLang(app.getLocale()). The derived value is not stored. */
 export class AppSettingsStore {
@@ -14,6 +15,7 @@ export class AppSettingsStore {
   /** The update campaign the user dismissed. The basis for not showing the same campaign again. */
   private dismissedCampaignId: string | null = null
   private orchestrationEnabled = false
+  private resumeStrategy: ResumeStrategy = 'original'
   private terminalFont: TerminalFont = { latin: null, hangul: null }
   private theme: ThemeId = DEFAULT_THEME_ID
 
@@ -33,6 +35,9 @@ export class AppSettingsStore {
       // Narrowed to === true — values like 'yes' or 1 must not slip through as truthy and turn an experimental feature on
       this.orchestrationEnabled =
         (parsed as { orchestrationEnabled?: unknown }).orchestrationEnabled === true
+      // Narrowed to === 'smart' — the file is user-editable, so anything else ('ask', 42, null) reads as 'original'
+      this.resumeStrategy =
+        (parsed as { resumeStrategy?: unknown }).resumeStrategy === 'smart' ? 'smart' : 'original'
       // Sanitised on read as well as on write: the file is user-editable, and the value ends up in a
       // CSS font-family string. Anything that does not survive is treated as unset.
       const font = (parsed as { terminalFont?: unknown }).terminalFont
@@ -51,6 +56,7 @@ export class AppSettingsStore {
         this.lang = null
         this.dismissedCampaignId = null
         this.orchestrationEnabled = false
+        this.resumeStrategy = 'original'
         this.terminalFont = { latin: null, hangul: null }
         this.theme = DEFAULT_THEME_ID
         return { recovered: false }
@@ -61,6 +67,7 @@ export class AppSettingsStore {
       // The failure branch resets this too — otherwise, on a reload through the same instance, the previous value
       // survives the corrupt-file recovery and leaves a setting enabled that the file does not contain
       this.orchestrationEnabled = false
+      this.resumeStrategy = 'original'
       this.terminalFont = { latin: null, hangul: null }
       this.theme = DEFAULT_THEME_ID
       return { recovered: true }
@@ -95,6 +102,15 @@ export class AppSettingsStore {
     await this.persist()
   }
 
+  getResumeStrategy(): ResumeStrategy {
+    return this.resumeStrategy
+  }
+
+  async setResumeStrategy(strategy: ResumeStrategy): Promise<void> {
+    this.resumeStrategy = strategy
+    await this.persist()
+  }
+
   getTerminalFont(): TerminalFont {
     return this.terminalFont
   }
@@ -125,12 +141,14 @@ export class AppSettingsStore {
       lang?: Lang
       dismissedCampaignId?: string
       orchestrationEnabled?: boolean
+      resumeStrategy?: ResumeStrategy
       terminalFont?: TerminalFont
       theme?: ThemeId
     } = {}
     if (this.lang) data.lang = this.lang
     if (this.dismissedCampaignId) data.dismissedCampaignId = this.dismissedCampaignId
     if (this.orchestrationEnabled) data.orchestrationEnabled = true
+    if (this.resumeStrategy === 'smart') data.resumeStrategy = 'smart'
     if (this.terminalFont.latin || this.terminalFont.hangul) data.terminalFont = this.terminalFont
     if (this.theme !== DEFAULT_THEME_ID) data.theme = this.theme
     await fs.mkdir(path.dirname(this.filePath), { recursive: true })

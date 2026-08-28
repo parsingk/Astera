@@ -175,6 +175,14 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.theme.hint':
     'Changes colours, corners and typeface together. The terminal font is chosen separately below.',
   'settings.theme.saveFailed': 'Could not save the theme: {detail}',
+  // ResumeStrategySettings.tsx — the two-way resume strategy picker
+  'settings.resumeStrategy.label': 'Resume strategy',
+  'settings.resumeStrategy.smart.label': 'Smart Resume',
+  'settings.resumeStrategy.smart.hint': 'Start a fresh session from a compact checkpoint.',
+  'settings.resumeStrategy.original.label': 'Resume original session',
+  'settings.resumeStrategy.original.hint': 'Continue the existing Claude/Codex conversation.',
+  'settings.resumeStrategy.recommended': '(recommended)',
+  'settings.resumeStrategy.saveFailed': 'Could not save the resume strategy: {detail}',
   'settings.font.latin': 'Terminal font (Latin)',
   'settings.font.hangul': 'Terminal font (Hangul)',
   'settings.font.system': 'System default',

@@ -237,7 +237,12 @@ function truncate(text: string, max: number): string {
  *  기능의 하드 제약이다.
  *
  *  Message.body·Gate 의 question/resolution 처럼 사람이나 에이전트가 자유 형식으로 쓴 텍스트에만
- *  적용한다 — git 요약이나 파일 경로처럼 앱이 구조로 만든 값에는 자격 증명이 섞일 자리가 없다. */
+ *  적용한다 — git 요약이나 파일 경로처럼 앱이 구조로 만든 값에는 자격 증명이 섞일 자리가 없다.
+ *
+ *  **탭 브리핑(tabResume.ts)도 이 게이트째로 재사용한다** — 그쪽이 싣는 최근 요청·대화 꼬리·명령
+ *  결과 발췌도 똑같이 사람/에이전트의 자유 형식 텍스트이고, 아래 사고(산문을 망치는 것보다 없던
+ *  자격 증명이 있었던 것처럼 보이게 만드는 것이 더 나쁘다)는 그 텍스트에도 그대로 적용된다. 새
+ *  규칙을 또 만들면 이 사고를 다시 만든다. */
 /** 값이 자격 증명처럼 **보이는가**. 두 조건을 함께 요구한다: 공백 없는 16자 이상의 긴 런이고,
  *  영어 낱말과 구별되는 신호(숫자·구분자·대소문자 혼용) 중 하나가 있어야 한다.
  *
@@ -255,7 +260,7 @@ function looksLikeSecret(value: string): boolean {
   return /\d/.test(value) || /[-_+/=]/.test(value) || (/[a-z]/.test(value) && /[A-Z]/.test(value))
 }
 
-function sanitize(text: string): string {
+export function sanitize(text: string): string {
   // key=value / key: value 형태 — 키 이름에 token/key/secret/password/credential 이 있으면 값을
   // 가린다. 값이 실제로 시작하기 전까지("Credential in use:" 처럼 콜론 뒤에 다른 말이 이어지는
   // 경우) 매치되지 않도록 키 이름과 구분자 사이에는 공백만 허용하고, 값은 looksLikeSecret 을

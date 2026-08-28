@@ -98,6 +98,8 @@ const api = {
     setLang: invoke('settings.setLang'),
     getOrchestrationEnabled: invoke('settings.getOrchestrationEnabled'),
     setOrchestrationEnabled: invoke('settings.setOrchestrationEnabled'),
+    getResumeStrategy: invoke('settings.getResumeStrategy'),
+    setResumeStrategy: invoke('settings.setResumeStrategy'),
     getTerminalFont: invoke('settings.getTerminalFont'),
     setTerminalFont: invoke('settings.setTerminalFont'),
     getTheme: invoke('settings.getTheme'),

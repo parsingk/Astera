@@ -139,6 +139,15 @@ export interface TranscriptMessage {
   timestamp?: string
 }
 
+/** The last Bash tool call in a transcript and its result — `tool_use`(name `Bash`)/`tool_result`
+ *  pair. There is no exit code in either provider's record, only `is_error`, so `failed` is a
+ *  boolean and nothing here claims a precision the transcript does not carry. */
+export interface LastCommand {
+  command: string
+  failed: boolean
+  excerpt: string
+}
+
 export interface TranscriptPreview {
   entryId: string
   messages: TranscriptMessage[]
@@ -482,6 +491,11 @@ export interface CoreEvents {
 }
 export type CoreEventChannel = keyof CoreEvents
 
+/** 한도에 걸린 세션을 어떻게 이어갈지. 'smart' 는 대화를 물려받지 않고 브리핑만으로 새 세션을
+ *  시작한다(브리핑을 만들 수 없으면 적용되지 않는다). 'original' 은 기존 동작: 대화 파일을 넘겨
+ *  `--resume` 으로 이어간다. */
+export type ResumeStrategy = 'smart' | 'original'
+
 /** The contract the renderer sees as window.api. The IPC adapter implements it. */
 export interface CoreApi {
   accounts: {
@@ -596,6 +610,9 @@ export interface CoreApi {
     // already open (environment variables are fixed at spawn time).
     getOrchestrationEnabled(): Promise<boolean>
     setOrchestrationEnabled(enabled: boolean): Promise<void>
+    // How a session that hits its limit gets continued. See ResumeStrategy.
+    getResumeStrategy(): Promise<ResumeStrategy>
+    setResumeStrategy(strategy: ResumeStrategy): Promise<void>
     // The terminal font pair. Either side may be null, meaning "not chosen" — the renderer then uses
     // the app's default chain for that half.
     getTerminalFont(): Promise<TerminalFont>

@@ -2,7 +2,7 @@
 // account → auto-accepting the trust prompt → automatically sending "carry on with the work". The pure
 // decisions live in core/rolling and every side effect is injected through deps — it does not depend on
 // electron, so it is verified with vitest. The wiring is in ipc.ts and index.ts.
-import type { Account, SessionInfo, RollStateEvent, SessionUsage } from '../core/types'
+import type { Account, ResumeStrategy, SessionInfo, RollStateEvent, SessionUsage } from '../core/types'
 import type { RollConfig } from '../core/rolling/config'
 import {
   OutputScanner,
@@ -122,19 +122,36 @@ export interface RollingDeps {
   orchEnv?(): { cliPath: string; infoPath: string; skillsPath: string } | undefined
   /** 재개 직전에 쓸 텍스트를 물어본다. **`chain.prompt` 가 정적이라서 필요하다** — 그 값은
    *  register 시점에 고정되는데, 재개 자료는 재개 직전의 상태(git·보고·결정)에서 조립해야
-   *  정확하다. sessionId 로 열린 Job Dispatch 를 찾을 수 없으면(사용자 탭 세션) `null` 을 돌린다.
-   *  `null` 이면 `chain.prompt` 를 그대로 쓴다 — 주입되지 않아도 기존 동작 그대로다. 구현은
-   *  `main/orchestration/resumePacket.ts`, 그 자체는 절대 던지지 않는다(계약). 그래도 이 dep 을
-   *  부르는 자리는 그 위에 자기 자신의 try/catch 를 또 두른다(`resumePromptFor`) — 이 자리를
-   *  부르는 쪽이 전부 fire-and-forget 이라, 언젠가 이 계약이 깨지면 처리되지 않는 예외가 되는
-   *  대신 로그로만 남고 고정 문장으로 저하하게 하려는 것이다(server.ts 가 probeLimit 을 부르는
-   *  것과 같은 태도).
+   *  정확하다.
+   *
+   *  **sessionId 로 열린 Job Dispatch 를 찾으면 그 packet 을 돌린다. 못 찾으면(사용자 탭 세션)
+   *  `tabFallback` 이 참일 때만 탭 브리핑으로 저하하고, 거짓이면 곧바로 `null` 이다.** Job 도 탭도
+   *  못 찾거나 만들지 못하면 `null` 이다. `null` 이면 `chain.prompt` 를 그대로 쓴다 — 주입되지
+   *  않아도 기존 동작 그대로다. 구현은 `main/orchestration/resumePacket.ts`, 그 자체는 절대
+   *  던지지 않는다(계약). 그래도 이 dep 을 부르는 자리는 그 위에 자기 자신의 try/catch 를 또
+   *  두른다(`resumePromptFor`) — 이 자리를 부르는 쪽이 전부 fire-and-forget 이라, 언젠가 이 계약이
+   *  깨지면 처리되지 않는 예외가 되는 대신 로그로만 남고 고정 문장으로 저하하게 하려는 것이다
+   *  (server.ts 가 probeLimit 을 부르는 것과 같은 태도).
    *
    *  **`form` 이 어느 모양을 원하는지 말한다** — 이 코디네이터가 자기가 어느 재개 경로에 있는지
    *  아는 유일한 쪽이기 때문이다(packet 을 만드는 쪽은 모른다). 'handover' 는 전체 인계이고
    *  'update' 는 덧붙일 한 줄이다. 가르는 기준은 `SPEC §11.5`: `--resume` 을 부르는가.
-   *  `resumePromptFor` 의 주석에 이 파일의 어느 자리가 어느 쪽인지 적어 두었다. */
-  resumeText?(sessionId: string, form: 'handover' | 'update'): Promise<string | null>
+   *  `resumePromptFor` 의 주석에 이 파일의 어느 자리가 어느 쪽인지 적어 두었다.
+   *
+   *  **`tabFallback` 이 거짓이면 탭 세션이라도 저하하지 않는다.** `--resume` 뒤 이미 살아 있는
+   *  프로세스에 다시 'handover' 를 묻는 자리(`scheduleAutoPrompt`)가 이 값을 거짓으로 준다 — 그
+   *  프로세스는 이미 대화를 통째로 이어받았으므로 탭 세션에는 인계할 것이 없고, 있으면
+   *  `chain.prompt`(사용자가 New Session 대화상자에서 직접 지정했을 수 있는 문구)를 지운다. Job
+   *  워커는 이 값과 무관하게 packet 을 그대로 받는다 — 이 dep 이 처음 생기기 전부터의 동작이다. */
+  resumeText?(sessionId: string, form: 'handover' | 'update', tabFallback: boolean): Promise<string | null>
+  /** 한도에 걸린 세션을 어떻게 이어갈지 — Task 1 의 설정값. **getter 로 받는다** — `orchEnv?` 와
+   *  같은 이유다: 값이 설정 화면에서 앱 수명 중간에 바뀌고, 이 코디네이터는 그 값이 존재하기 전에
+   *  만들어진다. 주입되지 않으면 `'original'`(기존 동작)로 본다.
+   *
+   *  `'smart'` 라고 곧바로 백지 재개가 되는 것은 아니다 — `resumeText` 가 브리핑을 만들어 줄 때만
+   *  적용된다(계획의 지배 제약: 브리핑을 못 만들면 백지 재개를 하지 않는다). `roll()` 을 보라.
+   *  codexRolling.ts 의 같은 이름 dep 과 같은 계약이다. */
+  resumeStrategy?(): ResumeStrategy
 }
 
 interface Chain {
@@ -250,6 +267,7 @@ export class RollingCoordinator {
   private readonly probeActivity: (transcriptPath: string) => Promise<number | null>
   private readonly readPending: (transcriptPath: string) => Promise<number | null>
   private readonly readUsage: (configDir: string) => Promise<number | null>
+  private readonly resumeStrategy: () => ResumeStrategy
 
   constructor(private deps: RollingDeps) {
     this.copy = deps.copy ?? copyTranscript
@@ -257,6 +275,7 @@ export class RollingCoordinator {
     this.probeActivity = deps.probeActivity ?? lastActivityAt
     this.readPending = deps.readPending ?? readPendingWorkflowCount
     this.readUsage = deps.readUsage ?? ((): Promise<number | null> => Promise.resolve(null))
+    this.resumeStrategy = deps.resumeStrategy ?? (() => 'original')
   }
 
   /** Called by ipc right after a spawn that has rollAccountIds (rolling active) — starts tracking the
@@ -807,14 +826,25 @@ export class RollingCoordinator {
   }
 
   /** 재개 자리에 실을 텍스트를 정한다. **어느 모양을 물을지는 이 함수를 부르는 자리가 정한다** —
-   *  가르는 기준은 `SPEC §11.5` 하나다: 그 경로가 `--resume` 을 부르는가.
-   *   - 'handover'(전체 인계): `scheduleAutoPrompt` 의 sendPrompt 뿐이다. 그 앞에서 roll() 이
-   *     kill 하고 `--resume` 으로 다시 띄웠으므로 프로세스가 새것이고, 작업을 이어 주는 것은
-   *     transcript 파일 하나다.
+   *  가르는 기준은 `SPEC §11.5` 하나다: 그 경로가 `--resume` 을 부르는가(또는 백지 재개로 그 자리를
+   *  대신하는가).
+   *   - 'handover'(전체 인계): 두 자리다.
+   *     - `roll()` 이 kill 하기 **직전**, `resumeStrategy() === 'smart'` 일 때만: 백지 재개로 갈지
+   *       정하는 바로 그 브리핑을 여기서 미리 짓는다(`tabFallback: true` — Job 도 탭도 브리핑이
+   *       있으면 후보로 쓴다). 브리핑이 있으면(`briefed`) 새 프로세스는 `--resume` 없이 빈 대화로
+   *       뜨고 이 문자열이 그 자리에 타이핑된다; 없으면 아래로 내려가 지금까지의 경로(복사 +
+   *       `--resume`)를 그대로 탄다.
+   *     - `scheduleAutoPrompt` 의 sendPrompt — 백지 재개로 가지 않은(강도가 'smart'가 아니었거나,
+   *       'smart'였지만 이번 롤은 브리핑을 못 만든) 모든 롤에서, `--resume` 으로 다시 뜬 뒤 실제로
+   *       타이핑할 프롬프트를 여기서 묻는다(`tabFallback: false`). 이 프로세스는 방금 `--resume`
+   *       으로 대화를 통째로 이어받았으므로 탭 세션에는 인계할 것이 없다 — Job 워커의 packet
+   *       갱신(spec 파일에 최신 Checkpoint 를 다시 적는 부수 효과)만 이 값과 무관하게 그대로
+   *       유지된다(F3, 이 dep 이 생기기 전부터의 동작).
    *   - 'update'(덧붙일 한 줄): `resumeInPlace` · idle nudge · 리셋 앵커. **세션이 살아 있다** —
    *     떨어뜨린 것이 없으니 인계할 것도 없고(§11.5), 대화가 온전한 에이전트에게 Task 지시문과
    *     의존성 목록을 다시 읽히는 것은 방금 리셋된 할당량을 이미 아는 것에 쓰는 일이다. 그래서
-   *     기다리는 동안 무엇이 바뀌었는지만 덧붙인다.
+   *     기다리는 동안 무엇이 바뀌었는지만 덧붙인다. 세 자리 모두 `tabFallback: true` 다 —
+   *     대체가 아니라 덧붙임이라 사용자 문구를 잃을 위험이 없다(바로 아래 문단).
    *
    *  'update' 를 **덧붙이는** 이유: 이 경로에서 `chain.prompt` 는 잃을 것이 없는 값이고, 사용자가
    *  직접 지정한 문구일 수도 있다(register 의 prompt). 대체하면 그것을 버린다.
@@ -822,21 +852,32 @@ export class RollingCoordinator {
    *  `resumeText` 는 던지지 않는다는 계약이지만(resumePacket.ts) 이 함수를 부르는 자리는 전부
    *  fire-and-forget 이라 예외가 새면 잡아 줄 곳이 없다 — 그래서 여기서 한 번 감싸고 로그만 남긴
    *  뒤 고정 문장으로 저하한다. 이 파일에 같은 try/catch 가 네 벌 있었는데, 이유가 적힌 자리는
-   *  `RollingDeps.resumeText` 의 JSDoc 뿐이고 네 벌의 주석은 서로를 가리키고만 있었다. */
+   *  `RollingDeps.resumeText` 의 JSDoc 뿐이고 네 벌의 주석은 서로를 가리키고만 있었다.
+   *
+   *  **`briefed` 를 함께 돌려주는 이유.** `text` 가 `null`/`undefined` 면 이 함수는 `chain.prompt` 로
+   *  저하하므로, 돌려주는 문자열 하나만으로는 호출한 쪽이 "브리핑이 있었는가"를 알 수 없다 — 실패해서
+   *  고정 문장이 된 것과 원래 고정 문장을 쓰려 한 것이 같은 모양이 되어 버린다. `roll()` 은 바로 그
+   *  사실로 백지 재개 여부를 가른다(계획의 지배 제약: 브리핑을 못 만들면 백지 재개를 하지 않는다).
+   *  codexRolling.ts 의 같은 이름 함수와 같은 계약이다.
+   *
+   *  **빈 문자열도 같은 저하를 탄다.** 오늘 어떤 producer 도 `''`를 돌리지 않지만, 돌린다면 백지
+   *  재개가 빈 프롬프트로 새 프로세스를 띄우는 꼴이 된다 — 그래서 `null`/`undefined` 와 같은 취급이다:
+   *  `briefed: false`. */
   private async resumePromptFor(
     chain: Chain,
     liveId: string,
-    form: 'handover' | 'update'
-  ): Promise<string> {
+    form: 'handover' | 'update',
+    tabFallback: boolean
+  ): Promise<{ prompt: string; briefed: boolean }> {
     try {
-      const text = await this.deps.resumeText?.(liveId, form)
-      if (text === null || text === undefined) return chain.prompt
-      return form === 'update' ? `${chain.prompt} ${text}` : text
+      const text = await this.deps.resumeText?.(liveId, form, tabFallback)
+      if (text === null || text === undefined || text === '') return { prompt: chain.prompt, briefed: false }
+      return { prompt: form === 'update' ? `${chain.prompt} ${text}` : text, briefed: true }
     } catch (err) {
       this.deps.log(
         `resume packet hook failed session=${liveId}: ${err instanceof Error ? err.message : String(err)}`
       )
-      return chain.prompt
+      return { prompt: chain.prompt, briefed: false }
     }
   }
 
@@ -865,7 +906,7 @@ export class RollingCoordinator {
     this.deps.log(`limit reset → resume in place session=${chain.liveId}`)
     const liveId = chain.liveId
     const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same convention as elsewhere
-    const prompt = await this.resumePromptFor(chain, liveId, 'update')
+    const { prompt } = await this.resumePromptFor(chain, liveId, 'update', true)
     if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
     this.deps.write(liveId, prompt)
     setTimeout(() => {
@@ -1030,7 +1071,10 @@ export class RollingCoordinator {
     )
   }
 
-  /** Executing a roll: copy → kill → respawn under the same ID → schedule the automatic prompt (the order is fixed) */
+  /** Executing a roll: copy → kill → respawn under the same ID → schedule the automatic prompt (the
+   *  order is fixed). When Smart Resume is on and a briefing was built, the copy and `resumeSessionId`
+   *  are skipped instead — the new session starts blank, carrying only the briefing (see the `smart`
+   *  branch below). */
   private async roll(chain: Chain, toIndex: number): Promise<void> {
     if (chain.rolling || chain.disposed) return
     chain.rolling = true
@@ -1056,30 +1100,56 @@ export class RollingCoordinator {
         this.rescheduleAbortedRoll(chain, 'no session metadata')
         return
       }
+      // resumeText 는 spec 파일에 쓰는 부수 효과가 있는 await 이므로 kill 과 재키잉 사이에는 두지
+      // 않는다 — 아래 kill/spawn 의 불변(그 구간에 await 를 두지 않는다)을 지키려면 kill 앞에서,
+      // 세션이 아직 살아 있을 때 물어 둔다. **'smart' 일 때만 여기서 묻는다** — 'original' 이면
+      // 복사할지(백지 재개인지) 정할 것이 없으므로 묻지 않고, sendPrompt 가 지금까지처럼 respawn
+      // 뒤에 스스로 한 번만 묻는다(Step 4) — 두 번 다 물으면 부수 효과도 두 번 일어난다.
+      const strategy = this.resumeStrategy()
+      let briefing: { prompt: string; briefed: boolean } | null = null
+      if (strategy === 'smart') {
+        briefing = await this.resumePromptFor(chain, chain.liveId, 'handover', true)
+        if (chain.disposed) {
+          this.deps.log(
+            `roll aborted — chain disposed while building the resume prompt session=${chain.liveId}`
+          )
+          return
+        }
+      }
+      // Smart Resume: 설정이 켜져 있고 브리핑이 실제로 있을 때만 백지 재개다. 브리핑을 못 만들면
+      // (!briefed) 이 스위치가 켜져 있어도 적용하지 않는다 — 계획의 지배 제약이고, 그 경우 아래는
+      // 오늘과 같은 경로(복사 + `--resume`)를 그대로 지난다.
+      const smart = briefing !== null && briefing.briefed
       // Published only once both aborts above are behind us — matches codexRolling.ts. Publishing this
       // before the metadata check announced a switch to Slack that never happens, and it also claimed the
       // stop episode in the orchestration tap with reason 'switching' (no reset time), so the reschedule's
       // own 'waiting' publication just below was then ignored as a repeat of the same stop.
       this.pushState(chain, 'switching', { accountLabel: target.label })
-      // ① copy — a claude blocked by a limit is idle, so there is no write contention
-      const dest = claudeHistoryStrategy.mapTargetPath(transcriptPath, target.configDir)
-      await this.copy(transcriptPath, dest)
-      // 복사 대기 중에 unregister()가 체인을 폐기했으면 여기서 멈춘다 — ② kill·③ spawn을 하지 않고,
-      // 폐기된 체인이 맵에 다시 들어가지 않도록 한다. 아래로 진행하면 새로 띄운 세션이 좀비가 되고
-      // 어떤 코디네이터도 다시 수거하지 못한다.
-      if (chain.disposed) {
-        this.deps.log(`roll aborted — chain disposed during the copy session=${chain.liveId}`)
-        return
+      // ① copy — a claude blocked by a limit is idle, so there is no write contention. Smart Resume
+      // skips this: the new session starts blank, so there is no transcript to hand it.
+      let dest: string | undefined
+      if (!smart) {
+        dest = claudeHistoryStrategy.mapTargetPath(transcriptPath, target.configDir)
+        await this.copy(transcriptPath, dest)
+        // 복사 대기 중에 unregister()가 체인을 폐기했으면 여기서 멈춘다 — ② kill·③ spawn을 하지 않고,
+        // 폐기된 체인이 맵에 다시 들어가지 않도록 한다. 아래로 진행하면 새로 띄운 세션이 좀비가 되고
+        // 어떤 코디네이터도 다시 수거하지 못한다.
+        if (chain.disposed) {
+          this.deps.log(`roll aborted — chain disposed during the copy session=${chain.liveId}`)
+          return
+        }
       }
       // ② kill the existing PTY → ③ respawn under the same ID. There is no await from here until
       // re-keying — even if the exit event arrives under the old key, the chain has already moved to the
-      // new one, so disposeChain does not misfire.
+      // new one, so disposeChain does not misfire. A blank-slate roll omits resumeSessionId entirely —
+      // the new process is a fresh `claude`, not a `claude --resume`, and the briefing is typed into it
+      // by scheduleAutoPrompt once it is ready, the same channel every ordinary roll already uses.
       this.deps.kill(chain.liveId)
       const oldId = chain.liveId
       const info = this.deps.spawn({
         account: target,
         cwd: chain.cwd,
-        resumeSessionId: sessionId,
+        resumeSessionId: smart ? undefined : sessionId,
         rollAccountIds: chain.accountIds,
         slackNotify: chain.liveInfo.slackNotify, // Slack notifications are kept per chain
         bypassPermissions: chain.liveInfo.bypassPermissions, // bypass is kept per chain
@@ -1089,13 +1159,29 @@ export class RollingCoordinator {
       chain.liveId = info.id
       chain.liveInfo = info
       chain.scanner = new OutputScanner()
-      chain.transcriptPath = dest // the live transcript now lives on the target account's side
-      // The copy still contains the limit error we just detected — since is set to now to exclude it.
-      // Leaving this to applyMeta alone would have it decide "the path has not changed" when the new
-      // account's statusLine reports the same path, and keep the old tail — and that tail is looking at
-      // the old account's file, so it reads nothing.
-      chain.limitTail = new ClaudeTranscriptTail(dest, this.now())
-      chain.limitTailReadFailWarned = false // a failure on the new path is reported again
+      if (dest !== undefined) {
+        chain.transcriptPath = dest // the live transcript now lives on the target account's side
+        // The copy still contains the limit error we just detected — since is set to now to exclude it.
+        // Leaving this to applyMeta alone would have it decide "the path has not changed" when the new
+        // account's statusLine reports the same path, and keep the old tail — and that tail is looking at
+        // the old account's file, so it reads nothing.
+        chain.limitTail = new ClaudeTranscriptTail(dest, this.now())
+        chain.limitTailReadFailWarned = false // a failure on the new path is reported again
+      } else {
+        // 백지 재개 — 새 세션은 다른 대화다. 신원 필드를 비운다: 비우지 않으면 다음 롤이 지금
+        // 일부러 두고 온 이 transcript 를 복사한다("백지 재개에서 반드시 지워야 하는 것" — 계획
+        // 문서). 두 시드 필드도 함께 비운다 — 남겨 두면 이 함수 위쪽의 sessionId/transcriptPath
+        // 폴백이 방금 버린 대화를 되살린다. claudeSessionId·transcriptPath 는 applyMeta 가 새
+        // 세션 자신의 statusLine 이 도착하는 대로 다시 채운다 — 갓 register 된 세션과 같은 경로다.
+        chain.claudeSessionId = null
+        chain.transcriptPath = null
+        chain.limitTail = null
+        chain.resumeSeedSessionId = null
+        chain.resumeSeedTranscriptPath = null
+        this.deps.log(
+          `smart resume — rolled ${oldId} into a blank-slate session ${info.id} account=${target.label}`
+        )
+      }
       chain.lastOutputAt = this.now()
       chain.trustSeen = false
       chain.awaitingReady = true
@@ -1117,7 +1203,9 @@ export class RollingCoordinator {
       // A re-publish that reattaches the banner to the new sessionId — not a new switch, so Slack does not announce it
       this.pushState(chain, 'switching', { accountLabel: target.label, reattach: true })
       this.deps.log(`rolled ${oldId} → ${info.id} account=${target.label}`)
-      this.scheduleAutoPrompt(chain)
+      // The briefing built above is passed down so sendPrompt does not ask resumeText a second time
+      // (Step 4) — undefined on the ordinary path, where sendPrompt keeps asking for itself as before.
+      this.scheduleAutoPrompt(chain, smart ? briefing?.prompt : undefined)
     } catch (err) {
       this.deps.log(`roll failed: ${err instanceof Error ? err.message : String(err)}`)
       // **The state published here can be optimistic.** If the throw landed between the kill and the
@@ -1133,13 +1221,25 @@ export class RollingCoordinator {
     }
   }
 
-  /** Polls for the ready signal after a respawn (the first statusline record) and then sends the carry-on prompt */
-  private scheduleAutoPrompt(chain: Chain): void {
+  /** Polls for the ready signal after a respawn (the first statusline record) and then sends the carry-on
+   *  prompt.
+   *
+   *  briefing: the Smart Resume briefing roll() already built (and used to decide the blank-slate
+   *  branch) — undefined on the ordinary path. When present, sendPrompt writes it as-is instead of
+   *  asking resumeText again; asking twice would write the Job worker's spec file twice (resumeText's
+   *  side effect).
+   *
+   *  **The ordinary-path ask passes `tabFallback: false` (F3).** This process was just `--resume`d, so
+   *  it already has the whole conversation — a tab session has nothing left to hand over, and asking
+   *  for one anyway would replace `chain.prompt` (possibly the user's own text from the New Session
+   *  dialog) with a pointer to a briefing file nobody needs. A Job worker's packet refresh is
+   *  unaffected — `tabFallback` only gates the tab-session fallback, not the Job Dispatch lookup. */
+  private scheduleAutoPrompt(chain: Chain, briefing?: string): void {
     const liveId = chain.liveId
     const startedAt = this.now()
     const sendPrompt = async (): Promise<void> => {
       if (chain.disposed || chain.liveId !== liveId) return
-      const prompt = await this.resumePromptFor(chain, liveId, 'handover')
+      const prompt = briefing ?? (await this.resumePromptFor(chain, liveId, 'handover', false)).prompt
       if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
       this.deps.write(liveId, prompt)
       const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same place and convention as liveId
@@ -1451,7 +1551,7 @@ export class RollingCoordinator {
     this.pushState(chain, 'nudged')
     const liveId = chain.liveId
     const stateSeq = chain.stateSeq // captures the generation at scheduling time
-    const prompt = await this.resumePromptFor(chain, liveId, 'update')
+    const { prompt } = await this.resumePromptFor(chain, liveId, 'update', true)
     if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
     this.deps.write(liveId, prompt)
     setTimeout(() => {
@@ -1557,7 +1657,7 @@ export class RollingCoordinator {
     this.pushState(chain, 'nudged') // a momentary event for the Slack notification — the renderer leaves it out of the banner
     const liveId = chain.liveId
     const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same place and convention as liveId
-    const prompt = await this.resumePromptFor(chain, liveId, 'update')
+    const { prompt } = await this.resumePromptFor(chain, liveId, 'update', true)
     if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
     this.deps.write(liveId, prompt)
     setTimeout(() => {
