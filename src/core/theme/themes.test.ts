@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { THEMES, DEFAULT_THEME_ID, isThemeId, themeById } from './themes'
 
 describe('THEMES', () => {
-  it('여섯 개이고 id 가 겹치지 않는다', () => {
-    expect(THEMES).toHaveLength(6)
-    expect(new Set(THEMES.map((t) => t.id)).size).toBe(6)
+  it('일곱 개이고 id 가 겹치지 않는다', () => {
+    expect(THEMES).toHaveLength(7)
+    expect(new Set(THEMES.map((t) => t.id)).size).toBe(7)
   })
 
   it('기본값은 umbra — 새로 설치한 사람이 처음 보는 모습이다', () => {
@@ -14,12 +14,12 @@ describe('THEMES', () => {
 
   // 하나라도 빠지면 그 테마에서 CSS 변수가 미정의가 되어 상속된 엉뚱한 값이 나온다.
   // 눈으로는 "왜 여기만 색이 이상하지"로만 보이므로 키 집합을 못 박는다.
-  it('여섯 테마의 색 키 집합이 정확히 같다', () => {
+  it('일곱 테마의 색 키 집합이 정확히 같다', () => {
     const keys = THEMES.map((t) => Object.keys(t.colors).sort().join(','))
     expect(new Set(keys).size).toBe(1)
   })
 
-  it('여섯 테마의 반경·그림자·서체 키 집합이 정확히 같다', () => {
+  it('일곱 테마의 반경·그림자·서체 키 집합이 정확히 같다', () => {
     for (const t of THEMES) {
       expect(Object.keys(t.radius).sort()).toEqual(['base', 'lg', 'sm'])
       expect(Object.keys(t.shadow).sort()).toEqual(['lg', 'sm'])
@@ -65,5 +65,9 @@ describe('isThemeId', () => {
 describe('themeById', () => {
   it('아는 id 는 그 테마', () => {
     expect(themeById('quasar').id).toBe('quasar')
+  })
+
+  it('Sirius — assistant-ui 의 종이·잉크 팔레트를 옮긴 일곱 번째 테마', () => {
+    expect(themeById('sirius').name).toBe('Sirius')
   })
 })

@@ -10,6 +10,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
 import { RunConfigForm } from './RunConfigForm'
 import { RunTypePicker } from './RunTypePicker'
+import { Copy, Minus, Plus } from 'lucide-react'
 
 /** Run configuration management — a tree on the left, the selected configuration's form on the
  *  right. The same layout as IntelliJ's Run/Debug Configurations. It used to be a small modal reached
@@ -236,7 +237,7 @@ export function RunConfigManager({
             <div className="rcm-tools">
               <div className="rtp-anchor">
                 <button title={t('run.manager.add')} onClick={() => setPickerOpen((v) => !v)}>
-                  ＋
+                  <Plus size={13} />
                 </button>
                 {pickerOpen && (
                   <RunTypePicker
@@ -274,7 +275,7 @@ export function RunConfigManager({
                   onDelete(selected.id)
                 }}
               >
-                −
+                <Minus size={13} />
               </button>
               <button
                 type="button"
@@ -293,7 +294,7 @@ export function RunConfigManager({
                   })
                 }}
               >
-                ⧉
+                <Copy size={13} />
               </button>
             </div>
             <div className="rcm-tree">

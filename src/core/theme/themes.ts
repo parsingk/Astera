@@ -5,7 +5,7 @@ const HANGUL = "'Malgun Gothic', 'Apple SD Gothic Neo', 'Noto Sans CJK KR', sans
  *  이 값(앱 UI의 코드 서식)은 테마가 고른다. */
 export const DEFAULT_MONO = "ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace"
 
-export type ThemeId = 'vega' | 'orion' | 'umbra' | 'aurora' | 'antares' | 'quasar'
+export type ThemeId = 'vega' | 'orion' | 'umbra' | 'aurora' | 'antares' | 'quasar' | 'sirius'
 export type Density = 'compact' | 'normal' | 'roomy'
 
 export interface ThemeColors {
@@ -143,6 +143,30 @@ export const THEMES: readonly Theme[] = [
     shadow: { sm: '0 0 0 0 rgba(0,0,0,0)', lg: '0 0 0 1px var(--line)' },
     density: 'compact',
     font: { sans: `'Geist', ${HANGUL}`, mono: null, tracking: '-0.01em' }
+  },
+  {
+    id: 'sirius',
+    name: 'Sirius',
+    // assistant-ui 의 브랜드 토큰(apps/docs/app/(home)/brand/page.tsx)을 그대로 옮겼다 — 종이와 잉크 두 색에
+    // --tint: 106 의 희미한 웜 그레이. 원본은 oklch 라 sRGB hex 로 환산했다: bg 는 "paper, dark"
+    // oklch(0.17 0.003 106), text 는 "ink, dark" oklch(0.985 0.002 106), panel·elevated 는 card·muted.
+    // 액센트도 흑백이다 — 그쪽 규칙이 "The mark carries one color: ink on paper, or paper on ink" 라서
+    // 버튼은 밝은 바탕에 어두운 글자(primary·primary-foreground)가 된다. 파랑은 "blue means live" 인
+    // 라이브 표시 전용이라 두 번째 액센트로 쓰지 않고, 링크(mdLink)에만 그 파랑(oklch(0.623 0.214 259.8))을 준다.
+    colors: {
+      bg: '#0f0f0e', rail: '#0f0f0e', panel: '#1a1918', elevated: '#282826',
+      surfaceHover: '#21201f', termBg: '#0f0f0e',
+      line: 'rgba(255,255,255,.1)', lineSoft: 'rgba(255,255,255,.06)',
+      text: '#fafaf9', textDim: '#a1a19e', textFaint: '#737371', railIcon: '#a1a19e',
+      accent: '#e5e5e4', accentInk: '#1a1918', statusBg: '#1a1918', statusInk: '#a1a19e',
+      mdLink: '#3b82f6'
+    },
+    radius: { base: '8px', lg: '10px', sm: '6px' },
+    markerW: '0px',
+    // 원본이 그림자 토큰을 전부 0 으로 두고 선으로만 층을 나눈다. Quasar 와 같은 no-op 값을 쓰는 이유도 그쪽 주석과 같다.
+    shadow: { sm: '0 0 0 0 rgba(0,0,0,0)', lg: '0 0 0 1px var(--line)' },
+    density: 'normal',
+    font: { sans: `'Public Sans', ${HANGUL}`, mono: `'JetBrains Mono', ${DEFAULT_MONO}`, tracking: '0' }
   }
 ]
 

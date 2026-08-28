@@ -22,6 +22,9 @@ export function applyTheme(theme: Theme): void {
   const root = document.documentElement
   for (const [name, value] of Object.entries(themeCssVars(theme))) root.style.setProperty(name, value)
   // 색을 바꾸지는 않는다. devtools 에서 현재 테마가 보이고, "이 테마만" 예외가 필요할 때의 탈출구다.
+  // 그 탈출구는 styles.css 의 '테마별 예외' 절이 쓴다 — 지금은 Sirius 의 입력칸 하나뿐이다.
+  // 변수 표로 낼 수 있는 것은 그쪽(core/theme/themes.ts)에 두고, 여기로 오는 것은 표로 말할 수
+  // 없는 것 — 한 테마에서만 규칙의 방향이 뒤집히는 경우 — 로 한정한다.
   root.dataset.theme = theme.id
 }
 

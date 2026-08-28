@@ -7,6 +7,7 @@ import { schedRuleSummary } from '../../../core/scheduler/summary'
 import { useI18n } from '../i18n/I18nProvider'
 import { PauseIcon, PlayIcon, RunIcon, STATE_KEY, STATUS_COLOR, TaskGlyph, TaskIcon, TrashIcon } from './JobIcons'
 import type { RunIconKind } from './JobIcons'
+import { ArrowUpRight, ChevronDown, ChevronRight } from 'lucide-react'
 
 /** Run 헤더 글리프의 툴팁. 끝난·실패·막힘은 줄의 글리프와 같은 모양이고 같은 뜻이라 같은 문구를 쓴다.
  *
@@ -149,7 +150,7 @@ function RunCard({
       className={`jobs-run${open ? '' : ' collapsed'}${run.sharesProjectFolder ? ' shared-folder' : ''}`}
     >
       <div className="jobs-run-head" onClick={() => onToggle()}>
-        <span className="jobs-caret">{open ? '▾' : '▸'}</span>
+        <span className="jobs-caret">{open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}</span>
         {/* 예약 회차의 번호. 한 템플릿의 회차들은 목표가 같아서(spawnScheduledRun 이 복사한다)
             제목만으로는 서로 구별되지 않는다 — 이 칩이 그것을 구별하는 유일한 표시다.
             평범한 Run 은 이 프롭을 받지 않으므로 그대로다. */}
@@ -248,7 +249,7 @@ function RunCard({
                 <TaskGlyph task={task} />
                 {sessionId ? (
                   <span className="jobs-jump" aria-hidden="true">
-                    ↗
+                    <ArrowUpRight size={12} />
                   </span>
                 ) : null}
               </div>
@@ -362,7 +363,7 @@ function ScheduleCard({
   return (
     <div className={`jobs-run jobs-tmpl${open ? '' : ' collapsed'}`}>
       <div className="jobs-run-head" onClick={onToggle}>
-        <span className="jobs-caret">{open ? '▾' : '▸'}</span>
+        <span className="jobs-caret">{open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}</span>
         <span className="jobs-objective" title={run.objective}>
           {run.objective}
         </span>

@@ -3,6 +3,7 @@ import type { Account, JobTask } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { AccountSelect } from './AccountSelect'
 import { Select, type SelectOption } from './Select'
+import { X } from 'lucide-react'
 
 /** 계정 슬롯 최대 개수. 새 세션 대화상자의 MAX_ROLL_ACCOUNTS 와 같은 값이지만 **상수를 공유하지
  *  않는다** — 저쪽은 탭 세션의 롤링이고 이쪽은 Task 의 체인이다. 한쪽을 늘릴 때 다른 쪽이 따라
@@ -135,7 +136,7 @@ export function NewTaskModal({
           aria-label={t('common.cancel')}
           onClick={() => !busy && onClose()}
         >
-          ✕
+          <X size={12} />
         </button>
       </div>
       <div className="detail-task-fields">
@@ -174,7 +175,7 @@ export function NewTaskModal({
                       aria-label={`${titleOf(id)} — ${t('common.cancel')}`}
                       onClick={() => setDeps((cur) => cur.filter((x) => x !== id))}
                     >
-                      ✕
+                      <X size={12} />
                     </button>
                   </span>
                 ))}

@@ -3,6 +3,7 @@ import type { RunStatus, TerminalBuffer } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { RunPanel } from './RunPanel'
 import { TerminalBody } from './TerminalBody'
+import { ChevronDown, Delete, Plus, Square, X } from 'lucide-react'
 
 /**
  * Bottom panel. The Run console and the project terminals share this one panel through tabs.
@@ -90,7 +91,7 @@ export function BottomPanel({
                       onCloseRun()
                     }}
                   >
-                    ✕
+                    <X size={11} />
                   </button>
                 </>
               )}
@@ -117,7 +118,7 @@ export function BottomPanel({
                   onCloseTerminal(term.id)
                 }}
               >
-                ✕
+                <X size={11} />
               </button>
             </span>
           ))}
@@ -127,14 +128,14 @@ export function BottomPanel({
             title={t('terminal.tab.new')}
             onClick={onNewTerminal}
           >
-            ＋
+            <Plus size={13} />
           </button>
         </span>
         <span className="run-panel-actions">
           {/* The actions match the active tab — stop only appears on the Run tab */}
           {activeTab === 'run' && running && (
             <button className="run-panel-btn stop" title={t('run.action.stop')} onClick={onStopRun}>
-              ⏹
+              <Square size={12} fill="currentColor" strokeWidth={0} />
             </button>
           )}
           <button
@@ -142,10 +143,10 @@ export function BottomPanel({
             title={t('run.panel.clear')}
             onClick={() => bump(activeTab)}
           >
-            ⌫
+            <Delete size={12} />
           </button>
           <button className="run-panel-btn" title={t('run.panel.collapse')} onClick={onCollapse}>
-            ▽
+            <ChevronDown size={12} />
           </button>
         </span>
       </div>
