@@ -102,14 +102,18 @@ import { loadRunConfigs, prepareRun } from './run/prepare'
  *
  *  **resumeText 는 두 롤링 코디네이터가 읽는 네 번째 값이다** — RollingDeps/CodexRollingDeps 의
  *  resumeText dep 구현이고, sessionId 로 열린 Job Dispatch 를 찾아 재개 packet 을 spec 파일에 적어
- *  넣은 뒤 그 자리에 쓸 한 줄을 돌려준다(main/orchestration/resumePacket.ts). Job 워커가 아니거나
- *  packet 을 못 만들면 null 이고, 그때 두 코디네이터는 기존 고정 문장으로 저하한다. */
+ *  넣은 뒤 그 자리에 쓸 한 줄을 돌려준다(main/orchestration/resumePacket.ts). Job 워커가 아니면(그리고
+ *  `tabFallback` 이 참이면) 탭 브리핑으로 저하한다 — 그 저하는 `tabResumeTextFor` 를 그대로 감쌀
+ *  뿐이라 오케스트레이션이 켜져 있을 때만 쓸 수 있는 자원(OrchState)에 기대지 않는다. **이 handle
+ *  자체가 오케스트레이션이 켜져 있을 때만 존재한다는 점은 그대로다** — `orchRef` 가 null 인 경우의
+ *  탭 폴백은 index.ts 가 별도로 받는 `tabResumeTextFor` 참조로 처리한다(fix wave 최종, F1 —
+ *  `OrchWiring.onTabResumeReady`). */
 export interface OrchHandle {
   stop: () => void
   onRolled: (oldSessionId: string, newInfo: { id: string; accountId: string }) => void
   onRollState: (e: RollStateEvent) => void
   orchEnv: () => { cliPath: string; infoPath: string; skillsPath: string } | undefined
-  resumeText: (sessionId: string, form: 'handover' | 'update') => Promise<string | null>
+  resumeText: (sessionId: string, form: 'handover' | 'update', tabFallback: boolean) => Promise<string | null>
 }
 
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
@@ -2229,19 +2233,21 @@ export function registerIpc(
       // form 을 그쪽이 넘기고, 이 배선은 그 값으로 함수만 고른다 — 어느 함수도 form 을 해석하지
       // 않는다.
       //
-      // **Job 워커용 함수가 null 이면 탭 세션용으로 저하한다(Task 2).** Dispatch 를 못 찾으면(=
-      // 일반 탭 세션) buildResumeNote/buildResumePacket 은 무조건 null 이었고, 그래서 지금까지
-      // 일반 탭의 모든 재개는 데이터 없이 고정 문장 하나로 끝났다 — 판단이 아니라 Dispatch 가
-      // 없으면 만들 방법이 없었기 때문이다. tabResumeTextFor 가 그 제약을 없앤다. **§11.5 가
-      // 가르는 것은 "어느 모양인가"이지 "데이터를 줄 것인가"가 아니다** — 'update' 자리에 주는
-      // 것은 그 절이 금지한 전체 인계가 아니라, 그 절이 이미 허용한 한 줄이다. Job 워커의 함수가
-      // 다른 이유(spec 쓰기 실패 등)로 null 을 돌린 경우도 같은 이유로 이쪽으로 내려간다 — 구조화된
-      // Job 인계를 못 만들었다고 git+대화 기반의 일반 브리핑까지 포기할 이유는 없다.
-      resumeText: (sessionId, form) =>
+      // **Job 워커용 함수가 null 이면, `tabFallback` 이 참일 때만 탭 세션용으로 저하한다(Task 2,
+      // fix wave 최종 F3).** Dispatch 를 못 찾으면(= 일반 탭 세션) buildResumeNote/buildResumePacket
+      // 은 무조건 null 이고, tabResumeTextFor 가 그 자리를 대신 채운다. **§11.5 가 가르는 것은
+      // "어느 모양인가"이지 "데이터를 줄 것인가"가 아니다** — 'update' 자리에 주는 것은 그 절이
+      // 금지한 전체 인계가 아니라, 그 절이 이미 허용한 한 줄이다. Job 워커의 함수가 다른 이유(spec
+      // 쓰기 실패 등)로 null 을 돌린 경우도 `tabFallback` 이 참이면 같은 이유로 이쪽으로 내려간다 —
+      // 구조화된 Job 인계를 못 만들었다고 git+대화 기반의 일반 브리핑까지 포기할 이유는 없다.
+      // `tabFallback` 이 거짓이면(rolling.ts/codexRolling.ts 의 ordinary-path 'handover' 호출,
+      // F3) 탭 세션에 대해서는 Job 과 마찬가지로 그냥 `null` 이다 — 부르는 쪽이 `chain.prompt` 로
+      // 저하한다.
+      resumeText: (sessionId, form, tabFallback) =>
         (form === 'update'
           ? buildResumeNote(sessionId, deps.getState(), { log: orchLog })
           : buildResumePacket(sessionId, deps.getState(), { log: orchLog })
-        ).then((text) => text ?? tabResumeTextFor(sessionId, form))
+        ).then((text) => text ?? (tabFallback ? tabResumeTextFor(sessionId, form) : null))
     })
   }
   if (orchWiring && core.appSettings.getOrchestrationEnabled())

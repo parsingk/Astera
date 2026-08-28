@@ -314,9 +314,11 @@ describe('CodexRollingCoordinator', () => {
   // 가는지가 미검증이었다(기존 테스트는 전부 `?? chain.prompt` 폴백만 지나간다).
   it('resumeText 에 handover 를 묻고 그 값을 resumePrompt 로 실어 보낸다', async () => {
     const forms: string[] = []
+    const tabFallbacks: boolean[] = []
     const h = harness({
-      resumeText: (_sessionId, form) => {
+      resumeText: (_sessionId, form, tabFallback) => {
         forms.push(form)
+        tabFallbacks.push(tabFallback)
         return Promise.resolve('RE-READ YOUR SPEC FILE')
       }
     })
@@ -328,7 +330,34 @@ describe('CodexRollingCoordinator', () => {
     await advance(100)
     // codex 롤은 계정 수와 무관하게 항상 kill + --resume 이므로 늘 전체 인계다(SPEC §11.5)
     expect(forms).toEqual(['handover'])
+    // fix wave 최종, F3: 전략이 (기본값인) 'original' 이므로 tabFallback 은 거짓이다 — 탭 세션이면
+    // 이 요청이 null 로 저하해 chain.prompt 가 그대로 살아남는다(이 테스트는 Job 워커 경로라 훅이
+    // 텍스트를 돌려주지만, 그 텍스트가 resumePrompt 로 가는 것은 이 branch 이전부터의 동작이다).
+    expect(tabFallbacks).toEqual([false])
     expect(h.spawned[0].resumePrompt).toBe('RE-READ YOUR SPEC FILE')
+    h.coord.stop()
+  })
+
+  // fix wave 최종, F3: 전략이 'smart' 일 때만 tabFallback 이 참이다 — codex 는 이 dep 을 롤당 한
+  // 번만 묻고 그 결과를 백지 판정과 --resume 프롬프트 양쪽에 그대로 쓰므로, 강도가 'smart' 가
+  // 아닌 한 탭 브리핑을 시도했다가는 그 결과가 그대로 --resume 프롬프트 자리로 흘러 탭 세션의
+  // chain.prompt 를 지운다.
+  it('전략이 smart 면 tabFallback 도 참으로 묻는다', async () => {
+    const tabFallbacks: boolean[] = []
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: (_sessionId, _form, tabFallback) => {
+        tabFallbacks.push(tabFallback)
+        return Promise.resolve('BRIEFING TEXT')
+      }
+    })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-hook-smart', cwd: h.info1.cwd, primary: 95 })
+    h.coord.register(h.info1)
+    await advance(1_500)
+    await appendLimitError(file)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advance(100)
+    expect(tabFallbacks).toEqual([true])
     h.coord.stop()
   })
 

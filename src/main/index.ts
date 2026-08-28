@@ -64,12 +64,22 @@ let tabResumeTextRef: ((sessionId: string, form: 'handover' | 'update') => Promi
 /** The `resumeText` dep both rolling coordinators receive (RollingDeps/CodexRollingDeps). fix wave
  *  최종, F1: tries the Job briefing through `orchRef` when orchestration is up; when it is not
  *  (`orchRef === null`), a Job Dispatch cannot exist at all, so there is nothing to look up there —
- *  this goes straight to `tabResumeTextRef` instead. */
+ *  this goes straight to `tabResumeTextRef`, guarded by the same `tabFallback` the caller already
+ *  computed (F3: the ordinary-path 'handover' ask passes `false` so a tab session's `chain.prompt`
+ *  is never replaced by a pointer the process has no use for). When orchestration *is* up, `orchRef
+ *  .resumeText` already does the Job-then-maybe-tab fallback internally (ipc.ts), so this does not
+ *  retry `tabResumeTextRef` itself — that would call `tabResumeTextFor` a second time for the same
+ *  session and form, redoing its file write for nothing. */
 const resumeTextDep = (
   sessionId: string,
-  form: 'handover' | 'update'
+  form: 'handover' | 'update',
+  tabFallback: boolean
 ): Promise<string | null> =>
-  orchRef?.resumeText(sessionId, form) ?? (tabResumeTextRef?.(sessionId, form) ?? Promise.resolve(null))
+  orchRef
+    ? orchRef.resumeText(sessionId, form, tabFallback)
+    : tabFallback
+      ? (tabResumeTextRef?.(sessionId, form) ?? Promise.resolve(null))
+      : Promise.resolve(null)
 let tray: Tray | null = null
 let quitting = false
 let mainWindow: BrowserWindow | null = null // focus target for the single-instance second-instance event
@@ -528,7 +538,7 @@ app.whenReady().then(async () => {
     },
     orchEnv: () => orchRef?.orchEnv(),
     // Job 워커의 재개 packet(Task 4b/4c), 없으면(오케스트레이션이 꺼져 있거나 탭 세션이면) 탭
-    // 브리핑으로 저하한다 — resumeTextDep 의 JSDoc(fix wave 최종, F1).
+    // 브리핑으로 저하한다 — resumeTextDep 의 JSDoc(fix wave 최종, F1/F3).
     resumeText: resumeTextDep,
     // 한도에 걸린 세션을 어떻게 이어갈지(Task 1 의 설정) — orchEnv 와 같은 이유로 getter 다: 값이
     // 설정 화면에서 앱 수명 중간에 바뀌고, 이 코디네이터는 그보다 먼저 만들어진다. codexRolling 의

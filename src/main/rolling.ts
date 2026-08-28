@@ -122,19 +122,28 @@ export interface RollingDeps {
   orchEnv?(): { cliPath: string; infoPath: string; skillsPath: string } | undefined
   /** 재개 직전에 쓸 텍스트를 물어본다. **`chain.prompt` 가 정적이라서 필요하다** — 그 값은
    *  register 시점에 고정되는데, 재개 자료는 재개 직전의 상태(git·보고·결정)에서 조립해야
-   *  정확하다. sessionId 로 열린 Job Dispatch 를 찾을 수 없으면(사용자 탭 세션) `null` 을 돌린다.
-   *  `null` 이면 `chain.prompt` 를 그대로 쓴다 — 주입되지 않아도 기존 동작 그대로다. 구현은
-   *  `main/orchestration/resumePacket.ts`, 그 자체는 절대 던지지 않는다(계약). 그래도 이 dep 을
-   *  부르는 자리는 그 위에 자기 자신의 try/catch 를 또 두른다(`resumePromptFor`) — 이 자리를
-   *  부르는 쪽이 전부 fire-and-forget 이라, 언젠가 이 계약이 깨지면 처리되지 않는 예외가 되는
-   *  대신 로그로만 남고 고정 문장으로 저하하게 하려는 것이다(server.ts 가 probeLimit 을 부르는
-   *  것과 같은 태도).
+   *  정확하다.
+   *
+   *  **sessionId 로 열린 Job Dispatch 를 찾으면 그 packet 을 돌린다. 못 찾으면(사용자 탭 세션)
+   *  `tabFallback` 이 참일 때만 탭 브리핑으로 저하하고, 거짓이면 곧바로 `null` 이다.** Job 도 탭도
+   *  못 찾거나 만들지 못하면 `null` 이다. `null` 이면 `chain.prompt` 를 그대로 쓴다 — 주입되지
+   *  않아도 기존 동작 그대로다. 구현은 `main/orchestration/resumePacket.ts`, 그 자체는 절대
+   *  던지지 않는다(계약). 그래도 이 dep 을 부르는 자리는 그 위에 자기 자신의 try/catch 를 또
+   *  두른다(`resumePromptFor`) — 이 자리를 부르는 쪽이 전부 fire-and-forget 이라, 언젠가 이 계약이
+   *  깨지면 처리되지 않는 예외가 되는 대신 로그로만 남고 고정 문장으로 저하하게 하려는 것이다
+   *  (server.ts 가 probeLimit 을 부르는 것과 같은 태도).
    *
    *  **`form` 이 어느 모양을 원하는지 말한다** — 이 코디네이터가 자기가 어느 재개 경로에 있는지
    *  아는 유일한 쪽이기 때문이다(packet 을 만드는 쪽은 모른다). 'handover' 는 전체 인계이고
    *  'update' 는 덧붙일 한 줄이다. 가르는 기준은 `SPEC §11.5`: `--resume` 을 부르는가.
-   *  `resumePromptFor` 의 주석에 이 파일의 어느 자리가 어느 쪽인지 적어 두었다. */
-  resumeText?(sessionId: string, form: 'handover' | 'update'): Promise<string | null>
+   *  `resumePromptFor` 의 주석에 이 파일의 어느 자리가 어느 쪽인지 적어 두었다.
+   *
+   *  **`tabFallback` 이 거짓이면 탭 세션이라도 저하하지 않는다.** `--resume` 뒤 이미 살아 있는
+   *  프로세스에 다시 'handover' 를 묻는 자리(`scheduleAutoPrompt`)가 이 값을 거짓으로 준다 — 그
+   *  프로세스는 이미 대화를 통째로 이어받았으므로 탭 세션에는 인계할 것이 없고, 있으면
+   *  `chain.prompt`(사용자가 New Session 대화상자에서 직접 지정했을 수 있는 문구)를 지운다. Job
+   *  워커는 이 값과 무관하게 packet 을 그대로 받는다 — 이 dep 이 처음 생기기 전부터의 동작이다. */
+  resumeText?(sessionId: string, form: 'handover' | 'update', tabFallback: boolean): Promise<string | null>
   /** 한도에 걸린 세션을 어떻게 이어갈지 — Task 1 의 설정값. **getter 로 받는다** — `orchEnv?` 와
    *  같은 이유다: 값이 설정 화면에서 앱 수명 중간에 바뀌고, 이 코디네이터는 그 값이 존재하기 전에
    *  만들어진다. 주입되지 않으면 `'original'`(기존 동작)로 본다.
@@ -817,14 +826,25 @@ export class RollingCoordinator {
   }
 
   /** 재개 자리에 실을 텍스트를 정한다. **어느 모양을 물을지는 이 함수를 부르는 자리가 정한다** —
-   *  가르는 기준은 `SPEC §11.5` 하나다: 그 경로가 `--resume` 을 부르는가.
-   *   - 'handover'(전체 인계): `scheduleAutoPrompt` 의 sendPrompt 뿐이다. 그 앞에서 roll() 이
-   *     kill 하고 `--resume` 으로 다시 띄웠으므로 프로세스가 새것이고, 작업을 이어 주는 것은
-   *     transcript 파일 하나다.
+   *  가르는 기준은 `SPEC §11.5` 하나다: 그 경로가 `--resume` 을 부르는가(또는 백지 재개로 그 자리를
+   *  대신하는가).
+   *   - 'handover'(전체 인계): 두 자리다.
+   *     - `roll()` 이 kill 하기 **직전**, `resumeStrategy() === 'smart'` 일 때만: 백지 재개로 갈지
+   *       정하는 바로 그 브리핑을 여기서 미리 짓는다(`tabFallback: true` — Job 도 탭도 브리핑이
+   *       있으면 후보로 쓴다). 브리핑이 있으면(`briefed`) 새 프로세스는 `--resume` 없이 빈 대화로
+   *       뜨고 이 문자열이 그 자리에 타이핑된다; 없으면 아래로 내려가 지금까지의 경로(복사 +
+   *       `--resume`)를 그대로 탄다.
+   *     - `scheduleAutoPrompt` 의 sendPrompt — 백지 재개로 가지 않은(강도가 'smart'가 아니었거나,
+   *       'smart'였지만 이번 롤은 브리핑을 못 만든) 모든 롤에서, `--resume` 으로 다시 뜬 뒤 실제로
+   *       타이핑할 프롬프트를 여기서 묻는다(`tabFallback: false`). 이 프로세스는 방금 `--resume`
+   *       으로 대화를 통째로 이어받았으므로 탭 세션에는 인계할 것이 없다 — Job 워커의 packet
+   *       갱신(spec 파일에 최신 Checkpoint 를 다시 적는 부수 효과)만 이 값과 무관하게 그대로
+   *       유지된다(F3, 이 dep 이 생기기 전부터의 동작).
    *   - 'update'(덧붙일 한 줄): `resumeInPlace` · idle nudge · 리셋 앵커. **세션이 살아 있다** —
    *     떨어뜨린 것이 없으니 인계할 것도 없고(§11.5), 대화가 온전한 에이전트에게 Task 지시문과
    *     의존성 목록을 다시 읽히는 것은 방금 리셋된 할당량을 이미 아는 것에 쓰는 일이다. 그래서
-   *     기다리는 동안 무엇이 바뀌었는지만 덧붙인다.
+   *     기다리는 동안 무엇이 바뀌었는지만 덧붙인다. 세 자리 모두 `tabFallback: true` 다 —
+   *     대체가 아니라 덧붙임이라 사용자 문구를 잃을 위험이 없다(바로 아래 문단).
    *
    *  'update' 를 **덧붙이는** 이유: 이 경로에서 `chain.prompt` 는 잃을 것이 없는 값이고, 사용자가
    *  직접 지정한 문구일 수도 있다(register 의 prompt). 대체하면 그것을 버린다.
@@ -846,10 +866,11 @@ export class RollingCoordinator {
   private async resumePromptFor(
     chain: Chain,
     liveId: string,
-    form: 'handover' | 'update'
+    form: 'handover' | 'update',
+    tabFallback: boolean
   ): Promise<{ prompt: string; briefed: boolean }> {
     try {
-      const text = await this.deps.resumeText?.(liveId, form)
+      const text = await this.deps.resumeText?.(liveId, form, tabFallback)
       if (text === null || text === undefined || text === '') return { prompt: chain.prompt, briefed: false }
       return { prompt: form === 'update' ? `${chain.prompt} ${text}` : text, briefed: true }
     } catch (err) {
@@ -885,7 +906,7 @@ export class RollingCoordinator {
     this.deps.log(`limit reset → resume in place session=${chain.liveId}`)
     const liveId = chain.liveId
     const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same convention as elsewhere
-    const { prompt } = await this.resumePromptFor(chain, liveId, 'update')
+    const { prompt } = await this.resumePromptFor(chain, liveId, 'update', true)
     if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
     this.deps.write(liveId, prompt)
     setTimeout(() => {
@@ -1087,7 +1108,7 @@ export class RollingCoordinator {
       const strategy = this.resumeStrategy()
       let briefing: { prompt: string; briefed: boolean } | null = null
       if (strategy === 'smart') {
-        briefing = await this.resumePromptFor(chain, chain.liveId, 'handover')
+        briefing = await this.resumePromptFor(chain, chain.liveId, 'handover', true)
         if (chain.disposed) {
           this.deps.log(
             `roll aborted — chain disposed while building the resume prompt session=${chain.liveId}`
@@ -1206,13 +1227,19 @@ export class RollingCoordinator {
    *  briefing: the Smart Resume briefing roll() already built (and used to decide the blank-slate
    *  branch) — undefined on the ordinary path. When present, sendPrompt writes it as-is instead of
    *  asking resumeText again; asking twice would write the Job worker's spec file twice (resumeText's
-   *  side effect). */
+   *  side effect).
+   *
+   *  **The ordinary-path ask passes `tabFallback: false` (F3).** This process was just `--resume`d, so
+   *  it already has the whole conversation — a tab session has nothing left to hand over, and asking
+   *  for one anyway would replace `chain.prompt` (possibly the user's own text from the New Session
+   *  dialog) with a pointer to a briefing file nobody needs. A Job worker's packet refresh is
+   *  unaffected — `tabFallback` only gates the tab-session fallback, not the Job Dispatch lookup. */
   private scheduleAutoPrompt(chain: Chain, briefing?: string): void {
     const liveId = chain.liveId
     const startedAt = this.now()
     const sendPrompt = async (): Promise<void> => {
       if (chain.disposed || chain.liveId !== liveId) return
-      const prompt = briefing ?? (await this.resumePromptFor(chain, liveId, 'handover')).prompt
+      const prompt = briefing ?? (await this.resumePromptFor(chain, liveId, 'handover', false)).prompt
       if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
       this.deps.write(liveId, prompt)
       const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same place and convention as liveId
@@ -1524,7 +1551,7 @@ export class RollingCoordinator {
     this.pushState(chain, 'nudged')
     const liveId = chain.liveId
     const stateSeq = chain.stateSeq // captures the generation at scheduling time
-    const { prompt } = await this.resumePromptFor(chain, liveId, 'update')
+    const { prompt } = await this.resumePromptFor(chain, liveId, 'update', true)
     if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
     this.deps.write(liveId, prompt)
     setTimeout(() => {
@@ -1630,7 +1657,7 @@ export class RollingCoordinator {
     this.pushState(chain, 'nudged') // a momentary event for the Slack notification — the renderer leaves it out of the banner
     const liveId = chain.liveId
     const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same place and convention as liveId
-    const { prompt } = await this.resumePromptFor(chain, liveId, 'update')
+    const { prompt } = await this.resumePromptFor(chain, liveId, 'update', true)
     if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
     this.deps.write(liveId, prompt)
     setTimeout(() => {

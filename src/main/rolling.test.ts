@@ -2154,17 +2154,20 @@ describe('같은 계정 재개는 kill 하지 않는다', () => {
 // 써지는지는 검증되지 않았다 — 즉 성공 경로가 미검증이었다.
 describe('resumeText 훅 배선 — 어느 모양을 묻고 그 값이 어디로 가는가', () => {
   const MIN = 60_000
-  /** 물어본 form 을 모두 기록하고 지정한 텍스트를 돌려주는 훅 */
+  /** 물어본 form·tabFallback 을 모두 기록하고 지정한 텍스트를 돌려주는 훅 */
   const hook = (
     text: string | null
-  ): { fn: RollingDeps['resumeText']; forms: string[] } => {
+  ): { fn: RollingDeps['resumeText']; forms: string[]; tabFallbacks: boolean[] } => {
     const forms: string[] = []
+    const tabFallbacks: boolean[] = []
     return {
-      fn: (_sessionId, form) => {
+      fn: (_sessionId, form, tabFallback) => {
         forms.push(form)
+        tabFallbacks.push(tabFallback)
         return Promise.resolve(text)
       },
-      forms
+      forms,
+      tabFallbacks
     }
   }
 
@@ -2177,6 +2180,10 @@ describe('resumeText 훅 배선 — 어느 모양을 묻고 그 값이 어디로
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await settle()
     expect(h0.forms).toEqual(['handover'])
+    // fix wave 최종, F3: 이 자리는 --resume 뒤 이미 대화를 통째로 이어받은 프로세스에 다시 묻는
+    // 자리라 tabFallback 이 거짓이다 — 탭 세션이라면 인계할 것이 없다(Job 워커라면 이 dep 은
+    // 여전히 packet 을 돌려준다, tabFallback 과 무관하게).
+    expect(h0.tabFallbacks).toEqual([false])
     // handover 는 **대체**다 — 전체 인계가 chain.prompt 자리를 차지한다
     expect(h.written.some((w) => w.id === 's2' && w.data === 'RE-READ YOUR SPEC FILE')).toBe(true)
     expect(h.written.some((w) => w.data === '이어서 작업 진행해 줘')).toBe(false)
@@ -2325,12 +2332,14 @@ describe('Smart Resume — 백지 재개', () => {
   // 효과가 있으므로, roll() 이 smart 여부를 가리려고 미리 물은 값을 sendPrompt 가 다시 묻는다면
   // 매 롤마다 두 번 쓰는 것이 된다. 이 테스트는 그 값이 실제로 아래로 전달되어 다시 묻지 않는지를
   // 호출 횟수로 확인한다.
-  it('브리핑은 handover 형태로 한 번만 요청된다', async () => {
+  it('브리핑은 handover 형태로 한 번만, tabFallback 참으로 요청된다', async () => {
     const forms: string[] = []
+    const tabFallbacks: boolean[] = []
     const h = harness({
       resumeStrategy: () => 'smart',
-      resumeText: (_sessionId, form) => {
+      resumeText: (_sessionId, form, tabFallback) => {
         forms.push(form)
+        tabFallbacks.push(tabFallback)
         return Promise.resolve('BRIEFING TEXT')
       }
     })
@@ -2340,6 +2349,9 @@ describe('Smart Resume — 백지 재개', () => {
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await settle()
     expect(forms).toEqual(['handover'])
+    // fix wave 최종, F3: strategy 가 'smart' 라 백지 재개 후보를 가리는 이 호출은 tabFallback 이
+    // 참이다 — Job 도 탭도 후보로 쓸 수 있어야 백지 재개가 성립한다.
+    expect(tabFallbacks).toEqual([true])
   })
 
   // 백지 재개 뒤 신원 필드(claudeSessionId·transcriptPath, 그리고 두 시드)가 비지 않으면, 다음 롤이

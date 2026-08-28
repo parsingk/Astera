@@ -106,15 +106,23 @@ export interface CodexRollingDeps {
    *  주입되지 않으면 아무것도 실리지 않는다(기존 동작) — now?/log? 와 같은 관례다. */
   orchEnv?(): { cliPath: string; infoPath: string; skillsPath: string } | undefined
   /** 재개 직전에 쓸 프롬프트를 물어본다. rolling.ts 의 같은 필드와 동일한 계약 — `chain.prompt` 가
-   *  register 시점에 고정되는 정적 값이라서 필요하다. sessionId 로 열린 Job Dispatch 를 찾을 수
-   *  없으면(사용자 탭 세션) `null` 을 돌린다. `null` 이면 `chain.prompt` 를 그대로 쓴다. codex 는
-   *  이 프롬프트를 spawn 인자로 넘기므로 **kill·spawn 전에** 물어야 한다(roll() 의 호출 자리 참고).
-   *  구현은 `main/orchestration/resumePacket.ts`.
+   *  register 시점에 고정되는 정적 값이라서 필요하다.
+   *
+   *  **sessionId 로 열린 Job Dispatch 를 찾으면 그 packet 을 돌린다. 못 찾으면(사용자 탭 세션)
+   *  `tabFallback` 이 참일 때만 탭 브리핑으로 저하하고, 거짓이면 곧바로 `null` 이다.** `null` 이면
+   *  `chain.prompt` 를 그대로 쓴다. codex 는 이 프롬프트를 spawn 인자로 넘기므로 **kill·spawn
+   *  전에** 물어야 한다(roll() 의 호출 자리 참고). 구현은 `main/orchestration/resumePacket.ts`.
    *
    *  **이 코디네이터는 두 모양을 다 묻는다.** 계정이 바뀌는 재개는 kill 하고 `--resume` 으로 다시
    *  띄우므로 'handover' 이고(roll), 같은 계정으로 이어가는 재개는 세션을 살려 두므로 'update' 다
-   *  (resumeInPlace). 가르는 기준은 `SPEC §11.5` 하나 — 그 경로가 `--resume` 을 부르는가다. */
-  resumeText?(sessionId: string, form: 'handover' | 'update'): Promise<string | null>
+   *  (resumeInPlace). 가르는 기준은 `SPEC §11.5` 하나 — 그 경로가 `--resume` 을 부르는가다.
+   *
+   *  **`tabFallback` 은 `resumeStrategy() === 'smart'` 를 그대로 옮긴 값이다(roll() 의 호출 자리,
+   *  F3).** codex 쪽은 이 dep 을 롤당 한 번만 묻고 그 결과를 백지 여부 판정과 `--resume` 프롬프트
+   *  양쪽에 그대로 쓴다 — claude 쪽처럼 두 자리에서 따로 묻지 않는다. 강도가 'smart' 가 아니면
+   *  애초에 백지 재개 후보가 될 수 없으므로 탭 브리핑을 시도할 이유가 없고, 시도했다가는 그 결과가
+   *  고스란히 `--resume` 프롬프트 자리로 흘러가 탭 세션의 `chain.prompt` 를 지운다. */
+  resumeText?(sessionId: string, form: 'handover' | 'update', tabFallback: boolean): Promise<string | null>
   /** 한도에 걸린 세션을 어떻게 이어갈지 — Task 1 의 설정값. **getter 로 받는다** — `orchEnv?` 와
    *  같은 이유다: 값이 설정 화면에서 앱 수명 중간에 바뀌고, 이 코디네이터는 그 값이 존재하기 전에
    *  만들어진다. 주입되지 않으면 `'original'`(기존 동작)로 본다.
@@ -701,12 +709,19 @@ export class CodexRollingCoordinator {
   }
 
   /** 재개 자리에 실을 텍스트를 정한다. **어느 모양을 물을지는 이 함수를 부르는 자리가 정한다** —
-   *  가르는 기준은 `SPEC §11.5` 하나다: 그 경로가 `--resume` 을 부르는가.
-   *   - 'handover'(전체 인계): `roll()`. kill 하고 `--resume` 으로 다시 띄우므로 프로세스가 새것이고,
-   *     작업을 이어 주는 것은 rollout 파일 하나다.
+   *  가르는 기준은 `SPEC §11.5` 하나다: 그 경로가 `--resume` 을 부르는가(또는 백지 재개로 그 자리를
+   *  대신하는가).
+   *   - 'handover'(전체 인계): `roll()` 하나뿐이지만, 그 결과가 두 가지 자리로 갈라져 쓰인다 —
+   *     `resumeStrategy() === 'smart'` 이고 브리핑을 실제로 얻었으면(`briefed`) 새 프로세스는
+   *     `--resume` 없이 빈 대화로 뜨고 이 문자열이 첫 프롬프트가 된다; 그렇지 않으면 kill 뒤
+   *     `codex resume` 으로 다시 띄우고 이 문자열이 그 재개 프롬프트가 된다. `tabFallback` 은
+   *     `resumeStrategy() === 'smart'` 를 그대로 옮긴 값이다(roll() — F3): 강도가 'smart' 가
+   *     아니면 백지 재개 후보 자체가 될 수 없으니 탭 브리핑을 시도할 이유가 없고, 시도하면 그
+   *     결과가 그대로 `--resume` 프롬프트 자리로 흘러 탭 세션의 `chain.prompt` 를 지운다.
    *   - 'update'(덧붙일 한 줄): `resumeInPlace`. **세션이 살아 있다** — 떨어뜨린 것이 없으니 인계할
    *     것도 없고, 대화가 온전한 에이전트에게 Task 지시문을 다시 읽히는 것은 방금 리셋된 할당량을
    *     이미 아는 것에 쓰는 일이다. 그래서 기다리는 동안 무엇이 바뀌었는지만 덧붙인다.
+   *     `tabFallback: true` — 대체가 아니라 덧붙임이라 사용자 문구를 잃을 위험이 없다.
    *
    *  'update' 를 **덧붙이는** 이유: 이 경로에서 `chain.prompt` 는 잃을 것이 없는 값이고, 사용자가
    *  직접 지정한 문구일 수도 있다(register 의 prompt). 대체하면 그것을 버린다.
@@ -733,10 +748,11 @@ export class CodexRollingCoordinator {
   private async resumePromptFor(
     chain: Chain,
     liveId: string,
-    form: 'handover' | 'update'
+    form: 'handover' | 'update',
+    tabFallback: boolean
   ): Promise<{ prompt: string; briefed: boolean }> {
     try {
-      const text = await this.deps.resumeText?.(liveId, form)
+      const text = await this.deps.resumeText?.(liveId, form, tabFallback)
       if (text === null || text === undefined || text === '') return { prompt: chain.prompt, briefed: false }
       return { prompt: form === 'update' ? `${chain.prompt} ${text}` : text, briefed: true }
     } catch (err) {
@@ -837,7 +853,7 @@ export class CodexRollingCoordinator {
       const sizeBefore = chain.rolloutPath
         ? await this.rolloutSize(chain.rolloutPath).catch(() => null)
         : null
-      const { prompt } = await this.resumePromptFor(chain, liveId, 'update')
+      const { prompt } = await this.resumePromptFor(chain, liveId, 'update', true)
       if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
       const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same convention as the claude side
       this.deps.write(liveId, prompt)
@@ -997,7 +1013,20 @@ export class CodexRollingCoordinator {
       // 도착해도 disposeChain 이 오작동하지 않는 이유). 그래서 kill 앞에서, 세션이 아직 살아 있을
       // 때 물어 둔다. **그리고 이제 복사보다도 앞에 있다** — 복사할지 말지(백지 재개인지)를 정하려면
       // 브리핑이 있는지를 먼저 알아야 하기 때문이다.
-      const { prompt, briefed } = await this.resumePromptFor(chain, chain.liveId, 'handover')
+      //
+      // **`tabFallback` 은 `resumeStrategy() === 'smart'` 를 그대로 옮긴다(F3).** codex 는 이 dep 을
+      // 롤당 한 번만 묻고 그 결과를 백지 판정과 `--resume` 프롬프트 양쪽에 그대로 쓴다(아래) —
+      // claude 쪽처럼 두 자리에서 따로 묻지 않는다. 강도가 'smart' 가 아니면 애초에 백지 재개 후보가
+      // 될 수 없으므로 탭 브리핑을 시도할 이유가 없고, 시도하면 그 결과가 그대로 `--resume` 프롬프트
+      // 자리로 흘러 탭 세션의 `chain.prompt`(New Session 대화상자에서 사용자가 직접 지정했을 수
+      // 있는 문구)를 지운다.
+      const strategy = this.resumeStrategy()
+      const { prompt, briefed } = await this.resumePromptFor(
+        chain,
+        chain.liveId,
+        'handover',
+        strategy === 'smart'
+      )
       if (chain.disposed) {
         this.deps.log(
           `codex roll aborted — chain disposed while building the resume prompt session=${chain.liveId}`
@@ -1022,8 +1051,7 @@ export class CodexRollingCoordinator {
       // so a mangled path is mangled either way. What refusing the blank slate buys is that the
       // mangled hint then arrives alongside the full copied conversation and `--resume`, so it is a
       // minor loss instead of a session starting from nothing.
-      const smart =
-        this.resumeStrategy() === 'smart' && briefed && sanitizeResumePrompt(prompt) === prompt
+      const smart = strategy === 'smart' && briefed && sanitizeResumePrompt(prompt) === prompt
       let dest: string | undefined
       if (!smart) {
         // ① The copy — a codex blocked by a limit is idle, so there is no write contention
