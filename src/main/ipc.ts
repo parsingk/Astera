@@ -38,7 +38,13 @@ import {
 } from '../core/orchestration/state'
 import { pickReviewer } from '../core/orchestration/reviewer'
 import { slotsToFill, tasksMissingAccounts } from '../core/orchestration/schedule'
-import { NO_COORDINATOR_ANSWER, unattendedQuestions } from '../core/orchestration/inbox'
+import {
+  NO_COORDINATOR_ANSWER,
+  unattendedQuestions,
+  unreadUpwardMail
+} from '../core/orchestration/inbox'
+import { buildHandoverPrompt } from '../core/orchestration/handover'
+import { attachCoordinator, detachCoordinator } from '../core/orchestration/state'
 import { firesDue } from '../core/orchestration/fire'
 import { reapableChildRuns } from '../core/orchestration/reap'
 import {
@@ -50,7 +56,7 @@ import {
   workingInRunRoot,
   worktreeDepsOf
 } from '../core/orchestration/integrate'
-import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
+import { DEFAULT_CONCURRENCY, FAILURE_LIMIT } from '../core/orchestration/types'
 import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, runsForProject } from '../core/orchestration/view'
 import { timelineFor } from '../core/orchestration/timeline'
@@ -298,6 +304,10 @@ export function registerIpc(
   let orchRollTap: OrchRollTap | null = null
   /** 검증기. startOrchestration 이 만들 때까지, 그리고 오케스트레이션이 꺼져 있으면 null 이다 */
   let orchValidator: TaskValidator | null = null
+  /** 코디네이터를 잃은 Run 을 다시 세우는 함수. **bootOrch 안에서 대입한다** — 정의가 그 안에
+   *  있어야 orch·deps 를 닫아 쓸 수 있고, 부르는 자리(core.sessions.onExit)는 그 밖이다.
+   *  orch·orchValidator 와 같은 관례다. */
+  let reviveCoordinator: ((sessionId: string) => Promise<void>) | null = null
   /** 예약 템플릿의 다음 발화 시각. **상태에 저장하지 않는다** — 재시작하면 비어 있고, 그때
    *  firesDue 가 nextFireAt(rule, now) 으로 다시 무장한다. 그것이 곧 "앱이 꺼져 있던 동안의
    *  발화는 버린다"는 규칙의 구현이다(main/scheduler.ts 가 같은 이유로 같은 선택을 했다). */
@@ -408,6 +418,7 @@ export function registerIpc(
     codexRolling?.handleExit(e)
     codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
+    void reviveCoordinator?.(e.sessionId) // 이 세션이 어느 Run 의 관리자였다면 다시 띄운다
     // Task 7's tab-resume briefing file is no longer deleted here — see tabResumeDir's own comment
     // above (fix wave 7, finding 1 (CRITICAL)) for why a per-exit delete keyed to this id was wrong:
     // it fired for the *old* session a smart resume had just written the briefing under, while the
@@ -1918,6 +1929,17 @@ export function registerIpc(
 
     /** 15초 — 세션 스케줄러의 TICK_MS 와 같은 값이다 */
     const ORCH_FIRE_TICK_MS = 15_000
+    /** 코디네이터를 깨우기 전에 기다리는 시간.
+     *
+     *  **짧으면** `check --wait` 안에서 정상적으로 기다리는 코디네이터를 찌른다 — 그 호출은 서버에서
+     *  막혀 있고 도는 동안 토큰을 안 쓰므로, 헛된 찌르기는 그 공짜 기다림을 유료 턴으로 바꾼다.
+     *  **길면** 잠든 코디네이터 밑에서 Run 이 그만큼 서 있다.
+     *
+     *  90초로 둔 근거: `check` 의 기본 대기가 그보다 짧고(DEFAULT_CHECK_TIMEOUT_MS), 정상 코디네이터는
+     *  타임아웃마다 다시 `check` 를 불러 그 배치를 ack 하므로 이 시각까지 미확인으로 남지 않는다.
+     *  즉 이 문턱을 넘는 것은 "루프를 놓았다" 의 신호에 가깝다. 틱이 15초이므로 실제 깨우기는
+     *  90~105초 사이에 일어난다. */
+    const COORDINATOR_NUDGE_MS = 90_000
     /** 예약 템플릿의 발화. 판정은 core 의 firesDue 가 하고(그쪽에 테스트가 있다) 여기는 그 답대로
      *  명령을 부른다. */
     const orchFireTick = async (): Promise<void> => {
@@ -2053,6 +2075,19 @@ export function registerIpc(
           title: `Coordinator · ${a.runId.slice(0, 12)}`,
           rollAccountIds: a.accountIds
         })
+        // **탭을 띄우는 것이 이 한 줄이다.** 공용 spawnSession 은 이 이벤트를 내지 않는다 — 사용자
+        // 경로에서는 반환값이 렌더러로 가서 App.tsx 가 탭을 만들기 때문이다(그 함수 위의 주석).
+        // main 안에서 직접 부르는 이 자리는 반환값이 렌더러에 닿지 않으므로, 워커 세션이 그랬던
+        // 것처럼 탭 없는 세션이 된다. 코디네이터 탭은 보여야 한다는 것이 이 기능의 결정이고
+        // (사람이 직접 지시할 자리가 그것이다), 탭이 없으면 그 자리가 사라진다.
+        //
+        // 실패는 삼킨다 — 같은 관례다(startWorker 의 emit): 부수적 실패가 세션 생성을 막지 않고,
+        // 탭은 다음 렌더러 마운트의 sessions.list() 재입양이 만든다.
+        try {
+          send('session:created', info)
+        } catch (err) {
+          orchLog(`session:created emit failed session=${info.id}: ${String(err)}`)
+        }
         orchLog(`coordinator started run=${a.runId} session=${info.id} account=${a.accountIds[0]}`)
         return { sessionId: info.id }
       },
@@ -2283,8 +2318,98 @@ export function registerIpc(
     void runScheduler().catch((e) => orchLog(`scheduler failed at startup: ${String(e)}`))
     // 예약 템플릿의 발화. **첫 바퀴는 무장만 한다**(firesDue) — 앱을 켤 때마다 한 회차가 도는
     // 것을 막는 장치가 그것이고, 그래서 여기서 즉시 한 번 부르지 않는다.
+    /** 코디네이터를 잃은 Run 을 다시 세운다.
+     *
+     *  **정상 종료와 사고를 가르지 않는다.** 코디네이터가 스스로 끝낼 자리가 없기 때문이다 — Run 이
+     *  끝나면 사람이 지운다. 그래서 세션이 없어지는 것은 언제나 사고이고(사용자가 탭을 닫았거나,
+     *  크래시거나, 에이전트가 종료했거나), 다시 띄우는 것이 맞다.
+     *
+     *  **한도는 이유가 아니다.** 코디네이터도 롤링 체인을 갖고 있어(startCoordinator 가
+     *  rollAccountIds 를 넘긴다) 한도에 걸리면 갈아탄다. 그 경로는 세션을 죽이더라도 롤링이 새
+     *  세션으로 이어 가고, 그때 이 함수가 보는 것은 옛 세션 id 다 — Run 의 coordinatorSessionId 와
+     *  더는 같지 않으므로 아래 조회에서 걸리지 않는다.
+     *
+     *  **앱 재시작은 이 경로가 아니다.** 그때는 세션이 모두 프로세스와 함께 사라지고 exit 이 오지
+     *  않는다. 사람이 실행을 다시 누른다 — 자동 복구를 하지 않기로 한 결정이다(SPEC §12.2). 다음
+     *  사람이 여기서 그 복구를 찾지 않도록 적어 둔다. */
+    reviveCoordinator = async (sessionId: string): Promise<void> => {
+      if (!orch || !orch.deps.enabled()) return
+      const st = orch.deps.getState()
+      const run = st.runs.find((r) => r.coordinatorSessionId === sessionId)
+      if (!run) return
+      const detached = detachCoordinator(st, { runId: run.id, failed: true })
+      if (!detached.ok) return
+      await orch.deps.setState(detached.state)
+      const failures = detached.value.coordinatorFailures ?? 0
+      const accountIds = run.coordinatorAccountIds
+      // **그친다.** 무한히 되띄우면 로그인이 끊긴 계정으로 세션을 끝없이 만든다. 한계값은 Task 의
+      // 회로 차단과 같은 것을 쓴다 — 같은 종류의 판단이고, 두 숫자를 따로 두면 한쪽만 조정된다.
+      if (failures >= FAILURE_LIMIT || !accountIds?.length) {
+        orchLog(
+          `coordinator not revived run=${run.id} failures=${failures} — ` +
+            (accountIds?.length ? 'giving up' : 'no coordinator account')
+        )
+        return
+      }
+      try {
+        const spawned = await orch.deps.startCoordinator!({
+          runId: run.id,
+          cwd: run.cwd,
+          accountIds,
+          prompt: buildHandoverPrompt({
+            runId: run.id,
+            objective: run.objective,
+            concurrency: run.concurrency ?? DEFAULT_CONCURRENCY,
+            taskCount: st.tasks.filter((t) => t.runId === run.id).length
+          })
+        })
+        const attached = attachCoordinator(orch.deps.getState(), {
+          runId: run.id,
+          sessionId: spawned.sessionId
+        })
+        if (attached.ok) await orch.deps.setState(attached.state)
+        orchLog(`coordinator revived run=${run.id} session=${spawned.sessionId} after=${failures}`)
+      } catch (err) {
+        // 다음 사고에 다시 시도한다 — 실패 횟수는 이미 올라가 있으므로 그침이 결국 작동한다.
+        orchLog(`coordinator revive failed run=${run.id} — ${String(err)}`)
+      }
+    }
+
+    /** 잠든 코디네이터를 깨운다. **판정은 core 에 있다**(unreadUpwardMail) — 이 파일에는 테스트가
+     *  닿지 않으므로 규칙을 여기 두면 다음 편집을 막아 줄 것이 없다. 여기 남는 것은 순수 함수가
+     *  가질 수 없는 것뿐이다: 세션에 타이핑하고, 바쁜지 보고, 로그를 남긴다.
+     *
+     *  **바쁜 세션은 건드리지 않는다.** 두 가지를 함께 막는다: (1) 턴 중인 코디네이터는 이미 일하고
+     *  있어 깨울 것이 없고, (2) 권한 요청 대화상자는 턴 중에 뜨므로 그때 타이핑하면 Enter 가 화면의
+     *  선택지를 승인해 버린다 — 롤링이 같은 위험을 훅 알림으로 막는다(rolling.ts 의 onHookEvent).
+     *  훅이 아니라 바쁨으로 막는 것은 더 거친 근사다: 대화상자가 떴는데 바쁨이 풀리는 런타임이
+     *  있으면 이 가드는 새어 나간다. 그 경우를 실측한 적은 없다. */
+    const nudgeSleepingCoordinators = async (): Promise<void> => {
+      if (!orch || !orch.deps.enabled()) return
+      for (const m of unreadUpwardMail(orch.deps.getState(), {
+        nowMs: Date.now(),
+        staleMs: COORDINATOR_NUDGE_MS
+      })) {
+        if (busyState.get(m.sessionId) === true) continue
+        // 세션이 없으면(사용자가 닫았다) 깨울 것이 없다 — 그 자리는 되띄우기가 맡는다.
+        if (!core.sessions.list().some((x) => x.id === m.sessionId && x.status !== 'exited')) continue
+        // **영어다.** 코디네이터는 영어로 인계받았다(handover.ts) — 롤링이 워커의 재개 문구를
+        // 앱의 UI 언어로 타이핑하다 같은 어긋남을 겪었고, 그 주석이 이유를 적어 두었다.
+        core.sessions.write(
+          m.sessionId,
+          `Your Run has ${m.messageIds.length} unread message(s). Run \`astera check --json\`, ` +
+            'handle them, ack the batch, then go back to `astera check --wait`.'
+        )
+        core.sessions.write(m.sessionId, '\r')
+        orchLog(
+          `coordinator nudged run=${m.runId} session=${m.sessionId} unread=${m.messageIds.length}`
+        )
+      }
+    }
+
     orchFireTimer = setInterval(() => {
       void orchFireTick().catch((e) => orchLog(`fire tick failed: ${String(e)}`))
+      void nudgeSleepingCoordinators().catch((e) => orchLog(`nudge failed: ${String(e)}`))
     }, ORCH_FIRE_TICK_MS)
     // Installing the discovery stub — without it there is no path by which an agent finds this feature.
     // **Done for every claude and codex account**: the path is the same

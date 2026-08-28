@@ -3305,6 +3305,7 @@ export default function App(): React.JSX.Element {
           // 스냅숏이 이미 프로젝트별로 접혀 오므로 폴더 사실이 앉을 자리가 그것이다(view.ts).
           // 아직 안 왔으면 거짓 — 없는 것을 경고하는 것보다 낫다
           projectFolderBusy={orchSnapshot?.projectFolderBusy ?? false}
+          accounts={accounts}
           onClose={() => setNewRunOpen(false)}
           onCreated={(runId) => {
             setNewRunOpen(false)

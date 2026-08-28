@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { NO_COORDINATOR_ANSWER, unattendedQuestions } from './inbox'
+import { NO_COORDINATOR_ANSWER, unattendedQuestions, unreadUpwardMail } from './inbox'
 import { emptyState, type OrchState } from './state'
 import type { Dispatch, Message, Run } from './types'
 
@@ -90,15 +90,17 @@ describe('unattendedQuestions', () => {
     expect(unattendedQuestions(s)).toEqual([])
   })
 
-  // 코디네이터가 있는 Run 은 그가 답한다. 이 그물은 답할 사람이 없는 Run 만 본다
-  it('앱이 돌리지 않는 Run 은 보지 않는다', () => {
-    const s = state({ runs: [run({ autoDispatch: undefined })] })
+  // **판정의 기준은 "답할 코디네이터가 있는가" 하나다.** 예전에는 autoDispatch 로 물었는데, 그때는
+  // 코디네이터 세션이라는 개념이 없어 그 둘이 같았다. 이제 코디네이터에게 넘긴 Run 은 autoDispatch
+  // 가 꺼져 있고(한 Run 에 운전자는 하나), 그 Run 의 질문은 앱이 답해서는 안 된다.
+  it('코디네이터가 붙어 있으면 보지 않는다 — 그가 답한다', () => {
+    const s = state({ runs: [run({ autoDispatch: undefined, coordinatorSessionId: 'coord1' })] })
     expect(unattendedQuestions(s)).toEqual([])
   })
 
-  it('예약 템플릿은 보지 않는다 — 템플릿 아래에는 도는 워커가 없다', () => {
-    const s = state({ runs: [run({ schedule: { kind: 'daily', time: '09:00' } })] })
-    expect(unattendedQuestions(s)).toEqual([])
+  it('코디네이터가 없으면 앱이 돌리는 Run 이 아니어도 본다 — 되띄우기가 그친 Run 이 그 갈래다', () => {
+    const s = state({ runs: [run({ autoDispatch: undefined, coordinatorFailures: 3 })] })
+    expect(unattendedQuestions(s)).toEqual(['msg_1'])
   })
 
   // 부드리기가 있는 것은 question 뿐이다. 나머지는 워커가 계속 도는 중이라 풀어 줄 것이 없다
@@ -123,5 +125,63 @@ describe('unattendedQuestions', () => {
       ]
     })
     expect(unattendedQuestions(s)).toEqual(['msg_1', 'msg_2'])
+  })
+})
+
+describe('unreadUpwardMail', () => {
+  const T0 = Date.parse(NOW)
+  const STALE = 60_000
+  const withCoord = (over: Partial<Run> = {}): Run =>
+    run({ coordinatorSessionId: 'coord1', ...over })
+
+  const mail = (over: Partial<Message> = {}): Message =>
+    question({ type: 'worker_done', answered: true, answerBody: '보고', ...over })
+
+  it('오래된 미확인 메일이 있으면 그 세션을 깨울 대상으로 낸다', () => {
+    const s = state({ runs: [withCoord()], messages: [mail()] })
+    expect(unreadUpwardMail(s, { nowMs: T0 + STALE, staleMs: STALE })).toEqual([
+      { runId: 'run_1', sessionId: 'coord1', messageIds: ['msg_1'] }
+    ])
+  })
+
+  // 유예가 없으면 `check --wait` 안에 있는 코디네이터를 헛되이 찌른다
+  it('아직 유예 안에 있으면 깨우지 않는다', () => {
+    const s = state({ runs: [withCoord()], messages: [mail()] })
+    expect(unreadUpwardMail(s, { nowMs: T0 + STALE - 1, staleMs: STALE })).toEqual([])
+  })
+
+  it('확인된 메일은 깨울 이유가 아니다 — ack 이 읽었다는 증거다', () => {
+    const s = state({ runs: [withCoord()], messages: [mail({ ackedAt: NOW })] })
+    expect(unreadUpwardMail(s, { nowMs: T0 + STALE, staleMs: STALE })).toEqual([])
+  })
+
+  it('코디네이터가 없는 Run 은 깨울 대상이 없다', () => {
+    const s = state({ runs: [run()], messages: [mail()] })
+    expect(unreadUpwardMail(s, { nowMs: T0 + STALE, staleMs: STALE })).toEqual([])
+  })
+
+  // heartbeat 만으로는 코디네이터가 할 일이 없다 — 그것으로 깨우면 살아 있는 코디네이터를
+  // 주기적으로 두드린다
+  it('heartbeat 만 쌓인 것으로는 깨우지 않는다', () => {
+    const s = state({ runs: [withCoord()], messages: [mail({ type: 'heartbeat' })] })
+    expect(unreadUpwardMail(s, { nowMs: T0 + STALE, staleMs: STALE })).toEqual([])
+  })
+
+  it('코디네이터의 행동이 필요한 유형은 전부 센다', () => {
+    for (const type of ['worker_done', 'status', 'question', 'escalation', 'decision_gate'] as const) {
+      const s = state({ runs: [withCoord()], messages: [mail({ type })] })
+      expect(unreadUpwardMail(s, { nowMs: T0 + STALE, staleMs: STALE })).toHaveLength(1)
+    }
+  })
+
+  it('Run 이 여럿이면 각자 자기 세션과 자기 메일을 낸다', () => {
+    const s = state({
+      runs: [withCoord(), withCoord({ id: 'run_2', coordinatorSessionId: 'coord2' })],
+      messages: [mail(), mail({ id: 'msg_2', runId: 'run_2' })]
+    })
+    expect(unreadUpwardMail(s, { nowMs: T0 + STALE, staleMs: STALE })).toEqual([
+      { runId: 'run_1', sessionId: 'coord1', messageIds: ['msg_1'] },
+      { runId: 'run_2', sessionId: 'coord2', messageIds: ['msg_2'] }
+    ])
   })
 })

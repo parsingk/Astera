@@ -825,6 +825,28 @@ export async function handleCommand(
           `run ${run.id} is a schedule template — it does not dispatch its own Tasks; its executions do`
         )
 
+      // **동시 실행 한도.** 지금까지 이 값을 지키는 곳은 앱의 스케줄러뿐이었다(schedule.ts 의
+      // slotsToFill) — 앱이 유일한 배치자였으므로 그것으로 충분했다. Run 을 코디네이터에게 넘기는
+      // 순간 이것은 **LLM 이 어길 수 있는 규칙**이 되므로, 이 명령이 이미 거절하는 다른 규칙들과
+      // 같은 대열에 들어간다(blocked Task, 회로 차단, 중복 Dispatch, 예약 템플릿).
+      //
+      // 인수 프롬프트도 같은 값을 말해 준다(handover.ts) — 문구가 1차이고 이 거절이 2차다. 문구만
+      // 있으면 슬쩍 넘겨도 아무도 모르고, 거절만 있으면 코디네이터가 시행착오로 규칙을 알아내며
+      // 턴을 쓴다. 그래서 지금 열린 수와 한도를 문구에 함께 적는다.
+      //
+      // **`--retry-of` 는 예외가 아니다.** 재시도도 새 Dispatch 를 열고 그 워커도 같은 폴더들에서
+      // 돈다 — 한도를 넘겨도 되는 이유가 없다.
+      const limit = run.concurrency ?? DEFAULT_CONCURRENCY
+      const openHere = s.dispatches.filter((d) => {
+        if (d.outcome || d.endedAt) return false
+        return s.tasks.find((x) => x.id === d.taskId)?.runId === run.id
+      }).length
+      if (openHere >= limit)
+        return conflict(
+          `run ${run.id} is at its concurrency limit: ${openHere} of ${limit} dispatches are open`
+        )
+
+
       // **`--worktree` 를 생략한 호출은 "이 Run 이 일하는 자리" 를 뜻한다** — 그것은 Run 이
       // 워크트리를 가진 뒤에는 그 워크트리다. 기본값이 여기 있는 이유: 배치를 정하는 것은 부르는
       // 쪽이 아니라 Run 이다. 렌더러의 수동 띄우기 버튼이 `'current'` 를 명시하던 동안 이 기능이
@@ -850,6 +872,19 @@ export async function handleCommand(
             `into the project folder; the scheduler creates one when the Run starts`
         )
       const worktree = str(args.worktree) ?? run.worktree ?? 'current'
+      // **배치 규칙은 여기서 거절되지 않는다 — 문구로만 지켜진다**(handover.ts 의 인수 프롬프트).
+      // 막고 싶은 것은 "병렬 워커가 한 폴더를 나눠 쓴다" 하나인데, 그것을 이 자리에서 확인할 수
+      // 없다: 위 값은 **의도**('current'·'new'·경로)이고 실제 cwd 로 푸는 것은 배선이다
+      // (startWorker). 이미 열린 Dispatch 의 `cwd` 와 비교하려면 그 풀이가 한 곳에 있어야 한다.
+      //
+      // 대신 쓸 수 있는 대용은 "한도 ≥2 인 Run 에서 --worktree 생략 금지" 였는데, 기본 한도가 3
+      // 이므로 그것은 **모든 기본 Run** 에서 생략을 금지하는 셈이 되고, 생략은 오늘 문서화된
+      // 정상 호출이다(이 주석 위의 기본값 단락). 대용을 넣어 보고 기존 테스트 21개가 거절당하는
+      // 것으로 확인했다.
+      //
+      // 그래서 이 가드는 cwd 풀이를 한 곳으로 모으는 작업과 함께 와야 한다. 그때까지 병렬 Run 에
+      // 잘못된 배치를 부를 수 있는 유일한 호출자는 코디네이터이고, 그에게는 규칙과 **이유**가
+      // 프롬프트로 간다.
 
       // For a --terminal reuse the server looks up in advance which dispatch actually owned that
       // session (its cwd, provider and accountId) and passes them to the coordinator as arguments —

@@ -1,7 +1,14 @@
 import { useState } from 'react'
-import type { ScheduleRule } from '../../../core/types'
+import type { Account, ScheduleRule } from '../../../core/types'
+import { providerOf } from '../../../core/providers/meta'
 import { useI18n } from '../i18n/I18nProvider'
+import { AccountSelect } from './AccountSelect'
 import { ScheduleRuleFields } from './ScheduleRuleFields'
+
+/** 코디네이터 계정 슬롯 상한. NewTaskModal 의 MAX_TASK_ACCOUNTS 와 같은 값이지만 **상수를
+ *  공유하지 않는다** — 저쪽은 한 Task 의 워커 체인이고 이쪽은 Run 하나의 관리자 체인이다.
+ *  한쪽을 늘릴 때 다른 쪽이 따라 움직이면 안 된다(그 파일의 같은 판단). */
+const MAX_COORDINATOR_ACCOUNTS = 3
 
 /** 사이드바의 '+ 새 작업'이 여는 폼. 여기서 만든 Run 은 앱이 스스로 돌린다 — 워커를 붙이고
  *  검증·병합까지 미는 스케줄러는 이미 있고(Task 1~6), 이 컴포넌트는 그 스케줄러가 볼 첫 Run 하나를
@@ -12,6 +19,7 @@ import { ScheduleRuleFields } from './ScheduleRuleFields'
 export function NewRunModal({
   projectPath,
   projectFolderBusy,
+  accounts,
   onClose,
   onCreated
 }: {
@@ -20,6 +28,8 @@ export function NewRunModal({
    *  **막지 않는다**: 파일을 안 건드리는 워커끼리는 충돌할 것이 없고 앱은 그것을 알 수 없다. */
   projectFolderBusy: boolean
   projectPath: string
+  /** 고를 수 있는 계정 전부. null 은 아직 안 온 것 — NewTaskModal 의 같은 prop 과 같은 뜻이다 */
+  accounts: Account[] | null
   onClose: () => void
   /** 만들어진 Run 의 id — 부르는 쪽이 곧바로 상세 창을 열어 Task 를 짜게 한다 */
   onCreated: (runId: string) => void
@@ -27,10 +37,32 @@ export function NewRunModal({
   const { t } = useI18n()
   const [objective, setObjective] = useState('')
   const [concurrency, setConcurrency] = useState(3)
+  /** 이 Run 을 관리할 코디네이터 세션의 계정들, 순서대로. **비어 있으면 코디네이터를 띄우지
+   *  않는다** — 그때는 앱이 직접 돌린다(server.ts 의 run-start). 그 갈림을 조용히 두지 않고
+   *  아래 힌트가 말한다. */
+  const [coordinatorAccountIds, setCoordinatorAccountIds] = useState<string[]>([])
   const [scheduled, setScheduled] = useState(false)
   const [schedule, setSchedule] = useState<ScheduleRule | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  /** 첫 계정이 정한 provider. 아직 없으면 null — 그때는 모든 칸이 전부 보여 준다. */
+  const head = (accounts ?? []).find((a) => a.id === coordinatorAccountIds[0])
+  const headProvider = head ? providerOf(head) : null
+
+  /** 그 칸에서 고를 수 있는 계정. **둘째 칸부터는 첫 계정과 같은 provider 만** — 코디네이터도 한
+   *  CLI 이고, 섞인 목록은 run-create 가 거절한다(server.ts 의 parseAccountList). 고를 수 없게
+   *  두는 것이 거절보다 낫다(NewTaskModal 의 같은 판단). */
+  const choicesFor = (index: number, slot: string): Account[] =>
+    (accounts ?? []).filter(
+      (a) =>
+        (a.id === slot || !coordinatorAccountIds.includes(a.id)) &&
+        (index === 0 || headProvider === null || providerOf(a) === headProvider)
+    )
+
+  const canAddSlot =
+    coordinatorAccountIds.length < MAX_COORDINATOR_ACCOUNTS &&
+    choicesFor(coordinatorAccountIds.length, '').length > 0
 
   const create = async (): Promise<void> => {
     const trimmed = objective.trim()
@@ -47,6 +79,10 @@ export function NewRunModal({
         // 정한다(orchestration/types.ts 의 Task.accountIds). run-create 는 이 플래그를 이제
         // 거절한다(server.ts).
         concurrency,
+        // 비어 있으면 칸 자체를 보내지 않는다 — "지정 없음"이고, 그때 앱이 직접 돌린다
+        ...(coordinatorAccountIds.length > 0
+          ? { coordinatorAccount: coordinatorAccountIds.join(',') }
+          : {}),
         // **`auto` 는 예약에도 보낸다.** 뜻은 "앱이 이것을 돌린다" 이고, 예약도 앱이 돌린다 —
         // 발화가 앱의 ticker 다. 이 UI 로 만든 Run 은 언제나 자동이므로 사용자에게 스위치를 주지
         // 않는다(스펙 5절).
@@ -117,6 +153,33 @@ export function NewRunModal({
             <p className="warn-text">{t('jobs.new.folderBusy')}</p>
           )}
         </div>
+        {/* 계정이 하나도 없으면 접는다 — 고를 것이 없는 컨트롤은 감춘다(NewTaskModal 의 같은 규칙).
+            null 은 아직 안 온 것이라 같이 접힌다. */}
+        {(accounts?.length ?? 0) > 0 && (
+          <div className="field">
+            <label>{t('jobs.new.coordinator')}</label>
+            {/* 슬롯 하나씩. 첫 칸을 비우면 뒤 칸도 함께 사라진다 — 첫 계정이 provider 를 정하므로
+                그것 없이 "두 번째 계정" 만 있는 상태는 뜻이 없다(NewTaskModal 의 같은 판단). */}
+            {(canAddSlot ? [...coordinatorAccountIds, ''] : coordinatorAccountIds).map((slot, i) => (
+              <AccountSelect
+                key={i}
+                className="stack-item"
+                accounts={choicesFor(i, slot)}
+                value={slot}
+                onChange={(id) =>
+                  setCoordinatorAccountIds((prev) => {
+                    const next = [...prev]
+                    if (id === '') next.splice(i)
+                    else next[i] = id
+                    return next.filter((x) => x !== '')
+                  })
+                }
+                allLabel={i === 0 ? t('jobs.new.coordinatorNone') : t('jobs.task.accountNone')}
+              />
+            ))}
+            <p className="modal-hint">{t('jobs.new.coordinatorHint')}</p>
+          </div>
+        )}
         <div className="field">
           <label className="check-small">
             <input

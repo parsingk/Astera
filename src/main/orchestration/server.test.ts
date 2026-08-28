@@ -2747,6 +2747,71 @@ describe('run-spawn — 예약 회차', () => {
 
 })
 
+describe('worker-start — 동시 실행 한도', () => {
+  const twoTasks = async (
+    concurrency?: number
+  ): Promise<{ deps: OrchServerDeps & { state: OrchState }; ids: string[] }> => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      ...(concurrency === undefined ? {} : { concurrency })
+    })
+    const runId = (run.body as { id: string }).id
+    const ids: string[] = []
+    for (const spec of ['a', 'b', 'c', 'd']) {
+      const t = await call(deps, 'task-create', { account: 'acc1', runId, spec })
+      ids.push((t.body as { id: string }).id)
+    }
+    return { deps, ids }
+  }
+
+  // 이 값을 지키는 곳은 앱의 스케줄러뿐이었다(slotsToFill) — 앱이 유일한 배치자였으므로 충분했다.
+  // 코디네이터에게 넘기는 순간 LLM 이 어길 수 있는 규칙이 되므로 서버가 같이 지킨다.
+  it('한도에 닿으면 다음 worker-start 를 거절한다', async () => {
+    const { deps, ids } = await twoTasks(2)
+    expect((await call(deps, 'worker-start', { task: ids[0], agent: 'codex', account: 'acc1', worktree: 'current' })).status).toBe(200)
+    expect((await call(deps, 'worker-start', { task: ids[1], agent: 'codex', account: 'acc1', worktree: 'current' })).status).toBe(200)
+    const third = await call(deps, 'worker-start', { task: ids[2], agent: 'codex', account: 'acc1', worktree: 'current' })
+    expect(third.status).toBe(409)
+    // 지금 열린 수와 한도를 함께 말한다 — 코디네이터가 시행착오로 규칙을 알아내며 턴을 쓰지 않게
+    const err = String((third.body as { error?: string }).error)
+    expect(err).toContain('concurrency limit')
+    expect(err).toContain('2 of 2')
+  })
+
+  it('한도 안이면 그대로 통과한다', async () => {
+    const { deps, ids } = await twoTasks(3)
+    for (const id of ids.slice(0, 3))
+      expect((await call(deps, 'worker-start', { task: id, agent: 'codex', account: 'acc1', worktree: 'current' })).status).toBe(200)
+  })
+
+  it('한도를 정하지 않은 Run 은 기본값을 쓴다', async () => {
+    const { deps, ids } = await twoTasks()
+    for (const id of ids.slice(0, 3))
+      expect((await call(deps, 'worker-start', { task: id, agent: 'codex', account: 'acc1', worktree: 'current' })).status).toBe(200)
+    expect(
+      (await call(deps, 'worker-start', { task: ids[3], agent: 'codex', account: 'acc1', worktree: 'current' })).status
+    ).toBe(409)
+  })
+
+  // 끝난 Dispatch 는 자리를 비운다 — 아니면 Run 이 한 번 한도에 닿은 뒤로 영원히 막힌다
+  it('끝난 Dispatch 는 세지 않는다', async () => {
+    const { deps, ids } = await twoTasks(1)
+    const first = await call(deps, 'worker-start', { task: ids[0], agent: 'codex', account: 'acc1', worktree: 'current' })
+    expect(first.status).toBe(200)
+    expect(
+      (await call(deps, 'worker-start', { task: ids[1], agent: 'codex', account: 'acc1', worktree: 'current' })).status
+    ).toBe(409)
+    const dispatchId = (first.body as { dispatchId?: string; id?: string }).dispatchId
+      ?? deps.getState().dispatches[0].id
+    await call(deps, 'worker-stop', { dispatch: dispatchId })
+    expect(
+      (await call(deps, 'worker-start', { task: ids[1], agent: 'codex', account: 'acc1', worktree: 'current' })).status
+    ).toBe(200)
+  })
+})
+
 describe('run-start — 코디네이터 인계', () => {
   /** startCoordinator 를 기록하는 deps. 계정은 claude 둘 + codex 하나. */
   const coordDeps = (
