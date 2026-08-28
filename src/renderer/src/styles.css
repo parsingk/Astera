@@ -565,7 +565,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .tab.exited .tab-title { text-decoration: line-through; color: var(--text-faint); }
 .tab-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 /* The rolling-active session marker — a small, restrained, non-interactive mark; the account chain is exposed only through the title tooltip */
-.tab-roll { flex: none; font-size: 11px; opacity: 0.65; cursor: default; user-select: none; }
+.tab-roll { flex: none; opacity: 0.65; cursor: default; user-select: none; }
 /* Session working: a spinner in the account colour. Larger than a dot (10px) with a bright semicircular
    arc turning, so it reads clearly. The colour is set inline (a faint track plus full colour on
    top/right = a bright 180° arc). */
@@ -1536,7 +1536,9 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* ---------- file viewer ---------- */
 .file-truncated { padding: 4px 12px; font-size: 12px; color: var(--warn); background: var(--warn-bg); flex: none; }
 .file-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-dim); font-size: 13px; background: var(--panel); z-index: 2; }
-.tab-dirty { flex: none; font-size: 9px; opacity: 0.8; }
+/* 저장되지 않은 파일 표시. .tab-dot 과 같은 방식의 CSS 원이다 — ● 글리프였을 때는 크기가 테마
+   서체를 탔고, 그 자리에 lucide Circle 을 넣으면 6px 에서 외곽선이 뭉개진다. */
+.tab-dirty { flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.8; }
 .file-editor-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
 .file-conflict { flex: none; padding: 4px 12px; font-size: 12px; background: var(--warn-bg); color: var(--warn); display: flex; gap: 8px; align-items: center; }
 

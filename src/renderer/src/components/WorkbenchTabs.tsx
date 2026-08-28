@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { resolveFileIcon } from '../../../core/files/icons'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
+import { Repeat } from 'lucide-react'
 
 /** File viewer tab. Renderer-only — unlike sessions, main is not involved. id = `file:${path}`.
  *  (FileTabs.tsx가 이 탭 줄로 대체되면서 타입만 여기로 옮겨 왔다) */
@@ -179,13 +180,11 @@ export function WorkbenchTabs({
           <span className="tab-title">{tab.title}</span>
           {tab.kind === 'file' && tab.hint && <span className="tab-hint">{tab.hint}</span>}
           {tab.kind === 'file' && tab.dirty && (
-            <span className="tab-dirty" title={t('explorer.tab.unsaved')}>
-              ●
-            </span>
+            <span className="tab-dirty" title={t('explorer.tab.unsaved')} />
           )}
           {tab.kind === 'session' && tab.rollTooltip && (
             <span className="tab-roll" title={tab.rollTooltip}>
-              🔁
+              <Repeat size={11} />
             </span>
           )}
           <button
