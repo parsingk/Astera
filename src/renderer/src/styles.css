@@ -421,7 +421,7 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .run-global { position: relative; }
 .run-global-badge { display: inline-flex; align-items: center; gap: 4px; background: var(--elevated); border: 1px solid var(--line-soft); color: var(--text-dim); border-radius: var(--radius-sm); font-size: 11px; padding: 2px 7px; cursor: pointer; font-variant-numeric: tabular-nums; }
 .run-global-badge:hover { border-color: var(--text-faint); }
-.run-global-badge .tri { color: var(--run); font-size: 9px; }
+.run-global-badge .tri { color: var(--run); }
 .run-global-badge .n { color: var(--ok); font-weight: 600; }
 .run-global-menu { position: absolute; top: calc(100% + 5px); right: 0; z-index: 20; min-width: 240px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 4px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 1px; }
 .run-global-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--radius); transition: background var(--ease); }
@@ -1150,7 +1150,7 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* 그룹 헤더라 .worktree-row/.session-row 와 같은 종류의 행이 아니다 — --row-pad-y 를 걸지 않은 게 빠뜨린 게 아니다 */
 .project-row { display: flex; align-items: center; gap: 9px; padding: 10px 12px; cursor: pointer; user-select: none; transition: background var(--ease); }
 .project-row:hover { background: var(--elevated); }
-.project-chevron { flex-shrink: 0; width: 12px; font-size: 11px; color: var(--text-faint); }
+.project-chevron { flex-shrink: 0; width: 12px; color: var(--text-faint); }
 .project-name { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-meta { font-size: 10px; font-family: var(--mono); color: var(--text-faint); flex-shrink: 0; }
 /* An expanded session: bound by a vertical rail in the account colour, with the title dimmed — the density stays as it is */
@@ -1549,7 +1549,7 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .fx-tree { flex: 1; min-height: 0; overflow: auto; font-size: 13px; user-select: none; }
 .fx-row { display: flex; align-items: center; gap: 4px; padding: 2px 8px; cursor: pointer; white-space: nowrap; transition: background var(--ease), box-shadow var(--ease); }
 .fx-row:hover { background: rgba(255, 255, 255, 0.06); }
-.fx-caret { flex: none; width: 12px; font-size: 10px; color: var(--text-dim); }
+.fx-caret { flex: none; width: 12px; color: var(--text-dim); }
 .fx-name { overflow: hidden; text-overflow: ellipsis; }
 /* git status — colour on the filename only. File type icon colours are left alone */
 .fx-name.git-new { color: var(--git-new); }
@@ -1691,7 +1691,7 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    '자세히' 버튼은 stopPropagation 을 부른다 — JobsView.tsx 의 그 자리 주석 참고.
    **hover 를 이 줄에 두지 않는다** — 위 .jobs-run:hover 가 Run 전체로 말한다 */
 .jobs-run-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px 0; cursor: pointer; }
-.jobs-caret { flex: none; width: 9px; font-size: 10px; color: var(--text-faint); }
+.jobs-caret { flex: none; width: 9px; color: var(--text-faint); }
 .jobs-objective { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 560; }
 /* 끝난 Run 은 물러난다 — 목록이 길어질수록 눈이 가야 하는 것은 아직 도는 쪽이다. 실패한 Run 은
    여기서 흐려지지 않는다: 사람이 손봐야 하는 것이라 끝났어도 읽혀야 한다 */
