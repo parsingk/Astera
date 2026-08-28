@@ -570,7 +570,18 @@ export function FileExplorer({
                 style={{ paddingLeft: depth * 14 + 8 }}
                 title={entry.path}
                 onClick={(ev) => {
-                  if (sel.applyClickSelection(entry.path, ev)) onOpenFile(entry.path)
+                  sel.applyClickSelection(entry.path, ev)
+                }}
+                // Opening is the double click's job, so that a single click leaves focus on the tree.
+                // Opening a file hands the cursor to the editor (FileEditor's focused effect), and with
+                // the cursor in CodeMirror the next Ctrl+C is CodeMirror's copy, which on an empty
+                // selection copies the cursor's line — that is how "copy the file, paste it into the
+                // session" used to paste the file's first line instead of its path.
+                onDoubleClick={(ev) => {
+                  // Ctrl/Shift only change the selection, they never open — the same rule the single
+                  // click follows (applyClickSelection's return value)
+                  if (ev.ctrlKey || ev.metaKey || ev.shiftKey) return
+                  onOpenFile(entry.path)
                 }}
                 onContextMenu={(ev) => {
                   ev.preventDefault()
