@@ -1051,7 +1051,17 @@ export class CodexRollingCoordinator {
       // so a mangled path is mangled either way. What refusing the blank slate buys is that the
       // mangled hint then arrives alongside the full copied conversation and `--resume`, so it is a
       // minor loss instead of a session starting from nothing.
-      const smart = strategy === 'smart' && briefed && sanitizeResumePrompt(prompt) === prompt
+      const sanitizedPrompt = sanitizeResumePrompt(prompt)
+      if (strategy === 'smart' && briefed && sanitizedPrompt !== prompt) {
+        // fix wave 최종, F6: 이 거부는 로그가 없으면 조용히 영구화된다 — userData 경로 하나에
+        // `["&|<>^%]` 나 연속된 공백이 있으면 이 설치본의 codex Smart Resume 은 롤마다 여기서
+        // 거부되지만, 그때까지 rolling.log 에는 그 사실이 한 줄도 남지 않았다. "폐기된 브리핑은
+        // 로그로 남긴다"는 이 branch 자신의 규칙을 이 자리만 어기고 있었다.
+        this.deps.log(
+          `codex smart resume refused — the briefing pointer would be mangled by the argv sanitizer, falling back to --resume session=${chain.liveId}`
+        )
+      }
+      const smart = strategy === 'smart' && briefed && sanitizedPrompt === prompt
       let dest: string | undefined
       if (!smart) {
         // ① The copy — a codex blocked by a limit is idle, so there is no write contention

@@ -384,9 +384,11 @@ describe('CodexRollingCoordinator', () => {
   // 버려진다(commands.ts 의 buildCodexCommand).
   describe('Smart Resume — 백지 재개', () => {
     it('전략이 smart 이고 브리핑이 있으면 복사 없이 --resume 없이 백지로 띄운다', async () => {
+      const logs: string[] = []
       const h = harness({
         resumeStrategy: () => 'smart',
-        resumeText: () => Promise.resolve('BRIEFING TEXT')
+        resumeText: () => Promise.resolve('BRIEFING TEXT'),
+        log: (m) => logs.push(m)
       })
       const file = await writeRollout({ accountId: 'c1', uuid: 'cx-smart-1', cwd: h.info1.cwd, primary: 95 })
       h.coord.register(h.info1)
@@ -399,6 +401,9 @@ describe('CodexRollingCoordinator', () => {
       expect(h.spawned.at(-1)?.resumeSessionId).toBeUndefined()
       expect(h.spawned.at(-1)?.resumePrompt).toBeUndefined()
       expect(h.spawned.at(-1)?.initialPrompt).toBe('BRIEFING TEXT')
+      // F6 의 거부 로그는 실제로 거부됐을 때만 난다 — sanitizer 가 아무것도 바꾸지 않은 이 경우엔
+      // 없어야 한다(반대로 뒤집혀도 통과하는 어설션을 남기지 않기 위해).
+      expect(logs.some((l) => l.includes('smart resume refused'))).toBe(false)
       h.coord.stop()
     })
 
@@ -409,9 +414,11 @@ describe('CodexRollingCoordinator', () => {
     // Smart Resume, and the roll falls back to the ordinary copy + `--resume` path, where
     // buildCodexCommand still applies the same sanitizer to resumePrompt as it always did.
     it('브리핑을 sanitizeResumePrompt 가 바꾸면 백지 재개를 포기하고 기존 경로로 롤한다', async () => {
+      const logs: string[] = []
       const h = harness({
         resumeStrategy: () => 'smart',
-        resumeText: () => Promise.resolve('Fix the "quote" bug & the pipe | issue')
+        resumeText: () => Promise.resolve('Fix the "quote" bug & the pipe | issue'),
+        log: (m) => logs.push(m)
       })
       const file = await writeRollout({
         accountId: 'c1',
@@ -429,6 +436,10 @@ describe('CodexRollingCoordinator', () => {
       expect(h.spawned.at(-1)?.resumeSessionId).toBe('cx-smart-sanitize')
       expect(h.spawned.at(-1)?.resumePrompt).toBe('Fix the "quote" bug & the pipe | issue')
       expect(h.spawned.at(-1)?.initialPrompt).toBeUndefined()
+      // fix wave 최종, F6: 이 거부는 조용히 일어나지 않는다 — userData 경로에 금지 문자가 있으면
+      // 이 계정의 Smart Resume 은 매 롤마다 여기서 거부되는데, 그 사실이 로그 한 줄도 없이 영구히
+      // 반복되던 것이 이 finding 이 잡은 결함이다.
+      expect(logs.some((l) => l.includes('smart resume refused'))).toBe(true)
       h.coord.stop()
     })
 
@@ -436,9 +447,11 @@ describe('CodexRollingCoordinator', () => {
     // spaces (plausible inside a real filesystem path, e.g. a Windows folder name) still collapses to
     // one and changes the string — the same refusal has to fire on that case too.
     it('브리핑에 연속 공백만 있어도 백지 재개를 포기한다', async () => {
+      const logs: string[] = []
       const h = harness({
         resumeStrategy: () => 'smart',
-        resumeText: () => Promise.resolve('C:\\Users\\Jane  Doe\\AppData\\tab-resume\\abc123.md')
+        resumeText: () => Promise.resolve('C:\\Users\\Jane  Doe\\AppData\\tab-resume\\abc123.md'),
+        log: (m) => logs.push(m)
       })
       const file = await writeRollout({
         accountId: 'c1',
@@ -454,6 +467,7 @@ describe('CodexRollingCoordinator', () => {
       expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
       expect(h.spawned.at(-1)?.resumeSessionId).toBe('cx-smart-doublespace')
       expect(h.spawned.at(-1)?.initialPrompt).toBeUndefined()
+      expect(logs.some((l) => l.includes('smart resume refused'))).toBe(true) // F6
       h.coord.stop()
     })
 

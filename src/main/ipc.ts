@@ -245,6 +245,16 @@ export function registerIpc(
     await fs.rm(tabResumeDir, { recursive: true, force: true }).catch(() => {})
     await fs.mkdir(tabResumeDir, { recursive: true })
   })().catch((err) => orchLog(`tab resume dir create failed: ${String(err)}`))
+  // fix wave 최종, F6: specsDir 아래의 같은 검사(이 파일 뒤쪽, bootOrch)와 같은 이유다. 탭
+  // handover 의 포인터 한 줄은 이 디렉터리 아래 파일을 가리키므로, 이 경로에 금지 문자가 있으면
+  // codex 의 인자 sanitizer(sanitizeResumePrompt, codexRolling.ts 의 roll())가 그 포인터를
+  // 영구히 망가뜨린다 — 매 롤마다 codexRolling.ts 가 로그를 남기긴 하지만(F6 의 나머지 절반),
+  // 그 로그는 실제로 롤이 일어나야만 나온다. 시작하자마자 원인을 알 수 있도록 여기서도 한 번
+  // 경고한다. 시작은 막지 않는다 — specsDir 과 같은 태도.
+  if (LAUNCH_FORBIDDEN.test(tabResumeDir))
+    orchLog(
+      `warning — the tab-resume directory path contains characters forbidden in a launch prompt (" & | < > ^ %): ${tabResumeDir} — codex Smart Resume will be refused for every tab session in this state`
+    )
   let orch: {
     server: OrchServer
     deps: OrchServerDeps
