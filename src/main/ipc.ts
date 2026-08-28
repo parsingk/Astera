@@ -204,15 +204,33 @@ export function registerIpc(
    *  buildTabResumeText's JSDoc, main/orchestration/resumePacket.ts). Same convention as
    *  `specsDir` below (userData, never the project folder — the briefing's own "inspect git status"
    *  instruction would otherwise pick up this app-owned file as evidence). Declared at this outer
-   *  scope, not inside bootOrch the way specsDir is, so `core.sessions.onExit` below can delete a
-   *  session's file on its way out without depending on orchestration having ever started.
+   *  scope, not inside bootOrch the way specsDir is, because `tabResumeTextFor` (below) closes over
+   *  it and is itself declared here, ahead of bootOrch.
    *
-   *  **No startup sweep, unlike specsDir.** A crash leaves a stray small file behind and that is left
-   *  alone — cleaning it up would need a definition of "stale" that specsDir does not need (every
-   *  Dispatch closes on restart; a tab session has no such restart-time signal). Reported as a known
-   *  gap rather than solved here. */
+   *  **Wiped and recreated at startup, the same shape as specsDir below.** Nothing under either
+   *  directory needs to survive a restart, and neither needs an age rule to tell a stale file from a
+   *  fresh one — both are wiped wholesale, so there is nothing left to date. (An earlier version of
+   *  this comment reasoned specsDir got to skip an age rule because "every Dispatch closes on
+   *  restart" — that was the wrong reason: wiping everything needs no age rule regardless of what
+   *  produced the files, and this directory needed the same wipe from the start.)
+   *
+   *  fix wave 7, finding 1 (CRITICAL): deletion used to run per session exit instead
+   *  (`core.sessions.onExit`), keyed to the id that was actually exiting — that was the bug this
+   *  startup sweep replaces. A smart-resume roll writes the briefing under the *old*,
+   *  about-to-die session's id and hands the *new* session a pointer to that exact path before the
+   *  kill (roll() in rolling.ts/codexRolling.ts). The producer's id and the consumer's id are never
+   *  the same id, so deleting the file the moment the producer exits removed it out from under a
+   *  consumer that had not even booted yet — not as a rare race, but as the expected outcome of every
+   *  smart resume. A startup sweep has no such mismatch: it runs before any session of this app run
+   *  exists, so a file written during the run is never in flight when it fires.
+   *
+   *  Accepted consequence: a briefing file accumulates for the lifetime of the app run — one per
+   *  smart resume, reclaimed only at the next restart. specsDir already carries the same shape. */
   const tabResumeDir = path.join(app.getPath('userData'), 'tab-resume')
-  void fs.mkdir(tabResumeDir, { recursive: true }).catch((err) => orchLog(`tab resume dir create failed: ${String(err)}`))
+  void (async (): Promise<void> => {
+    await fs.rm(tabResumeDir, { recursive: true, force: true }).catch(() => {})
+    await fs.mkdir(tabResumeDir, { recursive: true })
+  })().catch((err) => orchLog(`tab resume dir create failed: ${String(err)}`))
   let orch: {
     server: OrchServer
     deps: OrchServerDeps
@@ -336,16 +354,10 @@ export function registerIpc(
     codexRolling?.handleExit(e)
     codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
-    // Task 7 — delete this session's tab-resume briefing file, if a blank-slate smart resume ever
-    // wrote one. This is the one site that fires for a session's real exit no matter what: a rolling
-    // coordinator's own dispose (disposeChain, reached via its own handleExit above) cannot be used
-    // for this because a successful roll deletes the *old* session id from its chain map before the
-    // old PTY actually exits (rolling.ts/codexRolling.ts's roll()) — and the briefing file was written
-    // under that old id (buildTabResumeText is asked for 'handover' before the kill, while chain.liveId
-    // is still the dying session). By the time that id's exit reaches handleExit, the chain map has
-    // already forgotten it, so nothing there ever revisits this id again. core.sessions.onExit has no
-    // such gap: it is keyed to the id that is actually exiting, tracked or not.
-    void fs.rm(path.join(tabResumeDir, `${e.sessionId}.md`), { force: true }).catch(() => {})
+    // Task 7's tab-resume briefing file is no longer deleted here — see tabResumeDir's own comment
+    // above (fix wave 7, finding 1 (CRITICAL)) for why a per-exit delete keyed to this id was wrong:
+    // it fired for the *old* session a smart resume had just written the briefing under, while the
+    // *new* session that needs to read it was still booting.
     // An exited session clears busy and disposes its scanner
     busyScanners.delete(e.sessionId)
     if (busyState.get(e.sessionId)) send('session:busy', { sessionId: e.sessionId, busy: false })
