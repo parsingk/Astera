@@ -208,12 +208,11 @@ export const es: Catalog = {
     'Cambia colores, esquinas y tipografía a la vez. La fuente del terminal se elige aparte, más abajo.',
   'settings.theme.saveFailed': 'No se pudo guardar el tema: {detail}',
   // ResumeStrategySettings.tsx — the two-way resume strategy picker
-  'settings.resumeStrategy.label': 'Estrategia de reanudación',
-  'settings.resumeStrategy.smart.label': 'Reanudación inteligente',
-  'settings.resumeStrategy.smart.hint': 'Inicia una sesión nueva a partir de un punto de control compacto.',
+  'settings.resumeStrategy.label': 'Estrategia de reanudación de sesión',
+  'settings.resumeStrategy.smart.label': 'Reanudación inteligente (experimental)',
+  'settings.resumeStrategy.smart.hint': 'Continúa la conversación solo con un punto de control compacto.',
   'settings.resumeStrategy.original.label': 'Reanudar la sesión original',
-  'settings.resumeStrategy.original.hint': 'Continúa la conversación existente de Claude/Codex.',
-  'settings.resumeStrategy.recommended': '(recomendado)',
+  'settings.resumeStrategy.original.hint': 'Continúa la conversación con el resume propio del CLI.',
   'settings.resumeStrategy.saveFailed': 'No se pudo guardar la estrategia de reanudación: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': 'Fuente latina del terminal',

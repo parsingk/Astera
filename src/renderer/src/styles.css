@@ -877,7 +877,6 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .resume-strategy-card:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
 .resume-strategy-card-name { font-weight: 600; }
 .resume-strategy-card-desc { color: var(--text-dim); }
-.resume-strategy-recommended { margin-left: 6px; font-weight: 400; font-size: 11px; color: var(--text-faint); }
 /* worktree 기준 브랜치 — 라벨 문구를 위, 셀렉트를 아래에 둔다(.field label 들과 같은 관례).
    컨테이너가 <label>이 아니라 <div>인 이유는 컴포넌트 쪽 주석에 있다(라벨은 클릭을 컨트롤로 한 번 더
    전달해서 드롭다운이 닫히자마자 다시 열렸다). div 라서 `.field label`(0,1,1)과 경쟁하지 않으므로

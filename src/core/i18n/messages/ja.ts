@@ -204,12 +204,11 @@ export const ja: Catalog = {
   'settings.theme.hint': '色・角丸・書体がまとめて変わります。ターミナルのフォントは下で個別に選びます。',
   'settings.theme.saveFailed': 'テーマを保存できませんでした: {detail}',
   // ResumeStrategySettings.tsx — the two-way resume strategy picker
-  'settings.resumeStrategy.label': '再開方法',
-  'settings.resumeStrategy.smart.label': 'スマート再開',
-  'settings.resumeStrategy.smart.hint': 'コンパクトなチェックポイントから新しいセッションを開始します。',
+  'settings.resumeStrategy.label': 'セッション再開方法',
+  'settings.resumeStrategy.smart.label': 'スマート再開 (実験)',
+  'settings.resumeStrategy.smart.hint': '簡潔なチェックポイントだけで会話を続けます。',
   'settings.resumeStrategy.original.label': '元のセッションを再開',
-  'settings.resumeStrategy.original.hint': '既存の Claude/Codex の会話を続けます。',
-  'settings.resumeStrategy.recommended': '(推奨)',
+  'settings.resumeStrategy.original.hint': '従来の Resume で会話を続けます。',
   'settings.resumeStrategy.saveFailed': '再開方法を保存できませんでした: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': 'ターミナルの欧文フォント',
