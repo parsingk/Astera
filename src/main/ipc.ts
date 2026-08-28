@@ -200,6 +200,19 @@ export function registerIpc(
   // ── Agent orchestration ────────────────────────────────────────────
   // The pure layers, the store, the server, the coordinator, and the CLI are first connected here.
   const orchLog = orchWiring?.log ?? ((): void => {})
+  /** Task 7 — the directory a tab session's 'handover' briefing is written into (see
+   *  buildTabResumeText's JSDoc, main/orchestration/resumePacket.ts). Same convention as
+   *  `specsDir` below (userData, never the project folder — the briefing's own "inspect git status"
+   *  instruction would otherwise pick up this app-owned file as evidence). Declared at this outer
+   *  scope, not inside bootOrch the way specsDir is, so `core.sessions.onExit` below can delete a
+   *  session's file on its way out without depending on orchestration having ever started.
+   *
+   *  **No startup sweep, unlike specsDir.** A crash leaves a stray small file behind and that is left
+   *  alone — cleaning it up would need a definition of "stale" that specsDir does not need (every
+   *  Dispatch closes on restart; a tab session has no such restart-time signal). Reported as a known
+   *  gap rather than solved here. */
+  const tabResumeDir = path.join(app.getPath('userData'), 'tab-resume')
+  void fs.mkdir(tabResumeDir, { recursive: true }).catch((err) => orchLog(`tab resume dir create failed: ${String(err)}`))
   let orch: {
     server: OrchServer
     deps: OrchServerDeps
@@ -323,6 +336,16 @@ export function registerIpc(
     codexRolling?.handleExit(e)
     codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
+    // Task 7 — delete this session's tab-resume briefing file, if a blank-slate smart resume ever
+    // wrote one. This is the one site that fires for a session's real exit no matter what: a rolling
+    // coordinator's own dispose (disposeChain, reached via its own handleExit above) cannot be used
+    // for this because a successful roll deletes the *old* session id from its chain map before the
+    // old PTY actually exits (rolling.ts/codexRolling.ts's roll()) — and the briefing file was written
+    // under that old id (buildTabResumeText is asked for 'handover' before the kill, while chain.liveId
+    // is still the dying session). By the time that id's exit reaches handleExit, the chain map has
+    // already forgotten it, so nothing there ever revisits this id again. core.sessions.onExit has no
+    // such gap: it is keyed to the id that is actually exiting, tracked or not.
+    void fs.rm(path.join(tabResumeDir, `${e.sessionId}.md`), { force: true }).catch(() => {})
     // An exited session clears busy and disposes its scanner
     busyScanners.delete(e.sessionId)
     if (busyState.get(e.sessionId)) send('session:busy', { sessionId: e.sessionId, busy: false })
@@ -560,7 +583,13 @@ export function registerIpc(
       provider === 'codex'
         ? (codexRolling?.rolloutPathFor(sessionId) ?? null)
         : extractStatusLineSession(await core.statusLinePayload(sessionId)).transcriptPath
-    return buildTabResumeText(sessionId, form, { cwd: info.cwd, provider, transcriptPath, log: orchLog })
+    return buildTabResumeText(sessionId, form, {
+      cwd: info.cwd,
+      provider,
+      transcriptPath,
+      log: orchLog,
+      dir: tabResumeDir
+    })
   }
 
   let orchStarting = false

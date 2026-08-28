@@ -11,6 +11,7 @@
 // core/orchestration 의 순수 모듈(checkpoint.ts, resumeSection.ts)이 이미 하고, 여기는 그 결과를
 // 어디서 읽고(OrchState 에서 열린 Dispatch를 찾고, git 을 읽고) 어디에 쓰는지(spec 파일)만 맡는다.
 import { promises as fs } from 'node:fs'
+import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { buildCheckpoint } from '../../core/orchestration/checkpoint'
 import { formatResumeNote, formatResumeSection } from '../../core/orchestration/resumeSection'
@@ -272,13 +273,33 @@ export interface TabResumeDeps {
    *  transcript 와 레코드 모양이 달라 같은 파서로 읽을 수 없다(제목·손댄 파일 레코드가 없다: 그
    *  둘은 항상 비어 온다). */
   readTranscript?(path: string): Promise<TranscriptResumeMaterial>
+  /** Task 7 — 'handover' 브리핑을 적을 디렉터리. **'update' 에는 쓰이지 않는다**(그 폼은 파일을
+   *  건드리지 않는다 — 아래 buildTabResumeText 의 계약). Job 워커의 spec 파일과 달리 탭 세션에는
+   *  기존에 쓰던 파일이 없으므로 어디에 쓸지 자체가 이 함수 밖에서 결정되는 값이다 — 코디네이터가
+   *  cwd 를 넘기는 것과 같은 이유(위 cwd 필드의 JSDoc): 이 함수가 main 배선(userData 경로 등)을
+   *  들여다보게 하면 core/main 경계가 흐려진다. 실제 값은 main/ipc.ts 가 정한다(프로젝트 폴더가
+   *  아니라 앱 데이터 폴더 — 그 이유는 이 파일 아래 buildTabResumeText 의 JSDoc). */
+  dir: string
+  /** 파일을 쓰는 방법. ResumePacketDeps.writeFile 과 같은 이유의 테스트 전용 주입점이다 — 중간에
+   *  끊긴 쓰기를 결정론적으로 재현한다. 넘기지 않으면 실제 fs.writeFile 을 쓴다. 받는 경로는
+   *  임시 파일 경로다(writeAtomic 이 rename 으로 갈아 끼운다). 'update' 폼에서는 쓰이지 않는다. */
+  writeFile?(path: string, content: string): Promise<void>
 }
 
 /**
  * 탭 세션(Job Dispatch 가 없는 일반 세션)용 재개 프롬프트 문자열. buildResumePacket/buildResumeNote
- * 가 Job 워커를 위해 하는 일과 같은 자리이지만, 이쪽은 spec 파일이 없으므로 아무 데도 쓰지 않고
- * 조립한 문자열을 그대로 돌려준다(계획 문서 — "탭용 브리핑은 파일을 만들지 않고 프롬프트에
- * 인라인으로 싣는다").
+ * 가 Job 워커를 위해 하는 일과 같은 자리다.
+ *
+ * **Task 7 — 'handover' 는 이제 파일에 쓰고 한 줄만 돌려준다.** 계획 문서는 원래 "탭용 브리핑은
+ * 파일을 만들지 않고 프롬프트에 인라인으로 싣는다"고 정했었지만, 그 선택은 이 파일 머리말이 이미
+ * 반대로 정해 둔 것과 충돌했다 — claude 는 PTY 에 타이핑하므로 여러 줄 브리핑의 줄바꿈마다 Enter가
+ * 눌려 브리핑이 스스로 조각조각 제출되고, codex 는 CLI 인자를 sanitizeResumePrompt 가 한 줄로
+ * 접어 구조를 뭉갠다. 그래서 이제 Job 워커와 같은 모양을 쓴다: 조립된 브리핑은 `deps.dir` 아래
+ * `<sessionId>.md` 하나에 통째로 쓰고(세션당 파일 하나, 재개할 때마다 덮어쓴다 — 이력을 쌓지
+ * 않는다), 프롬프트 자리에는 그 파일을 가리키는 한 줄만 싣는다. spec 파일과 달리 보존할 기존
+ * 내용이 없으므로(Job 의 Task 지시문에 해당하는 것이 탭 세션에는 없다) upsertResumeSection 같은
+ * 절 관리 없이 매번 그대로 갈아 끼운다. **'update' 는 그대로다** — 살아 있는 세션에 얹는 한 줄이라
+ * 파일을 전혀 건드리지 않는다.
  *
  * **대화 파일은 한 번만 읽는다.** 제목·최근 요청·손댄 파일·꼬리 넷을 각각 다른 함수로 읽으면 같은
  * (수십 MB 일 수 있는) 파일을 네 번 훑는다 — parseTranscriptForResume(claude) 나
@@ -297,10 +318,14 @@ export interface TabResumeDeps {
  * 버전 세션, 혹은 아직 파일을 건드리지 않은 세션) git 의 변경 목록으로 내려간다 — 계획 문서의
  * 재료 표가 정한 순서다.
  *
- * **LAUNCH_FORBIDDEN 을 여기서 검사하지 않는다.** buildResumePacket 의 한 줄 포인터와 달리 이
- * 문자열은 앱이 만든 hex id 가 아니라 **사용자가 실제로 쓴 텍스트와 파일 경로**를 담는다 —
- * 제목·요청 하나에 따옴표나 `&`가 있는 것은 예삿일이고, 그때마다 브리핑 전체를 버리면
- * buildResumeNote 의 JSDoc 이 "순손실"이라 부른 바로 그 사고를 훨씬 잦은 빈도로 반복하는 것이다.
+ * **LAUNCH_FORBIDDEN 을 여기서 검사하지 않는다 — 두 폼의 이유가 갈린다.** 'update' 가 돌려주는
+ * 것은 여전히 **사용자가 실제로 쓴 텍스트와 파일 경로**를 담은 문장이다 — 제목·요청 하나에
+ * 따옴표나 `&`가 있는 것은 예삿일이고, 그때마다 버리면 buildResumeNote 의 JSDoc 이 "순손실"이라
+ * 부른 바로 그 사고를 반복하는 것이다. 'handover' 가 돌려주는 것은 이제(Task 7) 그 텍스트가 아니라
+ * `dir`·`sessionId` 로 지은 파일 경로 하나뿐인 짧은 포인터 한 줄이다 — buildResumePacket 의
+ * resumeLine 과 같은 모양이지만, resumeLine 은 앱이 만든 hex id 만 담아 걸릴 문자가 없는 반면 이
+ * 줄은 실제 파일시스템 경로를 담는다. 검사하지 않는 이유는 그래도 같다: 드문 사용자 이름
+ * 문자(`&` 등) 하나 때문에 브리핑 전체를 버리는 대가가, 지키는 이득보다 크다.
  *
  * **이 문자열이 argv 로 가는 자리는 이미 둘이다, 그리고 둘의 처방이 다르다.** `resumePrompt`
  * 자리(codex 의 `--resume` 뒤)는 buildCodexCommand 가 sanitizeResumePrompt 를 스스로 돌려 왔다 —
@@ -311,9 +336,22 @@ export interface TabResumeDeps {
  * 거부로 그 경계를 지킨다). 그래서 그 자리의 호출부(codexRolling.ts 의 백지 재개)가 넘기기
  * 직전에 sanitizeResumePrompt 를 스스로 적용한다 — "이미 갖고 있다"가 아니라 그 호출부가 새로
  * 갖췄다는 차이는 있지만, 이 함수가 미리 검사해 통째로 버릴 이유가 아니라는 결론은 그대로다.
+ * **'handover' 의 새 포인터 한 줄에서 이 sanitize 가 실제로 하는 일은 연속 공백을 하나로 접는
+ * 것뿐이다** — 사용자 이름에 연속된 공백이 있는 드문 경우가 아니면 경로는 그대로 살아남는다.
  *
  * 실패는 전부 `null` 이다 — 부르는 쪽은 기존 고정 문장으로 저하한다. 폐기는 항상 로그로 남는다.
  */
+
+/** 재개 프롬프트 자리에 실을 한 줄. resumeLine(Job 쪽, 위)과 같은 어투이되, 가리킬 taskId·
+ *  dispatchId 가 없으므로(탭 세션에는 Dispatch 가 없다) 대신 방금 쓴 파일 경로를 담는다. 보고
+ *  명령이 없는 이유도 같다 — worker_done 을 기다리는 Task 가 탭 세션에는 없다. */
+function tabResumeLine(filePath: string): string {
+  return (
+    'Continue this session: re-read the resume briefing the app just wrote to ' +
+    `${filePath}, then carry on from where the work already stands.`
+  )
+}
+
 export async function buildTabResumeText(
   sessionId: string,
   form: 'handover' | 'update',
@@ -350,7 +388,16 @@ export async function buildTabResumeText(
       deps.log?.(`tab resume skipped session=${sessionId} form=${form}: nothing to report`)
       return null
     }
-    return text
+    if (form === 'update') return text // 살아 있는 세션에 얹는 한 줄 — 파일을 건드리지 않는다
+
+    // 'handover': 조립된 브리핑을 세션당 파일 하나(<sessionId>.md)에 통째로 갈아 끼우고(재개마다
+    // 덮어쓴다 — 이력을 쌓지 않는다), 프롬프트 자리에는 그 파일을 가리키는 한 줄만 싣는다(위
+    // 함수 JSDoc — Task 7). 쓰기 실패는 이 try 블록의 catch 로 떨어져 다른 실패와 같은 방식으로
+    // null 로 저하하고 로그를 남긴다 — 새 세션이 백지 재개로 가지 않도록.
+    const filePath = path.join(deps.dir, `${sessionId}.md`)
+    const writeFile = deps.writeFile ?? ((p: string, c: string) => fs.writeFile(p, c, 'utf8'))
+    await writeAtomic(filePath, text, writeFile)
+    return tabResumeLine(filePath)
   } catch (err) {
     deps.log?.(`tab resume failed session=${sessionId} form=${form}: ${String(err)}`)
     return null

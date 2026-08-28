@@ -64,7 +64,13 @@ const HANDOVER_FILES_MAX = 20
 const REQUESTS_MAX = 5
 
 /** 메모 전체의 상한. resumeSection.ts 의 MAX_PACKET_CHARS 와 같은 역할이고 같은 근거(§9.3)다. 절마다
- *  상한을 두어도 절의 수만큼 곱해지므로 마지막 방어선을 하나 둔다. */
+ *  상한을 두어도 절의 수만큼 곱해지므로 마지막 방어선을 하나 둔다.
+ *
+ *  **Task 7 이후에도 유효한 근거.** 'handover' 의 이 문자열은 이제 프롬프트 자리에 직접 실리지
+ *  않고 파일로 옮겨 간다(main/orchestration/resumePacket.ts 의 buildTabResumeText). 그래도 이
+ *  상한이 재는 것은 원래 "터미널 한 줄의 길이"가 아니라 §9.3 이 금지한 것 — diff 본문·소스 내용을
+ *  담지 않는 것 — 이었으므로 근거는 그대로다: 새 세션이 이 파일을 읽는 비용이 곧 그 세션의
+ *  할당량에서 나가고, 그 값을 작게 유지하는 것이 이 상한의 일이다. */
 const MEMO_CHARS_MAX = 6000
 
 /** LAST COMMAND 절의 결과 발췌 상한(문자). §9.3(diff 본문·소스 내용은 담지 않고 어디를 보라고만
