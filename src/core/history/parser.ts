@@ -286,10 +286,15 @@ export async function parseTranscriptForResume(filePath: string): Promise<Transc
     lastCommand: null
   }
   // 아직 tool_result 를 못 받은, 가장 최근에 본 Bash tool_use — id 와 command 를 함께 들고 있다가
-  // 짝이 되는 tool_result(같은 id) 를 만나면 result.lastCommand 로 확정한다. 그 전에 또 다른 Bash
-  // tool_use 가 나오면 이 값을 덮어쓴다 — "마지막" 이 뜻하는 것은 시간순으로 가장 나중이라는
-  // 것이지, 먼저 시작된 호출을 기다려 주는 것이 아니다.
-  let pendingBash: { id: string; command: string } | null = null
+  // 짝이 되는 tool_result(같은 id) 를 만나면 result.lastCommand 로 확정한다. **결과가 도착한
+  // 순서대로 확정하므로 "마지막" 은 결과가 가장 나중에 온 호출이다.**
+  //
+  // **한 슬롯이 아니라 맵인 이유(리뷰가 잡았다).** 한 턴이 Bash tool_use 를 여러 개 내보낼 수 있고
+  // (독립적인 호출은 한 번에 묶어 보내는 것이 권장된다), 슬롯 하나면 나중 id 가 앞 id 를 덮어써서
+  // **먼저 시작된 호출의 결과가 도착해도 짝을 못 찾고 조용히 버려졌다.** 맵이면 어느 순서로
+  // 도착해도 짝이 맞는다. 미완으로 남는 항목은 파일을 다 읽고 그냥 버려진다 — 결과가 없는 호출은
+  // 성공/실패를 말할 수 없으므로 이 절에 실을 것이 없다.
+  const pendingBash = new Map<string, string>()
   const stream = createReadStream(filePath, { encoding: 'utf8' })
   const rl = createInterface({ input: stream })
   try {
@@ -335,19 +340,20 @@ export async function parseTranscriptForResume(filePath: string): Promise<Transc
           if (obj.type === 'assistant' && item.type === 'tool_use' && item.name === 'Bash') {
             const input = item.input as { command?: unknown } | undefined
             if (typeof item.id === 'string' && typeof input?.command === 'string') {
-              pendingBash = { id: item.id, command: input.command }
+              pendingBash.set(item.id, input.command)
             }
           } else if (
             obj.type === 'user' &&
             item.type === 'tool_result' &&
-            pendingBash !== null &&
-            item.tool_use_id === pendingBash.id
+            typeof item.tool_use_id === 'string' &&
+            pendingBash.has(item.tool_use_id)
           ) {
             result.lastCommand = {
-              command: pendingBash.command,
+              command: pendingBash.get(item.tool_use_id) as string,
               failed: item.is_error === true,
               excerpt: extractToolResultText(item.content) ?? ''
             }
+            pendingBash.delete(item.tool_use_id) // 같은 id 의 결과가 두 번 오면 첫 번째만 센다
           }
         }
       }

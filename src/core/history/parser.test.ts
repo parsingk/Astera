@@ -517,6 +517,49 @@ describe('parseTranscriptForResume', () => {
         }
       })
 
+    // 리뷰가 잡았다: 슬롯 하나로 추적하던 동안 한 턴이 Bash 를 둘 내보내면 뒤 id 가 앞 id 를
+    // 덮어써서, 먼저 시작된 호출의 결과가 도착해도 짝을 못 찾고 조용히 버려졌다. 독립적인 호출은
+    // 한 번에 묶어 보내는 것이 권장되므로 드문 모양이 아니다.
+    it('한 턴이 Bash 를 둘 내보내고 결과가 역순으로 와도 짝을 맞춘다', async () => {
+      const twoUses = line({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'p1', name: 'Bash', input: { command: 'git status' } },
+            { type: 'tool_use', id: 'p2', name: 'Bash', input: { command: 'npm test' } }
+          ]
+        }
+      })
+      const file = await write('cmd-parallel.jsonl', [
+        twoUses,
+        bashResult('p1', 'clean', false) // 먼저 시작된 쪽의 결과가 먼저 도착한다
+      ])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand).toEqual({ command: 'git status', failed: false, excerpt: 'clean' })
+    })
+
+    it('결과가 둘 다 오면 나중에 도착한 쪽이 마지막이다', async () => {
+      const twoUses = line({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'q1', name: 'Bash', input: { command: 'git status' } },
+            { type: 'tool_use', id: 'q2', name: 'Bash', input: { command: 'npm test' } }
+          ]
+        }
+      })
+      const file = await write('cmd-parallel2.jsonl', [
+        twoUses,
+        bashResult('q1', 'clean', false),
+        bashResult('q2', '2 tests failed', true)
+      ])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand?.command).toBe('npm test')
+      expect(material.lastCommand?.failed).toBe(true)
+    })
+
     it('완료된 Bash 호출의 명령·실패 여부·결과를 뽑는다', async () => {
       const file = await write('cmd-ok.jsonl', [bashUse('t1', 'npm test'), bashResult('t1', '2 tests failed', true)])
       const material = await parseTranscriptForResume(file)

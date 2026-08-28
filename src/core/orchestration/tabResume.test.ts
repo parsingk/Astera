@@ -262,13 +262,47 @@ describe('formatTabResume — LAST COMMAND (§7 의 LAST VALIDATION)', () => {
     expect(out).not.toContain('LAST COMMAND')
   })
 
-  it('발췌가 상한을 넘지 않는다', () => {
+  // 상한을 느슨하게(< 1000) 재던 것을 리뷰가 잡았다 — 상한이 900 으로 잘못 바뀌어도 통과한다.
+  // 실제 경계(300)를 못박는다: 그보다 조금 넘으면 잘리고, 그 아래면 그대로 남는다.
+  it('발췌가 상한(300자)에서 잘린다', () => {
     const out = formatTabResume(
-      { ...base, lastCommand: { command: 'npm test', failed: true, excerpt: 'x'.repeat(1000) } },
+      { ...base, lastCommand: { command: 'npm test', failed: true, excerpt: 'x'.repeat(400) } },
       'handover'
     )!
-    const section = out.split('\n\n').find((s) => s.startsWith('LAST COMMAND'))!
-    expect(section.length).toBeLessThan(1000)
+    expect(out).toContain('x'.repeat(300) + '…')
+    expect(out).not.toContain('x'.repeat(301))
+  })
+
+  it('발췌가 상한 아래면 그대로 남는다', () => {
+    const out = formatTabResume(
+      { ...base, lastCommand: { command: 'npm test', failed: true, excerpt: 'y'.repeat(299) } },
+      'handover'
+    )!
+    expect(out).toContain('y'.repeat(299))
+    expect(out).not.toContain('…')
+  })
+
+  // 리뷰가 잡았다: 발췌에만 상한이 있고 명령 문자열에는 없었다. 여러 줄 heredoc 이면 명령 하나가
+  // 수천 자이고, 전체 예산을 넘기면 뒤쪽 절(손댄 파일·대화 꼬리)이 밀려 나간다.
+  it('명령 문자열도 상한(600자)에서 잘린다', () => {
+    const out = formatTabResume(
+      { ...base, lastCommand: { command: 'z'.repeat(900), failed: false, excerpt: '' } },
+      'handover'
+    )!
+    expect(out).toContain('z'.repeat(600) + '…')
+    expect(out).not.toContain('z'.repeat(601))
+  })
+
+  // 리뷰가 잡은 설계 결함: 예산을 넘기면 뒤에서 자르는데 가장 뒤가 지시문 블록이었다. 증거는 많고
+  // 적음의 문제지만 지시문은 있고 없음의 문제다 — 이 기능이 존재하는 이유가 그 문장이다.
+  it('예산을 넘겨 잘려도 지시문 블록은 남는다', () => {
+    const out = formatTabResume(
+      { ...base, editedFiles: Array.from({ length: 20 }, () => 'src/'.padEnd(400, 'x')) },
+      'handover'
+    )!
+    expect(out).toContain('truncated to fit its size budget')
+    expect(out).toContain('BEFORE EDITING')
+    expect(out).toContain('Preserve the existing worktree and unfinished changes')
   })
 
   it('발췌에 섞인 자격 증명은 가려지고, 명령 자체는 가리지 않는다', () => {

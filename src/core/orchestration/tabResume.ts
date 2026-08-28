@@ -74,6 +74,13 @@ const MEMO_CHARS_MAX = 6000
  *  아니다. */
 const LAST_COMMAND_EXCERPT_MAX = 300
 
+/** 명령 문자열 자체의 상한. 발췌에만 상한을 두고 명령은 안 두었다가 리뷰가 잡았다 — 마지막 호출이
+ *  여러 줄 heredoc(`git commit -m "$(cat <<'EOF' … EOF)"` 같은 것)이면 명령 하나가 수천 자다.
+ *  전체 예산이 그 총량을 막아 주지만, 예산을 넘기면 뒤쪽 절부터 밀려 나가므로 이 절 하나가 손댄
+ *  파일 목록과 대화 꼬리를 통째로 밀어낼 수 있다. 발췌보다 넉넉한 이유는 명령은 **무엇을 실행했나**
+ *  라는 판단의 핵심이고 발췌는 그 결과의 증거 한 조각이기 때문이다. */
+const LAST_COMMAND_CHARS_MAX = 600
+
 /** 목록을 상한까지만 싣고 **잘린 개수를 밝힌다.** 조용히 자르면 새 세션이 "이게 전부"로 읽는다. */
 function cappedList(items: string[], max: number): string {
   const shown = items.slice(0, max)
@@ -151,7 +158,11 @@ function tailSection(input: TabResumeInput): string | null {
 function lastCommandSection(input: TabResumeInput): string | null {
   const lc = input.lastCommand
   if (!lc) return null
-  const lines = [lc.command, lc.failed ? 'Result: failed.' : 'Result: succeeded.']
+  const command =
+    lc.command.length > LAST_COMMAND_CHARS_MAX
+      ? lc.command.slice(0, LAST_COMMAND_CHARS_MAX) + '…'
+      : lc.command
+  const lines = [command, lc.failed ? 'Result: failed.' : 'Result: succeeded.']
   const excerpt = truncateExcerpt(sanitize(lc.excerpt))
   if (excerpt) lines.push(excerpt)
   return `LAST COMMAND\n${lines.join('\n')}`
@@ -167,13 +178,21 @@ const BEFORE_EDITING = `BEFORE EDITING
 
 Preserve the existing worktree and unfinished changes.`
 
-function assemble(sections: Array<string | null>): string {
-  const full = sections.filter((s): s is string => s !== null && s.length > 0).join('\n\n')
-  if (full.length <= MEMO_CHARS_MAX) return full
-  // 뒤에서 자른다 — 앞쪽 절(무엇을 이어받는지·무엇을 요청받았는지)이 대화 꼬리보다 잃으면 안 되는
-  // 정보다. 자른 사실을 밝히는 이유는 cappedList 와 같다: 조용히 자르면 새 세션이 "이게 전부"로 읽는다.
+/** 증거 절들을 예산 안으로 조립하고, **지시문은 언제나 뒤에 붙인다.**
+ *
+ *  **지시문이 잘림의 대상이 아닌 이유.** 예산을 넘으면 뒤에서 자르는데(앞쪽 절이 더 중요하므로),
+ *  가장 뒤에 있는 것이 지시문 블록이다. 그러면 예산을 넘긴 메모에서 하필 "처음부터 다시 하지
+ *  말고 현재 상태를 직접 확인하라"가 사라진다 — 이 기능이 존재하는 이유가 그 문장이다. 증거는
+ *  많고 적음의 문제지만 지시문은 있고 없음의 문제라서, 잘림은 증거에만 적용한다.
+ *
+ *  잘랐다는 사실을 밝히는 이유는 cappedList 와 같다: 조용히 자르면 새 세션이 "이게 전부"로 읽는다. */
+function assemble(evidence: Array<string | null>, instructions: string): string {
+  const joined = evidence.filter((s): s is string => s !== null && s.length > 0).join('\n\n')
+  const tailPart = `\n\n${instructions}`
+  const budget = MEMO_CHARS_MAX - tailPart.length
+  if (joined.length <= budget) return joined + tailPart
   const note = '\n\n[This briefing was truncated to fit its size budget.]'
-  return full.slice(0, MEMO_CHARS_MAX - note.length) + note
+  return joined.slice(0, budget - note.length) + note + tailPart
 }
 
 /** 새 프로세스로 이어받을 전체 메모. `--resume`을 부르는 재개(프로세스가 새것이라 대화를 통째로
@@ -184,16 +203,18 @@ function assemble(sections: Array<string | null>): string {
  *  채우지 못한다 — 그것들은 "지금 상태"의 증거가 아니라 대화의 흔적일 뿐이다. */
 function formatHandover(input: TabResumeInput): string | null {
   if (!input.git && input.tail.length === 0) return null
-  return assemble([
-    HEADER,
-    titleSection(input),
-    requestsSection(input),
-    stateSection(input),
-    lastCommandSection(input),
-    filesSection(input),
-    tailSection(input),
+  return assemble(
+    [
+      HEADER,
+      titleSection(input),
+      requestsSection(input),
+      stateSection(input),
+      lastCommandSection(input),
+      filesSection(input),
+      tailSection(input)
+    ],
     BEFORE_EDITING
-  ])
+  )
 }
 
 /** 살아 있는 세션에 덧붙이는 한 줄. **꼬리를 싣지 않는다** — 그 세션은 대화를 그대로 갖고 있으므로
