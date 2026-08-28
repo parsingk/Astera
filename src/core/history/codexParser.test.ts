@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { parseCodexMeta, parseCodexTail, parseCodexPreview, ROLLOUT_UUID_RE } from './codexParser'
+import { parseCodexMeta, parseCodexTail, parseCodexPreview, parseCodexForResume, ROLLOUT_UUID_RE } from './codexParser'
 
 let dir: string
 beforeEach(async () => {
@@ -106,6 +106,40 @@ describe('parseCodexPreview', () => {
       { role: 'user', text: 'q1', timestamp: '2026-07-09T04:32:04.447Z' },
       { role: 'assistant', text: 'a1', timestamp: '2026-07-09T04:32:08.937Z' }
     ])
+  })
+})
+
+// Task 3 (Phase 2c) — 탭 세션용 재개 브리핑 재료의 codex 대응. parser.ts 의
+// parseTranscriptForResume 과 같은 자리이지만, codex rollout 에는 claude 의 제목·손댄 파일 레코드가
+// 없어 그 둘은 항상 비운다(buildTabResumeText 가 손댄 파일은 git 으로 내려간다).
+describe('parseCodexForResume', () => {
+  it('요청·꼬리를 시간 순으로 뽑고, wrapper 는 제외하며, 제목·손댄 파일은 늘 비운다', async () => {
+    const p = await write('resume-a.jsonl', [
+      metaLine,
+      user('첫 요청'),
+      agent('네 알겠습니다'),
+      user('<environment_context>...'), // wrapper — 요청도 꼬리도 아니다
+      user('두번째 요청'),
+      noise
+    ])
+    const material = await parseCodexForResume(p)
+    expect(material.title).toBeNull() // codex 에는 ai-title/summary 에 해당하는 레코드가 없다
+    expect(material.editedFiles).toEqual([]) // codex 에는 file-history-snapshot 에 해당하는 레코드가 없다
+    expect(material.requests).toEqual(['첫 요청', '두번째 요청'])
+    expect(material.tail).toEqual([
+      { role: 'user', text: '첫 요청', timestamp: '2026-07-09T04:32:04.447Z' },
+      { role: 'assistant', text: '네 알겠습니다', timestamp: '2026-07-09T04:32:08.937Z' },
+      { role: 'user', text: '두번째 요청', timestamp: '2026-07-09T04:32:04.447Z' }
+    ])
+  })
+
+  it('요청·꼬리 각각 상한(20)을 넘으면 오래된 것부터 버린다', async () => {
+    const lines: string[] = [metaLine]
+    for (let i = 1; i <= 25; i++) lines.push(user(`q${i}`))
+    const material = await parseCodexForResume(await write('resume-b.jsonl', lines))
+    expect(material.requests).toHaveLength(20)
+    expect(material.requests[0]).toBe('q6')
+    expect(material.requests.at(-1)).toBe('q25')
   })
 })
 

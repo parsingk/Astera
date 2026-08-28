@@ -531,20 +531,34 @@ export function registerIpc(
   }
 
   /** resumeText 가 Dispatch 를 못 찾았을 때(탭 세션 — Job 워커가 아니다) 저하하는 자리.
-   *  buildTabResumeText(main/orchestration/resumePacket.ts) 자신은 cwd·transcript 경로를 인자로만
-   *  받는다 — 코디네이터 체인을 들여다보지 않기 위해서다(그 함수의 JSDoc). 그 값을 실제로 찾는 것은
-   *  이 배선의 몫이다: cwd 는 core.sessions.list() 에서, 대화 파일 경로는 statusLine 페이로드에서
-   *  얻는다(rolling.ts 의 refreshMeta·scheduler.ts·slack.ts 가 이미 같은 페이로드로 같은 값을
-   *  얻는 것과 같은 자리 — codex 는 usesStatusLine 이 꺼져 있어 늘 null 이고, 그때는 git 만으로
-   *  시도한다). */
+   *  buildTabResumeText(main/orchestration/resumePacket.ts) 자신은 cwd·provider·transcript 경로를
+   *  인자로만 받는다 — 코디네이터 체인을 들여다보지 않기 위해서다(그 함수의 JSDoc). 그 값을 실제로
+   *  찾는 것은 이 배선의 몫이다: cwd 는 core.sessions.list() 에서 얻는다.
+   *
+   *  **대화 파일 경로는 provider 마다 자리가 다르다.** claude 는 statusLine 페이로드에서 얻는다
+   *  (rolling.ts 의 refreshMeta·scheduler.ts·slack.ts 가 이미 같은 페이로드로 같은 값을 얻는 것과
+   *  같은 자리). codex 는 statusLine 이 없다(usesStatusLine=false) — 그 값을 아는 유일한 쪽은
+   *  rollout 파일을 파일시스템 스캔으로 찾아 둔 codexRolling 코디네이터뿐이라, 그쪽의
+   *  rolloutPathFor 를 대신 묻는다. 어느 쪽도 찾지 못하면(등록되지 않은 체인, 매핑 전) null 이고,
+   *  buildTabResumeText 는 git 만으로 시도한다. */
   const tabResumeTextFor = async (
     sessionId: string,
     form: 'handover' | 'update'
   ): Promise<string | null> => {
     const info = core.sessions.list().find((s) => s.id === sessionId)
     if (!info) return null
-    const { transcriptPath } = extractStatusLineSession(await core.statusLinePayload(sessionId))
-    return buildTabResumeText(sessionId, form, { cwd: info.cwd, transcriptPath, log: orchLog })
+    let account: Account
+    try {
+      account = core.accounts.get(info.accountId)
+    } catch {
+      return null // the account is gone — no provider to pick a reader with
+    }
+    const provider = providerOf(account)
+    const transcriptPath =
+      provider === 'codex'
+        ? (codexRolling?.rolloutPathFor(sessionId) ?? null)
+        : extractStatusLineSession(await core.statusLinePayload(sessionId)).transcriptPath
+    return buildTabResumeText(sessionId, form, { cwd: info.cwd, provider, transcriptPath, log: orchLog })
   }
 
   let orchStarting = false

@@ -373,6 +373,7 @@ describe('buildTabResumeText', () => {
 
     const text = await buildTabResumeText('sess1', 'handover', {
       cwd: CWD,
+      provider: 'claude',
       transcriptPath: '/fake/transcript.jsonl',
       git: fakeGit(),
       readTranscript
@@ -392,6 +393,7 @@ describe('buildTabResumeText', () => {
 
     const text = await buildTabResumeText('sess1', 'update', {
       cwd: CWD,
+      provider: 'claude',
       transcriptPath: '/fake/transcript.jsonl',
       git: fakeGit({
         'rev-parse HEAD': { ok: true, stdout: 'head-now', stderr: '' },
@@ -411,6 +413,7 @@ describe('buildTabResumeText', () => {
 
     const text = await buildTabResumeText('sess1', 'handover', {
       cwd: CWD,
+      provider: 'claude',
       transcriptPath: '/fake/transcript.jsonl',
       git: fakeGit({
         'rev-parse HEAD': { ok: true, stdout: 'head-now', stderr: '' },
@@ -427,6 +430,7 @@ describe('buildTabResumeText', () => {
 
     const text = await buildTabResumeText('sess1', 'handover', {
       cwd: CWD,
+      provider: 'claude',
       transcriptPath: null,
       git: fakeGit({
         'rev-parse HEAD': { ok: true, stdout: 'head-now', stderr: '' },
@@ -446,6 +450,7 @@ describe('buildTabResumeText', () => {
 
     const text = await buildTabResumeText('sess1', 'handover', {
       cwd: CWD,
+      provider: 'claude',
       transcriptPath: null,
       git: UNREADABLE_GIT,
       log
@@ -462,6 +467,7 @@ describe('buildTabResumeText', () => {
 
     const text = await buildTabResumeText('sess1', 'handover', {
       cwd: CWD,
+      provider: 'claude',
       transcriptPath: '/fake/transcript.jsonl',
       git: fakeGit(),
       readTranscript,
@@ -471,5 +477,40 @@ describe('buildTabResumeText', () => {
     expect(text).toBeNull()
     expect(log).toHaveBeenCalledTimes(1)
     expect(log.mock.calls[0]?.[0]).toContain('tab resume failed')
+  })
+
+  // Task 3 (Phase 2c) — codex 탭 세션의 격차를 닫는다. readTranscript 를 주입하지 않고 provider 로만
+  // 골라, 진짜 codex rollout 형식 파일을 읽힌다: claude 파서(parseTranscriptForResume)는 codex 의
+  // event_msg 레코드를 하나도 인식하지 못하므로(type이 'user'/'assistant'가 아니다), 잘못된 파서가
+  // 골렸다면 이 텍스트는 비어 있었을 것이다.
+  it('provider가 codex면 codex rollout 형식으로 읽는다', async () => {
+    const codexFile = path.join(specDir, 'codex-rollout.jsonl')
+    await fs.writeFile(
+      codexFile,
+      [
+        JSON.stringify({ type: 'session_meta', payload: { session_id: 'sid', cwd: CWD } }),
+        JSON.stringify({
+          timestamp: '2026-08-26T00:00:00.000Z',
+          type: 'event_msg',
+          payload: { type: 'user_message', message: 'codex 쪽 최근 요청입니다' }
+        }),
+        JSON.stringify({
+          timestamp: '2026-08-26T00:00:01.000Z',
+          type: 'event_msg',
+          payload: { type: 'agent_message', message: '알겠습니다' }
+        })
+      ].join('\n') + '\n',
+      'utf8'
+    )
+
+    const text = await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      provider: 'codex',
+      transcriptPath: codexFile,
+      git: fakeGit()
+    })
+
+    expect(text).not.toBeNull()
+    expect(text).toContain('codex 쪽 최근 요청입니다')
   })
 })

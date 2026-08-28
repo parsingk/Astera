@@ -242,8 +242,9 @@ export interface TranscriptResumeMaterial {
 
 /** 읽는 동안 메모리에 들고 있을 요청·꼬리 각각의 상한. **최종적으로 몇 개를 메모에 싣는지는
  *  포매터가 정한다** — 이 상한은 그보다 넉넉한 여유일 뿐이고, 병적으로 긴 대화에서도 이 두 배열이
- *  무한히 자라지 않게 막는 것이 유일한 목적이다. */
-const READ_BUFFER_MAX = 20
+ *  무한히 자라지 않게 막는 것이 유일한 목적이다. codexParser.ts의 parseCodexForResume도 같은 상한을
+ *  쓴다 — 그래서 export한다(claude와 codex 두 재료 읽기가 서로 다른 상한으로 갈리지 않게). */
+export const READ_BUFFER_MAX = 20
 
 /** `launchPrompt`(main/orchestration/coordinator.ts)가 spec 경로에 적용하는 것과 같은 정규화 —
  *  `file-history-snapshot`의 경로는 OS 그대로(윈도에서는 `\`)라서, 그 문자가 셸의 이스케이프

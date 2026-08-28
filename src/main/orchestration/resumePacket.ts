@@ -16,10 +16,11 @@ import { buildCheckpoint } from '../../core/orchestration/checkpoint'
 import { formatResumeNote, formatResumeSection } from '../../core/orchestration/resumeSection'
 import { formatTabResume } from '../../core/orchestration/tabResume'
 import type { OrchState } from '../../core/orchestration/state'
-import type { TranscriptMessage } from '../../core/types'
+import type { Provider, TranscriptMessage } from '../../core/types'
 import { readGitSummary, type GitSummaryDeps } from '../gitSummary'
 import { LAUNCH_FORBIDDEN } from './coordinator'
 import { parseTranscriptForResume, type TranscriptResumeMaterial } from '../../core/history/parser'
+import { parseCodexForResume } from '../../core/history/codexParser'
 
 export interface ResumePacketDeps {
   /** git 실행 어댑터. readGitSummary(main/gitSummary.ts)의 GitSummaryDeps.git 을 그대로 통과시킨다 —
@@ -254,6 +255,10 @@ export interface TabResumeDeps {
   /** 그 세션의 현재 대화 파일 경로. 모르면(아직 못 찾았거나 이 provider 가 그런 파일을 남기지
    *  않으면) null — 그때는 git 만으로 시도한다(아래 buildTabResumeText 의 계약). */
   transcriptPath: string | null
+  /** 그 대화 파일이 어느 provider 의 형식인지. `readTranscript` 의 기본값을 고르는 데만 쓴다
+   *  (아래) — claude·codex 두 코디네이터가 각자 자기 형식의 경로를 넘기므로, 어느 파서로 읽을지는
+   *  호출하는 쪽이 이미 안다. 이 값 자체를 판정하는 것은 이 함수의 일이 아니다. */
+  provider: Provider
   /** git 실행 어댑터. ResumePacketDeps.git 과 같은 관례 — 테스트 주입용이고, 넘기지 않으면 실제
    *  git 을 쓴다. */
   git?: GitSummaryDeps['git']
@@ -262,7 +267,10 @@ export interface TabResumeDeps {
    *  실제 사고다. */
   log?(message: string): void
   /** 대화 파일을 한 번 읽어 넷(제목·요청·손댄 파일·꼬리)을 뽑는 방법. 테스트 전용 주입점이다.
-   *  넘기지 않으면 parseTranscriptForResume(core/history/parser.ts)을 쓴다. */
+   *  넘기지 않으면 `provider` 에 따라 parseTranscriptForResume(claude, core/history/parser.ts) 나
+   *  parseCodexForResume(codex, core/history/codexParser.ts)를 쓴다 — codex rollout 은 claude
+   *  transcript 와 레코드 모양이 달라 같은 파서로 읽을 수 없다(제목·손댄 파일 레코드가 없다: 그
+   *  둘은 항상 비어 온다). */
   readTranscript?(path: string): Promise<TranscriptResumeMaterial>
 }
 
@@ -273,8 +281,13 @@ export interface TabResumeDeps {
  * 인라인으로 싣는다").
  *
  * **대화 파일은 한 번만 읽는다.** 제목·최근 요청·손댄 파일·꼬리 넷을 각각 다른 함수로 읽으면 같은
- * (수십 MB 일 수 있는) 파일을 네 번 훑는다 — parseTranscriptForResume 하나가 그 넷을 한 번의
- * 스트리밍으로 뽑는다.
+ * (수십 MB 일 수 있는) 파일을 네 번 훑는다 — parseTranscriptForResume(claude) 나
+ * parseCodexForResume(codex) 하나가 그 넷을 한 번의 스트리밍으로 뽑는다.
+ *
+ * **읽는 파서는 `deps.provider` 가 고른다.** codex rollout 은 claude transcript 와 레코드 모양이
+ * 달라 같은 파서로 읽을 수 없다 — codex 쪽은 대화 제목·손댄 파일 레코드가 아예 없어 그 둘을 항상
+ * 비운 채로 돌아온다(parseCodexForResume 의 JSDoc). 손댄 파일이 비면 아래에서 git 변경 목록으로
+ * 내려가므로 손실은 없다.
  *
  * **'update' 는 대화 파일을 아예 읽지 않는다.** formatTabResume 의 'update' 모양은 git 상태만
  * 쓰고 title·requests·editedFiles·tail 은 버린다(§11.5 — 대화가 온전한 세션에는 꼬리를 다시 실을
@@ -307,7 +320,9 @@ export async function buildTabResumeText(
     let editedFiles: string[] = []
     let tail: TranscriptMessage[] = []
     if (form === 'handover' && deps.transcriptPath) {
-      const read = deps.readTranscript ?? parseTranscriptForResume
+      const read =
+        deps.readTranscript ??
+        (deps.provider === 'codex' ? parseCodexForResume : parseTranscriptForResume)
       const material = await read(deps.transcriptPath)
       title = material.title
       requests = material.requests
