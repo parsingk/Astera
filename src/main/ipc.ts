@@ -170,6 +170,35 @@ export function parseAllowedExternalUrl(url: string): URL | null {
  *  capture file. Exported and taking its inputs as plain arguments for the same reason
  *  parseAllowedExternalUrl is: the handler itself cannot be reached without an electron harness, so
  *  the branching lives where a test can call it. */
+/** 이 계정을 쓰고 있는 **살아 있는** 세션들의 제목. 비어 있으면 지워도 된다.
+ *
+ *  **왜 필요한가.** `AccountRegistry.remove` 는 세션을 보지 않고 지우고, `get` 은 없는 id 에
+ *  던진다. 그래서 돌아가는 세션의 계정을 지우면 그 세션은 provider 도 못 알아내고, 한도에 걸렸을 때
+ *  롤도 못 한다 — 직전 브랜치들이 그 실패를 견디는 코드를 여러 겹 넣어야 했던 원인이 이것이다.
+ *  견디게 만드는 것보다 **애초에 못 지우게 하는 것**이 옳다.
+ *
+ *  **현재 계정만 보지 않고 롤링 체인 전체를 본다.** 계정 둘인 체인이 a1 에서 돌고 있을 때 a2 를
+ *  지우면 지금은 아무 일도 없지만, a1 이 한도에 걸리는 순간 갈아탈 곳이 사라져 롤이 중단된다. 그
+ *  경우를 견디는 코드가 이미 있지만(중단 뒤 재예약), 사용자가 막을 수 있었던 실패를 굳이 겪을 이유가
+ *  없다. 그래서 대기 계정도 차단 사유이고, 메시지가 그 사실을 말해야 한다("이 세션의 대기 계정").
+ *
+ *  종료된 세션은 세지 않는다 — 그 계정을 붙잡고 있지 않다.
+ *
+ *  핸들러가 아니라 여기 순수 함수로 두는 이유는 `providerOfSession` 과 같다: 핸들러는 electron
+ *  하네스 없이는 닿을 수 없으므로, 판단은 테스트가 부를 수 있는 자리에 둔다. */
+export function accountRemovalBlockers(
+  accountId: string,
+  sessions: readonly Pick<SessionInfo, 'accountId' | 'rollAccountIds' | 'status' | 'title'>[]
+): string[] {
+  return sessions
+    .filter(
+      (s) =>
+        s.status !== 'exited' &&
+        (s.accountId === accountId || (s.rollAccountIds ?? []).includes(accountId))
+    )
+    .map((s) => s.title)
+}
+
 export function providerOfSession(
   sessionId: string,
   sessions: readonly Pick<SessionInfo, 'id' | 'accountId'>[],
@@ -430,7 +459,15 @@ export function registerIpc(
   ipcMain.handle('accounts.list', () => core.accounts.list())
   ipcMain.handle('accounts.create', (_e, input) => core.accounts.create(input))
   ipcMain.handle('accounts.import', (_e, input) => core.accounts.import(input))
-  ipcMain.handle('accounts.remove', (_e, id) => core.accounts.remove(id))
+  // 돌아가는 세션이 쓰는 계정은 지우지 않는다 — 판단은 accountRemovalBlockers(위)에 있고, 여기는
+  // 세션 목록을 건네고 결과를 렌더러가 읽을 모양으로 바꾸는 일만 한다. 렌더러에도 같은 검사를 두면
+  // 두 곳이 어긋날 수 있으므로 두지 않는다: 여기가 경계다.
+  ipcMain.handle('accounts.remove', async (_e, id) => {
+    const blockers = accountRemovalBlockers(id, core.sessions.list())
+    if (blockers.length > 0) return { ok: false as const, titles: blockers }
+    await core.accounts.remove(id)
+    return { ok: true as const, titles: [] as string[] }
+  })
   ipcMain.handle('accounts.loginStatus', (_e, id) => core.accounts.loginStatus(id))
   ipcMain.handle('accounts.detect', () => core.detectAccounts())
   ipcMain.handle('accounts.ghosts', () => core.ghostAccounts())

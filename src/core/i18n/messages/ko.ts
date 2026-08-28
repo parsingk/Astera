@@ -435,6 +435,7 @@ export const ko = {
   'account.remove.processing': '처리 중…',
   'account.remove.confirmWithLogout': '해제 + 로그아웃',
   'account.logout.failed': '로그아웃 실패: {detail}\n\n등록 해제는 계속 진행합니다.',
+  'account.remove.inUse': '돌아가는 세션이 이 계정을 쓰고 있어 등록을 해제할 수 없습니다: {titles}\n\n세션을 닫거나, 그 세션의 롤링 순서에서 이 계정을 빼 주세요.',
   // The Message key accountLogout in core.ts returns. account.logout.failed (above) is the outer template that
   // slots this value into {detail}, so the two cannot share a name — it was split into the
   // account.error.* namespace, alongside account.error.raw.

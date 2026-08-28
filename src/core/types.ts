@@ -502,7 +502,11 @@ export interface CoreApi {
     list(): Promise<Account[]>
     create(input: { label: string; color?: string; provider?: Provider }): Promise<Account>
     import(input: { label: string; configDir: string; provider?: Provider }): Promise<Account>
-    remove(id: string): Promise<void> // deregisters only — the disk is not touched
+    /** 등록만 해제한다 — 디스크는 건드리지 않는다. **돌아가는 세션이 그 계정을 쓰고 있으면 거부하고
+     *  막고 있는 세션 제목들을 돌린다**(main 의 accountRemovalBlockers): 현재 계정인 세션뿐 아니라
+     *  그 계정을 롤링 대기 순서에 담고 있는 세션도 막는다 — 대기 계정이 사라지면 한도에 걸리는 순간
+     *  갈아탈 곳이 없어 롤이 중단된다. */
+    remove(id: string): Promise<{ ok: boolean; titles: string[] }>
     loginStatus(id: string): Promise<boolean> // the verdict from accounts/loginStatus.ts (claude also checks Keychain on macOS)
     detect(): Promise<DetectCandidate[]> // detection candidates, excluding registered and unregistered-by-the-user config dirs
     /** Unregistered config dirs as account-shaped history sources — this one keeps the ones the user

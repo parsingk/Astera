@@ -448,6 +448,7 @@ export const ja: Catalog = {
   'account.remove.processing': '処理中…',
   'account.remove.confirmWithLogout': '解除 + ログアウト',
   'account.logout.failed': 'ログアウトに失敗しました: {detail}\n\n登録解除はこのまま続行します。',
+  'account.remove.inUse': '実行中のセッションがこのアカウントを使用しているため、登録を解除できません: {titles}\n\nセッションを閉じるか、そのセッションのローテーション順からこのアカウントを外してください。',
   // The Message key accountLogout in core.ts returns
   'account.error.raw': '{detail}',
   'account.error.logoutFailed': 'ログアウトに失敗しました',

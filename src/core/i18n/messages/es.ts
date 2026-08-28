@@ -453,6 +453,7 @@ export const es: Catalog = {
   'account.remove.processing': 'Procesando…',
   'account.remove.confirmWithLogout': 'Anular y cerrar sesión',
   'account.logout.failed': 'Error al cerrar sesión: {detail}\n\nLa anulación del registro continúa igualmente.',
+  'account.remove.inUse': 'Una sesión en curso está usando esta cuenta, así que no se puede anular su registro: {titles}\n\nCierra la sesión o quita la cuenta de su orden de rotación.',
   // The Message key accountLogout in core.ts returns
   'account.error.raw': '{detail}',
   'account.error.logoutFailed': 'Error al cerrar sesión',

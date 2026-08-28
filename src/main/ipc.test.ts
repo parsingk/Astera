@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseAllowedExternalUrl, providerOfSession } from './ipc'
+import { accountRemovalBlockers, parseAllowedExternalUrl, providerOfSession } from './ipc'
 import type { Account, SessionInfo } from '../core/types'
 
 const account = (over: Partial<Account>): Account =>
@@ -74,5 +74,46 @@ describe('parseAllowedExternalUrl — 외부 URL 스킴 화이트리스트', () 
     expect(parseAllowedExternalUrl('https://example.com/\t')?.toString()).toBe(
       'https://example.com/'
     )
+  })
+})
+
+// 돌아가는 세션이 쓰는 계정은 지울 수 없다. registry.remove 는 세션을 보지 않고 지우고 get 은 없는
+// id 에 던지므로, 지워지면 그 세션은 provider 조회도 롤도 못 한다 — 견디는 코드를 겹치기보다 못
+// 지우게 하는 쪽이다.
+describe('accountRemovalBlockers', () => {
+  const s = (o: Partial<{ accountId: string; rollAccountIds: string[]; status: 'running' | 'exited'; title: string }>) => ({
+    accountId: o.accountId ?? 'a1',
+    rollAccountIds: o.rollAccountIds,
+    status: o.status ?? ('running' as const),
+    title: o.title ?? 'tab'
+  })
+
+  it('아무 세션도 쓰지 않으면 빈 배열 — 지워도 된다', () => {
+    expect(accountRemovalBlockers('a9', [s({ accountId: 'a1' })])).toEqual([])
+  })
+
+  it('그 계정으로 돌고 있는 세션을 막는다', () => {
+    expect(accountRemovalBlockers('a1', [s({ accountId: 'a1', title: '작업 탭' })])).toEqual(['작업 탭'])
+  })
+
+  // 현재 계정만 보면 2계정 체인의 **대기 계정**이 지워지고, a1 이 한도에 걸리는 순간 갈아탈 곳이
+  // 없어 롤이 중단된다. 그래서 체인에 담겨 있기만 해도 막는다.
+  it('지금 쓰지 않아도 롤링 대기 순서에 있으면 막는다', () => {
+    const rows = [s({ accountId: 'a1', rollAccountIds: ['a1', 'a2'], title: '롤링 탭' })]
+    expect(accountRemovalBlockers('a2', rows)).toEqual(['롤링 탭'])
+  })
+
+  it('종료된 세션은 세지 않는다 — 계정을 붙잡고 있지 않다', () => {
+    const rows = [s({ accountId: 'a1', rollAccountIds: ['a1', 'a2'], status: 'exited' })]
+    expect(accountRemovalBlockers('a1', rows)).toEqual([])
+    expect(accountRemovalBlockers('a2', rows)).toEqual([])
+  })
+
+  it('막는 세션이 여럿이면 전부 돌린다 — 사용자가 무엇을 닫아야 할지 알아야 한다', () => {
+    const rows = [
+      s({ accountId: 'a1', title: '첫째' }),
+      s({ accountId: 'a2', rollAccountIds: ['a2', 'a1'], title: '둘째' })
+    ]
+    expect(accountRemovalBlockers('a1', rows)).toEqual(['첫째', '둘째'])
   })
 })

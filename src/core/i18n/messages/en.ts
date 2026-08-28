@@ -388,6 +388,7 @@ export const en: Record<keyof typeof ko, string> = {
   'account.remove.processing': 'Working…',
   'account.remove.confirmWithLogout': 'Unregister + log out',
   'account.logout.failed': 'Logout failed: {detail}\n\nUnregistering will continue anyway.',
+  'account.remove.inUse': 'This account is in use by a running session and cannot be unregistered: {titles}\n\nClose the session first, or remove the account from its rolling order.',
   'account.error.raw': '{detail}',
   'account.error.logoutFailed': 'Logout failed',
   'account.sync.title': 'Import default account settings',
