@@ -866,10 +866,26 @@ export async function handleCommand(
       // 이다. 되돌아갈 자리가 없으니 거절한다: `--worktree` 를 **명시적으로** 준 호출(값이 무엇이든,
       // `'current'` 를 직접 써도)은 이 거절을 지나간다 — 그것은 사람이 자리를 골랐다는 뜻이고, 그
       // 선택을 막을 이유가 없다.
-      if (str(args.worktree) === null && run.autoDispatch && !run.worktree)
+      //
+      // **`autoDispatch` 만 보면 인계된 Run 이 이 거절에서 빠져나간다.** 사이드바 Run 을 코디네이터에게
+      // 넘기는 방식이 그 깃발을 끄는 것이므로(run-start), 넘긴 뒤에는 "앱이 돌리는 Run" 검사가
+      // 거짓이 된다 — 그런데 그 Run 의 워크트리를 만들어 주던 것도 앱이었다. 그래서 넘긴 Run 에서
+      // `--worktree` 를 생략하면 조용히 `'current'` 로 떨어져 워커가 프로젝트 폴더에서 돈다. 사람이
+      // 사이드바에서 짠 Run 임을 말하는 칸은 `coordinatorAccountIds` 이므로 그것으로 함께 묻는다.
+      //
+      // **이것은 완전한 답이 아니다.** 넘긴 Run 에서는 앱이 첫 슬롯을 채우지 않으므로 Run 워크트리가
+      // 아예 만들어지지 않고, 한도 1 인 Run 의 코디네이터는 "생략하라"는 배치 규칙을 따를 자리가
+      // 없다(handover.ts 가 그렇게 말한다). 그때 이 거절이 그 사실을 **소리 내어** 말해 주므로
+      // 코디네이터는 `--worktree new --name` 으로 갈 수 있다. 제대로 된 답은 인계 시점에 Run
+      // 워크트리를 미리 만들어 두는 것이고, 그것은 별개 작업이다.
+      if (
+        str(args.worktree) === null &&
+        (run.autoDispatch || (run.coordinatorAccountIds?.length ?? 0) > 0) &&
+        !run.worktree
+      )
         return conflict(
           `run ${run.id} has no worktree yet — there is nowhere to run a worker without writing ` +
-            `into the project folder; the scheduler creates one when the Run starts`
+            `into the project folder; pass --worktree new --name <name>`
         )
       const worktree = str(args.worktree) ?? run.worktree ?? 'current'
       // **배치 규칙은 여기서 거절되지 않는다 — 문구로만 지켜진다**(handover.ts 의 인수 프롬프트).

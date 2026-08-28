@@ -2747,6 +2747,54 @@ describe('run-spawn — 예약 회차', () => {
 
 })
 
+describe('worker-start — 인계된 Run 의 워크트리', () => {
+  // 사이드바 Run 을 넘기는 방식이 autoDispatch 를 끄는 것이라, `autoDispatch` 만 보면 넘긴 Run 이
+  // 이 거절에서 빠져나가고 워커가 조용히 프로젝트 폴더에서 돈다 — 설계가 금지하는 조합이다
+  it('코디네이터에게 넘긴 Run 도 워크트리 없이 --worktree 생략을 거절한다', async () => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      auto: true,
+      coordinatorAccount: 'acc1'
+    })
+    const runId = (run.body as { id: string }).id
+    const t = await call(deps, 'task-create', { account: 'acc1', runId, spec: 's' })
+    const taskId = (t.body as { id: string }).id
+    // 넘긴 상태를 흉내 낸다 — run-start 가 하는 그대로(autoDispatch 를 지운다)
+    await deps.setState({
+      ...deps.getState(),
+      runs: deps.getState().runs.map((r) => {
+        if (r.id !== runId) return r
+        const { autoDispatch: _drop, pendingStart: _drop2, ...rest } = r
+        return { ...rest, coordinatorSessionId: 'coord1' }
+      })
+    })
+    const r = await call(deps, 'worker-start', { task: taskId, agent: 'codex', account: 'acc1' })
+    expect(r.status).toBe(409)
+    expect(String((r.body as { error?: string }).error)).toContain('no worktree yet')
+  })
+
+  it('--worktree 를 명시하면 지나간다 — 사람이 자리를 골랐다는 뜻이다', async () => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      coordinatorAccount: 'acc1'
+    })
+    const runId = (run.body as { id: string }).id
+    const t = await call(deps, 'task-create', { account: 'acc1', runId, spec: 's' })
+    const r = await call(deps, 'worker-start', {
+      task: (t.body as { id: string }).id,
+      agent: 'codex',
+      account: 'acc1',
+      worktree: 'new',
+      name: 'w1'
+    })
+    expect(r.status).toBe(200)
+  })
+})
+
 describe('worker-start — 동시 실행 한도', () => {
   const twoTasks = async (
     concurrency?: number
