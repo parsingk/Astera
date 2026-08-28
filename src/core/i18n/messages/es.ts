@@ -855,9 +855,8 @@ export const es: Catalog = {
   'jobs.new.gitRequired': 'Solo se ejecuta en una carpeta que sea un repositorio de git',
   'jobs.new.objective': 'Objetivo',
   'jobs.new.coordinator': 'Cuenta del coordinador',
-  'jobs.new.coordinatorNone': 'Sin coordinador (lo ejecuta la app)',
-  'jobs.new.coordinatorHint':
-    'La cuenta de la sesión de agente que gestiona este trabajo: inicia los workers, responde a sus preguntas y te llama cuando hace falta. Déjala vacía y la app lo ejecuta ella misma, respondiendo a los workers con una respuesta fija. Con más de una, al alcanzar el límite el coordinador pasa a la siguiente en el orden indicado',
+  'jobs.new.coordinatorPick': 'Elige una cuenta',
+  'jobs.new.coordinatorHint': 'La cuenta de la sesión de agente que gestiona este trabajo.',
   'jobs.new.concurrency': 'En paralelo',
   'jobs.new.concurrencyHint': 'Cuántos workers mantiene abiertos a la vez',
   'jobs.new.schedule': 'Ejecución programada',

@@ -888,9 +888,8 @@ export const ko = {
   'jobs.new.gitRequired': 'git 저장소로 등록된 폴더에서만 실행됩니다',
   'jobs.new.objective': '목표',
   'jobs.new.coordinator': '코디네이터 계정',
-  'jobs.new.coordinatorNone': '코디네이터 없이 (앱이 직접 돌림)',
-  'jobs.new.coordinatorHint':
-    '이 작업을 관리할 에이전트 세션의 계정입니다 — 워커를 띄우고, 워커의 질문에 답하고, 필요할 때 사람을 부릅니다. 비워 두면 앱이 직접 돌리고 워커의 질문은 앱이 고정 답변으로 풀어 줍니다. 둘 이상 고르면 코디네이터가 한도에 걸렸을 때 적은 순서대로 갈아탑니다',
+  'jobs.new.coordinatorPick': '계정을 고르세요',
+  'jobs.new.coordinatorHint': '이 작업을 관리할 에이전트 세션의 계정입니다.',
   'jobs.new.concurrency': '동시 실행',
   'jobs.new.concurrencyHint': '이 작업이 한 번에 열어 둘 워커 수',
   'jobs.new.schedule': '예약 실행',

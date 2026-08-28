@@ -121,7 +121,7 @@ export interface OrchServerDeps {
   startCoordinator?(a: {
     runId: string
     cwd: string
-    accountIds: string[]
+    accountId: string
     prompt: string
   }): Promise<{ sessionId: string }>
   /** 이 Run 이 일할 워크트리를 하나 만들고 그 경로를 낸다. **`startCoordinator` 와 같은 꼴** —
@@ -357,15 +357,19 @@ export async function handleCommand(
       const concurrency = args.concurrency === undefined ? null : posInt(args.concurrency)
       if (args.concurrency !== undefined && concurrency === null)
         return bad('--concurrency must be an integer >= 1')
-      // 이 Run 을 관리할 코디네이터 세션의 계정들. **없으면 코디네이터를 띄우지 않는다** — 그때는
-      // 앱이 돌리고(옛 동작), 워커의 질문은 앱의 그물이 풀어 준다(inbox.ts). 그 갈림을 조용히
-      // 두지 않고 UI 가 힌트로 말한다.
+      // 이 Run 을 관리할 코디네이터 세션의 계정. **하나다** — 목록이 아닌 이유는 Run.coordinatorAccountId
+      // 의 주석에 있다(갈아타는 대신 같은 세션에서 기다린다). 없으면 코디네이터를 띄우지 않고 앱이
+      // 돌린다(옛 동작). 사이드바는 그 상태를 만들지 않지만 CLI 와 옛 Run 이 그 갈래다.
       const coordArg = str(args.coordinatorAccount)
-      let coordinatorAccountIds: string[] | undefined
+      let coordinatorAccountId: string | undefined
       if (coordArg !== null) {
-        const parsed = parseAccountList(coordArg, deps.listAccounts(), '--coordinator-account')
-        if (!parsed.ok) return bad(parsed.reason)
-        coordinatorAccountIds = parsed.ids
+        // 쉼표를 **거절한다.** 조용히 첫 칸만 쓰면 사람이 적은 것과 도는 것이 달라지고, 그 사실을
+        // 알 방법이 화면에 없다 — `--account` 가 빈 칸을 거절하는 것과 같은 이유다.
+        if (coordArg.includes(','))
+          return bad('--coordinator-account takes one account, not a list')
+        if (!deps.listAccounts().some((k) => k.id === coordArg))
+          return bad(`unknown account: ${coordArg}`)
+        coordinatorAccountId = coordArg
       }
       // 예약. **규칙만 받는다**(command 없는 반쪽) — Job 에는 타이핑할 명령이 없다(Run.schedule).
       // 지역 변수로 좁히는 이유는 타입이다: `if (a && !guard) return` 은 블록 밖에서 좁혀지지 않는다.
@@ -418,7 +422,7 @@ export async function handleCommand(
             objective,
             cwd,
             ...(concurrency !== null ? { concurrency } : {}),
-            ...(coordinatorAccountIds ? { coordinatorAccountIds } : {}),
+            ...(coordinatorAccountId ? { coordinatorAccountId } : {}),
             // `--auto` 는 값이 없는 플래그다(task-create --review 와 같은 모양). **예약이면 켜지
             // 않는다** — 템플릿은 자신이 돌지 않고, 발화가 만든 자식 Run 이 돈다(그 자식은
             // spawnScheduledRun 이 autoDispatch 를 켠다).
@@ -566,8 +570,8 @@ export async function handleCommand(
       // 회차가 돈다(Run.schedule) — 붙이면 아무 Task 도 없는 Run 을 관리하는 세션이 떠서 할당량만
       // 쓴다. 회차는 `coordinatorAccountIds` 를 물려받으므로(spawnScheduledRun) 관리자는 그쪽에
       // 붙는다. worker-start 가 템플릿의 Task 를 거절하는 것과 같은 이유다.
-      const accountIds = target.schedule ? undefined : target.coordinatorAccountIds
-      if (!accountIds?.length || !deps.startCoordinator) return commit(started)
+      const accountId = target.schedule ? undefined : target.coordinatorAccountId
+      if (!accountId || !deps.startCoordinator) return commit(started)
       // **워크트리를 먼저 만든다.** 코디네이터를 띄운 뒤에 만들면 그 세션이 첫 명령을 부르는 사이에
       // 워크트리 없는 Run 을 보게 된다. 실패하면 아래 spawn 실패와 같은 처리다 — 아무것도 바꾸지
       // 않고 거절해서 `pendingStart` 를 남긴다.
@@ -590,7 +594,7 @@ export async function handleCommand(
         const spawned = await deps.startCoordinator({
           runId: id,
           cwd: target.cwd,
-          accountIds,
+          accountId,
           prompt: buildHandoverPrompt({
             runId: id,
             objective: target.objective,
@@ -904,7 +908,7 @@ export async function handleCommand(
       // 넘기는 방식이 그 깃발을 끄는 것이므로(run-start), 넘긴 뒤에는 "앱이 돌리는 Run" 검사가
       // 거짓이 된다 — 그런데 그 Run 의 워크트리를 만들어 주던 것도 앱이었다. 그래서 넘긴 Run 에서
       // `--worktree` 를 생략하면 조용히 `'current'` 로 떨어져 워커가 프로젝트 폴더에서 돈다. 사람이
-      // 사이드바에서 짠 Run 임을 말하는 칸은 `coordinatorAccountIds` 이므로 그것으로 함께 묻는다.
+      // 사이드바에서 짠 Run 임을 말하는 칸은 `coordinatorAccountId` 이므로 그것으로 함께 묻는다.
       //
       // **이것은 완전한 답이 아니다.** 넘긴 Run 에서는 앱이 첫 슬롯을 채우지 않으므로 Run 워크트리가
       // 아예 만들어지지 않고, 한도 1 인 Run 의 코디네이터는 "생략하라"는 배치 규칙을 따를 자리가
@@ -913,7 +917,7 @@ export async function handleCommand(
       // 워크트리를 미리 만들어 두는 것이고, 그것은 별개 작업이다.
       if (
         str(args.worktree) === null &&
-        (run.autoDispatch || (run.coordinatorAccountIds?.length ?? 0) > 0) &&
+        (run.autoDispatch || run.coordinatorAccountId !== undefined) &&
         !run.worktree
       )
         return conflict(

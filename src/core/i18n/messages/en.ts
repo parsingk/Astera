@@ -753,9 +753,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.new.gitRequired': 'Runs only in a folder that is a git repository',
   'jobs.new.objective': 'Objective',
   'jobs.new.coordinator': 'Coordinator account',
-  'jobs.new.coordinatorNone': 'No coordinator (the app runs it)',
-  'jobs.new.coordinatorHint':
-    "The account for the agent session that manages this job — it starts the workers, answers their questions, and calls you when it needs you. Leave it empty and the app runs the job itself, answering the workers with one fixed reply. With more than one, a usage limit moves the coordinator to the next in the order you list them",
+  'jobs.new.coordinatorPick': 'Pick an account',
+  'jobs.new.coordinatorHint': 'The account for the agent session that manages this job.',
   'jobs.new.concurrency': 'Run at once',
   'jobs.new.concurrencyHint': 'How many workers this job keeps open at once',
   'jobs.new.schedule': 'Scheduled run',

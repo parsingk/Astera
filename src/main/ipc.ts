@@ -2074,13 +2074,15 @@ export function registerIpc(
         // 코디네이터에 등록하고, orchEnv 를 실어 준다. core.sessions.spawn 을 직접 부르면 그 셋을
         // 여기서 다시 하게 되고, 그중 하나를 빠뜨리면 코디네이터는 한도에 걸린 채 멈춰 선다.
         const info = await spawnSession({
-          accountId: a.accountIds[0],
+          accountId: a.accountId,
           cwd: a.cwd,
           initialPrompt: a.prompt,
           // 탭 제목 — 워커 탭이 Task 제목을 쓰는 것과 같은 이유다. 없으면 워크트리 basename 으로
           // 떠서 사용자가 이것이 무엇인지 알 수 없다.
           title: `Coordinator · ${a.runId.slice(0, 12)}`,
-          rollAccountIds: a.accountIds
+          // **한 원소다.** 그래서 롤링은 계정을 갈아타지 않고 리셋까지 기다린 뒤 같은 세션에서
+          // 이어간다 — 관리 중이던 Run 의 맥락을 잃지 않는 쪽을 골랐다(Run.coordinatorAccountId).
+          rollAccountIds: [a.accountId]
         })
         // **탭을 띄우는 것이 이 한 줄이다.** 공용 spawnSession 은 이 이벤트를 내지 않는다 — 사용자
         // 경로에서는 반환값이 렌더러로 가서 App.tsx 가 탭을 만들기 때문이다(그 함수 위의 주석).
@@ -2095,7 +2097,7 @@ export function registerIpc(
         } catch (err) {
           orchLog(`session:created emit failed session=${info.id}: ${String(err)}`)
         }
-        orchLog(`coordinator started run=${a.runId} session=${info.id} account=${a.accountIds[0]}`)
+        orchLog(`coordinator started run=${a.runId} session=${info.id} account=${a.accountId}`)
         return { sessionId: info.id }
       },
       startWorker: async (a) => {
@@ -2348,13 +2350,13 @@ export function registerIpc(
       if (!detached.ok) return
       await orch.deps.setState(detached.state)
       const failures = detached.value.coordinatorFailures ?? 0
-      const accountIds = run.coordinatorAccountIds
+      const accountId = run.coordinatorAccountId
       // **그친다.** 무한히 되띄우면 로그인이 끊긴 계정으로 세션을 끝없이 만든다. 한계값은 Task 의
       // 회로 차단과 같은 것을 쓴다 — 같은 종류의 판단이고, 두 숫자를 따로 두면 한쪽만 조정된다.
-      if (failures >= FAILURE_LIMIT || !accountIds?.length) {
+      if (failures >= FAILURE_LIMIT || !accountId) {
         orchLog(
           `coordinator not revived run=${run.id} failures=${failures} — ` +
-            (accountIds?.length ? 'giving up' : 'no coordinator account')
+            (accountId ? 'giving up' : 'no coordinator account')
         )
         return
       }
@@ -2362,7 +2364,7 @@ export function registerIpc(
         const spawned = await orch.deps.startCoordinator!({
           runId: run.id,
           cwd: run.cwd,
-          accountIds,
+          accountId,
           prompt: buildHandoverPrompt({
             runId: run.id,
             objective: run.objective,

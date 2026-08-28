@@ -71,10 +71,10 @@ export function createRun(
     objective: string
     cwd: string
     concurrency?: number
-    /** 이 Run 의 코디네이터 세션을 띄울 계정들. **여기서 확인하지 않는다** — 계정 목록은 앱이
-     *  아는 것이고, 부르는 쪽(server.ts 의 run-create)이 존재와 provider 동일성을 본다.
+    /** 이 Run 의 코디네이터 세션을 띄울 계정. **여기서 확인하지 않는다** — 계정 목록은 앱이
+     *  아는 것이고, 부르는 쪽(server.ts 의 run-create)이 실재하는 계정인지 본다.
      *  Task.accountIds 와 같은 관례다. */
-    coordinatorAccountIds?: string[]
+    coordinatorAccountId?: string
     autoDispatch?: boolean
     /** 사용자가 '실행' 을 누르기 전까지 돌지 않게 한다 — Run.pendingStart 의 주석을 보라 */
     pendingStart?: boolean
@@ -91,9 +91,9 @@ export function createRun(
     cwd: a.cwd,
     createdAt: now,
     ...(a.concurrency !== undefined ? { concurrency: a.concurrency } : {}),
-    // 빈 배열은 싣지 않는다 — "지정 없음" 과 값이 갈라지고, 그 구분으로 코디네이터를 띄울지
-    // 정하기 때문이다(Task.accountIds 가 같은 규칙을 쓴다)
-    ...(a.coordinatorAccountIds?.length ? { coordinatorAccountIds: a.coordinatorAccountIds } : {}),
+    // 빈 문자열은 싣지 않는다 — "지정 없음" 과 값이 갈라지고, 그 구분으로 코디네이터를 띄울지
+    // 정하기 때문이다
+    ...(a.coordinatorAccountId ? { coordinatorAccountId: a.coordinatorAccountId } : {}),
     ...(a.autoDispatch ? { autoDispatch: true } : {}),
     ...(a.schedule ? { schedule: a.schedule } : {}),
     ...(a.pendingStart ? { pendingStart: true } : {})
@@ -133,8 +133,8 @@ export function spawnScheduledRun(s: OrchState, templateId: string, now: string)
     // **회차는 물려받는다.** 회차는 자신이 도는 Run 이므로 관리자가 필요하고, 그 관리자를 누구로
     // 할지는 템플릿을 만든 사람이 이미 정했다. 세션 id 와 실패 횟수는 물려주지 않는다 — 그것은
     // 정의가 아니라 지난 회차의 결과다(result·consecutiveFailures 를 물려주지 않는 것과 같다).
-    ...(template.coordinatorAccountIds?.length
-      ? { coordinatorAccountIds: template.coordinatorAccountIds }
+    ...(template.coordinatorAccountId
+      ? { coordinatorAccountId: template.coordinatorAccountId }
       : {}),
     autoDispatch: true,
     templateId,
