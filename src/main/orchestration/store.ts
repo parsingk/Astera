@@ -102,6 +102,17 @@ export class OrchestrationStore {
       delete t.accountId
     }
 
+    // **provider 가 Run 에서 Task 로 내려간 뒤 남는 칸을 지운다.** 이제 provider 는 Task 의 계정이
+    // 정하고(orchestration/types.ts 의 Task.accountIds), 한 Run 에 두 provider 의 Task 가 섞일 수
+    // 있다 — Run 에 그 값이 남아 있으면 어느 쪽이 정본인지 코드마다 달라진다. 위 accountId 이행이
+    // 옛 칸을 지우는 것과 같은 이유다.
+    //
+    // **계정을 대신 채워 넣지는 않는다.** 옛 Run 의 provider 로 기본 계정을 찾아 넣을 수도 있지만,
+    // 그 기본 계정은 지금 무엇인지 이 자리에서 알 수 없고(계정 목록은 core 도 store 도 보지 않는다)
+    // 사람이 아끼려던 계정에 일을 보내는 쪽으로 틀릴 수 있다. 계정 없는 Task 는 자동 배치에서
+    // 빠지고 디스패치 시점에 Gate 를 연다 — 조용히 멈추지 않으므로 사람이 계정을 넣으면 곧바로 돈다.
+    for (const r of st.runs as unknown as Record<string, unknown>[]) delete r.provider
+
     const now = new Date().toISOString()
     // Restart cleanup: for an open Dispatch, the session died along with the app. The outcome
     // cannot be proven, so leave it as outcome_unknown and do not touch the Task (section 7 of the

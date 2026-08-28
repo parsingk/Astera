@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { Account, JobTask } from '../../../core/types'
+import { providerOf } from '../../../core/providers/meta'
 import { useI18n } from '../i18n/I18nProvider'
 import { AccountSelect } from './AccountSelect'
 import { Select, type SelectOption } from './Select'
@@ -35,7 +36,9 @@ export function NewTaskModal({
    *  자기 자신은 아직 만들어지지 않았으므로 목록에 있을 수가 없고, 그래서 "자신을 의존으로 고르는"
    *  경우를 걸러 낼 필요가 없다. */
   tasks: JobTask[]
-  /** 고를 수 있는 계정 — 이 Run 의 provider 것만 걸러 온다. null 은 아직 안 온 것 */
+  /** 고를 수 있는 계정 — **provider 로 걸러지지 않은 전부**다. 이 폼에서 고른 첫 계정이 이 Task 의
+   *  provider 를 정하므로(orchestration/types.ts 의 Task.accountIds), 걸러 올 기준이 부르는 쪽에
+   *  없다. 둘째 칸부터 첫 계정의 provider 로 좁히는 일은 이 폼이 한다. null 은 아직 안 온 것 */
   accounts: Account[] | null
   /** 검증 구성 목록. null 은 아직 안 온 것 */
   runConfigs: { id: string; name: string }[] | null
@@ -50,11 +53,12 @@ export function NewTaskModal({
   const [deps, setDeps] = useState<string[]>([])
   // '검증 없음'을 값 '' 으로 표현한다 — RunConfig.id 는 seed:* 접두사이거나 저장된 uuid라 절대 빈
   // 문자열이 될 수 없으므로 이 값과 겹칠 일이 없다.
-  /** 이 Task 를 띄울 계정들, 순서대로. **빈 배열이 "지정 안 함"이고 그것이 기본이다** — 그때는 그
-   *  provider 의 기본 계정으로 간다(core/accounts/dispatchAccount.ts). 첫 계정으로 띄우고 나머지는
-   *  한도에 걸렸을 때 갈아탈 순서다.
+  /** 이 Task 를 띄울 계정들, 순서대로. **하나는 반드시 있어야 한다** — 이 목록이 provider 의 유일한
+   *  출처이므로(Task.accountIds), 비면 어느 에이전트로 띄울지 알 방법이 없다. 예전에는 빈 배열이
+   *  "지정 안 함"이었고 그때는 Run 이 정한 provider 의 기본 계정으로 갔다.
    *
-   *  **첫 칸을 비우면 뒤 칸도 함께 사라진다** — 지정 없이 "두 번째 계정" 만 있는 상태는 뜻이 없다. */
+   *  첫 계정으로 띄우고 나머지는 한도에 걸렸을 때 갈아탈 순서다. **첫 칸을 비우면 뒤 칸도 함께
+   *  사라진다** — 첫 계정이 provider 를 정하므로 그것 없이 "두 번째 계정" 만 있는 상태는 뜻이 없다. */
   const [accountIds, setAccountIds] = useState<string[]>([])
   const [validateConfigId, setValidateConfigId] = useState('')
   const [review, setReview] = useState(false)
@@ -80,15 +84,32 @@ export function NewTaskModal({
    *  '추가 안 함' 한 줄만 있는 죽은 드롭다운이 남는다 — 계정이 하나인 사람이 가장 흔한 경우다.
    *  새 세션 대화상자가 '계정 추가' 버튼에 같은 판단을 쓴다(NewSessionDialog.tsx 의 canAdd).
    *  상한도 여기서 본다: 이것이 칸을 늘리는 유일한 길이므로 accountIds 는 상한을 넘을 수 없다. */
+  /** 첫 계정이 정한 provider. 아직 아무것도 안 골랐거나 그 id 가 목록에 없으면 null — 그때는
+   *  좁힐 기준이 없으므로 모든 칸이 전부 보여 준다. */
+  const head = (accounts ?? []).find((a) => a.id === accountIds[0])
+  const headProvider = head ? providerOf(head) : null
+
+  /** 그 칸에서 고를 수 있는 계정. **둘째 칸부터는 첫 계정과 같은 provider 만 낸다** — 섞이면 첫
+   *  계정으로 띄운 CLI 가 한도에 걸렸을 때 다른 CLI 의 계정으로 갈아타려 하고, 그것은 갈아타기가
+   *  아니라 다른 프로그램을 띄우는 일이다. task-create 도 섞인 목록을 거절하지만(server.ts), 고를
+   *  수 없게 두는 것이 거절보다 낫다 — 사람이 고른 뒤에 안 된다고 말할 일이 없다. */
+  const choicesFor = (index: number, slot: string): Account[] =>
+    (accounts ?? []).filter(
+      (a) =>
+        (a.id === slot || !accountIds.includes(a.id)) &&
+        (index === 0 || headProvider === null || providerOf(a) === headProvider)
+    )
+
   const canAddSlot =
     accountIds.length < MAX_TASK_ACCOUNTS &&
-    (accounts ?? []).some((a) => !accountIds.includes(a.id))
+    choicesFor(accountIds.length, '').length > 0
 
   const create = async (): Promise<void> => {
     const trimmedSpec = spec.trim()
     // busy 로 다시 걸러 이중 클릭이 Task 를 두 개 만들지 못하게 한다 — NewRunModal.create 와 같은
     // 이유다: 버튼의 disabled 는 같은 프레임에 반영되지 않을 수 있다.
-    if (!trimmedSpec || busy) return
+    // 계정도 함께 본다 — 버튼의 disabled 와 같은 조건이고, 같은 이유로 두 번 본다(위 주석).
+    if (!trimmedSpec || accountIds.length === 0 || busy) return
     setBusy(true)
     setError(null)
     try {
@@ -99,8 +120,9 @@ export function NewTaskModal({
         title: title.trim(),
         spec: trimmedSpec,
         deps,
-        // 쉼표로 보낸다 — task-create 의 문법이다(server.ts). 빈 배열이면 칸 자체를 보내지 않는다.
-        ...(accountIds.length > 0 ? { account: accountIds.join(',') } : {}),
+        // 쉼표로 보낸다 — task-create 의 문법이다(server.ts). **언제나 보낸다** — 아래 버튼이
+        // 빈 목록으로는 눌리지 않으므로 이 자리에 빈 값이 오지 않는다.
+        account: accountIds.join(','),
         ...(validateConfigId ? { validate: validateConfigId } : {}),
         ...(review ? { review: true } : {})
         // parent 는 보내지 않는다 — parentId 는 통합(integration) Task 의 표식이라, 이 폼에서 보내면
@@ -190,7 +212,7 @@ export function NewTaskModal({
             등록되면 지정 없는 Task 는 새 계정으로 조용히 넘어가고 못박은 Task 는 Gate 를 연다.
             (2) 칸이 없는 이유를 화면이 말하지 않아, 계정이 하나인 사람은 기능이 빠진 줄 안다.
             null 은 아직 안 온 것이라 같이 접힌다 */}
-        {(accounts?.length ?? 0) > 0 && (
+        {accounts !== null && (
           <div className="field">
             <label>{t('jobs.task.account')}</label>
             {/* 슬롯 하나씩. 첫 칸은 '지정 안 함'(빈 값)을 가질 수 있고, 뒤 칸은 고른 것만 남는다 —
@@ -202,9 +224,7 @@ export function NewTaskModal({
               <AccountSelect
                 key={i}
                 className="stack-item"
-                accounts={(accounts ?? []).filter(
-                  (a) => a.id === slot || !accountIds.includes(a.id)
-                )}
+                accounts={choicesFor(i, slot)}
                 value={slot}
                 onChange={(id) =>
                   setAccountIds((prev) => {
@@ -214,10 +234,15 @@ export function NewTaskModal({
                     return next.filter((x) => x !== '')
                   })
                 }
-                allLabel={i === 0 ? t('jobs.task.accountDefault') : t('jobs.task.accountNone')}
+                // 첫 칸의 빈 값은 더 이상 "기본 계정" 이 아니라 **아직 안 골랐다**는 뜻이다 —
+                // 계정이 provider 를 정하므로 지정 없이 띄울 수 있는 길이 없다.
+                allLabel={i === 0 ? t('jobs.task.accountPick') : t('jobs.task.accountNone')}
               />
             ))}
             <p className="modal-hint">{t('jobs.task.accountHint')}</p>
+            {/* 계정이 하나도 등록되지 않았으면 고를 것이 없어 이 Task 를 만들 수 없다 — 칸을
+                감추면 왜 만들기 버튼이 죽어 있는지 화면이 말하지 않는다. */}
+            {accounts.length === 0 && <p className="warn-text">{t('jobs.task.accountEmpty')}</p>}
             {accountIds.length > 0 && <p className="warn-text">{t('jobs.task.accountTrust')}</p>}
           </div>
         )}
@@ -240,7 +265,12 @@ export function NewTaskModal({
         <button onClick={onClose} disabled={busy}>
           {t('common.cancel')}
         </button>
-        <button className="primary" disabled={busy || !spec.trim()} onClick={() => void create()}>
+        {/* 계정이 없으면 만들 수 없다 — provider 를 알 방법이 없다(accountIds 의 주석) */}
+        <button
+          className="primary"
+          disabled={busy || !spec.trim() || accountIds.length === 0}
+          onClick={() => void create()}
+        >
           {t('jobs.task.create')}
         </button>
       </div>

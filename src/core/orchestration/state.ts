@@ -70,13 +70,12 @@ export function createRun(
   a: {
     objective: string
     cwd: string
-    provider?: Provider
     concurrency?: number
     autoDispatch?: boolean
     /** 사용자가 '실행' 을 누르기 전까지 돌지 않게 한다 — Run.pendingStart 의 주석을 보라 */
     pendingStart?: boolean
     /** 있으면 이 Run 은 템플릿이다 — Run.schedule 의 주석을 보라. 규칙의 유효성은 부르는
-     *  쪽(server.ts 의 run-create)이 isValidRule 로 본다, provider·accountId 와 같은 관례다 */
+     *  쪽(server.ts 의 run-create)이 isValidRule 로 본다, 계정 목록과 같은 관례다 */
     schedule?: ScheduleRule
   },
   now: string
@@ -87,7 +86,6 @@ export function createRun(
     objective: a.objective,
     cwd: a.cwd,
     createdAt: now,
-    ...(a.provider ? { provider: a.provider } : {}),
     ...(a.concurrency !== undefined ? { concurrency: a.concurrency } : {}),
     ...(a.autoDispatch ? { autoDispatch: true } : {}),
     ...(a.schedule ? { schedule: a.schedule } : {}),
@@ -124,7 +122,6 @@ export function spawnScheduledRun(s: OrchState, templateId: string, now: string)
     objective: template.objective,
     cwd: template.cwd,
     createdAt: now,
-    ...(template.provider ? { provider: template.provider } : {}),
     ...(template.concurrency !== undefined ? { concurrency: template.concurrency } : {}),
     autoDispatch: true,
     templateId,
@@ -288,8 +285,13 @@ export function createTask(
     deps: string[]
     parentId?: string
     /** 이 Task 를 띄울 계정들, 순서대로. **여기서 확인하지 않는다** — 계정 목록은 core 가 아니라
-     *  앱이 아는 것이고(schedule.ts 머리말과 같은 이유), 부르는 쪽(server.ts 의 task-create)이 그
-     *  Run 의 provider 계정인지 보고 거절한다. validateConfigId 도 같은 관례다. */
+     *  앱이 아는 것이고(schedule.ts 머리말과 같은 이유), 부르는 쪽(server.ts 의 task-create)이
+     *  존재하는 계정인지, 서로 같은 provider 인지 보고 거절한다. validateConfigId 도 같은 관례다.
+     *
+     *  **비었는지도 여기서 보지 않는다.** 이 목록이 provider 의 출처이므로 만드는 두 자리가 모두
+     *  하나 이상을 요구하지만(task-create, NewTaskModal), 그 요구도 계정을 아는 쪽의 몫이다 —
+     *  core 는 계정 목록을 못 보므로 "하나 이상" 만 확인해도 그 하나가 실재하는지는 알 수 없고,
+     *  반쪽 검사는 어느 쪽이 정본인지 흐린다. */
     accountIds?: string[]
     validateConfigId?: string
     reviewRequested?: boolean

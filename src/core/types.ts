@@ -384,15 +384,14 @@ export type RunOutcome = 'running' | 'completed' | 'failed'
 export interface JobRun {
   id: string
   objective: string
-  /** 이 Run 의 워커를 띄울 provider — Run(core/orchestration/types.ts)이 들고 있는 값을 그대로
-   *  옮긴 것이다. **여기서 계산하거나 기본값을 채우지 않는다** — CLI 가 --provider 없이 만든
-   *  Run 에는 이 값이 없을 수 있고(schedule.ts 의 slotsToFill 이 그런 Run 을 건너뛰는 것과 같은
-   *  사정), 그것을 감추면 "이 Run 은 무엇으로도 못 띄운다"는 사실이 사라진다. 기본값을 적용하는
-   *  것은 이 값을 쓰는 쪽(RunDetail.tsx)의 일이다. */
-  provider?: Provider
   /** 이 Run 이 동시에 열어 둘 Dispatch 수 — Run 이 들고 있는 값을 그대로 옮긴 것이다. 없으면
    *  DEFAULT_CONCURRENCY(core/orchestration/types.ts) 인데, 그 기본값도 여기서 채우지 않는다 —
-   *  provider 와 같은 이유다. */
+   *  계산도 기본값도 이 값을 쓰는 쪽(RunDetail.tsx)의 일이라는 이 타입의 관례다.
+   *
+   *  **provider 칸은 없다.** Run 은 더 이상 provider 를 정하지 않는다 — Task 의 계정이 정한다
+   *  (orchestration/types.ts 의 Task.accountIds). 한 Run 이 claude Task 와 codex Task 를 함께
+   *  가질 수 있으므로 Run 줄에 실을 하나의 값이 아예 없다. 지금 도는 것의 provider 는 Task 줄이
+   *  보여 준다(JobTask.provider — 열린 Dispatch 에서 온다). */
   concurrency?: number
   /** 저장된 값이 아니라 Task 에서 계산된다 — core/orchestration/view.ts 의 outcomeOf */
   outcome: RunOutcome

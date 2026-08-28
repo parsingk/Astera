@@ -96,6 +96,32 @@ describe('OrchestrationStore', () => {
     expect(store.get().dispatches[0].endedAt).toBeTruthy()
   })
 
+  // provider 가 Run 에서 Task 로 내려간 뒤 남는 칸 — 두 칸을 함께 두면 어느 쪽이 정본인지
+  // 코드마다 달라진다(위 accountId 이행과 같은 이유)
+  it('옛 Run.provider 를 지운다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    ;(s.runs[0] as unknown as Record<string, unknown>).provider = 'codex'
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    expect((store.get().runs[0] as unknown as Record<string, unknown>).provider).toBeUndefined()
+  })
+
+  // **계정을 대신 채워 넣지 않는다.** 옛 provider 로 기본 계정을 찾아 넣으면 사람이 아끼려던
+  // 계정에 일이 갈 수 있고, 무엇이 기본 계정인지 이 자리에서는 알 수도 없다. 계정 없는 Task 는
+  // 자동 배치에서 빠지고 디스패치 시점에 Gate 를 연다.
+  it('provider 를 지우면서 Task 에 계정을 지어 넣지는 않는다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    ;(s.runs[0] as unknown as Record<string, unknown>).provider = 'codex'
+    delete (s.tasks[0] as unknown as Record<string, unknown>).accountIds
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    expect(store.get().tasks[0].accountIds).toBeUndefined()
+  })
+
   it('옛 accountId 하나짜리 Task 를 accountIds 로 옮긴다 (이 칸이 생기기 전에 만든 Job)', async () => {
     const file = path.join(dir, 'orchestration.json')
     const s = withOpenDispatch()

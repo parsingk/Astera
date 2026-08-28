@@ -752,7 +752,6 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.new.title': 'Create a job',
   'jobs.new.gitRequired': 'Runs only in a folder that is a git repository',
   'jobs.new.objective': 'Objective',
-  'jobs.new.provider': 'Agent',
   'jobs.new.concurrency': 'Run at once',
   'jobs.new.concurrencyHint': 'How many workers this job keeps open at once',
   'jobs.new.schedule': 'Scheduled run',
@@ -761,6 +760,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.new.create': 'Create',
   'jobs.new.folderBusy': 'A worker is already running in this folder — at a limit of 1 this job runs its worker there too, so their edits can mix',
   'jobs.new.failed': 'Could not create the job',
+  'jobs.gate.noAccountAssigned': 'This Task has no account, so there is no way to tell which agent should run it — assign one',
   'jobs.gate.noAccount': 'No {provider} account is logged in, so this Task cannot start',
   // Fires when the **first** account in this Task's list cannot be used, and when nothing in the list
   // can — the first one is unusable either way, so one message covers both. The accounts after it are
@@ -781,10 +781,11 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.task.depsHint': 'Starts once every picked Task is done',
   'jobs.task.depsAdd': 'Pick a Task',
   'jobs.task.account': 'Account',
-  'jobs.task.accountDefault': 'Default account',
+  'jobs.task.accountPick': 'Pick an account',
   'jobs.task.accountNone': 'Not used',
+  'jobs.task.accountEmpty': 'No accounts registered — add one under Settings → Accounts first',
   'jobs.task.accountHint':
-    'The accounts this Task runs its worker on — the default account when left unset. With more than one, a usage limit moves the worker to the next in the order you list them',
+    'The accounts this Task runs its worker on — the first one decides which agent runs it, so one is required. With more than one, a usage limit moves the worker to the next in the order you list them',
   'jobs.task.accountTrust':
     'The first time a chosen account opens this folder the session tab asks you to trust it — the worker starts only once you answer',
   'jobs.task.validate': 'Run configuration that proves it done',
