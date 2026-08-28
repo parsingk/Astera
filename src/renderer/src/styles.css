@@ -1114,7 +1114,15 @@ input[type="checkbox"]:not(.md-task input) {
   cursor: pointer;
   transition: border-color var(--ease), background var(--ease);
 }
-input[type="checkbox"]:not(.md-task input):hover { border-color: var(--text-faint); }
+input[type="checkbox"]:not(.md-task input):not(:disabled):hover { border-color: var(--text-faint); }
+/* 끌 수 없는 체크박스는 그렇게 보여야 한다. button:disabled 와 같은 값을 쓴다.
+   새 세션·이어하기 모달의 'Slack 진행상황 알림'이 이것을 쓴다 — Slack 을 등록하지 않으면
+   disabled 인데, 여기 규칙이 없던 동안은 활성과 픽셀 단위로 같아 보였고 hover 에도 반응해서
+   "체크가 안 먹는다"로 읽혔다. 옆의 .check-note 안내만으로는 상자가 멀쩡해 보이는 것을 이기지 못한다. */
+input[type="checkbox"]:not(.md-task input):disabled { opacity: .5; cursor: not-allowed; }
+/* 상자만 흐리면 라벨 글자는 그대로라 줄이 아직 살아 있어 보인다. 줄 전체를 흐리게 해야
+   "이 항목은 지금 쓸 수 없다"가 읽힌다. :has() 는 Chrome 105+ 이고 이 앱은 146 이다. */
+label.check-small:has(input:disabled) { opacity: .55; }
 input[type="checkbox"]:not(.md-task input):checked {
   background: var(--accent);
   border-color: var(--accent);
