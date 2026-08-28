@@ -105,6 +105,8 @@ export class RunManager {
   // 도착하는 것은 정상 흐름이다(실행 패널을 열면 렌더러가 resize 를 보낸다). node-pty 는 죽은 pty 에
   // 그것을 부르면 던지고, 여기는 IPC 핸들러 뒤라 잡는 사람이 없어 main 프로세스가 죽는다.
   // stop 이 처음부터 같은 검사를 하고 있었다 — 이 둘만 빠져 있었다.
+  // **이 검사만으로는 부족하다.** status 는 pty.onExit 으로 서는데 node-pty 는 그보다 먼저 죽어
+  // 있고, 그 구간의 resize 는 여기를 통과한 뒤 던진다 — 그쪽은 withExitedPtyGuard 가 막는다.
   write(projectPath: string, data: string): void {
     const live = this.runs.get(projectPath)
     if (live?.status.status !== 'running') return
