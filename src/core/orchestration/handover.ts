@@ -5,14 +5,25 @@
  *  (coordinator.ts 의 buildSpecFile)과 재개 지시문(resumeSection.ts)이 영어인 것과 같은 자리이고,
  *  화면 문구가 아니므로 i18n 을 타지 않는다.
  *
- *  **여섯 가지가 다 들어가야 한다.** 하나라도 빠지면 코디네이터가 *지킬 수 없는* 규칙이 생긴다:
+ *  **일곱 가지가 다 들어가야 한다.** 하나라도 빠지면 코디네이터가 *지킬 수 없는* 규칙이 생긴다:
  *
  *  1. 이 Run 은 사람이 짰다 — 그대로 돌려라
- *  2. 계정은 Task 에 있다(첫 계정이 provider 다)
- *  3. 동시 실행 한도 — 숫자를 문구에 박아 넣는다
- *  4. 배치 규칙 — **이유까지** 적는다
- *  5. 네가 받은편지함이다 — 턴을 끝내면 아무것도 안 온다
- *  6. 사람이 필요하면 Gate, 그리고 그 제약
+ *  2. **아무것도 시작하기 전에 현황을 파악하라** — 중간에 들어왔을 수 있다
+ *  3. 계정은 Task 에 있다(첫 계정이 provider 다)
+ *  4. 동시 실행 한도 — 숫자를 문구에 박아 넣는다
+ *  5. 배치 규칙 — **이유까지** 적는다
+ *  6. 네가 받은편지함이다 — 턴을 끝내면 아무것도 안 온다
+ *  7. 사람이 필요하면 Gate, 그리고 그 제약
+ *
+ *  **2 가 필요한 이유.** 사람이 사이드바의 버튼으로 코디네이터를 **다시** 띄울 수 있다(앱은 스스로
+ *  되띄우지 않는다 — Run.coordinatorSessionId 의 주석). 그때 이 세션은 처음이 아니라 **중간에**
+ *  들어온다: 끝난 Task 가 있고, 앞선 코디네이터가 띄운 워커가 아직 돌고 있을 수 있고, 답을 기다리며
+ *  멈춘 질문과 열린 Gate 가 쌓여 있을 수 있다. 그것을 안 보고 시작하면 이미 도는 Task 에 두 번째
+ *  워커를 띄우려 하고(worker-start 가 거절한다 — 턴 낭비), 멈춰 있는 워커는 계속 멈춰 있다.
+ *
+ *  **처음 뜬 코디네이터에게도 같은 문구를 준다.** 갓 만든 Run 에서는 그 조사가 몇 초로 끝나고 답이
+ *  비어 있다. 두 갈래 문구를 두면 어느 쪽이 최신인지 갈리고, "지금은 처음인가" 를 앱이 잘못
+ *  판단하는 순간 코디네이터가 틀린 전제로 시작한다.
  *
  *  **3·4 를 문구로 주는 이유.** 값은 `run-show` 로 읽을 수 있었지만 **지키라고 말한 적이 없었고**,
  *  배치 규칙은 가이드가 이름만 부르고 정의를 어디에도 두지 않았다. 읽을 수 있는 것과 알려 준 것은
@@ -57,8 +68,21 @@ export function buildHandoverPrompt(a: {
     `- concurrency limit: ${a.concurrency}`,
     '',
     'START HERE',
-    'Run `astera help` and read the reference before your first command. Then',
-    `\`astera task-list --run ${a.runId} --json\` to see what the person laid out.`,
+    'Run `astera help` and read the reference before your first command.',
+    '',
+    'TAKE STOCK BEFORE YOU START ANYTHING',
+    'You may be joining this Run part-way through: a person can restart a coordinator from the Jobs',
+    'list, and the one before you may have left workers running. Four questions, in this order:',
+    `- \`astera task-list --run ${a.runId} --json\` — what is completed, ready, dispatched or blocked.`,
+    '- For every Task that says `dispatched`: `astera dispatch-show --task <tsk> --json`. An open',
+    '  dispatch means a worker outlived your predecessor and is still working — leave it alone and',
+    '  wait for its report. A closed one with no outcome means that attempt died; that Task needs a',
+    '  new worker (`worker-start --retry-of <dsp>`), not a duplicate.',
+    '- `astera check --json` — mail already waiting. **Answer it before starting new work**: a worker',
+    '  that asked a question is stopped until you reply, and no amount of new dispatching moves it.',
+    '- `astera gate-list --status open --json` — what a person still owes you. Those Tasks are blocked',
+    '  and will not move until the answer arrives; do not try to start them.',
+    'On a Run that has only just been created all four come back nearly empty, and that is the answer.',
     '',
     'THE PLAN IS ALREADY MADE',
     'The Tasks, their dependencies, their accounts and their validation settings were set by a',

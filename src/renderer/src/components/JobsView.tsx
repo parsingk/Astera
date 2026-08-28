@@ -117,7 +117,8 @@ function RunCard({
   canOpenSession,
   onOpenSession,
   onOpenRun,
-  onDeleteRun
+  onDeleteRun,
+  onRestartCoordinator
 }: {
   run: JobRun
   open: boolean
@@ -129,6 +130,9 @@ function RunCard({
   onOpenSession: (sessionId: string) => void
   onOpenRun: (runId: string) => void
   onDeleteRun: (runId: string) => void
+  /** 관리자가 사라진 Run 에 코디네이터를 다시 붙인다 — run-start 를 다시 부른다(그 명령의 뜻이
+   *  "이 Run 에 관리자가 있게 하라" 이고, 이미 있으면 아무것도 하지 않는다). */
+  onRestartCoordinator: (runId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const kind = runKind(run)
@@ -190,6 +194,25 @@ function RunCard({
           <RunIcon kind={kind} label={t(RUN_KIND_KEY[kind])} />
           {kind === 'running' && running > 0 ? <span>{running}</span> : null}
         </span>
+        {/* **관리자가 없다 — 다시 띄우는 버튼.** 앱이 스스로 되띄우지 않는 이유는 사람이 탭을
+            닫은 것을 결정으로 읽기 때문이다(Run.coordinatorSessionId 의 주석). 그러면 되돌릴 자리가
+            필요하고, 그 자리가 여기다: 코디네이터가 사라졌다는 사실이 가장 먼저 보이는 줄이 이 줄
+            이고(도는 것이 없어 보인다), 상세 창을 열어야 되돌릴 수 있다면 정확히 그 순간에 마찰이
+            생긴다 — 일시 중지 버튼이 이 줄에 있는 것과 같은 판단이다.
+            stopPropagation: 이 줄 자체가 접기·펴기다 */}
+        {run.coordinatorMissing && (
+          <button
+            className="jobs-more"
+            title={t('jobs.run.coordinatorRestartHint')}
+            aria-label={t('jobs.run.coordinatorRestart')}
+            onClick={(e) => {
+              e.stopPropagation()
+              onRestartCoordinator(run.id)
+            }}
+          >
+            <PlayIcon />
+          </button>
+        )}
         {/* 상세 창으로 가는 입구. **제목 줄에 있는 이유는 접기 때문이다** — 아래 한 줄은
             접으면 사라지는데, 접기는 세로를 아끼는 장치이지 유일한 문을 잠그는 장치가 아니다
             (같은 판단을 Gate 줄이 이미 하고 있다). 그리고 Run 이 쌓여 접어 두게 될 때가
@@ -339,7 +362,8 @@ function ScheduleCard({
   onOpenRun,
   onPauseRun,
   onResumeRun,
-  onDeleteRun
+  onDeleteRun,
+  onRestartCoordinator
 }: {
   run: JobRun
   open: boolean
@@ -353,6 +377,7 @@ function ScheduleCard({
   onPauseRun: (runId: string) => void
   onResumeRun: (runId: string) => void
   onDeleteRun: (runId: string) => void
+  onRestartCoordinator: (runId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const children = run.children ?? []
@@ -445,6 +470,7 @@ function ScheduleCard({
                 onOpenSession={onOpenSession}
                 onOpenRun={onOpenRun}
                 onDeleteRun={onDeleteRun}
+                onRestartCoordinator={onRestartCoordinator}
               />
             ))}
             {/* **누르면 늘어나는 수를 그대로 적는다.** "+12개 더" 라고 쓰고 5개만 늘리면 그 줄이
@@ -516,7 +542,8 @@ export function JobsView({
   onNewRun,
   onPauseRun,
   onResumeRun,
-  onDeleteRun
+  onDeleteRun,
+  onRestartCoordinator
 }: {
   snapshot: OrchSnapshot | null
   /** Whether the caller currently has a project open. snapshot alone cannot answer that — with no
@@ -550,6 +577,7 @@ export function JobsView({
   /** 이 Run 을 물러나게 한다(`run-delete`). **되돌릴 수 없다** — 확인은 이 뷰가 받고(지워지는 것을
    *  세어 보여 준다) 명령은 App 이 보낸다, onOpenRun 과 같은 갈래다. */
   onDeleteRun: (runId: string) => void
+  onRestartCoordinator: (runId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   // Runs the user collapsed. Absence means expanded — a Run that just appeared, or one from before this
@@ -632,6 +660,7 @@ export function JobsView({
             onPauseRun={onPauseRun}
             onResumeRun={onResumeRun}
             onDeleteRun={onDeleteRun}
+            onRestartCoordinator={onRestartCoordinator}
           />
         ) : (
           <RunCard
@@ -644,6 +673,7 @@ export function JobsView({
             onOpenSession={onOpenSession}
             onOpenRun={onOpenRun}
             onDeleteRun={onDeleteRun}
+            onRestartCoordinator={onRestartCoordinator}
           />
         )
       )}

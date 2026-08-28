@@ -572,6 +572,10 @@ export async function handleCommand(
       // 회차가 돈다(Run.schedule) — 붙이면 아무 Task 도 없는 Run 을 관리하는 세션이 떠서 할당량만
       // 쓴다. 회차는 `coordinatorAccountIds` 를 물려받으므로(spawnScheduledRun) 관리자는 그쪽에
       // 붙는다. worker-start 가 템플릿의 Task 를 거절하는 것과 같은 이유다.
+      // **이미 관리자가 있으면 아무것도 하지 않는다.** 이 명령은 사이드바의 '실행' 과 코디네이터를
+      // 다시 띄우는 버튼이 함께 쓴다 — 뜻은 "이 Run 에 관리자가 있게 하라" 이고, 두 번 눌러도 두
+      // 세션이 뜨지 않아야 한다.
+      if (target.coordinatorSessionId) return commit(started)
       const accountId = target.schedule ? undefined : target.coordinatorAccountId
       if (!accountId || !deps.startCoordinator) return commit(started)
       // **워크트리를 먼저 만든다.** 코디네이터를 띄운 뒤에 만들면 그 세션이 첫 명령을 부르는 사이에
