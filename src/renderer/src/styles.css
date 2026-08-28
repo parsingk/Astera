@@ -76,6 +76,48 @@
   font-style: normal;
   font-display: block;
 }
+@font-face {
+  font-family: 'Public Sans';
+  src: url('./assets/fonts/PublicSans/PublicSans-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Public Sans';
+  src: url('./assets/fonts/PublicSans/PublicSans-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Public Sans';
+  src: url('./assets/fonts/PublicSans/PublicSans-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Public Sans';
+  src: url('./assets/fonts/PublicSans/PublicSans-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('./assets/fonts/JetBrainsMono/JetBrainsMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('./assets/fonts/JetBrainsMono/JetBrainsMono-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: block;
+}
 
 /* Vega's palette, kept here as the fallback for when the theme provider does not run (bootTheme in
    renderer/lib/theme.tsx sets these same variables from the stored theme before the first paint). It is
@@ -736,7 +778,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    Chromium 에게 "어두운 쪽으로 그려라"라고 말하는 전부다.
    아이콘도 이것으로 밝아진다(실측). 그래서 filter: invert 로 뒤집던 방식을 버렸다 — 둘을 함께 쓰면
    이미 밝아진 아이콘을 다시 뒤집어 어두워진다.
-   여섯 테마가 모두 어두우므로(core/theme/themes.ts) dark 로 고정해도 테마와 어긋나지 않는다.
+   일곱 테마가 모두 어두우므로(core/theme/themes.ts) dark 로 고정해도 테마와 어긋나지 않는다.
    **주의**: 같은 선언이 number 스피너에는 듣지 않는다 — .jobs-concurrency 주석의 실측 그대로다.
    위젯마다 다르다는 뜻이고, 그래서 스피너는 없애고 이쪽은 이 선언을 쓴다. */
 .field input.sched-time { color-scheme: dark; }
@@ -813,7 +855,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* ---------- 모양 탭: 테마 카드 ---------- */
 .settings-theme { display: flex; flex-direction: column; gap: 8px; }
 .theme-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
-/* 카드는 자기 테마의 값으로 그린다(인라인 스타일) — 앱 토큰을 쓰면 여섯 장이 전부 같아 보인다.
+/* 카드는 자기 테마의 값으로 그린다(인라인 스타일) — 앱 토큰을 쓰면 일곱 장이 전부 같아 보인다.
    그래서 여기서는 색을 정하지 않고 배치만 정한다. */
 .theme-card { display: flex; flex-direction: column; gap: 8px; align-items: flex-start;
   padding: 10px; border: 1px solid; cursor: pointer; text-align: left; font-size: 12.5px; }
