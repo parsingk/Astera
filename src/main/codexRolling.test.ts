@@ -106,6 +106,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
     info: SessionInfo
     resumePrompt?: string
     resumeSessionId?: string
+    initialPrompt?: string
     orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
   }[]
   written: [string, string][]
@@ -119,6 +120,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
     info: SessionInfo
     resumePrompt?: string
     resumeSessionId?: string
+    initialPrompt?: string
     orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
   }[] = []
   const written: [string, string][] = []
@@ -141,6 +143,7 @@ function harness(overrides: Partial<CodexRollingDeps> = {}): {
         info,
         resumePrompt: opts.resumePrompt,
         resumeSessionId: opts.resumeSessionId,
+        initialPrompt: opts.initialPrompt,
         orchEnv: opts.orchEnv
       })
       events.push(`spawn:${info.id}:${opts.account.id}`)
@@ -342,6 +345,99 @@ describe('CodexRollingCoordinator', () => {
     expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
     expect(h.spawned[0].resumePrompt).toBe('이어서 작업 진행해 줘')
     h.coord.stop()
+  })
+
+  // Task 3 (Phase 2c): resumeStrategy 가 'smart' 이고 브리핑을 실제로 만들 수 있을 때만 백지
+  // 재개다 — rollout 복사도 `--resume` 도 하지 않고 새 codex 프로세스를 브리핑 하나만 들려 띄운다.
+  // 브리핑을 못 만들면(dep 이 없거나 null 을 돌리면) 이 스위치가 켜져 있어도 오늘의 경로 그대로다
+  // (계획의 지배 제약). resumePrompt 가 아니라 initialPrompt 로 싣는 이유는 spawn dep 의 JSDoc 참고
+  // — resumePrompt 는 `codex resume <id>` 뒤에만 붙는 인자라 resumeSessionId 없이는 조용히
+  // 버려진다(commands.ts 의 buildCodexCommand).
+  describe('Smart Resume — 백지 재개', () => {
+    it('전략이 smart 이고 브리핑이 있으면 복사 없이 --resume 없이 백지로 띄운다', async () => {
+      const h = harness({
+        resumeStrategy: () => 'smart',
+        resumeText: () => Promise.resolve('BRIEFING TEXT')
+      })
+      const file = await writeRollout({ accountId: 'c1', uuid: 'cx-smart-1', cwd: h.info1.cwd, primary: 95 })
+      h.coord.register(h.info1)
+      await advance(1_500) // 매핑 폴링
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      await advance(100)
+      expect(h.copied).toEqual([])
+      expect(h.events).toEqual(['kill:s1', 'spawn:s2:c2']) // 'copy' 가 없다
+      expect(h.spawned.at(-1)?.resumeSessionId).toBeUndefined()
+      expect(h.spawned.at(-1)?.resumePrompt).toBeUndefined()
+      expect(h.spawned.at(-1)?.initialPrompt).toBe('BRIEFING TEXT')
+      h.coord.stop()
+    })
+
+    // 이 테스트가 계획의 지배 제약("브리핑을 만들 수 없으면 백지 재개를 하지 않는다")을 지키는 자리다.
+    it('전략이 smart 이어도 브리핑이 null 이면 기존 경로로 롤한다', async () => {
+      const h = harness({
+        resumeStrategy: () => 'smart',
+        resumeText: () => Promise.resolve(null)
+      })
+      const file = await writeRollout({ accountId: 'c1', uuid: 'cx-smart-2', cwd: h.info1.cwd, primary: 95 })
+      h.coord.register(h.info1)
+      await advance(1_500)
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      await advance(100)
+      expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+      expect(h.copied[0]?.src).toBe(file)
+      expect(h.spawned.at(-1)?.resumeSessionId).toBe('cx-smart-2')
+      expect(h.spawned.at(-1)?.initialPrompt).toBeUndefined()
+      h.coord.stop()
+    })
+
+    it('전략이 original 이면 브리핑이 있어도 기존 경로로 롤한다', async () => {
+      const h = harness({
+        resumeStrategy: () => 'original',
+        resumeText: () => Promise.resolve('BRIEFING TEXT')
+      })
+      const file = await writeRollout({ accountId: 'c1', uuid: 'cx-smart-3', cwd: h.info1.cwd, primary: 95 })
+      h.coord.register(h.info1)
+      await advance(1_500)
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      await advance(100)
+      expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+      expect(h.spawned.at(-1)?.resumeSessionId).toBe('cx-smart-3')
+      expect(h.spawned.at(-1)?.resumePrompt).toBe('BRIEFING TEXT')
+      expect(h.spawned.at(-1)?.initialPrompt).toBeUndefined()
+      h.coord.stop()
+    })
+
+    it('백지 재개 뒤에는 신원 필드가 비어, 재-locate 전 두 번째 한도가 옛 rollout 을 복사하지 않는다', async () => {
+      const h = harness({
+        resumeStrategy: () => 'smart',
+        resumeText: () => Promise.resolve('BRIEFING TEXT')
+      })
+      const file = await writeRollout({ accountId: 'c1', uuid: 'cx-smart-4', cwd: h.info1.cwd, primary: 95 })
+      h.coord.register(h.info1)
+      await advance(1_500)
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      await advance(100)
+      expect(h.copied).toEqual([]) // 백지 재개 자체는 아무것도 복사하지 않는다
+      const newLiveId = h.spawned.at(-1)?.info.id
+      expect(newLiveId).toBeDefined()
+      const spawnedBefore = h.spawned.length
+      // 관측 방법: 새 rollout 파일은 아직 없다(재-locate 가 아직 끝나지 않았다). 이 상태에서 옛
+      // (버려진) 파일에 두 번째 한도 기록을 남기고 새 liveId 로 같은 문구를 흘려 본다. 신원 필드
+      // (codexSessionId·rolloutPath·tail)가 정말 비었다면 이 체인은 더 이상 그 파일을 tail 하지
+      // 않으므로(tick 은 tail 이 없는 체인을 건너뛴다 — private tick()) 아무 것도 복사되거나 다시
+      // spawn 되지 않는다. 지워지지 않았다면 옛 tail 이 살아 있어 이 기록을 판정하고 그 파일을
+      // 복사했을 것이다.
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: newLiveId!, data: LIMIT_TEXT })
+      await advance(15_000) // tick 한 바퀴 — 매핑 타임아웃(60초)에는 못 미친다
+      expect(h.copied).toEqual([])
+      expect(h.spawned.length).toBe(spawnedBefore)
+      h.coord.stop()
+    })
   })
 
   it('롤로 띄운 세션에 orchEnv를 실어 보낸다', async () => {

@@ -3,7 +3,7 @@
 // it is far shorter because none of the statusLine-specific problems (a stale snapshot, readiness
 // polling, auto-accepting trust) apply. Every side effect is injected through deps — it does not depend
 // on electron, so it is verified with vitest. The wiring is in ipc.ts and index.ts.
-import type { Account, RollStateEvent, SessionInfo } from '../core/types'
+import type { Account, ResumeStrategy, RollStateEvent, SessionInfo } from '../core/types'
 import type { RollConfig } from '../core/rolling/config'
 import { RollCycle } from '../core/rolling/cycle'
 import {
@@ -57,6 +57,12 @@ export interface CodexRollingDeps {
     cwd: string
     resumeSessionId?: string
     resumePrompt?: string
+    /** 백지 재개(Smart Resume)로 새 세션을 띄울 때 실을 첫 프롬프트. `resumePrompt` 와 달리
+     *  `resumeSessionId` 없이도 CLI 인자로 실린다 — `resumePrompt` 는 `codex resume <id>` 뒤에만
+     *  붙는 인자라서(core/sessions/commands.ts 의 buildCodexCommand) resumeSessionId 가 없으면
+     *  조용히 버려진다. orchestration 이 새 Job 워커를 띄울 때 첫 프롬프트를 싣는 것과 같은 경로
+     *  (initialPrompt)를 백지 재개에도 그대로 쓴다. */
+    initialPrompt?: string
     rollAccountIds?: string[]
     slackNotify?: boolean
     bypassPermissions?: boolean
@@ -108,6 +114,13 @@ export interface CodexRollingDeps {
    *  띄우므로 'handover' 이고(roll), 같은 계정으로 이어가는 재개는 세션을 살려 두므로 'update' 다
    *  (resumeInPlace). 가르는 기준은 `SPEC §11.5` 하나 — 그 경로가 `--resume` 을 부르는가다. */
   resumeText?(sessionId: string, form: 'handover' | 'update'): Promise<string | null>
+  /** 한도에 걸린 세션을 어떻게 이어갈지 — Task 1 의 설정값. **getter 로 받는다** — `orchEnv?` 와
+   *  같은 이유다: 값이 설정 화면에서 앱 수명 중간에 바뀌고, 이 코디네이터는 그 값이 존재하기 전에
+   *  만들어진다. 주입되지 않으면 `'original'`(기존 동작)로 본다.
+   *
+   *  `'smart'` 라고 곧바로 백지 재개가 되는 것은 아니다 — `resumeText` 가 브리핑을 만들어 줄 때만
+   *  적용된다(계획의 지배 제약: 브리핑을 못 만들면 백지 재개를 하지 않는다). `roll()` 을 보라. */
+  resumeStrategy?(): ResumeStrategy
 }
 
 interface Chain {
@@ -184,11 +197,13 @@ export class CodexRollingCoordinator {
   private readonly copy: (src: string, dest: string) => Promise<void>
   private readonly rolloutSize: (filePath: string) => Promise<number | null>
   private readonly now: () => number
+  private readonly resumeStrategy: () => ResumeStrategy
 
   constructor(private deps: CodexRollingDeps) {
     this.copy = deps.copy ?? copyTranscript
     this.rolloutSize = deps.rolloutSize ?? rolloutSize
     this.now = deps.now ?? Date.now
+    this.resumeStrategy = deps.resumeStrategy ?? (() => 'original')
   }
 
   /** Called by ipc right after spawning a codex session that has rollAccountIds. One id means single-account auto-resume.
@@ -273,6 +288,18 @@ export class CodexRollingCoordinator {
     for (const chain of this.chains.values())
       if (!chain.disposed && chain.codexSessionId === codexSessionId) return chain.liveInfo
     return null
+  }
+
+  /** The rollout file this live session is currently tailing, or null when it is not part of an active
+   *  chain, or the chain has not mapped one yet (unmapped / mid-locate).
+   *
+   *  **Why this exists.** codex has no statusLine, so ipc.ts's tab-resume fallback (tabResumeTextFor) —
+   *  which reads a claude session's conversation path from the statusLine capture file — has nothing to
+   *  read for codex. This coordinator is the only side that ever learns the path at all (it finds it by
+   *  scanning the filesystem: findRollout/attachRollout), so it is the only side that can answer. */
+  rolloutPathFor(sessionId: string): string | null {
+    const chain = this.chains.get(sessionId)
+    return chain && !chain.disposed ? chain.rolloutPath : null
   }
 
   handleData(e: { sessionId: string; data: string }): void {
@@ -691,21 +718,26 @@ export class CodexRollingCoordinator {
    *  결정해도 되는 것은 인계 문장의 내용까지고, 가드가 없으면 대신 소진된 계정에 앉은 채 재시도
    *  간격(리셋 시각, 모르면 15분)을 한 번 더 기다린다 — 그것이 이 함수가 막는 실제 대가다.
    *  resumeText 는 던지지 않는다는 계약이지만(resumePacket.ts) 그 계약이 깨질 때 잃는 것이 이만큼
-   *  크므로 로그를 남기고 기존 고정 문장으로 저하한다. rolling.ts 의 같은 이름 함수와 같은 모양이다. */
+   *  크므로 로그를 남기고 기존 고정 문장으로 저하한다. rolling.ts 의 같은 이름 함수와 같은 모양이다.
+   *
+   *  **`briefed` 를 함께 돌려주는 이유.** `text` 가 `null`/`undefined` 면 이 함수는 `chain.prompt` 로
+   *  저하하므로, 돌려주는 문자열 하나만으로는 호출한 쪽이 "브리핑이 있었는가"를 알 수 없다 — 실패해서
+   *  고정 문장이 된 것과 원래 고정 문장을 쓰려 한 것이 같은 모양이 되어 버린다. `roll()` 은 바로 그
+   *  사실로 백지 재개 여부를 가른다(계획의 지배 제약: 브리핑을 못 만들면 백지 재개를 하지 않는다). */
   private async resumePromptFor(
     chain: Chain,
     liveId: string,
     form: 'handover' | 'update'
-  ): Promise<string> {
+  ): Promise<{ prompt: string; briefed: boolean }> {
     try {
       const text = await this.deps.resumeText?.(liveId, form)
-      if (text === null || text === undefined) return chain.prompt
-      return form === 'update' ? `${chain.prompt} ${text}` : text
+      if (text === null || text === undefined) return { prompt: chain.prompt, briefed: false }
+      return { prompt: form === 'update' ? `${chain.prompt} ${text}` : text, briefed: true }
     } catch (err) {
       this.deps.log(
         `resume packet hook failed session=${liveId}: ${err instanceof Error ? err.message : String(err)}`
       )
-      return chain.prompt
+      return { prompt: chain.prompt, briefed: false }
     }
   }
 
@@ -799,7 +831,7 @@ export class CodexRollingCoordinator {
       const sizeBefore = chain.rolloutPath
         ? await this.rolloutSize(chain.rolloutPath).catch(() => null)
         : null
-      const prompt = await this.resumePromptFor(chain, liveId, 'update')
+      const { prompt } = await this.resumePromptFor(chain, liveId, 'update')
       if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
       const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same convention as the claude side
       this.deps.write(liveId, prompt)
@@ -932,7 +964,9 @@ export class CodexRollingCoordinator {
     )
   }
 
-  /** Runs the roll: copy the rollout → kill → respawn in the same slot with codex resume */
+  /** Runs the roll: copy the rollout → kill → respawn in the same slot with codex resume. When Smart
+   *  Resume is on and a briefing was built, the copy and the `--resume` are skipped instead — the new
+   *  session starts blank, carrying only the briefing (see the `smart` branch below). */
   private async roll(chain: Chain, toIndex: number): Promise<void> {
     if (chain.rolling || chain.disposed) return
     chain.rolling = true
@@ -950,36 +984,49 @@ export class CodexRollingCoordinator {
         return
       }
       const codexSessionId = chain.codexSessionId // pinned before the awaits below — attachRollout needs it non-null
+      const srcRolloutPath = chain.rolloutPath // pinned for the same reason — a blank-slate roll clears chain.rolloutPath before this function reads it again
       this.pushState(chain, 'switching', { accountLabel: target.label })
-      // ① The copy — a codex blocked by a limit is idle, so there is no write contention
-      const dest = codexHistoryStrategy.mapTargetPath(chain.rolloutPath, target.configDir)
-      await this.copy(chain.rolloutPath, dest)
-      // If the app shut down (stop) or the tab was closed (handleExit) while we waited on the copy, stop
-      // here — what follows is kill+spawn, and going on with a disposed chain leaves a zombie codex process
-      // and resurrected timers behind
-      if (chain.disposed) {
-        this.deps.log(`codex roll aborted — chain disposed during the copy session=${chain.liveId}`)
-        return
-      }
       // resumeText 는 spec 파일에 쓰는 부수 효과가 있는 await 이므로, kill 과 재키잉 사이에는 두지
       // 않는다 — 그 구간에 await 를 두지 않는다는 것이 아래 kill/spawn 의 불변이다(exit 가 옛 id 로
       // 도착해도 disposeChain 이 오작동하지 않는 이유). 그래서 kill 앞에서, 세션이 아직 살아 있을
-      // 때 물어 둔다.
-      const prompt = await this.resumePromptFor(chain, chain.liveId, 'handover')
+      // 때 물어 둔다. **그리고 이제 복사보다도 앞에 있다** — 복사할지 말지(백지 재개인지)를 정하려면
+      // 브리핑이 있는지를 먼저 알아야 하기 때문이다.
+      const { prompt, briefed } = await this.resumePromptFor(chain, chain.liveId, 'handover')
       if (chain.disposed) {
         this.deps.log(
           `codex roll aborted — chain disposed while building the resume prompt session=${chain.liveId}`
         )
         return
       }
-      // ② kill → ③ respawn in the same slot. The prompt is a CLI argument, so there is no PTY typing
+      // Smart Resume: 설정이 켜져 있고 브리핑이 실제로 있을 때만 백지 재개다. 브리핑을 못 만들면
+      // (!briefed) 이 스위치가 켜져 있어도 적용하지 않는다 — 계획의 지배 제약이고, 그 경우 아래는
+      // 오늘과 같은 경로(복사 + `--resume`)를 그대로 지난다.
+      const smart = this.resumeStrategy() === 'smart' && briefed
+      let dest: string | undefined
+      if (!smart) {
+        // ① The copy — a codex blocked by a limit is idle, so there is no write contention
+        dest = codexHistoryStrategy.mapTargetPath(srcRolloutPath, target.configDir)
+        await this.copy(srcRolloutPath, dest)
+        // If the app shut down (stop) or the tab was closed (handleExit) while we waited on the copy, stop
+        // here — what follows is kill+spawn, and going on with a disposed chain leaves a zombie codex process
+        // and resurrected timers behind
+        if (chain.disposed) {
+          this.deps.log(`codex roll aborted — chain disposed during the copy session=${chain.liveId}`)
+          return
+        }
+      }
+      // ② kill → ③ respawn in the same slot. The prompt is a CLI argument, so there is no PTY typing.
+      // A blank-slate roll passes neither resumeSessionId nor resumePrompt — the new process is a fresh
+      // `codex`, not a `codex resume`, and the briefing rides as initialPrompt instead (see the spawn dep's
+      // JSDoc for why resumePrompt alone would be silently dropped here).
       this.deps.kill(chain.liveId)
       const oldId = chain.liveId
       const info = this.deps.spawn({
         account: target,
         cwd: chain.cwd,
-        resumeSessionId: chain.codexSessionId,
-        resumePrompt: prompt,
+        resumeSessionId: smart ? undefined : codexSessionId,
+        resumePrompt: smart ? undefined : prompt,
+        initialPrompt: smart ? prompt : undefined,
         rollAccountIds: chain.accountIds,
         slackNotify: chain.liveInfo.slackNotify, // the Slack notification is kept per chain (mirrors rolling.ts)
         bypassPermissions: chain.liveInfo.bypassPermissions,
@@ -995,13 +1042,37 @@ export class CodexRollingCoordinator {
       chain.modelChoice = new CodexModelChoiceScanner() // same reason — a half-drawn prompt must not join the new session's output
       chain.cycle.advanceTo(toIndex)
       this.chains.set(info.id, chain)
-      // The respawned codex resumes, so it appends to dest rather than creating a new rollout — there is
-      // nothing to search for, and searching was exactly what broke here (see attachRollout). dest holds
-      // the old account's rate_limits, which is why attachRollout starts the tail at the end.
-      this.attachRollout(chain, codexSessionId, dest)
+      if (dest !== undefined) {
+        // The respawned codex resumes, so it appends to dest rather than creating a new rollout — there is
+        // nothing to search for, and searching was exactly what broke here (see attachRollout). dest holds
+        // the old account's rate_limits, which is why attachRollout starts the tail at the end.
+        this.attachRollout(chain, codexSessionId, dest)
+      } else {
+        // 백지 재개 — 새 세션은 다른 대화다. 신원 필드를 비운다: 비우지 않으면 다음 롤이 지금 일부러
+        // 두고 온 이 rollout 을 복사한다("백지 재개에서 반드시 지워야 하는 것"). priorReset·
+        // priorAsked 도 함께 비운다 — attachRollout 이 정상 롤에서 같은 이유로 같은 일을 한다: 남겨
+        // 두면 이 세션이 자기 rate_limits 를 한 번도 쓰기 전에 judgedByPriorBlock 이 지금 버린
+        // 대화의 기록으로 판정해 버린다. unmappedWarned·preemptWarned 도 새 unmapped 에피소드가
+        // 자기 로그를 낼 수 있도록 되돌린다. 새 rollout 은 아직 존재하지 않는 파일이므로 register()
+        // 의 fresh-spawn 경로와 같은 방법으로 다시 찾는다 — 그 전까지는 unmapped 상태이므로 onLimit
+        // 은 복사 없이 스스로 멈추고(대기를 예약하고) 재-locate 가 끝나야 다음 한도를 판정할 수 있다.
+        chain.codexSessionId = null
+        chain.rolloutPath = null
+        chain.tail = null
+        chain.priorReset = undefined
+        chain.priorAsked = false
+        chain.unmappedWarned = false
+        chain.preemptWarned = false
+        this.startLocate(chain, target)
+        this.deps.log(
+          `codex smart resume — rolled ${oldId} into a blank-slate session ${info.id} account=${target.label}`
+        )
+      }
       // dest is sent along too, so the CodexRolloutWatcher re-registration (index.ts) can drop this copy from
       // its candidates. CoreEvents['session:rolled'] does not declare this field, but send()'s payload is
-      // unknown so the extra field rides along safely — the renderer just ignores it.
+      // unknown so the extra field rides along safely — the renderer just ignores it. On a blank-slate roll
+      // dest is undefined — there is no known rollout yet, and the watcher's own registration already
+      // falls back to searching for one, the same as it does for any ordinary fresh spawn.
       this.deps.send('session:rolled', { oldSessionId: oldId, info, dest })
       this.pushState(chain, 'switching', { accountLabel: target.label, reattach: true })
       this.deps.log(`codex rolled ${oldId} → ${info.id} account=${target.label}`)
