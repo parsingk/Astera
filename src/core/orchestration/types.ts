@@ -27,6 +27,22 @@ export interface Run {
   createdAt: string
   /** 동시에 열어 둘 Dispatch 수. 없으면 DEFAULT_CONCURRENCY. */
   concurrency?: number
+  /** 이 Run 을 관리할 **코디네이터 세션**을 띄울 계정들, 순서대로.
+   *
+   *  **워커 계정과 층이 다르다.** 워커 계정은 Task 가 정하고(`Task.accountIds`), 이것은 그
+   *  Task 들을 돌리는 세션의 것이다. 목록인 이유는 Task 와 같다 — 코디네이터도 에이전트라 한도에
+   *  걸리고, 그때 갈아탈 순서가 필요하다. 목록 안에서 provider 가 섞이면 안 되는 것도 같다.
+   *
+   *  **없으면 코디네이터 없이 앱이 돌린다** — 이 칸이 생기기 전의 동작이고, 사이드바에서 계정을
+   *  비워 둔 Run 도 그 갈래다. 그때 워커의 질문을 풀어 주는 것은 앱의 그물이다(inbox.ts). */
+  coordinatorAccountIds?: string[]
+  /** 지금 이 Run 을 관리하고 있는 세션. **깨우기·되띄우기·안전망이 모두 이 칸의 유무로 판단한다** —
+   *  "답할 사람이 있는가" 를 묻는 유일한 자리다. 세션이 사라지면 배선이 이 칸을 지운다. */
+  coordinatorSessionId?: string
+  /** 코디네이터가 **연속으로** 사라진 횟수. 되띄우기를 그치는 근거이고, `Task.consecutiveFailures`
+   *  와 같은 꼴이다 — 무한히 되띄우면 로그인이 끊긴 계정으로 세션을 끝없이 만든다. 코디네이터가
+   *  한 번이라도 붙으면 0 으로 돌아간다. */
+  coordinatorFailures?: number
   /** 앱이 이 Run 을 스스로 돌리는가. **UI 가 만든 Run 에만 참이다** — 코디네이터가 만든 Run 을
    *  앱이 함께 돌리면 둘이 같은 ready Task 를 두고 경합하고, 진 쪽(대개 코디네이터)의
    *  worker-start 가 `dispatch already open` 을 받는다. 코디네이터 LLM 에게는 자기 명령이 이유

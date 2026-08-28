@@ -2747,6 +2747,115 @@ describe('run-spawn — 예약 회차', () => {
 
 })
 
+describe('run-start — 코디네이터 인계', () => {
+  /** startCoordinator 를 기록하는 deps. 계정은 claude 둘 + codex 하나. */
+  const coordDeps = (
+    over: Partial<OrchServerDeps> = {}
+  ): OrchServerDeps & { state: OrchState; spawned: { runId: string; prompt: string }[] } => {
+    const spawned: { runId: string; prompt: string }[] = []
+    const base = Object.assign(makeDeps(), {
+      listAccounts: () => [
+        { id: 'cl1', label: 'claude1', provider: 'claude' as const },
+        { id: 'cl2', label: 'claude2', provider: 'claude' as const },
+        { id: 'cx1', label: 'codex1', provider: 'codex' as const }
+      ],
+      startCoordinator: async (a: { runId: string; prompt: string }) => {
+        spawned.push({ runId: a.runId, prompt: a.prompt })
+        return { sessionId: 'coord-sess' }
+      },
+      ...over
+    })
+    return Object.assign(base, { spawned }) as never
+  }
+
+  const mkRun = async (
+    deps: OrchServerDeps,
+    args: Record<string, unknown> = {}
+  ): Promise<string> => {
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true, ...args })
+    return (r.body as { id: string }).id
+  }
+
+  it('코디네이터 계정이 있으면 실행이 코디네이터를 띄우고 운전자를 넘긴다', async () => {
+    const deps = coordDeps()
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1,cl2' })
+    const r = await call(deps, 'run-start', { run: runId })
+    expect(r.status).toBe(200)
+    expect(deps.spawned.map((x) => x.runId)).toEqual([runId])
+    const run = deps.getState().runs.find((x) => x.id === runId)!
+    expect(run.coordinatorSessionId).toBe('coord-sess')
+    // **운전자를 넘기는 방식이 autoDispatch 를 지우는 것이다** — 켜 둔 채로 코디네이터를 붙이면
+    // 둘이 같은 ready Task 를 두고 경합한다(Run.autoDispatch 의 주석)
+    expect(run).not.toHaveProperty('autoDispatch')
+    expect(run).not.toHaveProperty('pendingStart')
+  })
+
+  it('인수 프롬프트에 그 Run 의 한도와 Task 수가 실린다', async () => {
+    const deps = coordDeps()
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1', concurrency: 2 })
+    await call(deps, 'task-create', { account: 'cl1', runId, spec: 'a' })
+    await call(deps, 'run-start', { run: runId })
+    const prompt = deps.spawned[0].prompt
+    expect(prompt).toContain(runId)
+    expect(prompt).toContain('CONCURRENCY IS 2')
+    expect(prompt).toContain('tasks already defined: 1')
+  })
+
+  it('코디네이터 계정이 없으면 띄우지 않고 앱이 계속 돌린다 — 옛 동작', async () => {
+    const deps = coordDeps()
+    const runId = await mkRun(deps)
+    expect((await call(deps, 'run-start', { run: runId })).status).toBe(200)
+    expect(deps.spawned).toEqual([])
+    const run = deps.getState().runs.find((x) => x.id === runId)!
+    expect(run.autoDispatch).toBe(true)
+    expect(run).not.toHaveProperty('coordinatorSessionId')
+  })
+
+  it('배선이 그 기능을 주입하지 않으면 띄우지 않는다', async () => {
+    const deps = coordDeps({ startCoordinator: undefined })
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
+    expect((await call(deps, 'run-start', { run: runId })).status).toBe(200)
+    expect(deps.getState().runs[0].autoDispatch).toBe(true)
+  })
+
+  // 걷어 버리면 실행 버튼이 사라져 사람이 다시 누를 수 없고, 운전자도 없는 Run 이 남는다
+  it('코디네이터 띄우기가 실패하면 아무것도 바뀌지 않는다 — pendingStart 가 남는다', async () => {
+    const deps = coordDeps({
+      startCoordinator: async () => {
+        throw new Error('no session')
+      }
+    })
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
+    const r = await call(deps, 'run-start', { run: runId })
+    expect(r.status).toBe(400)
+    const run = deps.getState().runs.find((x) => x.id === runId)!
+    expect(run.pendingStart).toBe(true)
+    expect(run.autoDispatch).toBe(true)
+    expect(run).not.toHaveProperty('coordinatorSessionId')
+  })
+
+  it('--coordinator-account 는 섞인 provider 를 거절한다 — 코디네이터도 한 CLI 다', async () => {
+    const deps = coordDeps()
+    const r = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      coordinatorAccount: 'cl1,cx1'
+    })
+    expect(r.status).toBe(400)
+    expect(String((r.body as { error?: string }).error)).toContain('must not mix providers')
+  })
+
+  it('--coordinator-account 는 모르는 계정을 거절한다', async () => {
+    const deps = coordDeps()
+    const r = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      coordinatorAccount: 'nope'
+    })
+    expect(r.status).toBe(400)
+  })
+})
+
 describe('run-start — 사람이 실행을 누를 때까지 기다린다', () => {
   it('run-create --auto 는 pendingStart 를 함께 켠다', async () => {
     const deps = makeDeps()

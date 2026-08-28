@@ -23,6 +23,7 @@ import {
   deleteRuns,
   spawnScheduledRun,
   startRun,
+  attachCoordinator,
   pauseSchedule,
   resumeSchedule,
   setRunWorktree,
@@ -32,6 +33,7 @@ import {
 import {
   DEFAULT_ASK_TIMEOUT_MS,
   DEFAULT_CHECK_TIMEOUT_MS,
+  DEFAULT_CONCURRENCY,
   FAILURE_LIMIT,
   canTransition,
   recomputeReady,
@@ -41,6 +43,7 @@ import {
   type TaskStatus
 } from '../../core/orchestration/types'
 import { runWorktrees } from '../../core/orchestration/integrate'
+import { buildHandoverPrompt } from '../../core/orchestration/handover'
 import type { Provider } from '../../core/providers/meta'
 import { isValidRule, type ScheduleRule } from '../../core/scheduler/rule'
 
@@ -108,6 +111,18 @@ export interface OrchServerDeps {
    *  도는 세션을 닫는 일까지 배선이 한다(removeWorktree 의 isPathInUse 가 그러지 않으면 거절한다).
    *  실패한 경로는 돌려준다 — 삭제를 막지는 않지만 응답에 실어 사람이 알 수 있게 한다. */
   removeWorktrees?(paths: string[]): Promise<{ failed: string[] }>
+  /** 이 Run 을 관리할 코디네이터 세션을 띄운다. **`startWorker` 와 같은 꼴이다** — 배선이 채우고,
+   *  세션 프로세스만 만들고 OrchState 는 건드리지 않는다(서버가 상태를 소유한다). 첫 입력으로
+   *  인수 프롬프트를 받는다(core/orchestration/handover.ts).
+   *
+   *  주입되지 않으면 코디네이터를 띄우지 않는다 — `probeLimit`·`removeWorktrees` 와 같은 관례이고,
+   *  그때 Run 은 앱이 돌린다(옛 동작). */
+  startCoordinator?(a: {
+    runId: string
+    cwd: string
+    accountIds: string[]
+    prompt: string
+  }): Promise<{ sessionId: string }>
   listAccounts(provider?: Provider): { id: string; label: string; provider: Provider }[]
   readWorker(a: { dispatchId: string; limit?: number }): Promise<string>
   enabled(): boolean
@@ -250,6 +265,34 @@ async function pollUntil<T>(
   }
 }
 
+/** 쉼표로 온 계정 목록을 읽고 거절할 이유를 낸다. `null` 이면 통과다.
+ *
+ *  **두 자리가 같은 규칙을 쓴다** — Task 의 `--account`(그 Task 의 워커)와 Run 의
+ *  `--coordinator-account`(그 Run 의 관리자). 층은 다르지만 규칙은 같다: 실재하는 계정이어야
+ *  하고, 한 목록 안에서 provider 가 섞이면 안 되고(첫 계정이 provider 를 정하고 나머지는 갈아탈
+ *  순서다), 빈 칸과 중복은 손이 미끄러진 것이다. 규칙을 두 번 적으면 한쪽만 고쳐지는 날이 온다. */
+function parseAccountList(
+  raw: string,
+  known: { id: string; provider: Provider }[],
+  flag: string
+): { ok: true; ids: string[] } | { ok: false; reason: string } {
+  const parts = raw.split(',').map((x) => x.trim())
+  if (parts.some((x) => x === '')) return { ok: false, reason: `${flag} must not contain an empty entry` }
+  const dup = parts.find((x, i) => parts.indexOf(x) !== i)
+  if (dup !== undefined) return { ok: false, reason: `${flag} lists ${dup} twice` }
+  const unknown = parts.find((x) => !known.some((k) => k.id === x))
+  if (unknown !== undefined) return { ok: false, reason: `unknown account: ${unknown}` }
+  const providerOfId = (id: string): Provider => known.find((k) => k.id === id)!.provider
+  const head = providerOfId(parts[0])
+  const odd = parts.find((x) => providerOfId(x) !== head)
+  if (odd !== undefined)
+    return {
+      ok: false,
+      reason: `${flag} must not mix providers: ${parts[0]} is ${head}, ${odd} is ${providerOfId(odd)}`
+    }
+  return { ok: true, ids: parts }
+}
+
 export async function handleCommand(
   deps: OrchServerDeps,
   caller: { sessionId: string },
@@ -302,6 +345,16 @@ export async function handleCommand(
       const concurrency = args.concurrency === undefined ? null : posInt(args.concurrency)
       if (args.concurrency !== undefined && concurrency === null)
         return bad('--concurrency must be an integer >= 1')
+      // 이 Run 을 관리할 코디네이터 세션의 계정들. **없으면 코디네이터를 띄우지 않는다** — 그때는
+      // 앱이 돌리고(옛 동작), 워커의 질문은 앱의 그물이 풀어 준다(inbox.ts). 그 갈림을 조용히
+      // 두지 않고 UI 가 힌트로 말한다.
+      const coordArg = str(args.coordinatorAccount)
+      let coordinatorAccountIds: string[] | undefined
+      if (coordArg !== null) {
+        const parsed = parseAccountList(coordArg, deps.listAccounts(), '--coordinator-account')
+        if (!parsed.ok) return bad(parsed.reason)
+        coordinatorAccountIds = parsed.ids
+      }
       // 예약. **규칙만 받는다**(command 없는 반쪽) — Job 에는 타이핑할 명령이 없다(Run.schedule).
       // 지역 변수로 좁히는 이유는 타입이다: `if (a && !guard) return` 은 블록 밖에서 좁혀지지 않는다.
       let schedule: ScheduleRule | undefined
@@ -353,6 +406,7 @@ export async function handleCommand(
             objective,
             cwd,
             ...(concurrency !== null ? { concurrency } : {}),
+            ...(coordinatorAccountIds ? { coordinatorAccountIds } : {}),
             // `--auto` 는 값이 없는 플래그다(task-create --review 와 같은 모양). **예약이면 켜지
             // 않는다** — 템플릿은 자신이 돌지 않고, 발화가 만든 자식 Run 이 돈다(그 자식은
             // spawnScheduledRun 이 autoDispatch 를 켠다).
@@ -486,7 +540,46 @@ export async function handleCommand(
     case 'run-start': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
-      return commit(startRun(s, id))
+      const target = s.runs.find((r) => r.id === id)
+      if (!target) return bad(`unknown run: ${id}`)
+      const started = startRun(s, id)
+      if (!started.ok) return bad(started.error)
+      // **코디네이터를 띄울 수 있으면 띄우고, 이 Run 의 운전자를 그에게 넘긴다.** 넘기는 방식이
+      // `autoDispatch` 를 끄는 것이다 — 한 Run 에 운전자는 하나이고, 켜 둔 채로 코디네이터를
+      // 붙이면 둘이 같은 ready Task 를 두고 경합한다(Run.autoDispatch 의 주석).
+      //
+      // 계정 지정이 없거나 배선이 이 기능을 주입하지 않으면 옛 동작이다: 앱이 돌리고, 워커의
+      // 질문은 앱의 그물이 풀어 준다(core/orchestration/inbox.ts).
+      const accountIds = target.coordinatorAccountIds
+      if (!accountIds?.length || !deps.startCoordinator) return commit(started)
+      let sessionId: string
+      try {
+        const spawned = await deps.startCoordinator({
+          runId: id,
+          cwd: target.cwd,
+          accountIds,
+          prompt: buildHandoverPrompt({
+            runId: id,
+            objective: target.objective,
+            concurrency: target.concurrency ?? DEFAULT_CONCURRENCY,
+            taskCount: s.tasks.filter((t) => t.runId === id).length
+          })
+        })
+        sessionId = spawned.sessionId
+      } catch (e) {
+        // **`pendingStart` 를 그대로 둔다.** 걷어 버리면 실행 버튼이 사라져 사람이 다시 누를 수
+        // 없고, 운전자도 없는 Run 이 남는다 — 아무것도 돌지 않는데 화면은 시작한 것처럼 보인다.
+        // 그래서 이 실패는 상태를 하나도 바꾸지 않는다.
+        return bad(`could not start the coordinator: ${String(e)}`)
+      }
+      // autoDispatch 는 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이
+      // 코드베이스는 해당 없는 칸을 두지 않는다(startRun 이 pendingStart 를 지우는 것과 같다).
+      const handed = started.state.runs.map((r) => {
+        if (r.id !== id) return r
+        const { autoDispatch: _drop, ...rest } = r
+        return rest
+      })
+      return commit(attachCoordinator({ ...started.state, runs: handed }, { runId: id, sessionId }))
     }
     case 'run-pause': {
       const id = str(args.run)
@@ -605,37 +698,11 @@ export async function handleCommand(
       // 쉼표가 없으므로 그대로 흐른다.
       const accountArg = str(args.account)
       if (accountArg === null) return bad('--account is required')
-      let accountIds: string[] | undefined
-      {
-        const parts = accountArg.split(',').map((x) => x.trim())
-        // 빈 칸을 조용히 버리지 않고 거절한다 — `a,,b` 나 `a,` 는 손이 미끄러진 것이고, 버리면
-        // 사람이 적은 것과 도는 것이 달라진다. 그것을 알 방법은 화면에 없다.
-        if (parts.some((x) => x === '')) return bad('--account must not contain an empty entry')
-        const dup = parts.find((x, i) => parts.indexOf(x) !== i)
-        // 중복을 거절하는 이유: 같은 계정이 두 칸이면 RollCycle 은 두 계정인 줄 알고 한 바퀴를 세고,
-        // "갈아탄" 결과가 같은 계정이 된다. 판정 쪽에서도 접지만(dispatchAccount.ts) 명령은 그 전에
-        // 사람에게 말해 주는 자리다.
-        if (dup !== undefined) return bad(`--account lists ${dup} twice`)
-        // provider 로 좁히지 않고 전부 받아 온다 — 좁힐 기준이 이 목록 자신이다(Run 은 더 이상
-        // provider 를 모른다). 존재를 먼저 보고, 그다음 서로 같은 provider 인지 본다.
-        const known = deps.listAccounts()
-        const unknown = parts.find((x) => !known.some((k) => k.id === x))
-        if (unknown !== undefined) return bad(`unknown account: ${unknown}`)
-        // **섞인 목록을 거절한다.** 첫 계정으로 띄운 CLI 가 한도에 걸렸을 때 다른 CLI 의 계정으로
-        // 갈아타려 하는데, 그것은 갈아타기가 아니라 다른 프로그램을 띄우는 일이다. 판정 쪽에서도
-        // 접히지만(accountToDispatchOn 이 첫 계정의 provider 로 뒤 칸을 걸러낸다) 조용히 접히므로
-        // — 사람이 적은 목록과 도는 목록이 달라진다 — 명령이 그 전에 말해 준다. 빈 칸·중복을
-        // 거절하는 것과 같은 이유다.
-        const providerOfId = (id: string): Provider =>
-          known.find((k) => k.id === id)!.provider
-        const head = providerOfId(parts[0])
-        const odd = parts.find((x) => providerOfId(x) !== head)
-        if (odd !== undefined)
-          return bad(
-            `--account must not mix providers: ${parts[0]} is ${head}, ${odd} is ${providerOfId(odd)}`
-          )
-        accountIds = parts
-      }
+      // 검증은 parseAccountList 가 한다 — `run-create --coordinator-account` 와 **같은 규칙**이고,
+      // 두 번 적으면 한쪽만 고쳐지는 날이 온다(그 함수의 주석).
+      const parsedAccounts = parseAccountList(accountArg, deps.listAccounts(), '--account')
+      if (!parsedAccounts.ok) return bad(parsedAccounts.reason)
+      const accountIds: string[] = parsedAccounts.ids
       return commit(
         createTask(
           s,

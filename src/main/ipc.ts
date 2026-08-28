@@ -2029,6 +2029,33 @@ export function registerIpc(
         }
         return { failed }
       },
+      /** 이 Run 을 관리할 코디네이터 세션을 띄운다. **워커가 아니다** — Dispatch 도 spec 파일도
+       *  워크트리도 없다. 사람이 여는 세션과 같은 모양이고, 다른 것은 첫 입력이 인수 프롬프트라는
+       *  것뿐이다(core/orchestration/handover.ts).
+       *
+       *  **롤링 체인을 그대로 넘긴다** — 코디네이터도 에이전트라 한도에 걸린다. 워커에게 이 값을
+       *  넘기는 것과 같은 이유이고 같은 기계를 탄다(rollAccountIds 의 JSDuc).
+       *
+       *  **`bypassPermissions` 를 넘기지 않는다** — startWorker 가 넘기지 않는 것과 같은 이유다:
+       *  권한 검사를 에이전트의 말만으로 건너뛰는 쪽과 권한 프롬프트에서 멈추는 쪽 중, 멈추는 쪽이
+       *  허가 없는 실행에 대해 안전한 편이다. 멈추면 사람이 그 탭에서 답한다 — 코디네이터 탭은
+       *  보이므로(설계 결정 ④) 그 자리가 있다. */
+      startCoordinator: async (a) => {
+        // **워커와 같은 래퍼를 쓴다**(위 spawnSession) — 그 래퍼가 계정 객체를 찾고, 롤링
+        // 코디네이터에 등록하고, orchEnv 를 실어 준다. core.sessions.spawn 을 직접 부르면 그 셋을
+        // 여기서 다시 하게 되고, 그중 하나를 빠뜨리면 코디네이터는 한도에 걸린 채 멈춰 선다.
+        const info = await spawnSession({
+          accountId: a.accountIds[0],
+          cwd: a.cwd,
+          initialPrompt: a.prompt,
+          // 탭 제목 — 워커 탭이 Task 제목을 쓰는 것과 같은 이유다. 없으면 워크트리 basename 으로
+          // 떠서 사용자가 이것이 무엇인지 알 수 없다.
+          title: `Coordinator · ${a.runId.slice(0, 12)}`,
+          rollAccountIds: a.accountIds
+        })
+        orchLog(`coordinator started run=${a.runId} session=${info.id} account=${a.accountIds[0]}`)
+        return { sessionId: info.id }
+      },
       startWorker: async (a) => {
         // **이 워커의 롤링 체인을 여기서 정한다 — 워커를 띄우는 길이 전부 이 래퍼로 모이기
         // 때문이다.** 자동 배치 루프도 orchHandleCommand('worker-start') 를 부르고, CLI 의
