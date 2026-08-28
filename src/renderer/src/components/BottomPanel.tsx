@@ -3,7 +3,7 @@ import type { RunStatus, TerminalBuffer } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { RunPanel } from './RunPanel'
 import { TerminalBody } from './TerminalBody'
-import { ChevronDown, Plus, Square, X } from 'lucide-react'
+import { ChevronDown, Delete, Plus, Square, X } from 'lucide-react'
 
 /**
  * Bottom panel. The Run console and the project terminals share this one panel through tabs.
@@ -143,7 +143,7 @@ export function BottomPanel({
             title={t('run.panel.clear')}
             onClick={() => bump(activeTab)}
           >
-            ⌫
+            <Delete size={12} />
           </button>
           <button className="run-panel-btn" title={t('run.panel.collapse')} onClick={onCollapse}>
             <ChevronDown size={12} />

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { RunConfig, RunStatus } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { Select } from './Select'
-import { Play, Square } from 'lucide-react'
+import { EllipsisVertical, Play, Square } from 'lucide-react'
 
 /** Run toolbar. It sits in the title bar, next to the app name, and is drawn whenever a project is
  *  known — the explorer toggle does not reach it. Its own chrome (border, background, padding) is
@@ -78,7 +78,7 @@ export function RunToolbar({
           aria-expanded={showMore}
           onClick={() => setShowMore((v) => !v)}
         >
-          ⋮
+          <EllipsisVertical size={14} />
         </button>
         {showMore && (
           <div className="run-more-menu" role="menu" onMouseLeave={() => setShowMore(false)}>

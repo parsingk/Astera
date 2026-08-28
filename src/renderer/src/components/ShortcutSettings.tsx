@@ -12,6 +12,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { confirmModal } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import type { MessageKey } from '../../../core/i18n'
+import { Pencil, RotateCcw } from 'lucide-react'
 
 /**
  * Shortcut settings. Only the actions handled by the global capture handler can be edited —
@@ -109,7 +110,7 @@ export function ShortcutSettings({
                 title={t('shortcut.edit')}
                 aria-label={t('shortcut.edit')}
               >
-                ✎
+                <Pencil size={13} />
               </button>
               <button
                 onClick={() => void reset(action.id)}
@@ -117,7 +118,7 @@ export function ShortcutSettings({
                 title={t('shortcut.resetOne')}
                 aria-label={t('shortcut.resetOne')}
               >
-                ↺
+                <RotateCcw size={13} />
               </button>
             </span>
           </div>
