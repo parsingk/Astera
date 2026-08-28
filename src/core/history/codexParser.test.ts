@@ -137,6 +137,25 @@ describe('parseCodexForResume', () => {
     ])
   })
 
+  // 실측(2026-08-28, 이 컴퓨터의 실제 rollout 150개): 통과한 user_message 262건 중 38건이 아래
+  // 부류였고, `The following is the Codex agent history` 로 시작하는 것들이 통과분 글자의 대부분을
+  // 차지했다. codex 레코드에는 claude 의 isMeta 에 해당하는 구조화 표시가 없어(최상위 키가
+  // payload·timestamp·type 뿐이다) 이 목록이 판정을 혼자 진다.
+  it('기계가 남긴 user_message 는 요청도 꼬리도 아니다', async () => {
+    const p = await write('resume-machine.jsonl', [
+      metaLine,
+      user('진짜 요청'),
+      user('<task-notification>\n<task-id>abc</task-id>\n</task-notification>'),
+      user('<command-name>compact</command-name>'),
+      user('<local-command-stdout>done</local-command-stdout>'),
+      user('[Request interrupted by user]'),
+      user('The following is the Codex agent history added since your last approval: ...')
+    ])
+    const material = await parseCodexForResume(p)
+    expect(material.requests).toEqual(['진짜 요청'])
+    expect(material.tail.map((m) => m.text)).toEqual(['진짜 요청'])
+  })
+
   it('요청·꼬리 각각 상한(20)을 넘으면 오래된 것부터 버린다', async () => {
     const lines: string[] = [metaLine]
     for (let i = 1; i <= 25; i++) lines.push(user(`q${i}`))

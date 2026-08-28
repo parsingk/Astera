@@ -45,6 +45,24 @@ describe('parseTranscriptMeta', () => {
     })
   })
 
+  it('isMeta 레코드는 제목이 되지 않는다 — 스킬 본문이 대화 제목으로 걸리던 자리다', async () => {
+    const file = await write('meta-title.jsonl', [
+      line({
+        type: 'user',
+        sessionId: 'sess-m',
+        cwd: 'D:\\proj',
+        isMeta: true,
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: 'Base directory for this skill: C:/skills/artifact-design' }]
+        }
+      }),
+      line({ type: 'user', message: { role: 'user', content: '진짜 첫 요청' } })
+    ])
+    const meta = await parseTranscriptMeta(file)
+    expect(meta.title).toBe('진짜 첫 요청')
+  })
+
   it('첫 줄이 queue-operation이면 isHelper=true (HUD 헬퍼 세션, 실측 91%)', async () => {
     const file = await write('helper.jsonl', [
       line({ type: 'queue-operation', sessionId: 'helper-1' }),
@@ -233,6 +251,21 @@ describe('parseTranscriptMeta', () => {
 })
 
 describe('parseTranscriptTail', () => {
+  it('isMeta 레코드는 마지막 사용자 메시지도 아니고 답변 대기 판정도 뒤집지 않는다', async () => {
+    const file = await write('tail-meta.jsonl', [
+      line({ type: 'user', message: { role: 'user', content: '질문' } }),
+      line({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '답변' }] } }),
+      line({
+        type: 'user',
+        isMeta: true,
+        message: { role: 'user', content: [{ type: 'text', text: 'Base directory for this skill: C:/skills/x' }] }
+      })
+    ])
+    const tail = await parseTranscriptTail(file)
+    expect(tail.lastUserTitle).toBe('질문')
+    expect(tail.awaitingReply).toBe(true)
+  })
+
   it('마지막 real user 메시지를 lastUserTitle로 추출한다', async () => {
     const file = await write('tail-a.jsonl', [
       line({ type: 'user', message: { role: 'user', content: '첫 메시지' } }),
@@ -493,6 +526,28 @@ describe('parseTranscriptForResume', () => {
     const file = await write('machine.jsonl', [
       line({ type: 'user', message: { role: 'user', content: '<bash-input>ls -la</bash-input>' } }),
       line({ type: 'user', message: { role: 'user', content: '진짜 요청' } })
+    ])
+    const material = await parseTranscriptForResume(file)
+    expect(material.requests).toEqual(['진짜 요청'])
+    expect(material.tail.map((m) => m.text)).toEqual(['진짜 요청'])
+  })
+
+  // 접두어 목록으로는 못 잡는 부류다 — 스킬 본문은 아무 표지 없이 시작하고, 그 길이가 브리핑
+  // 예산을 통째로 먹는다(실측은 isMetaUserRecord 의 JSDoc).
+  it('isMeta 레코드는 요청에도 꼬리에도 들어가지 않는다', async () => {
+    const file = await write('meta.jsonl', [
+      line({ type: 'user', message: { role: 'user', content: '진짜 요청' } }),
+      line({
+        type: 'user',
+        isMeta: true,
+        turnCompanion: true,
+        sourceToolUseID: 'toolu_01ABC',
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: 'Base directory for this skill: C:/skills/artifact-design' }]
+        }
+      }),
+      line({ type: 'user', isMeta: true, message: { role: 'user', content: '[Image: original 3840x2088]' } })
     ])
     const material = await parseTranscriptForResume(file)
     expect(material.requests).toEqual(['진짜 요청'])

@@ -26,11 +26,29 @@ function eventMessage(obj: Record<string, unknown>): { kind: 'user' | 'agent'; t
 
 // System wrappers codex records as user_message — excluded from the title and the preview (mirrors
 // isRealUserText in parser.ts)
+//
+// **이 목록이 판정을 혼자 진다.** claude 쪽은 레코드에 `isMeta` 가 붙어 오므로 표지 없는 주입도
+// 구조로 걸러 낼 수 있지만(parser.ts 의 isMetaUserRecord), codex rollout 레코드의 최상위 키는
+// `payload`·`timestamp`·`type` 셋뿐이다(실측) — 구조로 물어볼 것이 없어서 접두어밖에 없다.
 const CODEX_WRAPPER_PREFIXES = [
   '<environment_context>',
   '<user_instructions>',
   '<permissions',
-  '<turn_aborted'
+  '<turn_aborted',
+  // 아래는 **claude 를 코디네이터로 두고 codex 워커를 돌릴 때** rollout 에 그대로 실려 온 것들이다
+  // (실측 2026-08-28, 이 컴퓨터의 실제 rollout 150개 / 통과 user_message 262건):
+  '<task-notification>', // 26건, 파일 2개
+  '<command-name>', // 6건, 파일 4개
+  '<local-command-stdout>', // 4건, 파일 3개
+  '[Request interrupted', // 2건, 파일 2개
+  // 실측 0건이지만 위 셋의 짝이라 함께 넣는다 — parser.ts 의 MACHINE_USER_PREFIXES 가
+  // `<bash-stderr>` 를 "모양으로 추가(위 짝)"한 것과 같은 이유다. 짝 하나만 걸러 두면 반쪽짜리
+  // 기록이 사람의 요청으로 남는다.
+  '<command-message>',
+  '<command-args>',
+  // codex 고유. 승인 흐름이 codex 에게 지난 기록을 다시 읽어 주는 문장이고, 길어서 통과분 글자의
+  // 대부분을 차지했다(실측 — 2000자 초과 78건이 통과분 글자의 91.8%). 사람이 쓴 요청이 아니다.
+  'The following is the Codex agent history'
 ]
 
 function isRealCodexUserText(text: string): boolean {
