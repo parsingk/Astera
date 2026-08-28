@@ -16,9 +16,10 @@
  *
  *  Drawn rather than set as text, for the reason JobIcons' lock pair gives: a glyph picks its own
  *  metrics and colour per font, and this has to inherit the button's (--text-dim → --text on hover).
- *  16 viewBox and currentColor are the app's SVG convention; the 1.5 stroke matches TrashIcon so the
- *  two weigh the same at row size. */
-export function ResumeGlyph({ size = 13 }: { size?: number }): React.JSX.Element {
+ *  16 viewBox and currentColor are the app's SVG convention; the 12px size and 1.5 stroke match the
+ *  icons in the worktree rows, so the two lists — laid out to mirror each other — come out the same
+ *  height and the same weight. */
+export function ResumeGlyph({ size = 12 }: { size?: number }): React.JSX.Element {
   return (
     <svg
       width={size}

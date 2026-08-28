@@ -6,6 +6,7 @@ import { toast } from '../lib/toast'
 import { dirtyCount, isOrphanUnverifiable, worktreeErrorMessage } from '../lib/worktreeErrors'
 import { subscribeCreated } from '../lib/worktreeBus'
 import { useI18n } from '../i18n/I18nProvider'
+import { PlayIcon, TrashIcon } from './JobIcons'
 
 /** 상태 라벨. **'폴더 없음' 은 없다** — 폴더가 사라진 항목은 listWithStatus 가 목록을 만들면서
  *  레지스트리에서 걷으므로 이 자리에 도달하지 않는다. 그 줄은 눌러도 할 일이 없는 정보였고,
@@ -170,32 +171,34 @@ export function WorktreePanel({
                       )
                     )}
                   </span>
-                  {/* This sits alongside the 📁 on the history project rows, so it uses the same ghost
-                      button plus folder glyph. .icon-btn (28×28, 16px glyph) is for the panel header
-                      toolbar and was far too big inside a row. */}
+                  {/* Drawn icons rather than text glyphs, the same as the history session rows this list
+                      is laid out to match: both hold 12px marks in a .ghost button, so the two lists'
+                      rows come out the same height. .icon-btn (28×28, 16px glyph) is for the panel
+                      header toolbar and was far too big inside a row.
+                      PlayIcon and TrashIcon come from JobIcons rather than being redrawn here — that
+                      file's own rule, that one meaning must not grow a second shape. */}
                   <span className="worktree-actions">
                     {removingId === w.id ? (
-                      // A session must not be opened on a worktree that is being removed, so ▶ and 📁
-                      // are taken away, and for ✕ the button box stays while only the glyph becomes a
-                      // spinner — removing the button too makes the spinner (14px) smaller than the
-                      // button (21.3px), so this row alone drops 6px and the list jumps
+                      // A session must not be started on a worktree that is being removed, so the start
+                      // button is taken away, and for delete the button box stays while only the icon
+                      // becomes a spinner. The spinner is sized down to the 12px the icons are (see
+                      // .worktree-actions .ghost.removing .loading-spinner) — at its shared 14px this
+                      // row alone would grow while the delete runs and the list would jump
                       <button className="ghost danger removing" disabled aria-label={t('worktree.remove.removing')}>
                         <span className="loading-spinner" aria-hidden="true" />
                       </button>
                     ) : (
                       <>
                         {w.status === 'ok' && (
-                          <>
-                            <button
-                              className="ghost"
-                              title={t('worktree.action.startSession')}
-                              aria-label={t('worktree.action.startSession')}
-                              disabled={busy}
-                              onClick={() => onStartSession(w.path)}
-                            >
-                              ▶
-                            </button>
-                          </>
+                          <button
+                            className="ghost"
+                            title={t('worktree.action.startSession')}
+                            aria-label={t('worktree.action.startSession')}
+                            disabled={busy}
+                            onClick={() => onStartSession(w.path)}
+                          >
+                            <PlayIcon />
+                          </button>
                         )}
                         <button
                           className="ghost danger"
@@ -204,7 +207,7 @@ export function WorktreePanel({
                           disabled={busy}
                           onClick={() => void remove(w)}
                         >
-                          ✕
+                          <TrashIcon />
                         </button>
                       </>
                     )}

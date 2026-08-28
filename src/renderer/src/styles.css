@@ -503,13 +503,14 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* The lock indicator while a delete is in flight — the 0.7 rule above is more specific than the global
    button:disabled (opacity .5), so without dimming again here a locked button looks completely normal */
 .worktree-actions .ghost:disabled { opacity: 0.3; }
-/* The ✕ on a row being deleted holds the spinner — dimming it like a locked button would kill the
-   spinner with it (a parent's opacity cannot be undone by a child, so the button itself is an exception).
-   The height goes back to the line box the ✕ glyph used to make (normal line-height on a 13px font,
-   ≈ 1.333em) plus .ghost's 2px top and bottom padding — the spinner is 14px, so left alone this row would
-   sit 3px lower and the list would jitter */
+/* The delete button on a row being deleted holds the spinner — dimming it like a locked button would kill
+   the spinner with it (a parent's opacity cannot be undone by a child, so the button itself is an exception). */
 .worktree-actions .ghost.removing:disabled { opacity: 0.7; }
-.worktree-actions .ghost.removing { min-height: calc(1.333em + 4px); }
+/* The spinner stands in for a 12px icon, so it is sized to one. The shared .loading-spinner is 14px, which
+   made the button 18px against the icons' 16px and grew this row for as long as the delete ran.
+   This replaces a min-height of calc(1.333em + 4px): that pinned the button to the line box the old ✕
+   *text* glyph made (≈21px), which the drawn icons no longer produce — left in place it jumped the row 5px. */
+.worktree-actions .ghost.removing .loading-spinner { width: 12px; height: 12px; }
 
 /* ---------- tabs ---------- */
 .tabs { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; }
