@@ -373,6 +373,34 @@ describe('CodexRollingCoordinator', () => {
       h.coord.stop()
     })
 
+    // fix wave 3, finding 1 (CRITICAL): initialPrompt is not sanitized by buildCodexCommand (unlike
+    // resumePrompt), and codexRolling.ts is what has to sanitize a briefing built out of the user's own
+    // conversation text before it reaches argv on win32 (cmd.exe metacharacters). Asserted on the spawn
+    // argument itself, not on sanitizeResumePrompt in isolation.
+    it('브리핑에 따옴표와 &가 있어도 spawn 에 실리는 initialPrompt 에는 남지 않는다', async () => {
+      const h = harness({
+        resumeStrategy: () => 'smart',
+        resumeText: () => Promise.resolve('Fix the "quote" bug & the pipe | issue')
+      })
+      const file = await writeRollout({
+        accountId: 'c1',
+        uuid: 'cx-smart-sanitize',
+        cwd: h.info1.cwd,
+        primary: 95
+      })
+      h.coord.register(h.info1)
+      await advance(1_500)
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      await advance(100)
+      const sent = h.spawned.at(-1)?.initialPrompt
+      expect(sent).toBeDefined()
+      expect(sent).not.toContain('"')
+      expect(sent).not.toContain('&')
+      expect(sent).not.toContain('|')
+      h.coord.stop()
+    })
+
     // 이 테스트가 계획의 지배 제약("브리핑을 만들 수 없으면 백지 재개를 하지 않는다")을 지키는 자리다.
     it('전략이 smart 이어도 브리핑이 null 이면 기존 경로로 롤한다', async () => {
       const h = harness({

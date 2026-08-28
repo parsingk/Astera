@@ -14,6 +14,7 @@ import {
   type RetryState
 } from '../core/rolling/retry'
 import { BlockRegistry } from '../core/rolling/blockRegistry'
+import { sanitizeResumePrompt } from '../core/sessions/commands'
 import { copyTranscript } from '../core/rolling/transcript'
 import { codexHistoryStrategy } from '../core/history/strategies/codex'
 import { findRollout } from '../core/rolling/codexLocate'
@@ -1019,6 +1020,14 @@ export class CodexRollingCoordinator {
       // A blank-slate roll passes neither resumeSessionId nor resumePrompt — the new process is a fresh
       // `codex`, not a `codex resume`, and the briefing rides as initialPrompt instead (see the spawn dep's
       // JSDoc for why resumePrompt alone would be silently dropped here).
+      //
+      // **Sanitized here, not rejected.** buildCodexCommand deliberately leaves initialPrompt
+      // unsanitized (see that field's JSDoc) because its other caller — the orchestration coordinator,
+      // launching a Job worker — checks the same forbidden characters up front and refuses to launch
+      // rather than risk silently mangling the spec-file pointer it built. This value is not a pointer;
+      // it is conversation prose the user actually typed, where a quote or an `&` is unremarkable.
+      // Rejecting here would turn Smart Resume off for most real conversations, while sanitizing only
+      // costs this string a little fidelity — the tradeoff the coordinator's own path cannot afford.
       this.deps.kill(chain.liveId)
       const oldId = chain.liveId
       const info = this.deps.spawn({
@@ -1026,7 +1035,7 @@ export class CodexRollingCoordinator {
         cwd: chain.cwd,
         resumeSessionId: smart ? undefined : codexSessionId,
         resumePrompt: smart ? undefined : prompt,
-        initialPrompt: smart ? prompt : undefined,
+        initialPrompt: smart ? sanitizeResumePrompt(prompt) : undefined,
         rollAccountIds: chain.accountIds,
         slackNotify: chain.liveInfo.slackNotify, // the Slack notification is kept per chain (mirrors rolling.ts)
         bypassPermissions: chain.liveInfo.bypassPermissions,

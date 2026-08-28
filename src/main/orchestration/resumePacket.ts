@@ -301,9 +301,16 @@ export interface TabResumeDeps {
  * 문자열은 앱이 만든 hex id 가 아니라 **사용자가 실제로 쓴 텍스트와 파일 경로**를 담는다 —
  * 제목·요청 하나에 따옴표나 `&`가 있는 것은 예삿일이고, 그때마다 브리핑 전체를 버리면
  * buildResumeNote 의 JSDoc 이 "순손실"이라 부른 바로 그 사고를 훨씬 잦은 빈도로 반복하는 것이다.
- * 이 문자열을 argv 로 넘기는 배선이 생기는 날에는(codex 의 `--resume` 자리처럼) 그 배선이 이미
- * 갖고 있는 sanitizer(`sanitizeResumePrompt`)가 그 경계를 담당한다 — 이 함수가 미리 검사해 통째로
- * 버릴 이유가 아니다.
+ *
+ * **이 문자열이 argv 로 가는 자리는 이미 둘이다, 그리고 둘의 처방이 다르다.** `resumePrompt`
+ * 자리(codex 의 `--resume` 뒤)는 buildCodexCommand 가 sanitizeResumePrompt 를 스스로 돌려 왔다 —
+ * 이 함수가 그 경계를 미리 검사할 이유가 없었던 것이 그래서다. Smart Resume 의 백지 재개가 같은
+ * 문자열을 `initialPrompt` 로도 실어 보내면서 두 번째 자리가 생겼는데, `buildCodexCommand` 는
+ * `initialPrompt` 를 스스로 sanitize 하지 않는다(그 필드의 JSDoc 이 이유를 적어 둔다 — 다른
+ * caller 인 오케스트레이션 코디네이터는 자신이 만든 spec 파일 포인터가 조용히 망가지지 않도록
+ * 거부로 그 경계를 지킨다). 그래서 그 자리의 호출부(codexRolling.ts 의 백지 재개)가 넘기기
+ * 직전에 sanitizeResumePrompt 를 스스로 적용한다 — "이미 갖고 있다"가 아니라 그 호출부가 새로
+ * 갖췄다는 차이는 있지만, 이 함수가 미리 검사해 통째로 버릴 이유가 아니라는 결론은 그대로다.
  *
  * 실패는 전부 `null` 이다 — 부르는 쪽은 기존 고정 문장으로 저하한다. 폐기는 항상 로그로 남는다.
  */
