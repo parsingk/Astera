@@ -2864,9 +2864,18 @@ describe('run-start — 코디네이터 인계', () => {
   /** startCoordinator 를 기록하는 deps. 계정은 claude 둘 + codex 하나. */
   const coordDeps = (
     over: Partial<OrchServerDeps> = {}
-  ): OrchServerDeps & { state: OrchState; spawned: { runId: string; prompt: string }[] } => {
+  ): OrchServerDeps & {
+    state: OrchState
+    spawned: { runId: string; prompt: string }[]
+    made: string[]
+  } => {
     const spawned: { runId: string; prompt: string }[] = []
+    const made: string[] = []
     const base = Object.assign(makeDeps(), {
+      makeRunWorktree: async (a: { repoPath: string; name: string }) => {
+        made.push(a.name)
+        return `D:/wt/${a.name}`
+      },
       listAccounts: () => [
         { id: 'cl1', label: 'claude1', provider: 'claude' as const },
         { id: 'cl2', label: 'claude2', provider: 'claude' as const },
@@ -2878,7 +2887,7 @@ describe('run-start — 코디네이터 인계', () => {
       },
       ...over
     })
-    return Object.assign(base, { spawned }) as never
+    return Object.assign(base, { spawned, made }) as never
   }
 
   const mkRun = async (
@@ -2912,6 +2921,65 @@ describe('run-start — 코디네이터 인계', () => {
     expect(prompt).toContain(runId)
     expect(prompt).toContain('CONCURRENCY IS 2')
     expect(prompt).toContain('tasks already defined: 1')
+  })
+
+  // 인계하면 앱이 그 Run 의 슬롯을 더 채우지 않으므로, 게으르게 만들던 워크트리를 만들어 줄
+  // 사람이 없어진다 — 한도 1 인 Run 의 코디네이터는 "생략하라"는 배치 규칙을 따를 자리가 없다
+  it('인계 시점에 Run 워크트리를 만들어 기록한다', async () => {
+    const deps = coordDeps()
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
+    expect((await call(deps, 'run-start', { run: runId })).status).toBe(200)
+    expect(deps.made).toHaveLength(1)
+    expect(deps.getState().runs.find((r) => r.id === runId)?.worktree).toBe(`D:/wt/${deps.made[0]}`)
+  })
+
+  it('이미 워크트리가 있으면 다시 만들지 않는다', async () => {
+    const deps = coordDeps()
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
+    await call(deps, 'run-worktree-set', { run: runId, worktree: 'D:/existing' })
+    await call(deps, 'run-start', { run: runId })
+    expect(deps.made).toEqual([])
+    expect(deps.getState().runs.find((r) => r.id === runId)?.worktree).toBe('D:/existing')
+  })
+
+  // 코디네이터를 띄운 뒤에 만들면 그 세션이 첫 명령을 부르는 사이 워크트리 없는 Run 을 본다
+  it('워크트리 만들기가 실패하면 코디네이터를 띄우지 않고 아무것도 바뀌지 않는다', async () => {
+    const deps = coordDeps({
+      makeRunWorktree: async () => {
+        throw new Error('disk full')
+      }
+    })
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
+    const r = await call(deps, 'run-start', { run: runId })
+    expect(r.status).toBe(400)
+    expect(deps.spawned).toEqual([])
+    const run = deps.getState().runs.find((x) => x.id === runId)!
+    expect(run.pendingStart).toBe(true)
+    expect(run).not.toHaveProperty('worktree')
+    expect(run).not.toHaveProperty('coordinatorSessionId')
+  })
+
+  it('배선이 그 기능을 주입하지 않으면 워크트리 없이 넘긴다 — worker-start 가 소리 내어 거절한다', async () => {
+    const deps = coordDeps({ makeRunWorktree: undefined })
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
+    expect((await call(deps, 'run-start', { run: runId })).status).toBe(200)
+    expect(deps.getState().runs.find((r) => r.id === runId)).not.toHaveProperty('worktree')
+    expect(deps.spawned).toHaveLength(1)
+  })
+
+  // 템플릿은 자신이 돌지 않는다 — 붙이면 Task 없는 Run 을 관리하는 세션이 할당량만 쓴다
+  it('예약 템플릿에는 코디네이터를 붙이지 않는다', async () => {
+    const deps = coordDeps()
+    const r = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      coordinatorAccount: 'cl1',
+      schedule: { kind: 'daily', time: '09:00' }
+    })
+    const runId = (r.body as { id: string }).id
+    expect((await call(deps, 'run-start', { run: runId })).status).toBe(200)
+    expect(deps.spawned).toEqual([])
+    expect(deps.made).toEqual([])
   })
 
   it('코디네이터 계정이 없으면 띄우지 않고 앱이 계속 돌린다 — 옛 동작', async () => {

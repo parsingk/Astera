@@ -2051,6 +2051,13 @@ export function registerIpc(
         }
         return { failed }
       },
+      /** 이 Run 이 일할 워크트리를 하나 만든다 — 인계 시점에 서버가 부른다(run-start).
+       *
+       *  **forkWorktree 를 그대로 쓴다.** 프로젝트가 **서 있는 브랜치**에서 갈라 주는 판단이 그
+       *  안에 있고, raw createWorktree 를 부르면 origin/HEAD 에서 갈라져 최종 병합이 엉뚱한 조상을
+       *  끌고 온다 — 스케줄러의 게으른 생성이 같은 함수를 쓰는 이유와 같다. 그 판단은 한 곳에만
+       *  있어야 한다. */
+      makeRunWorktree: (a) => forkWorktree({ repoPath: a.repoPath, name: a.name }),
       /** 이 Run 을 관리할 코디네이터 세션을 띄운다. **워커가 아니다** — Dispatch 도 spec 파일도
        *  워크트리도 없다. 사람이 여는 세션과 같은 모양이고, 다른 것은 첫 입력이 인수 프롬프트라는
        *  것뿐이다(core/orchestration/handover.ts).

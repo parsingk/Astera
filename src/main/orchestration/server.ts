@@ -44,6 +44,7 @@ import {
 } from '../../core/orchestration/types'
 import { runWorktrees } from '../../core/orchestration/integrate'
 import { buildHandoverPrompt } from '../../core/orchestration/handover'
+import { nameForRun } from '../../core/worktrees/naming'
 import type { Provider } from '../../core/providers/meta'
 import { isValidRule, type ScheduleRule } from '../../core/scheduler/rule'
 
@@ -123,6 +124,17 @@ export interface OrchServerDeps {
     accountIds: string[]
     prompt: string
   }): Promise<{ sessionId: string }>
+  /** 이 Run 이 일할 워크트리를 하나 만들고 그 경로를 낸다. **`startCoordinator` 와 같은 꼴** —
+   *  배선이 채우고, 디스크만 만들고 OrchState 는 건드리지 않는다(기록은 setRunWorktree 가 한다).
+   *
+   *  **왜 인계 시점에 필요한가.** 평소에는 앱의 스케줄러가 첫 슬롯을 채우기 직전에 게으르게 만든다.
+   *  그런데 Run 을 코디네이터에게 넘기면 앱은 그 Run 의 슬롯을 더 채우지 않으므로, 만들어 줄 사람이
+   *  없어진다 — 한도 1 인 Run 의 코디네이터는 "`--worktree` 를 생략하라"는 배치 규칙을 따를 자리가
+   *  아예 없게 된다(handover.ts 가 그렇게 지시한다).
+   *
+   *  주입되지 않으면 만들지 않는다 — 그때는 worker-start 가 `--worktree` 없는 호출을 소리 내어
+   *  거절하므로(아래) 코디네이터가 `--worktree new` 로 갈 수 있다. */
+  makeRunWorktree?(a: { repoPath: string; name: string }): Promise<string>
   listAccounts(provider?: Provider): { id: string; label: string; provider: Provider }[]
   readWorker(a: { dispatchId: string; limit?: number }): Promise<string>
   enabled(): boolean
@@ -550,8 +562,29 @@ export async function handleCommand(
       //
       // 계정 지정이 없거나 배선이 이 기능을 주입하지 않으면 옛 동작이다: 앱이 돌리고, 워커의
       // 질문은 앱의 그물이 풀어 준다(core/orchestration/inbox.ts).
-      const accountIds = target.coordinatorAccountIds
+      // **예약 템플릿에는 코디네이터를 붙이지 않는다.** 템플릿은 자신이 돌지 않고 발화가 만든
+      // 회차가 돈다(Run.schedule) — 붙이면 아무 Task 도 없는 Run 을 관리하는 세션이 떠서 할당량만
+      // 쓴다. 회차는 `coordinatorAccountIds` 를 물려받으므로(spawnScheduledRun) 관리자는 그쪽에
+      // 붙는다. worker-start 가 템플릿의 Task 를 거절하는 것과 같은 이유다.
+      const accountIds = target.schedule ? undefined : target.coordinatorAccountIds
       if (!accountIds?.length || !deps.startCoordinator) return commit(started)
+      // **워크트리를 먼저 만든다.** 코디네이터를 띄운 뒤에 만들면 그 세션이 첫 명령을 부르는 사이에
+      // 워크트리 없는 Run 을 보게 된다. 실패하면 아래 spawn 실패와 같은 처리다 — 아무것도 바꾸지
+      // 않고 거절해서 `pendingStart` 를 남긴다.
+      let withWorktree = started.state
+      if (!target.worktree && deps.makeRunWorktree) {
+        try {
+          const created = await deps.makeRunWorktree({
+            repoPath: target.cwd,
+            name: nameForRun(target)
+          })
+          const recorded = setRunWorktree(withWorktree, id, created)
+          if (!recorded.ok) return bad(recorded.error)
+          withWorktree = recorded.state
+        } catch (e) {
+          return bad(`could not create the run worktree: ${String(e)}`)
+        }
+      }
       let sessionId: string
       try {
         const spawned = await deps.startCoordinator({
@@ -574,12 +607,12 @@ export async function handleCommand(
       }
       // autoDispatch 는 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이
       // 코드베이스는 해당 없는 칸을 두지 않는다(startRun 이 pendingStart 를 지우는 것과 같다).
-      const handed = started.state.runs.map((r) => {
+      const handed = withWorktree.runs.map((r) => {
         if (r.id !== id) return r
         const { autoDispatch: _drop, ...rest } = r
         return rest
       })
-      return commit(attachCoordinator({ ...started.state, runs: handed }, { runId: id, sessionId }))
+      return commit(attachCoordinator({ ...withWorktree, runs: handed }, { runId: id, sessionId }))
     }
     case 'run-pause': {
       const id = str(args.run)
