@@ -1064,7 +1064,15 @@ export class CodexRollingCoordinator {
           `codex smart resume refused — the briefing pointer would be mangled by the argv sanitizer, falling back to --resume session=${chain.liveId}`
         )
       }
-      const smart = strategy === 'smart' && briefed && sanitizedPrompt === prompt
+      const mangled = strategy === 'smart' && briefed && sanitizedPrompt !== prompt
+      const smart = strategy === 'smart' && briefed && !mangled
+      // 거부된 포인터를 그대로 재개 프롬프트로 쓰지 않는다. F3 이 "설정이 꺼진 롤은 탭 브리핑을 아예
+      // 만들지 않는다"로 사용자 문구(chain.prompt, NewSessionDialog 의 rollPrompt)를 지켰지만, 그
+      // 규칙은 `tabFallback = strategy === 'smart'` 를 통해 걸린다 — 즉 **설정이 켜져 있고 위에서
+      // 뭉개짐으로 거부된 경우**에는 탭 포인터가 만들어진 채 원래 경로로 내려오고, 그 포인터가
+      // 사용자 문구를 덮었다. 이때 옳은 값은 chain.prompt 다: 뭉개짐 거부는 **탭 포인터에서만**
+      // 일어난다(Job 포인터는 id 만 담아 이 함수가 항등이다 — 상위에서 금지 문자 검사를 이미
+      // 통과했다), 그래서 여기서 다시 물을 필요 없이 그 사실만으로 판단할 수 있다.
       let dest: string | undefined
       if (!smart) {
         // ① The copy — a codex blocked by a limit is idle, so there is no write contention
@@ -1101,7 +1109,7 @@ export class CodexRollingCoordinator {
         account: target,
         cwd: chain.cwd,
         resumeSessionId: smart ? undefined : codexSessionId,
-        resumePrompt: smart ? undefined : prompt,
+        resumePrompt: smart ? undefined : mangled ? chain.prompt : prompt,
         initialPrompt: smart ? sanitizeResumePrompt(prompt) : undefined,
         rollAccountIds: chain.accountIds,
         slackNotify: chain.liveInfo.slackNotify, // the Slack notification is kept per chain (mirrors rolling.ts)

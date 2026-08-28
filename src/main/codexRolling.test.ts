@@ -413,6 +413,28 @@ describe('CodexRollingCoordinator', () => {
     // *before* the blank-slate branch is chosen: a briefing sanitizeResumePrompt would change refuses
     // Smart Resume, and the roll falls back to the ordinary copy + `--resume` path, where
     // buildCodexCommand still applies the same sanitizer to resumePrompt as it always did.
+    // 사용자가 롤 문구를 직접 지정한 경우가 이 수정의 요점이다 — 거부된 포인터가 그 문구를 덮으면
+    // 사용자는 자기가 적은 지시가 사라진 것을 알 방법이 없다(로그에도 프롬프트는 안 남는다).
+    it('거부된 포인터가 사용자가 지정한 롤 문구를 덮지 않는다', async () => {
+      const h = harness({
+        resumeStrategy: () => 'smart',
+        resumeText: () => Promise.resolve('read C:/Users/a b/x.md & continue')
+      })
+      const file = await writeRollout({
+        accountId: 'c1',
+        uuid: 'cx-smart-userprompt',
+        cwd: h.info1.cwd,
+        primary: 95
+      })
+      h.coord.register({ ...h.info1, rollPrompt: '내가 지정한 문구' })
+      await advance(1_500)
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      await advance(100)
+      expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2']) // 기존 경로로 갔다
+      expect(h.spawned.at(-1)?.resumePrompt).toBe('내가 지정한 문구')
+    })
+
     it('브리핑을 sanitizeResumePrompt 가 바꾸면 백지 재개를 포기하고 기존 경로로 롤한다', async () => {
       const logs: string[] = []
       const h = harness({
@@ -434,7 +456,9 @@ describe('CodexRollingCoordinator', () => {
       expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
       expect(h.copied[0]?.src).toBe(file)
       expect(h.spawned.at(-1)?.resumeSessionId).toBe('cx-smart-sanitize')
-      expect(h.spawned.at(-1)?.resumePrompt).toBe('Fix the "quote" bug & the pipe | issue')
+      // 거부된 포인터를 재개 프롬프트로 쓰지 않는다 — 그 자리에는 사용자 문구(chain.prompt)가 간다.
+      // 예전에는 뭉개질 그 문자열이 그대로 실려 사용자가 지정한 롤 문구를 덮었다.
+      expect(h.spawned.at(-1)?.resumePrompt).toBe('이어서 작업 진행해 줘')
       expect(h.spawned.at(-1)?.initialPrompt).toBeUndefined()
       // fix wave 최종, F6: 이 거부는 조용히 일어나지 않는다 — userData 경로에 금지 문자가 있으면
       // 이 계정의 Smart Resume 은 매 롤마다 여기서 거부되는데, 그 사실이 로그 한 줄도 없이 영구히
