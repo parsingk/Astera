@@ -492,6 +492,7 @@ export const en: Record<keyof typeof ko, string> = {
   'history.menu.hide': 'Hide',
   'history.project.noSessions': 'No sessions',
   'history.entry.preview': 'Preview',
+  'history.entry.resume': 'Resume session',
   'history.preview.truncated': '(recent turns only)',
   'history.preview.me': 'Me',
   'history.resume.folderMissingTitle': 'Project folder not found',

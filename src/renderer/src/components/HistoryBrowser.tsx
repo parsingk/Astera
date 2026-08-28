@@ -3,6 +3,7 @@ import type { Account, HistoryEntry, ProjectSummary, ScheduleConfig, TranscriptP
 import { ResumeDialog } from './ResumeDialog'
 import { AccountSelect } from './AccountSelect'
 import { ProviderBadge } from './ProviderBadge'
+import { ResumeGlyph } from './ResumeGlyph'
 import { isGhostAccountId } from '../../../core/accounts/ghostId'
 import { confirmModal } from '../lib/confirm'
 import { useI18n } from '../i18n/I18nProvider'
@@ -148,7 +149,10 @@ function ProjectRow({
               key={e.id}
               className="session-row"
               title={`${e.title} · ${new Date(e.updatedAt).toLocaleString()}`}
-              onClick={() => onResume(e)} // clicking the row resumes straight away (markSeen happens inside resume)
+              onClick={() => {
+                markSeen(e)
+                onOpenPreview(e)
+              }} // clicking the row opens the preview — resuming is the button beside it
             >
               {/* A ghost gets a hollow dot: its colour is a single grey, so colour alone would not separate
                   it from a registered account that happens to be grey */}
@@ -162,14 +166,18 @@ function ProjectRow({
               <span className="entry-sub">
                 {new Date(e.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </span>
+              {/* Same ghost button as the worktree row actions — .icon-btn (28×28) is for panel header
+                  toolbars and is far too big inside a row */}
               <button
+                className="ghost"
+                title={t('history.entry.resume')}
+                aria-label={t('history.entry.resume')}
                 onClick={(ev) => {
-                  ev.stopPropagation() // the button is preview — stops propagation to the row click (resume)
-                  markSeen(e)
-                  onOpenPreview(e)
+                  ev.stopPropagation() // the button is resume — stops propagation to the row click (preview)
+                  onResume(e) // markSeen happens inside resume
                 }}
               >
-                {t('history.entry.preview')}
+                <ResumeGlyph />
               </button>
             </li>
           ))}

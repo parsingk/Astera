@@ -559,6 +559,7 @@ export const ko = {
   'history.menu.hide': '숨기기',
   'history.project.noSessions': '세션 없음',
   'history.entry.preview': '미리보기',
+  'history.entry.resume': '세션 이어하기',
   'history.preview.truncated': '(최근 대화만)',
   'history.preview.me': '나',
   'history.resume.folderMissingTitle': '프로젝트 폴더 없음',

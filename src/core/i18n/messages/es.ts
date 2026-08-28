@@ -574,6 +574,7 @@ export const es: Catalog = {
   'history.menu.hide': 'Ocultar',
   'history.project.noSessions': 'Sin sesiones',
   'history.entry.preview': 'Vista previa',
+  'history.entry.resume': 'Reanudar la sesión',
   'history.preview.truncated': '(solo lo reciente)',
   'history.preview.me': 'Yo',
   'history.resume.folderMissingTitle': 'No se encontró la carpeta del proyecto',
