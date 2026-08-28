@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { RunConfig, RunStatus } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { Select } from './Select'
+import { Play, Square } from 'lucide-react'
 
 /** Run toolbar. It sits in the title bar, next to the app name, and is drawn whenever a project is
  *  known — the explorer toggle does not reach it. Its own chrome (border, background, padding) is
@@ -60,11 +61,11 @@ export function RunToolbar({
       )}
       {running ? (
         <button className="run-btn stop" title={t('run.action.stop')} onClick={onStop}>
-          ⏹
+          <Square size={14} fill="currentColor" strokeWidth={0} />
         </button>
       ) : (
         <button className="run-btn play" title={t('run.action.run')} disabled={!selectedId} onClick={onRun}>
-          ▶
+          <Play size={14} fill="currentColor" strokeWidth={0} />
         </button>
       )}
       {/* 구성 관리는 ⋮ 안으로 접는다. 이 툴바는 이제 타이틀바에 상시로 놓이므로, 자주 쓰지 않는
@@ -97,7 +98,7 @@ export function RunToolbar({
       {activeRuns.length > 0 && (
         <div className="run-global">
           <button className="run-global-badge" title={t('run.global.listTitle')} onClick={() => setShowRuns((v) => !v)}>
-            <span className="tri">▶</span>
+            <span className="tri"><Play size={10} fill="currentColor" strokeWidth={0} /></span>
             <span className="n">{activeRuns.length}</span>
           </button>
           {showRuns && (
@@ -114,7 +115,7 @@ export function RunToolbar({
                     {r.projectName} — {r.configName}
                   </button>
                   <button className="run-global-stop" title={t('run.action.stop')} onClick={() => onStopProject(r.projectPath)}>
-                    ⏹
+                    <Square size={11} fill="currentColor" strokeWidth={0} />
                   </button>
                 </div>
               ))}

@@ -3,7 +3,7 @@ import type { RunStatus, TerminalBuffer } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { RunPanel } from './RunPanel'
 import { TerminalBody } from './TerminalBody'
-import { ChevronDown, X } from 'lucide-react'
+import { ChevronDown, Square, X } from 'lucide-react'
 
 /**
  * Bottom panel. The Run console and the project terminals share this one panel through tabs.
@@ -135,7 +135,7 @@ export function BottomPanel({
           {/* The actions match the active tab — stop only appears on the Run tab */}
           {activeTab === 'run' && running && (
             <button className="run-panel-btn stop" title={t('run.action.stop')} onClick={onStopRun}>
-              ⏹
+              <Square size={12} fill="currentColor" strokeWidth={0} />
             </button>
           )}
           <button

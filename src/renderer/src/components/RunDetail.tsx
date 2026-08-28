@@ -29,7 +29,7 @@ import {
   UnlockIcon
 } from './JobIcons'
 import { NewTaskModal } from './NewTaskModal'
-import { X } from 'lucide-react'
+import { Play, Square, X } from 'lucide-react'
 
 /** 종류 배지의 문구. message 는 messageType 이 정한다.
  *  heartbeat 과 decision_gate 는 timeline.ts 의 SKIP 이 걸러 지금은 도달하지 않지만, 맵을
@@ -1111,7 +1111,7 @@ function Graph({
                   onStart(task.id)
                 }}
               >
-                ▶
+                <Play size={12} fill="currentColor" strokeWidth={0} />
               </button>
             )}
             {showGate && (
@@ -1152,7 +1152,7 @@ function Graph({
                   onStop(task.id)
                 }}
               >
-                ⏹
+                <Square size={12} fill="currentColor" strokeWidth={0} />
               </button>
             )}
             {showRestart && (
@@ -1165,7 +1165,7 @@ function Graph({
                   onRestart(task.id)
                 }}
               >
-                ▶
+                <Play size={12} fill="currentColor" strokeWidth={0} />
               </button>
             )}
           </>
