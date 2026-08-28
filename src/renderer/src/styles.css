@@ -521,7 +521,8 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* ---------- worktree panel ---------- */
 .worktree-panel { border-top: 1px solid var(--line); }
 /* Reuses the look of .panel-header h2 as a collapse/expand button */
-.panel-toggle { background: none; border: none; padding: 0; font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; cursor: pointer; }
+/* 캐럿이 아이콘이 된 뒤로 정렬이 필요하다 — 인라인 svg 는 baseline 에 앉아 대문자 글자보다 내려간다. */
+.panel-toggle { background: none; border: none; padding: 0; font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
 .panel-toggle:hover { color: var(--text); }
 /* It sits alongside the history section in the sidebar, so the hierarchy look matches that one:
    .worktree-group=.project-group, .worktree-repo=.project-name, .worktree-list=.session-sublist,
@@ -1407,6 +1408,8 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* RunConfigForm's "add optional field" menu — same shape as .rtp-menu but a flat list, so it gets its
    own (short) rule set rather than sharing .rtp-menu's grouped layout. */
 .rcm-add-option { position: relative; align-self: flex-start; }
+/* .panel-toggle 과 같은 이유 — 라벨 옆의 캐럿 아이콘을 글자 가운데에 맞춘다. */
+.rcm-add-option > button { display: inline-flex; align-items: center; gap: 4px; }
 .rcm-add-option-menu { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; min-width: 160px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 4px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 1px; }
 .rcm-add-option-item { text-align: left; white-space: nowrap; padding: 5px 8px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text); font-size: 12.5px; cursor: pointer; }
 .rcm-add-option-item:hover { background: var(--elevated); }
