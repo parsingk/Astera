@@ -71,6 +71,10 @@ export function createRun(
     objective: string
     cwd: string
     concurrency?: number
+    /** 이 Run 의 코디네이터 세션을 띄울 계정들. **여기서 확인하지 않는다** — 계정 목록은 앱이
+     *  아는 것이고, 부르는 쪽(server.ts 의 run-create)이 존재와 provider 동일성을 본다.
+     *  Task.accountIds 와 같은 관례다. */
+    coordinatorAccountIds?: string[]
     autoDispatch?: boolean
     /** 사용자가 '실행' 을 누르기 전까지 돌지 않게 한다 — Run.pendingStart 의 주석을 보라 */
     pendingStart?: boolean
@@ -87,6 +91,9 @@ export function createRun(
     cwd: a.cwd,
     createdAt: now,
     ...(a.concurrency !== undefined ? { concurrency: a.concurrency } : {}),
+    // 빈 배열은 싣지 않는다 — "지정 없음" 과 값이 갈라지고, 그 구분으로 코디네이터를 띄울지
+    // 정하기 때문이다(Task.accountIds 가 같은 규칙을 쓴다)
+    ...(a.coordinatorAccountIds?.length ? { coordinatorAccountIds: a.coordinatorAccountIds } : {}),
     ...(a.autoDispatch ? { autoDispatch: true } : {}),
     ...(a.schedule ? { schedule: a.schedule } : {}),
     ...(a.pendingStart ? { pendingStart: true } : {})
@@ -123,6 +130,12 @@ export function spawnScheduledRun(s: OrchState, templateId: string, now: string)
     cwd: template.cwd,
     createdAt: now,
     ...(template.concurrency !== undefined ? { concurrency: template.concurrency } : {}),
+    // **회차는 물려받는다.** 회차는 자신이 도는 Run 이므로 관리자가 필요하고, 그 관리자를 누구로
+    // 할지는 템플릿을 만든 사람이 이미 정했다. 세션 id 와 실패 횟수는 물려주지 않는다 — 그것은
+    // 정의가 아니라 지난 회차의 결과다(result·consecutiveFailures 를 물려주지 않는 것과 같다).
+    ...(template.coordinatorAccountIds?.length
+      ? { coordinatorAccountIds: template.coordinatorAccountIds }
+      : {}),
     autoDispatch: true,
     templateId,
     fireOrdinal: ordinal
@@ -1188,4 +1201,36 @@ export function deleteRuns(s: OrchState, runIds: ReadonlySet<string>): OrchState
     deliveries: s.deliveries.filter((d) => !runIds.has(d.runId)),
     gates: s.gates.filter((g) => !runIds.has(g.runId))
   }
+}
+
+/** 이 Run 을 관리하는 코디네이터 세션을 붙인다. **실패 횟수를 0 으로 돌린다** — 붙었다는 것이
+ *  곧 "직전의 사라짐이 연속이 아니게 됐다" 는 뜻이고, 그 판단을 되띄우기 쪽에 남기면 두 곳이
+ *  같은 값을 다르게 센다. */
+export function attachCoordinator(
+  s: OrchState,
+  a: { runId: string; sessionId: string }
+): Res<Run> {
+  const run = s.runs.find((r) => r.id === a.runId)
+  if (!run) return err(`unknown run: ${a.runId}`)
+  // 실패 횟수는 0 이 아니라 **지운다** — startRun 이 pendingStart 를 지우는 것과 같은 관례다
+  // (해당 없는 칸을 두지 않는다). 0 을 실으면 JSON 비교에서 "없음" 과 다른 값이 된다.
+  const next: Run = { ...run, coordinatorSessionId: a.sessionId }
+  delete next.coordinatorFailures
+  return ok({ ...s, runs: replace(s.runs, next) }, next)
+}
+
+/** 코디네이터 세션을 뗀다.
+ *
+ *  `failed` 는 "사라졌다" 이고 "정상 종료" 와 가르지 않는다 — 코디네이터가 스스로 끝낼 자리가
+ *  없기 때문이다(Run 이 끝나면 사람이 지운다). 그래서 세션이 없어지는 것은 언제나 사고이고,
+ *  되띄우기가 그것을 받는다. `failed: false` 는 사람이 Run 을 멈춘 경우다 — 그때는 되띄우지
+ *  않으므로 횟수를 올리지 않는다. */
+export function detachCoordinator(s: OrchState, a: { runId: string; failed: boolean }): Res<Run> {
+  const run = s.runs.find((r) => r.id === a.runId)
+  if (!run) return err(`unknown run: ${a.runId}`)
+  const next: Run = { ...run }
+  delete next.coordinatorSessionId
+  if (a.failed) next.coordinatorFailures = (run.coordinatorFailures ?? 0) + 1
+  else delete next.coordinatorFailures
+  return ok({ ...s, runs: replace(s.runs, next) }, next)
 }

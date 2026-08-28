@@ -840,6 +840,10 @@ export const ja: Catalog = {
   'jobs.new.title': '新しい作業を作る',
   'jobs.new.gitRequired': 'git リポジトリとして登録されたフォルダーでのみ実行されます',
   'jobs.new.objective': '目標',
+  'jobs.new.coordinator': 'コーディネーターのアカウント',
+  'jobs.new.coordinatorNone': 'コーディネーターなし (アプリが実行)',
+  'jobs.new.coordinatorHint':
+    'このジョブを管理するエージェントセッションのアカウントです — ワーカーを起動し、その質問に答え、必要なときに人を呼びます。空のままならアプリが自分で実行し、ワーカーの質問は固定の返答で解きます。2つ以上選ぶと、上限に達したときに並べた順に切り替わります',
   'jobs.new.concurrency': '同時実行',
   'jobs.new.concurrencyHint': 'この作業が同時に開くワーカー数',
   'jobs.new.schedule': '予約実行',

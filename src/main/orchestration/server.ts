@@ -23,6 +23,7 @@ import {
   deleteRuns,
   spawnScheduledRun,
   startRun,
+  attachCoordinator,
   pauseSchedule,
   resumeSchedule,
   setRunWorktree,
@@ -32,6 +33,7 @@ import {
 import {
   DEFAULT_ASK_TIMEOUT_MS,
   DEFAULT_CHECK_TIMEOUT_MS,
+  DEFAULT_CONCURRENCY,
   FAILURE_LIMIT,
   canTransition,
   recomputeReady,
@@ -41,6 +43,7 @@ import {
   type TaskStatus
 } from '../../core/orchestration/types'
 import { runWorktrees } from '../../core/orchestration/integrate'
+import { buildHandoverPrompt } from '../../core/orchestration/handover'
 import type { Provider } from '../../core/providers/meta'
 import { isValidRule, type ScheduleRule } from '../../core/scheduler/rule'
 
@@ -108,6 +111,18 @@ export interface OrchServerDeps {
    *  도는 세션을 닫는 일까지 배선이 한다(removeWorktree 의 isPathInUse 가 그러지 않으면 거절한다).
    *  실패한 경로는 돌려준다 — 삭제를 막지는 않지만 응답에 실어 사람이 알 수 있게 한다. */
   removeWorktrees?(paths: string[]): Promise<{ failed: string[] }>
+  /** 이 Run 을 관리할 코디네이터 세션을 띄운다. **`startWorker` 와 같은 꼴이다** — 배선이 채우고,
+   *  세션 프로세스만 만들고 OrchState 는 건드리지 않는다(서버가 상태를 소유한다). 첫 입력으로
+   *  인수 프롬프트를 받는다(core/orchestration/handover.ts).
+   *
+   *  주입되지 않으면 코디네이터를 띄우지 않는다 — `probeLimit`·`removeWorktrees` 와 같은 관례이고,
+   *  그때 Run 은 앱이 돌린다(옛 동작). */
+  startCoordinator?(a: {
+    runId: string
+    cwd: string
+    accountIds: string[]
+    prompt: string
+  }): Promise<{ sessionId: string }>
   listAccounts(provider?: Provider): { id: string; label: string; provider: Provider }[]
   readWorker(a: { dispatchId: string; limit?: number }): Promise<string>
   enabled(): boolean
@@ -250,6 +265,34 @@ async function pollUntil<T>(
   }
 }
 
+/** 쉼표로 온 계정 목록을 읽고 거절할 이유를 낸다. `null` 이면 통과다.
+ *
+ *  **두 자리가 같은 규칙을 쓴다** — Task 의 `--account`(그 Task 의 워커)와 Run 의
+ *  `--coordinator-account`(그 Run 의 관리자). 층은 다르지만 규칙은 같다: 실재하는 계정이어야
+ *  하고, 한 목록 안에서 provider 가 섞이면 안 되고(첫 계정이 provider 를 정하고 나머지는 갈아탈
+ *  순서다), 빈 칸과 중복은 손이 미끄러진 것이다. 규칙을 두 번 적으면 한쪽만 고쳐지는 날이 온다. */
+function parseAccountList(
+  raw: string,
+  known: { id: string; provider: Provider }[],
+  flag: string
+): { ok: true; ids: string[] } | { ok: false; reason: string } {
+  const parts = raw.split(',').map((x) => x.trim())
+  if (parts.some((x) => x === '')) return { ok: false, reason: `${flag} must not contain an empty entry` }
+  const dup = parts.find((x, i) => parts.indexOf(x) !== i)
+  if (dup !== undefined) return { ok: false, reason: `${flag} lists ${dup} twice` }
+  const unknown = parts.find((x) => !known.some((k) => k.id === x))
+  if (unknown !== undefined) return { ok: false, reason: `unknown account: ${unknown}` }
+  const providerOfId = (id: string): Provider => known.find((k) => k.id === id)!.provider
+  const head = providerOfId(parts[0])
+  const odd = parts.find((x) => providerOfId(x) !== head)
+  if (odd !== undefined)
+    return {
+      ok: false,
+      reason: `${flag} must not mix providers: ${parts[0]} is ${head}, ${odd} is ${providerOfId(odd)}`
+    }
+  return { ok: true, ids: parts }
+}
+
 export async function handleCommand(
   deps: OrchServerDeps,
   caller: { sessionId: string },
@@ -302,6 +345,16 @@ export async function handleCommand(
       const concurrency = args.concurrency === undefined ? null : posInt(args.concurrency)
       if (args.concurrency !== undefined && concurrency === null)
         return bad('--concurrency must be an integer >= 1')
+      // 이 Run 을 관리할 코디네이터 세션의 계정들. **없으면 코디네이터를 띄우지 않는다** — 그때는
+      // 앱이 돌리고(옛 동작), 워커의 질문은 앱의 그물이 풀어 준다(inbox.ts). 그 갈림을 조용히
+      // 두지 않고 UI 가 힌트로 말한다.
+      const coordArg = str(args.coordinatorAccount)
+      let coordinatorAccountIds: string[] | undefined
+      if (coordArg !== null) {
+        const parsed = parseAccountList(coordArg, deps.listAccounts(), '--coordinator-account')
+        if (!parsed.ok) return bad(parsed.reason)
+        coordinatorAccountIds = parsed.ids
+      }
       // 예약. **규칙만 받는다**(command 없는 반쪽) — Job 에는 타이핑할 명령이 없다(Run.schedule).
       // 지역 변수로 좁히는 이유는 타입이다: `if (a && !guard) return` 은 블록 밖에서 좁혀지지 않는다.
       let schedule: ScheduleRule | undefined
@@ -353,6 +406,7 @@ export async function handleCommand(
             objective,
             cwd,
             ...(concurrency !== null ? { concurrency } : {}),
+            ...(coordinatorAccountIds ? { coordinatorAccountIds } : {}),
             // `--auto` 는 값이 없는 플래그다(task-create --review 와 같은 모양). **예약이면 켜지
             // 않는다** — 템플릿은 자신이 돌지 않고, 발화가 만든 자식 Run 이 돈다(그 자식은
             // spawnScheduledRun 이 autoDispatch 를 켠다).
@@ -486,7 +540,46 @@ export async function handleCommand(
     case 'run-start': {
       const id = str(args.run)
       if (!id) return bad('--run is required')
-      return commit(startRun(s, id))
+      const target = s.runs.find((r) => r.id === id)
+      if (!target) return bad(`unknown run: ${id}`)
+      const started = startRun(s, id)
+      if (!started.ok) return bad(started.error)
+      // **코디네이터를 띄울 수 있으면 띄우고, 이 Run 의 운전자를 그에게 넘긴다.** 넘기는 방식이
+      // `autoDispatch` 를 끄는 것이다 — 한 Run 에 운전자는 하나이고, 켜 둔 채로 코디네이터를
+      // 붙이면 둘이 같은 ready Task 를 두고 경합한다(Run.autoDispatch 의 주석).
+      //
+      // 계정 지정이 없거나 배선이 이 기능을 주입하지 않으면 옛 동작이다: 앱이 돌리고, 워커의
+      // 질문은 앱의 그물이 풀어 준다(core/orchestration/inbox.ts).
+      const accountIds = target.coordinatorAccountIds
+      if (!accountIds?.length || !deps.startCoordinator) return commit(started)
+      let sessionId: string
+      try {
+        const spawned = await deps.startCoordinator({
+          runId: id,
+          cwd: target.cwd,
+          accountIds,
+          prompt: buildHandoverPrompt({
+            runId: id,
+            objective: target.objective,
+            concurrency: target.concurrency ?? DEFAULT_CONCURRENCY,
+            taskCount: s.tasks.filter((t) => t.runId === id).length
+          })
+        })
+        sessionId = spawned.sessionId
+      } catch (e) {
+        // **`pendingStart` 를 그대로 둔다.** 걷어 버리면 실행 버튼이 사라져 사람이 다시 누를 수
+        // 없고, 운전자도 없는 Run 이 남는다 — 아무것도 돌지 않는데 화면은 시작한 것처럼 보인다.
+        // 그래서 이 실패는 상태를 하나도 바꾸지 않는다.
+        return bad(`could not start the coordinator: ${String(e)}`)
+      }
+      // autoDispatch 는 **지운다** — false 로 두면 JSON 비교에서 "없음" 과 다른 값이 되고, 이
+      // 코드베이스는 해당 없는 칸을 두지 않는다(startRun 이 pendingStart 를 지우는 것과 같다).
+      const handed = started.state.runs.map((r) => {
+        if (r.id !== id) return r
+        const { autoDispatch: _drop, ...rest } = r
+        return rest
+      })
+      return commit(attachCoordinator({ ...started.state, runs: handed }, { runId: id, sessionId }))
     }
     case 'run-pause': {
       const id = str(args.run)
@@ -605,37 +698,11 @@ export async function handleCommand(
       // 쉼표가 없으므로 그대로 흐른다.
       const accountArg = str(args.account)
       if (accountArg === null) return bad('--account is required')
-      let accountIds: string[] | undefined
-      {
-        const parts = accountArg.split(',').map((x) => x.trim())
-        // 빈 칸을 조용히 버리지 않고 거절한다 — `a,,b` 나 `a,` 는 손이 미끄러진 것이고, 버리면
-        // 사람이 적은 것과 도는 것이 달라진다. 그것을 알 방법은 화면에 없다.
-        if (parts.some((x) => x === '')) return bad('--account must not contain an empty entry')
-        const dup = parts.find((x, i) => parts.indexOf(x) !== i)
-        // 중복을 거절하는 이유: 같은 계정이 두 칸이면 RollCycle 은 두 계정인 줄 알고 한 바퀴를 세고,
-        // "갈아탄" 결과가 같은 계정이 된다. 판정 쪽에서도 접지만(dispatchAccount.ts) 명령은 그 전에
-        // 사람에게 말해 주는 자리다.
-        if (dup !== undefined) return bad(`--account lists ${dup} twice`)
-        // provider 로 좁히지 않고 전부 받아 온다 — 좁힐 기준이 이 목록 자신이다(Run 은 더 이상
-        // provider 를 모른다). 존재를 먼저 보고, 그다음 서로 같은 provider 인지 본다.
-        const known = deps.listAccounts()
-        const unknown = parts.find((x) => !known.some((k) => k.id === x))
-        if (unknown !== undefined) return bad(`unknown account: ${unknown}`)
-        // **섞인 목록을 거절한다.** 첫 계정으로 띄운 CLI 가 한도에 걸렸을 때 다른 CLI 의 계정으로
-        // 갈아타려 하는데, 그것은 갈아타기가 아니라 다른 프로그램을 띄우는 일이다. 판정 쪽에서도
-        // 접히지만(accountToDispatchOn 이 첫 계정의 provider 로 뒤 칸을 걸러낸다) 조용히 접히므로
-        // — 사람이 적은 목록과 도는 목록이 달라진다 — 명령이 그 전에 말해 준다. 빈 칸·중복을
-        // 거절하는 것과 같은 이유다.
-        const providerOfId = (id: string): Provider =>
-          known.find((k) => k.id === id)!.provider
-        const head = providerOfId(parts[0])
-        const odd = parts.find((x) => providerOfId(x) !== head)
-        if (odd !== undefined)
-          return bad(
-            `--account must not mix providers: ${parts[0]} is ${head}, ${odd} is ${providerOfId(odd)}`
-          )
-        accountIds = parts
-      }
+      // 검증은 parseAccountList 가 한다 — `run-create --coordinator-account` 와 **같은 규칙**이고,
+      // 두 번 적으면 한쪽만 고쳐지는 날이 온다(그 함수의 주석).
+      const parsedAccounts = parseAccountList(accountArg, deps.listAccounts(), '--account')
+      if (!parsedAccounts.ok) return bad(parsedAccounts.reason)
+      const accountIds: string[] = parsedAccounts.ids
       return commit(
         createTask(
           s,
@@ -758,6 +825,28 @@ export async function handleCommand(
           `run ${run.id} is a schedule template — it does not dispatch its own Tasks; its executions do`
         )
 
+      // **동시 실행 한도.** 지금까지 이 값을 지키는 곳은 앱의 스케줄러뿐이었다(schedule.ts 의
+      // slotsToFill) — 앱이 유일한 배치자였으므로 그것으로 충분했다. Run 을 코디네이터에게 넘기는
+      // 순간 이것은 **LLM 이 어길 수 있는 규칙**이 되므로, 이 명령이 이미 거절하는 다른 규칙들과
+      // 같은 대열에 들어간다(blocked Task, 회로 차단, 중복 Dispatch, 예약 템플릿).
+      //
+      // 인수 프롬프트도 같은 값을 말해 준다(handover.ts) — 문구가 1차이고 이 거절이 2차다. 문구만
+      // 있으면 슬쩍 넘겨도 아무도 모르고, 거절만 있으면 코디네이터가 시행착오로 규칙을 알아내며
+      // 턴을 쓴다. 그래서 지금 열린 수와 한도를 문구에 함께 적는다.
+      //
+      // **`--retry-of` 는 예외가 아니다.** 재시도도 새 Dispatch 를 열고 그 워커도 같은 폴더들에서
+      // 돈다 — 한도를 넘겨도 되는 이유가 없다.
+      const limit = run.concurrency ?? DEFAULT_CONCURRENCY
+      const openHere = s.dispatches.filter((d) => {
+        if (d.outcome || d.endedAt) return false
+        return s.tasks.find((x) => x.id === d.taskId)?.runId === run.id
+      }).length
+      if (openHere >= limit)
+        return conflict(
+          `run ${run.id} is at its concurrency limit: ${openHere} of ${limit} dispatches are open`
+        )
+
+
       // **`--worktree` 를 생략한 호출은 "이 Run 이 일하는 자리" 를 뜻한다** — 그것은 Run 이
       // 워크트리를 가진 뒤에는 그 워크트리다. 기본값이 여기 있는 이유: 배치를 정하는 것은 부르는
       // 쪽이 아니라 Run 이다. 렌더러의 수동 띄우기 버튼이 `'current'` 를 명시하던 동안 이 기능이
@@ -777,12 +866,41 @@ export async function handleCommand(
       // 이다. 되돌아갈 자리가 없으니 거절한다: `--worktree` 를 **명시적으로** 준 호출(값이 무엇이든,
       // `'current'` 를 직접 써도)은 이 거절을 지나간다 — 그것은 사람이 자리를 골랐다는 뜻이고, 그
       // 선택을 막을 이유가 없다.
-      if (str(args.worktree) === null && run.autoDispatch && !run.worktree)
+      //
+      // **`autoDispatch` 만 보면 인계된 Run 이 이 거절에서 빠져나간다.** 사이드바 Run 을 코디네이터에게
+      // 넘기는 방식이 그 깃발을 끄는 것이므로(run-start), 넘긴 뒤에는 "앱이 돌리는 Run" 검사가
+      // 거짓이 된다 — 그런데 그 Run 의 워크트리를 만들어 주던 것도 앱이었다. 그래서 넘긴 Run 에서
+      // `--worktree` 를 생략하면 조용히 `'current'` 로 떨어져 워커가 프로젝트 폴더에서 돈다. 사람이
+      // 사이드바에서 짠 Run 임을 말하는 칸은 `coordinatorAccountIds` 이므로 그것으로 함께 묻는다.
+      //
+      // **이것은 완전한 답이 아니다.** 넘긴 Run 에서는 앱이 첫 슬롯을 채우지 않으므로 Run 워크트리가
+      // 아예 만들어지지 않고, 한도 1 인 Run 의 코디네이터는 "생략하라"는 배치 규칙을 따를 자리가
+      // 없다(handover.ts 가 그렇게 말한다). 그때 이 거절이 그 사실을 **소리 내어** 말해 주므로
+      // 코디네이터는 `--worktree new --name` 으로 갈 수 있다. 제대로 된 답은 인계 시점에 Run
+      // 워크트리를 미리 만들어 두는 것이고, 그것은 별개 작업이다.
+      if (
+        str(args.worktree) === null &&
+        (run.autoDispatch || (run.coordinatorAccountIds?.length ?? 0) > 0) &&
+        !run.worktree
+      )
         return conflict(
           `run ${run.id} has no worktree yet — there is nowhere to run a worker without writing ` +
-            `into the project folder; the scheduler creates one when the Run starts`
+            `into the project folder; pass --worktree new --name <name>`
         )
       const worktree = str(args.worktree) ?? run.worktree ?? 'current'
+      // **배치 규칙은 여기서 거절되지 않는다 — 문구로만 지켜진다**(handover.ts 의 인수 프롬프트).
+      // 막고 싶은 것은 "병렬 워커가 한 폴더를 나눠 쓴다" 하나인데, 그것을 이 자리에서 확인할 수
+      // 없다: 위 값은 **의도**('current'·'new'·경로)이고 실제 cwd 로 푸는 것은 배선이다
+      // (startWorker). 이미 열린 Dispatch 의 `cwd` 와 비교하려면 그 풀이가 한 곳에 있어야 한다.
+      //
+      // 대신 쓸 수 있는 대용은 "한도 ≥2 인 Run 에서 --worktree 생략 금지" 였는데, 기본 한도가 3
+      // 이므로 그것은 **모든 기본 Run** 에서 생략을 금지하는 셈이 되고, 생략은 오늘 문서화된
+      // 정상 호출이다(이 주석 위의 기본값 단락). 대용을 넣어 보고 기존 테스트 21개가 거절당하는
+      // 것으로 확인했다.
+      //
+      // 그래서 이 가드는 cwd 풀이를 한 곳으로 모으는 작업과 함께 와야 한다. 그때까지 병렬 Run 에
+      // 잘못된 배치를 부를 수 있는 유일한 호출자는 코디네이터이고, 그에게는 규칙과 **이유**가
+      // 프롬프트로 간다.
 
       // For a --terminal reuse the server looks up in advance which dispatch actually owned that
       // session (its cwd, provider and accountId) and passes them to the coordinator as arguments —

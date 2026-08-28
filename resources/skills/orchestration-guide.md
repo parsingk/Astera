@@ -43,6 +43,13 @@ from anyone. `--auto` also arms a start gate (`pendingStart`): such a Run holds 
 clears it, which is the app's "Run" button in the job detail window. So a Run made this way does
 nothing at all until that command lands. This guide does not document how to do that on purpose, but nothing at the CLI's own
 argument parser stops you from passing them anyway (it accepts any `--flag value` for any command).
+**A Run someone laid out in the app may be handed to you.** When the person presses Run on a Job they
+built in the sidebar, the app starts a coordinator session — possibly you — and gives it that Run.
+Such a Run comes with its Tasks, their dependencies, their accounts and their validation settings
+already set. Run them as they stand: do not create Tasks, do not rewrite their specs, and do not
+reassign their accounts. If the plan looks wrong, raise it with the person through `gate-create`
+rather than editing around it. Your first prompt says which Run it is and repeats its limits.
+
 So "the most recently created Run" (which `task-create` with no `--run` attaches to) can already be
 one of these — whether the app made it that way or a coordinator did — and that is exactly the case
 4.2's note on `parentId` warns about.
@@ -306,6 +313,22 @@ accounts [--agent <claude|codex>] [--json]
 - **`--name <s>` is required with `--worktree new`** — it becomes the branch and directory name of the
   new worktree. Without it the request is rejected with `400 --name is required for --worktree new`.
   It is unused (ignored) with `--worktree current` or an explicit path.
+- **The placement rule.** Referred to elsewhere in this guide and defined here. A Run's concurrency
+  (`run-show --id <run>`, defaulting to 3) decides where its workers belong:
+  - **1 or less — sequential.** Omit `--worktree`. Every worker runs where that Run works, one after
+    another.
+  - **2 or more — parallel.** Pass `--worktree new --name <short-name>` so each worker gets its own
+    worktree.
+
+  **Why:** merging finished work back requires a clean tree, so two workers must never share one
+  folder — they overwrite each other, and neither the commit obligation nor the merge step notices.
+  Nothing rejects the wrong combination at the moment (resolving the intended folder happens after
+  this command), so this one is on you.
+- **Respect the Run's concurrency.** Never let more than that many dispatches be open in one Run at
+  once. `worker-start` **rejects** the call that would exceed it with
+  `409 run <id> is at its concurrency limit: <n> of <n> dispatches are open`, and a rejection costs
+  you a turn — count the open ones first. The app's review dispatches are outside this count: a review
+  is a step of a Task that has already run, not a new work item.
 - **`--retry-of <dsp>` does not inherit placement.** Pass `--worktree`, `--agent`, and `--account`
   again — omitting them can retry with a different combination than the original attempt.
 - `--terminal <sessionId>` reuses an existing worker session. This is the only case where a new Task
@@ -601,6 +624,9 @@ meaningless and repeats the same failure indefinitely.
 - Do not guess accounts — confirm a real id with `accounts` first (4.3).
 - Do not choose a Task's account for someone who did not name one, unless there is only one it could
   be — ask instead (4.2).
+- Do not exceed a Run's concurrency, and do not put parallel workers in one folder — the placement
+  rule (4.3).
+- Do not restructure a Run a person laid out in the app (4.1) — run it as it stands, or open a Gate.
 - Do not move a quota-killed worker **to a different account.** Retry on the same account after
   `limitResetsAt` (section 7).
 - Do not write, edit, or delete a worker's `## Resume briefing` section in its spec file — the app

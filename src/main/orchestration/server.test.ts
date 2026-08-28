@@ -2747,6 +2747,228 @@ describe('run-spawn — 예약 회차', () => {
 
 })
 
+describe('worker-start — 인계된 Run 의 워크트리', () => {
+  // 사이드바 Run 을 넘기는 방식이 autoDispatch 를 끄는 것이라, `autoDispatch` 만 보면 넘긴 Run 이
+  // 이 거절에서 빠져나가고 워커가 조용히 프로젝트 폴더에서 돈다 — 설계가 금지하는 조합이다
+  it('코디네이터에게 넘긴 Run 도 워크트리 없이 --worktree 생략을 거절한다', async () => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      auto: true,
+      coordinatorAccount: 'acc1'
+    })
+    const runId = (run.body as { id: string }).id
+    const t = await call(deps, 'task-create', { account: 'acc1', runId, spec: 's' })
+    const taskId = (t.body as { id: string }).id
+    // 넘긴 상태를 흉내 낸다 — run-start 가 하는 그대로(autoDispatch 를 지운다)
+    await deps.setState({
+      ...deps.getState(),
+      runs: deps.getState().runs.map((r) => {
+        if (r.id !== runId) return r
+        const { autoDispatch: _drop, pendingStart: _drop2, ...rest } = r
+        return { ...rest, coordinatorSessionId: 'coord1' }
+      })
+    })
+    const r = await call(deps, 'worker-start', { task: taskId, agent: 'codex', account: 'acc1' })
+    expect(r.status).toBe(409)
+    expect(String((r.body as { error?: string }).error)).toContain('no worktree yet')
+  })
+
+  it('--worktree 를 명시하면 지나간다 — 사람이 자리를 골랐다는 뜻이다', async () => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      coordinatorAccount: 'acc1'
+    })
+    const runId = (run.body as { id: string }).id
+    const t = await call(deps, 'task-create', { account: 'acc1', runId, spec: 's' })
+    const r = await call(deps, 'worker-start', {
+      task: (t.body as { id: string }).id,
+      agent: 'codex',
+      account: 'acc1',
+      worktree: 'new',
+      name: 'w1'
+    })
+    expect(r.status).toBe(200)
+  })
+})
+
+describe('worker-start — 동시 실행 한도', () => {
+  const twoTasks = async (
+    concurrency?: number
+  ): Promise<{ deps: OrchServerDeps & { state: OrchState }; ids: string[] }> => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      ...(concurrency === undefined ? {} : { concurrency })
+    })
+    const runId = (run.body as { id: string }).id
+    const ids: string[] = []
+    for (const spec of ['a', 'b', 'c', 'd']) {
+      const t = await call(deps, 'task-create', { account: 'acc1', runId, spec })
+      ids.push((t.body as { id: string }).id)
+    }
+    return { deps, ids }
+  }
+
+  // 이 값을 지키는 곳은 앱의 스케줄러뿐이었다(slotsToFill) — 앱이 유일한 배치자였으므로 충분했다.
+  // 코디네이터에게 넘기는 순간 LLM 이 어길 수 있는 규칙이 되므로 서버가 같이 지킨다.
+  it('한도에 닿으면 다음 worker-start 를 거절한다', async () => {
+    const { deps, ids } = await twoTasks(2)
+    expect((await call(deps, 'worker-start', { task: ids[0], agent: 'codex', account: 'acc1', worktree: 'current' })).status).toBe(200)
+    expect((await call(deps, 'worker-start', { task: ids[1], agent: 'codex', account: 'acc1', worktree: 'current' })).status).toBe(200)
+    const third = await call(deps, 'worker-start', { task: ids[2], agent: 'codex', account: 'acc1', worktree: 'current' })
+    expect(third.status).toBe(409)
+    // 지금 열린 수와 한도를 함께 말한다 — 코디네이터가 시행착오로 규칙을 알아내며 턴을 쓰지 않게
+    const err = String((third.body as { error?: string }).error)
+    expect(err).toContain('concurrency limit')
+    expect(err).toContain('2 of 2')
+  })
+
+  it('한도 안이면 그대로 통과한다', async () => {
+    const { deps, ids } = await twoTasks(3)
+    for (const id of ids.slice(0, 3))
+      expect((await call(deps, 'worker-start', { task: id, agent: 'codex', account: 'acc1', worktree: 'current' })).status).toBe(200)
+  })
+
+  it('한도를 정하지 않은 Run 은 기본값을 쓴다', async () => {
+    const { deps, ids } = await twoTasks()
+    for (const id of ids.slice(0, 3))
+      expect((await call(deps, 'worker-start', { task: id, agent: 'codex', account: 'acc1', worktree: 'current' })).status).toBe(200)
+    expect(
+      (await call(deps, 'worker-start', { task: ids[3], agent: 'codex', account: 'acc1', worktree: 'current' })).status
+    ).toBe(409)
+  })
+
+  // 끝난 Dispatch 는 자리를 비운다 — 아니면 Run 이 한 번 한도에 닿은 뒤로 영원히 막힌다
+  it('끝난 Dispatch 는 세지 않는다', async () => {
+    const { deps, ids } = await twoTasks(1)
+    const first = await call(deps, 'worker-start', { task: ids[0], agent: 'codex', account: 'acc1', worktree: 'current' })
+    expect(first.status).toBe(200)
+    expect(
+      (await call(deps, 'worker-start', { task: ids[1], agent: 'codex', account: 'acc1', worktree: 'current' })).status
+    ).toBe(409)
+    const dispatchId = (first.body as { dispatchId?: string; id?: string }).dispatchId
+      ?? deps.getState().dispatches[0].id
+    await call(deps, 'worker-stop', { dispatch: dispatchId })
+    expect(
+      (await call(deps, 'worker-start', { task: ids[1], agent: 'codex', account: 'acc1', worktree: 'current' })).status
+    ).toBe(200)
+  })
+})
+
+describe('run-start — 코디네이터 인계', () => {
+  /** startCoordinator 를 기록하는 deps. 계정은 claude 둘 + codex 하나. */
+  const coordDeps = (
+    over: Partial<OrchServerDeps> = {}
+  ): OrchServerDeps & { state: OrchState; spawned: { runId: string; prompt: string }[] } => {
+    const spawned: { runId: string; prompt: string }[] = []
+    const base = Object.assign(makeDeps(), {
+      listAccounts: () => [
+        { id: 'cl1', label: 'claude1', provider: 'claude' as const },
+        { id: 'cl2', label: 'claude2', provider: 'claude' as const },
+        { id: 'cx1', label: 'codex1', provider: 'codex' as const }
+      ],
+      startCoordinator: async (a: { runId: string; prompt: string }) => {
+        spawned.push({ runId: a.runId, prompt: a.prompt })
+        return { sessionId: 'coord-sess' }
+      },
+      ...over
+    })
+    return Object.assign(base, { spawned }) as never
+  }
+
+  const mkRun = async (
+    deps: OrchServerDeps,
+    args: Record<string, unknown> = {}
+  ): Promise<string> => {
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true, ...args })
+    return (r.body as { id: string }).id
+  }
+
+  it('코디네이터 계정이 있으면 실행이 코디네이터를 띄우고 운전자를 넘긴다', async () => {
+    const deps = coordDeps()
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1,cl2' })
+    const r = await call(deps, 'run-start', { run: runId })
+    expect(r.status).toBe(200)
+    expect(deps.spawned.map((x) => x.runId)).toEqual([runId])
+    const run = deps.getState().runs.find((x) => x.id === runId)!
+    expect(run.coordinatorSessionId).toBe('coord-sess')
+    // **운전자를 넘기는 방식이 autoDispatch 를 지우는 것이다** — 켜 둔 채로 코디네이터를 붙이면
+    // 둘이 같은 ready Task 를 두고 경합한다(Run.autoDispatch 의 주석)
+    expect(run).not.toHaveProperty('autoDispatch')
+    expect(run).not.toHaveProperty('pendingStart')
+  })
+
+  it('인수 프롬프트에 그 Run 의 한도와 Task 수가 실린다', async () => {
+    const deps = coordDeps()
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1', concurrency: 2 })
+    await call(deps, 'task-create', { account: 'cl1', runId, spec: 'a' })
+    await call(deps, 'run-start', { run: runId })
+    const prompt = deps.spawned[0].prompt
+    expect(prompt).toContain(runId)
+    expect(prompt).toContain('CONCURRENCY IS 2')
+    expect(prompt).toContain('tasks already defined: 1')
+  })
+
+  it('코디네이터 계정이 없으면 띄우지 않고 앱이 계속 돌린다 — 옛 동작', async () => {
+    const deps = coordDeps()
+    const runId = await mkRun(deps)
+    expect((await call(deps, 'run-start', { run: runId })).status).toBe(200)
+    expect(deps.spawned).toEqual([])
+    const run = deps.getState().runs.find((x) => x.id === runId)!
+    expect(run.autoDispatch).toBe(true)
+    expect(run).not.toHaveProperty('coordinatorSessionId')
+  })
+
+  it('배선이 그 기능을 주입하지 않으면 띄우지 않는다', async () => {
+    const deps = coordDeps({ startCoordinator: undefined })
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
+    expect((await call(deps, 'run-start', { run: runId })).status).toBe(200)
+    expect(deps.getState().runs[0].autoDispatch).toBe(true)
+  })
+
+  // 걷어 버리면 실행 버튼이 사라져 사람이 다시 누를 수 없고, 운전자도 없는 Run 이 남는다
+  it('코디네이터 띄우기가 실패하면 아무것도 바뀌지 않는다 — pendingStart 가 남는다', async () => {
+    const deps = coordDeps({
+      startCoordinator: async () => {
+        throw new Error('no session')
+      }
+    })
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
+    const r = await call(deps, 'run-start', { run: runId })
+    expect(r.status).toBe(400)
+    const run = deps.getState().runs.find((x) => x.id === runId)!
+    expect(run.pendingStart).toBe(true)
+    expect(run.autoDispatch).toBe(true)
+    expect(run).not.toHaveProperty('coordinatorSessionId')
+  })
+
+  it('--coordinator-account 는 섞인 provider 를 거절한다 — 코디네이터도 한 CLI 다', async () => {
+    const deps = coordDeps()
+    const r = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      coordinatorAccount: 'cl1,cx1'
+    })
+    expect(r.status).toBe(400)
+    expect(String((r.body as { error?: string }).error)).toContain('must not mix providers')
+  })
+
+  it('--coordinator-account 는 모르는 계정을 거절한다', async () => {
+    const deps = coordDeps()
+    const r = await call(deps, 'run-create', {
+      objective: 'o',
+      cwd: 'D:/p',
+      coordinatorAccount: 'nope'
+    })
+    expect(r.status).toBe(400)
+  })
+})
+
 describe('run-start — 사람이 실행을 누를 때까지 기다린다', () => {
   it('run-create --auto 는 pendingStart 를 함께 켠다', async () => {
     const deps = makeDeps()
