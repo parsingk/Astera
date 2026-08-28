@@ -1119,15 +1119,21 @@ input[type="checkbox"]:not(.md-task input):checked {
   background: var(--accent);
   border-color: var(--accent);
 }
-/* 체크 표시는 가상 요소로 그린다 — appearance:none 이 네이티브 표시까지 지웠다. 두 변만 남긴
-   사각형을 45도 돌린 것이 갈고리다 */
+/* 체크 표시는 가상 요소로 그린다 — appearance:none 이 네이티브 표시까지 지웠다.
+   모양은 lucide 의 Check(`M20 6 9 17l-5-5`)다. 앱의 다른 아이콘이 전부 lucide 인데 이 표시만
+   두 변을 남긴 사각형을 45도 돌린 갈고리였고, border 로 그린 탓에 획 끝이 각져 lucide 의 둥근
+   끝(stroke-linecap: round)과 나란히 놓이면 달라 보였다.
+   **컴포넌트가 아니라 마스크인 이유**: <input type="checkbox"> 는 자식을 받지 못해 <Check/> 를
+   넣을 자리가 없다. 마스크로 쓰면 색은 여기서 --accent-ink 로 계속 주면서 모양만 빌려온다.
+   stroke-width 가 3 인 것은 24 viewBox 를 10px 로 줄이기 때문이다 — lucide 기본값 2 는 이
+   크기에서 0.83px 이 되어 상자 안에서 사라진다. 3 이면 1.25px 로, 갈고리였을 때의 1.5px 와
+   비슷한 무게가 된다. */
 input[type="checkbox"]:not(.md-task input):checked::after {
   content: '';
-  width: 7px;
-  height: 3.5px;
-  border-left: 1.5px solid var(--accent-ink);
-  border-bottom: 1.5px solid var(--accent-ink);
-  transform: rotate(-45deg) translate(0, -1px);
+  width: 10px;
+  height: 10px;
+  background: var(--accent-ink);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 input[type="checkbox"]:not(.md-task input):focus-visible {
   outline: none;
