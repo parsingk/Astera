@@ -118,6 +118,8 @@ You will also need:
 - Several accounts per vendor, each isolated through its own `CLAUDE_CONFIG_DIR` / `CODEX_HOME`
 - **Account rolling:** when a session hits a usage limit, Astera detects it from the transcript,
   works out the reset time, and resumes the work on the next account
+- **Resume strategy:** keep the CLI's original conversation — the default — or opt into
+  **Smart Resume (experimental)**, which starts the next session from a compact checkpoint instead
 - Optional import of a new account's setup from your default one: `settings.json`, the MCP server
   list, and the `skills`, `commands` and `agents` directories
 
@@ -152,28 +154,18 @@ You will also need:
 Jobs is opt-in. Turn on **Agent orchestration** in settings to add the Jobs sidebar. A job is a
 dependency graph whose tasks can run under either vendor, and there are two ways to run one.
 
-### 1. Run it from the Jobs sidebar — Astera coordinates
-
-This path is managed by the app:
+### 1. Build it in the Jobs sidebar
 
 1. Make sure the project is a git repository with a branch checked out.
-2. In the Jobs sidebar, click **New job**, set **Objective**, **Agent** and the concurrency limit
-   (the field is labelled **Run at once**), plus **Scheduled run** if you want one, then click
-   **Create**.
-3. In the job detail window, click **Add task**, then give the task a **Title** and its
-   **Instructions** and pick what it **Depends on**. Optionally choose an **Account**, a run
-   configuration that proves it done, or a review by an agent — which always runs on the other
-   vendor.
-4. After all tasks are laid out, click **Run**. Creating the job or adding a task does not start any
-   work; for a scheduled job, **Run** arms the schedule instead of starting a round immediately.
+2. Click **New job**, enter the **Objective**, choose a **Coordinator account**, set **Run at once**,
+   and optionally add a schedule.
+3. Add tasks with instructions, one or more worker accounts, and any dependencies. Builds, tests and
+   cross-vendor reviews can be attached as completion checks.
+4. Click **Run**. A normal job opens its coordinator; a scheduled job activates its schedule.
 
-Astera starts only tasks whose dependencies are complete. What happens after that depends on the
-concurrency limit. At 2 or more — 3 is the default — every task gets its own worktree, and before a
-downstream task starts Astera merges the finished ones into the job's own worktree; if that merge
-conflicts, it hands the conflict to an agent. At 1 the tasks inherit a single worktree in turn, so
-there is nothing to merge. Either way the completed job is not merged into the project's
-checked-out branch automatically — click **Merge** in the detail window when you are ready to bring
-the result back. The [complete Job lifecycle](docs/jobs.md) is documented in Korean.
+The Jobs view shows the dependency graph, active workers, questions and timeline. Parallel tasks can
+use separate git worktrees, and the finished result stays out of your checked-out branch until you
+click **Merge**. See the [complete Job lifecycle](docs/jobs.md) for details.
 
 ### 2. Run it with the `astera-orchestration` skill — an agent coordinates
 
@@ -183,41 +175,26 @@ receives the `astera` CLI on its `PATH` and the `astera-orchestration` skill. Yo
 > Use the `astera-orchestration` skill to coordinate this work: refactor the authentication module,
 > add regression tests after the refactor, and verify the test suite.
 
-The skill can also be invoked explicitly as `/astera-orchestration`. The coordinator creates the run
-and tasks, starts worker sessions — including workers on the *other* vendor — and waits on completion,
-dependencies, questions and escalations. Workers report through the bundled `astera` CLI. A run whose
-working directory matches the open project is still visible in the Jobs sidebar, but the coordinator,
-not Astera's automatic scheduler, decides what to dispatch.
+The skill can also be invoked explicitly as `/astera-orchestration`. It is for multi-step work that
+needs supervision, completion tracking or dependency coordination. The coordinator creates the run
+and tasks, dispatches Claude and Codex workers, waits for their reports and brings questions back to
+you. Runs created this way also appear in the Jobs sidebar when they belong to the open project.
 
-Either way:
-
-- **A task can be proven done rather than reported done:** attach one of the project's run
-  configurations and it completes only when that build or test suite exits `0`
-- What no exit code settles — whether the work does what was asked — can go to a reviewer on the
-  *other* vendor, and the task waits on that verdict
-- Each task can run in its own git worktree, so parallel workers do not collide
-- A decision the job cannot take on its own stops and waits for a person to answer it
-- Every agent started this way is pointed at the project's own decision records, whatever sits in
-  `knowledge/`, `docs/adr/`, `docs/decisions/` and the like, so a settled question is not reopened
+Skills are loaded when a session starts, so enable Agent orchestration first and then open a new
+coordinator session. A simple one-off handoff does not need an orchestration run.
 
 <div align="center">
-<img src="assets/jobs.gif" width="820" alt="Diagram: a job's tasks drawn as a dependency graph — Astera starts the two that are ready on both vendors at once, a test suite proves one of them done, the finished task worktrees merge into the job worktree, and a decision the job cannot take waits for a person" />
+<img src="assets/jobs.gif" width="820" alt="Diagram: a coordinator follows a job's dependency graph, starts the two ready tasks on both vendors at once, uses a test suite to prove one done, waits for both dependencies before continuing, and leaves an unresolved decision for a person" />
 </div>
 
-And you watch it happen: every job of the open project in the sidebar, its tasks drawn as a
-dependency graph, and what happened as a timeline. Which vendor is working on which task, and for
-how long. Start a task, stop it, retry it, raise a question for a person, or answer a waiting
-decision — from the task's own node in the graph.
-
-To read the coordinator's full CLI reference yourself:
+To read the coordinator CLI reference:
 
 ```bash
 astera help
 ```
 
-If `astera` comes back as `command not found`, the absolute path is in `$ASTERA_CLI` — the two are
-the same program. An empty `$ASTERA_CLI` means the session was not started by Astera, or Agent
-orchestration is off.
+If `astera` is not on `PATH`, use the path in `$ASTERA_CLI`. An empty value means the session was not
+started by Astera, or Agent orchestration is off.
 
 ## Build from source
 
