@@ -315,9 +315,14 @@ describe('SlackNotifier 훅 이벤트', () => {
 
 describe('SlackNotifier codex 턴 완료', () => {
   it('codex 턴 완료 — rollout 발췌를 붙여 보낸다', async () => {
+    // 현행 codex 형식(core/slack/codexTranscript.ts 의 주석 — 실측 2026-08-29)
     const tail = JSON.stringify({
-      type: 'event_msg',
-      payload: { type: 'agent_message', message: '작업을 마쳤습니다' }
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '작업을 마쳤습니다' }]
+      }
     })
     const h = setup({ readFileTail: async () => tail })
     h.notifier.register(codexSession('s-1'))

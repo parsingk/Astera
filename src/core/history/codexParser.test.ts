@@ -18,13 +18,30 @@ const metaLine = JSON.stringify({
     originator: 'codex-tui'
   }
 })
+// **현행 codex 형식이다**(codexParser 의 eventMessage 주석 — 실측 2026-08-29). 예전 픽스처는
+// `event_msg/user_message`·`agent_message` 였고, codex 가 그 둘을 쓰지 않게 되면서 그 모양의
+// 픽스처는 현실에 없는 파일을 흉내 내고 있었다.
 const user = (text: string): string =>
   JSON.stringify({
     timestamp: '2026-07-09T04:32:04.447Z',
-    type: 'event_msg',
-    payload: { type: 'user_message', message: text }
+    type: 'response_item',
+    payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] }
   })
 const agent = (text: string): string =>
+  JSON.stringify({
+    timestamp: '2026-07-09T04:32:08.937Z',
+    type: 'response_item',
+    payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }
+  })
+/** 스킬 지시문 등이 들어오는 롤 — 사람도 에이전트도 하지 않은 말이라 대화가 아니다 */
+const developer = (text: string): string =>
+  JSON.stringify({
+    timestamp: '2026-07-09T04:32:00.000Z',
+    type: 'response_item',
+    payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text }] }
+  })
+/** 옛 형식 한 줄 — 읽지 않아야 한다(구 형식 파일에도 response_item 이 있어 중복이 된다) */
+const legacyAgent = (text: string): string =>
   JSON.stringify({
     timestamp: '2026-07-09T04:32:08.937Z',
     type: 'event_msg',
@@ -141,7 +158,7 @@ describe('parseCodexForResume', () => {
   // 부류였고, `The following is the Codex agent history` 로 시작하는 것들이 통과분 글자의 대부분을
   // 차지했다. codex 레코드에는 claude 의 isMeta 에 해당하는 구조화 표시가 없어(최상위 키가
   // payload·timestamp·type 뿐이다) 이 목록이 판정을 혼자 진다.
-  it('기계가 남긴 user_message 는 요청도 꼬리도 아니다', async () => {
+  it('기계가 남긴 사용자 메시지는 요청도 꼬리도 아니다', async () => {
     const p = await write('resume-machine.jsonl', [
       metaLine,
       user('진짜 요청'),

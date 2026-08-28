@@ -13,15 +13,49 @@ export interface CodexMeta {
   title: string | null
 }
 
-// Extracts only the conversation message from one event_msg line. null if it is not one (defensive parsing).
+/** 대화 메시지 하나를 rollout 한 줄에서 뽑는다. 그 줄이 메시지가 아니면 null(방어적 파싱).
+ *
+ *  **`event_msg/user_message`·`agent_message` 가 아니라 `response_item/message` 를 읽는다.**
+ *  예전에는 앞의 둘을 읽었고, codex 가 그 둘을 더 이상 쓰지 않게 되면서 **이 앱의 codex 대화 읽기
+ *  전부가 눈을 잃었다** — 히스토리 제목·미리보기·읽지 않은 표시·Smart Resume 브리핑, 그리고 Slack
+ *  본문(core/slack/codexTranscript.ts 가 같은 전환을 겪었다).
+ *
+ *  **실측(2026-08-29, 이 컴퓨터의 rollout 최근 10개).** `event_msg/agent_message` 는 08-28 17:00
+ *  이후 파일 넷에서 **0** 이고 `user_message` 는 그보다 앞선 파일에서도 이미 0 이다. 반면
+ *  `response_item/message` 는 표본 **열 개 전부**에 있었고, 구 형식 파일에서는 개수가 옛 레코드보다
+ *  많거나 같았다(예: 20/20, 226/58). 그래서 이것만 읽으면 두 형식이 모두 덮이고 **중복도 없다** —
+ *  둘을 함께 읽으면 구 형식 파일에서 같은 메시지가 두 번 세어진다.
+ *
+ *  **`developer` 롤은 대화가 아니다.** 스킬 지시문과 다중 에이전트 안내가 그 롤로 들어온다(실측:
+ *  20KB 짜리 `<skills_instructions>` 가 그 자리다). 사람도 에이전트도 하지 않은 말이므로 뺀다.
+ *
+ *  본문은 `content` 블록들의 `text` 를 이어 붙인다. 블록 유형이 방향에 따라 다르다 — 들어오는
+ *  것은 `input_text`, 나가는 것은 `output_text` — 그래서 유형으로 고르지 않고 문자열 `text` 가
+ *  있는 블록을 전부 받는다. */
 function eventMessage(obj: Record<string, unknown>): { kind: 'user' | 'agent'; text: string } | null {
-  if (obj.type !== 'event_msg') return null
+  if (obj.type !== 'response_item') return null
   const payload = obj.payload
   if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) return null
   const p = payload as Record<string, unknown>
-  if (p.type !== 'user_message' && p.type !== 'agent_message') return null
-  if (typeof p.message !== 'string') return null
-  return { kind: p.type === 'user_message' ? 'user' : 'agent', text: p.message }
+  if (p.type !== 'message') return null
+  if (p.role !== 'user' && p.role !== 'assistant') return null
+  const text = contentText(p.content)
+  if (text === null) return null
+  return { kind: p.role === 'user' ? 'user' : 'agent', text }
+}
+
+/** `response_item/message` 의 본문. 블록 배열에서 문자열 `text` 를 이어 붙인다. 빈 결과는 null —
+ *  텍스트 없는 메시지(도구 호출만 실린 줄 등)를 대화로 세지 않는다. */
+function contentText(content: unknown): string | null {
+  if (typeof content === 'string') return content.trim() === '' ? null : content
+  if (!Array.isArray(content)) return null
+  let out = ''
+  for (const block of content) {
+    if (block === null || typeof block !== 'object') continue
+    const t = (block as { text?: unknown }).text
+    if (typeof t === 'string') out += t
+  }
+  return out.trim() === '' ? null : out
 }
 
 // System wrappers codex records as user_message — excluded from the title and the preview (mirrors
@@ -48,7 +82,11 @@ const CODEX_WRAPPER_PREFIXES = [
   '<command-args>',
   // codex 고유. 승인 흐름이 codex 에게 지난 기록을 다시 읽어 주는 문장이고, 길어서 통과분 글자의
   // 대부분을 차지했다(실측 — 2000자 초과 78건이 통과분 글자의 91.8%). 사람이 쓴 요청이 아니다.
-  'The following is the Codex agent history'
+  'The following is the Codex agent history',
+  // `response_item` 을 읽기 시작하면서 드러난 것(실측 2026-08-29): 사용자 롤 첫 메시지가 프로젝트의
+  // AGENTS.md 를 통째로 실은 10KB 짜리 주입이다. 사람이 쓴 요청이 아니고, 그대로 두면 히스토리
+  // 제목이 그 문서의 첫 줄이 된다.
+  '# AGENTS.md instructions'
 ]
 
 function isRealCodexUserText(text: string): boolean {
