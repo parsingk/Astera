@@ -373,11 +373,13 @@ describe('CodexRollingCoordinator', () => {
       h.coord.stop()
     })
 
-    // fix wave 3, finding 1 (CRITICAL): initialPrompt is not sanitized by buildCodexCommand (unlike
-    // resumePrompt), and codexRolling.ts is what has to sanitize a briefing built out of the user's own
-    // conversation text before it reaches argv on win32 (cmd.exe metacharacters). Asserted on the spawn
-    // argument itself, not on sanitizeResumePrompt in isolation.
-    it('브리핑에 따옴표와 &가 있어도 spawn 에 실리는 initialPrompt 에는 남지 않는다', async () => {
+    // fix wave 7, finding 2 (HIGH): a mangled pointer path has no fallback of its own — the app never
+    // learns the sanitizer changed anything, and the new blank-slate session just gets an ENOENT trying
+    // to read a path that no longer matches what the sanitizer produced. So the decision now runs
+    // *before* the blank-slate branch is chosen: a briefing sanitizeResumePrompt would change refuses
+    // Smart Resume, and the roll falls back to the ordinary copy + `--resume` path, where
+    // buildCodexCommand still applies the same sanitizer to resumePrompt as it always did.
+    it('브리핑을 sanitizeResumePrompt 가 바꾸면 백지 재개를 포기하고 기존 경로로 롤한다', async () => {
       const h = harness({
         resumeStrategy: () => 'smart',
         resumeText: () => Promise.resolve('Fix the "quote" bug & the pipe | issue')
@@ -393,11 +395,36 @@ describe('CodexRollingCoordinator', () => {
       await appendLimitError(file)
       h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
       await advance(100)
-      const sent = h.spawned.at(-1)?.initialPrompt
-      expect(sent).toBeDefined()
-      expect(sent).not.toContain('"')
-      expect(sent).not.toContain('&')
-      expect(sent).not.toContain('|')
+      expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+      expect(h.copied[0]?.src).toBe(file)
+      expect(h.spawned.at(-1)?.resumeSessionId).toBe('cx-smart-sanitize')
+      expect(h.spawned.at(-1)?.resumePrompt).toBe('Fix the "quote" bug & the pipe | issue')
+      expect(h.spawned.at(-1)?.initialPrompt).toBeUndefined()
+      h.coord.stop()
+    })
+
+    // The other half of sanitizeResumePrompt: no forbidden character at all, but a run of two or more
+    // spaces (plausible inside a real filesystem path, e.g. a Windows folder name) still collapses to
+    // one and changes the string — the same refusal has to fire on that case too.
+    it('브리핑에 연속 공백만 있어도 백지 재개를 포기한다', async () => {
+      const h = harness({
+        resumeStrategy: () => 'smart',
+        resumeText: () => Promise.resolve('C:\\Users\\Jane  Doe\\AppData\\tab-resume\\abc123.md')
+      })
+      const file = await writeRollout({
+        accountId: 'c1',
+        uuid: 'cx-smart-doublespace',
+        cwd: h.info1.cwd,
+        primary: 95
+      })
+      h.coord.register(h.info1)
+      await advance(1_500)
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      await advance(100)
+      expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+      expect(h.spawned.at(-1)?.resumeSessionId).toBe('cx-smart-doublespace')
+      expect(h.spawned.at(-1)?.initialPrompt).toBeUndefined()
       h.coord.stop()
     })
 

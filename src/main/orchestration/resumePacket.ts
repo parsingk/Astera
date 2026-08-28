@@ -71,7 +71,8 @@ function upsertResumeSection(existing: string, section: string): string {
  *  두 쓰기가 겹쳐도 서로의 임시 파일을 밟지 않는다.
  *
  *  rename 이 실패하면 임시 파일이 남는다 — 지우려 시도하되 그 실패는 삼킨다(원래 오류를 가리면
- *  안 된다). 남더라도 spec 디렉터리는 앱 시작마다 비워지므로(ipc.ts) 누적되지 않는다. */
+ *  안 된다). 남더라도 이 함수를 쓰는 두 디렉터리 — spec 디렉터리와 tab-resume 디렉터리 —
+ *  모두 앱 시작마다 통째로 비워지므로(ipc.ts) 누적되지 않는다. */
 async function writeAtomic(
   filePath: string,
   content: string,

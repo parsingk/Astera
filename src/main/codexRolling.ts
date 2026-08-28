@@ -1007,7 +1007,23 @@ export class CodexRollingCoordinator {
       // Smart Resume: 설정이 켜져 있고 브리핑이 실제로 있을 때만 백지 재개다. 브리핑을 못 만들면
       // (!briefed) 이 스위치가 켜져 있어도 적용하지 않는다 — 계획의 지배 제약이고, 그 경우 아래는
       // 오늘과 같은 경로(복사 + `--resume`)를 그대로 지난다.
-      const smart = this.resumeStrategy() === 'smart' && briefed
+      //
+      // fix wave 7, finding 2 (HIGH): the third conjunct is what stops a mangled pointer from being
+      // handed to a session with nothing else to fall back on. `prompt` here is not conversation
+      // prose — since Task 7 it is a short line that names a filesystem path (buildTabResumeText's
+      // 'handover'/resumeLine, orchestration/resumePacket.ts). codex's argv sanitizer
+      // (sanitizeResumePrompt, core/sessions/commands.ts) blanks `["&|<>^%]` and folds runs of
+      // whitespace to one space, so a path carrying any of those characters — or two consecutive
+      // spaces, plausible in a Windows folder name — comes back pointing at a file that does not
+      // exist, and a blank-slate session has no transcript to fall back on either. Checking the
+      // sanitizer's identity here, before the blank-slate branch is chosen, is what keeps that from
+      // happening: it does not make the pointer any safer once it does cross the sanitizer — the
+      // ordinary path's resumePrompt goes through this exact same function inside buildCodexCommand,
+      // so a mangled path is mangled either way. What refusing the blank slate buys is that the
+      // mangled hint then arrives alongside the full copied conversation and `--resume`, so it is a
+      // minor loss instead of a session starting from nothing.
+      const smart =
+        this.resumeStrategy() === 'smart' && briefed && sanitizeResumePrompt(prompt) === prompt
       let dest: string | undefined
       if (!smart) {
         // ① The copy — a codex blocked by a limit is idle, so there is no write contention
@@ -1026,13 +1042,18 @@ export class CodexRollingCoordinator {
       // `codex`, not a `codex resume`, and the briefing rides as initialPrompt instead (see the spawn dep's
       // JSDoc for why resumePrompt alone would be silently dropped here).
       //
-      // **Sanitized here, not rejected.** buildCodexCommand deliberately leaves initialPrompt
-      // unsanitized (see that field's JSDoc) because its other caller — the orchestration coordinator,
-      // launching a Job worker — checks the same forbidden characters up front and refuses to launch
-      // rather than risk silently mangling the spec-file pointer it built. This value is not a pointer;
-      // it is conversation prose the user actually typed, where a quote or an `&` is unremarkable.
-      // Rejecting here would turn Smart Resume off for most real conversations, while sanitizing only
-      // costs this string a little fidelity — the tradeoff the coordinator's own path cannot afford.
+      // **Sanitized here, not left to buildCodexCommand.** buildCodexCommand deliberately leaves
+      // initialPrompt unsanitized (see that field's JSDoc) because its other caller — the
+      // orchestration coordinator launching a Job worker — checks the same forbidden characters up
+      // front and refuses to launch rather than risk silently mangling the spec-file pointer it
+      // built. This call site takes the sanitizer instead of a refusal, but the refusal already
+      // happened one step earlier: `smart` above required this exact string to survive
+      // sanitizeResumePrompt unchanged, so by the time this line runs it is a defensive no-op, not a
+      // lossy transform (fix wave 7, finding 2 (HIGH) — an earlier version of this comment called the
+      // loss "a little fidelity" on the theory that this was conversation prose; that stopped being
+      // true once the packet moved behind a pointer line (Task 7, resumePacket.ts) — folding a
+      // mangled path through the sanitizer would have pointed it at a file that no longer exists,
+      // not merely lost a character).
       this.deps.kill(chain.liveId)
       const oldId = chain.liveId
       const info = this.deps.spawn({
