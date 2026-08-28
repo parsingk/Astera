@@ -563,7 +563,14 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    `clip` is not a scroll container at all, so nothing can scroll it. It only works because both axes
    are clipped here — pair it with `auto` on the other axis and it degrades to `hidden`. xterm's own
    scrolling is unaffected: that lives in the child .xterm-viewport. */
-.terminal-host { flex: 1; background: var(--term-bg); min-height: 0; overflow: clip; }
+/* min-width:0 is what `clip` costs. Width is this item's main axis (.terminal-wrap is a row flex
+   container), and a flex item's automatic minimum size only collapses to 0 when the item is a scroll
+   container — `hidden` was one, `clip` is not. So under clip the host's floor became its content width,
+   i.e. .xterm-screen's cols × cellWidth: splitting a pane left the host at its old width, the
+   ResizeObserver saw no real change, fitTerminalToHost kept the same column count, and the old
+   terminal stayed full width and got clipped with the new pane drawn over it. Measured: a slot going
+   1000px → 500px leaves the host at 990px without this, 500px with it. */
+.terminal-host { flex: 1; background: var(--term-bg); min-width: 0; min-height: 0; overflow: clip; }
 /* No inner padding on the terminal — it has to sit flush against the sidebar's bottom line and the left
    and right edges, or the session window looks like it is floating. Zero padding also prevents clipping:
    FitAddon takes the parent's (host's) height as availableHeight verbatim and subtracts only the padding
