@@ -43,7 +43,7 @@ import {
   unattendedQuestions,
   unreadUpwardMail
 } from '../core/orchestration/inbox'
-import { buildHandoverPrompt } from '../core/orchestration/handover'
+import { buildHandoverPrompt, coordinatorLaunchPrompt } from '../core/orchestration/handover'
 import { attachCoordinator, detachCoordinator } from '../core/orchestration/state'
 import { firesDue } from '../core/orchestration/fire'
 import { reapableChildRuns } from '../core/orchestration/reap'
@@ -2070,13 +2070,22 @@ export function registerIpc(
        *  허가 없는 실행에 대해 안전한 편이다. 멈추면 사람이 그 탭에서 답한다 — 코디네이터 탭은
        *  보이므로(설계 결정 ④) 그 자리가 있다. */
       startCoordinator: async (a) => {
+        // **브리핑은 파일로, 세션에는 한 줄만.** 이 프롬프트는 argv 로 가고 win32 에서 세션은
+        // `cmd.exe /c` 로 뜨므로 줄바꿈이 명령을 끊는다 — 워커의 spec 파일과 탭 재개 브리핑이
+        // 같은 제약 때문에 같은 모양으로 갈렸다(coordinatorLaunchPrompt 의 주석).
+        //
+        // **specsDir 에 쓴다.** 그 경로에 argv 금지 문자가 있으면 앱 시작 시 경고가 남는 자리가
+        // 이미 그것이고(아래 LAUNCH_FORBIDDEN 검사), 시작 시 비워지는 것도 무해하다: 앱을 다시
+        // 켜면 코디네이터도 없으므로 사람이 실행을 다시 누른다.
+        const briefPath = path.join(specsDir, `coordinator-${a.runId}.md`)
+        await fs.writeFile(briefPath, a.brief, 'utf8')
         // **워커와 같은 래퍼를 쓴다**(위 spawnSession) — 그 래퍼가 계정 객체를 찾고, 롤링
         // 코디네이터에 등록하고, orchEnv 를 실어 준다. core.sessions.spawn 을 직접 부르면 그 셋을
         // 여기서 다시 하게 되고, 그중 하나를 빠뜨리면 코디네이터는 한도에 걸린 채 멈춰 선다.
         const info = await spawnSession({
           accountId: a.accountId,
           cwd: a.cwd,
-          initialPrompt: a.prompt,
+          initialPrompt: coordinatorLaunchPrompt(briefPath.replace(/\\/g, '/')),
           // 탭 제목 — 워커 탭이 Task 제목을 쓰는 것과 같은 이유다. 없으면 워크트리 basename 으로
           // 떠서 사용자가 이것이 무엇인지 알 수 없다.
           title: `Coordinator · ${a.runId.slice(0, 12)}`,
@@ -2365,7 +2374,7 @@ export function registerIpc(
           runId: run.id,
           cwd: run.cwd,
           accountId,
-          prompt: buildHandoverPrompt({
+          brief: buildHandoverPrompt({
             runId: run.id,
             objective: run.objective,
             concurrency: run.concurrency ?? DEFAULT_CONCURRENCY,

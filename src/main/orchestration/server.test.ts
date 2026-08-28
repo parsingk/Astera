@@ -2866,10 +2866,10 @@ describe('run-start — 코디네이터 인계', () => {
     over: Partial<OrchServerDeps> = {}
   ): OrchServerDeps & {
     state: OrchState
-    spawned: { runId: string; prompt: string }[]
+    spawned: { runId: string; brief: string }[]
     made: string[]
   } => {
-    const spawned: { runId: string; prompt: string }[] = []
+    const spawned: { runId: string; brief: string }[] = []
     const made: string[] = []
     const base = Object.assign(makeDeps(), {
       makeRunWorktree: async (a: { repoPath: string; name: string }) => {
@@ -2881,8 +2881,8 @@ describe('run-start — 코디네이터 인계', () => {
         { id: 'cl2', label: 'claude2', provider: 'claude' as const },
         { id: 'cx1', label: 'codex1', provider: 'codex' as const }
       ],
-      startCoordinator: async (a: { runId: string; prompt: string }) => {
-        spawned.push({ runId: a.runId, prompt: a.prompt })
+      startCoordinator: async (a: { runId: string; brief: string }) => {
+        spawned.push({ runId: a.runId, brief: a.brief })
         return { sessionId: 'coord-sess' }
       },
       ...over
@@ -2917,10 +2917,10 @@ describe('run-start — 코디네이터 인계', () => {
     const runId = await mkRun(deps, { coordinatorAccount: 'cl1', concurrency: 2 })
     await call(deps, 'task-create', { account: 'cl1', runId, spec: 'a' })
     await call(deps, 'run-start', { run: runId })
-    const prompt = deps.spawned[0].prompt
-    expect(prompt).toContain(runId)
-    expect(prompt).toContain('CONCURRENCY IS 2')
-    expect(prompt).toContain('tasks already defined: 1')
+    const brief = deps.spawned[0].brief
+    expect(brief).toContain(runId)
+    expect(brief).toContain('CONCURRENCY IS 2')
+    expect(brief).toContain('tasks already defined: 1')
   })
 
   // 인계하면 앱이 그 Run 의 슬롯을 더 채우지 않으므로, 게으르게 만들던 워크트리를 만들어 줄

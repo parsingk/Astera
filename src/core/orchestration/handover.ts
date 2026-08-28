@@ -21,6 +21,21 @@
  *
  *  **4 에 이유를 적는 이유.** 규칙만 아는 코디네이터는 규칙이 닿지 않는 상황에서 아무 선택이나
  *  한다. 왜 병렬 워커가 한 폴더를 공유하면 안 되는지 알면 그 바깥에서도 옳게 판단한다. */
+/** 코디네이터 세션에 실제로 들어가는 **한 줄**. 위 브리핑은 파일로 가고 이것이 그 파일을 가리킨다.
+ *
+ *  **왜 한 줄이어야 하는가.** 이 문구는 세션의 argv 로 간다(commands.ts 의 `initialPrompt`), 그리고
+ *  win32 에서 세션은 `cmd.exe /c claude …` 로 뜬다 — **줄바꿈이 명령을 끊는다.** 여러 줄 브리핑을
+ *  그대로 실어 보내면 첫 줄만 남거나 아무것도 프롬프트로 들어가지 않고, 세션은 방금 열린 빈
+ *  화면으로 서 있는다(실측 2026-08-28: 코디네이터가 떴지만 Task 가 돌지 않았고, 그 세션에
+ *  트랜스크립트가 아예 없었다).
+ *
+ *  **이 저장소가 이미 두 번 쓴 해법이다.** 워커의 spec 파일 + `launchPrompt`(coordinator.ts), 탭
+ *  재개 브리핑 + `tabResumeLine`(resumePacket.ts) — 둘 다 같은 제약 때문에 파일과 한 줄로 갈렸다.
+ *  워커 쪽 문구와 어투를 맞춘다: 이미 그 문장을 읽는 에이전트가 같은 종류의 세션이다. */
+export function coordinatorLaunchPrompt(briefPath: string): string {
+  return `Read ${briefPath} and follow the instructions in it — it describes the Job you are managing`
+}
+
 export function buildHandoverPrompt(a: {
   runId: string
   objective: string
