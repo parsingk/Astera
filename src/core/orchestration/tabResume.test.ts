@@ -140,3 +140,37 @@ describe('formatTabResume — update', () => {
     expect(out).toContain('no uncommitted changes')
   })
 })
+
+// 아래 셋은 리뷰가 실측으로 잡은 결함을 고정한다(2026-08-28). 이 저장소의 실제 대화 파일 하나의
+// 마지막 파일 이력 레코드가 추적 파일 149개를 싣고 있었고, 상한이 없던 파일 절만 렌더하면 8,620자로
+// Job packet 이 메모 전체에 두는 예산(6000자)을 혼자 넘겼다.
+describe('formatTabResume — 크기 상한', () => {
+  const many = (n: number, prefix: string): string[] =>
+    Array.from({ length: n }, (_, i) => `${prefix}${i}`)
+
+  it('파일 목록은 상한까지만 싣고 잘린 개수를 밝힌다', () => {
+    const out = formatTabResume({ ...base, editedFiles: many(149, 'src/f') }, 'handover')!
+    expect(out).toContain('- src/f0')
+    expect(out).toContain('- src/f19')
+    expect(out).not.toContain('- src/f20')
+    expect(out).toContain('…and 129 more') // 조용히 자르면 새 세션이 "이게 전부" 로 읽는다
+  })
+
+  it('최근 요청은 상한까지만 싣고, 남기는 것은 최신 쪽이다', () => {
+    const out = formatTabResume({ ...base, requests: many(12, 'req') }, 'handover')!
+    expect(out).toContain('req11') // 가장 최근
+    expect(out).toContain('req7')
+    expect(out).not.toContain('req6') // 12개 중 마지막 5개만
+  })
+
+  it('메모 전체가 예산을 넘으면 뒤에서 자르고 잘렸다고 밝힌다', () => {
+    const out = formatTabResume(
+      { ...base, editedFiles: many(20, 'src/'.padEnd(400, 'x') + '/') },
+      'handover'
+    )!
+    expect(out.length).toBeLessThanOrEqual(6000)
+    expect(out).toContain('truncated to fit its size budget')
+    // 앞쪽 절은 살아남는다 — 무엇을 이어받는지가 대화 꼬리보다 잃으면 안 되는 정보다
+    expect(out.toLowerCase()).toContain('do not start over from scratch')
+  })
+})

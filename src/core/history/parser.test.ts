@@ -460,6 +460,18 @@ describe('parseTranscriptForResume', () => {
     expect(material.tail.map((m) => m.text)).toEqual(['첫 요청', '응답', '두 번째 요청'])
   })
 
+  // 제목 레코드는 이름이 버전마다 다르다 — 현행 Claude Code 는 `ai-title`, 구버전은 `summary` 다.
+  // 이 앱은 구버전 CLI 를 쓰는 사용자에게도 나가므로 둘 다 받아야 하고, 한쪽만 받으면 그 사용자는
+  // 제목 줄을 영구히 못 받은 채 그 사실이 조용히 지나간다.
+  it('구버전의 summary 레코드도 제목으로 읽는다', async () => {
+    const file = await write('old-title.jsonl', [
+      line({ type: 'summary', summary: '옛 형식 제목' }),
+      line({ type: 'user', message: { role: 'user', content: '요청' } })
+    ])
+    const material = await parseTranscriptForResume(file)
+    expect(material.title).toBe('옛 형식 제목')
+  })
+
   it('ai-title 레코드가 없으면 title 은 null 이다 — 그 레코드에 의존하지 않는다', async () => {
     const file = await write('no-title.jsonl', [
       line({ type: 'user', message: { role: 'user', content: '요청' } })

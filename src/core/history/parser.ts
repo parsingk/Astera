@@ -266,8 +266,15 @@ export async function parseTranscriptForResume(filePath: string): Promise<Transc
       }
       if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) continue
 
+      // 제목 레코드는 **이름이 버전마다 다르다** — 현행 Claude Code 는 `ai-title`(필드 `aiTitle`),
+      // 구버전은 `summary`(필드 `summary`)로 남긴다. 이 앱은 구버전 CLI 를 쓰는 사용자에게도 나가므로
+      // 둘 다 받는다. 한쪽만 받으면 그 사용자는 제목 줄을 영구히 못 받고, 그 사실이 조용히 지나간다.
       if (result.title === null && obj.type === 'ai-title' && typeof obj.aiTitle === 'string') {
         result.title = toTitle(obj.aiTitle)
+        continue
+      }
+      if (result.title === null && obj.type === 'summary' && typeof obj.summary === 'string') {
+        result.title = toTitle(obj.summary)
         continue
       }
 

@@ -46,6 +46,32 @@ const MESSAGE_CHARS_MAX = 500
  *  한 줄은 살아 있는 PTY 에 타이핑되므로(줄바꿈이 곧 Enter), 목록이 길면 한 줄이 화면을 뒤덮는다. */
 const UPDATE_FILES_MAX = 20
 
+/** 'handover' 의 파일 목록 상한. UPDATE_FILES_MAX 와 같은 값이고 같은 근거(§9.3)다 — 목록은 "어디를
+ *  보라"는 손잡이지 목록 자체가 내용이 아니다.
+ *
+ *  **상한 없이 나갔다가 실측으로 잡혔다(2026-08-28).** 이 저장소의 실제 대화 파일 하나(29MB)의 마지막
+ *  파일 이력 레코드가 추적 파일 149개를 싣고 있었고, 그 절만 렌더하면 8,620자다 — Job packet 이 메모
+ *  **전체**에 두는 예산(resumeSection.ts 의 MAX_PACKET_CHARS = 6000)보다 크다. */
+const HANDOVER_FILES_MAX = 20
+
+/** 최근 요청 수 상한. 이것이 없으면 실제로 몇 개가 실리는지는 파서가 **메모리 안전**을 위해 둔 읽기
+ *  상한이 남겨 준 값이 되고, 그것은 "몇 개를 보여줄까"를 판단한 값이 아니다. 다섯이면 요청이 바뀐
+ *  흐름을 보여 주기에 충분하다 — 그것이 이 절의 목적이다. */
+const REQUESTS_MAX = 5
+
+/** 메모 전체의 상한. resumeSection.ts 의 MAX_PACKET_CHARS 와 같은 역할이고 같은 근거(§9.3)다. 절마다
+ *  상한을 두어도 절의 수만큼 곱해지므로 마지막 방어선을 하나 둔다. */
+const MEMO_CHARS_MAX = 6000
+
+/** 목록을 상한까지만 싣고 **잘린 개수를 밝힌다.** 조용히 자르면 새 세션이 "이게 전부"로 읽는다. */
+function cappedList(items: string[], max: number): string {
+  const shown = items.slice(0, max)
+  const rest = items.length - shown.length
+  const lines = shown.map((x) => `- ${x}`)
+  if (rest > 0) lines.push(`- …and ${rest} more`)
+  return lines.join('\n')
+}
+
 function truncateMessage(text: string): string {
   const t = text.trim()
   return t.length > MESSAGE_CHARS_MAX ? t.slice(0, MESSAGE_CHARS_MAX) + '…' : t
@@ -62,10 +88,10 @@ function titleSection(input: TabResumeInput): string | null {
 // 세션에서 첫 메시지를 작업으로 넘기면 새 세션이 이미 끝났거나 버려진 작업을 다시 시작한다.
 function requestsSection(input: TabResumeInput): string | null {
   if (!input.requests.length) return null
-  const lines = input.requests.map((r) => `- ${truncateMessage(r)}`)
+  const recent = input.requests.slice(-REQUESTS_MAX).map((r) => truncateMessage(r))
   return (
     'RECENT REQUESTS (oldest first — evidence of what was asked, not a judgment about which one ' +
-    `is the current task)\n${lines.join('\n')}`
+    `is the current task)\n${cappedList(recent, REQUESTS_MAX)}`
   )
 }
 
@@ -81,7 +107,7 @@ function stateSection(input: TabResumeInput): string {
 
 function filesSection(input: TabResumeInput): string | null {
   if (!input.editedFiles.length) return null
-  return `FILES TOUCHED IN THIS CONVERSATION\n${input.editedFiles.map((f) => `- ${f}`).join('\n')}`
+  return `FILES TOUCHED IN THIS CONVERSATION\n${cappedList(input.editedFiles, HANDOVER_FILES_MAX)}`
 }
 
 function tailSection(input: TabResumeInput): string | null {
@@ -102,7 +128,12 @@ const BEFORE_EDITING = `BEFORE EDITING
 Preserve the existing worktree and unfinished changes.`
 
 function assemble(sections: Array<string | null>): string {
-  return sections.filter((s): s is string => s !== null && s.length > 0).join('\n\n')
+  const full = sections.filter((s): s is string => s !== null && s.length > 0).join('\n\n')
+  if (full.length <= MEMO_CHARS_MAX) return full
+  // 뒤에서 자른다 — 앞쪽 절(무엇을 이어받는지·무엇을 요청받았는지)이 대화 꼬리보다 잃으면 안 되는
+  // 정보다. 자른 사실을 밝히는 이유는 cappedList 와 같다: 조용히 자르면 새 세션이 "이게 전부"로 읽는다.
+  const note = '\n\n[This briefing was truncated to fit its size budget.]'
+  return full.slice(0, MEMO_CHARS_MAX - note.length) + note
 }
 
 /** 새 프로세스로 이어받을 전체 메모. `--resume`을 부르는 재개(프로세스가 새것이라 대화를 통째로
