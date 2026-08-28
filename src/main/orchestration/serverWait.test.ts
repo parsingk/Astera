@@ -25,6 +25,7 @@ const seed = async (deps: OrchServerDeps): Promise<{ taskId: string; dispatchId:
   })
   const runId = (run.body as { id: string }).id
   const task = await handleCommand(deps, { sessionId: 'coord' }, 'task-create', {
+    account: 'acc1',
     runId,
     title: 't',
     spec: 's'
@@ -200,11 +201,9 @@ describe('ask --resume 검증', () => {
       objective: 'o2',
       cwd: 'D:/p'
     })
-    const task2 = await handleCommand(deps, { sessionId: 'coord' }, 'task-create', {
-      runId: (run2.body as { id: string }).id,
+    const task2 = await handleCommand(deps, { sessionId: 'coord' }, 'task-create', { account: 'acc1', runId: (run2.body as { id: string }).id,
       title: 't2',
-      spec: 's2'
-    })
+      spec: 's2' })
     const taskId2 = (task2.body as { id: string }).id
     // startWorker mock이 항상 sess1을 돌려주므로 worker-start로는 두 번째 세션을 만들 수 없다 —
     // server.test.ts의 "다른(남의) dispatchId" 테스트와 같은 방식으로 sess2 소유 dispatch를

@@ -115,7 +115,7 @@
       session: 'done', st: 'done · 12/12 passing', bi: 100, bw: 'g', slack: '', sl: '✅ turn finished' }
   ];
 
-  // ── Jobs: a job Astera drives itself. Nothing here depends on the other two. ─
+  // ── Jobs: a coordinator follows a dependency graph. Nothing here depends on the other two. ─
   //
   // The graph reads left to right, where the app's own graph (RunDetail.tsx, graphLayout.ts) stacks
   // its layers top to bottom. The canvas decides that: 900×330 is wide and short, and three layers of
@@ -138,7 +138,7 @@
     </div>
     <div class="box" id="t3" style="left:300px; top:152px; width:250px">
       <div class="t">Wire them together</div><div class="s" id="m3">waiting on 2</div>
-      <div class="s" id="p3">merge · 2 worktrees</div>
+      <div class="s" id="p3">depends · 2 tasks</div>
     </div>
     <div class="box" id="t4" style="left:610px; top:112px; width:250px">
       <div class="t">Update the docs</div><div class="s" id="m4">waiting on 1</div>
@@ -157,25 +157,25 @@
   // is the exception that proves it: only the one frame with a gate on screen has a question to name.
   const jobs = [
     { cap: 'You draw the job once — the tasks, and what waits on what.',
-      m1: 'ready', m2: 'ready', m3: 'waiting on 2', m4: 'waiting on 1', p1: 'proof · npm test', p3: 'merge · 2 worktrees',
+      m1: 'ready', m2: 'ready', m3: 'waiting on 2', m4: 'waiting on 1', p1: 'proof · npm test', p3: 'depends · 2 tasks',
       j1: 'dim', j2: 'dim', j3: 'dim' },
-    { cap: '<b>Astera starts what is ready</b> — two at once, on both vendors.',
+    { cap: '<b>The coordinator starts what is ready</b> — two at once, on both vendors.',
       t1: 'lit', t2: 'lit', m1: 'codex · 2m 10s', m2: 'claude · 1m 04s', m3: 'waiting on 2',
-      m4: 'waiting on 1', p1: 'proof · npm test', p3: 'merge · 2 worktrees', j1: 'dim', j2: 'dim', j3: 'dim' },
+      m4: 'waiting on 1', p1: 'proof · npm test', p3: 'depends · 2 tasks', j1: 'dim', j2: 'dim', j3: 'dim' },
     { cap: 'A task is done when the tests say so, not when the agent says so.',
       t1: 'done', t2: 'lit', m1: 'codex · 2m 41s', m2: 'claude · 1m 22s', m3: 'waiting on 1',
-      m4: 'waiting on 1', p1: 'npm test · exit 0', p3: 'merge · 2 worktrees', j1: 'lit', j2: 'dim', j3: 'dim' },
-    { cap: '<b>The finished worktrees merge back</b> before what follows them starts.',
+      m4: 'waiting on 1', p1: 'npm test · exit 0', p3: 'depends · 2 tasks', j1: 'lit', j2: 'dim', j3: 'dim' },
+    { cap: '<b>The coordinator follows the graph</b> before starting what comes next.',
       t1: 'done', t2: 'done', t3: 'lit', m1: 'codex · 2m 41s', m2: 'claude · 1m 58s',
-      m3: 'claude · 0m 12s', m4: 'waiting on 1', p1: 'npm test · exit 0', p3: 'merged 2 worktrees',
+      m3: 'claude · 0m 12s', m4: 'waiting on 1', p1: 'npm test · exit 0', p3: '2 dependencies done',
       j1: 'lit', j2: 'lit', j3: 'dim' },
     { cap: 'A decision it cannot take waits for you — right there on the node.',
       t1: 'done', t2: 'done', t3: 'warn', gate: 'warn', m1: 'codex · 2m 41s', m2: 'claude · 1m 58s',
-      m3: 'blocked', m4: 'waiting on 1', p1: 'npm test · exit 0', p3: 'merged 2 worktrees',
+      m3: 'blocked', m4: 'waiting on 1', p1: 'npm test · exit 0', p3: '2 dependencies done',
       gq: 'Keep --format as an alias?', j1: 'lit', j2: 'lit', j3: 'dim', j4: 'lit' },
     { cap: 'You answer, and the rest runs out.',
       t1: 'done', t2: 'done', t3: 'done', t4: 'done', m1: 'codex · 2m 41s', m2: 'claude · 1m 58s',
-      m3: 'claude · 4m 08s', m4: 'codex · 0m 47s', p1: 'npm test · exit 0', p3: 'merged 2 worktrees',
+      m3: 'claude · 4m 08s', m4: 'codex · 0m 47s', p1: 'npm test · exit 0', p3: '2 dependencies done',
       j1: 'lit', j2: 'lit', j3: 'lit' }
   ];
 

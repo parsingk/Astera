@@ -710,10 +710,11 @@ describe('HistoryIndex (lazy)', () => {
       return file
     }
 
+    // 현행 codex 형식(codexParser 의 eventMessage 주석 — 실측 2026-08-29)
     const cxUser = (t: string): unknown => ({
       timestamp: '2026-07-09T01:00:00Z',
-      type: 'event_msg',
-      payload: { type: 'user_message', message: t }
+      type: 'response_item',
+      payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: t }] }
     })
 
     it('codex 계정의 rollout이 프로젝트·세션 목록에 나타난다', async () => {

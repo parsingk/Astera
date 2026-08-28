@@ -1632,6 +1632,25 @@ export default function App(): React.JSX.Element {
     })()
   }
 
+  /** 관리자가 사라진 Run 에 코디네이터를 다시 붙인다. **`run-start` 를 다시 부른다** — 그 명령의
+   *  뜻이 "이 Run 에 관리자가 있게 하라" 이고, 이미 붙어 있으면 아무것도 하지 않는다(server.ts).
+   *  그래서 새 명령을 만들지 않았다.
+   *
+   *  앱이 스스로 되띄우지 않는 이유는 Run.coordinatorSessionId 의 주석에 있다 — 탭을 닫는 것은
+   *  사람의 결정이고, 곧바로 다시 여는 것은 그 결정을 무시하는 일이다. 그래서 되돌리는 자리가
+   *  사람의 손에 있다. */
+  const restartCoordinator = (runId: string): void => {
+    void (async () => {
+      if (!currentProject) return
+      try {
+        const reply = await window.api.orch.command(currentProject, 'run-start', { run: runId })
+        if (reply.status >= 400) toast.error(t('jobs.run.coordinatorRestartFailed'))
+      } catch {
+        toast.error(t('jobs.run.coordinatorRestartFailed'))
+      }
+    })()
+  }
+
   /** 활성 탭이 말하는 루트 — 파일 탭이면 그 파일의 프로젝트, 세션 탭이면 그 세션의 cwd.
    *  탭이 없으면 null이고, 그 자리는 아래에서 stickyRoot 가 채운다.
    *
@@ -2483,6 +2502,7 @@ export default function App(): React.JSX.Element {
                 // 거절(도는 워커가 있다)은 토스트로 — 폼이 없는 단발 액션의 실패 관례다.
                 onPauseRun={pauseScheduleRun}
                 onResumeRun={resumeScheduleRun}
+                onRestartCoordinator={restartCoordinator}
                 onDeleteRun={(runId) => {
                   void (async () => {
                     if (!currentProject) return
@@ -3305,6 +3325,7 @@ export default function App(): React.JSX.Element {
           // 스냅숏이 이미 프로젝트별로 접혀 오므로 폴더 사실이 앉을 자리가 그것이다(view.ts).
           // 아직 안 왔으면 거짓 — 없는 것을 경고하는 것보다 낫다
           projectFolderBusy={orchSnapshot?.projectFolderBusy ?? false}
+          accounts={accounts}
           onClose={() => setNewRunOpen(false)}
           onCreated={(runId) => {
             setNewRunOpen(false)

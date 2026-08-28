@@ -264,15 +264,13 @@ export function RunDetail({
    *     기본값으로 만든 Run 에는 이 버튼이 나오지 않는다 — 대안(프로젝트 폴더로라도 억지로
    *     띄우기)을 만들지 않기로 한 결정이다.
    *
-   *  2) 이 Run 에 provider 가 있다. 없으면 이 버튼은 눌려도 결코 되지 않는다 — worker-start 가
-   *     --agent 로 지목할 provider 가 없어 `--agent must be claude|codex` 로 거절한다(server.ts).
-   *     **schedule.ts 의 slotsToFill 이 이미 같은 판단을 내려 두었다** — `const provider =
-   *     run.provider; if (!provider) continue` 로 provider 없는 Run 을 건너뛴다는 그 주석과 같은
-   *     사정이다(그런 Run 은 명령으로는 만들 수 없지만 orchestration.json 은 프로세스보다 오래
-   *     살고 손으로 고쳐질 수 있다). 스케줄러가 이미 내린 판단을 UI 가 다르게 낼 이유가 없다.
-   *     버튼을 그대로 두고 실패했을 때 안내로 대신하는 것도 틀렸다 — "로그인된 계정이 없다"는
-   *     이 경우 거짓이다(계정은 있을 수 있고, 없는 것은 이 Run 의 provider 다). 원인을 잘못
-   *     말하는 오류 문구는 문구가 없는 것보다 나쁘다.
+   *  2) **이 조건은 Task 로 내려갔다.** 예전에는 "이 Run 에 provider 가 있다" 였는데, provider 는
+   *     이제 Run 이 아니라 Task 의 계정이 정한다. 그래서 같은 판단이 노드마다 필요하고, 아래
+   *     showStart 가 그 Task 에 계정이 있는지 본다 — 계정이 없으면 worker-start 에 --agent 로
+   *     지목할 provider 가 없어 눌려도 결코 되지 않는다. **schedule.ts 의 slotsToFill 이 이미 같은
+   *     판단을 내려 두었다**(계정 없는 Task 는 고르지 않는다). 버튼을 그대로 두고 실패했을 때
+   *     안내로 대신하는 것은 틀렸다 — "로그인된 계정이 없다"는 이 경우 거짓이고(계정은 있을 수
+   *     있고, 없는 것은 이 Task 의 지정이다), 원인을 잘못 말하는 문구는 문구가 없는 것보다 나쁘다.
    *
    *  3) 이 Run 이 **예약 템플릿이 아니다.** 템플릿은 자신의 Task 를 돌리지 않는다 — 발화가 만든
    *     회차가 돈다. `worker-start` 가 이 조합을 거절하므로(server.ts) 버튼을 두면 서버가 반드시
@@ -290,7 +288,7 @@ export function RunDetail({
    *     버튼도 없어야 한다는 이 게이트의 존재 이유를 어긴다. */
   const canManualStart =
     (run?.concurrency ?? DEFAULT_CONCURRENCY) <= 1 &&
-    run?.provider !== undefined &&
+    run !== undefined &&
     run.schedule === undefined &&
     run.pendingStart !== true
   const keyOf = (e: JobEvent): string => `${e.kind}:${e.sourceId}`
@@ -463,18 +461,18 @@ export function RunDetail({
   const startTask = async (taskId: string): Promise<void> => {
     setBusy(taskId)
     try {
-      const provider = run?.provider
-      // provider 가 없는 Run 은 canManualStart 가 이미 버튼을 지워 이 자리에 닿지 못한다 — 이
-      // 확인은 그 상태가 정말로 불가능함을 다시 강제하는 것이 아니라, 페인트와 클릭 사이에
-      // 스냅샷이 바뀌는 좁은 창에 대한 방어일 뿐이다(canManualStart 의 주석).
       // **이 Task 에 지정된 계정을 지킨다.** 스케줄러와 같은 판정을 쓴다(accountToDispatchOn) —
       // 두 경로가 다른 계정을 고르면 같은 Task 가 누가 띄웠는지에 따라 다른 계정에서 돌게 된다.
       // 지정이 목록이면 그 첫 계정으로 띄운다(판정이 그렇게 답한다) — 갈아탈 순서는 이 명령이
       // 정하지 않는다: worker-start 를 받은 배선이 Task.accountIds 로 체인을 만든다(ipc.ts).
+      //
+      // **provider 도 그 첫 계정에서 나온다**(Task.accountIds). 계정 없는 Task 는 showStart 가
+      // 이미 버튼을 지워 이 자리에 닿지 못한다 — 아래 확인은 그 상태가 불가능함을 다시 강제하는
+      // 것이 아니라, 페인트와 클릭 사이에 스냅숏이 바뀌는 좁은 창에 대한 방어다.
       const assigned = tasks.find((tk) => tk.id === taskId)?.accountIds
-      const accountId = provider
-        ? await accountFor(provider, assigned ?? undefined)
-        : null
+      const first = assigned?.length ? (accounts ?? []).find((a) => a.id === assigned[0]) : undefined
+      const provider = first ? providerOf(first) : null
+      const accountId = provider ? await accountFor(provider, assigned) : null
       if (!provider || !accountId) {
         // 폼이 없는 단발 액션의 실패라 toast 로 보낸다(gateError 의 주석과 같은 규칙) —
         // 계정을 못 찾은 경우도 같은 안내다(worker-start 를 부를 수 없다는 결과가 같다).
@@ -727,15 +725,14 @@ export function RunDetail({
           </div>
           <div className="detail-events">
             {authoring ? (
+              // **계정을 provider 로 걸러 보내지 않는다** — 이 폼에서 고른 첫 계정이 provider 를
+              // 정하므로(Task.accountIds), 걸러 보낼 기준이 이 시점에 없다. 두 번째 칸부터 첫
+              // 계정의 provider 로 좁히는 일은 폼 안에서 한다.
               <NewTaskModal
                 projectPath={projectPath}
                 runId={runId}
                 tasks={tasks}
-                accounts={
-                  accounts === null
-                    ? null
-                    : accounts.filter((a) => providerOf(a) === run?.provider)
-                }
+                accounts={accounts}
                 runConfigs={runConfigs}
                 onClose={() => setAuthoring(false)}
                 onCreated={() => setAuthoring(false)}
@@ -1055,7 +1052,13 @@ function Graph({
     // 열린 Dispatch 가 있는지는 provider(그리고 startedAt)의 유무로만 안다 — 스냅샷에 Dispatch
     // 배열 자체가 없으므로 이것이 유일한 신호다(view.ts 의 jobTaskOf 주석과 brief 의 Step 2).
     const dispatchOpen = task.provider !== undefined
-    const showStart = canManualStart && (task.status === 'ready' || task.status === 'pending')
+    // **계정이 없으면 띄울 수 없다** — provider 가 그 계정에서 나오므로 worker-start 에 --agent 로
+    // 지목할 것이 없다(canManualStart 의 2번). 스케줄러가 같은 Task 를 건너뛰는 것과 같은 판단이다
+    // (schedule.ts 의 slotsToFill).
+    const showStart =
+      canManualStart &&
+      (task.accountIds?.length ?? 0) > 0 &&
+      (task.status === 'ready' || task.status === 'pending')
     const showGate = task.status === 'ready' || task.status === 'pending'
     const showStop = task.status === 'dispatched' && dispatchOpen
     const showRestart = task.status === 'failed' || (task.status === 'dispatched' && !dispatchOpen)

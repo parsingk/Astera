@@ -20,9 +20,8 @@ a las 3 de la mañana y arrancará sin ti. Cuando cualquier sesión alcanza un l
 o no—, Astera lee la hora de reinicio en la transcripción, cambia a tu siguiente cuenta y retoma el
 *mismo* trabajo. Slack te avisa cuando termina un turno o se alcanza un límite. Las sesiones conviven
 en una sola ventana, cada una aislada en su propio worktree de git. Y un trabajo de una docena de
-pasos no te obliga a despachar cada uno: dibuja las tareas y qué espera a qué, y Astera recorre el
-grafo sola — o deja que un agente inicie las demás sesiones, les reparta tareas y espere bloqueado
-hasta que informen a través de una CLI incluida.
+pasos puede organizarse como un Job y ejecutarse desde la barra lateral de Jobs, o dejarse en manos
+de una coordinadora mediante la skill `/astera-orchestration`.
 
 > **Estado:** Windows, macOS y Linux. Ejecuta las CLI de `claude` y `codex`, así que solo llega tan lejos
 > como la que tengas instalada.
@@ -118,6 +117,9 @@ También necesitarás:
 - Varias cuentas por proveedor, cada una aislada mediante su propio `CLAUDE_CONFIG_DIR` / `CODEX_HOME`
 - **Rotación de cuentas:** cuando una sesión alcanza un límite de uso, Astera lo detecta en la
   transcripción, calcula la hora de reinicio y retoma el trabajo en la siguiente cuenta
+- **Estrategia de reanudación:** conserva la conversación original de la CLI —la opción
+  predeterminada— o usa **Reanudación inteligente (experimental)** para iniciar la siguiente sesión
+  desde un punto de control compacto
 - Importación opcional de la configuración de una cuenta nueva desde tu cuenta predeterminada:
   `settings.json`, la lista de servidores MCP y los directorios `skills`, `commands` y `agents`
 
@@ -135,7 +137,7 @@ También necesitarás:
 </div>
 
 **Apariencia**
-- Seis temas — Vega, Orion, Umbra, Aurora, Antares y Quasar — elegidos desde tarjetas que se dibujan
+- Siete temas — Vega, Orion, Umbra, Aurora, Antares, Quasar y Sirius — elegidos desde tarjetas que se dibujan
   cada una con su propia paleta, así que eliges mirando en vez de por el nombre
 - Un tema es más que colores: el radio de las esquinas, las sombras, la tipografía de la interfaz y la
   densidad de las filas vienen con él, así que Quasar pone más en pantalla que Umbra
@@ -154,30 +156,19 @@ Jobs es opcional. Activa **Orquestación de agentes** en los ajustes para mostra
 Un trabajo es un grafo de tareas con dependencias que pueden ejecutarse con cualquiera de los dos
 proveedores, y hay dos formas de ponerlo en marcha.
 
-### 1. Ejecutarlo desde la barra lateral de Jobs — Astera coordina
-
-Esta modalidad la gestiona la aplicación:
+### 1. Prepararlo en la barra lateral de Jobs
 
 1. Comprueba que el proyecto sea un repositorio git con una rama activa.
-2. En la barra lateral de Jobs, pulsa **Nuevo trabajo**, define **Objetivo**, **Agente** y el límite
-   de concurrencia (el campo se llama **En paralelo**), más **Ejecución programada** si la quieres, y
-   pulsa **Crear**.
-3. En la vista detallada, pulsa **Añadir tarea**, ponle un **Título** y sus **Instrucciones**, y
-   marca sus dependencias en **Depende de**. Opcionalmente elige una **Cuenta**, una configuración
-   que pruebe que terminó, o una revisión por otro agente — que siempre se ejecuta en el otro
-   proveedor.
-4. Cuando hayas definido todas las tareas, pulsa **Ejecutar**. Crear el trabajo o añadir una tarea no
-   inicia nada; en un trabajo programado, **Ejecutar** activa la programación en vez de iniciar una
-   ejecución inmediatamente.
+2. Pulsa **Nuevo trabajo**, indica el **Objetivo**, elige una **Cuenta coordinadora**, fija
+   **En paralelo** y añade una programación si la necesitas.
+3. Añade a cada tarea sus instrucciones, una o más cuentas trabajadoras y sus dependencias. También
+   puedes usar compilaciones, pruebas y revisiones del otro proveedor como comprobaciones finales.
+4. Pulsa **Ejecutar**. Un Job normal abre su coordinadora; uno programado activa su calendario.
 
-Astera solo inicia las tareas cuyas dependencias han terminado. Lo que pasa después depende del
-límite de concurrencia. Con 2 o más —3 es el valor por defecto— cada tarea recibe su propio
-worktree, y antes de arrancar una tarea posterior Astera fusiona los ya terminados en el worktree
-propio del trabajo; si hay un conflicto, se lo entrega a un agente. Con 1, las tareas heredan un
-único worktree por turnos, así que no hay nada que fusionar. En cualquier caso, el trabajo
-terminado no se fusiona automáticamente con la rama activa del proyecto: pulsa **Fusionar** en la
-vista detallada cuando quieras incorporar el resultado.
-El [ciclo de vida completo de un Job](docs/jobs.md) está documentado actualmente en coreano.
+La vista de Jobs muestra el grafo de dependencias, las trabajadoras activas, las preguntas y la línea
+de tiempo. Las tareas paralelas pueden usar worktrees de git separados, y el resultado no entra en la
+rama activa hasta que pulses **Fusionar**. Consulta el [ciclo de vida de un Job](docs/jobs.md) para
+más detalles (actualmente solo en coreano).
 
 ### 2. Ejecutarlo con la skill `astera-orchestration` — un agente coordina
 
@@ -188,36 +179,20 @@ natural, por ejemplo:
 > Usa la skill `astera-orchestration` para coordinar este trabajo: refactoriza el módulo de
 > autenticación, añade después pruebas de regresión y verifícalo con la suite de pruebas.
 
-También puedes invocar la skill explícitamente como `/astera-orchestration`. La coordinadora crea el
-Run y las tareas, reparte el trabajo a sesiones trabajadoras —incluidas las del *otro* proveedor— y
-espera finalizaciones, dependencias, preguntas y escalaciones. Las trabajadoras informan a través de
-la CLI `astera` incluida. Un Run cuyo directorio de trabajo coincida con el proyecto abierto también
-aparece en la barra lateral de Jobs, pero es la coordinadora, no el planificador automático de Astera,
-quien decide qué despachar.
+También puedes invocar la skill explícitamente como `/astera-orchestration`. Sirve para trabajos de
+varios pasos que necesitan supervisión, seguimiento de resultados o coordinación de dependencias.
+La coordinadora crea el Run y las tareas, las reparte entre trabajadoras de Claude y Codex, espera sus
+informes y te devuelve las preguntas que requieran una decisión. Los Runs del proyecto abierto
+también aparecen en la barra lateral de Jobs.
 
-En cualquiera de los dos casos:
-
-- **Una tarea puede demostrarse terminada en vez de declararse terminada:** asóciale una de las
-  configuraciones de ejecución del proyecto y solo se completa si esa compilación o esa batería de
-  pruebas termina en `0`
-- Lo que ningún código de salida resuelve — si el trabajo hace lo que se pidió — puede pasar a un
-  revisor del *otro* proveedor, y la tarea espera ese veredicto
-- Cada tarea puede ejecutarse en su propio worktree de git para que las trabajadoras en paralelo no
-  choquen
-- Una decisión que el trabajo no puede tomar por su cuenta se detiene y espera a una persona
-- Todo agente iniciado así recibe la ubicación de las decisiones del propio proyecto, lo que haya en
-  `knowledge/`, `docs/adr/`, `docs/decisions/` y similares, para no reabrir lo que ya está cerrado
+Las skills se cargan al iniciar una sesión: activa primero **Orquestación de agentes** y abre después
+una sesión coordinadora nueva. Una entrega sencilla y puntual no necesita un Run de orquestación.
 
 <div align="center">
-<img src="assets/jobs.gif" width="820" alt="Diagrama: las tareas de un trabajo dibujadas como un grafo de dependencias — Astera arranca a la vez las dos que están listas, cada una en un proveedor distinto, una batería de pruebas demuestra terminada una de ellas, los worktrees de las tareas terminadas se fusionan en el worktree del trabajo, y una decisión que el trabajo no puede tomar espera a una persona" />
+<img src="assets/jobs.gif" width="820" alt="Diagrama: una coordinadora sigue el grafo de dependencias, inicia dos tareas listas en proveedores distintos, comprueba una con pruebas, continúa cuando terminan sus dependencias y espera a una persona cuando hace falta una decisión" />
 </div>
 
-Y lo ves ocurrir: todos los trabajos del proyecto abierto en la barra lateral, sus tareas dibujadas
-como un grafo de dependencias y lo ocurrido como una línea de tiempo. Qué proveedor trabaja en qué
-tarea, y desde hace cuánto. Iniciar una tarea, detenerla, reintentarla, plantear una pregunta a una
-persona o responder la decisión que está esperando — desde el nodo de la propia tarea.
-
-Para leer por tu cuenta la referencia completa de la CLI de coordinación:
+Para leer la referencia de la CLI de coordinación:
 
 ```bash
 astera help

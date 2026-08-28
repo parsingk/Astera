@@ -36,13 +36,20 @@ lands in their Job. Nothing fails when this happens — the Tasks are simply som
 id from `run-create --json` and pass it on every `task-create`.
 
 **"It does no scheduling or batching" above is true only for a Run made through the syntax this
-guide documents.** `run-create`'s server-side handler also reads `--provider`, `--concurrency`, and
-`--auto` — none of which appear in its syntax line (4.1) — and `--auto` makes that Run dispatch and
+guide documents.** `run-create`'s server-side handler also reads `--concurrency` and
+`--auto` — neither of which appears in its syntax line (4.1) — and `--auto` makes that Run dispatch and
 place its own workers exactly the way a Run the app's Jobs sidebar created does, with no `worker-start`
 from anyone. `--auto` also arms a start gate (`pendingStart`): such a Run holds still until `run-start`
 clears it, which is the app's "Run" button in the job detail window. So a Run made this way does
 nothing at all until that command lands. This guide does not document how to do that on purpose, but nothing at the CLI's own
 argument parser stops you from passing them anyway (it accepts any `--flag value` for any command).
+**A Run someone laid out in the app may be handed to you.** When the person presses Run on a Job they
+built in the sidebar, the app starts a coordinator session — possibly you — and gives it that Run.
+Such a Run comes with its Tasks, their dependencies, their accounts and their validation settings
+already set. Run them as they stand: do not create Tasks, do not rewrite their specs, and do not
+reassign their accounts. If the plan looks wrong, raise it with the person through `gate-create`
+rather than editing around it. Your first prompt says which Run it is and repeats its limits.
+
 So "the most recently created Run" (which `task-create` with no `--run` attaches to) can already be
 one of these — whether the app made it that way or a coordinator did — and that is exactly the case
 4.2's note on `parentId` warns about.
@@ -142,30 +149,33 @@ spends quota** — attaching it to a Task like a one-line documentation fix is t
 # 1) Create the Run — always pass --cwd (see 4.1). --json returns its id; every task-create takes it
 astera run-create --objective "refactor the auth module" --cwd "/abs/path/to/repo" --json
 
-# 2) Create N Tasks — pass --run with the id from step 1 (see 4.2; the default is app-wide)
-astera task-create --run run_9f8e7d6c5b4a3210 --title "consolidate types" --spec - --json <<'EOF'
+# 2) Check the accounts — a Task's --account decides which agent runs it, and it is required (4.2).
+#    If which account to use was not stated and more than one could apply, ask before creating Tasks.
+astera accounts --json
+
+# 3) Create N Tasks — pass --run with the id from step 1 (see 4.2; the default is app-wide)
+astera task-create --run run_9f8e7d6c5b4a3210 --account acc_main --title "consolidate types" --spec - --json <<'EOF'
 Consolidate the core/auth types into one place. ...
 EOF
-astera task-create --run run_9f8e7d6c5b4a3210 --title "add tests" --spec - --deps '["tsk_1a2b3c4d"]' --json <<'EOF'
+astera task-create --run run_9f8e7d6c5b4a3210 --account acc_sub --title "add tests" --spec - --deps '["tsk_1a2b3c4d"]' --json <<'EOF'
 Once the consolidation above is done, add regression tests. ...
 EOF
 
-# 3) Check the accounts, then start N workers
+# 4) Start N workers — the ids came from step 2
 #    --worktree new **requires** --name (4.3) — without it the request is rejected with a 400
-astera accounts --agent claude --json
 astera worker-start --task tsk_1a2b3c4d --agent claude --account acc_main --worktree new --name types-cleanup --json
 astera worker-start --task tsk_5e6f7a8b --agent codex --account acc_sub --worktree new --name add-tests --json
 
-# 4) Wait — blocks until worker_done, escalation, or question arrives (this can take tens of minutes)
+# 5) Wait — blocks until worker_done, escalation, or question arrives (this can take tens of minutes)
 astera check --wait --json
 
-# 5) Ack only after handling every message in the batch (reply first if it was a question)
+# 6) Ack only after handling every message in the batch (reply first if it was a question)
 astera reply --id msg_9f9f9f9f --body - --json <<'EOF'
 That path is correct. Carry on.
 EOF
 astera check --ack dlv_aaaa1111 --json
 
-# 6) Clean up when done — reuse the session if there is follow-up work, otherwise release it
+# 7) Clean up when done — reuse the session if there is follow-up work, otherwise release it
 astera worker-start --task tsk_next --agent claude --account acc_main --terminal <sessionId> --json
 astera worker-release --dispatch dsp_c3c3c3c3 --json
 ```
@@ -206,7 +216,7 @@ starts.
 ### 4.2 Task and Gate
 
 ```
-task-create --title <s> --spec <s|-> [--run <run>] [--deps <json_array>] [--account <id,…>] [--validate <configId>] [--review] [--json]
+task-create --title <s> --spec <s|-> --account <id,…> [--run <run>] [--deps <json_array>] [--validate <configId>] [--review] [--json]
 task-list [--run <run>] [--status <s>] [--ready] [--brief] [--json]
 task-update --id <tsk> --status <s> [--result <s|->] [--json]   # bypasses the transition table — see section 8
 dispatch-show --task <tsk> [--json]        # that Task's Dispatch history as an array (retries and the app's review Dispatch included)
@@ -236,15 +246,27 @@ gate-list [--task <tsk>] [--status <s>] [--json]
   can be one of those — pass `--run <run>` so it cannot. Use `--deps` to say what a Task follows;
   that is what the graph is built from (`--deps` orders Tasks, it does not choose their Run).
 - **`--account <id>` or `--account <id>,<id>,…` sets the accounts this Task's worker runs on, in
-  order** — the ids come from `accounts` (4.3). Omit it and the worker starts on that provider's
-  default account instead. With more than one id, running into a usage limit moves the worker to the
-  next account in the order given; with only one, there is nowhere to move, so it waits out the limit
-  instead. Every account has to belong to that Run's provider — `task-create` rejects the whole list
-  otherwise, the same way it rejects an empty entry (`a,,b`) or a repeated id (`a,a`). If the first
+  order, and it is required** — the ids come from `accounts` (4.3). **This list is the only thing that
+  says which agent runs the Task.** A Run no longer carries a provider, so a Task with no accounts
+  cannot be started by anyone: `task-create` rejects it, and the app's own scheduler skips it.
+- **Every account in one `--account` list has to be the same provider** — `task-create` rejects a
+  mixed list, naming both offending ids, the same way it rejects an empty entry (`a,,b`) or a repeated
+  id (`a,a`). Two Tasks in the **same Run** may use different providers; that is the point of the
+  provider living on the Task. It is one Task's list that may not mix.
+- With more than one id, running into a usage limit moves the worker to the next account in the order
+  given; with only one, there is nowhere to move, so it waits out the limit instead. If the first
   account in the list turns out unusable when the worker actually starts — unknown id, wrong provider,
   or not logged in — the Task does not fall back to the next one: dispatch fails and a Gate opens for
   you to resolve, the same as an unrunnable validation or review (section 2). Only accounts after the
   first are dropped in place like that.
+- **When the person who asked for the Job did not say which account to use, do not pick one for them
+  beyond the one unambiguous case.** Run `accounts --json` (4.3) first, then:
+  - exactly one account exists → use it, and say which one you used;
+  - they named a provider (or the work plainly requires one) and that provider has exactly one account
+    → use it, and say which one;
+  - anything else → **ask them, listing the accounts by label with their provider**, and wait. Do not
+    create the Tasks first and fix the accounts afterwards: a Task's accounts decide which agent runs
+    it, and picking on their behalf spends the quota they were saving.
 - **`--validate <configId>` makes this Task's completion depend on a run configuration**, not just the
   worker's own report — the id comes from `run-configs` (4.1). Omit it and nothing changes:
   `worker_done --outcome succeeded` completes the Task exactly as before. With it, that same report
@@ -291,6 +313,22 @@ accounts [--agent <claude|codex>] [--json]
 - **`--name <s>` is required with `--worktree new`** — it becomes the branch and directory name of the
   new worktree. Without it the request is rejected with `400 --name is required for --worktree new`.
   It is unused (ignored) with `--worktree current` or an explicit path.
+- **The placement rule.** Referred to elsewhere in this guide and defined here. A Run's concurrency
+  (`run-show --id <run>`, defaulting to 3) decides where its workers belong:
+  - **1 or less — sequential.** Omit `--worktree`. Every worker runs where that Run works, one after
+    another.
+  - **2 or more — parallel.** Pass `--worktree new --name <short-name>` so each worker gets its own
+    worktree.
+
+  **Why:** merging finished work back requires a clean tree, so two workers must never share one
+  folder — they overwrite each other, and neither the commit obligation nor the merge step notices.
+  Nothing rejects the wrong combination at the moment (resolving the intended folder happens after
+  this command), so this one is on you.
+- **Respect the Run's concurrency.** Never let more than that many dispatches be open in one Run at
+  once. `worker-start` **rejects** the call that would exceed it with
+  `409 run <id> is at its concurrency limit: <n> of <n> dispatches are open`, and a rejection costs
+  you a turn — count the open ones first. The app's review dispatches are outside this count: a review
+  is a step of a Task that has already run, not a new work item.
 - **`--retry-of <dsp>` does not inherit placement.** Pass `--worktree`, `--agent`, and `--account`
   again — omitting them can retry with a different combination than the original attempt.
 - `--terminal <sessionId>` reuses an existing worker session. This is the only case where a new Task
@@ -584,6 +622,11 @@ meaningless and repeats the same failure indefinitely.
   `ask` (section 6).
 - Do not treat a `worker-retain`ed Dispatch as dead — `worker-stop` returns 409 (4.3).
 - Do not guess accounts — confirm a real id with `accounts` first (4.3).
+- Do not choose a Task's account for someone who did not name one, unless there is only one it could
+  be — ask instead (4.2).
+- Do not exceed a Run's concurrency, and do not put parallel workers in one folder — the placement
+  rule (4.3).
+- Do not restructure a Run a person laid out in the app (4.1) — run it as it stands, or open a Gate.
 - Do not move a quota-killed worker **to a different account.** Retry on the same account after
   `limitResetsAt` (section 7).
 - Do not write, edit, or delete a worker's `## Resume briefing` section in its spec file — the app

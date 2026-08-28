@@ -37,7 +37,14 @@ import {
   openReviewDispatch
 } from '../core/orchestration/state'
 import { pickReviewer } from '../core/orchestration/reviewer'
-import { slotsToFill } from '../core/orchestration/schedule'
+import { slotsToFill, tasksMissingAccounts } from '../core/orchestration/schedule'
+import {
+  NO_COORDINATOR_ANSWER,
+  unattendedQuestions,
+  unreadUpwardMail
+} from '../core/orchestration/inbox'
+import { coordinatorLaunchPrompt } from '../core/orchestration/handover'
+import { detachCoordinator } from '../core/orchestration/state'
 import { firesDue } from '../core/orchestration/fire'
 import { reapableChildRuns } from '../core/orchestration/reap'
 import {
@@ -297,6 +304,10 @@ export function registerIpc(
   let orchRollTap: OrchRollTap | null = null
   /** 검증기. startOrchestration 이 만들 때까지, 그리고 오케스트레이션이 꺼져 있으면 null 이다 */
   let orchValidator: TaskValidator | null = null
+  /** 사라진 코디네이터의 자리를 비우는 함수. **bootOrch 안에서 대입한다** — 정의가 그 안에
+   *  있어야 orch·deps 를 닫아 쓸 수 있고, 부르는 자리(core.sessions.onExit)는 그 밖이다.
+   *  orch·orchValidator 와 같은 관례다. */
+  let releaseCoordinator: ((sessionId: string) => Promise<void>) | null = null
   /** 예약 템플릿의 다음 발화 시각. **상태에 저장하지 않는다** — 재시작하면 비어 있고, 그때
    *  firesDue 가 nextFireAt(rule, now) 으로 다시 무장한다. 그것이 곧 "앱이 꺼져 있던 동안의
    *  발화는 버린다"는 규칙의 구현이다(main/scheduler.ts 가 같은 이유로 같은 선택을 했다). */
@@ -407,6 +418,7 @@ export function registerIpc(
     codexRolling?.handleExit(e)
     codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
+    void releaseCoordinator?.(e.sessionId) // 이 세션이 어느 Run 의 관리자였다면 그 칸을 비운다
     // Task 7's tab-resume briefing file is no longer deleted here — see tabResumeDir's own comment
     // above (fix wave 7, finding 1 (CRITICAL)) for why a per-exit delete keyed to this id was wrong:
     // it fired for the *old* session a smart resume had just written the briefing under, while the
@@ -1541,6 +1553,39 @@ export function registerIpc(
           // 것뿐이다: 꺼진 채로 저장이 일어날 때마다 슬롯 수만큼 로그가 쌓이는데 orchLog 는 메인
           // 스레드의 동기 appendFileSync 다. 아래 slots.length === 0 조기 탈출과 같은 성격이다.
           if (!orch.deps.enabled()) return
+          // **계정이 없어 띄울 수 없는 Task 에 Gate 를 연다.** slotsToFill 이 그것들을 건너뛰므로
+          // 아래 루프는 보지 못하고, 그냥 두면 Run 이 이유 없이 서 있는다 — 이 하위 시스템이
+          // 없애려는 증상 그대로다(gateSlot 의 주석). Gate 는 Task 를 blocked 로 보내므로 판정이
+          // 다음 바퀴에 같은 Task 를 다시 내지 않는다(tasksMissingAccounts 의 주석).
+          for (const m of tasksMissingAccounts(orch.deps.getState())) {
+            if (attempted.has(m.taskId)) continue
+            attempted.add(m.taskId)
+            await gateSlot(orch.deps, m.taskId, t(core.lang, 'jobs.gate.noAccountAssigned'))
+          }
+          // **답할 사람이 없는 질문을 풀어 준다.** `ask` 는 부드리기라 워커가 답이 올 때까지 멈춰
+          // 서 있는데, 그 답을 줄 코디네이터가 앱이 만든 Run 에는 없다(inbox.ts 의 머리말 —
+          // 실측으로 잡힌 정지다). 사람에게 올리지 않는 이유도 거기 있다.
+          //
+          // **Gate 로 올릴 수 없다는 것도 이유의 하나다.** createGate 는 열린 Dispatch 를 가진
+          // Task 를 거절하고(state.ts), `dispatched -> blocked` 전이 자체가 없다(types.ts 의
+          // ALLOWED). 즉 기다리는 워커가 있는 동안 Gate 는 존재할 수 없다.
+          //
+          // `UI_CALLER` 는 열린 Dispatch 를 갖지 않으므로 COORDINATOR_ONLY 가드를 지난다
+          // (server.ts 의 isWorker 판정). 실패는 로그로만 남긴다 — 이 자리에서 할 수 있는 것이
+          // 없고, 다음 바퀴에 같은 질문이 다시 후보로 올라온다.
+          for (const id of unattendedQuestions(orch.deps.getState())) {
+            const answered = await orchHandleCommand(
+              orch.deps,
+              { sessionId: UI_CALLER },
+              'reply',
+              { id, body: NO_COORDINATOR_ANSWER }
+            )
+            orchLog(
+              answered.status >= 400
+                ? `inbox: reply rejected message=${id} — ${JSON.stringify(answered.body)}`
+                : `inbox: answered an unattended question message=${id} — no coordinator on this run`
+            )
+          }
           const slots = slotsToFill(orch.deps.getState()).filter((s) => !attempted.has(s.taskId))
           // 띄울 자리가 없으면 계정 조회까지 가지 않는다. 이 함수는 **모든 저장마다** 불리고 그
           // 대부분은 띄울 것이 없는 저장이다 — 아래 조회에 계정마다 파일(macOS 에서는 Keychain)
@@ -1570,9 +1615,24 @@ export function registerIpc(
               // 계정. 판정은 core 에 있다(accountToDispatchOn) — 이 파일에는 테스트가 닿지 않는다.
               // **갈아탈 순서(체인)는 여기서 넘기지 않는다** — worker-start 를 거쳐 가므로 그 체인은
               // deps.startWorker 래퍼가 다시 계산한다(그래야 CLI 로 띄운 워커도 같은 체인을 받는다).
+              // **provider 는 이 Task 의 첫 계정이 정한다.** Slot 에는 그 칸이 없다 — 계정 id 를
+              // provider 로 옮기려면 계정 목록을 봐야 하고 그것은 core 가 볼 수 없는 것이라
+              // (schedule.ts 의 Slot 주석), 그 한 걸음이 여기 있다. 첫 id 가 목록에 없으면 판정에
+              // 넘길 provider 자체가 없으므로 곧바로 Gate 다 — accountToDispatchOn 이 같은 id 를
+              // 'assigned-unusable' 로 답할 자리이고, 사람이 할 일도 같다(지정을 고친다).
+              const firstAccount = accounts.find((x) => x.id === slot.accountIds[0])
+              if (!firstAccount) {
+                await gateSlot(
+                  orch.deps,
+                  slot.taskId,
+                  t(core.lang, 'jobs.gate.assignedAccountUnusable')
+                )
+                continue
+              }
+              const slotProvider = providerOf(firstAccount)
               const picked = accountToDispatchOn({
-                ...(slot.accountIds !== undefined ? { assigned: slot.accountIds } : {}),
-                provider: slot.provider,
+                assigned: slot.accountIds,
+                provider: slotProvider,
                 accounts,
                 loggedInIds: loggedIn
               })
@@ -1588,7 +1648,7 @@ export function registerIpc(
                   slot.taskId,
                   picked.reason === 'assigned-unusable'
                     ? t(core.lang, 'jobs.gate.assignedAccountUnusable')
-                    : t(core.lang, 'jobs.gate.noAccount', { provider: slot.provider })
+                    : t(core.lang, 'jobs.gate.noAccount', { provider: slotProvider })
                 )
                 continue
               }
@@ -1825,7 +1885,7 @@ export function registerIpc(
                 orch.deps,
                 { sessionId: UI_CALLER },
                 'worker-start',
-                { task: slot.taskId, agent: slot.provider, account: accountId, ...placement }
+                { task: slot.taskId, agent: slotProvider, account: accountId, ...placement }
               )
               if (reply.status >= 400)
                 await gateSlot(
@@ -1869,6 +1929,17 @@ export function registerIpc(
 
     /** 15초 — 세션 스케줄러의 TICK_MS 와 같은 값이다 */
     const ORCH_FIRE_TICK_MS = 15_000
+    /** 코디네이터를 깨우기 전에 기다리는 시간.
+     *
+     *  **짧으면** `check --wait` 안에서 정상적으로 기다리는 코디네이터를 찌른다 — 그 호출은 서버에서
+     *  막혀 있고 도는 동안 토큰을 안 쓰므로, 헛된 찌르기는 그 공짜 기다림을 유료 턴으로 바꾼다.
+     *  **길면** 잠든 코디네이터 밑에서 Run 이 그만큼 서 있다.
+     *
+     *  90초로 둔 근거: `check` 의 기본 대기가 그보다 짧고(DEFAULT_CHECK_TIMEOUT_MS), 정상 코디네이터는
+     *  타임아웃마다 다시 `check` 를 불러 그 배치를 ack 하므로 이 시각까지 미확인으로 남지 않는다.
+     *  즉 이 문턱을 넘는 것은 "루프를 놓았다" 의 신호에 가깝다. 틱이 15초이므로 실제 깨우기는
+     *  90~105초 사이에 일어난다. */
+    const COORDINATOR_NUDGE_MS = 90_000
     /** 예약 템플릿의 발화. 판정은 core 의 firesDue 가 하고(그쪽에 테스트가 있다) 여기는 그 답대로
      *  명령을 부른다. */
     const orchFireTick = async (): Promise<void> => {
@@ -1980,6 +2051,64 @@ export function registerIpc(
         }
         return { failed }
       },
+      /** 이 Run 이 일할 워크트리를 하나 만든다 — 인계 시점에 서버가 부른다(run-start).
+       *
+       *  **forkWorktree 를 그대로 쓴다.** 프로젝트가 **서 있는 브랜치**에서 갈라 주는 판단이 그
+       *  안에 있고, raw createWorktree 를 부르면 origin/HEAD 에서 갈라져 최종 병합이 엉뚱한 조상을
+       *  끌고 온다 — 스케줄러의 게으른 생성이 같은 함수를 쓰는 이유와 같다. 그 판단은 한 곳에만
+       *  있어야 한다. */
+      makeRunWorktree: (a) => forkWorktree({ repoPath: a.repoPath, name: a.name }),
+      /** 이 Run 을 관리할 코디네이터 세션을 띄운다. **워커가 아니다** — Dispatch 도 spec 파일도
+       *  워크트리도 없다. 사람이 여는 세션과 같은 모양이고, 다른 것은 첫 입력이 인수 프롬프트라는
+       *  것뿐이다(core/orchestration/handover.ts).
+       *
+       *  **롤링 체인을 그대로 넘긴다** — 코디네이터도 에이전트라 한도에 걸린다. 워커에게 이 값을
+       *  넘기는 것과 같은 이유이고 같은 기계를 탄다(rollAccountIds 의 JSDuc).
+       *
+       *  **`bypassPermissions` 를 넘기지 않는다** — startWorker 가 넘기지 않는 것과 같은 이유다:
+       *  권한 검사를 에이전트의 말만으로 건너뛰는 쪽과 권한 프롬프트에서 멈추는 쪽 중, 멈추는 쪽이
+       *  허가 없는 실행에 대해 안전한 편이다. 멈추면 사람이 그 탭에서 답한다 — 코디네이터 탭은
+       *  보이므로(설계 결정 ④) 그 자리가 있다. */
+      startCoordinator: async (a) => {
+        // **브리핑은 파일로, 세션에는 한 줄만.** 이 프롬프트는 argv 로 가고 win32 에서 세션은
+        // `cmd.exe /c` 로 뜨므로 줄바꿈이 명령을 끊는다 — 워커의 spec 파일과 탭 재개 브리핑이
+        // 같은 제약 때문에 같은 모양으로 갈렸다(coordinatorLaunchPrompt 의 주석).
+        //
+        // **specsDir 에 쓴다.** 그 경로에 argv 금지 문자가 있으면 앱 시작 시 경고가 남는 자리가
+        // 이미 그것이고(아래 LAUNCH_FORBIDDEN 검사), 시작 시 비워지는 것도 무해하다: 앱을 다시
+        // 켜면 코디네이터도 없으므로 사람이 실행을 다시 누른다.
+        const briefPath = path.join(specsDir, `coordinator-${a.runId}.md`)
+        await fs.writeFile(briefPath, a.brief, 'utf8')
+        // **워커와 같은 래퍼를 쓴다**(위 spawnSession) — 그 래퍼가 계정 객체를 찾고, 롤링
+        // 코디네이터에 등록하고, orchEnv 를 실어 준다. core.sessions.spawn 을 직접 부르면 그 셋을
+        // 여기서 다시 하게 되고, 그중 하나를 빠뜨리면 코디네이터는 한도에 걸린 채 멈춰 선다.
+        const info = await spawnSession({
+          accountId: a.accountId,
+          cwd: a.cwd,
+          initialPrompt: coordinatorLaunchPrompt(briefPath.replace(/\\/g, '/')),
+          // 탭 제목 — 워커 탭이 Task 제목을 쓰는 것과 같은 이유다. 없으면 워크트리 basename 으로
+          // 떠서 사용자가 이것이 무엇인지 알 수 없다.
+          title: `Coordinator · ${a.runId.slice(0, 12)}`,
+          // **한 원소다.** 그래서 롤링은 계정을 갈아타지 않고 리셋까지 기다린 뒤 같은 세션에서
+          // 이어간다 — 관리 중이던 Run 의 맥락을 잃지 않는 쪽을 골랐다(Run.coordinatorAccountId).
+          rollAccountIds: [a.accountId]
+        })
+        // **탭을 띄우는 것이 이 한 줄이다.** 공용 spawnSession 은 이 이벤트를 내지 않는다 — 사용자
+        // 경로에서는 반환값이 렌더러로 가서 App.tsx 가 탭을 만들기 때문이다(그 함수 위의 주석).
+        // main 안에서 직접 부르는 이 자리는 반환값이 렌더러에 닿지 않으므로, 워커 세션이 그랬던
+        // 것처럼 탭 없는 세션이 된다. 코디네이터 탭은 보여야 한다는 것이 이 기능의 결정이고
+        // (사람이 직접 지시할 자리가 그것이다), 탭이 없으면 그 자리가 사라진다.
+        //
+        // 실패는 삼킨다 — 같은 관례다(startWorker 의 emit): 부수적 실패가 세션 생성을 막지 않고,
+        // 탭은 다음 렌더러 마운트의 sessions.list() 재입양이 만든다.
+        try {
+          send('session:created', info)
+        } catch (err) {
+          orchLog(`session:created emit failed session=${info.id}: ${String(err)}`)
+        }
+        orchLog(`coordinator started run=${a.runId} session=${info.id} account=${a.accountId}`)
+        return { sessionId: info.id }
+      },
       startWorker: async (a) => {
         // **이 워커의 롤링 체인을 여기서 정한다 — 워커를 띄우는 길이 전부 이 래퍼로 모이기
         // 때문이다.** 자동 배치 루프도 orchHandleCommand('worker-start') 를 부르고, CLI 의
@@ -1993,9 +2122,15 @@ export function registerIpc(
         let rollAccountIds = [a.accountId]
         const stateHere = store.get()
         const task = stateHere.tasks.find((t) => t.id === a.taskId)
-        // Task 의 provider — Run 이 정한다(Run.provider). 없는 Run 도 있다: 코디네이터가 만든 Run 은
-        // provider 를 안 들고, 자동 배치는 그런 Run 을 아예 건너뛴다(schedule.ts).
-        const taskProvider = stateHere.runs.find((r) => r.id === task?.runId)?.provider
+        // Task 의 provider — **그 Task 의 첫 계정이 정한다**(Task.accountIds). 계정 목록 조회는
+        // 메모리에서 끝나므로(비싼 것은 아래 loginStatus 다) 이 한 걸음에 비용이 없다. 첫 id 가
+        // 목록에 없으면 undefined — 아래 조건이 그 경우를 "어긋났다고 말할 수 없다"로 다룬다.
+        const taskProvider = task?.accountIds?.length
+          ? (() => {
+              const first = core.accounts.list().find((x) => x.id === task.accountIds![0])
+              return first ? providerOf(first) : undefined
+            })()
+          : undefined
         // **두 경우에 로그인 조회를 하지 않는다.**
         // (1) 지정이 없을 때 — 답은 요청된 계정 하나로 확정이고(rollChainFor), 그 조회는 계정마다 파일
         //     읽기(macOS 의 claude 계정은 `security` 프로세스)를 붙인다. 워커를 띄우는 모든 자리가 이
@@ -2005,8 +2140,8 @@ export function registerIpc(
         //     검토자는 구현자와 다른 provider 이므로 Task 의 계정은 rollChainFor 안에서 전부 걸러지고,
         //     남는 것은 조회 비용과 "쓸 수 있는 계정이 하나도 없다"는 어긋난 로그뿐이다 — 사실은 그
         //     계정들이 다른 provider 의 것일 뿐이고 사람이 할 일은 없다. 검토 경로는 이 앞에서 이미
-        //     같은 조회를 한 번 했다(startReview). Run 이 provider 를 안 들고 있으면 어긋났다고 말할
-        //     수 없으므로 건너뛰지 않는다.
+        //     같은 조회를 한 번 했다(startReview). 첫 계정 id 가 목록에 없어 provider 를 알 수
+        //     없으면 어긋났다고 말할 수 없으므로 건너뛰지 않는다.
         if (task?.accountIds?.length && (taskProvider === undefined || taskProvider === a.provider)) {
           try {
             const accountList = core.accounts.list()
@@ -2201,8 +2336,61 @@ export function registerIpc(
     void runScheduler().catch((e) => orchLog(`scheduler failed at startup: ${String(e)}`))
     // 예약 템플릿의 발화. **첫 바퀴는 무장만 한다**(firesDue) — 앱을 켤 때마다 한 회차가 도는
     // 것을 막는 장치가 그것이고, 그래서 여기서 즉시 한 번 부르지 않는다.
+    /** 코디네이터 세션이 사라졌을 때 그 Run 의 관리자 칸을 비운다. **다시 띄우지는 않는다.**
+     *
+     *  사람이 탭을 닫은 것인지 크래시인지 구별할 방법이 없고(`SessionManager.kill` 은 표시를 남기지
+     *  않는다), 닫은 쪽이라면 곧바로 다시 여는 것은 그 결정을 무시하는 일이다. 대신 사이드바의
+     *  Run 줄에 다시 띄우는 버튼이 나온다(JobRun.coordinatorMissing) — 언제 되돌릴지는 사람이
+     *  정한다. 그동안 워커의 질문은 앱의 그물이 풀어 준다(inbox.ts).
+     *
+     *  **앱 재시작은 이 경로가 아니다.** 그때는 세션이 프로세스와 함께 사라지고 exit 이 오지 않는다.
+     *  같은 버튼이 그 경우도 받는다 — 자동 복구를 하지 않기로 한 결정과 같은 방향이다(SPEC §12.2). */
+    releaseCoordinator = async (sessionId: string): Promise<void> => {
+      if (!orch || !orch.deps.enabled()) return
+      const st = orch.deps.getState()
+      const run = st.runs.find((r) => r.coordinatorSessionId === sessionId)
+      if (!run) return
+      const detached = detachCoordinator(st, { runId: run.id })
+      if (!detached.ok) return
+      await orch.deps.setState(detached.state)
+      orchLog(`coordinator gone run=${run.id} session=${sessionId} — restart it from the Jobs list`)
+    }
+
+    /** 잠든 코디네이터를 깨운다. **판정은 core 에 있다**(unreadUpwardMail) — 이 파일에는 테스트가
+     *  닿지 않으므로 규칙을 여기 두면 다음 편집을 막아 줄 것이 없다. 여기 남는 것은 순수 함수가
+     *  가질 수 없는 것뿐이다: 세션에 타이핑하고, 바쁜지 보고, 로그를 남긴다.
+     *
+     *  **바쁜 세션은 건드리지 않는다.** 두 가지를 함께 막는다: (1) 턴 중인 코디네이터는 이미 일하고
+     *  있어 깨울 것이 없고, (2) 권한 요청 대화상자는 턴 중에 뜨므로 그때 타이핑하면 Enter 가 화면의
+     *  선택지를 승인해 버린다 — 롤링이 같은 위험을 훅 알림으로 막는다(rolling.ts 의 onHookEvent).
+     *  훅이 아니라 바쁨으로 막는 것은 더 거친 근사다: 대화상자가 떴는데 바쁨이 풀리는 런타임이
+     *  있으면 이 가드는 새어 나간다. 그 경우를 실측한 적은 없다. */
+    const nudgeSleepingCoordinators = async (): Promise<void> => {
+      if (!orch || !orch.deps.enabled()) return
+      for (const m of unreadUpwardMail(orch.deps.getState(), {
+        nowMs: Date.now(),
+        staleMs: COORDINATOR_NUDGE_MS
+      })) {
+        if (busyState.get(m.sessionId) === true) continue
+        // 세션이 없으면(사용자가 닫았다) 깨울 것이 없다 — 그 자리는 되띄우기가 맡는다.
+        if (!core.sessions.list().some((x) => x.id === m.sessionId && x.status !== 'exited')) continue
+        // **영어다.** 코디네이터는 영어로 인계받았다(handover.ts) — 롤링이 워커의 재개 문구를
+        // 앱의 UI 언어로 타이핑하다 같은 어긋남을 겪었고, 그 주석이 이유를 적어 두었다.
+        core.sessions.write(
+          m.sessionId,
+          `Your Run has ${m.messageIds.length} unread message(s). Run \`astera check --json\`, ` +
+            'handle them, ack the batch, then go back to `astera check --wait`.'
+        )
+        core.sessions.write(m.sessionId, '\r')
+        orchLog(
+          `coordinator nudged run=${m.runId} session=${m.sessionId} unread=${m.messageIds.length}`
+        )
+      }
+    }
+
     orchFireTimer = setInterval(() => {
       void orchFireTick().catch((e) => orchLog(`fire tick failed: ${String(e)}`))
+      void nudgeSleepingCoordinators().catch((e) => orchLog(`nudge failed: ${String(e)}`))
     }, ORCH_FIRE_TICK_MS)
     // Installing the discovery stub — without it there is no path by which an agent finds this feature.
     // **Done for every claude and codex account**: the path is the same

@@ -1,15 +1,8 @@
 import { useState } from 'react'
-import type { Provider, ScheduleRule } from '../../../core/types'
+import type { Account, ScheduleRule } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
-import { Select, type SelectOption } from './Select'
+import { AccountSelect } from './AccountSelect'
 import { ScheduleRuleFields } from './ScheduleRuleFields'
-
-/** Provider 선택지 — 'Claude'/'Codex'는 번역하지 않는다. ProviderBadge/AccountRow 가 이미 같은
- *  이름을 그대로 쓰고, catalog.test.ts 의 LITERALS 가 네 카탈로그 모두에서 그대로 남도록 강제한다. */
-const PROVIDER_ITEMS: SelectOption[] = [
-  { value: 'claude', label: 'Claude' },
-  { value: 'codex', label: 'Codex' }
-]
 
 /** 사이드바의 '+ 새 작업'이 여는 폼. 여기서 만든 Run 은 앱이 스스로 돌린다 — 워커를 붙이고
  *  검증·병합까지 미는 스케줄러는 이미 있고(Task 1~6), 이 컴포넌트는 그 스케줄러가 볼 첫 Run 하나를
@@ -20,6 +13,7 @@ const PROVIDER_ITEMS: SelectOption[] = [
 export function NewRunModal({
   projectPath,
   projectFolderBusy,
+  accounts,
   onClose,
   onCreated
 }: {
@@ -28,14 +22,19 @@ export function NewRunModal({
    *  **막지 않는다**: 파일을 안 건드리는 워커끼리는 충돌할 것이 없고 앱은 그것을 알 수 없다. */
   projectFolderBusy: boolean
   projectPath: string
+  /** 고를 수 있는 계정 전부. null 은 아직 안 온 것 — NewTaskModal 의 같은 prop 과 같은 뜻이다 */
+  accounts: Account[] | null
   onClose: () => void
   /** 만들어진 Run 의 id — 부르는 쪽이 곧바로 상세 창을 열어 Task 를 짜게 한다 */
   onCreated: (runId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const [objective, setObjective] = useState('')
-  const [provider, setProvider] = useState<Provider>('claude')
   const [concurrency, setConcurrency] = useState(3)
+  /** 이 Run 을 관리할 코디네이터 세션의 계정. **하나다**(Run.coordinatorAccountId). 고르기 전에는
+   *  만들 수 없다 — 이 폼은 코디네이터 없는 Run 을 만들지 않는다. 코드에는 그 갈래가 남아 있지만
+   *  (옛 Run·CLI) 여기서 만드는 것은 언제나 관리자가 있는 Run 이다. */
+  const [coordinatorAccountId, setCoordinatorAccountId] = useState('')
   const [scheduled, setScheduled] = useState(false)
   const [schedule, setSchedule] = useState<ScheduleRule | null>(null)
   const [busy, setBusy] = useState(false)
@@ -45,15 +44,20 @@ export function NewRunModal({
     const trimmed = objective.trim()
     // busy 로 다시 걸러 이중 클릭이 Run 을 두 개 만들지 못하게 한다 — 버튼의 disabled 는 같은
     // 프레임에 반영되지 않을 수 있어 여기서도 확인한다.
-    if (!trimmed || busy) return
+    // 계정도 함께 본다 — 아래 버튼의 disabled 와 같은 조건이고, 같은 이유로 두 번 본다(위 주석)
+    if (!trimmed || !coordinatorAccountId || busy) return
     setBusy(true)
     setError(null)
     try {
       const reply = await window.api.orch.command(projectPath, 'run-create', {
         objective: trimmed,
         cwd: projectPath,
-        provider,
+        // **provider 를 보내지 않는다** — Run 은 더 이상 그것을 정하지 않고, Task 의 계정이
+        // 정한다(orchestration/types.ts 의 Task.accountIds). run-create 는 이 플래그를 이제
+        // 거절한다(server.ts).
         concurrency,
+        // **언제나 보낸다** — 아래 버튼이 계정 없이는 눌리지 않는다
+        coordinatorAccount: coordinatorAccountId,
         // **`auto` 는 예약에도 보낸다.** 뜻은 "앱이 이것을 돌린다" 이고, 예약도 앱이 돌린다 —
         // 발화가 앱의 ticker 다. 이 UI 로 만든 Run 은 언제나 자동이므로 사용자에게 스위치를 주지
         // 않는다(스펙 5절).
@@ -102,15 +106,6 @@ export function NewRunModal({
           />
         </div>
         <div className="field">
-          <label>{t('jobs.new.provider')}</label>
-          <Select
-            items={PROVIDER_ITEMS}
-            value={provider}
-            onChange={(v) => setProvider(v as Provider)}
-            ariaLabel={t('jobs.new.provider')}
-          />
-        </div>
-        <div className="field">
           <label>{t('jobs.new.concurrency')}</label>
           <input
             type="number"
@@ -133,6 +128,26 @@ export function NewRunModal({
             <p className="warn-text">{t('jobs.new.folderBusy')}</p>
           )}
         </div>
+        {/* 계정이 없어도 칸을 접지 않는다 — 접으면 만들기 버튼이 왜 죽어 있는지 화면이 말하지
+            않는다(NewTaskModal 의 같은 판단). null 은 아직 안 온 것이라 그때만 접는다. */}
+        {accounts !== null && (
+          <div className="field">
+            <label>{t('jobs.new.coordinator')}</label>
+            {/* **칸 하나다.** 빈 값은 "아직 안 골랐다" 이고 "앱이 돌린다" 가 아니다 — 이 폼은
+                코디네이터 없는 Run 을 만들지 않는다. 목록이 아닌 이유는 Run.coordinatorAccountId
+                의 주석에 있다(갈아타는 대신 같은 세션에서 기다린다). */}
+            <AccountSelect
+              accounts={accounts}
+              value={coordinatorAccountId}
+              onChange={setCoordinatorAccountId}
+              allLabel={t('jobs.new.coordinatorPick')}
+            />
+            <p className="modal-hint">{t('jobs.new.coordinatorHint')}</p>
+            {accounts.length === 0 && (
+              <p className="warn-text">{t('jobs.task.accountEmpty')}</p>
+            )}
+          </div>
+        )}
         <div className="field">
           <label className="check-small">
             <input
@@ -160,7 +175,10 @@ export function NewRunModal({
           </button>
           <button
             className="primary"
-            disabled={busy || !objective.trim() || (scheduled && schedule === null)}
+            // 코디네이터 계정 없이는 만들 수 없다 — 이 폼은 관리자 있는 Run 만 만든다
+            disabled={
+              busy || !objective.trim() || !coordinatorAccountId || (scheduled && schedule === null)
+            }
             onClick={() => void create()}
           >
             {t('jobs.new.create')}

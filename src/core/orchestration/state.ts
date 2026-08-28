@@ -70,13 +70,16 @@ export function createRun(
   a: {
     objective: string
     cwd: string
-    provider?: Provider
     concurrency?: number
+    /** 이 Run 의 코디네이터 세션을 띄울 계정. **여기서 확인하지 않는다** — 계정 목록은 앱이
+     *  아는 것이고, 부르는 쪽(server.ts 의 run-create)이 실재하는 계정인지 본다.
+     *  Task.accountIds 와 같은 관례다. */
+    coordinatorAccountId?: string
     autoDispatch?: boolean
     /** 사용자가 '실행' 을 누르기 전까지 돌지 않게 한다 — Run.pendingStart 의 주석을 보라 */
     pendingStart?: boolean
     /** 있으면 이 Run 은 템플릿이다 — Run.schedule 의 주석을 보라. 규칙의 유효성은 부르는
-     *  쪽(server.ts 의 run-create)이 isValidRule 로 본다, provider·accountId 와 같은 관례다 */
+     *  쪽(server.ts 의 run-create)이 isValidRule 로 본다, 계정 목록과 같은 관례다 */
     schedule?: ScheduleRule
   },
   now: string
@@ -87,8 +90,10 @@ export function createRun(
     objective: a.objective,
     cwd: a.cwd,
     createdAt: now,
-    ...(a.provider ? { provider: a.provider } : {}),
     ...(a.concurrency !== undefined ? { concurrency: a.concurrency } : {}),
+    // 빈 문자열은 싣지 않는다 — "지정 없음" 과 값이 갈라지고, 그 구분으로 코디네이터를 띄울지
+    // 정하기 때문이다
+    ...(a.coordinatorAccountId ? { coordinatorAccountId: a.coordinatorAccountId } : {}),
     ...(a.autoDispatch ? { autoDispatch: true } : {}),
     ...(a.schedule ? { schedule: a.schedule } : {}),
     ...(a.pendingStart ? { pendingStart: true } : {})
@@ -124,8 +129,13 @@ export function spawnScheduledRun(s: OrchState, templateId: string, now: string)
     objective: template.objective,
     cwd: template.cwd,
     createdAt: now,
-    ...(template.provider ? { provider: template.provider } : {}),
     ...(template.concurrency !== undefined ? { concurrency: template.concurrency } : {}),
+    // **회차는 물려받는다.** 회차는 자신이 도는 Run 이므로 관리자가 필요하고, 그 관리자를 누구로
+    // 할지는 템플릿을 만든 사람이 이미 정했다. 세션 id 와 실패 횟수는 물려주지 않는다 — 그것은
+    // 정의가 아니라 지난 회차의 결과다(result·consecutiveFailures 를 물려주지 않는 것과 같다).
+    ...(template.coordinatorAccountId
+      ? { coordinatorAccountId: template.coordinatorAccountId }
+      : {}),
     autoDispatch: true,
     templateId,
     fireOrdinal: ordinal
@@ -288,8 +298,13 @@ export function createTask(
     deps: string[]
     parentId?: string
     /** 이 Task 를 띄울 계정들, 순서대로. **여기서 확인하지 않는다** — 계정 목록은 core 가 아니라
-     *  앱이 아는 것이고(schedule.ts 머리말과 같은 이유), 부르는 쪽(server.ts 의 task-create)이 그
-     *  Run 의 provider 계정인지 보고 거절한다. validateConfigId 도 같은 관례다. */
+     *  앱이 아는 것이고(schedule.ts 머리말과 같은 이유), 부르는 쪽(server.ts 의 task-create)이
+     *  존재하는 계정인지, 서로 같은 provider 인지 보고 거절한다. validateConfigId 도 같은 관례다.
+     *
+     *  **비었는지도 여기서 보지 않는다.** 이 목록이 provider 의 출처이므로 만드는 두 자리가 모두
+     *  하나 이상을 요구하지만(task-create, NewTaskModal), 그 요구도 계정을 아는 쪽의 몫이다 —
+     *  core 는 계정 목록을 못 보므로 "하나 이상" 만 확인해도 그 하나가 실재하는지는 알 수 없고,
+     *  반쪽 검사는 어느 쪽이 정본인지 흐린다. */
     accountIds?: string[]
     validateConfigId?: string
     reviewRequested?: boolean
@@ -1186,4 +1201,26 @@ export function deleteRuns(s: OrchState, runIds: ReadonlySet<string>): OrchState
     deliveries: s.deliveries.filter((d) => !runIds.has(d.runId)),
     gates: s.gates.filter((g) => !runIds.has(g.runId))
   }
+}
+
+/** 이 Run 을 관리하는 코디네이터 세션을 붙인다. */
+export function attachCoordinator(
+  s: OrchState,
+  a: { runId: string; sessionId: string }
+): Res<Run> {
+  const run = s.runs.find((r) => r.id === a.runId)
+  if (!run) return err(`unknown run: ${a.runId}`)
+  const next: Run = { ...run, coordinatorSessionId: a.sessionId }
+  return ok({ ...s, runs: replace(s.runs, next) }, next)
+}
+
+/** 코디네이터 세션을 뗀다. **왜 사라졌는지 묻지 않는다** — 사람이 닫았는지 크래시인지 구별할
+ *  방법이 없고(`SessionManager.kill` 은 표시를 남기지 않는다), 어느 쪽이든 앱이 하는 일은 같다:
+ *  이 칸을 지우고 사람이 다시 띄울 버튼을 내보인다(Run.coordinatorSessionId 의 주석). */
+export function detachCoordinator(s: OrchState, a: { runId: string }): Res<Run> {
+  const run = s.runs.find((r) => r.id === a.runId)
+  if (!run) return err(`unknown run: ${a.runId}`)
+  const next: Run = { ...run }
+  delete next.coordinatorSessionId
+  return ok({ ...s, runs: replace(s.runs, next) }, next)
 }

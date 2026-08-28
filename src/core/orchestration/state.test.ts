@@ -24,6 +24,8 @@ import {
   spawnScheduledRun,
   latestOrdinaryRun,
   setRunWorktree,
+  attachCoordinator,
+  detachCoordinator,
   type OrchState
 } from './state'
 import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task } from './types'
@@ -1579,7 +1581,6 @@ const template = (): { s: OrchState; templateId: string; aId: string; bId: strin
       {
         objective: '매일 점검',
         cwd: 'D:/p',
-        provider: 'claude',
         concurrency: 2,
         schedule: { kind: 'daily', time: '09:00' }
       },
@@ -1608,7 +1609,6 @@ describe('spawnScheduledRun', () => {
     const saved = state.runs.find((r) => r.id === child.id)!
     expect(saved.objective).toBe('매일 점검')
     expect(saved.cwd).toBe('D:/p')
-    expect(saved.provider).toBe('claude')
     expect(saved.concurrency).toBe(2)
     expect(saved.autoDispatch).toBe(true)
     expect(saved.templateId).toBe(templateId)
@@ -2261,5 +2261,87 @@ describe('recordResume — 정지 이력의 마지막 항목을 닫는다', () =
     expect(r.ok).toBe(true)
     if (!r.ok) throw new Error('expected ok')
     expect(r.state).toBe(s) // 같은 객체 — 아무것도 바꾸지 않았다
+  })
+})
+
+describe('코디네이터 세션 붙이기·떼기', () => {
+  const withRun = (over: Record<string, unknown> = {}): { s: OrchState; runId: string } => {
+    const r = unwrap<{ id: string }>(
+      createRun(emptyState(), { objective: 'o', cwd: 'D:/p', ...over }, NOW) as never
+    )
+    return { s: r.state, runId: r.value.id }
+  }
+
+  it('run-create 가 코디네이터 계정을 싣는다', () => {
+    const { s, runId } = withRun({ coordinatorAccountId: 'acc1' })
+    expect(s.runs.find((r) => r.id === runId)?.coordinatorAccountId).toBe('acc1')
+  })
+
+  // 빈 문자열이 "지정 없음" 과 갈라지면, 그 구분으로 코디네이터를 띄울지 정하는 자리가 흔들린다
+  it('빈 문자열은 싣지 않는다 — 지정 없음과 같다', () => {
+    const { s, runId } = withRun({ coordinatorAccountId: '' })
+    expect(s.runs.find((r) => r.id === runId)).not.toHaveProperty('coordinatorAccountId')
+  })
+
+  it('붙이면 세션 id 가 실린다', () => {
+    const { s, runId } = withRun()
+    const r = unwrap<{ id: string }>(attachCoordinator(s, { runId, sessionId: 'sess1' }) as never)
+    expect(r.state.runs[0].coordinatorSessionId).toBe('sess1')
+  })
+
+  it('사라지면 세션 id 가 지워진다', () => {
+    const { s, runId } = withRun()
+    let st = unwrap<{ id: string }>(attachCoordinator(s, { runId, sessionId: 'sess1' }) as never).state
+    st = unwrap<{ id: string }>(detachCoordinator(st, { runId }) as never).state
+    expect(st.runs[0]).not.toHaveProperty('coordinatorSessionId')
+  })
+
+  // **왜 사라졌는지 묻지 않는다.** 사람이 닫았는지 크래시인지 구별할 방법이 없고(kill 은 표시를
+  // 남기지 않는다), 어느 쪽이든 앱이 하는 일은 같다 — 칸을 비우고 사람이 다시 띄울 버튼을 낸다.
+  it('떼는 것은 두 번 불러도 같다 — 셀 것이 없다', () => {
+    const { s, runId } = withRun()
+    let st = unwrap<{ id: string }>(detachCoordinator(s, { runId }) as never).state
+    st = unwrap<{ id: string }>(detachCoordinator(st, { runId }) as never).state
+    expect(st.runs[0]).not.toHaveProperty('coordinatorSessionId')
+    expect(st.runs[0]).not.toHaveProperty('coordinatorFailures')
+  })
+
+  it('다시 붙이면 그 세션이 실린다', () => {
+    const { s, runId } = withRun()
+    let st = unwrap<{ id: string }>(attachCoordinator(s, { runId, sessionId: 'sess1' }) as never).state
+    st = unwrap<{ id: string }>(detachCoordinator(st, { runId }) as never).state
+    st = unwrap<{ id: string }>(attachCoordinator(st, { runId, sessionId: 'sess2' }) as never).state
+    expect(st.runs[0].coordinatorSessionId).toBe('sess2')
+  })
+
+  it('모르는 Run 이면 거절한다', () => {
+    expect(attachCoordinator(emptyState(), { runId: 'nope', sessionId: 's' }).ok).toBe(false)
+    expect(detachCoordinator(emptyState(), { runId: 'nope' }).ok).toBe(false)
+  })
+
+  // 회차는 자신이 도는 Run 이므로 관리자가 필요하고, 누구로 할지는 템플릿을 만든 사람이 정했다.
+  // 세션 id 와 실패 횟수는 정의가 아니라 지난 회차의 결과라 물려주지 않는다
+  it('예약 회차가 코디네이터 계정을 물려받고 세션·실패는 물려받지 않는다', () => {
+    const t = unwrap<{ id: string }>(
+      createRun(
+        emptyState(),
+        {
+          objective: '매일',
+          cwd: 'D:/p',
+          coordinatorAccountId: 'acc1',
+          schedule: { kind: 'daily', time: '09:00' }
+        },
+        NOW
+      ) as never
+    )
+    let st = unwrap<{ id: string }>(
+      attachCoordinator(t.state, { runId: t.value.id, sessionId: 'sess-template' }) as never
+    ).state
+    st = unwrap<{ id: string }>(detachCoordinator(st, { runId: t.value.id }) as never).state
+    const child = unwrap<{ id: string }>(spawnScheduledRun(st, t.value.id, FIRE) as never)
+    const saved = child.state.runs.find((r) => r.id === child.value.id)!
+    expect(saved.coordinatorAccountId).toBe('acc1')
+    expect(saved).not.toHaveProperty('coordinatorSessionId')
+    expect(saved).not.toHaveProperty('coordinatorFailures')
   })
 })

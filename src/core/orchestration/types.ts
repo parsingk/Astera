@@ -25,10 +25,31 @@ export interface Run {
   objective: string
   cwd: string
   createdAt: string
-  /** 이 Run 의 워커를 띄울 provider. 계정은 defaultAccountIdOf 가 고른다. */
-  provider?: Provider
   /** 동시에 열어 둘 Dispatch 수. 없으면 DEFAULT_CONCURRENCY. */
   concurrency?: number
+  /** 이 Run 을 관리할 **코디네이터 세션**을 띄울 계정. 하나다.
+   *
+   *  **워커 계정과 층이 다르다.** 워커 계정은 Task 가 정하고(`Task.accountIds`), 이것은 그
+   *  Task 들을 돌리는 세션의 것이다.
+   *
+   *  **Task 처럼 목록이 아닌 이유.** 목록은 "한도에 걸렸을 때 갈아탈 순서" 를 뜻하고, 그 값이
+   *  있으면 롤링이 계정을 갈아타며 세션을 새로 띄운다. 관리자에게 그것을 주지 않기로 했다 —
+   *  계정이 하나면 롤링은 갈아타지 않고 리셋까지 기다린 뒤 **같은 세션에서** 이어간다
+   *  (RollCycle.onLimit 은 계정 수가 1이면 언제나 대기를 낸다). 관리 중이던 Run 의 맥락을 잃지
+   *  않는 쪽이 이 자리에서는 더 중요하다.
+   *
+   *  **없으면 코디네이터 없이 앱이 돌린다.** 사이드바는 더 이상 그 상태를 만들지 않지만, 이 칸이
+   *  생기기 전에 만든 Run 과 CLI 로 만든 Run 이 그 갈래다 — UI 가 만들지 못하는 것과 코드가 다루지
+   *  못하는 것은 다르다. 그때 워커의 질문을 풀어 주는 것은 앱의 그물이다(inbox.ts). */
+  coordinatorAccountId?: string
+  /** 지금 이 Run 을 관리하고 있는 세션. **깨우기와 안전망이 이 칸의 유무로 판단한다** — "답할
+   *  사람이 있는가" 를 묻는 유일한 자리다. 세션이 사라지면 배선이 이 칸을 지운다.
+   *
+   *  **사라진 코디네이터를 앱이 다시 띄우지는 않는다.** 탭을 닫는 것은 사람의 결정이고, 곧바로
+   *  다시 열면 그 결정을 무시하는 것이다 — 크래시와 구별할 방법도 없다(`kill` 은 표시를 남기지
+   *  않는다). 대신 사이드바의 Run 줄에 다시 띄우는 버튼이 나온다(JobRun.coordinatorMissing).
+   *  그동안 워커의 질문은 앱의 그물이 풀어 준다(inbox.ts). */
+  coordinatorSessionId?: string
   /** 앱이 이 Run 을 스스로 돌리는가. **UI 가 만든 Run 에만 참이다** — 코디네이터가 만든 Run 을
    *  앱이 함께 돌리면 둘이 같은 ready Task 를 두고 경합하고, 진 쪽(대개 코디네이터)의
    *  worker-start 가 `dispatch already open` 을 받는다. 코디네이터 LLM 에게는 자기 명령이 이유
@@ -99,18 +120,30 @@ export interface Task {
   status: TaskStatus
   result?: string
   filesModified?: string[]
-  /** 이 Task 의 워커를 띄울 계정들, **순서대로**. **없거나 비면 그 provider 의 기본 계정으로 간다** —
-   *  명령으로 만든 Task 와 이 칸이 생기기 전의 Task 가 모두 그 갈래다.
+  /** 이 Task 의 워커를 띄울 계정들, **순서대로**.
+   *
+   *  **이 목록이 provider 의 유일한 출처다.** 예전에는 Run 이 provider 를 들고 있었고(`Run.provider`)
+   *  이 칸은 비워 둘 수 있었다 — 비면 그 provider 의 기본 계정으로 갔다. 이제 Run 은 provider 를
+   *  모르므로, 계정이 없으면 **어느 CLI 로 띄울지 알 방법이 없다.** 그래서 자동 디스패치는 계정 없는
+   *  Task 를 고르지 않고(schedule.ts 의 slotsToFill), 만드는 두 자리가 모두 계정을 요구한다
+   *  (server.ts 의 task-create, NewTaskModal).
+   *
+   *  **그래도 optional 인 이유:** orchestration.json 은 프로세스보다 오래 살고 Run 은 30일 남는다.
+   *  이 규칙 전에 만들어진 Task 와 손으로 고친 파일에는 이 칸이 없다. 그런 Task 는 조용히 멈추는
+   *  대신 디스패치 시점에 Gate 를 연다 — 사람이 계정을 넣으면 곧바로 돈다.
+   *
+   *  **목록 안의 계정은 서로 같은 provider 여야 한다.** 섞이면 첫 계정으로 띄운 CLI 가 한도에 걸렸을
+   *  때 다른 CLI 계정으로 갈아타려 하고, 그것은 갈아타기가 아니라 다른 프로그램을 띄우는 일이다.
+   *  task-create 가 그 목록을 거절하고, UI 는 첫 계정이 고른 provider 로 이후 칸을 좁힌다.
    *
    *  첫 계정으로 띄우고, 나머지는 **한도에 걸렸을 때 갈아탈 순서**다 — 배선이 이 목록을 그대로
    *  세션의 롤링 체인(rollAccountIds)으로 넘긴다. 계정이 하나면 갈아탈 곳이 없어 리셋까지 기다린다
    *  (RollCycle.onLimit 은 계정 수가 1이면 언제나 대기를 낸다).
    *
-   *  provider 는 Run 이 정하므로(Run.provider) 이 계정들은 그것과 같은 provider 여야 한다.
-   *  task-create 가 그 조합을 거절하지만, 못 쓰는 지정이 실제로 도달했을 때 무엇을 하는지는
-   *  accountToDispatchOn(core/accounts/dispatchAccount.ts)이 정한다 — **첫 계정**을 못 쓰면 뒤
-   *  계정을 올려세우지 않고 그대로 실패해 Gate 를 열고, 첫 계정을 쓸 수 있으면 **뒤 계정** 중
-   *  못 쓰는 것만 순서를 지키며 제자리에서 빠진다. */
+   *  못 쓰는 지정이 실제로 도달했을 때 무엇을 하는지는 accountToDispatchOn
+   *  (core/accounts/dispatchAccount.ts)이 정한다 — **첫 계정**을 못 쓰면 뒤 계정을 올려세우지 않고
+   *  그대로 실패해 Gate 를 열고, 첫 계정을 쓸 수 있으면 **뒤 계정** 중 못 쓰는 것만 순서를 지키며
+   *  제자리에서 빠진다. */
   accountIds?: string[]
   /** 이 Task 를 완료로 판정할 실행 구성의 id. 없으면 worker_done 을 그대로 믿는다 —
    *  "문서를 고친다" 같은 Task 에 빌드를 거는 것은 틀린 판정이므로 검증 없음이 기본이다. */

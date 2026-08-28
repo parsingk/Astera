@@ -188,7 +188,7 @@ describe('snapshotFor', () => {
     expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs).toEqual([
       {
         id: 'r1', objective: 'objective r1', outcome: 'running', done: 1, total: 2, eventCount: 3,
-        provider: undefined, concurrency: undefined, sharesProjectFolder: false,
+        concurrency: undefined, sharesProjectFolder: false,
         tasks: [
           { id: 't1', title: 'task t1', status: 'completed', sessionId: undefined, gateQuestion: undefined, openGates: 0 },
           { id: 't2', title: 'task t2', status: 'ready', sessionId: undefined, gateQuestion: undefined, openGates: 0 }
@@ -380,22 +380,51 @@ describe('snapshotFor', () => {
     expect(snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs[0].eventCount).toBe(3)
   })
 
-  // provider·concurrency 는 Run 이 들고 있는 값을 그대로 옮긴 것이다 — 계산도 기본값도 여기서
-  // 넣지 않는다(JobRun 의 주석과 같다). 기본값(DEFAULT_CONCURRENCY)을 적용하는 것은 이 값을
-  // 읽는 렌더러의 일이다.
-  it('Run 의 provider·concurrency 를 그대로 싣는다', () => {
-    const withBoth: Run = { ...run('r1', absPath('p')), provider: 'codex', concurrency: 2 }
-    const s = withRuns([withBoth])
+  // concurrency 는 Run 이 들고 있는 값을 그대로 옮긴 것이다 — 계산도 기본값도 여기서 넣지
+  // 않는다(JobRun 의 주석과 같다). 기본값(DEFAULT_CONCURRENCY)을 적용하는 것은 이 값을 읽는
+  // 렌더러의 일이다. **provider 는 이 자리에 없다** — Run 이 아니라 Task 의 계정이 정하므로
+  // 한 Run 에 실을 하나의 값이 없다(JobRun 의 주석).
+  it('Run 의 concurrency 를 그대로 싣는다', () => {
+    const s = withRuns([{ ...run('r1', absPath('p')), concurrency: 2 }])
     const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs
-    expect(r.provider).toBe('codex')
     expect(r.concurrency).toBe(2)
   })
 
   it('Run 에 없으면 undefined 다 — 기본값을 여기서 채우지 않는다', () => {
     const s = withRuns([run('r1', absPath('p'))])
     const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs
-    expect(r.provider).toBeUndefined()
     expect(r.concurrency).toBeUndefined()
+  })
+
+  // 관리자가 있어야 하는데 없다는 사실이 사이드바의 버튼 근거다 — 이 칸이 없으면 사람이
+  // 코디네이터를 되돌릴 자리가 사라진다
+  it('코디네이터 계정이 있는데 세션이 없으면 coordinatorMissing 이다', () => {
+    const s = withRuns([{ ...run('r1', absPath('p')), coordinatorAccountId: 'acc1' }])
+    const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs
+    expect(r.coordinatorMissing).toBe(true)
+  })
+
+  it('세션이 붙어 있으면 그 칸이 없다', () => {
+    const s = withRuns([
+      { ...run('r1', absPath('p')), coordinatorAccountId: 'acc1', coordinatorSessionId: 'sess1' }
+    ])
+    const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs
+    expect(r).not.toHaveProperty('coordinatorMissing')
+  })
+
+  // 계정 지정이 없는 Run(옛 Run·CLI Run)은 애초에 관리자를 기대하지 않는다
+  it('코디네이터 계정이 없으면 그 칸이 없다', () => {
+    const s = withRuns([run('r1', absPath('p'))])
+    const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs
+    expect(r).not.toHaveProperty('coordinatorMissing')
+  })
+
+  // Run 에서 provider 를 지운 변경이 이 뷰에도 닿았는지 — 칸이 남아 있으면 사이드바가 한 Run 을
+  // 하나의 에이전트로 그리는 옛 화면으로 조용히 돌아간다
+  it('JobRun 에 provider 칸이 없다', () => {
+    const s = withRuns([run('r1', absPath('p'))])
+    const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs
+    expect('provider' in r).toBe(false)
   })
 })
 

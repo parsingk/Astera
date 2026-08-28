@@ -805,6 +805,9 @@ export const ko = {
   'jobs.run.pauseFailed': '일시 중지하지 못했습니다',
   'jobs.run.pauseRetained': 'worker-retain 으로 붙잡아 둔 세션이 있어 멈출 수 없습니다 — 먼저 놓아 주세요',
   'jobs.run.resume': '다시 실행',
+  'jobs.run.coordinatorRestart': '코디네이터 다시 띄우기',
+  'jobs.run.coordinatorRestartHint': '이 작업을 관리할 코디네이터 세션이 없습니다 — 눌러서 다시 띄웁니다',
+  'jobs.run.coordinatorRestartFailed': '코디네이터를 다시 띄우지 못했습니다',
   'jobs.run.resumeHint': '다음 예약 시각부터 다시 돌기 시작합니다',
   'jobs.run.startHint': 'Task 를 다 짠 뒤 누르면 이 작업이 돌기 시작합니다',
   'jobs.run.startFailed': '작업을 시작하지 못했습니다',
@@ -887,7 +890,9 @@ export const ko = {
   'jobs.new.title': '새 작업 만들기',
   'jobs.new.gitRequired': 'git 저장소로 등록된 폴더에서만 실행됩니다',
   'jobs.new.objective': '목표',
-  'jobs.new.provider': '에이전트',
+  'jobs.new.coordinator': '코디네이터 계정',
+  'jobs.new.coordinatorPick': '계정을 고르세요',
+  'jobs.new.coordinatorHint': '이 작업을 관리할 에이전트 세션의 계정입니다.',
   'jobs.new.concurrency': '동시 실행',
   'jobs.new.concurrencyHint': '이 작업이 한 번에 열어 둘 워커 수',
   'jobs.new.schedule': '예약 실행',
@@ -902,6 +907,7 @@ export const ko = {
   // 스케줄러가 워커를 띄울 계정을 못 골랐을 때 여는 Gate 의 문구(ipc.ts). 첫째는 예전부터
   // 있던 경우(그 provider 에 로그인된 계정이 없다), 둘째는 사람이 이 Task 에 지정한 계정을
   // 쓸 수 없는 경우다 — 지정을 무시하고 기본 계정으로 갈아타지 않으므로 사람에게 말해야 한다
+  'jobs.gate.noAccountAssigned': '이 Task 에 계정이 지정되지 않아 어느 에이전트로 띄울지 알 수 없습니다 — 계정을 지정하세요',
   'jobs.gate.noAccount': '{provider} 계정에 로그인되어 있지 않아 이 Task 를 시작할 수 없습니다',
   'jobs.gate.assignedAccountUnusable':
     '이 Task 에 지정된 첫 계정을 쓸 수 없고, 그 뒤의 계정들은 나중에 갈아탈 순서일 뿐입니다 — 그 계정에 다시 로그인하거나 이 Task 의 계정 목록을 고치세요',
@@ -920,10 +926,11 @@ export const ko = {
   // 못박음"은 계정이 하나뿐이어도 뜻이 다르다(로그아웃되고 둘째가 등록되면 갈리는 동작이
   // NewTaskModal.tsx 에 있다). 안 고르면 그 provider 의 기본 계정으로 간다(core/accounts/dispatchAccount.ts)
   'jobs.task.account': '계정',
-  'jobs.task.accountDefault': '기본 계정',
+  'jobs.task.accountPick': '계정을 고르세요',
   'jobs.task.accountNone': '추가 안 함',
+  'jobs.task.accountEmpty': '등록된 계정이 없습니다 — 설정 → 계정에서 먼저 추가하세요',
   'jobs.task.accountHint':
-    '이 Task 의 워커를 띄울 계정입니다 — 고르지 않으면 기본 계정으로 갑니다. 둘 이상 고르면 한도에 걸렸을 때 적은 순서대로 갈아탑니다',
+    '이 Task 의 워커를 띄울 계정입니다 — 첫 계정이 어느 에이전트로 돌릴지 정하므로 반드시 하나는 고르세요. 둘 이상 고르면 한도에 걸렸을 때 적은 순서대로 갈아탑니다',
   // 고른 계정이 이 폴더를 처음 쓰면 CLI 가 신뢰 확인을 띄우고 **거기서 멈춘다** — 앱은 그것을
   // 모르고 노드는 도는 모양 그대로라, 미리 말해 두지 않으면 왜 아무 일도 없는지 알 길이 없다
   'jobs.task.accountTrust': '고른 계정이 이 폴더를 처음 쓰면 세션 탭에 폴더 신뢰 확인이 뜹니다 — 승인해야 워커가 일을 시작합니다',
