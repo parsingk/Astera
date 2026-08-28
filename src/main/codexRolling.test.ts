@@ -515,13 +515,30 @@ describe('CodexRollingCoordinator', () => {
       h.coord.stop()
     })
 
+    // fix wave 최종, F4: 예전 버전은 계정이 둘뿐이었다. RollCycle.onLimit 은 연속 한도 횟수가
+    // 계정 수의 배수가 되면 그 자체로 wait 를 돌려준다(streak % count === 0) — 계정이 둘이면
+    // 바로 이 두 번째 한도에서 그 조건에 걸려 onLimit 이 roll() 을 부르기도 전에 통째로 wait 로
+    // 빠진다. 그러면 신원을 지우는 세 줄(chain.codexSessionId·rolloutPath·tail = null)을 지우든
+    // 안 지우든 애초에 roll() 근처에도 못 가므로 무엇을 구분했는지 알 수 없다(뮤테이션 검증,
+    // 2026-08-28: 그 세 줄을 지워도 이 테스트만 그대로 통과했다 — 원인은 브리핑이 아니라 이
+    // 계정 수 자체였다). 계정을 셋으로 늘리면 이 두 번째 한도도 여전히 roll 판정이라(streak=2,
+    // 2 % 3 ≠ 0) 실제로 onLimit → roll() 을 다시 탄다. 그리고 두 번째 호출부터 resumeText 가
+    // null 을 돌리게 해 그 롤이 반드시 ordinary(복사) 경로를 타게 만든다 — 신원이 비어 있지
+    // 않으면 그 경로가 옛(버려진) rolloutPath 를 실제로 복사한다.
     it('백지 재개 뒤에는 신원 필드가 비어, 재-locate 전 두 번째 한도가 옛 rollout 을 복사하지 않는다', async () => {
+      const accounts: Record<string, Account> = {
+        c1: acc('c1', 'Codex A'),
+        c2: acc('c2', 'Codex B'),
+        c3: acc('c3', 'Codex C')
+      }
+      let calls = 0
       const h = harness({
+        getAccount: (id) => accounts[id] ?? null,
         resumeStrategy: () => 'smart',
-        resumeText: () => Promise.resolve('BRIEFING TEXT')
+        resumeText: () => Promise.resolve(calls++ === 0 ? 'BRIEFING TEXT' : null)
       })
       const file = await writeRollout({ accountId: 'c1', uuid: 'cx-smart-4', cwd: h.info1.cwd, primary: 95 })
-      h.coord.register(h.info1)
+      h.coord.register({ ...h.info1, rollAccountIds: ['c1', 'c2', 'c3'] })
       await advance(1_500)
       await appendLimitError(file)
       h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
@@ -529,18 +546,16 @@ describe('CodexRollingCoordinator', () => {
       expect(h.copied).toEqual([]) // 백지 재개 자체는 아무것도 복사하지 않는다
       const newLiveId = h.spawned.at(-1)?.info.id
       expect(newLiveId).toBeDefined()
-      const spawnedBefore = h.spawned.length
       // 관측 방법: 새 rollout 파일은 아직 없다(재-locate 가 아직 끝나지 않았다). 이 상태에서 옛
-      // (버려진) 파일에 두 번째 한도 기록을 남기고 새 liveId 로 같은 문구를 흘려 본다. 신원 필드
-      // (codexSessionId·rolloutPath·tail)가 정말 비었다면 이 체인은 더 이상 그 파일을 tail 하지
-      // 않으므로(tick 은 tail 이 없는 체인을 건너뛴다 — private tick()) 아무 것도 복사되거나 다시
-      // spawn 되지 않는다. 지워지지 않았다면 옛 tail 이 살아 있어 이 기록을 판정하고 그 파일을
-      // 복사했을 것이다.
+      // (버려진) 파일에 두 번째 한도 기록을 남기고 새 liveId 로 같은 문구를 흘려 본다. 이번 롤은
+      // resumeText 가 null 을 돌리므로 반드시 복사 경로를 탄다 — 신원 필드(codexSessionId·
+      // rolloutPath·tail)가 정말 비었다면 onLimit 이 그 값들이 없다는 이유로 roll() 을 부르기도
+      // 전에 멈춘다. 비지 않았다면 onLimit 을 통과해 roll() 이 옛 rolloutPath 를 그대로 복사한다
+      // — 그래서 이 어설션은 "옛(버려진) 파일을 소스로 하는 복사가 없다"를 직접 확인한다.
       await appendLimitError(file)
       h.coord.handleData({ sessionId: newLiveId!, data: LIMIT_TEXT })
       await advance(15_000) // tick 한 바퀴 — 매핑 타임아웃(60초)에는 못 미친다
-      expect(h.copied).toEqual([])
-      expect(h.spawned.length).toBe(spawnedBefore)
+      expect(h.copied.some((c) => c.src === file)).toBe(false)
       h.coord.stop()
     })
   })

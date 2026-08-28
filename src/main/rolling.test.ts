@@ -2704,4 +2704,41 @@ describe('등록 시점의 재개 정보', () => {
     // 잘못 선언해 아무 일도 하지 않는 것과는 다른 결과다.
     expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a1'])
   })
+
+  // fix wave 최종, F5: register 가 채우는 두 시드 필드(resumeSeedSessionId·resumeSeedTranscriptPath)
+  // 도 백지 재개 뒤에는 비워야 한다 — 비우지 않으면 다음 롤이 지금 일부러 두고 온 그 시드 대화를
+  // 되살린다(roll() 위쪽의 `sessionId = chain.claudeSessionId ?? chain.resumeSeedSessionId` 폴백이
+  // 그 시드를 다시 집는다). 계정을 셋으로 두는 이유(하네스 기본값 rollAccountIds=['a1','a2','a3']):
+  // 둘이면 RollCycle.onLimit 이 연속 두 번째 한도에서 "한 바퀴 다 막혔다"로 보고(streak % count
+  // === 0) roll() 을 부르기도 전에 곧장 wait 로 빠져, 시드를 지우든 안 지우든 아무것도 구분하지
+  // 못한다.
+  it('백지 재개 뒤에는 시드도 비어, 다음 롤이 버려둔 시드 대화를 되살리지 않는다', async () => {
+    vi.setSystemTime(new Date(T0))
+    let calls = 0
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: () => Promise.resolve(calls++ === 0 ? 'BRIEFING TEXT' : null)
+    })
+    h.coord.register({ ...h.info1, resumeSessionId: 'hist-sess' }, DEST) // 시드 등록 — statusLine 은 끝내 오지 않는다
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    // 백지 재개 — 시드를 브리핑으로 대신했으므로 복사가 없다
+    expect(h.events).toEqual(['kill:s1', 'spawn:s2:a2'])
+    expect(h.copied).toEqual([])
+    const newLiveId = h.spawned.at(-1)?.id
+    expect(newLiveId).toBeDefined()
+    // 롤 뒤 REPLAY_GRACE_MS(60초) 가 지날 때까지 기다린다 — 그 전에는 같은 한도 문구가 "리플레이"
+    // 로 무시된다(--resume 이 옛 한도 문구를 화면에 다시 그리는 것과 구분하지 못하므로, 백지
+    // 재개에도 똑같이 적용된다). 30초 무-statusline 폴백(auto-prompt)도 이 사이에 지나간다.
+    await vi.advanceTimersByTimeAsync(62_000)
+    // 두 번째 한도 — 계정이 셋이라 RollCycle 은 여전히 roll 판정이다(streak=2, 2 % 3 ≠ 0).
+    // resumeText 는 두 번째 호출부터 null 을 돌리므로 이 롤은 반드시 ordinary(복사) 경로를 탄다.
+    // 시드가 정말 비었다면 roll() 은 claudeSessionId·transcriptPath·시드가 모두 없다는 이유로
+    // "세션 메타 없음"으로 중단하고 재시도를 예약한다 — 비지 않았다면 옛 시드 경로(DEST)를 그대로
+    // 복사한다.
+    h.coord.handleData({ sessionId: newLiveId!, data: LIMIT_WITH_RESET })
+    await flush()
+    expect(h.copied.some((c) => c.src === DEST)).toBe(false)
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting') // "세션 메타 없음"으로 중단하고 재시도를 예약한다
+  })
 })
