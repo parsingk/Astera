@@ -455,8 +455,11 @@ export class CodexRollingCoordinator {
   }
 
   /** Polls until the rollout file appears. On finding it, tailing starts; past the deadline rolling is
-   *  disabled. This is the fresh-spawn path only — a resume knows its file already (attachRollout), and
-   *  the exclude list the re-locate after a roll used to need went away with it. */
+   *  disabled. This used to be the fresh-spawn path only — a resume knows its file already
+   *  (attachRollout) — but a blank-slate roll (Smart Resume) also lands here now: that respawn is a
+   *  fresh `codex` with no `--resume`, so it has no known rollout either, and roll() calls this the
+   *  same way register() does for a brand-new chain. The exclude list the re-locate after an ordinary
+   *  (non-blank-slate) roll used to need went away with that roll's `attachRollout` call instead. */
   private startLocate(chain: Chain, account: Account | null): void {
     if (!account) {
       this.deps.log(`codex locate aborted — no such account session=${chain.liveId}`)

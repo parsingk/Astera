@@ -574,11 +574,15 @@ app.whenReady().then(async () => {
       }
       try {
         if (channel === 'session:rolled') {
-          // dest: the rollout path copied into the target account just before the roll
+          // dest: the rollout path copied into the target account just before an ordinary roll
           // (codexRolling.roll() carries it along). The respawn resumes, so codex appends to that very
           // file instead of creating a new one — it is what the watcher has to tail, and searching for a
           // newly created file would find nothing at all. It is handed over directly; the watcher starts
-          // at the end of it so the turns from before the roll are not reported again.
+          // at the end of it so the turns from before the roll are not reported again. **`undefined` on
+          // a blank-slate roll (Smart Resume)** — that respawn is a fresh `codex` with no rollout to
+          // copy or hand over yet, so `register` below falls back to its own search, the same path a
+          // brand-new session already takes (codexRolling.ts's `roll()` documents the same fallback at
+          // its own `send('session:rolled', ...)` call).
           const p = payload as { oldSessionId: string; info: SessionInfo; dest?: string }
           scheduler.rekey(p.oldSessionId, p.info.id) // the schedule follows the roll chain
           // When rolling switches accounts the session respawns under a new sessionId and a new

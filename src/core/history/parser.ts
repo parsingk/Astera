@@ -223,8 +223,12 @@ export async function parseTranscriptTail(
  *  파일을 네 번 훑는다. 무엇을 메모에 얼마나 실을지(개수·길이 상한)는 포매터
  *  (core/orchestration/tabResume.ts)가 정한다 — 이 함수는 재료만 모은다. */
 export interface TranscriptResumeMaterial {
-  /** `ai-title` 레코드의 `aiTitle`. 그 레코드가 없으면(구버전 claude, 또는 그 플러그인이 없는
-   *  사용자) null — 대화 제목에 의존하지 않는다는 계약이 이 필드의 nullability 로 드러난다. */
+  /** 제목 레코드의 값 — 현행 claude 가 남기는 `ai-title`(필드 `aiTitle`)이나 구버전이 남기는
+   *  `summary`(필드 `summary`) 중 먼저 만난 쪽(아래 parseTranscriptForResume 의 판정문이 둘 다
+   *  받는 이유를 적어 둔다). **둘 다 claude 자신이 남기는 기록이다** — 플러그인이 남기는 것이
+   *  아니라, 있다면 그저 이 레코드를 읽을 뿐이다. 어느 쪽도 없으면(구버전 claude 이거나, 그
+   *  레코드가 쓰이기 전에 대화 파일을 읽었거나) null — 대화 제목에 의존하지 않는다는 계약이 이
+   *  필드의 nullability 로 드러난다. */
   title: string | null
   /** 사람이 실제로 보낸 요청. 시간 순(오래된 것부터) — 셋 중 아무것도 "이것이 작업이다"로
    *  판정되지 않는다. */

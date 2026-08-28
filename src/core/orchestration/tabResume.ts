@@ -8,15 +8,18 @@ import { sanitize } from './checkpoint'
 import type { GitSummary } from './checkpoint'
 import type { LastCommand, TranscriptMessage } from '../types'
 
-/** formatTabResume 의 입력. 일곱 조각이 메모의 일곱 절에 대응한다 — 제목·최근 요청·코드 상태·손댄
- *  파일·마지막 명령이 이 인터페이스의 필드고, 꼬리도 그렇다. 지시문(BEFORE EDITING 등)은 입력이
- *  아니라 이 파일이 붙이는 고정 문장이다 — 탭 세션마다 달라질 것이 없기 때문이다. */
+/** formatTabResume 의 입력. 필드 일곱 개가 메모의 여섯 절에 대응한다 — 1:1 이 아니다: cwd 와 git
+ *  이 함께 CURRENT STATE 한 절을 이루고, 나머지 다섯(title·requests·editedFiles·lastCommand·tail)은
+ *  절 하나씩이다. 지시문(BEFORE EDITING 등)은 입력이 아니라 이 파일이 붙이는 고정 문장이다 — 탭
+ *  세션마다 달라질 것이 없기 때문이다. */
 export interface TabResumeInput {
   /** 세션의 작업 폴더. git 이 없어도(저장소가 아니어도) 이것만은 항상 있다. */
   cwd: string
-  /** 대화 파일의 `ai-title` 레코드. **대화 제목에 의존하지 않는다** — 그 레코드는 claude 버전에
-   *  따라 이름이 다르고(§0 참조), 이 앱은 그 레코드를 남기는 플러그인이 없는 사용자에게도 나간다.
-   *  없으면 이 줄만 빠지고 나머지 메모는 그대로 성립한다. */
+  /** 대화 파일의 제목 레코드. **대화 제목에 의존하지 않는다** — 그 레코드는 claude 버전에 따라
+   *  이름이 다르고(parser.ts 의 TranscriptResumeMaterial.title 이 어느 이름들을 받는지 적어
+   *  둔다), 그 레코드 자체는 claude 가 남기는 것이지 플러그인이 남기는 것이 아니다 — 아직 그
+   *  레코드가 쓰이기 전에 대화 파일을 읽었거나 구버전 claude 라서 없을 수 있다. 없으면 이 줄만
+   *  빠지고 나머지 메모는 그대로 성립한다. */
   title: string | null
   /** 최근 사용자 요청, 시간 순(오래된 것부터). **어느 것도 "지금 하던 작업"으로 판정되지 않는다** —
    *  대화 중간에 요청이 바뀌었을 수 있고, 어느 것이 현재 작업인지 가리려면 대화를 읽고 이해해야

@@ -268,7 +268,7 @@ export interface TabResumeDeps {
    *  buildResumeNote 의 JSDoc 이 적어 둔 이유와 같다: 소리 없이 사라지는 브리핑이 이 기능의
    *  실제 사고다. */
   log?(message: string): void
-  /** 대화 파일을 한 번 읽어 넷(제목·요청·손댄 파일·꼬리)을 뽑는 방법. 테스트 전용 주입점이다.
+  /** 대화 파일을 한 번 읽어 다섯(제목·요청·손댄 파일·꼬리·마지막 명령)을 뽑는 방법. 테스트 전용 주입점이다.
    *  넘기지 않으면 `provider` 에 따라 parseTranscriptForResume(claude, core/history/parser.ts) 나
    *  parseCodexForResume(codex, core/history/codexParser.ts)를 쓴다 — codex rollout 은 claude
    *  transcript 와 레코드 모양이 달라 같은 파서로 읽을 수 없다(제목·손댄 파일 레코드가 없다: 그
@@ -302,14 +302,14 @@ export interface TabResumeDeps {
  * 절 관리 없이 매번 그대로 갈아 끼운다. **'update' 는 그대로다** — 살아 있는 세션에 얹는 한 줄이라
  * 파일을 전혀 건드리지 않는다.
  *
- * **대화 파일은 한 번만 읽는다.** 제목·최근 요청·손댄 파일·꼬리 넷을 각각 다른 함수로 읽으면 같은
- * (수십 MB 일 수 있는) 파일을 네 번 훑는다 — parseTranscriptForResume(claude) 나
- * parseCodexForResume(codex) 하나가 그 넷을 한 번의 스트리밍으로 뽑는다.
+ * **대화 파일은 한 번만 읽는다.** 제목·최근 요청·손댄 파일·꼬리·마지막 명령 다섯을 각각 다른
+ * 함수로 읽으면 같은(수십 MB 일 수 있는) 파일을 다섯 번 훑는다 — parseTranscriptForResume(claude)
+ * 나 parseCodexForResume(codex) 하나가 그 다섯을 한 번의 스트리밍으로 뽑는다.
  *
  * **읽는 파서는 `deps.provider` 가 고른다.** codex rollout 은 claude transcript 와 레코드 모양이
- * 달라 같은 파서로 읽을 수 없다 — codex 쪽은 대화 제목·손댄 파일 레코드가 아예 없어 그 둘을 항상
- * 비운 채로 돌아온다(parseCodexForResume 의 JSDoc). 손댄 파일이 비면 아래에서 git 변경 목록으로
- * 내려가므로 손실은 없다.
+ * 달라 같은 파서로 읽을 수 없다 — codex 쪽은 대화 제목·손댄 파일·마지막 명령 레코드가 아예 없어
+ * 그 셋을 항상 비운 채로 돌아온다(parseCodexForResume 의 JSDoc). 손댄 파일이 비면 아래에서 git
+ * 변경 목록으로 내려가므로 손실은 없다.
  *
  * **'update' 는 대화 파일을 아예 읽지 않는다.** formatTabResume 의 'update' 모양은 git 상태만
  * 쓰고 title·requests·editedFiles·tail 은 버린다(§11.5 — 대화가 온전한 세션에는 꼬리를 다시 실을
