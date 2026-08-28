@@ -377,10 +377,17 @@ export async function buildTabResumeText(
       tail = material.tail
       lastCommand = material.lastCommand
     }
-    if (editedFiles.length === 0 && git) editedFiles = git.changed
+    // fix wave 최종, F9: 어느 쪽으로 채웠는지를 함께 넘긴다 — filesSection 이 그 출처에 따라 다른
+    // 표제를 고른다(editedFilesSource 의 JSDoc, tabResume.ts). 대화 기록에서 이미 채웠으면(길이가
+    // 0 이 아니면) 그대로 'transcript' 다.
+    let editedFilesSource: 'transcript' | 'git' = 'transcript'
+    if (editedFiles.length === 0 && git) {
+      editedFiles = git.changed
+      editedFilesSource = 'git'
+    }
 
     const text = formatTabResume(
-      { cwd: deps.cwd, title, requests, editedFiles, git, tail, lastCommand },
+      { cwd: deps.cwd, title, requests, editedFiles, editedFilesSource, git, tail, lastCommand },
       form
     )
     if (text === null) {

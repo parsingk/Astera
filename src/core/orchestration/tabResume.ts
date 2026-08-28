@@ -29,6 +29,14 @@ export interface TabResumeInput {
   /** 대화 중 손댄 파일. `file-history-snapshot` 레코드에서 뽑히거나(있으면), 없으면 git 의 변경
    *  목록으로 내려간다 — 그 선택은 buildTabResumeText 가 하고 여기서는 이미 정해진 목록만 받는다. */
   editedFiles: string[]
+  /** editedFiles 가 어느 쪽에서 왔는지 — 'transcript'(file-history-snapshot 레코드가 있었다) 또는
+   *  'git'(그 레코드가 없어 git 의 변경 목록으로 내려갔다). filesSection 이 절 표제를 고르는
+   *  근거일 뿐이다(fix wave 최종, F9). **git 목록은 "이 대화에서 손댔다"의 증거가 아니다** — 지금
+   *  커밋 안 된 변경일 뿐이고, 이 대화가 시작되기 전부터 있었을 수도, 다른 프로세스가 냈을 수도
+   *  있다. 예전에는 출처와 무관하게 항상 "FILES TOUCHED IN THIS CONVERSATION"이라고 적어, git 으로
+   *  내려간 경우에도 실제로 아는 것보다 더 안다고 주장했다. editedFiles 가 비어 있으면(폴백조차
+   *  없으면) 이 값은 읽히지 않는다 — filesSection 이 그 경우 절 자체를 생략한다. */
+  editedFilesSource: 'transcript' | 'git'
   /** 저장소 수준 git 요약. 워크트리가 git 저장소가 아니거나 읽기 자체가 실패하면 null. */
   git: GitSummary | null
   /** 의미 있는 user/assistant 메시지의 꼬리(parseTranscriptForResume 이 뽑는다). tool 원본 출력은
@@ -147,9 +155,16 @@ function stateSection(input: TabResumeInput): string {
   return `CURRENT STATE\n${lines.map((l) => `- ${l}`).join('\n')}`
 }
 
+// fix wave 최종, F9: 두 출처가 서로 다른 표제를 쓴다 — 대화 기록에서 뽑았으면 "이 대화에서
+// 손댔다"고 말할 수 있지만, git 목록으로 내려간 경우는 "지금 커밋 안 된 변경"일 뿐이라서 같은
+// 문구를 쓰면 실제로 아는 것보다 더 안다고 주장하는 셈이다(editedFilesSource 의 JSDoc).
 function filesSection(input: TabResumeInput): string | null {
   if (!input.editedFiles.length) return null
-  return `FILES TOUCHED IN THIS CONVERSATION\n${cappedList(input.editedFiles, HANDOVER_FILES_MAX)}`
+  const heading =
+    input.editedFilesSource === 'git'
+      ? 'UNCOMMITTED CHANGES (from git)'
+      : 'FILES TOUCHED IN THIS CONVERSATION'
+  return `${heading}\n${cappedList(input.editedFiles, HANDOVER_FILES_MAX)}`
 }
 
 function tailSection(input: TabResumeInput): string | null {

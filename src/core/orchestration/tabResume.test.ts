@@ -14,6 +14,7 @@ const base: TabResumeInput = {
   title: 'refactor-auth-module',
   requests: ['Refactor the authentication module.', 'Also update its tests.'],
   editedFiles: ['src/auth/AuthService.ts'],
+  editedFilesSource: 'transcript',
   git,
   tail: [
     { role: 'user', text: 'Preserve the public AuthService API.' },
@@ -163,6 +164,29 @@ describe('formatTabResume — update', () => {
   it('변경사항이 없으면 그렇게 말한다', () => {
     const out = formatTabResume({ ...base, git: { ...git, changed: [] } }, 'update')!
     expect(out).toContain('no uncommitted changes')
+  })
+})
+
+// fix wave 최종, F9: git 목록으로 내려간 손댄 파일은 "이 대화에서 손댔다"는 증거가 아니다 — 지금
+// 커밋 안 된 변경일 뿐이고, 이 대화가 시작되기 전부터 있었을 수도 있다. 두 출처가 같은 표제를 쓰면
+// 메모가 실제로 아는 것보다 더 안다고 주장하는 셈이다.
+describe('formatTabResume — 손댄 파일 절의 표제는 출처를 따라간다 (§9.3 실측)', () => {
+  it("대화 기록에서 뽑았으면 'FILES TOUCHED IN THIS CONVERSATION'이다", () => {
+    const out = formatTabResume({ ...base, editedFilesSource: 'transcript' }, 'handover')!
+    expect(out).toContain('FILES TOUCHED IN THIS CONVERSATION')
+    expect(out).not.toContain('UNCOMMITTED CHANGES')
+  })
+
+  it("git 의 변경 목록으로 내려갔으면 'UNCOMMITTED CHANGES (from git)'이다", () => {
+    const out = formatTabResume({ ...base, editedFilesSource: 'git' }, 'handover')!
+    expect(out).toContain('UNCOMMITTED CHANGES (from git)')
+    expect(out).not.toContain('FILES TOUCHED IN THIS CONVERSATION')
+  })
+
+  it('손댄 파일이 아예 없으면 출처와 무관하게 절 자체가 빠진다', () => {
+    const out = formatTabResume({ ...base, editedFiles: [], editedFilesSource: 'git' }, 'handover')!
+    expect(out).not.toContain('UNCOMMITTED CHANGES')
+    expect(out).not.toContain('FILES TOUCHED IN THIS CONVERSATION')
   })
 })
 

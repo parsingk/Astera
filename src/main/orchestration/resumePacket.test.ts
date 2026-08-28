@@ -393,6 +393,9 @@ describe('buildTabResumeText', () => {
     expect(content).toContain('Fix the flaky CI test.')
     expect(content).toContain('src/a.ts')
     expect(content).toContain('It fails only on Windows.')
+    // fix wave 최종, F9: 대화 기록에서 뽑은 목록이므로 git 유래 표제가 아니다.
+    expect(content).toContain('FILES TOUCHED IN THIS CONVERSATION')
+    expect(content).not.toContain('UNCOMMITTED CHANGES')
     expect(readTranscript).toHaveBeenCalledTimes(1)
     expect(readTranscript).toHaveBeenCalledWith('/fake/transcript.jsonl')
   })
@@ -512,7 +515,12 @@ describe('buildTabResumeText', () => {
       dir: specDir
     })
 
-    expect(await fs.readFile(tabFile('sess1'), 'utf8')).toContain('src/from-git.ts')
+    const content = await fs.readFile(tabFile('sess1'), 'utf8')
+    expect(content).toContain('src/from-git.ts')
+    // fix wave 최종, F9: git 으로 내려간 목록은 "이 대화에서 손댔다"고 주장하지 않는다 — 지금
+    // 커밋 안 된 변경일 뿐이라는 것을 표제로 밝힌다(tabResume.ts 의 editedFilesSource).
+    expect(content).toContain('UNCOMMITTED CHANGES (from git)')
+    expect(content).not.toContain('FILES TOUCHED IN THIS CONVERSATION')
   })
 
   // fix wave 최종, F2: transcriptPath 를 모르면(대화를 못 읽었다는 뜻) git 만으로 handover 를
