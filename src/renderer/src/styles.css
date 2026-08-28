@@ -1991,3 +1991,32 @@ kbd.shortcut-conflict { color: var(--fi-red); border-color: var(--fi-red); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 /* the confirmation modal body — preserves paths and multi-line messages verbatim (the existing .confirm-text is excluded, being multi-line JSX) */
 .confirm-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---------- 테마별 예외 ---------- */
+/* 테마는 CSS 변수 표 하나로 정의되고(core/theme/themes.ts), 그 표로 말할 수 없는 것만 여기 온다.
+   renderer/lib/theme.tsx 가 documentElement 에 심는 data-theme 이 이 블록들의 문이다.
+
+   Sirius 의 입력칸은 assistant-ui 의 것을 따른다: 평소에는 테두리 없이 채워져 있고, 포커스하면
+   바탕이 어두워지면서 테두리가 나타난다 — 다른 여섯 테마와 정확히 반대 방향이라 변수만으로는
+   낼 수 없다(--line-soft 를 투명하게 만들면 테두리를 쓰는 다른 자리가 모두 사라진다).
+   원본은 packages/ui/src/components/ui/base/input.tsx 의 `bg-muted/60 border-transparent
+   focus-visible:bg-background focus-visible:border-ring` 이다.
+
+   크기는 일부러 옮기지 않았다. 원본은 h-9(36px)에 px-3(12px)이지만 이 앱에서 컨트롤의 크기는
+   테마의 density 가 정하고(core/theme/apply.ts 의 DENSITY), Sirius 는 normal 을 선언했다.
+   여기서 높이를 따로 키우면 밀도를 정하는 곳이 두 군데가 된다.
+   포커스 링도 2px 그대로다 — 원본은 1px 지만 포커스 가시성을 낮출 이유가 없다. */
+[data-theme='sirius'] .field input[type='text'],
+[data-theme='sirius'] .field textarea {
+  background: var(--elevated);
+  border-color: transparent;
+}
+[data-theme='sirius'] .field input[type='text']:focus,
+[data-theme='sirius'] .field textarea:focus {
+  background: var(--bg);
+  border-color: var(--accent);
+}
+/* 쉬는 체크박스도 같은 이유로 채워진 바탕에 둔다 — 원본의 dark:bg-input/30 자리다. */
+[data-theme='sirius'] input[type='checkbox']:not(.md-task input) {
+  background: var(--elevated);
+}
