@@ -598,6 +598,7 @@ export const en: Record<keyof typeof ko, string> = {
   'run.form.addOption': 'Add option',
   'run.panel.noActiveRun': 'Run',
   'run.panel.exited': ' · Exited (code {code})',
+  'run.panel.close': 'Close run tab',
   'run.panel.clear': 'Clear',
   'run.panel.collapse': 'Collapse',
   'terminal.rail.open': 'Terminal',

@@ -684,6 +684,7 @@ export const ja: Catalog = {
   // BottomPanel.tsx — the Run tab label, clear and collapse buttons
   'run.panel.noActiveRun': '実行',
   'run.panel.exited': ' · 終了 (コード {code})',
+  'run.panel.close': '実行タブを閉じる',
   'run.panel.clear': '消去',
   'run.panel.collapse': '折りたたむ',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.

@@ -693,6 +693,7 @@ export const es: Catalog = {
   // BottomPanel.tsx — the Run tab label, clear and collapse buttons
   'run.panel.noActiveRun': 'Ejecución',
   'run.panel.exited': ' · Finalizado (código {code})',
+  'run.panel.close': 'Cerrar la pestaña de ejecución',
   'run.panel.clear': 'Limpiar',
   'run.panel.collapse': 'Contraer',
   // BottomPanel, the rail terminal button

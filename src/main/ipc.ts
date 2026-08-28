@@ -2645,6 +2645,9 @@ export function registerIpc(
     if (core.run.get(projectPath)?.validation) orchValidator?.markStopped(projectPath)
     return core.run.stop(projectPath)
   })
+  // 실행 탭을 ✕ 로 닫았을 때. run.stop 과 같이 이미 있는 실행에 거는 조작이라 경로 가드를 두지
+  // 않는다 — 임의의 경로를 넘겨도 그 키의 실행이 없으면 아무 일도 일어나지 않는다.
+  ipcMain.handle('run.dismiss', async (_e, projectPath: string) => core.run.dismiss(projectPath))
   ipcMain.on('run.write', (_e, projectPath: string, data: string) => core.run.write(projectPath, data))
   ipcMain.on('run.resize', (_e, projectPath: string, cols: number, rows: number) =>
     core.run.resize(projectPath, cols, rows)

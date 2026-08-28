@@ -21,6 +21,7 @@ export function BottomPanel({
   onSelectTab,
   onNewTerminal,
   onCloseTerminal,
+  onCloseRun,
   onStopRun,
   onCollapse
 }: {
@@ -35,6 +36,8 @@ export function BottomPanel({
   onSelectTab: (tab: string) => void
   onNewTerminal: () => void
   onCloseTerminal: (id: string) => void
+  /** Run 탭의 ✕. 종료된 실행에만 그려지므로 도는 실행을 여기서 잃을 일은 없다 — 정지는 ⏹ 이다. */
+  onCloseRun: () => void
   onStopRun: () => void
   onCollapse: () => void
 }): React.JSX.Element {
@@ -45,23 +48,53 @@ export function BottomPanel({
     setClearNonces((prev) => ({ ...prev, [tab]: (prev[tab] ?? 0) + 1 }))
 
   const running = runStatus?.status === 'running'
+  // 탭 자체의 Enter/Space. ✕ 를 품는 탭은 <button> 안에 <button> 을 넣을 수 없어 span 이어야 하고,
+  // 그 대가로 키보드 접근성을 손으로 잇는다. 중첩된 ✕ 에서 올라온 키는 그 버튼이 이미 처리했으므로
+  // 걸러낸다 — 거르지 않으면 ✕ 에 포커스를 둔 채 Space 를 누를 때 선택과 닫기가 함께 발화한다.
+  const tabKeyDown =
+    (tab: string) =>
+    (e: React.KeyboardEvent): void => {
+      if (e.target !== e.currentTarget) return
+      if (e.key !== 'Enter' && e.key !== ' ') return
+      e.preventDefault()
+      onSelectTab(tab)
+    }
   return (
     <div className="run-panel">
       <div className="bottom-tabs">
         <span className="bottom-tab-list">
           {runAvailable && (
-          <button
-            className={activeTab === 'run' ? 'bottom-tab on' : 'bottom-tab'}
-            onClick={() => onSelectTab('run')}
-          >
-            {running && <span className="run-live-dot" />}
-            {runStatus ? runStatus.configName : t('run.panel.noActiveRun')}
-            {runStatus?.status === 'exited' && (
-              <span className="run-exit">
-                {t('run.panel.exited', { code: runStatus.exitCode ?? '?' })}
-              </span>
-            )}
-          </button>
+            <span
+              role="tab"
+              aria-selected={activeTab === 'run'}
+              tabIndex={0}
+              className={activeTab === 'run' ? 'bottom-tab on' : 'bottom-tab'}
+              onClick={() => onSelectTab('run')}
+              onKeyDown={tabKeyDown('run')}
+            >
+              {running && <span className="run-live-dot" />}
+              {runStatus ? runStatus.configName : t('run.panel.noActiveRun')}
+              {/* 끝난 실행에만 종료 배지와 ✕ 가 함께 붙는다. 도는 실행에 ✕ 를 두면 자식 프로세스를
+                  남긴 채 탭만 사라진다 — 그쪽은 오른쪽의 ⏹ 이 맡는다. */}
+              {runStatus?.status === 'exited' && (
+                <>
+                  <span className="run-exit">
+                    {t('run.panel.exited', { code: runStatus.exitCode ?? '?' })}
+                  </span>
+                  <button
+                    className="bottom-tab-close"
+                    aria-label={t('run.panel.close')}
+                    title={t('run.panel.close')}
+                    onClick={(e) => {
+                      e.stopPropagation() // keeps close from misfiring the tab selection
+                      onCloseRun()
+                    }}
+                  >
+                    ✕
+                  </button>
+                </>
+              )}
+            </span>
           )}
           {terminals.map((term, i) => (
             <span
@@ -71,17 +104,7 @@ export function BottomPanel({
               tabIndex={0}
               className={activeTab === term.id ? 'bottom-tab on' : 'bottom-tab'}
               onClick={() => onSelectTab(term.id)}
-              onKeyDown={(e) => {
-                // A ✕ <button> cannot be nested inside a <button>, so the tab itself is a span — the price
-                // is wiring up keyboard accessibility by hand. The Run tab in the same strip is a button,
-                // so it does not need this.
-                // Keys that came up from the nested ✕ are handled by that button itself — without
-                // filtering them out, pressing Space with ✕ focused fires both the selection and the close
-                if (e.target !== e.currentTarget) return
-                if (e.key !== 'Enter' && e.key !== ' ') return
-                e.preventDefault()
-                onSelectTab(term.id)
-              }}
+              onKeyDown={tabKeyDown(term.id)}
             >
               {/* The number in the label is the display order in the current list — creation order is not remembered */}
               {t('terminal.tab.label', { n: i + 1 })}

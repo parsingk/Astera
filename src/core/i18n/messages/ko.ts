@@ -701,6 +701,8 @@ export const ko = {
   // (a separately added terminal.tab.run was an exact duplicate of the value and was cleaned up).
   'run.panel.noActiveRun': '실행',
   'run.panel.exited': ' · 종료(코드 {code})',
+  // 종료된 실행에만 붙는 ✕ — 실행 중에는 그리지 않는다(⏹ 로 먼저 정지시킨다)
+  'run.panel.close': '실행 탭 닫기',
   'run.panel.clear': '지우기',
   'run.panel.collapse': '접기',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.

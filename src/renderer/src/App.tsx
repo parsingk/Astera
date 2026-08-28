@@ -1529,6 +1529,10 @@ export default function App(): React.JSX.Element {
   const [runConfigs, setRunConfigs] = useState<RunConfig[]>([])
   const [runSelectedId, setRunSelectedId] = useState<string | null>(null)
   const [runActive, setRunActive] = useState<RunStatus | null>(null)
+  /** Run 탭을 ✕ 로 닫은 프로젝트. Run 탭은 실행이 없을 때도 '실행' 라벨로 남아 있으므로, main 에서
+   *  끝난 실행을 지우는 것(run.dismiss)만으로는 탭이 사라지지 않는다 — 닫았다는 사실은 여기 있다.
+   *  프로젝트별로 두는 이유: 다른 프로젝트로 옮기면 그쪽 Run 탭은 다시 보여야 한다. */
+  const [runTabClosedFor, setRunTabClosedFor] = useState<string | null>(null)
   const [activeRuns, setActiveRuns] = useState<RunStatus[]>([])
   const [runPanelOpen, setRunPanelOpen] = useState(false)
   // Project terminals. They share the bottom panel with the Run tab.
@@ -1870,7 +1874,10 @@ export default function App(): React.JSX.Element {
    *  실행 구성으로 제안하게 된다. main 의 경로 가드도 터미널에만 홈을 열어 준다(assertTerminalPath). */
   const bottomRoot = currentProject ?? homeDir
   bottomRootRef.current = bottomRoot
-  const runAvailable = currentProject !== null
+  // 실행이 있으면 Run 탭은 언제나 보인다 — 닫은 기억은 실행이 없을 때만 탭을 감춘다. 그래서 닫은
+  // 뒤 ▶ 로 다시 돌리면(runActive 가 채워진다) 따로 되돌리는 코드 없이 탭이 돌아온다.
+  const runAvailable =
+    currentProject !== null && (runActive !== null || runTabClosedFor !== currentProject)
   /** 아래쪽 패널에 실제로 넘길 탭. Run 탭이 없는데 bottomTab 이 'run' 에 남아 있으면 본문이 비므로,
    *  그때는 터미널로 떨어뜨린다. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
    *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. */
@@ -2059,6 +2066,17 @@ export default function App(): React.JSX.Element {
   }
   const runStop = (): void => {
     if (currentProject) void window.api.run.stop(currentProject)
+  }
+  /** Run 탭의 ✕. main 에서 끝난 실행을 버려 마지막 exitCode 와 최근 출력을 함께 지우고(그러지 않으면
+   *  run.list 를 다시 읽는 순간 되살아난다) 다음 실행까지 탭을 감춘다. 활성 탭 폴백은 bottomTabShown
+   *  이 이미 맡으므로 bottomTab 은 'run' 그대로 둔다 — 다시 실행하면 그 탭으로 돌아오는 편이 낫다.
+   *  터미널이 하나도 없으면 패널을 접는다: ＋ 만 남은 빈 패널은 접힌 것보다 나쁘다. */
+  const runDismiss = (): void => {
+    if (!currentProject) return
+    void window.api.run.dismiss(currentProject)
+    setRunActive(null)
+    setRunTabClosedFor(currentProject)
+    if (terminals.length === 0) setRunPanelOpen(false)
   }
   const runDeleteConfig = (id: string): void => {
     if (!currentProject) return
@@ -2739,6 +2757,7 @@ export default function App(): React.JSX.Element {
                     onSelectTab={setBottomTab}
                     onNewTerminal={() => void newTerminal()}
                     onCloseTerminal={closeTerminal}
+                    onCloseRun={runDismiss}
                     onStopRun={runStop}
                     onCollapse={() => setRunPanelOpen(false)}
                   />

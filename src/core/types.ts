@@ -673,6 +673,9 @@ export interface CoreApi {
     listActive(): Promise<RunStatus[]> // all active runs — for the count badge and the dropdown
     start(projectPath: string, configId: string): Promise<RunStatus>
     stop(projectPath: string): Promise<void>
+    // 종료된 실행을 버린다 — 실행 탭의 ✕. 마지막 exitCode 와 최근 출력까지 함께 사라지므로 탭을
+    // 다시 열어도 지난 실행이 돌아오지 않는다. 도는 실행에는 아무 일도 하지 않는다(RunManager.dismiss).
+    dismiss(projectPath: string): Promise<void>
     write(projectPath: string, data: string): void
     resize(projectPath: string, cols: number, rows: number): void
     // Both return the **stored** list only — never passed through mergeConfigs, so the auto-detected

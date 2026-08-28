@@ -303,4 +303,33 @@ describe('RunManager', () => {
       expect(spawned[0].pty.writes).toBe(1)
     })
   })
+
+  // 실행 탭의 ✕ 가 부르는 경로. 종료된 실행이 맵에 남아 있는 한(바로 위 describe 의 이유)
+  // get 은 계속 exited 를 돌려주므로, 렌더러에서 탭만 감춰도 run.list 를 다시 읽는 순간
+  // 되살아난다 — 닫기는 여기서 항목을 지워야 성립한다.
+  describe('dismiss', () => {
+    it('종료된 실행을 맵에서 지운다 — 상태도 최근 출력도 남지 않는다', () => {
+      const { mgr, spawned } = setup()
+      mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
+      spawned[0].pty.dataCb('build ok')
+      spawned[0].pty.exit(0)
+      mgr.dismiss('D:/p')
+      expect(mgr.get('D:/p')).toBeNull()
+      expect(mgr.recentOutput('D:/p')).toBe('')
+    })
+
+    // 도는 실행을 놓아 버리면 stop 이 찾을 pty 가 사라져 자식 프로세스를 멈출 수단이 없어진다.
+    // 그래서 ✕ 는 종료된 실행에만 붙지만, 경로 자체도 막는다.
+    it('도는 실행은 지우지 않는다', () => {
+      const { mgr } = setup()
+      mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
+      mgr.dismiss('D:/p')
+      expect(mgr.get('D:/p')?.status).toBe('running')
+    })
+
+    it('실행이 없는 프로젝트에 불러도 던지지 않는다', () => {
+      const { mgr } = setup()
+      expect(() => mgr.dismiss('D:/none')).not.toThrow()
+    })
+  })
 })

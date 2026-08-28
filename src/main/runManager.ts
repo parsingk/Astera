@@ -92,6 +92,17 @@ export class RunManager {
     return { ...status }
   }
 
+  /** 실행 탭의 ✕. 종료된 실행을 맵에서 지운다 — 그래야 get/recentOutput 이 비고, 렌더러가 탭을
+   *  닫은 뒤 run.list 를 다시 읽어도 그 실행이 되살아나지 않는다(끝난 실행을 일부러 남겨 두는
+   *  이유는 write/resize 위의 주석을 보라 — 여기는 그 보관을 사용자가 끝내는 유일한 통로다).
+   *  도는 실행은 건드리지 않는다: pty 를 놓아 버리면 stop 이 찾을 것이 없어져 자식 프로세스를
+   *  멈출 수단이 사라진다. */
+  dismiss(projectPath: string): void {
+    const live = this.runs.get(projectPath)
+    if (!live || live.status.status === 'running') return
+    this.runs.delete(projectPath)
+  }
+
   stop(projectPath: string): void {
     const live = this.runs.get(projectPath)
     if (!live || live.status.status !== 'running') return

@@ -128,6 +128,7 @@ const api = {
     listActive: invoke('run.listActive'),
     start: invoke('run.start'),
     stop: invoke('run.stop'),
+    dismiss: invoke('run.dismiss'),
     write: fire('run.write'),
     resize: fire('run.resize'),
     saveConfig: invoke('run.saveConfig'),
