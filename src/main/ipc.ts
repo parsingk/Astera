@@ -61,7 +61,8 @@ import { writeInfo, writeShuttle } from './orchestration/shuttle'
 import { WorkerTails } from './orchestration/tail'
 import { releaseArgsFor } from './orchestration/release'
 import { installStub } from './orchestration/stub'
-import { buildResumeNote, buildResumePacket } from './orchestration/resumePacket'
+import { buildResumeNote, buildResumePacket, buildTabResumeText } from './orchestration/resumePacket'
+import { extractStatusLineSession } from '../core/usage/statusline'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
 import { imageMime } from '../core/files/imageMime'
@@ -527,6 +528,23 @@ export function registerIpc(
     }
     if (!descriptorOf(core.descriptors, account).busyTitleReliable) return null
     return busyState.get(sessionId) ?? false
+  }
+
+  /** resumeText 가 Dispatch 를 못 찾았을 때(탭 세션 — Job 워커가 아니다) 저하하는 자리.
+   *  buildTabResumeText(main/orchestration/resumePacket.ts) 자신은 cwd·transcript 경로를 인자로만
+   *  받는다 — 코디네이터 체인을 들여다보지 않기 위해서다(그 함수의 JSDoc). 그 값을 실제로 찾는 것은
+   *  이 배선의 몫이다: cwd 는 core.sessions.list() 에서, 대화 파일 경로는 statusLine 페이로드에서
+   *  얻는다(rolling.ts 의 refreshMeta·scheduler.ts·slack.ts 가 이미 같은 페이로드로 같은 값을
+   *  얻는 것과 같은 자리 — codex 는 usesStatusLine 이 꺼져 있어 늘 null 이고, 그때는 git 만으로
+   *  시도한다). */
+  const tabResumeTextFor = async (
+    sessionId: string,
+    form: 'handover' | 'update'
+  ): Promise<string | null> => {
+    const info = core.sessions.list().find((s) => s.id === sessionId)
+    if (!info) return null
+    const { transcriptPath } = extractStatusLineSession(await core.statusLinePayload(sessionId))
+    return buildTabResumeText(sessionId, form, { cwd: info.cwd, transcriptPath, log: orchLog })
   }
 
   let orchStarting = false
@@ -2124,19 +2142,29 @@ export function registerIpc(
       // 롤링 배선이 읽는다. 오케스트레이션이 꺼져 있으면 undefined — 그러면 롤된 세션은 예전처럼
       // CLI 없이 뜨고, 그 상태에서 워커가 존재할 일도 없다.
       orchEnv: () => orchEnvOf(),
-      // 두 롤링 코디네이터의 resumeText dep 구현. Job 워커가 아니거나 만들지 못하면 null 이고,
-      // 그때 부르는 쪽은 기존 고정 문장으로 저하한다(main/orchestration/resumePacket.ts 의 계약).
+      // 두 롤링 코디네이터의 resumeText dep 구현.
       //
       // **모양이 둘이고, 고르는 자리가 여기다.** 기준은 `SPEC §11.5` — 그 재개 경로가 `--resume` 을
-      // 부르는가. 부르면 프로세스가 새것이라 전체 인계가 값을 내고(buildResumePacket), 부르지 않으면
-      // 같은 프로세스가 계속 도는 것이므로 떨어뜨린 것이 없어 인계할 것도 없다: 기다리는 동안 무엇이
-      // 바뀌었는지 한 줄만 덧붙인다(buildResumeNote). 어느 경로인지 아는 쪽은 코디네이터뿐이라
-      // form 을 그쪽이 넘기고, 이 배선은 그 값으로 함수만 고른다 — 두 함수 중 어느 것도 form 을
-      // 해석하지 않는다.
+      // 부르는가. 부르면 프로세스가 새것이라 전체 인계가 값을 내고(buildResumePacket/
+      // buildTabResumeText 의 'handover'), 부르지 않으면 같은 프로세스가 계속 도는 것이므로
+      // 떨어뜨린 것이 없어 인계할 것도 없다: 기다리는 동안 무엇이 바뀌었는지 한 줄만 덧붙인다
+      // (buildResumeNote/buildTabResumeText 의 'update'). 어느 경로인지 아는 쪽은 코디네이터뿐이라
+      // form 을 그쪽이 넘기고, 이 배선은 그 값으로 함수만 고른다 — 어느 함수도 form 을 해석하지
+      // 않는다.
+      //
+      // **Job 워커용 함수가 null 이면 탭 세션용으로 저하한다(Task 2).** Dispatch 를 못 찾으면(=
+      // 일반 탭 세션) buildResumeNote/buildResumePacket 은 무조건 null 이었고, 그래서 지금까지
+      // 일반 탭의 모든 재개는 데이터 없이 고정 문장 하나로 끝났다 — 판단이 아니라 Dispatch 가
+      // 없으면 만들 방법이 없었기 때문이다. tabResumeTextFor 가 그 제약을 없앤다. **§11.5 가
+      // 가르는 것은 "어느 모양인가"이지 "데이터를 줄 것인가"가 아니다** — 'update' 자리에 주는
+      // 것은 그 절이 금지한 전체 인계가 아니라, 그 절이 이미 허용한 한 줄이다. Job 워커의 함수가
+      // 다른 이유(spec 쓰기 실패 등)로 null 을 돌린 경우도 같은 이유로 이쪽으로 내려간다 — 구조화된
+      // Job 인계를 못 만들었다고 git+대화 기반의 일반 브리핑까지 포기할 이유는 없다.
       resumeText: (sessionId, form) =>
-        form === 'update'
+        (form === 'update'
           ? buildResumeNote(sessionId, deps.getState(), { log: orchLog })
           : buildResumePacket(sessionId, deps.getState(), { log: orchLog })
+        ).then((text) => text ?? tabResumeTextFor(sessionId, form))
     })
   }
   if (orchWiring && core.appSettings.getOrchestrationEnabled())

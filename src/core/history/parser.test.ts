@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   lastTurns,
+  parseTranscriptForResume,
   parseTranscriptMeta,
   parseTranscriptPreview,
   parseTranscriptTail
@@ -432,5 +433,57 @@ describe('parseTranscriptPreview', () => {
     expect(preview.messages).toHaveLength(2)
     expect(preview.messages[0]).toEqual({ role: 'user', text: '첫 메시지', timestamp: undefined })
     expect(preview.messages[1]).toEqual({ role: 'assistant', text: '두 번째 메시지', timestamp: undefined })
+  })
+})
+
+describe('parseTranscriptForResume', () => {
+  it('한 번의 읽기로 제목·요청·손댄 파일·꼬리를 모두 뽑는다', async () => {
+    const file = await write('all.jsonl', [
+      line({ type: 'ai-title', aiTitle: 'fix-flaky-test', sessionId: 's1' }),
+      line({ type: 'user', message: { role: 'user', content: '첫 요청' } }),
+      line({
+        type: 'file-history-snapshot',
+        snapshot: { trackedFileBackups: { 'src\\a.ts': { version: 1 } } }
+      }),
+      line({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '응답' }] } }),
+      line({ type: 'user', message: { role: 'user', content: '두 번째 요청' } }),
+      line({
+        type: 'file-history-snapshot',
+        snapshot: { trackedFileBackups: { 'src\\a.ts': { version: 1 }, 'src\\b.ts': { version: 1 } } }
+      })
+    ])
+    const material = await parseTranscriptForResume(file)
+    expect(material.title).toBe('fix-flaky-test')
+    expect(material.requests).toEqual(['첫 요청', '두 번째 요청'])
+    // 가장 최근 file-history-snapshot 만 남고, 경로는 슬래시로 정규화된다
+    expect(material.editedFiles).toEqual(['src/a.ts', 'src/b.ts'])
+    expect(material.tail.map((m) => m.text)).toEqual(['첫 요청', '응답', '두 번째 요청'])
+  })
+
+  it('ai-title 레코드가 없으면 title 은 null 이다 — 그 레코드에 의존하지 않는다', async () => {
+    const file = await write('no-title.jsonl', [
+      line({ type: 'user', message: { role: 'user', content: '요청' } })
+    ])
+    const material = await parseTranscriptForResume(file)
+    expect(material.title).toBeNull()
+    expect(material.requests).toEqual(['요청'])
+  })
+
+  it('file-history-snapshot 이 한 번도 없으면 editedFiles 는 빈 배열이다', async () => {
+    const file = await write('no-snapshot.jsonl', [
+      line({ type: 'user', message: { role: 'user', content: '요청' } })
+    ])
+    const material = await parseTranscriptForResume(file)
+    expect(material.editedFiles).toEqual([])
+  })
+
+  it('기계가 남긴 user 줄은 요청에도 꼬리에도 들어가지 않는다', async () => {
+    const file = await write('machine.jsonl', [
+      line({ type: 'user', message: { role: 'user', content: '<bash-input>ls -la</bash-input>' } }),
+      line({ type: 'user', message: { role: 'user', content: '진짜 요청' } })
+    ])
+    const material = await parseTranscriptForResume(file)
+    expect(material.requests).toEqual(['진짜 요청'])
+    expect(material.tail.map((m) => m.text)).toEqual(['진짜 요청'])
   })
 })

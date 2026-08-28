@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { buildResumeNote, buildResumePacket } from './resumePacket'
+import { buildResumeNote, buildResumePacket, buildTabResumeText } from './resumePacket'
+import type { TranscriptResumeMaterial } from '../../core/history/parser'
 import { LAUNCH_FORBIDDEN } from './coordinator'
 import * as checkpointModule from '../../core/orchestration/checkpoint'
 import { emptyState, createRun, createTask, openDispatch } from '../../core/orchestration/state'
@@ -353,4 +354,122 @@ describe('buildResumeNote', () => {
     expect(await buildResumeNote('plain-tab', s, { git: withChanges(), now: () => NOW })).toBeNull()
   })
 
+})
+
+// Task 2 — Dispatch 가 없는 탭 세션도 브리핑을 받는다. buildResumePacket/buildResumeNote 와 달리
+// OrchState 를 보지 않으므로 seed()/specDir 을 쓰지 않는다.
+describe('buildTabResumeText', () => {
+  const CWD = 'C:/projects/my-api'
+
+  const material: TranscriptResumeMaterial = {
+    title: 'fix-flaky-ci',
+    requests: ['Fix the flaky CI test.'],
+    editedFiles: ['src/a.ts'],
+    tail: [{ role: 'user', text: 'It fails only on Windows.' }]
+  }
+
+  it('handover — 대화 파일을 한 번 읽어 제목·요청·손댄 파일·꼬리를 모두 싣는다', async () => {
+    const readTranscript = vi.fn().mockResolvedValue(material)
+
+    const text = await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      transcriptPath: '/fake/transcript.jsonl',
+      git: fakeGit(),
+      readTranscript
+    })
+
+    expect(text).not.toBeNull()
+    expect(text).toContain('fix-flaky-ci')
+    expect(text).toContain('Fix the flaky CI test.')
+    expect(text).toContain('src/a.ts')
+    expect(text).toContain('It fails only on Windows.')
+    expect(readTranscript).toHaveBeenCalledTimes(1)
+    expect(readTranscript).toHaveBeenCalledWith('/fake/transcript.jsonl')
+  })
+
+  it("update — 대화 파일을 아예 읽지 않는다(git 상태만 쓰므로 읽을 값이 없다)", async () => {
+    const readTranscript = vi.fn().mockResolvedValue(material)
+
+    const text = await buildTabResumeText('sess1', 'update', {
+      cwd: CWD,
+      transcriptPath: '/fake/transcript.jsonl',
+      git: fakeGit({
+        'rev-parse HEAD': { ok: true, stdout: 'head-now', stderr: '' },
+        '-c core.quotepath=false status --short': { ok: true, stdout: ' M src/a.ts\n', stderr: '' }
+      }),
+      readTranscript
+    })
+
+    expect(text).not.toBeNull()
+    expect(text).toContain('src/a.ts')
+    expect(text).not.toContain('fix-flaky-ci') // 제목은 update 재료가 아니다
+    expect(readTranscript).not.toHaveBeenCalled() // 읽지 않는다 — 낭비를 피한다
+  })
+
+  it('손댄 파일이 대화에 없으면 git 의 변경 목록으로 내려간다', async () => {
+    const readTranscript = vi.fn().mockResolvedValue({ ...material, editedFiles: [] })
+
+    const text = await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      transcriptPath: '/fake/transcript.jsonl',
+      git: fakeGit({
+        'rev-parse HEAD': { ok: true, stdout: 'head-now', stderr: '' },
+        '-c core.quotepath=false status --short': { ok: true, stdout: '?? src/from-git.ts\n', stderr: '' }
+      }),
+      readTranscript
+    })
+
+    expect(text).toContain('src/from-git.ts')
+  })
+
+  it('transcriptPath 를 모르면 git 만으로 시도한다', async () => {
+    const readTranscript = vi.fn().mockResolvedValue(material)
+
+    const text = await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      transcriptPath: null,
+      git: fakeGit({
+        'rev-parse HEAD': { ok: true, stdout: 'head-now', stderr: '' },
+        '-c core.quotepath=false status --short': { ok: true, stdout: '?? src/only-git.ts\n', stderr: '' }
+      }),
+      readTranscript
+    })
+
+    expect(text).not.toBeNull()
+    expect(text).toContain('src/only-git.ts')
+    expect(text).not.toContain('fix-flaky-ci') // 못 읽었으니 제목도 없다
+    expect(readTranscript).not.toHaveBeenCalled()
+  })
+
+  it('git 도 없고 transcriptPath 도 없으면 null 이고 폐기가 로그로 남는다', async () => {
+    const log = vi.fn()
+
+    const text = await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      transcriptPath: null,
+      git: UNREADABLE_GIT,
+      log
+    })
+
+    expect(text).toBeNull()
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(log.mock.calls[0]?.[0]).toContain('tab resume skipped')
+  })
+
+  it('대화 파일 읽기가 던지면 null 을 돌리고 로그를 남긴다', async () => {
+    const log = vi.fn()
+    const readTranscript = vi.fn().mockRejectedValue(new Error('EMFILE'))
+
+    const text = await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      transcriptPath: '/fake/transcript.jsonl',
+      git: fakeGit(),
+      readTranscript,
+      log
+    })
+
+    expect(text).toBeNull()
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(log.mock.calls[0]?.[0]).toContain('tab resume failed')
+  })
 })

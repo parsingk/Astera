@@ -14,9 +14,12 @@ import { promises as fs } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { buildCheckpoint } from '../../core/orchestration/checkpoint'
 import { formatResumeNote, formatResumeSection } from '../../core/orchestration/resumeSection'
+import { formatTabResume } from '../../core/orchestration/tabResume'
 import type { OrchState } from '../../core/orchestration/state'
+import type { TranscriptMessage } from '../../core/types'
 import { readGitSummary, type GitSummaryDeps } from '../gitSummary'
 import { LAUNCH_FORBIDDEN } from './coordinator'
+import { parseTranscriptForResume, type TranscriptResumeMaterial } from '../../core/history/parser'
 
 export interface ResumePacketDeps {
   /** git 실행 어댑터. readGitSummary(main/gitSummary.ts)의 GitSummaryDeps.git 을 그대로 통과시킨다 —
@@ -236,6 +239,93 @@ export async function buildResumeNote(
     return note
   } catch (err) {
     deps.log?.(`resume note failed dispatch=${dispatch.id}: ${String(err)}`)
+    return null
+  }
+}
+
+/** buildTabResumeText 의 의존성. buildResumePacket/buildResumeNote 와 달리 OrchState 를 보지
+ *  않는다 — 탭 세션은 Dispatch 가 없으므로 볼 State 가 없다. 대신 cwd 와 transcript 경로를 직접
+ *  받는다. */
+export interface TabResumeDeps {
+  /** 그 세션의 작업 폴더. **코디네이터가 아는 값이므로 인자로 받는다** — 이 함수가 체인 내부를
+   *  들여다보게 하면 core/main 경계가 흐려지고, claude·codex 두 코디네이터가 각자 다른 방법으로
+   *  같은 값을 넘길 여지가 생긴다. */
+  cwd: string
+  /** 그 세션의 현재 대화 파일 경로. 모르면(아직 못 찾았거나 이 provider 가 그런 파일을 남기지
+   *  않으면) null — 그때는 git 만으로 시도한다(아래 buildTabResumeText 의 계약). */
+  transcriptPath: string | null
+  /** git 실행 어댑터. ResumePacketDeps.git 과 같은 관례 — 테스트 주입용이고, 넘기지 않으면 실제
+   *  git 을 쓴다. */
+  git?: GitSummaryDeps['git']
+  /** 폐기 진단 로그. 넘기지 않으면 아무 것도 하지 않는다. **폐기를 소리 없이 버리지 않는다** —
+   *  buildResumeNote 의 JSDoc 이 적어 둔 이유와 같다: 소리 없이 사라지는 브리핑이 이 기능의
+   *  실제 사고다. */
+  log?(message: string): void
+  /** 대화 파일을 한 번 읽어 넷(제목·요청·손댄 파일·꼬리)을 뽑는 방법. 테스트 전용 주입점이다.
+   *  넘기지 않으면 parseTranscriptForResume(core/history/parser.ts)을 쓴다. */
+  readTranscript?(path: string): Promise<TranscriptResumeMaterial>
+}
+
+/**
+ * 탭 세션(Job Dispatch 가 없는 일반 세션)용 재개 프롬프트 문자열. buildResumePacket/buildResumeNote
+ * 가 Job 워커를 위해 하는 일과 같은 자리이지만, 이쪽은 spec 파일이 없으므로 아무 데도 쓰지 않고
+ * 조립한 문자열을 그대로 돌려준다(계획 문서 — "탭용 브리핑은 파일을 만들지 않고 프롬프트에
+ * 인라인으로 싣는다").
+ *
+ * **대화 파일은 한 번만 읽는다.** 제목·최근 요청·손댄 파일·꼬리 넷을 각각 다른 함수로 읽으면 같은
+ * (수십 MB 일 수 있는) 파일을 네 번 훑는다 — parseTranscriptForResume 하나가 그 넷을 한 번의
+ * 스트리밍으로 뽑는다.
+ *
+ * **'update' 는 대화 파일을 아예 읽지 않는다.** formatTabResume 의 'update' 모양은 git 상태만
+ * 쓰고 title·requests·editedFiles·tail 은 버린다(§11.5 — 대화가 온전한 세션에는 꼬리를 다시 실을
+ * 필요가 없다) — 그럴 값을 위해 큰 파일을 훑는 것은 순수 낭비다.
+ *
+ * 손댄 파일은 대화의 `file-history-snapshot` 레코드에서 먼저 찾고, 그 레코드가 한 번도 없으면(구
+ * 버전 세션, 혹은 아직 파일을 건드리지 않은 세션) git 의 변경 목록으로 내려간다 — 계획 문서의
+ * 재료 표가 정한 순서다.
+ *
+ * **LAUNCH_FORBIDDEN 을 여기서 검사하지 않는다.** buildResumePacket 의 한 줄 포인터와 달리 이
+ * 문자열은 앱이 만든 hex id 가 아니라 **사용자가 실제로 쓴 텍스트와 파일 경로**를 담는다 —
+ * 제목·요청 하나에 따옴표나 `&`가 있는 것은 예삿일이고, 그때마다 브리핑 전체를 버리면
+ * buildResumeNote 의 JSDoc 이 "순손실"이라 부른 바로 그 사고를 훨씬 잦은 빈도로 반복하는 것이다.
+ * 이 문자열을 argv 로 넘기는 배선이 생기는 날에는(codex 의 `--resume` 자리처럼) 그 배선이 이미
+ * 갖고 있는 sanitizer(`sanitizeResumePrompt`)가 그 경계를 담당한다 — 이 함수가 미리 검사해 통째로
+ * 버릴 이유가 아니다.
+ *
+ * 실패는 전부 `null` 이다 — 부르는 쪽은 기존 고정 문장으로 저하한다. 폐기는 항상 로그로 남는다.
+ */
+export async function buildTabResumeText(
+  sessionId: string,
+  form: 'handover' | 'update',
+  deps: TabResumeDeps
+): Promise<string | null> {
+  try {
+    const git = await readGitSummary(deps.cwd, deps.git ? { git: deps.git } : undefined).catch(() => null)
+
+    let title: string | null = null
+    let requests: string[] = []
+    let editedFiles: string[] = []
+    let tail: TranscriptMessage[] = []
+    if (form === 'handover' && deps.transcriptPath) {
+      const read = deps.readTranscript ?? parseTranscriptForResume
+      const material = await read(deps.transcriptPath)
+      title = material.title
+      requests = material.requests
+      editedFiles = material.editedFiles
+      tail = material.tail
+    }
+    if (editedFiles.length === 0 && git) editedFiles = git.changed
+
+    const text = formatTabResume({ cwd: deps.cwd, title, requests, editedFiles, git, tail }, form)
+    if (text === null) {
+      // formatTabResume 이 null 을 돌리는 유일한 이유는 "확인한 것도 대화 흔적도 없다"다(그 함수의
+      // 계약) — buildResumeNote 와 같은 이유로 여기서도 소리 없이 버리지 않는다.
+      deps.log?.(`tab resume skipped session=${sessionId} form=${form}: nothing to report`)
+      return null
+    }
+    return text
+  } catch (err) {
+    deps.log?.(`tab resume failed session=${sessionId} form=${form}: ${String(err)}`)
     return null
   }
 }

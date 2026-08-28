@@ -218,6 +218,92 @@ export async function parseTranscriptTail(
   }
 }
 
+/** 탭 세션용 재개 브리핑의 재료. `buildTabResumeText`(main/orchestration/resumePacket.ts)가 대화
+ *  파일 하나에서 이 넷을 **한 번의 읽기로** 뽑는다 — 따로따로 읽으면 같은(어쩌면 수십 MB짜리)
+ *  파일을 네 번 훑는다. 무엇을 메모에 얼마나 실을지(개수·길이 상한)는 포매터
+ *  (core/orchestration/tabResume.ts)가 정한다 — 이 함수는 재료만 모은다. */
+export interface TranscriptResumeMaterial {
+  /** `ai-title` 레코드의 `aiTitle`. 그 레코드가 없으면(구버전 claude, 또는 그 플러그인이 없는
+   *  사용자) null — 대화 제목에 의존하지 않는다는 계약이 이 필드의 nullability 로 드러난다. */
+  title: string | null
+  /** 사람이 실제로 보낸 요청. 시간 순(오래된 것부터) — 셋 중 아무것도 "이것이 작업이다"로
+   *  판정되지 않는다. */
+  requests: string[]
+  /** 가장 최근 `file-history-snapshot` 레코드의 `trackedFileBackups` 키. 이 맵은 누적이다(실측 —
+   *  새 레코드가 이전 레코드의 키를 전부 포함한 채 자란다), 그래서 마지막 레코드 하나만 있으면
+   *  충분하다. 그런 레코드가 한 번도 없으면 빈 배열 — 그때는 부르는 쪽이 git 변경 목록으로
+   *  내려간다. */
+  editedFiles: string[]
+  /** 의미 있는 user/assistant 메시지의 꼬리. 사람이 안 쓴 `type:'user'` 줄(bash 출력 등)은
+   *  parseTranscriptTail 과 같은 이유로 걸러진다 — §8.4 가 "tool raw output 대량 포함 금지"라고
+   *  못박은 것이 바로 이 부류다. */
+  tail: TranscriptMessage[]
+}
+
+/** 읽는 동안 메모리에 들고 있을 요청·꼬리 각각의 상한. **최종적으로 몇 개를 메모에 싣는지는
+ *  포매터가 정한다** — 이 상한은 그보다 넉넉한 여유일 뿐이고, 병적으로 긴 대화에서도 이 두 배열이
+ *  무한히 자라지 않게 막는 것이 유일한 목적이다. */
+const READ_BUFFER_MAX = 20
+
+/** `launchPrompt`(main/orchestration/coordinator.ts)가 spec 경로에 적용하는 것과 같은 정규화 —
+ *  `file-history-snapshot`의 경로는 OS 그대로(윈도에서는 `\`)라서, 그 문자가 셸의 이스케이프
+ *  문자로 읽히는 것을 앞서 그 파일이 겪은 것과 같은 이유로 미리 없앤다. */
+function toPortablePath(p: string): string {
+  return p.replace(/\\/g, '/')
+}
+
+export async function parseTranscriptForResume(filePath: string): Promise<TranscriptResumeMaterial> {
+  const result: TranscriptResumeMaterial = { title: null, requests: [], editedFiles: [], tail: [] }
+  const stream = createReadStream(filePath, { encoding: 'utf8' })
+  const rl = createInterface({ input: stream })
+  try {
+    for await (const raw of rl) {
+      let obj: Record<string, unknown>
+      try {
+        obj = JSON.parse(raw)
+      } catch {
+        continue // defensive parsing — ignore a broken line
+      }
+      if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) continue
+
+      if (result.title === null && obj.type === 'ai-title' && typeof obj.aiTitle === 'string') {
+        result.title = toTitle(obj.aiTitle)
+        continue
+      }
+
+      if (obj.type === 'file-history-snapshot') {
+        const snapshot = obj.snapshot as { trackedFileBackups?: unknown } | undefined
+        const tracked = snapshot?.trackedFileBackups
+        if (tracked && typeof tracked === 'object' && !Array.isArray(tracked)) {
+          result.editedFiles = Object.keys(tracked).map(toPortablePath)
+        }
+        continue
+      }
+
+      if (obj.type !== 'user' && obj.type !== 'assistant') continue
+      const text = extractText(obj.message)
+      if (text === null) continue
+
+      if (obj.type === 'user') {
+        if (!isRealUserText(text)) continue // 기계가 남긴 user 줄 — 요청도 꼬리도 아니다
+        result.requests.push(text)
+        if (result.requests.length > READ_BUFFER_MAX) result.requests.shift()
+      }
+
+      result.tail.push({
+        role: obj.type,
+        text,
+        timestamp: typeof obj.timestamp === 'string' ? obj.timestamp : undefined
+      })
+      if (result.tail.length > READ_BUFFER_MAX) result.tail.shift()
+    }
+  } finally {
+    rl.close()
+    stream.destroy()
+  }
+  return result
+}
+
 /** Full (capped) parse for the preview — called only when an item is opened (lazy) */
 /** 미리보기가 보여 주는 최근 턴 수. 한 턴은 user 메시지에서 시작해 다음 user 메시지 전까지다. */
 export const PREVIEW_TURNS = 10
