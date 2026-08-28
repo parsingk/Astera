@@ -39,12 +39,7 @@ export function ResumeStrategySettings(): React.JSX.Element {
           aria-pressed={strategy === 'smart'}
           onClick={() => pick('smart')}
         >
-          <span className="resume-strategy-card-name">
-            {t('settings.resumeStrategy.smart.label')}
-            <span className="resume-strategy-recommended">
-              {t('settings.resumeStrategy.recommended')}
-            </span>
-          </span>
+          <span className="resume-strategy-card-name">{t('settings.resumeStrategy.smart.label')}</span>
           <span className="resume-strategy-card-desc">{t('settings.resumeStrategy.smart.hint')}</span>
         </button>
         <button

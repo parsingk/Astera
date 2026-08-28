@@ -68,6 +68,24 @@ function isRealUserText(text: string): boolean {
   return !MACHINE_USER_PREFIXES.some((p) => t.startsWith(p))
 }
 
+/** CLI 가 스스로 끼워 넣은 `type:'user'` 레코드인가. **텍스트가 아니라 레코드를 본다** —
+ *  MACHINE_USER_PREFIXES 는 `<bash-input>` 처럼 표지를 달고 오는 부류만 잡고, 스킬 본문은 표지
+ *  없이 평범한 산문으로 시작해 그 목록을 그대로 통과한다.
+ *
+ *  **실측(2026-08-28, 이 컴퓨터의 최근 대화 파일 60개).** isRealUserText 를 통과한 user 텍스트
+ *  268건 중 48건(17.9%)이 `isMeta:true` 였고, **글자 수로는 86.3%** 였다(스킬 본문이 통째로
+ *  실린다). 60개 중 10개 파일에서 나왔고, 잡힌 것은 스킬 본문과 이미지 자리표시자
+ *  (`[Image: original 3840x2088…]`)다. 재개 브리핑의 요청 절이 이것들로 채워지면 예산
+ *  (tabResume.ts 의 MEMO_CHARS_MAX)을 사람이 쓴 요청이 아닌 것에 내주고, 히스토리 목록의 제목이
+ *  스킬 본문이 되고, 답변 대기 표시(초록 점)가 사람이 말한 적 없는 줄 때문에 꺼진다.
+ *
+ *  `turnCompanion`·`sourceToolUseID` 도 같은 레코드에 함께 오지만(실측) 이 판정은 `isMeta` 하나만
+ *  본다 — 셋 중 그 하나가 "사람이 쓴 것이 아니다"를 직접 뜻하고, 나머지 둘은 그 레코드가 어디서
+ *  왔는지를 말할 뿐이다. */
+function isMetaUserRecord(obj: Record<string, unknown>): boolean {
+  return obj.isMeta === true
+}
+
 // Non-conversation record file: a session file holding only auxiliary records and no conversation
 // messages. Identified by the first line's type and excluded from the index.
 // queue-operation (HUD status line helper) · ai-title/agent-name (records of title and subagent name
@@ -129,7 +147,7 @@ export async function parseTranscriptMeta(filePath: string, maxLines = 50): Prom
         firstUserLineSeen = true
         if (typeof obj.uuid === 'string') meta.rootUuid = obj.uuid
       }
-      if (meta.title === null && obj.type === 'user') {
+      if (meta.title === null && obj.type === 'user' && !isMetaUserRecord(obj)) {
         const text = extractText(obj.message)
         if (text && isRealUserText(text)) meta.title = toTitle(text)
       }
@@ -188,7 +206,7 @@ export async function parseTranscriptTail(
             awaitingReply = true
             roleResolved = true
           }
-        } else if (obj.type === 'user') {
+        } else if (obj.type === 'user' && !isMetaUserRecord(obj)) {
           const text2 = extractText(obj.message)
           if (text2 !== null && isRealUserText(text2)) {
             awaitingReply = false
@@ -197,7 +215,7 @@ export async function parseTranscriptTail(
         }
       }
 
-      if (lastUserTitle === null && obj.type === 'user') {
+      if (lastUserTitle === null && obj.type === 'user' && !isMetaUserRecord(obj)) {
         const text2 = extractText(obj.message)
         if (text2 !== null && isRealUserText(text2)) lastUserTitle = toTitle(text2)
       }
@@ -367,7 +385,9 @@ export async function parseTranscriptForResume(filePath: string): Promise<Transc
       if (text === null) continue
 
       if (obj.type === 'user') {
-        if (!isRealUserText(text)) continue // 기계가 남긴 user 줄 — 요청도 꼬리도 아니다
+        // 기계가 남긴 user 줄 — 요청도 꼬리도 아니다. 표지를 단 부류(접두어)와 표지 없이 오는
+        // 부류(isMeta, 스킬 본문 등) 둘 다 여기서 떨어진다.
+        if (!isRealUserText(text) || isMetaUserRecord(obj)) continue
         result.requests.push(text)
         if (result.requests.length > READ_BUFFER_MAX) result.requests.shift()
       }
