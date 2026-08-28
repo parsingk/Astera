@@ -2900,7 +2900,7 @@ describe('run-start — 코디네이터 인계', () => {
 
   it('코디네이터 계정이 있으면 실행이 코디네이터를 띄우고 운전자를 넘긴다', async () => {
     const deps = coordDeps()
-    const runId = await mkRun(deps, { coordinatorAccount: 'cl1,cl2' })
+    const runId = await mkRun(deps, { coordinatorAccount: 'cl1' })
     const r = await call(deps, 'run-start', { run: runId })
     expect(r.status).toBe(200)
     expect(deps.spawned.map((x) => x.runId)).toEqual([runId])
@@ -3015,15 +3015,16 @@ describe('run-start — 코디네이터 인계', () => {
     expect(run).not.toHaveProperty('coordinatorSessionId')
   })
 
-  it('--coordinator-account 는 섞인 provider 를 거절한다 — 코디네이터도 한 CLI 다', async () => {
+  // 조용히 첫 칸만 쓰면 사람이 적은 것과 도는 것이 달라지고, 그 사실을 알 방법이 화면에 없다
+  it('--coordinator-account 는 목록을 거절한다 — 계정은 하나다', async () => {
     const deps = coordDeps()
     const r = await call(deps, 'run-create', {
       objective: 'o',
       cwd: 'D:/p',
-      coordinatorAccount: 'cl1,cx1'
+      coordinatorAccount: 'cl1,cl2'
     })
     expect(r.status).toBe(400)
-    expect(String((r.body as { error?: string }).error)).toContain('must not mix providers')
+    expect(String((r.body as { error?: string }).error)).toContain('takes one account')
   })
 
   it('--coordinator-account 는 모르는 계정을 거절한다', async () => {

@@ -2272,15 +2272,15 @@ describe('코디네이터 세션 붙이기·떼기', () => {
     return { s: r.state, runId: r.value.id }
   }
 
-  it('run-create 가 코디네이터 계정 목록을 싣는다', () => {
-    const { s, runId } = withRun({ coordinatorAccountIds: ['acc1', 'acc2'] })
-    expect(s.runs.find((r) => r.id === runId)?.coordinatorAccountIds).toEqual(['acc1', 'acc2'])
+  it('run-create 가 코디네이터 계정을 싣는다', () => {
+    const { s, runId } = withRun({ coordinatorAccountId: 'acc1' })
+    expect(s.runs.find((r) => r.id === runId)?.coordinatorAccountId).toBe('acc1')
   })
 
-  // 빈 배열이 "지정 없음" 과 갈라지면, 그 구분으로 코디네이터를 띄울지 정하는 자리가 흔들린다
-  it('빈 목록은 싣지 않는다 — 지정 없음과 같다', () => {
-    const { s, runId } = withRun({ coordinatorAccountIds: [] })
-    expect(s.runs.find((r) => r.id === runId)).not.toHaveProperty('coordinatorAccountIds')
+  // 빈 문자열이 "지정 없음" 과 갈라지면, 그 구분으로 코디네이터를 띄울지 정하는 자리가 흔들린다
+  it('빈 문자열은 싣지 않는다 — 지정 없음과 같다', () => {
+    const { s, runId } = withRun({ coordinatorAccountId: '' })
+    expect(s.runs.find((r) => r.id === runId)).not.toHaveProperty('coordinatorAccountId')
   })
 
   it('붙이면 세션 id 가 실린다', () => {
@@ -2331,7 +2331,7 @@ describe('코디네이터 세션 붙이기·떼기', () => {
         {
           objective: '매일',
           cwd: 'D:/p',
-          coordinatorAccountIds: ['acc1'],
+          coordinatorAccountId: 'acc1',
           schedule: { kind: 'daily', time: '09:00' }
         },
         NOW
@@ -2343,7 +2343,7 @@ describe('코디네이터 세션 붙이기·떼기', () => {
     st = unwrap<{ id: string }>(detachCoordinator(st, { runId: t.value.id, failed: true }) as never).state
     const child = unwrap<{ id: string }>(spawnScheduledRun(st, t.value.id, FIRE) as never)
     const saved = child.state.runs.find((r) => r.id === child.value.id)!
-    expect(saved.coordinatorAccountIds).toEqual(['acc1'])
+    expect(saved.coordinatorAccountId).toBe('acc1')
     expect(saved).not.toHaveProperty('coordinatorSessionId')
     expect(saved).not.toHaveProperty('coordinatorFailures')
   })
