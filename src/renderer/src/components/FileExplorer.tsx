@@ -13,7 +13,7 @@ import { useGitStatus } from '../hooks/useGitStatus'
 import { useI18n } from '../i18n/I18nProvider'
 import type { UndoEntry } from '../../../core/files/undo'
 import type { GitState } from '../../../core/git/status'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, X } from 'lucide-react'
 
 /** Tree snapshot the App holds on to, so that even when the explorer toggle unmounts FileExplorer the tree can be handed back on remount */
 export interface ExplorerTreeState {
@@ -663,7 +663,7 @@ export function FileExplorer({
               title={t('common.close')}
               onClick={onClose}
             >
-              ✕
+              <X size={14} />
             </button>
           </div>
         </header>
@@ -731,7 +731,7 @@ export function FileExplorer({
             title={t('common.close')}
             onClick={onClose}
           >
-            ✕
+            <X size={14} />
           </button>
         </div>
       </header>

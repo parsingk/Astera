@@ -9,6 +9,7 @@ import { AccountSelect } from './AccountSelect'
 import { BranchGlyph } from './BranchGlyph'
 import { Select, type SelectOption } from './Select'
 import { ScheduleFields } from './ScheduleFields'
+import { X } from 'lucide-react'
 
 const SOFT_LIMIT = 12
 const MAX_ROLL_ACCOUNTS = 3
@@ -328,7 +329,7 @@ export function NewSessionDialog({
                   title={t('session.new.removeAccountSlot')}
                   onClick={() => setAccountIds((prev) => prev.filter((_, i) => i !== slot))}
                 >
-                  ✕
+                  <X size={12} />
                 </button>
               )}
             </div>

@@ -89,6 +89,7 @@ import { fileTab, parseTab, sessionTab } from '../../core/panes/tabId'
 import { placeTab } from '../../core/panes/place'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
+import { X } from 'lucide-react'
 
 sessionBus.init()
 
@@ -2843,7 +2844,7 @@ export default function App(): React.JSX.Element {
                 title={t('common.close')}
                 onClick={() => setShowSettings(false)}
               >
-                ✕
+                <X size={14} />
               </button>
             </div>
             <div className="settings-body">

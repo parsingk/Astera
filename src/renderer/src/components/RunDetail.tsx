@@ -29,6 +29,7 @@ import {
   UnlockIcon
 } from './JobIcons'
 import { NewTaskModal } from './NewTaskModal'
+import { X } from 'lucide-react'
 
 /** 종류 배지의 문구. message 는 messageType 이 정한다.
  *  heartbeat 과 decision_gate 는 timeline.ts 의 SKIP 이 걸러 지금은 도달하지 않지만, 맵을
@@ -647,7 +648,7 @@ export function RunDetail({
               aria-label={t('jobs.timeline.close')}
               onClick={onClose}
             >
-              ✕
+              <X size={13} />
             </button>
           )}
         </div>
@@ -756,7 +757,7 @@ export function RunDetail({
                         aria-label={t('common.cancel')}
                         onClick={cancelAnswer}
                       >
-                        ✕
+                        <X size={12} />
                       </button>
                     </div>
                     <div className="detail-task-fields">
@@ -816,7 +817,7 @@ export function RunDetail({
                     aria-label={t('common.cancel')}
                     onClick={cancelAsk}
                   >
-                    ✕
+                    <X size={12} />
                   </button>
                 </div>
                 <div className="detail-task-fields">
@@ -874,7 +875,7 @@ export function RunDetail({
                       aria-label={t('jobs.detail.clearFilter')}
                       onClick={() => setSelected(null)}
                     >
-                      ✕
+                      <X size={12} />
                     </button>
                   </div>
                 )}
