@@ -13,7 +13,6 @@ const tmpl = (id: string, over: Partial<Run> = {}): Run => ({
   objective: `objective ${id}`,
   cwd: '/p',
   createdAt: '2026-08-21T00:00:00.000Z',
-  provider: 'claude',
   schedule: { kind: 'daily', time: '09:00' },
   ...over
 })

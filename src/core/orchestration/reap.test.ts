@@ -11,7 +11,6 @@ const run = (over: Partial<Run> = {}): Run => ({
   objective: 'o',
   cwd: '/p',
   createdAt: '2026-08-22T00:00:00.000Z',
-  provider: 'claude',
   ...over
 })
 
@@ -31,8 +30,8 @@ const task = (id: string, over: Partial<Task> = {}): Task => ({
 const dispatch = (over: Partial<Dispatch> = {}): Dispatch => ({
   id: 'd1',
   taskId: 't1',
-  provider: 'claude',
   accountId: 'a',
+  provider: 'claude',
   sessionId: 's',
   cwd: WT,
   specPath: '/s',

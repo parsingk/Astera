@@ -78,16 +78,17 @@ describe('handleCommand — 기본', () => {
     const r = await call(makeDeps(), 'run-create', {})
     expect(r.status).toBe(400)
   })
-  it('run-create 가 provider·concurrency·auto 를 Run 에 싣는다', async () => {
+  it('run-create 가 concurrency·auto 를 Run 에 싣는다', async () => {
     const r = await call(makeDeps(), 'run-create', {
       objective: '무언가',
       cwd: '/p',
-      provider: 'claude',
       concurrency: 5,
       auto: true
     })
     expect(r.status).toBe(200)
-    expect(r.body).toMatchObject({ provider: 'claude', concurrency: 5, autoDispatch: true })
+    expect(r.body).toMatchObject({ concurrency: 5, autoDispatch: true })
+    // provider 는 이제 Run 의 것이 아니다 — Task 의 계정이 정한다(Task.accountIds)
+    expect(r.body).not.toHaveProperty('provider')
   })
   it('run-create 에 셋이 없으면 Run 에도 없다 — 옛 동작이 그대로다', async () => {
     const r = await call(makeDeps(), 'run-create', { objective: '무언가', cwd: '/p' })
@@ -99,16 +100,21 @@ describe('handleCommand — 기본', () => {
     const r = await call(makeDeps(), 'run-create', { objective: 'x', cwd: '/p', concurrency: 0 })
     expect(r.status).toBe(400)
   })
-  it('provider 가 claude|codex 가 아니면 거절한다', async () => {
-    const r = await call(makeDeps(), 'run-create', { objective: 'x', cwd: '/p', provider: 'gpt' })
-    expect(r.status).toBe(400)
+  // 조용히 무시하지 않는 이유: 이 플래그를 보내는 호출자는 "이 Run 은 이 CLI 로 돈다"고 믿고
+  // 있고, 무시하면 그 믿음이 틀렸다는 것을 알 방법이 없다. 값이 맞는 provider 여도 거절한다 —
+  // 옮길 자리가 없기 때문이다(한 Run 에 두 provider 의 Task 가 섞일 수 있다).
+  it('run-create 는 provider 를 더 받지 않는다 — 값이 맞아도 거절한다', async () => {
+    for (const provider of ['claude', 'codex', 'gpt']) {
+      const r = await call(makeDeps(), 'run-create', { objective: 'x', cwd: '/p', provider })
+      expect(r.status).toBe(400)
+      expect(String((r.body as { error?: string }).error)).toContain('--provider is no longer accepted')
+    }
   })
   it('run-create 가 schedule 을 담아 템플릿을 만든다', async () => {
     const deps = makeDeps()
     const r = await call(deps, 'run-create', {
       objective: '매일 점검',
       cwd: 'D:/p',
-      provider: 'claude',
       schedule: { kind: 'daily', time: '09:00' }
     })
     expect(r.status).toBe(200)
@@ -151,7 +157,7 @@ describe('handleCommand — 역할 인가', () => {
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const taskId = (task.body as { id: string }).id
     await call(deps, 'worker-start', {
       taskId,
@@ -221,7 +227,7 @@ describe('handleCommand — 롤링이 세션을 rekey 한 뒤 (worker-rolling-ph
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const taskId = (task.body as { id: string }).id
     await call(deps, 'worker-start', {
       taskId,
@@ -296,7 +302,7 @@ describe('handleCommand — 역할 인가 (완료 후에도 워커)', () => {
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const taskId = (task.body as { id: string }).id
     await call(deps, 'worker-start', {
       taskId,
@@ -336,7 +342,7 @@ describe('handleCommand — worker_done 재전송 멱등성 (§8) — 소유권�
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const taskId = (task.body as { id: string }).id
     await call(deps, 'worker-start', {
       taskId,
@@ -425,7 +431,7 @@ describe('handleCommand — send 소유권 (워커)', () => {
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const taskId = (task.body as { id: string }).id
     await call(deps, 'worker-start', {
       taskId,
@@ -458,6 +464,7 @@ describe('handleCommand — send 소유권 (워커)', () => {
     const deps = await seedWorker()
     const run2 = await call(deps, 'run-create', { objective: 'o2', cwd: 'D:/p' })
     const task2 = await call(deps, 'task-create', {
+      account: 'acc1',
       runId: (run2.body as { id: string }).id,
       title: 't2',
       spec: 's2'
@@ -503,7 +510,7 @@ describe('handleCommand — worker-start 사전 검증 (고아 세션 방지)', 
     }
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const taskId = (task.body as { id: string }).id
     await deps.setState({
       ...deps.getState(),
@@ -551,7 +558,7 @@ describe('handleCommand — worker-start 사전 검증 (고아 세션 방지)', 
     }
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const taskId = (task.body as { id: string }).id
     const gate = await call(deps, 'gate-create', { task: taskId, question: 'q?' })
     expect(gate.status).toBe(200) // 사전조건: task가 blocked로 전이됐다
@@ -576,7 +583,7 @@ describe('handleCommand — worker-start 사전 검증 (고아 세션 방지)', 
     }
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const taskId = (task.body as { id: string }).id
     const first = await call(deps, 'worker-start', {
       taskId,
@@ -611,11 +618,10 @@ describe('handleCommand — worker-start 사전 검증 (고아 세션 방지)', 
     const run = await call(deps, 'run-create', {
       objective: '매일 점검',
       cwd: 'D:/p',
-      provider: 'codex',
       schedule: { kind: 'daily', time: '09:00' }
     })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const taskId = (task.body as { id: string }).id
     const r = await call(deps, 'worker-start', {
       taskId,
@@ -634,11 +640,10 @@ describe('handleCommand — worker-start 사전 검증 (고아 세션 방지)', 
     const run = await call(deps, 'run-create', {
       objective: '매일 점검',
       cwd: 'D:/p',
-      provider: 'codex',
       schedule: { kind: 'daily', time: '09:00' }
     })
     const templateId = (run.body as { id: string }).id
-    await call(deps, 'task-create', { runId: templateId, title: 't', spec: 's' })
+    await call(deps, 'task-create', { account: 'acc1', runId: templateId, title: 't', spec: 's' })
     const child = (await call(deps, 'run-spawn', { run: templateId })).body as { id: string }
     const copy = deps.getState().tasks.find((t) => t.runId === child.id)!
     const r = await call(deps, 'worker-start', {
@@ -658,11 +663,10 @@ describe('handleCommand — worker-start 사전 검증 (고아 세션 방지)', 
     const run = await call(deps, 'run-create', {
       objective: 'o',
       cwd: 'D:/p',
-      provider: 'codex',
       auto: true
     })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const taskId = (task.body as { id: string }).id
     const r = await call(deps, 'worker-start', { taskId, agent: 'codex', account: 'acc1' })
     expect(r.status).toBe(409)
@@ -675,11 +679,10 @@ describe('handleCommand — worker-start 사전 검증 (고아 세션 방지)', 
     const run = await call(deps, 'run-create', {
       objective: 'o',
       cwd: 'D:/p',
-      provider: 'codex',
       auto: true
     })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const taskId = (task.body as { id: string }).id
     const r = await call(deps, 'worker-start', {
       taskId,
@@ -696,7 +699,7 @@ describe('handleCommand — check', () => {
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     await call(deps, 'worker-start', {
       taskId: (task.body as { id: string }).id,
       agent: 'codex',
@@ -713,7 +716,7 @@ describe('handleCommand — reset', () => {
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     await call(deps, 'worker-start', {
       taskId: (task.body as { id: string }).id,
       agent: 'codex',
@@ -770,7 +773,7 @@ describe('handleCommand — reset', () => {
     it('reset --tasks도 백업한다', async () => {
       const { deps, file } = await withStore()
       const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
-      await call(deps, 'task-create', { runId: (run.body as { id: string }).id, spec: 's' })
+      await call(deps, 'task-create', { account: 'acc1', runId: (run.body as { id: string }).id, spec: 's' })
       expect((await call(deps, 'reset', { tasks: true })).status).toBe(200)
       const bak = JSON.parse(await fs.readFile(file + '.bak', 'utf8')) as OrchState
       expect(bak.tasks).toHaveLength(1)
@@ -792,7 +795,7 @@ describe('handleCommand — reset', () => {
       const deps = makeDeps()
       const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
       const runId = (run.body as { id: string }).id
-      await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+      await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
       deps.backup = async (): Promise<void> => {
         const before = deps.getState()
         await deps.setState({
@@ -837,7 +840,7 @@ describe('handleCommand — inbox는 코디네이터 전용', () => {
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
     for (const title of ['A', 'B']) {
-      const task = await call(deps, 'task-create', { runId, title, spec: `spec ${title}` })
+      const task = await call(deps, 'task-create', { account: 'acc1', runId, title, spec: `spec ${title}` })
       await call(deps, 'worker-start', {
         taskId: (task.body as { id: string }).id,
         agent: 'codex',
@@ -883,11 +886,9 @@ describe('handleCommand — retained dispatch', () => {
       released.push(dispatchId)
     }
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
-    const task = await call(deps, 'task-create', {
-      runId: (run.body as { id: string }).id,
+    const task = await call(deps, 'task-create', { account: 'acc1', runId: (run.body as { id: string }).id,
       title: 't',
-      spec: 's'
-    })
+      spec: 's' })
     const started = await call(deps, 'worker-start', {
       taskId: (task.body as { id: string }).id,
       agent: 'codex',
@@ -950,7 +951,7 @@ describe('handleCommand — task-update (전이 표 우회, task-13a)', () => {
   const seedTask = async (deps: OrchServerDeps): Promise<string> => {
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     return (task.body as { id: string }).id
   }
 
@@ -1112,9 +1113,9 @@ describe('handleCommand — task-update (전이 표 우회, task-13a)', () => {
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const a = await call(deps, 'task-create', { runId, title: 'a', spec: 's' })
+    const a = await call(deps, 'task-create', { account: 'acc1', runId, title: 'a', spec: 's' })
     const aId = (a.body as { id: string }).id
-    const b = await call(deps, 'task-create', { runId, title: 'b', spec: 's', deps: [aId] })
+    const b = await call(deps, 'task-create', { account: 'acc1', runId, title: 'b', spec: 's', deps: [aId] })
     const bId = (b.body as { id: string }).id
     expect(deps.getState().tasks.find((t) => t.id === bId)!.status).toBe('pending')
     const r = await call(deps, 'task-update', { id: aId, status: 'completed' })
@@ -1126,9 +1127,9 @@ describe('handleCommand — task-update (전이 표 우회, task-13a)', () => {
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const a = await call(deps, 'task-create', { runId, title: 'a', spec: 's' })
+    const a = await call(deps, 'task-create', { account: 'acc1', runId, title: 'a', spec: 's' })
     const aId = (a.body as { id: string }).id
-    const b = await call(deps, 'task-create', { runId, title: 'b', spec: 's', deps: [aId] })
+    const b = await call(deps, 'task-create', { account: 'acc1', runId, title: 'b', spec: 's', deps: [aId] })
     const bId = (b.body as { id: string }).id
     const gate = await call(deps, 'gate-create', { task: bId, question: 'q?' })
     expect(gate.status).toBe(200) // 사전조건: B가 blocked로 전이됐다
@@ -1171,8 +1172,9 @@ describe('handleCommand — task-list --ready', () => {
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const a = await call(deps, 'task-create', { runId, title: 'a', spec: 's' })
+    const a = await call(deps, 'task-create', { account: 'acc1', runId, title: 'a', spec: 's' })
     await call(deps, 'task-create', {
+      account: 'acc1',
       runId,
       title: 'b',
       spec: 's',
@@ -1185,11 +1187,9 @@ describe('handleCommand — task-list --ready', () => {
   it('brief는 spec을 160자에서 자르고 표시를 남긴다', async () => {
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
-    await call(deps, 'task-create', {
-      runId: (run.body as { id: string }).id,
+    await call(deps, 'task-create', { account: 'acc1', runId: (run.body as { id: string }).id,
       title: 't',
-      spec: 'x'.repeat(300)
-    })
+      spec: 'x'.repeat(300) })
     const r = await call(deps, 'task-list', { brief: true })
     const list = r.body as { spec: string; spec_truncated: boolean }[]
     expect(list[0].spec.length).toBe(160)
@@ -1239,7 +1239,7 @@ describe('handleCommand — worker-start × OrchCoordinator 통합 배선', () =
   const seedTask = async (deps: OrchServerDeps): Promise<string> => {
     const run = await call(deps, 'run-create', { objective: 'o', cwd: dir })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     return (task.body as { id: string }).id
   }
 
@@ -1419,7 +1419,7 @@ describe('handleExit — probeLimit 배선과 쓰기 역전 회귀', () => {
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const taskId = (task.body as { id: string }).id
     await call(deps, 'worker-start', {
       taskId,
@@ -1532,7 +1532,7 @@ describe("send --type worker_done --outcome failed: 한도 탐침", () => {
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const taskId = (task.body as { id: string }).id
     await call(deps, 'worker-start', {
       taskId,
@@ -1686,7 +1686,7 @@ describe('unregisterRolling — Dispatch 가 닫히는데 세션은 살아 있�
     deps.unregisterRolling = (sessionId) => dropped.push(sessionId)
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const taskId = (task.body as { id: string }).id
     await call(deps, 'worker-start', { taskId, agent: 'codex', account: 'acc1', worktree: 'current' })
     return { deps, taskId, dispatchId: deps.getState().dispatches[0].id, dropped }
@@ -1811,7 +1811,7 @@ describe('task-create --validate 와 run-configs', () => {
   it('--validate 를 Task 에 저장한다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    const r = await call(deps, 'task-create', { spec: '작업', validate: 'cfg1' })
+    const r = await call(deps, 'task-create', { account: 'acc1', spec: '작업', validate: 'cfg1' })
     expect(r.status).toBe(200)
     expect(deps.getState().tasks[0].validateConfigId).toBe('cfg1')
   })
@@ -1819,7 +1819,7 @@ describe('task-create --validate 와 run-configs', () => {
   it('--validate 없이 만든 Task 에는 그 필드가 없다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업' })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업' })
     expect(deps.getState().tasks[0].validateConfigId).toBeUndefined()
   })
 
@@ -1846,7 +1846,7 @@ describe('task-create --validate 와 run-configs', () => {
     const deps = makeDeps()
     deps.listRunConfigs = async () => [{ id: 'cfg1', name: '테스트', type: 'npm' }]
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업' })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업' })
     const taskId = deps.getState().tasks[0].id
     await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
     const workerSession = deps.getState().dispatches[0].sessionId
@@ -1863,6 +1863,64 @@ describe('task-create --account', () => {
       { id: 'acc1', label: '계정1', provider: 'codex' as const },
       { id: 'acc2', label: '계정2', provider: 'codex' as const }
     ]
+  })
+
+  /** claude 와 codex 를 함께 가진 목록 — 섞인 지정을 거절하는지 보려면 두 provider 가 필요하다 */
+  const mixedDeps = (): OrchServerDeps & { state: OrchState } =>
+    Object.assign(makeDeps(), {
+      listAccounts: () => [
+        { id: 'cl1', label: 'claude1', provider: 'claude' as const },
+        { id: 'cl2', label: 'claude2', provider: 'claude' as const },
+        { id: 'cx1', label: 'codex1', provider: 'codex' as const }
+      ]
+    })
+
+  // 이 목록이 provider 의 유일한 출처이므로(Task.accountIds), 없으면 어느 CLI 로 띄울지 알 방법이
+  // 없다. 예전에는 Run 이 provider 를 들고 있어 비워 두면 그 provider 의 기본 계정으로 갔다.
+  it('--account 가 없으면 거절한다 — provider 의 출처가 이 목록뿐이다', async () => {
+    const deps = accountDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const r = await call(deps, 'task-create', { runId, spec: 's' })
+    expect(r.status).toBe(400)
+    expect(String((r.body as { error?: string }).error)).toContain('--account is required')
+    expect(deps.getState().tasks).toHaveLength(0)
+  })
+
+  // 섞이면 첫 계정으로 띄운 CLI 가 한도에 걸렸을 때 다른 CLI 의 계정으로 갈아타려 한다 — 그것은
+  // 갈아타기가 아니라 다른 프로그램을 띄우는 일이다
+  it('서로 다른 provider 가 섞인 목록을 거절한다', async () => {
+    const deps = mixedDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const r = await call(deps, 'task-create', { runId, spec: 's', account: 'cl1,cx1' })
+    expect(r.status).toBe(400)
+    const err = String((r.body as { error?: string }).error)
+    // 어느 칸이 어긋났는지 말한다 — 목록이 셋 넷이면 "섞였다"만으로는 어디를 고칠지 알 수 없다
+    expect(err).toContain('must not mix providers')
+    expect(err).toContain('cl1 is claude')
+    expect(err).toContain('cx1 is codex')
+    expect(deps.getState().tasks).toHaveLength(0)
+  })
+
+  it('같은 provider 끼리면 그대로 받는다 — 순서도 그대로다', async () => {
+    const deps = mixedDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const r = await call(deps, 'task-create', { runId, spec: 's', account: 'cl2,cl1' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().tasks.at(-1)?.accountIds).toEqual(['cl2', 'cl1'])
+  })
+
+  // 한 Run 에 두 provider 의 Task 가 섞이는 것은 **막지 않는다** — provider 를 Run 에서 Task 로
+  // 내린 이유가 그것이다. 거절은 한 Task 안의 목록에만 적용된다.
+  it('같은 Run 에 claude Task 와 codex Task 가 함께 있을 수 있다', async () => {
+    const deps = mixedDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    expect((await call(deps, 'task-create', { runId, spec: 'a', account: 'cl1' })).status).toBe(200)
+    expect((await call(deps, 'task-create', { runId, spec: 'b', account: 'cx1' })).status).toBe(200)
+    expect(deps.getState().tasks.map((t) => t.accountIds)).toEqual([['cl1'], ['cx1']])
   })
 
   it('--account 는 쉼표로 순서 있는 목록을 받는다', async () => {
@@ -1927,7 +1985,7 @@ describe('worker_done 이 검증을 시작한다', () => {
     const started: { taskId: string; cwd: string }[] = []
     deps.startValidation = (a) => void started.push(a)
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업', validate: 'cfg1' })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업', validate: 'cfg1' })
     const taskId = deps.getState().tasks[0].id
     await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
     const d = deps.getState().dispatches[0]
@@ -1946,7 +2004,7 @@ describe('worker_done 이 검증을 시작한다', () => {
     const started: { taskId: string; cwd: string }[] = []
     deps.startValidation = (a) => void started.push(a)
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업' })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업' })
     const taskId = deps.getState().tasks[0].id
     await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
     const d = deps.getState().dispatches[0]
@@ -1967,7 +2025,7 @@ describe('worker_done 이 검증을 시작한다', () => {
   it('startValidation 이 주입되지 않으면 검증 없이 completed 로 간다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업', validate: 'cfg1' })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업', validate: 'cfg1' })
     const taskId = deps.getState().tasks[0].id
     await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
     const d = deps.getState().dispatches[0]
@@ -1990,7 +2048,7 @@ describe('worker_done 이 검증을 시작한다', () => {
     const started: { taskId: string; cwd: string }[] = []
     deps.startValidation = (a) => void started.push(a)
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업', validate: 'cfg1' })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업', validate: 'cfg1' })
     const taskId = deps.getState().tasks[0].id
     await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
     const d = deps.getState().dispatches[0]
@@ -2014,14 +2072,14 @@ describe('task-create --review 와 검토 라우팅', () => {
   it('task-create --review 가 reviewRequested 를 켠다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업', review: true })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업', review: true })
     expect(deps.getState().tasks[0].reviewRequested).toBe(true)
   })
 
   it('--review 없이 만든 Task 는 reviewRequested 가 없다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업' })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업' })
     expect(deps.getState().tasks[0].reviewRequested).toBeUndefined()
   })
 
@@ -2032,7 +2090,7 @@ describe('task-create --review 와 검토 라우팅', () => {
     const deps = makeDeps()
     deps.startReview = () => {}
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업', review: true })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업', review: true })
     const taskId = deps.getState().tasks[0].id
     await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
     const impl = deps.getState().dispatches[0]
@@ -2092,7 +2150,7 @@ describe('task-create --review 와 검토 라우팅', () => {
   it('구현 Dispatch 로 온 worker_done 은 지금과 똑같이 처리된다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업' })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업' })
     const taskId = deps.getState().tasks[0].id
     await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
     const d = deps.getState().dispatches[0]
@@ -2111,7 +2169,7 @@ describe('task-create --review 와 검토 라우팅', () => {
     // reviewRequested 가 걸린 Task 도 성공 보고에 곧바로 completed 로 간다
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업', review: true })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업', review: true })
     const taskId = deps.getState().tasks[0].id
     await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
     const d = deps.getState().dispatches[0]
@@ -2131,7 +2189,7 @@ describe('task-create --review 와 검토 라우팅', () => {
     const started: { taskId: string }[] = []
     deps.startReview = (a) => void started.push(a)
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업', review: true })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업', review: true })
     const taskId = deps.getState().tasks[0].id
     await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
     const d = deps.getState().dispatches[0]
@@ -2151,7 +2209,7 @@ describe('task-create --review 와 검토 라우팅', () => {
     const started: { taskId: string }[] = []
     deps.startReview = (a) => void started.push(a)
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업', review: true })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업', review: true })
     const taskId = deps.getState().tasks[0].id
     await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
     const d = deps.getState().dispatches[0]
@@ -2175,7 +2233,7 @@ describe('task-create --review 와 검토 라우팅', () => {
   it('task-update --status reviewing 이 거절되지 않는다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    const task = await call(deps, 'task-create', { spec: '작업' })
+    const task = await call(deps, 'task-create', { account: 'acc1', spec: '작업' })
     const taskId = (task.body as { id: string }).id
     const r = await call(deps, 'task-update', { id: taskId, status: 'reviewing' })
     expect(r.status).toBe(200)
@@ -2197,7 +2255,7 @@ describe('검토 Dispatch 가 스스로 끝나지 못했을 때 — handleExit �
     const deps = makeDeps()
     deps.startReview = () => {}
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업', review: true })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업', review: true })
     const taskId = deps.getState().tasks[0].id
     await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
     const impl = deps.getState().dispatches[0]
@@ -2259,7 +2317,7 @@ describe('검토 Dispatch 가 스스로 끝나지 못했을 때 — handleExit �
   it('구현 Dispatch 가 죽으면 Gate 를 열지 않고 기존 동작 그대로다', async () => {
     const deps = makeDeps()
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업' })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업' })
     const taskId = deps.getState().tasks[0].id
     await call(deps, 'worker-start', { task: taskId, agent: 'codex', account: 'acc1' })
     await handleExit(deps, { sessionId: 'sess1', exitCode: 1 })
@@ -2350,7 +2408,7 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
     })
     deps.startValidation = (a) => validator.enqueue(a)
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업', validate: 'cfg1' })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업', validate: 'cfg1' })
     const taskId = deps.getState().tasks[0].id
     await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
     const d = deps.getState().dispatches[0]
@@ -2417,7 +2475,7 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
     })
     deps.startValidation = (a) => validator.enqueue(a)
     await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
-    await call(deps, 'task-create', { spec: '작업', validate: 'cfg1' })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업', validate: 'cfg1' })
     const taskId = deps.getState().tasks[0].id
     await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
     const d = deps.getState().dispatches[0]
@@ -2454,7 +2512,7 @@ describe('run-delete', () => {
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     await call(deps, 'worker-start', {
       taskId: (task.body as { id: string }).id,
       agent: 'codex',
@@ -2470,7 +2528,7 @@ describe('run-delete', () => {
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     const r = await call(deps, 'run-delete', { id: runId })
     expect(r.status).toBe(200)
     expect(r.body).toEqual({ deleted: runId, tasks: 1 })
@@ -2484,7 +2542,7 @@ describe('run-delete', () => {
     const deps = makeDeps()
     const busy = await call(deps, 'run-create', { objective: 'busy', cwd: 'D:/p' })
     const busyId = (busy.body as { id: string }).id
-    const bt = await call(deps, 'task-create', { runId: busyId, title: 'bt', spec: 's' })
+    const bt = await call(deps, 'task-create', { account: 'acc1', runId: busyId, title: 'bt', spec: 's' })
     await call(deps, 'worker-start', {
       taskId: (bt.body as { id: string }).id,
       agent: 'codex',
@@ -2511,7 +2569,7 @@ describe('run-delete', () => {
     const deps = makeDeps()
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id
-    const task = await call(deps, 'task-create', { runId, title: 't', spec: 's' })
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
     await call(deps, 'worker-start', {
       taskId: (task.body as { id: string }).id,
       agent: 'codex',
@@ -2533,7 +2591,6 @@ describe('run-spawn — 예약 회차', () => {
     const r = await call(deps, 'run-create', {
       objective: '매일 점검',
       cwd: 'D:/p',
-      provider: 'claude',
       schedule: { kind: 'daily', time: '09:00' }
     })
     return { deps, templateId: (r.body as { id: string }).id }
@@ -2693,7 +2750,7 @@ describe('run-spawn — 예약 회차', () => {
 describe('run-start — 사람이 실행을 누를 때까지 기다린다', () => {
   it('run-create --auto 는 pendingStart 를 함께 켠다', async () => {
     const deps = makeDeps()
-    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', provider: 'claude', auto: true })
+    await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true })
     const run = deps.getState().runs[0]
     expect(run.autoDispatch).toBe(true)
     expect(run.pendingStart).toBe(true)
@@ -2745,7 +2802,6 @@ describe('run-start — 사람이 실행을 누를 때까지 기다린다', () =
     const t = await call(deps, 'run-create', {
       objective: 'o',
       cwd: 'D:/p',
-      provider: 'claude',
       schedule: { kind: 'daily', time: '09:00' }
     })
     const r = await call(deps, 'run-spawn', { run: (t.body as { id: string }).id })
@@ -2754,7 +2810,7 @@ describe('run-start — 사람이 실행을 누를 때까지 기다린다', () =
 
   it('run-start 가 pendingStart 를 걷는다', async () => {
     const deps = makeDeps()
-    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', provider: 'claude', auto: true })
+    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true })
     const id = (c.body as { id: string }).id
     const r = await call(deps, 'run-start', { run: id })
     expect(r.status).toBe(200)
@@ -2765,7 +2821,7 @@ describe('run-start — 사람이 실행을 누를 때까지 기다린다', () =
   // 사람이 손쓸 수 없는 실패 문구를 띄우는 것은 이 명령이 하려는 일과 무관하다
   it('이미 시작한 Run 에 다시 불러도 200 이다', async () => {
     const deps = makeDeps()
-    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', provider: 'claude', auto: true })
+    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true })
     const id = (c.body as { id: string }).id
     await call(deps, 'run-start', { run: id })
     expect((await call(deps, 'run-start', { run: id })).status).toBe(200)
@@ -2779,7 +2835,7 @@ describe('run-start — 사람이 실행을 누를 때까지 기다린다', () =
 
   it('워커 세션은 부를 수 없다', async () => {
     const deps = makeDeps()
-    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', provider: 'claude', auto: true })
+    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', auto: true })
     const id = (c.body as { id: string }).id
     await deps.setState({
       ...deps.getState(),
@@ -2827,7 +2883,7 @@ const withFinishedWorktree = async (): Promise<{
       return { failed: [] as string[] }
     }
   })
-  const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', provider: 'claude' })
+  const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
   const runId = (c.body as { id: string }).id
   await deps.setState({
     ...deps.getState(),
@@ -2916,7 +2972,7 @@ describe('run-delete — 병합·워크트리 선택', () => {
         return { ok: true as const, merged: p }
       }
     })
-    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p', provider: 'claude' })
+    const c = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const id = (c.body as { id: string }).id
     expect((await call(deps, 'run-delete', { id, merge: true })).status).toBe(200)
     expect(merged).toEqual([])
@@ -2948,7 +3004,6 @@ describe('run-delete — 예약 템플릿의 회차 워크트리', () => {
     const c = await call(deps, 'run-create', {
       objective: 'o',
       cwd: 'D:/p',
-      provider: 'claude',
       auto: true,
       schedule: { kind: 'daily', time: '09:00' }
     })
@@ -2964,7 +3019,6 @@ describe('run-delete — 예약 템플릿의 회차 워크트리', () => {
           objective: 'o',
           cwd: 'D:/p',
           createdAt: NOW,
-          provider: 'claude',
           autoDispatch: true,
           templateId,
           fireOrdinal: 1
@@ -3041,7 +3095,6 @@ describe('run-pause', () => {
     const c = await call(deps, 'run-create', {
       objective: 'o',
       cwd: 'D:/p',
-      provider: 'claude',
       auto: true,
       schedule: { kind: 'daily', time: '09:00' }
     })
@@ -3057,7 +3110,6 @@ describe('run-pause', () => {
           objective: 'o',
           cwd: 'D:/p',
           createdAt: NOW,
-          provider: 'claude',
           autoDispatch: true,
           templateId,
           fireOrdinal: 1
@@ -3228,7 +3280,7 @@ describe('run-merge', () => {
 
     expect(removed).toEqual([])
     expect(deps.getState().runs.find((r) => r.id === runId)?.worktree).toBe('D:/wt/run')
-    const t = await call(deps, 'task-create', { runId, title: '다음', spec: 's' })
+    const t = await call(deps, 'task-create', { account: 'acc1', runId, title: '다음', spec: 's' })
     const r = await call(deps, 'worker-start', {
       taskId: (t.body as { id: string }).id,
       agent: 'codex',
@@ -3357,7 +3409,7 @@ describe('handleCommand — CLI 인자 경로', () => {
     const r = await call(
       deps,
       'task-create',
-      cliArgs(['task-create', '--run', older, '--title', 't', '--spec', 's'])
+      cliArgs(['task-create', '--account', 'acc1', '--run', older, '--title', 't', '--spec', 's'])
     )
     expect((r.body as { runId: string }).runId).toBe(older)
   })
@@ -3369,7 +3421,7 @@ describe('handleCommand — CLI 인자 경로', () => {
     await call(
       deps,
       'task-create',
-      cliArgs(['task-create', '--run', older, '--title', 't', '--spec', 's'])
+      cliArgs(['task-create', '--account', 'acc1', '--run', older, '--title', 't', '--spec', 's'])
     )
     const tasks = deps.getState().tasks
     expect(tasks).toHaveLength(1)
@@ -3379,14 +3431,14 @@ describe('handleCommand — CLI 인자 경로', () => {
 
   it('--run 이 없으면 가장 최근 Run 에 붙는다', async () => {
     const { deps, newer } = await twoRuns()
-    const r = await call(deps, 'task-create', cliArgs(['task-create', '--title', 't', '--spec', 's']))
+    const r = await call(deps, 'task-create', cliArgs(['task-create', '--account', 'acc1', '--title', 't', '--spec', 's']))
     expect((r.body as { runId: string }).runId).toBe(newer)
   })
 
   // 앱은 IPC 로 runId 를 직접 보낸다(NewTaskModal). 그 길이 계속 살아 있어야 한다
   it('앱이 보내는 runId 도 그대로 받는다', async () => {
     const { deps, older } = await twoRuns()
-    const r = await call(deps, 'task-create', { runId: older, title: 't', spec: 's' })
+    const r = await call(deps, 'task-create', { account: 'acc1', runId: older, title: 't', spec: 's' })
     expect((r.body as { runId: string }).runId).toBe(older)
   })
 
@@ -3395,7 +3447,7 @@ describe('handleCommand — CLI 인자 경로', () => {
     const r = await call(
       deps,
       'task-create',
-      cliArgs(['task-create', '--run', 'run_nope', '--title', 't', '--spec', 's'])
+      cliArgs(['task-create', '--account', 'acc1', '--run', 'run_nope', '--title', 't', '--spec', 's'])
     )
     expect(r.status).toBeGreaterThanOrEqual(400)
   })

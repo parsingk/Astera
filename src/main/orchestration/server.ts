@@ -293,9 +293,12 @@ export async function handleCommand(
       // .trim() here (unlike the plain str() presence check elsewhere) because resolveProjectRoot
       // below is a real async call now — a whitespace-only objective must not reach it.
       if (!objective?.trim()) return bad('--objective is required')
-      const providerArg = str(args.provider)
-      if (providerArg !== null && providerArg !== 'claude' && providerArg !== 'codex')
-        return bad('--provider must be claude|codex')
+      // **provider 는 이제 Run 의 것이 아니다** — Task 의 계정이 정한다(Task.accountIds). 조용히
+      // 무시하지 않고 거절하는 이유: 이 플래그를 보내는 호출자는 "이 Run 은 이 CLI 로 돈다"고
+      // 믿고 있고, 무시하면 그 믿음이 틀렸다는 것을 알 방법이 없다. 한 Run 에 두 provider 의
+      // Task 가 섞일 수 있게 된 것이 이 변경의 목적이므로 옮길 자리도 없다.
+      if (args.provider !== undefined)
+        return bad('--provider is no longer accepted — the provider comes from task-create --account')
       const concurrency = args.concurrency === undefined ? null : posInt(args.concurrency)
       if (args.concurrency !== undefined && concurrency === null)
         return bad('--concurrency must be an integer >= 1')
@@ -349,7 +352,6 @@ export async function handleCommand(
           {
             objective,
             cwd,
-            ...(providerArg ? { provider: providerArg } : {}),
             ...(concurrency !== null ? { concurrency } : {}),
             // `--auto` 는 값이 없는 플래그다(task-create --review 와 같은 모양). **예약이면 켜지
             // 않는다** — 템플릿은 자신이 돌지 않고, 발화가 만든 자식 Run 이 돈다(그 자식은
@@ -587,8 +589,10 @@ export async function handleCommand(
       if (!runId) return bad('--run is required (no run exists)')
       if (!spec) return bad('--spec is required')
       // `--account` 는 이 Task 를 띄울 계정들이다 — **쉼표로 순서 있는 목록**을 받는다(`a,b,c`).
-      // 첫 계정으로 띄우고 나머지는 한도에 걸렸을 때 갈아탈 순서다. 없으면 그 provider 의 기본
-      // 계정으로 간다(core/accounts/dispatchAccount.ts).
+      // 첫 계정으로 띄우고 나머지는 한도에 걸렸을 때 갈아탈 순서다.
+      // **필수다.** 이 목록이 provider 의 유일한 출처이므로(Task.accountIds), 없으면 어느 CLI 로
+      // 띄울지 알 방법이 없다. 예전에는 Run 이 provider 를 들고 있어 비워 두면 그 provider 의 기본
+      // 계정으로 갔다.
       // **여기서 거절하는 이유**: 목록의 한 칸이라도 잘못돼 있으면 dispatch 시점에 Gate 가 열리는데,
       // 그때는 사람이 이미 Task 를 만들어 둔 뒤라 왜 안 도는지 되짚어야 한다. 만들 때 목록 전체를
       // 거절하면 그 자리에서 알 수 있다.
@@ -600,8 +604,9 @@ export async function handleCommand(
       // 받는다. `ask --options` 가 이미 CSV 이므로 그 관례를 쓴다 — 계정 하나만 주는 기존 호출은
       // 쉼표가 없으므로 그대로 흐른다.
       const accountArg = str(args.account)
+      if (accountArg === null) return bad('--account is required')
       let accountIds: string[] | undefined
-      if (accountArg !== null) {
+      {
         const parts = accountArg.split(',').map((x) => x.trim())
         // 빈 칸을 조용히 버리지 않고 거절한다 — `a,,b` 나 `a,` 는 손이 미끄러진 것이고, 버리면
         // 사람이 적은 것과 도는 것이 달라진다. 그것을 알 방법은 화면에 없다.
@@ -611,17 +616,23 @@ export async function handleCommand(
         // "갈아탄" 결과가 같은 계정이 된다. 판정 쪽에서도 접지만(dispatchAccount.ts) 명령은 그 전에
         // 사람에게 말해 주는 자리다.
         if (dup !== undefined) return bad(`--account lists ${dup} twice`)
-        const run = s.runs.find((r) => r.id === runId)
-        // Run 의 provider 로 좁혀 묻는다. provider 가 없는 Run(명령으로는 만들 수 없는 조합이지만
-        // 파일은 손으로 고쳐진다)에서는 좁힐 기준이 없어 존재만 본다 — 그런 Run 은 애초에
-        // slotsToFill 이 건너뛴다.
-        const known = deps.listAccounts(run?.provider)
+        // provider 로 좁히지 않고 전부 받아 온다 — 좁힐 기준이 이 목록 자신이다(Run 은 더 이상
+        // provider 를 모른다). 존재를 먼저 보고, 그다음 서로 같은 provider 인지 본다.
+        const known = deps.listAccounts()
         const unknown = parts.find((x) => !known.some((k) => k.id === x))
-        if (unknown !== undefined)
+        if (unknown !== undefined) return bad(`unknown account: ${unknown}`)
+        // **섞인 목록을 거절한다.** 첫 계정으로 띄운 CLI 가 한도에 걸렸을 때 다른 CLI 의 계정으로
+        // 갈아타려 하는데, 그것은 갈아타기가 아니라 다른 프로그램을 띄우는 일이다. 판정 쪽에서도
+        // 접히지만(accountToDispatchOn 이 첫 계정의 provider 로 뒤 칸을 걸러낸다) 조용히 접히므로
+        // — 사람이 적은 목록과 도는 목록이 달라진다 — 명령이 그 전에 말해 준다. 빈 칸·중복을
+        // 거절하는 것과 같은 이유다.
+        const providerOfId = (id: string): Provider =>
+          known.find((k) => k.id === id)!.provider
+        const head = providerOfId(parts[0])
+        const odd = parts.find((x) => providerOfId(x) !== head)
+        if (odd !== undefined)
           return bad(
-            run?.provider
-              ? `unknown ${run.provider} account: ${unknown}`
-              : `unknown account: ${unknown}`
+            `--account must not mix providers: ${parts[0]} is ${head}, ${odd} is ${providerOfId(odd)}`
           )
         accountIds = parts
       }

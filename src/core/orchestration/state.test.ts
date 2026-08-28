@@ -1579,7 +1579,6 @@ const template = (): { s: OrchState; templateId: string; aId: string; bId: strin
       {
         objective: '매일 점검',
         cwd: 'D:/p',
-        provider: 'claude',
         concurrency: 2,
         schedule: { kind: 'daily', time: '09:00' }
       },
@@ -1608,7 +1607,6 @@ describe('spawnScheduledRun', () => {
     const saved = state.runs.find((r) => r.id === child.id)!
     expect(saved.objective).toBe('매일 점검')
     expect(saved.cwd).toBe('D:/p')
-    expect(saved.provider).toBe('claude')
     expect(saved.concurrency).toBe(2)
     expect(saved.autoDispatch).toBe(true)
     expect(saved.templateId).toBe(templateId)

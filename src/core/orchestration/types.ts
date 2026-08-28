@@ -25,8 +25,6 @@ export interface Run {
   objective: string
   cwd: string
   createdAt: string
-  /** 이 Run 의 워커를 띄울 provider. 계정은 defaultAccountIdOf 가 고른다. */
-  provider?: Provider
   /** 동시에 열어 둘 Dispatch 수. 없으면 DEFAULT_CONCURRENCY. */
   concurrency?: number
   /** 앱이 이 Run 을 스스로 돌리는가. **UI 가 만든 Run 에만 참이다** — 코디네이터가 만든 Run 을
@@ -99,18 +97,30 @@ export interface Task {
   status: TaskStatus
   result?: string
   filesModified?: string[]
-  /** 이 Task 의 워커를 띄울 계정들, **순서대로**. **없거나 비면 그 provider 의 기본 계정으로 간다** —
-   *  명령으로 만든 Task 와 이 칸이 생기기 전의 Task 가 모두 그 갈래다.
+  /** 이 Task 의 워커를 띄울 계정들, **순서대로**.
+   *
+   *  **이 목록이 provider 의 유일한 출처다.** 예전에는 Run 이 provider 를 들고 있었고(`Run.provider`)
+   *  이 칸은 비워 둘 수 있었다 — 비면 그 provider 의 기본 계정으로 갔다. 이제 Run 은 provider 를
+   *  모르므로, 계정이 없으면 **어느 CLI 로 띄울지 알 방법이 없다.** 그래서 자동 디스패치는 계정 없는
+   *  Task 를 고르지 않고(schedule.ts 의 slotsToFill), 만드는 두 자리가 모두 계정을 요구한다
+   *  (server.ts 의 task-create, NewTaskModal).
+   *
+   *  **그래도 optional 인 이유:** orchestration.json 은 프로세스보다 오래 살고 Run 은 30일 남는다.
+   *  이 규칙 전에 만들어진 Task 와 손으로 고친 파일에는 이 칸이 없다. 그런 Task 는 조용히 멈추는
+   *  대신 디스패치 시점에 Gate 를 연다 — 사람이 계정을 넣으면 곧바로 돈다.
+   *
+   *  **목록 안의 계정은 서로 같은 provider 여야 한다.** 섞이면 첫 계정으로 띄운 CLI 가 한도에 걸렸을
+   *  때 다른 CLI 계정으로 갈아타려 하고, 그것은 갈아타기가 아니라 다른 프로그램을 띄우는 일이다.
+   *  task-create 가 그 목록을 거절하고, UI 는 첫 계정이 고른 provider 로 이후 칸을 좁힌다.
    *
    *  첫 계정으로 띄우고, 나머지는 **한도에 걸렸을 때 갈아탈 순서**다 — 배선이 이 목록을 그대로
    *  세션의 롤링 체인(rollAccountIds)으로 넘긴다. 계정이 하나면 갈아탈 곳이 없어 리셋까지 기다린다
    *  (RollCycle.onLimit 은 계정 수가 1이면 언제나 대기를 낸다).
    *
-   *  provider 는 Run 이 정하므로(Run.provider) 이 계정들은 그것과 같은 provider 여야 한다.
-   *  task-create 가 그 조합을 거절하지만, 못 쓰는 지정이 실제로 도달했을 때 무엇을 하는지는
-   *  accountToDispatchOn(core/accounts/dispatchAccount.ts)이 정한다 — **첫 계정**을 못 쓰면 뒤
-   *  계정을 올려세우지 않고 그대로 실패해 Gate 를 열고, 첫 계정을 쓸 수 있으면 **뒤 계정** 중
-   *  못 쓰는 것만 순서를 지키며 제자리에서 빠진다. */
+   *  못 쓰는 지정이 실제로 도달했을 때 무엇을 하는지는 accountToDispatchOn
+   *  (core/accounts/dispatchAccount.ts)이 정한다 — **첫 계정**을 못 쓰면 뒤 계정을 올려세우지 않고
+   *  그대로 실패해 Gate 를 열고, 첫 계정을 쓸 수 있으면 **뒤 계정** 중 못 쓰는 것만 순서를 지키며
+   *  제자리에서 빠진다. */
   accountIds?: string[]
   /** 이 Task 를 완료로 판정할 실행 구성의 id. 없으면 worker_done 을 그대로 믿는다 —
    *  "문서를 고친다" 같은 Task 에 빌드를 거는 것은 틀린 판정이므로 검증 없음이 기본이다. */

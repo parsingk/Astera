@@ -854,7 +854,6 @@ export const es: Catalog = {
   'jobs.new.title': 'Crear un trabajo',
   'jobs.new.gitRequired': 'Solo se ejecuta en una carpeta que sea un repositorio de git',
   'jobs.new.objective': 'Objetivo',
-  'jobs.new.provider': 'Agente',
   'jobs.new.concurrency': 'En paralelo',
   'jobs.new.concurrencyHint': 'Cuántos workers mantiene abiertos a la vez',
   'jobs.new.schedule': 'Ejecución programada',
@@ -863,6 +862,7 @@ export const es: Catalog = {
   'jobs.new.create': 'Crear',
   'jobs.new.folderBusy': 'Ya hay un worker trabajando en esta carpeta — con límite 1 el worker de este trabajo también corre ahí, así que sus ediciones pueden mezclarse',
   'jobs.new.failed': 'No se pudo crear el trabajo',
+  'jobs.gate.noAccountAssigned': 'Esta tarea no tiene cuenta, así que no hay forma de saber qué agente debe ejecutarla — asigna una',
   'jobs.gate.noAccount': 'Ninguna cuenta de {provider} tiene la sesión iniciada, así que esta Task no puede empezar',
   'jobs.gate.assignedAccountUnusable':
     'No se puede usar la primera cuenta asignada a esta Task, y las siguientes solo están ahí para pasar a ellas más tarde — vuelve a iniciar sesión en esa cuenta o cambia la lista de cuentas de esta Task',
@@ -877,10 +877,11 @@ export const es: Catalog = {
   'jobs.task.depsHint': 'Empieza cuando todas las Task elegidas terminen',
   'jobs.task.depsAdd': 'Elegir una Task',
   'jobs.task.account': 'Cuenta',
-  'jobs.task.accountDefault': 'Cuenta por defecto',
+  'jobs.task.accountPick': 'Elige una cuenta',
   'jobs.task.accountNone': 'Sin usar',
+  'jobs.task.accountEmpty': 'No hay cuentas registradas — añade una en Ajustes → Cuentas primero',
   'jobs.task.accountHint':
-    'Las cuentas en las que esta tarea ejecuta su worker — la cuenta predeterminada si se deja sin definir. Con más de una, al alcanzar el límite de uso el worker pasa a la siguiente en el orden indicado',
+    'Las cuentas en las que esta tarea ejecuta su worker — la primera decide qué agente la ejecuta, así que hace falta al menos una. Con más de una, al alcanzar el límite de uso el worker pasa a la siguiente en el orden indicado',
   'jobs.task.accountTrust':
     'La primera vez que una cuenta elegida abre esta carpeta, la pestaña de sesión pide confirmar que confías en ella — el worker no empieza hasta que respondas',
   'jobs.task.validate': 'Configuración que prueba que terminó',

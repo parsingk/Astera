@@ -37,7 +37,7 @@ import {
   openReviewDispatch
 } from '../core/orchestration/state'
 import { pickReviewer } from '../core/orchestration/reviewer'
-import { slotsToFill } from '../core/orchestration/schedule'
+import { slotsToFill, tasksMissingAccounts } from '../core/orchestration/schedule'
 import { firesDue } from '../core/orchestration/fire'
 import { reapableChildRuns } from '../core/orchestration/reap'
 import {
@@ -1541,6 +1541,15 @@ export function registerIpc(
           // 것뿐이다: 꺼진 채로 저장이 일어날 때마다 슬롯 수만큼 로그가 쌓이는데 orchLog 는 메인
           // 스레드의 동기 appendFileSync 다. 아래 slots.length === 0 조기 탈출과 같은 성격이다.
           if (!orch.deps.enabled()) return
+          // **계정이 없어 띄울 수 없는 Task 에 Gate 를 연다.** slotsToFill 이 그것들을 건너뛰므로
+          // 아래 루프는 보지 못하고, 그냥 두면 Run 이 이유 없이 서 있는다 — 이 하위 시스템이
+          // 없애려는 증상 그대로다(gateSlot 의 주석). Gate 는 Task 를 blocked 로 보내므로 판정이
+          // 다음 바퀴에 같은 Task 를 다시 내지 않는다(tasksMissingAccounts 의 주석).
+          for (const m of tasksMissingAccounts(orch.deps.getState())) {
+            if (attempted.has(m.taskId)) continue
+            attempted.add(m.taskId)
+            await gateSlot(orch.deps, m.taskId, t(core.lang, 'jobs.gate.noAccountAssigned'))
+          }
           const slots = slotsToFill(orch.deps.getState()).filter((s) => !attempted.has(s.taskId))
           // 띄울 자리가 없으면 계정 조회까지 가지 않는다. 이 함수는 **모든 저장마다** 불리고 그
           // 대부분은 띄울 것이 없는 저장이다 — 아래 조회에 계정마다 파일(macOS 에서는 Keychain)
@@ -1570,9 +1579,24 @@ export function registerIpc(
               // 계정. 판정은 core 에 있다(accountToDispatchOn) — 이 파일에는 테스트가 닿지 않는다.
               // **갈아탈 순서(체인)는 여기서 넘기지 않는다** — worker-start 를 거쳐 가므로 그 체인은
               // deps.startWorker 래퍼가 다시 계산한다(그래야 CLI 로 띄운 워커도 같은 체인을 받는다).
+              // **provider 는 이 Task 의 첫 계정이 정한다.** Slot 에는 그 칸이 없다 — 계정 id 를
+              // provider 로 옮기려면 계정 목록을 봐야 하고 그것은 core 가 볼 수 없는 것이라
+              // (schedule.ts 의 Slot 주석), 그 한 걸음이 여기 있다. 첫 id 가 목록에 없으면 판정에
+              // 넘길 provider 자체가 없으므로 곧바로 Gate 다 — accountToDispatchOn 이 같은 id 를
+              // 'assigned-unusable' 로 답할 자리이고, 사람이 할 일도 같다(지정을 고친다).
+              const firstAccount = accounts.find((x) => x.id === slot.accountIds[0])
+              if (!firstAccount) {
+                await gateSlot(
+                  orch.deps,
+                  slot.taskId,
+                  t(core.lang, 'jobs.gate.assignedAccountUnusable')
+                )
+                continue
+              }
+              const slotProvider = providerOf(firstAccount)
               const picked = accountToDispatchOn({
-                ...(slot.accountIds !== undefined ? { assigned: slot.accountIds } : {}),
-                provider: slot.provider,
+                assigned: slot.accountIds,
+                provider: slotProvider,
                 accounts,
                 loggedInIds: loggedIn
               })
@@ -1588,7 +1612,7 @@ export function registerIpc(
                   slot.taskId,
                   picked.reason === 'assigned-unusable'
                     ? t(core.lang, 'jobs.gate.assignedAccountUnusable')
-                    : t(core.lang, 'jobs.gate.noAccount', { provider: slot.provider })
+                    : t(core.lang, 'jobs.gate.noAccount', { provider: slotProvider })
                 )
                 continue
               }
@@ -1825,7 +1849,7 @@ export function registerIpc(
                 orch.deps,
                 { sessionId: UI_CALLER },
                 'worker-start',
-                { task: slot.taskId, agent: slot.provider, account: accountId, ...placement }
+                { task: slot.taskId, agent: slotProvider, account: accountId, ...placement }
               )
               if (reply.status >= 400)
                 await gateSlot(
@@ -1993,9 +2017,15 @@ export function registerIpc(
         let rollAccountIds = [a.accountId]
         const stateHere = store.get()
         const task = stateHere.tasks.find((t) => t.id === a.taskId)
-        // Task 의 provider — Run 이 정한다(Run.provider). 없는 Run 도 있다: 코디네이터가 만든 Run 은
-        // provider 를 안 들고, 자동 배치는 그런 Run 을 아예 건너뛴다(schedule.ts).
-        const taskProvider = stateHere.runs.find((r) => r.id === task?.runId)?.provider
+        // Task 의 provider — **그 Task 의 첫 계정이 정한다**(Task.accountIds). 계정 목록 조회는
+        // 메모리에서 끝나므로(비싼 것은 아래 loginStatus 다) 이 한 걸음에 비용이 없다. 첫 id 가
+        // 목록에 없으면 undefined — 아래 조건이 그 경우를 "어긋났다고 말할 수 없다"로 다룬다.
+        const taskProvider = task?.accountIds?.length
+          ? (() => {
+              const first = core.accounts.list().find((x) => x.id === task.accountIds![0])
+              return first ? providerOf(first) : undefined
+            })()
+          : undefined
         // **두 경우에 로그인 조회를 하지 않는다.**
         // (1) 지정이 없을 때 — 답은 요청된 계정 하나로 확정이고(rollChainFor), 그 조회는 계정마다 파일
         //     읽기(macOS 의 claude 계정은 `security` 프로세스)를 붙인다. 워커를 띄우는 모든 자리가 이
@@ -2005,8 +2035,8 @@ export function registerIpc(
         //     검토자는 구현자와 다른 provider 이므로 Task 의 계정은 rollChainFor 안에서 전부 걸러지고,
         //     남는 것은 조회 비용과 "쓸 수 있는 계정이 하나도 없다"는 어긋난 로그뿐이다 — 사실은 그
         //     계정들이 다른 provider 의 것일 뿐이고 사람이 할 일은 없다. 검토 경로는 이 앞에서 이미
-        //     같은 조회를 한 번 했다(startReview). Run 이 provider 를 안 들고 있으면 어긋났다고 말할
-        //     수 없으므로 건너뛰지 않는다.
+        //     같은 조회를 한 번 했다(startReview). 첫 계정 id 가 목록에 없어 provider 를 알 수
+        //     없으면 어긋났다고 말할 수 없으므로 건너뛰지 않는다.
         if (task?.accountIds?.length && (taskProvider === undefined || taskProvider === a.provider)) {
           try {
             const accountList = core.accounts.list()
