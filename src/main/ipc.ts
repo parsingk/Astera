@@ -123,6 +123,16 @@ export interface OrchWiring {
    *  synchronous: asynchronous cleanup may not finish before the process ends, and deleting the token
    *  file has to happen (OS permissions on the token file are the access control). */
   onStarted: (h: OrchHandle) => void
+  /** fix wave 최종, F1: hands over the tab-briefing function (`tabResumeTextFor` below) once,
+   *  unconditionally — called synchronously from inside `registerIpc`, not from `bootOrch`. That is the
+   *  whole point of a separate callback: `onStarted`/`OrchHandle` exist only once orchestration has
+   *  actually booted (the toggle is on), but a plain tab session's briefing has nothing to do with that
+   *  toggle — it reads a transcript and git, not `OrchState`. Before this, index.ts's two rolling
+   *  coordinators reached the tab fallback only through `orchRef?.resumeText`, so on a default install
+   *  (orchestration off) `orchRef` was always null and Smart Resume was inert regardless of its own
+   *  setting. index.ts stores the function this hands over separately from `orchRef` and calls it
+   *  directly when `orchRef` is null. */
+  onTabResumeReady: (fn: (sessionId: string, form: 'handover' | 'update') => Promise<string | null>) => void
 }
 
 /** 앱 자신이 명령을 부를 때의 호출자 id. **어떤 세션 id 와도 겹칠 수 없는 모양**이어야 한다 —
@@ -603,6 +613,10 @@ export function registerIpc(
       dir: tabResumeDir
     })
   }
+  // fix wave 최종, F1: handed over here, unconditionally — not inside bootOrch below, which only runs
+  // when orchestration is enabled. index.ts keeps this apart from `orchRef` (set by `onStarted`, further
+  // down) so the two rolling coordinators can reach a tab session's briefing even with the toggle off.
+  orchWiring?.onTabResumeReady(tabResumeTextFor)
 
   let orchStarting = false
   /** Starts orchestration. Called only when the toggle is on — with it off, the store is not even read

@@ -54,6 +54,22 @@ let codexRolloutRef: CodexRolloutWatcher | null = null
 let slackInboxControllerRef: SlackInboxController | null = null // Slack inbound socket rebuilder — cut on quit
 let rollingRef: RollingCoordinator | null = null // lets the hook callback reach a coordinator created later
 let orchRef: OrchHandle | null = null // orchestration shutdown cleanup + the rolling seam
+// fix wave 최종, F1: the tab-briefing function, handed over unconditionally (OrchWiring.onTabResumeReady)
+// — unlike orchRef above, this is set the moment registerIpc runs, whether or not orchestration ever
+// boots. Read by the two rolling coordinators' resumeText dep when orchRef is null (orchestration off),
+// so a plain tab session's Smart Resume briefing does not depend on the unrelated orchestration toggle.
+let tabResumeTextRef: ((sessionId: string, form: 'handover' | 'update') => Promise<string | null>) | null =
+  null
+
+/** The `resumeText` dep both rolling coordinators receive (RollingDeps/CodexRollingDeps). fix wave
+ *  최종, F1: tries the Job briefing through `orchRef` when orchestration is up; when it is not
+ *  (`orchRef === null`), a Job Dispatch cannot exist at all, so there is nothing to look up there —
+ *  this goes straight to `tabResumeTextRef` instead. */
+const resumeTextDep = (
+  sessionId: string,
+  form: 'handover' | 'update'
+): Promise<string | null> =>
+  orchRef?.resumeText(sessionId, form) ?? (tabResumeTextRef?.(sessionId, form) ?? Promise.resolve(null))
 let tray: Tray | null = null
 let quitting = false
 let mainWindow: BrowserWindow | null = null // focus target for the single-instance second-instance event
@@ -511,9 +527,9 @@ app.whenReady().then(async () => {
       void core!.rollConfig.set(sid, cfg).catch(() => {})
     },
     orchEnv: () => orchRef?.orchEnv(),
-    // Job 워커의 재개 packet(Task 4b/4c). 오케스트레이션이 꺼져 있으면(orchRef === null) 물어볼
-    // 곳이 없다 — 그때는 null 로, RollingCoordinator 가 기존 고정 문장으로 저하한다.
-    resumeText: (sessionId, form) => orchRef?.resumeText(sessionId, form) ?? Promise.resolve(null),
+    // Job 워커의 재개 packet(Task 4b/4c), 없으면(오케스트레이션이 꺼져 있거나 탭 세션이면) 탭
+    // 브리핑으로 저하한다 — resumeTextDep 의 JSDoc(fix wave 최종, F1).
+    resumeText: resumeTextDep,
     // 한도에 걸린 세션을 어떻게 이어갈지(Task 1 의 설정) — orchEnv 와 같은 이유로 getter 다: 값이
     // 설정 화면에서 앱 수명 중간에 바뀌고, 이 코디네이터는 그보다 먼저 만들어진다. codexRolling 의
     // 같은 배선과 같은 자리, 같은 값이다.
@@ -615,8 +631,8 @@ app.whenReady().then(async () => {
       void core!.rollConfig.set(sid, cfg).catch(() => {}) // fire-and-forget
     },
     orchEnv: () => orchRef?.orchEnv(),
-    // Job 워커의 재개 packet(Task 4b/4c) — rolling.ts 의 같은 필드와 같은 이유다.
-    resumeText: (sessionId, form) => orchRef?.resumeText(sessionId, form) ?? Promise.resolve(null),
+    // Job 워커의 재개 packet(Task 4b/4c) — rolling.ts 의 같은 필드, 같은 resumeTextDep 이다.
+    resumeText: resumeTextDep,
     // 한도에 걸린 세션을 어떻게 이어갈지(Task 1 의 설정) — orchEnv 와 같은 이유로 getter 다: 값이
     // 설정 화면에서 앱 수명 중간에 바뀌고, 이 코디네이터는 그보다 먼저 만들어진다.
     resumeStrategy: () => core!.appSettings.getResumeStrategy()
@@ -651,6 +667,11 @@ app.whenReady().then(async () => {
       log: orchLog,
       onStarted: (h) => {
         orchRef = h
+      },
+      // fix wave 최종, F1: called unconditionally, regardless of whether orchestration ever starts —
+      // see OrchWiring.onTabResumeReady's JSDoc (ipc.ts) and resumeTextDep above.
+      onTabResumeReady: (fn) => {
+        tabResumeTextRef = fn
       }
     },
     () => refreshTrayMenu(win) // rebuild Open/Quit in the new language after settings.setLang
