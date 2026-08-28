@@ -540,20 +540,22 @@ export function registerIpc(
    *  같은 자리). codex 는 statusLine 이 없다(usesStatusLine=false) — 그 값을 아는 유일한 쪽은
    *  rollout 파일을 파일시스템 스캔으로 찾아 둔 codexRolling 코디네이터뿐이라, 그쪽의
    *  rolloutPathFor 를 대신 묻는다. 어느 쪽도 찾지 못하면(등록되지 않은 체인, 매핑 전) null 이고,
-   *  buildTabResumeText 는 git 만으로 시도한다. */
+   *  buildTabResumeText 는 git 만으로 시도한다.
+   *
+   *  **계정은 provider 를 가리는 데만 쓰고, 계정이 없어도 claude 경로는 막히지 않는다.**
+   *  providerOfSession(위) 을 그대로 재사용한다 — 세션이 사라졌을 때 이미 null 을 돌리도록 되어
+   *  있는 함수라 여기서 다시 만들 이유가 없다. 다만 그 null 을 "물을 수 없다"로 반환하지 않고
+   *  "claude 로 본다"로 받는다: claude 쪽 조회(statusLine 페이로드)는 애초에 계정을 보지 않으므로
+   *  계정이 지워졌다고 그 경로를 막을 이유가 없다 — 계정이 탭 세션 도중 Settings 에서 지워지면
+   *  이 함수가 (계정을 아예 조회하지 않던 예전처럼) 여전히 브리핑을 만들어야 한다는 뜻이다. */
   const tabResumeTextFor = async (
     sessionId: string,
     form: 'handover' | 'update'
   ): Promise<string | null> => {
-    const info = core.sessions.list().find((s) => s.id === sessionId)
+    const sessions = core.sessions.list()
+    const info = sessions.find((s) => s.id === sessionId)
     if (!info) return null
-    let account: Account
-    try {
-      account = core.accounts.get(info.accountId)
-    } catch {
-      return null // the account is gone — no provider to pick a reader with
-    }
-    const provider = providerOf(account)
+    const provider = providerOfSession(sessionId, sessions, (id) => core.accounts.get(id)) ?? 'claude'
     const transcriptPath =
       provider === 'codex'
         ? (codexRolling?.rolloutPathFor(sessionId) ?? null)

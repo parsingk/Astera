@@ -724,7 +724,12 @@ export class CodexRollingCoordinator {
    *  **`briefed` 를 함께 돌려주는 이유.** `text` 가 `null`/`undefined` 면 이 함수는 `chain.prompt` 로
    *  저하하므로, 돌려주는 문자열 하나만으로는 호출한 쪽이 "브리핑이 있었는가"를 알 수 없다 — 실패해서
    *  고정 문장이 된 것과 원래 고정 문장을 쓰려 한 것이 같은 모양이 되어 버린다. `roll()` 은 바로 그
-   *  사실로 백지 재개 여부를 가른다(계획의 지배 제약: 브리핑을 못 만들면 백지 재개를 하지 않는다). */
+   *  사실로 백지 재개 여부를 가른다(계획의 지배 제약: 브리핑을 못 만들면 백지 재개를 하지 않는다).
+   *
+   *  **빈 문자열도 같은 저하를 탄다.** 오늘 어떤 producer 도 `''`를 돌리지 않지만, 돌린다면 백지
+   *  재개가 빈 프롬프트로 새 프로세스를 띄우는 꼴이 된다 — 그것은 저하보다 더 나쁘다(빈 화면으로
+   *  시작하는 것과 기존 고정 문장으로 시작하는 것 중 후자가 항상 낫다). 그래서 `null`/`undefined`
+   *  와 같은 취급이다: `briefed: false`. */
   private async resumePromptFor(
     chain: Chain,
     liveId: string,
@@ -732,7 +737,7 @@ export class CodexRollingCoordinator {
   ): Promise<{ prompt: string; briefed: boolean }> {
     try {
       const text = await this.deps.resumeText?.(liveId, form)
-      if (text === null || text === undefined) return { prompt: chain.prompt, briefed: false }
+      if (text === null || text === undefined || text === '') return { prompt: chain.prompt, briefed: false }
       return { prompt: form === 'update' ? `${chain.prompt} ${text}` : text, briefed: true }
     } catch (err) {
       this.deps.log(

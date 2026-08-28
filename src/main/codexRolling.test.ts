@@ -420,6 +420,27 @@ describe('CodexRollingCoordinator', () => {
       h.coord.stop()
     })
 
+    // fix wave 3, finding 3 (LOW): '' is not null/undefined, so briefed used to read true for it — a
+    // blank-slate roll with an empty prompt, worse than falling back. No producer returns '' today, but
+    // the guard in resumePromptFor should still treat it the same as no briefing at all.
+    it('브리핑이 빈 문자열이면 브리핑이 없던 것처럼 기존 경로로 롤한다', async () => {
+      const h = harness({
+        resumeStrategy: () => 'smart',
+        resumeText: () => Promise.resolve('')
+      })
+      const file = await writeRollout({ accountId: 'c1', uuid: 'cx-smart-empty', cwd: h.info1.cwd, primary: 95 })
+      h.coord.register(h.info1)
+      await advance(1_500)
+      await appendLimitError(file)
+      h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+      await advance(100)
+      expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:c2'])
+      expect(h.copied[0]?.src).toBe(file)
+      expect(h.spawned.at(-1)?.resumeSessionId).toBe('cx-smart-empty')
+      expect(h.spawned.at(-1)?.initialPrompt).toBeUndefined()
+      h.coord.stop()
+    })
+
     it('전략이 original 이면 브리핑이 있어도 기존 경로로 롤한다', async () => {
       const h = harness({
         resumeStrategy: () => 'original',
