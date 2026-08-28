@@ -9,7 +9,7 @@ import { confirmModal } from '../lib/confirm'
 import { useI18n } from '../i18n/I18nProvider'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import * as hiddenProjects from '../lib/hiddenProjects'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 
 const PAGE = 50
 const SEEN_KEY = 'cm.historySeen'
@@ -433,7 +433,7 @@ export function HistoryBrowser({
             }}
           />
           <button title={t('history.refresh.tooltip')} onClick={() => void window.api.history.refresh()}>
-            ⟳
+            <RefreshCw size={14} />
           </button>
         </div>
       </header>

@@ -7,7 +7,7 @@ import { dirtyCount, isOrphanUnverifiable, worktreeErrorMessage } from '../lib/w
 import { subscribeCreated } from '../lib/worktreeBus'
 import { useI18n } from '../i18n/I18nProvider'
 import { PlayIcon, TrashIcon } from './JobIcons'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 
 /** 상태 라벨. **'폴더 없음' 은 없다** — 폴더가 사라진 항목은 listWithStatus 가 목록을 만들면서
  *  레지스트리에서 걷으므로 이 자리에 도달하지 않는다. 그 줄은 눌러도 할 일이 없는 정보였고,
@@ -146,7 +146,7 @@ export function WorktreePanel({
         </button>
         <div className="panel-actions">
           <button className="icon-btn" title={t('worktree.refresh')} aria-label={t('worktree.refresh')} disabled={busy} onClick={() => void refresh()}>
-            ⟳
+            <RefreshCw size={14} />
           </button>
         </div>
       </header>
