@@ -98,8 +98,8 @@ describe('unattendedQuestions', () => {
     expect(unattendedQuestions(s)).toEqual([])
   })
 
-  it('코디네이터가 없으면 앱이 돌리는 Run 이 아니어도 본다 — 되띄우기가 그친 Run 이 그 갈래다', () => {
-    const s = state({ runs: [run({ autoDispatch: undefined, coordinatorFailures: 3 })] })
+  it('코디네이터가 없으면 앱이 돌리는 Run 이 아니어도 본다 — 사람이 탭을 닫은 Run 이 그 갈래다', () => {
+    const s = state({ runs: [run({ autoDispatch: undefined, coordinatorAccountId: 'acc1' })] })
     expect(unattendedQuestions(s)).toEqual(['msg_1'])
   })
 

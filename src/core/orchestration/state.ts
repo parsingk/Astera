@@ -1203,34 +1203,24 @@ export function deleteRuns(s: OrchState, runIds: ReadonlySet<string>): OrchState
   }
 }
 
-/** 이 Run 을 관리하는 코디네이터 세션을 붙인다. **실패 횟수를 0 으로 돌린다** — 붙었다는 것이
- *  곧 "직전의 사라짐이 연속이 아니게 됐다" 는 뜻이고, 그 판단을 되띄우기 쪽에 남기면 두 곳이
- *  같은 값을 다르게 센다. */
+/** 이 Run 을 관리하는 코디네이터 세션을 붙인다. */
 export function attachCoordinator(
   s: OrchState,
   a: { runId: string; sessionId: string }
 ): Res<Run> {
   const run = s.runs.find((r) => r.id === a.runId)
   if (!run) return err(`unknown run: ${a.runId}`)
-  // 실패 횟수는 0 이 아니라 **지운다** — startRun 이 pendingStart 를 지우는 것과 같은 관례다
-  // (해당 없는 칸을 두지 않는다). 0 을 실으면 JSON 비교에서 "없음" 과 다른 값이 된다.
   const next: Run = { ...run, coordinatorSessionId: a.sessionId }
-  delete next.coordinatorFailures
   return ok({ ...s, runs: replace(s.runs, next) }, next)
 }
 
-/** 코디네이터 세션을 뗀다.
- *
- *  `failed` 는 "사라졌다" 이고 "정상 종료" 와 가르지 않는다 — 코디네이터가 스스로 끝낼 자리가
- *  없기 때문이다(Run 이 끝나면 사람이 지운다). 그래서 세션이 없어지는 것은 언제나 사고이고,
- *  되띄우기가 그것을 받는다. `failed: false` 는 사람이 Run 을 멈춘 경우다 — 그때는 되띄우지
- *  않으므로 횟수를 올리지 않는다. */
-export function detachCoordinator(s: OrchState, a: { runId: string; failed: boolean }): Res<Run> {
+/** 코디네이터 세션을 뗀다. **왜 사라졌는지 묻지 않는다** — 사람이 닫았는지 크래시인지 구별할
+ *  방법이 없고(`SessionManager.kill` 은 표시를 남기지 않는다), 어느 쪽이든 앱이 하는 일은 같다:
+ *  이 칸을 지우고 사람이 다시 띄울 버튼을 내보인다(Run.coordinatorSessionId 의 주석). */
+export function detachCoordinator(s: OrchState, a: { runId: string }): Res<Run> {
   const run = s.runs.find((r) => r.id === a.runId)
   if (!run) return err(`unknown run: ${a.runId}`)
   const next: Run = { ...run }
   delete next.coordinatorSessionId
-  if (a.failed) next.coordinatorFailures = (run.coordinatorFailures ?? 0) + 1
-  else delete next.coordinatorFailures
   return ok({ ...s, runs: replace(s.runs, next) }, next)
 }

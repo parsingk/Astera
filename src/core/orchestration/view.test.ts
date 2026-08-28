@@ -396,6 +396,29 @@ describe('snapshotFor', () => {
     expect(r.concurrency).toBeUndefined()
   })
 
+  // 관리자가 있어야 하는데 없다는 사실이 사이드바의 버튼 근거다 — 이 칸이 없으면 사람이
+  // 코디네이터를 되돌릴 자리가 사라진다
+  it('코디네이터 계정이 있는데 세션이 없으면 coordinatorMissing 이다', () => {
+    const s = withRuns([{ ...run('r1', absPath('p')), coordinatorAccountId: 'acc1' }])
+    const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs
+    expect(r.coordinatorMissing).toBe(true)
+  })
+
+  it('세션이 붙어 있으면 그 칸이 없다', () => {
+    const s = withRuns([
+      { ...run('r1', absPath('p')), coordinatorAccountId: 'acc1', coordinatorSessionId: 'sess1' }
+    ])
+    const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs
+    expect(r).not.toHaveProperty('coordinatorMissing')
+  })
+
+  // 계정 지정이 없는 Run(옛 Run·CLI Run)은 애초에 관리자를 기대하지 않는다
+  it('코디네이터 계정이 없으면 그 칸이 없다', () => {
+    const s = withRuns([run('r1', absPath('p'))])
+    const [r] = snapshotFor(s, absPath('p'), anySession, noWorktrees, noFires, allExist).runs
+    expect(r).not.toHaveProperty('coordinatorMissing')
+  })
+
   // Run 에서 provider 를 지운 변경이 이 뷰에도 닿았는지 — 칸이 남아 있으면 사이드바가 한 Run 을
   // 하나의 에이전트로 그리는 옛 화면으로 조용히 돌아간다
   it('JobRun 에 provider 칸이 없다', () => {

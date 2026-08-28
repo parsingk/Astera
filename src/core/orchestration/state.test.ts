@@ -2289,37 +2289,34 @@ describe('코디네이터 세션 붙이기·떼기', () => {
     expect(r.state.runs[0].coordinatorSessionId).toBe('sess1')
   })
 
-  it('사라지면 세션 id 가 지워지고 실패가 쌓인다', () => {
+  it('사라지면 세션 id 가 지워진다', () => {
     const { s, runId } = withRun()
     let st = unwrap<{ id: string }>(attachCoordinator(s, { runId, sessionId: 'sess1' }) as never).state
-    st = unwrap<{ id: string }>(detachCoordinator(st, { runId, failed: true }) as never).state
+    st = unwrap<{ id: string }>(detachCoordinator(st, { runId }) as never).state
     expect(st.runs[0]).not.toHaveProperty('coordinatorSessionId')
-    expect(st.runs[0].coordinatorFailures).toBe(1)
-    st = unwrap<{ id: string }>(detachCoordinator(st, { runId, failed: true }) as never).state
-    expect(st.runs[0].coordinatorFailures).toBe(2)
   })
 
-  // 붙었다는 것이 곧 "직전의 사라짐이 연속이 아니게 됐다" 다. 그 판단을 되띄우기 쪽에 남기면
-  // 두 곳이 같은 값을 다르게 센다
-  it('다시 붙으면 실패 횟수가 사라진다', () => {
+  // **왜 사라졌는지 묻지 않는다.** 사람이 닫았는지 크래시인지 구별할 방법이 없고(kill 은 표시를
+  // 남기지 않는다), 어느 쪽이든 앱이 하는 일은 같다 — 칸을 비우고 사람이 다시 띄울 버튼을 낸다.
+  it('떼는 것은 두 번 불러도 같다 — 셀 것이 없다', () => {
     const { s, runId } = withRun()
-    let st = unwrap<{ id: string }>(detachCoordinator(s, { runId, failed: true }) as never).state
-    expect(st.runs[0].coordinatorFailures).toBe(1)
+    let st = unwrap<{ id: string }>(detachCoordinator(s, { runId }) as never).state
+    st = unwrap<{ id: string }>(detachCoordinator(st, { runId }) as never).state
+    expect(st.runs[0]).not.toHaveProperty('coordinatorSessionId')
+    expect(st.runs[0]).not.toHaveProperty('coordinatorFailures')
+  })
+
+  it('다시 붙이면 그 세션이 실린다', () => {
+    const { s, runId } = withRun()
+    let st = unwrap<{ id: string }>(attachCoordinator(s, { runId, sessionId: 'sess1' }) as never).state
+    st = unwrap<{ id: string }>(detachCoordinator(st, { runId }) as never).state
     st = unwrap<{ id: string }>(attachCoordinator(st, { runId, sessionId: 'sess2' }) as never).state
-    expect(st.runs[0]).not.toHaveProperty('coordinatorFailures')
-  })
-
-  it('사람이 멈춘 경우(failed=false)는 횟수를 올리지 않고 지운다', () => {
-    const { s, runId } = withRun()
-    let st = unwrap<{ id: string }>(detachCoordinator(s, { runId, failed: true }) as never).state
-    st = unwrap<{ id: string }>(detachCoordinator(st, { runId, failed: false }) as never).state
-    expect(st.runs[0]).not.toHaveProperty('coordinatorFailures')
-    expect(st.runs[0]).not.toHaveProperty('coordinatorSessionId')
+    expect(st.runs[0].coordinatorSessionId).toBe('sess2')
   })
 
   it('모르는 Run 이면 거절한다', () => {
     expect(attachCoordinator(emptyState(), { runId: 'nope', sessionId: 's' }).ok).toBe(false)
-    expect(detachCoordinator(emptyState(), { runId: 'nope', failed: true }).ok).toBe(false)
+    expect(detachCoordinator(emptyState(), { runId: 'nope' }).ok).toBe(false)
   })
 
   // 회차는 자신이 도는 Run 이므로 관리자가 필요하고, 누구로 할지는 템플릿을 만든 사람이 정했다.
@@ -2340,7 +2337,7 @@ describe('코디네이터 세션 붙이기·떼기', () => {
     let st = unwrap<{ id: string }>(
       attachCoordinator(t.state, { runId: t.value.id, sessionId: 'sess-template' }) as never
     ).state
-    st = unwrap<{ id: string }>(detachCoordinator(st, { runId: t.value.id, failed: true }) as never).state
+    st = unwrap<{ id: string }>(detachCoordinator(st, { runId: t.value.id }) as never).state
     const child = unwrap<{ id: string }>(spawnScheduledRun(st, t.value.id, FIRE) as never)
     const saved = child.state.runs.find((r) => r.id === child.value.id)!
     expect(saved.coordinatorAccountId).toBe('acc1')

@@ -231,6 +231,11 @@ export function snapshotFor(
       // 의 주석과 같다). 워크트리 배치 규칙(동시 실행 한도가 1 이하일 때만 프로젝트 폴더)의
       // 판단은 이 값을 받은 렌더러가 한다. **provider 는 여기 없다** — Task 의 계정이 정하므로
       // 한 Run 에 하나의 값이 없다(JobRun 의 주석).
+      // 빈 값은 싣지 않는다 — 거짓을 실으면 sameSnapshot 의 문자열을 이유 없이 늘린다(아래
+      // worktrees·pendingStart 와 같은 관례)
+      ...(run.coordinatorAccountId !== undefined && run.coordinatorSessionId === undefined
+        ? { coordinatorMissing: true }
+        : {}),
       concurrency: run.concurrency,
       outcome: outcomeOf(state, run.id),
       done,

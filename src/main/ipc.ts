@@ -43,8 +43,8 @@ import {
   unattendedQuestions,
   unreadUpwardMail
 } from '../core/orchestration/inbox'
-import { buildHandoverPrompt, coordinatorLaunchPrompt } from '../core/orchestration/handover'
-import { attachCoordinator, detachCoordinator } from '../core/orchestration/state'
+import { coordinatorLaunchPrompt } from '../core/orchestration/handover'
+import { detachCoordinator } from '../core/orchestration/state'
 import { firesDue } from '../core/orchestration/fire'
 import { reapableChildRuns } from '../core/orchestration/reap'
 import {
@@ -56,7 +56,7 @@ import {
   workingInRunRoot,
   worktreeDepsOf
 } from '../core/orchestration/integrate'
-import { DEFAULT_CONCURRENCY, FAILURE_LIMIT } from '../core/orchestration/types'
+import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
 import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, runsForProject } from '../core/orchestration/view'
 import { timelineFor } from '../core/orchestration/timeline'
@@ -304,10 +304,10 @@ export function registerIpc(
   let orchRollTap: OrchRollTap | null = null
   /** 검증기. startOrchestration 이 만들 때까지, 그리고 오케스트레이션이 꺼져 있으면 null 이다 */
   let orchValidator: TaskValidator | null = null
-  /** 코디네이터를 잃은 Run 을 다시 세우는 함수. **bootOrch 안에서 대입한다** — 정의가 그 안에
+  /** 사라진 코디네이터의 자리를 비우는 함수. **bootOrch 안에서 대입한다** — 정의가 그 안에
    *  있어야 orch·deps 를 닫아 쓸 수 있고, 부르는 자리(core.sessions.onExit)는 그 밖이다.
    *  orch·orchValidator 와 같은 관례다. */
-  let reviveCoordinator: ((sessionId: string) => Promise<void>) | null = null
+  let releaseCoordinator: ((sessionId: string) => Promise<void>) | null = null
   /** 예약 템플릿의 다음 발화 시각. **상태에 저장하지 않는다** — 재시작하면 비어 있고, 그때
    *  firesDue 가 nextFireAt(rule, now) 으로 다시 무장한다. 그것이 곧 "앱이 꺼져 있던 동안의
    *  발화는 버린다"는 규칙의 구현이다(main/scheduler.ts 가 같은 이유로 같은 선택을 했다). */
@@ -418,7 +418,7 @@ export function registerIpc(
     codexRolling?.handleExit(e)
     codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
-    void reviveCoordinator?.(e.sessionId) // 이 세션이 어느 Run 의 관리자였다면 다시 띄운다
+    void releaseCoordinator?.(e.sessionId) // 이 세션이 어느 Run 의 관리자였다면 그 칸을 비운다
     // Task 7's tab-resume briefing file is no longer deleted here — see tabResumeDir's own comment
     // above (fix wave 7, finding 1 (CRITICAL)) for why a per-exit delete keyed to this id was wrong:
     // it fired for the *old* session a smart resume had just written the briefing under, while the
@@ -2336,61 +2336,24 @@ export function registerIpc(
     void runScheduler().catch((e) => orchLog(`scheduler failed at startup: ${String(e)}`))
     // 예약 템플릿의 발화. **첫 바퀴는 무장만 한다**(firesDue) — 앱을 켤 때마다 한 회차가 도는
     // 것을 막는 장치가 그것이고, 그래서 여기서 즉시 한 번 부르지 않는다.
-    /** 코디네이터를 잃은 Run 을 다시 세운다.
+    /** 코디네이터 세션이 사라졌을 때 그 Run 의 관리자 칸을 비운다. **다시 띄우지는 않는다.**
      *
-     *  **정상 종료와 사고를 가르지 않는다.** 코디네이터가 스스로 끝낼 자리가 없기 때문이다 — Run 이
-     *  끝나면 사람이 지운다. 그래서 세션이 없어지는 것은 언제나 사고이고(사용자가 탭을 닫았거나,
-     *  크래시거나, 에이전트가 종료했거나), 다시 띄우는 것이 맞다.
+     *  사람이 탭을 닫은 것인지 크래시인지 구별할 방법이 없고(`SessionManager.kill` 은 표시를 남기지
+     *  않는다), 닫은 쪽이라면 곧바로 다시 여는 것은 그 결정을 무시하는 일이다. 대신 사이드바의
+     *  Run 줄에 다시 띄우는 버튼이 나온다(JobRun.coordinatorMissing) — 언제 되돌릴지는 사람이
+     *  정한다. 그동안 워커의 질문은 앱의 그물이 풀어 준다(inbox.ts).
      *
-     *  **한도는 이유가 아니다.** 코디네이터도 롤링 체인을 갖고 있어(startCoordinator 가
-     *  rollAccountIds 를 넘긴다) 한도에 걸리면 갈아탄다. 그 경로는 세션을 죽이더라도 롤링이 새
-     *  세션으로 이어 가고, 그때 이 함수가 보는 것은 옛 세션 id 다 — Run 의 coordinatorSessionId 와
-     *  더는 같지 않으므로 아래 조회에서 걸리지 않는다.
-     *
-     *  **앱 재시작은 이 경로가 아니다.** 그때는 세션이 모두 프로세스와 함께 사라지고 exit 이 오지
-     *  않는다. 사람이 실행을 다시 누른다 — 자동 복구를 하지 않기로 한 결정이다(SPEC §12.2). 다음
-     *  사람이 여기서 그 복구를 찾지 않도록 적어 둔다. */
-    reviveCoordinator = async (sessionId: string): Promise<void> => {
+     *  **앱 재시작은 이 경로가 아니다.** 그때는 세션이 프로세스와 함께 사라지고 exit 이 오지 않는다.
+     *  같은 버튼이 그 경우도 받는다 — 자동 복구를 하지 않기로 한 결정과 같은 방향이다(SPEC §12.2). */
+    releaseCoordinator = async (sessionId: string): Promise<void> => {
       if (!orch || !orch.deps.enabled()) return
       const st = orch.deps.getState()
       const run = st.runs.find((r) => r.coordinatorSessionId === sessionId)
       if (!run) return
-      const detached = detachCoordinator(st, { runId: run.id, failed: true })
+      const detached = detachCoordinator(st, { runId: run.id })
       if (!detached.ok) return
       await orch.deps.setState(detached.state)
-      const failures = detached.value.coordinatorFailures ?? 0
-      const accountId = run.coordinatorAccountId
-      // **그친다.** 무한히 되띄우면 로그인이 끊긴 계정으로 세션을 끝없이 만든다. 한계값은 Task 의
-      // 회로 차단과 같은 것을 쓴다 — 같은 종류의 판단이고, 두 숫자를 따로 두면 한쪽만 조정된다.
-      if (failures >= FAILURE_LIMIT || !accountId) {
-        orchLog(
-          `coordinator not revived run=${run.id} failures=${failures} — ` +
-            (accountId ? 'giving up' : 'no coordinator account')
-        )
-        return
-      }
-      try {
-        const spawned = await orch.deps.startCoordinator!({
-          runId: run.id,
-          cwd: run.cwd,
-          accountId,
-          brief: buildHandoverPrompt({
-            runId: run.id,
-            objective: run.objective,
-            concurrency: run.concurrency ?? DEFAULT_CONCURRENCY,
-            taskCount: st.tasks.filter((t) => t.runId === run.id).length
-          })
-        })
-        const attached = attachCoordinator(orch.deps.getState(), {
-          runId: run.id,
-          sessionId: spawned.sessionId
-        })
-        if (attached.ok) await orch.deps.setState(attached.state)
-        orchLog(`coordinator revived run=${run.id} session=${spawned.sessionId} after=${failures}`)
-      } catch (err) {
-        // 다음 사고에 다시 시도한다 — 실패 횟수는 이미 올라가 있으므로 그침이 결국 작동한다.
-        orchLog(`coordinator revive failed run=${run.id} — ${String(err)}`)
-      }
+      orchLog(`coordinator gone run=${run.id} session=${sessionId} — restart it from the Jobs list`)
     }
 
     /** 잠든 코디네이터를 깨운다. **판정은 core 에 있다**(unreadUpwardMail) — 이 파일에는 테스트가
