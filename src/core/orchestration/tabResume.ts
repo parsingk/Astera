@@ -4,12 +4,13 @@
 //
 // 이 파일도 순수하다 — fs 를 만지지 않는다. 대화 파일을 읽어 여기 넣을 재료를 만드는 일은
 // main/orchestration/resumePacket.ts 의 buildTabResumeText 가 한다.
+import { sanitize } from './checkpoint'
 import type { GitSummary } from './checkpoint'
-import type { TranscriptMessage } from '../types'
+import type { LastCommand, TranscriptMessage } from '../types'
 
-/** formatTabResume 의 입력. 여섯 조각이 메모의 여섯 절에 대응한다 — 제목·최근 요청·코드 상태·손댄
- *  파일이 이 인터페이스의 필드고, 꼬리도 그렇다. 지시문(BEFORE EDITING 등)은 입력이 아니라 이
- *  파일이 붙이는 고정 문장이다 — 탭 세션마다 달라질 것이 없기 때문이다. */
+/** formatTabResume 의 입력. 일곱 조각이 메모의 일곱 절에 대응한다 — 제목·최근 요청·코드 상태·손댄
+ *  파일·마지막 명령이 이 인터페이스의 필드고, 꼬리도 그렇다. 지시문(BEFORE EDITING 등)은 입력이
+ *  아니라 이 파일이 붙이는 고정 문장이다 — 탭 세션마다 달라질 것이 없기 때문이다. */
 export interface TabResumeInput {
   /** 세션의 작업 폴더. git 이 없어도(저장소가 아니어도) 이것만은 항상 있다. */
   cwd: string
@@ -30,6 +31,9 @@ export interface TabResumeInput {
   /** 의미 있는 user/assistant 메시지의 꼬리(parseTranscriptForResume 이 뽑는다). tool 원본 출력은
    *  이미 걸러진 채로 들어온다. */
   tail: TranscriptMessage[]
+  /** 대화 중 마지막으로 완료된 Bash 호출(parseTranscriptForResume 이 뽑는다). codex 는 이 재료가
+   *  없어 항상 null 이다(parseCodexForResume 의 JSDoc) — 그때는 이 절 자체가 빠진다. */
+  lastCommand: LastCommand | null
 }
 
 /** 꼬리에 실을 최근 메시지 수 상한. §9.3(Packet 은 작아야 한다 — diff 본문·소스 내용을 담지 않는
@@ -63,6 +67,13 @@ const REQUESTS_MAX = 5
  *  상한을 두어도 절의 수만큼 곱해지므로 마지막 방어선을 하나 둔다. */
 const MEMO_CHARS_MAX = 6000
 
+/** LAST COMMAND 절의 결과 발췌 상한(문자). §9.3(diff 본문·소스 내용은 담지 않고 어디를 보라고만
+ *  말한다)의 근거를 그대로 따른다 — 이 발췌는 워커가 다듬어 쓴 report body(checkpoint.ts 의
+ *  REPORT_BODY_MAX)와 달리 가공되지 않은 Bash stdout/stderr 원문이라서, 실패한 테스트의 로그
+ *  전체를 그대로 담을 수 있다. 새 세션이 필요한 것은 "성공/실패의 증거" 한 조각이지 로그 전체가
+ *  아니다. */
+const LAST_COMMAND_EXCERPT_MAX = 300
+
 /** 목록을 상한까지만 싣고 **잘린 개수를 밝힌다.** 조용히 자르면 새 세션이 "이게 전부"로 읽는다. */
 function cappedList(items: string[], max: number): string {
   const shown = items.slice(0, max)
@@ -77,6 +88,11 @@ function truncateMessage(text: string): string {
   return t.length > MESSAGE_CHARS_MAX ? t.slice(0, MESSAGE_CHARS_MAX) + '…' : t
 }
 
+function truncateExcerpt(text: string): string {
+  const t = text.trim()
+  return t.length > LAST_COMMAND_EXCERPT_MAX ? t.slice(0, LAST_COMMAND_EXCERPT_MAX) + '…' : t
+}
+
 const HEADER = 'You are continuing an existing Astera session.\n\nDo not start over from scratch.'
 
 function titleSection(input: TabResumeInput): string | null {
@@ -88,7 +104,10 @@ function titleSection(input: TabResumeInput): string | null {
 // 세션에서 첫 메시지를 작업으로 넘기면 새 세션이 이미 끝났거나 버려진 작업을 다시 시작한다.
 function requestsSection(input: TabResumeInput): string | null {
   if (!input.requests.length) return null
-  const recent = input.requests.slice(-REQUESTS_MAX).map((r) => truncateMessage(r))
+  // sanitize 를 truncate 보다 먼저 적용한다 — 잘라낸 뒤에 훑으면 자격 증명이 잘려 나가 게이트를
+  // 통과하지 못하고 그대로 남을 수 있다(checkpoint.ts 의 looksLikeSecret 은 16자 이상의 끊기지
+  // 않은 런을 요구한다).
+  const recent = input.requests.slice(-REQUESTS_MAX).map((r) => truncateMessage(sanitize(r)))
   return (
     'RECENT REQUESTS (oldest first — evidence of what was asked, not a judgment about which one ' +
     `is the current task)\n${cappedList(recent, REQUESTS_MAX)}`
@@ -101,6 +120,13 @@ function stateSection(input: TabResumeInput): string {
     if (input.git.branch) lines.push(`Branch: ${input.git.branch}`)
     if (input.git.head) lines.push(`HEAD: ${input.git.head}`)
     if (input.git.diffstat) lines.push(`Diffstat: ${input.git.diffstat}`)
+  } else {
+    // git 이 없으면 이 절이 조용히 얇아지는 대신 **왜** 얇은지를 밝힌다 — 그렇지 않으면 새 세션은
+    // "코드 상태에 대해 확인된 것이 없다"를 "변경 사항이 없다"로 잘못 읽을 수 있다.
+    lines.push(
+      'No git evidence for this directory (not a repository, or git could not be read) — ' +
+        'inspect the files directly.'
+    )
   }
   return `CURRENT STATE\n${lines.map((l) => `- ${l}`).join('\n')}`
 }
@@ -113,8 +139,22 @@ function filesSection(input: TabResumeInput): string | null {
 function tailSection(input: TabResumeInput): string | null {
   if (!input.tail.length) return null
   const shown = input.tail.slice(-TAIL_MESSAGES_MAX)
-  const lines = shown.map((m) => `[${m.role}] ${truncateMessage(m.text)}`)
+  const lines = shown.map((m) => `[${m.role}] ${truncateMessage(sanitize(m.text))}`)
   return `CONVERSATION TAIL (most recent last)\n${lines.join('\n')}`
+}
+
+// 명령 자체는 가리지 않는다 — 담을 대상은 결과 발췌뿐이다(위 sanitize 재사용 JSDoc, checkpoint.ts).
+// 명령 문자열은 에이전트가 무엇을 실행하기로 **선택**한 값이지 자유 서술이 아니고, slack/transcript.ts
+// 의 REDACTED_KEYS 도 같은 이유로 Bash 의 command 는 가리지 않는다(그 파일의 주석 — 무엇을 실행하는지
+// 자체가 판단의 핵심이라 가리면 판단이 불가능해진다). 종료 코드는 트랜스크립트에 없으므로(있는 것은
+// tool_result.is_error 불리언뿐) "실패/성공"이라고만 적는다 — 없는 정밀도를 지어내지 않는다.
+function lastCommandSection(input: TabResumeInput): string | null {
+  const lc = input.lastCommand
+  if (!lc) return null
+  const lines = [lc.command, lc.failed ? 'Result: failed.' : 'Result: succeeded.']
+  const excerpt = truncateExcerpt(sanitize(lc.excerpt))
+  if (excerpt) lines.push(excerpt)
+  return `LAST COMMAND\n${lines.join('\n')}`
 }
 
 // Job 쪽 BEFORE_EDITING(resumeSection.ts)과 같은 목적이되, 보고 의무 줄은 없다 — 탭 세션에는
@@ -149,6 +189,7 @@ function formatHandover(input: TabResumeInput): string | null {
     titleSection(input),
     requestsSection(input),
     stateSection(input),
+    lastCommandSection(input),
     filesSection(input),
     tailSection(input),
     BEFORE_EDITING

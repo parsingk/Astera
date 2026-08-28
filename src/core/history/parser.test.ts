@@ -498,4 +498,102 @@ describe('parseTranscriptForResume', () => {
     expect(material.requests).toEqual(['진짜 요청'])
     expect(material.tail.map((m) => m.text)).toEqual(['진짜 요청'])
   })
+
+  // Task 6 (Phase 2c) — 실측(2026-08-28, 이 컴퓨터의 실제 대화 파일들): tool_use 이름 Bash 는
+  // input.command 를 담고, 짝이 되는 tool_result 는 tool_use_id·is_error·content 를 담는다. 같은
+  // 단일 패스에 얹는다(기존 주석이 적어 둔 대로 파일을 다시 훑지 않는다).
+  describe('lastCommand — 마지막 Bash 호출과 그 결과(LAST VALIDATION 재료)', () => {
+    const bashUse = (id: string, command: string) =>
+      line({
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] }
+      })
+    const bashResult = (id: string, content: string, isError: boolean) =>
+      line({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: id, content, is_error: isError }]
+        }
+      })
+
+    it('완료된 Bash 호출의 명령·실패 여부·결과를 뽑는다', async () => {
+      const file = await write('cmd-ok.jsonl', [bashUse('t1', 'npm test'), bashResult('t1', '2 tests failed', true)])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand).toEqual({ command: 'npm test', failed: true, excerpt: '2 tests failed' })
+    })
+
+    it('is_error 가 false 면 failed 도 false 다 — 종료 코드는 애초에 없다', async () => {
+      const file = await write('cmd-success.jsonl', [
+        bashUse('t1', 'npm run build'),
+        bashResult('t1', 'build succeeded', false)
+      ])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand?.failed).toBe(false)
+    })
+
+    it('여러 번 실행되면 시간순으로 가장 나중에 완료된 것만 남는다', async () => {
+      const file = await write('cmd-many.jsonl', [
+        bashUse('t1', 'npm test'),
+        bashResult('t1', 'first result', true),
+        bashUse('t2', 'npm run lint'),
+        bashResult('t2', 'lint clean', false)
+      ])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand).toEqual({ command: 'npm run lint', failed: false, excerpt: 'lint clean' })
+    })
+
+    it('마지막 Bash 호출이 아직 결과를 못 받았으면(세션이 그 도중 끊겼으면) 그 이전의 완료된 호출이 남는다', async () => {
+      const file = await write('cmd-pending.jsonl', [
+        bashUse('t1', 'npm test'),
+        bashResult('t1', 'passed', false),
+        bashUse('t2', 'npm run deploy') // 결과 없이 파일이 끝난다
+      ])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand).toEqual({ command: 'npm test', failed: false, excerpt: 'passed' })
+    })
+
+    it('Bash 호출이 한 번도 없으면 null 이다', async () => {
+      const file = await write('cmd-none.jsonl', [
+        line({ type: 'user', message: { role: 'user', content: '평범한 요청' } })
+      ])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand).toBeNull()
+    })
+
+    it('Bash 가 아닌 다른 도구(Read)는 lastCommand 에 들어가지 않는다', async () => {
+      const file = await write('cmd-other-tool.jsonl', [
+        line({
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: 'a.ts' } }]
+          }
+        }),
+        line({
+          type: 'user',
+          message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'r1', content: 'file contents' }] }
+        })
+      ])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand).toBeNull()
+    })
+
+    it('tool_result.content 가 배열(text 블록)이어도 방어적으로 읽는다', async () => {
+      const file = await write('cmd-array-content.jsonl', [
+        bashUse('t1', 'npm test'),
+        line({
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [
+              { type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: 'ok' }], is_error: false }
+            ]
+          }
+        })
+      ])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand).toEqual({ command: 'npm test', failed: false, excerpt: 'ok' })
+    })
+  })
 })

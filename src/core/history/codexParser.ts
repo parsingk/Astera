@@ -180,16 +180,25 @@ export async function parseCodexPreview(
 
 /** 탭 세션용 재개 브리핑의 재료 — parseTranscriptForResume(parser.ts)의 codex 대응.
  *
- *  **claude 와 같은 넷 중 둘만 채운다.** codex rollout 에는 claude 의 `ai-title`/`summary`(대화
+ *  **claude 와 같은 다섯 중 둘만 채운다.** codex rollout 에는 claude 의 `ai-title`/`summary`(대화
  *  제목 레코드)나 `file-history-snapshot`(손댄 파일 스냅숏)에 해당하는 레코드가 없다 — 있지도 않은
  *  것을 첫 사용자 메시지 등으로 대신 채우면 "어느 메시지가 작업인지 판정하지 않는다"는 계획의
  *  규칙을 이 provider 에서만 깨는 것이 된다. 그래서 `title` 은 항상 `null`, `editedFiles` 는 항상
  *  빈 배열이다 — 후자는 buildTabResumeText(main/orchestration/resumePacket.ts)가 이미 git 변경
- *  목록으로 내려가는 경로를 갖고 있어 손실이 없다. 나머지 둘(`requests`·`tail`)은 claude 와 같은
- *  재료(event_msg 의 user_message/agent_message)에서 뽑는다 — parseCodexPreview 와 같은 판정
- *  (isRealCodexUserText)을 쓴다. */
+ *  목록으로 내려가는 경로를 갖고 있어 손실이 없다. `lastCommand` 도 같은 이유로 항상 `null` 이다 —
+ *  codex 의 실행 기록(`function_call`/`function_call_output`, 도구 이름 `exec_command`)은 claude 의
+ *  `tool_use`(Bash)/`tool_result`(`is_error`) 와 필드 모양이 다르고 그쪽은 측정한 적이 없다. 있지도
+ *  않은 모양을 추측해 채우는 것은 이 필드가 지키려는 것("모르는 것을 지어내지 않는다")과 정반대다.
+ *  나머지 둘(`requests`·`tail`)은 claude 와 같은 재료(event_msg 의 user_message/agent_message)에서
+ *  뽑는다 — parseCodexPreview 와 같은 판정(isRealCodexUserText)을 쓴다. */
 export async function parseCodexForResume(filePath: string): Promise<TranscriptResumeMaterial> {
-  const result: TranscriptResumeMaterial = { title: null, requests: [], editedFiles: [], tail: [] }
+  const result: TranscriptResumeMaterial = {
+    title: null,
+    requests: [],
+    editedFiles: [],
+    tail: [],
+    lastCommand: null
+  }
   const stream = createReadStream(filePath, { encoding: 'utf8' })
   const rl = createInterface({ input: stream })
   try {

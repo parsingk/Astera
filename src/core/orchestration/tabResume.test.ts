@@ -18,7 +18,8 @@ const base: TabResumeInput = {
   tail: [
     { role: 'user', text: 'Preserve the public AuthService API.' },
     { role: 'assistant', text: "I'll keep the public interface unchanged." }
-  ]
+  ],
+  lastCommand: null
 }
 
 describe('formatTabResume — handover', () => {
@@ -172,5 +173,117 @@ describe('formatTabResume — 크기 상한', () => {
     expect(out).toContain('truncated to fit its size budget')
     // 앞쪽 절은 살아남는다 — 무엇을 이어받는지가 대화 꼬리보다 잃으면 안 되는 정보다
     expect(out.toLowerCase()).toContain('do not start over from scratch')
+  })
+})
+
+// Task 6 (Phase 2c) — 설계 문서가 요구하지만 구현이 아직 안 하던 세 가지. checkpoint.ts 의
+// sanitize JSDoc 이 적어 둔 실측 사고("Fixed the token: it was being dropped by the interceptor."가
+// "Fixed the token=[REDACTED] was being dropped by the interceptor."로 뭉개진 것)를 다시 만들지
+// 않는지가 핵심이라, 자격 증명이 아닌 평범한 산문을 반드시 함께 확인한다.
+describe('formatTabResume — 자격 증명 redaction (§17)', () => {
+  const secret = 'sk-ant-api03-FAKESECRETVALUE1234567890'
+
+  it('자격 증명처럼 보이는 값이 섞인 요청은 가려진다', () => {
+    const out = formatTabResume(
+      { ...base, requests: [`Left a note: token=${secret} in the config.`] },
+      'handover'
+    )!
+    expect(out).not.toContain(secret)
+    expect(out).toContain('[REDACTED]')
+  })
+
+  it('평범한 산문("the token was dropped")은 그대로 남는다 — 게이트 없는 규칙을 다시 만들지 않는다', () => {
+    const prose = 'Fixed the token: it was being dropped by the interceptor.'
+    const out = formatTabResume({ ...base, requests: [prose], tail: [{ role: 'user', text: prose }] }, 'handover')!
+    expect(out).toContain(prose)
+    expect(out).not.toContain('[REDACTED]')
+  })
+
+  it('대화 꼬리에 섞인 자격 증명도 가려진다', () => {
+    const out = formatTabResume(
+      { ...base, tail: [{ role: 'assistant', text: `Bearer ${secret} was the culprit.` }] },
+      'handover'
+    )!
+    expect(out).not.toContain(secret)
+  })
+
+  it('git 요약·파일 경로처럼 앱이 구조로 만든 값에는 적용하지 않는다', () => {
+    // branch 이름이 우연히 그 모양이어도(예: sk-1042-fix-login) 가리지 않는다 — 구조화된 값이다
+    const out = formatTabResume({ ...base, git: { ...git, branch: 'sk-1042-fix-login-token' } }, 'handover')!
+    expect(out).toContain('sk-1042-fix-login-token')
+  })
+})
+
+describe('formatTabResume — git 이 없다는 사실을 메모에 밝힌다 (§10)', () => {
+  it('git 이 null 이면 그 사실과 파일을 직접 확인하라는 말이 들어간다', () => {
+    const out = formatTabResume({ ...base, git: null }, 'handover')!
+    expect(out).not.toBeNull()
+    expect(out.toLowerCase()).toContain('no git evidence')
+    expect(out.toLowerCase()).toContain('inspect the files directly')
+  })
+
+  it('git 도 꼬리도 없으면 여전히 null 이다 — 계약은 그대로다', () => {
+    expect(
+      formatTabResume(
+        { ...base, git: null, tail: [], requests: [], editedFiles: [], title: null, lastCommand: null },
+        'handover'
+      )
+    ).toBeNull()
+  })
+})
+
+describe('formatTabResume — LAST COMMAND (§7 의 LAST VALIDATION)', () => {
+  const lastCommand = { command: 'npm test', failed: true, excerpt: '2 tests failed' }
+
+  it('마지막 명령과 그 결과 발췌가 메모에 들어간다', () => {
+    const out = formatTabResume({ ...base, lastCommand }, 'handover')!
+    expect(out).toContain('LAST COMMAND')
+    expect(out).toContain('npm test')
+    expect(out).toContain('2 tests failed')
+  })
+
+  it('실패했으면 failed 라고 적는다 — 종료 코드는 없으므로 지어내지 않는다', () => {
+    const out = formatTabResume({ ...base, lastCommand }, 'handover')!
+    expect(out).toContain('failed')
+    expect(out.toLowerCase()).not.toContain('exit code')
+  })
+
+  it('실패가 아니면 실패라고 적지 않는다', () => {
+    const out = formatTabResume(
+      { ...base, lastCommand: { command: 'npm test', failed: false, excerpt: 'all tests passed' } },
+      'handover'
+    )!
+    expect(out).toContain('succeeded')
+    expect(out.toLowerCase()).not.toContain('failed')
+  })
+
+  it('명령이 하나도 없으면 그 절이 빠진다', () => {
+    const out = formatTabResume({ ...base, lastCommand: null }, 'handover')!
+    expect(out).not.toContain('LAST COMMAND')
+  })
+
+  it('발췌가 상한을 넘지 않는다', () => {
+    const out = formatTabResume(
+      { ...base, lastCommand: { command: 'npm test', failed: true, excerpt: 'x'.repeat(1000) } },
+      'handover'
+    )!
+    const section = out.split('\n\n').find((s) => s.startsWith('LAST COMMAND'))!
+    expect(section.length).toBeLessThan(1000)
+  })
+
+  it('발췌에 섞인 자격 증명은 가려지고, 명령 자체는 가리지 않는다', () => {
+    const secret = 'sk-ant-api03-FAKESECRETVALUE1234567890'
+    const out = formatTabResume(
+      {
+        ...base,
+        lastCommand: { command: `curl -H "token=${secret}"`, failed: false, excerpt: `token=${secret} rejected` }
+      },
+      'handover'
+    )!
+    // 명령 문자열 자리는 가리지 않는다 — 무엇을 실행했는지는 판단의 핵심이다
+    expect(out).toContain(`curl -H "token=${secret}"`)
+    // 결과 발췌는 가려진다
+    expect(out).toContain('token=[REDACTED] rejected')
+    expect(out).not.toContain(`${secret} rejected`)
   })
 })

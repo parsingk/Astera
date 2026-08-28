@@ -16,7 +16,7 @@ import { buildCheckpoint } from '../../core/orchestration/checkpoint'
 import { formatResumeNote, formatResumeSection } from '../../core/orchestration/resumeSection'
 import { formatTabResume } from '../../core/orchestration/tabResume'
 import type { OrchState } from '../../core/orchestration/state'
-import type { Provider, TranscriptMessage } from '../../core/types'
+import type { LastCommand, Provider, TranscriptMessage } from '../../core/types'
 import { readGitSummary, type GitSummaryDeps } from '../gitSummary'
 import { LAUNCH_FORBIDDEN } from './coordinator'
 import { parseTranscriptForResume, type TranscriptResumeMaterial } from '../../core/history/parser'
@@ -326,6 +326,7 @@ export async function buildTabResumeText(
     let requests: string[] = []
     let editedFiles: string[] = []
     let tail: TranscriptMessage[] = []
+    let lastCommand: LastCommand | null = null
     if (form === 'handover' && deps.transcriptPath) {
       const read =
         deps.readTranscript ??
@@ -335,10 +336,14 @@ export async function buildTabResumeText(
       requests = material.requests
       editedFiles = material.editedFiles
       tail = material.tail
+      lastCommand = material.lastCommand
     }
     if (editedFiles.length === 0 && git) editedFiles = git.changed
 
-    const text = formatTabResume({ cwd: deps.cwd, title, requests, editedFiles, git, tail }, form)
+    const text = formatTabResume(
+      { cwd: deps.cwd, title, requests, editedFiles, git, tail, lastCommand },
+      form
+    )
     if (text === null) {
       // formatTabResume 이 null 을 돌리는 유일한 이유는 "확인한 것도 대화 흔적도 없다"다(그 함수의
       // 계약) — buildResumeNote 와 같은 이유로 여기서도 소리 없이 버리지 않는다.

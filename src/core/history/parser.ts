@@ -1,7 +1,7 @@
 import { createReadStream } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
-import type { TranscriptMessage } from '../types'
+import type { LastCommand, TranscriptMessage } from '../types'
 
 export interface TranscriptMeta {
   sessionId: string | null
@@ -238,6 +238,13 @@ export interface TranscriptResumeMaterial {
    *  parseTranscriptTail 과 같은 이유로 걸러진다 — §8.4 가 "tool raw output 대량 포함 금지"라고
    *  못박은 것이 바로 이 부류다. */
   tail: TranscriptMessage[]
+  /** 대화 중 마지막으로 **완료된**(tool_result 가 실제로 도착한) Bash 호출. 아직 결과가 안 온
+   *  채(세션이 그 도중에 끊긴 채) 대화가 끝나면 그 마지막 호출은 담기지 않는다 — 실패/성공 어느
+   *  쪽도 참이 아직 아니고, 모르는 것을 지어내지 않는다. 한 번도 완료된 Bash 호출이 없으면 null.
+   *  종료 코드는 기록되지 않는다(있는 것은 `tool_result.is_error` 불리언뿐) — `excerpt` 는 아직
+   *  자르거나 가리지 않은 원문이고, 상한과 redaction 은 포매터(tabResume.ts)의 몫이다(다른 필드와
+   *  같은 분업). */
+  lastCommand: LastCommand | null
 }
 
 /** 읽는 동안 메모리에 들고 있을 요청·꼬리 각각의 상한. **최종적으로 몇 개를 메모에 싣는지는
@@ -253,8 +260,36 @@ function toPortablePath(p: string): string {
   return p.replace(/\\/g, '/')
 }
 
+/** `tool_result.content` 의 텍스트. 실측(2026-08-28, 이 컴퓨터의 실제 대화 파일 다수, Bash
+ *  tool_result 12,816건)으로는 항상 문자열이었지만, extractText 가 message.content 에 대해 이미
+ *  대비하는 것과 같은 배열 모양(text 블록)도 받아 둔다 — 다른 도구의 tool_result 가 이 모양으로
+ *  오는 것은 이미 알려져 있고, 그 모양이 Bash 에도 언젠가 쓰이지 않을 이유가 없다. */
+function extractToolResultText(content: unknown): string | null {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    const block = content.find(
+      (c): c is { type: string; text: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: unknown }).type === 'text' &&
+        typeof (c as { text?: unknown }).text === 'string'
+    )
+    return block ? block.text : null
+  }
+  return null
+}
+
 export async function parseTranscriptForResume(filePath: string): Promise<TranscriptResumeMaterial> {
-  const result: TranscriptResumeMaterial = { title: null, requests: [], editedFiles: [], tail: [] }
+  const result: TranscriptResumeMaterial = {
+    title: null,
+    requests: [],
+    editedFiles: [],
+    tail: [],
+    lastCommand: null
+  }
+  // 아직 tool_result 를 못 받은, 가장 최근에 본 Bash tool_use — id 와 command 를 함께 들고 있다가
+  // 짝이 되는 tool_result(같은 id) 를 만나면 result.lastCommand 로 확정한다. 그 전에 또 다른 Bash
+  // tool_use 가 나오면 이 값을 덮어쓴다 — "마지막" 이 뜻하는 것은 시간순으로 가장 나중이라는
+  // 것이지, 먼저 시작된 호출을 기다려 주는 것이 아니다.
+  let pendingBash: { id: string; command: string } | null = null
   const stream = createReadStream(filePath, { encoding: 'utf8' })
   const rl = createInterface({ input: stream })
   try {
@@ -286,6 +321,35 @@ export async function parseTranscriptForResume(filePath: string): Promise<Transc
           result.editedFiles = Object.keys(tracked).map(toPortablePath)
         }
         continue
+      }
+
+      // Bash 호출과 그 결과 — extractText 가 text 블록만 찾는 것과 달리 여기서는 같은
+      // message.content 배열에서 tool_use/tool_result 블록을 본다. 이 검사는 아래 text 추출과
+      // 배타적이지 않다(같은 줄이 text 와 tool_use 를 함께 실을 수 있다) — 그래서 continue 하지
+      // 않고 통과시킨다.
+      const blocks = (obj.message as { content?: unknown } | undefined)?.content
+      if (Array.isArray(blocks)) {
+        for (const b of blocks) {
+          if (b === null || typeof b !== 'object') continue
+          const item = b as Record<string, unknown>
+          if (obj.type === 'assistant' && item.type === 'tool_use' && item.name === 'Bash') {
+            const input = item.input as { command?: unknown } | undefined
+            if (typeof item.id === 'string' && typeof input?.command === 'string') {
+              pendingBash = { id: item.id, command: input.command }
+            }
+          } else if (
+            obj.type === 'user' &&
+            item.type === 'tool_result' &&
+            pendingBash !== null &&
+            item.tool_use_id === pendingBash.id
+          ) {
+            result.lastCommand = {
+              command: pendingBash.command,
+              failed: item.is_error === true,
+              excerpt: extractToolResultText(item.content) ?? ''
+            }
+          }
+        }
       }
 
       if (obj.type !== 'user' && obj.type !== 'assistant') continue

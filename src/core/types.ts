@@ -139,6 +139,15 @@ export interface TranscriptMessage {
   timestamp?: string
 }
 
+/** The last Bash tool call in a transcript and its result — `tool_use`(name `Bash`)/`tool_result`
+ *  pair. There is no exit code in either provider's record, only `is_error`, so `failed` is a
+ *  boolean and nothing here claims a precision the transcript does not carry. */
+export interface LastCommand {
+  command: string
+  failed: boolean
+  excerpt: string
+}
+
 export interface TranscriptPreview {
   entryId: string
   messages: TranscriptMessage[]

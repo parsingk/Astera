@@ -125,6 +125,10 @@ describe('parseCodexForResume', () => {
     const material = await parseCodexForResume(p)
     expect(material.title).toBeNull() // codex 에는 ai-title/summary 에 해당하는 레코드가 없다
     expect(material.editedFiles).toEqual([]) // codex 에는 file-history-snapshot 에 해당하는 레코드가 없다
+    // Task 6 — codex 의 실행 기록(function_call/exec_command)은 claude 의 tool_use(Bash)/tool_result
+    // 와 모양이 다르고 측정한 적이 없다. 있지도 않은 모양을 추측해 채우지 않고 항상 비운다 — title·
+    // editedFiles 와 같은 "없으면 없는 대로" 계약이다.
+    expect(material.lastCommand).toBeNull()
     expect(material.requests).toEqual(['첫 요청', '두번째 요청'])
     expect(material.tail).toEqual([
       { role: 'user', text: '첫 요청', timestamp: '2026-07-09T04:32:04.447Z' },

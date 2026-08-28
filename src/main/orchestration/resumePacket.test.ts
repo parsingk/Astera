@@ -365,7 +365,8 @@ describe('buildTabResumeText', () => {
     title: 'fix-flaky-ci',
     requests: ['Fix the flaky CI test.'],
     editedFiles: ['src/a.ts'],
-    tail: [{ role: 'user', text: 'It fails only on Windows.' }]
+    tail: [{ role: 'user', text: 'It fails only on Windows.' }],
+    lastCommand: null
   }
 
   it('handover — 대화 파일을 한 번 읽어 제목·요청·손댄 파일·꼬리를 모두 싣는다', async () => {
@@ -386,6 +387,27 @@ describe('buildTabResumeText', () => {
     expect(text).toContain('It fails only on Windows.')
     expect(readTranscript).toHaveBeenCalledTimes(1)
     expect(readTranscript).toHaveBeenCalledWith('/fake/transcript.jsonl')
+  })
+
+  // Task 6 (Phase 2c) — material.lastCommand 가 포매터까지 이어진다는 것을 이 배선 지점에서 확인한다
+  // (내용 자체의 규칙은 tabResume.test.ts·parser.test.ts 가 이미 덮는다).
+  it('handover — material 의 lastCommand 가 브리핑까지 이어진다', async () => {
+    const readTranscript = vi.fn().mockResolvedValue({
+      ...material,
+      lastCommand: { command: 'npm test', failed: true, excerpt: '2 tests failed' }
+    })
+
+    const text = await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      provider: 'claude',
+      transcriptPath: '/fake/transcript.jsonl',
+      git: fakeGit(),
+      readTranscript
+    })
+
+    expect(text).toContain('LAST COMMAND')
+    expect(text).toContain('npm test')
+    expect(text).toContain('2 tests failed')
   })
 
   it("update — 대화 파일을 아예 읽지 않는다(git 상태만 쓰므로 읽을 값이 없다)", async () => {
