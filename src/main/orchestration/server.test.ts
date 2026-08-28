@@ -1225,7 +1225,9 @@ describe('handleCommand — worker-start × OrchCoordinator 통합 배선', () =
       setState: async (next) => {
         box.state = next
       },
-      startWorker: (a) => coordinator.startWorker(a),
+      // 실제 배선은 여기서 Task.accountIds 를 읽어 롤링 체인을 만든다(ipc.ts의 deps.startWorker) —
+      // 이 테스트 배선은 그 계정 하나짜리 체인으로 충분하다(서버는 체인을 보지 않는다).
+      startWorker: (a) => coordinator.startWorker({ ...a, rollAccountIds: [a.accountId] }),
       releaseWorker: async () => {},
       listAccounts: () => [{ id: 'acc1', label: '계정1', provider: 'codex' }],
       readWorker: async () => 'output',
@@ -1850,6 +1852,72 @@ describe('task-create --validate 와 run-configs', () => {
     const workerSession = deps.getState().dispatches[0].sessionId
     const r = await call(deps, 'run-configs', {}, workerSession)
     expect(r.status).toBe(200)
+  })
+})
+
+describe('task-create --account', () => {
+  // 기본 makeDeps 는 계정을 하나만 준다 — 목록 문법을 보려면 같은 provider 의 계정이 둘 있어야 한다
+  const accountDeps = () => ({
+    ...makeDeps(),
+    listAccounts: () => [
+      { id: 'acc1', label: '계정1', provider: 'codex' as const },
+      { id: 'acc2', label: '계정2', provider: 'codex' as const }
+    ]
+  })
+
+  it('--account 는 쉼표로 순서 있는 목록을 받는다', async () => {
+    const deps = accountDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const r = await call(deps, 'task-create', { runId, spec: 's', account: 'acc2,acc1' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().tasks.at(-1)?.accountIds).toEqual(['acc2', 'acc1'])
+  })
+
+  it('--account 하나는 원소 하나인 목록이다 (기존 호출)', async () => {
+    const deps = accountDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const r = await call(deps, 'task-create', { runId, spec: 's', account: 'acc1' })
+    expect(r.status).toBe(200)
+    expect(deps.getState().tasks.at(-1)?.accountIds).toEqual(['acc1'])
+  })
+
+  it('목록의 어느 한 칸이라도 모르는 계정이면 거절한다', async () => {
+    const deps = accountDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const r = await call(deps, 'task-create', { runId, spec: 's', account: 'acc1,nope' })
+    expect(r.status).toBe(400)
+    expect((r.body as { error: string }).error).toMatch(/nope/)
+  })
+
+  it('같은 계정을 두 번 적으면 거절한다', async () => {
+    const deps = accountDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const r = await call(deps, 'task-create', { runId, spec: 's', account: 'acc1,acc1' })
+    expect(r.status).toBe(400)
+    expect((r.body as { error: string }).error).toMatch(/acc1/)
+  })
+
+  it('쉼표만 있거나 빈 칸이 섞이면 거절한다', async () => {
+    const deps = accountDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    // 상태 코드만으로는 이 검사를 못 박지 못한다 — 빈 칸은 언제나 동시에 "모르는 계정"이거나
+    // (트림하면 빈 문자열은 목록에 없다) 중복(빈 문자열끼리는 서로 같다)이기도 해서, 이 검사를
+    // 지워도 다른 두 검사 중 하나가 대신 400 을 낸다. 메시지까지 맞춰야 이 검사 자체를 본다.
+    const commaOnly = await call(deps, 'task-create', { runId, spec: 's', account: ',' })
+    expect(commaOnly.status).toBe(400)
+    expect((commaOnly.body as { error: string }).error).toBe(
+      '--account must not contain an empty entry'
+    )
+    const mixedEmpty = await call(deps, 'task-create', { runId, spec: 's', account: 'acc1,,acc2' })
+    expect(mixedEmpty.status).toBe(400)
+    expect((mixedEmpty.body as { error: string }).error).toBe(
+      '--account must not contain an empty entry'
+    )
   })
 })
 

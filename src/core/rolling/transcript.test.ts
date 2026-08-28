@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 // 경로 매핑 테스트는 src/core/history/strategies/mapTargetPath.test.ts로 옮겼다.
-import { copyTranscript } from './transcript'
+import { copyTranscript, samePath } from './transcript'
 
 describe('copyTranscript', () => {
   let tmp: string
@@ -47,5 +47,29 @@ describe('copyTranscript', () => {
     // dest는 같은 파일을 대소문자만 바꿔 가리킴 — 가드가 정규화 비교로 no-op 처리해야
     await copyTranscript(f, f.toLowerCase())
     expect(await fs.readFile(f, 'utf8')).toBe('content\n')
+  })
+})
+
+// copyTranscript 의 self-copy 가드가 쓰는 술어지만, 배선(ipc)에서는 다른 사실을 묻는 데 쓴다 —
+// 복사 대상은 **대상 계정의** configDir 로 만들어지므로, 원본과 같으면 그 재개는 계정을 넘지 않았다는
+// 뜻이다. codex 재개가 파일의 한도 기록을 믿어도 되는지가 그 답에 걸려 있다(codexRolling.register).
+describe('samePath', () => {
+  it('같은 파일이면 true — 대소문자 차이는 무시한다 (Windows 우선)', () => {
+    const f = path.join('C:\\Users\\me\\.codex', 'sessions', '2026', '07', '09', 'r.jsonl')
+    expect(samePath(f, f)).toBe(true)
+    expect(samePath(f, f.toLowerCase())).toBe(true)
+  })
+
+  it('계정 폴더가 다르면 false — 이것이 계정을 넘은 재개다', () => {
+    const src = path.join('C:\\Users\\me\\.codex', 'sessions', '2026', '07', '09', 'r.jsonl')
+    const dest = path.join(
+      'C:\\Users\\me\\.codex-accounts\\sub',
+      'sessions',
+      '2026',
+      '07',
+      '09',
+      'r.jsonl'
+    )
+    expect(samePath(src, dest)).toBe(false)
   })
 })

@@ -276,7 +276,11 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
       return { ok: false, message: { key: 'account.error.raw', params: { detail } } }
     }
   }
-  // Live session usage — reads the statusLine capture file (context_window, rate_limits) and maps it. No credential access.
+  // Live session usage for a **claude** session — reads the statusLine capture file (context_window,
+  // rate_limits) and maps it. No credential access.
+  // Deliberately not provider-aware: codex has no statusLine, and its figures come from a rollout tail
+  // that lives in main (CodexRolloutWatcher), which this module does not hold. The usage.session
+  // handler in ipc.ts is the dispatcher that picks between the two.
   const usageSession = async (sessionId: string): Promise<SessionUsage | null> => {
     const payload = await statusLine.read(sessionId)
     return payload ? parseStatusLinePayload(payload) : null

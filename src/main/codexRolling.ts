@@ -3,10 +3,18 @@
 // it is far shorter because none of the statusLine-specific problems (a stale snapshot, readiness
 // polling, auto-accepting trust) apply. Every side effect is injected through deps — it does not depend
 // on electron, so it is verified with vitest. The wiring is in ipc.ts and index.ts.
-import type { Account, RollStateEvent, SessionInfo } from '../core/types'
+import type { Account, ResumeStrategy, RollStateEvent, SessionInfo } from '../core/types'
 import type { RollConfig } from '../core/rolling/config'
 import { RollCycle } from '../core/rolling/cycle'
-import { pickAvailable, planRetry, type BlockRecord, type RetryState } from '../core/rolling/retry'
+import {
+  laterBlock,
+  pickAvailable,
+  planRetry,
+  type BlockRecord,
+  type RetryState
+} from '../core/rolling/retry'
+import { BlockRegistry } from '../core/rolling/blockRegistry'
+import { sanitizeResumePrompt } from '../core/sessions/commands'
 import { copyTranscript } from '../core/rolling/transcript'
 import { codexHistoryStrategy } from '../core/history/strategies/codex'
 import { findRollout } from '../core/rolling/codexLocate'
@@ -16,6 +24,8 @@ import {
   CodexRolloutTail,
   limitReached,
   maxedOut,
+  priorBlockAt,
+  priorLimitVerdict,
   rolloutSize,
   worstResetAt,
   type CodexLimitState
@@ -31,9 +41,16 @@ const HEALTHY_MS = 60_000 // no limit detected for this long after a switch → 
 
 /** Which grounds the limit verdict fired on — a log label. `errorInfo` is the one that actually fires
  *  on codex 0.14x (usage_limit_exceeded); `reachedType` has never been observed non-null, so seeing it
- *  in the log would itself be news. Recording the two separately is what keeps the next person from
- *  reading a structured hit as a screen-text hit. */
-type LimitReason = 'reachedType' | 'errorInfo' | 'text+gate' | 'maxed+silent' | 'force'
+ *  in the log would itself be news. `priorBlock` is the reopened-conversation case: the session has no
+ *  snapshot of its own and the block came out of the rollout it attached to (measured 2026-08-27, three
+ *  resumes of one conversation). Recording it separately is what keeps the next person from reading a
+ *  structured hit as the file's own record. */
+type LimitReason =
+  | 'reachedType'
+  | 'errorInfo'
+  | 'maxed+silent'
+  | 'priorBlock'
+  | 'force'
 
 export interface CodexRollingDeps {
   spawn(opts: {
@@ -41,6 +58,12 @@ export interface CodexRollingDeps {
     cwd: string
     resumeSessionId?: string
     resumePrompt?: string
+    /** 백지 재개(Smart Resume)로 새 세션을 띄울 때 실을 첫 프롬프트. `resumePrompt` 와 달리
+     *  `resumeSessionId` 없이도 CLI 인자로 실린다 — `resumePrompt` 는 `codex resume <id>` 뒤에만
+     *  붙는 인자라서(core/sessions/commands.ts 의 buildCodexCommand) resumeSessionId 가 없으면
+     *  조용히 버려진다. orchestration 이 새 Job 워커를 띄울 때 첫 프롬프트를 싣는 것과 같은 경로
+     *  (initialPrompt)를 백지 재개에도 그대로 쓴다. */
+    initialPrompt?: string
     rollAccountIds?: string[]
     slackNotify?: boolean
     bypassPermissions?: boolean
@@ -54,6 +77,14 @@ export interface CodexRollingDeps {
   send(channel: 'session:rolled' | 'session:rollState', payload: unknown): void
   log(message: string): void
   lang: () => Lang // taken as a getter rather than a value so the latest language is used even after setLang
+  /** Block records shared with every other rolling chain, in both coordinators (SPEC §11.2/6).
+   *
+   *  **The wiring passes one instance to both.** That is the whole point: three workers rolling through
+   *  the same accounts used to each rediscover every block themselves, wasting a kill+respawn per
+   *  worker per account. It is **required, not optional**, because an optional field can be dropped
+   *  from the wiring without a single test failing — and the failure mode is this feature silently
+   *  reverting to per-chain isolation. The same reasoning made rollAccountIds required. */
+  blocks: BlockRegistry
   persistConfig?: (codexSessionId: string, config: RollConfig) => void
   copy?: (src: string, dest: string) => Promise<void> // for test injection — defaults to copyTranscript
   /** The rollout's byte size, `null` when it cannot be read. Injected the same way `copy` is, and for
@@ -75,15 +106,30 @@ export interface CodexRollingDeps {
    *  주입되지 않으면 아무것도 실리지 않는다(기존 동작) — now?/log? 와 같은 관례다. */
   orchEnv?(): { cliPath: string; infoPath: string; skillsPath: string } | undefined
   /** 재개 직전에 쓸 프롬프트를 물어본다. rolling.ts 의 같은 필드와 동일한 계약 — `chain.prompt` 가
-   *  register 시점에 고정되는 정적 값이라서 필요하다. sessionId 로 열린 Job Dispatch 를 찾을 수
-   *  없으면(사용자 탭 세션) `null` 을 돌린다. `null` 이면 `chain.prompt` 를 그대로 쓴다. codex 는
-   *  이 프롬프트를 spawn 인자로 넘기므로 **kill·spawn 전에** 물어야 한다(roll() 의 호출 자리 참고).
-   *  구현은 `main/orchestration/resumePacket.ts`.
+   *  register 시점에 고정되는 정적 값이라서 필요하다.
+   *
+   *  **sessionId 로 열린 Job Dispatch 를 찾으면 그 packet 을 돌린다. 못 찾으면(사용자 탭 세션)
+   *  `tabFallback` 이 참일 때만 탭 브리핑으로 저하하고, 거짓이면 곧바로 `null` 이다.** `null` 이면
+   *  `chain.prompt` 를 그대로 쓴다. codex 는 이 프롬프트를 spawn 인자로 넘기므로 **kill·spawn
+   *  전에** 물어야 한다(roll() 의 호출 자리 참고). 구현은 `main/orchestration/resumePacket.ts`.
    *
    *  **이 코디네이터는 두 모양을 다 묻는다.** 계정이 바뀌는 재개는 kill 하고 `--resume` 으로 다시
    *  띄우므로 'handover' 이고(roll), 같은 계정으로 이어가는 재개는 세션을 살려 두므로 'update' 다
-   *  (resumeInPlace). 가르는 기준은 `SPEC §11.5` 하나 — 그 경로가 `--resume` 을 부르는가다. */
-  resumeText?(sessionId: string, form: 'handover' | 'update'): Promise<string | null>
+   *  (resumeInPlace). 가르는 기준은 `SPEC §11.5` 하나 — 그 경로가 `--resume` 을 부르는가다.
+   *
+   *  **`tabFallback` 은 `resumeStrategy() === 'smart'` 를 그대로 옮긴 값이다(roll() 의 호출 자리,
+   *  F3).** codex 쪽은 이 dep 을 롤당 한 번만 묻고 그 결과를 백지 여부 판정과 `--resume` 프롬프트
+   *  양쪽에 그대로 쓴다 — claude 쪽처럼 두 자리에서 따로 묻지 않는다. 강도가 'smart' 가 아니면
+   *  애초에 백지 재개 후보가 될 수 없으므로 탭 브리핑을 시도할 이유가 없고, 시도했다가는 그 결과가
+   *  고스란히 `--resume` 프롬프트 자리로 흘러가 탭 세션의 `chain.prompt` 를 지운다. */
+  resumeText?(sessionId: string, form: 'handover' | 'update', tabFallback: boolean): Promise<string | null>
+  /** 한도에 걸린 세션을 어떻게 이어갈지 — Task 1 의 설정값. **getter 로 받는다** — `orchEnv?` 와
+   *  같은 이유다: 값이 설정 화면에서 앱 수명 중간에 바뀌고, 이 코디네이터는 그 값이 존재하기 전에
+   *  만들어진다. 주입되지 않으면 `'original'`(기존 동작)로 본다.
+   *
+   *  `'smart'` 라고 곧바로 백지 재개가 되는 것은 아니다 — `resumeText` 가 브리핑을 만들어 줄 때만
+   *  적용된다(계획의 지배 제약: 브리핑을 못 만들면 백지 재개를 하지 않는다). `roll()` 을 보라. */
+  resumeStrategy?(): ResumeStrategy
 }
 
 interface Chain {
@@ -97,9 +143,20 @@ interface Chain {
   rolloutPath: string | null
   tail: CodexRolloutTail | null
   state: CodexLimitState | null // the last rate_limits read
+  /** The block this conversation already had on record when we attached, or null when it records none.
+   *  Only consulted while `state` is still null — see priorLimitVerdict. `undefined` means the answer
+   *  has not arrived yet, and is deliberately distinct from null: reading "not yet known" as "no block
+   *  on record" would let a phrase fire without the evidence that decides whether it is a replay.
+   *  Only register()'s resume branch ever fills it — attachRollout clears it back to undefined for all
+   *  three of its callers, and that comment is where the reasons are. */
+  priorReset: { at: number; weekly: boolean } | null | undefined
+  /** Whether the file has been asked at all. It exists for the log: "the answer has not arrived yet"
+   *  and "there was never a question" both leave priorReset undefined, and the first is the line the
+   *  incident log of 2026-08-27 was full of, indistinguishable from an ordinary missing snapshot (why). */
+  priorAsked: boolean
   scanner: CodexLimitScanner // detects the limit phrase in PTY output (corrects for chunk boundaries)
   modelChoice: CodexModelChoiceScanner // detects codex's approaching-limit model-switch prompt in the same stream
-  textHit: boolean // whether the limit phrase was seen in this window (the tick combines it with the state to decide)
+  textHit: boolean // whether the limit phrase was seen in this window — read only by judgedByPriorBlock and the ignored-phrase log now that the phrase-only verdict is retired
   unmappedWarned: boolean // whether the rollout-unmapped skip has already been logged (suppresses repeats of the same line)
   preemptWarned: boolean // whether the preemption has already been logged — keeps it from piling up on every 1-second poll
   lastOutputAt: number
@@ -118,11 +175,29 @@ interface Chain {
   stateSeq: number
 }
 
-/** Extracts just the part of a Chain the retry verdict needs (the input of core/rolling/retry.ts) */
-const retryState = (chain: Chain): RetryState => ({
+/** Extracts just the part of a Chain the retry verdict needs (the input of core/rolling/retry.ts).
+ *
+ *  The recovery array is the chain's own record **merged with what other chains found** — a block on
+ *  an account is a fact about the account, so a chain that has not hit it yet should still skip it
+ *  (SPEC §11.2/6). laterBlock keeps whichever side justifies the longer block. `chain.recovery` is left
+ *  untouched: it still answers the per-chain question this coordinator asks it.
+ *
+ *  **This feeds planRetry as well as pickAvailable, and that is the expensive half.** planRetry walks
+ *  every index including currentIndex, so a record another chain wrote about the account this chain is
+ *  sitting on does not only steer this chain away from an account — it can extend and relabel this
+ *  chain's own wait on the account it currently holds (measured on the claude side, same merge: a
+ *  single-account chain whose own evidence said "session window resets in 2 minutes" published
+ *  t0+3min/session alone and t0+61min/weekly once another chain had recorded that account
+ *  weekly-exhausted first; a real weekly reset is days). That is correct when the record is right — a
+ *  weekly-exhausted account is unusable whatever its session window says — and it is where a wrong
+ *  record costs the most: the chain is now waiting rather than arriving, and only an arrival arms the
+ *  healthy timer that would tear the record up (blockRegistry.clear). */
+const retryState = (chain: Chain, blocks: BlockRegistry, now: number): RetryState => ({
   accountIds: chain.accountIds,
   currentIndex: chain.cycle.currentIndex,
-  recovery: chain.recovery
+  recovery: chain.accountIds.map((id, i) =>
+    laterBlock(chain.recovery[i] ?? null, blocks.get(id, now))
+  )
 })
 
 export class CodexRollingCoordinator {
@@ -131,11 +206,13 @@ export class CodexRollingCoordinator {
   private readonly copy: (src: string, dest: string) => Promise<void>
   private readonly rolloutSize: (filePath: string) => Promise<number | null>
   private readonly now: () => number
+  private readonly resumeStrategy: () => ResumeStrategy
 
   constructor(private deps: CodexRollingDeps) {
     this.copy = deps.copy ?? copyTranscript
     this.rolloutSize = deps.rolloutSize ?? rolloutSize
     this.now = deps.now ?? Date.now
+    this.resumeStrategy = deps.resumeStrategy ?? (() => 'original')
   }
 
   /** Called by ipc right after spawning a codex session that has rollAccountIds. One id means single-account auto-resume.
@@ -144,8 +221,15 @@ export class CodexRollingCoordinator {
    *  the transcript copy it just made. Passing it skips the locate poll entirely, which is not an
    *  optimisation but the only way a resumed session gets mapped at all: see attachRollout. It is
    *  ignored unless the session really is a resume (info.resumeSessionId), because a fresh spawn's
-   *  rollout does not exist yet and has to be found. */
-  register(info: SessionInfo, rolloutPath?: string): void {
+   *  rollout does not exist yet and has to be found.
+   *
+   *  `sameAccount` says whether that file was written by the account this session is spawning under.
+   *  ipc is the only side that can answer it — it holds both ends of the copy, and the target it built
+   *  from the target account's own configDir equals the source exactly when the resume did not cross
+   *  accounts. It gates one thing, the recovery read below; everything else here is account-independent.
+   *  The default is the conservative answer, so a caller that cannot tell gets the behaviour this
+   *  coordinator had before the recovery existed. */
+  register(info: SessionInfo, rolloutPath?: string, sameAccount = false): void {
     const ids = info.rollAccountIds ?? []
     if (ids.length < 1) return
     const chain: Chain = {
@@ -159,6 +243,8 @@ export class CodexRollingCoordinator {
       rolloutPath: null,
       tail: null,
       state: null,
+      priorReset: undefined,
+      priorAsked: false,
       scanner: new CodexLimitScanner(),
       modelChoice: new CodexModelChoiceScanner(),
       textHit: false,
@@ -177,6 +263,21 @@ export class CodexRollingCoordinator {
     this.chains.set(info.id, chain)
     if (info.resumeSessionId && rolloutPath) {
       this.attachRollout(chain, info.resumeSessionId, rolloutPath)
+      // **This is the one attach site that gets to recover the reset from the file — and only when the
+      // account matches.** The user reopened a conversation, so whatever block it ended on is still the
+      // block it is under, and the tail starts at the end — so the file's own record is the only
+      // evidence this session will ever have.
+      //
+      // **Why the account has to match.** The resume picker offers every logged-in account of the same
+      // provider and picking a different one is an ordinary thing to do. The wiring then copies the
+      // rollout into *that* account's folder and this chain starts on it, while the records inside the
+      // copy belong to the account that was refused. Recovering them would attribute the block to an
+      // account that is perfectly healthy, and onLimit broadcasts whatever it finds in chain.recovery to
+      // the shared registry — so every other chain is steered off that account too, until a reset that
+      // can be a week away. A two-account chain also kills the fresh session and respawns on the
+      // exhausted one. None of it needs a limit phrase, and none of it happened before the recovery
+      // existed. So for a cross-account reopen nothing is asked and the verdict is never consulted.
+      if (sameAccount) this.askPriorReset(chain)
       // The locate path persists the config on success; the resume path knows the id up front, so it
       // does the same here — otherwise resuming a chain would never refresh its stored roll config.
       this.deps.persistConfig?.(info.resumeSessionId, {
@@ -196,6 +297,18 @@ export class CodexRollingCoordinator {
     for (const chain of this.chains.values())
       if (!chain.disposed && chain.codexSessionId === codexSessionId) return chain.liveInfo
     return null
+  }
+
+  /** The rollout file this live session is currently tailing, or null when it is not part of an active
+   *  chain, or the chain has not mapped one yet (unmapped / mid-locate).
+   *
+   *  **Why this exists.** codex has no statusLine, so ipc.ts's tab-resume fallback (tabResumeTextFor) —
+   *  which reads a claude session's conversation path from the statusLine capture file — has nothing to
+   *  read for codex. This coordinator is the only side that ever learns the path at all (it finds it by
+   *  scanning the filesystem: findRollout/attachRollout), so it is the only side that can answer. */
+  rolloutPathFor(sessionId: string): string | null {
+    const chain = this.chains.get(sessionId)
+    return chain && !chain.disposed ? chain.rolloutPath : null
   }
 
   handleData(e: { sessionId: string; data: string }): void {
@@ -292,11 +405,61 @@ export class CodexRollingCoordinator {
     chain.codexSessionId = codexSessionId
     chain.tail = new CodexRolloutTail(rolloutPath, this.now, { startAtEnd: true })
     chain.unmappedWarned = false // it is mapped now — a future unmapped state gets to report itself again
+    // **Attaching never recovers the block; only register()'s resume branch asks for it.** The other
+    // two callers attach to a file whose limit record must not be believed. resumeInPlace re-anchors on
+    // the very file whose record produced the wait we have just served, so recovering it would judge
+    // the session limited again the instant it resumes; roll() attaches to the copy, which holds the
+    // *previous account's* record — the reason the tail starts at the end in the first place.
+    //
+    // **It clears to `undefined`, not to null, and the difference is the whole point.** null is a value
+    // in this design — "no block on record" — and that is precisely the input that makes a phrase alone
+    // sufficient (see priorLimitVerdict's last branch). Clearing to null would therefore mean that one
+    // redrawn phrase after a roll produces a wait *and* writes a block against the freshly switched,
+    // perfectly healthy account into the shared registry, where every other chain then honours it.
+    // `undefined` leaves the verdict unconsulted, which is exactly the previous behaviour of both paths.
+    chain.priorReset = undefined
+    chain.priorAsked = false
+  }
+
+  /** Asks the rollout what block this conversation already ended on, and hands the answer to the chain.
+   *  Called from the history-resume path alone, and there only when the file's records were written by
+   *  the account we are resuming under (see register for that gate, and attachRollout for why the other
+   *  two attach sites must not ask at all).
+   *
+   *  priorBlockAt, not the looser readPriorReset the tail seeds itself with: deciding *whether* the
+   *  file records a block needs the structured limit signal, because a reset on its own is reported for
+   *  any window at or above 90% — a merely busy conversation. The reasoning is on priorBlockAt.
+   *
+   *  Fire-and-forget: a failed read leaves it null, which reads as "no block on record" — the
+   *  conservative side, since the verdict then needs a confirmed phrase before it acts. Until the answer
+   *  lands the field stays undefined and the verdict is not consulted at all (judgedByPriorBlock).
+   *
+   *  Both callbacks are gated on the tail still being this chain's tail, the same across-await guard as
+   *  `chain.liveId !== liveId` elsewhere in this file. Without it a read still in flight when the chain
+   *  rolls or re-anchors would write the old file's block over the value attachRollout had just
+   *  cleared — the trap above, arriving by race. Every re-attach builds a new tail, so identity of the
+   *  object is identity of the attachment. */
+  private askPriorReset(chain: Chain): void {
+    const tail = chain.tail
+    const rolloutPath = chain.rolloutPath
+    if (!tail || !rolloutPath) return
+    chain.priorReset = undefined
+    chain.priorAsked = true
+    void priorBlockAt(rolloutPath)
+      .then((r) => {
+        if (chain.tail === tail) chain.priorReset = r
+      })
+      .catch(() => {
+        if (chain.tail === tail) chain.priorReset = null
+      })
   }
 
   /** Polls until the rollout file appears. On finding it, tailing starts; past the deadline rolling is
-   *  disabled. This is the fresh-spawn path only — a resume knows its file already (attachRollout), and
-   *  the exclude list the re-locate after a roll used to need went away with it. */
+   *  disabled. This used to be the fresh-spawn path only — a resume knows its file already
+   *  (attachRollout) — but a blank-slate roll (Smart Resume) also lands here now: that respawn is a
+   *  fresh `codex` with no `--resume`, so it has no known rollout either, and roll() calls this the
+   *  same way register() does for a brand-new chain. The exclude list the re-locate after an ordinary
+   *  (non-blank-slate) roll used to need went away with that roll's `attachRollout` call instead. */
   private startLocate(chain: Chain, account: Account | null): void {
     if (!account) {
       this.deps.log(`codex locate aborted — no such account session=${chain.liveId}`)
@@ -355,12 +518,15 @@ export class CodexRollingCoordinator {
     if (s) chain.state = s
   }
 
-  /** Refreshes the state and applies verdicts ① and ② */
+  /** Refreshes the state and applies the verdict `limitReached` sees from the structured signal — or,
+   *  while this session has no snapshot of its own, priorLimitVerdict's reading of what the rollout
+   *  already recorded (judgedByPriorBlock) */
   private async evaluate(chain: Chain): Promise<void> {
     if (chain.rolling || chain.waitTimer || chain.disposed) return
     await this.refresh(chain)
     if (chain.rolling || chain.waitTimer || chain.disposed) return // the across-await state guard
-    if (!limitReached(chain.state, { textHit: chain.textHit })) {
+    if (this.judgedByPriorBlock(chain)) return
+    if (!limitReached(chain.state)) {
       // Record exactly why it was ignored — logging an unmapped rollout as "usage below the gate" (the old
       // log printed undefined%) destroys the evidence for calibrating the phrase regex on the first real
       // limit hit
@@ -369,20 +535,34 @@ export class CodexRollingCoordinator {
       return
     }
     this.recordRecovery(chain)
-    this.onLimit(chain, this.reasonOf(chain, 'text+gate'))
+    this.onLimit(chain, this.reasonOf(chain))
   }
 
-  /** Which signal carried the verdict. `fallback` is what to report when neither structured signal is
-   *  present — the phrase on the caller's path, reachedType on the tick's (where no phrase is possible). */
-  private reasonOf(chain: Chain, fallback: LimitReason): LimitReason {
+  /** Which of the two structured signals carried the verdict.
+   *
+   *  **It no longer takes a fallback.** Both callers reach it only after `limitReached` has returned
+   *  true, and that now requires `reachedType` or `error` — the same two this function tests. So the
+   *  third branch was unreachable, and a parameter that can never be used is a parameter the next
+   *  reader has to disprove. `reachedType` is checked first because it is the more specific claim; in
+   *  practice it has never been observed non-null (see limitErrorOf), so the last line is what runs. */
+  private reasonOf(chain: Chain): LimitReason {
     if (chain.state?.reachedType) return 'reachedType'
-    if (chain.state?.error) return 'errorInfo'
-    return fallback
+    return 'errorInfo'
   }
 
-  /** Why the phrase was ignored — distinguishes unmapped, no state received, and usage below the gate */
+  /** Why the phrase failed to carry a verdict — distinguishes four branches: rollout unmapped, the
+   *  file's own record not read yet, no snapshot received, and the snapshot's usage numbers when neither
+   *  structured signal fired.
+   *
+   *  The in-flight case gets its own name because it is a different situation with the same symptom: on
+   *  a history resume the verdict is waiting on the file's own record (askPriorReset), and the phrase
+   *  that arrives before that read lands is not being ignored for lack of a snapshot — it will be judged
+   *  a moment later. Reporting both as "rate_limits not received" is what made the 2026-08-27 log
+   *  unreadable. Once the answer is in, priorReset is null or a value and this falls through. */
   private why(chain: Chain): string {
     if (!chain.tail) return 'rollout unmapped'
+    if (!chain.state && chain.priorAsked && chain.priorReset === undefined)
+      return 'prior block not read yet'
     if (!chain.state) return 'rate_limits not received'
     const { primary, secondary } = chain.state
     return `primary=${primary?.usedPercent ?? 'n/a'}%, secondary=${secondary?.usedPercent ?? 'n/a'}%`
@@ -396,6 +576,69 @@ export class CodexRollingCoordinator {
       weekly: worst.weekly,
       since: this.now()
     }
+  }
+
+  /** The verdict for a session that has not written a rate_limits record of its own yet. Returns true
+   *  when it has handled the chain and the caller must stop.
+   *
+   *  The state is still null: no rate_limits record has been written since we attached. That is the
+   *  normal shape right after a resume, and a session already at its limit can never leave it — those
+   *  records ride on turn completion, and a blocked turn never completes. So the file's own record is
+   *  the only evidence available, and both directions matter: it lets a limit fire with no phrase at
+   *  all, and it lets a phrase be dismissed as the redraw of a block that has already cleared. See
+   *  priorLimitVerdict for the reasoning; the moment the session writes its own record this stops
+   *  answering and the ordinary verdicts take over unchanged.
+   *
+   *  Called from both the phrase path (evaluate) and the tick — the firing-without-a-phrase case can
+   *  only arrive on the tick, so one copy per caller would drift. */
+  private judgedByPriorBlock(chain: Chain): boolean {
+    if (chain.state !== null || chain.priorReset === undefined) return false
+    const now = this.now()
+    const v = priorLimitVerdict(chain.priorReset, { textHit: chain.textHit }, now)
+    if (v.kind === 'limited') {
+      // recordRecovery cannot be reused here — it reads worstResetAt(chain.state) and that state is
+      // null. The verdict already carries the reset, so it is recorded as it stands. Writing it into
+      // chain.recovery *before* onLimit is what hands it to the shared registry too (SPEC §11.2/6):
+      // onLimit re-reads this slot and broadcasts it, but only once its own guards have passed.
+      //
+      // **Known imprecision, and nothing tears it up.** register only asks the file when the reopen
+      // stays on the account that wrote it, so the slot (currentIndex, always 0 on a fresh register)
+      // is that account. The shape that still slips through is a rollout a *roll* copied into this
+      // account's folder: the copy carries the previous account's records, yet reopening it here is a
+      // same-account resume by every test we have — not because the two cases cannot be told apart,
+      // but because nothing here currently tries. RollConfigStore is already keyed by the codex
+      // session id and written on every attach, so recording which account last ran that session would
+      // answer it, and would survive a restart; the copy's own file creation time is the roll instant,
+      // so a record predating it was written elsewhere — with the caveat this repo already knows, that
+      // creation time is unreliable on some filesystems. Neither is wired up, which is why this stays
+      // documented rather than restructured. Do not expect the healthy timer to cover it: that timer
+      // is armed by an *arrival* on an account (blockRegistry.clear), and this session is already
+      // sitting on it, going straight into a wait — so a wrong reset here holds for its full length,
+      // for every chain.
+      //
+      // **The reset is recorded only when the file supplied one.** at === null is priorLimitVerdict's
+      // phrase-only branch — the weakest evidence in the design: no record in the file, so the screen
+      // text is all there is, and the scanner reads the whole redraw, so an agent's own output, a quoted
+      // log or a pasted document carrying a limit-shaped sentence reaches it too. Leaving the slot empty
+      // keeps that evidence inside this chain. planRetry reads an empty slot as now + RETRY_FALLBACK_MS,
+      // the very value blockedUntil computes from { at: null, since: now }, so this wait is unchanged —
+      // while onLimit, which broadcasts whatever this slot holds, then has nothing to say and no other
+      // chain is steered off a healthy account by one line of text. The one further effect is wanted
+      // too: with the slot empty, a later pass of this chain does not skip the account either.
+      if (v.at !== null)
+        chain.recovery[chain.cycle.currentIndex] = { at: v.at, weekly: v.weekly, since: now }
+      chain.textHit = false // spent either way — the next tick must not fire on the same phrase again
+      this.onLimit(chain, 'priorBlock')
+      return true
+    }
+    if (v.kind === 'replay') {
+      chain.textHit = false
+      this.deps.log(
+        `codex limit-text ignored (replay of a block that already cleared) session=${chain.liveId}`
+      )
+      return true
+    }
+    return false
   }
 
   private onLimit(chain: Chain, reason: LimitReason): void {
@@ -414,18 +657,44 @@ export class CodexRollingCoordinator {
     }
     chain.textHit = false
     const action = chain.cycle.onLimit()
+    // One clock reading for the whole verdict. pickAvailable and planRetry below have to judge the same
+    // instant — if time moves between them, an account pickAvailable called unusable can look usable to
+    // planRetry microseconds later, and the wait would target an account it had just refused.
+    const now = this.now()
+    // The shared write is here rather than in recordRecovery because recordRecovery runs at three call
+    // sites and every one of them is ahead of the guards above (the rollout-unmapped one especially) —
+    // writing there would broadcast to every other chain a verdict this coordinator has just declined to
+    // act on. It re-reads the record recordRecovery stored instead of building a second one, so the two
+    // stores hold the same object and cannot drift (SPEC §11.2/6). forceRoll reaches here without a
+    // record; there is then nothing to say.
+    const record = chain.recovery[chain.cycle.currentIndex]
+    if (record) this.deps.blocks.record(chain.accountIds[chain.cycle.currentIndex], record, now)
     const target =
-      action.type === 'roll' ? pickAvailable(retryState(chain), action.toIndex, this.now()) : null
+      action.type === 'roll'
+        ? pickAvailable(retryState(chain, this.deps.blocks, now), action.toIndex, now)
+        : null
+    // The detour, in the same shape as the claude side. 'shared' marks a skip around an account **this
+    // chain never touched** — the block came from another chain's record. Without it the log cannot answer
+    // "why did this worker skip an account it had no history with", which is the first question an
+    // incident asks now that a block can arrive from elsewhere (SPEC §11.2/6).
+    const skipShared =
+      action.type === 'roll' &&
+      !chain.recovery[action.toIndex] &&
+      this.deps.blocks.get(chain.accountIds[action.toIndex], now) !== null
+    const detour =
+      action.type === 'roll' && target !== action.toIndex
+        ? ` blocked(${action.toIndex}${skipShared ? ',shared' : ''})→${target === null ? 'wait' : target}`
+        : ''
     // reason and the raw reachedType are the only evidence for calibrating the assumptions we have not
     // measured yet (the limit phrase, the reachedType values, replay behaviour) on the first real hit — so
     // what fired and the raw value are recorded together
     this.deps.log(
       `codex limit detected session=${chain.liveId} reason=${reason} ` +
         `reachedType=${chain.state?.reachedType ?? 'null'} ${this.why(chain)} ` +
-        `action=${JSON.stringify(action)}`
+        `action=${JSON.stringify(action)}${detour}`
     )
     if (target === null) {
-      const plan = planRetry(retryState(chain), this.now())
+      const plan = planRetry(retryState(chain, this.deps.blocks, now), now)
       this.pushState(chain, 'waiting', {
         nextRetryAt: new Date(plan.retryAt).toISOString(),
         scope: plan.weekly ? 'weekly' : 'session'
@@ -443,35 +712,57 @@ export class CodexRollingCoordinator {
   }
 
   /** 재개 자리에 실을 텍스트를 정한다. **어느 모양을 물을지는 이 함수를 부르는 자리가 정한다** —
-   *  가르는 기준은 `SPEC §11.5` 하나다: 그 경로가 `--resume` 을 부르는가.
-   *   - 'handover'(전체 인계): `roll()`. kill 하고 `--resume` 으로 다시 띄우므로 프로세스가 새것이고,
-   *     작업을 이어 주는 것은 rollout 파일 하나다.
+   *  가르는 기준은 `SPEC §11.5` 하나다: 그 경로가 `--resume` 을 부르는가(또는 백지 재개로 그 자리를
+   *  대신하는가).
+   *   - 'handover'(전체 인계): `roll()` 하나뿐이지만, 그 결과가 두 가지 자리로 갈라져 쓰인다 —
+   *     `resumeStrategy() === 'smart'` 이고 브리핑을 실제로 얻었으면(`briefed`) 새 프로세스는
+   *     `--resume` 없이 빈 대화로 뜨고 이 문자열이 첫 프롬프트가 된다; 그렇지 않으면 kill 뒤
+   *     `codex resume` 으로 다시 띄우고 이 문자열이 그 재개 프롬프트가 된다. `tabFallback` 은
+   *     `resumeStrategy() === 'smart'` 를 그대로 옮긴 값이다(roll() — F3): 강도가 'smart' 가
+   *     아니면 백지 재개 후보 자체가 될 수 없으니 탭 브리핑을 시도할 이유가 없고, 시도하면 그
+   *     결과가 그대로 `--resume` 프롬프트 자리로 흘러 탭 세션의 `chain.prompt` 를 지운다.
    *   - 'update'(덧붙일 한 줄): `resumeInPlace`. **세션이 살아 있다** — 떨어뜨린 것이 없으니 인계할
    *     것도 없고, 대화가 온전한 에이전트에게 Task 지시문을 다시 읽히는 것은 방금 리셋된 할당량을
    *     이미 아는 것에 쓰는 일이다. 그래서 기다리는 동안 무엇이 바뀌었는지만 덧붙인다.
+   *     `tabFallback: true` — 대체가 아니라 덧붙임이라 사용자 문구를 잃을 위험이 없다.
    *
    *  'update' 를 **덧붙이는** 이유: 이 경로에서 `chain.prompt` 는 잃을 것이 없는 값이고, 사용자가
    *  직접 지정한 문구일 수도 있다(register 의 prompt). 대체하면 그것을 버린다.
    *
    *  **try/catch 가 여기 있는 이유는 `roll()` 의 catch 가 있는 자리다.** 그 호출은 roll() 바깥 try
-   *  안에 있고 그 catch 는 kill·respawn **앞에서** 돌아 'none' 을 게시하고 끝난다 — 즉 깨진 packet
-   *  계약이 인계를 얇게 만드는 것이 아니라 **롤 자체를 중단시켜 워커를 한도에 멈춘 채로 남긴다.**
+   *  안에 있고 그 catch 는 kill·respawn **앞에서** 돈다 — 즉 깨진 packet 계약이 인계 문장을 얇게
+   *  만드는 것이 아니라 **롤 자체를 중단시킨다.** 그 catch 는 이제 'none' 으로 끝내지 않고 다음
+   *  시도를 예약하므로(rescheduleAbortedRoll) 워커가 영구히 멈추지는 않는다. 그래도 이 가드는
+   *  그대로 필요하다: 깨진 packet 계약이 **이번 롤이 일어나는지를 결정해서는 안 된다.** 그것이
+   *  결정해도 되는 것은 인계 문장의 내용까지고, 가드가 없으면 대신 소진된 계정에 앉은 채 재시도
+   *  간격(리셋 시각, 모르면 15분)을 한 번 더 기다린다 — 그것이 이 함수가 막는 실제 대가다.
    *  resumeText 는 던지지 않는다는 계약이지만(resumePacket.ts) 그 계약이 깨질 때 잃는 것이 이만큼
-   *  크므로 로그를 남기고 기존 고정 문장으로 저하한다. rolling.ts 의 같은 이름 함수와 같은 모양이다. */
+   *  크므로 로그를 남기고 기존 고정 문장으로 저하한다. rolling.ts 의 같은 이름 함수와 같은 모양이다.
+   *
+   *  **`briefed` 를 함께 돌려주는 이유.** `text` 가 `null`/`undefined` 면 이 함수는 `chain.prompt` 로
+   *  저하하므로, 돌려주는 문자열 하나만으로는 호출한 쪽이 "브리핑이 있었는가"를 알 수 없다 — 실패해서
+   *  고정 문장이 된 것과 원래 고정 문장을 쓰려 한 것이 같은 모양이 되어 버린다. `roll()` 은 바로 그
+   *  사실로 백지 재개 여부를 가른다(계획의 지배 제약: 브리핑을 못 만들면 백지 재개를 하지 않는다).
+   *
+   *  **빈 문자열도 같은 저하를 탄다.** 오늘 어떤 producer 도 `''`를 돌리지 않지만, 돌린다면 백지
+   *  재개가 빈 프롬프트로 새 프로세스를 띄우는 꼴이 된다 — 그것은 저하보다 더 나쁘다(빈 화면으로
+   *  시작하는 것과 기존 고정 문장으로 시작하는 것 중 후자가 항상 낫다). 그래서 `null`/`undefined`
+   *  와 같은 취급이다: `briefed: false`. */
   private async resumePromptFor(
     chain: Chain,
     liveId: string,
-    form: 'handover' | 'update'
-  ): Promise<string> {
+    form: 'handover' | 'update',
+    tabFallback: boolean
+  ): Promise<{ prompt: string; briefed: boolean }> {
     try {
-      const text = await this.deps.resumeText?.(liveId, form)
-      if (text === null || text === undefined) return chain.prompt
-      return form === 'update' ? `${chain.prompt} ${text}` : text
+      const text = await this.deps.resumeText?.(liveId, form, tabFallback)
+      if (text === null || text === undefined || text === '') return { prompt: chain.prompt, briefed: false }
+      return { prompt: form === 'update' ? `${chain.prompt} ${text}` : text, briefed: true }
     } catch (err) {
       this.deps.log(
         `resume packet hook failed session=${liveId}: ${err instanceof Error ? err.message : String(err)}`
       )
-      return chain.prompt
+      return { prompt: chain.prompt, briefed: false }
     }
   }
 
@@ -527,7 +818,9 @@ export class CodexRollingCoordinator {
    *      it writes the same function (attachRollout) to the same file again.
    *   ② **Clear state.** The last snapshot is 100% — leaving it would fire the maxed+silent fallback
    *      again right after the resume. roll() does the same thing at the respawn point.
-   *   ③ **Reset the textHit latch and the phrase scanner.** Same reason.
+   *   ③ **Reset the textHit latch and the phrase scanner.** Once the same reason as ①·②; since the
+   *      phrase-only verdict was retired the latch can no longer re-raise a verdict, so clearing it now
+   *      only keeps the ignored-phrase log honest about which episode a phrase belongs to.
    *
    *  The timer it arms last is not a plain healthy timer — it is a deadline that has to decide whether
    *  the typed line started a turn at all. See settleInPlace.
@@ -563,7 +856,7 @@ export class CodexRollingCoordinator {
       const sizeBefore = chain.rolloutPath
         ? await this.rolloutSize(chain.rolloutPath).catch(() => null)
         : null
-      const prompt = await this.resumePromptFor(chain, liveId, 'update')
+      const { prompt } = await this.resumePromptFor(chain, liveId, 'update', true)
       if (chain.disposed || chain.liveId !== liveId) return // the across-await state guard
       const stateSeq = chain.stateSeq // captures the generation at scheduling time — the same convention as the claude side
       this.deps.write(liveId, prompt)
@@ -632,10 +925,73 @@ export class CodexRollingCoordinator {
     // and the next limit is misread as a whole lap being blocked.
     chain.cycle.onHealthy()
     chain.recovery[chain.cycle.currentIndex] = null
+    // The rollout grew, so a turn actually ran on this account — of the four clear sites this is the only
+    // one holding evidence of work rather than 60 seconds of silence. So the account demonstrably works and
+    // the shared record must go too: otherwise one bad reading keeps every other chain off it until its
+    // recorded reset time passes (blockRegistry.clear).
+    this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
     chain.inPlaceUsed = false
   }
 
-  /** Runs the roll: copy the rollout → kill → respawn in the same slot with codex resume */
+  /** A roll gave up. Schedule the next attempt instead of leaving the chain idle.
+   *
+   *  **Why this exists.** These abort paths used to publish 'none' and return, which schedules nothing:
+   *  the session is still blocked by its limit, nothing else will detect it (the limit was already
+   *  consumed), and the worker sits idle until a human notices. It surfaced twice — an account removed
+   *  from the chain while it ran (pickAvailable sees ids only, so it hands roll() an account that cannot
+   *  be resolved), and a conversation reopened from history whose session metadata was never learned
+   *  because the limit stops the statusLine from being called at all.
+   *
+   *  **Why the wait machinery and not a new timer.** onLimit's "no usable account" branch already
+   *  publishes 'waiting' with a retry time and arms waitTimer. Reusing it means the renderer's waiting
+   *  row, the scheduler's suppression and the Slack mapping all keep working here — a new state or a
+   *  private timer would have to be taught to each of them.
+   *
+   *  **Why 'waiting' replaces the 'none' rather than following it.** Publishing 'none' first lifts the
+   *  scheduler's suppression and clears the banner, and then puts it straight back.
+   *
+   *  **Why retrying an abort that will abort again is right, and what the loop costs.** If the account
+   *  is gone for good this repeats at the interval planRetry computes — the recorded reset plus the
+   *  margin, or the 15-minute fallback when no reset is known. (The 60-second floor only applies when
+   *  that time has already passed, so it is not the loop's normal period.) Each round logs. And a round
+   *  is not always only a log line: when planRetry's target resolves to the account this chain is
+   *  already on, resumeAfterWait resumes in place, which types the prompt and Enter into the live PTY.
+   *  That is the same loop shape the ordinary wait path has always had, so none of it is new behaviour
+   *  — and it is still better than silence, because the log is the only thing that can tell someone to
+   *  re-add the account or close the session.
+   *
+   *  This is a second copy of the claude side's function of the same name, deliberately — lifting timer
+   *  lifetimes into a common parent is the axis of this app that has produced the most bugs
+   *  (core/rolling/retry.ts's header records that decision). */
+  private rescheduleAbortedRoll(chain: Chain, why: string): void {
+    // Defensive. No caller can actually reach here with a wait already armed — onLimit's wait branch
+    // does not call roll() — but it is checked because being wrong once costs a second timer on the
+    // same chain: one of the two leaks with nothing left holding its handle, and the session resumes
+    // twice.
+    if (chain.waitTimer || chain.disposed) return
+    // One clock reading, for the same reason onLimit takes one: the block records retryState merges and
+    // the instant planRetry judges them against have to be the same moment.
+    const now = this.now()
+    const plan = planRetry(retryState(chain, this.deps.blocks, now), now)
+    this.deps.log(
+      `codex roll retry scheduled after abort (${why}) at=${new Date(plan.retryAt).toISOString()} session=${chain.liveId}`
+    )
+    this.pushState(chain, 'waiting', {
+      nextRetryAt: new Date(plan.retryAt).toISOString(),
+      scope: plan.weekly ? 'weekly' : 'session'
+    })
+    chain.waitTimer = setTimeout(
+      () => {
+        chain.waitTimer = null
+        void this.resumeAfterWait(chain, plan.target)
+      },
+      Math.max(0, plan.retryAt - this.now())
+    )
+  }
+
+  /** Runs the roll: copy the rollout → kill → respawn in the same slot with codex resume. When Smart
+   *  Resume is on and a briefing was built, the copy and the `--resume` are skipped instead — the new
+   *  session starts blank, carrying only the briefing (see the `smart` branch below). */
   private async roll(chain: Chain, toIndex: number): Promise<void> {
     if (chain.rolling || chain.disposed) return
     chain.rolling = true
@@ -643,45 +999,118 @@ export class CodexRollingCoordinator {
       const target = this.deps.getAccount(chain.accountIds[toIndex])
       if (!target) {
         this.deps.log(`codex roll aborted — no such account id=${chain.accountIds[toIndex]}`)
-        this.pushState(chain, 'none')
+        this.rescheduleAbortedRoll(chain, 'no such account')
         return
       }
       if (!chain.codexSessionId || !chain.rolloutPath) {
         this.deps.log(`codex roll aborted — rollout unmapped session=${chain.liveId}`)
-        this.pushState(chain, 'none')
+        chain.unmappedWarned = false // let a still-unmapped state report itself again on the next retry round
+        this.rescheduleAbortedRoll(chain, 'rollout unmapped')
         return
       }
       const codexSessionId = chain.codexSessionId // pinned before the awaits below — attachRollout needs it non-null
+      const srcRolloutPath = chain.rolloutPath // pinned for the same reason — a blank-slate roll clears chain.rolloutPath before this function reads it again
       this.pushState(chain, 'switching', { accountLabel: target.label })
-      // ① The copy — a codex blocked by a limit is idle, so there is no write contention
-      const dest = codexHistoryStrategy.mapTargetPath(chain.rolloutPath, target.configDir)
-      await this.copy(chain.rolloutPath, dest)
-      // If the app shut down (stop) or the tab was closed (handleExit) while we waited on the copy, stop
-      // here — what follows is kill+spawn, and going on with a disposed chain leaves a zombie codex process
-      // and resurrected timers behind
-      if (chain.disposed) {
-        this.deps.log(`codex roll aborted — chain disposed during the copy session=${chain.liveId}`)
-        return
-      }
       // resumeText 는 spec 파일에 쓰는 부수 효과가 있는 await 이므로, kill 과 재키잉 사이에는 두지
       // 않는다 — 그 구간에 await 를 두지 않는다는 것이 아래 kill/spawn 의 불변이다(exit 가 옛 id 로
       // 도착해도 disposeChain 이 오작동하지 않는 이유). 그래서 kill 앞에서, 세션이 아직 살아 있을
-      // 때 물어 둔다.
-      const prompt = await this.resumePromptFor(chain, chain.liveId, 'handover')
+      // 때 물어 둔다. **그리고 이제 복사보다도 앞에 있다** — 복사할지 말지(백지 재개인지)를 정하려면
+      // 브리핑이 있는지를 먼저 알아야 하기 때문이다.
+      //
+      // **`tabFallback` 은 `resumeStrategy() === 'smart'` 를 그대로 옮긴다(F3).** codex 는 이 dep 을
+      // 롤당 한 번만 묻고 그 결과를 백지 판정과 `--resume` 프롬프트 양쪽에 그대로 쓴다(아래) —
+      // claude 쪽처럼 두 자리에서 따로 묻지 않는다. 강도가 'smart' 가 아니면 애초에 백지 재개 후보가
+      // 될 수 없으므로 탭 브리핑을 시도할 이유가 없고, 시도하면 그 결과가 그대로 `--resume` 프롬프트
+      // 자리로 흘러 탭 세션의 `chain.prompt`(New Session 대화상자에서 사용자가 직접 지정했을 수
+      // 있는 문구)를 지운다.
+      const strategy = this.resumeStrategy()
+      const { prompt, briefed } = await this.resumePromptFor(
+        chain,
+        chain.liveId,
+        'handover',
+        strategy === 'smart'
+      )
       if (chain.disposed) {
         this.deps.log(
           `codex roll aborted — chain disposed while building the resume prompt session=${chain.liveId}`
         )
         return
       }
-      // ② kill → ③ respawn in the same slot. The prompt is a CLI argument, so there is no PTY typing
+      // Smart Resume: 설정이 켜져 있고 브리핑이 실제로 있을 때만 백지 재개다. 브리핑을 못 만들면
+      // (!briefed) 이 스위치가 켜져 있어도 적용하지 않는다 — 계획의 지배 제약이고, 그 경우 아래는
+      // 오늘과 같은 경로(복사 + `--resume`)를 그대로 지난다.
+      //
+      // fix wave 7, finding 2 (HIGH): the third conjunct is what stops a mangled pointer from being
+      // handed to a session with nothing else to fall back on. `prompt` here is not conversation
+      // prose — since Task 7 it is a short line that names a filesystem path (buildTabResumeText's
+      // 'handover'/resumeLine, orchestration/resumePacket.ts). codex's argv sanitizer
+      // (sanitizeResumePrompt, core/sessions/commands.ts) blanks `["&|<>^%]` and folds runs of
+      // whitespace to one space, so a path carrying any of those characters — or two consecutive
+      // spaces, plausible in a Windows folder name — comes back pointing at a file that does not
+      // exist, and a blank-slate session has no transcript to fall back on either. Checking the
+      // sanitizer's identity here, before the blank-slate branch is chosen, is what keeps that from
+      // happening: it does not make the pointer any safer once it does cross the sanitizer — the
+      // ordinary path's resumePrompt goes through this exact same function inside buildCodexCommand,
+      // so a mangled path is mangled either way. What refusing the blank slate buys is that the
+      // mangled hint then arrives alongside the full copied conversation and `--resume`, so it is a
+      // minor loss instead of a session starting from nothing.
+      const sanitizedPrompt = sanitizeResumePrompt(prompt)
+      if (strategy === 'smart' && briefed && sanitizedPrompt !== prompt) {
+        // fix wave 최종, F6: 이 거부는 로그가 없으면 조용히 영구화된다 — userData 경로 하나에
+        // `["&|<>^%]` 나 연속된 공백이 있으면 이 설치본의 codex Smart Resume 은 롤마다 여기서
+        // 거부되지만, 그때까지 rolling.log 에는 그 사실이 한 줄도 남지 않았다. "폐기된 브리핑은
+        // 로그로 남긴다"는 이 branch 자신의 규칙을 이 자리만 어기고 있었다.
+        this.deps.log(
+          `codex smart resume refused — the briefing pointer would be mangled by the argv sanitizer, falling back to --resume session=${chain.liveId}`
+        )
+      }
+      const mangled = strategy === 'smart' && briefed && sanitizedPrompt !== prompt
+      const smart = strategy === 'smart' && briefed && !mangled
+      // 거부된 포인터를 그대로 재개 프롬프트로 쓰지 않는다. F3 이 "설정이 꺼진 롤은 탭 브리핑을 아예
+      // 만들지 않는다"로 사용자 문구(chain.prompt, NewSessionDialog 의 rollPrompt)를 지켰지만, 그
+      // 규칙은 `tabFallback = strategy === 'smart'` 를 통해 걸린다 — 즉 **설정이 켜져 있고 위에서
+      // 뭉개짐으로 거부된 경우**에는 탭 포인터가 만들어진 채 원래 경로로 내려오고, 그 포인터가
+      // 사용자 문구를 덮었다. 이때 옳은 값은 chain.prompt 다: 뭉개짐 거부는 **탭 포인터에서만**
+      // 일어난다(Job 포인터는 id 만 담아 이 함수가 항등이다 — 상위에서 금지 문자 검사를 이미
+      // 통과했다), 그래서 여기서 다시 물을 필요 없이 그 사실만으로 판단할 수 있다.
+      let dest: string | undefined
+      if (!smart) {
+        // ① The copy — a codex blocked by a limit is idle, so there is no write contention
+        dest = codexHistoryStrategy.mapTargetPath(srcRolloutPath, target.configDir)
+        await this.copy(srcRolloutPath, dest)
+        // If the app shut down (stop) or the tab was closed (handleExit) while we waited on the copy, stop
+        // here — what follows is kill+spawn, and going on with a disposed chain leaves a zombie codex process
+        // and resurrected timers behind
+        if (chain.disposed) {
+          this.deps.log(`codex roll aborted — chain disposed during the copy session=${chain.liveId}`)
+          return
+        }
+      }
+      // ② kill → ③ respawn in the same slot. The prompt is a CLI argument, so there is no PTY typing.
+      // A blank-slate roll passes neither resumeSessionId nor resumePrompt — the new process is a fresh
+      // `codex`, not a `codex resume`, and the briefing rides as initialPrompt instead (see the spawn dep's
+      // JSDoc for why resumePrompt alone would be silently dropped here).
+      //
+      // **Sanitized here, not left to buildCodexCommand.** buildCodexCommand deliberately leaves
+      // initialPrompt unsanitized (see that field's JSDoc) because its other caller — the
+      // orchestration coordinator launching a Job worker — checks the same forbidden characters up
+      // front and refuses to launch rather than risk silently mangling the spec-file pointer it
+      // built. This call site takes the sanitizer instead of a refusal, but the refusal already
+      // happened one step earlier: `smart` above required this exact string to survive
+      // sanitizeResumePrompt unchanged, so by the time this line runs it is a defensive no-op, not a
+      // lossy transform (fix wave 7, finding 2 (HIGH) — an earlier version of this comment called the
+      // loss "a little fidelity" on the theory that this was conversation prose; that stopped being
+      // true once the packet moved behind a pointer line (Task 7, resumePacket.ts) — folding a
+      // mangled path through the sanitizer would have pointed it at a file that no longer exists,
+      // not merely lost a character).
       this.deps.kill(chain.liveId)
       const oldId = chain.liveId
       const info = this.deps.spawn({
         account: target,
         cwd: chain.cwd,
-        resumeSessionId: chain.codexSessionId,
-        resumePrompt: prompt,
+        resumeSessionId: smart ? undefined : codexSessionId,
+        resumePrompt: smart ? undefined : mangled ? chain.prompt : prompt,
+        initialPrompt: smart ? sanitizeResumePrompt(prompt) : undefined,
         rollAccountIds: chain.accountIds,
         slackNotify: chain.liveInfo.slackNotify, // the Slack notification is kept per chain (mirrors rolling.ts)
         bypassPermissions: chain.liveInfo.bypassPermissions,
@@ -697,13 +1126,37 @@ export class CodexRollingCoordinator {
       chain.modelChoice = new CodexModelChoiceScanner() // same reason — a half-drawn prompt must not join the new session's output
       chain.cycle.advanceTo(toIndex)
       this.chains.set(info.id, chain)
-      // The respawned codex resumes, so it appends to dest rather than creating a new rollout — there is
-      // nothing to search for, and searching was exactly what broke here (see attachRollout). dest holds
-      // the old account's rate_limits, which is why attachRollout starts the tail at the end.
-      this.attachRollout(chain, codexSessionId, dest)
-      // dest is sent along too, so the CodexTurnWatcher re-registration (index.ts) can drop this copy from
+      if (dest !== undefined) {
+        // The respawned codex resumes, so it appends to dest rather than creating a new rollout — there is
+        // nothing to search for, and searching was exactly what broke here (see attachRollout). dest holds
+        // the old account's rate_limits, which is why attachRollout starts the tail at the end.
+        this.attachRollout(chain, codexSessionId, dest)
+      } else {
+        // 백지 재개 — 새 세션은 다른 대화다. 신원 필드를 비운다: 비우지 않으면 다음 롤이 지금 일부러
+        // 두고 온 이 rollout 을 복사한다("백지 재개에서 반드시 지워야 하는 것"). priorReset·
+        // priorAsked 도 함께 비운다 — attachRollout 이 정상 롤에서 같은 이유로 같은 일을 한다: 남겨
+        // 두면 이 세션이 자기 rate_limits 를 한 번도 쓰기 전에 judgedByPriorBlock 이 지금 버린
+        // 대화의 기록으로 판정해 버린다. unmappedWarned·preemptWarned 도 새 unmapped 에피소드가
+        // 자기 로그를 낼 수 있도록 되돌린다. 새 rollout 은 아직 존재하지 않는 파일이므로 register()
+        // 의 fresh-spawn 경로와 같은 방법으로 다시 찾는다 — 그 전까지는 unmapped 상태이므로 onLimit
+        // 은 복사 없이 스스로 멈추고(대기를 예약하고) 재-locate 가 끝나야 다음 한도를 판정할 수 있다.
+        chain.codexSessionId = null
+        chain.rolloutPath = null
+        chain.tail = null
+        chain.priorReset = undefined
+        chain.priorAsked = false
+        chain.unmappedWarned = false
+        chain.preemptWarned = false
+        this.startLocate(chain, target)
+        this.deps.log(
+          `codex smart resume — rolled ${oldId} into a blank-slate session ${info.id} account=${target.label}`
+        )
+      }
+      // dest is sent along too, so the CodexRolloutWatcher re-registration (index.ts) can drop this copy from
       // its candidates. CoreEvents['session:rolled'] does not declare this field, but send()'s payload is
-      // unknown so the extra field rides along safely — the renderer just ignores it.
+      // unknown so the extra field rides along safely — the renderer just ignores it. On a blank-slate roll
+      // dest is undefined — there is no known rollout yet, and the watcher's own registration already
+      // falls back to searching for one, the same as it does for any ordinary fresh spawn.
       this.deps.send('session:rolled', { oldSessionId: oldId, info, dest })
       this.pushState(chain, 'switching', { accountLabel: target.label, reattach: true })
       this.deps.log(`codex rolled ${oldId} → ${info.id} account=${target.label}`)
@@ -712,27 +1165,42 @@ export class CodexRollingCoordinator {
         chain.healthyTimer = null
         chain.cycle.onHealthy()
         chain.recovery[chain.cycle.currentIndex] = null
+        // What this timer observed is 60 seconds with **no limit detected** — not that a turn actually ran
+        // (settleInPlace is the only site with that evidence). The shared record goes with it because a
+        // false one keeps every other chain off the account until its recorded reset time passes; the price
+        // is that a *true* record another chain wrote inside this window is erased by a session that has
+        // not produced any work of its own yet (blockRegistry.clear).
+        this.deps.blocks.clear(chain.accountIds[chain.cycle.currentIndex])
         chain.inPlaceUsed = false
       }, HEALTHY_MS)
       this.pushState(chain, 'none')
     } catch (err) {
       this.deps.log(`codex roll failed: ${err instanceof Error ? err.message : String(err)}`)
-      this.pushState(chain, 'none')
+      // **The state published here can be optimistic.** If the throw landed between the kill and the
+      // re-key, this 'waiting' — and the resume the timer eventually fires — is addressed to a session
+      // id that no longer exists; 'none' was the more honest state for that one window. The session was
+      // already lost at that point and that fatality is pre-existing, not something the reschedule adds.
+      // It is deliberately not distinguished: a flag saying "the kill already happened" would have to be
+      // threaded through the whole kill→spawn→re-key sequence to be correct, and a wrong flag would
+      // silence the reschedule on the aborts that need it.
+      this.rescheduleAbortedRoll(chain, 'roll failed')
     } finally {
       chain.rolling = false
     }
   }
 
-  /** The 15-second tick — refreshes the state, applies verdict ① (reachedType with no phrase) and fallback ③ (100% plus 30 seconds of no output) */
+  /** The 15-second tick — refreshes the state, applies verdict ① (reachedType with no phrase), the
+   *  recovered block of a session that has no snapshot yet (judgedByPriorBlock — the only place that
+   *  verdict can fire without a phrase) and fallback ③ (100% plus 30 seconds of no output) */
   private tick(): void {
     for (const chain of this.chains.values()) {
       if (chain.disposed || chain.rolling || chain.waitTimer || !chain.tail) continue
       void this.refresh(chain).then(() => {
         if (chain.disposed || chain.rolling || chain.waitTimer) return
-        if (limitReached(chain.state, { textHit: false })) {
+        if (this.judgedByPriorBlock(chain)) return
+        if (limitReached(chain.state)) {
           this.recordRecovery(chain)
-          // No phrase was involved, so this can only be one of the two structured signals
-          this.onLimit(chain, this.reasonOf(chain, 'reachedType'))
+          this.onLimit(chain, this.reasonOf(chain))
           return
         }
         if (maxedOut(chain.state) && this.now() - chain.lastOutputAt > FALLBACK_SILENCE_MS) {

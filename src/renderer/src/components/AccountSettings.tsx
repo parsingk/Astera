@@ -32,7 +32,14 @@ export function AccountSettings({ accounts }: { accounts: Account[] }): React.JS
           toast.error(t('account.logout.failed', { detail: tm(r.message ?? null) ?? '' }))
         }
       }
-      await window.api.accounts.remove(removeTarget.id)
+      // 돌아가는 세션이 그 계정을 쓰고 있으면 main 이 거부한다(ipc.ts 의 accountRemovalBlockers).
+      // 거부는 실패가 아니라 사용자가 몰랐던 사실을 알리는 것이므로, 어느 세션이 막고 있는지 이름을
+      // 말한다 — 이름 없이 "쓰이는 중"만 말하면 사용자가 무엇을 닫아야 할지 알 수 없다.
+      const r = await window.api.accounts.remove(removeTarget.id)
+      if (r && !r.ok) {
+        toast.error(t('account.remove.inUse', { titles: r.titles.join(', ') }))
+        return
+      }
     } finally {
       setRemoving(false)
       setRemoveTarget(null)

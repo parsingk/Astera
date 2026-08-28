@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   lastTurns,
+  parseTranscriptForResume,
   parseTranscriptMeta,
   parseTranscriptPreview,
   parseTranscriptTail
@@ -42,6 +43,24 @@ describe('parseTranscriptMeta', () => {
       isSidechain: false,
       isHelper: false
     })
+  })
+
+  it('isMeta 레코드는 제목이 되지 않는다 — 스킬 본문이 대화 제목으로 걸리던 자리다', async () => {
+    const file = await write('meta-title.jsonl', [
+      line({
+        type: 'user',
+        sessionId: 'sess-m',
+        cwd: 'D:\\proj',
+        isMeta: true,
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: 'Base directory for this skill: C:/skills/artifact-design' }]
+        }
+      }),
+      line({ type: 'user', message: { role: 'user', content: '진짜 첫 요청' } })
+    ])
+    const meta = await parseTranscriptMeta(file)
+    expect(meta.title).toBe('진짜 첫 요청')
   })
 
   it('첫 줄이 queue-operation이면 isHelper=true (HUD 헬퍼 세션, 실측 91%)', async () => {
@@ -232,6 +251,21 @@ describe('parseTranscriptMeta', () => {
 })
 
 describe('parseTranscriptTail', () => {
+  it('isMeta 레코드는 마지막 사용자 메시지도 아니고 답변 대기 판정도 뒤집지 않는다', async () => {
+    const file = await write('tail-meta.jsonl', [
+      line({ type: 'user', message: { role: 'user', content: '질문' } }),
+      line({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '답변' }] } }),
+      line({
+        type: 'user',
+        isMeta: true,
+        message: { role: 'user', content: [{ type: 'text', text: 'Base directory for this skill: C:/skills/x' }] }
+      })
+    ])
+    const tail = await parseTranscriptTail(file)
+    expect(tail.lastUserTitle).toBe('질문')
+    expect(tail.awaitingReply).toBe(true)
+  })
+
   it('마지막 real user 메시지를 lastUserTitle로 추출한다', async () => {
     const file = await write('tail-a.jsonl', [
       line({ type: 'user', message: { role: 'user', content: '첫 메시지' } }),
@@ -432,5 +466,232 @@ describe('parseTranscriptPreview', () => {
     expect(preview.messages).toHaveLength(2)
     expect(preview.messages[0]).toEqual({ role: 'user', text: '첫 메시지', timestamp: undefined })
     expect(preview.messages[1]).toEqual({ role: 'assistant', text: '두 번째 메시지', timestamp: undefined })
+  })
+})
+
+describe('parseTranscriptForResume', () => {
+  it('한 번의 읽기로 제목·요청·손댄 파일·꼬리를 모두 뽑는다', async () => {
+    const file = await write('all.jsonl', [
+      line({ type: 'ai-title', aiTitle: 'fix-flaky-test', sessionId: 's1' }),
+      line({ type: 'user', message: { role: 'user', content: '첫 요청' } }),
+      line({
+        type: 'file-history-snapshot',
+        snapshot: { trackedFileBackups: { 'src\\a.ts': { version: 1 } } }
+      }),
+      line({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '응답' }] } }),
+      line({ type: 'user', message: { role: 'user', content: '두 번째 요청' } }),
+      line({
+        type: 'file-history-snapshot',
+        snapshot: { trackedFileBackups: { 'src\\a.ts': { version: 1 }, 'src\\b.ts': { version: 1 } } }
+      })
+    ])
+    const material = await parseTranscriptForResume(file)
+    expect(material.title).toBe('fix-flaky-test')
+    expect(material.requests).toEqual(['첫 요청', '두 번째 요청'])
+    // 가장 최근 file-history-snapshot 만 남고, 경로는 슬래시로 정규화된다
+    expect(material.editedFiles).toEqual(['src/a.ts', 'src/b.ts'])
+    expect(material.tail.map((m) => m.text)).toEqual(['첫 요청', '응답', '두 번째 요청'])
+  })
+
+  // 제목 레코드는 이름이 버전마다 다르다 — 현행 Claude Code 는 `ai-title`, 구버전은 `summary` 다.
+  // 이 앱은 구버전 CLI 를 쓰는 사용자에게도 나가므로 둘 다 받아야 하고, 한쪽만 받으면 그 사용자는
+  // 제목 줄을 영구히 못 받은 채 그 사실이 조용히 지나간다.
+  it('구버전의 summary 레코드도 제목으로 읽는다', async () => {
+    const file = await write('old-title.jsonl', [
+      line({ type: 'summary', summary: '옛 형식 제목' }),
+      line({ type: 'user', message: { role: 'user', content: '요청' } })
+    ])
+    const material = await parseTranscriptForResume(file)
+    expect(material.title).toBe('옛 형식 제목')
+  })
+
+  it('ai-title 레코드가 없으면 title 은 null 이다 — 그 레코드에 의존하지 않는다', async () => {
+    const file = await write('no-title.jsonl', [
+      line({ type: 'user', message: { role: 'user', content: '요청' } })
+    ])
+    const material = await parseTranscriptForResume(file)
+    expect(material.title).toBeNull()
+    expect(material.requests).toEqual(['요청'])
+  })
+
+  it('file-history-snapshot 이 한 번도 없으면 editedFiles 는 빈 배열이다', async () => {
+    const file = await write('no-snapshot.jsonl', [
+      line({ type: 'user', message: { role: 'user', content: '요청' } })
+    ])
+    const material = await parseTranscriptForResume(file)
+    expect(material.editedFiles).toEqual([])
+  })
+
+  it('기계가 남긴 user 줄은 요청에도 꼬리에도 들어가지 않는다', async () => {
+    const file = await write('machine.jsonl', [
+      line({ type: 'user', message: { role: 'user', content: '<bash-input>ls -la</bash-input>' } }),
+      line({ type: 'user', message: { role: 'user', content: '진짜 요청' } })
+    ])
+    const material = await parseTranscriptForResume(file)
+    expect(material.requests).toEqual(['진짜 요청'])
+    expect(material.tail.map((m) => m.text)).toEqual(['진짜 요청'])
+  })
+
+  // 접두어 목록으로는 못 잡는 부류다 — 스킬 본문은 아무 표지 없이 시작하고, 그 길이가 브리핑
+  // 예산을 통째로 먹는다(실측은 isMetaUserRecord 의 JSDoc).
+  it('isMeta 레코드는 요청에도 꼬리에도 들어가지 않는다', async () => {
+    const file = await write('meta.jsonl', [
+      line({ type: 'user', message: { role: 'user', content: '진짜 요청' } }),
+      line({
+        type: 'user',
+        isMeta: true,
+        turnCompanion: true,
+        sourceToolUseID: 'toolu_01ABC',
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: 'Base directory for this skill: C:/skills/artifact-design' }]
+        }
+      }),
+      line({ type: 'user', isMeta: true, message: { role: 'user', content: '[Image: original 3840x2088]' } })
+    ])
+    const material = await parseTranscriptForResume(file)
+    expect(material.requests).toEqual(['진짜 요청'])
+    expect(material.tail.map((m) => m.text)).toEqual(['진짜 요청'])
+  })
+
+  // Task 6 (Phase 2c) — 실측(2026-08-28, 이 컴퓨터의 실제 대화 파일들): tool_use 이름 Bash 는
+  // input.command 를 담고, 짝이 되는 tool_result 는 tool_use_id·is_error·content 를 담는다. 같은
+  // 단일 패스에 얹는다(기존 주석이 적어 둔 대로 파일을 다시 훑지 않는다).
+  describe('lastCommand — 마지막 Bash 호출과 그 결과(LAST VALIDATION 재료)', () => {
+    const bashUse = (id: string, command: string) =>
+      line({
+        type: 'assistant',
+        message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] }
+      })
+    const bashResult = (id: string, content: string, isError: boolean) =>
+      line({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: id, content, is_error: isError }]
+        }
+      })
+
+    // 리뷰가 잡았다: 슬롯 하나로 추적하던 동안 한 턴이 Bash 를 둘 내보내면 뒤 id 가 앞 id 를
+    // 덮어써서, 먼저 시작된 호출의 결과가 도착해도 짝을 못 찾고 조용히 버려졌다. 독립적인 호출은
+    // 한 번에 묶어 보내는 것이 권장되므로 드문 모양이 아니다.
+    it('한 턴이 Bash 를 둘 내보내고 결과가 역순으로 와도 짝을 맞춘다', async () => {
+      const twoUses = line({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'p1', name: 'Bash', input: { command: 'git status' } },
+            { type: 'tool_use', id: 'p2', name: 'Bash', input: { command: 'npm test' } }
+          ]
+        }
+      })
+      const file = await write('cmd-parallel.jsonl', [
+        twoUses,
+        bashResult('p1', 'clean', false) // 먼저 시작된 쪽의 결과가 먼저 도착한다
+      ])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand).toEqual({ command: 'git status', failed: false, excerpt: 'clean' })
+    })
+
+    it('결과가 둘 다 오면 나중에 도착한 쪽이 마지막이다', async () => {
+      const twoUses = line({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'q1', name: 'Bash', input: { command: 'git status' } },
+            { type: 'tool_use', id: 'q2', name: 'Bash', input: { command: 'npm test' } }
+          ]
+        }
+      })
+      const file = await write('cmd-parallel2.jsonl', [
+        twoUses,
+        bashResult('q1', 'clean', false),
+        bashResult('q2', '2 tests failed', true)
+      ])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand?.command).toBe('npm test')
+      expect(material.lastCommand?.failed).toBe(true)
+    })
+
+    it('완료된 Bash 호출의 명령·실패 여부·결과를 뽑는다', async () => {
+      const file = await write('cmd-ok.jsonl', [bashUse('t1', 'npm test'), bashResult('t1', '2 tests failed', true)])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand).toEqual({ command: 'npm test', failed: true, excerpt: '2 tests failed' })
+    })
+
+    it('is_error 가 false 면 failed 도 false 다 — 종료 코드는 애초에 없다', async () => {
+      const file = await write('cmd-success.jsonl', [
+        bashUse('t1', 'npm run build'),
+        bashResult('t1', 'build succeeded', false)
+      ])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand?.failed).toBe(false)
+    })
+
+    it('여러 번 실행되면 시간순으로 가장 나중에 완료된 것만 남는다', async () => {
+      const file = await write('cmd-many.jsonl', [
+        bashUse('t1', 'npm test'),
+        bashResult('t1', 'first result', true),
+        bashUse('t2', 'npm run lint'),
+        bashResult('t2', 'lint clean', false)
+      ])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand).toEqual({ command: 'npm run lint', failed: false, excerpt: 'lint clean' })
+    })
+
+    it('마지막 Bash 호출이 아직 결과를 못 받았으면(세션이 그 도중 끊겼으면) 그 이전의 완료된 호출이 남는다', async () => {
+      const file = await write('cmd-pending.jsonl', [
+        bashUse('t1', 'npm test'),
+        bashResult('t1', 'passed', false),
+        bashUse('t2', 'npm run deploy') // 결과 없이 파일이 끝난다
+      ])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand).toEqual({ command: 'npm test', failed: false, excerpt: 'passed' })
+    })
+
+    it('Bash 호출이 한 번도 없으면 null 이다', async () => {
+      const file = await write('cmd-none.jsonl', [
+        line({ type: 'user', message: { role: 'user', content: '평범한 요청' } })
+      ])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand).toBeNull()
+    })
+
+    it('Bash 가 아닌 다른 도구(Read)는 lastCommand 에 들어가지 않는다', async () => {
+      const file = await write('cmd-other-tool.jsonl', [
+        line({
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: 'a.ts' } }]
+          }
+        }),
+        line({
+          type: 'user',
+          message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'r1', content: 'file contents' }] }
+        })
+      ])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand).toBeNull()
+    })
+
+    it('tool_result.content 가 배열(text 블록)이어도 방어적으로 읽는다', async () => {
+      const file = await write('cmd-array-content.jsonl', [
+        bashUse('t1', 'npm test'),
+        line({
+          type: 'user',
+          message: {
+            role: 'user',
+            content: [
+              { type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: 'ok' }], is_error: false }
+            ]
+          }
+        })
+      ])
+      const material = await parseTranscriptForResume(file)
+      expect(material.lastCommand).toEqual({ command: 'npm test', failed: false, excerpt: 'ok' })
+    })
   })
 })

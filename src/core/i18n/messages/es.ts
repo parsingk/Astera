@@ -207,6 +207,13 @@ export const es: Catalog = {
   'settings.theme.hint':
     'Cambia colores, esquinas y tipografía a la vez. La fuente del terminal se elige aparte, más abajo.',
   'settings.theme.saveFailed': 'No se pudo guardar el tema: {detail}',
+  // ResumeStrategySettings.tsx — the two-way resume strategy picker
+  'settings.resumeStrategy.label': 'Estrategia de reanudación de sesión',
+  'settings.resumeStrategy.smart.label': 'Reanudación inteligente (experimental)',
+  'settings.resumeStrategy.smart.hint': 'Continúa la conversación solo con un punto de control compacto.',
+  'settings.resumeStrategy.original.label': 'Reanudar la sesión original',
+  'settings.resumeStrategy.original.hint': 'Continúa la conversación con el resume propio del CLI.',
+  'settings.resumeStrategy.saveFailed': 'No se pudo guardar la estrategia de reanudación: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': 'Fuente latina del terminal',
   'settings.font.hangul': 'Fuente hangul del terminal',
@@ -445,6 +452,7 @@ export const es: Catalog = {
   'account.remove.processing': 'Procesando…',
   'account.remove.confirmWithLogout': 'Anular y cerrar sesión',
   'account.logout.failed': 'Error al cerrar sesión: {detail}\n\nLa anulación del registro continúa igualmente.',
+  'account.remove.inUse': 'Una sesión en curso está usando esta cuenta, así que no se puede anular su registro: {titles}\n\nCierra la sesión o quita la cuenta de su orden de rotación.',
   // The Message key accountLogout in core.ts returns
   'account.error.raw': '{detail}',
   'account.error.logoutFailed': 'Error al cerrar sesión',
@@ -574,6 +582,7 @@ export const es: Catalog = {
   'history.menu.hide': 'Ocultar',
   'history.project.noSessions': 'Sin sesiones',
   'history.entry.preview': 'Vista previa',
+  'history.entry.resume': 'Reanudar la sesión',
   'history.preview.truncated': '(solo lo reciente)',
   'history.preview.me': 'Yo',
   'history.resume.folderMissingTitle': 'No se encontró la carpeta del proyecto',
@@ -692,6 +701,7 @@ export const es: Catalog = {
   // BottomPanel.tsx — the Run tab label, clear and collapse buttons
   'run.panel.noActiveRun': 'Ejecución',
   'run.panel.exited': ' · Finalizado (código {code})',
+  'run.panel.close': 'Cerrar la pestaña de ejecución',
   'run.panel.clear': 'Limpiar',
   'run.panel.collapse': 'Contraer',
   // BottomPanel, the rail terminal button
@@ -817,6 +827,8 @@ export const es: Catalog = {
   'jobs.event.dispatchStarted': 'worker iniciado',
   'jobs.event.gateOpened': 'esperando decisión',
   'jobs.event.gateResolved': 'decidido',
+  'jobs.event.limitHit': 'límite alcanzado',
+  'jobs.event.resumed': 'worker reanudado',
   'jobs.event.status': 'estado',
   'jobs.event.workerDone': 'informe del worker',
   'jobs.event.question': 'pregunta',
@@ -852,7 +864,8 @@ export const es: Catalog = {
   'jobs.new.folderBusy': 'Ya hay un worker trabajando en esta carpeta — con límite 1 el worker de este trabajo también corre ahí, así que sus ediciones pueden mezclarse',
   'jobs.new.failed': 'No se pudo crear el trabajo',
   'jobs.gate.noAccount': 'Ninguna cuenta de {provider} tiene la sesión iniciada, así que esta Task no puede empezar',
-  'jobs.gate.assignedAccountUnusable': 'La cuenta asignada a esta Task no se puede usar — no tiene la sesión iniciada, fue eliminada o pertenece a otro agente',
+  'jobs.gate.assignedAccountUnusable':
+    'No se puede usar la primera cuenta asignada a esta Task, y las siguientes solo están ahí para pasar a ellas más tarde — vuelve a iniciar sesión en esa cuenta o cambia la lista de cuentas de esta Task',
   // NewTaskModal.tsx — el formulario en el que se convierte el panel inferior de RunDetail
   // (.detail-events) mientras se está creando una Task. deps pertenece al grafo, no a este formulario
   // (el grafo es donde se eligen las dependencias) — por eso este catálogo solo tiene el texto que
@@ -865,13 +878,22 @@ export const es: Catalog = {
   'jobs.task.depsAdd': 'Elegir una Task',
   'jobs.task.account': 'Cuenta',
   'jobs.task.accountDefault': 'Cuenta por defecto',
-  'jobs.task.accountHint': 'La cuenta en la que esta Task levanta su worker — la cuenta por defecto si no eliges',
-  'jobs.task.accountTrust': 'La primera vez que esta cuenta abre esta carpeta, la pestaña de sesión pide confirmar que confías en ella — el worker no empieza hasta que respondas',
+  'jobs.task.accountNone': 'Sin usar',
+  'jobs.task.accountHint':
+    'Las cuentas en las que esta tarea ejecuta su worker — la cuenta predeterminada si se deja sin definir. Con más de una, al alcanzar el límite de uso el worker pasa a la siguiente en el orden indicado',
+  'jobs.task.accountTrust':
+    'La primera vez que una cuenta elegida abre esta carpeta, la pestaña de sesión pide confirmar que confías en ella — el worker no empieza hasta que respondas',
   'jobs.task.validate': 'Configuración que prueba que terminó',
   'jobs.task.validateNone': 'Sin validación',
   'jobs.task.review': 'Revisión por otro agente',
   'jobs.task.create': 'Añadir',
   'jobs.task.failed': 'No se pudo crear la tarea',
+  // JobsView.tsx — después del provider en una fila en ejecución. Si está esperando, esto
+  // reemplaza el tiempo transcurrido, y el historial de reanudaciones se añade después
+  // ({left}/{n} es la sustitución {name} de core/i18n/index.ts).
+  'jobs.task.waitingReset': 'Esperando el reinicio · {left}',
+  'jobs.task.waitingNoTime': 'Esperando el reinicio',
+  'jobs.task.resumedCount': 'reanudada {n}×',
   'jobs.node.start': 'Iniciar',
   'jobs.node.stop': 'Detener',
   'jobs.node.restart': 'Iniciar de nuevo',

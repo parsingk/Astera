@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { buildResumeNote, buildResumePacket } from './resumePacket'
+import { buildResumeNote, buildResumePacket, buildTabResumeText } from './resumePacket'
+import type { TranscriptResumeMaterial } from '../../core/history/parser'
 import { LAUNCH_FORBIDDEN } from './coordinator'
 import * as checkpointModule from '../../core/orchestration/checkpoint'
 import { emptyState, createRun, createTask, openDispatch } from '../../core/orchestration/state'
@@ -353,4 +354,272 @@ describe('buildResumeNote', () => {
     expect(await buildResumeNote('plain-tab', s, { git: withChanges(), now: () => NOW })).toBeNull()
   })
 
+})
+
+// Task 2 — Dispatch 가 없는 탭 세션도 브리핑을 받는다. buildResumePacket/buildResumeNote 와 달리
+// OrchState 를 보지 않으므로 seed()를 쓰지 않는다. specDir 은 여전히 쓴다 — 이제 tab-resume 파일이
+// 실제로 쓰이는 디렉터리(deps.dir)로도 겸한다(Task 7).
+describe('buildTabResumeText', () => {
+  const CWD = 'C:/projects/my-api'
+
+  const material: TranscriptResumeMaterial = {
+    title: 'fix-flaky-ci',
+    requests: ['Fix the flaky CI test.'],
+    editedFiles: ['src/a.ts'],
+    tail: [{ role: 'user', text: 'It fails only on Windows.' }],
+    lastCommand: null
+  }
+
+  const tabFile = (sessionId: string): string => path.join(specDir, `${sessionId}.md`)
+
+  it('handover — 대화 파일을 한 번 읽어 제목·요청·손댄 파일·꼬리를 모두 파일에 싣고, 그 파일을 가리키는 한 줄만 돌려준다', async () => {
+    const readTranscript = vi.fn().mockResolvedValue(material)
+
+    const line = await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      provider: 'claude',
+      transcriptPath: '/fake/transcript.jsonl',
+      git: fakeGit(),
+      readTranscript,
+      dir: specDir
+    })
+
+    expect(line).not.toBeNull()
+    expect(line).not.toContain('\n') // 한 줄이어야 한다 — claude 는 PTY 에 타이핑한다, codex 는 인자로 간다
+    expect(line).toContain(tabFile('sess1'))
+
+    const content = await fs.readFile(tabFile('sess1'), 'utf8')
+    expect(content).toContain('fix-flaky-ci')
+    expect(content).toContain('Fix the flaky CI test.')
+    expect(content).toContain('src/a.ts')
+    expect(content).toContain('It fails only on Windows.')
+    // fix wave 최종, F9: 대화 기록에서 뽑은 목록이므로 git 유래 표제가 아니다.
+    expect(content).toContain('FILES TOUCHED IN THIS CONVERSATION')
+    expect(content).not.toContain('UNCOMMITTED CHANGES')
+    expect(readTranscript).toHaveBeenCalledTimes(1)
+    expect(readTranscript).toHaveBeenCalledWith('/fake/transcript.jsonl')
+  })
+
+  // fix round (Task 7): 같은 세션으로 두 번 재개하면 파일이 쌓이지 않고 교체된다 — buildResumePacket
+  // 의 spec 파일과 달리 보존할 기존 절이 없으므로 통째로 덮어쓴다(brief 결정 2 — 이력을 쌓지 않는다).
+  it('같은 세션으로 두 번 handover 하면 파일이 두 개가 되지 않고 두 번째 내용으로 덮어써진다', async () => {
+    const first = await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      provider: 'claude',
+      transcriptPath: '/fake/transcript.jsonl',
+      git: fakeGit(),
+      readTranscript: vi.fn().mockResolvedValue(material),
+      dir: specDir
+    })
+    expect(first).not.toBeNull()
+    expect(await fs.readFile(tabFile('sess1'), 'utf8')).toContain('fix-flaky-ci')
+
+    const second = await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      provider: 'claude',
+      transcriptPath: '/fake/transcript.jsonl',
+      git: fakeGit(),
+      readTranscript: vi.fn().mockResolvedValue({ ...material, title: 'a-later-title' }),
+      dir: specDir
+    })
+    expect(second).not.toBeNull()
+
+    const content = await fs.readFile(tabFile('sess1'), 'utf8')
+    expect(content).toContain('a-later-title')
+    expect(content).not.toContain('fix-flaky-ci') // 쌓이지 않고 완전히 교체됐다
+    expect(await fs.readdir(specDir)).toEqual(['sess1.md']) // 파일이 두 개가 되지 않는다, 끊긴 임시 파일도 없다
+  })
+
+  // fix round (Task 7): writeAtomic 이 실패하면 다른 실패와 같은 계약 — null 로 저하하고 폐기를
+  // 로그로 남긴다(buildResumeNote 의 JSDoc 이 적어 둔 이유와 같다 — 소리 없이 사라지지 않는다).
+  it('handover 파일 쓰기가 실패하면 null 이고 폐기가 로그로 남는다', async () => {
+    const log = vi.fn()
+    const writeFile = vi.fn(() =>
+      Promise.reject(Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }))
+    )
+
+    const line = await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      provider: 'claude',
+      transcriptPath: '/fake/transcript.jsonl',
+      git: fakeGit(),
+      readTranscript: vi.fn().mockResolvedValue(material),
+      dir: specDir,
+      writeFile,
+      log
+    })
+
+    expect(line).toBeNull()
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(log.mock.calls[0]?.[0]).toContain('tab resume failed')
+  })
+
+  // Task 6 (Phase 2c) — material.lastCommand 가 포매터까지 이어진다는 것을 이 배선 지점에서 확인한다
+  // (내용 자체의 규칙은 tabResume.test.ts·parser.test.ts 가 이미 덮는다). Task 7 이후로는 파일에서 확인한다.
+  it('handover — material 의 lastCommand 가 파일까지 이어진다', async () => {
+    const readTranscript = vi.fn().mockResolvedValue({
+      ...material,
+      lastCommand: { command: 'npm test', failed: true, excerpt: '2 tests failed' }
+    })
+
+    const line = await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      provider: 'claude',
+      transcriptPath: '/fake/transcript.jsonl',
+      git: fakeGit(),
+      readTranscript,
+      dir: specDir
+    })
+
+    expect(line).not.toContain('\n')
+    const content = await fs.readFile(tabFile('sess1'), 'utf8')
+    expect(content).toContain('LAST COMMAND')
+    expect(content).toContain('npm test')
+    expect(content).toContain('2 tests failed')
+  })
+
+  it("update — 대화 파일을 아예 읽지 않고, 파일도 만들지 않는다(git 상태만 쓰므로 읽을 값이 없다)", async () => {
+    const readTranscript = vi.fn().mockResolvedValue(material)
+
+    const text = await buildTabResumeText('sess1', 'update', {
+      cwd: CWD,
+      provider: 'claude',
+      transcriptPath: '/fake/transcript.jsonl',
+      git: fakeGit({
+        'rev-parse HEAD': { ok: true, stdout: 'head-now', stderr: '' },
+        '-c core.quotepath=false status --short': { ok: true, stdout: ' M src/a.ts\n', stderr: '' }
+      }),
+      readTranscript,
+      dir: specDir
+    })
+
+    expect(text).not.toBeNull()
+    expect(text).toContain('src/a.ts')
+    expect(text).not.toContain('fix-flaky-ci') // 제목은 update 재료가 아니다
+    expect(readTranscript).not.toHaveBeenCalled() // 읽지 않는다 — 낭비를 피한다
+    await expect(fs.access(tabFile('sess1'))).rejects.toThrow() // 'update' 는 파일을 건드리지 않는다
+  })
+
+  it('손댄 파일이 대화에 없으면 git 의 변경 목록으로 내려간다(파일에서 확인한다)', async () => {
+    const readTranscript = vi.fn().mockResolvedValue({ ...material, editedFiles: [] })
+
+    await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      provider: 'claude',
+      transcriptPath: '/fake/transcript.jsonl',
+      git: fakeGit({
+        'rev-parse HEAD': { ok: true, stdout: 'head-now', stderr: '' },
+        '-c core.quotepath=false status --short': { ok: true, stdout: '?? src/from-git.ts\n', stderr: '' }
+      }),
+      readTranscript,
+      dir: specDir
+    })
+
+    const content = await fs.readFile(tabFile('sess1'), 'utf8')
+    expect(content).toContain('src/from-git.ts')
+    // fix wave 최종, F9: git 으로 내려간 목록은 "이 대화에서 손댔다"고 주장하지 않는다 — 지금
+    // 커밋 안 된 변경일 뿐이라는 것을 표제로 밝힌다(tabResume.ts 의 editedFilesSource).
+    expect(content).toContain('UNCOMMITTED CHANGES (from git)')
+    expect(content).not.toContain('FILES TOUCHED IN THIS CONVERSATION')
+  })
+
+  // fix wave 최종, F2: transcriptPath 를 모르면(대화를 못 읽었다는 뜻) git 만으로 handover 를
+  // 내면 안 된다 — git 은 "지금 코드 상태"의 증거일 뿐 "대화에서 무엇을 하고 있었는가"의 증거가
+  // 아니다(formatHandover 의 계약, tabResume.ts). 이 테스트는 예전에 "git 만으로 시도한다"고
+  // 반대로 확인했는데, 그 시도 자체가 대화가 통째로 사라지는 백지 handover 를 골랐다.
+  it('transcriptPath 를 모르면 null 이다 — git 만으로는 handover 를 만들지 않는다', async () => {
+    const readTranscript = vi.fn().mockResolvedValue(material)
+    const log = vi.fn()
+
+    const line = await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      provider: 'claude',
+      transcriptPath: null,
+      git: fakeGit({
+        'rev-parse HEAD': { ok: true, stdout: 'head-now', stderr: '' },
+        '-c core.quotepath=false status --short': { ok: true, stdout: '?? src/only-git.ts\n', stderr: '' }
+      }),
+      readTranscript,
+      log,
+      dir: specDir
+    })
+
+    expect(line).toBeNull()
+    expect(readTranscript).not.toHaveBeenCalled()
+    await expect(fs.access(tabFile('sess1'))).rejects.toThrow() // 파일도 쓰지 않는다
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(log.mock.calls[0]?.[0]).toContain('tab resume skipped')
+  })
+
+  it('git 도 없고 transcriptPath 도 없으면 null 이고 폐기가 로그로 남는다', async () => {
+    const log = vi.fn()
+
+    const text = await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      provider: 'claude',
+      transcriptPath: null,
+      git: UNREADABLE_GIT,
+      log,
+      dir: specDir
+    })
+
+    expect(text).toBeNull()
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(log.mock.calls[0]?.[0]).toContain('tab resume skipped')
+  })
+
+  it('대화 파일 읽기가 던지면 null 을 돌리고 로그를 남긴다', async () => {
+    const log = vi.fn()
+    const readTranscript = vi.fn().mockRejectedValue(new Error('EMFILE'))
+
+    const text = await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      provider: 'claude',
+      transcriptPath: '/fake/transcript.jsonl',
+      git: fakeGit(),
+      readTranscript,
+      log,
+      dir: specDir
+    })
+
+    expect(text).toBeNull()
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(log.mock.calls[0]?.[0]).toContain('tab resume failed')
+  })
+
+  // Task 3 (Phase 2c) — codex 탭 세션의 격차를 닫는다. readTranscript 를 주입하지 않고 provider 로만
+  // 골라, 진짜 codex rollout 형식 파일을 읽힌다: claude 파서(parseTranscriptForResume)는 codex 의
+  // event_msg 레코드를 하나도 인식하지 못하므로(type이 'user'/'assistant'가 아니다), 잘못된 파서가
+  // 골렸다면 이 텍스트는 비어 있었을 것이다.
+  it('provider가 codex면 codex rollout 형식으로 읽는다', async () => {
+    const codexFile = path.join(specDir, 'codex-rollout.jsonl')
+    await fs.writeFile(
+      codexFile,
+      [
+        JSON.stringify({ type: 'session_meta', payload: { session_id: 'sid', cwd: CWD } }),
+        JSON.stringify({
+          timestamp: '2026-08-26T00:00:00.000Z',
+          type: 'event_msg',
+          payload: { type: 'user_message', message: 'codex 쪽 최근 요청입니다' }
+        }),
+        JSON.stringify({
+          timestamp: '2026-08-26T00:00:01.000Z',
+          type: 'event_msg',
+          payload: { type: 'agent_message', message: '알겠습니다' }
+        })
+      ].join('\n') + '\n',
+      'utf8'
+    )
+
+    const line = await buildTabResumeText('sess1', 'handover', {
+      cwd: CWD,
+      provider: 'codex',
+      transcriptPath: codexFile,
+      git: fakeGit(),
+      dir: specDir
+    })
+
+    expect(line).not.toBeNull()
+    expect(await fs.readFile(tabFile('sess1'), 'utf8')).toContain('codex 쪽 최근 요청입니다')
+  })
 })

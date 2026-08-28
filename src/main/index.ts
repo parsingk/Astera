@@ -13,10 +13,11 @@ import { isOwnDocument } from './navigationGuard'
 import { RollingCoordinator } from './rolling'
 import { SchedulerCoordinator } from './scheduler'
 import { CodexRollingCoordinator } from './codexRolling'
+import { BlockRegistry } from '../core/rolling/blockRegistry'
 import { SlackNotifier, SlackConfigStore } from './slack'
 import { SlackInboxController, createSocketClient } from './slackInbox'
 import { HookEventWatcher } from './hookEvents'
-import { CodexTurnWatcher } from './codexTurnWatcher'
+import { CodexRolloutWatcher } from './codexRolloutWatcher'
 import { RateLimitFetcher } from './usage'
 import { t } from '../core/i18n'
 import { loadPolicy, nextCheckDelayMs, parsePolicyUrl, shouldApplyCampaign } from './updatePolicy'
@@ -49,10 +50,36 @@ const USAGE_GATE_MAX_AGE_MS = 10_000
 let core: Core | null = null
 let codexRollingRef: CodexRollingCoordinator | null = null
 let schedulerRef: SchedulerCoordinator | null = null
-let codexTurnsRef: CodexTurnWatcher | null = null
+let codexRolloutRef: CodexRolloutWatcher | null = null
 let slackInboxControllerRef: SlackInboxController | null = null // Slack inbound socket rebuilder — cut on quit
 let rollingRef: RollingCoordinator | null = null // lets the hook callback reach a coordinator created later
 let orchRef: OrchHandle | null = null // orchestration shutdown cleanup + the rolling seam
+// fix wave 최종, F1: the tab-briefing function, handed over unconditionally (OrchWiring.onTabResumeReady)
+// — unlike orchRef above, this is set the moment registerIpc runs, whether or not orchestration ever
+// boots. Read by the two rolling coordinators' resumeText dep when orchRef is null (orchestration off),
+// so a plain tab session's Smart Resume briefing does not depend on the unrelated orchestration toggle.
+let tabResumeTextRef: ((sessionId: string, form: 'handover' | 'update') => Promise<string | null>) | null =
+  null
+
+/** The `resumeText` dep both rolling coordinators receive (RollingDeps/CodexRollingDeps). fix wave
+ *  최종, F1: tries the Job briefing through `orchRef` when orchestration is up; when it is not
+ *  (`orchRef === null`), a Job Dispatch cannot exist at all, so there is nothing to look up there —
+ *  this goes straight to `tabResumeTextRef`, guarded by the same `tabFallback` the caller already
+ *  computed (F3: the ordinary-path 'handover' ask passes `false` so a tab session's `chain.prompt`
+ *  is never replaced by a pointer the process has no use for). When orchestration *is* up, `orchRef
+ *  .resumeText` already does the Job-then-maybe-tab fallback internally (ipc.ts), so this does not
+ *  retry `tabResumeTextRef` itself — that would call `tabResumeTextFor` a second time for the same
+ *  session and form, redoing its file write for nothing. */
+const resumeTextDep = (
+  sessionId: string,
+  form: 'handover' | 'update',
+  tabFallback: boolean
+): Promise<string | null> =>
+  orchRef
+    ? orchRef.resumeText(sessionId, form, tabFallback)
+    : tabFallback
+      ? (tabResumeTextRef?.(sessionId, form) ?? Promise.resolve(null))
+      : Promise.resolve(null)
 let tray: Tray | null = null
 let quitting = false
 let mainWindow: BrowserWindow | null = null // focus target for the single-instance second-instance event
@@ -333,11 +360,13 @@ app.whenReady().then(async () => {
     slack.applyConfig(c)
     void slackInboxController.apply(c)
   })
-  // codex turn-completion detection: codex has no hooks, so this reads task_complete out of the
-  // rollout jsonl. Independent of rolling, only codex sessions with Slack notifications on are
-  // watched (the caller decides that at register time) — the watcher's own logs share slack.log,
-  // since turn-completion notifications end up on Slack anyway.
-  const codexTurns = new CodexTurnWatcher({
+  // codex rollout watcher: codex has neither hooks nor a statusLine mechanism, so this one tail of
+  // the rollout jsonl answers both questions — task_complete for turn completion, and the token_count
+  // records the usage chips draw. Independent of rolling. Every codex session is watched (the caller
+  // registers them all, because the chips follow the active session) and the watcher reports turn
+  // completion only for those that asked for Slack. Its logs share slack.log: turn-completion
+  // notifications end up on Slack anyway, and the usage side is quiet in normal operation.
+  const codexRollout = new CodexRolloutWatcher({
     getAccount: (id) => {
       try {
         return core!.accounts.get(id)
@@ -348,7 +377,7 @@ app.whenReady().then(async () => {
     onTurnComplete: (sessionId, rolloutPath) => slack.onCodexTurnComplete(sessionId, rolloutPath),
     log: slackLog
   })
-  codexTurnsRef = codexTurns
+  codexRolloutRef = codexRollout
   const hookWatcher = new HookEventWatcher(
     core.hookEventsDir,
     (sid, payload) => {
@@ -417,6 +446,9 @@ app.whenReady().then(async () => {
   // a limit phrase re-matching on every chunk still produces very few real requests. The token never
   // leaves this process.
   const usageFetcher = new RateLimitFetcher()
+  // One registry for both coordinators — the sharing is the feature (SPEC §11.2/6). Two instances
+  // would compile and pass every test while sharing nothing.
+  const blocks = new BlockRegistry()
   const rolling = new RollingCoordinator({
     spawn: (opts) => core!.sessions.spawn(opts),
     write: (id, d) => core!.sessions.write(id, d),
@@ -499,14 +531,19 @@ app.whenReady().then(async () => {
       }
     },
     lang: () => core!.lang,
+    blocks,
     persistConfig: (sid, cfg) => {
       // fire-and-forget — a persist failure must not block rolling
       void core!.rollConfig.set(sid, cfg).catch(() => {})
     },
     orchEnv: () => orchRef?.orchEnv(),
-    // Job 워커의 재개 packet(Task 4b/4c). 오케스트레이션이 꺼져 있으면(orchRef === null) 물어볼
-    // 곳이 없다 — 그때는 null 로, RollingCoordinator 가 기존 고정 문장으로 저하한다.
-    resumeText: (sessionId, form) => orchRef?.resumeText(sessionId, form) ?? Promise.resolve(null)
+    // Job 워커의 재개 packet(Task 4b/4c), 없으면(오케스트레이션이 꺼져 있거나 탭 세션이면) 탭
+    // 브리핑으로 저하한다 — resumeTextDep 의 JSDoc(fix wave 최종, F1/F3).
+    resumeText: resumeTextDep,
+    // 한도에 걸린 세션을 어떻게 이어갈지(Task 1 의 설정) — orchEnv 와 같은 이유로 getter 다: 값이
+    // 설정 화면에서 앱 수명 중간에 바뀌고, 이 코디네이터는 그보다 먼저 만들어진다. codexRolling 의
+    // 같은 배선과 같은 자리, 같은 값이다.
+    resumeStrategy: () => core!.appSettings.getResumeStrategy()
   })
   rollingRef = rolling
 
@@ -537,20 +574,26 @@ app.whenReady().then(async () => {
       }
       try {
         if (channel === 'session:rolled') {
-          // dest: the rollout path copied into the target account just before the roll
+          // dest: the rollout path copied into the target account just before an ordinary roll
           // (codexRolling.roll() carries it along). The respawn resumes, so codex appends to that very
           // file instead of creating a new one — it is what the watcher has to tail, and searching for a
           // newly created file would find nothing at all. It is handed over directly; the watcher starts
-          // at the end of it so the turns from before the roll are not reported again.
+          // at the end of it so the turns from before the roll are not reported again. **`undefined` on
+          // a blank-slate roll (Smart Resume)** — that respawn is a fresh `codex` with no rollout to
+          // copy or hand over yet, so `register` below falls back to its own search, the same path a
+          // brand-new session already takes (codexRolling.ts's `roll()` documents the same fallback at
+          // its own `send('session:rolled', ...)` call).
           const p = payload as { oldSessionId: string; info: SessionInfo; dest?: string }
           scheduler.rekey(p.oldSessionId, p.info.id) // the schedule follows the roll chain
           // When rolling switches accounts the session respawns under a new sessionId and a new
-          // rollout file appears — without re-registering, turn-completion notifications stop for
-          // good after the switch. codexRolling is the codex-only coordinator (ipc.ts's spawn branch
-          // already splits on provider), so every session reaching here is codex — re-checking the
-          // provider is unnecessary.
-          codexTurns.unregister(p.oldSessionId)
-          if (p.info.slackNotify) codexTurns.register(p.info, p.dest)
+          // rollout file appears — without re-registering, both turn-completion notifications and the
+          // usage chips stop for good after the switch. codexRolling is the codex-only coordinator
+          // (ipc.ts's spawn branch already splits on provider), so every session reaching here is
+          // codex — re-checking the provider is unnecessary. Unconditional, matching the spawn path:
+          // the chips are needed whether or not this session asked for Slack, and the watcher gates
+          // the turn callback on info.slackNotify itself.
+          codexRollout.unregister(p.oldSessionId)
+          codexRollout.register(p.info, p.dest)
         } else if (channel === 'session:rollState') {
           // codex rolling sends session:rollState too (switching/waiting/none) — suppress the resume window
           scheduler.handleRollState(payload as RollStateEvent)
@@ -597,12 +640,16 @@ app.whenReady().then(async () => {
       }
     },
     lang: () => core!.lang,
+    blocks,
     persistConfig: (sid, cfg) => {
       void core!.rollConfig.set(sid, cfg).catch(() => {}) // fire-and-forget
     },
     orchEnv: () => orchRef?.orchEnv(),
-    // Job 워커의 재개 packet(Task 4b/4c) — rolling.ts 의 같은 필드와 같은 이유다.
-    resumeText: (sessionId, form) => orchRef?.resumeText(sessionId, form) ?? Promise.resolve(null)
+    // Job 워커의 재개 packet(Task 4b/4c) — rolling.ts 의 같은 필드, 같은 resumeTextDep 이다.
+    resumeText: resumeTextDep,
+    // 한도에 걸린 세션을 어떻게 이어갈지(Task 1 의 설정) — orchEnv 와 같은 이유로 getter 다: 값이
+    // 설정 화면에서 앱 수명 중간에 바뀌고, 이 코디네이터는 그보다 먼저 만들어진다.
+    resumeStrategy: () => core!.appSettings.getResumeStrategy()
   })
   codexRollingRef = codexRolling
   // Agent orchestration: an HTTP server embedded in the app plus the astera CLI let an agent spawn
@@ -629,11 +676,16 @@ app.whenReady().then(async () => {
     },
     codexRolling,
     scheduler,
-    codexTurns,
+    codexRollout,
     {
       log: orchLog,
       onStarted: (h) => {
         orchRef = h
+      },
+      // fix wave 최종, F1: called unconditionally, regardless of whether orchestration ever starts —
+      // see OrchWiring.onTabResumeReady's JSDoc (ipc.ts) and resumeTextDep above.
+      onTabResumeReady: (fn) => {
+        tabResumeTextRef = fn
       }
     },
     () => refreshTrayMenu(win) // rebuild Open/Quit in the new language after settings.setLang
@@ -841,7 +893,7 @@ app.on('will-quit', () => {
     /* shutdown cleanup failures are ignored */
   }
   try {
-    codexTurnsRef?.stop() // codex turn watcher polling cleanup
+    codexRolloutRef?.stop() // codex rollout watcher polling cleanup
   } catch {
     /* shutdown cleanup failures are ignored */
   }

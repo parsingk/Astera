@@ -76,6 +76,48 @@
   font-style: normal;
   font-display: block;
 }
+@font-face {
+  font-family: 'Public Sans';
+  src: url('./assets/fonts/PublicSans/PublicSans-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Public Sans';
+  src: url('./assets/fonts/PublicSans/PublicSans-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Public Sans';
+  src: url('./assets/fonts/PublicSans/PublicSans-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Public Sans';
+  src: url('./assets/fonts/PublicSans/PublicSans-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('./assets/fonts/JetBrainsMono/JetBrainsMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('./assets/fonts/JetBrainsMono/JetBrainsMono-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: block;
+}
 
 /* Vega's palette, kept here as the fallback for when the theme provider does not run (bootTheme in
    renderer/lib/theme.tsx sets these same variables from the stored theme before the first paint). It is
@@ -379,7 +421,7 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .run-global { position: relative; }
 .run-global-badge { display: inline-flex; align-items: center; gap: 4px; background: var(--elevated); border: 1px solid var(--line-soft); color: var(--text-dim); border-radius: var(--radius-sm); font-size: 11px; padding: 2px 7px; cursor: pointer; font-variant-numeric: tabular-nums; }
 .run-global-badge:hover { border-color: var(--text-faint); }
-.run-global-badge .tri { color: var(--run); font-size: 9px; }
+.run-global-badge .tri { color: var(--run); }
 .run-global-badge .n { color: var(--ok); font-weight: 600; }
 .run-global-menu { position: absolute; top: calc(100% + 5px); right: 0; z-index: 20; min-width: 240px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 4px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 1px; }
 .run-global-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--radius); transition: background var(--ease); }
@@ -479,7 +521,8 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* ---------- worktree panel ---------- */
 .worktree-panel { border-top: 1px solid var(--line); }
 /* Reuses the look of .panel-header h2 as a collapse/expand button */
-.panel-toggle { background: none; border: none; padding: 0; font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; cursor: pointer; }
+/* 캐럿이 아이콘이 된 뒤로 정렬이 필요하다 — 인라인 svg 는 baseline 에 앉아 대문자 글자보다 내려간다. */
+.panel-toggle { background: none; border: none; padding: 0; font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
 .panel-toggle:hover { color: var(--text); }
 /* It sits alongside the history section in the sidebar, so the hierarchy look matches that one:
    .worktree-group=.project-group, .worktree-repo=.project-name, .worktree-list=.session-sublist,
@@ -503,13 +546,14 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* The lock indicator while a delete is in flight — the 0.7 rule above is more specific than the global
    button:disabled (opacity .5), so without dimming again here a locked button looks completely normal */
 .worktree-actions .ghost:disabled { opacity: 0.3; }
-/* The ✕ on a row being deleted holds the spinner — dimming it like a locked button would kill the
-   spinner with it (a parent's opacity cannot be undone by a child, so the button itself is an exception).
-   The height goes back to the line box the ✕ glyph used to make (normal line-height on a 13px font,
-   ≈ 1.333em) plus .ghost's 2px top and bottom padding — the spinner is 14px, so left alone this row would
-   sit 3px lower and the list would jitter */
+/* The delete button on a row being deleted holds the spinner — dimming it like a locked button would kill
+   the spinner with it (a parent's opacity cannot be undone by a child, so the button itself is an exception). */
 .worktree-actions .ghost.removing:disabled { opacity: 0.7; }
-.worktree-actions .ghost.removing { min-height: calc(1.333em + 4px); }
+/* The spinner stands in for a 12px icon, so it is sized to one. The shared .loading-spinner is 14px, which
+   made the button 18px against the icons' 16px and grew this row for as long as the delete ran.
+   This replaces a min-height of calc(1.333em + 4px): that pinned the button to the line box the old ✕
+   *text* glyph made (≈21px), which the drawn icons no longer produce — left in place it jumped the row 5px. */
+.worktree-actions .ghost.removing .loading-spinner { width: 12px; height: 12px; }
 
 /* ---------- tabs ---------- */
 .tabs { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; }
@@ -521,7 +565,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .tab.exited .tab-title { text-decoration: line-through; color: var(--text-faint); }
 .tab-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 /* The rolling-active session marker — a small, restrained, non-interactive mark; the account chain is exposed only through the title tooltip */
-.tab-roll { flex: none; font-size: 11px; opacity: 0.65; cursor: default; user-select: none; }
+.tab-roll { flex: none; opacity: 0.65; cursor: default; user-select: none; }
 /* Session working: a spinner in the account colour. Larger than a dot (10px) with a bright semicircular
    arc turning, so it reads clearly. The colour is set inline (a faint track plus full colour on
    top/right = a bright 180° arc). */
@@ -562,7 +606,14 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    `clip` is not a scroll container at all, so nothing can scroll it. It only works because both axes
    are clipped here — pair it with `auto` on the other axis and it degrades to `hidden`. xterm's own
    scrolling is unaffected: that lives in the child .xterm-viewport. */
-.terminal-host { flex: 1; background: var(--term-bg); min-height: 0; overflow: clip; }
+/* min-width:0 is what `clip` costs. Width is this item's main axis (.terminal-wrap is a row flex
+   container), and a flex item's automatic minimum size only collapses to 0 when the item is a scroll
+   container — `hidden` was one, `clip` is not. So under clip the host's floor became its content width,
+   i.e. .xterm-screen's cols × cellWidth: splitting a pane left the host at its old width, the
+   ResizeObserver saw no real change, fitTerminalToHost kept the same column count, and the old
+   terminal stayed full width and got clipped with the new pane drawn over it. Measured: a slot going
+   1000px → 500px leaves the host at 990px without this, 500px with it. */
+.terminal-host { flex: 1; background: var(--term-bg); min-width: 0; min-height: 0; overflow: clip; }
 /* No inner padding on the terminal — it has to sit flush against the sidebar's bottom line and the left
    and right edges, or the session window looks like it is floating. Zero padding also prevents clipping:
    FitAddon takes the parent's (host's) height as availableHeight verbatim and subtracts only the padding
@@ -728,7 +779,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    Chromium 에게 "어두운 쪽으로 그려라"라고 말하는 전부다.
    아이콘도 이것으로 밝아진다(실측). 그래서 filter: invert 로 뒤집던 방식을 버렸다 — 둘을 함께 쓰면
    이미 밝아진 아이콘을 다시 뒤집어 어두워진다.
-   여섯 테마가 모두 어두우므로(core/theme/themes.ts) dark 로 고정해도 테마와 어긋나지 않는다.
+   일곱 테마가 모두 어두우므로(core/theme/themes.ts) dark 로 고정해도 테마와 어긋나지 않는다.
    **주의**: 같은 선언이 number 스피너에는 듣지 않는다 — .jobs-concurrency 주석의 실측 그대로다.
    위젯마다 다르다는 뜻이고, 그래서 스피너는 없애고 이쪽은 이 선언을 쓴다. */
 .field input.sched-time { color-scheme: dark; }
@@ -805,7 +856,7 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* ---------- 모양 탭: 테마 카드 ---------- */
 .settings-theme { display: flex; flex-direction: column; gap: 8px; }
 .theme-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
-/* 카드는 자기 테마의 값으로 그린다(인라인 스타일) — 앱 토큰을 쓰면 여섯 장이 전부 같아 보인다.
+/* 카드는 자기 테마의 값으로 그린다(인라인 스타일) — 앱 토큰을 쓰면 일곱 장이 전부 같아 보인다.
    그래서 여기서는 색을 정하지 않고 배치만 정한다. */
 .theme-card { display: flex; flex-direction: column; gap: 8px; align-items: flex-start;
   padding: 10px; border: 1px solid; cursor: pointer; text-align: left; font-size: 12.5px; }
@@ -814,6 +865,18 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .theme-card-bars { display: flex; width: 100%; height: 18px; border-radius: inherit; overflow: hidden; }
 .theme-card-bars i { flex: 1; }
 .theme-card-name { font-weight: 600; }
+/* ---------- 일반 탭: 재개 방식 카드 ---------- */
+/* .theme-grid/.theme-card와 같은 두 열 카드 배치다. 다만 팔레트 미리보기가 없어 인라인 스타일이
+   필요 없으므로 색은 앱 토큰(--line 등)에서 그대로 가져온다. */
+.settings-resume-strategy { display: flex; flex-direction: column; gap: 8px; }
+.resume-strategy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.resume-strategy-card { display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+  padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg);
+  color: var(--text); cursor: pointer; text-align: left; font-size: 12.5px; }
+.resume-strategy-card.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.resume-strategy-card:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.resume-strategy-card-name { font-weight: 600; }
+.resume-strategy-card-desc { color: var(--text-dim); }
 /* worktree 기준 브랜치 — 라벨 문구를 위, 셀렉트를 아래에 둔다(.field label 들과 같은 관례).
    컨테이너가 <label>이 아니라 <div>인 이유는 컴포넌트 쪽 주석에 있다(라벨은 클릭을 컨트롤로 한 번 더
    전달해서 드롭다운이 닫히자마자 다시 열렸다). div 라서 `.field label`(0,1,1)과 경쟁하지 않으므로
@@ -860,8 +923,6 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    여기서 다시 적는다 — 그쪽에 클래스를 얹으면 그 규칙의 뜻이 바뀐다. */
 .settings-history-bulk button.danger { margin-left: auto; color: var(--danger); border-color: var(--danger); }
 .settings-history-bulk button.danger:disabled { opacity: 0.45; cursor: default; color: var(--text-dim); border-color: var(--line-soft); }
-/* 행 맨 앞의 체크박스가 경로 텍스트에 눌려 줄어들지 않게 한다 */
-.settings-row > input[type='checkbox'] { flex: none; margin: 0; }
 .settings-field-label { font-size: 13.5px; color: var(--text-dim); }
 .settings-hint { font-size: 12px; color: var(--text-faint); }
 
@@ -884,6 +945,13 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
   flex: 1;
   min-width: 0;
 }
+/* NewTaskModal 의 계정 슬롯 — 위 .account-slot 과 같은 일을 다른 자리에서 한다(이쪽은 Task 의 체인,
+   위는 탭 세션의 롤링)는 이유로 이 블록 옆에 둔다. 감싸는 div 없이 AccountSelect 를 필드 안에 그대로
+   쌓으므로, 기본 여백이 없는 블록이라 그냥 두면 테두리가 맞붙는다 — .jobs-sched 가 자기 줄들에 주는
+   것과 같은 6px 를 형제 사이에 준다.
+   **.field 안으로 한정한다**: 이름만 보고 쓸 수 있는 전역 클래스가 앱 전체에 형제 여백 규칙을 들고
+   있으면, 다른 화면에서 같은 이름을 쓰는 순간 이유를 모르는 여백이 생긴다. */
+.field .stack-item + .stack-item { margin-top: 6px; }
 /* A custom dropdown for account selection — it replaces the native select so an SVG badge can go inside
    an option. The trigger uses the same border and background as .sel-trigger. */
 /* ---------- Select: the app's one dropdown ----------
@@ -1035,11 +1103,13 @@ label.check-small {
 }
 /* 이 앱의 체크박스. 네이티브 상자는 어느 테마에서도 브라우저 기본 파란색과 흰 바탕으로 그려져
    테마 밖으로 튄다 — appearance:none 으로 지우고 .sel-trigger 의 바탕·테두리로 다시 그린다.
-   **`label.check-small` 에만 건다.** 이 클래스가 모달들이 공유하는 체크박스 관례이고(12곳),
-   그 밖의 체크박스는 다른 문맥에 산다 — 설정의 .settings-row, 계정 쪽 .toggle-row, 그리고
-   마크다운 프리뷰가 그리는 작업 목록. 마지막 것은 사용자 문서의 일부라 앱 크롬의 색을 입히면
-   틀린 말이 된다. */
-label.check-small input[type="checkbox"] {
+   **모든 체크박스에 건다.** 한동안 `label.check-small` 에만 걸었는데, 그 관례를 쓰지 않는 자리
+   다섯 곳이 파란 네이티브 상자로 남아 있었다 — 설정의 .settings-row, 계정 쪽 .toggle-row 와
+   .detect-row, 히스토리의 .settings-history-check. 거는 선택자를 열거해서 늘리면 다음에 추가되는
+   체크박스가 같은 방식으로 또 빠지므로, 거는 쪽이 아니라 **빠지는 쪽**을 적는다.
+   빠지는 것은 마크다운 프리뷰의 작업 목록뿐이다(li.md-task) — 그건 사용자 문서의 일부라 앱 크롬의
+   색을 입히면 틀린 말이 된다. */
+input[type="checkbox"]:not(.md-task input) {
   appearance: none;
   flex: none;
   width: 14px;
@@ -1056,22 +1126,36 @@ label.check-small input[type="checkbox"] {
   cursor: pointer;
   transition: border-color var(--ease), background var(--ease);
 }
-label.check-small input[type="checkbox"]:hover { border-color: var(--text-faint); }
-label.check-small input[type="checkbox"]:checked {
+input[type="checkbox"]:not(.md-task input):not(:disabled):hover { border-color: var(--text-faint); }
+/* 끌 수 없는 체크박스는 그렇게 보여야 한다. button:disabled 와 같은 값을 쓴다.
+   새 세션·이어하기 모달의 'Slack 진행상황 알림'이 이것을 쓴다 — Slack 을 등록하지 않으면
+   disabled 인데, 여기 규칙이 없던 동안은 활성과 픽셀 단위로 같아 보였고 hover 에도 반응해서
+   "체크가 안 먹는다"로 읽혔다. 옆의 .check-note 안내만으로는 상자가 멀쩡해 보이는 것을 이기지 못한다. */
+input[type="checkbox"]:not(.md-task input):disabled { opacity: .5; cursor: not-allowed; }
+/* 상자만 흐리면 라벨 글자는 그대로라 줄이 아직 살아 있어 보인다. 줄 전체를 흐리게 해야
+   "이 항목은 지금 쓸 수 없다"가 읽힌다. :has() 는 Chrome 105+ 이고 이 앱은 146 이다. */
+label.check-small:has(input:disabled) { opacity: .55; }
+input[type="checkbox"]:not(.md-task input):checked {
   background: var(--accent);
   border-color: var(--accent);
 }
-/* 체크 표시는 가상 요소로 그린다 — appearance:none 이 네이티브 표시까지 지웠다. 두 변만 남긴
-   사각형을 45도 돌린 것이 갈고리다 */
-label.check-small input[type="checkbox"]:checked::after {
+/* 체크 표시는 가상 요소로 그린다 — appearance:none 이 네이티브 표시까지 지웠다.
+   모양은 lucide 의 Check(`M20 6 9 17l-5-5`)다. 앱의 다른 아이콘이 전부 lucide 인데 이 표시만
+   두 변을 남긴 사각형을 45도 돌린 갈고리였고, border 로 그린 탓에 획 끝이 각져 lucide 의 둥근
+   끝(stroke-linecap: round)과 나란히 놓이면 달라 보였다.
+   **컴포넌트가 아니라 마스크인 이유**: <input type="checkbox"> 는 자식을 받지 못해 <Check/> 를
+   넣을 자리가 없다. 마스크로 쓰면 색은 여기서 --accent-ink 로 계속 주면서 모양만 빌려온다.
+   stroke-width 가 3 인 것은 24 viewBox 를 10px 로 줄이기 때문이다 — lucide 기본값 2 는 이
+   크기에서 0.83px 이 되어 상자 안에서 사라진다. 3 이면 1.25px 로, 갈고리였을 때의 1.5px 와
+   비슷한 무게가 된다. */
+input[type="checkbox"]:not(.md-task input):checked::after {
   content: '';
-  width: 7px;
-  height: 3.5px;
-  border-left: 1.5px solid var(--accent-ink);
-  border-bottom: 1.5px solid var(--accent-ink);
-  transform: rotate(-45deg) translate(0, -1px);
+  width: 10px;
+  height: 10px;
+  background: var(--accent-ink);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / contain no-repeat;
 }
-label.check-small input[type="checkbox"]:focus-visible {
+input[type="checkbox"]:not(.md-task input):focus-visible {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--ring);
@@ -1092,7 +1176,7 @@ label.check-small input[type="checkbox"]:focus-visible {
 /* 그룹 헤더라 .worktree-row/.session-row 와 같은 종류의 행이 아니다 — --row-pad-y 를 걸지 않은 게 빠뜨린 게 아니다 */
 .project-row { display: flex; align-items: center; gap: 9px; padding: 10px 12px; cursor: pointer; user-select: none; transition: background var(--ease); }
 .project-row:hover { background: var(--elevated); }
-.project-chevron { flex-shrink: 0; width: 12px; font-size: 11px; color: var(--text-faint); }
+.project-chevron { flex-shrink: 0; width: 12px; color: var(--text-faint); }
 .project-name { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-meta { font-size: 10px; font-family: var(--mono); color: var(--text-faint); flex-shrink: 0; }
 /* An expanded session: bound by a vertical rail in the account colour, with the title dimmed — the density stays as it is */
@@ -1350,6 +1434,8 @@ label.check-small input[type="checkbox"]:focus-visible {
 /* RunConfigForm's "add optional field" menu — same shape as .rtp-menu but a flat list, so it gets its
    own (short) rule set rather than sharing .rtp-menu's grouped layout. */
 .rcm-add-option { position: relative; align-self: flex-start; }
+/* .panel-toggle 과 같은 이유 — 라벨 옆의 캐럿 아이콘을 글자 가운데에 맞춘다. */
+.rcm-add-option > button { display: inline-flex; align-items: center; gap: 4px; }
 .rcm-add-option-menu { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; min-width: 160px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 4px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 1px; }
 .rcm-add-option-item { text-align: left; white-space: nowrap; padding: 5px 8px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text); font-size: 12.5px; cursor: pointer; }
 .rcm-add-option-item:hover { background: var(--elevated); }
@@ -1476,7 +1562,9 @@ label.check-small input[type="checkbox"]:focus-visible {
 /* ---------- file viewer ---------- */
 .file-truncated { padding: 4px 12px; font-size: 12px; color: var(--warn); background: var(--warn-bg); flex: none; }
 .file-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-dim); font-size: 13px; background: var(--panel); z-index: 2; }
-.tab-dirty { flex: none; font-size: 9px; opacity: 0.8; }
+/* 저장되지 않은 파일 표시. .tab-dot 과 같은 방식의 CSS 원이다 — ● 글리프였을 때는 크기가 테마
+   서체를 탔고, 그 자리에 lucide Circle 을 넣으면 6px 에서 외곽선이 뭉개진다. */
+.tab-dirty { flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: 0.8; }
 .file-editor-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
 .file-conflict { flex: none; padding: 4px 12px; font-size: 12px; background: var(--warn-bg); color: var(--warn); display: flex; gap: 8px; align-items: center; }
 
@@ -1487,7 +1575,7 @@ label.check-small input[type="checkbox"]:focus-visible {
 .fx-tree { flex: 1; min-height: 0; overflow: auto; font-size: 13px; user-select: none; }
 .fx-row { display: flex; align-items: center; gap: 4px; padding: 2px 8px; cursor: pointer; white-space: nowrap; transition: background var(--ease), box-shadow var(--ease); }
 .fx-row:hover { background: rgba(255, 255, 255, 0.06); }
-.fx-caret { flex: none; width: 12px; font-size: 10px; color: var(--text-dim); }
+.fx-caret { flex: none; width: 12px; color: var(--text-dim); }
 .fx-name { overflow: hidden; text-overflow: ellipsis; }
 /* git status — colour on the filename only. File type icon colours are left alone */
 .fx-name.git-new { color: var(--git-new); }
@@ -1629,7 +1717,7 @@ label.check-small input[type="checkbox"]:focus-visible {
    '자세히' 버튼은 stopPropagation 을 부른다 — JobsView.tsx 의 그 자리 주석 참고.
    **hover 를 이 줄에 두지 않는다** — 위 .jobs-run:hover 가 Run 전체로 말한다 */
 .jobs-run-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px 0; cursor: pointer; }
-.jobs-caret { flex: none; width: 9px; font-size: 10px; color: var(--text-faint); }
+.jobs-caret { flex: none; width: 9px; color: var(--text-faint); }
 .jobs-objective { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 560; }
 /* 끝난 Run 은 물러난다 — 목록이 길어질수록 눈이 가야 하는 것은 아직 도는 쪽이다. 실패한 Run 은
    여기서 흐려지지 않는다: 사람이 손봐야 하는 것이라 끝났어도 읽혀야 한다 */
@@ -1656,7 +1744,10 @@ label.check-small input[type="checkbox"]:focus-visible {
 .jobs-task--reviewing .jobs-av { background: rgba(169, 142, 222, 0.18); color: var(--fi-purple); }
 .jobs-task-body { flex: 1; min-width: 0; }
 .jobs-task-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.jobs-task-meta { display: block; color: var(--text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+/* 제목 줄과 같은 세 규칙을 쓴다 — 이 줄도 길어질 수 있다. 사이드바는 280px, 줄 본문은 약 199px
+   인데 가장 긴 문구("claude · 리셋 대기 · 2:14:00 · 2번 이어짐", 스페인어는 더 길다)는 250px 쯤을
+   요구해서, 자르지 않으면 둘째 줄로 넘어가며 줄 높이가 늘어난다 */
+.jobs-task-meta { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; }
 .jobs-jump { flex: none; color: var(--text-faint); font-size: 12px; }
 /* 넷째부터를 접은 줄. 여는 곳이 없으므로 눌리지 않는다 */
 .jobs-fold { cursor: default; color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
@@ -1931,3 +2022,36 @@ kbd.shortcut-conflict { color: var(--fi-red); border-color: var(--fi-red); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 /* the confirmation modal body — preserves paths and multi-line messages verbatim (the existing .confirm-text is excluded, being multi-line JSX) */
 .confirm-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---------- 테마별 예외 ---------- */
+/* 테마는 CSS 변수 표 하나로 정의되고(core/theme/themes.ts), 그 표로 말할 수 없는 것만 여기 온다.
+   renderer/lib/theme.tsx 가 documentElement 에 심는 data-theme 이 이 블록들의 문이다.
+
+   Sirius 의 입력칸은 assistant-ui 의 것을 따른다: 평소에는 테두리 없이 채워져 있고, 포커스하면
+   바탕이 어두워지면서 테두리가 나타난다 — 다른 여섯 테마와 정확히 반대 방향이라 변수만으로는
+   낼 수 없다(--line-soft 를 투명하게 만들면 테두리를 쓰는 다른 자리가 모두 사라진다).
+   원본은 packages/ui/src/components/ui/base/input.tsx 의 `bg-muted/60 border-transparent
+   focus-visible:bg-background focus-visible:border-ring` 이다.
+
+   크기는 일부러 옮기지 않았다. 원본은 h-9(36px)에 px-3(12px)이지만 이 앱에서 컨트롤의 크기는
+   테마의 density 가 정하고(core/theme/apply.ts 의 DENSITY), Sirius 는 normal 을 선언했다.
+   여기서 높이를 따로 키우면 밀도를 정하는 곳이 두 군데가 된다.
+   포커스 링도 2px 그대로다 — 원본은 1px 지만 포커스 가시성을 낮출 이유가 없다. */
+[data-theme='sirius'] .field input[type='text'],
+[data-theme='sirius'] .field textarea {
+  background: var(--elevated);
+  border-color: transparent;
+}
+[data-theme='sirius'] .field input[type='text']:focus,
+[data-theme='sirius'] .field textarea:focus {
+  background: var(--bg);
+  border-color: var(--accent);
+}
+/* 쉬는 체크박스도 같은 이유로 채워진 바탕에 둔다 — 원본의 dark:bg-input/30 자리다.
+   **:not(:checked) 가 필요한 이유**: 이 선택자와 위쪽의 `:checked` 규칙은 특이도가 (0,3,2)로
+   같고, 이 블록이 파일 뒤에 있어 배경 선언이 그쪽을 이긴다. 그래서 처음에는 체크된 상자까지
+   --elevated 로 칠해졌고, 그 위에 --accent-ink 체크가 얹혀 대비 1.21:1 로 사라졌다. 원본도
+   쉴 때(bg-input/30)와 체크됐을 때(data-[state=checked]:bg-primary)를 나눈다. */
+[data-theme='sirius'] input[type='checkbox']:not(.md-task input):not(:checked) {
+  background: var(--elevated);
+}

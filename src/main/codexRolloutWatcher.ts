@@ -1,15 +1,25 @@
-// Detects turn completion in codex sessions from the rollout file.
+// Reads a codex session's rollout file and answers two questions from the one tail: has a turn just
+// completed, and how much of the context and of the two limit windows is used.
 //
-// For Claude the Stop hook reports it, but codex has no hook system. Instead the rollout jsonl records
-// event_msg/task_complete once per turn (verified across 59 files and 156 turns).
+// Turn completion: for Claude the Stop hook reports it, but codex has no hook system. Instead the
+// rollout jsonl records event_msg/task_complete once per turn (verified across 59 files and 156 turns).
+//
+// Usage: codex has no statusLine mechanism either, so the rollout is also the only place the usage
+// chips' three figures are written down (token_count records — see core/usage/codex.ts). That is why
+// **every** codex session is registered here, not only the ones that asked for Slack notifications:
+// the chips are drawn for whichever session is active. Only the turn callback stays gated (Entry
+// .notifyTurns), so Slack traffic does not grow.
 //
 // Why this is independent of rolling: Slack-only sessions with rolling turned off have to be detected too.
 // Bolting it onto CodexRollingCoordinator would create a responsibility mismatch — "the rolling coordinator tracks
 // sessions that are not rolling" — and clash with the existing rolling design. When rolling is on, two tails run
 // over the same file, which is negligible because reads are incremental by offset.
-import type { Account, SessionInfo } from '../core/types'
+import type { Account, SessionInfo, SessionUsage } from '../core/types'
 import { JsonlTail } from '../core/rolling/jsonlTail'
 import { findRollout } from '../core/rolling/codexLocate'
+import { limitStateFromLines, type CodexLimitState } from '../core/rolling/codexSignal'
+import { tailLines } from '../core/rolling/tailLines'
+import { contextFromLines, sessionUsageOf } from '../core/usage/codex'
 
 const POLL_MS = 1_000 // Same value as LOCATE_POLL_MS in codexRolling.ts (which is not exported there)
 
@@ -21,9 +31,32 @@ interface Entry {
   rolloutPath: string | null
   tail: JsonlTail | null
   disposed: boolean
+  /** Whether turn completion is reported. Every codex session is watched (the usage chips need it);
+   *  only the ones that asked for Slack notifications get the callback. */
+  notifyTurns: boolean
+  /** The two limit windows, carried forward across batches that hold none — see limitStateFromLines. */
+  limits: CodexLimitState | null
+  context: SessionUsage['context']
+  /** Reads the context out of the file as it stood at attach time, for a resume or a post-roll respawn.
+   *
+   *  Only the context, never the windows. A resumed session attaches to a file whose usage figures were
+   *  written by the previous account, and drawing those would report the wrong account's usage —
+   *  whereas the context is still true, because it is the same conversation. (The mirror image of
+   *  CodexRolloutTail's priorReset, which keeps the reset instant and drops the percentages.)
+   *
+   *  Started in register for the same reason CodexRolloutTail starts its own seed there: what we want
+   *  is the file as it stood when we attached, and the first step() can be a whole tick later. */
+  contextSeed: Promise<SessionUsage['context']> | null
 }
 
-export interface CodexTurnDeps {
+/** The context figure the rollout already held when we attached, or null when the file cannot be read.
+ *  A module-level function rather than a method, mirroring readPriorReset in codexSignal.ts. */
+async function seedContext(filePath: string): Promise<SessionUsage['context']> {
+  const lines = await tailLines(filePath)
+  return lines ? contextFromLines(lines) : null
+}
+
+export interface CodexRolloutDeps {
   getAccount(id: string): Account | null
   onTurnComplete(sessionId: string, rolloutPath: string): void
   log(message: string): void
@@ -46,16 +79,18 @@ function isTaskComplete(line: string): boolean {
   return (p as Record<string, unknown>).type === 'task_complete'
 }
 
-export class CodexTurnWatcher {
+export class CodexRolloutWatcher {
   private entries = new Map<string, Entry>()
   private ticker: ReturnType<typeof setInterval> | null = null
   private readonly now: () => number
 
-  constructor(private deps: CodexTurnDeps) {
+  constructor(private deps: CodexRolloutDeps) {
     this.now = deps.now ?? Date.now
   }
 
-  /** Registers only codex sessions that have Slack notifications enabled. The caller determines the provider and passes it in.
+  /** Registers a codex session. The caller determines the provider and passes it in; every codex
+   *  session belongs here, because the usage chips are drawn for whichever one is active. Whether turn
+   *  completion is *reported* is decided per entry from info.slackNotify.
    *
    *  rolloutPath: the file a resumed session will write to, when the caller already knows it (ipc for a
    *  history resume, index.ts for the respawn after a roll). It is not an optimisation — `codex resume`
@@ -66,7 +101,7 @@ export class CodexTurnWatcher {
    *  misfire the old excludePaths argument was there to prevent. */
   register(info: SessionInfo, rolloutPath?: string): void {
     if (!this.deps.getAccount(info.accountId)) {
-      this.deps.log(`codex turn watch registration cancelled — no such account session=${info.id}`)
+      this.deps.log(`codex rollout watch registration cancelled — no such account session=${info.id}`)
       return
     }
     this.entries.set(info.id, {
@@ -76,9 +111,22 @@ export class CodexTurnWatcher {
       since: this.now(),
       rolloutPath: rolloutPath ?? null,
       tail: rolloutPath ? new JsonlTail(rolloutPath, { startAtEnd: true }) : null,
-      disposed: false
+      disposed: false,
+      notifyTurns: info.slackNotify === true,
+      limits: null,
+      context: null,
+      contextSeed: rolloutPath ? seedContext(rolloutPath) : null
     })
     this.ensureTicker()
+  }
+
+  /** The usage snapshot for the chips, or null when this session is unknown or nothing has been read
+   *  yet. Synchronous on purpose — it is answered from what the poll already collected, the same way
+   *  the claude side answers from the statusLine capture file. */
+  usage(sessionId: string): SessionUsage | null {
+    const e = this.entries.get(sessionId)
+    if (!e) return null
+    return sessionUsageOf(e.context, e.limits)
   }
 
   unregister(sessionId: string): void {
@@ -121,7 +169,7 @@ export class CodexTurnWatcher {
       } catch (err) {
         // One session's failure must not stop the others
         this.deps.log(
-          `codex turn watch error session=${entry.sessionId}: ${err instanceof Error ? err.message : String(err)}`
+          `codex rollout watch error session=${entry.sessionId}: ${err instanceof Error ? err.message : String(err)}`
         )
       }
     }
@@ -129,6 +177,13 @@ export class CodexTurnWatcher {
 
   private async step(entry: Entry): Promise<void> {
     if (entry.disposed) return
+    if (entry.contextSeed) {
+      const seeded = await entry.contextSeed
+      entry.contextSeed = null
+      if (entry.disposed) return
+      // Only fills a gap — a batch already read is newer than the file's state at attach time
+      if (entry.context === null) entry.context = seeded
+    }
     if (!entry.tail) {
       const account = this.deps.getAccount(entry.accountId)
       if (!account) return
@@ -145,15 +200,27 @@ export class CodexTurnWatcher {
       if (this.claimed(entry).includes(found.path)) return
       entry.rolloutPath = found.path
       entry.tail = new JsonlTail(found.path)
-      this.deps.log(`codex turn watch mapped session=${entry.sessionId} path=${found.path}`)
+      this.deps.log(`codex rollout watch mapped session=${entry.sessionId} path=${found.path}`)
       return // End this step() having only mapped, without reading — the next tick's read() is still that JsonlTail's
       // first call, so it reads the whole file from offset 0. Deferring does not narrow the range read, so it does not
       // filter out past turns — this delay has no practical effect.
     }
     const r = await entry.tail.read()
     if (!r || entry.disposed) return
+    if (r.restarted) {
+      // State read from a recreated file has nothing to do with the previous file (same rule as
+      // CodexRolloutTail.read)
+      entry.limits = null
+      entry.context = null
+    }
+    // One read, three answers. entry.limits is handed in so the windows survive a batch that carries
+    // none — the credit-balance token_count codex writes the moment a limit hits is exactly that case.
+    const limits = limitStateFromLines(r.lines, this.now(), entry.limits)
+    if (limits) entry.limits = limits
+    entry.context = contextFromLines(r.lines, entry.context)
     let hit = false
     for (const line of r.lines) if (isTaskComplete(line)) hit = true
-    if (hit && entry.rolloutPath) this.deps.onTurnComplete(entry.sessionId, entry.rolloutPath)
+    if (hit && entry.notifyTurns && entry.rolloutPath)
+      this.deps.onTurnComplete(entry.sessionId, entry.rolloutPath)
   }
 }

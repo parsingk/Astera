@@ -1,7 +1,7 @@
 import { createReadStream } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
-import type { TranscriptMessage } from '../types'
+import type { LastCommand, TranscriptMessage } from '../types'
 
 export interface TranscriptMeta {
   sessionId: string | null
@@ -68,6 +68,24 @@ function isRealUserText(text: string): boolean {
   return !MACHINE_USER_PREFIXES.some((p) => t.startsWith(p))
 }
 
+/** CLI 가 스스로 끼워 넣은 `type:'user'` 레코드인가. **텍스트가 아니라 레코드를 본다** —
+ *  MACHINE_USER_PREFIXES 는 `<bash-input>` 처럼 표지를 달고 오는 부류만 잡고, 스킬 본문은 표지
+ *  없이 평범한 산문으로 시작해 그 목록을 그대로 통과한다.
+ *
+ *  **실측(2026-08-28, 이 컴퓨터의 최근 대화 파일 60개).** isRealUserText 를 통과한 user 텍스트
+ *  268건 중 48건(17.9%)이 `isMeta:true` 였고, **글자 수로는 86.3%** 였다(스킬 본문이 통째로
+ *  실린다). 60개 중 10개 파일에서 나왔고, 잡힌 것은 스킬 본문과 이미지 자리표시자
+ *  (`[Image: original 3840x2088…]`)다. 재개 브리핑의 요청 절이 이것들로 채워지면 예산
+ *  (tabResume.ts 의 MEMO_CHARS_MAX)을 사람이 쓴 요청이 아닌 것에 내주고, 히스토리 목록의 제목이
+ *  스킬 본문이 되고, 답변 대기 표시(초록 점)가 사람이 말한 적 없는 줄 때문에 꺼진다.
+ *
+ *  `turnCompanion`·`sourceToolUseID` 도 같은 레코드에 함께 오지만(실측) 이 판정은 `isMeta` 하나만
+ *  본다 — 셋 중 그 하나가 "사람이 쓴 것이 아니다"를 직접 뜻하고, 나머지 둘은 그 레코드가 어디서
+ *  왔는지를 말할 뿐이다. */
+function isMetaUserRecord(obj: Record<string, unknown>): boolean {
+  return obj.isMeta === true
+}
+
 // Non-conversation record file: a session file holding only auxiliary records and no conversation
 // messages. Identified by the first line's type and excluded from the index.
 // queue-operation (HUD status line helper) · ai-title/agent-name (records of title and subagent name
@@ -129,7 +147,7 @@ export async function parseTranscriptMeta(filePath: string, maxLines = 50): Prom
         firstUserLineSeen = true
         if (typeof obj.uuid === 'string') meta.rootUuid = obj.uuid
       }
-      if (meta.title === null && obj.type === 'user') {
+      if (meta.title === null && obj.type === 'user' && !isMetaUserRecord(obj)) {
         const text = extractText(obj.message)
         if (text && isRealUserText(text)) meta.title = toTitle(text)
       }
@@ -188,7 +206,7 @@ export async function parseTranscriptTail(
             awaitingReply = true
             roleResolved = true
           }
-        } else if (obj.type === 'user') {
+        } else if (obj.type === 'user' && !isMetaUserRecord(obj)) {
           const text2 = extractText(obj.message)
           if (text2 !== null && isRealUserText(text2)) {
             awaitingReply = false
@@ -197,7 +215,7 @@ export async function parseTranscriptTail(
         }
       }
 
-      if (lastUserTitle === null && obj.type === 'user') {
+      if (lastUserTitle === null && obj.type === 'user' && !isMetaUserRecord(obj)) {
         const text2 = extractText(obj.message)
         if (text2 !== null && isRealUserText(text2)) lastUserTitle = toTitle(text2)
       }
@@ -216,6 +234,176 @@ export async function parseTranscriptTail(
       /* an fd cleanup failure is ignored — it does not affect the result */
     }
   }
+}
+
+/** 탭 세션용 재개 브리핑의 재료. `buildTabResumeText`(main/orchestration/resumePacket.ts)가 대화
+ *  파일 하나에서 이 넷을 **한 번의 읽기로** 뽑는다 — 따로따로 읽으면 같은(어쩌면 수십 MB짜리)
+ *  파일을 네 번 훑는다. 무엇을 메모에 얼마나 실을지(개수·길이 상한)는 포매터
+ *  (core/orchestration/tabResume.ts)가 정한다 — 이 함수는 재료만 모은다. */
+export interface TranscriptResumeMaterial {
+  /** 제목 레코드의 값 — 현행 claude 가 남기는 `ai-title`(필드 `aiTitle`)이나 구버전이 남기는
+   *  `summary`(필드 `summary`) 중 먼저 만난 쪽(아래 parseTranscriptForResume 의 판정문이 둘 다
+   *  받는 이유를 적어 둔다). **둘 다 claude 자신이 남기는 기록이다** — 플러그인이 남기는 것이
+   *  아니라, 있다면 그저 이 레코드를 읽을 뿐이다. 어느 쪽도 없으면(구버전 claude 이거나, 그
+   *  레코드가 쓰이기 전에 대화 파일을 읽었거나) null — 대화 제목에 의존하지 않는다는 계약이 이
+   *  필드의 nullability 로 드러난다. */
+  title: string | null
+  /** 사람이 실제로 보낸 요청. 시간 순(오래된 것부터) — 셋 중 아무것도 "이것이 작업이다"로
+   *  판정되지 않는다. */
+  requests: string[]
+  /** 가장 최근 `file-history-snapshot` 레코드의 `trackedFileBackups` 키. 이 맵은 누적이다(실측 —
+   *  새 레코드가 이전 레코드의 키를 전부 포함한 채 자란다), 그래서 마지막 레코드 하나만 있으면
+   *  충분하다. 그런 레코드가 한 번도 없으면 빈 배열 — 그때는 부르는 쪽이 git 변경 목록으로
+   *  내려간다. */
+  editedFiles: string[]
+  /** 의미 있는 user/assistant 메시지의 꼬리. 사람이 안 쓴 `type:'user'` 줄(bash 출력 등)은
+   *  parseTranscriptTail 과 같은 이유로 걸러진다 — §8.4 가 "tool raw output 대량 포함 금지"라고
+   *  못박은 것이 바로 이 부류다. */
+  tail: TranscriptMessage[]
+  /** 대화 중 마지막으로 **완료된**(tool_result 가 실제로 도착한) Bash 호출. 아직 결과가 안 온
+   *  채(세션이 그 도중에 끊긴 채) 대화가 끝나면 그 마지막 호출은 담기지 않는다 — 실패/성공 어느
+   *  쪽도 참이 아직 아니고, 모르는 것을 지어내지 않는다. 한 번도 완료된 Bash 호출이 없으면 null.
+   *  종료 코드는 기록되지 않는다(있는 것은 `tool_result.is_error` 불리언뿐) — `excerpt` 는 아직
+   *  자르거나 가리지 않은 원문이고, 상한과 redaction 은 포매터(tabResume.ts)의 몫이다(다른 필드와
+   *  같은 분업). */
+  lastCommand: LastCommand | null
+}
+
+/** 읽는 동안 메모리에 들고 있을 요청·꼬리 각각의 상한. **최종적으로 몇 개를 메모에 싣는지는
+ *  포매터가 정한다** — 이 상한은 그보다 넉넉한 여유일 뿐이고, 병적으로 긴 대화에서도 이 두 배열이
+ *  무한히 자라지 않게 막는 것이 유일한 목적이다. codexParser.ts의 parseCodexForResume도 같은 상한을
+ *  쓴다 — 그래서 export한다(claude와 codex 두 재료 읽기가 서로 다른 상한으로 갈리지 않게). */
+export const READ_BUFFER_MAX = 20
+
+/** `launchPrompt`(main/orchestration/coordinator.ts)가 spec 경로에 적용하는 것과 같은 정규화 —
+ *  `file-history-snapshot`의 경로는 OS 그대로(윈도에서는 `\`)라서, 그 문자가 셸의 이스케이프
+ *  문자로 읽히는 것을 앞서 그 파일이 겪은 것과 같은 이유로 미리 없앤다. */
+function toPortablePath(p: string): string {
+  return p.replace(/\\/g, '/')
+}
+
+/** `tool_result.content` 의 텍스트. 실측(2026-08-28, 이 컴퓨터의 실제 대화 파일 다수, Bash
+ *  tool_result 12,816건)으로는 항상 문자열이었지만, extractText 가 message.content 에 대해 이미
+ *  대비하는 것과 같은 배열 모양(text 블록)도 받아 둔다 — 다른 도구의 tool_result 가 이 모양으로
+ *  오는 것은 이미 알려져 있고, 그 모양이 Bash 에도 언젠가 쓰이지 않을 이유가 없다. */
+function extractToolResultText(content: unknown): string | null {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    const block = content.find(
+      (c): c is { type: string; text: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: unknown }).type === 'text' &&
+        typeof (c as { text?: unknown }).text === 'string'
+    )
+    return block ? block.text : null
+  }
+  return null
+}
+
+export async function parseTranscriptForResume(filePath: string): Promise<TranscriptResumeMaterial> {
+  const result: TranscriptResumeMaterial = {
+    title: null,
+    requests: [],
+    editedFiles: [],
+    tail: [],
+    lastCommand: null
+  }
+  // 아직 tool_result 를 못 받은, 가장 최근에 본 Bash tool_use — id 와 command 를 함께 들고 있다가
+  // 짝이 되는 tool_result(같은 id) 를 만나면 result.lastCommand 로 확정한다. **결과가 도착한
+  // 순서대로 확정하므로 "마지막" 은 결과가 가장 나중에 온 호출이다.**
+  //
+  // **한 슬롯이 아니라 맵인 이유(리뷰가 잡았다).** 한 턴이 Bash tool_use 를 여러 개 내보낼 수 있고
+  // (독립적인 호출은 한 번에 묶어 보내는 것이 권장된다), 슬롯 하나면 나중 id 가 앞 id 를 덮어써서
+  // **먼저 시작된 호출의 결과가 도착해도 짝을 못 찾고 조용히 버려졌다.** 맵이면 어느 순서로
+  // 도착해도 짝이 맞는다. 미완으로 남는 항목은 파일을 다 읽고 그냥 버려진다 — 결과가 없는 호출은
+  // 성공/실패를 말할 수 없으므로 이 절에 실을 것이 없다.
+  const pendingBash = new Map<string, string>()
+  const stream = createReadStream(filePath, { encoding: 'utf8' })
+  const rl = createInterface({ input: stream })
+  try {
+    for await (const raw of rl) {
+      let obj: Record<string, unknown>
+      try {
+        obj = JSON.parse(raw)
+      } catch {
+        continue // defensive parsing — ignore a broken line
+      }
+      if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) continue
+
+      // 제목 레코드는 **이름이 버전마다 다르다** — 현행 Claude Code 는 `ai-title`(필드 `aiTitle`),
+      // 구버전은 `summary`(필드 `summary`)로 남긴다. 이 앱은 구버전 CLI 를 쓰는 사용자에게도 나가므로
+      // 둘 다 받는다. 한쪽만 받으면 그 사용자는 제목 줄을 영구히 못 받고, 그 사실이 조용히 지나간다.
+      if (result.title === null && obj.type === 'ai-title' && typeof obj.aiTitle === 'string') {
+        result.title = toTitle(obj.aiTitle)
+        continue
+      }
+      if (result.title === null && obj.type === 'summary' && typeof obj.summary === 'string') {
+        result.title = toTitle(obj.summary)
+        continue
+      }
+
+      if (obj.type === 'file-history-snapshot') {
+        const snapshot = obj.snapshot as { trackedFileBackups?: unknown } | undefined
+        const tracked = snapshot?.trackedFileBackups
+        if (tracked && typeof tracked === 'object' && !Array.isArray(tracked)) {
+          result.editedFiles = Object.keys(tracked).map(toPortablePath)
+        }
+        continue
+      }
+
+      // Bash 호출과 그 결과 — extractText 가 text 블록만 찾는 것과 달리 여기서는 같은
+      // message.content 배열에서 tool_use/tool_result 블록을 본다. 이 검사는 아래 text 추출과
+      // 배타적이지 않다(같은 줄이 text 와 tool_use 를 함께 실을 수 있다) — 그래서 continue 하지
+      // 않고 통과시킨다.
+      const blocks = (obj.message as { content?: unknown } | undefined)?.content
+      if (Array.isArray(blocks)) {
+        for (const b of blocks) {
+          if (b === null || typeof b !== 'object') continue
+          const item = b as Record<string, unknown>
+          if (obj.type === 'assistant' && item.type === 'tool_use' && item.name === 'Bash') {
+            const input = item.input as { command?: unknown } | undefined
+            if (typeof item.id === 'string' && typeof input?.command === 'string') {
+              pendingBash.set(item.id, input.command)
+            }
+          } else if (
+            obj.type === 'user' &&
+            item.type === 'tool_result' &&
+            typeof item.tool_use_id === 'string' &&
+            pendingBash.has(item.tool_use_id)
+          ) {
+            result.lastCommand = {
+              command: pendingBash.get(item.tool_use_id) as string,
+              failed: item.is_error === true,
+              excerpt: extractToolResultText(item.content) ?? ''
+            }
+            pendingBash.delete(item.tool_use_id) // 같은 id 의 결과가 두 번 오면 첫 번째만 센다
+          }
+        }
+      }
+
+      if (obj.type !== 'user' && obj.type !== 'assistant') continue
+      const text = extractText(obj.message)
+      if (text === null) continue
+
+      if (obj.type === 'user') {
+        // 기계가 남긴 user 줄 — 요청도 꼬리도 아니다. 표지를 단 부류(접두어)와 표지 없이 오는
+        // 부류(isMeta, 스킬 본문 등) 둘 다 여기서 떨어진다.
+        if (!isRealUserText(text) || isMetaUserRecord(obj)) continue
+        result.requests.push(text)
+        if (result.requests.length > READ_BUFFER_MAX) result.requests.shift()
+      }
+
+      result.tail.push({
+        role: obj.type,
+        text,
+        timestamp: typeof obj.timestamp === 'string' ? obj.timestamp : undefined
+      })
+      if (result.tail.length > READ_BUFFER_MAX) result.tail.shift()
+    }
+  } finally {
+    rl.close()
+    stream.destroy()
+  }
+  return result
 }
 
 /** Full (capped) parse for the preview — called only when an item is opened (lazy) */

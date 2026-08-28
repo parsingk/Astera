@@ -144,11 +144,20 @@ function jobTaskOf(
   const open = state.gates
     .filter((g) => g.taskId === task.id && g.status === 'open')
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  // waiting 은 running 에서만 읽는다 — latest 를 쓰면 끝난 Dispatch 의 열린 항목(앱이 꺼져
+  // outcome_unknown 으로 닫힌 경우)이 "아직 기다리는 중"으로 보인다. 그 Dispatch 는 이미 끝났으므로
+  // 아무도 그 리셋을 기다리지 않는다.
+  const entries = running?.resumes ?? []
+  const openEntry =
+    entries.length > 0 && entries[entries.length - 1].resumedAt === undefined
+      ? entries[entries.length - 1]
+      : null
+  const done = entries.filter((e) => e.resumedAt !== undefined).length
   return {
     id: task.id,
     title: task.title,
     status: task.status,
-    ...(task.accountId !== undefined ? { accountId: task.accountId } : {}),
+    ...(task.accountIds !== undefined ? { accountIds: task.accountIds } : {}),
     sessionId: latest && isKnownSession(latest.sessionId) ? latest.sessionId : undefined,
     // The oldest open Gate is the one the orchestrator has to answer first, so that is the one the
     // row shows and the one the answer form resolves. openGates carries the rest as a count rather
@@ -164,7 +173,19 @@ function jobTaskOf(
         }
       : {}),
     openGates: open.length,
-    ...(running ? { provider: running.provider, startedAt: running.startedAt } : {})
+    ...(running ? { provider: running.provider, startedAt: running.startedAt } : {}),
+    ...(openEntry
+      ? {
+          waiting: {
+            accountId: openEntry.fromAccountId,
+            // 사유를 함께 보낸다 — 리셋을 기다리는 정지와 계정을 바꾸는 정지는 그리는 것이 다르고,
+            // 화면에는 그것을 되살릴 다른 재료가 없다(JobTask.waiting 의 주석).
+            reason: openEntry.reason,
+            ...(openEntry.resetsAt !== undefined ? { resetsAt: openEntry.resetsAt } : {})
+          }
+        }
+      : {}),
+    ...(done > 0 ? { resumes: done } : {})
   }
 }
 

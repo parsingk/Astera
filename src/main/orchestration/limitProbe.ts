@@ -103,11 +103,11 @@ async function probeCodexLimit(d: Dispatch, deps: LimitProbeDeps): Promise<numbe
   // resumed a conversation that once hit a limit would be judged to have died of one. The windows are
   // left alone: they describe the account, not this turn.
   const state = read && read.error && read.error.at <= since ? { ...read, error: null } : read
-  // textHit is always false — that is the input of the PTY output scanner (CodexLimitScanner), and the
-  // probe does not look at the PTY stream. So codex is decided from the structured signals alone
-  // (usage_limit_exceeded, rate_limit_reached_type) — a limit that produces only the phrase is missed by
-  // this probe. Widening that needs a separate decision.
-  if (!limitReached(state, { textHit: false })) return null
+  // This probe never had a phrase to offer — it reads the rollout file, not the PTY output scanner
+  // (CodexLimitScanner) — and limitReached now decides from the structured signals alone
+  // (usage_limit_exceeded, rate_limit_reached_type) regardless. A limit that produces only the phrase is
+  // still missed by this probe; widening that needs a separate decision.
+  if (!limitReached(state)) return null
   const reset = worstResetAt(state)
   if (reset.at === null) {
     // A deliberate decision: when reachedType is definite (a limit) but neither window is at or above the

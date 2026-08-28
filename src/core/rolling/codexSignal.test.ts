@@ -9,6 +9,8 @@ import {
   findKeepModelChoice,
   limitReached,
   maxedOut,
+  priorBlockAt,
+  priorLimitVerdict,
   rolloutSize,
   worstResetAt,
   type CodexLimitState
@@ -171,14 +173,14 @@ describe('CodexRolloutTail', () => {
     const p = await write('err.jsonl', [tokenCount({ primary: 40 }), taskComplete()])
     const s = await new CodexRolloutTail(p).read()
     expect(s?.error?.at).toBe(Date.parse('2026-08-26T08:31:22.224Z')) // 판정은 배치 시각이 아니라 기록 자신의 시각에 붙는다
-    expect(limitReached(s, { textHit: false })).toBe(true)
+    expect(limitReached(s)).toBe(true)
   })
 
   it('한도가 아닌 task_complete는 신호가 아니다', async () => {
     const p = await write('ok.jsonl', [tokenCount({ primary: 40 }), taskComplete({ info: null })])
     const s = await new CodexRolloutTail(p).read()
     expect(s?.error).toBeNull()
-    expect(limitReached(s, { textHit: false })).toBe(false)
+    expect(limitReached(s)).toBe(false)
   })
 
   // 실측: 한도가 난 0.8초 뒤 codex 는 창이 전부 null 인 크레딧 기록(limit_id "premium")을 내보낸다.
@@ -212,7 +214,7 @@ describe('CodexRolloutTail', () => {
     expect(await tail.read()).toBeNull() // 붙은 시점 이전 내용은 상태가 되지 않는다
     await fs.appendFile(p, taskComplete() + '\n', 'utf8') // 재개하자마자 다시 한도
     const s = await tail.read()
-    expect(limitReached(s, { textHit: false })).toBe(true)
+    expect(limitReached(s)).toBe(true)
     expect(worstResetAt(s).at).toBe(1787739458_000) // 리셋은 회수했다
     expect(maxedOut(s)).toBe(false) // 낡은 100%는 판정에 쓰이지 않는다
   })
@@ -368,38 +370,47 @@ const state = (o: Partial<CodexLimitState>): CodexLimitState => ({
 
 describe('limitReached', () => {
   it('① reachedType이 non-null이면 문구 없이도 도달로 본다', () => {
-    expect(limitReached(state({ reachedType: 'primary' }), { textHit: false })).toBe(true)
+    expect(limitReached(state({ reachedType: 'primary' }))).toBe(true)
   })
 
   it('① 한도 에러가 있으면 문구 없이도 도달로 본다 (0.149가 실제로 내보내는 신호)', () => {
     const s = state({ error: { message: LIMIT_MESSAGE, at: 2_000 } })
-    expect(limitReached(s, { textHit: false })).toBe(true)
+    expect(limitReached(s)).toBe(true)
   })
 
-  it('② 확정 문구가 오면 사용률과 무관하게 도달로 본다', () => {
+  // 폐지(2026-08-28). 실측 8건에서 문구 단독 분기는 진짜를 한 번도 잡지 못했다(0/4): 진짜 4건은
+  // 전부 구조화 신호 + 사용량 99~100% 였고, 문구 단독 4건은 전부 사용량 0~1% 의 화면 재생이었다.
+  // 오탐의 비용은 타이머가 아니라 **일하는 세션의 입력창에 재개 문장이 들어가는 것**이다.
+  it('문구는 더 이상 단독으로 도달을 만들지 못한다 (사용량이 높아도)', () => {
     const s = state({ primary: { usedPercent: 93, resetsAt: null } })
-    expect(limitReached(s, { textHit: true })).toBe(true)
+    expect(limitReached(s)).toBe(false)
   })
 
-  // rate_limits는 턴이 완료돼야 갱신된다. 한도로 요청이 거부되면 새 token_count가
-  // 안 나와 사용률이 낮은 값에 멈추는데, 예전 90% 게이트는 그때 정당한 한도 문구를 막아버렸다.
-  it('② 사용률 스냅샷이 낮은 값에 멈춰 있어도 확정 문구면 도달로 본다', () => {
+  it('문구가 있어도 구조화 신호가 없으면 도달이 아니다 (낮은 스냅샷 — 실측 오탐의 모양)', () => {
     const s = state({
-      primary: { usedPercent: 42, resetsAt: null },
-      secondary: { usedPercent: 7, resetsAt: null }
+      primary: { usedPercent: 0, resetsAt: null },
+      secondary: { usedPercent: 63, resetsAt: null }
     })
-    expect(limitReached(s, { textHit: true })).toBe(true)
+    expect(limitReached(s)).toBe(false)
+  })
+
+  it('구조화 신호가 있으면 사용량이 낮아도 도달이다 (거부된 턴은 스냅샷을 갱신하지 못한다)', () => {
+    const s = state({
+      primary: { usedPercent: 0, resetsAt: null },
+      error: { message: LIMIT_MESSAGE, at: 2_000 }
+    })
+    expect(limitReached(s)).toBe(true)
   })
 
   it('문구가 없고 reachedType도 없으면 사용률이 높아도 도달이 아니다 (③은 별도 판정)', () => {
     const s = state({ primary: { usedPercent: 99, resetsAt: null } })
-    expect(limitReached(s, { textHit: false })).toBe(false)
+    expect(limitReached(s)).toBe(false)
   })
 
   // 상태가 없다 = rollout 미매핑. 롤은 rolloutPath·codexSessionId가 있어야 하므로 코디네이터가
-  // 별도로 막지만, 판정 자체도 문구만으로 도달을 선언하지 않는다.
-  it('상태가 없으면 문구만으로는 도달로 보지 않는다', () => {
-    expect(limitReached(null, { textHit: true })).toBe(false)
+  // 별도로 막지만, 판정 자체도 상태 없이는 도달을 선언하지 않는다.
+  it('상태가 없으면 도달로 보지 않는다', () => {
+    expect(limitReached(null)).toBe(false)
   })
 })
 
@@ -431,6 +442,129 @@ describe('worstResetAt', () => {
   it('해당 창이 없으면 at=null', () => {
     expect(worstResetAt(state({}))).toEqual({ at: null, weekly: false })
     expect(worstResetAt(null)).toEqual({ at: null, weekly: false })
+  })
+})
+
+// worstResetAt 의 게이트는 90 이므로 "리셋이 회수된다"와 "막힌 채 끝났다"는 다른 질문이다. 91% 는
+// 바쁘던 대화지 막힌 대화가 아닌데 리셋을 돌려준다 — 그것을 재개 판정의 근거로 쓰면 문구 한 줄 없이
+// 멀쩡한 세션이 대기에 처박힌다. 그래서 이쪽은 거부된 턴의 구조 기록을 요구한다.
+describe('priorBlockAt', () => {
+  it('구조 에러가 있으면 같은 파싱의 리셋을 돌려준다', async () => {
+    const p = await write('pb-hit.jsonl', [
+      tokenCount({ primary: 99, primaryReset: 1787739458 }),
+      taskComplete()
+    ])
+    expect(await priorBlockAt(p)).toEqual({ at: 1787739458_000, weekly: false })
+  })
+
+  // 같은 파일을 느슨한 쪽으로 읽으면 리셋이 회수된다 — 위 'startAtEnd로 붙어도 이전 턴의 리셋
+  // 시각은 회수한다' 가 그 성질을 지킨다. 두 질문이 갈리는 지점이 바로 이 픽스처다.
+  it('사용률이 게이트를 넘어도 구조 기록이 없으면 null (바쁘던 대화)', async () => {
+    const p = await write('pb-busy.jsonl', [tokenCount({ primary: 91, primaryReset: 1787739458 })])
+    expect(await priorBlockAt(p)).toBeNull()
+  })
+
+  it('reachedType 만 있어도 인정한다 (실측된 적 없지만 다루는 신호)', async () => {
+    const p = await write('pb-reached.jsonl', [
+      tokenCount({ primary: 99, primaryReset: 1787739458, reached: 'primary' })
+    ])
+    expect(await priorBlockAt(p)).toEqual({ at: 1787739458_000, weekly: false })
+  })
+
+  it('막힌 채 끝났어도 그 창의 사용률이 게이트 미만이면 null (리셋이 없어서가 아니라 게이트 미달로 제외된다)', async () => {
+    const p = await write('pb-noreset.jsonl', [tokenCount({ primary: 40 }), taskComplete()])
+    expect(await priorBlockAt(p)).toBeNull()
+  })
+
+  it('한도 기록이 아닌 종료(error: null)는 차단이 아니다', async () => {
+    const p = await write('pb-clean.jsonl', [
+      tokenCount({ primary: 99, primaryReset: 1787739458 }),
+      taskComplete({ info: null })
+    ])
+    expect(await priorBlockAt(p)).toBeNull()
+  })
+
+  // 구조 기록이 '어딘가에' 있는 것과 '거기서 끝난' 것은 다른 질문이다. 아침에 한도에 걸렸다가 기다려
+  // 풀린 뒤 다시 91% 까지 일한 대화는 앞의 질문에 yes 를 준다 — 그것을 믿으면 멀쩡한 세션이 창 길이만큼
+  // 문구 없이 대기에 처박히고, 건강한 계정에 공유 차단까지 붙는다.
+  it('막혔다가 회복한 대화는 null (구조 기록이 뒤에 남아 있어도)', async () => {
+    const p = await write('pb-recovered.jsonl', [
+      tokenCount({ primary: 100, primaryReset: 1787000000 }), // 그때 막혔고
+      taskComplete(),
+      tokenCount({ primary: 95, primaryReset: 1787739458 }) // 그 뒤로 턴을 돌렸다 — 지금은 안 막혔다
+    ])
+    expect(await priorBlockAt(p)).toBeNull()
+  })
+
+  it('회복한 뒤 다시 막혔으면 마지막 차단의 리셋을 돌려준다', async () => {
+    const p = await write('pb-again.jsonl', [
+      tokenCount({ primary: 100, primaryReset: 1787000000 }),
+      taskComplete(),
+      tokenCount({ primary: 95, primaryReset: 1787739458 }),
+      taskComplete()
+    ])
+    expect(await priorBlockAt(p)).toEqual({ at: 1787739458_000, weekly: false })
+  })
+
+  // 한도가 나는 순간 codex 는 창이 전부 null 인 크레딧 기록을 0.8초 뒤에 함께 적는다(실측). 즉 막힌
+  // rollout 의 **마지막 줄**이 그것일 수 있다. 그것을 '평범한 스냅숏'으로 읽으면 막힌 대화에 대해
+  // '안 막혔다'고 답한다 — 이 함수가 존재하는 바로 그 경우다.
+  it('구조 신호 뒤에 온 창 없는 크레딧 기록은 차단을 취소하지 않는다', async () => {
+    const p = await write('pb-credit.jsonl', [
+      tokenCount({ primary: 99, primaryReset: 1787739458 }),
+      taskComplete(),
+      tokenCount({}) // limit_id: premium — 창이 전부 null 인 그 기록
+    ])
+    expect(await priorBlockAt(p)).toEqual({ at: 1787739458_000, weekly: false })
+  })
+
+  it('파일이 없으면 null', async () => {
+    expect(await priorBlockAt(path.join(dir, 'nope.jsonl'))).toBeNull()
+  })
+})
+
+describe('priorLimitVerdict', () => {
+  const NOW = 1_000_000
+
+  it('복구된 리셋이 미래면 문구 없이도 한도다', () => {
+    expect(priorLimitVerdict({ at: NOW + 60_000, weekly: false }, { textHit: false }, NOW)).toEqual({
+      kind: 'limited',
+      at: NOW + 60_000,
+      weekly: false
+    })
+  })
+
+  it('복구된 리셋이 과거면 문구는 재생이다', () => {
+    expect(priorLimitVerdict({ at: NOW - 1, weekly: false }, { textHit: true }, NOW)).toEqual({
+      kind: 'replay'
+    })
+  })
+
+  it('복구된 리셋이 과거이고 문구도 없으면 아무것도 아니다', () => {
+    expect(priorLimitVerdict({ at: NOW - 1, weekly: false }, { textHit: false }, NOW)).toEqual({
+      kind: 'none'
+    })
+  })
+
+  it('복구된 리셋이 없고 문구가 있으면 한도다 — 리셋 시각은 모른다', () => {
+    expect(priorLimitVerdict(null, { textHit: true }, NOW)).toEqual({ kind: 'limited', at: null, weekly: false })
+  })
+
+  it('복구된 리셋도 문구도 없으면 아무것도 아니다', () => {
+    expect(priorLimitVerdict(null, { textHit: false }, NOW)).toEqual({ kind: 'none' })
+  })
+
+  it('리셋 시각이 정확히 지금이면 지난 것으로 본다 (경계)', () => {
+    // pickAvailable·blockedUntil 과 같은 관례 — `<= now` 는 만료다
+    expect(priorLimitVerdict({ at: NOW, weekly: false }, { textHit: true }, NOW)).toEqual({ kind: 'replay' })
+  })
+
+  it('주간 한도면 그 표시가 함께 나온다', () => {
+    expect(priorLimitVerdict({ at: NOW + 1, weekly: true }, { textHit: false }, NOW)).toEqual({
+      kind: 'limited',
+      at: NOW + 1,
+      weekly: true
+    })
   })
 })
 

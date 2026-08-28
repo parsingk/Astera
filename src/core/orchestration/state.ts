@@ -144,7 +144,7 @@ export function spawnScheduledRun(s: OrchState, templateId: string, now: string)
     ...(t.parentId !== undefined && idMap.has(t.parentId)
       ? { parentId: idMap.get(t.parentId)! }
       : {}),
-    ...(t.accountId !== undefined ? { accountId: t.accountId } : {}),
+    ...(t.accountIds !== undefined ? { accountIds: [...t.accountIds] } : {}),
     ...(t.validateConfigId !== undefined ? { validateConfigId: t.validateConfigId } : {}),
     ...(t.reviewRequested ? { reviewRequested: true } : {}),
     status: 'pending',
@@ -287,10 +287,10 @@ export function createTask(
     spec: string
     deps: string[]
     parentId?: string
-    /** 이 Task 를 띄울 계정. **여기서 확인하지 않는다** — 계정 목록은 core 가 아니라 앱이 아는
-     *  것이고(schedule.ts 머리말과 같은 이유), 부르는 쪽(server.ts 의 task-create)이 그 Run 의
-     *  provider 계정인지 보고 거절한다. validateConfigId 도 같은 관례다. */
-    accountId?: string
+    /** 이 Task 를 띄울 계정들, 순서대로. **여기서 확인하지 않는다** — 계정 목록은 core 가 아니라
+     *  앱이 아는 것이고(schedule.ts 머리말과 같은 이유), 부르는 쪽(server.ts 의 task-create)이 그
+     *  Run 의 provider 계정인지 보고 거절한다. validateConfigId 도 같은 관례다. */
+    accountIds?: string[]
     validateConfigId?: string
     reviewRequested?: boolean
   },
@@ -309,7 +309,9 @@ export function createTask(
     spec: a.spec,
     deps: a.deps,
     parentId: a.parentId,
-    ...(a.accountId ? { accountId: a.accountId } : {}),
+    // 빈 배열은 **지정 없음**이다 — 그것도 실으면 Task 를 값으로 비교하는 자리에서 지정이 없는
+    // Task 와 갈라진다(조건부 전개를 쓰는 이유 그대로).
+    ...(a.accountIds?.length ? { accountIds: a.accountIds } : {}),
     ...(a.validateConfigId ? { validateConfigId: a.validateConfigId } : {}),
     ...(a.reviewRequested ? { reviewRequested: a.reviewRequested } : {}),
     status: 'pending',
@@ -836,13 +838,127 @@ export function recordStopSnapshot(
 ): Res<Dispatch | null> {
   const dispatch = s.dispatches.find((d) => d.sessionId === a.sessionId && !d.endedAt)
   if (!dispatch) return ok(s, null)
+  // 스냅샷은 덮어쓰고(조립기가 직전 정지만 읽는다) 이력은 쌓는다 — 두 값이 답하는 질문이 다르다.
+  //
+  // **마지막 항목이 아직 열려 있어도 새 항목을 쌓는다.** 한동안은 그 경우 쌓지 않았다. 그 가드가
+  // 막으려던 것(한 번의 정지가 롤 상태를 여러 번 게시하는 것)은 부르는 쪽에서 이미 걸러지고
+  // (main/orchestration/rollTap.ts 의 세션별 표식), 가드가 만든 해악이 더 컸다: 재개 없이 끝난
+  // 에피소드가 하나라도 있으면 **그 뒤의 진짜 정지가 아무것도 남기지 못하고** — 리셋 시각이 화면까지
+  // 오지 못한다 — 다음 재개가 몇 시간 전의 항목을 닫아, 타임라인이 그 사이의 실제 작업 시간을 통째로
+  // 한 번의 정지 구간으로 그리고 횟수도 둘이 아니라 하나로 읽힌다. 열린 항목을 그대로 두고 새로
+  // 쌓는 것이 정직한 모양이다 — 그러면 타임라인은 "끝내 이어지지 않은 정지" 를 그리고, 그것이 실제로
+  // 일어난 일이다. 투영은 **마지막** 항목만 살아 있는 것으로 보고 횟수는 닫힌 항목만 센다
+  // (core/orchestration/view.ts 의 jobTaskOf).
+  const resumes = [
+    ...(dispatch.resumes ?? []),
+    {
+      stoppedAt: now,
+      reason: a.reason,
+      ...(a.resetsAt !== undefined ? { resetsAt: a.resetsAt } : {}),
+      fromAccountId: dispatch.accountId
+    }
+  ]
   const next: Dispatch = {
     ...dispatch,
     stopSnapshot: {
       headCommit: a.headCommit,
       reason: a.reason,
       ...(a.resetsAt !== undefined ? { resetsAt: a.resetsAt } : {})
-    }
+    },
+    resumes
+  }
+  const task = s.tasks.find((t) => t.id === dispatch.taskId)
+  return ok(
+    {
+      ...s,
+      dispatches: replace(s.dispatches, next),
+      tasks: task ? replace(s.tasks, { ...task, updatedAt: now }) : s.tasks
+    },
+    next
+  )
+}
+
+/** 정지 스냅샷의 `headCommit` 을 뒤늦게 채운다. **정지 자체는 이미 기록돼 있다** — 이 함수는 그때
+ *  비워 둔 칸 하나만 메운다. 왜 두 걸음으로 나눠 기록하는지는 부르는 쪽에 적었다
+ *  (main/orchestration/rollTap.ts 의 recordStop): HEAD 를 읽는 것은 프로세스 하나를 띄우는 일이고,
+ *  그것을 기다리는 사이에 롤이 Dispatch 의 세션 id 를 바꿔 치운다.
+ *
+ *  **세션 id 가 아니라 Dispatch id 로 찾는 이유가 바로 그것이다.** 재키잉을 지나도 Dispatch id 는
+ *  같다(`rekeyDispatch` 는 sessionId·accountId 만 고쳐 쓴다).
+ *
+ *  **비워 둔 칸만 메운다 — 정확히는, 지금 그 칸이 null 일 때만 메운다.** 이것이 "다른 에피소드의
+ *  스냅샷에는 못 쓴다" 는 것까지 보장하지는 않는다: 새 스냅샷도 매번 `headCommit: null` 로
+ *  시작하기 때문이다(main/orchestration/rollTap.ts 의 recordStop, ~286행). 이 함수를 부르게 한 git
+ *  읽기가 다음 정지가 이미 커밋되고도 그 정지 자신의 git 읽기가 아직 답하기 전인 순간까지 늦게
+ *  걸리면, 그 늦은 답은 다음 에피소드의(아직 비어 있는) 스냅샷에 옛 HEAD 를 써 넣는다 — git 이 한
+ *  에피소드 전체를 건너뛸 만큼 멈춰 서야 하는 드문 경합이다. 방향은 안전한 쪽이다: 기준점이 실제보다
+ *  오래된 커밋이 되므로 worktreeMoved 는 "바뀌었다" 쪽으로만 틀릴 수 있다 — "바뀌지 않았다" 를
+ *  확인하지 않은 채 단정하는, 스냅샷이 막으려는 결말은 여전히 일어나지 않는다. Task 의 updatedAt 도
+ *  올리지 않는다: 이 값은 화면에 그리는 것이 아니라 Checkpoint 조립기만 읽고(checkpoint.ts 의
+ *  worktreeMoved), 정지 자체는 이미 앞 걸음이 알렸다. */
+export function recordStopHead(
+  s: OrchState,
+  a: { dispatchId: string; headCommit: string }
+): Res<Dispatch | null> {
+  const dispatch = s.dispatches.find((d) => d.id === a.dispatchId && !d.endedAt)
+  if (!dispatch?.stopSnapshot || dispatch.stopSnapshot.headCommit !== null) return ok(s, null)
+  const next: Dispatch = {
+    ...dispatch,
+    stopSnapshot: { ...dispatch.stopSnapshot, headCommit: a.headCommit }
+  }
+  return ok({ ...s, dispatches: replace(s.dispatches, next) }, next)
+}
+
+/** A later `'waiting'` publication inside a stop episode already on record carries a fresher retry
+ *  time than the one on file — the retry loop that follows an aborted roll (rolling.ts,
+ *  codexRolling.ts) republishes `'waiting'` every round, each with its own `nextRetryAt`. The
+ *  episode itself is deduped by the caller (main/orchestration/rollTap.ts's `stopped`), so this only
+ *  ever runs for a dispatch that already has an open entry — dropping the new time instead of
+ *  recording it left the Jobs row and Checkpoint quoting the very first retry forever.
+ *
+ *  **Patches the open entry in place; does not open a second one.** The episode is still one stop —
+ *  `resumes` keeps its length and its resume count, and `headCommit`/`reason`/`stoppedAt`/
+ *  `fromAccountId` are untouched (same convention as `recordStopHead`, which patches one field of an
+ *  existing record rather than writing a new one). No open entry — already resumed, or no stop on
+ *  record at all — is a no-op. */
+export function updateStopReset(
+  s: OrchState,
+  a: { sessionId: string; resetsAt: string }
+): Res<Dispatch | null> {
+  const dispatch = s.dispatches.find((d) => d.sessionId === a.sessionId && !d.endedAt)
+  if (!dispatch?.stopSnapshot) return ok(s, null)
+  const resumes = dispatch.resumes ?? []
+  const last = resumes[resumes.length - 1]
+  if (!last || last.resumedAt !== undefined) return ok(s, null)
+  const next: Dispatch = {
+    ...dispatch,
+    stopSnapshot: { ...dispatch.stopSnapshot, resetsAt: a.resetsAt },
+    resumes: [...resumes.slice(0, -1), { ...last, resetsAt: a.resetsAt }]
+  }
+  return ok({ ...s, dispatches: replace(s.dispatches, next) }, next)
+}
+
+/** 재개가 일어났다고 이력의 마지막 항목을 닫는다.
+ *
+ *  **정지가 기록돼 있지 않으면 아무것도 하지 않는다.** 항목을 지어내면 화면이 "0 번 멈추고 1 번
+ *  이어졌다" 를 그린다. 사용자 탭 세션(열린 Dispatch 가 없다)도 같은 이유로 조용히 넘어간다 —
+ *  `recordStopSnapshot` 과 같은 관례다.
+ *
+ *  **계정이 같아도 재개다.** claude 의 계정 하나짜리와 codex 의 제자리 재개는 세션 id 가 바뀌지 않아
+ *  `rekeyDispatch` 를 타지 않으므로, 그 경로는 `'nudged'` 로 여기 온다(rollTap.ts). */
+export function recordResume(
+  s: OrchState,
+  a: { sessionId: string; accountId: string },
+  now: string
+): Res<Dispatch | null> {
+  const dispatch = s.dispatches.find((d) => d.sessionId === a.sessionId && !d.endedAt)
+  if (!dispatch) return ok(s, null)
+  const held = dispatch.resumes ?? []
+  const last = held[held.length - 1]
+  if (!last || last.resumedAt !== undefined) return ok(s, null)
+  const next: Dispatch = {
+    ...dispatch,
+    resumes: [...held.slice(0, -1), { ...last, resumedAt: now, toAccountId: a.accountId }]
   }
   const task = s.tasks.find((t) => t.id === dispatch.taskId)
   return ok(

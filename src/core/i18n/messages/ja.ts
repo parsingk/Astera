@@ -203,6 +203,13 @@ export const ja: Catalog = {
   'settings.theme.label': 'テーマ',
   'settings.theme.hint': '色・角丸・書体がまとめて変わります。ターミナルのフォントは下で個別に選びます。',
   'settings.theme.saveFailed': 'テーマを保存できませんでした: {detail}',
+  // ResumeStrategySettings.tsx — the two-way resume strategy picker
+  'settings.resumeStrategy.label': 'セッション再開方法',
+  'settings.resumeStrategy.smart.label': 'スマート再開 (実験)',
+  'settings.resumeStrategy.smart.hint': '簡潔なチェックポイントだけで会話を続けます。',
+  'settings.resumeStrategy.original.label': '元のセッションを再開',
+  'settings.resumeStrategy.original.hint': '従来の Resume で会話を続けます。',
+  'settings.resumeStrategy.saveFailed': '再開方法を保存できませんでした: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': 'ターミナルの欧文フォント',
   'settings.font.hangul': 'ターミナルのハングルフォント',
@@ -440,6 +447,7 @@ export const ja: Catalog = {
   'account.remove.processing': '処理中…',
   'account.remove.confirmWithLogout': '解除 + ログアウト',
   'account.logout.failed': 'ログアウトに失敗しました: {detail}\n\n登録解除はこのまま続行します。',
+  'account.remove.inUse': '実行中のセッションがこのアカウントを使用しているため、登録を解除できません: {titles}\n\nセッションを閉じるか、そのセッションのローテーション順からこのアカウントを外してください。',
   // The Message key accountLogout in core.ts returns
   'account.error.raw': '{detail}',
   'account.error.logoutFailed': 'ログアウトに失敗しました',
@@ -567,6 +575,7 @@ export const ja: Catalog = {
   'history.menu.hide': '非表示にする',
   'history.project.noSessions': 'セッションなし',
   'history.entry.preview': 'プレビュー',
+  'history.entry.resume': 'セッションを再開',
   'history.preview.truncated': '(最近の会話のみ)',
   'history.preview.me': '自分',
   'history.resume.folderMissingTitle': 'プロジェクトフォルダなし',
@@ -683,6 +692,7 @@ export const ja: Catalog = {
   // BottomPanel.tsx — the Run tab label, clear and collapse buttons
   'run.panel.noActiveRun': '実行',
   'run.panel.exited': ' · 終了 (コード {code})',
+  'run.panel.close': '実行タブを閉じる',
   'run.panel.clear': '消去',
   'run.panel.collapse': '折りたたむ',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
@@ -804,6 +814,8 @@ export const ja: Catalog = {
   'jobs.event.dispatchStarted': 'ワーカー開始',
   'jobs.event.gateOpened': '判断待ち',
   'jobs.event.gateResolved': '判断済み',
+  'jobs.event.limitHit': '上限停止',
+  'jobs.event.resumed': 'ワーカー再開',
   'jobs.event.status': '状況',
   'jobs.event.workerDone': 'ワーカー報告',
   'jobs.event.question': '質問',
@@ -838,7 +850,8 @@ export const ja: Catalog = {
   'jobs.new.folderBusy': 'このフォルダではすでにワーカーが動いています — 同時実行が 1 だとこの作業のワーカーも同じフォルダで回るため、互いの編集が混ざることがあります',
   'jobs.new.failed': '作業を作れませんでした',
   'jobs.gate.noAccount': '{provider} アカウントにログインしていないため、この Task を開始できません',
-  'jobs.gate.assignedAccountUnusable': 'この Task に指定されたアカウントは使用できません — ログインしていない、削除された、または別のエージェントのアカウントです',
+  'jobs.gate.assignedAccountUnusable':
+    'この Task に指定された最初のアカウントが使用できず、その後ろのアカウントは後で切り替えるための順番にすぎません — そのアカウントに再ログインするか、この Task のアカウント一覧を変更してください',
   // NewTaskModal.tsx — Task を組み立てている間、詳細ウィンドウの下段(.detail-events)が変わるフォーム。
   // deps はこのフォームではなくグラフが持つ(選ぶ場所がグラフだから) — このカタログには deps の値
   // 自体ではなく、グラフを指すヒント文言(depsHint)だけがある。
@@ -850,13 +863,21 @@ export const ja: Catalog = {
   'jobs.task.depsAdd': '先行 Task を選ぶ',
   'jobs.task.account': 'アカウント',
   'jobs.task.accountDefault': '既定のアカウント',
-  'jobs.task.accountHint': 'この Task のワーカーを立てるアカウントです — 選ばなければ既定のアカウントになります',
-  'jobs.task.accountTrust': 'このアカウントでこのフォルダを初めて使うとき、セッションタブにフォルダの信頼確認が出ます — 承認するまでワーカーは始まりません',
+  'jobs.task.accountNone': '使用しない',
+  'jobs.task.accountHint':
+    'この Task のワーカーを起動するアカウントです — 未指定なら既定のアカウントになります。2つ以上選ぶと、利用上限に達したときに並べた順に切り替わります',
+  'jobs.task.accountTrust':
+    '選んだアカウントがこのフォルダを初めて使うとき、セッションタブにフォルダの信頼確認が出ます — 承認するまでワーカーは始まりません',
   'jobs.task.validate': '完了を検証する実行構成',
   'jobs.task.validateNone': '検証なし',
   'jobs.task.review': '別のエージェントが確認',
   'jobs.task.create': '追加',
   'jobs.task.failed': 'Task を作れませんでした',
+  // JobsView.tsx — 動いている行の provider の後ろ。待機中は経過時間の代わりにこれを書き、
+  // 再開歴があれば後ろに続ける（{left}・{n} は core/i18n/index.ts の {name} 置換）。
+  'jobs.task.waitingReset': 'リセット待ち · {left}',
+  'jobs.task.waitingNoTime': 'リセット待ち',
+  'jobs.task.resumedCount': '{n} 回再開',
   'jobs.node.start': '起動',
   'jobs.node.stop': '停止',
   'jobs.node.restart': 'もう一度起動',

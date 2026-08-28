@@ -8,13 +8,13 @@ import type { RollingCoordinator } from './rolling'
 import type { CodexRollingCoordinator } from './codexRolling'
 import type { SchedulerCoordinator } from './scheduler'
 import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
-import type { CodexTurnWatcher } from './codexTurnWatcher'
+import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
-import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, RollStateEvent, RunConfig, SessionInfo } from '../core/types'
+import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, RollStateEvent, RunConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
-import { copyTranscript } from '../core/rolling/transcript'
+import { copyTranscript, samePath } from '../core/rolling/transcript'
 import { OrchestrationStore } from './orchestration/store'
 import {
   OrchCoordinator,
@@ -50,7 +50,7 @@ import {
   worktreeDepsOf
 } from '../core/orchestration/integrate'
 import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
-import { accountToDispatchOn } from '../core/accounts/dispatchAccount'
+import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, runsForProject } from '../core/orchestration/view'
 import { timelineFor } from '../core/orchestration/timeline'
 import { layersOf } from '../core/orchestration/graph'
@@ -61,7 +61,8 @@ import { writeInfo, writeShuttle } from './orchestration/shuttle'
 import { WorkerTails } from './orchestration/tail'
 import { releaseArgsFor } from './orchestration/release'
 import { installStub } from './orchestration/stub'
-import { buildResumeNote, buildResumePacket } from './orchestration/resumePacket'
+import { buildResumeNote, buildResumePacket, buildTabResumeText } from './orchestration/resumePacket'
+import { extractStatusLineSession } from '../core/usage/statusline'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
 import { imageMime } from '../core/files/imageMime'
@@ -101,14 +102,18 @@ import { loadRunConfigs, prepareRun } from './run/prepare'
  *
  *  **resumeText 는 두 롤링 코디네이터가 읽는 네 번째 값이다** — RollingDeps/CodexRollingDeps 의
  *  resumeText dep 구현이고, sessionId 로 열린 Job Dispatch 를 찾아 재개 packet 을 spec 파일에 적어
- *  넣은 뒤 그 자리에 쓸 한 줄을 돌려준다(main/orchestration/resumePacket.ts). Job 워커가 아니거나
- *  packet 을 못 만들면 null 이고, 그때 두 코디네이터는 기존 고정 문장으로 저하한다. */
+ *  넣은 뒤 그 자리에 쓸 한 줄을 돌려준다(main/orchestration/resumePacket.ts). Job 워커가 아니면(그리고
+ *  `tabFallback` 이 참이면) 탭 브리핑으로 저하한다 — 그 저하는 `tabResumeTextFor` 를 그대로 감쌀
+ *  뿐이라 오케스트레이션이 켜져 있을 때만 쓸 수 있는 자원(OrchState)에 기대지 않는다. **이 handle
+ *  자체가 오케스트레이션이 켜져 있을 때만 존재한다는 점은 그대로다** — `orchRef` 가 null 인 경우의
+ *  탭 폴백은 index.ts 가 별도로 받는 `tabResumeTextFor` 참조로 처리한다(fix wave 최종, F1 —
+ *  `OrchWiring.onTabResumeReady`). */
 export interface OrchHandle {
   stop: () => void
   onRolled: (oldSessionId: string, newInfo: { id: string; accountId: string }) => void
   onRollState: (e: RollStateEvent) => void
   orchEnv: () => { cliPath: string; infoPath: string; skillsPath: string } | undefined
-  resumeText: (sessionId: string, form: 'handover' | 'update') => Promise<string | null>
+  resumeText: (sessionId: string, form: 'handover' | 'update', tabFallback: boolean) => Promise<string | null>
 }
 
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
@@ -122,6 +127,16 @@ export interface OrchWiring {
    *  synchronous: asynchronous cleanup may not finish before the process ends, and deleting the token
    *  file has to happen (OS permissions on the token file are the access control). */
   onStarted: (h: OrchHandle) => void
+  /** fix wave 최종, F1: hands over the tab-briefing function (`tabResumeTextFor` below) once,
+   *  unconditionally — called synchronously from inside `registerIpc`, not from `bootOrch`. That is the
+   *  whole point of a separate callback: `onStarted`/`OrchHandle` exist only once orchestration has
+   *  actually booted (the toggle is on), but a plain tab session's briefing has nothing to do with that
+   *  toggle — it reads a transcript and git, not `OrchState`. Before this, index.ts's two rolling
+   *  coordinators reached the tab fallback only through `orchRef?.resumeText`, so on a default install
+   *  (orchestration off) `orchRef` was always null and Smart Resume was inert regardless of its own
+   *  setting. index.ts stores the function this hands over separately from `orchRef` and calls it
+   *  directly when `orchRef` is null. */
+  onTabResumeReady: (fn: (sessionId: string, form: 'handover' | 'update') => Promise<string | null>) => void
 }
 
 /** 앱 자신이 명령을 부를 때의 호출자 id. **어떤 세션 id 와도 겹칠 수 없는 모양**이어야 한다 —
@@ -148,6 +163,56 @@ export function parseAllowedExternalUrl(url: string): URL | null {
   return parsed
 }
 
+/** Which CLI a live session is running, or null when that cannot be decided (the session is gone, or
+ *  its account has been deleted while the tab stayed open).
+ *
+ *  usage.session picks its source with this — codex reads the rollout watcher, claude the statusLine
+ *  capture file. Exported and taking its inputs as plain arguments for the same reason
+ *  parseAllowedExternalUrl is: the handler itself cannot be reached without an electron harness, so
+ *  the branching lives where a test can call it. */
+/** 이 계정을 쓰고 있는 **살아 있는** 세션들의 제목. 비어 있으면 지워도 된다.
+ *
+ *  **왜 필요한가.** `AccountRegistry.remove` 는 세션을 보지 않고 지우고, `get` 은 없는 id 에
+ *  던진다. 그래서 돌아가는 세션의 계정을 지우면 그 세션은 provider 도 못 알아내고, 한도에 걸렸을 때
+ *  롤도 못 한다 — 직전 브랜치들이 그 실패를 견디는 코드를 여러 겹 넣어야 했던 원인이 이것이다.
+ *  견디게 만드는 것보다 **애초에 못 지우게 하는 것**이 옳다.
+ *
+ *  **현재 계정만 보지 않고 롤링 체인 전체를 본다.** 계정 둘인 체인이 a1 에서 돌고 있을 때 a2 를
+ *  지우면 지금은 아무 일도 없지만, a1 이 한도에 걸리는 순간 갈아탈 곳이 사라져 롤이 중단된다. 그
+ *  경우를 견디는 코드가 이미 있지만(중단 뒤 재예약), 사용자가 막을 수 있었던 실패를 굳이 겪을 이유가
+ *  없다. 그래서 대기 계정도 차단 사유이고, 메시지가 그 사실을 말해야 한다("이 세션의 대기 계정").
+ *
+ *  종료된 세션은 세지 않는다 — 그 계정을 붙잡고 있지 않다.
+ *
+ *  핸들러가 아니라 여기 순수 함수로 두는 이유는 `providerOfSession` 과 같다: 핸들러는 electron
+ *  하네스 없이는 닿을 수 없으므로, 판단은 테스트가 부를 수 있는 자리에 둔다. */
+export function accountRemovalBlockers(
+  accountId: string,
+  sessions: readonly Pick<SessionInfo, 'accountId' | 'rollAccountIds' | 'status' | 'title'>[]
+): string[] {
+  return sessions
+    .filter(
+      (s) =>
+        s.status !== 'exited' &&
+        (s.accountId === accountId || (s.rollAccountIds ?? []).includes(accountId))
+    )
+    .map((s) => s.title)
+}
+
+export function providerOfSession(
+  sessionId: string,
+  sessions: readonly Pick<SessionInfo, 'id' | 'accountId'>[],
+  getAccount: (id: string) => Account
+): Provider | null {
+  const s = sessions.find((x) => x.id === sessionId)
+  if (!s) return null
+  try {
+    return providerOf(getAccount(s.accountId))
+  } catch {
+    return null // the account is gone — core.accounts.get throws, and the 3-second poll must not
+  }
+}
+
 export function registerIpc(
   core: Core,
   win: BrowserWindow,
@@ -162,7 +227,7 @@ export function registerIpc(
   }, // Slack notifications
   codexRolling?: CodexRollingCoordinator, // Codex rolling
   scheduler?: SchedulerCoordinator, // session scheduler
-  codexTurns?: CodexTurnWatcher, // codex turn-completion watcher
+  codexRollout?: CodexRolloutWatcher, // codex rollout watcher — turn completion and usage
   orchWiring?: OrchWiring, // agent orchestration
   onLangChanged?: () => void // rebuilds anything (the tray menu) built with a fixed language
 ): void {
@@ -178,6 +243,47 @@ export function registerIpc(
   // ── Agent orchestration ────────────────────────────────────────────
   // The pure layers, the store, the server, the coordinator, and the CLI are first connected here.
   const orchLog = orchWiring?.log ?? ((): void => {})
+  /** Task 7 — the directory a tab session's 'handover' briefing is written into (see
+   *  buildTabResumeText's JSDoc, main/orchestration/resumePacket.ts). Same convention as
+   *  `specsDir` below (userData, never the project folder — the briefing's own "inspect git status"
+   *  instruction would otherwise pick up this app-owned file as evidence). Declared at this outer
+   *  scope, not inside bootOrch the way specsDir is, because `tabResumeTextFor` (below) closes over
+   *  it and is itself declared here, ahead of bootOrch.
+   *
+   *  **Wiped and recreated at startup, the same shape as specsDir below.** Nothing under either
+   *  directory needs to survive a restart, and neither needs an age rule to tell a stale file from a
+   *  fresh one — both are wiped wholesale, so there is nothing left to date. (An earlier version of
+   *  this comment reasoned specsDir got to skip an age rule because "every Dispatch closes on
+   *  restart" — that was the wrong reason: wiping everything needs no age rule regardless of what
+   *  produced the files, and this directory needed the same wipe from the start.)
+   *
+   *  fix wave 7, finding 1 (CRITICAL): deletion used to run per session exit instead
+   *  (`core.sessions.onExit`), keyed to the id that was actually exiting — that was the bug this
+   *  startup sweep replaces. A smart-resume roll writes the briefing under the *old*,
+   *  about-to-die session's id and hands the *new* session a pointer to that exact path before the
+   *  kill (roll() in rolling.ts/codexRolling.ts). The producer's id and the consumer's id are never
+   *  the same id, so deleting the file the moment the producer exits removed it out from under a
+   *  consumer that had not even booted yet — not as a rare race, but as the expected outcome of every
+   *  smart resume. A startup sweep has no such mismatch: it runs before any session of this app run
+   *  exists, so a file written during the run is never in flight when it fires.
+   *
+   *  Accepted consequence: a briefing file accumulates for the lifetime of the app run — one per
+   *  smart resume, reclaimed only at the next restart. specsDir already carries the same shape. */
+  const tabResumeDir = path.join(app.getPath('userData'), 'tab-resume')
+  void (async (): Promise<void> => {
+    await fs.rm(tabResumeDir, { recursive: true, force: true }).catch(() => {})
+    await fs.mkdir(tabResumeDir, { recursive: true })
+  })().catch((err) => orchLog(`tab resume dir create failed: ${String(err)}`))
+  // fix wave 최종, F6: specsDir 아래의 같은 검사(이 파일 뒤쪽, bootOrch)와 같은 이유다. 탭
+  // handover 의 포인터 한 줄은 이 디렉터리 아래 파일을 가리키므로, 이 경로에 금지 문자가 있으면
+  // codex 의 인자 sanitizer(sanitizeResumePrompt, codexRolling.ts 의 roll())가 그 포인터를
+  // 영구히 망가뜨린다 — 매 롤마다 codexRolling.ts 가 로그를 남기긴 하지만(F6 의 나머지 절반),
+  // 그 로그는 실제로 롤이 일어나야만 나온다. 시작하자마자 원인을 알 수 있도록 여기서도 한 번
+  // 경고한다. 시작은 막지 않는다 — specsDir 과 같은 태도.
+  if (LAUNCH_FORBIDDEN.test(tabResumeDir))
+    orchLog(
+      `warning — the tab-resume directory path contains characters forbidden in a launch prompt (" & | < > ^ %): ${tabResumeDir} — codex Smart Resume will be refused for every tab session in this state`
+    )
   let orch: {
     server: OrchServer
     deps: OrchServerDeps
@@ -299,8 +405,12 @@ export function registerIpc(
     send('session:exit', e)
     rolling?.handleExit(e)
     codexRolling?.handleExit(e)
-    codexTurns?.unregister(e.sessionId) // stop polling the rollout of a dead session
+    codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
+    // Task 7's tab-resume briefing file is no longer deleted here — see tabResumeDir's own comment
+    // above (fix wave 7, finding 1 (CRITICAL)) for why a per-exit delete keyed to this id was wrong:
+    // it fired for the *old* session a smart resume had just written the briefing under, while the
+    // *new* session that needs to read it was still booting.
     // An exited session clears busy and disposes its scanner
     busyScanners.delete(e.sessionId)
     if (busyState.get(e.sessionId)) send('session:busy', { sessionId: e.sessionId, busy: false })
@@ -349,7 +459,15 @@ export function registerIpc(
   ipcMain.handle('accounts.list', () => core.accounts.list())
   ipcMain.handle('accounts.create', (_e, input) => core.accounts.create(input))
   ipcMain.handle('accounts.import', (_e, input) => core.accounts.import(input))
-  ipcMain.handle('accounts.remove', (_e, id) => core.accounts.remove(id))
+  // 돌아가는 세션이 쓰는 계정은 지우지 않는다 — 판단은 accountRemovalBlockers(위)에 있고, 여기는
+  // 세션 목록을 건네고 결과를 렌더러가 읽을 모양으로 바꾸는 일만 한다. 렌더러에도 같은 검사를 두면
+  // 두 곳이 어긋날 수 있으므로 두지 않는다: 여기가 경계다.
+  ipcMain.handle('accounts.remove', async (_e, id) => {
+    const blockers = accountRemovalBlockers(id, core.sessions.list())
+    if (blockers.length > 0) return { ok: false as const, titles: blockers }
+    await core.accounts.remove(id)
+    return { ok: true as const, titles: [] as string[] }
+  })
   ipcMain.handle('accounts.loginStatus', (_e, id) => core.accounts.loginStatus(id))
   ipcMain.handle('accounts.detect', () => core.detectAccounts())
   ipcMain.handle('accounts.ghosts', () => core.ghostAccounts())
@@ -394,11 +512,20 @@ export function registerIpc(
     const account = core.accounts.get(opts.accountId)
     // Resolves and passes the provider of every account in the roll chain — the manager rejects a mix.
     // The rollAccountIds combination the modal settled on is checked here as well.
+    //
+    // What is checked is only the provider mix. An id that no longer resolves keeps its place in the
+    // chain — neither coordinator's register() filters unknown ids out — and where that surfaces is the
+    // roll: pickAvailable sees ids only, so a chain whose only usable index is a removed account reaches
+    // roll(), which cannot resolve it and gives up on that attempt. What now happens instead of going
+    // quiet: that abort schedules its next attempt, so the worker stays visible as waiting and retries
+    // rather than sitting idle. The worker will keep failing for as long as the id is unresolvable, and
+    // the log line per retry is what tells someone to re-add the account or close the session. Adding
+    // that filter is a behaviour change and its own follow-up, not a thing this line does.
     const rollProviders = opts.rollAccountIds?.map((rid: string) => {
       try {
         return providerOf(core.accounts.get(rid))
       } catch {
-        return providerOf(account) // an account id that is gone — treated as the primary's and filtered out at the rolling registration step
+        return providerOf(account) // an account id that is gone — counted as the primary's so a stale id alone does not read as a mix
       }
     })
     // Resuming under a different account: copy the session file into the target account's folder, then
@@ -411,6 +538,12 @@ export function registerIpc(
     // it: `codex resume` appends to this file instead of creating a new rollout, so the coordinator's
     // creation-time search can never find it and the path has to be handed over (see attachRollout).
     let resumeTranscriptDest: string | undefined
+    // Whether that file was written by the account we are about to resume it under. codex rolling needs
+    // it and this is the only side that can answer: the destination was built from the target account's
+    // own configDir, so it equals the source exactly when the account did not change. See
+    // CodexRollingCoordinator.register — a reopened conversation's own limit records may only be
+    // believed for the account that produced them.
+    let resumeSameAccount = false
     if (opts.resumeSessionId && typeof opts.resumeTranscriptPath === 'string' && opts.resumeTranscriptPath) {
       try {
         // Assembling the target path is the job of the per-provider history strategy — whoever knows
@@ -420,6 +553,7 @@ export function registerIpc(
           account.configDir
         )
         resumeTranscriptDest = dest
+        resumeSameAccount = samePath(opts.resumeTranscriptPath, dest)
         await copyTranscript(opts.resumeTranscriptPath, dest)
       } catch {
         /* A failed copy is ignored */
@@ -434,8 +568,9 @@ export function registerIpc(
       // The rolling coordinators are separate per-provider implementations and are deliberately not
       // folded behind the descriptor. Limit detection and session identification differ enough that
       // they only share the skeleton.
-      if (providerOf(account) === 'codex') codexRolling?.register(info, resumeTranscriptDest)
-      else rolling?.register(info)
+      if (providerOf(account) === 'codex')
+        codexRolling?.register(info, resumeTranscriptDest, resumeSameAccount)
+      else rolling?.register(info, resumeTranscriptDest)
     }
     if (info.schedule) {
       try {
@@ -452,14 +587,17 @@ export function registerIpc(
         /* A failed Slack registration does not block session creation */
       }
     }
-    // codex has no hooks, so turn completion is detected from task_complete in the rollout
-    if (info.slackNotify && providerOf(account) === 'codex') {
+    // codex keeps both of its own signals in the rollout: turn completion (it has no hook system)
+    // and the usage figures the chips draw (it has no statusLine mechanism either). So **every** codex
+    // session is registered, not only the Slack ones — the chips are drawn for whichever session is
+    // active — and the watcher gates the turn callback on info.slackNotify itself.
+    if (providerOf(account) === 'codex') {
       try {
         // On a resume the rollout is the copy target, not a file codex is about to create (see the
         // resumeTranscriptDest comment above) — the watcher cannot find that one by searching either
-        codexTurns?.register(info, resumeTranscriptDest)
+        codexRollout?.register(info, resumeTranscriptDest)
       } catch {
-        /* A failed codex turn-watcher registration does not block session creation */
+        /* A failed codex rollout-watcher registration does not block session creation */
       }
     }
     return info
@@ -487,6 +625,55 @@ export function registerIpc(
     if (!descriptorOf(core.descriptors, account).busyTitleReliable) return null
     return busyState.get(sessionId) ?? false
   }
+
+  /** resumeText 가 Dispatch 를 못 찾았을 때(탭 세션 — Job 워커가 아니다) 저하하는 자리.
+   *  buildTabResumeText(main/orchestration/resumePacket.ts) 자신은 cwd·provider·transcript 경로를
+   *  인자로만 받는다 — 코디네이터 체인을 들여다보지 않기 위해서다(그 함수의 JSDoc). 그 값을 실제로
+   *  찾는 것은 이 배선의 몫이다: cwd 는 core.sessions.list() 에서 얻는다.
+   *
+   *  **대화 파일 경로는 provider 마다 자리가 다르다.** claude 는 statusLine 페이로드에서 얻는다
+   *  (rolling.ts 의 refreshMeta·scheduler.ts·slack.ts 가 이미 같은 페이로드로 같은 값을 얻는 것과
+   *  같은 자리). codex 는 statusLine 이 없다(usesStatusLine=false) — 그 값을 아는 유일한 쪽은
+   *  rollout 파일을 파일시스템 스캔으로 찾아 둔 codexRolling 코디네이터뿐이라, 그쪽의
+   *  rolloutPathFor 를 대신 묻는다. 어느 쪽도 찾지 못하면(등록되지 않은 체인, 매핑 전) null 이고,
+   *  buildTabResumeText 는 git 만으로 시도한다.
+   *
+   *  **provider 를 못 가리면 null 로 저하한다 — 'claude'로 보지 않는다.** 예전에는 여기서 null 을
+   *  "claude 로 본다"로 받았다: providerOfSession(위)이 null 을 돌리는 것은 계정이 지워진 경우뿐이고,
+   *  claude 쪽 조회(statusLine 페이로드)는 애초에 계정을 보지 않으니 막힐 이유가 없다는 논리였다.
+   *  그런데 이 provider 값은 조회가 아니라 **어느 파일을 읽을지** 자체를 가른다 — codex 계정이
+   *  지워지면 실제 provider 는 codex 인데 'claude'로 보아 statusLine 페이로드(codex 는 절대 쓰지
+   *  않는다)를 물으므로 transcriptPath 가 null 이 되고, 진짜 경로를 아는 rolloutPathFor 는 애초에
+   *  불리지도 않는다. 그 결과 대화는 하나도 못 읽었는데 git 만으로 handover 가 만들어질 뻔한
+   *  경로였다(fix wave 최종, F2) — formatHandover 가 이제 대화 증거 없이는 null 을 돌리므로 그
+   *  최악은 막혔지만, 그렇다고 틀린 provider 로 넘어갈 이유는 없다. 판단이 안 서면 아무것도
+   *  시도하지 않고 null 을 돌린다 — 부르는 쪽(resumeText 배선)은 그러면 기존 고정 문장으로
+   *  저하한다. 그것이 이 자리에서 낼 수 있는 가장 안전한 결과다. */
+  const tabResumeTextFor = async (
+    sessionId: string,
+    form: 'handover' | 'update'
+  ): Promise<string | null> => {
+    const sessions = core.sessions.list()
+    const info = sessions.find((s) => s.id === sessionId)
+    if (!info) return null
+    const provider = providerOfSession(sessionId, sessions, (id) => core.accounts.get(id))
+    if (!provider) return null
+    const transcriptPath =
+      provider === 'codex'
+        ? (codexRolling?.rolloutPathFor(sessionId) ?? null)
+        : extractStatusLineSession(await core.statusLinePayload(sessionId)).transcriptPath
+    return buildTabResumeText(sessionId, form, {
+      cwd: info.cwd,
+      provider,
+      transcriptPath,
+      log: orchLog,
+      dir: tabResumeDir
+    })
+  }
+  // fix wave 최종, F1: handed over here, unconditionally — not inside bootOrch below, which only runs
+  // when orchestration is enabled. index.ts keeps this apart from `orchRef` (set by `onStarted`, further
+  // down) so the two rolling coordinators can reach a tab session's briefing even with the toggle off.
+  orchWiring?.onTabResumeReady(tabResumeTextFor)
 
   let orchStarting = false
   /** Starts orchestration. Called only when the toggle is on — with it off, the store is not even read
@@ -682,7 +869,10 @@ export function registerIpc(
           bypassPermissions: o.bypassPermissions,
           initialPrompt: o.initialPrompt,
           title: o.title, // the worker tab title is task.title
-          rollAccountIds: o.rollAccountIds, // 한 원소 체인 — 이 세션을 롤링에 등록시킨다
+          // 이 워커의 롤링 체인 — 첫 원소가 이 Dispatch 의 계정이고 나머지는 갈아탈 순서다
+          // (Task.accountIds 에서 온다; 아래 startWorker 래퍼가 rollChainFor 로 만든다). 지정이 없는
+          // Task 에서는 그대로 한 원소다. **넘기는 것 자체가 이 세션을 롤링에 등록시킨다.**
+          rollAccountIds: o.rollAccountIds,
           rollPrompt: o.rollPrompt // 워커용 재개 문구 — 없으면 롤링이 UI 언어 기본값을 쓴다
         } satisfies typeof o)
         try {
@@ -1376,10 +1566,12 @@ export function registerIpc(
             // **남은 슬롯이 통째로 버려진다** — 상관없는 다른 프로젝트의 Run 이 남의 실패 때문에
             // 서 있게 되고, 하나의 문제가 전부를 세우지 않는다는 이 루프의 전제가 거짓이 된다.
             try {
-              // 사람이 이 Task 에 계정을 지정했으면 그것, 아니면 그 provider 의 기본 계정.
-              // 판정은 core 에 있다(accountToDispatchOn) — 이 파일에는 테스트가 닿지 않는다.
+              // 사람이 이 Task 에 계정을 지정했으면 그 목록의 첫 계정, 아니면 그 provider 의 기본
+              // 계정. 판정은 core 에 있다(accountToDispatchOn) — 이 파일에는 테스트가 닿지 않는다.
+              // **갈아탈 순서(체인)는 여기서 넘기지 않는다** — worker-start 를 거쳐 가므로 그 체인은
+              // deps.startWorker 래퍼가 다시 계산한다(그래야 CLI 로 띄운 워커도 같은 체인을 받는다).
               const picked = accountToDispatchOn({
-                ...(slot.accountId !== undefined ? { assigned: slot.accountId } : {}),
+                ...(slot.accountIds !== undefined ? { assigned: slot.accountIds } : {}),
                 provider: slot.provider,
                 accounts,
                 loggedInIds: loggedIn
@@ -1387,8 +1579,10 @@ export function registerIpc(
               if (!picked.ok) {
                 // 조용히 넘기면 Run 이 이유 없이 서 있다 — 이 슬라이스가 없애려는 증상 그대로다.
                 // Reviewer 슬라이스가 "쓸 수 있는 다른 provider 계정이 없다"에 내린 것과 같은 판단이다.
-                // **지정한 계정을 못 쓰는 경우도 여기로 온다.** 기본 계정으로 갈아타지 않는 이유는
-                // accountToDispatchOn 의 주석에 있다: 그가 아끼려던 계정에 일이 간다.
+                // **지정한 계정을 못 쓰는 경우도 여기로 온다** — 목록의 첫 칸을 못 쓰는 것과 목록에
+                // 쓸 것이 아예 없는 것, 둘 다다. 기본 계정으로도 뒤 칸으로도 갈아타지 않는 이유는
+                // accountToDispatchOn 의 주석에 있다: 그가 아끼려던 계정에 일이 간다. 그러니 이
+                // Gate 가 사람이 그 사실을 아는 유일한 자리다.
                 await gateSlot(
                   orch.deps,
                   slot.taskId,
@@ -1787,7 +1981,74 @@ export function registerIpc(
         return { failed }
       },
       startWorker: async (a) => {
-        const started = await coordinator.startWorker(a)
+        // **이 워커의 롤링 체인을 여기서 정한다 — 워커를 띄우는 길이 전부 이 래퍼로 모이기
+        // 때문이다.** 자동 배치 루프도 orchHandleCommand('worker-start') 를 부르고, CLI 의
+        // worker-start 도 같은 핸들러이며(server.ts 의 deps.startWorker), 검토 Dispatch 도 이 함수를
+        // 지난다. 체인을 그중 한 곳에서 넘기면 나머지 경로는 갈아탈 곳 없는 워커를 띄운다.
+        //
+        // **규칙 자체는 core 에 있다**(rollChainFor) — 이 파일에는 테스트가 닿지 않으므로(위
+        // accountToDispatchOn 호출부의 주석) 규칙을 여기 두면 다음 편집을 막아 줄 것이 없다. 여기
+        // 남는 것은 순수 함수가 가질 수 없는 것뿐이다: Task 를 읽고, 로그인 여부를 조회하고,
+        // 그 조회의 예외를 삼키고, 저하한 이유를 로그에 남긴다.
+        let rollAccountIds = [a.accountId]
+        const stateHere = store.get()
+        const task = stateHere.tasks.find((t) => t.id === a.taskId)
+        // Task 의 provider — Run 이 정한다(Run.provider). 없는 Run 도 있다: 코디네이터가 만든 Run 은
+        // provider 를 안 들고, 자동 배치는 그런 Run 을 아예 건너뛴다(schedule.ts).
+        const taskProvider = stateHere.runs.find((r) => r.id === task?.runId)?.provider
+        // **두 경우에 로그인 조회를 하지 않는다.**
+        // (1) 지정이 없을 때 — 답은 요청된 계정 하나로 확정이고(rollChainFor), 그 조회는 계정마다 파일
+        //     읽기(macOS 의 claude 계정은 `security` 프로세스)를 붙인다. 워커를 띄우는 모든 자리가 이
+        //     래퍼를 지나므로 그 값을 헛되이 물릴 이유가 없다(자동 배치 루프가 바퀴마다 한 번만
+        //     조회하는 것과 같은 이유).
+        // (2) **띄우는 provider 가 이 Task 의 provider 와 다를 때** — 검토 Dispatch 가 그 자리다.
+        //     검토자는 구현자와 다른 provider 이므로 Task 의 계정은 rollChainFor 안에서 전부 걸러지고,
+        //     남는 것은 조회 비용과 "쓸 수 있는 계정이 하나도 없다"는 어긋난 로그뿐이다 — 사실은 그
+        //     계정들이 다른 provider 의 것일 뿐이고 사람이 할 일은 없다. 검토 경로는 이 앞에서 이미
+        //     같은 조회를 한 번 했다(startReview). Run 이 provider 를 안 들고 있으면 어긋났다고 말할
+        //     수 없으므로 건너뛰지 않는다.
+        if (task?.accountIds?.length && (taskProvider === undefined || taskProvider === a.provider)) {
+          try {
+            const accountList = core.accounts.list()
+            const loggedInHere = new Set(
+              (
+                await Promise.all(
+                  accountList.map(async (x) =>
+                    (await core.accounts.loginStatus(x.id)) ? x.id : null
+                  )
+                )
+              ).filter((id): id is string => id !== null)
+            )
+            const picked = rollChainFor({
+              requested: a.accountId,
+              taskAccountIds: task.accountIds,
+              provider: a.provider,
+              accounts: accountList,
+              loggedInIds: loggedInHere
+            })
+            rollAccountIds = picked.chain
+            // 저하한 두 갈래를 갈라 적는다 — 사람이 할 일이 다르다: 앞은 이 Task 의 계정을 아무것도
+            // 못 쓴다는 뜻(로그인이 필요하다), 뒤는 하필 이 Dispatch 의 계정만 걸러졌다는 뜻이다.
+            if (picked.degraded === 'nothing-usable')
+              orchLog(
+                `worker-start: no usable account among ${a.accountId},${task.accountIds.join(',')} ` +
+                  `for ${a.provider} — rolling chain falls back to ${a.accountId} alone`
+              )
+            else if (picked.degraded === 'requested-unusable')
+              orchLog(
+                `worker-start: the dispatch account ${a.accountId} is not usable, so the chain ` +
+                  `${task.accountIds.join(',')} is dropped — falls back to ${a.accountId} alone`
+              )
+          } catch (e) {
+            // 로그인 조회는 계정 파일과 Keychain 을 읽으므로 던질 수 있다. 그것이 워커를 못 띄우는
+            // 이유가 되어서는 안 된다 — 체인 없이 띄우는 것은 이 목록이 생기기 전의 동작이다.
+            orchLog(
+              `worker-start: could not read login status — rolling chain falls back to ` +
+                `${a.accountId} alone: ${String(e)}`
+            )
+          }
+        }
+        const started = await coordinator.startWorker({ ...a, rollAccountIds })
         // From this point on, that session's output belongs to this dispatch. On reuse (--terminal) the
         // previous dispatch's tail freezes where it is. Only a dispatch that has reached a terminal
         // state is eligible for eviction — a live worker's tail is not dropped even past the cap (see
@@ -2009,19 +2270,31 @@ export function registerIpc(
       // 롤링 배선이 읽는다. 오케스트레이션이 꺼져 있으면 undefined — 그러면 롤된 세션은 예전처럼
       // CLI 없이 뜨고, 그 상태에서 워커가 존재할 일도 없다.
       orchEnv: () => orchEnvOf(),
-      // 두 롤링 코디네이터의 resumeText dep 구현. Job 워커가 아니거나 만들지 못하면 null 이고,
-      // 그때 부르는 쪽은 기존 고정 문장으로 저하한다(main/orchestration/resumePacket.ts 의 계약).
+      // 두 롤링 코디네이터의 resumeText dep 구현.
       //
       // **모양이 둘이고, 고르는 자리가 여기다.** 기준은 `SPEC §11.5` — 그 재개 경로가 `--resume` 을
-      // 부르는가. 부르면 프로세스가 새것이라 전체 인계가 값을 내고(buildResumePacket), 부르지 않으면
-      // 같은 프로세스가 계속 도는 것이므로 떨어뜨린 것이 없어 인계할 것도 없다: 기다리는 동안 무엇이
-      // 바뀌었는지 한 줄만 덧붙인다(buildResumeNote). 어느 경로인지 아는 쪽은 코디네이터뿐이라
-      // form 을 그쪽이 넘기고, 이 배선은 그 값으로 함수만 고른다 — 두 함수 중 어느 것도 form 을
-      // 해석하지 않는다.
-      resumeText: (sessionId, form) =>
-        form === 'update'
+      // 부르는가. 부르면 프로세스가 새것이라 전체 인계가 값을 내고(buildResumePacket/
+      // buildTabResumeText 의 'handover'), 부르지 않으면 같은 프로세스가 계속 도는 것이므로
+      // 떨어뜨린 것이 없어 인계할 것도 없다: 기다리는 동안 무엇이 바뀌었는지 한 줄만 덧붙인다
+      // (buildResumeNote/buildTabResumeText 의 'update'). 어느 경로인지 아는 쪽은 코디네이터뿐이라
+      // form 을 그쪽이 넘기고, 이 배선은 그 값으로 함수만 고른다 — 어느 함수도 form 을 해석하지
+      // 않는다.
+      //
+      // **Job 워커용 함수가 null 이면, `tabFallback` 이 참일 때만 탭 세션용으로 저하한다(Task 2,
+      // fix wave 최종 F3).** Dispatch 를 못 찾으면(= 일반 탭 세션) buildResumeNote/buildResumePacket
+      // 은 무조건 null 이고, tabResumeTextFor 가 그 자리를 대신 채운다. **§11.5 가 가르는 것은
+      // "어느 모양인가"이지 "데이터를 줄 것인가"가 아니다** — 'update' 자리에 주는 것은 그 절이
+      // 금지한 전체 인계가 아니라, 그 절이 이미 허용한 한 줄이다. Job 워커의 함수가 다른 이유(spec
+      // 쓰기 실패 등)로 null 을 돌린 경우도 `tabFallback` 이 참이면 같은 이유로 이쪽으로 내려간다 —
+      // 구조화된 Job 인계를 못 만들었다고 git+대화 기반의 일반 브리핑까지 포기할 이유는 없다.
+      // `tabFallback` 이 거짓이면(rolling.ts/codexRolling.ts 의 ordinary-path 'handover' 호출,
+      // F3) 탭 세션에 대해서는 Job 과 마찬가지로 그냥 `null` 이다 — 부르는 쪽이 `chain.prompt` 로
+      // 저하한다.
+      resumeText: (sessionId, form, tabFallback) =>
+        (form === 'update'
           ? buildResumeNote(sessionId, deps.getState(), { log: orchLog })
           : buildResumePacket(sessionId, deps.getState(), { log: orchLog })
+        ).then((text) => text ?? (tabFallback ? tabResumeTextFor(sessionId, form) : null))
     })
   }
   if (orchWiring && core.appSettings.getOrchestrationEnabled())
@@ -2030,7 +2303,7 @@ export function registerIpc(
   ipcMain.on('sessions.resize', (_e, id, cols, rows) => core.sessions.resize(id, cols, rows))
   ipcMain.on('sessions.ack', (_e, id, bytes) => core.sessions.ack(id, bytes))
   ipcMain.handle('sessions.kill', (_e, id) => {
-    codexTurns?.unregister(id) // also unregister on the tab-close path, which arrives before the exit event
+    codexRollout?.unregister(id) // also unregister on the tab-close path, which arrives before the exit event
     return core.sessions.kill(id)
   })
   ipcMain.handle('sessions.list', () => core.sessions.list())
@@ -2131,8 +2404,17 @@ export function registerIpc(
   ipcMain.handle('worktrees.getRoot', () => core.worktrees.getRoot())
   ipcMain.handle('worktrees.setRoot', (_e, root: string | null) => core.worktrees.setRoot(root))
 
-  // usage — reads an active session's context, 5-hour, and weekly % out of the statusLine capture file
-  ipcMain.handle('usage.session', (_e, sessionId: string) => core.usageSession(sessionId))
+  // usage — an active session's context, 5-hour and weekly %. The two CLIs keep those figures in
+  // different places, so the source is picked per session: claude writes them into the statusLine
+  // capture file every turn, codex records them in its rollout jsonl, which CodexRolloutWatcher tails.
+  // Both answer as SessionUsage, so the renderer asks one question for every session.
+  // A provider that cannot be decided (session or account gone) answers null, same as having no data.
+  ipcMain.handle('usage.session', (_e, sessionId: string) => {
+    const provider = providerOfSession(sessionId, core.sessions.list(), (id) => core.accounts.get(id))
+    if (provider === 'codex') return codexRollout?.usage(sessionId) ?? null
+    if (provider === 'claude') return core.usageSession(sessionId)
+    return null
+  })
 
   // File explorer: only paths under a registered session cwd are accessible, which keeps arbitrary
   // paths from being exposed.
@@ -2521,6 +2803,9 @@ export function registerIpc(
     if (core.run.get(projectPath)?.validation) orchValidator?.markStopped(projectPath)
     return core.run.stop(projectPath)
   })
+  // 실행 탭을 ✕ 로 닫았을 때. run.stop 과 같이 이미 있는 실행에 거는 조작이라 경로 가드를 두지
+  // 않는다 — 임의의 경로를 넘겨도 그 키의 실행이 없으면 아무 일도 일어나지 않는다.
+  ipcMain.handle('run.dismiss', async (_e, projectPath: string) => core.run.dismiss(projectPath))
   ipcMain.on('run.write', (_e, projectPath: string, data: string) => core.run.write(projectPath, data))
   ipcMain.on('run.resize', (_e, projectPath: string, cols: number, rows: number) =>
     core.run.resize(projectPath, cols, rows)
@@ -2911,6 +3196,15 @@ export function registerIpc(
     await core.appSettings.setOrchestrationEnabled(enabled)
     // Turning it on starts it immediately (a no-op if already up). Why turning it off does not close it is in the startOrch comment.
     if (enabled && orchWiring) await startOrch()
+  })
+
+  // How a session that hits its limit gets continued. The same trust-boundary check as setLang — the
+  // value the renderer sent is validated before being written to disk.
+  ipcMain.handle('settings.getResumeStrategy', () => core.appSettings.getResumeStrategy())
+  ipcMain.handle('settings.setResumeStrategy', async (_e, strategy: unknown) => {
+    if (strategy !== 'smart' && strategy !== 'original')
+      throw new Error(`INVALID_RESUME_STRATEGY: ${String(strategy)}`)
+    await core.appSettings.setResumeStrategy(strategy)
   })
 
   // The terminal font pair. The same trust-boundary check as setLang: the shape is validated here, and

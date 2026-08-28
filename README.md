@@ -135,7 +135,7 @@ You will also need:
 </div>
 
 **Appearance**
-- Six themes — Vega, Orion, Umbra, Aurora, Antares and Quasar — picked from cards that each draw
+- Seven themes — Vega, Orion, Umbra, Aurora, Antares, Quasar and Sirius — picked from cards that each draw
   themselves in their own palette, so you choose by looking rather than by name
 - A theme is more than colours: the corner radius, the shadows, the UI typeface and the row density
   come with it, so Quasar puts more on screen than Umbra does

@@ -139,6 +139,15 @@ export interface TranscriptMessage {
   timestamp?: string
 }
 
+/** The last Bash tool call in a transcript and its result — `tool_use`(name `Bash`)/`tool_result`
+ *  pair. There is no exit code in either provider's record, only `is_error`, so `failed` is a
+ *  boolean and nothing here claims a precision the transcript does not carry. */
+export interface LastCommand {
+  command: string
+  failed: boolean
+  excerpt: string
+}
+
 export interface TranscriptPreview {
   entryId: string
   messages: TranscriptMessage[]
@@ -271,10 +280,10 @@ export interface JobTask {
    *  unclickable: the Task was never dispatched, or its Dispatch is from a previous app run, or the
    *  worker is mid-launch and its real session id does not exist yet. */
   sessionId?: string
-  /** 사람이 이 Task 에 지정해 둔 계정(Task.accountId). 상세 창의 `띄우기` 가 스케줄러와 **같은
-   *  계정**을 고르려면 이 값이 필요하다 — 없으면 그 버튼이 기본 계정으로 띄워, 같은 Task 가 누가
-   *  띄웠는지에 따라 다른 계정에서 돌게 된다. */
-  accountId?: string
+  /** 사람이 이 Task 에 지정해 둔 계정들, 순서대로(Task.accountIds). 상세 창의 `띄우기` 가
+   *  스케줄러와 **같은 계정**을 고르려면 이 값이 필요하다 — 없으면 그 버튼이 기본 계정으로 띄워,
+   *  같은 Task 가 누가 띄웠는지에 따라 다른 계정에서 돌게 된다. */
+  accountIds?: string[]
   /** 가장 이른 열린 Gate. 없으면 이 칸이 없다.
    *
    *  **셋을 한 묶음으로 싣는다.** 한때 질문만 따로 실었는데, 화면에서 답하려면 `gate-resolve` 가
@@ -292,6 +301,23 @@ export interface JobTask {
   provider?: Provider
   /** That Dispatch's startedAt. The renderer counts elapsed time from this with formatElapsed. */
   startedAt?: string
+  /** 지금 멈춰 있으면 그 계정과 정지 사유, 그리고 리셋 시각. **열린 Dispatch 의 마지막 이력 항목에
+   *  `resumedAt` 이 없을 때만 있다** — 끝난 Dispatch 의 열린 항목은 아무도 기다리지 않는 것이다
+   *  (앱이 꺼져 outcome_unknown 으로 닫힌 경우가 그 갈래다).
+   *
+   *  **`reason` 이 함께 오는 이유.** 이 칸이 있다는 것과 "리셋을 기다린다" 는 같은 말이 아니다 —
+   *  계정을 바꾸는 정지(`'switching'`)도 이 칸을 채우지만 그쪽은 기다리는 것이 아니고 리셋 시각도
+   *  없다. 사유 없이 그리면 계정 전환이 "리셋 대기" 로 읽히고, 전환이 실패해 그 항목이 끝내 닫히지
+   *  않으면 그 거짓말이 영구히 남는다.
+   *
+   *  `resetsAt` 이 없는 대기도 있다 — `'waiting'` 이어도 provider 가 시각을 주지 않는 경우가 있다.
+   *  화면은 시각 없이 "기다리는 중" 만 그린다. */
+  waiting?: { accountId: string; reason: 'waiting' | 'switching'; resetsAt?: string }
+  /** **지금 도는 Dispatch** 가 몇 번 이어졌는가 — 그 Dispatch 의 **닫힌** 이력 항목의 수다. 0 이면
+   *  이 칸이 없다. Task 전체의 합이 아니다: 재시도는 새 Dispatch 를 열므로 이 숫자가 0 으로
+   *  돌아가고, 그때도 앞선 Dispatch 의 정지·재개는 상세 창의 타임라인에 그대로 남는다
+   *  (core/orchestration/timeline.ts 는 Dispatch 마다 이력을 편다). */
+  resumes?: number
 }
 
 export type JobEventKind =
@@ -301,6 +327,8 @@ export type JobEventKind =
   | 'message'
   | 'gate-opened'
   | 'gate-resolved'
+  | 'limit-hit'
+  | 'resumed'
 
 /** 타임라인 한 줄. 저장된 레코드가 아니라 core/orchestration/timeline.ts 가 파생한 값이다.
  *  Jobs 사이드바의 JobTask 와 같은 자리에 있는 이유도 같다 — 렌더러가 그리는 투영이다. */
@@ -463,13 +491,22 @@ export interface CoreEvents {
 }
 export type CoreEventChannel = keyof CoreEvents
 
+/** 한도에 걸린 세션을 어떻게 이어갈지. 'smart' 는 대화를 물려받지 않고 브리핑만으로 새 세션을
+ *  시작한다(브리핑을 만들 수 없으면 적용되지 않는다). 'original' 은 기존 동작: 대화 파일을 넘겨
+ *  `--resume` 으로 이어간다. */
+export type ResumeStrategy = 'smart' | 'original'
+
 /** The contract the renderer sees as window.api. The IPC adapter implements it. */
 export interface CoreApi {
   accounts: {
     list(): Promise<Account[]>
     create(input: { label: string; color?: string; provider?: Provider }): Promise<Account>
     import(input: { label: string; configDir: string; provider?: Provider }): Promise<Account>
-    remove(id: string): Promise<void> // deregisters only — the disk is not touched
+    /** 등록만 해제한다 — 디스크는 건드리지 않는다. **돌아가는 세션이 그 계정을 쓰고 있으면 거부하고
+     *  막고 있는 세션 제목들을 돌린다**(main 의 accountRemovalBlockers): 현재 계정인 세션뿐 아니라
+     *  그 계정을 롤링 대기 순서에 담고 있는 세션도 막는다 — 대기 계정이 사라지면 한도에 걸리는 순간
+     *  갈아탈 곳이 없어 롤이 중단된다. */
+    remove(id: string): Promise<{ ok: boolean; titles: string[] }>
     loginStatus(id: string): Promise<boolean> // the verdict from accounts/loginStatus.ts (claude also checks Keychain on macOS)
     detect(): Promise<DetectCandidate[]> // detection candidates, excluding registered and unregistered-by-the-user config dirs
     /** Unregistered config dirs as account-shaped history sources — this one keeps the ones the user
@@ -533,7 +570,7 @@ export interface CoreApi {
     setRoot(root: string | null): Promise<void>
   }
   usage: {
-    session(sessionId: string): Promise<SessionUsage | null> // context, 5-hour, and weekly % for an active session (from statusLine)
+    session(sessionId: string): Promise<SessionUsage | null> // context, 5-hour, and weekly % for an active session (claude: statusLine capture, codex: rollout tail)
   }
   localHistory: {
     // Browsing and restoring the snapshot taken just before a deletion. projectPath uses the same
@@ -577,6 +614,9 @@ export interface CoreApi {
     // already open (environment variables are fixed at spawn time).
     getOrchestrationEnabled(): Promise<boolean>
     setOrchestrationEnabled(enabled: boolean): Promise<void>
+    // How a session that hits its limit gets continued. See ResumeStrategy.
+    getResumeStrategy(): Promise<ResumeStrategy>
+    setResumeStrategy(strategy: ResumeStrategy): Promise<void>
     // The terminal font pair. Either side may be null, meaning "not chosen" — the renderer then uses
     // the app's default chain for that half.
     getTerminalFont(): Promise<TerminalFont>
@@ -654,6 +694,9 @@ export interface CoreApi {
     listActive(): Promise<RunStatus[]> // all active runs — for the count badge and the dropdown
     start(projectPath: string, configId: string): Promise<RunStatus>
     stop(projectPath: string): Promise<void>
+    // 종료된 실행을 버린다 — 실행 탭의 ✕. 마지막 exitCode 와 최근 출력까지 함께 사라지므로 탭을
+    // 다시 열어도 지난 실행이 돌아오지 않는다. 도는 실행에는 아무 일도 하지 않는다(RunManager.dismiss).
+    dismiss(projectPath: string): Promise<void>
     write(projectPath: string, data: string): void
     resize(projectPath: string, cols: number, rows: number): void
     // Both return the **stored** list only — never passed through mergeConfigs, so the auto-detected

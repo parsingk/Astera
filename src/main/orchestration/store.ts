@@ -74,6 +74,34 @@ export class OrchestrationStore {
     // from files such as accounts.json, where a bad shape risks corrupting an account.
     const st = parsed as OrchState
 
+    // **이 칸이 목록이 되기 전에 만든 Task 를 옮긴다.** 이 파일은 프로세스보다 오래 살고, Run 은
+    // 30일(RUN_TTL_MS)까지 남는다 — 옮기지 않으면 앱을 올리는 순간 그 Task 들의 계정 지정이 조용히
+    // 사라지고, 사람이 아끼려던 계정에 일이 간다(dispatchAccount.ts 가 막으려는 바로 그것이다).
+    // 옛 칸은 지운다: 두 칸을 함께 두면 어느 쪽이 정본인지 코드마다 달라진다.
+    for (const t of st.tasks as unknown as Record<string, unknown>[]) {
+      const legacy = t.accountId
+      // **조건은 "새 칸이 없다"가 아니라 "새 칸이 비어 있다"다.** 손으로 고치다 만 파일에는 두 칸이
+      // 함께 있다(`{"accountId":"a","accountIds":[]}`) — 이 이행이 있는 이유가 바로 그런 편집이다.
+      // `undefined` 만 보면 그 파일은 빈 목록 그대로 돌아오고 옛 칸은 아래에서 지워져 지정이 통째로
+      // 사라진다. 빈 배열이 "지정 없음"이라는 것은 이 브랜치가 곳곳에서 못박은 규칙이므로
+      // (Task.accountIds 의 JSDoc, createTask, rollChainFor) 여기서도 그 규칙으로 읽는다.
+      if (!(t.accountIds as unknown[] | undefined)?.length) {
+        if (typeof legacy === 'string' && legacy !== '') t.accountIds = [legacy]
+        // **옛 이름 아래 목록이 들어 있으면 그것도 받는다** — 값은 맞고 이름만 옛것인, 있을 수 있는
+        // 손질이다(이 파일은 손으로 고쳐진다). 버리면 사람이 적어 둔 순서가 조용히 사라진다.
+        // **읽을 수 없는 원소는 그 원소만 버린다.** 전부 아니면 전무로 보면 `["a", 3]` 이 읽히는 "a"
+        // 까지 함께 버리는데, 그것도 사람이 아끼려던 계정을 지우는 일이다. 남는 것이 하나도 없으면
+        // (빈 배열, 숫자만, 빈 문자열만) 지정으로 읽을 수 없으므로 칸을 만들지 않는다 — 빈 배열을
+        // 실으면 "지정 없음"과 값이 갈라지고, 그것을 체인으로 넘기면 롤링이 계정 아닌 것으로
+        // 갈아타려 한다.
+        else if (Array.isArray(legacy)) {
+          const ids = legacy.filter((x): x is string => typeof x === 'string' && x !== '')
+          if (ids.length > 0) t.accountIds = ids
+        }
+      }
+      delete t.accountId
+    }
+
     const now = new Date().toISOString()
     // Restart cleanup: for an open Dispatch, the session died along with the app. The outcome
     // cannot be proven, so leave it as outcome_unknown and do not touch the Task (section 7 of the

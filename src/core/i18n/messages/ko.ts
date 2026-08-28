@@ -194,6 +194,13 @@ export const ko = {
   'settings.theme.label': '테마',
   'settings.theme.hint': '색과 모서리, 서체가 함께 바뀝니다. 터미널 폰트는 아래에서 따로 고릅니다.',
   'settings.theme.saveFailed': '테마 저장 실패: {detail}',
+  // ResumeStrategySettings.tsx — the two-way resume strategy picker
+  'settings.resumeStrategy.label': '세션 재개 방식',
+  'settings.resumeStrategy.smart.label': '스마트 재개 (실험)',
+  'settings.resumeStrategy.smart.hint': '간결한 체크포인트만으로 대화를 이어갑니다.',
+  'settings.resumeStrategy.original.label': '원래 세션 재개',
+  'settings.resumeStrategy.original.hint': '기존 Resume 방식으로 대화를 이어갑니다.',
+  'settings.resumeStrategy.saveFailed': '재개 방식을 저장하지 못했습니다: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': '터미널 영문 폰트',
   'settings.font.hangul': '터미널 한글 폰트',
@@ -427,6 +434,7 @@ export const ko = {
   'account.remove.processing': '처리 중…',
   'account.remove.confirmWithLogout': '해제 + 로그아웃',
   'account.logout.failed': '로그아웃 실패: {detail}\n\n등록 해제는 계속 진행합니다.',
+  'account.remove.inUse': '돌아가는 세션이 이 계정을 쓰고 있어 등록을 해제할 수 없습니다: {titles}\n\n세션을 닫거나, 그 세션의 롤링 순서에서 이 계정을 빼 주세요.',
   // The Message key accountLogout in core.ts returns. account.logout.failed (above) is the outer template that
   // slots this value into {detail}, so the two cannot share a name — it was split into the
   // account.error.* namespace, alongside account.error.raw.
@@ -559,6 +567,7 @@ export const ko = {
   'history.menu.hide': '숨기기',
   'history.project.noSessions': '세션 없음',
   'history.entry.preview': '미리보기',
+  'history.entry.resume': '세션 이어하기',
   'history.preview.truncated': '(최근 대화만)',
   'history.preview.me': '나',
   'history.resume.folderMissingTitle': '프로젝트 폴더 없음',
@@ -700,6 +709,8 @@ export const ko = {
   // (a separately added terminal.tab.run was an exact duplicate of the value and was cleaned up).
   'run.panel.noActiveRun': '실행',
   'run.panel.exited': ' · 종료(코드 {code})',
+  // 종료된 실행에만 붙는 ✕ — 실행 중에는 그리지 않는다(⏹ 로 먼저 정지시킨다)
+  'run.panel.close': '실행 탭 닫기',
   'run.panel.clear': '지우기',
   'run.panel.collapse': '접기',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
@@ -845,6 +856,8 @@ export const ko = {
   'jobs.event.dispatchStarted': '워커 시작',
   'jobs.event.gateOpened': '결정 대기',
   'jobs.event.gateResolved': '결정 완료',
+  'jobs.event.limitHit': '한도 정지',
+  'jobs.event.resumed': '워커 재개',
   'jobs.event.status': '소식',
   'jobs.event.workerDone': '워커 보고',
   'jobs.event.question': '질문',
@@ -890,7 +903,8 @@ export const ko = {
   // 있던 경우(그 provider 에 로그인된 계정이 없다), 둘째는 사람이 이 Task 에 지정한 계정을
   // 쓸 수 없는 경우다 — 지정을 무시하고 기본 계정으로 갈아타지 않으므로 사람에게 말해야 한다
   'jobs.gate.noAccount': '{provider} 계정에 로그인되어 있지 않아 이 Task 를 시작할 수 없습니다',
-  'jobs.gate.assignedAccountUnusable': '이 Task 에 지정된 계정을 쓸 수 없습니다 — 로그인되어 있지 않거나 지워졌거나 다른 에이전트의 계정입니다',
+  'jobs.gate.assignedAccountUnusable':
+    '이 Task 에 지정된 첫 계정을 쓸 수 없고, 그 뒤의 계정들은 나중에 갈아탈 순서일 뿐입니다 — 그 계정에 다시 로그인하거나 이 Task 의 계정 목록을 고치세요',
   // NewTaskModal.tsx — Task 를 짜는 동안 상세 창의 아래 칸(.detail-events)이 바뀌는 폼. deps 는
   // 이 폼이 아니라 그래프가 쥐고 있다(고르는 자리가 그래프이므로) — 그래서 이 카탈로그에는 deps
   // 자체의 값이 아니라 그것을 고르라고 안내하는 문구(depsHint)만 있다.
@@ -902,19 +916,27 @@ export const ko = {
   // 거짓이 됐다. 대신 고른 것이 무엇을 뜻하는지 적는다(recomputeReady 의 규칙 그대로다)
   'jobs.task.depsHint': '고른 Task 가 모두 끝나야 시작합니다',
   'jobs.task.depsAdd': '선행 Task 고르기',
-  // 계정 칸. **고를 계정이 둘 이상일 때만 그려진다** — 하나뿐이면 기본 계정이 그 하나다.
-  // 안 고르면 그 provider 의 기본 계정으로 간다(core/accounts/dispatchAccount.ts)
+  // 계정 칸. **계정이 하나도 없을 때만 접힌다** — 하나여도 그린다: "지정 안 함"과 "이 계정으로
+  // 못박음"은 계정이 하나뿐이어도 뜻이 다르다(로그아웃되고 둘째가 등록되면 갈리는 동작이
+  // NewTaskModal.tsx 에 있다). 안 고르면 그 provider 의 기본 계정으로 간다(core/accounts/dispatchAccount.ts)
   'jobs.task.account': '계정',
   'jobs.task.accountDefault': '기본 계정',
-  'jobs.task.accountHint': '이 Task 의 워커를 띄울 계정입니다 — 고르지 않으면 기본 계정으로 갑니다',
+  'jobs.task.accountNone': '추가 안 함',
+  'jobs.task.accountHint':
+    '이 Task 의 워커를 띄울 계정입니다 — 고르지 않으면 기본 계정으로 갑니다. 둘 이상 고르면 한도에 걸렸을 때 적은 순서대로 갈아탑니다',
   // 고른 계정이 이 폴더를 처음 쓰면 CLI 가 신뢰 확인을 띄우고 **거기서 멈춘다** — 앱은 그것을
   // 모르고 노드는 도는 모양 그대로라, 미리 말해 두지 않으면 왜 아무 일도 없는지 알 길이 없다
-  'jobs.task.accountTrust': '이 계정으로 이 폴더를 처음 쓰면 세션 탭에 폴더 신뢰 확인이 뜹니다 — 승인해야 워커가 일을 시작합니다',
+  'jobs.task.accountTrust': '고른 계정이 이 폴더를 처음 쓰면 세션 탭에 폴더 신뢰 확인이 뜹니다 — 승인해야 워커가 일을 시작합니다',
   'jobs.task.validate': '완료를 검증할 실행 구성',
   'jobs.task.validateNone': '검증 없음',
   'jobs.task.review': '다른 에이전트가 검토',
   'jobs.task.create': '추가',
   'jobs.task.failed': 'Task 를 만들지 못했습니다',
+  // JobsView.tsx — 도는 줄의 provider 뒤. 대기 중이면 경과 대신 이것을 적고, 이어진 적이 있으면
+  // 그 뒤에 이어 붙인다({left}·{n} 은 core/i18n/index.ts 의 {name} 치환).
+  'jobs.task.waitingReset': '리셋 대기 · {left}',
+  'jobs.task.waitingNoTime': '리셋 대기',
+  'jobs.task.resumedCount': '{n}번 이어짐',
   // RunDetail.tsx — 그래프 노드 위의 버튼. 띄우기와 다시 띄우기는 같은 글리프(▶)를 쓴다 — 전이표상
   // 한 노드에 둘이 함께 나오는 일이 없어(서로 배타적인 상태에서만 보인다) 뜻이 섞이지 않는다.
   // jobs.node.failed 는 이 네 동작(띄우기·멈추기·물어보기·다시 띄우기)이 함께 쓰는 하나의 실패

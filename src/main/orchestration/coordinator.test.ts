@@ -77,6 +77,8 @@ const baseArgs = (dispatchId = 'dsp_1', taskId = 'tsk_1') => ({
   spec: '설계하고 반영하라',
   provider: 'codex' as const,
   accountId: 'acc1',
+  // 그 계정 하나짜리 체인 — 배선이 Task.accountIds 로 더 긴 체인을 만들 수 있다(아래 통과 테스트)
+  rollAccountIds: ['acc1'],
   runCwd: '', // 각 테스트에서 dir로 채운다
   worktree: 'current'
 })
@@ -400,13 +402,16 @@ describe('OrchCoordinator.startWorker', () => {
     expect((deps.spawned[0] as { title: string }).title).toBe('인증 리팩터')
   })
   // 한도에 걸린 워커가 스스로 이어지게 하려면 spawnSession이 롤링 코디네이터에 등록할 체인을
-  // 받아야 한다. 체인은 그 Dispatch가 실제로 쓰는 계정 하나뿐이다(baseArgs의 accountId: 'acc1') —
-  // 순서 있는 여러 계정 목록은 이 태스크의 범위 밖이다(Phase 1c).
-  it('워커를 자기 계정 한 개짜리 롤링 체인으로 띄운다', async () => {
+  // 받아야 한다. 코디네이터는 그 체인을 **정하지 않고 순서대로 그대로 넘긴다** — 무엇이 그 목록이
+  // 되는지는 배선이 정한다(Task.accountIds 를 읽는 ipc.ts의 deps.startWorker 래퍼).
+  it('받은 롤링 체인을 순서대로 spawnSession에 넘긴다', async () => {
     const deps = makeDeps()
     const co = new OrchCoordinator(deps)
-    await co.startWorker({ ...baseArgs(), runCwd: dir })
-    expect((deps.spawned[0] as { rollAccountIds?: string[] }).rollAccountIds).toEqual(['acc1'])
+    await co.startWorker({ ...baseArgs(), rollAccountIds: ['acc1', 'acc2'], runCwd: dir })
+    expect((deps.spawned[0] as { rollAccountIds?: string[] }).rollAccountIds).toEqual([
+      'acc1',
+      'acc2'
+    ])
   })
   // 재개 문구. 넘기지 않으면 롤링이 앱의 **UI 언어** 기본값을 타이핑한다 — 영어로 지시받은 워커가
   // 다른 언어로 재개되고, 그 문구는 "계속하라"라서 보고 의무를 상기시키지 않는다.

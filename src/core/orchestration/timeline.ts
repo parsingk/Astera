@@ -20,7 +20,9 @@ const KIND_RANK: Record<JobEventKind, number> = {
   'dispatch-started': 2,
   message: 3,
   'gate-opened': 4,
-  'gate-resolved': 5
+  'gate-resolved': 5,
+  'limit-hit': 6,
+  resumed: 7
 }
 
 /** 타임라인에서 빼는 메시지 종류.
@@ -76,6 +78,30 @@ function collect(
       ...(d.review ? { review: true } : {}),
       ...(isKnownSession(d.sessionId) ? { sessionId: d.sessionId } : {})
     })
+    // 정지와 재개를 한 항목에 담는 Dispatch.resumes(ResumeEntry)를 이벤트 둘로 편다 — 화면은
+    // 정지 한 줄과(닫혔으면) 재개 한 줄을 따로 그린다. sourceId 는 종류 안에서만 유일하면 되므로
+    // (JobEvent.sourceId) 이력 색인을 그대로 붙인다. 계정 라벨은 core 가 모르므로 summary 에는
+    // id 만 싣고, 사람이 읽을 문구는 렌더러가 만든다.
+    for (const [i, e] of (d.resumes ?? []).entries()) {
+      events.push({
+        at: e.stoppedAt,
+        kind: 'limit-hit',
+        sourceId: `${d.id}:${i}`,
+        taskId: d.taskId,
+        taskTitle: titleOf.get(d.taskId),
+        summary: e.fromAccountId
+      })
+      if (e.resumedAt !== undefined) {
+        events.push({
+          at: e.resumedAt,
+          kind: 'resumed',
+          sourceId: `${d.id}:${i}`,
+          taskId: d.taskId,
+          taskTitle: titleOf.get(d.taskId),
+          summary: e.toAccountId ?? e.fromAccountId
+        })
+      }
+    }
   }
   for (const m of state.messages) {
     if (m.runId !== runId || SKIP.has(m.type)) continue

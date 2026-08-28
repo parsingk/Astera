@@ -7,6 +7,7 @@ import type { Account, SessionInfo } from '../core/types'
 import { claudeHistoryStrategy } from '../core/history/strategies/claude'
 import { matchesLimitPhrase } from '../core/rolling/detect'
 import { parseResetTime } from '../core/rolling/resetTime'
+import { BlockRegistry } from '../core/rolling/blockRegistry'
 import { RollingCoordinator, type RollingDeps } from './rolling'
 
 const acc = (id: string, label: string): Account => ({
@@ -77,6 +78,7 @@ function harness(overrides: Partial<RollingDeps> = {}): {
     send: (channel, p) => sent.push({ channel, payload: p as Record<string, unknown> }),
     log: () => {},
     lang: () => 'ko', // 기존 한국어 기대값을 유지
+    blocks: new BlockRegistry(), // 하네스마다 새 인스턴스 — 앞 테스트의 차단이 뒤 테스트를 막지 않게
     copy: (src, dest) => {
       copied.push({ src, dest })
       events.push('copy')
@@ -164,13 +166,16 @@ describe('RollingCoordinator', () => {
     expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a2'])
   })
 
-  it('statusline 메타가 아예 없으면 롤을 중단하고 none 상태를 알린다', async () => {
+  // 종전 기대값은 'none' 이었다 — 중단이 아무것도 예약하지 않는다는, 지금 고친 그 동작이다.
+  // 중단 자체(copy/kill/spawn 없음)는 그대로 검사하고, 그 뒤에 무엇이 게시되는지는 아래의
+  // '중단된 롤이 다음 시도를 예약한다' describe 가 재시도까지 함께 못박는다.
+  it('statusline 메타가 아예 없으면 롤을 중단하고 대기 상태를 알린다', async () => {
     const h = harness()
     h.coord.register(h.info1)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await flush()
     expect(h.events).toEqual([])
-    expect(h.sent.at(-1)?.payload.state).toBe('none')
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
   })
 
   it('respawn 후 신뢰 다이얼로그를 자동 수락한다 (Enter 400ms)', async () => {
@@ -365,6 +370,7 @@ describe('RollingCoordinator', () => {
       send: () => {},
       log: () => {},
       lang: () => 'ko',
+      blocks: new BlockRegistry(),
       copy: () => Promise.resolve()
     } satisfies RollingDeps)
     const info1: SessionInfo = {
@@ -588,9 +594,16 @@ const payloadEx = (o: {
   weekly?: number
   fiveReset?: string
   weeklyReset?: string
+  sid?: string // 한 하네스에 체인이 둘 이상일 때 — 안 주면 종전 그대로 'claude-sess'
 }): unknown => ({
-  session_id: 'claude-sess',
-  transcript_path: path.join('D:\\cfg', 'live', 'projects', 'D--work-p', 'claude-sess.jsonl'),
+  session_id: o.sid ?? 'claude-sess',
+  transcript_path: path.join(
+    'D:\\cfg',
+    'live',
+    'projects',
+    'D--work-p',
+    `${o.sid ?? 'claude-sess'}.jsonl`
+  ),
   rate_limits: {
     ...(o.five != null ? { five_hour: win(o.five, o.fiveReset) } : {}),
     ...(o.weekly != null ? { seven_day: win(o.weekly, o.weeklyReset) } : {})
@@ -745,6 +758,115 @@ describe('RollingCoordinator 차단 계정 회피', () => {
     h.coord.handleData({ sessionId: 's2', data: LIMIT_TEXT })
     await flush()
     expect(h.spawned.at(-1)?.accountId).toBe('a1') // 차단이 풀렸으므로 정상 전환
+  })
+
+  // 세 워커가 같은 계정들을 돌면 각자 모든 계정에서 한도를 다시 맞아야 했다 — 워커마다 계정마다
+  // kill+respawn 한 번이 낭비였고, 그 낭비를 없애는 것이 공유 기록이다(SPEC §11.2/6).
+  it('다른 체인이 막힌 계정을 알려 주면 그 계정을 건너뛴다 (몰림 방지)', async () => {
+    const h = harness()
+    // 체인 1: [a1, a2, a3] — a1 에서 한도 → a2 로 롤. 그 순간 a1 이 공유 기록에 올라간다
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned.at(-1)?.accountId).toBe('a2')
+    // 체인 2: 같은 계정들을 다른 순서로 도는 둘째 워커. a2 에서 한도를 만나면 라운드 로빈이 가리키는
+    // 다음 계정이 a1 이다 — 공유가 없으면 방금 막힌 그 계정으로 그대로 옮겨 간다.
+    h.payloads.set('s10', payload(97, 'claude-sess-2', 'D--work-q'))
+    h.coord.register({
+      ...h.info1,
+      id: 's10',
+      accountId: 'a2',
+      cwd: 'D:\\work\\q',
+      rollAccountIds: ['a2', 'a1', 'a3']
+    })
+    h.coord.handleData({ sessionId: 's10', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned.at(-1)?.accountId).toBe('a3')
+  })
+
+  // 오탐 안전 밸브. 공유 기록은 계정에 관한 사실이라 잘못 적히면 그 계정을 도는 모든 체인을 막는다 —
+  // 어떤 체인이 그 계정에서 HEALTHY_MS 를 무사히 넘기면 기록을 걷어낸다.
+  it('어떤 체인이 그 계정으로 무사히 돌면 공유 기록이 풀린다 (오탐 안전 밸브)', async () => {
+    const h = harness()
+    // 체인 1: [a2, a1] — a2 에서 한도 → a1 로 롤. 이제 a1 에서 정상으로 돌고 있다
+    h.payloads.set('s1', payload(97))
+    h.coord.register({ ...h.info1, accountId: 'a2', rollAccountIds: ['a2', 'a1'] })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned.at(-1)?.accountId).toBe('a1')
+    h.payloads.set('s2', payload(5)) // 준비 신호 → 자동 프롬프트 → healthy 타이머 무장
+    await settle()
+    // 체인 2: a1 에서 한도를 보고 그 계정을 공유 기록에 올린다(진짜든 오탐이든)
+    h.payloads.set('s10', payload(97, 'claude-sess-2', 'D--work-q'))
+    h.coord.register({
+      ...h.info1,
+      id: 's10',
+      accountId: 'a1',
+      cwd: 'D:\\work\\q',
+      rollAccountIds: ['a1', 'a3']
+    })
+    h.coord.handleData({ sessionId: 's10', data: LIMIT_TEXT })
+    await flush()
+    // 중간 체크포인트: 이 시점에는 기록이 살아 있어야 한다. 없으면 아래 마지막 단언이 "기록이
+    // 지워졌다"가 아니라 "애초에 공유가 없었다"로도 통과해 버린다.
+    h.payloads.set('s30', payload(97, 'claude-sess-4', 'D--work-s'))
+    h.coord.register({
+      ...h.info1,
+      id: 's30',
+      accountId: 'a2',
+      cwd: 'D:\\work\\s',
+      rollAccountIds: ['a2', 'a1', 'a3']
+    })
+    h.coord.handleData({ sessionId: 's30', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned.at(-1)?.accountId).toBe('a3')
+    // 체인 1 이 a1 에서 HEALTHY_MS(60초)를 무사히 넘긴다 → 공유 기록이 지워진다
+    await vi.advanceTimersByTimeAsync(65_000)
+    // 체인 3: a1 이 다시 후보다. 기록이 남아 있었다면 a3 로 우회한다
+    h.payloads.set('s20', payload(97, 'claude-sess-3', 'D--work-r'))
+    h.coord.register({
+      ...h.info1,
+      id: 's20',
+      accountId: 'a2',
+      cwd: 'D:\\work\\r',
+      rollAccountIds: ['a2', 'a1', 'a3']
+    })
+    h.coord.handleData({ sessionId: 's20', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned.at(-1)?.accountId).toBe('a1')
+  })
+
+  // 합쳐진 기록은 pickAvailable 만 먹이는 것이 아니다. planRetry 는 currentIndex 까지 포함해 전부
+  // 훑으므로, 남이 적은 기록이 **이 체인이 지금 앉아 있는 계정**의 재시도 시각과 scope 라벨까지
+  // 바꾼다. 기록이 맞을 때는 그것이 맞는 동작이고(주간 소진 계정은 5시간 창이 뭐라 하든 못 쓴다),
+  // 틀릴 때는 여기가 대가가 가장 큰 자리다 — 대기하는 체인은 그 계정에 도착하지 않으니 healthy
+  // 타이머 밸브가 걸리지 않는다.
+  //
+  // **순서가 핵심이다.** 위 두 테스트는 남의 기록을 자기 판정 **뒤에** 적으므로 이 자리를 지나가지
+  // 않는다. 여기서는 먼저 적는다.
+  it('다른 체인이 먼저 적은 더 긴 기록이 자기 계정의 대기까지 늘리고 라벨도 바꾼다', async () => {
+    const h = harness()
+    const t0 = Date.now()
+    // 체인 2: 같은 a1 에서 주간 소진 — 60분짜리 기록을 공유 기록에 먼저 올린다
+    h.payloads.set('s10', payloadEx({
+      sid: 'claude-sess-2', five: 20, weekly: 100, weeklyReset: new Date(t0 + 60 * MIN).toISOString()
+    }))
+    h.coord.register({ ...h.info1, id: 's10', cwd: 'D:\\work\\q', rollAccountIds: ['a1', 'a2'] })
+    // 체인 1: 단일 계정 a1. 자기 증거는 "5시간 창이 2분 뒤 풀린다" 뿐이다
+    h.payloads.set('s1', payloadEx({ five: 100, weekly: 20, fiveReset: new Date(t0 + 2 * MIN).toISOString() }))
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    h.coord.handleData({ sessionId: 's10', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned.at(-1)?.accountId).toBe('a2') // 판정이 인정됐다 = a1 이 공유 기록에 올라갔다
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    const w = lastWaiting(h.sent)
+    expect(w?.sessionId).toBe('s1') // 체인 1 의 대기다 — 체인 2 는 롤했으므로 대기를 게시하지 않는다
+    // 공유가 없으면 자기 증거만 보고 t0+3분(2분 + 여유 1분)·session 이다. 합쳐지면 더 긴 쪽이
+    // 이겨 t0+61분·weekly 로 바뀐다 — 시각뿐 아니라 라벨도 남의 기록을 따른다.
+    expect(w?.nextRetryAt).toBe(new Date(t0 + 61 * MIN).toISOString())
+    expect(w?.scope).toBe('weekly')
   })
 
   it('respawn 후 재부착 switching 이벤트에는 reattach 표시가 붙는다 (Slack 중복 방지)', async () => {
@@ -1274,25 +1396,84 @@ describe('idle nudge', () => {
     expect(h.written).toEqual([])
   })
 
-  // 게이트를 사용률 단독으로 두면 막히는 조합이 실측된다: 한도 문구를 실제로 물었는데 스냅샷은
-  // 한도 직전이 아니라 낮은 값에 얼어 있는 경우 — 게이트가 걸러낸 것은 오탐이 아니라 정당한 한도
-  // 문구였다. 그 세션에서 롤까지 실패하면 세션은 멈춘 채 남고, 차단 기록이 유일한 증거다.
-  it('한도 감지 이력이 남아 있으면 사용률이 낮아도 nudge한다 — 롤이 실패해 멈춘 세션', async () => {
+  // 이 테스트는 종전에 **idle nudge 가** 멈춘 세션을 되살리는 것을 검사했다(롤이 중단되면 체인이
+  // 대기도 아니고 롤링도 아닌 상태로 남았으므로 틱이 그 체인을 계속 봤다). 중단이 이제 재시도를
+  // 예약하므로 그 전제가 사라졌다 — 대기가 걸린 체인은 틱이 건너뛰고(waitTimer 가드), 그와 함께
+  // 감지·폴백·nudge 가 모두 멈춘다. 되살리는 것은 이제 nudge 가 아니라 그 예약된 재시도다.
+  //
+  // 그래서 검사 대상을 그 우선순위로 바꾼다: 대기 중에는 아무것도 세션에 쓰지 않고(nudge 가
+  // 끼어들면 예약된 재시도와 두 번 개입한다), 예약된 시각에 재개 문장이 들어간다. 종전 기대값과
+  // 같은 문장이 같은 세션에 들어가는 것이고, 다른 것은 그것을 넣는 경로와 시각이다.
+  it('롤이 실패해 멈춘 세션은 예약된 재시도가 되살린다 — 대기 중에는 nudge하지 않는다', async () => {
+    // probeActivity·readPending 오버라이드가 없다: 대기의 억제는 **틱 자체**에서 걸려
+    // (tick 의 waitTimer 가드) idleNudgeCheck 가 아예 호출되지 않으므로, nudge 의 전제 조건을
+    // 차려 놓아도 이 테스트에서는 아무것도 달라지지 않는다.
     const h = harness({
-      // a2를 못 찾게 해 롤을 중단시킨다 → "한도는 감지됐고 세션은 그대로 멈춘" 상태가 남는다
-      getAccount: (id) => (id === 'a1' ? acc('a1', '계정A') : null),
-      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN),
-      readPending: () => Promise.resolve(null)
+      // a2를 못 찾게 해 롤을 중단시킨다 → 중단이 재시도를 예약한다(rolling.ts 의 rescheduleAbortedRoll)
+      getAccount: (id) => (id === 'a1' ? acc('a1', '계정A') : null)
     })
     h.payloads.set('s1', payload(30)) // 스냅샷은 게이트 미달 — 차단 기록만이 증거다
     h.coord.register(h.info1)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await flush()
     expect(h.events).toEqual([]) // 롤 중단 — copy/kill/spawn 없음
+    const retryAt = Date.parse(String(h.sent.at(-1)?.payload.nextRetryAt))
+    expect(retryAt).toBeGreaterThan(Date.now())
     h.coord.onHookEvent('s1', idleHook)
     await advanceIo(11 * MIN)
     await vi.advanceTimersByTimeAsync(200)
+    expect(h.written).toEqual([]) // 대기 중 — nudge 가 끼어들지 않는다
+    await advanceIo(retryAt - Date.now() + 1_000) // 예약된 시각
+    await vi.advanceTimersByTimeAsync(200) // 150ms 엔터 타이머
     expect(h.written.map((w) => w.data)).toEqual(['이어서 작업 진행해 줘', '\r'])
+    expect(h.events).toEqual([]) // 같은 계정이므로 kill·spawn 없이 제자리 재개다
+  })
+
+  // `limitEvidence` 의 분기 ①(현재 계정에 차단 기록이 있으면 사용률이 낮아도 nudge 한다)을 위한
+  // 테스트. 위의 테스트가 종전에 이 분기를 덮고 있었고, 중단이 재시도를 예약하게 되면서 그 경로로는
+  // 더 이상 이 상태에 닿을 수 없다 — 그래서 **살아 있는 생산자**로 다시 덮는다.
+  //
+  // 살아 있는 생산자는 이것이다: `roll()` 은 `chain.recovery` 를 지우지 않고, healthy 타이머는
+  // **현재 칸만** 지운다(다른 계정의 기록은 남긴다). 그래서 기록이 남은 계정으로 되돌아오면 그 기록이
+  // 현재 칸의 기록이 된다. 그 뒤 자동 프롬프트가 120초 만료로 'stalled' 로 끝나면 — 그 경로는
+  // awaitingReady 만 풀고 프롬프트를 보내지 않으므로 **healthy 타이머가 걸리지 않는다** — 기록은
+  // 지워지지 않은 채 체인이 다시 틱 대상이 된다. 스냅숏은 없으니(분기 ②는 false) nudge 를 내는 것은
+  // 분기 ① 하나뿐이고, 관측되는 결과는 살아 있는 PTY 로 나가는 재개 문장이다.
+  it('되돌아온 계정에 차단 기록이 남아 있으면 사용률 근거 없이도 nudge한다', async () => {
+    const T0 = Date.UTC(2026, 7, 3, 0, 0)
+    vi.setSystemTime(new Date(T0))
+    const h = harness({
+      probeActivity: () => Promise.resolve(Date.now() - 20 * MIN), // 서브에이전트 활동 없음
+      readPending: () => Promise.resolve(null)
+    })
+    const twoAccounts = { ...h.info1, rollAccountIds: ['a1', 'a2'] }
+    // a1 의 차단은 2분 뒤 풀린다 — 그래야 아래에서 a1 으로 되돌아올 수 있다
+    h.payloads.set('s1', payloadReset(97, Math.floor((T0 + 2 * MIN) / 1000)))
+    h.payloads.set('s2', payloadEx({ five: 20 })) // a2 는 멀쩡하다 → 자동 프롬프트가 정상 발화해 healthy 타이머를 건다
+    h.coord.register(twoAccounts)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await advanceIo(3 * MIN) // a1 → a2 롤 + healthy 타이머(60초)로 recovery[a2] 정리. recovery[a1] 은 남는다
+    expect(h.spawned.at(-1)?.accountId).toBe('a2')
+    // a2 도 한도에 걸린다 → a1 의 차단은 이미 풀렸으므로 a1 으로 되돌아간다
+    h.coord.handleData({ sessionId: 's2', data: LIMIT_TEXT })
+    await advanceIo(1_000)
+    expect(h.spawned.at(-1)?.accountId).toBe('a1') // 기록이 남아 있는 칸으로 돌아왔다
+    const liveId = h.spawned.at(-1)!.id
+    // 자동 프롬프트를 30초 폴백에서 붙잡아 둔다(화면에 인식 못한 대화상자가 떠 있는 모양) → 120초
+    // 만료가 'stalled' 로 끝나고 프롬프트도 healthy 타이머도 없다. s3 의 statusLine 은 주지 않으므로
+    // lastUsagePct 는 null 로 남는다 — 분기 ② 는 성립하지 않는다.
+    h.coord.handleData({ sessionId: liveId, data: WAIT_DIALOG })
+    await advanceIo(2 * MIN + 10_000)
+    expect(h.sent.at(-1)?.payload.state).toBe('stalled')
+    expect(h.written.filter((w) => w.id === liveId)).toEqual([]) // 자동 프롬프트는 나가지 않았다
+    // 이제 정지가 이어진다 → 근거는 남은 차단 기록 하나뿐이다
+    h.coord.onHookEvent(liveId, idleHook)
+    await advanceIo(11 * MIN)
+    await vi.advanceTimersByTimeAsync(200) // 150ms 엔터 타이머
+    expect(h.written.filter((w) => w.id === liveId).map((w) => w.data)).toEqual([
+      '이어서 작업 진행해 줘',
+      '\r'
+    ])
   })
 })
 
@@ -1925,6 +2106,47 @@ describe('같은 계정 재개는 kill 하지 않는다', () => {
     await vi.advanceTimersByTimeAsync(11 * MIN)
     expect(h.sent.slice(sentBefore).some((s) => s.payload.state === 'nudged')).toBe(false)
   })
+
+  // 네 지우는 자리 중 **제자리 재개 쪽**을 못박는다. 위 테스트는 자기 체인의 기록만 보므로 그 한 줄을
+  // 지워도 통과한다 — 공유 기록까지 함께 풀리는지는 다른 체인이 적은 기록으로만 볼 수 있다.
+  it('제자리 재개 60초 뒤 다른 체인이 적은 공유 기록도 함께 풀린다 (오탐 안전 밸브)', async () => {
+    // resetAnchorCheck(단일 계정 3-b)가 실제 fs를 stat한다 — fake timer 아래서 그 완료 콜백은 안 돈다
+    const h = harness({ probeActivity: () => Promise.resolve(null) })
+    const t0 = Date.now()
+    // 체인 1: 단일 계정 a1, reset은 2분 뒤 → 판정 시점의 계획은 3분 뒤 제자리 재개다
+    h.payloads.set('s1', payloadEx({ five: 95, weekly: 20, fiveReset: new Date(t0 + 2 * MIN).toISOString() }))
+    h.coord.register(infoSelf())
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(lastWaiting(h.sent)).toBeDefined()
+    // 체인 2: 같은 a1 에서 주간 소진(60분)을 적는다 — 체인 1 의 대기(3분)보다 오래 남는 기록이다.
+    // 체인 1 의 판정 **뒤에** 적히므로 그 대기 시각은 늘어나지 않는다.
+    h.payloads.set('s10', payloadEx({
+      sid: 'claude-sess-2', five: 20, weekly: 97, weeklyReset: new Date(t0 + 60 * MIN).toISOString()
+    }))
+    h.coord.register({ ...h.info1, id: 's10', cwd: 'D:\\work\\q', rollAccountIds: ['a1', 'a2'] })
+    h.coord.handleData({ sessionId: 's10', data: LIMIT_TEXT })
+    await flush()
+    // 중간 체크포인트: 지금은 기록이 살아 있어야 한다. 체인 3 은 a1 을 한 번도 만진 적이 없는데도
+    // 갈 곳이 없어 대기한다 — 이 단언이 없으면 마지막 단언이 "애초에 공유가 없었다"로도 통과한다.
+    h.payloads.set('s20', payloadEx({ sid: 'claude-sess-3', five: 95, weekly: 20 }))
+    h.coord.register({ ...h.info1, id: 's20', accountId: 'a2', cwd: 'D:\\work\\r', rollAccountIds: ['a2', 'a1'] })
+    const spawnedBefore = h.spawned.length
+    h.coord.handleData({ sessionId: 's20', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned.length).toBe(spawnedBefore) // a1 으로 옮기지 않았다
+    // 체인 1 의 대기 만료 → 제자리 재개 → 그 뒤 60초 무사 → 공유 기록이 지워진다
+    await vi.advanceTimersByTimeAsync(3 * MIN + 70_000)
+    // resumeCount 는 모든 체인의 문장을 센다(롤의 자동 프롬프트도 같은 문장이다) — 체인 1 은
+    // kill 되지 않으니 여전히 s1 이다. 그 세션에 들어간 문장만 세서 제자리 재개를 확인한다.
+    expect(h.written.filter((w) => w.id === 's1' && w.data === RESUME_PROMPT)).toHaveLength(1)
+    // 체인 4: a1 이 다시 후보다. 기록이 남아 있었다면 갈 곳이 없어 대기한다
+    h.payloads.set('s30', payloadEx({ sid: 'claude-sess-4', five: 95, weekly: 20 }))
+    h.coord.register({ ...h.info1, id: 's30', accountId: 'a2', cwd: 'D:\\work\\s', rollAccountIds: ['a2', 'a1'] })
+    h.coord.handleData({ sessionId: 's30', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned.at(-1)?.accountId).toBe('a1')
+  })
 })
 
 // fix round 2 — 이 describe 가 없던 동안 배선 계층에 테스트가 아예 없었다. 기존 테스트는 전부
@@ -1932,17 +2154,20 @@ describe('같은 계정 재개는 kill 하지 않는다', () => {
 // 써지는지는 검증되지 않았다 — 즉 성공 경로가 미검증이었다.
 describe('resumeText 훅 배선 — 어느 모양을 묻고 그 값이 어디로 가는가', () => {
   const MIN = 60_000
-  /** 물어본 form 을 모두 기록하고 지정한 텍스트를 돌려주는 훅 */
+  /** 물어본 form·tabFallback 을 모두 기록하고 지정한 텍스트를 돌려주는 훅 */
   const hook = (
     text: string | null
-  ): { fn: RollingDeps['resumeText']; forms: string[] } => {
+  ): { fn: RollingDeps['resumeText']; forms: string[]; tabFallbacks: boolean[] } => {
     const forms: string[] = []
+    const tabFallbacks: boolean[] = []
     return {
-      fn: (_sessionId, form) => {
+      fn: (_sessionId, form, tabFallback) => {
         forms.push(form)
+        tabFallbacks.push(tabFallback)
         return Promise.resolve(text)
       },
-      forms
+      forms,
+      tabFallbacks
     }
   }
 
@@ -1955,6 +2180,10 @@ describe('resumeText 훅 배선 — 어느 모양을 묻고 그 값이 어디로
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
     await settle()
     expect(h0.forms).toEqual(['handover'])
+    // fix wave 최종, F3: 이 자리는 --resume 뒤 이미 대화를 통째로 이어받은 프로세스에 다시 묻는
+    // 자리라 tabFallback 이 거짓이다 — 탭 세션이라면 인계할 것이 없다(Job 워커라면 이 dep 은
+    // 여전히 packet 을 돌려준다, tabFallback 과 무관하게).
+    expect(h0.tabFallbacks).toEqual([false])
     // handover 는 **대체**다 — 전체 인계가 chain.prompt 자리를 차지한다
     expect(h.written.some((w) => w.id === 's2' && w.data === 'RE-READ YOUR SPEC FILE')).toBe(true)
     expect(h.written.some((w) => w.data === '이어서 작업 진행해 줘')).toBe(false)
@@ -2040,5 +2269,476 @@ describe('resumeText 훅 배선 — 어느 모양을 묻고 그 값이 어디로
     await flush()
     await vi.advanceTimersByTimeAsync(10 * MIN + 2 * MIN)
     expect(h.written[0]?.data).toBe('이어서 작업 진행해 줘')
+  })
+})
+
+// Task 4 (Phase 2c): resumeStrategy 가 'smart' 이고 브리핑을 실제로 만들 수 있을 때만 백지 재개다 —
+// transcript 복사도 `--resume` 도 하지 않고 새 claude 프로세스를 respawn 한 뒤, 그 살아난 창에
+// 브리핑을 타이핑한다(codex 처럼 argv 로 싣지 않는다 — sendPrompt 가 이미 쓰는 채널 그대로다).
+// 브리핑을 못 만들면(dep 이 없거나 null/빈 문자열을 돌리면) 이 스위치가 켜져 있어도 오늘의 경로
+// 그대로다(계획의 지배 제약).
+describe('Smart Resume — 백지 재개', () => {
+  it('전략이 smart 이고 브리핑이 있으면 복사 없이 --resume 없이 백지로 띄우고, 살아난 창에 브리핑을 타이핑한다', async () => {
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: () => Promise.resolve('BRIEFING TEXT')
+    })
+    h.payloads.set('s1', payload(97))
+    h.payloads.set('s2', payload(20)) // respawn 뒤 statusline 이 도착해야 auto-prompt 가 나간다
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await settle()
+    expect(h.copied).toEqual([]) // 복사가 없다
+    expect(h.events).toEqual(['kill:s1', 'spawn:s2:a2']) // 'copy' 가 없다
+    expect(h.spawned.at(-1)?.resumeSessionId).toBeUndefined()
+    expect(h.written.some((w) => w.id === 's2' && w.data === 'BRIEFING TEXT')).toBe(true)
+  })
+
+  // 이 테스트가 계획의 지배 제약("브리핑을 만들 수 없으면 백지 재개를 하지 않는다")을 지키는 자리다.
+  it('전략이 smart 이어도 브리핑이 없으면(null) 기존 경로로 롤한다', async () => {
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: () => Promise.resolve(null)
+    })
+    h.payloads.set('s1', payload(97))
+    h.payloads.set('s2', payload(20))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await settle()
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a2'])
+    expect(h.copied[0]?.src).toBe(
+      path.join('D:\\cfg', 'a1', 'projects', 'D--work-p', 'claude-sess.jsonl')
+    )
+    expect(h.spawned.at(-1)?.resumeSessionId).toBe('claude-sess')
+    expect(h.written.some((w) => w.id === 's2' && w.data === RESUME_PROMPT)).toBe(true)
+  })
+
+  it('전략이 original 이면 브리핑이 있어도 기존 경로로 롤한다', async () => {
+    const h = harness({
+      resumeStrategy: () => 'original',
+      resumeText: () => Promise.resolve('BRIEFING TEXT')
+    })
+    h.payloads.set('s1', payload(97))
+    h.payloads.set('s2', payload(20))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await settle()
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a2'])
+    expect(h.spawned.at(-1)?.resumeSessionId).toBe('claude-sess')
+    expect(h.written.some((w) => w.id === 's2' && w.data === 'BRIEFING TEXT')).toBe(true)
+  })
+
+  // fix round 2 의 관례(codexRolling.test.ts)와 같은 이유: resumeText 는 spec 파일에 쓰는 부수
+  // 효과가 있으므로, roll() 이 smart 여부를 가리려고 미리 물은 값을 sendPrompt 가 다시 묻는다면
+  // 매 롤마다 두 번 쓰는 것이 된다. 이 테스트는 그 값이 실제로 아래로 전달되어 다시 묻지 않는지를
+  // 호출 횟수로 확인한다.
+  it('브리핑은 handover 형태로 한 번만, tabFallback 참으로 요청된다', async () => {
+    const forms: string[] = []
+    const tabFallbacks: boolean[] = []
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: (_sessionId, form, tabFallback) => {
+        forms.push(form)
+        tabFallbacks.push(tabFallback)
+        return Promise.resolve('BRIEFING TEXT')
+      }
+    })
+    h.payloads.set('s1', payload(97))
+    h.payloads.set('s2', payload(20))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await settle()
+    expect(forms).toEqual(['handover'])
+    // fix wave 최종, F3: strategy 가 'smart' 라 백지 재개 후보를 가리는 이 호출은 tabFallback 이
+    // 참이다 — Job 도 탭도 후보로 쓸 수 있어야 백지 재개가 성립한다.
+    expect(tabFallbacks).toEqual([true])
+  })
+
+  // 백지 재개 뒤 신원 필드(claudeSessionId·transcriptPath, 그리고 두 시드)가 비지 않으면, 다음 롤이
+  // 지금 일부러 두고 온 대화를 되살린다("백지 재개에서 반드시 지워야 하는 것" — 계획 문서). 필드를
+  // 직접 읽는 대신 그 결과를 관측한다: respawn 한 새 세션이 자기 statusline 을 한 번도 보고하지
+  // 않은 채(신원이 채워지지 않은 채) 두 번째 한도를 맞으면, 신원이 비어 있어야 roll() 이 "세션
+  // 메타 없음"으로 중단하고 재시도를 예약한다 — 비지 않았다면 옛 계정의 옛 transcript 를 그대로
+  // 복사해 다시 spawn 했을 것이다.
+  it('백지 재개 뒤에는 신원 필드가 비어, 새 세션이 자기 statusline 을 배우기 전의 두 번째 한도가 옛 대화를 되살리지 않는다', async () => {
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: () => Promise.resolve('BRIEFING TEXT')
+    })
+    h.payloads.set('s1', payload(97)) // s2 에는 payload 를 두지 않는다 — statusline 이 끝내 오지 않는다
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush() // 백지 재개(kill:s1 → spawn:s2:a2) 완료
+    expect(h.events).toEqual(['kill:s1', 'spawn:s2:a2'])
+    // statusline 이 끝내 오지 않아 auto-prompt 의 30초 무-statusline 폴백이 브리핑을 타이핑하고
+    // awaitingReady 를 해제한다 — applyMeta 는 한 번도 불리지 않으므로 신원은 계속 비어 있다.
+    await vi.advanceTimersByTimeAsync(32_000)
+    expect(h.written.some((w) => w.id === 's2' && w.data === 'BRIEFING TEXT')).toBe(true)
+    const eventsBefore = h.events.length
+    const spawnedBefore = h.spawned.length
+    await h.coord.forceRoll('s2')
+    await flush() // onLimit이 fire-and-forget으로 시작한 roll()의 abort 분기가 마저 돈다
+    expect(h.events.length).toBe(eventsBefore) // copy/kill/spawn 이 새로 일어나지 않았다
+    expect(h.spawned.length).toBe(spawnedBefore)
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting') // "세션 메타 없음"으로 중단하고 재시도를 예약한다
+  })
+})
+
+// 롤이 중간에 포기하면 예전에는 'none' 을 게시하고 반환했다 — 아무것도 예약하지 않는다. 세션은
+// 한도에 그대로 막혀 있고 그 한도는 신호로 이미 소비됐으므로 다시 감지될 일이 없어, 사람이
+// 알아챌 때까지 워커가 유휴로 남는다. 두 경로가 실측됐다: 체인의 계정이 돌아가는 중에 삭제된 것
+// (가용성 판정은 id 만 보므로 해결되지 않는 계정을 roll() 에 넘긴다), 그리고 히스토리에서 다시 연
+// 대화가 세션 메타를 배우지 못한 것(한도에 걸린 claude 는 statusLine 훅을 아예 부르지 않는다 —
+// 88초 동안 0회 실측). 그래서 여기 단언의 핵심은 셋이다: 'waiting' 이 게시된다, nextRetryAt 이
+// 실려 있다, **그 시각에 실제로 다시 시도한다**. 세 번째가 요점이다 — 상태만 게시하고 타이머를
+// 안 걸면 고치기 전과 똑같다.
+describe('중단된 롤이 다음 시도를 예약한다', () => {
+  // 계정을 가릴 수 있게 문구가 reset 시각을 싣는다. 그래야 recovery[a1] 이 15분 폴백보다 뒤로
+  // 밀려 planRetry 가 a2 를 겨냥하고, 재시도가 실제로 roll() 을 다시 부른다 — statusLine 이 얼어
+  // 있어도 문구는 시각을 담는다는 것이 실측이고(resetTime.ts), 이 파일의 선례도 그것이다.
+  // 문구의 11am 이 5시간 창 안에 들어오도록 시계를 고정한다.
+  const T0 = Date.UTC(2026, 7, 3, 0, 0) // 11am(Asia/Seoul) = 02:00Z → +2시간
+  const LIMIT_WITH_RESET = limitWithReset('session', '11am')
+
+  /** 게시된 대기의 재시도 시각까지 이동한다. 반환값은 그 시각. */
+  const jumpToRetry = async (h: {
+    sent: { channel: string; payload: Record<string, unknown> }[]
+  }): Promise<number> => {
+    const at = Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+    await vi.advanceTimersByTimeAsync(at - Date.now() + 1_000)
+    return at
+  }
+  const retryAtOf = (h: { sent: { channel: string; payload: Record<string, unknown> }[] }): number =>
+    Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+
+  it('계정이 사라져 롤을 포기하면 다시 시도할 시각을 잡는다 (영구 유휴 방지)', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness({ getAccount: (id) => (id === 'a1' ? acc('a1', '계정A') : null) })
+    h.payloads.set('s1', payload(97)) // 세션 메타는 배웠다 — 중단 사유는 사라진 계정이다
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    expect(h.events).toEqual([]) // 롤 중단 — copy/kill/spawn 없음
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting') // 'none' 이 아니다
+    expect(retryAtOf(h)).toBeGreaterThan(Date.now())
+    // (c) 그 시각에 실제로 다시 시도한다. 계정은 여전히 없으므로 또 포기하고 또 예약한다 —
+    // 새 'waiting' 이 더 뒤의 시각으로 게시되는 것이 재시도가 돌았다는 증거다.
+    const first = await jumpToRetry(h)
+    expect(retryAtOf(h)).toBeGreaterThan(first)
+  })
+
+  it('statusLine 을 못 배워 롤을 포기해도 다시 시도할 시각을 잡는다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness() // payload 없음 → claudeSessionId·transcriptPath 를 배우지 못한다
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    expect(h.events).toEqual([])
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+    expect(retryAtOf(h)).toBeGreaterThan(Date.now())
+    // (c) 그 사이에 statusLine 이 도착하면 그 시각의 재시도는 성공한다
+    h.payloads.set('s1', payload(97))
+    await jumpToRetry(h)
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a2'])
+  })
+
+  it('롤이 예외로 실패해도 다시 시도할 시각을 잡는다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness({ copy: () => Promise.reject(new Error('transcript copy blew up')) })
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    expect(h.events).toEqual([]) // 복사가 던졌으므로 kill·spawn 은 없다
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+    const first = await jumpToRetry(h)
+    expect(retryAtOf(h)).toBeGreaterThan(first)
+  })
+})
+
+// 제자리 재개가 실제로 턴을 시작했는지 판정하는 자리. 여기서 판정을 하지 않으면 — 실측(2026-08-27):
+// 세션 메타를 못 배운 단일 계정이 대기 뒤 제자리 재개를 하고, 60초 뒤 healthyTimer 가 무조건
+// "건강하다"를 선언한 다음, **45분 동안 아무 일도 일어나지 않았다**. limitTail 이 없어 ①이 죽고,
+// 페이로드가 없어 fallback 트리거가 죽고, Notification 이 없어 idle nudge 도 뜨지 않는다.
+// 메타를 배운 경우는 얼어붙은 페이로드가 fallback 을 다시 살려 스스로 복구되므로(실측) 여기서
+// 묻는 것은 "그동안 메타가 도착했는가" 하나다.
+describe('제자리 재개의 정착 판정', () => {
+  const T0 = Date.UTC(2026, 7, 3, 0, 0) // 문구의 11am(Asia/Seoul)이 5시간 창 안에 들어오도록 고정
+  const LIMIT_WITH_RESET = limitWithReset('session', '11am')
+  const retryAtOf = (h: { sent: { channel: string; payload: Record<string, unknown> }[] }): number =>
+    Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+
+  it('메타를 여전히 못 배웠으면 respawn 으로 넘겨 영구 침묵을 끝낸다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness() // 페이로드 없음 → claudeSessionId·transcriptPath 를 못 배운다
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] }) // 단일 계정 — 대기 뒤 제자리 재개 경로
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    const firstRetry = retryAtOf(h)
+    await vi.advanceTimersByTimeAsync(firstRetry - Date.now() + 1_000)
+    expect(resumeCount(h)).toBe(1) // 제자리 재개가 일어났다
+    const sentBefore = h.sent.length
+    // 정착 판정까지 이동한다. 메타는 여전히 없으므로 roll 로 넘어가고, roll 은 메타 부재로 중단한 뒤
+    // 다시 대기를 예약한다 — 새 'waiting' 이 더 뒤의 시각으로 게시되는 것이 침묵이 끝났다는 증거다.
+    await vi.advanceTimersByTimeAsync(61_000)
+    await flush()
+    expect(h.sent.slice(sentBefore).map((s) => s.payload.state)).toContain('waiting')
+    expect(retryAtOf(h)).toBeGreaterThan(firstRetry)
+  })
+
+  // **페이로드를 100 이 아니라 20 으로 두는 이유.** 100 이면 제자리 재개 30초 뒤 fallback 트리거가
+  // 먼저 발화하고, onLimit 이 판정 전에 healthyTimer 를 지우므로 정착 판정이 아예 실행되지
+  // 않는다 — 그 갈래는 이 테스트가 확인하려는 것이 아니다. 20 은 "statusLine 이 신선한 낮은 값으로
+  // 돌아왔다" 는 정상 복구를 나타내고, 한도 문구 자체는 사용량 게이트 없이 감지되므로(detect 경로에서
+  // 게이트가 제거된 이유) 첫 한도는 그대로 잡힌다.
+  it('메타를 배운 뒤라면 정착 판정이 respawn 하지 않는다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness()
+    h.payloads.set('s1', payload(20))
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    await vi.advanceTimersByTimeAsync(retryAtOf(h) - Date.now() + 1_000)
+    expect(resumeCount(h)).toBe(1)
+    const eventsBefore = h.events.length
+    await vi.advanceTimersByTimeAsync(61_000)
+    await flush()
+    expect(h.events.slice(eventsBefore).filter((e) => e.startsWith('spawn') || e.startsWith('kill'))).toEqual([])
+  })
+
+  // 정착 판정만 있으면 이렇게 돈다: 대기 → 제자리 재개(입력) → 60초 → 메타 없음 → roll 중단 →
+  // 대기(리셋이 지났으므로 60초 바닥) → 제자리 재개(또 입력) → … 약 2분마다 PTY 로 영구히
+  // 타이핑한다. codex 는 같은 것을 inPlaceUsed 로 묶는다 — 한 차단 에피소드에 제자리 재개는 한 번.
+  it('정착에 실패한 에피소드는 두 번째부터 제자리 재개를 쓰지 않는다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness()
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    await vi.advanceTimersByTimeAsync(retryAtOf(h) - Date.now() + 1_000)
+    expect(resumeCount(h)).toBe(1)
+    // 정착 실패 → roll 중단 → 재예약. 그 뒤 세 라운드를 더 돈다.
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(61_000)
+      await flush()
+      await vi.advanceTimersByTimeAsync(retryAtOf(h) - Date.now() + 1_000)
+      await flush()
+    }
+    // 라운드가 실제로 돌았다(재예약이 계속된다)…
+    expect(retryAtOf(h)).toBeGreaterThan(T0)
+    // …그러나 프롬프트는 첫 라운드의 한 번뿐이다
+    expect(resumeCount(h)).toBe(1)
+  })
+
+  // payload(20) 인 이유는 바로 위 테스트의 주석과 같다 — 100 이면 fallback 이 정착 판정보다 먼저
+  // 발화해 healthyTimer 를 지우고, inPlaceUsed 가 해제되지 않아 이 테스트가 확인하려는 것이 사라진다.
+  it('정착에 성공하면 다음 에피소드는 다시 제자리 재개를 쓴다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness()
+    h.payloads.set('s1', payload(20))
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    await vi.advanceTimersByTimeAsync(retryAtOf(h) - Date.now() + 1_000)
+    expect(resumeCount(h)).toBe(1)
+    await vi.advanceTimersByTimeAsync(61_000) // 정착 성공 → inPlaceUsed 해제
+    await flush()
+    // 두 번째 에피소드: 새 한도 → 대기 → 제자리 재개가 다시 쓰인다
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    await vi.advanceTimersByTimeAsync(retryAtOf(h) - Date.now() + 1_000)
+    expect(resumeCount(h)).toBe(2)
+  })
+
+  // 재현 시나리오: 페이로드가 전혀 없다가 정착 창(60초)이 끝나기 몇 초 전에야 도착한다 — tickChain은
+  // 15초마다만 캐시를 새로 쓰므로 이 몇 초는 마지막 tick 간격 안에 들어가 그 tick으로는 못 본다.
+  // settleInPlace가 스스로 refreshMeta 하지 않으면 낡은 캐시만 보고 kill·spawn(respawn)해 버린다.
+  it('정착 창 막바지에 도착한 메타는 kill·spawn 없이 정착된다', async () => {
+    // 초 단위를 어긋나게 둬 정착 마감이 정기 tick 경계와 겹치지 않게 한다 — 겹치면 그 tick이 먼저
+    // 캐시를 새로 써서 이 테스트가 재현하려는 "마지막 tick 간격 안" 자체가 사라진다.
+    vi.setSystemTime(new Date(T0 + 8_000))
+    const h = harness() // 페이로드 없음 → 초기에는 메타를 못 배운다
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    const firstRetry = retryAtOf(h)
+    await vi.advanceTimersByTimeAsync(firstRetry - Date.now() + 1_000)
+    expect(resumeCount(h)).toBe(1) // 제자리 재개가 일어났다
+    const eventsBefore = h.events.length
+    // 정착 마감(제자리 재개 + 60초) 6초 전, 마지막 정기 tick이 지나간 직후에야 페이로드가 도착한다.
+    await vi.advanceTimersByTimeAsync(53_000)
+    h.payloads.set('s1', payload(20))
+    await vi.advanceTimersByTimeAsync(7_000)
+    await flush()
+    expect(h.events.slice(eventsBefore).filter((e) => e.startsWith('spawn') || e.startsWith('kill'))).toEqual([])
+  })
+
+  // 레이스 재현: 정착 판정이 메타를 다시 읽는 동안, 같은 세션에서 진짜 한도가 다시 걸려 liveId 를
+  // 바꾸지 않는 대기를 세운다(onLimit 의 재키 없는 갈래 — 단일 계정 체인이라 그 갈래만 존재한다).
+  // 고치기 전에는 그 읽기가 refreshMeta 안에서 곧바로 적용되어(가드보다 먼저) 건강하다고 선언하고,
+  // 방금 세운 대기가 막 남긴 차단 기록을 지웠다.
+  it('정착 판정의 늦은 메타 읽기가 그 사이에 다시 걸린 한도의 대기를 지우지 않는다', async () => {
+    // 정착 마감이 정기 tick 경계와 겹치지 않도록 초 단위를 어긋나게 둔다 — 위 테스트와 같은 이유.
+    vi.setSystemTime(new Date(T0 + 8_000))
+    const blocks = new BlockRegistry()
+    const payloads = new Map<string, unknown>()
+    let armed = false
+    // 객체에 담는다 — 클로저 안에서 대입된 let 변수를 나중에 호출하면 TS 의 흐름 분석이 그 사이의
+    // 다른 호출(같은 클로저를 다시 태울 수 있는 handleData 등)을 반영하지 못해 타입을 never 로
+    // 좁혀 버린다.
+    const late: { resolve: ((v: unknown) => void) | null } = { resolve: null }
+    const h = harness({
+      blocks,
+      readStatusPayload: (id) => {
+        if (armed) {
+          armed = false // 다음 한 번만 붙잡는다 — 정착 판정 자신의 읽기여야 한다
+          return new Promise<unknown>((resolve) => {
+            late.resolve = resolve
+          })
+        }
+        return Promise.resolve(payloads.get(id) ?? null)
+      }
+    })
+    // 페이로드 없음 — statusLine 을 못 배운 채로 대기·정착 창을 지난다("메타를 여전히 못 배웠으면"
+    // 테스트와 같은 조건). limitTail 이 생기지 않으므로 정기 tick 이 실제 fs 를 건드리지 않고, 그
+    // 사이의 tick 이 언제 정착 판정 자신의 읽기와 같은 순간에 겹칠지 신경 쓸 필요가 없어진다.
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    const firstRetry = retryAtOf(h)
+    await vi.advanceTimersByTimeAsync(firstRetry - Date.now() + 1_000)
+    expect(resumeCount(h)).toBe(1) // 제자리 재개가 일어났다
+
+    // 정착 마감(60초) 6초 전까지는 정상 진행.
+    await vi.advanceTimersByTimeAsync(53_000)
+    armed = true
+    await vi.advanceTimersByTimeAsync(7_000) // healthyTimer 발화 — 이 읽기만 붙잡아 둔다
+    expect(late.resolve).not.toBeNull() // 정착 판정 자신의 읽기가 실제로 붙잡혔다는 확인
+
+    // 같은 세션에서 진짜 한도가 다시 걸린다. 이번에는 statusLine 이 살아 있다 — liveId 는 그대로다
+    // (재키 없음) — onLimit 이 대기를 세우고 차단 기록을 남긴다.
+    payloads.set('s1', payload(20))
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    expect(lastWaiting(h.sent)).toBeTruthy() // 대기가 실제로 섰다
+    expect(blocks.get('a1', Date.now())).not.toBeNull() // 그 대기가 막 남긴 차단 기록
+
+    // 붙잡아 둔 읽기가 이제야 돌아온다 — 세션이 이미 다른 판정으로 넘어간 뒤에 도착한 낡은 메타다.
+    // 고치기 전에는 이 적용이 정착 판정의 가드보다 먼저 끝나 버려, 방금 세운 차단 기록을
+    // blocks.clear 가 지웠다 — pushState 를 부르지 않는 갈래라 h.sent 로는 드러나지 않으므로
+    // 판별은 공유 차단 레지스트리(blocks)로만 가능하다.
+    late.resolve?.(payload(20))
+    await flush()
+    expect(blocks.get('a1', Date.now())).not.toBeNull()
+  })
+})
+
+// 히스토리에서 이미 한도에 걸린 대화를 다시 열면 statusLine 이 오지 않는다(한도가 그 호출을 멈춘다).
+// 예전에는 그래서 계정을 갈아탈 수 없었다 — 넘길 대화 파일이 무엇인지 몰라 roll 이 중단됐다.
+// 그런데 앱은 그 두 값을 이미 알고 있다: 사용자가 목록에서 고른 대화 id, 그리고 대상 계정 폴더로
+// 복사해 둔 경로. 등록할 때 그것을 받아 두면 statusLine 없이도 전환이 성립한다.
+describe('등록 시점의 재개 정보', () => {
+  const T0 = Date.UTC(2026, 7, 3, 0, 0)
+  const LIMIT_WITH_RESET = limitWithReset('session', '11am')
+  const DEST = path.join('D:\\cfg', 'a1', 'projects', 'D--work-p', 'hist-sess.jsonl')
+
+  it('statusLine 이 없어도 히스토리 재개 정보로 계정을 갈아탄다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness() // 페이로드 없음 — statusLine 은 끝내 오지 않는다
+    h.coord.register({ ...h.info1, resumeSessionId: 'hist-sess' }, DEST)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    // 예전에는 여기서 events 가 비어 있었다(중단). 이제 복사하고 갈아탄다.
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a2'])
+    expect(h.copied[0]?.src).toBe(DEST)
+    expect(h.spawned.at(-1)?.resumeSessionId).toBe('hist-sess')
+  })
+
+  it('재개 정보가 없으면 예전처럼 빈 칸으로 시작한다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness()
+    h.coord.register(h.info1) // 새 세션 — 재개가 아니다
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    expect(h.events).toEqual([]) // statusLine 을 못 배웠으므로 중단
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting')
+  })
+
+  // register 는 학습된 값이 아니라 별도의 시드 필드(resumeSeedSessionId/resumeSeedTranscriptPath)를
+  // 채운다 — claudeSessionId·transcriptPath 는 여기서 여전히 null 로 시작한다. statusLine 이 tick
+  // 한 번을 통해 진짜 값을 배우면, roll() 은 그 학습된 값을 쓰고 시드는 쓰지 않는다.
+  it('statusLine 이 학습되면 roll 은 시드가 아니라 학습된 값을 쓴다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const h = harness()
+    h.coord.register({ ...h.info1, resumeSessionId: 'hist-sess' }, DEST)
+    h.payloads.set('s1', payload(20)) // statusLine 이 살아났다 — 다른 세션 id 를 싣는다
+    await vi.advanceTimersByTimeAsync(16_000) // tick 한 번 — claudeSessionId·transcriptPath 를 학습한다
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    // payload() 가 싣는 값이 쓰인다 — 시드 'hist-sess' 가 아니다
+    expect(h.spawned.at(-1)?.resumeSessionId).toBe('claude-sess')
+  })
+
+  // 이 재설계의 이유. 시드는 roll() 의 폴백일 뿐 "statusLine 이 돌아왔는가"의 증거가 아니다 —
+  // settleInPlace 는 claudeSessionId·transcriptPath 만 보고, 시드는 절대 읽지 않는다. 그래서
+  // 히스토리 재개 정보가 있어도 statusLine 이 끝내 오지 않으면 정착 판정은 여전히 "메타 없음"으로
+  // 읽어 respawn 시도(roll)로 넘어가야 한다 — 건강하다고 잘못 선언해 아무 일도 하지 않으면 안 된다.
+  // 누군가 나중에 학습된 필드를 시드로 미리 채우면 이 테스트가 깨진다.
+  it('시드는 정착 판정의 건강 증거로 쓰이지 않는다', async () => {
+    vi.setSystemTime(new Date(T0))
+    const logs: string[] = []
+    const h = harness({ log: (m) => logs.push(m) })
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'], resumeSessionId: 'hist-sess' }, DEST)
+    // 페이로드 없음 — statusLine 은 끝내 오지 않는다. 단일 계정이므로 대기 → 제자리 재개 경로.
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    const firstRetry = Date.parse(String(lastWaiting(h.sent)?.nextRetryAt))
+    await vi.advanceTimersByTimeAsync(firstRetry - Date.now() + 1_000)
+    expect(resumeCount(h)).toBe(1) // 제자리 재개가 일어났다
+    logs.length = 0
+    // 정착 마감(60초). 시드가 있어도 statusLine 이 오지 않았으므로 판정은 "메타 없음" 그대로다.
+    await vi.advanceTimersByTimeAsync(61_000)
+    await flush()
+    expect(logs.some((l) => l.includes('no session metadata'))).toBe(true)
+    // roll() 은 그 시드를 폴백으로 써서 실제로 전환한다(같은 계정으로 재개) — 판정이 "건강하다"로
+    // 잘못 선언해 아무 일도 하지 않는 것과는 다른 결과다.
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a1'])
+  })
+
+  // fix wave 최종, F5: register 가 채우는 두 시드 필드(resumeSeedSessionId·resumeSeedTranscriptPath)
+  // 도 백지 재개 뒤에는 비워야 한다 — 비우지 않으면 다음 롤이 지금 일부러 두고 온 그 시드 대화를
+  // 되살린다(roll() 위쪽의 `sessionId = chain.claudeSessionId ?? chain.resumeSeedSessionId` 폴백이
+  // 그 시드를 다시 집는다). 계정을 셋으로 두는 이유(하네스 기본값 rollAccountIds=['a1','a2','a3']):
+  // 둘이면 RollCycle.onLimit 이 연속 두 번째 한도에서 "한 바퀴 다 막혔다"로 보고(streak % count
+  // === 0) roll() 을 부르기도 전에 곧장 wait 로 빠져, 시드를 지우든 안 지우든 아무것도 구분하지
+  // 못한다.
+  it('백지 재개 뒤에는 시드도 비어, 다음 롤이 버려둔 시드 대화를 되살리지 않는다', async () => {
+    vi.setSystemTime(new Date(T0))
+    let calls = 0
+    const h = harness({
+      resumeStrategy: () => 'smart',
+      resumeText: () => Promise.resolve(calls++ === 0 ? 'BRIEFING TEXT' : null)
+    })
+    h.coord.register({ ...h.info1, resumeSessionId: 'hist-sess' }, DEST) // 시드 등록 — statusLine 은 끝내 오지 않는다
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_WITH_RESET })
+    await flush()
+    // 백지 재개 — 시드를 브리핑으로 대신했으므로 복사가 없다
+    expect(h.events).toEqual(['kill:s1', 'spawn:s2:a2'])
+    expect(h.copied).toEqual([])
+    const newLiveId = h.spawned.at(-1)?.id
+    expect(newLiveId).toBeDefined()
+    // 롤 뒤 REPLAY_GRACE_MS(60초) 가 지날 때까지 기다린다 — 그 전에는 같은 한도 문구가 "리플레이"
+    // 로 무시된다(--resume 이 옛 한도 문구를 화면에 다시 그리는 것과 구분하지 못하므로, 백지
+    // 재개에도 똑같이 적용된다). 30초 무-statusline 폴백(auto-prompt)도 이 사이에 지나간다.
+    await vi.advanceTimersByTimeAsync(62_000)
+    // 두 번째 한도 — 계정이 셋이라 RollCycle 은 여전히 roll 판정이다(streak=2, 2 % 3 ≠ 0).
+    // resumeText 는 두 번째 호출부터 null 을 돌리므로 이 롤은 반드시 ordinary(복사) 경로를 탄다.
+    // 시드가 정말 비었다면 roll() 은 claudeSessionId·transcriptPath·시드가 모두 없다는 이유로
+    // "세션 메타 없음"으로 중단하고 재시도를 예약한다 — 비지 않았다면 옛 시드 경로(DEST)를 그대로
+    // 복사한다.
+    h.coord.handleData({ sessionId: newLiveId!, data: LIMIT_WITH_RESET })
+    await flush()
+    expect(h.copied.some((c) => c.src === DEST)).toBe(false)
+    expect(h.sent.at(-1)?.payload.state).toBe('waiting') // "세션 메타 없음"으로 중단하고 재시도를 예약한다
   })
 })

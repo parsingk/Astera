@@ -13,6 +13,7 @@ import { useGitStatus } from '../hooks/useGitStatus'
 import { useI18n } from '../i18n/I18nProvider'
 import type { UndoEntry } from '../../../core/files/undo'
 import type { GitState } from '../../../core/git/status'
+import { ChevronDown, ChevronRight, RefreshCw, X } from 'lucide-react'
 
 /** Tree snapshot the App holds on to, so that even when the explorer toggle unmounts FileExplorer the tree can be handed back on remount */
 export interface ExplorerTreeState {
@@ -570,7 +571,18 @@ export function FileExplorer({
                 style={{ paddingLeft: depth * 14 + 8 }}
                 title={entry.path}
                 onClick={(ev) => {
-                  if (sel.applyClickSelection(entry.path, ev)) onOpenFile(entry.path)
+                  sel.applyClickSelection(entry.path, ev)
+                }}
+                // Opening is the double click's job, so that a single click leaves focus on the tree.
+                // Opening a file hands the cursor to the editor (FileEditor's focused effect), and with
+                // the cursor in CodeMirror the next Ctrl+C is CodeMirror's copy, which on an empty
+                // selection copies the cursor's line — that is how "copy the file, paste it into the
+                // session" used to paste the file's first line instead of its path.
+                onDoubleClick={(ev) => {
+                  // Ctrl/Shift only change the selection, they never open — the same rule the single
+                  // click follows (applyClickSelection's return value)
+                  if (ev.ctrlKey || ev.metaKey || ev.shiftKey) return
+                  onOpenFile(entry.path)
                 }}
                 onContextMenu={(ev) => {
                   ev.preventDefault()
@@ -618,7 +630,7 @@ export function FileExplorer({
                   {...dragHandlers(entry)}
                   {...dropHandlers(entry)}
                 >
-                  <span className="fx-caret">{isOpen ? '▾' : '▸'}</span>
+                  <span className="fx-caret">{isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}</span>
                   <FileIcon {...resolveFolderIcon(entry.name, isOpen)} />
                   <span className="fx-name">{entry.name}</span>
                   {gitStatus.folderCount[entry.path] > 0 && (
@@ -651,7 +663,7 @@ export function FileExplorer({
               title={t('common.close')}
               onClick={onClose}
             >
-              ✕
+              <X size={14} />
             </button>
           </div>
         </header>
@@ -711,7 +723,7 @@ export function FileExplorer({
             title={t('explorer.refresh')}
             onClick={refresh}
           >
-            ⟳
+            <RefreshCw size={14} />
           </button>
           <button
             className="icon-btn"
@@ -719,7 +731,7 @@ export function FileExplorer({
             title={t('common.close')}
             onClick={onClose}
           >
-            ✕
+            <X size={14} />
           </button>
         </div>
       </header>

@@ -29,6 +29,7 @@ import { UpdateGate } from './components/UpdateGate'
 import { ShortcutSettings } from './components/ShortcutSettings'
 import { TerminalFontSettings } from './components/TerminalFontSettings'
 import { ThemeSettings } from './components/ThemeSettings'
+import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import type {
   OrchSnapshot,
@@ -89,6 +90,7 @@ import { fileTab, parseTab, sessionTab } from '../../core/panes/tabId'
 import { placeTab } from '../../core/panes/place'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
+import { PanelLeft, Settings, X } from 'lucide-react'
 
 sessionBus.init()
 
@@ -1529,6 +1531,10 @@ export default function App(): React.JSX.Element {
   const [runConfigs, setRunConfigs] = useState<RunConfig[]>([])
   const [runSelectedId, setRunSelectedId] = useState<string | null>(null)
   const [runActive, setRunActive] = useState<RunStatus | null>(null)
+  /** Run 탭을 ✕ 로 닫은 프로젝트. Run 탭은 실행이 없을 때도 '실행' 라벨로 남아 있으므로, main 에서
+   *  끝난 실행을 지우는 것(run.dismiss)만으로는 탭이 사라지지 않는다 — 닫았다는 사실은 여기 있다.
+   *  프로젝트별로 두는 이유: 다른 프로젝트로 옮기면 그쪽 Run 탭은 다시 보여야 한다. */
+  const [runTabClosedFor, setRunTabClosedFor] = useState<string | null>(null)
   const [activeRuns, setActiveRuns] = useState<RunStatus[]>([])
   const [runPanelOpen, setRunPanelOpen] = useState(false)
   // Project terminals. They share the bottom panel with the Run tab.
@@ -1870,7 +1876,10 @@ export default function App(): React.JSX.Element {
    *  실행 구성으로 제안하게 된다. main 의 경로 가드도 터미널에만 홈을 열어 준다(assertTerminalPath). */
   const bottomRoot = currentProject ?? homeDir
   bottomRootRef.current = bottomRoot
-  const runAvailable = currentProject !== null
+  // 실행이 있으면 Run 탭은 언제나 보인다 — 닫은 기억은 실행이 없을 때만 탭을 감춘다. 그래서 닫은
+  // 뒤 ▶ 로 다시 돌리면(runActive 가 채워진다) 따로 되돌리는 코드 없이 탭이 돌아온다.
+  const runAvailable =
+    currentProject !== null && (runActive !== null || runTabClosedFor !== currentProject)
   /** 아래쪽 패널에 실제로 넘길 탭. Run 탭이 없는데 bottomTab 이 'run' 에 남아 있으면 본문이 비므로,
    *  그때는 터미널로 떨어뜨린다. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
    *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. */
@@ -2060,6 +2069,17 @@ export default function App(): React.JSX.Element {
   const runStop = (): void => {
     if (currentProject) void window.api.run.stop(currentProject)
   }
+  /** Run 탭의 ✕. main 에서 끝난 실행을 버려 마지막 exitCode 와 최근 출력을 함께 지우고(그러지 않으면
+   *  run.list 를 다시 읽는 순간 되살아난다) 다음 실행까지 탭을 감춘다. 활성 탭 폴백은 bottomTabShown
+   *  이 이미 맡으므로 bottomTab 은 'run' 그대로 둔다 — 다시 실행하면 그 탭으로 돌아오는 편이 낫다.
+   *  터미널이 하나도 없으면 패널을 접는다: ＋ 만 남은 빈 패널은 접힌 것보다 나쁘다. */
+  const runDismiss = (): void => {
+    if (!currentProject) return
+    void window.api.run.dismiss(currentProject)
+    setRunActive(null)
+    setRunTabClosedFor(currentProject)
+    if (terminals.length === 0) setRunPanelOpen(false)
+  }
   const runDeleteConfig = (id: string): void => {
     if (!currentProject) return
     void window.api.run.deleteConfig(currentProject, id).then(() => {
@@ -2202,9 +2222,10 @@ export default function App(): React.JSX.Element {
     setBottomTab((cur) => (cur === id ? 'run' : cur))
   }
 
-  // Usage for the active session (context, 5-hour, weekly) — read from the statusLine capture file.
-  // Claude refreshes it every turn, so it is re-queried periodically (cheap, being a file read), and
-  // immediately on a session switch.
+  // Usage for the active session (context, 5-hour, weekly). One question for both providers — main
+  // picks the source (claude: statusLine capture file, codex: rollout tail). Either way it is a value
+  // that only changes when a turn completes, so it is re-queried periodically (cheap, no CLI or
+  // network involved) and immediately on a session switch.
   // (Separate from the activeSessionId state — only an id whose session existence was confirmed by
   // active is used.)
   const usageSessionId = active?.id
@@ -2309,7 +2330,7 @@ export default function App(): React.JSX.Element {
             title={t('session.rail.toggleSidebar')}
             onClick={() => setSidebarOpen((v) => !v)}
           >
-            ◱
+            <PanelLeft size={16} />
           </button>
           {/* 탐색기 토글. 폴더 아이콘과 컨텍스트 메뉴 항목을 걷어내면서 탐색기로 들어가는 길이 단축키
               하나만 남았는데, 처음 쓰는 사람은 그 키를 알 수 없다. 툴팁에 실제 바인딩을 함께 띄우므로
@@ -2409,7 +2430,7 @@ export default function App(): React.JSX.Element {
               title={t('settings.title')}
               onClick={() => setShowSettings(true)}
             >
-              ⚙
+              <Settings size={16} />
             </button>
           </span>
         </nav>
@@ -2738,6 +2759,7 @@ export default function App(): React.JSX.Element {
                     onSelectTab={setBottomTab}
                     onNewTerminal={() => void newTerminal()}
                     onCloseTerminal={closeTerminal}
+                    onCloseRun={runDismiss}
                     onStopRun={runStop}
                     onCollapse={() => setRunPanelOpen(false)}
                   />
@@ -2823,7 +2845,7 @@ export default function App(): React.JSX.Element {
                 title={t('common.close')}
                 onClick={() => setShowSettings(false)}
               >
-                ✕
+                <X size={14} />
               </button>
             </div>
             <div className="settings-body">
@@ -2899,6 +2921,10 @@ export default function App(): React.JSX.Element {
                       />
                     </label>
                     <span className="settings-hint">{t('settings.orchestration.hint')}</span>
+                    {/* 재개 전략 — 한도에 걸린 세션을 어떻게 이어갈지. Appearance 가 아니라 여기 있는
+                        이유: 이것은 보이는 방식이 아니라 동작이고, 바로 위 오케스트레이션 토글과 같은
+                        갈래(롤링·워커)를 건드린다. */}
+                    <ResumeStrategySettings />
                   </>
                 )}
                 {settingsTab === 'appearance' && (

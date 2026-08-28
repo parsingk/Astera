@@ -47,8 +47,12 @@ export function buildClaudeCommand(platform: NodeJS.Platform): CommandBuilder {
  *  `%` is stripped as well: cmd.exe's percent expansion (%VAR%) happens before metacharacter handling, so
  *  even with all of the above removed, a surviving `%NAME%` brings the separate-execution path back. Even
  *  with no malice involved, the prompt can be silently substituted with an environment variable's value and
- *  a different sentence reaches codex. */
-function sanitizeResumePrompt(prompt: string): string {
+ *  a different sentence reaches codex.
+ *
+ *  Exported so a second argv call site can reuse the same rule instead of inventing its own — see
+ *  codexRolling.ts's blank-slate roll, which sanitizes a conversation briefing before it becomes
+ *  initialPrompt (the initialPrompt field above deliberately does not sanitize on its own). */
+export function sanitizeResumePrompt(prompt: string): string {
   return prompt
     .replace(/["&|<>^%]/g, ' ')
     .replace(/\s+/g, ' ')

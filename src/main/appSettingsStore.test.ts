@@ -151,6 +151,39 @@ describe('orchestrationEnabled', () => {
   })
 })
 
+describe('resumeStrategy', () => {
+  it('기본값은 original이다', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getResumeStrategy()).toBe('original')
+  })
+
+  it('smart를 저장하고 새 인스턴스가 다시 읽는다', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    await a.setResumeStrategy('smart')
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getResumeStrategy()).toBe('smart')
+  })
+
+  it('알 수 없는 값은 original로 떨어진다', async () => {
+    for (const raw of [{ resumeStrategy: 'ask' }, { resumeStrategy: 42 }, { resumeStrategy: null }]) {
+      await fs.writeFile(file(), JSON.stringify(raw), 'utf8')
+      const store = new AppSettingsStore(file())
+      await store.load()
+      expect(store.getResumeStrategy()).toBe('original')
+    }
+  })
+
+  it('original일 때는 파일에 그 키를 쓰지 않는다', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    await store.setResumeStrategy('original')
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('resumeStrategy')
+  })
+})
+
 describe('닫은 업데이트 캠페인 id', () => {
   it('없으면 null이다', async () => {
     const store = new AppSettingsStore(file())

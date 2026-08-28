@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import type { JobRun, JobTask, OrchSnapshot, Provider, TaskStatus } from '../../../core/types'
-import type { MessageKey } from '../../../core/i18n'
-import { formatElapsed } from '../../../core/orchestration/elapsed'
+import type { MessageKey, MessageParams } from '../../../core/i18n'
+import { formatElapsed, formatRemaining } from '../../../core/orchestration/elapsed'
 import { isStoppedWorker, runningCount } from '../../../core/orchestration/running'
 import { schedRuleSummary } from '../../../core/scheduler/summary'
 import { useI18n } from '../i18n/I18nProvider'
 import { PauseIcon, PlayIcon, RunIcon, STATE_KEY, STATUS_COLOR, TaskGlyph, TaskIcon, TrashIcon } from './JobIcons'
 import type { RunIconKind } from './JobIcons'
+import { ArrowUpRight, ChevronDown, ChevronRight } from 'lucide-react'
 
 /** Run 헤더 글리프의 툴팁. 끝난·실패·막힘은 줄의 글리프와 같은 모양이고 같은 뜻이라 같은 문구를 쓴다.
  *
@@ -74,6 +75,36 @@ type RunningTask = JobTask & { provider: Provider; startedAt: string }
 const isRunning = (t: JobTask): t is RunningTask =>
   t.provider !== undefined && t.startedAt !== undefined
 
+/** provider 뒤에 오는 문구. **리셋을 기다리는 중이면 경과 대신 이것을 적는다** — `startedAt` 이
+ *  있어도 그 경과는 지금 벌어지는 일(한도에 걸려 멈춰 있다)을 말해 주지 않는다. `waiting`·`resumes`
+ *  는 서로 다른 이력 항목에서 오므로(view.ts 의 jobTaskOf) 함께 올 수 있다 — 두 번 이어진 뒤에 다시
+ *  대기 중일 수 있고, 그때는 재개 횟수를 뒤에 이어 붙인다.
+ *
+ *  **계정을 바꾸는 정지는 일부러 그리지 않는다.** `waiting` 은 그쪽에서도 채워지지만
+ *  (JobTask.waiting 의 주석) 그것은 기다리는 것이 아니고 리셋 시각도 없어서, 사유를 보지 않으면 이
+ *  줄이 "리셋 대기" 로 읽힌다 — 보통 1초도 안 되는 전환에. 그 대신 아무 말도 하지 않는다: 줄은 이미
+ *  provider 와 경과 시간을 적고 있고, 전환에 걸려 멈춘 것을 알리는 것은 **새로운 표시 상태**여서
+ *  이 물결에서 정할 일이 아니다(전환이 실패해 그 항목이 끝내 닫히지 않는 갈래가 실제로 있다 —
+ *  SPEC §21 의 알려진 한계).
+ *
+ *  **리셋 시각이 있어도 이미 지났으면 시각 없는 문구로 떨어진다** — formatRemaining 이 그 경계를
+ *  undefined 로 답한다(elapsed.ts). 지난 시각을 "앞으로 남았다"로 그리는 것이 시각을 안 그리는
+ *  것보다 나쁘다는 판단은 재개 브리핑과 같다. */
+function taskMeta(
+  task: RunningTask,
+  nowMs: number,
+  t: (key: MessageKey, params?: MessageParams) => string
+): string {
+  const wait = task.waiting?.reason === 'waiting' ? task.waiting : undefined
+  const left = wait?.resetsAt !== undefined ? formatRemaining(wait.resetsAt, nowMs) : undefined
+  const base = wait
+    ? left !== undefined
+      ? t('jobs.task.waitingReset', { left })
+      : t('jobs.task.waitingNoTime')
+    : formatElapsed(task.startedAt, nowMs)
+  return task.resumes ? `${base} · ${t('jobs.task.resumedCount', { n: task.resumes })}` : base
+}
+
 /** Run 하나의 카드 — 머리말·띠·도는 줄·Gate 줄·아래 한 줄. **JobsView 에서 뽑아낸 것이고 그리는
  *  것이 달라지지 않았다.** 뽑은 이유는 예약 템플릿의 회차를 같은 모양으로 그려야 해서다: 한 벌을
  *  두 자리에서 쓰지 않으면 두 벌이 갈라진다. */
@@ -119,7 +150,7 @@ function RunCard({
       className={`jobs-run${open ? '' : ' collapsed'}${run.sharesProjectFolder ? ' shared-folder' : ''}`}
     >
       <div className="jobs-run-head" onClick={() => onToggle()}>
-        <span className="jobs-caret">{open ? '▾' : '▸'}</span>
+        <span className="jobs-caret">{open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}</span>
         {/* 예약 회차의 번호. 한 템플릿의 회차들은 목표가 같아서(spawnScheduledRun 이 복사한다)
             제목만으로는 서로 구별되지 않는다 — 이 칩이 그것을 구별하는 유일한 표시다.
             평범한 Run 은 이 프롭을 받지 않으므로 그대로다. */}
@@ -211,14 +242,14 @@ function RunCard({
                   <span className="jobs-task-title" title={task.title}>
                     {task.title}
                   </span>
-                  <span className="jobs-task-meta">
-                    {task.provider} · {formatElapsed(task.startedAt, nowMs)}
+                  <span className="jobs-task-meta" title={`${task.provider} · ${taskMeta(task, nowMs, t)}`}>
+                    {task.provider} · {taskMeta(task, nowMs, t)}
                   </span>
                 </span>
                 <TaskGlyph task={task} />
                 {sessionId ? (
                   <span className="jobs-jump" aria-hidden="true">
-                    ↗
+                    <ArrowUpRight size={12} />
                   </span>
                 ) : null}
               </div>
@@ -332,7 +363,7 @@ function ScheduleCard({
   return (
     <div className={`jobs-run jobs-tmpl${open ? '' : ' collapsed'}`}>
       <div className="jobs-run-head" onClick={onToggle}>
-        <span className="jobs-caret">{open ? '▾' : '▸'}</span>
+        <span className="jobs-caret">{open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}</span>
         <span className="jobs-objective" title={run.objective}>
           {run.objective}
         </span>
@@ -535,11 +566,14 @@ export function JobsView({
 
   // 도는 것이 없으면 타이머도 없다 — 아무것도 안 변하는 화면을 1초마다 다시 그릴 이유가 없다.
   // 조건을 스냅샷에서 뽑는 덕분에 마지막 워커가 끝나면 다음 푸시에서 저절로 꺼진다.
+  // waiting 도 센다 — 지금은 열린 Dispatch 만 대기 중이 되므로 늘 startedAt 과 함께 오지만
+  // (view.ts 의 jobTaskOf), 카운트다운이 그 우연에 기대면 안 된다: startedAt 없이 waiting 만
+  // 오는 날 이 조건이 그대로면 시계가 멈춘 채 남은 시간이 굳는다.
   const anyRunning =
     snapshot?.runs.some(
       (r) =>
-        r.tasks.some((tk) => tk.startedAt) ||
-        (r.children ?? []).some((kid) => kid.tasks.some((tk) => tk.startedAt))
+        r.tasks.some((tk) => tk.startedAt || tk.waiting) ||
+        (r.children ?? []).some((kid) => kid.tasks.some((tk) => tk.startedAt || tk.waiting))
     ) ?? false
   const [nowMs, setNowMs] = useState(() => Date.now())
   useEffect(() => {

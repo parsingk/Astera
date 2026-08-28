@@ -99,14 +99,19 @@ export interface Task {
   status: TaskStatus
   result?: string
   filesModified?: string[]
-  /** 이 Task 의 워커를 띄울 계정. **없으면 그 provider 의 기본 계정으로 간다** — 명령으로 만든
-   *  Task 와 이 칸이 생기기 전의 Task 가 모두 그 갈래다.
+  /** 이 Task 의 워커를 띄울 계정들, **순서대로**. **없거나 비면 그 provider 의 기본 계정으로 간다** —
+   *  명령으로 만든 Task 와 이 칸이 생기기 전의 Task 가 모두 그 갈래다.
    *
-   *  provider 는 Run 이 정하므로(Run.provider) 이 계정은 그것과 같은 provider 여야 한다.
+   *  첫 계정으로 띄우고, 나머지는 **한도에 걸렸을 때 갈아탈 순서**다 — 배선이 이 목록을 그대로
+   *  세션의 롤링 체인(rollAccountIds)으로 넘긴다. 계정이 하나면 갈아탈 곳이 없어 리셋까지 기다린다
+   *  (RollCycle.onLimit 은 계정 수가 1이면 언제나 대기를 낸다).
+   *
+   *  provider 는 Run 이 정하므로(Run.provider) 이 계정들은 그것과 같은 provider 여야 한다.
    *  task-create 가 그 조합을 거절하지만, 못 쓰는 지정이 실제로 도달했을 때 무엇을 하는지는
-   *  accountToDispatchOn(core/accounts/dispatchAccount.ts)이 정한다 — 조용히 기본 계정으로
-   *  갈아타지 않고 Gate 를 연다. */
-  accountId?: string
+   *  accountToDispatchOn(core/accounts/dispatchAccount.ts)이 정한다 — **첫 계정**을 못 쓰면 뒤
+   *  계정을 올려세우지 않고 그대로 실패해 Gate 를 열고, 첫 계정을 쓸 수 있으면 **뒤 계정** 중
+   *  못 쓰는 것만 순서를 지키며 제자리에서 빠진다. */
+  accountIds?: string[]
   /** 이 Task 를 완료로 판정할 실행 구성의 id. 없으면 worker_done 을 그대로 믿는다 —
    *  "문서를 고친다" 같은 Task 에 빌드를 거는 것은 틀린 판정이므로 검증 없음이 기본이다. */
   validateConfigId?: string
@@ -118,6 +123,29 @@ export interface Task {
   consecutiveFailures: number
   createdAt: string
   updatedAt: string
+}
+
+/** 한 번의 정지와 그 재개. **이 배열이 없으면 "몇 번 이어졌는가" 를 되살릴 방법이 아예 없다** —
+ *  롤은 Dispatch 를 닫지 않고 `sessionId`·`accountId` 만 고쳐 쓰고(rollTap 의 rekeyDispatch),
+ *  `stopSnapshot` 은 정지마다 덮어써서 직전 하나만 남는다.
+ *
+ *  **정지와 재개를 한 항목에 담는다.** 둘을 따로 두면 짝을 맞추는 규칙이 하나 더 생기고, 그 규칙이
+ *  어긋나는 날 화면이 "세 번 멈추고 두 번 이어졌다" 를 그린다. **마지막** 항목의 `resumedAt` 부재가
+ *  곧 "지금 기다리는 중" 이다 — 화면이 그것으로 판정한다. 앞쪽에 열린 채 남은 항목은 지금이 아니라
+ *  **끝내 이어지지 않은 정지**를 말한다('stalled' 로 끝난 에피소드가 그 갈래다). */
+export interface ResumeEntry {
+  /** ISO. 정지가 감지된 시각 */
+  stoppedAt: string
+  /** 정지를 일으킨 롤 상태 그대로 — `stopSnapshot.reason` 과 같은 값이다 */
+  reason: 'waiting' | 'switching'
+  /** ISO. `'waiting'` 일 때만(`RollStateEvent.nextRetryAt`). 계정을 바꾸는 쪽은 기다리지 않는다 */
+  resetsAt?: string
+  /** 정지 시점의 계정 */
+  fromAccountId: string
+  /** ISO. 재개가 실제로 일어난 시각. **없으면 아직 기다리는 중이다** */
+  resumedAt?: string
+  /** 재개 후의 계정. 같은 계정에서 이어갔으면 `fromAccountId` 와 같다 — 제자리 재개가 그 갈래다 */
+  toAccountId?: string
 }
 
 export interface Dispatch {
@@ -165,6 +193,9 @@ export interface Dispatch {
      *  않으므로 리셋 시각이라는 값 자체가 없다. */
     resetsAt?: string
   }
+  /** 이 Dispatch 가 멈추고 이어진 이력. 화면의 "기다리는 중" 과 "N 번 이어졌다" 가 이것을 읽는다
+   *  (`core/orchestration/view.ts`). 항목이 없으면 이 칸 자체가 없다. */
+  resumes?: ResumeEntry[]
   /** Cleanup held back at the user's request (worker-retain) */
   retained: boolean
   /** 이 Dispatch 가 구현이 아니라 검토인가. 한 Task 에 구현 Dispatch 와 검토 Dispatch 가 함께

@@ -47,7 +47,7 @@ describe('themeCssVars', () => {
     expect(v['--modal-pad']).toBe('24px')
   })
 
-  it('여섯 테마가 정확히 같은 변수 이름 집합을 낸다', () => {
+  it('일곱 테마가 정확히 같은 변수 이름 집합을 낸다', () => {
     const sets = THEMES.map((t) => Object.keys(themeCssVars(t)).sort().join(','))
     expect(new Set(sets).size).toBe(1)
   })
@@ -60,7 +60,7 @@ describe('themeCssVars', () => {
     }
   })
 
-  // 키 집합 테스트는 여섯 테마에서 균일하게 빠진 토큰과 잘못 매핑된 파생을 둘 다 통과시키므로,
+  // 키 집합 테스트는 일곱 테마에서 균일하게 빠진 토큰과 잘못 매핑된 파생을 둘 다 통과시키므로,
   // 테마 하나의 반환 객체 전체를 고정해 그 두 경우를 잡는다.
   it('Quasar 의 전체 반환 객체를 고정한다', () => {
     expect(themeCssVars(themeById('quasar'))).toEqual({

@@ -175,6 +175,13 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.theme.hint':
     'Changes colours, corners and typeface together. The terminal font is chosen separately below.',
   'settings.theme.saveFailed': 'Could not save the theme: {detail}',
+  // ResumeStrategySettings.tsx — the two-way resume strategy picker
+  'settings.resumeStrategy.label': 'Session resume strategy',
+  'settings.resumeStrategy.smart.label': 'Smart Resume (experimental)',
+  'settings.resumeStrategy.smart.hint': 'Continues the conversation from a compact checkpoint alone.',
+  'settings.resumeStrategy.original.label': 'Resume original session',
+  'settings.resumeStrategy.original.hint': "Continues the conversation with the CLI's own resume.",
+  'settings.resumeStrategy.saveFailed': 'Could not save the resume strategy: {detail}',
   'settings.font.latin': 'Terminal font (Latin)',
   'settings.font.hangul': 'Terminal font (Hangul)',
   'settings.font.system': 'System default',
@@ -380,6 +387,7 @@ export const en: Record<keyof typeof ko, string> = {
   'account.remove.processing': 'Working…',
   'account.remove.confirmWithLogout': 'Unregister + log out',
   'account.logout.failed': 'Logout failed: {detail}\n\nUnregistering will continue anyway.',
+  'account.remove.inUse': 'This account is in use by a running session and cannot be unregistered: {titles}\n\nClose the session first, or remove the account from its rolling order.',
   'account.error.raw': '{detail}',
   'account.error.logoutFailed': 'Logout failed',
   'account.sync.title': 'Import default account settings',
@@ -492,6 +500,7 @@ export const en: Record<keyof typeof ko, string> = {
   'history.menu.hide': 'Hide',
   'history.project.noSessions': 'No sessions',
   'history.entry.preview': 'Preview',
+  'history.entry.resume': 'Resume session',
   'history.preview.truncated': '(recent turns only)',
   'history.preview.me': 'Me',
   'history.resume.folderMissingTitle': 'Project folder not found',
@@ -597,6 +606,7 @@ export const en: Record<keyof typeof ko, string> = {
   'run.form.addOption': 'Add option',
   'run.panel.noActiveRun': 'Run',
   'run.panel.exited': ' · Exited (code {code})',
+  'run.panel.close': 'Close run tab',
   'run.panel.clear': 'Clear',
   'run.panel.collapse': 'Collapse',
   'terminal.rail.open': 'Terminal',
@@ -712,6 +722,8 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.event.dispatchStarted': 'worker started',
   'jobs.event.gateOpened': 'awaiting decision',
   'jobs.event.gateResolved': 'decided',
+  'jobs.event.limitHit': 'usage limit hit',
+  'jobs.event.resumed': 'worker resumed',
   'jobs.event.status': 'status',
   'jobs.event.workerDone': 'worker report',
   'jobs.event.question': 'question',
@@ -750,7 +762,14 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.new.folderBusy': 'A worker is already running in this folder — at a limit of 1 this job runs its worker there too, so their edits can mix',
   'jobs.new.failed': 'Could not create the job',
   'jobs.gate.noAccount': 'No {provider} account is logged in, so this Task cannot start',
-  'jobs.gate.assignedAccountUnusable': 'The account assigned to this Task cannot be used — it is not logged in, has been removed, or belongs to another agent',
+  // Fires when the **first** account in this Task's list cannot be used, and when nothing in the list
+  // can — the first one is unusable either way, so one message covers both. The accounts after it are
+  // never promoted into its place (dispatchAccount.ts: listing one later is consent to roll onto it
+  // after exhaustion, not consent to start on it), which is the part the user cannot guess, so it is
+  // said out loud. No account is named: the call site holds ids, and an id is not the name the user
+  // picked the account by — the sibling above names only the provider for the same reason.
+  'jobs.gate.assignedAccountUnusable':
+    "The first account assigned to this Task cannot be used, and the accounts after it are only there to move onto later — log that account back in, or change this Task's account list",
   // NewTaskModal.tsx — the form RunDetail's bottom pane (.detail-events) turns into while a Task is
   // being authored. deps belongs to the graph, not this form (the graph is where dependencies get
   // picked) — that is why this catalog only has the hint text pointing at the graph, not the deps
@@ -763,13 +782,21 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.task.depsAdd': 'Pick a Task',
   'jobs.task.account': 'Account',
   'jobs.task.accountDefault': 'Default account',
-  'jobs.task.accountHint': 'The account this Task runs its worker on — the default account when left unset',
-  'jobs.task.accountTrust': 'The first time this account opens this folder the session tab asks you to trust it — the worker starts only once you answer',
+  'jobs.task.accountNone': 'Not used',
+  'jobs.task.accountHint':
+    'The accounts this Task runs its worker on — the default account when left unset. With more than one, a usage limit moves the worker to the next in the order you list them',
+  'jobs.task.accountTrust':
+    'The first time a chosen account opens this folder the session tab asks you to trust it — the worker starts only once you answer',
   'jobs.task.validate': 'Run configuration that proves it done',
   'jobs.task.validateNone': 'No validation',
   'jobs.task.review': 'Review by another agent',
   'jobs.task.create': 'Add',
   'jobs.task.failed': 'Could not create the task',
+  // JobsView.tsx — after the provider on a running row. Waiting draws this instead of elapsed, and a
+  // resume history appends after it.
+  'jobs.task.waitingReset': 'Waiting for reset · {left}',
+  'jobs.task.waitingNoTime': 'Waiting for reset',
+  'jobs.task.resumedCount': 'resumed {n}×',
   'jobs.node.start': 'Start',
   'jobs.node.stop': 'Stop',
   'jobs.node.restart': 'Start again',

@@ -96,6 +96,96 @@ describe('OrchestrationStore', () => {
     expect(store.get().dispatches[0].endedAt).toBeTruthy()
   })
 
+  it('옛 accountId 하나짜리 Task 를 accountIds 로 옮긴다 (이 칸이 생기기 전에 만든 Job)', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    // 손으로 만든 옛 모양 — accountId 는 이제 스키마에 없다
+    ;(s.tasks[0] as unknown as Record<string, unknown>).accountId = 'acc-1'
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    expect(store.get().tasks[0].accountIds).toEqual(['acc-1'])
+    // 옛 칸은 남기지 않는다 — 두 칸이 어긋나면 어느 쪽이 정본인지 코드마다 달라진다
+    expect((store.get().tasks[0] as unknown as Record<string, unknown>).accountId).toBeUndefined()
+  })
+
+  it('옛 accountId 아래 목록이 들어 있으면 그 순서째 옮긴다 (이름만 옛것인 손질)', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    ;(s.tasks[0] as unknown as Record<string, unknown>).accountId = ['acc-1', 'acc-2']
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    expect(store.get().tasks[0].accountIds).toEqual(['acc-1', 'acc-2'])
+  })
+
+  // **읽을 수 없는 원소는 그 원소만 버린다.** 전부 아니면 전무로 보면 읽히는 'acc-1' 까지 함께
+  // 사라지고, 그것도 사람이 아끼려던 계정을 지우는 일이다 — 이 이행이 막으려는 바로 그것이다
+  it('옛 목록에 읽을 수 없는 원소가 섞여 있으면 그 원소만 버린다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    ;(s.tasks[0] as unknown as Record<string, unknown>).accountId = ['acc-1', '']
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    expect(store.get().tasks[0].accountIds).toEqual(['acc-1'])
+    expect((store.get().tasks[0] as unknown as Record<string, unknown>).accountId).toBeUndefined()
+  })
+
+  // 문자열이 아닌 원소도 같다 — JSON 은 무엇이든 담을 수 있고 이 파일은 손으로 고쳐진다
+  it('옛 목록의 문자열 아닌 원소만 버리고 읽히는 것은 남긴다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    ;(s.tasks[0] as unknown as Record<string, unknown>).accountId = ['acc-1', 3]
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    expect(store.get().tasks[0].accountIds).toEqual(['acc-1'])
+  })
+
+  // 남는 것이 하나도 없으면 칸을 만들지 않는다 — 빈 배열을 실으면 "지정 없음"과 값이 갈라지고,
+  // 그것을 체인으로 넘기면 롤링이 계정 아닌 것으로 갈아타려 한다
+  it('옛 목록에 읽을 수 있는 원소가 하나도 없으면 지정을 만들지 않는다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    ;(s.tasks[0] as unknown as Record<string, unknown>).accountId = ['', 3]
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    expect(store.get().tasks[0].accountIds).toBeUndefined()
+    expect((store.get().tasks[0] as unknown as Record<string, unknown>).accountId).toBeUndefined()
+  })
+
+  // **두 칸이 함께 있는 파일** — 손으로 고치다 만 모양이고, 이 이행이 있는 이유가 바로 그런 편집이다.
+  // 새 칸이 "있는가"만 보면 빈 목록 그대로 돌아오고 옛 칸은 지워져 지정이 통째로 사라진다.
+  // 빈 배열은 "지정 없음"이므로(Task.accountIds 의 JSDoc) 옛 값이 이긴다
+  it('새 칸이 빈 목록이면 옛 accountId 를 그 자리로 옮긴다 (고치다 만 파일)', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    const t = s.tasks[0] as unknown as Record<string, unknown>
+    t.accountId = 'acc-1'
+    t.accountIds = []
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    expect(store.get().tasks[0].accountIds).toEqual(['acc-1'])
+    expect((store.get().tasks[0] as unknown as Record<string, unknown>).accountId).toBeUndefined()
+  })
+
+  // 새 칸에 값이 들어 있으면 그것이 정본이다 — 옛 칸은 읽지 않고 지운다
+  it('새 칸에 값이 있으면 옛 accountId 는 그것을 덮지 않는다', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    const t = s.tasks[0] as unknown as Record<string, unknown>
+    t.accountId = 'acc-old'
+    t.accountIds = ['acc-1', 'acc-2']
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    await store.load()
+    expect(store.get().tasks[0].accountIds).toEqual(['acc-1', 'acc-2'])
+    expect((store.get().tasks[0] as unknown as Record<string, unknown>).accountId).toBeUndefined()
+  })
+
   it('재시작 정리가 Task를 failed로 옮기지 않는다', async () => {
     const file = path.join(dir, 'orchestration.json')
     await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')

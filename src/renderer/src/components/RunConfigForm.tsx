@@ -8,6 +8,7 @@ import { parseEnvLines, formatEnvLines, toRelativeCwd } from '../../../core/run/
 import type { MessageKey } from '../../../core/i18n'
 import { useI18n } from '../i18n/I18nProvider'
 import { Select, type SelectOption } from './Select'
+import { ChevronDown } from 'lucide-react'
 
 /** Label for the JDK select — the version, vendor and path all have to be visible.
  *  Lifted from RunConfigDialog (deleted in Task 8) rather than imported from it. */
@@ -627,7 +628,8 @@ export function RunConfigForm({
 
       <div className="rcm-add-option">
         <button type="button" disabled={available.length === 0} onClick={() => setAddOpen((v) => !v)}>
-          {t('run.form.addOption')} ▾
+          {t('run.form.addOption')}
+          <ChevronDown size={12} />
         </button>
         {addOpen && (
           <div className="rcm-add-option-menu" onMouseLeave={() => setAddOpen(false)}>

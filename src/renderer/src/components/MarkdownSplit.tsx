@@ -6,6 +6,8 @@ import {
   type MdViewMode, type ScrollAnchor
 } from '../../../core/files/markdownView'
 import { useI18n } from '../i18n/I18nProvider'
+import { Columns2, Eye, PanelLeft } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 
 const RATIO_KEY = 'cm.md.splitRatio'
 
@@ -13,10 +15,10 @@ const RATIO_KEY = 'cm.md.splitRatio'
  *  유니온)임에도 실제로 타입을 통과한다(직접 tsc 로 확인) — `MdViewMode` 가 세 값짜리 닫힌 유니온이라
  *  템플릿 리터럴 타입이 세 조합으로 즉시 펼쳐지고, 그 세 문자열이 전부 `ko.ts` 에 이미 있는 키라서다.
  *  캐스트도, 따로 든 `key: MessageKey` 필드도 필요 없다. */
-const MODES: { id: MdViewMode; glyph: string }[] = [
-  { id: 'editor', glyph: '◫' },
-  { id: 'split', glyph: '◪' },
-  { id: 'preview', glyph: '▣' }
+const MODES: { id: MdViewMode; Icon: LucideIcon }[] = [
+  { id: 'editor', Icon: PanelLeft },
+  { id: 'split', Icon: Columns2 },
+  { id: 'preview', Icon: Eye }
 ]
 
 /** 모드 버튼 세 개와 좌우 분할.
@@ -293,20 +295,20 @@ export function MarkdownSplit({
           영향을 주지 않는다 — FileEditor 는 그대로 마운트 상태를 유지한다. */}
       {markdown && (
         <div className="md-toolbar">
-          {MODES.map((m) => (
+          {MODES.map(({ id, Icon }) => (
             <button
-              key={m.id}
+              key={id}
               type="button"
-              className={mode === m.id ? 'active' : undefined}
-              aria-pressed={mode === m.id}
-              // 글리프 하나뿐인 버튼이라 텍스트 콘텐츠가 접근성 이름이 되어 주지 못한다 — title 과
+              className={mode === id ? 'active' : undefined}
+              aria-pressed={mode === id}
+              // 아이콘 하나뿐인 버튼이라 텍스트 콘텐츠가 접근성 이름이 되어 주지 못한다 — title 과
               // aria-label 을 같은 문구로 같이 주는 것은 이 앱의 아이콘 전용 버튼 관례
               // (App.tsx 의 rail-btn, WorktreePanel 의 icon-btn 등) 을 그대로 따른 것이다.
-              title={t(`files.markdown.mode.${m.id}`)}
-              aria-label={t(`files.markdown.mode.${m.id}`)}
-              onClick={() => onModeChange(m.id)}
+              title={t(`files.markdown.mode.${id}`)}
+              aria-label={t(`files.markdown.mode.${id}`)}
+              onClick={() => onModeChange(id)}
             >
-              {m.glyph}
+              <Icon size={14} />
             </button>
           ))}
         </div>
