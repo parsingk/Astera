@@ -599,13 +599,21 @@ describe('buildTabResumeText', () => {
         JSON.stringify({ type: 'session_meta', payload: { session_id: 'sid', cwd: CWD } }),
         JSON.stringify({
           timestamp: '2026-08-26T00:00:00.000Z',
-          type: 'event_msg',
-          payload: { type: 'user_message', message: 'codex 쪽 최근 요청입니다' }
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: 'codex 쪽 최근 요청입니다' }]
+          }
         }),
         JSON.stringify({
           timestamp: '2026-08-26T00:00:01.000Z',
-          type: 'event_msg',
-          payload: { type: 'agent_message', message: '알겠습니다' }
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: '알겠습니다' }]
+          }
         })
       ].join('\n') + '\n',
       'utf8'
