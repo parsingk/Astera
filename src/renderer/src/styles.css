@@ -2027,7 +2027,11 @@ kbd.shortcut-conflict { color: var(--fi-red); border-color: var(--fi-red); }
   background: var(--bg);
   border-color: var(--accent);
 }
-/* 쉬는 체크박스도 같은 이유로 채워진 바탕에 둔다 — 원본의 dark:bg-input/30 자리다. */
-[data-theme='sirius'] input[type='checkbox']:not(.md-task input) {
+/* 쉬는 체크박스도 같은 이유로 채워진 바탕에 둔다 — 원본의 dark:bg-input/30 자리다.
+   **:not(:checked) 가 필요한 이유**: 이 선택자와 위쪽의 `:checked` 규칙은 특이도가 (0,3,2)로
+   같고, 이 블록이 파일 뒤에 있어 배경 선언이 그쪽을 이긴다. 그래서 처음에는 체크된 상자까지
+   --elevated 로 칠해졌고, 그 위에 --accent-ink 체크가 얹혀 대비 1.21:1 로 사라졌다. 원본도
+   쉴 때(bg-input/30)와 체크됐을 때(data-[state=checked]:bg-primary)를 나눈다. */
+[data-theme='sirius'] input[type='checkbox']:not(.md-task input):not(:checked) {
   background: var(--elevated);
 }
