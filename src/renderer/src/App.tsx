@@ -18,7 +18,7 @@ import { EditorStateCache } from './lib/editorStateCache'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { JobsView } from './components/JobsView'
 import { UnderstandingView } from './components/UnderstandingView'
-import { FeatureDetail } from './components/FeatureDetail'
+import { FeatureDetailHost } from './components/FeatureDetail'
 import { RunDetail } from './components/RunDetail'
 import { NewRunModal } from './components/NewRunModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
@@ -2001,16 +2001,14 @@ export default function App(): React.JSX.Element {
     const f = u.features.find((x) => x.id === rec.featureId)
     if (!f) return null
     return (
-      <div className="workbench-body">
-        <FeatureDetail
-          feature={f}
-          explanation={u.explanations[rec.featureId] ?? null}
-          // 탭마다 따로다 — scopedNode 는 featureTabId 로 키를 삼는다(위 선언의 주석)
-          scopedNodeId={scopedNode[featureTabId] ?? null}
-          onPickStep={(id) => setScopedNode((m) => ({ ...m, [featureTabId]: id }))}
-          onOpenPath={openFeaturePath}
-        />
-      </div>
+      <FeatureDetailHost
+        feature={f}
+        explanation={u.explanations[rec.featureId] ?? null}
+        // 탭마다 따로다 — scopedNode 는 featureTabId 로 키를 삼는다(위 선언의 주석)
+        scopedNodeId={scopedNode[featureTabId] ?? null}
+        onPickStep={(id) => setScopedNode((m) => ({ ...m, [featureTabId]: id }))}
+        onOpenPath={openFeaturePath}
+      />
     )
   }
 

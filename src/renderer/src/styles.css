@@ -1868,7 +1868,7 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 
 /* How It Works 기능 상세 페인. 왼쪽은 읽는 이야기, 오른쪽은 되짚는 참조 — 그 둘의 폭 비가 이 화면의
    전부다(1.62 : 1). 세션 탭·파일 탭과 같은 줄에 서므로 자기 머리를 따로 그린다. */
-.hiw-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); }
+.hiw-pane { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); }
 .hiw-pane-empty { display: grid; place-items: center; color: var(--text-faint); font-size: 12px; }
 .hiw-fhead { display: flex; align-items: center; gap: 10px; padding: 11px 18px; border-bottom: 1px solid var(--line-soft); }
 .hiw-fhead h4 { margin: 0; font-size: 17px; font-weight: 600; color: var(--text); }
@@ -1883,6 +1883,12 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .hiw-main { flex: 1.62; min-width: 0; border-right: 1px solid var(--line-soft); display: flex; flex-direction: column; overflow-y: auto; }
 .hiw-side-col { flex: 1; min-width: 0; background: var(--panel); overflow-y: auto; }
 .hiw-grow { flex: 1; }
+
+/* 좁은 페인의 참조 서랍. .hiw-pane 을 덮으며 열린다(그 자리를 잡는 position: relative 는 위) —
+   본문 옆이 아니라 위에 뜨는 것은 그래야 이 화면이 넓을 때와 같은 두 단짜리 레이아웃으로 남고,
+   좁을 때만 절반을 접었다 펴는 것이 되기 때문이다(설계 §6, FeatureDetail.tsx 의 narrow prop 주석). */
+.hiw-drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 290px; z-index: 5; background: var(--panel); border-left: 1px solid var(--line); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow-y: auto; }
+.hiw-drawer .hiw-side-col { background: none; }
 .hiw-sec { padding: 13px 18px; border-bottom: 1px solid var(--line-soft); }
 .hiw-side-col .hiw-sec { padding: 12px 15px; }
 .hiw-sec:last-child { border-bottom: 0; }

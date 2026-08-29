@@ -90,7 +90,24 @@ const render = (scoped: string | null = null, x: FeatureExplanation | null = exp
       explanation: x,
       scopedNodeId: scoped,
       onPickStep: () => {},
-      onOpenPath: () => {}
+      onOpenPath: () => {},
+      narrow: false,
+      drawerOpen: false,
+      onToggleDrawer: () => {}
+    })
+  )
+
+const renderNarrow = (drawerOpen: boolean): string =>
+  renderToStaticMarkup(
+    React.createElement(FeatureDetail, {
+      feature,
+      explanation,
+      scopedNodeId: null,
+      onPickStep: () => {},
+      onOpenPath: () => {},
+      narrow: true,
+      drawerOpen,
+      onToggleDrawer: () => {}
     })
   )
 
@@ -133,5 +150,23 @@ describe('FeatureDetail', () => {
     const html = render('login')
     expect(html).toContain('hiw.pane.decisions')
     expect(html).not.toContain('hiw.scope.clear')
+  })
+})
+
+describe('좁은 페인', () => {
+  it('접혀 있으면 참조 단이 없고 버튼만 있다', () => {
+    const html = renderNarrow(false)
+    expect(html).toContain('hiw.pane.reference')
+    expect(html).not.toContain('hiw.pane.decisions')
+  })
+
+  it('열면 서랍으로 나온다', () => {
+    const html = renderNarrow(true)
+    expect(html).toContain('hiw-drawer')
+    expect(html).toContain('hiw.pane.decisions')
+  })
+
+  it('넓을 때는 버튼이 없다', () => {
+    expect(render()).not.toContain('hiw.pane.reference')
   })
 })
