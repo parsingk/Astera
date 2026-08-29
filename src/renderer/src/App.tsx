@@ -18,6 +18,7 @@ import { EditorStateCache } from './lib/editorStateCache'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { JobsView } from './components/JobsView'
 import { UnderstandingView } from './components/UnderstandingView'
+import { FeatureDetail } from './components/FeatureDetail'
 import { RunDetail } from './components/RunDetail'
 import { NewRunModal } from './components/NewRunModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
@@ -90,7 +91,7 @@ import {
   type PaneDir,
   type PaneNode
 } from '../../core/panes/tree'
-import { fileTab, parseTab, sessionTab } from '../../core/panes/tabId'
+import { featureTab, fileTab, parseTab, sessionTab } from '../../core/panes/tabId'
 import { placeTab } from '../../core/panes/place'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
@@ -347,6 +348,10 @@ export default function App(): React.JSX.Element {
   /** 활성 탭이 파일일 때만 그 id */
   const activeFileId = activeTab?.kind === 'file' ? activeTabId : null
   const activeSessionId = activeTab?.kind === 'session' ? activeTab.id : null
+  /** 활성 탭이 기능 상세일 때 그 기능 id — How It Works 사이드바가 어느 줄을 켜 둘지 정한다.
+   *  탭 트리에서 파생시키는 이유는 activeFileId 와 같다: 별도 상태를 두면 다른 페인의 탭을 누르거나
+   *  포커스를 옮기는 순간 트리와 갈라진다 */
+  const activeFeatureId = activeTab?.kind === 'feature' ? activeTab.id : null
   // 활성 탭이 파일일 수 있게 되면서 "지금 보고 있는 것"과 "작업 중인 세션"이 갈라졌다. 세션에 딸린
   // 표시(상태 바, 사용량 폴링)는 마지막으로 활성이었던 세션 탭을 따른다 — 파일을 읽는 동안 상태 바가
   // 비고 컨텍스트·한도 칩이 사라지지 않게. 파일 트리 루트는 여기서 나오지 않고 활성 탭에서 나온다.
@@ -1085,6 +1090,31 @@ export default function App(): React.JSX.Element {
     )
   }
 
+  /** How It Works 사이드바에서 기능을 골랐다. 이미 열려 있으면 그 탭을 활성으로 만들고, 없으면
+   *  활성 페인의 새 탭으로 연다 — 파일 탭과 같은 placeTab 이 그 둘을 다 정한다(placeTab 의 intoGroup
+   *  이 "이미 트리에 있으면 다시 넣지 않고 활성화한다"). openFile 이 앞에 따로 확인을 두는 것은
+   *  fileTabs 라는 자기 목록을 겹쳐 넣지 않기 위해서인데, 기능 탭에는 그런 목록이 없다 —
+   *  제목과 상태는 understanding 에서 매번 찾는다. */
+  const openFeatureTab = (featureId: string): void => {
+    const placed = placeTab(layoutRef.current, featureTab(featureId), {
+      activePaneId: activePaneIdRef.current
+    })
+    setLayout(placed.root)
+    if (placed.paneId) setActivePaneId(placed.paneId)
+  }
+
+  /** 구현 참조를 눌렀다. 그 경로는 저장소 상대이므로(understanding/types.ts) 지금 프로젝트에 붙여
+   *  절대 경로로 만든 다음 평소의 파일 탭으로 연다 — 설명 옆에 소스를 띄우는 것이 이 화면의 목적이다.
+   *  구분자는 루트의 것을 따른다(core/files/paths.ts 의 resolveRelative 와 같은 관례). */
+  const openFeaturePath = (relPath: string): void => {
+    const root = currentProjectRef.current
+    if (!root) return
+    const sep = root.includes('\\') ? '\\' : '/'
+    const parts = relPath.split(/[/\\]/).filter((p) => p !== '' && p !== '.')
+    if (parts.length === 0) return
+    openFile(`${root}${sep}${parts.join(sep)}`)
+  }
+
   /** 에디터가 사라질 때 그 상태를 캐시에 넘겨받는다. 세션 모드로 나가면 .run-host가 통째로
    *  언마운트되므로, 이 경로가 없으면 되돌리기 이력이 거기서 끊긴다(세션 탭은 숨기기만 해서 안 끊긴다).
    *
@@ -1126,6 +1156,23 @@ export default function App(): React.JSX.Element {
     )
   }
 
+  /** 탭 하나를 트리에서 뺀다. 다음에 무엇이 활성이 되는지는 removeTab 이 정한다(세션 탭을 닫을 때와
+   *  같은 규칙). 여기서 ref 를 직접 맞춰 두는 것은 연쇄로 닫힐 때(폴더 삭제) 다음 반복이 렌더 전의
+   *  낡은 값을 읽지 않게 하기 위해서다 — closeFileTab 의 fileTabsRef 미러링과 같은 이유다.
+   *  기능 탭이 세 번째 종류로 들어오면서 파일 탭과 이 꼬리를 그대로 나눠 쓰게 되어 함수가 되었다 —
+   *  기능 탭에는 버퍼도 죽일 프로세스도 없어 닫기가 이것 하나다. */
+  const dropTabFromTree = (id: string): void => {
+    const cur = layoutRef.current
+    if (!cur || !groupOfTab(cur, id)) return
+    const nextLayout = removeTab(cur, id)
+    layoutRef.current = nextLayout
+    const p = activePaneIdRef.current
+    const nextPane = nextLayout ? (p && leafOf(nextLayout, p) ? p : firstLeaf(nextLayout).id) : null
+    activePaneIdRef.current = nextPane
+    setActivePaneId(nextPane)
+    setLayout(nextLayout)
+  }
+
   const closeFileTab = async (id: string): Promise<void> => {
     // Decided outside the updater — avoids StrictMode double-invocation side effects (the existing convention)
     const buf = fileBuffersRef.current[id]
@@ -1155,21 +1202,9 @@ export default function App(): React.JSX.Element {
       const { [id]: _drop, ...rest } = prev
       return rest
     })
-    // 트리에서도 뺀다. 다음에 무엇이 활성이 되는지는 removeTab이 정한다(세션 탭을 닫을 때와 같은 규칙),
-    // 그러면 activeFileId는 파생값이므로 저절로 따라온다. 여기서 ref를 직접 맞춰 두는 것은 연쇄로 닫힐
-    // 때(폴더 삭제) 다음 반복이 렌더 전의 낡은 값을 읽지 않게 하기 위해서다 — closeFileTab 위쪽의
-    // fileTabsRef 미러링과 같은 이유다
+    // 트리에서도 뺀다(dropTabFromTree). 그러면 activeFileId 는 파생값이므로 저절로 따라온다
     if (activeFileIdRef.current === id) activeFileIdRef.current = null
-    const cur = layoutRef.current
-    if (cur && groupOfTab(cur, id)) {
-      const nextLayout = removeTab(cur, id)
-      layoutRef.current = nextLayout
-      const p = activePaneIdRef.current
-      const nextPane = nextLayout ? (p && leafOf(nextLayout, p) ? p : firstLeaf(nextLayout).id) : null
-      activePaneIdRef.current = nextPane
-      setActivePaneId(nextPane)
-      setLayout(nextLayout)
-    }
+    dropTabFromTree(id)
   }
 
   /** 탭 줄에서 탭을 골랐다. 종류에 상관없이 트리에서 그 탭을 활성으로 만들고 그 페인에 포커스를 준다 —
@@ -1186,12 +1221,18 @@ export default function App(): React.JSX.Element {
   // ref뿐이라 최신 상태에 대해 동작한다(toggleExplorer와 같은 관례)
   selectWorkbenchTabRef.current = selectWorkbenchTab
 
-  /** 파일 탭은 기존 경로(더티면 확인 모달), 세션 탭은 세션 모드의 탭 닫기와 같은 경로로 종료한다 */
+  /** 파일 탭은 기존 경로(더티면 확인 모달), 세션 탭은 세션 모드의 탭 닫기와 같은 경로로 종료한다.
+   *  기능 탭은 트리에서 빼는 것이 전부다 — 여기서 갈래를 두지 않으면 featureId 가 세션 id 로 읽혀
+   *  sessions.kill 로 흘러간다 */
   const closeWorkbenchTab = (tabId: string): void => {
     const ref = parseTab(tabId)
     if (!ref) return
     if (ref.kind === 'file') {
       void closeFileTab(tabId)
+      return
+    }
+    if (ref.kind === 'feature') {
+      dropTabFromTree(tabId)
       return
     }
     closeSession(ref.id)
@@ -1898,6 +1939,29 @@ export default function App(): React.JSX.Element {
           {buf.loading && <div className="file-overlay">{t('files.editor.loading')}</div>}
           {!buf.loading && buf.error && <div className="file-overlay">{buf.error}</div>}
         </div>
+      </div>
+    )
+  }
+
+  /** 기능 탭의 본문. renderEditor 와 같은 갈래다 — 페인 격자는 자리만 잡고 내용은 App 이 만든다.
+   *  목록에 없는 기능(프로젝트가 바뀌었거나 다시 분석되며 사라졌다)은 그리지 않는다: renderEditor 가
+   *  파일 탭·버퍼가 없을 때 null 을 주는 것과 같고, 탭 줄에서도 그 탭은 이미 빠져 있다.
+   *  설명이 아직 없으면 explanation 이 null 이고 FeatureDetail 이 그 안내를 그린다. */
+  const renderFeature = (featureId: string): React.ReactNode => {
+    const u = understanding
+    const f = u?.features.find((x) => x.id === featureId)
+    if (!u || !f) return null
+    return (
+      <div className="workbench-body">
+        <FeatureDetail
+          feature={f}
+          explanation={u.explanations[featureId] ?? null}
+          // Task 11 이 탭마다 따로인 좁힘 상태를 들고 오면서 이 둘을 갈아 끼운다 — 지금은 흐름도가
+          // 뼈대뿐이라 고를 단계 자체가 없다
+          scopedNodeId={null}
+          onPickStep={() => {}}
+          onOpenPath={openFeaturePath}
+        />
       </div>
     )
   }
@@ -2678,11 +2742,12 @@ export default function App(): React.JSX.Element {
             ) : sidebarPane === 'understanding' ? (
               <UnderstandingView
                 understanding={understanding}
-                // Task 10 이 페인 탭을 붙이기 전까지는 고를 대상도, 열 탭도 없다 — 세 자리 모두
-                // 자리표시자다. Task 10 이 openFeatureTab 을 만들면서 이 셋을 실제 값으로 바꾼다.
-                selectedFeatureId={null}
-                onOpenFeature={() => {}}
-                onReview={() => {}}
+                // 켜 둘 줄은 탭 트리가 정한다 — 활성 페인의 활성 탭이 기능이면 그 기능이다
+                selectedFeatureId={activeFeatureId}
+                onOpenFeature={openFeatureTab}
+                // [검토] 도 같은 탭을 연다. 검토 흐름 자체는 아직 없고, 그 전까지 이 버튼이 할 수
+                // 있는 가장 정직한 일이 "무엇을 검토할지 펼쳐 보여 주는 것"이다
+                onReview={openFeatureTab}
                 onAnalyze={() => toast.info(t('hiw.empty.notYet'))}
               />
             ) : (
@@ -2764,7 +2829,9 @@ export default function App(): React.JSX.Element {
                 accounts={accounts}
                 fileTabs={fileTabs}
                 dirtyFileIds={dirtyIds}
+                features={understanding?.features ?? []}
                 renderEditor={renderEditor}
+                renderFeature={renderFeature}
                 rollStates={rollStates}
                 schedStates={schedStates}
                 busy={busy}

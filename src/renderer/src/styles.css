@@ -590,6 +590,9 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    (core/files/tabLabel.ts). Only present when names collide, so it is drawn quietly: dim, smaller than
    the name, and clipped rather than allowed to push the name out of a narrow pane */
 .tab-hint { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 10px; color: var(--text-faint); }
+/* 기능 탭의 상태 글리프. 사이드바의 .hiw-g 와 같은 규칙이다 — 모양이 상태를 말하고 색은 거들 뿐 */
+.tab-glyph { flex: none; font-size: 11px; line-height: 1; color: var(--ok); }
+.tab-glyph.warn { color: var(--warn); }
 
 /* ---------- terminal ---------- */
 /* .terminal-slot is not terminal-only: it is how a pane's body claims its place in the grid, and the
@@ -1862,6 +1865,60 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .hiw-empty .hiw-fine { font-size: 10.5px; color: var(--text-faint); }
 .hiw-cta { background: var(--btn-bg); color: var(--btn-ink); border: 1px solid var(--btn-border); border-radius: var(--radius-sm); padding: 5px 15px; font-size: 12px; font-weight: 500; cursor: pointer; }
 .hiw-cta:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--ring); }
+
+/* How It Works 기능 상세 페인. 왼쪽은 읽는 이야기, 오른쪽은 되짚는 참조 — 그 둘의 폭 비가 이 화면의
+   전부다(1.62 : 1). 세션 탭·파일 탭과 같은 줄에 서므로 자기 머리를 따로 그린다. */
+.hiw-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); }
+.hiw-pane-empty { display: grid; place-items: center; color: var(--text-faint); font-size: 12px; }
+.hiw-fhead { display: flex; align-items: center; gap: 10px; padding: 11px 18px; border-bottom: 1px solid var(--line-soft); }
+.hiw-fhead h4 { margin: 0; font-size: 17px; font-weight: 600; color: var(--text); }
+.hiw-st { font-size: 11px; color: var(--ok); }
+.hiw-st.warn { color: var(--warn); }
+.hiw-sp { flex: 1; }
+.hiw-ghost { font-size: 11px; color: var(--text-dim); background: none; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 2px 9px; cursor: pointer; }
+.hiw-ghost.acc { color: var(--accent); }
+.hiw-ghost:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--ring); }
+
+.hiw-split { flex: 1; display: flex; min-height: 0; }
+.hiw-main { flex: 1.62; min-width: 0; border-right: 1px solid var(--line-soft); display: flex; flex-direction: column; overflow-y: auto; }
+.hiw-side-col { flex: 1; min-width: 0; background: var(--panel); overflow-y: auto; }
+.hiw-grow { flex: 1; }
+.hiw-sec { padding: 13px 18px; border-bottom: 1px solid var(--line-soft); }
+.hiw-side-col .hiw-sec { padding: 12px 15px; }
+.hiw-sec:last-child { border-bottom: 0; }
+/* .hiw-lab 은 위의 사이드바가 이미 정의한다 — 페인 안으로 한정하지 않으면 나중에 오는 이 규칙이
+   사이드바의 '최근 변경' 라벨까지 덮는다 */
+.hiw-pane .hiw-lab { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.11em; text-transform: uppercase; color: var(--text-faint); margin: 0 0 7px; }
+.hiw-hint { text-transform: none; letter-spacing: 0; }
+.hiw-p { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--text); max-width: 46ch; }
+.hiw-fail { display: flex; flex-direction: column; gap: 4px; }
+.hiw-fail div { display: flex; gap: 7px; font-size: 11.5px; color: var(--text-dim); }
+.hiw-fail b { flex: 0 0 118px; font-weight: 400; color: var(--warn); }
+
+.hiw-why { display: flex; flex-direction: column; gap: 3px; margin-bottom: 11px; }
+.hiw-why:last-child { margin-bottom: 0; }
+.hiw-wt { font-size: 12px; font-weight: 500; color: var(--text); }
+.hiw-wr { font-size: 11.5px; line-height: 1.55; color: var(--text-dim); }
+.hiw-src { align-self: flex-start; margin-top: 2px; font-family: var(--mono); font-size: 9.5px; color: var(--text-faint); border: 1px solid var(--line-soft); border-radius: 99px; padding: 1px 8px; }
+/* 추정. ADR 과 색이 달라야 같은 무게로 읽히지 않는다 */
+.hiw-src.low { color: var(--warn); border-color: var(--warn); }
+
+.hiw-impl { display: flex; flex-direction: column; gap: 5px; }
+.hiw-impl-row { display: flex; gap: 12px; align-items: baseline; }
+.hiw-impl-row b { font-size: 11.5px; font-weight: 400; color: var(--text-dim); }
+.hiw-impl-row button { font-family: var(--mono); font-size: 11px; color: var(--accent); background: none; border: 0; border-bottom: 1px dotted var(--accent); padding: 0; cursor: pointer; }
+.hiw-impl-row button:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--ring); }
+
+.hiw-chg { display: flex; flex-direction: column; gap: 2px; margin-bottom: 9px; }
+.hiw-chg:last-child { margin-bottom: 0; }
+.hiw-ct { display: flex; gap: 8px; font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
+.hiw-ct u { text-decoration: none; color: var(--accent); }
+.hiw-cb { font-size: 11.5px; color: var(--text-dim); }
+
+/* 좁힘 머리. --marker-w 가 0 인 테마(Umbra·Sirius)에서도 보이도록 배경을 함께 준다 */
+.hiw-scope { display: flex; align-items: center; gap: 8px; padding: 9px 15px; background: var(--elevated); border-bottom: 1px solid var(--line-soft); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
+.hiw-scope-label { font-size: 11.5px; font-weight: 500; color: var(--text); }
+.hiw-scope-clear { margin-left: auto; font-size: 10.5px; color: var(--text-faint); background: none; border: 0; cursor: pointer; }
 
 /* ---------- file type icons ---------- */
 .fi { flex: none; display: block; width: 14px; height: 14px; color: var(--fi-gray); }

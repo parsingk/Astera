@@ -15,8 +15,11 @@ import {
 } from '../../../core/panes/tree'
 import { parseTab, sessionTab } from '../../../core/panes/tabId'
 import { tabLabels } from '../../../core/files/tabLabel'
+import { ATTENTION_STATUSES } from '../../../core/understanding/list'
+import type { ProjectFeature } from '../../../core/understanding/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { TerminalView } from './TerminalView'
+import { GLYPH } from './UnderstandingIcons'
 import { WorkbenchTabs, type FileTab, type WorkbenchTab } from './WorkbenchTabs'
 
 /** Pane grid.
@@ -26,10 +29,10 @@ import { WorkbenchTabs, type FileTab, type WorkbenchTab } from './WorkbenchTabs'
  *  destroys the xterm instance and its scrollback. Sessions that are off screen stay mounted and are
  *  only hidden with display (existing behavior).
  *
- *  A pane holds both kinds of tab, so each pane has an editor slot beside the session slots. There is
- *  **one editor per pane, not one per open file** — twenty open files would otherwise mean twenty
- *  CodeMirror instances, while a pane switching between its own file tabs reuses the one editor and lets
- *  App's EditorStateCache carry undo and scroll across. */
+ *  A pane holds all three kinds of tab, so each pane has an editor slot and a feature slot beside the
+ *  session slots. There is **one editor per pane, not one per open file** — twenty open files would
+ *  otherwise mean twenty CodeMirror instances, while a pane switching between its own file tabs reuses
+ *  the one editor and lets App's EditorStateCache carry undo and scroll across. */
 export function PaneGrid({
   layout,
   activePaneId,
@@ -37,6 +40,7 @@ export function PaneGrid({
   accounts,
   fileTabs,
   dirtyFileIds,
+  features,
   rollStates,
   schedStates,
   busy,
@@ -52,7 +56,8 @@ export function PaneGrid({
   onTabContextMenu,
   onDragTabChange,
   onDropTabInBar,
-  renderEditor
+  renderEditor,
+  renderFeature
 }: {
   layout: PaneNode | null
   activePaneId: string | null
@@ -61,10 +66,13 @@ export function PaneGrid({
   /** Every open file tab, whichever pane holds it. The name hint is computed over all of them at once */
   fileTabs: FileTab[]
   dirtyFileIds: Set<string>
+  /** 지금 프로젝트의 기능 목록. 기능 탭이 제목과 상태 글리프를 여기서 찾는다 — 세션 탭이 sessions
+   *  에서, 파일 탭이 fileTabs 에서 찾는 것과 같은 자리다. 이 목록에 없는 기능의 탭은 그리지 않는다 */
+  features: ProjectFeature[]
   rollStates: Record<string, RollStateEvent>
   schedStates: Record<string, SchedStateEvent>
   busy: Record<string, boolean>
-  /** The tab id being dragged (either kind), or null. App owns it so a drag started in one pane's bar is
+  /** The tab id being dragged (any kind), or null. App owns it so a drag started in one pane's bar is
    *  visible to every other pane */
   draggingTabId: string | null
   newDisabled: boolean
@@ -73,7 +81,7 @@ export function PaneGrid({
   /** Dropped on a pane's body — an edge zone splits, the centre moves into that pane */
   onDropTabIntoPane: (paneId: string, zone: DropZone, tabId: string) => void
   onRestart: (s: SessionInfo) => void
-  /** A tab was clicked — of either kind. App activates it in the tree, which also moves the focus there */
+  /** A tab was clicked — of any kind. App activates it in the tree, which also moves the focus there */
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
   onNewInGroup: (paneId: string) => void
@@ -86,6 +94,10 @@ export function PaneGrid({
   /** focused = 이 페인이 활성이고 그 활성 탭이 이 파일일 때. 에디터가 커서를 가져갈 시점을 정한다 —
    *  TerminalView 가 active 프롭으로 같은 일을 한다 */
   renderEditor: (paneId: string, fileTabId: string, focused: boolean) => React.ReactNode
+  /** 기능 탭의 본문. renderEditor 와 같은 갈래로 App 이 만들고 격자는 자리만 잡는다.
+   *  paneId 를 받지 않는 것은 에디터와 달리 페인마다 살려 둘 인스턴스가 없기 때문이다 — 지킬 문서
+   *  상태가 없어서 활성일 때만 그리고 벗어나면 언마운트한다(아래 기능 슬롯의 주석) */
+  renderFeature: (featureId: string) => React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement>(null)
@@ -110,6 +122,8 @@ export function PaneGrid({
   // Session id → session info, file tab id → file tab. Used when a group's tab ids are turned into tabs
   const sessionOf = new Map(sessions.map((s) => [s.id, s]))
   const fileTabOf = new Map(fileTabs.map((f) => [f.id, f]))
+  // 기능 id → 기능. 기능 탭 id 는 `feature:${id}` 이므로 parseTab 이 준 id 로 바로 찾는다
+  const featureOf = new Map(features.map((f) => [f.id, f]))
   // The name hint is computed **over every open file tab at once**, not per pane — two files with the
   // same name in different panes still have to be told apart
   const labels = tabLabels(fileTabs.map((f) => f.path))
@@ -215,6 +229,32 @@ export function PaneGrid({
           </div>
         )
       })}
+      {/* 기능 상세 슬롯 — 페인당 하나, 세션·에디터 슬롯과 같은 rect 계산으로 놓인다.
+          **에디터와 달리 활성일 때만 그린다.** 에디터를 숨겨서만 두는 이유는 CodeMirror 인스턴스와
+          되돌리기 이력을 언마운트가 지우기 때문인데(lastFileOfPane), 기능 상세는 지킬 상태가 없다 —
+          고른 흐름 단계도 컴포넌트가 아니라 App 이 탭별로 들고 있어 다시 그려도 그대로 돌아온다.
+          그래서 lastFileOfPane 같은 기억을 따로 두지 않는다 */}
+      {paneLeaves.map((l) => {
+        const rect = rects.get(l.id)
+        const ref = parseTab(l.activeTabId)
+        if (!rect || ref?.kind !== 'feature') return null
+        return (
+          <div
+            key={`feature-${l.id}`}
+            className="terminal-slot"
+            style={{
+              display: 'flex',
+              left: `${rect.x}%`,
+              width: `${rect.w}%`,
+              top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
+              height: `calc(${rect.h}% - var(--pane-tabbar-h))`
+            }}
+            onMouseDown={() => onFocusPane(l.id)}
+          >
+            {renderFeature(ref.id)}
+          </div>
+        )
+      })}
       {/* The pane bodies' drop targets — one per pane, whichever kind of tab that pane is showing. They
           cannot live on the slots: a session slot is display:none unless it is the active tab, so a pane
           showing a file had no target, and putting them on the editor slot as well would give one pane two
@@ -286,6 +326,20 @@ export function PaneGrid({
                           .join(' → ')
                       })
                     : null
+              }
+            }
+            if (ref?.kind === 'feature') {
+              const feat = featureOf.get(ref.id)
+              // 다른 프로젝트로 옮겨 갔거나 목록에서 사라진 기능 — 세션·파일 탭이 없어졌을 때와
+              // 같이 그리지 않고 건너뛴다
+              if (!feat) return null
+              return {
+                tabId,
+                kind: 'feature',
+                featureId: feat.id,
+                title: feat.name,
+                glyph: GLYPH[feat.status],
+                needsAttention: ATTENTION_STATUSES.includes(feat.status)
               }
             }
             const f = ref?.kind === 'file' ? fileTabOf.get(tabId) : undefined

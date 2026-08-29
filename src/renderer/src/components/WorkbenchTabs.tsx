@@ -15,11 +15,11 @@ export interface FileTab {
   projectRoot: string
 }
 
-/** 페인 하나의 탭 줄에 올라가는 탭. 파일 탭과 세션 탭을 한 줄에 그린다.
+/** 페인 하나의 탭 줄에 올라가는 탭. 파일 탭과 세션 탭과 기능 탭을 한 줄에 그린다.
  *
  *  표식이 종류마다 다르다 — 세션 탭은 계정 색과 작업 중 스피너와 롤링 표시를, 파일 탭은 확장자 아이콘과
- *  더티 점과 이름 구분자를 가진다. 정렬은 받은 순서 그대로다: 어느 종류를 먼저 둘지는 이 컴포넌트가
- *  아니라 트리(페인의 tabIds)가 정한다. */
+ *  더티 점과 이름 구분자를, 기능 탭은 상태 글리프를 가진다. 정렬은 받은 순서 그대로다: 어느 종류를
+ *  먼저 둘지는 이 컴포넌트가 아니라 트리(페인의 tabIds)가 정한다. */
 export type WorkbenchTab =
   | {
       tabId: string
@@ -41,6 +41,15 @@ export type WorkbenchTab =
       /** 계정 롤링 체인의 툴팁. 롤링이 걸려 있지 않으면 null — 계정 목록은 PaneGrid가 갖고 있으므로
        *  문구를 거기서 만들어 넘긴다 */
       rollTooltip: string | null
+    }
+  | {
+      tabId: string
+      kind: 'feature'
+      featureId: string
+      title: string
+      /** 상태 글리프. 색은 CSS 가 정한다 — 여기서는 모양만 넘긴다 */
+      glyph: string
+      needsAttention: boolean
     }
 
 /** 페인 하나의 탭 줄.
@@ -163,6 +172,14 @@ export function WorkbenchTabs({
         >
           {tab.kind === 'file' ? (
             <FileIcon {...resolveFileIcon(tab.title)} />
+          ) : tab.kind === 'feature' ? (
+            // 사이드바 줄의 .hiw-g 와 같은 글리프다 — 같은 기능이 두 자리에서 다른 표를 달면 안 된다
+            <span
+              className={tab.needsAttention ? 'tab-glyph warn' : 'tab-glyph'}
+              aria-hidden="true"
+            >
+              {tab.glyph}
+            </span>
           ) : tab.busy && !tab.exited ? (
             // 작업 중: 계정 색의 회전하는 링. .tab-dot.busy는 background가 투명이고 테두리로 그려지므로
             // 색을 borderColor로 줘야 한다
