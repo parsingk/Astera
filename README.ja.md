@@ -122,9 +122,8 @@ Astera は、あなたが席にいない間もエージェントのセッショ�
 
 <div align="center">
 <img src="assets/rolling.gif" width="820" alt="図: 実行中のセッションが週の上限に達し、Astera がトランスクリプトからリセット時刻を読み取って次のアカウントに切り替え、同じ会話がそのまま続く" />
-<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-demo-rolling.mp4" width="820" controls muted>
-<a href="assets/astera-demo-rolling.mp4">画面録画: セッションが上限に達すると Astera が次のアカウントに切り替えて同じ会話を続け、行き先がなければ再開時刻を表示する</a>
-</video>
+<img src="assets/rolling-demo.gif" width="820" alt="画面録画: セッションが上限に達すると Astera が次のアカウントに切り替えて同じ会話を復元し、行き先がなければ再開時刻を表示する" />
+<p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-demo-rolling.mp4">▶ 全編 (28秒)</a></p>
 </div>
 
 **スケジュール実行とリモート操作**
@@ -134,9 +133,8 @@ Astera は、あなたが席にいない間もエージェントのセッショ�
 
 <div align="center">
 <img src="assets/schedule.gif" width="820" alt="図: 03:00 にスケジュールされたセッションが自ら起動し、残しておいたコマンドを実行し、終わると Slack が結果を報告する" />
-<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-demo-schedule.mp4" width="820" controls muted>
-<a href="assets/astera-demo-schedule.mp4">画面録画: スケジュールを設定したセッションが、その時刻になると自ら作業を始める</a>
-</video>
+<img src="assets/schedule-demo.gif" width="820" alt="画面録画: スケジュールを表示しているセッションに、その時刻になるとコマンドが自ら入力される" />
+<p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-demo-schedule.mp4">▶ 全編 (22秒)</a></p>
 </div>
 
 **外観**
@@ -190,9 +188,8 @@ Run は Jobs サイドバーにも表示されます。
 
 <div align="center">
 <img src="assets/jobs.gif" width="820" alt="図: コーディネーターがジョブの依存関係グラフをたどり、準備できた 2 つを別々のベンダーで開始し、テストで完了を確認し、依存 Task が終わってから次へ進み、判断が必要なときは人を待つ" />
-<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-killer-demo.mp4" width="820" controls muted>
-<a href="assets/astera-killer-demo.mp4">画面録画: ジョブが依存グラフに沿って進む — 準備できたタスクが動き出し、上限に達したワーカーが自ら再開し、最後のタスクは両方の依存を待つ</a>
-</video>
+<img src="assets/jobs-demo.gif" width="820" alt="画面録画: ジョブが依存グラフに沿って進む — 上限に達したワーカーが自ら再開し、両方の依存が報告を終えると、最後のタスクが検証とベンダー横断レビューを通過する" />
+<p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-killer-demo.mp4">▶ 全編 (30秒)</a></p>
 </div>
 
 コーディネーター CLI のリファレンスを見るには:

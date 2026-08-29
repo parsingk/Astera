@@ -125,9 +125,8 @@ También necesitarás:
 
 <div align="center">
 <img src="assets/rolling.gif" width="820" alt="Diagrama: una sesión en marcha alcanza su límite semanal, Astera lee la hora de reinicio en la transcripción, cambia a la siguiente cuenta y la misma conversación continúa" />
-<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-demo-rolling.mp4" width="820" controls muted>
-<a href="assets/astera-demo-rolling.mp4">Grabación de pantalla: una sesión alcanza su límite, Astera cambia a la siguiente cuenta y la misma conversación continúa; cuando no queda ninguna, muestra a qué hora se reanudará</a>
-</video>
+<img src="assets/rolling-demo.gif" width="820" alt="Grabación de pantalla: una sesión alcanza su límite, Astera cambia a la siguiente cuenta con la misma conversación restaurada y, cuando no queda ninguna, indica a qué hora se reanudará" />
+<p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-demo-rolling.mp4">▶ Grabación completa (28s)</a></p>
 </div>
 
 **Programación y control remoto**
@@ -137,9 +136,8 @@ También necesitarás:
 
 <div align="center">
 <img src="assets/schedule.gif" width="820" alt="Diagrama: a las 03:00 una sesión programada arranca sola, ejecuta el comando que le dejaste, termina, y Slack informa del resultado" />
-<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-demo-schedule.mp4" width="820" controls muted>
-<a href="assets/astera-demo-schedule.mp4">Grabación de pantalla: una sesión con horario programado, y el trabajo arrancando solo cuando llega la hora</a>
-</video>
+<img src="assets/schedule-demo.gif" width="820" alt="Grabación de pantalla: una sesión mostrando su horario, y el comando entrando solo cuando llega la hora" />
+<p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-demo-schedule.mp4">▶ Grabación completa (22s)</a></p>
 </div>
 
 **Apariencia**
@@ -196,9 +194,8 @@ una sesión coordinadora nueva. Una entrega sencilla y puntual no necesita un Ru
 
 <div align="center">
 <img src="assets/jobs.gif" width="820" alt="Diagrama: una coordinadora sigue el grafo de dependencias, inicia dos tareas listas en proveedores distintos, comprueba una con pruebas, continúa cuando terminan sus dependencias y espera a una persona cuando hace falta una decisión" />
-<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-killer-demo.mp4" width="820" controls muted>
-<a href="assets/astera-killer-demo.mp4">Grabación de pantalla: un trabajo recorre su grafo de dependencias — las tareas listas arrancan, un trabajador alcanza su límite y se reanuda solo, y la última tarea espera a sus dos dependencias</a>
-</video>
+<img src="assets/jobs-demo.gif" width="820" alt="Grabación de pantalla: un trabajo avanzando por su grafo de dependencias — un trabajador alcanza su límite y se reanuda solo, ambas dependencias informan, y la última tarea pasa una validación y una revisión cruzada entre proveedores" />
+<p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-killer-demo.mp4">▶ Grabación completa (30s)</a></p>
 </div>
 
 Para leer la referencia de la CLI de coordinación:
