@@ -929,5 +929,6 @@ export const ja: Catalog = {
   'hiw.empty.analyze': 'プロジェクトを分析',
   'hiw.empty.readOnly': '読み取りのみです — コードは変更しません。',
   'hiw.empty.notYet': '分析機能はまだ準備中です。',
-  'hiw.pane.noExplanation': 'この機能の説明はまだありません。'
+  'hiw.pane.noExplanation': 'この機能の説明はまだありません。',
+  'hiw.pane.notInProject': 'このタブの機能は、現在開いているプロジェクトには見つかりません。'
 }

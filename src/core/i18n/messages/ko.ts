@@ -1000,5 +1000,6 @@ export const ko = {
   'hiw.empty.analyze': '프로젝트 분석',
   'hiw.empty.readOnly': '읽기만 합니다 — 코드를 고치지 않습니다.',
   'hiw.empty.notYet': '분석 기능은 아직 준비 중입니다.',
-  'hiw.pane.noExplanation': '이 기능의 설명이 아직 없습니다.'
+  'hiw.pane.noExplanation': '이 기능의 설명이 아직 없습니다.',
+  'hiw.pane.notInProject': '이 탭의 기능을 지금 열려 있는 프로젝트에서 찾을 수 없습니다.'
 } as const

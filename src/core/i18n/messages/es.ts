@@ -945,5 +945,6 @@ export const es: Catalog = {
   'hiw.empty.analyze': 'Analizar proyecto',
   'hiw.empty.readOnly': 'Solo lectura — tu código no se modifica.',
   'hiw.empty.notYet': 'El análisis todavía no está disponible.',
-  'hiw.pane.noExplanation': 'Esta función aún no tiene explicación.'
+  'hiw.pane.noExplanation': 'Esta función aún no tiene explicación.',
+  'hiw.pane.notInProject': 'La funcionalidad de esta pestaña no está en el proyecto abierto actualmente.'
 }

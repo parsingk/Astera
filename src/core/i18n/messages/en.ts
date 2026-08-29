@@ -848,5 +848,6 @@ export const en: Record<keyof typeof ko, string> = {
   'hiw.empty.analyze': 'Analyze project',
   'hiw.empty.readOnly': 'Read-only — your code is not modified.',
   'hiw.empty.notYet': 'Analysis is not available yet.',
-  'hiw.pane.noExplanation': 'This feature has no explanation yet.'
+  'hiw.pane.noExplanation': 'This feature has no explanation yet.',
+  'hiw.pane.notInProject': 'This tab’s feature is not in the project that is open right now.'
 }

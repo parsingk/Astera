@@ -99,6 +99,11 @@ import { PanelLeft, Settings, X } from 'lucide-react'
 
 sessionBus.init()
 
+/** 기능 탭의 좁힘 기억(scopedNode)이 쓰는 키. 프로젝트와 기능을 함께 담는다 — 탭 id 에는 프로젝트가
+ *  없어 두 프로젝트가 같은 기능 id 를 가지면 서로의 좁힘이 새어 든다. 읽는 쪽·쓰는 쪽·지우는 쪽이
+ *  같은 문자열을 만들도록 한 자리에 둔다. */
+const scopeKey = (rec: FeatureTab): string => `${rec.projectRoot}::${rec.featureId}`
+
 // The shortcut list for the settings modal. When a binding changes (the TerminalView key handler or
 // the global listener in App), update this list along with it.
 // group and desc are kept as MessageKeys and translated with t() at render time (the shortcuts tab of
@@ -420,7 +425,17 @@ export default function App(): React.JSX.Element {
   // here — that effect depends on currentProject, declared much later, and a dependency array is
   // evaluated during render, so it would throw a TDZ ReferenceError this early). null covers both "no
   // project" and "never analyzed" — UnderstandingView draws the same empty state for either.
-  const [understanding, setUnderstanding] = useState<ProjectUnderstanding | null>(null)
+  //
+  // **루트를 함께 든다.** 캐시가 프로젝트 하나뿐이라, 맨 데이터만 들면 자기가 어느 프로젝트의 것인지
+  // 말하지 못한다. 그러면 "이게 맞는 프로젝트인가?"를 물어야 하는 곳마다 `rec.projectRoot !==
+  // currentProject` 라는 대리 질문을 하게 되는데 — 그것은 탭 기록을 현재 프로젝트와 비교할 뿐
+  // 캐시 자신은 확인하지 않는다. 프로젝트를 바꾼 뒤 IPC 왕복이 끝나기 전까지 둘은 어긋나 있고,
+  // 그 창에서 두 프로젝트가 같은 기능 id 를 가지면 A 의 상태와 A 의 설명이 B 의 탭에 붙는다.
+  // 루트가 여기 있으면 아래의 소비자들이 대리 없이 곧장 물을 수 있다.
+  const [understanding, setUnderstanding] = useState<{
+    root: string
+    data: ProjectUnderstanding | null
+  } | null>(null)
   const [isMax, setIsMax] = useState(false)
   const [usage, setUsage] = useState<SessionUsage | null>(null)
   const [rollStates, setRollStates] = useState<Record<string, RollStateEvent>>({})
@@ -431,9 +446,11 @@ export default function App(): React.JSX.Element {
   // 프로젝트도 이름도 담지 못하므로, 트리에 들어간 문자열만으로는 그 탭을 그릴 수도, 그 탭이 어느
   // 프로젝트의 것인지 답할 수도 없다(WorkbenchTabs 의 FeatureTab 머리주석)
   const [featureTabs, setFeatureTabs] = useState<FeatureTab[]>([])
-  // 기능 탭 id → 그 탭에서 고른 흐름 단계. 탭 id(`feature:<featureId>`)로 키를 삼는다 — featureId 로
-  // 삼으면 두 프로젝트가 같은 기능 id 를 가질 때 서로의 좁힘이 새는데, 탭 id 는 이미 FeatureTab
-  // 레코드 자체가 그 경우를 "방금 누른 쪽이 이긴다"로 다루는 것과 같은 자리라 새 문제를 만들지 않는다
+  // 기능 탭에서 고른 흐름 단계. 키는 scopeKey — 프로젝트와 기능을 함께 담는다. 탭 id
+  // (`feature:<featureId>`)에는 프로젝트가 없어서 그것으로 키를 삼으면 두 프로젝트가 같은 기능 id 를
+  // 가질 때 서로의 좁힘이 새어 든다. 탭 기록에는 두 값이 이미 다 있으므로 공짜다.
+  // 탭을 닫으면 그 항목도 지운다(closeWorkbenchTab) — 남겨 두면 세션 내내 자라고, 다시 연 탭에
+  // 사용자가 설정한 적 없는 좁힘이 되살아난다
   const [scopedNode, setScopedNode] = useState<Record<string, string | null>>({})
   interface FileBuffer {
     /** 항상 LF다. CodeMirror가 문서를 LF로 정규화하므로 버퍼도 같은 모양이어야 에디터 상태와 비교되고
@@ -1215,6 +1232,14 @@ export default function App(): React.JSX.Element {
       return
     }
     if (ref.kind === 'feature') {
+      // 좁힘 기억도 함께 지운다 — 파일 탭이 닫힐 때 버퍼를 지우는 것과 같은 자리다. 남겨 두면
+      // 세션 내내 자라고, 닫았던 탭을 다시 열면 사용자가 설정한 적 없는 좁힘이 되살아난다
+      const rec = featureTabs.find((x) => x.id === tabId)
+      if (rec)
+        setScopedNode((prev) => {
+          const { [scopeKey(rec)]: _drop, ...rest } = prev
+          return rest
+        })
       setFeatureTabs((prev) => prev.filter((x) => x.id !== tabId))
       dropTabFromTree(tabId)
       return
@@ -1944,7 +1969,12 @@ export default function App(): React.JSX.Element {
    *  **선언이 여기 있는 이유**: 본문이 currentProject 를 읽는다. 이 파일은 그 const 보다 위에서
    *  그 값을 참조해 TDZ 로 죽은 전례가 있어(위 두 효과의 주석), 읽는 것은 전부 그 아래에 둔다. */
   const openFeatureTab = (featureId: string): void => {
-    const feature = understanding?.features.find((f) => f.id === featureId)
+    // 지금 프로젝트의 이해에서만 찾는다. 프로젝트를 막 바꿔 캐시가 아직 이전 것이면 여기서 A 의
+    // 기능을 집어 `projectRoot` 만 B 인 탭이 생기고 — 그 탭은 어느 이해로도 그려지지 않는다
+    const feature =
+      understanding?.root === currentProject
+        ? understanding.data?.features.find((f) => f.id === featureId)
+        : undefined
     // 목록에서 누른 것이므로 정상 경로에서는 둘 다 있다. 없으면 이름도 프로젝트도 없는 탭이 되므로
     // 아무것도 하지 않는다 — openFile 이 루트가 없을 때 그러는 것과 같다
     if (!currentProject || !feature) return
@@ -1968,7 +1998,9 @@ export default function App(): React.JSX.Element {
     const root = currentProjectRef.current
     if (!root) return
     const sep = root.includes('\\') ? '\\' : '/'
-    const parts = relPath.split(/[/\\]/).filter((p) => p !== '' && p !== '.')
+    // `..` 도 함께 거른다. 지금은 main 의 assertAllowedPath 가 어휘적으로 해소해 거부하므로 프로젝트
+    // 밖으로 나가지 못하지만, 이 경로 문자열은 곧 모델이 만든다 — 거른 뒤에 붙이는 편이 싸다
+    const parts = relPath.split(/[/\\]/).filter((p) => p !== '' && p !== '.' && p !== '..')
     if (parts.length === 0) return
     openFile(`${root}${sep}${parts.join(sep)}`)
   }
@@ -1977,13 +2009,15 @@ export default function App(): React.JSX.Element {
    *  탭 기록에 박아 두지 않는다(박아 두면 다시 분석해도 글리프가 옛것으로 남는다).
    *
    *  **지금 읽어 둔 이해가 그 탭의 프로젝트 것일 때만 넣는다.** 기능 id 는 프로젝트마다 겹칠 수
-   *  있으므로 그 확인 없이 넣으면 B 의 탭에 A 의 상태가 붙는다. 빠진 탭은 글리프 없이 이름만
-   *  그려진다(PaneGrid 의 featureStatuses 주석) — 사라지는 것보다 낫다.
+   *  있으므로 그 확인 없이 넣으면 B 의 탭에 A 의 상태가 붙는다. 캐시가 자기 루트를 들고 있으므로
+   *  그 질문을 곧장 한다 — currentProject 와 비교하는 대리는 프로젝트를 바꾼 뒤 IPC 왕복이 끝나기
+   *  전까지 캐시와 어긋난다. 빠진 탭은 글리프 없이 이름만 그려진다(PaneGrid 의 featureStatuses
+   *  주석) — 사라지는 것보다 낫다.
    *  dirtyIds 와 같은 갈래다: 판정은 여기서 하고 격자는 조회만 한다. */
   const featureStatuses: Record<string, FeatureStatus> = {}
   for (const rec of featureTabs) {
-    if (rec.projectRoot !== currentProject) continue
-    const f = understanding?.features.find((x) => x.id === rec.featureId)
+    if (!understanding || rec.projectRoot !== understanding.root) continue
+    const f = understanding.data?.features.find((x) => x.id === rec.featureId)
     if (f) featureStatuses[rec.id] = f.status
   }
 
@@ -1991,22 +2025,34 @@ export default function App(): React.JSX.Element {
    *
    *  **읽어 둔 이해가 이 탭의 프로젝트 것일 때만 그린다.** 기능 id 는 프로젝트마다 겹칠 수 있어서,
    *  그 확인 없이 그리면 방금 활성이 된 A 의 탭에 아직 남아 있는 B 의 설명이 한 프레임 비친다.
-   *  어긋나는 동안은 null 이고, 활성 탭이 정한 루트로 아래 효과가 A 를 읽어 오면 채워진다 —
-   *  파일 탭이 files.read 를 기다리는 동안 비어 있는 것과 같은 짧은 공백이다.
+   *  캐시가 자기 루트를 들고 있으므로 그 질문을 곧장 한다(understanding 선언의 주석).
+   *
+   *  **어긋나면 비우지 않고 이유를 적는다.** 분할 화면에서 다른 프로젝트의 기능 탭이 비활성 페인의
+   *  활성 탭이면 슬롯은 그대로 자리를 잡는데 여기서 null 을 주면 아무 안내 없는 빈 칸이 페인 본문을
+   *  덮는다 — 사용자는 그것을 고장으로 읽는다. 캐시는 프로젝트당 하나뿐이라 이 상태는 그 페인이
+   *  살아 있는 내내 이어질 수 있다(프로젝트를 바꾸는 동안의 한 프레임과 다르다).
    *  설명이 아직 없으면 explanation 이 null 이고 FeatureDetail 이 그 안내를 그린다. */
   const renderFeature = (featureTabId: string): React.ReactNode => {
     const rec = featureTabs.find((x) => x.id === featureTabId)
-    const u = understanding
-    if (!rec || !u || rec.projectRoot !== currentProject) return null
-    const f = u.features.find((x) => x.id === rec.featureId)
-    if (!f) return null
+    if (!rec) return null
+    const u = understanding && rec.projectRoot === understanding.root ? understanding.data : null
+    const f = u ? u.features.find((x) => x.id === rec.featureId) : undefined
+    // .workbench-body 로 한 번 감싼다 — FeatureDetailHost 가 자기 본문에 두르는 그 클래스다.
+    // 페인 슬롯은 flex 상자라, 이것 없이 두면 안내가 페인을 채우지 못하고 글자 폭만큼만 선다
+    if (!u || !f)
+      return (
+        <div className="workbench-body">
+          <div className="hiw-pane hiw-pane-empty">{t('hiw.pane.notInProject')}</div>
+        </div>
+      )
+    // 좁힘 기억의 키 — 프로젝트와 기능을 함께 담는다(scopeKey 의 주석)
+    const key = scopeKey(rec)
     return (
       <FeatureDetailHost
         feature={f}
         explanation={u.explanations[rec.featureId] ?? null}
-        // 탭마다 따로다 — scopedNode 는 featureTabId 로 키를 삼는다(위 선언의 주석)
-        scopedNodeId={scopedNode[featureTabId] ?? null}
-        onPickStep={(id) => setScopedNode((m) => ({ ...m, [featureTabId]: id }))}
+        scopedNodeId={scopedNode[key] ?? null}
+        onPickStep={(id) => setScopedNode((m) => ({ ...m, [key]: id }))}
         onOpenPath={openFeaturePath}
       />
     )
@@ -2082,12 +2128,24 @@ export default function App(): React.JSX.Element {
   // ReferenceError (this file has hit that exact mistake before; see the newRunOpen and openRun
   // effects above). A project that has never been analyzed resolves to null — UnderstandingView's
   // empty state draws that, the same as no project at all.
+  //
+  // **거부 갈래도 run.list 와 같은 모양이다.** understanding.get 은 assertAllowedPath 를 부르고 그것은
+  // 던지므로(ipc.ts), 허용 목록에서 밀려난 루트(사라진 워크트리 등)는 처리되지 않은 거부로 콘솔에
+  // 튀어나온다. 그리고 실패했을 때 이전 프로젝트의 이해가 남는 것이 더 나쁘다 — 그 목록에서 줄을
+  // 누르면 새 프로젝트 이름 아래에서 이전 프로젝트의 기능이 열린다. 두 갈래 모두 루트를 함께 실어
+  // 그 값이 어느 프로젝트의 것인지를 캐시가 스스로 말하게 한다.
   useEffect(() => {
     if (!currentProject) return setUnderstanding(null)
+    const root = currentProject
     let alive = true
-    void window.api.understanding.get(currentProject).then((u) => {
-      if (alive) setUnderstanding(u)
-    })
+    void window.api.understanding.get(root).then(
+      (u) => {
+        if (alive) setUnderstanding({ root, data: u })
+      },
+      () => {
+        if (alive) setUnderstanding({ root, data: null })
+      }
+    )
     return () => {
       alive = false
     }
@@ -2787,7 +2845,11 @@ export default function App(): React.JSX.Element {
               />
             ) : sidebarPane === 'understanding' ? (
               <UnderstandingView
-                understanding={understanding}
+                // 지금 프로젝트의 것일 때만 넘긴다. 프로젝트를 바꾼 뒤 IPC 왕복이 끝나기 전까지
+                // 캐시는 이전 프로젝트의 것이고, 그대로 넘기면 새 프로젝트 이름 아래에 이전
+                // 프로젝트의 기능 목록이 선다 — 그 줄을 누르면 그리지 못하는 탭이 만들어진다.
+                // 그동안은 분석 전과 같은 빈 상태다(run.list 를 기다리는 실행 구성과 같은 공백)
+                understanding={understanding?.root === currentProject ? understanding.data : null}
                 // 켜 둘 줄은 탭 트리가 정한다 — 활성 페인의 활성 탭이 기능이면 그 기능이다
                 selectedFeatureId={activeFeatureId}
                 onOpenFeature={openFeatureTab}
