@@ -591,6 +591,22 @@ app.whenReady().then(async () => {
       } catch {
         /* renderer send failures are ignored */
       }
+      // Work Unit 수집기도 롤을 탭한다 — claude 쪽과 같은 자리, 같은 이유다. **여기서는 경로를
+      // 건네줄 수 있다**: 재개된 codex 는 새 파일을 만들지 않고 바로 이 dest 에 이어 쓰므로(아래
+      // 주석) 그 순간의 파일 끝이 곧 되쓰기가 끝난 자리다. 빈 대화로 굴릴 때는 `undefined` 이고,
+      // 그때는 claude 쪽처럼 수집기가 다음 회차에 끝을 잡는다.
+      // **codex 세션은 오늘 Unit 을 만들지 않는다**(collector.ts 머리주석의 이유). 그래도 알리는
+      // 이유는 한쪽만 잡힌 비대칭이 codex 지원이 오는 날 조용한 버그가 되기 때문이다.
+      // 자기 try 안에 두는 것도 claude 쪽과 같다 — 아래 블록의 rekey 와 rollout 재등록이 이
+      // 호출의 예외에 함께 쓸려 가지 않게 한다.
+      try {
+        if (channel === 'session:rolled') {
+          const p = payload as { info: SessionInfo; dest?: string }
+          workUnitForkRef?.(p.info.id, p.dest)
+        }
+      } catch {
+        /* a Work Unit tap failure must not block codex rolling */
+      }
       try {
         if (channel === 'session:rolled') {
           // dest: the rollout path copied into the target account just before an ordinary roll
@@ -603,13 +619,6 @@ app.whenReady().then(async () => {
           // brand-new session already takes (codexRolling.ts's `roll()` documents the same fallback at
           // its own `send('session:rolled', ...)` call).
           const p = payload as { oldSessionId: string; info: SessionInfo; dest?: string }
-          // Work Unit 수집기에도 같은 것을 알린다. **여기서는 경로를 건네줄 수 있다** — 재개된
-          // codex 는 새 파일을 만들지 않고 바로 이 dest 에 이어 쓰기 때문이고(바로 위 주석), 그래서
-          // 그 순간의 파일 끝이 곧 되쓰기가 끝난 자리다. 빈 대화로 굴릴 때는 `undefined` 이고, 그때는
-          // claude 쪽처럼 수집기가 다음 회차에 끝을 잡는다.
-          // **codex 세션은 오늘 Unit 을 만들지 않는다**(collector.ts 머리주석의 이유). 그래도 알리는
-          // 이유는 한쪽만 잡힌 비대칭이 codex 지원이 오는 날 조용한 버그가 되기 때문이다.
-          workUnitForkRef?.(p.info.id, p.dest)
           scheduler.rekey(p.oldSessionId, p.info.id) // the schedule follows the roll chain
           // When rolling switches accounts the session respawns under a new sessionId and a new
           // rollout file appears — without re-registering, both turn-completion notifications and the

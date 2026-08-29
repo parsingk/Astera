@@ -401,4 +401,113 @@ describe('WorkUnitCollector — 스펙 §16.1 커서', () => {
     expect(state.units[1].title).toBe('굴린 뒤 첫 요청')
     expect(state.messages.filter((m) => m.sessionId === 's2')).toHaveLength(1)
   })
+
+  // 이어받은 세션의 경로를 그 순간 stat 하지 못하는 일은 흔하다 — statusline 이 경로를 먼저
+  // 알려 주고 파일은 조금 뒤에 생긴다. 그때 크기를 0 으로 읽어 커서로 남기면, 다음 회차에는
+  // **경로가 맞는 커서**가 있으므로 이어받기 표시를 다시 보지 않고 그 0 에서 읽는다 — 되쓰인
+  // 대화 전체다. 크기 0 과 못 읽음은 다른 답이어야 한다.
+  it('이어받은 세션의 파일을 아직 stat 하지 못하면 그 회차를 건너뛴다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, human('굴리기 전 요청'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.units).toHaveLength(1)
+
+    collector.onSessionForked('s2')
+
+    // statusline 이 경로를 알려 줬지만 그 파일은 아직 없다 — stat 이 실패한다
+    const rolled = path.join(dir, 'transcript-rolled-late.jsonl')
+    fake.sessions = [session({ sessionId: 's2', transcriptPath: rolled })]
+    collector.onTranscriptChanged()
+    await collector.flush()
+    // 정할 수 없었으므로 커서를 남기지 않는다. 다음 회차가 다시 묻는다
+    expect(store.get(projectPath)!.cursors.some((c) => c.sessionId === 's2')).toBe(false)
+
+    // 그 뒤 --resume 이 옛 대화를 그 파일에 통째로 적는다
+    await fs.copyFile(transcript, rolled)
+    collector.onTranscriptChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.units).toHaveLength(1) // 되쓰인 줄은 Unit 이 되지 않았다
+
+    await fs.appendFile(rolled, human('굴린 뒤 첫 요청'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2)
+    expect(state.units[1].title).toBe('굴린 뒤 첫 요청')
+  })
+
+  // 0 이 옳은 경우는 하나뿐이다 — 세션 id 도 파일도 지금 처음 본다. 켠 뒤 시작한 세션이라도
+  // 보고 있던 파일이 바뀌면 그 파일의 앞부분은 우리가 본 적 없는 대화이고, 그것을 읽는 것은
+  // "켜기 전의 대화는 읽지 않는다"를 어기는 것이다. rolling.ts 의 applyMeta 가 경로가 바뀌면
+  // since=now 로 tail 을 새로 세우는 것과 같은 판단이다.
+  it('켠 뒤 시작한 세션이라도 파일이 바뀌면 그 파일은 끝부터 읽는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [] // 켤 때는 아무 세션도 없다
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    // 켠 뒤에 시작한 세션 — 그 파일은 처음부터 읽는 것이 맞다
+    await fs.appendFile(transcript, human('켠 뒤 시작한 세션의 요청'), 'utf8')
+    fake.sessions = [session()]
+    collector.onTranscriptChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.messages).toHaveLength(1)
+
+    // 그 세션이 다른 파일을 보게 됐다. 그 파일에는 우리가 본 적 없는 대화가 들어 있다
+    const other = path.join(dir, 'transcript-other.jsonl')
+    await fs.writeFile(other, human('그 파일에 있던 요청 하나') + human('그 파일에 있던 요청 둘'), 'utf8')
+    fake.sessions = [session({ transcriptPath: other })]
+    collector.onTranscriptChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.messages).toHaveLength(1) // 그 둘은 읽지 않았다
+
+    await fs.appendFile(other, human('바뀐 파일에 새로 온 요청'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.messages.map((m) => m.text)).toEqual([
+      '켠 뒤 시작한 세션의 요청',
+      '바뀐 파일에 새로 온 요청'
+    ])
+    // 같은 세션의 열린 Unit 에 붙는다 (decideBoundary 의 Case C)
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].messageCount).toBe(2)
+  })
+
+  // tail 이 돌려주는 restarted 를 수집기가 여태 무시했다. 파일이 커서보다 작아지면 tail 은
+  // 처음부터 다시 읽는데, 켤 때 이미 돌던 세션에게 그 "처음"은 우리 것이 아니다.
+  it('파일이 커서보다 작아져도 켤 때 돌던 세션은 처음부터 읽지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    await fs.appendFile(
+      transcript,
+      human('켜기 전 요청 하나') + human('켜기 전 요청 둘') + human('켜기 전 요청 셋'),
+      'utf8'
+    )
+    const { collector, store } = await makeCollector(fake)
+    await collector.start() // 커서 = 지금 파일 끝
+
+    // 같은 경로가 더 짧은 파일이 됐다 — 잘렸거나 다른 파일이 같은 이름으로 놓였다
+    await fs.writeFile(transcript, human('짧아진 파일에 있던 요청'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    expect(store.get(projectPath)!.units).toHaveLength(0) // 되감아 읽지 않았다
+    expect(store.get(projectPath)!.cursors[0].offset).toBe((await fs.stat(transcript)).size)
+
+    await fs.appendFile(transcript, human('그 뒤에 온 요청'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].title).toBe('그 뒤에 온 요청')
+  })
 })

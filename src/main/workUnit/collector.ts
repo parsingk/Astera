@@ -354,6 +354,9 @@ export class WorkUnitCollector {
       for (const s of group) {
         if (s.transcriptPath === null) continue
         const size = await fileSize(s.transcriptPath)
+        // 못 읽었다. **0 으로 적지 않는다** — 경로가 null 이었을 때와 같은 자리로 미룬다:
+        // 집합에 남아 있으므로 다음 회차가 다시 묻고, 그때 파일 끝을 잡는다
+        if (size === null) continue
         state.cursors.push({
           sessionId: s.sessionId,
           filePath: s.transcriptPath,
@@ -370,14 +373,30 @@ export class WorkUnitCollector {
   private async tail(state: WorkUnitState, s: CollectorSession): Promise<boolean> {
     if (s.transcriptPath === null) return false
     const cursor = state.cursors.find((c) => c.sessionId === s.sessionId)
-    // 파일이 달라졌으면(세션이 fork/resume 되었다) 옛 오프셋은 전혀 다른 내용의 한가운데를 가리킨다.
-    // 그때 — 그리고 커서가 아예 없을 때 — 어디서부터 읽을지는 anchorFor 가 답한다. **버리면 0 이 되고,
-    // 0 이 옳은 경우는 하나뿐이다**(설계 문서 §16 의 "오프셋을 버린다"는 그 하나만 보고 쓴 문장이다).
-    const usable =
-      cursor && cursor.filePath === s.transcriptPath
-        ? { offset: cursor.offset, sizeAtRead: cursor.sizeAtRead }
-        : await this.anchorFor(s.sessionId, s.transcriptPath)
+    // 파일이 달라졌으면(세션을 이어받았거나 그 세션이 다른 파일을 보게 됐다) 옛 오프셋은
+    // 전혀 다른 내용의 한가운데를 가리킨다. 그때 — 그리고 커서가 아예 없을 때 — 어디서부터
+    // 읽을지는 anchorFor 가 답한다. **버리면 0 이 되고, 0 이 증명되는 경우는 하나뿐이다** —
+    // 세션 id 도 파일도 지금 처음 본다(설계 문서 §16 의 "오프셋을 버린다"는 그 하나만 보고 쓴 문장이다).
+    let usable: { offset: number; sizeAtRead: number } | null = null
+    if (cursor && cursor.filePath === s.transcriptPath) {
+      usable = { offset: cursor.offset, sizeAtRead: cursor.sizeAtRead }
+    } else {
+      const anchor = await this.anchorFor(s.sessionId, s.transcriptPath, cursor !== undefined)
+      // 지금은 정할 수 없다. **아무것도 쓰지 않고 나간다** — 무엇을 적든 다음 회차에는
+      // 경로가 맞는 커서가 있어 이 판정을 다시 거치지 않게 된다
+      if (anchor === 'skip') return false
+      usable = anchor
+    }
     const r = await readNewLines(s.transcriptPath, usable)
+
+    // **되감았다.** 파일이 커서보다 작아져 tail 이 처음부터 다시 읽었다(잘렸거나 같은
+    // 이름으로 다른 파일이 놓였다). 켜질 때 이미 돌던 세션과 이어받은 세션에게 그 "처음"은
+    // 우리 것이 아니다 — 읽은 줄을 버리고 지금 끝을 다시 잡는다. `readNewLines` 가 `restarted` 를
+    // 돌려주는 이유가 이 한 자리다.
+    if (r.restarted && this.startAtEnd.has(s.sessionId)) {
+      this.moveCursor(state, s.sessionId, s.transcriptPath, r.offset, r.sizeAtRead)
+      return true
+    }
 
     let dirty = false
     if (cursor) {
@@ -412,17 +431,28 @@ export class WorkUnitCollector {
     return dirty
   }
 
-  /** 쓸 커서가 없을 때 어디서부터 읽는가. **`null` 은 "파일 처음부터"라는 뜻**이고(readNewLines),
-   *  그것이 옳은 세션은 켠 뒤에 새로 시작한 세션뿐이다.
+  /** 쓸 커서가 없을 때 어디서부터 읽는가. 답은 셋이다 — 잡은 자리 · `null`(파일 처음부터) ·
+   *  `'skip'`(지금은 정할 수 없다).
+   *
+   *  **0 이 증명되는 경우는 하나뿐이다: 세션 id 도 파일도 지금 처음 본다.** 이미 커서를 가진
+   *  세션이 다른 파일을 보게 됐다면 그 파일의 앞부분은 우리가 본 적 없는 대화이지 "그 세션의
+   *  시작"이 아니다. 이 저장소는 같은 물음에 이미 같은 답을 냈다 — rolling.ts 의 `applyMeta` 는
+   *  경로가 바뀌면 `since = now` 로 tail 을 새로 세우고, 그 이유를 "그 앞의 것들은 이 체인이 보기
+   *  전에 이미 거기 있었다"라고 적어 두었다.
    *
    *  이어받기 표시(`forkAnchors`)를 먼저 보는 이유: 그 값은 되쓰기가 시작되기 전에 잡은 자리라,
    *  이어받은 직후 사람이 한 말까지 읽는다. 지금 파일 끝을 잡으면 그 한 줄을 놓친다. 다만 그
    *  표시는 알림이 준 경로에 대해서만 쓸 수 있다 — 이어받은 세션이 결국 다른 파일을 쓰면(`--resume`
-   *  이 새 파일에 되쓰는 경우) 그 파일에서 잡을 수 있는 정확한 자리는 지금의 끝뿐이다. */
+   *  이 새 파일에 되쓰는 경우) 그 파일에서 잡을 수 있는 정확한 자리는 지금의 끝뿐이다.
+   *
+   *  **크기 0 과 "못 읽음"은 다른 답이다.** stat 이 실패했는데 0 으로 적으면 그것이 진짜 커서로
+   *  남고, 다음 회차에는 경로가 맞는 커서가 있어 이 함수를 다시 거치지 않은 채 0 에서 읽는다 —
+   *  되쓰인 대화 전체다. 그래서 실패는 `'skip'` 이고, 그 회차는 아무것도 쓰지 않고 지나간다. */
   private async anchorFor(
     sessionId: string,
-    filePath: string
-  ): Promise<{ offset: number; sizeAtRead: number } | null> {
+    filePath: string,
+    hasCursor: boolean
+  ): Promise<{ offset: number; sizeAtRead: number } | null | 'skip'> {
     const anchor = this.forkAnchors.get(sessionId)
     if (anchor && anchor.filePath === filePath) {
       // 한 번 쓰면 상태의 커서가 그 자리를 이어받는다 — 남겨 두면 파일이 한 바퀴 돌았을 때 이미
@@ -430,9 +460,28 @@ export class WorkUnitCollector {
       this.forkAnchors.delete(sessionId)
       return { offset: anchor.offset, sizeAtRead: anchor.offset }
     }
-    if (!this.startAtEnd.has(sessionId)) return null
+    if (!hasCursor && !this.startAtEnd.has(sessionId)) return null
     const size = await fileSize(filePath)
+    if (size === null) return 'skip'
     return { offset: size, sizeAtRead: size }
+  }
+
+  /** 한 세션의 커서를 그 자리로 옮긴다 — 있으면 고치고 없으면 만든다 */
+  private moveCursor(
+    state: WorkUnitState,
+    sessionId: string,
+    filePath: string,
+    offset: number,
+    sizeAtRead: number
+  ): void {
+    const cursor = state.cursors.find((c) => c.sessionId === sessionId)
+    if (!cursor) {
+      state.cursors.push({ sessionId, filePath, offset, sizeAtRead })
+      return
+    }
+    cursor.filePath = filePath
+    cursor.offset = offset
+    cursor.sizeAtRead = sizeAtRead
   }
 
   /** 사람의 요청 하나 — WU §13 의 세 경우 (boundary.ts) */
@@ -659,11 +708,17 @@ export class WorkUnitCollector {
   }
 }
 
-async function fileSize(filePath: string): Promise<number> {
+/** 파일 크기, 못 읽으면 `null`. **0 을 돌려주지 않는다** — 부르는 둘 다 그 0 을
+ *  커서로 적고, 이어받은 세션에게 그것은 되쓰인 대화를 통째로 읽으라는 뜻이 된다.
+ *
+ *  이전에는 실패를 0 으로 삼키며 *아직 없다, 그 앞에 읽지 않은 것도 없다* 라고 적어
+ *  두었는데, 그 말이 맞는 것은 켜기 전에 없던 파일뿐이다. 이어받은 세션의 전제는 그
+ *  반대다 — 그 파일에는 이미 과거가 들어 있다. 부르는 쪽이 그 둘을 가리게 한다. */
+async function fileSize(filePath: string): Promise<number | null> {
   try {
     return (await fs.stat(filePath)).size
   } catch {
-    return 0 // 아직 없다 — 그 앞에 읽지 않은 것도 없다
+    return null
   }
 }
 

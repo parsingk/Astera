@@ -16,7 +16,7 @@ export interface SessionWorkUnit {
   startedAt: string
   completedAt?: string
 
-  /** 이 Unit 을 연 메시지가 **우리가 관찰한** 사람의 요청 중 몇 번째인가 (0-기반). 그 세션의
+  /** 이 Unit 을 연 메시지가 **그 세션에서 관찰한** 사람의 요청 중 몇 번째인가 (0-기반). 그 세션의
    *  몇 번째 요청인가가 아니다 — 켠 뒤의 첫 요청은 그 앞에 열 번의 대화가 있었어도 0 이다(스펙 §16.1).
    *  **uuid 를 쓰지 않는 이유:** TranscriptMessage(core/types.ts)는 { role, text, timestamp? }
    *  뿐이고 식별자를 싣지 않는다. 파서를 넓히는 것은 이 계획의 범위 밖이라 재도출 가능한
@@ -58,7 +58,7 @@ export interface TranscriptCursor {
  *  원본 트랜스크립트를 다시 읽지 않고 여기서 다시 도출한다. 실측으로 55MB 파일당 15KB 다 */
 export interface ObservedUserMessage {
   sessionId: string
-  /** **우리가 관찰한** 요청 중 몇 번째인가 (0-기반). 켜기 전의 요청은 세지 않는다 (스펙 §16.1) */
+  /** **그 세션에서 관찰한** 요청 중 몇 번째인가 (0-기반). 켜기 전의 요청은 세지 않는다 (스펙 §16.1) */
   index: number
   at: string
   text: string
