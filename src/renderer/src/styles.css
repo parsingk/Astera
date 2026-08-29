@@ -1952,11 +1952,11 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .hiw-chg { display: flex; flex-direction: column; gap: 2px; margin-bottom: 9px; }
 .hiw-chg:last-child { margin-bottom: 0; }
 .hiw-ct { display: flex; gap: 8px; font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
-.hiw-ct u { text-decoration: none; color: var(--accent); }
 .hiw-cb { font-size: 11.5px; color: var(--text-dim); }
 
 /* 좁힘 머리. --marker-w 가 0 인 테마(Umbra·Sirius)에서도 보이도록 배경을 함께 준다 */
 .hiw-scope { display: flex; align-items: center; gap: 8px; padding: 9px 15px; background: var(--elevated); border-bottom: 1px solid var(--line-soft); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
+/* 날짜와 출처 둘 다 메타다. 출처에 --accent 밑줄을 주면 이 앱의 링크 모습이 되는데 갈 곳이 없다 */
 .hiw-scope-label { font-size: 11.5px; font-weight: 500; color: var(--text); }
 .hiw-scope-clear { margin-left: auto; font-size: 10.5px; color: var(--text-faint); background: none; border: 0; cursor: pointer; }
 

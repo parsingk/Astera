@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { FeatureExplanation, ProjectFeature } from '../../../core/understanding/types'
 import { scopeToStep } from '../../../core/understanding/scope'
+import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
 import { FlowDiagram } from './FlowDiagram'
 import { GLYPH, GLYPH_COLOR, STATUS_KEY } from './UnderstandingIcons'
@@ -46,6 +47,8 @@ export function FeatureDetail({
   if (!explanation) {
     return <div className="hiw-pane hiw-pane-empty">{t('hiw.pane.noExplanation')}</div>
   }
+
+  const notYet = (): void => toast.info(t('hiw.empty.notYet'))
 
   const scoped = scopedNodeId ? scopeToStep(explanation, scopedNodeId) : null
 
@@ -104,8 +107,11 @@ export function FeatureDetail({
           <div key={c.id} className="hiw-chg">
             <span className="hiw-ct">
               <span>{dateOf(c.at)}</span>
-              <u>{c.sourceLabel}</u>
+              <span>{c.sourceLabel}</span>
             </span>
+            {/* 출처는 라벨이지 링크가 아니다. 이 앱에서 --accent 밑줄은 누를 수 있는 것의 모습인데
+                갈 곳이 아직 없다(근거 화면은 이 브랜치가 만들지 않는다) — 버튼과 달리 글에는
+                누를 수 있다는 약속을 걸지 않고 메타로 되돌린다 */}
             <span className="hiw-cb">{c.body}</span>
           </div>
         ))}
@@ -123,11 +129,18 @@ export function FeatureDetail({
           {GLYPH[feature.status]} {t(STATUS_KEY[feature.status])}
         </span>
         <span className="hiw-sp" />
-        <button className="hiw-ghost">
+        {/* 셋 다 아직 뒤가 없다. 사이드바의 [프로젝트 분석] 이 이미 이 경우의 답을 정해 두었으므로
+            같은 토스트를 준다 — 한 화면에서 "아직 안 만든 컨트롤"에 두 가지 답을 주면, 눌러도
+            아무 일이 없는 쪽은 사용자에게 고장으로 읽힌다 */}
+        <button className="hiw-ghost" onClick={notYet}>
           {t('hiw.pane.evidence', { count: feature.evidenceCount })}
         </button>
-        <button className="hiw-ghost">{t('hiw.pane.edit')}</button>
-        <button className="hiw-ghost acc">{t('hiw.pane.regenerate')}</button>
+        <button className="hiw-ghost" onClick={notYet}>
+          {t('hiw.pane.edit')}
+        </button>
+        <button className="hiw-ghost acc" onClick={notYet}>
+          {t('hiw.pane.regenerate')}
+        </button>
         {narrow && (
           <button className="hiw-ghost acc" onClick={onToggleDrawer}>
             {t('hiw.pane.reference')} {drawerOpen ? '▾' : '▸'}
