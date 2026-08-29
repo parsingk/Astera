@@ -1,0 +1,275 @@
+// 설계 문서 §18 이 이름까지 정해 준 셋(WU §23 의 나머지)과, 스펙 §16.1 의 커서 규칙 셋.
+//
+// **감시자를 띄우지 않는다.** 수집기는 의존을 밖에서 받고 방아쇠를 메서드로 노출하므로, 진짜
+// 트랜스크립트 파일을 임시 디렉터리에 쓰고 그 메서드를 직접 부르면 전부 확인된다. 디바운스는
+// `flush()` 로 건너뛴다 — 테스트가 150ms 를 기다리지 않게 하려고 남겨 둔 길이다.
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { promises as fs } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { WorkUnitStore } from './store'
+import { WorkUnitCollector, type CollectorGit, type CollectorSession } from './collector'
+import { isOpen } from '../../core/workUnit/status'
+import type { GitRef } from '../../core/git/types'
+
+let dir: string
+let storeFile: string
+let projectPath: string
+let transcript: string
+
+/** 사람의 요청 한 줄. `promptSource: 'typed'` 가 humanRequest.ts 의 허용 목록을 통과하는 표지다 */
+const human = (text: string, at = '2026-08-30T00:00:00.000Z'): string =>
+  JSON.stringify({
+    type: 'user',
+    promptSource: 'typed',
+    timestamp: at,
+    message: { role: 'user', content: text }
+  }) + '\n'
+
+/** 사람의 요청이 아닌 줄 — 도구 결과. 걸러지는지 보려고 섞는다 */
+const toolResult = (): string =>
+  JSON.stringify({
+    type: 'user',
+    promptSource: 'typed',
+    toolUseResult: { ok: true },
+    message: { role: 'user', content: 'tool output' }
+  }) + '\n'
+
+interface Fake {
+  git: CollectorGit & { ref: GitRef; files: string[]; ancestor: boolean | null }
+  sessions: CollectorSession[]
+  clock: number
+}
+
+function makeFake(): Fake {
+  const fake: Fake = {
+    git: {
+      ref: { branch: 'main', head: 'c0' },
+      files: [],
+      ancestor: true,
+      readRef: async () => fake.git.ref,
+      isAncestor: async () => fake.git.ancestor,
+      changedFiles: async () => fake.git.files
+    },
+    sessions: [],
+    clock: Date.parse('2026-08-30T09:00:00.000Z')
+  }
+  return fake
+}
+
+async function makeCollector(
+  fake: Fake,
+  file = storeFile
+): Promise<{ collector: WorkUnitCollector; store: WorkUnitStore }> {
+  const store = new WorkUnitStore(file)
+  await store.load()
+  const collector = new WorkUnitCollector({
+    store,
+    listSessions: async () => fake.sessions,
+    git: fake.git,
+    now: () => fake.clock
+  })
+  return { collector, store }
+}
+
+const session = (overrides: Partial<CollectorSession> = {}): CollectorSession => ({
+  sessionId: 's1',
+  projectPath,
+  transcriptPath: transcript,
+  idleSignalTrusted: true,
+  ...overrides
+})
+
+beforeEach(async () => {
+  dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wu-collector-'))
+  storeFile = path.join(dir, 'workUnits.json')
+  projectPath = path.join(dir, 'project')
+  transcript = path.join(dir, 'transcript.jsonl')
+  await fs.mkdir(projectPath, { recursive: true })
+  await fs.writeFile(transcript, '', 'utf8')
+})
+afterEach(async () => {
+  await fs.rm(dir, { recursive: true, force: true })
+})
+
+// ── WU §23 의 나머지 셋 ────────────────────────────────────────────────
+
+describe('WorkUnitCollector — WU §23', () => {
+  it('커밋이 없어도 정상 동작한다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    // 이 세션은 커밋을 한 번도 만들지 않는다 — HEAD 는 처음부터 끝까지 c0 이다.
+    // 바뀌는 것은 작업 트리뿐이고, 그것이 관찰된 변경의 전부다.
+    fake.git.files = ['src/login.ts']
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, human('로그인 기능 만들어줘'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    await collector.onSessionIdle('s1')
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].title).toBe('로그인 기능 만들어줘')
+    // WU §7 이 "Commit 을 작업 경계의 주 기준으로 쓰지 않는다"고 한 것의 실제 확인이다
+    expect(state.units[0].status).toBe('completed-candidate')
+    expect(state.units[0].git.observedChangedFiles).toEqual(['src/login.ts'])
+    expect(state.externalGitChanges).toHaveLength(0)
+  })
+
+  it('여러 커밋이 한 Unit 을 유지한다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, human('리팩터링해줘'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    const openedId = store.get(projectPath)!.units[0].id
+
+    for (const head of ['c1', 'c2', 'c3']) {
+      fake.git.ref = { branch: 'main', head }
+      collector.onGitChanged()
+      await collector.flush()
+    }
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1) // 커밋은 Unit 을 열지 않는다 — 여는 것은 사람의 요청뿐이다
+    expect(state.units[0].id).toBe(openedId)
+    expect(state.units[0].status).toBe('active')
+    expect(state.units[0].git.startHead).toBe('c0')
+    expect(state.units[0].git.endHead).toBe('c3')
+  })
+
+  it('재시작 후 활성 Unit 이 복구된다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const first = await makeCollector(fake)
+    await first.collector.start()
+    await fs.appendFile(transcript, human('설정 화면 추가해줘'), 'utf8')
+    first.collector.onTranscriptChanged()
+    await first.collector.flush()
+    const openedId = first.store.get(projectPath)!.units[0].id
+    expect(first.store.get(projectPath)!.units[0].status).toBe('active')
+
+    // 수집기를 버리고, 같은 저장소 파일로 새로 세운다 — 앱 재시작이다
+    const second = await makeCollector(fake)
+    await second.collector.start()
+
+    await fs.appendFile(transcript, human('버튼 색도 바꿔줘'), 'utf8')
+    second.collector.onTranscriptChanged()
+    await second.collector.flush()
+
+    const state = second.store.get(projectPath)!
+    // decideBoundary 의 Case C — 새 Unit 을 열지 않고 그 Unit 에 붙는다
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].id).toBe(openedId)
+    expect(state.units[0].messageCount).toBe(2)
+  })
+})
+
+// ── 스펙 §16.1 의 커서 규칙 셋 ─────────────────────────────────────────
+
+describe('WorkUnitCollector — 스펙 §16.1 커서', () => {
+  it('켠 뒤 시작한 세션은 처음부터 읽는다 — 커서가 0 이다', async () => {
+    const fake = makeFake()
+    fake.sessions = [] // 켤 때는 아무 세션도 없다
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    // 그 뒤에 세션이 시작하고 파일을 쓴다
+    await fs.appendFile(transcript, human('첫 요청') + toolResult() + human('두 번째 요청'), 'utf8')
+    fake.sessions = [session()]
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1) // 둘째 요청은 같은 Unit 에 붙는다
+    expect(state.units[0].title).toBe('첫 요청') // 파일의 첫 줄부터 읽었다
+    expect(state.messages.map((m) => m.index)).toEqual([0, 1]) // 도구 결과는 세지 않는다
+    expect(state.cursors[0].offset).toBe((await fs.stat(transcript)).size)
+  })
+
+  it('이미 돌던 세션은 켠 순간의 파일 끝부터 읽는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    // 켜기 전의 대화. 한 줄도 Unit 이 되어서는 안 된다
+    await fs.appendFile(transcript, human('켜기 전 요청 하나') + human('켜기 전 요청 둘'), 'utf8')
+    const sizeAtSwitch = (await fs.stat(transcript)).size
+
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+    expect(store.get(projectPath)!.cursors[0].offset).toBe(sizeAtSwitch)
+
+    collector.onTranscriptChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.units).toHaveLength(0)
+
+    await fs.appendFile(transcript, human('켠 뒤 첫 요청'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].title).toBe('켠 뒤 첫 요청')
+    expect(state.units[0].firstMessageIndex).toBe(0)
+    expect(state.messages).toHaveLength(1)
+  })
+
+  it('껐다 켜면 이전 커서를 버리고 그 순간의 끝을 다시 잡는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    fake.git.files = ['src/a.ts']
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, human('켜져 있는 동안의 요청'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.units[0].status).toBe('active')
+
+    // 끈다 — 열려 있던 Unit 은 onFeatureDisabled 로 그 자리에서 닫히고 커서는 버려진다
+    await collector.onEnabledChanged(false)
+    const closed = store.get(projectPath)!
+    expect(isOpen(closed.units[0].status)).toBe(false)
+    expect(closed.units[0].status).toBe('completed') // 관찰된 변경이 있었다
+    expect(closed.units[0].completedAt).toBeDefined()
+    expect(closed.cursors).toHaveLength(0)
+
+    // 꺼져 있는 동안 쌓인 줄
+    await fs.appendFile(transcript, human('꺼진 동안 하나') + human('꺼진 동안 둘'), 'utf8')
+
+    await collector.onEnabledChanged(true)
+    expect(store.get(projectPath)!.cursors[0].offset).toBe((await fs.stat(transcript)).size)
+
+    collector.onTranscriptChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.units).toHaveLength(1) // 꺼진 동안의 두 줄은 읽지 않았다
+
+    await fs.appendFile(transcript, human('다시 켠 뒤의 요청'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2)
+    expect(state.units[1].title).toBe('다시 켠 뒤의 요청')
+  })
+
+  // 체크박스를 두 번 누르면 두 핸들러가 겹쳐 든다. 끄기가 아직 큐에 있는데 켜기가 먼저 상태를
+  // 비우면, 닫아야 할 프로젝트를 찾을 길이 사라져 Unit 이 열린 채 남는다.
+  it('끄기와 켜기가 겹쳐도 열려 있던 Unit 은 닫힌다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+    await fs.appendFile(transcript, human('겹치는 토글'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    await Promise.all([collector.onEnabledChanged(false), collector.onEnabledChanged(true)])
+
+    expect(isOpen(store.get(projectPath)!.units[0].status)).toBe(false)
+  })
+})

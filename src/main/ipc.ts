@@ -17,6 +17,9 @@ import { descriptorOf } from '../core/providers/descriptor'
 import { copyTranscript, samePath } from '../core/rolling/transcript'
 import { OrchestrationStore } from './orchestration/store'
 import { UnderstandingStore } from './understanding/store'
+import { WorkUnitStore } from './workUnit/store'
+import { WorkUnitCollector, readChangedFiles, type CollectorSession } from './workUnit/collector'
+import { readGitRef, isAncestorOf } from './workUnit/gitProbe'
 import {
   OrchCoordinator,
   LAUNCH_FORBIDDEN,
@@ -400,6 +403,12 @@ export function registerIpc(
       busyState.set(e.sessionId, busy)
       send('session:busy', { sessionId: e.sessionId, busy })
       scheduler?.handleBusy(e.sessionId, busy) // releases a schedule that is waiting on idle
+      // 에이전트가 한 턴을 끝냈다 — Work Unit 의 완료 후보 판정이 여기서 시작한다 (WU §14-1).
+      // 수집기가 꺼져 있으면 이 호출은 아무 일도 하지 않는다.
+      if (!busy)
+        void workUnitCollector
+          .onSessionIdle(e.sessionId)
+          .catch((err) => orchLog(`work unit idle failed: ${String(err)}`))
     }
     try {
       slack?.notifier.handleData(e) // limit detection for non-rolling sessions
@@ -419,6 +428,10 @@ export function registerIpc(
     codexRolling?.handleExit(e)
     codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
+    // 세션이 끝났다 (WU §14-4) — 관찰이 여기서 멈추므로 열려 있던 Work Unit 은 후보로 남기지 않고 닫는다
+    void workUnitCollector
+      .onSessionExit(e.sessionId)
+      .catch((err) => orchLog(`work unit exit failed: ${String(err)}`))
     void releaseCoordinator?.(e.sessionId) // 이 세션이 어느 Run 의 관리자였다면 그 칸을 비운다
     // Task 7's tab-resume briefing file is no longer deleted here — see tabResumeDir's own comment
     // above (fix wave 7, finding 1 (CRITICAL)) for why a per-exit delete keyed to this id was wrong:
@@ -454,7 +467,13 @@ export function registerIpc(
   // project terminal output and exit to the renderer
   core.terminal.onData = (e) => send('terminal:data', e)
   core.terminal.onExit = (e) => send('terminal:exit', e)
-  core.history.onUpdated = () => send('history:updated', { total: 0 })
+  // 트랜스크립트가 바뀌었다는 신호는 이 하나뿐이다 — HistoryIndex 가 계정의 기록 디렉터리를 감시하고
+  // 이미 Work Unit 이 쓰려던 것과 같은 값(150ms 디바운스 · 1000ms 상한)으로 접어서 부른다. 감시자를
+  // 하나 더 세우지 않고 여기에 얹는다.
+  core.history.onUpdated = () => {
+    send('history:updated', { total: 0 })
+    workUnitCollector.onTranscriptChanged()
+  }
   // Accounts go out exactly as stored. There is no default-account flag to decorate: the default is decided
   // per provider from the list plus login state, and the renderer already holds both (useAccountStatus), so
   // it derives that itself with core/accounts/defaultAccount.ts.
@@ -2979,6 +2998,75 @@ export function registerIpc(
     return understanding.get(projectPath) ?? null
   })
 
+  // Work Unit detection: workUnits.json persistence, and the collector that fills it. Built here for
+  // exactly the reason the understanding store above is — this has nothing to do with agent
+  // orchestration, so it must not go inside bootOrch, which only runs when the orchestration toggle is
+  // on and that toggle defaults to off. **Built unconditionally, started conditionally**: the object
+  // always exists, so every trigger site (session data, session exit, history updates, the git
+  // watcher) can call it on a default install, and it is start() that the work unit toggle gates.
+  // Those trigger sites appear earlier in this function than this declaration and close over it;
+  // registerIpc is synchronous, so none of them can run before this line has executed.
+  const workUnits = new WorkUnitStore(path.join(app.getPath('userData'), 'workUnits.json'))
+  // Same shape and the same two reasons as understandingLoaded above: registerIpc is synchronous so
+  // this cannot be awaited here, and the .catch keeps one failed load from rejecting every later await.
+  const workUnitsLoaded = workUnits
+    .load()
+    .then((loaded) => {
+      if (loaded.recovered)
+        orchLog('failed to read or parse workUnits.json — kept the .bak and started from an empty state')
+    })
+    .catch((e) => orchLog(`workUnits.json load failed: ${String(e)}`))
+
+  /** 수집기가 이번에 볼 세션들. **수집기는 세션을 스스로 찾지 않는다** — 어느 세션이 어느 파일을
+   *  쓰는지는 이 파일만 아는 일이고(tabResumeTextFor 가 같은 값을 같은 방식으로 얻는다), 그것을
+   *  수집기 안으로 끌고 오면 수집기가 electron 하네스 없이는 테스트되지 않는다.
+   *
+   *  계정이 사라진 세션은 건너뛴다 — provider 를 못 가리면 **어느 파일을 읽을지** 자체를 정할 수
+   *  없고, 틀린 파일을 읽느니 그 세션을 안 보는 편이 낫다(tabResumeTextFor 의 같은 판단). */
+  const workUnitSessions = async (): Promise<CollectorSession[]> => {
+    const out: CollectorSession[] = []
+    for (const s of core.sessions.list()) {
+      if (s.status === 'exited') continue
+      let account: Account
+      try {
+        account = core.accounts.get(s.accountId)
+      } catch {
+        continue
+      }
+      out.push({
+        sessionId: s.id,
+        projectPath: s.cwd,
+        transcriptPath:
+          providerOf(account) === 'codex'
+            ? (codexRolling?.rolloutPathFor(s.id) ?? null)
+            : extractStatusLineSession(await core.statusLinePayload(s.id)).transcriptPath,
+        // 유휴 신호를 믿을 수 있는가. orchIsBusy 가 같은 값을 같은 자리에서 읽는다 — codex 는 false 이고,
+        // 그 세션의 Unit 은 새 사용자 메시지나 세션 종료로만 닫힌다(설계 §6).
+        idleSignalTrusted: descriptorOf(core.descriptors, account).busyTitleReliable
+      })
+    }
+    return out
+  }
+
+  const workUnitCollector = new WorkUnitCollector({
+    store: workUnits,
+    listSessions: workUnitSessions,
+    git: { readRef: readGitRef, isAncestor: isAncestorOf, changedFiles: readChangedFiles },
+    now: () => Date.now(),
+    // Astera 자신의 git 조작을 등록하는 곳이 아직 없다 — EG §26 의 등록은 이 계획의 어느 태스크도
+    // 만들지 않았다. 그래서 V1 은 모든 전이를 외부 변경으로 본다. 등록하는 쪽이 생기면 바뀌는 것은
+    // 이 한 줄이다.
+    pendingGitOps: () => [],
+    log: orchLog
+  })
+  // 토글이 꺼져 있으면 시작하지 않는다. **load 뒤로 미룬다** — 먼저 시작하면 수집기가 쓴 상태를
+  // 뒤늦게 끝난 load() 가 통째로 덮어쓴다.
+  void workUnitsLoaded
+    .then(() =>
+      core.appSettings.getWorkUnitTrackingEnabled() ? workUnitCollector.start() : undefined
+    )
+    .catch((e) => orchLog(`work unit collector start failed: ${String(e)}`))
+
   // The detected JDKs. There is no path argument, so this is not subject to assertAllowedPath — the scan
   // only looks at conventional directories (Program Files and friends) and PATH.
   ipcMain.handle('run.listJdks', async () => listJdks())
@@ -3144,7 +3232,12 @@ export function registerIpc(
   })
 
   // Watches only the git dir's index and HEAD, narrowly, so a commit made from a session terminal still refreshes the explorer.
-  const gitWatcher = new GitWatcher(() => send('git:changed', undefined))
+  // The Work Unit collector rides along: the callback carries no payload — it only says something in
+  // the git dir moved — so the collector re-reads the repository itself to learn what happened.
+  const gitWatcher = new GitWatcher(() => {
+    send('git:changed', undefined)
+    workUnitCollector.onGitChanged()
+  })
   ipcMain.handle('git.watch', async (_e, root: string) => {
     await assertAllowedPath(root)
     await gitWatcher.watch(root)
@@ -3419,9 +3512,9 @@ export function registerIpc(
   })
 
   // The work unit tracking toggle. The same trust-boundary check as setLang — the value the renderer
-  // sent is validated before being written to disk. No detection logic lives behind this yet — this is
-  // only the setting, registered unconditionally here (not inside bootOrch, which only runs once
-  // orchestration is on) so the checkbox works on a default install exactly like every other setting.
+  // sent is validated before being written to disk. Registered unconditionally here (not inside
+  // bootOrch, which only runs once orchestration is on) so the checkbox works on a default install
+  // exactly like every other setting.
   ipcMain.handle('settings.getWorkUnitTrackingEnabled', () =>
     core.appSettings.getWorkUnitTrackingEnabled()
   )
@@ -3429,6 +3522,10 @@ export function registerIpc(
     if (typeof enabled !== 'boolean')
       throw new Error(`INVALID_WORK_UNIT_TRACKING_ENABLED: ${String(enabled)}`)
     await core.appSettings.setWorkUnitTrackingEnabled(enabled)
+    // 켜면 **그 순간의 파일 끝**을 커서로 잡고(이전 커서는 버린다), 끄면 열려 있던 Unit 을 그 자리에서
+    // 닫는다 — 스펙 §16.1 이다. 저장소를 다 읽기 전에 시작하지 않도록 load 를 먼저 기다린다.
+    await workUnitsLoaded
+    await workUnitCollector.onEnabledChanged(enabled)
   })
 
   // How a session that hits its limit gets continued. The same trust-boundary check as setLang — the
