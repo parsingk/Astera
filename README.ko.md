@@ -125,6 +125,9 @@ Windows에서는 이후 업데이트를 자동으로 확인하고, 내려받기 
 
 <div align="center">
 <img src="assets/rolling.gif" width="820" alt="다이어그램: 실행 중인 세션이 주간 한도에 걸리고, Astera가 트랜스크립트에서 리셋 시각을 읽어 다음 계정으로 전환하며, 같은 대화가 그대로 이어진다" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-demo-rolling.mp4" width="820" controls muted>
+<a href="assets/astera-demo-rolling.mp4">화면 녹화: 세션이 한도에 걸리면 Astera가 다음 계정으로 전환해 같은 대화를 이어가고, 갈 곳이 없으면 재개 시각을 알려 준다</a>
+</video>
 </div>
 
 **예약 실행과 Slack 원격 제어**
@@ -134,6 +137,9 @@ Windows에서는 이후 업데이트를 자동으로 확인하고, 내려받기 
 
 <div align="center">
 <img src="assets/schedule.gif" width="820" alt="다이어그램: 03:00에 예약된 세션이 스스로 시작해 남겨 둔 명령을 실행하고, 끝나면 Slack이 결과를 알린다" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-demo-schedule.mp4" width="820" controls muted>
+<a href="assets/astera-demo-schedule.mp4">화면 녹화: 예약이 걸린 세션이 그 시각이 되면 스스로 작업을 시작한다</a>
+</video>
 </div>
 
 **테마와 모양**
@@ -186,6 +192,9 @@ git worktree에서 실행할 수 있고, 완료 결과는 상세 화면에서 **
 
 <div align="center">
 <img src="assets/jobs.gif" width="820" alt="다이어그램: 코디네이터가 Job의 의존성 그래프를 따라 준비된 두 작업을 서로 다른 벤더에서 동시에 시작하고, 테스트로 하나의 완료를 증명하며, 두 의존 작업이 끝난 뒤 다음 작업을 진행하고, 스스로 정할 수 없는 결정은 사람을 기다린다" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-killer-demo.mp4" width="820" controls muted>
+<a href="assets/astera-killer-demo.mp4">화면 녹화: Job이 의존성 그래프를 따라 진행된다 — 준비된 Task가 시작되고, 한도에 걸린 워커가 스스로 이어가며, 마지막 Task는 두 의존성이 끝날 때까지 기다린다</a>
+</video>
 </div>
 
 코디네이터 CLI 레퍼런스를 보려면:

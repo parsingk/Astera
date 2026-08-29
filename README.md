@@ -125,6 +125,9 @@ You will also need:
 
 <div align="center">
 <img src="assets/rolling.gif" width="820" alt="Diagram: a running session hits its weekly limit, Astera reads the reset time from the transcript, switches to the next account, and the same conversation carries on" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-demo-rolling.mp4" width="820" controls muted>
+<a href="assets/astera-demo-rolling.mp4">Screen recording: a session hits a usage limit, Astera switches to the next account and the same conversation carries on, then shows when it will resume</a>
+</video>
 </div>
 
 **Scheduling and remote control**
@@ -134,6 +137,9 @@ You will also need:
 
 <div align="center">
 <img src="assets/schedule.gif" width="820" alt="Diagram: at 03:00 a scheduled session starts on its own, runs the command left for it, finishes, and Slack reports the result" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-demo-schedule.mp4" width="820" controls muted>
+<a href="assets/astera-demo-schedule.mp4">Screen recording: a session with a schedule, and the work starting on its own when the time comes</a>
+</video>
 </div>
 
 **Appearance**
@@ -185,6 +191,9 @@ coordinator session. A simple one-off handoff does not need an orchestration run
 
 <div align="center">
 <img src="assets/jobs.gif" width="820" alt="Diagram: a coordinator follows a job's dependency graph, starts the two ready tasks on both vendors at once, uses a test suite to prove one done, waits for both dependencies before continuing, and leaves an unresolved decision for a person" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-killer-demo.mp4" width="820" controls muted>
+<a href="assets/astera-killer-demo.mp4">Screen recording: a job runs its dependency graph — the ready tasks start, a worker hits a usage limit and resumes by itself, and the last task waits for both dependencies</a>
+</video>
 </div>
 
 To read the coordinator CLI reference:
