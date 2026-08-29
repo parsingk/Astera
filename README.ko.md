@@ -33,54 +33,6 @@ Astera는 오래 걸리는 Claude Code와 Codex 작업을 위한 데스크톱 �
 - **여러 단계의 작업을 조율합니다.** 의존 관계를 Job으로 모델링하고, 준비된 Task를 어느 벤더에서든
   실행하며, 빌드·테스트·리뷰·사람의 판단을 완료 조건으로 둘 수 있습니다.
 
-## 설치
-
-**[Releases](https://github.com/parsingk/Astera/releases/latest)** 에서 최신 릴리스를 내려받아
-실행합니다. Windows는 `astera-<version>-setup.exe`, macOS는 `astera-<version>-universal.dmg`,
-Linux는 `astera-<version>-x86_64.AppImage` 또는 `astera-<version>-amd64.deb`를 사용합니다.
-Windows에서는 이후 업데이트를 자동으로 확인하고, 내려받기 전에 묻습니다.
-
-> **macOS 빌드는 아직 공증(notarize)되지 않았습니다.** 따라서 Gatekeeper가 첫 실행을 막을 수 있습니다.
-> 앱을 Applications로 옮긴 뒤 macOS가 붙인 격리 플래그를 지워 주세요.
->
-> ```bash
-> xattr -cr /Applications/Astera.app
-> ```
->
-> 이 명령은 "인터넷에서 다운로드됨" 표시만 제거합니다. 그 표시가 유일한 실행 차단 요인이며, 앱은
-> ad-hoc 서명 상태로 유지됩니다. 클릭으로 처리하고 싶다면 시스템 설정 → **개인정보 보호 및 보안** →
-> **확인 없이 열기**를 사용해도 됩니다. Control-클릭 → **열기** 방식은 macOS 15 (Sequoia)에서
-> 없어져 더 이상 동작하지 않습니다.
->
-> 그리고 공증 전까지는 자동 업데이트가 꺼져 있어, 새 버전이 나오면 dmg를 다시 받아야 합니다.
-> Windows에서는 첫 실행 때 SmartScreen 경고가 뜰 수 있습니다 — **추가 정보 → 실행** 을 누르세요.
->
-> SignPath Foundation 오픈소스 프로그램(Windows)과 Apple Developer ID(macOS)를 통한 서명을
-> 준비하고 있습니다 — 누가 무엇에 서명하는지는 [코드 서명 정책](docs/code-signing.md), 구체적인
-> 절차는 [docs/releasing.md](docs/releasing.md)를 보세요. Linux 빌드는 서명하지 않습니다. Linux
-> 배포 환경에서는 일반적인 방식입니다.
-
-> **Linux에서는** 두 파일 모두 다운로드만으로는 사용할 수 없습니다. AppImage에는 실행 권한을 주세요.
->
-> ```bash
-> chmod +x astera-<version>-x86_64.AppImage
-> ```
->
-> deb는 `dpkg -i` 대신 apt로 설치해야 의존성도 함께 설치됩니다.
->
-> ```bash
-> sudo apt install ./astera-<version>-amd64.deb
-> ```
->
-> 지원 하한은 deb에 선언돼 있어서, 더 낮은 시스템에는 apt가 설치를 거부합니다 — 설치는 되고 실행만
-> 안 되는 상황을 만들지 않습니다.
-
-이 밖에 필요한 것:
-
-- **Windows 10 또는 11**, **macOS 12 (Monterey) 이상**, 혹은 **Ubuntu 22.04 / Debian 12 이상**
-- `PATH` 상의 **[Claude Code](https://claude.com/claude-code) 또는 Codex CLI** (둘 다여도 됩니다) —
-  Astera는 이들을 실행할 뿐, 대체하지는 않습니다
-
 ## 무엇을 하는 앱인가
 
 **프로젝트 작업 공간**
@@ -202,6 +154,54 @@ astera help
 
 `astera`가 `PATH`에 없다면 `$ASTERA_CLI`의 경로를 사용하세요. 값이 비어 있다면 그 세션은 Astera가
 시작한 것이 아니거나 에이전트 오케스트레이션이 꺼져 있습니다.
+
+## 설치
+
+**[Releases](https://github.com/parsingk/Astera/releases/latest)** 에서 최신 릴리스를 내려받아
+실행합니다. Windows는 `astera-<version>-setup.exe`, macOS는 `astera-<version>-universal.dmg`,
+Linux는 `astera-<version>-x86_64.AppImage` 또는 `astera-<version>-amd64.deb`를 사용합니다.
+Windows에서는 이후 업데이트를 자동으로 확인하고, 내려받기 전에 묻습니다.
+
+> **macOS 빌드는 아직 공증(notarize)되지 않았습니다.** 따라서 Gatekeeper가 첫 실행을 막을 수 있습니다.
+> 앱을 Applications로 옮긴 뒤 macOS가 붙인 격리 플래그를 지워 주세요.
+>
+> ```bash
+> xattr -cr /Applications/Astera.app
+> ```
+>
+> 이 명령은 "인터넷에서 다운로드됨" 표시만 제거합니다. 그 표시가 유일한 실행 차단 요인이며, 앱은
+> ad-hoc 서명 상태로 유지됩니다. 클릭으로 처리하고 싶다면 시스템 설정 → **개인정보 보호 및 보안** →
+> **확인 없이 열기**를 사용해도 됩니다. Control-클릭 → **열기** 방식은 macOS 15 (Sequoia)에서
+> 없어져 더 이상 동작하지 않습니다.
+>
+> 그리고 공증 전까지는 자동 업데이트가 꺼져 있어, 새 버전이 나오면 dmg를 다시 받아야 합니다.
+> Windows에서는 첫 실행 때 SmartScreen 경고가 뜰 수 있습니다 — **추가 정보 → 실행** 을 누르세요.
+>
+> SignPath Foundation 오픈소스 프로그램(Windows)과 Apple Developer ID(macOS)를 통한 서명을
+> 준비하고 있습니다 — 누가 무엇에 서명하는지는 [코드 서명 정책](docs/code-signing.md), 구체적인
+> 절차는 [docs/releasing.md](docs/releasing.md)를 보세요. Linux 빌드는 서명하지 않습니다. Linux
+> 배포 환경에서는 일반적인 방식입니다.
+
+> **Linux에서는** 두 파일 모두 다운로드만으로는 사용할 수 없습니다. AppImage에는 실행 권한을 주세요.
+>
+> ```bash
+> chmod +x astera-<version>-x86_64.AppImage
+> ```
+>
+> deb는 `dpkg -i` 대신 apt로 설치해야 의존성도 함께 설치됩니다.
+>
+> ```bash
+> sudo apt install ./astera-<version>-amd64.deb
+> ```
+>
+> 지원 하한은 deb에 선언돼 있어서, 더 낮은 시스템에는 apt가 설치를 거부합니다 — 설치는 되고 실행만
+> 안 되는 상황을 만들지 않습니다.
+
+이 밖에 필요한 것:
+
+- **Windows 10 또는 11**, **macOS 12 (Monterey) 이상**, 혹은 **Ubuntu 22.04 / Debian 12 이상**
+- `PATH` 상의 **[Claude Code](https://claude.com/claude-code) 또는 Codex CLI** (둘 다여도 됩니다) —
+  Astera는 이들을 실행할 뿐, 대체하지는 않습니다
 
 ## 소스에서 빌드하기
 

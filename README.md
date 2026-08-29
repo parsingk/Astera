@@ -33,56 +33,6 @@ vendors, checks the result, and waits when a human decision is needed.
 - **Coordinate work that has more than one step.** Model dependencies as a Job, run ready tasks on
   either vendor, and use builds, tests, reviews, and human decisions as completion gates.
 
-## Install
-
-Download the latest release from
-**[Releases](https://github.com/parsingk/Astera/releases/latest)** and run it — `astera-<version>-setup.exe`
-on Windows, `astera-<version>-universal.dmg` on macOS, and `astera-<version>-x86_64.AppImage` or
-`astera-<version>-amd64.deb` on Linux. On Windows the app updates itself from there afterwards,
-asking before it downloads.
-
-> **macOS builds are not notarized yet**, which costs you two things. Gatekeeper blocks the first
-> launch, so after dragging the app to Applications, clear the quarantine flag macOS put on it:
->
-> ```bash
-> xattr -cr /Applications/Astera.app
-> ```
->
-> That removes the "downloaded from the internet" marker, which is the only thing standing in the way
-> — the app itself is signed (ad-hoc), so nothing else about it changes. System Settings →
-> **Privacy & Security** → **Open Anyway** works too if you prefer clicking; the Control-click →
-> **Open** shortcut does not, macOS 15 (Sequoia) removed it.
->
-> And auto-update stays off until the build is notarized, so a new version means downloading the dmg
-> again. On Windows, SmartScreen may warn on first run — click **More info → Run anyway**.
->
-> Signing through the SignPath Foundation's open-source program (Windows) and an Apple Developer ID
-> (macOS) is being set up — see the [Code signing policy](docs/code-signing.md) for who signs what,
-> and [docs/releasing.md](docs/releasing.md) for the mechanics. The Linux builds are unsigned, which
-> is what that channel expects.
-
-> **On Linux**, neither artifact runs straight from the download. Give the AppImage the executable
-> bit:
->
-> ```bash
-> chmod +x astera-<version>-x86_64.AppImage
-> ```
->
-> and install the deb through apt rather than `dpkg -i`, so its dependencies come with it:
->
-> ```bash
-> sudo apt install ./astera-<version>-amd64.deb
-> ```
->
-> The deb declares the supported floor, so apt refuses an older system instead of installing
-> something that cannot start.
-
-You will also need:
-
-- **Windows 10 or 11**, **macOS 12 (Monterey) or later**, or **Ubuntu 22.04 / Debian 12 or later**
-- **[Claude Code](https://claude.com/claude-code) and/or the Codex CLI** on your `PATH` — Astera runs
-  them, it does not replace them
-
 ## What it does
 
 **Project workspaces**
@@ -201,6 +151,56 @@ astera help
 
 If `astera` is not on `PATH`, use the path in `$ASTERA_CLI`. An empty value means the session was not
 started by Astera, or Agent orchestration is off.
+
+## Install
+
+Download the latest release from
+**[Releases](https://github.com/parsingk/Astera/releases/latest)** and run it — `astera-<version>-setup.exe`
+on Windows, `astera-<version>-universal.dmg` on macOS, and `astera-<version>-x86_64.AppImage` or
+`astera-<version>-amd64.deb` on Linux. On Windows the app updates itself from there afterwards,
+asking before it downloads.
+
+> **macOS builds are not notarized yet**, which costs you two things. Gatekeeper blocks the first
+> launch, so after dragging the app to Applications, clear the quarantine flag macOS put on it:
+>
+> ```bash
+> xattr -cr /Applications/Astera.app
+> ```
+>
+> That removes the "downloaded from the internet" marker, which is the only thing standing in the way
+> — the app itself is signed (ad-hoc), so nothing else about it changes. System Settings →
+> **Privacy & Security** → **Open Anyway** works too if you prefer clicking; the Control-click →
+> **Open** shortcut does not, macOS 15 (Sequoia) removed it.
+>
+> And auto-update stays off until the build is notarized, so a new version means downloading the dmg
+> again. On Windows, SmartScreen may warn on first run — click **More info → Run anyway**.
+>
+> Signing through the SignPath Foundation's open-source program (Windows) and an Apple Developer ID
+> (macOS) is being set up — see the [Code signing policy](docs/code-signing.md) for who signs what,
+> and [docs/releasing.md](docs/releasing.md) for the mechanics. The Linux builds are unsigned, which
+> is what that channel expects.
+
+> **On Linux**, neither artifact runs straight from the download. Give the AppImage the executable
+> bit:
+>
+> ```bash
+> chmod +x astera-<version>-x86_64.AppImage
+> ```
+>
+> and install the deb through apt rather than `dpkg -i`, so its dependencies come with it:
+>
+> ```bash
+> sudo apt install ./astera-<version>-amd64.deb
+> ```
+>
+> The deb declares the supported floor, so apt refuses an older system instead of installing
+> something that cannot start.
+
+You will also need:
+
+- **Windows 10 or 11**, **macOS 12 (Monterey) or later**, or **Ubuntu 22.04 / Debian 12 or later**
+- **[Claude Code](https://claude.com/claude-code) and/or the Codex CLI** on your `PATH` — Astera runs
+  them, it does not replace them
 
 ## Build from source
 
