@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { FeatureExplanation, ProjectFeature } from '../../../core/understanding/types'
 import { scopeToStep } from '../../../core/understanding/scope'
 import { useI18n } from '../i18n/I18nProvider'
@@ -168,8 +168,8 @@ export function FeatureDetail({
         </div>
 
         {!narrow && reference}
+        {narrow && drawerOpen && <div className="hiw-drawer">{reference}</div>}
       </div>
-      {narrow && drawerOpen && <div className="hiw-drawer">{reference}</div>}
     </div>
   )
 }
@@ -181,7 +181,11 @@ export function FeatureDetail({
  *  이 재는 일을 `FeatureDetail` 밖으로 뺀 이유: 그 컴포넌트의 테스트는 jsdom 도 `ResizeObserver` 도
  *  없이 `renderToStaticMarkup` 만으로 돌아간다(FeatureDetail.test.ts) — narrow/drawerOpen 을 강제로
  *  넘겨 접힌 렌더와 펼친 렌더를 확인해야 하므로, `FeatureDetail` 자신은 그 둘을 그대로 받는 순수한
- *  컴포넌트로 남겨 두고 재는 일은 이 컴포넌트에만 둔다. */
+ *  컴포넌트로 남겨 두고 재는 일은 이 컴포넌트에만 둔다.
+ *
+ *  **첫 재기는 `useLayoutEffect` 다** — `useEffect` 면 브라우저가 이미 넓은 2단 레이아웃을 한 번
+ *  그린 뒤에야 좁혀서, 이미 좁은 페인에서 열면 첫 프레임이 넓게 그려졌다가 튄다. `Select.tsx` 의
+ *  메뉴 자리 재기가 같은 이유로 이미 `useLayoutEffect` 를 쓴다. */
 export function FeatureDetailHost(
   props: Omit<FeatureDetailProps, 'narrow' | 'drawerOpen' | 'onToggleDrawer'>
 ): React.JSX.Element {
@@ -189,7 +193,7 @@ export function FeatureDetailHost(
   const [narrow, setNarrow] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const host = hostRef.current
     if (!host) return
     const measure = (width: number): void => setNarrow(width < NARROW_PANE)
