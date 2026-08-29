@@ -1919,7 +1919,19 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
   background: var(--elevated);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius-sm);
-  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  overflow: hidden;
+}
+/* 라벨은 두 줄까지 감싼다. 한 줄 nowrap 이던 때는 폭 124px 에 한글 9자에서 잘렸는데, 흐름의 단계
+   이름은 그보다 길기 마련이다("터미널에 붙임 · 사용 준비 완료"). 세 줄로 늘리지 않는 이유: 그쯤이면
+   칸 이름이 아니라 문장이고, 그것은 칸이 좁은 것이 아니라 생성기가 이름을 길게 쓴 것이다
+   (core/understanding/types.ts 의 FlowNode.label 주석).
+   keep-all 은 한국어를 어절 단위로 끊기 위한 것이고, anywhere 는 띄어쓰기 없는 긴 토큰이 칸을
+   넘지 않게 하는 탈출구다. */
+.hiw-node > span {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden;
+  text-align: center; line-height: 1.35;
+  word-break: keep-all; overflow-wrap: anywhere;
 }
 /* 테두리 색이 종류를 말한다. 시작과 중간 단계는 기본 선을 쓴다 — 전부 색을 주면 아무것도 안 읽힌다 */
 .hiw-node--decision { border-color: var(--warn); }

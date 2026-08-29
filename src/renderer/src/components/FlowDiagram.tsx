@@ -87,7 +87,12 @@ export function FlowDiagram({
             title={node.label}
             onClick={pickable ? () => onPick(selected ? null : b.id) : undefined}
           >
-            {node.label}
+            {/* 라벨을 span 으로 한 겹 감싸는 이유: 줄 수를 두 줄로 묶는 것(-webkit-line-clamp)은
+                display 를 -webkit-box 로 바꾸는데, 그러면 바깥 칸의 flex 가운데 정렬이 사라진다.
+                바깥은 정렬만, 안쪽은 감싸기만 맡는다. 클래스를 주지 않는 것도 뜻이 있다 —
+                `hiw-node` 로 시작하는 이름을 주면 FlowDiagram.test.ts 의 칸 개수 단언이 이 span 까지
+                세어 두 배가 된다. */}
+            <span>{node.label}</span>
           </div>
         )
       })}

@@ -40,6 +40,10 @@ export interface FlowEdge {
 
 export interface FlowNode {
   id: string
+  /** 흐름도 칸에 그려지는 이름. **22자 안쪽으로 쓴다** — 칸은 고정 크기이고 두 줄까지만 감싸므로
+   *  그보다 길면 잘린다(flowLayout.ts 의 NODE_W/NODE_H, styles.css 의 `.hiw-node > span`).
+   *  잘리는 것은 칸이 좁아서가 아니라 단계 이름이 문장이 됐다는 뜻이다 — 자세한 설명은
+   *  `description` 의 자리이고, 그쪽은 길이 제한이 없다. */
   label: string
   /** 단계를 골랐을 때 오른쪽에 뜨는 "이 단계에서 일어나는 일" */
   description?: string
