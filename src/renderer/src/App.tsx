@@ -431,6 +431,10 @@ export default function App(): React.JSX.Element {
   // 프로젝트도 이름도 담지 못하므로, 트리에 들어간 문자열만으로는 그 탭을 그릴 수도, 그 탭이 어느
   // 프로젝트의 것인지 답할 수도 없다(WorkbenchTabs 의 FeatureTab 머리주석)
   const [featureTabs, setFeatureTabs] = useState<FeatureTab[]>([])
+  // 기능 탭 id → 그 탭에서 고른 흐름 단계. 탭 id(`feature:<featureId>`)로 키를 삼는다 — featureId 로
+  // 삼으면 두 프로젝트가 같은 기능 id 를 가질 때 서로의 좁힘이 새는데, 탭 id 는 이미 FeatureTab
+  // 레코드 자체가 그 경우를 "방금 누른 쪽이 이긴다"로 다루는 것과 같은 자리라 새 문제를 만들지 않는다
+  const [scopedNode, setScopedNode] = useState<Record<string, string | null>>({})
   interface FileBuffer {
     /** 항상 LF다. CodeMirror가 문서를 LF로 정규화하므로 버퍼도 같은 모양이어야 에디터 상태와 비교되고
      *  재사용된다. 디스크의 줄바꿈은 eol에 따로 들고 있다가 쓸 때 되돌린다 */
@@ -2001,10 +2005,9 @@ export default function App(): React.JSX.Element {
         <FeatureDetail
           feature={f}
           explanation={u.explanations[rec.featureId] ?? null}
-          // Task 11 이 탭마다 따로인 좁힘 상태를 들고 오면서 이 둘을 갈아 끼운다 — 지금은 흐름도가
-          // 뼈대뿐이라 고를 단계 자체가 없다
-          scopedNodeId={null}
-          onPickStep={() => {}}
+          // 탭마다 따로다 — scopedNode 는 featureTabId 로 키를 삼는다(위 선언의 주석)
+          scopedNodeId={scopedNode[featureTabId] ?? null}
+          onPickStep={(id) => setScopedNode((m) => ({ ...m, [featureTabId]: id }))}
           onOpenPath={openFeaturePath}
         />
       </div>
