@@ -26,59 +26,6 @@ de una coordinadora mediante la skill `/astera-orchestration`.
 > **Estado:** Windows, macOS y Linux. Ejecuta las CLI de `claude` y `codex`, así que solo llega tan lejos
 > como la que tengas instalada.
 
-## Instalación
-
-Descarga la última versión desde
-**[Releases](https://github.com/parsingk/Astera/releases/latest)** y ejecútala:
-`astera-<version>-setup.exe` en Windows, `astera-<version>-universal.dmg` en macOS, y
-`astera-<version>-x86_64.AppImage` o `astera-<version>-amd64.deb` en Linux. En Windows la
-aplicación se actualiza sola a partir de ahí, preguntando antes de descargar.
-
-> **Las compilaciones de macOS aún no están notarizadas**, y eso cuesta dos cosas. Gatekeeper bloquea
-> el primer arranque, así que después de arrastrar la aplicación a Aplicaciones, quita la marca de
-> cuarentena que macOS le puso:
->
-> ```bash
-> xattr -cr /Applications/Astera.app
-> ```
->
-> Eso elimina la marca de «descargado de internet», que es lo único que estorba: la aplicación en sí
-> está firmada (ad-hoc), así que nada más cambia. Ajustes del Sistema → **Privacidad y seguridad** →
-> **Abrir igualmente** también funciona si prefieres hacer clic; el atajo Control-clic → **Abrir**
-> no, macOS 15 (Sequoia) lo eliminó.
->
-> Y la actualización automática seguirá desactivada hasta que la compilación esté notarizada, así que
-> una versión nueva significa volver a descargar el dmg. En Windows, SmartScreen puede advertirte en
-> el primer arranque: pulsa **Más información → Ejecutar de todas formas**.
->
-> Se está preparando la firma mediante el programa de código abierto de la SignPath Foundation
-> (Windows) y un Apple Developer ID (macOS) — consulta la
-> [política de firma de código](docs/code-signing.md) para saber quién firma qué, y
-> [docs/releasing.md](docs/releasing.md) para el procedimiento.
-
-> **En Linux**, ninguno de los dos artefactos arranca tal como se descarga. Dale el bit de
-> ejecución al AppImage:
->
-> ```bash
-> chmod +x astera-<version>-x86_64.AppImage
-> ```
->
-> e instala el deb con apt y no con `dpkg -i`, para que sus dependencias vengan con él:
->
-> ```bash
-> sudo apt install ./astera-<version>-amd64.deb
-> ```
->
-> El deb declara el mínimo soportado, así que apt rechaza un sistema más antiguo en vez de instalar
-> algo que no podría arrancar.
-
-También necesitarás:
-
-- **Windows 10 u 11**, **macOS 12 (Monterey) o posterior**, o **Ubuntu 22.04 / Debian 12 o
-  posterior**
-- **[Claude Code](https://claude.com/claude-code) y/o la CLI de Codex** en tu `PATH` — Astera las
-  ejecuta, no las sustituye
-
 ## Qué hace
 
 **Sesiones**
@@ -207,6 +154,59 @@ astera help
 Si `astera` responde `command not found`, la ruta absoluta está en `$ASTERA_CLI`: son el mismo
 programa. Un `$ASTERA_CLI` vacío significa que la sesión no la inició Astera, o que la Orquestación
 de agentes está desactivada.
+
+## Instalación
+
+Descarga la última versión desde
+**[Releases](https://github.com/parsingk/Astera/releases/latest)** y ejecútala:
+`astera-<version>-setup.exe` en Windows, `astera-<version>-universal.dmg` en macOS, y
+`astera-<version>-x86_64.AppImage` o `astera-<version>-amd64.deb` en Linux. En Windows la
+aplicación se actualiza sola a partir de ahí, preguntando antes de descargar.
+
+> **Las compilaciones de macOS aún no están notarizadas**, y eso cuesta dos cosas. Gatekeeper bloquea
+> el primer arranque, así que después de arrastrar la aplicación a Aplicaciones, quita la marca de
+> cuarentena que macOS le puso:
+>
+> ```bash
+> xattr -cr /Applications/Astera.app
+> ```
+>
+> Eso elimina la marca de «descargado de internet», que es lo único que estorba: la aplicación en sí
+> está firmada (ad-hoc), así que nada más cambia. Ajustes del Sistema → **Privacidad y seguridad** →
+> **Abrir igualmente** también funciona si prefieres hacer clic; el atajo Control-clic → **Abrir**
+> no, macOS 15 (Sequoia) lo eliminó.
+>
+> Y la actualización automática seguirá desactivada hasta que la compilación esté notarizada, así que
+> una versión nueva significa volver a descargar el dmg. En Windows, SmartScreen puede advertirte en
+> el primer arranque: pulsa **Más información → Ejecutar de todas formas**.
+>
+> Se está preparando la firma mediante el programa de código abierto de la SignPath Foundation
+> (Windows) y un Apple Developer ID (macOS) — consulta la
+> [política de firma de código](docs/code-signing.md) para saber quién firma qué, y
+> [docs/releasing.md](docs/releasing.md) para el procedimiento.
+
+> **En Linux**, ninguno de los dos artefactos arranca tal como se descarga. Dale el bit de
+> ejecución al AppImage:
+>
+> ```bash
+> chmod +x astera-<version>-x86_64.AppImage
+> ```
+>
+> e instala el deb con apt y no con `dpkg -i`, para que sus dependencias vengan con él:
+>
+> ```bash
+> sudo apt install ./astera-<version>-amd64.deb
+> ```
+>
+> El deb declara el mínimo soportado, así que apt rechaza un sistema más antiguo en vez de instalar
+> algo que no podría arrancar.
+
+También necesitarás:
+
+- **Windows 10 u 11**, **macOS 12 (Monterey) o posterior**, o **Ubuntu 22.04 / Debian 12 o
+  posterior**
+- **[Claude Code](https://claude.com/claude-code) y/o la CLI de Codex** en tu `PATH` — Astera las
+  ejecuta, no las sustituye
 
 ## Compilar desde el código fuente
 
