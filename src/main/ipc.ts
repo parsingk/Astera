@@ -2959,10 +2959,18 @@ export function registerIpc(
   // registerIpc is synchronous, so this cannot be awaited here — the handler below awaits it instead,
   // which keeps the handler itself registered on every startup while still never serving before load
   // has actually finished.
-  const understandingLoaded = understanding.load().then((loaded) => {
-    if (loaded.recovered)
-      orchLog('failed to read or parse understanding.json — kept the .bak and started from an empty state')
-  })
+  // The .catch is not decoration. Today load() resolves on every path and orchLog cannot throw, but
+  // both are unverified invariants — and if either breaks, every later `await understandingLoaded`
+  // rejects forever (the screen goes permanently blank with no explanation) and the first rejection
+  // becomes an unhandled rejection in main, which nothing here listens for. Same shape as the queue
+  // freeze this branch already fixed in the store: one failure must not poison everything after it.
+  const understandingLoaded = understanding
+    .load()
+    .then((loaded) => {
+      if (loaded.recovered)
+        orchLog('failed to read or parse understanding.json — kept the .bak and started from an empty state')
+    })
+    .catch((e) => orchLog(`understanding.json load failed: ${String(e)}`))
   ipcMain.handle('understanding.get', async (_e, projectPath: string) => {
     // orch.list 와 같은 검사 — 경로가 무엇이 돌아올지를 정한다
     await assertAllowedPath(projectPath)
