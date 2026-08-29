@@ -38,9 +38,6 @@ de una coordinadora mediante la skill `/astera-orchestration`.
 - Varias cuentas por proveedor, cada una aislada mediante su propio `CLAUDE_CONFIG_DIR` / `CODEX_HOME`
 - **Rotación de cuentas:** cuando una sesión alcanza un límite de uso, Astera lo detecta en la
   transcripción, calcula la hora de reinicio y retoma el trabajo en la siguiente cuenta
-- **Estrategia de reanudación:** conserva la conversación original de la CLI —la opción
-  predeterminada— o usa **Reanudación inteligente (experimental)** para iniciar la siguiente sesión
-  desde un punto de control compacto
 - Importación opcional de la configuración de una cuenta nueva desde tu cuenta predeterminada:
   `settings.json`, la lista de servidores MCP y los directorios `skills`, `commands` y `agents`
 
@@ -49,6 +46,18 @@ de una coordinadora mediante la skill `/astera-orchestration`.
 <img src="assets/rolling-demo.gif" width="820" alt="Grabación de pantalla: una sesión alcanza su límite, Astera cambia a la siguiente cuenta con la misma conversación restaurada y, cuando no queda ninguna, indica a qué hora se reanudará" />
 <p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-demo-rolling.mp4">▶ Grabación completa (28s)</a></p>
 </div>
+
+**Reanudación inteligente (experimental)**
+- Desactivada por defecto. **Configuración → General → Estrategia de reanudación de sesión** elige entre el
+  resume propio de la CLI y esta
+- Con ella activada, cuando un límite mueve el trabajo a la siguiente cuenta esa sesión arranca **en
+  blanco** y recibe un punto de control compacto como primer mensaje, en vez de reproducir toda la
+  conversación
+- El punto de control lleva la carpeta de trabajo y su estado de git, las peticiones recientes en
+  orden, los archivos que tocó, el último comando que ejecutó y el final del intercambio — con los
+  secretos ocultados al entrar
+- Si no se puede construir un punto de control, el cambio recae en la reanudación normal, así que
+  activarla nunca deja un relevo peor que antes
 
 **Programación y control remoto**
 - Programa sesiones para que empiecen a una hora determinada
