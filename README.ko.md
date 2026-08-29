@@ -13,6 +13,8 @@
 
 [English](README.md) · **한국어** · [日本語](README.ja.md) · [Español](README.es.md)
 
+<img src="assets/hero.jpg" width="960" alt="한 창에서 네 세션을 2×2로 돌리는 Astera — Claude Code 셋과 Codex 하나가 Claude 계정 둘과 Codex 계정 하나로 돌고, 사이드바에는 계정과 프로젝트 히스토리가 있다" />
+
 </div>
 
 Astera는 오래 걸리는 Claude Code와 Codex 작업을 위한 데스크톱 워크벤치입니다. 자리를 비운 동안에도
@@ -38,33 +40,6 @@ Astera는 오래 걸리는 Claude Code와 Codex 작업을 위한 데스크톱 �
 **프로젝트 작업 공간**
 - 여러 개의 `claude` / `codex` 세션을 한 창에서 탭과 분할 창으로
 - 프로젝트별 터미널
-
-**에디터와 단축키**
-- 키 하나로 탐색기를 켜고 끕니다 — `Ctrl`/`Cmd`+`Shift`+`E`가 파일 트리와 Run 툴바, Run 콘솔을
-  여닫고 페인 배치는 그대로 둡니다
-- 각 페인에는 파일 탭과 세션 탭을 함께 담는 탭 표시줄이 하나씩 있습니다. 파일을 수정하는 세션은
-  그 파일 옆에 둘 수 있고, 분할 화면에서는 둘을 나란히 보며, `Ctrl`+`Tab`으로 활성 페인의 탭을
-  순환합니다
-- 단순 텍스트 상자가 아닌 CodeMirror 기반 편집기입니다. TypeScript·JavaScript·Python·Go·Rust·
-  C/C++·Java·PHP·SQL·HTML·CSS·Markdown·JSON·YAML·XML 문법 강조를 지원하며, 여러 파일을 탭으로
-  열 수 있습니다
-- **마크다운은 나란히 볼 수 있습니다:** 마크다운 파일은 에디터·분할·프리뷰 중 하나로 열리고
-  `Ctrl`/`Cmd`+`Shift`+`V`가 셋을 순환합니다. 분할에서는 양쪽 스크롤이 서로를 따라갑니다
-- 항목마다 git 상태(추가·수정·삭제·충돌)를 표시하는 파일 트리와 생성·이름 변경·이동·복사·삭제·
-  Finder/Explorer에서 보기
-- **로컬 히스토리:** 삭제하기 전에 스냅샷을 남기므로, 에이전트가 정리해 버린 것도 직접 지운 것도
-  되살릴 수 있습니다. 30일간, 프로젝트당 최대 200 MB 보관
-- 모든 단축키는 설정에서 다시 지정할 수 있고, 기본값은 macOS에서 `Cmd`, 그 외에서 `Ctrl`입니다 —
-  창 분할, 분할된 창 사이 포커스 이동, 세션 순회, 파일 탭 닫기
-
-**실행 구성**
-- 실행 구성은 Shell·npm·Node.js·Gradle·Maven·cargo·go·Python·pytest·Docker Compose·Dockerfile·
-  .NET 유형을 지원하며, 유형별로 필요한 항목만 입력합니다
-- 명령은 실행할 때 조합됩니다. Gradle Wrapper, 락파일이 가리키는 패키지 매니저, 셸에 맞는 인용은
-  입력란에 직접 적는 대신 실행 시점에 결정됩니다
-- 프로젝트의 빌드 파일을 읽어 npm 스크립트를 실행 구성으로 가져오고, Gradle·Maven 프로젝트에는 표준
-  태스크와 골을 준비합니다. 자동으로 찾은 구성은 기울임꼴로 표시되며, 수정하는 순간 내 구성으로
-  저장됩니다
 
 **계정**
 - 벤더별로 여러 계정을 둘 수 있으며, 각 계정은 자체 `CLAUDE_CONFIG_DIR` / `CODEX_HOME`으로 격리
@@ -92,6 +67,33 @@ Astera는 오래 걸리는 Claude Code와 Codex 작업을 위한 데스크톱 �
 <p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-demo-schedule.mp4">▶ 전체 영상 (22초)</a></p>
 </div>
 
+**실행 구성**
+- 실행 구성은 Shell·npm·Node.js·Gradle·Maven·cargo·go·Python·pytest·Docker Compose·Dockerfile·
+  .NET 유형을 지원하며, 유형별로 필요한 항목만 입력합니다
+- 명령은 실행할 때 조합됩니다. Gradle Wrapper, 락파일이 가리키는 패키지 매니저, 셸에 맞는 인용은
+  입력란에 직접 적는 대신 실행 시점에 결정됩니다
+- 프로젝트의 빌드 파일을 읽어 npm 스크립트를 실행 구성으로 가져오고, Gradle·Maven 프로젝트에는 표준
+  태스크와 골을 준비합니다. 자동으로 찾은 구성은 기울임꼴로 표시되며, 수정하는 순간 내 구성으로
+  저장됩니다
+
+**에디터와 단축키**
+- 키 하나로 탐색기를 켜고 끕니다 — `Ctrl`/`Cmd`+`Shift`+`E`가 파일 트리와 Run 툴바, Run 콘솔을
+  여닫고 페인 배치는 그대로 둡니다
+- 각 페인에는 파일 탭과 세션 탭을 함께 담는 탭 표시줄이 하나씩 있습니다. 파일을 수정하는 세션은
+  그 파일 옆에 둘 수 있고, 분할 화면에서는 둘을 나란히 보며, `Ctrl`+`Tab`으로 활성 페인의 탭을
+  순환합니다
+- 단순 텍스트 상자가 아닌 CodeMirror 기반 편집기입니다. TypeScript·JavaScript·Python·Go·Rust·
+  C/C++·Java·PHP·SQL·HTML·CSS·Markdown·JSON·YAML·XML 문법 강조를 지원하며, 여러 파일을 탭으로
+  열 수 있습니다
+- **마크다운은 나란히 볼 수 있습니다:** 마크다운 파일은 에디터·분할·프리뷰 중 하나로 열리고
+  `Ctrl`/`Cmd`+`Shift`+`V`가 셋을 순환합니다. 분할에서는 양쪽 스크롤이 서로를 따라갑니다
+- 항목마다 git 상태(추가·수정·삭제·충돌)를 표시하는 파일 트리와 생성·이름 변경·이동·복사·삭제·
+  Finder/Explorer에서 보기
+- **로컬 히스토리:** 삭제하기 전에 스냅샷을 남기므로, 에이전트가 정리해 버린 것도 직접 지운 것도
+  되살릴 수 있습니다. 30일간, 프로젝트당 최대 200 MB 보관
+- 모든 단축키는 설정에서 다시 지정할 수 있고, 기본값은 macOS에서 `Cmd`, 그 외에서 `Ctrl`입니다 —
+  창 분할, 분할된 창 사이 포커스 이동, 세션 순회, 파일 탭 닫기
+
 **테마와 모양**
 - 테마 일곱 — Vega, Orion, Umbra, Aurora, Antares, Quasar, Sirius. 카드마다 자기 팔레트로 스스로를 그리므로
   이름이 아니라 눈으로 고릅니다
@@ -109,6 +111,12 @@ Astera는 오래 걸리는 Claude Code와 Codex 작업을 위한 데스크톱 �
 
 Jobs는 선택 기능입니다. 설정에서 **에이전트 오케스트레이션**을 켜면 Jobs 사이드바가 나타납니다.
 Job은 Claude와 Codex에서 실행할 수 있는 Task의 의존성 그래프이며, 실행 방식은 두 가지입니다.
+
+<div align="center">
+<img src="assets/jobs.gif" width="820" alt="다이어그램: 코디네이터가 Job의 의존성 그래프를 따라 준비된 두 작업을 서로 다른 벤더에서 동시에 시작하고, 테스트로 하나의 완료를 증명하며, 두 의존 작업이 끝난 뒤 다음 작업을 진행하고, 스스로 정할 수 없는 결정은 사람을 기다린다" />
+<img src="assets/jobs-demo.gif" width="820" alt="화면 녹화: Job이 의존성 그래프를 따라 진행된다 — 한도에 걸린 워커가 스스로 이어가고, 두 의존성이 보고를 마치면 마지막 Task가 검증과 교차 벤더 리뷰를 통과한다" />
+<p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-killer-demo.mp4">▶ 전체 영상 (30초)</a></p>
+</div>
 
 ### 1. Jobs 사이드바에서 구성
 
@@ -139,12 +147,6 @@ git worktree에서 실행할 수 있고, 완료 결과는 상세 화면에서 **
 
 스킬은 세션 시작 시 로드되므로 에이전트 오케스트레이션을 먼저 켠 뒤 새 코디네이터 세션을 여세요.
 한 번 넘기고 끝나는 단순 작업에는 오케스트레이션 Run이 필요하지 않습니다.
-
-<div align="center">
-<img src="assets/jobs.gif" width="820" alt="다이어그램: 코디네이터가 Job의 의존성 그래프를 따라 준비된 두 작업을 서로 다른 벤더에서 동시에 시작하고, 테스트로 하나의 완료를 증명하며, 두 의존 작업이 끝난 뒤 다음 작업을 진행하고, 스스로 정할 수 없는 결정은 사람을 기다린다" />
-<img src="assets/jobs-demo.gif" width="820" alt="화면 녹화: Job이 의존성 그래프를 따라 진행된다 — 한도에 걸린 워커가 스스로 이어가고, 두 의존성이 보고를 마치면 마지막 Task가 검증과 교차 벤더 리뷰를 통과한다" />
-<p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-killer-demo.mp4">▶ 전체 영상 (30초)</a></p>
-</div>
 
 코디네이터 CLI 레퍼런스를 보려면:
 
