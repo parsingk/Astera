@@ -32,34 +32,6 @@ de una coordinadora mediante la skill `/astera-orchestration`.
 - Muchas sesiones de `claude` / `codex` en una ventana, como pestañas y como paneles divididos
 - Una terminal por proyecto
 
-**Editor y atajos**
-- Una tecla muestra y oculta el explorador: `Ctrl`/`Cmd`+`Shift`+`E` para el árbol de archivos, la
-  barra de ejecución y la consola de ejecución, dejando los paneles donde están
-- Una fila de pestañas por panel, con los dos tipos de pestaña: un archivo se sitúa junto a la sesión
-  que lo está cambiando, una división muestra ambos a la vez y `Ctrl`+`Tab` recorre la fila del
-  panel activo
-- Un editor de verdad, no un cuadro de texto: CodeMirror con resaltado de sintaxis para TypeScript,
-  JavaScript, Python, Go, Rust, C/C++, Java, PHP, SQL, HTML, CSS, Markdown, JSON, YAML y XML,
-  abiertos en pestañas
-- **Markdown en paralelo:** un archivo markdown se abre como editor, dividido o previsualización, y
-  `Ctrl`/`Cmd`+`Shift`+`V` recorre los tres — en la vista dividida, los dos paneles se siguen al
-  desplazarse
-- Un árbol de archivos con el estado de git en cada entrada (nuevo, modificado, eliminado, conflicto),
-  y crear, renombrar, mover, copiar, eliminar y mostrar en Finder / el Explorador
-- **Historial local:** se toma una instantánea antes de eliminar, así que lo que limpió el agente —o
-  tú— se puede recuperar. Se conserva 30 días, hasta 200 MB por proyecto
-- Todos los atajos se pueden reasignar en los ajustes, con `Cmd` por defecto en macOS y `Ctrl` en el
-  resto: dividir paneles, mover el foco entre ellos, recorrer sesiones, cerrar una pestaña de archivo
-
-**Ejecución**
-- Una configuración de ejecución tiene un tipo — Shell, npm, Node.js, Gradle, Maven, cargo, go,
-  Python, pytest, Docker Compose, Dockerfile o .NET — y guarda solo los campos que ese tipo tiene
-- El comando se arma al ejecutarlo, así que el wrapper de Gradle, el gestor de paquetes que implica
-  tu lockfile y las comillas que pide tu shell se resuelven entonces, no se escriben en una casilla
-- Se leen los archivos de compilación del proyecto, así que sus scripts de npm ya están ahí como
-  configuraciones, y un proyecto de Gradle o Maven trae las tareas y los objetivos habituales. Las
-  detectadas aparecen en cursiva hasta que editas una, lo que la guarda como tuya
-
 **Cuentas**
 - Varias cuentas por proveedor, cada una aislada mediante su propio `CLAUDE_CONFIG_DIR` / `CODEX_HOME`
 - **Rotación de cuentas:** cuando una sesión alcanza un límite de uso, Astera lo detecta en la
@@ -87,6 +59,34 @@ de una coordinadora mediante la skill `/astera-orchestration`.
 <p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-demo-schedule.mp4">▶ Grabación completa (22s)</a></p>
 </div>
 
+**Ejecución**
+- Una configuración de ejecución tiene un tipo — Shell, npm, Node.js, Gradle, Maven, cargo, go,
+  Python, pytest, Docker Compose, Dockerfile o .NET — y guarda solo los campos que ese tipo tiene
+- El comando se arma al ejecutarlo, así que el wrapper de Gradle, el gestor de paquetes que implica
+  tu lockfile y las comillas que pide tu shell se resuelven entonces, no se escriben en una casilla
+- Se leen los archivos de compilación del proyecto, así que sus scripts de npm ya están ahí como
+  configuraciones, y un proyecto de Gradle o Maven trae las tareas y los objetivos habituales. Las
+  detectadas aparecen en cursiva hasta que editas una, lo que la guarda como tuya
+
+**Editor y atajos**
+- Una tecla muestra y oculta el explorador: `Ctrl`/`Cmd`+`Shift`+`E` para el árbol de archivos, la
+  barra de ejecución y la consola de ejecución, dejando los paneles donde están
+- Una fila de pestañas por panel, con los dos tipos de pestaña: un archivo se sitúa junto a la sesión
+  que lo está cambiando, una división muestra ambos a la vez y `Ctrl`+`Tab` recorre la fila del
+  panel activo
+- Un editor de verdad, no un cuadro de texto: CodeMirror con resaltado de sintaxis para TypeScript,
+  JavaScript, Python, Go, Rust, C/C++, Java, PHP, SQL, HTML, CSS, Markdown, JSON, YAML y XML,
+  abiertos en pestañas
+- **Markdown en paralelo:** un archivo markdown se abre como editor, dividido o previsualización, y
+  `Ctrl`/`Cmd`+`Shift`+`V` recorre los tres — en la vista dividida, los dos paneles se siguen al
+  desplazarse
+- Un árbol de archivos con el estado de git en cada entrada (nuevo, modificado, eliminado, conflicto),
+  y crear, renombrar, mover, copiar, eliminar y mostrar en Finder / el Explorador
+- **Historial local:** se toma una instantánea antes de eliminar, así que lo que limpió el agente —o
+  tú— se puede recuperar. Se conserva 30 días, hasta 200 MB por proyecto
+- Todos los atajos se pueden reasignar en los ajustes, con `Cmd` por defecto en macOS y `Ctrl` en el
+  resto: dividir paneles, mover el foco entre ellos, recorrer sesiones, cerrar una pestaña de archivo
+
 **Apariencia**
 - Siete temas — Vega, Orion, Umbra, Aurora, Antares, Quasar y Sirius — elegidos desde tarjetas que se dibujan
   cada una con su propia paleta, así que eliges mirando en vez de por el nombre
@@ -106,6 +106,12 @@ de una coordinadora mediante la skill `/astera-orchestration`.
 Jobs es opcional. Activa **Orquestación de agentes** en los ajustes para mostrar su barra lateral.
 Un trabajo es un grafo de tareas con dependencias que pueden ejecutarse con cualquiera de los dos
 proveedores, y hay dos formas de ponerlo en marcha.
+
+<div align="center">
+<img src="assets/jobs.gif" width="820" alt="Diagrama: una coordinadora sigue el grafo de dependencias, inicia dos tareas listas en proveedores distintos, comprueba una con pruebas, continúa cuando terminan sus dependencias y espera a una persona cuando hace falta una decisión" />
+<img src="assets/jobs-demo.gif" width="820" alt="Grabación de pantalla: un trabajo avanzando por su grafo de dependencias — un trabajador alcanza su límite y se reanuda solo, ambas dependencias informan, y la última tarea pasa una validación y una revisión cruzada entre proveedores" />
+<p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-killer-demo.mp4">▶ Grabación completa (30s)</a></p>
+</div>
 
 ### 1. Prepararlo en la barra lateral de Jobs
 
@@ -138,12 +144,6 @@ también aparecen en la barra lateral de Jobs.
 
 Las skills se cargan al iniciar una sesión: activa primero **Orquestación de agentes** y abre después
 una sesión coordinadora nueva. Una entrega sencilla y puntual no necesita un Run de orquestación.
-
-<div align="center">
-<img src="assets/jobs.gif" width="820" alt="Diagrama: una coordinadora sigue el grafo de dependencias, inicia dos tareas listas en proveedores distintos, comprueba una con pruebas, continúa cuando terminan sus dependencias y espera a una persona cuando hace falta una decisión" />
-<img src="assets/jobs-demo.gif" width="820" alt="Grabación de pantalla: un trabajo avanzando por su grafo de dependencias — un trabajador alcanza su límite y se reanuda solo, ambas dependencias informan, y la última tarea pasa una validación y una revisión cruzada entre proveedores" />
-<p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-killer-demo.mp4">▶ Grabación completa (30s)</a></p>
-</div>
 
 Para leer la referencia de la CLI de coordinación:
 

@@ -39,31 +39,6 @@ vendors, checks the result, and waits when a human decision is needed.
 - Many `claude` / `codex` sessions in one window, as tabs and as split panes
 - A terminal per project
 
-**Editor and shortcuts**
-- One key shows and hides the explorer — `Ctrl`/`Cmd`+`Shift`+`E` for the file tree, the run toolbar
-  and the run console, leaving the panes where they are
-- One tab bar per pane, holding both kinds of tab: a file sits beside the session that is changing
-  it, a split shows the two at once, and `Ctrl`+`Tab` walks the active pane's row
-- A real editor, not a text box: CodeMirror with syntax highlighting for TypeScript, JavaScript,
-  Python, Go, Rust, C/C++, Java, PHP, SQL, HTML, CSS, Markdown, JSON, YAML and XML, open across tabs
-- **Markdown side by side:** a markdown file opens as editor, split, or preview, and
-  `Ctrl`/`Cmd`+`Shift`+`V` cycles the three — in split, the two panes follow each other's scrolling
-- A file tree with git state on each entry (new, modified, deleted, conflict), and create, rename,
-  move, copy, delete and reveal-in-Finder/Explorer
-- **Local history:** a snapshot is taken before a delete, so an agent's cleanup — or your own — is
-  recoverable. Kept 30 days, up to 200 MB per project
-- Every shortcut is remappable in settings, defaulting to `Cmd` on macOS and `Ctrl` elsewhere:
-  splitting panes, moving focus between them, cycling sessions, closing a file tab
-
-**Run**
-- A run configuration has a kind — Shell, npm, Node.js, Gradle, Maven, cargo, go, Python, pytest,
-  Docker Compose, Dockerfile or .NET — and holds only the fields that kind actually has
-- The command is assembled when you run it, so the Gradle wrapper, the package manager your lockfile
-  implies and the quoting your shell needs are worked out then, not typed into a box
-- Your build files are read, so a project's npm scripts are already there as configurations, and a
-  Gradle or Maven project starts with the standard tasks and goals. A detected one shows in italics
-  until you edit it, which saves it as yours
-
 **Accounts**
 - Several accounts per vendor, each isolated through its own `CLAUDE_CONFIG_DIR` / `CODEX_HOME`
 - **Account rolling:** when a session hits a usage limit, Astera detects it from the transcript,
@@ -90,6 +65,31 @@ vendors, checks the result, and waits when a human decision is needed.
 <p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-demo-schedule.mp4">▶ Full recording (22s)</a></p>
 </div>
 
+**Run**
+- A run configuration has a kind — Shell, npm, Node.js, Gradle, Maven, cargo, go, Python, pytest,
+  Docker Compose, Dockerfile or .NET — and holds only the fields that kind actually has
+- The command is assembled when you run it, so the Gradle wrapper, the package manager your lockfile
+  implies and the quoting your shell needs are worked out then, not typed into a box
+- Your build files are read, so a project's npm scripts are already there as configurations, and a
+  Gradle or Maven project starts with the standard tasks and goals. A detected one shows in italics
+  until you edit it, which saves it as yours
+
+**Editor and shortcuts**
+- One key shows and hides the explorer — `Ctrl`/`Cmd`+`Shift`+`E` for the file tree, the run toolbar
+  and the run console, leaving the panes where they are
+- One tab bar per pane, holding both kinds of tab: a file sits beside the session that is changing
+  it, a split shows the two at once, and `Ctrl`+`Tab` walks the active pane's row
+- A real editor, not a text box: CodeMirror with syntax highlighting for TypeScript, JavaScript,
+  Python, Go, Rust, C/C++, Java, PHP, SQL, HTML, CSS, Markdown, JSON, YAML and XML, open across tabs
+- **Markdown side by side:** a markdown file opens as editor, split, or preview, and
+  `Ctrl`/`Cmd`+`Shift`+`V` cycles the three — in split, the two panes follow each other's scrolling
+- A file tree with git state on each entry (new, modified, deleted, conflict), and create, rename,
+  move, copy, delete and reveal-in-Finder/Explorer
+- **Local history:** a snapshot is taken before a delete, so an agent's cleanup — or your own — is
+  recoverable. Kept 30 days, up to 200 MB per project
+- Every shortcut is remappable in settings, defaulting to `Cmd` on macOS and `Ctrl` elsewhere:
+  splitting panes, moving focus between them, cycling sessions, closing a file tab
+
 **Appearance**
 - Seven themes — Vega, Orion, Umbra, Aurora, Antares, Quasar and Sirius — picked from cards that each draw
   themselves in their own palette, so you choose by looking rather than by name
@@ -107,6 +107,12 @@ vendors, checks the result, and waits when a human decision is needed.
 
 Jobs is opt-in. Turn on **Agent orchestration** in settings to add the Jobs sidebar. A job is a
 dependency graph whose tasks can run under either vendor, and there are two ways to run one.
+
+<div align="center">
+<img src="assets/jobs.gif" width="820" alt="Diagram: a coordinator follows a job's dependency graph, starts the two ready tasks on both vendors at once, uses a test suite to prove one done, waits for both dependencies before continuing, and leaves an unresolved decision for a person" />
+<img src="assets/jobs-demo.gif" width="820" alt="Screen recording: a job advancing through its dependency graph — a worker hits a usage limit and resumes by itself, both dependencies report, and the last task passes a validation and a cross-vendor review" />
+<p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-killer-demo.mp4">▶ Full recording (30s)</a></p>
+</div>
 
 ### 1. Build it in the Jobs sidebar
 
@@ -136,12 +142,6 @@ you. Runs created this way also appear in the Jobs sidebar when they belong to t
 
 Skills are loaded when a session starts, so enable Agent orchestration first and then open a new
 coordinator session. A simple one-off handoff does not need an orchestration run.
-
-<div align="center">
-<img src="assets/jobs.gif" width="820" alt="Diagram: a coordinator follows a job's dependency graph, starts the two ready tasks on both vendors at once, uses a test suite to prove one done, waits for both dependencies before continuing, and leaves an unresolved decision for a person" />
-<img src="assets/jobs-demo.gif" width="820" alt="Screen recording: a job advancing through its dependency graph — a worker hits a usage limit and resumes by itself, both dependencies report, and the last task passes a validation and a cross-vendor review" />
-<p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-killer-demo.mp4">▶ Full recording (30s)</a></p>
-</div>
 
 To read the coordinator CLI reference:
 
