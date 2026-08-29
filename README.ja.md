@@ -122,6 +122,9 @@ Astera は、あなたが席にいない間もエージェントのセッショ�
 
 <div align="center">
 <img src="assets/rolling.gif" width="820" alt="図: 実行中のセッションが週の上限に達し、Astera がトランスクリプトからリセット時刻を読み取って次のアカウントに切り替え、同じ会話がそのまま続く" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-demo-rolling.mp4" width="820" controls muted>
+<a href="assets/astera-demo-rolling.mp4">画面録画: セッションが上限に達すると Astera が次のアカウントに切り替えて同じ会話を続け、行き先がなければ再開時刻を表示する</a>
+</video>
 </div>
 
 **スケジュール実行とリモート操作**
@@ -131,6 +134,9 @@ Astera は、あなたが席にいない間もエージェントのセッショ�
 
 <div align="center">
 <img src="assets/schedule.gif" width="820" alt="図: 03:00 にスケジュールされたセッションが自ら起動し、残しておいたコマンドを実行し、終わると Slack が結果を報告する" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-demo-schedule.mp4" width="820" controls muted>
+<a href="assets/astera-demo-schedule.mp4">画面録画: スケジュールを設定したセッションが、その時刻になると自ら作業を始める</a>
+</video>
 </div>
 
 **外観**

@@ -125,6 +125,9 @@ Windows에서는 이후 업데이트를 자동으로 확인하고, 내려받기 
 
 <div align="center">
 <img src="assets/rolling.gif" width="820" alt="다이어그램: 실행 중인 세션이 주간 한도에 걸리고, Astera가 트랜스크립트에서 리셋 시각을 읽어 다음 계정으로 전환하며, 같은 대화가 그대로 이어진다" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-demo-rolling.mp4" width="820" controls muted>
+<a href="assets/astera-demo-rolling.mp4">화면 녹화: 세션이 한도에 걸리면 Astera가 다음 계정으로 전환해 같은 대화를 이어가고, 갈 곳이 없으면 재개 시각을 알려 준다</a>
+</video>
 </div>
 
 **예약 실행과 Slack 원격 제어**
@@ -134,6 +137,9 @@ Windows에서는 이후 업데이트를 자동으로 확인하고, 내려받기 
 
 <div align="center">
 <img src="assets/schedule.gif" width="820" alt="다이어그램: 03:00에 예약된 세션이 스스로 시작해 남겨 둔 명령을 실행하고, 끝나면 Slack이 결과를 알린다" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-demo-schedule.mp4" width="820" controls muted>
+<a href="assets/astera-demo-schedule.mp4">화면 녹화: 예약이 걸린 세션이 그 시각이 되면 스스로 작업을 시작한다</a>
+</video>
 </div>
 
 **테마와 모양**

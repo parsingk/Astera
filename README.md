@@ -125,6 +125,9 @@ You will also need:
 
 <div align="center">
 <img src="assets/rolling.gif" width="820" alt="Diagram: a running session hits its weekly limit, Astera reads the reset time from the transcript, switches to the next account, and the same conversation carries on" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-demo-rolling.mp4" width="820" controls muted>
+<a href="assets/astera-demo-rolling.mp4">Screen recording: a session hits a usage limit, Astera switches to the next account and the same conversation carries on, then shows when it will resume</a>
+</video>
 </div>
 
 **Scheduling and remote control**
@@ -134,6 +137,9 @@ You will also need:
 
 <div align="center">
 <img src="assets/schedule.gif" width="820" alt="Diagram: at 03:00 a scheduled session starts on its own, runs the command left for it, finishes, and Slack reports the result" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-demo-schedule.mp4" width="820" controls muted>
+<a href="assets/astera-demo-schedule.mp4">Screen recording: a session with a schedule, and the work starting on its own when the time comes</a>
+</video>
 </div>
 
 **Appearance**

@@ -125,6 +125,9 @@ También necesitarás:
 
 <div align="center">
 <img src="assets/rolling.gif" width="820" alt="Diagrama: una sesión en marcha alcanza su límite semanal, Astera lee la hora de reinicio en la transcripción, cambia a la siguiente cuenta y la misma conversación continúa" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-demo-rolling.mp4" width="820" controls muted>
+<a href="assets/astera-demo-rolling.mp4">Grabación de pantalla: una sesión alcanza su límite, Astera cambia a la siguiente cuenta y la misma conversación continúa; cuando no queda ninguna, muestra a qué hora se reanudará</a>
+</video>
 </div>
 
 **Programación y control remoto**
@@ -134,6 +137,9 @@ También necesitarás:
 
 <div align="center">
 <img src="assets/schedule.gif" width="820" alt="Diagrama: a las 03:00 una sesión programada arranca sola, ejecuta el comando que le dejaste, termina, y Slack informa del resultado" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-demo-schedule.mp4" width="820" controls muted>
+<a href="assets/astera-demo-schedule.mp4">Grabación de pantalla: una sesión con horario programado, y el trabajo arrancando solo cuando llega la hora</a>
+</video>
 </div>
 
 **Apariencia**
