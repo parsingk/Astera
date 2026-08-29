@@ -64,7 +64,8 @@ export type WorkbenchTab =
        *  **null 은 "지금 상태를 모른다"** — 다른 프로젝트의 기능 탭이 그렇다. 그때는 글리프 자리를
        *  비운다(틀린 상태를 그리는 것보다 낫다) */
       glyph: string | null
-      needsAttention: boolean
+      /** 그 글리프의 색(테마 토큰). PaneGrid 가 UnderstandingIcons 의 GLYPH_COLOR 에서 가져온다 */
+      glyphColor: string | null
     }
 
 /** 페인 하나의 탭 줄.
@@ -192,7 +193,8 @@ export function WorkbenchTabs({
             // 상태를 모르면 빈 span 도 두지 않는다 — gap 만 남아 제목이 밀려 보인다
             tab.glyph !== null && (
               <span
-                className={tab.needsAttention ? 'tab-glyph warn' : 'tab-glyph'}
+                className="tab-glyph"
+                style={{ color: tab.glyphColor ?? undefined }}
                 aria-hidden="true"
               >
                 {tab.glyph}

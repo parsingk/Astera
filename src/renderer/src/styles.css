@@ -590,9 +590,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    (core/files/tabLabel.ts). Only present when names collide, so it is drawn quietly: dim, smaller than
    the name, and clipped rather than allowed to push the name out of a narrow pane */
 .tab-hint { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 10px; color: var(--text-faint); }
-/* 기능 탭의 상태 글리프. 사이드바의 .hiw-g 와 같은 규칙이다 — 모양이 상태를 말하고 색은 거들 뿐 */
-.tab-glyph { flex: none; font-size: 11px; line-height: 1; color: var(--ok); }
-.tab-glyph.warn { color: var(--warn); }
+/* 기능 탭의 상태 글리프. 사이드바의 .hiw-g 와 같은 규칙이다 — 모양이 상태를 말하고 색은 거들 뿐.
+   **색은 여기서 정하지 않는다** — 상태마다 다르고, 세 자리(여기·.hiw-g·.hiw-st)가 갈라지지 않도록
+   UnderstandingIcons 의 GLYPH_COLOR 한 표에서 인라인으로 온다 */
+.tab-glyph { flex: none; font-size: 11px; line-height: 1; }
 
 /* ---------- terminal ---------- */
 /* .terminal-slot is not terminal-only: it is how a pane's body claims its place in the grid, and the
@@ -1845,8 +1846,8 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* 배경과 띠를 함께 준다 — Umbra·Sirius 는 --marker-w 가 0 이라 띠만으로는 아무것도 보이지 않는다.
    .fx-row.selected, .rail-btn.on 이 쓰는 그 조합이다 */
 .hiw-row.on { background: var(--line-soft); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
-.hiw-g { flex: 0 0 auto; width: 12px; text-align: center; font-size: 11px; line-height: 1.45; color: var(--ok); }
-.hiw-row.needs .hiw-g { color: var(--warn); }
+/* 색은 .tab-glyph 와 같은 이유로 여기 없다 — GLYPH_COLOR 에서 인라인으로 온다 */
+.hiw-g { flex: 0 0 auto; width: 12px; text-align: center; font-size: 11px; line-height: 1.45; }
 .hiw-body { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .hiw-name { font-size: 12px; font-weight: 500; color: var(--text); }
 .hiw-summary { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1872,8 +1873,8 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .hiw-pane-empty { display: grid; place-items: center; color: var(--text-faint); font-size: 12px; }
 .hiw-fhead { display: flex; align-items: center; gap: 10px; padding: 11px 18px; border-bottom: 1px solid var(--line-soft); }
 .hiw-fhead h4 { margin: 0; font-size: 17px; font-weight: 600; color: var(--text); }
-.hiw-st { font-size: 11px; color: var(--ok); }
-.hiw-st.warn { color: var(--warn); }
+/* 색은 .hiw-g·.tab-glyph 와 같은 표에서 온다(GLYPH_COLOR) */
+.hiw-st { font-size: 11px; }
 .hiw-sp { flex: 1; }
 .hiw-ghost { font-size: 11px; color: var(--text-dim); background: none; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 2px 9px; cursor: pointer; }
 .hiw-ghost.acc { color: var(--accent); }

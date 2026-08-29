@@ -3,7 +3,7 @@ import type { FeatureExplanation, ProjectFeature } from '../../../core/understan
 import { scopeToStep } from '../../../core/understanding/scope'
 import { useI18n } from '../i18n/I18nProvider'
 import { FlowDiagram } from './FlowDiagram'
-import { GLYPH, STATUS_KEY } from './UnderstandingIcons'
+import { GLYPH, GLYPH_COLOR, STATUS_KEY } from './UnderstandingIcons'
 
 const dateOf = (iso: string): string => {
   const d = new Date(iso)
@@ -117,8 +117,9 @@ export function FeatureDetail({
     <div className="hiw-pane">
       <div className="hiw-fhead">
         <h4>{feature.name}</h4>
-        {/* 상태를 박아 두지 않는다 — 사이드바와 같은 표를 본다(설계 §8) */}
-        <span className={feature.status === 'up-to-date' ? 'hiw-st' : 'hiw-st warn'}>
+        {/* 상태를 박아 두지 않는다 — 모양도 문구도 색도 사이드바와 같은 표를 본다(설계 §8).
+            색을 여기서 따로 고르면 세 자리가 갈라진다(UnderstandingIcons 의 GLYPH_COLOR) */}
+        <span className="hiw-st" style={{ color: GLYPH_COLOR[feature.status] }}>
           {GLYPH[feature.status]} {t(STATUS_KEY[feature.status])}
         </span>
         <span className="hiw-sp" />

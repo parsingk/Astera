@@ -1,7 +1,7 @@
 import type { ProjectUnderstanding } from '../../../core/understanding/types'
 import { attentionCount, ATTENTION_STATUSES, sortFeatures } from '../../../core/understanding/list'
 import { useI18n } from '../i18n/I18nProvider'
-import { GLYPH } from './UnderstandingIcons'
+import { GLYPH, GLYPH_COLOR } from './UnderstandingIcons'
 
 const dateOf = (iso: string): string => {
   const d = new Date(iso)
@@ -67,10 +67,12 @@ export function UnderstandingView({
           return (
             <div
               key={f.id}
-              className={`hiw-row${f.id === selectedFeatureId ? ' on' : ''}${needs ? ' needs' : ''}`}
+              className={`hiw-row${f.id === selectedFeatureId ? ' on' : ''}`}
               onClick={() => onOpenFeature(f.id)}
             >
-              <span className="hiw-g" aria-hidden="true">
+              {/* 색은 상태에서 온다 — 줄이 "검토 필요" 집합에 드는지로 고르면 그 집합에 없는
+                  generation-failed 가 초록으로 그려진다(UnderstandingIcons 의 GLYPH_COLOR) */}
+              <span className="hiw-g" style={{ color: GLYPH_COLOR[f.status] }} aria-hidden="true">
                 {GLYPH[f.status]}
               </span>
               <span className="hiw-body">

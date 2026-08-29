@@ -15,11 +15,10 @@ import {
 } from '../../../core/panes/tree'
 import { parseTab, sessionTab } from '../../../core/panes/tabId'
 import { tabLabels } from '../../../core/files/tabLabel'
-import { ATTENTION_STATUSES } from '../../../core/understanding/list'
 import type { FeatureStatus } from '../../../core/understanding/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { TerminalView } from './TerminalView'
-import { GLYPH } from './UnderstandingIcons'
+import { GLYPH, GLYPH_COLOR } from './UnderstandingIcons'
 import {
   WorkbenchTabs,
   type FeatureTab,
@@ -351,7 +350,9 @@ export function PaneGrid({
                 featureId: rec.featureId,
                 title: rec.title,
                 glyph: status ? GLYPH[status] : null,
-                needsAttention: status ? ATTENTION_STATUSES.includes(status) : false
+                // 색도 같은 표에서 온다 — "검토 필요" 집합으로 고르면 그 집합에 없는
+                // generation-failed 가 초록으로 그려진다(UnderstandingIcons 의 GLYPH_COLOR)
+                glyphColor: status ? GLYPH_COLOR[status] : null
               }
             }
             const f = ref?.kind === 'file' ? fileTabOf.get(tabId) : undefined
