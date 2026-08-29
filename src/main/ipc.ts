@@ -771,17 +771,6 @@ export function registerIpc(
     const store = new OrchestrationStore(path.join(app.getPath('userData'), 'orchestration.json'))
     const loaded = await store.load()
     if (loaded.recovered) orchLog('failed to read or parse orchestration.json — kept the .bak and started from an empty state')
-
-    const understanding = new UnderstandingStore(
-      path.join(app.getPath('userData'), 'understanding.json')
-    )
-    const uLoaded = await understanding.load()
-    if (uLoaded.recovered)
-      orchLog('failed to read or parse understanding.json — kept the .bak and started from an empty state')
-
-    ipcMain.handle('understanding.get', (_e, projectPath: string) =>
-      understanding.get(projectPath) ?? null
-    )
     if (
       loaded.unknownOutcomes > 0 ||
       loaded.pruned > 0 ||
@@ -2957,6 +2946,29 @@ export function registerIpc(
     orchRequest++
     orchProject = null
     orchSent = null
+  })
+
+  // How It Works: understanding.json persistence. Unlike OrchestrationStore above (built inside
+  // bootOrch, which only runs when the orchestration toggle is on), this has nothing to do with agent
+  // orchestration — a project's stored explanation must be readable whether or not that toggle is on,
+  // and the toggle defaults to off. So it is constructed here, unconditionally, at the same scope as
+  // assertAllowedPath (needed by the handler below) rather than beside OrchestrationStore.
+  const understanding = new UnderstandingStore(
+    path.join(app.getPath('userData'), 'understanding.json')
+  )
+  // registerIpc is synchronous, so this cannot be awaited here — the handler below awaits it instead,
+  // which keeps the handler itself registered on every startup while still never serving before load
+  // has actually finished.
+  const understandingLoaded = understanding.load().then((loaded) => {
+    if (loaded.recovered)
+      orchLog('failed to read or parse understanding.json — kept the .bak and started from an empty state')
+  })
+  ipcMain.handle('understanding.get', async (_e, projectPath: string) => {
+    // orch.list 와 같은 검사 — 경로가 무엇이 돌아올지를 정한다
+    await assertAllowedPath(projectPath)
+    await understandingLoaded
+    // undefined 가 아니라 null 로 넘긴다 — structured clone 에서 undefined 는 구별되는 값으로 살아남지 않는다
+    return understanding.get(projectPath) ?? null
   })
 
   // The detected JDKs. There is no path argument, so this is not subject to assertAllowedPath — the scan
