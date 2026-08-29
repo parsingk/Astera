@@ -26,15 +26,6 @@ vendors, checks the result, and waits when a human decision is needed.
 > **Status:** Windows, macOS and Linux. It drives the `claude` and `codex` CLIs, so it is only as
 > capable as whichever of those you have installed.
 
-## Built for long-running agent work
-
-- **Leave sessions unattended.** Start work at a scheduled time, get notified in Slack when a turn
-  ends or a limit is reached, and continue on the next configured account without losing the thread.
-- **Run work in parallel without sharing a checkout.** Keep Claude Code and Codex sessions together
-  in one window while each session can work from its own git worktree.
-- **Coordinate work that has more than one step.** Model dependencies as a Job, run ready tasks on
-  either vendor, and use builds, tests, reviews, and human decisions as completion gates.
-
 ## What it does
 
 **Project workspaces**
