@@ -127,7 +127,11 @@ describe('FeatureDetail', () => {
 
   it('추정한 결정의 알약에만 low 가 붙는다', () => {
     const html = render()
-    expect(html).toContain('hiw-src low')
+    // 어느 쪽에 붙었는지까지 고정한다. `hiw-src low` 가 있다는 것과 알약이 둘이라는 것만 보면
+    // **뒤집힌 구현(ADR 알약에 low)도 통과한다** — 추정과 결정을 같은 무게로 보여 주지 않는다는
+    // 설계 §4 의 구분을 지키는 단언이 이것 하나뿐이라, 라벨까지 붙여 자리를 못박는다
+    expect(html).toContain('hiw-src low">세션 #140')
+    expect(html).toContain('hiw-src">ADR-012')
     expect((html.match(/hiw-src/g) ?? []).length).toBe(2)
   })
 

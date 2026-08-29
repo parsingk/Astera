@@ -18,7 +18,11 @@ export interface ProjectFeature {
   /** 사이드바 한 줄에 들어가는 요약 */
   summary: string
   status: FeatureStatus
-  /** ISO. "2일 전"의 원본 */
+  /** ISO. 이 기능의 설명을 마지막으로 갱신한 시각.
+   *  **아직 그리는 화면이 없다** — 설계 §3·§8 이 사이드바 메타에 `2일 전 · 근거 6` 을 적었지만
+   *  이번 브랜치는 `근거 6` 만 그린다. 상대 시각 포매터가 저장소에 없고, 설명을 만드는 계층이
+   *  없어 이 값에 의미 있는 시각이 들어오지도 않는다. 생성 계획이 그 둘을 함께 맡는다
+   *  (docs/2026-08-29-how-it-works-ui-design.md §3). */
   updatedAt: string
   /** "근거 6". 설명을 통째로 읽지 않고 개수만 보이려고 두는 파생값이다 */
   evidenceCount: number

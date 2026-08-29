@@ -396,8 +396,10 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .run-host { flex: none; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 
 /* ---------- project Run/Stop — RunToolbar and workbench wiring ---------- */
-/* The editor body. It now lives inside a pane's slot rather than under the run console's host, and the
-   rule is unchanged because the slot is a column flex box just as that host is */
+/* The body of whatever a pane's workbench slot holds — the editor, and now the How It Works feature
+   detail too (FeatureDetailHost wraps itself in this class for the same reason). It lives inside a
+   pane's slot rather than under the run console's host, and the rule is unchanged because the slot is
+   a column flex box just as that host is */
 .workbench-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .run-toolbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-left: 1px solid var(--line); background: var(--panel); position: relative; }
 /* The run-config picker in the toolbar. Only sizing lives here now — the surface comes from .sel.
@@ -1955,12 +1957,12 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 
 .hiw-chg { display: flex; flex-direction: column; gap: 2px; margin-bottom: 9px; }
 .hiw-chg:last-child { margin-bottom: 0; }
+/* 날짜와 출처 둘 다 메타다. 출처에 --accent 밑줄을 주면 이 앱의 링크 모습이 되는데 갈 곳이 없다 */
 .hiw-ct { display: flex; gap: 8px; font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
 .hiw-cb { font-size: 11.5px; color: var(--text-dim); }
 
 /* 좁힘 머리. --marker-w 가 0 인 테마(Umbra·Sirius)에서도 보이도록 배경을 함께 준다 */
 .hiw-scope { display: flex; align-items: center; gap: 8px; padding: 9px 15px; background: var(--elevated); border-bottom: 1px solid var(--line-soft); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
-/* 날짜와 출처 둘 다 메타다. 출처에 --accent 밑줄을 주면 이 앱의 링크 모습이 되는데 갈 곳이 없다 */
 .hiw-scope-label { font-size: 11.5px; font-weight: 500; color: var(--text); }
 .hiw-scope-clear { margin-left: auto; font-size: 10.5px; color: var(--text-faint); background: none; border: 0; cursor: pointer; }
 
