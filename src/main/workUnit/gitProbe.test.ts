@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { makeRepo, tempDir } from '../../core/worktrees/testRepo'
 import { classifyTransition } from '../../core/git/transition'
-import { readGitRef, isAncestorOf } from './gitProbe'
+import { readGitRef, isAncestorOf, readRange } from './gitProbe'
 
 const run = (repo: string, args: string[]): void => {
   execFileSync('git', args, { cwd: repo, windowsHide: true, stdio: 'pipe' })
@@ -94,5 +94,35 @@ describe('isAncestorOf', () => {
     const hash = headHash(repo)
     expect(await isAncestorOf(repo, hash, MISSING_HASH)).toBeNull()
     expect(await isAncestorOf(repo, MISSING_HASH, hash)).toBeNull()
+  })
+})
+
+describe('readRange', () => {
+  it('fast-forward 구간의 커밋과 파일이 들어 있다', async () => {
+    const repo = await makeRepo()
+    const before = headHash(repo)
+
+    await fs.writeFile(path.join(repo, 'g.txt'), 'y', 'utf8')
+    run(repo, ['add', 'g.txt'])
+    run(repo, ['commit', '-m', 'second'])
+    const mid = headHash(repo)
+
+    await fs.writeFile(path.join(repo, 'h.txt'), 'z', 'utf8')
+    run(repo, ['add', 'h.txt'])
+    run(repo, ['commit', '-m', 'third'])
+    const after = headHash(repo)
+
+    const range = await readRange(repo, before, after)
+    // git log 는 최신 커밋을 먼저 낸다
+    expect(range.commits).toEqual([after, mid])
+    expect(range.changedFiles.sort()).toEqual(['g.txt', 'h.txt'])
+  })
+
+  it('git 저장소가 아닌 디렉터리 → 던지지 않고 빈 목록', async () => {
+    const notRepo = await tempDir('astera-gitprobe-range-notrepo-')
+    await expect(readRange(notRepo, MISSING_HASH, MISSING_HASH)).resolves.toEqual({
+      commits: [],
+      changedFiles: []
+    })
   })
 })

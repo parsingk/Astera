@@ -10,6 +10,7 @@ import path from 'node:path'
 import { WorkUnitStore } from './store'
 import { WorkUnitCollector, type CollectorGit, type CollectorSession } from './collector'
 import { isOpen } from '../../core/workUnit/status'
+import { OPERATION_GRACE_MS } from '../../core/git/provenance'
 import type { GitRef } from '../../core/git/types'
 
 let dir: string
@@ -36,7 +37,12 @@ const toolResult = (): string =>
   }) + '\n'
 
 interface Fake {
-  git: CollectorGit & { ref: GitRef; files: string[]; ancestor: boolean | null }
+  git: CollectorGit & {
+    ref: GitRef
+    files: string[]
+    ancestor: boolean | null
+    range: { commits: string[]; changedFiles: string[] }
+  }
   sessions: CollectorSession[]
   clock: number
 }
@@ -47,9 +53,11 @@ function makeFake(): Fake {
       ref: { branch: 'main', head: 'c0' },
       files: [],
       ancestor: true,
+      range: { commits: [], changedFiles: [] },
       readRef: async () => fake.git.ref,
       isAncestor: async () => fake.git.ancestor,
-      changedFiles: async () => fake.git.files
+      changedFiles: async () => fake.git.files,
+      readRange: async () => fake.git.range
     },
     sessions: [],
     clock: Date.parse('2026-08-30T09:00:00.000Z')
@@ -63,11 +71,14 @@ async function makeCollector(
 ): Promise<{ collector: WorkUnitCollector; store: WorkUnitStore }> {
   const store = new WorkUnitStore(file)
   await store.load()
-  const collector = new WorkUnitCollector({
+  // 자기 참조다 — pendingGitOps 는 collector 자신의 등록 목록을 그대로 돌려준다. ipc.ts 가
+  // workUnitCollector 를 wiring 하는 것과 같은 자리, 같은 이유다.
+  const collector: WorkUnitCollector = new WorkUnitCollector({
     store,
     listSessions: async () => fake.sessions,
     git: fake.git,
-    now: () => fake.clock
+    now: () => fake.clock,
+    pendingGitOps: () => collector.getPendingGitOps()
   })
   return { collector, store }
 }
@@ -198,6 +209,54 @@ describe('WorkUnitCollector — WU §23', () => {
     expect(state.units[0].status).toBe('completed')
     expect(state.units[0].git.endHead).toBe('c9') // 경계가 물은 HEAD 가 닫히는 Unit 에도 들어간다
     expect(state.units[1].git.startHead).toBe('c9')
+  })
+})
+
+// ── Astera 자신의 git 동작 (EG §26·§41-9) ─────────────────────────────
+
+describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
+  it('Astera 의 병합은 외부 변경이 되지 않는다 (EG §41-9)', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    // 기준선을 잡는다 — 처음 보는 저장소는 전이를 만들지 않는다
+    collector.onGitChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(0)
+
+    // Astera 자신의 병합이 도는 중이라고 등록한 채로 HEAD 를 옮긴다 — ipc.ts 의 job-merge 자리와 같다
+    const opId = collector.beginGitOperation('job-merge', projectPath)
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+    collector.endGitOperation(opId)
+
+    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(0)
+  })
+
+  // Task 11 리뷰가 짚은 자리다: 수집기의 주입된 시계(now)가 유예 경계를 실제로 넘기는 테스트가
+  // 없었다. isAsteraOperation 의 유예(OPERATION_GRACE_MS)는 provenance.test.ts 가 순수 함수로도
+  // 확인하지만, 여기서는 수집기 자신의 begin/end + 주입된 clock 을 통해 끝에서 끝까지 확인한다.
+  it('유예가 지난 뒤의 전이는 외부다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    collector.onGitChanged() // 기준선
+    await collector.flush()
+
+    const opId = collector.beginGitOperation('job-merge', projectPath)
+    collector.endGitOperation(opId)
+    fake.clock += OPERATION_GRACE_MS + 1 // 유예 너머로 시각을 옮긴다
+
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+
+    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(1)
   })
 })
 

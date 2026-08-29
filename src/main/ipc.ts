@@ -18,8 +18,8 @@ import { copyTranscript, samePath } from '../core/rolling/transcript'
 import { OrchestrationStore } from './orchestration/store'
 import { UnderstandingStore } from './understanding/store'
 import { WorkUnitStore } from './workUnit/store'
-import { WorkUnitCollector, readChangedFiles, type CollectorSession } from './workUnit/collector'
-import { readGitRef, isAncestorOf } from './workUnit/gitProbe'
+import { WorkUnitCollector, type CollectorSession } from './workUnit/collector'
+import { readGitRef, isAncestorOf, readChangedFiles, readRange } from './workUnit/gitProbe'
 import {
   OrchCoordinator,
   LAUNCH_FORBIDDEN,
@@ -1513,23 +1513,34 @@ export function registerIpc(
           }
         // `--no-edit` 는 편집기를 막는 것이다. 이 자리에는 사람이 없고, 편집기가 뜨면 그 git 프로세스는
         // git() 의 30초 timeout 까지 서 있다가 죽는다 — 그때 남는 저장소가 곧 병합 중간 상태다.
-        const merged = await git(['merge', '--no-edit', ref], { cwd: mergeInto })
-        if (!merged.ok) {
-          // 미리 검사가 통과했는데도 실패했다면 충돌이 아닌 이유다(추적되지 않는 파일과의 겹침,
-          // index.lock, 훅, 서명). 되돌린 뒤 사람에게 간다 — 에이전트에게 넘기지 않는 이유는 이것이
-          // "합치면 충돌한다"가 아니라 "앱이 병합을 돌릴 수 없다"이기 때문이다.
-          await git(['merge', '--abort'], { cwd: mergeInto }) // 병합이 시작되지도 않았으면 실패한다 — 무시한다
-          // **되돌아갔는지 확인해서 그 사실을 문장에 넣는다.** 앱이 저장소를 어떤 상태로 두었는지를
-          // 사용자가 짐작하게 두지 않는다 — 이 경로가 있는 이유가 그것이다.
-          const after = await git(['status', '--porcelain', '--untracked-files=no'], { cwd: mergeInto })
-          const left =
-            after.ok && after.stdout === ''
-              ? '합칠 폴더는 병합 전 상태로 되돌렸습니다.'
-              : '**합칠 폴더가 병합 중간 상태로 남아 있을 수 있습니다 — git status 로 직접 확인해 주세요.**'
-          return {
-            kind: 'human',
-            reason: `${target.branch} 브랜치를 합칠 폴더에 합치지 못했습니다: ${merged.stderr || merged.stdout}. ${left}`
+        //
+        // **저장소를 실제로 움직이는 자리다** — mergeInto 의 HEAD 와 index 를 옮긴다. gitWatcher 가
+        // 바로 그 둘을 보고 있으므로, 이 병합을 EG §26 에 등록해 두지 않으면 Astera 자신이 방금 만든
+        // 변경이 "외부에서 저장소가 바뀌었다"로 기록된다(EG §41-9). `finally` 로 닫는 이유는 아래
+        // 실패 분기가 그 안에서 그대로 `return` 하기 때문이다 — try 없이 두면 그 경로로 나갈 때
+        // 등록이 영원히 "진행 중"으로 남고, 그날부터 이 프로젝트의 모든 외부 변경이 조용히 삼켜진다.
+        const mergeOpId = workUnitCollector.beginGitOperation('job-merge', mergeInto)
+        try {
+          const merged = await git(['merge', '--no-edit', ref], { cwd: mergeInto })
+          if (!merged.ok) {
+            // 미리 검사가 통과했는데도 실패했다면 충돌이 아닌 이유다(추적되지 않는 파일과의 겹침,
+            // index.lock, 훅, 서명). 되돌린 뒤 사람에게 간다 — 에이전트에게 넘기지 않는 이유는 이것이
+            // "합치면 충돌한다"가 아니라 "앱이 병합을 돌릴 수 없다"이기 때문이다.
+            await git(['merge', '--abort'], { cwd: mergeInto }) // 병합이 시작되지도 않았으면 실패한다 — 무시한다
+            // **되돌아갔는지 확인해서 그 사실을 문장에 넣는다.** 앱이 저장소를 어떤 상태로 두었는지를
+            // 사용자가 짐작하게 두지 않는다 — 이 경로가 있는 이유가 그것이다.
+            const after = await git(['status', '--porcelain', '--untracked-files=no'], { cwd: mergeInto })
+            const left =
+              after.ok && after.stdout === ''
+                ? '합칠 폴더는 병합 전 상태로 되돌렸습니다.'
+                : '**합칠 폴더가 병합 중간 상태로 남아 있을 수 있습니다 — git status 로 직접 확인해 주세요.**'
+            return {
+              kind: 'human',
+              reason: `${target.branch} 브랜치를 합칠 폴더에 합치지 못했습니다: ${merged.stderr || merged.stdout}. ${left}`
+            }
           }
+        } finally {
+          workUnitCollector.endGitOperation(mergeOpId)
         }
         orchLog(`scheduler: merged ${ref} into ${mergeInto}`)
         // 합친 워크트리는 여기서 지운다 — **폴더까지. 단 `reap` 일 때만이다**(위 주석: 사람이 누른
@@ -3068,15 +3079,15 @@ export function registerIpc(
     return out
   }
 
-  const workUnitCollector = new WorkUnitCollector({
+  // 자기 참조다: pendingGitOps 는 workUnitCollector 자신의 등록 목록을 그대로 돌려준다
+  // (beginGitOperation/endGitOperation 이 채운다). 안전한 이유는 이 화살표 함수가 생성자 안에서
+  // 부르는 것이 아니라 나중에(gitRound 가 돌 때) 불리기 때문이다 — 그때는 아래 const 가 이미 잡혀 있다.
+  const workUnitCollector: WorkUnitCollector = new WorkUnitCollector({
     store: workUnits,
     listSessions: workUnitSessions,
-    git: { readRef: readGitRef, isAncestor: isAncestorOf, changedFiles: readChangedFiles },
+    git: { readRef: readGitRef, isAncestor: isAncestorOf, changedFiles: readChangedFiles, readRange },
     now: () => Date.now(),
-    // Astera 자신의 git 조작을 등록하는 곳이 아직 없다 — EG §26 의 등록은 이 계획의 어느 태스크도
-    // 만들지 않았다. 그래서 V1 은 모든 전이를 외부 변경으로 본다. 등록하는 쪽이 생기면 바뀌는 것은
-    // 이 한 줄이다.
-    pendingGitOps: () => [],
+    pendingGitOps: () => workUnitCollector.getPendingGitOps(),
     log: orchLog
   })
   // 토글이 꺼져 있으면 시작하지 않는다. **load 뒤로 미룬다** — 먼저 시작하면 수집기가 쓴 상태를

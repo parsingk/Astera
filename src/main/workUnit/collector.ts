@@ -21,8 +21,6 @@
 // 세션은 여기까지 흘러오되 한 줄도 사람의 요청으로 인정되지 않는다.
 import { promises as fs, statSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { git } from '../../core/worktrees/git'
-import { parsePorcelainZ } from '../../core/git/status'
 import type { ExternalGitChange, GitRef, PendingGitOperation } from '../../core/git/types'
 import { classifyTransition } from '../../core/git/transition'
 import { isAsteraOperation } from '../../core/git/provenance'
@@ -45,9 +43,6 @@ import type { WorkUnitState, WorkUnitStore } from './store'
 const DEBOUNCE_MS = 150
 const MAX_WAIT_MS = 1000
 
-/** `git status` 는 감시 고리 안에서 돌므로 매달리면 안 된다. ipc.ts 의 git.status 와 같은 값 */
-const STATUS_TIMEOUT_MS = 5_000
-
 /** 지금 보고 있는 세션 하나. **수집기는 세션을 스스로 찾지 않는다** — 어느 세션이 어느 프로바이더의
  *  어느 파일을 쓰는지는 ipc.ts 만 아는 일이고(claude 는 statusLine 페이로드, codex 는 rollout 경로),
  *  그것을 여기로 끌고 오면 이 파일이 electron 하네스 없이는 테스트되지 않는다. */
@@ -67,6 +62,9 @@ export interface CollectorGit {
   isAncestor(repoPath: string, before: string | null, after: string | null): Promise<boolean | null>
   /** 작업 트리에서 지금 바뀌어 있는 파일들 (저장소 루트 기준 상대 경로, git 이 찍은 그대로) */
   changedFiles(repoPath: string): Promise<string[]>
+  /** before..after 구간의 커밋과 그 구간에서 바뀐 파일들 (gitProbe.ts 의 readRange). fast-forward 로
+   *  확인된 전이에서만 부른다 — 그 밖의 전이는 이 범위를 신뢰할 수 없다(ExternalGitChange.commits 주석). */
+  readRange(repoPath: string, before: string, after: string): Promise<{ commits: string[]; changedFiles: string[] }>
 }
 
 export interface CollectorDeps {
@@ -78,14 +76,11 @@ export interface CollectorDeps {
    *  디바운스의 상한도 이 값으로 잰다(`arm`). 시계를 밖에서 주면 테스트가 그 값들을 고정된 값으로
    *  확인할 수 있다. */
   now: () => number
-  /** Astera 가 지금 돌리고 있는 git 동작들 (EG §26).
-   *
-   *  **V1 에는 이것을 등록하는 곳이 없다.** 워크트리 생성·병합 같은 Astera 자신의 git 조작을
-   *  등록하는 일은 이 계획의 어느 태스크도 만들지 않았고, 그래서 ipc.ts 는 빈 목록을 준다 —
-   *  결과적으로 V1 은 모든 전이를 외부 변경으로 본다. `isAsteraOperation` 을 그래도 부르는 이유는
-   *  등록하는 쪽이 생기는 즉시 이 자리가 맞게 동작해야 하기 때문이다. **유예 경계 자체는 이 주입점이
-   *  아니라 provenance.test.ts 가 확인한다** — 이 수집기의 테스트는 이 자리를 채우지 않으므로
-   *  (빈 목록이 기본값이다) 여기를 지나는 판정은 늘 "Astera 것이 아니다"로 떨어진다. */
+  /** Astera 가 지금 돌리고 있는 git 동작들 (EG §26). ipc.ts 는 이 수집기 자신의
+   *  `getPendingGitOps()` 를 그대로 넘긴다 — 그 목록은 `beginGitOperation`/`endGitOperation` 이
+   *  채운다(ipc.ts 의 job-merge 자리가 부른다). 주입 가능하게 남겨 둔 이유는 테스트가 가짜 목록으로
+   *  유예 경계(이 파일의 collector.test.ts)와 판정 자체(provenance.test.ts)를 각각 따로 확인할 수
+   *  있게 하기 위해서다. 넘기지 않으면(`undefined`) 빈 목록으로 본다. */
   pendingGitOps?: () => readonly PendingGitOperation[]
   log?: (m: string) => void
 }
@@ -99,26 +94,6 @@ const emptyState = (): WorkUnitState => ({
   messages: [],
   externalGitChanges: []
 })
-
-/**
- * 작업 트리에서 지금 바뀌어 있는 파일들. `CollectorGit.changedFiles` 의 실제 구현이다.
- *
- * `--no-optional-locks` 가 반드시 필요하다: 없으면 status 가 `.git/index` 를 갱신하고 그것이 다시
- * GitWatcher 를 깨워 무한 고리가 된다 (ipc.ts 의 git.status 핸들러가 같은 이유로 같은 플래그를 쓴다).
- * `trim:false` 도 같다 — porcelain 레코드는 `XY<공백>경로` 라 앞 공백을 깎으면 경로의 첫 글자가 함께 날아간다.
- *
- * **이 함수가 gitProbe.ts 가 아니라 여기 있는 이유:** 그 파일은 이 계획의 다른 태스크가 만들어
- * 리뷰까지 끝난 자리이고, 이 배선 태스크는 그것을 고치지 않기로 했다. 대신 수집기의 기본 구현으로
- * 두고 주입점을 열어 둔다 — 테스트는 가짜를 넣고, ipc.ts 는 이것을 그대로 쓴다.
- */
-export async function readChangedFiles(repoPath: string): Promise<string[]> {
-  const r = await git(
-    ['--no-optional-locks', 'status', '--porcelain', '-z', '--untracked-files=all'],
-    { cwd: repoPath, timeoutMs: STATUS_TIMEOUT_MS, trim: false }
-  )
-  if (!r.ok) return [] // 저장소가 아니거나 git 이 실패했다 — 관찰된 변경이 없는 것으로 본다
-  return parsePorcelainZ(r.stdout).map((e) => e.relPath)
-}
 
 export class WorkUnitCollector {
   /** 기능이 켜져 있는가. 꺼져 있으면 어떤 방아쇠도 저장소를 건드리지 않는다 */
@@ -153,6 +128,10 @@ export class WorkUnitCollector {
    *  알리는 자리(ipc.ts 의 resume 경로)는 프로젝트를 함께 주지 않으므로, 다음 회차의 tail 이
    *  같은 파일을 보고 있을 때 옮겨 심는다. */
   private forkAnchors = new Map<string, { filePath: string; offset: number }>()
+  /** Astera 자신이 지금 돌리고 있는 git 동작들 (EG §26) — `beginGitOperation`/`endGitOperation` 이
+   *  채운다. **지우지 않는다** — provenance.ts 의 유예가 끝난 동작을 보고 판단하기 때문이다. 재시작하면
+   *  사라지는 메모리 목록이다(디스크에 남기지 않는다 — 동작은 늘 이 실행 안에서 시작하고 끝난다). */
+  private pendingOps: PendingGitOperation[] = []
 
   constructor(private deps: CollectorDeps) {}
 
@@ -188,6 +167,31 @@ export class WorkUnitCollector {
 
   onEnabledChanged(enabled: boolean): Promise<void> {
     return enabled ? this.start() : this.stop()
+  }
+
+  // ── Astera 자신의 git 동작 등록 (EG §26) ───────────────────────────────
+
+  /** Astera 자신의 git 조작을 시작하기 **직전에** 등록한다 — ipc.ts 의 job-merge 자리가 부른다.
+   *  `startedAt` 은 주입된 시각(deps.now)을 쓴다. **꺼져 있으면 아무 일도 하지 않는다** — 부르는
+   *  쪽이 토글을 신경 쓰지 않아도 된다. */
+  beginGitOperation(kind: PendingGitOperation['kind'], projectPath: string): string {
+    if (!this.running) return ''
+    const id = randomUUID()
+    this.pendingOps.push({ id, kind, projectPath, startedAt: this.nowIso() })
+    return id
+  }
+
+  /** 그 동작이 끝났다(성공이든 실패든). **지우지 않는다** — `isAsteraOperation`(provenance.ts)의
+   *  유예가 끝난 동작을 보고 판단하기 때문이다. 꺼져 있으면 아무 일도 하지 않는다. */
+  endGitOperation(id: string): void {
+    if (!this.running) return
+    const op = this.pendingOps.find((o) => o.id === id)
+    if (op) op.endedAt = this.nowIso()
+  }
+
+  /** ipc.ts 가 `pendingGitOps` 로 그대로 넘기는 값 — 이 수집기 자신이 등록한 동작들 */
+  getPendingGitOps(): readonly PendingGitOperation[] {
+    return this.pendingOps
   }
 
   // ── 방아쇠 ──────────────────────────────────────────────────────────
@@ -543,17 +547,21 @@ export class WorkUnitCollector {
     const open = state.units.filter((u) => isOpen(u.status))
     for (const u of open) u.git.endHead = after.head
     if (!isAsteraOperation(projectPath, this.deps.now(), this.ops())) {
+      // fast-forward 일 때만 채운다 — 그 밖의 전이는 before..after 범위를 신뢰할 수 없다
+      // (types.ts 의 ExternalGitChange.commits 주석). Astera 자신의 동작으로 판정된 경우는 이
+      // 블록에 들어오지 않으므로, 버려질 range 를 위해 git 을 더 부르지 않는다.
+      const range =
+        type === 'fast-forward' && before.head && after.head
+          ? await this.deps.git.readRange(projectPath, before.head, after.head)
+          : { commits: [], changedFiles: [] }
       const change: ExternalGitChange = {
         id: randomUUID(),
         projectPath,
         type,
         before,
         after,
-        // **V1 은 둘 다 채우지 않는다.** 범위 diff 를 물으려면 git 을 더 부려야 하고, 설계 §17 이
-        // 그 정교화를 다음 계획(Change Interpreter)으로 미뤘다. 지금 필요한 것은 관계뿐이다 —
-        // "이 작업 중 외부 변경이 있었다"는 id 로만 이어진다 (설계 §11).
-        commits: [],
-        changedFiles: [],
+        commits: range.commits,
+        changedFiles: range.changedFiles,
         detectedAt: this.nowIso()
       }
       state.externalGitChanges.push(change)
