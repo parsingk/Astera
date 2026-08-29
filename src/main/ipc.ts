@@ -240,7 +240,19 @@ export function registerIpc(
   scheduler?: SchedulerCoordinator, // session scheduler
   codexRollout?: CodexRolloutWatcher, // codex rollout watcher — turn completion and usage
   orchWiring?: OrchWiring, // agent orchestration
-  onLangChanged?: () => void // rebuilds anything (the tray menu) built with a fixed language
+  onLangChanged?: () => void, // rebuilds anything (the tray menu) built with a fixed language
+  /** Hands the Work Unit collector's "this session is a continuation" notification over to index.ts,
+   *  once and unconditionally — the same shape as `OrchWiring.onTabResumeReady`, and for the same
+   *  reason: the value lives in this file (the collector is built here, with the session list and the
+   *  store it needs), but one of its callers is a tap that only index.ts owns — the rolling
+   *  coordinators' `send`, where `session:rolled` arrives. Without this, a session respawned by a
+   *  usage-limit roll reaches the collector as a session it has never seen, and an unseen session is
+   *  read from byte 0 — which for a `--resume` is the entire replayed conversation (스펙 §16.1).
+   *
+   *  `transcriptPath` is optional because the claude roll does not know it yet; see the collector's
+   *  `onSessionForked`. Doing nothing when the feature is off is the notification's own contract, so
+   *  index.ts calls this without consulting the toggle. */
+  onWorkUnitForkReady?: (notify: (newSessionId: string, transcriptPath?: string) => void) => void
 ): void {
   const send = (channel: string, payload: unknown): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
@@ -3074,6 +3086,12 @@ export function registerIpc(
       core.appSettings.getWorkUnitTrackingEnabled() ? workUnitCollector.start() : undefined
     )
     .catch((e) => orchLog(`work unit collector start failed: ${String(e)}`))
+  // 이어받기 알림을 배선에 넘긴다. **토글과 무관하게 항상 넘긴다** — `onTabResumeReady` 와
+  // 같은 이유다: 꺼져 있을 때 아무 일도 하지 않는 것은 알림 자신의 계약이고, 부르는 쪽이 토글을
+  // 다시 묻게 하면 그 판정이 두 곳으로 갈라진다.
+  onWorkUnitForkReady?.((sessionId, transcriptPath) =>
+    workUnitCollector.onSessionForked(sessionId, transcriptPath)
+  )
 
   // The detected JDKs. There is no path argument, so this is not subject to assertAllowedPath — the scan
   // only looks at conventional directories (Program Files and friends) and PATH.

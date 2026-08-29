@@ -364,4 +364,41 @@ describe('WorkUnitCollector — 스펙 §16.1 커서', () => {
     expect(state.units[0].title).toBe('켠 뒤 첫 요청')
     expect(state.messages).toHaveLength(1)
   })
+
+  // 한도에 걸려 자동으로 굴린 세션은 다르다 — 굴리기를 알리는 자리(index.ts 의 session:rolled 탭)가
+  // 새 세션 id 만 들고 있고, 그 세션이 쓸 파일은 그 순간 아직 아무도 모른다(statusline 이 오기 전이다).
+  // 그래도 **0 으로 떨어지면 안 된다** — 그 파일에는 `--resume` 이 되쓴 옆 대화가 이미 들어 있다.
+  it('굴려서 생긴 세션은 경로를 모르는 채 알려줘도 되쓰인 내용을 읽지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, human('굴리기 전 요청'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.units).toHaveLength(1)
+
+    // session:rolled 가 왔다. 새 세션 id 만 안다 — 경로는 건네지 않는다
+    collector.onSessionForked('s2')
+
+    // 그 뒤 statusline 이 경로를 알려 준다. 그 파일에는 되쓰인 옆 대화가 이미 들어 있다
+    const rolled = path.join(dir, 'transcript-rolled-by-limit.jsonl')
+    await fs.copyFile(transcript, rolled)
+    fake.sessions = [session({ sessionId: 's2', transcriptPath: rolled })]
+    collector.onTranscriptChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.units).toHaveLength(1) // 되쓰인 줄은 Unit 을 만들지 않았다
+
+    // 굴린 뒤에 사람이 처음 한 말만 Unit 이 된다
+    await fs.appendFile(rolled, human('굴린 뒤 첫 요청'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2)
+    expect(state.units[1].sessionId).toBe('s2')
+    expect(state.units[1].title).toBe('굴린 뒤 첫 요청')
+    expect(state.messages.filter((m) => m.sessionId === 's2')).toHaveLength(1)
+  })
 })

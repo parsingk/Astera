@@ -237,11 +237,23 @@ export class WorkUnitCollector {
    *  **부르는 쪽이 토글을 확인하지 않아도 된다.** 꺼져 있으면 아무 일도 하지 않는다 — 다시 켜면
    *  `seed` 가 그때의 파일 끝을 잡으므로 이 자리에 남길 것이 없다.
    *
+   *  **`transcriptPath` 가 선택인 이유: 부르는 자리 둘이 아는 것이 다르다.**
+   *    - 사람이 기록에서 대화를 다시 여는 경로(ipc.ts 의 resume)는 방금 대화를 복사해 둔
+   *      파일을 들고 있다 — 그 자리를 그대로 준다.
+   *    - 한도에 걸려 굴리는 경로(index.ts 의 `session:rolled` 탭)는 새 세션 id 만 실어 보낸다.
+   *      claude 쪽은 그 순간 그 세션이 쓸 파일을 **아무도 모른다**(statusline 이 아직 오지
+   *      않았다). 추측하지 않고 집합에만 넣으면, 다음 회차에 그 세션을 처음 보는 자리가
+   *      그 파일의 끝을 잡는다(`anchorFor`). 잃는 것은 그 사이에 쓰인 한 두 줄이고, 막는 것은
+   *      되쓰인 대화 전체다.
+   *
    *  크기를 동기로 읽는 이유: `--resume` 이 되쓰기를 시작하기 전의 크기여야 "그 순간"이 뜻이 있다.
    *  파일 하나의 stat 이고, 이어받기마다 한 번뿐이다. */
-  onSessionForked(newSessionId: string, transcriptPath: string): void {
+  onSessionForked(newSessionId: string, transcriptPath?: string): void {
     if (!this.running) return
+    // **먼저 집합에 넣는다.** 경로를 모르거나 그 경로가 틀렸을 때 기대는 자리가 이것이다 —
+    // 이 줄이 없으면 그 둘 모두 0 으로 떨어진다
     this.startAtEnd.add(newSessionId)
+    if (transcriptPath === undefined) return
     let size: number
     try {
       size = statSync(transcriptPath).size

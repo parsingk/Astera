@@ -60,6 +60,10 @@ let orchRef: OrchHandle | null = null // orchestration shutdown cleanup + the ro
 // so a plain tab session's Smart Resume briefing does not depend on the unrelated orchestration toggle.
 let tabResumeTextRef: ((sessionId: string, form: 'handover' | 'update') => Promise<string | null>) | null =
   null
+// Work Unit 수집기의 "이 세션은 이어받은 것이다" 알림. `tabResumeTextRef` 와 같은 갈래다 —
+// 값은 registerIpc 안에서 만들어지지만 부르는 자리 하나가 이 파일에만 있다(두 롤링 코디네이터의
+// send 탭). 수집기가 꺼져 있으면 이 함수는 아무 일도 하지 않으므로 탭 쪽은 토글을 묻지 않는다.
+let workUnitForkRef: ((newSessionId: string, transcriptPath?: string) => void) | null = null
 
 /** The `resumeText` dep both rolling coordinators receive (RollingDeps/CodexRollingDeps). fix wave
  *  최종, F1: tries the Job briefing through `orchRef` when orchestration is up; when it is not
@@ -483,6 +487,21 @@ app.whenReady().then(async () => {
       } catch {
         /* renderer send failures are ignored */
       }
+      // Work Unit 수집기도 롤을 탭한다. 굴린 세션은 새 세션 id 를 받고, `--resume` 이 그
+      // 세션의 트랜스크립트에 이전 대화를 통째로 다시 적는다 — 알리지 않으면 수집기가 처음 보는
+      // 세션으로 여겨 그 파일을 0 부터 읽고, 그것이 곧 켜기 전의 대화다(스펙 §16.1).
+      // **경로는 건네지 않는다.** 이 게시의 payload 에는 없고, 굴려서 띄운 프로세스가 어느 파일을
+      // 쓸지는 그 세션의 statusLine 이 도착해야 정해진다(rolling.ts 의 applyMeta 가 그것을
+      // 기다린다). 추측 대신 세션 id 만 알리고, 파일 끝을 잡는 일은 수집기가 그 세션을 처음
+      // 보는 회차로 미룬다. 다른 탭들과 같은 이유로 자기 try 안에 격리한다.
+      try {
+        if (channel === 'session:rolled') {
+          const p = payload as { oldSessionId: string; info: SessionInfo }
+          workUnitForkRef?.(p.info.id)
+        }
+      } catch {
+        /* a Work Unit tap failure must not block rolling */
+      }
       // The scheduler taps rolling events too — isolated in its own try, separate from the Slack
       // tap, so a throw out of rekey does not silently swallow the Slack notification (rolled) below.
       try {
@@ -584,6 +603,13 @@ app.whenReady().then(async () => {
           // brand-new session already takes (codexRolling.ts's `roll()` documents the same fallback at
           // its own `send('session:rolled', ...)` call).
           const p = payload as { oldSessionId: string; info: SessionInfo; dest?: string }
+          // Work Unit 수집기에도 같은 것을 알린다. **여기서는 경로를 건네줄 수 있다** — 재개된
+          // codex 는 새 파일을 만들지 않고 바로 이 dest 에 이어 쓰기 때문이고(바로 위 주석), 그래서
+          // 그 순간의 파일 끝이 곧 되쓰기가 끝난 자리다. 빈 대화로 굴릴 때는 `undefined` 이고, 그때는
+          // claude 쪽처럼 수집기가 다음 회차에 끝을 잡는다.
+          // **codex 세션은 오늘 Unit 을 만들지 않는다**(collector.ts 머리주석의 이유). 그래도 알리는
+          // 이유는 한쪽만 잡힌 비대칭이 codex 지원이 오는 날 조용한 버그가 되기 때문이다.
+          workUnitForkRef?.(p.info.id, p.dest)
           scheduler.rekey(p.oldSessionId, p.info.id) // the schedule follows the roll chain
           // When rolling switches accounts the session respawns under a new sessionId and a new
           // rollout file appears — without re-registering, both turn-completion notifications and the
@@ -688,7 +714,12 @@ app.whenReady().then(async () => {
         tabResumeTextRef = fn
       }
     },
-    () => refreshTrayMenu(win) // rebuild Open/Quit in the new language after settings.setLang
+    () => refreshTrayMenu(win), // rebuild Open/Quit in the new language after settings.setLang
+    // 위 두 send 탭이 부를 자리를 받아 둔다. registerIpc 가 돌아오면서 바로 채워지고,
+    // 탭은 그보다 훨씬 뒤인 첫 롤에서야 돌므로 순서 문제는 없다(orchRef 와 같은 모양).
+    (notify) => {
+      workUnitForkRef = notify
+    }
   )
   // No tray on Linux. With close quitting for real there is nothing to hide, so the menu's
   // Open/Quit would only repeat what the window and its close button already do — while tying the
