@@ -199,6 +199,9 @@ const api = {
     command: invoke('orch.command'),
     unwatch: invoke('orch.unwatch')
   },
+  understanding: {
+    get: invoke('understanding.get')
+  },
   platform: process.platform,
   win: {
     minimize: () => ipcRenderer.send('win.minimize'),

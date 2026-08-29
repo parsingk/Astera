@@ -16,6 +16,7 @@ import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
 import { copyTranscript, samePath } from '../core/rolling/transcript'
 import { OrchestrationStore } from './orchestration/store'
+import { UnderstandingStore } from './understanding/store'
 import {
   OrchCoordinator,
   LAUNCH_FORBIDDEN,
@@ -770,6 +771,17 @@ export function registerIpc(
     const store = new OrchestrationStore(path.join(app.getPath('userData'), 'orchestration.json'))
     const loaded = await store.load()
     if (loaded.recovered) orchLog('failed to read or parse orchestration.json — kept the .bak and started from an empty state')
+
+    const understanding = new UnderstandingStore(
+      path.join(app.getPath('userData'), 'understanding.json')
+    )
+    const uLoaded = await understanding.load()
+    if (uLoaded.recovered)
+      orchLog('failed to read or parse understanding.json — kept the .bak and started from an empty state')
+
+    ipcMain.handle('understanding.get', (_e, projectPath: string) =>
+      understanding.get(projectPath) ?? null
+    )
     if (
       loaded.unknownOutcomes > 0 ||
       loaded.pruned > 0 ||

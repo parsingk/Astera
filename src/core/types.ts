@@ -18,6 +18,7 @@ import type { RollConfig } from './rolling/types'
 export type { RollConfig } from './rolling/types'
 import type { GitState } from './git/status'
 export type { GitState } from './git/status'
+import type { ProjectUnderstanding } from './understanding/types'
 import type { Provider } from './providers/meta'
 import type { TerminalFont } from './terminal/font'
 import type { ThemeId } from './theme/themes'
@@ -878,6 +879,11 @@ export interface OrchApi {
   unwatch(): Promise<void>
 }
 
+export interface UnderstandingApi {
+  /** 저장된 이해. 한 번도 분석하지 않은 프로젝트는 null — 빈 상태가 그것을 그린다 */
+  get(projectPath: string): Promise<ProjectUnderstanding | null>
+}
+
 export type RendererApi = CoreApi & {
   system: SystemApi
   clipboard: ClipboardApi
@@ -898,5 +904,6 @@ export type RendererApi = CoreApi & {
   app: AppControlApi
   keys: KeysApi
   orch: OrchApi
+  understanding: UnderstandingApi
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }
