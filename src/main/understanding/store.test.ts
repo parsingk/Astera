@@ -72,4 +72,31 @@ describe('UnderstandingStore', () => {
     const s = new UnderstandingStore(file)
     expect((await s.load()).recovered).toBe(true)
   })
+
+  it('읽을 수 없는 파일은 "아직 없음"이 아니다 — 다음 set() 이 조용히 덮어쓰면 안 된다', async () => {
+    // 파일 자리에 디렉터리를 둔다. readFile 이 던지는 코드는 플랫폼마다 다르지만(EISDIR/EPERM)
+    // ENOENT 가 아니라는 점은 어디서나 같고, 이 테스트가 보는 것이 바로 그 구분이다
+    await fs.mkdir(file)
+    const s = new UnderstandingStore(file)
+    expect((await s.load()).recovered).toBe(true)
+  })
+
+  it('쓰기가 한 번 실패해도 다음 쓰기는 진행된다 — 큐가 얼어붙지 않는다', async () => {
+    // 부모 자리에 파일을 두면 mkdir 이 실패해 첫 쓰기가 거절된다
+    const nested = path.join(dir, 'sub', 'understanding.json')
+    await fs.writeFile(path.join(dir, 'sub'), 'blocker', 'utf8')
+    const s = new UnderstandingStore(nested)
+    await s.load()
+    await expect(s.set('C:/p', sample)).rejects.toThrow()
+
+    // 막고 있던 것을 치우면 다음 쓰기는 성공해야 한다
+    await fs.rm(path.join(dir, 'sub'))
+    await s.set('C:/q', sample)
+
+    const b = new UnderstandingStore(nested)
+    await b.load()
+    expect(b.get('C:/q')).toEqual(sample)
+    // 첫 set() 의 상태도 메모리에 남아 있었으므로 함께 실렸다
+    expect(b.get('C:/p')).toEqual(sample)
+  })
 })

@@ -35,24 +35,19 @@ export class UnderstandingStore {
   constructor(private filePath: string) {}
 
   async load(): Promise<{ recovered: boolean }> {
-    let raw: string
+    let parsed: unknown
     try {
-      raw = await fs.readFile(this.filePath, 'utf8')
-    } catch {
-      return { recovered: false } // 아직 없다 — 빈 상태가 맞다
+      parsed = JSON.parse(await fs.readFile(this.filePath, 'utf8'))
+    } catch (e) {
+      // **ENOENT 만 "아직 없다" 다.** 나머지 읽기 오류(EACCES·EPERM·EISDIR)를 같이 삼키면, 읽지
+      // 못한 기존 파일을 다음 set() 이 조용히 덮어쓴다 — 사용자에게 아무 신호 없이 데이터가 사라진다.
+      // OrchestrationStore.load 가 같은 이유로 이 갈래를 가른다.
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { recovered: false }
+      return this.recover()
     }
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      if (!isValid(parsed)) throw new Error('shape')
-      this.state = parsed
-      return { recovered: false }
-    } catch {
-      // 통째로 되돌린다. 항목끼리 참조가 걸려 있어(feature ↔ explanation) 한 항목만 버리면
-      // 매달린 참조가 남고, 그것은 처음부터 다시 하는 것보다 나쁜 상태다
-      await fs.writeFile(this.filePath + '.bak', raw, 'utf8').catch(() => {})
-      this.state = { projects: {} }
-      return { recovered: true }
-    }
+    if (!isValid(parsed)) return this.recover()
+    this.state = parsed
+    return { recovered: false }
   }
 
   get(projectPath: string): ProjectUnderstanding | undefined {
@@ -71,12 +66,26 @@ export class UnderstandingStore {
 
   private save(): Promise<void> {
     const snapshot = JSON.stringify(this.state, null, 2)
-    this.queue = this.queue.then(async () => {
+    const run = async (): Promise<void> => {
       const tmp = this.filePath + '.tmp'
       await fs.mkdir(path.dirname(this.filePath), { recursive: true })
       await fs.writeFile(tmp, snapshot, 'utf8')
       await fs.rename(tmp, this.filePath)
-    })
+    }
+    // then(run, run) 의 두 인자가 같은 이유: 앞선 쓰기가 실패해도 다음 쓰기는 진행돼야 한다.
+    // onRejected 가 없으면 한 번 거절된 큐가 이후의 모든 save 를 그대로 거절로 흘려보내고,
+    // 그 시점부터 디스크가 얼어붙는다 — OrchestrationStore.save 의 주석이 경고하는 그 실패다.
+    this.queue = this.queue.then(run, run)
     return this.queue
+  }
+
+  /** 통째로 되돌린다. 항목끼리 참조가 걸려 있어(feature ↔ explanation) 한 항목만 버리면 매달린
+   *  참조가 남고, 그것은 처음부터 다시 하는 것보다 나쁜 상태다.
+   *
+   *  copyFile 을 쓰는 이유: 내용을 읽지 못해서 온 경우(권한 오류)에도 원본을 물려 둘 수 있다. */
+  private async recover(): Promise<{ recovered: boolean }> {
+    await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
+    this.state = { projects: {} }
+    return { recovered: true }
   }
 }
