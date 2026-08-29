@@ -1841,7 +1841,8 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .hiw-sum em { font-style: normal; color: var(--warn); }
 
 .hiw-list { flex: 1; overflow-y: auto; padding: 4px 0; min-height: 0; }
-.hiw-row { display: flex; gap: 8px; padding: calc(var(--row-pad-y) + 3px) 12px; cursor: default; }
+/* 누르면 그 기능의 탭이 열린다 — 이 파일의 다른 클릭 가능한 줄(.jobs-task, .lh-row, .fx-row)과 같다 */
+.hiw-row { display: flex; gap: 8px; padding: calc(var(--row-pad-y) + 3px) 12px; cursor: pointer; }
 .hiw-row:hover { background: var(--surface-hover); }
 /* 배경과 띠를 함께 준다 — Umbra·Sirius 는 --marker-w 가 0 이라 띠만으로는 아무것도 보이지 않는다.
    .fx-row.selected, .rail-btn.on 이 쓰는 그 조합이다 */
@@ -1906,7 +1907,8 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    너비·높이·자리는 core/understanding/flowLayout.ts 가 계산한 값을 인라인 style 로 그대로 받는다 —
    여기서 같은 숫자를 다시 적으면 한쪽만 고쳤을 때 선이 상자 가장자리에서 어긋난다. */
 .hiw-flow { position: relative; }
-.hiw-edges { position: absolute; left: 0; top: 0; }
+/* 선은 상자 아래에 깔리므로 클릭을 가로채면 안 된다 — .detail-edges 가 같은 이유로 이미 그렇다 */
+.hiw-edges { position: absolute; left: 0; top: 0; pointer-events: none; }
 .hiw-node {
   position: absolute;
   display: flex; align-items: center; justify-content: center;
@@ -1939,7 +1941,9 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .hiw-why:last-child { margin-bottom: 0; }
 .hiw-wt { font-size: 12px; font-weight: 500; color: var(--text); }
 .hiw-wr { font-size: 11.5px; line-height: 1.55; color: var(--text-dim); }
-.hiw-src { align-self: flex-start; margin-top: 2px; font-family: var(--mono); font-size: 9.5px; color: var(--text-faint); border: 1px solid var(--line-soft); border-radius: 99px; padding: 1px 8px; }
+/* 반경도 테마가 정한다(설계 §7) — 99px 로 박으면 Quasar(--radius-sm: 1px)처럼 각진 테마에서
+   이 알약만 혼자 둥글다 */
+.hiw-src { align-self: flex-start; margin-top: 2px; font-family: var(--mono); font-size: 9.5px; color: var(--text-faint); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 1px 8px; }
 /* 추정. ADR 과 색이 달라야 같은 무게로 읽히지 않는다 */
 .hiw-src.low { color: var(--warn); border-color: var(--warn); }
 

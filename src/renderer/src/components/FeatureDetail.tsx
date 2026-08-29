@@ -93,9 +93,13 @@ export function FeatureDetail({
         </p>
         <div className="hiw-impl">
           {(scoped ? scoped.implementation : explanation.implementation).map((i) => (
-            <span key={i.path} className="hiw-impl-row">
+            // 경로만으로는 키가 겹칠 수 있다 — 한 파일이 두 역할을 맡는 것은 생성기의 현실적인
+            // 출력이다("인증 API" 와 "세션 저장" 이 같은 파일)
+            <span key={`${i.role}:${i.path}`} className="hiw-impl-row">
               <b>{i.role}</b>
-              <button onClick={() => onOpenPath(i.path)}>{i.path.split('/').pop()}</button>
+              {/* 구분자 둘을 다 가른다 — 저장된 경로가 역슬래시면 `/` 만으로는 아무것도 잘리지 않고
+                  파일명 자리에 경로가 통째로 선다. 누르는 쪽(openFeaturePath)도 둘을 다 받는다 */}
+              <button onClick={() => onOpenPath(i.path)}>{i.path.split(/[/\\]/).pop()}</button>
             </span>
           ))}
         </div>
@@ -105,13 +109,13 @@ export function FeatureDetail({
         <p className="hiw-lab">{scoped ? t('hiw.scope.changes') : t('hiw.pane.changes')}</p>
         {(scoped ? scoped.changes : explanation.recentChanges).map((c) => (
           <div key={c.id} className="hiw-chg">
+            {/* 출처는 라벨이지 링크가 아니다. 이 앱에서 --accent 밑줄은 누를 수 있는 것의 모습인데
+                갈 곳이 아직 없다(근거 화면은 이 브랜치가 만들지 않는다) — 버튼과 달리 글에는
+                누를 수 있다는 약속을 걸지 않고 메타로 되돌린다 */}
             <span className="hiw-ct">
               <span>{dateOf(c.at)}</span>
               <span>{c.sourceLabel}</span>
             </span>
-            {/* 출처는 라벨이지 링크가 아니다. 이 앱에서 --accent 밑줄은 누를 수 있는 것의 모습인데
-                갈 곳이 아직 없다(근거 화면은 이 브랜치가 만들지 않는다) — 버튼과 달리 글에는
-                누를 수 있다는 약속을 걸지 않고 메타로 되돌린다 */}
             <span className="hiw-cb">{c.body}</span>
           </div>
         ))}
@@ -155,16 +159,21 @@ export function FeatureDetail({
             <p className="hiw-p">{explanation.overview}</p>
           </section>
 
-          <section className="hiw-sec hiw-grow">
-            <p className="hiw-lab">
-              {t('hiw.pane.flow')} <span className="hiw-hint">{t('hiw.pane.flowHint')}</span>
-            </p>
-            <FlowDiagram
-              nodes={explanation.userFlow}
-              selectedId={scoped?.node.id ?? null}
-              onPick={onPickStep}
-            />
-          </section>
+          {/* 흐름이 없는 기능(설정·로깅)을 설계 §5 가 명시적으로 예상한다. 가드가 없으면 제목과
+              "단계를 클릭하면…" 힌트만 남은 빈 칸이 서는데, 클릭할 단계가 없으므로 그 힌트는
+              거짓이다 — 바로 아래 실패 칸이 같은 이유로 이미 이 가드를 쓴다 */}
+          {explanation.userFlow.length > 0 && (
+            <section className="hiw-sec hiw-grow">
+              <p className="hiw-lab">
+                {t('hiw.pane.flow')} <span className="hiw-hint">{t('hiw.pane.flowHint')}</span>
+              </p>
+              <FlowDiagram
+                nodes={explanation.userFlow}
+                selectedId={scoped?.node.id ?? null}
+                onPick={onPickStep}
+              />
+            </section>
+          )}
 
           {explanation.failureFlows.length > 0 && (
             <section className="hiw-sec">
