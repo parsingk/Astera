@@ -15,6 +15,19 @@ export interface FileTab {
   projectRoot: string
 }
 
+/** How It Works 기능 상세 탭. FileTab 과 같은 모양이고 같은 이유로 projectRoot 를 들고 다닌다 —
+ *  `feature:<id>` 라는 탭 id 는 프로젝트를 담지 못하므로, 이 기록이 없으면 활성 탭이 이 탭일 때
+ *  currentProject 가 엉뚱한 곳(마지막 기억)으로 떨어지고 다른 프로젝트를 고르는 순간 이 탭이
+ *  탭 줄에서 사라진다. 제목도 여기서 나온다: understanding 은 지금 열린 프로젝트의 것 하나뿐이라,
+ *  거기서만 이름을 찾으면 다른 프로젝트의 탭은 이름을 잃는다. */
+export interface FeatureTab {
+  id: string
+  featureId: string
+  title: string
+  /** 이 탭이 열릴 때의 프로젝트 루트. 활성 탭이 이 탭일 때 앱이 이 프로젝트를 보여준다 */
+  projectRoot: string
+}
+
 /** 페인 하나의 탭 줄에 올라가는 탭. 파일 탭과 세션 탭과 기능 탭을 한 줄에 그린다.
  *
  *  표식이 종류마다 다르다 — 세션 탭은 계정 색과 작업 중 스피너와 롤링 표시를, 파일 탭은 확장자 아이콘과
@@ -47,8 +60,10 @@ export type WorkbenchTab =
       kind: 'feature'
       featureId: string
       title: string
-      /** 상태 글리프. 색은 CSS 가 정한다 — 여기서는 모양만 넘긴다 */
-      glyph: string
+      /** 상태 글리프. 색은 CSS 가 정한다 — 여기서는 모양만 넘긴다.
+       *  **null 은 "지금 상태를 모른다"** — 다른 프로젝트의 기능 탭이 그렇다. 그때는 글리프 자리를
+       *  비운다(틀린 상태를 그리는 것보다 낫다) */
+      glyph: string | null
       needsAttention: boolean
     }
 
@@ -173,13 +188,16 @@ export function WorkbenchTabs({
           {tab.kind === 'file' ? (
             <FileIcon {...resolveFileIcon(tab.title)} />
           ) : tab.kind === 'feature' ? (
-            // 사이드바 줄의 .hiw-g 와 같은 글리프다 — 같은 기능이 두 자리에서 다른 표를 달면 안 된다
-            <span
-              className={tab.needsAttention ? 'tab-glyph warn' : 'tab-glyph'}
-              aria-hidden="true"
-            >
-              {tab.glyph}
-            </span>
+            // 사이드바 줄의 .hiw-g 와 같은 글리프다 — 같은 기능이 두 자리에서 다른 표를 달면 안 된다.
+            // 상태를 모르면 빈 span 도 두지 않는다 — gap 만 남아 제목이 밀려 보인다
+            tab.glyph !== null && (
+              <span
+                className={tab.needsAttention ? 'tab-glyph warn' : 'tab-glyph'}
+                aria-hidden="true"
+              >
+                {tab.glyph}
+              </span>
+            )
           ) : tab.busy && !tab.exited ? (
             // 작업 중: 계정 색의 회전하는 링. .tab-dot.busy는 background가 투명이고 테두리로 그려지므로
             // 색을 borderColor로 줘야 한다

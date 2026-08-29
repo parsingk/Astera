@@ -8,7 +8,7 @@ import { AccountSettings } from './components/AccountSettings'
 import { HistorySettings } from './components/HistorySettings'
 import { HistoryBrowser } from './components/HistoryBrowser'
 import { Select } from './components/Select'
-import { type FileTab } from './components/WorkbenchTabs'
+import { type FeatureTab, type FileTab } from './components/WorkbenchTabs'
 import { FileEditor } from './components/FileEditor'
 import { MarkdownSplit } from './components/MarkdownSplit'
 import { invalidateImageCache } from './components/MarkdownPreview'
@@ -44,7 +44,7 @@ import type {
 } from '../../core/types'
 // core/types.ts imports this for UnderstandingApi but does not re-export it (unlike the block above),
 // so it comes from its own module — the same import UnderstandingView.tsx uses.
-import type { ProjectUnderstanding } from '../../core/understanding/types'
+import type { FeatureStatus, ProjectUnderstanding } from '../../core/understanding/types'
 import { slackMode } from '../../core/slack/ready'
 import { findRun } from '../../core/orchestration/snapshot'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
@@ -340,7 +340,7 @@ export default function App(): React.JSX.Element {
   const [dragTabId, setDragTabId] = useState<string | null>(null)
   // Position of the tab context menu
   const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null)
-  // 지금 보고 있는 탭은 트리가 정한다 — 활성 페인의 활성 탭. 두 종류가 한 트리에 있으므로 별도의
+  // 지금 보고 있는 탭은 트리가 정한다 — 활성 페인의 활성 탭. 세 종류가 한 트리에 있으므로 별도의
   // activeTabId 상태를 두면 트리와 어긋난다(다른 페인의 탭을 클릭하거나 페인 포커스를 옮기는 순간
   // 갈라진다). 파일 탭 id는 전부터 `file:<path>` 형식이었으므로 파일 관련 코드는 그대로 쓴다
   const activeTabId = (layout && activePaneId ? leafOf(layout, activePaneId)?.activeTabId : null) ?? null
@@ -427,6 +427,10 @@ export default function App(): React.JSX.Element {
   const [schedStates, setSchedStates] = useState<Record<string, SchedStateEvent>>({}) // the schedule banner
   const [busy, setBusy] = useState<Record<string, boolean>>({}) // whether each session is working — the tab spinner
   const [fileTabs, setFileTabs] = useState<FileTab[]>([]) // file viewer tabs
+  // How It Works 기능 상세 탭. 파일 탭과 같은 이유로 목록을 따로 든다 — `feature:<id>` 라는 탭 id 는
+  // 프로젝트도 이름도 담지 못하므로, 트리에 들어간 문자열만으로는 그 탭을 그릴 수도, 그 탭이 어느
+  // 프로젝트의 것인지 답할 수도 없다(WorkbenchTabs 의 FeatureTab 머리주석)
+  const [featureTabs, setFeatureTabs] = useState<FeatureTab[]>([])
   interface FileBuffer {
     /** 항상 LF다. CodeMirror가 문서를 LF로 정규화하므로 버퍼도 같은 모양이어야 에디터 상태와 비교되고
      *  재사용된다. 디스크의 줄바꿈은 eol에 따로 들고 있다가 쓸 때 되돌린다 */
@@ -1090,31 +1094,6 @@ export default function App(): React.JSX.Element {
     )
   }
 
-  /** How It Works 사이드바에서 기능을 골랐다. 이미 열려 있으면 그 탭을 활성으로 만들고, 없으면
-   *  활성 페인의 새 탭으로 연다 — 파일 탭과 같은 placeTab 이 그 둘을 다 정한다(placeTab 의 intoGroup
-   *  이 "이미 트리에 있으면 다시 넣지 않고 활성화한다"). openFile 이 앞에 따로 확인을 두는 것은
-   *  fileTabs 라는 자기 목록을 겹쳐 넣지 않기 위해서인데, 기능 탭에는 그런 목록이 없다 —
-   *  제목과 상태는 understanding 에서 매번 찾는다. */
-  const openFeatureTab = (featureId: string): void => {
-    const placed = placeTab(layoutRef.current, featureTab(featureId), {
-      activePaneId: activePaneIdRef.current
-    })
-    setLayout(placed.root)
-    if (placed.paneId) setActivePaneId(placed.paneId)
-  }
-
-  /** 구현 참조를 눌렀다. 그 경로는 저장소 상대이므로(understanding/types.ts) 지금 프로젝트에 붙여
-   *  절대 경로로 만든 다음 평소의 파일 탭으로 연다 — 설명 옆에 소스를 띄우는 것이 이 화면의 목적이다.
-   *  구분자는 루트의 것을 따른다(core/files/paths.ts 의 resolveRelative 와 같은 관례). */
-  const openFeaturePath = (relPath: string): void => {
-    const root = currentProjectRef.current
-    if (!root) return
-    const sep = root.includes('\\') ? '\\' : '/'
-    const parts = relPath.split(/[/\\]/).filter((p) => p !== '' && p !== '.')
-    if (parts.length === 0) return
-    openFile(`${root}${sep}${parts.join(sep)}`)
-  }
-
   /** 에디터가 사라질 때 그 상태를 캐시에 넘겨받는다. 세션 모드로 나가면 .run-host가 통째로
    *  언마운트되므로, 이 경로가 없으면 되돌리기 이력이 거기서 끊긴다(세션 탭은 숨기기만 해서 안 끊긴다).
    *
@@ -1232,6 +1211,7 @@ export default function App(): React.JSX.Element {
       return
     }
     if (ref.kind === 'feature') {
+      setFeatureTabs((prev) => prev.filter((x) => x.id !== tabId))
       dropTabFromTree(tabId)
       return
     }
@@ -1718,7 +1698,8 @@ export default function App(): React.JSX.Element {
     })()
   }
 
-  /** 활성 탭이 말하는 루트 — 파일 탭이면 그 파일의 프로젝트, 세션 탭이면 그 세션의 cwd.
+  /** 활성 탭이 말하는 루트 — 파일 탭이면 그 파일의 프로젝트, 기능 탭이면 그 기능의 프로젝트,
+   *  세션 탭이면 그 세션의 cwd.
    *  탭이 없으면 null이고, 그 자리는 아래에서 stickyRoot 가 채운다.
    *
    *  히스토리와 worktree 목록에 있던 '탐색기에서 열기'는 이 규칙과 양립하지 않아 없앴다. 그 버튼들은
@@ -1728,7 +1709,12 @@ export default function App(): React.JSX.Element {
   const activeTabRoot =
     (activeTab?.kind === 'file'
       ? fileTabs.find((t) => t.id === activeTabId)?.projectRoot
-      : sessions.find((s) => s.id === activeTab?.id)?.cwd) ?? null
+      : activeTab?.kind === 'feature'
+        ? // 기능 탭도 자기 프로젝트를 말한다. 이 갈래가 없으면 아래 세션 조회가 기능 id 로 세션을
+          // 찾다 undefined 를 주고, currentProject 가 조용히 stickyRoot 로 떨어진다 — 그러면 A 의
+          // 기능 탭을 보다 B 의 세션 탭을 누르는 순간 이 탭이 목록에서 빠져 닫을 수도 없어진다
+          featureTabs.find((t) => t.id === activeTabId)?.projectRoot
+        : sessions.find((s) => s.id === activeTab?.id)?.cwd) ?? null
 
   /** 탭이 하나도 없을 때의 현재 프로젝트. 마운트에서 한 번 복원하고, 그 뒤로는 활성 탭이 갱신한다.
    *  영속 규칙은 lib/stickyProject.ts 에 있다(렌더러에 테스트가 없어 App.tsx 안에서는 확인할 수 없다). */
@@ -1943,19 +1929,78 @@ export default function App(): React.JSX.Element {
     )
   }
 
+  /** How It Works 사이드바에서 기능을 골랐다. 이미 열려 있으면 그 탭을 활성으로 만들고, 없으면
+   *  활성 페인의 새 탭으로 연다 — 두 갈래를 여기서 가르지 않는 것은 placeTab 의 intoGroup 이 이미
+   *  "트리에 있으면 다시 넣지 않고 활성화한다" 를 하기 때문이다.
+   *
+   *  **탭 기록을 함께 만든다** — openFile 이 FileTab 을 만드는 것과 같은 자리, 같은 이유다. 이름과
+   *  프로젝트가 그 기록에 박히므로, 다른 프로젝트로 옮겨 가도 이 탭은 이름과 × 를 잃지 않고 다시
+   *  누르면 자기 프로젝트로 돌아온다.
+   *
+   *  **선언이 여기 있는 이유**: 본문이 currentProject 를 읽는다. 이 파일은 그 const 보다 위에서
+   *  그 값을 참조해 TDZ 로 죽은 전례가 있어(위 두 효과의 주석), 읽는 것은 전부 그 아래에 둔다. */
+  const openFeatureTab = (featureId: string): void => {
+    const feature = understanding?.features.find((f) => f.id === featureId)
+    // 목록에서 누른 것이므로 정상 경로에서는 둘 다 있다. 없으면 이름도 프로젝트도 없는 탭이 되므로
+    // 아무것도 하지 않는다 — openFile 이 루트가 없을 때 그러는 것과 같다
+    if (!currentProject || !feature) return
+    const id = featureTab(featureId)
+    const record: FeatureTab = { id, featureId, title: feature.name, projectRoot: currentProject }
+    // 같은 탭 id 를 다시 열면 갈아 끼운다. `feature:<id>` 에는 프로젝트가 없어서 두 프로젝트가 같은
+    // 기능 id 를 가지면 탭 하나를 나눠 쓰게 되는데, 그때 먼저 만든 기록을 남겨 두면 B 에서 누른 탭이
+    // A 의 설명을 그린다 — 방금 누른 쪽이 이긴다. 이름이 바뀌었을 때 제목이 따라오는 것도 이 덕이다
+    setFeatureTabs((prev) =>
+      prev.some((x) => x.id === id) ? prev.map((x) => (x.id === id ? record : x)) : [...prev, record]
+    )
+    const placed = placeTab(layoutRef.current, id, { activePaneId: activePaneIdRef.current })
+    setLayout(placed.root)
+    if (placed.paneId) setActivePaneId(placed.paneId)
+  }
+
+  /** 구현 참조를 눌렀다. 그 경로는 저장소 상대이므로(understanding/types.ts) 지금 프로젝트에 붙여
+   *  절대 경로로 만든 다음 평소의 파일 탭으로 연다 — 설명 옆에 소스를 띄우는 것이 이 화면의 목적이다.
+   *  구분자는 루트의 것을 따른다(core/files/paths.ts 의 resolveRelative 와 같은 관례). */
+  const openFeaturePath = (relPath: string): void => {
+    const root = currentProjectRef.current
+    if (!root) return
+    const sep = root.includes('\\') ? '\\' : '/'
+    const parts = relPath.split(/[/\\]/).filter((p) => p !== '' && p !== '.')
+    if (parts.length === 0) return
+    openFile(`${root}${sep}${parts.join(sep)}`)
+  }
+
+  /** 기능 탭 id → 그 기능의 지금 상태. 탭 줄의 글리프가 이 값을 본다 — 상태는 살아 있는 값이라
+   *  탭 기록에 박아 두지 않는다(박아 두면 다시 분석해도 글리프가 옛것으로 남는다).
+   *
+   *  **지금 읽어 둔 이해가 그 탭의 프로젝트 것일 때만 넣는다.** 기능 id 는 프로젝트마다 겹칠 수
+   *  있으므로 그 확인 없이 넣으면 B 의 탭에 A 의 상태가 붙는다. 빠진 탭은 글리프 없이 이름만
+   *  그려진다(PaneGrid 의 featureStatuses 주석) — 사라지는 것보다 낫다.
+   *  dirtyIds 와 같은 갈래다: 판정은 여기서 하고 격자는 조회만 한다. */
+  const featureStatuses: Record<string, FeatureStatus> = {}
+  for (const rec of featureTabs) {
+    if (rec.projectRoot !== currentProject) continue
+    const f = understanding?.features.find((x) => x.id === rec.featureId)
+    if (f) featureStatuses[rec.id] = f.status
+  }
+
   /** 기능 탭의 본문. renderEditor 와 같은 갈래다 — 페인 격자는 자리만 잡고 내용은 App 이 만든다.
-   *  목록에 없는 기능(프로젝트가 바뀌었거나 다시 분석되며 사라졌다)은 그리지 않는다: renderEditor 가
-   *  파일 탭·버퍼가 없을 때 null 을 주는 것과 같고, 탭 줄에서도 그 탭은 이미 빠져 있다.
+   *
+   *  **읽어 둔 이해가 이 탭의 프로젝트 것일 때만 그린다.** 기능 id 는 프로젝트마다 겹칠 수 있어서,
+   *  그 확인 없이 그리면 방금 활성이 된 A 의 탭에 아직 남아 있는 B 의 설명이 한 프레임 비친다.
+   *  어긋나는 동안은 null 이고, 활성 탭이 정한 루트로 아래 효과가 A 를 읽어 오면 채워진다 —
+   *  파일 탭이 files.read 를 기다리는 동안 비어 있는 것과 같은 짧은 공백이다.
    *  설명이 아직 없으면 explanation 이 null 이고 FeatureDetail 이 그 안내를 그린다. */
-  const renderFeature = (featureId: string): React.ReactNode => {
+  const renderFeature = (featureTabId: string): React.ReactNode => {
+    const rec = featureTabs.find((x) => x.id === featureTabId)
     const u = understanding
-    const f = u?.features.find((x) => x.id === featureId)
-    if (!u || !f) return null
+    if (!rec || !u || rec.projectRoot !== currentProject) return null
+    const f = u.features.find((x) => x.id === rec.featureId)
+    if (!f) return null
     return (
       <div className="workbench-body">
         <FeatureDetail
           feature={f}
-          explanation={u.explanations[featureId] ?? null}
+          explanation={u.explanations[rec.featureId] ?? null}
           // Task 11 이 탭마다 따로인 좁힘 상태를 들고 오면서 이 둘을 갈아 끼운다 — 지금은 흐름도가
           // 뼈대뿐이라 고를 단계 자체가 없다
           scopedNodeId={null}
@@ -2829,7 +2874,8 @@ export default function App(): React.JSX.Element {
                 accounts={accounts}
                 fileTabs={fileTabs}
                 dirtyFileIds={dirtyIds}
-                features={understanding?.features ?? []}
+                featureTabs={featureTabs}
+                featureStatuses={featureStatuses}
                 renderEditor={renderEditor}
                 renderFeature={renderFeature}
                 rollStates={rollStates}
@@ -3379,7 +3425,7 @@ export default function App(): React.JSX.Element {
           </div>
         </div>
       )}
-      {/* The pane tab context menu — the entry point for split and unsplit. It serves both kinds of tab:
+      {/* The pane tab context menu — the entry point for split and unsplit. It serves every kind of tab:
           the id goes to the tree unread, and Close takes the same path the tab's × does (a dirty file
           still asks for confirmation, a session is still ended). What gets split is the group the
           right-clicked tab belongs to, not the active pane — so right-clicking a tab in another group

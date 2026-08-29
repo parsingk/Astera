@@ -16,11 +16,16 @@ import {
 import { parseTab, sessionTab } from '../../../core/panes/tabId'
 import { tabLabels } from '../../../core/files/tabLabel'
 import { ATTENTION_STATUSES } from '../../../core/understanding/list'
-import type { ProjectFeature } from '../../../core/understanding/types'
+import type { FeatureStatus } from '../../../core/understanding/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { TerminalView } from './TerminalView'
 import { GLYPH } from './UnderstandingIcons'
-import { WorkbenchTabs, type FileTab, type WorkbenchTab } from './WorkbenchTabs'
+import {
+  WorkbenchTabs,
+  type FeatureTab,
+  type FileTab,
+  type WorkbenchTab
+} from './WorkbenchTabs'
 
 /** Pane grid.
  *
@@ -40,7 +45,8 @@ export function PaneGrid({
   accounts,
   fileTabs,
   dirtyFileIds,
-  features,
+  featureTabs,
+  featureStatuses,
   rollStates,
   schedStates,
   busy,
@@ -66,9 +72,12 @@ export function PaneGrid({
   /** Every open file tab, whichever pane holds it. The name hint is computed over all of them at once */
   fileTabs: FileTab[]
   dirtyFileIds: Set<string>
-  /** 지금 프로젝트의 기능 목록. 기능 탭이 제목과 상태 글리프를 여기서 찾는다 — 세션 탭이 sessions
-   *  에서, 파일 탭이 fileTabs 에서 찾는 것과 같은 자리다. 이 목록에 없는 기능의 탭은 그리지 않는다 */
-  features: ProjectFeature[]
+  /** Every open feature tab, whichever pane holds it — fileTabs 와 같은 자리, 같은 이유다.
+   *  제목과 프로젝트가 이 기록에서 나오므로, 다른 프로젝트의 기능 탭도 이름과 × 를 잃지 않는다 */
+  featureTabs: FeatureTab[]
+  /** 기능 탭 id → 지금 살아 있는 상태. **지금 열린 프로젝트의 탭만 여기에 있다** — 그 판정(기록의
+   *  projectRoot 대 currentProject)은 App 이 한다. dirtyFileIds 와 같은 갈래로, 격자는 조회만 한다 */
+  featureStatuses: Record<string, FeatureStatus>
   rollStates: Record<string, RollStateEvent>
   schedStates: Record<string, SchedStateEvent>
   busy: Record<string, boolean>
@@ -95,9 +104,10 @@ export function PaneGrid({
    *  TerminalView 가 active 프롭으로 같은 일을 한다 */
   renderEditor: (paneId: string, fileTabId: string, focused: boolean) => React.ReactNode
   /** 기능 탭의 본문. renderEditor 와 같은 갈래로 App 이 만들고 격자는 자리만 잡는다.
-   *  paneId 를 받지 않는 것은 에디터와 달리 페인마다 살려 둘 인스턴스가 없기 때문이다 — 지킬 문서
-   *  상태가 없어서 활성일 때만 그리고 벗어나면 언마운트한다(아래 기능 슬롯의 주석) */
-  renderFeature: (featureId: string) => React.ReactNode
+   *  기능 id 가 아니라 **탭 id** 를 넘긴다 — 어느 프로젝트의 기능인지는 기록이 알고, 그 기록을
+   *  찾는 열쇠가 탭 id 다. paneId 를 받지 않는 것은 에디터와 달리 페인마다 살려 둘 인스턴스가
+   *  없기 때문이다 — 지킬 문서 상태가 없어서 활성일 때만 그린다(아래 기능 슬롯의 주석) */
+  renderFeature: (featureTabId: string) => React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement>(null)
@@ -122,8 +132,8 @@ export function PaneGrid({
   // Session id → session info, file tab id → file tab. Used when a group's tab ids are turned into tabs
   const sessionOf = new Map(sessions.map((s) => [s.id, s]))
   const fileTabOf = new Map(fileTabs.map((f) => [f.id, f]))
-  // 기능 id → 기능. 기능 탭 id 는 `feature:${id}` 이므로 parseTab 이 준 id 로 바로 찾는다
-  const featureOf = new Map(features.map((f) => [f.id, f]))
+  // 기능 탭 id → 그 탭의 기록. fileTabOf 와 같은 모양이다
+  const featureTabOf = new Map(featureTabs.map((f) => [f.id, f]))
   // The name hint is computed **over every open file tab at once**, not per pane — two files with the
   // same name in different panes still have to be told apart
   const labels = tabLabels(fileTabs.map((f) => f.path))
@@ -236,8 +246,9 @@ export function PaneGrid({
           그래서 lastFileOfPane 같은 기억을 따로 두지 않는다 */}
       {paneLeaves.map((l) => {
         const rect = rects.get(l.id)
-        const ref = parseTab(l.activeTabId)
-        if (!rect || ref?.kind !== 'feature') return null
+        // 기록이 없는 탭에는 슬롯도 두지 않는다 — 에디터 슬롯이 fileTabOf 로 거르는 것과 같다.
+        // 두면 아무것도 안 든 div 가 페인 본문을 덮어 드롭 대상이 가려진다
+        if (!rect || !featureTabOf.has(l.activeTabId)) return null
         return (
           <div
             key={`feature-${l.id}`}
@@ -251,7 +262,7 @@ export function PaneGrid({
             }}
             onMouseDown={() => onFocusPane(l.id)}
           >
-            {renderFeature(ref.id)}
+            {renderFeature(l.activeTabId)}
           </div>
         )
       })}
@@ -329,17 +340,18 @@ export function PaneGrid({
               }
             }
             if (ref?.kind === 'feature') {
-              const feat = featureOf.get(ref.id)
-              // 다른 프로젝트로 옮겨 갔거나 목록에서 사라진 기능 — 세션·파일 탭이 없어졌을 때와
-              // 같이 그리지 않고 건너뛴다
-              if (!feat) return null
+              const rec = featureTabOf.get(tabId)
+              if (!rec) return null
+              // 상태는 살아 있는 값이라 기록에 담지 않는다. 다른 프로젝트의 탭이면 그 값이 없고,
+              // 그때는 글리프 없이 이름만 그린다 — 탭이 사라지는 것보다 낫다
+              const status = featureStatuses[tabId]
               return {
                 tabId,
                 kind: 'feature',
-                featureId: feat.id,
-                title: feat.name,
-                glyph: GLYPH[feat.status],
-                needsAttention: ATTENTION_STATUSES.includes(feat.status)
+                featureId: rec.featureId,
+                title: rec.title,
+                glyph: status ? GLYPH[status] : null,
+                needsAttention: status ? ATTENTION_STATUSES.includes(status) : false
               }
             }
             const f = ref?.kind === 'file' ? fileTabOf.get(tabId) : undefined
