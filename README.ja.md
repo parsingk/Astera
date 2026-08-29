@@ -190,6 +190,9 @@ Run は Jobs サイドバーにも表示されます。
 
 <div align="center">
 <img src="assets/jobs.gif" width="820" alt="図: コーディネーターがジョブの依存関係グラフをたどり、準備できた 2 つを別々のベンダーで開始し、テストで完了を確認し、依存 Task が終わってから次へ進み、判断が必要なときは人を待つ" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-killer-demo.mp4" width="820" controls muted>
+<a href="assets/astera-killer-demo.mp4">画面録画: ジョブが依存グラフに沿って進む — 準備できたタスクが動き出し、上限に達したワーカーが自ら再開し、最後のタスクは両方の依存を待つ</a>
+</video>
 </div>
 
 コーディネーター CLI のリファレンスを見るには:

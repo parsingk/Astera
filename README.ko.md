@@ -192,6 +192,9 @@ git worktree에서 실행할 수 있고, 완료 결과는 상세 화면에서 **
 
 <div align="center">
 <img src="assets/jobs.gif" width="820" alt="다이어그램: 코디네이터가 Job의 의존성 그래프를 따라 준비된 두 작업을 서로 다른 벤더에서 동시에 시작하고, 테스트로 하나의 완료를 증명하며, 두 의존 작업이 끝난 뒤 다음 작업을 진행하고, 스스로 정할 수 없는 결정은 사람을 기다린다" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-killer-demo.mp4" width="820" controls muted>
+<a href="assets/astera-killer-demo.mp4">화면 녹화: Job이 의존성 그래프를 따라 진행된다 — 준비된 Task가 시작되고, 한도에 걸린 워커가 스스로 이어가며, 마지막 Task는 두 의존성이 끝날 때까지 기다린다</a>
+</video>
 </div>
 
 코디네이터 CLI 레퍼런스를 보려면:

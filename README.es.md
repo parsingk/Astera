@@ -196,6 +196,9 @@ una sesión coordinadora nueva. Una entrega sencilla y puntual no necesita un Ru
 
 <div align="center">
 <img src="assets/jobs.gif" width="820" alt="Diagrama: una coordinadora sigue el grafo de dependencias, inicia dos tareas listas en proveedores distintos, comprueba una con pruebas, continúa cuando terminan sus dependencias y espera a una persona cuando hace falta una decisión" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-killer-demo.mp4" width="820" controls muted>
+<a href="assets/astera-killer-demo.mp4">Grabación de pantalla: un trabajo recorre su grafo de dependencias — las tareas listas arrancan, un trabajador alcanza su límite y se reanuda solo, y la última tarea espera a sus dos dependencias</a>
+</video>
 </div>
 
 Para leer la referencia de la CLI de coordinación:

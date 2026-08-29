@@ -191,6 +191,9 @@ coordinator session. A simple one-off handoff does not need an orchestration run
 
 <div align="center">
 <img src="assets/jobs.gif" width="820" alt="Diagram: a coordinator follows a job's dependency graph, starts the two ready tasks on both vendors at once, uses a test suite to prove one done, waits for both dependencies before continuing, and leaves an unresolved decision for a person" />
+<video src="https://github.com/parsingk/Astera/raw/main/assets/astera-killer-demo.mp4" width="820" controls muted>
+<a href="assets/astera-killer-demo.mp4">Screen recording: a job runs its dependency graph — the ready tasks start, a worker hits a usage limit and resumes by itself, and the last task waits for both dependencies</a>
+</video>
 </div>
 
 To read the coordinator CLI reference:
