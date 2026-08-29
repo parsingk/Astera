@@ -32,7 +32,10 @@ export interface PendingGitOperation {
   endedAt?: string
 }
 
+/** 저장소가 어디에 있었는가. `ExternalGitChange` 의 before/after 가 이 모양이다 */
 export interface GitRef {
-  name: string
-  hash: string
+  /** detached HEAD 면 null */
+  branch: string | null
+  /** 커밋이 하나도 없는 저장소면 null */
+  head: string | null
 }
