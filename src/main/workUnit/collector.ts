@@ -10,8 +10,16 @@
 //
 // **주기적 폴링이 없다.** 방아쇠는 넷뿐이다 — 트랜스크립트 변경 · `.git` 변경 · 세션 유휴 ·
 // 세션 종료. EG §25 가 "지나치게 짧은 polling 은 피한다"고 했고 설계 §16 이 이 넷으로 충분하다고
-// 적었다.
-import { promises as fs } from 'node:fs'
+// 적었다. (`onSessionForked` 는 다섯째 방아쇠가 아니다 — 회차를 돌리지 않고 커서만 잡는다.)
+//
+// **codex 세션에서는 Unit 이 만들어지지 않는다.** 빠뜨린 것이 아니라 형식의 성질이다. 사람의
+// 요청을 가리는 판정(humanRequest.ts)은 레코드의 구조 표지 — `type:'user'` · `toolUseResult` ·
+// `isMeta` · `promptSource` — 를 보는데, codex rollout 레코드의 최상위 키는 `payload` ·
+// `timestamp` · `type` 셋뿐이다(실측: codexParser.ts 의 `CODEX_WRAPPER_PREFIXES` 주석).
+// 구조로 물어볼 것이 없으니 지원하려면 그 파일이 쓰는 접두사 차단 목록으로 돌아가야 하는데,
+// 그 목록은 이 계획이 일부러 버린 것이다(humanRequest.ts 의 허용 목록 주석). 그래서 codex
+// 세션은 여기까지 흘러오되 한 줄도 사람의 요청으로 인정되지 않는다.
+import { promises as fs, statSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { git } from '../../core/worktrees/git'
 import { parsePorcelainZ } from '../../core/git/status'
@@ -65,16 +73,19 @@ export interface CollectorDeps {
   store: WorkUnitStore
   listSessions: () => Promise<CollectorSession[]>
   git: CollectorGit
-  /** 지금 시각(ms). **인자로 받는 이유는 `isAsteraOperation` 의 유예 판정이 시간에 걸려 있어서다** —
-   *  테스트가 시계를 잡을 수 없으면 그 경계를 확인할 수 없다. */
+  /** 지금 시각(ms). **인자로 받는 이유는 이 수집기가 시각을 기록하고 시각으로 기다리기 때문이다** —
+   *  Unit 의 `startedAt` · `completedAt` 과 외부 변경의 `detectedAt` 이 이 값에서 나오고(`nowIso`),
+   *  디바운스의 상한도 이 값으로 잰다(`arm`). 시계를 밖에서 주면 테스트가 그 값들을 고정된 값으로
+   *  확인할 수 있다. */
   now: () => number
   /** Astera 가 지금 돌리고 있는 git 동작들 (EG §26).
    *
    *  **V1 에는 이것을 등록하는 곳이 없다.** 워크트리 생성·병합 같은 Astera 자신의 git 조작을
    *  등록하는 일은 이 계획의 어느 태스크도 만들지 않았고, 그래서 ipc.ts 는 빈 목록을 준다 —
    *  결과적으로 V1 은 모든 전이를 외부 변경으로 본다. `isAsteraOperation` 을 그래도 부르는 이유는
-   *  등록하는 쪽이 생기는 즉시 이 자리가 맞게 동작해야 하기 때문이고, 유예 경계는 테스트가 이
-   *  주입점으로 확인한다. */
+   *  등록하는 쪽이 생기는 즉시 이 자리가 맞게 동작해야 하기 때문이다. **유예 경계 자체는 이 주입점이
+   *  아니라 provenance.test.ts 가 확인한다** — 이 수집기의 테스트는 이 자리를 채우지 않으므로
+   *  (빈 목록이 기본값이다) 여기를 지나는 판정은 늘 "Astera 것이 아니다"로 떨어진다. */
   pendingGitOps?: () => readonly PendingGitOperation[]
   log?: (m: string) => void
 }
@@ -128,6 +139,20 @@ export class WorkUnitCollector {
   /** 이 회차 동안 쓴 적이 있는 프로젝트. 끌 때 닫아야 할 곳을 찾는 데 쓴다 —
    *  `WorkUnitStore` 는 키를 열거하는 길을 주지 않는다 */
   private touched = new Set<string>()
+  /** **쓸 커서가 없을 때 0 이 아니라 파일 끝을 잡아야 하는 세션들.** 두 갈래가 여기 든다 —
+   *  켤 때 이미 돌던 세션(seed)과 `--resume` 으로 이어받은 세션(onSessionForked). 둘 다 그 파일의
+   *  앞부분이 **켜기 전 또는 이 세션 이전의 대화**여서, 0 은 곧 과거 전체다.
+   *
+   *  켠 뒤에 새로 시작한 세션은 여기 없고, 그래서 지금까지처럼 0 부터 읽힌다 — 그 파일은 켠 뒤에
+   *  만들어진 것이므로 처음이 곧 세션의 시작이다(스펙 §16.1 표의 첫 줄).
+   *
+   *  **디스크에 남기지 않는다.** 이 집합이 말하는 것은 "이번 실행에서 언제 무엇을 보았는가"이고,
+   *  다음 실행에는 그 앎이 없다 — 커서를 버리는 것과 같은 이유다(stop 의 주석). */
+  private startAtEnd = new Set<string>()
+  /** onSessionForked 가 **그 순간** 잡아 둔 자리. 저장소의 커서는 프로젝트별인데 이어받기를
+   *  알리는 자리(ipc.ts 의 resume 경로)는 프로젝트를 함께 주지 않으므로, 다음 회차의 tail 이
+   *  같은 파일을 보고 있을 때 옮겨 심는다. */
+  private forkAnchors = new Map<string, { filePath: string; offset: number }>()
 
   constructor(private deps: CollectorDeps) {}
 
@@ -199,6 +224,35 @@ export class WorkUnitCollector {
     })
   }
 
+  /** 세션을 이어받았다 — 한도에 걸려 굴렸거나(rolling.ts) 사람이 기록에서 대화를 다시 열었다.
+   *  **새 세션만의 일이다**: 옛 세션의 커서와 Unit 은 건드리지 않는다. 그 세션은 곧 끝나고
+   *  `onSessionExit` 가 닫는다.
+   *
+   *  **왜 파일 끝인가.** `--resume` 은 이전 대화를 통째로 다시 적고, 되읽힌 요청들은 `promptSource`
+   *  를 그대로 달고 있어 사람의 요청 판정을 전부 통과한다. 수집기는 이 세션 id 를 처음 보므로
+   *  커서가 없고, 커서가 없다는 것만으로 0 부터 읽으면 켜기 전의 대화가 Unit 이 되고 켠 뒤의 것은
+   *  두 번 읽힌다. 파일 끝은 되읽힌 내용을 건너뛰는 유일하게 정확한 지점이다 — 잃는 것은 재개
+   *  브리핑 한 줄일 수 있고, 얻는 것은 "켜기 전의 대화는 읽지 않는다"는 약속이다(스펙 §16.1).
+   *
+   *  **부르는 쪽이 토글을 확인하지 않아도 된다.** 꺼져 있으면 아무 일도 하지 않는다 — 다시 켜면
+   *  `seed` 가 그때의 파일 끝을 잡으므로 이 자리에 남길 것이 없다.
+   *
+   *  크기를 동기로 읽는 이유: `--resume` 이 되쓰기를 시작하기 전의 크기여야 "그 순간"이 뜻이 있다.
+   *  파일 하나의 stat 이고, 이어받기마다 한 번뿐이다. */
+  onSessionForked(newSessionId: string, transcriptPath: string): void {
+    if (!this.running) return
+    this.startAtEnd.add(newSessionId)
+    let size: number
+    try {
+      size = statSync(transcriptPath).size
+    } catch {
+      // 아직 없다 — 새 파일에 처음부터 쓰인다면 그 처음이 이 세션의 시작이다. 그래도 위의 집합에는
+      // 남겨 둔다: 이 세션이 결국 **다른** 파일(되쓰인 쪽)을 쓰면 그때는 끝부터 읽어야 한다
+      return
+    }
+    this.forkAnchors.set(newSessionId, { filePath: transcriptPath, offset: size })
+  }
+
   /** 세션이 끝났다 (WU §14-4). 관찰이 여기서 멈추므로 후보로 남기지 않는다 */
   onSessionExit(sessionId: string): Promise<void> {
     return this.enqueue(async () => {
@@ -226,6 +280,10 @@ export class WorkUnitCollector {
       state.cursors = state.cursors.filter((c) => c.sessionId !== sessionId)
       if (cursorCount !== state.cursors.length) dirty = true
       this.known.delete(sessionId)
+      // 커서와 같은 이유로 함께 지운다 — 이 둘도 "그 세션을 어디서부터 읽을 것인가"의 답이고,
+      // 끝난 세션에는 그 물음이 없다
+      this.startAtEnd.delete(sessionId)
+      this.forkAnchors.delete(sessionId)
       if (dirty) await this.persist(s.projectPath, state)
     })
   }
@@ -265,10 +323,19 @@ export class WorkUnitCollector {
 
   /** 스펙 §16.1 — 켠 순간의 파일 끝을 잡는다. **이전 커서는 버린다.**
    *  지금 목록에 없는 세션은 이 뒤에 나타나면 커서 없이 처음부터 읽히는데, 그것이 표의 첫 줄
-   *  ("켠 뒤 시작한 세션은 0")이다 — 그 파일은 켠 뒤에 만들어진 것이므로 처음이 곧 세션의 시작이다. */
+   *  ("켠 뒤 시작한 세션은 0")이다 — 그 파일은 켠 뒤에 만들어진 것이므로 처음이 곧 세션의 시작이다.
+   *
+   *  **경로를 못 읽은 세션도 켤 때 이미 돌던 세션이다.** `transcriptPath` 는 그 순간 `null` 로 올 수
+   *  있고(statusline 캡처 파일이 아직 없거나 쓰이는 중이다) 그러면 여기서 커서를 잡지 못한다. 그
+   *  세션을 그냥 건너뛰면 다음 회차에 "커서 없는 세션"으로 보여 0 부터 읽히므로, 본 것만은 남긴다 —
+   *  그 구분을 하는 것이 `startAtEnd` 다. */
   private async seed(listed?: CollectorSession[]): Promise<void> {
     const sessions = listed ?? (await this.deps.listSessions())
     for (const s of sessions) this.known.set(s.sessionId, s)
+    // 커서처럼 비우고 다시 잡는 것이 아니라 **더한다.** 비우면 잡기가 한 번 실패해 다시 부를 때
+    // (round 의 재시도) 첫 목록에서 본 세션을 잊고, 켜자마자 온 이어받기 표시도 함께 지워진다.
+    // 비우는 자리는 끄기 하나뿐이다 — 커서를 버리는 그 자리다(closeAll).
+    for (const s of sessions) this.startAtEnd.add(s.sessionId)
     for (const [projectPath, group] of groupByProject(sessions)) {
       const state = this.stateOf(projectPath)
       state.cursors = []
@@ -291,11 +358,13 @@ export class WorkUnitCollector {
   private async tail(state: WorkUnitState, s: CollectorSession): Promise<boolean> {
     if (s.transcriptPath === null) return false
     const cursor = state.cursors.find((c) => c.sessionId === s.sessionId)
-    // 파일이 달라졌으면(세션이 fork/resume 되었다) 옛 오프셋은 전혀 다른 내용의 한가운데를 가리킨다
+    // 파일이 달라졌으면(세션이 fork/resume 되었다) 옛 오프셋은 전혀 다른 내용의 한가운데를 가리킨다.
+    // 그때 — 그리고 커서가 아예 없을 때 — 어디서부터 읽을지는 anchorFor 가 답한다. **버리면 0 이 되고,
+    // 0 이 옳은 경우는 하나뿐이다**(설계 문서 §16 의 "오프셋을 버린다"는 그 하나만 보고 쓴 문장이다).
     const usable =
       cursor && cursor.filePath === s.transcriptPath
         ? { offset: cursor.offset, sizeAtRead: cursor.sizeAtRead }
-        : null
+        : await this.anchorFor(s.sessionId, s.transcriptPath)
     const r = await readNewLines(s.transcriptPath, usable)
 
     let dirty = false
@@ -329,6 +398,29 @@ export class WorkUnitCollector {
       dirty = true
     }
     return dirty
+  }
+
+  /** 쓸 커서가 없을 때 어디서부터 읽는가. **`null` 은 "파일 처음부터"라는 뜻**이고(readNewLines),
+   *  그것이 옳은 세션은 켠 뒤에 새로 시작한 세션뿐이다.
+   *
+   *  이어받기 표시(`forkAnchors`)를 먼저 보는 이유: 그 값은 되쓰기가 시작되기 전에 잡은 자리라,
+   *  이어받은 직후 사람이 한 말까지 읽는다. 지금 파일 끝을 잡으면 그 한 줄을 놓친다. 다만 그
+   *  표시는 알림이 준 경로에 대해서만 쓸 수 있다 — 이어받은 세션이 결국 다른 파일을 쓰면(`--resume`
+   *  이 새 파일에 되쓰는 경우) 그 파일에서 잡을 수 있는 정확한 자리는 지금의 끝뿐이다. */
+  private async anchorFor(
+    sessionId: string,
+    filePath: string
+  ): Promise<{ offset: number; sizeAtRead: number } | null> {
+    const anchor = this.forkAnchors.get(sessionId)
+    if (anchor && anchor.filePath === filePath) {
+      // 한 번 쓰면 상태의 커서가 그 자리를 이어받는다 — 남겨 두면 파일이 한 바퀴 돌았을 때 이미
+      // 읽은 자리로 되돌아간다
+      this.forkAnchors.delete(sessionId)
+      return { offset: anchor.offset, sizeAtRead: anchor.offset }
+    }
+    if (!this.startAtEnd.has(sessionId)) return null
+    const size = await fileSize(filePath)
+    return { offset: size, sizeAtRead: size }
   }
 
   /** 사람의 요청 하나 — WU §13 의 세 경우 (boundary.ts) */
@@ -436,6 +528,10 @@ export class WorkUnitCollector {
     this.known.clear()
     this.lastRef.clear()
     this.touched.clear()
+    // 커서와 함께 버린다. 남겨 두면 꺼져 있는 동안 쓰인 줄들 앞에 잡힌 자리가 살아남아, 다시 켤 때
+    // 그 줄들이 읽힌다 — 커서를 버리는 이유(스펙 §16.1) 그대로다
+    this.startAtEnd.clear()
+    this.forkAnchors.clear()
   }
 
   private close(unit: SessionWorkUnit, status: SessionWorkUnit['status'], projectPath: string, at?: string): void {

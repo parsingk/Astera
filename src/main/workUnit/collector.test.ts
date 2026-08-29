@@ -168,6 +168,37 @@ describe('WorkUnitCollector — WU §23', () => {
     expect(state.units[0].id).toBe(openedId)
     expect(state.units[0].messageCount).toBe(2)
   })
+
+  // 재시작하면 lastRef 캐시가 비어 있다. 경계에서 HEAD 를 묻기 전에 앞 Unit 을 닫으면 그 Unit 의
+  // endHead 는 영영 비어 있게 되고, 그 자리가 채워졌는지 보는 테스트가 없어 되돌려도 조용했다.
+  it('재시작 뒤 첫 경계에서도 앞 Unit 의 endHead 가 채워진다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    fake.git.files = ['src/a.ts'] // 관찰된 변경이 있어야 유휴가 완료 후보를 만든다
+    const first = await makeCollector(fake)
+    await first.collector.start()
+    await fs.appendFile(transcript, human('첫 작업'), 'utf8')
+    first.collector.onTranscriptChanged()
+    await first.collector.flush()
+    await first.collector.onSessionIdle('s1')
+    expect(first.store.get(projectPath)!.units[0].status).toBe('completed-candidate')
+
+    // 앱 재시작 — 새 수집기의 git 캐시는 비어 있고, 그동안 HEAD 도 움직였다
+    fake.git.ref = { branch: 'main', head: 'c9' }
+    const second = await makeCollector(fake)
+    await second.collector.start()
+
+    // 이 요청이 앞 Unit 을 확정한다 (decideBoundary 의 close-and-open)
+    await fs.appendFile(transcript, human('다음 작업'), 'utf8')
+    second.collector.onTranscriptChanged()
+    await second.collector.flush()
+
+    const state = second.store.get(projectPath)!
+    expect(state.units).toHaveLength(2)
+    expect(state.units[0].status).toBe('completed')
+    expect(state.units[0].git.endHead).toBe('c9') // 경계가 물은 HEAD 가 닫히는 Unit 에도 들어간다
+    expect(state.units[1].git.startHead).toBe('c9')
+  })
 })
 
 // ── 스펙 §16.1 의 커서 규칙 셋 ─────────────────────────────────────────
@@ -271,5 +302,66 @@ describe('WorkUnitCollector — 스펙 §16.1 커서', () => {
     await Promise.all([collector.onEnabledChanged(false), collector.onEnabledChanged(true)])
 
     expect(isOpen(store.get(projectPath)!.units[0].status)).toBe(false)
+  })
+
+  // 한도에 걸려 세션을 굴리면(rolling.ts) 새 세션 id 가 생기고 `--resume` 이 이전 대화를 통째로
+  // 되쓴다. 수집기는 그 id 를 처음 보므로 커서가 없고, 커서가 없다는 것만으로 0 부터 읽으면
+  // **켜기 전의 대화가 Unit 이 되고 켠 뒤의 것은 두 번 읽힌다.**
+  it('이어받은 세션은 --resume 이 되쓴 과거를 다시 읽지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, human('굴리기 전 요청 하나') + human('굴리기 전 요청 둘'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.units).toHaveLength(1)
+
+    // 굴리기 — 새 파일에 옛 대화가 그대로 다시 적히고, 앱은 그것이 이어진 세션임을 알고 있다
+    const rolled = path.join(dir, 'transcript-rolled.jsonl')
+    await fs.copyFile(transcript, rolled)
+    collector.onSessionForked('s2', rolled)
+    fake.sessions = [session({ sessionId: 's2', transcriptPath: rolled })]
+
+    // 이어받은 뒤에 사람이 처음 한 말
+    await fs.appendFile(rolled, human('이어받은 뒤 첫 요청'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2) // 되읽힌 두 줄은 Unit 을 만들지 않았다
+    expect(state.units[1].sessionId).toBe('s2')
+    expect(state.units[1].title).toBe('이어받은 뒤 첫 요청')
+    expect(state.messages.filter((m) => m.sessionId === 's2')).toHaveLength(1)
+  })
+
+  // statusline 캡처 파일이 아직 없거나 쓰이는 중이면 그 세션의 경로는 그 순간 null 로 온다.
+  // seed 가 그 세션을 건너뛰면 다음 회차에 **커서 없는 세션**으로 보이고, 그것만으로 0 부터
+  // 읽으면 켜기 전의 대화가 통째로 들어온다.
+  it('켤 때 경로를 못 읽은 세션도 0 부터 읽지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session({ transcriptPath: null })]
+    // 켜기 전의 대화. 한 줄도 Unit 이 되어서는 안 된다
+    await fs.appendFile(transcript, human('켜기 전 요청 하나') + human('켜기 전 요청 둘'), 'utf8')
+
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+    expect(store.get(projectPath)!.cursors).toHaveLength(0) // 잡을 경로가 없었다
+
+    // 다음 회차부터는 경로가 온다 — 켤 때 이미 돌던 세션이므로 파일 끝을 잡아야 한다
+    fake.sessions = [session()]
+    collector.onTranscriptChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.units).toHaveLength(0)
+
+    await fs.appendFile(transcript, human('켠 뒤 첫 요청'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].title).toBe('켠 뒤 첫 요청')
+    expect(state.messages).toHaveLength(1)
   })
 })

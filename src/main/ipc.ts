@@ -595,6 +595,14 @@ export function registerIpc(
     // (OrchCoordinator.spawnSession) both go through this function, so passing it per call site would
     // give us two copies.
     const info = core.sessions.spawn({ ...opts, account, rollProviders, orchEnv: orchEnvOf() })
+    // 이어받은 세션이라고 Work Unit 수집기에 알린다 (스펙 §16.1). **추측할 자리가 아니다** — 이
+    // 자리가 그것이 resume 이라는 것을 아는 유일한 곳이고, 수집기는 새 세션 id 만 보므로 알리지
+    // 않으면 커서 없는 새 세션으로 보아 파일을 0 부터 읽는다. `--resume` 은 이전 대화를 통째로 다시
+    // 적으므로 그 0 은 곧 켜기 전의 대화 전체다. 건네는 경로는 방금 대화를 복사해 둔 그 파일이다 —
+    // 이어받은 프로세스가 이어 쓰는 파일이 그것이다(codex 는 확실히 그렇고, claude 가 새 파일을
+    // 쓰면 수집기가 그 세션을 처음 보는 자리에서 그 파일의 끝을 잡는다).
+    // 토글이 꺼져 있으면 이 호출은 아무 일도 하지 않는다 — 부르는 쪽이 확인하지 않아도 된다.
+    if (resumeTranscriptDest !== undefined) workUnitCollector.onSessionForked(info.id, resumeTranscriptDest)
     // Route to the per-provider coordinator — a mix is already blocked by the guard above, so the primary account's provider decides
     if ((opts.rollAccountIds?.length ?? 0) >= 1) {
       // The rolling coordinators are separate per-provider implementations and are deliberately not
