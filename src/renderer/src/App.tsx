@@ -17,6 +17,7 @@ import type { EditorView } from '@codemirror/view'
 import { EditorStateCache } from './lib/editorStateCache'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { JobsView } from './components/JobsView'
+import { UnderstandingView } from './components/UnderstandingView'
 import { RunDetail } from './components/RunDetail'
 import { NewRunModal } from './components/NewRunModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
@@ -40,6 +41,9 @@ import type {
   RunStatus,
   TerminalBuffer
 } from '../../core/types'
+// core/types.ts imports this for UnderstandingApi but does not re-export it (unlike the block above),
+// so it comes from its own module — the same import UnderstandingView.tsx uses.
+import type { ProjectUnderstanding } from '../../core/understanding/types'
 import { slackMode } from '../../core/slack/ready'
 import { findRun } from '../../core/orchestration/snapshot'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
@@ -404,6 +408,14 @@ export default function App(): React.JSX.Element {
   // Whether the Jobs sidebar view is showing — same convention as explorerOpen (toggleJobs mirrors
   // toggleExplorer below), just for the read-only orchestration view instead of the file tree.
   const [jobsOpen, setJobsOpen] = useState(false)
+  // Whether the How It Works sidebar view is showing — same convention as jobsOpen (toggleHiw mirrors
+  // toggleJobs below), unlike Jobs there is no feature flag gating it off the rail.
+  const [hiwOpen, setHiwOpen] = useState(false)
+  // The current project's understanding, loaded by the effect near currentProject below (it cannot sit
+  // here — that effect depends on currentProject, declared much later, and a dependency array is
+  // evaluated during render, so it would throw a TDZ ReferenceError this early). null covers both "no
+  // project" and "never analyzed" — UnderstandingView draws the same empty state for either.
+  const [understanding, setUnderstanding] = useState<ProjectUnderstanding | null>(null)
   const [isMax, setIsMax] = useState(false)
   const [usage, setUsage] = useState<SessionUsage | null>(null)
   const [rollStates, setRollStates] = useState<Record<string, RollStateEvent>>({})
@@ -1335,6 +1347,7 @@ export default function App(): React.JSX.Element {
     if (opening) {
       setSidebarOpen(true)
       setJobsOpen(false) // 사이드바는 한 번에 한 뷰만 보여준다
+      setHiwOpen(false)
     }
     setExplorerOpen(opening)
   }
@@ -1348,8 +1361,21 @@ export default function App(): React.JSX.Element {
     if (opening) {
       setSidebarOpen(true)
       setExplorerOpen(false)
+      setHiwOpen(false)
     }
     setJobsOpen(opening)
+  }
+
+  /** How It Works 사이드바 토글 — toggleJobs 와 같은 규칙: 켤 때 사이드바가 접혀 있으면 함께 펴고,
+   *  세 뷰 중 하나만 보이므로 나머지 둘을 끈다. */
+  const toggleHiw = (): void => {
+    const opening = !hiwOpen
+    if (opening) {
+      setSidebarOpen(true)
+      setExplorerOpen(false)
+      setJobsOpen(false)
+    }
+    setHiwOpen(opening)
   }
 
   // A setState updater can be invoked twice under StrictMode (in development), so setActivePaneId and
@@ -1876,19 +1902,23 @@ export default function App(): React.JSX.Element {
     )
   }
 
-  // 사이드바에 그릴 뷰 하나 — 세 갈래 삼항보다 이 값 하나가 어느 뷰가 열려 있는지를 더 분명히 읽힌다.
-  // 탐색기와 Jobs는 서로 배타적이다(toggleExplorer/toggleJobs가 상대를 끈다). orchEnabled가 꺼지면
-  // jobsOpen이 내부적으로 true로 남아 있어도 Jobs를 그리지 않고 세션 목록으로 돌아간다 — 레일의 진입점이
-  // 사라지는 시점에 사이드바도 조용히 원래 모습으로 돌아가야 어색해지지 않는다.
+  // 사이드바에 그릴 뷰 하나 — 네 갈래 삼항보다 이 값 하나가 어느 뷰가 열려 있는지를 더 분명히 읽힌다.
+  // 탐색기·Jobs·How It Works는 서로 배타적이다(toggleExplorer/toggleJobs/toggleHiw가 나머지를 끈다).
+  // orchEnabled가 꺼지면 jobsOpen이 내부적으로 true로 남아 있어도 Jobs를 그리지 않고 세션 목록으로
+  // 돌아간다 — 레일의 진입점이 사라지는 시점에 사이드바도 조용히 원래 모습으로 돌아가야 어색해지지
+  // 않는다. How It Works에는 그런 기능 플래그가 없다.
   //
   // **아래 효과들과 Run 콘솔의 렌더가 이 값을 공유한다.** 그래서 선언이 렌더 본문 끝이 아니라 여기에
   // 있다 — 효과의 의존성 배열은 렌더 중에 평가되므로 선언이 그보다 아래면 TDZ 로 터진다.
-  // 세 자리에 `explorerOpen || jobsOpen` 을 각각 쓰면 사이드바가 실제로 보여주는 것과 어긋날 수 있다.
-  const sidebarPane: 'explorer' | 'jobs' | 'sessions' = explorerOpen
+  // 세 자리에 `explorerOpen || jobsOpen || hiwOpen` 을 각각 쓰면 사이드바가 실제로 보여주는 것과
+  // 어긋날 수 있다.
+  const sidebarPane: 'explorer' | 'jobs' | 'understanding' | 'sessions' = explorerOpen
     ? 'explorer'
     : jobsOpen && orchEnabled
       ? 'jobs'
-      : 'sessions'
+      : hiwOpen
+        ? 'understanding'
+        : 'sessions'
   /** 아래쪽 패널이 쓰는 경로. 프로젝트가 없으면 홈으로 떨어진다 — 셸을 직접 띄웠을 때와 같은 곳이고,
    *  그래야 탭이 하나도 없을 때도 터미널을 열 수 있다. 홈에서는 Run 탭이 없다(runAvailable):
    *  실행 구성은 프로젝트 단위이고, 홈의 파일 목록으로 시드를 감지하면 남의 홈 package.json 스크립트를
@@ -1933,6 +1963,24 @@ export default function App(): React.JSX.Element {
       setRunContext(null)
     })
     return () => { cancelled = true }
+  }, [currentProject])
+
+  // Loads that project's How It Works understanding whenever the project changes — same shape as
+  // run.list just above. **This must sit here, after currentProject is declared** — its dependency
+  // array is evaluated during render, and placing it up near hiwOpen (where the brief for this task
+  // first sketched it) would read currentProject before that `const` runs and crash with a TDZ
+  // ReferenceError (this file has hit that exact mistake before; see the newRunOpen and openRun
+  // effects above). A project that has never been analyzed resolves to null — UnderstandingView's
+  // empty state draws that, the same as no project at all.
+  useEffect(() => {
+    if (!currentProject) return setUnderstanding(null)
+    let alive = true
+    void window.api.understanding.get(currentProject).then((u) => {
+      if (alive) setUnderstanding(u)
+    })
+    return () => {
+      alive = false
+    }
   }, [currentProject])
 
   // Turning the setting off makes the rail button — the only control that can close the Jobs view —
@@ -2408,6 +2456,32 @@ export default function App(): React.JSX.Element {
               </svg>
             </button>
           )}
+          {/* How It Works 사이드바 토글. Jobs 와 달리 기능 플래그가 없어 늘 그린다. */}
+          <button
+            className={hiwOpen ? 'rail-btn on' : 'rail-btn'}
+            aria-label={t('hiw.rail.open')}
+            title={t('hiw.rail.open')}
+            onClick={toggleHiw}
+          >
+            {/* 지도 — 흐름을 읽는다는 뜻. 앱의 SVG 관례대로 16 viewBox 에 currentColor 하나, 바깥
+                사각형은 1.4, 안쪽 갈래는 1.2 */}
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinejoin="round"
+            >
+              <rect x="2" y="2.4" width="12" height="11.2" rx="1.4" />
+              <g strokeWidth="1.2" strokeLinecap="round">
+                <path d="M8 4.6 v2.2" />
+                <path d="M5.2 11.4 v-1.6 h5.6 v1.6" />
+                <path d="M8 6.8 v3" />
+              </g>
+            </svg>
+          </button>
           {/* 아래쪽 패널을 여는 입구. 페인을 가리지 않는다 — 프로젝트가 없으면 홈에서 열리므로 어느
               화면에서든 셸을 하나 띄울 수 있다. 예전에는 explorerOpen 이었고 주석도 "파일·에디터 모드
               전용"이라고 적혀 있었는데, 이 패널이 탐색기의 것이 아니게 된 뒤로는 둘 다 거짓이 됐다.
@@ -2600,6 +2674,16 @@ export default function App(): React.JSX.Element {
                     }
                   })()
                 }}
+              />
+            ) : sidebarPane === 'understanding' ? (
+              <UnderstandingView
+                understanding={understanding}
+                // Task 10 이 페인 탭을 붙이기 전까지는 고를 대상도, 열 탭도 없다 — 세 자리 모두
+                // 자리표시자다. Task 10 이 openFeatureTab 을 만들면서 이 셋을 실제 값으로 바꾼다.
+                selectedFeatureId={null}
+                onOpenFeature={() => {}}
+                onReview={() => {}}
+                onAnalyze={() => toast.info(t('hiw.empty.notYet'))}
               />
             ) : (
               <>
