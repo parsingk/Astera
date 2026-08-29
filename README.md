@@ -36,8 +36,6 @@ vendors, checks the result, and waits when a human decision is needed.
 - Several accounts per vendor, each isolated through its own `CLAUDE_CONFIG_DIR` / `CODEX_HOME`
 - **Account rolling:** when a session hits a usage limit, Astera detects it from the transcript,
   works out the reset time, and resumes the work on the next account
-- **Resume strategy:** keep the CLI's original conversation — the default — or opt into
-  **Smart Resume (experimental)**, which starts the next session from a compact checkpoint instead
 - Optional import of a new account's setup from your default one: `settings.json`, the MCP server
   list, and the `skills`, `commands` and `agents` directories
 
@@ -46,6 +44,17 @@ vendors, checks the result, and waits when a human decision is needed.
 <img src="assets/rolling-demo.gif" width="820" alt="Screen recording: a session hits a usage limit, Astera switches to the next account with the same conversation restored, and when there is nowhere left to go it says when it will resume" />
 <p><a href="https://github.com/parsingk/Astera/blob/main/assets/astera-demo-rolling.mp4">▶ Full recording (28s)</a></p>
 </div>
+
+**Smart Resume (experimental)**
+- Off by default. **Settings → General → Session resume strategy** chooses between the CLI's own
+  resume and this one
+- With it on, a usage limit that moves the work to the next account starts that session **blank** and
+  hands it a compact checkpoint as its first message, instead of replaying the whole conversation
+- The checkpoint carries the working folder and its git state, the conversation's recent requests in
+  order, the files it touched, the last command it ran, and the tail of the exchange — with secrets
+  redacted on the way in
+- If a checkpoint cannot be built the switch falls back to the ordinary resume, so turning this on
+  never leaves a roll worse off than before
 
 **Scheduling and remote control**
 - Schedule sessions to start at a given time
