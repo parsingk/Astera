@@ -13,6 +13,8 @@
 
 [English](README.md) · [한국어](README.ko.md) · [日本語](README.ja.md) · **Español**
 
+<img src="assets/hero.jpg" width="960" alt="Astera ejecutando cuatro sesiones en una ventana en una cuadrícula 2x2 — tres de Claude Code y una de Codex, sobre dos cuentas de Claude y una de Codex — con las cuentas y el historial del proyecto en la barra lateral" />
+
 </div>
 
 Astera ejecuta tus sesiones de agente cuando no estás en el escritorio. Programa una para que empiece

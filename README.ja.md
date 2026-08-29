@@ -13,6 +13,8 @@
 
 [English](README.md) · [한국어](README.ko.md) · **日本語** · [Español](README.es.md)
 
+<img src="assets/hero.jpg" width="960" alt="1 つのウィンドウで 4 セッションを 2×2 で動かす Astera — Claude Code 3 つと Codex 1 つが Claude アカウント 2 つと Codex アカウント 1 つで動き、サイドバーにはアカウントとプロジェクト履歴が並ぶ" />
+
 </div>
 
 Astera は、あなたが席にいない間もエージェントのセッションを動かします。午前 3 時に開始するよう

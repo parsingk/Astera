@@ -13,6 +13,8 @@
 
 **English** · [한국어](README.ko.md) · [日本語](README.ja.md) · [Español](README.es.md)
 
+<img src="assets/hero.jpg" width="960" alt="Astera running four sessions in one window as a 2x2 grid — three Claude Code and one Codex, on two Claude accounts and a Codex one — with the accounts and the project history in the sidebar" />
+
 </div>
 
 Astera is a desktop workbench for long-running Claude Code and Codex work. Keep several sessions

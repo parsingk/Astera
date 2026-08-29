@@ -13,6 +13,8 @@
 
 [English](README.md) · **한국어** · [日本語](README.ja.md) · [Español](README.es.md)
 
+<img src="assets/hero.jpg" width="960" alt="한 창에서 네 세션을 2×2로 돌리는 Astera — Claude Code 셋과 Codex 하나가 Claude 계정 둘과 Codex 계정 하나로 돌고, 사이드바에는 계정과 프로젝트 히스토리가 있다" />
+
 </div>
 
 Astera는 오래 걸리는 Claude Code와 Codex 작업을 위한 데스크톱 워크벤치입니다. 자리를 비운 동안에도
