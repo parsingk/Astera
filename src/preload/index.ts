@@ -98,6 +98,8 @@ const api = {
     setLang: invoke('settings.setLang'),
     getOrchestrationEnabled: invoke('settings.getOrchestrationEnabled'),
     setOrchestrationEnabled: invoke('settings.setOrchestrationEnabled'),
+    getWorkUnitTrackingEnabled: invoke('settings.getWorkUnitTrackingEnabled'),
+    setWorkUnitTrackingEnabled: invoke('settings.setWorkUnitTrackingEnabled'),
     getResumeStrategy: invoke('settings.getResumeStrategy'),
     setResumeStrategy: invoke('settings.setResumeStrategy'),
     getTerminalFont: invoke('settings.getTerminalFont'),

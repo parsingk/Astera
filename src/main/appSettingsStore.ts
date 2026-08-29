@@ -7,7 +7,7 @@ import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from '../core/theme/themes'
 import type { ResumeStrategy } from '../core/types'
 
 /** App-wide settings persistence. Holds the language, the id of the dismissed update campaign, the
- *  orchestration toggle, the resume strategy, the terminal font, and the theme.
+ *  orchestration toggle, the work unit tracking toggle, the resume strategy, the terminal font, and the theme.
  *  A null lang means the user has never picked one explicitly — the caller derives it with
  *  pickInitialLang(app.getLocale()). The derived value is not stored. */
 export class AppSettingsStore {
@@ -15,6 +15,7 @@ export class AppSettingsStore {
   /** The update campaign the user dismissed. The basis for not showing the same campaign again. */
   private dismissedCampaignId: string | null = null
   private orchestrationEnabled = false
+  private workUnitTrackingEnabled = false
   private resumeStrategy: ResumeStrategy = 'original'
   private terminalFont: TerminalFont = { latin: null, hangul: null }
   private theme: ThemeId = DEFAULT_THEME_ID
@@ -35,6 +36,10 @@ export class AppSettingsStore {
       // Narrowed to === true — values like 'yes' or 1 must not slip through as truthy and turn an experimental feature on
       this.orchestrationEnabled =
         (parsed as { orchestrationEnabled?: unknown }).orchestrationEnabled === true
+      // Same narrowing, same reason — and it is the whole point of this toggle: default (and any
+      // untrusted file content) reads as off, so detection stays off until the user explicitly turns it on.
+      this.workUnitTrackingEnabled =
+        (parsed as { workUnitTrackingEnabled?: unknown }).workUnitTrackingEnabled === true
       // Narrowed to === 'smart' — the file is user-editable, so anything else ('ask', 42, null) reads as 'original'
       this.resumeStrategy =
         (parsed as { resumeStrategy?: unknown }).resumeStrategy === 'smart' ? 'smart' : 'original'
@@ -56,6 +61,7 @@ export class AppSettingsStore {
         this.lang = null
         this.dismissedCampaignId = null
         this.orchestrationEnabled = false
+        this.workUnitTrackingEnabled = false
         this.resumeStrategy = 'original'
         this.terminalFont = { latin: null, hangul: null }
         this.theme = DEFAULT_THEME_ID
@@ -67,6 +73,7 @@ export class AppSettingsStore {
       // The failure branch resets this too — otherwise, on a reload through the same instance, the previous value
       // survives the corrupt-file recovery and leaves a setting enabled that the file does not contain
       this.orchestrationEnabled = false
+      this.workUnitTrackingEnabled = false
       this.resumeStrategy = 'original'
       this.terminalFont = { latin: null, hangul: null }
       this.theme = DEFAULT_THEME_ID
@@ -99,6 +106,15 @@ export class AppSettingsStore {
 
   async setOrchestrationEnabled(enabled: boolean): Promise<void> {
     this.orchestrationEnabled = enabled
+    await this.persist()
+  }
+
+  getWorkUnitTrackingEnabled(): boolean {
+    return this.workUnitTrackingEnabled
+  }
+
+  async setWorkUnitTrackingEnabled(enabled: boolean): Promise<void> {
+    this.workUnitTrackingEnabled = enabled
     await this.persist()
   }
 
@@ -141,6 +157,7 @@ export class AppSettingsStore {
       lang?: Lang
       dismissedCampaignId?: string
       orchestrationEnabled?: boolean
+      workUnitTrackingEnabled?: boolean
       resumeStrategy?: ResumeStrategy
       terminalFont?: TerminalFont
       theme?: ThemeId
@@ -148,6 +165,7 @@ export class AppSettingsStore {
     if (this.lang) data.lang = this.lang
     if (this.dismissedCampaignId) data.dismissedCampaignId = this.dismissedCampaignId
     if (this.orchestrationEnabled) data.orchestrationEnabled = true
+    if (this.workUnitTrackingEnabled) data.workUnitTrackingEnabled = true
     if (this.resumeStrategy === 'smart') data.resumeStrategy = 'smart'
     if (this.terminalFont.latin || this.terminalFont.hangul) data.terminalFont = this.terminalFont
     if (this.theme !== DEFAULT_THEME_ID) data.theme = this.theme

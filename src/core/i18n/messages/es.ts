@@ -23,6 +23,10 @@ export const es: Catalog = {
     'Pida a la sesión que vaya a usar como orquestador que ejecute astera help para obtener la guía de uso completa.',
   'settings.orchestration.saveFailed':
     'No se pudo guardar la configuración de orquestación: {detail}',
+  // Seguimiento de unidades de trabajo
+  'settings.workUnit.label': 'Seguimiento de unidades de trabajo (experimental)',
+  'settings.workUnit.hint': 'Agrupa lo que haces en una sesión en unidades del tamaño de un objetivo. Solo las conversaciones posteriores a activarlo: el historial existente nunca se lee.',
+  'settings.workUnit.saveFailed': 'No se pudo guardar la configuración de seguimiento: {detail}',
   'settings.accounts.hint':
     '⤓ importa la configuración de la cuenta predeterminada del mismo CLI. La predeterminada es la primera cuenta registrada que tenga la sesión iniciada, una por CLI.',
   'common.cancel': 'Cancelar',

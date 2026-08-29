@@ -3418,6 +3418,19 @@ export function registerIpc(
     if (enabled && orchWiring) await startOrch()
   })
 
+  // The work unit tracking toggle. The same trust-boundary check as setLang — the value the renderer
+  // sent is validated before being written to disk. No detection logic lives behind this yet — this is
+  // only the setting, registered unconditionally here (not inside bootOrch, which only runs once
+  // orchestration is on) so the checkbox works on a default install exactly like every other setting.
+  ipcMain.handle('settings.getWorkUnitTrackingEnabled', () =>
+    core.appSettings.getWorkUnitTrackingEnabled()
+  )
+  ipcMain.handle('settings.setWorkUnitTrackingEnabled', async (_e, enabled: boolean) => {
+    if (typeof enabled !== 'boolean')
+      throw new Error(`INVALID_WORK_UNIT_TRACKING_ENABLED: ${String(enabled)}`)
+    await core.appSettings.setWorkUnitTrackingEnabled(enabled)
+  })
+
   // How a session that hits its limit gets continued. The same trust-boundary check as setLang — the
   // value the renderer sent is validated before being written to disk.
   ipcMain.handle('settings.getResumeStrategy', () => core.appSettings.getResumeStrategy())

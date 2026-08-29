@@ -415,6 +415,7 @@ export default function App(): React.JSX.Element {
   const [slackLoaded, setSlackLoaded] = useState(false)
   const [wtRoot, setWtRoot] = useState('') // the worktree root in the settings modal
   const [orchEnabled, setOrchEnabled] = useState(false) // the agent orchestration toggle
+  const [workUnitTrackingEnabled, setWorkUnitTrackingEnabled] = useState(false) // the work unit tracking toggle
   // Whether the Jobs sidebar view is showing — same convention as explorerOpen (toggleJobs mirrors
   // toggleExplorer below), just for the read-only orchestration view instead of the file tree.
   const [jobsOpen, setJobsOpen] = useState(false)
@@ -740,6 +741,9 @@ export default function App(): React.JSX.Element {
     // effect above (the rail needs it before anyone opens this modal); this is what keeps the checkbox
     // honest if the stored value ever diverges from what the renderer is holding.
     void window.api.settings.getOrchestrationEnabled().then(setOrchEnabled)
+    // Same re-sync for work unit tracking. Unlike orchestration, nothing outside this modal reads it yet,
+    // so there is no mount-time fetch to keep honest — this is the only read.
+    void window.api.settings.getWorkUnitTrackingEnabled().then(setWorkUnitTrackingEnabled)
   }, [showSettings])
 
   // Keyboard session tab switching: a global capture listener, so it works regardless of where focus
@@ -3201,6 +3205,29 @@ export default function App(): React.JSX.Element {
                       />
                     </label>
                     <span className="settings-hint">{t('settings.orchestration.hint')}</span>
+                    {/* Work unit tracking — same settings-row/settings-hint/label shape as orchestration
+                        above, and the same optimistic-update-then-revert-on-failure behaviour. Off by
+                        default: nothing is read from before the moment this is turned on. */}
+                    <label className="settings-row">
+                      <span>{t('settings.workUnit.label')}</span>
+                      <input
+                        type="checkbox"
+                        checked={workUnitTrackingEnabled}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                          setWorkUnitTrackingEnabled(next) // an optimistic update — reverted below on failure
+                          void window.api.settings.setWorkUnitTrackingEnabled(next).catch((err) => {
+                            setWorkUnitTrackingEnabled(!next)
+                            toast.error(
+                              t('settings.workUnit.saveFailed', {
+                                detail: err instanceof Error ? err.message : String(err)
+                              })
+                            )
+                          })
+                        }}
+                      />
+                    </label>
+                    <span className="settings-hint">{t('settings.workUnit.hint')}</span>
                     {/* 재개 전략 — 한도에 걸린 세션을 어떻게 이어갈지. Appearance 가 아니라 여기 있는
                         이유: 이것은 보이는 방식이 아니라 동작이고, 바로 위 오케스트레이션 토글과 같은
                         갈래(롤링·워커)를 건드린다. */}

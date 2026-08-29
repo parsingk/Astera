@@ -621,6 +621,10 @@ export interface CoreApi {
     // already open (environment variables are fixed at spawn time).
     getOrchestrationEnabled(): Promise<boolean>
     setOrchestrationEnabled(enabled: boolean): Promise<void>
+    // Work unit tracking: groups a session's activity into goal-sized units. Off by default, and reads
+    // nothing from before the moment it is turned on.
+    getWorkUnitTrackingEnabled(): Promise<boolean>
+    setWorkUnitTrackingEnabled(enabled: boolean): Promise<void>
     // How a session that hits its limit gets continued. See ResumeStrategy.
     getResumeStrategy(): Promise<ResumeStrategy>
     setResumeStrategy(strategy: ResumeStrategy): Promise<void>

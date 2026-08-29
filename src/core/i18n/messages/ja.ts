@@ -22,6 +22,10 @@ export const ja: Catalog = {
     'すでに開いているセッションには適用されません — 新しいセッションから有効になります。' +
     'オーケストレーターとして使うセッションで astera help を実行させると、詳しい使い方が得られます。',
   'settings.orchestration.saveFailed': 'オーケストレーション設定を保存できませんでした: {detail}',
+  // Work Unit 追跡
+  'settings.workUnit.label': '作業単位の追跡（実験）',
+  'settings.workUnit.hint': 'セッションでの作業を目標ごとの単位にまとめて記録します。オンにした後の会話だけを見ます — 既存の履歴は読みません。',
+  'settings.workUnit.saveFailed': '作業単位の追跡設定を保存できませんでした: {detail}',
   'settings.accounts.hint':
     '⤓ は同じ CLI の既定アカウントから設定を取り込みます。既定アカウントはログイン済みのアカウントのうち最初に登録されたもので、CLI ごとに1つあります。',
   'common.cancel': 'キャンセル',

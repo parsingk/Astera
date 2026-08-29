@@ -19,6 +19,10 @@ export const en: Record<keyof typeof ko, string> = {
     'It does not apply to sessions that are already open — only new sessions get it. ' +
     'Ask the session you want to orchestrate with to run astera help for the full usage guide.',
   'settings.orchestration.saveFailed': 'Could not save the orchestration setting: {detail}',
+  // Work unit tracking
+  'settings.workUnit.label': 'Work unit tracking (experimental)',
+  'settings.workUnit.hint': 'Groups what you do in a session into goal-sized units. Only conversations after you turn it on — existing history is never read.',
+  'settings.workUnit.saveFailed': "Couldn't save the work unit tracking setting: {detail}",
   'settings.accounts.hint':
     "⤓ imports settings from that CLI's default account. The default is the earliest registered account that is logged in — one per CLI.",
   'common.cancel': 'Cancel',

@@ -23,6 +23,10 @@ export const ko = {
     '이미 열려 있는 세션에는 적용되지 않습니다 — 새 세션부터 동작합니다. ' +
     '오케스트레이터로 쓸 세션에서 astera help 를 실행하게 하면 전체 사용법을 얻습니다.',
   'settings.orchestration.saveFailed': '오케스트레이션 설정을 저장하지 못했습니다: {detail}',
+  // Work Unit 추적
+  'settings.workUnit.label': '작업 단위 추적 (실험)',
+  'settings.workUnit.hint': '세션에서 한 작업을 목표 단위로 나눠 기록합니다. 켠 뒤의 대화만 봅니다 — 이전 기록은 읽지 않습니다.',
+  'settings.workUnit.saveFailed': '작업 단위 추적 설정을 저장하지 못했습니다: {detail}',
   'settings.accounts.hint':
     '⤓ 는 같은 CLI의 기본 계정에서 설정을 가져옵니다. 기본 계정은 로그인된 계정 중 가장 먼저 등록된 것으로, CLI마다 하나씩 있습니다.',
   'common.cancel': '취소',
