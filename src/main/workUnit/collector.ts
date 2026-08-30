@@ -18,13 +18,11 @@
 // 적었다. (`onSessionForked` 와 `onSessionBusy` 는 다섯째·여섯째 방아쇠가 아니다 — 회차를 돌리지
 // 않고 각각 커서와 등록만 잡는다.)
 //
-// **codex 세션에서는 Unit 이 만들어지지 않는다.** 빠뜨린 것이 아니라 형식의 성질이다. 사람의
-// 요청을 가리는 판정(humanRequest.ts)은 레코드의 구조 표지 — `type:'user'` · `toolUseResult` ·
-// `isMeta` · `promptSource` — 를 보는데, codex rollout 레코드의 최상위 키는 `payload` ·
-// `timestamp` · `type` 셋뿐이다(실측: codexParser.ts 의 `CODEX_WRAPPER_PREFIXES` 주석).
-// 구조로 물어볼 것이 없으니 지원하려면 그 파일이 쓰는 접두사 차단 목록으로 돌아가야 하는데,
-// 그 목록은 이 계획이 일부러 버린 것이다(humanRequest.ts 의 허용 목록 주석). 그래서 codex
-// 세션은 여기까지 흘러오되 한 줄도 사람의 요청으로 인정되지 않는다.
+// **두 형식을 함께 읽는다.** claude 는 `promptSource` 허용 목록으로, codex 는 레코드의
+// `content_item_kinds` 가 정확히 `['user.text']` 인지로 사람의 요청을 가린다 — 둘 다 구조 표지이고,
+// 문구 대조로 돌아가지 않는다(humanRequest.ts 의 허용 목록 주석). 끝나는 신호도 갈린다: claude 는
+// 창 제목의 유휴 전환을 쓰고, codex 는 그것을 믿을 수 없어(제목이 초당 여러 번 깜빡인다) 기록에
+// 적히는 턴 종료 줄을 읽는다.
 import { promises as fs, statSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import type { ExternalGitChange, GitRef, PendingGitOperation } from '../../core/git/types'

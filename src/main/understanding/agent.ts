@@ -14,9 +14,16 @@ import type { GeneratorSettings } from '../../core/understanding/generatorSettin
 import { extractJson, readClaudeOutput, readCodexOutput } from '../../core/understanding/agentOutput'
 import { agentArgs, codexMcpServerNames } from '../../core/understanding/agentArgs'
 
-/** 한 번의 생성에 주는 시간. 설명 하나는 파일 몇 개를 읽고 한 번 답하는 일이라 길 이유가 없고,
- *  **배경에서 도는 일이 무한히 매달리면 사용자는 그 사실조차 모른다.** */
-const TIMEOUT_MS = 180_000
+/** 한 번의 생성에 주는 시간.
+ *
+ *  **실측으로 정했다.** 180초로 두었더니 이 저장소의 중간 크기 기능 하나에서 그대로 넘겼다 —
+ *  17턴에 247초. 그 실패는 "만들지 못했습니다"로만 보이고, 다시 눌러도 같은 자리에서 같이
+ *  끝난다. 그래서 실제로 걸리는 시간의 두 배가 조금 넘게 잡는다.
+ *
+ *  **그럼에도 끝은 있다.** 배경에서 도는 일이 무한히 매달리면 사용자는 그 사실조차 모른다 —
+ *  이제 그 줄은 도는 동안 "만드는 중"으로 서 있으므로 기다림이 보이기는 하지만, 영원히 서
+ *  있는 것과 실패는 사용자에게 같은 것이다. 읽는 양은 프롬프트가 따로 묶는다(prompt.ts 의 예산). */
+const TIMEOUT_MS = 600_000
 
 export type AgentRun = { ok: true; value: unknown } | { ok: false; reason: string }
 

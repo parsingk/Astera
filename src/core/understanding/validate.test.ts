@@ -177,3 +177,48 @@ describe('근거 잇기 — 단계를 누를 수 있게 하는 것', () => {
     expect(r.value.userFlow[0].evidenceIds).toBeUndefined()
   })
 })
+
+// **두 흐름의 규칙이 다르다.** userFlow 만 그래프로 그려지므로 자기 안에서 닫혀 있어야 하고,
+// failureFlows 는 목록으로만 그려져 간선이 화면에 없다. 이 구분이 없을 때 216초짜리 생성 하나가
+// "본류가 실패 칸을 가리킨다"는 이유로 통째로 버려졌다(실측).
+describe('흐름 간선이 풀리는 범위', () => {
+  const make = (userFlow: unknown, failureFlows: unknown): unknown => ({
+    overview: '설명',
+    userFlow,
+    failureFlows,
+    keyDecisions: [],
+    implementation: [{ role: 'x', path: 'src/a.ts' }],
+    evidencePaths: ['src/a.ts'],
+    needsReview: false
+  })
+  const all = (): boolean => true
+
+  it('본류가 없는 칸을 가리키면 거부한다 — 선이 허공으로 간다', () => {
+    const r = validateExplanation(
+      make([{ id: 'u1', label: '요청', type: 'start', next: [{ targetId: 'f1' }] }], [{ id: 'f1', label: '실패', type: 'failure', next: [] }]),
+      all
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toContain('f1')
+  })
+
+  it('실패 흐름이 본류로 돌아가는 것은 받는다 — 그 간선은 그려지지 않는다', () => {
+    const r = validateExplanation(
+      make(
+        [{ id: 'u1', label: '요청', type: 'start', next: [] }],
+        [{ id: 'f1', label: '재시도', type: 'failure', next: [{ targetId: 'u1' }] }]
+      ),
+      all
+    )
+    expect(r.ok).toBe(true)
+  })
+
+  it('실패 흐름이 아무 데도 없는 칸을 가리키면 그래도 거부한다', () => {
+    const r = validateExplanation(
+      make([{ id: 'u1', label: '요청', type: 'start', next: [] }], [{ id: 'f1', label: '재시도', type: 'failure', next: [{ targetId: '없음' }] }]),
+      all
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toContain('없음')
+  })
+})

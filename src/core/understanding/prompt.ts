@@ -62,6 +62,10 @@ FlowNode = { "id": string, "label": string, "type": "start"|"step"|"decision"|"s
 Labels must be under 22 characters — a longer label means the step name became a sentence;
 put the sentence in "description" instead.
 
+"userFlow" is drawn as a diagram and must be closed: every "targetId" in it must be the id of
+another node **in userFlow**. Failures are shown as a separate list, not wired into that diagram —
+put them in "failureFlows" and do not point the main flow at them.
+
 Every step and every decision must name the files it is built from, in its own "evidencePaths".
 The reader clicks a step to see what it rests on; a step that names nothing cannot be clicked, so
 the reader is left with a diagram they cannot open. Name the file you actually read for that step,
@@ -90,7 +94,13 @@ Feature to explain: ${req.feature.name}
 One-line summary so far: ${req.feature.summary}
 
 Start from these implementation paths (repo-relative, under ${req.projectRoot}) and read what you
-need to ground the explanation. Read only — never modify anything:
+need to ground the explanation. Read only — never modify anything.
+
+**Work to a budget: open at most 10 files, and stop as soon as every step has a file behind it.**
+You are running in the background under a time limit; an explanation that never finishes is worth
+less than a grounded one that does. If the budget runs out before you can ground something, say so
+in "needsReview" rather than reading further.
+
 ${req.implementationPaths.map((p) => `- ${p}`).join('\n')}${changes}
 
 ${OUTPUT_SHAPE}`

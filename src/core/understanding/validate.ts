@@ -79,7 +79,15 @@ function readNode(v: unknown, at: string, sink: string[]): FlowNode | string {
   }
 }
 
-function readFlow(v: unknown, name: string, sink: string[]): FlowNode[] | string {
+/**
+ * @param known 간선이 가리켜도 되는 id 들. 주지 않으면 자기 안에서만 풀린다.
+ *
+ *  **두 흐름의 규칙이 다르다.** `userFlow` 는 화면에 그래프로 그려지므로(FlowDiagram → layoutFlow)
+ *  없는 칸을 가리키면 선이 허공으로 간다 — 자기 안에서 닫혀 있어야 한다. `failureFlows` 는 목록으로
+ *  그려질 뿐 간선을 그리지 않으므로, 본류로 돌아가는 간선을 가졌다고 해서 설명 전체를 버릴 이유가
+ *  없다. 실제로 그것 때문에 216초짜리 생성 하나가 통째로 버려졌다(실측).
+ */
+function readFlow(v: unknown, name: string, sink: string[], known?: Set<string>): FlowNode[] | string {
   if (!Array.isArray(v)) return `${name} 이 배열이 아니다`
   const nodes: FlowNode[] = []
   for (let i = 0; i < v.length; i++) {
@@ -88,7 +96,7 @@ function readFlow(v: unknown, name: string, sink: string[]): FlowNode[] | string
     nodes.push(n)
   }
   // 간선이 없는 칸을 가리키면 화면의 배치가 실패한다 — 지금 잡는 편이 낫다
-  const ids = new Set(nodes.map((n) => n.id))
+  const ids = known ?? new Set(nodes.map((n) => n.id))
   for (const n of nodes)
     for (const e of n.next)
       if (!ids.has(e.targetId)) return `${name}: ${n.id} 가 없는 칸 ${e.targetId} 를 가리킨다`
@@ -111,7 +119,19 @@ export function validateExplanation(
   const userFlow = readFlow(raw.userFlow, 'userFlow', cited)
   if (typeof userFlow === 'string') return bad(userFlow)
   if (userFlow.length === 0) return bad('userFlow 가 비어 있다 — 흐름 없는 설명은 화면이 그릴 것이 없다')
-  const failureFlows = readFlow(raw.failureFlows ?? [], 'failureFlows', cited)
+  const failureFlows = readFlow(
+    raw.failureFlows ?? [],
+    'failureFlows',
+    cited,
+    // 본류로 돌아가는 간선을 허용한다 — 위 readFlow 의 주석. 자기 자신도 포함해야 하므로
+    // 먼저 id 만 훑어 모은다(그 배열은 아직 검증 전이라 모양을 믿지 않고 방어적으로 읽는다)
+    new Set([
+      ...userFlow.map((n) => n.id),
+      ...(Array.isArray(raw.failureFlows) ? raw.failureFlows : []).flatMap((n) =>
+        isObj(n) && isStr(n.id) ? [n.id] : []
+      )
+    ])
+  )
   if (typeof failureFlows === 'string') return bad(failureFlows)
 
   if (!Array.isArray(raw.keyDecisions)) return bad('keyDecisions 가 배열이 아니다')
