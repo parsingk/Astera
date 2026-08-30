@@ -266,10 +266,10 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
     expect(state.externalGitChanges[0].changedFiles).toEqual(['a.txt', 'b.txt'])
   })
 
-  // ExternalGitChange.commits/changedFiles 의 주석 그대로다: fast-forward 가 아니면 before..after
-  // 범위를 신뢰할 수 없다. fake.git.range 를 채워 둬도 branch-switch 에는 그것이 새지 않아야 한다 —
-  // readRange 를 부르지 않았다는 것의 관찰 가능한 증거다.
-  it('branch-switch 에는 commits·changedFiles 를 채우지 않는다', async () => {
+  // 브랜치만 갈아타 HEAD 가 그대로면 견줄 트리가 하나뿐이라 범위를 아예 묻지 않는다.
+  // fake.git.range 를 채워 둬도 이 기록에는 그것이 새지 않아야 한다 — readRange 를 부르지
+  // 않았다는 것의 관찰 가능한 증거다. (HEAD 까지 움직인 브랜치 전환은 바로 아래 테스트가 본다.)
+  it('HEAD 가 그대로인 브랜치 전환에는 범위를 묻지 않는다 — 둘 다 빈다', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
     fake.git.range = { commits: ['should-not-appear'], changedFiles: ['should-not-appear.txt'] }
@@ -822,6 +822,37 @@ describe('WorkUnitCollector — 배선 두 자리', () => {
     expect(state.externalGitChanges).toHaveLength(1)
     expect(state.units[0].encounteredExternalGitChangeIds).toEqual([state.externalGitChanges[0].id])
     expect(state.units[0].git.observedChangedFiles).toEqual(['src/mine.ts'])
+  })
+
+  // **그 반대쪽.** 재시작 직후 사람이 `.git` 이벤트보다 먼저 말을 걸면 그 Unit 은 **이미 옮겨진
+  // HEAD 에서** 열린다(startHead = c1). 그 뒤 첫 회차가 꺼져 있던 동안의 이동을 잡아도 그 변화는
+  // 이 Unit 이 생기기 전에 끝난 일이다 — EG §27 의 "겪었다"가 아니다.
+  it('꺼져 있던 동안의 변경은 그 뒤에 열린 Unit 에 달리지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const first = await makeCollector(fake)
+    await first.collector.start()
+    first.collector.onGitChanged() // 마지막으로 안 상태 — main, c0
+    await first.collector.flush()
+
+    // 앱이 꺼져 있는 사이의 pull
+    fake.git.ref = { branch: 'main', head: 'c1' }
+
+    const second = await makeCollector(fake)
+    await second.collector.start()
+
+    // `.git` 이벤트보다 사람의 말이 먼저 온다
+    await fs.appendFile(transcript, human('다시 켠 뒤 첫 요청'), 'utf8')
+    second.collector.onTranscriptChanged()
+    await second.collector.flush()
+    expect(second.store.get(projectPath)!.units[0].git.startHead).toBe('c1') // 옮겨진 자리에서 열렸다
+
+    second.collector.onGitChanged()
+    await second.collector.flush()
+
+    const state = second.store.get(projectPath)!
+    expect(state.externalGitChanges).toHaveLength(1) // 변경 자체는 잡힌다 — 놓치지 않는다
+    expect(state.units[0].encounteredExternalGitChangeIds).toEqual([])
   })
 
   // WU §23 unit 8 의 배선. 순수 함수(completion.ts 의 onSessionEnd)는 그쪽 테스트가 덮지만,

@@ -65,9 +65,12 @@ export async function readChangedFiles(repoPath: string): Promise<string[]> {
 }
 
 /**
- * before..after 구간의 커밋 해시들과 그 구간에서 바뀐 파일들. 수집기는 `fast-forward` 로 확인된
- * 전이에서만 이것을 부른다 — 그 밖의 전이는 `before..after` 범위 자체를 신뢰할 수 없다
- * (`core/git/types.ts` 의 `ExternalGitChange.commits` 주석).
+ * before..after 구간의 커밋 해시들과 그 구간에서 바뀐 파일들. 수집기는 **두 HEAD 가 다른 전이라면
+ * 무엇이든** 이것을 부르고, 돌려받은 둘을 다르게 쓴다 — `commits` 는 `fast-forward` 에서만 쓴다
+ * (그 밖의 전이에서는 `before..after` 를 커밋 목록으로 신뢰할 수 없다, `core/git/types.ts` 의
+ * `ExternalGitChange.commits` 주석). `changedFiles` 는 어느 전이에서나 쓴다 — 아래에 적었듯 그 값을
+ * 내는 것은 `git diff before..after` 이고 그것은 **두 트리의 비교**라 브랜치를 갈아타든 역사를 다시
+ * 쓰든 옳다(collector.ts 의 gitRound 주석).
  *
  * **따로 묻는다 — 한 스트림에 섞지 않는다.** 처음엔 `git log --name-only` 하나로 커밋과 파일을
  * 같이 받고 해시 줄을 40자 hex 모양으로 골라냈지만, 그 모양 판정은 두 가지로 깨진다: SHA-256

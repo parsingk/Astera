@@ -582,7 +582,6 @@ export class WorkUnitCollector {
     const snapshot = state.gitSnapshot
     if (
       snapshot === undefined ||
-      snapshot.projectPath !== projectPath ||
       snapshot.branch !== after.branch ||
       snapshot.head !== after.head
     ) {
@@ -606,6 +605,14 @@ export class WorkUnitCollector {
     if (type === 'none') return observed || dirty
 
     const open = state.units.filter((u) => isOpen(u.status))
+    // **이 전이의 앞에 있던 Unit 들.** 시각이 아니라 HEAD 로 가른다 — Unit 의 `startedAt` 은
+    // 트랜스크립트 레코드의 시각이고 `detectedAt` 은 이 수집기의 시계라 서로 견줄 수 있는 값이
+    // 아니고, 더 근본적으로는 **두 경우의 시각 순서가 같다**: 재시작 직후에 열린 Unit 도 이 회차보다
+    // 먼저 열린다. 가려 주는 증거는 그 Unit 이 어느 자리에서 열렸는가 하나뿐이다 — 이미 옮겨진
+    // HEAD 에서 열렸다면(startHead = after.head) 그 이동은 이 Unit 이 생기기 전에 끝난 일이다
+    // (EG §27 — "겪었다"이지 "만들었다"가 아니고, 겪지도 않은 것은 더더욱 아니다).
+    // **endHead 를 덮기 전에 가른다** — 바로 아래 줄이 그 값을 after.head 로 바꾼다.
+    const encountered = open.filter((u) => (u.git.endHead ?? u.git.startHead) === before.head)
     for (const u of open) u.git.endHead = after.head
     // samePath: 등록 쪽(ipc.ts 의 mergeInto)과 이 projectPath(세션의 cwd 에서 뽑았다)는 따로
     // 기록되어 대소문자·구분자가 다를 수 있다(provenance.ts 의 isAsteraOperation 주석). 그 비교를
@@ -637,8 +644,9 @@ export class WorkUnitCollector {
         detectedAt: this.nowIso()
       }
       state.externalGitChanges.push(change)
-      // "겪었다"이지 "만들었다"가 아니다 (EG §27)
-      for (const u of open) u.encounteredExternalGitChangeIds.push(change.id)
+      // "겪었다"이지 "만들었다"가 아니다 (EG §27). 그리고 **겪은 Unit 에만** 담는다 — 위에서 가른
+      // 그 집합이다
+      for (const u of encountered) u.encounteredExternalGitChangeIds.push(change.id)
     }
     return true
   }
