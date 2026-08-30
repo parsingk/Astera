@@ -262,6 +262,20 @@ export function registerIpc(
   // is emitted only when the state changes.
   const busyScanners = new Map<string, BusyScanner>()
   const busyState = new Map<string, boolean>()
+  /** 그 세션의 busy 신호를 **판정에 쓸 수 있는가** (`ProviderDescriptor.busyTitleReliable`).
+   *  orchIsBusy 가 값 대신 null 을 돌려주는 판정과 같은 값이고, workUnitSessions 의
+   *  `idleSignalTrusted` 도 같은 자리에서 온다. codex 가 false 인 이유는 그 플래그의 선언 자리에
+   *  실측으로 적혀 있다 — 창 제목이 장식이라 스피너가 계속 흐르고 자식 프로세스가 덮어쓴다.
+   *
+   *  계정이 사라졌으면 false 다: provider 를 못 가리면 그 신호가 무엇을 뜻하는지 알 수 없고,
+   *  모르는 신호는 믿지 않는 편이 안전하다(workUnitSessions 가 그런 세션을 건너뛰는 것과 같은 판단). */
+  const busySignalTrusted = (s: SessionInfo): boolean => {
+    try {
+      return descriptorOf(core.descriptors, core.accounts.get(s.accountId)).busyTitleReliable
+    } catch {
+      return false
+    }
+  }
 
   // ── Agent orchestration ────────────────────────────────────────────
   // The pure layers, the store, the server, the coordinator, and the CLI are first connected here.
@@ -420,12 +434,17 @@ export function registerIpc(
       //
       // **시작 쪽도 함께 알린다.** 그 구간 안에서 옮겨진 HEAD 는 **이 세션이 만든 것**이고, 그것을
       // 알려 주는 신호가 앱에는 이것 하나뿐이다 — 에이전트가 터미널에 치는 커밋을 Astera 가 미리
-      // 등록할 길은 없다(수집기의 onSessionBusy 주석). cwd 를 여기서 찾는 이유도 같다: 세션의 첫
-      // 턴은 수집기의 첫 회차보다 먼저 바빠질 수 있어, 그 값을 확실히 아는 쪽이 준다
-      // (orchIsBusy 가 같은 목록을 같은 방식으로 뒤진다 — busy 가 **바뀔 때만** 도는 자리다).
+      // 등록할 길은 없다(수집기의 onSessionBusy 주석).
+      //
+      // **그 신호를 믿을 수 있는지도 여기서 판정해 넘긴다.** orchIsBusy 가 바로 아래에서 같은
+      // 판정을 하고 값 대신 null 을 돌려주는 그 이유다 — codex 의 창 제목은 장식이라 이 자리가
+      // 초당 여러 번 뒤집히고, 그것을 그대로 등록하면 그 프로젝트의 외부 변경이 세션이 사는 동안
+      // 통째로 삼켜진다. cwd 와 이 판정을 둘 다 여기서 찾는 이유는 같다: 세션의 첫 턴은 수집기의
+      // 첫 회차보다 먼저 바빠질 수 있어 수집기의 세션 목록이 아직 비어 있다. busy 가 **바뀔 때만**
+      // 도는 자리라 list() 비용은 문제되지 않는다(orchIsBusy 가 같은 목록을 같은 방식으로 뒤진다).
       if (busy) {
-        const cwd = core.sessions.list().find((x) => x.id === e.sessionId)?.cwd
-        if (cwd !== undefined) workUnitCollector.onSessionBusy(e.sessionId, cwd)
+        const s = core.sessions.list().find((x) => x.id === e.sessionId)
+        if (s) workUnitCollector.onSessionBusy(e.sessionId, s.cwd, busySignalTrusted(s))
       } else {
         void workUnitCollector
           .onSessionIdle(e.sessionId)
@@ -3105,6 +3124,11 @@ export function registerIpc(
     // 수명이 수집기의 start()/stop() 에 걸린 감시자를 프로젝트마다 하나씩 여기서 만들어 준다.
     // 무엇을 볼지·언제 닫을지는 수집기가 정한다(그쪽의 syncWatchers).
     watchGit: async (projectPath) => {
+      // **아직 저장소가 아니면 null 이다.** GitWatcher 는 이 경우 던지지 않고 조용히 아무것도 보지
+      // 않으므로, 그대로 자리를 잡으면 그 프로젝트에서 나중에 git init 을 해도 토글이나 앱을 다시
+      // 돌리기 전까지 영영 감시되지 않는다. null 을 돌려주면 수집기가 자리를 비워 두고 다음 회차에
+      // 다시 묻는다 (그쪽의 syncWatchers).
+      if ((await gitDir(projectPath)) === null) return null
       const w = new GitWatcher(() => workUnitCollector.onGitChanged(), orchLog)
       await w.watch(projectPath)
       return () => w.close()
@@ -3293,8 +3317,11 @@ export function registerIpc(
   // **This one belongs to the explorer**: the renderer opens it on mount and closes it on unmount, so it
   // is alive only while the sidebar shows the explorer pane. The Work Unit collector no longer depends
   // on it — it holds its own watcher, whose lifetime is its own start()/stop() (see watchGit above).
-  // The nudge below stays because it costs nothing (the collector debounces, and a project it has no
-  // session in produces an empty round) and it reaches the collector before its own watcher settles.
+  // The nudge below stays because it costs one already-debounced round — the round is not scoped to the
+  // explorer's project, it walks every session project and probes git for each, but the collector's
+  // debounce coalesces this with the event its own watcher raises, and an uncoalesced second round
+  // classifies as no transition and records nothing. It also reaches the collector before its own
+  // watcher settles.
   const gitWatcher = new GitWatcher(() => {
     send('git:changed', undefined)
     workUnitCollector.onGitChanged()

@@ -68,7 +68,7 @@ function makeFake(): Fake {
 async function makeCollector(
   fake: Fake,
   file = storeFile,
-  watchGit?: (projectPath: string) => Promise<() => Promise<void>>
+  watchGit?: (projectPath: string) => Promise<(() => Promise<void>) | null>
 ): Promise<{ collector: WorkUnitCollector; store: WorkUnitStore }> {
   const store = new WorkUnitStore(file)
   await store.load()
@@ -143,7 +143,7 @@ describe('WorkUnitCollector — WU §23', () => {
     const openedId = store.get(projectPath)!.units[0].id
 
     // 에이전트가 그 요청을 받아 한 턴을 돈다 — 아래 세 커밋은 **이 세션이 만드는 것이다**
-    collector.onSessionBusy('s1', projectPath)
+    collector.onSessionBusy('s1', projectPath, true)
 
     for (const head of ['c1', 'c2', 'c3']) {
       fake.git.ref = { branch: 'main', head }
@@ -467,7 +467,7 @@ describe('WorkUnitCollector — 세션이 바쁜 동안의 HEAD 이동', () => {
     await collector.flush()
 
     // 에이전트가 한 턴을 시작한다 — 그 안에서 커밋한다
-    collector.onSessionBusy('s1', projectPath)
+    collector.onSessionBusy('s1', projectPath, true)
     fake.git.ref = { branch: 'main', head: 'c1' }
     collector.onGitChanged()
     await collector.flush()
@@ -487,7 +487,7 @@ describe('WorkUnitCollector — 세션이 바쁜 동안의 HEAD 이동', () => {
     collector.onGitChanged() // 기준선
     await collector.flush()
 
-    collector.onSessionBusy('s1', projectPath)
+    collector.onSessionBusy('s1', projectPath, true)
     await collector.onSessionIdle('s1')
     fake.clock += OPERATION_GRACE_MS - 1 // 아직 유예 안이다
 
@@ -507,7 +507,7 @@ describe('WorkUnitCollector — 세션이 바쁜 동안의 HEAD 이동', () => {
     collector.onGitChanged() // 기준선
     await collector.flush()
 
-    collector.onSessionBusy('s1', projectPath)
+    collector.onSessionBusy('s1', projectPath, true)
     await collector.onSessionIdle('s1')
     fake.clock += OPERATION_GRACE_MS + 1 // 유예 너머 — 이 이동은 그 턴의 것이 아니다
 
@@ -530,9 +530,42 @@ describe('WorkUnitCollector — 세션이 바쁜 동안의 HEAD 이동', () => {
     collector.onGitChanged() // 기준선
     await collector.flush()
 
-    collector.onSessionBusy('s1', projectPath)
+    collector.onSessionBusy('s1', projectPath, true)
     await collector.onSessionExit('s1')
     fake.clock += OPERATION_GRACE_MS + 1
+
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+
+    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(1)
+  })
+
+  // **codex 의 창 제목은 장식이다** (`ProviderDescriptor.busyTitleReliable` 이 false 인 이유가 그
+  // 선언 자리에 실측으로 적혀 있다). 스피너가 초당 열 프레임쯤 흐르고 **턴이 끝난 뒤에도 계속
+  // 흐르며**, codex 가 띄운 자식 프로세스들이 그 제목을 제 것으로 덮어쓴다. 그래서 앱은 그 세션이
+  // 초당 여러 번 일했다 쉬었다 하는 것으로 본다.
+  //
+  // rising edge 마다 유예를 새로 열면, 다음 edge 가 유예보다 빨리 오므로 **그 프로젝트는 세션이
+  // 사는 동안 영구 사면 상태가 된다** — 마지막에 찍힌 것이 스피너면 닫히는 자리조차 오지 않는다.
+  // 그 사이 남이 pull 하든 rebase 하든 한 줄도 적히지 않는다. `externalGitChanges` 는 **프로젝트**
+  // 단위라 피해가 codex 세션에 머물지도 않는다: 같은 cwd 를 쓰는 claude 세션의 Unit 이 겪은 기록도
+  // 함께 사라진다. `endGitOperation` 의 주석이 "훨씬 나쁜 실패"라고 부른 바로 그것이다.
+  it('busy 신호를 믿을 수 없는 세션은 그 프로젝트의 외부 변경을 가리지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session({ idleSignalTrusted: false })]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    collector.onGitChanged() // 기준선
+    await collector.flush()
+
+    // 깜빡임. 유휴는 오지 않는다 — 마지막에 찍힌 것이 스피너인 경우다
+    for (let i = 0; i < 5; i++) {
+      collector.onSessionBusy('s1', projectPath, false)
+      fake.clock += 100
+    }
+    fake.clock += OPERATION_GRACE_MS * 1000 // 열린 등록은 아무리 지나도 만료되지 않는다
 
     fake.git.ref = { branch: 'main', head: 'c1' }
     collector.onGitChanged()
@@ -1112,7 +1145,7 @@ describe('WorkUnitCollector — 자기 git 감시자', () => {
   const spyWatcher = (): {
     watched: string[]
     closed: string[]
-    watchGit: (p: string) => Promise<() => Promise<void>>
+    watchGit: (p: string) => Promise<(() => Promise<void>) | null>
   } => {
     const watched: string[] = []
     const closed: string[] = []
@@ -1161,5 +1194,47 @@ describe('WorkUnitCollector — 자기 git 감시자', () => {
     fake.sessions = [session()] // s2 가 끝났다 — 그 프로젝트에는 볼 세션이 남지 않았다
     await collector.flush()
     expect(spy.closed).toEqual([other])
+  })
+
+  // **끄는 회차의 저장이 실패해도 감시자는 닫혀야 한다.** closeAll 은 프로젝트마다 저장하는데,
+  // 저장소의 쓰기는 실패하면 거절하고(store.ts) 그 거절을 회차 큐가 삼켜 로그만 남긴다. 처분이
+  // 그 루프 **뒤에** 있으면 한 번의 쓰기 실패로 감시자가 전부 살아남아, 추적이 꺼진 채로 계속
+  // 수집기를 두드린다 — closeAll 의 주석이 그러지 않는다고 약속한 바로 그것이다.
+  it('저장이 실패해도 감시자는 닫힌다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const spy = spyWatcher()
+    const { collector, store } = await makeCollector(fake, storeFile, spy.watchGit)
+    await collector.start()
+    expect(spy.watched).toEqual([projectPath])
+
+    store.set = async () => {
+      throw new Error('쓰기 실패') // 디스크가 찼거나 rename 이 실패했다
+    }
+    await collector.stop()
+
+    expect(spy.closed).toEqual([projectPath])
+  })
+
+  // 아직 저장소가 아닌 프로젝트에서는 볼 것이 없다 — `GitWatcher` 는 던지지 않고 조용히 아무것도
+  // 보지 않는다. 그때 자리를 잡아 버리면 그 키가 남아, 나중에 그 프로젝트에서 `git init` 을 해도
+  // 토글이나 앱을 다시 돌리기 전까지 영영 감시되지 않는다.
+  it('아직 저장소가 아닌 프로젝트는 자리를 잡지 않는다 — git init 뒤 다음 회차가 다시 본다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    let isRepo = false
+    const watched: string[] = []
+    const watchGit = async (p: string): Promise<(() => Promise<void>) | null> => {
+      if (!isRepo) return null // 볼 것이 없었다
+      watched.push(p)
+      return async () => {}
+    }
+    const { collector } = await makeCollector(fake, storeFile, watchGit)
+    await collector.start()
+    expect(watched).toEqual([])
+
+    isRepo = true // git init
+    await collector.flush()
+    expect(watched).toEqual([projectPath])
   })
 })

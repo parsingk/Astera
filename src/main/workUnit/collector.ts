@@ -99,7 +99,9 @@ export interface CollectorDeps {
    *  유예 경계(이 파일의 collector.test.ts)와 판정 자체(provenance.test.ts)를 각각 따로 확인할 수
    *  있게 하기 위해서다. 넘기지 않으면(`undefined`) 빈 목록으로 본다. */
   pendingGitOps?: () => readonly PendingGitOperation[]
-  /** 프로젝트 하나의 `.git` 을 보기 시작한다. 돌려주는 함수가 그 감시를 닫는다.
+  /** 프로젝트 하나의 `.git` 을 보기 시작한다. 돌려주는 함수가 그 감시를 닫고, **`null` 은 볼 것이
+   *  없었다는 답이다**(아직 저장소가 아닌 프로젝트) — 그때 수집기는 자리를 잡지 않고 다음 회차에
+   *  다시 묻는다.
    *
    *  **만드는 일만 밖에 둔다.** 수명은 이 수집기의 `start()`/`stop()` 이 쥐고(`syncWatchers`·
    *  `closeAll`), 무엇을 볼지도 이 수집기가 정한다(`listSessions()` 가 주는 프로젝트들). 만드는
@@ -107,7 +109,7 @@ export interface CollectorDeps {
    *  이 파일의 전제가 깨진다 — `git`·`now` 를 주입받는 것과 같은 이유다.
    *
    *  넘기지 않으면 감시하지 않는다. 그때 `.git` 방아쇠는 밖에서 오는 `onGitChanged()` 뿐이다. */
-  watchGit?: (projectPath: string) => Promise<() => Promise<void>>
+  watchGit?: (projectPath: string) => Promise<(() => Promise<void>) | null>
   log?: (m: string) => void
 }
 
@@ -302,9 +304,20 @@ export class WorkUnitCollector {
    *  놓친다. 반대(자기 커밋을 남의 것으로 기록)보다 낫다 — 놓친 외부 기록은 줄 하나지만, 잘못 붙은
    *  기록은 다음 계획이 그 Unit 의 성과를 지우게 만든다.
    *
-   *  `projectPath` 를 인자로 받는다: 이 수집기의 `known` 은 회차가 돌아야 채워지는데, 세션의 첫
-   *  턴은 그 회차보다 먼저 바빠질 수 있다. 그 값을 확실히 아는 쪽(ipc.ts 의 세션 목록)이 준다. */
-  onSessionBusy(sessionId: string, projectPath: string): void {
+   *  **믿을 수 없는 신호로는 등록하지 않는다** (`busySignalTrusted`, 곧
+   *  `ProviderDescriptor.busyTitleReliable`). codex 의 창 제목은 장식이라 스피너가 초당 열 프레임쯤
+   *  흐르고 턴이 끝난 뒤에도 계속 흐르며, codex 가 띄운 자식 프로세스가 그것을 덮어쓴다. 그 신호를
+   *  그대로 믿으면 rising edge 가 유예보다 빨리 오므로 **그 프로젝트는 세션이 사는 동안 영구 사면**
+   *  이 되고, 마지막에 찍힌 것이 스피너면 등록이 닫히지도 않는다. `externalGitChanges` 는 프로젝트
+   *  단위라 피해가 그 세션에 머물지도 않는다 — 같은 cwd 의 claude 세션이 겪은 기록까지 사라진다.
+   *  이것은 위에서 고른 "놓치는 쪽"이 아니라 `endGitOperation` 이 "훨씬 나쁜 실패"라고 부른 쪽이다.
+   *
+   *  **`projectPath` 도 `busySignalTrusted` 도 인자로 받는다.** 둘 다 이 수집기가 스스로 알 수 없다:
+   *  `known` 은 회차가 돌아야 채워지는데 세션의 첫 턴은 그 회차보다 먼저 온다. 세션 → 계정 →
+   *  descriptor 를 찾을 수 있는 쪽(ipc.ts, `orchIsBusy` 가 같은 값을 같은 방식으로 읽는 자리)이
+   *  판정해서 준다. */
+  onSessionBusy(sessionId: string, projectPath: string, busySignalTrusted: boolean): void {
+    if (!busySignalTrusted) return
     if (this.busyOps.has(sessionId)) return // 이미 열려 있다 — 같은 구간을 두 번 등록하지 않는다
     const id = this.beginGitOperation('commit', projectPath)
     if (id !== '') this.busyOps.set(sessionId, id) // 꺼져 있으면 '' 이고, 그때는 들 것이 없다
@@ -504,13 +517,15 @@ export class WorkUnitCollector {
    *  (`HistoryIndex.startBackground`)은 창이 뜬 뒤 한 번 켜져 프로세스가 사는 동안 계속 보는데,
    *  설계 §16 의 그림은 둘을 나란한 상시 방아쇠로 그렸다. 그래서 이쪽도 그렇게 만든다.
    *
-   *  **프로젝트마다 하나씩 든다.** `GitWatcher` 는 한 번에 한 곳만 보고 `watch()` 가 앞의 것을
-   *  닫으므로, 여러 경로를 받게 넓히면 그 "앞의 것을 닫는다"에 기대고 있는 기존 사용처(탐색기가
-   *  프로젝트를 옮길 때 `git.watch` 를 다시 부르는 자리)의 계약이 함께 바뀐다. 그쪽은 렌더러의
-   *  것이고 지금 잘 도니 건드리지 않는다.
+   *  **프로젝트마다 인스턴스를 하나씩 든다.** `GitWatcher` 를 여러 경로를 받게 넓히면 `unwatch()`
+   *  의 뜻이 함께 바뀐다 — 지금 그것은 "그 하나를 닫는다"이고, 여러 개를 들면 경로를 받거나 전부
+   *  닫는 것이 되어 기존 사용처(탐색기)의 계약이 달라진다. 인스턴스를 여러 개 드는 쪽은
+   *  `GitWatcher` 를 **한 줄도 바꾸지 않는다.** (탐색기가 `watch()` 의 "앞의 것을 닫는다"에 기대고
+   *  있는 것은 아니다 — 그쪽 훅은 다음 root 를 보기 전에 `unwatch()` 를 직접 부른다.)
    *
    *  **직렬화는 회차 고리가 이미 해 준다** — 부르는 자리(`round`·`seed`)가 둘 다 `enqueue` 안이라
-   *  두 syncWatchers 가 겹치지 않고, 그래서 같은 프로젝트를 두 번 여는 경우가 없다. */
+   *  두 syncWatchers 가 겹치지 않는다. 그 안에서는 나란히 연다: 하나하나가 chokidar 의 `ready` 를
+   *  기다리므로, 직렬로 열면 프로젝트가 여럿일 때 토글을 켜는 IPC 응답이 그 합만큼 붙잡힌다. */
   private async syncWatchers(sessions: readonly CollectorSession[]): Promise<void> {
     const watch = this.deps.watchGit
     if (!watch) return
@@ -520,16 +535,23 @@ export class WorkUnitCollector {
       this.gitWatches.delete(projectPath)
       await this.stopWatch(projectPath, stop)
     }
-    for (const projectPath of wanted) {
-      if (this.gitWatches.has(projectPath)) continue
-      try {
-        this.gitWatches.set(projectPath, await watch(projectPath))
-      } catch (e) {
-        // 저장소가 아니거나 감시를 걸 수 없었다. **회차를 멈추지 않는다** — 이 프로젝트만 조용히
-        // 빠지고, 다음 회차가 다시 시도한다
-        this.log(`git watch failed ${projectPath}: ${String(e)}`)
-      }
-    }
+    // `has` 검사가 각 갈래의 첫 await 앞에서 동기로 끝나므로, 나란히 돌아도 같은 프로젝트를 두 번
+    // 열지 않는다
+    await Promise.all(
+      [...wanted].map(async (projectPath) => {
+        if (this.gitWatches.has(projectPath)) return
+        try {
+          const stop = await watch(projectPath)
+          // `null` 은 **볼 것이 없었다**는 답이다 — 아직 저장소가 아닌 프로젝트가 그렇다. 자리를
+          // 잡지 않아야 그 프로젝트에서 나중에 `git init` 을 했을 때 다음 회차가 다시 묻는다
+          if (stop) this.gitWatches.set(projectPath, stop)
+        } catch (e) {
+          // 감시를 걸다가 던졌다(git dir 조회나 chokidar 의 I/O 실패). **회차를 멈추지 않는다** —
+          // 자리를 잡지 않았으므로 다음 회차가 다시 시도한다
+          this.log(`git watch failed ${projectPath}: ${String(e)}`)
+        }
+      })
+    )
   }
 
   private async stopWatch(projectPath: string, stop: () => Promise<void>): Promise<void> {
@@ -791,6 +813,14 @@ export class WorkUnitCollector {
 
   /** 기능을 껐다. 열려 있던 Unit 을 그 자리에서 닫고 커서를 버린다 (스펙 §16.1) */
   private async closeAll(): Promise<void> {
+    // **아래 루프보다 먼저 닫는다.** 그 루프는 프로젝트마다 저장하고, 저장소의 쓰기는 실패하면
+    // 거절한다(store.ts) — 그 거절은 회차 큐가 삼켜 로그만 남기므로, 처분이 루프 뒤에 있으면 한
+    // 번의 쓰기 실패로 감시자가 전부 살아남아 추적이 꺼진 채로 계속 이 수집기를 두드린다.
+    // **탐색기의 감시자는 여기 없다**: 그것은 렌더러가 열고 닫는 다른 감시자다.
+    for (const [projectPath, stop] of [...this.gitWatches]) {
+      this.gitWatches.delete(projectPath)
+      await this.stopWatch(projectPath, stop)
+    }
     const projects = new Set(this.touched)
     for (const s of this.known.values()) projects.add(s.projectPath)
     for (const projectPath of projects) {
@@ -811,12 +841,6 @@ export class WorkUnitCollector {
       if (dirty) await this.persist(projectPath, state)
     }
     this.known.clear()
-    // 이 수집기가 세운 `.git` 감시자를 전부 닫는다 — 수명이 이 토글에 걸려 있다는 것이 그 뜻이다.
-    // **탐색기의 감시자는 여기 없다**: 그것은 렌더러가 열고 닫는 다른 감시자다.
-    for (const [projectPath, stop] of [...this.gitWatches]) {
-      this.gitWatches.delete(projectPath)
-      await this.stopWatch(projectPath, stop)
-    }
     // 이 실행의 캐시만 비운다. **저장된 스냅샷은 건드리지 않는다** — 커서와 반대 방향의 규칙이고
     // 그것이 맞다: 커서에 걸린 약속은 "켜기 전의 대화는 읽지 않는다"(스펙 §16.1)이고 스냅샷에 걸린
     // 약속은 "실제로 일어난 변화를 놓치지 않는다"(EG §41-10)다. 대화는 사람의 말이고 저장소의
