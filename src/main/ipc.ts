@@ -3101,9 +3101,15 @@ export function registerIpc(
       out.push({
         sessionId: s.id,
         projectPath: s.cwd,
+        // **codex 쪽은 두 곳에 묻는다.** `codexRolling` 은 사용자가 **계정 굴리기를 켠** 세션만
+        // 등록한다(spawn 의 `rollAccountIds.length >= 1` 가드) — 평범한 codex 세션은 거기 없어서
+        // 경로가 null 이 되고, 그러면 수집기가 읽을 파일 자체를 못 받아 Unit 이 하나도 생기지
+        // 않는다. `codexRollout` 은 **모든** codex 세션을 등록하므로(사용량 칩이 그것을 요구한다)
+        // 그쪽이 기본이고, 굴리는 세션은 굴리기 쪽이 먼저 답한다 — 굴린 직후에는 그쪽이 새 파일을
+        // 먼저 안다(attachRollout 이 넘겨받은 경로를 그 자리에서 채운다).
         transcriptPath:
           providerOf(account) === 'codex'
-            ? (codexRolling?.rolloutPathFor(s.id) ?? null)
+            ? (codexRolling?.rolloutPathFor(s.id) ?? codexRollout?.rolloutPathFor(s.id) ?? null)
             : extractStatusLineSession(await core.statusLinePayload(s.id)).transcriptPath,
         // 유휴 신호를 믿을 수 있는가. orchIsBusy 가 같은 값을 같은 자리에서 읽는다 — codex 는 false 이고,
         // 그 세션의 Unit 은 새 사용자 메시지나 세션 종료로만 닫힌다(설계 §6).

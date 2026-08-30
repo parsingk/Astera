@@ -129,6 +129,17 @@ export class CodexRolloutWatcher {
     return sessionUsageOf(e.context, e.limits)
   }
 
+  /** The rollout file this session writes to, or null before the scan has mapped it.
+   *
+   *  Work Unit detection reads this file, and this watcher is the only place that knows the path for
+   *  **every** codex session: codexRolling.rolloutPathFor answers only for sessions the user put on
+   *  account rolling (register is behind `rollAccountIds.length >= 1`), whereas every codex session is
+   *  registered here because the usage chips need it. Same reason the chips read from here. */
+  rolloutPathFor(sessionId: string): string | null {
+    const e = this.entries.get(sessionId)
+    return e && !e.disposed ? e.rolloutPath : null
+  }
+
   unregister(sessionId: string): void {
     const e = this.entries.get(sessionId)
     if (e) e.disposed = true
