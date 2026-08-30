@@ -342,6 +342,43 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
 
     expect(store.get(projectPath)!.externalGitChanges).toHaveLength(0)
   })
+
+  // beginGitOperation 의 프룬(pending 목록에서 유예 지난 것을 치우는 자리)은 규칙이 둘이고 서로
+  // 다르다 — 하나로는 둘 다 못 잡는다. 여기서는 등록 목록 자체(getPendingGitOps)를 본다, 그
+  // 목록이 isAsteraOperation 의 판정에 미치는 영향(외부 변경 개수)이 아니라 — 판정을 통해서만
+  // 보면 두 규칙이 뒤섞여 어느 쪽이 깨졌는지 가릴 수 없다.
+  it('유예가 지난 뒤 끝난 동작은 다음 등록 때 목록에서 치워진다', async () => {
+    const fake = makeFake()
+    const { collector } = await makeCollector(fake)
+    await collector.start()
+
+    const first = collector.beginGitOperation('job-merge', projectPath)
+    collector.endGitOperation(first)
+    fake.clock += OPERATION_GRACE_MS + 1 // 유예를 넘긴다
+
+    collector.beginGitOperation('job-merge', projectPath) // 프룬은 여기, 새로 넣기 직전에 돈다
+
+    expect(collector.getPendingGitOps().some((o) => o.id === first)).toBe(false)
+  })
+
+  // **끝나지 않은 동작을 나이로 지우면 안 되는 이유가 이 테스트의 전부다.** 오래 걸리는 병합은
+  // endGitOperation 이 불리기 전까지 유예보다 오래 열려 있을 수 있고, 그것을 나이만 보고 지우면
+  // 그 병합이 끝나기도 전에 외부로 오판된다 — CRITICAL 회귀(위 "추적을 끄는 사이에...")가 막은
+  // "영원히 삼켜짐"의 반대쪽, "너무 일찍 흘려보냄"이다.
+  it('끝나지 않은 동작은 아무리 오래돼도 치우지 않는다', async () => {
+    const fake = makeFake()
+    const { collector } = await makeCollector(fake)
+    await collector.start()
+
+    const first = collector.beginGitOperation('job-merge', projectPath) // 끝내지 않는다 — 열어 둔다
+    fake.clock += OPERATION_GRACE_MS * 100 // 유예를 한참 넘긴다
+
+    const second = collector.beginGitOperation('job-merge', projectPath)
+
+    const ops = collector.getPendingGitOps()
+    expect(ops.some((o) => o.id === first)).toBe(true)
+    expect(ops.some((o) => o.id === second)).toBe(true)
+  })
 })
 
 // ── 스펙 §16.1 의 커서 규칙 셋 ─────────────────────────────────────────

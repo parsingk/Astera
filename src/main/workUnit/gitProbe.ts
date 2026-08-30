@@ -95,6 +95,11 @@ export async function readRange(
 ): Promise<{ commits: string[]; changedFiles: string[] }> {
   const range = `${before}..${after}`
   const opts = { cwd: repoPath, timeoutMs: WATCH_ROUND_TIMEOUT_MS, trim: false }
+  // 파일 쪽은 `git diff before..after --name-only` 다 — 커밋마다의 `--name-only` 목록을 합집합으로
+  // 모으던 이전 방식과 다르고, **일부러 바꿨다.** `git log --name-only` 는 머지 커밋 자신을 위한
+  // diff 를 내지 않는다(그 커밋이 부모들과 갈라지는 지점만 보여주고, 머지 자신이 새로 들여온
+  // 변경은 조용히 빠진다). `diff before..after` 는 그 두 커밋의 트리를 통째로 견주므로, 그 사이에
+  // 머지가 가져온 변경까지 전부 들어간다 — 그래서 이쪽이 낫다.
   const [log, diff] = await Promise.all([
     git(['log', '--pretty=format:%H', '-z', range], opts),
     git(['-c', 'core.quotePath=false', 'diff', '--name-only', '-z', range], opts)
