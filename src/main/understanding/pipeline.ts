@@ -109,6 +109,24 @@ export class UnderstandingPipeline {
         analyzedAt: fresh.analyzedAt,
         recentChanges: fresh.recentChanges
       }
+
+      // **가드를 여기서 한 번 더 본다.** 위(에이전트 실행 전)의 검사만으로는 부족하다: 그 사이
+      // 30~180초가 흐르고, 그동안 사용자가 이 기능의 설명을 손으로 고쳤을 수 있다. 그 값을 덮으면
+      // 스펙 §56 이 금지한 일이 조용히 일어난다 — 앞의 검사를 통과했다는 것은 "그때는 아니었다"일
+      // 뿐이다. 기능이 사라졌거나(재분석이 이름을 바꿨다) 이름이 바뀐 경우도 여기서 걸러야 한다:
+      // 죽은 id 에 쓰면 그 설명은 아무도 가리키지 않는 자리에 남고 상태는 generating 에 갇힌다.
+      const living = merged.features.find((f) => f.id === feature.id)
+      if (!living) {
+        this.deps.log?.(`understanding: feature ${feature.id} vanished during generation — 결과를 버린다`)
+        await this.deps.store.set(projectRoot, merged)
+        return
+      }
+      if (merged.explanations[feature.id]?.userEdited) {
+        this.mark(merged, feature.id, 'update-available')
+        await this.deps.store.set(projectRoot, merged)
+        return
+      }
+
       if (built.ok) {
         merged.explanations[feature.id] = {
           featureId: feature.id,
@@ -125,9 +143,30 @@ export class UnderstandingPipeline {
   }
 
   /** 첫 분석 — 기능 목록 초안을 만든다 (스펙 §21). 설명은 만들지 않는다.
+   *
    *  **이 하나는 부르는 쪽이 결과를 본다** — 사용자가 버튼을 눌러 기다리는 일이라, 실패하면
-   *  그 사유가 화면에 떠야 한다. */
-  async analyzeProject(projectRoot: string): Promise<{ ok: true; count: number } | { ok: false; reason: string }> {
+   *  그 사유가 화면에 떠야 한다. 그래서 큐가 값을 실어 나른다: 배경 재생성과 같은 줄에 서되
+   *  결과는 부르는 쪽으로 돌아간다.
+   *
+   *  **같은 줄에 서야 하는 이유:** 이 함수는 기능의 id 를 새로 만든다. 배경 재생성이 도는
+   *  동안 그것이 끼어들면 재생성이 들고 있던 id 가 죽고, 그 결과는 아무도 가리키지 않는 자리에
+   *  쓰이며 상태는 generating 에 갇힌다(그쪽에도 방어가 있지만, 애초에 겹치지 않는 편이 낫다).
+   *  이 파일 머리주석이 "한 번에 하나만 돈다"고 적은 것이 이 뜻이다. */
+  analyzeProject(projectRoot: string): Promise<{ ok: true; count: number } | { ok: false; reason: string }> {
+    let result: { ok: true; count: number } | { ok: false; reason: string } = {
+      ok: false,
+      reason: 'UNKNOWN'
+    }
+    // enqueue 는 거부하지 않는다 — 던진 예외는 그쪽이 삼켜 로그로 남기고, 여기서는 위의
+    // 초깃값이 그대로 돌아간다. 사용자는 "알 수 없는 이유로 실패"를 보고 다시 누를 수 있다
+    return this.enqueue(async () => {
+      result = await this.runAnalyze(projectRoot)
+    }).then(() => result)
+  }
+
+  private async runAnalyze(
+    projectRoot: string
+  ): Promise<{ ok: true; count: number } | { ok: false; reason: string }> {
     const ready = this.agentContext()
     if (!ready.ok) return ready
 
@@ -140,27 +179,50 @@ export class UnderstandingPipeline {
     })
     if (!run.ok) return { ok: false, reason: run.reason }
 
-    const v = validateDiscovery(run.value, (p) => existsSync(path.join(projectRoot, p)))
+    const v = validateDiscovery(run.value, insideProject(projectRoot))
     if (!v.ok) return { ok: false, reason: v.reason }
 
     const now = this.deps.now()
     const prev = this.deps.store.get(projectRoot)
+
+    // **이름을 한 번만 쓴다.** 초안에 같은 이름이 둘 오면(에이전트가 실제로 그럴 수 있다) 둘 다
+    // 같은 옛 id 를 물려받아 하나로 뭉개지는데, 화면에는 "2개를 찾았다"고 뜨고 사이드바의 두 줄이
+    // 같은 곳을 가리킨다. 먼저 온 것이 이름을 가진다 — 뒤엣것은 새 id 를 받아 따로 선다.
+    const taken = new Set<string>()
+    const features: ProjectFeature[] = v.value.features.map((f) => {
+      const old = taken.has(f.name) ? undefined : prev?.features.find((x) => x.name === f.name)
+      taken.add(f.name)
+      return {
+        id: old?.id ?? randomUUID(),
+        name: f.name,
+        summary: f.summary,
+        status: old && prev?.explanations[old.id] ? old.status : 'needs-review',
+        updatedAt: old?.updatedAt ?? now,
+        evidenceCount: old?.evidenceCount ?? 0,
+        staleReason: old?.staleReason
+      } satisfies ProjectFeature
+    })
+
+    // **주인 없는 설명은 걷는다.** 기능의 이름이 바뀌면 옛 id 는 어느 줄도 가리키지 않는데,
+    // 그대로 두면 파일이 영영 자라고 그 안의 userEdited 설명은 사람이 다시 꺼낼 길이 없다.
+    // 잃는 것을 줄이려고 **먼저 이어 붙이기를 시도한다**: 옛 기능 중 짝을 못 찾은 것이 하나이고
+    // 새 기능 중 설명이 없는 것도 하나뿐이면, 그 둘은 이름이 바뀐 같은 기능으로 본다.
+    const carried = new Set(features.map((f) => f.id))
+    const orphanIds = Object.keys(prev?.explanations ?? {}).filter((id) => !carried.has(id))
+    const explanations = { ...(prev?.explanations ?? {}) }
+    const fresh = features.filter((f) => !explanations[f.id])
+    if (orphanIds.length === 1 && fresh.length === 1) {
+      const moved = explanations[orphanIds[0]]
+      explanations[fresh[0].id] = { ...moved, featureId: fresh[0].id }
+      this.deps.log?.(
+        `understanding: 설명을 ${orphanIds[0]} → ${fresh[0].id} 로 옮겼다 (이름이 바뀐 것으로 본다)`
+      )
+    }
+    for (const id of orphanIds) if (!carried.has(id)) delete explanations[id]
+
     const next: ProjectUnderstanding = {
-      // **사람이 고친 설명이 있는 기능은 이름으로 이어 붙인다.** 재분석이 그 설명을 잃게 하지
-      // 않는다(스펙 §56) — id 는 새로 나지만 이름이 같으면 같은 기능으로 본다
-      features: v.value.features.map((f) => {
-        const old = prev?.features.find((x) => x.name === f.name)
-        return {
-          id: old?.id ?? randomUUID(),
-          name: f.name,
-          summary: f.summary,
-          status: old && prev?.explanations[old.id] ? old.status : 'needs-review',
-          updatedAt: old?.updatedAt ?? now,
-          evidenceCount: old?.evidenceCount ?? 0,
-          staleReason: old?.staleReason
-        } satisfies ProjectFeature
-      }),
-      explanations: prev?.explanations ?? {},
+      features,
+      explanations,
       analyzedAt: now,
       recentChanges: prev?.recentChanges ?? []
     }
@@ -211,7 +273,7 @@ export class UnderstandingPipeline {
     })
     if (!run.ok) return run
 
-    const v = validateExplanation(run.value, (p) => existsSync(path.join(projectRoot, p)))
+    const v = validateExplanation(run.value, insideProject(projectRoot))
     if (!v.ok) return { ok: false, reason: v.reason }
 
     const e = v.value
@@ -286,5 +348,20 @@ export class UnderstandingPipeline {
     }
     this.chain = this.chain.then(run, run)
     return this.chain
+  }
+}
+
+/** 저장소 **안에** 실제로 있는 경로인가.
+ *
+ *  **`path.join` 만으로는 부족하다:** `../outside/secret.ts` 는 프로젝트 밖으로 풀리는데도
+ *  존재하므로 통과한다(실측). 그러면 근거 검증(§24-12)이 막으려던 바로 그것 — 근거 아닌 것을
+ *  근거로 대는 일 — 이 통과하고, 그 경로는 화면에 뜨며 다음 재생성의 "여기서부터 읽어라"
+ *  목록에도 실린다. 그래서 푼 뒤에 저장소 안인지 다시 묻는다. */
+function insideProject(projectRoot: string): (p: string) => boolean {
+  return (p) => {
+    const abs = path.resolve(projectRoot, p)
+    const rel = path.relative(projectRoot, abs)
+    if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return false
+    return existsSync(abs)
   }
 }

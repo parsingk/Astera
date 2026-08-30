@@ -13,10 +13,18 @@ import { UnderstandingStore } from './store'
 import { UnderstandingPipeline } from './pipeline'
 
 // runAgent 를 가짜로 — 파이프라인이 부르는 유일한 프로세스 자리다
-const agentReply = vi.hoisted(() => ({ value: null as unknown, fail: null as string | null, calls: 0 }))
+const agentReply = vi.hoisted(() => ({
+  value: null as unknown,
+  fail: null as string | null,
+  calls: 0,
+  /** 에이전트가 도는 **동안** 벌어지는 일. 실제로는 여기가 수십 초라 그 사이에 사용자가
+   *  설명을 고치거나 다시 분석할 수 있다 — 그 틈을 이 자리에서 만든다 */
+  during: null as null | (() => Promise<void>)
+}))
 vi.mock('./agent', () => ({
   runAgent: async (): Promise<{ ok: boolean; value?: unknown; reason?: string }> => {
     agentReply.calls += 1
+    if (agentReply.during) await agentReply.during()
     return agentReply.fail ? { ok: false, reason: agentReply.fail } : { ok: true, value: agentReply.value }
   }
 }))
@@ -104,6 +112,7 @@ beforeEach(async () => {
   agentReply.value = null
   agentReply.fail = null
   agentReply.calls = 0
+  agentReply.during = null
 })
 afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
@@ -270,5 +279,132 @@ describe('analyzeProject — 첫 분석 (스펙 §21)', () => {
     expect(u.features[0].id).toBe('f-auth') // id 가 유지됐다
     expect(u.explanations['f-auth'].overview).toBe('사람이 쓴 설명')
     expect(u.explanations['f-auth'].userEdited).toBe(true)
+  })
+})
+
+describe('재분석이 잃거나 뭉개지 않는가', () => {
+  it('초안에 같은 이름이 둘 오면 각각 다른 줄로 선다 — 하나로 뭉개지지 않는다', async () => {
+    const { store, pipeline } = await make()
+    await seedFeature(store)
+    agentReply.value = {
+      features: [
+        { name: '인증', summary: '로그인과 세션', implementationPaths: ['src/auth'] },
+        { name: '인증', summary: '토큰 갱신', implementationPaths: ['src/auth'] }
+      ]
+    }
+
+    const r = await pipeline.analyzeProject(projectRoot)
+    expect(r).toEqual({ ok: true, count: 2 })
+
+    const u = store.get(projectRoot)!
+    // 두 줄이 같은 곳을 가리키면 사이드바에서 하나를 눌러도 다른 하나가 열린다
+    expect(u.features[0].id).not.toBe(u.features[1].id)
+    expect(u.features[0].id).toBe('f-auth') // 먼저 온 것이 옛 이름을 가진다
+    expect(u.explanations[u.features[1].id].overview).toBe('토큰 갱신') // 뒤엣것은 새로 선다
+  })
+
+  it('이름이 바뀐 기능 하나는 설명을 데리고 간다', async () => {
+    const { store, pipeline } = await make()
+    await seedFeature(store, { userEdited: true, overview: '사람이 쓴 설명' })
+    agentReply.value = { features: [{ name: '로그인', summary: '세션', implementationPaths: ['src/auth'] }] }
+
+    await pipeline.analyzeProject(projectRoot)
+
+    const u = store.get(projectRoot)!
+    const id = u.features[0].id
+    expect(id).not.toBe('f-auth') // 이름이 달라 새 id 다
+    expect(u.explanations[id].overview).toBe('사람이 쓴 설명') // 그래도 설명은 따라왔다
+    expect(u.explanations[id].userEdited).toBe(true)
+    expect(u.explanations[id].featureId).toBe(id) // 자기 자신을 가리킨다
+    expect(u.explanations['f-auth']).toBeUndefined() // 옛 자리는 남지 않는다
+  })
+
+  it('짝을 못 찾은 설명이 여럿이면 잇지 않고 걷는다 — 엉뚱한 설명을 붙이는 것보다 낫다', async () => {
+    const { store, pipeline } = await make()
+    await store.set(projectRoot, {
+      features: [
+        { id: 'f-a', name: 'A', summary: '', status: 'up-to-date', updatedAt: 'x', evidenceCount: 0 },
+        { id: 'f-b', name: 'B', summary: '', status: 'up-to-date', updatedAt: 'x', evidenceCount: 0 }
+      ],
+      explanations: {
+        'f-a': { featureId: 'f-a', overview: 'A 설명', userFlow: [], failureFlows: [], keyDecisions: [], implementation: [], recentChanges: [], evidence: [], userEdited: false, generatedAt: 'x' },
+        'f-b': { featureId: 'f-b', overview: 'B 설명', userFlow: [], failureFlows: [], keyDecisions: [], implementation: [], recentChanges: [], evidence: [], userEdited: false, generatedAt: 'x' }
+      },
+      recentChanges: []
+    })
+    agentReply.value = { features: [{ name: 'C', summary: 'C 요약', implementationPaths: ['src/auth'] }] }
+
+    expect(await pipeline.analyzeProject(projectRoot)).toEqual({ ok: true, count: 1 })
+
+    const u = store.get(projectRoot)!
+    expect(Object.keys(u.explanations)).toEqual([u.features[0].id]) // 옛 둘은 사라졌다
+    expect(u.explanations[u.features[0].id].overview).toBe('C 요약') // 초안이 준 그대로
+  })
+
+  // **저장소 밖은 근거가 아니다.** path.join 만으로는 ../ 가 통과한다 — 그것이 화면에 뜨고
+  // 다음 재생성의 "여기서부터 읽어라" 목록에도 실린다
+  it('저장소 밖으로 나가는 경로는 실재해도 거부한다', async () => {
+    const { pipeline } = await make()
+    agentReply.value = {
+      features: [{ name: 'x', summary: 'y', implementationPaths: ['../understanding.json'] }]
+    }
+    const r = await pipeline.analyzeProject(projectRoot)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toContain('understanding.json')
+  })
+})
+
+describe('에이전트가 도는 동안 저장 파일이 바뀌면', () => {
+  it('그 사이에 사람이 고친 설명은 덮지 않는다 (스펙 §56)', async () => {
+    const { store, pipeline } = await make()
+    await seedFeature(store)
+    agentReply.value = explanation()
+    // 실제로는 여기가 30~180초다. 그동안 사용자가 설명을 고쳤다
+    agentReply.during = async (): Promise<void> => {
+      const u = store.get(projectRoot)!
+      await store.set(projectRoot, {
+        ...u,
+        explanations: { 'f-auth': { ...u.explanations['f-auth'], overview: '사람이 쓴 설명', userEdited: true } }
+      })
+    }
+
+    await pipeline.onUnitClosed(projectRoot, unit())
+
+    const u = store.get(projectRoot)!
+    expect(u.explanations['f-auth'].overview).toBe('사람이 쓴 설명')
+    expect(u.features[0].status).toBe('update-available')
+  })
+
+  it('그 사이에 기능이 사라졌으면 결과를 버린다 — 유령 설명을 남기지 않는다', async () => {
+    const { store, pipeline } = await make()
+    await seedFeature(store)
+    agentReply.value = explanation()
+    agentReply.during = async (): Promise<void> => {
+      await store.set(projectRoot, { features: [], explanations: {}, recentChanges: [] })
+    }
+
+    await pipeline.onUnitClosed(projectRoot, unit())
+
+    const u = store.get(projectRoot)!
+    expect(u.features).toHaveLength(0)
+    expect(u.explanations['f-auth']).toBeUndefined() // 아무도 가리키지 않는 자리에 쓰지 않았다
+  })
+
+  it('첫 분석과 재생성은 같은 줄에 선다 — 겹치면 서로의 id 를 죽인다', async () => {
+    const { store, pipeline } = await make()
+    await seedFeature(store)
+    agentReply.value = explanation()
+    const order: string[] = []
+    agentReply.during = async (): Promise<void> => {
+      order.push('start')
+      await new Promise((r) => setTimeout(r, 20))
+      order.push('end')
+    }
+
+    const a = pipeline.onUnitClosed(projectRoot, unit())
+    const b = pipeline.analyzeProject(projectRoot)
+    await Promise.all([a, b])
+
+    expect(order).toEqual(['start', 'end', 'start', 'end']) // 겹치지 않았다
   })
 })
