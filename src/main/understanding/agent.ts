@@ -1,21 +1,18 @@
 // 설명을 만드는 에이전트를 한 번 돌린다 — **읽기 전용으로**.
 //
-// **읽기 전용은 실측으로 정한 조합이다(2026-08-30).** 문서만 보고 정했으면 틀렸을 자리다:
-//   claude — `--tools "Read,Glob,Grep"` 만으로는 **막히지 않는다.** 그 인자로 돌린 에이전트가
-//            실제로 파일을 만들었다. `--permission-mode plan` 에 `--disallowedTools` 를 함께
-//            줘야 막히고, 그 상태에서 읽기는 그대로 된다(둘 다 확인했다).
-//   codex  — `-s read-only` 로 막힌다(확인). `--skip-git-repo-check` 는 git 저장소가 아닌
-//            프로젝트에서도 돌게 한다 — 이 앱은 그런 폴더도 프로젝트로 연다.
-//
-// 프로세스만 여기서 다루고, 출력에서 값을 꺼내는 일은 core/understanding/agentOutput.ts 가 한다.
+// 인자 벡터는 core/understanding/agentArgs.ts 가 만든다. 그 조합이 왜 그 모양인지(전부 실측이다)
+// 도 거기 적혀 있고, 여기서는 프로세스와 그 주변만 다룬다 — 출력에서 값을 꺼내는 일은
+// core/understanding/agentOutput.ts 가 한다.
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import path from 'node:path'
 import { providerOf } from '../../core/providers/meta'
 import { descriptorOf } from '../../core/providers/descriptor'
 import type { Account, Provider } from '../../core/types'
 import type { ProviderDescriptor } from '../../core/providers/descriptor'
 import type { GeneratorSettings } from '../../core/understanding/generatorSettings'
 import { extractJson, readClaudeOutput, readCodexOutput } from '../../core/understanding/agentOutput'
+import { agentArgs, codexMcpServerNames } from '../../core/understanding/agentArgs'
 
 /** 한 번의 생성에 주는 시간. 설명 하나는 파일 몇 개를 읽고 한 번 답하는 일이라 길 이유가 없고,
  *  **배경에서 도는 일이 무한히 매달리면 사용자는 그 사실조차 모른다.** */
@@ -47,29 +44,15 @@ export async function runAgent(a: RunArgs): Promise<AgentRun> {
   const d = descriptorOf(a.descriptors, a.account)
   const codex = provider === 'codex'
 
-  const args = codex
-    ? [
-        'exec',
-        '-s',
-        'read-only',
-        // git 저장소가 아닌 폴더도 이 앱은 프로젝트로 연다
-        '--skip-git-repo-check',
-        '--json',
-        ...(a.generator.model ? ['-m', a.generator.model] : []),
-        ...(a.generator.effort ? ['-c', `model_reasoning_effort="${a.generator.effort}"`] : [])
-      ]
-    : [
-        '-p',
-        // **이 둘이 함께여야 막힌다** — 위 머리주석의 실측
-        '--permission-mode',
-        'plan',
-        '--disallowedTools',
-        'Write,Edit,NotebookEdit,Bash',
-        '--output-format',
-        'json',
-        ...(a.generator.model ? ['--model', a.generator.model] : []),
-        ...(a.generator.effort ? ['--effort', a.generator.effort] : [])
-      ]
+  const args = agentArgs({
+    provider,
+    model: a.generator.model,
+    effort: a.generator.effort,
+    // codex 의 MCP 서버는 이름을 알아야 끌 수 있다 (agentArgs 의 주석). 읽지 못하면 빈 목록이다 —
+    // **그때는 끄지 못한 채로 돈다.** 설정을 못 읽는 것은 파일이 없다는 뜻이 대부분이고(MCP 도
+    // 없다), 있는데 못 읽는 드문 경우까지 생성 자체를 막을 이유는 없다.
+    codexMcpServers: codex ? readCodexMcpServers(a.account.configDir) : undefined
+  })
 
   const cmd = wrap(d.cliFile, args)
   const env = { ...process.env, [d.configDirEnv]: a.account.configDir }
@@ -142,4 +125,13 @@ export async function runAgent(a: RunArgs): Promise<AgentRun> {
     return { ok: false, reason: json.reason }
   }
   return { ok: true, value: json.value }
+}
+
+/** 그 계정의 codex 설정에 잡힌 MCP 서버 이름들. 읽지 못하면 빈 목록이다 — 부르는 쪽의 주석 */
+function readCodexMcpServers(configDir: string): string[] {
+  try {
+    return codexMcpServerNames(readFileSync(path.join(configDir, 'config.toml'), 'utf8'))
+  } catch {
+    return []
+  }
 }

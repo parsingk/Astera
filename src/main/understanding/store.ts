@@ -47,7 +47,26 @@ export class UnderstandingStore {
     }
     if (!isValid(parsed)) return this.recover()
     this.state = parsed
+    this.unstick()
     return { recovered: false }
+  }
+
+  /** 앱이 죽는 순간 생성 중이던 기능을 풀어 준다.
+   *
+   *  `generating` 은 "지금 에이전트가 돌고 있다"는 뜻인데, 그 에이전트는 이 앱의 자식 프로세스다.
+   *  앱이 죽으면 함께 죽고, 다시 켜도 아무도 그 자리를 잇지 않는다 — 파일에서 읽어 온 `generating`
+   *  은 그래서 언제나 거짓말이다. 그대로 두면 그 기능은 화면에서 영영 스피너를 돌리고, 사용자가
+   *  다시 만들 길도 없다(`generating` 은 [다시] 를 내주지 않는다).
+   *
+   *  **여기서만 참이다.** load 는 이 프로세스에서 단 한 번, 어떤 생성보다 먼저 돈다. 다른 자리에서
+   *  같은 판단을 하면 실제로 돌고 있는 생성을 실패로 표시하게 된다. */
+  private unstick(): void {
+    for (const u of Object.values(this.state.projects))
+      for (const f of u.features)
+        if (f.status === 'generating') {
+          f.status = 'generation-failed'
+          f.staleReason = 'INTERRUPTED'
+        }
   }
 
   get(projectPath: string): ProjectUnderstanding | undefined {

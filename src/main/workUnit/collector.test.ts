@@ -12,6 +12,7 @@ import { WorkUnitCollector, type CollectorGit, type CollectorSession } from './c
 import { isOpen } from '../../core/workUnit/status'
 import { OPERATION_GRACE_MS } from '../../core/git/provenance'
 import type { GitRef } from '../../core/git/types'
+import type { SessionWorkUnit } from '../../core/workUnit/types'
 
 let dir: string
 let storeFile: string
@@ -69,9 +70,11 @@ async function makeCollector(
   fake: Fake,
   file = storeFile,
   watchGit?: (projectPath: string) => Promise<(() => Promise<void>) | null>
-): Promise<{ collector: WorkUnitCollector; store: WorkUnitStore }> {
+): Promise<{ collector: WorkUnitCollector; store: WorkUnitStore; closed: SessionWorkUnit[] }> {
   const store = new WorkUnitStore(file)
   await store.load()
+  // 하류(설명 생성)로 나가는 알림. 여기에 들어오는 Unit 하나가 에이전트 왕복 하나다
+  const closed: SessionWorkUnit[] = []
   // 자기 참조다 — pendingGitOps 는 collector 자신의 등록 목록을 그대로 돌려준다. ipc.ts 가
   // workUnitCollector 를 wiring 하는 것과 같은 자리, 같은 이유다.
   const collector: WorkUnitCollector = new WorkUnitCollector({
@@ -80,9 +83,10 @@ async function makeCollector(
     git: fake.git,
     now: () => fake.clock,
     pendingGitOps: () => collector.getPendingGitOps(),
-    watchGit
+    watchGit,
+    onUnitClosed: (_p, u) => closed.push(u)
   })
-  return { collector, store }
+  return { collector, store, closed }
 }
 
 const session = (overrides: Partial<CollectorSession> = {}): CollectorSession => ({
@@ -750,6 +754,46 @@ describe('WorkUnitCollector — 스펙 §16.1 커서', () => {
     await Promise.all([collector.onEnabledChanged(false), collector.onEnabledChanged(true)])
 
     expect(isOpen(store.get(projectPath)!.units[0].status)).toBe(false)
+  })
+
+  // **끄기는 지갑을 열지 않는다.** 열려 있던 Unit 은 completed 로 닫히지만(위 테스트), 그 하나하나가
+  // 하류의 에이전트 왕복이 되면 "이제 그만 추적하겠다"고 누른 그 순간에 프로젝트 수만큼의 왕복이
+  // 시작된다 — 사용자가 산 것과 정반대이고, 그 왕복은 시간과 사용량을 실제로 쓴다.
+  it('기능을 끄며 닫힌 Unit 은 설명 생성으로 흘러가지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, closed } = await makeCollector(fake)
+    await collector.start()
+    await fs.appendFile(transcript, human('끄기 직전의 요청'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    fake.git.files = ['src/a.ts'] // 이것이 있어야 completed 로 닫힌다
+
+    await collector.onEnabledChanged(false)
+
+    expect(store.get(projectPath)!.units[0].status).toBe('completed') // 기록으로는 남는다
+    expect(closed).toHaveLength(0) // 그러나 아무것도 생성하지 않는다
+  })
+
+  // 위의 가드가 헛돌지 않는지 — 평소에는 알림이 실제로 나가야 한다
+  it('평소에 닫힌 Unit 은 설명 생성으로 흘러간다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, closed } = await makeCollector(fake)
+    await collector.start()
+    await fs.appendFile(transcript, human('첫 작업'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    fake.git.files = ['src/a.ts']
+    await collector.onSessionIdle('s1')
+
+    await fs.appendFile(transcript, human('다음 작업'), 'utf8') // 이 요청이 앞 Unit 을 확정한다
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    expect(closed).toHaveLength(1)
+    expect(closed[0].title).toBe('첫 작업')
+    expect(closed[0].status).toBe('completed')
   })
 
   // 한도에 걸려 세션을 굴리면(rolling.ts) 새 세션 id 가 생기고 `--resume` 이 이전 대화를 통째로

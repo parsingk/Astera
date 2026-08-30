@@ -887,7 +887,13 @@ export class WorkUnitCollector {
       if (open.length > 0) {
         this.observe(state, projectPath, await this.changedFiles(projectPath))
         for (const u of open)
-          this.close(u, onFeatureDisabled({ observedChangeCount: u.git.observedChangedFiles.length }), projectPath)
+          this.close(
+            u,
+            onFeatureDisabled({ observedChangeCount: u.git.observedChangedFiles.length }),
+            projectPath,
+            undefined,
+            false // 아래 close 의 notify — 끄기는 하류를 깨우지 않는다
+          )
         dirty = true
       }
       if (state.cursors.length > 0) {
@@ -909,7 +915,17 @@ export class WorkUnitCollector {
     this.forkAnchors.clear()
   }
 
-  private close(unit: SessionWorkUnit, status: SessionWorkUnit['status'], projectPath: string, at?: string): void {
+  private close(
+    unit: SessionWorkUnit,
+    status: SessionWorkUnit['status'],
+    projectPath: string,
+    at?: string,
+    /** 하류(설명 생성)에 알릴 것인가. **기능을 끌 때만 false 다** — 끄기는 열려 있던 Unit 을 전부
+     *  한꺼번에 닫는데(closeAll), 그 하나하나가 에이전트를 돌리면 "추적을 그만두겠다"고 누른 그
+     *  순간에 프로젝트 수만큼의 왕복이 시작된다. 사용자가 산 것과 정반대이고, 그 왕복은 시간과
+     *  사용량을 실제로 쓴다. 그 Unit 들은 기록으로만 남는다. */
+    notify = true
+  ): void {
     unit.status = status
     if (!isOpen(status)) {
       unit.completedAt = at ?? this.nowIso()
@@ -921,7 +937,7 @@ export class WorkUnitCollector {
       // **부르고 기다리지 않는다.** 하류(설명 생성)는 에이전트를 돌려 수십 초가 걸리는데, 그것을
       // 기다리면 이 회차의 저장이 그만큼 늦어지고 다음 방아쇠가 밀린다. 하류의 큐가 자기 순서를
       // 지키고 거부하지 않는 것(pipeline 의 enqueue)이 이 한 줄이 성립하는 조건이다.
-      this.deps.onUnitClosed?.(projectPath, unit)
+      if (notify) this.deps.onUnitClosed?.(projectPath, unit)
     }
   }
 
