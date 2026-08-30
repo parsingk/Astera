@@ -416,13 +416,25 @@ export default function App(): React.JSX.Element {
   const [slackLoaded, setSlackLoaded] = useState(false)
   const [wtRoot, setWtRoot] = useState('') // the worktree root in the settings modal
   const [orchEnabled, setOrchEnabled] = useState(false) // the agent orchestration toggle
+  // The rail button for Jobs is gated on this, so the shortcut must be too — a key that opens a view
+  // whose control is not on screen leaves the user somewhere they cannot get back from. Read through a
+  // ref for the same reason as jobsOpenRef.
+  const orchEnabledRef = useRef(orchEnabled)
+  orchEnabledRef.current = orchEnabled
   const [workUnitTrackingEnabled, setWorkUnitTrackingEnabled] = useState(false) // the work unit tracking toggle
   // Whether the Jobs sidebar view is showing — same convention as explorerOpen (toggleJobs mirrors
   // toggleExplorer below), just for the read-only orchestration view instead of the file tree.
   const [jobsOpen, setJobsOpen] = useState(false)
+  // Read by toggleJobs for the same reason explorerOpenRef exists: the keydown listener is registered
+  // once with [] and closes over the first render, so a toggle that reads the render value would always
+  // compute the same direction from the keyboard.
+  const jobsOpenRef = useRef(jobsOpen)
+  jobsOpenRef.current = jobsOpen
   // Whether the How It Works sidebar view is showing — same convention as jobsOpen (toggleHiw mirrors
   // toggleJobs below), unlike Jobs there is no feature flag gating it off the rail.
   const [hiwOpen, setHiwOpen] = useState(false)
+  const hiwOpenRef = useRef(hiwOpen) // see jobsOpenRef
+  hiwOpenRef.current = hiwOpen
   // The current project's understanding, loaded by the effect near currentProject below (it cannot sit
   // here — that effect depends on currentProject, declared much later, and a dependency array is
   // evaluated during render, so it would throw a TDZ ReferenceError this early). null covers both "no
@@ -785,6 +797,29 @@ export default function App(): React.JSX.Element {
         e.stopPropagation()
         if (e.repeat) return
         toggleExplorer()
+        return
+      }
+      // The two sidebar views the rail can open. Pressed again they close, which is what the rail
+      // button does — so the key is the button, not a second way in.
+      //
+      // Jobs is gated on the orchestration setting because its rail button is: with the setting off the
+      // button is not drawn, and a key that opens a view whose only control is missing strands the user
+      // in it. How It Works has no such flag.
+      //
+      // Not blocked while a text field has focus, unlike the tab-cycling actions below: the default
+      // chords are Ctrl+Shift+J/H, which no input of ours uses, and switching sidebars while reading a
+      // file is exactly when it is wanted.
+      //
+      // Both toggles are recreated on every render and this listener holds the first one, but their
+      // bodies are all refs and setters, so a stale closure still acts on the latest state — the same
+      // convention toggleExplorer and closeFileTab already rely on.
+      if (action === 'sidebar.jobs' || action === 'sidebar.howItWorks') {
+        if (action === 'sidebar.jobs' && !orchEnabledRef.current) return
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return // holding the key would flap the sidebar
+        if (action === 'sidebar.jobs') toggleJobs()
+        else toggleHiw()
         return
       }
       // Closing a file tab, same as closing a browser tab. When dirty, closeFileTab raises a
@@ -1412,11 +1447,14 @@ export default function App(): React.JSX.Element {
   }
 
   /** Jobs 사이드바 토글 — 탐색기 토글과 같은 규칙이다: 켤 때 사이드바가 접혀 있으면 함께 펴고, 세
-   *  뷰 중 하나만 보이므로 탐색기가 열려 있었다면 닫는다. 키보드 단축키가 없으므로 toggleExplorer와
-   *  달리 ref가 아니라 최신 렌더의 jobsOpen을 그대로 읽는다 — 전역 리스너에 한 번만 등록되는 함수가
-   *  아니라 매 렌더 새로 만들어져 레일 버튼의 onClick에 바로 연결되기 때문이다. */
+   *  뷰 중 하나만 보이므로 탐색기가 열려 있었다면 닫는다.
+   *
+   *  Reads the ref rather than the render value, exactly as toggleExplorer does: this now also runs
+   *  from the keydown listener, which is registered once and closes over the first render. Reading
+   *  `jobsOpen` there would compute `opening` from a value frozen at mount, so the shortcut would only
+   *  ever open the view and never close it. */
   const toggleJobs = (): void => {
-    const opening = !jobsOpen
+    const opening = !jobsOpenRef.current
     if (opening) {
       setSidebarOpen(true)
       setExplorerOpen(false)
@@ -1426,9 +1464,9 @@ export default function App(): React.JSX.Element {
   }
 
   /** How It Works 사이드바 토글 — toggleJobs 와 같은 규칙: 켤 때 사이드바가 접혀 있으면 함께 펴고,
-   *  세 뷰 중 하나만 보이므로 나머지 둘을 끈다. */
+   *  세 뷰 중 하나만 보이므로 나머지 둘을 끈다. Reads the ref for the reason toggleJobs gives. */
   const toggleHiw = (): void => {
-    const opening = !hiwOpen
+    const opening = !hiwOpenRef.current
     if (opening) {
       setSidebarOpen(true)
       setExplorerOpen(false)

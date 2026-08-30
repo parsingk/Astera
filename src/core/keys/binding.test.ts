@@ -203,3 +203,50 @@ describe('riskyReasonKey — 터미널에서 쓰이는 키 경고', () => {
     expect(riskyReasonKey(parseChord('Ctrl+`')!)).toBeNull()
   })
 })
+
+// The two sidebar views the rail can open. Nothing but the rail button reached them before, so a
+// keyboard user had to leave the keyboard to switch between Jobs, How It Works and the file tree.
+describe('sidebar view actions', () => {
+  const mac = makeActions('darwin')
+
+  it('both views are bindable actions', () => {
+    expect(ACTIONS.map((a) => a.id)).toEqual(
+      expect.arrayContaining(['sidebar.jobs', 'sidebar.howItWorks'])
+    )
+  })
+
+  it('defaults follow the Ctrl+Shift+<letter> family the sidebar already uses', () => {
+    expect(ACTIONS.find((a) => a.id === 'sidebar.jobs')?.defaults).toEqual(['Ctrl+Shift+J'])
+    expect(ACTIONS.find((a) => a.id === 'sidebar.howItWorks')?.defaults).toEqual(['Ctrl+Shift+H'])
+  })
+
+  // Cmd rather than Ctrl on mac, for the reason makeActions gives: Ctrl combos have to reach the
+  // shell through xterm, Cmd never does
+  it('mac binds them to Cmd', () => {
+    expect(mac.find((a) => a.id === 'sidebar.jobs')?.defaults).toEqual(['Cmd+Shift+J'])
+    expect(mac.find((a) => a.id === 'sidebar.howItWorks')?.defaults).toEqual(['Cmd+Shift+H'])
+  })
+
+  // Opening a sidebar view competes with nothing a shell reads, the same judgement
+  // explorer.toggleMode makes for Ctrl+Shift+E
+  it('they do not yield to the terminal', () => {
+    for (const id of ['sidebar.jobs', 'sidebar.howItWorks'] as const)
+      expect(ACTIONS.find((a) => a.id === id)?.yieldsToTerminal).toBe(false)
+  })
+
+  it('the events reach them', () => {
+    const bindings = resolveBindings({}, ACTIONS)
+    expect(
+      findActionForEvent(bindings, ev({ code: 'KeyJ', ctrlKey: true, shiftKey: true }), ACTIONS)
+    ).toBe('sidebar.jobs')
+    expect(
+      findActionForEvent(bindings, ev({ code: 'KeyH', ctrlKey: true, shiftKey: true }), ACTIONS)
+    ).toBe('sidebar.howItWorks')
+  })
+
+  // The defaults-do-not-conflict test above covers win32; mac has its own set of defaults and
+  // nothing else asserts on them
+  it('mac defaults do not conflict either', () => {
+    expect(findConflicts(resolveBindings({}, mac), mac)).toEqual([])
+  })
+})

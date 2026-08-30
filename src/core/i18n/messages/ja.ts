@@ -319,6 +319,8 @@ export const ja: Catalog = {
   'shortcut.explorer.saveFile': 'ファイルを保存',
   'shortcut.explorer.closeFileTab': 'ファイルタブを閉じる',
   'shortcut.explorer.cyclePreview': 'マークダウンプレビューモードの切り替え',
+  'shortcut.sidebar.jobs': 'Jobs サイドバーの開閉',
+  'shortcut.sidebar.howItWorks': 'How It Works サイドバーの開閉',
   'shortcut.explorer.rename': '名前の変更',
   'shortcut.explorer.delete': '削除',
   'shortcut.explorer.selectAll': 'すべて選択',

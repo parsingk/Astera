@@ -305,6 +305,8 @@ export const ko = {
   'shortcut.explorer.saveFile': '파일 저장',
   'shortcut.explorer.closeFileTab': '파일 탭 닫기',
   'shortcut.explorer.cyclePreview': '마크다운 프리뷰 모드 전환',
+  'shortcut.sidebar.jobs': 'Jobs 사이드바 열기/닫기',
+  'shortcut.sidebar.howItWorks': 'How It Works 사이드바 열기/닫기',
   'shortcut.explorer.rename': '이름 변경',
   'shortcut.explorer.delete': '삭제',
   'shortcut.explorer.selectAll': '전체 선택',
