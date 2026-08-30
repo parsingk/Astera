@@ -30,6 +30,7 @@ const render = (u: ProjectUnderstanding | null, selected: string | null = null):
       selectedFeatureId: selected,
       onOpenFeature: () => {},
       onReview: () => {},
+      onRegenerate: () => {},
       onAnalyze: () => {}
     })
   )
@@ -79,5 +80,34 @@ describe('UnderstandingView', () => {
   it('프로젝트 전체 최근 변경을 그린다', () => {
     expect(render(base)).toContain('hiw.recent.project')
     expect(render(base)).toContain('JWT → 서버 세션')
+  })
+})
+
+// 만들지 못한 줄은 그 자리에서 다시 눌러 볼 수 있어야 한다 — 그러지 않으면 사유만 남고 고칠
+// 길이 없다. 갱신이 있는 줄에서 새 설명을 받는 길도 이 버튼뿐이다(사람이 고친 설명은 배경
+// 재생성이 덮지 않는다, 스펙 §56).
+describe('[다시 만들기] 가 서는 자리', () => {
+  const one = (status: ProjectUnderstanding['features'][number]['status'], staleReason?: string): ProjectUnderstanding => ({
+    features: [{ id: 'x', name: '결제', summary: '카드', status, updatedAt: 'x', evidenceCount: 0, staleReason }],
+    explanations: {},
+    recentChanges: []
+  })
+
+  it('만들지 못한 줄에 선다 — 사유와 함께', () => {
+    const html = render(one('generation-failed', '180초 안에 끝나지 않았다'))
+    expect(html).toContain('hiw.feature.regenerate')
+    expect(html).toContain('180초 안에 끝나지 않았다')
+  })
+
+  it('갱신이 있는 줄에도 선다', () => {
+    expect(render(one('update-available'))).toContain('hiw.feature.regenerate')
+  })
+
+  it('최신인 줄에는 서지 않는다', () => {
+    expect(render(one('up-to-date'))).not.toContain('hiw.feature.regenerate')
+  })
+
+  it('만드는 중인 줄에는 서지 않는다 — 두 번 누르면 두 번 돈다', () => {
+    expect(render(one('generating'))).not.toContain('hiw.feature.regenerate')
   })
 })

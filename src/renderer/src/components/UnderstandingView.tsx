@@ -14,6 +14,7 @@ export function UnderstandingView({
   selectedFeatureId,
   onOpenFeature,
   onReview,
+  onRegenerate,
   onAnalyze,
   analyzing = false
 }: {
@@ -21,6 +22,9 @@ export function UnderstandingView({
   selectedFeatureId: string | null
   onOpenFeature: (featureId: string) => void
   onReview: (featureId: string) => void
+  /** 이 기능의 설명을 다시 만든다. **결과를 기다리지 않는다** — 줄의 상태가 곧 "만드는 중"이 되고,
+   *  끝나면 화면이 스스로 다시 읽는다(App 의 'understanding:changed' 구독) */
+  onRegenerate: (featureId: string) => void
   onAnalyze: () => void
   /** 분석이 도는 동안 — 버튼을 잠그고 그 사실을 보여 준다. 에이전트 왕복은 수십 초라
    *  아무 표시가 없으면 사용자가 다시 누르고, 그러면 두 번 돈다 */
@@ -68,6 +72,10 @@ export function UnderstandingView({
       <div className="hiw-list">
         {features.map((f) => {
           const needs = ATTENTION_STATUSES.includes(f.status)
+          // **[다시] 가 서는 두 자리.** 만들지 못한 줄은 그 자리에서 다시 눌러 볼 수 있어야 하고
+          // (그러지 않으면 사유만 남고 고칠 길이 없다), 갱신이 있는 줄에서 새 설명을 받는 길도
+          // 이 버튼뿐이다 — 사람이 고친 설명은 배경 재생성이 덮지 않기 때문이다(스펙 §56).
+          const retry = f.status === 'generation-failed' || f.status === 'update-available'
           return (
             <div
               key={f.id}
@@ -85,9 +93,10 @@ export function UnderstandingView({
                   {f.summary}
                 </span>
                 <span className="hiw-meta">
-                  {/* 검토가 필요하면 시각이 아니라 이유가 선다 — 그 버튼을 누를지 정하려면
-                      이유가 먼저 보여야 한다(설계 §3) */}
-                  {needs && f.staleReason ? (
+                  {/* 손이 필요하면 시각이 아니라 이유가 선다 — 그 버튼을 누를지 정하려면 이유가
+                      먼저 보여야 한다(설계 §3). **만들지 못한 줄도 여기에 든다**: 그 사유가
+                      "왜 다시 눌러야 하는가"의 답이고, 그것이 없으면 버튼만 남는다 */}
+                  {(needs || retry) && f.staleReason ? (
                     <span className="w">{f.staleReason}</span>
                   ) : (
                     t('hiw.feature.evidence', { count: f.evidenceCount })
@@ -102,6 +111,17 @@ export function UnderstandingView({
                     }}
                   >
                     {t('hiw.feature.review')}
+                  </button>
+                )}
+                {retry && (
+                  <button
+                    className="hiw-review"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onRegenerate(f.id)
+                    }}
+                  >
+                    {t('hiw.feature.regenerate')}
                   </button>
                 )}
               </span>

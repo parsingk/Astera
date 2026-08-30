@@ -49,16 +49,23 @@ export const OUTPUT_SHAPE = `Respond with a single JSON object, no markdown fenc
   "overview": string,            // 2-4 sentences, contract rules apply
   "userFlow": FlowNode[],        // the main path, chronological
   "failureFlows": FlowNode[],    // only important failures (rule 9)
-  "keyDecisions": { "title": string, "reason": string, "sourceLabel": string }[],
+  "keyDecisions": { "title": string, "reason": string, "sourceLabel": string,
+                    "evidencePaths": string[] }[],
   "implementation": { "role": string, "path": string }[],  // repo-relative paths, forward slashes
   "evidencePaths": string[],     // every file you actually read to ground this
   "needsReview": boolean,        // true when evidence was insufficient (rule 13)
   "needsReviewReason": string    // required when needsReview is true
 }
 FlowNode = { "id": string, "label": string, "type": "start"|"step"|"decision"|"success"|"failure",
-             "description": string, "next": { "targetId": string, "condition"?: string }[] }
+             "description": string, "next": { "targetId": string, "condition"?: string }[],
+             "evidencePaths": string[] }
 Labels must be under 22 characters — a longer label means the step name became a sentence;
-put the sentence in "description" instead.`
+put the sentence in "description" instead.
+
+Every step and every decision must name the files it is built from, in its own "evidencePaths".
+The reader clicks a step to see what it rests on; a step that names nothing cannot be clicked, so
+the reader is left with a diagram they cannot open. Name the file you actually read for that step,
+not the whole feature's file list.`
 
 export interface ExplainRequest {
   feature: Pick<ProjectFeature, 'id' | 'name' | 'summary'>

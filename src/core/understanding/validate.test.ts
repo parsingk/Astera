@@ -109,3 +109,71 @@ describe('validateDiscovery — 첫 분석 (§21)', () => {
     if (!r.ok) expect(r.reason).toContain('src/notifications')
   })
 })
+
+// 오른쪽 단이 좁혀지는 것은 오직 근거 id 의 겹침이다(scope.ts). 그 id 가 여기서 만들어진다 —
+// 여기서 비면 흐름도는 눌리지 않는 그림이 된다.
+describe('근거 잇기 — 단계를 누를 수 있게 하는 것', () => {
+  const base = {
+    overview: '설명',
+    userFlow: [
+      { id: 'a', label: '요청', type: 'start', next: [], evidencePaths: ['src/a.ts'] },
+      { id: 'b', label: '응답', type: 'success', next: [] }
+    ],
+    failureFlows: [],
+    keyDecisions: [{ title: 't', reason: 'r', sourceLabel: 's', evidencePaths: ['src/b.ts'] }],
+    implementation: [{ role: '인증', path: 'src/a.ts' }],
+    evidencePaths: ['src/a.ts'],
+    needsReview: false
+  }
+  const all = (): boolean => true
+
+  it('단계가 댄 경로가 id 로 실린다 — 대지 않은 단계는 고를 수 없다', () => {
+    const r = validateExplanation(base, all)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.userFlow[0].evidenceIds).toEqual(['file:src/a.ts'])
+    expect(r.value.userFlow[1].evidenceIds).toBeUndefined()
+  })
+
+  it('결정도 자기 근거를 든다', () => {
+    const r = validateExplanation(base, all)
+    if (!r.ok) throw new Error(r.reason)
+    expect(r.value.keyDecisions[0].evidenceIds).toEqual(['file:src/b.ts'])
+  })
+
+  // 구현 참조는 "이 기능이 이 파일에 산다"는 말이라 그 파일 말고 다른 근거가 있을 수 없다.
+  // 이 기본값이 없으면 단계를 눌렀을 때 "이 단계의 구현" 칸이 늘 빈다
+  it('구현 참조는 대지 않아도 자기 경로가 근거다', () => {
+    const r = validateExplanation(base, all)
+    if (!r.ok) throw new Error(r.reason)
+    expect(r.value.implementation[0].evidenceIds).toEqual(['file:src/a.ts'])
+  })
+
+  // 항목이 댄 경로가 근거 목록에 없으면 그 id 는 아무것도 가리키지 않는 id 가 된다
+  it('항목이 댄 경로가 근거 목록에 합쳐진다', () => {
+    const r = validateExplanation(base, all)
+    if (!r.ok) throw new Error(r.reason)
+    expect(r.value.evidencePaths).toContain('src/b.ts')
+    expect(r.value.evidencePaths.filter((p) => p === 'src/a.ts')).toHaveLength(1) // 겹치지 않는다
+  })
+
+  it('항목이 댄 경로도 실재해야 한다', () => {
+    const r = validateExplanation(base, (p) => p !== 'src/b.ts')
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toContain('src/b.ts')
+  })
+
+  it('근거 경로가 문자열 배열이 아니면 거부한다', () => {
+    const bad = { ...base, userFlow: [{ ...base.userFlow[0], evidencePaths: [1] }] }
+    const r = validateExplanation(bad, all)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toContain('evidencePaths')
+  })
+
+  // 빈 배열을 그대로 실으면 "근거가 있다"면서 아무것도 가리키지 않는 단계가 된다
+  it('빈 근거 배열은 없는 것과 같이 다룬다', () => {
+    const r = validateExplanation({ ...base, userFlow: [{ ...base.userFlow[0], evidencePaths: [] }] }, all)
+    if (!r.ok) throw new Error(r.reason)
+    expect(r.value.userFlow[0].evidenceIds).toBeUndefined()
+  })
+})

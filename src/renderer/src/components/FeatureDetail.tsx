@@ -25,6 +25,9 @@ type FeatureDetailProps = {
    *  **아래로 이어 붙이지 않는다** — 그러면 좁은 화면에서 이 화면이 세로 한 장짜리 다른 레이아웃이
    *  되고, 사용자는 폭에 따라 서로 다른 두 화면을 배우게 된다(설계 §6). 그 대신 한 레이아웃을 그대로
    *  두고 절반을 접는다 — 서랍으로. */
+  /** 이 기능의 설명을 다시 만든다 — 머리의 [다시 만들기]. 사이드바 줄의 같은 이름 버튼과
+   *  같은 곳으로 간다(UnderstandingView 의 onRegenerate) */
+  onRegenerate: () => void
   narrow: boolean
   drawerOpen: boolean
   onToggleDrawer: () => void
@@ -38,6 +41,7 @@ export function FeatureDetail({
   scopedNodeId,
   onPickStep,
   onOpenPath,
+  onRegenerate,
   narrow,
   drawerOpen,
   onToggleDrawer
@@ -48,7 +52,7 @@ export function FeatureDetail({
     return <div className="hiw-pane hiw-pane-empty">{t('hiw.pane.noExplanation')}</div>
   }
 
-  const notYet = (): void => toast.info(t('hiw.empty.notYet'))
+  const notYet = (): void => toast.info(t('hiw.pane.notYet'))
 
   const scoped = scopedNodeId ? scopeToStep(explanation, scopedNodeId) : null
 
@@ -133,17 +137,22 @@ export function FeatureDetail({
           {GLYPH[feature.status]} {t(STATUS_KEY[feature.status])}
         </span>
         <span className="hiw-sp" />
-        {/* 셋 다 아직 뒤가 없다. 사이드바의 [프로젝트 분석] 이 이미 이 경우의 답을 정해 두었으므로
-            같은 토스트를 준다 — 한 화면에서 "아직 안 만든 컨트롤"에 두 가지 답을 주면, 눌러도
-            아무 일이 없는 쪽은 사용자에게 고장으로 읽힌다 */}
+        {/* 앞의 둘은 아직 뒤가 없다 — 근거 단은 오른쪽에 이미 펼쳐져 있고, 편집은 저장할 곳
+            (§56 의 userEdited)을 아직 쓰지 않는다. 눌러도 아무 일이 없는 것보다 "아직"이라고
+            말하는 편이 낫다: 한 화면에서 반응 없는 버튼은 고장으로 읽힌다 */}
         <button className="hiw-ghost" onClick={notYet}>
           {t('hiw.pane.evidence', { count: feature.evidenceCount })}
         </button>
         <button className="hiw-ghost" onClick={notYet}>
           {t('hiw.pane.edit')}
         </button>
-        <button className="hiw-ghost acc" onClick={notYet}>
-          {t('hiw.pane.regenerate')}
+        {/* 이쪽은 뒤가 있다. 도는 동안은 잠근다 — 두 번 누르면 두 번 돈다 */}
+        <button
+          className="hiw-ghost acc"
+          onClick={onRegenerate}
+          disabled={feature.status === 'generating'}
+        >
+          {t(feature.status === 'generating' ? 'hiw.status.generating' : 'hiw.pane.regenerate')}
         </button>
         {narrow && (
           <button className="hiw-ghost acc" onClick={onToggleDrawer}>

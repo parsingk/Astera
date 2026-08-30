@@ -65,17 +65,21 @@ const explanation = (over: Record<string, unknown> = {}): Record<string, unknown
 async function make(generator: { accountId?: string } = { accountId: 'a1' }): Promise<{
   store: UnderstandingStore
   pipeline: UnderstandingPipeline
+  /** 화면으로 나간 알림. 여기가 비면 배경 재생성의 결과는 화면에 닿지 않는다 */
+  changed: string[]
 }> {
   const store = new UnderstandingStore(storeFile)
   await store.load()
+  const changed: string[] = []
   const pipeline = new UnderstandingPipeline({
     store,
     accountOf: (id) => (id === 'a1' ? account : null),
     descriptors: {} as never,
     generator: () => generator,
-    now: () => '2026-08-30T12:00:00.000Z'
+    now: () => '2026-08-30T12:00:00.000Z',
+    onChanged: (root) => changed.push(root)
   })
-  return { store, pipeline }
+  return { store, pipeline, changed }
 }
 
 /** 기능 하나가 이미 있는 상태를 만든다 — 첫 분석이 끝난 뒤의 모양 */
@@ -406,5 +410,121 @@ describe('에이전트가 도는 동안 저장 파일이 바뀌면', () => {
     await Promise.all([a, b])
 
     expect(order).toEqual(['start', 'end', 'start', 'end']) // 겹치지 않았다
+  })
+})
+
+describe('[다시] — 사용자가 직접 시킨 재생성', () => {
+  it('사람이 고친 설명도 덮는다 — 그렇게 하라고 누른 버튼이다', async () => {
+    const { store, pipeline } = await make()
+    await seedFeature(store, { userEdited: true, overview: '사람이 쓴 설명' })
+    agentReply.value = explanation()
+
+    await pipeline.regenerate(projectRoot, 'f-auth')
+
+    const u = store.get(projectRoot)!
+    expect(u.explanations['f-auth'].overview).toBe('사용자가 로그인하면 서버가 세션을 만든다.')
+    expect(u.explanations['f-auth'].userEdited).toBe(false)
+    expect(u.features[0].status).toBe('up-to-date')
+  })
+
+  it('만들지 못했던 줄을 다시 세운다', async () => {
+    const { store, pipeline } = await make()
+    await seedFeature(store)
+    agentReply.fail = '180초 안에 끝나지 않았다'
+    await pipeline.regenerate(projectRoot, 'f-auth')
+    expect(store.get(projectRoot)!.features[0].status).toBe('generation-failed')
+
+    agentReply.fail = null
+    agentReply.value = explanation()
+    await pipeline.regenerate(projectRoot, 'f-auth')
+    expect(store.get(projectRoot)!.features[0].status).toBe('up-to-date')
+  })
+
+  it('없는 기능이면 아무것도 하지 않는다', async () => {
+    const { store, pipeline } = await make()
+    await seedFeature(store)
+    await pipeline.regenerate(projectRoot, 'f-없음')
+    expect(agentReply.calls).toBe(0)
+    expect(store.get(projectRoot)!.features[0].status).toBe('up-to-date')
+  })
+
+  // 도는 동안 화면이 그것을 보여 줘야 한다 — 아무 표시가 없으면 사용자는 다시 누른다
+  it('도는 동안 그 줄은 "만드는 중"이다', async () => {
+    const { store, pipeline } = await make()
+    await seedFeature(store)
+    agentReply.value = explanation()
+    let seen: string | undefined
+    agentReply.during = async (): Promise<void> => {
+      seen = store.get(projectRoot)!.features[0].status
+    }
+
+    await pipeline.regenerate(projectRoot, 'f-auth')
+    expect(seen).toBe('generating')
+  })
+})
+
+describe('화면에 닿는가', () => {
+  // 재생성은 배경에서 수십 초 걸려 끝난다. 이 알림이 없으면 그 결과는 사용자가 프로젝트를
+  // 바꿨다 돌아올 때까지 화면에 없다 — 사용자에게는 실패한 것으로 보인다
+  it('저장할 때마다 화면에 알린다', async () => {
+    const { store, pipeline, changed } = await make()
+    await seedFeature(store)
+    agentReply.value = explanation()
+    changed.length = 0
+
+    await pipeline.onUnitClosed(projectRoot, unit())
+
+    expect(changed.length).toBeGreaterThanOrEqual(2) // "만드는 중" 과 그 결과
+    expect(new Set(changed)).toEqual(new Set([projectRoot]))
+  })
+})
+
+describe('기능마다의 최근 변경', () => {
+  // 사이드바 아래 목록은 프로젝트 전체의 것이라, 기능 하나를 열었을 때
+  // "이 기능이 최근에 왜 바뀌었나"에는 답하지 못한다
+  it('그 기능의 설명에도 변경이 쌓인다', async () => {
+    const { store, pipeline } = await make()
+    await seedFeature(store)
+    agentReply.value = explanation()
+
+    await pipeline.onUnitClosed(projectRoot, unit({ title: '로그인 고쳐줘' }))
+
+    const e = store.get(projectRoot)!.explanations['f-auth']
+    expect(e.recentChanges).toHaveLength(1)
+    expect(e.recentChanges[0].body).toBe('로그인 고쳐줘')
+    // 그 줄의 근거가 실려야 단계를 눌렀을 때 "이 단계를 바꾼 변경" 칸이 선다
+    expect(e.recentChanges[0].evidenceIds).toEqual(['file:src/auth/login.ts'])
+  })
+
+  it('새 설명이 그 이력을 지우지 않는다', async () => {
+    const { store, pipeline } = await make()
+    await seedFeature(store)
+    agentReply.value = explanation()
+    await pipeline.onUnitClosed(projectRoot, unit({ title: '첫 번째' }))
+    await pipeline.onUnitClosed(projectRoot, unit({ title: '두 번째', sessionId: 's-2' }))
+
+    const e = store.get(projectRoot)!.explanations['f-auth']
+    expect(e.recentChanges.map((c) => c.body)).toEqual(['두 번째', '첫 번째'])
+  })
+
+  it('사람이 고쳐 생성을 건너뛰어도 변경은 남는다 — 일어난 일은 일어난 일이다', async () => {
+    const { store, pipeline } = await make()
+    await seedFeature(store, { userEdited: true })
+    await pipeline.onUnitClosed(projectRoot, unit({ title: '그래도 바뀐 것' }))
+
+    const e = store.get(projectRoot)!.explanations['f-auth']
+    expect(e.recentChanges.map((c) => c.body)).toEqual(['그래도 바뀐 것'])
+    expect(agentReply.calls).toBe(0)
+  })
+
+  it('다섯 줄까지만 든다', async () => {
+    const { store, pipeline } = await make()
+    await seedFeature(store, { userEdited: true }) // 에이전트를 부르지 않아 빠르다
+    for (let i = 0; i < 7; i++)
+      await pipeline.onUnitClosed(projectRoot, unit({ title: `변경 ${i}`, sessionId: `s-${i}` }))
+
+    const e = store.get(projectRoot)!.explanations['f-auth']
+    expect(e.recentChanges).toHaveLength(5)
+    expect(e.recentChanges[0].body).toBe('변경 6')
   })
 })

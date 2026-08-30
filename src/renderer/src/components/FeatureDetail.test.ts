@@ -91,6 +91,7 @@ const render = (scoped: string | null = null, x: FeatureExplanation | null = exp
       scopedNodeId: scoped,
       onPickStep: () => {},
       onOpenPath: () => {},
+      onRegenerate: () => {},
       narrow: false,
       drawerOpen: false,
       onToggleDrawer: () => {}
@@ -105,6 +106,7 @@ const renderNarrow = (drawerOpen: boolean): string =>
       scopedNodeId: null,
       onPickStep: () => {},
       onOpenPath: () => {},
+      onRegenerate: () => {},
       narrow: true,
       drawerOpen,
       onToggleDrawer: () => {}

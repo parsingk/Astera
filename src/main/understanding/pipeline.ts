@@ -14,10 +14,16 @@ import path from 'node:path'
 import type { Account, Provider } from '../../core/types'
 import type { ProviderDescriptor } from '../../core/providers/descriptor'
 import type { SessionWorkUnit } from '../../core/workUnit/types'
-import type { ChangeSummary, ProjectFeature, ProjectUnderstanding } from '../../core/understanding/types'
+import type {
+  ChangeSummary,
+  FeatureExplanation,
+  ProjectFeature,
+  ProjectUnderstanding
+} from '../../core/understanding/types'
 import type { GeneratorSettings } from '../../core/understanding/generatorSettings'
 import { changeSummaryOf } from '../../core/understanding/changeRecord'
 import { mapFilesToFeatures } from '../../core/understanding/mapping'
+import { evidenceIdOf } from '../../core/understanding/evidence'
 import { buildDiscoverPrompt, buildExplainPrompt } from '../../core/understanding/prompt'
 import { sketchText } from '../../core/understanding/context'
 import { validateDiscovery, validateExplanation } from '../../core/understanding/validate'
@@ -29,6 +35,20 @@ import type { UnderstandingStore } from './store'
  *  이 배열은 프로젝트마다 무한히 자랄 수 있고, 읽는 자리는 세 줄뿐이다 */
 const RECENT_LIMIT = 20
 
+/** 기능 하나의 페인 아래에 서는 줄 수. 프로젝트 전체 목록보다 짧다 — 한 기능의 이력은 그 기능을
+ *  열었을 때만 보이고, 그 자리에서 필요한 것은 "최근에 왜 바뀌었나" 몇 줄이다 */
+const FEATURE_RECENT_LIMIT = 5
+
+/** explain() 이 돌려주는 것. onUnitClosed 와 regenerate 가 같은 값을 받아 같은 방식으로 얹는다 */
+type Built =
+  | {
+      ok: true
+      value: Omit<FeatureExplanation, 'featureId' | 'userEdited' | 'generatedAt'>
+      needsReview: boolean
+      needsReviewReason?: string
+    }
+  | { ok: false; reason: string }
+
 export interface PipelineDeps {
   store: UnderstandingStore
   /** 생성 계정을 찾는다. 없으면(지우거나 안 골랐으면) null — 그때는 생성하지 않는다 */
@@ -36,6 +56,9 @@ export interface PipelineDeps {
   descriptors: Record<Provider, ProviderDescriptor>
   generator: () => GeneratorSettings
   now: () => string
+  /** 저장이 끝났다. **화면이 다시 읽는 방아쇠다** — 재생성은 배경에서 수십 초 걸려 끝나고,
+   *  이것이 없으면 그 결과는 사용자가 프로젝트를 바꿔 돌아올 때까지 화면에 없다 */
+  onChanged?: (projectRoot: string) => void
   log?: (m: string) => void
 }
 
@@ -79,67 +102,124 @@ export class UnderstandingPipeline {
 
       if (!feature) {
         // 어느 기능에도 안 걸린다 — 기록만 남기고 끝낸다
-        await this.deps.store.set(projectRoot, next)
+        await this.write(projectRoot, next)
         return
       }
 
       const prev = explanations[feature.id]
+      // **그 기능의 줄에도 남긴다.** 사이드바 아래 목록은 프로젝트 전체의 것이라, 기능 하나를
+      // 열었을 때 "이 기능이 최근에 왜 바뀌었나"에는 답하지 못한다. 생성의 성패와 무관하게
+      // 남기는 이유: 변화는 실제로 일어났고, 그것이 설명에 실렸는지는 상태가 따로 말한다.
+      if (prev)
+        next.explanations[feature.id] = {
+          ...prev,
+          recentChanges: [summary, ...prev.recentChanges].slice(0, FEATURE_RECENT_LIMIT)
+        }
+
       // **사람이 고친 설명은 덮지 않는다** (스펙 §56). 대신 "갱신할 것이 있다"고만 표시한다
       if (prev?.userEdited) {
         this.mark(next, feature.id, 'update-available')
-        await this.deps.store.set(projectRoot, next)
+        await this.write(projectRoot, next)
         return
       }
 
       // 여기서부터가 에이전트 왕복이다. 먼저 "만드는 중"을 저장해 화면이 그것을 보여 준다
       this.mark(next, feature.id, 'generating')
-      await this.deps.store.set(projectRoot, next)
+      await this.write(projectRoot, next)
 
       const built = await this.explain(projectRoot, feature, prev?.implementation.map((i) => i.path) ?? [], [
         summary.body
       ])
-
-      // 에이전트가 도는 동안 저장 파일이 바뀌었을 수 있다(사용자가 다른 프로젝트를 분석했거나
-      // 다음 Unit 이 닫혔다). **그때의 값을 다시 읽어 그 위에 얹는다** — 우리가 들고 있던
-      // 스냅샷으로 덮으면 그 사이의 변화가 사라진다
-      const fresh = this.deps.store.get(projectRoot) ?? next
-      const merged: ProjectUnderstanding = {
-        features: [...fresh.features],
-        explanations: { ...fresh.explanations },
-        analyzedAt: fresh.analyzedAt,
-        recentChanges: fresh.recentChanges
-      }
-
-      // **가드를 여기서 한 번 더 본다.** 위(에이전트 실행 전)의 검사만으로는 부족하다: 그 사이
-      // 30~180초가 흐르고, 그동안 사용자가 이 기능의 설명을 손으로 고쳤을 수 있다. 그 값을 덮으면
-      // 스펙 §56 이 금지한 일이 조용히 일어난다 — 앞의 검사를 통과했다는 것은 "그때는 아니었다"일
-      // 뿐이다. 기능이 사라졌거나(재분석이 이름을 바꿨다) 이름이 바뀐 경우도 여기서 걸러야 한다:
-      // 죽은 id 에 쓰면 그 설명은 아무도 가리키지 않는 자리에 남고 상태는 generating 에 갇힌다.
-      const living = merged.features.find((f) => f.id === feature.id)
-      if (!living) {
-        this.deps.log?.(`understanding: feature ${feature.id} vanished during generation — 결과를 버린다`)
-        await this.deps.store.set(projectRoot, merged)
-        return
-      }
-      if (merged.explanations[feature.id]?.userEdited) {
-        this.mark(merged, feature.id, 'update-available')
-        await this.deps.store.set(projectRoot, merged)
-        return
-      }
-
-      if (built.ok) {
-        merged.explanations[feature.id] = {
-          featureId: feature.id,
-          ...built.value,
-          userEdited: false,
-          generatedAt: this.deps.now()
-        }
-        this.mark(merged, feature.id, built.needsReview ? 'needs-review' : 'up-to-date', built.needsReviewReason)
-      } else {
-        this.mark(merged, feature.id, 'generation-failed', built.reason)
-      }
-      await this.deps.store.set(projectRoot, merged)
+      await this.applyBuilt(projectRoot, feature.id, built, true)
     })
+  }
+
+  /** 사용자가 기능 하나의 [다시] 를 눌렀다.
+   *
+   *  **결과를 기다리지 않는다** — analyzeProject 와 갈리는 자리다. 저쪽은 목록 자체가 없어 기다리는
+   *  동안 보여 줄 것이 없지만, 여기는 그릴 줄이 이미 있어 그 자리에서 "생성 중"을 보여 줄 수 있다.
+   *  끝나면 저장이 화면으로 밀린다(onChanged).
+   *
+   *  **사람이 고친 설명도 덮는다.** 배경 재생성과 갈리는 자리다: 그쪽은 아무도 부탁하지 않은
+   *  일이라 §56 이 막지만, 이 버튼은 사용자가 "다시 만들어라"라고 말한 것이다 — `update-available`
+   *  줄이 새 설명을 받는 유일한 길이 이 버튼이다. */
+  regenerate(projectRoot: string, featureId: string): Promise<void> {
+    return this.enqueue(async () => {
+      const u = this.deps.store.get(projectRoot)
+      const feature = u?.features.find((f) => f.id === featureId)
+      if (!u || !feature) return
+
+      const prev = u.explanations[featureId]
+      const next: ProjectUnderstanding = {
+        ...u,
+        features: [...u.features],
+        explanations: { ...u.explanations }
+      }
+      this.mark(next, featureId, 'generating')
+      await this.write(projectRoot, next)
+
+      const built = await this.explain(
+        projectRoot,
+        feature,
+        prev?.implementation.map((i) => i.path) ?? [],
+        // 이 기능에 쌓인 변화를 그대로 재료로 준다 — 무엇이 왜 바뀌었는지가 설명에 실려야 한다
+        (prev?.recentChanges ?? []).map((c) => c.body)
+      )
+      await this.applyBuilt(projectRoot, featureId, built, false)
+    })
+  }
+
+  /** 에이전트가 답한 뒤 얹고 저장한다. 배경 재생성과 [다시] 버튼이 같은 일을 한다 —
+   *  갈리는 것은 `respectUserEdited` 하나뿐이다(위 regenerate 의 주석). */
+  private async applyBuilt(
+    projectRoot: string,
+    featureId: string,
+    built: Built,
+    respectUserEdited: boolean
+  ): Promise<void> {
+    // 에이전트가 도는 동안 저장 파일이 바뀌었을 수 있다(사용자가 다른 프로젝트를 분석했거나
+    // 다음 Unit 이 닫혔다). **그때의 값을 다시 읽어 그 위에 얹는다** — 우리가 들고 있던
+    // 스냅샷으로 덮으면 그 사이의 변화가 사라진다
+    const fresh = this.deps.store.get(projectRoot)
+    if (!fresh) return
+    const merged: ProjectUnderstanding = {
+      features: [...fresh.features],
+      explanations: { ...fresh.explanations },
+      analyzedAt: fresh.analyzedAt,
+      recentChanges: fresh.recentChanges
+    }
+
+    // **가드를 여기서 한 번 더 본다.** 에이전트 실행 전의 검사만으로는 부족하다: 그 사이
+    // 30~180초가 흐르고, 그동안 사용자가 이 기능의 설명을 손으로 고쳤을 수 있다. 기능이
+    // 사라진 경우(재분석이 이름을 바꿨다)도 여기서 걸러야 한다 — 죽은 id 에 쓰면 그 설명은
+    // 아무도 가리키지 않는 자리에 남고 상태는 "생성 중"에 갇힌다.
+    const living = merged.features.find((f) => f.id === featureId)
+    if (!living) {
+      this.deps.log?.(`understanding: feature ${featureId} vanished during generation — 결과를 버린다`)
+      await this.write(projectRoot, merged)
+      return
+    }
+    const prev = merged.explanations[featureId]
+    if (respectUserEdited && prev?.userEdited) {
+      this.mark(merged, featureId, 'update-available')
+      await this.write(projectRoot, merged)
+      return
+    }
+
+    if (built.ok) {
+      merged.explanations[featureId] = {
+        featureId,
+        ...built.value,
+        // 기능의 최근 변경은 설명이 아니라 이력이다 — 새 설명이 그것을 지워서는 안 된다
+        recentChanges: prev?.recentChanges ?? [],
+        userEdited: false,
+        generatedAt: this.deps.now()
+      }
+      this.mark(merged, featureId, built.needsReview ? 'needs-review' : 'up-to-date', built.needsReviewReason)
+    } else {
+      this.mark(merged, featureId, 'generation-failed', built.reason)
+    }
+    await this.write(projectRoot, merged)
   }
 
   /** 첫 분석 — 기능 목록 초안을 만든다 (스펙 §21). 설명은 만들지 않는다.
@@ -243,7 +323,7 @@ export class UnderstandingPipeline {
         generatedAt: now
       }
     }
-    await this.deps.store.set(projectRoot, next)
+    await this.write(projectRoot, next)
     return { ok: true, count: next.features.length }
   }
 
@@ -253,10 +333,7 @@ export class UnderstandingPipeline {
     feature: ProjectFeature,
     implementationPaths: string[],
     recentChangeBodies: string[]
-  ): Promise<
-    | { ok: true; value: Omit<ProjectUnderstanding['explanations'][string], 'featureId' | 'userEdited' | 'generatedAt'>; needsReview: boolean; needsReviewReason?: string }
-    | { ok: false; reason: string }
-  > {
+  ): Promise<Built> {
     const ready = this.agentContext()
     if (!ready.ok) return ready
 
@@ -292,12 +369,15 @@ export class UnderstandingPipeline {
           // 출처를 가릴 근거가 없다 — 에이전트가 코드를 읽고 추론한 것이므로 'agent' 다.
           // 스펙 §12 가 그 구분에 알약 색을 걸었다: 추정을 결정과 같은 무게로 보여 주지 않는다
           source: 'agent' as const,
-          sourceLabel: d.sourceLabel
+          sourceLabel: d.sourceLabel,
+          evidenceIds: d.evidenceIds
         })),
         implementation: e.implementation,
         recentChanges: [],
+        // **id 를 경로에서 만든다** — 무작위로 두면 재생성마다 값이 바뀌어, 그 id 를 들고 있던
+        // 최근 변경 줄이 다음 생성의 어떤 단계와도 겹치지 않는다(evidence.ts 의 주석)
         evidence: e.evidencePaths.map((p) => ({
-          id: randomUUID(),
+          id: evidenceIdOf(p),
           type: 'source-file' as const,
           label: p,
           path: p
@@ -333,6 +413,13 @@ export class UnderstandingPipeline {
       evidenceCount: u.explanations[featureId]?.evidence.length ?? u.features[i].evidenceCount,
       staleReason: reason
     }
+  }
+
+  /** 저장하고 **화면에 알린다.** store.set 을 직접 부르지 않는 이유가 이 한 줄이다: 알림을
+   *  빠뜨린 저장은 조용히 화면 밖에 남고, 사용자는 재생성이 실패한 것으로 읽는다. */
+  private async write(projectRoot: string, u: ProjectUnderstanding): Promise<void> {
+    await this.deps.store.set(projectRoot, u)
+    this.deps.onChanged?.(projectRoot)
   }
 
   /** 큐. **거부하지 않는다** — 한 번의 생성 실패가 이후 모든 생성을 멈추게 하면 안 되고,

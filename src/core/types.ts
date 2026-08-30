@@ -497,6 +497,11 @@ export interface CoreEvents {
   // main's worktree-to-repository resolution (see OrchApi) — that call is the only thing that tells
   // main what the renderer has open.
   'orch:state': OrchSnapshot
+
+  /** How It Works 의 저장 파일이 바뀌었다. **실린 값은 프로젝트 키이고, 받는 쪽은 그것을 쓰지
+   *  않는다** — main 은 그 키를 원 저장소로 접어 두는데(설계 D1) 렌더러는 그 접기를 모른다.
+   *  "다시 읽어라"는 신호로만 쓴다. 배경 재생성이 화면에 닿는 유일한 길이다. */
+  'understanding:changed': string
 }
 export type CoreEventChannel = keyof CoreEvents
 
@@ -901,6 +906,11 @@ export interface UnderstandingApi {
    *  **결과를 돌려준다**: 사용자가 눌러 기다리는 일이라 실패하면 그 사유가 화면에 떠야 한다.
    *  reason 이 NO_GENERATOR_ACCOUNT 면 설정에서 생성 계정을 아직 고르지 않았다는 뜻이다. */
   analyze(projectPath: string): Promise<{ ok: true; count: number } | { ok: false; reason: string }>
+
+  /** 기능 하나의 설명을 다시 만든다 — 사이드바 줄의 [다시] 버튼.
+   *  **결과를 기다리지 않는다**: analyze 와 갈리는 자리다. 그릴 줄이 이미 있어 그 자리에서
+   *  "생성 중"을 보여 줄 수 있고, 끝나면 'understanding:changed' 가 화면을 밀어 준다. */
+  regenerate(projectPath: string, featureId: string): Promise<void>
 }
 
 export type RendererApi = CoreApi & {

@@ -7,13 +7,15 @@
 // node: import 없음 — 파일 존재 여부는 술어로 받는다. 그래서 이 검증 전체가 fs 없이 전수
 // 테스트된다 (transition.ts 가 조상 답을 값으로 받는 것과 같은 갈래다).
 import type { FlowNode, FlowNodeType } from './types'
+import { evidenceIdOf } from './evidence'
 
 export interface ValidatedExplanation {
   overview: string
   userFlow: FlowNode[]
   failureFlows: FlowNode[]
-  keyDecisions: { title: string; reason: string; sourceLabel: string }[]
-  implementation: { role: string; path: string }[]
+  keyDecisions: { title: string; reason: string; sourceLabel: string; evidenceIds?: string[] }[]
+  implementation: { role: string; path: string; evidenceIds?: string[] }[]
+  /** 위 셋이 댄 경로까지 모두 합친 것 — 근거 목록은 여기서 만들어진다 */
   evidencePaths: string[]
   needsReview: boolean
   needsReviewReason?: string
@@ -32,9 +34,24 @@ const isStr = (v: unknown): v is string => typeof v === 'string' && v.trim() !==
 
 const bad = (reason: string): ValidationResult => ({ ok: false, reason })
 
+/** 항목 하나가 댄 근거 경로를 id 로 바꾼다. **비어 있으면 undefined 다** — 빈 배열을 실으면
+ *  "근거가 있다"고 말하면서 아무것도 가리키지 않는 단계가 되고, 그 단계는 눌러도 오른쪽이 비어
+ *  있다(scope.ts 의 isScopable 이 개수로 판단한다).
+ *
+ *  @param sink 본 경로를 여기에 모은다 — 실재 여부는 부르는 쪽이 한꺼번에 묻고, 근거 목록도
+ *    그 합집합에서 만들어진다. 항목이 위쪽 evidencePaths 에 없는 파일을 대도 거부하지 않는 이유:
+ *    그 경로도 실재 검사를 그대로 지나므로 거짓이 실릴 길은 없고, 거부는 설명 전체를 버린다. */
+function readEvidenceIds(v: unknown, at: string, sink: string[]): string[] | undefined | { err: string } {
+  if (v === undefined || v === null) return undefined
+  if (!Array.isArray(v) || v.some((p) => !isStr(p))) return { err: `${at}: evidencePaths 가 문자열 배열이 아니다` }
+  const paths = v as string[]
+  for (const p of paths) sink.push(p)
+  return paths.length > 0 ? paths.map(evidenceIdOf) : undefined
+}
+
 /** 흐름도 한 칸. label 22자 규칙은 여기서 **자르지 않고 거부한다** — 잘라 실으면 화면에는
  *  말없이 뭉개진 이름이 남고, 거부하면 에이전트가 description 으로 옮겨 다시 온다 */
-function readNode(v: unknown, at: string): FlowNode | string {
+function readNode(v: unknown, at: string, sink: string[]): FlowNode | string {
   if (!isObj(v)) return `${at}: 흐름 칸이 객체가 아니다`
   if (!isStr(v.id)) return `${at}: id 가 없다`
   if (!isStr(v.label)) return `${at}: label 이 없다`
@@ -50,20 +67,23 @@ function readNode(v: unknown, at: string): FlowNode | string {
         : { targetId: e.targetId }
     )
   }
+  const evidenceIds = readEvidenceIds(v.evidencePaths, at, sink)
+  if (evidenceIds !== undefined && !Array.isArray(evidenceIds)) return evidenceIds.err
   return {
     id: v.id,
     label: v.label,
     type: v.type as FlowNodeType,
     description: typeof v.description === 'string' ? v.description : undefined,
-    next
+    next,
+    evidenceIds
   }
 }
 
-function readFlow(v: unknown, name: string): FlowNode[] | string {
+function readFlow(v: unknown, name: string, sink: string[]): FlowNode[] | string {
   if (!Array.isArray(v)) return `${name} 이 배열이 아니다`
   const nodes: FlowNode[] = []
   for (let i = 0; i < v.length; i++) {
-    const n = readNode(v[i], `${name}[${i}]`)
+    const n = readNode(v[i], `${name}[${i}]`, sink)
     if (typeof n === 'string') return n
     nodes.push(n)
   }
@@ -86,10 +106,12 @@ export function validateExplanation(
   if (!isObj(raw)) return bad('출력이 JSON 객체가 아니다')
   if (!isStr(raw.overview)) return bad('overview 가 없다')
 
-  const userFlow = readFlow(raw.userFlow, 'userFlow')
+  // 항목들이 댄 근거 경로가 여기 모인다 — 실재 검사도, 근거 목록도 이 합집합에서 나온다
+  const cited: string[] = []
+  const userFlow = readFlow(raw.userFlow, 'userFlow', cited)
   if (typeof userFlow === 'string') return bad(userFlow)
   if (userFlow.length === 0) return bad('userFlow 가 비어 있다 — 흐름 없는 설명은 화면이 그릴 것이 없다')
-  const failureFlows = readFlow(raw.failureFlows ?? [], 'failureFlows')
+  const failureFlows = readFlow(raw.failureFlows ?? [], 'failureFlows', cited)
   if (typeof failureFlows === 'string') return bad(failureFlows)
 
   if (!Array.isArray(raw.keyDecisions)) return bad('keyDecisions 가 배열이 아니다')
@@ -97,7 +119,9 @@ export function validateExplanation(
   for (const d of raw.keyDecisions) {
     if (!isObj(d) || !isStr(d.title) || !isStr(d.reason) || !isStr(d.sourceLabel))
       return bad('keyDecisions 항목이 title/reason/sourceLabel 을 잃었다')
-    keyDecisions.push({ title: d.title, reason: d.reason, sourceLabel: d.sourceLabel })
+    const ids = readEvidenceIds(d.evidencePaths, 'keyDecisions', cited)
+    if (ids !== undefined && !Array.isArray(ids)) return bad(ids.err)
+    keyDecisions.push({ title: d.title, reason: d.reason, sourceLabel: d.sourceLabel, evidenceIds: ids })
   }
 
   if (!Array.isArray(raw.implementation) || raw.implementation.length === 0)
@@ -106,17 +130,25 @@ export function validateExplanation(
   for (const i of raw.implementation) {
     if (!isObj(i) || !isStr(i.role) || !isStr(i.path))
       return bad('implementation 항목이 role/path 를 잃었다')
-    implementation.push({ role: i.role, path: i.path })
+    const ids = readEvidenceIds(i.evidencePaths, 'implementation', cited)
+    if (ids !== undefined && !Array.isArray(ids)) return bad(ids.err)
+    // **대지 않았으면 자기 경로가 곧 근거다.** 구현 참조는 "이 기능이 이 파일에 산다"는 말이라
+    // 그 파일 말고 다른 근거가 있을 수 없다. 이 기본값이 없으면 단계를 눌렀을 때 "이 단계의 구현"
+    // 칸이 늘 비고, 그것은 에이전트가 한 줄을 빠뜨렸다는 이유로 화면이 반쯤 죽는 것이다.
+    implementation.push({ role: i.role, path: i.path, evidenceIds: ids ?? [evidenceIdOf(i.path)] })
   }
 
   if (!Array.isArray(raw.evidencePaths) || raw.evidencePaths.some((p) => !isStr(p)))
     return bad('evidencePaths 가 문자열 배열이 아니다')
-  const evidencePaths = raw.evidencePaths as string[]
+  // 위쪽 목록과 항목들이 댄 것을 합친다 — 근거 목록이 이것으로 만들어지므로, 여기 없는 경로를
+  // 가리키는 evidenceIds 는 아무것도 가리키지 않는 id 가 된다
+  const evidencePaths = [
+    ...new Set([...(raw.evidencePaths as string[]), ...cited, ...implementation.map((i) => i.path)])
+  ]
 
   // **유령 경로 하나면 전체를 거부한다.** 하나쯤 눈감으면 "몇 개까지 괜찮은가"라는 답 없는
   // 질문이 생긴다 — 실재하는 경로만 대는 것은 에이전트가 지킬 수 있는 계약이다
-  for (const p of [...implementation.map((i) => i.path), ...evidencePaths])
-    if (!fileExists(p)) return bad(`실재하지 않는 경로를 근거로 댔다: ${p}`)
+  for (const p of evidencePaths) if (!fileExists(p)) return bad(`실재하지 않는 경로를 근거로 댔다: ${p}`)
 
   const needsReview = raw.needsReview === true
   const needsReviewReason = typeof raw.needsReviewReason === 'string' ? raw.needsReviewReason : undefined

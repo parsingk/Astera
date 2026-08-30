@@ -48,3 +48,20 @@ describe('changeSummaryOf — 완료된 Unit 하나가 최근 변경 한 줄이 
     expect(changeSummaryOf(unit(), 'x')!.featureName).toBeUndefined()
   })
 })
+
+// "이 단계를 바꾼 변경" 칸이 서는 것은 이 id 와 단계의 근거 id 가 겹칠 때뿐이다(scope.ts)
+describe('변경 줄의 근거', () => {
+  it('그 Unit 이 건드린 파일이 근거 id 로 실린다', () => {
+    const u = {
+      id: 'wu', sessionId: 's1', projectPath: 'D:/p', title: '로그인 고쳐줘',
+      status: 'completed' as const, startedAt: '2026-08-30T00:00:00.000Z',
+      completedAt: '2026-08-30T00:05:00.000Z', firstMessageIndex: 0, messageCount: 2,
+      git: { startHead: 'a', observedChangedFiles: ['src/auth/login.ts', 'src/auth/session.ts'] },
+      encounteredExternalGitChangeIds: []
+    }
+    expect(changeSummaryOf(u, 'c1')!.evidenceIds).toEqual([
+      'file:src/auth/login.ts',
+      'file:src/auth/session.ts'
+    ])
+  })
+})

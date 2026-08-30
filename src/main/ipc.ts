@@ -3087,6 +3087,10 @@ export function registerIpc(
     descriptors: core.descriptors,
     generator: () => core.appSettings.getGenerator(),
     now: () => new Date().toISOString(),
+    // 배경 재생성이 끝났다고 화면에 알린다. **접힌 키를 그대로 실어 보낸다** — 렌더러는 그 접기를
+    // 모르므로(워크트리 세션이면 원 저장소의 키다) 값을 비교하지 않고 다시 읽기만 한다.
+    // 그쪽 주석이 그 이유를 적고 있다.
+    onChanged: (root) => send('understanding:changed', root),
     log: orchLog
   })
 
@@ -3096,6 +3100,16 @@ export function registerIpc(
     await assertAllowedPath(projectPath)
     await understandingLoaded
     return understandingPipeline.analyzeProject(understandingKeyOf(projectPath))
+  })
+
+  /** 기능 하나의 [다시] 버튼. **결과를 기다리지 않는다** — 바로 위와 갈리는 자리다: 그릴 줄이
+   *  이미 있어 그 자리에서 "생성 중"을 보여 줄 수 있고, 끝나면 understanding:changed 가 민다. */
+  ipcMain.handle('understanding.regenerate', async (_e, projectPath: string, featureId: string) => {
+    await assertAllowedPath(projectPath)
+    if (typeof featureId !== 'string' || featureId === '')
+      throw new Error(`INVALID_FEATURE_ID: ${String(featureId)}`)
+    await understandingLoaded
+    void understandingPipeline.regenerate(understandingKeyOf(projectPath), featureId)
   })
 
   // Work Unit detection: workUnits.json persistence, and the collector that fills it. Built here for

@@ -8,6 +8,7 @@
 // node: import 없음 — id 와 시각은 부르는 쪽(main)이 만든다.
 import type { SessionWorkUnit } from '../workUnit/types'
 import type { ChangeSummary } from './types'
+import { evidenceIdOf } from './evidence'
 
 /** 화면의 sourceLabel 규칙. 스펙 예시("세션 #182")를 따르되 이 앱의 세션에는 순번이 없어
  *  id 의 앞 여덟 자를 쓴다 — 사람이 두 변경을 구별하는 용도이지 식별자가 아니다.
@@ -28,7 +29,11 @@ export function changeSummaryOf(unit: SessionWorkUnit, id: string): ChangeSummar
     sourceKind: 'session',
     sourceId: unit.sessionId,
     sourceLabel: sessionLabelOf(unit.sessionId),
-    body: unit.title
+    body: unit.title,
+    // **이 변경이 건드린 파일이 곧 이 줄의 근거다.** 단계를 눌렀을 때 "이 단계를 바꾼 변경" 칸이
+    // 서는 것은 오직 이 겹침이다(scope.ts). 그 기능의 근거가 아닌 파일도 함께 들지만, 겹치지
+    // 않으면 어디에도 서지 않으므로 거를 이유가 없다.
+    evidenceIds: unit.git.observedChangedFiles.map(evidenceIdOf)
     // featureName 은 매핑이 정한 뒤 파이프라인이 채운다 — 이 단계는 기능을 모른다
   }
 }

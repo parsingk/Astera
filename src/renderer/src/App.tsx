@@ -2000,6 +2000,19 @@ export default function App(): React.JSX.Element {
     if (placed.paneId) setActivePaneId(placed.paneId)
   }
 
+  /** 기능 하나의 설명을 다시 만들라고 시킨다 — 사이드바 줄과 페인 머리의 [다시 만들기].
+   *
+   *  **기다리지 않는다.** 결과는 저장을 거쳐 'understanding:changed' 로 돌아오고(아래 구독),
+   *  그동안 그 줄의 상태가 "만드는 중"으로 서 있다. 여기서 잡는 것은 IPC 자체가 거절되는 경우다
+   *  — 허용 목록 밖의 경로 같은 것 — 그것을 삼키면 눌러도 아무 일이 없는 버튼이 된다. */
+  const regenerateFeature = (projectRoot: string, featureId: string): void => {
+    void window.api.understanding.regenerate(projectRoot, featureId).catch((err) =>
+      toast.error(
+        t('hiw.analyze.failed', { detail: err instanceof Error ? err.message : String(err) })
+      )
+    )
+  }
+
   /** 구현 참조를 눌렀다. 그 경로는 저장소 상대이므로(understanding/types.ts) 지금 프로젝트에 붙여
    *  절대 경로로 만든 다음 평소의 파일 탭으로 연다 — 설명 옆에 소스를 띄우는 것이 이 화면의 목적이다.
    *  구분자는 루트의 것을 따른다(core/files/paths.ts 의 resolveRelative 와 같은 관례). */
@@ -2063,6 +2076,7 @@ export default function App(): React.JSX.Element {
         scopedNodeId={scopedNode[key] ?? null}
         onPickStep={(id) => setScopedNode((m) => ({ ...m, [key]: id }))}
         onOpenPath={openFeaturePath}
+        onRegenerate={() => regenerateFeature(rec.projectRoot, rec.featureId)}
       />
     )
   }
@@ -2212,6 +2226,17 @@ export default function App(): React.JSX.Element {
       void window.api.orch.unwatch()
     }
   }, [jobsOpen, sidebarOpen, currentProject])
+
+  // 배경 재생성이 끝나면 main 이 밀어 준다 — 그 결과가 화면에 닿는 유일한 길이다. 재생성은
+  // 작업 단위가 닫힐 때 저절로 돌고 수십 초가 걸리므로, 이것이 없으면 새 설명은 사용자가 프로젝트를
+  // 바꿨다 돌아올 때까지 화면에 없다.
+  //
+  // **실린 값을 비교하지 않는다.** main 은 프로젝트 키를 원 저장소로 접어 쓰는데(설계 D1) 렌더러는
+  // 그 접기를 모른다 — 워크트리를 열고 있으면 밀려 오는 키는 이 창의 currentProject 와 다르다.
+  // 그래서 어느 프로젝트의 것이든 다시 읽기만 한다: 접기를 아는 쪽(understanding.get)이 답한다.
+  useEffect(() => {
+    return window.api.on('understanding:changed', () => setUnderstandingSeq((n) => n + 1))
+  }, [])
 
   // When the project changes, that project's terminal list is read again — main holds them per project,
   // so another project's terminals stay alive and are simply not shown here
@@ -2865,6 +2890,9 @@ export default function App(): React.JSX.Element {
                 // [검토] 도 같은 탭을 연다. 검토 흐름 자체는 아직 없고, 그 전까지 이 버튼이 할 수
                 // 있는 가장 정직한 일이 "무엇을 검토할지 펼쳐 보여 주는 것"이다
                 onReview={openFeatureTab}
+                // [다시] — 기다리지 않는다. 줄의 상태가 곧 "만드는 중"이 되고, 끝나면
+                // 'understanding:changed' 가 이 화면을 다시 읽게 한다
+                onRegenerate={(id) => currentProject && regenerateFeature(currentProject, id)}
                 // 첫 분석 (스펙 §21). **결과를 기다려 보여 준다** — 사용자가 눌러 기다리는
                 // 일이고, 실패하면(생성 계정을 안 골랐다, 에이전트가 답을 못 했다) 그 사유가
                 // 떠야 한다. 성공하면 신호를 올려 사이드바가 새 목록을 다시 읽는다.

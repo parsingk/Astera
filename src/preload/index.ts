@@ -33,7 +33,8 @@ const EVENT_CHANNELS = [
   'run:status',
   'terminal:data',
   'terminal:exit',
-  'orch:state'
+  'orch:state',
+  'understanding:changed'
 ]
 
 const api = {
@@ -206,7 +207,8 @@ const api = {
   },
   understanding: {
     get: invoke('understanding.get'),
-    analyze: invoke('understanding.analyze')
+    analyze: invoke('understanding.analyze'),
+    regenerate: invoke('understanding.regenerate')
   },
   platform: process.platform,
   win: {
