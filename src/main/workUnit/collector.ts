@@ -33,7 +33,12 @@ import { isAsteraOperation, OPERATION_GRACE_MS } from '../../core/git/provenance
 import { isSamePath } from '../../core/files/tree'
 import type { SessionWorkUnit } from '../../core/workUnit/types'
 import { isOpen } from '../../core/workUnit/status'
-import { isHumanRequest, requestTextOf, titleOf } from '../../core/workUnit/humanRequest'
+import {
+  isCodexTurnComplete,
+  isHumanRequest,
+  requestTextOf,
+  titleOf
+} from '../../core/workUnit/humanRequest'
 import { decideBoundary } from '../../core/workUnit/boundary'
 import {
   onAgentIdle,
@@ -610,6 +615,7 @@ export class WorkUnitCollector {
       dirty = true
     }
 
+    let turnCompleted = false
     for (const raw of r.lines) {
       let record: unknown
       try {
@@ -617,11 +623,43 @@ export class WorkUnitCollector {
       } catch {
         continue // 반쪽 줄은 tail 이 이미 걸렀다. 그래도 남는 깨진 줄 하나가 회차를 멈추게 하지 않는다
       }
-      if (!isObj(record) || !isHumanRequest(record)) continue
-      await this.applyRequest(state, s, record)
-      dirty = true
+      if (!isObj(record)) continue
+      if (isHumanRequest(record)) {
+        await this.applyRequest(state, s, record)
+        dirty = true
+        continue
+      }
+      // **codex 의 턴 종료는 기록 파일 안에 있다.** claude 는 창 제목의 유휴 전환(session:busy)이
+      // 알려 주지만 codex 의 제목은 장식이라 그 신호를 믿을 수 없다(descriptor 의 busyTitleReliable
+      // 이 false 인 이유). 그래서 codex 는 rollout 이 스스로 적는 `task_complete` 를 쓴다 —
+      // 추측이 아니라 codex 자신이 쓴 구조적 신호이고, codexRolloutWatcher 가 이미 같은 값을
+      // 턴 알림에 쓴다(그 파일 머리주석: 59개 파일 156턴에서 검증).
+      //
+      // **표시만 하고 여기서 판정하지 않는다** — 판정에는 작업 트리를 물어야 하고(git 프로세스),
+      // 한 회차에 턴이 여럿 끝나 있을 수 있다. 아래에서 한 번만 묻는다.
+      if (isCodexTurnComplete(record)) turnCompleted = true
     }
+
+    if (turnCompleted) dirty = (await this.applyIdle(state, s)) || dirty
     return dirty
+  }
+
+  /** 그 세션의 열린 Unit 에 유휴 판정을 먹인다 — `onSessionIdle` 과 같은 규칙, 다른 방아쇠.
+   *  claude 는 창 제목이 알려 주고(그쪽), codex 는 기록에 적힌 턴 종료를 읽어 여기로 온다. */
+  private async applyIdle(state: WorkUnitState, s: CollectorSession): Promise<boolean> {
+    const open = state.units.find((u) => u.sessionId === s.sessionId && isOpen(u.status))
+    if (!open) return false
+    this.observe(state, s.projectPath, await this.changedFiles(s.projectPath))
+    const next = onAgentIdle({
+      status: open.status,
+      observedChangeCount: open.git.observedChangedFiles.length,
+      // **이 자리에서는 늘 믿는다.** 프로바이더의 유휴 신호가 아니라 codex 자신이 기록에 적은
+      // 턴 종료이고, `busyTitleReliable` 이 말하는 것은 창 제목의 신뢰도이지 이것이 아니다.
+      idleSignalTrusted: true
+    })
+    if (next === open.status) return false
+    open.status = next
+    return true
   }
 
   /** 쓸 커서가 없을 때 어디서부터 읽는가. 답은 셋이다 — 잡은 자리 · `null`(파일 처음부터) ·

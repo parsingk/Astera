@@ -1343,3 +1343,108 @@ describe('WorkUnitCollector — isAncestor 를 묻는 조건', () => {
     expect(asks).toBe(1)
   })
 })
+
+// ── codex 세션 ─────────────────────────────────────────────────────────
+//
+// codex 는 창 제목의 유휴 신호를 믿을 수 없다(busyTitleReliable=false). 대신 rollout 이 턴마다
+// `task_complete` 를 적으므로 그것을 유휴로 읽는다 — 추측이 아니라 codex 자신이 쓴 신호다.
+
+/** codex rollout 의 사람 메시지 한 줄 */
+const codexHuman = (text: string, at = '2026-08-30T00:00:00.000Z'): string =>
+  JSON.stringify({
+    timestamp: at,
+    type: 'response_item',
+    payload: {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_text', text }],
+      internal_chat_message_metadata_passthrough: { turn_id: 't1', content_item_kinds: ['user.text'] }
+    }
+  }) + '\n'
+
+/** 재개 되쓰기 — 지난 대화를 user.text 조각 여럿으로 묶어 한 레코드에 넣는다 */
+const codexReplay = (): string =>
+  JSON.stringify({
+    type: 'response_item',
+    payload: {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_text', text: 'The following is the Codex agent history…' }],
+      internal_chat_message_metadata_passthrough: {
+        content_item_kinds: Array(12).fill('user.text')
+      }
+    }
+  }) + '\n'
+
+/** codex 가 턴을 끝냈다고 적는 줄 */
+const codexTurnComplete = (): string =>
+  JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', turn_id: 't1' } }) + '\n'
+
+describe('WorkUnitCollector — codex', () => {
+  it('codex 세션도 사람의 요청으로 Unit 을 연다', async () => {
+    const fake = makeFake()
+    // codex 는 유휴 신호를 믿을 수 없다 — 그런데도 Unit 이 서야 한다
+    fake.sessions = [session({ idleSignalTrusted: false })]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexHuman('로그인 고쳐줘'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].title).toBe('로그인 고쳐줘')
+    expect(state.units[0].status).toBe('active')
+  })
+
+  // **이것이 새면 켜기 전의 대화가 Unit 이 된다** (스펙 §16.1)
+  it('재개 되쓰기와 주입은 Unit 을 열지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session({ idleSignalTrusted: false })]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexReplay(), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    expect(store.get(projectPath)?.units ?? []).toHaveLength(0)
+  })
+
+  // claude 라면 session:busy 의 유휴 전환이 하는 일을, codex 는 기록 안에서 한다
+  it('task_complete 가 유휴 판정을 대신한다 — 바뀐 것이 있으면 완료 후보가 된다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session({ idleSignalTrusted: false })]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexHuman('버그 고쳐줘'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.units[0].status).toBe('active')
+
+    // 에이전트가 파일을 고치고 턴을 끝냈다
+    fake.git.files = ['src/fixed.ts']
+    await fs.appendFile(transcript, codexTurnComplete(), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units[0].status).toBe('completed-candidate')
+    expect(state.units[0].git.observedChangedFiles).toEqual(['src/fixed.ts'])
+  })
+
+  it('바뀐 것이 없으면 턴이 끝나도 진행 중이다 — 질문만 한 턴이다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session({ idleSignalTrusted: false })]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexHuman('이 코드 뭐야?') + codexTurnComplete(), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    expect(store.get(projectPath)!.units[0].status).toBe('active')
+  })
+})
