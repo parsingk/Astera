@@ -151,7 +151,35 @@ describe('readRange', () => {
     const notRepo = await tempDir('astera-gitprobe-range-notrepo-')
     await expect(readRange(notRepo, MISSING_HASH, MISSING_HASH)).resolves.toEqual({
       commits: [],
-      changedFiles: []
+      changedFiles: [],
+      authors: []
     })
+  })
+
+  // EG §6 이 pull 에서 수집할 것으로 `Authors` 를 적었고 §40 이 "author metadata" 를 필수 단위
+  // 테스트로 걸었다. 이름은 **형식 문자열에 붙이지 않고 따로 묻는다** — 그 이유는 gitProbe.ts 의
+  // readRange 주석에 있다. 여기서 한 번에 셋을 본다: 나오는 차례(git log 는 최신이 먼저다),
+  // 중복 제거, 그리고 이름 안의 공백이 그대로 남는가.
+  it('구간의 author 이름을 중복 없이 모은다 — 공백이 든 이름도 그대로다', async () => {
+    const repo = await makeRepo()
+    const before = headHash(repo)
+
+    const commitAs = async (name: string, file: string): Promise<void> => {
+      await fs.writeFile(path.join(repo, file), file, 'utf8')
+      run(repo, ['add', file])
+      run(repo, ['-c', `user.name=${name}`, '-c', 'user.email=x@x.com', 'commit', '-m', file])
+    }
+    await commitAs('Alice A', 'a.txt')
+    // 가운데 공백이 둘이다 — 접히거나 깎이면 여기서 드러난다
+    await commitAs('Bob  B', 'b.txt')
+    // 같은 사람이 다시 — 목록에 한 번만 있어야 한다
+    await commitAs('Alice A', 'c.txt')
+    const after = headHash(repo)
+
+    const range = await readRange(repo, before, after)
+    expect(range.commits).toHaveLength(3)
+    expect(range.authors).toEqual(['Alice A', 'Bob  B'])
+    // 이 구간을 연 커밋의 author('Test User', makeRepo 가 심었다)는 before 자신이라 범위 밖이다
+    expect(range.authors).not.toContain('Test User')
   })
 })

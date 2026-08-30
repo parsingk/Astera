@@ -64,10 +64,17 @@ export interface CollectorGit {
   /** 작업 트리에서 지금 바뀌어 있는 파일들 (저장소 루트 기준 상대 경로, git 이 찍은 그대로) */
   changedFiles(repoPath: string): Promise<string[]>
   /** before..after 구간의 커밋과 그 구간에서 바뀐 파일들 (gitProbe.ts 의 readRange). **두 HEAD 가
-   *  다른 전이에서 부른다.** 돌려받은 둘의 쓰임은 다르다 — 커밋 목록은 fast-forward 에서만 쓰고
-   *  (그 밖에는 범위를 신뢰할 수 없다, ExternalGitChange.commits 주석), 파일 목록은 두 트리의
-   *  비교라 어느 전이에서나 쓴다(gitRound 의 주석). */
-  readRange(repoPath: string, before: string, after: string): Promise<{ commits: string[]; changedFiles: string[] }>
+   *  다른 전이에서 부른다.** 돌려받은 셋의 쓰임은 다르다 — 커밋 목록과 author 목록은
+   *  fast-forward 에서만 쓰고(그 밖에는 범위를 신뢰할 수 없다, ExternalGitChange.commits 주석),
+   *  파일 목록은 두 트리의 비교라 어느 전이에서나 쓴다(gitRound 의 주석).
+   *
+   *  `authors` 가 선택인 것은 **구현이 그것 없이도 계약을 지키기 때문이다** — 이름은 표시용이고
+   *  (EG §7) 판정에 쓰이지 않는다. 실제 구현(gitProbe.readRange)은 늘 준다. */
+  readRange(
+    repoPath: string,
+    before: string,
+    after: string
+  ): Promise<{ commits: string[]; changedFiles: string[]; authors?: string[] }>
 }
 
 export interface CollectorDeps {
@@ -640,6 +647,9 @@ export class WorkUnitCollector {
         before,
         after,
         commits: type === 'fast-forward' ? range.commits : [],
+        // author 는 `git log before..after` 에서 오므로 **커밋과 같은 조건으로** 버린다 —
+        // 범위를 믿을 수 없는 전이에서 이름만 믿을 이유가 없다 (EG §6·§7)
+        authors: type === 'fast-forward' ? (range.authors ?? []) : [],
         changedFiles: range.changedFiles,
         detectedAt: this.nowIso()
       }

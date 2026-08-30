@@ -41,7 +41,7 @@ interface Fake {
     ref: GitRef
     files: string[]
     ancestor: boolean | null
-    range: { commits: string[]; changedFiles: string[] }
+    range: { commits: string[]; changedFiles: string[]; authors?: string[] }
   }
   sessions: CollectorSession[]
   clock: number
@@ -264,6 +264,40 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
     expect(state.externalGitChanges).toHaveLength(1)
     expect(state.externalGitChanges[0].commits).toEqual(['c1'])
     expect(state.externalGitChanges[0].changedFiles).toEqual(['a.txt', 'b.txt'])
+  })
+
+  // 바로 위 테스트와 같은 자리, 같은 이유다 — readRange 가 낸 author 목록이 실제로 기록까지
+  // threading 되는지는 이 자리 말고는 볼 데가 없다(gitProbe.test.ts 는 readRange 자신만 본다).
+  // 그리고 **커밋과 같은 조건으로 버리는지**를 함께 본다: `git log before..after` 에서 온 값이라
+  // fast-forward 밖에서는 커밋과 마찬가지로 뜻이 없다(EG §6·§7).
+  it('fast-forward 의 author 는 저장되고, 브랜치 전환의 author 는 버려진다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    collector.onGitChanged() // 기준선 (main, c0)
+    await collector.flush()
+
+    fake.git.range = { commits: ['c1'], changedFiles: ['pulled.ts'], authors: ['Kim', 'Lee'] }
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+
+    // HEAD 까지 옮긴 브랜치 전환 — 같은 range 를 돌려받아도 이름은 남지 않아야 한다
+    fake.git.ref = { branch: 'feature', head: 'c2' }
+    fake.git.ancestor = false
+    collector.onGitChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.externalGitChanges).toHaveLength(2)
+    expect(state.externalGitChanges[0].type).toBe('fast-forward')
+    expect(state.externalGitChanges[0].authors).toEqual(['Kim', 'Lee'])
+    expect(state.externalGitChanges[1].type).toBe('branch-switch')
+    expect(state.externalGitChanges[1].authors).toEqual([])
+    // 파일 목록은 두 트리의 비교라 브랜치 전환에서도 남는다 — 함께 버려지지 않았음을 못박는다
+    expect(state.externalGitChanges[1].changedFiles).toEqual(['pulled.ts'])
   })
 
   // 브랜치만 갈아타 HEAD 가 그대로면 견줄 트리가 하나뿐이라 범위를 아예 묻지 않는다.
@@ -853,6 +887,86 @@ describe('WorkUnitCollector — 배선 두 자리', () => {
     const state = second.store.get(projectPath)!
     expect(state.externalGitChanges).toHaveLength(1) // 변경 자체는 잡힌다 — 놓치지 않는다
     expect(state.units[0].encounteredExternalGitChangeIds).toEqual([])
+  })
+
+  // **위 둘은 귀속이 넓어지는 쪽을 막고, 아래 둘은 좁아지는 쪽을 막는다.** 가르는 줄은
+  // `gitRound` 의 `open.filter((u) => (u.git.endHead ?? u.git.startHead) === before.head)` 하나이고,
+  // 그 줄에는 틀릴 수 있는 방향이 둘 있다. 넓어지면 겪지도 않은 Unit 에 남의 변경이 달리고
+  // (위 두 테스트), 좁아지면 실제로 겪은 Unit 이 그것을 못 받는다 — 아래 둘이 그 두 갈래를 하나씩
+  // 짚는다. 지금까지는 임시 탐침으로만 확인하고 지웠던 자리다.
+
+  // **좁아지는 갈래 (1) — `?? u.git.startHead`.** 앱이 강제로 꺼지면 열린 Unit 은 `endHead` 가
+  // 없는 채로 디스크에 남는다(정상 종료의 onSessionExit 를 못 거쳤다). 그 Unit 이 앉아 있는 자리는
+  // 마지막 회차의 head 이고 그것은 저장된 스냅샷의 head 와 같으므로, 다시 켠 첫 회차가 잡는 변경은
+  // 이 Unit 이 **겪은** 것이 맞다(EG §27). 되짚음이 `endHead` 만 본다면 이 Unit 은 조용히 빠진다.
+  it('강제 종료로 endHead 가 비어 있던 Unit 도 다시 켠 뒤의 외부 변경을 받는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const first = await makeCollector(fake)
+    await first.collector.start()
+
+    // 열린 Unit 하나. HEAD 는 c0 이고 아직 어떤 회차도 endHead 를 채우지 않았다
+    await fs.appendFile(transcript, human('꺼지기 전에 시작한 작업'), 'utf8')
+    first.collector.onTranscriptChanged()
+    await first.collector.flush()
+    first.collector.onGitChanged() // 기준선 — 스냅샷이 c0 으로 남는다
+    await first.collector.flush()
+
+    const before = first.store.get(projectPath)!
+    expect(before.units[0].git.startHead).toBe('c0')
+    expect(before.units[0].git.endHead).toBeUndefined() // 강제 종료가 남기는 모양 그대로다
+    expect(before.units[0].status).toBe('active')
+
+    // 앱이 강제로 꺼진다 — onSessionExit 도 stop 도 부르지 않고 수집기를 그냥 버린다
+    fake.git.range = { commits: ['c1'], changedFiles: ['pulled.ts'] }
+    fake.git.ref = { branch: 'main', head: 'c1' }
+
+    const second = await makeCollector(fake)
+    await second.collector.start()
+    second.collector.onGitChanged()
+    await second.collector.flush()
+
+    const state = second.store.get(projectPath)!
+    expect(state.units).toHaveLength(1) // 같은 Unit 이다 — 다시 열린 것이 아니다
+    expect(state.externalGitChanges).toHaveLength(1)
+    expect(state.units[0].encounteredExternalGitChangeIds).toEqual([state.externalGitChanges[0].id])
+    // 그 변경이 들여온 파일은 여전히 이 Unit 이 만든 것이 아니다
+    expect(state.units[0].git.observedChangedFiles).toEqual([])
+  })
+
+  // **좁아지는 갈래 (2) — 회차마다 `endHead` 를 전진시키는 것.** 한 Unit 이 열려 있는 동안 남이
+  // 두 번 저장소를 옮기면 둘 다 그 Unit 이 겪은 것이다. 매 회차 `endHead` 가 after.head 로
+  // 전진하므로 다음 회차의 before.head 와 계속 맞는다 — 전진이 없으면 둘째부터 조용히 빠진다.
+  it('연속된 두 외부 변경이 열린 Unit 하나에 모두 달린다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, human('작업 하나'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    collector.onGitChanged() // 기준선 (main, c0)
+    await collector.flush()
+
+    fake.git.range = { commits: ['c1'], changedFiles: ['first.ts'] }
+    fake.git.ref = { branch: 'main', head: 'c1' } // 남의 pull 하나
+    collector.onGitChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.units[0].git.endHead).toBe('c1') // 전진했다
+
+    fake.git.range = { commits: ['c2'], changedFiles: ['second.ts'] }
+    fake.git.ref = { branch: 'main', head: 'c2' } // 이어서 또 하나
+    collector.onGitChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
+    expect(state.externalGitChanges).toHaveLength(2)
+    expect(state.units[0].encounteredExternalGitChangeIds).toEqual([
+      state.externalGitChanges[0].id,
+      state.externalGitChanges[1].id
+    ])
   })
 
   // WU §23 unit 8 의 배선. 순수 함수(completion.ts 의 onSessionEnd)는 그쪽 테스트가 덮지만,
