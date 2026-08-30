@@ -67,7 +67,8 @@ function makeFake(): Fake {
 
 async function makeCollector(
   fake: Fake,
-  file = storeFile
+  file = storeFile,
+  watchGit?: (projectPath: string) => Promise<() => Promise<void>>
 ): Promise<{ collector: WorkUnitCollector; store: WorkUnitStore }> {
   const store = new WorkUnitStore(file)
   await store.load()
@@ -78,7 +79,8 @@ async function makeCollector(
     listSessions: async () => fake.sessions,
     git: fake.git,
     now: () => fake.clock,
-    pendingGitOps: () => collector.getPendingGitOps()
+    pendingGitOps: () => collector.getPendingGitOps(),
+    watchGit
   })
   return { collector, store }
 }
@@ -140,6 +142,9 @@ describe('WorkUnitCollector — WU §23', () => {
     await collector.flush()
     const openedId = store.get(projectPath)!.units[0].id
 
+    // 에이전트가 그 요청을 받아 한 턴을 돈다 — 아래 세 커밋은 **이 세션이 만드는 것이다**
+    collector.onSessionBusy('s1', projectPath)
+
     for (const head of ['c1', 'c2', 'c3']) {
       fake.git.ref = { branch: 'main', head }
       collector.onGitChanged()
@@ -152,6 +157,10 @@ describe('WorkUnitCollector — WU §23', () => {
     expect(state.units[0].status).toBe('active')
     expect(state.units[0].git.startHead).toBe('c0')
     expect(state.units[0].git.endHead).toBe('c3')
+    // **이 테스트의 이름이 말하는 것을 코드도 말해야 한다.** 이 커밋들은 이 세션의 것이고, 남이
+    // 옮긴 저장소가 아니다. 외부 변경으로 기록되면 그 id 가 이 Unit 에 "겪은 것"으로 달리고,
+    // 다음 계획이 그 집합을 성과에서 빼면서 이 Unit 이 실제로 한 일을 지운다.
+    expect(state.externalGitChanges).toEqual([])
   })
 
   it('재시작 후 활성 Unit 이 복구된다', async () => {
@@ -438,6 +447,98 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
     const ops = collector.getPendingGitOps()
     expect(ops.some((o) => o.id === first)).toBe(true)
     expect(ops.some((o) => o.id === second)).toBe(true)
+  })
+})
+
+// ── 에이전트가 도는 동안의 HEAD 이동 (task 17) ──────────────────────────
+
+// 브랜치 전체 리뷰가 찾은 자리다. Astera 가 직접 돌린 동작만 원장에 있으니, **세션의 에이전트가
+// 터미널에 친 커밋**은 그 목록에 없어 외부 변경으로 기록되고 그 id 가 방금 그 커밋을 만든 Unit 에
+// "겪은 것"으로 달렸다. 다음 계획이 그 집합을 Unit 의 성과에서 빼도록 명세돼 있어, 그대로 두면
+// 그 Unit 이 실제로 한 일이 지워진다.
+describe('WorkUnitCollector — 세션이 바쁜 동안의 HEAD 이동', () => {
+  it('세션이 바쁜 동안 옮겨진 HEAD 는 외부 변경이 아니다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    collector.onGitChanged() // 기준선 (main, c0)
+    await collector.flush()
+
+    // 에이전트가 한 턴을 시작한다 — 그 안에서 커밋한다
+    collector.onSessionBusy('s1', projectPath)
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+
+    expect(store.get(projectPath)!.externalGitChanges).toEqual([])
+  })
+
+  // 실제 배선의 순서가 이것이다: 감시자의 awaitWriteFinish 와 수집기의 디바운스 때문에 `.git`
+  // 회차는 busy → false 보다 **뒤에** 온다. 유예가 없으면 이 자리가 전부 오판된다 —
+  // OPERATION_GRACE_MS 가 job-merge 에 있어야 하는 이유와 같은 이유, 같은 폭이다.
+  it('바쁜 구간이 끝난 직후의 이동도 유예 안에서는 그 세션의 것이다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    collector.onGitChanged() // 기준선
+    await collector.flush()
+
+    collector.onSessionBusy('s1', projectPath)
+    await collector.onSessionIdle('s1')
+    fake.clock += OPERATION_GRACE_MS - 1 // 아직 유예 안이다
+
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+
+    expect(store.get(projectPath)!.externalGitChanges).toEqual([])
+  })
+
+  it('바쁜 구간이 끝나고 유예가 지난 뒤의 이동은 외부다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    collector.onGitChanged() // 기준선
+    await collector.flush()
+
+    collector.onSessionBusy('s1', projectPath)
+    await collector.onSessionIdle('s1')
+    fake.clock += OPERATION_GRACE_MS + 1 // 유예 너머 — 이 이동은 그 턴의 것이 아니다
+
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+
+    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(1)
+  })
+
+  // **끝나지 않은 등록은 그 프로젝트의 모든 외부 변경을 조용히 삼킨다** — endGitOperation 의
+  // 주석이 "지어낸 외부 기록 하나보다 훨씬 나쁜 실패"라고 적어 둔 그것이다. 바쁜 채로 죽은 세션은
+  // 유휴 신호를 영영 보내지 않으므로, 종료가 그 자리를 대신 닫아야 한다.
+  it('바쁜 채로 끝난 세션의 등록도 닫힌다 — 외부 변경을 영영 삼키지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    collector.onGitChanged() // 기준선
+    await collector.flush()
+
+    collector.onSessionBusy('s1', projectPath)
+    await collector.onSessionExit('s1')
+    fake.clock += OPERATION_GRACE_MS + 1
+
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+
+    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(1)
   })
 })
 
@@ -996,5 +1097,69 @@ describe('WorkUnitCollector — 배선 두 자리', () => {
     expect(state.units[0].status).toBe('abandoned') // 관찰된 변경이 없었다
     expect(state.units[0].completedAt).toBeDefined()
     expect(state.cursors).toHaveLength(0) // 더 자랄 파일을 가리키지 않는 커서는 지운다
+  })
+})
+
+// ── 수집기 자신의 `.git` 감시자 (task 17) ──────────────────────────────
+
+// 지금까지 `.git` 방아쇠는 **탐색기 패널이 열려 있을 때만** 살아 있었다 — 그 감시자를 여닫는 것은
+// 렌더러의 useGitStatus 이고, 사이드바를 Jobs 로 바꾸면 git.unwatch 가 불려 수집기는 그 순간부터
+// git 이벤트를 하나도 받지 못했다(외부 변경도, 스냅샷 전진도, 새 Unit 의 startHead 도).
+// 트랜스크립트 쪽처럼 상시가 되려면 수명이 수집기의 start()/stop() 에 걸려야 한다.
+describe('WorkUnitCollector — 자기 git 감시자', () => {
+  /** 감시 요청과 닫기만 적는 가짜. 진짜 GitWatcher(chokidar)는 여기까지 오지 않는다 —
+   *  만드는 일을 주입으로 남긴 이유가 이것이다 */
+  const spyWatcher = (): {
+    watched: string[]
+    closed: string[]
+    watchGit: (p: string) => Promise<() => Promise<void>>
+  } => {
+    const watched: string[] = []
+    const closed: string[] = []
+    return {
+      watched,
+      closed,
+      watchGit: async (p: string) => {
+        watched.push(p)
+        return async () => {
+          closed.push(p)
+        }
+      }
+    }
+  }
+
+  it('켜면 세션의 프로젝트를 보고, 끄면 닫는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const spy = spyWatcher()
+    const { collector } = await makeCollector(fake, storeFile, spy.watchGit)
+
+    expect(spy.watched).toEqual([]) // 토글이 꺼져 있으면 띄우지 않는다
+
+    await collector.start()
+    expect(spy.watched).toEqual([projectPath])
+
+    await collector.flush() // 회차가 더 돌아도 같은 프로젝트를 두 번 열지 않는다
+    expect(spy.watched).toEqual([projectPath])
+
+    await collector.stop()
+    expect(spy.closed).toEqual([projectPath])
+  })
+
+  it('세션이 사라진 프로젝트의 감시자는 닫는다', async () => {
+    const fake = makeFake()
+    const other = path.join(dir, 'other')
+    fake.sessions = [
+      session(),
+      session({ sessionId: 's2', projectPath: other, transcriptPath: null })
+    ]
+    const spy = spyWatcher()
+    const { collector } = await makeCollector(fake, storeFile, spy.watchGit)
+    await collector.start()
+    expect([...spy.watched].sort()).toEqual([other, projectPath].sort())
+
+    fake.sessions = [session()] // s2 가 끝났다 — 그 프로젝트에는 볼 세션이 남지 않았다
+    await collector.flush()
+    expect(spy.closed).toEqual([other])
   })
 })

@@ -4,13 +4,19 @@
 // (provenance.ts)의 판정은 전부 core 의 순수 함수이고, 이 파일은 그것을 잇는 껍데기다. 이 저장소가
 // main 의 배선에 판단을 두지 않는 이유는 humanRequest.ts 의 `titleOf` 주석에 적혀 있다.
 //
-// **감시자를 만들지 않는다.** `.git` 감시자도 트랜스크립트 감시자도 ipc.ts 가 이미 들고 있고,
-// 그쪽이 여기 방아쇠 메서드를 부른다. 그래서 이 수집기는 감시자 없이, 임시 파일과 가짜 git 만으로
-// 전부 테스트된다(collector.test.ts).
+// **감시자를 만들지는 않되 `.git` 감시자의 수명은 이 수집기가 쥔다.** 트랜스크립트 쪽은 ipc.ts 가
+// 이미 상시로 들고 있고(HistoryIndex 가 창이 뜬 뒤 한 번 켜져 프로세스가 사는 동안 본다) 그쪽이
+// 여기 방아쇠 메서드를 부른다. `.git` 쪽은 그렇지 않았다 — 탐색기 패널의 감시자를 얻어 타고 있었고,
+// 그것은 사이드바가 탐색기일 때만 살아 있어 패널을 Jobs 로 바꾸면 수집기가 git 이벤트를 하나도 받지
+// 못했다(외부 변경도, 스냅샷 전진도, 새 Unit 의 startHead 도). 그래서 이 수집기가 프로젝트마다
+// 하나씩 자기 감시자를 들고 `start()`/`stop()` 에 그 수명을 건다(`syncWatchers`·`closeAll`).
+// **만드는 일만 주입받는다**(`deps.watchGit`) — 그래서 이 수집기는 여전히 감시자 없이, 임시 파일과
+// 가짜 git 만으로 전부 테스트된다(collector.test.ts).
 //
 // **주기적 폴링이 없다.** 방아쇠는 넷뿐이다 — 트랜스크립트 변경 · `.git` 변경 · 세션 유휴 ·
 // 세션 종료. EG §25 가 "지나치게 짧은 polling 은 피한다"고 했고 설계 §16 이 이 넷으로 충분하다고
-// 적었다. (`onSessionForked` 는 다섯째 방아쇠가 아니다 — 회차를 돌리지 않고 커서만 잡는다.)
+// 적었다. (`onSessionForked` 와 `onSessionBusy` 는 다섯째·여섯째 방아쇠가 아니다 — 회차를 돌리지
+// 않고 각각 커서와 등록만 잡는다.)
 //
 // **codex 세션에서는 Unit 이 만들어지지 않는다.** 빠뜨린 것이 아니라 형식의 성질이다. 사람의
 // 요청을 가리는 판정(humanRequest.ts)은 레코드의 구조 표지 — `type:'user'` · `toolUseResult` ·
@@ -86,12 +92,22 @@ export interface CollectorDeps {
    *  디바운스의 상한도 이 값으로 잰다(`arm`). 시계를 밖에서 주면 테스트가 그 값들을 고정된 값으로
    *  확인할 수 있다. */
   now: () => number
-  /** Astera 가 지금 돌리고 있는 git 동작들 (EG §26). ipc.ts 는 이 수집기 자신의
-   *  `getPendingGitOps()` 를 그대로 넘긴다 — 그 목록은 `beginGitOperation`/`endGitOperation` 이
-   *  채운다(ipc.ts 의 job-merge 자리가 부른다). 주입 가능하게 남겨 둔 이유는 테스트가 가짜 목록으로
+  /** 지금 열려 있는 등록들 (EG §26) — Astera 자신의 git 동작과 세션이 바쁜 구간, 둘 다다. ipc.ts 는
+   *  이 수집기 자신의 `getPendingGitOps()` 를 그대로 넘긴다 — 그 목록은
+   *  `beginGitOperation`/`endGitOperation` 이 채운다(ipc.ts 의 job-merge 자리와 `onSessionBusy` 가
+   *  부른다). 주입 가능하게 남겨 둔 이유는 테스트가 가짜 목록으로
    *  유예 경계(이 파일의 collector.test.ts)와 판정 자체(provenance.test.ts)를 각각 따로 확인할 수
    *  있게 하기 위해서다. 넘기지 않으면(`undefined`) 빈 목록으로 본다. */
   pendingGitOps?: () => readonly PendingGitOperation[]
+  /** 프로젝트 하나의 `.git` 을 보기 시작한다. 돌려주는 함수가 그 감시를 닫는다.
+   *
+   *  **만드는 일만 밖에 둔다.** 수명은 이 수집기의 `start()`/`stop()` 이 쥐고(`syncWatchers`·
+   *  `closeAll`), 무엇을 볼지도 이 수집기가 정한다(`listSessions()` 가 주는 프로젝트들). 만드는
+   *  일까지 여기 두면 이 파일이 chokidar 를 끌고 오고, 그러면 감시자 없이 전부 테스트한다는
+   *  이 파일의 전제가 깨진다 — `git`·`now` 를 주입받는 것과 같은 이유다.
+   *
+   *  넘기지 않으면 감시하지 않는다. 그때 `.git` 방아쇠는 밖에서 오는 `onGitChanged()` 뿐이다. */
+  watchGit?: (projectPath: string) => Promise<() => Promise<void>>
   log?: (m: string) => void
 }
 
@@ -154,6 +170,13 @@ export class WorkUnitCollector {
    *  채운다. **지우지 않는다** — provenance.ts 의 유예가 끝난 동작을 보고 판단하기 때문이다. 재시작하면
    *  사라지는 메모리 목록이다(디스크에 남기지 않는다 — 동작은 늘 이 실행 안에서 시작하고 끝난다). */
   private pendingOps: PendingGitOperation[] = []
+  /** 지금 바쁜 세션마다 그 구간의 등록 id (`onSessionBusy` 가 넣고 `onSessionIdle`·`onSessionExit`
+   *  이 닫는다). **`closeAll` 이 비우지 않는다** — 추적을 끄는 사이에 유휴가 와도 그 등록을 찾아
+   *  닫을 수 있어야 하고, 그것이 `endGitOperation` 이 토글과 무관하게 항상 닫는 이유와 같다. */
+  private busyOps = new Map<string, string>()
+  /** 이 수집기가 세워 둔 `.git` 감시자들 — 프로젝트마다 하나이고, 값은 그것을 닫는 함수다.
+   *  `syncWatchers` 가 채우고 `closeAll` 이 비운다. */
+  private gitWatches = new Map<string, () => Promise<void>>()
 
   constructor(private deps: CollectorDeps) {}
 
@@ -198,8 +221,9 @@ export class WorkUnitCollector {
 
   // ── Astera 자신의 git 동작 등록 (EG §26) ───────────────────────────────
 
-  /** Astera 자신의 git 조작을 시작하기 **직전에** 등록한다 — ipc.ts 의 job-merge 자리가 부른다.
-   *  `startedAt` 은 주입된 시각(deps.now)을 쓴다. **꺼져 있으면 아무 일도 하지 않는다** — 부르는
+  /** "이 이동은 이 앱 안에서 벌어진 일이다"라고 말할 구간 하나를 등록한다. 부르는 자리가 둘이다 —
+   *  Astera 자신의 git 조작을 시작하기 **직전에**(ipc.ts 의 job-merge 자리)와, 세션이 바빠진
+   *  순간(`onSessionBusy`). `startedAt` 은 주입된 시각(deps.now)을 쓴다. **꺼져 있으면 아무 일도 하지 않는다** — 부르는
    *  쪽이 토글을 신경 쓰지 않아도 된다(`endGitOperation` 이 토글과 무관하게 항상 닫는 것으로 그 몫까지
    *  진다 — 아래 주석).
    *
@@ -253,8 +277,56 @@ export class WorkUnitCollector {
     this.arm()
   }
 
-  /** 에이전트가 한 턴을 끝냈다 (session:busy → false). 상태 변화에만 오므로 디바운스하지 않는다 */
+  /** 에이전트가 한 턴을 시작했다 (session:busy → true). **그 구간을 등록 목록에 넣는다.**
+   *
+   *  **왜 이것이 필요한가.** 원장(`pendingOps`)에는 Astera 가 직접 돌린 git 동작만 들어 있었다.
+   *  그런데 `.git` 감시자는 애초에 **에이전트가** 세션 터미널에서 친 커밋을 보라고 만든 것이고
+   *  (ipc.ts 의 그 감시자 주석), 그 커밋은 Astera 가 돌린 것이 아니라 등록될 자리가 없었다. 그래서
+   *  세션 자신의 커밋이 외부 변경으로 기록되고, 그 id 가 방금 그 커밋을 만든 Unit 에 "겪은 것"으로
+   *  달렸다 — 다음 계획이 그 집합을 Unit 의 성과에서 빼도록 명세돼 있으므로, 그대로 두면 그 Unit 이
+   *  실제로 한 일이 지워진다.
+   *
+   *  **새 감지를 만들지 않는다.** 커밋을 미리 등록할 수는 없다 — Astera 가 돌리는 것이 아니다.
+   *  대신 앱이 이미 아는 신호를 쓴다: `session:busy` 다. 설계 §6 이 그것을 완료 신호로 이미 신뢰하고,
+   *  ipc.ts 가 이미 수집기에 전달한다. **어떤 프로젝트에서 HEAD 가 움직였는데 그 프로젝트의 세션이
+   *  방금까지 바쁜 상태였다면 그 이동은 그 세션의 것이다.**
+   *
+   *  **`PendingGitOperation` 으로 만들어 같은 목록에 넣는다.** `kind` 의 `'commit'` 은 이 브랜치
+   *  내내 아무도 만들지 않는 값이었다 — 그 이름이 있던 이유가 이것이다. 판정도 유예도
+   *  `isAsteraOperation` 하나를 그대로 쓴다: 바쁜 구간은 "아직 도는 중"(endedAt 없음)이고, 끝난
+   *  구간은 `OPERATION_GRACE_MS` 만큼 더 그 세션의 것이다. 유예가 같은 폭인 이유도 같다 —
+   *  감시자의 awaitWriteFinish 와 이 파일의 디바운스 때문에 `.git` 회차는 busy → false 보다 **뒤에**
+   *  오고, 그 순서 역전이 유예 없이는 전부 오판된다.
+   *
+   *  **틀리는 방향을 골랐다.** 에이전트가 일하는 동안 들어온 **진짜** 외부 pull 은 이 규칙이
+   *  놓친다. 반대(자기 커밋을 남의 것으로 기록)보다 낫다 — 놓친 외부 기록은 줄 하나지만, 잘못 붙은
+   *  기록은 다음 계획이 그 Unit 의 성과를 지우게 만든다.
+   *
+   *  `projectPath` 를 인자로 받는다: 이 수집기의 `known` 은 회차가 돌아야 채워지는데, 세션의 첫
+   *  턴은 그 회차보다 먼저 바빠질 수 있다. 그 값을 확실히 아는 쪽(ipc.ts 의 세션 목록)이 준다. */
+  onSessionBusy(sessionId: string, projectPath: string): void {
+    if (this.busyOps.has(sessionId)) return // 이미 열려 있다 — 같은 구간을 두 번 등록하지 않는다
+    const id = this.beginGitOperation('commit', projectPath)
+    if (id !== '') this.busyOps.set(sessionId, id) // 꺼져 있으면 '' 이고, 그때는 들 것이 없다
+  }
+
+  /** 그 세션의 바쁜 구간을 닫는다. **유휴와 종료 둘 다에서 부른다** — 바쁜 채로 죽은 세션은 유휴
+   *  신호를 영영 보내지 않고, 끝나지 않은 등록 하나가 그 프로젝트의 **모든** 외부 변경을 조용히
+   *  삼킨다(`endGitOperation` 의 주석이 적은, 지어낸 기록 하나보다 훨씬 나쁜 실패). */
+  private endBusyOperation(sessionId: string): void {
+    const id = this.busyOps.get(sessionId)
+    if (id === undefined) return
+    this.busyOps.delete(sessionId)
+    this.endGitOperation(id)
+  }
+
+  /** 에이전트가 한 턴을 끝냈다 (session:busy → false). 상태 변화에만 오므로 디바운스하지 않는다.
+   *
+   *  **등록을 닫는 것은 큐 밖에서, 지금 한다** — `endedAt` 은 유예를 재는 값이라 실제로 유휴가 된
+   *  그 순간이어야 하고, 큐 안에서 닫으면 앞선 회차가 끝날 때까지 밀린다. `endGitOperation` 이
+   *  토글과 무관하게 닫는 것과 같은 이유로 `running` 도 보지 않는다. */
   onSessionIdle(sessionId: string): Promise<void> {
+    this.endBusyOperation(sessionId)
     return this.enqueue(async () => {
       if (!this.running) return
       await this.round(false) // 유휴 판정 전에 그 턴이 남긴 줄까지 따라잡는다
@@ -316,6 +388,7 @@ export class WorkUnitCollector {
 
   /** 세션이 끝났다 (WU §14-4). 관찰이 여기서 멈추므로 후보로 남기지 않는다 */
   onSessionExit(sessionId: string): Promise<void> {
+    this.endBusyOperation(sessionId) // 바쁜 채로 죽었을 수 있다 — 유휴와 같은 자리, 같은 이유다
     return this.enqueue(async () => {
       if (!this.running) return
       await this.round(false)
@@ -373,6 +446,7 @@ export class WorkUnitCollector {
       await this.seed(sessions)
       return
     }
+    await this.syncWatchers(sessions)
     for (const [projectPath, group] of groupByProject(sessions)) {
       const state = this.stateOf(projectPath)
       let dirty = false
@@ -416,6 +490,54 @@ export class WorkUnitCollector {
       await this.persist(projectPath, state)
     }
     this.seeded = true
+    // 켠 자리에서 바로 세운다. 여기서 하지 않으면 첫 `.git` 감시는 다음 회차까지 미뤄지는데,
+    // 회차를 부르는 방아쇠 자체가 감시자에서 오는 경우가 있어 영영 오지 않을 수 있다
+    await this.syncWatchers(sessions)
+  }
+
+  /** 세션이 있는 프로젝트마다 `.git` 감시자를 하나씩 세우고, 볼 세션이 없어진 프로젝트의 것은 닫는다.
+   *
+   *  **왜 수집기가 자기 감시자를 드는가.** `.git` 방아쇠는 탐색기 패널의 감시자를 얻어 타고 있었고,
+   *  그것은 사이드바가 탐색기일 때만 살아 있다(렌더러의 `useGitStatus` 가 언마운트에서
+   *  `git.unwatch` 를 부른다). 패널을 Jobs 로 바꾸면 수집기는 그 순간부터 git 이벤트를 하나도 받지
+   *  못했다 — 외부 변경도, 스냅샷 전진도, 새 Unit 의 `startHead` 도. 트랜스크립트 쪽
+   *  (`HistoryIndex.startBackground`)은 창이 뜬 뒤 한 번 켜져 프로세스가 사는 동안 계속 보는데,
+   *  설계 §16 의 그림은 둘을 나란한 상시 방아쇠로 그렸다. 그래서 이쪽도 그렇게 만든다.
+   *
+   *  **프로젝트마다 하나씩 든다.** `GitWatcher` 는 한 번에 한 곳만 보고 `watch()` 가 앞의 것을
+   *  닫으므로, 여러 경로를 받게 넓히면 그 "앞의 것을 닫는다"에 기대고 있는 기존 사용처(탐색기가
+   *  프로젝트를 옮길 때 `git.watch` 를 다시 부르는 자리)의 계약이 함께 바뀐다. 그쪽은 렌더러의
+   *  것이고 지금 잘 도니 건드리지 않는다.
+   *
+   *  **직렬화는 회차 고리가 이미 해 준다** — 부르는 자리(`round`·`seed`)가 둘 다 `enqueue` 안이라
+   *  두 syncWatchers 가 겹치지 않고, 그래서 같은 프로젝트를 두 번 여는 경우가 없다. */
+  private async syncWatchers(sessions: readonly CollectorSession[]): Promise<void> {
+    const watch = this.deps.watchGit
+    if (!watch) return
+    const wanted = new Set(sessions.map((s) => s.projectPath))
+    for (const [projectPath, stop] of [...this.gitWatches]) {
+      if (wanted.has(projectPath)) continue
+      this.gitWatches.delete(projectPath)
+      await this.stopWatch(projectPath, stop)
+    }
+    for (const projectPath of wanted) {
+      if (this.gitWatches.has(projectPath)) continue
+      try {
+        this.gitWatches.set(projectPath, await watch(projectPath))
+      } catch (e) {
+        // 저장소가 아니거나 감시를 걸 수 없었다. **회차를 멈추지 않는다** — 이 프로젝트만 조용히
+        // 빠지고, 다음 회차가 다시 시도한다
+        this.log(`git watch failed ${projectPath}: ${String(e)}`)
+      }
+    }
+  }
+
+  private async stopWatch(projectPath: string, stop: () => Promise<void>): Promise<void> {
+    try {
+      await stop()
+    } catch (e) {
+      this.log(`git unwatch failed ${projectPath}: ${String(e)}`)
+    }
   }
 
   /** 한 세션의 트랜스크립트를 뒤만 읽고, 거기서 나온 사람의 요청을 경계 규칙에 먹인다 */
@@ -624,6 +746,10 @@ export class WorkUnitCollector {
     // samePath: 등록 쪽(ipc.ts 의 mergeInto)과 이 projectPath(세션의 cwd 에서 뽑았다)는 따로
     // 기록되어 대소문자·구분자가 다를 수 있다(provenance.ts 의 isAsteraOperation 주석). 그 비교를
     // provenance.ts 는 직접 하지 못하므로(node: 없음) 여기서 isSamePath 를 넘긴다.
+    //
+    // **이 목록에는 두 종류가 들어 있다** — Astera 가 직접 돌린 동작(`job-merge`)과 세션이 바빴던
+    // 구간(`commit`, onSessionBusy). 둘 다 "이 이동은 이 앱 안에서 벌어진 일이다"라는 같은 뜻이고,
+    // 판정은 그 구분을 하지 않는다.
     if (!isAsteraOperation(projectPath, this.deps.now(), this.ops(), OPERATION_GRACE_MS, isSamePath)) {
       // **돌려받은 둘은 믿을 수 있는 정도가 다르고, 그래서 버리는 것도 한쪽뿐이다.**
       // `git log before..after` 는 fast-forward 가 아니면 뜻이 없다 — 그 밖의 전이에서 이 범위를
@@ -685,6 +811,12 @@ export class WorkUnitCollector {
       if (dirty) await this.persist(projectPath, state)
     }
     this.known.clear()
+    // 이 수집기가 세운 `.git` 감시자를 전부 닫는다 — 수명이 이 토글에 걸려 있다는 것이 그 뜻이다.
+    // **탐색기의 감시자는 여기 없다**: 그것은 렌더러가 열고 닫는 다른 감시자다.
+    for (const [projectPath, stop] of [...this.gitWatches]) {
+      this.gitWatches.delete(projectPath)
+      await this.stopWatch(projectPath, stop)
+    }
     // 이 실행의 캐시만 비운다. **저장된 스냅샷은 건드리지 않는다** — 커서와 반대 방향의 규칙이고
     // 그것이 맞다: 커서에 걸린 약속은 "켜기 전의 대화는 읽지 않는다"(스펙 §16.1)이고 스냅샷에 걸린
     // 약속은 "실제로 일어난 변화를 놓치지 않는다"(EG §41-10)다. 대화는 사람의 말이고 저장소의

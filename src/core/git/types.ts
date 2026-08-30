@@ -37,7 +37,11 @@ export interface ExternalGitChange {
   detectedAt: string
 }
 
-/** EG §26. Astera 가 git 을 건드리기 **직전에** 등록하고 끝나면 endedAt 을 채운다 */
+/** EG §26. HEAD 가 움직였을 때 **그 이동이 이 앱 안에서 벌어진 일임을 말해 주는 등록**이고, 끝나면
+ *  endedAt 을 채운다. 두 종류가 들어온다 — Astera 자신이 git 을 건드리기 **직전에** 등록하는 것
+ *  (`job-merge`)과, 세션의 에이전트가 한 턴을 도는 구간(`commit`, main/workUnit/collector.ts 의
+ *  `onSessionBusy`). 뒤쪽은 미리 등록할 수 없어서(에이전트의 커밋을 Astera 가 예고할 길이 없다)
+ *  구간으로 대신 잡는다. */
 export interface PendingGitOperation {
   id: string
   kind: 'job-merge' | 'checkout' | 'commit' | 'other'

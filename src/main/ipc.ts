@@ -417,10 +417,20 @@ export function registerIpc(
       scheduler?.handleBusy(e.sessionId, busy) // releases a schedule that is waiting on idle
       // 에이전트가 한 턴을 끝냈다 — Work Unit 의 완료 후보 판정이 여기서 시작한다 (WU §14-1).
       // 수집기가 꺼져 있으면 이 호출은 아무 일도 하지 않는다.
-      if (!busy)
+      //
+      // **시작 쪽도 함께 알린다.** 그 구간 안에서 옮겨진 HEAD 는 **이 세션이 만든 것**이고, 그것을
+      // 알려 주는 신호가 앱에는 이것 하나뿐이다 — 에이전트가 터미널에 치는 커밋을 Astera 가 미리
+      // 등록할 길은 없다(수집기의 onSessionBusy 주석). cwd 를 여기서 찾는 이유도 같다: 세션의 첫
+      // 턴은 수집기의 첫 회차보다 먼저 바빠질 수 있어, 그 값을 확실히 아는 쪽이 준다
+      // (orchIsBusy 가 같은 목록을 같은 방식으로 뒤진다 — busy 가 **바뀔 때만** 도는 자리다).
+      if (busy) {
+        const cwd = core.sessions.list().find((x) => x.id === e.sessionId)?.cwd
+        if (cwd !== undefined) workUnitCollector.onSessionBusy(e.sessionId, cwd)
+      } else {
         void workUnitCollector
           .onSessionIdle(e.sessionId)
           .catch((err) => orchLog(`work unit idle failed: ${String(err)}`))
+      }
     }
     try {
       slack?.notifier.handleData(e) // limit detection for non-rolling sessions
@@ -3088,6 +3098,17 @@ export function registerIpc(
     git: { readRef: readGitRef, isAncestor: isAncestorOf, changedFiles: readChangedFiles, readRange },
     now: () => Date.now(),
     pendingGitOps: () => workUnitCollector.getPendingGitOps(),
+    // **수집기가 자기 `.git` 감시자를 갖는다.** 아래(git.watch)의 감시자는 탐색기의 것이고,
+    // 탐색기 패널이 떠 있을 때만 산다 — 렌더러의 useGitStatus 가 언마운트에서 git.unwatch 를
+    // 부르므로, 사이드바를 Jobs 로 바꾸면 수집기는 git 이벤트를 하나도 받지 못했다. 트랜스크립트
+    // 쪽(core.history 의 HistoryIndex)이 창이 뜬 뒤 계속 보는 것과 나란한 상시 방아쇠가 되도록,
+    // 수명이 수집기의 start()/stop() 에 걸린 감시자를 프로젝트마다 하나씩 여기서 만들어 준다.
+    // 무엇을 볼지·언제 닫을지는 수집기가 정한다(그쪽의 syncWatchers).
+    watchGit: async (projectPath) => {
+      const w = new GitWatcher(() => workUnitCollector.onGitChanged(), orchLog)
+      await w.watch(projectPath)
+      return () => w.close()
+    },
     log: orchLog
   })
   // 토글이 꺼져 있으면 시작하지 않는다. **load 뒤로 미룬다** — 먼저 시작하면 수집기가 쓴 상태를
@@ -3269,8 +3290,11 @@ export function registerIpc(
   })
 
   // Watches only the git dir's index and HEAD, narrowly, so a commit made from a session terminal still refreshes the explorer.
-  // The Work Unit collector rides along: the callback carries no payload — it only says something in
-  // the git dir moved — so the collector re-reads the repository itself to learn what happened.
+  // **This one belongs to the explorer**: the renderer opens it on mount and closes it on unmount, so it
+  // is alive only while the sidebar shows the explorer pane. The Work Unit collector no longer depends
+  // on it — it holds its own watcher, whose lifetime is its own start()/stop() (see watchGit above).
+  // The nudge below stays because it costs nothing (the collector debounces, and a project it has no
+  // session in produces an empty round) and it reaches the collector before its own watcher settles.
   const gitWatcher = new GitWatcher(() => {
     send('git:changed', undefined)
     workUnitCollector.onGitChanged()

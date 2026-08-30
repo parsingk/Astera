@@ -20,6 +20,11 @@ const ms = (iso: string | undefined): number | null => {
 }
 
 /**
+ * **`ops` 에는 두 종류가 들어온다.** Astera 자신이 돌린 git 동작(`job-merge`)과, 세션의 에이전트가
+ * 한 턴을 돌던 구간(`commit`, main/workUnit/collector.ts 의 `onSessionBusy`) — 둘 다 "이 이동은 이
+ * 앱 안에서 벌어진 일이다"라는 같은 뜻이라 이 함수는 그 구분을 하지 않는다. 유예도 같다: 뒤쪽에서도
+ * `.git` 이벤트가 구간이 닫힌 뒤에 도착하는 순서 역전이 그대로 일어난다.
+ *
  * `projectPath`(수집기가 세션의 cwd 에서 뽑은 값)와 `o.projectPath`(등록 자리가 넘긴 값, 예:
  * ipc.ts 의 job-merge 가 넘기는 mergeInto = run.worktree ?? run.cwd)는 **따로 기록된다** — 이
  * 저장소의 다른 곳(core/orchestration/integrate.ts 의 worktreeDeps 주석)이 이미 같은 문제를
