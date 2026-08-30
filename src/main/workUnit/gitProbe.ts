@@ -3,8 +3,9 @@ import { git } from '../../core/worktrees/git'
 import { parsePorcelainZ } from '../../core/git/status'
 import type { GitRef } from '../../core/git/types'
 
-/** 감시 고리(gitWatcher) 안에서 도는 호출은 매달리면 안 된다 — `readChangedFiles` 도 `readRange` 도
- *  같은 회차(gitRound) 안에서 불린다. ipc.ts 의 git.status 와 같은 값. */
+/** 감시 고리(gitWatcher) 안에서 도는 호출은 매달리면 안 된다 — 이 파일의 함수 넷이 전부 같은
+ *  회차(gitRound) 안에서 불리므로 넷 다 이 값을 쓴다. 어댑터 기본값(30초)을 쓰면 git 하나가
+ *  매달릴 때 수집기의 직렬 큐 전체가 그만큼 선다. ipc.ts 의 git.status 와 같은 값. */
 const WATCH_ROUND_TIMEOUT_MS = 5_000
 
 /** 감시 고리(gitWatcher)에서 불린다 — 여기서 던지면 고리 전체가 멈춘다. 그래서 절대 던지지 않고,
@@ -16,8 +17,9 @@ const WATCH_ROUND_TIMEOUT_MS = 5_000
  *  주지 않는다. `symbolic-ref --short HEAD` 는 그 경우에도 "main" 을 답하고, HEAD 가 심볼릭
  *  ref 가 아닌 detached 상태에서는 그대로 실패해 null 이 된다 — 이 함수가 원하는 모양 그대로다. */
 export async function readGitRef(repoPath: string): Promise<GitRef> {
-  const branchResult = await git(['symbolic-ref', '--short', 'HEAD'], { cwd: repoPath })
-  const headResult = await git(['rev-parse', 'HEAD'], { cwd: repoPath })
+  const opts = { cwd: repoPath, timeoutMs: WATCH_ROUND_TIMEOUT_MS }
+  const branchResult = await git(['symbolic-ref', '--short', 'HEAD'], opts)
+  const headResult = await git(['rev-parse', 'HEAD'], opts)
   const branch = branchResult.ok ? branchResult.stdout : null
   const head = headResult.ok ? headResult.stdout : null
   return { branch, head }
@@ -38,11 +40,12 @@ export async function isAncestorOf(
 ): Promise<boolean | null> {
   if (before === null || after === null) return null
 
-  const beforeExists = await git(['cat-file', '-e', `${before}^{commit}`], { cwd: repoPath })
-  const afterExists = await git(['cat-file', '-e', `${after}^{commit}`], { cwd: repoPath })
+  const opts = { cwd: repoPath, timeoutMs: WATCH_ROUND_TIMEOUT_MS }
+  const beforeExists = await git(['cat-file', '-e', `${before}^{commit}`], opts)
+  const afterExists = await git(['cat-file', '-e', `${after}^{commit}`], opts)
   if (!beforeExists.ok || !afterExists.ok) return null
 
-  return (await git(['merge-base', '--is-ancestor', before, after], { cwd: repoPath })).ok
+  return (await git(['merge-base', '--is-ancestor', before, after], opts)).ok
 }
 
 /**

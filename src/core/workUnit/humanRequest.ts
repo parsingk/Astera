@@ -14,7 +14,9 @@
 //
 // history/parser.ts 는 건드리지 않는다: 히스토리 목록은 promptSource 가 없던 시절의 옛 기록도
 // 다루므로 그쪽은 문자열 판정이 여전히 맞다. 두 벌인 이유가 이것이다.
-// (toTitle 은 그 파일에서 가져다 쓴다 — 그것은 문자열 다듬기이지 판정이 아니다.)
+// (toTitle 은 그 파일에서 가져다 쓴다 — 그것은 문자열 다듬기이지 판정이 아니다. 다만 그 파일이
+// node:fs 를 최상위에서 import 하므로, 이 모듈을 렌더러 번들에 넣으려면 toTitle 을 잎 모듈로
+// 먼저 올려야 한다 — 지금 렌더러는 이 파일을 import 하지 않아 문제가 없다.)
 import { toTitle } from '../history/parser'
 
 /** `promptSource` 가 이 넷 중 하나여야 사람의 요청이다.

@@ -116,11 +116,6 @@ export class WorkUnitStore {
     return this.save()
   }
 
-  remove(projectPath: string): Promise<void> {
-    delete this.state.projects[projectPath]
-    return this.save()
-  }
-
   private save(): Promise<void> {
     const snapshot = JSON.stringify(this.state, null, 2)
     const run = async (): Promise<void> => {

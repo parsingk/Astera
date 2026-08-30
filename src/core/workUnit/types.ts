@@ -27,6 +27,15 @@ export interface SessionWorkUnit {
   git: {
     startHead: string | null
     endHead?: string | null
+    /** Unit 이 열릴 때 **이미 더러웠던** 파일들. observe 는 이 목록에 없는 파일만 센다.
+     *
+     *  이것이 없으면 관찰이 "작업 트리 전체의 더러움"이 된다 — 앞 Unit 이 고쳐 놓고 커밋하지
+     *  않은 파일이 다음 Unit 에도 세어져, 파일을 하나도 안 바꾼 질문 Unit 이 `completed` 로
+     *  확정된다. 설계 §6 이 이 신호를 "git 스냅샷 **비교**"라 부른 이유가 이것이고, §7 의
+     *  "관찰된 변경이 없는 Unit 은 abandoned"(WU §4.5 의 근사)가 서는 것도 이 비교 위에서다.
+     *  선택 필드인 이유: 이 필드가 생기기 전에 저장된 Unit 은 기준선이 없고, 그때는 전처럼
+     *  전부 센다 — 넓게 세는 쪽이 좁게 세는 쪽보다 안전하다(잃는 것이 없다). */
+    baselineDirtyFiles?: string[]
     /** **이 구간에 관찰된** 변경. 이 Unit 이 만들었다는 뜻이 아니다 (스펙 §11) */
     observedChangedFiles: string[]
   }

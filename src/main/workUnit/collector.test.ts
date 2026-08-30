@@ -111,15 +111,16 @@ describe('WorkUnitCollector — WU §23', () => {
   it('커밋이 없어도 정상 동작한다', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
-    // 이 세션은 커밋을 한 번도 만들지 않는다 — HEAD 는 처음부터 끝까지 c0 이다.
-    // 바뀌는 것은 작업 트리뿐이고, 그것이 관찰된 변경의 전부다.
-    fake.git.files = ['src/login.ts']
     const { collector, store } = await makeCollector(fake)
     await collector.start()
 
     await fs.appendFile(transcript, human('로그인 기능 만들어줘'), 'utf8')
     collector.onTranscriptChanged()
     await collector.flush()
+    // 이 세션은 커밋을 한 번도 만들지 않는다 — HEAD 는 처음부터 끝까지 c0 이다.
+    // 바뀌는 것은 작업 트리뿐이고, **Unit 이 열린 뒤에** 바뀐다 — 열릴 때 잡는 기준선 너머의
+    // 변경만 그 Unit 의 관찰이다
+    fake.git.files = ['src/login.ts']
     await collector.onSessionIdle('s1')
 
     const state = store.get(projectPath)!
@@ -194,12 +195,12 @@ describe('WorkUnitCollector — WU §23', () => {
   it('재시작 뒤 첫 경계에서도 앞 Unit 의 endHead 가 채워진다', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
-    fake.git.files = ['src/a.ts'] // 관찰된 변경이 있어야 유휴가 완료 후보를 만든다
     const first = await makeCollector(fake)
     await first.collector.start()
     await fs.appendFile(transcript, human('첫 작업'), 'utf8')
     first.collector.onTranscriptChanged()
     await first.collector.flush()
+    fake.git.files = ['src/a.ts'] // Unit 이 연 뒤의 변경이어야 관찰로 세어 유휴가 완료 후보를 만든다
     await first.collector.onSessionIdle('s1')
     expect(first.store.get(projectPath)!.units[0].status).toBe('completed-candidate')
 
@@ -699,7 +700,6 @@ describe('WorkUnitCollector — 스펙 §16.1 커서', () => {
   it('껐다 켜면 이전 커서를 버리고 그 순간의 끝을 다시 잡는다', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
-    fake.git.files = ['src/a.ts']
     const { collector, store } = await makeCollector(fake)
     await collector.start()
 
@@ -707,6 +707,7 @@ describe('WorkUnitCollector — 스펙 §16.1 커서', () => {
     collector.onTranscriptChanged()
     await collector.flush()
     expect(store.get(projectPath)!.units[0].status).toBe('active')
+    fake.git.files = ['src/a.ts'] // 이 Unit 이 연 뒤의 변경 — 끌 때 completed 로 닫히는 근거다
 
     // 끈다 — 열려 있던 Unit 은 onFeatureDisabled 로 그 자리에서 닫히고 커서는 버려진다
     await collector.onEnabledChanged(false)
@@ -969,13 +970,13 @@ describe('WorkUnitCollector — 배선 두 자리', () => {
   it('작업 중의 외부 변경은 id 로만 Unit 에 담긴다 — 그 파일 목록은 섞이지 않는다', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
-    fake.git.files = ['src/mine.ts'] // 이 세션이 만지고 있는 파일
     const { collector, store } = await makeCollector(fake)
     await collector.start()
 
     await fs.appendFile(transcript, human('작업 하나'), 'utf8')
     collector.onTranscriptChanged()
     await collector.flush()
+    fake.git.files = ['src/mine.ts'] // 이 세션이 (Unit 을 연 뒤에) 만지고 있는 파일
 
     collector.onGitChanged() // 기준선
     await collector.flush()
@@ -1236,5 +1237,109 @@ describe('WorkUnitCollector — 자기 git 감시자', () => {
     isRepo = true // git init
     await collector.flush()
     expect(watched).toEqual([projectPath])
+  })
+})
+
+// ── 열릴 때의 기준선 (설계 §6 "git 스냅샷 비교", §7 의 WU §4.5 근사) ──────
+//
+// 관찰이 "작업 트리 전체의 더러움"이면 앞 Unit 이 커밋하지 않고 남긴 파일이 다음 Unit 에도 세어져,
+// 파일을 하나도 안 바꾼 질문 Unit 이 completed 로 확정돼 하류로 흐른다. 세션이 커밋 없이 진행되는
+// 것이 보통이므로 이것은 가장자리가 아니라 두 번째 Unit 부터의 모든 Unit 이다.
+
+describe('WorkUnitCollector — 열릴 때의 기준선', () => {
+  it('앞 Unit 이 남긴 더러움은 다음 Unit 의 개수에 세지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    // Unit A — 파일 셋을 바꾸고 완료 후보가 된다
+    await fs.appendFile(transcript, human('기능 만들어줘'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    fake.git.files = ['a.ts', 'b.ts', 'c.ts']
+    await collector.onSessionIdle('s1')
+    expect(store.get(projectPath)!.units[0].status).toBe('completed-candidate')
+
+    // Unit B — 질문만 한다. 작업 트리는 A 가 남긴 그대로다(커밋하지 않았다)
+    await fs.appendFile(transcript, human('왜 이렇게 구현했어?'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    await collector.onSessionIdle('s1')
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2)
+    expect(state.units[0].status).toBe('completed') // A 는 B 의 도착이 확정했다
+    // B 는 아무것도 바꾸지 않았다 — A 의 더러움이 세어졌다면 여기가 completed-candidate 가 된다
+    expect(state.units[1].status).toBe('active')
+    expect(state.units[1].git.observedChangedFiles).toEqual([])
+  })
+
+  it('기준선 너머의 진짜 변경은 완료 후보를 만든다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    // 열리기 전부터 더러웠던 파일 둘
+    fake.git.files = ['left-over.ts', 'stale.ts']
+    await fs.appendFile(transcript, human('버그 고쳐줘'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    // 이 Unit 의 작업이 새 파일 하나를 더한다
+    fake.git.files = ['left-over.ts', 'stale.ts', 'fixed.ts']
+    await collector.onSessionIdle('s1')
+
+    const state = store.get(projectPath)!
+    expect(state.units[0].status).toBe('completed-candidate')
+    expect(state.units[0].git.observedChangedFiles).toEqual(['fixed.ts'])
+  })
+
+  it('질문만 한 Unit 은 세션이 끝날 때 abandoned 다 (설계 §7)', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    // 세션이 시작하기 전부터 작업 트리가 더럽다 — 이 더러움은 누구의 관찰도 아니다
+    fake.git.files = ['dirty-before.ts']
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, human('이 코드 뭐 하는 거야?'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    await collector.onSessionExit('s1')
+
+    const state = store.get(projectPath)!
+    expect(state.units[0].status).toBe('abandoned')
+  })
+})
+
+// ── 쓰지 않을 답은 git 에게 묻지 않는다 (transition.ts 의 갈래 순서) ──────
+
+describe('WorkUnitCollector — isAncestor 를 묻는 조건', () => {
+  it('전이가 없거나 브랜치가 바뀐 회차에는 묻지 않고, 같은 브랜치에서 head 가 움직였을 때만 묻는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    let asks = 0
+    fake.git.isAncestor = async () => {
+      asks += 1
+      return fake.git.ancestor
+    }
+    const { collector } = await makeCollector(fake)
+    await collector.start()
+
+    collector.onGitChanged() // 처음 본 저장소 — 기준선만 잡는다, 견줄 앞이 없다
+    await collector.flush()
+    collector.onGitChanged() // 아무것도 안 움직였다 — none, 조상 답은 읽히지 않는다
+    await collector.flush()
+    fake.git.ref = { branch: 'feature', head: 'c0' } // 브랜치 전환 — 조상 답은 읽히지 않는다
+    collector.onGitChanged()
+    await collector.flush()
+    expect(asks).toBe(0)
+
+    fake.git.ref = { branch: 'feature', head: 'c1' } // 같은 브랜치에서 head 이동 — 이때만 묻는다
+    collector.onGitChanged()
+    await collector.flush()
+    expect(asks).toBe(1)
   })
 })

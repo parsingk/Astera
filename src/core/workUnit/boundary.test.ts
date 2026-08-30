@@ -19,11 +19,7 @@ describe('decideBoundary — 새 사용자 메시지가 왔을 때 (WU §13)', (
     expect(decideBoundary('abandoned')).toEqual({ kind: 'open' })
   })
 
-  // WU §13 은 Case C 에 "명백한 별도 기능 요청이면 새 Unit" 이라는 예외를 두지만 V1 에는 없다.
-  // 그 판정은 메시지 분류기를 요구하고(WU §4), WU §17 이 "잘게 나누는 것보다 크게 묶는 편이
-  // 낫다"고 방향을 정했다.
-  it('V1 은 메시지를 분류하지 않는다 — 진행 중이면 무엇이 오든 같은 Unit 이다', () => {
-    // refinement · constraint · correction · question 이 모두 같은 결정을 받는다
-    expect(decideBoundary('active')).toEqual({ kind: 'append' })
-  })
+  // "V1 은 메시지를 분류하지 않는다"는 사실은 여기서 테스트하지 않는다 — 그것은 함수가 메시지를
+  // **받지 않는다**는 타입 수준의 사실이고, boundary.ts 의 함수 주석이 제자리에서 말한다. 위의
+  // Case C 와 같은 단언을 되풀이하는 테스트는 독립적으로 실패할 수 없어 지웠다.
 })

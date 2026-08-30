@@ -711,7 +711,14 @@ export class WorkUnitCollector {
       startedAt: at,
       firstMessageIndex: index,
       messageCount: 1,
-      git: { startHead: head, observedChangedFiles: [] },
+      git: {
+        startHead: head,
+        // 지금 이미 더러운 것은 이 Unit 의 일이 아니다 — 앞 Unit 이 커밋하지 않고 남긴
+        // 파일들이다. observe 가 이 목록 밖의 파일만 세므로, 파일을 안 바꾼 질문 Unit 은
+        // 개수 0 으로 남아 abandoned 로 걸러진다 (types.ts 의 baselineDirtyFiles 주석)
+        baselineDirtyFiles: await this.changedFiles(s.projectPath),
+        observedChangedFiles: []
+      },
       encounteredExternalGitChangeIds: []
     }
     state.units.push(unit)
@@ -746,10 +753,15 @@ export class WorkUnitCollector {
     }
     if (!before) return dirty // 처음 본 저장소 — 비교할 앞이 없으니 기준선만 잡는다
 
+    // **조상 답이 쓰이는 갈래에서만 묻는다.** classifyTransition 은 브랜치가 다르면 그 답을 보지
+    // 않고, head 가 같아도 보지 않는다(transition.ts 의 갈래 순서). 그 밖에서 물으면 프로세스 셋을
+    // 띄워 얻은 답이 버려진다 — 이 파일 위의 "git 은 방아쇠가 있었을 때만 묻는다"와 같은 규칙이다.
+    // 안 물을 때 넘기는 null 은 이미 "git 이 답하지 못했다"의 값이라 그 갈래들은 그것을 읽지 않는다.
+    const needsAncestry = before.branch === after.branch && before.head !== after.head
     const type = classifyTransition(
       before,
       after,
-      await this.deps.git.isAncestor(projectPath, before.head, after.head)
+      needsAncestry ? await this.deps.git.isAncestor(projectPath, before.head, after.head) : null
     )
     // 작업 트리는 전이가 없어도 바뀌어 있을 수 있다 (`git add` 가 index 만 건드린 경우)
     const observed = this.observe(state, projectPath, await this.changedFiles(projectPath))
@@ -874,9 +886,13 @@ export class WorkUnitCollector {
     let changed = false
     for (const u of state.units) {
       if (u.projectPath !== projectPath || !isOpen(u.status)) continue
+      // 열릴 때 이미 더러웠던 파일은 이 Unit 의 관찰이 아니다. 기준선에 있던 파일이 이 구간에
+      // **또** 바뀌었어도 가려낼 방법이 없어(status 는 경로만 준다) 세지 않는다 — 덜 세는 쪽이
+      // 낫다: 더 세면 질문 Unit 이 completed 로 확정되고, 덜 세면 다음 신호가 다시 기회를 준다
+      const baseline = new Set(u.git.baselineDirtyFiles ?? [])
       const seen = new Set(u.git.observedChangedFiles)
       for (const f of files) {
-        if (seen.has(f)) continue
+        if (seen.has(f) || baseline.has(f)) continue
         seen.add(f)
         u.git.observedChangedFiles.push(f)
         changed = true

@@ -51,6 +51,7 @@ describe('onFeatureDisabled — 기능을 껐을 때 (스펙 §16.1)', () => {
   })
 
   it('완료 후보로 남기지 않는다 — 확정해 줄 다음 메시지가 오지 않는다', () => {
-    expect(onFeatureDisabled({ observedChangeCount: 1 })).not.toBe('completed-candidate')
+    // not.toBe 였다가 toBe 로 좁혔다: not.toBe 는 함수가 잘못 'abandoned' 를 돌려줘도 통과한다
+    expect(onFeatureDisabled({ observedChangeCount: 1 })).toBe('completed')
   })
 })

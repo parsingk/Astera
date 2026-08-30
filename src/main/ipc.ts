@@ -3091,6 +3091,11 @@ export function registerIpc(
       try {
         account = core.accounts.get(s.accountId)
       } catch {
+        // 이 건너뜀은 seed 의 transcriptPath-null 건너뜀과 **다르다**: 그쪽은 세션이 목록에 남아
+        // startAtEnd 의 보호를 받지만, 여기서 거른 세션은 목록에서 아예 사라져 나중에 나타나면
+        // 커서 없는 새 세션으로 읽힌다. 오늘은 도달 불가능하다 — 사용 중인 계정은 지울 수 없다
+        // (accounts.remove 의 사용 중 검사). 이 catch 는 그 불변식이 깨지는 날을 위한 것이 아니라
+        // get 이 던지는 API 라서 있다.
         continue
       }
       out.push({
