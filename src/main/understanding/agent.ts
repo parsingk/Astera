@@ -9,6 +9,7 @@
 //
 // 프로세스만 여기서 다루고, 출력에서 값을 꺼내는 일은 core/understanding/agentOutput.ts 가 한다.
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { providerOf } from '../../core/providers/meta'
 import { descriptorOf } from '../../core/providers/descriptor'
 import type { Account, Provider } from '../../core/types'
@@ -74,6 +75,14 @@ export async function runAgent(a: RunArgs): Promise<AgentRun> {
   const env = { ...process.env, [d.configDirEnv]: a.account.configDir }
 
   const out = await new Promise<{ stdout: string; stderr: string } | { error: string }>((resolve) => {
+    // **없는 작업 디렉터리는 실행 파일 문제처럼 보인다.** win32 에서 존재하지 않는 cwd 로
+    // spawn 하면 오류가 `spawn cmd.exe ENOENT` 로 오는데(실측), 그것을 그대로 사용자에게 보이면
+    // "CLI 가 설치되지 않았다"로 읽힌다. 프로젝트 폴더가 사라진 것은 실제로 일어나는 일이라
+    // (워크트리를 지웠거나 드라이브가 빠졌다) 여기서 갈라 준다.
+    if (!existsSync(a.cwd)) {
+      resolve({ error: `프로젝트 폴더가 없다: ${a.cwd}` })
+      return
+    }
     let child: ReturnType<typeof spawn>
     try {
       child = spawn(cmd.file, cmd.args, { cwd: a.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })

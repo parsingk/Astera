@@ -19,8 +19,10 @@ import type { GeneratorSettings } from '../../core/understanding/generatorSettin
 import { changeSummaryOf } from '../../core/understanding/changeRecord'
 import { mapFilesToFeatures } from '../../core/understanding/mapping'
 import { buildDiscoverPrompt, buildExplainPrompt } from '../../core/understanding/prompt'
+import { sketchText } from '../../core/understanding/context'
 import { validateDiscovery, validateExplanation } from '../../core/understanding/validate'
 import { runAgent } from './agent'
+import { collectSketch } from './collectContext'
 import type { UnderstandingStore } from './store'
 
 /** 사이드바 아래 "최근 변경" 이 보여 주는 줄 수. 그보다 오래된 것은 잘라 낸다 —
@@ -132,7 +134,8 @@ export class UnderstandingPipeline {
     const run = await runAgent({
       ...ready.ctx,
       cwd: projectRoot,
-      prompt: buildDiscoverPrompt(projectRoot),
+      // 재료를 먼저 모은다 (스펙 §29) — 이것이 없으면 에이전트가 저장소를 하나씩 열어 본다
+      prompt: buildDiscoverPrompt(projectRoot, sketchText(await collectSketch(projectRoot))),
       log: this.deps.log
     })
     if (!run.ok) return { ok: false, reason: run.reason }

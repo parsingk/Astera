@@ -46,12 +46,24 @@ describe('buildExplainPrompt', () => {
 })
 
 describe('buildDiscoverPrompt', () => {
+  const sketch = ['Directories:', '- src/auth', '', '--- README.md ---', '# Astera'].join('\n')
+
   it('루트·계약·초안 성격·출력 모양이 실린다', () => {
-    const p = buildDiscoverPrompt('D:/p')
+    const p = buildDiscoverPrompt('D:/p', sketch)
     expect(p).toContain('D:/p')
     expect(p).toContain(EXPLANATION_CONTRACT)
     expect(p).toContain('implementationPaths')
     expect(p).toContain('draft')
     expect(p).toContain('never modify anything')
+  })
+
+  // **재료 없이 보내면 에이전트가 저장소를 하나씩 열어 본다** — 이 저장소(572개 파일)에서
+  // 10분을 넘겨도 끝나지 않았다. 스펙 §29 가 금지한 것이고, 그 재료가 실리는지가 이 한 줄이다
+  it('모아 준 재료가 프롬프트에 실린다 (스펙 §29)', () => {
+    const p = buildDiscoverPrompt('D:/p', sketch)
+    expect(p).toContain('- src/auth')
+    expect(p).toContain('# Astera')
+    // 그리고 그것으로 일하라고 말한다 — 실어 놓고 안 쓰면 실은 뜻이 없다
+    expect(p).toContain('Work from this')
   })
 })

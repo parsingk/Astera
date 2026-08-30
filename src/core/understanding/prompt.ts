@@ -89,12 +89,22 @@ ${req.implementationPaths.map((p) => `- ${p}`).join('\n')}${changes}
 ${OUTPUT_SHAPE}`
 }
 
-/** 첫 분석 — 기능 목록 초안을 만들어 달라는 프롬프트 (스펙 §21). 설명은 만들지 않는다 */
-export function buildDiscoverPrompt(projectRoot: string): string {
+/** 첫 분석 — 기능 목록 초안을 만들어 달라는 프롬프트 (스펙 §21). 설명은 만들지 않는다.
+ *
+ *  **재료를 함께 준다 (스펙 §29).** "저장소를 보고 찾아라"라고만 했더니 이 저장소(572개 파일)에서
+ *  10분을 넘겨도 끝나지 않았다 — 에이전트가 파일을 하나씩 열어 보는 것을 막지 않았기 때문이다.
+ *  §29 가 그것을 미리 금지했다: "전체 repository 를 prompt 에 넣지 않는다 … deterministic
+ *  heuristic 으로 충분하다." 그래서 디렉터리 뼈대와 문서 앞부분을 값으로 실어 준다.
+ *
+ *  @param sketch collectSketch 가 모아 sketchText 로 다듬은 문자열 */
+export function buildDiscoverPrompt(projectRoot: string, sketch: string): string {
   return `You are cataloguing what a software project does, for a product manager.
 
-Look at the repository at ${projectRoot} — its README, routes or command surfaces, top-level
-directory structure — and list the major user-facing features. Read only; never modify anything.
+Below is the shape of the repository at ${projectRoot} — its directory skeleton and the opening
+of its main documents. **Work from this.** Open a file only when you cannot name a feature without
+it, and never more than a handful. Read only; never modify anything.
+
+${sketch}
 
 Rules 4-7 and 11-14 of the following contract apply to names and summaries:
 
@@ -110,6 +120,7 @@ Respond with a single JSON object, no markdown fence:
     }
   ]
 }
-List 3 to 12 features. The result is a draft the user can rename or remove — prefer missing a
-minor feature over inventing one.`
+List 3 to 12 features. Every path must be one that exists — prefer a directory from the skeleton
+above over a file you have not opened. The result is a draft the user can rename or remove: prefer
+missing a minor feature over inventing one.`
 }

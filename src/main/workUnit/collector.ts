@@ -115,6 +115,12 @@ export interface CollectorDeps {
    *
    *  넘기지 않으면 감시하지 않는다. 그때 `.git` 방아쇠는 밖에서 오는 `onGitChanged()` 뿐이다. */
   watchGit?: (projectPath: string) => Promise<(() => Promise<void>) | null>
+  /** Unit 이 닫혔다 — 완료·버림·기능 끄기·세션 종료 어느 쪽이든.
+   *
+   *  **이 수집기는 하류가 무엇을 하는지 모른다.** 설명을 만드는 것은 다음 층의 일이고, 여기서
+   *  아는 것은 "이 Unit 이 닫혔다"까지다. 넘기지 않으면 아무 일도 일어나지 않는다 — 그래서
+   *  이 파일의 테스트가 하류 없이 그대로 돈다. */
+  onUnitClosed?: (projectPath: string, unit: SessionWorkUnit) => void
   log?: (m: string) => void
 }
 
@@ -909,6 +915,13 @@ export class WorkUnitCollector {
       unit.completedAt = at ?? this.nowIso()
       const head = this.lastRef.get(projectPath)?.head
       if (head !== undefined) unit.git.endHead = head
+      // **닫히는 Unit 을 하류에 알린다.** 이 파일에는 Unit 이 닫히는 자리가 여기 하나뿐이라
+      // (완료·버림·기능 끄기·세션 종료가 전부 이 메서드를 지난다) 알림도 여기 하나면 된다.
+      //
+      // **부르고 기다리지 않는다.** 하류(설명 생성)는 에이전트를 돌려 수십 초가 걸리는데, 그것을
+      // 기다리면 이 회차의 저장이 그만큼 늦어지고 다음 방아쇠가 밀린다. 하류의 큐가 자기 순서를
+      // 지키고 거부하지 않는 것(pipeline 의 enqueue)이 이 한 줄이 성립하는 조건이다.
+      this.deps.onUnitClosed?.(projectPath, unit)
     }
   }
 

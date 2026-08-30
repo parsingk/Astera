@@ -896,6 +896,11 @@ export interface OrchApi {
 export interface UnderstandingApi {
   /** 저장된 이해. 한 번도 분석하지 않은 프로젝트는 null — 빈 상태가 그것을 그린다 */
   get(projectPath: string): Promise<ProjectUnderstanding | null>
+
+  /** 첫 분석 — 이 프로젝트에 어떤 기능이 있는지 목록을 만든다 (스펙 §21). 설명은 만들지 않는다.
+   *  **결과를 돌려준다**: 사용자가 눌러 기다리는 일이라 실패하면 그 사유가 화면에 떠야 한다.
+   *  reason 이 NO_GENERATOR_ACCOUNT 면 설정에서 생성 계정을 아직 고르지 않았다는 뜻이다. */
+  analyze(projectPath: string): Promise<{ ok: true; count: number } | { ok: false; reason: string }>
 }
 
 export type RendererApi = CoreApi & {

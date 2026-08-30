@@ -14,13 +14,17 @@ export function UnderstandingView({
   selectedFeatureId,
   onOpenFeature,
   onReview,
-  onAnalyze
+  onAnalyze,
+  analyzing = false
 }: {
   understanding: ProjectUnderstanding | null
   selectedFeatureId: string | null
   onOpenFeature: (featureId: string) => void
   onReview: (featureId: string) => void
   onAnalyze: () => void
+  /** 분석이 도는 동안 — 버튼을 잠그고 그 사실을 보여 준다. 에이전트 왕복은 수십 초라
+   *  아무 표시가 없으면 사용자가 다시 누르고, 그러면 두 번 돈다 */
+  analyzing?: boolean
 }): React.JSX.Element {
   const { t } = useI18n()
 
@@ -32,8 +36,8 @@ export function UnderstandingView({
         </div>
         <div className="hiw-empty">
           <p>{t('hiw.empty.body')}</p>
-          <button className="hiw-cta" onClick={onAnalyze}>
-            {t('hiw.empty.analyze')}
+          <button className="hiw-cta" onClick={onAnalyze} disabled={analyzing}>
+            {t(analyzing ? 'hiw.analyze.running' : 'hiw.empty.analyze')}
           </button>
           <p className="hiw-fine">{t('hiw.empty.readOnly')}</p>
         </div>
@@ -48,7 +52,7 @@ export function UnderstandingView({
     <div className="hiw-side">
       <div className="hiw-head">
         <b>{t('hiw.title')}</b>
-        <button className="hiw-act" title={t('hiw.reanalyze')} onClick={onAnalyze}>
+        <button className="hiw-act" title={t(analyzing ? 'hiw.analyze.running' : 'hiw.reanalyze')} onClick={onAnalyze} disabled={analyzing}>
           ⟳
         </button>
       </div>

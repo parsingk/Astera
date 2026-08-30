@@ -434,6 +434,10 @@ export default function App(): React.JSX.Element {
   // 캐시 자신은 확인하지 않는다. 프로젝트를 바꾼 뒤 IPC 왕복이 끝나기 전까지 둘은 어긋나 있고,
   // 그 창에서 두 프로젝트가 같은 기능 id 를 가지면 A 의 상태와 A 의 설명이 B 의 탭에 붙는다.
   // 루트가 여기 있으면 아래의 소비자들이 대리 없이 곧장 물을 수 있다.
+  /** 이해를 다시 읽게 하는 신호. 분석이 끝났을 때 올린다 — 아래 effect 는 프로젝트가 바뀔
+   *  때만 도는데, 분석은 프로젝트를 바꾸지 않으면서 그 값을 바꾼다. */
+  const [understandingSeq, setUnderstandingSeq] = useState(0)
+  const [analyzing, setAnalyzing] = useState(false)
   const [understanding, setUnderstanding] = useState<{
     root: string
     data: ProjectUnderstanding | null
@@ -2154,7 +2158,7 @@ export default function App(): React.JSX.Element {
     return () => {
       alive = false
     }
-  }, [currentProject])
+  }, [currentProject, understandingSeq])
 
   // Turning the setting off makes the rail button — the only control that can close the Jobs view —
   // disappear along with it (it is gated on the same orchEnabled), so a view left open past that point
@@ -2861,7 +2865,36 @@ export default function App(): React.JSX.Element {
                 // [검토] 도 같은 탭을 연다. 검토 흐름 자체는 아직 없고, 그 전까지 이 버튼이 할 수
                 // 있는 가장 정직한 일이 "무엇을 검토할지 펼쳐 보여 주는 것"이다
                 onReview={openFeatureTab}
-                onAnalyze={() => toast.info(t('hiw.empty.notYet'))}
+                // 첫 분석 (스펙 §21). **결과를 기다려 보여 준다** — 사용자가 눌러 기다리는
+                // 일이고, 실패하면(생성 계정을 안 골랐다, 에이전트가 답을 못 했다) 그 사유가
+                // 떠야 한다. 성공하면 신호를 올려 사이드바가 새 목록을 다시 읽는다.
+                analyzing={analyzing}
+                onAnalyze={() => {
+                  if (!currentProject || analyzing) return
+                  setAnalyzing(true)
+                  void window.api.understanding
+                    .analyze(currentProject)
+                    .then((r) => {
+                      if (r.ok) {
+                        setUnderstandingSeq((n) => n + 1)
+                        toast.info(t('hiw.analyze.done', { count: String(r.count) }))
+                        return
+                      }
+                      toast.error(
+                        r.reason === 'NO_GENERATOR_ACCOUNT'
+                          ? t('hiw.analyze.noAccount')
+                          : t('hiw.analyze.failed', { detail: r.reason })
+                      )
+                    })
+                    .catch((err) =>
+                      toast.error(
+                        t('hiw.analyze.failed', {
+                          detail: err instanceof Error ? err.message : String(err)
+                        })
+                      )
+                    )
+                    .finally(() => setAnalyzing(false))
+                }}
               />
             ) : (
               <>

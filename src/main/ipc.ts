@@ -17,6 +17,7 @@ import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
 import type { ModelListResult } from '../core/models/types'
 import { listClaudeModels, listCodexModels } from './models/discover'
+import { UnderstandingPipeline } from './understanding/pipeline'
 import { copyTranscript, samePath } from '../core/rolling/transcript'
 import { OrchestrationStore } from './orchestration/store'
 import { UnderstandingStore } from './understanding/store'
@@ -3057,12 +3058,44 @@ export function registerIpc(
         orchLog('failed to read or parse understanding.json — kept the .bak and started from an empty state')
     })
     .catch((e) => orchLog(`understanding.json load failed: ${String(e)}`))
+  /** **키를 원 저장소로 접는다.** 워크트리에서 도는 세션의 "프로젝트"는 그 워크트리가 아니라
+   *  원 저장소다(설계 D1) — 그렇지 않으면 Job 이 워크트리에서 한 일이 원 저장소의 설명에 닿지
+   *  않고, 렌더러가 보내는 키(탭에 따라 워크트리이거나 저장소다)와 파이프라인이 저장하는 키가
+   *  갈린다. orchestration 이 이미 같은 답을 쓰고 있어(orch.list) 네 번째 정규화가 아니다. */
+  const understandingKeyOf = (projectPath: string): string =>
+    repoPathOf(core.worktrees.list(), projectPath)
   ipcMain.handle('understanding.get', async (_e, projectPath: string) => {
     // orch.list 와 같은 검사 — 경로가 무엇이 돌아올지를 정한다
     await assertAllowedPath(projectPath)
     await understandingLoaded
     // undefined 가 아니라 null 로 넘긴다 — structured clone 에서 undefined 는 구별되는 값으로 살아남지 않는다
-    return understanding.get(projectPath) ?? null
+    return understanding.get(understandingKeyOf(projectPath)) ?? null
+  })
+
+  /** 작업 단위가 닫히면 그것을 설명으로 옮기는 층. **수집기와 따로 세운다** — 수집기는 하류가
+   *  무엇을 하는지 모르고, 이쪽은 수집기가 어떻게 Unit 을 찾는지 모른다. */
+  const understandingPipeline = new UnderstandingPipeline({
+    store: understanding,
+    accountOf: (id) => {
+      try {
+        return core.accounts.get(id)
+      } catch {
+        // 계정이 지워졌다 — 고르지 않은 것과 같이 다룬다(pipeline 의 agentContext)
+        return null
+      }
+    },
+    descriptors: core.descriptors,
+    generator: () => core.appSettings.getGenerator(),
+    now: () => new Date().toISOString(),
+    log: orchLog
+  })
+
+  /** 분석 버튼. **결과를 돌려준다** — 사용자가 눌러 기다리는 일이라 실패하면 사유가 화면에 떠야
+   *  한다(배경에서 도는 재생성과 다른 점이다). */
+  ipcMain.handle('understanding.analyze', async (_e, projectPath: string) => {
+    await assertAllowedPath(projectPath)
+    await understandingLoaded
+    return understandingPipeline.analyzeProject(understandingKeyOf(projectPath))
   })
 
   // Work Unit detection: workUnits.json persistence, and the collector that fills it. Built here for
@@ -3150,6 +3183,12 @@ export function registerIpc(
       const w = new GitWatcher(() => workUnitCollector.onGitChanged(), orchLog)
       await w.watch(projectPath)
       return () => w.close()
+    },
+    // Unit 이 닫히면 설명 층에 넘긴다. **기다리지 않는다** — 그쪽은 에이전트를 돌려 수십 초가
+    // 걸리고, 그 큐가 순서와 실패를 스스로 다룬다(pipeline 의 enqueue). 여기서 키를 접는 이유는
+    // understanding.get 과 같다: 워크트리 세션의 일이 원 저장소의 설명에 닿아야 한다(설계 D1).
+    onUnitClosed: (projectPath, unit) => {
+      void understandingPipeline.onUnitClosed(understandingKeyOf(projectPath), unit)
     },
     log: orchLog
   })
