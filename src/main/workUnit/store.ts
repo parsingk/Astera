@@ -41,8 +41,14 @@ export interface WorkUnitState {
   messages: ObservedUserMessage[]
   externalGitChanges: ExternalGitChange[]
   /** **선택 필드다.** 이 필드가 생기기 전의 `workUnits.json` 이 이미 사용자 디스크에 있고, 필수로
-   *  두면 그 파일이 타입 가드를 통과하지 못해 통째로 `.bak` 으로 밀린다 (SessionWorkUnit.validation
-   *  이 미리 선택 필드로 놓인 것과 같은 이유다). */
+   *  두면 그 파일이 타입 가드를 통과하지 못해 통째로 `.bak` 으로 밀린다 — `isState` 는 `units` 같은
+   *  최상위 칸을 **직접 보기 때문이다.**
+   *
+   *  **`SessionWorkUnit.validation` 과 같은 이유가 아니다.** 한동안 그렇게 적혀 있었지만, 그쪽은
+   *  가드가 닿지 않는 자리다 — `isValid` 는 배열의 원소 하나하나를 아예 열어 보지 않으므로(바로
+   *  아래 주석) `SessionWorkUnit` 에 필드가 늘어도 옛 파일은 그대로 읽힌다. 그 필드가 선택인 것은
+   *  마이그레이션 때문이 아니라 스펙의 이름을 미리 지어 두려는 것이고(그 필드 주석), 이 필드가
+   *  선택인 것은 **옛 파일을 실제로 지키기 위해서다.** */
   gitSnapshot?: ProjectGitSnapshot
 }
 
