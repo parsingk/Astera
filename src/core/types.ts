@@ -21,6 +21,8 @@ export type { GitState } from './git/status'
 import type { ProjectUnderstanding } from './understanding/types'
 import type { Provider } from './providers/meta'
 import type { TerminalFont } from './terminal/font'
+import type { GeneratorSettings } from './understanding/generatorSettings'
+import type { ModelListResult } from './models/types'
 import type { ThemeId } from './theme/themes'
 // The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
 // orchestration/types.ts is safe to reach for: its single import is a type-only providers/meta.ts,
@@ -625,6 +627,14 @@ export interface CoreApi {
     // nothing from before the moment it is turned on.
     getWorkUnitTrackingEnabled(): Promise<boolean>
     setWorkUnitTrackingEnabled(enabled: boolean): Promise<void>
+    // Which account (and model) writes the How It Works explanations. Empty means no account has been
+    // chosen, and nothing is generated — the screen says so rather than staying silently blank.
+    getGenerator(): Promise<GeneratorSettings>
+    setGenerator(g: GeneratorSettings): Promise<void>
+    // The models that account can use, asked of the CLI itself. Never rejects: a failure comes back as
+    // { models: [], error } so the settings screen can fall back to a free-text field and say why.
+    // Cached for the life of the app; pass refresh to ask again.
+    listModels(accountId: string, refresh?: boolean): Promise<ModelListResult>
     // How a session that hits its limit gets continued. See ResumeStrategy.
     getResumeStrategy(): Promise<ResumeStrategy>
     setResumeStrategy(strategy: ResumeStrategy): Promise<void>

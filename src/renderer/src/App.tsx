@@ -31,6 +31,7 @@ import { UpdateGate } from './components/UpdateGate'
 import { ShortcutSettings } from './components/ShortcutSettings'
 import { TerminalFontSettings } from './components/TerminalFontSettings'
 import { ThemeSettings } from './components/ThemeSettings'
+import { GeneratorSettings } from './components/GeneratorSettings'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import type {
@@ -3231,6 +3232,9 @@ export default function App(): React.JSX.Element {
                     {/* 재개 전략 — 한도에 걸린 세션을 어떻게 이어갈지. Appearance 가 아니라 여기 있는
                         이유: 이것은 보이는 방식이 아니라 동작이고, 바로 위 오케스트레이션 토글과 같은
                         갈래(롤링·워커)를 건드린다. */}
+                    {/* 설명 생성 — 작업 단위 추적이 모은 것을 무엇으로 설명할 것인가.
+                        추적 토글 바로 아래에 두는 이유: 추적이 이 설정의 입력을 만든다. */}
+                    <GeneratorSettings />
                     <ResumeStrategySettings />
                   </>
                 )}

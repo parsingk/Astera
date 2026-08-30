@@ -874,6 +874,17 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* ---------- 일반 탭: 재개 방식 카드 ---------- */
 /* .theme-grid/.theme-card와 같은 두 열 카드 배치다. 다만 팔레트 미리보기가 없어 인라인 스타일이
    필요 없으므로 색은 앱 토큰(--line 등)에서 그대로 가져온다. */
+/* 설명 생성 설정. 형제인 resume-strategy 와 같은 토큰만 쓴다 — 새 색을 만들지 않는다 */
+.settings-gen { display: flex; flex-direction: column; gap: 8px; }
+.settings-gen-select { min-width: 200px; }
+.settings-gen-input { min-width: 200px; padding: 5px 8px; border: 1px solid var(--line);
+  border-radius: var(--radius); background: var(--bg); color: var(--text); font-size: 12.5px; }
+.settings-gen-input:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.settings-gen-refresh { align-self: flex-start; padding: 5px 10px; border: 1px solid var(--line);
+  border-radius: var(--radius); background: var(--bg); color: var(--text); cursor: pointer; font-size: 12px; }
+.settings-gen-refresh:disabled { opacity: 0.5; cursor: default; }
+.settings-gen-refresh:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+
 .settings-resume-strategy { display: flex; flex-direction: column; gap: 8px; }
 .resume-strategy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
 .resume-strategy-card { display: flex; flex-direction: column; gap: 4px; align-items: flex-start;

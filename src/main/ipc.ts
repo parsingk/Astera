@@ -14,6 +14,9 @@ import { BusyScanner } from '../core/terminal/busy'
 import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, RollStateEvent, RunConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
+import { readGeneratorSettings } from '../core/understanding/generatorSettings'
+import type { ModelListResult } from '../core/models/types'
+import { listClaudeModels, listCodexModels } from './models/discover'
 import { copyTranscript, samePath } from '../core/rolling/transcript'
 import { OrchestrationStore } from './orchestration/store'
 import { UnderstandingStore } from './understanding/store'
@@ -260,6 +263,10 @@ export function registerIpc(
 
   // Session working/idle detection: decided from the window-title OSC in the output, and session:busy
   // is emitted only when the state changes.
+  /** 계정 id → 그 계정의 모델 목록. **앱이 사는 동안만** 든다 — claude 쪽 왕복이 1.6초라
+   *  설정을 열 때마다 물으면 눈에 띈다. 디스크에 두지 않는 이유: 목록은 계정의 구독·조직
+   *  정책에 따라 바뀌고, 그 변화를 우리가 감지할 방법이 없다. 새로 고침은 사용자가 누른다. */
+  const modelCache = new Map<string, ModelListResult>()
   const busyScanners = new Map<string, BusyScanner>()
   const busyState = new Map<string, boolean>()
   /** 그 세션의 busy 신호를 **판정에 쓸 수 있는가** (`ProviderDescriptor.busyTitleReliable`).
@@ -3625,6 +3632,44 @@ export function registerIpc(
     // 닫는다 — 스펙 §16.1 이다. 저장소를 다 읽기 전에 시작하지 않도록 load 를 먼저 기다린다.
     await workUnitsLoaded
     await workUnitCollector.onEnabledChanged(enabled)
+  })
+
+  // 설명을 누가·무엇으로 만드는가. **셋을 함께 쓴다** — 계정을 바꾸면 그 계정에 없는 모델이
+  // 남아서는 안 되기 때문이다(appSettingsStore.setGenerator 의 주석). 값의 정제는 그 setter 가
+  // 하므로 여기서는 모양만 본다 — setTerminalFont 와 같은 갈래다.
+  ipcMain.handle('settings.getGenerator', () => core.appSettings.getGenerator())
+  ipcMain.handle('settings.setGenerator', async (_e, g: unknown) => {
+    if (g === null || typeof g !== 'object' || Array.isArray(g))
+      throw new Error(`INVALID_GENERATOR_SETTINGS: ${String(g)}`)
+    await core.appSettings.setGenerator(readGeneratorSettings(g))
+  })
+
+  /** 그 계정이 쓸 수 있는 모델. **실패도 값으로 돌려준다** — 조회 실패는 정상 경로이고
+   *  (미로그인, codex app-server 는 experimental), 그때 설정 화면은 드롭다운 대신 자유
+   *  입력칸을 보여 주면서 사유를 말한다. 던지면 그 사유가 렌더러에서 사라진다.
+   *
+   *  **앱이 사는 동안 한 번만 묻는다.** claude 쪽 왕복이 1.6초라 설정을 열 때마다 물으면
+   *  눈에 띈다. 새로 고침은 renderer 가 `refresh: true` 로 요청한다. */
+  ipcMain.handle('settings.listModels', async (_e, accountId: unknown, refresh: unknown) => {
+    if (typeof accountId !== 'string') throw new Error(`INVALID_ACCOUNT_ID: ${String(accountId)}`)
+    if (refresh !== true) {
+      const hit = modelCache.get(accountId)
+      if (hit) return hit
+    }
+    let account: Account
+    try {
+      account = core.accounts.get(accountId)
+    } catch {
+      return { models: [], error: 'ACCOUNT_GONE' }
+    }
+    const d = descriptorOf(core.descriptors, account)
+    const result =
+      providerOf(account) === 'codex'
+        ? await listCodexModels(d.cliFile, account.configDir)
+        : await listClaudeModels(d.cliFile, account.configDir)
+    // 실패는 캐시하지 않는다 — 로그인하고 다시 열면 바로 보여야 한다
+    if (!result.error) modelCache.set(accountId, result)
+    return result
   })
 
   // How a session that hits its limit gets continued. The same trust-boundary check as setLang — the
