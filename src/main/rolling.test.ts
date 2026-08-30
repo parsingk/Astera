@@ -536,7 +536,11 @@ describe('RollingCoordinator', () => {
     expect(h.written.map((w) => w.data)).toEqual(['2', '\r'])
   })
 
-  it('감시 창이 지난 뒤 도착한 선택지는 누르지 않는다', async () => {
+  // 감시 창의 뜻이 바뀌었다. 대기 항목이 있는 선택 대화상자는 **그 자체가 한도 신호**이므로
+  // (detect.ts 의 OutputScanner), 앞선 문구로부터 얼마가 지났든 화면에 떠 있으면 누른다.
+  // 누르지 않으면 세션이 그 앞에서 멈추고, 그것이 2026-08-30 에 실제로 10시간 24분 동안
+  // 일어난 일이다 — rolling.log 에 한 줄도 남지 않은 채로.
+  it('감시 창이 지난 뒤 도착한 선택지도 누른다 — 대화상자 자체가 신호다', async () => {
     const h = harness()
     h.payloads.set('s1', payload(97))
     h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
@@ -548,7 +552,30 @@ describe('RollingCoordinator', () => {
       data: '  1. Adjust monthly spend limit: $50\n❯ 2. Wait for ' + 'limit to reset\n'
     })
     await vi.advanceTimersByTimeAsync(200)
-    expect(h.written).toEqual([])
+    expect(h.written.map((w) => w.data)).toEqual(['2', '\r'])
+  })
+
+  // 사용자 실측 2026-08-30. 관리자 통제 플랜의 한도 화면에는 배너 문구가 **없다** — 메뉴만 뜬다.
+  // 게다가 계정 조회도 그 한도를 보지 못한다(maxPercent 는 5시간·주간 창만 본다). 문구도 수치도
+  // 이 화면을 설명하지 못하므로, 화면에 떠 있는 대화상자 말고는 근거가 없다.
+  it('배너 문구 없이 선택 메뉴만 와도 누른다 — 관리자 통제 플랜', async () => {
+    const h = harness()
+    h.payloads.set('s1', payload(73)) // 계정 조회는 이 한도를 보지 못한다
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] })
+    h.coord.handleData({
+      sessionId: 's1',
+      data: [
+        'What do you want to do?',
+        '',
+        '❯ 1. Stop and wait for ' + 'limit to reset',
+        '  2. Wait here, then continue automatically shortly',
+        '  3. Ask your admin for more usage',
+        '',
+        'Enter to confirm · Esc to cancel'
+      ].join('\n')
+    })
+    await vi.advanceTimersByTimeAsync(200)
+    expect(h.written.map((w) => w.data)).toEqual(['1', '\r'])
   })
 })
 
