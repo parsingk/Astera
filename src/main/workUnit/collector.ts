@@ -23,7 +23,8 @@ import { promises as fs, statSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import type { ExternalGitChange, GitRef, PendingGitOperation } from '../../core/git/types'
 import { classifyTransition } from '../../core/git/transition'
-import { isAsteraOperation } from '../../core/git/provenance'
+import { isAsteraOperation, OPERATION_GRACE_MS } from '../../core/git/provenance'
+import { isSamePath } from '../../core/files/tree'
 import type { SessionWorkUnit } from '../../core/workUnit/types'
 import { isOpen } from '../../core/workUnit/status'
 import { isHumanRequest, requestTextOf, titleOf } from '../../core/workUnit/humanRequest'
@@ -173,18 +174,36 @@ export class WorkUnitCollector {
 
   /** Astera 자신의 git 조작을 시작하기 **직전에** 등록한다 — ipc.ts 의 job-merge 자리가 부른다.
    *  `startedAt` 은 주입된 시각(deps.now)을 쓴다. **꺼져 있으면 아무 일도 하지 않는다** — 부르는
-   *  쪽이 토글을 신경 쓰지 않아도 된다. */
+   *  쪽이 토글을 신경 쓰지 않아도 된다(`endGitOperation` 이 토글과 무관하게 항상 닫는 것으로 그 몫까지
+   *  진다 — 아래 주석).
+   *
+   *  새로 넣기 전에 **유예가 지나 이미 끝난** 동작을 먼저 치운다. 지우지 않으면 Job 병합마다
+   *  기록이 하나씩 쌓여 이 프로세스가 사는 동안 매 git 회차마다 다시 훑게 된다. **끝나지 않은
+   *  동작은 절대 건드리지 않는다** — 오래 걸리는 병합을 유예로 착각해 지우면 그 동작이 도중에
+   *  외부로 오판된다(끝나지 않은 것을 헤아리는 판단은 `isAsteraOperation` 하나로 남긴다). */
   beginGitOperation(kind: PendingGitOperation['kind'], projectPath: string): string {
     if (!this.running) return ''
+    const now = this.deps.now()
+    this.pendingOps = this.pendingOps.filter((o) => {
+      if (o.endedAt === undefined) return true
+      const ended = Date.parse(o.endedAt)
+      return Number.isFinite(ended) && now - ended <= OPERATION_GRACE_MS
+    })
     const id = randomUUID()
     this.pendingOps.push({ id, kind, projectPath, startedAt: this.nowIso() })
     return id
   }
 
   /** 그 동작이 끝났다(성공이든 실패든). **지우지 않는다** — `isAsteraOperation`(provenance.ts)의
-   *  유예가 끝난 동작을 보고 판단하기 때문이다. 꺼져 있으면 아무 일도 하지 않는다. */
+   *  유예가 끝난 동작을 보고 판단하기 때문이다.
+   *
+   *  **꺼져 있어도 닫는다.** `beginGitOperation` 과 달리 여기에 `!running` 가드를 두면, 추적을
+   *  끈 사이에 `endGitOperation` 이 불려도 아무 일도 하지 않고 `endedAt` 이 영영 비게 된다 —
+   *  `isAsteraOperation` 은 `endedAt` 이 없는 동작을 "아직 도는 중"으로 읽으므로, 그 프로젝트의
+   *  **모든** 외부 변경이 그때부터 조용히 Astera 것으로 삼켜진다(브리핑이 말한, 지어낸 외부 기록
+   *  하나보다 훨씬 나쁜 실패). 꺼진 채로 `endedAt` 만 적는 것은 해가 없다 — 다음에 켜졌을 때
+   *  `isAsteraOperation` 이 유예를 그대로 적용해 판단한다. */
   endGitOperation(id: string): void {
-    if (!this.running) return
     const op = this.pendingOps.find((o) => o.id === id)
     if (op) op.endedAt = this.nowIso()
   }
@@ -546,7 +565,10 @@ export class WorkUnitCollector {
 
     const open = state.units.filter((u) => isOpen(u.status))
     for (const u of open) u.git.endHead = after.head
-    if (!isAsteraOperation(projectPath, this.deps.now(), this.ops())) {
+    // samePath: 등록 쪽(ipc.ts 의 mergeInto)과 이 projectPath(세션의 cwd 에서 뽑았다)는 따로
+    // 기록되어 대소문자·구분자가 다를 수 있다(provenance.ts 의 isAsteraOperation 주석). 그 비교를
+    // provenance.ts 는 직접 하지 못하므로(node: 없음) 여기서 isSamePath 를 넘긴다.
+    if (!isAsteraOperation(projectPath, this.deps.now(), this.ops(), OPERATION_GRACE_MS, isSamePath)) {
       // fast-forward 일 때만 채운다 — 그 밖의 전이는 before..after 범위를 신뢰할 수 없다
       // (types.ts 의 ExternalGitChange.commits 주석). Astera 자신의 동작으로 판정된 경우는 이
       // 블록에 들어오지 않으므로, 버려질 range 를 위해 git 을 더 부르지 않는다.

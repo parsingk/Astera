@@ -52,3 +52,25 @@ describe('isAsteraOperation (EG §26)', () => {
     expect(isAsteraOperation('D:\\p', T0 + 1000, [other, op()])).toBe(true)
   })
 })
+
+// mergeInto(등록 쪽)와 세션의 cwd(비교 쪽)는 따로 기록되어 대소문자·구분자가 다를 수 있다
+// (core/orchestration/integrate.ts 의 worktreeDeps 주석과 같은 문제). 그 비교를 이 파일이 직접
+// 하지 못하므로(node: 없음) 주입받는다 — 그 주입점 자체를 확인한다.
+describe('isAsteraOperation — samePath 주입', () => {
+  it('기본 비교는 엄격한 === 다 — 대소문자만 달라도 다른 프로젝트로 본다', () => {
+    expect(isAsteraOperation('D:\\P', T0 + 1000, [op({ projectPath: 'd:\\p' })])).toBe(false)
+  })
+
+  it('주입한 비교가 같다고 하면 그 등록을 그대로 쓴다', () => {
+    const caseInsensitive = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase()
+    expect(
+      isAsteraOperation(
+        'D:\\P',
+        T0 + 1000,
+        [op({ projectPath: 'd:\\p' })],
+        OPERATION_GRACE_MS,
+        caseInsensitive
+      )
+    ).toBe(true)
+  })
+})

@@ -19,14 +19,25 @@ const ms = (iso: string | undefined): number | null => {
   return Number.isFinite(n) ? n : null
 }
 
+/**
+ * `projectPath`(수집기가 세션의 cwd 에서 뽑은 값)와 `o.projectPath`(등록 자리가 넘긴 값, 예:
+ * ipc.ts 의 job-merge 가 넘기는 mergeInto = run.worktree ?? run.cwd)는 **따로 기록된다** — 이
+ * 저장소의 다른 곳(core/orchestration/integrate.ts 의 worktreeDeps 주석)이 이미 같은 문제를
+ * 적어 두었다: 같은 폴더를 대소문자나 구분자만 다르게 적을 수 있다(Windows 드라이브 문자가 `d:`
+ * 와 `D:` 로 갈리는 경우가 그것이다). 그 저장소들은 전부 `isSamePath`(core/files/tree.ts)로
+ * 비교하지만, 이 파일은 node: 를 끌고 오지 않는다는 규약이 있어 그 함수를 직접 부르지 못한다 —
+ * 그래서 비교 자체를 주입받는다. 기본값은 엄격한 `===`(이 파일의 나머지 테스트가 기대하는 그대로)
+ * 이고, 실제 배선(collector.ts)은 `isSamePath` 를 넘긴다.
+ */
 export function isAsteraOperation(
   projectPath: string,
   atMs: number,
   ops: readonly PendingGitOperation[],
-  graceMs: number = OPERATION_GRACE_MS
+  graceMs: number = OPERATION_GRACE_MS,
+  samePath: (a: string, b: string) => boolean = (a, b) => a === b
 ): boolean {
   return ops.some((o) => {
-    if (o.projectPath !== projectPath) return false
+    if (!samePath(o.projectPath, projectPath)) return false
     const started = ms(o.startedAt)
     if (started === null || started > atMs) return false
     if (o.endedAt === undefined) return true // 아직 도는 중

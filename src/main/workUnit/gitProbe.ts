@@ -3,8 +3,9 @@ import { git } from '../../core/worktrees/git'
 import { parsePorcelainZ } from '../../core/git/status'
 import type { GitRef } from '../../core/git/types'
 
-/** `git status` 는 감시 고리(gitWatcher) 안에서 돌므로 매달리면 안 된다. ipc.ts 의 git.status 와 같은 값 */
-const STATUS_TIMEOUT_MS = 5_000
+/** 감시 고리(gitWatcher) 안에서 도는 호출은 매달리면 안 된다 — `readChangedFiles` 도 `readRange` 도
+ *  같은 회차(gitRound) 안에서 불린다. ipc.ts 의 git.status 와 같은 값. */
+const WATCH_ROUND_TIMEOUT_MS = 5_000
 
 /** 감시 고리(gitWatcher)에서 불린다 — 여기서 던지면 고리 전체가 멈춘다. 그래서 절대 던지지 않고,
  *  실패한 항목은 null 로 돌려준다.
@@ -51,52 +52,55 @@ export async function isAncestorOf(
  * GitWatcher 를 깨워 무한 고리가 된다 (ipc.ts 의 git.status 핸들러가 같은 이유로 같은 플래그를 쓴다).
  * `trim:false` 도 같다 — porcelain 레코드는 `XY<공백>경로` 라 앞 공백을 깎으면 경로의 첫 글자가 함께 날아간다.
  *
- * (Task 11 은 이 함수를 collector.ts 에 두었다 — 그때는 이 파일을 고칠 수 없다는 제약이 있었다. 이
- * 태스크는 그 제약이 없어 제자리로 옮긴다: git 에 말을 거는 일이 두 파일에 나뉘어 있을 이유가 없다.)
+ * (이 함수는 한동안 collector.ts 에 있었다 — 그때는 이 파일을 고칠 수 없다는 제약이 있어서였다.
+ * 지금은 그 제약이 없어 제자리로 옮긴다: git 에 말을 거는 일이 두 파일에 나뉘어 있을 이유가 없다.)
  */
 export async function readChangedFiles(repoPath: string): Promise<string[]> {
   const r = await git(
     ['--no-optional-locks', 'status', '--porcelain', '-z', '--untracked-files=all'],
-    { cwd: repoPath, timeoutMs: STATUS_TIMEOUT_MS, trim: false }
+    { cwd: repoPath, timeoutMs: WATCH_ROUND_TIMEOUT_MS, trim: false }
   )
   if (!r.ok) return [] // 저장소가 아니거나 git 이 실패했다 — 관찰된 변경이 없는 것으로 본다
   return parsePorcelainZ(r.stdout).map((e) => e.relPath)
 }
-
-// 파일 이름이 우연히 40자 hex 와 같은 모양이 될 가능성은 사실상 없다 — 커밋 해시 줄과 파일 줄을
-// 가르는 데 쓴다 (readRange 의 주석).
-const COMMIT_HASH_RE = /^[0-9a-f]{40}$/
 
 /**
  * before..after 구간의 커밋 해시들과 그 구간에서 바뀐 파일들. 수집기는 `fast-forward` 로 확인된
  * 전이에서만 이것을 부른다 — 그 밖의 전이는 `before..after` 범위 자체를 신뢰할 수 없다
  * (`core/git/types.ts` 의 `ExternalGitChange.commits` 주석).
  *
- * 한 번의 `git log --name-only` 로 커밋과 파일을 함께 받는다. `--pretty=format:%H` 가 커밋마다
- * 40자 hex 해시 한 줄을 내고 그 뒤로 `--name-only` 가 그 커밋에서 바뀐 파일들을 한 줄씩 낸다 —
- * 실측(git 2.45.1): `<hash>\n<file>\n<file>\n\n<hash>\n<file>\n` (커밋 사이는 빈 줄로 갈린다,
- * 머지 커밋처럼 파일이 없는 커밋은 다음 해시 줄로 바로 이어진다). 그래서 각 줄을 40자 hex 정규식으로
- * 먼저 걸러 해시 줄과 파일 줄을 가른다.
+ * **따로 묻는다 — 한 스트림에 섞지 않는다.** 처음엔 `git log --name-only` 하나로 커밋과 파일을
+ * 같이 받고 해시 줄을 40자 hex 모양으로 골라냈지만, 그 모양 판정은 두 가지로 깨진다: SHA-256
+ * 저장소의 64자 해시가 전부 "파일"로 잘못 잡혀 커밋 목록이 비고, 40자 hex 그대로인 파일 이름이
+ * "커밋"으로 잘못 잡힌다. 거기다 `--name-only` 는 파일이 있는 커밋에서만 헤더 뒤에 개행을 넣고
+ * 파일이 없는 커밋(빈 커밋)에서는 넣지 않아, 한 스트림 안에서 경계를 셀 때 그 개행의 유무까지
+ * 가려야 한다 — 실측(git 2.45.1)으로 확인했다. 그래서 커밋과 파일을 **구조적으로 분리된 두 번의
+ * 호출**로 받는다: 하나는 해시만, 하나는 파일만 낸다. 어느 쪽도 "이게 해시처럼 생겼나"를 묻지
+ * 않으므로 다이제스트 길이나 파일 이름 모양과 무관하게 옳다.
  *
- * 실패하면(저장소가 아니다, 커밋을 못 찾는다) 빈 목록이다 — **절대 던지지 않는다.** 감시 고리
- * (gitWatcher) 안에서 불린다.
+ * 둘 다 `-z` 로 NUL 구분한다(개행이 아니다 — 커밋 메시지에 개행이 있을 수 있고, 여기서는 안
+ * 쓰지만 옆의 `readChangedFiles` 가 이미 같은 이유로 -z 를 쓴다). 파일 목록 쪽에는
+ * `-c core.quotePath=false` 도 준다 — 없으면 비 ASCII 경로가 8진 이스케이프로 인용된다
+ * (실측: 파일 `한글.txt` 가 `"\355\225\234\352\270\200.txt"` 로 나온다). 그러면 그 문자열이
+ * 그대로 저장돼 사람이 읽을 수 없는 경로가 남는다 — 한글이 흔한 이 코드베이스에서는 드문 일이
+ * 아니다.
+ *
+ * 실패하면(저장소가 아니다, 커밋을 못 찾는다) 둘 다 빈 목록이다 — **절대 던지지 않는다.** 감시
+ * 고리(gitWatcher) 안에서 불린다.
  */
 export async function readRange(
   repoPath: string,
   before: string,
   after: string
 ): Promise<{ commits: string[]; changedFiles: string[] }> {
-  const r = await git(['log', '--pretty=format:%H', '--name-only', `${before}..${after}`], {
-    cwd: repoPath
-  })
-  if (!r.ok) return { commits: [], changedFiles: [] }
+  const range = `${before}..${after}`
+  const opts = { cwd: repoPath, timeoutMs: WATCH_ROUND_TIMEOUT_MS, trim: false }
+  const [log, diff] = await Promise.all([
+    git(['log', '--pretty=format:%H', '-z', range], opts),
+    git(['-c', 'core.quotePath=false', 'diff', '--name-only', '-z', range], opts)
+  ])
+  if (!log.ok || !diff.ok) return { commits: [], changedFiles: [] }
 
-  const commits: string[] = []
-  const files = new Set<string>()
-  for (const line of r.stdout.split('\n')) {
-    if (line === '') continue
-    if (COMMIT_HASH_RE.test(line)) commits.push(line)
-    else files.add(line)
-  }
-  return { commits, changedFiles: [...files] }
+  const split = (s: string): string[] => s.split('\0').filter((t) => t !== '')
+  return { commits: split(log.stdout), changedFiles: split(diff.stdout) }
 }

@@ -236,10 +236,13 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
     expect(store.get(projectPath)!.externalGitChanges).toHaveLength(0)
   })
 
-  // Task 11 리뷰가 짚은 자리다: 수집기의 주입된 시계(now)가 유예 경계를 실제로 넘기는 테스트가
-  // 없었다. isAsteraOperation 의 유예(OPERATION_GRACE_MS)는 provenance.test.ts 가 순수 함수로도
-  // 확인하지만, 여기서는 수집기 자신의 begin/end + 주입된 clock 을 통해 끝에서 끝까지 확인한다.
-  it('유예가 지난 뒤의 전이는 외부다', async () => {
+  // 수집기의 주입된 시계(now)가 유예 경계를 실제로 넘기는 테스트가 없었다. isAsteraOperation 의
+  // 유예(OPERATION_GRACE_MS)는 provenance.test.ts 가 순수 함수로도 확인하지만, 여기서는 수집기
+  // 자신의 begin/end + 주입된 clock 을 통해 끝에서 끝까지 확인하고, fast-forward 의 commits·
+  // changedFiles 가 실제로 저장되는 기록까지 함께 본다(readRange 의 결과를 그대로 threading 하는지는
+  // 이 자리 말고는 볼 데가 없다 — commits·changedFiles 를 빈 배열로 바꿔도 이 단언 없이는 스위트가
+  // 그대로 초록이었다).
+  it('유예가 지난 뒤의 전이는 외부다 — commits·changedFiles 도 함께 저장된다', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
     const { collector, store } = await makeCollector(fake)
@@ -252,11 +255,92 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
     collector.endGitOperation(opId)
     fake.clock += OPERATION_GRACE_MS + 1 // 유예 너머로 시각을 옮긴다
 
+    fake.git.range = { commits: ['c1'], changedFiles: ['a.txt', 'b.txt'] }
     fake.git.ref = { branch: 'main', head: 'c1' }
     collector.onGitChanged()
     await collector.flush()
 
+    const state = store.get(projectPath)!
+    expect(state.externalGitChanges).toHaveLength(1)
+    expect(state.externalGitChanges[0].commits).toEqual(['c1'])
+    expect(state.externalGitChanges[0].changedFiles).toEqual(['a.txt', 'b.txt'])
+  })
+
+  // ExternalGitChange.commits/changedFiles 의 주석 그대로다: fast-forward 가 아니면 before..after
+  // 범위를 신뢰할 수 없다. fake.git.range 를 채워 둬도 branch-switch 에는 그것이 새지 않아야 한다 —
+  // readRange 를 부르지 않았다는 것의 관찰 가능한 증거다.
+  it('branch-switch 에는 commits·changedFiles 를 채우지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    fake.git.range = { commits: ['should-not-appear'], changedFiles: ['should-not-appear.txt'] }
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    collector.onGitChanged() // 기준선 (main, c0)
+    await collector.flush()
+
+    fake.git.ref = { branch: 'feature', head: 'c0' } // 브랜치만 바뀐다 — HEAD 는 그대로
+    collector.onGitChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.externalGitChanges).toHaveLength(1)
+    expect(state.externalGitChanges[0].type).toBe('branch-switch')
+    expect(state.externalGitChanges[0].commits).toEqual([])
+    expect(state.externalGitChanges[0].changedFiles).toEqual([])
+  })
+
+  // **CRITICAL 회귀 테스트.** endGitOperation 이 `!running` 가드를 갖고 있으면, 추적을 끄는 사이에
+  // 끝난 병합의 endedAt 이 영영 비고, isAsteraOperation 은 endedAt 없는 동작을 "아직 도는 중"으로
+  // 영원히 읽는다 — 그 프로젝트의 모든 외부 변경이 그때부터 조용히 삼켜진다. ipc.ts 의 job-merge
+  // 자리는 토글을 묻지 않고 beginGitOperation/endGitOperation 을 부르므로, 병합 도중 설정 체크박스가
+  // 눌리는 창은 실제로 열려 있다.
+  it('추적을 끄는 사이에 끝난 동작도 닫힌다 — 열린 채로 영원히 남지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    collector.onGitChanged() // 기준선
+    await collector.flush()
+
+    const opId = collector.beginGitOperation('job-merge', projectPath)
+    await collector.stop() // 병합이 도는 중에 추적을 끈다
+    collector.endGitOperation(opId) // 꺼져 있어도 닫혀야 한다
+    await collector.start() // 다시 켠다 — lastRef 가 비므로 다음 회차는 기준선부터 다시 잡는다
+
+    collector.onGitChanged() // 재시작 뒤의 기준선
+    await collector.flush()
+
+    fake.clock += OPERATION_GRACE_MS + 1 // 유예를 넘긴다
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+
+    // 닫히지 않았다면 이 동작은 여전히 "도는 중"으로 읽혀 이 전이도 Astera 것으로 삼켜지고,
+    // 길이는 0 으로 남는다.
     expect(store.get(projectPath)!.externalGitChanges).toHaveLength(1)
+  })
+
+  // ipc.ts 의 mergeInto(run.worktree ?? run.cwd)와 이 프로젝트의 cwd 는 따로 기록되고, 대소문자나
+  // 구분자만 다르게 적힐 수 있다(core/orchestration/integrate.ts 의 worktreeDeps 주석과 같은 문제) —
+  // isAsteraOperation 에 isSamePath 를 넘기지 않으면 이 등록은 아무 것도 못 막는다.
+  it('등록된 경로 표기가 달라도(대소문자) Astera 의 병합으로 본다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    collector.onGitChanged() // 기준선
+    await collector.flush()
+
+    const opId = collector.beginGitOperation('job-merge', projectPath.toUpperCase())
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+    collector.endGitOperation(opId)
+
+    expect(store.get(projectPath)!.externalGitChanges).toHaveLength(0)
   })
 })
 
