@@ -29,7 +29,6 @@ const render = (u: ProjectUnderstanding | null, selected: string | null = null):
       understanding: u,
       selectedFeatureId: selected,
       onOpenFeature: () => {},
-      onReview: () => {},
       onRegenerate: () => {},
       onAnalyze: () => {}
     })
@@ -62,7 +61,7 @@ describe('UnderstandingView', () => {
   it('검토가 필요한 줄은 시각 대신 이유를 적는다', () => {
     const html = render(base)
     expect(html).toContain('PaymentService.ts 외 2개가 바뀜')
-    expect(html).toContain('hiw.feature.review')
+    expect(html).toContain('hiw.feature.regenerate')
   })
 
   it('최신인 줄은 근거 개수를 적는다', () => {
@@ -103,11 +102,72 @@ describe('[다시 만들기] 가 서는 자리', () => {
     expect(render(one('update-available'))).toContain('hiw.feature.regenerate')
   })
 
-  it('최신인 줄에는 서지 않는다', () => {
+  it('최신인 줄에는 서지 않는다 — 손댈 것이 없는 줄에 버튼을 두지 않는다', () => {
     expect(render(one('up-to-date'))).not.toContain('hiw.feature.regenerate')
+  })
+
+  // 한때 여기 [갱신 검토] 가 함께 있었고, 그것이 하는 일은 줄을 누르는 것과 같았다 — 이미 그 탭을
+  // 보고 있으면 눌러도 아무 일이 없었다. 읽는 것은 줄이 맡고 버튼은 손댈 수 있는 일만 맡는다
+  it('줄의 버튼은 하나뿐이다', () => {
+    const html = render(one('needs-review'))
+    expect(html).not.toContain('hiw.feature.review')
+    expect(html.match(/hiw-review/g) ?? []).toHaveLength(1)
+  })
+
+  it('오래됐을 수 있는 줄과 근거가 모자란 줄에도 선다 — 다시 만드는 것이 유일한 지렛대다', () => {
+    for (const s of ['needs-review', 'possibly-stale'] as const)
+      expect(render(one(s))).toContain('hiw.feature.regenerate')
   })
 
   it('만드는 중인 줄에는 서지 않는다 — 두 번 누르면 두 번 돈다', () => {
     expect(render(one('generating'))).not.toContain('hiw.feature.regenerate')
+  })
+})
+
+// 생성은 3~4분 걸린다. 멈춘 화면과 도는 화면이 같아 보이면 사용자는 다시 누르거나 고장으로 읽는다 —
+// 문구가 "만드는 중"이라고 적혀 있어도 그렇다.
+describe('도는 동안 움직인다', () => {
+  const one = (status: ProjectUnderstanding['features'][number]['status']): ProjectUnderstanding => ({
+    features: [{ id: 'x', name: '결제', summary: '카드', status, updatedAt: 'x', evidenceCount: 0 }],
+    explanations: {},
+    recentChanges: []
+  })
+
+  it('만드는 중인 줄의 글리프가 돈다', () => {
+    expect(render(one('generating'))).toContain('hiw-spin')
+  })
+
+  it('다른 상태는 돌지 않는다 — 움직임이 곧 "지금 하고 있다"여야 한다', () => {
+    for (const s of ['up-to-date', 'needs-review', 'generation-failed'] as const)
+      expect(render(one(s))).not.toContain('hiw-spin')
+  })
+
+  it('분석 중이면 새로 고침 버튼이 돈다', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(UnderstandingView, {
+        understanding: one('up-to-date'),
+        selectedFeatureId: null,
+        onOpenFeature: () => {},
+          onRegenerate: () => {},
+        onAnalyze: () => {},
+        analyzing: true
+      })
+    )
+    expect(html).toContain('hiw-spin')
+  })
+
+  // 첫 분석은 2분이 넘는다 — 빈 화면의 버튼도 같은 문제다
+  it('빈 상태의 [프로젝트 분석] 도 도는 동안 움직인다', () => {
+    const html = renderToStaticMarkup(
+      React.createElement(UnderstandingView, {
+        understanding: null,
+        selectedFeatureId: null,
+        onOpenFeature: () => {},
+          onRegenerate: () => {},
+        onAnalyze: () => {},
+        analyzing: true
+      })
+    )
+    expect(html).toContain('hiw-spin')
   })
 })

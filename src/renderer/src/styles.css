@@ -1862,6 +1862,19 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .hiw-row.on { background: var(--line-soft); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
 /* 색은 .tab-glyph 와 같은 이유로 여기 없다 — GLYPH_COLOR 에서 인라인으로 온다 */
 .hiw-g { flex: 0 0 auto; width: 12px; text-align: center; font-size: 11px; line-height: 1.45; }
+/* "지금 돌고 있다"를 **움직임으로** 말한다. 상태 문구가 이미 그렇게 적혀 있어도, 멈춘 화면에서는
+   3~4분짜리 생성과 그 자리에서 죽어 버린 화면이 똑같이 보인다 — Jobs 사이드바가 같은 이유로 같은
+   언어를 쓴다(아래 job-spin 주석).
+
+   **새 키프레임을 만들지 않는다.** cm-spin 은 이 앱이 .tab-dot.busy 와 .loading-spinner 에 이미
+   쓰는 회전이고, 언젠가 그 회전을 멈춰야 한다면 끌 자리가 하나여야 한다. 1.5초는 Jobs 사이드바의
+   글리프(.job-arc)와 같다 — 목록 안의 작은 표시라 빠른 회전은 소란스럽다. reduced-motion 에서도
+   도는 이유도 그쪽과 같다(그 주석이 실측까지 적어 두었다).
+
+   **문자만 감싸 돈다.** 이 클래스가 붙는 것은 언제나 글리프 한 글자를 감싼 안쪽 span 이다 —
+   바깥 칸(.hiw-g)은 줄 높이만큼 늘어나는 flex 칸이라 그것을 돌리면 글리프가 제자리에서 도는 대신
+   큰 호를 그린다. 그 판단은 UnderstandingIcons 의 StatusGlyph 에 적혀 있다. */
+.hiw-spin { display: inline-block; line-height: 1; transform-origin: 50% 50%; animation: cm-spin 1.5s linear infinite; }
 .hiw-body { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .hiw-name { font-size: 12px; font-weight: 500; color: var(--text); }
 .hiw-summary { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1913,7 +1926,6 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* .hiw-lab 은 위의 사이드바가 이미 정의한다 — 페인 안으로 한정하지 않으면 나중에 오는 이 규칙이
    사이드바의 '최근 변경' 라벨까지 덮는다 */
 .hiw-pane .hiw-lab { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.11em; text-transform: uppercase; color: var(--text-faint); margin: 0 0 7px; }
-.hiw-hint { text-transform: none; letter-spacing: 0; }
 .hiw-p { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--text); max-width: 46ch; }
 
 /* 흐름도. 상자는 HTML, 선은 그 아래 SVG — .detail-canvas / .detail-edges 와 같은 겹침이다.
@@ -1952,8 +1964,17 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .hiw-node.pickable:hover { border-color: var(--accent); }
 .hiw-node.selected { border-color: var(--accent); background: var(--surface-hover); }
 .hiw-node.muted { opacity: 0.34; }
+/* 분기 조건. **줄바꿈을 막고 위로 올린다** — 실측으로 깨졌던 자리다.
+   절대 배치라 이 칸의 최대 폭은 "도형판 폭 − left" 인데, 한 줄짜리 흐름에서 그것은 상자 폭의
+   절반(75px)이다. 10px 한글로 일곱 자면 넘치고, 넘치면 두 줄이 된다. 그런데 이 칸이 앉는 자리는
+   상자와 상자 사이 30px 이고 아래쪽에 붙어 있어(translate -100%), 두 줄이 되면 **첫 줄이 위쪽
+   상자 뒤로 들어간다** — 상자가 DOM 에서 나중이라 위에 그려진다. 화면에는 문구의 꼬리만 남아
+   "한도에 도달하고 다음 계정이 있음" 이 "이 있음" 으로 보였다.
+   nowrap 이 그 원인을 없애고, z-index 가 그래도 겹칠 때 문구를 위에 세운다. 길이 자체는
+   프롬프트와 검증기가 따로 묶는다(core/understanding/validate.ts 의 MAX_CONDITION). */
 .hiw-cond {
-  position: absolute; transform: translate(-50%, -100%);
+  position: absolute; transform: translate(-50%, -100%); z-index: 1;
+  white-space: nowrap;
   font-family: var(--mono); font-size: 10px; color: var(--text-faint);
   background: var(--bg); padding: 0 3px;
 }

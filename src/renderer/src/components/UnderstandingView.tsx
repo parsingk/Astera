@@ -1,7 +1,7 @@
 import type { ProjectUnderstanding } from '../../../core/understanding/types'
 import { attentionCount, ATTENTION_STATUSES, sortFeatures } from '../../../core/understanding/list'
 import { useI18n } from '../i18n/I18nProvider'
-import { GLYPH, GLYPH_COLOR } from './UnderstandingIcons'
+import { GLYPH_COLOR, StatusGlyph } from './UnderstandingIcons'
 
 const dateOf = (iso: string): string => {
   const d = new Date(iso)
@@ -13,7 +13,6 @@ export function UnderstandingView({
   understanding,
   selectedFeatureId,
   onOpenFeature,
-  onReview,
   onRegenerate,
   onAnalyze,
   analyzing = false
@@ -21,7 +20,6 @@ export function UnderstandingView({
   understanding: ProjectUnderstanding | null
   selectedFeatureId: string | null
   onOpenFeature: (featureId: string) => void
-  onReview: (featureId: string) => void
   /** 이 기능의 설명을 다시 만든다. **결과를 기다리지 않는다** — 줄의 상태가 곧 "만드는 중"이 되고,
    *  끝나면 화면이 스스로 다시 읽는다(App 의 'understanding:changed' 구독) */
   onRegenerate: (featureId: string) => void
@@ -41,7 +39,8 @@ export function UnderstandingView({
         <div className="hiw-empty">
           <p>{t('hiw.empty.body')}</p>
           <button className="hiw-cta" onClick={onAnalyze} disabled={analyzing}>
-            {t(analyzing ? 'hiw.analyze.running' : 'hiw.empty.analyze')}
+            {/* 첫 분석은 2분이 넘는다. 멈춘 버튼과 도는 버튼이 같아 보이면 사용자는 다시 누른다 */}
+            {analyzing && <StatusGlyph status="generating" />} {t(analyzing ? 'hiw.analyze.running' : 'hiw.empty.analyze')}
           </button>
           <p className="hiw-fine">{t('hiw.empty.readOnly')}</p>
         </div>
@@ -57,7 +56,8 @@ export function UnderstandingView({
       <div className="hiw-head">
         <b>{t('hiw.title')}</b>
         <button className="hiw-act" title={t(analyzing ? 'hiw.analyze.running' : 'hiw.reanalyze')} onClick={onAnalyze} disabled={analyzing}>
-          ⟳
+          {/* 이 버튼은 글리프가 이미 ⟳ 다 — 도는 동안 그것을 실제로 돌린다 */}
+          <span className={analyzing ? 'hiw-spin' : undefined}>⟳</span>
         </button>
       </div>
 
@@ -72,10 +72,17 @@ export function UnderstandingView({
       <div className="hiw-list">
         {features.map((f) => {
           const needs = ATTENTION_STATUSES.includes(f.status)
-          // **[다시] 가 서는 두 자리.** 만들지 못한 줄은 그 자리에서 다시 눌러 볼 수 있어야 하고
-          // (그러지 않으면 사유만 남고 고칠 길이 없다), 갱신이 있는 줄에서 새 설명을 받는 길도
-          // 이 버튼뿐이다 — 사람이 고친 설명은 배경 재생성이 덮지 않기 때문이다(스펙 §56).
-          const retry = f.status === 'generation-failed' || f.status === 'update-available'
+          // **줄의 버튼은 하나뿐이고, 그 뜻은 언제나 "다시 만들어라"다.**
+          //
+          // 한때 여기 [갱신 검토] 가 함께 있었는데, 그것이 하는 일은 줄을 누르는 것과 같았다
+          // (둘 다 그 기능의 탭을 연다) — 이미 그 탭을 보고 있으면 눌러도 아무 일이 없었고,
+          // 실제로 그렇게 보고됐다. 읽는 것은 줄이 맡고, 버튼은 손댈 수 있는 일만 맡는다.
+          //
+          // 손이 필요한 네 상태 모두에 선다: 만들지 못했으면 다시 눌러 볼 길이 있어야 하고
+          // (없으면 사유만 남는다), 오래됐거나 근거가 모자란 줄에도 다시 만드는 것이 유일한
+          // 지렛대이며, 갱신이 있는 줄에서는 이것이 새 설명을 받는 **유일한** 길이다 — 사람이
+          // 고친 설명은 배경 재생성이 덮지 않기 때문이다(스펙 §56).
+          const retry = needs || f.status === 'generation-failed'
           return (
             <div
               key={f.id}
@@ -85,7 +92,7 @@ export function UnderstandingView({
               {/* 색은 상태에서 온다 — 줄이 "검토 필요" 집합에 드는지로 고르면 그 집합에 없는
                   generation-failed 가 초록으로 그려진다(UnderstandingIcons 의 GLYPH_COLOR) */}
               <span className="hiw-g" style={{ color: GLYPH_COLOR[f.status] }} aria-hidden="true">
-                {GLYPH[f.status]}
+                <StatusGlyph status={f.status} />
               </span>
               <span className="hiw-body">
                 <span className="hiw-name">{f.name}</span>
@@ -102,17 +109,6 @@ export function UnderstandingView({
                     t('hiw.feature.evidence', { count: f.evidenceCount })
                   )}
                 </span>
-                {needs && (
-                  <button
-                    className="hiw-review"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onReview(f.id)
-                    }}
-                  >
-                    {t('hiw.feature.review')}
-                  </button>
-                )}
                 {retry && (
                   <button
                     className="hiw-review"

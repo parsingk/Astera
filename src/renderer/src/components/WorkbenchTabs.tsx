@@ -66,6 +66,8 @@ export type WorkbenchTab =
       glyph: string | null
       /** 그 글리프의 색(테마 토큰). PaneGrid 가 UnderstandingIcons 의 GLYPH_COLOR 에서 가져온다 */
       glyphColor: string | null
+      /** 도는 중인가 — 판정은 UnderstandingIcons 의 isWorking 하나다 */
+      glyphSpins: boolean
     }
 
 /** 페인 하나의 탭 줄.
@@ -197,7 +199,7 @@ export function WorkbenchTabs({
                 style={{ color: tab.glyphColor ?? undefined }}
                 aria-hidden="true"
               >
-                {tab.glyph}
+                {tab.glyphSpins ? <span className="hiw-spin">{tab.glyph}</span> : tab.glyph}
               </span>
             )
           ) : tab.busy && !tab.exited ? (

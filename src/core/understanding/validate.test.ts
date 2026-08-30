@@ -222,3 +222,40 @@ describe('흐름 간선이 풀리는 범위', () => {
     if (!r.ok) expect(r.reason).toContain('없음')
   })
 })
+
+// 분기 조건은 상자와 상자 사이 30px 에 앉는다. 문장이 오면 두 줄이 되고, 두 줄이 되면 첫 줄이
+// 위쪽 상자 뒤로 숨어 꼬리만 보인다 — 실측으로 그렇게 깨졌다("한도에 도달하고 다음 계정이 있음"이
+// "이 있음"으로 보였다). 화면 쪽은 nowrap 으로 막았고, 여기서는 문장이 된 조건을 잡는다.
+describe('분기 조건 문구', () => {
+  const withCondition = (condition: string): unknown => ({
+    overview: '설명',
+    userFlow: [
+      { id: 'a', label: '시작', type: 'start', next: [{ targetId: 'b', condition }] },
+      { id: 'b', label: '끝', type: 'success', next: [] }
+    ],
+    failureFlows: [],
+    keyDecisions: [],
+    implementation: [{ role: 'x', path: 'src/a.ts' }],
+    evidencePaths: ['src/a.ts'],
+    needsReview: false
+  })
+  const all = (): boolean => true
+
+  it('딱지 길이는 그대로 실린다', () => {
+    const r = validateExplanation(withCondition('한도에 도달하지 않음'), all)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.value.userFlow[0].next[0].condition).toBe('한도에 도달하지 않음')
+  })
+
+  // 한도가 넉넉한 이유: 실측에서 에이전트가 쓴 가장 긴 조건이 18자였고, 그것 하나로 3~4분짜리
+  // 생성을 통째로 버리는 것은 값이 맞지 않는다
+  it('열여덟 자는 통과한다', () => {
+    expect(validateExplanation(withCondition('한도에 도달하고 다음 계정이 있음'), all).ok).toBe(true)
+  })
+
+  it('문장이 된 조건은 거부한다', () => {
+    const r = validateExplanation(withCondition('사용자가 다른 계정을 고르고 그 계정이 아직 한도에 걸리지 않았을 때'), all)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toContain('분기 조건')
+  })
+})

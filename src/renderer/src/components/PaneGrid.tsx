@@ -18,7 +18,7 @@ import { tabLabels } from '../../../core/files/tabLabel'
 import type { FeatureStatus } from '../../../core/understanding/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { TerminalView } from './TerminalView'
-import { GLYPH, GLYPH_COLOR } from './UnderstandingIcons'
+import { GLYPH, GLYPH_COLOR, isWorking } from './UnderstandingIcons'
 import {
   WorkbenchTabs,
   type FeatureTab,
@@ -350,6 +350,9 @@ export function PaneGrid({
                 featureId: rec.featureId,
                 title: rec.title,
                 glyph: status ? GLYPH[status] : null,
+                // 탭 줄에서도 돈다 — 그 기능의 탭을 열어 둔 채 기다리는 것이 흔한 자리다.
+                // 판정은 UnderstandingIcons 한 곳에서 온다(isWorking)
+                glyphSpins: status ? isWorking(status) : false,
                 // 색도 같은 표에서 온다 — "검토 필요" 집합으로 고르면 그 집합에 없는
                 // generation-failed 가 초록으로 그려진다(UnderstandingIcons 의 GLYPH_COLOR)
                 glyphColor: status ? GLYPH_COLOR[status] : null

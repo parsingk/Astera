@@ -27,6 +27,16 @@ export type ValidationResult =
 
 const NODE_TYPES: readonly FlowNodeType[] = ['start', 'step', 'decision', 'success', 'failure']
 
+/** 분기 조건 문구의 한도. **칸 이름(22자)보다 짧다** — 이 문구가 앉는 자리는 상자와 상자 사이
+ *  30px 이고, 상자 폭(150px)을 넘으면 옆 갈래 위로 삐져나온다. 10px 고정폭 한글로 열두 자면
+ *  그 폭을 채운다.
+ *
+ *  **자르지 않고 거부하는 것**은 칸 이름과 같은 이유다. 다만 한도는 넉넉하다: 실측에서 에이전트가
+ *  쓴 가장 긴 조건이 열여덟 자였고("한도에 도달하고 다음 계정이 있음"), 그것 하나로 3~4분짜리
+ *  생성을 통째로 버리는 것은 값이 맞지 않는다. 여기서 잡으려는 것은 문장이 된 조건이다 —
+ *  짧게 쓰라는 요구는 프롬프트가 하고, 이 줄은 그 요구가 완전히 무시됐을 때만 선다. */
+export const MAX_CONDITION = 20
+
 const isObj = (v: unknown): v is Record<string, unknown> =>
   v !== null && typeof v === 'object' && !Array.isArray(v)
 
@@ -61,6 +71,8 @@ function readNode(v: unknown, at: string, sink: string[]): FlowNode | string {
   const next: FlowNode['next'] = []
   for (const e of v.next) {
     if (!isObj(e) || !isStr(e.targetId)) return `${at}: next 의 간선이 targetId 를 잃었다`
+    if (typeof e.condition === 'string' && e.condition.length > MAX_CONDITION)
+      return `${at}: 분기 조건이 ${MAX_CONDITION}자를 넘는다 ("${e.condition.slice(0, 30)}…") — 조건은 문장이 아니라 딱지다`
     next.push(
       typeof e.condition === 'string'
         ? { targetId: e.targetId, condition: e.condition }

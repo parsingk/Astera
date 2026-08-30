@@ -2889,8 +2889,7 @@ export default function App(): React.JSX.Element {
                 onOpenFeature={openFeatureTab}
                 // [검토] 도 같은 탭을 연다. 검토 흐름 자체는 아직 없고, 그 전까지 이 버튼이 할 수
                 // 있는 가장 정직한 일이 "무엇을 검토할지 펼쳐 보여 주는 것"이다
-                onReview={openFeatureTab}
-                // [다시] — 기다리지 않는다. 줄의 상태가 곧 "만드는 중"이 되고, 끝나면
+                // [다시 만들기] — 기다리지 않는다. 줄의 상태가 곧 "만드는 중"이 되고, 끝나면
                 // 'understanding:changed' 가 이 화면을 다시 읽게 한다
                 onRegenerate={(id) => currentProject && regenerateFeature(currentProject, id)}
                 // 첫 분석 (스펙 §21). **결과를 기다려 보여 준다** — 사용자가 눌러 기다리는

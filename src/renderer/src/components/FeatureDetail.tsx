@@ -4,7 +4,7 @@ import { scopeToStep } from '../../../core/understanding/scope'
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
 import { FlowDiagram } from './FlowDiagram'
-import { GLYPH, GLYPH_COLOR, STATUS_KEY } from './UnderstandingIcons'
+import { GLYPH_COLOR, STATUS_KEY, StatusGlyph } from './UnderstandingIcons'
 
 const dateOf = (iso: string): string => {
   const d = new Date(iso)
@@ -134,7 +134,7 @@ export function FeatureDetail({
         {/* 상태를 박아 두지 않는다 — 모양도 문구도 색도 사이드바와 같은 표를 본다(설계 §8).
             색을 여기서 따로 고르면 세 자리가 갈라진다(UnderstandingIcons 의 GLYPH_COLOR) */}
         <span className="hiw-st" style={{ color: GLYPH_COLOR[feature.status] }}>
-          {GLYPH[feature.status]} {t(STATUS_KEY[feature.status])}
+          <StatusGlyph status={feature.status} /> {t(STATUS_KEY[feature.status])}
         </span>
         <span className="hiw-sp" />
         {/* 앞의 둘은 아직 뒤가 없다 — 근거 단은 오른쪽에 이미 펼쳐져 있고, 편집은 저장할 곳
@@ -152,7 +152,14 @@ export function FeatureDetail({
           onClick={onRegenerate}
           disabled={feature.status === 'generating'}
         >
-          {t(feature.status === 'generating' ? 'hiw.status.generating' : 'hiw.pane.regenerate')}
+          {/* 방금 누른 자리에서 움직임이 보여야 한다 — 잠긴 버튼만으로는 눌린 것인지 고장인지 모른다 */}
+          {feature.status === 'generating' ? (
+            <>
+              <StatusGlyph status="generating" /> {t('hiw.status.generating')}
+            </>
+          ) : (
+            t('hiw.pane.regenerate')
+          )}
         </button>
         {narrow && (
           <button className="hiw-ghost acc" onClick={onToggleDrawer}>
@@ -173,9 +180,7 @@ export function FeatureDetail({
               거짓이다 — 바로 아래 실패 칸이 같은 이유로 이미 이 가드를 쓴다 */}
           {explanation.userFlow.length > 0 && (
             <section className="hiw-sec hiw-grow">
-              <p className="hiw-lab">
-                {t('hiw.pane.flow')} <span className="hiw-hint">{t('hiw.pane.flowHint')}</span>
-              </p>
+              <p className="hiw-lab">{t('hiw.pane.flow')}</p>
               <FlowDiagram
                 nodes={explanation.userFlow}
                 selectedId={scoped?.node.id ?? null}

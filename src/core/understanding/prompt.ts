@@ -60,7 +60,9 @@ FlowNode = { "id": string, "label": string, "type": "start"|"step"|"decision"|"s
              "description": string, "next": { "targetId": string, "condition"?: string }[],
              "evidencePaths": string[] }
 Labels must be under 22 characters — a longer label means the step name became a sentence;
-put the sentence in "description" instead.
+put the sentence in "description" instead. A "condition" is a tag on a branch, not a sentence:
+keep it under 12 characters ("yes", "limit hit", "만료"). It is drawn in the gap between two
+boxes, so a long one crowds the diagram.
 
 "userFlow" is drawn as a diagram and must be closed: every "targetId" in it must be the id of
 another node **in userFlow**. Failures are shown as a separate list, not wired into that diagram —

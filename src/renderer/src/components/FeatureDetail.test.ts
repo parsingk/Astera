@@ -176,3 +176,32 @@ describe('좁은 페인', () => {
     expect(render()).not.toContain('hiw.pane.reference')
   })
 })
+
+// [다시 만들기] 를 누르면 3~4분 기다린다. 방금 누른 자리에서 움직임이 보여야 한다 —
+// 잠긴 버튼만으로는 눌린 것인지 고장인지 구별되지 않는다.
+describe('만드는 중', () => {
+  const busy = (): string =>
+    renderToStaticMarkup(
+      React.createElement(FeatureDetail, {
+        feature: { ...feature, status: 'generating' },
+        explanation,
+        scopedNodeId: null,
+        onPickStep: () => {},
+        onOpenPath: () => {},
+        onRegenerate: () => {},
+        narrow: false,
+        drawerOpen: false,
+        onToggleDrawer: () => {}
+      })
+    )
+
+  it('머리의 상태 글리프와 버튼이 함께 돈다', () => {
+    const html = busy()
+    expect(html.match(/hiw-spin/g) ?? []).toHaveLength(2) // 상태 글리프 + 버튼 안
+    expect(html).toContain('disabled') // 두 번 누르면 두 번 돈다
+  })
+
+  it('평소에는 아무것도 돌지 않는다', () => {
+    expect(render()).not.toContain('hiw-spin')
+  })
+})
