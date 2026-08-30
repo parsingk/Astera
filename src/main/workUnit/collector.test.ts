@@ -290,6 +290,32 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
     expect(state.externalGitChanges[0].changedFiles).toEqual([])
   })
 
+  // 위 테스트의 반대쪽이다. `commits` 와 `changedFiles` 는 믿을 수 있는 정도가 다르다 —
+  // `git log before..after` 는 브랜치를 갈아타면 뜻이 없지만, `git diff --name-only before..after`
+  // 는 **두 트리의 비교**라 그때도 정확하다. 다음 계획의 기능 매핑이 브랜치 전환에서 그 파일
+  // 목록을 받아야 한다(EG §18·§19). 위 테스트가 여전히 빈 목록인 것은 그쪽 HEAD 가 움직이지
+  // 않아서다 — 같은 트리끼리는 견줄 것이 없다.
+  it('브랜치 전환에도 changedFiles 는 채운다 — 버리는 것은 commits 뿐이다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    fake.git.range = { commits: ['범위를-믿을-수-없다'], changedFiles: ['src/a.ts', 'src/b.ts'] }
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    collector.onGitChanged() // 기준선 (main, c0)
+    await collector.flush()
+
+    fake.git.ref = { branch: 'feature', head: 'c5' } // 브랜치도 HEAD 도 바뀐다
+    collector.onGitChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.externalGitChanges).toHaveLength(1)
+    expect(state.externalGitChanges[0].type).toBe('branch-switch')
+    expect(state.externalGitChanges[0].changedFiles).toEqual(['src/a.ts', 'src/b.ts'])
+    expect(state.externalGitChanges[0].commits).toEqual([])
+  })
+
   // **CRITICAL 회귀 테스트.** endGitOperation 이 `!running` 가드를 갖고 있으면, 추적을 끄는 사이에
   // 끝난 병합의 endedAt 이 영영 비고, isAsteraOperation 은 endedAt 없는 동작을 "아직 도는 중"으로
   // 영원히 읽는다 — 그 프로젝트의 모든 외부 변경이 그때부터 조용히 삼켜진다. ipc.ts 의 job-merge
@@ -307,9 +333,9 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
     const opId = collector.beginGitOperation('job-merge', projectPath)
     await collector.stop() // 병합이 도는 중에 추적을 끈다
     collector.endGitOperation(opId) // 꺼져 있어도 닫혀야 한다
-    await collector.start() // 다시 켠다 — lastRef 가 비므로 다음 회차는 기준선부터 다시 잡는다
+    await collector.start() // 다시 켠다 — 저장된 스냅샷이 남아 있으므로 앞은 여전히 (main, c0) 이다
 
-    collector.onGitChanged() // 재시작 뒤의 기준선
+    collector.onGitChanged() // 그 사이 HEAD 는 움직이지 않았다 — 전이 없음(none)
     await collector.flush()
 
     fake.clock += OPERATION_GRACE_MS + 1 // 유예를 넘긴다
@@ -378,6 +404,79 @@ describe('WorkUnitCollector — beginGitOperation/endGitOperation', () => {
     const ops = collector.getPendingGitOps()
     expect(ops.some((o) => o.id === first)).toBe(true)
     expect(ops.some((o) => o.id === second)).toBe(true)
+  })
+})
+
+// ── 저장된 git 스냅샷 (설계 §9 · EG §41-10·§42-17) ─────────────────────
+
+describe('WorkUnitCollector — 앱이 꺼져 있던 동안의 변화', () => {
+  // 스냅샷이 메모리에만 있으면 이 pull 은 없던 일이 된다 — 새 수집기에는 비교할 앞이 없어
+  // 기준선만 잡고 나가기 때문이다. 저장된 스냅샷이 그 앞이 되어야 **보통의 전이**로 판정된다.
+  it('꺼져 있는 동안 옮겨진 HEAD 가 다시 켠 첫 회차에 잡힌다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const first = await makeCollector(fake)
+    await first.collector.start()
+    first.collector.onGitChanged() // 마지막으로 안 상태 — main, c0
+    await first.collector.flush()
+    expect(first.store.get(projectPath)!.externalGitChanges).toHaveLength(0)
+
+    // 앱을 끈다(수집기를 버린다). 그 사이에 다른 창에서 pull 이 돈다
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    fake.git.range = { commits: ['c1'], changedFiles: ['pulled.ts'] }
+
+    // 같은 저장 파일로 다시 켠다 — 앱 재시작이다
+    const second = await makeCollector(fake)
+    await second.collector.start()
+    second.collector.onGitChanged()
+    await second.collector.flush()
+
+    const state = second.store.get(projectPath)!
+    expect(state.externalGitChanges).toHaveLength(1)
+    expect(state.externalGitChanges[0].type).toBe('fast-forward')
+    expect(state.externalGitChanges[0].before).toEqual({ branch: 'main', head: 'c0' })
+    expect(state.externalGitChanges[0].after).toEqual({ branch: 'main', head: 'c1' })
+    expect(state.externalGitChanges[0].changedFiles).toEqual(['pulled.ts'])
+  })
+
+  it('처음 보는 프로젝트는 기준선만 잡는다 — 기록이 생기지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    collector.onGitChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.externalGitChanges).toHaveLength(0)
+    // 비교할 앞은 없었지만 기준선은 남는다 — 다음 실행의 "앞"이 이것이다
+    expect(state.gitSnapshot).toMatchObject({ projectPath, branch: 'main', head: 'c0' })
+  })
+
+  // **커서와 반대 방향의 규칙이고, 그것이 맞다.** 커서는 "켜기 전의 대화는 읽지 않는다"는 약속이
+  // 걸려 있어 끌 때 버린다(스펙 §16.1). 스냅샷에 걸린 약속은 그 반대다 — "실제로 일어난 변화를
+  // 놓치지 않는다". 대화는 사람의 말이고 저장소의 역사는 사실이다.
+  it('껐다 켜는 사이의 변화도 잡는다 — 스냅샷은 커서와 달리 버리지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    collector.onGitChanged() // 마지막으로 안 상태 — main, c0
+    await collector.flush()
+
+    await collector.onEnabledChanged(false)
+    expect(store.get(projectPath)!.cursors).toHaveLength(0) // 커서는 버렸다
+    fake.git.ref = { branch: 'main', head: 'c1' } // 꺼져 있는 동안의 pull
+    await collector.onEnabledChanged(true)
+
+    collector.onGitChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.externalGitChanges).toHaveLength(1)
+    expect(state.externalGitChanges[0].before).toEqual({ branch: 'main', head: 'c0' })
   })
 })
 
@@ -689,5 +788,61 @@ describe('WorkUnitCollector — 스펙 §16.1 커서', () => {
     const state = store.get(projectPath)!
     expect(state.units).toHaveLength(1)
     expect(state.units[0].title).toBe('그 뒤에 온 요청')
+  })
+})
+
+// ── 배선에만 있어 테스트가 닿지 않던 두 자리 ───────────────────────────
+
+describe('WorkUnitCollector — 배선 두 자리', () => {
+  // EG §42-3 의 오귀속 방지가 이 연결에 걸려 있다. 작업 중에 남이 옮긴 저장소를 **겪은** 것은 그
+  // Unit 에 남기되(EG §27 — "겪었다"이지 "만들었다"가 아니다), 그 변경이 들여온 파일이 Unit 의
+  // 관찰된 변경 목록으로 섞이면 안 된다. 섞이면 다음 계획의 해석기가 남의 작업을 이 Unit 의
+  // 것으로 읽는다.
+  it('작업 중의 외부 변경은 id 로만 Unit 에 담긴다 — 그 파일 목록은 섞이지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    fake.git.files = ['src/mine.ts'] // 이 세션이 만지고 있는 파일
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, human('작업 하나'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+
+    collector.onGitChanged() // 기준선
+    await collector.flush()
+
+    // 남이 pull 했다 — 그 구간이 들여온 파일은 이 Unit 이 만든 것이 아니다
+    fake.git.range = { commits: ['c1'], changedFiles: ['vendor/pulled.ts'] }
+    fake.git.ref = { branch: 'main', head: 'c1' }
+    collector.onGitChanged()
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.externalGitChanges).toHaveLength(1)
+    expect(state.units[0].encounteredExternalGitChangeIds).toEqual([state.externalGitChanges[0].id])
+    expect(state.units[0].git.observedChangedFiles).toEqual(['src/mine.ts'])
+  })
+
+  // WU §23 unit 8 의 배선. 순수 함수(completion.ts 의 onSessionEnd)는 그쪽 테스트가 덮지만,
+  // 세션 종료가 그 함수까지 닿아 Unit 을 닫는지는 이 자리 말고는 볼 데가 없다.
+  it('세션이 끝나면 열린 Unit 이 닫힌다 — 관찰된 변경이 없었으면 abandoned', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, human('아무것도 바꾸지 못한 작업'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.units[0].status).toBe('active')
+
+    fake.sessions = [] // 끝난 세션은 listSessions 에서 이미 빠져 있다
+    await collector.onSessionExit('s1')
+
+    const state = store.get(projectPath)!
+    expect(state.units[0].status).toBe('abandoned') // 관찰된 변경이 없었다
+    expect(state.units[0].completedAt).toBeDefined()
+    expect(state.cursors).toHaveLength(0) // 더 자랄 파일을 가리키지 않는 커서는 지운다
   })
 })

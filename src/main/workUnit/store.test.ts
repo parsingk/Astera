@@ -27,6 +27,14 @@ const sample: WorkUnitState = {
   externalGitChanges: []
 }
 
+/** 설계 §9 의 ProjectGitSnapshot — "Astera 가 마지막으로 알던 git 상태" */
+const snapshot = {
+  projectPath: 'D:\\p',
+  branch: 'main',
+  head: 'abc',
+  capturedAt: '2026-08-29T10:00:00.000Z'
+}
+
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-wu-'))
   file = path.join(dir, 'workUnits.json')
@@ -59,6 +67,33 @@ describe('WorkUnitStore', () => {
     await s.set('D:\\b', { units: [], cursors: [], messages: [], externalGitChanges: [] })
     expect(s.get('D:\\a')!.units).toHaveLength(1)
     expect(s.get('D:\\b')!.units).toHaveLength(0)
+  })
+
+  // 이 값이 메모리에만 있으면 앱이 꺼져 있던 동안의 pull·브랜치 전환이 통째로 사라진다
+  // (설계 §9, EG §41-10·§42-17). 디스크 왕복이 그 전제다.
+  it('git 스냅샷도 함께 저장되고 다시 읽힌다', async () => {
+    const a = new WorkUnitStore(file)
+    await a.load()
+    await a.set('D:\\p', { ...sample, gitSnapshot: snapshot })
+
+    const b = new WorkUnitStore(file)
+    await b.load()
+    expect(b.get('D:\\p')!.gitSnapshot).toEqual(snapshot)
+  })
+
+  // **선택 필드다.** 이 브랜치를 쓰던 사용자의 디스크에는 이 필드가 없는 workUnits.json 이 이미
+  // 있고, 필수로 두면 그 파일이 통째로 .bak 으로 밀린다. 있을 때 보는 것은 "객체인가" 하나뿐이다 —
+  // 원소 모양을 보지 않는 이 파일의 정책 그대로다.
+  it('gitSnapshot 은 없어도 되고, 있으면 객체여야 한다', async () => {
+    await fs.writeFile(file, JSON.stringify({ projects: { 'D:\\p': sample } }), 'utf8')
+    expect((await new WorkUnitStore(file).load()).recovered).toBe(false)
+
+    await fs.writeFile(
+      file,
+      JSON.stringify({ projects: { 'D:\\p': { ...sample, gitSnapshot: 'nope' } } }),
+      'utf8'
+    )
+    expect((await new WorkUnitStore(file).load()).recovered).toBe(true)
   })
 
   it('깨진 파일은 .bak 으로 물리고 빈 상태로 시작한다', async () => {

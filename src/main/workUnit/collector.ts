@@ -36,7 +36,7 @@ import {
   onSessionEnd
 } from '../../core/workUnit/completion'
 import { readNewLines } from './tail'
-import type { WorkUnitState, WorkUnitStore } from './store'
+import type { ProjectGitSnapshot, WorkUnitState, WorkUnitStore } from './store'
 
 /** `core/history/index.ts` 와 같은 값이다. 상한이 있는 이유도 그 파일 주석 그대로다 —
  *  *"계속 리셋되기만 하는 디바운스는 세션이 쓰는 동안 영영 발화하지 않는다."* 세션이 트랜스크립트에
@@ -63,8 +63,10 @@ export interface CollectorGit {
   isAncestor(repoPath: string, before: string | null, after: string | null): Promise<boolean | null>
   /** 작업 트리에서 지금 바뀌어 있는 파일들 (저장소 루트 기준 상대 경로, git 이 찍은 그대로) */
   changedFiles(repoPath: string): Promise<string[]>
-  /** before..after 구간의 커밋과 그 구간에서 바뀐 파일들 (gitProbe.ts 의 readRange). fast-forward 로
-   *  확인된 전이에서만 부른다 — 그 밖의 전이는 이 범위를 신뢰할 수 없다(ExternalGitChange.commits 주석). */
+  /** before..after 구간의 커밋과 그 구간에서 바뀐 파일들 (gitProbe.ts 의 readRange). **두 HEAD 가
+   *  다른 전이에서 부른다.** 돌려받은 둘의 쓰임은 다르다 — 커밋 목록은 fast-forward 에서만 쓰고
+   *  (그 밖에는 범위를 신뢰할 수 없다, ExternalGitChange.commits 주석), 파일 목록은 두 트리의
+   *  비교라 어느 전이에서나 쓴다(gitRound 의 주석). */
   readRange(repoPath: string, before: string, after: string): Promise<{ commits: string[]; changedFiles: string[] }>
 }
 
@@ -96,6 +98,13 @@ const emptyState = (): WorkUnitState => ({
   externalGitChanges: []
 })
 
+/** 저장된 스냅샷을 전이 판정이 다루는 모양으로 (설계 §9 → EG §22). 없으면 `undefined` — 그때가
+ *  "처음 보는 프로젝트"이고, 기준선만 잡는 자리다. **`{ branch: null, head: null }` 로 채워 넣지
+ *  않는다**: 그것은 "커밋도 브랜치도 없는 저장소"라는 뜻이 있는 값이라, 처음 보는 프로젝트가
+ *  브랜치 전환을 한 것으로 잡힌다. */
+const snapshotRef = (s: ProjectGitSnapshot | undefined): GitRef | undefined =>
+  s === undefined ? undefined : { branch: s.branch, head: s.head }
+
 export class WorkUnitCollector {
   /** 기능이 켜져 있는가. 꺼져 있으면 어떤 방아쇠도 저장소를 건드리지 않는다 */
   private running = false
@@ -107,8 +116,13 @@ export class WorkUnitCollector {
   private pendingGit = false
   /** 회차를 겹치지 않게 한다. FileWatcher·GitWatcher 의 직렬화 고리와 같은 관례 */
   private chain: Promise<void> = Promise.resolve()
-  /** 프로젝트마다 "마지막으로 안 git 상태". gitWatcher 의 콜백은 인자가 없으므로 전이를 판정하려면
-   *  이전 값을 여기서 들고 있어야 한다 (설계 §9 의 ProjectGitSnapshot) */
+  /** 프로젝트마다 "이 실행에서 마지막으로 물어본 git 상태". gitWatcher 의 콜백은 인자가 없으므로
+   *  지금 상태는 늘 우리가 직접 물어야 하고, 그 답을 여기 들고 있어 같은 회차 안에서 두 번 묻지
+   *  않는다(refOf).
+   *
+   *  **전이의 "앞"을 대는 자리는 여기가 아니다.** 그 값은 디스크에 남는 스냅샷
+   *  (`WorkUnitState.gitSnapshot`, 설계 §9)이고, 이 Map 은 그것이 아직 없을 때만 답한다 —
+   *  프로세스와 함께 사라지는 값을 앞으로 쓰면 앱이 꺼져 있던 동안의 변화가 통째로 사라진다. */
   private lastRef = new Map<string, GitRef>()
   /** 마지막 회차에 본 세션들. 종료 이벤트가 왔을 때 그 세션은 이미 목록에서 빠졌을 수 있어서 든다 */
   private known = new Map<string, CollectorSession>()
@@ -148,6 +162,11 @@ export class WorkUnitCollector {
       // **이 셋을 동기적으로 비우지 않는다.** 껐다 곧바로 켜면 아직 돌지 않은 closeAll 이 큐에 남아
       // 있고, 그것이 닫아야 할 프로젝트를 찾는 유일한 길이 이 둘이다 — 먼저 비우면 열려 있던 Unit 이
       // 닫히지 않은 채 남는다.
+      //
+      // **비우는 것은 이 실행의 캐시뿐이고 저장된 스냅샷은 그대로 둔다.** 다음 회차의 gitRound 가
+      // 그것을 앞으로 읽어(프로젝트마다 저장 파일에서 온다) 꺼져 있던 동안의 변화를 판정한다 —
+      // 여기서 프로젝트를 훑어 미리 넣지 않는 이유는 `WorkUnitStore` 가 키를 열거하는 길을 주지
+      // 않기 때문이다(closeAll 이 `touched` 를 드는 것과 같은 제약).
       this.lastRef.clear()
       this.known.clear()
       this.touched.clear()
@@ -550,9 +569,32 @@ export class WorkUnitCollector {
   /** `.git` 이 움직였다. 전이를 판정하고, Astera 가 한 일이 아니면 외부 변경으로 남긴다 */
   private async gitRound(state: WorkUnitState, projectPath: string): Promise<boolean> {
     const after = await this.deps.git.readRef(projectPath)
-    const before = this.lastRef.get(projectPath)
+    // **앞은 저장된 스냅샷이 먼저다.** 그것이 "Astera 가 마지막으로 견준 상태"이고, 앱이 꺼져 있던
+    // 동안의 pull·브랜치 전환·rebase 가 다시 켠 첫 회차에서 **보통의 전이**로 판정되는 이유다
+    // (설계 §9, EG §41-10·§42-17). 메모리 캐시를 먼저 보면 그 회차 전에 refOf 가 지금 HEAD 를
+    // 물어 둔 경우(경계에서 Unit 이 열렸다) 지금과 지금을 견주게 되어 그 변화가 도로 사라진다.
+    // 스냅샷이 아직 없을 때만 캐시가 답한다 — 저장 전에 이 실행이 이미 본 값이다.
+    const before = snapshotRef(state.gitSnapshot) ?? this.lastRef.get(projectPath)
     this.lastRef.set(projectPath, after)
-    if (!before) return false // 처음 본 저장소 — 비교할 앞이 없으니 기준선만 잡는다
+    // 스냅샷을 지금 상태로 옮긴다. **값이 실제로 달라졌을 때만 dirty 다** — 매 회차 쓰면 아무 일도
+    // 없는 회차마다 파일을 다시 쓰게 된다(tail 이 커서에 쓰는 규칙 그대로).
+    let dirty = false
+    const snapshot = state.gitSnapshot
+    if (
+      snapshot === undefined ||
+      snapshot.projectPath !== projectPath ||
+      snapshot.branch !== after.branch ||
+      snapshot.head !== after.head
+    ) {
+      state.gitSnapshot = {
+        projectPath,
+        branch: after.branch,
+        head: after.head,
+        capturedAt: this.nowIso()
+      }
+      dirty = true
+    }
+    if (!before) return dirty // 처음 본 저장소 — 비교할 앞이 없으니 기준선만 잡는다
 
     const type = classifyTransition(
       before,
@@ -561,7 +603,7 @@ export class WorkUnitCollector {
     )
     // 작업 트리는 전이가 없어도 바뀌어 있을 수 있다 (`git add` 가 index 만 건드린 경우)
     const observed = this.observe(state, projectPath, await this.changedFiles(projectPath))
-    if (type === 'none') return observed
+    if (type === 'none') return observed || dirty
 
     const open = state.units.filter((u) => isOpen(u.status))
     for (const u of open) u.git.endHead = after.head
@@ -569,11 +611,19 @@ export class WorkUnitCollector {
     // 기록되어 대소문자·구분자가 다를 수 있다(provenance.ts 의 isAsteraOperation 주석). 그 비교를
     // provenance.ts 는 직접 하지 못하므로(node: 없음) 여기서 isSamePath 를 넘긴다.
     if (!isAsteraOperation(projectPath, this.deps.now(), this.ops(), OPERATION_GRACE_MS, isSamePath)) {
-      // fast-forward 일 때만 채운다 — 그 밖의 전이는 before..after 범위를 신뢰할 수 없다
-      // (types.ts 의 ExternalGitChange.commits 주석). Astera 자신의 동작으로 판정된 경우는 이
-      // 블록에 들어오지 않으므로, 버려질 range 를 위해 git 을 더 부르지 않는다.
+      // **돌려받은 둘은 믿을 수 있는 정도가 다르고, 그래서 버리는 것도 한쪽뿐이다.**
+      // `git log before..after` 는 fast-forward 가 아니면 뜻이 없다 — 그 밖의 전이에서 이 범위를
+      // 신뢰할 수 없다(types.ts 의 ExternalGitChange.commits 주석). 그러나 `changedFiles` 를 내는
+      // 것은 `git diff --name-only before..after` 이고 그것은 **두 트리의 비교**라 브랜치를 갈아타든
+      // 역사를 다시 쓰든 "무엇이 달라졌는가"에 정확히 답한다. 다음 계획의 기능 매핑이 브랜치
+      // 전환에서 바로 그 목록을 받아야 한다(EG §18·§19).
+      //
+      // 그래서 두 HEAD 가 다르기만 하면 묻고, 커밋 목록만 fast-forward 밖에서 버린다. 두 HEAD 가
+      // 같으면(브랜치만 갈아탔다) 견줄 트리가 하나뿐이라 묻지 않는다 — 답이 늘 빈 목록이다.
+      // Astera 자신의 동작으로 판정된 경우는 이 블록에 들어오지 않으므로, 버려질 range 를 위해
+      // git 을 더 부르지 않는다.
       const range =
-        type === 'fast-forward' && before.head && after.head
+        before.head && after.head && before.head !== after.head
           ? await this.deps.git.readRange(projectPath, before.head, after.head)
           : { commits: [], changedFiles: [] }
       const change: ExternalGitChange = {
@@ -582,7 +632,7 @@ export class WorkUnitCollector {
         type,
         before,
         after,
-        commits: range.commits,
+        commits: type === 'fast-forward' ? range.commits : [],
         changedFiles: range.changedFiles,
         detectedAt: this.nowIso()
       }
@@ -617,6 +667,10 @@ export class WorkUnitCollector {
       if (dirty) await this.persist(projectPath, state)
     }
     this.known.clear()
+    // 이 실행의 캐시만 비운다. **저장된 스냅샷은 건드리지 않는다** — 커서와 반대 방향의 규칙이고
+    // 그것이 맞다: 커서에 걸린 약속은 "켜기 전의 대화는 읽지 않는다"(스펙 §16.1)이고 스냅샷에 걸린
+    // 약속은 "실제로 일어난 변화를 놓치지 않는다"(EG §41-10)다. 대화는 사람의 말이고 저장소의
+    // 역사는 사실이라, 꺼져 있던 사이의 pull 도 다시 켜면 보여야 한다.
     this.lastRef.clear()
     this.touched.clear()
     // 커서와 함께 버린다. 남겨 두면 꺼져 있는 동안 쓰인 줄들 앞에 잡힌 자리가 살아남아, 다시 켤 때
