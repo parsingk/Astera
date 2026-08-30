@@ -76,9 +76,21 @@ vendors, checks the result, and waits when a human decision is needed.
   Gradle or Maven project starts with the standard tasks and goals. A detected one shows in italics
   until you edit it, which saves it as yours
 
+**How It Works (experimental)**
+- How It Works is for people who do not read code. What a feature does, the order things happen in,
+  what can go wrong, why it was built this way, and which files each part was read from
+- Off by default. Turn on **Work unit tracking** in settings, then pick the **Explanation account**
+  that will write them
+- Ask it to analyse a project once and it reads the repository and lists what that project does
+- When a session finishes a piece of work, the explanation of whatever that work touched is written
+  again, and the sidebar records the change as the request you actually made
+- It only ever reads. Nothing here can change your code
+
 **Editor and shortcuts**
 - One key shows and hides the explorer — `Ctrl`/`Cmd`+`Shift`+`E` for the file tree, the run toolbar
   and the run console, leaving the panes where they are
+- The other two sidebar views have a key each — `Ctrl`/`Cmd`+`Shift`+`J` for Jobs and
+  `Ctrl`/`Cmd`+`Shift`+`H` for How It Works
 - One tab bar per pane, holding both kinds of tab: a file sits beside the session that is changing
   it, a split shows the two at once, and `Ctrl`+`Tab` walks the active pane's row
 - A real editor, not a text box: CodeMirror with syntax highlighting for TypeScript, JavaScript,
@@ -90,7 +102,8 @@ vendors, checks the result, and waits when a human decision is needed.
 - **Local history:** a snapshot is taken before a delete, so an agent's cleanup — or your own — is
   recoverable. Kept 30 days, up to 200 MB per project
 - Every shortcut is remappable in settings, defaulting to `Cmd` on macOS and `Ctrl` elsewhere:
-  splitting panes, moving focus between them, cycling sessions, closing a file tab
+  splitting panes, moving focus between them, cycling sessions, closing a file tab, opening a
+  sidebar view
 
 **Appearance**
 - Seven themes — Vega, Orion, Umbra, Aurora, Antares, Quasar and Sirius — picked from cards that each draw

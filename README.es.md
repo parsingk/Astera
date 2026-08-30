@@ -79,9 +79,21 @@ de una coordinadora mediante la skill `/astera-orchestration`.
   configuraciones, y un proyecto de Gradle o Maven trae las tareas y los objetivos habituales. Las
   detectadas aparecen en cursiva hasta que editas una, lo que la guarda como tuya
 
+**How It Works (experimental)**
+- How It Works es para quien no lee código. Qué hace una función, en qué orden ocurre todo, qué
+  puede salir mal, por qué se construyó así y de qué archivos salió cada parte
+- Desactivado por defecto. Activa el **seguimiento de unidades de trabajo** en los ajustes y elige la
+  **cuenta para explicaciones** que las escribirá
+- Pídele que analice un proyecto una vez y leerá el repositorio para enumerar lo que hace
+- Cuando una sesión termina un trabajo, la explicación de la función que ese trabajo tocó se vuelve a
+  escribir, y la barra lateral deja el cambio con la petición que hiciste en realidad
+- Solo lee. Nada de esto puede cambiar tu código
+
 **Editor y atajos**
 - Una tecla muestra y oculta el explorador: `Ctrl`/`Cmd`+`Shift`+`E` para el árbol de archivos, la
   barra de ejecución y la consola de ejecución, dejando los paneles donde están
+- Las otras dos vistas de la barra lateral tienen su propia tecla: `Ctrl`/`Cmd`+`Shift`+`J` para Jobs
+  y `Ctrl`/`Cmd`+`Shift`+`H` para How It Works
 - Una fila de pestañas por panel, con los dos tipos de pestaña: un archivo se sitúa junto a la sesión
   que lo está cambiando, una división muestra ambos a la vez y `Ctrl`+`Tab` recorre la fila del
   panel activo
@@ -96,7 +108,8 @@ de una coordinadora mediante la skill `/astera-orchestration`.
 - **Historial local:** se toma una instantánea antes de eliminar, así que lo que limpió el agente —o
   tú— se puede recuperar. Se conserva 30 días, hasta 200 MB por proyecto
 - Todos los atajos se pueden reasignar en los ajustes, con `Cmd` por defecto en macOS y `Ctrl` en el
-  resto: dividir paneles, mover el foco entre ellos, recorrer sesiones, cerrar una pestaña de archivo
+  resto: dividir paneles, mover el foco entre ellos, recorrer sesiones, cerrar una pestaña de
+  archivo, abrir una vista de la barra lateral
 
 **Apariencia**
 - Siete temas — Vega, Orion, Umbra, Aurora, Antares, Quasar y Sirius — elegidos desde tarjetas que se dibujan
