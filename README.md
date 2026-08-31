@@ -80,7 +80,13 @@ vendors, checks the result, and waits when a human decision is needed.
 - How It Works is for people who do not read code. Nothing is recorded until you start it — type
   `/astera-task` with what you want done, and one piece of work is one row from there, however many
   messages it takes: an approval, a correction, a change of mind partway are all the same row
-- A Jobs Run is still one row on its own, with no `/astera-task` needed
+- `/astera-task` is a skill the app installs into your accounts, like the orchestration one. It
+  tells the agent to mark the start, keep working through as many of your messages as it takes, and
+  mark the end when your objective is met — you type the objective, it does the rest
+- A Run is still one row on its own, with no `/astera-task` needed, whether you started it from the
+  Jobs sidebar or an agent started it through the `astera-orchestration` skill
+- A piece of work that changed no files leaves no row. If you declared one and then only talked,
+  there is nothing to write up
 - Off by default. Turn on **Work unit tracking** in settings, then pick the **Explanation account**
   that will write the entries. It does not apply to sessions that are already open — only new
   sessions get it
@@ -162,7 +168,9 @@ receives the `astera` CLI on its `PATH` and the `astera-orchestration` skill. Yo
 The skill can also be invoked explicitly as `/astera-orchestration`. It is for multi-step work that
 needs supervision, completion tracking or dependency coordination. The coordinator creates the run
 and tasks, dispatches Claude and Codex workers, waits for their reports and brings questions back to
-you. Runs created this way also appear in the Jobs sidebar when they belong to the open project.
+you. Runs created this way also appear in the Jobs sidebar when they belong to the open project, and
+with **Work unit tracking** on they land in How It Works as one row each when they finish, exactly
+like a Run you started yourself.
 
 Skills are loaded when a session starts, so enable Agent orchestration first and then open a new
 coordinator session. A simple one-off handoff does not need an orchestration run.

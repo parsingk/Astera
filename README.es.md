@@ -84,7 +84,13 @@ de una coordinadora mediante la skill `/astera-orchestration`.
   `/astera-task` con lo que quieres hacer y a partir de ahí una línea reúne ese trabajo, por muchos
   mensajes que haga falta — una aprobación, una corrección, un cambio de idea a mitad de camino,
   todo queda en la misma línea
-- Un Run de Jobs sigue siendo su propia línea, sin necesitar `/astera-task`
+- `/astera-task` es una habilidad que la app instala en tus cuentas, igual que la de orquestación.
+  Le dice al agente que marque el inicio, siga trabajando durante todos los mensajes que hagan
+  falta y marque el final cuando se cumpla tu objetivo — tú escribes el objetivo, él hace el resto
+- Un Run sigue siendo su propia línea, sin necesitar `/astera-task`, lo hayas iniciado tú desde la
+  barra de Jobs o lo haya iniciado un agente con la habilidad `astera-orchestration`
+- Un trabajo que no cambió ningún archivo no deja línea. Si lo declaraste y solo hablaste, no hay
+  nada que redactar
 - Desactivado por defecto. Activa el **seguimiento de unidades de trabajo** en los ajustes y elige
   la **cuenta para explicaciones** que las escribirá. No se aplica a las sesiones que ya están
   abiertas: funciona a partir de las sesiones nuevas
@@ -175,7 +181,9 @@ También puedes invocar la skill explícitamente como `/astera-orchestration`. S
 varios pasos que necesitan supervisión, seguimiento de resultados o coordinación de dependencias.
 La coordinadora crea el Run y las tareas, las reparte entre trabajadoras de Claude y Codex, espera sus
 informes y te devuelve las preguntas que requieran una decisión. Los Runs del proyecto abierto
-también aparecen en la barra lateral de Jobs.
+también aparecen en la barra lateral de Jobs y, con el **seguimiento de unidades de trabajo**
+activado, quedan en How It Works como una línea cada uno al terminar, igual que un Run que hayas
+iniciado tú.
 
 Las skills se cargan al iniciar una sesión: activa primero **Orquestación de agentes** y abre después
 una sesión coordinadora nueva. Una entrega sencilla y puntual no necesita un Run de orquestación.
