@@ -66,6 +66,17 @@ describe('WorkUnitStore', () => {
     expect(s.get('D:\\b')!.units).toHaveLength(0)
   })
 
+  // seed() 의 orphan 훑기가 기대는 유일한 자리다 — WorkUnitStore 는 다른 방법으로 키를 내주지 않는다
+  it('projectPaths 는 저장된 프로젝트 전부를 돌려준다', async () => {
+    const s = new WorkUnitStore(file)
+    await s.load()
+    expect(s.projectPaths()).toEqual([])
+
+    await s.set('D:\\a', sample)
+    await s.set('D:\\b', { units: [], cursors: [], externalGitChanges: [] })
+    expect(s.projectPaths().sort()).toEqual(['D:\\a', 'D:\\b'])
+  })
+
   // 이 값이 메모리에만 있으면 앱이 꺼져 있던 동안의 pull·브랜치 전환이 통째로 사라진다
   // (설계 §9, EG §41-10·§42-17). 디스크 왕복이 그 전제다.
   //

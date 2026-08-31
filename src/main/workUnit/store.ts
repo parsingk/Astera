@@ -122,6 +122,13 @@ export class WorkUnitStore {
     return this.state.projects[projectPath]
   }
 
+  /** Every project this store currently holds a state for. **Only for sweeps that must reach a
+   *  project with no live session** (the collector's `seed()` orphan-interrupt) — everyday code
+   *  should still be handed a `projectPath` rather than enumerate the whole store. */
+  projectPaths(): string[] {
+    return Object.keys(this.state.projects)
+  }
+
   set(projectPath: string, value: WorkUnitState): Promise<void> {
     this.state.projects[projectPath] = value
     return this.save()

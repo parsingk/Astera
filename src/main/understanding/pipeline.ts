@@ -106,7 +106,10 @@ export class UnderstandingPipeline {
    *  collector's own round must not be held up by an agent that takes minutes. */
   onUnitClosed(projectRoot: string, unit: SessionWorkUnit): Promise<void> {
     return this.enqueue(async () => {
-      if (unit.status !== 'completed') return // spec §7 — an abandoned unit does not flow downstream
+      // Only a completed unit becomes a record — a cancelled or interrupted one does not, and
+      // the collector's finish() already only calls this for a completed unit; this guard is a
+      // second line of defense.
+      if (unit.status !== 'completed') return
       const record: WorkRecord = {
         id: randomUUID(),
         at: unit.endedAt ?? unit.startedAt,
