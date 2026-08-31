@@ -4,6 +4,17 @@
 
 export type FlowNodeType = 'start' | 'step' | 'decision' | 'success' | 'failure'
 
+/** One check the agent reported running. The name is its own words; the status is a closed set. */
+export interface SessionCheck {
+  name: string
+  status: 'passed' | 'failed' | 'skipped'
+}
+
+/** How much of a finished piece of work was actually checked. Separate from the lifecycle on
+ *  purpose: declaring the work over and the work being good are different claims, and a failed
+ *  check never reopens it. */
+export type Verification = 'verified' | 'partial' | 'unverified' | 'failed'
+
 export interface FlowEdge {
   targetId: string
   /** 분기 조건의 표시 문구 — "예", "아니오", "실패" */

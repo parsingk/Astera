@@ -10,11 +10,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { ExternalGitChange } from '../../core/git/types'
-import type {
-  ObservedUserMessage,
-  SessionWorkUnit,
-  TranscriptCursor
-} from '../../core/workUnit/types'
+import type { SessionWorkUnit, TranscriptCursor } from '../../core/workUnit/types'
 
 /** 설계 §9 의 ProjectGitSnapshot — "Astera 가 마지막으로 알던 git 상태"(EG §4).
  *
@@ -37,8 +33,6 @@ export interface ProjectGitSnapshot {
 export interface WorkUnitState {
   units: SessionWorkUnit[]
   cursors: TranscriptCursor[]
-  /** 우리가 본 사용자 메시지. 규칙이 바뀌면 여기서 다시 도출한다 (스펙 §16.1) */
-  messages: ObservedUserMessage[]
   externalGitChanges: ExternalGitChange[]
   /** **선택 필드다.** 이 필드가 생기기 전의 `workUnits.json` 이 이미 사용자 디스크에 있고, 필수로
    *  두면 그 파일이 타입 가드를 통과하지 못해 통째로 `.bak` 으로 밀린다 — `isState` 는 `units` 같은
@@ -67,10 +61,13 @@ function isState(v: unknown): v is WorkUnitState {
   return (
     Array.isArray(v.units) &&
     Array.isArray(v.cursors) &&
-    Array.isArray(v.messages) &&
     Array.isArray(v.externalGitChanges) &&
     // 선택 필드라 없어도 좋다. 있을 때 보는 것은 배열들과 같은 깊이 — "객체인가" 하나뿐이다
-    (v.gitSnapshot === undefined || isObj(v.gitSnapshot))
+    (v.gitSnapshot === undefined || isObj(v.gitSnapshot)) &&
+    // `messages` was dropped when the boundary became declared. Older files still carry it, so the
+    // guard accepts it and the next write leaves it behind — requiring it would `.bak` every file
+    // written before this change.
+    (v.messages === undefined || Array.isArray(v.messages))
   )
 }
 
@@ -96,6 +93,20 @@ export class WorkUnitStore {
       return this.recover()
     }
     if (!isValid(parsed)) return this.recover()
+    // Statuses from before the boundary was declared. `completed-candidate` meant "the agent
+    // stopped and something changed" — nobody confirmed it, so it goes in front of the person.
+    // `abandoned` meant "closed with nothing observed", which nothing downstream ever read.
+    for (const state of Object.values(parsed.projects)) {
+      state.units = state.units.filter((u) => (u.status as string) !== 'abandoned')
+      for (const u of state.units) {
+        if ((u.status as string) === 'completed-candidate') {
+          u.status = 'interrupted'
+          u.reason = 'INTERRUPTED_BY_APP_UPGRADE'
+        }
+        const legacy = u as unknown as { title?: string }
+        if (!u.objective && legacy.title) u.objective = legacy.title
+      }
+    }
     this.state = parsed
     return { recovered: false }
   }

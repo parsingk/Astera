@@ -2,13 +2,13 @@ import { describe, it, expect } from 'vitest'
 import { isOpen } from './status'
 
 describe('isOpen', () => {
-  it('active 와 completed-candidate 만 열려 있다 — 새 메시지를 받을 수 있는 상태다', () => {
+  it('active 만 열려 있다', () => {
     expect(isOpen('active')).toBe(true)
-    expect(isOpen('completed-candidate')).toBe(true)
   })
 
-  it('끝난 것은 닫혀 있다 — 다시 열지 않는다', () => {
+  it('중단된 것은 열려 있지 않다 — 사람을 기다릴 뿐 관찰을 더 받지 않는다', () => {
+    expect(isOpen('interrupted')).toBe(false)
     expect(isOpen('completed')).toBe(false)
-    expect(isOpen('abandoned')).toBe(false)
+    expect(isOpen('cancelled')).toBe(false)
   })
 })

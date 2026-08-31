@@ -40,12 +40,10 @@ const unit = (over: Partial<SessionWorkUnit> = {}): SessionWorkUnit => ({
   id: 'wu-1',
   sessionId: 'sess-abcd1234',
   projectPath: projectRoot,
-  title: '한도 감지를 고쳐줘',
+  objective: '한도 감지를 고쳐줘',
   status: 'completed',
   startedAt: '2026-08-31T10:00:00.000Z',
-  completedAt: '2026-08-31T10:05:00.000Z',
-  firstMessageIndex: 0,
-  messageCount: 2,
+  endedAt: '2026-08-31T10:05:00.000Z',
   sawWrite: true,
   git: { startHead: 'a', endHead: 'b', observedChangedFiles: ['src/auth/login.ts'] },
   encounteredExternalGitChangeIds: [],
@@ -143,7 +141,7 @@ describe('onUnitClosed — 닫힌 작업이 기록이 된다', () => {
 
   it('completed 가 아닌 Unit 은 기록하지 않는다', async () => {
     const { store, pipeline } = await make()
-    await pipeline.onUnitClosed(projectRoot, unit({ status: 'abandoned' }))
+    await pipeline.onUnitClosed(projectRoot, unit({ status: 'cancelled' }))
     expect(store.get(projectRoot)?.records ?? []).toHaveLength(0)
     expect(agentReply.calls).toBe(0)
   })
@@ -190,8 +188,8 @@ describe('onUnitClosed — 닫힌 작업이 기록이 된다', () => {
   it('새 기록이 앞에 온다 — 목록의 축은 시간이다', async () => {
     const { store, pipeline } = await make()
     agentReply.value = explanation()
-    await pipeline.onUnitClosed(projectRoot, unit({ id: 'wu-1', title: '먼저' }))
-    await pipeline.onUnitClosed(projectRoot, unit({ id: 'wu-2', title: '나중' }))
+    await pipeline.onUnitClosed(projectRoot, unit({ id: 'wu-1', objective: '먼저' }))
+    await pipeline.onUnitClosed(projectRoot, unit({ id: 'wu-2', objective: '나중' }))
     expect(store.get(projectRoot)!.records.map((x) => x.request)).toEqual(['나중', '먼저'])
   })
 

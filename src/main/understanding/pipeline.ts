@@ -109,9 +109,9 @@ export class UnderstandingPipeline {
       if (unit.status !== 'completed') return // spec §7 — an abandoned unit does not flow downstream
       const record: WorkRecord = {
         id: randomUUID(),
-        at: unit.completedAt ?? unit.startedAt,
+        at: unit.endedAt ?? unit.startedAt,
         source: { kind: 'session', sessionId: unit.sessionId, label: sessionLabelOf(unit.sessionId) },
-        request: unit.title,
+        request: unit.objective,
         changedFiles: [...unit.git.observedChangedFiles],
         git: { startHead: unit.git.startHead, endHead: unit.git.endHead ?? null },
         status: 'generating'

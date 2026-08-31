@@ -1,8 +1,16 @@
-// 트랜스크립트·git·세션 이벤트를 모아 core 의 순수 함수를 부르고 그 결과를 저장한다 (설계 §16).
+// 트랜스크립트·git·세션 이벤트를 모아 core 의 순수 함수를 부르고 그 결과를 저장한다.
 //
-// **여기에는 규칙이 없다.** 경계(boundary.ts)·완료(completion.ts)·전이(transition.ts)·출처
-// (provenance.ts)의 판정은 전부 core 의 순수 함수이고, 이 파일은 그것을 잇는 껍데기다. 이 저장소가
-// main 의 배선에 판단을 두지 않는 이유는 humanRequest.ts 의 `titleOf` 주석에 적혀 있다.
+// **경계는 더 이상 여기서 추측하지 않는다.** 언제 작업이 시작하고 끝나는지는 사람이
+// `/astera-task` 로, 에이전트가 `session-task-complete` 로 선언한다(lifecycle.ts 의
+// `startedTask`/`completedTask`/`cancelledTask`/`interruptedTask`) — 이 파일은 그 선언을 받아
+// 저장소에 반영하는 껍데기일 뿐이다. 전이(transition.ts)·출처(provenance.ts)의 판정도 여전히
+// core 의 순수 함수다.
+//
+// **트랜스크립트는 여전히 읽는다 — 다만 경계를 위해서가 아니다.** 세션 자신이 파일을 건드렸다는
+// 증거(`hasWriteEvidence`, humanRequest.ts)는 관찰로는 답할 수 없는 유일한 질문("이 변경이 **이**
+// 세션의 것인가")이라 계속 트랜스크립트에서 읽는다. 사람의 요청을 가려내던 `isHumanRequest`·
+// `titleOf`·codex 의 `task_complete` 판정은 이 계획이 지운다 — 그 판정이 만들던 `SessionWorkUnit`
+// 이 이제 만들어지지 않는다.
 //
 // **감시자를 만들지는 않되 `.git` 감시자의 수명은 이 수집기가 쥔다.** 트랜스크립트 쪽은 ipc.ts 가
 // 이미 상시로 들고 있고(HistoryIndex 가 창이 뜬 뒤 한 번 켜져 프로세스가 사는 동안 본다) 그쪽이
@@ -14,37 +22,18 @@
 // 가짜 git 만으로 전부 테스트된다(collector.test.ts).
 //
 // **주기적 폴링이 없다.** 방아쇠는 넷뿐이다 — 트랜스크립트 변경 · `.git` 변경 · 세션 유휴 ·
-// 세션 종료. EG §25 가 "지나치게 짧은 polling 은 피한다"고 했고 설계 §16 이 이 넷으로 충분하다고
-// 적었다. (`onSessionForked` 와 `onSessionBusy` 는 다섯째·여섯째 방아쇠가 아니다 — 회차를 돌리지
-// 않고 각각 커서와 등록만 잡는다.)
-//
-// **두 형식을 함께 읽는다.** claude 는 `promptSource` 허용 목록으로, codex 는 레코드의
-// `content_item_kinds` 가 정확히 `['user.text']` 인지로 사람의 요청을 가린다 — 둘 다 구조 표지이고,
-// 문구 대조로 돌아가지 않는다(humanRequest.ts 의 허용 목록 주석). 끝나는 신호도 갈린다: claude 는
-// 창 제목의 유휴 전환을 쓰고, codex 는 그것을 믿을 수 없어(제목이 초당 여러 번 깜빡인다) 기록에
-// 적히는 턴 종료 줄을 읽는다.
+// 세션 종료, 그리고 선언 메서드(`startTask`·`completeTask`·`cancelTask`)다. (`onSessionForked` 와
+// `onSessionBusy` 는 회차를 돌리지 않고 각각 커서와 등록만 잡는다.)
 import { promises as fs, statSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import type { ExternalGitChange, GitRef, PendingGitOperation } from '../../core/git/types'
 import { classifyTransition } from '../../core/git/transition'
 import { isAsteraOperation, OPERATION_GRACE_MS } from '../../core/git/provenance'
 import { isSamePath } from '../../core/files/tree'
-import type { SessionWorkUnit } from '../../core/workUnit/types'
+import type { SessionCheck, SessionWorkUnit } from '../../core/workUnit/types'
 import { isOpen } from '../../core/workUnit/status'
-import {
-  hasWriteEvidence,
-  isCodexTurnComplete,
-  isHumanRequest,
-  requestTextOf,
-  titleOf
-} from '../../core/workUnit/humanRequest'
-import { decideBoundary } from '../../core/workUnit/boundary'
-import {
-  onAgentIdle,
-  onBoundaryConfirm,
-  onFeatureDisabled,
-  onSessionEnd
-} from '../../core/workUnit/completion'
+import { hasWriteEvidence } from '../../core/workUnit/humanRequest'
+import { startedTask, completedTask, cancelledTask, interruptedTask } from '../../core/workUnit/lifecycle'
 import { readNewLines } from './tail'
 import type { ProjectGitSnapshot, WorkUnitState, WorkUnitStore } from './store'
 
@@ -120,16 +109,30 @@ export interface CollectorDeps {
    *  아는 것은 "이 Unit 이 닫혔다"까지다. 넘기지 않으면 아무 일도 일어나지 않는다 — 그래서
    *  이 파일의 테스트가 하류 없이 그대로 돈다. */
   onUnitClosed?: (projectPath: string, unit: SessionWorkUnit) => void
+  /** the open-task section's redraw trigger; the record list has its own in `onUnitClosed` */
+  onTasksChanged?: (projectPath: string) => void
   log?: (m: string) => void
+}
+
+/** One row of the screen's open-task section. A DTO, not the unit — the renderer has no business
+ *  with git baselines, and `src/core/workUnit/**` is not in tsconfig.web.json's include list. */
+export interface OpenSessionTask {
+  id: string
+  objective: string
+  status: 'active' | 'interrupted'
+  startedAt: string
+  reason?: string
+  sessionId: string
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   v !== null && typeof v === 'object' && !Array.isArray(v)
 
+const failed = (e: unknown) => ({ ok: false as const, reason: String(e) })
+
 const emptyState = (): WorkUnitState => ({
   units: [],
   cursors: [],
-  messages: [],
   externalGitChanges: []
 })
 
@@ -216,7 +219,7 @@ export class WorkUnitCollector {
     })
   }
 
-  /** 끈다. 열려 있던 Unit 을 `onFeatureDisabled` 로 그 자리에서 닫고 **커서를 버린다**.
+  /** 끈다. 열려 있던 Unit 을 그 자리에서 중단(interrupted)으로 놓고 **커서를 버린다**.
    *  이어받으면 꺼져 있던 동안 쌓인 것을 다시 켤 때 전부 읽게 되고, 그것이 스펙 §16.1 이 금지한 것이다. */
   async stop(): Promise<void> {
     if (!this.running) return
@@ -229,6 +232,166 @@ export class WorkUnitCollector {
 
   onEnabledChanged(enabled: boolean): Promise<void> {
     return enabled ? this.start() : this.stop()
+  }
+
+  // ── 선언 ────────────────────────────────────────────────────────────
+
+  /** The same queue, with an answer. `enqueue` above logs and swallows — right for a background
+   *  round, wrong for a declaration the agent is waiting on. `chain` stays `Promise<void>`, so the
+   *  result is mapped away before it is stored. */
+  private enqueueFor<T>(fn: () => Promise<T>, onError: (e: unknown) => T): Promise<T> {
+    const run = async (): Promise<T> => {
+      try {
+        return await fn()
+      } catch (e) {
+        this.log(String(e))
+        return onError(e)
+      }
+    }
+    const p = this.chain.then(run, run)
+    this.chain = p.then(
+      () => undefined,
+      () => undefined
+    )
+    return p
+  }
+
+  /** The person typed /astera-task and the agent relayed it. **An active task is interrupted, not
+   *  closed** — the person may still want it, and the screen is where they say so. */
+  startTask(
+    sessionId: string,
+    objective: string
+  ): Promise<{ ok: true; id: string; interruptedId?: string } | { ok: false; reason: string }> {
+    return this.enqueueFor(async () => {
+      if (!this.running) return { ok: false as const, reason: 'work unit tracking is off' }
+      const s = this.known.get(sessionId)
+      if (!s) return { ok: false as const, reason: `unknown session: ${sessionId}` }
+      if (objective.trim() === '') return { ok: false as const, reason: 'an objective is required' }
+      const state = this.stateOf(s.projectPath)
+      const at = this.nowIso()
+      let interruptedId: string | undefined
+      const open = state.units.find((u) => u.sessionId === sessionId && u.status === 'active')
+      if (open) {
+        const i = state.units.indexOf(open)
+        state.units[i] = interruptedTask(open, { at, reason: 'INTERRUPTED_BY_NEW_TASK' })
+        interruptedId = open.id
+      }
+      const head = (await this.refOf(s.projectPath)).head
+      state.units.push(
+        startedTask({
+          id: randomUUID(),
+          sessionId,
+          projectPath: s.projectPath,
+          objective,
+          at,
+          startHead: head,
+          baselineDirtyFiles: await this.changedFiles(s.projectPath)
+        })
+      )
+      const id = state.units[state.units.length - 1].id
+      await this.persist(s.projectPath, state)
+      this.deps.onTasksChanged?.(s.projectPath)
+      return { ok: true as const, id, interruptedId }
+    }, failed)
+  }
+
+  /** The agent said it is done. **Never creates anything** — a completion that could bring a task
+   *  into being would infer the start from the end, which is the bug this plan removes. */
+  completeTask(
+    sessionId: string,
+    input: { source: 'agent' | 'user'; checks?: SessionCheck[]; summary?: string }
+  ): Promise<{ ok: true; id: string } | { ok: false; reason: string }> {
+    return this.enqueueFor(async () => {
+      if (!this.running) return { ok: false as const, reason: 'work unit tracking is off' }
+      const s = this.known.get(sessionId)
+      if (!s) return { ok: false as const, reason: `unknown session: ${sessionId}` }
+      // **Catch up first, then read.** `round` writes into the live state object, so a unit read
+      // before it can be stale by the time it is closed. This is the last chance to see the write
+      // evidence this turn produced — without it a task that only just edited a file closes with
+      // sawWrite unset and is dropped instead of recorded.
+      await this.round(false)
+      const state = this.stateOf(s.projectPath)
+      const open = state.units.find((u) => u.sessionId === sessionId && u.status === 'active')
+      if (!open) return { ok: false as const, reason: 'NO_ACTIVE_TASK' }
+      this.observe(state, s.projectPath, await this.changedFiles(s.projectPath))
+      this.finish(state, open, completedTask(open, { ...input, at: this.nowIso() }), s.projectPath)
+      await this.persist(s.projectPath, state)
+      this.deps.onTasksChanged?.(s.projectPath)
+      return { ok: true as const, id: open.id }
+    }, failed)
+  }
+
+  /** The person pressed 완료 on a row. Reaches interrupted tasks too, which is the whole reason
+   *  that state exists. */
+  completeTaskById(
+    projectPath: string,
+    unitId: string
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    return this.enqueueFor(async () => {
+      const state = this.deps.store.get(projectPath)
+      const u = state?.units.find((x) => x.id === unitId)
+      if (!state || !u) return { ok: false as const, reason: `unknown task: ${unitId}` }
+      if (u.status !== 'active' && u.status !== 'interrupted')
+        return { ok: false as const, reason: `task is ${u.status}` }
+      if (this.running) this.observe(state, projectPath, await this.changedFiles(projectPath))
+      this.finish(state, u, completedTask(u, { source: 'user', at: this.nowIso() }), projectPath)
+      await this.persist(projectPath, state)
+      this.deps.onTasksChanged?.(projectPath)
+      return { ok: true as const }
+    }, failed)
+  }
+
+  cancelTask(
+    sessionId: string,
+    reason?: string
+  ): Promise<{ ok: true; id: string } | { ok: false; reason: string }> {
+    return this.enqueueFor(async () => {
+      if (!this.running) return { ok: false as const, reason: 'work unit tracking is off' }
+      const s = this.known.get(sessionId)
+      if (!s) return { ok: false as const, reason: `unknown session: ${sessionId}` }
+      const state = this.stateOf(s.projectPath)
+      const open = state.units.find((u) => u.sessionId === sessionId && u.status === 'active')
+      if (!open) return { ok: false as const, reason: 'NO_ACTIVE_TASK' }
+      const i = state.units.indexOf(open)
+      state.units[i] = cancelledTask(open, { at: this.nowIso(), reason })
+      await this.persist(s.projectPath, state)
+      this.deps.onTasksChanged?.(s.projectPath)
+      return { ok: true as const, id: open.id }
+    }, failed)
+  }
+
+  cancelTaskById(
+    projectPath: string,
+    unitId: string
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    return this.enqueueFor(async () => {
+      const state = this.deps.store.get(projectPath)
+      const u = state?.units.find((x) => x.id === unitId)
+      if (!state || !u) return { ok: false as const, reason: `unknown task: ${unitId}` }
+      if (u.status !== 'active' && u.status !== 'interrupted')
+        return { ok: false as const, reason: `task is ${u.status}` }
+      state.units[state.units.indexOf(u)] = cancelledTask(u, { at: this.nowIso() })
+      await this.persist(projectPath, state)
+      this.deps.onTasksChanged?.(projectPath)
+      return { ok: true as const }
+    }, failed)
+  }
+
+  /** What the screen shows above the record list. Synchronous and off the queue: it only reads,
+   *  and the screen asks for it on every push. */
+  listOpen(projectPath: string): OpenSessionTask[] {
+    const state = this.deps.store.get(projectPath)
+    if (!state) return []
+    return state.units
+      .filter((u) => u.status === 'active' || u.status === 'interrupted')
+      .map((u) => ({
+        id: u.id,
+        objective: u.objective,
+        status: u.status as 'active' | 'interrupted',
+        startedAt: u.startedAt,
+        reason: u.reason,
+        sessionId: u.sessionId
+      }))
   }
 
   // ── Astera 자신의 git 동작 등록 (EG §26) ───────────────────────────────
@@ -343,29 +506,12 @@ export class WorkUnitCollector {
     this.endGitOperation(id)
   }
 
-  /** 에이전트가 한 턴을 끝냈다 (session:busy → false). 상태 변화에만 오므로 디바운스하지 않는다.
-   *
-   *  **등록을 닫는 것은 큐 밖에서, 지금 한다** — `endedAt` 은 유예를 재는 값이라 실제로 유휴가 된
-   *  그 순간이어야 하고, 큐 안에서 닫으면 앞선 회차가 끝날 때까지 밀린다. `endGitOperation` 이
-   *  토글과 무관하게 닫는 것과 같은 이유로 `running` 도 보지 않는다. */
+  /** The agent finished a turn (session:busy → false). **Only the git-operation registration
+   *  closes here now** — a turn ending says nothing about whether the work is done, and that was
+   *  the inference this plan removes. */
   onSessionIdle(sessionId: string): Promise<void> {
     this.endBusyOperation(sessionId)
-    return this.enqueue(async () => {
-      if (!this.running) return
-      await this.round(false) // 유휴 판정 전에 그 턴이 남긴 줄까지 따라잡는다
-      const s = this.known.get(sessionId)
-      if (!s) return
-      const state = this.stateOf(s.projectPath)
-      const open = state.units.find((u) => u.sessionId === sessionId && isOpen(u.status))
-      if (!open) return
-      this.observe(state, s.projectPath, await this.changedFiles(s.projectPath))
-      open.status = onAgentIdle({
-        status: open.status,
-        observedChangeCount: open.git.observedChangedFiles.length,
-        idleSignalTrusted: s.idleSignalTrusted
-      })
-      await this.persist(s.projectPath, state)
-    })
+    return Promise.resolve()
   }
 
   /** 세션을 이어받았다 — 한도에 걸려 굴렸거나(rolling.ts) 사람이 기록에서 대화를 다시 열었다.
@@ -409,7 +555,8 @@ export class WorkUnitCollector {
     this.forkAnchors.set(newSessionId, { filePath: transcriptPath, offset: size })
   }
 
-  /** 세션이 끝났다 (WU §14-4). 관찰이 여기서 멈추므로 후보로 남기지 않는다 */
+  /** 세션이 끝났다. 열려 있던 Unit 은 완료가 아니라 **중단**이 된다 — 사람이 화면에서 완료로
+   *  닫을 때까지 그대로 남는다. */
   onSessionExit(sessionId: string): Promise<void> {
     this.endBusyOperation(sessionId) // 바쁜 채로 죽었을 수 있다 — 유휴와 같은 자리, 같은 이유다
     return this.enqueue(async () => {
@@ -421,17 +568,17 @@ export class WorkUnitCollector {
       // 끝난 세션은 listSessions 에서 이미 빠져 있어 위 회차가 읽지 않는다. 종료 직전에 온 요청도
       // 그 세션의 것이므로, 이 하나만 따로 마지막까지 읽는다
       let dirty = await this.tail(state, s)
-      const open = state.units.filter((u) => u.sessionId === sessionId && isOpen(u.status))
+      const open = state.units.filter((u) => u.sessionId === sessionId && u.status === 'active')
       if (open.length > 0) {
         this.observe(state, s.projectPath, await this.changedFiles(s.projectPath))
+        const at = this.nowIso()
         for (const u of open)
-          this.close(
-            state,
-            u,
-            onSessionEnd({ observedChangeCount: u.git.observedChangedFiles.length }),
-            s.projectPath
-          )
+          state.units[state.units.indexOf(u)] = interruptedTask(u, {
+            at,
+            reason: 'INTERRUPTED_BY_SESSION_END'
+          })
         dirty = true
+        this.deps.onTasksChanged?.(s.projectPath)
       }
       // 죽은 세션의 커서는 더 자랄 파일을 가리키지 않는다
       const cursorCount = state.cursors.length
@@ -509,6 +656,16 @@ export class WorkUnitCollector {
           filePath: s.transcriptPath,
           offset: size,
           sizeAtRead: size
+        })
+      }
+      // An active task whose session is gone did not finish — the app was closed, or the tab was.
+      // It waits on screen for the person rather than being recorded or thrown away.
+      const at = this.nowIso()
+      for (const u of state.units) {
+        if (u.status !== 'active' || this.known.has(u.sessionId)) continue
+        state.units[state.units.indexOf(u)] = interruptedTask(u, {
+          at,
+          reason: 'INTERRUPTED_BY_APP_RESTART'
         })
       }
       await this.persist(projectPath, state)
@@ -621,7 +778,6 @@ export class WorkUnitCollector {
       dirty = true
     }
 
-    let turnCompleted = false
     for (const raw of r.lines) {
       let record: unknown
       try {
@@ -630,20 +786,6 @@ export class WorkUnitCollector {
         continue // 반쪽 줄은 tail 이 이미 걸렀다. 그래도 남는 깨진 줄 하나가 회차를 멈추게 하지 않는다
       }
       if (!isObj(record)) continue
-      if (isHumanRequest(record)) {
-        await this.applyRequest(state, s, record)
-        dirty = true
-        continue
-      }
-      // **codex 의 턴 종료는 기록 파일 안에 있다.** claude 는 창 제목의 유휴 전환(session:busy)이
-      // 알려 주지만 codex 의 제목은 장식이라 그 신호를 믿을 수 없다(descriptor 의 busyTitleReliable
-      // 이 false 인 이유). 그래서 codex 는 rollout 이 스스로 적는 `task_complete` 를 쓴다 —
-      // 추측이 아니라 codex 자신이 쓴 구조적 신호이고, codexRolloutWatcher 가 이미 같은 값을
-      // 턴 알림에 쓴다(그 파일 머리주석: 59개 파일 156턴에서 검증).
-      //
-      // **표시만 하고 여기서 판정하지 않는다** — 판정에는 작업 트리를 물어야 하고(git 프로세스),
-      // 한 회차에 턴이 여럿 끝나 있을 수 있다. 아래에서 한 번만 묻는다.
-      if (isCodexTurnComplete(record)) turnCompleted = true
       // Did this session write anything? Marked here, on the unit that is open at the time, because
       // this is the only place a record is read per session — observed git changes cannot tell the
       // sessions apart (see SessionWorkUnit.sawWrite). Marked once; the flag never goes back.
@@ -656,26 +798,7 @@ export class WorkUnitCollector {
       }
     }
 
-    if (turnCompleted) dirty = (await this.applyIdle(state, s)) || dirty
     return dirty
-  }
-
-  /** 그 세션의 열린 Unit 에 유휴 판정을 먹인다 — `onSessionIdle` 과 같은 규칙, 다른 방아쇠.
-   *  claude 는 창 제목이 알려 주고(그쪽), codex 는 기록에 적힌 턴 종료를 읽어 여기로 온다. */
-  private async applyIdle(state: WorkUnitState, s: CollectorSession): Promise<boolean> {
-    const open = state.units.find((u) => u.sessionId === s.sessionId && isOpen(u.status))
-    if (!open) return false
-    this.observe(state, s.projectPath, await this.changedFiles(s.projectPath))
-    const next = onAgentIdle({
-      status: open.status,
-      observedChangeCount: open.git.observedChangedFiles.length,
-      // **이 자리에서는 늘 믿는다.** 프로바이더의 유휴 신호가 아니라 codex 자신이 기록에 적은
-      // 턴 종료이고, `busyTitleReliable` 이 말하는 것은 창 제목의 신뢰도이지 이것이 아니다.
-      idleSignalTrusted: true
-    })
-    if (next === open.status) return false
-    open.status = next
-    return true
   }
 
   /** 쓸 커서가 없을 때 어디서부터 읽는가. 답은 셋이다 — 잡은 자리 · `null`(파일 처음부터) ·
@@ -729,53 +852,6 @@ export class WorkUnitCollector {
     cursor.filePath = filePath
     cursor.offset = offset
     cursor.sizeAtRead = sizeAtRead
-  }
-
-  /** 사람의 요청 하나 — WU §13 의 세 경우 (boundary.ts) */
-  private async applyRequest(
-    state: WorkUnitState,
-    s: CollectorSession,
-    record: Record<string, unknown>
-  ): Promise<void> {
-    const text = requestTextOf(record)
-    const at = typeof record.timestamp === 'string' ? record.timestamp : this.nowIso()
-    // 트랜스크립트 파서가 메시지 식별자를 싣지 않으므로 순번으로 대신한다 (types.ts 의 firstMessageIndex)
-    const index = state.messages.reduce((n, m) => (m.sessionId === s.sessionId ? n + 1 : n), 0)
-    state.messages.push({ sessionId: s.sessionId, index, at, text })
-
-    const open = state.units.find((u) => u.sessionId === s.sessionId && isOpen(u.status))
-    const decision = decideBoundary(open ? open.status : null)
-    if (decision.kind === 'append') {
-      open!.messageCount += 1
-      return
-    }
-    // 새 Unit 이 열린다. **HEAD 를 먼저 묻는다** — 닫히는 Unit 의 endHead 도 같은 값이고,
-    // close() 는 여기서 채워지는 캐시를 읽는다
-    const head = (await this.refOf(s.projectPath)).head
-    if (decision.kind === 'close-and-open') {
-      // 앞 Unit 을 확정하는 것은 이 메시지다 (WU §6)
-      this.close(state, open!, onBoundaryConfirm(open!.status), s.projectPath, at)
-    }
-    const unit: SessionWorkUnit = {
-      id: randomUUID(),
-      sessionId: s.sessionId,
-      projectPath: s.projectPath,
-      title: titleOf(text),
-      status: 'active',
-      startedAt: at,
-      firstMessageIndex: index,
-      messageCount: 1,
-      git: {
-        startHead: head,
-        // 지금 이미 더러운 것은 이 Unit 의 일이 아니다 — 앞 Unit 이 커밋하지 않고 남긴
-        // 파일들이다. observe 가 이 목록 밖의 파일만 세므로, 파일을 안 바꾼 질문 Unit 은
-        // 개수 0 으로 남아 abandoned 로 걸러진다 (types.ts 의 baselineDirtyFiles 주석)
-        baselineDirtyFiles: await this.changedFiles(s.projectPath),
-        observedChangedFiles: []
-      },
-      encounteredExternalGitChangeIds: []
-    }
-    state.units.push(unit)
   }
 
   /** `.git` 이 움직였다. 전이를 판정하고, Astera 가 한 일이 아니면 외부 변경으로 남긴다 */
@@ -877,7 +953,7 @@ export class WorkUnitCollector {
 
   // ── 닫기 ────────────────────────────────────────────────────────────
 
-  /** 기능을 껐다. 열려 있던 Unit 을 그 자리에서 닫고 커서를 버린다 (스펙 §16.1) */
+  /** 기능을 껐다. 열려 있던 Unit 을 그 자리에서 중단으로 놓고 커서를 버린다 (스펙 §16.1) */
   private async closeAll(): Promise<void> {
     // **아래 루프보다 먼저 닫는다.** 그 루프는 프로젝트마다 저장하고, 저장소의 쓰기는 실패하면
     // 거절한다(store.ts) — 그 거절은 회차 큐가 삼켜 로그만 남기므로, 처분이 루프 뒤에 있으면 한
@@ -892,19 +968,16 @@ export class WorkUnitCollector {
     for (const projectPath of projects) {
       const state = this.deps.store.get(projectPath)
       if (!state) continue
-      const open = state.units.filter((u) => isOpen(u.status))
+      const open = state.units.filter((u) => u.status === 'active')
       let dirty = false
       if (open.length > 0) {
         this.observe(state, projectPath, await this.changedFiles(projectPath))
+        const at = this.nowIso()
         for (const u of open)
-          this.close(
-            state,
-            u,
-            onFeatureDisabled({ observedChangeCount: u.git.observedChangedFiles.length }),
-            projectPath,
-            undefined,
-            false // 아래 close 의 notify — 끄기는 하류를 깨우지 않는다
-          )
+          state.units[state.units.indexOf(u)] = interruptedTask(u, {
+            at,
+            reason: 'INTERRUPTED_BY_TRACKING_OFF'
+          })
         dirty = true
       }
       if (state.cursors.length > 0) {
@@ -926,46 +999,37 @@ export class WorkUnitCollector {
     this.forkAnchors.clear()
   }
 
-  private close(
+  /** Put a transitioned unit back in state, and hand it downstream if it is worth recording.
+   *
+   *  **A unit with no write evidence is removed, not recorded.** Observed changes land on every
+   *  open unit in the project because git cannot say who made them, so a session that only asked a
+   *  question carries whatever another session was editing beside it — measured 2026-08-31, two
+   *  such units held the seven files that conversation was changing.
+   *
+   *  Dropping rather than marking: the record would answer no question later. It says a session
+   *  existed and did nothing, which the transcript already says. */
+  private finish(
     state: WorkUnitState,
     unit: SessionWorkUnit,
-    status: SessionWorkUnit['status'],
+    next: SessionWorkUnit,
     projectPath: string,
-    at?: string,
-    /** 하류(설명 생성)에 알릴 것인가. **기능을 끌 때만 false 다** — 끄기는 열려 있던 Unit 을 전부
-     *  한꺼번에 닫는데(closeAll), 그 하나하나가 에이전트를 돌리면 "추적을 그만두겠다"고 누른 그
-     *  순간에 프로젝트 수만큼의 왕복이 시작된다. 사용자가 산 것과 정반대이고, 그 왕복은 시간과
-     *  사용량을 실제로 쓴다. 그 Unit 들은 기록으로만 남는다. */
+    /** Notify the write-up pipeline? **False only when tracking is being turned off** — that path
+     *  closes every open unit at once, and one agent round trip per unit is the opposite of what
+     *  the person just asked for. */
     notify = true
   ): void {
-    unit.status = status
-    if (!isOpen(status)) {
-      // **A unit with no write evidence is removed, not recorded.** Observed changes land on every
-      // open unit in the project because git cannot say who made them, so a session that only asked a
-      // question carries whatever another session was editing beside it — measured 2026-08-31, two
-      // such units held the seven files this very conversation was changing. Closed as they stood,
-      // that question would have shown up under Recent changes and spent a generation rewriting a
-      // feature's explanation from it.
-      //
-      // Dropping rather than marking: the record would answer no question later. It says a session
-      // existed and did nothing, which the transcript already says, and it would still have to be
-      // filtered at every read.
-      if (!unit.sawWrite) {
-        const i = state.units.indexOf(unit)
-        if (i >= 0) state.units.splice(i, 1)
-        return
-      }
-      unit.completedAt = at ?? this.nowIso()
-      const head = this.lastRef.get(projectPath)?.head
-      if (head !== undefined) unit.git.endHead = head
-      // **닫히는 Unit 을 하류에 알린다.** 이 파일에는 Unit 이 닫히는 자리가 여기 하나뿐이라
-      // (완료·버림·기능 끄기·세션 종료가 전부 이 메서드를 지난다) 알림도 여기 하나면 된다.
-      //
-      // **부르고 기다리지 않는다.** 하류(설명 생성)는 에이전트를 돌려 수십 초가 걸리는데, 그것을
-      // 기다리면 이 회차의 저장이 그만큼 늦어지고 다음 방아쇠가 밀린다. 하류의 큐가 자기 순서를
-      // 지키고 거부하지 않는 것(pipeline 의 enqueue)이 이 한 줄이 성립하는 조건이다.
-      if (notify) this.deps.onUnitClosed?.(projectPath, unit)
+    const i = state.units.indexOf(unit)
+    if (next.status === 'completed' && !next.sawWrite) {
+      if (i >= 0) state.units.splice(i, 1)
+      return
     }
+    if (i >= 0) state.units[i] = next
+    if (next.status !== 'completed') return
+    const head = this.lastRef.get(projectPath)?.head
+    if (head !== undefined) next.git.endHead = head
+    // **Called and not awaited.** The write-up runs an agent for tens of seconds; waiting would
+    // delay this round's save. The pipeline's own queue keeps the order.
+    if (notify) this.deps.onUnitClosed?.(projectPath, next)
   }
 
   // ── 잔일 ────────────────────────────────────────────────────────────
