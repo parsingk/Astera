@@ -77,17 +77,23 @@ vendors, checks the result, and waits when a human decision is needed.
   until you edit it, which saves it as yours
 
 **How It Works (experimental)**
-- How It Works is for people who do not read code. Each time a piece of work finishes, one row
-  records what changed and how — a session's work, or one Jobs Run
+- How It Works is for people who do not read code. Nothing is recorded until you start it — type
+  `/astera-task` with what you want done, and one piece of work is one row from there, however many
+  messages it takes: an approval, a correction, a change of mind partway are all the same row
+- A Jobs Run is still one row on its own, with no `/astera-task` needed
 - Off by default. Turn on **Work unit tracking** in settings, then pick the **Explanation account**
-  that will write the entries
+  that will write the entries. It does not apply to sessions that are already open — only new
+  sessions get it
 - Only work finished after you turned tracking on. Nothing before it is read — not the code, not
   earlier sessions, not earlier runs
-- A row appears the moment the work closes and fills itself in a few minutes later. If it could not
-  be written up, it says why and offers to try again
+- The agent marks a row done when the objective is met, or you mark it done yourself from the
+  screen — a piece of work that never got an ending just waits there until you do
+- A row fills itself in a few minutes after it closes. If it could not be written up, it says why
+  and offers to try again
 - Open a row for what changed, what a person using the product will notice, the order things happen
   in, the decisions taken, and where it lives in the code
-- It only ever reads. Nothing here can change your code
+- What the agent said it checked is shown as reported, not as something the app measured itself
+- It still only ever reads. Nothing here can change your code
 
 **Editor and shortcuts**
 - One key shows and hides the explorer — `Ctrl`/`Cmd`+`Shift`+`E` for the file tree, the run toolbar

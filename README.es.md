@@ -80,16 +80,24 @@ de una coordinadora mediante la skill `/astera-orchestration`.
   detectadas aparecen en cursiva hasta que editas una, lo que la guarda como tuya
 
 **How It Works (experimental)**
-- How It Works es para quien no lee código. Cada vez que termina un trabajo, una línea registra
-  qué cambió y cómo — el trabajo de una sesión, o un Run de Jobs
+- How It Works es para quien no lee código. No se registra nada hasta que tú lo empiezas: escribe
+  `/astera-task` con lo que quieres hacer y a partir de ahí una línea reúne ese trabajo, por muchos
+  mensajes que haga falta — una aprobación, una corrección, un cambio de idea a mitad de camino,
+  todo queda en la misma línea
+- Un Run de Jobs sigue siendo su propia línea, sin necesitar `/astera-task`
 - Desactivado por defecto. Activa el **seguimiento de unidades de trabajo** en los ajustes y elige
-  la **cuenta para explicaciones** que las escribirá
+  la **cuenta para explicaciones** que las escribirá. No se aplica a las sesiones que ya están
+  abiertas: funciona a partir de las sesiones nuevas
 - Solo se registra el trabajo terminado después de activar el seguimiento. Nada anterior se lee: ni
   el código, ni sesiones previas, ni Runs previos
-- La línea aparece en cuanto el trabajo se cierra y se completa sola unos minutos después. Si no se
-  pudo redactar, dice por qué y ofrece intentarlo de nuevo
+- El agente cierra la línea cuando considera cumplido el objetivo, o puedes cerrarla tú mismo desde
+  la pantalla — un trabajo que se quedó sin cierre espera ahí hasta que alguien lo resuelva
+- La línea se completa sola unos minutos después de cerrarse. Si no se pudo redactar, dice por qué
+  y ofrece intentarlo de nuevo
 - Abre una línea para ver qué cambió, qué notará quien use el producto, en qué orden ocurre todo,
   las decisiones que se tomaron y dónde vive en el código
+- Lo que el agente dijo haber comprobado se muestra tal como lo informó, no como algo que la
+  aplicación haya verificado
 - Solo lee. Nada de esto puede cambiar tu código
 
 **Editor y atajos**
