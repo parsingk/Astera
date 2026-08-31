@@ -20,6 +20,7 @@ import type { GeneratorSettings } from '../../core/understanding/generatorSettin
 import type { SessionWorkUnit } from '../../core/workUnit/types'
 import { sessionLabelOf } from '../../core/understanding/changeRecord'
 import { buildRecordPrompt } from '../../core/understanding/prompt'
+import type { Lang } from '../../core/i18n'
 import { validateRecord } from '../../core/understanding/validate'
 import { evidenceIdOf } from '../../core/understanding/evidence'
 import type { UnderstandingStore } from './store'
@@ -31,6 +32,9 @@ export interface PipelineDeps {
   accountOf: (accountId: string) => Account | null
   descriptors: Record<Provider, ProviderDescriptor>
   generator: () => GeneratorSettings
+  /** The app's language, asked for at write-up time rather than held: the user can change it
+   *  while a record is still being made, and the next one should follow. */
+  lang: () => Lang
   now: () => string
   /** Commit subjects in a range, for the agent's material. Optional: a project that is not a
    *  repository has none, and a record is still worth writing without them. */
@@ -172,7 +176,8 @@ export class UnderstandingPipeline {
         commits,
         tasks: cur.source.kind === 'job' ? cur.jobTasks : undefined,
         validation: cur.validation,
-        projectRoot
+        projectRoot,
+        lang: this.deps.lang()
       }),
       log: this.deps.log
     })

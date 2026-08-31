@@ -5,6 +5,13 @@
 // 계약은 테스트가 닿는 자리에 있어야 한다 — titleOf 가 humanRequest.ts 에 있는 것과 같은 이유다.
 //
 // node: import 없음. 파일 내용은 부르는 쪽이 읽어 넣는다 — 이 모듈은 문자열만 만든다.
+import type { Lang } from '../i18n'
+
+/** What to call each language **inside the prompt**. The model is told to write in one of these, so
+ *  the name is given in English — that is the language the rest of the prompt is in, and a model
+ *  reading "한국어" in an otherwise English instruction has to infer that it is being named
+ *  rather than quoted. The native name lives in i18n's CATALOGS and is for people, not for this. */
+const LANGUAGE_NAME: Record<Lang, string> = { ko: 'Korean', en: 'English', ja: 'Japanese', es: 'Spanish' }
 
 /** 스펙 §24 전문. **줄이지 않는다** — 이 계약의 요점은 AI 가 기술 용어로 도망가지 못하게
  *  명시적으로 막는 것이고, 조항을 빼는 순간 그 구멍으로 도망간다. §25(Vocabulary Guard)의
@@ -41,6 +48,10 @@ Rules:
 14. Do not include private reasoning or chain-of-thought.`
 
 export interface RecordRequest {
+  /** The app's language. The write-up is read on screen next to the app's own text, so it is
+   *  written in the same language — without this the model picks one per run, and two records
+   *  made minutes apart came back in different languages. */
+  lang: Lang
   /** The user's own words, verbatim — for a Job, its objective */
   request: string
   changedFiles: readonly string[]
@@ -59,6 +70,7 @@ export interface RecordRequest {
  *  the range, and for a Job its tasks. Discovery used to hand over a repository skeleton and take
  *  ten minutes; there is nothing of that shape here, and the reading budget keeps it that way. */
 export function buildRecordPrompt(req: RecordRequest): string {
+  const language = LANGUAGE_NAME[req.lang]
   const jobSection =
     req.tasks && req.tasks.length > 0
       ? `\n\nTasks in this run and how each ended:\n` +
@@ -80,6 +92,11 @@ ${req.request}
 
 Files that changed while this work was open:
 ${req.changedFiles.map((f) => `- ${f}`).join('\n')}${commits}${jobSection}${validation}
+
+Write every sentence a person reads in ${language}: "overview", "userVisibleChanges", every
+"label", "description" and "condition" in "flow", every "title" and "reason" in "decisions", every
+"role" in "implementation", and "needsReviewReason". File paths, node ids and the fixed values of
+"type" stay as they are. Keep code identifiers in their original form and explain them in ${language}.
 
 Read what you need to explain this change. Read only — never modify anything.
 

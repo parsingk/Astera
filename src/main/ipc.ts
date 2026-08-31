@@ -3122,6 +3122,9 @@ export function registerIpc(
     },
     descriptors: core.descriptors,
     generator: () => core.appSettings.getGenerator(),
+    // The write-up is read next to the app's own text, so it is written in the app's language.
+    // Read per record, not captured: core.lang changes when the user changes the setting.
+    lang: () => core.lang,
     now: () => new Date().toISOString(),
     // Commit subjects in the unit's range — material for the write-up. readRange is the same reader
     // the collector uses for git provenance, so there is no second way to ask this question.

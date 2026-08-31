@@ -22,7 +22,8 @@ describe('buildRecordPrompt', () => {
     request: '한도 대화상자를 못 알아보던 것을 고쳐줘',
     changedFiles: ['src/core/rolling/detect.ts', 'src/main/rolling.ts'],
     commits: ['fix(rolling): treat the dialog as the signal'],
-    projectRoot: 'D:/p'
+    projectRoot: 'D:/p',
+    lang: 'ko' as const
   }
 
   it('계약·요청·파일·커밋·출력 모양이 모두 실린다', () => {
@@ -39,6 +40,15 @@ describe('buildRecordPrompt', () => {
     const p = buildRecordPrompt(req)
     expect(p).toContain('one piece of work that just finished')
     expect(p).toContain('never modify anything')
+  })
+
+  // The write-up sits on screen beside the app's own text. Without this the model chose a language
+  // per run, and two records made two minutes apart came back in different ones.
+  it('앱의 언어로 쓰라고 못박는다', () => {
+    expect(buildRecordPrompt(req)).toContain('a person reads in Korean')
+    expect(buildRecordPrompt({ ...req, lang: 'ja' })).toContain('a person reads in Japanese')
+    // Paths and ids are not sentences — translating them would break the links they carry
+    expect(buildRecordPrompt(req)).toContain('File paths, node ids')
   })
 
   it('읽기 예산을 준다 (스펙 §29)', () => {

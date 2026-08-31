@@ -89,6 +89,7 @@ async function make(generator: { accountId?: string } = { accountId: 'a1' }): Pr
     accountOf: (id) => (id === 'a1' ? account : null),
     descriptors: {} as never,
     generator: () => generator,
+    lang: () => 'ko' as const,
     now: () => '2026-08-30T12:00:00.000Z',
     onChanged: (root) => changed.push(root)
   })
