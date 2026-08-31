@@ -293,6 +293,9 @@ export class WorkUnitCollector {
       let interruptedId: string | undefined
       const open = state.units.find((u) => u.sessionId === sessionId && u.status === 'active')
       if (open) {
+        // A live look before the transition — see observe's own doc for why all three interrupt
+        // paths (this one, onSessionExit, closeAll) take one at exactly this moment.
+        this.observe(state, s.projectPath, await this.changedFiles(s.projectPath))
         const i = state.units.indexOf(open)
         state.units[i] = interruptedTask(open, { at, reason: 'INTERRUPTED_BY_NEW_TASK' })
         interruptedId = open.id
@@ -1192,11 +1195,21 @@ export class WorkUnitCollector {
 
   // ── 잔일 ────────────────────────────────────────────────────────────
 
-  /** 관찰된 변경을 그 프로젝트의 **열린 Unit 전부**에 더한다.
+  /** Adds observed changes to **every open unit** in that project.
    *
-   *  한 프로젝트에 세션이 여럿이면 같은 파일 목록이 여러 Unit 에 들어간다. 그것이 틀린 것이 아닌
-   *  이유는 이 필드의 뜻이 "이 구간에 **관찰된** 변경"이지 "이 Unit 이 만든 변경"이 아니기 때문이다
-   *  (스펙 §11). 어느 Unit 이 만들었는지 가리는 것은 다음 계획의 Change Interpreter 다. */
+   *  With several sessions on one project, the same file list lands on more than one unit. That is
+   *  not a mistake — this field means "changed **during** this window", not "changed **by** this
+   *  unit" (spec §11). Sorting out which unit actually made a change is a later plan's Change
+   *  Interpreter, not this method.
+   *
+   *  **Called with a live read right before every interrupt.** `onSessionExit`, `closeAll`, and
+   *  `startTask`'s new-task branch all call `changedFiles()` and hand it to `observe` in the same
+   *  breath as the `interruptedTask` transition that follows. That ordering is load-bearing, not a
+   *  style choice: `isOpen` excludes everything but `active`, so once a unit is interrupted this
+   *  method never touches it again — whatever `observedChangedFiles` holds at that exact moment is
+   *  what a later 완료 (`finish`, Critical 1's second guard) judges the unit by. A fourth path that
+   *  interrupts a unit without this same live look first can freeze it holding zero observed files
+   *  despite real, already-made edits sitting right there in the working tree. */
   private observe(state: WorkUnitState, projectPath: string, files: string[]): boolean {
     if (files.length === 0) return false
     let changed = false

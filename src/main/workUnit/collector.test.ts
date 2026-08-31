@@ -167,12 +167,23 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
     expect(state.units[1].status).toBe('active')
   })
 
-  // **Critical regression.** Before this fix, `startTask`'s interrupt branch did not catch up the
-  // transcript first, so a write-evidence line already sitting in the file at interrupt time was
-  // read on a later round and credited to whichever unit happened to be open then — the newly
-  // started one, not the one that actually made the change. The unit that did the real work then
-  // carried no sawWrite of its own, and completing it later dropped it in `finish`.
-  it('startTask 는 중단하기 전에 밀린 트랜스크립트를 먼저 따라잡는다', async () => {
+  // **Two regressions pinned by one scenario.** Before the transcript-catchup fix, `startTask`'s
+  // interrupt branch did not catch up the transcript first, so a write-evidence line already
+  // sitting in the file at interrupt time was read on a later round and credited to whichever unit
+  // happened to be open then — the newly started one, not the one that actually made the change.
+  // The unit that did the real work carried no sawWrite of its own, and completing it later dropped
+  // it in `finish`.
+  //
+  // Fixing that exposed a second gap (coordinator follow-up on Critical 1): `onSessionExit` and
+  // `closeAll` both take a live `changedFiles()` look immediately before interrupting, but
+  // `startTask`'s new-task branch did not — it only ran `catchUpTranscripts()`. That was harmless
+  // while `finish` only checked `sawWrite`. Once it also drops a unit with no observed changed
+  // files, a real edit already sitting in the working tree — but not yet seen by a `.git` round,
+  // which is debounced up to ~1s — froze the interrupted unit at zero observed files forever
+  // (`observe` never touches anything but `active`). This test's fixture reaches exactly that state
+  // (`fake.git.files` is set but no `onGitChanged`/`flush` ever runs before the interrupt), so it
+  // now also pins that `startTask` takes its own live look.
+  it('startTask 는 중단하기 전에 밀린 트랜스크립트와 git 상태를 먼저 따라잡는다', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
     const { collector, store, closed } = await makeCollector(fake)
@@ -180,14 +191,12 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
 
     const first = await collector.startTask('s1', '첫 작업')
     if (!first.ok) throw new Error('unexpected')
-    // Critical 1's second guard needs an observed change — recorded now, while the unit is still
-    // active, since `observe` never touches an already-interrupted unit (isOpen excludes it)
-    fake.git.files = ['src/first.ts']
-    collector.onGitChanged()
-    await collector.flush()
     // The first task's write-evidence line is written to the file, but the debounced watcher has
     // not read it yet — onTranscriptChanged()/flush() are deliberately not called
     await fs.appendFile(transcript, wrote(), 'utf8')
+    // Likewise, a real edit sits in the working tree but no `.git` round has looked yet — no
+    // onGitChanged()/flush() either
+    fake.git.files = ['src/first.ts']
 
     const second = await collector.startTask('s1', '두 번째 작업')
     if (!second.ok) throw new Error('unexpected')
@@ -198,7 +207,9 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
 
     const state = store.get(projectPath)!
     const firstUnit = state.units.find((u) => u.id === first.id)
-    expect(firstUnit).toBeDefined() // 지워지지 않았다 — sawWrite 가 중단되기 전에 잡혔다
+    // Not dropped — sawWrite was caught before the interrupt, and the interrupt itself took a live
+    // look at the changed files (both regressions this test guards)
+    expect(firstUnit).toBeDefined()
     expect(firstUnit!.status).toBe('completed')
     expect(closed.some((u) => u.id === first.id)).toBe(true)
 

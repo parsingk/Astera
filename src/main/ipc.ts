@@ -475,8 +475,11 @@ export function registerIpc(
       busyState.set(e.sessionId, busy)
       send('session:busy', { sessionId: e.sessionId, busy })
       scheduler?.handleBusy(e.sessionId, busy) // releases a schedule that is waiting on idle
-      // 에이전트가 한 턴을 끝냈다 — Work Unit 의 완료 후보 판정이 여기서 시작한다 (WU §14-1).
-      // 수집기가 꺼져 있으면 이 호출은 아무 일도 하지 않는다.
+      // The agent's busy state flipped. There is no completion candidacy judged here any more —
+      // that whole notion is gone with the declared boundary. What this feeds is the Work Unit
+      // collector's git-operation attribution window (EG §26): busy → true opens the registration
+      // (onSessionBusy), busy → false closes it (onSessionIdle) — nothing about whether a task is
+      // done. If the collector is off, these calls do nothing.
       //
       // **시작 쪽도 함께 알린다.** 그 구간 안에서 옮겨진 HEAD 는 **이 세션이 만든 것**이고, 그것을
       // 알려 주는 신호가 앱에는 이것 하나뿐이다 — 에이전트가 터미널에 치는 커밋을 Astera 가 미리
