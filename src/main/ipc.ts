@@ -2097,11 +2097,13 @@ export function registerIpc(
         // already finished when the app started is not recorded (same rule as D2: the screen holds
         // only what the app watched happen, not what it finds already done).
         //
-        // Wrapped in try/catch for the reason pushOrchState's own comment gives: store.save has
-        // already committed by this point, so a throw here must not turn a successful write into a
-        // command that answers with an error.
-        try {
-          for (const { runId, outcome } of justFinished(prevOrchState ?? next, next)) {
+        // Caught per Run, not around the loop. Several Runs can finish in one write (runRecord's
+        // own test pins that), and a throw while handling the first would silently drop the rest —
+        // the same per-item isolation orchFireTick uses below. The catch is needed at all for the
+        // reason pushOrchState's own comment gives: store.save has already committed by this
+        // point, so a throw here must not turn a successful write into a command that errors.
+        for (const { runId, outcome } of justFinished(prevOrchState ?? next, next)) {
+          try {
             const run = next.runs.find((r) => r.id === runId)
             if (!run) continue
             const tasks = next.tasks.filter((t) => t.runId === runId)
@@ -2115,9 +2117,9 @@ export function registerIpc(
               changedFiles: [...new Set(tasks.flatMap((t) => t.filesModified ?? []))],
               validation: { status: outcome === 'completed' ? 'passed' : 'failed' }
             })
+          } catch (e) {
+            orchLog(`run-finished record failed for ${runId}: ${String(e)}`)
           }
-        } catch (e) {
-          orchLog(`run-finished record failed: ${String(e)}`)
         }
         prevOrchState = next
         // 저장이 끝난 뒤에 돈다 — 스케줄러가 읽는 것은 getState() 이고, 저장 전에 부르면 방금의
