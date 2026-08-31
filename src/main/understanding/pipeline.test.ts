@@ -9,8 +9,9 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { SessionWorkUnit } from '../../core/workUnit/types'
+import type { WorkRecord } from '../../core/understanding/types'
 import { UnderstandingStore } from './store'
-import { UnderstandingPipeline } from './pipeline'
+import { UnderstandingPipeline, type RunRecordInput } from './pipeline'
 
 // runAgent 를 가짜로 — 파이프라인이 부르는 유일한 프로세스 자리다
 const agentReply = vi.hoisted(() => ({
@@ -48,6 +49,18 @@ const unit = (over: Partial<SessionWorkUnit> = {}): SessionWorkUnit => ({
   sawWrite: true,
   git: { startHead: 'a', endHead: 'b', observedChangedFiles: ['src/auth/login.ts'] },
   encounteredExternalGitChangeIds: [],
+  ...over
+})
+
+const runInput = (over: Partial<RunRecordInput> = {}): RunRecordInput => ({
+  runId: 'run-1',
+  jobName: '단축키 충돌 정리',
+  objective: '단축키가 겹치는 곳을 찾아 정리해줘',
+  at: '2026-08-31T11:00:00.000Z',
+  taskIds: ['t1', 't2'],
+  tasks: [{ title: '충돌 찾기', outcome: 'completed' }],
+  changedFiles: ['src/auth/login.ts'],
+  validation: { status: 'passed' },
   ...over
 })
 
@@ -186,6 +199,53 @@ describe('onUnitClosed — 닫힌 작업이 기록이 된다', () => {
     agentReply.value = explanation()
     await pipeline.onUnitClosed(projectRoot, unit())
     expect(changed.length).toBeGreaterThanOrEqual(2) // 만드는 중 + 결과
+  })
+})
+
+describe('onRunFinished — 끝난 Job Run 이 기록이 된다', () => {
+  it('기록이 즉시 생기고, 만드는 동안 출처는 job 이며 상태는 만드는 중이다', async () => {
+    const { store, pipeline } = await make()
+    agentReply.value = explanation()
+    let seen: WorkRecord | undefined
+    agentReply.during = async (): Promise<void> => {
+      seen = store.get(projectRoot)!.records[0]
+    }
+    await pipeline.onRunFinished(projectRoot, runInput())
+    expect(seen?.status).toBe('generating')
+    expect(seen?.source).toEqual({
+      kind: 'job',
+      runId: 'run-1',
+      jobName: '단축키 충돌 정리',
+      taskIds: ['t1', 't2']
+    })
+    expect(seen?.request).toBe('단축키가 겹치는 곳을 찾아 정리해줘') // Run 의 objective 그대로
+  })
+
+  it('jobTasks 와 validation 이 기록에 그대로 실린다', async () => {
+    const { store, pipeline } = await make()
+    agentReply.value = explanation()
+    await pipeline.onRunFinished(projectRoot, runInput())
+    const r = store.get(projectRoot)!.records[0]
+    expect(r.status).toBe('ready')
+    expect(r.jobTasks).toEqual([{ title: '충돌 찾기', outcome: 'completed' }])
+    expect(r.validation).toEqual({ status: 'passed' })
+  })
+
+  it('changedFiles 는 입력 그대로 실린다 — Job 의 각 task 가 이미 무엇을 건드렸는지 보고한다', async () => {
+    const { store, pipeline } = await make()
+    agentReply.value = explanation()
+    await pipeline.onRunFinished(projectRoot, runInput({ changedFiles: ['src/auth/login.ts', 'src/a.ts'] }))
+    expect(store.get(projectRoot)!.records[0].changedFiles).toEqual(['src/auth/login.ts', 'src/a.ts'])
+  })
+
+  // fill() 은 onUnitClosed 와 같은 코드를 타므로, 그 실패 경로 전부를 여기서 다시 확인하지는
+  // 않는다 — 대표로 하나만, Job 도 같은 계정 확인을 거친다는 것만 확인한다
+  it('생성 계정이 없으면 그 사유가 기록에 남는다', async () => {
+    const { store, pipeline } = await make({})
+    await pipeline.onRunFinished(projectRoot, runInput())
+    const r = store.get(projectRoot)!.records[0]
+    expect(r.status).toBe('failed')
+    expect(r.reason).toBe('NO_GENERATOR_ACCOUNT')
   })
 })
 

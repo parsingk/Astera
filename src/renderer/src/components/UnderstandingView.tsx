@@ -1,3 +1,4 @@
+import type { MessageKey } from '../../../core/i18n'
 import type { ProjectUnderstanding, RecordStatus, WorkRecord } from '../../../core/understanding/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { RECORD_GLYPH, RECORD_GLYPH_COLOR, StatusGlyph } from './UnderstandingIcons'
@@ -13,6 +14,16 @@ const canRetry = (s: RecordStatus): boolean => s === 'failed' || s === 'needs-re
 
 const sourceLabel = (r: WorkRecord): string =>
   r.source.kind === 'session' ? r.source.label : r.source.jobName
+
+/** These two reasons are internal codes, not sentences — everything else in `reason` is already a
+ *  free-form sentence written by the agent or the validator and belongs on screen unchanged. */
+const REASON_KEY: Record<string, MessageKey> = {
+  NO_GENERATOR_ACCOUNT: 'hiw.record.reason.noAccount',
+  INTERRUPTED: 'hiw.record.reason.interrupted'
+}
+
+const reasonText = (reason: string, t: (key: MessageKey) => string): string =>
+  reason in REASON_KEY ? t(REASON_KEY[reason]) : reason
 
 /** How It Works sidebar — what was done, newest first. */
 export function UnderstandingView({
@@ -64,7 +75,7 @@ export function UnderstandingView({
                 {dateOf(r.at)} · {sourceLabel(r)}
               </span>
               {/* The reason is the answer to "why would I press that button" — it belongs beside it */}
-              {r.reason && <span className="hiw-summary w">{r.reason}</span>}
+              {r.reason && <span className="hiw-summary w">{reasonText(r.reason, t)}</span>}
               {canRetry(r.status) && (
                 <button
                   className="hiw-review"

@@ -921,6 +921,9 @@ export const ja: Catalog = {
   'hiw.record.needsReview': '要確認',
   'hiw.record.failed': '作成できませんでした',
   'hiw.record.regenerateFailed': '作り直しに失敗しました: {detail}',
+  'hiw.record.reason.noAccount': '説明生成用のアカウントが設定されていません — 設定 → 一般で選んでください。',
+  'hiw.record.reason.interrupted':
+    'これを書いている途中でアプリが終了しました — 下のボタンを押すともう一度作成します。',
   'hiw.pane.overview': '何をしますか',
   'hiw.pane.userVisible': '何が変わったか',
   'hiw.pane.flow': 'どう動きますか',

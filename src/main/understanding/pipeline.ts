@@ -1,13 +1,15 @@
-// 작업 단위가 닫히면 그 변화를 설명으로 옮긴다 — 이 계획의 배선.
+// The impure edges around writing a record — Electron, the filesystem, the agent process. The pure
+// judgment calls (what evidence counts, what shape a prompt takes, what a valid record looks like)
+// live in core's pure functions (changeRecord · prompt · validate); this file only sequences them
+// and persists the result. Same split as workUnit/collector.ts.
 //
-// **여기에는 규칙이 없다.** 판정은 전부 core 의 순수 함수가 하고(changeRecord · mapping ·
-// prompt · validate), 이 파일은 순서를 잇고 저장한다. 그 갈래는 workUnit/collector.ts 와 같다.
+// **Two writers, one shape.** A closed work unit (onUnitClosed) and a finished Job Run
+// (onRunFinished) both write a WorkRecord the same way: create it immediately with status
+// 'generating', then fill it in once the agent answers — the write-up itself can take minutes.
 //
-// 흐름 (설계 §3):
-//   완료된 Unit → ChangeSummary → 겹치는 기능 고르기 → 그 기능만 재생성 → understanding.json
-//
-// **한 번에 하나만 돈다.** 에이전트 실행은 비싸고(수십 초), 같은 프로젝트에 두 개가 겹치면
-// 나중 것이 앞 것의 결과를 덮는다. 큐 하나로 직렬화하는 것은 collector 의 enqueue 와 같은 이유다.
+// **One at a time.** The agent process is expensive (tens of seconds); two running for the same
+// project would let the later one overwrite the earlier one's result. A single queue serializes
+// them, for the same reason as collector.ts's enqueue.
 import { existsSync, statSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'

@@ -992,6 +992,8 @@ export const ko = {
   'hiw.record.needsReview': '검토 필요',
   'hiw.record.failed': '만들지 못했습니다',
   'hiw.record.regenerateFailed': '다시 만들기 실패: {detail}',
+  'hiw.record.reason.noAccount': '설명 생성 계정이 설정되어 있지 않습니다 — 설정 → 일반에서 골라 주세요.',
+  'hiw.record.reason.interrupted': '이 기록을 만드는 도중 앱이 꺼졌습니다 — 아래 버튼을 눌러 다시 만들어 주세요.',
   'hiw.pane.overview': '무엇을 하나요',
   'hiw.pane.userVisible': '무엇이 달라졌나요',
   'hiw.pane.flow': '어떻게 동작하나요',

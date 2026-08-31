@@ -840,6 +840,9 @@ export const en: Record<keyof typeof ko, string> = {
   'hiw.record.needsReview': 'Needs review',
   'hiw.record.failed': 'Could not write it up',
   'hiw.record.regenerateFailed': 'Could not write it up again: {detail}',
+  'hiw.record.reason.noAccount': 'No explanation account is set — pick one in Settings → General.',
+  'hiw.record.reason.interrupted':
+    'The app closed while this was being written up — press the button below to try again.',
   'hiw.pane.overview': 'What it does',
   'hiw.pane.userVisible': 'What you will notice',
   'hiw.pane.flow': 'How it works',

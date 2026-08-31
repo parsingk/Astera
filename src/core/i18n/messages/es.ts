@@ -937,6 +937,10 @@ export const es: Catalog = {
   'hiw.record.needsReview': 'Requiere revisión',
   'hiw.record.failed': 'No se pudo redactar',
   'hiw.record.regenerateFailed': 'No se pudo volver a redactar: {detail}',
+  'hiw.record.reason.noAccount':
+    'No hay una cuenta de explicación configurada — elige una en Configuración → General.',
+  'hiw.record.reason.interrupted':
+    'La aplicación se cerró mientras esto se estaba redactando — pulsa el botón de abajo para volver a intentarlo.',
   'hiw.pane.overview': 'Qué hace',
   'hiw.pane.userVisible': 'Qué notarás',
   'hiw.pane.flow': 'Cómo funciona',

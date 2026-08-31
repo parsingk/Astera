@@ -40,38 +40,6 @@ Rules:
     review instead of guessing.
 14. Do not include private reasoning or chain-of-thought.`
 
-/** 출력 스키마의 산문 설명. JSON 스키마 파일 대신 프롬프트에 싣는 이유: claude 의 -p 는
- *  --output-format json 로 겉봉투만 보장하고 내용 스키마는 계약이 지켜야 한다. 검증은 어차피
- *  validate.ts 가 다시 한다 — 여기는 에이전트가 맞출 과녁을 보여 주는 자리다. */
-export const OUTPUT_SHAPE = `Respond with a single JSON object, no markdown fence, of this exact shape:
-{
-  "overview": string,            // 2-4 sentences, contract rules apply
-  "userFlow": FlowNode[],        // the main path, chronological
-  "failureFlows": FlowNode[],    // only important failures (rule 9)
-  "keyDecisions": { "title": string, "reason": string, "sourceLabel": string,
-                    "evidencePaths": string[] }[],
-  "implementation": { "role": string, "path": string }[],  // repo-relative paths, forward slashes
-  "evidencePaths": string[],     // every file you actually read to ground this
-  "needsReview": boolean,        // true when evidence was insufficient (rule 13)
-  "needsReviewReason": string    // required when needsReview is true
-}
-FlowNode = { "id": string, "label": string, "type": "start"|"step"|"decision"|"success"|"failure",
-             "description": string, "next": { "targetId": string, "condition"?: string }[],
-             "evidencePaths": string[] }
-Labels must be under 22 characters — a longer label means the step name became a sentence;
-put the sentence in "description" instead. A "condition" is a tag on a branch, not a sentence:
-keep it under 12 characters ("yes", "limit hit", "만료"). It is drawn in the gap between two
-boxes, so a long one crowds the diagram.
-
-"userFlow" is drawn as a diagram and must be closed: every "targetId" in it must be the id of
-another node **in userFlow**. Failures are shown as a separate list, not wired into that diagram —
-put them in "failureFlows" and do not point the main flow at them.
-
-Every step and every decision must name the files it is built from, in its own "evidencePaths".
-The reader clicks a step to see what it rests on; a step that names nothing cannot be clicked, so
-the reader is left with a diagram they cannot open. Name the file you actually read for that step,
-not the whole feature's file list.`
-
 export interface RecordRequest {
   /** The user's own words, verbatim — for a Job, its objective */
   request: string

@@ -71,6 +71,27 @@ describe('UnderstandingView', () => {
     expect(html).toContain('hiw.record.regenerate')
   })
 
+  // NO_GENERATOR_ACCOUNT/INTERRUPTED are internal codes, not sentences — the row must translate
+  // them instead of showing the bare code to someone who does not read code
+  it('내부 코드인 사유는 안내 문구로 바뀐다', () => {
+    const html = render({ records: [rec({ status: 'failed', reason: 'NO_GENERATOR_ACCOUNT' })] })
+    expect(html).toContain('hiw.record.reason.noAccount')
+    expect(html).not.toContain('NO_GENERATOR_ACCOUNT')
+  })
+
+  it('앱이 꺼져 끊긴 기록도 코드가 아니라 안내 문구로 바뀐다', () => {
+    const html = render({ records: [rec({ status: 'failed', reason: 'INTERRUPTED' })] })
+    expect(html).toContain('hiw.record.reason.interrupted')
+    expect(html).not.toContain('INTERRUPTED')
+  })
+
+  // 그 외 사유는 에이전트나 validator 가 쓴 자유 문장이므로 그대로 보인다 — 모르는 코드를
+  // 지어내 옮기지 않는다
+  it('알려지지 않은 사유는 고치지 않고 그대로 보인다', () => {
+    const html = render({ records: [rec({ status: 'failed', reason: '알 수 없는 이유로 실패했다' })] })
+    expect(html).toContain('알 수 없는 이유로 실패했다')
+  })
+
   it('다 만든 줄에는 [다시] 가 없다', () => {
     expect(render({ records: [rec()] })).not.toContain('hiw.record.regenerate')
   })
