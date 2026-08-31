@@ -13,17 +13,14 @@ const sample: WorkUnitState = {
       id: 'wu-1',
       sessionId: 's-1',
       projectPath: 'D:\\p',
-      title: '로그인 기능 만들어줘',
+      objective: '로그인 기능 만들어줘',
       status: 'active',
       startedAt: '2026-08-29T10:00:00.000Z',
-      firstMessageIndex: 0,
-      messageCount: 1,
       git: { startHead: 'abc', observedChangedFiles: [] },
       encounteredExternalGitChangeIds: []
     }
   ],
   cursors: [{ sessionId: 's-1', filePath: 'C:\\t.jsonl', offset: 120, sizeAtRead: 120 }],
-  messages: [{ sessionId: 's-1', index: 0, at: '2026-08-29T10:00:00.000Z', text: '로그인 기능 만들어줘' }],
   externalGitChanges: []
 }
 
@@ -64,9 +61,20 @@ describe('WorkUnitStore', () => {
     const s = new WorkUnitStore(file)
     await s.load()
     await s.set('D:\\a', sample)
-    await s.set('D:\\b', { units: [], cursors: [], messages: [], externalGitChanges: [] })
+    await s.set('D:\\b', { units: [], cursors: [], externalGitChanges: [] })
     expect(s.get('D:\\a')!.units).toHaveLength(1)
     expect(s.get('D:\\b')!.units).toHaveLength(0)
+  })
+
+  // The one thing seed()'s orphan sweep relies on — WorkUnitStore has no other way to hand out its keys
+  it('projectPaths 는 저장된 프로젝트 전부를 돌려준다', async () => {
+    const s = new WorkUnitStore(file)
+    await s.load()
+    expect(s.projectPaths()).toEqual([])
+
+    await s.set('D:\\a', sample)
+    await s.set('D:\\b', { units: [], cursors: [], externalGitChanges: [] })
+    expect(s.projectPaths().sort()).toEqual(['D:\\a', 'D:\\b'])
   })
 
   // 이 값이 메모리에만 있으면 앱이 꺼져 있던 동안의 pull·브랜치 전환이 통째로 사라진다
@@ -133,5 +141,64 @@ describe('WorkUnitStore', () => {
     const b = new WorkUnitStore(nested)
     await b.load()
     expect(b.get('D:\\q')).toEqual(sample)
+  })
+
+  // Requiring the field would send every file written before this change to .bak
+  it('옛 파일의 messages 는 가드를 통과하고 다음 저장에서 사라진다', async () => {
+    const legacy = {
+      ...sample,
+      messages: [{ sessionId: 's-1', index: 0, at: '2026-08-29T10:00:00.000Z', text: '로그인 기능 만들어줘' }]
+    }
+    await fs.writeFile(file, JSON.stringify({ projects: { 'D:\\p': legacy } }), 'utf8')
+
+    const s = new WorkUnitStore(file)
+    expect((await s.load()).recovered).toBe(false) // 가드를 통과했다
+
+    await s.set('D:\\p', sample) // 다음 저장은 새 모양이다 — messages 가 없다
+    const raw = JSON.parse(await fs.readFile(file, 'utf8'))
+    expect(raw.projects['D:\\p'].messages).toBeUndefined()
+  })
+
+  it('completed-candidate 는 중단으로 바뀌어 사람 앞에 선다', async () => {
+    const legacyUnit = { ...sample.units[0], status: 'completed-candidate' }
+    await fs.writeFile(
+      file,
+      JSON.stringify({ projects: { 'D:\\p': { ...sample, units: [legacyUnit] } } }),
+      'utf8'
+    )
+
+    const s = new WorkUnitStore(file)
+    await s.load()
+    const u = s.get('D:\\p')!.units[0]
+    expect(u.status).toBe('interrupted')
+    expect(u.reason).toBe('INTERRUPTED_BY_APP_UPGRADE')
+  })
+
+  it('abandoned 는 버린다 — 하류가 한 번도 읽지 않은 상태였다', async () => {
+    const legacyUnit = { ...sample.units[0], status: 'abandoned' }
+    await fs.writeFile(
+      file,
+      JSON.stringify({ projects: { 'D:\\p': { ...sample, units: [legacyUnit] } } }),
+      'utf8'
+    )
+
+    const s = new WorkUnitStore(file)
+    await s.load()
+    expect(s.get('D:\\p')!.units).toHaveLength(0)
+  })
+
+  it('title 만 있는 옛 Unit 은 그것을 objective 로 든다', async () => {
+    const legacyUnit: Record<string, unknown> = { ...sample.units[0] }
+    delete legacyUnit.objective
+    legacyUnit.title = '옛 제목'
+    await fs.writeFile(
+      file,
+      JSON.stringify({ projects: { 'D:\\p': { ...sample, units: [legacyUnit] } } }),
+      'utf8'
+    )
+
+    const s = new WorkUnitStore(file)
+    await s.load()
+    expect(s.get('D:\\p')!.units[0].objective).toBe('옛 제목')
   })
 })

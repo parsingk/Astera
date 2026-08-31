@@ -284,8 +284,16 @@ export function registerIpc(
    *
    *  `transcriptPath` is optional because the claude roll does not know it yet; see the collector's
    *  `onSessionForked`. Doing nothing when the feature is off is the notification's own contract, so
-   *  index.ts calls this without consulting the toggle. */
-  onWorkUnitForkReady?: (notify: (newSessionId: string, transcriptPath?: string) => void) => void
+   *  index.ts calls this without consulting the toggle.
+   *
+   *  `oldSessionId` is how a roll's two taps (index.ts's `session:rolled` handlers) hand over the
+   *  killed session's id, so the collector can re-key that session's still-`active` unit onto the
+   *  resumed one instead of leaving it for the exit that follows to interrupt (Important 3 — a usage
+   *  limit is not a completion). History resume does not have — and must not pass — one; see
+   *  `onSessionForked`'s own doc for why. */
+  onWorkUnitForkReady?: (
+    notify: (newSessionId: string, transcriptPath?: string, oldSessionId?: string) => void
+  ) => void
 ): void {
   const send = (channel: string, payload: unknown): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
@@ -389,9 +397,10 @@ export function registerIpc(
    *  is not up (toggle off, or startup failed) or the user turned it off at runtime — "off" has to
    *  mean "newly created sessions do not know about the CLI". Looking only at whether the server is
    *  alive (orch !== null) would let a session created after turning it off discover the CLI and then
-   *  get a 409 on every call. */
+   *  get a 409 on every call. **Work-unit tracking counts too**: /astera-task needs the same CLI and
+   *  the same ASTERA_SESSION, and the command gate in the server decides what may be called. */
   const orchEnvOf = (): { cliPath: string; infoPath: string; skillsPath: string } | undefined =>
-    orch && core.appSettings.getOrchestrationEnabled()
+    orch && (core.appSettings.getOrchestrationEnabled() || core.appSettings.getWorkUnitTrackingEnabled())
       ? { cliPath: orch.cliPath, infoPath: orch.infoPath, skillsPath: orch.skillsPath }
       : undefined
   /** The project the Jobs sidebar is folded for. main is not otherwise told what the renderer has
@@ -466,8 +475,11 @@ export function registerIpc(
       busyState.set(e.sessionId, busy)
       send('session:busy', { sessionId: e.sessionId, busy })
       scheduler?.handleBusy(e.sessionId, busy) // releases a schedule that is waiting on idle
-      // 에이전트가 한 턴을 끝냈다 — Work Unit 의 완료 후보 판정이 여기서 시작한다 (WU §14-1).
-      // 수집기가 꺼져 있으면 이 호출은 아무 일도 하지 않는다.
+      // The agent's busy state flipped. There is no completion candidacy judged here any more —
+      // that whole notion is gone with the declared boundary. What this feeds is the Work Unit
+      // collector's git-operation attribution window (EG §26): busy → true opens the registration
+      // (onSessionBusy), busy → false closes it (onSessionIdle) — nothing about whether a task is
+      // done. If the collector is off, these calls do nothing.
       //
       // **시작 쪽도 함께 알린다.** 그 구간 안에서 옮겨진 HEAD 는 **이 세션이 만든 것**이고, 그것을
       // 알려 주는 신호가 앱에는 이것 하나뿐이다 — 에이전트가 터미널에 치는 커밋을 Astera 가 미리
@@ -506,7 +518,11 @@ export function registerIpc(
     codexRolling?.handleExit(e)
     codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
-    // 세션이 끝났다 (WU §14-4) — 관찰이 여기서 멈추므로 열려 있던 Work Unit 은 후보로 남기지 않고 닫는다
+    // The session ended (WU §14-4) — observation stops here, so any Work Unit still `active` is
+    // interrupted, not completed; it waits on the How It Works screen until the person closes it.
+    // A usage-limit roll's exit is not this case — the collector's `onSessionForked` re-keys the
+    // unit onto the resumed session's id before this fires, so there is nothing left here to
+    // interrupt (see that method's doc for the ordering this depends on).
     void workUnitCollector
       .onSessionExit(e.sessionId)
       .catch((err) => orchLog(`work unit exit failed: ${String(err)}`))
@@ -740,6 +756,11 @@ export function registerIpc(
     // 이어받은 프로세스가 이어 쓰는 파일이 그것이다(codex 는 확실히 그렇고, claude 가 새 파일을
     // 쓰면 수집기가 그 세션을 처음 보는 자리에서 그 파일의 끝을 잡는다).
     // 토글이 꺼져 있으면 이 호출은 아무 일도 하지 않는다 — 부르는 쪽이 확인하지 않아도 된다.
+    // **`oldSessionId` (the third argument) is deliberately not passed.** This path is the person
+    // reopening a past conversation from the sidebar, not a usage-limit roll — `opts.resumeSessionId`
+    // is that old session's id, but even if its task is still sitting `interrupted`, this resume
+    // gives no grounds to revive it as `active`: the person never called `/astera-task` again.
+    // `onSessionForked`'s doc records this decision and why (Important 3).
     if (resumeTranscriptDest !== undefined) workUnitCollector.onSessionForked(info.id, resumeTranscriptDest)
     // Route to the per-provider coordinator — a mix is already blocked by the guard above, so the primary account's provider decides
     if ((opts.rollAccountIds?.length ?? 0) >= 1) {
@@ -853,13 +874,67 @@ export function registerIpc(
   // down) so the two rolling coordinators can reach a tab session's briefing even with the toggle off.
   orchWiring?.onTabResumeReady(tabResumeTextFor)
 
+  /**
+   * Installs whichever discovery stub(s) match the two toggles' current state, against every known
+   * account. Pulled out of bootOrch (which used to build and install this list inline, once) into a
+   * standalone function that both settings.setOrchestrationEnabled and
+   * settings.setWorkUnitTrackingEnabled also call directly — **not just bootOrch**.
+   *
+   * **Why bootOrch alone is not enough**: bootOrch only runs on the transition that actually starts
+   * the server (see startOrch's `if (orch || orchStarting) return`). Before this task the server could
+   * only be up when orchestration was on, so setOrchestrationEnabled(true) always reached it. Now
+   * either toggle can start the server, so the second toggle to turn on reaches a server that is
+   * already up — bootOrch, and this install, never run for it. Concretely: tracking on first plants
+   * the task stub (server boots); orchestration on second calls startOrch(), which no-ops because
+   * `orch` is already set — without this function being called independently, the orchestration stub
+   * would never be planted for that session, on the one transition (enabling the feature) where losing
+   * the only discovery path for it matters most (see the header comment in stub.ts).
+   *
+   * No-ops when the server has never come up (`orch` is null — nothing has a skillsPath yet to install
+   * from) or when both toggles are off (`stubs` comes out empty). Safe to call redundantly — that is
+   * the point of calling it from three places: installStub already skips a write once content matches
+   * (see stub.ts), so the worst repeated cost is a per-account file read, not a per-account write.
+   */
+  const installStubsForCurrentToggles = (): void => {
+    if (!orch) return
+    const stubs = [
+      ...(core.appSettings.getOrchestrationEnabled()
+        ? [
+            {
+              stubPath: path.join(orch.skillsPath, 'orchestration-stub.md'),
+              skillName: 'astera-orchestration'
+            }
+          ]
+        : []),
+      ...(core.appSettings.getWorkUnitTrackingEnabled()
+        ? [{ stubPath: path.join(orch.skillsPath, 'task-stub.md'), skillName: 'astera-task' }]
+        : [])
+    ]
+    if (stubs.length === 0) return
+    // installStub swallows per-stub and per-account failures itself and does not throw, but the
+    // .catch is here so that even an unexpected failure cannot affect the caller.
+    void installStub({
+      stubs,
+      configDirs: core.accounts.list().map((a) => a.configDir),
+      log: orchLog
+    })
+      .then((r) =>
+        orchLog(
+          `stub install — ${r.written.length} written, ${r.unchanged.length} unchanged, ${r.skipped.length} skipped (no ownership marker and differs from the current stub), ${r.failed.length} failed, ${r.removed.length} legacy removed`
+        )
+      )
+      .catch((err) => orchLog(`stub install failed: ${String(err)}`))
+  }
+
   let orchStarting = false
-  /** Starts orchestration. Called only when the toggle is on — with it off, the store is not even read
-   *  and no port is opened. Turning it on at runtime comes back through here and starts immediately
-   *  (sessions created after that get the CLI — environment variables are fixed at spawn time, so
-   *  sessions already running cannot). If it is already up, this does nothing. Turning it off does not
-   *  close the server — enabled() is read on every request, so CLI calls after that are rejected with
-   *  a 409. */
+  /** Starts the orchestration server. Called when **either** toggle is on — agent orchestration or
+   *  work-unit tracking, since `/astera-task` needs the same CLI and the same `ASTERA_SESSION` the
+   *  orchestration server already hands out (see `orchEnvOf`'s doc). With both off, this is never
+   *  called and no port is opened. Turning either one on at runtime comes back through here and
+   *  starts immediately (sessions created after that get the CLI — environment variables are fixed
+   *  at spawn time, so sessions already running cannot). If it is already up, this does nothing.
+   *  Turning a toggle off does not close the server — `enabled()`/`trackingEnabled()` are read on
+   *  every request, so CLI calls after that are rejected with a 409. */
   const startOrch = async (): Promise<void> => {
     // orch is assigned last (after the port and files are ready), so re-entering in that window would
     // start two servers — the first loses its reference and keeps holding the port, and the info file
@@ -2444,6 +2519,15 @@ export function registerIpc(
       },
       // Read on every request — turning it off at runtime has to reject CLI calls from then on
       enabled: () => core.appSettings.getOrchestrationEnabled(),
+      // Same reasoning as `enabled` above, but for the session-task-* commands. workUnitCollector is
+      // declared further down (around the `WorkUnitCollector` construction) — referencing it here is
+      // fine because these arrows only run once a call comes in, well after that declaration has run.
+      trackingEnabled: () => core.appSettings.getWorkUnitTrackingEnabled(),
+      sessionTasks: {
+        start: (sessionId, objective) => workUnitCollector.startTask(sessionId, objective),
+        complete: (sessionId, input) => workUnitCollector.completeTask(sessionId, input),
+        cancel: (sessionId, reason) => workUnitCollector.cancelTask(sessionId, reason)
+      },
       probeLimit: makeLimitProbe({
         // The key is the app session id (that is what StatusLineManager.read uses to find the capture file)
         statusLinePayload: (sessionId) => core.statusLinePayload(sessionId),
@@ -2604,28 +2688,18 @@ export function registerIpc(
       void orchFireTick().catch((e) => orchLog(`fire tick failed: ${String(e)}`))
       void nudgeSleepingCoordinators().catch((e) => orchLog(`nudge failed: ${String(e)}`))
     }, ORCH_FIRE_TICK_MS)
-    // Installing the discovery stub — without it there is no path by which an agent finds this feature.
-    // **Done for every claude and codex account**: the path is the same
-    // (<configDir>/skills/astera-orchestration/SKILL.md), and there is evidence that codex also treats
-    // the skills directory as a home resource (see the comments in stub.ts). AGENTS.md is left alone —
-    // it is a user file.
+    // Installing the discovery stub(s) — without one there is no path by which an agent finds the
+    // matching feature. **Done for every claude and codex account**: the path is the same
+    // (<configDir>/skills/<name>/SKILL.md), and there is evidence that codex also treats the skills
+    // directory as a home resource (see the comments in stub.ts). AGENTS.md is left alone — it is a
+    // user file.
     // Called after orch is assigned — a position where a failed install cannot affect server startup.
-    // installStub swallows per-account failures itself and does not throw, but the .catch is here so
-    // that even an unexpected failure cannot block startup.
-    // **A deliberate limit**: this runs once, at startup. An account added afterwards does not get the
-    // stub until the next app start — hooking accounts.onChanged would write to user files on every
-    // account edit, and that trade-off is out of scope here.
-    void installStub({
-      stubPath: path.join(skillsPath, 'orchestration-stub.md'),
-      configDirs: core.accounts.list().map((a) => a.configDir),
-      log: orchLog
-    })
-      .then((r) =>
-        orchLog(
-          `stub install — ${r.written.length} written, ${r.unchanged.length} unchanged, ${r.skipped.length} skipped (no ownership marker and differs from the current stub), ${r.failed.length} failed, ${r.removed.length} legacy removed`
-        )
-      )
-      .catch((err) => orchLog(`stub install failed: ${String(err)}`))
+    // **Which stub(s) install is conditional, per toggle, and is not just done here** — see
+    // installStubsForCurrentToggles's own comment for why the settings handlers call it too.
+    // **A remaining limit**: an account added while everything relevant is already on does not get
+    // the stub until the next app start or a toggle flip — hooking accounts.onChanged would write to
+    // user files on every account edit, and that trade-off is out of scope here.
+    installStubsForCurrentToggles()
     orchWiring?.onStarted({
       stop: () => {
         // 미뤄 둔 exit 를 버린다. 남겨 두면 서버가 내려간 뒤에 setState 가 돌 수 있다.
@@ -2667,8 +2741,9 @@ export function registerIpc(
       // 부족하고(reattach 를 봐야 한다), 리셋 시각도 이 이벤트에만 있다. 판단과 세션별 기억은
       // OrchRollTap 이 갖는다(rollTap.ts 의 onRollState).
       onRollState: (e) => orchRollTap?.onRollState(e),
-      // 롤링 배선이 읽는다. 오케스트레이션이 꺼져 있으면 undefined — 그러면 롤된 세션은 예전처럼
-      // CLI 없이 뜨고, 그 상태에서 워커가 존재할 일도 없다.
+      // Read by the rolling wiring. `undefined` only when **both** orchestration and work-unit
+      // tracking are off (see orchEnvOf's own doc) — then the rolled session comes up without a CLI
+      // as before, and there is no way for a worker to exist in that state anyway.
       orchEnv: () => orchEnvOf(),
       // 두 롤링 코디네이터의 resumeText dep 구현.
       //
@@ -2697,7 +2772,10 @@ export function registerIpc(
         ).then((text) => text ?? (tabFallback ? tabResumeTextFor(sessionId, form) : null))
     })
   }
-  if (orchWiring && core.appSettings.getOrchestrationEnabled())
+  if (
+    orchWiring &&
+    (core.appSettings.getOrchestrationEnabled() || core.appSettings.getWorkUnitTrackingEnabled())
+  )
     void startOrch().catch((err) => orchLog(`startup failed: ${String(err)}`))
   ipcMain.on('sessions.write', (_e, id, data) => core.sessions.write(id, data))
   ipcMain.on('sessions.resize', (_e, id, cols, rows) => core.sessions.resize(id, cols, rows))
@@ -3324,6 +3402,11 @@ export function registerIpc(
     onUnitClosed: (projectPath, unit) => {
       void understandingPipeline.onUnitClosed(understandingKeyOf(projectPath), unit)
     },
+    // The open-task section's redraw trigger. **Not folded** — same reason as the sessionTasks.*
+    // handlers just below (their own comment has the full story): workUnits.json is keyed by the raw
+    // session cwd, not the origin-repo fold understanding.json uses, so this has to name the same key
+    // the renderer's own sessionTasks.list call used, unfolded, or the two would agree on nothing.
+    onTasksChanged: (projectPath) => send('sessionTasks:changed', projectPath),
     log: orchLog
   })
   // 토글이 꺼져 있으면 시작하지 않는다. **load 뒤로 미룬다** — 먼저 시작하면 수집기가 쓴 상태를
@@ -3336,9 +3419,41 @@ export function registerIpc(
   // 이어받기 알림을 배선에 넘긴다. **토글과 무관하게 항상 넘긴다** — `onTabResumeReady` 와
   // 같은 이유다: 꺼져 있을 때 아무 일도 하지 않는 것은 알림 자신의 계약이고, 부르는 쪽이 토글을
   // 다시 묻게 하면 그 판정이 두 곳으로 갈라진다.
-  onWorkUnitForkReady?.((sessionId, transcriptPath) =>
-    workUnitCollector.onSessionForked(sessionId, transcriptPath)
+  onWorkUnitForkReady?.((sessionId, transcriptPath, oldSessionId) =>
+    workUnitCollector.onSessionForked(sessionId, transcriptPath, oldSessionId)
   )
+
+  // The How It Works screen's open-task section. Same shape as understanding.get: assertAllowedPath
+  // first (the path decides which project's tasks come back), then the collector call.
+  //
+  // **Passed through, not folded.** `understanding.json` is keyed by the project folded to the
+  // origin repo (understandingKeyOf, design D1) — but `workUnits.json` is not: `workUnitSessions`
+  // above builds every `CollectorSession` with `projectPath: s.cwd` verbatim, and nothing in
+  // collector.ts folds it afterwards (`stateOf`/`persist` store and read back whatever key they are
+  // handed — collector.test.ts's `completeTaskById`/`listOpen` calls pin exactly that). So these two
+  // stores live in genuinely different key spaces, and folding here would ask the *other* store's
+  // key of *this* one, which holds nothing under it.
+  //
+  // **What this leaves imperfect:** a worktree session's open task is visible only in that
+  // worktree's own tab, not under the origin repository's tab — unlike a finished record, which
+  // (via the fold above) shows up under the origin repo no matter which tab produced it. That
+  // asymmetry is real and already exists for work-unit state generally; it is parked for a later
+  // plan (docs/2026-08-30-understanding-generation-conformance.md), not something to fix here.
+  ipcMain.handle('sessionTasks.list', async (_e, projectPath: string) => {
+    await assertAllowedPath(projectPath)
+    return workUnitCollector.listOpen(projectPath)
+  })
+  ipcMain.handle('sessionTasks.complete', async (_e, projectPath: string, id: string) => {
+    await assertAllowedPath(projectPath)
+    const r = await workUnitCollector.completeTaskById(projectPath, id)
+    if (!r.ok) throw new Error(r.reason)
+    return { recorded: r.recorded }
+  })
+  ipcMain.handle('sessionTasks.cancel', async (_e, projectPath: string, id: string) => {
+    await assertAllowedPath(projectPath)
+    const r = await workUnitCollector.cancelTaskById(projectPath, id)
+    if (!r.ok) throw new Error(r.reason)
+  })
 
   // The detected JDKs. There is no path argument, so this is not subject to assertAllowedPath — the scan
   // only looks at conventional directories (Program Files and friends) and PATH.
@@ -3788,6 +3903,11 @@ export function registerIpc(
     await core.appSettings.setOrchestrationEnabled(enabled)
     // Turning it on starts it immediately (a no-op if already up). Why turning it off does not close it is in the startOrch comment.
     if (enabled && orchWiring) await startOrch()
+    // Not gated on whether startOrch() just booted anything — the case this covers is exactly the one
+    // where it did not: the server was already up (started by the other toggle), so bootOrch's own
+    // install never ran for this one. installStubsForCurrentToggles re-reads both toggles itself and
+    // no-ops when the server still is not up.
+    if (enabled) installStubsForCurrentToggles()
   })
 
   // The work unit tracking toggle. The same trust-boundary check as setLang — the value the renderer
@@ -3805,6 +3925,11 @@ export function registerIpc(
     // 닫는다 — 스펙 §16.1 이다. 저장소를 다 읽기 전에 시작하지 않도록 load 를 먼저 기다린다.
     await workUnitsLoaded
     await workUnitCollector.onEnabledChanged(enabled)
+    // Same line the orchestration setter uses, for the same reason: /astera-task needs the server
+    // and the planted CLI. Turning it off does not close the server — see the startOrch comment.
+    if (enabled && orchWiring) await startOrch()
+    // Same reasoning as the orchestration setter above — see installStubsForCurrentToggles's comment.
+    if (enabled) installStubsForCurrentToggles()
   })
 
   // 설명을 누가·무엇으로 만드는가. **셋을 함께 쓴다** — 계정을 바꾸면 그 계정에 없는 모델이

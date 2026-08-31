@@ -25,7 +25,11 @@ export const es: Catalog = {
     'No se pudo guardar la configuración de orquestación: {detail}',
   // Seguimiento de unidades de trabajo
   'settings.workUnit.label': 'Seguimiento de unidades de trabajo (experimental)',
-  'settings.workUnit.hint': 'Agrupa lo que haces en una sesión en unidades del tamaño de un objetivo. Solo las conversaciones posteriores a activarlo: el historial existente nunca se lee.',
+  'settings.workUnit.hint':
+    'Declara una tarea escribiendo /astera-task con lo que quieres hacer, y eso se convierte en una ' +
+    'fila propia hasta que termina, sin importar cuántos mensajes haga falta. No se aplica a las ' +
+    'sesiones que ya están abiertas: funciona a partir de las sesiones nuevas. Solo se leen las ' +
+    'conversaciones posteriores a activarlo — el historial existente nunca se lee.',
   'settings.workUnit.saveFailed': 'No se pudo guardar la configuración de seguimiento: {detail}',
   // Generación de explicaciones (How It Works)
   'settings.gen.label': 'Cuenta para explicaciones',
@@ -944,6 +948,10 @@ export const es: Catalog = {
     'No hay una cuenta de explicación configurada — elige una en Configuración → General.',
   'hiw.record.reason.interrupted':
     'La aplicación se cerró mientras esto se estaba redactando — pulsa el botón de abajo para volver a intentarlo.',
+  'hiw.record.reason.checkFailed':
+    'Una comprobación que ejecutó el agente no pasó — vale la pena revisar el resultado.',
+  'hiw.record.reason.checkFailedJob':
+    'Una comprobación que ejecutó la aplicación no pasó — vale la pena revisar el resultado.',
   'hiw.pane.overview': 'Qué hace',
   'hiw.pane.userVisible': 'Qué notarás',
   'hiw.pane.flow': 'Cómo funciona',
@@ -959,5 +967,23 @@ export const es: Catalog = {
   'hiw.empty.readOnly': 'Solo lectura — tu código no se modifica.',
   'hiw.pane.notYet': 'Este botón aún no está listo.',
   'hiw.pane.noExplanation': 'Este registro aún no tiene explicación.',
-  'hiw.pane.notInProject': 'El registro de esta pestaña no está en el proyecto abierto actualmente.'
+  'hiw.pane.notInProject': 'El registro de esta pestaña no está en el proyecto abierto actualmente.',
+  'hiw.open.title': 'En curso',
+  'hiw.open.interruptedTitle': 'Quedó sin terminar',
+  'hiw.open.complete': 'Hecho',
+  'hiw.open.cancel': 'Cancelar',
+  'hiw.open.completeFailed': 'No se pudo marcar como hecho: {detail}',
+  'hiw.open.completeEmpty': 'No hubo ningún cambio, así que no se registró nada.',
+  'hiw.open.cancelFailed': 'No se pudo cancelar: {detail}',
+  'hiw.open.startedAt': 'Iniciado a las {time}',
+  'hiw.open.reason.newTask': 'Se detuvo porque empezó otra tarea',
+  'hiw.open.reason.sessionEnd': 'Se detuvo porque la sesión terminó',
+  'hiw.open.reason.appRestart': 'Se detuvo porque la aplicación se cerró',
+  'hiw.open.reason.trackingOff': 'Se detuvo porque se desactivó el seguimiento',
+  'hiw.open.reason.upgrade': 'Se detuvo porque la aplicación se actualizó',
+  'hiw.verify.verified': 'Todas las comprobaciones reportadas pasaron',
+  'hiw.verify.partial': 'Solo se comprobó una parte',
+  'hiw.verify.unverified': 'No se comprobó nada',
+  'hiw.verify.failed': 'Una comprobación reportada falló',
+  'hiw.verify.reported': 'Lo reportó el agente — la aplicación no lo ejecutó por su cuenta'
 }

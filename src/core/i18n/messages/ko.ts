@@ -25,7 +25,10 @@ export const ko = {
   'settings.orchestration.saveFailed': '오케스트레이션 설정을 저장하지 못했습니다: {detail}',
   // Work Unit 추적
   'settings.workUnit.label': '작업 단위 추적 (실험)',
-  'settings.workUnit.hint': '세션에서 한 작업을 목표 단위로 나눠 기록합니다. 켠 뒤의 대화만 봅니다 — 이전 기록은 읽지 않습니다.',
+  'settings.workUnit.hint':
+    '/astera-task 로 하려는 일을 적으면 그때부터 한 줄이 시작되고, 끝날 때까지 몇 번을 주고받든 같은 ' +
+    '줄로 남습니다. 이미 열려 있는 세션에는 적용되지 않습니다 — 새 세션부터 동작합니다. 켠 뒤의 ' +
+    '대화만 봅니다 — 이전 기록은 읽지 않습니다.',
   'settings.workUnit.saveFailed': '작업 단위 추적 설정을 저장하지 못했습니다: {detail}',
   // 설명 생성 (How It Works)
   'settings.gen.label': '설명 생성 계정',
@@ -997,6 +1000,8 @@ export const ko = {
   'hiw.record.regenerateFailed': '다시 만들기 실패: {detail}',
   'hiw.record.reason.noAccount': '설명 생성 계정이 설정되어 있지 않습니다 — 설정 → 일반에서 골라 주세요.',
   'hiw.record.reason.interrupted': '이 기록을 만드는 도중 앱이 꺼졌습니다 — 아래 버튼을 눌러 다시 만들어 주세요.',
+  'hiw.record.reason.checkFailed': '에이전트가 돌린 검사가 통과하지 못했습니다 — 결과물을 확인해 보세요.',
+  'hiw.record.reason.checkFailedJob': '앱이 돌린 검사가 통과하지 못했습니다 — 결과물을 확인해 보세요.',
   'hiw.pane.overview': '무엇을 하나요',
   'hiw.pane.userVisible': '무엇이 달라졌나요',
   'hiw.pane.flow': '어떻게 동작하나요',
@@ -1012,5 +1017,23 @@ export const ko = {
   'hiw.empty.readOnly': '읽기만 합니다 — 코드를 고치지 않습니다.',
   'hiw.pane.notYet': '이 버튼은 아직 준비 중입니다.',
   'hiw.pane.noExplanation': '이 기록의 설명이 아직 없습니다.',
-  'hiw.pane.notInProject': '이 탭의 기록을 지금 열려 있는 프로젝트에서 찾을 수 없습니다.'
+  'hiw.pane.notInProject': '이 탭의 기록을 지금 열려 있는 프로젝트에서 찾을 수 없습니다.',
+  'hiw.open.title': '진행 중',
+  'hiw.open.interruptedTitle': '마무리되지 않음',
+  'hiw.open.complete': '완료',
+  'hiw.open.cancel': '취소',
+  'hiw.open.completeFailed': '완료 처리하지 못했습니다: {detail}',
+  'hiw.open.completeEmpty': '바뀐 것이 없어 기록하지 않았습니다.',
+  'hiw.open.cancelFailed': '취소하지 못했습니다: {detail}',
+  'hiw.open.startedAt': '{time} 시작',
+  'hiw.open.reason.newTask': '다른 작업이 시작되어 멈췄습니다',
+  'hiw.open.reason.sessionEnd': '세션이 끝나 멈췄습니다',
+  'hiw.open.reason.appRestart': '앱이 꺼져 멈췄습니다',
+  'hiw.open.reason.trackingOff': '추적을 꺼서 멈췄습니다',
+  'hiw.open.reason.upgrade': '앱이 업데이트되어 멈췄습니다',
+  'hiw.verify.verified': '보고된 검사가 모두 통과했습니다',
+  'hiw.verify.partial': '일부만 확인되었습니다',
+  'hiw.verify.unverified': '확인된 것이 없습니다',
+  'hiw.verify.failed': '보고된 검사가 실패했습니다',
+  'hiw.verify.reported': '에이전트가 보고한 것입니다 — 앱이 직접 돌려 보지는 않았습니다'
 } as const

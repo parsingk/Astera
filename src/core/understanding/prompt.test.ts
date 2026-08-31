@@ -67,4 +67,21 @@ describe('buildRecordPrompt', () => {
     expect(withJob).toContain('감지 고치기')
     expect(withJob).toContain('테스트 4029개 통과')
   })
+
+  // A session's checks are the agent's own claim, not a measurement — the wording says so, and
+  // the section is absent entirely when there is nothing to report (same rule as the Job section).
+  it('보고된 검사와 요약이 실리고, 없으면 그 절이 없다', () => {
+    expect(buildRecordPrompt(req)).not.toContain('What the agent reported running')
+    expect(buildRecordPrompt(req)).not.toContain("The agent's own one-line summary")
+    const withChecks = buildRecordPrompt({
+      ...req,
+      checks: [{ name: '단위 테스트', status: 'passed' }],
+      resultSummary: '한도 감지를 고쳤다'
+    })
+    expect(withChecks).toContain('What the agent reported running')
+    expect(withChecks).toContain('it said so; nobody measured it')
+    expect(withChecks).toContain('- 단위 테스트: passed')
+    expect(withChecks).toContain("The agent's own one-line summary")
+    expect(withChecks).toContain('한도 감지를 고쳤다')
+  })
 })

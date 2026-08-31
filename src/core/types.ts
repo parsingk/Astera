@@ -519,6 +519,12 @@ export interface CoreEvents {
    *  않는다** — main 은 그 키를 원 저장소로 접어 두는데(설계 D1) 렌더러는 그 접기를 모른다.
    *  "다시 읽어라"는 신호로만 쓴다. 배경 재생성이 화면에 닿는 유일한 길이다. */
   'understanding:changed': string
+  /** The open-task section's redraw trigger. **Not folded**, unlike 'understanding:changed' above —
+   *  workUnits.json (what this section reads) is keyed by the raw session cwd, a different key space
+   *  from understanding.json's origin-repo fold (ipc.ts's sessionTasks.* handlers explain why). The
+   *  receiving side still does not compare the payload against `currentProject`; it is only a
+   *  "read again" signal, whichever project it names. */
+  'sessionTasks:changed': string
 }
 export type CoreEventChannel = keyof CoreEvents
 
@@ -923,6 +929,36 @@ export interface UnderstandingApi {
   regenerate(projectPath: string, recordId: string): Promise<void>
 }
 
+/** One row of the How It Works screen's open-task section. A DTO, not the stored unit: the
+ *  renderer has no business with git baselines, and `src/core/workUnit/**` is not in
+ *  tsconfig.web.json's include list. */
+export interface OpenSessionTask {
+  id: string
+  objective: string
+  status: 'active' | 'interrupted'
+  startedAt: string
+  /** When it stopped. Only an interrupted row has one — the screen uses it as that row's date, the
+   *  same way a finished record uses its own `at` (UnderstandingView.tsx). */
+  endedAt?: string
+  /** Why it was interrupted. One of the INTERRUPTED_BY_* codes; the screen translates them. */
+  reason?: string
+  sessionId: string
+}
+
+export interface SessionTaskApi {
+  /** Session tasks still waiting on an ending — active and interrupted, newest first. */
+  list(projectPath: string): Promise<OpenSessionTask[]>
+  /** Close one as completed with `source: 'user'`. The write-up starts now, not before.
+   *
+   *  `recorded: false` means the button press was accepted but nothing was kept — the unit had no
+   *  write evidence or no changed files (spec §12), so `finish` (collector.ts) dropped it instead of
+   *  turning it into a record. That is correct behavior, not a failure, so it resolves rather than
+   *  rejecting; the renderer tells the person with a distinct, non-error toast
+   *  (`hiw.open.completeEmpty`). */
+  complete(projectPath: string, id: string): Promise<{ recorded: boolean }>
+  cancel(projectPath: string, id: string): Promise<void>
+}
+
 export type RendererApi = CoreApi & {
   system: SystemApi
   clipboard: ClipboardApi
@@ -944,5 +980,6 @@ export type RendererApi = CoreApi & {
   keys: KeysApi
   orch: OrchApi
   understanding: UnderstandingApi
+  sessionTasks: SessionTaskApi
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

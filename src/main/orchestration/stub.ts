@@ -80,6 +80,11 @@ const withoutMarker = (s: string): string =>
     // bytes cannot match a pre-marker file.
     .replace(/<!--[\s\S]*?-->\n*/g, (m) => (m.includes(STUB_MARKER) ? '' : m))
 
+/** The skill directory name identifying the orchestration stub. It is the one stub old installs
+ *  ever used a different directory name for (see LEGACY_STUB_DIRS), so it is also what installStub
+ *  uses below to scope legacy cleanup to that stub only. */
+const ORCHESTRATION_SKILL_NAME = 'astera-orchestration'
+
 /** Install location under an account's configDir. `.claude` is not hardcoded — per-account
  *  CLAUDE_CONFIG_DIR (CODEX_HOME for codex) isolation is the whole reason this app exists.
  *
@@ -87,11 +92,11 @@ const withoutMarker = (s: string): string =>
  *  user's shared config directory, so a generic name would collide with any other tool that installs
  *  an orchestration skill there. Two apps fighting over one file is a silent failure — whichever
  *  wrote last owns it, and the loser's install is skipped forever by the ownership check below. */
-export const stubTargetPath = (configDir: string): string =>
-  path.join(configDir, 'skills', 'astera-orchestration', 'SKILL.md')
+export const stubTargetPath = (configDir: string, skillName: string = ORCHESTRATION_SKILL_NAME): string =>
+  path.join(configDir, 'skills', skillName, 'SKILL.md')
 
 /**
- * Installs the stub into each account's skills directory.
+ * Installs one or more stubs into each account's skills directory.
  *
  * - **Only files the app owns are overwritten.** There are two grounds for ownership and **either one
  *   is enough**: ① `STUB_MARKER` is present (everything written from now on qualifies) ② the content
@@ -108,7 +113,10 @@ export const stubTargetPath = (configDir: string): string =>
  * - If it is our file, it gets overwritten — the stub is app-owned and versioned. Identical content is
  *   not rewritten though (a pointless file update wakes the user's file watchers).
  * - **It never throws.** A failed install must not stop orchestration from starting (the feature works
- *   without the skill as long as the user gives directions). One account failing does not stop the rest.
+ *   without the skill as long as the user gives directions). One account failing does not stop the
+ *   rest, and — now that this installs a list — one stub failing does not stop the others either:
+ *   every rule above (the ownership marker, the legacy-removal rule, "leave a file we do not own
+ *   alone") is judged per stub and per account, independently.
  * - Nothing is deleted when the toggle goes off — that would be deleting a user file, and leaving it
  *   is harmless because the stub's "check the tooling" step reports that `$ASTERA_CLI` is empty.
  * - **The stub this app installed under an old name is removed** (see LEGACY_STUB_DIRS for why a
@@ -116,11 +124,14 @@ export const stubTargetPath = (configDir: string): string =>
  *   `LEGACY_STUB_MARKER`; a file without either marker is left alone and only logged. Removal happens
  *   **only once the current stub is confirmed in place** for that account — deleting the old one after
  *   a failed install would leave the account with no orchestration skill at all, which is worse than
- *   a stale one.
+ *   a stale one. This is scoped to the orchestration stub alone (see ORCHESTRATION_SKILL_NAME) —
+ *   `LEGACY_STUB_DIRS` names directories only that stub ever used.
  */
 export async function installStub(a: {
-  /** Absolute path to resources/skills/orchestration-stub.md */
-  stubPath: string
+  /** Each stub and the skill directory name it installs under. The app owns both files; the
+   *  ownership marker, the legacy-removal rule and the "leave a file we do not own alone" rule
+   *  are per stub, not per account. */
+  stubs: { stubPath: string; skillName: string }[]
   /** configDirs of the target accounts (both claude and codex) */
   configDirs: string[]
   log?: (message: string) => void
@@ -138,53 +149,59 @@ export async function installStub(a: {
     failed: [] as string[],
     removed: [] as string[]
   }
-  let content: string
-  try {
-    content = await fs.readFile(a.stubPath, 'utf8')
-  } catch (err) {
-    a.log?.(`stub install skipped — could not read the source ${a.stubPath}: ${String(err)}`)
-    return result
-  }
-  // If the source has no marker, the files we write would look like someone else's on the next
-  // launch. Installing in that state stops updates forever, so nothing is done and it is reported
-  // (this guards against an accidental edit to the stub during development).
-  if (!content.includes(STUB_MARKER)) {
-    a.log?.(`stub install skipped — the source carries no ownership marker ${a.stubPath}`)
-    return result
-  }
-  for (const configDir of a.configDirs) {
-    const target = stubTargetPath(configDir)
-    // Whether this account ends the round with the current stub on disk — the precondition for
-    // touching the old one. `continue` is deliberately not used below: `unchanged` is the second-launch
-    // path and has to reach the cleanup too, or a leftover would survive every launch after the first.
-    let inPlace = false
+  for (const stub of a.stubs) {
+    let content: string
     try {
-      const existing = await fs.readFile(target, 'utf8').catch(() => null)
-      const appOwned =
-        existing === null ||
-        existing.includes(STUB_MARKER) ||
-        withoutMarker(existing) === withoutMarker(content)
-      if (!appOwned) {
-        result.skipped.push(target)
-        // Does not overclaim: we cannot assert the app did not create it (it may be a stub from an
-        // older version). State only what is known and leave the path as evidence for the user.
-        a.log?.(
-          `stub install skipped — no ownership marker and content differs from the current stub ${target}`
-        )
-      } else if (existing === content) {
-        result.unchanged.push(target)
-        inPlace = true
-      } else {
-        await fs.mkdir(path.dirname(target), { recursive: true })
-        await fs.writeFile(target, content, 'utf8')
-        result.written.push(target)
-        inPlace = true
-      }
+      content = await fs.readFile(stub.stubPath, 'utf8')
     } catch (err) {
-      result.failed.push(target)
-      a.log?.(`stub install failed ${target}: ${String(err)}`)
+      a.log?.(`stub install skipped — could not read the source ${stub.stubPath}: ${String(err)}`)
+      continue
     }
-    if (inPlace) result.removed.push(...(await removeLegacyStubs(configDir, a.log)))
+    // If the source has no marker, the files we write would look like someone else's on the next
+    // launch. Installing in that state stops updates forever, so nothing is done and it is reported
+    // (this guards against an accidental edit to the stub during development).
+    if (!content.includes(STUB_MARKER)) {
+      a.log?.(`stub install skipped — the source carries no ownership marker ${stub.stubPath}`)
+      continue
+    }
+    for (const configDir of a.configDirs) {
+      const target = stubTargetPath(configDir, stub.skillName)
+      // Whether this account ends the round with the current stub on disk — the precondition for
+      // touching the old one. `continue` is deliberately not used below: `unchanged` is the second-launch
+      // path and has to reach the cleanup too, or a leftover would survive every launch after the first.
+      let inPlace = false
+      try {
+        const existing = await fs.readFile(target, 'utf8').catch(() => null)
+        const appOwned =
+          existing === null ||
+          existing.includes(STUB_MARKER) ||
+          withoutMarker(existing) === withoutMarker(content)
+        if (!appOwned) {
+          result.skipped.push(target)
+          // Does not overclaim: we cannot assert the app did not create it (it may be a stub from an
+          // older version). State only what is known and leave the path as evidence for the user.
+          a.log?.(
+            `stub install skipped — no ownership marker and content differs from the current stub ${target}`
+          )
+        } else if (existing === content) {
+          result.unchanged.push(target)
+          inPlace = true
+        } else {
+          await fs.mkdir(path.dirname(target), { recursive: true })
+          await fs.writeFile(target, content, 'utf8')
+          result.written.push(target)
+          inPlace = true
+        }
+      } catch (err) {
+        result.failed.push(target)
+        a.log?.(`stub install failed ${target}: ${String(err)}`)
+      }
+      // Scoped to the orchestration stub only — LEGACY_STUB_DIRS names directories that only that
+      // stub ever used, so a task-stub install (or any future stub) must never touch them.
+      if (inPlace && stub.skillName === ORCHESTRATION_SKILL_NAME) {
+        result.removed.push(...(await removeLegacyStubs(configDir, a.log)))
+      }
+    }
   }
   return result
 }

@@ -63,7 +63,13 @@ let tabResumeTextRef: ((sessionId: string, form: 'handover' | 'update') => Promi
 // Work Unit 수집기의 "이 세션은 이어받은 것이다" 알림. `tabResumeTextRef` 와 같은 갈래다 —
 // 값은 registerIpc 안에서 만들어지지만 부르는 자리 하나가 이 파일에만 있다(두 롤링 코디네이터의
 // send 탭). 수집기가 꺼져 있으면 이 함수는 아무 일도 하지 않으므로 탭 쪽은 토글을 묻지 않는다.
-let workUnitForkRef: ((newSessionId: string, transcriptPath?: string) => void) | null = null
+// **`oldSessionId` (the third argument) is passed only by the rolling taps.** It carries the id of
+// the session a usage-limit roll just killed, so the collector can re-key that session's open task
+// onto the new one (Important 3) — history resume never passes it (collector.ts's `onSessionForked`
+// doc explains why).
+let workUnitForkRef:
+  | ((newSessionId: string, transcriptPath?: string, oldSessionId?: string) => void)
+  | null = null
 
 /** The `resumeText` dep both rolling coordinators receive (RollingDeps/CodexRollingDeps). fix wave
  *  최종, F1: tries the Job briefing through `orchRef` when orchestration is up; when it is not
@@ -501,10 +507,15 @@ app.whenReady().then(async () => {
       // 쓸지는 그 세션의 statusLine 이 도착해야 정해진다(rolling.ts 의 applyMeta 가 그것을
       // 기다린다). 추측 대신 세션 id 만 알리고, 파일 끝을 잡는 일은 수집기가 그 세션을 처음
       // 보는 회차로 미룬다. 다른 탭들과 같은 이유로 자기 try 안에 격리한다.
+      // **`oldSessionId` goes along too (Important 3).** The killed session's open task has to be
+      // re-keyed onto the new one, or that session's exit event — which follows this — would
+      // interrupt it for no reason: a usage limit is not a completion. rolling.ts's roll() goes
+      // kill → spawn → this publish with no await in between, so the killed session's real
+      // (asynchronous) exit event is guaranteed to arrive after this notification.
       try {
         if (channel === 'session:rolled') {
           const p = payload as { oldSessionId: string; info: SessionInfo }
-          workUnitForkRef?.(p.info.id)
+          workUnitForkRef?.(p.info.id, undefined, p.oldSessionId)
         }
       } catch {
         /* a Work Unit tap failure must not block rolling */
@@ -602,14 +613,16 @@ app.whenReady().then(async () => {
       // 건네줄 수 있다**: 재개된 codex 는 새 파일을 만들지 않고 바로 이 dest 에 이어 쓰므로(아래
       // 주석) 그 순간의 파일 끝이 곧 되쓰기가 끝난 자리다. 빈 대화로 굴릴 때는 `undefined` 이고,
       // 그때는 claude 쪽처럼 수집기가 다음 회차에 끝을 잡는다.
-      // **codex 세션은 오늘 Unit 을 만들지 않는다**(collector.ts 머리주석의 이유). 그래도 알리는
-      // 이유는 한쪽만 잡힌 비대칭이 codex 지원이 오는 날 조용한 버그가 되기 때문이다.
+      // **codex sessions do not create a Unit today** (see collector.ts's header comment for why),
+      // so passing `oldSessionId` has nothing to re-key and quietly does nothing for now. Passed
+      // anyway, same as the path above, because an asymmetry caught on only one side becomes a
+      // silent bug the day codex support arrives.
       // 자기 try 안에 두는 것도 claude 쪽과 같다 — 아래 블록의 rekey 와 rollout 재등록이 이
       // 호출의 예외에 함께 쓸려 가지 않게 한다.
       try {
         if (channel === 'session:rolled') {
-          const p = payload as { info: SessionInfo; dest?: string }
-          workUnitForkRef?.(p.info.id, p.dest)
+          const p = payload as { oldSessionId: string; info: SessionInfo; dest?: string }
+          workUnitForkRef?.(p.info.id, p.dest, p.oldSessionId)
         }
       } catch {
         /* a Work Unit tap failure must not block codex rolling */

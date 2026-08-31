@@ -1,11 +1,13 @@
 // 설명 생성 에이전트에게 주는 프롬프트 — 스펙 §24 의 Explanation Contract 가 본문이다.
 //
-// **계약이 core 에 상수로 있는 이유:** 이 문장들이 배선(main) 안에 문자열로 흩어지면 어느
-// 테스트도 "§24 의 14개 규칙이 다 들어 있는가"를 물을 수 없다. 스펙이 명시적 계약을 요구했으니
-// 계약은 테스트가 닿는 자리에 있어야 한다 — titleOf 가 humanRequest.ts 에 있는 것과 같은 이유다.
+// **Why the contract lives in core as a constant:** if these sentences were scattered as strings
+// inside the wiring (main), no test could ask "does this hold all 14 rules from §24?" The spec
+// demanded an explicit contract, so the contract has to live somewhere a test can reach it — the
+// same reason `verificationOf` lives in workUnit/verification.ts.
 //
 // node: import 없음. 파일 내용은 부르는 쪽이 읽어 넣는다 — 이 모듈은 문자열만 만든다.
 import type { Lang } from '../i18n'
+import type { SessionCheck } from './types'
 
 /** What to call each language **inside the prompt**. The model is told to write in one of these, so
  *  the name is given in English — that is the language the rest of the prompt is in, and a model
@@ -61,6 +63,12 @@ export interface RecordRequest {
   tasks?: readonly { title: string; outcome: string }[]
   /** Job only */
   validation?: { status: string; summary?: string }
+  /** Session only: what the agent said it ran with `session-task-complete`. **It said so; nobody
+   *  measured it** — a Job's `validation` above is the app's own result, which is why the two
+   *  never appear together. */
+  checks?: readonly SessionCheck[]
+  /** Session only: the agent's own one-line summary from `session-task-complete`. */
+  resultSummary?: string
   projectRoot: string
 }
 
@@ -81,6 +89,12 @@ export function buildRecordPrompt(req: RecordRequest): string {
     : ''
   const commits =
     req.commits.length > 0 ? `\n\nCommits in this range:\n${req.commits.map((c) => `- ${c}`).join('\n')}` : ''
+  const checks =
+    req.checks && req.checks.length > 0
+      ? `\n\nWhat the agent reported running (it said so; nobody measured it):\n` +
+        req.checks.map((c) => `- ${c.name}: ${c.status}`).join('\n')
+      : ''
+  const said = req.resultSummary ? `\n\nThe agent's own one-line summary:\n${req.resultSummary}` : ''
 
   return `${EXPLANATION_CONTRACT}
 
@@ -91,7 +105,7 @@ What the person asked for, verbatim:
 ${req.request}
 
 Files that changed while this work was open:
-${req.changedFiles.map((f) => `- ${f}`).join('\n')}${commits}${jobSection}${validation}
+${req.changedFiles.map((f) => `- ${f}`).join('\n')}${commits}${checks}${said}${jobSection}${validation}
 
 Write every sentence a person reads in ${language}: "overview", "userVisibleChanges", every
 "label", "description" and "condition" in "flow", every "title" and "reason" in "decisions", every

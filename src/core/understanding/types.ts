@@ -4,6 +4,17 @@
 
 export type FlowNodeType = 'start' | 'step' | 'decision' | 'success' | 'failure'
 
+/** One check the agent reported running. The name is its own words; the status is a closed set. */
+export interface SessionCheck {
+  name: string
+  status: 'passed' | 'failed' | 'skipped'
+}
+
+/** How much of a finished piece of work was actually checked. Separate from the lifecycle on
+ *  purpose: declaring the work over and the work being good are different claims, and a failed
+ *  check never reopens it. */
+export type Verification = 'verified' | 'partial' | 'unverified' | 'failed'
+
 export interface FlowEdge {
   targetId: string
   /** 분기 조건의 표시 문구 — "예", "아니오", "실패" */
@@ -91,8 +102,15 @@ export interface WorkRecord {
   request: string
   changedFiles: string[]
   git: { startHead: string | null; endHead: string | null; commits?: string[] }
-  /** A Job carries its validation outcome; a session has none */
+  /** A Job carries its validation outcome; a session has none. **Records written before this
+   *  field's replacement carry this** — nothing new writes it any more; kept only so those old
+   *  records stay readable. `verification` below is what every reader should prefer, falling
+   *  back to this field when it is absent. */
   validation?: { status: 'passed' | 'failed' | 'unknown'; summary?: string }
+  /** What was checked, and by whom it was reported. **A Job's comes from the Run's own validation;
+   *  a session's comes from what the agent said it ran.** The screen labels the second as reported
+   *  rather than measured, because the app ran neither. */
+  verification?: { status: Verification; checks?: SessionCheck[]; summary?: string }
   /** Job only: the tasks this run carried, for the agent's material */
   jobTasks?: { title: string; outcome: string }[]
   status: RecordStatus

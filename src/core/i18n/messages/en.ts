@@ -21,7 +21,11 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.orchestration.saveFailed': 'Could not save the orchestration setting: {detail}',
   // Work unit tracking
   'settings.workUnit.label': 'Work unit tracking (experimental)',
-  'settings.workUnit.hint': 'Groups what you do in a session into goal-sized units. Only conversations after you turn it on — existing history is never read.',
+  'settings.workUnit.hint':
+    'Lets you declare a piece of work by typing /astera-task with what you want done — one row from ' +
+    'there until it ends, however many messages it takes. It does not apply to sessions that are ' +
+    'already open — only new sessions get it. Only conversations after you turn it on are read — ' +
+    'existing history is never read.',
   'settings.workUnit.saveFailed': "Couldn't save the work unit tracking setting: {detail}",
   // Explanation generation (How It Works)
   'settings.gen.label': 'Explanation account',
@@ -846,6 +850,8 @@ export const en: Record<keyof typeof ko, string> = {
   'hiw.record.reason.noAccount': 'No explanation account is set — pick one in Settings → General.',
   'hiw.record.reason.interrupted':
     'The app closed while this was being written up — press the button below to try again.',
+  'hiw.record.reason.checkFailed': 'A check the agent ran did not pass — the write-up is worth a look.',
+  'hiw.record.reason.checkFailedJob': 'A check the app ran did not pass — the write-up is worth a look.',
   'hiw.pane.overview': 'What it does',
   'hiw.pane.userVisible': 'What you will notice',
   'hiw.pane.flow': 'How it works',
@@ -861,5 +867,23 @@ export const en: Record<keyof typeof ko, string> = {
   'hiw.empty.readOnly': 'Read-only — your code is not modified.',
   'hiw.pane.notYet': 'This button is not ready yet.',
   'hiw.pane.noExplanation': 'This record has no explanation yet.',
-  'hiw.pane.notInProject': 'This tab’s record is not in the project that is open right now.'
+  'hiw.pane.notInProject': 'This tab’s record is not in the project that is open right now.',
+  'hiw.open.title': 'In progress',
+  'hiw.open.interruptedTitle': 'Left unfinished',
+  'hiw.open.complete': 'Done',
+  'hiw.open.cancel': 'Cancel',
+  'hiw.open.completeFailed': 'Could not mark it done: {detail}',
+  'hiw.open.completeEmpty': 'Nothing changed, so there was nothing to record.',
+  'hiw.open.cancelFailed': 'Could not cancel it: {detail}',
+  'hiw.open.startedAt': 'Started {time}',
+  'hiw.open.reason.newTask': 'Stopped when another task started',
+  'hiw.open.reason.sessionEnd': 'Stopped when the session ended',
+  'hiw.open.reason.appRestart': 'Stopped when the app closed',
+  'hiw.open.reason.trackingOff': 'Stopped when tracking was turned off',
+  'hiw.open.reason.upgrade': 'Stopped when the app updated',
+  'hiw.verify.verified': 'Every reported check passed',
+  'hiw.verify.partial': 'Only some of it was checked',
+  'hiw.verify.unverified': 'Nothing was checked',
+  'hiw.verify.failed': 'A reported check failed',
+  'hiw.verify.reported': 'Reported by the agent — the app did not run it itself'
 }

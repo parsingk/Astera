@@ -18,6 +18,7 @@ import type { ProviderDescriptor } from '../../core/providers/descriptor'
 import type { ProjectUnderstanding, RecordExplanation, WorkRecord } from '../../core/understanding/types'
 import type { GeneratorSettings } from '../../core/understanding/generatorSettings'
 import type { SessionWorkUnit } from '../../core/workUnit/types'
+import { verificationOf } from '../../core/workUnit/verification'
 import { sessionLabelOf } from '../../core/understanding/changeRecord'
 import { buildRecordPrompt } from '../../core/understanding/prompt'
 import type { Lang } from '../../core/i18n'
@@ -106,14 +107,23 @@ export class UnderstandingPipeline {
    *  collector's own round must not be held up by an agent that takes minutes. */
   onUnitClosed(projectRoot: string, unit: SessionWorkUnit): Promise<void> {
     return this.enqueue(async () => {
-      if (unit.status !== 'completed') return // spec §7 — an abandoned unit does not flow downstream
+      // Only a completed unit becomes a record — a cancelled or interrupted one does not, and
+      // the collector's finish() already only calls this for a completed unit; this guard is a
+      // second line of defense.
+      if (unit.status !== 'completed') return
       const record: WorkRecord = {
         id: randomUUID(),
-        at: unit.completedAt ?? unit.startedAt,
+        at: unit.endedAt ?? unit.startedAt,
         source: { kind: 'session', sessionId: unit.sessionId, label: sessionLabelOf(unit.sessionId) },
-        request: unit.title,
+        request: unit.objective,
         changedFiles: [...unit.git.observedChangedFiles],
         git: { startHead: unit.git.startHead, endHead: unit.git.endHead ?? null },
+        // A session's checks are what the agent said it ran — the app never ran them itself.
+        verification: {
+          status: verificationOf(unit.checks),
+          ...(unit.checks && unit.checks.length > 0 ? { checks: unit.checks } : {}),
+          ...(unit.resultSummary ? { summary: unit.resultSummary } : {})
+        },
         status: 'generating'
       }
       // **Saved before the agent runs.** The write-up takes minutes; a row that only appears when it
@@ -137,7 +147,21 @@ export class UnderstandingPipeline {
         request: input.objective,
         changedFiles: input.changedFiles,
         git: { startHead: null, endHead: null },
-        validation: input.validation,
+        // A Run's validation is the app's own result, not a claim: it ran the configuration —
+        // unlike a session's `checks`, which are only what the agent said it ran. Both land in
+        // `verification`, but the screen labels a session's as reported rather than measured
+        // (a later task does that).
+        verification: input.validation
+          ? {
+              status:
+                input.validation.status === 'passed'
+                  ? 'verified'
+                  : input.validation.status === 'failed'
+                    ? 'failed'
+                    : 'unverified',
+              summary: input.validation.summary
+            }
+          : undefined,
         jobTasks: input.tasks,
         status: 'generating'
       }
@@ -175,7 +199,14 @@ export class UnderstandingPipeline {
         changedFiles: cur.changedFiles,
         commits,
         tasks: cur.source.kind === 'job' ? cur.jobTasks : undefined,
-        validation: cur.validation,
+        // The prompt's "Validation" section is Job-only. A new record carries the outcome in
+        // `verification`; regenerating one written before this task falls back to the raw
+        // `validation` field it still has — the same precedence every reader uses (types.ts).
+        validation: cur.source.kind === 'job' ? (cur.verification ?? cur.validation) : undefined,
+        // A session's own claim about what it ran, and its one-line summary — never the app's
+        // measurement. Job records carry none of this; their outcome is the validation above.
+        checks: cur.source.kind === 'session' ? cur.verification?.checks : undefined,
+        resultSummary: cur.source.kind === 'session' ? cur.verification?.summary : undefined,
         projectRoot,
         lang: this.deps.lang()
       }),
@@ -191,6 +222,10 @@ export class UnderstandingPipeline {
       return
     }
     const e = v.value
+    // Spec §17 — an agent that declared victory with a failing check shows up as something to
+    // look at. The lifecycle still says completed: declaring the work over and the work being
+    // good are different claims.
+    const failed = cur.verification?.status === 'failed'
     const explanation: RecordExplanation = {
       overview: e.overview,
       userVisibleChanges: e.userVisibleChanges,
@@ -218,8 +253,25 @@ export class UnderstandingPipeline {
     await this.patch(projectRoot, recordId, (r) => ({
       ...r,
       explanation,
-      status: e.needsReview ? 'needs-review' : 'ready',
-      reason: e.needsReview ? e.needsReviewReason : undefined
+      status: e.needsReview || failed ? 'needs-review' : 'ready',
+      // The model's own reason wins when it gave one — a failed check only supplies a reason
+      // when the write-up itself came back clean, so it never erases what the model said.
+      //
+      // **Two codes, not one, for a failed check** — `CHECK_FAILED` reads "a check the agent ran did
+      // not pass", which is true for a session's own claimed checks but wrong for a Job: a Run's
+      // `validation` is the app's own measurement (this file's own comment on `verification` above),
+      // never something the agent claimed. `cur.source.kind` is already read for that exact
+      // distinction a few lines up (the prompt's `checks`/`validation` split), so branching the
+      // reason code the same way is one `if`, not a second lookup — cheaper than threading
+      // `source.kind` through the renderer's reason-to-text table (UnderstandingView.tsx's
+      // `REASON_KEY`) just for this one entry.
+      reason: e.needsReview
+        ? e.needsReviewReason
+        : failed
+          ? cur.source.kind === 'job'
+            ? 'CHECK_FAILED_JOB'
+            : 'CHECK_FAILED'
+          : undefined
     }))
   }
 

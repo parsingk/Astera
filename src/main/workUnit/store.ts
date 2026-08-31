@@ -10,11 +10,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { ExternalGitChange } from '../../core/git/types'
-import type {
-  ObservedUserMessage,
-  SessionWorkUnit,
-  TranscriptCursor
-} from '../../core/workUnit/types'
+import type { SessionWorkUnit, TranscriptCursor } from '../../core/workUnit/types'
 
 /** 설계 §9 의 ProjectGitSnapshot — "Astera 가 마지막으로 알던 git 상태"(EG §4).
  *
@@ -37,24 +33,26 @@ export interface ProjectGitSnapshot {
 export interface WorkUnitState {
   units: SessionWorkUnit[]
   cursors: TranscriptCursor[]
-  /** 우리가 본 사용자 메시지. 규칙이 바뀌면 여기서 다시 도출한다 (스펙 §16.1) */
-  messages: ObservedUserMessage[]
   externalGitChanges: ExternalGitChange[]
-  /** **선택 필드다.** 이 필드가 생기기 전의 `workUnits.json` 이 이미 사용자 디스크에 있고, 필수로
-   *  두면 그 파일이 타입 가드를 통과하지 못해 통째로 `.bak` 으로 밀린다 — `isState` 는 `units` 같은
-   *  최상위 칸을 **직접 보기 때문이다.**
+  /** **Optional field.** A `workUnits.json` written before this field existed is already on disk,
+   *  and making it required would fail the type guard and send that whole file to `.bak` — `isState`
+   *  looks at a top-level slot like this one **directly**.
    *
-   *  **`SessionWorkUnit.validation` 과 같은 이유가 아니다.** 한동안 그렇게 적혀 있었지만, 그쪽은
-   *  가드가 닿지 않는 자리다 — `isValid` 는 배열의 원소 하나하나를 아예 열어 보지 않으므로(바로
-   *  아래 주석) `SessionWorkUnit` 에 필드가 늘어도 옛 파일은 그대로 읽힌다. 그 필드가 선택인 것은
-   *  마이그레이션 때문이 아니라 스펙의 이름을 미리 지어 두려는 것이고(그 필드 주석), 이 필드가
-   *  선택인 것은 **옛 파일을 실제로 지키기 위해서다.** */
+   *  This is not the same situation as an optional field on `SessionWorkUnit` (this file's comment
+   *  used to say so — it was wrong). A unit's own fields sit one level down, inside the `units`
+   *  array, and `isValid` never opens an individual unit's shape at all (see the comment on `isValid`
+   *  just below) — so a unit gaining an optional field does not need one to keep old files readable;
+   *  that guard was never checking unit fields to begin with. Only here, at the top level that
+   *  `isState` does inspect directly, is "optional" what keeps an old file out of `.bak`. */
   gitSnapshot?: ProjectGitSnapshot
 }
 
-/** projectPath → 그 프로젝트의 상태. 프로젝트를 나누는 것은 파일이 아니라 파일 안의 키다 —
- *  orchestration.json · understanding.json 과 같은 갈래다. **키 문자열은 understanding.json 과
- *  같아야 한다**: 다음 계획이 둘을 잇는다. */
+/** projectPath → that project's state. **Not the same key space as `understanding.json`.**
+ *  `understanding.json` folds a worktree session's project onto its origin repository
+ *  (`understandingKeyOf`, design D1); this store does not — a `CollectorSession.projectPath` is
+ *  written and read back verbatim (ipc.ts's `sessionTasks.list` handler explains why folding here
+ *  would be wrong: it would ask the *other* store's key of *this* one, which holds nothing under
+ *  it). Confusing the two key spaces is exactly what Task 5's Critical bug was. */
 interface StoreShape {
   projects: Record<string, WorkUnitState>
 }
@@ -67,10 +65,13 @@ function isState(v: unknown): v is WorkUnitState {
   return (
     Array.isArray(v.units) &&
     Array.isArray(v.cursors) &&
-    Array.isArray(v.messages) &&
     Array.isArray(v.externalGitChanges) &&
     // 선택 필드라 없어도 좋다. 있을 때 보는 것은 배열들과 같은 깊이 — "객체인가" 하나뿐이다
-    (v.gitSnapshot === undefined || isObj(v.gitSnapshot))
+    (v.gitSnapshot === undefined || isObj(v.gitSnapshot)) &&
+    // `messages` was dropped when the boundary became declared. Older files still carry it, so the
+    // guard accepts it and the next write leaves it behind — requiring it would `.bak` every file
+    // written before this change.
+    (v.messages === undefined || Array.isArray(v.messages))
   )
 }
 
@@ -96,6 +97,20 @@ export class WorkUnitStore {
       return this.recover()
     }
     if (!isValid(parsed)) return this.recover()
+    // Statuses from before the boundary was declared. `completed-candidate` meant "the agent
+    // stopped and something changed" — nobody confirmed it, so it goes in front of the person.
+    // `abandoned` meant "closed with nothing observed", which nothing downstream ever read.
+    for (const state of Object.values(parsed.projects)) {
+      state.units = state.units.filter((u) => (u.status as string) !== 'abandoned')
+      for (const u of state.units) {
+        if ((u.status as string) === 'completed-candidate') {
+          u.status = 'interrupted'
+          u.reason = 'INTERRUPTED_BY_APP_UPGRADE'
+        }
+        const legacy = u as unknown as { title?: string }
+        if (!u.objective && legacy.title) u.objective = legacy.title
+      }
+    }
     this.state = parsed
     return { recovered: false }
   }
@@ -109,6 +124,13 @@ export class WorkUnitStore {
 
   get(projectPath: string): WorkUnitState | undefined {
     return this.state.projects[projectPath]
+  }
+
+  /** Every project this store currently holds a state for. **Only for sweeps that must reach a
+   *  project with no live session** (the collector's `seed()` orphan-interrupt) — everyday code
+   *  should still be handed a `projectPath` rather than enumerate the whole store. */
+  projectPaths(): string[] {
+    return Object.keys(this.state.projects)
   }
 
   set(projectPath: string, value: WorkUnitState): Promise<void> {
