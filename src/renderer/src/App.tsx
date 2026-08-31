@@ -2097,10 +2097,19 @@ export default function App(): React.JSX.Element {
   /** [완료] on an open-task row — closes it with `source: 'user'`, active or interrupted either way.
    *  The write-up starts on main's side of this call, not before: nothing here creates it directly.
    *  Does not wait for the redraw — 'sessionTasks:changed' (subscribed above) does that once main's
-   *  onTasksChanged fires, the same shape as [Write it up again] above. */
+   *  onTasksChanged fires, the same shape as [Write it up again] above.
+   *
+   *  **`recorded: false` is not an error.** `finish` (collector.ts) drops a unit with no write
+   *  evidence or no changed files instead of turning it into a record (spec §12) — the row still
+   *  disappears, but silently that reads as a bug: the person pressed a button on a row that had
+   *  been waiting for them and it vanished with no explanation. `hiw.open.completeEmpty` says what
+   *  happened without reading as a failure, since dropping empty work is the correct outcome. */
   const completeOpenTask = (projectRoot: string, id: string): void => {
     void window.api.sessionTasks
       .complete(projectRoot, id)
+      .then((r) => {
+        if (!r.recorded) toast.info(t('hiw.open.completeEmpty'))
+      })
       .catch((err) =>
         toast.error(
           t('hiw.open.completeFailed', { detail: err instanceof Error ? err.message : String(err) })

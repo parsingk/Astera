@@ -44,7 +44,7 @@ const wrote = (tool = 'Edit'): string =>
     message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: tool, input: {} }] }
   }) + '\n'
 
-/** codex 가 턴을 끝냈다고 스스로 적는 줄 — codex 쪽의 회귀 가드가 이것을 쓴다 */
+/** The line codex writes to say a turn ended, by itself — codex's own regression guard uses this */
 const codexTurnComplete = (): string =>
   JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', turn_id: 't1' } }) + '\n'
 
@@ -81,11 +81,19 @@ async function makeCollector(
   fake: Fake,
   file = storeFile,
   watchGit?: (projectPath: string) => Promise<(() => Promise<void>) | null>
-): Promise<{ collector: WorkUnitCollector; store: WorkUnitStore; closed: SessionWorkUnit[] }> {
+): Promise<{
+  collector: WorkUnitCollector
+  store: WorkUnitStore
+  closed: SessionWorkUnit[]
+  tasksChanged: string[]
+}> {
   const store = new WorkUnitStore(file)
   await store.load()
   // 하류(설명 생성)로 나가는 알림. 여기에 들어오는 Unit 하나가 에이전트 왕복 하나다
   const closed: SessionWorkUnit[] = []
+  // The screen's redraw signal (Item 9). How many times a project path lands here, and in what
+  // order, is exactly how many times the screen had to re-read.
+  const tasksChanged: string[] = []
   // 자기 참조다 — pendingGitOps 는 collector 자신의 등록 목록을 그대로 돌려준다. ipc.ts 가
   // workUnitCollector 를 wiring 하는 것과 같은 자리, 같은 이유다.
   const collector: WorkUnitCollector = new WorkUnitCollector({
@@ -95,9 +103,10 @@ async function makeCollector(
     now: () => fake.clock,
     pendingGitOps: () => collector.getPendingGitOps(),
     watchGit,
-    onUnitClosed: (_p, u) => closed.push(u)
+    onUnitClosed: (_p, u) => closed.push(u),
+    onTasksChanged: (p) => tasksChanged.push(p)
   })
-  return { collector, store, closed }
+  return { collector, store, closed, tasksChanged }
 }
 
 const session = (overrides: Partial<CollectorSession> = {}): CollectorSession => ({
@@ -120,7 +129,7 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
 })
 
-// ── 선언으로 여닫는다 (task 1) ────────────────────────────────────────
+// ── Opened and closed by declaration (task 1) ─────────────────────────
 
 describe('WorkUnitCollector — 선언으로 여닫는다', () => {
   it('startTask 가 목표를 든 Unit 을 연다', async () => {
@@ -171,8 +180,13 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
 
     const first = await collector.startTask('s1', '첫 작업')
     if (!first.ok) throw new Error('unexpected')
-    // 첫 작업의 쓰기 증거 줄이 파일에는 적혔지만, 디바운스된 감시자는 아직 읽지 않았다 —
-    // onTranscriptChanged()/flush() 를 일부러 부르지 않는다
+    // Critical 1's second guard needs an observed change — recorded now, while the unit is still
+    // active, since `observe` never touches an already-interrupted unit (isOpen excludes it)
+    fake.git.files = ['src/first.ts']
+    collector.onGitChanged()
+    await collector.flush()
+    // The first task's write-evidence line is written to the file, but the debounced watcher has
+    // not read it yet — onTranscriptChanged()/flush() are deliberately not called
     await fs.appendFile(transcript, wrote(), 'utf8')
 
     const second = await collector.startTask('s1', '두 번째 작업')
@@ -246,6 +260,32 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
     expect(closed).toHaveLength(0) // 설명 생성으로도 흘러가지 않는다
   })
 
+  // Critical 1: `sawWrite` alone is not the rule spec §12 asks for. `CLAUDE_WRITE_TOOLS`
+  // (humanRequest.ts) counts `Bash`/`PowerShell`, so a session that only ran a read-only shell
+  // command — `grep`, `git log`, the task-stub skill's own step-1 `echo "$ASTERA_CLI"` — sets
+  // `sawWrite` true without changing a single file. This unit must still be dropped: nothing
+  // changed, so there is nothing to record (spec §12 — "The person may have started a record and
+  // then only talked").
+  it('아무 파일도 바뀌지 않은 Unit 은 쓰기 증거가 있어도 완료해도 기록되지 않고 지워진다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, closed } = await makeCollector(fake)
+    await collector.start()
+
+    await collector.startTask('s1', '무엇이 문제인지 살펴봐줘')
+    await fs.appendFile(transcript, wrote('Bash'), 'utf8') // a read-only shell command — sawWrite still turns on
+    collector.onTranscriptChanged()
+    await collector.flush()
+    expect(store.get(projectPath)!.units[0].sawWrite).toBe(true)
+    // fake.git.files stays at its default [] — nothing changed
+
+    const result = await collector.completeTask('s1', { source: 'agent' })
+    expect(result.ok).toBe(true)
+
+    expect(store.get(projectPath)!.units).toHaveLength(0) // sawWrite alone does not save it
+    expect(closed).toHaveLength(0)
+  })
+
   it('completeTaskById 는 중단된 것도 닫는다', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
@@ -255,7 +295,11 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
     const first = await collector.startTask('s1', '첫 작업')
     if (!first.ok) throw new Error('unexpected')
     await fs.appendFile(transcript, wrote(), 'utf8')
+    // Critical 1's second guard needs an observed change — recorded now, while the unit is still
+    // active, since `observe` never touches an already-interrupted unit (isOpen excludes it)
+    fake.git.files = ['src/first.ts']
     collector.onTranscriptChanged()
+    collector.onGitChanged()
     await collector.flush()
     await collector.startTask('s1', '두 번째 작업') // 첫 작업을 중단으로 민다
     expect(store.get(projectPath)!.units[0].status).toBe('interrupted')
@@ -306,16 +350,20 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
   it('추적을 끄면 열린 Unit 은 중단이 되고 하류를 깨우지 않는다', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
-    const { collector, store, closed } = await makeCollector(fake)
+    const { collector, store, closed, tasksChanged } = await makeCollector(fake)
     await collector.start()
 
     await collector.startTask('s1', '추적을 끄기 전 작업')
+    tasksChanged.length = 0 // clear startTask's own notification — this test wants only the off-switch one
     await collector.onEnabledChanged(false)
 
     const state = store.get(projectPath)!
     expect(state.units[0].status).toBe('interrupted')
     expect(state.units[0].reason).toBe('INTERRUPTED_BY_TRACKING_OFF')
     expect(closed).toHaveLength(0)
+    // Item 9 (final review): closeAll used to interrupt without telling the screen — it kept
+    // showing a stale "in progress" row until some other event triggered a re-read.
+    expect(tasksChanged).toEqual([projectPath])
   })
 
   it('앱을 다시 켜면 세션이 사라진 active Unit 은 중단이 된다', async () => {
@@ -325,8 +373,8 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
     await first.collector.start()
     await first.collector.startTask('s1', '재시작 전 작업')
 
-    // s1 은 사라졌지만, 같은 프로젝트에 다른 세션(s2)이 남아 있다 — groupByProject(sessions) 가
-    // 이 프로젝트를 방문하는 흔한 경로다
+    // s1 is gone, but another session (s2) remains in the same project — the common path by which
+    // groupByProject(sessions) visits this project at all
     fake.sessions = [session({ sessionId: 's2' })]
     const second = await makeCollector(fake)
     await second.collector.start()
@@ -335,12 +383,14 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
     const orphan = state.units.find((u) => u.sessionId === 's1')!
     expect(orphan.status).toBe('interrupted')
     expect(orphan.reason).toBe('INTERRUPTED_BY_APP_RESTART')
+    // Item 9 (final review): seed's restart-interrupt used to skip this notification too.
+    expect(second.tasksChanged).toEqual([projectPath])
   })
 
-  // **회귀.** 이 프로젝트의 세션이 전부 사라지면 groupByProject(sessions) 가 이 프로젝트를 아예
-  // 방문하지 않는다 — WorkUnitStore 는 키를 열거하는 길을 주지 않으므로, seed() 가 그 project 를
-  // 훑으려면 store.projectPaths() 로 따로 물어야 한다. 이 물음이 없으면 이 Unit 은 세션이 하나도
-  // 남지 않은 프로젝트에 active 로 영원히 남는다.
+  // **Regression.** If every session in this project is gone, groupByProject(sessions) never
+  // visits it at all — WorkUnitStore gives no way to enumerate its keys, so seed() has to ask
+  // store.projectPaths() separately to sweep such a project. Without that question, this unit
+  // stays active forever in a project with no session left in it.
   it('세션이 하나도 남지 않은 프로젝트의 active Unit 도 재시작하면 중단이 된다', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
@@ -348,7 +398,7 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
     await first.collector.start()
     await first.collector.startTask('s1', '재시작 전 작업')
 
-    // 이 프로젝트의 세션이 전부 사라졌다 — 다른 프로젝트의 세션만 남는다
+    // Every session in this project is gone — only another project's session remains
     const otherProject = path.join(dir, 'other-project')
     await fs.mkdir(otherProject, { recursive: true })
     fake.sessions = [session({ sessionId: 's2', projectPath: otherProject, transcriptPath: null })]
@@ -358,11 +408,15 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
     const state = second.store.get(projectPath)!
     expect(state.units[0].status).toBe('interrupted')
     expect(state.units[0].reason).toBe('INTERRUPTED_BY_APP_RESTART')
+    // Item 9 (final review): this is seed's *second* pass (the orphaned-project loop, a separate
+    // code path from the previous test's) — it needs the same notification, not shared code that
+    // would have fixed both at once.
+    expect(second.tasksChanged).toEqual([projectPath])
   })
 
-  // **회귀 가드 (1/2) — 이 계획 전체가 지키려는 것.** 사람이 트랜스크립트에 친 요청 한 줄은
-  // 더 이상 Unit 을 열지도 닫지도 않는다. 2026-08-31 에 하나의 기능이 이 줄 때문에 기록 둘로
-  // 쪼개졌었다.
+  // **Regression guard (1/2) — the whole point of this plan.** A request line the person typed
+  // into the transcript no longer opens or closes a unit at all. On 2026-08-31 one feature was
+  // split into two records because of this line.
   it('사용자 메시지가 와도 Unit 은 열리지도 닫히지도 않는다', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
@@ -372,7 +426,7 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
     await fs.appendFile(transcript, human('로그인 기능 만들어줘'), 'utf8')
     collector.onTranscriptChanged()
     await collector.flush()
-    expect(store.get(projectPath)?.units ?? []).toHaveLength(0) // 메시지만으로는 아무것도 열리지 않는다
+    expect(store.get(projectPath)?.units ?? []).toHaveLength(0) // a message alone opens nothing
 
     await collector.startTask('s1', '선언으로 연 작업')
     await fs.appendFile(transcript, human('두 번째 메시지'), 'utf8')
@@ -380,13 +434,13 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
     await collector.flush()
 
     const state = store.get(projectPath)!
-    expect(state.units).toHaveLength(1) // 메시지가 와도 개수도 상태도 움직이지 않는다
+    expect(state.units).toHaveLength(1) // neither the count nor the status moves when a message arrives
     expect(state.units[0].status).toBe('active')
     expect(state.units[0].objective).toBe('선언으로 연 작업')
   })
 
-  // **회귀 가드 (2/2).** codex 가 기록에 스스로 적는 턴 종료(`task_complete`)도 더 이상 Unit 을
-  // 완료 후보로 만들거나 닫지 않는다.
+  // **Regression guard (2/2).** A turn ending that codex records for itself (`task_complete`) also
+  // no longer turns a unit into a completion candidate or closes it.
   it('turn 이 끝나도 Unit 은 닫히지 않는다', async () => {
     const fake = makeFake()
     fake.sessions = [session({ idleSignalTrusted: false })]
@@ -421,6 +475,23 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
     expect(open.find((t) => t.status === 'active')?.objective).toBe('세 번째 작업')
   })
 
+  // Item 6 (final review): `core/types.ts` documents this as newest-first, but the store itself is
+  // oldest-first (new units are pushed onto the end) — this pins the sort that makes the doc true.
+  it('listOpen 은 최근에 시작한 것이 앞에 온다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session(), session({ sessionId: 's2' })]
+    const { collector } = await makeCollector(fake)
+    await collector.start()
+
+    await collector.startTask('s1', '먼저 시작한 작업')
+    fake.clock += 1000
+    const second = await collector.startTask('s2', '나중에 시작한 작업')
+    if (!second.ok) throw new Error('unexpected')
+
+    const open = collector.listOpen(projectPath)
+    expect(open.map((t) => t.objective)).toEqual(['나중에 시작한 작업', '먼저 시작한 작업'])
+  })
+
   // Review fix (Task 5, round 1): ipc.ts's sessionTasks.* handlers used to fold this path through
   // understandingKeyOf before calling here, on the mistaken belief that workUnits.json is keyed the
   // same way understanding.json is. It is not — `projectPath` here is a session's raw cwd (the
@@ -441,7 +512,7 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
   })
 })
 
-// ── 열려 있는 동안의 HEAD 전진 — 선언으로 연 뒤에도 그대로다 ──────────────
+// ── HEAD moving forward while open — still true once opened by declaration ──
 
 describe('WorkUnitCollector — 열려 있는 동안의 HEAD 전진', () => {
   it('여러 커밋이 한 Unit 을 유지한다', async () => {
@@ -462,41 +533,42 @@ describe('WorkUnitCollector — 열려 있는 동안의 HEAD 전진', () => {
     }
 
     const state = store.get(projectPath)!
-    expect(state.units).toHaveLength(1) // 커밋은 Unit 을 열지 않는다 — 여는 것은 선언뿐이다
+    expect(state.units).toHaveLength(1) // a commit does not open a unit — only a declaration does
     expect(state.units[0].id).toBe(opened.id)
     expect(state.units[0].status).toBe('active')
     expect(state.units[0].git.startHead).toBe('c0')
     expect(state.units[0].git.endHead).toBe('c3')
-    // 이 커밋들은 이 세션의 것이고, 남이 옮긴 저장소가 아니다
+    // these commits belong to this session — not a repository someone else moved
     expect(state.externalGitChanges).toEqual([])
   })
 })
 
-// ── 커서 기계장치, sawWrite 로 고정한다 (fix round 1, Important 3) ────────
+// ── Cursor machinery, pinned via sawWrite (fix round 1, Important 3) ──
 //
-// seed()/anchorFor/onSessionForked/tail 의 restarted 분기는 여전히 실재하고 여전히 옳아야
-// 한다 — Unit 이 더 이상 메시지로 열리지 않는다고 해서 "이 줄을 읽어도 되는가"라는 물음이
-// 사라지는 것은 아니다. 이 세 테스트는 그 물음을 예전처럼 "Unit 이 생겼는가"가 아니라
-// startTask 로 연 Task 의 sawWrite 로 고정한다 — 그 관찰만이 지금 남아 있는 유일한 관찰이다.
+// seed()/anchorFor/onSessionForked/tail's `restarted` branch is still real and still has to be
+// right — a unit no longer opening from a message does not make the question "is it safe to read
+// this line" go away. These three tests pin that question the same way they always did, just
+// through the sawWrite of a task opened by startTask instead of "did a unit get created" — that
+// observation is the only one still standing.
 
 describe('WorkUnitCollector — 커서 기계장치, sawWrite 로 고정한다', () => {
   it('이미 돌던 세션의 켜기 전 트랜스크립트는 나중에 연 Task 의 sawWrite 를 켜지 않는다', async () => {
     const fake = makeFake()
-    fake.sessions = [session()] // 켤 때 이미 돌던 세션
-    // 켜기 전에 이미 쓰기 증거가 있다 — seed() 가 잡는 파일 끝보다 앞선 내용이다
+    fake.sessions = [session()] // a session already running when tracking turns on
+    // Write evidence already exists before turning on — content earlier than the file end seed() anchors on
     await fs.appendFile(transcript, wrote(), 'utf8')
     const sizeAtStart = (await fs.stat(transcript)).size
     const { collector, store } = await makeCollector(fake)
-    await collector.start() // 커서 = 이 시점의 파일 끝
+    await collector.start() // cursor = the file's end at this moment
 
     expect(store.get(projectPath)!.cursors[0].offset).toBe(sizeAtStart)
 
     const result = await collector.startTask('s1', '켠 뒤 작업')
     expect(result.ok).toBe(true)
     let state = store.get(projectPath)!
-    expect(state.units[0].sawWrite).toBeFalsy() // 켜기 전 줄은 결코 읽히지 않는다
+    expect(state.units[0].sawWrite).toBeFalsy() // a line from before turning on is never read
 
-    // 켠 뒤에 진짜로 쓴 것은 정상적으로 잡힌다 — 위 결과가 우연이 아님을 보인다
+    // Something actually written after turning on is caught normally — showing the result above was no accident
     await fs.appendFile(transcript, wrote(), 'utf8')
     collector.onTranscriptChanged()
     await collector.flush()
@@ -510,17 +582,17 @@ describe('WorkUnitCollector — 커서 기계장치, sawWrite 로 고정한다',
     const { collector, store } = await makeCollector(fake)
     await collector.start()
 
-    // 원본 세션이 쓰기 증거를 남겼다 — 굴러(rolled) 새 세션이 되기 전의 일이다
+    // The original session left write evidence — before it was rolled into a new session
     await fs.appendFile(transcript, wrote(), 'utf8')
     const sizeAtFork = (await fs.stat(transcript)).size
     const rolled = path.join(dir, 'transcript-rolled.jsonl')
-    await fs.copyFile(transcript, rolled) // --resume 이 옛 대화를 통째로 다시 적는다
-    collector.onSessionForked('s2', rolled) // 되쓰기 시작 전 크기(sizeAtFork)를 앵커로 잡는다
+    await fs.copyFile(transcript, rolled) // --resume rewrites the whole old conversation
+    collector.onSessionForked('s2', rolled) // anchors on the size before the rewrite (sizeAtFork)
 
-    // statusline 이 뒤늦게 s2 의 경로를 알려 준다
+    // the statusline reports s2's path only later
     fake.sessions = [session({ sessionId: 's2', transcriptPath: rolled })]
     collector.onTranscriptChanged()
-    await collector.flush() // s2 를 처음 보는 회차 — 앵커가 정확하면 이 회차는 아무것도 읽지 않는다
+    await collector.flush() // the round that first sees s2 — if the anchor is right, this round reads nothing
 
     expect(store.get(projectPath)!.cursors.find((c) => c.sessionId === 's2')!.offset).toBe(sizeAtFork)
 
@@ -528,9 +600,9 @@ describe('WorkUnitCollector — 커서 기계장치, sawWrite 로 고정한다',
     expect(result.ok).toBe(true)
     let state = store.get(projectPath)!
     let unit = state.units.find((u) => u.sessionId === 's2')!
-    expect(unit.sawWrite).toBeFalsy() // 되쓰인 옛 wrote() 줄이 새 Unit 에 붙지 않았다
+    expect(unit.sawWrite).toBeFalsy() // the rewritten old wrote() line did not land on the new unit
 
-    // 이어받은 뒤 진짜로 쓴 것은 정상적으로 잡힌다 — 위 결과가 우연이 아님을 보인다
+    // Something actually written after the resume is caught normally — showing the result above was no accident
     await fs.appendFile(rolled, wrote(), 'utf8')
     collector.onTranscriptChanged()
     await collector.flush()
@@ -541,30 +613,31 @@ describe('WorkUnitCollector — 커서 기계장치, sawWrite 로 고정한다',
 
   it('잘리거나 다시 쓰인 트랜스크립트는 잘리기 전 줄을 sawWrite 로 다시 읽지 않는다', async () => {
     const fake = makeFake()
-    fake.sessions = [session()] // 켤 때 이미 돌던 세션 — startAtEnd 에 든다
+    fake.sessions = [session()] // a session already running when tracking turns on — goes into startAtEnd
     await fs.appendFile(
       transcript,
       human('켜기 전 긴 대화') + wrote() + human('또 다른 줄') + wrote(),
       'utf8'
     )
     const { collector, store } = await makeCollector(fake)
-    await collector.start() // 커서 = 이 시점의 (긴) 파일 끝
+    await collector.start() // cursor = the (long) file's end at this moment
 
     const result = await collector.startTask('s1', '작업')
     expect(result.ok).toBe(true)
     expect(store.get(projectPath)!.units[0].sawWrite).toBeFalsy()
 
-    // 같은 이름의 훨씬 짧은 파일로 바뀐다 — 잘렸거나 다른 파일이 놓였다. 이 내용에도 쓰기
-    // 증거가 있지만, 이미 돌던 세션에게 "잘린 뒤의 다시 씀"은 우리 것이 아니다
+    // Replaced by a much shorter file of the same name — truncated, or a different file was put in
+    // its place. This content has write evidence too, but for a session already running, "a
+    // rewrite after truncation" is not ours to read
     await fs.writeFile(transcript, wrote(), 'utf8')
     collector.onTranscriptChanged()
     await collector.flush()
 
     let state = store.get(projectPath)!
-    expect(state.units[0].sawWrite).toBeFalsy() // 잘리기 전이든 잘린 뒤든, 이 한 줄은 읽히지 않았다
-    expect(state.cursors[0].offset).toBe((await fs.stat(transcript)).size) // 끝으로 건너뛰었다
+    expect(state.units[0].sawWrite).toBeFalsy() // this one line is never read, before or after the truncation
+    expect(state.cursors[0].offset).toBe((await fs.stat(transcript)).size) // skipped straight to the end
 
-    // 그 뒤에 진짜로 온 것은 정상적으로 잡힌다
+    // What genuinely arrives afterward is caught normally
     await fs.appendFile(transcript, wrote(), 'utf8')
     collector.onTranscriptChanged()
     await collector.flush()
@@ -573,6 +646,80 @@ describe('WorkUnitCollector — 커서 기계장치, sawWrite 로 고정한다',
   })
 })
 
+// Important 3: design's "Never" list is explicit that a usage-limit roll is not a completion, and
+// the active unit belongs to the same session task across it. `onSessionForked`'s `oldSessionId`
+// re-keys that unit onto the resumed session's id, ahead of the old session's own (later, async)
+// exit — see that method's doc for why the ordering holds.
+describe('WorkUnitCollector — 한도로 굴렀을 때 열린 작업이 살아남는다 (Important 3)', () => {
+  it('재키잉된 활성 작업은 옛 세션의 종료로 중단되지 않고, 새 세션으로 계속 완료할 수 있다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()] // s1
+    const { collector, store, closed } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '한도 전에 하던 작업')
+    expect(started.ok).toBe(true)
+
+    // rolling.ts's roll() goes kill → spawn → send('session:rolled') with no await in between —
+    // the old session's real (asynchronous) exit event is guaranteed to arrive after this
+    // notification. Passing oldSessionId relies on exactly that ordering (see onSessionForked's doc).
+    collector.onSessionForked('s2', undefined, 's1')
+    fake.sessions = [session({ sessionId: 's2' })] // s1 is already dead — it drops out of the list
+
+    // only now does s1's exit event arrive
+    await collector.onSessionExit('s1')
+
+    let state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].sessionId).toBe('s2') // re-keyed
+    expect(state.units[0].status).toBe('active') // a usage limit is not a completion — not interrupted
+
+    // still completable, now as s2
+    await fs.appendFile(transcript, wrote(), 'utf8')
+    fake.git.files = ['src/after-roll.ts']
+    const result = await collector.completeTask('s2', { source: 'agent' })
+    expect(result.ok).toBe(true)
+    state = store.get(projectPath)!
+    expect(state.units[0].status).toBe('completed')
+    expect(closed).toHaveLength(1)
+  })
+
+  it('굴러 넘어가기 직전에 쓰인 증거도 재키잉된 뒤의 Unit 에 붙는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '한도 직전 작업')
+    expect(started.ok).toBe(true)
+    // the last write-evidence line right before hitting the limit — the debounced watcher has not
+    // read it yet
+    await fs.appendFile(transcript, wrote(), 'utf8')
+
+    collector.onSessionForked('s2', undefined, 's1')
+    fake.sessions = [session({ sessionId: 's2' })]
+    await collector.onSessionExit('s1')
+
+    const state = store.get(projectPath)!
+    const unit = state.units.find((u) => u.sessionId === 's2')!
+    expect(unit.sawWrite).toBe(true) // read under the old session's own name before the rename
+  })
+
+  it('사람이 기록에서 다시 여는 이어받기는 oldSessionId 를 건네지 않아, 옛 작업을 재키잉하지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '옛 작업')
+    expect(started.ok).toBe(true)
+
+    collector.onSessionForked('s2') // the shape of a history resume — no oldSessionId
+    const state = store.get(projectPath)!
+    expect(state.units[0].sessionId).toBe('s1') // left untouched
+    expect(state.units[0].status).toBe('active')
+  })
+})
 
 // ── Astera 자신의 git 동작 (EG §26·§41-9) ─────────────────────────────
 
@@ -1001,13 +1148,14 @@ describe('WorkUnitCollector — 앱이 꺼져 있던 동안의 변화', () => {
   })
 })
 
-// ── 배선에만 있어 테스트가 닿지 않던 두 자리 ───────────────────────────
+// ── Two spots that lived only in wiring, never reached by a test ──────
 
 describe('WorkUnitCollector — 배선 두 자리', () => {
-  // EG §42-3 의 오귀속 방지가 이 연결에 걸려 있다. 작업 중에 남이 옮긴 저장소를 **겪은** 것은 그
-  // Unit 에 남기되(EG §27 — "겪었다"이지 "만들었다"가 아니다), 그 변경이 들여온 파일이 Unit 의
-  // 관찰된 변경 목록으로 섞이면 안 된다. 섞이면 다음 계획의 해석기가 남의 작업을 이 Unit 의
-  // 것으로 읽는다.
+  // EG §42-3's mis-attribution guard hangs on this wiring. A repository someone else moved
+  // **during** the task is left on the unit as something it **encountered** (EG §27 — "encountered",
+  // not "made"), but the files that change brought in must not get mixed into the unit's own
+  // observed-changes list. Mixed in, a later plan's interpreter would read someone else's work as
+  // this unit's own.
   it('작업 중의 외부 변경은 id 로만 Unit 에 담긴다 — 그 파일 목록은 섞이지 않는다', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
@@ -1015,12 +1163,12 @@ describe('WorkUnitCollector — 배선 두 자리', () => {
     await collector.start()
 
     await collector.startTask('s1', '작업 하나')
-    fake.git.files = ['src/mine.ts'] // 이 세션이 (Unit 을 연 뒤에) 만지고 있는 파일
+    fake.git.files = ['src/mine.ts'] // the file this session is touching (after opening the unit)
 
-    collector.onGitChanged() // 기준선
+    collector.onGitChanged() // baseline
     await collector.flush()
 
-    // 남이 pull 했다 — 그 구간이 들여온 파일은 이 Unit 이 만든 것이 아니다
+    // someone else pulled — the file that range brought in is not something this unit made
     fake.git.range = { commits: ['c1'], changedFiles: ['vendor/pulled.ts'] }
     fake.git.ref = { branch: 'main', head: 'c1' }
     collector.onGitChanged()
@@ -1032,26 +1180,27 @@ describe('WorkUnitCollector — 배선 두 자리', () => {
     expect(state.units[0].git.observedChangedFiles).toEqual(['src/mine.ts'])
   })
 
-  // **그 반대쪽.** 재시작 직후 사람이 새 작업을 선언하면 그 Unit 은 **이미 옮겨진 HEAD 에서**
-  // 열린다(startHead = c1). 그 뒤 첫 회차가 꺼져 있던 동안의 이동을 잡아도 그 변화는 이 Unit 이
-  // 생기기 전에 끝난 일이다 — EG §27 의 "겪었다"가 아니다.
+  // **The opposite side.** If the person declares a new task right after a restart, that unit
+  // opens **already at the moved HEAD** (startHead = c1). The first round afterward can still catch
+  // the move that happened while the app was off, but that move finished before this unit even
+  // existed — not something it "encountered" under EG §27.
   it('꺼져 있던 동안의 변경은 그 뒤에 열린 Unit 에 달리지 않는다', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
     const first = await makeCollector(fake)
     await first.collector.start()
-    first.collector.onGitChanged() // 마지막으로 안 상태 — main, c0
+    first.collector.onGitChanged() // the last known state — main, c0
     await first.collector.flush()
 
-    // 앱이 꺼져 있는 사이의 pull
+    // a pull while the app was off
     fake.git.ref = { branch: 'main', head: 'c1' }
 
     const second = await makeCollector(fake)
     await second.collector.start()
 
-    // `.git` 이벤트보다 사람의 선언이 먼저 온다
+    // the person's declaration arrives before the `.git` event does
     await second.collector.startTask('s1', '다시 켠 뒤 첫 요청')
-    expect(second.store.get(projectPath)!.units[0].git.startHead).toBe('c1') // 옮겨진 자리에서 열렸다
+    expect(second.store.get(projectPath)!.units[0].git.startHead).toBe('c1') // opened already at the moved spot
 
     second.collector.onGitChanged()
     await second.collector.flush()

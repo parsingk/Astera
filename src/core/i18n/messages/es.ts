@@ -25,7 +25,11 @@ export const es: Catalog = {
     'No se pudo guardar la configuración de orquestación: {detail}',
   // Seguimiento de unidades de trabajo
   'settings.workUnit.label': 'Seguimiento de unidades de trabajo (experimental)',
-  'settings.workUnit.hint': 'Agrupa lo que haces en una sesión en unidades del tamaño de un objetivo. Solo las conversaciones posteriores a activarlo: el historial existente nunca se lee.',
+  'settings.workUnit.hint':
+    'Declara una tarea escribiendo /astera-task con lo que quieres hacer, y eso se convierte en una ' +
+    'fila propia hasta que termina, sin importar cuántos mensajes haga falta. No se aplica a las ' +
+    'sesiones que ya están abiertas: funciona a partir de las sesiones nuevas. Solo se leen las ' +
+    'conversaciones posteriores a activarlo — el historial existente nunca se lee.',
   'settings.workUnit.saveFailed': 'No se pudo guardar la configuración de seguimiento: {detail}',
   // Generación de explicaciones (How It Works)
   'settings.gen.label': 'Cuenta para explicaciones',
@@ -946,6 +950,8 @@ export const es: Catalog = {
     'La aplicación se cerró mientras esto se estaba redactando — pulsa el botón de abajo para volver a intentarlo.',
   'hiw.record.reason.checkFailed':
     'Una comprobación que ejecutó el agente no pasó — vale la pena revisar el resultado.',
+  'hiw.record.reason.checkFailedJob':
+    'Una comprobación que ejecutó la aplicación no pasó — vale la pena revisar el resultado.',
   'hiw.pane.overview': 'Qué hace',
   'hiw.pane.userVisible': 'Qué notarás',
   'hiw.pane.flow': 'Cómo funciona',
@@ -967,6 +973,7 @@ export const es: Catalog = {
   'hiw.open.complete': 'Hecho',
   'hiw.open.cancel': 'Cancelar',
   'hiw.open.completeFailed': 'No se pudo marcar como hecho: {detail}',
+  'hiw.open.completeEmpty': 'No hubo ningún cambio, así que no se registró nada.',
   'hiw.open.cancelFailed': 'No se pudo cancelar: {detail}',
   'hiw.open.startedAt': 'Iniciado a las {time}',
   'hiw.open.reason.newTask': 'Se detuvo porque empezó otra tarea',

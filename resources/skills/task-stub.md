@@ -16,18 +16,22 @@ that work and its end, and writes it up for someone who does not read code. **Yo
    ```bash
    echo "$ASTERA_CLI"
    ```
-2. Declare the start, with the objective the person gave you, verbatim:
+2. Declare the start, with the objective the person gave you, verbatim. **If they gave none** —
+   a bare `/astera-task` with nothing after it — ask them what it is. Never invent one; a made-up
+   objective is worse than asking.
    ```bash
    astera session-task-start --objective "<their words>"
    ```
    If this reports that it interrupted an earlier task, tell the person — that one is waiting for
-   them on the How It Works screen.
+   them on the How It Works screen. If it fails instead (`unknown session: …` is a real answer
+   right after opening a new tab — the app has not caught up to this session yet), tell the person
+   and try the command once more rather than continuing as if a task had started.
 3. Do the work. It may take many turns and many messages from them; **it is all one task.** Do not
    start another one partway through.
 4. When the objective is met, declare the end. Report what you actually ran:
    ```bash
    astera session-task-complete \
-     --check tests=passed --check build=skipped \
+     --check <name>=<passed|failed|skipped> \
      --summary "<one line on what is different now>"
    ```
    `--check` takes `<name>=<passed|failed|skipped>` and repeats. **Never claim a check you did not

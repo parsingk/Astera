@@ -110,6 +110,22 @@ describe('UnderstandingView', () => {
     expect(html).not.toContain('CHECK_FAILED')
   })
 
+  // Item 8 (final review): a Job's failed validation is the app's own measurement, not the
+  // agent's claim — it must translate to the Job-specific sentence, not the session one.
+  it('Job 의 검사 실패는 세션과 다른 안내 문구로 바뀐다', () => {
+    const html = render({
+      records: [
+        rec({
+          status: 'needs-review',
+          reason: 'CHECK_FAILED_JOB',
+          source: { kind: 'job', runId: 'run1', jobName: '단축키 붙이기', taskIds: ['t1'] }
+        })
+      ]
+    })
+    expect(html).toContain('hiw.record.reason.checkFailedJob')
+    expect(html).not.toContain('CHECK_FAILED_JOB')
+  })
+
   // Every other reason is a free-form sentence the agent or the validator wrote, so it is shown
   // as it stands. Text we do not control gets no invented translation.
   it('알려지지 않은 사유는 고치지 않고 그대로 보인다', () => {
@@ -140,6 +156,42 @@ describe('UnderstandingView', () => {
     expect(html).toContain('hiw.open.reason.newTask')
     expect(html).toContain('hiw.open.complete')
     expect(html).toContain('hiw.open.cancel')
+  })
+
+  // Item 6 (final review): spec §11 draws 진행 중 and 마무리되지 않음 as two separate labelled
+  // sections — a heading that just swaps text depending on whether anything is active would let an
+  // interrupted-only row sit under "진행 중".
+  it('진행 중과 마무리되지 않음은 각각 다른 절로 나뉘고, 진행 중이 먼저 온다', () => {
+    const html = render({ records: [] }, null, [
+      task({ id: 't1', status: 'active', objective: '진행 중인 작업' }),
+      task({
+        id: 't2',
+        status: 'interrupted',
+        objective: '중단된 작업',
+        reason: 'INTERRUPTED_BY_NEW_TASK'
+      })
+    ])
+    expect(html).toContain('hiw.open.title')
+    expect(html).toContain('hiw.open.interruptedTitle')
+    const inProgressLabel = html.indexOf('hiw.open.title')
+    const unfinishedLabel = html.indexOf('hiw.open.interruptedTitle')
+    const activeRow = html.indexOf('진행 중인 작업')
+    const interruptedRow = html.indexOf('중단된 작업')
+    expect(inProgressLabel).toBeLessThan(activeRow)
+    expect(activeRow).toBeLessThan(unfinishedLabel) // the whole 진행 중 section comes before 마무리되지 않음
+    expect(unfinishedLabel).toBeLessThan(interruptedRow)
+  })
+
+  it('마무리되지 않음 절의 각 줄에는 기록 줄처럼 날짜가 있다', () => {
+    const html = render({ records: [] }, null, [
+      task({
+        status: 'interrupted',
+        startedAt: '2026-08-29T01:00:00.000Z',
+        endedAt: '2026-08-30T09:00:00.000Z',
+        reason: 'INTERRUPTED_BY_SESSION_END'
+      })
+    ])
+    expect(html).toContain('8/30') // endedAt's date — not startedAt's (8/29)
   })
 
   it('진행 중인 것이 없으면 그 절이 아예 없다', () => {

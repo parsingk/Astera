@@ -348,7 +348,7 @@ describe('session-task-*', () => {
     cancel: overrides.cancel ?? (async () => ({ ok: true, id: 'wu_1' }))
   })
 
-  /** worker-start까지 진행해 sess1이 워커인 상태를 만든다 (위 seedWorker와 동일한 절차) */
+  /** Runs through worker-start so sess1 becomes a worker (same procedure as seedWorker above) */
   const seedWorker = async (deps: OrchServerDeps): Promise<void> => {
     const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
     const runId = (run.body as { id: string }).id

@@ -172,8 +172,12 @@ export function RecordDetail({
 
       {/* What was checked, one line. A job's checks are the app's own measurement; a session's are
           only what the agent claimed to have run, so that line gets a second, fine-print sentence
-          saying so (WorkRecord.verification's own doc comment). */}
-      {verification && (
+          saying so (WorkRecord.verification's own doc comment).
+          **`unverified` means nothing was reported at all** — showing "Nothing was checked" next to
+          "Reported by the agent" would have the second sentence contradict the first, since there is
+          no report to attribute. Spec §11: this block belongs on screen only when there is something
+          to say. */}
+      {verification && verification.status !== 'unverified' && (
         <div className="hiw-verify">
           <p className="hiw-p">{t(VERIFY_KEY[verification.status])}</p>
           {record.source.kind === 'session' && <p className="hiw-fine">{t('hiw.verify.reported')}</p>}

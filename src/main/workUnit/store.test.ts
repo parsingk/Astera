@@ -66,7 +66,7 @@ describe('WorkUnitStore', () => {
     expect(s.get('D:\\b')!.units).toHaveLength(0)
   })
 
-  // seed() 의 orphan 훑기가 기대는 유일한 자리다 — WorkUnitStore 는 다른 방법으로 키를 내주지 않는다
+  // The one thing seed()'s orphan sweep relies on — WorkUnitStore has no other way to hand out its keys
   it('projectPaths 는 저장된 프로젝트 전부를 돌려준다', async () => {
     const s = new WorkUnitStore(file)
     await s.load()

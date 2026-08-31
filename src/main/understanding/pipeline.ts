@@ -256,7 +256,22 @@ export class UnderstandingPipeline {
       status: e.needsReview || failed ? 'needs-review' : 'ready',
       // The model's own reason wins when it gave one — a failed check only supplies a reason
       // when the write-up itself came back clean, so it never erases what the model said.
-      reason: e.needsReview ? e.needsReviewReason : failed ? 'CHECK_FAILED' : undefined
+      //
+      // **Two codes, not one, for a failed check** — `CHECK_FAILED` reads "a check the agent ran did
+      // not pass", which is true for a session's own claimed checks but wrong for a Job: a Run's
+      // `validation` is the app's own measurement (this file's own comment on `verification` above),
+      // never something the agent claimed. `cur.source.kind` is already read for that exact
+      // distinction a few lines up (the prompt's `checks`/`validation` split), so branching the
+      // reason code the same way is one `if`, not a second lookup — cheaper than threading
+      // `source.kind` through the renderer's reason-to-text table (UnderstandingView.tsx's
+      // `REASON_KEY`) just for this one entry.
+      reason: e.needsReview
+        ? e.needsReviewReason
+        : failed
+          ? cur.source.kind === 'job'
+            ? 'CHECK_FAILED_JOB'
+            : 'CHECK_FAILED'
+          : undefined
     }))
   }
 

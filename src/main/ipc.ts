@@ -284,8 +284,16 @@ export function registerIpc(
    *
    *  `transcriptPath` is optional because the claude roll does not know it yet; see the collector's
    *  `onSessionForked`. Doing nothing when the feature is off is the notification's own contract, so
-   *  index.ts calls this without consulting the toggle. */
-  onWorkUnitForkReady?: (notify: (newSessionId: string, transcriptPath?: string) => void) => void
+   *  index.ts calls this without consulting the toggle.
+   *
+   *  `oldSessionId` is how a roll's two taps (index.ts's `session:rolled` handlers) hand over the
+   *  killed session's id, so the collector can re-key that session's still-`active` unit onto the
+   *  resumed one instead of leaving it for the exit that follows to interrupt (Important 3 — a usage
+   *  limit is not a completion). History resume does not have — and must not pass — one; see
+   *  `onSessionForked`'s own doc for why. */
+  onWorkUnitForkReady?: (
+    notify: (newSessionId: string, transcriptPath?: string, oldSessionId?: string) => void
+  ) => void
 ): void {
   const send = (channel: string, payload: unknown): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
@@ -507,7 +515,11 @@ export function registerIpc(
     codexRolling?.handleExit(e)
     codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
-    // 세션이 끝났다 (WU §14-4) — 관찰이 여기서 멈추므로 열려 있던 Work Unit 은 후보로 남기지 않고 닫는다
+    // The session ended (WU §14-4) — observation stops here, so any Work Unit still `active` is
+    // interrupted, not completed; it waits on the How It Works screen until the person closes it.
+    // A usage-limit roll's exit is not this case — the collector's `onSessionForked` re-keys the
+    // unit onto the resumed session's id before this fires, so there is nothing left here to
+    // interrupt (see that method's doc for the ordering this depends on).
     void workUnitCollector
       .onSessionExit(e.sessionId)
       .catch((err) => orchLog(`work unit exit failed: ${String(err)}`))
@@ -741,6 +753,11 @@ export function registerIpc(
     // 이어받은 프로세스가 이어 쓰는 파일이 그것이다(codex 는 확실히 그렇고, claude 가 새 파일을
     // 쓰면 수집기가 그 세션을 처음 보는 자리에서 그 파일의 끝을 잡는다).
     // 토글이 꺼져 있으면 이 호출은 아무 일도 하지 않는다 — 부르는 쪽이 확인하지 않아도 된다.
+    // **`oldSessionId` (the third argument) is deliberately not passed.** This path is the person
+    // reopening a past conversation from the sidebar, not a usage-limit roll — `opts.resumeSessionId`
+    // is that old session's id, but even if its task is still sitting `interrupted`, this resume
+    // gives no grounds to revive it as `active`: the person never called `/astera-task` again.
+    // `onSessionForked`'s doc records this decision and why (Important 3).
     if (resumeTranscriptDest !== undefined) workUnitCollector.onSessionForked(info.id, resumeTranscriptDest)
     // Route to the per-provider coordinator — a mix is already blocked by the guard above, so the primary account's provider decides
     if ((opts.rollAccountIds?.length ?? 0) >= 1) {
@@ -907,12 +924,14 @@ export function registerIpc(
   }
 
   let orchStarting = false
-  /** Starts orchestration. Called only when the toggle is on — with it off, the store is not even read
-   *  and no port is opened. Turning it on at runtime comes back through here and starts immediately
-   *  (sessions created after that get the CLI — environment variables are fixed at spawn time, so
-   *  sessions already running cannot). If it is already up, this does nothing. Turning it off does not
-   *  close the server — enabled() is read on every request, so CLI calls after that are rejected with
-   *  a 409. */
+  /** Starts the orchestration server. Called when **either** toggle is on — agent orchestration or
+   *  work-unit tracking, since `/astera-task` needs the same CLI and the same `ASTERA_SESSION` the
+   *  orchestration server already hands out (see `orchEnvOf`'s doc). With both off, this is never
+   *  called and no port is opened. Turning either one on at runtime comes back through here and
+   *  starts immediately (sessions created after that get the CLI — environment variables are fixed
+   *  at spawn time, so sessions already running cannot). If it is already up, this does nothing.
+   *  Turning a toggle off does not close the server — `enabled()`/`trackingEnabled()` are read on
+   *  every request, so CLI calls after that are rejected with a 409. */
   const startOrch = async (): Promise<void> => {
     // orch is assigned last (after the port and files are ready), so re-entering in that window would
     // start two servers — the first loses its reference and keeps holding the port, and the info file
@@ -2719,8 +2738,9 @@ export function registerIpc(
       // 부족하고(reattach 를 봐야 한다), 리셋 시각도 이 이벤트에만 있다. 판단과 세션별 기억은
       // OrchRollTap 이 갖는다(rollTap.ts 의 onRollState).
       onRollState: (e) => orchRollTap?.onRollState(e),
-      // 롤링 배선이 읽는다. 오케스트레이션이 꺼져 있으면 undefined — 그러면 롤된 세션은 예전처럼
-      // CLI 없이 뜨고, 그 상태에서 워커가 존재할 일도 없다.
+      // Read by the rolling wiring. `undefined` only when **both** orchestration and work-unit
+      // tracking are off (see orchEnvOf's own doc) — then the rolled session comes up without a CLI
+      // as before, and there is no way for a worker to exist in that state anyway.
       orchEnv: () => orchEnvOf(),
       // 두 롤링 코디네이터의 resumeText dep 구현.
       //
@@ -3396,8 +3416,8 @@ export function registerIpc(
   // 이어받기 알림을 배선에 넘긴다. **토글과 무관하게 항상 넘긴다** — `onTabResumeReady` 와
   // 같은 이유다: 꺼져 있을 때 아무 일도 하지 않는 것은 알림 자신의 계약이고, 부르는 쪽이 토글을
   // 다시 묻게 하면 그 판정이 두 곳으로 갈라진다.
-  onWorkUnitForkReady?.((sessionId, transcriptPath) =>
-    workUnitCollector.onSessionForked(sessionId, transcriptPath)
+  onWorkUnitForkReady?.((sessionId, transcriptPath, oldSessionId) =>
+    workUnitCollector.onSessionForked(sessionId, transcriptPath, oldSessionId)
   )
 
   // The How It Works screen's open-task section. Same shape as understanding.get: assertAllowedPath
@@ -3424,6 +3444,7 @@ export function registerIpc(
     await assertAllowedPath(projectPath)
     const r = await workUnitCollector.completeTaskById(projectPath, id)
     if (!r.ok) throw new Error(r.reason)
+    return { recorded: r.recorded }
   })
   ipcMain.handle('sessionTasks.cancel', async (_e, projectPath: string, id: string) => {
     await assertAllowedPath(projectPath)

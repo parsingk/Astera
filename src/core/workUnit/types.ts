@@ -1,4 +1,4 @@
-// Work Unit 감지가 다루는 값들.
+// The values Work Unit detection deals with.
 // node: import 없음 — main 과 core 가 함께 읽는다.
 import type { SessionCheck } from '../understanding/types'
 

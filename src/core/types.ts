@@ -937,6 +937,9 @@ export interface OpenSessionTask {
   objective: string
   status: 'active' | 'interrupted'
   startedAt: string
+  /** When it stopped. Only an interrupted row has one — the screen uses it as that row's date, the
+   *  same way a finished record uses its own `at` (UnderstandingView.tsx). */
+  endedAt?: string
   /** Why it was interrupted. One of the INTERRUPTED_BY_* codes; the screen translates them. */
   reason?: string
   sessionId: string
@@ -945,8 +948,14 @@ export interface OpenSessionTask {
 export interface SessionTaskApi {
   /** Session tasks still waiting on an ending — active and interrupted, newest first. */
   list(projectPath: string): Promise<OpenSessionTask[]>
-  /** Close one as completed with `source: 'user'`. The write-up starts now, not before. */
-  complete(projectPath: string, id: string): Promise<void>
+  /** Close one as completed with `source: 'user'`. The write-up starts now, not before.
+   *
+   *  `recorded: false` means the button press was accepted but nothing was kept — the unit had no
+   *  write evidence or no changed files (spec §12), so `finish` (collector.ts) dropped it instead of
+   *  turning it into a record. That is correct behavior, not a failure, so it resolves rather than
+   *  rejecting; the renderer tells the person with a distinct, non-error toast
+   *  (`hiw.open.completeEmpty`). */
+  complete(projectPath: string, id: string): Promise<{ recorded: boolean }>
   cancel(projectPath: string, id: string): Promise<void>
 }
 

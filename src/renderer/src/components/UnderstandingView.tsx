@@ -9,8 +9,8 @@ const dateOf = (iso: string): string => {
   return `${d.getMonth() + 1}/${d.getDate()}`
 }
 
-/** HistoryBrowser/TerminalView 이 이미 쓰는 같은 형식 — 진행 중인 작업은 날짜보다 몇 시에
- *  시작했는지가 궁금하다. */
+/** The same format HistoryBrowser/TerminalView already use — for a task still in progress, what
+ *  time it started matters more than what date it is. */
 const timeOf = (iso: string): string =>
   new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
@@ -30,6 +30,9 @@ const REASON_KEY: Record<string, MessageKey> = {
   NO_GENERATOR_ACCOUNT: 'hiw.record.reason.noAccount',
   INTERRUPTED: 'hiw.record.reason.interrupted',
   CHECK_FAILED: 'hiw.record.reason.checkFailed',
+  // A Job's own validation is the app's measurement, not something the agent claimed — a separate
+  // code so the sentence attributes the check to the right party (pipeline.ts's `fill`).
+  CHECK_FAILED_JOB: 'hiw.record.reason.checkFailedJob',
   INTERRUPTED_BY_NEW_TASK: 'hiw.open.reason.newTask',
   INTERRUPTED_BY_SESSION_END: 'hiw.open.reason.sessionEnd',
   INTERRUPTED_BY_APP_RESTART: 'hiw.open.reason.appRestart',
@@ -79,9 +82,38 @@ export function UnderstandingView({
     )
   }
 
-  // "In progress" only fits while something really is — a section holding only interrupted tasks
-  // says so instead.
-  const anyActive = openTasks.some((u) => u.status === 'active')
+  // Spec §11 draws two separate labelled sections rather than one heading that changes meaning —
+  // an interrupted row must never read as "in progress". `openTasks` (listOpen, collector.ts) is
+  // already newest-first, and filtering by status preserves that relative order, so neither list
+  // needs its own sort.
+  const active = openTasks.filter((u) => u.status === 'active')
+  const interrupted = openTasks.filter((u) => u.status === 'interrupted')
+
+  const openRow = (u: OpenSessionTask): React.JSX.Element => (
+    <div key={u.id} className="hiw-row hiw-open-row">
+      <span className="hiw-body">
+        <span className="hiw-name">{u.objective}</span>
+        {u.status === 'active' ? (
+          <span className="hiw-meta">{t('hiw.open.startedAt', { time: timeOf(u.startedAt) })}</span>
+        ) : (
+          // A date the same way a finished record's row has one (dateOf(r.at) below) — spec §11's
+          // sketch for this row.
+          <span className="hiw-meta">{dateOf(u.endedAt ?? u.startedAt)}</span>
+        )}
+        {u.status !== 'active' && u.reason && (
+          <span className="hiw-summary w">{reasonText(u.reason, t)}</span>
+        )}
+        <span className="hiw-open-actions">
+          <button className="hiw-review" onClick={() => onCompleteTask(u.id)}>
+            {t('hiw.open.complete')}
+          </button>
+          <button className="hiw-review" onClick={() => onCancelTask(u.id)}>
+            {t('hiw.open.cancel')}
+          </button>
+        </span>
+      </span>
+    </div>
+  )
 
   return (
     <div className="hiw-side">
@@ -90,27 +122,18 @@ export function UnderstandingView({
       </div>
       {openTasks.length > 0 && (
         <div className="hiw-open">
-          <p className="hiw-lab">{t(anyActive ? 'hiw.open.title' : 'hiw.open.interruptedTitle')}</p>
-          {openTasks.map((u) => (
-            <div key={u.id} className="hiw-row hiw-open-row">
-              <span className="hiw-body">
-                <span className="hiw-name">{u.objective}</span>
-                {u.status === 'active' ? (
-                  <span className="hiw-meta">{t('hiw.open.startedAt', { time: timeOf(u.startedAt) })}</span>
-                ) : (
-                  <span className="hiw-summary w">{u.reason ? reasonText(u.reason, t) : ''}</span>
-                )}
-                <span className="hiw-open-actions">
-                  <button className="hiw-review" onClick={() => onCompleteTask(u.id)}>
-                    {t('hiw.open.complete')}
-                  </button>
-                  <button className="hiw-review" onClick={() => onCancelTask(u.id)}>
-                    {t('hiw.open.cancel')}
-                  </button>
-                </span>
-              </span>
-            </div>
-          ))}
+          {active.length > 0 && (
+            <>
+              <p className="hiw-lab">{t('hiw.open.title')}</p>
+              {active.map(openRow)}
+            </>
+          )}
+          {interrupted.length > 0 && (
+            <>
+              <p className="hiw-lab">{t('hiw.open.interruptedTitle')}</p>
+              {interrupted.map(openRow)}
+            </>
+          )}
         </div>
       )}
       <div className="hiw-list">

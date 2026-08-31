@@ -1,8 +1,9 @@
 // 설명 생성 에이전트에게 주는 프롬프트 — 스펙 §24 의 Explanation Contract 가 본문이다.
 //
-// **계약이 core 에 상수로 있는 이유:** 이 문장들이 배선(main) 안에 문자열로 흩어지면 어느
-// 테스트도 "§24 의 14개 규칙이 다 들어 있는가"를 물을 수 없다. 스펙이 명시적 계약을 요구했으니
-// 계약은 테스트가 닿는 자리에 있어야 한다 — verificationOf 가 workUnit/verification.ts 에 있는 것과 같은 이유다.
+// **Why the contract lives in core as a constant:** if these sentences were scattered as strings
+// inside the wiring (main), no test could ask "does this hold all 14 rules from §24?" The spec
+// demanded an explicit contract, so the contract has to live somewhere a test can reach it — the
+// same reason `verificationOf` lives in workUnit/verification.ts.
 //
 // node: import 없음. 파일 내용은 부르는 쪽이 읽어 넣는다 — 이 모듈은 문자열만 만든다.
 import type { Lang } from '../i18n'

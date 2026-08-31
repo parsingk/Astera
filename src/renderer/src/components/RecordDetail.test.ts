@@ -228,6 +228,16 @@ describe('검사 결과', () => {
     expect(html).toContain('hiw.verify.verified')
   })
 
+  // Item 7 (final review): `unverified` means nothing was reported at all — showing "Nothing was
+  // checked" next to "Reported by the agent" would have the second sentence contradict the first
+  // (spec §11: this block belongs on screen only when there is something to say).
+  it('아무것도 확인되지 않았으면 그 절 전체가 없다', () => {
+    const html = renderRecordWith({ verification: { status: 'unverified' } })
+    expect(html).not.toContain('hiw-verify')
+    expect(html).not.toContain('hiw.verify.unverified')
+    expect(html).not.toContain('hiw.verify.reported')
+  })
+
   // A Job's own validation is the app's measurement, not a claim — no "reported" caveat for it
   it('Job 기록은 검사가 있어도 보고했다는 말이 붙지 않는다', () => {
     const html = renderRecordWith({

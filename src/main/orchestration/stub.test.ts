@@ -155,6 +155,31 @@ describe('installStub', () => {
     expect(logs).toEqual([])
   })
 
+  // Item 13 (final review): the test above guards `orchestration-stub.md` alone — its own comment
+  // explains why (without the marker, the install silently stops). `task-stub.md` has exactly the
+  // same exposure (installStubsForCurrentToggles, ipc.ts, installs it with skillName 'astera-task')
+  // and had no guard at all.
+  it('실제 task-stub도 마커를 뺀 옛 파일을 앱 소유로 인식한다', async () => {
+    const real = path.join(__dirname, '../../../resources/skills/task-stub.md')
+    const content = await fs.readFile(real, 'utf8')
+    expect(content).toContain(STUB_MARKER) // premise: the shipped file has the marker
+    const preMarker = stripMarkerByIndex(content)
+    expect(preMarker).not.toContain(STUB_MARKER)
+    const configDir = path.join(dir, 'real-task')
+    const target = stubTargetPath(configDir, 'astera-task')
+    await fs.mkdir(path.dirname(target), { recursive: true })
+    await fs.writeFile(target, preMarker, 'utf8')
+    const logs: string[] = []
+    const r = await installStub({
+      stubs: [{ stubPath: real, skillName: 'astera-task' }],
+      configDirs: [configDir],
+      log: (m) => logs.push(m)
+    })
+    expect(r.skipped).toEqual([]) // a skip here would mean C1 came back
+    expect(r.written).toEqual([target])
+    expect(logs).toEqual([])
+  })
+
   it('건너뜀 로그가 단정하지 않는다 — 아는 것은 "표시가 없고 현재 stub과 다르다"뿐이다', async () => {
     // 옛 버전 앱이 쓴 stub도 이 분기로 온다(비교 대상은 현재 리소스의 stub 하나뿐이다).
     // 그것을 "앱이 만들지 않은 파일"이라고 단정하면 로그가 사실보다 많이 말한다.
@@ -247,6 +272,12 @@ describe('installStub', () => {
     // 이 단정이 없으면 resources의 원본에서 표시가 사라져도 테스트가 통과하고, 설치가 조용히
     // 멈춘다(위 "원본에 소유 표시가 없으면" 분기로 빠진다)
     const real = path.join(process.cwd(), 'resources', 'skills', 'orchestration-stub.md')
+    expect(await fs.readFile(real, 'utf8')).toContain(STUB_MARKER)
+  })
+
+  // Item 13 (final review): same exposure, same guard, for task-stub.md — it had none before.
+  it('배포되는 실제 task-stub 원본에 소유 표시가 있다', async () => {
+    const real = path.join(process.cwd(), 'resources', 'skills', 'task-stub.md')
     expect(await fs.readFile(real, 'utf8')).toContain(STUB_MARKER)
   })
 })

@@ -296,6 +296,19 @@ describe('onRunFinished — 끝난 Job Run 이 기록이 된다', () => {
     expect(store.get(projectRoot)!.records[0].changedFiles).toEqual(['src/auth/login.ts', 'src/a.ts'])
   })
 
+  // Item 8 (final review): a Job's `validation` is the app's own measurement, never something the
+  // agent claimed — the reason code has to say so, distinctly from a session's CHECK_FAILED (whose
+  // text blames "a check the agent ran").
+  it('Run 의 검증이 실패하면 CHECK_FAILED_JOB 이 남는다 — 에이전트 탓이 아니다', async () => {
+    const { store, pipeline } = await make()
+    agentReply.value = explanation() // the write-up itself came back clean
+    await pipeline.onRunFinished(projectRoot, runInput({ validation: { status: 'failed' } }))
+    const r = store.get(projectRoot)!.records[0]
+    expect(r.verification?.status).toBe('failed')
+    expect(r.status).toBe('needs-review')
+    expect(r.reason).toBe('CHECK_FAILED_JOB')
+  })
+
   // fill() is the same code onUnitClosed runs, so its failure branches are not re-checked here.
   // One stands for all of them: that a Job record goes through the same account gate.
   it('생성 계정이 없으면 그 사유가 기록에 남는다', async () => {
