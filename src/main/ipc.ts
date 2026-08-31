@@ -389,9 +389,10 @@ export function registerIpc(
    *  is not up (toggle off, or startup failed) or the user turned it off at runtime — "off" has to
    *  mean "newly created sessions do not know about the CLI". Looking only at whether the server is
    *  alive (orch !== null) would let a session created after turning it off discover the CLI and then
-   *  get a 409 on every call. */
+   *  get a 409 on every call. **Work-unit tracking counts too**: /astera-task needs the same CLI and
+   *  the same ASTERA_SESSION, and the command gate in the server decides what may be called. */
   const orchEnvOf = (): { cliPath: string; infoPath: string; skillsPath: string } | undefined =>
-    orch && core.appSettings.getOrchestrationEnabled()
+    orch && (core.appSettings.getOrchestrationEnabled() || core.appSettings.getWorkUnitTrackingEnabled())
       ? { cliPath: orch.cliPath, infoPath: orch.infoPath, skillsPath: orch.skillsPath }
       : undefined
   /** The project the Jobs sidebar is folded for. main is not otherwise told what the renderer has
@@ -2444,6 +2445,15 @@ export function registerIpc(
       },
       // Read on every request — turning it off at runtime has to reject CLI calls from then on
       enabled: () => core.appSettings.getOrchestrationEnabled(),
+      // Same reasoning as `enabled` above, but for the session-task-* commands. workUnitCollector is
+      // declared further down (around the `WorkUnitCollector` construction) — referencing it here is
+      // fine because these arrows only run once a call comes in, well after that declaration has run.
+      trackingEnabled: () => core.appSettings.getWorkUnitTrackingEnabled(),
+      sessionTasks: {
+        start: (sessionId, objective) => workUnitCollector.startTask(sessionId, objective),
+        complete: (sessionId, input) => workUnitCollector.completeTask(sessionId, input),
+        cancel: (sessionId, reason) => workUnitCollector.cancelTask(sessionId, reason)
+      },
       probeLimit: makeLimitProbe({
         // The key is the app session id (that is what StatusLineManager.read uses to find the capture file)
         statusLinePayload: (sessionId) => core.statusLinePayload(sessionId),
@@ -2604,28 +2614,43 @@ export function registerIpc(
       void orchFireTick().catch((e) => orchLog(`fire tick failed: ${String(e)}`))
       void nudgeSleepingCoordinators().catch((e) => orchLog(`nudge failed: ${String(e)}`))
     }, ORCH_FIRE_TICK_MS)
-    // Installing the discovery stub — without it there is no path by which an agent finds this feature.
-    // **Done for every claude and codex account**: the path is the same
-    // (<configDir>/skills/astera-orchestration/SKILL.md), and there is evidence that codex also treats
-    // the skills directory as a home resource (see the comments in stub.ts). AGENTS.md is left alone —
-    // it is a user file.
+    // Installing the discovery stub(s) — without one there is no path by which an agent finds the
+    // matching feature. **Done for every claude and codex account**: the path is the same
+    // (<configDir>/skills/<name>/SKILL.md), and there is evidence that codex also treats the skills
+    // directory as a home resource (see the comments in stub.ts). AGENTS.md is left alone — it is a
+    // user file.
+    // **Which stub(s) install here is conditional, per toggle** — bootOrch runs for either toggle
+    // (see the two call sites of startOrch), so a person who only turned on work-unit tracking must
+    // not get an orchestration skill they never asked for (one that reports "orchestration is off" on
+    // every call), and the reverse for orchestration without tracking.
     // Called after orch is assigned — a position where a failed install cannot affect server startup.
-    // installStub swallows per-account failures itself and does not throw, but the .catch is here so
-    // that even an unexpected failure cannot block startup.
-    // **A deliberate limit**: this runs once, at startup. An account added afterwards does not get the
-    // stub until the next app start — hooking accounts.onChanged would write to user files on every
-    // account edit, and that trade-off is out of scope here.
-    void installStub({
-      stubPath: path.join(skillsPath, 'orchestration-stub.md'),
-      configDirs: core.accounts.list().map((a) => a.configDir),
-      log: orchLog
-    })
-      .then((r) =>
-        orchLog(
-          `stub install — ${r.written.length} written, ${r.unchanged.length} unchanged, ${r.skipped.length} skipped (no ownership marker and differs from the current stub), ${r.failed.length} failed, ${r.removed.length} legacy removed`
+    // installStub swallows per-stub and per-account failures itself and does not throw, but the
+    // .catch is here so that even an unexpected failure cannot block startup.
+    // **A deliberate limit**: this runs once, at startup (bootOrch is a no-op on a later call once
+    // orch is already set — see startOrch). An account added afterwards, or a toggle flipped on after
+    // the server already started from the other one, does not get the stub until the next app start —
+    // hooking accounts.onChanged (or re-running this on every settings change) would write to user
+    // files on every account edit, and that trade-off is out of scope here.
+    const stubs = [
+      ...(core.appSettings.getOrchestrationEnabled()
+        ? [{ stubPath: path.join(skillsPath, 'orchestration-stub.md'), skillName: 'astera-orchestration' }]
+        : []),
+      ...(core.appSettings.getWorkUnitTrackingEnabled()
+        ? [{ stubPath: path.join(skillsPath, 'task-stub.md'), skillName: 'astera-task' }]
+        : [])
+    ]
+    if (stubs.length > 0)
+      void installStub({
+        stubs,
+        configDirs: core.accounts.list().map((a) => a.configDir),
+        log: orchLog
+      })
+        .then((r) =>
+          orchLog(
+            `stub install — ${r.written.length} written, ${r.unchanged.length} unchanged, ${r.skipped.length} skipped (no ownership marker and differs from the current stub), ${r.failed.length} failed, ${r.removed.length} legacy removed`
+          )
         )
-      )
-      .catch((err) => orchLog(`stub install failed: ${String(err)}`))
+        .catch((err) => orchLog(`stub install failed: ${String(err)}`))
     orchWiring?.onStarted({
       stop: () => {
         // 미뤄 둔 exit 를 버린다. 남겨 두면 서버가 내려간 뒤에 setState 가 돌 수 있다.
@@ -2697,7 +2722,10 @@ export function registerIpc(
         ).then((text) => text ?? (tabFallback ? tabResumeTextFor(sessionId, form) : null))
     })
   }
-  if (orchWiring && core.appSettings.getOrchestrationEnabled())
+  if (
+    orchWiring &&
+    (core.appSettings.getOrchestrationEnabled() || core.appSettings.getWorkUnitTrackingEnabled())
+  )
     void startOrch().catch((err) => orchLog(`startup failed: ${String(err)}`))
   ipcMain.on('sessions.write', (_e, id, data) => core.sessions.write(id, data))
   ipcMain.on('sessions.resize', (_e, id, cols, rows) => core.sessions.resize(id, cols, rows))
@@ -3805,6 +3833,9 @@ export function registerIpc(
     // 닫는다 — 스펙 §16.1 이다. 저장소를 다 읽기 전에 시작하지 않도록 load 를 먼저 기다린다.
     await workUnitsLoaded
     await workUnitCollector.onEnabledChanged(enabled)
+    // Same line the orchestration setter uses, for the same reason: /astera-task needs the server
+    // and the planted CLI. Turning it off does not close the server — see the startOrch comment.
+    if (enabled && orchWiring) await startOrch()
   })
 
   // 설명을 누가·무엇으로 만드는가. **셋을 함께 쓴다** — 계정을 바꾸면 그 계정에 없는 모델이
