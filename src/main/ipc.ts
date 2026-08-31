@@ -67,6 +67,7 @@ import {
 import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
 import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, runsForProject } from '../core/orchestration/view'
+import { justFinished } from '../core/orchestration/runRecord'
 import { timelineFor } from '../core/orchestration/timeline'
 import { layersOf } from '../core/orchestration/graph'
 import { repoPathOf } from '../core/worktrees/repo'
@@ -2070,6 +2071,11 @@ export function registerIpc(
       }
     }
 
+    // The state before this write, so a Run's finish can be caught as an edge (runRecord.ts) rather
+    // than read as a state — outcomeOf is derived, so "finished" stays true on every round after the
+    // last task lands. Local to this boot: a restart has no previous state either, the same rule a
+    // fresh app start needs (see the null fallback in setState below).
+    let prevOrchState: OrchState | null = null
     const deps: OrchServerDeps = {
       getState: () => store.get(),
       // Passed in a form that is definitely awaited — the caller's await contract stays. save() itself
@@ -2086,6 +2092,34 @@ export function registerIpc(
       setState: async (next) => {
         await store.save(next)
         pushOrchState(next)
+        // A finished Run becomes a record. `prevOrchState ?? next` on the first write after boot
+        // treats "before" as "after" — justFinished(next, next) is always empty — so a Run that was
+        // already finished when the app started is not recorded (same rule as D2: the screen holds
+        // only what the app watched happen, not what it finds already done).
+        //
+        // Wrapped in try/catch for the reason pushOrchState's own comment gives: store.save has
+        // already committed by this point, so a throw here must not turn a successful write into a
+        // command that answers with an error.
+        try {
+          for (const { runId, outcome } of justFinished(prevOrchState ?? next, next)) {
+            const run = next.runs.find((r) => r.id === runId)
+            if (!run) continue
+            const tasks = next.tasks.filter((t) => t.runId === runId)
+            void understandingPipeline.onRunFinished(understandingKeyOf(run.cwd), {
+              runId,
+              jobName: run.objective.slice(0, 60),
+              objective: run.objective,
+              at: new Date().toISOString(),
+              taskIds: tasks.map((t) => t.id),
+              tasks: tasks.map((t) => ({ title: t.title, outcome: t.status })),
+              changedFiles: [...new Set(tasks.flatMap((t) => t.filesModified ?? []))],
+              validation: { status: outcome === 'completed' ? 'passed' : 'failed' }
+            })
+          }
+        } catch (e) {
+          orchLog(`run-finished record failed: ${String(e)}`)
+        }
+        prevOrchState = next
         // 저장이 끝난 뒤에 돈다 — 스케줄러가 읽는 것은 getState() 이고, 저장 전에 부르면 방금의
         // 변경을 못 본다. 떠나 보내는 promise 에 **종단 .catch 가 있어야 한다**(startReview 와 같은
         // 이유: 붙이지 않으면 unhandled rejection 이 main 프로세스를 죽인다).

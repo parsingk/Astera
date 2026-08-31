@@ -39,6 +39,20 @@ export interface PipelineDeps {
   log?: (m: string) => void
 }
 
+export interface RunRecordInput {
+  runId: string
+  jobName: string
+  /** The Run's objective — what the user asked this job to achieve */
+  objective: string
+  at: string
+  taskIds: string[]
+  tasks: { title: string; outcome: string }[]
+  /** Union of every task's filesModified. A Job's tasks report what they touched, so this does not
+   *  need the git snapshot comparison a session's unit relies on. */
+  changedFiles: string[]
+  validation?: { status: 'passed' | 'failed' | 'unknown'; summary?: string }
+}
+
 export class UnderstandingPipeline {
   private chain: Promise<void> = Promise.resolve()
 
@@ -102,6 +116,27 @@ export class UnderstandingPipeline {
       const commits = await this.commitsOf(projectRoot, record)
       await this.patch(projectRoot, record.id, (r) => ({ ...r, git: { ...r.git, commits } }))
       await this.fill(projectRoot, record.id, commits)
+    })
+  }
+
+  /** A Job Run reached a terminal state. One Run is one record (design D3) — the user asked for one
+   *  Run, so that is the boundary of one piece of work, and its tasks are material inside it rather
+   *  than rows of their own. */
+  onRunFinished(projectRoot: string, input: RunRecordInput): Promise<void> {
+    return this.enqueue(async () => {
+      const record: WorkRecord = {
+        id: randomUUID(),
+        at: input.at,
+        source: { kind: 'job', runId: input.runId, jobName: input.jobName, taskIds: input.taskIds },
+        request: input.objective,
+        changedFiles: input.changedFiles,
+        git: { startHead: null, endHead: null },
+        validation: input.validation,
+        jobTasks: input.tasks,
+        status: 'generating'
+      }
+      await this.prepend(projectRoot, record)
+      await this.fill(projectRoot, record.id, [])
     })
   }
 
