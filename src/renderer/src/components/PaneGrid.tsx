@@ -15,13 +15,13 @@ import {
 } from '../../../core/panes/tree'
 import { parseTab, sessionTab } from '../../../core/panes/tabId'
 import { tabLabels } from '../../../core/files/tabLabel'
-import type { FeatureStatus } from '../../../core/understanding/types'
+import type { RecordStatus } from '../../../core/understanding/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { TerminalView } from './TerminalView'
-import { GLYPH, GLYPH_COLOR, isWorking } from './UnderstandingIcons'
+import { RECORD_GLYPH, RECORD_GLYPH_COLOR } from './UnderstandingIcons'
 import {
   WorkbenchTabs,
-  type FeatureTab,
+  type RecordTab,
   type FileTab,
   type WorkbenchTab
 } from './WorkbenchTabs'
@@ -33,7 +33,7 @@ import {
  *  destroys the xterm instance and its scrollback. Sessions that are off screen stay mounted and are
  *  only hidden with display (existing behavior).
  *
- *  A pane holds all three kinds of tab, so each pane has an editor slot and a feature slot beside the
+ *  A pane holds all three kinds of tab, so each pane has an editor slot and a record slot beside the
  *  session slots. There is **one editor per pane, not one per open file** — twenty open files would
  *  otherwise mean twenty CodeMirror instances, while a pane switching between its own file tabs reuses
  *  the one editor and lets App's EditorStateCache carry undo and scroll across. */
@@ -44,8 +44,8 @@ export function PaneGrid({
   accounts,
   fileTabs,
   dirtyFileIds,
-  featureTabs,
-  featureStatuses,
+  recordTabs,
+  recordStatuses,
   rollStates,
   schedStates,
   busy,
@@ -62,7 +62,7 @@ export function PaneGrid({
   onDragTabChange,
   onDropTabInBar,
   renderEditor,
-  renderFeature
+  renderRecord
 }: {
   layout: PaneNode | null
   activePaneId: string | null
@@ -71,12 +71,14 @@ export function PaneGrid({
   /** Every open file tab, whichever pane holds it. The name hint is computed over all of them at once */
   fileTabs: FileTab[]
   dirtyFileIds: Set<string>
-  /** Every open feature tab, whichever pane holds it — fileTabs 와 같은 자리, 같은 이유다.
-   *  제목과 프로젝트가 이 기록에서 나오므로, 다른 프로젝트의 기능 탭도 이름과 × 를 잃지 않는다 */
-  featureTabs: FeatureTab[]
-  /** 기능 탭 id → 지금 살아 있는 상태. **지금 열린 프로젝트의 탭만 여기에 있다** — 그 판정(기록의
-   *  projectRoot 대 currentProject)은 App 이 한다. dirtyFileIds 와 같은 갈래로, 격자는 조회만 한다 */
-  featureStatuses: Record<string, FeatureStatus>
+  /** Every open record tab, whichever pane holds it — same place, same reason as fileTabs. The title
+   *  and the project come from this record, so a record tab from another project keeps its name and
+   *  its × too. */
+  recordTabs: RecordTab[]
+  /** Record tab id → its current status. **Only tabs of the currently open project are in here** —
+   *  that check (the tab's projectRoot against currentProject) is App's job. Same split as
+   *  dirtyFileIds: the grid only looks it up. */
+  recordStatuses: Record<string, RecordStatus>
   rollStates: Record<string, RollStateEvent>
   schedStates: Record<string, SchedStateEvent>
   busy: Record<string, boolean>
@@ -102,11 +104,12 @@ export function PaneGrid({
   /** focused = 이 페인이 활성이고 그 활성 탭이 이 파일일 때. 에디터가 커서를 가져갈 시점을 정한다 —
    *  TerminalView 가 active 프롭으로 같은 일을 한다 */
   renderEditor: (paneId: string, fileTabId: string, focused: boolean) => React.ReactNode
-  /** 기능 탭의 본문. renderEditor 와 같은 갈래로 App 이 만들고 격자는 자리만 잡는다.
-   *  기능 id 가 아니라 **탭 id** 를 넘긴다 — 어느 프로젝트의 기능인지는 기록이 알고, 그 기록을
-   *  찾는 열쇠가 탭 id 다. paneId 를 받지 않는 것은 에디터와 달리 페인마다 살려 둘 인스턴스가
-   *  없기 때문이다 — 지킬 문서 상태가 없어서 활성일 때만 그린다(아래 기능 슬롯의 주석) */
-  renderFeature: (featureTabId: string) => React.ReactNode
+  /** A record tab's body. Same split as renderEditor — App builds it, the grid only places it.
+   *  It is handed the **tab id**, not the record id — which project's record it is is known by the
+   *  tab record, and the tab id is the key that finds it. It does not take paneId because, unlike the
+   *  editor, there is no instance to keep alive per pane — there is no document state to preserve, so
+   *  it is only drawn while active (see the comment on the record slot below). */
+  renderRecord: (recordTabId: string) => React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement>(null)
@@ -131,8 +134,8 @@ export function PaneGrid({
   // Session id → session info, file tab id → file tab. Used when a group's tab ids are turned into tabs
   const sessionOf = new Map(sessions.map((s) => [s.id, s]))
   const fileTabOf = new Map(fileTabs.map((f) => [f.id, f]))
-  // 기능 탭 id → 그 탭의 기록. fileTabOf 와 같은 모양이다
-  const featureTabOf = new Map(featureTabs.map((f) => [f.id, f]))
+  // Record tab id → that tab's record. Same shape as fileTabOf
+  const recordTabOf = new Map(recordTabs.map((r) => [r.id, r]))
   // The name hint is computed **over every open file tab at once**, not per pane — two files with the
   // same name in different panes still have to be told apart
   const labels = tabLabels(fileTabs.map((f) => f.path))
@@ -238,19 +241,20 @@ export function PaneGrid({
           </div>
         )
       })}
-      {/* 기능 상세 슬롯 — 페인당 하나, 세션·에디터 슬롯과 같은 rect 계산으로 놓인다.
-          **에디터와 달리 활성일 때만 그린다.** 에디터를 숨겨서만 두는 이유는 CodeMirror 인스턴스와
-          되돌리기 이력을 언마운트가 지우기 때문인데(lastFileOfPane), 기능 상세는 지킬 상태가 없다 —
-          고른 흐름 단계도 컴포넌트가 아니라 App 이 탭별로 들고 있어 다시 그려도 그대로 돌아온다.
-          그래서 lastFileOfPane 같은 기억을 따로 두지 않는다 */}
+      {/* The record detail slot — one per pane, placed by the same rect calculation as the session and
+          editor slots. **Unlike the editor, this is only drawn while active.** The editor is only
+          hidden, not unmounted, because unmounting would erase the CodeMirror instance and its undo
+          history (lastFileOfPane) — a record detail has no state to preserve that way: the picked flow
+          step is kept per-tab by App rather than by the component, so it comes right back on a fresh
+          render. That is why no lastFileOfPane-style memory is kept for it. */}
       {paneLeaves.map((l) => {
         const rect = rects.get(l.id)
         // 기록이 없는 탭에는 슬롯도 두지 않는다 — 에디터 슬롯이 fileTabOf 로 거르는 것과 같다.
         // 두면 아무것도 안 든 div 가 페인 본문을 덮어 드롭 대상이 가려진다
-        if (!rect || !featureTabOf.has(l.activeTabId)) return null
+        if (!rect || !recordTabOf.has(l.activeTabId)) return null
         return (
           <div
-            key={`feature-${l.id}`}
+            key={`record-${l.id}`}
             className="terminal-slot"
             style={{
               display: 'flex',
@@ -261,7 +265,7 @@ export function PaneGrid({
             }}
             onMouseDown={() => onFocusPane(l.id)}
           >
-            {renderFeature(l.activeTabId)}
+            {renderRecord(l.activeTabId)}
           </div>
         )
       })}
@@ -338,24 +342,26 @@ export function PaneGrid({
                     : null
               }
             }
-            if (ref?.kind === 'feature') {
-              const rec = featureTabOf.get(tabId)
+            if (ref?.kind === 'record') {
+              const rec = recordTabOf.get(tabId)
               if (!rec) return null
               // 상태는 살아 있는 값이라 기록에 담지 않는다. 다른 프로젝트의 탭이면 그 값이 없고,
               // 그때는 글리프 없이 이름만 그린다 — 탭이 사라지는 것보다 낫다
-              const status = featureStatuses[tabId]
+              const status = recordStatuses[tabId]
               return {
                 tabId,
-                kind: 'feature',
-                featureId: rec.featureId,
+                kind: 'record',
+                recordId: rec.recordId,
                 title: rec.title,
-                glyph: status ? GLYPH[status] : null,
-                // 탭 줄에서도 돈다 — 그 기능의 탭을 열어 둔 채 기다리는 것이 흔한 자리다.
-                // 판정은 UnderstandingIcons 한 곳에서 온다(isWorking)
-                glyphSpins: status ? isWorking(status) : false,
-                // 색도 같은 표에서 온다 — "검토 필요" 집합으로 고르면 그 집합에 없는
-                // generation-failed 가 초록으로 그려진다(UnderstandingIcons 의 GLYPH_COLOR)
-                glyphColor: status ? GLYPH_COLOR[status] : null
+                glyph: status ? RECORD_GLYPH[status] : null,
+                // Spins on the tab bar too — leaving a record's tab open while waiting is a common
+                // place to be. The one place that decides this is UnderstandingIcons' RECORD_GLYPH,
+                // by whether the status is `generating`.
+                glyphSpins: status === 'generating',
+                // The colour comes from the same table too — picking it by a "needs review" set
+                // would leave `failed`, which is not in that set, drawn green
+                // (UnderstandingIcons' RECORD_GLYPH_COLOR)
+                glyphColor: status ? RECORD_GLYPH_COLOR[status] : null
               }
             }
             const f = ref?.kind === 'file' ? fileTabOf.get(tabId) : undefined

@@ -5,7 +5,13 @@
 // 계약은 테스트가 닿는 자리에 있어야 한다 — titleOf 가 humanRequest.ts 에 있는 것과 같은 이유다.
 //
 // node: import 없음. 파일 내용은 부르는 쪽이 읽어 넣는다 — 이 모듈은 문자열만 만든다.
-import type { ProjectFeature } from './types'
+import type { Lang } from '../i18n'
+
+/** What to call each language **inside the prompt**. The model is told to write in one of these, so
+ *  the name is given in English — that is the language the rest of the prompt is in, and a model
+ *  reading "한국어" in an otherwise English instruction has to infer that it is being named
+ *  rather than quoted. The native name lives in i18n's CATALOGS and is for people, not for this. */
+const LANGUAGE_NAME: Record<Lang, string> = { ko: 'Korean', en: 'English', ja: 'Japanese', es: 'Spanish' }
 
 /** 스펙 §24 전문. **줄이지 않는다** — 이 계약의 요점은 AI 가 기술 용어로 도망가지 못하게
  *  명시적으로 막는 것이고, 조항을 빼는 순간 그 구멍으로 도망간다. §25(Vocabulary Guard)의
@@ -41,112 +47,89 @@ Rules:
     review instead of guessing.
 14. Do not include private reasoning or chain-of-thought.`
 
-/** 출력 스키마의 산문 설명. JSON 스키마 파일 대신 프롬프트에 싣는 이유: claude 의 -p 는
- *  --output-format json 로 겉봉투만 보장하고 내용 스키마는 계약이 지켜야 한다. 검증은 어차피
- *  validate.ts 가 다시 한다 — 여기는 에이전트가 맞출 과녁을 보여 주는 자리다. */
-export const OUTPUT_SHAPE = `Respond with a single JSON object, no markdown fence, of this exact shape:
+export interface RecordRequest {
+  /** The app's language. The write-up is read on screen next to the app's own text, so it is
+   *  written in the same language — without this the model picks one per run, and two records
+   *  made minutes apart came back in different languages. */
+  lang: Lang
+  /** The user's own words, verbatim — for a Job, its objective */
+  request: string
+  changedFiles: readonly string[]
+  /** Commit subjects in the unit's git range. Empty when nothing was committed. */
+  commits: readonly string[]
+  /** Job only: what the run's tasks were and how each ended */
+  tasks?: readonly { title: string; outcome: string }[]
+  /** Job only */
+  validation?: { status: string; summary?: string }
+  projectRoot: string
+}
+
+/** Ask for a write-up of **one piece of work that just finished** — not of the project.
+ *
+ *  The material is deliberately small (§29): the request, the files that changed, the commits in
+ *  the range, and for a Job its tasks. Discovery used to hand over a repository skeleton and take
+ *  ten minutes; there is nothing of that shape here, and the reading budget keeps it that way. */
+export function buildRecordPrompt(req: RecordRequest): string {
+  const language = LANGUAGE_NAME[req.lang]
+  const jobSection =
+    req.tasks && req.tasks.length > 0
+      ? `\n\nTasks in this run and how each ended:\n` +
+        req.tasks.map((t) => `- ${t.title} — ${t.outcome}`).join('\n')
+      : ''
+  const validation = req.validation
+    ? `\n\nValidation: ${req.validation.status}${req.validation.summary ? ` — ${req.validation.summary}` : ''}`
+    : ''
+  const commits =
+    req.commits.length > 0 ? `\n\nCommits in this range:\n${req.commits.map((c) => `- ${c}`).join('\n')}` : ''
+
+  return `${EXPLANATION_CONTRACT}
+
+You are writing up **one piece of work that just finished** in the project at ${req.projectRoot}.
+Not what the project does — what this particular piece of work changed, and how.
+
+What the person asked for, verbatim:
+${req.request}
+
+Files that changed while this work was open:
+${req.changedFiles.map((f) => `- ${f}`).join('\n')}${commits}${jobSection}${validation}
+
+Write every sentence a person reads in ${language}: "overview", "userVisibleChanges", every
+"label", "description" and "condition" in "flow", every "title" and "reason" in "decisions", every
+"role" in "implementation", and "needsReviewReason". File paths, node ids and the fixed values of
+"type" stay as they are. Keep code identifiers in their original form and explain them in ${language}.
+
+Read what you need to explain this change. Read only — never modify anything.
+
+**Work to a budget: open at most 10 files, and stop as soon as every step has a file behind it.**
+You are running in the background under a time limit; a write-up that never finishes is worth less
+than a grounded one that does. If the budget runs out before you can ground something, say so in
+"needsReview" rather than reading further.
+
+${RECORD_OUTPUT_SHAPE}`
+}
+
+const RECORD_OUTPUT_SHAPE = `Respond with a single JSON object, no markdown fence, of this exact shape:
 {
-  "overview": string,            // 2-4 sentences, contract rules apply
-  "userFlow": FlowNode[],        // the main path, chronological
-  "failureFlows": FlowNode[],    // only important failures (rule 9)
-  "keyDecisions": { "title": string, "reason": string, "sourceLabel": string,
-                    "evidencePaths": string[] }[],
-  "implementation": { "role": string, "path": string }[],  // repo-relative paths, forward slashes
-  "evidencePaths": string[],     // every file you actually read to ground this
-  "needsReview": boolean,        // true when evidence was insufficient (rule 13)
-  "needsReviewReason": string    // required when needsReview is true
+  "overview": string,               // 2-4 sentences on what is different now, contract rules apply
+  "userVisibleChanges": string[],   // what a person using the product will notice; [] if none
+  "flow": FlowNode[],               // the order things happen in, for the part that changed
+  "decisions": { "title": string, "reason": string, "sourceLabel": string,
+                 "evidencePaths": string[] }[],
+  "implementation": { "role": string, "path": string }[],  // repo-relative, forward slashes
+  "evidencePaths": string[],        // every file you actually read to ground this
+  "needsReview": boolean,           // true when evidence was insufficient (rule 13)
+  "needsReviewReason": string       // required when needsReview is true
 }
 FlowNode = { "id": string, "label": string, "type": "start"|"step"|"decision"|"success"|"failure",
              "description": string, "next": { "targetId": string, "condition"?: string }[],
              "evidencePaths": string[] }
 Labels must be under 22 characters — a longer label means the step name became a sentence;
 put the sentence in "description" instead. A "condition" is a tag on a branch, not a sentence:
-keep it under 12 characters ("yes", "limit hit", "만료"). It is drawn in the gap between two
-boxes, so a long one crowds the diagram.
+keep it under 12 characters.
 
-"userFlow" is drawn as a diagram and must be closed: every "targetId" in it must be the id of
-another node **in userFlow**. Failures are shown as a separate list, not wired into that diagram —
-put them in "failureFlows" and do not point the main flow at them.
+"flow" is drawn as a diagram and must be closed: every "targetId" must be the id of another node
+in "flow".
 
 Every step and every decision must name the files it is built from, in its own "evidencePaths".
-The reader clicks a step to see what it rests on; a step that names nothing cannot be clicked, so
-the reader is left with a diagram they cannot open. Name the file you actually read for that step,
-not the whole feature's file list.`
+The reader clicks a step to see what it rests on; a step that names nothing cannot be clicked.`
 
-export interface ExplainRequest {
-  feature: Pick<ProjectFeature, 'id' | 'name' | 'summary'>
-  /** 이 기능의 구현 경로들 — 에이전트가 읽을 곳. 첫 분석이 만든 것이거나 지난 설명의 것 */
-  implementationPaths: readonly string[]
-  /** 이번 재생성을 일으킨 변화. 첫 생성이면 빈 목록 */
-  recentChangeBodies: readonly string[]
-  /** 프로젝트 루트 — 에이전트의 작업 디렉터리가 이곳이라는 사실을 문장으로 알려 준다 */
-  projectRoot: string
-}
-
-/** 기능 하나의 설명을 만들어 달라는 프롬프트 전문 */
-export function buildExplainPrompt(req: ExplainRequest): string {
-  const changes =
-    req.recentChangeBodies.length > 0
-      ? `\n\nRecent changes that triggered this update (user requests, verbatim):\n` +
-        req.recentChangeBodies.map((b) => `- ${b}`).join('\n')
-      : ''
-  return `${EXPLANATION_CONTRACT}
-
-Feature to explain: ${req.feature.name}
-One-line summary so far: ${req.feature.summary}
-
-Start from these implementation paths (repo-relative, under ${req.projectRoot}) and read what you
-need to ground the explanation. Read only — never modify anything.
-
-**Work to a budget: open at most 10 files, and stop as soon as every step has a file behind it.**
-You are running in the background under a time limit; an explanation that never finishes is worth
-less than a grounded one that does. If the budget runs out before you can ground something, say so
-in "needsReview" rather than reading further.
-
-${req.implementationPaths.map((p) => `- ${p}`).join('\n')}${changes}
-
-${OUTPUT_SHAPE}`
-}
-
-/** 첫 분석 — 기능 목록 초안을 만들어 달라는 프롬프트 (스펙 §21). 설명은 만들지 않는다.
- *
- *  **재료를 함께 준다 (스펙 §29).** "저장소를 보고 찾아라"라고만 했더니 이 저장소(572개 파일)에서
- *  10분을 넘겨도 끝나지 않았다 — 에이전트가 파일을 하나씩 열어 보는 것을 막지 않았기 때문이다.
- *  §29 가 그것을 미리 금지했다: "전체 repository 를 prompt 에 넣지 않는다 … deterministic
- *  heuristic 으로 충분하다." 그래서 디렉터리 뼈대와 문서 앞부분을 값으로 실어 준다.
- *
- *  @param sketch collectSketch 가 모아 sketchText 로 다듬은 문자열 */
-export function buildDiscoverPrompt(projectRoot: string, sketch: string): string {
-  return `You are cataloguing what a software project does, for a product manager.
-
-Below is the shape of the repository at ${projectRoot} — its directory skeleton and the opening
-of its main documents. **Work from this.** Open a file only when you cannot name a feature without
-it, and never more than a handful. Read only; never modify anything.
-
-${sketch}
-
-Rules 4-7 and 11-14 of the following contract apply to names and summaries:
-
-${EXPLANATION_CONTRACT}
-
-Respond with a single JSON object, no markdown fence:
-{
-  "features": [
-    {
-      "name": string,        // feature name a user would recognise — "인증", not "AuthService"
-      "summary": string,     // one line for a sidebar row
-      "implementationPaths": string[]  // repo-relative paths where this feature lives
-    }
-  ]
-}
-List 3 to 12 features. Name what a person *does* with this project, not what the project is:
-"sign in with Google" is a feature, "a desktop workspace for coding agents" is the product. If a
-name would fit on the front page of a README, it is too broad — split it.
-
-**Every feature must name at least one real file** in "implementationPaths", not only a directory.
-Open what you need to find them; a directory alone is not an answer, because the reader clicks these
-paths to read the code. Adding the containing directory as well is fine. Every path must exist.
-
-The result is a draft the user can rename or remove: prefer missing a minor feature over inventing
-one.`
-}

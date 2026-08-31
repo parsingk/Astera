@@ -107,7 +107,7 @@ export async function readRange(
   repoPath: string,
   before: string,
   after: string
-): Promise<{ commits: string[]; changedFiles: string[]; authors: string[] }> {
+): Promise<{ commits: string[]; changedFiles: string[]; authors: string[]; subjects: string[] }> {
   const range = `${before}..${after}`
   const opts = { cwd: repoPath, timeoutMs: WATCH_ROUND_TIMEOUT_MS, trim: false }
   // 파일 쪽은 `git diff before..after --name-only` 다 — 커밋마다의 `--name-only` 목록을 합집합으로
@@ -115,12 +115,17 @@ export async function readRange(
   // diff 를 내지 않는다(그 커밋이 부모들과 갈라지는 지점만 보여주고, 머지 자신이 새로 들여온
   // 변경은 조용히 빠진다). `diff before..after` 는 그 두 커밋의 트리를 통째로 견주므로, 그 사이에
   // 머지가 가져온 변경까지 전부 들어간다 — 그래서 이쪽이 낫다.
-  const [log, diff, who] = await Promise.all([
+  const [log, diff, who, subj] = await Promise.all([
     git(['log', '--pretty=format:%H', '-z', range], opts),
     git(['-c', 'core.quotePath=false', 'diff', '--name-only', '-z', range], opts),
-    git(['log', '--pretty=format:%an', '-z', range], opts)
+    git(['log', '--pretty=format:%an', '-z', range], opts),
+    // Subject lines (%s) for the write-up pipeline's material (main/understanding/pipeline.ts's
+    // readCommits). `commits` above is hashes, useful for identity but meaningless as prompt text —
+    // this is the human-readable counterpart, asked for over the same range for the same reason
+    // authors is: a hash tells the agent nothing, so it needs its own query.
+    git(['log', '--pretty=format:%s', '-z', range], opts)
   ])
-  if (!log.ok || !diff.ok) return { commits: [], changedFiles: [], authors: [] }
+  if (!log.ok || !diff.ok) return { commits: [], changedFiles: [], authors: [], subjects: [] }
 
   const split = (s: string): string[] => s.split('\0').filter((t) => t !== '')
   // author 만 실패했다면 나머지 둘은 그대로 준다 — 이름은 표시용이고(EG §7), 커밋과 파일이
@@ -128,6 +133,7 @@ export async function readRange(
   return {
     commits: split(log.stdout),
     changedFiles: split(diff.stdout),
-    authors: who.ok ? [...new Set(split(who.stdout))] : []
+    authors: who.ok ? [...new Set(split(who.stdout))] : [],
+    subjects: subj.ok ? split(subj.stdout) : []
   }
 }

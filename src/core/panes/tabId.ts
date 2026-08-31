@@ -3,13 +3,14 @@
 // 파일 탭 id는 이 모듈이 생기기 전부터 `file:${path}` 형식이었다(FileTabs.tsx의 FileTab.id) — 새 형식을
 // 도입하는 것이 아니라 흩어져 있던 형식을 한 곳으로 모으는 것이다.
 // node: import 없음 — 렌더러가 import한다.
-export type TabKind = 'session' | 'file' | 'feature'
+export type TabKind = 'session' | 'file' | 'record'
 export type TabRef = { kind: TabKind; id: string }
 
 export const sessionTab = (sessionId: string): string => `session:${sessionId}`
 export const fileTab = (path: string): string => `file:${path}`
-/** How It Works 의 기능 상세. 세션·파일과 같은 줄에 서고, 트리는 이 셋을 구별하지 않는다 */
-export const featureTab = (featureId: string): string => `feature:${featureId}`
+/** How It Works's record detail. Stands in the same row as a session or a file, and the tree does
+ *  not tell the three apart. */
+export const recordTab = (recordId: string): string => `record:${recordId}`
 
 /** 탭 id가 아닌 문자열은 null — 던지지 않는다. 저장된 옛 상태나 다른 종류의 id를 만나도 화면이 죽지
  *  않아야 한다. Windows 경로의 드라이브 콜론 때문에 쪼개기는 첫 콜론에서만 한다. */
@@ -19,5 +20,5 @@ export function parseTab(tabId: string): TabRef | null {
   const kind = tabId.slice(0, i)
   const id = tabId.slice(i + 1)
   if (id === '') return null
-  return kind === 'session' || kind === 'file' || kind === 'feature' ? { kind, id } : null
+  return kind === 'session' || kind === 'file' || kind === 'record' ? { kind, id } : null
 }

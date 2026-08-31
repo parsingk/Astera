@@ -24,8 +24,12 @@ let dir: string
 let cli: string
 
 const FAKE = `
-const mode = process.env.CLAUDE_CONFIG_DIR || process.env.CODEX_HOME || ''
-if (mode === 'die') {
+// **Each protocol reads its own variable.** discover.ts spreads process.env into the child, so a
+// codex lookup still carries whatever CLAUDE_CONFIG_DIR the parent had — reading one OR the other
+// let a real config path win and silently turned every mode into the success branch.
+const claudeMode = process.env.CLAUDE_CONFIG_DIR || ''
+const codexMode = process.env.CODEX_HOME || ''
+if (claudeMode === 'die' || codexMode === 'die') {
   process.stderr.write('not logged in\\n')
   process.exit(3)
 }
@@ -40,6 +44,7 @@ process.stdin.on('data', (d) => {
     try { msg = JSON.parse(line) } catch { continue }
     const say = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
     if (msg.type === 'control_request') {
+      const mode = claudeMode
       if (mode === 'reject') say({ type: 'control_response', response: { request_id: msg.request_id, subtype: 'error', error: 'nope' } })
       else if (mode === 'empty') say({ type: 'control_response', response: { request_id: msg.request_id, subtype: 'success', response: { models: [] } } })
       else if (mode === 'noise') { say({ type: 'system', subtype: 'init' }); say({ type: 'control_response', response: { request_id: 'someone-else', subtype: 'success', response: { models: [] } } }); process.exit(0) }
@@ -47,6 +52,7 @@ process.stdin.on('data', (d) => {
         { value: 'opus', resolvedModel: 'claude-opus-5', displayName: 'Opus 5', description: 'd', supportsEffort: true, supportedEffortLevels: ['low', 'high'] }
       ] } } })
     } else if (msg.method === 'model/list') {
+      const mode = codexMode
       if (mode === 'reject') say({ id: msg.id, error: { code: -32601, message: 'no such method' } })
       else say({ id: msg.id, result: { data: [
         { id: 'gpt-5.6', model: 'gpt-5.6', displayName: 'GPT 5.6', description: 'd',

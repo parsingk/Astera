@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildDiscoverPrompt, buildExplainPrompt, EXPLANATION_CONTRACT } from './prompt'
+import { EXPLANATION_CONTRACT, buildRecordPrompt } from './prompt'
 
 describe('EXPLANATION_CONTRACT — 스펙 §24 의 계약이 온전한가', () => {
   // 조항을 빼면 그 구멍으로 도망간다 — 14개 번호와 §25 요지(7-1)가 전부 있어야 한다
@@ -17,53 +17,54 @@ describe('EXPLANATION_CONTRACT — 스펙 §24 의 계약이 온전한가', () =
   })
 })
 
-describe('buildExplainPrompt', () => {
+describe('buildRecordPrompt', () => {
   const req = {
-    feature: { id: 'auth', name: '인증', summary: '로그인과 세션' },
-    implementationPaths: ['src/auth', 'src/core/session.ts'],
-    recentChangeBodies: ['로그인 고쳐줘'],
-    projectRoot: 'D:/p'
+    request: '한도 대화상자를 못 알아보던 것을 고쳐줘',
+    changedFiles: ['src/core/rolling/detect.ts', 'src/main/rolling.ts'],
+    commits: ['fix(rolling): treat the dialog as the signal'],
+    projectRoot: 'D:/p',
+    lang: 'ko' as const
   }
 
-  it('계약·기능·경로·변화·출력 모양이 모두 실린다', () => {
-    const p = buildExplainPrompt(req)
+  it('계약·요청·파일·커밋·출력 모양이 모두 실린다', () => {
+    const p = buildRecordPrompt(req)
     expect(p).toContain(EXPLANATION_CONTRACT)
-    expect(p).toContain('인증')
-    expect(p).toContain('- src/auth')
-    expect(p).toContain('- 로그인 고쳐줘')
-    expect(p).toContain('"needsReview"')
-    expect(p).toContain('under 22 characters')
+    expect(p).toContain('한도 대화상자를 못 알아보던 것을 고쳐줘')
+    expect(p).toContain('- src/core/rolling/detect.ts')
+    expect(p).toContain('fix(rolling): treat the dialog as the signal')
+    expect(p).toContain('"userVisibleChanges"')
   })
 
-  it('읽기 전용을 문장으로 못박는다', () => {
-    expect(buildExplainPrompt(req)).toContain('never modify anything')
-  })
-
-  it('첫 생성(변화 없음)이면 변화 절이 아예 없다', () => {
-    const p = buildExplainPrompt({ ...req, recentChangeBodies: [] })
-    expect(p).not.toContain('Recent changes')
-  })
-})
-
-describe('buildDiscoverPrompt', () => {
-  const sketch = ['Directories:', '- src/auth', '', '--- README.md ---', '# Astera'].join('\n')
-
-  it('루트·계약·초안 성격·출력 모양이 실린다', () => {
-    const p = buildDiscoverPrompt('D:/p', sketch)
-    expect(p).toContain('D:/p')
-    expect(p).toContain(EXPLANATION_CONTRACT)
-    expect(p).toContain('implementationPaths')
-    expect(p).toContain('draft')
+  // What this prompt asks for is not the project — it's **one piece of work that just finished**
+  it('작업 하나를 설명하라고 못박는다', () => {
+    const p = buildRecordPrompt(req)
+    expect(p).toContain('one piece of work that just finished')
     expect(p).toContain('never modify anything')
   })
 
-  // **재료 없이 보내면 에이전트가 저장소를 하나씩 열어 본다** — 이 저장소(572개 파일)에서
-  // 10분을 넘겨도 끝나지 않았다. 스펙 §29 가 금지한 것이고, 그 재료가 실리는지가 이 한 줄이다
-  it('모아 준 재료가 프롬프트에 실린다 (스펙 §29)', () => {
-    const p = buildDiscoverPrompt('D:/p', sketch)
-    expect(p).toContain('- src/auth')
-    expect(p).toContain('# Astera')
-    // 그리고 그것으로 일하라고 말한다 — 실어 놓고 안 쓰면 실은 뜻이 없다
-    expect(p).toContain('Work from this')
+  // The write-up sits on screen beside the app's own text. Without this the model chose a language
+  // per run, and two records made two minutes apart came back in different ones.
+  it('앱의 언어로 쓰라고 못박는다', () => {
+    expect(buildRecordPrompt(req)).toContain('a person reads in Korean')
+    expect(buildRecordPrompt({ ...req, lang: 'ja' })).toContain('a person reads in Japanese')
+    // Paths and ids are not sentences — translating them would break the links they carry
+    expect(buildRecordPrompt(req)).toContain('File paths, node ids')
+  })
+
+  it('읽기 예산을 준다 (스펙 §29)', () => {
+    expect(buildRecordPrompt(req)).toContain('at most 10 files')
+  })
+
+  // A Job carries a task list and a validation outcome together; a session has no such section at all
+  it('Job 의 재료가 있으면 싣고, 없으면 그 절이 없다', () => {
+    expect(buildRecordPrompt(req)).not.toContain('Tasks in this run')
+    const withJob = buildRecordPrompt({
+      ...req,
+      tasks: [{ title: '감지 고치기', outcome: 'completed' }],
+      validation: { status: 'passed', summary: '테스트 4029개 통과' }
+    })
+    expect(withJob).toContain('Tasks in this run')
+    expect(withJob).toContain('감지 고치기')
+    expect(withJob).toContain('테스트 4029개 통과')
   })
 })

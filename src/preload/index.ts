@@ -207,7 +207,6 @@ const api = {
   },
   understanding: {
     get: invoke('understanding.get'),
-    analyze: invoke('understanding.analyze'),
     regenerate: invoke('understanding.regenerate')
   },
   platform: process.platform,

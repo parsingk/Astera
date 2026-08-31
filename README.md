@@ -77,13 +77,16 @@ vendors, checks the result, and waits when a human decision is needed.
   until you edit it, which saves it as yours
 
 **How It Works (experimental)**
-- How It Works is for people who do not read code. What a feature does, the order things happen in,
-  what can go wrong, why it was built this way, and which files each part was read from
+- How It Works is for people who do not read code. Each time a piece of work finishes, one row
+  records what changed and how — a session's work, or one Jobs Run
 - Off by default. Turn on **Work unit tracking** in settings, then pick the **Explanation account**
-  that will write them
-- Ask it to analyse a project once and it reads the repository and lists what that project does
-- When a session finishes a piece of work, the explanation of whatever that work touched is written
-  again, and the sidebar records the change as the request you actually made
+  that will write the entries
+- Only work finished after you turned tracking on. Nothing before it is read — not the code, not
+  earlier sessions, not earlier runs
+- A row appears the moment the work closes and fills itself in a few minutes later. If it could not
+  be written up, it says why and offers to try again
+- Open a row for what changed, what a person using the product will notice, the order things happen
+  in, the decisions taken, and where it lives in the code
 - It only ever reads. Nothing here can change your code
 
 **Editor and shortcuts**

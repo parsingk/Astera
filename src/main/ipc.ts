@@ -67,6 +67,7 @@ import {
 import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
 import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, runsForProject } from '../core/orchestration/view'
+import { justFinished } from '../core/orchestration/runRecord'
 import { timelineFor } from '../core/orchestration/timeline'
 import { layersOf } from '../core/orchestration/graph'
 import { repoPathOf } from '../core/worktrees/repo'
@@ -2070,6 +2071,11 @@ export function registerIpc(
       }
     }
 
+    // The state before this write, so a Run's finish can be caught as an edge (runRecord.ts) rather
+    // than read as a state — outcomeOf is derived, so "finished" stays true on every round after the
+    // last task lands. Local to this boot: a restart has no previous state either, the same rule a
+    // fresh app start needs (see the null fallback in setState below).
+    let prevOrchState: OrchState | null = null
     const deps: OrchServerDeps = {
       getState: () => store.get(),
       // Passed in a form that is definitely awaited — the caller's await contract stays. save() itself
@@ -2086,6 +2092,36 @@ export function registerIpc(
       setState: async (next) => {
         await store.save(next)
         pushOrchState(next)
+        // A finished Run becomes a record. `prevOrchState ?? next` on the first write after boot
+        // treats "before" as "after" — justFinished(next, next) is always empty — so a Run that was
+        // already finished when the app started is not recorded (same rule as D2: the screen holds
+        // only what the app watched happen, not what it finds already done).
+        //
+        // Caught per Run, not around the loop. Several Runs can finish in one write (runRecord's
+        // own test pins that), and a throw while handling the first would silently drop the rest —
+        // the same per-item isolation orchFireTick uses below. The catch is needed at all for the
+        // reason pushOrchState's own comment gives: store.save has already committed by this
+        // point, so a throw here must not turn a successful write into a command that errors.
+        for (const { runId, outcome } of justFinished(prevOrchState ?? next, next)) {
+          try {
+            const run = next.runs.find((r) => r.id === runId)
+            if (!run) continue
+            const tasks = next.tasks.filter((t) => t.runId === runId)
+            void understandingPipeline.onRunFinished(understandingKeyOf(run.cwd), {
+              runId,
+              jobName: run.objective.slice(0, 60),
+              objective: run.objective,
+              at: new Date().toISOString(),
+              taskIds: tasks.map((t) => t.id),
+              tasks: tasks.map((t) => ({ title: t.title, outcome: t.status })),
+              changedFiles: [...new Set(tasks.flatMap((t) => t.filesModified ?? []))],
+              validation: { status: outcome === 'completed' ? 'passed' : 'failed' }
+            })
+          } catch (e) {
+            orchLog(`run-finished record failed for ${runId}: ${String(e)}`)
+          }
+        }
+        prevOrchState = next
         // 저장이 끝난 뒤에 돈다 — 스케줄러가 읽는 것은 getState() 이고, 저장 전에 부르면 방금의
         // 변경을 못 본다. 떠나 보내는 promise 에 **종단 .catch 가 있어야 한다**(startReview 와 같은
         // 이유: 붙이지 않으면 unhandled rejection 이 main 프로세스를 죽인다).
@@ -3086,7 +3122,13 @@ export function registerIpc(
     },
     descriptors: core.descriptors,
     generator: () => core.appSettings.getGenerator(),
+    // The write-up is read next to the app's own text, so it is written in the app's language.
+    // Read per record, not captured: core.lang changes when the user changes the setting.
+    lang: () => core.lang,
     now: () => new Date().toISOString(),
+    // Commit subjects in the unit's range — material for the write-up. readRange is the same reader
+    // the collector uses for git provenance, so there is no second way to ask this question.
+    readCommits: async (root, from, to) => (from && to ? (await readRange(root, from, to)).subjects : []),
     // 배경 재생성이 끝났다고 화면에 알린다. **접힌 키를 그대로 실어 보낸다** — 렌더러는 그 접기를
     // 모르므로(워크트리 세션이면 원 저장소의 키다) 값을 비교하지 않고 다시 읽기만 한다.
     // 그쪽 주석이 그 이유를 적고 있다.
@@ -3094,22 +3136,12 @@ export function registerIpc(
     log: orchLog
   })
 
-  /** 분석 버튼. **결과를 돌려준다** — 사용자가 눌러 기다리는 일이라 실패하면 사유가 화면에 떠야
-   *  한다(배경에서 도는 재생성과 다른 점이다). */
-  ipcMain.handle('understanding.analyze', async (_e, projectPath: string) => {
+  ipcMain.handle('understanding.regenerate', async (_e, projectPath: string, recordId: string) => {
     await assertAllowedPath(projectPath)
+    if (typeof recordId !== 'string' || recordId === '')
+      throw new Error(`INVALID_RECORD_ID: ${String(recordId)}`)
     await understandingLoaded
-    return understandingPipeline.analyzeProject(understandingKeyOf(projectPath))
-  })
-
-  /** 기능 하나의 [다시] 버튼. **결과를 기다리지 않는다** — 바로 위와 갈리는 자리다: 그릴 줄이
-   *  이미 있어 그 자리에서 "생성 중"을 보여 줄 수 있고, 끝나면 understanding:changed 가 민다. */
-  ipcMain.handle('understanding.regenerate', async (_e, projectPath: string, featureId: string) => {
-    await assertAllowedPath(projectPath)
-    if (typeof featureId !== 'string' || featureId === '')
-      throw new Error(`INVALID_FEATURE_ID: ${String(featureId)}`)
-    await understandingLoaded
-    void understandingPipeline.regenerate(understandingKeyOf(projectPath), featureId)
+    void understandingPipeline.regenerate(understandingKeyOf(projectPath), recordId)
   })
 
   // Work Unit detection: workUnits.json persistence, and the collector that fills it. Built here for
@@ -3198,9 +3230,9 @@ export function registerIpc(
       await w.watch(projectPath)
       return () => w.close()
     },
-    // Unit 이 닫히면 설명 층에 넘긴다. **기다리지 않는다** — 그쪽은 에이전트를 돌려 수십 초가
-    // 걸리고, 그 큐가 순서와 실패를 스스로 다룬다(pipeline 의 enqueue). 여기서 키를 접는 이유는
-    // understanding.get 과 같다: 워크트리 세션의 일이 원 저장소의 설명에 닿아야 한다(설계 D1).
+    // Hands a closed unit to the explanation pipeline. **Folds the key to the origin repo** — same
+    // reason as understandingKeyOf's own comment (a worktree session's "project" is the origin repo,
+    // not the worktree).
     onUnitClosed: (projectPath, unit) => {
       void understandingPipeline.onUnitClosed(understandingKeyOf(projectPath), unit)
     },
