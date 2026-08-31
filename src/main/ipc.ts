@@ -3094,24 +3094,6 @@ export function registerIpc(
     log: orchLog
   })
 
-  /** 분석 버튼. **결과를 돌려준다** — 사용자가 눌러 기다리는 일이라 실패하면 사유가 화면에 떠야
-   *  한다(배경에서 도는 재생성과 다른 점이다). */
-  ipcMain.handle('understanding.analyze', async (_e, projectPath: string) => {
-    await assertAllowedPath(projectPath)
-    await understandingLoaded
-    return understandingPipeline.analyzeProject(understandingKeyOf(projectPath))
-  })
-
-  /** 기능 하나의 [다시] 버튼. **결과를 기다리지 않는다** — 바로 위와 갈리는 자리다: 그릴 줄이
-   *  이미 있어 그 자리에서 "생성 중"을 보여 줄 수 있고, 끝나면 understanding:changed 가 민다. */
-  ipcMain.handle('understanding.regenerate', async (_e, projectPath: string, featureId: string) => {
-    await assertAllowedPath(projectPath)
-    if (typeof featureId !== 'string' || featureId === '')
-      throw new Error(`INVALID_FEATURE_ID: ${String(featureId)}`)
-    await understandingLoaded
-    void understandingPipeline.regenerate(understandingKeyOf(projectPath), featureId)
-  })
-
   // Work Unit detection: workUnits.json persistence, and the collector that fills it. Built here for
   // exactly the reason the understanding store above is — this has nothing to do with agent
   // orchestration, so it must not go inside bootOrch, which only runs when the orchestration toggle is
@@ -3197,12 +3179,6 @@ export function registerIpc(
       const w = new GitWatcher(() => workUnitCollector.onGitChanged(), orchLog)
       await w.watch(projectPath)
       return () => w.close()
-    },
-    // Unit 이 닫히면 설명 층에 넘긴다. **기다리지 않는다** — 그쪽은 에이전트를 돌려 수십 초가
-    // 걸리고, 그 큐가 순서와 실패를 스스로 다룬다(pipeline 의 enqueue). 여기서 키를 접는 이유는
-    // understanding.get 과 같다: 워크트리 세션의 일이 원 저장소의 설명에 닿아야 한다(설계 D1).
-    onUnitClosed: (projectPath, unit) => {
-      void understandingPipeline.onUnitClosed(understandingKeyOf(projectPath), unit)
     },
     log: orchLog
   })

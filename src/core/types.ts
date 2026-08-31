@@ -918,16 +918,6 @@ export interface OrchApi {
 export interface UnderstandingApi {
   /** 저장된 이해. 한 번도 분석하지 않은 프로젝트는 null — 빈 상태가 그것을 그린다 */
   get(projectPath: string): Promise<ProjectUnderstanding | null>
-
-  /** 첫 분석 — 이 프로젝트에 어떤 기능이 있는지 목록을 만든다 (스펙 §21). 설명은 만들지 않는다.
-   *  **결과를 돌려준다**: 사용자가 눌러 기다리는 일이라 실패하면 그 사유가 화면에 떠야 한다.
-   *  reason 이 NO_GENERATOR_ACCOUNT 면 설정에서 생성 계정을 아직 고르지 않았다는 뜻이다. */
-  analyze(projectPath: string): Promise<{ ok: true; count: number } | { ok: false; reason: string }>
-
-  /** 기능 하나의 설명을 다시 만든다 — 사이드바 줄의 [다시] 버튼.
-   *  **결과를 기다리지 않는다**: analyze 와 갈리는 자리다. 그릴 줄이 이미 있어 그 자리에서
-   *  "생성 중"을 보여 줄 수 있고, 끝나면 'understanding:changed' 가 화면을 밀어 준다. */
-  regenerate(projectPath: string, featureId: string): Promise<void>
 }
 
 export type RendererApi = CoreApi & {

@@ -123,13 +123,13 @@ export interface FeatureExplanation {
   generatedAt: string
 }
 
-/** 프로젝트 하나의 이해 전체. 저장소가 프로젝트 경로 → 이 값으로 들고 있다 */
+/** Everything How It Works shows for one project: the work that has finished
+ *  since tracking was turned on, newest first. */
 export interface ProjectUnderstanding {
-  features: ProjectFeature[]
-  /** featureId → 설명 */
-  explanations: Record<string, FeatureExplanation>
-  /** 마지막 분석 시각. 한 번도 분석하지 않았으면 없다 */
-  analyzedAt?: string
-  /** 사이드바 아래 세 줄 — 프로젝트 전체의 최근 변경 */
-  recentChanges: ChangeSummary[]
+  records: WorkRecord[]
+}
+
+/** Placeholder until Task 2 gives it its fields. */
+export interface WorkRecord {
+  id: string
 }

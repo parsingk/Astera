@@ -5,7 +5,6 @@
 // 계약은 테스트가 닿는 자리에 있어야 한다 — titleOf 가 humanRequest.ts 에 있는 것과 같은 이유다.
 //
 // node: import 없음. 파일 내용은 부르는 쪽이 읽어 넣는다 — 이 모듈은 문자열만 만든다.
-import type { ProjectFeature } from './types'
 
 /** 스펙 §24 전문. **줄이지 않는다** — 이 계약의 요점은 AI 가 기술 용어로 도망가지 못하게
  *  명시적으로 막는 것이고, 조항을 빼는 순간 그 구멍으로 도망간다. §25(Vocabulary Guard)의
@@ -73,80 +72,3 @@ The reader clicks a step to see what it rests on; a step that names nothing cann
 the reader is left with a diagram they cannot open. Name the file you actually read for that step,
 not the whole feature's file list.`
 
-export interface ExplainRequest {
-  feature: Pick<ProjectFeature, 'id' | 'name' | 'summary'>
-  /** 이 기능의 구현 경로들 — 에이전트가 읽을 곳. 첫 분석이 만든 것이거나 지난 설명의 것 */
-  implementationPaths: readonly string[]
-  /** 이번 재생성을 일으킨 변화. 첫 생성이면 빈 목록 */
-  recentChangeBodies: readonly string[]
-  /** 프로젝트 루트 — 에이전트의 작업 디렉터리가 이곳이라는 사실을 문장으로 알려 준다 */
-  projectRoot: string
-}
-
-/** 기능 하나의 설명을 만들어 달라는 프롬프트 전문 */
-export function buildExplainPrompt(req: ExplainRequest): string {
-  const changes =
-    req.recentChangeBodies.length > 0
-      ? `\n\nRecent changes that triggered this update (user requests, verbatim):\n` +
-        req.recentChangeBodies.map((b) => `- ${b}`).join('\n')
-      : ''
-  return `${EXPLANATION_CONTRACT}
-
-Feature to explain: ${req.feature.name}
-One-line summary so far: ${req.feature.summary}
-
-Start from these implementation paths (repo-relative, under ${req.projectRoot}) and read what you
-need to ground the explanation. Read only — never modify anything.
-
-**Work to a budget: open at most 10 files, and stop as soon as every step has a file behind it.**
-You are running in the background under a time limit; an explanation that never finishes is worth
-less than a grounded one that does. If the budget runs out before you can ground something, say so
-in "needsReview" rather than reading further.
-
-${req.implementationPaths.map((p) => `- ${p}`).join('\n')}${changes}
-
-${OUTPUT_SHAPE}`
-}
-
-/** 첫 분석 — 기능 목록 초안을 만들어 달라는 프롬프트 (스펙 §21). 설명은 만들지 않는다.
- *
- *  **재료를 함께 준다 (스펙 §29).** "저장소를 보고 찾아라"라고만 했더니 이 저장소(572개 파일)에서
- *  10분을 넘겨도 끝나지 않았다 — 에이전트가 파일을 하나씩 열어 보는 것을 막지 않았기 때문이다.
- *  §29 가 그것을 미리 금지했다: "전체 repository 를 prompt 에 넣지 않는다 … deterministic
- *  heuristic 으로 충분하다." 그래서 디렉터리 뼈대와 문서 앞부분을 값으로 실어 준다.
- *
- *  @param sketch collectSketch 가 모아 sketchText 로 다듬은 문자열 */
-export function buildDiscoverPrompt(projectRoot: string, sketch: string): string {
-  return `You are cataloguing what a software project does, for a product manager.
-
-Below is the shape of the repository at ${projectRoot} — its directory skeleton and the opening
-of its main documents. **Work from this.** Open a file only when you cannot name a feature without
-it, and never more than a handful. Read only; never modify anything.
-
-${sketch}
-
-Rules 4-7 and 11-14 of the following contract apply to names and summaries:
-
-${EXPLANATION_CONTRACT}
-
-Respond with a single JSON object, no markdown fence:
-{
-  "features": [
-    {
-      "name": string,        // feature name a user would recognise — "인증", not "AuthService"
-      "summary": string,     // one line for a sidebar row
-      "implementationPaths": string[]  // repo-relative paths where this feature lives
-    }
-  ]
-}
-List 3 to 12 features. Name what a person *does* with this project, not what the project is:
-"sign in with Google" is a feature, "a desktop workspace for coding agents" is the product. If a
-name would fit on the front page of a README, it is too broad — split it.
-
-**Every feature must name at least one real file** in "implementationPaths", not only a directory.
-Open what you need to find them; a directory alone is not an answer, because the reader clicks these
-paths to read the code. Adding the containing directory as well is fine. Every path must exist.
-
-The result is a draft the user can rename or remove: prefer missing a minor feature over inventing
-one.`
-}

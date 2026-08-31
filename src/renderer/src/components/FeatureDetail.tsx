@@ -1,3 +1,5 @@
+// Currently unreferenced. The record detail pane renders through this file — deleting it would
+// mean writing the same layout again a task later.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { FeatureExplanation, ProjectFeature } from '../../../core/understanding/types'
 import { scopeToStep } from '../../../core/understanding/scope'

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { validateDiscovery, validateExplanation } from './validate'
+import { validateExplanation } from './validate'
 
 /** 통과하는 최소 출력 — 각 테스트가 여기서 한 곳씩 망가뜨린다 */
 const good = (): Record<string, unknown> => ({
@@ -83,33 +83,6 @@ describe('validateExplanation — 근거 검증 (§24-12)', () => {
     const r = validateExplanation(good(), exists(['src/auth/session.ts'])) // login.ts 가 없다
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.reason).toContain('src/auth/login.ts')
-  })
-})
-
-describe('validateDiscovery — 첫 분석 (§21)', () => {
-  const draft = (): Record<string, unknown> => ({
-    features: [
-      { name: '인증', summary: '로그인과 세션 관리', implementationPaths: ['src/auth', 'src/auth/login.ts'] },
-      { name: '알림', summary: '슬랙 알림', implementationPaths: ['src/notifications/slack.ts'] }
-    ]
-  })
-
-  /** 모든 경로를 파일로 본다 — 파일/디렉터리 구분 자체를 보는 테스트만 따로 답을 준다 */
-  const allFiles = (): boolean => true
-
-  it('올바른 초안은 통과한다', () => {
-    const r = validateDiscovery(draft(), allExist, allFiles)
-    expect(r.ok).toBe(true)
-    if (r.ok) expect(r.value.features.map((f) => f.name)).toEqual(['인증', '알림'])
-  })
-
-  it('빈 목록·구현 경로 없는 기능·유령 경로는 거부한다', () => {
-    expect(validateDiscovery({ features: [] }, allExist, allFiles).ok).toBe(false)
-    const noPath = { features: [{ name: '인증', summary: 's', implementationPaths: [] }] }
-    expect(validateDiscovery(noPath, allExist, allFiles).ok).toBe(false)
-    const r = validateDiscovery(draft(), exists(['src/auth', 'src/auth/login.ts']), allFiles)
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.reason).toContain('src/notifications')
   })
 })
 
@@ -260,31 +233,5 @@ describe('분기 조건 문구', () => {
     const r = validateExplanation(withCondition('사용자가 다른 계정을 고르고 그 계정이 아직 한도에 걸리지 않았을 때'), all)
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.reason).toContain('분기 조건')
-  })
-})
-
-// 2026-08-31 실측: 한 분석이 다섯 기능을 냈는데 **모든 경로가 디렉터리**였다. 프롬프트가 그렇게
-// 시켰기 때문이고(첫 분석을 빠르게 끝내려고), 그 결과 화면의 구현 링크가 하나도 열리지 않았다.
-// 기능 이름도 그 알갱이로 따라가 "장시간 AI 코딩 세션"처럼 제품 소개가 기능 자리에 앉았다.
-describe('구현 경로는 파일을 포함해야 한다', () => {
-  const one = (paths: string[]): unknown => ({
-    features: [{ name: '인증', summary: '로그인', implementationPaths: paths }]
-  })
-  const all = (): boolean => true
-  const fileIs = (files: string[]) => (p: string): boolean => files.includes(p)
-
-  it('디렉터리만 대면 거부한다', () => {
-    const r = validateDiscovery(one(['src/auth', 'src/session']), all, fileIs([]))
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.reason).toContain('디렉터리만')
-  })
-
-  it('파일이 하나라도 있으면 통과한다 — 디렉터리를 함께 대는 것은 괜찮다', () => {
-    const r = validateDiscovery(one(['src/auth', 'src/auth/login.ts']), all, fileIs(['src/auth/login.ts']))
-    expect(r.ok).toBe(true)
-  })
-
-  it('파일만 대도 통과한다', () => {
-    expect(validateDiscovery(one(['src/auth/login.ts']), all, fileIs(['src/auth/login.ts'])).ok).toBe(true)
   })
 })

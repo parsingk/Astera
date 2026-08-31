@@ -8,13 +8,7 @@ import { UnderstandingStore } from './store'
 let dir: string
 let file: string
 
-const sample: ProjectUnderstanding = {
-  features: [
-    { id: 'auth', name: '인증', summary: 'Google 로그인', status: 'up-to-date', updatedAt: '2026-08-27T00:00:00.000Z', evidenceCount: 6 }
-  ],
-  explanations: {},
-  recentChanges: []
-}
+const sample: ProjectUnderstanding = { records: [] }
 
 beforeEach(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'astera-hiw-'))
@@ -46,9 +40,9 @@ describe('UnderstandingStore', () => {
     const s = new UnderstandingStore(file)
     await s.load()
     await s.set('C:/a', sample)
-    await s.set('C:/b', { ...sample, features: [] })
-    expect(s.get('C:/a')!.features).toHaveLength(1)
-    expect(s.get('C:/b')!.features).toHaveLength(0)
+    await s.set('C:/b', { records: [{ id: 'x' }] })
+    expect(s.get('C:/a')!.records).toHaveLength(0)
+    expect(s.get('C:/b')!.records).toHaveLength(1)
   })
 
   it('지우면 사라진다', async () => {
@@ -79,27 +73,6 @@ describe('UnderstandingStore', () => {
     await fs.mkdir(file)
     const s = new UnderstandingStore(file)
     expect((await s.load()).recovered).toBe(true)
-  })
-
-  // 에이전트는 이 앱의 자식 프로세스다 — 앱이 죽으면 함께 죽고 아무도 그 자리를 잇지 않는다.
-  // 그대로 두면 그 기능은 다시 켠 화면에서 영영 스피너를 돌리고 다시 만들 길도 없다
-  it('앱이 죽으며 남은 generating 은 다시 켤 때 풀린다', async () => {
-    const a = new UnderstandingStore(file)
-    await a.load()
-    await a.set('C:/p', {
-      ...sample,
-      features: [
-        { ...sample.features[0], status: 'generating' },
-        { id: 'x', name: '다른 것', summary: '', status: 'up-to-date', updatedAt: 'x', evidenceCount: 0 }
-      ]
-    })
-
-    const b = new UnderstandingStore(file)
-    await b.load()
-    const f = b.get('C:/p')!.features
-    expect(f[0].status).toBe('generation-failed')
-    expect(f[0].staleReason).toBe('INTERRUPTED')
-    expect(f[1].status).toBe('up-to-date') // 나머지는 건드리지 않는다
   })
 
   it('쓰기가 한 번 실패해도 다음 쓰기는 진행된다 — 큐가 얼어붙지 않는다', async () => {
