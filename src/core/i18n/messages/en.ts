@@ -105,6 +105,9 @@ export const en: Record<keyof typeof ko, string> = {
     'Failed to start session: {message} (the worktree “{name}” was kept — delete it from the Worktrees panel)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped
   'session.spawn.resumeLiveIgnored': 'This session is already running — the options you selected were not applied.',
+  // Smart Resume took the blank slate — without this the user reads the empty window as a lost conversation
+  'session.spawn.smartResume':
+    'Smart Resume: started a fresh session with a briefing of the work so far, instead of reloading the conversation.',
   'session.placeholder.start': '+ Start a new session',
   'session.usage.contextTitleWithTokens': 'Context usage ({used} / {window} tokens)',
   'session.usage.contextTitle': 'Context usage',

@@ -107,6 +107,36 @@ describe('CodexRolloutWatcher', () => {
     w.stop()
   })
 
+  // 탐색은 경로와 세션 id 를 함께 돌려주는데(findRollout) 지금까지 경로만 남기고 id 는 버렸다.
+  // 그 id 가 codex 에서 claude 의 statusLine session_id 에 해당하는 값이고, 스케줄러가 키를 배울
+  // 유일한 출처다 — 이 감시자는 **모든** codex 세션에 붙으므로 롤링을 켜지 않은 세션도 답할 수 있다.
+  it('스캔이 rollout을 찾으면 그 codex 세션 id를 답한다', async () => {
+    const cwd = path.join(dir, 'proj')
+    await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: () => {},
+      now: () => now
+    })
+    w.register(session('live-1', cwd))
+    expect(w.codexSessionIdFor('live-1')).toBeNull() // 스캔 전에는 모른다
+    await advance(TICK) // locate
+    expect(w.codexSessionIdFor('live-1')).toBe('sess-a')
+    w.stop()
+  })
+
+  it('등록되지 않은 세션의 codex 세션 id는 null이다', () => {
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: () => {},
+      now: () => now
+    })
+    expect(w.codexSessionIdFor('nobody')).toBeNull()
+    w.stop()
+  })
+
   it('같은 task_complete로 두 번 발화하지 않는다', async () => {
     const cwd = path.join(dir, 'proj')
     const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)

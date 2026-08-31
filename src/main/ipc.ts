@@ -11,7 +11,7 @@ import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
 import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
-import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, RollStateEvent, RunConfig, SessionInfo } from '../core/types'
+import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
@@ -19,6 +19,7 @@ import type { ModelListResult } from '../core/models/types'
 import { listClaudeModels, listCodexModels } from './models/discover'
 import { UnderstandingPipeline } from './understanding/pipeline'
 import { copyTranscript, samePath } from '../core/rolling/transcript'
+import { sanitizeResumePrompt } from '../core/sessions/commands'
 import { OrchestrationStore } from './orchestration/store'
 import { UnderstandingStore } from './understanding/store'
 import { WorkUnitStore } from './workUnit/store'
@@ -227,6 +228,33 @@ export function providerOfSession(
   } catch {
     return null // the account is gone — core.accounts.get throws, and the 3-second poll must not
   }
+}
+
+/**
+ * 사이드바 히스토리 재개가 백지 재개로 갈지 정한다. `SPEC §11.5` 가 `--resume` 발원지로 꼽은 셋
+ * 중 세 번째 자리이고, 앞의 둘(`rolling.ts`·`codexRolling.ts` 의 `roll()`)이 쓰는 규칙과 같다.
+ *
+ * **판정을 `spawnSession` 안에 두지 않는 이유는 위 세 헬퍼와 같다** — 그 함수는 `registerIpc` 안의
+ * 클로저라 electron 하네스 없이는 테스트가 닿을 수 없다.
+ *
+ * - `briefing` 이 null 이면 백지로 가지 않는다. **계획의 지배 제약이다** — 브리핑을 못 만들었는데
+ *   대화까지 버리면 새 세션에 남는 것이 없다.
+ * - codex 는 이 줄을 argv 로 싣고 `sanitizeResumePrompt` 가 `["&|<>^%]` 와 연속 공백을 지운다.
+ *   그 변환에 걸리는 경로면 포인터가 없는 파일을 가리키게 되는데 **백지 세션에는 돌아갈 대화도
+ *   없다** — 그래서 백지를 포기한다(`codexRolling.ts` 의 fix wave 7, finding 2 와 같은 판단).
+ *   `mangled` 를 따로 돌리는 것은 그 거부가 로그 없이 영구화되지 않게 하기 위해서다(같은 파일의 F6).
+ * - claude 는 그 sanitizer 를 지나지 않으므로 같은 경로에서도 백지로 간다.
+ */
+export function historyResumePlan(a: {
+  strategy: ResumeStrategy
+  provider: Provider
+  briefing: string | null
+}): { blankSlate: boolean; initialPrompt?: string; mangled: boolean } {
+  if (a.strategy !== 'smart' || a.briefing === null) return { blankSlate: false, mangled: false }
+  if (a.provider !== 'codex') return { blankSlate: true, initialPrompt: a.briefing, mangled: false }
+  const safe = sanitizeResumePrompt(a.briefing)
+  if (safe !== a.briefing) return { blankSlate: false, mangled: true }
+  return { blankSlate: true, initialPrompt: safe, mangled: false }
 }
 
 export function registerIpc(
@@ -626,7 +654,55 @@ export function registerIpc(
     // CodexRollingCoordinator.register — a reopened conversation's own limit records may only be
     // believed for the account that produced them.
     let resumeSameAccount = false
-    if (opts.resumeSessionId && typeof opts.resumeTranscriptPath === 'string' && opts.resumeTranscriptPath) {
+    // Smart Resume — `SPEC §11.5` 가 `--resume` 발원지로 꼽은 셋 중 **세 번째** 자리다(앞의 둘은
+    // `rolling.ts`·`codexRolling.ts` 의 `roll()`). 설정이 켜져 있고 브리핑이 실제로 만들어지면 대화를
+    // 복사하지도 `--resume` 하지도 않는다: 백지 세션을 띄우고 그 브리핑을 가리키는 한 줄만 싣는다.
+    //
+    // **복사보다 먼저 묻는다.** 브리핑은 원본 대화 파일을 읽어야 하는데(읽기만 한다), 백지로 갈지
+    // 정해지기 전에 복사부터 하면 백지 재개에서 아무도 열지 않을 파일을 target 계정 폴더에 남긴다.
+    // 두 코디네이터가 `roll()` 에서 브리핑을 복사 앞으로 끌어올린 것과 같은 이유다.
+    //
+    // **설정이 꺼져 있으면 브리핑을 아예 만들지 않는다.** `buildTabResumeText` 의 'handover' 는
+    // 파일을 쓰는 부수 효과가 있다 — 쓰지도 않을 브리핑 파일을 재개할 때마다 남길 이유가 없다
+    // (codexRolling.ts 의 `tabFallback = strategy === 'smart'` 와 같은 판단).
+    let blankSlatePrompt: string | undefined
+    if (opts.resumeSessionId) {
+      const strategy = core.appSettings.getResumeStrategy()
+      const provider = providerOf(account)
+      const briefing =
+        strategy === 'smart'
+          ? await buildTabResumeText(opts.resumeSessionId, 'handover', {
+              cwd: opts.cwd,
+              provider,
+              // 원본 계정 쪽 파일이다. 아직 복사하지 않았으므로 이 경로가 유일한 대화이고, 이
+              // 함수는 그것을 읽기만 한다. 모르면 null — 그러면 대화 증거가 없어 브리핑이
+              // 만들어지지 않고, 아래는 기존 경로를 그대로 지난다.
+              transcriptPath: opts.resumeTranscriptPath ?? null,
+              log: orchLog,
+              dir: tabResumeDir
+            })
+          : null
+      const plan = historyResumePlan({ strategy, provider, briefing })
+      // 뭉개짐 거부는 로그가 없으면 조용히 영구화된다 — userData 경로에 `["&|<>^%]` 가 하나 있으면
+      // 이 설치본의 codex 사이드바 재개는 매번 여기서 거부되는데, 그 사실이 어디에도 남지 않는다
+      // (codexRolling.ts 의 F6 이 같은 자리에서 고친 것과 같은 사고).
+      if (plan.mangled)
+        orchLog(
+          `history resume — smart resume refused, the briefing pointer would be mangled by the argv sanitizer, falling back to --resume session=${opts.resumeSessionId}`
+        )
+      if (plan.blankSlate) {
+        blankSlatePrompt = plan.initialPrompt
+        orchLog(
+          `history resume — blank-slate resume of ${opts.resumeSessionId} account=${account.label}`
+        )
+      }
+    }
+    if (
+      !blankSlatePrompt &&
+      opts.resumeSessionId &&
+      typeof opts.resumeTranscriptPath === 'string' &&
+      opts.resumeTranscriptPath
+    ) {
       try {
         // Assembling the target path is the job of the per-provider history strategy — whoever knows
         // the disk layout builds the path. This used to pick between two mappers here.
@@ -644,7 +720,19 @@ export function registerIpc(
     // orchEnv is decided in this one place — the user path (sessions.spawn) and the coordinator path
     // (OrchCoordinator.spawnSession) both go through this function, so passing it per call site would
     // give us two copies.
-    const info = core.sessions.spawn({ ...opts, account, rollProviders, orchEnv: orchEnvOf() })
+    const info = core.sessions.spawn({
+      ...opts,
+      account,
+      rollProviders,
+      orchEnv: orchEnvOf(),
+      // 백지 재개 — `--resume` 을 부르지 않는다. `opts` 에는 아직 `resumeSessionId` 가 들어 있으므로
+      // 여기서 undefined 로 덮는 것이 그 취소다. 그 결과 `info.resumeSessionId` 도 비고, 그것을
+      // 읽는 아래 배선들(rolling·codexRolling 의 seed 필드, rollout 감시자)이 저절로 새 세션으로
+      // 다룬다 — `roll()` 의 백지 재개가 체인의 신원 필드를 비우는 것과 같은 상태다.
+      ...(blankSlatePrompt !== undefined
+        ? { resumeSessionId: undefined, initialPrompt: blankSlatePrompt }
+        : {})
+    })
     // 이어받은 세션이라고 Work Unit 수집기에 알린다 (스펙 §16.1). **추측할 자리가 아니다** — 이
     // 자리가 그것이 resume 이라는 것을 아는 유일한 곳이고, 수집기는 새 세션 id 만 보므로 알리지
     // 않으면 커서 없는 새 세션으로 보아 파일을 0 부터 읽는다. `--resume` 은 이전 대화를 통째로 다시
