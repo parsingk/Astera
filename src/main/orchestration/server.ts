@@ -47,6 +47,8 @@ import { buildHandoverPrompt } from '../../core/orchestration/handover'
 import { nameForRun } from '../../core/worktrees/naming'
 import type { Provider } from '../../core/providers/meta'
 import { isValidRule, type ScheduleRule } from '../../core/scheduler/rule'
+import { parseCheckFlag } from '../../core/workUnit/verification'
+import type { SessionCheck } from '../../core/workUnit/types'
 
 export interface OrchServerDeps {
   getState(): OrchState
@@ -140,6 +142,29 @@ export interface OrchServerDeps {
   listAccounts(provider?: Provider): { id: string; label: string; provider: Provider }[]
   readWorker(a: { dispatchId: string; limit?: number }): Promise<string>
   enabled(): boolean
+  /** Whether work-unit tracking is on — the toggle the three session-task-* commands answer to,
+   *  instead of `enabled()` (which gates Jobs). Optional so the existing test harnesses (and any
+   *  wiring that predates work-unit tracking) keep compiling; the session-task-* commands treat a
+   *  missing implementation the same as `false`. */
+  trackingEnabled?(): boolean
+  /** The handle the three session-task-* commands call through, shaped so `ipc.ts` can pass
+   *  `WorkUnitCollector.startTask/completeTask/cancelTask` straight in. Optional for the same reason
+   *  as `trackingEnabled` — when it is not injected, the commands answer `work unit tracking is
+   *  off` rather than throwing. */
+  sessionTasks?: {
+    start(
+      sessionId: string,
+      objective: string
+    ): Promise<{ ok: true; id: string; interruptedId?: string } | { ok: false; reason: string }>
+    complete(
+      sessionId: string,
+      input: { source: 'agent'; checks?: SessionCheck[]; summary?: string }
+    ): Promise<{ ok: true; id: string } | { ok: false; reason: string }>
+    cancel(
+      sessionId: string,
+      reason?: string
+    ): Promise<{ ok: true; id: string } | { ok: false; reason: string }>
+  }
   now?(): string
   /**
    * Decides whether an ended worker session hit a quota limit and returns the reset time (epoch ms).
@@ -233,6 +258,11 @@ const COORDINATOR_ONLY = new Set([
   'inbox'
 ])
 
+/** Session-task commands answer to the work-unit tracking toggle, not the orchestration one. They
+ *  are the only commands that do: everything else here drives Jobs, which is what "orchestration"
+ *  names. */
+const SESSION_TASK_CMDS = new Set(['session-task-start', 'session-task-complete', 'session-task-cancel'])
+
 const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null)
 
 /** 1 이상의 정수만 통과. CLI 는 숫자를 문자열로 넘길 수도 있으므로 둘 다 받는다. */
@@ -313,7 +343,11 @@ export async function handleCommand(
   cmd: string,
   args: Record<string, unknown>
 ): Promise<Reply> {
-  if (!deps.enabled()) return conflict('orchestration disabled')
+  if (SESSION_TASK_CMDS.has(cmd)) {
+    if (!deps.trackingEnabled?.()) return conflict('work unit tracking is off')
+  } else if (!deps.enabled()) {
+    return conflict('orchestration disabled')
+  }
   const now = deps.now?.() ?? new Date().toISOString()
   const s = deps.getState()
 
@@ -825,6 +859,52 @@ export async function handleCommand(
       const tasks = recomputeReady(s.tasks.map((t) => (t.id === id ? nextTask : t)))
       await deps.setState({ ...s, tasks })
       return okBody(tasks.find((t) => t.id === id)!)
+    }
+    case 'session-task-start': {
+      // A worker is executing a Jobs task, and that Run already writes its own record when it
+      // finishes (onRunFinished). A worker declaring its own would record the same work twice,
+      // once per level.
+      if (isWorker) return denied('worker sessions cannot declare their own session task')
+      if (!deps.sessionTasks) return conflict('work unit tracking is off')
+      const objective = str(args.objective)
+      if (!objective || objective.trim() === '') return bad('--objective is required')
+      const r = await deps.sessionTasks.start(caller.sessionId, objective)
+      if (!r.ok) return bad(r.reason)
+      return okBody({ id: r.id, interruptedId: r.interruptedId })
+    }
+    case 'session-task-complete': {
+      if (isWorker) return denied('worker sessions cannot declare their own session task')
+      if (!deps.sessionTasks) return conflict('work unit tracking is off')
+      const raw = args.check === undefined ? [] : (args.check as unknown[])
+      if (!Array.isArray(raw)) return bad('--check must be <name>=<status>')
+      const checks: SessionCheck[] = []
+      for (const one of raw) {
+        const parsed = parseCheckFlag(String(one))
+        if ('error' in parsed) return bad(parsed.error)
+        checks.push(parsed)
+      }
+      const r = await deps.sessionTasks.complete(caller.sessionId, {
+        source: 'agent',
+        checks,
+        summary: str(args.summary) || undefined
+      })
+      // NO_ACTIVE_TASK is not a retry — it means nothing was started, and a completion must never
+      // be able to bring a session task into being.
+      if (!r.ok)
+        return r.reason === 'NO_ACTIVE_TASK'
+          ? conflict('no session task is open — one starts with /astera-task')
+          : bad(r.reason)
+      return okBody({ id: r.id })
+    }
+    case 'session-task-cancel': {
+      if (isWorker) return denied('worker sessions cannot declare their own session task')
+      if (!deps.sessionTasks) return conflict('work unit tracking is off')
+      const r = await deps.sessionTasks.cancel(caller.sessionId, str(args.reason) || undefined)
+      if (!r.ok)
+        return r.reason === 'NO_ACTIVE_TASK'
+          ? conflict('no session task is open — one starts with /astera-task')
+          : bad(r.reason)
+      return okBody({ id: r.id })
     }
     case 'dispatch-show': {
       const taskId = str(args.task)

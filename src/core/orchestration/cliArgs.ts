@@ -17,6 +17,9 @@ export const camel = (flag: string): string =>
 const NUMERIC = new Set(['timeoutMs', 'limit'])
 /** Flags to interpret as JSON arrays. ask's --options is CSV, so it is not here */
 const JSON_ARRAY = new Set(['deps'])
+/** Flags that may appear more than once and always arrive as an array. Everything else keeps the
+ *  last value, which is what every existing caller expects. */
+const REPEATABLE = new Set(['check'])
 
 export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   if (argv.length === 0) return { error: 'a command is required (try: help)' }
@@ -62,6 +65,11 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
       } catch {
         return { error: `--${tok.slice(2)} must be a JSON array` }
       }
+      continue
+    }
+    if (REPEATABLE.has(key)) {
+      const prev = args[key]
+      args[key] = Array.isArray(prev) ? [...prev, next] : [next]
       continue
     }
     args[key] = next

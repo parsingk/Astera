@@ -336,6 +336,154 @@ describe('handleCommand — 역할 인가 (완료 후에도 워커)', () => {
   })
 })
 
+describe('session-task-*', () => {
+  type SessionTasks = NonNullable<OrchServerDeps['sessionTasks']>
+
+  // A stand-in for WorkUnitCollector.startTask/completeTask/cancelTask — records nothing on its
+  // own, just answers whatever the test asks it to.
+  const makeSessionTasks = (overrides: Partial<SessionTasks> = {}): SessionTasks => ({
+    start: overrides.start ?? (async () => ({ ok: true, id: 'wu_1' })),
+    complete: overrides.complete ?? (async () => ({ ok: true, id: 'wu_1' })),
+    cancel: overrides.cancel ?? (async () => ({ ok: true, id: 'wu_1' }))
+  })
+
+  /** worker-start까지 진행해 sess1이 워커인 상태를 만든다 (위 seedWorker와 동일한 절차) */
+  const seedWorker = async (deps: OrchServerDeps): Promise<void> => {
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    await call(deps, 'worker-start', {
+      taskId,
+      agent: 'codex',
+      account: 'acc1',
+      worktree: 'current'
+    })
+  }
+
+  it('오케스트레이션이 꺼져 있어도 추적이 켜져 있으면 받는다', async () => {
+    const deps = {
+      ...makeDeps(),
+      enabled: () => false,
+      trackingEnabled: () => true,
+      sessionTasks: makeSessionTasks()
+    }
+    const r = await call(deps, 'session-task-start', { objective: '인증 리팩터' })
+    expect(r.status).toBe(200)
+  })
+
+  it('추적이 꺼져 있으면 거절한다', async () => {
+    const deps = { ...makeDeps(), trackingEnabled: () => false }
+    const r = await call(deps, 'session-task-start', { objective: '인증 리팩터' })
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toContain('tracking')
+  })
+
+  it('추적이 켜져 있어도 run-create 는 여전히 오케스트레이션을 요구한다', async () => {
+    const deps = { ...makeDeps(), enabled: () => false, trackingEnabled: () => true }
+    const r = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toContain('disabled')
+  })
+
+  it('워커 세션은 세 명령을 다 못 부른다 — Run 이 이미 그 일을 기록한다', async () => {
+    const deps = { ...makeDeps(), trackingEnabled: () => true, sessionTasks: makeSessionTasks() }
+    await seedWorker(deps)
+    for (const cmd of ['session-task-start', 'session-task-complete', 'session-task-cancel']) {
+      const r = await call(deps, cmd, { objective: 'x' }, 'sess1')
+      expect(r.status).toBe(403)
+    }
+  })
+
+  it('session-task-start 가 목표를 넘기고 중단된 앞 작업의 id 를 돌려준다', async () => {
+    const start = vi.fn<SessionTasks['start']>(async () => ({
+      ok: true,
+      id: 'wu_new',
+      interruptedId: 'wu_old'
+    }))
+    const deps = {
+      ...makeDeps(),
+      trackingEnabled: () => true,
+      sessionTasks: makeSessionTasks({ start })
+    }
+    const r = await call(deps, 'session-task-start', { objective: '인증 리팩터' }, 'sess9')
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ id: 'wu_new', interruptedId: 'wu_old' })
+    expect(start).toHaveBeenCalledWith('sess9', '인증 리팩터')
+  })
+
+  it('목표가 비면 거절한다', async () => {
+    const deps = { ...makeDeps(), trackingEnabled: () => true, sessionTasks: makeSessionTasks() }
+    expect((await call(deps, 'session-task-start', {})).status).toBe(400)
+    expect((await call(deps, 'session-task-start', { objective: '   ' })).status).toBe(400)
+  })
+
+  it('session-task-complete 가 --check 를 구조화된 값으로 넘긴다', async () => {
+    const complete = vi.fn<SessionTasks['complete']>(async () => ({ ok: true, id: 'wu_1' }))
+    const deps = {
+      ...makeDeps(),
+      trackingEnabled: () => true,
+      sessionTasks: makeSessionTasks({ complete })
+    }
+    const r = await call(
+      deps,
+      'session-task-complete',
+      { check: ['tests=passed', 'build=skipped'], summary: '요약' },
+      'sess9'
+    )
+    expect(r.status).toBe(200)
+    expect(complete).toHaveBeenCalledWith('sess9', {
+      source: 'agent',
+      checks: [
+        { name: 'tests', status: 'passed' },
+        { name: 'build', status: 'skipped' }
+      ],
+      summary: '요약'
+    })
+  })
+
+  it('닫힌 집합 밖의 검사 상태는 거절한다', async () => {
+    const complete = vi.fn<SessionTasks['complete']>(async () => ({ ok: true, id: 'wu_1' }))
+    const deps = {
+      ...makeDeps(),
+      trackingEnabled: () => true,
+      sessionTasks: makeSessionTasks({ complete })
+    }
+    const r = await call(deps, 'session-task-complete', { check: ['tests=maybe'] })
+    expect(r.status).toBe(400)
+    expect(complete).not.toHaveBeenCalled()
+  })
+
+  it('열린 작업이 없으면 session-task-complete 는 아무것도 만들지 않는다', async () => {
+    const complete = vi.fn<SessionTasks['complete']>(async () => ({
+      ok: false,
+      reason: 'NO_ACTIVE_TASK'
+    }))
+    const deps = {
+      ...makeDeps(),
+      trackingEnabled: () => true,
+      sessionTasks: makeSessionTasks({ complete })
+    }
+    const before = deps.getState()
+    const r = await call(deps, 'session-task-complete', {})
+    expect(r.status).toBe(409)
+    expect(JSON.stringify(r.body)).toContain('/astera-task')
+    expect(deps.getState()).toBe(before)
+  })
+
+  it('session-task-cancel 이 사유를 넘긴다', async () => {
+    const cancel = vi.fn<SessionTasks['cancel']>(async () => ({ ok: true, id: 'wu_1' }))
+    const deps = {
+      ...makeDeps(),
+      trackingEnabled: () => true,
+      sessionTasks: makeSessionTasks({ cancel })
+    }
+    const r = await call(deps, 'session-task-cancel', { reason: '더 이상 필요 없음' }, 'sess9')
+    expect(r.status).toBe(200)
+    expect(cancel).toHaveBeenCalledWith('sess9', '더 이상 필요 없음')
+  })
+})
+
 describe('handleCommand — worker_done 재전송 멱등성 (§8) — 소유권과 유효성 분리', () => {
   /** worker-start까지 진행해 sess1이 워커인 상태를 만든다 */
   const seedWorker = async (): Promise<OrchServerDeps> => {
