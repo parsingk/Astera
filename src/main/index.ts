@@ -443,7 +443,11 @@ app.whenReady().then(async () => {
     },
     deleteConfig: (sid) => {
       void core!.schedulerConfig.delete(sid).catch(() => {})
-    }
+    },
+    // codex 세션의 scheduler.json 키. claude 가 statusLine 페이로드에서 얻는 것을 codex 는 여기서
+    // 얻는다 — rollout 감시자는 모든 codex 세션에 붙고, 그 탐색이 경로와 세션 id 를 함께 낸다.
+    // 이 배선이 없던 동안 codex 스케줄은 세션이 사는 동안만 돌고 아무 키로도 저장되지 않았다.
+    codexSessionId: (id) => codexRollout.codexSessionIdFor(id)
   })
   schedulerRef = scheduler
   // Direct account-usage lookups. It carries its own call coalescing, backoff and 10-second timeout, so
