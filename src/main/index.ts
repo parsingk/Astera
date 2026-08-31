@@ -479,7 +479,10 @@ app.whenReady().then(async () => {
     // refresh the token itself — a separate piece of work.
     readUsage: async (configDir) => {
       const u = await usageFetcher.get(configDir, USAGE_GATE_MAX_AGE_MS)
-      return u.status === 'ok' ? u.maxPercent : null
+      // The peak carries maxPercent's own figure plus the reset time of the bucket it came from. That
+      // time is what a block record needs when the session is halted — the phrase may never have been
+      // printed and the statusLine snapshot is frozen by then (see RateLimitPeak).
+      return u.status === 'ok' ? u.peak : null
     },
     send: (channel, payload) => {
       try {

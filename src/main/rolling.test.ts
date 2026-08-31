@@ -103,6 +103,14 @@ function harness(overrides: Partial<RollingDeps> = {}): {
 // 이 리터럴이 통짜면 이 테스트 파일 자체가 롤링 세션의 PTY로 흘러갈 때(예: cat/read) 스캐너가
 // 물어 실제 롤을 유발한다 — 접합으로 쪼개 소스에 트리거를 두지 않는다. 런타임 값은 동일하다.
 const LIMIT_TEXT = 'Claude usage limit ' + 'reached ∙ resets 3am'
+
+/** What the account query answers with. Only the percentage matters to most tests, so the reset time
+ *  defaults to none — the tests that care about a wait being aimed at a real time pass one. */
+const peak = (
+  percent: number,
+  resetsAt: string | null = null,
+  weekly = false
+): { percent: number; resetsAt: string | null; weekly: boolean } => ({ percent, resetsAt, weekly })
 // 관리자 통제 플랜에서 실측한 한도 선택 목록(2026-08-26). 항목 1의 라벨 앞에 'Stop and ' 가 붙어 있는
 // 것과, 항목 2가 **CLI 자신의 자동 대기** 라는 것이 요점이다. 통짜 금지 관례는 LIMIT_TEXT 와 동일.
 const WAIT_DIALOG =
@@ -1928,7 +1936,7 @@ describe('transcript 한도 감지', () => {
 // 계정 사용량을 직접 조회해 정한다(statusLine 스냅샷과 달리 얼지 않는다).
 describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
   it('문구를 물어도 사용량이 100% 미만이면 롤도 대기도 시작하지 않는다', async () => {
-    const h = harness({ readUsage: () => Promise.resolve(40) })
+    const h = harness({ readUsage: () => Promise.resolve(peak(40)) })
     h.payloads.set('s1', payload(97))
     h.coord.register(h.info1)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
@@ -1938,7 +1946,7 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
   })
 
   it('사용량이 100% 이상이면 인정하고 롤한다 — 스냅샷이 낮아도 직접 조회가 판정한다', async () => {
-    const h = harness({ readUsage: () => Promise.resolve(100) })
+    const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
     h.payloads.set('s1', payload(3))
     h.coord.register(h.info1)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
@@ -1953,7 +1961,7 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
   // `maxPercent` 가 73% 로 읽혔고, 문구가 두 번 기각되어 세션이 대화상자 앞에서 밤새 멈춰 있었다.
   it('사용량이 100% 미만이어도 한도 선택 대화상자가 떠 있으면 인정한다', async () => {
     const logs: string[] = []
-    const h = harness({ readUsage: () => Promise.resolve(40), log: (m) => logs.push(m) })
+    const h = harness({ readUsage: () => Promise.resolve(peak(40)), log: (m) => logs.push(m) })
     h.payloads.set('s1', payload(3))
     h.coord.register(h.info1)
     h.coord.handleData({ sessionId: 's1', data: `${LIMIT_TEXT}\n${WAIT_DIALOG}` })
@@ -1965,7 +1973,7 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
 
   // 예외를 좁게 유지한다: 라벨만으로는 부족하고 실제로 입력을 기다리는 목록이어야 한다.
   it('라벨만 인용됐고 입력 대기 목록이 아니면 기각을 유지한다', async () => {
-    const h = harness({ readUsage: () => Promise.resolve(40) })
+    const h = harness({ readUsage: () => Promise.resolve(peak(40)) })
     h.payloads.set('s1', payload(97))
     h.coord.register(h.info1)
     h.coord.handleData({
@@ -1989,7 +1997,7 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
 
   it('기각은 체인을 잠그지 않는다 — 사용량이 오르면 다음 문구는 인정된다', async () => {
     const usage = [40, 100]
-    const h = harness({ readUsage: () => Promise.resolve(usage.shift() ?? 0) })
+    const h = harness({ readUsage: () => Promise.resolve(peak(usage.shift() ?? 0)) })
     h.payloads.set('s1', payload(97))
     h.coord.register(h.info1)
     h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
@@ -2002,7 +2010,7 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
 
   it('기각 로그는 창 안에서 반복되지 않는다 — 문구는 청크마다 다시 물린다', async () => {
     const logs: string[] = []
-    const h = harness({ readUsage: () => Promise.resolve(40), log: (m) => logs.push(m) })
+    const h = harness({ readUsage: () => Promise.resolve(peak(40)), log: (m) => logs.push(m) })
     h.payloads.set('s1', payload(97))
     h.coord.register(h.info1)
     for (let i = 0; i < 3; i++) {
@@ -2015,8 +2023,10 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
   // 조회는 네트워크 왕복(최대 10초)이라 그 사이 다른 경로가 롤을 끝낼 수 있다. liveId를 보지
   // 않으면 옛 세션의 문구로 새 세션에 차단 기록을 찍고 곧바로 또 롤한다.
   it('조회가 도는 사이 롤이 끝났으면 그 판정을 새 세션에 적용하지 않는다', async () => {
-    let resolveUsage: (v: number) => void = () => {}
-    const h = harness({ readUsage: () => new Promise<number>((r) => (resolveUsage = r)) })
+    let resolveUsage: (v: ReturnType<typeof peak> | null) => void = () => {}
+    const h = harness({
+      readUsage: () => new Promise<ReturnType<typeof peak> | null>((r) => (resolveUsage = r))
+    })
     h.payloads.set('s1', payload(97))
     h.payloads.set('s2', payload(5, 'claude-sess'))
     h.coord.register(h.info1)
@@ -2026,7 +2036,7 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
     await h.coord.forceRoll('s1') // 다른 경로가 먼저 롤을 끝낸다
     await vi.advanceTimersByTimeAsync(1_200) // 준비 폴링 → 자동 프롬프트 → awaitingReady 해제
     const after = h.events.length
-    resolveUsage(100) // 뒤늦게 도착한 옛 세션의 판정
+    resolveUsage(peak(100)) // 뒤늦게 도착한 옛 세션의 판정
     await flush()
     expect(h.events.length).toBe(after) // 두 번째 롤이 일어나지 않는다
   })
@@ -2036,7 +2046,7 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
     const h = harness({
       readUsage: () => {
         calls++
-        return Promise.resolve(0) // 게이트를 탔다면 기각됐을 값
+        return Promise.resolve(peak(0)) // 게이트를 탔다면 기각됐을 값
       }
     })
     h.payloads.set('s1', payloadEx({ five: 3, weekly: 100 }))
@@ -2046,6 +2056,56 @@ describe('한도 증거 게이트 — 계정 사용량 직접 조회', () => {
     await advanceIo(46_000)
     expect(h.spawned.at(-1)?.accountId).toBe('a2')
     expect(calls).toBe(0)
+  })
+
+  // **2026-08-30 실측 — 이 그물이 없어서 세션이 10시간 24분 멈춰 있었다.**
+  //
+  // statusLine 은 세션이 입력 대기에서 멈추는 순간 갱신을 멈추고, 그 전 값에 얼어붙는다. 폴백은
+  // 바로 그 얼어붙은 값을 읽고 "아직 여유 있다"고 판단했다. 문구 경로는 배너가 없어서, 트랜스크립트
+  // 경로는 기록이 안 남아서 각각 실패했으니, 세 그물이 모두 같은 죽은 정보를 보고 있었다.
+  it('statusLine 이 얼어붙어도 계정이 100% 라고 하면 롤링한다', async () => {
+    const h = harness({ readUsage: () => Promise.resolve(peak(100)) })
+    h.payloads.set('s1', payloadEx({ five: 3, weekly: 50 })) // 한도에 걸리기 전 값에 멈춰 있다
+    h.coord.register(h.info1)
+    await advanceIo(46_000)
+    expect(h.spawned.at(-1)?.accountId).toBe('a2')
+  })
+
+  // 돌고 있는 세션은 묻지 않는다 — 조회는 네트워크 왕복이고, 출력이 흐르는 동안 statusLine 은
+  // 믿을 수 있다. 조용해진 뒤에만 의심한다.
+  it('세션이 조용하지 않으면 계정에 묻지 않는다', async () => {
+    let calls = 0
+    const h = harness({
+      readUsage: () => {
+        calls++
+        return Promise.resolve(peak(100))
+      }
+    })
+    h.payloads.set('s1', payloadEx({ five: 3, weekly: 50 }))
+    h.coord.register(h.info1)
+    await advanceIo(20_000) // tick 은 돌았지만 무출력이 30초에 못 미친다
+    expect(calls).toBe(0)
+    expect(h.spawned).toHaveLength(0) // 묻지 않았으니 롤도 없다
+  })
+
+  // 문구가 없으면 파싱할 시각도 없고, 스냅샷은 문턱(GATE_PCT) 아래라 후보가 아니다. 그때 남는
+  // 유일한 시각이 계정이 알려 준 것이다 — 없으면 대기가 실제 리셋이 아니라 기본 간격을 겨냥한다.
+  it('계정이 알려 준 리셋 시각으로 기다린다 — 문구도 스냅샷도 없을 때', async () => {
+    vi.setSystemTime(new Date(Date.UTC(2026, 7, 30, 0, 0)))
+    const resetsAt = new Date(Date.UTC(2026, 7, 30, 2, 0)).toISOString() // 2시간 뒤
+    const h = harness({ readUsage: () => Promise.resolve(peak(100, resetsAt, false)) })
+    h.payloads.set('s1', payloadEx({ five: 3, weekly: 50 }))
+    h.coord.register({ ...h.info1, rollAccountIds: ['a1'] }) // 단일 계정 — 롤 대신 대기
+    await advanceIo(46_000)
+    expect(resumeCount(h)).toBe(0)
+
+    // 30분: 기본 대기 간격(15분)을 썼다면 여기서 이미 재개했다. 계정이 준 시각을 썼다는 증거가
+    // 이 0 이다 — 이 줄이 이 테스트의 판별력 전부다.
+    await vi.advanceTimersByTimeAsync(30 * 60_000)
+    expect(resumeCount(h)).toBe(0)
+
+    await vi.advanceTimersByTimeAsync(100 * 60_000) // 2시간을 넘긴다
+    expect(resumeCount(h)).toBeGreaterThan(0)
   })
 })
 

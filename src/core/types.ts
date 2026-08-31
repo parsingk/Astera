@@ -216,6 +216,21 @@ export interface RateLimitWindow {
  *  figure when a session halted by a limit has left that snapshot frozen at a stale value.
  *  status: 'ok' = at least one window was obtained, 'unavailable' = no credentials, 'error' = the
  *  request or the parse failed. */
+/** The bucket that is fullest, and when it lets go.
+ *
+ *  Why this is carried alongside maxPercent rather than derived later: the reset time is only in the
+ *  response, and the response is discarded once the percentage is read. Without it the only sources of
+ *  a reset time are the screen phrase and the statusLine snapshot — and a session halted at a limit
+ *  has neither (the phrase may never be printed, the snapshot is frozen). Measured 2026-08-30: a
+ *  session waited ten hours with `five_hour.resets_at` sitting in an answer nobody kept. */
+export interface RateLimitPeak {
+  percent: number
+  /** ISO 8601. null when the bucket carries no reset (an inactive scoped bucket, an older response). */
+  resetsAt: string | null
+  /** Is this a weekly bucket — what a block record needs to know about the wait it is recording. */
+  weekly: boolean
+}
+
 export interface RateLimitUsage {
   session: RateLimitWindow | null // the 5-hour window
   weekly: RateLimitWindow | null // the weekly (7-day) window
@@ -223,6 +238,8 @@ export interface RateLimitUsage {
    *  this is the value the limit verdict uses. The two windows alone are not enough; see the comment
    *  on maxPercentOf in core/usage/rateLimit.ts. */
   maxPercent: number | null
+  /** The bucket maxPercent came from, with its reset time. null when no bucket was readable. */
+  peak: RateLimitPeak | null
   status: 'ok' | 'unavailable' | 'error'
 }
 

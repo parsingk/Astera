@@ -2,7 +2,14 @@
 // account → auto-accepting the trust prompt → automatically sending "carry on with the work". The pure
 // decisions live in core/rolling and every side effect is injected through deps — it does not depend on
 // electron, so it is verified with vitest. The wiring is in ipc.ts and index.ts.
-import type { Account, ResumeStrategy, SessionInfo, RollStateEvent, SessionUsage } from '../core/types'
+import type {
+  Account,
+  RateLimitPeak,
+  ResumeStrategy,
+  SessionInfo,
+  RollStateEvent,
+  SessionUsage
+} from '../core/types'
 import type { RollConfig } from '../core/rolling/config'
 import {
   OutputScanner,
@@ -106,7 +113,10 @@ export interface RollingDeps {
    *  be read. The default is "cannot be read" because the real implementation (RateLimitFetcher) uses
    *  the electron net module, and this file has to stay free of electron to be testable under vitest.
    *  index.ts does the wiring. */
-  readUsage?: (configDir: string) => Promise<number | null>
+  /** Ask the account what its usage is. Carries the fullest bucket's reset time with the figure —
+   *  that time is the only reliable one when a session halts at a limit, because the phrase may never
+   *  be printed and the statusLine snapshot freezes (see RateLimitPeak). */
+  readUsage?: (configDir: string) => Promise<RateLimitPeak | null>
   /** 롤로 띄우는 세션에 실을 astera CLI 환경.
    *
    *  **왜 dep 이고 왜 getter 인가.** 롤링 코디네이터는 `ipc.ts` 의 `spawnSession` 을 우회해
@@ -266,7 +276,7 @@ export class RollingCoordinator {
   private readonly now: () => number
   private readonly probeActivity: (transcriptPath: string) => Promise<number | null>
   private readonly readPending: (transcriptPath: string) => Promise<number | null>
-  private readonly readUsage: (configDir: string) => Promise<number | null>
+  private readonly readUsage: (configDir: string) => Promise<RateLimitPeak | null>
   private readonly resumeStrategy: () => ResumeStrategy
 
   constructor(private deps: RollingDeps) {
@@ -274,7 +284,7 @@ export class RollingCoordinator {
     this.now = deps.now ?? Date.now
     this.probeActivity = deps.probeActivity ?? lastActivityAt
     this.readPending = deps.readPending ?? readPendingWorkflowCount
-    this.readUsage = deps.readUsage ?? ((): Promise<number | null> => Promise.resolve(null))
+    this.readUsage = deps.readUsage ?? ((): Promise<RateLimitPeak | null> => Promise.resolve(null))
     this.resumeStrategy = deps.resumeStrategy ?? (() => 'original')
   }
 
@@ -629,14 +639,14 @@ export class RollingCoordinator {
     // 동작했다(`limit confirmed via usage 100%` → `limit reset → resume in place`).
     const dialogOnScreen =
       hasWaitChoiceLabel(chain.lastScreen) && looksLikeChoicePrompt(chain.lastScreen)
-    if (usage !== null && usage < LIMIT_PCT && !dialogOnScreen) {
+    if (usage !== null && usage.percent < LIMIT_PCT && !dialogOnScreen) {
       // Rejection happens only on positive evidence that the account is fine, and it changes no state at
       // all (no recordRecovery, no pushState, no waitTimer) — half the cost of a false positive is not
       // the verdict itself but being stuck in 'waiting' afterwards, where tick() skips the chain and
       // detection, the fallback trigger and the idle nudge all stop with it.
       if (this.now() >= chain.rejectLogUntil) {
         chain.rejectLogUntil = this.now() + REJECT_LOG_MS
-        this.deps.log(`limit phrase rejected — account usage ${usage}% session=${chain.liveId}`)
+        this.deps.log(`limit phrase rejected — account usage ${usage.percent}% session=${chain.liveId}`)
       }
       return
     }
@@ -648,14 +658,14 @@ export class RollingCoordinator {
     const evidence =
       usage === null
         ? 'phrase (usage unavailable)'
-        : usage < LIMIT_PCT
-          ? `wait-choice dialog on screen (usage ${usage}%)`
-          : `usage ${usage}%`
+        : usage.percent < LIMIT_PCT
+          ? `wait-choice dialog on screen (usage ${usage.percent}%)`
+          : `usage ${usage.percent}%`
     this.deps.log(`limit confirmed via ${evidence} session=${chain.liveId}`)
     // Called even with no payload — when the phrase itself carries the time, an accurate wait can be
     // recorded regardless of a missing capture file. With payload=null the snapshot candidates are empty
     // and at becomes null, which is the same outcome as previously skipping the record entirely.
-    this.recordRecovery(chain, payload, text)
+    this.recordRecovery(chain, payload, text, undefined, usage)
     this.onLimit(chain)
   }
 
@@ -665,7 +675,7 @@ export class RollingCoordinator {
    *  its accessToken is fresh (Claude Code refreshes it at session start). An account with no session
    *  has an expired token and fails with a 401; opening that path would need the app to refresh tokens
    *  itself, which is separate work. */
-  private async readAccountUsage(chain: Chain): Promise<number | null> {
+  private async readAccountUsage(chain: Chain): Promise<RateLimitPeak | null> {
     const account = this.deps.getAccount(chain.accountIds[chain.cycle.currentIndex])
     if (!account) return null
     return this.readUsage(account.configDir)
@@ -693,7 +703,16 @@ export class RollingCoordinator {
    *  (measured at 7.2s and 9s) as "already past" and add a whole day. since (when the record was made) is
    *  always this.now() regardless of this argument — retry.ts depends on that field for the separate
    *  meaning of "when was this record written". */
-  private recordRecovery(chain: Chain, payload: unknown, text?: string, refAt?: number): void {
+  private recordRecovery(
+    chain: Chain,
+    payload: unknown,
+    text?: string,
+    refAt?: number,
+    /** What the account itself said, when the caller had already asked. **The only source that does
+     *  not depend on the session being alive** — the phrase may never be printed and the statusLine
+     *  snapshot freezes the moment a session halts, which is exactly when this record is written. */
+    queried?: RateLimitPeak | null
+  ): void {
     const now = this.now()
     const fromText = text ? parseResetTime(text, refAt ?? now) : null
     if (fromText) {
@@ -715,7 +734,21 @@ export class RollingCoordinator {
       const at = u?.weekly?.resetsAt ? Date.parse(u.weekly.resetsAt) : NaN
       if (Number.isFinite(at)) cand.push({ at, weekly: true })
     }
-    const worst = fromText ?? (cand.length ? cand.reduce((a, b) => (b.at > a.at ? b : a)) : null)
+    // The account's own answer, used when neither the phrase nor the snapshot produced one. It is
+    // last rather than first because the phrase names the window that actually blocked, while this is
+    // the fullest bucket — usually the same one, but the phrase is the more direct evidence when both
+    // are present. Its own gate is the same GATE_PCT the snapshot candidates use: a bucket well short
+    // of full is not the one that stopped the session, and its reset would aim the wait at the wrong
+    // time.
+    const fromQuery =
+      queried && queried.resetsAt && queried.percent >= GATE_PCT
+        ? ((): { at: number; weekly: boolean } | null => {
+            const at = Date.parse(queried.resetsAt)
+            return Number.isFinite(at) ? { at, weekly: queried.weekly } : null
+          })()
+        : null
+    const worst =
+      fromText ?? (cand.length ? cand.reduce((a, b) => (b.at > a.at ? b : a)) : null) ?? fromQuery
     const record: BlockRecord = {
       at: worst ? worst.at : null,
       weekly: worst ? worst.weekly : false,
@@ -1388,7 +1421,25 @@ export class RollingCoordinator {
     const seven = u?.weekly?.usedPercent
     const maxed =
       (typeof five === 'number' && five >= 100) || (typeof seven === 'number' && seven >= 100)
-    if (maxed && this.now() - chain.lastOutputAt > FALLBACK_SILENCE_MS) {
+    const silent = this.now() - chain.lastOutputAt > FALLBACK_SILENCE_MS
+    // **A silent session is exactly when this snapshot cannot be trusted.** statusLine stops updating
+    // the moment the session halts at an input wait, so its figures freeze at whatever they were before
+    // the limit — and this trigger, which exists to catch a limit no other path saw, was reading that
+    // frozen value and concluding everything was fine.
+    //
+    // Measured 2026-08-30: a session sat at a limit dialog for ten hours and twenty-four minutes. The
+    // phrase path saw no banner (there was none), the transcript recorded no error entry, and this
+    // trigger read a stale snapshot under 100%. All three safety nets were looking at the same dead
+    // information. Asking the account is the one question that answers regardless of session state.
+    //
+    // Only asked when the snapshot has already failed to justify a roll and the session has gone quiet,
+    // so a working session never reaches it; the lookup's own five-minute cache holds the rate down
+    // across the 15-second ticks that do.
+    const queried = silent && !maxed ? await this.readAccountUsage(chain) : null
+    // The across-await guard, for the reason the gate gives above — a roll can finish inside the lookup.
+    if (chain.disposed || chain.rolling || chain.waitTimer || chain.awaitingReady) return
+    const queriedMaxed = queried !== null && queried.percent >= LIMIT_PCT
+    if ((maxed || queriedMaxed) && silent) {
       // claudeSession and tail exist to measure ①'s (the transcript's) coverage after the fact.
       // ① (limitTailCheck) was already awaited to completion above, and if ① had caught a hit we would have
       // returned at the guard — so this log surviving now genuinely guarantees that ① did not catch
@@ -1404,11 +1455,15 @@ export class RollingCoordinator {
       //                   and ok means the read() of this tick, completed by the await above, succeeded
       //                   with no hit — it cannot be confused with "not checked yet".
       // The limit phrase is deliberately not included (it stopped a loop in which the log itself became a trigger).
+      // queried= tells the reader which evidence fired. `-` means the snapshot was already at 100%
+      // and no lookup was needed; a number means the snapshot said otherwise and the account overruled
+      // it — the shape of the ten-hour stall.
       this.deps.log(
-        `fallback trigger (five=${five}, weekly=${seven}, silent>30s) session=${chain.liveId} ` +
+        `fallback trigger (five=${five}, weekly=${seven}, queried=${queried ? `${queried.percent}%` : '-'}, ` +
+          `silent>30s) session=${chain.liveId} ` +
           `claudeSession=${chain.claudeSessionId ?? 'unknown'} tail=${tailState}`
       )
-      this.recordRecovery(chain, payload)
+      this.recordRecovery(chain, payload, undefined, undefined, queried)
       this.onLimit(chain)
     }
   }

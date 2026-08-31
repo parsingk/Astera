@@ -54,6 +54,7 @@ const ERROR_USAGE = (status: RateLimitUsage['status']): RateLimitUsage => ({
   session: null,
   weekly: null,
   maxPercent: null,
+  peak: null,
   status
 })
 
