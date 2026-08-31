@@ -9,7 +9,7 @@
 // **한 번에 하나만 돈다.** 에이전트 실행은 비싸고(수십 초), 같은 프로젝트에 두 개가 겹치면
 // 나중 것이 앞 것의 결과를 덮는다. 큐 하나로 직렬화하는 것은 collector 의 enqueue 와 같은 이유다.
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import path from 'node:path'
 import type { Account, Provider } from '../../core/types'
 import type { ProviderDescriptor } from '../../core/providers/descriptor'
@@ -259,7 +259,7 @@ export class UnderstandingPipeline {
     })
     if (!run.ok) return { ok: false, reason: run.reason }
 
-    const v = validateDiscovery(run.value, insideProject(projectRoot))
+    const v = validateDiscovery(run.value, insideProject(projectRoot), isProjectFile(projectRoot))
     if (!v.ok) return { ok: false, reason: v.reason }
 
     const now = this.deps.now()
@@ -444,6 +444,22 @@ export class UnderstandingPipeline {
  *  존재하므로 통과한다(실측). 그러면 근거 검증(§24-12)이 막으려던 바로 그것 — 근거 아닌 것을
  *  근거로 대는 일 — 이 통과하고, 그 경로는 화면에 뜨며 다음 재생성의 "여기서부터 읽어라"
  *  목록에도 실린다. 그래서 푼 뒤에 저장소 안인지 다시 묻는다. */
+/** 저장소 안에 있고, **디렉터리가 아니라 파일**인가.
+ *
+ *  첫 분석이 기능마다 파일을 최소 하나 대야 하는 이유는 validate.ts 에 적혀 있다 — 여기서는 그
+ *  물음에 fs 로 답할 뿐이다. insideProject 를 먼저 거쳐 저장소 밖을 배제한다. */
+function isProjectFile(projectRoot: string): (p: string) => boolean {
+  const inside = insideProject(projectRoot)
+  return (p) => {
+    if (!inside(p)) return false
+    try {
+      return statSync(path.resolve(projectRoot, p)).isFile()
+    } catch {
+      return false
+    }
+  }
+}
+
 function insideProject(projectRoot: string): (p: string) => boolean {
   return (p) => {
     const abs = path.resolve(projectRoot, p)

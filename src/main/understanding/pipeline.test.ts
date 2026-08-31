@@ -240,7 +240,7 @@ describe('onUnitClosed — 완료된 Unit 이 설명이 된다', () => {
 })
 
 describe('analyzeProject — 첫 분석 (스펙 §21)', () => {
-  const draft = { features: [{ name: '인증', summary: '로그인과 세션', implementationPaths: ['src/auth'] }] }
+  const draft = { features: [{ name: '인증', summary: '로그인과 세션', implementationPaths: ['src/auth', 'src/auth/login.ts'] }] }
 
   it('기능 목록을 만들고 구현 경로를 심어 둔다', async () => {
     const { store, pipeline } = await make()
@@ -254,7 +254,10 @@ describe('analyzeProject — 첫 분석 (스펙 §21)', () => {
     expect(u.features[0].status).toBe('needs-review') // 설명이 아직 없다
     expect(u.analyzedAt).toBe('2026-08-30T12:00:00.000Z')
     // 다음 매핑이 읽을 자리 — 이것이 없으면 어떤 변화도 이 기능에 걸리지 않는다
-    expect(u.explanations[u.features[0].id].implementation).toEqual([{ role: '인증', path: 'src/auth' }])
+    expect(u.explanations[u.features[0].id].implementation).toEqual([
+      { role: '인증', path: 'src/auth' },
+      { role: '인증', path: 'src/auth/login.ts' }
+    ])
   })
 
   it('실재하지 않는 경로를 대면 거부한다', async () => {
@@ -292,8 +295,8 @@ describe('재분석이 잃거나 뭉개지 않는가', () => {
     await seedFeature(store)
     agentReply.value = {
       features: [
-        { name: '인증', summary: '로그인과 세션', implementationPaths: ['src/auth'] },
-        { name: '인증', summary: '토큰 갱신', implementationPaths: ['src/auth'] }
+        { name: '인증', summary: '로그인과 세션', implementationPaths: ['src/auth', 'src/auth/login.ts'] },
+        { name: '인증', summary: '토큰 갱신', implementationPaths: ['src/auth', 'src/auth/login.ts'] }
       ]
     }
 
@@ -310,7 +313,7 @@ describe('재분석이 잃거나 뭉개지 않는가', () => {
   it('이름이 바뀐 기능 하나는 설명을 데리고 간다', async () => {
     const { store, pipeline } = await make()
     await seedFeature(store, { userEdited: true, overview: '사람이 쓴 설명' })
-    agentReply.value = { features: [{ name: '로그인', summary: '세션', implementationPaths: ['src/auth'] }] }
+    agentReply.value = { features: [{ name: '로그인', summary: '세션', implementationPaths: ['src/auth', 'src/auth/login.ts'] }] }
 
     await pipeline.analyzeProject(projectRoot)
 
@@ -336,7 +339,7 @@ describe('재분석이 잃거나 뭉개지 않는가', () => {
       },
       recentChanges: []
     })
-    agentReply.value = { features: [{ name: 'C', summary: 'C 요약', implementationPaths: ['src/auth'] }] }
+    agentReply.value = { features: [{ name: 'C', summary: 'C 요약', implementationPaths: ['src/auth', 'src/auth/login.ts'] }] }
 
     expect(await pipeline.analyzeProject(projectRoot)).toEqual({ ok: true, count: 1 })
 

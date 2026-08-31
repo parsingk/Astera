@@ -139,7 +139,14 @@ Respond with a single JSON object, no markdown fence:
     }
   ]
 }
-List 3 to 12 features. Every path must be one that exists — prefer a directory from the skeleton
-above over a file you have not opened. The result is a draft the user can rename or remove: prefer
-missing a minor feature over inventing one.`
+List 3 to 12 features. Name what a person *does* with this project, not what the project is:
+"sign in with Google" is a feature, "a desktop workspace for coding agents" is the product. If a
+name would fit on the front page of a README, it is too broad — split it.
+
+**Every feature must name at least one real file** in "implementationPaths", not only a directory.
+Open what you need to find them; a directory alone is not an answer, because the reader clicks these
+paths to read the code. Adding the containing directory as well is fine. Every path must exist.
+
+The result is a draft the user can rename or remove: prefer missing a minor feature over inventing
+one.`
 }

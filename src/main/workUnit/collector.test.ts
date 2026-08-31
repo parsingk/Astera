@@ -28,6 +28,16 @@ const human = (text: string, at = '2026-08-30T00:00:00.000Z'): string =>
     message: { role: 'user', content: text }
   }) + '\n'
 
+/** The session wrote something. A unit closes as a record only when its own transcript shows this
+ *  (SessionWorkUnit.sawWrite) — observed git changes land on every open unit and so cannot say which
+ *  session made them. Most fixtures below pair a request with this, because that is what a session
+ *  that did any work looks like. */
+const wrote = (tool = 'Edit'): string =>
+  JSON.stringify({
+    type: 'assistant',
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: tool, input: {} }] }
+  }) + '\n'
+
 /** 사람의 요청이 아닌 줄 — 도구 결과. 걸러지는지 보려고 섞는다 */
 const toolResult = (): string =>
   JSON.stringify({
@@ -201,7 +211,7 @@ describe('WorkUnitCollector — WU §23', () => {
     fake.sessions = [session()]
     const first = await makeCollector(fake)
     await first.collector.start()
-    await fs.appendFile(transcript, human('첫 작업'), 'utf8')
+    await fs.appendFile(transcript, human('첫 작업') + wrote(), 'utf8')
     first.collector.onTranscriptChanged()
     await first.collector.flush()
     fake.git.files = ['src/a.ts'] // Unit 이 연 뒤의 변경이어야 관찰로 세어 유휴가 완료 후보를 만든다
@@ -707,7 +717,7 @@ describe('WorkUnitCollector — 스펙 §16.1 커서', () => {
     const { collector, store } = await makeCollector(fake)
     await collector.start()
 
-    await fs.appendFile(transcript, human('켜져 있는 동안의 요청'), 'utf8')
+    await fs.appendFile(transcript, human('켜져 있는 동안의 요청') + wrote(), 'utf8')
     collector.onTranscriptChanged()
     await collector.flush()
     expect(store.get(projectPath)!.units[0].status).toBe('active')
@@ -747,7 +757,7 @@ describe('WorkUnitCollector — 스펙 §16.1 커서', () => {
     fake.sessions = [session()]
     const { collector, store } = await makeCollector(fake)
     await collector.start()
-    await fs.appendFile(transcript, human('겹치는 토글'), 'utf8')
+    await fs.appendFile(transcript, human('겹치는 토글') + wrote(), 'utf8')
     collector.onTranscriptChanged()
     await collector.flush()
 
@@ -764,7 +774,7 @@ describe('WorkUnitCollector — 스펙 §16.1 커서', () => {
     fake.sessions = [session()]
     const { collector, store, closed } = await makeCollector(fake)
     await collector.start()
-    await fs.appendFile(transcript, human('끄기 직전의 요청'), 'utf8')
+    await fs.appendFile(transcript, human('끄기 직전의 요청') + wrote(), 'utf8')
     collector.onTranscriptChanged()
     await collector.flush()
     fake.git.files = ['src/a.ts'] // 이것이 있어야 completed 로 닫힌다
@@ -781,7 +791,7 @@ describe('WorkUnitCollector — 스펙 §16.1 커서', () => {
     fake.sessions = [session()]
     const { collector, closed } = await makeCollector(fake)
     await collector.start()
-    await fs.appendFile(transcript, human('첫 작업'), 'utf8')
+    await fs.appendFile(transcript, human('첫 작업') + wrote(), 'utf8')
     collector.onTranscriptChanged()
     await collector.flush()
     fake.git.files = ['src/a.ts']
@@ -1163,7 +1173,7 @@ describe('WorkUnitCollector — 배선 두 자리', () => {
     const { collector, store } = await makeCollector(fake)
     await collector.start()
 
-    await fs.appendFile(transcript, human('아무것도 바꾸지 못한 작업'), 'utf8')
+    await fs.appendFile(transcript, human('아무것도 바꾸지 못한 작업') + wrote(), 'utf8')
     collector.onTranscriptChanged()
     await collector.flush()
     expect(store.get(projectPath)!.units[0].status).toBe('active')
@@ -1298,7 +1308,7 @@ describe('WorkUnitCollector — 열릴 때의 기준선', () => {
     await collector.start()
 
     // Unit A — 파일 셋을 바꾸고 완료 후보가 된다
-    await fs.appendFile(transcript, human('기능 만들어줘'), 'utf8')
+    await fs.appendFile(transcript, human('기능 만들어줘') + wrote(), 'utf8')
     collector.onTranscriptChanged()
     await collector.flush()
     fake.git.files = ['a.ts', 'b.ts', 'c.ts']
@@ -1340,7 +1350,69 @@ describe('WorkUnitCollector — 열릴 때의 기준선', () => {
     expect(state.units[0].git.observedChangedFiles).toEqual(['fixed.ts'])
   })
 
-  it('질문만 한 Unit 은 세션이 끝날 때 abandoned 다 (설계 §7)', async () => {
+  // 예전에는 abandoned 로 **남았다**. 이제는 아예 기록되지 않는다 — 사용자 요청이고, 이유는
+  // 아래 "남의 변경" 테스트가 보여 준다: 질문만 한 Unit 도 옆 세션의 변경을 자기 것으로 갖는다.
+  // **실측 2026-08-31.** astera 를 고치는 세션 하나와, "이 프로젝트 한 줄 설명해"라고만 물은 세션
+  // 둘이 같은 프로젝트에 떠 있었다. git 스냅샷 비교는 셋 모두에게 같은 파일 7개를 얹었고, 질문만
+  // 한 Unit 들이 그대로 닫혔다면 그 질문이 "최근 변경"에 뜨고 설명 하나를 갈아엎었을 것이다.
+  it('옆 세션의 변경이 붙어도 자기 쓰기 흔적이 없으면 기록되지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, closed } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, human('이 프로젝트 한 줄 설명해'), 'utf8') // 도구를 쓰지 않는다
+    collector.onTranscriptChanged()
+    await collector.flush()
+    // 옆 세션이 고친 파일들이 이 Unit 에도 관찰로 들어온다
+    fake.git.files = ['src/a.ts', 'src/b.ts']
+    await collector.onSessionIdle('s1')
+    expect(store.get(projectPath)!.units[0].git.observedChangedFiles).toHaveLength(2)
+
+    await collector.onSessionExit('s1')
+
+    expect(store.get(projectPath)!.units).toHaveLength(0)
+    expect(closed).toHaveLength(0) // 설명 생성으로도 흘러가지 않는다
+  })
+
+  // 같은 상황에서 자기가 쓴 세션은 그대로 남는다 — 위 가드가 진짜 작업까지 지우면 안 된다
+  it('자기 쓰기 흔적이 있으면 그대로 기록된다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, closed } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, human('버그 고쳐줘') + wrote('Write'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    fake.git.files = ['src/a.ts']
+    await collector.onSessionIdle('s1')
+    await collector.onSessionExit('s1')
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].status).toBe('completed')
+    expect(closed).toHaveLength(1)
+  })
+
+  // 셸로 파일을 고치는 작업이 흔하다 — 그것을 빼면 진짜 작업이 통째로 기록되지 않는다
+  it('셸만 쓴 세션도 기록된다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, human('스크립트로 고쳐줘') + wrote('Bash'), 'utf8')
+    collector.onTranscriptChanged()
+    await collector.flush()
+    fake.git.files = ['src/a.ts']
+    await collector.onSessionIdle('s1')
+    await collector.onSessionExit('s1')
+
+    expect(store.get(projectPath)!.units).toHaveLength(1)
+  })
+
+  it('질문만 한 Unit 은 아예 기록되지 않는다 (설계 §7)', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
     // 세션이 시작하기 전부터 작업 트리가 더럽다 — 이 더러움은 누구의 관찰도 아니다
@@ -1354,7 +1426,7 @@ describe('WorkUnitCollector — 열릴 때의 기준선', () => {
     await collector.onSessionExit('s1')
 
     const state = store.get(projectPath)!
-    expect(state.units[0].status).toBe('abandoned')
+    expect(state.units).toHaveLength(0)
   })
 })
 

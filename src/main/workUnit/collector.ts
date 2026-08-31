@@ -32,6 +32,7 @@ import { isSamePath } from '../../core/files/tree'
 import type { SessionWorkUnit } from '../../core/workUnit/types'
 import { isOpen } from '../../core/workUnit/status'
 import {
+  hasWriteEvidence,
   isCodexTurnComplete,
   isHumanRequest,
   requestTextOf,
@@ -425,6 +426,7 @@ export class WorkUnitCollector {
         this.observe(state, s.projectPath, await this.changedFiles(s.projectPath))
         for (const u of open)
           this.close(
+            state,
             u,
             onSessionEnd({ observedChangeCount: u.git.observedChangedFiles.length }),
             s.projectPath
@@ -642,6 +644,16 @@ export class WorkUnitCollector {
       // **표시만 하고 여기서 판정하지 않는다** — 판정에는 작업 트리를 물어야 하고(git 프로세스),
       // 한 회차에 턴이 여럿 끝나 있을 수 있다. 아래에서 한 번만 묻는다.
       if (isCodexTurnComplete(record)) turnCompleted = true
+      // Did this session write anything? Marked here, on the unit that is open at the time, because
+      // this is the only place a record is read per session — observed git changes cannot tell the
+      // sessions apart (see SessionWorkUnit.sawWrite). Marked once; the flag never goes back.
+      if (hasWriteEvidence(record)) {
+        const open = state.units.find((u) => u.sessionId === s.sessionId && isOpen(u.status))
+        if (open && !open.sawWrite) {
+          open.sawWrite = true
+          dirty = true
+        }
+      }
     }
 
     if (turnCompleted) dirty = (await this.applyIdle(state, s)) || dirty
@@ -742,7 +754,7 @@ export class WorkUnitCollector {
     const head = (await this.refOf(s.projectPath)).head
     if (decision.kind === 'close-and-open') {
       // 앞 Unit 을 확정하는 것은 이 메시지다 (WU §6)
-      this.close(open!, onBoundaryConfirm(open!.status), s.projectPath, at)
+      this.close(state, open!, onBoundaryConfirm(open!.status), s.projectPath, at)
     }
     const unit: SessionWorkUnit = {
       id: randomUUID(),
@@ -886,6 +898,7 @@ export class WorkUnitCollector {
         this.observe(state, projectPath, await this.changedFiles(projectPath))
         for (const u of open)
           this.close(
+            state,
             u,
             onFeatureDisabled({ observedChangeCount: u.git.observedChangedFiles.length }),
             projectPath,
@@ -914,6 +927,7 @@ export class WorkUnitCollector {
   }
 
   private close(
+    state: WorkUnitState,
     unit: SessionWorkUnit,
     status: SessionWorkUnit['status'],
     projectPath: string,
@@ -926,6 +940,21 @@ export class WorkUnitCollector {
   ): void {
     unit.status = status
     if (!isOpen(status)) {
+      // **A unit with no write evidence is removed, not recorded.** Observed changes land on every
+      // open unit in the project because git cannot say who made them, so a session that only asked a
+      // question carries whatever another session was editing beside it — measured 2026-08-31, two
+      // such units held the seven files this very conversation was changing. Closed as they stood,
+      // that question would have shown up under Recent changes and spent a generation rewriting a
+      // feature's explanation from it.
+      //
+      // Dropping rather than marking: the record would answer no question later. It says a session
+      // existed and did nothing, which the transcript already says, and it would still have to be
+      // filtered at every read.
+      if (!unit.sawWrite) {
+        const i = state.units.indexOf(unit)
+        if (i >= 0) state.units.splice(i, 1)
+        return
+      }
       unit.completedAt = at ?? this.nowIso()
       const head = this.lastRef.get(projectPath)?.head
       if (head !== undefined) unit.git.endHead = head

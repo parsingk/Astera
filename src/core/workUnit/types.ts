@@ -24,6 +24,19 @@ export interface SessionWorkUnit {
   firstMessageIndex: number
   messageCount: number
 
+  /** Did this session itself touch a file — a write tool or a shell, read out of its own transcript
+   *  (hasWriteEvidence in humanRequest.ts).
+   *
+   *  Observed changes cannot answer this. They come from comparing git snapshots and land on every
+   *  open unit in the project, because git reports what changed and never who changed it. With
+   *  several sessions on one project — which is what this app is for — a session that only asked a
+   *  question carries the files another session was editing.
+   *
+   *  A unit that closes without this is **removed rather than recorded**: it never reaches Recent
+   *  changes and never spends a generation. Optional because units stored before this field existed
+   *  have no answer; those are treated as no evidence, which merely retires them. */
+  sawWrite?: boolean
+
   git: {
     startHead: string | null
     endHead?: string | null
