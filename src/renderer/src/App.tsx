@@ -528,8 +528,8 @@ export default function App(): React.JSX.Element {
   fileTabsRef.current = fileTabs
   // 탭 순환이 쓰는 것 — 클릭과 같은 경로를 타야 종류에 상관없이 같은 일이 일어난다
   const selectWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
-  /** Ctrl+W 가 닫을 수 있는 탭의 id. **세션은 여기 들지 않는다** — 그 키로 세션을 죽이지 않는다.
-   *  파일은 가볍게 열고 닫는 읽기용 탭이라 여기 든다. */
+  /** The id of the tab Ctrl+W may close. **Sessions are excluded** — that key must not kill a
+   *  process. Files are lightweight, read-only tabs that open and close freely, so they belong here. */
   const closableTabIdRef = useRef<string | null>(null)
   // 탭 트리에서 파생시킨다 — activeFileId 와 같은 이유다: 따로 상태를 두면 다른 페인의 탭을
   // 누르는 순간 트리와 갈라진다
