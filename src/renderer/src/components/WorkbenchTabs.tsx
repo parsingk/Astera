@@ -15,11 +15,26 @@ export interface FileTab {
   projectRoot: string
 }
 
-/** 페인 하나의 탭 줄에 올라가는 탭. 파일 탭과 세션 탭을 한 줄에 그린다.
+/** How It Works record detail tab. Same shape as FileTab and carries projectRoot for the same
+ *  reason — a `record:<id>` tab id cannot hold the project, so without this record, currentProject
+ *  falls back to the wrong place (last remembered) while this tab is active, and the tab disappears
+ *  from the bar the moment another project is picked. The title comes from here too: understanding
+ *  only ever holds the currently open project's data, so looking up the name there alone would strip
+ *  the title from any tab belonging to a different project. */
+export interface RecordTab {
+  id: string
+  recordId: string
+  title: string
+  /** 이 탭이 열릴 때의 프로젝트 루트. 활성 탭이 이 탭일 때 앱이 이 프로젝트를 보여준다 */
+  projectRoot: string
+}
+
+/** The tabs shown on one pane's tab bar. Draws file tabs, session tabs and record tabs in one row.
  *
- *  표식이 종류마다 다르다 — 세션 탭은 계정 색과 작업 중 스피너와 롤링 표시를, 파일 탭은 확장자 아이콘과
- *  더티 점과 이름 구분자를 가진다. 정렬은 받은 순서 그대로다: 어느 종류를 먼저 둘지는 이 컴포넌트가
- *  아니라 트리(페인의 tabIds)가 정한다. */
+ *  Each kind marks itself differently — a session tab carries the account color, a busy spinner and a
+ *  rolling indicator; a file tab carries its extension icon, a dirty dot and a name disambiguator; a
+ *  record tab carries a status glyph. Order is whatever was received: which kind sits where is decided
+ *  by the tree (the pane's tabIds), not by this component. */
 export type WorkbenchTab =
   | {
       tabId: string
@@ -41,6 +56,21 @@ export type WorkbenchTab =
       /** 계정 롤링 체인의 툴팁. 롤링이 걸려 있지 않으면 null — 계정 목록은 PaneGrid가 갖고 있으므로
        *  문구를 거기서 만들어 넘긴다 */
       rollTooltip: string | null
+    }
+  | {
+      tabId: string
+      kind: 'record'
+      recordId: string
+      title: string
+      /** Status glyph. CSS is not what decides its colour — only the shape is passed here.
+       *  **null means "the current status is unknown"** — true of a record tab from another project.
+       *  The glyph slot is then left empty (better than drawing the wrong status). */
+      glyph: string | null
+      /** That glyph's colour (a theme token). PaneGrid pulls it from UnderstandingIcons'
+       *  RECORD_GLYPH_COLOR. */
+      glyphColor: string | null
+      /** Spinning or not — decided by whether PaneGrid finds the record's status to be `generating`. */
+      glyphSpins: boolean
     }
 
 /** 페인 하나의 탭 줄.
@@ -163,6 +193,19 @@ export function WorkbenchTabs({
         >
           {tab.kind === 'file' ? (
             <FileIcon {...resolveFileIcon(tab.title)} />
+          ) : tab.kind === 'record' ? (
+            // Same glyph as the sidebar row's .hiw-g — the same record must not wear two different
+            // labels in two places. When the status is unknown, no span is left either — an empty
+            // one would leave a gap that pushes the title over.
+            tab.glyph !== null && (
+              <span
+                className="tab-glyph"
+                style={{ color: tab.glyphColor ?? undefined }}
+                aria-hidden="true"
+              >
+                {tab.glyphSpins ? <span className="hiw-spin">{tab.glyph}</span> : tab.glyph}
+              </span>
+            )
           ) : tab.busy && !tab.exited ? (
             // 작업 중: 계정 색의 회전하는 링. .tab-dot.busy는 background가 투명이고 테두리로 그려지므로
             // 색을 borderColor로 줘야 한다

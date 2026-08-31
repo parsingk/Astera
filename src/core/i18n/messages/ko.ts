@@ -23,6 +23,26 @@ export const ko = {
     '이미 열려 있는 세션에는 적용되지 않습니다 — 새 세션부터 동작합니다. ' +
     '오케스트레이터로 쓸 세션에서 astera help 를 실행하게 하면 전체 사용법을 얻습니다.',
   'settings.orchestration.saveFailed': '오케스트레이션 설정을 저장하지 못했습니다: {detail}',
+  // Work Unit 추적
+  'settings.workUnit.label': '작업 단위 추적 (실험)',
+  'settings.workUnit.hint':
+    '/astera-task 로 하려는 일을 적으면 그때부터 한 줄이 시작되고, 끝날 때까지 몇 번을 주고받든 같은 ' +
+    '줄로 남습니다. 이미 열려 있는 세션에는 적용되지 않습니다 — 새 세션부터 동작합니다. 켠 뒤의 ' +
+    '대화만 봅니다 — 이전 기록은 읽지 않습니다.',
+  'settings.workUnit.saveFailed': '작업 단위 추적 설정을 저장하지 못했습니다: {detail}',
+  // 설명 생성 (How It Works)
+  'settings.gen.label': '설명 생성 계정',
+  'settings.gen.hint': '작업이 끝나면 이 계정으로 기능 설명을 만듭니다. 고르지 않으면 만들지 않습니다.',
+  'settings.gen.none': '고르지 않음 — 설명을 만들지 않습니다',
+  'settings.gen.model': '모델',
+  'settings.gen.modelDefault': 'CLI 기본값',
+  'settings.gen.effort': '추론 강도',
+  'settings.gen.effortDefault': '모델 기본값',
+  'settings.gen.refresh': '모델 목록 새로 고침',
+  'settings.gen.loading': '모델을 묻는 중…',
+  'settings.gen.listFailed': '모델 목록을 받지 못했습니다 — 직접 입력할 수 있습니다. ({detail})',
+  'settings.gen.modelPlaceholder': '모델 이름을 직접 입력',
+  'settings.gen.saveFailed': '설명 생성 설정을 저장하지 못했습니다: {detail}',
   'settings.accounts.hint':
     '⤓ 는 같은 CLI의 기본 계정에서 설정을 가져옵니다. 기본 계정은 로그인된 계정 중 가장 먼저 등록된 것으로, CLI마다 하나씩 있습니다.',
   'common.cancel': '취소',
@@ -103,6 +123,9 @@ export const ko = {
     '세션 시작 실패: {message} (worktree "{name}"는 남아 있으니 Worktrees 패널에서 삭제하세요)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped
   'session.spawn.resumeLiveIgnored': '이미 실행 중인 세션입니다 — 선택한 옵션은 적용되지 않았습니다.',
+  // Smart Resume took the blank slate — without this the user reads the empty window as a lost conversation
+  'session.spawn.smartResume':
+    '스마트 재개: 대화를 다시 싣는 대신, 지금까지의 작업 브리핑을 들려 새 세션으로 시작했습니다.',
   'session.placeholder.start': '+ 새 세션으로 시작하세요',
   'session.usage.contextTitleWithTokens': '컨텍스트 사용률 ({used} / {window} 토큰)',
   'session.usage.contextTitle': '컨텍스트 사용률',
@@ -288,6 +311,8 @@ export const ko = {
   'shortcut.explorer.saveFile': '파일 저장',
   'shortcut.explorer.closeFileTab': '파일 탭 닫기',
   'shortcut.explorer.cyclePreview': '마크다운 프리뷰 모드 전환',
+  'shortcut.sidebar.jobs': 'Jobs 사이드바 열기/닫기',
+  'shortcut.sidebar.howItWorks': 'How It Works 사이드바 열기/닫기',
   'shortcut.explorer.rename': '이름 변경',
   'shortcut.explorer.delete': '삭제',
   'shortcut.explorer.selectAll': '전체 선택',
@@ -963,5 +988,52 @@ export const ko = {
   // 화면에서 만든 Run 에는 그 글을 읽는 코디네이터가 아예 없다. 코디네이터가 있는 Run 에서는
   // 여전히 질문으로 읽히므로 잃는 것이 없다(가이드: a decision block for deciding the task DAG)
   'jobs.node.gateQuestion': '왜 세워 두는지',
-  'jobs.node.failed': '이 동작을 하지 못했습니다'
+  'jobs.node.failed': '이 동작을 하지 못했습니다',
+  // How It Works — 프로젝트 이해
+  'hiw.rail.open': 'How It Works',
+  'hiw.title': 'How It Works',
+  'hiw.record.regenerate': '다시 만들기',
+  'hiw.record.generating': '만드는 중',
+  'hiw.record.ready': '기록됨',
+  'hiw.record.needsReview': '검토 필요',
+  'hiw.record.failed': '만들지 못했습니다',
+  'hiw.record.regenerateFailed': '다시 만들기 실패: {detail}',
+  'hiw.record.reason.noAccount': '설명 생성 계정이 설정되어 있지 않습니다 — 설정 → 일반에서 골라 주세요.',
+  'hiw.record.reason.interrupted': '이 기록을 만드는 도중 앱이 꺼졌습니다 — 아래 버튼을 눌러 다시 만들어 주세요.',
+  'hiw.record.reason.checkFailed': '에이전트가 돌린 검사가 통과하지 못했습니다 — 결과물을 확인해 보세요.',
+  'hiw.record.reason.checkFailedJob': '앱이 돌린 검사가 통과하지 못했습니다 — 결과물을 확인해 보세요.',
+  'hiw.pane.overview': '무엇을 하나요',
+  'hiw.pane.userVisible': '무엇이 달라졌나요',
+  'hiw.pane.flow': '어떻게 동작하나요',
+  'hiw.pane.decisions': '왜 이렇게 만들었나요',
+  'hiw.pane.implementation': '실제 구현은',
+  'hiw.pane.edit': '편집',
+  'hiw.pane.reference': '참조',
+  'hiw.scope.clear': '전체 보기',
+  'hiw.scope.whatHappens': '이 단계에서 일어나는 일',
+  'hiw.scope.why': '왜',
+  'hiw.scope.implementation': '이 단계의 구현',
+  'hiw.empty.body': '작업 하나가 끝날 때마다 무엇을 어떻게 바꿨는지가 여기 쌓입니다. 추적을 켠 뒤의 작업만 기록합니다.',
+  'hiw.empty.readOnly': '읽기만 합니다 — 코드를 고치지 않습니다.',
+  'hiw.pane.notYet': '이 버튼은 아직 준비 중입니다.',
+  'hiw.pane.noExplanation': '이 기록의 설명이 아직 없습니다.',
+  'hiw.pane.notInProject': '이 탭의 기록을 지금 열려 있는 프로젝트에서 찾을 수 없습니다.',
+  'hiw.open.title': '진행 중',
+  'hiw.open.interruptedTitle': '마무리되지 않음',
+  'hiw.open.complete': '완료',
+  'hiw.open.cancel': '취소',
+  'hiw.open.completeFailed': '완료 처리하지 못했습니다: {detail}',
+  'hiw.open.completeEmpty': '바뀐 것이 없어 기록하지 않았습니다.',
+  'hiw.open.cancelFailed': '취소하지 못했습니다: {detail}',
+  'hiw.open.startedAt': '{time} 시작',
+  'hiw.open.reason.newTask': '다른 작업이 시작되어 멈췄습니다',
+  'hiw.open.reason.sessionEnd': '세션이 끝나 멈췄습니다',
+  'hiw.open.reason.appRestart': '앱이 꺼져 멈췄습니다',
+  'hiw.open.reason.trackingOff': '추적을 꺼서 멈췄습니다',
+  'hiw.open.reason.upgrade': '앱이 업데이트되어 멈췄습니다',
+  'hiw.verify.verified': '보고된 검사가 모두 통과했습니다',
+  'hiw.verify.partial': '일부만 확인되었습니다',
+  'hiw.verify.unverified': '확인된 것이 없습니다',
+  'hiw.verify.failed': '보고된 검사가 실패했습니다',
+  'hiw.verify.reported': '에이전트가 보고한 것입니다 — 앱이 직접 돌려 보지는 않았습니다'
 } as const

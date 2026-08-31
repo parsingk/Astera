@@ -29,6 +29,16 @@ interface Entry {
   cwd: string
   since: number // Spawn time — the cutoff findRollout uses to filter out earlier sessions' files
   rolloutPath: string | null
+  /** The codex session id of that rollout, or null until the scan maps it.
+   *
+   *  findRollout answers path and id together and this was throwing the id away. It is codex's
+   *  counterpart to the claude `session_id` that arrives in the statusLine payload — the scheduler
+   *  learns its scheduler.json key from it (SchedulerCoordinator.learnKey).
+   *
+   *  **Left null when the path was handed over at registration.** In that case the caller is resuming,
+   *  so it already holds the id (`info.resumeSessionId`) and nothing here needs to answer it — filling
+   *  it from that field would only add a second source of truth for a value its own caller supplied. */
+  codexSessionId: string | null
   tail: JsonlTail | null
   disposed: boolean
   /** Whether turn completion is reported. Every codex session is watched (the usage chips need it);
@@ -110,6 +120,7 @@ export class CodexRolloutWatcher {
       cwd: info.cwd,
       since: this.now(),
       rolloutPath: rolloutPath ?? null,
+      codexSessionId: null,
       tail: rolloutPath ? new JsonlTail(rolloutPath, { startAtEnd: true }) : null,
       disposed: false,
       notifyTurns: info.slackNotify === true,
@@ -127,6 +138,29 @@ export class CodexRolloutWatcher {
     const e = this.entries.get(sessionId)
     if (!e) return null
     return sessionUsageOf(e.context, e.limits)
+  }
+
+  /** The rollout file this session writes to, or null before the scan has mapped it.
+   *
+   *  Work Unit detection reads this file, and this watcher is the only place that knows the path for
+   *  **every** codex session: codexRolling.rolloutPathFor answers only for sessions the user put on
+   *  account rolling (register is behind `rollAccountIds.length >= 1`), whereas every codex session is
+   *  registered here because the usage chips need it. Same reason the chips read from here. */
+  rolloutPathFor(sessionId: string): string | null {
+    const e = this.entries.get(sessionId)
+    return e && !e.disposed ? e.rolloutPath : null
+  }
+
+  /** The codex session id this session writes under, or null before the scan has mapped it.
+   *
+   *  **This is codex's answer to claude's statusLine `session_id`.** Anything that needs to key
+   *  something by the conversation's own id — today the scheduler's scheduler.json key — reads it here,
+   *  and only this watcher can answer for **every** codex session (codexRolling knows it too, but only
+   *  for sessions the user put on account rolling). Synchronous for the same reason `usage` is: it is
+   *  answered from what the poll already collected. */
+  codexSessionIdFor(sessionId: string): string | null {
+    const e = this.entries.get(sessionId)
+    return e && !e.disposed ? e.codexSessionId : null
   }
 
   unregister(sessionId: string): void {
@@ -199,6 +233,7 @@ export class CodexRolloutWatcher {
       // session (mirroring codexRolling's re-check for the same reason). Both paths were built by findRollout, so the strings match.
       if (this.claimed(entry).includes(found.path)) return
       entry.rolloutPath = found.path
+      entry.codexSessionId = found.sessionId
       entry.tail = new JsonlTail(found.path)
       this.deps.log(`codex rollout watch mapped session=${entry.sessionId} path=${found.path}`)
       return // End this step() having only mapped, without reading — the next tick's read() is still that JsonlTail's

@@ -77,3 +77,20 @@ describe('parseArgs', () => {
     })
   })
 })
+
+describe('반복되는 플래그', () => {
+  it('--check 는 여러 번 와서 배열이 된다', () => {
+    const r = parseArgs(['session-task-complete', '--check', 'tests=passed', '--check', 'build=skipped'])
+    expect(r).toMatchObject({ args: { check: ['tests=passed', 'build=skipped'] } })
+  })
+
+  it('한 번만 와도 배열이다 — 부르는 쪽이 두 모양을 다루지 않게', () => {
+    const r = parseArgs(['session-task-complete', '--check', 'tests=passed'])
+    expect(r).toMatchObject({ args: { check: ['tests=passed'] } })
+  })
+
+  it('반복 목록에 없는 플래그는 마지막 값이 이긴다 — 지금 동작 그대로다', () => {
+    const r = parseArgs(['send', '--text', 'a', '--text', 'b'])
+    expect(r).toMatchObject({ args: { text: 'b' } })
+  })
+})

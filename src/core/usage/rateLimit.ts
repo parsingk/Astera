@@ -1,4 +1,4 @@
-import type { RateLimitUsage, RateLimitWindow } from '../types'
+import type { RateLimitPeak, RateLimitUsage, RateLimitWindow } from '../types'
 
 // Maps the /api/oauth/usage response to RateLimitUsage. Pure functions — no network, no electron.
 // This is the evidence the limit verdict runs on: unlike the statusLine snapshot, which stops updating
@@ -10,6 +10,15 @@ interface UsageWindowRaw {
   used_percentage?: unknown
   utilization?: unknown // the name the OAuth usage endpoint uses (0-100)
   resets_at?: unknown // epoch seconds (number), or an ISO/other string
+}
+
+/** One entry of `limits[]`. Measured 2026-08-30 on a live account:
+ *  `{kind:"weekly_all", group:"weekly", percent:88, severity:"warning",
+ *    resets_at:"2026-09-02T09:59:59+00:00", scope:null, is_active:true}` */
+interface UsageLimitRaw {
+  percent?: unknown
+  resets_at?: unknown
+  group?: unknown
 }
 
 function clampPercent(n: number): number {
@@ -51,10 +60,12 @@ export function mapUsageResponse(data: unknown): RateLimitUsage {
   }
   const session = mapWindow(d.five_hour)
   const weekly = mapWindow(d.seven_day)
+  const peak = peakOf(d.limits, session, weekly)
   return {
     session,
     weekly,
-    maxPercent: maxPercentOf(d.limits, session, weekly),
+    maxPercent: peak ? peak.percent : null,
+    peak,
     status: session || weekly ? 'ok' : 'error'
   }
 }
@@ -72,21 +83,33 @@ export function mapUsageResponse(data: unknown): RateLimitUsage {
  *  bucket is already a limit — including the per-model scoped ones.
  *
  *  An older response shape with no `limits[]` falls back to the two windows. */
-function maxPercentOf(
+function peakOf(
   limits: unknown,
   session: RateLimitWindow | null,
   weekly: RateLimitWindow | null
-): number | null {
-  const pcts: number[] = []
+): RateLimitPeak | null {
+  const found: RateLimitPeak[] = []
   if (Array.isArray(limits))
     for (const l of limits) {
       if (typeof l !== 'object' || l === null) continue
-      const p = (l as { percent?: unknown }).percent
-      if (typeof p === 'number' && Number.isFinite(p)) pcts.push(clampPercent(p))
+      const raw = l as UsageLimitRaw
+      const p = raw.percent
+      if (typeof p !== 'number' || !Number.isFinite(p)) continue
+      found.push({
+        percent: clampPercent(p),
+        resetsAt: normalizeReset(raw.resets_at),
+        // `group` is "session" or "weekly" (measured). Anything else is read as not-weekly rather
+        // than guessed at — a wrong weekly flag mislabels the wait a block record is describing.
+        weekly: raw.group === 'weekly'
+      })
     }
-  if (!pcts.length) {
-    if (session) pcts.push(session.usedPercent)
-    if (weekly) pcts.push(weekly.usedPercent)
+  // The older response shape with no limits[] — the two windows are all there is.
+  if (!found.length) {
+    if (session) found.push({ percent: session.usedPercent, resetsAt: session.resetsAt, weekly: false })
+    if (weekly) found.push({ percent: weekly.usedPercent, resetsAt: weekly.resetsAt, weekly: true })
   }
-  return pcts.length ? Math.max(...pcts) : null
+  if (!found.length) return null
+  // Ties go to the first: with two buckets equally full either reset is as good an answer, and
+  // reduce's `>` already keeps the earlier one.
+  return found.reduce((a, b) => (b.percent > a.percent ? b : a))
 }

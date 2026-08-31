@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fileTab, parseTab, sessionTab } from './tabId'
+import { recordTab, fileTab, parseTab, sessionTab } from './tabId'
 
 describe('tabId', () => {
   it('세션 탭 id를 만들고 되읽는다', () => {
@@ -16,13 +16,20 @@ describe('tabId', () => {
     expect(parseTab('file:D:\\repo\\a.ts')).toEqual({ kind: 'file', id: 'D:\\repo\\a.ts' })
   })
 
+  it('기록 탭을 만들고 되읽는다', () => {
+    expect(recordTab('auth')).toBe('record:auth')
+    expect(parseTab('record:auth')).toEqual({ kind: 'record', id: 'auth' })
+  })
+
   it('접두사가 없거나 알 수 없는 종류는 null', () => {
     expect(parseTab('sess-1')).toBeNull()
     expect(parseTab('run:1')).toBeNull()
+    expect(parseTab('widget:x')).toBeNull()
   })
 
   it('종류만 있고 id가 빈 문자열이면 null', () => {
     expect(parseTab('session:')).toBeNull()
+    expect(parseTab('record:')).toBeNull()
   })
 
   // 콜론으로 시작하는 문자열은 종류가 빈 문자열이므로 탭 id가 아니다

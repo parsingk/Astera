@@ -5,9 +5,14 @@ import { sanitizeFontFamily } from '../core/terminal/font'
 import type { TerminalFont } from '../core/terminal/font'
 import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from '../core/theme/themes'
 import type { ResumeStrategy } from '../core/types'
+import {
+  readGeneratorSettings,
+  writableGeneratorSettings,
+  type GeneratorSettings
+} from '../core/understanding/generatorSettings'
 
 /** App-wide settings persistence. Holds the language, the id of the dismissed update campaign, the
- *  orchestration toggle, the resume strategy, the terminal font, and the theme.
+ *  orchestration toggle, the work unit tracking toggle, the resume strategy, the terminal font, and the theme.
  *  A null lang means the user has never picked one explicitly — the caller derives it with
  *  pickInitialLang(app.getLocale()). The derived value is not stored. */
 export class AppSettingsStore {
@@ -15,6 +20,9 @@ export class AppSettingsStore {
   /** The update campaign the user dismissed. The basis for not showing the same campaign again. */
   private dismissedCampaignId: string | null = null
   private orchestrationEnabled = false
+  private workUnitTrackingEnabled = false
+  /** 설명을 누가·무엇으로 만드는가. 비어 있으면 생성하지 않는다 (설계 D2) */
+  private generator: GeneratorSettings = {}
   private resumeStrategy: ResumeStrategy = 'original'
   private terminalFont: TerminalFont = { latin: null, hangul: null }
   private theme: ThemeId = DEFAULT_THEME_ID
@@ -35,6 +43,14 @@ export class AppSettingsStore {
       // Narrowed to === true — values like 'yes' or 1 must not slip through as truthy and turn an experimental feature on
       this.orchestrationEnabled =
         (parsed as { orchestrationEnabled?: unknown }).orchestrationEnabled === true
+      // Same narrowing, same reason — and it is the whole point of this toggle: default (and any
+      // untrusted file content) reads as off, so detection stays off until the user explicitly turns it on.
+      this.workUnitTrackingEnabled =
+        (parsed as { workUnitTrackingEnabled?: unknown }).workUnitTrackingEnabled === true
+      // Sanitised on read like terminalFont, and for the same reason: the file is user-editable and
+      // these values become CLI arguments. Anything that does not survive reads as "not set", which
+      // means the CLI default (or, for the account, no generation at all).
+      this.generator = readGeneratorSettings((parsed as { generator?: unknown }).generator)
       // Narrowed to === 'smart' — the file is user-editable, so anything else ('ask', 42, null) reads as 'original'
       this.resumeStrategy =
         (parsed as { resumeStrategy?: unknown }).resumeStrategy === 'smart' ? 'smart' : 'original'
@@ -56,6 +72,8 @@ export class AppSettingsStore {
         this.lang = null
         this.dismissedCampaignId = null
         this.orchestrationEnabled = false
+        this.workUnitTrackingEnabled = false
+        this.generator = {}
         this.resumeStrategy = 'original'
         this.terminalFont = { latin: null, hangul: null }
         this.theme = DEFAULT_THEME_ID
@@ -67,6 +85,8 @@ export class AppSettingsStore {
       // The failure branch resets this too — otherwise, on a reload through the same instance, the previous value
       // survives the corrupt-file recovery and leaves a setting enabled that the file does not contain
       this.orchestrationEnabled = false
+      this.workUnitTrackingEnabled = false
+      this.generator = {}
       this.resumeStrategy = 'original'
       this.terminalFont = { latin: null, hangul: null }
       this.theme = DEFAULT_THEME_ID
@@ -99,6 +119,26 @@ export class AppSettingsStore {
 
   async setOrchestrationEnabled(enabled: boolean): Promise<void> {
     this.orchestrationEnabled = enabled
+    await this.persist()
+  }
+
+  getWorkUnitTrackingEnabled(): boolean {
+    return this.workUnitTrackingEnabled
+  }
+
+  async setWorkUnitTrackingEnabled(enabled: boolean): Promise<void> {
+    this.workUnitTrackingEnabled = enabled
+    await this.persist()
+  }
+
+  getGenerator(): GeneratorSettings {
+    return this.generator
+  }
+
+  /** 셋을 **함께** 쓴다 — 계정을 바꾸면 그 계정에 없는 모델이, 모델을 바꾸면 그 모델이 안 받는
+   *  강도가 남아서는 안 된다. 하나씩 쓰는 setter 를 두면 그 불변식을 지킬 자리가 사라진다. */
+  async setGenerator(g: GeneratorSettings): Promise<void> {
+    this.generator = readGeneratorSettings(g)
     await this.persist()
   }
 
@@ -141,6 +181,8 @@ export class AppSettingsStore {
       lang?: Lang
       dismissedCampaignId?: string
       orchestrationEnabled?: boolean
+      workUnitTrackingEnabled?: boolean
+      generator?: GeneratorSettings
       resumeStrategy?: ResumeStrategy
       terminalFont?: TerminalFont
       theme?: ThemeId
@@ -148,6 +190,10 @@ export class AppSettingsStore {
     if (this.lang) data.lang = this.lang
     if (this.dismissedCampaignId) data.dismissedCampaignId = this.dismissedCampaignId
     if (this.orchestrationEnabled) data.orchestrationEnabled = true
+    if (this.workUnitTrackingEnabled) data.workUnitTrackingEnabled = true
+    // 비어 있으면 키 자체를 남기지 않는다 — 위 falsy 규칙 그대로다
+    const generator = writableGeneratorSettings(this.generator)
+    if (generator) data.generator = generator
     if (this.resumeStrategy === 'smart') data.resumeStrategy = 'smart'
     if (this.terminalFont.latin || this.terminalFont.hangul) data.terminalFont = this.terminalFont
     if (this.theme !== DEFAULT_THEME_ID) data.theme = this.theme

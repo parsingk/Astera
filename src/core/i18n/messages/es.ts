@@ -23,6 +23,27 @@ export const es: Catalog = {
     'Pida a la sesión que vaya a usar como orquestador que ejecute astera help para obtener la guía de uso completa.',
   'settings.orchestration.saveFailed':
     'No se pudo guardar la configuración de orquestación: {detail}',
+  // Seguimiento de unidades de trabajo
+  'settings.workUnit.label': 'Seguimiento de unidades de trabajo (experimental)',
+  'settings.workUnit.hint':
+    'Declara una tarea escribiendo /astera-task con lo que quieres hacer, y eso se convierte en una ' +
+    'fila propia hasta que termina, sin importar cuántos mensajes haga falta. No se aplica a las ' +
+    'sesiones que ya están abiertas: funciona a partir de las sesiones nuevas. Solo se leen las ' +
+    'conversaciones posteriores a activarlo — el historial existente nunca se lee.',
+  'settings.workUnit.saveFailed': 'No se pudo guardar la configuración de seguimiento: {detail}',
+  // Generación de explicaciones (How It Works)
+  'settings.gen.label': 'Cuenta para explicaciones',
+  'settings.gen.hint': 'Cuando termina un trabajo, esta cuenta escribe la explicación de la función. No se genera nada hasta que elijas una.',
+  'settings.gen.none': 'Sin elegir — no se genera nada',
+  'settings.gen.model': 'Modelo',
+  'settings.gen.modelDefault': 'El predeterminado del CLI',
+  'settings.gen.effort': 'Profundidad de razonamiento',
+  'settings.gen.effortDefault': 'El predeterminado del modelo',
+  'settings.gen.refresh': 'Actualizar la lista de modelos',
+  'settings.gen.loading': 'Consultando los modelos…',
+  'settings.gen.listFailed': 'No se pudo obtener la lista de modelos — puedes escribir uno. ({detail})',
+  'settings.gen.modelPlaceholder': 'Escribe el nombre de un modelo',
+  'settings.gen.saveFailed': 'No se pudo guardar la configuración de generación: {detail}',
   'settings.accounts.hint':
     '⤓ importa la configuración de la cuenta predeterminada del mismo CLI. La predeterminada es la primera cuenta registrada que tenga la sesión iniciada, una por CLI.',
   'common.cancel': 'Cancelar',
@@ -112,6 +133,9 @@ export const es: Catalog = {
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped
   'session.spawn.resumeLiveIgnored':
     'Esta sesión ya está en ejecución — las opciones seleccionadas no se aplicaron.',
+  // Smart Resume took the blank slate — without this the user reads the empty window as a lost conversation
+  'session.spawn.smartResume':
+    'Reanudación inteligente: se inició una sesión nueva con un resumen del trabajo hecho hasta ahora, en lugar de recargar la conversación.',
   'session.placeholder.start': '+ Empiece con una sesión nueva',
   'session.usage.contextTitleWithTokens': 'Uso del contexto ({used} / {window} tokens)',
   'session.usage.contextTitle': 'Uso del contexto',
@@ -306,6 +330,8 @@ export const es: Catalog = {
   'shortcut.explorer.saveFile': 'Guardar el archivo',
   'shortcut.explorer.closeFileTab': 'Cerrar la pestaña de archivo',
   'shortcut.explorer.cyclePreview': 'Cambiar el modo de vista previa de markdown',
+  'shortcut.sidebar.jobs': 'Mostrar u ocultar la barra lateral de Jobs',
+  'shortcut.sidebar.howItWorks': 'Mostrar u ocultar la barra lateral de How It Works',
   'shortcut.explorer.rename': 'Cambiar nombre',
   'shortcut.explorer.delete': 'Eliminar',
   'shortcut.explorer.selectAll': 'Seleccionar todo',
@@ -908,5 +934,56 @@ export const es: Catalog = {
   'jobs.node.answer': 'Desbloquear',
   'jobs.node.answerLabel': 'Decisión',
   'jobs.node.gateQuestion': 'Por qué queda en espera',
-  'jobs.node.failed': 'No se pudo completar esta acción'
+  'jobs.node.failed': 'No se pudo completar esta acción',
+  // How It Works — comprensión del proyecto
+  'hiw.rail.open': 'How It Works',
+  'hiw.title': 'How It Works',
+  'hiw.record.regenerate': 'Volver a redactar',
+  'hiw.record.generating': 'Redactando',
+  'hiw.record.ready': 'Registrado',
+  'hiw.record.needsReview': 'Requiere revisión',
+  'hiw.record.failed': 'No se pudo redactar',
+  'hiw.record.regenerateFailed': 'No se pudo volver a redactar: {detail}',
+  'hiw.record.reason.noAccount':
+    'No hay una cuenta de explicación configurada — elige una en Configuración → General.',
+  'hiw.record.reason.interrupted':
+    'La aplicación se cerró mientras esto se estaba redactando — pulsa el botón de abajo para volver a intentarlo.',
+  'hiw.record.reason.checkFailed':
+    'Una comprobación que ejecutó el agente no pasó — vale la pena revisar el resultado.',
+  'hiw.record.reason.checkFailedJob':
+    'Una comprobación que ejecutó la aplicación no pasó — vale la pena revisar el resultado.',
+  'hiw.pane.overview': 'Qué hace',
+  'hiw.pane.userVisible': 'Qué notarás',
+  'hiw.pane.flow': 'Cómo funciona',
+  'hiw.pane.decisions': 'Por qué funciona así',
+  'hiw.pane.implementation': 'Implementación',
+  'hiw.pane.edit': 'Editar',
+  'hiw.pane.reference': 'Referencia',
+  'hiw.scope.clear': 'Ver todo',
+  'hiw.scope.whatHappens': 'Qué ocurre aquí',
+  'hiw.scope.why': 'Por qué',
+  'hiw.scope.implementation': 'Implementación de este paso',
+  'hiw.empty.body': 'Cada vez que termina un trabajo, aquí queda qué cambió y cómo. Solo se registra el trabajo posterior a activar el seguimiento.',
+  'hiw.empty.readOnly': 'Solo lectura — tu código no se modifica.',
+  'hiw.pane.notYet': 'Este botón aún no está listo.',
+  'hiw.pane.noExplanation': 'Este registro aún no tiene explicación.',
+  'hiw.pane.notInProject': 'El registro de esta pestaña no está en el proyecto abierto actualmente.',
+  'hiw.open.title': 'En curso',
+  'hiw.open.interruptedTitle': 'Quedó sin terminar',
+  'hiw.open.complete': 'Hecho',
+  'hiw.open.cancel': 'Cancelar',
+  'hiw.open.completeFailed': 'No se pudo marcar como hecho: {detail}',
+  'hiw.open.completeEmpty': 'No hubo ningún cambio, así que no se registró nada.',
+  'hiw.open.cancelFailed': 'No se pudo cancelar: {detail}',
+  'hiw.open.startedAt': 'Iniciado a las {time}',
+  'hiw.open.reason.newTask': 'Se detuvo porque empezó otra tarea',
+  'hiw.open.reason.sessionEnd': 'Se detuvo porque la sesión terminó',
+  'hiw.open.reason.appRestart': 'Se detuvo porque la aplicación se cerró',
+  'hiw.open.reason.trackingOff': 'Se detuvo porque se desactivó el seguimiento',
+  'hiw.open.reason.upgrade': 'Se detuvo porque la aplicación se actualizó',
+  'hiw.verify.verified': 'Todas las comprobaciones reportadas pasaron',
+  'hiw.verify.partial': 'Solo se comprobó una parte',
+  'hiw.verify.unverified': 'No se comprobó nada',
+  'hiw.verify.failed': 'Una comprobación reportada falló',
+  'hiw.verify.reported': 'Lo reportó el agente — la aplicación no lo ejecutó por su cuenta'
 }

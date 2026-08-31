@@ -22,6 +22,26 @@ export const ja: Catalog = {
     'すでに開いているセッションには適用されません — 新しいセッションから有効になります。' +
     'オーケストレーターとして使うセッションで astera help を実行させると、詳しい使い方が得られます。',
   'settings.orchestration.saveFailed': 'オーケストレーション設定を保存できませんでした: {detail}',
+  // Work Unit 追跡
+  'settings.workUnit.label': '作業単位の追跡（実験）',
+  'settings.workUnit.hint':
+    '/astera-task でやりたいことを書くと、そこから作業が始まり、終わるまで何度やり取りしても同じ1行の' +
+    'ままです。すでに開いているセッションには適用されません — 新しいセッションから有効になります。' +
+    'オンにした後の会話だけを見ます — 既存の履歴は読みません。',
+  'settings.workUnit.saveFailed': '作業単位の追跡設定を保存できませんでした: {detail}',
+  // 説明生成 (How It Works)
+  'settings.gen.label': '説明生成アカウント',
+  'settings.gen.hint': '作業が終わると、このアカウントが機能の説明を書きます。選ぶまでは生成しません。',
+  'settings.gen.none': '未選択 — 生成しません',
+  'settings.gen.model': 'モデル',
+  'settings.gen.modelDefault': 'CLI の既定',
+  'settings.gen.effort': '推論の深さ',
+  'settings.gen.effortDefault': 'モデルの既定',
+  'settings.gen.refresh': 'モデル一覧を更新',
+  'settings.gen.loading': 'モデルを問い合わせ中…',
+  'settings.gen.listFailed': 'モデル一覧を取得できませんでした — 直接入力できます。({detail})',
+  'settings.gen.modelPlaceholder': 'モデル名を直接入力',
+  'settings.gen.saveFailed': '説明生成の設定を保存できませんでした: {detail}',
   'settings.accounts.hint':
     '⤓ は同じ CLI の既定アカウントから設定を取り込みます。既定アカウントはログイン済みのアカウントのうち最初に登録されたもので、CLI ごとに1つあります。',
   'common.cancel': 'キャンセル',
@@ -111,6 +131,9 @@ export const ja: Catalog = {
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped
   'session.spawn.resumeLiveIgnored':
     'すでに実行中のセッションです — 選択したオプションは適用されませんでした。',
+  // Smart Resume took the blank slate — without this the user reads the empty window as a lost conversation
+  'session.spawn.smartResume':
+    'スマート再開: 会話を読み込み直す代わりに、これまでの作業の要約を渡して新しいセッションで始めました。',
   'session.placeholder.start': '+ 新しいセッションを開始',
   'session.usage.contextTitleWithTokens': 'コンテキスト使用率 ({used} / {window} トークン)',
   'session.usage.contextTitle': 'コンテキスト使用率',
@@ -302,6 +325,8 @@ export const ja: Catalog = {
   'shortcut.explorer.saveFile': 'ファイルを保存',
   'shortcut.explorer.closeFileTab': 'ファイルタブを閉じる',
   'shortcut.explorer.cyclePreview': 'マークダウンプレビューモードの切り替え',
+  'shortcut.sidebar.jobs': 'Jobs サイドバーの開閉',
+  'shortcut.sidebar.howItWorks': 'How It Works サイドバーの開閉',
   'shortcut.explorer.rename': '名前の変更',
   'shortcut.explorer.delete': '削除',
   'shortcut.explorer.selectAll': 'すべて選択',
@@ -892,5 +917,53 @@ export const ja: Catalog = {
   'jobs.node.answer': 'ロックを解除',
   'jobs.node.answerLabel': '決定',
   'jobs.node.gateQuestion': 'なぜ止めるのか',
-  'jobs.node.failed': 'この操作を行えませんでした'
+  'jobs.node.failed': 'この操作を行えませんでした',
+  // How It Works — プロジェクト理解
+  'hiw.rail.open': 'How It Works',
+  'hiw.title': 'How It Works',
+  'hiw.record.regenerate': '作り直す',
+  'hiw.record.generating': '作成中',
+  'hiw.record.ready': '記録済み',
+  'hiw.record.needsReview': '要確認',
+  'hiw.record.failed': '作成できませんでした',
+  'hiw.record.regenerateFailed': '作り直しに失敗しました: {detail}',
+  'hiw.record.reason.noAccount': '説明生成用のアカウントが設定されていません — 設定 → 一般で選んでください。',
+  'hiw.record.reason.interrupted':
+    'これを書いている途中でアプリが終了しました — 下のボタンを押すともう一度作成します。',
+  'hiw.record.reason.checkFailed': 'エージェントが行った検査が通りませんでした — 内容を確認してください。',
+  'hiw.record.reason.checkFailedJob': 'アプリが行った検査が通りませんでした — 内容を確認してください。',
+  'hiw.pane.overview': '何をしますか',
+  'hiw.pane.userVisible': '何が変わったか',
+  'hiw.pane.flow': 'どう動きますか',
+  'hiw.pane.decisions': 'なぜこうなっていますか',
+  'hiw.pane.implementation': '実装',
+  'hiw.pane.edit': '編集',
+  'hiw.pane.reference': '参照',
+  'hiw.scope.clear': 'すべて表示',
+  'hiw.scope.whatHappens': 'このステップで起きること',
+  'hiw.scope.why': 'なぜ',
+  'hiw.scope.implementation': 'このステップの実装',
+  'hiw.empty.body': 'ひとつの作業が終わるたびに、何をどう変えたかがここに残ります。追跡を有効にしたあとの作業だけを記録します。',
+  'hiw.empty.readOnly': '読み取りのみです — コードは変更しません。',
+  'hiw.pane.notYet': 'このボタンはまだ準備中です。',
+  'hiw.pane.noExplanation': 'この記録の説明はまだありません。',
+  'hiw.pane.notInProject': 'このタブの記録は、現在開いているプロジェクトには見つかりません。',
+  'hiw.open.title': '進行中',
+  'hiw.open.interruptedTitle': '終わっていない作業',
+  'hiw.open.complete': '完了',
+  'hiw.open.cancel': 'キャンセル',
+  'hiw.open.completeFailed': '完了にできませんでした: {detail}',
+  'hiw.open.completeEmpty': '変更がなかったので、記録しませんでした。',
+  'hiw.open.cancelFailed': 'キャンセルできませんでした: {detail}',
+  'hiw.open.startedAt': '{time} に開始',
+  'hiw.open.reason.newTask': '別の作業が始まって止まりました',
+  'hiw.open.reason.sessionEnd': 'セッションが終わって止まりました',
+  'hiw.open.reason.appRestart': 'アプリが終了して止まりました',
+  'hiw.open.reason.trackingOff': '追跡がオフになって止まりました',
+  'hiw.open.reason.upgrade': 'アプリが更新されて止まりました',
+  'hiw.verify.verified': '報告された検査はすべて成功しました',
+  'hiw.verify.partial': '一部しか確認されていません',
+  'hiw.verify.unverified': '確認されたものはありません',
+  'hiw.verify.failed': '報告された検査が失敗しました',
+  'hiw.verify.reported': 'エージェントが報告した内容です — アプリ自身が実行したわけではありません'
 }

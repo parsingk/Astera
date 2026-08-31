@@ -11,11 +11,20 @@ import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
 import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
-import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, RollStateEvent, RunConfig, SessionInfo } from '../core/types'
+import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
+import { readGeneratorSettings } from '../core/understanding/generatorSettings'
+import type { ModelListResult } from '../core/models/types'
+import { listClaudeModels, listCodexModels } from './models/discover'
+import { UnderstandingPipeline } from './understanding/pipeline'
 import { copyTranscript, samePath } from '../core/rolling/transcript'
+import { sanitizeResumePrompt } from '../core/sessions/commands'
 import { OrchestrationStore } from './orchestration/store'
+import { UnderstandingStore } from './understanding/store'
+import { WorkUnitStore } from './workUnit/store'
+import { WorkUnitCollector, type CollectorSession } from './workUnit/collector'
+import { readGitRef, isAncestorOf, readChangedFiles, readRange } from './workUnit/gitProbe'
 import {
   OrchCoordinator,
   LAUNCH_FORBIDDEN,
@@ -59,6 +68,7 @@ import {
 import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
 import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
 import { sameSnapshot, snapshotFor, runsForProject } from '../core/orchestration/view'
+import { justFinished } from '../core/orchestration/runRecord'
 import { timelineFor } from '../core/orchestration/timeline'
 import { layersOf } from '../core/orchestration/graph'
 import { repoPathOf } from '../core/worktrees/repo'
@@ -220,6 +230,33 @@ export function providerOfSession(
   }
 }
 
+/**
+ * 사이드바 히스토리 재개가 백지 재개로 갈지 정한다. `SPEC §11.5` 가 `--resume` 발원지로 꼽은 셋
+ * 중 세 번째 자리이고, 앞의 둘(`rolling.ts`·`codexRolling.ts` 의 `roll()`)이 쓰는 규칙과 같다.
+ *
+ * **판정을 `spawnSession` 안에 두지 않는 이유는 위 세 헬퍼와 같다** — 그 함수는 `registerIpc` 안의
+ * 클로저라 electron 하네스 없이는 테스트가 닿을 수 없다.
+ *
+ * - `briefing` 이 null 이면 백지로 가지 않는다. **계획의 지배 제약이다** — 브리핑을 못 만들었는데
+ *   대화까지 버리면 새 세션에 남는 것이 없다.
+ * - codex 는 이 줄을 argv 로 싣고 `sanitizeResumePrompt` 가 `["&|<>^%]` 와 연속 공백을 지운다.
+ *   그 변환에 걸리는 경로면 포인터가 없는 파일을 가리키게 되는데 **백지 세션에는 돌아갈 대화도
+ *   없다** — 그래서 백지를 포기한다(`codexRolling.ts` 의 fix wave 7, finding 2 와 같은 판단).
+ *   `mangled` 를 따로 돌리는 것은 그 거부가 로그 없이 영구화되지 않게 하기 위해서다(같은 파일의 F6).
+ * - claude 는 그 sanitizer 를 지나지 않으므로 같은 경로에서도 백지로 간다.
+ */
+export function historyResumePlan(a: {
+  strategy: ResumeStrategy
+  provider: Provider
+  briefing: string | null
+}): { blankSlate: boolean; initialPrompt?: string; mangled: boolean } {
+  if (a.strategy !== 'smart' || a.briefing === null) return { blankSlate: false, mangled: false }
+  if (a.provider !== 'codex') return { blankSlate: true, initialPrompt: a.briefing, mangled: false }
+  const safe = sanitizeResumePrompt(a.briefing)
+  if (safe !== a.briefing) return { blankSlate: false, mangled: true }
+  return { blankSlate: true, initialPrompt: safe, mangled: false }
+}
+
 export function registerIpc(
   core: Core,
   win: BrowserWindow,
@@ -236,7 +273,27 @@ export function registerIpc(
   scheduler?: SchedulerCoordinator, // session scheduler
   codexRollout?: CodexRolloutWatcher, // codex rollout watcher — turn completion and usage
   orchWiring?: OrchWiring, // agent orchestration
-  onLangChanged?: () => void // rebuilds anything (the tray menu) built with a fixed language
+  onLangChanged?: () => void, // rebuilds anything (the tray menu) built with a fixed language
+  /** Hands the Work Unit collector's "this session is a continuation" notification over to index.ts,
+   *  once and unconditionally — the same shape as `OrchWiring.onTabResumeReady`, and for the same
+   *  reason: the value lives in this file (the collector is built here, with the session list and the
+   *  store it needs), but one of its callers is a tap that only index.ts owns — the rolling
+   *  coordinators' `send`, where `session:rolled` arrives. Without this, a session respawned by a
+   *  usage-limit roll reaches the collector as a session it has never seen, and an unseen session is
+   *  read from byte 0 — which for a `--resume` is the entire replayed conversation (스펙 §16.1).
+   *
+   *  `transcriptPath` is optional because the claude roll does not know it yet; see the collector's
+   *  `onSessionForked`. Doing nothing when the feature is off is the notification's own contract, so
+   *  index.ts calls this without consulting the toggle.
+   *
+   *  `oldSessionId` is how a roll's two taps (index.ts's `session:rolled` handlers) hand over the
+   *  killed session's id, so the collector can re-key that session's still-`active` unit onto the
+   *  resumed one instead of leaving it for the exit that follows to interrupt (Important 3 — a usage
+   *  limit is not a completion). History resume does not have — and must not pass — one; see
+   *  `onSessionForked`'s own doc for why. */
+  onWorkUnitForkReady?: (
+    notify: (newSessionId: string, transcriptPath?: string, oldSessionId?: string) => void
+  ) => void
 ): void {
   const send = (channel: string, payload: unknown): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
@@ -244,8 +301,26 @@ export function registerIpc(
 
   // Session working/idle detection: decided from the window-title OSC in the output, and session:busy
   // is emitted only when the state changes.
+  /** 계정 id → 그 계정의 모델 목록. **앱이 사는 동안만** 든다 — claude 쪽 왕복이 1.6초라
+   *  설정을 열 때마다 물으면 눈에 띈다. 디스크에 두지 않는 이유: 목록은 계정의 구독·조직
+   *  정책에 따라 바뀌고, 그 변화를 우리가 감지할 방법이 없다. 새로 고침은 사용자가 누른다. */
+  const modelCache = new Map<string, ModelListResult>()
   const busyScanners = new Map<string, BusyScanner>()
   const busyState = new Map<string, boolean>()
+  /** 그 세션의 busy 신호를 **판정에 쓸 수 있는가** (`ProviderDescriptor.busyTitleReliable`).
+   *  orchIsBusy 가 값 대신 null 을 돌려주는 판정과 같은 값이고, workUnitSessions 의
+   *  `idleSignalTrusted` 도 같은 자리에서 온다. codex 가 false 인 이유는 그 플래그의 선언 자리에
+   *  실측으로 적혀 있다 — 창 제목이 장식이라 스피너가 계속 흐르고 자식 프로세스가 덮어쓴다.
+   *
+   *  계정이 사라졌으면 false 다: provider 를 못 가리면 그 신호가 무엇을 뜻하는지 알 수 없고,
+   *  모르는 신호는 믿지 않는 편이 안전하다(workUnitSessions 가 그런 세션을 건너뛰는 것과 같은 판단). */
+  const busySignalTrusted = (s: SessionInfo): boolean => {
+    try {
+      return descriptorOf(core.descriptors, core.accounts.get(s.accountId)).busyTitleReliable
+    } catch {
+      return false
+    }
+  }
 
   // ── Agent orchestration ────────────────────────────────────────────
   // The pure layers, the store, the server, the coordinator, and the CLI are first connected here.
@@ -322,9 +397,10 @@ export function registerIpc(
    *  is not up (toggle off, or startup failed) or the user turned it off at runtime — "off" has to
    *  mean "newly created sessions do not know about the CLI". Looking only at whether the server is
    *  alive (orch !== null) would let a session created after turning it off discover the CLI and then
-   *  get a 409 on every call. */
+   *  get a 409 on every call. **Work-unit tracking counts too**: /astera-task needs the same CLI and
+   *  the same ASTERA_SESSION, and the command gate in the server decides what may be called. */
   const orchEnvOf = (): { cliPath: string; infoPath: string; skillsPath: string } | undefined =>
-    orch && core.appSettings.getOrchestrationEnabled()
+    orch && (core.appSettings.getOrchestrationEnabled() || core.appSettings.getWorkUnitTrackingEnabled())
       ? { cliPath: orch.cliPath, infoPath: orch.infoPath, skillsPath: orch.skillsPath }
       : undefined
   /** The project the Jobs sidebar is folded for. main is not otherwise told what the renderer has
@@ -399,6 +475,30 @@ export function registerIpc(
       busyState.set(e.sessionId, busy)
       send('session:busy', { sessionId: e.sessionId, busy })
       scheduler?.handleBusy(e.sessionId, busy) // releases a schedule that is waiting on idle
+      // The agent's busy state flipped. There is no completion candidacy judged here any more —
+      // that whole notion is gone with the declared boundary. What this feeds is the Work Unit
+      // collector's git-operation attribution window (EG §26): busy → true opens the registration
+      // (onSessionBusy), busy → false closes it (onSessionIdle) — nothing about whether a task is
+      // done. If the collector is off, these calls do nothing.
+      //
+      // **시작 쪽도 함께 알린다.** 그 구간 안에서 옮겨진 HEAD 는 **이 세션이 만든 것**이고, 그것을
+      // 알려 주는 신호가 앱에는 이것 하나뿐이다 — 에이전트가 터미널에 치는 커밋을 Astera 가 미리
+      // 등록할 길은 없다(수집기의 onSessionBusy 주석).
+      //
+      // **그 신호를 믿을 수 있는지도 여기서 판정해 넘긴다.** orchIsBusy 가 바로 아래에서 같은
+      // 판정을 하고 값 대신 null 을 돌려주는 그 이유다 — codex 의 창 제목은 장식이라 이 자리가
+      // 초당 여러 번 뒤집히고, 그것을 그대로 등록하면 그 프로젝트의 외부 변경이 세션이 사는 동안
+      // 통째로 삼켜진다. cwd 와 이 판정을 둘 다 여기서 찾는 이유는 같다: 세션의 첫 턴은 수집기의
+      // 첫 회차보다 먼저 바빠질 수 있어 수집기의 세션 목록이 아직 비어 있다. busy 가 **바뀔 때만**
+      // 도는 자리라 list() 비용은 문제되지 않는다(orchIsBusy 가 같은 목록을 같은 방식으로 뒤진다).
+      if (busy) {
+        const s = core.sessions.list().find((x) => x.id === e.sessionId)
+        if (s) workUnitCollector.onSessionBusy(e.sessionId, s.cwd, busySignalTrusted(s))
+      } else {
+        void workUnitCollector
+          .onSessionIdle(e.sessionId)
+          .catch((err) => orchLog(`work unit idle failed: ${String(err)}`))
+      }
     }
     try {
       slack?.notifier.handleData(e) // limit detection for non-rolling sessions
@@ -418,6 +518,14 @@ export function registerIpc(
     codexRolling?.handleExit(e)
     codexRollout?.unregister(e.sessionId) // stop polling the rollout of a dead session
     scheduler?.handleExit(e) // clean up the schedule entry
+    // The session ended (WU §14-4) — observation stops here, so any Work Unit still `active` is
+    // interrupted, not completed; it waits on the How It Works screen until the person closes it.
+    // A usage-limit roll's exit is not this case — the collector's `onSessionForked` re-keys the
+    // unit onto the resumed session's id before this fires, so there is nothing left here to
+    // interrupt (see that method's doc for the ordering this depends on).
+    void workUnitCollector
+      .onSessionExit(e.sessionId)
+      .catch((err) => orchLog(`work unit exit failed: ${String(err)}`))
     void releaseCoordinator?.(e.sessionId) // 이 세션이 어느 Run 의 관리자였다면 그 칸을 비운다
     // Task 7's tab-resume briefing file is no longer deleted here — see tabResumeDir's own comment
     // above (fix wave 7, finding 1 (CRITICAL)) for why a per-exit delete keyed to this id was wrong:
@@ -453,7 +561,13 @@ export function registerIpc(
   // project terminal output and exit to the renderer
   core.terminal.onData = (e) => send('terminal:data', e)
   core.terminal.onExit = (e) => send('terminal:exit', e)
-  core.history.onUpdated = () => send('history:updated', { total: 0 })
+  // 트랜스크립트가 바뀌었다는 신호는 이 하나뿐이다 — HistoryIndex 가 계정의 기록 디렉터리를 감시하고
+  // 이미 Work Unit 이 쓰려던 것과 같은 값(150ms 디바운스 · 1000ms 상한)으로 접어서 부른다. 감시자를
+  // 하나 더 세우지 않고 여기에 얹는다.
+  core.history.onUpdated = () => {
+    send('history:updated', { total: 0 })
+    workUnitCollector.onTranscriptChanged()
+  }
   // Accounts go out exactly as stored. There is no default-account flag to decorate: the default is decided
   // per provider from the list plus login state, and the renderer already holds both (useAccountStatus), so
   // it derives that itself with core/accounts/defaultAccount.ts.
@@ -556,7 +670,55 @@ export function registerIpc(
     // CodexRollingCoordinator.register — a reopened conversation's own limit records may only be
     // believed for the account that produced them.
     let resumeSameAccount = false
-    if (opts.resumeSessionId && typeof opts.resumeTranscriptPath === 'string' && opts.resumeTranscriptPath) {
+    // Smart Resume — `SPEC §11.5` 가 `--resume` 발원지로 꼽은 셋 중 **세 번째** 자리다(앞의 둘은
+    // `rolling.ts`·`codexRolling.ts` 의 `roll()`). 설정이 켜져 있고 브리핑이 실제로 만들어지면 대화를
+    // 복사하지도 `--resume` 하지도 않는다: 백지 세션을 띄우고 그 브리핑을 가리키는 한 줄만 싣는다.
+    //
+    // **복사보다 먼저 묻는다.** 브리핑은 원본 대화 파일을 읽어야 하는데(읽기만 한다), 백지로 갈지
+    // 정해지기 전에 복사부터 하면 백지 재개에서 아무도 열지 않을 파일을 target 계정 폴더에 남긴다.
+    // 두 코디네이터가 `roll()` 에서 브리핑을 복사 앞으로 끌어올린 것과 같은 이유다.
+    //
+    // **설정이 꺼져 있으면 브리핑을 아예 만들지 않는다.** `buildTabResumeText` 의 'handover' 는
+    // 파일을 쓰는 부수 효과가 있다 — 쓰지도 않을 브리핑 파일을 재개할 때마다 남길 이유가 없다
+    // (codexRolling.ts 의 `tabFallback = strategy === 'smart'` 와 같은 판단).
+    let blankSlatePrompt: string | undefined
+    if (opts.resumeSessionId) {
+      const strategy = core.appSettings.getResumeStrategy()
+      const provider = providerOf(account)
+      const briefing =
+        strategy === 'smart'
+          ? await buildTabResumeText(opts.resumeSessionId, 'handover', {
+              cwd: opts.cwd,
+              provider,
+              // 원본 계정 쪽 파일이다. 아직 복사하지 않았으므로 이 경로가 유일한 대화이고, 이
+              // 함수는 그것을 읽기만 한다. 모르면 null — 그러면 대화 증거가 없어 브리핑이
+              // 만들어지지 않고, 아래는 기존 경로를 그대로 지난다.
+              transcriptPath: opts.resumeTranscriptPath ?? null,
+              log: orchLog,
+              dir: tabResumeDir
+            })
+          : null
+      const plan = historyResumePlan({ strategy, provider, briefing })
+      // 뭉개짐 거부는 로그가 없으면 조용히 영구화된다 — userData 경로에 `["&|<>^%]` 가 하나 있으면
+      // 이 설치본의 codex 사이드바 재개는 매번 여기서 거부되는데, 그 사실이 어디에도 남지 않는다
+      // (codexRolling.ts 의 F6 이 같은 자리에서 고친 것과 같은 사고).
+      if (plan.mangled)
+        orchLog(
+          `history resume — smart resume refused, the briefing pointer would be mangled by the argv sanitizer, falling back to --resume session=${opts.resumeSessionId}`
+        )
+      if (plan.blankSlate) {
+        blankSlatePrompt = plan.initialPrompt
+        orchLog(
+          `history resume — blank-slate resume of ${opts.resumeSessionId} account=${account.label}`
+        )
+      }
+    }
+    if (
+      !blankSlatePrompt &&
+      opts.resumeSessionId &&
+      typeof opts.resumeTranscriptPath === 'string' &&
+      opts.resumeTranscriptPath
+    ) {
       try {
         // Assembling the target path is the job of the per-provider history strategy — whoever knows
         // the disk layout builds the path. This used to pick between two mappers here.
@@ -574,7 +736,32 @@ export function registerIpc(
     // orchEnv is decided in this one place — the user path (sessions.spawn) and the coordinator path
     // (OrchCoordinator.spawnSession) both go through this function, so passing it per call site would
     // give us two copies.
-    const info = core.sessions.spawn({ ...opts, account, rollProviders, orchEnv: orchEnvOf() })
+    const info = core.sessions.spawn({
+      ...opts,
+      account,
+      rollProviders,
+      orchEnv: orchEnvOf(),
+      // 백지 재개 — `--resume` 을 부르지 않는다. `opts` 에는 아직 `resumeSessionId` 가 들어 있으므로
+      // 여기서 undefined 로 덮는 것이 그 취소다. 그 결과 `info.resumeSessionId` 도 비고, 그것을
+      // 읽는 아래 배선들(rolling·codexRolling 의 seed 필드, rollout 감시자)이 저절로 새 세션으로
+      // 다룬다 — `roll()` 의 백지 재개가 체인의 신원 필드를 비우는 것과 같은 상태다.
+      ...(blankSlatePrompt !== undefined
+        ? { resumeSessionId: undefined, initialPrompt: blankSlatePrompt }
+        : {})
+    })
+    // 이어받은 세션이라고 Work Unit 수집기에 알린다 (스펙 §16.1). **추측할 자리가 아니다** — 이
+    // 자리가 그것이 resume 이라는 것을 아는 유일한 곳이고, 수집기는 새 세션 id 만 보므로 알리지
+    // 않으면 커서 없는 새 세션으로 보아 파일을 0 부터 읽는다. `--resume` 은 이전 대화를 통째로 다시
+    // 적으므로 그 0 은 곧 켜기 전의 대화 전체다. 건네는 경로는 방금 대화를 복사해 둔 그 파일이다 —
+    // 이어받은 프로세스가 이어 쓰는 파일이 그것이다(codex 는 확실히 그렇고, claude 가 새 파일을
+    // 쓰면 수집기가 그 세션을 처음 보는 자리에서 그 파일의 끝을 잡는다).
+    // 토글이 꺼져 있으면 이 호출은 아무 일도 하지 않는다 — 부르는 쪽이 확인하지 않아도 된다.
+    // **`oldSessionId` (the third argument) is deliberately not passed.** This path is the person
+    // reopening a past conversation from the sidebar, not a usage-limit roll — `opts.resumeSessionId`
+    // is that old session's id, but even if its task is still sitting `interrupted`, this resume
+    // gives no grounds to revive it as `active`: the person never called `/astera-task` again.
+    // `onSessionForked`'s doc records this decision and why (Important 3).
+    if (resumeTranscriptDest !== undefined) workUnitCollector.onSessionForked(info.id, resumeTranscriptDest)
     // Route to the per-provider coordinator — a mix is already blocked by the guard above, so the primary account's provider decides
     if ((opts.rollAccountIds?.length ?? 0) >= 1) {
       // The rolling coordinators are separate per-provider implementations and are deliberately not
@@ -687,13 +874,67 @@ export function registerIpc(
   // down) so the two rolling coordinators can reach a tab session's briefing even with the toggle off.
   orchWiring?.onTabResumeReady(tabResumeTextFor)
 
+  /**
+   * Installs whichever discovery stub(s) match the two toggles' current state, against every known
+   * account. Pulled out of bootOrch (which used to build and install this list inline, once) into a
+   * standalone function that both settings.setOrchestrationEnabled and
+   * settings.setWorkUnitTrackingEnabled also call directly — **not just bootOrch**.
+   *
+   * **Why bootOrch alone is not enough**: bootOrch only runs on the transition that actually starts
+   * the server (see startOrch's `if (orch || orchStarting) return`). Before this task the server could
+   * only be up when orchestration was on, so setOrchestrationEnabled(true) always reached it. Now
+   * either toggle can start the server, so the second toggle to turn on reaches a server that is
+   * already up — bootOrch, and this install, never run for it. Concretely: tracking on first plants
+   * the task stub (server boots); orchestration on second calls startOrch(), which no-ops because
+   * `orch` is already set — without this function being called independently, the orchestration stub
+   * would never be planted for that session, on the one transition (enabling the feature) where losing
+   * the only discovery path for it matters most (see the header comment in stub.ts).
+   *
+   * No-ops when the server has never come up (`orch` is null — nothing has a skillsPath yet to install
+   * from) or when both toggles are off (`stubs` comes out empty). Safe to call redundantly — that is
+   * the point of calling it from three places: installStub already skips a write once content matches
+   * (see stub.ts), so the worst repeated cost is a per-account file read, not a per-account write.
+   */
+  const installStubsForCurrentToggles = (): void => {
+    if (!orch) return
+    const stubs = [
+      ...(core.appSettings.getOrchestrationEnabled()
+        ? [
+            {
+              stubPath: path.join(orch.skillsPath, 'orchestration-stub.md'),
+              skillName: 'astera-orchestration'
+            }
+          ]
+        : []),
+      ...(core.appSettings.getWorkUnitTrackingEnabled()
+        ? [{ stubPath: path.join(orch.skillsPath, 'task-stub.md'), skillName: 'astera-task' }]
+        : [])
+    ]
+    if (stubs.length === 0) return
+    // installStub swallows per-stub and per-account failures itself and does not throw, but the
+    // .catch is here so that even an unexpected failure cannot affect the caller.
+    void installStub({
+      stubs,
+      configDirs: core.accounts.list().map((a) => a.configDir),
+      log: orchLog
+    })
+      .then((r) =>
+        orchLog(
+          `stub install — ${r.written.length} written, ${r.unchanged.length} unchanged, ${r.skipped.length} skipped (no ownership marker and differs from the current stub), ${r.failed.length} failed, ${r.removed.length} legacy removed`
+        )
+      )
+      .catch((err) => orchLog(`stub install failed: ${String(err)}`))
+  }
+
   let orchStarting = false
-  /** Starts orchestration. Called only when the toggle is on — with it off, the store is not even read
-   *  and no port is opened. Turning it on at runtime comes back through here and starts immediately
-   *  (sessions created after that get the CLI — environment variables are fixed at spawn time, so
-   *  sessions already running cannot). If it is already up, this does nothing. Turning it off does not
-   *  close the server — enabled() is read on every request, so CLI calls after that are rejected with
-   *  a 409. */
+  /** Starts the orchestration server. Called when **either** toggle is on — agent orchestration or
+   *  work-unit tracking, since `/astera-task` needs the same CLI and the same `ASTERA_SESSION` the
+   *  orchestration server already hands out (see `orchEnvOf`'s doc). With both off, this is never
+   *  called and no port is opened. Turning either one on at runtime comes back through here and
+   *  starts immediately (sessions created after that get the CLI — environment variables are fixed
+   *  at spawn time, so sessions already running cannot). If it is already up, this does nothing.
+   *  Turning a toggle off does not close the server — `enabled()`/`trackingEnabled()` are read on
+   *  every request, so CLI calls after that are rejected with a 409. */
   const startOrch = async (): Promise<void> => {
     // orch is assigned last (after the port and files are ready), so re-entering in that window would
     // start two servers — the first loses its reference and keeps holding the port, and the info file
@@ -1473,23 +1714,34 @@ export function registerIpc(
           }
         // `--no-edit` 는 편집기를 막는 것이다. 이 자리에는 사람이 없고, 편집기가 뜨면 그 git 프로세스는
         // git() 의 30초 timeout 까지 서 있다가 죽는다 — 그때 남는 저장소가 곧 병합 중간 상태다.
-        const merged = await git(['merge', '--no-edit', ref], { cwd: mergeInto })
-        if (!merged.ok) {
-          // 미리 검사가 통과했는데도 실패했다면 충돌이 아닌 이유다(추적되지 않는 파일과의 겹침,
-          // index.lock, 훅, 서명). 되돌린 뒤 사람에게 간다 — 에이전트에게 넘기지 않는 이유는 이것이
-          // "합치면 충돌한다"가 아니라 "앱이 병합을 돌릴 수 없다"이기 때문이다.
-          await git(['merge', '--abort'], { cwd: mergeInto }) // 병합이 시작되지도 않았으면 실패한다 — 무시한다
-          // **되돌아갔는지 확인해서 그 사실을 문장에 넣는다.** 앱이 저장소를 어떤 상태로 두었는지를
-          // 사용자가 짐작하게 두지 않는다 — 이 경로가 있는 이유가 그것이다.
-          const after = await git(['status', '--porcelain', '--untracked-files=no'], { cwd: mergeInto })
-          const left =
-            after.ok && after.stdout === ''
-              ? '합칠 폴더는 병합 전 상태로 되돌렸습니다.'
-              : '**합칠 폴더가 병합 중간 상태로 남아 있을 수 있습니다 — git status 로 직접 확인해 주세요.**'
-          return {
-            kind: 'human',
-            reason: `${target.branch} 브랜치를 합칠 폴더에 합치지 못했습니다: ${merged.stderr || merged.stdout}. ${left}`
+        //
+        // **저장소를 실제로 움직이는 자리다** — mergeInto 의 HEAD 와 index 를 옮긴다. gitWatcher 가
+        // 바로 그 둘을 보고 있으므로, 이 병합을 EG §26 에 등록해 두지 않으면 Astera 자신이 방금 만든
+        // 변경이 "외부에서 저장소가 바뀌었다"로 기록된다(EG §41-9). `finally` 로 닫는 이유는 아래
+        // 실패 분기가 그 안에서 그대로 `return` 하기 때문이다 — try 없이 두면 그 경로로 나갈 때
+        // 등록이 영원히 "진행 중"으로 남고, 그날부터 이 프로젝트의 모든 외부 변경이 조용히 삼켜진다.
+        const mergeOpId = workUnitCollector.beginGitOperation('job-merge', mergeInto)
+        try {
+          const merged = await git(['merge', '--no-edit', ref], { cwd: mergeInto })
+          if (!merged.ok) {
+            // 미리 검사가 통과했는데도 실패했다면 충돌이 아닌 이유다(추적되지 않는 파일과의 겹침,
+            // index.lock, 훅, 서명). 되돌린 뒤 사람에게 간다 — 에이전트에게 넘기지 않는 이유는 이것이
+            // "합치면 충돌한다"가 아니라 "앱이 병합을 돌릴 수 없다"이기 때문이다.
+            await git(['merge', '--abort'], { cwd: mergeInto }) // 병합이 시작되지도 않았으면 실패한다 — 무시한다
+            // **되돌아갔는지 확인해서 그 사실을 문장에 넣는다.** 앱이 저장소를 어떤 상태로 두었는지를
+            // 사용자가 짐작하게 두지 않는다 — 이 경로가 있는 이유가 그것이다.
+            const after = await git(['status', '--porcelain', '--untracked-files=no'], { cwd: mergeInto })
+            const left =
+              after.ok && after.stdout === ''
+                ? '합칠 폴더는 병합 전 상태로 되돌렸습니다.'
+                : '**합칠 폴더가 병합 중간 상태로 남아 있을 수 있습니다 — git status 로 직접 확인해 주세요.**'
+            return {
+              kind: 'human',
+              reason: `${target.branch} 브랜치를 합칠 폴더에 합치지 못했습니다: ${merged.stderr || merged.stdout}. ${left}`
+            }
           }
+        } finally {
+          workUnitCollector.endGitOperation(mergeOpId)
         }
         orchLog(`scheduler: merged ${ref} into ${mergeInto}`)
         // 합친 워크트리는 여기서 지운다 — **폴더까지. 단 `reap` 일 때만이다**(위 주석: 사람이 누른
@@ -1982,6 +2234,11 @@ export function registerIpc(
       }
     }
 
+    // The state before this write, so a Run's finish can be caught as an edge (runRecord.ts) rather
+    // than read as a state — outcomeOf is derived, so "finished" stays true on every round after the
+    // last task lands. Local to this boot: a restart has no previous state either, the same rule a
+    // fresh app start needs (see the null fallback in setState below).
+    let prevOrchState: OrchState | null = null
     const deps: OrchServerDeps = {
       getState: () => store.get(),
       // Passed in a form that is definitely awaited — the caller's await contract stays. save() itself
@@ -1998,6 +2255,36 @@ export function registerIpc(
       setState: async (next) => {
         await store.save(next)
         pushOrchState(next)
+        // A finished Run becomes a record. `prevOrchState ?? next` on the first write after boot
+        // treats "before" as "after" — justFinished(next, next) is always empty — so a Run that was
+        // already finished when the app started is not recorded (same rule as D2: the screen holds
+        // only what the app watched happen, not what it finds already done).
+        //
+        // Caught per Run, not around the loop. Several Runs can finish in one write (runRecord's
+        // own test pins that), and a throw while handling the first would silently drop the rest —
+        // the same per-item isolation orchFireTick uses below. The catch is needed at all for the
+        // reason pushOrchState's own comment gives: store.save has already committed by this
+        // point, so a throw here must not turn a successful write into a command that errors.
+        for (const { runId, outcome } of justFinished(prevOrchState ?? next, next)) {
+          try {
+            const run = next.runs.find((r) => r.id === runId)
+            if (!run) continue
+            const tasks = next.tasks.filter((t) => t.runId === runId)
+            void understandingPipeline.onRunFinished(understandingKeyOf(run.cwd), {
+              runId,
+              jobName: run.objective.slice(0, 60),
+              objective: run.objective,
+              at: new Date().toISOString(),
+              taskIds: tasks.map((t) => t.id),
+              tasks: tasks.map((t) => ({ title: t.title, outcome: t.status })),
+              changedFiles: [...new Set(tasks.flatMap((t) => t.filesModified ?? []))],
+              validation: { status: outcome === 'completed' ? 'passed' : 'failed' }
+            })
+          } catch (e) {
+            orchLog(`run-finished record failed for ${runId}: ${String(e)}`)
+          }
+        }
+        prevOrchState = next
         // 저장이 끝난 뒤에 돈다 — 스케줄러가 읽는 것은 getState() 이고, 저장 전에 부르면 방금의
         // 변경을 못 본다. 떠나 보내는 promise 에 **종단 .catch 가 있어야 한다**(startReview 와 같은
         // 이유: 붙이지 않으면 unhandled rejection 이 main 프로세스를 죽인다).
@@ -2232,6 +2519,15 @@ export function registerIpc(
       },
       // Read on every request — turning it off at runtime has to reject CLI calls from then on
       enabled: () => core.appSettings.getOrchestrationEnabled(),
+      // Same reasoning as `enabled` above, but for the session-task-* commands. workUnitCollector is
+      // declared further down (around the `WorkUnitCollector` construction) — referencing it here is
+      // fine because these arrows only run once a call comes in, well after that declaration has run.
+      trackingEnabled: () => core.appSettings.getWorkUnitTrackingEnabled(),
+      sessionTasks: {
+        start: (sessionId, objective) => workUnitCollector.startTask(sessionId, objective),
+        complete: (sessionId, input) => workUnitCollector.completeTask(sessionId, input),
+        cancel: (sessionId, reason) => workUnitCollector.cancelTask(sessionId, reason)
+      },
       probeLimit: makeLimitProbe({
         // The key is the app session id (that is what StatusLineManager.read uses to find the capture file)
         statusLinePayload: (sessionId) => core.statusLinePayload(sessionId),
@@ -2392,28 +2688,18 @@ export function registerIpc(
       void orchFireTick().catch((e) => orchLog(`fire tick failed: ${String(e)}`))
       void nudgeSleepingCoordinators().catch((e) => orchLog(`nudge failed: ${String(e)}`))
     }, ORCH_FIRE_TICK_MS)
-    // Installing the discovery stub — without it there is no path by which an agent finds this feature.
-    // **Done for every claude and codex account**: the path is the same
-    // (<configDir>/skills/astera-orchestration/SKILL.md), and there is evidence that codex also treats
-    // the skills directory as a home resource (see the comments in stub.ts). AGENTS.md is left alone —
-    // it is a user file.
+    // Installing the discovery stub(s) — without one there is no path by which an agent finds the
+    // matching feature. **Done for every claude and codex account**: the path is the same
+    // (<configDir>/skills/<name>/SKILL.md), and there is evidence that codex also treats the skills
+    // directory as a home resource (see the comments in stub.ts). AGENTS.md is left alone — it is a
+    // user file.
     // Called after orch is assigned — a position where a failed install cannot affect server startup.
-    // installStub swallows per-account failures itself and does not throw, but the .catch is here so
-    // that even an unexpected failure cannot block startup.
-    // **A deliberate limit**: this runs once, at startup. An account added afterwards does not get the
-    // stub until the next app start — hooking accounts.onChanged would write to user files on every
-    // account edit, and that trade-off is out of scope here.
-    void installStub({
-      stubPath: path.join(skillsPath, 'orchestration-stub.md'),
-      configDirs: core.accounts.list().map((a) => a.configDir),
-      log: orchLog
-    })
-      .then((r) =>
-        orchLog(
-          `stub install — ${r.written.length} written, ${r.unchanged.length} unchanged, ${r.skipped.length} skipped (no ownership marker and differs from the current stub), ${r.failed.length} failed, ${r.removed.length} legacy removed`
-        )
-      )
-      .catch((err) => orchLog(`stub install failed: ${String(err)}`))
+    // **Which stub(s) install is conditional, per toggle, and is not just done here** — see
+    // installStubsForCurrentToggles's own comment for why the settings handlers call it too.
+    // **A remaining limit**: an account added while everything relevant is already on does not get
+    // the stub until the next app start or a toggle flip — hooking accounts.onChanged would write to
+    // user files on every account edit, and that trade-off is out of scope here.
+    installStubsForCurrentToggles()
     orchWiring?.onStarted({
       stop: () => {
         // 미뤄 둔 exit 를 버린다. 남겨 두면 서버가 내려간 뒤에 setState 가 돌 수 있다.
@@ -2455,8 +2741,9 @@ export function registerIpc(
       // 부족하고(reattach 를 봐야 한다), 리셋 시각도 이 이벤트에만 있다. 판단과 세션별 기억은
       // OrchRollTap 이 갖는다(rollTap.ts 의 onRollState).
       onRollState: (e) => orchRollTap?.onRollState(e),
-      // 롤링 배선이 읽는다. 오케스트레이션이 꺼져 있으면 undefined — 그러면 롤된 세션은 예전처럼
-      // CLI 없이 뜨고, 그 상태에서 워커가 존재할 일도 없다.
+      // Read by the rolling wiring. `undefined` only when **both** orchestration and work-unit
+      // tracking are off (see orchEnvOf's own doc) — then the rolled session comes up without a CLI
+      // as before, and there is no way for a worker to exist in that state anyway.
       orchEnv: () => orchEnvOf(),
       // 두 롤링 코디네이터의 resumeText dep 구현.
       //
@@ -2485,7 +2772,10 @@ export function registerIpc(
         ).then((text) => text ?? (tabFallback ? tabResumeTextFor(sessionId, form) : null))
     })
   }
-  if (orchWiring && core.appSettings.getOrchestrationEnabled())
+  if (
+    orchWiring &&
+    (core.appSettings.getOrchestrationEnabled() || core.appSettings.getWorkUnitTrackingEnabled())
+  )
     void startOrch().catch((err) => orchLog(`startup failed: ${String(err)}`))
   ipcMain.on('sessions.write', (_e, id, data) => core.sessions.write(id, data))
   ipcMain.on('sessions.resize', (_e, id, cols, rows) => core.sessions.resize(id, cols, rows))
@@ -2947,6 +3237,224 @@ export function registerIpc(
     orchSent = null
   })
 
+  // How It Works: understanding.json persistence. Unlike OrchestrationStore above (built inside
+  // bootOrch, which only runs when the orchestration toggle is on), this has nothing to do with agent
+  // orchestration — a project's stored explanation must be readable whether or not that toggle is on,
+  // and the toggle defaults to off. So it is constructed here, unconditionally, at the same scope as
+  // assertAllowedPath (needed by the handler below) rather than beside OrchestrationStore.
+  const understanding = new UnderstandingStore(
+    path.join(app.getPath('userData'), 'understanding.json')
+  )
+  // registerIpc is synchronous, so this cannot be awaited here — the handler below awaits it instead,
+  // which keeps the handler itself registered on every startup while still never serving before load
+  // has actually finished.
+  // The .catch is not decoration. Today load() resolves on every path and orchLog cannot throw, but
+  // both are unverified invariants — and if either breaks, every later `await understandingLoaded`
+  // rejects forever (the screen goes permanently blank with no explanation) and the first rejection
+  // becomes an unhandled rejection in main, which nothing here listens for. Same shape as the queue
+  // freeze this branch already fixed in the store: one failure must not poison everything after it.
+  const understandingLoaded = understanding
+    .load()
+    .then((loaded) => {
+      if (loaded.recovered)
+        orchLog('failed to read or parse understanding.json — kept the .bak and started from an empty state')
+    })
+    .catch((e) => orchLog(`understanding.json load failed: ${String(e)}`))
+  /** **키를 원 저장소로 접는다.** 워크트리에서 도는 세션의 "프로젝트"는 그 워크트리가 아니라
+   *  원 저장소다(설계 D1) — 그렇지 않으면 Job 이 워크트리에서 한 일이 원 저장소의 설명에 닿지
+   *  않고, 렌더러가 보내는 키(탭에 따라 워크트리이거나 저장소다)와 파이프라인이 저장하는 키가
+   *  갈린다. orchestration 이 이미 같은 답을 쓰고 있어(orch.list) 네 번째 정규화가 아니다. */
+  const understandingKeyOf = (projectPath: string): string =>
+    repoPathOf(core.worktrees.list(), projectPath)
+  ipcMain.handle('understanding.get', async (_e, projectPath: string) => {
+    // orch.list 와 같은 검사 — 경로가 무엇이 돌아올지를 정한다
+    await assertAllowedPath(projectPath)
+    await understandingLoaded
+    // undefined 가 아니라 null 로 넘긴다 — structured clone 에서 undefined 는 구별되는 값으로 살아남지 않는다
+    return understanding.get(understandingKeyOf(projectPath)) ?? null
+  })
+
+  /** 작업 단위가 닫히면 그것을 설명으로 옮기는 층. **수집기와 따로 세운다** — 수집기는 하류가
+   *  무엇을 하는지 모르고, 이쪽은 수집기가 어떻게 Unit 을 찾는지 모른다. */
+  const understandingPipeline = new UnderstandingPipeline({
+    store: understanding,
+    accountOf: (id) => {
+      try {
+        return core.accounts.get(id)
+      } catch {
+        // 계정이 지워졌다 — 고르지 않은 것과 같이 다룬다(pipeline 의 agentContext)
+        return null
+      }
+    },
+    descriptors: core.descriptors,
+    generator: () => core.appSettings.getGenerator(),
+    // The write-up is read next to the app's own text, so it is written in the app's language.
+    // Read per record, not captured: core.lang changes when the user changes the setting.
+    lang: () => core.lang,
+    now: () => new Date().toISOString(),
+    // Commit subjects in the unit's range — material for the write-up. readRange is the same reader
+    // the collector uses for git provenance, so there is no second way to ask this question.
+    readCommits: async (root, from, to) => (from && to ? (await readRange(root, from, to)).subjects : []),
+    // 배경 재생성이 끝났다고 화면에 알린다. **접힌 키를 그대로 실어 보낸다** — 렌더러는 그 접기를
+    // 모르므로(워크트리 세션이면 원 저장소의 키다) 값을 비교하지 않고 다시 읽기만 한다.
+    // 그쪽 주석이 그 이유를 적고 있다.
+    onChanged: (root) => send('understanding:changed', root),
+    log: orchLog
+  })
+
+  ipcMain.handle('understanding.regenerate', async (_e, projectPath: string, recordId: string) => {
+    await assertAllowedPath(projectPath)
+    if (typeof recordId !== 'string' || recordId === '')
+      throw new Error(`INVALID_RECORD_ID: ${String(recordId)}`)
+    await understandingLoaded
+    void understandingPipeline.regenerate(understandingKeyOf(projectPath), recordId)
+  })
+
+  // Work Unit detection: workUnits.json persistence, and the collector that fills it. Built here for
+  // exactly the reason the understanding store above is — this has nothing to do with agent
+  // orchestration, so it must not go inside bootOrch, which only runs when the orchestration toggle is
+  // on and that toggle defaults to off. **Built unconditionally, started conditionally**: the object
+  // always exists, so every trigger site (session data, session exit, history updates, the git
+  // watcher) can call it on a default install, and it is start() that the work unit toggle gates.
+  // Those trigger sites appear earlier in this function than this declaration and close over it;
+  // registerIpc is synchronous, so none of them can run before this line has executed.
+  const workUnits = new WorkUnitStore(path.join(app.getPath('userData'), 'workUnits.json'))
+  // Same shape and the same two reasons as understandingLoaded above: registerIpc is synchronous so
+  // this cannot be awaited here, and the .catch keeps one failed load from rejecting every later await.
+  const workUnitsLoaded = workUnits
+    .load()
+    .then((loaded) => {
+      if (loaded.recovered)
+        orchLog('failed to read or parse workUnits.json — kept the .bak and started from an empty state')
+    })
+    .catch((e) => orchLog(`workUnits.json load failed: ${String(e)}`))
+
+  /** 수집기가 이번에 볼 세션들. **수집기는 세션을 스스로 찾지 않는다** — 어느 세션이 어느 파일을
+   *  쓰는지는 이 파일만 아는 일이고(tabResumeTextFor 가 같은 값을 같은 방식으로 얻는다), 그것을
+   *  수집기 안으로 끌고 오면 수집기가 electron 하네스 없이는 테스트되지 않는다.
+   *
+   *  계정이 사라진 세션은 건너뛴다 — provider 를 못 가리면 **어느 파일을 읽을지** 자체를 정할 수
+   *  없고, 틀린 파일을 읽느니 그 세션을 안 보는 편이 낫다(tabResumeTextFor 의 같은 판단). */
+  const workUnitSessions = async (): Promise<CollectorSession[]> => {
+    const out: CollectorSession[] = []
+    for (const s of core.sessions.list()) {
+      if (s.status === 'exited') continue
+      let account: Account
+      try {
+        account = core.accounts.get(s.accountId)
+      } catch {
+        // 이 건너뜀은 seed 의 transcriptPath-null 건너뜀과 **다르다**: 그쪽은 세션이 목록에 남아
+        // startAtEnd 의 보호를 받지만, 여기서 거른 세션은 목록에서 아예 사라져 나중에 나타나면
+        // 커서 없는 새 세션으로 읽힌다. 오늘은 도달 불가능하다 — 사용 중인 계정은 지울 수 없다
+        // (accounts.remove 의 사용 중 검사). 이 catch 는 그 불변식이 깨지는 날을 위한 것이 아니라
+        // get 이 던지는 API 라서 있다.
+        continue
+      }
+      out.push({
+        sessionId: s.id,
+        projectPath: s.cwd,
+        // **codex 쪽은 두 곳에 묻는다.** `codexRolling` 은 사용자가 **계정 굴리기를 켠** 세션만
+        // 등록한다(spawn 의 `rollAccountIds.length >= 1` 가드) — 평범한 codex 세션은 거기 없어서
+        // 경로가 null 이 되고, 그러면 수집기가 읽을 파일 자체를 못 받아 Unit 이 하나도 생기지
+        // 않는다. `codexRollout` 은 **모든** codex 세션을 등록하므로(사용량 칩이 그것을 요구한다)
+        // 그쪽이 기본이고, 굴리는 세션은 굴리기 쪽이 먼저 답한다 — 굴린 직후에는 그쪽이 새 파일을
+        // 먼저 안다(attachRollout 이 넘겨받은 경로를 그 자리에서 채운다).
+        transcriptPath:
+          providerOf(account) === 'codex'
+            ? (codexRolling?.rolloutPathFor(s.id) ?? codexRollout?.rolloutPathFor(s.id) ?? null)
+            : extractStatusLineSession(await core.statusLinePayload(s.id)).transcriptPath,
+        // 유휴 신호를 믿을 수 있는가. orchIsBusy 가 같은 값을 같은 자리에서 읽는다 — codex 는 false 이고,
+        // 그 세션의 Unit 은 새 사용자 메시지나 세션 종료로만 닫힌다(설계 §6).
+        idleSignalTrusted: descriptorOf(core.descriptors, account).busyTitleReliable
+      })
+    }
+    return out
+  }
+
+  // 자기 참조다: pendingGitOps 는 workUnitCollector 자신의 등록 목록을 그대로 돌려준다
+  // (beginGitOperation/endGitOperation 이 채운다). 안전한 이유는 이 화살표 함수가 생성자 안에서
+  // 부르는 것이 아니라 나중에(gitRound 가 돌 때) 불리기 때문이다 — 그때는 아래 const 가 이미 잡혀 있다.
+  const workUnitCollector: WorkUnitCollector = new WorkUnitCollector({
+    store: workUnits,
+    listSessions: workUnitSessions,
+    git: { readRef: readGitRef, isAncestor: isAncestorOf, changedFiles: readChangedFiles, readRange },
+    now: () => Date.now(),
+    pendingGitOps: () => workUnitCollector.getPendingGitOps(),
+    // **수집기가 자기 `.git` 감시자를 갖는다.** 아래(git.watch)의 감시자는 탐색기의 것이고,
+    // 탐색기 패널이 떠 있을 때만 산다 — 렌더러의 useGitStatus 가 언마운트에서 git.unwatch 를
+    // 부르므로, 사이드바를 Jobs 로 바꾸면 수집기는 git 이벤트를 하나도 받지 못했다. 트랜스크립트
+    // 쪽(core.history 의 HistoryIndex)이 창이 뜬 뒤 계속 보는 것과 나란한 상시 방아쇠가 되도록,
+    // 수명이 수집기의 start()/stop() 에 걸린 감시자를 프로젝트마다 하나씩 여기서 만들어 준다.
+    // 무엇을 볼지·언제 닫을지는 수집기가 정한다(그쪽의 syncWatchers).
+    watchGit: async (projectPath) => {
+      // **아직 저장소가 아니면 null 이다.** GitWatcher 는 이 경우 던지지 않고 조용히 아무것도 보지
+      // 않으므로, 그대로 자리를 잡으면 그 프로젝트에서 나중에 git init 을 해도 토글이나 앱을 다시
+      // 돌리기 전까지 영영 감시되지 않는다. null 을 돌려주면 수집기가 자리를 비워 두고 다음 회차에
+      // 다시 묻는다 (그쪽의 syncWatchers).
+      if ((await gitDir(projectPath)) === null) return null
+      const w = new GitWatcher(() => workUnitCollector.onGitChanged(), orchLog)
+      await w.watch(projectPath)
+      return () => w.close()
+    },
+    // Hands a closed unit to the explanation pipeline. **Folds the key to the origin repo** — same
+    // reason as understandingKeyOf's own comment (a worktree session's "project" is the origin repo,
+    // not the worktree).
+    onUnitClosed: (projectPath, unit) => {
+      void understandingPipeline.onUnitClosed(understandingKeyOf(projectPath), unit)
+    },
+    // The open-task section's redraw trigger. **Not folded** — same reason as the sessionTasks.*
+    // handlers just below (their own comment has the full story): workUnits.json is keyed by the raw
+    // session cwd, not the origin-repo fold understanding.json uses, so this has to name the same key
+    // the renderer's own sessionTasks.list call used, unfolded, or the two would agree on nothing.
+    onTasksChanged: (projectPath) => send('sessionTasks:changed', projectPath),
+    log: orchLog
+  })
+  // 토글이 꺼져 있으면 시작하지 않는다. **load 뒤로 미룬다** — 먼저 시작하면 수집기가 쓴 상태를
+  // 뒤늦게 끝난 load() 가 통째로 덮어쓴다.
+  void workUnitsLoaded
+    .then(() =>
+      core.appSettings.getWorkUnitTrackingEnabled() ? workUnitCollector.start() : undefined
+    )
+    .catch((e) => orchLog(`work unit collector start failed: ${String(e)}`))
+  // 이어받기 알림을 배선에 넘긴다. **토글과 무관하게 항상 넘긴다** — `onTabResumeReady` 와
+  // 같은 이유다: 꺼져 있을 때 아무 일도 하지 않는 것은 알림 자신의 계약이고, 부르는 쪽이 토글을
+  // 다시 묻게 하면 그 판정이 두 곳으로 갈라진다.
+  onWorkUnitForkReady?.((sessionId, transcriptPath, oldSessionId) =>
+    workUnitCollector.onSessionForked(sessionId, transcriptPath, oldSessionId)
+  )
+
+  // The How It Works screen's open-task section. Same shape as understanding.get: assertAllowedPath
+  // first (the path decides which project's tasks come back), then the collector call.
+  //
+  // **Passed through, not folded.** `understanding.json` is keyed by the project folded to the
+  // origin repo (understandingKeyOf, design D1) — but `workUnits.json` is not: `workUnitSessions`
+  // above builds every `CollectorSession` with `projectPath: s.cwd` verbatim, and nothing in
+  // collector.ts folds it afterwards (`stateOf`/`persist` store and read back whatever key they are
+  // handed — collector.test.ts's `completeTaskById`/`listOpen` calls pin exactly that). So these two
+  // stores live in genuinely different key spaces, and folding here would ask the *other* store's
+  // key of *this* one, which holds nothing under it.
+  //
+  // **What this leaves imperfect:** a worktree session's open task is visible only in that
+  // worktree's own tab, not under the origin repository's tab — unlike a finished record, which
+  // (via the fold above) shows up under the origin repo no matter which tab produced it. That
+  // asymmetry is real and already exists for work-unit state generally; it is parked for a later
+  // plan (docs/2026-08-30-understanding-generation-conformance.md), not something to fix here.
+  ipcMain.handle('sessionTasks.list', async (_e, projectPath: string) => {
+    await assertAllowedPath(projectPath)
+    return workUnitCollector.listOpen(projectPath)
+  })
+  ipcMain.handle('sessionTasks.complete', async (_e, projectPath: string, id: string) => {
+    await assertAllowedPath(projectPath)
+    const r = await workUnitCollector.completeTaskById(projectPath, id)
+    if (!r.ok) throw new Error(r.reason)
+    return { recorded: r.recorded }
+  })
+  ipcMain.handle('sessionTasks.cancel', async (_e, projectPath: string, id: string) => {
+    await assertAllowedPath(projectPath)
+    const r = await workUnitCollector.cancelTaskById(projectPath, id)
+    if (!r.ok) throw new Error(r.reason)
+  })
+
   // The detected JDKs. There is no path argument, so this is not subject to assertAllowedPath — the scan
   // only looks at conventional directories (Program Files and friends) and PATH.
   ipcMain.handle('run.listJdks', async () => listJdks())
@@ -3112,7 +3620,18 @@ export function registerIpc(
   })
 
   // Watches only the git dir's index and HEAD, narrowly, so a commit made from a session terminal still refreshes the explorer.
-  const gitWatcher = new GitWatcher(() => send('git:changed', undefined))
+  // **This one belongs to the explorer**: the renderer opens it on mount and closes it on unmount, so it
+  // is alive only while the sidebar shows the explorer pane. The Work Unit collector no longer depends
+  // on it — it holds its own watcher, whose lifetime is its own start()/stop() (see watchGit above).
+  // The nudge below stays because it costs one already-debounced round — the round is not scoped to the
+  // explorer's project, it walks every session project and probes git for each, but the collector's
+  // debounce coalesces this with the event its own watcher raises, and an uncoalesced second round
+  // classifies as no transition and records nothing. It also reaches the collector before its own
+  // watcher settles.
+  const gitWatcher = new GitWatcher(() => {
+    send('git:changed', undefined)
+    workUnitCollector.onGitChanged()
+  })
   ipcMain.handle('git.watch', async (_e, root: string) => {
     await assertAllowedPath(root)
     await gitWatcher.watch(root)
@@ -3384,6 +3903,71 @@ export function registerIpc(
     await core.appSettings.setOrchestrationEnabled(enabled)
     // Turning it on starts it immediately (a no-op if already up). Why turning it off does not close it is in the startOrch comment.
     if (enabled && orchWiring) await startOrch()
+    // Not gated on whether startOrch() just booted anything — the case this covers is exactly the one
+    // where it did not: the server was already up (started by the other toggle), so bootOrch's own
+    // install never ran for this one. installStubsForCurrentToggles re-reads both toggles itself and
+    // no-ops when the server still is not up.
+    if (enabled) installStubsForCurrentToggles()
+  })
+
+  // The work unit tracking toggle. The same trust-boundary check as setLang — the value the renderer
+  // sent is validated before being written to disk. Registered unconditionally here (not inside
+  // bootOrch, which only runs once orchestration is on) so the checkbox works on a default install
+  // exactly like every other setting.
+  ipcMain.handle('settings.getWorkUnitTrackingEnabled', () =>
+    core.appSettings.getWorkUnitTrackingEnabled()
+  )
+  ipcMain.handle('settings.setWorkUnitTrackingEnabled', async (_e, enabled: boolean) => {
+    if (typeof enabled !== 'boolean')
+      throw new Error(`INVALID_WORK_UNIT_TRACKING_ENABLED: ${String(enabled)}`)
+    await core.appSettings.setWorkUnitTrackingEnabled(enabled)
+    // 켜면 **그 순간의 파일 끝**을 커서로 잡고(이전 커서는 버린다), 끄면 열려 있던 Unit 을 그 자리에서
+    // 닫는다 — 스펙 §16.1 이다. 저장소를 다 읽기 전에 시작하지 않도록 load 를 먼저 기다린다.
+    await workUnitsLoaded
+    await workUnitCollector.onEnabledChanged(enabled)
+    // Same line the orchestration setter uses, for the same reason: /astera-task needs the server
+    // and the planted CLI. Turning it off does not close the server — see the startOrch comment.
+    if (enabled && orchWiring) await startOrch()
+    // Same reasoning as the orchestration setter above — see installStubsForCurrentToggles's comment.
+    if (enabled) installStubsForCurrentToggles()
+  })
+
+  // 설명을 누가·무엇으로 만드는가. **셋을 함께 쓴다** — 계정을 바꾸면 그 계정에 없는 모델이
+  // 남아서는 안 되기 때문이다(appSettingsStore.setGenerator 의 주석). 값의 정제는 그 setter 가
+  // 하므로 여기서는 모양만 본다 — setTerminalFont 와 같은 갈래다.
+  ipcMain.handle('settings.getGenerator', () => core.appSettings.getGenerator())
+  ipcMain.handle('settings.setGenerator', async (_e, g: unknown) => {
+    if (g === null || typeof g !== 'object' || Array.isArray(g))
+      throw new Error(`INVALID_GENERATOR_SETTINGS: ${String(g)}`)
+    await core.appSettings.setGenerator(readGeneratorSettings(g))
+  })
+
+  /** 그 계정이 쓸 수 있는 모델. **실패도 값으로 돌려준다** — 조회 실패는 정상 경로이고
+   *  (미로그인, codex app-server 는 experimental), 그때 설정 화면은 드롭다운 대신 자유
+   *  입력칸을 보여 주면서 사유를 말한다. 던지면 그 사유가 렌더러에서 사라진다.
+   *
+   *  **앱이 사는 동안 한 번만 묻는다.** claude 쪽 왕복이 1.6초라 설정을 열 때마다 물으면
+   *  눈에 띈다. 새로 고침은 renderer 가 `refresh: true` 로 요청한다. */
+  ipcMain.handle('settings.listModels', async (_e, accountId: unknown, refresh: unknown) => {
+    if (typeof accountId !== 'string') throw new Error(`INVALID_ACCOUNT_ID: ${String(accountId)}`)
+    if (refresh !== true) {
+      const hit = modelCache.get(accountId)
+      if (hit) return hit
+    }
+    let account: Account
+    try {
+      account = core.accounts.get(accountId)
+    } catch {
+      return { models: [], error: 'ACCOUNT_GONE' }
+    }
+    const d = descriptorOf(core.descriptors, account)
+    const result =
+      providerOf(account) === 'codex'
+        ? await listCodexModels(d.cliFile, account.configDir)
+        : await listClaudeModels(d.cliFile, account.configDir)
+    // 실패는 캐시하지 않는다 — 로그인하고 다시 열면 바로 보여야 한다
+    if (!result.error) modelCache.set(accountId, result)
+    return result
   })
 
   // How a session that hits its limit gets continued. The same trust-boundary check as setLang — the

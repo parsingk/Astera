@@ -55,6 +55,39 @@ describe('OutputScanner', () => {
     expect(s.push('Context limit reached · /compact to continue').limit).toBe(false)
   })
 
+  // 2026-08-30 실측. CLI 가 배너 문구 없이 선택 메뉴만 그리는 화면이 있다 — 관리자 통제 플랜의
+  // 한도가 그렇다(3번 항목이 "Ask your admin for more usage"). 문구만 보는 판정은 그 화면에서
+  // 아무것도 못 본다: rolling.log 에 10시간 24분 동안 한 줄도 남지 않았고, 누를 번호를 이미
+  // 정확히 찾아내는 코드가 있는데도 그것을 부를 기회 자체가 오지 않아 세션이 대화상자 앞에
+  // 무한히 멈췄다.
+  //
+  // **대화상자의 존재가 CLI 자신의 판정이다.** 이 파일의 usage 게이트 주석이 같은 이유로 이미
+  // 그렇게 적고 있다 — 계정 조회 수치보다 강한 증거다.
+  it('배너 문구 없이 선택 메뉴만 떠도 한도로 본다', () => {
+    const screen = [
+      'What do you want to do?',
+      '',
+      '\u276f 1. Stop and wait for ' + 'limit to reset',
+      '  2. Wait here, then continue automatically shortly',
+      '  3. Ask your admin for more usage',
+      '',
+      'Enter to confirm \u00b7 Esc to cancel'
+    ].join('\n')
+    expect(new OutputScanner().push(screen).limit).toBe(true)
+  })
+
+  // 거짓 양성을 막는 것은 두 조건을 함께 요구하는 것이다. 문서나 도구 출력에 이 라벨이 인용될
+  // 수는 있지만, 그런 텍스트는 입력을 기다리는 대화상자를 그리지 않는다.
+  it('대화상자 없이 라벨만 있으면 감지하지 않는다', () => {
+    const quoted = 'the menu offers "Stop and wait for ' + 'limit to reset" as its first item'
+    expect(new OutputScanner().push(quoted).limit).toBe(false)
+  })
+
+  it('대화상자는 떠 있지만 대기 항목이 없으면 감지하지 않는다', () => {
+    const other = ['\u276f 1. Yes', '  2. No', '', 'Enter to confirm \u00b7 Esc to cancel'].join('\n')
+    expect(new OutputScanner().push(other).limit).toBe(false)
+  })
+
   it('청크 경계에서 잘린 문구도 감지한다', () => {
     const s = new OutputScanner()
     expect(s.push('... usage limit re').limit).toBe(false)

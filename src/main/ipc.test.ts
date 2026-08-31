@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { accountRemovalBlockers, parseAllowedExternalUrl, providerOfSession } from './ipc'
+import {
+  accountRemovalBlockers,
+  historyResumePlan,
+  parseAllowedExternalUrl,
+  providerOfSession
+} from './ipc'
+import { sanitizeResumePrompt } from '../core/sessions/commands'
 import type { Account, SessionInfo } from '../core/types'
 
 const account = (over: Partial<Account>): Account =>
@@ -115,5 +121,74 @@ describe('accountRemovalBlockers', () => {
       s({ accountId: 'a2', rollAccountIds: ['a2', 'a1'], title: '둘째' })
     ]
     expect(accountRemovalBlockers('a1', rows)).toEqual(['첫째', '둘째'])
+  })
+})
+
+// 사이드바 히스토리 재개(App.tsx → sessions.spawn)가 Smart Resume 을 만나는 자리의 판정.
+//
+// **왜 순수 함수로 빼는가.** 판정 자체는 spawnSession 안에 있어야 자연스럽지만, 그 함수는
+// registerIpc 안의 클로저라 electron 하네스 없이는 닿을 수 없다 — 위 세 헬퍼(providerOfSession,
+// parseAllowedExternalUrl, accountRemovalBlockers)가 ipc.ts 에서 export 되어 있는 이유와 같다.
+//
+// 규칙의 원본은 rolling.ts 와 codexRolling.ts 의 roll() 이다(SPEC §11.5 가 `--resume` 발원지로
+// 꼽은 셋 중 둘). 세 번째가 여기다.
+describe('historyResumePlan — 사이드바 재개의 백지 재개 판정', () => {
+  // 경로는 String.raw 로 적는다 — 이 줄이 담는 것은 실제 파일시스템 경로이고, 평범한 문자열
+  // 리터럴로 쓰면 `\t`(탭)·`\s`(s) 같은 이스케이프가 조용히 끼어든다. 그러면 sanitizer 에 걸린
+  // 이유가 경로가 아니라 테스트의 오타가 되고, 아래 두 갈래를 가르는 것이 `&` 인지 탭인지
+  // 알 수 없게 된다.
+  const line = (dir = String.raw`C:\tab-resume`): string =>
+    `Continue this session: re-read the resume briefing the app just wrote to ${dir}${String.raw`\s1.md`}, then carry on from where the work already stands.`
+
+  it("'original' 이면 브리핑이 있어도 백지로 가지 않는다", () => {
+    const plan = historyResumePlan({ strategy: 'original', provider: 'claude', briefing: line() })
+    expect(plan.blankSlate).toBe(false)
+  })
+
+  it("'smart' 이고 브리핑이 있으면 백지로 가고, 그 한 줄을 첫 프롬프트로 싣는다", () => {
+    const plan = historyResumePlan({ strategy: 'smart', provider: 'claude', briefing: line() })
+    expect(plan.blankSlate).toBe(true)
+    expect(plan.initialPrompt).toBe(line())
+  })
+
+  // 계획의 지배 제약 — 브리핑을 만들 수 없으면 백지 재개를 하지 않는다. 대화를 버리는 대가로
+  // 얻는 것이 없기 때문이다.
+  it('브리핑을 만들지 못했으면 스위치가 켜져 있어도 백지로 가지 않는다', () => {
+    const plan = historyResumePlan({ strategy: 'smart', provider: 'claude', briefing: null })
+    expect(plan.blankSlate).toBe(false)
+  })
+
+  // codex 는 이 줄을 argv 로 싣는다 — buildCodexCommand 가 아니라 호출부가 sanitize 한다
+  // (codexRolling.ts 의 백지 재개와 같은 자리, 같은 이유).
+  it('codex 는 sanitize 를 통과한 값을 싣는다', () => {
+    const plan = historyResumePlan({ strategy: 'smart', provider: 'codex', briefing: line() })
+    expect(plan.blankSlate).toBe(true)
+    expect(plan.initialPrompt).toBe(sanitizeResumePrompt(line()))
+  })
+
+  // codexRolling.ts 의 fix wave 7, finding 2 와 같은 사고를 막는다: 경로에 `["&|<>^%]` 가 있으면
+  // sanitizer 가 그것을 지워 없는 파일을 가리키게 되는데, 백지 세션에는 돌아갈 대화조차 없다.
+  // 그럴 때는 백지를 포기하고 복사 + `--resume` 으로 내려간다 — 뭉개진 힌트가 온전한 대화와 함께
+  // 도착하면 작은 손해로 끝난다.
+  it('codex 에서 포인터가 뭉개지면 백지를 포기하고, 그 사실을 알린다', () => {
+    const plan = historyResumePlan({
+      strategy: 'smart',
+      provider: 'codex',
+      briefing: line(String.raw`C:\Users\R&D\tab-resume`)
+    })
+    expect(plan.blankSlate).toBe(false)
+    expect(plan.mangled).toBe(true)
+  })
+
+  // 뭉개짐 거부는 codex 만의 사정이다 — claude 는 이 줄을 PTY 가 아니라 argv 로 싣되
+  // sanitizer 를 통과시키지 않으므로 `&` 가 그대로 살아 있다.
+  it('claude 는 같은 경로에서도 백지로 간다 — sanitizer 를 지나지 않는다', () => {
+    const plan = historyResumePlan({
+      strategy: 'smart',
+      provider: 'claude',
+      briefing: line(String.raw`C:\Users\R&D\tab-resume`)
+    })
+    expect(plan.blankSlate).toBe(true)
+    expect(plan.mangled).toBe(false)
   })
 })

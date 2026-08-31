@@ -15,8 +15,19 @@ export interface SchedulerDeps {
   readStatusPayload(sessionId: string): Promise<unknown | null>
   send(channel: 'session:schedState', payload: unknown): void
   log(message: string): void
-  persistConfig?: (sessionKey: string, config: ScheduleConfig) => void // saved once, when the claude session id is learned
+  persistConfig?: (sessionKey: string, config: ScheduleConfig) => void // saved once, when the session id is learned
   deleteConfig?: (sessionKey: string) => void // deletes the persisted entry when the schedule is turned off
+  /** The codex session id of a live session, or null while the scan has not mapped its rollout yet.
+   *
+   *  **codex's counterpart to readStatusPayload.** codex has no statusLine, but its rollout watcher
+   *  scans for the rollout file of every codex session and that scan (findRollout) answers path and
+   *  session id together — CodexRolloutWatcher.codexSessionIdFor is that value. Without it a codex
+   *  schedule only lives as long as its session: nothing is ever written under a key, so the next
+   *  resume of that conversation cannot pre-fill it.
+   *
+   *  Synchronous, unlike readStatusPayload, because the watcher answers from what its poll already
+   *  collected. Absent (no watcher wired) codex keeps the old behaviour — no learning, no persistence. */
+  codexSessionId?: (sessionId: string) => string | null
   now?: () => number
 }
 
@@ -27,8 +38,9 @@ interface Entry {
   pending: boolean // the fire time has arrived and we are waiting for busy to clear — being a boolean, overlapping rounds collapse into one
   busy: boolean // taps ipc's session:busy (BusyScanner)
   suppressed: boolean // suppresses firing during a rolling resume window (the trust prompt, waiting, switching) — handleRollState
-  sessionKey: string | null // the claude session id — the scheduler.json key. A provider that does not use statusLine is learnable=false, so no learning is even attempted (nothing is persisted)
-  learnable: boolean // whether statusline learning is possible — decided by PROVIDER_META[provider].usesStatusLine. A provider without statusLine (currently codex) is always false
+  provider: Provider // decides where learnKey reads the session id from — claude's statusLine, codex's rollout watcher
+  sessionKey: string | null // the conversation's own session id — the scheduler.json key. Null until learned (or supplied by a resume)
+  learnable: boolean // whether this session's key can be learned at all — see register for what each provider needs
   learning: boolean // guards against overlapping readStatusPayload calls
   enterTimer: ReturnType<typeof setTimeout> | null
   disposed: boolean
@@ -63,8 +75,13 @@ export class SchedulerCoordinator {
       pending: false,
       busy: false,
       suppressed: false,
+      provider,
       sessionKey: info.resumeSessionId ?? null,
-      learnable: PROVIDER_META[provider].usesStatusLine,
+      // claude learns from its statusLine payload, which is always there. codex has no statusLine but
+      // its rollout watcher knows the id — it is learnable exactly when that accessor was wired.
+      learnable:
+        PROVIDER_META[provider].usesStatusLine ||
+        (provider === 'codex' && this.deps.codexSessionId !== undefined),
       learning: false,
       enterTimer: null,
       disposed: false
@@ -202,20 +219,30 @@ export class SchedulerCoordinator {
     }
   }
 
-  /** Learns the claude session id (from statusline) and persists it once. tick() gates on
-   *  entry.learnable, so a codex session never calls this method at all — codex has no statusline, so
-   *  readStatusPayload would return null forever, and before the gate every scheduled codex session
-   *  wasted every 15-second tick reading a file that does not exist and swallowing the ENOENT. A codex
-   *  schedule works only while the session is alive; there is no resume restore (out of scope). */
+  /** Learns the conversation's own session id and persists it once. Which file that id comes out of is
+   *  the only thing that differs per provider.
+   *
+   *  claude reads its statusLine payload. **codex never touches that file** — it has no statusLine, so
+   *  readStatusPayload would return null forever, and before this branch existed every scheduled codex
+   *  session wasted every 15-second tick reading a file that does not exist and swallowing the ENOENT.
+   *  Its id comes from the rollout watcher instead, which scans for the rollout of every codex session
+   *  and gets the id together with the path (`codexSessionId` in SchedulerDeps).
+   *
+   *  A null answer is "not yet", not "never": the rollout appears a moment after spawn and the statusLine
+   *  payload lands on the first render, so tick() simply asks again next time. */
   private async learnKey(entry: Entry): Promise<void> {
     entry.learning = true
     try {
-      const payload = await this.deps.readStatusPayload(entry.liveId)
-      if (!payload || entry.disposed || entry.sessionKey) return
-      const meta = extractStatusLineSession(payload)
-      if (!meta.sessionId) return
-      entry.sessionKey = meta.sessionId
-      this.deps.persistConfig?.(meta.sessionId, entry.config)
+      const learned =
+        entry.provider === 'codex'
+          ? (this.deps.codexSessionId?.(entry.liveId) ?? null)
+          : extractStatusLineSession(await this.deps.readStatusPayload(entry.liveId)).sessionId
+      // disposed/sessionKey are re-checked because the claude branch above awaits — a dispose or a
+      // competing learn can land in that window. The codex branch is synchronous and cannot, but the
+      // check costs nothing and the two branches are better off answering to the same rule.
+      if (!learned || entry.disposed || entry.sessionKey) return
+      entry.sessionKey = learned
+      this.deps.persistConfig?.(learned, entry.config)
     } finally {
       entry.learning = false
     }

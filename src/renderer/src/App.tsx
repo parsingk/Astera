@@ -8,7 +8,7 @@ import { AccountSettings } from './components/AccountSettings'
 import { HistorySettings } from './components/HistorySettings'
 import { HistoryBrowser } from './components/HistoryBrowser'
 import { Select } from './components/Select'
-import { type FileTab } from './components/WorkbenchTabs'
+import { type FileTab, type RecordTab } from './components/WorkbenchTabs'
 import { FileEditor } from './components/FileEditor'
 import { MarkdownSplit } from './components/MarkdownSplit'
 import { invalidateImageCache } from './components/MarkdownPreview'
@@ -17,6 +17,8 @@ import type { EditorView } from '@codemirror/view'
 import { EditorStateCache } from './lib/editorStateCache'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { JobsView } from './components/JobsView'
+import { UnderstandingView } from './components/UnderstandingView'
+import { RecordDetailHost } from './components/RecordDetail'
 import { RunDetail } from './components/RunDetail'
 import { NewRunModal } from './components/NewRunModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
@@ -29,9 +31,11 @@ import { UpdateGate } from './components/UpdateGate'
 import { ShortcutSettings } from './components/ShortcutSettings'
 import { TerminalFontSettings } from './components/TerminalFontSettings'
 import { ThemeSettings } from './components/ThemeSettings'
+import { GeneratorSettings } from './components/GeneratorSettings'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import type {
+  OpenSessionTask,
   OrchSnapshot,
   RunConfig,
   RunContext,
@@ -40,6 +44,9 @@ import type {
   RunStatus,
   TerminalBuffer
 } from '../../core/types'
+// core/types.ts imports this for UnderstandingApi but does not re-export it (unlike the block above),
+// so it comes from its own module — the same import UnderstandingView.tsx uses.
+import type { ProjectUnderstanding, RecordStatus } from '../../core/understanding/types'
 import { slackMode } from '../../core/slack/ready'
 import { findRun } from '../../core/orchestration/snapshot'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
@@ -59,6 +66,7 @@ import type { UndoEntry } from '../../core/files/undo'
 import * as sessionBus from './lib/sessionBus'
 import * as sticky from './lib/stickyProject'
 import { toast } from './lib/toast'
+import { spawnNotice } from './lib/spawnNotice'
 import { confirmModal, confirmModalWithChoices, isConfirmOpen } from './lib/confirm'
 import * as hiddenProjects from './lib/hiddenProjects'
 import { worktreeErrorMessage } from './lib/worktreeErrors'
@@ -86,13 +94,19 @@ import {
   type PaneDir,
   type PaneNode
 } from '../../core/panes/tree'
-import { fileTab, parseTab, sessionTab } from '../../core/panes/tabId'
+import { fileTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
 import { placeTab } from '../../core/panes/place'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
 import { PanelLeft, Settings, X } from 'lucide-react'
 
 sessionBus.init()
+
+/** The key a record tab's narrowed-flow-step memory (scopedNode) uses. Carries both the project and
+ *  the record — a tab id (`record:<id>`) has no project in it, so two projects sharing a record id
+ *  would otherwise leak each other's scoping. Kept in one place so the reader, the writer and the
+ *  deleter all build the same string. */
+const scopeKey = (rec: RecordTab): string => `${rec.projectRoot}::${rec.recordId}`
 
 // The shortcut list for the settings modal. When a binding changes (the TerminalView key handler or
 // the global listener in App), update this list along with it.
@@ -335,7 +349,7 @@ export default function App(): React.JSX.Element {
   const [dragTabId, setDragTabId] = useState<string | null>(null)
   // Position of the tab context menu
   const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null)
-  // 지금 보고 있는 탭은 트리가 정한다 — 활성 페인의 활성 탭. 두 종류가 한 트리에 있으므로 별도의
+  // 지금 보고 있는 탭은 트리가 정한다 — 활성 페인의 활성 탭. 세 종류가 한 트리에 있으므로 별도의
   // activeTabId 상태를 두면 트리와 어긋난다(다른 페인의 탭을 클릭하거나 페인 포커스를 옮기는 순간
   // 갈라진다). 파일 탭 id는 전부터 `file:<path>` 형식이었으므로 파일 관련 코드는 그대로 쓴다
   const activeTabId = (layout && activePaneId ? leafOf(layout, activePaneId)?.activeTabId : null) ?? null
@@ -343,6 +357,10 @@ export default function App(): React.JSX.Element {
   /** 활성 탭이 파일일 때만 그 id */
   const activeFileId = activeTab?.kind === 'file' ? activeTabId : null
   const activeSessionId = activeTab?.kind === 'session' ? activeTab.id : null
+  /** The active record id when the active tab is a record detail — decides which sidebar row How It
+   *  Works keeps lit. Derived from the tab tree for the same reason as activeFileId: a separate piece
+   *  of state would drift from the tree the moment another pane's tab is clicked or focus moves. */
+  const activeRecordId = activeTab?.kind === 'record' ? activeTab.id : null
   // 활성 탭이 파일일 수 있게 되면서 "지금 보고 있는 것"과 "작업 중인 세션"이 갈라졌다. 세션에 딸린
   // 표시(상태 바, 사용량 폴링)는 마지막으로 활성이었던 세션 탭을 따른다 — 파일을 읽는 동안 상태 바가
   // 비고 컨텍스트·한도 칩이 사라지지 않게. 파일 트리 루트는 여기서 나오지 않고 활성 탭에서 나온다.
@@ -401,15 +419,68 @@ export default function App(): React.JSX.Element {
   const [slackLoaded, setSlackLoaded] = useState(false)
   const [wtRoot, setWtRoot] = useState('') // the worktree root in the settings modal
   const [orchEnabled, setOrchEnabled] = useState(false) // the agent orchestration toggle
+  // The rail button for Jobs is gated on this, so the shortcut must be too — a key that opens a view
+  // whose control is not on screen leaves the user somewhere they cannot get back from. Read through a
+  // ref for the same reason as jobsOpenRef.
+  const orchEnabledRef = useRef(orchEnabled)
+  orchEnabledRef.current = orchEnabled
+  const [workUnitTrackingEnabled, setWorkUnitTrackingEnabled] = useState(false) // the work unit tracking toggle
   // Whether the Jobs sidebar view is showing — same convention as explorerOpen (toggleJobs mirrors
   // toggleExplorer below), just for the read-only orchestration view instead of the file tree.
   const [jobsOpen, setJobsOpen] = useState(false)
+  // Read by toggleJobs for the same reason explorerOpenRef exists: the keydown listener is registered
+  // once with [] and closes over the first render, so a toggle that reads the render value would always
+  // compute the same direction from the keyboard.
+  const jobsOpenRef = useRef(jobsOpen)
+  jobsOpenRef.current = jobsOpen
+  // Whether the How It Works sidebar view is showing — same convention as jobsOpen (toggleHiw mirrors
+  // toggleJobs below), unlike Jobs there is no feature flag gating it off the rail.
+  const [hiwOpen, setHiwOpen] = useState(false)
+  const hiwOpenRef = useRef(hiwOpen) // see jobsOpenRef
+  hiwOpenRef.current = hiwOpen
+  // The current project's understanding, loaded by the effect near currentProject below (it cannot sit
+  // here — that effect depends on currentProject, declared much later, and a dependency array is
+  // evaluated during render, so it would throw a TDZ ReferenceError this early). null covers both "no
+  // project" and "never analyzed" — UnderstandingView draws the same empty state for either.
+  //
+  // **The root rides along with it.** The cache holds only one project's data, so the data alone
+  // cannot say which project it belongs to. Without the root, every place that needs to ask "is this
+  // the right project?" would ask the proxy question `rec.projectRoot !== currentProject` instead —
+  // which only compares a tab record against the current project, not the cache itself. Between
+  // switching projects and the IPC round trip finishing, the two are out of sync, and in that window
+  // two projects sharing the same record id would attach A's status and A's explanation to B's tab.
+  // With the root sitting here, the consumers below can ask directly instead of through that proxy.
+  /** 이해를 다시 읽게 하는 신호. 분석이 끝났을 때 올린다 — 아래 effect 는 프로젝트가 바뀔
+   *  때만 도는데, 분석은 프로젝트를 바꾸지 않으면서 그 값을 바꾼다. */
+  const [understandingSeq, setUnderstandingSeq] = useState(0)
+  const [understanding, setUnderstanding] = useState<{
+    root: string
+    data: ProjectUnderstanding | null
+  } | null>(null)
+  /** How It Works screen's open-task section — same shape as `understanding` just above, right down
+   *  to why the root rides along with it (that comment applies here unchanged) and why a second
+   *  sequence number exists (a completed/cancelled task's own IPC call does not change
+   *  `currentProject`, so the loading effect would never re-run without one). */
+  const [sessionTasksSeq, setSessionTasksSeq] = useState(0)
+  const [openTasks, setOpenTasks] = useState<{ root: string; data: OpenSessionTask[] } | null>(null)
   const [isMax, setIsMax] = useState(false)
   const [usage, setUsage] = useState<SessionUsage | null>(null)
   const [rollStates, setRollStates] = useState<Record<string, RollStateEvent>>({})
   const [schedStates, setSchedStates] = useState<Record<string, SchedStateEvent>>({}) // the schedule banner
   const [busy, setBusy] = useState<Record<string, boolean>>({}) // whether each session is working — the tab spinner
   const [fileTabs, setFileTabs] = useState<FileTab[]>([]) // file viewer tabs
+  // How It Works record detail tabs. Kept in a separate list for the same reason as file tabs — a
+  // `record:<id>` tab id carries neither the project nor the title, so this tab could not be drawn,
+  // and this tab's project could not be answered, from the tree string alone (see RecordTab's comment
+  // in WorkbenchTabs.tsx).
+  const [recordTabs, setRecordTabs] = useState<RecordTab[]>([])
+  // The flow step picked on a record tab. Keyed by scopeKey — project and record together, because a
+  // tab id (`record:<recordId>`) has no project in it, and keying on that alone would let two
+  // projects sharing a record id leak each other's scoping. The tab record already has both, so this
+  // costs nothing extra.
+  // Cleared when its tab closes (closeWorkbenchTab) — left alone it would grow for the life of the
+  // session, and reopening a closed tab would resurrect a scope the user never set.
+  const [scopedNode, setScopedNode] = useState<Record<string, string | null>>({})
   interface FileBuffer {
     /** 항상 LF다. CodeMirror가 문서를 LF로 정규화하므로 버퍼도 같은 모양이어야 에디터 상태와 비교되고
      *  재사용된다. 디스크의 줄바꿈은 eol에 따로 들고 있다가 쓸 때 되돌린다 */
@@ -489,6 +560,18 @@ export default function App(): React.JSX.Element {
   fileTabsRef.current = fileTabs
   // 탭 순환이 쓰는 것 — 클릭과 같은 경로를 타야 종류에 상관없이 같은 일이 일어난다
   const selectWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
+  /** The id of the tab Ctrl+W may close. **Sessions are excluded** — that key must not kill a
+   *  process. Files and records are both lightweight, read-only tabs that open and close freely, so
+   *  both belong here. */
+  const closableTabIdRef = useRef<string | null>(null)
+  // 탭 트리에서 파생시킨다 — activeFileId 와 같은 이유다: 따로 상태를 두면 다른 페인의 탭을
+  // 누르는 순간 트리와 갈라진다
+  closableTabIdRef.current =
+    activeTab?.kind === 'file' || activeTab?.kind === 'record' ? activeTabId : null
+  /** The close function itself. `closeWorkbenchTab` is recreated every render and its body reads
+   *  render-time values (via closeFileTab), so a key listener registered once that called a captured
+   *  stale closure would act on outdated tabs — same place, same reason as selectWorkbenchTabRef. */
+  const closeWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
   const fileBuffersRef = useRef(fileBuffers) // keeps the external-change handler from going stale
   fileBuffersRef.current = fileBuffers
   // 파일별 에디터 상태 캐시. FileEditor보다 오래 살아야 하므로 여기서 소유한다 (editorStateCache.ts의 주석)
@@ -698,6 +781,9 @@ export default function App(): React.JSX.Element {
     // effect above (the rail needs it before anyone opens this modal); this is what keeps the checkbox
     // honest if the stored value ever diverges from what the renderer is holding.
     void window.api.settings.getOrchestrationEnabled().then(setOrchEnabled)
+    // Same re-sync for work unit tracking. Unlike orchestration, nothing outside this modal reads it yet,
+    // so there is no mount-time fetch to keep honest — this is the only read.
+    void window.api.settings.getWorkUnitTrackingEnabled().then(setWorkUnitTrackingEnabled)
   }, [showSettings])
 
   // Keyboard session tab switching: a global capture listener, so it works regardless of where focus
@@ -736,20 +822,45 @@ export default function App(): React.JSX.Element {
         toggleExplorer()
         return
       }
+      // The two sidebar views the rail can open. Pressed again they close, which is what the rail
+      // button does — so the key is the button, not a second way in.
+      //
+      // Jobs is gated on the orchestration setting because its rail button is: with the setting off the
+      // button is not drawn, and a key that opens a view whose only control is missing strands the user
+      // in it. How It Works has no such flag.
+      //
+      // Not blocked while a text field has focus, unlike the tab-cycling actions below: the default
+      // chords are Ctrl+Shift+J/H, which no input of ours uses, and switching sidebars while reading a
+      // file is exactly when it is wanted.
+      //
+      // Both toggles are recreated on every render and this listener holds the first one, but their
+      // bodies are all refs and setters, so a stale closure still acts on the latest state — the same
+      // convention toggleExplorer and closeFileTab already rely on.
+      if (action === 'sidebar.jobs' || action === 'sidebar.howItWorks') {
+        if (action === 'sidebar.jobs' && !orchEnabledRef.current) return
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return // holding the key would flap the sidebar
+        if (action === 'sidebar.jobs') toggleJobs()
+        else toggleHiw()
+        return
+      }
       // Closing a file tab, same as closing a browser tab. When dirty, closeFileTab raises a
-      // confirmation modal. The only condition is that the active tab is a file — a file tab lives in a
-      // pane now, so whether the explorer sidebar is showing says nothing about it. It is still not
-      // intercepted while xterm has focus — in a terminal, Ctrl+W deletes the previous word, which is
-      // needed while typing to Claude (see yieldsToTerminal above).
-      // closeFileTab is recreated on every render, but its body is all refs and setters, so it works
-      // against the latest state even when stale (the same convention as toggleExplorer above).
+      // confirmation modal. The condition is that the active tab is one Ctrl+W may close — a file or a
+      // How It Works record. Both are opened and closed freely to read something; a session is not, and
+      // closing one kills a process, so it is left out (the tab strip's × still closes all three).
+      // A tab lives in a pane now, so whether the explorer sidebar is showing says nothing about it.
+      // It is still not intercepted while xterm has focus — in a terminal, Ctrl+W deletes the previous
+      // word, which is needed while typing to Claude (see yieldsToTerminal above).
       if (action === 'explorer.closeFileTab') {
-        const id = activeFileIdRef.current
-        if (!id) return // no file tab is open — unlike a browser, this does not close the window
+        const id = closableTabIdRef.current
+        if (!id) return // nothing closable is open — unlike a browser, this does not close the window
         e.preventDefault()
         e.stopPropagation()
         if (e.repeat) return // stops tabs closing in a chain while the key is held
-        void closeFileTab(id)
+        // Through the shared closer rather than closeFileTab, so a file still gets its dirty-file
+        // confirmation and a record tab takes its own branch (which also clears the remembered scope).
+        closeWorkbenchTabRef.current(id)
         return
       }
       // 마크다운 프리뷰 모드 순환. 활성 탭이 .md 일 때만 의미가 있다. 툴바 버튼은 모드를 직접
@@ -996,13 +1107,19 @@ export default function App(): React.JSX.Element {
       // The default account mapping is keyed on the original repo — a worktree path is new every time and mappings must not pile up
       if (opts.saveDefault)
         await window.api.projects.setDefaultAccount(opts.repoRoot ?? opts.cwd, opts.accountIds[0])
-      // When the rolling resume guard hits, main returns the existing live session → focus it without
-      // adding a tab. The verdict is made outside the setSessions callback, through sessionsRef: a state
-      // updater has to be pure, and StrictMode may run it twice, so raising a toast inside risks firing
-      // twice.
-      const guardHit = Boolean(opts.resumeSessionId) && sessionsRef.current.some((s) => s.id === info.id)
+      // What actually happened to the resume the modal asked for — the rolling guard focused an existing
+      // tab instead (its options quietly discarded), or Smart Resume started a blank session carrying a
+      // briefing. Both look wrong to the user unless we say so: one drops the chosen account, the other
+      // shows an empty window where a conversation was expected. The verdict is made outside the
+      // setSessions callback, through sessionsRef: a state updater has to be pure, and StrictMode may run
+      // it twice, so raising a toast inside risks firing twice.
+      const notice = spawnNotice({
+        requestedResumeSessionId: opts.resumeSessionId,
+        returnedResumeSessionId: info.resumeSessionId,
+        returnedTabAlreadyOpen: sessionsRef.current.some((s) => s.id === info.id)
+      })
       setSessions((prev) => (prev.some((s) => s.id === info.id) ? prev : [...prev, info]))
-      if (guardHit) toast.info(t('session.spawn.resumeLiveIgnored')) // tells the user the resume modal's options were quietly discarded
+      if (notice) toast.info(t(`session.spawn.${notice}`))
       const cur = layoutRef.current
       const pending = pendingSplitRef.current
       pendingSplitRef.current = null
@@ -1114,6 +1231,23 @@ export default function App(): React.JSX.Element {
     )
   }
 
+  /** 탭 하나를 트리에서 뺀다. 다음에 무엇이 활성이 되는지는 removeTab 이 정한다(세션 탭을 닫을 때와
+   *  같은 규칙). 여기서 ref 를 직접 맞춰 두는 것은 연쇄로 닫힐 때(폴더 삭제) 다음 반복이 렌더 전의
+   *  낡은 값을 읽지 않게 하기 위해서다 — closeFileTab 의 fileTabsRef 미러링과 같은 이유다.
+   *  기능 탭이 세 번째 종류로 들어오면서 파일 탭과 이 꼬리를 그대로 나눠 쓰게 되어 함수가 되었다 —
+   *  기능 탭에는 버퍼도 죽일 프로세스도 없어 닫기가 이것 하나다. */
+  const dropTabFromTree = (id: string): void => {
+    const cur = layoutRef.current
+    if (!cur || !groupOfTab(cur, id)) return
+    const nextLayout = removeTab(cur, id)
+    layoutRef.current = nextLayout
+    const p = activePaneIdRef.current
+    const nextPane = nextLayout ? (p && leafOf(nextLayout, p) ? p : firstLeaf(nextLayout).id) : null
+    activePaneIdRef.current = nextPane
+    setActivePaneId(nextPane)
+    setLayout(nextLayout)
+  }
+
   const closeFileTab = async (id: string): Promise<void> => {
     // Decided outside the updater — avoids StrictMode double-invocation side effects (the existing convention)
     const buf = fileBuffersRef.current[id]
@@ -1143,21 +1277,9 @@ export default function App(): React.JSX.Element {
       const { [id]: _drop, ...rest } = prev
       return rest
     })
-    // 트리에서도 뺀다. 다음에 무엇이 활성이 되는지는 removeTab이 정한다(세션 탭을 닫을 때와 같은 규칙),
-    // 그러면 activeFileId는 파생값이므로 저절로 따라온다. 여기서 ref를 직접 맞춰 두는 것은 연쇄로 닫힐
-    // 때(폴더 삭제) 다음 반복이 렌더 전의 낡은 값을 읽지 않게 하기 위해서다 — closeFileTab 위쪽의
-    // fileTabsRef 미러링과 같은 이유다
+    // 트리에서도 뺀다(dropTabFromTree). 그러면 activeFileId 는 파생값이므로 저절로 따라온다
     if (activeFileIdRef.current === id) activeFileIdRef.current = null
-    const cur = layoutRef.current
-    if (cur && groupOfTab(cur, id)) {
-      const nextLayout = removeTab(cur, id)
-      layoutRef.current = nextLayout
-      const p = activePaneIdRef.current
-      const nextPane = nextLayout ? (p && leafOf(nextLayout, p) ? p : firstLeaf(nextLayout).id) : null
-      activePaneIdRef.current = nextPane
-      setActivePaneId(nextPane)
-      setLayout(nextLayout)
-    }
+    dropTabFromTree(id)
   }
 
   /** 탭 줄에서 탭을 골랐다. 종류에 상관없이 트리에서 그 탭을 활성으로 만들고 그 페인에 포커스를 준다 —
@@ -1174,7 +1296,10 @@ export default function App(): React.JSX.Element {
   // ref뿐이라 최신 상태에 대해 동작한다(toggleExplorer와 같은 관례)
   selectWorkbenchTabRef.current = selectWorkbenchTab
 
-  /** 파일 탭은 기존 경로(더티면 확인 모달), 세션 탭은 세션 모드의 탭 닫기와 같은 경로로 종료한다 */
+  /** A file tab closes through its existing path (a confirmation modal when dirty); a session tab
+   *  closes through session mode's tab-close path. A record tab is nothing more than dropping it from
+   *  the tree — skip that branch here and its id would be read as a session id and flow into
+   *  sessions.kill. */
   const closeWorkbenchTab = (tabId: string): void => {
     const ref = parseTab(tabId)
     if (!ref) return
@@ -1182,8 +1307,24 @@ export default function App(): React.JSX.Element {
       void closeFileTab(tabId)
       return
     }
+    if (ref.kind === 'record') {
+      // Drops the remembered scope along with it — same place as clearing a file tab's buffer when
+      // it closes. Left alone it would grow for the life of the session, and reopening a closed tab
+      // would resurrect a scope the user never set.
+      const rec = recordTabs.find((x) => x.id === tabId)
+      if (rec)
+        setScopedNode((prev) => {
+          const { [scopeKey(rec)]: _drop, ...rest } = prev
+          return rest
+        })
+      setRecordTabs((prev) => prev.filter((x) => x.id !== tabId))
+      dropTabFromTree(tabId)
+      return
+    }
     closeSession(ref.id)
   }
+  // Ctrl+W 가 이 함수를 타도록 — 위 selectWorkbenchTabRef 와 같은 자리, 같은 이유다
+  closeWorkbenchTabRef.current = closeWorkbenchTab
 
   // Adjusting open tabs after a file operation. A watcher event does not say 'what became what', so the
   // renderer adjusts them itself right after the operation succeeds. A tab id is literally
@@ -1335,21 +1476,38 @@ export default function App(): React.JSX.Element {
     if (opening) {
       setSidebarOpen(true)
       setJobsOpen(false) // 사이드바는 한 번에 한 뷰만 보여준다
+      setHiwOpen(false)
     }
     setExplorerOpen(opening)
   }
 
   /** Jobs 사이드바 토글 — 탐색기 토글과 같은 규칙이다: 켤 때 사이드바가 접혀 있으면 함께 펴고, 세
-   *  뷰 중 하나만 보이므로 탐색기가 열려 있었다면 닫는다. 키보드 단축키가 없으므로 toggleExplorer와
-   *  달리 ref가 아니라 최신 렌더의 jobsOpen을 그대로 읽는다 — 전역 리스너에 한 번만 등록되는 함수가
-   *  아니라 매 렌더 새로 만들어져 레일 버튼의 onClick에 바로 연결되기 때문이다. */
+   *  뷰 중 하나만 보이므로 탐색기가 열려 있었다면 닫는다.
+   *
+   *  Reads the ref rather than the render value, exactly as toggleExplorer does: this now also runs
+   *  from the keydown listener, which is registered once and closes over the first render. Reading
+   *  `jobsOpen` there would compute `opening` from a value frozen at mount, so the shortcut would only
+   *  ever open the view and never close it. */
   const toggleJobs = (): void => {
-    const opening = !jobsOpen
+    const opening = !jobsOpenRef.current
     if (opening) {
       setSidebarOpen(true)
       setExplorerOpen(false)
+      setHiwOpen(false)
     }
     setJobsOpen(opening)
+  }
+
+  /** How It Works 사이드바 토글 — toggleJobs 와 같은 규칙: 켤 때 사이드바가 접혀 있으면 함께 펴고,
+   *  세 뷰 중 하나만 보이므로 나머지 둘을 끈다. Reads the ref for the reason toggleJobs gives. */
+  const toggleHiw = (): void => {
+    const opening = !hiwOpenRef.current
+    if (opening) {
+      setSidebarOpen(true)
+      setExplorerOpen(false)
+      setJobsOpen(false)
+    }
+    setHiwOpen(opening)
   }
 
   // A setState updater can be invoked twice under StrictMode (in development), so setActivePaneId and
@@ -1651,7 +1809,8 @@ export default function App(): React.JSX.Element {
     })()
   }
 
-  /** 활성 탭이 말하는 루트 — 파일 탭이면 그 파일의 프로젝트, 세션 탭이면 그 세션의 cwd.
+  /** 활성 탭이 말하는 루트 — 파일 탭이면 그 파일의 프로젝트, 기능 탭이면 그 기능의 프로젝트,
+   *  세션 탭이면 그 세션의 cwd.
    *  탭이 없으면 null이고, 그 자리는 아래에서 stickyRoot 가 채운다.
    *
    *  히스토리와 worktree 목록에 있던 '탐색기에서 열기'는 이 규칙과 양립하지 않아 없앴다. 그 버튼들은
@@ -1661,7 +1820,13 @@ export default function App(): React.JSX.Element {
   const activeTabRoot =
     (activeTab?.kind === 'file'
       ? fileTabs.find((t) => t.id === activeTabId)?.projectRoot
-      : sessions.find((s) => s.id === activeTab?.id)?.cwd) ?? null
+      : activeTab?.kind === 'record'
+        ? // A record tab names its own project too. Without this branch the session lookup below
+          // would search for a session by the record id and come up empty, and currentProject would
+          // silently fall back to stickyRoot — so viewing A's record tab and then clicking B's session
+          // tab would drop this tab from the list, with no way left to close it.
+          recordTabs.find((t) => t.id === activeTabId)?.projectRoot
+        : sessions.find((s) => s.id === activeTab?.id)?.cwd) ?? null
 
   /** 탭이 하나도 없을 때의 현재 프로젝트. 마운트에서 한 번 복원하고, 그 뒤로는 활성 탭이 갱신한다.
    *  영속 규칙은 lib/stickyProject.ts 에 있다(렌더러에 테스트가 없어 App.tsx 안에서는 확인할 수 없다). */
@@ -1876,19 +2041,183 @@ export default function App(): React.JSX.Element {
     )
   }
 
-  // 사이드바에 그릴 뷰 하나 — 세 갈래 삼항보다 이 값 하나가 어느 뷰가 열려 있는지를 더 분명히 읽힌다.
-  // 탐색기와 Jobs는 서로 배타적이다(toggleExplorer/toggleJobs가 상대를 끈다). orchEnabled가 꺼지면
-  // jobsOpen이 내부적으로 true로 남아 있어도 Jobs를 그리지 않고 세션 목록으로 돌아간다 — 레일의 진입점이
-  // 사라지는 시점에 사이드바도 조용히 원래 모습으로 돌아가야 어색해지지 않는다.
+  /** Picked a record from the How It Works sidebar. If it is already open, activates that tab; if
+   *  not, opens it as a new tab in the active pane — the two cases are not split here because
+   *  placeTab's intoGroup already does "activate it if it's in the tree, don't reinsert it" itself.
+   *
+   *  **Builds a tab record along with it** — same place, same reason as openFile building a FileTab.
+   *  The title and the project are pinned into that record, so moving to another project does not
+   *  cost this tab its name or its ×, and clicking it again returns to its own project.
+   *
+   *  **Why the declaration sits here**: the body reads currentProject. This file has a history of
+   *  that reference dying to a TDZ error when declared above that const (see the comment on the two
+   *  effects above), so everything that reads it stays below. */
+  const openRecordTab = (recordId: string): void => {
+    // Only looked up in the current project's understanding. If the project was just switched and the
+    // cache is still the previous one, this would pick up A's record and produce a tab whose
+    // projectRoot is B alone — a tab no cached understanding would ever draw
+    const record =
+      understanding?.root === currentProject
+        ? understanding.data?.records.find((r) => r.id === recordId)
+        : undefined
+    // Reached from a sidebar row's click, so in the normal path both exist. Without either this would
+    // be a tab with no name and no project, so do nothing — the same choice openFile makes when it
+    // has no root
+    if (!currentProject || !record) return
+    const id = recordTab(recordId)
+    const tab: RecordTab = { id, recordId, title: record.request, projectRoot: currentProject }
+    // Reopening the same tab id replaces it. `record:<id>` carries no project, so two projects
+    // sharing a record id would share one tab — keeping the earlier record would let a tab just
+    // opened from B draw A's explanation. The one just pressed wins.
+    setRecordTabs((prev) =>
+      prev.some((x) => x.id === id) ? prev.map((x) => (x.id === id ? tab : x)) : [...prev, tab]
+    )
+    const placed = placeTab(layoutRef.current, id, { activePaneId: activePaneIdRef.current })
+    setLayout(placed.root)
+    if (placed.paneId) setActivePaneId(placed.paneId)
+  }
+
+  /** Asks for one record's explanation to be written again — the sidebar row's and the pane head's
+   *  [Write it up again].
+   *
+   *  **Does not wait.** The result comes back through the store and then 'understanding:changed'
+   *  (subscribed below), and until then the row's status simply reads "Writing up". What is caught
+   *  here is the IPC call itself being rejected — an out-of-allowlist path, say — swallowing that
+   *  would leave a button that does nothing when pressed. */
+  const regenerateRecord = (projectRoot: string, recordId: string): void => {
+    void window.api.understanding
+      .regenerate(projectRoot, recordId)
+      .catch((err) =>
+        toast.error(
+          t('hiw.record.regenerateFailed', { detail: err instanceof Error ? err.message : String(err) })
+        )
+      )
+  }
+
+  /** [완료] on an open-task row — closes it with `source: 'user'`, active or interrupted either way.
+   *  The write-up starts on main's side of this call, not before: nothing here creates it directly.
+   *  Does not wait for the redraw — 'sessionTasks:changed' (subscribed above) does that once main's
+   *  onTasksChanged fires, the same shape as [Write it up again] above.
+   *
+   *  **`recorded: false` is not an error.** `finish` (collector.ts) drops a unit with no write
+   *  evidence or no changed files instead of turning it into a record (spec §12) — the row still
+   *  disappears, but silently that reads as a bug: the person pressed a button on a row that had
+   *  been waiting for them and it vanished with no explanation. `hiw.open.completeEmpty` says what
+   *  happened without reading as a failure, since dropping empty work is the correct outcome. */
+  const completeOpenTask = (projectRoot: string, id: string): void => {
+    void window.api.sessionTasks
+      .complete(projectRoot, id)
+      .then((r) => {
+        if (!r.recorded) toast.info(t('hiw.open.completeEmpty'))
+      })
+      .catch((err) =>
+        toast.error(
+          t('hiw.open.completeFailed', { detail: err instanceof Error ? err.message : String(err) })
+        )
+      )
+  }
+
+  /** [취소] on an open-task row — closes it with nothing written up; the row simply disappears. */
+  const cancelOpenTask = (projectRoot: string, id: string): void => {
+    void window.api.sessionTasks
+      .cancel(projectRoot, id)
+      .catch((err) =>
+        toast.error(t('hiw.open.cancelFailed', { detail: err instanceof Error ? err.message : String(err) }))
+      )
+  }
+
+  /** Clicked an implementation reference. Its path is repository-relative (understanding/types.ts),
+   *  so it is joined onto the current project into an absolute path and opened through the usual file
+   *  tab — putting the source beside the explanation is what this screen is for. The separator
+   *  follows the root's own (the same convention as core/files/paths.ts's resolveRelative). */
+  const openRecordPath = (relPath: string): void => {
+    const root = currentProjectRef.current
+    if (!root) return
+    const sep = root.includes('\\') ? '\\' : '/'
+    // Also filters out `..` — main's assertAllowedPath already resolves paths lexically and rejects
+    // an escape from the project today, but this path string will soon come from the model, and
+    // filtering before joining is cheaper than after
+    const parts = relPath.split(/[/\\]/).filter((p) => p !== '' && p !== '.' && p !== '..')
+    if (parts.length === 0) return
+    openFile(`${root}${sep}${parts.join(sep)}`)
+  }
+
+  /** Record tab id → that record's current status. The tab bar's glyph reads this — status is a live
+   *  value, so it is not pinned into the tab record (pinning it would leave the glyph stale after a
+   *  fresh regeneration).
+   *
+   *  **Only entered when the understanding held right now belongs to that tab's project.** A record
+   *  id can repeat across projects, so without this check B's tab could pick up A's status. The cache
+   *  carries its own root, so this asks it directly — comparing against currentProject instead would
+   *  be out of sync between switching projects and the IPC round trip finishing. A tab left out of
+   *  this map still draws with a name and no glyph (see the comment on the record slot in PaneGrid) —
+   *  better than disappearing.
+   *  Same split as dirtyIds: the judgment is made here, the grid only looks it up. */
+  const recordStatuses: Record<string, RecordStatus> = {}
+  for (const rec of recordTabs) {
+    if (!understanding || rec.projectRoot !== understanding.root) continue
+    const r = understanding.data?.records.find((x) => x.id === rec.recordId)
+    if (r) recordStatuses[rec.id] = r.status
+  }
+
+  /** A record tab's body. Same split as renderEditor — the pane grid only claims a slot, App builds
+   *  what goes in it.
+   *
+   *  **Only drawn when the understanding held right now belongs to this tab's project.** A record id
+   *  can repeat across projects, so without this check the tab just activated for A could flash B's
+   *  still-lingering explanation for one frame. The cache carries its own root, so this asks it
+   *  directly (see the comment on the understanding declaration).
+   *
+   *  **A mismatch draws a reason, not a blank.** In a split view, another project's record tab can be
+   *  the active tab of an unfocused pane — its slot still claims its place, and returning null there
+   *  would cover the pane body with an unexplained blank that reads as broken. The cache is one per
+   *  project, so this state can persist for as long as that pane stays alive (unlike the one frame
+   *  during a project switch). No explanation yet just means `explanation` is undefined, and
+   *  RecordDetail draws that guidance on its own. */
+  const renderRecord = (recordTabId: string): React.ReactNode => {
+    const rec = recordTabs.find((x) => x.id === recordTabId)
+    if (!rec) return null
+    const u = understanding && rec.projectRoot === understanding.root ? understanding.data : null
+    const r = u ? u.records.find((x) => x.id === rec.recordId) : undefined
+    // Wrapped once in .workbench-body — the same class RecordDetailHost wraps its own body in. The
+    // pane slot is a flex box, so without this the guidance would not fill the pane, only as wide as
+    // its own text
+    if (!u || !r)
+      return (
+        <div className="workbench-body">
+          <div className="hiw-pane hiw-pane-empty">{t('hiw.pane.notInProject')}</div>
+        </div>
+      )
+    // The scoping memory's key — carries the project and the record together (scopeKey's comment)
+    const key = scopeKey(rec)
+    return (
+      <RecordDetailHost
+        record={r}
+        scopedNodeId={scopedNode[key] ?? null}
+        onPickStep={(id) => setScopedNode((m) => ({ ...m, [key]: id }))}
+        onOpenPath={openRecordPath}
+        onRegenerate={() => regenerateRecord(rec.projectRoot, rec.recordId)}
+      />
+    )
+  }
+
+  // 사이드바에 그릴 뷰 하나 — 네 갈래 삼항보다 이 값 하나가 어느 뷰가 열려 있는지를 더 분명히 읽힌다.
+  // 탐색기·Jobs·How It Works는 서로 배타적이다(toggleExplorer/toggleJobs/toggleHiw가 나머지를 끈다).
+  // orchEnabled가 꺼지면 jobsOpen이 내부적으로 true로 남아 있어도 Jobs를 그리지 않고 세션 목록으로
+  // 돌아간다 — 레일의 진입점이 사라지는 시점에 사이드바도 조용히 원래 모습으로 돌아가야 어색해지지
+  // 않는다. How It Works에는 그런 기능 플래그가 없다.
   //
   // **아래 효과들과 Run 콘솔의 렌더가 이 값을 공유한다.** 그래서 선언이 렌더 본문 끝이 아니라 여기에
   // 있다 — 효과의 의존성 배열은 렌더 중에 평가되므로 선언이 그보다 아래면 TDZ 로 터진다.
-  // 세 자리에 `explorerOpen || jobsOpen` 을 각각 쓰면 사이드바가 실제로 보여주는 것과 어긋날 수 있다.
-  const sidebarPane: 'explorer' | 'jobs' | 'sessions' = explorerOpen
+  // 세 자리에 `explorerOpen || jobsOpen || hiwOpen` 을 각각 쓰면 사이드바가 실제로 보여주는 것과
+  // 어긋날 수 있다.
+  const sidebarPane: 'explorer' | 'jobs' | 'understanding' | 'sessions' = explorerOpen
     ? 'explorer'
     : jobsOpen && orchEnabled
       ? 'jobs'
-      : 'sessions'
+      : hiwOpen
+        ? 'understanding'
+        : 'sessions'
   /** 아래쪽 패널이 쓰는 경로. 프로젝트가 없으면 홈으로 떨어진다 — 셸을 직접 띄웠을 때와 같은 곳이고,
    *  그래야 탭이 하나도 없을 때도 터미널을 열 수 있다. 홈에서는 Run 탭이 없다(runAvailable):
    *  실행 구성은 프로젝트 단위이고, 홈의 파일 목록으로 시드를 감지하면 남의 홈 package.json 스크립트를
@@ -1934,6 +2263,59 @@ export default function App(): React.JSX.Element {
     })
     return () => { cancelled = true }
   }, [currentProject])
+
+  // Loads that project's How It Works understanding whenever the project changes — same shape as
+  // run.list just above. **This must sit here, after currentProject is declared** — its dependency
+  // array is evaluated during render, and placing it up near hiwOpen (where the brief for this task
+  // first sketched it) would read currentProject before that `const` runs and crash with a TDZ
+  // ReferenceError (this file has hit that exact mistake before; see the newRunOpen and openRun
+  // effects above). A project that has never been analyzed resolves to null — UnderstandingView's
+  // empty state draws that, the same as no project at all.
+  //
+  // **거부 갈래도 run.list 와 같은 모양이다.** understanding.get 은 assertAllowedPath 를 부르고 그것은
+  // 던지므로(ipc.ts), 허용 목록에서 밀려난 루트(사라진 워크트리 등)는 처리되지 않은 거부로 콘솔에
+  // 튀어나온다. 그리고 실패했을 때 이전 프로젝트의 이해가 남는 것이 더 나쁘다 — 그 목록에서 줄을
+  // 누르면 새 프로젝트 이름 아래에서 이전 프로젝트의 기능이 열린다. 두 갈래 모두 루트를 함께 실어
+  // 그 값이 어느 프로젝트의 것인지를 캐시가 스스로 말하게 한다.
+  useEffect(() => {
+    if (!currentProject) return setUnderstanding(null)
+    const root = currentProject
+    let alive = true
+    void window.api.understanding.get(root).then(
+      (u) => {
+        if (alive) setUnderstanding({ root, data: u })
+      },
+      () => {
+        if (alive) setUnderstanding({ root, data: null })
+      }
+    )
+    return () => {
+      alive = false
+    }
+  }, [currentProject, understandingSeq])
+
+  // The open-task section's own load — same shape as the understanding effect just above, including
+  // the root travelling with the data and the two failure/success branches resolving to the same
+  // project key. **Unlike `understanding.get`, main does not fold this path** — workUnits.json is
+  // keyed by the raw session cwd, a different key space from understanding.json's origin-repo fold
+  // (ipc.ts's sessionTasks.* handlers explain why) — so this passes `currentProject` straight
+  // through, same as main does on its end.
+  useEffect(() => {
+    if (!currentProject) return setOpenTasks(null)
+    const root = currentProject
+    let alive = true
+    void window.api.sessionTasks.list(root).then(
+      (tasks) => {
+        if (alive) setOpenTasks({ root, data: tasks })
+      },
+      () => {
+        if (alive) setOpenTasks({ root, data: [] })
+      }
+    )
+    return () => {
+      alive = false
+    }
+  }, [currentProject, sessionTasksSeq])
 
   // Turning the setting off makes the rail button — the only control that can close the Jobs view —
   // disappear along with it (it is gated on the same orchEnabled), so a view left open past that point
@@ -1987,6 +2369,26 @@ export default function App(): React.JSX.Element {
       void window.api.orch.unwatch()
     }
   }, [jobsOpen, sidebarOpen, currentProject])
+
+  // 배경 재생성이 끝나면 main 이 밀어 준다 — 그 결과가 화면에 닿는 유일한 길이다. 재생성은
+  // 작업 단위가 닫힐 때 저절로 돌고 수십 초가 걸리므로, 이것이 없으면 새 설명은 사용자가 프로젝트를
+  // 바꿨다 돌아올 때까지 화면에 없다.
+  //
+  // **실린 값을 비교하지 않는다.** main 은 프로젝트 키를 원 저장소로 접어 쓰는데(설계 D1) 렌더러는
+  // 그 접기를 모른다 — 워크트리를 열고 있으면 밀려 오는 키는 이 창의 currentProject 와 다르다.
+  // 그래서 어느 프로젝트의 것이든 다시 읽기만 한다: 접기를 아는 쪽(understanding.get)이 답한다.
+  useEffect(() => {
+    return window.api.on('understanding:changed', () => setUnderstandingSeq((n) => n + 1))
+  }, [])
+
+  // A task started, was completed/cancelled, or was interrupted — the collector's onTasksChanged
+  // fires for all of these (collector.ts). Same shape as the listener just above — still not
+  // comparing the pushed key against currentProject, even though this one is never folded (unlike
+  // 'understanding:changed''s payload): it is just a "read again" signal, so the value carried does
+  // not need to be checked before triggering the same unconditional re-read through sessionTasks.list.
+  useEffect(() => {
+    return window.api.on('sessionTasks:changed', () => setSessionTasksSeq((n) => n + 1))
+  }, [])
 
   // When the project changes, that project's terminal list is read again — main holds them per project,
   // so another project's terminals stay alive and are simply not shown here
@@ -2408,6 +2810,32 @@ export default function App(): React.JSX.Element {
               </svg>
             </button>
           )}
+          {/* How It Works 사이드바 토글. Jobs 와 달리 기능 플래그가 없어 늘 그린다. */}
+          <button
+            className={hiwOpen ? 'rail-btn on' : 'rail-btn'}
+            aria-label={t('hiw.rail.open')}
+            title={t('hiw.rail.open')}
+            onClick={toggleHiw}
+          >
+            {/* 지도 — 흐름을 읽는다는 뜻. 앱의 SVG 관례대로 16 viewBox 에 currentColor 하나, 바깥
+                사각형은 1.4, 안쪽 갈래는 1.2 */}
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinejoin="round"
+            >
+              <rect x="2" y="2.4" width="12" height="11.2" rx="1.4" />
+              <g strokeWidth="1.2" strokeLinecap="round">
+                <path d="M8 4.6 v2.2" />
+                <path d="M5.2 11.4 v-1.6 h5.6 v1.6" />
+                <path d="M8 6.8 v3" />
+              </g>
+            </svg>
+          </button>
           {/* 아래쪽 패널을 여는 입구. 페인을 가리지 않는다 — 프로젝트가 없으면 홈에서 열리므로 어느
               화면에서든 셸을 하나 띄울 수 있다. 예전에는 explorerOpen 이었고 주석도 "파일·에디터 모드
               전용"이라고 적혀 있었는데, 이 패널이 탐색기의 것이 아니게 된 뒤로는 둘 다 거짓이 됐다.
@@ -2601,6 +3029,28 @@ export default function App(): React.JSX.Element {
                   })()
                 }}
               />
+            ) : sidebarPane === 'understanding' ? (
+              <UnderstandingView
+                // Passed only when it belongs to the current project. Between switching projects and
+                // the IPC round trip finishing, the cache still holds the previous project's data, and
+                // passing it through as-is would stand the previous project's record list under the
+                // new project's name — clicking a row would then open a tab that draws nothing. Until
+                // then this is the same empty state as before any work was recorded (the same gap a
+                // run configuration shows while waiting on run.list).
+                understanding={understanding?.root === currentProject ? understanding.data : null}
+                // Which row stays lit is decided by the tab tree — whichever record the active pane's
+                // active tab holds, if any
+                selectedRecordId={activeRecordId}
+                onOpenRecord={openRecordTab}
+                // [Write it up again] — does not wait. The row's status becomes "Writing up" and,
+                // once it finishes, 'understanding:changed' makes this screen read itself again
+                onRegenerate={(id) => currentProject && regenerateRecord(currentProject, id)}
+                // Same "only when it belongs to the current project" guard as `understanding` above,
+                // for the same reason.
+                openTasks={openTasks?.root === currentProject ? openTasks.data : []}
+                onCompleteTask={(id) => currentProject && completeOpenTask(currentProject, id)}
+                onCancelTask={(id) => currentProject && cancelOpenTask(currentProject, id)}
+              />
             ) : (
               <>
                 <AccountPanel accounts={accounts} />
@@ -2680,7 +3130,10 @@ export default function App(): React.JSX.Element {
                 accounts={accounts}
                 fileTabs={fileTabs}
                 dirtyFileIds={dirtyIds}
+                recordTabs={recordTabs}
+                recordStatuses={recordStatuses}
                 renderEditor={renderEditor}
+                renderRecord={renderRecord}
                 rollStates={rollStates}
                 schedStates={schedStates}
                 busy={busy}
@@ -2941,9 +3394,35 @@ export default function App(): React.JSX.Element {
                       />
                     </label>
                     <span className="settings-hint">{t('settings.orchestration.hint')}</span>
+                    {/* Work unit tracking — same settings-row/settings-hint/label shape as orchestration
+                        above, and the same optimistic-update-then-revert-on-failure behaviour. Off by
+                        default: nothing is read from before the moment this is turned on. */}
+                    <label className="settings-row">
+                      <span>{t('settings.workUnit.label')}</span>
+                      <input
+                        type="checkbox"
+                        checked={workUnitTrackingEnabled}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                          setWorkUnitTrackingEnabled(next) // an optimistic update — reverted below on failure
+                          void window.api.settings.setWorkUnitTrackingEnabled(next).catch((err) => {
+                            setWorkUnitTrackingEnabled(!next)
+                            toast.error(
+                              t('settings.workUnit.saveFailed', {
+                                detail: err instanceof Error ? err.message : String(err)
+                              })
+                            )
+                          })
+                        }}
+                      />
+                    </label>
+                    <span className="settings-hint">{t('settings.workUnit.hint')}</span>
                     {/* 재개 전략 — 한도에 걸린 세션을 어떻게 이어갈지. Appearance 가 아니라 여기 있는
                         이유: 이것은 보이는 방식이 아니라 동작이고, 바로 위 오케스트레이션 토글과 같은
                         갈래(롤링·워커)를 건드린다. */}
+                    {/* 설명 생성 — 작업 단위 추적이 모은 것을 무엇으로 설명할 것인가.
+                        추적 토글 바로 아래에 두는 이유: 추적이 이 설정의 입력을 만든다. */}
+                    <GeneratorSettings />
                     <ResumeStrategySettings />
                   </>
                 )}
@@ -3228,7 +3707,7 @@ export default function App(): React.JSX.Element {
           </div>
         </div>
       )}
-      {/* The pane tab context menu — the entry point for split and unsplit. It serves both kinds of tab:
+      {/* The pane tab context menu — the entry point for split and unsplit. It serves every kind of tab:
           the id goes to the tree unread, and Close takes the same path the tab's × does (a dirty file
           still asks for confirmation, a session is still ended). What gets split is the group the
           right-clicked tab belongs to, not the active pane — so right-clicking a tab in another group

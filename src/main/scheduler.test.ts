@@ -200,6 +200,39 @@ describe('SchedulerCoordinator', () => {
     expect(h.statusCalls).toEqual([])
   })
 
+  // codex 에도 키를 배울 자리가 있다 — statusLine 이 아니라 rollout 감시자다. 그쪽은 모든 codex
+  // 세션에 붙어 rollout 파일을 찾고, 그 탐색(findRollout)이 경로와 **세션 id 를 함께** 돌려준다.
+  // 이 값이 없으면 codex 스케줄은 그 세션이 사는 동안만 돌고 다음 재개에 프리필되지 않는다.
+  it('codex는 rollout 감시자가 알아낸 세션 id로 학습해 1회 영속한다', async () => {
+    const h = harness({ codexSessionId: () => 'codex-sess' })
+    h.coord.register(info('s1', everyMin()), 'codex')
+    await vi.advanceTimersByTimeAsync(2 * 15_000) // tick 2회 — 학습은 1회만
+    expect(h.persisted).toEqual([{ key: 'codex-sess', config: everyMin() }])
+    expect(h.statusCalls).toEqual([]) // codex 는 여전히 statusLine 을 묻지 않는다
+  })
+
+  // rollout 탐색은 파일이 생길 때까지 걸린다(1초 폴링). 그동안 null 을 받는 것은 실패가 아니라
+  // 아직 모르는 것이므로, 학습을 포기하지 않고 다음 tick 에 다시 묻는다.
+  it('codex 세션 id를 아직 모르면 다음 tick에 다시 묻는다', async () => {
+    let id: string | null = null
+    const h = harness({ codexSessionId: () => id })
+    h.coord.register(info('s1', everyMin()), 'codex')
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(h.persisted).toEqual([])
+    id = 'codex-sess'
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(h.persisted).toEqual([{ key: 'codex-sess', config: everyMin() }])
+  })
+
+  // 배선이 그 접근자를 넘기지 않으면(감시자가 없는 조합) 예전 동작 그대로다 — 조용히 아무 것도
+  // 하지 않을 뿐, 스케줄 자체는 그 세션이 사는 동안 계속 돈다.
+  it('codexSessionId 접근자가 없으면 아무 것도 영속하지 않는다', async () => {
+    const h = harness()
+    h.coord.register(info('s1', everyMin()), 'codex')
+    await vi.advanceTimersByTimeAsync(3 * 15_000)
+    expect(h.persisted).toEqual([])
+  })
+
   it('provider 생략(기본 claude)이면 기존처럼 학습·영속이 일어난다', async () => {
     const h = harness()
     h.coord.register(info('s1', everyMin())) // provider 생략

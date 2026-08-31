@@ -1,7 +1,13 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { Account, HistoryEntry, ProjectSummary } from '../../types'
-import { parseCodexMeta, parseCodexPreview, parseCodexTail, ROLLOUT_UUID_RE } from '../codexParser'
+import {
+  isExecRollout,
+  parseCodexMeta,
+  parseCodexPreview,
+  parseCodexTail,
+  ROLLOUT_UUID_RE
+} from '../codexParser'
 import type { HistoryStrategy } from './types'
 
 /** Scan root for codex session files — this file is the only place that knows about `sessions` */
@@ -38,7 +44,13 @@ export const codexHistoryStrategy: HistoryStrategy = {
         files.push({ path: path.join(dir, f.name), mtimeMs: f.mtimeMs, size: f.size })
       }
     }
-    const cwds = await io.cwdMemo(files, async (p) => (await parseCodexMeta(p)).cwd)
+    // An exec rollout reports no cwd here, which is the same thing this list already says about a
+    // file it does not recognise — "no cwd = not a project", the rule buildEntry applies too. That
+    // keeps the exclusion in one shape rather than adding a second kind of skip.
+    const cwds = await io.cwdMemo(files, async (p) => {
+      const m = await parseCodexMeta(p)
+      return isExecRollout(m) ? null : m.cwd
+    })
     const byPath = new Map<string, ProjectSummary>()
     files.forEach((f, i) => {
       const cwd = cwds[i]
@@ -66,6 +78,9 @@ export const codexHistoryStrategy: HistoryStrategy = {
       return null
     }
     if (!meta.cwd) return null
+    // This app's own explanation runs are not the user's conversations — they should not appear in a
+    // list of sessions to resume (see isExecRollout).
+    if (isExecRollout(meta)) return null
     const sessionId = meta.sessionId ?? filePath.match(ROLLOUT_UUID_RE)?.[1] ?? null
     if (!sessionId) return null
     let mtime = mtimeMs

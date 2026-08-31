@@ -19,6 +19,27 @@ export const en: Record<keyof typeof ko, string> = {
     'It does not apply to sessions that are already open — only new sessions get it. ' +
     'Ask the session you want to orchestrate with to run astera help for the full usage guide.',
   'settings.orchestration.saveFailed': 'Could not save the orchestration setting: {detail}',
+  // Work unit tracking
+  'settings.workUnit.label': 'Work unit tracking (experimental)',
+  'settings.workUnit.hint':
+    'Lets you declare a piece of work by typing /astera-task with what you want done — one row from ' +
+    'there until it ends, however many messages it takes. It does not apply to sessions that are ' +
+    'already open — only new sessions get it. Only conversations after you turn it on are read — ' +
+    'existing history is never read.',
+  'settings.workUnit.saveFailed': "Couldn't save the work unit tracking setting: {detail}",
+  // Explanation generation (How It Works)
+  'settings.gen.label': 'Explanation account',
+  'settings.gen.hint': 'When a piece of work finishes, this account writes the feature explanation. Nothing is generated until you pick one.',
+  'settings.gen.none': 'Not chosen — nothing is generated',
+  'settings.gen.model': 'Model',
+  'settings.gen.modelDefault': "The CLI's default",
+  'settings.gen.effort': 'Reasoning effort',
+  'settings.gen.effortDefault': "The model's default",
+  'settings.gen.refresh': 'Refresh model list',
+  'settings.gen.loading': 'Asking for models…',
+  'settings.gen.listFailed': "Could not get the model list — you can type one instead. ({detail})",
+  'settings.gen.modelPlaceholder': 'Type a model name',
+  'settings.gen.saveFailed': "Couldn't save the explanation settings: {detail}",
   'settings.accounts.hint':
     "⤓ imports settings from that CLI's default account. The default is the earliest registered account that is logged in — one per CLI.",
   'common.cancel': 'Cancel',
@@ -88,6 +109,9 @@ export const en: Record<keyof typeof ko, string> = {
     'Failed to start session: {message} (the worktree “{name}” was kept — delete it from the Worktrees panel)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped
   'session.spawn.resumeLiveIgnored': 'This session is already running — the options you selected were not applied.',
+  // Smart Resume took the blank slate — without this the user reads the empty window as a lost conversation
+  'session.spawn.smartResume':
+    'Smart Resume: started a fresh session with a briefing of the work so far, instead of reloading the conversation.',
   'session.placeholder.start': '+ Start a new session',
   'session.usage.contextTitleWithTokens': 'Context usage ({used} / {window} tokens)',
   'session.usage.contextTitle': 'Context usage',
@@ -258,6 +282,8 @@ export const en: Record<keyof typeof ko, string> = {
   'shortcut.explorer.saveFile': 'Save file',
   'shortcut.explorer.closeFileTab': 'Close file tab',
   'shortcut.explorer.cyclePreview': 'Cycle markdown preview mode',
+  'shortcut.sidebar.jobs': 'Toggle the Jobs sidebar',
+  'shortcut.sidebar.howItWorks': 'Toggle the How It Works sidebar',
   'shortcut.explorer.rename': 'Rename',
   'shortcut.explorer.delete': 'Delete',
   'shortcut.explorer.selectAll': 'Select all',
@@ -811,5 +837,53 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.node.answer': 'Unlock',
   'jobs.node.answerLabel': 'Decision',
   'jobs.node.gateQuestion': 'Why it is held',
-  'jobs.node.failed': 'Could not do that'
+  'jobs.node.failed': 'Could not do that',
+  // How It Works — project understanding
+  'hiw.rail.open': 'How It Works',
+  'hiw.title': 'How It Works',
+  'hiw.record.regenerate': 'Write it up again',
+  'hiw.record.generating': 'Writing up',
+  'hiw.record.ready': 'Recorded',
+  'hiw.record.needsReview': 'Needs review',
+  'hiw.record.failed': 'Could not write it up',
+  'hiw.record.regenerateFailed': 'Could not write it up again: {detail}',
+  'hiw.record.reason.noAccount': 'No explanation account is set — pick one in Settings → General.',
+  'hiw.record.reason.interrupted':
+    'The app closed while this was being written up — press the button below to try again.',
+  'hiw.record.reason.checkFailed': 'A check the agent ran did not pass — the write-up is worth a look.',
+  'hiw.record.reason.checkFailedJob': 'A check the app ran did not pass — the write-up is worth a look.',
+  'hiw.pane.overview': 'What it does',
+  'hiw.pane.userVisible': 'What you will notice',
+  'hiw.pane.flow': 'How it works',
+  'hiw.pane.decisions': 'Why it works this way',
+  'hiw.pane.implementation': 'Implementation',
+  'hiw.pane.edit': 'Edit',
+  'hiw.pane.reference': 'Reference',
+  'hiw.scope.clear': 'Show all',
+  'hiw.scope.whatHappens': 'What happens here',
+  'hiw.scope.why': 'Why',
+  'hiw.scope.implementation': 'Implementation for this step',
+  'hiw.empty.body': 'Each time a piece of work finishes, what changed and how lands here. Only work done after you turned tracking on.',
+  'hiw.empty.readOnly': 'Read-only — your code is not modified.',
+  'hiw.pane.notYet': 'This button is not ready yet.',
+  'hiw.pane.noExplanation': 'This record has no explanation yet.',
+  'hiw.pane.notInProject': 'This tab’s record is not in the project that is open right now.',
+  'hiw.open.title': 'In progress',
+  'hiw.open.interruptedTitle': 'Left unfinished',
+  'hiw.open.complete': 'Done',
+  'hiw.open.cancel': 'Cancel',
+  'hiw.open.completeFailed': 'Could not mark it done: {detail}',
+  'hiw.open.completeEmpty': 'Nothing changed, so there was nothing to record.',
+  'hiw.open.cancelFailed': 'Could not cancel it: {detail}',
+  'hiw.open.startedAt': 'Started {time}',
+  'hiw.open.reason.newTask': 'Stopped when another task started',
+  'hiw.open.reason.sessionEnd': 'Stopped when the session ended',
+  'hiw.open.reason.appRestart': 'Stopped when the app closed',
+  'hiw.open.reason.trackingOff': 'Stopped when tracking was turned off',
+  'hiw.open.reason.upgrade': 'Stopped when the app updated',
+  'hiw.verify.verified': 'Every reported check passed',
+  'hiw.verify.partial': 'Only some of it was checked',
+  'hiw.verify.unverified': 'Nothing was checked',
+  'hiw.verify.failed': 'A reported check failed',
+  'hiw.verify.reported': 'Reported by the agent — the app did not run it itself'
 }

@@ -106,7 +106,22 @@ export class OutputScanner {
     // spaced pattern is the one every other caller uses and keeping it in the path means a change
     // there cannot silently stop applying to the screen.
     const squashed = squash(this.tail)
-    const limit = LIMIT_RE.test(this.tail) || LIMIT_SQUASHED_RE.test(squashed)
+    // **The dialog counts as a signal on its own.** The phrase is the usual way a limit announces
+    // itself, but it is not the only one: on a managed (admin-controlled) plan the CLI draws the
+    // choice list with no banner above it at all, and a phrase-only verdict sees nothing there.
+    // Measured 2026-08-30 — rolling.log went 10 hours 24 minutes without a single line while the
+    // session sat in front of that dialog, and the code that finds the wait item (findWaitChoice
+    // reads it correctly, verified against the same screen) was never reached, because reaching it
+    // requires this verdict to fire first.
+    //
+    // Two conditions together, which is what keeps it narrow: the wait item's label is present, and
+    // something is actually waiting for input. Prose that merely quotes the label — a document, a
+    // tool's output — draws no dialog. That is the same reasoning the usage gate in rolling.ts
+    // already relies on, where the dialog outranks the account's own usage figure.
+    const limit =
+      LIMIT_RE.test(this.tail) ||
+      LIMIT_SQUASHED_RE.test(squashed) ||
+      (hasWaitChoiceLabel(this.tail) && looksLikeChoicePrompt(this.tail))
     const trust = TRUST_RE.test(squashed)
     const text = this.tail // capture before clearing — so the caller can re-parse what the match was based on
     if (limit || trust) this.tail = ''

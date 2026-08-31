@@ -33,7 +33,9 @@ const EVENT_CHANNELS = [
   'run:status',
   'terminal:data',
   'terminal:exit',
-  'orch:state'
+  'orch:state',
+  'understanding:changed',
+  'sessionTasks:changed'
 ]
 
 const api = {
@@ -98,6 +100,11 @@ const api = {
     setLang: invoke('settings.setLang'),
     getOrchestrationEnabled: invoke('settings.getOrchestrationEnabled'),
     setOrchestrationEnabled: invoke('settings.setOrchestrationEnabled'),
+    getWorkUnitTrackingEnabled: invoke('settings.getWorkUnitTrackingEnabled'),
+    setWorkUnitTrackingEnabled: invoke('settings.setWorkUnitTrackingEnabled'),
+    getGenerator: invoke('settings.getGenerator'),
+    setGenerator: invoke('settings.setGenerator'),
+    listModels: invoke('settings.listModels'),
     getResumeStrategy: invoke('settings.getResumeStrategy'),
     setResumeStrategy: invoke('settings.setResumeStrategy'),
     getTerminalFont: invoke('settings.getTerminalFont'),
@@ -198,6 +205,15 @@ const api = {
     runDetail: invoke('orch.runDetail'),
     command: invoke('orch.command'),
     unwatch: invoke('orch.unwatch')
+  },
+  understanding: {
+    get: invoke('understanding.get'),
+    regenerate: invoke('understanding.regenerate')
+  },
+  sessionTasks: {
+    list: invoke('sessionTasks.list'),
+    complete: invoke('sessionTasks.complete'),
+    cancel: invoke('sessionTasks.cancel')
   },
   platform: process.platform,
   win: {

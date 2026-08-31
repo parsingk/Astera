@@ -18,8 +18,11 @@ import type { RollConfig } from './rolling/types'
 export type { RollConfig } from './rolling/types'
 import type { GitState } from './git/status'
 export type { GitState } from './git/status'
+import type { ProjectUnderstanding } from './understanding/types'
 import type { Provider } from './providers/meta'
 import type { TerminalFont } from './terminal/font'
+import type { GeneratorSettings } from './understanding/generatorSettings'
+import type { ModelListResult } from './models/types'
 import type { ThemeId } from './theme/themes'
 // The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
 // orchestration/types.ts is safe to reach for: its single import is a type-only providers/meta.ts,
@@ -213,6 +216,21 @@ export interface RateLimitWindow {
  *  figure when a session halted by a limit has left that snapshot frozen at a stale value.
  *  status: 'ok' = at least one window was obtained, 'unavailable' = no credentials, 'error' = the
  *  request or the parse failed. */
+/** The bucket that is fullest, and when it lets go.
+ *
+ *  Why this is carried alongside maxPercent rather than derived later: the reset time is only in the
+ *  response, and the response is discarded once the percentage is read. Without it the only sources of
+ *  a reset time are the screen phrase and the statusLine snapshot — and a session halted at a limit
+ *  has neither (the phrase may never be printed, the snapshot is frozen). Measured 2026-08-30: a
+ *  session waited ten hours with `five_hour.resets_at` sitting in an answer nobody kept. */
+export interface RateLimitPeak {
+  percent: number
+  /** ISO 8601. null when the bucket carries no reset (an inactive scoped bucket, an older response). */
+  resetsAt: string | null
+  /** Is this a weekly bucket — what a block record needs to know about the wait it is recording. */
+  weekly: boolean
+}
+
 export interface RateLimitUsage {
   session: RateLimitWindow | null // the 5-hour window
   weekly: RateLimitWindow | null // the weekly (7-day) window
@@ -220,6 +238,8 @@ export interface RateLimitUsage {
    *  this is the value the limit verdict uses. The two windows alone are not enough; see the comment
    *  on maxPercentOf in core/usage/rateLimit.ts. */
   maxPercent: number | null
+  /** The bucket maxPercent came from, with its reset time. null when no bucket was readable. */
+  peak: RateLimitPeak | null
   status: 'ok' | 'unavailable' | 'error'
 }
 
@@ -494,6 +514,17 @@ export interface CoreEvents {
   // main's worktree-to-repository resolution (see OrchApi) — that call is the only thing that tells
   // main what the renderer has open.
   'orch:state': OrchSnapshot
+
+  /** How It Works 의 저장 파일이 바뀌었다. **실린 값은 프로젝트 키이고, 받는 쪽은 그것을 쓰지
+   *  않는다** — main 은 그 키를 원 저장소로 접어 두는데(설계 D1) 렌더러는 그 접기를 모른다.
+   *  "다시 읽어라"는 신호로만 쓴다. 배경 재생성이 화면에 닿는 유일한 길이다. */
+  'understanding:changed': string
+  /** The open-task section's redraw trigger. **Not folded**, unlike 'understanding:changed' above —
+   *  workUnits.json (what this section reads) is keyed by the raw session cwd, a different key space
+   *  from understanding.json's origin-repo fold (ipc.ts's sessionTasks.* handlers explain why). The
+   *  receiving side still does not compare the payload against `currentProject`; it is only a
+   *  "read again" signal, whichever project it names. */
+  'sessionTasks:changed': string
 }
 export type CoreEventChannel = keyof CoreEvents
 
@@ -620,6 +651,18 @@ export interface CoreApi {
     // already open (environment variables are fixed at spawn time).
     getOrchestrationEnabled(): Promise<boolean>
     setOrchestrationEnabled(enabled: boolean): Promise<void>
+    // Work unit tracking: groups a session's activity into goal-sized units. Off by default, and reads
+    // nothing from before the moment it is turned on.
+    getWorkUnitTrackingEnabled(): Promise<boolean>
+    setWorkUnitTrackingEnabled(enabled: boolean): Promise<void>
+    // Which account (and model) writes the How It Works explanations. Empty means no account has been
+    // chosen, and nothing is generated — the screen says so rather than staying silently blank.
+    getGenerator(): Promise<GeneratorSettings>
+    setGenerator(g: GeneratorSettings): Promise<void>
+    // The models that account can use, asked of the CLI itself. Never rejects: a failure comes back as
+    // { models: [], error } so the settings screen can fall back to a free-text field and say why.
+    // Cached for the life of the app; pass refresh to ask again.
+    listModels(accountId: string, refresh?: boolean): Promise<ModelListResult>
     // How a session that hits its limit gets continued. See ResumeStrategy.
     getResumeStrategy(): Promise<ResumeStrategy>
     setResumeStrategy(strategy: ResumeStrategy): Promise<void>
@@ -878,6 +921,44 @@ export interface OrchApi {
   unwatch(): Promise<void>
 }
 
+export interface UnderstandingApi {
+  /** 저장된 이해. 한 번도 분석하지 않은 프로젝트는 null — 빈 상태가 그것을 그린다 */
+  get(projectPath: string): Promise<ProjectUnderstanding | null>
+  /** Regenerate one record's write-up. **Does not wait for the result** — that row's status becomes
+   *  'generating' right away, and 'understanding:changed' pushes the screen once it finishes. */
+  regenerate(projectPath: string, recordId: string): Promise<void>
+}
+
+/** One row of the How It Works screen's open-task section. A DTO, not the stored unit: the
+ *  renderer has no business with git baselines, and `src/core/workUnit/**` is not in
+ *  tsconfig.web.json's include list. */
+export interface OpenSessionTask {
+  id: string
+  objective: string
+  status: 'active' | 'interrupted'
+  startedAt: string
+  /** When it stopped. Only an interrupted row has one — the screen uses it as that row's date, the
+   *  same way a finished record uses its own `at` (UnderstandingView.tsx). */
+  endedAt?: string
+  /** Why it was interrupted. One of the INTERRUPTED_BY_* codes; the screen translates them. */
+  reason?: string
+  sessionId: string
+}
+
+export interface SessionTaskApi {
+  /** Session tasks still waiting on an ending — active and interrupted, newest first. */
+  list(projectPath: string): Promise<OpenSessionTask[]>
+  /** Close one as completed with `source: 'user'`. The write-up starts now, not before.
+   *
+   *  `recorded: false` means the button press was accepted but nothing was kept — the unit had no
+   *  write evidence or no changed files (spec §12), so `finish` (collector.ts) dropped it instead of
+   *  turning it into a record. That is correct behavior, not a failure, so it resolves rather than
+   *  rejecting; the renderer tells the person with a distinct, non-error toast
+   *  (`hiw.open.completeEmpty`). */
+  complete(projectPath: string, id: string): Promise<{ recorded: boolean }>
+  cancel(projectPath: string, id: string): Promise<void>
+}
+
 export type RendererApi = CoreApi & {
   system: SystemApi
   clipboard: ClipboardApi
@@ -898,5 +979,7 @@ export type RendererApi = CoreApi & {
   app: AppControlApi
   keys: KeysApi
   orch: OrchApi
+  understanding: UnderstandingApi
+  sessionTasks: SessionTaskApi
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

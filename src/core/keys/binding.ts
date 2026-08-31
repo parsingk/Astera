@@ -19,6 +19,8 @@ export type ActionId =
   | 'explorer.toggleMode'
   | 'explorer.closeFileTab'
   | 'explorer.cyclePreview'
+  | 'sidebar.jobs'
+  | 'sidebar.howItWorks'
   | 'sessionTab.prev'
   | 'sessionTab.next'
   | 'pane.splitRight'
@@ -86,6 +88,25 @@ export function makeActions(platform: string): readonly ActionSpec[] {
       // 붙여넣기이기도 하다. Linux·Windows Terminal 에서 Ctrl+Shift+V 는 표준 터미널 붙여넣기 조합이기도
       // 하다. 마크다운 프리뷰 모드 순환에 터미널 입력을 가로챌 이유가 없으므로 양보한다.
       yieldsToTerminal: true
+    },
+    // The two sidebar views the rail can open. There is no explorer entry beside them: Ctrl+Shift+E
+    // switches the explorer's mode rather than opening it, so the file tree has no "open me" key and
+    // adding one was left out of this change.
+    {
+      id: 'sidebar.jobs',
+      // Ctrl+Shift+<letter> is the family this app already uses for sidebar work (Ctrl+Shift+E), and
+      // J and H are clear of the DevTools accelerators main/index.ts binds (Ctrl+Shift+I, F12).
+      defaults: [`${M}+Shift+J`],
+      descKey: 'shortcut.sidebar.jobs',
+      // Opening a sidebar view competes with nothing a shell reads — the same judgement
+      // explorer.toggleMode makes.
+      yieldsToTerminal: false
+    },
+    {
+      id: 'sidebar.howItWorks',
+      defaults: [`${M}+Shift+H`],
+      descKey: 'shortcut.sidebar.howItWorks',
+      yieldsToTerminal: false
     },
     {
       id: 'sessionTab.prev',

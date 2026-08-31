@@ -23,8 +23,8 @@ afterEach(async () => {
  *  마커를 **여러 줄 주석 + 뒤 빈 줄**로 쓰는 이유: 실제 `resources/skills/orchestration-stub.md`가
  *  그 형태이고, 단일 줄로 흉내내면 리뷰가 지적한 함정(줄 단위 필터가 둘째 줄과 빈 줄을 남겨 비교가
  *  영구히 실패한다)을 픽스처가 가려 버린다. */
-const writeSource = async (body = '# stub\n'): Promise<string> => {
-  const p = path.join(dir, 'orchestration-stub.md')
+const writeSource = async (body = '# stub\n', filename = 'orchestration-stub.md'): Promise<string> => {
+  const p = path.join(dir, filename)
   await fs.writeFile(p, `---\nname: x\n---\n\n${markerBlock()}\n${body}`, 'utf8')
   return p
 }
@@ -52,7 +52,7 @@ describe('installStub', () => {
     // 디렉토리 이름에 앱 이름을 넣는다 — 사용자 공용 config 디렉토리라 일반명은 다른 도구와 충돌한다.
     const stubPath = await writeSource()
     const configDir = path.join(dir, 'accounts', 'work')
-    const r = await installStub({ stubPath, configDirs: [configDir] })
+    const r = await installStub({ stubs: [{ stubPath, skillName: 'astera-orchestration' }], configDirs: [configDir] })
     const target = stubTargetPath(configDir)
     expect(r.written).toEqual([target])
     expect(target).toBe(path.join(configDir, 'skills', 'astera-orchestration', 'SKILL.md'))
@@ -62,7 +62,7 @@ describe('installStub', () => {
   it('여러 계정에 각각 쓴다 (claude·codex 경로가 같다)', async () => {
     const stubPath = await writeSource()
     const dirs = [path.join(dir, '.claude-accounts', 'a'), path.join(dir, '.codex-accounts', 'b')]
-    const r = await installStub({ stubPath, configDirs: dirs })
+    const r = await installStub({ stubs: [{ stubPath, skillName: 'astera-orchestration' }], configDirs: dirs })
     expect(r.written).toHaveLength(2)
     for (const d of dirs) {
       expect(await fs.readFile(stubTargetPath(d), 'utf8')).toContain(STUB_MARKER)
@@ -75,7 +75,10 @@ describe('installStub', () => {
     const configDir = path.join(dir, 'work')
     await fs.mkdir(path.dirname(stubTargetPath(configDir)), { recursive: true })
     await fs.writeFile(stubTargetPath(configDir), `<!-- ${STUB_MARKER} -->\n# old\n`, 'utf8')
-    const r = await installStub({ stubPath: await writeSource('# new\n'), configDirs: [configDir] })
+    const r = await installStub({
+      stubs: [{ stubPath: await writeSource('# new\n'), skillName: 'astera-orchestration' }],
+      configDirs: [configDir]
+    })
     expect(r.written).toHaveLength(1)
     expect(await fs.readFile(stubTargetPath(configDir), 'utf8')).toContain('# new')
   })
@@ -90,7 +93,7 @@ describe('installStub', () => {
     await fs.writeFile(target, mine, 'utf8')
     const logs: string[] = []
     const r = await installStub({
-      stubPath: await writeSource(),
+      stubs: [{ stubPath: await writeSource(), skillName: 'astera-orchestration' }],
       configDirs: [configDir],
       log: (m) => logs.push(m)
     })
@@ -117,7 +120,11 @@ describe('installStub', () => {
     await fs.mkdir(path.dirname(target), { recursive: true })
     await fs.writeFile(target, preMarker, 'utf8')
     const logs: string[] = []
-    const r = await installStub({ stubPath, configDirs: [configDir], log: (m) => logs.push(m) })
+    const r = await installStub({
+      stubs: [{ stubPath, skillName: 'astera-orchestration' }],
+      configDirs: [configDir],
+      log: (m) => logs.push(m)
+    })
     expect(r.skipped).toEqual([])
     expect(r.written).toEqual([target])
     expect(await fs.readFile(target, 'utf8')).toBe(content) // 마커까지 회복됐다
@@ -138,8 +145,37 @@ describe('installStub', () => {
     await fs.mkdir(path.dirname(target), { recursive: true })
     await fs.writeFile(target, preMarker, 'utf8')
     const logs: string[] = []
-    const r = await installStub({ stubPath: real, configDirs: [configDir], log: (m) => logs.push(m) })
+    const r = await installStub({
+      stubs: [{ stubPath: real, skillName: 'astera-orchestration' }],
+      configDirs: [configDir],
+      log: (m) => logs.push(m)
+    })
     expect(r.skipped).toEqual([]) // 건너뛰면 C1이 되살아난 것이다
+    expect(r.written).toEqual([target])
+    expect(logs).toEqual([])
+  })
+
+  // Item 13 (final review): the test above guards `orchestration-stub.md` alone — its own comment
+  // explains why (without the marker, the install silently stops). `task-stub.md` has exactly the
+  // same exposure (installStubsForCurrentToggles, ipc.ts, installs it with skillName 'astera-task')
+  // and had no guard at all.
+  it('실제 task-stub도 마커를 뺀 옛 파일을 앱 소유로 인식한다', async () => {
+    const real = path.join(__dirname, '../../../resources/skills/task-stub.md')
+    const content = await fs.readFile(real, 'utf8')
+    expect(content).toContain(STUB_MARKER) // premise: the shipped file has the marker
+    const preMarker = stripMarkerByIndex(content)
+    expect(preMarker).not.toContain(STUB_MARKER)
+    const configDir = path.join(dir, 'real-task')
+    const target = stubTargetPath(configDir, 'astera-task')
+    await fs.mkdir(path.dirname(target), { recursive: true })
+    await fs.writeFile(target, preMarker, 'utf8')
+    const logs: string[] = []
+    const r = await installStub({
+      stubs: [{ stubPath: real, skillName: 'astera-task' }],
+      configDirs: [configDir],
+      log: (m) => logs.push(m)
+    })
+    expect(r.skipped).toEqual([]) // a skip here would mean C1 came back
     expect(r.written).toEqual([target])
     expect(logs).toEqual([])
   })
@@ -153,7 +189,11 @@ describe('installStub', () => {
     await fs.writeFile(target, '# 표시도 없고 내용도 다르다\n', 'utf8')
     const logs: string[] = []
     const stubPath = await writeSource()
-    await installStub({ stubPath, configDirs: [configDir], log: (m) => logs.push(m) })
+    await installStub({
+      stubs: [{ stubPath, skillName: 'astera-orchestration' }],
+      configDirs: [configDir],
+      log: (m) => logs.push(m)
+    })
     expect(logs).toHaveLength(1)
     expect(logs[0]).not.toContain('the app did not create')
     expect(logs[0]).toContain('no ownership marker')
@@ -167,7 +207,11 @@ describe('installStub', () => {
     await fs.writeFile(stubPath, '# stub without marker\n', 'utf8')
     const configDir = path.join(dir, 'work')
     const logs: string[] = []
-    const r = await installStub({ stubPath, configDirs: [configDir], log: (m) => logs.push(m) })
+    const r = await installStub({
+      stubs: [{ stubPath, skillName: 'astera-orchestration' }],
+      configDirs: [configDir],
+      log: (m) => logs.push(m)
+    })
     expect(r).toEqual({ written: [], unchanged: [], skipped: [], failed: [], removed: [] })
     expect(logs).toHaveLength(1)
     await expect(fs.stat(stubTargetPath(configDir))).rejects.toThrow()
@@ -176,10 +220,10 @@ describe('installStub', () => {
   it('내용이 같으면 다시 쓰지 않는다 — 파일 워쳐를 깨우지 않는다', async () => {
     const stubPath = await writeSource()
     const configDir = path.join(dir, 'work')
-    await installStub({ stubPath, configDirs: [configDir] })
+    await installStub({ stubs: [{ stubPath, skillName: 'astera-orchestration' }], configDirs: [configDir] })
     const target = stubTargetPath(configDir)
     const before = (await fs.stat(target)).mtimeMs
-    const r = await installStub({ stubPath, configDirs: [configDir] })
+    const r = await installStub({ stubs: [{ stubPath, skillName: 'astera-orchestration' }], configDirs: [configDir] })
     expect(r.written).toEqual([])
     expect(r.unchanged).toEqual([target])
     expect((await fs.stat(target)).mtimeMs).toBe(before)
@@ -193,7 +237,11 @@ describe('installStub', () => {
     await fs.writeFile(path.join(bad, 'skills'), 'not a directory', 'utf8')
     const good = path.join(dir, 'good')
     const logs: string[] = []
-    const r = await installStub({ stubPath, configDirs: [bad, good], log: (m) => logs.push(m) })
+    const r = await installStub({
+      stubs: [{ stubPath, skillName: 'astera-orchestration' }],
+      configDirs: [bad, good],
+      log: (m) => logs.push(m)
+    })
     expect(r.failed).toEqual([stubTargetPath(bad)])
     expect(r.written).toEqual([stubTargetPath(good)])
     expect(logs).toHaveLength(1)
@@ -203,7 +251,7 @@ describe('installStub', () => {
     const logs: string[] = []
     const configDir = path.join(dir, 'work')
     const r = await installStub({
-      stubPath: path.join(dir, 'missing.md'),
+      stubs: [{ stubPath: path.join(dir, 'missing.md'), skillName: 'astera-orchestration' }],
       configDirs: [configDir],
       log: (m) => logs.push(m)
     })
@@ -213,7 +261,10 @@ describe('installStub', () => {
   })
 
   it('계정이 없으면 아무 일도 없다', async () => {
-    const r = await installStub({ stubPath: await writeSource(), configDirs: [] })
+    const r = await installStub({
+      stubs: [{ stubPath: await writeSource(), skillName: 'astera-orchestration' }],
+      configDirs: []
+    })
     expect(r).toEqual({ written: [], unchanged: [], skipped: [], failed: [], removed: [] })
   })
 
@@ -221,6 +272,12 @@ describe('installStub', () => {
     // 이 단정이 없으면 resources의 원본에서 표시가 사라져도 테스트가 통과하고, 설치가 조용히
     // 멈춘다(위 "원본에 소유 표시가 없으면" 분기로 빠진다)
     const real = path.join(process.cwd(), 'resources', 'skills', 'orchestration-stub.md')
+    expect(await fs.readFile(real, 'utf8')).toContain(STUB_MARKER)
+  })
+
+  // Item 13 (final review): same exposure, same guard, for task-stub.md — it had none before.
+  it('배포되는 실제 task-stub 원본에 소유 표시가 있다', async () => {
+    const real = path.join(process.cwd(), 'resources', 'skills', 'task-stub.md')
     expect(await fs.readFile(real, 'utf8')).toContain(STUB_MARKER)
   })
 })
@@ -244,7 +301,10 @@ describe('구 경로 정리', () => {
   it('앱이 쓴 구 stub 을 지우고, 비게 된 디렉토리도 걷어낸다', async () => {
     const configDir = path.join(dir, 'work')
     const legacy = await writeLegacy(configDir, STUB_MARKER)
-    const r = await installStub({ stubPath: await writeSource(), configDirs: [configDir] })
+    const r = await installStub({
+      stubs: [{ stubPath: await writeSource(), skillName: 'astera-orchestration' }],
+      configDirs: [configDir]
+    })
     expect(r.removed).toEqual([legacy])
     await expect(fs.stat(legacy)).rejects.toThrow()
     await expect(fs.stat(path.dirname(legacy))).rejects.toThrow() // 빈 디렉토리도 남기지 않는다
@@ -256,7 +316,10 @@ describe('구 경로 정리', () => {
     // `managed by claude-manager (SERVER-3004)` 문구를 달고 있다.
     const configDir = path.join(dir, 'work')
     const legacy = await writeLegacy(configDir, `${LEGACY_STUB_MARKER} (SERVER-3004)`)
-    const r = await installStub({ stubPath: await writeSource(), configDirs: [configDir] })
+    const r = await installStub({
+      stubs: [{ stubPath: await writeSource(), skillName: 'astera-orchestration' }],
+      configDirs: [configDir]
+    })
     expect(r.removed).toEqual([legacy])
     await expect(fs.stat(legacy)).rejects.toThrow()
   })
@@ -271,7 +334,7 @@ describe('구 경로 정리', () => {
     await fs.writeFile(legacy, mine, 'utf8')
     const logs: string[] = []
     const r = await installStub({
-      stubPath: await writeSource(),
+      stubs: [{ stubPath: await writeSource(), skillName: 'astera-orchestration' }],
       configDirs: [configDir],
       log: (m) => logs.push(m)
     })
@@ -286,7 +349,10 @@ describe('구 경로 정리', () => {
     const legacy = await writeLegacy(configDir, STUB_MARKER)
     const sibling = path.join(path.dirname(legacy), 'NOTES.md')
     await fs.writeFile(sibling, '사용자 메모', 'utf8')
-    const r = await installStub({ stubPath: await writeSource(), configDirs: [configDir] })
+    const r = await installStub({
+      stubs: [{ stubPath: await writeSource(), skillName: 'astera-orchestration' }],
+      configDirs: [configDir]
+    })
     expect(r.removed).toEqual([legacy])
     expect(await fs.readFile(sibling, 'utf8')).toBe('사용자 메모') // 남의 파일은 그대로
   })
@@ -296,7 +362,10 @@ describe('구 경로 정리', () => {
     const legacy = await writeLegacy(configDir, STUB_MARKER)
     // 타겟 자리를 디렉토리로 막아 writeFile 을 실패시킨다
     await fs.mkdir(stubTargetPath(configDir), { recursive: true })
-    const r = await installStub({ stubPath: await writeSource(), configDirs: [configDir] })
+    const r = await installStub({
+      stubs: [{ stubPath: await writeSource(), skillName: 'astera-orchestration' }],
+      configDirs: [configDir]
+    })
     expect(r.failed).toEqual([stubTargetPath(configDir)])
     expect(r.removed).toEqual([])
     await expect(fs.stat(legacy)).resolves.toBeTruthy() // 낡았어도 없는 것보다는 낫다
@@ -306,16 +375,19 @@ describe('구 경로 정리', () => {
     // 두 번째 기동 경로다. unchanged 로 빠지면서 정리를 건너뛰면 유령 스킬이 영구히 남는다.
     const stubPath = await writeSource()
     const configDir = path.join(dir, 'work')
-    await installStub({ stubPath, configDirs: [configDir] })
+    await installStub({ stubs: [{ stubPath, skillName: 'astera-orchestration' }], configDirs: [configDir] })
     const legacy = await writeLegacy(configDir, STUB_MARKER)
-    const r = await installStub({ stubPath, configDirs: [configDir] })
+    const r = await installStub({ stubs: [{ stubPath, skillName: 'astera-orchestration' }], configDirs: [configDir] })
     expect(r.unchanged).toEqual([stubTargetPath(configDir)])
     expect(r.removed).toEqual([legacy])
   })
 
   it('구 경로가 없으면 아무 일도 없다', async () => {
     const configDir = path.join(dir, 'work')
-    const r = await installStub({ stubPath: await writeSource(), configDirs: [configDir] })
+    const r = await installStub({
+      stubs: [{ stubPath: await writeSource(), skillName: 'astera-orchestration' }],
+      configDirs: [configDir]
+    })
     expect(r.removed).toEqual([])
   })
 
@@ -326,8 +398,106 @@ describe('구 경로 정리', () => {
     const legacy = await writeLegacy(configDir, STUB_MARKER)
     const stubPath = path.join(dir, 'no-marker.md')
     await fs.writeFile(stubPath, '# stub without marker\n', 'utf8')
-    const r = await installStub({ stubPath, configDirs: [configDir] })
+    const r = await installStub({ stubs: [{ stubPath, skillName: 'astera-orchestration' }], configDirs: [configDir] })
     expect(r.removed).toEqual([])
     await expect(fs.stat(legacy)).resolves.toBeTruthy()
+  })
+})
+
+describe('여러 스킬 설치', () => {
+  it('스킬 두 개를 각자의 폴더에 심는다', async () => {
+    const orchPath = await writeSource('# orchestration\n', 'orchestration-stub.md')
+    const taskPath = await writeSource('# task\n', 'task-stub.md')
+    const configDir = path.join(dir, 'work')
+    const r = await installStub({
+      stubs: [
+        { stubPath: orchPath, skillName: 'astera-orchestration' },
+        { stubPath: taskPath, skillName: 'astera-task' }
+      ],
+      configDirs: [configDir]
+    })
+    const orchTarget = stubTargetPath(configDir, 'astera-orchestration')
+    const taskTarget = stubTargetPath(configDir, 'astera-task')
+    expect(r.written).toEqual(expect.arrayContaining([orchTarget, taskTarget]))
+    expect(r.written).toHaveLength(2)
+    expect(await fs.readFile(orchTarget, 'utf8')).toContain('# orchestration')
+    expect(await fs.readFile(taskTarget, 'utf8')).toContain('# task')
+  })
+
+  it('한쪽이 실패해도 다른 쪽은 심는다', async () => {
+    const taskPath = await writeSource('# task\n', 'task-stub.md')
+    const configDir = path.join(dir, 'work')
+    const logs: string[] = []
+    const r = await installStub({
+      stubs: [
+        // No source file for this one — reading it fails, but that must not abort the other stub.
+        { stubPath: path.join(dir, 'missing-orchestration-stub.md'), skillName: 'astera-orchestration' },
+        { stubPath: taskPath, skillName: 'astera-task' }
+      ],
+      configDirs: [configDir],
+      log: (m) => logs.push(m)
+    })
+    const taskTarget = stubTargetPath(configDir, 'astera-task')
+    expect(r.written).toEqual([taskTarget])
+    expect(await fs.readFile(taskTarget, 'utf8')).toContain('# task')
+    // The missing source is only logged, never thrown.
+    expect(logs.some((m) => m.includes('missing-orchestration-stub.md'))).toBe(true)
+  })
+
+  it('표식 없는 파일은 스킬마다 따로 판단해 건드리지 않는다', async () => {
+    const orchPath = await writeSource('# orchestration\n', 'orchestration-stub.md')
+    const taskPath = await writeSource('# task\n', 'task-stub.md')
+    const configDir = path.join(dir, 'work')
+    const orchTarget = stubTargetPath(configDir, 'astera-orchestration')
+    const taskTarget = stubTargetPath(configDir, 'astera-task')
+    // The orchestration slot already holds a file the app does not own; the task slot is untouched.
+    const mine = '---\nname: astera-orchestration\n---\n# user-written skill\n'
+    await fs.mkdir(path.dirname(orchTarget), { recursive: true })
+    await fs.writeFile(orchTarget, mine, 'utf8')
+    const r = await installStub({
+      stubs: [
+        { stubPath: orchPath, skillName: 'astera-orchestration' },
+        { stubPath: taskPath, skillName: 'astera-task' }
+      ],
+      configDirs: [configDir]
+    })
+    expect(r.skipped).toEqual([orchTarget])
+    expect(r.written).toEqual([taskTarget])
+    expect(await fs.readFile(orchTarget, 'utf8')).toBe(mine) // left alone, byte for byte
+    expect(await fs.readFile(taskTarget, 'utf8')).toContain('# task')
+  })
+
+  // Pins the property ipc.ts's installStubsForCurrentToggles relies on: it rebuilds the full stub
+  // list from the two toggles' current state and calls installStub again on every toggle flip (not
+  // just once, at startup), so that the second toggle to turn on does not lose the stub the first
+  // one already planted. There is no ipc.ts-level harness for the caller itself (registerIpc needs a
+  // full Electron mock), so this pins the guarantee one level down, at installStub.
+  it('토글이 하나씩 켜질 때마다 다시 불러도, 먼저 심은 스킬은 그대로 두고 새 스킬만 마저 심는다', async () => {
+    const orchPath = await writeSource('# orchestration\n', 'orchestration-stub.md')
+    const taskPath = await writeSource('# task\n', 'task-stub.md')
+    const configDir = path.join(dir, 'work')
+    const taskTarget = stubTargetPath(configDir, 'astera-task')
+    const orchTarget = stubTargetPath(configDir, 'astera-orchestration')
+    // Work-unit tracking turned on first — the rebuilt list has only the task stub.
+    const first = await installStub({
+      stubs: [{ stubPath: taskPath, skillName: 'astera-task' }],
+      configDirs: [configDir]
+    })
+    expect(first.written).toEqual([taskTarget])
+    const before = (await fs.stat(taskTarget)).mtimeMs
+    // Orchestration turned on second — the list is rebuilt from scratch with both toggles now on,
+    // and installStub is called again (this is the call the settings handler makes unconditionally).
+    const second = await installStub({
+      stubs: [
+        { stubPath: orchPath, skillName: 'astera-orchestration' },
+        { stubPath: taskPath, skillName: 'astera-task' }
+      ],
+      configDirs: [configDir]
+    })
+    expect(second.written).toEqual([orchTarget]) // only the newly-enabled stub is written...
+    expect(second.unchanged).toEqual([taskTarget]) // ...the already-installed one is left alone
+    expect((await fs.stat(taskTarget)).mtimeMs).toBe(before) // not rewritten, no watcher wakeup
+    expect(await fs.readFile(orchTarget, 'utf8')).toContain('# orchestration')
+    expect(await fs.readFile(taskTarget, 'utf8')).toContain('# task')
   })
 })

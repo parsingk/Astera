@@ -396,8 +396,10 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .run-host { flex: none; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 
 /* ---------- project Run/Stop — RunToolbar and workbench wiring ---------- */
-/* The editor body. It now lives inside a pane's slot rather than under the run console's host, and the
-   rule is unchanged because the slot is a column flex box just as that host is */
+/* The body of whatever a pane's workbench slot holds — the editor, and now the How It Works record
+   detail too (RecordDetailHost wraps itself in this class for the same reason). It lives inside a
+   pane's slot rather than under the run console's host, and the rule is unchanged because the slot is
+   a column flex box just as that host is */
 .workbench-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .run-toolbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-left: 1px solid var(--line); background: var(--panel); position: relative; }
 /* The run-config picker in the toolbar. Only sizing lives here now — the surface comes from .sel.
@@ -590,6 +592,11 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    (core/files/tabLabel.ts). Only present when names collide, so it is drawn quietly: dim, smaller than
    the name, and clipped rather than allowed to push the name out of a narrow pane */
 .tab-hint { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 10px; color: var(--text-faint); }
+/* A record tab's status glyph. Same rule as the sidebar's .hiw-g — shape says the status, colour only
+   supports it. **The colour is not decided here** — it varies by status, and comes inline from one
+   table (UnderstandingIcons' RECORD_GLYPH_COLOR) so the three places (here, .hiw-g, .hiw-st) do not
+   drift apart. */
+.tab-glyph { flex: none; font-size: 11px; line-height: 1; }
 
 /* ---------- terminal ---------- */
 /* .terminal-slot is not terminal-only: it is how a pane's body claims its place in the grid, and the
@@ -868,6 +875,17 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 /* ---------- 일반 탭: 재개 방식 카드 ---------- */
 /* .theme-grid/.theme-card와 같은 두 열 카드 배치다. 다만 팔레트 미리보기가 없어 인라인 스타일이
    필요 없으므로 색은 앱 토큰(--line 등)에서 그대로 가져온다. */
+/* 설명 생성 설정. 형제인 resume-strategy 와 같은 토큰만 쓴다 — 새 색을 만들지 않는다 */
+.settings-gen { display: flex; flex-direction: column; gap: 8px; }
+.settings-gen-select { min-width: 200px; }
+.settings-gen-input { min-width: 200px; padding: 5px 8px; border: 1px solid var(--line);
+  border-radius: var(--radius); background: var(--bg); color: var(--text); font-size: 12.5px; }
+.settings-gen-input:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.settings-gen-refresh { align-self: flex-start; padding: 5px 10px; border: 1px solid var(--line);
+  border-radius: var(--radius); background: var(--bg); color: var(--text); cursor: pointer; font-size: 12px; }
+.settings-gen-refresh:disabled { opacity: 0.5; cursor: default; }
+.settings-gen-refresh:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+
 .settings-resume-strategy { display: flex; flex-direction: column; gap: 8px; }
 .resume-strategy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
 .resume-strategy-card { display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
@@ -1822,6 +1840,180 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .jobs-tmpl-more:hover { color: var(--accent); }
 .jobs-tmpl-kids .jobs-run { border-bottom: none; }
 .jobs-tmpl-kids .jobs-run:not(:last-child) { border-bottom: 1px solid var(--line-soft); }
+
+/* How It Works sidebar. A row's skeleton is the same as .jobs-task; what a row adds is an optional
+   reason line below the date/source meta, and a [Write it up again] button on the rows that need it. */
+.hiw-side { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.hiw-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line-soft); }
+.hiw-head b { font-size: 12px; font-weight: 600; color: var(--text); }
+
+.hiw-list { flex: 1; overflow-y: auto; padding: 4px 0; min-height: 0; }
+/* Clicking opens that record's tab — the same as this file's other clickable rows (.jobs-task,
+   .lh-row, .fx-row) */
+.hiw-row { display: flex; gap: 8px; padding: calc(var(--row-pad-y) + 3px) 12px; cursor: pointer; }
+.hiw-row:hover { background: var(--surface-hover); }
+/* 배경과 띠를 함께 준다 — Umbra·Sirius 는 --marker-w 가 0 이라 띠만으로는 아무것도 보이지 않는다.
+   .fx-row.selected, .rail-btn.on 이 쓰는 그 조합이다 */
+.hiw-row.on { background: var(--line-soft); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
+/* Colour is not here for the same reason as .tab-glyph — it comes inline from RECORD_GLYPH_COLOR */
+.hiw-g { flex: 0 0 auto; width: 12px; text-align: center; font-size: 11px; line-height: 1.45; }
+/* "지금 돌고 있다"를 **움직임으로** 말한다. 상태 문구가 이미 그렇게 적혀 있어도, 멈춘 화면에서는
+   3~4분짜리 생성과 그 자리에서 죽어 버린 화면이 똑같이 보인다 — Jobs 사이드바가 같은 이유로 같은
+   언어를 쓴다(아래 job-spin 주석).
+
+   **새 키프레임을 만들지 않는다.** cm-spin 은 이 앱이 .tab-dot.busy 와 .loading-spinner 에 이미
+   쓰는 회전이고, 언젠가 그 회전을 멈춰야 한다면 끌 자리가 하나여야 한다. 1.5초는 Jobs 사이드바의
+   글리프(.job-arc)와 같다 — 목록 안의 작은 표시라 빠른 회전은 소란스럽다. reduced-motion 에서도
+   도는 이유도 그쪽과 같다(그 주석이 실측까지 적어 두었다).
+
+   **문자만 감싸 돈다.** 이 클래스가 붙는 것은 언제나 글리프 한 글자를 감싼 안쪽 span 이다 —
+   바깥 칸(.hiw-g)은 줄 높이만큼 늘어나는 flex 칸이라 그것을 돌리면 글리프가 제자리에서 도는 대신
+   큰 호를 그린다. 그 판단은 UnderstandingIcons 의 StatusGlyph 에 적혀 있다. */
+.hiw-spin { display: inline-block; line-height: 1; transform-origin: 50% 50%; animation: cm-spin 1.5s linear infinite; }
+.hiw-body { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.hiw-name { font-size: 12px; font-weight: 500; color: var(--text); }
+.hiw-summary { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A row's reason for wanting attention — why [Write it up again] is offered. This is the only
+   place that answers "why", so it gets the same warn colour as a needs-review/failed glyph
+   instead of reading as ordinary dim text. */
+.hiw-summary.w { color: var(--warn); }
+.hiw-meta { font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
+.hiw-review { align-self: flex-start; margin-top: 4px; font-size: 10.5px; color: var(--accent); background: var(--elevated); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 1px 7px; cursor: pointer; }
+.hiw-review:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--ring); }
+
+.hiw-lab { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 5px; }
+
+/* Small print anywhere on this screen — was only the empty state's caveat, now also the record
+   detail pane's "reported, not measured" note (RecordDetail.tsx). Kept bare (not scoped to
+   .hiw-empty) so both can reuse it without duplicating the two declarations. */
+.hiw-fine { font-size: 10.5px; color: var(--text-faint); }
+
+.hiw-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 22px; text-align: center; }
+.hiw-empty p { font-size: 11.5px; color: var(--text-dim); line-height: 1.6; margin: 0; }
+
+/* The open-task section, above .hiw-list (UnderstandingView.tsx). A row reuses .hiw-row's skeleton
+   but is not clickable — there is no record behind it yet — so the pointer cursor is turned off. */
+.hiw-open { border-bottom: 1px solid var(--line-soft); padding-bottom: 2px; }
+.hiw-open .hiw-lab { padding: 8px 12px 2px; margin: 0; }
+.hiw-open-row { cursor: default; }
+.hiw-open-row:hover { background: none; }
+.hiw-open-actions { display: flex; gap: 6px; margin-top: 4px; }
+.hiw-open-actions .hiw-review { align-self: auto; margin-top: 0; }
+
+/* How It Works record detail pane. The left side is the story to read, the right side is the
+   reference to double-check — the width ratio between the two (1.62 : 1) is the whole of this
+   screen's layout. It draws its own head because it sits in the same row as a session tab or a file
+   tab. */
+.hiw-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); }
+.hiw-pane-empty { display: grid; place-items: center; color: var(--text-faint); font-size: 12px; }
+.hiw-fhead { display: flex; align-items: center; gap: 10px; padding: 11px 18px; border-bottom: 1px solid var(--line-soft); }
+.hiw-fhead h4 { margin: 0; font-size: 17px; font-weight: 600; color: var(--text); }
+/* Colour comes from the same table as .hiw-g and .tab-glyph (RECORD_GLYPH_COLOR) */
+.hiw-st { font-size: 11px; }
+.hiw-sp { flex: 1; }
+.hiw-ghost { font-size: 11px; color: var(--text-dim); background: none; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 2px 9px; cursor: pointer; }
+.hiw-ghost.acc { color: var(--accent); }
+.hiw-ghost:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--ring); }
+
+/* What was checked, one line under the head (RecordDetail.tsx). */
+.hiw-verify { padding: 8px 18px; border-bottom: 1px solid var(--line-soft); }
+.hiw-verify .hiw-p { margin: 0; }
+.hiw-verify .hiw-fine { margin: 3px 0 0; }
+
+.hiw-split { position: relative; flex: 1; display: flex; min-height: 0; }
+.hiw-main { flex: 1.62; min-width: 0; border-right: 1px solid var(--line-soft); display: flex; flex-direction: column; overflow-y: auto; }
+.hiw-side-col { flex: 1; min-width: 0; background: var(--panel); overflow-y: auto; }
+.hiw-grow { flex: 1; }
+
+/* The narrow pane's reference drawer. Opens covering .hiw-split. **The anchor is .hiw-split, not
+   .hiw-pane.** Anchoring top: 0 to .hiw-pane instead would start the drawer above the head row,
+   covering even the reference button that closes it — leaving no way out short of widening the pane.
+   Why top is not pushed down by the head's own height: that height is set by padding and content, so
+   pinning a number would drift out of sync. It floats above the body rather than beside it so that
+   this stays the same two-column layout the screen has when wide, and only folds and unfolds half of
+   it when narrow (design §6, RecordDetail.tsx's narrow prop comment). */
+.hiw-drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 290px; z-index: 5; background: var(--panel); border-left: 1px solid var(--line); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow-y: auto; }
+.hiw-drawer .hiw-side-col { background: none; }
+.hiw-sec { padding: 13px 18px; border-bottom: 1px solid var(--line-soft); }
+.hiw-side-col .hiw-sec { padding: 12px 15px; }
+.hiw-sec:last-child { border-bottom: 0; }
+/* `.hiw-lab` already has a bare-selector definition above — even though only the pane uses that class
+   today, scoping this override to `.hiw-pane` keeps it from also reaching a sidebar element that
+   picks up the same class later */
+.hiw-pane .hiw-lab { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.11em; text-transform: uppercase; color: var(--text-faint); margin: 0 0 7px; }
+.hiw-p { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--text); max-width: 46ch; }
+
+/* 흐름도. 상자는 HTML, 선은 그 아래 SVG — .detail-canvas / .detail-edges 와 같은 겹침이다.
+   너비·높이·자리는 core/understanding/flowLayout.ts 가 계산한 값을 인라인 style 로 그대로 받는다 —
+   여기서 같은 숫자를 다시 적으면 한쪽만 고쳤을 때 선이 상자 가장자리에서 어긋난다. */
+.hiw-flow { position: relative; }
+/* 선은 상자 아래에 깔리므로 클릭을 가로채면 안 된다 — .detail-edges 가 같은 이유로 이미 그렇다 */
+.hiw-edges { position: absolute; left: 0; top: 0; pointer-events: none; }
+.hiw-node {
+  position: absolute;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 8px;
+  font-size: 11.5px; color: var(--text);
+  background: var(--elevated);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+/* 라벨은 두 줄까지 감싼다. 한 줄 nowrap 이던 때는 폭 124px 에 한글 9자에서 잘렸는데, 흐름의 단계
+   이름은 그보다 길기 마련이다("터미널에 붙임 · 사용 준비 완료"). 세 줄로 늘리지 않는 이유: 그쯤이면
+   칸 이름이 아니라 문장이고, 그것은 칸이 좁은 것이 아니라 생성기가 이름을 길게 쓴 것이다
+   (core/understanding/types.ts 의 FlowNode.label 주석).
+   keep-all 은 한국어를 어절 단위로 끊기 위한 것이고, anywhere 는 띄어쓰기 없는 긴 토큰이 칸을
+   넘지 않게 하는 탈출구다. */
+.hiw-node > span {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden;
+  text-align: center; line-height: 1.35;
+  word-break: keep-all; overflow-wrap: anywhere;
+}
+/* 테두리 색이 종류를 말한다. 시작과 중간 단계는 기본 선을 쓴다 — 전부 색을 주면 아무것도 안 읽힌다 */
+.hiw-node--decision { border-color: var(--warn); }
+.hiw-node--failure { border-color: var(--warn); }
+.hiw-node--success { border-color: var(--ok); }
+.hiw-node.pickable { cursor: pointer; }
+.hiw-node.pickable:hover { border-color: var(--accent); }
+.hiw-node.selected { border-color: var(--accent); background: var(--surface-hover); }
+.hiw-node.muted { opacity: 0.34; }
+/* 분기 조건. **줄바꿈을 막고 위로 올린다** — 실측으로 깨졌던 자리다.
+   절대 배치라 이 칸의 최대 폭은 "도형판 폭 − left" 인데, 한 줄짜리 흐름에서 그것은 상자 폭의
+   절반(75px)이다. 10px 한글로 일곱 자면 넘치고, 넘치면 두 줄이 된다. 그런데 이 칸이 앉는 자리는
+   상자와 상자 사이 30px 이고 아래쪽에 붙어 있어(translate -100%), 두 줄이 되면 **첫 줄이 위쪽
+   상자 뒤로 들어간다** — 상자가 DOM 에서 나중이라 위에 그려진다. 화면에는 문구의 꼬리만 남아
+   "한도에 도달하고 다음 계정이 있음" 이 "이 있음" 으로 보였다.
+   nowrap 이 그 원인을 없애고, z-index 가 그래도 겹칠 때 문구를 위에 세운다. 길이 자체는
+   프롬프트와 검증기가 따로 묶는다(core/understanding/validate.ts 의 MAX_CONDITION). */
+.hiw-cond {
+  position: absolute; transform: translate(-50%, -100%); z-index: 1;
+  white-space: nowrap;
+  font-family: var(--mono); font-size: 10px; color: var(--text-faint);
+  background: var(--bg); padding: 0 3px;
+}
+
+.hiw-why { display: flex; flex-direction: column; gap: 3px; margin-bottom: 11px; }
+.hiw-why:last-child { margin-bottom: 0; }
+.hiw-wt { font-size: 12px; font-weight: 500; color: var(--text); }
+.hiw-wr { font-size: 11.5px; line-height: 1.55; color: var(--text-dim); }
+/* 반경도 테마가 정한다(설계 §7) — 99px 로 박으면 Quasar(--radius-sm: 1px)처럼 각진 테마에서
+   이 알약만 혼자 둥글다 */
+.hiw-src { align-self: flex-start; margin-top: 2px; font-family: var(--mono); font-size: 9.5px; color: var(--text-faint); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 1px 8px; }
+/* 추정. ADR 과 색이 달라야 같은 무게로 읽히지 않는다 */
+.hiw-src.low { color: var(--warn); border-color: var(--warn); }
+
+.hiw-impl { display: flex; flex-direction: column; gap: 5px; }
+.hiw-impl-row { display: flex; gap: 12px; align-items: baseline; }
+.hiw-impl-row b { font-size: 11.5px; font-weight: 400; color: var(--text-dim); }
+.hiw-impl-row button { font-family: var(--mono); font-size: 11px; color: var(--accent); background: none; border: 0; border-bottom: 1px dotted var(--accent); padding: 0; cursor: pointer; }
+.hiw-impl-row button:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--ring); }
+
+/* 좁힘 머리. --marker-w 가 0 인 테마(Umbra·Sirius)에서도 보이도록 배경을 함께 준다 */
+.hiw-scope { display: flex; align-items: center; gap: 8px; padding: 9px 15px; background: var(--elevated); border-bottom: 1px solid var(--line-soft); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
+.hiw-scope-label { font-size: 11.5px; font-weight: 500; color: var(--text); }
+.hiw-scope-clear { margin-left: auto; font-size: 10.5px; color: var(--text-faint); background: none; border: 0; cursor: pointer; }
 
 /* ---------- file type icons ---------- */
 .fi { flex: none; display: block; width: 14px; height: 14px; color: var(--fi-gray); }

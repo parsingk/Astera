@@ -4,7 +4,7 @@
 // yesterday's date folders.
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { parseCodexMeta, ROLLOUT_UUID_RE } from '../history/codexParser'
+import { isExecRollout, parseCodexMeta, ROLLOUT_UUID_RE } from '../history/codexParser'
 
 // win32 first: ignore differences in path case and separators (project-wide rule)
 const norm = (p: string): string => path.resolve(p).toLowerCase()
@@ -95,6 +95,10 @@ export async function findRollout(opts: {
       continue
     }
     if (!meta.cwd || norm(meta.cwd) !== norm(opts.cwd)) continue
+    // This app's own `codex exec` runs land in the same account and folder and are newer than the
+    // session that is looking for its file, so without this they win the "newest wins" contest below
+    // (see isExecRollout). A session is never spawned through exec, so no real candidate is lost.
+    if (isExecRollout(meta)) continue
     // if session_meta has no session_id, fall back to the uuid in the filename (mirrors buildEntry in history/strategies/codex.ts)
     const sessionId = meta.sessionId ?? file.match(ROLLOUT_UUID_RE)?.[1] ?? null
     if (!sessionId) continue
