@@ -48,6 +48,7 @@ import { nameForRun } from '../../core/worktrees/naming'
 import type { Provider } from '../../core/providers/meta'
 import { isValidRule, type ScheduleRule } from '../../core/scheduler/rule'
 import { parseCheckFlag } from '../../core/workUnit/verification'
+import { outcomeOf } from '../../core/orchestration/view'
 import type { SessionCheck } from '../../core/workUnit/types'
 
 export interface OrchServerDeps {
@@ -371,13 +372,22 @@ export async function handleCommand(
   )
   const isWorker = myDispatchIds.size > 0
   if (isWorker && COORDINATOR_ONLY.has(cmd)) return denied(`worker sessions cannot call ${cmd}`)
-  // isRunCoordinator: this session runs a Run as its coordinator (Run.coordinatorSessionId). Kept
-  // separate from isWorker rather than folded into one flag — they answer different questions
-  // (dispatch ownership vs. Run coordination) for different reasons elsewhere in this file (isWorker
-  // also feeds COORDINATOR_ONLY above), and are combined only at the session-task-* cases below,
-  // which are the one place both answer the same question: is this session's work already going to
-  // be recorded by a Run, at some level, when that Run finishes?
-  const isRunCoordinator = s.runs.some((r) => r.coordinatorSessionId === caller.sessionId)
+  // isRunCoordinator: this session is coordinating a Run that is **still running**. Kept separate
+  // from isWorker rather than folded into one flag — they answer different questions (dispatch
+  // ownership vs. Run coordination) for different reasons elsewhere in this file (isWorker also
+  // feeds COORDINATOR_ONLY above), and are combined only at the session-task-* cases below, which
+  // are the one place both answer the same question: is this session's work already going to be
+  // recorded by a Run, at some level, when that Run finishes?
+  //
+  // **`outcomeOf` is what makes this narrow enough to be right.** `coordinatorSessionId` is cleared
+  // only when the coordinator session itself disappears (detachCoordinator's one caller) — never
+  // when its Run finishes, pauses or merges. Asking only whether the field points at this session
+  // therefore denied a session its own /astera-task for as long as it lived, once it had coordinated
+  // a single Run: shipped in v1.3.10 and fixed here. A Run with no tasks yet reads as 'running',
+  // which is the answer we want while one is being set up.
+  const isRunCoordinator = s.runs.some(
+    (r) => r.coordinatorSessionId === caller.sessionId && outcomeOf(s, r.id) === 'running'
+  )
 
   const commit = async <T>(r: Res<T>): Promise<Reply> => {
     if (!r.ok) return bad(r.error)

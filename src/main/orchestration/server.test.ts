@@ -414,6 +414,31 @@ describe('session-task-*', () => {
     }
   })
 
+  // v1.3.10 denied a session its own /astera-task for as long as it lived, once it had coordinated a
+  // single Run: coordinatorSessionId is cleared only when the session itself disappears, never when
+  // its Run finishes. The rule is meant to stop one piece of work being recorded twice while a Run is
+  // in flight — after it lands, whatever that session does next is different work.
+  it('Run 이 끝난 뒤에는 같은 세션이 자기 작업을 다시 선언할 수 있다', async () => {
+    const deps = { ...makeDeps(), trackingEnabled: () => true, sessionTasks: makeSessionTasks() }
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    const attached = attachCoordinator(deps.getState(), { runId, sessionId: 'sess1' })
+    if (!attached.ok) throw new Error(attached.error)
+    await deps.setState(attached.state)
+
+    // While the Run is running, denied — the Run will record this work itself
+    expect((await call(deps, 'session-task-start', { objective: 'x' }, 'sess1')).status).toBe(403)
+
+    // The Run lands. coordinatorSessionId still points at sess1, and that must stop mattering
+    await call(deps, 'task-update', { id: taskId, status: 'completed' })
+    expect(deps.getState().runs.find((r) => r.id === runId)!.coordinatorSessionId).toBe('sess1')
+    for (const cmd of ['session-task-start', 'session-task-complete', 'session-task-cancel']) {
+      expect((await call(deps, cmd, { objective: 'x' }, 'sess1')).status).toBe(200)
+    }
+  })
+
   it('session-task-start 가 목표를 넘기고 중단된 앞 작업의 id 를 돌려준다', async () => {
     const start = vi.fn<SessionTasks['start']>(async () => ({
       ok: true,
