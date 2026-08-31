@@ -592,9 +592,10 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    (core/files/tabLabel.ts). Only present when names collide, so it is drawn quietly: dim, smaller than
    the name, and clipped rather than allowed to push the name out of a narrow pane */
 .tab-hint { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 10px; color: var(--text-faint); }
-/* 기능 탭의 상태 글리프. 사이드바의 .hiw-g 와 같은 규칙이다 — 모양이 상태를 말하고 색은 거들 뿐.
-   **색은 여기서 정하지 않는다** — 상태마다 다르고, 세 자리(여기·.hiw-g·.hiw-st)가 갈라지지 않도록
-   UnderstandingIcons 의 GLYPH_COLOR 한 표에서 인라인으로 온다 */
+/* A record tab's status glyph. Same rule as the sidebar's .hiw-g — shape says the status, colour only
+   supports it. **The colour is not decided here** — it varies by status, and comes inline from one
+   table (UnderstandingIcons' RECORD_GLYPH_COLOR) so the three places (here, .hiw-g, .hiw-st) do not
+   drift apart. */
 .tab-glyph { flex: none; font-size: 11px; line-height: 1; }
 
 /* ---------- terminal ---------- */
@@ -1840,27 +1841,21 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .jobs-tmpl-kids .jobs-run { border-bottom: none; }
 .jobs-tmpl-kids .jobs-run:not(:last-child) { border-bottom: 1px solid var(--line-soft); }
 
-/* How It Works 사이드바. 줄의 뼈대는 .jobs-task 와 같고, 다른 것은 메타 줄이 시각과 이유
-   사이에서 바뀐다는 점이다. */
+/* How It Works sidebar. A row's skeleton is the same as .jobs-task; what a row adds is an optional
+   reason line below the date/source meta, and a [Write it up again] button on the rows that need it. */
 .hiw-side { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .hiw-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line-soft); }
 .hiw-head b { font-size: 12px; font-weight: 600; color: var(--text); }
-.hiw-act { margin-left: auto; background: none; border: 0; color: var(--text-faint); cursor: pointer; }
-.hiw-act:hover { color: var(--text); }
-.hiw-act:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--ring); }
-
-.hiw-sum { display: flex; gap: 6px; padding: 6px 12px; font-size: 11px; color: var(--text-faint); border-bottom: 1px solid var(--line-soft); }
-/* 요약 줄에서 색을 갖는 유일한 숫자. 셋 다 색을 주면 셋 다 안 읽힌다 */
-.hiw-sum em { font-style: normal; color: var(--warn); }
 
 .hiw-list { flex: 1; overflow-y: auto; padding: 4px 0; min-height: 0; }
-/* 누르면 그 기능의 탭이 열린다 — 이 파일의 다른 클릭 가능한 줄(.jobs-task, .lh-row, .fx-row)과 같다 */
+/* Clicking opens that record's tab — the same as this file's other clickable rows (.jobs-task,
+   .lh-row, .fx-row) */
 .hiw-row { display: flex; gap: 8px; padding: calc(var(--row-pad-y) + 3px) 12px; cursor: pointer; }
 .hiw-row:hover { background: var(--surface-hover); }
 /* 배경과 띠를 함께 준다 — Umbra·Sirius 는 --marker-w 가 0 이라 띠만으로는 아무것도 보이지 않는다.
    .fx-row.selected, .rail-btn.on 이 쓰는 그 조합이다 */
 .hiw-row.on { background: var(--line-soft); box-shadow: inset var(--marker-w) 0 0 var(--accent); }
-/* 색은 .tab-glyph 와 같은 이유로 여기 없다 — GLYPH_COLOR 에서 인라인으로 온다 */
+/* Colour is not here for the same reason as .tab-glyph — it comes inline from RECORD_GLYPH_COLOR */
 .hiw-g { flex: 0 0 auto; width: 12px; text-align: center; font-size: 11px; line-height: 1.45; }
 /* "지금 돌고 있다"를 **움직임으로** 말한다. 상태 문구가 이미 그렇게 적혀 있어도, 멈춘 화면에서는
    3~4분짜리 생성과 그 자리에서 죽어 버린 화면이 똑같이 보인다 — Jobs 사이드바가 같은 이유로 같은
@@ -1879,28 +1874,24 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .hiw-name { font-size: 12px; font-weight: 500; color: var(--text); }
 .hiw-summary { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hiw-meta { font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
-.hiw-meta .w { color: var(--warn); }
 .hiw-review { align-self: flex-start; margin-top: 4px; font-size: 10.5px; color: var(--accent); background: var(--elevated); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 1px 7px; cursor: pointer; }
 .hiw-review:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--ring); }
 
-.hiw-recent { border-top: 1px solid var(--line-soft); padding: 8px 12px 10px; }
 .hiw-lab { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 5px; }
-.hiw-rrow { display: flex; gap: 8px; font-size: 11px; color: var(--text-dim); padding: 1.5px 0; }
-.hiw-rrow b { font-family: var(--mono); font-size: 10px; font-weight: 400; color: var(--text-faint); flex: 0 0 86px; }
 
 .hiw-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 22px; text-align: center; }
 .hiw-empty p { font-size: 11.5px; color: var(--text-dim); line-height: 1.6; margin: 0; }
 .hiw-empty .hiw-fine { font-size: 10.5px; color: var(--text-faint); }
-.hiw-cta { background: var(--btn-bg); color: var(--btn-ink); border: 1px solid var(--btn-border); border-radius: var(--radius-sm); padding: 5px 15px; font-size: 12px; font-weight: 500; cursor: pointer; }
-.hiw-cta:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--ring); }
 
-/* How It Works 기능 상세 페인. 왼쪽은 읽는 이야기, 오른쪽은 되짚는 참조 — 그 둘의 폭 비가 이 화면의
-   전부다(1.62 : 1). 세션 탭·파일 탭과 같은 줄에 서므로 자기 머리를 따로 그린다. */
+/* How It Works record detail pane. The left side is the story to read, the right side is the
+   reference to double-check — the width ratio between the two (1.62 : 1) is the whole of this
+   screen's layout. It draws its own head because it sits in the same row as a session tab or a file
+   tab. */
 .hiw-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); }
 .hiw-pane-empty { display: grid; place-items: center; color: var(--text-faint); font-size: 12px; }
 .hiw-fhead { display: flex; align-items: center; gap: 10px; padding: 11px 18px; border-bottom: 1px solid var(--line-soft); }
 .hiw-fhead h4 { margin: 0; font-size: 17px; font-weight: 600; color: var(--text); }
-/* 색은 .hiw-g·.tab-glyph 와 같은 표에서 온다(GLYPH_COLOR) */
+/* Colour comes from the same table as .hiw-g and .tab-glyph (RECORD_GLYPH_COLOR) */
 .hiw-st { font-size: 11px; }
 .hiw-sp { flex: 1; }
 .hiw-ghost { font-size: 11px; color: var(--text-dim); background: none; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 2px 9px; cursor: pointer; }
@@ -1917,14 +1908,15 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    그러면 페인을 넓히는 것 말고는 빠져나올 길이 없다. 머리 높이만큼 top 을 밀지 않는 이유: 그 높이는
    패딩과 내용이 정하는 값이라 숫자로 박으면 어긋난다. 본문 옆이 아니라 위에 뜨는 것은 그래야 이
    화면이 넓을 때와 같은 두 단짜리 레이아웃으로 남고, 좁을 때만 절반을 접었다 펴는 것이 되기
-   때문이다(설계 §6, FeatureDetail.tsx 의 narrow prop 주석). */
+   때문이다(설계 §6, RecordDetail.tsx 의 narrow prop 주석). */
 .hiw-drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 290px; z-index: 5; background: var(--panel); border-left: 1px solid var(--line); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow-y: auto; }
 .hiw-drawer .hiw-side-col { background: none; }
 .hiw-sec { padding: 13px 18px; border-bottom: 1px solid var(--line-soft); }
 .hiw-side-col .hiw-sec { padding: 12px 15px; }
 .hiw-sec:last-child { border-bottom: 0; }
-/* .hiw-lab 은 위의 사이드바가 이미 정의한다 — 페인 안으로 한정하지 않으면 나중에 오는 이 규칙이
-   사이드바의 '최근 변경' 라벨까지 덮는다 */
+/* `.hiw-lab` already has a bare-selector definition above — even though only the pane uses that class
+   today, scoping this override to `.hiw-pane` keeps it from also reaching a sidebar element that
+   picks up the same class later */
 .hiw-pane .hiw-lab { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.11em; text-transform: uppercase; color: var(--text-faint); margin: 0 0 7px; }
 .hiw-p { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--text); max-width: 46ch; }
 
@@ -1979,10 +1971,6 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
   background: var(--bg); padding: 0 3px;
 }
 
-.hiw-fail { display: flex; flex-direction: column; gap: 4px; }
-.hiw-fail div { display: flex; gap: 7px; font-size: 11.5px; color: var(--text-dim); }
-.hiw-fail b { flex: 0 0 118px; font-weight: 400; color: var(--warn); }
-
 .hiw-why { display: flex; flex-direction: column; gap: 3px; margin-bottom: 11px; }
 .hiw-why:last-child { margin-bottom: 0; }
 .hiw-wt { font-size: 12px; font-weight: 500; color: var(--text); }
@@ -1998,12 +1986,6 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .hiw-impl-row b { font-size: 11.5px; font-weight: 400; color: var(--text-dim); }
 .hiw-impl-row button { font-family: var(--mono); font-size: 11px; color: var(--accent); background: none; border: 0; border-bottom: 1px dotted var(--accent); padding: 0; cursor: pointer; }
 .hiw-impl-row button:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--ring); }
-
-.hiw-chg { display: flex; flex-direction: column; gap: 2px; margin-bottom: 9px; }
-.hiw-chg:last-child { margin-bottom: 0; }
-/* 날짜와 출처 둘 다 메타다. 출처에 --accent 밑줄을 주면 이 앱의 링크 모습이 되는데 갈 곳이 없다 */
-.hiw-ct { display: flex; gap: 8px; font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
-.hiw-cb { font-size: 11.5px; color: var(--text-dim); }
 
 /* 좁힘 머리. --marker-w 가 0 인 테마(Umbra·Sirius)에서도 보이도록 배경을 함께 준다 */
 .hiw-scope { display: flex; align-items: center; gap: 8px; padding: 9px 15px; background: var(--elevated); border-bottom: 1px solid var(--line-soft); box-shadow: inset var(--marker-w) 0 0 var(--accent); }

@@ -15,24 +15,26 @@ export interface FileTab {
   projectRoot: string
 }
 
-/** How It Works 기능 상세 탭. FileTab 과 같은 모양이고 같은 이유로 projectRoot 를 들고 다닌다 —
- *  `feature:<id>` 라는 탭 id 는 프로젝트를 담지 못하므로, 이 기록이 없으면 활성 탭이 이 탭일 때
- *  currentProject 가 엉뚱한 곳(마지막 기억)으로 떨어지고 다른 프로젝트를 고르는 순간 이 탭이
- *  탭 줄에서 사라진다. 제목도 여기서 나온다: understanding 은 지금 열린 프로젝트의 것 하나뿐이라,
- *  거기서만 이름을 찾으면 다른 프로젝트의 탭은 이름을 잃는다. */
-export interface FeatureTab {
+/** How It Works record detail tab. Same shape as FileTab and carries projectRoot for the same
+ *  reason — a `record:<id>` tab id cannot hold the project, so without this record, currentProject
+ *  falls back to the wrong place (last remembered) while this tab is active, and the tab disappears
+ *  from the bar the moment another project is picked. The title comes from here too: understanding
+ *  only ever holds the currently open project's data, so looking up the name there alone would strip
+ *  the title from any tab belonging to a different project. */
+export interface RecordTab {
   id: string
-  featureId: string
+  recordId: string
   title: string
   /** 이 탭이 열릴 때의 프로젝트 루트. 활성 탭이 이 탭일 때 앱이 이 프로젝트를 보여준다 */
   projectRoot: string
 }
 
-/** 페인 하나의 탭 줄에 올라가는 탭. 파일 탭과 세션 탭과 기능 탭을 한 줄에 그린다.
+/** The tabs shown on one pane's tab bar. Draws file tabs, session tabs and record tabs in one row.
  *
- *  표식이 종류마다 다르다 — 세션 탭은 계정 색과 작업 중 스피너와 롤링 표시를, 파일 탭은 확장자 아이콘과
- *  더티 점과 이름 구분자를, 기능 탭은 상태 글리프를 가진다. 정렬은 받은 순서 그대로다: 어느 종류를
- *  먼저 둘지는 이 컴포넌트가 아니라 트리(페인의 tabIds)가 정한다. */
+ *  Each kind marks itself differently — a session tab carries the account color, a busy spinner and a
+ *  rolling indicator; a file tab carries its extension icon, a dirty dot and a name disambiguator; a
+ *  record tab carries a status glyph. Order is whatever was received: which kind sits where is decided
+ *  by the tree (the pane's tabIds), not by this component. */
 export type WorkbenchTab =
   | {
       tabId: string
@@ -57,16 +59,17 @@ export type WorkbenchTab =
     }
   | {
       tabId: string
-      kind: 'feature'
-      featureId: string
+      kind: 'record'
+      recordId: string
       title: string
-      /** 상태 글리프. 색은 CSS 가 정한다 — 여기서는 모양만 넘긴다.
-       *  **null 은 "지금 상태를 모른다"** — 다른 프로젝트의 기능 탭이 그렇다. 그때는 글리프 자리를
-       *  비운다(틀린 상태를 그리는 것보다 낫다) */
+      /** Status glyph. CSS is not what decides its colour — only the shape is passed here.
+       *  **null means "the current status is unknown"** — true of a record tab from another project.
+       *  The glyph slot is then left empty (better than drawing the wrong status). */
       glyph: string | null
-      /** 그 글리프의 색(테마 토큰). PaneGrid 가 UnderstandingIcons 의 GLYPH_COLOR 에서 가져온다 */
+      /** That glyph's colour (a theme token). PaneGrid pulls it from UnderstandingIcons'
+       *  RECORD_GLYPH_COLOR. */
       glyphColor: string | null
-      /** 도는 중인가 — 판정은 UnderstandingIcons 의 isWorking 하나다 */
+      /** Spinning or not — decided by whether PaneGrid finds the record's status to be `generating`. */
       glyphSpins: boolean
     }
 
@@ -190,9 +193,10 @@ export function WorkbenchTabs({
         >
           {tab.kind === 'file' ? (
             <FileIcon {...resolveFileIcon(tab.title)} />
-          ) : tab.kind === 'feature' ? (
-            // 사이드바 줄의 .hiw-g 와 같은 글리프다 — 같은 기능이 두 자리에서 다른 표를 달면 안 된다.
-            // 상태를 모르면 빈 span 도 두지 않는다 — gap 만 남아 제목이 밀려 보인다
+          ) : tab.kind === 'record' ? (
+            // Same glyph as the sidebar row's .hiw-g — the same record must not wear two different
+            // labels in two places. When the status is unknown, no span is left either — an empty
+            // one would leave a gap that pushes the title over.
             tab.glyph !== null && (
               <span
                 className="tab-glyph"
