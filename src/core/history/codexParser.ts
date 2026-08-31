@@ -11,6 +11,16 @@ export interface CodexMeta {
   sessionId: string | null
   cwd: string | null
   title: string | null
+  /** What created this rollout, from `session_meta.source`. Measured 2026-08-31 on a live account:
+   *  a session a person opened reads `"cli"` (with `originator: "codex-tui"`), while a one-shot
+   *  `codex exec` run reads `"exec"` (`originator: "codex_exec"`).
+   *
+   *  This app never spawns a session through `exec` — it attaches a terminal to the interactive CLI —
+   *  so an `exec` rollout is never a user's session. It is this app's own explanation generator,
+   *  running in the same account and the same folder. null when the field is absent (an older codex),
+   *  and a null is never treated as exec: losing a real session costs far more than showing an extra
+   *  row. */
+  source: string | null
 }
 
 /** 대화 메시지 하나를 rollout 한 줄에서 뽑는다. 그 줄이 메시지가 아니면 null(방어적 파싱).
@@ -107,8 +117,24 @@ function parseLine(raw: string): Record<string, unknown> | null {
 
 /** Extracts session_meta (sessionId, cwd) and the first user title within the leading maxLines
  *  (mirrors parseTranscriptMeta in parser.ts) */
+/** Was this rollout written by a one-shot `codex exec` run rather than a session someone opened?
+ *
+ *  Both callers of this — the rollout-to-session match (rolling/codexLocate.ts) and the history list
+ *  — want the same answer, so the rule lives here once. Measured 2026-08-31: this app's explanation
+ *  generator runs `codex exec` in the same account and the same project folder as the user's own
+ *  session, and the match picks the newest file, so the generator's rollout was taking the user
+ *  session's place. Everything read for that session afterwards — its work units, its usage chip, its
+ *  limit detection — was then reading the wrong file. A work unit turned up titled with the first line
+ *  of the explanation prompt.
+ *
+ *  Only an explicit "exec" counts. A file with no source (an older codex) is left alone: dropping a
+ *  real session silently kills its tracking, which costs far more than an extra row. */
+export function isExecRollout(meta: CodexMeta): boolean {
+  return meta.source === 'exec'
+}
+
 export async function parseCodexMeta(filePath: string, maxLines = 40): Promise<CodexMeta> {
-  const meta: CodexMeta = { sessionId: null, cwd: null, title: null }
+  const meta: CodexMeta = { sessionId: null, cwd: null, title: null, source: null }
   const stream = createReadStream(filePath, { encoding: 'utf8' })
   const rl = createInterface({ input: stream })
   let n = 0
@@ -124,6 +150,7 @@ export async function parseCodexMeta(filePath: string, maxLines = 40): Promise<C
           if (meta.sessionId === null && typeof pr.session_id === 'string') meta.sessionId = pr.session_id
           if (meta.sessionId === null && typeof pr.id === 'string') meta.sessionId = pr.id
           if (meta.cwd === null && typeof pr.cwd === 'string') meta.cwd = pr.cwd
+          if (meta.source === null && typeof pr.source === 'string') meta.source = pr.source
         }
         continue
       }

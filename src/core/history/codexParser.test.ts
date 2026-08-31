@@ -2,7 +2,14 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { parseCodexMeta, parseCodexTail, parseCodexPreview, parseCodexForResume, ROLLOUT_UUID_RE } from './codexParser'
+import {
+  isExecRollout,
+  parseCodexMeta,
+  parseCodexTail,
+  parseCodexPreview,
+  parseCodexForResume,
+  ROLLOUT_UUID_RE
+} from './codexParser'
 
 let dir: string
 beforeEach(async () => {
@@ -65,7 +72,8 @@ describe('parseCodexMeta', () => {
     expect(await parseCodexMeta(p)).toEqual({
       sessionId: '019f4524-e0ac-7571-a8af-5585504f0d32',
       cwd: 'D:\\proj\\demo',
-      title: '버그 고쳐줘'
+      title: '버그 고쳐줘',
+      source: null
     })
   })
 
@@ -76,7 +84,37 @@ describe('parseCodexMeta', () => {
 
   it('깨진 줄·meta 없음은 null 필드로 폴백한다', async () => {
     const p = await write('c.jsonl', ['{broken', noise])
-    expect(await parseCodexMeta(p)).toEqual({ sessionId: null, cwd: null, title: null })
+    expect(await parseCodexMeta(p)).toEqual({ sessionId: null, cwd: null, title: null, source: null })
+  })
+
+  // 2026-08-31 실측: 사람이 연 세션은 'cli', 이 앱이 돌린 일회성 실행은 'exec' 다
+  it('session_meta 의 source 를 읽는다', async () => {
+    const line = JSON.stringify({
+      type: 'session_meta',
+      payload: { session_id: 'u1', cwd: 'D:\\proj\\demo', source: 'exec' }
+    })
+    expect((await parseCodexMeta(await write('src.jsonl', [line]))).source).toBe('exec')
+  })
+})
+
+// 이 판정이 두 곳(세션↔파일 연결, 히스토리 목록)에서 같아야 한다 — 갈라지면 한쪽에서는 걸러지고
+// 다른 쪽에서는 보인다
+describe('isExecRollout', () => {
+  const meta = (source: string | null): Parameters<typeof isExecRollout>[0] => ({
+    sessionId: 's',
+    cwd: 'D:\\p',
+    title: null,
+    source
+  })
+
+  it('exec 만 참이다', () => {
+    expect(isExecRollout(meta('exec'))).toBe(true)
+    expect(isExecRollout(meta('cli'))).toBe(false)
+  })
+
+  // 옛 codex 는 이 필드가 없다. 모를 때 걸러 내면 진짜 세션의 추적이 통째로 죽는다
+  it('없으면 거르지 않는다', () => {
+    expect(isExecRollout(meta(null))).toBe(false)
   })
 })
 

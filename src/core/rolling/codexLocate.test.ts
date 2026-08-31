@@ -29,13 +29,18 @@ async function makeRollout(opts: {
   uuid: string
   cwd: string | null
   mtimeMs: number
+  /** session_meta.source. 'exec' 는 이 앱이 돌린 일회성 실행이다 */
+  source?: string
 }): Promise<string> {
   const dir = path.join(home, 'sessions', opts.y, opts.m, opts.d)
   await fs.mkdir(dir, { recursive: true })
   const file = path.join(dir, `rollout-2026-07-09T00-00-00-${opts.uuid}.jsonl`)
   const meta = {
     type: 'session_meta',
-    payload: opts.cwd === null ? { session_id: opts.uuid } : { session_id: opts.uuid, cwd: opts.cwd }
+    payload:
+      opts.cwd === null
+        ? { session_id: opts.uuid }
+        : { session_id: opts.uuid, cwd: opts.cwd, ...(opts.source ? { source: opts.source } : {}) }
   }
   await fs.writeFile(file, JSON.stringify(meta) + '\n', 'utf8')
   const t = new Date(opts.mtimeMs)
@@ -290,5 +295,68 @@ describe('findRollout', () => {
 
     const r = await findRollout({ configDir: home, cwd: 'D:\\work\\p', since: NOW - 5_000, now: () => NOW })
     expect(r?.sessionId).toBe(uuid)
+  })
+})
+
+// 2026-08-31 실측. 설명 생성 에이전트는 `codex exec` 로 **같은 계정·같은 폴더**에서 돌고, 사용자
+// 세션이 자기 파일을 찾는 순간보다 나중에 파일을 만든다. 아래 "가장 최근이 이긴다" 규칙이 그대로
+// 적용되면 생성 에이전트의 파일이 사용자 세션의 자리를 차지하고, 그 뒤로 그 세션에 대해 읽는
+// 모든 것(작업 단위·사용량·한도)이 엉뚱한 파일을 본다. 실제로 작업 단위 하나가 설명 프롬프트의
+// 첫 줄을 제목으로 달고 나타났다.
+describe('exec rollout 은 세션의 파일이 아니다', () => {
+  const CWD = 'D:\\work\\p'
+
+  it('더 최근이어도 exec 파일은 고르지 않는다', async () => {
+    await makeRollout({
+      y: '2026', m: '07', d: '09',
+      uuid: '019f4524-e0ac-7571-a8af-5585504f0d32',
+      cwd: CWD,
+      mtimeMs: NOW - 3_000
+    })
+    await makeRollout({
+      y: '2026', m: '07', d: '09',
+      uuid: '019f4524-e0ac-7571-a8af-5585504f0d99',
+      cwd: CWD,
+      mtimeMs: NOW - 1_000, // 더 최근 — 이것이 이기면 안 된다
+      source: 'exec'
+    })
+    const r = await findRollout({ configDir: home, cwd: CWD, since: NOW - 5_000, now: () => NOW })
+    expect(r?.sessionId).toBe('019f4524-e0ac-7571-a8af-5585504f0d32')
+  })
+
+  it('후보가 exec 뿐이면 아무것도 찾지 못한다 — 남의 파일을 쥐느니 없는 편이 낫다', async () => {
+    await makeRollout({
+      y: '2026', m: '07', d: '09',
+      uuid: '019f4524-e0ac-7571-a8af-5585504f0d77',
+      cwd: CWD,
+      mtimeMs: NOW - 1_000,
+      source: 'exec'
+    })
+    expect(await findRollout({ configDir: home, cwd: CWD, since: NOW - 5_000, now: () => NOW })).toBeNull()
+  })
+
+  // 옛 codex 는 이 필드를 쓰지 않는다. 모를 때 거르면 진짜 세션의 추적이 통째로 죽는다 —
+  // 줄 하나가 더 보이는 것보다 훨씬 비싸다
+  it('source 가 없는 파일은 그대로 후보다', async () => {
+    await makeRollout({
+      y: '2026', m: '07', d: '09',
+      uuid: '019f4524-e0ac-7571-a8af-5585504f0d55',
+      cwd: CWD,
+      mtimeMs: NOW - 1_000
+    })
+    const r = await findRollout({ configDir: home, cwd: CWD, since: NOW - 5_000, now: () => NOW })
+    expect(r?.sessionId).toBe('019f4524-e0ac-7571-a8af-5585504f0d55')
+  })
+
+  it("사용자가 연 세션(source: 'cli')은 당연히 후보다", async () => {
+    await makeRollout({
+      y: '2026', m: '07', d: '09',
+      uuid: '019f4524-e0ac-7571-a8af-5585504f0d66',
+      cwd: CWD,
+      mtimeMs: NOW - 1_000,
+      source: 'cli'
+    })
+    const r = await findRollout({ configDir: home, cwd: CWD, since: NOW - 5_000, now: () => NOW })
+    expect(r?.sessionId).toBe('019f4524-e0ac-7571-a8af-5585504f0d66')
   })
 })
