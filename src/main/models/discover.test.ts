@@ -8,6 +8,14 @@
 //
 // 가짜에게 무엇을 하라고 이르는 통로는 **설정 디렉터리 인자**다 — 인자 벡터는 이 파일이 고정하고
 // 있어 손댈 수 없지만, `CLAUDE_CONFIG_DIR`/`CODEX_HOME` 은 부르는 쪽이 정한다.
+//
+// **그 둘을 `||` 로 묶으면 안 된다.** `listCodexModels`(discover.ts)는 `process.env` 를 펼친 위에
+// `CODEX_HOME` 만 덮으므로, 주변 환경에 이미 `CLAUDE_CONFIG_DIR` 이 있으면 그 값이 그대로 자식에게
+// 간다 — astera 가 띄운 세션의 셸에서 스위트를 돌리면 언제나 그렇다(SessionManager.spawn 이 계정마다
+// 그 변수를 심는다). 예전에는 가짜가 `CLAUDE_CONFIG_DIR || CODEX_HOME` 으로 모드를 읽어서, 그런
+// 기계에서는 codex 모드가 한 번도 전달되지 않고 전부 기본 갈래로 떨어졌다. 하필 그 기본 갈래가
+// 'ok' 와 같은 동작이라 `'ok'` 테스트는 통과하고 `'reject'` 하나만 깨져, 저하 경로를 보라고 만든
+// 이 파일이 정작 저하 경로를 못 보고 있었다. 그래서 각 갈래는 **자기 제품의 변수만** 읽는다.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
@@ -24,8 +32,9 @@ let dir: string
 let cli: string
 
 const FAKE = `
-const mode = process.env.CLAUDE_CONFIG_DIR || process.env.CODEX_HOME || ''
-if (mode === 'die') {
+const claudeMode = process.env.CLAUDE_CONFIG_DIR || ''
+const codexMode = process.env.CODEX_HOME || ''
+if (claudeMode === 'die' || codexMode === 'die') {
   process.stderr.write('not logged in\\n')
   process.exit(3)
 }
@@ -40,14 +49,14 @@ process.stdin.on('data', (d) => {
     try { msg = JSON.parse(line) } catch { continue }
     const say = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
     if (msg.type === 'control_request') {
-      if (mode === 'reject') say({ type: 'control_response', response: { request_id: msg.request_id, subtype: 'error', error: 'nope' } })
-      else if (mode === 'empty') say({ type: 'control_response', response: { request_id: msg.request_id, subtype: 'success', response: { models: [] } } })
-      else if (mode === 'noise') { say({ type: 'system', subtype: 'init' }); say({ type: 'control_response', response: { request_id: 'someone-else', subtype: 'success', response: { models: [] } } }); process.exit(0) }
+      if (claudeMode === 'reject') say({ type: 'control_response', response: { request_id: msg.request_id, subtype: 'error', error: 'nope' } })
+      else if (claudeMode === 'empty') say({ type: 'control_response', response: { request_id: msg.request_id, subtype: 'success', response: { models: [] } } })
+      else if (claudeMode === 'noise') { say({ type: 'system', subtype: 'init' }); say({ type: 'control_response', response: { request_id: 'someone-else', subtype: 'success', response: { models: [] } } }); process.exit(0) }
       else say({ type: 'control_response', response: { request_id: msg.request_id, subtype: 'success', response: { models: [
         { value: 'opus', resolvedModel: 'claude-opus-5', displayName: 'Opus 5', description: 'd', supportsEffort: true, supportedEffortLevels: ['low', 'high'] }
       ] } } })
     } else if (msg.method === 'model/list') {
-      if (mode === 'reject') say({ id: msg.id, error: { code: -32601, message: 'no such method' } })
+      if (codexMode === 'reject') say({ id: msg.id, error: { code: -32601, message: 'no such method' } })
       else say({ id: msg.id, result: { data: [
         { id: 'gpt-5.6', model: 'gpt-5.6', displayName: 'GPT 5.6', description: 'd',
           supportedReasoningEfforts: [{ reasoningEffort: 'low' }, { reasoningEffort: 'high' }], defaultReasoningEffort: 'high' }
