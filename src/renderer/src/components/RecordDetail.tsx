@@ -1,22 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { FeatureExplanation, ProjectFeature } from '../../../core/understanding/types'
+import type { WorkRecord } from '../../../core/understanding/types'
 import { scopeToStep } from '../../../core/understanding/scope'
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
 import { FlowDiagram } from './FlowDiagram'
-import { GLYPH_COLOR, STATUS_KEY, StatusGlyph } from './UnderstandingIcons'
-
-const dateOf = (iso: string): string => {
-  const d = new Date(iso)
-  return `${d.getMonth() + 1}/${d.getDate()}`
-}
+import { RECORD_GLYPH, RECORD_GLYPH_COLOR, RECORD_STATUS_KEY, StatusGlyph } from './UnderstandingIcons'
 
 /** 참조 단이 접히는 폭. 이 아래에서는 왼쪽 본문이 40자 밑으로 내려가 흐름도가 잘린다. */
 const NARROW_PANE = 720
 
-type FeatureDetailProps = {
-  feature: ProjectFeature
-  explanation: FeatureExplanation | null
+type RecordDetailProps = {
+  record: WorkRecord
   /** 고른 흐름 단계. 고를 수 없는 단계가 들어오면 scopeToStep 이 null 을 주고 전체를 그린다 */
   scopedNodeId: string | null
   onPickStep: (nodeId: string | null) => void
@@ -25,19 +19,19 @@ type FeatureDetailProps = {
    *  **아래로 이어 붙이지 않는다** — 그러면 좁은 화면에서 이 화면이 세로 한 장짜리 다른 레이아웃이
    *  되고, 사용자는 폭에 따라 서로 다른 두 화면을 배우게 된다(설계 §6). 그 대신 한 레이아웃을 그대로
    *  두고 절반을 접는다 — 서랍으로. */
-  /** 이 기능의 설명을 다시 만든다 — 머리의 [다시 만들기]. 사이드바 줄의 같은 이름 버튼과
-   *  같은 곳으로 간다(UnderstandingView 의 onRegenerate) */
+  /** Writes this record's explanation again — the head's [Write it up again]. Goes to the same
+   *  place as the sidebar row's button of the same name (UnderstandingView's onRegenerate). */
   onRegenerate: () => void
   narrow: boolean
   drawerOpen: boolean
   onToggleDrawer: () => void
 }
 
-/** 한 기능의 상세. 왼쪽은 사람이 읽는 이야기, 오른쪽은 개발자가 되짚는 참조다 —
- *  "설명을 먼저, 구현을 나중에"가 위아래 순서가 아니라 좌우 공간으로 지켜진다(설계 §4). */
-export function FeatureDetail({
-  feature,
-  explanation,
+/** One record's detail. The left side is the story a person reads; the right side is the reference
+ *  a developer double-checks against — "explanation first, implementation after" is kept not by
+ *  top-to-bottom order but by left-right space (design §4). */
+export function RecordDetail({
+  record,
   scopedNodeId,
   onPickStep,
   onOpenPath,
@@ -45,8 +39,9 @@ export function FeatureDetail({
   narrow,
   drawerOpen,
   onToggleDrawer
-}: FeatureDetailProps): React.JSX.Element {
+}: RecordDetailProps): React.JSX.Element {
   const { t } = useI18n()
+  const explanation = record.explanation
 
   if (!explanation) {
     return <div className="hiw-pane hiw-pane-empty">{t('hiw.pane.noExplanation')}</div>
@@ -56,9 +51,9 @@ export function FeatureDetail({
 
   const scoped = scopedNodeId ? scopeToStep(explanation, scopedNodeId) : null
 
-  // 참조 단 하나를 변수로 뽑아 둔다 — 넓을 때는 본문 옆에, 좁을 때는 서랍 안에 그대로 넣는다.
-  // 두 자리에서 같은 노드를 만드는 대신 하나를 그대로 옮겨 쓰는 것이라, 결정/구현/변경 내용이
-  // 두 갈래로 갈라져 어긋날 일이 없다.
+  // The reference column is pulled out into one variable — placed beside the body when wide, tucked
+  // into the drawer when narrow. Building the same node in two places instead of moving one node
+  // between two slots is what keeps decisions and implementation from drifting apart between them.
   const reference = (
     <div className="hiw-side-col">
       {scoped && (
@@ -79,7 +74,7 @@ export function FeatureDetail({
 
       <section className="hiw-sec">
         <p className="hiw-lab">{scoped ? t('hiw.scope.why') : t('hiw.pane.decisions')}</p>
-        {(scoped ? scoped.decisions : explanation.keyDecisions).map((d) => (
+        {(scoped ? scoped.decisions : explanation.decisions).map((d) => (
           <div key={d.id} className="hiw-why">
             <span className="hiw-wt">{d.title}</span>
             <span className="hiw-wr">{d.reason}</span>
@@ -101,28 +96,13 @@ export function FeatureDetail({
             // 출력이다("인증 API" 와 "세션 저장" 이 같은 파일)
             <span key={`${i.role}:${i.path}`} className="hiw-impl-row">
               <b>{i.role}</b>
-              {/* 구분자 둘을 다 가른다 — 저장된 경로가 역슬래시면 `/` 만으로는 아무것도 잘리지 않고
-                  파일명 자리에 경로가 통째로 선다. 누르는 쪽(openFeaturePath)도 둘을 다 받는다 */}
+              {/* Splits on both separators — if the stored path uses backslashes, `/` alone cuts
+                  nothing and the whole path lands where the filename should. The click side
+                  (onOpenPath, App's openRecordPath) also accepts both. */}
               <button onClick={() => onOpenPath(i.path)}>{i.path.split(/[/\\]/).pop()}</button>
             </span>
           ))}
         </div>
-      </section>
-
-      <section className="hiw-sec">
-        <p className="hiw-lab">{scoped ? t('hiw.scope.changes') : t('hiw.pane.changes')}</p>
-        {(scoped ? scoped.changes : explanation.recentChanges).map((c) => (
-          <div key={c.id} className="hiw-chg">
-            {/* 출처는 라벨이지 링크가 아니다. 이 앱에서 --accent 밑줄은 누를 수 있는 것의 모습인데
-                갈 곳이 아직 없다(근거 화면은 이 브랜치가 만들지 않는다) — 버튼과 달리 글에는
-                누를 수 있다는 약속을 걸지 않고 메타로 되돌린다 */}
-            <span className="hiw-ct">
-              <span>{dateOf(c.at)}</span>
-              <span>{c.sourceLabel}</span>
-            </span>
-            <span className="hiw-cb">{c.body}</span>
-          </div>
-        ))}
       </section>
     </div>
   )
@@ -130,35 +110,30 @@ export function FeatureDetail({
   return (
     <div className="hiw-pane">
       <div className="hiw-fhead">
-        <h4>{feature.name}</h4>
-        {/* 상태를 박아 두지 않는다 — 모양도 문구도 색도 사이드바와 같은 표를 본다(설계 §8).
-            색을 여기서 따로 고르면 세 자리가 갈라진다(UnderstandingIcons 의 GLYPH_COLOR) */}
-        <span className="hiw-st" style={{ color: GLYPH_COLOR[feature.status] }}>
-          <StatusGlyph status={feature.status} /> {t(STATUS_KEY[feature.status])}
+        <h4>{record.request}</h4>
+        {/* The status is not hard-coded here — shape, wording and colour all read the same table
+            the sidebar does (design §8). Picking the colour separately here would let the three
+            places drift apart (UnderstandingIcons' RECORD_GLYPH_COLOR). */}
+        <span className="hiw-st" style={{ color: RECORD_GLYPH_COLOR[record.status] }}>
+          <StatusGlyph glyph={RECORD_GLYPH[record.status]} spinning={record.status === 'generating'} />{' '}
+          {t(RECORD_STATUS_KEY[record.status])}
         </span>
         <span className="hiw-sp" />
-        {/* 앞의 둘은 아직 뒤가 없다 — 근거 단은 오른쪽에 이미 펼쳐져 있고, 편집은 저장할 곳
-            (§56 의 userEdited)을 아직 쓰지 않는다. 눌러도 아무 일이 없는 것보다 "아직"이라고
-            말하는 편이 낫다: 한 화면에서 반응 없는 버튼은 고장으로 읽힌다 */}
-        <button className="hiw-ghost" onClick={notYet}>
-          {t('hiw.pane.evidence', { count: feature.evidenceCount })}
-        </button>
+        {/* This button has nothing behind it yet — editing has no place to save to (§56's
+            userEdited) yet. Saying "not yet" beats a button that does nothing when pressed: on a
+            screen like this, an unresponsive button reads as broken. */}
         <button className="hiw-ghost" onClick={notYet}>
           {t('hiw.pane.edit')}
         </button>
         {/* 이쪽은 뒤가 있다. 도는 동안은 잠근다 — 두 번 누르면 두 번 돈다 */}
-        <button
-          className="hiw-ghost acc"
-          onClick={onRegenerate}
-          disabled={feature.status === 'generating'}
-        >
+        <button className="hiw-ghost acc" onClick={onRegenerate} disabled={record.status === 'generating'}>
           {/* 방금 누른 자리에서 움직임이 보여야 한다 — 잠긴 버튼만으로는 눌린 것인지 고장인지 모른다 */}
-          {feature.status === 'generating' ? (
+          {record.status === 'generating' ? (
             <>
-              <StatusGlyph status="generating" /> {t('hiw.status.generating')}
+              <StatusGlyph glyph={RECORD_GLYPH.generating} spinning /> {t('hiw.record.generating')}
             </>
           ) : (
-            t('hiw.pane.regenerate')
+            t('hiw.record.regenerate')
           )}
         </button>
         {narrow && (
@@ -175,31 +150,30 @@ export function FeatureDetail({
             <p className="hiw-p">{explanation.overview}</p>
           </section>
 
-          {/* 흐름이 없는 기능(설정·로깅)을 설계 §5 가 명시적으로 예상한다. 가드가 없으면 제목과
-              "단계를 클릭하면…" 힌트만 남은 빈 칸이 서는데, 클릭할 단계가 없으므로 그 힌트는
-              거짓이다 — 바로 아래 실패 칸이 같은 이유로 이미 이 가드를 쓴다 */}
-          {explanation.userFlow.length > 0 && (
-            <section className="hiw-sec hiw-grow">
-              <p className="hiw-lab">{t('hiw.pane.flow')}</p>
-              <FlowDiagram
-                nodes={explanation.userFlow}
-                selectedId={scoped?.node.id ?? null}
-                onPick={onPickStep}
-              />
+          {/* Empty when the work changed nothing a user would notice (an internal refactor, a test
+              fixed) — the guard keeps that case from drawing a labelled section with nothing in it */}
+          {explanation.userVisibleChanges.length > 0 && (
+            <section className="hiw-sec">
+              <p className="hiw-lab">{t('hiw.pane.userVisible')}</p>
+              <ul className="hiw-p">
+                {explanation.userVisibleChanges.map((c, i) => (
+                  <li key={i}>{c}</li>
+                ))}
+              </ul>
             </section>
           )}
 
-          {explanation.failureFlows.length > 0 && (
-            <section className="hiw-sec">
-              <p className="hiw-lab">{t('hiw.pane.failures')}</p>
-              <div className="hiw-fail">
-                {explanation.failureFlows.map((f) => (
-                  <div key={f.id}>
-                    <b>{f.label}</b>
-                    <span>{f.description}</span>
-                  </div>
-                ))}
-              </div>
+          {/* A record whose flow is empty is expected (a change that only touched configuration or
+              logging, say). Without this guard an empty box with just the label and a "click a step
+              to..." hint would remain, and with no step to click that hint would be a lie. */}
+          {explanation.flow.length > 0 && (
+            <section className="hiw-sec hiw-grow">
+              <p className="hiw-lab">{t('hiw.pane.flow')}</p>
+              <FlowDiagram
+                nodes={explanation.flow}
+                selectedId={scoped?.node.id ?? null}
+                onPick={onPickStep}
+              />
             </section>
           )}
         </div>
@@ -211,20 +185,22 @@ export function FeatureDetail({
   )
 }
 
-/** `FeatureDetail` 을 페인 폭에 맞춰 씌운다. 폭은 `ResizeObserver` 로 재는데 — 페인은 사용자가
- *  끌어 나누므로 창 크기로는 알 수 없고, 이미 코드베이스가 자기 크기를 스스로 재는 자리마다 이
- *  방식을 쓴다(Select.tsx 의 메뉴 재기, RunPanel/TerminalBody 의 터미널 재기).
+/** Wraps `RecordDetail` to fit the pane's width. The width is measured with `ResizeObserver` —
+ *  panes are resized by the user so window size cannot tell it, and the codebase already uses this
+ *  approach everywhere it measures its own size (Select.tsx's menu sizing, RunPanel/TerminalBody's
+ *  terminal sizing).
  *
- *  이 재는 일을 `FeatureDetail` 밖으로 뺀 이유: 그 컴포넌트의 테스트는 jsdom 도 `ResizeObserver` 도
- *  없이 `renderToStaticMarkup` 만으로 돌아간다(FeatureDetail.test.ts) — narrow/drawerOpen 을 강제로
- *  넘겨 접힌 렌더와 펼친 렌더를 확인해야 하므로, `FeatureDetail` 자신은 그 둘을 그대로 받는 순수한
- *  컴포넌트로 남겨 두고 재는 일은 이 컴포넌트에만 둔다.
+ *  Why this measuring is kept out of `RecordDetail`: that component's test runs on
+ *  `renderToStaticMarkup` alone, without jsdom or `ResizeObserver` (RecordDetail.test.ts) — it has to
+ *  force narrow/drawerOpen to check the folded and unfolded renders, so `RecordDetail` itself stays a
+ *  pure component that just takes those two as given, and the measuring lives only in this component.
  *
- *  **첫 재기는 `useLayoutEffect` 다** — `useEffect` 면 브라우저가 이미 넓은 2단 레이아웃을 한 번
- *  그린 뒤에야 좁혀서, 이미 좁은 페인에서 열면 첫 프레임이 넓게 그려졌다가 튄다. `Select.tsx` 의
- *  메뉴 자리 재기가 같은 이유로 이미 `useLayoutEffect` 를 쓴다. */
-export function FeatureDetailHost(
-  props: Omit<FeatureDetailProps, 'narrow' | 'drawerOpen' | 'onToggleDrawer'>
+ *  **The first measurement is `useLayoutEffect`.** With `useEffect`, the browser would already paint
+ *  the wide two-column layout once before narrowing it, so opening an already-narrow pane would flash
+ *  wide on the first frame. `Select.tsx`'s menu placement already uses `useLayoutEffect` for the same
+ *  reason. */
+export function RecordDetailHost(
+  props: Omit<RecordDetailProps, 'narrow' | 'drawerOpen' | 'onToggleDrawer'>
 ): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const [narrow, setNarrow] = useState(false)
@@ -250,7 +226,7 @@ export function FeatureDetailHost(
 
   return (
     <div className="workbench-body" ref={hostRef}>
-      <FeatureDetail
+      <RecordDetail
         {...props}
         narrow={narrow}
         drawerOpen={drawerOpen}

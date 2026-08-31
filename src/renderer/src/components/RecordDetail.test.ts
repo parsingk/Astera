@@ -1,37 +1,33 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { FeatureExplanation, ProjectFeature } from '../../../core/understanding/types'
-import { FeatureDetail } from './FeatureDetail'
+import type { RecordExplanation, WorkRecord } from '../../../core/understanding/types'
+import { RecordDetail } from './RecordDetail'
 
+// MarkdownPreview.test.ts 와 같은 이유 — I18nProvider 의 효과는 renderToStaticMarkup 에서 돌지 않고
+// 실제 window.api 도 없다. 훅을 직접 갈아 끼우는 것이 jsdom 없이 진짜 렌더를 보는 방법이다.
 vi.mock('../i18n/I18nProvider', () => ({
   useI18n: () => ({
     lang: 'ko',
-    // 값을 JSON.stringify 로 찍지 않는다 — renderToStaticMarkup 이 텍스트 노드의 " 를
-    // &quot; 로 이스케이프해서, 따옴표가 든 단언은 어떤 구현으로도 통과하지 못한다
-    t: (key: string, params?: Record<string, string | number>) =>
-      params
-        ? `${key}:{${Object.entries(params)
-            .map(([k, v]) => `${k}:${v}`)
-            .join(',')}}`
-        : key,
+    t: (key: string) => key,
     tm: (m: unknown) => (m === null ? null : String(m))
   })
 }))
 
-const feature: ProjectFeature = {
-  id: 'auth',
-  name: '인증',
-  summary: 'Google 로그인',
-  status: 'up-to-date',
-  updatedAt: '2026-08-27T00:00:00.000Z',
-  evidenceCount: 6
+const baseRecord: WorkRecord = {
+  id: 'r1',
+  at: '2026-08-29T00:00:00.000Z',
+  source: { kind: 'session', sessionId: '182', label: '세션 #182' },
+  request: '인증에 Google 로그인을 붙여줘',
+  changedFiles: ['src/auth/SessionStore.ts'],
+  git: { startHead: 'a', endHead: 'b' },
+  status: 'ready'
 }
 
-const explanation: FeatureExplanation = {
-  featureId: 'auth',
+const explanation: RecordExplanation = {
   overview: '사용자는 Google 계정으로 로그인할 수 있습니다.',
-  userFlow: [
+  userVisibleChanges: ['로그인 화면에 "Google로 계속하기" 버튼이 보입니다.'],
+  flow: [
     { id: 'login', label: '로그인 클릭', type: 'start', next: [{ targetId: 'session' }] },
     {
       id: 'session',
@@ -42,12 +38,7 @@ const explanation: FeatureExplanation = {
       evidenceIds: ['e1']
     }
   ],
-  // 빈 배열로 두면 "여섯 조각" 테스트가 통과할 수 없다 — 실패 흐름은 있을 때만 그린다(제목만
-  // 남은 빈 칸을 만들지 않는다). 여섯 번째 조각을 확인하려면 흐름이 하나는 있어야 한다
-  failureFlows: [
-    { id: 'denied', label: 'Google 이 거부', description: '로그인 화면으로 되돌립니다.', type: 'failure', next: [] }
-  ],
-  keyDecisions: [
+  decisions: [
     {
       id: 'd1',
       title: 'JWT 대신 서버 세션',
@@ -65,17 +56,6 @@ const explanation: FeatureExplanation = {
     }
   ],
   implementation: [{ role: '세션 저장', path: 'src/auth/SessionStore.ts', evidenceIds: ['e1'] }],
-  recentChanges: [
-    {
-      id: 'c1',
-      at: '2026-08-29T00:00:00.000Z',
-      sourceKind: 'session',
-      sourceId: '182',
-      sourceLabel: '세션 #182',
-      body: 'JWT → 서버 세션',
-      evidenceIds: ['e1']
-    }
-  ],
   evidence: [
     { id: 'e1', type: 'source-file', label: 'SessionStore.ts', path: 'src/auth/SessionStore.ts' }
   ],
@@ -83,11 +63,10 @@ const explanation: FeatureExplanation = {
   generatedAt: '2026-08-29T00:00:00.000Z'
 }
 
-const render = (scoped: string | null = null, x: FeatureExplanation | null = explanation): string =>
+const render = (scoped: string | null = null, exp: RecordExplanation | null = explanation): string =>
   renderToStaticMarkup(
-    React.createElement(FeatureDetail, {
-      feature,
-      explanation: x,
+    React.createElement(RecordDetail, {
+      record: { ...baseRecord, explanation: exp ?? undefined },
       scopedNodeId: scoped,
       onPickStep: () => {},
       onOpenPath: () => {},
@@ -98,11 +77,12 @@ const render = (scoped: string | null = null, x: FeatureExplanation | null = exp
     })
   )
 
+const renderWith = (over: Partial<RecordExplanation>): string => render(null, { ...explanation, ...over })
+
 const renderNarrow = (drawerOpen: boolean): string =>
   renderToStaticMarkup(
-    React.createElement(FeatureDetail, {
-      feature,
-      explanation,
+    React.createElement(RecordDetail, {
+      record: { ...baseRecord, explanation },
       scopedNodeId: null,
       onPickStep: () => {},
       onOpenPath: () => {},
@@ -113,18 +93,24 @@ const renderNarrow = (drawerOpen: boolean): string =>
     })
   )
 
-describe('FeatureDetail', () => {
-  it('여섯 조각을 모두 그린다', () => {
+describe('RecordDetail', () => {
+  it('네 조각을 모두 그린다', () => {
     const html = render()
     for (const key of [
       'hiw.pane.overview',
       'hiw.pane.flow',
-      'hiw.pane.failures',
       'hiw.pane.decisions',
-      'hiw.pane.implementation',
-      'hiw.pane.changes'
+      'hiw.pane.implementation'
     ])
       expect(html).toContain(key)
+  })
+
+  it('사용자에게 보이는 변화가 있으면 그 절이 선다', () => {
+    expect(render()).toContain('hiw.pane.userVisible')
+  })
+
+  it('없으면 그 절이 아예 없다', () => {
+    expect(renderWith({ userVisibleChanges: [] })).not.toContain('hiw.pane.userVisible')
   })
 
   it('추정한 결정의 알약에만 low 가 붙는다', () => {
@@ -182,9 +168,8 @@ describe('좁은 페인', () => {
 describe('만드는 중', () => {
   const busy = (): string =>
     renderToStaticMarkup(
-      React.createElement(FeatureDetail, {
-        feature: { ...feature, status: 'generating' },
-        explanation,
+      React.createElement(RecordDetail, {
+        record: { ...baseRecord, status: 'generating', explanation },
         scopedNodeId: null,
         onPickStep: () => {},
         onOpenPath: () => {},

@@ -80,13 +80,16 @@ de una coordinadora mediante la skill `/astera-orchestration`.
   detectadas aparecen en cursiva hasta que editas una, lo que la guarda como tuya
 
 **How It Works (experimental)**
-- How It Works es para quien no lee código. Qué hace una función, en qué orden ocurre todo, qué
-  puede salir mal, por qué se construyó así y de qué archivos salió cada parte
-- Desactivado por defecto. Activa el **seguimiento de unidades de trabajo** en los ajustes y elige la
-  **cuenta para explicaciones** que las escribirá
-- Pídele que analice un proyecto una vez y leerá el repositorio para enumerar lo que hace
-- Cuando una sesión termina un trabajo, la explicación de la función que ese trabajo tocó se vuelve a
-  escribir, y la barra lateral deja el cambio con la petición que hiciste en realidad
+- How It Works es para quien no lee código. Cada vez que termina un trabajo, una línea registra
+  qué cambió y cómo — el trabajo de una sesión, o un Run de Jobs
+- Desactivado por defecto. Activa el **seguimiento de unidades de trabajo** en los ajustes y elige
+  la **cuenta para explicaciones** que las escribirá
+- Solo se registra el trabajo terminado después de activar el seguimiento. Nada anterior se lee: ni
+  el código, ni sesiones previas, ni Runs previos
+- La línea aparece en cuanto el trabajo se cierra y se completa sola unos minutos después. Si no se
+  pudo redactar, dice por qué y ofrece intentarlo de nuevo
+- Abre una línea para ver qué cambió, qué notará quien use el producto, en qué orden ocurre todo,
+  las decisiones que se tomaron y dónde vive en el código
 - Solo lee. Nada de esto puede cambiar tu código
 
 **Editor y atajos**

@@ -8,7 +8,7 @@ import { AccountSettings } from './components/AccountSettings'
 import { HistorySettings } from './components/HistorySettings'
 import { HistoryBrowser } from './components/HistoryBrowser'
 import { Select } from './components/Select'
-import { type FeatureTab, type FileTab } from './components/WorkbenchTabs'
+import { type FileTab, type RecordTab } from './components/WorkbenchTabs'
 import { FileEditor } from './components/FileEditor'
 import { MarkdownSplit } from './components/MarkdownSplit'
 import { invalidateImageCache } from './components/MarkdownPreview'
@@ -18,7 +18,7 @@ import { EditorStateCache } from './lib/editorStateCache'
 import { FileExplorer, type ExplorerTreeState } from './components/FileExplorer'
 import { JobsView } from './components/JobsView'
 import { UnderstandingView } from './components/UnderstandingView'
-import { FeatureDetailHost } from './components/FeatureDetail'
+import { RecordDetailHost } from './components/RecordDetail'
 import { RunDetail } from './components/RunDetail'
 import { NewRunModal } from './components/NewRunModal'
 import { NewSessionDialog } from './components/NewSessionDialog'
@@ -45,7 +45,7 @@ import type {
 } from '../../core/types'
 // core/types.ts imports this for UnderstandingApi but does not re-export it (unlike the block above),
 // so it comes from its own module — the same import UnderstandingView.tsx uses.
-import type { FeatureStatus, ProjectUnderstanding } from '../../core/understanding/types'
+import type { ProjectUnderstanding, RecordStatus } from '../../core/understanding/types'
 import { slackMode } from '../../core/slack/ready'
 import { findRun } from '../../core/orchestration/snapshot'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
@@ -93,7 +93,7 @@ import {
   type PaneDir,
   type PaneNode
 } from '../../core/panes/tree'
-import { featureTab, fileTab, parseTab, sessionTab } from '../../core/panes/tabId'
+import { fileTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
 import { placeTab } from '../../core/panes/place'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
@@ -101,10 +101,11 @@ import { PanelLeft, Settings, X } from 'lucide-react'
 
 sessionBus.init()
 
-/** 기능 탭의 좁힘 기억(scopedNode)이 쓰는 키. 프로젝트와 기능을 함께 담는다 — 탭 id 에는 프로젝트가
- *  없어 두 프로젝트가 같은 기능 id 를 가지면 서로의 좁힘이 새어 든다. 읽는 쪽·쓰는 쪽·지우는 쪽이
- *  같은 문자열을 만들도록 한 자리에 둔다. */
-const scopeKey = (rec: FeatureTab): string => `${rec.projectRoot}::${rec.featureId}`
+/** The key a record tab's narrowed-flow-step memory (scopedNode) uses. Carries both the project and
+ *  the record — a tab id (`record:<id>`) has no project in it, so two projects sharing a record id
+ *  would otherwise leak each other's scoping. Kept in one place so the reader, the writer and the
+ *  deleter all build the same string. */
+const scopeKey = (rec: RecordTab): string => `${rec.projectRoot}::${rec.recordId}`
 
 // The shortcut list for the settings modal. When a binding changes (the TerminalView key handler or
 // the global listener in App), update this list along with it.
@@ -355,10 +356,10 @@ export default function App(): React.JSX.Element {
   /** 활성 탭이 파일일 때만 그 id */
   const activeFileId = activeTab?.kind === 'file' ? activeTabId : null
   const activeSessionId = activeTab?.kind === 'session' ? activeTab.id : null
-  /** 활성 탭이 기능 상세일 때 그 기능 id — How It Works 사이드바가 어느 줄을 켜 둘지 정한다.
-   *  탭 트리에서 파생시키는 이유는 activeFileId 와 같다: 별도 상태를 두면 다른 페인의 탭을 누르거나
-   *  포커스를 옮기는 순간 트리와 갈라진다 */
-  const activeFeatureId = activeTab?.kind === 'feature' ? activeTab.id : null
+  /** The active record id when the active tab is a record detail — decides which sidebar row How It
+   *  Works keeps lit. Derived from the tab tree for the same reason as activeFileId: a separate piece
+   *  of state would drift from the tree the moment another pane's tab is clicked or focus moves. */
+  const activeRecordId = activeTab?.kind === 'record' ? activeTab.id : null
   // 활성 탭이 파일일 수 있게 되면서 "지금 보고 있는 것"과 "작업 중인 세션"이 갈라졌다. 세션에 딸린
   // 표시(상태 바, 사용량 폴링)는 마지막으로 활성이었던 세션 탭을 따른다 — 파일을 읽는 동안 상태 바가
   // 비고 컨텍스트·한도 칩이 사라지지 않게. 파일 트리 루트는 여기서 나오지 않고 활성 탭에서 나온다.
@@ -441,16 +442,16 @@ export default function App(): React.JSX.Element {
   // evaluated during render, so it would throw a TDZ ReferenceError this early). null covers both "no
   // project" and "never analyzed" — UnderstandingView draws the same empty state for either.
   //
-  // **루트를 함께 든다.** 캐시가 프로젝트 하나뿐이라, 맨 데이터만 들면 자기가 어느 프로젝트의 것인지
-  // 말하지 못한다. 그러면 "이게 맞는 프로젝트인가?"를 물어야 하는 곳마다 `rec.projectRoot !==
-  // currentProject` 라는 대리 질문을 하게 되는데 — 그것은 탭 기록을 현재 프로젝트와 비교할 뿐
-  // 캐시 자신은 확인하지 않는다. 프로젝트를 바꾼 뒤 IPC 왕복이 끝나기 전까지 둘은 어긋나 있고,
-  // 그 창에서 두 프로젝트가 같은 기능 id 를 가지면 A 의 상태와 A 의 설명이 B 의 탭에 붙는다.
-  // 루트가 여기 있으면 아래의 소비자들이 대리 없이 곧장 물을 수 있다.
+  // **The root rides along with it.** The cache holds only one project's data, so the data alone
+  // cannot say which project it belongs to. Without the root, every place that needs to ask "is this
+  // the right project?" would ask the proxy question `rec.projectRoot !== currentProject` instead —
+  // which only compares a tab record against the current project, not the cache itself. Between
+  // switching projects and the IPC round trip finishing, the two are out of sync, and in that window
+  // two projects sharing the same record id would attach A's status and A's explanation to B's tab.
+  // With the root sitting here, the consumers below can ask directly instead of through that proxy.
   /** 이해를 다시 읽게 하는 신호. 분석이 끝났을 때 올린다 — 아래 effect 는 프로젝트가 바뀔
    *  때만 도는데, 분석은 프로젝트를 바꾸지 않으면서 그 값을 바꾼다. */
   const [understandingSeq, setUnderstandingSeq] = useState(0)
-  const [analyzing, setAnalyzing] = useState(false)
   const [understanding, setUnderstanding] = useState<{
     root: string
     data: ProjectUnderstanding | null
@@ -461,15 +462,17 @@ export default function App(): React.JSX.Element {
   const [schedStates, setSchedStates] = useState<Record<string, SchedStateEvent>>({}) // the schedule banner
   const [busy, setBusy] = useState<Record<string, boolean>>({}) // whether each session is working — the tab spinner
   const [fileTabs, setFileTabs] = useState<FileTab[]>([]) // file viewer tabs
-  // How It Works 기능 상세 탭. 파일 탭과 같은 이유로 목록을 따로 든다 — `feature:<id>` 라는 탭 id 는
-  // 프로젝트도 이름도 담지 못하므로, 트리에 들어간 문자열만으로는 그 탭을 그릴 수도, 그 탭이 어느
-  // 프로젝트의 것인지 답할 수도 없다(WorkbenchTabs 의 FeatureTab 머리주석)
-  const [featureTabs, setFeatureTabs] = useState<FeatureTab[]>([])
-  // 기능 탭에서 고른 흐름 단계. 키는 scopeKey — 프로젝트와 기능을 함께 담는다. 탭 id
-  // (`feature:<featureId>`)에는 프로젝트가 없어서 그것으로 키를 삼으면 두 프로젝트가 같은 기능 id 를
-  // 가질 때 서로의 좁힘이 새어 든다. 탭 기록에는 두 값이 이미 다 있으므로 공짜다.
-  // 탭을 닫으면 그 항목도 지운다(closeWorkbenchTab) — 남겨 두면 세션 내내 자라고, 다시 연 탭에
-  // 사용자가 설정한 적 없는 좁힘이 되살아난다
+  // How It Works record detail tabs. Kept in a separate list for the same reason as file tabs — a
+  // `record:<id>` tab id carries neither the project nor the title, so this tab could not be drawn,
+  // and this tab's project could not be answered, from the tree string alone (see RecordTab's comment
+  // in WorkbenchTabs.tsx).
+  const [recordTabs, setRecordTabs] = useState<RecordTab[]>([])
+  // The flow step picked on a record tab. Keyed by scopeKey — project and record together, because a
+  // tab id (`record:<recordId>`) has no project in it, and keying on that alone would let two
+  // projects sharing a record id leak each other's scoping. The tab record already has both, so this
+  // costs nothing extra.
+  // Cleared when its tab closes (closeWorkbenchTab) — left alone it would grow for the life of the
+  // session, and reopening a closed tab would resurrect a scope the user never set.
   const [scopedNode, setScopedNode] = useState<Record<string, string | null>>({})
   interface FileBuffer {
     /** 항상 LF다. CodeMirror가 문서를 LF로 정규화하므로 버퍼도 같은 모양이어야 에디터 상태와 비교되고
@@ -550,16 +553,17 @@ export default function App(): React.JSX.Element {
   fileTabsRef.current = fileTabs
   // 탭 순환이 쓰는 것 — 클릭과 같은 경로를 타야 종류에 상관없이 같은 일이 일어난다
   const selectWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
-  /** Ctrl+W 가 닫을 수 있는 탭의 id. **세션은 여기 들지 않는다** — 그 키로 세션을 죽이지 않는다.
-   *  파일과 기능은 둘 다 가볍게 열고 닫는 읽기용 탭이라 같은 취급을 받는다. */
+  /** The id of the tab Ctrl+W may close. **Sessions are excluded** — that key must not kill a
+   *  process. Files and records are both lightweight, read-only tabs that open and close freely, so
+   *  both belong here. */
   const closableTabIdRef = useRef<string | null>(null)
   // 탭 트리에서 파생시킨다 — activeFileId 와 같은 이유다: 따로 상태를 두면 다른 페인의 탭을
   // 누르는 순간 트리와 갈라진다
   closableTabIdRef.current =
-    activeTab?.kind === 'file' || activeTab?.kind === 'feature' ? activeTabId : null
-  /** 닫는 함수 자체. `closeWorkbenchTab` 은 매 렌더 새로 만들어지고 그 본문이 `featureTabs`
-   *  (렌더 값)를 읽으므로, 한 번만 등록되는 키 리스너가 붙잡은 옛 클로저를 부르면 좁힘 기억을
-   *  지우지 못한다 — selectWorkbenchTabRef 와 같은 자리, 같은 이유다. */
+    activeTab?.kind === 'file' || activeTab?.kind === 'record' ? activeTabId : null
+  /** The close function itself. `closeWorkbenchTab` is recreated every render and its body reads
+   *  render-time values (via closeFileTab), so a key listener registered once that called a captured
+   *  stale closure would act on outdated tabs — same place, same reason as selectWorkbenchTabRef. */
   const closeWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
   const fileBuffersRef = useRef(fileBuffers) // keeps the external-change handler from going stale
   fileBuffersRef.current = fileBuffers
@@ -836,7 +840,7 @@ export default function App(): React.JSX.Element {
       }
       // Closing a file tab, same as closing a browser tab. When dirty, closeFileTab raises a
       // confirmation modal. The condition is that the active tab is one Ctrl+W may close — a file or a
-      // How It Works feature. Both are opened and closed freely to read something; a session is not, and
+      // How It Works record. Both are opened and closed freely to read something; a session is not, and
       // closing one kills a process, so it is left out (the tab strip's × still closes all three).
       // A tab lives in a pane now, so whether the explorer sidebar is showing says nothing about it.
       // It is still not intercepted while xterm has focus — in a terminal, Ctrl+W deletes the previous
@@ -848,7 +852,7 @@ export default function App(): React.JSX.Element {
         e.stopPropagation()
         if (e.repeat) return // stops tabs closing in a chain while the key is held
         // Through the shared closer rather than closeFileTab, so a file still gets its dirty-file
-        // confirmation and a feature tab takes its own branch (which also clears the remembered scope).
+        // confirmation and a record tab takes its own branch (which also clears the remembered scope).
         closeWorkbenchTabRef.current(id)
         return
       }
@@ -1285,9 +1289,10 @@ export default function App(): React.JSX.Element {
   // ref뿐이라 최신 상태에 대해 동작한다(toggleExplorer와 같은 관례)
   selectWorkbenchTabRef.current = selectWorkbenchTab
 
-  /** 파일 탭은 기존 경로(더티면 확인 모달), 세션 탭은 세션 모드의 탭 닫기와 같은 경로로 종료한다.
-   *  기능 탭은 트리에서 빼는 것이 전부다 — 여기서 갈래를 두지 않으면 featureId 가 세션 id 로 읽혀
-   *  sessions.kill 로 흘러간다 */
+  /** A file tab closes through its existing path (a confirmation modal when dirty); a session tab
+   *  closes through session mode's tab-close path. A record tab is nothing more than dropping it from
+   *  the tree — skip that branch here and its id would be read as a session id and flow into
+   *  sessions.kill. */
   const closeWorkbenchTab = (tabId: string): void => {
     const ref = parseTab(tabId)
     if (!ref) return
@@ -1295,16 +1300,17 @@ export default function App(): React.JSX.Element {
       void closeFileTab(tabId)
       return
     }
-    if (ref.kind === 'feature') {
-      // 좁힘 기억도 함께 지운다 — 파일 탭이 닫힐 때 버퍼를 지우는 것과 같은 자리다. 남겨 두면
-      // 세션 내내 자라고, 닫았던 탭을 다시 열면 사용자가 설정한 적 없는 좁힘이 되살아난다
-      const rec = featureTabs.find((x) => x.id === tabId)
+    if (ref.kind === 'record') {
+      // Drops the remembered scope along with it — same place as clearing a file tab's buffer when
+      // it closes. Left alone it would grow for the life of the session, and reopening a closed tab
+      // would resurrect a scope the user never set.
+      const rec = recordTabs.find((x) => x.id === tabId)
       if (rec)
         setScopedNode((prev) => {
           const { [scopeKey(rec)]: _drop, ...rest } = prev
           return rest
         })
-      setFeatureTabs((prev) => prev.filter((x) => x.id !== tabId))
+      setRecordTabs((prev) => prev.filter((x) => x.id !== tabId))
       dropTabFromTree(tabId)
       return
     }
@@ -1807,11 +1813,12 @@ export default function App(): React.JSX.Element {
   const activeTabRoot =
     (activeTab?.kind === 'file'
       ? fileTabs.find((t) => t.id === activeTabId)?.projectRoot
-      : activeTab?.kind === 'feature'
-        ? // 기능 탭도 자기 프로젝트를 말한다. 이 갈래가 없으면 아래 세션 조회가 기능 id 로 세션을
-          // 찾다 undefined 를 주고, currentProject 가 조용히 stickyRoot 로 떨어진다 — 그러면 A 의
-          // 기능 탭을 보다 B 의 세션 탭을 누르는 순간 이 탭이 목록에서 빠져 닫을 수도 없어진다
-          featureTabs.find((t) => t.id === activeTabId)?.projectRoot
+      : activeTab?.kind === 'record'
+        ? // A record tab names its own project too. Without this branch the session lookup below
+          // would search for a session by the record id and come up empty, and currentProject would
+          // silently fall back to stickyRoot — so viewing A's record tab and then clicking B's session
+          // tab would drop this tab from the list, with no way left to close it.
+          recordTabs.find((t) => t.id === activeTabId)?.projectRoot
         : sessions.find((s) => s.id === activeTab?.id)?.cwd) ?? null
 
   /** 탭이 하나도 없을 때의 현재 프로젝트. 마운트에서 한 번 복원하고, 그 뒤로는 활성 탭이 갱신한다.
@@ -2027,116 +2034,130 @@ export default function App(): React.JSX.Element {
     )
   }
 
-  /** How It Works 사이드바에서 기능을 골랐다. 이미 열려 있으면 그 탭을 활성으로 만들고, 없으면
-   *  활성 페인의 새 탭으로 연다 — 두 갈래를 여기서 가르지 않는 것은 placeTab 의 intoGroup 이 이미
-   *  "트리에 있으면 다시 넣지 않고 활성화한다" 를 하기 때문이다.
+  /** Picked a record from the How It Works sidebar. If it is already open, activates that tab; if
+   *  not, opens it as a new tab in the active pane — the two cases are not split here because
+   *  placeTab's intoGroup already does "activate it if it's in the tree, don't reinsert it" itself.
    *
-   *  **탭 기록을 함께 만든다** — openFile 이 FileTab 을 만드는 것과 같은 자리, 같은 이유다. 이름과
-   *  프로젝트가 그 기록에 박히므로, 다른 프로젝트로 옮겨 가도 이 탭은 이름과 × 를 잃지 않고 다시
-   *  누르면 자기 프로젝트로 돌아온다.
+   *  **Builds a tab record along with it** — same place, same reason as openFile building a FileTab.
+   *  The title and the project are pinned into that record, so moving to another project does not
+   *  cost this tab its name or its ×, and clicking it again returns to its own project.
    *
-   *  **선언이 여기 있는 이유**: 본문이 currentProject 를 읽는다. 이 파일은 그 const 보다 위에서
-   *  그 값을 참조해 TDZ 로 죽은 전례가 있어(위 두 효과의 주석), 읽는 것은 전부 그 아래에 둔다. */
-  const openFeatureTab = (featureId: string): void => {
-    // 지금 프로젝트의 이해에서만 찾는다. 프로젝트를 막 바꿔 캐시가 아직 이전 것이면 여기서 A 의
-    // 기능을 집어 `projectRoot` 만 B 인 탭이 생기고 — 그 탭은 어느 이해로도 그려지지 않는다
-    const feature =
+   *  **Why the declaration sits here**: the body reads currentProject. This file has a history of
+   *  that reference dying to a TDZ error when declared above that const (see the comment on the two
+   *  effects above), so everything that reads it stays below. */
+  const openRecordTab = (recordId: string): void => {
+    // Only looked up in the current project's understanding. If the project was just switched and the
+    // cache is still the previous one, this would pick up A's record and produce a tab whose
+    // projectRoot is B alone — a tab no cached understanding would ever draw
+    const record =
       understanding?.root === currentProject
-        ? understanding.data?.features.find((f) => f.id === featureId)
+        ? understanding.data?.records.find((r) => r.id === recordId)
         : undefined
-    // 목록에서 누른 것이므로 정상 경로에서는 둘 다 있다. 없으면 이름도 프로젝트도 없는 탭이 되므로
-    // 아무것도 하지 않는다 — openFile 이 루트가 없을 때 그러는 것과 같다
-    if (!currentProject || !feature) return
-    const id = featureTab(featureId)
-    const record: FeatureTab = { id, featureId, title: feature.name, projectRoot: currentProject }
-    // 같은 탭 id 를 다시 열면 갈아 끼운다. `feature:<id>` 에는 프로젝트가 없어서 두 프로젝트가 같은
-    // 기능 id 를 가지면 탭 하나를 나눠 쓰게 되는데, 그때 먼저 만든 기록을 남겨 두면 B 에서 누른 탭이
-    // A 의 설명을 그린다 — 방금 누른 쪽이 이긴다. 이름이 바뀌었을 때 제목이 따라오는 것도 이 덕이다
-    setFeatureTabs((prev) =>
-      prev.some((x) => x.id === id) ? prev.map((x) => (x.id === id ? record : x)) : [...prev, record]
+    // Reached from a sidebar row's click, so in the normal path both exist. Without either this would
+    // be a tab with no name and no project, so do nothing — the same choice openFile makes when it
+    // has no root
+    if (!currentProject || !record) return
+    const id = recordTab(recordId)
+    const tab: RecordTab = { id, recordId, title: record.request, projectRoot: currentProject }
+    // Reopening the same tab id replaces it. `record:<id>` carries no project, so two projects
+    // sharing a record id would share one tab — keeping the earlier record would let a tab just
+    // opened from B draw A's explanation. The one just pressed wins.
+    setRecordTabs((prev) =>
+      prev.some((x) => x.id === id) ? prev.map((x) => (x.id === id ? tab : x)) : [...prev, tab]
     )
     const placed = placeTab(layoutRef.current, id, { activePaneId: activePaneIdRef.current })
     setLayout(placed.root)
     if (placed.paneId) setActivePaneId(placed.paneId)
   }
 
-  /** 기능 하나의 설명을 다시 만들라고 시킨다 — 사이드바 줄과 페인 머리의 [다시 만들기].
+  /** Asks for one record's explanation to be written again — the sidebar row's and the pane head's
+   *  [Write it up again].
    *
-   *  **기다리지 않는다.** 결과는 저장을 거쳐 'understanding:changed' 로 돌아오고(아래 구독),
-   *  그동안 그 줄의 상태가 "만드는 중"으로 서 있다. 여기서 잡는 것은 IPC 자체가 거절되는 경우다
-   *  — 허용 목록 밖의 경로 같은 것 — 그것을 삼키면 눌러도 아무 일이 없는 버튼이 된다. */
-  const regenerateFeature = (projectRoot: string, featureId: string): void => {
-    void window.api.understanding.regenerate(projectRoot, featureId).catch((err) =>
-      toast.error(
-        t('hiw.analyze.failed', { detail: err instanceof Error ? err.message : String(err) })
+   *  **Does not wait.** The result comes back through the store and then 'understanding:changed'
+   *  (subscribed below), and until then the row's status simply reads "Writing up". What is caught
+   *  here is the IPC call itself being rejected — an out-of-allowlist path, say — swallowing that
+   *  would leave a button that does nothing when pressed. */
+  const regenerateRecord = (projectRoot: string, recordId: string): void => {
+    void window.api.understanding
+      .regenerate(projectRoot, recordId)
+      .catch((err) =>
+        toast.error(
+          t('hiw.record.regenerateFailed', { detail: err instanceof Error ? err.message : String(err) })
+        )
       )
-    )
   }
 
-  /** 구현 참조를 눌렀다. 그 경로는 저장소 상대이므로(understanding/types.ts) 지금 프로젝트에 붙여
-   *  절대 경로로 만든 다음 평소의 파일 탭으로 연다 — 설명 옆에 소스를 띄우는 것이 이 화면의 목적이다.
-   *  구분자는 루트의 것을 따른다(core/files/paths.ts 의 resolveRelative 와 같은 관례). */
-  const openFeaturePath = (relPath: string): void => {
+  /** Clicked an implementation reference. Its path is repository-relative (understanding/types.ts),
+   *  so it is joined onto the current project into an absolute path and opened through the usual file
+   *  tab — putting the source beside the explanation is what this screen is for. The separator
+   *  follows the root's own (the same convention as core/files/paths.ts's resolveRelative). */
+  const openRecordPath = (relPath: string): void => {
     const root = currentProjectRef.current
     if (!root) return
     const sep = root.includes('\\') ? '\\' : '/'
-    // `..` 도 함께 거른다. 지금은 main 의 assertAllowedPath 가 어휘적으로 해소해 거부하므로 프로젝트
-    // 밖으로 나가지 못하지만, 이 경로 문자열은 곧 모델이 만든다 — 거른 뒤에 붙이는 편이 싸다
+    // Also filters out `..` — main's assertAllowedPath already resolves paths lexically and rejects
+    // an escape from the project today, but this path string will soon come from the model, and
+    // filtering before joining is cheaper than after
     const parts = relPath.split(/[/\\]/).filter((p) => p !== '' && p !== '.' && p !== '..')
     if (parts.length === 0) return
     openFile(`${root}${sep}${parts.join(sep)}`)
   }
 
-  /** 기능 탭 id → 그 기능의 지금 상태. 탭 줄의 글리프가 이 값을 본다 — 상태는 살아 있는 값이라
-   *  탭 기록에 박아 두지 않는다(박아 두면 다시 분석해도 글리프가 옛것으로 남는다).
+  /** Record tab id → that record's current status. The tab bar's glyph reads this — status is a live
+   *  value, so it is not pinned into the tab record (pinning it would leave the glyph stale after a
+   *  fresh regeneration).
    *
-   *  **지금 읽어 둔 이해가 그 탭의 프로젝트 것일 때만 넣는다.** 기능 id 는 프로젝트마다 겹칠 수
-   *  있으므로 그 확인 없이 넣으면 B 의 탭에 A 의 상태가 붙는다. 캐시가 자기 루트를 들고 있으므로
-   *  그 질문을 곧장 한다 — currentProject 와 비교하는 대리는 프로젝트를 바꾼 뒤 IPC 왕복이 끝나기
-   *  전까지 캐시와 어긋난다. 빠진 탭은 글리프 없이 이름만 그려진다(PaneGrid 의 featureStatuses
-   *  주석) — 사라지는 것보다 낫다.
-   *  dirtyIds 와 같은 갈래다: 판정은 여기서 하고 격자는 조회만 한다. */
-  const featureStatuses: Record<string, FeatureStatus> = {}
-  for (const rec of featureTabs) {
+   *  **Only entered when the understanding held right now belongs to that tab's project.** A record
+   *  id can repeat across projects, so without this check B's tab could pick up A's status. The cache
+   *  carries its own root, so this asks it directly — comparing against currentProject instead would
+   *  be out of sync between switching projects and the IPC round trip finishing. A tab left out of
+   *  this map still draws with a name and no glyph (see the comment on the record slot in PaneGrid) —
+   *  better than disappearing.
+   *  Same split as dirtyIds: the judgment is made here, the grid only looks it up. */
+  const recordStatuses: Record<string, RecordStatus> = {}
+  for (const rec of recordTabs) {
     if (!understanding || rec.projectRoot !== understanding.root) continue
-    const f = understanding.data?.features.find((x) => x.id === rec.featureId)
-    if (f) featureStatuses[rec.id] = f.status
+    const r = understanding.data?.records.find((x) => x.id === rec.recordId)
+    if (r) recordStatuses[rec.id] = r.status
   }
 
-  /** 기능 탭의 본문. renderEditor 와 같은 갈래다 — 페인 격자는 자리만 잡고 내용은 App 이 만든다.
+  /** A record tab's body. Same split as renderEditor — the pane grid only claims a slot, App builds
+   *  what goes in it.
    *
-   *  **읽어 둔 이해가 이 탭의 프로젝트 것일 때만 그린다.** 기능 id 는 프로젝트마다 겹칠 수 있어서,
-   *  그 확인 없이 그리면 방금 활성이 된 A 의 탭에 아직 남아 있는 B 의 설명이 한 프레임 비친다.
-   *  캐시가 자기 루트를 들고 있으므로 그 질문을 곧장 한다(understanding 선언의 주석).
+   *  **Only drawn when the understanding held right now belongs to this tab's project.** A record id
+   *  can repeat across projects, so without this check the tab just activated for A could flash B's
+   *  still-lingering explanation for one frame. The cache carries its own root, so this asks it
+   *  directly (see the comment on the understanding declaration).
    *
-   *  **어긋나면 비우지 않고 이유를 적는다.** 분할 화면에서 다른 프로젝트의 기능 탭이 비활성 페인의
-   *  활성 탭이면 슬롯은 그대로 자리를 잡는데 여기서 null 을 주면 아무 안내 없는 빈 칸이 페인 본문을
-   *  덮는다 — 사용자는 그것을 고장으로 읽는다. 캐시는 프로젝트당 하나뿐이라 이 상태는 그 페인이
-   *  살아 있는 내내 이어질 수 있다(프로젝트를 바꾸는 동안의 한 프레임과 다르다).
-   *  설명이 아직 없으면 explanation 이 null 이고 FeatureDetail 이 그 안내를 그린다. */
-  const renderFeature = (featureTabId: string): React.ReactNode => {
-    const rec = featureTabs.find((x) => x.id === featureTabId)
+   *  **A mismatch draws a reason, not a blank.** In a split view, another project's record tab can be
+   *  the active tab of an unfocused pane — its slot still claims its place, and returning null there
+   *  would cover the pane body with an unexplained blank that reads as broken. The cache is one per
+   *  project, so this state can persist for as long as that pane stays alive (unlike the one frame
+   *  during a project switch). No explanation yet just means `explanation` is undefined, and
+   *  RecordDetail draws that guidance on its own. */
+  const renderRecord = (recordTabId: string): React.ReactNode => {
+    const rec = recordTabs.find((x) => x.id === recordTabId)
     if (!rec) return null
     const u = understanding && rec.projectRoot === understanding.root ? understanding.data : null
-    const f = u ? u.features.find((x) => x.id === rec.featureId) : undefined
-    // .workbench-body 로 한 번 감싼다 — FeatureDetailHost 가 자기 본문에 두르는 그 클래스다.
-    // 페인 슬롯은 flex 상자라, 이것 없이 두면 안내가 페인을 채우지 못하고 글자 폭만큼만 선다
-    if (!u || !f)
+    const r = u ? u.records.find((x) => x.id === rec.recordId) : undefined
+    // Wrapped once in .workbench-body — the same class RecordDetailHost wraps its own body in. The
+    // pane slot is a flex box, so without this the guidance would not fill the pane, only as wide as
+    // its own text
+    if (!u || !r)
       return (
         <div className="workbench-body">
           <div className="hiw-pane hiw-pane-empty">{t('hiw.pane.notInProject')}</div>
         </div>
       )
-    // 좁힘 기억의 키 — 프로젝트와 기능을 함께 담는다(scopeKey 의 주석)
+    // The scoping memory's key — carries the project and the record together (scopeKey's comment)
     const key = scopeKey(rec)
     return (
-      <FeatureDetailHost
-        feature={f}
-        explanation={u.explanations[rec.featureId] ?? null}
+      <RecordDetailHost
+        record={r}
         scopedNodeId={scopedNode[key] ?? null}
         onPickStep={(id) => setScopedNode((m) => ({ ...m, [key]: id }))}
-        onOpenPath={openFeaturePath}
-        onRegenerate={() => regenerateFeature(rec.projectRoot, rec.featureId)}
+        onOpenPath={openRecordPath}
+        onRegenerate={() => regenerateRecord(rec.projectRoot, rec.recordId)}
       />
     )
   }
@@ -2939,49 +2960,20 @@ export default function App(): React.JSX.Element {
               />
             ) : sidebarPane === 'understanding' ? (
               <UnderstandingView
-                // 지금 프로젝트의 것일 때만 넘긴다. 프로젝트를 바꾼 뒤 IPC 왕복이 끝나기 전까지
-                // 캐시는 이전 프로젝트의 것이고, 그대로 넘기면 새 프로젝트 이름 아래에 이전
-                // 프로젝트의 기능 목록이 선다 — 그 줄을 누르면 그리지 못하는 탭이 만들어진다.
-                // 그동안은 분석 전과 같은 빈 상태다(run.list 를 기다리는 실행 구성과 같은 공백)
+                // Passed only when it belongs to the current project. Between switching projects and
+                // the IPC round trip finishing, the cache still holds the previous project's data, and
+                // passing it through as-is would stand the previous project's record list under the
+                // new project's name — clicking a row would then open a tab that draws nothing. Until
+                // then this is the same empty state as before any work was recorded (the same gap a
+                // run configuration shows while waiting on run.list).
                 understanding={understanding?.root === currentProject ? understanding.data : null}
-                // 켜 둘 줄은 탭 트리가 정한다 — 활성 페인의 활성 탭이 기능이면 그 기능이다
-                selectedFeatureId={activeFeatureId}
-                onOpenFeature={openFeatureTab}
-                // [검토] 도 같은 탭을 연다. 검토 흐름 자체는 아직 없고, 그 전까지 이 버튼이 할 수
-                // 있는 가장 정직한 일이 "무엇을 검토할지 펼쳐 보여 주는 것"이다
-                // [다시 만들기] — 기다리지 않는다. 줄의 상태가 곧 "만드는 중"이 되고, 끝나면
-                // 'understanding:changed' 가 이 화면을 다시 읽게 한다
-                onRegenerate={(id) => currentProject && regenerateFeature(currentProject, id)}
-                // 첫 분석 (스펙 §21). **결과를 기다려 보여 준다** — 사용자가 눌러 기다리는
-                // 일이고, 실패하면(생성 계정을 안 골랐다, 에이전트가 답을 못 했다) 그 사유가
-                // 떠야 한다. 성공하면 신호를 올려 사이드바가 새 목록을 다시 읽는다.
-                analyzing={analyzing}
-                onAnalyze={() => {
-                  if (!currentProject || analyzing) return
-                  setAnalyzing(true)
-                  void window.api.understanding
-                    .analyze(currentProject)
-                    .then((r) => {
-                      if (r.ok) {
-                        setUnderstandingSeq((n) => n + 1)
-                        toast.info(t('hiw.analyze.done', { count: String(r.count) }))
-                        return
-                      }
-                      toast.error(
-                        r.reason === 'NO_GENERATOR_ACCOUNT'
-                          ? t('hiw.analyze.noAccount')
-                          : t('hiw.analyze.failed', { detail: r.reason })
-                      )
-                    })
-                    .catch((err) =>
-                      toast.error(
-                        t('hiw.analyze.failed', {
-                          detail: err instanceof Error ? err.message : String(err)
-                        })
-                      )
-                    )
-                    .finally(() => setAnalyzing(false))
-                }}
+                // Which row stays lit is decided by the tab tree — whichever record the active pane's
+                // active tab holds, if any
+                selectedRecordId={activeRecordId}
+                onOpenRecord={openRecordTab}
+                // [Write it up again] — does not wait. The row's status becomes "Writing up" and,
+                // once it finishes, 'understanding:changed' makes this screen read itself again
+                onRegenerate={(id) => currentProject && regenerateRecord(currentProject, id)}
               />
             ) : (
               <>
@@ -3062,10 +3054,10 @@ export default function App(): React.JSX.Element {
                 accounts={accounts}
                 fileTabs={fileTabs}
                 dirtyFileIds={dirtyIds}
-                featureTabs={featureTabs}
-                featureStatuses={featureStatuses}
+                recordTabs={recordTabs}
+                recordStatuses={recordStatuses}
                 renderEditor={renderEditor}
-                renderFeature={renderFeature}
+                renderRecord={renderRecord}
                 rollStates={rollStates}
                 schedStates={schedStates}
                 busy={busy}

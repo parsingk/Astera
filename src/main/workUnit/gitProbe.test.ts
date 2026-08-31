@@ -119,6 +119,9 @@ describe('readRange', () => {
     // git log 는 최신 커밋을 먼저 낸다
     expect(range.commits).toEqual([after, mid])
     expect(range.changedFiles.sort()).toEqual(['g.txt', 'has space/한글.txt'])
+    // subjects: same order and count as commits, but the human-readable line instead of the hash —
+    // this is what feeds the write-up pipeline's material (main/understanding/pipeline.ts)
+    expect(range.subjects).toEqual(['third', 'second'])
   })
 
   it('SHA-256 저장소의 64자 해시를 파일로 오인하지 않는다', async () => {
@@ -152,7 +155,8 @@ describe('readRange', () => {
     await expect(readRange(notRepo, MISSING_HASH, MISSING_HASH)).resolves.toEqual({
       commits: [],
       changedFiles: [],
-      authors: []
+      authors: [],
+      subjects: []
     })
   })
 

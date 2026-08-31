@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import type { FeatureExplanation } from './types'
+import type { RecordExplanation } from './types'
 import { isScopable, scopeToStep } from './scope'
 
-const explanation: FeatureExplanation = {
-  featureId: 'auth',
+const explanation: RecordExplanation = {
   overview: '',
-  userFlow: [
+  userVisibleChanges: [],
+  flow: [
     { id: 'login', label: '로그인 클릭', type: 'start', next: [{ targetId: 'session' }] },
     {
       id: 'session',
@@ -16,18 +16,13 @@ const explanation: FeatureExplanation = {
       evidenceIds: ['e-store', 'e-svc']
     }
   ],
-  failureFlows: [],
-  keyDecisions: [
+  decisions: [
     { id: 'd1', title: '서버 세션', reason: '', source: 'adr', sourceLabel: 'ADR-012', evidenceIds: ['e-store'] },
     { id: 'd2', title: '어댑터 분리', reason: '', source: 'agent', sourceLabel: '추정', evidenceIds: ['e-oauth'] }
   ],
   implementation: [
     { role: '세션 저장', path: 'src/auth/SessionStore.ts', evidenceIds: ['e-store'] },
     { role: 'Google 연동', path: 'src/auth/GoogleOAuthProvider.ts', evidenceIds: ['e-oauth'] }
-  ],
-  recentChanges: [
-    { id: 'c1', at: '2026-08-29T00:00:00.000Z', sourceKind: 'session', sourceId: '182', sourceLabel: '세션 #182', body: '', evidenceIds: ['e-svc'] },
-    { id: 'c2', at: '2026-08-21T00:00:00.000Z', sourceKind: 'job', sourceId: '51', sourceLabel: 'Job #51', body: '', evidenceIds: ['e-oauth'] }
   ],
   evidence: [],
   userEdited: false,
@@ -36,11 +31,11 @@ const explanation: FeatureExplanation = {
 
 describe('isScopable', () => {
   it('근거가 붙은 단계만 고를 수 있다', () => {
-    expect(isScopable(explanation.userFlow[1])).toBe(true)
+    expect(isScopable(explanation.flow[1])).toBe(true)
   })
 
   it('근거가 없는 단계는 고를 수 없다 — 좁힐 것이 없다', () => {
-    expect(isScopable(explanation.userFlow[0])).toBe(false)
+    expect(isScopable(explanation.flow[0])).toBe(false)
   })
 })
 
@@ -50,13 +45,13 @@ describe('scopeToStep', () => {
     expect(v.node.id).toBe('session')
     expect(v.decisions.map((d) => d.id)).toEqual(['d1'])
     expect(v.implementation.map((i) => i.path)).toEqual(['src/auth/SessionStore.ts'])
-    expect(v.changes.map((c) => c.id)).toEqual(['c1'])
   })
 
-  it('실패 갈래의 단계도 찾는다', () => {
-    const withFailure: FeatureExplanation = {
+  it('흐름에 실패 갈래가 섞여 있어도 그 단계를 찾는다', () => {
+    const withFailure: RecordExplanation = {
       ...explanation,
-      failureFlows: [
+      flow: [
+        ...explanation.flow,
         { id: 'authfail', label: '인증 실패', type: 'failure', next: [], evidenceIds: ['e-oauth'] }
       ]
     }
