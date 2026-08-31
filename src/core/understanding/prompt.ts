@@ -6,6 +6,7 @@
 //
 // node: import 없음. 파일 내용은 부르는 쪽이 읽어 넣는다 — 이 모듈은 문자열만 만든다.
 import type { Lang } from '../i18n'
+import type { SessionCheck } from './types'
 
 /** What to call each language **inside the prompt**. The model is told to write in one of these, so
  *  the name is given in English — that is the language the rest of the prompt is in, and a model
@@ -61,6 +62,12 @@ export interface RecordRequest {
   tasks?: readonly { title: string; outcome: string }[]
   /** Job only */
   validation?: { status: string; summary?: string }
+  /** Session only: what the agent said it ran with `session-task-complete`. **It said so; nobody
+   *  measured it** — a Job's `validation` above is the app's own result, which is why the two
+   *  never appear together. */
+  checks?: readonly SessionCheck[]
+  /** Session only: the agent's own one-line summary from `session-task-complete`. */
+  resultSummary?: string
   projectRoot: string
 }
 
@@ -81,6 +88,12 @@ export function buildRecordPrompt(req: RecordRequest): string {
     : ''
   const commits =
     req.commits.length > 0 ? `\n\nCommits in this range:\n${req.commits.map((c) => `- ${c}`).join('\n')}` : ''
+  const checks =
+    req.checks && req.checks.length > 0
+      ? `\n\nWhat the agent reported running (it said so; nobody measured it):\n` +
+        req.checks.map((c) => `- ${c.name}: ${c.status}`).join('\n')
+      : ''
+  const said = req.resultSummary ? `\n\nThe agent's own one-line summary:\n${req.resultSummary}` : ''
 
   return `${EXPLANATION_CONTRACT}
 
@@ -91,7 +104,7 @@ What the person asked for, verbatim:
 ${req.request}
 
 Files that changed while this work was open:
-${req.changedFiles.map((f) => `- ${f}`).join('\n')}${commits}${jobSection}${validation}
+${req.changedFiles.map((f) => `- ${f}`).join('\n')}${commits}${checks}${said}${jobSection}${validation}
 
 Write every sentence a person reads in ${language}: "overview", "userVisibleChanges", every
 "label", "description" and "condition" in "flow", every "title" and "reason" in "decisions", every

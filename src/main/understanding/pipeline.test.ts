@@ -20,11 +20,15 @@ const agentReply = vi.hoisted(() => ({
   calls: 0,
   /** 에이전트가 도는 **동안** 벌어지는 일. 실제로는 여기가 수십 초라 그 사이에 사용자가
    *  설명을 고치거나 다시 분석할 수 있다 — 그 틈을 이 자리에서 만든다 */
-  during: null as null | (() => Promise<void>)
+  during: null as null | (() => Promise<void>),
+  /** The prompt handed to the last call — lets a test check what material reached the agent
+   *  without re-deriving buildRecordPrompt's own logic. */
+  lastPrompt: null as string | null
 }))
 vi.mock('./agent', () => ({
-  runAgent: async (): Promise<{ ok: boolean; value?: unknown; reason?: string }> => {
+  runAgent: async (a: { prompt: string }): Promise<{ ok: boolean; value?: unknown; reason?: string }> => {
     agentReply.calls += 1
+    agentReply.lastPrompt = a.prompt
     if (agentReply.during) await agentReply.during()
     return agentReply.fail ? { ok: false, reason: agentReply.fail } : { ok: true, value: agentReply.value }
   }
@@ -104,6 +108,7 @@ beforeEach(async () => {
   agentReply.fail = null
   agentReply.calls = 0
   agentReply.during = null
+  agentReply.lastPrompt = null
 })
 afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
@@ -199,6 +204,59 @@ describe('onUnitClosed — 닫힌 작업이 기록이 된다', () => {
     await pipeline.onUnitClosed(projectRoot, unit())
     expect(changed.length).toBeGreaterThanOrEqual(2) // 만드는 중 + 결과
   })
+
+  it('보고된 검사가 기록에 남고 verification 이 파생된다', async () => {
+    const { store, pipeline } = await make()
+    agentReply.value = explanation()
+    await pipeline.onUnitClosed(
+      projectRoot,
+      unit({ checks: [{ name: '단위 테스트', status: 'passed' }], resultSummary: '통과했다' })
+    )
+    const r = store.get(projectRoot)!.records[0]
+    expect(r.verification).toEqual({
+      status: 'verified',
+      checks: [{ name: '단위 테스트', status: 'passed' }],
+      summary: '통과했다'
+    })
+  })
+
+  it('검사 하나가 실패하면 기록은 needs-review 로 선다 — 라이프사이클은 completed 그대로다', async () => {
+    const { store, pipeline } = await make()
+    agentReply.value = explanation() // agent's own write-up is clean: needsReview is false
+    const u = unit({ checks: [{ name: '단위 테스트', status: 'failed' }] })
+    await pipeline.onUnitClosed(projectRoot, u)
+    const r = store.get(projectRoot)!.records[0]
+    expect(r.verification?.status).toBe('failed')
+    expect(r.status).toBe('needs-review')
+    expect(r.reason).toBe('CHECK_FAILED')
+    expect(u.status).toBe('completed') // the unit's own lifecycle never moves
+  })
+
+  it('보고된 검사가 없으면 unverified 다', async () => {
+    const { store, pipeline } = await make()
+    agentReply.value = explanation()
+    await pipeline.onUnitClosed(projectRoot, unit())
+    const r = store.get(projectRoot)!.records[0]
+    expect(r.verification).toEqual({ status: 'unverified' })
+  })
+
+  it('에이전트의 요약이 프롬프트 재료로 들어간다', async () => {
+    const { pipeline } = await make()
+    agentReply.value = explanation()
+    await pipeline.onUnitClosed(projectRoot, unit({ resultSummary: '한도 감지를 고쳤다' }))
+    expect(agentReply.lastPrompt).toContain('한도 감지를 고쳤다')
+  })
+
+  // Forcing needs-review must not overwrite a reason the model already gave — only stand in when
+  // the write-up itself came back clean.
+  it('모델이 이미 needs-review 사유를 냈으면 실패한 검사가 있어도 그 사유를 지우지 않는다', async () => {
+    const { store, pipeline } = await make()
+    agentReply.value = explanation({ needsReview: true, needsReviewReason: '커밋을 찾지 못했다' })
+    await pipeline.onUnitClosed(projectRoot, unit({ checks: [{ name: '단위 테스트', status: 'failed' }] }))
+    const r = store.get(projectRoot)!.records[0]
+    expect(r.status).toBe('needs-review')
+    expect(r.reason).toContain('커밋')
+  })
 })
 
 describe('onRunFinished — 끝난 Job Run 이 기록이 된다', () => {
@@ -220,14 +278,15 @@ describe('onRunFinished — 끝난 Job Run 이 기록이 된다', () => {
     expect(seen?.request).toBe('단축키가 겹치는 곳을 찾아 정리해줘') // Run 의 objective 그대로
   })
 
-  it('jobTasks 와 validation 이 기록에 그대로 실린다', async () => {
+  it('jobTasks 가 그대로 실리고, validation 은 verification 으로 파생된다', async () => {
     const { store, pipeline } = await make()
     agentReply.value = explanation()
     await pipeline.onRunFinished(projectRoot, runInput())
     const r = store.get(projectRoot)!.records[0]
     expect(r.status).toBe('ready')
     expect(r.jobTasks).toEqual([{ title: '충돌 찾기', outcome: 'completed' }])
-    expect(r.validation).toEqual({ status: 'passed' })
+    expect(r.verification).toEqual({ status: 'verified' })
+    expect(r.validation).toBeUndefined() // nothing new writes the old field any more
   })
 
   it('changedFiles 는 입력 그대로 실린다 — Job 의 각 task 가 이미 무엇을 건드렸는지 보고한다', async () => {
