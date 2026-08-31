@@ -238,8 +238,8 @@ describe('onRunFinished — 끝난 Job Run 이 기록이 된다', () => {
     expect(store.get(projectRoot)!.records[0].changedFiles).toEqual(['src/auth/login.ts', 'src/a.ts'])
   })
 
-  // fill() 은 onUnitClosed 와 같은 코드를 타므로, 그 실패 경로 전부를 여기서 다시 확인하지는
-  // 않는다 — 대표로 하나만, Job 도 같은 계정 확인을 거친다는 것만 확인한다
+  // fill() is the same code onUnitClosed runs, so its failure branches are not re-checked here.
+  // One stands for all of them: that a Job record goes through the same account gate.
   it('생성 계정이 없으면 그 사유가 기록에 남는다', async () => {
     const { store, pipeline } = await make({})
     await pipeline.onRunFinished(projectRoot, runInput())

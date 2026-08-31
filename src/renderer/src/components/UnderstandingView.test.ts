@@ -85,8 +85,8 @@ describe('UnderstandingView', () => {
     expect(html).not.toContain('INTERRUPTED')
   })
 
-  // 그 외 사유는 에이전트나 validator 가 쓴 자유 문장이므로 그대로 보인다 — 모르는 코드를
-  // 지어내 옮기지 않는다
+  // Every other reason is a free-form sentence the agent or the validator wrote, so it is shown
+  // as it stands. Text we do not control gets no invented translation.
   it('알려지지 않은 사유는 고치지 않고 그대로 보인다', () => {
     const html = render({ records: [rec({ status: 'failed', reason: '알 수 없는 이유로 실패했다' })] })
     expect(html).toContain('알 수 없는 이유로 실패했다')
