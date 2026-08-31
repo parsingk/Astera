@@ -129,7 +129,44 @@ export interface ProjectUnderstanding {
   records: WorkRecord[]
 }
 
-/** Placeholder until Task 2 gives it its fields. */
+/** Where a record came from. A session's work unit, or one Job Run. */
+export type RecordSource =
+  | { kind: 'session'; sessionId: string; label: string }
+  | { kind: 'job'; runId: string; jobName: string; taskIds: string[] }
+
+/** A record is written the moment the work closes and filled in afterwards, so its state is about
+ *  the write-up rather than about the work — the work is already done. */
+export type RecordStatus = 'generating' | 'ready' | 'needs-review' | 'failed'
+
+/** One finished piece of work. The spec's ProjectChangeRecord (§14) in this repository's style. */
 export interface WorkRecord {
   id: string
+  /** ISO. When the work finished — the axis the list sorts on */
+  at: string
+  source: RecordSource
+  /** What the person actually asked for, verbatim. No agent decides this. */
+  request: string
+  changedFiles: string[]
+  git: { startHead: string | null; endHead: string | null; commits?: string[] }
+  /** A Job carries its validation outcome; a session has none */
+  validation?: { status: 'passed' | 'failed' | 'unknown'; summary?: string }
+  status: RecordStatus
+  /** Why it needs review, or why the write-up failed. Shown on the row. */
+  reason?: string
+  explanation?: RecordExplanation
+}
+
+/** What the agent writes about one piece of work. Every field's shape is one the detail pane
+ *  already renders, which is why that pane needs no changes. */
+export interface RecordExplanation {
+  overview: string
+  /** What a person using the product will notice. Empty when the work changed nothing user-facing. */
+  userVisibleChanges: string[]
+  flow: FlowNode[]
+  decisions: ExplanationDecision[]
+  implementation: ImplementationRef[]
+  evidence: ExplanationEvidence[]
+  /** A person edited this write-up. Regeneration in the background must not overwrite it (§56). */
+  userEdited: boolean
+  generatedAt: string
 }

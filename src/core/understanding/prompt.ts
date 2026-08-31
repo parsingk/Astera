@@ -72,3 +72,79 @@ The reader clicks a step to see what it rests on; a step that names nothing cann
 the reader is left with a diagram they cannot open. Name the file you actually read for that step,
 not the whole feature's file list.`
 
+export interface RecordRequest {
+  /** The user's own words, verbatim — for a Job, its objective */
+  request: string
+  changedFiles: readonly string[]
+  /** Commit subjects in the unit's git range. Empty when nothing was committed. */
+  commits: readonly string[]
+  /** Job only: what the run's tasks were and how each ended */
+  tasks?: readonly { title: string; outcome: string }[]
+  /** Job only */
+  validation?: { status: string; summary?: string }
+  projectRoot: string
+}
+
+/** Ask for a write-up of **one piece of work that just finished** — not of the project.
+ *
+ *  The material is deliberately small (§29): the request, the files that changed, the commits in
+ *  the range, and for a Job its tasks. Discovery used to hand over a repository skeleton and take
+ *  ten minutes; there is nothing of that shape here, and the reading budget keeps it that way. */
+export function buildRecordPrompt(req: RecordRequest): string {
+  const jobSection =
+    req.tasks && req.tasks.length > 0
+      ? `\n\nTasks in this run and how each ended:\n` +
+        req.tasks.map((t) => `- ${t.title} — ${t.outcome}`).join('\n')
+      : ''
+  const validation = req.validation
+    ? `\n\nValidation: ${req.validation.status}${req.validation.summary ? ` — ${req.validation.summary}` : ''}`
+    : ''
+  const commits =
+    req.commits.length > 0 ? `\n\nCommits in this range:\n${req.commits.map((c) => `- ${c}`).join('\n')}` : ''
+
+  return `${EXPLANATION_CONTRACT}
+
+You are writing up **one piece of work that just finished** in the project at ${req.projectRoot}.
+Not what the project does — what this particular piece of work changed, and how.
+
+What the person asked for, verbatim:
+${req.request}
+
+Files that changed while this work was open:
+${req.changedFiles.map((f) => `- ${f}`).join('\n')}${commits}${jobSection}${validation}
+
+Read what you need to explain this change. Read only — never modify anything.
+
+**Work to a budget: open at most 10 files, and stop as soon as every step has a file behind it.**
+You are running in the background under a time limit; a write-up that never finishes is worth less
+than a grounded one that does. If the budget runs out before you can ground something, say so in
+"needsReview" rather than reading further.
+
+${RECORD_OUTPUT_SHAPE}`
+}
+
+const RECORD_OUTPUT_SHAPE = `Respond with a single JSON object, no markdown fence, of this exact shape:
+{
+  "overview": string,               // 2-4 sentences on what is different now, contract rules apply
+  "userVisibleChanges": string[],   // what a person using the product will notice; [] if none
+  "flow": FlowNode[],               // the order things happen in, for the part that changed
+  "decisions": { "title": string, "reason": string, "sourceLabel": string,
+                 "evidencePaths": string[] }[],
+  "implementation": { "role": string, "path": string }[],  // repo-relative, forward slashes
+  "evidencePaths": string[],        // every file you actually read to ground this
+  "needsReview": boolean,           // true when evidence was insufficient (rule 13)
+  "needsReviewReason": string       // required when needsReview is true
+}
+FlowNode = { "id": string, "label": string, "type": "start"|"step"|"decision"|"success"|"failure",
+             "description": string, "next": { "targetId": string, "condition"?: string }[],
+             "evidencePaths": string[] }
+Labels must be under 22 characters — a longer label means the step name became a sentence;
+put the sentence in "description" instead. A "condition" is a tag on a branch, not a sentence:
+keep it under 12 characters.
+
+"flow" is drawn as a diagram and must be closed: every "targetId" must be the id of another node
+in "flow".
+
+Every step and every decision must name the files it is built from, in its own "evidencePaths".
+The reader clicks a step to see what it rests on; a step that names nothing cannot be clicked.`
+

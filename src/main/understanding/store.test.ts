@@ -40,7 +40,19 @@ describe('UnderstandingStore', () => {
     const s = new UnderstandingStore(file)
     await s.load()
     await s.set('C:/a', sample)
-    await s.set('C:/b', { records: [{ id: 'x' }] })
+    await s.set('C:/b', {
+      records: [
+        {
+          id: 'x',
+          at: new Date().toISOString(),
+          source: { kind: 'session', sessionId: 's', label: 'label' },
+          request: 'r',
+          changedFiles: [],
+          git: { startHead: null, endHead: null },
+          status: 'ready'
+        }
+      ]
+    })
     expect(s.get('C:/a')!.records).toHaveLength(0)
     expect(s.get('C:/b')!.records).toHaveLength(1)
   })

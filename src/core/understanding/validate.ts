@@ -9,11 +9,12 @@
 import type { FlowNode, FlowNodeType } from './types'
 import { evidenceIdOf } from './evidence'
 
-export interface ValidatedExplanation {
+export interface ValidatedRecord {
   overview: string
-  userFlow: FlowNode[]
-  failureFlows: FlowNode[]
-  keyDecisions: { title: string; reason: string; sourceLabel: string; evidenceIds?: string[] }[]
+  /** What a person using the product will notice; empty when the work changed nothing user-facing */
+  userVisibleChanges: string[]
+  flow: FlowNode[]
+  decisions: { title: string; reason: string; sourceLabel: string; evidenceIds?: string[] }[]
   implementation: { role: string; path: string; evidenceIds?: string[] }[]
   /** 위 셋이 댄 경로까지 모두 합친 것 — 근거 목록은 여기서 만들어진다 */
   evidencePaths: string[]
@@ -22,7 +23,7 @@ export interface ValidatedExplanation {
 }
 
 export type ValidationResult =
-  | { ok: true; value: ValidatedExplanation }
+  | { ok: true; value: ValidatedRecord }
   | { ok: false; reason: string }
 
 const NODE_TYPES: readonly FlowNodeType[] = ['start', 'step', 'decision', 'success', 'failure']
@@ -91,15 +92,10 @@ function readNode(v: unknown, at: string, sink: string[]): FlowNode | string {
   }
 }
 
-/**
- * @param known 간선이 가리켜도 되는 id 들. 주지 않으면 자기 안에서만 풀린다.
- *
- *  **두 흐름의 규칙이 다르다.** `userFlow` 는 화면에 그래프로 그려지므로(FlowDiagram → layoutFlow)
- *  없는 칸을 가리키면 선이 허공으로 간다 — 자기 안에서 닫혀 있어야 한다. `failureFlows` 는 목록으로
- *  그려질 뿐 간선을 그리지 않으므로, 본류로 돌아가는 간선을 가졌다고 해서 설명 전체를 버릴 이유가
- *  없다. 실제로 그것 때문에 216초짜리 생성 하나가 통째로 버려졌다(실측).
- */
-function readFlow(v: unknown, name: string, sink: string[], known?: Set<string>): FlowNode[] | string {
+/** Reads one flow and checks it is closed — every `next.targetId` must name a node inside this
+ *  same array. `flow` is drawn as a diagram (FlowDiagram → layoutFlow), so a dangling target would
+ *  draw a line to nowhere. */
+function readFlow(v: unknown, name: string, sink: string[]): FlowNode[] | string {
   if (!Array.isArray(v)) return `${name} 이 배열이 아니다`
   const nodes: FlowNode[] = []
   for (let i = 0; i < v.length; i++) {
@@ -108,7 +104,7 @@ function readFlow(v: unknown, name: string, sink: string[], known?: Set<string>)
     nodes.push(n)
   }
   // 간선이 없는 칸을 가리키면 화면의 배치가 실패한다 — 지금 잡는 편이 낫다
-  const ids = known ?? new Set(nodes.map((n) => n.id))
+  const ids = new Set(nodes.map((n) => n.id))
   for (const n of nodes)
     for (const e of n.next)
       if (!ids.has(e.targetId)) return `${name}: ${n.id} 가 없는 칸 ${e.targetId} 를 가리킨다`
@@ -119,46 +115,35 @@ function readFlow(v: unknown, name: string, sink: string[], known?: Set<string>)
  * @param fileExists 저장소 상대 경로가 실재하는가 — 부르는 쪽(main)이 fs 로 답한다.
  *   **근거 검증의 요점이다**: 에이전트가 대는 경로가 유령이면 그 설명은 §24-12 를 어긴 것이다.
  */
-export function validateExplanation(
+export function validateRecord(
   raw: unknown,
   fileExists: (repoRelativePath: string) => boolean
 ): ValidationResult {
   if (!isObj(raw)) return bad('출력이 JSON 객체가 아니다')
   if (!isStr(raw.overview)) return bad('overview 가 없다')
 
+  if (!Array.isArray(raw.userVisibleChanges) || raw.userVisibleChanges.some((x) => typeof x !== 'string'))
+    return bad('userVisibleChanges 가 문자열 배열이 아니다')
+
   // 항목들이 댄 근거 경로가 여기 모인다 — 실재 검사도, 근거 목록도 이 합집합에서 나온다
   const cited: string[] = []
-  const userFlow = readFlow(raw.userFlow, 'userFlow', cited)
-  if (typeof userFlow === 'string') return bad(userFlow)
-  if (userFlow.length === 0) return bad('userFlow 가 비어 있다 — 흐름 없는 설명은 화면이 그릴 것이 없다')
-  const failureFlows = readFlow(
-    raw.failureFlows ?? [],
-    'failureFlows',
-    cited,
-    // 본류로 돌아가는 간선을 허용한다 — 위 readFlow 의 주석. 자기 자신도 포함해야 하므로
-    // 먼저 id 만 훑어 모은다(그 배열은 아직 검증 전이라 모양을 믿지 않고 방어적으로 읽는다)
-    new Set([
-      ...userFlow.map((n) => n.id),
-      ...(Array.isArray(raw.failureFlows) ? raw.failureFlows : []).flatMap((n) =>
-        isObj(n) && isStr(n.id) ? [n.id] : []
-      )
-    ])
-  )
-  if (typeof failureFlows === 'string') return bad(failureFlows)
+  const flow = readFlow(raw.flow, 'flow', cited)
+  if (typeof flow === 'string') return bad(flow)
+  if (flow.length === 0) return bad('flow 가 비어 있다 — 흐름 없는 설명은 화면이 그릴 것이 없다')
 
-  if (!Array.isArray(raw.keyDecisions)) return bad('keyDecisions 가 배열이 아니다')
-  const keyDecisions: ValidatedExplanation['keyDecisions'] = []
-  for (const d of raw.keyDecisions) {
+  if (!Array.isArray(raw.decisions)) return bad('decisions 가 배열이 아니다')
+  const decisions: ValidatedRecord['decisions'] = []
+  for (const d of raw.decisions) {
     if (!isObj(d) || !isStr(d.title) || !isStr(d.reason) || !isStr(d.sourceLabel))
-      return bad('keyDecisions 항목이 title/reason/sourceLabel 을 잃었다')
-    const ids = readEvidenceIds(d.evidencePaths, 'keyDecisions', cited)
+      return bad('decisions 항목이 title/reason/sourceLabel 을 잃었다')
+    const ids = readEvidenceIds(d.evidencePaths, 'decisions', cited)
     if (ids !== undefined && !Array.isArray(ids)) return bad(ids.err)
-    keyDecisions.push({ title: d.title, reason: d.reason, sourceLabel: d.sourceLabel, evidenceIds: ids })
+    decisions.push({ title: d.title, reason: d.reason, sourceLabel: d.sourceLabel, evidenceIds: ids })
   }
 
   if (!Array.isArray(raw.implementation) || raw.implementation.length === 0)
     return bad('implementation 이 비어 있다 — 근거 없는 설명이다 (§24-12)')
-  const implementation: ValidatedExplanation['implementation'] = []
+  const implementation: ValidatedRecord['implementation'] = []
   for (const i of raw.implementation) {
     if (!isObj(i) || !isStr(i.role) || !isStr(i.path))
       return bad('implementation 항목이 role/path 를 잃었다')
@@ -189,6 +174,15 @@ export function validateExplanation(
 
   return {
     ok: true,
-    value: { overview: raw.overview, userFlow, failureFlows, keyDecisions, implementation, evidencePaths, needsReview, needsReviewReason }
+    value: {
+      overview: raw.overview,
+      userVisibleChanges: raw.userVisibleChanges as string[],
+      flow,
+      decisions,
+      implementation,
+      evidencePaths,
+      needsReview,
+      needsReviewReason
+    }
   }
 }
