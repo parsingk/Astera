@@ -34,7 +34,8 @@ const EVENT_CHANNELS = [
   'terminal:data',
   'terminal:exit',
   'orch:state',
-  'understanding:changed'
+  'understanding:changed',
+  'sessionTasks:changed'
 ]
 
 const api = {
@@ -208,6 +209,11 @@ const api = {
   understanding: {
     get: invoke('understanding.get'),
     regenerate: invoke('understanding.regenerate')
+  },
+  sessionTasks: {
+    list: invoke('sessionTasks.list'),
+    complete: invoke('sessionTasks.complete'),
+    cancel: invoke('sessionTasks.cancel')
   },
   platform: process.platform,
   win: {

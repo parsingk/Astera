@@ -944,6 +944,8 @@ export const es: Catalog = {
     'No hay una cuenta de explicación configurada — elige una en Configuración → General.',
   'hiw.record.reason.interrupted':
     'La aplicación se cerró mientras esto se estaba redactando — pulsa el botón de abajo para volver a intentarlo.',
+  'hiw.record.reason.checkFailed':
+    'Una comprobación que ejecutó el agente no pasó — vale la pena revisar el resultado.',
   'hiw.pane.overview': 'Qué hace',
   'hiw.pane.userVisible': 'Qué notarás',
   'hiw.pane.flow': 'Cómo funciona',
@@ -959,5 +961,22 @@ export const es: Catalog = {
   'hiw.empty.readOnly': 'Solo lectura — tu código no se modifica.',
   'hiw.pane.notYet': 'Este botón aún no está listo.',
   'hiw.pane.noExplanation': 'Este registro aún no tiene explicación.',
-  'hiw.pane.notInProject': 'El registro de esta pestaña no está en el proyecto abierto actualmente.'
+  'hiw.pane.notInProject': 'El registro de esta pestaña no está en el proyecto abierto actualmente.',
+  'hiw.open.title': 'En curso',
+  'hiw.open.interruptedTitle': 'Quedó sin terminar',
+  'hiw.open.complete': 'Hecho',
+  'hiw.open.cancel': 'Cancelar',
+  'hiw.open.completeFailed': 'No se pudo marcar como hecho: {detail}',
+  'hiw.open.cancelFailed': 'No se pudo cancelar: {detail}',
+  'hiw.open.startedAt': 'Iniciado a las {time}',
+  'hiw.open.reason.newTask': 'Se detuvo porque empezó otra tarea',
+  'hiw.open.reason.sessionEnd': 'Se detuvo porque la sesión terminó',
+  'hiw.open.reason.appRestart': 'Se detuvo porque la aplicación se cerró',
+  'hiw.open.reason.trackingOff': 'Se detuvo porque se desactivó el seguimiento',
+  'hiw.open.reason.upgrade': 'Se detuvo porque la aplicación se actualizó',
+  'hiw.verify.verified': 'Todas las comprobaciones reportadas pasaron',
+  'hiw.verify.partial': 'Solo se comprobó una parte',
+  'hiw.verify.unverified': 'No se comprobó nada',
+  'hiw.verify.failed': 'Una comprobación reportada falló',
+  'hiw.verify.reported': 'Lo reportó el agente — la aplicación no lo ejecutó por su cuenta'
 }

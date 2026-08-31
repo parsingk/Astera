@@ -35,6 +35,7 @@ import { GeneratorSettings } from './components/GeneratorSettings'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import type {
+  OpenSessionTask,
   OrchSnapshot,
   RunConfig,
   RunContext,
@@ -456,6 +457,12 @@ export default function App(): React.JSX.Element {
     root: string
     data: ProjectUnderstanding | null
   } | null>(null)
+  /** How It Works screen's open-task section — same shape as `understanding` just above, right down
+   *  to why the root rides along with it (that comment applies here unchanged) and why a second
+   *  sequence number exists (a completed/cancelled task's own IPC call does not change
+   *  `currentProject`, so the loading effect would never re-run without one). */
+  const [sessionTasksSeq, setSessionTasksSeq] = useState(0)
+  const [openTasks, setOpenTasks] = useState<{ root: string; data: OpenSessionTask[] } | null>(null)
   const [isMax, setIsMax] = useState(false)
   const [usage, setUsage] = useState<SessionUsage | null>(null)
   const [rollStates, setRollStates] = useState<Record<string, RollStateEvent>>({})
@@ -2087,6 +2094,29 @@ export default function App(): React.JSX.Element {
       )
   }
 
+  /** [완료] on an open-task row — closes it with `source: 'user'`, active or interrupted either way.
+   *  The write-up starts on main's side of this call, not before: nothing here creates it directly.
+   *  Does not wait for the redraw — 'sessionTasks:changed' (subscribed above) does that once main's
+   *  onTasksChanged fires, the same shape as [Write it up again] above. */
+  const completeOpenTask = (projectRoot: string, id: string): void => {
+    void window.api.sessionTasks
+      .complete(projectRoot, id)
+      .catch((err) =>
+        toast.error(
+          t('hiw.open.completeFailed', { detail: err instanceof Error ? err.message : String(err) })
+        )
+      )
+  }
+
+  /** [취소] on an open-task row — closes it with nothing written up; the row simply disappears. */
+  const cancelOpenTask = (projectRoot: string, id: string): void => {
+    void window.api.sessionTasks
+      .cancel(projectRoot, id)
+      .catch((err) =>
+        toast.error(t('hiw.open.cancelFailed', { detail: err instanceof Error ? err.message : String(err) }))
+      )
+  }
+
   /** Clicked an implementation reference. Its path is repository-relative (understanding/types.ts),
    *  so it is joined onto the current project into an absolute path and opened through the usual file
    *  tab — putting the source beside the explanation is what this screen is for. The separator
@@ -2255,6 +2285,27 @@ export default function App(): React.JSX.Element {
     }
   }, [currentProject, understandingSeq])
 
+  // The open-task section's own load — same shape as the understanding effect just above, including
+  // the root travelling with the data and the two failure/success branches resolving to the same
+  // project key. main folds the project path to the origin repo before answering (sessionTasks.list's
+  // comment in ipc.ts), so this effect does not need to do that folding itself.
+  useEffect(() => {
+    if (!currentProject) return setOpenTasks(null)
+    const root = currentProject
+    let alive = true
+    void window.api.sessionTasks.list(root).then(
+      (tasks) => {
+        if (alive) setOpenTasks({ root, data: tasks })
+      },
+      () => {
+        if (alive) setOpenTasks({ root, data: [] })
+      }
+    )
+    return () => {
+      alive = false
+    }
+  }, [currentProject, sessionTasksSeq])
+
   // Turning the setting off makes the rail button — the only control that can close the Jobs view —
   // disappear along with it (it is gated on the same orchEnabled), so a view left open past that point
   // is one the user has no way left to reach the control for. Closing it here is what lets the
@@ -2317,6 +2368,15 @@ export default function App(): React.JSX.Element {
   // 그래서 어느 프로젝트의 것이든 다시 읽기만 한다: 접기를 아는 쪽(understanding.get)이 답한다.
   useEffect(() => {
     return window.api.on('understanding:changed', () => setUnderstandingSeq((n) => n + 1))
+  }, [])
+
+  // A task started, was completed/cancelled, or was interrupted — the collector's onTasksChanged
+  // fires for all of these (collector.ts). Same shape as the listener just above, including not
+  // comparing the pushed key against currentProject: it is folded to the origin repo the same way
+  // (ipc.ts's sessionTasks wiring), so this only re-reads through sessionTasks.list, which folds the
+  // same way on the way in.
+  useEffect(() => {
+    return window.api.on('sessionTasks:changed', () => setSessionTasksSeq((n) => n + 1))
   }, [])
 
   // When the project changes, that project's terminal list is read again — main holds them per project,
@@ -2974,6 +3034,11 @@ export default function App(): React.JSX.Element {
                 // [Write it up again] — does not wait. The row's status becomes "Writing up" and,
                 // once it finishes, 'understanding:changed' makes this screen read itself again
                 onRegenerate={(id) => currentProject && regenerateRecord(currentProject, id)}
+                // Same "only when it belongs to the current project" guard as `understanding` above,
+                // for the same reason.
+                openTasks={openTasks?.root === currentProject ? openTasks.data : []}
+                onCompleteTask={(id) => currentProject && completeOpenTask(currentProject, id)}
+                onCancelTask={(id) => currentProject && cancelOpenTask(currentProject, id)}
               />
             ) : (
               <>

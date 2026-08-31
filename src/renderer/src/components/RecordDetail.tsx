@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { WorkRecord } from '../../../core/understanding/types'
+import type { MessageKey } from '../../../core/i18n'
+import type { Verification, WorkRecord } from '../../../core/understanding/types'
 import { scopeToStep } from '../../../core/understanding/scope'
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
@@ -8,6 +9,31 @@ import { RECORD_GLYPH, RECORD_GLYPH_COLOR, RECORD_STATUS_KEY, StatusGlyph } from
 
 /** 참조 단이 접히는 폭. 이 아래에서는 왼쪽 본문이 40자 밑으로 내려가 흐름도가 잘린다. */
 const NARROW_PANE = 720
+
+const VERIFY_KEY: Record<Verification, MessageKey> = {
+  verified: 'hiw.verify.verified',
+  partial: 'hiw.verify.partial',
+  unverified: 'hiw.verify.unverified',
+  failed: 'hiw.verify.failed'
+}
+
+/** `verification` is what every reader should prefer (types.ts). A record written before that
+ *  field's replacement carries only the old `validation` shape — this folds it onto the same four
+ *  states, the same mapping `pipeline.ts`'s `onRunFinished` already uses for a Job's own result, so
+ *  those older records stay readable instead of showing nothing. */
+const verificationOf = (r: WorkRecord): { status: Verification; summary?: string } | undefined => {
+  if (r.verification) return r.verification
+  if (!r.validation) return undefined
+  return {
+    status:
+      r.validation.status === 'passed'
+        ? 'verified'
+        : r.validation.status === 'failed'
+          ? 'failed'
+          : 'unverified',
+    summary: r.validation.summary
+  }
+}
 
 type RecordDetailProps = {
   record: WorkRecord
@@ -42,6 +68,7 @@ export function RecordDetail({
 }: RecordDetailProps): React.JSX.Element {
   const { t } = useI18n()
   const explanation = record.explanation
+  const verification = verificationOf(record)
 
   if (!explanation) {
     return <div className="hiw-pane hiw-pane-empty">{t('hiw.pane.noExplanation')}</div>
@@ -142,6 +169,16 @@ export function RecordDetail({
           </button>
         )}
       </div>
+
+      {/* What was checked, one line. A job's checks are the app's own measurement; a session's are
+          only what the agent claimed to have run, so that line gets a second, fine-print sentence
+          saying so (WorkRecord.verification's own doc comment). */}
+      {verification && (
+        <div className="hiw-verify">
+          <p className="hiw-p">{t(VERIFY_KEY[verification.status])}</p>
+          {record.source.kind === 'session' && <p className="hiw-fine">{t('hiw.verify.reported')}</p>}
+        </div>
+      )}
 
       <div className="hiw-split">
         <div className="hiw-main">

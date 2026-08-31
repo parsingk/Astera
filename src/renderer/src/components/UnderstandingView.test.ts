@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import type { OpenSessionTask } from '../../../core/types'
 import type { ProjectUnderstanding, WorkRecord } from '../../../core/understanding/types'
 import { UnderstandingView } from './UnderstandingView'
 
@@ -25,13 +26,29 @@ const rec = (over: Partial<WorkRecord> = {}): WorkRecord => ({
   ...over
 })
 
-const render = (u: ProjectUnderstanding | null, selectedRecordId: string | null = null): string =>
+const task = (over: Partial<OpenSessionTask> = {}): OpenSessionTask => ({
+  id: 't1',
+  objective: '한도 감지 조사',
+  status: 'active',
+  startedAt: '2026-08-31T01:00:00.000Z',
+  sessionId: 's1',
+  ...over
+})
+
+const render = (
+  u: ProjectUnderstanding | null,
+  selectedRecordId: string | null = null,
+  openTasks: OpenSessionTask[] = []
+): string =>
   renderToStaticMarkup(
     React.createElement(UnderstandingView, {
       understanding: u,
       selectedRecordId,
       onOpenRecord: () => {},
-      onRegenerate: () => {}
+      onRegenerate: () => {},
+      openTasks,
+      onCompleteTask: () => {},
+      onCancelTask: () => {}
     })
   )
 
@@ -85,6 +102,14 @@ describe('UnderstandingView', () => {
     expect(html).not.toContain('INTERRUPTED')
   })
 
+  // CHECK_FAILED (Task 4): the model's write-up came back clean but a reported check did not —
+  // this is exactly the gap INTERRUPTED shipped with once already (fixed later, as a review finding)
+  it('검사가 실패한 기록도 코드가 아니라 안내 문구로 바뀐다', () => {
+    const html = render({ records: [rec({ status: 'needs-review', reason: 'CHECK_FAILED' })] })
+    expect(html).toContain('hiw.record.reason.checkFailed')
+    expect(html).not.toContain('CHECK_FAILED')
+  })
+
   // Every other reason is a free-form sentence the agent or the validator wrote, so it is shown
   // as it stands. Text we do not control gets no invented translation.
   it('알려지지 않은 사유는 고치지 않고 그대로 보인다', () => {
@@ -98,5 +123,42 @@ describe('UnderstandingView', () => {
 
   it('고른 줄에 on 이 붙는다', () => {
     expect(render({ records: [rec()] }, 'r1')).toContain('hiw-row on')
+  })
+
+  it('진행 중인 작업이 기록 목록 위에 선다', () => {
+    const html = render({ records: [rec()] }, null, [task({ objective: '한도 감지 조사' })])
+    const openIdx = html.indexOf('한도 감지 조사')
+    const recordIdx = html.indexOf('한도 감지를 고쳐줘')
+    expect(openIdx).toBeGreaterThanOrEqual(0)
+    expect(recordIdx).toBeGreaterThan(openIdx)
+  })
+
+  it('중단된 작업은 사유와 함께 서고 완료 버튼을 단다', () => {
+    const html = render({ records: [] }, null, [
+      task({ status: 'interrupted', reason: 'INTERRUPTED_BY_NEW_TASK' })
+    ])
+    expect(html).toContain('hiw.open.reason.newTask')
+    expect(html).toContain('hiw.open.complete')
+    expect(html).toContain('hiw.open.cancel')
+  })
+
+  it('진행 중인 것이 없으면 그 절이 아예 없다', () => {
+    const html = render({ records: [rec()] }, null, [])
+    expect(html).not.toContain('hiw-open')
+  })
+
+  it('진행 중인 작업만 있고 기록이 없으면 빈 상태 대신 그 절을 보여준다', () => {
+    const html = render({ records: [] }, null, [task()])
+    expect(html).not.toContain('hiw.empty.body')
+    expect(html).toContain('hiw-open')
+  })
+
+  // Same rule as a record's reason — the collector's INTERRUPTED_BY_* codes translate, anything
+  // else (a code this screen has never heard of) is shown exactly as it arrived.
+  it('모르는 중단 사유는 그대로 보인다', () => {
+    const html = render({ records: [] }, null, [
+      task({ status: 'interrupted', reason: '알 수 없는 이유로 멈췄다' })
+    ])
+    expect(html).toContain('알 수 없는 이유로 멈췄다')
   })
 })

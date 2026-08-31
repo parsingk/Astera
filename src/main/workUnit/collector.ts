@@ -33,6 +33,7 @@ import { classifyTransition } from '../../core/git/transition'
 import { isAsteraOperation, OPERATION_GRACE_MS } from '../../core/git/provenance'
 import { isSamePath } from '../../core/files/tree'
 import type { SessionCheck, SessionWorkUnit } from '../../core/workUnit/types'
+import type { OpenSessionTask } from '../../core/types'
 import { isOpen } from '../../core/workUnit/status'
 import { hasWriteEvidence } from '../../core/workUnit/humanRequest'
 import { startedTask, completedTask, cancelledTask, interruptedTask } from '../../core/workUnit/lifecycle'
@@ -114,17 +115,6 @@ export interface CollectorDeps {
   /** the open-task section's redraw trigger; the record list has its own in `onUnitClosed` */
   onTasksChanged?: (projectPath: string) => void
   log?: (m: string) => void
-}
-
-/** One row of the screen's open-task section. A DTO, not the unit — the renderer has no business
- *  with git baselines, and `src/core/workUnit/**` is not in tsconfig.web.json's include list. */
-export interface OpenSessionTask {
-  id: string
-  objective: string
-  status: 'active' | 'interrupted'
-  startedAt: string
-  reason?: string
-  sessionId: string
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>

@@ -79,6 +79,20 @@ const render = (scoped: string | null = null, exp: RecordExplanation | null = ex
 
 const renderWith = (over: Partial<RecordExplanation>): string => render(null, { ...explanation, ...over })
 
+const renderRecordWith = (over: Partial<WorkRecord>): string =>
+  renderToStaticMarkup(
+    React.createElement(RecordDetail, {
+      record: { ...baseRecord, explanation, ...over },
+      scopedNodeId: null,
+      onPickStep: () => {},
+      onOpenPath: () => {},
+      onRegenerate: () => {},
+      narrow: false,
+      drawerOpen: false,
+      onToggleDrawer: () => {}
+    })
+  )
+
 const renderNarrow = (drawerOpen: boolean): string =>
   renderToStaticMarkup(
     React.createElement(RecordDetail, {
@@ -188,5 +202,39 @@ describe('만드는 중', () => {
 
   it('평소에는 아무것도 돌지 않는다', () => {
     expect(render()).not.toContain('hiw-spin')
+  })
+})
+
+describe('검사 결과', () => {
+  it('검사 결과가 있으면 앱이 돌린 것이 아니라고 함께 적는다', () => {
+    // baseRecord's source is 'session' — a session's checks are the agent's own claim, never the
+    // app's measurement, so the fine-print line has to say so
+    const html = renderRecordWith({ verification: { status: 'verified' } })
+    expect(html).toContain('hiw.verify.verified')
+    expect(html).toContain('hiw.verify.reported')
+  })
+
+  it('검사 결과가 없으면 그 절이 없다', () => {
+    expect(render()).not.toContain('hiw-verify')
+  })
+
+  // A record written before `verification` existed carries only the old `validation` shape — every
+  // reader has to fall back to it, or these older records would silently lose their check line
+  it('예전 기록의 validation 만 있어도 문장이 보인다', () => {
+    const html = renderRecordWith({
+      verification: undefined,
+      validation: { status: 'passed', summary: '테스트 통과' }
+    })
+    expect(html).toContain('hiw.verify.verified')
+  })
+
+  // A Job's own validation is the app's measurement, not a claim — no "reported" caveat for it
+  it('Job 기록은 검사가 있어도 보고했다는 말이 붙지 않는다', () => {
+    const html = renderRecordWith({
+      source: { kind: 'job', runId: 'run1', jobName: '단축키 붙이기', taskIds: ['t1'] },
+      verification: { status: 'failed' }
+    })
+    expect(html).toContain('hiw.verify.failed')
+    expect(html).not.toContain('hiw.verify.reported')
   })
 })

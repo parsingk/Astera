@@ -846,6 +846,7 @@ export const en: Record<keyof typeof ko, string> = {
   'hiw.record.reason.noAccount': 'No explanation account is set — pick one in Settings → General.',
   'hiw.record.reason.interrupted':
     'The app closed while this was being written up — press the button below to try again.',
+  'hiw.record.reason.checkFailed': 'A check the agent ran did not pass — the write-up is worth a look.',
   'hiw.pane.overview': 'What it does',
   'hiw.pane.userVisible': 'What you will notice',
   'hiw.pane.flow': 'How it works',
@@ -861,5 +862,22 @@ export const en: Record<keyof typeof ko, string> = {
   'hiw.empty.readOnly': 'Read-only — your code is not modified.',
   'hiw.pane.notYet': 'This button is not ready yet.',
   'hiw.pane.noExplanation': 'This record has no explanation yet.',
-  'hiw.pane.notInProject': 'This tab’s record is not in the project that is open right now.'
+  'hiw.pane.notInProject': 'This tab’s record is not in the project that is open right now.',
+  'hiw.open.title': 'In progress',
+  'hiw.open.interruptedTitle': 'Left unfinished',
+  'hiw.open.complete': 'Done',
+  'hiw.open.cancel': 'Cancel',
+  'hiw.open.completeFailed': 'Could not mark it done: {detail}',
+  'hiw.open.cancelFailed': 'Could not cancel it: {detail}',
+  'hiw.open.startedAt': 'Started {time}',
+  'hiw.open.reason.newTask': 'Stopped when another task started',
+  'hiw.open.reason.sessionEnd': 'Stopped when the session ended',
+  'hiw.open.reason.appRestart': 'Stopped when the app closed',
+  'hiw.open.reason.trackingOff': 'Stopped when tracking was turned off',
+  'hiw.open.reason.upgrade': 'Stopped when the app updated',
+  'hiw.verify.verified': 'Every reported check passed',
+  'hiw.verify.partial': 'Only some of it was checked',
+  'hiw.verify.unverified': 'Nothing was checked',
+  'hiw.verify.failed': 'A reported check failed',
+  'hiw.verify.reported': 'Reported by the agent — the app did not run it itself'
 }

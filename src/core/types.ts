@@ -519,6 +519,10 @@ export interface CoreEvents {
    *  않는다** — main 은 그 키를 원 저장소로 접어 두는데(설계 D1) 렌더러는 그 접기를 모른다.
    *  "다시 읽어라"는 신호로만 쓴다. 배경 재생성이 화면에 닿는 유일한 길이다. */
   'understanding:changed': string
+  /** The open-task section's redraw trigger. Same shape as 'understanding:changed' — the payload is
+   *  the project key folded to the origin repo (design D1), and the receiving side does not compare
+   *  it against `currentProject`; it is only a "read again" signal, whichever project it names. */
+  'sessionTasks:changed': string
 }
 export type CoreEventChannel = keyof CoreEvents
 
@@ -923,6 +927,27 @@ export interface UnderstandingApi {
   regenerate(projectPath: string, recordId: string): Promise<void>
 }
 
+/** One row of the How It Works screen's open-task section. A DTO, not the stored unit: the
+ *  renderer has no business with git baselines, and `src/core/workUnit/**` is not in
+ *  tsconfig.web.json's include list. */
+export interface OpenSessionTask {
+  id: string
+  objective: string
+  status: 'active' | 'interrupted'
+  startedAt: string
+  /** Why it was interrupted. One of the INTERRUPTED_BY_* codes; the screen translates them. */
+  reason?: string
+  sessionId: string
+}
+
+export interface SessionTaskApi {
+  /** Session tasks still waiting on an ending — active and interrupted, newest first. */
+  list(projectPath: string): Promise<OpenSessionTask[]>
+  /** Close one as completed with `source: 'user'`. The write-up starts now, not before. */
+  complete(projectPath: string, id: string): Promise<void>
+  cancel(projectPath: string, id: string): Promise<void>
+}
+
 export type RendererApi = CoreApi & {
   system: SystemApi
   clipboard: ClipboardApi
@@ -944,5 +969,6 @@ export type RendererApi = CoreApi & {
   keys: KeysApi
   orch: OrchApi
   understanding: UnderstandingApi
+  sessionTasks: SessionTaskApi
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

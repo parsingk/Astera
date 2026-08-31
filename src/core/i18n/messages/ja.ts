@@ -927,6 +927,7 @@ export const ja: Catalog = {
   'hiw.record.reason.noAccount': '説明生成用のアカウントが設定されていません — 設定 → 一般で選んでください。',
   'hiw.record.reason.interrupted':
     'これを書いている途中でアプリが終了しました — 下のボタンを押すともう一度作成します。',
+  'hiw.record.reason.checkFailed': 'エージェントが行った検査が通りませんでした — 内容を確認してください。',
   'hiw.pane.overview': '何をしますか',
   'hiw.pane.userVisible': '何が変わったか',
   'hiw.pane.flow': 'どう動きますか',
@@ -942,5 +943,22 @@ export const ja: Catalog = {
   'hiw.empty.readOnly': '読み取りのみです — コードは変更しません。',
   'hiw.pane.notYet': 'このボタンはまだ準備中です。',
   'hiw.pane.noExplanation': 'この記録の説明はまだありません。',
-  'hiw.pane.notInProject': 'このタブの記録は、現在開いているプロジェクトには見つかりません。'
+  'hiw.pane.notInProject': 'このタブの記録は、現在開いているプロジェクトには見つかりません。',
+  'hiw.open.title': '進行中',
+  'hiw.open.interruptedTitle': '未完了',
+  'hiw.open.complete': '完了',
+  'hiw.open.cancel': 'キャンセル',
+  'hiw.open.completeFailed': '完了にできませんでした: {detail}',
+  'hiw.open.cancelFailed': 'キャンセルできませんでした: {detail}',
+  'hiw.open.startedAt': '{time} に開始',
+  'hiw.open.reason.newTask': '別の作業が始まって止まりました',
+  'hiw.open.reason.sessionEnd': 'セッションが終わって止まりました',
+  'hiw.open.reason.appRestart': 'アプリが終了して止まりました',
+  'hiw.open.reason.trackingOff': '追跡をオフにして止まりました',
+  'hiw.open.reason.upgrade': 'アプリが更新されて止まりました',
+  'hiw.verify.verified': '報告された検査はすべて成功しました',
+  'hiw.verify.partial': '一部しか確認されていません',
+  'hiw.verify.unverified': '確認されたものはありません',
+  'hiw.verify.failed': '報告された検査が失敗しました',
+  'hiw.verify.reported': 'エージェントが報告した内容です — アプリ自身が実行したわけではありません'
 }

@@ -1883,9 +1883,22 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 
 .hiw-lab { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 5px; }
 
+/* Small print anywhere on this screen — was only the empty state's caveat, now also the record
+   detail pane's "reported, not measured" note (RecordDetail.tsx). Kept bare (not scoped to
+   .hiw-empty) so both can reuse it without duplicating the two declarations. */
+.hiw-fine { font-size: 10.5px; color: var(--text-faint); }
+
 .hiw-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 22px; text-align: center; }
 .hiw-empty p { font-size: 11.5px; color: var(--text-dim); line-height: 1.6; margin: 0; }
-.hiw-empty .hiw-fine { font-size: 10.5px; color: var(--text-faint); }
+
+/* The open-task section, above .hiw-list (UnderstandingView.tsx). A row reuses .hiw-row's skeleton
+   but is not clickable — there is no record behind it yet — so the pointer cursor is turned off. */
+.hiw-open { border-bottom: 1px solid var(--line-soft); padding-bottom: 2px; }
+.hiw-open .hiw-lab { padding: 8px 12px 2px; margin: 0; }
+.hiw-open-row { cursor: default; }
+.hiw-open-row:hover { background: none; }
+.hiw-open-actions { display: flex; gap: 6px; margin-top: 4px; }
+.hiw-open-actions .hiw-review { align-self: auto; margin-top: 0; }
 
 /* How It Works record detail pane. The left side is the story to read, the right side is the
    reference to double-check — the width ratio between the two (1.62 : 1) is the whole of this
@@ -1901,6 +1914,11 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .hiw-ghost { font-size: 11px; color: var(--text-dim); background: none; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 2px 9px; cursor: pointer; }
 .hiw-ghost.acc { color: var(--accent); }
 .hiw-ghost:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--ring); }
+
+/* What was checked, one line under the head (RecordDetail.tsx). */
+.hiw-verify { padding: 8px 18px; border-bottom: 1px solid var(--line-soft); }
+.hiw-verify .hiw-p { margin: 0; }
+.hiw-verify .hiw-fine { margin: 3px 0 0; }
 
 .hiw-split { position: relative; flex: 1; display: flex; min-height: 0; }
 .hiw-main { flex: 1.62; min-width: 0; border-right: 1px solid var(--line-soft); display: flex; flex-direction: column; overflow-y: auto; }

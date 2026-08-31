@@ -3379,6 +3379,11 @@ export function registerIpc(
     onUnitClosed: (projectPath, unit) => {
       void understandingPipeline.onUnitClosed(understandingKeyOf(projectPath), unit)
     },
+    // The open-task section's redraw trigger. **Folds the key the same way onUnitClosed does above**
+    // — the renderer's listOpen call folds its own request the same way, so the two sides must agree
+    // on which key names a project, or a worktree tab would be told to redraw a project it never asked
+    // about while the origin repo's tab (the one that actually holds the task) hears nothing.
+    onTasksChanged: (projectPath) => send('sessionTasks:changed', understandingKeyOf(projectPath)),
     log: orchLog
   })
   // 토글이 꺼져 있으면 시작하지 않는다. **load 뒤로 미룬다** — 먼저 시작하면 수집기가 쓴 상태를
@@ -3394,6 +3399,27 @@ export function registerIpc(
   onWorkUnitForkReady?.((sessionId, transcriptPath) =>
     workUnitCollector.onSessionForked(sessionId, transcriptPath)
   )
+
+  // The How It Works screen's open-task section. Same shape as understanding.get: assertAllowedPath
+  // first (the path decides which project's tasks come back), then the collector call. **The key is
+  // folded to the origin repo the same way understandingKeyOf folds it for the record list** — a
+  // worktree session's project is the origin repo (design D1), and the collector stores tasks under
+  // that folded key (onUnitClosed's wiring above folds it the same way), so asking with the raw
+  // worktree path would look in a project that has nothing in it.
+  ipcMain.handle('sessionTasks.list', async (_e, projectPath: string) => {
+    await assertAllowedPath(projectPath)
+    return workUnitCollector.listOpen(understandingKeyOf(projectPath))
+  })
+  ipcMain.handle('sessionTasks.complete', async (_e, projectPath: string, id: string) => {
+    await assertAllowedPath(projectPath)
+    const r = await workUnitCollector.completeTaskById(understandingKeyOf(projectPath), id)
+    if (!r.ok) throw new Error(r.reason)
+  })
+  ipcMain.handle('sessionTasks.cancel', async (_e, projectPath: string, id: string) => {
+    await assertAllowedPath(projectPath)
+    const r = await workUnitCollector.cancelTaskById(understandingKeyOf(projectPath), id)
+    if (!r.ok) throw new Error(r.reason)
+  })
 
   // The detected JDKs. There is no path argument, so this is not subject to assertAllowedPath — the scan
   // only looks at conventional directories (Program Files and friends) and PATH.
