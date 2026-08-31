@@ -371,6 +371,13 @@ export async function handleCommand(
   )
   const isWorker = myDispatchIds.size > 0
   if (isWorker && COORDINATOR_ONLY.has(cmd)) return denied(`worker sessions cannot call ${cmd}`)
+  // isRunCoordinator: this session runs a Run as its coordinator (Run.coordinatorSessionId). Kept
+  // separate from isWorker rather than folded into one flag — they answer different questions
+  // (dispatch ownership vs. Run coordination) for different reasons elsewhere in this file (isWorker
+  // also feeds COORDINATOR_ONLY above), and are combined only at the session-task-* cases below,
+  // which are the one place both answer the same question: is this session's work already going to
+  // be recorded by a Run, at some level, when that Run finishes?
+  const isRunCoordinator = s.runs.some((r) => r.coordinatorSessionId === caller.sessionId)
 
   const commit = async <T>(r: Res<T>): Promise<Reply> => {
     if (!r.ok) return bad(r.error)
@@ -861,10 +868,11 @@ export async function handleCommand(
       return okBody(tasks.find((t) => t.id === id)!)
     }
     case 'session-task-start': {
-      // A worker is executing a Jobs task, and that Run already writes its own record when it
-      // finishes (onRunFinished). A worker declaring its own would record the same work twice,
-      // once per level.
-      if (isWorker) return denied('worker sessions cannot declare their own session task')
+      // A worker is executing a Jobs task, and a Run coordinator is running one — either way that
+      // Run already writes its own record when it finishes (onRunFinished). Declaring a session
+      // task on top would record the same work twice, once per level.
+      if (isWorker || isRunCoordinator)
+        return denied('a session already inside a Run cannot declare its own session task')
       if (!deps.sessionTasks) return conflict('work unit tracking is off')
       const objective = str(args.objective)
       if (!objective || objective.trim() === '') return bad('--objective is required')
@@ -873,7 +881,8 @@ export async function handleCommand(
       return okBody({ id: r.id, interruptedId: r.interruptedId })
     }
     case 'session-task-complete': {
-      if (isWorker) return denied('worker sessions cannot declare their own session task')
+      if (isWorker || isRunCoordinator)
+        return denied('a session already inside a Run cannot declare its own session task')
       if (!deps.sessionTasks) return conflict('work unit tracking is off')
       const raw = args.check === undefined ? [] : (args.check as unknown[])
       if (!Array.isArray(raw)) return bad('--check must be <name>=<status>')
@@ -897,7 +906,8 @@ export async function handleCommand(
       return okBody({ id: r.id })
     }
     case 'session-task-cancel': {
-      if (isWorker) return denied('worker sessions cannot declare their own session task')
+      if (isWorker || isRunCoordinator)
+        return denied('a session already inside a Run cannot declare its own session task')
       if (!deps.sessionTasks) return conflict('work unit tracking is off')
       const r = await deps.sessionTasks.cancel(caller.sessionId, str(args.reason) || undefined)
       if (!r.ok)

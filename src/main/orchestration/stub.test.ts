@@ -435,4 +435,38 @@ describe('여러 스킬 설치', () => {
     expect(await fs.readFile(orchTarget, 'utf8')).toBe(mine) // left alone, byte for byte
     expect(await fs.readFile(taskTarget, 'utf8')).toContain('# task')
   })
+
+  // Pins the property ipc.ts's installStubsForCurrentToggles relies on: it rebuilds the full stub
+  // list from the two toggles' current state and calls installStub again on every toggle flip (not
+  // just once, at startup), so that the second toggle to turn on does not lose the stub the first
+  // one already planted. There is no ipc.ts-level harness for the caller itself (registerIpc needs a
+  // full Electron mock), so this pins the guarantee one level down, at installStub.
+  it('토글이 하나씩 켜질 때마다 다시 불러도, 먼저 심은 스킬은 그대로 두고 새 스킬만 마저 심는다', async () => {
+    const orchPath = await writeSource('# orchestration\n', 'orchestration-stub.md')
+    const taskPath = await writeSource('# task\n', 'task-stub.md')
+    const configDir = path.join(dir, 'work')
+    const taskTarget = stubTargetPath(configDir, 'astera-task')
+    const orchTarget = stubTargetPath(configDir, 'astera-orchestration')
+    // Work-unit tracking turned on first — the rebuilt list has only the task stub.
+    const first = await installStub({
+      stubs: [{ stubPath: taskPath, skillName: 'astera-task' }],
+      configDirs: [configDir]
+    })
+    expect(first.written).toEqual([taskTarget])
+    const before = (await fs.stat(taskTarget)).mtimeMs
+    // Orchestration turned on second — the list is rebuilt from scratch with both toggles now on,
+    // and installStub is called again (this is the call the settings handler makes unconditionally).
+    const second = await installStub({
+      stubs: [
+        { stubPath: orchPath, skillName: 'astera-orchestration' },
+        { stubPath: taskPath, skillName: 'astera-task' }
+      ],
+      configDirs: [configDir]
+    })
+    expect(second.written).toEqual([orchTarget]) // only the newly-enabled stub is written...
+    expect(second.unchanged).toEqual([taskTarget]) // ...the already-installed one is left alone
+    expect((await fs.stat(taskTarget)).mtimeMs).toBe(before) // not rewritten, no watcher wakeup
+    expect(await fs.readFile(orchTarget, 'utf8')).toContain('# orchestration')
+    expect(await fs.readFile(taskTarget, 'utf8')).toContain('# task')
+  })
 })

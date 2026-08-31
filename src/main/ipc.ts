@@ -854,6 +854,58 @@ export function registerIpc(
   // down) so the two rolling coordinators can reach a tab session's briefing even with the toggle off.
   orchWiring?.onTabResumeReady(tabResumeTextFor)
 
+  /**
+   * Installs whichever discovery stub(s) match the two toggles' current state, against every known
+   * account. Pulled out of bootOrch (which used to build and install this list inline, once) into a
+   * standalone function that both settings.setOrchestrationEnabled and
+   * settings.setWorkUnitTrackingEnabled also call directly — **not just bootOrch**.
+   *
+   * **Why bootOrch alone is not enough**: bootOrch only runs on the transition that actually starts
+   * the server (see startOrch's `if (orch || orchStarting) return`). Before this task the server could
+   * only be up when orchestration was on, so setOrchestrationEnabled(true) always reached it. Now
+   * either toggle can start the server, so the second toggle to turn on reaches a server that is
+   * already up — bootOrch, and this install, never run for it. Concretely: tracking on first plants
+   * the task stub (server boots); orchestration on second calls startOrch(), which no-ops because
+   * `orch` is already set — without this function being called independently, the orchestration stub
+   * would never be planted for that session, on the one transition (enabling the feature) where losing
+   * the only discovery path for it matters most (see the header comment in stub.ts).
+   *
+   * No-ops when the server has never come up (`orch` is null — nothing has a skillsPath yet to install
+   * from) or when both toggles are off (`stubs` comes out empty). Safe to call redundantly — that is
+   * the point of calling it from three places: installStub already skips a write once content matches
+   * (see stub.ts), so the worst repeated cost is a per-account file read, not a per-account write.
+   */
+  const installStubsForCurrentToggles = (): void => {
+    if (!orch) return
+    const stubs = [
+      ...(core.appSettings.getOrchestrationEnabled()
+        ? [
+            {
+              stubPath: path.join(orch.skillsPath, 'orchestration-stub.md'),
+              skillName: 'astera-orchestration'
+            }
+          ]
+        : []),
+      ...(core.appSettings.getWorkUnitTrackingEnabled()
+        ? [{ stubPath: path.join(orch.skillsPath, 'task-stub.md'), skillName: 'astera-task' }]
+        : [])
+    ]
+    if (stubs.length === 0) return
+    // installStub swallows per-stub and per-account failures itself and does not throw, but the
+    // .catch is here so that even an unexpected failure cannot affect the caller.
+    void installStub({
+      stubs,
+      configDirs: core.accounts.list().map((a) => a.configDir),
+      log: orchLog
+    })
+      .then((r) =>
+        orchLog(
+          `stub install — ${r.written.length} written, ${r.unchanged.length} unchanged, ${r.skipped.length} skipped (no ownership marker and differs from the current stub), ${r.failed.length} failed, ${r.removed.length} legacy removed`
+        )
+      )
+      .catch((err) => orchLog(`stub install failed: ${String(err)}`))
+  }
+
   let orchStarting = false
   /** Starts orchestration. Called only when the toggle is on — with it off, the store is not even read
    *  and no port is opened. Turning it on at runtime comes back through here and starts immediately
@@ -2619,38 +2671,13 @@ export function registerIpc(
     // (<configDir>/skills/<name>/SKILL.md), and there is evidence that codex also treats the skills
     // directory as a home resource (see the comments in stub.ts). AGENTS.md is left alone — it is a
     // user file.
-    // **Which stub(s) install here is conditional, per toggle** — bootOrch runs for either toggle
-    // (see the two call sites of startOrch), so a person who only turned on work-unit tracking must
-    // not get an orchestration skill they never asked for (one that reports "orchestration is off" on
-    // every call), and the reverse for orchestration without tracking.
     // Called after orch is assigned — a position where a failed install cannot affect server startup.
-    // installStub swallows per-stub and per-account failures itself and does not throw, but the
-    // .catch is here so that even an unexpected failure cannot block startup.
-    // **A deliberate limit**: this runs once, at startup (bootOrch is a no-op on a later call once
-    // orch is already set — see startOrch). An account added afterwards, or a toggle flipped on after
-    // the server already started from the other one, does not get the stub until the next app start —
-    // hooking accounts.onChanged (or re-running this on every settings change) would write to user
-    // files on every account edit, and that trade-off is out of scope here.
-    const stubs = [
-      ...(core.appSettings.getOrchestrationEnabled()
-        ? [{ stubPath: path.join(skillsPath, 'orchestration-stub.md'), skillName: 'astera-orchestration' }]
-        : []),
-      ...(core.appSettings.getWorkUnitTrackingEnabled()
-        ? [{ stubPath: path.join(skillsPath, 'task-stub.md'), skillName: 'astera-task' }]
-        : [])
-    ]
-    if (stubs.length > 0)
-      void installStub({
-        stubs,
-        configDirs: core.accounts.list().map((a) => a.configDir),
-        log: orchLog
-      })
-        .then((r) =>
-          orchLog(
-            `stub install — ${r.written.length} written, ${r.unchanged.length} unchanged, ${r.skipped.length} skipped (no ownership marker and differs from the current stub), ${r.failed.length} failed, ${r.removed.length} legacy removed`
-          )
-        )
-        .catch((err) => orchLog(`stub install failed: ${String(err)}`))
+    // **Which stub(s) install is conditional, per toggle, and is not just done here** — see
+    // installStubsForCurrentToggles's own comment for why the settings handlers call it too.
+    // **A remaining limit**: an account added while everything relevant is already on does not get
+    // the stub until the next app start or a toggle flip — hooking accounts.onChanged would write to
+    // user files on every account edit, and that trade-off is out of scope here.
+    installStubsForCurrentToggles()
     orchWiring?.onStarted({
       stop: () => {
         // 미뤄 둔 exit 를 버린다. 남겨 두면 서버가 내려간 뒤에 setState 가 돌 수 있다.
@@ -3816,6 +3843,11 @@ export function registerIpc(
     await core.appSettings.setOrchestrationEnabled(enabled)
     // Turning it on starts it immediately (a no-op if already up). Why turning it off does not close it is in the startOrch comment.
     if (enabled && orchWiring) await startOrch()
+    // Not gated on whether startOrch() just booted anything — the case this covers is exactly the one
+    // where it did not: the server was already up (started by the other toggle), so bootOrch's own
+    // install never ran for this one. installStubsForCurrentToggles re-reads both toggles itself and
+    // no-ops when the server still is not up.
+    if (enabled) installStubsForCurrentToggles()
   })
 
   // The work unit tracking toggle. The same trust-boundary check as setLang — the value the renderer
@@ -3836,6 +3868,8 @@ export function registerIpc(
     // Same line the orchestration setter uses, for the same reason: /astera-task needs the server
     // and the planted CLI. Turning it off does not close the server — see the startOrch comment.
     if (enabled && orchWiring) await startOrch()
+    // Same reasoning as the orchestration setter above — see installStubsForCurrentToggles's comment.
+    if (enabled) installStubsForCurrentToggles()
   })
 
   // 설명을 누가·무엇으로 만드는가. **셋을 함께 쓴다** — 계정을 바꾸면 그 계정에 없는 모델이

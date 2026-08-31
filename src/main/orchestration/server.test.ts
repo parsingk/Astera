@@ -7,6 +7,7 @@ import { OrchCoordinator, type CoordinatorDeps } from './coordinator'
 import { OrchestrationStore } from './store'
 import {
   applyValidationResult,
+  attachCoordinator,
   blockForValidation,
   emptyState,
   rekeyDispatch,
@@ -389,6 +390,24 @@ describe('session-task-*', () => {
   it('워커 세션은 세 명령을 다 못 부른다 — Run 이 이미 그 일을 기록한다', async () => {
     const deps = { ...makeDeps(), trackingEnabled: () => true, sessionTasks: makeSessionTasks() }
     await seedWorker(deps)
+    for (const cmd of ['session-task-start', 'session-task-complete', 'session-task-cancel']) {
+      const r = await call(deps, cmd, { objective: 'x' }, 'sess1')
+      expect(r.status).toBe(403)
+    }
+  })
+
+  // isWorker alone misses this: a Run's coordinator session never holds a dispatch, so it passed
+  // the worker check and could declare a session task on top of the record its own Run already
+  // writes when it finishes (onRunFinished) — the same double-recording the worker check exists to
+  // block, one level up. trackingEnabled and sessionTasks are both truthy here on purpose: a missing
+  // isRunCoordinator check must be the only way this test can fail, not some unrelated 409/409.
+  it('Run 코디네이터 세션도 세 명령을 다 못 부른다 — 그 Run 이 이미 그 일을 기록한다', async () => {
+    const deps = { ...makeDeps(), trackingEnabled: () => true, sessionTasks: makeSessionTasks() }
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const attached = attachCoordinator(deps.getState(), { runId, sessionId: 'sess1' })
+    if (!attached.ok) throw new Error(attached.error)
+    await deps.setState(attached.state)
     for (const cmd of ['session-task-start', 'session-task-complete', 'session-task-cancel']) {
       const r = await call(deps, cmd, { objective: 'x' }, 'sess1')
       expect(r.status).toBe(403)
