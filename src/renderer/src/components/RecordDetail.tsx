@@ -111,8 +111,9 @@ export function RecordDetail({
     <div className="hiw-pane">
       <div className="hiw-fhead">
         <h4>{record.request}</h4>
-        {/* 상태를 박아 두지 않는다 — 모양도 문구도 색도 사이드바와 같은 표를 본다(설계 §8).
-            색을 여기서 따로 고르면 세 자리가 갈라진다(UnderstandingIcons 의 RECORD_GLYPH_COLOR) */}
+        {/* The status is not hard-coded here — shape, wording and colour all read the same table
+            the sidebar does (design §8). Picking the colour separately here would let the three
+            places drift apart (UnderstandingIcons' RECORD_GLYPH_COLOR). */}
         <span className="hiw-st" style={{ color: RECORD_GLYPH_COLOR[record.status] }}>
           <StatusGlyph glyph={RECORD_GLYPH[record.status]} spinning={record.status === 'generating'} />{' '}
           {t(RECORD_STATUS_KEY[record.status])}

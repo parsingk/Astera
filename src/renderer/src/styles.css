@@ -396,8 +396,8 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .run-host { flex: none; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 
 /* ---------- project Run/Stop — RunToolbar and workbench wiring ---------- */
-/* The body of whatever a pane's workbench slot holds — the editor, and now the How It Works feature
-   detail too (FeatureDetailHost wraps itself in this class for the same reason). It lives inside a
+/* The body of whatever a pane's workbench slot holds — the editor, and now the How It Works record
+   detail too (RecordDetailHost wraps itself in this class for the same reason). It lives inside a
    pane's slot rather than under the run console's host, and the rule is unchanged because the slot is
    a column flex box just as that host is */
 .workbench-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
@@ -1873,6 +1873,10 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .hiw-body { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .hiw-name { font-size: 12px; font-weight: 500; color: var(--text); }
 .hiw-summary { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A row's reason for wanting attention — why [Write it up again] is offered. This is the only
+   place that answers "why", so it gets the same warn colour as a needs-review/failed glyph
+   instead of reading as ordinary dim text. */
+.hiw-summary.w { color: var(--warn); }
 .hiw-meta { font-family: var(--mono); font-size: 10px; color: var(--text-faint); }
 .hiw-review { align-self: flex-start; margin-top: 4px; font-size: 10.5px; color: var(--accent); background: var(--elevated); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 1px 7px; cursor: pointer; }
 .hiw-review:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--ring); }
@@ -1903,12 +1907,13 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .hiw-side-col { flex: 1; min-width: 0; background: var(--panel); overflow-y: auto; }
 .hiw-grow { flex: 1; }
 
-/* 좁은 페인의 참조 서랍. .hiw-split 을 덮으며 열린다. **기준은 .hiw-split 이지 .hiw-pane 이 아니다.**
-   .hiw-pane 에 대고 top: 0 을 주면 서랍이 머리줄 위에서 시작해 자기를 닫을 참조 버튼까지 덮는다 —
-   그러면 페인을 넓히는 것 말고는 빠져나올 길이 없다. 머리 높이만큼 top 을 밀지 않는 이유: 그 높이는
-   패딩과 내용이 정하는 값이라 숫자로 박으면 어긋난다. 본문 옆이 아니라 위에 뜨는 것은 그래야 이
-   화면이 넓을 때와 같은 두 단짜리 레이아웃으로 남고, 좁을 때만 절반을 접었다 펴는 것이 되기
-   때문이다(설계 §6, RecordDetail.tsx 의 narrow prop 주석). */
+/* The narrow pane's reference drawer. Opens covering .hiw-split. **The anchor is .hiw-split, not
+   .hiw-pane.** Anchoring top: 0 to .hiw-pane instead would start the drawer above the head row,
+   covering even the reference button that closes it — leaving no way out short of widening the pane.
+   Why top is not pushed down by the head's own height: that height is set by padding and content, so
+   pinning a number would drift out of sync. It floats above the body rather than beside it so that
+   this stays the same two-column layout the screen has when wide, and only folds and unfolds half of
+   it when narrow (design §6, RecordDetail.tsx's narrow prop comment). */
 .hiw-drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 290px; z-index: 5; background: var(--panel); border-left: 1px solid var(--line); box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow-y: auto; }
 .hiw-drawer .hiw-side-col { background: none; }
 .hiw-sec { padding: 13px 18px; border-bottom: 1px solid var(--line-soft); }
