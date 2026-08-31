@@ -206,7 +206,8 @@ const api = {
     unwatch: invoke('orch.unwatch')
   },
   understanding: {
-    get: invoke('understanding.get')
+    get: invoke('understanding.get'),
+    regenerate: invoke('understanding.regenerate')
   },
   platform: process.platform,
   win: {

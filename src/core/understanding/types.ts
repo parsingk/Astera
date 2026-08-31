@@ -150,6 +150,8 @@ export interface WorkRecord {
   git: { startHead: string | null; endHead: string | null; commits?: string[] }
   /** A Job carries its validation outcome; a session has none */
   validation?: { status: 'passed' | 'failed' | 'unknown'; summary?: string }
+  /** Job only: the tasks this run carried, for the agent's material */
+  jobTasks?: { title: string; outcome: string }[]
   status: RecordStatus
   /** Why it needs review, or why the write-up failed. Shown on the row. */
   reason?: string

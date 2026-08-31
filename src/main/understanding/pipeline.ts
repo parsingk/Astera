@@ -9,12 +9,19 @@
 // **한 번에 하나만 돈다.** 에이전트 실행은 비싸고(수십 초), 같은 프로젝트에 두 개가 겹치면
 // 나중 것이 앞 것의 결과를 덮는다. 큐 하나로 직렬화하는 것은 collector 의 enqueue 와 같은 이유다.
 import { existsSync, statSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import type { Account, Provider } from '../../core/types'
 import type { ProviderDescriptor } from '../../core/providers/descriptor'
-import type { ProjectUnderstanding } from '../../core/understanding/types'
+import type { ProjectUnderstanding, RecordExplanation, WorkRecord } from '../../core/understanding/types'
 import type { GeneratorSettings } from '../../core/understanding/generatorSettings'
+import type { SessionWorkUnit } from '../../core/workUnit/types'
+import { sessionLabelOf } from '../../core/understanding/changeRecord'
+import { buildRecordPrompt } from '../../core/understanding/prompt'
+import { validateRecord } from '../../core/understanding/validate'
+import { evidenceIdOf } from '../../core/understanding/evidence'
 import type { UnderstandingStore } from './store'
+import { runAgent } from './agent'
 
 export interface PipelineDeps {
   store: UnderstandingStore
@@ -23,6 +30,9 @@ export interface PipelineDeps {
   descriptors: Record<Provider, ProviderDescriptor>
   generator: () => GeneratorSettings
   now: () => string
+  /** Commit subjects in a range, for the agent's material. Optional: a project that is not a
+   *  repository has none, and a record is still worth writing without them. */
+  readCommits?: (projectRoot: string, from: string | null, to: string | null) => Promise<string[]>
   /** 저장이 끝났다. **화면이 다시 읽는 방아쇠다** — 재생성은 배경에서 수십 초 걸려 끝나고,
    *  이것이 없으면 그 결과는 사용자가 프로젝트를 바꿔 돌아올 때까지 화면에 없다 */
   onChanged?: (projectRoot: string) => void
@@ -66,6 +76,137 @@ export class UnderstandingPipeline {
     }
     this.chain = this.chain.then(run, run)
     return this.chain
+  }
+
+  /** A work unit closed. **The only writer of records from a session** — nothing else may create
+   *  one, which is what makes "nothing from before you turned tracking on" hold for the whole
+   *  screen (design D2).
+   *
+   *  The caller does not wait: the returned promise never rejects (see enqueue), and the
+   *  collector's own round must not be held up by an agent that takes minutes. */
+  onUnitClosed(projectRoot: string, unit: SessionWorkUnit): Promise<void> {
+    return this.enqueue(async () => {
+      if (unit.status !== 'completed') return // 스펙 §7 — 버려진 Unit 은 하류로 흐르지 않는다
+      const record: WorkRecord = {
+        id: randomUUID(),
+        at: unit.completedAt ?? unit.startedAt,
+        source: { kind: 'session', sessionId: unit.sessionId, label: sessionLabelOf(unit.sessionId) },
+        request: unit.title,
+        changedFiles: [...unit.git.observedChangedFiles],
+        git: { startHead: unit.git.startHead, endHead: unit.git.endHead ?? null },
+        status: 'generating'
+      }
+      // **Saved before the agent runs.** The write-up takes minutes; a row that only appears when it
+      // finishes leaves the screen looking like nothing happened, and the work is already done.
+      await this.prepend(projectRoot, record)
+      const commits = await this.commitsOf(projectRoot, record)
+      record.git.commits = commits
+      await this.fill(projectRoot, record.id, commits)
+    })
+  }
+
+  /** The user pressed [다시] on one record. Same path, minus the record creation — and it does
+   *  overwrite a hand-edited write-up, because that is what pressing it means (§56 binds the
+   *  background, not the user). */
+  regenerate(projectRoot: string, recordId: string): Promise<void> {
+    return this.enqueue(async () => {
+      const cur = this.deps.store.get(projectRoot)?.records.find((r) => r.id === recordId)
+      if (!cur) return
+      await this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'generating', reason: undefined }))
+      await this.fill(projectRoot, recordId, cur.git.commits ?? [])
+    })
+  }
+
+  /** The agent round trip and everything that hangs on its answer. */
+  private async fill(projectRoot: string, recordId: string, commits: string[]): Promise<void> {
+    const ready = this.agentContext()
+    const cur = this.deps.store.get(projectRoot)?.records.find((r) => r.id === recordId)
+    if (!cur) return
+    if (!ready.ok) {
+      await this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'failed', reason: ready.reason }))
+      return
+    }
+    const run = await runAgent({
+      ...ready.ctx,
+      cwd: projectRoot,
+      prompt: buildRecordPrompt({
+        request: cur.request,
+        changedFiles: cur.changedFiles,
+        commits,
+        tasks: cur.source.kind === 'job' ? cur.jobTasks : undefined,
+        validation: cur.validation,
+        projectRoot
+      }),
+      log: this.deps.log
+    })
+    if (!run.ok) {
+      await this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'failed', reason: run.reason }))
+      return
+    }
+    const v = validateRecord(run.value, insideProject(projectRoot))
+    if (!v.ok) {
+      await this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'failed', reason: v.reason }))
+      return
+    }
+    const e = v.value
+    const explanation: RecordExplanation = {
+      overview: e.overview,
+      userVisibleChanges: e.userVisibleChanges,
+      flow: e.flow,
+      decisions: e.decisions.map((d) => ({
+        id: randomUUID(),
+        title: d.title,
+        reason: d.reason,
+        // 코드를 읽고 추론한 것이므로 'agent' 다 — 스펙 §12 가 그 구분에 알약 색을 걸었다
+        source: 'agent' as const,
+        sourceLabel: d.sourceLabel,
+        evidenceIds: d.evidenceIds
+      })),
+      implementation: e.implementation,
+      evidence: e.evidencePaths.map((p) => ({
+        id: evidenceIdOf(p),
+        type: 'source-file' as const,
+        label: p,
+        path: p
+      })),
+      userEdited: false,
+      generatedAt: this.deps.now()
+    }
+    await this.patch(projectRoot, recordId, (r) => ({
+      ...r,
+      explanation,
+      status: e.needsReview ? 'needs-review' : 'ready',
+      reason: e.needsReview ? e.needsReviewReason : undefined
+    }))
+  }
+
+  private async commitsOf(projectRoot: string, r: WorkRecord): Promise<string[]> {
+    if (!this.deps.readCommits) return []
+    try {
+      return await this.deps.readCommits(projectRoot, r.git.startHead, r.git.endHead)
+    } catch {
+      return [] // 커밋을 못 읽는 것은 기록을 못 쓸 이유가 아니다
+    }
+  }
+
+  private prepend(projectRoot: string, record: WorkRecord): Promise<void> {
+    const cur = this.deps.store.get(projectRoot)
+    return this.write(projectRoot, { records: [record, ...(cur?.records ?? [])] })
+  }
+
+  /** **Reads the file again before writing.** The agent takes minutes, and in that time another
+   *  unit can close or the user can edit. Writing back a snapshot taken before the round trip would
+   *  drop whatever happened in between. A record that vanished is left alone. */
+  private async patch(
+    projectRoot: string,
+    recordId: string,
+    f: (r: WorkRecord) => WorkRecord
+  ): Promise<void> {
+    const cur = this.deps.store.get(projectRoot)
+    if (!cur || !cur.records.some((r) => r.id === recordId)) return
+    await this.write(projectRoot, {
+      records: cur.records.map((r) => (r.id === recordId ? f(r) : r))
+    })
   }
 }
 

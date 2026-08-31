@@ -105,4 +105,19 @@ describe('UnderstandingStore', () => {
     // 첫 set() 의 상태도 메모리에 남아 있었으므로 함께 실렸다
     expect(b.get('C:/p')).toEqual(sample)
   })
+
+  it('앱이 죽으며 남은 generating 은 다시 켤 때 풀린다', async () => {
+    const a = new UnderstandingStore(file)
+    await a.load()
+    await a.set('C:/p', {
+      records: [
+        { id: 'r1', at: 'x', source: { kind: 'session', sessionId: 's', label: 'l' }, request: 'q',
+          changedFiles: [], git: { startHead: null, endHead: null }, status: 'generating' }
+      ]
+    })
+    const b = new UnderstandingStore(file)
+    await b.load()
+    expect(b.get('C:/p')!.records[0].status).toBe('failed')
+    expect(b.get('C:/p')!.records[0].reason).toBe('INTERRUPTED')
+  })
 })

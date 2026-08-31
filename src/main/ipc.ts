@@ -3087,11 +3087,22 @@ export function registerIpc(
     descriptors: core.descriptors,
     generator: () => core.appSettings.getGenerator(),
     now: () => new Date().toISOString(),
+    // Commit subjects in the unit's range — material for the write-up. readRange is the same reader
+    // the collector uses for git provenance, so there is no second way to ask this question.
+    readCommits: async (root, from, to) => (from && to ? (await readRange(root, from, to)).subjects : []),
     // 배경 재생성이 끝났다고 화면에 알린다. **접힌 키를 그대로 실어 보낸다** — 렌더러는 그 접기를
     // 모르므로(워크트리 세션이면 원 저장소의 키다) 값을 비교하지 않고 다시 읽기만 한다.
     // 그쪽 주석이 그 이유를 적고 있다.
     onChanged: (root) => send('understanding:changed', root),
     log: orchLog
+  })
+
+  ipcMain.handle('understanding.regenerate', async (_e, projectPath: string, recordId: string) => {
+    await assertAllowedPath(projectPath)
+    if (typeof recordId !== 'string' || recordId === '')
+      throw new Error(`INVALID_RECORD_ID: ${String(recordId)}`)
+    await understandingLoaded
+    void understandingPipeline.regenerate(understandingKeyOf(projectPath), recordId)
   })
 
   // Work Unit detection: workUnits.json persistence, and the collector that fills it. Built here for
@@ -3179,6 +3190,11 @@ export function registerIpc(
       const w = new GitWatcher(() => workUnitCollector.onGitChanged(), orchLog)
       await w.watch(projectPath)
       return () => w.close()
+    },
+    // 닫힌 Unit 을 설명 파이프라인으로 넘긴다. **키를 원 저장소로 접는다** — understandingKeyOf 의
+    // 주석과 같은 이유다(워크트리 세션의 "프로젝트"는 그 워크트리가 아니라 원 저장소다).
+    onUnitClosed: (projectPath, unit) => {
+      void understandingPipeline.onUnitClosed(understandingKeyOf(projectPath), unit)
     },
     log: orchLog
   })

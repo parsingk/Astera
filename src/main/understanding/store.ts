@@ -47,6 +47,7 @@ export class UnderstandingStore {
     }
     if (!isValid(parsed)) return this.recover()
     this.state = parsed
+    this.unstick()
     return { recovered: false }
   }
 
@@ -87,5 +88,17 @@ export class UnderstandingStore {
     await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
     this.state = { projects: {} }
     return { recovered: true }
+  }
+
+  /** A record left in `generating` on disk is always a lie: the agent is a child of this process and
+   *  died with it. Left alone it spins forever with no way to retry. **True only here** — load runs
+   *  once, before any generation. */
+  private unstick(): void {
+    for (const u of Object.values(this.state.projects))
+      for (const r of u.records)
+        if (r.status === 'generating') {
+          r.status = 'failed'
+          r.reason = 'INTERRUPTED'
+        }
   }
 }

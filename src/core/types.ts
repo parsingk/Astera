@@ -918,6 +918,9 @@ export interface OrchApi {
 export interface UnderstandingApi {
   /** 저장된 이해. 한 번도 분석하지 않은 프로젝트는 null — 빈 상태가 그것을 그린다 */
   get(projectPath: string): Promise<ProjectUnderstanding | null>
+  /** 기록 하나의 설명을 다시 만든다. **결과를 기다리지 않는다** — 그 줄의 상태가 곧 "만드는 중"이
+   *  되고, 끝나면 'understanding:changed' 가 화면을 밀어 준다. */
+  regenerate(projectPath: string, recordId: string): Promise<void>
 }
 
 export type RendererApi = CoreApi & {
