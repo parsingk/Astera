@@ -120,6 +120,9 @@ export const ko = {
     '세션 시작 실패: {message} (worktree "{name}"는 남아 있으니 Worktrees 패널에서 삭제하세요)',
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped
   'session.spawn.resumeLiveIgnored': '이미 실행 중인 세션입니다 — 선택한 옵션은 적용되지 않았습니다.',
+  // Smart Resume took the blank slate — without this the user reads the empty window as a lost conversation
+  'session.spawn.smartResume':
+    '스마트 재개: 대화를 다시 싣는 대신, 지금까지의 작업 브리핑을 들려 새 세션으로 시작했습니다.',
   'session.placeholder.start': '+ 새 세션으로 시작하세요',
   'session.usage.contextTitleWithTokens': '컨텍스트 사용률 ({used} / {window} 토큰)',
   'session.usage.contextTitle': '컨텍스트 사용률',

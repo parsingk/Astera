@@ -65,6 +65,7 @@ import type { UndoEntry } from '../../core/files/undo'
 import * as sessionBus from './lib/sessionBus'
 import * as sticky from './lib/stickyProject'
 import { toast } from './lib/toast'
+import { spawnNotice } from './lib/spawnNotice'
 import { confirmModal, confirmModalWithChoices, isConfirmOpen } from './lib/confirm'
 import * as hiddenProjects from './lib/hiddenProjects'
 import { worktreeErrorMessage } from './lib/worktreeErrors'
@@ -1095,13 +1096,19 @@ export default function App(): React.JSX.Element {
       // The default account mapping is keyed on the original repo — a worktree path is new every time and mappings must not pile up
       if (opts.saveDefault)
         await window.api.projects.setDefaultAccount(opts.repoRoot ?? opts.cwd, opts.accountIds[0])
-      // When the rolling resume guard hits, main returns the existing live session → focus it without
-      // adding a tab. The verdict is made outside the setSessions callback, through sessionsRef: a state
-      // updater has to be pure, and StrictMode may run it twice, so raising a toast inside risks firing
-      // twice.
-      const guardHit = Boolean(opts.resumeSessionId) && sessionsRef.current.some((s) => s.id === info.id)
+      // What actually happened to the resume the modal asked for — the rolling guard focused an existing
+      // tab instead (its options quietly discarded), or Smart Resume started a blank session carrying a
+      // briefing. Both look wrong to the user unless we say so: one drops the chosen account, the other
+      // shows an empty window where a conversation was expected. The verdict is made outside the
+      // setSessions callback, through sessionsRef: a state updater has to be pure, and StrictMode may run
+      // it twice, so raising a toast inside risks firing twice.
+      const notice = spawnNotice({
+        requestedResumeSessionId: opts.resumeSessionId,
+        returnedResumeSessionId: info.resumeSessionId,
+        returnedTabAlreadyOpen: sessionsRef.current.some((s) => s.id === info.id)
+      })
       setSessions((prev) => (prev.some((s) => s.id === info.id) ? prev : [...prev, info]))
-      if (guardHit) toast.info(t('session.spawn.resumeLiveIgnored')) // tells the user the resume modal's options were quietly discarded
+      if (notice) toast.info(t(`session.spawn.${notice}`))
       const cur = layoutRef.current
       const pending = pendingSplitRef.current
       pendingSplitRef.current = null

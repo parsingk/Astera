@@ -129,6 +129,9 @@ export const es: Catalog = {
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped
   'session.spawn.resumeLiveIgnored':
     'Esta sesión ya está en ejecución — las opciones seleccionadas no se aplicaron.',
+  // Smart Resume took the blank slate — without this the user reads the empty window as a lost conversation
+  'session.spawn.smartResume':
+    'Reanudación inteligente: se inició una sesión nueva con un resumen del trabajo hecho hasta ahora, en lugar de recargar la conversación.',
   'session.placeholder.start': '+ Empiece con una sesión nueva',
   'session.usage.contextTitleWithTokens': 'Uso del contexto ({used} / {window} tokens)',
   'session.usage.contextTitle': 'Uso del contexto',

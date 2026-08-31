@@ -128,6 +128,9 @@ export const ja: Catalog = {
   // Rolling-resume guard hit — tells the user the tab was just focused and their chosen options were dropped
   'session.spawn.resumeLiveIgnored':
     'すでに実行中のセッションです — 選択したオプションは適用されませんでした。',
+  // Smart Resume took the blank slate — without this the user reads the empty window as a lost conversation
+  'session.spawn.smartResume':
+    'スマート再開: 会話を読み込み直す代わりに、これまでの作業の要約を渡して新しいセッションで始めました。',
   'session.placeholder.start': '+ 新しいセッションを開始',
   'session.usage.contextTitleWithTokens': 'コンテキスト使用率 ({used} / {window} トークン)',
   'session.usage.contextTitle': 'コンテキスト使用率',
