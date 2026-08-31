@@ -549,6 +549,17 @@ export default function App(): React.JSX.Element {
   fileTabsRef.current = fileTabs
   // 탭 순환이 쓰는 것 — 클릭과 같은 경로를 타야 종류에 상관없이 같은 일이 일어난다
   const selectWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
+  /** Ctrl+W 가 닫을 수 있는 탭의 id. **세션은 여기 들지 않는다** — 그 키로 세션을 죽이지 않는다.
+   *  파일과 기능은 둘 다 가볍게 열고 닫는 읽기용 탭이라 같은 취급을 받는다. */
+  const closableTabIdRef = useRef<string | null>(null)
+  // 탭 트리에서 파생시킨다 — activeFileId 와 같은 이유다: 따로 상태를 두면 다른 페인의 탭을
+  // 누르는 순간 트리와 갈라진다
+  closableTabIdRef.current =
+    activeTab?.kind === 'file' || activeTab?.kind === 'feature' ? activeTabId : null
+  /** 닫는 함수 자체. `closeWorkbenchTab` 은 매 렌더 새로 만들어지고 그 본문이 `featureTabs`
+   *  (렌더 값)를 읽으므로, 한 번만 등록되는 키 리스너가 붙잡은 옛 클로저를 부르면 좁힘 기억을
+   *  지우지 못한다 — selectWorkbenchTabRef 와 같은 자리, 같은 이유다. */
+  const closeWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
   const fileBuffersRef = useRef(fileBuffers) // keeps the external-change handler from going stale
   fileBuffersRef.current = fileBuffers
   // 파일별 에디터 상태 캐시. FileEditor보다 오래 살아야 하므로 여기서 소유한다 (editorStateCache.ts의 주석)
@@ -823,19 +834,21 @@ export default function App(): React.JSX.Element {
         return
       }
       // Closing a file tab, same as closing a browser tab. When dirty, closeFileTab raises a
-      // confirmation modal. The only condition is that the active tab is a file — a file tab lives in a
-      // pane now, so whether the explorer sidebar is showing says nothing about it. It is still not
-      // intercepted while xterm has focus — in a terminal, Ctrl+W deletes the previous word, which is
-      // needed while typing to Claude (see yieldsToTerminal above).
-      // closeFileTab is recreated on every render, but its body is all refs and setters, so it works
-      // against the latest state even when stale (the same convention as toggleExplorer above).
+      // confirmation modal. The condition is that the active tab is one Ctrl+W may close — a file or a
+      // How It Works feature. Both are opened and closed freely to read something; a session is not, and
+      // closing one kills a process, so it is left out (the tab strip's × still closes all three).
+      // A tab lives in a pane now, so whether the explorer sidebar is showing says nothing about it.
+      // It is still not intercepted while xterm has focus — in a terminal, Ctrl+W deletes the previous
+      // word, which is needed while typing to Claude (see yieldsToTerminal above).
       if (action === 'explorer.closeFileTab') {
-        const id = activeFileIdRef.current
-        if (!id) return // no file tab is open — unlike a browser, this does not close the window
+        const id = closableTabIdRef.current
+        if (!id) return // nothing closable is open — unlike a browser, this does not close the window
         e.preventDefault()
         e.stopPropagation()
         if (e.repeat) return // stops tabs closing in a chain while the key is held
-        void closeFileTab(id)
+        // Through the shared closer rather than closeFileTab, so a file still gets its dirty-file
+        // confirmation and a feature tab takes its own branch (which also clears the remembered scope).
+        closeWorkbenchTabRef.current(id)
         return
       }
       // 마크다운 프리뷰 모드 순환. 활성 탭이 .md 일 때만 의미가 있다. 툴바 버튼은 모드를 직접
@@ -1290,6 +1303,8 @@ export default function App(): React.JSX.Element {
     }
     closeSession(ref.id)
   }
+  // Ctrl+W 가 이 함수를 타도록 — 위 selectWorkbenchTabRef 와 같은 자리, 같은 이유다
+  closeWorkbenchTabRef.current = closeWorkbenchTab
 
   // Adjusting open tabs after a file operation. A watcher event does not say 'what became what', so the
   // renderer adjusts them itself right after the operation succeeds. A tab id is literally
