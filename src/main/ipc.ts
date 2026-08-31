@@ -3191,8 +3191,9 @@ export function registerIpc(
       await w.watch(projectPath)
       return () => w.close()
     },
-    // 닫힌 Unit 을 설명 파이프라인으로 넘긴다. **키를 원 저장소로 접는다** — understandingKeyOf 의
-    // 주석과 같은 이유다(워크트리 세션의 "프로젝트"는 그 워크트리가 아니라 원 저장소다).
+    // Hands a closed unit to the explanation pipeline. **Folds the key to the origin repo** — same
+    // reason as understandingKeyOf's own comment (a worktree session's "project" is the origin repo,
+    // not the worktree).
     onUnitClosed: (projectPath, unit) => {
       void understandingPipeline.onUnitClosed(understandingKeyOf(projectPath), unit)
     },

@@ -34,7 +34,7 @@ describe('buildRecordPrompt', () => {
     expect(p).toContain('"userVisibleChanges"')
   })
 
-  // 이 프롬프트가 설명하는 것은 프로젝트가 아니라 **방금 끝난 작업 하나**다
+  // What this prompt asks for is not the project — it's **one piece of work that just finished**
   it('작업 하나를 설명하라고 못박는다', () => {
     const p = buildRecordPrompt(req)
     expect(p).toContain('one piece of work that just finished')
@@ -45,7 +45,7 @@ describe('buildRecordPrompt', () => {
     expect(buildRecordPrompt(req)).toContain('at most 10 files')
   })
 
-  // Job 은 Task 목록과 검증 결과를 함께 가진다; 세션은 그 절이 아예 없다
+  // A Job carries a task list and a validation outcome together; a session has no such section at all
   it('Job 의 재료가 있으면 싣고, 없으면 그 절이 없다', () => {
     expect(buildRecordPrompt(req)).not.toContain('Tasks in this run')
     const withJob = buildRecordPrompt({

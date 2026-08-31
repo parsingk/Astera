@@ -1,5 +1,5 @@
-// 세션 sourceLabel 표기 — 화면의 "세션 sess-abcd" 같은 문구가 여기서 난다.
-// node: import 없음.
+// Session sourceLabel formatting — this is where text like "세션 sess-abcd" on screen comes from.
+// node: no imports.
 
 /** 화면의 sourceLabel 규칙. 스펙 예시("세션 #182")를 따르되 이 앱의 세션에는 순번이 없어
  *  id 의 앞 여덟 자를 쓴다 — 사람이 두 변경을 구별하는 용도이지 식별자가 아니다.

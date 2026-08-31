@@ -86,7 +86,7 @@ export class UnderstandingPipeline {
    *  collector's own round must not be held up by an agent that takes minutes. */
   onUnitClosed(projectRoot: string, unit: SessionWorkUnit): Promise<void> {
     return this.enqueue(async () => {
-      if (unit.status !== 'completed') return // 스펙 §7 — 버려진 Unit 은 하류로 흐르지 않는다
+      if (unit.status !== 'completed') return // spec §7 — an abandoned unit does not flow downstream
       const record: WorkRecord = {
         id: randomUUID(),
         at: unit.completedAt ?? unit.startedAt,
@@ -100,7 +100,7 @@ export class UnderstandingPipeline {
       // finishes leaves the screen looking like nothing happened, and the work is already done.
       await this.prepend(projectRoot, record)
       const commits = await this.commitsOf(projectRoot, record)
-      record.git.commits = commits
+      await this.patch(projectRoot, record.id, (r) => ({ ...r, git: { ...r.git, commits } }))
       await this.fill(projectRoot, record.id, commits)
     })
   }
@@ -143,7 +143,7 @@ export class UnderstandingPipeline {
       await this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'failed', reason: run.reason }))
       return
     }
-    const v = validateRecord(run.value, insideProject(projectRoot))
+    const v = validateRecord(run.value, isProjectFile(projectRoot))
     if (!v.ok) {
       await this.patch(projectRoot, recordId, (r) => ({ ...r, status: 'failed', reason: v.reason }))
       return
@@ -157,7 +157,8 @@ export class UnderstandingPipeline {
         id: randomUUID(),
         title: d.title,
         reason: d.reason,
-        // 코드를 읽고 추론한 것이므로 'agent' 다 — 스펙 §12 가 그 구분에 알약 색을 걸었다
+        // 'agent' because this was read from code and inferred — spec §12 hangs the pill's color on
+        // that distinction
         source: 'agent' as const,
         sourceLabel: d.sourceLabel,
         evidenceIds: d.evidenceIds
@@ -185,7 +186,7 @@ export class UnderstandingPipeline {
     try {
       return await this.deps.readCommits(projectRoot, r.git.startHead, r.git.endHead)
     } catch {
-      return [] // 커밋을 못 읽는 것은 기록을 못 쓸 이유가 아니다
+      return [] // failing to read commits is not a reason to fail the record
     }
   }
 

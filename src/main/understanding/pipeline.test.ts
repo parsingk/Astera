@@ -107,7 +107,7 @@ describe('onUnitClosed — 닫힌 작업이 기록이 된다', () => {
     const r = store.get(projectRoot)!.records
     expect(r).toHaveLength(1)
     expect(r[0].request).toBe('한도 감지를 고쳐줘') // 사용자의 말 그대로
-    // sessionLabelOf 는 id 앞 여덟 자다(changeRecord.ts) — 'sess-abcd1234'.slice(0,8) === 'sess-abc'
+    // sessionLabelOf takes the id's first eight characters (changeRecord.ts) — 'sess-abcd1234'.slice(0,8) === 'sess-abc'
     expect(r[0].source).toEqual({ kind: 'session', sessionId: 'sess-abcd1234', label: '세션 sess-abc' })
     expect(r[0].changedFiles).toEqual(['src/auth/login.ts'])
     expect(r[0].status).toBe('ready')
@@ -115,7 +115,7 @@ describe('onUnitClosed — 닫힌 작업이 기록이 된다', () => {
     expect(r[0].explanation!.userVisibleChanges).toEqual(['세션이 스스로 풀린다'])
   })
 
-  // 에이전트는 3~4분 걸린다. 그동안 화면에 아무것도 없으면 실패로 읽힌다
+  // The agent takes 3-4 minutes. If the screen shows nothing during that time, it reads as failure
   it('에이전트가 도는 동안 기록은 이미 있고 상태는 만드는 중이다', async () => {
     const { store, pipeline } = await make()
     agentReply.value = explanation()
@@ -157,6 +157,20 @@ describe('onUnitClosed — 닫힌 작업이 기록이 된다', () => {
     const r = store.get(projectRoot)!.records[0]
     expect(r.status).toBe('needs-review')
     expect(r.reason).toContain('커밋')
+  })
+
+  // Using insideProject instead of isProjectFile would have let an existing directory pass —
+  // then the screen's implementation link would be saved pointing at nothing it can open
+  it('근거가 디렉터리면 거부한다 — 있어도 파일이 아니면 안 된다', async () => {
+    const { store, pipeline } = await make()
+    agentReply.value = explanation({
+      evidencePaths: ['src/auth', 'src/auth/login.ts'],
+      implementation: [{ role: '감지', path: 'src/auth' }]
+    })
+    await pipeline.onUnitClosed(projectRoot, unit())
+    const r = store.get(projectRoot)!.records[0]
+    expect(r.status).toBe('failed')
+    expect(r.reason).toContain('src/auth')
   })
 
   it('새 기록이 앞에 온다 — 목록의 축은 시간이다', async () => {

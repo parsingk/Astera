@@ -220,7 +220,7 @@ describe('validateRecord', () => {
     expect(validateRecord({ ...ok, overview: '' }, all).ok).toBe(false)
   })
 
-  // 사용자에게 보이는 변화가 없는 작업도 있다 — 내부 정리, 테스트 추가
+  // Some work has no user-visible change — internal cleanup, added tests
   it('userVisibleChanges 는 비어 있어도 된다', () => {
     expect(validateRecord({ ...ok, userVisibleChanges: [] }, all).ok).toBe(true)
   })
