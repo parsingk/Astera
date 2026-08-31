@@ -3379,11 +3379,11 @@ export function registerIpc(
     onUnitClosed: (projectPath, unit) => {
       void understandingPipeline.onUnitClosed(understandingKeyOf(projectPath), unit)
     },
-    // The open-task section's redraw trigger. **Folds the key the same way onUnitClosed does above**
-    // — the renderer's listOpen call folds its own request the same way, so the two sides must agree
-    // on which key names a project, or a worktree tab would be told to redraw a project it never asked
-    // about while the origin repo's tab (the one that actually holds the task) hears nothing.
-    onTasksChanged: (projectPath) => send('sessionTasks:changed', understandingKeyOf(projectPath)),
+    // The open-task section's redraw trigger. **Not folded** — same reason as the sessionTasks.*
+    // handlers just below (their own comment has the full story): workUnits.json is keyed by the raw
+    // session cwd, not the origin-repo fold understanding.json uses, so this has to name the same key
+    // the renderer's own sessionTasks.list call used, unfolded, or the two would agree on nothing.
+    onTasksChanged: (projectPath) => send('sessionTasks:changed', projectPath),
     log: orchLog
   })
   // 토글이 꺼져 있으면 시작하지 않는다. **load 뒤로 미룬다** — 먼저 시작하면 수집기가 쓴 상태를
@@ -3401,23 +3401,33 @@ export function registerIpc(
   )
 
   // The How It Works screen's open-task section. Same shape as understanding.get: assertAllowedPath
-  // first (the path decides which project's tasks come back), then the collector call. **The key is
-  // folded to the origin repo the same way understandingKeyOf folds it for the record list** — a
-  // worktree session's project is the origin repo (design D1), and the collector stores tasks under
-  // that folded key (onUnitClosed's wiring above folds it the same way), so asking with the raw
-  // worktree path would look in a project that has nothing in it.
+  // first (the path decides which project's tasks come back), then the collector call.
+  //
+  // **Passed through, not folded.** `understanding.json` is keyed by the project folded to the
+  // origin repo (understandingKeyOf, design D1) — but `workUnits.json` is not: `workUnitSessions`
+  // above builds every `CollectorSession` with `projectPath: s.cwd` verbatim, and nothing in
+  // collector.ts folds it afterwards (`stateOf`/`persist` store and read back whatever key they are
+  // handed — collector.test.ts's `completeTaskById`/`listOpen` calls pin exactly that). So these two
+  // stores live in genuinely different key spaces, and folding here would ask the *other* store's
+  // key of *this* one, which holds nothing under it.
+  //
+  // **What this leaves imperfect:** a worktree session's open task is visible only in that
+  // worktree's own tab, not under the origin repository's tab — unlike a finished record, which
+  // (via the fold above) shows up under the origin repo no matter which tab produced it. That
+  // asymmetry is real and already exists for work-unit state generally; it is parked for a later
+  // plan (docs/2026-08-30-understanding-generation-conformance.md), not something to fix here.
   ipcMain.handle('sessionTasks.list', async (_e, projectPath: string) => {
     await assertAllowedPath(projectPath)
-    return workUnitCollector.listOpen(understandingKeyOf(projectPath))
+    return workUnitCollector.listOpen(projectPath)
   })
   ipcMain.handle('sessionTasks.complete', async (_e, projectPath: string, id: string) => {
     await assertAllowedPath(projectPath)
-    const r = await workUnitCollector.completeTaskById(understandingKeyOf(projectPath), id)
+    const r = await workUnitCollector.completeTaskById(projectPath, id)
     if (!r.ok) throw new Error(r.reason)
   })
   ipcMain.handle('sessionTasks.cancel', async (_e, projectPath: string, id: string) => {
     await assertAllowedPath(projectPath)
-    const r = await workUnitCollector.cancelTaskById(understandingKeyOf(projectPath), id)
+    const r = await workUnitCollector.cancelTaskById(projectPath, id)
     if (!r.ok) throw new Error(r.reason)
   })
 

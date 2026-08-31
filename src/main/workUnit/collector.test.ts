@@ -420,6 +420,25 @@ describe('WorkUnitCollector — 선언으로 여닫는다', () => {
     expect(open.map((t) => t.status).sort()).toEqual(['active', 'interrupted'])
     expect(open.find((t) => t.status === 'active')?.objective).toBe('세 번째 작업')
   })
+
+  // Review fix (Task 5, round 1): ipc.ts's sessionTasks.* handlers used to fold this path through
+  // understandingKeyOf before calling here, on the mistaken belief that workUnits.json is keyed the
+  // same way understanding.json is. It is not — `projectPath` here is a session's raw cwd (the
+  // `workUnitSessions` builder in ipc.ts sets it verbatim), and nothing in this file transforms it.
+  // ipc.ts has no handler-level test harness (registerIpc wires real electron ipcMain), so this pins
+  // the contract one layer down: asking with a different path — standing in for a worktree's origin
+  // repo, which is what a fold would have substituted — must see nothing.
+  it('listOpen 은 받은 경로 그대로 찾는다 — 접지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector } = await makeCollector(fake)
+    await collector.start()
+
+    await collector.startTask('s1', '워크트리에서 시작한 작업')
+
+    expect(collector.listOpen(projectPath)).toHaveLength(1)
+    expect(collector.listOpen(path.join(dir, 'not-the-same-project'))).toEqual([])
+  })
 })
 
 // ── 열려 있는 동안의 HEAD 전진 — 선언으로 연 뒤에도 그대로다 ──────────────

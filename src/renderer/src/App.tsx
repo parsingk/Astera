@@ -2287,8 +2287,10 @@ export default function App(): React.JSX.Element {
 
   // The open-task section's own load — same shape as the understanding effect just above, including
   // the root travelling with the data and the two failure/success branches resolving to the same
-  // project key. main folds the project path to the origin repo before answering (sessionTasks.list's
-  // comment in ipc.ts), so this effect does not need to do that folding itself.
+  // project key. **Unlike `understanding.get`, main does not fold this path** — workUnits.json is
+  // keyed by the raw session cwd, a different key space from understanding.json's origin-repo fold
+  // (ipc.ts's sessionTasks.* handlers explain why) — so this passes `currentProject` straight
+  // through, same as main does on its end.
   useEffect(() => {
     if (!currentProject) return setOpenTasks(null)
     const root = currentProject
@@ -2371,10 +2373,10 @@ export default function App(): React.JSX.Element {
   }, [])
 
   // A task started, was completed/cancelled, or was interrupted — the collector's onTasksChanged
-  // fires for all of these (collector.ts). Same shape as the listener just above, including not
-  // comparing the pushed key against currentProject: it is folded to the origin repo the same way
-  // (ipc.ts's sessionTasks wiring), so this only re-reads through sessionTasks.list, which folds the
-  // same way on the way in.
+  // fires for all of these (collector.ts). Same shape as the listener just above — still not
+  // comparing the pushed key against currentProject, even though this one is never folded (unlike
+  // 'understanding:changed''s payload): it is just a "read again" signal, so the value carried does
+  // not need to be checked before triggering the same unconditional re-read through sessionTasks.list.
   useEffect(() => {
     return window.api.on('sessionTasks:changed', () => setSessionTasksSeq((n) => n + 1))
   }, [])
