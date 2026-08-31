@@ -77,29 +77,20 @@ vendors, checks the result, and waits when a human decision is needed.
   until you edit it, which saves it as yours
 
 **How It Works (experimental)**
-- How It Works is for people who do not read code. Nothing is recorded until you start it — type
-  `/astera-task` with what you want done, and one piece of work is one row from there, however many
-  messages it takes: an approval, a correction, a change of mind partway are all the same row
+- How It Works is for people who do not read code. Write down what you want done with the
+  `/astera-task` skill and it starts getting ready to record from there; once the work is finished it
+  reads what happened and writes it up
 - `/astera-task` is a skill the app installs into your accounts, like the orchestration one. It
   tells the agent to mark the start, keep working through as many of your messages as it takes, and
   mark the end when your objective is met — you type the objective, it does the rest
-- A Run is still one row on its own, with no `/astera-task` needed, whether you started it from the
-  Jobs sidebar or an agent started it through the `astera-orchestration` skill
+- A Jobs Run (`/astera-orchestration`) is read and recorded the same way. The reading starts once
+  the Run has finished
 - A piece of work that changed no files leaves no row. If you declared one and then only talked,
   there is nothing to write up
 - Off by default. Turn on **Work unit tracking** in settings, then pick the **Explanation account**
   that will write the entries. It does not apply to sessions that are already open — only new
   sessions get it
-- Only work finished after you turned tracking on. Nothing before it is read — not the code, not
-  earlier sessions, not earlier runs
-- The agent marks a row done when the objective is met, or you mark it done yourself from the
-  screen — a piece of work that never got an ending just waits there until you do
-- A row fills itself in a few minutes after it closes. If it could not be written up, it says why
-  and offers to try again
-- Open a row for what changed, what a person using the product will notice, the order things happen
-  in, the decisions taken, and where it lives in the code
-- What the agent said it checked is shown as reported, not as something the app measured itself
-- It still only ever reads. Nothing here can change your code
+- Only work done after you turned the feature on in settings is recorded
 
 **Editor and shortcuts**
 - One key shows and hides the explorer — `Ctrl`/`Cmd`+`Shift`+`E` for the file tree, the run toolbar

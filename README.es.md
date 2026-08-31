@@ -80,31 +80,20 @@ de una coordinadora mediante la skill `/astera-orchestration`.
   detectadas aparecen en cursiva hasta que editas una, lo que la guarda como tuya
 
 **How It Works (experimental)**
-- How It Works es para quien no lee código. No se registra nada hasta que tú lo empiezas: escribe
-  `/astera-task` con lo que quieres hacer y a partir de ahí una línea reúne ese trabajo, por muchos
-  mensajes que haga falta — una aprobación, una corrección, un cambio de idea a mitad de camino,
-  todo queda en la misma línea
+- How It Works es para quien no lee código. Escribe con la habilidad `/astera-task` lo que quieres
+  hacer y desde ahí empieza a prepararse para registrarlo; cuando el trabajo termina, lee lo que
+  pasó y lo redacta
 - `/astera-task` es una habilidad que la app instala en tus cuentas, igual que la de orquestación.
   Le dice al agente que marque el inicio, siga trabajando durante todos los mensajes que hagan
   falta y marque el final cuando se cumpla tu objetivo — tú escribes el objetivo, él hace el resto
-- Un Run sigue siendo su propia línea, sin necesitar `/astera-task`, lo hayas iniciado tú desde la
-  barra de Jobs o lo haya iniciado un agente con la habilidad `astera-orchestration`
+- Un Run de Jobs (`/astera-orchestration`) se lee y se registra igual. La lectura empieza cuando el
+  Run ha terminado
 - Un trabajo que no cambió ningún archivo no deja línea. Si lo declaraste y solo hablaste, no hay
   nada que redactar
 - Desactivado por defecto. Activa el **seguimiento de unidades de trabajo** en los ajustes y elige
   la **cuenta para explicaciones** que las escribirá. No se aplica a las sesiones que ya están
   abiertas: funciona a partir de las sesiones nuevas
-- Solo se registra el trabajo terminado después de activar el seguimiento. Nada anterior se lee: ni
-  el código, ni sesiones previas, ni Runs previos
-- El agente cierra la línea cuando considera cumplido el objetivo, o puedes cerrarla tú mismo desde
-  la pantalla — un trabajo que se quedó sin cierre espera ahí hasta que alguien lo resuelva
-- La línea se completa sola unos minutos después de cerrarse. Si no se pudo redactar, dice por qué
-  y ofrece intentarlo de nuevo
-- Abre una línea para ver qué cambió, qué notará quien use el producto, en qué orden ocurre todo,
-  las decisiones que se tomaron y dónde vive en el código
-- Lo que el agente dijo haber comprobado se muestra tal como lo informó, no como algo que la
-  aplicación haya verificado
-- Solo lee. Nada de esto puede cambiar tu código
+- Solo se registra el trabajo hecho después de activar la función en los ajustes
 
 **Editor y atajos**
 - Una tecla muestra y oculta el explorador: `Ctrl`/`Cmd`+`Shift`+`E` para el árbol de archivos, la
