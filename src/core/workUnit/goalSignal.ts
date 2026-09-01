@@ -8,7 +8,7 @@
 // once per record and does not know which vendor wrote it (`hasWriteEvidence`, humanRequest.ts,
 // makes the same choice for the same reason).
 //
-// node: import 없음 — main 과 core 가 함께 읽는다.
+// Note: This module has no imports because both main and core read it.
 
 /** A goal boundary. `summary` is the claude evaluator's own reason for saying the condition holds;
  *  codex reports no equivalent, so it is absent there. */
