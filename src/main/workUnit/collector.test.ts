@@ -1645,10 +1645,10 @@ describe('네이티브 /goal 이 작업 하나를 연다', () => {
   })
 
   // Final review, item 3: the screen's own [complete]/[cancel] closes a goal's unit through a
-  // route the goal never sees, so `goalUnits` used to keep pointing at a unit that is no longer
-  // open. The idempotence check above (`entry.objective === signal.objective`) then mistook the
-  // very same objective typed again for the re-sent record it exists to ignore, and opened nothing.
-  it('goal 이 연 Unit 을 화면에서 닫은 뒤 같은 목표를 다시 치면 새 Unit 이 열린다', async () => {
+  // route the goal never sees. Claude's `sentinel` is a declaration, not a broadcast (spec §4), so
+  // a repeat of it always counts as a new start — even the very same objective, even after the
+  // goal's earlier unit already closed — unlike codex's `active` below, which does not.
+  it('claude 에서 goal 이 연 Unit 을 화면에서 닫은 뒤 같은 목표를 다시 선언하면 새 Unit 이 열린다', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
     const { collector, store } = await makeCollector(fake)
@@ -1728,6 +1728,76 @@ describe('네이티브 /goal 이 작업 하나를 연다', () => {
     expect(state.units[0].status).toBe('cancelled') // untouched further
     expect(state.units[1].objective).toBe('두 번째 목표')
     expect(state.units[1].status).toBe('active') // a fresh unit for a genuinely different goal
+  })
+
+  // Re-review regression: a start signal naming a different objective while the goal's own unit is
+  // still open must hit the already-open guard and leave `goalUnits` alone — deleting it there (as
+  // a prior version of this fix did) severs the only link telling the goal's end which unit is its
+  // own, and the unit is then stuck open until the person closes it by hand. Claude reaches the
+  // already-open guard here because `sentinel` is always a declaration, regardless of objective.
+  it('claude 에서 Unit 이 열린 채로 다른 목표가 다시 선언돼도, 끝은 여전히 그 Unit 을 닫는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, closed } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '첫 번째 목표' }),
+      'utf8'
+    )
+    await collector.flush() // opens the unit
+
+    // The person refines the goal while its unit is still open — a fresh declaration, but one unit
+    // is already open so it must be ignored, not opened as a second unit.
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '두 번째 목표' }),
+      'utf8'
+    )
+    await collector.flush()
+    expect(store.get(projectPath)!.units).toHaveLength(1) // still just the one unit
+
+    await fs.appendFile(transcript, wrote(), 'utf8')
+    fake.git.files = ['src/x.ts']
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ met: true, condition: '두 번째 목표', reason: '끝났다' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].status).toBe('completed') // not left open for the person to close by hand
+    expect(closed).toHaveLength(1)
+  })
+
+  // Same regression, codex's route to the already-open guard: not a declaration, but a broadcast
+  // naming an objective that no longer matches the remembered one, so the repeat guard does not
+  // catch it either — both vendors must land on the guard that preserves `goalUnits`.
+  it('codex 에서 Unit 이 열린 채로 다른 목표로 active 가 다시 와도, complete 는 여전히 그 Unit 을 닫는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, closed } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexGoal('active', '첫 번째 목표'), 'utf8')
+    await collector.flush() // opens the unit
+
+    await fs.appendFile(transcript, codexGoal('active', '두 번째 목표'), 'utf8')
+    await collector.flush()
+    expect(store.get(projectPath)!.units).toHaveLength(1) // still just the one unit
+
+    await fs.appendFile(transcript, wrote(), 'utf8')
+    fake.git.files = ['src/x.ts']
+    await fs.appendFile(transcript, codexGoal('complete', '두 번째 목표'), 'utf8')
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].status).toBe('completed') // not left open for the person to close by hand
+    expect(closed).toHaveLength(1)
   })
 
   // Fix round 1, finding 2: a goal's unit used to be identified by its objective text alone, so a

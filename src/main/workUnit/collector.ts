@@ -812,10 +812,6 @@ export class WorkUnitCollector {
           // unit below.
           return
         }
-        // Either a declaration (claude's `sentinel` always counts as a new start) or a broadcast
-        // naming a different objective (a genuinely new codex goal). Either way, whatever entry was
-        // here no longer answers "is a unit already open" for the goal about to run below.
-        if (entry) this.goalUnits.delete(sessionId)
         const open = state.units.find((u) => u.sessionId === sessionId && isOpen(u.status))
         if (open) {
           // Spec §5.2 — a goal adds a finish line to work already declared; it does not start a
@@ -823,12 +819,23 @@ export class WorkUnitCollector {
           // The notice is deduped separately from the retry above (final review, item 4) — the
           // retry must run every time so the goal gets its own unit the instant the block clears,
           // but the toast saying so must not repeat while the block persists.
+          //
+          // **`entry` is left untouched here.** `open` can be the goal's own still-active unit — a
+          // person refining a claude condition, or codex broadcasting a changed objective, while
+          // that unit is open — and deleting `entry` in that case would sever the only link telling
+          // the goal's own end which unit to close, leaving it stuck open until the person closes it
+          // by hand (re-review regression). Discarding `entry` is only safe once we know we are not
+          // about to return with the goal's own unit left exactly as it was.
           if (this.goalIgnoredNotices.get(sessionId) !== signal.objective) {
             this.goalIgnoredNotices.set(sessionId, signal.objective)
             this.deps.onGoalIgnored?.(s.projectPath, signal.objective)
           }
           return
         }
+        // Either a declaration (claude's `sentinel` always counts as a new start) or a broadcast
+        // naming a different objective (a genuinely new codex goal). Either way, whatever entry was
+        // here no longer answers "is a unit already open" for the goal about to run below.
+        if (entry) this.goalUnits.delete(sessionId)
         this.goalIgnoredNotices.delete(sessionId)
         const r = await this.startTaskCore(sessionId, signal.objective)
         if (r.ok) this.goalUnits.set(sessionId, { id: r.id, objective: signal.objective })
