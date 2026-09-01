@@ -2900,9 +2900,10 @@ export function registerIpc(
   ipcMain.on('github.subscribe', () => githubPrs.subscribe())
   ipcMain.on('github.unsubscribe', () => githubPrs.unsubscribe())
   ipcMain.handle('settings.getGithubPolling', () => core.appSettings.getGithubPolling())
-  ipcMain.handle('settings.setGithubPolling', (_e, enabled: unknown) =>
-    core.appSettings.setGithubPolling(enabled === true)
-  )
+  ipcMain.handle('settings.setGithubPolling', async (_e, enabled: boolean) => {
+    if (typeof enabled !== 'boolean') throw new Error(`INVALID_GITHUB_POLLING: ${String(enabled)}`)
+    await core.appSettings.setGithubPolling(enabled)
+  })
 
   // usage — an active session's context, 5-hour and weekly %. The two CLIs keep those figures in
   // different places, so the source is picked per session: claude writes them into the statusLine
