@@ -103,6 +103,30 @@ export const ko = {
   // ROLL_MIXED_PROVIDER in sessions/manager.ts — a session-rolling constraint unrelated to worktrees, so it uses
   // session.* rather than worktree.*. The MESSAGES array in worktreeErrors.ts maps to this key
   'session.roll.mixedProvider': 'Claude와 Codex 계정을 섞어 롤링할 수 없습니다',
+  // ---- github ----
+  'github.settings.status': '연결 상태',
+  'github.settings.connected': '연결됨 — {account}',
+  'github.settings.connectedNoAccount': '연결됨',
+  'github.settings.notInstalled': 'GitHub CLI(gh)가 설치되어 있지 않습니다. 설치한 뒤 앱을 다시 시작하세요.',
+  'github.settings.installLink': 'GitHub CLI 설치 페이지 열기',
+  'github.settings.notAuthenticated':
+    'GitHub CLI가 로그인되어 있지 않습니다. 터미널에서 아래 명령을 실행한 뒤 다시 확인하세요.',
+  'github.settings.error': '상태를 확인하지 못했습니다 — gh 실행이 실패했습니다.',
+  'github.settings.recheck': '다시 확인',
+  'github.settings.copyCommand': '명령 복사',
+  'github.settings.commandCopied': '명령을 복사했습니다',
+  'github.settings.polling': 'PR 상태 자동 갱신',
+  'github.settings.pollingHint': '끄면 수동 새로고침과 워크트리 패널을 펼칠 때만 조회합니다.',
+  'github.badge.openInBrowser': '브라우저에서 열기',
+  'github.badge.copyLink': '링크 복사',
+  'github.badge.linkCopied': '링크를 복사했습니다',
+  'github.badge.stale': '레이트리밋으로 갱신이 멈춰 있습니다 — 마지막으로 확인한 상태입니다',
+  'github.badge.draft': '초안',
+  'github.badge.checks.pending': '체크 진행 중',
+  'github.badge.checks.failing': '체크 실패',
+  'github.state.open': '열림',
+  'github.state.merged': '머지됨',
+  'github.state.closed': '닫힘',
   // App.tsx — shared window controls, resizer, separator
   'common.minimize': '최소화',
   'common.maximize': '최대화',
