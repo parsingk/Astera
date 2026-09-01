@@ -557,6 +557,20 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    *text* glyph made (≈21px), which the drawn icons no longer produce — left in place it jumped the row 5px. */
 .worktree-actions .ghost.removing .loading-spinner { width: 12px; height: 12px; }
 
+/* PR badge on a worktree row — read-only GitHub state (design doc §6). Colors reuse existing
+   tokens on purpose, no new palette: open=--ok, merged=--accent, closed=--danger,
+   draft=--text-faint. Passing checks draw nothing — only pending/failing earn a dot. */
+.pr-badge { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; background: none; border: none; padding: 0 2px; font-family: var(--mono); font-size: 10px; cursor: pointer; }
+.pr-badge.open { color: var(--ok); }
+.pr-badge.merged { color: var(--accent); }
+.pr-badge.closed { color: var(--danger); }
+.pr-badge.draft { color: var(--text-faint); }
+/* Dimmed, not hidden — the rate-limit breaker keeps the last known state on screen (§4) */
+.pr-badge.stale { opacity: 0.45; }
+.pr-badge .pr-checks { width: 6px; height: 6px; border-radius: 50%; }
+.pr-badge .pr-checks.pending { background: var(--warn); }
+.pr-badge .pr-checks.failing { background: var(--danger); }
+
 /* ---------- tabs ---------- */
 .tabs { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; }
 /* 이 padding 은 죽은 값이다 — WorkbenchTabs 는 .pane-tabbar 안에서만 렌더링되고, 거기서는
