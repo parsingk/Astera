@@ -1031,7 +1031,7 @@ export const ko = {
   'hiw.open.reason.appRestart': '앱이 꺼져 멈췄습니다',
   'hiw.open.reason.trackingOff': '추적을 꺼서 멈췄습니다',
   'hiw.open.reason.upgrade': '앱이 업데이트되어 멈췄습니다',
-  'hiw.goal.ignored': 'How it works의 열려져 있는 작업 기록을 먼저 완료처리 해주세요.',
+  'hiw.goal.ignored': 'How It Works의 열려 있는 작업 기록을 먼저 완료처리 해주세요.',
   'hiw.verify.verified': '보고된 검사가 모두 통과했습니다',
   'hiw.verify.partial': '일부만 확인되었습니다',
   'hiw.verify.unverified': '확인된 것이 없습니다',
