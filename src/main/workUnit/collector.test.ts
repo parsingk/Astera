@@ -15,7 +15,12 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { WorkUnitStore } from './store'
-import { WorkUnitCollector, type CollectorGit, type CollectorSession } from './collector'
+import {
+  WorkUnitCollector,
+  type CollectorDeps,
+  type CollectorGit,
+  type CollectorSession
+} from './collector'
 import { OPERATION_GRACE_MS } from '../../core/git/provenance'
 import type { GitRef } from '../../core/git/types'
 import type { SessionWorkUnit } from '../../core/workUnit/types'
@@ -47,6 +52,20 @@ const wrote = (tool = 'Edit'): string =>
 /** The line codex writes to say a turn ended, by itself — codex's own regression guard uses this */
 const codexTurnComplete = (): string =>
   JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', turn_id: 't1' } }) + '\n'
+
+/** A claude goal boundary — the `goal_status` attachment measured in spec §3.1 */
+const claudeGoal = (a: Record<string, unknown>): string =>
+  JSON.stringify({ type: 'attachment', attachment: { type: 'goal_status', ...a } }) + '\n'
+
+/** A codex goal boundary — the `thread_goal_updated` event measured in spec §3.2 */
+const codexGoal = (status: string, objective = 'rpg 게임을 만들어줘'): string =>
+  JSON.stringify({
+    type: 'event_msg',
+    payload: {
+      type: 'thread_goal_updated',
+      goal: { objective, status, tokensUsed: 0, timeUsedSeconds: 0 }
+    }
+  }) + '\n'
 
 interface Fake {
   git: CollectorGit & {
@@ -80,12 +99,14 @@ function makeFake(): Fake {
 async function makeCollector(
   fake: Fake,
   file = storeFile,
-  watchGit?: (projectPath: string) => Promise<(() => Promise<void>) | null>
+  watchGit?: (projectPath: string) => Promise<(() => Promise<void>) | null>,
+  extra: Partial<CollectorDeps> = {}
 ): Promise<{
   collector: WorkUnitCollector
   store: WorkUnitStore
   closed: SessionWorkUnit[]
   tasksChanged: string[]
+  ignored: { projectPath: string; objective: string; blockingUnitId: string }[]
 }> {
   const store = new WorkUnitStore(file)
   await store.load()
@@ -94,6 +115,8 @@ async function makeCollector(
   // The screen's redraw signal (Item 9). How many times a project path lands here, and in what
   // order, is exactly how many times the screen had to re-read.
   const tasksChanged: string[] = []
+  // A goal arrived while a unit was already open — see onGoalIgnored's own doc for why it fires.
+  const ignored: { projectPath: string; objective: string; blockingUnitId: string }[] = []
   // 자기 참조다 — pendingGitOps 는 collector 자신의 등록 목록을 그대로 돌려준다. ipc.ts 가
   // workUnitCollector 를 wiring 하는 것과 같은 자리, 같은 이유다.
   const collector: WorkUnitCollector = new WorkUnitCollector({
@@ -104,9 +127,11 @@ async function makeCollector(
     pendingGitOps: () => collector.getPendingGitOps(),
     watchGit,
     onUnitClosed: (_p, u) => closed.push(u),
-    onTasksChanged: (p) => tasksChanged.push(p)
+    onTasksChanged: (p) => tasksChanged.push(p),
+    onGoalIgnored: (info) => ignored.push(info),
+    ...extra
   })
-  return { collector, store, closed, tasksChanged }
+  return { collector, store, closed, tasksChanged, ignored }
 }
 
 const session = (overrides: Partial<CollectorSession> = {}): CollectorSession => ({
@@ -1438,6 +1463,738 @@ describe('WorkUnitCollector — isAncestor 를 묻는 조건', () => {
     collector.onGitChanged()
     await collector.flush()
     expect(asks).toBe(1)
+  })
+})
+
+// ── 네이티브 /goal 이 여닫는 Unit (task 2) ─────────────────────────────
+
+describe('네이티브 /goal 이 작업 하나를 연다', () => {
+  it('claude 의 sentinel 은 그 문장 그대로 Unit 을 연다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: 'rpg 게임을 만들어줘' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].objective).toBe('rpg 게임을 만들어줘')
+    expect(state.units[0].status).toBe('active')
+  })
+
+  it('met 은 그 Unit 을 완료로 닫고, 평가자의 이유를 요약으로 남긴다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, closed } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: 'rpg 게임을 만들어줘' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    await fs.appendFile(transcript, wrote(), 'utf8') // evidence that this session touched a file
+    fake.git.files = ['src/game.ts']
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ met: true, condition: 'rpg 게임을 만들어줘', reason: '충족됐다' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units[0].status).toBe('completed')
+    expect(state.units[0].completion?.source).toBe('agent')
+    expect(state.units[0].resultSummary).toBe('충족됐다')
+    expect(closed).toHaveLength(1)
+  })
+
+  it('이미 열린 작업이 있으면 목표는 새 Unit 을 열지 않고, 그 Unit 의 id 를 실어 알린다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, ignored } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '결제 붙이기')
+    expect(started.ok).toBe(true)
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1) // neither interrupted nor joined by a second unit
+    expect(state.units[0].objective).toBe('결제 붙이기')
+    expect(state.units[0].status).toBe('active')
+    // the blocking unit is /astera-task's own — its id is what the toast's button would close
+    expect(ignored).toEqual([
+      { projectPath, objective: '테스트가 통과할 때까지', blockingUnitId: state.units[0].id }
+    ])
+  })
+
+  // Final review, item 4: codex re-sends `thread_goal_updated` with `status: "active"` on every
+  // turn boundary, not only when the goal itself changes. Retrying while blocked is correct and
+  // must keep happening, but the toast telling the person about it must not repeat every turn.
+  it('막힌 채로 같은 목표가 반복돼도 알림은 한 번만 뜬다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, ignored } = await makeCollector(fake)
+    await collector.start()
+
+    await collector.startTask('s1', '결제 붙이기') // an already-open unit blocks the goal
+
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush()
+    // codex resends the identical record on the next turn boundary too — still blocked, same text
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1) // still just the /astera-task unit
+    expect(ignored).toHaveLength(1) // one notice, not two
+    expect(ignored[0]).toEqual({
+      projectPath,
+      objective: 'rpg 게임을 만들어줘',
+      blockingUnitId: state.units[0].id
+    })
+  })
+
+  it('목표의 끝은 /astera-task 가 연 Unit 을 닫지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await collector.startTask('s1', '결제 붙이기')
+    await fs.appendFile(transcript, wrote(), 'utf8')
+    fake.git.files = ['src/pay.ts']
+    await fs.appendFile(transcript, claudeGoal({ met: true, condition: '테스트가 통과할 때까지' }), 'utf8')
+    await collector.flush()
+
+    expect(store.get(projectPath)!.units[0].status).toBe('active')
+  })
+
+  it('Run 안의 세션에서 온 목표는 무시하고 알리지도 않는다 — 사람이 친 것이 아니다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, ignored } = await makeCollector(fake, undefined, undefined, {
+      inRun: () => true
+    })
+    await collector.start()
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: 'rpg 게임을 만들어줘' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    expect(store.get(projectPath)?.units ?? []).toHaveLength(0)
+    expect(ignored).toEqual([])
+  })
+
+  it('codex 가 같은 목표로 active 를 반복해도 Unit 은 하나다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush()
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush()
+
+    expect(store.get(projectPath)!.units).toHaveLength(1)
+  })
+
+  it('되돌아올 수 있는 codex 상태는 Unit 을 닫지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush()
+    await fs.appendFile(transcript, codexGoal('paused'), 'utf8')
+    await collector.flush()
+
+    expect(store.get(projectPath)!.units[0].status).toBe('active')
+  })
+
+  // Final review, item 7: only claude's `met` had ever driven a goal's end through the collector —
+  // codex's own end (`status: "complete"`) is the same code path but had never been exercised.
+  it('codex 의 complete 도 같은 경로로 Unit 을 완료로 닫는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, closed } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush()
+
+    await fs.appendFile(transcript, wrote(), 'utf8') // evidence that this session touched a file
+    fake.git.files = ['src/game.ts']
+    await fs.appendFile(transcript, codexGoal('complete'), 'utf8')
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units[0].status).toBe('completed')
+    expect(state.units[0].completion?.source).toBe('agent')
+    expect(closed).toHaveLength(1)
+  })
+
+  // Final review, item 3: the screen's own [complete]/[cancel] closes a goal's unit through a
+  // route the goal never sees. Claude's `sentinel` is a declaration, not a broadcast (spec §4), so
+  // a repeat of it always counts as a new start — even the very same objective, even after the
+  // goal's earlier unit already closed — unlike codex's `active` below, which does not.
+  it('claude 에서 goal 이 연 Unit 을 화면에서 닫은 뒤 같은 목표를 다시 선언하면 새 Unit 이 열린다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush() // the goal opens its own unit
+
+    // The person closes it from the screen — a route the goal's own end never takes.
+    const opened = store.get(projectPath)!.units[0]
+    await collector.cancelTaskById(projectPath, opened.id)
+
+    // The very same objective arrives again.
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2)
+    expect(state.units[0].status).toBe('cancelled') // untouched further
+    expect(state.units[1].objective).toBe('테스트가 통과할 때까지')
+    expect(state.units[1].status).toBe('active') // a fresh unit, not silently dropped
+  })
+
+  // This is the defect this round fixes. codex's `active` is a state broadcast, re-sent on every
+  // turn boundary whether or not the goal changed — unlike claude's `sentinel` above, it is not a
+  // declaration. Treating the repeat as a fresh start would find nothing open once the person closes
+  // the row and silently mint a duplicate for a goal they just dismissed (spec §4).
+  it('codex 가 연 Unit 을 화면에서 닫은 뒤 같은 목표로 active 가 반복돼도 새 Unit 은 열리지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush() // the goal opens its own unit
+
+    // The person closes it from the screen — a route the goal's own end never takes.
+    const opened = store.get(projectPath)!.units[0]
+    await collector.cancelTaskById(projectPath, opened.id)
+
+    // codex re-sends the same status broadcast on the next turn boundary, naming the same objective.
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1) // no duplicate row for a goal the person just dismissed
+    expect(state.units[0].status).toBe('cancelled') // untouched further
+  })
+
+  // The rule above is per-objective, not a blanket "ignore codex after a close" — a broadcast
+  // naming a genuinely different objective is still a new goal and still opens its own unit.
+  it('codex 에서 Unit 을 닫은 뒤 다른 목표로 active 가 오면 새 Unit 이 열린다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexGoal('active', '첫 번째 목표'), 'utf8')
+    await collector.flush() // the goal opens its own unit
+
+    const opened = store.get(projectPath)!.units[0]
+    await collector.cancelTaskById(projectPath, opened.id)
+
+    await fs.appendFile(transcript, codexGoal('active', '두 번째 목표'), 'utf8')
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2)
+    expect(state.units[0].status).toBe('cancelled') // untouched further
+    expect(state.units[1].objective).toBe('두 번째 목표')
+    expect(state.units[1].status).toBe('active') // a fresh unit for a genuinely different goal
+  })
+
+  // Re-review regression: a start signal naming a different objective while the goal's own unit is
+  // still open must hit the already-open guard and leave `goalUnits` alone — deleting it there (as
+  // a prior version of this fix did) severs the only link telling the goal's end which unit is its
+  // own, and the unit is then stuck open until the person closes it by hand. Claude reaches the
+  // already-open guard here because `sentinel` is always a declaration, regardless of objective.
+  it('claude 에서 Unit 이 열린 채로 다른 목표가 다시 선언돼도, 끝은 여전히 그 Unit 을 닫는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, closed, ignored } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '첫 번째 목표' }),
+      'utf8'
+    )
+    await collector.flush() // opens the unit
+    const openedId = store.get(projectPath)!.units[0].id
+
+    // The person refines the goal while its unit is still open — a fresh declaration, but one unit
+    // is already open so it must be ignored, not opened as a second unit.
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '두 번째 목표' }),
+      'utf8'
+    )
+    await collector.flush()
+    expect(store.get(projectPath)!.units).toHaveLength(1) // still just the one unit
+    // the blocking unit is the goal's own — the notice carries its id, same as an /astera-task block
+    expect(ignored).toEqual([
+      { projectPath, objective: '두 번째 목표', blockingUnitId: openedId }
+    ])
+
+    await fs.appendFile(transcript, wrote(), 'utf8')
+    fake.git.files = ['src/x.ts']
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ met: true, condition: '두 번째 목표', reason: '끝났다' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].status).toBe('completed') // not left open for the person to close by hand
+    expect(closed).toHaveLength(1)
+  })
+
+  // Same regression, codex's route to the already-open guard: not a declaration, but a broadcast
+  // naming an objective that no longer matches the remembered one, so the repeat guard does not
+  // catch it either — both vendors must land on the guard that preserves `goalUnits`.
+  it('codex 에서 Unit 이 열린 채로 다른 목표로 active 가 다시 와도, complete 는 여전히 그 Unit 을 닫는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, closed } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexGoal('active', '첫 번째 목표'), 'utf8')
+    await collector.flush() // opens the unit
+
+    await fs.appendFile(transcript, codexGoal('active', '두 번째 목표'), 'utf8')
+    await collector.flush()
+    expect(store.get(projectPath)!.units).toHaveLength(1) // still just the one unit
+
+    await fs.appendFile(transcript, wrote(), 'utf8')
+    fake.git.files = ['src/x.ts']
+    await fs.appendFile(transcript, codexGoal('complete', '두 번째 목표'), 'utf8')
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].status).toBe('completed') // not left open for the person to close by hand
+    expect(closed).toHaveLength(1)
+  })
+
+  // Fix round 1, finding 2: a goal's unit used to be identified by its objective text alone, so a
+  // goal's end could close a same-worded `/astera-task` unit that was never the goal's own.
+  it('같은 글자의 목표라도, /astera-task 가 새로 연 Unit 은 id 가 달라 목표의 끝이 닫지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush() // the goal opens its own unit, first in the list
+
+    // The person then types the very same sentence into /astera-task — same text, a different unit.
+    // This interrupts the goal's unit and opens a second one with the identical objective.
+    await collector.startTask('s1', '테스트가 통과할 때까지')
+
+    await fs.appendFile(transcript, wrote(), 'utf8')
+    fake.git.files = ['src/x.ts']
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ met: true, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2)
+    expect(state.units[0].status).toBe('interrupted') // the goal's own unit — untouched further
+    expect(state.units[1].status).toBe('active') // the /astera-task unit — not closed by the goal
+  })
+
+  // Fix round 1, finding 4: a usage-limit roll re-keys the active unit onto the new session id
+  // (`reKeyRolledUnit`), but used to leave `goalUnits` behind under the old id — a goal outlives a
+  // roll (it is on the ignore list precisely for `usageLimited`), so its end must still find the
+  // unit under the resumed session.
+  it('한도로 굴러도 목표는 재키잉된 세션 아래에서 그 Unit 을 마저 닫는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()] // s1
+    const { collector, store, closed } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '한도 전에 하던 목표' }),
+      'utf8'
+    )
+    await collector.flush() // opens the unit under s1
+
+    // rolling.ts's roll(): kill(old) → spawn(new) → send('session:rolled'), no await in between —
+    // the old session's own exit event is guaranteed to arrive after this notification.
+    collector.onSessionForked('s2', undefined, 's1')
+    fake.sessions = [session({ sessionId: 's2' })] // s1 is already dead
+    await collector.onSessionExit('s1')
+
+    await fs.appendFile(transcript, wrote(), 'utf8')
+    fake.git.files = ['src/after-roll.ts']
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ met: true, condition: '한도 전에 하던 목표', reason: '끝났다' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].sessionId).toBe('s2')
+    expect(state.units[0].status).toBe('completed')
+    expect(state.units[0].resultSummary).toBe('끝났다')
+    expect(closed).toHaveLength(1)
+  })
+
+  // A blocked goal is retried, not dropped (deferredGoalStarts). Claude is the vendor this saves:
+  // `sentinel` fires once, at declaration time, so if that one signal lands while blocked and is
+  // simply ignored, nothing ever asks again — unlike codex, which re-broadcasts `active` on every
+  // turn and so is retried for free by the transcript itself.
+  it('claude 목표가 막혀 있다가 막던 Unit 이 닫히면, 다음 회차에 스스로 자기 Unit 을 연다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, ignored } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '결제 붙이기') // blocks the goal
+    if (!started.ok) throw new Error('unexpected')
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush()
+    expect(store.get(projectPath)!.units).toHaveLength(1) // still just the /astera-task unit
+    expect(ignored).toHaveLength(1)
+
+    // The person closes the blocking row — the same effect the toast's own button has.
+    await collector.cancelTaskById(projectPath, started.id)
+
+    // No new goal signal arrives on this round — only the retry inside applyGoalSignals fires.
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2)
+    expect(state.units[0].status).toBe('cancelled') // the /astera-task row — untouched further
+    expect(state.units[1].objective).toBe('테스트가 통과할 때까지')
+    expect(state.units[1].status).toBe('active') // the goal's own row, opened by the retry alone
+  })
+
+  // A goal that finished while blocked must never open a row afterwards — that row would then
+  // never close, since nothing will ever send its end signal again.
+  it('막힌 채로 목표가 끝나면, 막던 Unit 이 나중에 닫혀도 뒤늦게 새 Unit 이 열리지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '결제 붙이기') // blocks the goal
+    if (!started.ok) throw new Error('unexpected')
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush() // blocked — deferred, not opened
+
+    // The goal is met while still blocked — the evaluator does not know or care that the person
+    // never saw a row for it.
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ met: true, condition: '테스트가 통과할 때까지', reason: '끝났다' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    // Only now does the blocking row close.
+    await collector.cancelTaskById(projectPath, started.id)
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1) // no row ever opened for the goal that already ended
+    expect(state.units[0].objective).toBe('결제 붙이기')
+  })
+
+  // The retry must not interrupt anything on its own — it is a plain replay of the same signal
+  // through the same already-open check, not a new way to close or displace a unit.
+  it('아직 막혀 있으면 재시도해도 두 번째 Unit 을 열지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, ignored } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '결제 붙이기') // blocks the goal
+    if (!started.ok) throw new Error('unexpected')
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush()
+    expect(ignored).toHaveLength(1)
+
+    // Nothing closes the blocking row — the next round only runs the retry.
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1) // still just the /astera-task unit — no interruption, no second unit
+    expect(state.units[0].id).toBe(started.id)
+    expect(state.units[0].status).toBe('active')
+    expect(ignored).toHaveLength(1) // the notice guard still holds — no repeat toast either
+  })
+
+  // A blocked goal's deferred entry has to survive a roll the same way `goalUnits` already does
+  // (reKeyRolledUnit) — the app exists to roll accounts, so a session id changing under a still-
+  // blocked claude goal is an ordinary event, not a corner case. Without the re-key, the deferred
+  // entry is stranded under the dead old session id and the goal's own row never opens.
+  it('막힌 claude 목표는 세션이 굴러도 재키잉된 세션 아래에서 재시도돼 자기 Unit 을 연다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()] // s1
+    const { collector, store, ignored } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '결제 붙이기') // blocks the goal
+    if (!started.ok) throw new Error('unexpected')
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush() // blocked — deferred under s1
+    expect(ignored).toHaveLength(1)
+
+    // rolling.ts's roll(): kill(old) → spawn(new) → send('session:rolled'), no await in between —
+    // the old session's own exit event is guaranteed to arrive after this notification.
+    collector.onSessionForked('s2', undefined, 's1')
+    fake.sessions = [session({ sessionId: 's2' })] // s1 is already dead
+    await collector.onSessionExit('s1')
+
+    // The blocking row closes only now, under the resumed session.
+    await collector.cancelTaskById(projectPath, started.id)
+
+    // No new goal signal arrives — only the retry inside applyGoalSignals fires.
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2)
+    expect(state.units[0].sessionId).toBe('s2') // re-keyed by the roll, same as goalUnits
+    expect(state.units[0].status).toBe('cancelled') // the /astera-task row — untouched further
+    expect(state.units[1].sessionId).toBe('s2') // the goal's own row opens under the new session id
+    expect(state.units[1].objective).toBe('테스트가 통과할 때까지')
+    expect(state.units[1].status).toBe('active')
+  })
+
+  // The residual race the previous fix left in place: deferredGoalStarts and goalIgnoredNotices are
+  // per-session state, not per-unit state, so gating their re-key on an active unit existing strands
+  // them under the dead old session id whenever the blocking row already closed — with no round run
+  // since — before the roll happens. There is no active unit at all here when the roll fires.
+  it('막던 Unit 이 이미 닫혀 활성 Unit 이 하나도 없어도, 굴러간 세션에서 막혔던 목표는 스스로 열린다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()] // s1
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '결제 붙이기') // blocks the goal
+    if (!started.ok) throw new Error('unexpected')
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush() // blocked — deferred under s1
+
+    // The blocking row closes, and no round runs afterwards — the deferred start has not been
+    // retried yet, and no active unit remains under s1 at all.
+    await collector.cancelTaskById(projectPath, started.id)
+    expect(store.get(projectPath)!.units.filter((u) => u.status === 'active')).toHaveLength(0)
+
+    // rolling.ts's roll(): kill(old) → spawn(new) → send('session:rolled'), no await in between —
+    // the old session's own exit event is guaranteed to arrive after this notification.
+    collector.onSessionForked('s2', undefined, 's1')
+    fake.sessions = [session({ sessionId: 's2' })] // s1 is already dead
+    await collector.onSessionExit('s1')
+
+    // Only now does a round run — the retry inside applyGoalSignals, under the new session id.
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2)
+    expect(state.units[0].sessionId).toBe('s1') // already closed before the roll — never re-keyed
+    expect(state.units[0].status).toBe('cancelled')
+    expect(state.units[1].sessionId).toBe('s2') // the goal's own row, opened under the rolled session
+    expect(state.units[1].objective).toBe('테스트가 통과할 때까지')
+    expect(state.units[1].status).toBe('active')
+  })
+
+  // Critical (branch review): two applyGoalSignals passes can overlap and both snapshot the same
+  // deferred entry before either consumes it — one link opens the goal's own row, a second, stale
+  // link then finds that very row open, re-defers the goal behind it, and raises a duplicate notice
+  // pointing at the goal's own brand-new row. Left in place, pressing [완료] on that row later (the
+  // only way codex's own row ever ends) reopens a second, identical row. Reproduced here without
+  // timers: flush() bypasses the debounce, so two calls issued before the first resolves interleave
+  // their applyGoalSignals passes exactly the way two debounced rounds racing in production would.
+  it('겹친 두 flush 는 막혀 있던 목표를 두 번 재시도하지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()] // s1
+    const { collector, store, ignored } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '결제 붙이기') // blocks the goal
+    if (!started.ok) throw new Error('unexpected')
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush() // blocked — deferred under s1
+    expect(ignored).toHaveLength(1)
+
+    // The blocking row closes — the deferred start is now free to open its own row.
+    await collector.cancelTaskById(projectPath, started.id)
+
+    // Two overlapping flushes, the second issued before the first has resolved.
+    const a = collector.flush()
+    const b = collector.flush()
+    await a
+    await b
+
+    // Exactly one notice ever fired — none of it pointed at the goal's own new row.
+    expect(ignored).toHaveLength(1)
+
+    const opened = store.get(projectPath)!.units.find((u) => u.objective === '테스트가 통과할 때까지')
+    expect(opened?.status).toBe('active')
+
+    // The person closes the goal's row from the screen — codex's only route to ending it.
+    await collector.cancelTaskById(projectPath, opened!.id)
+    await collector.flush() // if the entry was wrongly re-deferred, this would reopen a duplicate
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2) // the /astera-task row and the goal's row — no duplicate
+  })
+
+  // Important (branch review): the replay loop used to run before the round's own pending signals,
+  // so a stale deferred objective could win a race against a fresher one typed after the block
+  // already cleared but before the next round landed — opening a row titled with the objective the
+  // person had already abandoned.
+  it('막혔던 목표가 있어도, 같은 회차에 도착한 새 목표가 이긴다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()] // s1
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '결제 붙이기') // blocks the first goal
+    if (!started.ok) throw new Error('unexpected')
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '첫 번째 목표' }),
+      'utf8'
+    )
+    await collector.flush() // blocked — deferred under s1
+
+    // The blocking row closes, and — before any round runs — the person retypes /goal with a
+    // different objective. Both changes are visible to the very next round.
+    await collector.cancelTaskById(projectPath, started.id)
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '두 번째 목표' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    const active = state.units.filter((u) => u.status === 'active')
+    expect(active).toHaveLength(1) // exactly one row opened, not one per objective
+    expect(active[0].objective).toBe('두 번째 목표') // the newer objective wins, not the stale one
+  })
+
+  // The dedupe entry has its own end-of-life, separate from the deferred entry it is paired with —
+  // a goal ending resets the right to be told again. Left uncleared, declaring the same objective a
+  // second time while still blocked would silently skip the notice, read by the person as the
+  // feature not working.
+  it('목표가 막힌 채로 끝난 뒤 같은 목표를 다시 선언하면, 알림이 다시 뜬다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()] // s1
+    const { collector, store, ignored } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '결제 붙이기') // blocks the goal
+    if (!started.ok) throw new Error('unexpected')
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush() // blocked — one notice
+    expect(ignored).toHaveLength(1)
+
+    // The goal is met while still blocked — its evaluator never knew a row had not opened.
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ met: true, condition: '테스트가 통과할 때까지', reason: '끝났다' }),
+      'utf8'
+    )
+    await collector.flush()
+    expect(store.get(projectPath)!.units).toHaveLength(1) // no row was ever opened for it
+
+    // The same objective is declared again — still blocked by the same /astera-task row.
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    expect(ignored).toHaveLength(2) // a second, genuine block earns its own notice
   })
 })
 

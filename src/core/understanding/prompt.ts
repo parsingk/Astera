@@ -107,7 +107,7 @@ ${req.request}
 Files that changed while this work was open:
 ${req.changedFiles.map((f) => `- ${f}`).join('\n')}${commits}${checks}${said}${jobSection}${validation}
 
-Write every sentence a person reads in ${language}: "overview", "userVisibleChanges", every
+Write every sentence a person reads in ${language}: "title", "overview", "userVisibleChanges", every
 "label", "description" and "condition" in "flow", every "title" and "reason" in "decisions", every
 "role" in "implementation", and "needsReviewReason". File paths, node ids and the fixed values of
 "type" stay as they are. Keep code identifiers in their original form and explain them in ${language}.
@@ -124,6 +124,7 @@ ${RECORD_OUTPUT_SHAPE}`
 
 const RECORD_OUTPUT_SHAPE = `Respond with a single JSON object, no markdown fence, of this exact shape:
 {
+  "title": string,                  // under 40 characters, names this piece of work; contract rules apply
   "overview": string,               // 2-4 sentences on what is different now, contract rules apply
   "userVisibleChanges": string[],   // what a person using the product will notice; [] if none
   "flow": FlowNode[],               // the order things happen in, for the part that changed

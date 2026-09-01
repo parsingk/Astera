@@ -114,6 +114,16 @@ describe('액션 버튼', () => {
     expect(onClick).toHaveBeenCalledOnce()
   })
 
+  it('push가 돌려준 id로 액션 onClick 안에서 dismiss하면 목록에서 사라진다', () => {
+    const w = watch()
+    const id = mod.toast.info('업데이트 준비됨', {
+      action: { label: '지금 설치', onClick: () => mod.dismiss(id) }
+    })
+    expect(w.items).toHaveLength(1)
+    w.items[0].action?.onClick()
+    expect(w.items).toHaveLength(0)
+  })
+
   it('액션 없는 호출은 예전 그대로 — action이 없고 자동 소멸한다', () => {
     const w = watch()
     mod.toast.success('완료')

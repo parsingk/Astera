@@ -65,7 +65,7 @@ import { cycleViewMode, isMdViewMode, type MdViewMode } from '../../core/files/m
 import type { UndoEntry } from '../../core/files/undo'
 import * as sessionBus from './lib/sessionBus'
 import * as sticky from './lib/stickyProject'
-import { toast } from './lib/toast'
+import { dismiss, toast } from './lib/toast'
 import { spawnNotice } from './lib/spawnNotice'
 import { confirmModal, confirmModalWithChoices, isConfirmOpen } from './lib/confirm'
 import * as hiddenProjects from './lib/hiddenProjects'
@@ -2389,6 +2389,28 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     return window.api.on('sessionTasks:changed', () => setSessionTasksSeq((n) => n + 1))
   }, [])
+
+  // The person typed /goal while a unit was already open on that session, so it opened nothing.
+  // Silence would read as the feature being broken, and the toast carries a button that closes
+  // the unit in the way — reusing completeOpenTask, the same call the row's own [완료] does.
+  useEffect(
+    () =>
+      window.api.on('sessionTasks:goalIgnored', ({ projectPath, blockingUnitId }) => {
+        // Dismissed the instant the button is pressed, not once completeOpenTask resolves — that is
+        // what tells the person the press was accepted. Any outcome (hiw.open.completeEmpty, or an
+        // error) arrives as its own toast afterwards.
+        const id = toast.info(t('hiw.goal.ignored'), {
+          action: {
+            label: t('hiw.open.complete'), // same label as the row's own [완료] — same action, one key
+            onClick: () => {
+              dismiss(id)
+              completeOpenTask(projectPath, blockingUnitId)
+            }
+          }
+        })
+      }),
+    [t]
+  )
 
   // When the project changes, that project's terminal list is read again — main holds them per project,
   // so another project's terminals stay alive and are simply not shown here
