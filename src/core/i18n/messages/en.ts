@@ -882,7 +882,6 @@ export const en: Record<keyof typeof ko, string> = {
   'hiw.open.reason.trackingOff': 'Stopped when tracking was turned off',
   'hiw.open.reason.upgrade': 'Stopped when the app updated',
   'hiw.goal.ignored': 'Finish the open work record in How It Works first.',
-  'hiw.goal.ignored.complete': 'Done',
   'hiw.verify.verified': 'Every reported check passed',
   'hiw.verify.partial': 'Only some of it was checked',
   'hiw.verify.unverified': 'Nothing was checked',

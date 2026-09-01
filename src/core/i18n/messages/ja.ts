@@ -962,7 +962,6 @@ export const ja: Catalog = {
   'hiw.open.reason.trackingOff': '追跡がオフになって止まりました',
   'hiw.open.reason.upgrade': 'アプリが更新されて止まりました',
   'hiw.goal.ignored': '先に How It Works の進行中の作業記録を完了にしてください。',
-  'hiw.goal.ignored.complete': '完了',
   'hiw.verify.verified': '報告された検査はすべて成功しました',
   'hiw.verify.partial': '一部しか確認されていません',
   'hiw.verify.unverified': '確認されたものはありません',

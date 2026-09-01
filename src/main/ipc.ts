@@ -3462,7 +3462,18 @@ export function registerIpc(
   ipcMain.handle('sessionTasks.complete', async (_e, projectPath: string, id: string) => {
     await assertAllowedPath(projectPath)
     const r = await workUnitCollector.completeTaskById(projectPath, id)
-    if (!r.ok) throw new Error(r.reason)
+    if (!r.ok) {
+      // The row can already be gone by the time this lands — newly reachable since the
+      // goal-ignored toast's own [완료] action (App.tsx) does not auto-dismiss, so it can outlive
+      // the row it names if the person closes it some other way first, or a goal's own end signal
+      // already did. Both of collector.ts's own reasons for `!ok` here (`unknown task: …` — the row
+      // was dropped entirely, `finish`'s empty-drop; `task is …` — it closed under some other
+      // status) mean the same thing from this click's point of view: what the button wanted, the
+      // row gone, is already true. Treated as success, not a failure the person has to read.
+      if (r.reason === `unknown task: ${id}` || r.reason.startsWith('task is '))
+        return { recorded: true }
+      throw new Error(r.reason)
+    }
     return { recorded: r.recorded }
   })
   ipcMain.handle('sessionTasks.cancel', async (_e, projectPath: string, id: string) => {

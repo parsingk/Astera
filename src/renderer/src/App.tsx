@@ -2398,7 +2398,7 @@ export default function App(): React.JSX.Element {
       window.api.on('sessionTasks:goalIgnored', ({ projectPath, blockingUnitId }) =>
         toast.info(t('hiw.goal.ignored'), {
           action: {
-            label: t('hiw.goal.ignored.complete'),
+            label: t('hiw.open.complete'), // same label as the row's own [완료] — same action, one key
             onClick: () => completeOpenTask(projectPath, blockingUnitId)
           }
         })

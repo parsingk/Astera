@@ -2072,5 +2072,88 @@ describe('네이티브 /goal 이 작업 하나를 연다', () => {
     expect(state.units[1].objective).toBe('테스트가 통과할 때까지')
     expect(state.units[1].status).toBe('active')
   })
+
+  // Critical (branch review): two applyGoalSignals passes can overlap and both snapshot the same
+  // deferred entry before either consumes it — one link opens the goal's own row, a second, stale
+  // link then finds that very row open, re-defers the goal behind it, and raises a duplicate notice
+  // pointing at the goal's own brand-new row. Left in place, pressing [완료] on that row later (the
+  // only way codex's own row ever ends) reopens a second, identical row. Reproduced here without
+  // timers: flush() bypasses the debounce, so two calls issued before the first resolves interleave
+  // their applyGoalSignals passes exactly the way two debounced rounds racing in production would.
+  it('겹친 두 flush 는 막혀 있던 목표를 두 번 재시도하지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()] // s1
+    const { collector, store, ignored } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '결제 붙이기') // blocks the goal
+    if (!started.ok) throw new Error('unexpected')
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush() // blocked — deferred under s1
+    expect(ignored).toHaveLength(1)
+
+    // The blocking row closes — the deferred start is now free to open its own row.
+    await collector.cancelTaskById(projectPath, started.id)
+
+    // Two overlapping flushes, the second issued before the first has resolved.
+    const a = collector.flush()
+    const b = collector.flush()
+    await a
+    await b
+
+    // Exactly one notice ever fired — none of it pointed at the goal's own new row.
+    expect(ignored).toHaveLength(1)
+
+    const opened = store.get(projectPath)!.units.find((u) => u.objective === '테스트가 통과할 때까지')
+    expect(opened?.status).toBe('active')
+
+    // The person closes the goal's row from the screen — codex's only route to ending it.
+    await collector.cancelTaskById(projectPath, opened!.id)
+    await collector.flush() // if the entry was wrongly re-deferred, this would reopen a duplicate
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2) // the /astera-task row and the goal's row — no duplicate
+  })
+
+  // Important (branch review): the replay loop used to run before the round's own pending signals,
+  // so a stale deferred objective could win a race against a fresher one typed after the block
+  // already cleared but before the next round landed — opening a row titled with the objective the
+  // person had already abandoned.
+  it('막혔던 목표가 있어도, 같은 회차에 도착한 새 목표가 이긴다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()] // s1
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '결제 붙이기') // blocks the first goal
+    if (!started.ok) throw new Error('unexpected')
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '첫 번째 목표' }),
+      'utf8'
+    )
+    await collector.flush() // blocked — deferred under s1
+
+    // The blocking row closes, and — before any round runs — the person retypes /goal with a
+    // different objective. Both changes are visible to the very next round.
+    await collector.cancelTaskById(projectPath, started.id)
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '두 번째 목표' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    const active = state.units.filter((u) => u.status === 'active')
+    expect(active).toHaveLength(1) // exactly one row opened, not one per objective
+    expect(active[0].objective).toBe('두 번째 목표') // the newer objective wins, not the stale one
+  })
 })
 

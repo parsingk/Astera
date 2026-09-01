@@ -122,7 +122,9 @@ export interface CollectorDeps {
   inRun?: (sessionId: string) => boolean
   /** A goal signal arrived while a unit was already open, so it opened nothing. **The person is
    *  told**: they typed the goal, and silence would read as the feature not working. Nothing is
-   *  lost when this fires — the goal still runs and its work still lands on the open unit.
+   *  lost when this fires — the goal still runs and its work still lands on the open unit, **and the
+   *  start itself is not dropped**: it is remembered (`deferredGoalStarts`) and replayed once the
+   *  block clears, so the goal still gets its own row without the person having to retype it.
    *
    *  `blockingUnitId` is the id of the unit in the way, so the renderer can offer to close it
    *  directly — the same action the screen's own [완료] button drives — instead of only naming the
@@ -137,6 +139,18 @@ export interface CollectorDeps {
   /** the open-task section's redraw trigger; the record list has its own in `onUnitClosed` */
   onTasksChanged?: (projectPath: string) => void
   log?: (m: string) => void
+}
+
+/** One goal boundary queued for `applyGoalSignals`: either a real signal read from a transcript
+ *  this round, or a synthetic retry of a still-blocked start built from `deferredGoalStarts`
+ *  (`isReplay: true`). Kept outside `GoalSignal` itself deliberately — that type describes what a
+ *  vendor wrote in a transcript, and a replay is this collector's own bookkeeping, never something
+ *  any vendor sent. `applyGoalSignal` reads `isReplay` to guard against the race two overlapping
+ *  `applyGoalSignals` passes can create — see that method's own doc for the full mechanism. */
+interface QueuedGoalSignal {
+  sessionId: string
+  signal: GoalSignal
+  isReplay: boolean
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -208,8 +222,10 @@ export class WorkUnitCollector {
   private gitWatches = new Map<string, () => Promise<void>>()
   /** Goal boundaries seen during a round, applied after it. **Never applied inside one** —
    *  `startTask`/`completeTask` enqueue onto the same serial chain the round occupies, so awaiting
-   *  one from the per-line loop would wait on a link that cannot run yet. */
-  private pendingGoals: { sessionId: string; signal: GoalSignal }[] = []
+   *  one from the per-line loop would wait on a link that cannot run yet. Every entry queued here is
+   *  a real signal (`isReplay: false`) — the replay entries `applyGoalSignals` also feeds through
+   *  `applyGoalSignal` are never queued; they are built fresh from `deferredGoalStarts` each pass. */
+  private pendingGoals: QueuedGoalSignal[] = []
   /** Per session, the id and objective of the unit **a goal opened**. Three jobs: the objective
    *  makes a repeated codex `active` record idempotent (it re-sends one per status change, and also
    *  every turn boundary, whether or not the unit it names is still open — the entry survives the
@@ -805,8 +821,11 @@ export class WorkUnitCollector {
       this.startAtEnd.delete(sessionId)
       this.forkAnchors.delete(sessionId)
       // Same reason: a goal deferred on this session (deferredGoalStarts' own doc) has nothing left
-      // to retry once the session that would receive the retry is gone.
+      // to retry once the session that would receive the retry is gone. goalIgnoredNotices is
+      // cleared alongside it for the same reason `reKeyRolledUnit` treats the two as a pair — a
+      // dead session id can never receive another notice to dedupe against.
       this.deferredGoalStarts.delete(sessionId)
+      this.goalIgnoredNotices.delete(sessionId)
       if (dirty) await this.persist(s.projectPath, state)
     })
   }
@@ -826,28 +845,40 @@ export class WorkUnitCollector {
     return round.then(() => this.applyGoalSignals())
   }
 
-  /** Turn the boundaries this round saw into declarations. Runs outside the round's own link. */
+  /** Turn the boundaries this round saw into declarations. Runs outside the round's own link.
+   *
+   *  **The retry loop runs after the pending loop, not before.** A person can retype `/goal` with a
+   *  different objective before the block even clears — the old objective is still deferred, and a
+   *  fresh signal for the new one lands in `pending` the same round. Running the retry first used to
+   *  let the stale objective win: it would open a row before the pending loop ever saw the newer
+   *  one, and the newer signal then hit the already-open guard instead of opening its own row. With
+   *  the pending loop first, the newer signal opens the row (nothing is open yet), and its own
+   *  successful-open path clears the stale deferral — so the retry loop's replay of the old
+   *  objective, run second, becomes a no-op. Only the latest objective for a session ever wins,
+   *  matching `deferredGoalStarts`' own doc.
+   *
+   *  **Two overlapping calls to `applyGoalSignals` can still race**, independent of that ordering.
+   *  `flush()` chains this method onto its own round's promise with `.then`, not onto the shared
+   *  `enqueue` chain — so a second `flush()` call registered while the first's round is still
+   *  running can have its own round, and this method's own retry-loop reads of
+   *  `deferredGoalStarts`, interleave with the first call's. Concretely: pass A snapshots
+   *  `deferredGoalStarts` and starts an `enqueueFor` link for the replay; before that link runs,
+   *  pass B's own retry loop snapshots the *same still-present* entry and queues a second replay
+   *  right after A's. A's replay then opens the row and deletes the entry — but B's replay, built
+   *  from a snapshot taken before that deletion, runs anyway, finds the row A just opened, and
+   *  (wrongly, without the guard below) re-defers it and raises a second notice pointing at the
+   *  goal's own brand-new row. `isReplay` on the queued signal is what lets `applyGoalSignal` re-read
+   *  the map at the moment its link actually executes, rather than trusting the snapshot: a replay
+   *  whose objective no longer matches the live entry (because another link already consumed or
+   *  replaced it) is stale and returns immediately, doing nothing. */
   private async applyGoalSignals(): Promise<void> {
     const pending = this.pendingGoals
     this.pendingGoals = []
     if (!this.running) return
 
-    // Retry every goal still waiting on a blocked unit, before this round's own signals — see
-    // `deferredGoalStarts`' own doc for why this exists (claude has no other way to be retried) and
-    // why a plain replay through `applyGoalSignal` is enough (it re-runs the already-open check
-    // itself). No new trigger is needed for this: a session working toward a goal keeps writing to
-    // its transcript, so a round — and this replay — arrives on its own within the debounce.
-    for (const [sessionId, objective] of [...this.deferredGoalStarts]) {
+    for (const { sessionId, signal, isReplay } of pending) {
       try {
-        await this.applyGoalSignal(sessionId, { kind: 'start', objective, declared: true })
-      } catch (e) {
-        this.log(String(e)) // same swallow-and-continue as the loop below
-      }
-    }
-
-    for (const { sessionId, signal } of pending) {
-      try {
-        await this.applyGoalSignal(sessionId, signal)
+        await this.applyGoalSignal(sessionId, signal, isReplay)
       } catch (e) {
         // A signal's own attempt, or a host callback it calls (`inRun`, `onGoalIgnored` — a later
         // task backs both with ipc.ts code that can throw, e.g. sending on a destroyed window),
@@ -857,13 +888,34 @@ export class WorkUnitCollector {
         this.log(String(e))
       }
     }
+
+    // Retry every goal still waiting on a blocked unit — see `deferredGoalStarts`' own doc for why
+    // this exists (claude has no other way to be retried) and why a plain replay through
+    // `applyGoalSignal` is enough (it re-runs the already-open check itself). No new trigger is
+    // needed for this: a session working toward a goal keeps writing to its transcript, so a round —
+    // and this replay — arrives on its own within the debounce.
+    for (const [sessionId, objective] of [...this.deferredGoalStarts]) {
+      try {
+        await this.applyGoalSignal(sessionId, { kind: 'start', objective, declared: true }, true)
+      } catch (e) {
+        this.log(String(e)) // same swallow-and-continue as the loop above
+      }
+    }
   }
 
   /** One boundary, applied. **The "is a unit already open?" read and the mutation it gates share a
    *  single enqueued link** (`startTaskCore`/`completeTaskCore`) — reading that check outside
    *  `enqueueFor` and only mutating through it would let the person's own `/astera-task` land in
-   *  between the two, which is exactly the race a goal must never win. */
-  private async applyGoalSignal(sessionId: string, signal: GoalSignal): Promise<void> {
+   *  between the two, which is exactly the race a goal must never win.
+   *
+   *  `isReplay` marks a synthetic retry built from `deferredGoalStarts` rather than a signal a
+   *  vendor actually wrote — see `applyGoalSignals`' own doc for the overlapping-rounds race this
+   *  exists to guard against. A real signal is always called with `false`. */
+  private async applyGoalSignal(
+    sessionId: string,
+    signal: GoalSignal,
+    isReplay: boolean
+  ): Promise<void> {
     const s = this.known.get(sessionId)
     if (!s) return
     // A Run records itself (spec §5.4). No notice: an agent inside the Run typed this, not a person.
@@ -871,6 +923,12 @@ export class WorkUnitCollector {
 
     if (signal.kind === 'start') {
       await this.enqueueFor(async () => {
+        // A stale replay: by the time this link actually runs, some other link already consumed or
+        // replaced this session's deferred entry (opened it, re-deferred it under a fresher
+        // objective, or dropped it on a goal end / session exit). Only the live map, read here and
+        // not at the moment this replay was queued, can say that — see `applyGoalSignals`' own doc.
+        // A real signal never takes this branch (`isReplay` is always false for one).
+        if (isReplay && this.deferredGoalStarts.get(sessionId) !== signal.objective) return
         if (!this.running) return
         const state = this.stateOf(s.projectPath)
         const entry = this.goalUnits.get(sessionId)
@@ -1183,7 +1241,7 @@ export class WorkUnitCollector {
       // A goal boundary. Only noted here — see pendingGoals for why it cannot be acted on inside
       // a round.
       const goal = goalSignalOf(record)
-      if (goal) this.pendingGoals.push({ sessionId: s.sessionId, signal: goal })
+      if (goal) this.pendingGoals.push({ sessionId: s.sessionId, signal: goal, isReplay: false })
     }
 
     return dirty

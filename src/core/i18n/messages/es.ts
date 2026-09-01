@@ -982,7 +982,6 @@ export const es: Catalog = {
   'hiw.open.reason.trackingOff': 'Se detuvo porque se desactivó el seguimiento',
   'hiw.open.reason.upgrade': 'Se detuvo porque la aplicación se actualizó',
   'hiw.goal.ignored': 'Termina primero el registro de trabajo abierto en How It Works.',
-  'hiw.goal.ignored.complete': 'Hecho',
   'hiw.verify.verified': 'Todas las comprobaciones reportadas pasaron',
   'hiw.verify.partial': 'Solo se comprobó una parte',
   'hiw.verify.unverified': 'No se comprobó nada',
