@@ -43,7 +43,8 @@ export function createGithubPrs(deps: GithubPrsDeps): GithubPrs {
   const forcePending = new Set<string>()
   // Repos where `gh pr list` answered "no git remotes found" — that verdict cannot change
   // without a config change, so remembering it stops a dead repo from costing a spawn every
-  // minute. Cleared only when the repo drops out of the registry (finding 4).
+  // minute against the background sweep. Cleared when the repo drops out of the registry
+  // (finding 4), or when a forced refresh gives the user's fix a chance to be seen.
   const noRemoteRepos = new Set<string>()
   let subscribers = 0
   let timer: NodeJS.Timeout | null = null
@@ -82,8 +83,9 @@ export function createGithubPrs(deps: GithubPrsDeps): GithubPrs {
       if (!repos.includes(r)) noRemoteRepos.delete(r) // a removed worktree's repo must not pin the memo forever
     })
     forcePending.forEach((r) => {
-      // a removed worktree's repo must not pin the queue; a memoized no-remote repo can never
-      // succeed, so a forced refresh must not resurrect it either
+      // a removed worktree's repo must not pin the queue. refresh() clears noRemoteRepos for
+      // every repo it force-queues, before queuing it, so a just-forced entry is never memoized
+      // here — the noRemoteRepos clause is a defensive backstop, not a path this should hit.
       if (!repos.includes(r) || noRemoteRepos.has(r)) forcePending.delete(r)
     })
     const activeRepos = repos.filter((r) => !noRemoteRepos.has(r))
@@ -163,7 +165,16 @@ export function createGithubPrs(deps: GithubPrsDeps): GithubPrs {
         const probed = await this.recheck()
         if (probed.kind !== 'connected') return
       }
-      if (opts?.force) for (const r of repoPaths()) forcePending.add(r)
+      if (opts?.force) {
+        for (const r of repoPaths()) {
+          // A press of the refresh button is the user saying "try again anyway" — clear the
+          // no-remote memo before queuing so a repo that gained a remote (or had whatever made it
+          // look remote-less fixed) is reachable without an app restart. If it still has no
+          // remote, tick()'s classification simply re-memoizes it once this attempt fails again.
+          noRemoteRepos.delete(r)
+          forcePending.add(r)
+        }
+      }
       await tick()
     },
     subscribe(): void {

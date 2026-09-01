@@ -207,9 +207,34 @@ describe('createGithubPrs', () => {
     expect(h.fetches).toHaveLength(1)
     h.advance(MIN_SPACING_MS + 60_000)
     await g.tick()
-    expect(h.fetches).toHaveLength(1) // memoized — no repeat spawn for a repo that can never succeed
-    await g.refresh({ force: true }) // a forced refresh must not resurrect it either
+    expect(h.fetches).toHaveLength(1) // memoized — the background sweep never retries a repo that can never succeed
+    g.stop()
+  })
+
+  it('a forced refresh clears the no-remote memo, so fixing the remote does not need a restart', async () => {
+    const h = harness()
+    let noRemote = true
+    h.deps.fetchPrList = async (repoPath): Promise<GhResult> => {
+      h.fetches.push(repoPath)
+      return noRemote
+        ? { ok: false, stdout: '', stderr: 'no git remotes found' }
+        : { ok: true, stdout: openPr, stderr: '' }
+    }
+    const g = createGithubPrs(h.deps)
+    await g.start()
+    g.subscribe()
+
+    await g.tick() // classifies no-remote and memoizes the repo
     expect(h.fetches).toHaveLength(1)
+    h.advance(MIN_SPACING_MS + 60_000)
+    await g.tick()
+    expect(h.fetches).toHaveLength(1) // still memoized — the background sweep keeps skipping it
+
+    noRemote = false // the user added a remote (or fixed whatever made it look remote-less)
+    h.advance(MIN_SPACING_MS)
+    await g.refresh({ force: true })
+    expect(h.fetches).toHaveLength(2) // the memo no longer blocks a user-initiated forced attempt
+    expect(g.prs()['C:/repo'].byBranch['me/fix'].number).toBe(12)
     g.stop()
   })
 })
