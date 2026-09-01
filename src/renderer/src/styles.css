@@ -1186,9 +1186,21 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .entry-title { flex: 1; min-width: 0; font-size: 11.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .entry-sub { font-size: 9.5px; font-family: var(--mono); color: var(--text-faint); flex-shrink: 0; }
 .history-sentinel { padding: 8px 12px; font-size: 10.5px; color: var(--text-faint); text-align: center; }
-/* The first project page loading — the shared .loading-spinner, centred on its own row. Text-align does
-   not centre it (the spinner is a block-sized element, not an inline glyph), hence the flex row. */
+/* The first page of a list still loading — the dots on their own row, centred. Text-align does not
+   centre them (the indicator is a flex box, not an inline glyph), hence the flex row. */
 .history-loading { display: flex; justify-content: center; padding: 14px 12px; }
+/* Three dots taking turns, for the two lists in the history panel (HistoryBrowser's LoadingDots).
+   **Not the shared .loading-spinner**: a 14px ring is what the app puts in an overlay or on a button,
+   and what is missing here is a row — a short line of dots sits in the gap the list is about to fill.
+   **A new keyframe is right here** even though cm-spin exists: this is not a rotation, so there is
+   nothing to share with it.
+   **No reduced-motion opt-out.** Same policy as the app's other "일하는 중" motion — the reasoning,
+   and the measurement behind it, is at .job-arc below; core/orchestration/spinnerCss.test.ts holds it. */
+.loading-dots { display: inline-flex; align-items: center; gap: 4px; height: 14px; }
+.loading-dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); animation: cm-bounce 1.1s ease-in-out infinite; }
+.loading-dots i:nth-child(2) { animation-delay: .15s; }
+.loading-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes cm-bounce { 0%, 70%, 100% { transform: none; opacity: .35; } 35% { transform: translateY(-5px); opacity: 1; } }
 /* the per-project list */
 .project-group { border-bottom: 1px solid var(--line-soft); }
 /* 그룹 헤더라 .worktree-row/.session-row 와 같은 종류의 행이 아니다 — --row-pad-y 를 걸지 않은 게 빠뜨린 게 아니다 */
@@ -1204,6 +1216,10 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .session-row .entry-title { color: var(--text-dim); }
 .session-sublist .history-sentinel { padding-left: 10px; text-align: left; }
 .session-sublist .empty { padding-left: 10px; }
+/* A project's sessions loading — centred like the project list's, only on a shorter row: the session
+   rows above and below it are denser than a project row, so the 14px padding of the outer list would
+   open a gap the sublist has nowhere else. Alignment is the base rule's; only the padding differs. */
+.session-sublist .history-loading { padding: 8px 12px; }
 .modal.preview { width: 640px; max-height: 80vh; }
 .modal.detect { width: 520px; max-height: 80vh; }
 .detect-list { list-style: none; max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }

@@ -24,8 +24,25 @@ function loadSeenMap(): Record<string, string> {
   }
 }
 
-/** One project row plus, when expanded, that project's session list (infinite scroll). Each row owns its own session paging state. */
-function ProjectRow({
+/** "Still loading" for this panel — three dots bouncing in turn. Local to the history browser: the
+ *  shared .loading-spinner stays what the rest of the app uses (a terminal overlay, a dialog's
+ *  submit button, a row action), and those are not lists. Both lists here are, and they show it in
+ *  the same place a row would be, so they say it the same way. */
+function LoadingDots(): React.JSX.Element {
+  return (
+    <span className="loading-dots" aria-hidden="true">
+      <i />
+      <i />
+      <i />
+    </span>
+  )
+}
+
+/** One project row plus, when expanded, that project's session list (infinite scroll). Each row owns its own session paging state.
+ *  Exported for HistoryBrowser.test.ts only — the row's first render is the whole of what that test
+ *  pins, and it cannot be reached through HistoryBrowser (its own project list is empty until an
+ *  effect fills it, and effects do not run under renderToStaticMarkup). */
+export function ProjectRow({
   project,
   expanded,
   onToggle,
@@ -55,6 +72,14 @@ function ProjectRow({
   const { t } = useI18n()
   const [sessions, setSessions] = useState<HistoryEntry[]>([])
   const [total, setTotal] = useState(0)
+  // Whether this project's first session page has ever arrived — the same two-meanings-of-empty
+  // problem the project list solves one level up with its own `loaded`, and it was still here: an
+  // empty `sessions` meant both "the page is in flight" and "this project has none", so expanding a
+  // project showed "세션 없음" for the whole request and then swapped it for the list.
+  // It never goes back to false, for the reason given up there: on a refresh or an account-filter
+  // change the sessions already on screen stay until the new page replaces them, so there is no
+  // empty state to cover.
+  const [loaded, setLoaded] = useState(false)
   const reqToken = useRef(0)
   const fetchingRef = useRef(false)
   const sentinelRef = useRef<HTMLLIElement>(null)
@@ -98,6 +123,7 @@ function ProjectRow({
         if (reqToken.current !== token) return
         setSessions(p.entries)
         setTotal(p.total)
+        setLoaded(true)
       })
   }, [expanded, refreshNonce, accountId, project.projectPath])
 
@@ -182,7 +208,14 @@ function ProjectRow({
               </button>
             </li>
           ))}
-          {sessions.length === 0 && <li className="empty">{t('history.project.noSessions')}</li>}
+          {!loaded && (
+            <li className="history-loading" role="status" aria-label={t('history.loading')}>
+              <LoadingDots />
+            </li>
+          )}
+          {loaded && sessions.length === 0 && (
+            <li className="empty">{t('history.project.noSessions')}</li>
+          )}
           {sessions.length < total && (
             <li ref={sentinelRef} className="history-sentinel">
               {t('history.loading')}
@@ -455,12 +488,12 @@ export function HistoryBrowser({
             onContextMenu={(x, y, projectPath) => setMenu({ x, y, projectPath })}
           />
         ))}
-        {/* 첫 페이지가 오기 전에는 스피너, 도착한 뒤에 비어 있으면 '기록 없음'. 두 상태를 가르지 않으면
-            프로젝트 디렉터리를 훑는 동안 계속 '기록 없음'이 보인다. 글자는 없고 스피너만 두므로 읽히는
+        {/* 첫 페이지가 오기 전에는 점 셋, 도착한 뒤에 비어 있으면 '기록 없음'. 두 상태를 가르지 않으면
+            프로젝트 디렉터리를 훑는 동안 계속 '기록 없음'이 보인다. 글자는 없고 표시만 두므로 읽히는
             이름은 aria-label이 맡는다 (기존 history.loading 문구를 그대로 쓴다) */}
         {!loaded && (
           <li className="history-loading" role="status" aria-label={t('history.loading')}>
-            <span className="loading-spinner" aria-hidden="true" />
+            <LoadingDots />
           </li>
         )}
         {loaded && projects.length === 0 && (
