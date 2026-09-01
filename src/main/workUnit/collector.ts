@@ -241,12 +241,26 @@ export class WorkUnitCollector {
    *  this, a goal blocked behind an already-open unit would toast the same notice on every turn while
    *  the block persists (final review, item 4). Retrying the goal itself is unaffected: this only
    *  gates the notice, never the retry, and the retry is what lets the goal open its own unit the
-   *  moment the block clears. Cleared once that retry succeeds — a fresh block afterwards, even with
-   *  the same objective text, is a new occurrence and earns its own notice. Moved onto the new
-   *  session id by `reKeyRolledUnit` — unconditionally, unlike `goalUnits` below, since this map
-   *  needs no active unit to still be meaningful (`deferredGoalStarts`' own doc has the full
-   *  reasoning) — so a roll must not make an already-shown notice fire again just because the
-   *  session id underneath it changed. */
+   *  moment the block clears.
+   *
+   *  **Every place this map is cleared or moved, listed in full because that is exactly what this
+   *  branch kept getting wrong.** Every defect fixed here was one of this map and its sibling
+   *  `deferredGoalStarts` not being cleared or re-keyed somewhere — a stranded deferral across a
+   *  roll, a stranded entry with no active unit at roll time, a suppressed notice after a goal
+   *  ended. A reader adding a fifth site needs to find the other four, here and in
+   *  `deferredGoalStarts`' own doc.
+   *    - Cleared once the retry succeeds — a fresh block afterwards, even with the same objective
+   *      text, is a new occurrence and earns its own notice.
+   *    - Cleared when that session's goal ends while still blocked (`applyGoalSignal`'s `end`
+   *      branch, alongside `deferredGoalStarts`) — the goal is over, so the notice it earned is
+   *      over with it; the *next* goal's block on the same session must not read as a repeat of
+   *      this one's already-shown notice and go silent.
+   *    - Cleared in `closeAll` and in `onSessionExit`, alongside `deferredGoalStarts` in both —
+   *      tracking turned off, or the session gone, leaves nothing left to dedupe against.
+   *    - Moved onto the new session id by `reKeyRolledUnit` — unconditionally, unlike `goalUnits`
+   *      below, since this map needs no active unit to still be meaningful (`deferredGoalStarts`'
+   *      own doc has the full reasoning) — so a roll must not make an already-shown notice fire
+   *      again just because the session id underneath it changed. */
   private goalIgnoredNotices = new Map<string, string>()
   /** Per session, a goal `start` that arrived while a unit was already open, kept so
    *  `applyGoalSignals` can retry it once the block clears. **This is what saves claude's goal from
