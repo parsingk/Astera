@@ -2155,5 +2155,46 @@ describe('네이티브 /goal 이 작업 하나를 연다', () => {
     expect(active).toHaveLength(1) // exactly one row opened, not one per objective
     expect(active[0].objective).toBe('두 번째 목표') // the newer objective wins, not the stale one
   })
+
+  // The dedupe entry has its own end-of-life, separate from the deferred entry it is paired with —
+  // a goal ending resets the right to be told again. Left uncleared, declaring the same objective a
+  // second time while still blocked would silently skip the notice, read by the person as the
+  // feature not working.
+  it('목표가 막힌 채로 끝난 뒤 같은 목표를 다시 선언하면, 알림이 다시 뜬다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()] // s1
+    const { collector, store, ignored } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '결제 붙이기') // blocks the goal
+    if (!started.ok) throw new Error('unexpected')
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush() // blocked — one notice
+    expect(ignored).toHaveLength(1)
+
+    // The goal is met while still blocked — its evaluator never knew a row had not opened.
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ met: true, condition: '테스트가 통과할 때까지', reason: '끝났다' }),
+      'utf8'
+    )
+    await collector.flush()
+    expect(store.get(projectPath)!.units).toHaveLength(1) // no row was ever opened for it
+
+    // The same objective is declared again — still blocked by the same /astera-task row.
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    expect(ignored).toHaveLength(2) // a second, genuine block earns its own notice
+  })
 })
 

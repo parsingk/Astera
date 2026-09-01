@@ -989,8 +989,13 @@ export class WorkUnitCollector {
     // The goal this session was pursuing just ended — including the case where it never got past
     // the block above and no row was ever opened for it. Either way there is nothing left to retry:
     // a goal that finished while blocked must never open a row afterwards, since that row would
-    // then never close (deferredGoalStarts' own doc).
+    // then never close (deferredGoalStarts' own doc). goalIgnoredNotices is cleared alongside it —
+    // same pairing as reKeyRolledUnit and onSessionExit — because a goal ending resets the right to
+    // be told again: left behind, the dedupe would read the *next* goal's block (even the same
+    // objective, declared fresh) as a repeat of this one's already-shown notice and stay silent,
+    // which is exactly what onGoalIgnored's own doc says must not happen.
     this.deferredGoalStarts.delete(sessionId)
+    this.goalIgnoredNotices.delete(sessionId)
     const entry = this.goalUnits.get(sessionId)
     if (entry === undefined) return // this session's open unit, if any, is not a goal's
     this.goalUnits.delete(sessionId)
