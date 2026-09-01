@@ -138,4 +138,78 @@ describe('createGithubPrs', () => {
     expect(h.fetches).toHaveLength(1) // disconnected — no more calls
     g.stop()
   })
+
+  it('an auth failure empties prs() while keeping the cache for recovery (finding 2)', async () => {
+    const h = harness()
+    let authFail = false
+    h.deps.fetchPrList = async (repoPath): Promise<GhResult> => {
+      h.fetches.push(repoPath)
+      return authFail
+        ? { ok: false, stdout: '', stderr: 'HTTP 401: Bad credentials' }
+        : { ok: true, stdout: openPr, stderr: '' }
+    }
+    const g = createGithubPrs(h.deps)
+    await g.start()
+    g.subscribe()
+    await g.tick() // healthy fetch fills the cache
+    expect(g.prs()['C:/repo'].byBranch['me/fix'].number).toBe(12)
+
+    authFail = true
+    h.advance(MIN_SPACING_MS + 60_000)
+    await g.tick() // the 401
+    expect(g.status().kind).toBe('not-authenticated')
+    // Gated, not just stale: the collapse/expand round trip in WorktreePanel must not bring the
+    // old snapshot straight back with no indication anything changed.
+    expect(g.prs()).toEqual({})
+
+    // Recovery: the user re-authenticated elsewhere; a recheck (Re-check, or the settings tab
+    // opening — finding 3) finds it, and the next successful fetch repopulates from the cache.
+    const probed = await g.recheck()
+    expect(probed.kind).toBe('connected')
+    authFail = false
+    h.advance(MIN_SPACING_MS + 60_000)
+    await g.tick()
+    expect(g.prs()['C:/repo'].byBranch['me/fix'].number).toBe(12)
+    g.stop()
+  })
+
+  it('ENOENT from a PR fetch re-probes instead of trusting the raw code (finding 4)', async () => {
+    // A worktree's repo folder being deleted raises the exact same ENOENT as gh itself being
+    // missing. Trusting the raw code would misreport this repo as "gh not installed"; the probe
+    // (run without this repo's broken cwd) is what actually knows gh is fine.
+    const h = harness({
+      fetchPrList: async (repoPath): Promise<GhResult> => {
+        h.fetches.push(repoPath)
+        return { ok: false, stdout: '', stderr: '', spawnError: 'ENOENT' }
+      }
+    })
+    const g = createGithubPrs(h.deps)
+    await g.start()
+    g.subscribe()
+    await g.tick()
+    expect(g.status()).toEqual({ kind: 'connected', account: 'me' }) // not dragged down to not-installed
+    const statusEvents = h.sent.filter((s) => s.channel === 'github:status')
+    expect(statusEvents).toHaveLength(2) // start()'s announcement, then tick()'s re-probe — not silent
+    g.stop()
+  })
+
+  it('a repo with no configured remote is memoized and stops costing a spawn every tick (finding 4)', async () => {
+    const h = harness({
+      fetchPrList: async (repoPath): Promise<GhResult> => {
+        h.fetches.push(repoPath)
+        return { ok: false, stdout: '', stderr: 'no git remotes found' }
+      }
+    })
+    const g = createGithubPrs(h.deps)
+    await g.start()
+    g.subscribe()
+    await g.tick() // classifies no-remote and memoizes the repo
+    expect(h.fetches).toHaveLength(1)
+    h.advance(MIN_SPACING_MS + 60_000)
+    await g.tick()
+    expect(h.fetches).toHaveLength(1) // memoized — no repeat spawn for a repo that can never succeed
+    await g.refresh({ force: true }) // a forced refresh must not resurrect it either
+    expect(h.fetches).toHaveLength(1)
+    g.stop()
+  })
 })

@@ -12,8 +12,16 @@ export function GithubSettings(): React.JSX.Element {
   const [checking, setChecking] = useState(false)
 
   useEffect(() => {
-    void window.api.github.status().then(setProbe)
+    // recheck(), not status(): main's cached probe can be stale by the time this tab opens (a
+    // background auth loss, or a `gh auth login` run in a terminal since app start), and this is
+    // a local process call — about half a second — that also broadcasts, so the worktree panel
+    // stays in step with whatever this tab just found (design doc §5).
+    void window.api.github.recheck().then(setProbe)
     void window.api.settings.getGithubPolling().then(setPolling)
+    // Keeps tracking state changes while the tab stays open — a later auth loss, or a recheck
+    // triggered elsewhere, must not leave this pane reporting a stale "Connected".
+    const offStatus = window.api.on('github:status', setProbe)
+    return () => offStatus()
   }, [])
 
   const recheck = async (): Promise<void> => {

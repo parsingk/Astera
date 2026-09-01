@@ -44,7 +44,7 @@ describe('PrBadge', () => {
 
   it('stale dims and says why in the title', () => {
     const html = render(pr(), true)
-    expect(html).toContain('stale')
+    expect(html).toContain('pr-badge open stale')
     expect(html).toContain('github.badge.stale')
   })
 })
