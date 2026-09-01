@@ -15,7 +15,12 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { WorkUnitStore } from './store'
-import { WorkUnitCollector, type CollectorGit, type CollectorSession } from './collector'
+import {
+  WorkUnitCollector,
+  type CollectorDeps,
+  type CollectorGit,
+  type CollectorSession
+} from './collector'
 import { OPERATION_GRACE_MS } from '../../core/git/provenance'
 import type { GitRef } from '../../core/git/types'
 import type { SessionWorkUnit } from '../../core/workUnit/types'
@@ -47,6 +52,20 @@ const wrote = (tool = 'Edit'): string =>
 /** The line codex writes to say a turn ended, by itself — codex's own regression guard uses this */
 const codexTurnComplete = (): string =>
   JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', turn_id: 't1' } }) + '\n'
+
+/** A claude goal boundary — the `goal_status` attachment measured in spec §3.1 */
+const claudeGoal = (a: Record<string, unknown>): string =>
+  JSON.stringify({ type: 'attachment', attachment: { type: 'goal_status', ...a } }) + '\n'
+
+/** A codex goal boundary — the `thread_goal_updated` event measured in spec §3.2 */
+const codexGoal = (status: string, objective = 'rpg 게임을 만들어줘'): string =>
+  JSON.stringify({
+    type: 'event_msg',
+    payload: {
+      type: 'thread_goal_updated',
+      goal: { objective, status, tokensUsed: 0, timeUsedSeconds: 0 }
+    }
+  }) + '\n'
 
 interface Fake {
   git: CollectorGit & {
@@ -80,12 +99,14 @@ function makeFake(): Fake {
 async function makeCollector(
   fake: Fake,
   file = storeFile,
-  watchGit?: (projectPath: string) => Promise<(() => Promise<void>) | null>
+  watchGit?: (projectPath: string) => Promise<(() => Promise<void>) | null>,
+  extra: Partial<CollectorDeps> = {}
 ): Promise<{
   collector: WorkUnitCollector
   store: WorkUnitStore
   closed: SessionWorkUnit[]
   tasksChanged: string[]
+  ignored: { projectPath: string; objective: string }[]
 }> {
   const store = new WorkUnitStore(file)
   await store.load()
@@ -94,6 +115,8 @@ async function makeCollector(
   // The screen's redraw signal (Item 9). How many times a project path lands here, and in what
   // order, is exactly how many times the screen had to re-read.
   const tasksChanged: string[] = []
+  // A goal arrived while a unit was already open — see onGoalIgnored's own doc for why it fires.
+  const ignored: { projectPath: string; objective: string }[] = []
   // 자기 참조다 — pendingGitOps 는 collector 자신의 등록 목록을 그대로 돌려준다. ipc.ts 가
   // workUnitCollector 를 wiring 하는 것과 같은 자리, 같은 이유다.
   const collector: WorkUnitCollector = new WorkUnitCollector({
@@ -104,9 +127,11 @@ async function makeCollector(
     pendingGitOps: () => collector.getPendingGitOps(),
     watchGit,
     onUnitClosed: (_p, u) => closed.push(u),
-    onTasksChanged: (p) => tasksChanged.push(p)
+    onTasksChanged: (p) => tasksChanged.push(p),
+    onGoalIgnored: (p, objective) => ignored.push({ projectPath: p, objective }),
+    ...extra
   })
-  return { collector, store, closed, tasksChanged }
+  return { collector, store, closed, tasksChanged, ignored }
 }
 
 const session = (overrides: Partial<CollectorSession> = {}): CollectorSession => ({
@@ -1438,6 +1463,141 @@ describe('WorkUnitCollector — isAncestor 를 묻는 조건', () => {
     collector.onGitChanged()
     await collector.flush()
     expect(asks).toBe(1)
+  })
+})
+
+// ── 네이티브 /goal 이 여닫는 Unit (task 2) ─────────────────────────────
+
+describe('네이티브 /goal 이 작업 하나를 연다', () => {
+  it('claude 의 sentinel 은 그 문장 그대로 Unit 을 연다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: 'rpg 게임을 만들어줘' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].objective).toBe('rpg 게임을 만들어줘')
+    expect(state.units[0].status).toBe('active')
+  })
+
+  it('met 은 그 Unit 을 완료로 닫고, 평가자의 이유를 요약으로 남긴다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, closed } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: 'rpg 게임을 만들어줘' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    await fs.appendFile(transcript, wrote(), 'utf8') // evidence that this session touched a file
+    fake.git.files = ['src/game.ts']
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ met: true, condition: 'rpg 게임을 만들어줘', reason: '충족됐다' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units[0].status).toBe('completed')
+    expect(state.units[0].completion?.source).toBe('agent')
+    expect(state.units[0].resultSummary).toBe('충족됐다')
+    expect(closed).toHaveLength(1)
+  })
+
+  it('이미 열린 작업이 있으면 목표는 새 Unit 을 열지 않고, 그 사실을 알린다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, ignored } = await makeCollector(fake)
+    await collector.start()
+
+    await collector.startTask('s1', '결제 붙이기')
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1) // neither interrupted nor joined by a second unit
+    expect(state.units[0].objective).toBe('결제 붙이기')
+    expect(state.units[0].status).toBe('active')
+    expect(ignored).toEqual([{ projectPath, objective: '테스트가 통과할 때까지' }])
+  })
+
+  it('목표의 끝은 /astera-task 가 연 Unit 을 닫지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await collector.startTask('s1', '결제 붙이기')
+    await fs.appendFile(transcript, wrote(), 'utf8')
+    fake.git.files = ['src/pay.ts']
+    await fs.appendFile(transcript, claudeGoal({ met: true, condition: '테스트가 통과할 때까지' }), 'utf8')
+    await collector.flush()
+
+    expect(store.get(projectPath)!.units[0].status).toBe('active')
+  })
+
+  it('Run 안의 세션에서 온 목표는 무시하고 알리지도 않는다 — 사람이 친 것이 아니다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, ignored } = await makeCollector(fake, undefined, undefined, {
+      inRun: () => true
+    })
+    await collector.start()
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: 'rpg 게임을 만들어줘' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    expect(store.get(projectPath)?.units ?? []).toHaveLength(0)
+    expect(ignored).toEqual([])
+  })
+
+  it('codex 가 같은 목표로 active 를 반복해도 Unit 은 하나다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush()
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush()
+
+    expect(store.get(projectPath)!.units).toHaveLength(1)
+  })
+
+  it('되돌아올 수 있는 codex 상태는 Unit 을 닫지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush()
+    await fs.appendFile(transcript, codexGoal('paused'), 'utf8')
+    await collector.flush()
+
+    expect(store.get(projectPath)!.units[0].status).toBe('active')
   })
 })
 

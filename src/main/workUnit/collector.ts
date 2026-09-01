@@ -39,6 +39,7 @@ import type { SessionCheck, SessionWorkUnit } from '../../core/workUnit/types'
 import type { OpenSessionTask } from '../../core/types'
 import { isOpen } from '../../core/workUnit/status'
 import { hasWriteEvidence } from '../../core/workUnit/humanRequest'
+import { goalSignalOf, type GoalSignal } from '../../core/workUnit/goalSignal'
 import { startedTask, completedTask, cancelledTask, interruptedTask } from '../../core/workUnit/lifecycle'
 import { readNewLines } from './tail'
 import type { ProjectGitSnapshot, WorkUnitState, WorkUnitStore } from './store'
@@ -114,6 +115,15 @@ export interface CollectorDeps {
    *
    *  넘기지 않으면 감시하지 않는다. 그때 `.git` 방아쇠는 밖에서 오는 `onGitChanged()` 뿐이다. */
   watchGit?: (projectPath: string) => Promise<(() => Promise<void>) | null>
+  /** Is this session's work already going to be recorded by a Run? A `/goal` typed inside one is
+   *  ignored for the same reason `session-task-*` is refused there (server.ts's
+   *  `isWorker || isRunCoordinator`) — the Run records itself. Not passed means "no Run knowledge",
+   *  and then nothing is skipped. */
+  inRun?: (sessionId: string) => boolean
+  /** A goal signal arrived while a unit was already open, so it opened nothing. **The person is
+   *  told**: they typed the goal, and silence would read as the feature not working. Nothing is
+   *  lost when this fires — the goal still runs and its work still lands on the open unit. */
+  onGoalIgnored?: (projectPath: string, objective: string) => void
   /** Unit 이 닫혔다 — 완료·버림·기능 끄기·세션 종료 어느 쪽이든.
    *
    *  **이 수집기는 하류가 무엇을 하는지 모른다.** 설명을 만드는 것은 다음 층의 일이고, 여기서
@@ -192,6 +202,14 @@ export class WorkUnitCollector {
   /** 이 수집기가 세워 둔 `.git` 감시자들 — 프로젝트마다 하나이고, 값은 그것을 닫는 함수다.
    *  `syncWatchers` 가 채우고 `closeAll` 이 비운다. */
   private gitWatches = new Map<string, () => Promise<void>>()
+  /** Goal boundaries seen during a round, applied after it. **Never applied inside one** —
+   *  `startTask`/`completeTask` enqueue onto the same serial chain the round occupies, so awaiting
+   *  one from the per-line loop would wait on a link that cannot run yet. */
+  private pendingGoals: { sessionId: string; signal: GoalSignal }[] = []
+  /** Per session, the objective of the unit **a goal opened**. Three jobs: it makes a repeated
+   *  `active` record idempotent (codex re-sends one per status change), it keeps a goal's end from
+   *  closing a unit `/astera-task` opened, and its absence is how we know there is nothing to close. */
+  private goalUnits = new Map<string, string>()
 
   constructor(private deps: CollectorDeps) {}
 
@@ -693,13 +711,59 @@ export class WorkUnitCollector {
   /** 한 회차를 지금 돌린다. **디바운스를 거치지 않는 유일한 길**이다 — 대기 중인 타이머는 취소한다.
    *  테스트가 150ms 를 기다리지 않고 확인할 수 있는 것이 이 메서드 덕분이다. */
   flush(): Promise<void> {
-    return this.enqueue(async () => {
+    const round = this.enqueue(async () => {
       this.disarm()
       if (!this.running) return
       const wantGit = this.pendingGit
       this.pendingGit = false
       await this.round(wantGit)
     })
+    // **After the round, not in it.** Each call below enqueues its own link, which can only run
+    // once the round's link is done — so this must not be awaited from inside that link.
+    return round.then(() => this.applyGoalSignals())
+  }
+
+  /** Turn the boundaries this round saw into declarations. Runs outside the round's own link. */
+  private async applyGoalSignals(): Promise<void> {
+    const pending = this.pendingGoals
+    this.pendingGoals = []
+    if (!this.running) return
+    for (const { sessionId, signal } of pending) {
+      const s = this.known.get(sessionId)
+      if (!s) continue
+      // A Run records itself (spec §5.4). No notice: an agent inside the Run typed this, not a person.
+      if (this.deps.inRun?.(sessionId)) continue
+
+      if (signal.kind === 'start') {
+        // codex re-sends `active` on every status change; the same objective is the same goal.
+        if (this.goalUnits.get(sessionId) === signal.objective) continue
+        const open = this.stateOf(s.projectPath).units.find(
+          (u) => u.sessionId === sessionId && isOpen(u.status)
+        )
+        if (open) {
+          // Spec §5.2 — a goal adds a finish line to work already declared; it does not start a
+          // second piece of work, and interrupting here would split one job into two records.
+          this.deps.onGoalIgnored?.(s.projectPath, signal.objective)
+          continue
+        }
+        const r = await this.startTask(sessionId, signal.objective)
+        if (r.ok) this.goalUnits.set(sessionId, signal.objective)
+        continue
+      }
+
+      const objective = this.goalUnits.get(sessionId)
+      if (objective === undefined) continue // this session's open unit, if any, is not a goal's
+      this.goalUnits.delete(sessionId)
+      const open = this.stateOf(s.projectPath).units.find(
+        (u) => u.sessionId === sessionId && isOpen(u.status)
+      )
+      // Closed by something else in between — the person's button, a session exit. Nothing to do.
+      if (!open || open.objective !== objective) continue
+      await this.completeTask(sessionId, {
+        source: 'agent',
+        ...(signal.summary ? { summary: signal.summary } : {})
+      })
+    }
   }
 
   // ── 회차 ────────────────────────────────────────────────────────────
@@ -929,6 +993,10 @@ export class WorkUnitCollector {
           dirty = true
         }
       }
+      // A goal boundary. Only noted here — see pendingGoals for why it cannot be acted on inside
+      // a round.
+      const goal = goalSignalOf(record)
+      if (goal) this.pendingGoals.push({ sessionId: s.sessionId, signal: goal })
     }
 
     return dirty
@@ -1135,6 +1203,8 @@ export class WorkUnitCollector {
       if (open.length > 0) this.deps.onTasksChanged?.(projectPath)
     }
     this.known.clear()
+    this.pendingGoals = []
+    this.goalUnits.clear()
     // 이 실행의 캐시만 비운다. **저장된 스냅샷은 건드리지 않는다** — 커서와 반대 방향의 규칙이고
     // 그것이 맞다: 커서에 걸린 약속은 "켜기 전의 대화는 읽지 않는다"(스펙 §16.1)이고 스냅샷에 걸린
     // 약속은 "실제로 일어난 변화를 놓치지 않는다"(EG §41-10)다. 대화는 사람의 말이고 저장소의
