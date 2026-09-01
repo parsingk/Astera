@@ -3417,7 +3417,12 @@ export function registerIpc(
         (r) => r.coordinatorSessionId === sessionId && outcomeOf(st, r.id) === 'running'
       )
     },
-    onGoalIgnored: (_projectPath, _objective) => send('sessionTasks:goalIgnored', undefined),
+    // Fire-and-forget only. This runs from inside the collector's own serial promise chain
+    // (collector.ts's applyGoalSignal), so it must stay a plain, synchronous `send` — awaiting
+    // anything here, or calling back into another collector declaration, would deadlock on that
+    // same chain.
+    onGoalIgnored: ({ projectPath, blockingUnitId }) =>
+      send('sessionTasks:goalIgnored', { projectPath, blockingUnitId }),
     log: orchLog
   })
   // 토글이 꺼져 있으면 시작하지 않는다. **load 뒤로 미룬다** — 먼저 시작하면 수집기가 쓴 상태를
