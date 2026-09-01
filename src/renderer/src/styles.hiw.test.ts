@@ -32,4 +32,11 @@ describe('How It Works 의 테마 규약', () => {
       expect(rule, rule).toMatch(/background:/)
     }
   })
+
+  it('줄 제목은 두 줄에서 자른다 — /goal 인자는 문단일 수 있다', () => {
+    const rule = hiwRules().find((r) => r.startsWith('.hiw-name{'))
+    expect(rule).toBeDefined()
+    expect(rule).toMatch(/-webkit-line-clamp:\s*2/)
+    expect(rule).toMatch(/overflow:\s*hidden/)
+  })
 })

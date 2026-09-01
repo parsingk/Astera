@@ -1871,7 +1871,10 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    큰 호를 그린다. 그 판단은 UnderstandingIcons 의 StatusGlyph 에 적혀 있다. */
 .hiw-spin { display: inline-block; line-height: 1; transform-origin: 50% 50%; animation: cm-spin 1.5s linear infinite; }
 .hiw-body { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.hiw-name { font-size: 12px; font-weight: 500; color: var(--text); }
+/* A row title is whatever the person typed — a /goal argument can be a paragraph. Two lines, then
+   ellipsis; the whole of it is in the row's `title` (UnderstandingView.tsx), the same way a
+   truncated account label carries its full value (AccountRow.tsx). */
+.hiw-name { font-size: 12px; font-weight: 500; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .hiw-summary { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A row's reason for wanting attention — why [Write it up again] is offered. This is the only
    place that answers "why", so it gets the same warn colour as a needs-review/failed glyph
