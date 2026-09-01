@@ -2029,5 +2029,48 @@ describe('네이티브 /goal 이 작업 하나를 연다', () => {
     expect(state.units[1].objective).toBe('테스트가 통과할 때까지')
     expect(state.units[1].status).toBe('active')
   })
+
+  // The residual race the previous fix left in place: deferredGoalStarts and goalIgnoredNotices are
+  // per-session state, not per-unit state, so gating their re-key on an active unit existing strands
+  // them under the dead old session id whenever the blocking row already closed — with no round run
+  // since — before the roll happens. There is no active unit at all here when the roll fires.
+  it('막던 Unit 이 이미 닫혀 활성 Unit 이 하나도 없어도, 굴러간 세션에서 막혔던 목표는 스스로 열린다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()] // s1
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '결제 붙이기') // blocks the goal
+    if (!started.ok) throw new Error('unexpected')
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush() // blocked — deferred under s1
+
+    // The blocking row closes, and no round runs afterwards — the deferred start has not been
+    // retried yet, and no active unit remains under s1 at all.
+    await collector.cancelTaskById(projectPath, started.id)
+    expect(store.get(projectPath)!.units.filter((u) => u.status === 'active')).toHaveLength(0)
+
+    // rolling.ts's roll(): kill(old) → spawn(new) → send('session:rolled'), no await in between —
+    // the old session's own exit event is guaranteed to arrive after this notification.
+    collector.onSessionForked('s2', undefined, 's1')
+    fake.sessions = [session({ sessionId: 's2' })] // s1 is already dead
+    await collector.onSessionExit('s1')
+
+    // Only now does a round run — the retry inside applyGoalSignals, under the new session id.
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2)
+    expect(state.units[0].sessionId).toBe('s1') // already closed before the roll — never re-keyed
+    expect(state.units[0].status).toBe('cancelled')
+    expect(state.units[1].sessionId).toBe('s2') // the goal's own row, opened under the rolled session
+    expect(state.units[1].objective).toBe('테스트가 통과할 때까지')
+    expect(state.units[1].status).toBe('active')
+  })
 })
 
