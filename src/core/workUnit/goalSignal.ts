@@ -11,8 +11,20 @@
 // Note: This module has no imports because both main and core read it.
 
 /** A goal boundary. `summary` is the claude evaluator's own reason for saying the condition holds;
- *  codex reports no equivalent, so it is absent there. */
-export type GoalSignal = { kind: 'start'; objective: string } | { kind: 'end'; summary?: string }
+ *  codex reports no equivalent, so it is absent there.
+ *
+ *  `declared` on a `start` says which of the two vendors sent it, because they do not mean the same
+ *  thing (spec §4). Claude's `sentinel` fires once, at the moment the person types `/goal` — a
+ *  *declaration*, so `declared` is `true`. Codex's `active` is re-sent at every turn boundary as
+ *  well as on every status change — a *state broadcast* naming whatever goal is already attached,
+ *  so `declared` is `false`. The collector treats the two differently: a declaration always counts
+ *  as a new start, discarding whatever bookkeeping an earlier goal left behind; a broadcast that
+ *  repeats the objective the session's goal was last opened with is ignored, whether or not that
+ *  unit is still open — the alternative would let a re-sent broadcast undo the person's own
+ *  `[complete]`/`[cancel]` on that unit by minting a duplicate. */
+export type GoalSignal =
+  | { kind: 'start'; objective: string; declared: boolean }
+  | { kind: 'end'; summary?: string }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   v !== null && typeof v === 'object' && !Array.isArray(v)
@@ -37,7 +49,7 @@ export function goalSignalOf(record: Record<string, unknown>): GoalSignal | null
     if (!isObj(a) || a.type !== 'goal_status') return null
     if (a.sentinel === true) {
       const objective = objectiveOf(a.condition)
-      return objective === null ? null : { kind: 'start', objective }
+      return objective === null ? null : { kind: 'start', objective, declared: true }
     }
     if (a.met === true)
       return { kind: 'end', ...(typeof a.reason === 'string' ? { summary: a.reason } : {}) }
@@ -56,7 +68,7 @@ export function goalSignalOf(record: Record<string, unknown>): GoalSignal | null
     if (g.status === 'complete') return { kind: 'end' }
     if (g.status === 'active') {
       const objective = objectiveOf(g.objective)
-      return objective === null ? null : { kind: 'start', objective }
+      return objective === null ? null : { kind: 'start', objective, declared: false }
     }
     return null
   }

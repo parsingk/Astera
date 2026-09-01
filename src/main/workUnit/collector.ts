@@ -207,12 +207,14 @@ export class WorkUnitCollector {
    *  one from the per-line loop would wait on a link that cannot run yet. */
   private pendingGoals: { sessionId: string; signal: GoalSignal }[] = []
   /** Per session, the id and objective of the unit **a goal opened**. Three jobs: the objective
-   *  makes a repeated `active` record idempotent (codex re-sends one per status change); the id is
-   *  what the close path matches against — two units can carry the same objective text (a pasted
-   *  sentence typed into both `/goal` and `/astera-task`), and only the id says which one is the
-   *  goal's, so a goal's end can never close an `/astera-task` unit that merely repeats its words;
-   *  and its absence is how we know there is nothing to close. Moved onto the new session id by
-   *  `reKeyRolledUnit` — a goal outlives a usage-limit roll the same way its unit does. */
+   *  makes a repeated codex `active` record idempotent (it re-sends one per status change, and also
+   *  every turn boundary, whether or not the unit it names is still open — the entry survives the
+   *  unit closing for exactly this reason, spec §4); the id is what the close path matches against —
+   *  two units can carry the same objective text (a pasted sentence typed into both `/goal` and
+   *  `/astera-task`), and only the id says which one is the goal's, so a goal's end can never close
+   *  an `/astera-task` unit that merely repeats its words; and its absence is how we know there is
+   *  nothing to close. Moved onto the new session id by `reKeyRolledUnit` — a goal outlives a
+   *  usage-limit roll the same way its unit does. */
   private goalUnits = new Map<string, { id: string; objective: string }>()
   /** Per session, the objective last handed to `onGoalIgnored`. Codex re-sends `thread_goal_updated`
    *  with `status: "active"` on every turn boundary, not only when the goal itself changes — without
@@ -799,18 +801,21 @@ export class WorkUnitCollector {
         if (!this.running) return
         const state = this.stateOf(s.projectPath)
         const entry = this.goalUnits.get(sessionId)
-        if (entry && !state.units.some((u) => u.id === entry.id && isOpen(u.status))) {
-          // The unit this goal opened is no longer open — closed through another route (the
-          // screen's [complete]/[cancel], a session exit, a replacing /astera-task). This entry no
-          // longer answers "is a unit already open", and leaving it in place would have the dedupe
-          // below mistake a genuinely repeated objective for the same re-sent `active` record,
-          // silently opening nothing (final review, item 3).
-          this.goalUnits.delete(sessionId)
-        } else if (entry?.objective === signal.objective) {
-          // codex re-sends `active` on every status change; the same objective on a unit that is
-          // still open is the same goal, not a new one.
+        if (!signal.declared && entry?.objective === signal.objective) {
+          // Codex's `active` is a state broadcast, re-sent on every turn boundary as well as on
+          // every status change — this repeat names the same goal this session's unit was opened
+          // for, so it changes nothing, **whether or not that unit is still open**. Treating it as
+          // a fresh start would find nothing open once the person closes that unit through
+          // [complete]/[cancel] and silently mint a duplicate row for a goal they just dismissed
+          // (spec §4) — the one case this rule exists to stop. Claude's `sentinel` never takes this
+          // branch: it is a declaration, not a broadcast, and always falls through to open a new
+          // unit below.
           return
         }
+        // Either a declaration (claude's `sentinel` always counts as a new start) or a broadcast
+        // naming a different objective (a genuinely new codex goal). Either way, whatever entry was
+        // here no longer answers "is a unit already open" for the goal about to run below.
+        if (entry) this.goalUnits.delete(sessionId)
         const open = state.units.find((u) => u.sessionId === sessionId && isOpen(u.status))
         if (open) {
           // Spec §5.2 — a goal adds a finish line to work already declared; it does not start a

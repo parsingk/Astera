@@ -32,7 +32,11 @@ const codexGoal = (status: string, objective = 'rpg 게임을 만들어줘') => 
 
 describe('goalSignalOf', () => {
   it('claude 의 sentinel 은 목표의 시작이다', () => {
-    expect(goalSignalOf(claudeSet)).toEqual({ kind: 'start', objective: 'rpg 게임을 만들어줘' })
+    expect(goalSignalOf(claudeSet)).toEqual({
+      kind: 'start',
+      objective: 'rpg 게임을 만들어줘',
+      declared: true
+    })
   })
 
   it('claude 의 met 은 목표의 끝이고, 평가자의 이유를 요약으로 가져온다', () => {
@@ -47,7 +51,11 @@ describe('goalSignalOf', () => {
   })
 
   it('codex 의 active 는 시작, complete 는 끝이다', () => {
-    expect(goalSignalOf(codexGoal('active'))).toEqual({ kind: 'start', objective: 'rpg 게임을 만들어줘' })
+    expect(goalSignalOf(codexGoal('active'))).toEqual({
+      kind: 'start',
+      objective: 'rpg 게임을 만들어줘',
+      declared: false
+    })
     expect(goalSignalOf(codexGoal('complete'))).toEqual({ kind: 'end' })
   })
 

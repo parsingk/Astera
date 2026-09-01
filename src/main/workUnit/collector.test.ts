@@ -1680,6 +1680,56 @@ describe('네이티브 /goal 이 작업 하나를 연다', () => {
     expect(state.units[1].status).toBe('active') // a fresh unit, not silently dropped
   })
 
+  // This is the defect this round fixes. codex's `active` is a state broadcast, re-sent on every
+  // turn boundary whether or not the goal changed — unlike claude's `sentinel` above, it is not a
+  // declaration. Treating the repeat as a fresh start would find nothing open once the person closes
+  // the row and silently mint a duplicate for a goal they just dismissed (spec §4).
+  it('codex 가 연 Unit 을 화면에서 닫은 뒤 같은 목표로 active 가 반복돼도 새 Unit 은 열리지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush() // the goal opens its own unit
+
+    // The person closes it from the screen — a route the goal's own end never takes.
+    const opened = store.get(projectPath)!.units[0]
+    await collector.cancelTaskById(projectPath, opened.id)
+
+    // codex re-sends the same status broadcast on the next turn boundary, naming the same objective.
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1) // no duplicate row for a goal the person just dismissed
+    expect(state.units[0].status).toBe('cancelled') // untouched further
+  })
+
+  // The rule above is per-objective, not a blanket "ignore codex after a close" — a broadcast
+  // naming a genuinely different objective is still a new goal and still opens its own unit.
+  it('codex 에서 Unit 을 닫은 뒤 다른 목표로 active 가 오면 새 Unit 이 열린다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexGoal('active', '첫 번째 목표'), 'utf8')
+    await collector.flush() // the goal opens its own unit
+
+    const opened = store.get(projectPath)!.units[0]
+    await collector.cancelTaskById(projectPath, opened.id)
+
+    await fs.appendFile(transcript, codexGoal('active', '두 번째 목표'), 'utf8')
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2)
+    expect(state.units[0].status).toBe('cancelled') // untouched further
+    expect(state.units[1].objective).toBe('두 번째 목표')
+    expect(state.units[1].status).toBe('active') // a fresh unit for a genuinely different goal
+  })
+
   // Fix round 1, finding 2: a goal's unit used to be identified by its objective text alone, so a
   // goal's end could close a same-worded `/astera-task` unit that was never the goal's own.
   it('같은 글자의 목표라도, /astera-task 가 새로 연 Unit 은 id 가 달라 목표의 끝이 닫지 않는다', async () => {
