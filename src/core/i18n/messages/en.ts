@@ -107,6 +107,7 @@ export const en: Record<keyof typeof ko, string> = {
   'github.settings.commandCopied': 'Command copied',
   'github.settings.polling': 'Refresh PR status automatically',
   'github.settings.pollingHint': 'When off, PR status is fetched only on manual refresh and when the worktree panel expands.',
+  'github.settings.saveFailed': 'Could not save the PR polling setting: {detail}',
   'github.badge.openInBrowser': 'Open in browser',
   'github.badge.copyLink': 'Copy link',
   'github.badge.linkCopied': 'Link copied',

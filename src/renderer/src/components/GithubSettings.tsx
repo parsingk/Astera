@@ -78,8 +78,15 @@ export function GithubSettings(): React.JSX.Element {
           checked={polling}
           onChange={(e) => {
             const next = e.target.checked
-            setPolling(next) // optimistic — reverted on failure
-            void window.api.settings.setGithubPolling(next).catch(() => setPolling(!next))
+            setPolling(next) // optimistic — reverted below on failure
+            void window.api.settings.setGithubPolling(next).catch((err) => {
+              setPolling(!next)
+              toast.error(
+                t('github.settings.saveFailed', {
+                  detail: err instanceof Error ? err.message : String(err)
+                })
+              )
+            })
           }}
         />
       </label>

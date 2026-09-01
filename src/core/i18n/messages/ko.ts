@@ -117,6 +117,7 @@ export const ko = {
   'github.settings.commandCopied': '명령을 복사했습니다',
   'github.settings.polling': 'PR 상태 자동 갱신',
   'github.settings.pollingHint': '끄면 수동 새로고침과 워크트리 패널을 펼칠 때만 조회합니다.',
+  'github.settings.saveFailed': 'PR 상태 자동 갱신 설정을 저장하지 못했습니다: {detail}',
   'github.badge.openInBrowser': '브라우저에서 열기',
   'github.badge.copyLink': '링크 복사',
   'github.badge.linkCopied': '링크를 복사했습니다',
