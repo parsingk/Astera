@@ -122,8 +122,14 @@ export interface CollectorDeps {
   inRun?: (sessionId: string) => boolean
   /** A goal signal arrived while a unit was already open, so it opened nothing. **The person is
    *  told**: they typed the goal, and silence would read as the feature not working. Nothing is
-   *  lost when this fires — the goal still runs and its work still lands on the open unit. */
-  onGoalIgnored?: (projectPath: string, objective: string) => void
+   *  lost when this fires — the goal still runs and its work still lands on the open unit, **and the
+   *  start itself is not dropped**: it is remembered (`deferredGoalStarts`) and replayed once the
+   *  block clears, so the goal still gets its own row without the person having to retype it.
+   *
+   *  `blockingUnitId` is the id of the unit in the way, so the renderer can offer to close it
+   *  directly — the same action the screen's own [완료] button drives — instead of only naming the
+   *  situation. */
+  onGoalIgnored?: (info: { projectPath: string; objective: string; blockingUnitId: string }) => void
   /** Unit 이 닫혔다 — 완료·버림·기능 끄기·세션 종료 어느 쪽이든.
    *
    *  **이 수집기는 하류가 무엇을 하는지 모른다.** 설명을 만드는 것은 다음 층의 일이고, 여기서
@@ -133,6 +139,18 @@ export interface CollectorDeps {
   /** the open-task section's redraw trigger; the record list has its own in `onUnitClosed` */
   onTasksChanged?: (projectPath: string) => void
   log?: (m: string) => void
+}
+
+/** One goal boundary queued for `applyGoalSignals`: either a real signal read from a transcript
+ *  this round, or a synthetic retry of a still-blocked start built from `deferredGoalStarts`
+ *  (`isReplay: true`). Kept outside `GoalSignal` itself deliberately — that type describes what a
+ *  vendor wrote in a transcript, and a replay is this collector's own bookkeeping, never something
+ *  any vendor sent. `applyGoalSignal` reads `isReplay` to guard against the race two overlapping
+ *  `applyGoalSignals` passes can create — see that method's own doc for the full mechanism. */
+interface QueuedGoalSignal {
+  sessionId: string
+  signal: GoalSignal
+  isReplay: boolean
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
@@ -204,8 +222,10 @@ export class WorkUnitCollector {
   private gitWatches = new Map<string, () => Promise<void>>()
   /** Goal boundaries seen during a round, applied after it. **Never applied inside one** —
    *  `startTask`/`completeTask` enqueue onto the same serial chain the round occupies, so awaiting
-   *  one from the per-line loop would wait on a link that cannot run yet. */
-  private pendingGoals: { sessionId: string; signal: GoalSignal }[] = []
+   *  one from the per-line loop would wait on a link that cannot run yet. Every entry queued here is
+   *  a real signal (`isReplay: false`) — the replay entries `applyGoalSignals` also feeds through
+   *  `applyGoalSignal` are never queued; they are built fresh from `deferredGoalStarts` each pass. */
+  private pendingGoals: QueuedGoalSignal[] = []
   /** Per session, the id and objective of the unit **a goal opened**. Three jobs: the objective
    *  makes a repeated codex `active` record idempotent (it re-sends one per status change, and also
    *  every turn boundary, whether or not the unit it names is still open — the entry survives the
@@ -221,9 +241,51 @@ export class WorkUnitCollector {
    *  this, a goal blocked behind an already-open unit would toast the same notice on every turn while
    *  the block persists (final review, item 4). Retrying the goal itself is unaffected: this only
    *  gates the notice, never the retry, and the retry is what lets the goal open its own unit the
-   *  moment the block clears. Cleared once that retry succeeds — a fresh block afterwards, even with
-   *  the same objective text, is a new occurrence and earns its own notice. */
+   *  moment the block clears.
+   *
+   *  **Every place this map is cleared or moved, listed in full because that is exactly what this
+   *  branch kept getting wrong.** Every defect fixed here was one of this map and its sibling
+   *  `deferredGoalStarts` not being cleared or re-keyed somewhere — a stranded deferral across a
+   *  roll, a stranded entry with no active unit at roll time, a suppressed notice after a goal
+   *  ended. A reader adding a fifth site needs to find the other four, here and in
+   *  `deferredGoalStarts`' own doc.
+   *    - Cleared once the retry succeeds — a fresh block afterwards, even with the same objective
+   *      text, is a new occurrence and earns its own notice.
+   *    - Cleared when that session's goal ends while still blocked (`applyGoalSignal`'s `end`
+   *      branch, alongside `deferredGoalStarts`) — the goal is over, so the notice it earned is
+   *      over with it; the *next* goal's block on the same session must not read as a repeat of
+   *      this one's already-shown notice and go silent.
+   *    - Cleared in `closeAll` and in `onSessionExit`, alongside `deferredGoalStarts` in both —
+   *      tracking turned off, or the session gone, leaves nothing left to dedupe against.
+   *    - Moved onto the new session id by `reKeyRolledUnit` — unconditionally, unlike `goalUnits`
+   *      below, since this map needs no active unit to still be meaningful (`deferredGoalStarts`'
+   *      own doc has the full reasoning) — so a roll must not make an already-shown notice fire
+   *      again just because the session id underneath it changed. */
   private goalIgnoredNotices = new Map<string, string>()
+  /** Per session, a goal `start` that arrived while a unit was already open, kept so
+   *  `applyGoalSignals` can retry it once the block clears. **This is what saves claude's goal from
+   *  the block losing it outright** — claude's `sentinel` fires once, at declaration time, so if
+   *  that one signal is dropped nothing ever asks again; codex survives without this because it
+   *  re-broadcasts `active` on every turn, which already re-tries the start on its own.
+   *
+   *  **Replayed through `applyGoalSignal` itself, not opened directly** — the retry is built as a
+   *  synthetic `start` signal with `declared: true` (it *was* a declaration) and handed to the same
+   *  method a real signal goes through, so the already-open check, the notice dedup
+   *  (`goalIgnoredNotices`), and `goalUnits` bookkeeping all apply to it for free: still blocked, it
+   *  lands right back here (harmlessly — same objective, so the notice stays deduped); block
+   *  cleared, it opens the goal's row exactly as a fresh declaration would.
+   *
+   *  **Overwritten, not queued** — only the latest objective for a session matters, the same
+   *  reasoning `goalUnits`' own doc gives for matching by id rather than text. Cleared once the
+   *  retry succeeds, when that session's goal ends while still blocked (spec: a goal that finished
+   *  while blocked must never open a row afterwards — that row would then never close), and
+   *  alongside the other per-run state (`closeAll`, `onSessionExit`). **Moved, not cleared, by
+   *  `reKeyRolledUnit`** on a usage-limit roll — a blocked claude goal has only this one chance at a
+   *  replay, so losing the entry to a roll would reintroduce exactly the loss this map exists to
+   *  prevent. **Moved unconditionally**, ahead of `reKeyRolledUnit`'s own `if (!u) return` guard:
+   *  unlike `goalUnits`, this entry names no unit, so it stays meaningful with none active under the
+   *  session (see that method's own comment for why the two are split). */
+  private deferredGoalStarts = new Map<string, string>()
 
   constructor(private deps: CollectorDeps) {}
 
@@ -678,7 +740,8 @@ export class WorkUnitCollector {
     if (oldSessionId !== undefined) void this.enqueue(() => this.reKeyRolledUnit(oldSessionId, newSessionId))
   }
 
-  /** The re-keying half of `onSessionForked` — moves a roll's active unit onto the new session id.
+  /** The re-keying half of `onSessionForked` — moves a roll's active unit, and any goal
+   *  bookkeeping tied to this session, onto the new session id.
    *  Queued rather than run inline: `onSessionExit(old)` is queued too (its own call below), and
    *  `enqueue`'s FIFO ordering is what guarantees this lands first, before that exit reads the same
    *  state and finds nothing under the old id.
@@ -698,6 +761,25 @@ export class WorkUnitCollector {
     if (!old) return
     const state = this.stateOf(old.projectPath)
     await this.tail(state, old)
+
+    // deferredGoalStarts and goalIgnoredNotices are per-*session* state, not per-unit state, so they
+    // move here — ahead of the `if (!u) return` guard below — rather than alongside `goalUnits`.
+    // A deferred start exists **precisely because** the goal could not open a unit, and it stays
+    // meaningful with no active unit under this session at all: the blocking row can already have
+    // closed before the roll (or before any round since has run), and the entry is still what tells
+    // the next round to open the goal's row. Gating this move on `u` would strand it under the dead
+    // old id in exactly that case — the bug a previous version of this fix left in place.
+    const deferred = this.deferredGoalStarts.get(oldSessionId)
+    if (deferred !== undefined) {
+      this.deferredGoalStarts.delete(oldSessionId)
+      this.deferredGoalStarts.set(newSessionId, deferred)
+    }
+    const notice = this.goalIgnoredNotices.get(oldSessionId)
+    if (notice !== undefined) {
+      this.goalIgnoredNotices.delete(oldSessionId)
+      this.goalIgnoredNotices.set(newSessionId, notice)
+    }
+
     const u = state.units.find((x) => x.sessionId === oldSessionId && x.status === 'active')
     if (!u) return
     u.sessionId = newSessionId
@@ -705,6 +787,10 @@ export class WorkUnitCollector {
     // otherwise the goal's own end never finds this unit again (it is on the `usageLimited` ignore
     // list precisely because a goal outlives a roll), and a re-sent `active` afterwards reads as a
     // second goal opened on top of the first, wrongly.
+    //
+    // **Kept below the `u` guard, unlike the two maps above.** This entry names a unit by id
+    // (`goalUnits`' own doc), so with no active unit under this session there is nothing for it to
+    // name — the split placement is deliberate, not an oversight.
     const goal = this.goalUnits.get(oldSessionId)
     if (goal) {
       this.goalUnits.delete(oldSessionId)
@@ -748,6 +834,12 @@ export class WorkUnitCollector {
       // 끝난 세션에는 그 물음이 없다
       this.startAtEnd.delete(sessionId)
       this.forkAnchors.delete(sessionId)
+      // Same reason: a goal deferred on this session (deferredGoalStarts' own doc) has nothing left
+      // to retry once the session that would receive the retry is gone. goalIgnoredNotices is
+      // cleared alongside it for the same reason `reKeyRolledUnit` treats the two as a pair — a
+      // dead session id can never receive another notice to dedupe against.
+      this.deferredGoalStarts.delete(sessionId)
+      this.goalIgnoredNotices.delete(sessionId)
       if (dirty) await this.persist(s.projectPath, state)
     })
   }
@@ -767,14 +859,40 @@ export class WorkUnitCollector {
     return round.then(() => this.applyGoalSignals())
   }
 
-  /** Turn the boundaries this round saw into declarations. Runs outside the round's own link. */
+  /** Turn the boundaries this round saw into declarations. Runs outside the round's own link.
+   *
+   *  **The retry loop runs after the pending loop, not before.** A person can retype `/goal` with a
+   *  different objective before the block even clears — the old objective is still deferred, and a
+   *  fresh signal for the new one lands in `pending` the same round. Running the retry first used to
+   *  let the stale objective win: it would open a row before the pending loop ever saw the newer
+   *  one, and the newer signal then hit the already-open guard instead of opening its own row. With
+   *  the pending loop first, the newer signal opens the row (nothing is open yet), and its own
+   *  successful-open path clears the stale deferral — so the retry loop's replay of the old
+   *  objective, run second, becomes a no-op. Only the latest objective for a session ever wins,
+   *  matching `deferredGoalStarts`' own doc.
+   *
+   *  **Two overlapping calls to `applyGoalSignals` can still race**, independent of that ordering.
+   *  `flush()` chains this method onto its own round's promise with `.then`, not onto the shared
+   *  `enqueue` chain — so a second `flush()` call registered while the first's round is still
+   *  running can have its own round, and this method's own retry-loop reads of
+   *  `deferredGoalStarts`, interleave with the first call's. Concretely: pass A snapshots
+   *  `deferredGoalStarts` and starts an `enqueueFor` link for the replay; before that link runs,
+   *  pass B's own retry loop snapshots the *same still-present* entry and queues a second replay
+   *  right after A's. A's replay then opens the row and deletes the entry — but B's replay, built
+   *  from a snapshot taken before that deletion, runs anyway, finds the row A just opened, and
+   *  (wrongly, without the guard below) re-defers it and raises a second notice pointing at the
+   *  goal's own brand-new row. `isReplay` on the queued signal is what lets `applyGoalSignal` re-read
+   *  the map at the moment its link actually executes, rather than trusting the snapshot: a replay
+   *  whose objective no longer matches the live entry (because another link already consumed or
+   *  replaced it) is stale and returns immediately, doing nothing. */
   private async applyGoalSignals(): Promise<void> {
     const pending = this.pendingGoals
     this.pendingGoals = []
     if (!this.running) return
-    for (const { sessionId, signal } of pending) {
+
+    for (const { sessionId, signal, isReplay } of pending) {
       try {
-        await this.applyGoalSignal(sessionId, signal)
+        await this.applyGoalSignal(sessionId, signal, isReplay)
       } catch (e) {
         // A signal's own attempt, or a host callback it calls (`inRun`, `onGoalIgnored` — a later
         // task backs both with ipc.ts code that can throw, e.g. sending on a destroyed window),
@@ -784,13 +902,34 @@ export class WorkUnitCollector {
         this.log(String(e))
       }
     }
+
+    // Retry every goal still waiting on a blocked unit — see `deferredGoalStarts`' own doc for why
+    // this exists (claude has no other way to be retried) and why a plain replay through
+    // `applyGoalSignal` is enough (it re-runs the already-open check itself). No new trigger is
+    // needed for this: a session working toward a goal keeps writing to its transcript, so a round —
+    // and this replay — arrives on its own within the debounce.
+    for (const [sessionId, objective] of [...this.deferredGoalStarts]) {
+      try {
+        await this.applyGoalSignal(sessionId, { kind: 'start', objective, declared: true }, true)
+      } catch (e) {
+        this.log(String(e)) // same swallow-and-continue as the loop above
+      }
+    }
   }
 
   /** One boundary, applied. **The "is a unit already open?" read and the mutation it gates share a
    *  single enqueued link** (`startTaskCore`/`completeTaskCore`) — reading that check outside
    *  `enqueueFor` and only mutating through it would let the person's own `/astera-task` land in
-   *  between the two, which is exactly the race a goal must never win. */
-  private async applyGoalSignal(sessionId: string, signal: GoalSignal): Promise<void> {
+   *  between the two, which is exactly the race a goal must never win.
+   *
+   *  `isReplay` marks a synthetic retry built from `deferredGoalStarts` rather than a signal a
+   *  vendor actually wrote — see `applyGoalSignals`' own doc for the overlapping-rounds race this
+   *  exists to guard against. A real signal is always called with `false`. */
+  private async applyGoalSignal(
+    sessionId: string,
+    signal: GoalSignal,
+    isReplay: boolean
+  ): Promise<void> {
     const s = this.known.get(sessionId)
     if (!s) return
     // A Run records itself (spec §5.4). No notice: an agent inside the Run typed this, not a person.
@@ -798,6 +937,12 @@ export class WorkUnitCollector {
 
     if (signal.kind === 'start') {
       await this.enqueueFor(async () => {
+        // A stale replay: by the time this link actually runs, some other link already consumed or
+        // replaced this session's deferred entry (opened it, re-deferred it under a fresher
+        // objective, or dropped it on a goal end / session exit). Only the live map, read here and
+        // not at the moment this replay was queued, can say that — see `applyGoalSignals`' own doc.
+        // A real signal never takes this branch (`isReplay` is always false for one).
+        if (isReplay && this.deferredGoalStarts.get(sessionId) !== signal.objective) return
         if (!this.running) return
         const state = this.stateOf(s.projectPath)
         const entry = this.goalUnits.get(sessionId)
@@ -820,6 +965,10 @@ export class WorkUnitCollector {
           // retry must run every time so the goal gets its own unit the instant the block clears,
           // but the toast saying so must not repeat while the block persists.
           //
+          // **Remembered for `applyGoalSignals` to retry** (`deferredGoalStarts`) — overwritten
+          // every time, so a later block on a different objective supersedes an earlier one.
+          this.deferredGoalStarts.set(sessionId, signal.objective)
+
           // **`entry` is left untouched here.** `open` can be the goal's own still-active unit — a
           // person refining a claude condition, or codex broadcasting a changed objective, while
           // that unit is open — and deleting `entry` in that case would sever the only link telling
@@ -828,7 +977,11 @@ export class WorkUnitCollector {
           // about to return with the goal's own unit left exactly as it was.
           if (this.goalIgnoredNotices.get(sessionId) !== signal.objective) {
             this.goalIgnoredNotices.set(sessionId, signal.objective)
-            this.deps.onGoalIgnored?.(s.projectPath, signal.objective)
+            this.deps.onGoalIgnored?.({
+              projectPath: s.projectPath,
+              objective: signal.objective,
+              blockingUnitId: open.id
+            })
           }
           return
         }
@@ -838,11 +991,25 @@ export class WorkUnitCollector {
         if (entry) this.goalUnits.delete(sessionId)
         this.goalIgnoredNotices.delete(sessionId)
         const r = await this.startTaskCore(sessionId, signal.objective)
-        if (r.ok) this.goalUnits.set(sessionId, { id: r.id, objective: signal.objective })
+        if (r.ok) {
+          this.goalUnits.set(sessionId, { id: r.id, objective: signal.objective })
+          // Started — nothing left to retry, whether this run was itself a retry or a fresh signal.
+          this.deferredGoalStarts.delete(sessionId)
+        }
       }, () => undefined)
       return
     }
 
+    // The goal this session was pursuing just ended — including the case where it never got past
+    // the block above and no row was ever opened for it. Either way there is nothing left to retry:
+    // a goal that finished while blocked must never open a row afterwards, since that row would
+    // then never close (deferredGoalStarts' own doc). goalIgnoredNotices is cleared alongside it —
+    // same pairing as reKeyRolledUnit and onSessionExit — because a goal ending resets the right to
+    // be told again: left behind, the dedupe would read the *next* goal's block (even the same
+    // objective, declared fresh) as a repeat of this one's already-shown notice and stay silent,
+    // which is exactly what onGoalIgnored's own doc says must not happen.
+    this.deferredGoalStarts.delete(sessionId)
+    this.goalIgnoredNotices.delete(sessionId)
     const entry = this.goalUnits.get(sessionId)
     if (entry === undefined) return // this session's open unit, if any, is not a goal's
     this.goalUnits.delete(sessionId)
@@ -1093,7 +1260,7 @@ export class WorkUnitCollector {
       // A goal boundary. Only noted here — see pendingGoals for why it cannot be acted on inside
       // a round.
       const goal = goalSignalOf(record)
-      if (goal) this.pendingGoals.push({ sessionId: s.sessionId, signal: goal })
+      if (goal) this.pendingGoals.push({ sessionId: s.sessionId, signal: goal, isReplay: false })
     }
 
     return dirty
@@ -1303,6 +1470,7 @@ export class WorkUnitCollector {
     this.pendingGoals = []
     this.goalUnits.clear()
     this.goalIgnoredNotices.clear()
+    this.deferredGoalStarts.clear()
     // 이 실행의 캐시만 비운다. **저장된 스냅샷은 건드리지 않는다** — 커서와 반대 방향의 규칙이고
     // 그것이 맞다: 커서에 걸린 약속은 "켜기 전의 대화는 읽지 않는다"(스펙 §16.1)이고 스냅샷에 걸린
     // 약속은 "실제로 일어난 변화를 놓치지 않는다"(EG §41-10)다. 대화는 사람의 말이고 저장소의

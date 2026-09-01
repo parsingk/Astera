@@ -4,7 +4,7 @@
  *  HistoryBrowser or anywhere else without props. Displaying them is ToastHost's job. */
 
 export type ToastKind = 'info' | 'success' | 'error'
-/** The single action button a toast can carry. The one use is install-update-now — there is no requirement for more than one. */
+/** The single action button a toast can carry — no toast needs more than one. */
 export type ToastAction = { label: string; onClick: () => void }
 export type Toast = {
   id: number

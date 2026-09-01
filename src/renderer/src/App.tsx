@@ -2390,9 +2390,21 @@ export default function App(): React.JSX.Element {
     return window.api.on('sessionTasks:changed', () => setSessionTasksSeq((n) => n + 1))
   }, [])
 
-  // The person typed /goal and nothing opened. Silence would read as the feature being broken,
-  // and there is no action to offer — the goal still runs, and its work lands on the open unit.
-  useEffect(() => window.api.on('sessionTasks:goalIgnored', () => toast.info(t('hiw.goal.ignored'))), [t])
+  // The person typed /goal while a unit was already open on that session, so it opened nothing.
+  // Silence would read as the feature being broken, and the toast carries a button that closes
+  // the unit in the way — reusing completeOpenTask, the same call the row's own [완료] does.
+  useEffect(
+    () =>
+      window.api.on('sessionTasks:goalIgnored', ({ projectPath, blockingUnitId }) =>
+        toast.info(t('hiw.goal.ignored'), {
+          action: {
+            label: t('hiw.open.complete'), // same label as the row's own [완료] — same action, one key
+            onClick: () => completeOpenTask(projectPath, blockingUnitId)
+          }
+        })
+      ),
+    [t]
+  )
 
   // When the project changes, that project's terminal list is read again — main holds them per project,
   // so another project's terminals stay alive and are simply not shown here
