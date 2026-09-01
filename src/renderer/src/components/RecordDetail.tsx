@@ -71,7 +71,14 @@ export function RecordDetail({
   const verification = verificationOf(record)
 
   if (!explanation) {
-    return <div className="hiw-pane hiw-pane-empty">{t('hiw.pane.noExplanation')}</div>
+    // No write-up yet (still generating, or the last attempt failed) — there is no title to fall
+    // back from, but the person's own words are still worth showing here rather than nothing.
+    return (
+      <div className="hiw-pane hiw-pane-empty">
+        <h4 title={record.request}>{record.request}</h4>
+        {t('hiw.pane.noExplanation')}
+      </div>
+    )
   }
 
   const notYet = (): void => toast.info(t('hiw.pane.notYet'))
@@ -137,7 +144,7 @@ export function RecordDetail({
   return (
     <div className="hiw-pane">
       <div className="hiw-fhead">
-        <h4>{record.request}</h4>
+        <h4 title={record.request}>{record.explanation?.title ?? record.request}</h4>
         {/* The status is not hard-coded here — shape, wording and colour all read the same table
             the sidebar does (design §8). Picking the colour separately here would let the three
             places drift apart (UnderstandingIcons' RECORD_GLYPH_COLOR). */}

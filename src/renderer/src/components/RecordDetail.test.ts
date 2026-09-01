@@ -157,6 +157,14 @@ describe('RecordDetail', () => {
     expect(html).toContain('hiw.pane.decisions')
     expect(html).not.toContain('hiw.scope.clear')
   })
+
+  it('제목이 있으면 그것을 머리에 쓴다', () => {
+    expect(renderWith({ title: '로그인을 서버 세션으로' })).toContain('>로그인을 서버 세션으로</h4>')
+  })
+
+  it('제목이 없으면 사람이 적은 문장을 그대로 쓴다 — 옛 기록도 읽혀야 한다', () => {
+    expect(renderRecordWith({ explanation: undefined })).toContain('>인증에 Google 로그인을 붙여줘</h4>')
+  })
 })
 
 describe('좁은 페인', () => {

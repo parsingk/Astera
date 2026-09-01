@@ -147,7 +147,7 @@ export function UnderstandingView({
               <StatusGlyph glyph={RECORD_GLYPH[r.status]} spinning={r.status === 'generating'} />
             </span>
             <span className="hiw-body">
-              <span className="hiw-name" title={r.request}>{r.request}</span>
+              <span className="hiw-name" title={r.request}>{r.explanation?.title ?? r.request}</span>
               <span className="hiw-meta">
                 {dateOf(r.at)} · {sourceLabel(r)}
               </span>

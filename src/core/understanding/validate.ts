@@ -10,6 +10,9 @@ import type { FlowNode, FlowNodeType } from './types'
 import { evidenceIdOf } from './evidence'
 
 export interface ValidatedRecord {
+  /** A short name for this piece of work. **Optional on purpose** — the row falls back to the
+   *  person's own words, so a model that omits it costs a nicety, not the whole write-up. */
+  title?: string
   overview: string
   /** What a person using the product will notice; empty when the work changed nothing user-facing */
   userVisibleChanges: string[]
@@ -122,6 +125,8 @@ export function validateRecord(
   if (!isObj(raw)) return bad('출력이 JSON 객체가 아니다')
   if (!isStr(raw.overview)) return bad('overview 가 없다')
 
+  const title = isStr(raw.title) && raw.title.trim() !== '' ? raw.title : undefined
+
   if (!Array.isArray(raw.userVisibleChanges) || raw.userVisibleChanges.some((x) => typeof x !== 'string'))
     return bad('userVisibleChanges 가 문자열 배열이 아니다')
 
@@ -175,6 +180,7 @@ export function validateRecord(
   return {
     ok: true,
     value: {
+      title,
       overview: raw.overview,
       userVisibleChanges: raw.userVisibleChanges as string[],
       flow,
