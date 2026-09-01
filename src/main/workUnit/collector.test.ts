@@ -1599,5 +1599,79 @@ describe('네이티브 /goal 이 작업 하나를 연다', () => {
 
     expect(store.get(projectPath)!.units[0].status).toBe('active')
   })
+
+  // Fix round 1, finding 2: a goal's unit used to be identified by its objective text alone, so a
+  // goal's end could close a same-worded `/astera-task` unit that was never the goal's own.
+  it('같은 글자의 목표라도, /astera-task 가 새로 연 Unit 은 id 가 달라 목표의 끝이 닫지 않는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush() // the goal opens its own unit, first in the list
+
+    // The person then types the very same sentence into /astera-task — same text, a different unit.
+    // This interrupts the goal's unit and opens a second one with the identical objective.
+    await collector.startTask('s1', '테스트가 통과할 때까지')
+
+    await fs.appendFile(transcript, wrote(), 'utf8')
+    fake.git.files = ['src/x.ts']
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ met: true, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2)
+    expect(state.units[0].status).toBe('interrupted') // the goal's own unit — untouched further
+    expect(state.units[1].status).toBe('active') // the /astera-task unit — not closed by the goal
+  })
+
+  // Fix round 1, finding 4: a usage-limit roll re-keys the active unit onto the new session id
+  // (`reKeyRolledUnit`), but used to leave `goalUnits` behind under the old id — a goal outlives a
+  // roll (it is on the ignore list precisely for `usageLimited`), so its end must still find the
+  // unit under the resumed session.
+  it('한도로 굴러도 목표는 재키잉된 세션 아래에서 그 Unit 을 마저 닫는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()] // s1
+    const { collector, store, closed } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '한도 전에 하던 목표' }),
+      'utf8'
+    )
+    await collector.flush() // opens the unit under s1
+
+    // rolling.ts's roll(): kill(old) → spawn(new) → send('session:rolled'), no await in between —
+    // the old session's own exit event is guaranteed to arrive after this notification.
+    collector.onSessionForked('s2', undefined, 's1')
+    fake.sessions = [session({ sessionId: 's2' })] // s1 is already dead
+    await collector.onSessionExit('s1')
+
+    await fs.appendFile(transcript, wrote(), 'utf8')
+    fake.git.files = ['src/after-roll.ts']
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ met: true, condition: '한도 전에 하던 목표', reason: '끝났다' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(1)
+    expect(state.units[0].sessionId).toBe('s2')
+    expect(state.units[0].status).toBe('completed')
+    expect(state.units[0].resultSummary).toBe('끝났다')
+    expect(closed).toHaveLength(1)
+  })
 })
 

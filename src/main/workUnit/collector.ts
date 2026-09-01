@@ -206,10 +206,14 @@ export class WorkUnitCollector {
    *  `startTask`/`completeTask` enqueue onto the same serial chain the round occupies, so awaiting
    *  one from the per-line loop would wait on a link that cannot run yet. */
   private pendingGoals: { sessionId: string; signal: GoalSignal }[] = []
-  /** Per session, the objective of the unit **a goal opened**. Three jobs: it makes a repeated
-   *  `active` record idempotent (codex re-sends one per status change), it keeps a goal's end from
-   *  closing a unit `/astera-task` opened, and its absence is how we know there is nothing to close. */
-  private goalUnits = new Map<string, string>()
+  /** Per session, the id and objective of the unit **a goal opened**. Three jobs: the objective
+   *  makes a repeated `active` record idempotent (codex re-sends one per status change); the id is
+   *  what the close path matches against — two units can carry the same objective text (a pasted
+   *  sentence typed into both `/goal` and `/astera-task`), and only the id says which one is the
+   *  goal's, so a goal's end can never close an `/astera-task` unit that merely repeats its words;
+   *  and its absence is how we know there is nothing to close. Moved onto the new session id by
+   *  `reKeyRolledUnit` — a goal outlives a usage-limit roll the same way its unit does. */
+  private goalUnits = new Map<string, { id: string; objective: string }>()
 
   constructor(private deps: CollectorDeps) {}
 
@@ -297,44 +301,56 @@ export class WorkUnitCollector {
     sessionId: string,
     objective: string
   ): Promise<{ ok: true; id: string; interruptedId?: string } | { ok: false; reason: string }> {
-    return this.enqueueFor(async () => {
-      if (!this.running) return { ok: false as const, reason: 'work unit tracking is off' }
-      const s = this.known.get(sessionId)
-      if (!s) return { ok: false as const, reason: `unknown session: ${sessionId}` }
-      if (objective.trim() === '') return { ok: false as const, reason: 'an objective is required' }
-      // Catch up before possibly interrupting whatever is open — see catchUpTranscripts. It must
-      // run while the previous unit is still active, because that is the only status tail's
-      // write-evidence branch reads.
-      await this.catchUpTranscripts()
-      const state = this.stateOf(s.projectPath)
-      const at = this.nowIso()
-      let interruptedId: string | undefined
-      const open = state.units.find((u) => u.sessionId === sessionId && u.status === 'active')
-      if (open) {
-        // A live look before the transition — see observe's own doc for why all three interrupt
-        // paths (this one, onSessionExit, closeAll) take one at exactly this moment.
-        this.observe(state, s.projectPath, await this.changedFiles(s.projectPath))
-        const i = state.units.indexOf(open)
-        state.units[i] = interruptedTask(open, { at, reason: 'INTERRUPTED_BY_NEW_TASK' })
-        interruptedId = open.id
-      }
-      const head = (await this.refOf(s.projectPath)).head
-      state.units.push(
-        startedTask({
-          id: randomUUID(),
-          sessionId,
-          projectPath: s.projectPath,
-          objective,
-          at,
-          startHead: head,
-          baselineDirtyFiles: await this.changedFiles(s.projectPath)
-        })
-      )
-      const id = state.units[state.units.length - 1].id
-      await this.persist(s.projectPath, state)
-      this.deps.onTasksChanged?.(s.projectPath)
-      return { ok: true as const, id, interruptedId }
-    }, failed)
+    return this.enqueueFor(() => this.startTaskCore(sessionId, objective), failed)
+  }
+
+  /** The atomic body of `startTask`. Factored out so the goal path (`applyGoalSignal`) can put its
+   *  own "is a unit already open?" read and this mutation inside **one** enqueued link — reading
+   *  that check outside `enqueueFor` and only mutating through it left a window for the person's
+   *  own `/astera-task` to land in between, which a goal must never win against. Called directly
+   *  (never through another `enqueueFor`) by both callers: the public `startTask` above already
+   *  supplies the link, and calling `enqueueFor` again from inside one already running on the same
+   *  chain would deadlock. */
+  private async startTaskCore(
+    sessionId: string,
+    objective: string
+  ): Promise<{ ok: true; id: string; interruptedId?: string } | { ok: false; reason: string }> {
+    if (!this.running) return { ok: false as const, reason: 'work unit tracking is off' }
+    const s = this.known.get(sessionId)
+    if (!s) return { ok: false as const, reason: `unknown session: ${sessionId}` }
+    if (objective.trim() === '') return { ok: false as const, reason: 'an objective is required' }
+    // Catch up before possibly interrupting whatever is open — see catchUpTranscripts. It must
+    // run while the previous unit is still active, because that is the only status tail's
+    // write-evidence branch reads.
+    await this.catchUpTranscripts()
+    const state = this.stateOf(s.projectPath)
+    const at = this.nowIso()
+    let interruptedId: string | undefined
+    const open = state.units.find((u) => u.sessionId === sessionId && u.status === 'active')
+    if (open) {
+      // A live look before the transition — see observe's own doc for why all three interrupt
+      // paths (this one, onSessionExit, closeAll) take one at exactly this moment.
+      this.observe(state, s.projectPath, await this.changedFiles(s.projectPath))
+      const i = state.units.indexOf(open)
+      state.units[i] = interruptedTask(open, { at, reason: 'INTERRUPTED_BY_NEW_TASK' })
+      interruptedId = open.id
+    }
+    const head = (await this.refOf(s.projectPath)).head
+    state.units.push(
+      startedTask({
+        id: randomUUID(),
+        sessionId,
+        projectPath: s.projectPath,
+        objective,
+        at,
+        startHead: head,
+        baselineDirtyFiles: await this.changedFiles(s.projectPath)
+      })
+    )
+    const id = state.units[state.units.length - 1].id
+    await this.persist(s.projectPath, state)
+    this.deps.onTasksChanged?.(s.projectPath)
+    return { ok: true as const, id, interruptedId }
   }
 
   /** The agent said it is done. **Never creates anything** — a completion that could bring a task
@@ -343,22 +359,31 @@ export class WorkUnitCollector {
     sessionId: string,
     input: { source: 'agent' | 'user'; checks?: SessionCheck[]; summary?: string }
   ): Promise<{ ok: true; id: string } | { ok: false; reason: string }> {
-    return this.enqueueFor(async () => {
-      if (!this.running) return { ok: false as const, reason: 'work unit tracking is off' }
-      const s = this.known.get(sessionId)
-      if (!s) return { ok: false as const, reason: `unknown session: ${sessionId}` }
-      // Catch up first, then read — see catchUpTranscripts. `round` writes into the live state
-      // object, so a unit read before it can be stale by the time it is closed.
-      await this.catchUpTranscripts()
-      const state = this.stateOf(s.projectPath)
-      const open = state.units.find((u) => u.sessionId === sessionId && u.status === 'active')
-      if (!open) return { ok: false as const, reason: 'NO_ACTIVE_TASK' }
-      this.observe(state, s.projectPath, await this.changedFiles(s.projectPath))
-      this.finish(state, open, completedTask(open, { ...input, at: this.nowIso() }), s.projectPath)
-      await this.persist(s.projectPath, state)
-      this.deps.onTasksChanged?.(s.projectPath)
-      return { ok: true as const, id: open.id }
-    }, failed)
+    return this.enqueueFor(() => this.completeTaskCore(sessionId, input), failed)
+  }
+
+  /** The atomic body of `completeTask` — split out for the same reason as `startTaskCore`: the
+   *  goal path (`applyGoalSignal`) needs its own id check and this mutation inside one enqueued
+   *  link, and `completeTask` itself enqueues, so calling it from inside a link already on the
+   *  chain would deadlock. */
+  private async completeTaskCore(
+    sessionId: string,
+    input: { source: 'agent' | 'user'; checks?: SessionCheck[]; summary?: string }
+  ): Promise<{ ok: true; id: string } | { ok: false; reason: string }> {
+    if (!this.running) return { ok: false as const, reason: 'work unit tracking is off' }
+    const s = this.known.get(sessionId)
+    if (!s) return { ok: false as const, reason: `unknown session: ${sessionId}` }
+    // Catch up first, then read — see catchUpTranscripts. `round` writes into the live state
+    // object, so a unit read before it can be stale by the time it is closed.
+    await this.catchUpTranscripts()
+    const state = this.stateOf(s.projectPath)
+    const open = state.units.find((u) => u.sessionId === sessionId && u.status === 'active')
+    if (!open) return { ok: false as const, reason: 'NO_ACTIVE_TASK' }
+    this.observe(state, s.projectPath, await this.changedFiles(s.projectPath))
+    this.finish(state, open, completedTask(open, { ...input, at: this.nowIso() }), s.projectPath)
+    await this.persist(s.projectPath, state)
+    this.deps.onTasksChanged?.(s.projectPath)
+    return { ok: true as const, id: open.id }
   }
 
   /** The person pressed 완료 on a row. Reaches interrupted tasks too, which is the whole reason
@@ -666,6 +691,15 @@ export class WorkUnitCollector {
     const u = state.units.find((x) => x.sessionId === oldSessionId && x.status === 'active')
     if (!u) return
     u.sessionId = newSessionId
+    // A goal's unit survives the roll under the new id too, so its bookkeeping moves with it —
+    // otherwise the goal's own end never finds this unit again (it is on the `usageLimited` ignore
+    // list precisely because a goal outlives a roll), and a re-sent `active` afterwards reads as a
+    // second goal opened on top of the first, wrongly.
+    const goal = this.goalUnits.get(oldSessionId)
+    if (goal) {
+      this.goalUnits.delete(oldSessionId)
+      this.goalUnits.set(newSessionId, goal)
+    }
     await this.persist(old.projectPath, state)
     this.deps.onTasksChanged?.(old.projectPath)
   }
@@ -729,14 +763,34 @@ export class WorkUnitCollector {
     this.pendingGoals = []
     if (!this.running) return
     for (const { sessionId, signal } of pending) {
-      const s = this.known.get(sessionId)
-      if (!s) continue
-      // A Run records itself (spec §5.4). No notice: an agent inside the Run typed this, not a person.
-      if (this.deps.inRun?.(sessionId)) continue
+      try {
+        await this.applyGoalSignal(sessionId, signal)
+      } catch (e) {
+        // A signal's own attempt, or a host callback it calls (`inRun`, `onGoalIgnored` — a later
+        // task backs both with ipc.ts code that can throw, e.g. sending on a destroyed window),
+        // failed. Logged and swallowed, the same as `enqueue`'s own run: one bad signal must not
+        // stop the rest from being applied, and this method must never reject — `flush()` chains it
+        // onto its own return value with no `.catch` of its own.
+        this.log(String(e))
+      }
+    }
+  }
 
-      if (signal.kind === 'start') {
+  /** One boundary, applied. **The "is a unit already open?" read and the mutation it gates share a
+   *  single enqueued link** (`startTaskCore`/`completeTaskCore`) — reading that check outside
+   *  `enqueueFor` and only mutating through it would let the person's own `/astera-task` land in
+   *  between the two, which is exactly the race a goal must never win. */
+  private async applyGoalSignal(sessionId: string, signal: GoalSignal): Promise<void> {
+    const s = this.known.get(sessionId)
+    if (!s) return
+    // A Run records itself (spec §5.4). No notice: an agent inside the Run typed this, not a person.
+    if (this.deps.inRun?.(sessionId)) return
+
+    if (signal.kind === 'start') {
+      await this.enqueueFor(async () => {
+        if (!this.running) return
         // codex re-sends `active` on every status change; the same objective is the same goal.
-        if (this.goalUnits.get(sessionId) === signal.objective) continue
+        if (this.goalUnits.get(sessionId)?.objective === signal.objective) return
         const open = this.stateOf(s.projectPath).units.find(
           (u) => u.sessionId === sessionId && isOpen(u.status)
         )
@@ -744,26 +798,32 @@ export class WorkUnitCollector {
           // Spec §5.2 — a goal adds a finish line to work already declared; it does not start a
           // second piece of work, and interrupting here would split one job into two records.
           this.deps.onGoalIgnored?.(s.projectPath, signal.objective)
-          continue
+          return
         }
-        const r = await this.startTask(sessionId, signal.objective)
-        if (r.ok) this.goalUnits.set(sessionId, signal.objective)
-        continue
-      }
+        const r = await this.startTaskCore(sessionId, signal.objective)
+        if (r.ok) this.goalUnits.set(sessionId, { id: r.id, objective: signal.objective })
+      }, () => undefined)
+      return
+    }
 
-      const objective = this.goalUnits.get(sessionId)
-      if (objective === undefined) continue // this session's open unit, if any, is not a goal's
-      this.goalUnits.delete(sessionId)
+    const entry = this.goalUnits.get(sessionId)
+    if (entry === undefined) return // this session's open unit, if any, is not a goal's
+    this.goalUnits.delete(sessionId)
+    await this.enqueueFor(async () => {
+      if (!this.running) return
       const open = this.stateOf(s.projectPath).units.find(
         (u) => u.sessionId === sessionId && isOpen(u.status)
       )
-      // Closed by something else in between — the person's button, a session exit. Nothing to do.
-      if (!open || open.objective !== objective) continue
-      await this.completeTask(sessionId, {
+      // Closed by something else in between, or replaced by a new `/astera-task` on the same
+      // session — the person's button, a session exit. Matched by id, not objective: two units can
+      // carry the same text, and only the id says which one is the goal's — an `/astera-task` unit
+      // must never be closed by a goal that merely repeats its words.
+      if (!open || open.id !== entry.id) return
+      await this.completeTaskCore(sessionId, {
         source: 'agent',
         ...(signal.summary ? { summary: signal.summary } : {})
       })
-    }
+    }, () => undefined)
   }
 
   // ── 회차 ────────────────────────────────────────────────────────────
