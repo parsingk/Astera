@@ -81,7 +81,9 @@ export function RecordDetail({
     )
   }
 
-  const notYet = (): void => toast.info(t('hiw.pane.notYet'))
+  const notYet = (): void => {
+    toast.info(t('hiw.pane.notYet'))
+  }
 
   const scoped = scopedNodeId ? scopeToStep(explanation, scopedNodeId) : null
 
