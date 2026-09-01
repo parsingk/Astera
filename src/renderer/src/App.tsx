@@ -2390,6 +2390,10 @@ export default function App(): React.JSX.Element {
     return window.api.on('sessionTasks:changed', () => setSessionTasksSeq((n) => n + 1))
   }, [])
 
+  // The person typed /goal and nothing opened. Silence would read as the feature being broken,
+  // and there is no action to offer — the goal still runs, and its work lands on the open unit.
+  useEffect(() => window.api.on('sessionTasks:goalIgnored', () => toast.info(t('hiw.goal.ignored'))), [t])
+
   // When the project changes, that project's terminal list is read again — main holds them per project,
   // so another project's terminals stay alive and are simply not shown here
   useEffect(() => {

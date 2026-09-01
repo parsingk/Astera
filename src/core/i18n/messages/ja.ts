@@ -961,6 +961,7 @@ export const ja: Catalog = {
   'hiw.open.reason.appRestart': 'アプリが終了して止まりました',
   'hiw.open.reason.trackingOff': '追跡がオフになって止まりました',
   'hiw.open.reason.upgrade': 'アプリが更新されて止まりました',
+  'hiw.goal.ignored': 'すでに進行中の作業があるため、この目標は別途記録しません — 開いている作業に含まれます。',
   'hiw.verify.verified': '報告された検査はすべて成功しました',
   'hiw.verify.partial': '一部しか確認されていません',
   'hiw.verify.unverified': '確認されたものはありません',
