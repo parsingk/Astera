@@ -36,6 +36,10 @@ describe('How It Works 의 테마 규약', () => {
   it('줄 제목은 두 줄에서 자른다 — /goal 인자는 문단일 수 있다', () => {
     const rule = hiwRules().find((r) => r.startsWith('.hiw-name{'))
     expect(rule).toBeDefined()
+    // 넷 다 있어야 자름이 실제로 걸린다 — 어느 하나만 빠져도 나머지 셋은 그대로 있어 이 단언들이
+    // 조용히 통과하면서 자름은 소리 없이 풀린다(final review, item 6)
+    expect(rule).toMatch(/display:\s*-webkit-box/)
+    expect(rule).toMatch(/-webkit-box-orient:\s*vertical/)
     expect(rule).toMatch(/-webkit-line-clamp:\s*2/)
     expect(rule).toMatch(/overflow:\s*hidden/)
   })

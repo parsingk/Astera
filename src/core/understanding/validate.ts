@@ -125,7 +125,7 @@ export function validateRecord(
   if (!isObj(raw)) return bad('출력이 JSON 객체가 아니다')
   if (!isStr(raw.overview)) return bad('overview 가 없다')
 
-  const title = isStr(raw.title) && raw.title.trim() !== '' ? raw.title : undefined
+  const title = isStr(raw.title) ? raw.title : undefined
 
   if (!Array.isArray(raw.userVisibleChanges) || raw.userVisibleChanges.some((x) => typeof x !== 'string'))
     return bad('userVisibleChanges 가 문자열 배열이 아니다')

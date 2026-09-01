@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { OpenSessionTask } from '../../../core/types'
-import type { ProjectUnderstanding, WorkRecord } from '../../../core/understanding/types'
+import type { ProjectUnderstanding, RecordExplanation, WorkRecord } from '../../../core/understanding/types'
 import { UnderstandingView } from './UnderstandingView'
 
 // MarkdownPreview.test.ts 와 같은 이유 — I18nProvider 의 효과는 renderToStaticMarkup 에서 돌지 않고
@@ -62,6 +62,23 @@ describe('UnderstandingView', () => {
     expect(html).toContain('8/31')
     expect(html).toContain('한도 감지를 고쳐줘')
     expect(html).toContain('세션 abcd1234')
+  })
+
+  // 디스크에 이미 있는 기록들의 진짜 모양 — explanation 자체가 없는 것과는 다른 경로다(final
+  // review, item 7): title 필드가 이 자리에 생기기 전에 만들어진 explanation 은 title 만 없다
+  it('설명은 있어도 title 이 없으면 줄 제목은 원문으로 돌아간다', () => {
+    const noTitle: RecordExplanation = {
+      overview: '한도 대화상자를 신호로 삼도록 바꿨다.',
+      userVisibleChanges: [],
+      flow: [],
+      decisions: [],
+      implementation: [],
+      evidence: [],
+      userEdited: false,
+      generatedAt: '2026-08-31T01:00:00.000Z'
+    }
+    const html = render({ records: [rec({ explanation: noTitle })] })
+    expect(html).toContain('한도 감지를 고쳐줘')
   })
 
   it('Job 기록은 그 Job 이름을 출처로 보인다', () => {

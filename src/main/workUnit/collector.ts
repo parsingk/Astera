@@ -214,6 +214,14 @@ export class WorkUnitCollector {
    *  and its absence is how we know there is nothing to close. Moved onto the new session id by
    *  `reKeyRolledUnit` — a goal outlives a usage-limit roll the same way its unit does. */
   private goalUnits = new Map<string, { id: string; objective: string }>()
+  /** Per session, the objective last handed to `onGoalIgnored`. Codex re-sends `thread_goal_updated`
+   *  with `status: "active"` on every turn boundary, not only when the goal itself changes — without
+   *  this, a goal blocked behind an already-open unit would toast the same notice on every turn while
+   *  the block persists (final review, item 4). Retrying the goal itself is unaffected: this only
+   *  gates the notice, never the retry, and the retry is what lets the goal open its own unit the
+   *  moment the block clears. Cleared once that retry succeeds — a fresh block afterwards, even with
+   *  the same objective text, is a new occurrence and earns its own notice. */
+  private goalIgnoredNotices = new Map<string, string>()
 
   constructor(private deps: CollectorDeps) {}
 
@@ -789,17 +797,34 @@ export class WorkUnitCollector {
     if (signal.kind === 'start') {
       await this.enqueueFor(async () => {
         if (!this.running) return
-        // codex re-sends `active` on every status change; the same objective is the same goal.
-        if (this.goalUnits.get(sessionId)?.objective === signal.objective) return
-        const open = this.stateOf(s.projectPath).units.find(
-          (u) => u.sessionId === sessionId && isOpen(u.status)
-        )
+        const state = this.stateOf(s.projectPath)
+        const entry = this.goalUnits.get(sessionId)
+        if (entry && !state.units.some((u) => u.id === entry.id && isOpen(u.status))) {
+          // The unit this goal opened is no longer open — closed through another route (the
+          // screen's [complete]/[cancel], a session exit, a replacing /astera-task). This entry no
+          // longer answers "is a unit already open", and leaving it in place would have the dedupe
+          // below mistake a genuinely repeated objective for the same re-sent `active` record,
+          // silently opening nothing (final review, item 3).
+          this.goalUnits.delete(sessionId)
+        } else if (entry?.objective === signal.objective) {
+          // codex re-sends `active` on every status change; the same objective on a unit that is
+          // still open is the same goal, not a new one.
+          return
+        }
+        const open = state.units.find((u) => u.sessionId === sessionId && isOpen(u.status))
         if (open) {
           // Spec §5.2 — a goal adds a finish line to work already declared; it does not start a
           // second piece of work, and interrupting here would split one job into two records.
-          this.deps.onGoalIgnored?.(s.projectPath, signal.objective)
+          // The notice is deduped separately from the retry above (final review, item 4) — the
+          // retry must run every time so the goal gets its own unit the instant the block clears,
+          // but the toast saying so must not repeat while the block persists.
+          if (this.goalIgnoredNotices.get(sessionId) !== signal.objective) {
+            this.goalIgnoredNotices.set(sessionId, signal.objective)
+            this.deps.onGoalIgnored?.(s.projectPath, signal.objective)
+          }
           return
         }
+        this.goalIgnoredNotices.delete(sessionId)
         const r = await this.startTaskCore(sessionId, signal.objective)
         if (r.ok) this.goalUnits.set(sessionId, { id: r.id, objective: signal.objective })
       }, () => undefined)
@@ -1265,6 +1290,7 @@ export class WorkUnitCollector {
     this.known.clear()
     this.pendingGoals = []
     this.goalUnits.clear()
+    this.goalIgnoredNotices.clear()
     // 이 실행의 캐시만 비운다. **저장된 스냅샷은 건드리지 않는다** — 커서와 반대 방향의 규칙이고
     // 그것이 맞다: 커서에 걸린 약속은 "켜기 전의 대화는 읽지 않는다"(스펙 §16.1)이고 스냅샷에 걸린
     // 약속은 "실제로 일어난 변화를 놓치지 않는다"(EG §41-10)다. 대화는 사람의 말이고 저장소의

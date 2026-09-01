@@ -1538,6 +1538,28 @@ describe('네이티브 /goal 이 작업 하나를 연다', () => {
     expect(ignored).toEqual([{ projectPath, objective: '테스트가 통과할 때까지' }])
   })
 
+  // Final review, item 4: codex re-sends `thread_goal_updated` with `status: "active"` on every
+  // turn boundary, not only when the goal itself changes. Retrying while blocked is correct and
+  // must keep happening, but the toast telling the person about it must not repeat every turn.
+  it('막힌 채로 같은 목표가 반복돼도 알림은 한 번만 뜬다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, ignored } = await makeCollector(fake)
+    await collector.start()
+
+    await collector.startTask('s1', '결제 붙이기') // an already-open unit blocks the goal
+
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush()
+    // codex resends the identical record on the next turn boundary too — still blocked, same text
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush()
+
+    expect(store.get(projectPath)!.units).toHaveLength(1) // still just the /astera-task unit
+    expect(ignored).toHaveLength(1) // one notice, not two
+    expect(ignored[0]).toEqual({ projectPath, objective: 'rpg 게임을 만들어줘' })
+  })
+
   it('목표의 끝은 /astera-task 가 연 Unit 을 닫지 않는다', async () => {
     const fake = makeFake()
     fake.sessions = [session()]
@@ -1598,6 +1620,64 @@ describe('네이티브 /goal 이 작업 하나를 연다', () => {
     await collector.flush()
 
     expect(store.get(projectPath)!.units[0].status).toBe('active')
+  })
+
+  // Final review, item 7: only claude's `met` had ever driven a goal's end through the collector —
+  // codex's own end (`status: "complete"`) is the same code path but had never been exercised.
+  it('codex 의 complete 도 같은 경로로 Unit 을 완료로 닫는다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store, closed } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(transcript, codexGoal('active'), 'utf8')
+    await collector.flush()
+
+    await fs.appendFile(transcript, wrote(), 'utf8') // evidence that this session touched a file
+    fake.git.files = ['src/game.ts']
+    await fs.appendFile(transcript, codexGoal('complete'), 'utf8')
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units[0].status).toBe('completed')
+    expect(state.units[0].completion?.source).toBe('agent')
+    expect(closed).toHaveLength(1)
+  })
+
+  // Final review, item 3: the screen's own [complete]/[cancel] closes a goal's unit through a
+  // route the goal never sees, so `goalUnits` used to keep pointing at a unit that is no longer
+  // open. The idempotence check above (`entry.objective === signal.objective`) then mistook the
+  // very same objective typed again for the re-sent record it exists to ignore, and opened nothing.
+  it('goal 이 연 Unit 을 화면에서 닫은 뒤 같은 목표를 다시 치면 새 Unit 이 열린다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()]
+    const { collector, store } = await makeCollector(fake)
+    await collector.start()
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush() // the goal opens its own unit
+
+    // The person closes it from the screen — a route the goal's own end never takes.
+    const opened = store.get(projectPath)!.units[0]
+    await collector.cancelTaskById(projectPath, opened.id)
+
+    // The very same objective arrives again.
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2)
+    expect(state.units[0].status).toBe('cancelled') // untouched further
+    expect(state.units[1].objective).toBe('테스트가 통과할 때까지')
+    expect(state.units[1].status).toBe('active') // a fresh unit, not silently dropped
   })
 
   // Fix round 1, finding 2: a goal's unit used to be identified by its objective text alone, so a

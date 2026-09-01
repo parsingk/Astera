@@ -144,7 +144,19 @@ export function RecordDetail({
   return (
     <div className="hiw-pane">
       <div className="hiw-fhead">
-        <h4 title={record.request}>{record.explanation?.title ?? record.request}</h4>
+        <div>
+          <h4 title={record.request}>{explanation.title ?? record.request}</h4>
+          {/* The write-up's title took the heading — spec §5.5 still wants the person's own words
+              *shown in the pane*, not reachable only through the h4's `title` tooltip above, which a
+              touch device and several screen readers cannot reach. Rendered only when a title is
+              actually standing in for the heading: with no title the heading above already *is* this
+              same sentence, and repeating it here would just say it twice. */}
+          {explanation.title && (
+            <p className="hiw-req" title={record.request}>
+              {record.request}
+            </p>
+          )}
+        </div>
         {/* The status is not hard-coded here — shape, wording and colour all read the same table
             the sidebar does (design §8). Picking the colour separately here would let the three
             places drift apart (UnderstandingIcons' RECORD_GLYPH_COLOR). */}

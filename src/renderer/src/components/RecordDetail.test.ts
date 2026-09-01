@@ -165,6 +165,27 @@ describe('RecordDetail', () => {
   it('제목이 없으면 사람이 적은 문장을 그대로 쓴다 — 옛 기록도 읽혀야 한다', () => {
     expect(renderRecordWith({ explanation: undefined })).toContain('>인증에 Google 로그인을 붙여줘</h4>')
   })
+
+  // 설명은 있는데 title 만 없는 진짜 옛 기록의 모양 (final review, item 7) — explanation 자체가
+  // 없는 위 테스트와는 다른 경로다: title 만 빠졌을 때도 UnderstandingRecord.title 이 아니라
+  // record.request 로 떨어져야 한다
+  it('설명은 있어도 title 만 없으면 원문으로 돌아간다', () => {
+    expect(renderWith({ title: undefined })).toContain('>인증에 Google 로그인을 붙여줘</h4>')
+  })
+
+  // 설계 §5.5: "the verbatim request stays on the record and is shown in the pane" — 머리의
+  // title= 툴팁만으로는 터치 기기나 일부 스크린 리더가 닿지 못한다 (final review, item 1)
+  it('제목이 머리를 대신하면 사람의 원문도 화면에 그대로 보인다', () => {
+    const html = renderWith({ title: '로그인을 서버 세션으로' })
+    expect(html).toContain('로그인을 서버 세션으로')
+    expect(html).toContain('hiw-req')
+    expect(html).toContain('인증에 Google 로그인을 붙여줘')
+  })
+
+  // 머리가 이미 원문 그 자체일 때는 같은 문장을 두 번 그리지 않는다
+  it('제목이 없으면 원문 줄을 따로 그리지 않는다 — 머리가 이미 그 문장이다', () => {
+    expect(renderRecordWith({ explanation: undefined })).not.toContain('hiw-req')
+  })
 })
 
 describe('좁은 페인', () => {
