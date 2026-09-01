@@ -31,6 +31,17 @@ describe('classifyGhFailure', () => {
     expect(classifyGhFailure('net/http: request canceled (Client.Timeout exceeded)')).toBe('network')
   })
 
+  it('classifies a repo with no configured remote', () => {
+    expect(classifyGhFailure('no git remotes found')).toBe('no-remote')
+  })
+
+  it('a maxBuffer overflow classifies as truncated, not other — overflow leaves stderr empty, so it can only be read off spawnError', () => {
+    // Constructed without spawning anything, the way gh.ts itself would receive it: the process
+    // was killed for exceeding maxBuffer, so stdout is a partial fragment and stderr never filled.
+    const overflow = result({ spawnError: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', stdout: '[{"number":1' })
+    expect(classifyGhFailure(overflow.stderr, overflow.spawnError)).toBe('truncated')
+  })
+
   it('everything else is other', () => {
     expect(classifyGhFailure('unknown flag: --nope')).toBe('other')
   })

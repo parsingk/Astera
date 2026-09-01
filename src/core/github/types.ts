@@ -32,4 +32,14 @@ export interface GhProbe {
   account?: string
 }
 
-export type GhFailureKind = 'rate-limit' | 'auth' | 'network' | 'not-found' | 'other'
+export type GhFailureKind =
+  | 'rate-limit'
+  | 'auth'
+  | 'network'
+  | 'not-found'
+  /** `gh pr list` in a repo with no configured remote — "no git remotes found" — cannot
+   *  succeed until the repo is reconfigured, so the coordinator memoizes it per repo path. */
+  | 'no-remote'
+  /** stdout overflowed maxBuffer and was cut off; see gh.ts's MAX_BUFFER_BYTES comment. */
+  | 'truncated'
+  | 'other'
