@@ -1987,5 +1987,47 @@ describe('네이티브 /goal 이 작업 하나를 연다', () => {
     expect(state.units[0].status).toBe('active')
     expect(ignored).toHaveLength(1) // the notice guard still holds — no repeat toast either
   })
+
+  // A blocked goal's deferred entry has to survive a roll the same way `goalUnits` already does
+  // (reKeyRolledUnit) — the app exists to roll accounts, so a session id changing under a still-
+  // blocked claude goal is an ordinary event, not a corner case. Without the re-key, the deferred
+  // entry is stranded under the dead old session id and the goal's own row never opens.
+  it('막힌 claude 목표는 세션이 굴러도 재키잉된 세션 아래에서 재시도돼 자기 Unit 을 연다', async () => {
+    const fake = makeFake()
+    fake.sessions = [session()] // s1
+    const { collector, store, ignored } = await makeCollector(fake)
+    await collector.start()
+
+    const started = await collector.startTask('s1', '결제 붙이기') // blocks the goal
+    if (!started.ok) throw new Error('unexpected')
+
+    await fs.appendFile(
+      transcript,
+      claudeGoal({ sentinel: true, met: false, condition: '테스트가 통과할 때까지' }),
+      'utf8'
+    )
+    await collector.flush() // blocked — deferred under s1
+    expect(ignored).toHaveLength(1)
+
+    // rolling.ts's roll(): kill(old) → spawn(new) → send('session:rolled'), no await in between —
+    // the old session's own exit event is guaranteed to arrive after this notification.
+    collector.onSessionForked('s2', undefined, 's1')
+    fake.sessions = [session({ sessionId: 's2' })] // s1 is already dead
+    await collector.onSessionExit('s1')
+
+    // The blocking row closes only now, under the resumed session.
+    await collector.cancelTaskById(projectPath, started.id)
+
+    // No new goal signal arrives — only the retry inside applyGoalSignals fires.
+    await collector.flush()
+
+    const state = store.get(projectPath)!
+    expect(state.units).toHaveLength(2)
+    expect(state.units[0].sessionId).toBe('s2') // re-keyed by the roll, same as goalUnits
+    expect(state.units[0].status).toBe('cancelled') // the /astera-task row — untouched further
+    expect(state.units[1].sessionId).toBe('s2') // the goal's own row opens under the new session id
+    expect(state.units[1].objective).toBe('테스트가 통과할 때까지')
+    expect(state.units[1].status).toBe('active')
+  })
 })
 

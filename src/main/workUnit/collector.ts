@@ -226,7 +226,9 @@ export class WorkUnitCollector {
    *  the block persists (final review, item 4). Retrying the goal itself is unaffected: this only
    *  gates the notice, never the retry, and the retry is what lets the goal open its own unit the
    *  moment the block clears. Cleared once that retry succeeds — a fresh block afterwards, even with
-   *  the same objective text, is a new occurrence and earns its own notice. */
+   *  the same objective text, is a new occurrence and earns its own notice. Moved onto the new
+   *  session id by `reKeyRolledUnit`, same as `goalUnits` — a roll must not make an already-shown
+   *  notice fire again just because the session id underneath it changed. */
   private goalIgnoredNotices = new Map<string, string>()
   /** Per session, a goal `start` that arrived while a unit was already open, kept so
    *  `applyGoalSignals` can retry it once the block clears. **This is what saves claude's goal from
@@ -245,7 +247,10 @@ export class WorkUnitCollector {
    *  reasoning `goalUnits`' own doc gives for matching by id rather than text. Cleared once the
    *  retry succeeds, when that session's goal ends while still blocked (spec: a goal that finished
    *  while blocked must never open a row afterwards — that row would then never close), and
-   *  alongside the other per-run state (`closeAll`, `onSessionExit`). */
+   *  alongside the other per-run state (`closeAll`, `onSessionExit`). **Moved, not cleared, by
+   *  `reKeyRolledUnit`** on a usage-limit roll — same as `goalUnits`: a blocked claude goal has only
+   *  this one chance at a replay, so losing the entry to a roll would reintroduce exactly the loss
+   *  this map exists to prevent. */
   private deferredGoalStarts = new Map<string, string>()
 
   constructor(private deps: CollectorDeps) {}
@@ -701,7 +706,8 @@ export class WorkUnitCollector {
     if (oldSessionId !== undefined) void this.enqueue(() => this.reKeyRolledUnit(oldSessionId, newSessionId))
   }
 
-  /** The re-keying half of `onSessionForked` — moves a roll's active unit onto the new session id.
+  /** The re-keying half of `onSessionForked` — moves a roll's active unit, and any goal
+   *  bookkeeping tied to this session, onto the new session id.
    *  Queued rather than run inline: `onSessionExit(old)` is queued too (its own call below), and
    *  `enqueue`'s FIFO ordering is what guarantees this lands first, before that exit reads the same
    *  state and finds nothing under the old id.
@@ -732,6 +738,22 @@ export class WorkUnitCollector {
     if (goal) {
       this.goalUnits.delete(oldSessionId)
       this.goalUnits.set(newSessionId, goal)
+    }
+    // Same reasoning, same move, for the two other per-session maps a goal leaves behind. A goal
+    // blocked at the moment of the roll has no entry in `goalUnits` above (it never got to open a
+    // row), so this is its only bookkeeping — losing it here would silently reintroduce the exact
+    // loss `deferredGoalStarts` exists to prevent, this time for a roll instead of a plain block.
+    // `goalIgnoredNotices` moves alongside it so an already-shown notice for this objective stays
+    // deduped rather than firing again under the new session id.
+    const deferred = this.deferredGoalStarts.get(oldSessionId)
+    if (deferred !== undefined) {
+      this.deferredGoalStarts.delete(oldSessionId)
+      this.deferredGoalStarts.set(newSessionId, deferred)
+    }
+    const notice = this.goalIgnoredNotices.get(oldSessionId)
+    if (notice !== undefined) {
+      this.goalIgnoredNotices.delete(oldSessionId)
+      this.goalIgnoredNotices.set(newSessionId, notice)
     }
     await this.persist(old.projectPath, state)
     this.deps.onTasksChanged?.(old.projectPath)
