@@ -18,6 +18,8 @@ import type { RollConfig } from './rolling/types'
 export type { RollConfig } from './rolling/types'
 import type { GitState } from './git/status'
 export type { GitState } from './git/status'
+import type { GhProbe, RepoPrSnapshot } from './github/types'
+export type { GhProbe, PrChecks, PrInfo, PrState, RepoPrSnapshot, GhStatusKind } from './github/types'
 import type { ProjectUnderstanding } from './understanding/types'
 import type { Provider } from './providers/meta'
 import type { TerminalFont } from './terminal/font'
@@ -504,6 +506,11 @@ export interface CoreEvents {
   'accounts:ghostsChanged': { accounts: Account[] }
   'files:changed': { path: string; kind: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir' } // watcher
   'git:changed': void // index/HEAD changes in the git dir, e.g. a commit from a session terminal — triggers a tree state refresh
+  /** One repository's PR snapshot was refreshed (or marked stale by the rate-limit breaker).
+   *  The whole snapshot rides along — the renderer replaces, never merges. */
+  'github:prs-updated': { repoRoot: string; snapshot: RepoPrSnapshot }
+  /** The gh connection probe changed (app start, re-check, or an auth failure mid-flight). */
+  'github:status': GhProbe
   'run:data': { projectPath: string; data: string } // run output
   'run:status': RunStatus // run state change (running/exited)
   'terminal:data': { id: string; data: string } // project terminal output
@@ -610,6 +617,18 @@ export interface CoreApi {
     getRoot(): Promise<string>
     setRoot(root: string | null): Promise<void>
   }
+  github: {
+    /** The cached probe from app start or the last re-check — never runs gh itself. */
+    status(): Promise<GhProbe>
+    /** Re-runs `gh auth status` and returns (and broadcasts) the fresh result. */
+    recheck(): Promise<GhProbe>
+    /** The current per-repository snapshot cache. */
+    prs(): Promise<Record<string, RepoPrSnapshot>>
+    /** Nudges the refresh loop; force queues every repository past its interval. */
+    refresh(opts?: { force?: boolean }): Promise<void>
+    subscribe(): void
+    unsubscribe(): void
+  }
   usage: {
     session(sessionId: string): Promise<SessionUsage | null> // context, 5-hour, and weekly % for an active session (claude: statusLine capture, codex: rollout tail)
   }
@@ -659,6 +678,10 @@ export interface CoreApi {
     // nothing from before the moment it is turned on.
     getWorkUnitTrackingEnabled(): Promise<boolean>
     setWorkUnitTrackingEnabled(enabled: boolean): Promise<void>
+    // Whether the worktree PR badges poll GitHub in the background. Off leaves the cache as-is —
+    // refresh only happens on an explicit github.refresh call.
+    getGithubPolling(): Promise<boolean>
+    setGithubPolling(enabled: boolean): Promise<void>
     // Which account (and model) writes the How It Works explanations. Empty means no account has been
     // chosen, and nothing is generated — the screen says so rather than staying silently blank.
     getGenerator(): Promise<GeneratorSettings>
