@@ -86,6 +86,10 @@ de una coordinadora mediante la skill `/astera-orchestration`.
 - `/astera-task` es una habilidad que la app instala en tus cuentas, igual que la de orquestación.
   Le dice al agente que marque el inicio, siga trabajando durante todos los mensajes que hagan
   falta y marque el final cuando se cumpla tu objetivo — tú escribes el objetivo, él hace el resto
+- El `/goal` nativo de Claude Code y Codex se registra igual. En Claude el registro se completa solo
+  cuando el trabajo termina; en Codex tienes que completarlo tú
+- Solo se puede registrar un trabajo por sesión. Una petición que llega mientras ya hay uno
+  registrándose te pide completar el anterior primero, y el siguiente empieza en cuanto lo haces
 - Un Run de Jobs (`/astera-orchestration`) se lee y se registra igual. La lectura empieza cuando el
   Run ha terminado
 - Un trabajo que no cambió ningún archivo no deja línea. Si lo declaraste y solo hablaste, no hay

@@ -83,6 +83,10 @@ vendors, checks the result, and waits when a human decision is needed.
 - `/astera-task` is a skill the app installs into your accounts, like the orchestration one. It
   tells the agent to mark the start, keep working through as many of your messages as it takes, and
   mark the end when your objective is met — you type the objective, it does the rest
+- Claude Code's and Codex's own `/goal` is recorded the same way. On Claude the record completes
+  itself once the work is done; on Codex you have to complete it yourself
+- Only one piece of work can be recorded per session. A request that arrives while one is already
+  being recorded asks you to complete the earlier one first, and the next one starts once you do
 - A Jobs Run (`/astera-orchestration`) is read and recorded the same way. The reading starts once
   the Run has finished
 - A piece of work that changed no files leaves no row. If you declared one and then only talked,
