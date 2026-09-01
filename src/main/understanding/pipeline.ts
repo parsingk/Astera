@@ -227,6 +227,7 @@ export class UnderstandingPipeline {
     // good are different claims.
     const failed = cur.verification?.status === 'failed'
     const explanation: RecordExplanation = {
+      ...(e.title ? { title: e.title } : {}),
       overview: e.overview,
       userVisibleChanges: e.userVisibleChanges,
       flow: e.flow,

@@ -1871,7 +1871,10 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    큰 호를 그린다. 그 판단은 UnderstandingIcons 의 StatusGlyph 에 적혀 있다. */
 .hiw-spin { display: inline-block; line-height: 1; transform-origin: 50% 50%; animation: cm-spin 1.5s linear infinite; }
 .hiw-body { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.hiw-name { font-size: 12px; font-weight: 500; color: var(--text); }
+/* A row title is whatever the person typed — a /goal argument can be a paragraph. Two lines, then
+   ellipsis; the whole of it is in the row's `title` (UnderstandingView.tsx), the same way a
+   truncated account label carries its full value (AccountRow.tsx). */
+.hiw-name { font-size: 12px; font-weight: 500; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .hiw-summary { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* A row's reason for wanting attention — why [Write it up again] is offered. This is the only
    place that answers "why", so it gets the same warn colour as a needs-review/failed glyph
@@ -1906,8 +1909,20 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    tab. */
 .hiw-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); }
 .hiw-pane-empty { display: grid; place-items: center; color: var(--text-faint); font-size: 12px; }
+/* The empty state's own heading (RecordDetail.tsx's "still generating, or failed" branch) — without
+   this it fell through to the browser's bare h4 (bold, 1.33em margins), centred by the grid above
+   into something that looked like an error banner rather than this screen's usual small print. */
+.hiw-pane-empty h4 { margin: 0 0 6px; font-size: 15px; font-weight: 600; color: var(--text); }
 .hiw-fhead { display: flex; align-items: center; gap: 10px; padding: 11px 18px; border-bottom: 1px solid var(--line-soft); }
-.hiw-fhead h4 { margin: 0; font-size: 17px; font-weight: 600; color: var(--text); }
+/* Clamped the same way as the sidebar's .hiw-name — the prompt only *asks* the write-up agent for a
+   title under 40 characters, nothing enforces it, and the fallback heading (record.request) is a
+   whole paragraph when there is no title at all. */
+.hiw-fhead h4 { margin: 0; font-size: 17px; font-weight: 600; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* The verbatim request, kept visible under a written title (spec §5.5) instead of living only in
+   that h4's `title` tooltip — a touch device or several screen readers cannot reach a tooltip.
+   RecordDetail.tsx renders this only when a title is actually standing in for the heading, so the
+   same sentence never appears twice. */
+.hiw-req { margin: 2px 0 0; font-size: 11px; color: var(--text-faint); }
 /* Colour comes from the same table as .hiw-g and .tab-glyph (RECORD_GLYPH_COLOR) */
 .hiw-st { font-size: 11px; }
 .hiw-sp { flex: 1; }

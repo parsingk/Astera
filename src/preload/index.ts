@@ -35,7 +35,8 @@ const EVENT_CHANNELS = [
   'terminal:exit',
   'orch:state',
   'understanding:changed',
-  'sessionTasks:changed'
+  'sessionTasks:changed',
+  'sessionTasks:goalIgnored'
 ]
 
 const api = {

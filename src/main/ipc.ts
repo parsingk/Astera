@@ -67,7 +67,7 @@ import {
 } from '../core/orchestration/integrate'
 import { DEFAULT_CONCURRENCY } from '../core/orchestration/types'
 import { accountToDispatchOn, rollChainFor } from '../core/accounts/dispatchAccount'
-import { sameSnapshot, snapshotFor, runsForProject } from '../core/orchestration/view'
+import { sameSnapshot, snapshotFor, runsForProject, outcomeOf } from '../core/orchestration/view'
 import { justFinished } from '../core/orchestration/runRecord'
 import { timelineFor } from '../core/orchestration/timeline'
 import { layersOf } from '../core/orchestration/graph'
@@ -3407,6 +3407,17 @@ export function registerIpc(
     // session cwd, not the origin-repo fold understanding.json uses, so this has to name the same key
     // the renderer's own sessionTasks.list call used, unfolded, or the two would agree on nothing.
     onTasksChanged: (projectPath) => send('sessionTasks:changed', projectPath),
+    // Spec §5.4 — the same question server.ts asks before accepting session-task-*: is this
+    // session's work already going to be recorded by a Run, at some level, when that Run finishes?
+    inRun: (sessionId) => {
+      if (!orch || !orch.deps.enabled()) return false
+      const st = orch.deps.getState()
+      if (st.dispatches.some((d) => d.sessionId === sessionId)) return true
+      return st.runs.some(
+        (r) => r.coordinatorSessionId === sessionId && outcomeOf(st, r.id) === 'running'
+      )
+    },
+    onGoalIgnored: (_projectPath, _objective) => send('sessionTasks:goalIgnored', undefined),
     log: orchLog
   })
   // 토글이 꺼져 있으면 시작하지 않는다. **load 뒤로 미룬다** — 먼저 시작하면 수집기가 쓴 상태를

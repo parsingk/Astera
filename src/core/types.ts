@@ -525,6 +525,9 @@ export interface CoreEvents {
    *  receiving side still does not compare the payload against `currentProject`; it is only a
    *  "read again" signal, whichever project it names. */
   'sessionTasks:changed': string
+  // A native /goal arrived while a unit was already open on that session, so it opened nothing —
+  // no payload, since the toast it drives (App.tsx) does not need to know which project.
+  'sessionTasks:goalIgnored': void
 }
 export type CoreEventChannel = keyof CoreEvents
 

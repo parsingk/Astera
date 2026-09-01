@@ -123,6 +123,10 @@ export interface WorkRecord {
  *  knows how to render (flow, decisions, implementation, evidence) — `userVisibleChanges` is the one
  *  genuinely new shape, rendered as a plain list. */
 export interface RecordExplanation {
+  /** A short name for this work, written by the agent once the changed files were known.
+   *  **Never replaces `WorkRecord.request`** — that stays the person's own words. Absent on records
+   *  written before this field, and whenever the model omitted it. */
+  title?: string
   overview: string
   /** What a person using the product will notice. Empty when the work changed nothing user-facing. */
   userVisibleChanges: string[]

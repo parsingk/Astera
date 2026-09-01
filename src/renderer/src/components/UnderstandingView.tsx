@@ -92,7 +92,7 @@ export function UnderstandingView({
   const openRow = (u: OpenSessionTask): React.JSX.Element => (
     <div key={u.id} className="hiw-row hiw-open-row">
       <span className="hiw-body">
-        <span className="hiw-name">{u.objective}</span>
+        <span className="hiw-name" title={u.objective}>{u.objective}</span>
         {u.status === 'active' ? (
           <span className="hiw-meta">{t('hiw.open.startedAt', { time: timeOf(u.startedAt) })}</span>
         ) : (
@@ -147,7 +147,7 @@ export function UnderstandingView({
               <StatusGlyph glyph={RECORD_GLYPH[r.status]} spinning={r.status === 'generating'} />
             </span>
             <span className="hiw-body">
-              <span className="hiw-name">{r.request}</span>
+              <span className="hiw-name" title={r.request}>{r.explanation?.title ?? r.request}</span>
               <span className="hiw-meta">
                 {dateOf(r.at)} · {sourceLabel(r)}
               </span>

@@ -77,6 +77,19 @@ describe('validateRecord — 스키마', () => {
     )
     expect(r.ok).toBe(true)
   })
+
+  it('title 은 있으면 받고 없어도 통과한다 — 옛 기록과 이 값을 빠뜨린 모델을 모두 살린다', () => {
+    const withTitle = validateRecord({ ...good(), title: '로그인을 서버 세션으로' }, allExist)
+    expect(withTitle.ok && withTitle.value.title).toBe('로그인을 서버 세션으로')
+
+    const without = validateRecord(good(), allExist)
+    expect(without.ok && without.value.title).toBeUndefined()
+  })
+
+  it('빈 title 은 없는 것으로 본다 — 빈 제목은 줄에서 고를 수 없다', () => {
+    const r = validateRecord({ ...good(), title: '   ' }, allExist)
+    expect(r.ok && r.value.title).toBeUndefined()
+  })
 })
 
 describe('validateRecord — 근거 검증 (§24-12)', () => {
