@@ -844,6 +844,13 @@ export const ko = {
   'slack.inbox.injectFailed': '⚠️ 입력을 전달하지 못했습니다',
   'slack.limitNoResume': '⛔ 한도 도달 — 자동 재개 없음',
   'slack.limitNoResumeAt': '⛔ 한도 도달 — 자동 재개 없음 (리셋 {at})',
+  // Desktop notification bodies. They follow the app language, the same way Slack's already do. The
+  // title is the session's own title, so the body says only what happened.
+  'notify.inputNeeded': '입력을 기다립니다',
+  'notify.limitWaiting': '한도에 걸려 재개를 기다립니다',
+  'notify.accountSwitched': '계정을 {label} 로 전환했습니다',
+  'notify.turnDone': '작업이 끝났습니다',
+  'notify.fallbackTitle': 'Astera',
   // JobsView.tsx, App.tsx — the read-only Jobs sidebar (오케스트레이션 Run/Task 목록)
   // 'Jobs'는 번역하지 않는다 — '작업'은 이미 Task를 가리키는 말이라, 뷰 이름까지 '작업'이라 하면
   // 그 안의 Task 행들과 이름이 겹친다. catalog.test.ts의 LITERALS가 네 카탈로그 모두에서 그대로

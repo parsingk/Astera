@@ -726,6 +726,11 @@ export const en: Record<keyof typeof ko, string> = {
   'slack.inbox.injectFailed': '⚠️ The input could not be delivered',
   'slack.limitNoResume': '⛔ Limit reached — no auto-resume',
   'slack.limitNoResumeAt': '⛔ Limit reached — no auto-resume (resets {at})',
+  'notify.inputNeeded': 'Waiting for your input',
+  'notify.limitWaiting': 'Stopped on a limit, waiting to resume',
+  'notify.accountSwitched': 'Switched to {label}',
+  'notify.turnDone': 'Finished',
+  'notify.fallbackTitle': 'Astera',
   // JobsView.tsx, App.tsx — the read-only Jobs sidebar (the orchestration Run/Task list)
   'jobs.rail.open': 'Jobs',
   'jobs.empty': 'No jobs started yet',
