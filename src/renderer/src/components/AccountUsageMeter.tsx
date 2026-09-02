@@ -11,6 +11,10 @@ export const usageLevel = (percent: number): 'ok' | 'warn' | 'crit' =>
 /** A percentage is a CSS width here, and the API's figure is not this module's to trust. */
 export const clampPercent = (n: number): number => Math.max(0, Math.min(100, n))
 
+/** Both components below need this same check before they draw anything — kept in one place so the
+ *  two copies cannot drift apart (a hover target with nothing in it, or an overlay with no meter). */
+const hasUsage = (u: AccountUsage | undefined): u is AccountUsage => !!u && !!(u.session || u.weekly)
+
 const track = (w: RateLimitWindow | null): React.JSX.Element => (
   <span>
     {w && <i className={usageLevel(w.usedPercent)} style={{ width: `${clampPercent(w.usedPercent)}%` }} />}
@@ -37,7 +41,7 @@ export function AccountUsageMeter({
 }: {
   usage: AccountUsage | undefined
 }): React.JSX.Element | null {
-  if (!usage || (!usage.session && !usage.weekly)) return null
+  if (!hasUsage(usage)) return null
   return (
     <span className={usage.remembered ? 'acct-meter stale' : 'acct-meter'} aria-hidden="true">
       {track(usage.session)}
@@ -63,7 +67,7 @@ export function AccountUsageDetail({
   usage: AccountUsage | undefined
 }): React.JSX.Element | null {
   const { t, lang } = useI18n()
-  if (!usage || (!usage.session && !usage.weekly)) return null
+  if (!hasUsage(usage)) return null
 
   const line = (label: string, w: RateLimitWindow): React.JSX.Element => {
     // A window whose reset has already passed, or that never carried one, shows its figure and no

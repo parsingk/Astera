@@ -220,7 +220,11 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
             // ones where it would leave the panel. Decided by index rather than by measuring: there
             // is nothing to measure before the overlay is displayed, and a wrong guess here costs a
             // flip, not a defect.
-            detailUp={i >= accounts.length - 2}
+            //
+            // `accounts.length > 2` guards against "the last two rows" meaning every row: at one
+            // account (0 >= -1) or two (0 >= 0 and 1 >= 0) the bare condition is true for every row,
+            // which flipped a fresh install's only row upward over the panel header for no reason.
+            detailUp={accounts.length > 2 && i >= accounts.length - 2}
           />
         ))}
         {accounts.length === 0 && <li className="empty">{t('account.panel.empty')}</li>}

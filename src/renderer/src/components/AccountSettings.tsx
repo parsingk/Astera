@@ -79,7 +79,11 @@ export function AccountSettings({ accounts }: { accounts: Account[] }): React.JS
             usage={usage[a.configDir]}
             // Same last-two-rows heuristic as the sidebar panel (AccountPanel) — nothing to measure
             // before the overlay is displayed, and a wrong guess here costs a flip, not a defect.
-            detailUp={i >= accounts.length - 2}
+            //
+            // `accounts.length > 2` guards against "the last two rows" meaning every row: at one
+            // account (0 >= -1) or two (0 >= 0 and 1 >= 0) the bare condition is true for every row,
+            // which flipped a fresh install's only row upward for no reason.
+            detailUp={accounts.length > 2 && i >= accounts.length - 2}
           >
             {/* ⤓ needs a source, and that source is this provider's default account. Hidden on the default
                 itself (it would be copying onto itself) and when the provider has no default yet, which
