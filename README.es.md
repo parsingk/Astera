@@ -79,6 +79,12 @@ de una coordinadora mediante la skill `/astera-orchestration`.
   configuraciones, y un proyecto de Gradle o Maven trae las tareas y los objetivos habituales. Las
   detectadas aparecen en cursiva hasta que editas una, lo que la guarda como tuya
 
+**GitHub**
+- El estado de la pull request aparece en la lista de worktrees
+- Un worktree con commits que su base no tiene ofrece crear la pull request: un diálogo sube la rama
+  y abre la PR contra la rama de la que ese worktree se bifurcó
+- Toma prestada la sesión de `gh` que ya tienes; no se guarda ningún token
+
 **How It Works (experimental)**
 - How It Works es para quien no lee código. Escribe con la habilidad `/astera-task` lo que quieres
   hacer y desde ahí empieza a prepararse para registrarlo; cuando el trabajo termina, lee lo que

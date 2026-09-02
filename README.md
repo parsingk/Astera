@@ -76,6 +76,12 @@ vendors, checks the result, and waits when a human decision is needed.
   Gradle or Maven project starts with the standard tasks and goals. A detected one shows in italics
   until you edit it, which saves it as yours
 
+**GitHub**
+- Pull request state is shown in the worktree list
+- A worktree holding commits its base does not have offers to create the pull request — one dialog
+  pushes the branch and opens the PR against the branch that worktree was forked from
+- It borrows the `gh` login you already have; no token is stored
+
 **How It Works (experimental)**
 - How It Works is for people who do not read code. Write down what you want done with the
   `/astera-task` skill and it starts getting ready to record from there; once the work is finished it
