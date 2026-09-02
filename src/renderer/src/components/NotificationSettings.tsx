@@ -44,11 +44,14 @@ export function NotificationSettings(): React.JSX.Element {
 
   const toggle = (key: keyof DesktopNotifySettings, next: boolean): void => {
     if (!flags) return
-    const previous = flags
+    const was = flags[key]
     const updated = { ...flags, [key]: next }
     setFlags(updated) // optimistic — reverted below on failure
     void window.api.settings.setDesktopNotify(updated).catch((err) => {
-      setFlags(previous)
+      // Revert this key alone, through a functional updater: a second checkbox toggled while
+      // this save was in flight has already applied, and reverting the whole record would
+      // discard it.
+      setFlags((f) => (f ? { ...f, [key]: was } : f))
       toast.error(
         t('settings.notifications.saveFailed', {
           detail: err instanceof Error ? err.message : String(err)
