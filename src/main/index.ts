@@ -18,7 +18,6 @@ import { SlackNotifier, SlackConfigStore } from './slack'
 import { SlackInboxController, createSocketClient } from './slackInbox'
 import { HookEventWatcher } from './hookEvents'
 import { CodexRolloutWatcher } from './codexRolloutWatcher'
-import { RateLimitFetcher } from './usage'
 import { t } from '../core/i18n'
 import { loadPolicy, nextCheckDelayMs, parsePolicyUrl, shouldApplyCampaign } from './updatePolicy'
 import type { SessionInfo, RollStateEvent, UpdateCampaignInfo } from '../core/types'
@@ -459,7 +458,9 @@ app.whenReady().then(async () => {
   // Direct account-usage lookups. It carries its own call coalescing, backoff and 10-second timeout, so
   // a limit phrase re-matching on every chunk still produces very few real requests. The token never
   // leaves this process.
-  const usageFetcher = new RateLimitFetcher()
+  // Owned by core so the account panel's service and the limit verdict share one cache — see
+  // Core.usageFetcher for why that sharing is load-bearing.
+  const usageFetcher = core.usageFetcher
   // One registry for both coordinators — the sharing is the feature (SPEC §11.2/6). Two instances
   // would compile and pass every test while sharing nothing.
   const blocks = new BlockRegistry()

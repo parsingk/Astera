@@ -113,6 +113,7 @@ import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
 import { loadRunConfigs, prepareRun } from './run/prepare'
 import { createGithubPrs } from './githubPrs'
+import { createAccountUsage } from './accountUsage'
 import { createPullRequest, readCommits } from './prCreate'
 import { fillFromCommits } from '../core/github/fill'
 
@@ -2938,6 +2939,19 @@ export function registerIpc(
   )
   ipcMain.on('github.subscribe', () => githubPrs.subscribe())
   ipcMain.on('github.unsubscribe', () => githubPrs.unsubscribe())
+
+  // Per-account usage for the account rows (design doc §4). Created here for the same reason
+  // githubPrs is — it needs `send`. It fetches nothing until a panel subscribes.
+  const accountUsage = createAccountUsage({
+    accounts: core.accounts,
+    fetcher: core.usageFetcher,
+    store: core.accountUsage,
+    send
+  })
+  ipcMain.handle('usage.accounts', () => accountUsage.usage())
+  ipcMain.on('usage.subscribe', () => accountUsage.subscribe())
+  ipcMain.on('usage.unsubscribe', () => accountUsage.unsubscribe())
+
   ipcMain.handle('settings.getGithubPolling', () => core.appSettings.getGithubPolling())
   ipcMain.handle('settings.setGithubPolling', async (_e, enabled: boolean) => {
     if (typeof enabled !== 'boolean') throw new Error(`INVALID_GITHUB_POLLING: ${String(enabled)}`)

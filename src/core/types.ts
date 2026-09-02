@@ -721,6 +721,9 @@ export interface CoreApi {
   }
   usage: {
     session(sessionId: string): Promise<SessionUsage | null> // context, 5-hour, and weekly % for an active session (claude: statusLine capture, codex: rollout tail)
+    accounts(): Promise<Record<string, AccountUsage>> // last-known usage per account, for the account rows (design doc §4)
+    subscribe(): void
+    unsubscribe(): void
   }
   localHistory: {
     // Browsing and restoring the snapshot taken just before a deletion. projectPath uses the same
