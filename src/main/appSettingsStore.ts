@@ -10,9 +10,16 @@ import {
   writableGeneratorSettings,
   type GeneratorSettings
 } from '../core/understanding/generatorSettings'
+import {
+  DESKTOP_NOTIFY_DEFAULTS,
+  readDesktopNotify,
+  writableDesktopNotify,
+  type DesktopNotifySettings
+} from '../core/notify/settings'
 
 /** App-wide settings persistence. Holds the language, the id of the dismissed update campaign, the
- *  orchestration toggle, the work unit tracking toggle, the resume strategy, the terminal font, and the theme.
+ *  orchestration toggle, the work unit tracking toggle, the resume strategy, the terminal font, the
+ *  theme, and the desktop notification flags.
  *  A null lang means the user has never picked one explicitly — the caller derives it with
  *  pickInitialLang(app.getLocale()). The derived value is not stored. */
 export class AppSettingsStore {
@@ -30,6 +37,9 @@ export class AppSettingsStore {
   private resumeStrategy: ResumeStrategy = 'original'
   private terminalFont: TerminalFont = { latin: null, hangul: null }
   private theme: ThemeId = DEFAULT_THEME_ID
+  /** Desktop notifications, one flag per event. Written and read as one object, so the four move
+   *  together and there is one place that knows what a missing file means. */
+  private desktopNotify: DesktopNotifySettings = { ...DESKTOP_NOTIFY_DEFAULTS }
 
   constructor(private filePath: string) {}
 
@@ -52,6 +62,9 @@ export class AppSettingsStore {
       this.workUnitTrackingEnabled =
         (parsed as { workUnitTrackingEnabled?: unknown }).workUnitTrackingEnabled === true
       this.githubPolling = (parsed as { githubPolling?: unknown }).githubPolling !== false
+      // Narrowed on read, like generator and terminalFont and for the same reason: the file is
+      // user-editable, and the narrowing is per flag's own default (see readDesktopNotify).
+      this.desktopNotify = readDesktopNotify((parsed as { desktopNotify?: unknown }).desktopNotify)
       // Sanitised on read like terminalFont, and for the same reason: the file is user-editable and
       // these values become CLI arguments. Anything that does not survive reads as "not set", which
       // means the CLI default (or, for the account, no generation at all).
@@ -79,6 +92,7 @@ export class AppSettingsStore {
         this.orchestrationEnabled = false
         this.workUnitTrackingEnabled = false
         this.githubPolling = true
+        this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
         this.generator = {}
         this.resumeStrategy = 'original'
         this.terminalFont = { latin: null, hangul: null }
@@ -93,6 +107,7 @@ export class AppSettingsStore {
       this.orchestrationEnabled = false
       this.workUnitTrackingEnabled = false
       this.githubPolling = true
+      this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
       this.generator = {}
       this.resumeStrategy = 'original'
       this.terminalFont = { latin: null, hangul: null }
@@ -144,6 +159,23 @@ export class AppSettingsStore {
 
   async setGithubPolling(enabled: boolean): Promise<void> {
     this.githubPolling = enabled
+    await this.persist()
+  }
+
+  getDesktopNotify(): DesktopNotifySettings {
+    return { ...this.desktopNotify }
+  }
+
+  /** The four are written together — the settings tab reads the record, flips one flag and sends the
+   *  whole thing back, the same convention setGenerator follows. Each field is narrowed here as well
+   *  as on read: this arrives from the renderer. */
+  async setDesktopNotify(next: DesktopNotifySettings): Promise<void> {
+    this.desktopNotify = {
+      inputNeeded: next.inputNeeded === true,
+      limitWaiting: next.limitWaiting === true,
+      accountSwitched: next.accountSwitched === true,
+      turnDone: next.turnDone === true
+    }
     await this.persist()
   }
 
@@ -199,6 +231,7 @@ export class AppSettingsStore {
       orchestrationEnabled?: boolean
       workUnitTrackingEnabled?: boolean
       githubPolling?: boolean
+      desktopNotify?: DesktopNotifySettings
       generator?: GeneratorSettings
       resumeStrategy?: ResumeStrategy
       terminalFont?: TerminalFont
@@ -209,6 +242,10 @@ export class AppSettingsStore {
     if (this.orchestrationEnabled) data.orchestrationEnabled = true
     if (this.workUnitTrackingEnabled) data.workUnitTrackingEnabled = true
     if (this.githubPolling === false) data.githubPolling = false
+    // Every flag at its default leaves the key out of the file entirely; load reconstructs those
+    // defaults from an absent key, so nothing is lost.
+    const desktopNotify = writableDesktopNotify(this.desktopNotify)
+    if (desktopNotify) data.desktopNotify = desktopNotify
     // 비어 있으면 키 자체를 남기지 않는다 — 위 falsy 규칙 그대로다
     const generator = writableGeneratorSettings(this.generator)
     if (generator) data.generator = generator
