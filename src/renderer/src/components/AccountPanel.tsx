@@ -4,6 +4,7 @@ import { PROVIDERS, PROVIDER_META, providerOf } from '../../../core/providers/me
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
 import { useAccountStatus } from '../hooks/useAccountStatus'
+import { useAccountUsage } from '../hooks/useAccountUsage'
 import { ProviderBadge } from './ProviderBadge'
 import { FolderGlyph } from './FolderGlyph'
 import { AccountRow } from './AccountRow'
@@ -45,6 +46,7 @@ function ProviderPicker({
 export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.Element {
   const { t, tm } = useI18n()
   const { loginMap, emailMap, defaultIdByProvider } = useAccountStatus(accounts)
+  const usage = useAccountUsage()
   const [addOpen, setAddOpen] = useState(false)
   const [addLabel, setAddLabel] = useState('')
   const [addCopySettings, setAddCopySettings] = useState(true)
@@ -206,13 +208,19 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
         </div>
       </header>
       <ul>
-        {accounts.map((a) => (
+        {accounts.map((a, i) => (
           <AccountRow
             key={a.id}
             account={a}
             loggedIn={loginMap[a.id]}
             email={emailMap[a.id]}
             isDefault={defaultIdByProvider[providerOf(a)] === a.id}
+            usage={usage[a.configDir]}
+            // The overlay is two or three lines — about two rows tall — so the last two rows are the
+            // ones where it would leave the panel. Decided by index rather than by measuring: there
+            // is nothing to measure before the overlay is displayed, and a wrong guess here costs a
+            // flip, not a defect.
+            detailUp={i >= accounts.length - 2}
           />
         ))}
         {accounts.length === 0 && <li className="empty">{t('account.panel.empty')}</li>}

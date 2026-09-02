@@ -544,6 +544,9 @@ export interface CoreEvents {
   'github:prs-updated': { repoRoot: string; snapshot: RepoPrSnapshot }
   /** The gh connection probe changed (app start, re-check, or an auth failure mid-flight). */
   'github:status': GhProbe
+  /** Every claude account's last-known usage, re-sent whole on each tick (design doc §4). The
+   *  renderer replaces the map, never merges — an account that dropped out has no reading to show. */
+  'usage:accounts-updated': Record<string, AccountUsage>
   'run:data': { projectPath: string; data: string } // run output
   'run:status': RunStatus // run state change (running/exited)
   'terminal:data': { id: string; data: string } // project terminal output

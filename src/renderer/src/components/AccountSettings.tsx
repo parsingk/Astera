@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { Account } from '../../../core/types'
 import { providerOf } from '../../../core/providers/meta'
 import { useAccountStatus } from '../hooks/useAccountStatus'
+import { useAccountUsage } from '../hooks/useAccountUsage'
 import { AccountRow } from './AccountRow'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
@@ -11,6 +12,7 @@ import { toast } from '../lib/toast'
 export function AccountSettings({ accounts }: { accounts: Account[] }): React.JSX.Element {
   const { t, tm } = useI18n()
   const { loginMap, emailMap, defaultIdByProvider } = useAccountStatus(accounts)
+  const usage = useAccountUsage()
   const [removeTarget, setRemoveTarget] = useState<Account | null>(null)
   const [logoutToo, setLogoutToo] = useState(false)
   const [removing, setRemoving] = useState(false)
@@ -65,7 +67,7 @@ export function AccountSettings({ accounts }: { accounts: Account[] }): React.JS
     <div className="settings-accounts">
       <span className="settings-hint">{t('settings.accounts.hint')}</span>
       <ul>
-        {accounts.map((a) => {
+        {accounts.map((a, i) => {
           const defaultId = defaultIdByProvider[providerOf(a)]
           return (
           <AccountRow
@@ -74,6 +76,10 @@ export function AccountSettings({ accounts }: { accounts: Account[] }): React.JS
             loggedIn={loginMap[a.id]}
             email={emailMap[a.id]}
             isDefault={defaultId === a.id}
+            usage={usage[a.configDir]}
+            // Same last-two-rows heuristic as the sidebar panel (AccountPanel) — nothing to measure
+            // before the overlay is displayed, and a wrong guess here costs a flip, not a defect.
+            detailUp={i >= accounts.length - 2}
           >
             {/* ⤓ needs a source, and that source is this provider's default account. Hidden on the default
                 itself (it would be copying onto itself) and when the provider has no default yet, which
