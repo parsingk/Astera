@@ -34,6 +34,7 @@ import { ThemeSettings } from './components/ThemeSettings'
 import { GeneratorSettings } from './components/GeneratorSettings'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { GithubSettings } from './components/GithubSettings'
+import { NotificationSettings } from './components/NotificationSettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import type {
   OpenSessionTask,
@@ -409,6 +410,7 @@ export default function App(): React.JSX.Element {
     | 'info'
     | 'shortcuts'
     | 'slack'
+    | 'notifications'
     | 'github'
     | 'worktree'
     | 'history'
@@ -3377,6 +3379,7 @@ export default function App(): React.JSX.Element {
                     ['info', t('settings.tab.info')],
                     ['shortcuts', t('settings.tab.shortcuts')],
                     ['slack', 'Slack'],
+                    ['notifications', t('settings.tab.notifications')],
                     ['github', 'GitHub'],
                     ['worktree', 'Worktree'],
                     ['history', t('settings.tab.history')]
@@ -3724,6 +3727,7 @@ export default function App(): React.JSX.Element {
                     <span className="settings-hint">{t('settings.slack.setupGuide')}</span>
                   </div>
                 )}
+                {settingsTab === 'notifications' && <NotificationSettings />}
                 {settingsTab === 'github' && <GithubSettings />}
                 {settingsTab === 'worktree' && (
                   <div className="settings-worktree">

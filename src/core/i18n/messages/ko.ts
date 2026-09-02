@@ -10,6 +10,7 @@ export const ko = {
   'settings.tab.info': '정보',
   'settings.tab.shortcuts': '단축키',
   'settings.tab.history': '히스토리',
+  'settings.tab.notifications': '알림',
   'settings.general.language': '언어',
   // {lang} is the language the OS locale resolves to, shown so the effect of picking System is
   // visible before picking it
@@ -131,6 +132,18 @@ export const ko = {
   'github.state.open': '열림',
   'github.state.merged': '머지됨',
   'github.state.closed': '닫힘',
+  // ---- notifications ----
+  'settings.notifications.hint':
+    '데스크톱 알림입니다. 창이 떠 있고 그 세션을 보고 있으면 보내지 않습니다. Slack 을 켜 뒀어도 둘 다 갑니다 — 자리를 떠난 사람과 같은 화면의 다른 창을 보는 사람은 다른 사람입니다.',
+  'settings.notifications.inputNeeded': '입력이 필요할 때',
+  'settings.notifications.inputNeededHint': '세션이 질문이나 승인을 기다리며 멈춘 상태입니다.',
+  'settings.notifications.limitWaiting': '한도에 걸려 멈출 때',
+  'settings.notifications.limitWaitingHint': '재개 예정 시각까지 기다립니다.',
+  'settings.notifications.accountSwitched': '계정을 전환할 때',
+  'settings.notifications.accountSwitchedHint': '작업은 계속 진행됩니다. 세션이 여럿이면 잦습니다.',
+  'settings.notifications.turnDone': '작업이 끝날 때',
+  'settings.notifications.turnDoneHint': '턴마다 옵니다. 세션이 여럿이면 잦습니다.',
+  'settings.notifications.saveFailed': '알림 설정을 저장하지 못했습니다: {detail}',
   'worktree.push.aheadUnknown': '푸시하지 않은 커밋이 있습니다',
   'worktree.push.createPr': 'PR 만들기',
   'worktree.push.createPrHint': 'PR 만들기 — 커밋 {count}개를 {base}(으)로',
