@@ -111,7 +111,10 @@ export function createAccountUsage(deps: AccountUsageDeps): AccountUsageService 
   }
 
   const ensureTimer = (): void => {
-    if (subscribers > 0 && timer === null) timer = setInterval(() => void tick(), TICK_MS)
+    // tick's own failures are already handled inside it (each fetch is caught per directory) — the
+    // only thing that can still escape is deps.send throwing. .catch is the last backstop so that
+    // cannot become an unhandled rejection, which can terminate the process.
+    if (subscribers > 0 && timer === null) timer = setInterval(() => void tick().catch(() => {}), TICK_MS)
   }
   const dropTimer = (): void => {
     if (subscribers === 0 && timer !== null) {
@@ -128,7 +131,9 @@ export function createAccountUsage(deps: AccountUsageDeps): AccountUsageService 
       // The mount fetch (§4). Fired here rather than left to the first interval, which is five
       // minutes away — a panel that has just opened must not sit on a stale figure that long. The
       // fetcher's cache absorbs the cost when a second panel mounts moments later.
-      void tick()
+      // Same backstop as the interval's tick above (see ensureTimer) — a send failure here must not
+      // become an unhandled rejection either.
+      void tick().catch(() => {})
     },
     unsubscribe(): void {
       subscribers = Math.max(0, subscribers - 1)
