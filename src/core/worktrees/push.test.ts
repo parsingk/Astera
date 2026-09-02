@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { PUSH_STATE_FORMAT, parsePushState } from './push'
+import { normalizeBaseForGh, parsePushState, PUSH_STATE_FORMAT, readPushState } from './push'
 
 describe('parsePushState', () => {
   it('reads ahead and behind against the base', () => {
@@ -53,5 +53,101 @@ describe('parsePushState', () => {
   it('the exported format carries all four fields the parser reads', () => {
     for (const atom of ['refname:short', 'ahead-behind:', 'upstream:short', 'upstream:track'])
       expect(PUSH_STATE_FORMAT).toContain(atom)
+  })
+})
+
+describe('normalizeBaseForGh', () => {
+  // The rule this repo already paid for once: a local branch can contain a slash too.
+  // fetchBaseRef's comment records a shape-based split sending git to a remote that did not
+  // exist. Astera names branches <user>/<slug>, so this is the ordinary case here.
+  it('strips a real remote prefix', async () => {
+    expect(await normalizeBaseForGh('/r', 'origin/main', async () => true)).toBe('main')
+  })
+
+  it('leaves a local branch that merely looks remote alone', async () => {
+    expect(await normalizeBaseForGh('/r', 'parsingk/maple', async () => false)).toBe(
+      'parsingk/maple'
+    )
+  })
+
+  it('leaves a name with no slash alone without asking', async () => {
+    let asked = false
+    const probe = async (): Promise<boolean> => {
+      asked = true
+      return true
+    }
+    expect(await normalizeBaseForGh('/r', 'develop', probe)).toBe('develop')
+    expect(asked).toBe(false)
+  })
+
+  it('strips only the first segment', async () => {
+    expect(await normalizeBaseForGh('/r', 'origin/release/1.2', async () => true)).toBe(
+      'release/1.2'
+    )
+  })
+})
+
+describe('readPushState', () => {
+  it('asks git once per base and merges the results', async () => {
+    const calls: string[][] = []
+    const got = await readPushState('/r', ['develop', 'main'], {
+      run: async (args) => {
+        calls.push(args)
+        return { ok: true, stdout: `b${calls.length}|1 0||`, stderr: '' }
+      },
+      versionOk: async () => true
+    })
+    expect(calls).toHaveLength(2)
+    expect(calls[0].join(' ')).toContain('develop')
+    expect(calls[1].join(' ')).toContain('main')
+    expect(Object.keys(got).sort()).toEqual(['b1', 'b2'])
+  })
+
+  it('de-duplicates repeated bases', async () => {
+    let n = 0
+    await readPushState('/r', ['develop', 'develop'], {
+      run: async () => {
+        n += 1
+        return { ok: true, stdout: '', stderr: '' }
+      },
+      versionOk: async () => true
+    })
+    expect(n).toBe(1)
+  })
+
+  // Not knowing the count is no reason to withhold the action, so this returns empty rather
+  // than throwing — the row simply shows nothing and the menu still offers Create.
+  it('returns empty when git is too old, without running anything', async () => {
+    let ran = false
+    const got = await readPushState('/r', ['develop'], {
+      run: async () => {
+        ran = true
+        return { ok: true, stdout: 'x|1 0||', stderr: '' }
+      },
+      versionOk: async () => false
+    })
+    expect(got).toEqual({})
+    expect(ran).toBe(false)
+  })
+
+  it('a failed git call contributes nothing and does not throw', async () => {
+    const got = await readPushState('/r', ['develop'], {
+      run: async () => ({ ok: false, stdout: '', stderr: 'boom' }),
+      versionOk: async () => true
+    })
+    expect(got).toEqual({})
+  })
+
+  it('substitutes the base into the format rather than appending it', async () => {
+    let fmt = ''
+    await readPushState('/r', ['develop'], {
+      run: async (args) => {
+        fmt = args.find((a) => a.startsWith('--format=')) ?? ''
+        return { ok: true, stdout: '', stderr: '' }
+      },
+      versionOk: async () => true
+    })
+    expect(fmt).toContain('%(ahead-behind:develop)')
+    expect(fmt).not.toContain('<base>')
   })
 })

@@ -1,3 +1,6 @@
+import { git, gitVersionAtLeast, remoteExists } from './git'
+import type { GitResult } from './git'
+
 /** How a branch sits against its base and its upstream. */
 export interface BranchPushState {
   /** Commits on this branch that the base does not have. **null means unknown** — the base ref
@@ -37,4 +40,56 @@ export function parsePushState(stdout: string): Record<string, BranchPushState> 
     }
   }
   return out
+}
+
+/** Injectable seams so the tests need neither a repository nor a git binary. Production callers
+ *  pass nothing. */
+export interface PushStateDeps {
+  run?: (args: string[], cwd: string) => Promise<GitResult>
+  versionOk?: () => Promise<boolean>
+}
+
+/** `%(ahead-behind:)` landed in git 2.41. Below that this whole read is skipped. */
+const AHEAD_BEHIND_GIT = { major: 2, minor: 41 }
+
+/** Push state for every branch of one repository, one `for-each-ref` per distinct base.
+ *  Worktrees of a repository may carry different bases; in practice there is one.
+ *  Returns an empty map rather than throwing when git is too old or a call fails — not knowing
+ *  the count is no reason to withhold the action that depends on it. */
+export async function readPushState(
+  repoPath: string,
+  bases: string[],
+  deps: PushStateDeps = {}
+): Promise<Record<string, BranchPushState>> {
+  const run = deps.run ?? ((args: string[], cwd: string) => git(args, { cwd }))
+  const versionOk =
+    deps.versionOk ?? (() => gitVersionAtLeast(AHEAD_BEHIND_GIT.major, AHEAD_BEHIND_GIT.minor))
+  if (!(await versionOk())) return {}
+  const out: Record<string, BranchPushState> = {}
+  for (const base of [...new Set(bases)]) {
+    const r = await run(
+      ['for-each-ref', `--format=${PUSH_STATE_FORMAT.replace('<base>', base)}`, 'refs/heads/'],
+      repoPath
+    )
+    if (!r.ok) continue // one unreadable base must not sink the others
+    Object.assign(out, parsePushState(r.stdout))
+  }
+  return out
+}
+
+/** Turns a stored baseRef into the branch name `gh pr create --base` expects.
+ *
+ *  **Remote-ness is decided by the remote list, never by the name's shape.** A local branch can
+ *  contain a slash too — `parsingk/maple` looks exactly like `origin/main`, and astera names its
+ *  own branches `<user>/<slug>`, so that is the ordinary case here rather than an edge one.
+ *  fetchBaseRef in ./git records what shape-splitting cost the last time. */
+export async function normalizeBaseForGh(
+  repoPath: string,
+  baseRef: string,
+  isRemote: (repo: string, name: string) => Promise<boolean> = remoteExists
+): Promise<string> {
+  const slash = baseRef.indexOf('/')
+  if (slash === -1) return baseRef
+  const head = baseRef.slice(0, slash)
+  return (await isRemote(repoPath, head)) ? baseRef.slice(slash + 1) : baseRef
 }
