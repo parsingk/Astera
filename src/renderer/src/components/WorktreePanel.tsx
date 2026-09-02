@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { WorktreeListItem } from '../../../core/types'
+import type { BranchPushState, WorktreeListItem } from '../../../core/types'
 import type { MessageKey } from '../../../core/i18n'
 import type { RepoPrSnapshot } from '../../../core/github/types'
 import { confirmModal } from '../lib/confirm'
@@ -8,8 +8,11 @@ import { dirtyCount, isOrphanUnverifiable, worktreeErrorMessage } from '../lib/w
 import { subscribeCreated } from '../lib/worktreeBus'
 import { useI18n } from '../i18n/I18nProvider'
 import { PlayIcon, TrashIcon } from './JobIcons'
-import { ContextMenu } from './ContextMenu'
+import { ContextMenu, type MenuItem } from './ContextMenu'
+import { CreatePrDialog } from './CreatePrDialog'
 import { PrBadge } from './PrBadge'
+import { PushBadge } from './PushBadge'
+import { rowSlot } from './rowSlot'
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 
 /** 상태 라벨. **'폴더 없음' 은 없다** — 폴더가 사라진 항목은 listWithStatus 가 목록을 만들면서
@@ -32,6 +35,11 @@ export function WorktreePanel({
   const [prs, setPrs] = useState<Record<string, RepoPrSnapshot>>({})
   // PR link menu — one at a time, held here rather than per row (the FileExplorer/HistoryBrowser shape)
   const [prMenu, setPrMenu] = useState<{ x: number; y: number; url: string } | null>(null)
+  const [pushState, setPushState] = useState<Record<string, Record<string, BranchPushState>>>({})
+  // The row whose create dialog is open, if any
+  const [creating, setCreating] = useState<WorktreeListItem | null>(null)
+  // The row menu — one at a time, held here rather than per row (the HistoryBrowser shape)
+  const [rowMenu, setRowMenu] = useState<{ x: number; y: number; w: WorktreeListItem } | null>(null)
   const [removingId, setRemovingId] = useState<string | null>(null) // the worktree whose removal is in progress
   const busy = removingId !== null
 
@@ -57,10 +65,19 @@ export function WorktreePanel({
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
-      setItems(await window.api.worktrees.list())
+      const list = await window.api.worktrees.list()
+      setItems(list)
       // The same triggers that re-query worktrees re-query their PRs: mount, expand, manual ⟳,
       // and the created event. This is the whole manual path when polling is off.
       void window.api.github.refresh({ force: true })
+      // Push state is local git, so it rides the same triggers as the list itself rather than a
+      // timer: mount, expand, manual refresh, and the worktree-created event.
+      const byRepo = new Map<string, Set<string>>()
+      for (const w of list) byRepo.set(w.repoPath, (byRepo.get(w.repoPath) ?? new Set()).add(w.baseRef))
+      const next: Record<string, Record<string, BranchPushState>> = {}
+      for (const [repo, bases] of byRepo)
+        next[repo] = await window.api.worktrees.pushState(repo, [...bases])
+      setPushState(next)
     } catch (err) {
       // Swallowing the failure quietly makes the stale list on screen look current — a refresh failure is reported
       const m = worktreeErrorMessage(err instanceof Error ? err.message : String(err))
@@ -189,7 +206,15 @@ export function WorktreePanel({
                 whole list so the rail runs continuously instead of breaking at every row */}
             <div className="worktree-list">
               {list.map((w) => (
-                <div key={w.id} className="worktree-row" title={`${w.path}\n${w.branch}`}>
+                <div
+                  key={w.id}
+                  className="worktree-row"
+                  title={`${w.path}\n${w.branch}`}
+                  onContextMenu={(ev) => {
+                    ev.preventDefault() // Electron's own menu would cover ours
+                    setRowMenu({ x: ev.clientX, y: ev.clientY, w })
+                  }}
+                >
                   <span className="worktree-name">
                     {w.name}
                     {/* While removing, the progress state wins — there is no reason to report 'Git registration lost' on a row that is being deleted */}
@@ -203,14 +228,25 @@ export function WorktreePanel({
                   </span>
                   {(() => {
                     const snap = prs[w.repoPath]
-                    const pr = snap?.byBranch[w.branch]
-                    return pr ? (
-                      <PrBadge
-                        pr={pr}
-                        stale={snap.stale}
-                        onOpenMenu={(e) => setPrMenu({ x: e.clientX, y: e.clientY, url: pr.url })}
+                    const slot = rowSlot(snap?.byBranch[w.branch], pushState[w.repoPath]?.[w.branch])
+                    if (slot === null) return null
+                    if (slot.kind === 'pr')
+                      return (
+                        <PrBadge
+                          pr={slot.pr}
+                          stale={snap!.stale}
+                          onOpenMenu={(e) =>
+                            setPrMenu({ x: e.clientX, y: e.clientY, url: slot.pr.url })
+                          }
+                        />
+                      )
+                    return (
+                      <PushBadge
+                        ahead={slot.ahead}
+                        base={w.baseRef}
+                        onCreate={() => setCreating(w)}
                       />
-                    ) : null
+                    )
                   })()}
                   {/* Drawn icons rather than text glyphs, the same as the history session rows this list
                       is laid out to match: both hold 12px marks in a .ghost button, so the two lists'
@@ -276,6 +312,50 @@ export function WorktreePanel({
               }
             }
           ]}
+        />
+      )}
+      {rowMenu &&
+        (() => {
+          const w = rowMenu.w
+          const pr = prs[w.repoPath]?.byBranch[w.branch]
+          const ahead = pushState[w.repoPath]?.[w.branch]?.ahead
+          const items: MenuItem[] = pr
+            ? [
+                {
+                  label: t('github.badge.openInBrowser'),
+                  onSelect: () => void window.api.system.openExternal(pr.url)
+                },
+                {
+                  label: t('github.badge.copyLink'),
+                  onSelect: () => {
+                    window.api.clipboard.writeText(pr.url)
+                    toast.success(t('github.badge.linkCopied'))
+                  }
+                }
+              ]
+            : [
+                {
+                  label: t('worktree.push.createPr'),
+                  disabled: ahead === 0,
+                  onSelect: () => setCreating(w)
+                }
+              ]
+          return (
+            <ContextMenu x={rowMenu.x} y={rowMenu.y} items={items} onClose={() => setRowMenu(null)} />
+          )
+        })()}
+      {creating && (
+        <CreatePrDialog
+          worktree={creating}
+          base={creating.baseRef}
+          needsPush={!pushState[creating.repoPath]?.[creating.branch]?.hasUpstream}
+          behind={pushState[creating.repoPath]?.[creating.branch]?.behind ?? null}
+          onCancel={() => setCreating(null)}
+          onDone={() => {
+            setCreating(null)
+            void refresh() // the ↑N becomes #N where it stands
+            void window.api.github.refresh({ force: true })
+          }}
         />
       )}
     </section>
