@@ -595,6 +595,13 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .pr-badge .pr-checks.pending { border: 1.5px solid var(--warn); }
 .pr-badge .pr-checks.failing { background: var(--danger); }
 
+/* Unpushed commits, in the same slot the PR badge uses (rowSlot decides which). Quiet at rest so
+   the row reads as a row, and only on hover does it announce that it is the way to open a pull
+   request — Orca's "the primary action shifts with state", at the size a sidebar row allows. */
+.push-badge { flex: none; background: none; border: none; padding: 0 3px; font-family: var(--mono); font-size: 10px; color: var(--text-faint); cursor: pointer; border-radius: var(--radius-sm); }
+.push-badge:hover { color: var(--accent); background: var(--elevated); }
+.push-badge:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+
 /* ---------- tabs ---------- */
 .tabs { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; }
 /* 이 padding 은 죽은 값이다 — WorkbenchTabs 는 .pane-tabbar 안에서만 렌더링되고, 거기서는
