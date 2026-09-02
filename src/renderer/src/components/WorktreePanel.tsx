@@ -353,8 +353,10 @@ export function WorktreePanel({
           onCancel={() => setCreating(null)}
           onDone={() => {
             setCreating(null)
-            void refresh() // the ↑N becomes #N where it stands
-            void window.api.github.refresh({ force: true })
+            // refresh() ends with github.refresh({ force: true }) itself, so this one call turns
+            // the ↑N into #N — a second explicit refresh here is absorbed by the coordinator's
+            // in-flight guard and its minimum call spacing, and buys nothing.
+            void refresh()
           }}
         />
       )}
