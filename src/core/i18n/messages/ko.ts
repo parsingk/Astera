@@ -125,6 +125,8 @@ export const ko = {
   'github.badge.draft': '초안',
   'github.badge.checks.pending': '체크 진행 중',
   'github.badge.checks.failing': '체크 실패',
+  'github.badge.checks.passing': '체크 통과',
+  'github.badge.checks.none': '체크 없음',
   'github.state.open': '열림',
   'github.state.merged': '머지됨',
   'github.state.closed': '닫힘',

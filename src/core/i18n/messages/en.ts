@@ -115,6 +115,8 @@ export const en: Record<keyof typeof ko, string> = {
   'github.badge.draft': 'Draft',
   'github.badge.checks.pending': 'Checks running',
   'github.badge.checks.failing': 'Checks failing',
+  'github.badge.checks.passing': 'Checks passing',
+  'github.badge.checks.none': 'No checks',
   'github.state.open': 'Open',
   'github.state.merged': 'Merged',
   'github.state.closed': 'Closed',
