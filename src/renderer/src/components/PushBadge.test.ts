@@ -7,9 +7,9 @@ vi.mock('../i18n/I18nProvider', () => ({
   useI18n: () => ({ lang: 'ko', t: (key: string) => key, tm: (m: unknown) => String(m) })
 }))
 
-const render = (ahead: number | null): string =>
+const render = (ahead: number | null, disabled = false): string =>
   renderToStaticMarkup(
-    React.createElement(PushBadge, { ahead, base: 'develop', onCreate: () => {} })
+    React.createElement(PushBadge, { ahead, base: 'develop', disabled, onCreate: () => {} })
   )
 
 describe('PushBadge', () => {
@@ -32,5 +32,12 @@ describe('PushBadge', () => {
 
   it('is a button, so it is keyboard reachable', () => {
     expect(render(3)).toContain('<button')
+  })
+
+  // Still ↑3 while the panel's git lock holds or gh is away: the commits are unpushed either way.
+  it('goes quiet rather than disappearing when disabled', () => {
+    const html = render(3, true)
+    expect(html).toContain('disabled')
+    expect(html).toContain('↑3')
   })
 })

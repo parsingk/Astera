@@ -43,6 +43,8 @@ export function WorktreePanel({
   // The row menu — one at a time, held here rather than per row (the HistoryBrowser shape)
   const [rowMenu, setRowMenu] = useState<{ x: number; y: number; w: WorktreeListItem } | null>(null)
   const [removingId, setRemovingId] = useState<string | null>(null) // the worktree whose removal is in progress
+  // Optimistic, so the panel does not flash a disabled affordance before the cached probe answers.
+  const [ghConnected, setGhConnected] = useState(true)
   const busy = removingId !== null
 
   // PR snapshots: pull once, then ride the push events. Subscribed only while this panel is
@@ -51,11 +53,14 @@ export function WorktreePanel({
     if (!open) return
     window.api.github.subscribe()
     void window.api.github.prs().then(setPrs)
+    // status() answers from the cached probe and never runs gh, so asking here costs nothing
+    void window.api.github.status().then((p) => setGhConnected(p.kind === 'connected'))
     const offPrs = window.api.on('github:prs-updated', (p) =>
       setPrs((prev) => ({ ...prev, [p.repoRoot]: p.snapshot }))
     )
     const offStatus = window.api.on('github:status', (probe) => {
       // Badges disappear quietly on disconnect; the settings card explains why (§7)
+      setGhConnected(probe.kind === 'connected')
       if (probe.kind !== 'connected') setPrs({})
     })
     return () => {
@@ -246,6 +251,7 @@ export function WorktreePanel({
                       <PushBadge
                         ahead={slot.ahead}
                         base={w.baseRef}
+                        disabled={busy || !ghConnected}
                         onCreate={() => setCreating(w)}
                       />
                     )
@@ -335,13 +341,26 @@ export function WorktreePanel({
                   }
                 }
               ]
-            : [
-                {
-                  label: t('worktree.push.createPr'),
-                  disabled: ahead === 0,
-                  onSelect: () => setCreating(w)
-                }
-              ]
+            : []
+          // A closed or merged PR keeps its badge (the slot shows the further-along fact), but the
+          // branch can be proposed again — without this the row would offer only Open/Copy forever.
+          // A merged branch is usually ahead === 0, so the disabled rule below keeps it quiet.
+          if (!pr || pr.state !== 'open') {
+            if (items.length > 0) items.push('separator')
+            // MenuItem has no hint field, so a disabled item states its reason in its own label
+            // (spec §5). Order matters: nothing to merge is the more specific answer.
+            items.push({
+              label:
+                ahead === 0
+                  ? t('worktree.push.noCommits')
+                  : !ghConnected
+                    ? t('worktree.push.ghDisconnected')
+                    : t('worktree.push.createPr'),
+              // busy needs no reason in the label — the row is visibly spinning
+              disabled: ahead === 0 || !ghConnected || busy,
+              onSelect: () => setCreating(w)
+            })
+          }
           return (
             <ContextMenu x={rowMenu.x} y={rowMenu.y} items={items} onClose={() => setRowMenu(null)} />
           )
