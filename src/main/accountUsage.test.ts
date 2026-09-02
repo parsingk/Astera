@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Account, AccountUsage, RateLimitUsage } from '../core/types'
-import { AccountUsageStore } from './accountUsageStore'
+import { AccountUsageStore, type RememberedUsage } from './accountUsageStore'
 import { createAccountUsage } from './accountUsage'
 import { TTL_OK_MS } from './usage'
 
@@ -49,8 +49,44 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true }).catch(() => {})
 })
 
-/** A service over a fetcher whose answer per configDir is scripted. */
-function harness(accounts: Account[], answers: Record<string, RateLimitUsage>) {
+/** An in-memory double for the three fake-timer tests below, matching AccountUsageDeps's
+ *  structural store type. A real AccountUsageStore.remember() ends in a real fs.writeFile, and that
+ *  write cannot settle inside vi.advanceTimersByTimeAsync's bounded event-loop yields — see the
+ *  comment on `store` in accountUsage.ts. This double applies the same refusals the real store does
+ *  (non-'ok' status, an unparseable or missing peak.resetsAt, no window at all) and the same past-
+ *  peak expiry rule on read, so a test built on it still means what it would mean on the real store.
+ */
+function fakeStore(): Pick<AccountUsageStore, 'get' | 'remember'> {
+  const entries = new Map<string, RememberedUsage>()
+  return {
+    get(configDir) {
+      const entry = entries.get(configDir)
+      if (!entry) return null
+      if (Date.parse(entry.peak.resetsAt) <= NOW) return null
+      return entry
+    },
+    async remember(configDir, usage) {
+      if (usage.status !== 'ok') return
+      const resetsAt = usage.peak?.resetsAt ?? null
+      if (typeof resetsAt !== 'string' || !Number.isFinite(Date.parse(resetsAt))) return
+      if (!usage.session && !usage.weekly) return
+      entries.set(configDir, {
+        session: usage.session,
+        weekly: usage.weekly,
+        peak: { percent: usage.peak!.percent, resetsAt, weekly: usage.peak!.weekly },
+        readAt: new Date(NOW).toISOString()
+      })
+    }
+  }
+}
+
+/** A service over a fetcher whose answer per configDir is scripted. `storeOverride` lets the three
+ *  fake-timer tests below supply the in-memory double instead of the shared, disk-backed `store`. */
+function harness(
+  accounts: Account[],
+  answers: Record<string, RateLimitUsage>,
+  storeOverride?: Pick<AccountUsageStore, 'get' | 'remember'>
+) {
   const sent: Record<string, AccountUsage>[] = []
   const calls: string[] = []
   const svc = createAccountUsage({
@@ -61,7 +97,7 @@ function harness(accounts: Account[], answers: Record<string, RateLimitUsage>) {
         return answers[configDir] ?? failed
       }
     },
-    store,
+    store: storeOverride ?? store,
     send: (_channel, payload) => sent.push(payload)
   })
   return { svc, sent, calls }
@@ -157,13 +193,7 @@ describe('createAccountUsage', () => {
 
   it('subscribe fetches immediately and starts the tick; unsubscribe stops it', async () => {
     vi.useFakeTimers()
-    // TTL_OK_MS (5 minutes) is compressed to zero real wall-clock time here, but
-    // AccountUsageStore.persist() still performs a real disk write, and remember() awaits it
-    // before tick() releases its inFlight guard — a race the fake clock cannot win against
-    // unfaked disk I/O. Stubbed so only the in-memory bookkeeping every assertion below actually
-    // reads (the real Task 1 Map/expiry/peak logic) is on the critical path.
-    vi.spyOn(store as unknown as { persist(): Promise<void> }, 'persist').mockResolvedValue(undefined)
-    const { svc, calls } = harness([account('main', '/cfg/main')], { '/cfg/main': ok(11) })
+    const { svc, calls } = harness([account('main', '/cfg/main')], { '/cfg/main': ok(11) }, fakeStore())
 
     svc.subscribe()
     await vi.advanceTimersByTimeAsync(0)
@@ -179,13 +209,7 @@ describe('createAccountUsage', () => {
 
   it('the tick keeps running while a second subscriber is still mounted', async () => {
     vi.useFakeTimers()
-    // TTL_OK_MS (5 minutes) is compressed to zero real wall-clock time here, but
-    // AccountUsageStore.persist() still performs a real disk write, and remember() awaits it
-    // before tick() releases its inFlight guard — a race the fake clock cannot win against
-    // unfaked disk I/O. Stubbed so only the in-memory bookkeeping every assertion below actually
-    // reads (the real Task 1 Map/expiry/peak logic) is on the critical path.
-    vi.spyOn(store as unknown as { persist(): Promise<void> }, 'persist').mockResolvedValue(undefined)
-    const { svc, calls } = harness([account('main', '/cfg/main')], { '/cfg/main': ok(11) })
+    const { svc, calls } = harness([account('main', '/cfg/main')], { '/cfg/main': ok(11) }, fakeStore())
     svc.subscribe()
     svc.subscribe()
     await vi.advanceTimersByTimeAsync(0)
@@ -203,13 +227,7 @@ describe('createAccountUsage', () => {
 
   it('stop clears the tick however many subscribers were counted', async () => {
     vi.useFakeTimers()
-    // TTL_OK_MS (5 minutes) is compressed to zero real wall-clock time here, but
-    // AccountUsageStore.persist() still performs a real disk write, and remember() awaits it
-    // before tick() releases its inFlight guard — a race the fake clock cannot win against
-    // unfaked disk I/O. Stubbed so only the in-memory bookkeeping every assertion below actually
-    // reads (the real Task 1 Map/expiry/peak logic) is on the critical path.
-    vi.spyOn(store as unknown as { persist(): Promise<void> }, 'persist').mockResolvedValue(undefined)
-    const { svc, calls } = harness([account('main', '/cfg/main')], { '/cfg/main': ok(11) })
+    const { svc, calls } = harness([account('main', '/cfg/main')], { '/cfg/main': ok(11) }, fakeStore())
     svc.subscribe()
     svc.subscribe()
     await vi.advanceTimersByTimeAsync(0)

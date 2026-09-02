@@ -14,7 +14,12 @@ export interface AccountUsageDeps {
   /** RateLimitFetcher, reused unchanged. It already carries the 5-minute success cache, the capped
    *  15-minute 429 back-off, and in-flight coalescing per configDir. */
   fetcher: { get(configDir: string, maxAgeMs?: number): Promise<RateLimitUsage> }
-  store: AccountUsageStore
+  /** Structural, not the concrete class: the service only ever calls `get` and `remember` (below).
+   *  Kept narrow for the same reason readAccessToken in usage.ts is a plain function rather than a
+   *  private class method — a test can hand in an in-memory double instead of a real file, because
+   *  the real store's `persist()` write cannot settle inside vi.advanceTimersByTimeAsync's bounded
+   *  event-loop yields. */
+  store: Pick<AccountUsageStore, 'get' | 'remember'>
   send: (channel: 'usage:accounts-updated', payload: Record<string, AccountUsage>) => void
 }
 
