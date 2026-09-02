@@ -154,7 +154,7 @@ export function CreatePrDialog({
           <span className="settings-hint">{t('pr.create.dirty', { count: dirtyCount })}</span>
         )}
         {commitCount > 0 && (
-          <span className="settings-hint">{t('worktree.push.ahead', { count: commitCount })}</span>
+          <span className="settings-hint">{t('pr.create.commits', { count: commitCount })}</span>
         )}
         {behindCount !== null && behindCount > 0 && (
           <span className="settings-hint">{t('pr.create.behind', { count: behindCount })}</span>
