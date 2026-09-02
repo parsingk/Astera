@@ -1,4 +1,5 @@
-import type { Account } from '../../../core/types'
+import type { Account, AccountUsage } from '../../../core/types'
+import { AccountUsageMeter } from './AccountUsageMeter'
 import { ProviderBadge } from './ProviderBadge'
 import { useI18n } from '../i18n/I18nProvider'
 
@@ -11,6 +12,7 @@ export function AccountRow({
   loggedIn,
   email,
   isDefault,
+  usage,
   children
 }: {
   account: Account
@@ -19,6 +21,8 @@ export function AccountRow({
   /** That provider's default account — the ⤓ source. One row per provider can carry it, so with both
    *  claude and codex registered two rows show the badge. */
   isDefault?: boolean
+  /** This account's usage, keyed by configDir upstream. undefined draws nothing (design doc §5). */
+  usage?: AccountUsage
   children?: React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
@@ -33,6 +37,10 @@ export function AccountRow({
       {/* Not translated, matching ProviderBadge's 'Claude'/'Codex' — these are short identifiers rather
           than prose, and the row is narrow */}
       {isDefault && <span className="badge">default</span>}
+      {/* Gated on loggedIn as well as on having a reading: §5 draws nothing for an account that is
+          not logged in, and `undefined` (the state before useAccountStatus has answered) draws
+          nothing either, so no meter flashes in and out on mount. */}
+      {loggedIn && <AccountUsageMeter usage={usage} />}
       <span
         className={loggedIn ? 'login-dot on' : 'login-dot'}
         title={loggedIn ? t('account.status.loggedIn') : t('account.status.notLoggedIn')}
