@@ -15,6 +15,9 @@ docs/*
 # Published deliberately: the SignPath Foundation requires the code signing policy to be reachable at
 # a public URL, and the README links to it.
 !docs/code-signing.md
+# Not a note but an input: scripts/build-release-notes.cjs reads docs/release-notes/<tag>.md out of
+# the checkout the publish job makes at the tag, so a write-up that is not committed does not exist.
+!docs/release-notes/
 
 # The source brand sheet (a 1254x1254 mockup). Icons are cropped from it and only the outputs are
 # committed — see scripts/gen-icon.ps1.
