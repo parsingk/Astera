@@ -182,6 +182,10 @@ export function WorktreePanel({
   const byRepo = new Map<string, WorktreeListItem[]>()
   for (const w of items) byRepo.set(w.repoPath, [...(byRepo.get(w.repoPath) ?? []), w])
 
+  const creatingPush = creating
+    ? pushState[creating.repoPath]?.[creating.baseRef]?.[creating.branch]
+    : undefined
+
   // Re-query only on expand — collapsing just changes the display state and needs no refresh
   const toggleOpen = (): void => {
     setOpen((v) => {
@@ -369,7 +373,9 @@ export function WorktreePanel({
         <CreatePrDialog
           worktree={creating}
           base={creating.baseRef}
-          needsPush={!pushState[creating.repoPath]?.[creating.baseRef]?.[creating.branch]?.hasUpstream}
+          // A `gone` upstream — configured once, then deleted on the remote — is not on the
+          // remote. Treating it as pushed skips the push and hands the person a raw gh failure.
+          needsPush={!creatingPush?.hasUpstream || creatingPush.upstreamGone}
           onCancel={() => setCreating(null)}
           onDone={() => {
             setCreating(null)
