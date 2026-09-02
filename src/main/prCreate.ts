@@ -75,7 +75,7 @@ export async function createPullRequest(
   // from every other failure, so it gets its own kind rather than hiding in 'other'.
   const kind: PrCreateFailureKind = /already exists/i.test(created.stderr)
     ? 'exists'
-    : classifyGhFailure(created.stderr)
+    : classifyGhFailure(created.stderr, created.spawnError)
   return { ok: false, stage: 'create', kind, detail: created.stderr, pushed: req.needsPush }
 }
 

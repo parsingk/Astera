@@ -91,7 +91,7 @@ describe('createPullRequest', () => {
       }),
       normalizeBase: async (_r, b) => b
     })
-    expect(r).toMatchObject({ ok: false, stage: 'create', kind: 'exists' })
+    expect(r).toMatchObject({ ok: false, stage: 'create', kind: 'exists', pushed: false })
   })
 
   // The union mirrors GhFailureKind; a bucket the classifier knows must not be flattened into
@@ -103,6 +103,22 @@ describe('createPullRequest', () => {
       normalizeBase: async (_r, b) => b
     })
     expect(r).toMatchObject({ ok: false, stage: 'create', kind: 'no-remote' })
+  })
+
+  // 'truncated' comes only from spawnError — a maxBuffer overflow leaves stderr empty, which is
+  // why classifyGhFailure takes two arguments. Dropping the second makes the member unreachable.
+  it('passes spawnError through, so a truncated read is not misread as unclassified', async () => {
+    const r = await createPullRequest(req(), {
+      runGit: async () => okGit,
+      runGh: async () => ({
+        ok: false,
+        stdout: '',
+        stderr: '',
+        spawnError: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+      }),
+      normalizeBase: async (_r, b) => b
+    })
+    expect(r).toMatchObject({ ok: false, stage: 'create', kind: 'truncated' })
   })
 
   it('passes the normalised base, and --draft only when asked', async () => {
