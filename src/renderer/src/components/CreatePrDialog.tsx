@@ -123,8 +123,8 @@ export function CreatePrDialog({
             ariaLabel={t('pr.create.base')}
           />
         </div>
-        <label className="settings-row">
-          <span>{t('pr.create.prTitle')}</span>
+        <div className="field">
+          <label>{t('pr.create.prTitle')}</label>
           <input
             type="text"
             value={title}
@@ -133,9 +133,9 @@ export function CreatePrDialog({
               setTitle(e.target.value)
             }}
           />
-        </label>
-        <label className="settings-row">
-          <span>{t('pr.create.body')}</span>
+        </div>
+        <div className="field">
+          <label>{t('pr.create.body')}</label>
           <textarea
             rows={6}
             value={body}
@@ -144,20 +144,20 @@ export function CreatePrDialog({
               setBody(e.target.value)
             }}
           />
-        </label>
-        <label className="settings-row">
-          <span>{t('pr.create.draft')}</span>
+        </div>
+        <label className="row check-small">
           <input type="checkbox" checked={draft} onChange={(e) => setDraft(e.target.checked)} />
+          {t('pr.create.draft')}
         </label>
-        {willPush && <span className="settings-hint">{t('pr.create.willPush')}</span>}
+        {willPush && <span className="modal-hint">{t('pr.create.willPush')}</span>}
         {dirtyCount > 0 && (
-          <span className="settings-hint">{t('pr.create.dirty', { count: dirtyCount })}</span>
+          <span className="modal-hint">{t('pr.create.dirty', { count: dirtyCount })}</span>
         )}
         {commitCount > 0 && (
-          <span className="settings-hint">{t('pr.create.commits', { count: commitCount })}</span>
+          <span className="modal-hint">{t('pr.create.commits', { count: commitCount })}</span>
         )}
         {behindCount !== null && behindCount > 0 && (
-          <span className="settings-hint">{t('pr.create.behind', { count: behindCount })}</span>
+          <span className="modal-hint">{t('pr.create.behind', { count: behindCount })}</span>
         )}
         {failure && (
           <div className="pr-create-failure">
