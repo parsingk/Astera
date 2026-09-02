@@ -23,7 +23,7 @@ export function parsePushState(stdout: string): Record<string, BranchPushState> 
   for (const line of stdout.split('\n')) {
     if (line.trim() === '') continue
     const parts = line.split('|')
-    if (parts.length < 4) continue // not our format — skip, do not guess
+    if (parts.length !== 4) continue // not our format — skip, do not guess
     const [name, aheadBehind, upstream, track] = parts
     if (name === '') continue
     // "3 0" when the base resolved, empty when it did not. Two numbers or nothing.

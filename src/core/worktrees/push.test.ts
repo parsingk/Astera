@@ -39,6 +39,13 @@ describe('parsePushState', () => {
     expect(Object.keys(got).sort()).toEqual(['a', 'b'])
   })
 
+  // `|` is legal in a git ref name, so a pipe-bearing branch produces more than four fields.
+  // Admitting it would silently shift every field one place along — worse than skipping it.
+  it('skips a line with too many fields, not just too few', () => {
+    const got = parsePushState(['feat|x|1 0|origin/feat|x|', 'ok|1 0||'].join('\n'))
+    expect(Object.keys(got)).toEqual(['ok'])
+  })
+
   it('empty output is an empty map, not a throw', () => {
     expect(parsePushState('')).toEqual({})
   })
