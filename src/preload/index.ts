@@ -82,7 +82,12 @@ const api = {
     remove: invoke('worktrees.remove'),
     isGitRepo: invoke('worktrees.isGitRepo'),
     getRoot: invoke('worktrees.getRoot'),
-    setRoot: invoke('worktrees.setRoot')
+    setRoot: invoke('worktrees.setRoot'),
+    pushState: invoke('worktrees.pushState')
+  },
+  pr: {
+    draftFor: invoke('pr.draftFor'),
+    create: invoke('pr.create')
   },
   github: {
     status: invoke('github.status'),

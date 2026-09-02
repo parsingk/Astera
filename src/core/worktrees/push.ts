@@ -1,17 +1,6 @@
 import { git, gitVersionAtLeast, remoteExists } from './git'
 import type { GitResult } from './git'
-
-/** How a branch sits against its base and its upstream. */
-export interface BranchPushState {
-  /** Commits on this branch that the base does not have. **null means unknown** — the base ref
-   *  could not be resolved — and must never be treated as 0. A branch with work on it would
-   *  otherwise render as having nothing to push. */
-  ahead: number | null
-  behind: number | null
-  hasUpstream: boolean
-  /** The upstream is configured but no longer exists on the remote (git prints `gone`). */
-  upstreamGone: boolean
-}
+import type { BranchPushState } from '../types'
 
 /** The --format argument, with `%(ahead-behind:<base>)` left for the caller to fill in. Exported so
  *  the reader and the tests read the same contract; `<base>` is substituted, not concatenated by

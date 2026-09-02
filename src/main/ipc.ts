@@ -94,7 +94,15 @@ import { goneWorktreeProjects } from '../core/worktrees/hiddenHistory'
 import { deleteProjectHistory } from './historyDeletion'
 import { removeWorktree } from '../core/worktrees/remove'
 import { listWithStatus } from '../core/worktrees/list'
-import { git, repoRoot, gitDir, gitVersionAtLeast, listGitWorktrees } from '../core/worktrees/git'
+import {
+  git,
+  repoRoot,
+  gitDir,
+  gitVersionAtLeast,
+  listGitWorktrees,
+  isCleanWorktree
+} from '../core/worktrees/git'
+import { readPushState } from '../core/worktrees/push'
 import { t, isLang, type MessageKey } from '../core/i18n'
 import { isThemeId } from '../core/theme/themes'
 import type { LangPreference } from '../core/i18n'
@@ -105,6 +113,8 @@ import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
 import { loadRunConfigs, prepareRun } from './run/prepare'
 import { createGithubPrs } from './githubPrs'
+import { createPullRequest, readCommits } from './prCreate'
+import { fillFromCommits } from '../core/github/fill'
 
 /** startOrchestration 이 배선에게 돌려주는 손잡이. index.ts 가 이것을 들고 있는다.
  *  **stop 은 동기다** — will-quit 에서 불리므로 비동기 정리는 프로세스가 끝나기 전에 완료될 보장이
@@ -2882,6 +2892,28 @@ export function registerIpc(
   ipcMain.handle('worktrees.isGitRepo', (_e, dir: string) => repoRoot(dir))
   ipcMain.handle('worktrees.getRoot', () => core.worktrees.getRoot())
   ipcMain.handle('worktrees.setRoot', (_e, root: string | null) => core.worktrees.setRoot(root))
+  ipcMain.handle('worktrees.pushState', (_e, repoPath: string, bases: string[]) =>
+    readPushState(repoPath, Array.isArray(bases) ? bases : [])
+  )
+  // Opening the dialog reads the branch, not the network: the commits and the dirty count are
+  // both local git. Nothing here touches gh.
+  ipcMain.handle(
+    'pr.draftFor',
+    async (_e, opts: { worktreePath: string; branch: string; base: string }) => {
+      const commits = await readCommits(opts.worktreePath, opts.base)
+      const { title, body } = fillFromCommits(opts.branch, commits)
+      let dirtyCount = 0
+      try {
+        dirtyCount = (await isCleanWorktree(opts.worktreePath)).changedCount
+      } catch {
+        dirtyCount = 0 // a status failure must not stop the dialog opening
+      }
+      return { title, body, commitCount: commits.length, dirtyCount }
+    }
+  )
+  ipcMain.handle('pr.create', (_e, req: Parameters<typeof createPullRequest>[0]) =>
+    createPullRequest(req)
+  )
 
   // PR snapshots for the worktree panel (design doc §4). Created here because it needs `send`;
   // start() probes gh once and announces the result — it fetches nothing until subscribed.
