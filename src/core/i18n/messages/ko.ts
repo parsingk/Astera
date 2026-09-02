@@ -147,7 +147,7 @@ export const ko = {
   'pr.create.submit': 'PR 만들기',
   'pr.create.submitWithPush': '푸시하고 PR 만들기',
   'pr.create.submitting': '만드는 중…',
-  'pr.create.pushFailed': '푸시가 거절되었습니다. 아무것도 바뀌지 않았습니다.',
+  'pr.create.pushFailed': '푸시에 실패했습니다. 아무것도 바뀌지 않았습니다.',
   'pr.create.createFailed': 'PR을 만들지 못했습니다.',
   'pr.create.createFailedPushed': '브랜치는 올라갔고 PR만 실패했습니다. 다시 시도하면 푸시는 건너뜁니다.',
   'pr.create.exists': '이 브랜치의 PR이 이미 있습니다.',

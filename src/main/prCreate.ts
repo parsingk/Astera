@@ -1,7 +1,7 @@
 import { classifyGhFailure, gh, type GhResult } from '../core/github/gh'
 import { git, type GitResult } from '../core/worktrees/git'
 import { normalizeBaseForGh } from '../core/worktrees/push'
-import { fillFromCommits, type CommitSummary } from '../core/github/fill'
+import type { CommitSummary } from '../core/github/fill'
 
 export interface PrCreateRequest {
   worktreePath: string
@@ -42,6 +42,11 @@ export type PrCreateResult =
       pushed: boolean
     }
 
+/** `git push` is the one git call this function makes, and git()'s 30s default is far too short for
+ *  a large branch over a slow link — the kill would come back as a push failure. Same figure and
+ *  same reason as WORKTREE_ADD_TIMEOUT_MS in core/worktrees/create.ts. */
+const PUSH_TIMEOUT_MS = 180_000
+
 export interface PrCreateDeps {
   runGit?: (args: string[], cwd: string) => Promise<GitResult>
   runGh?: (args: string[], cwd: string) => Promise<GhResult>
@@ -54,7 +59,8 @@ export async function createPullRequest(
   req: PrCreateRequest,
   deps: PrCreateDeps = {}
 ): Promise<PrCreateResult> {
-  const runGit = deps.runGit ?? ((a: string[], cwd: string) => git(a, { cwd }))
+  const runGit =
+    deps.runGit ?? ((a: string[], cwd: string) => git(a, { cwd, timeoutMs: PUSH_TIMEOUT_MS }))
   const runGh = deps.runGh ?? ((a: string[], cwd: string) => gh(a, { cwd }))
   const normalize = deps.normalizeBase ?? normalizeBaseForGh
 
@@ -100,5 +106,3 @@ export async function readCommits(
       return { subject: subject.trim(), body: body.trim() }
     })
 }
-
-export { fillFromCommits }

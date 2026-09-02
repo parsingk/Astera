@@ -137,7 +137,7 @@ export const en: Record<keyof typeof ko, string> = {
   'pr.create.submit': 'Create pull request',
   'pr.create.submitWithPush': 'Push & create pull request',
   'pr.create.submitting': 'Creating…',
-  'pr.create.pushFailed': 'The push was rejected. Nothing changed.',
+  'pr.create.pushFailed': 'The push failed. Nothing was changed.',
   'pr.create.createFailed': 'Could not create the pull request.',
   'pr.create.createFailedPushed': 'The branch is on the remote; only the pull request failed. Retrying will skip the push.',
   'pr.create.exists': 'A pull request for this branch already exists.',
