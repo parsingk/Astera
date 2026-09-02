@@ -595,6 +595,43 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .pr-badge .pr-checks.pending { border: 1.5px solid var(--warn); }
 .pr-badge .pr-checks.failing { background: var(--danger); }
 
+/* Unpushed commits, in the same slot the PR badge uses (rowSlot decides which). Quiet at rest so
+   the row reads as a row, and only on hover does it announce that it is the way to open a pull
+   request — Orca's "the primary action shifts with state", at the size a sidebar row allows. */
+.push-badge { flex: none; background: none; border: none; padding: 0 3px; font-family: var(--mono); font-size: 10px; color: var(--text-faint); cursor: pointer; border-radius: var(--radius-sm); }
+.push-badge:hover { color: var(--accent); background: var(--elevated); }
+.push-badge:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+/* Disabled — a removal is holding the panel's git lock, or gh is not connected. The badge stays:
+   unpushed commits are a fact that does not depend on gh, and hiding it would make a disconnect
+   look like the work vanished. But it stops offering itself. Chromium still matches :hover on a
+   disabled button, so without this it would light up in the accent and claim to be pressable. */
+.push-badge:disabled { cursor: default; }
+.push-badge:disabled:hover { color: var(--text-faint); background: none; }
+
+/* The create-PR dialog. Sized like .modal.new-session, which it is built from. */
+/* position:relative (like .modal.new-session) so the busy .loading-overlay covers this modal, not the viewport */
+/* Wider than the 460px default: this dialog carries a title line and a six-row body, and a PR
+   description is prose that reads badly in a narrow column. No max-height/scroll, following
+   .modal.new-session — both hold a loading overlay, and an overlay over a scrolling box is its
+   own problem. position: relative is what that overlay is anchored to. */
+.modal.create-pr { width: 640px; position: relative; }
+.modal.create-pr .pr-base-row { display: flex; align-items: center; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line-soft); }
+.modal.create-pr .pr-base-row .mono { font-family: var(--mono); font-size: 11.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* label.check-small declares inline-flex so it sits in the flow at its own width, but .modal is a
+   flex column with the default align-items: stretch, which widens it to the whole dialog — and a
+   label toggles its control wherever it is clicked, so the empty space beside the words toggles
+   the draft box. align-self restores the width the class already asked for. The same is true of
+   every check-small in every modal; fixing it there is its own change, not this feature's. */
+.modal.create-pr label.check-small { align-self: flex-start; }
+/* The palette, width and resize now come from `.field textarea`, which this dialog's fields sit in
+   like every other modal's. Only the two things that differ stay here: a PR body is prose, not
+   code, so it keeps the UI face rather than .field's mono, and it gets a little more side padding. */
+.modal.create-pr textarea { padding: 6px 8px; font-family: inherit; }
+/* Failure stays in the dialog rather than becoming a toast — it answers a button just pressed. */
+.pr-create-failure { border: 1px solid var(--danger); border-radius: var(--radius); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.pr-create-failure p { margin: 0; font-size: 12px; color: var(--text); }
+.pr-create-detail { margin: 0; max-height: 120px; overflow: auto; font-family: var(--mono); font-size: 10.5px; color: var(--text-dim); white-space: pre-wrap; }
+
 /* ---------- tabs ---------- */
 .tabs { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; }
 /* 이 padding 은 죽은 값이다 — WorkbenchTabs 는 .pane-tabbar 안에서만 렌더링되고, 거기서는

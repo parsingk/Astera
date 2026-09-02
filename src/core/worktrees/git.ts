@@ -83,8 +83,10 @@ export async function toFullRef(repo: string, baseRef: string): Promise<string |
   return null
 }
 
-/** Whether that name is a configured remote. `git remote` lists one per line. */
-async function remoteExists(repo: string, name: string): Promise<boolean> {
+/** Whether that name is a configured remote. `git remote` lists one per line.
+ *  Exported because the PR base normaliser needs the same rule: remote-ness is decided by the
+ *  remote list, never by the name's shape. */
+export async function remoteExists(repo: string, name: string): Promise<boolean> {
   const r = await git(['remote'], { cwd: repo })
   if (!r.ok) return false
   return r.stdout.split('\n').some((line) => line.trim() === name)
