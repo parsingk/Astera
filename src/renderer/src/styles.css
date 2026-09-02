@@ -166,6 +166,17 @@
   --md-text: #d0d0d6;
   --md-code-bg: #23232a;
   --md-line: #000000;
+  /* Pull request state. **Deliberately outside the theme pipeline** — apply.ts must never
+     override these. Two reasons. (1) This is GitHub's vocabulary, not this app's palette: a
+     person reads these four colours the same way on github.com, and re-tinting them per theme
+     would break a recognition they already have. (2) Merged used --accent before, which is this
+     app's active/focus colour — a merged PR read as *selected*, and in Sirius --accent is very
+     nearly white. Purple has no other use here, so merged cannot collide with anything.
+     Colour is never the only carrier: PrBadge draws a distinct glyph per state as well. */
+  --pr-open: #3fb950;
+  --pr-merged: #a371f7;
+  --pr-closed: #f85149;
+  --pr-draft: #8b949e;
   --ok: #79c98f; /* logged in */
   --ok-bg: #14301f;
   --status-bg: #0e6478; /* bottom status bar */
@@ -522,6 +533,13 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 
 /* ---------- worktree panel ---------- */
 .worktree-panel { border-top: 1px solid var(--line); }
+/* The shared .panel-header stacks its title and its actions, which is right for history and the
+   explorer — their actions carry a full-width account filter and a path row. This panel's only
+   action is one 28x28 icon button, so the column spent a whole row on it and the refresh control
+   read as having dropped below the heading. Put it on the title's row instead, scoped here so the
+   other three panels keep the stack. */
+.worktree-panel .panel-header { flex-direction: row; align-items: center; }
+.worktree-panel .panel-actions { margin-left: auto; }
 /* Reuses the look of .panel-header h2 as a collapse/expand button */
 /* 캐럿이 아이콘이 된 뒤로 정렬이 필요하다 — 인라인 svg 는 baseline 에 앉아 대문자 글자보다 내려간다. */
 .panel-toggle { background: none; border: none; padding: 0; font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
@@ -556,6 +574,63 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    This replaces a min-height of calc(1.333em + 4px): that pinned the button to the line box the old ✕
    *text* glyph made (≈21px), which the drawn icons no longer produce — left in place it jumped the row 5px. */
 .worktree-actions .ghost.removing .loading-spinner { width: 12px; height: 12px; }
+
+/* PR badge on a worktree row — read-only GitHub state (design doc §6). Colors reuse existing
+   tokens on purpose, no new palette: open=--ok, merged=--accent, closed=--danger,
+   draft=--text-faint. Passing checks draw nothing — only pending/failing earn a dot. */
+.pr-badge { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; background: none; border: none; padding: 0 2px; font-family: var(--mono); font-size: 10px; cursor: pointer; }
+.pr-badge.open { color: var(--pr-open); }
+.pr-badge.merged { color: var(--pr-merged); }
+.pr-badge.closed { color: var(--pr-closed); }
+.pr-badge.draft { color: var(--pr-draft); }
+/* The state glyph carries the meaning on its own — green and red are the one pair a
+   red-green colour blindness cannot separate, and open/closed were exactly that pair. */
+.pr-badge .pr-glyph { flex: none; }
+/* Dimmed, not hidden — the rate-limit breaker keeps the last known state on screen (§4) */
+.pr-badge.stale { opacity: 0.45; }
+/* Checks. **Shape, not only colour**: pending is a hollow ring and failing is filled, so the
+   amber/red pair does not have to be told apart by hue either. Passing still draws nothing —
+   quiet by default is the design; the words are in the title. */
+.pr-badge .pr-checks { width: 6px; height: 6px; border-radius: 50%; box-sizing: border-box; }
+.pr-badge .pr-checks.pending { border: 1.5px solid var(--warn); }
+.pr-badge .pr-checks.failing { background: var(--danger); }
+
+/* Unpushed commits, in the same slot the PR badge uses (rowSlot decides which). Quiet at rest so
+   the row reads as a row, and only on hover does it announce that it is the way to open a pull
+   request — Orca's "the primary action shifts with state", at the size a sidebar row allows. */
+.push-badge { flex: none; background: none; border: none; padding: 0 3px; font-family: var(--mono); font-size: 10px; color: var(--text-faint); cursor: pointer; border-radius: var(--radius-sm); }
+.push-badge:hover { color: var(--accent); background: var(--elevated); }
+.push-badge:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+/* Disabled — a removal is holding the panel's git lock, or gh is not connected. The badge stays:
+   unpushed commits are a fact that does not depend on gh, and hiding it would make a disconnect
+   look like the work vanished. But it stops offering itself. Chromium still matches :hover on a
+   disabled button, so without this it would light up in the accent and claim to be pressable. */
+.push-badge:disabled { cursor: default; }
+.push-badge:disabled:hover { color: var(--text-faint); background: none; }
+
+/* The create-PR dialog. Sized like .modal.new-session, which it is built from. */
+/* position:relative (like .modal.new-session) so the busy .loading-overlay covers this modal, not the viewport */
+/* Wider than the 460px default: this dialog carries a title line and a six-row body, and a PR
+   description is prose that reads badly in a narrow column. No max-height/scroll, following
+   .modal.new-session — both hold a loading overlay, and an overlay over a scrolling box is its
+   own problem. position: relative is what that overlay is anchored to. */
+.modal.create-pr { width: 640px; position: relative; }
+.modal.create-pr .pr-base-row { display: flex; align-items: center; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line-soft); }
+.modal.create-pr .pr-base-row .mono { font-family: var(--mono); font-size: 11.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* label.check-small declares inline-flex so it sits in the flow at its own width, but .modal is a
+   flex column with the default align-items: stretch, which widens it to the whole dialog — and a
+   label toggles its control wherever it is clicked, so the empty space beside the words toggles
+   the draft box. align-self restores the width the class already asked for. The same is true of
+   every check-small in every modal; fixing it there is its own change, not this feature's. */
+.modal.create-pr label.check-small { align-self: flex-start; }
+/* The palette, width and resize now come from `.field textarea`, which this dialog's fields sit in
+   like every other modal's. Only the two things that differ stay here: a PR body is prose, not
+   code, so it keeps the UI face rather than .field's mono, and it gets a little more side padding. */
+.modal.create-pr textarea { padding: 6px 8px; font-family: inherit; }
+/* Failure stays in the dialog rather than becoming a toast — it answers a button just pressed. */
+.pr-create-failure { border: 1px solid var(--danger); border-radius: var(--radius); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.pr-create-failure p { margin: 0; font-size: 12px; color: var(--text); }
+.pr-create-detail { margin: 0; max-height: 120px; overflow: auto; font-family: var(--mono); font-size: 10.5px; color: var(--text-dim); white-space: pre-wrap; }
 
 /* ---------- tabs ---------- */
 .tabs { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; }
@@ -1186,9 +1261,21 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .entry-title { flex: 1; min-width: 0; font-size: 11.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .entry-sub { font-size: 9.5px; font-family: var(--mono); color: var(--text-faint); flex-shrink: 0; }
 .history-sentinel { padding: 8px 12px; font-size: 10.5px; color: var(--text-faint); text-align: center; }
-/* The first project page loading — the shared .loading-spinner, centred on its own row. Text-align does
-   not centre it (the spinner is a block-sized element, not an inline glyph), hence the flex row. */
+/* The first page of a list still loading — the dots on their own row, centred. Text-align does not
+   centre them (the indicator is a flex box, not an inline glyph), hence the flex row. */
 .history-loading { display: flex; justify-content: center; padding: 14px 12px; }
+/* Three dots taking turns, for the two lists in the history panel (HistoryBrowser's LoadingDots).
+   **Not the shared .loading-spinner**: a 14px ring is what the app puts in an overlay or on a button,
+   and what is missing here is a row — a short line of dots sits in the gap the list is about to fill.
+   **A new keyframe is right here** even though cm-spin exists: this is not a rotation, so there is
+   nothing to share with it.
+   **No reduced-motion opt-out.** Same policy as the app's other "일하는 중" motion — the reasoning,
+   and the measurement behind it, is at .job-arc below; core/orchestration/spinnerCss.test.ts holds it. */
+.loading-dots { display: inline-flex; align-items: center; gap: 4px; height: 14px; }
+.loading-dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); animation: cm-bounce 1.1s ease-in-out infinite; }
+.loading-dots i:nth-child(2) { animation-delay: .15s; }
+.loading-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes cm-bounce { 0%, 70%, 100% { transform: none; opacity: .35; } 35% { transform: translateY(-5px); opacity: 1; } }
 /* the per-project list */
 .project-group { border-bottom: 1px solid var(--line-soft); }
 /* 그룹 헤더라 .worktree-row/.session-row 와 같은 종류의 행이 아니다 — --row-pad-y 를 걸지 않은 게 빠뜨린 게 아니다 */
@@ -1204,6 +1291,10 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .session-row .entry-title { color: var(--text-dim); }
 .session-sublist .history-sentinel { padding-left: 10px; text-align: left; }
 .session-sublist .empty { padding-left: 10px; }
+/* A project's sessions loading — centred like the project list's, only on a shorter row: the session
+   rows above and below it are denser than a project row, so the 14px padding of the outer list would
+   open a gap the sublist has nowhere else. Alignment is the base rule's; only the padding differs. */
+.session-sublist .history-loading { padding: 8px 12px; }
 .modal.preview { width: 640px; max-height: 80vh; }
 .modal.detect { width: 520px; max-height: 80vh; }
 .detect-list { list-style: none; max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }

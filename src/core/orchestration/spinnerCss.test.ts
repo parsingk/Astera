@@ -71,4 +71,15 @@ describe('"일하는 중" 회전 ↔ CSS', () => {
       expect(b).not.toMatch(/\.loading-spinner/)
     }
   })
+
+  // 히스토리 패널의 점 셋(.loading-dots)은 회전이 아니지만 같은 것을 말한다 — 목록의 첫 페이지가
+  // 오고 있다는 신호이고, 멈추면 그 자리는 그냥 빈 줄이 된다(빈 목록과 구별되지 않는다).
+  // 위 셋과 정책을 갈라 놓을 이유가 없으니 같은 계약 안에 둔다.
+  it('.loading-dots 의 튐도 reduced-motion 으로 끄지 않는다', () => {
+    expect(css).toMatch(/\.loading-dots i\s*\{[^}]*animation:\s*cm-bounce/)
+    for (const b of reducedMotionBlocks()) {
+      expect(b).not.toMatch(/cm-bounce/)
+      expect(b).not.toMatch(/\.loading-dots/)
+    }
+  })
 })

@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { WorktreeListItem } from '../../../core/types'
+import type { BranchPushState, WorktreeListItem } from '../../../core/types'
 import type { MessageKey } from '../../../core/i18n'
+import type { RepoPrSnapshot } from '../../../core/github/types'
 import { confirmModal } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import { dirtyCount, isOrphanUnverifiable, worktreeErrorMessage } from '../lib/worktreeErrors'
 import { subscribeCreated } from '../lib/worktreeBus'
 import { useI18n } from '../i18n/I18nProvider'
 import { PlayIcon, TrashIcon } from './JobIcons'
+import { ContextMenu, type MenuItem } from './ContextMenu'
+import { CreatePrDialog } from './CreatePrDialog'
+import { PrBadge } from './PrBadge'
+import { PushBadge } from './PushBadge'
+import { rowSlot } from './rowSlot'
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 
 /** 상태 라벨. **'폴더 없음' 은 없다** — 폴더가 사라진 항목은 listWithStatus 가 목록을 만들면서
@@ -26,12 +32,59 @@ export function WorktreePanel({
   const { t } = useI18n()
   const [items, setItems] = useState<WorktreeListItem[]>([])
   const [open, setOpen] = useState(true)
+  const [prs, setPrs] = useState<Record<string, RepoPrSnapshot>>({})
+  // PR link menu — one at a time, held here rather than per row (the FileExplorer/HistoryBrowser shape)
+  const [prMenu, setPrMenu] = useState<{ x: number; y: number; url: string } | null>(null)
+  const [pushState, setPushState] = useState<
+    Record<string, Record<string, Record<string, BranchPushState>>>
+  >({})
+  // The row whose create dialog is open, if any
+  const [creating, setCreating] = useState<WorktreeListItem | null>(null)
+  // The row menu — one at a time, held here rather than per row (the HistoryBrowser shape)
+  const [rowMenu, setRowMenu] = useState<{ x: number; y: number; w: WorktreeListItem } | null>(null)
   const [removingId, setRemovingId] = useState<string | null>(null) // the worktree whose removal is in progress
+  // Optimistic, so the panel does not flash a disabled affordance before the cached probe answers.
+  const [ghConnected, setGhConnected] = useState(true)
   const busy = removingId !== null
+
+  // PR snapshots: pull once, then ride the push events. Subscribed only while this panel is
+  // mounted AND expanded — the zero-subscriber signal is what lets main stop polling (§4).
+  useEffect(() => {
+    if (!open) return
+    window.api.github.subscribe()
+    void window.api.github.prs().then(setPrs)
+    // status() answers from the cached probe and never runs gh, so asking here costs nothing
+    void window.api.github.status().then((p) => setGhConnected(p.kind === 'connected'))
+    const offPrs = window.api.on('github:prs-updated', (p) =>
+      setPrs((prev) => ({ ...prev, [p.repoRoot]: p.snapshot }))
+    )
+    const offStatus = window.api.on('github:status', (probe) => {
+      // Badges disappear quietly on disconnect; the settings card explains why (§7)
+      setGhConnected(probe.kind === 'connected')
+      if (probe.kind !== 'connected') setPrs({})
+    })
+    return () => {
+      offPrs()
+      offStatus()
+      window.api.github.unsubscribe()
+    }
+  }, [open])
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
-      setItems(await window.api.worktrees.list())
+      const list = await window.api.worktrees.list()
+      setItems(list)
+      // The same triggers that re-query worktrees re-query their PRs: mount, expand, manual ⟳,
+      // and the created event. This is the whole manual path when polling is off.
+      void window.api.github.refresh({ force: true })
+      // Push state is local git, so it rides the same triggers as the list itself rather than a
+      // timer: mount, expand, manual refresh, and the worktree-created event.
+      const byRepo = new Map<string, Set<string>>()
+      for (const w of list) byRepo.set(w.repoPath, (byRepo.get(w.repoPath) ?? new Set()).add(w.baseRef))
+      const next: Record<string, Record<string, Record<string, BranchPushState>>> = {}
+      for (const [repo, bases] of byRepo)
+        next[repo] = await window.api.worktrees.pushState(repo, [...bases])
+      setPushState(next)
     } catch (err) {
       // Swallowing the failure quietly makes the stale list on screen look current — a refresh failure is reported
       const m = worktreeErrorMessage(err instanceof Error ? err.message : String(err))
@@ -129,6 +182,10 @@ export function WorktreePanel({
   const byRepo = new Map<string, WorktreeListItem[]>()
   for (const w of items) byRepo.set(w.repoPath, [...(byRepo.get(w.repoPath) ?? []), w])
 
+  const creatingPush = creating
+    ? pushState[creating.repoPath]?.[creating.baseRef]?.[creating.branch]
+    : undefined
+
   // Re-query only on expand — collapsing just changes the display state and needs no refresh
   const toggleOpen = (): void => {
     setOpen((v) => {
@@ -160,7 +217,15 @@ export function WorktreePanel({
                 whole list so the rail runs continuously instead of breaking at every row */}
             <div className="worktree-list">
               {list.map((w) => (
-                <div key={w.id} className="worktree-row" title={`${w.path}\n${w.branch}`}>
+                <div
+                  key={w.id}
+                  className="worktree-row"
+                  title={`${w.path}\n${w.branch}`}
+                  onContextMenu={(ev) => {
+                    ev.preventDefault() // Electron's own menu would cover ours
+                    setRowMenu({ x: ev.clientX, y: ev.clientY, w })
+                  }}
+                >
                   <span className="worktree-name">
                     {w.name}
                     {/* While removing, the progress state wins — there is no reason to report 'Git registration lost' on a row that is being deleted */}
@@ -172,6 +237,29 @@ export function WorktreePanel({
                       )
                     )}
                   </span>
+                  {(() => {
+                    const snap = prs[w.repoPath]
+                    const slot = rowSlot(snap?.byBranch[w.branch], pushState[w.repoPath]?.[w.baseRef]?.[w.branch])
+                    if (slot === null) return null
+                    if (slot.kind === 'pr')
+                      return (
+                        <PrBadge
+                          pr={slot.pr}
+                          stale={snap!.stale}
+                          onOpenMenu={(e) =>
+                            setPrMenu({ x: e.clientX, y: e.clientY, url: slot.pr.url })
+                          }
+                        />
+                      )
+                    return (
+                      <PushBadge
+                        ahead={slot.ahead}
+                        base={w.baseRef}
+                        disabled={busy || !ghConnected}
+                        onCreate={() => setCreating(w)}
+                      />
+                    )
+                  })()}
                   {/* Drawn icons rather than text glyphs, the same as the history session rows this list
                       is laid out to match: both hold 12px marks in a .ghost button, so the two lists'
                       rows come out the same height. .icon-btn (28×28, 16px glyph) is for the panel
@@ -218,6 +306,86 @@ export function WorktreePanel({
             </div>
           </div>
         ))}
+      {prMenu && (
+        <ContextMenu
+          x={prMenu.x}
+          y={prMenu.y}
+          onClose={() => setPrMenu(null)}
+          items={[
+            {
+              label: t('github.badge.openInBrowser'),
+              onSelect: () => void window.api.system.openExternal(prMenu.url)
+            },
+            {
+              label: t('github.badge.copyLink'),
+              onSelect: () => {
+                window.api.clipboard.writeText(prMenu.url)
+                toast.success(t('github.badge.linkCopied'))
+              }
+            }
+          ]}
+        />
+      )}
+      {rowMenu &&
+        (() => {
+          const w = rowMenu.w
+          const pr = prs[w.repoPath]?.byBranch[w.branch]
+          const ahead = pushState[w.repoPath]?.[w.baseRef]?.[w.branch]?.ahead
+          const items: MenuItem[] = pr
+            ? [
+                {
+                  label: t('github.badge.openInBrowser'),
+                  onSelect: () => void window.api.system.openExternal(pr.url)
+                },
+                {
+                  label: t('github.badge.copyLink'),
+                  onSelect: () => {
+                    window.api.clipboard.writeText(pr.url)
+                    toast.success(t('github.badge.linkCopied'))
+                  }
+                }
+              ]
+            : []
+          // A closed or merged PR keeps its badge (the slot shows the further-along fact), but the
+          // branch can be proposed again — without this the row would offer only Open/Copy forever.
+          // A merged branch is usually ahead === 0, so the disabled rule below keeps it quiet.
+          if (!pr || pr.state !== 'open') {
+            if (items.length > 0) items.push('separator')
+            // MenuItem has no hint field, so a disabled item states its reason in its own label
+            // (spec §5). Order matters: nothing to merge is the more specific answer.
+            items.push({
+              label:
+                ahead === 0
+                  ? t('worktree.push.noCommits')
+                  : !ghConnected
+                    ? t('worktree.push.ghDisconnected')
+                    : t('worktree.push.createPr'),
+              // busy needs no reason in the label — the row is visibly spinning
+              disabled: ahead === 0 || !ghConnected || busy,
+              onSelect: () => setCreating(w)
+            })
+          }
+          return (
+            <ContextMenu x={rowMenu.x} y={rowMenu.y} items={items} onClose={() => setRowMenu(null)} />
+          )
+        })()}
+      {creating && (
+        <CreatePrDialog
+          worktree={creating}
+          base={creating.baseRef}
+          // A `gone` upstream — configured once, then deleted on the remote — is not on the
+          // remote. Treating it as pushed skips the push and hands the person a raw gh failure.
+          needsPush={!creatingPush?.hasUpstream || creatingPush.upstreamGone}
+          onCancel={() => setCreating(null)}
+          onDone={() => {
+            setCreating(null)
+            // refresh() ends with github.refresh({ force: true }) itself, so this one call turns
+            // the ↑N into #N — a second explicit refresh here is absorbed by the coordinator's
+            // in-flight guard and its minimum call spacing, and buys nothing.
+            void refresh()
+          }}
+        />
+      )}
     </section>
   )
 }

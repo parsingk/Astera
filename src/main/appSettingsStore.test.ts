@@ -151,6 +151,30 @@ describe('orchestrationEnabled', () => {
   })
 })
 
+describe('githubPolling', () => {
+  it('githubPolling defaults to on', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getGithubPolling()).toBe(true)
+  })
+
+  it('only an explicit false turns githubPolling off, and it persists', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    await a.setGithubPolling(false)
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getGithubPolling()).toBe(false)
+  })
+
+  it('a corrupt file resets githubPolling to on', async () => {
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getGithubPolling()).toBe(true)
+  })
+})
+
 describe('resumeStrategy', () => {
   it('기본값은 original이다', async () => {
     const store = new AppSettingsStore(file())

@@ -33,6 +33,7 @@ import { TerminalFontSettings } from './components/TerminalFontSettings'
 import { ThemeSettings } from './components/ThemeSettings'
 import { GeneratorSettings } from './components/GeneratorSettings'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
+import { GithubSettings } from './components/GithubSettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import type {
   OpenSessionTask,
@@ -402,7 +403,15 @@ export default function App(): React.JSX.Element {
   explorerOpenRef.current = explorerOpen // the file explorer toggle
   const [showSettings, setShowSettings] = useState(false)
   const [settingsTab, setSettingsTab] = useState<
-    'general' | 'appearance' | 'accounts' | 'info' | 'shortcuts' | 'slack' | 'worktree' | 'history'
+    | 'general'
+    | 'appearance'
+    | 'accounts'
+    | 'info'
+    | 'shortcuts'
+    | 'slack'
+    | 'github'
+    | 'worktree'
+    | 'history'
   >('info') // the settings sidebar, with general and accounts added
   const [slackUrl, setSlackUrl] = useState('') // the Slack Webhook URL in the settings modal
   const [slackSaved, setSlackSaved] = useState(false)
@@ -3353,6 +3362,7 @@ export default function App(): React.JSX.Element {
                     ['info', t('settings.tab.info')],
                     ['shortcuts', t('settings.tab.shortcuts')],
                     ['slack', 'Slack'],
+                    ['github', 'GitHub'],
                     ['worktree', 'Worktree'],
                     ['history', t('settings.tab.history')]
                   ] as const
@@ -3699,6 +3709,7 @@ export default function App(): React.JSX.Element {
                     <span className="settings-hint">{t('settings.slack.setupGuide')}</span>
                   </div>
                 )}
+                {settingsTab === 'github' && <GithubSettings />}
                 {settingsTab === 'worktree' && (
                   <div className="settings-worktree">
                     <label className="settings-field-label">{t('settings.worktree.createLocation')}</label>

@@ -19,6 +19,7 @@ export const es: Catalog = {
   'settings.orchestration.hint':
     'Cuando está activada, las sesiones de agente que abre la aplicación pueden abrir sesiones de trabajador con otro proveedor. ' +
     'Un agente podrá crear sesiones con cualquiera de las cuentas de la aplicación, así que actívela solo cuando la necesite. ' +
+    'Solo funciona en un proyecto que sea un repositorio de git. ' +
     'No se aplica a las sesiones que ya están abiertas: funciona a partir de las sesiones nuevas. ' +
     'Pida a la sesión que vaya a usar como orquestador que ejecute astera help para obtener la guía de uso completa.',
   'settings.orchestration.saveFailed':
@@ -27,7 +28,8 @@ export const es: Catalog = {
   'settings.workUnit.label': 'Seguimiento de unidades de trabajo (experimental)',
   'settings.workUnit.hint':
     'Declara una tarea escribiendo /astera-task con lo que quieres hacer, y eso se convierte en una ' +
-    'fila propia hasta que termina, sin importar cuántos mensajes haga falta. No se aplica a las ' +
+    'fila propia hasta que termina, sin importar cuántos mensajes haga falta. Solo funciona en un ' +
+    'proyecto que sea un repositorio de git. No se aplica a las ' +
     'sesiones que ya están abiertas: funciona a partir de las sesiones nuevas. Solo se leen las ' +
     'conversaciones posteriores a activarlo — el historial existente nunca se lee.',
   'settings.workUnit.saveFailed': 'No se pudo guardar la configuración de seguimiento: {detail}',

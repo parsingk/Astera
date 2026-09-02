@@ -18,6 +18,8 @@ import type { RollConfig } from './rolling/types'
 export type { RollConfig } from './rolling/types'
 import type { GitState } from './git/status'
 export type { GitState } from './git/status'
+import type { GhProbe, RepoPrSnapshot } from './github/types'
+export type { GhProbe, PrChecks, PrInfo, PrState, RepoPrSnapshot, GhStatusKind } from './github/types'
 import type { ProjectUnderstanding } from './understanding/types'
 import type { Provider } from './providers/meta'
 import type { TerminalFont } from './terminal/font'
@@ -116,6 +118,21 @@ export interface BranchRef {
   remote: boolean // came from refs/remotes/
   current: boolean // the local HEAD branch
   updatedAt: string // ISO 8601 committer date, for display
+}
+
+/** How a branch sits against its base and its upstream. Declared here rather than in
+ *  worktrees/push.ts for the same reason as BranchRef above: the renderer needs the shape, and
+ *  push.ts imports git.ts, which imports node:child_process — tsconfig.web.json whitelists
+ *  node-free core files, so push.ts can never be one of them either. */
+export interface BranchPushState {
+  /** Commits on this branch that the base does not have. **null means unknown** — the base ref
+   *  could not be resolved — and must never be treated as 0. A branch with work on it would
+   *  otherwise render as having nothing to push. */
+  ahead: number | null
+  behind: number | null
+  hasUpstream: boolean
+  /** The upstream is configured but no longer exists on the remote (git prints `gone`). */
+  upstreamGone: boolean
 }
 
 export interface WorktreeRemoveResult {
@@ -504,6 +521,11 @@ export interface CoreEvents {
   'accounts:ghostsChanged': { accounts: Account[] }
   'files:changed': { path: string; kind: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir' } // watcher
   'git:changed': void // index/HEAD changes in the git dir, e.g. a commit from a session terminal — triggers a tree state refresh
+  /** One repository's PR snapshot was refreshed (or marked stale by the rate-limit breaker).
+   *  The whole snapshot rides along — the renderer replaces, never merges. */
+  'github:prs-updated': { repoRoot: string; snapshot: RepoPrSnapshot }
+  /** The gh connection probe changed (app start, re-check, or an auth failure mid-flight). */
+  'github:status': GhProbe
   'run:data': { projectPath: string; data: string } // run output
   'run:status': RunStatus // run state change (running/exited)
   'terminal:data': { id: string; data: string } // project terminal output
@@ -609,6 +631,75 @@ export interface CoreApi {
     isGitRepo(dir: string): Promise<string | null> // returns the repo root, or null
     getRoot(): Promise<string>
     setRoot(root: string | null): Promise<void>
+    /** Branch push state for one repository, one git call per distinct base, keyed base then
+     *  branch — a count only means anything paired with the base it was measured against. Empty
+     *  when git is older than 2.41 — the count is unknown, which is not a reason to withhold
+     *  Create PR. */
+    pushState(
+      repoPath: string,
+      bases: string[]
+    ): Promise<Record<string, Record<string, BranchPushState>>>
+  }
+  pr: {
+    /** Everything the create dialog needs to open: the seeded title and body, and whether the
+     *  worktree has uncommitted changes (which the dialog states but does not block on). */
+    draftFor(opts: { worktreePath: string; branch: string; base: string }): Promise<{
+      title: string
+      body: string
+      commitCount: number
+      dirtyCount: number
+      /** null is unknown — the base did not resolve — and must not be drawn as 0. */
+      behindCount: number | null
+    }>
+    /** Mirrors PrCreateRequest (src/main/prCreate.ts) field-for-field, for the same reason as the
+     *  kind union below, and with the same obligation: nothing type-checks the two declarations
+     *  against each other, since preload's invoke returns Promise<any>. */
+    create(req: {
+      worktreePath: string
+      repoPath: string
+      branch: string
+      base: string
+      title: string
+      body: string
+      draft: boolean
+      needsPush: boolean
+    }): Promise<
+      | { ok: true; url: string }
+      | {
+          ok: false
+          stage: 'push' | 'create'
+          /** Deliberately mirrors PrCreateFailureKind (src/main/prCreate.ts) member-for-member,
+           *  rather than importing it. Unlike BranchPushState above, this type's home is not just a
+           *  node-touching shape file — prCreate.ts is main-only run logic (push + gh create), so
+           *  moving the declaration to core/types.ts the way BranchRef/BranchPushState were moved
+           *  would mean relocating logic, not a shape. If prCreate.ts's union ever changes, update
+           *  this copy to match. */
+          kind:
+            | 'rejected'
+            | 'exists'
+            | 'rate-limit'
+            | 'auth'
+            | 'network'
+            | 'not-found'
+            | 'no-remote'
+            | 'truncated'
+            | 'other'
+          detail: string
+          pushed: boolean
+        }
+    >
+  }
+  github: {
+    /** The cached probe from app start or the last re-check — never runs gh itself. */
+    status(): Promise<GhProbe>
+    /** Re-runs `gh auth status` and returns (and broadcasts) the fresh result. */
+    recheck(): Promise<GhProbe>
+    /** The current per-repository snapshot cache. */
+    prs(): Promise<Record<string, RepoPrSnapshot>>
+    /** Nudges the refresh loop; force queues every repository past its interval. */
+    refresh(opts?: { force?: boolean }): Promise<void>
+    subscribe(): void
+    unsubscribe(): void
   }
   usage: {
     session(sessionId: string): Promise<SessionUsage | null> // context, 5-hour, and weekly % for an active session (claude: statusLine capture, codex: rollout tail)
@@ -659,6 +750,10 @@ export interface CoreApi {
     // nothing from before the moment it is turned on.
     getWorkUnitTrackingEnabled(): Promise<boolean>
     setWorkUnitTrackingEnabled(enabled: boolean): Promise<void>
+    // Whether the worktree PR badges poll GitHub in the background. Off leaves the cache as-is —
+    // refresh only happens on an explicit github.refresh call.
+    getGithubPolling(): Promise<boolean>
+    setGithubPolling(enabled: boolean): Promise<void>
     // Which account (and model) writes the How It Works explanations. Empty means no account has been
     // chosen, and nothing is generated — the screen says so rather than staying silently blank.
     getGenerator(): Promise<GeneratorSettings>

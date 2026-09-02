@@ -385,10 +385,11 @@ jobs:
     needs: [windows, macos, linux]
     runs-on: ubuntu-latest
     env:
-      # Hoisted here because the secrets context is NOT available in a step's if: — referencing it
-      # there makes the whole file an invalid workflow, which GitHub then fails on every push that
-      # touches it. Job-level env can read secrets, and steps can test env. Same shape as the macos
-      # job's SIGNING.
+      # Read by scripts/build-release-notes.cjs, which drops the Gatekeeper caveat from the notes
+      # once macOS builds are notarized. Job-level env is inherited by every step, and it has to live
+      # here rather than on the step because the secrets context is NOT available in a step's if: —
+      # referencing it there makes the whole file an invalid workflow. Same shape as the macos job's
+      # SIGNING.
       MAC_SIGNED: ${{ secrets.APPLE_CSC_LINK != '' && secrets.APPLE_ID != '' }}
     steps:
       # fetch-depth: 0 because the release notes are built from the commits since the previous tag —
@@ -418,7 +419,10 @@ jobs:
 
       # Notes come from scripts/build-release-notes.cjs rather than gh's --generate-notes: that flag
       # builds its list out of pull requests, and this repository commits straight to the branch, so
-      # it yielded nothing but a Full Changelog link on every release through v1.0.3.
+      # it yielded nothing but a Full Changelog link on every release through v1.0.3. The script
+      # writes the WHOLE body, install caveats included — they used to be prepended by two further
+      # steps here, which put three notices in front of the change list on every release page and
+      # needed marker guards so a publish re-run would not stack a second copy of each.
       - name: Create draft release and upload assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -428,47 +432,6 @@ jobs:
             gh release create "$tag" --draft --title "$tag" \
               --notes "$(node scripts/build-release-notes.cjs "$tag")"
           gh release upload "$tag" release-assets/* policy.json --clobber
-
-      # Same reasoning as the macOS caveat below — whoever downloads from this page has not read the
-      # README — except that neither Linux artifact starts by double-clicking what GitHub hands you.
-      # This one is unconditional: no secret ever makes it stop being true. It runs before the macOS
-      # step so that, when both apply, the Gatekeeper caveat ends up on top.
-      - name: Note how the Linux artifacts are installed
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag='${{ github.ref_name }}'
-          notice='> **Linux:** the AppImage needs the executable bit before it will run — `chmod +x` the file you downloaded. The deb installs with `sudo apt install ./<file>.deb`, which pulls its dependencies; `dpkg -i` on its own does not. The supported floor is Ubuntu 22.04 / Debian 12, and the deb declares it, so apt refuses an older system rather than installing something that cannot start.'
-          body=$(gh release view "$tag" --json body -q .body)
-          # publish re-runs whenever a build job is re-run — which is how a brownout on the pinned
-          # Linux runner is recovered — so without this the same notice stacks up on the body once
-          # per attempt. Matching on the marker rather than the whole notice keeps it working when
-          # the wording is edited.
-          if printf '%s' "$body" | grep -qF '> **Linux:**'; then
-            echo 'the Linux note is already on this release — leaving the body alone'
-            exit 0
-          fi
-          gh release edit "$tag" --notes "$(printf '%s\n\n%s' "$notice" "$body")"
-
-      # Whoever downloads the dmg from this page has not read the README, so the caveat belongs on
-      # the release itself — and it has to carry the same xattr -cr line the README gives, since this
-      # page is where someone hits the problem. It runs while the release is still a draft: a failure
-      # here leaves it unpublished rather than shipping a build whose first launch fails with no
-      # explanation attached. The step drops out on its own once the Apple secrets are configured.
-      - name: Note the un-notarized macOS build in the release
-        if: env.MAC_SIGNED != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag='${{ github.ref_name }}'
-          notice='> **The macOS build is not notarized yet.** It is ad-hoc signed, so it runs on Apple Silicon, but Gatekeeper blocks the first launch: after dragging the app to Applications, clear the quarantine flag with `xattr -cr /Applications/Astera.app`. **System Settings → Privacy & Security → Open Anyway** works too. Auto-update stays off on macOS until the build is notarized, so a new version means downloading the dmg from this page again. The Windows installer is unaffected.'
-          body=$(gh release view "$tag" --json body -q .body)
-          # Same guard as the Linux note above: a publish re-run must not stack a second copy.
-          if printf '%s' "$body" | grep -qF '> **The macOS build is not notarized yet.**'; then
-            echo 'the macOS caveat is already on this release — leaving the body alone'
-            exit 0
-          fi
-          gh release edit "$tag" --notes "$(printf '%s\n\n%s' "$notice" "$body")"
 
       - name: Publish the release
         env:

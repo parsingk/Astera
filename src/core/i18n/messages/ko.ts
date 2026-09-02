@@ -20,20 +20,21 @@ export const ko = {
   'settings.orchestration.hint':
     '켜면 앱이 띄운 에이전트 세션이 다른 벤더의 워커 세션을 띄울 수 있습니다. ' +
     '에이전트가 앱의 어느 계정으로든 세션을 만들 수 있게 되므로 필요할 때만 켜세요. ' +
-    '이미 열려 있는 세션에는 적용되지 않습니다 — 새 세션부터 동작합니다. ' +
+    'git 저장소인 프로젝트에서만 작동합니다. ' +
+    '이미 열려 있는 세션에는 적용되지 않습니다. 새 세션부터 동작합니다. ' +
     '오케스트레이터로 쓸 세션에서 astera help 를 실행하게 하면 전체 사용법을 얻습니다.',
   'settings.orchestration.saveFailed': '오케스트레이션 설정을 저장하지 못했습니다: {detail}',
   // Work Unit 추적
   'settings.workUnit.label': '작업 단위 추적 (실험)',
   'settings.workUnit.hint':
     '/astera-task 로 하려는 일을 적으면 그때부터 한 줄이 시작되고, 끝날 때까지 몇 번을 주고받든 같은 ' +
-    '줄로 남습니다. 이미 열려 있는 세션에는 적용되지 않습니다 — 새 세션부터 동작합니다. 켠 뒤의 ' +
-    '대화만 봅니다 — 이전 기록은 읽지 않습니다.',
+    '줄로 남습니다. git 저장소인 프로젝트에서만 작동합니다. 이미 열려 있는 세션에는 적용되지 ' +
+    '않습니다. 새 세션부터 동작합니다. 켠 뒤의 대화만 봅니다. 이전 기록은 읽지 않습니다.',
   'settings.workUnit.saveFailed': '작업 단위 추적 설정을 저장하지 못했습니다: {detail}',
   // 설명 생성 (How It Works)
   'settings.gen.label': '설명 생성 계정',
-  'settings.gen.hint': '작업이 끝나면 이 계정으로 기능 설명을 만듭니다. 고르지 않으면 만들지 않습니다.',
-  'settings.gen.none': '고르지 않음 — 설명을 만들지 않습니다',
+  'settings.gen.hint': '선택한 계정으로 기능 설명을 만듭니다.',
+  'settings.gen.none': '선택 안 함',
   'settings.gen.model': '모델',
   'settings.gen.modelDefault': 'CLI 기본값',
   'settings.gen.effort': '추론 강도',
@@ -103,6 +104,55 @@ export const ko = {
   // ROLL_MIXED_PROVIDER in sessions/manager.ts — a session-rolling constraint unrelated to worktrees, so it uses
   // session.* rather than worktree.*. The MESSAGES array in worktreeErrors.ts maps to this key
   'session.roll.mixedProvider': 'Claude와 Codex 계정을 섞어 롤링할 수 없습니다',
+  // ---- github ----
+  'github.settings.status': '연결 상태',
+  'github.settings.connected': '연결됨 — {account}',
+  'github.settings.connectedNoAccount': '연결됨',
+  'github.settings.notInstalled': 'GitHub CLI(gh)가 설치되어 있지 않습니다. 설치한 뒤 앱을 다시 시작하세요.',
+  'github.settings.installLink': 'GitHub CLI 설치 페이지 열기',
+  'github.settings.notAuthenticated':
+    'GitHub CLI가 로그인되어 있지 않습니다. 터미널에서 아래 명령을 실행한 뒤 다시 확인하세요.',
+  'github.settings.error': '상태를 확인하지 못했습니다 — gh 실행이 실패했습니다.',
+  'github.settings.recheck': '다시 확인',
+  'github.settings.copyCommand': '명령 복사',
+  'github.settings.commandCopied': '명령을 복사했습니다',
+  'github.settings.polling': 'PR 상태 자동 갱신',
+  'github.settings.pollingHint': '끄면 수동 새로고침과 워크트리 패널을 펼칠 때만 조회합니다.',
+  'github.settings.saveFailed': 'PR 상태 자동 갱신 설정을 저장하지 못했습니다: {detail}',
+  'github.badge.openInBrowser': '브라우저에서 열기',
+  'github.badge.copyLink': '링크 복사',
+  'github.badge.linkCopied': '링크를 복사했습니다',
+  'github.badge.stale': '레이트리밋으로 갱신이 멈춰 있습니다 — 마지막으로 확인한 상태입니다',
+  'github.badge.draft': '초안',
+  'github.badge.checks.pending': '체크 진행 중',
+  'github.badge.checks.failing': '체크 실패',
+  'github.badge.checks.passing': '체크 통과',
+  'github.badge.checks.none': '체크 없음',
+  'github.state.open': '열림',
+  'github.state.merged': '머지됨',
+  'github.state.closed': '닫힘',
+  'worktree.push.aheadUnknown': '푸시하지 않은 커밋이 있습니다',
+  'worktree.push.createPr': 'PR 만들기',
+  'worktree.push.createPrHint': 'PR 만들기 — 커밋 {count}개를 {base}(으)로',
+  'worktree.push.noCommits': '합칠 커밋이 없습니다',
+  'worktree.push.ghDisconnected': 'GitHub에 연결되어 있지 않습니다 — 설정에서 확인하세요',
+  'pr.create.title': 'PR 만들기',
+  'pr.create.base': '기준 브랜치',
+  'pr.create.prTitle': '제목',
+  'pr.create.body': '본문',
+  'pr.create.draft': '초안으로 만들기',
+  'pr.create.willPush': '이 브랜치는 원격에 없습니다. 만들 때 함께 푸시합니다.',
+  'pr.create.commits': '이 PR에 들어갈 커밋 {count}개',
+  'pr.create.dirty': '커밋하지 않은 변경 {count}개는 PR에 들어가지 않습니다',
+  'pr.create.behind': '기준 브랜치보다 {count}개 뒤처져 있습니다',
+  'pr.create.submit': 'PR 만들기',
+  'pr.create.submitWithPush': '푸시하고 PR 만들기',
+  'pr.create.submitting': '만드는 중…',
+  'pr.create.pushFailed': '푸시에 실패했습니다. 아무것도 바뀌지 않았습니다.',
+  'pr.create.createFailed': 'PR을 만들지 못했습니다.',
+  'pr.create.createFailedPushed': '브랜치는 올라갔고 PR만 실패했습니다. 다시 시도하면 푸시는 건너뜁니다.',
+  'pr.create.exists': '이 브랜치의 PR이 이미 있습니다.',
+  'pr.create.openExisting': '그 PR 열기',
   // App.tsx — shared window controls, resizer, separator
   'common.minimize': '최소화',
   'common.maximize': '최대화',

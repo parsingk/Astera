@@ -16,6 +16,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.orchestration.hint':
     'When on, agent sessions started by the app can start worker sessions on another vendor. ' +
     'An agent can then create sessions under any of your accounts, so turn this on only when you need it. ' +
+    'It only works in a project that is a git repository. ' +
     'It does not apply to sessions that are already open — only new sessions get it. ' +
     'Ask the session you want to orchestrate with to run astera help for the full usage guide.',
   'settings.orchestration.saveFailed': 'Could not save the orchestration setting: {detail}',
@@ -23,7 +24,8 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.workUnit.label': 'Work unit tracking (experimental)',
   'settings.workUnit.hint':
     'Lets you declare a piece of work by typing /astera-task with what you want done — one row from ' +
-    'there until it ends, however many messages it takes. It does not apply to sessions that are ' +
+    'there until it ends, however many messages it takes. It only works in a project that is a ' +
+    'git repository. It does not apply to sessions that are ' +
     'already open — only new sessions get it. Only conversations after you turn it on are read — ' +
     'existing history is never read.',
   'settings.workUnit.saveFailed': "Couldn't save the work unit tracking setting: {detail}",
@@ -93,6 +95,55 @@ export const en: Record<keyof typeof ko, string> = {
   'worktree.inUse.run': 'Process “{name}” is running and using this worktree. Stop it first.',
   'worktree.inUse.unknown': 'This worktree is in use.',
   'session.roll.mixedProvider': 'Rolling cannot mix Claude and Codex accounts.',
+  // ---- github ----
+  'github.settings.status': 'Connection',
+  'github.settings.connected': 'Connected — {account}',
+  'github.settings.connectedNoAccount': 'Connected',
+  'github.settings.notInstalled': 'The GitHub CLI (gh) is not installed. Install it, then restart the app.',
+  'github.settings.installLink': 'Open the GitHub CLI install page',
+  'github.settings.notAuthenticated':
+    'The GitHub CLI is not logged in. Run this command in a terminal, then re-check.',
+  'github.settings.error': 'Could not check the status — running gh failed.',
+  'github.settings.recheck': 'Re-check',
+  'github.settings.copyCommand': 'Copy command',
+  'github.settings.commandCopied': 'Command copied',
+  'github.settings.polling': 'Refresh PR status automatically',
+  'github.settings.pollingHint': 'When off, PR status is fetched only on manual refresh and when the worktree panel expands.',
+  'github.settings.saveFailed': 'Could not save the PR polling setting: {detail}',
+  'github.badge.openInBrowser': 'Open in browser',
+  'github.badge.copyLink': 'Copy link',
+  'github.badge.linkCopied': 'Link copied',
+  'github.badge.stale': 'Refresh is paused by a rate limit — showing the last known state',
+  'github.badge.draft': 'Draft',
+  'github.badge.checks.pending': 'Checks running',
+  'github.badge.checks.failing': 'Checks failing',
+  'github.badge.checks.passing': 'Checks passing',
+  'github.badge.checks.none': 'No checks',
+  'github.state.open': 'Open',
+  'github.state.merged': 'Merged',
+  'github.state.closed': 'Closed',
+  'worktree.push.aheadUnknown': 'This branch has unpushed commits',
+  'worktree.push.createPr': 'Create pull request',
+  'worktree.push.createPrHint': 'Create a pull request — {count} commits onto {base}',
+  'worktree.push.noCommits': 'No commits to merge',
+  'worktree.push.ghDisconnected': 'Not connected to GitHub — check Settings',
+  'pr.create.title': 'Create pull request',
+  'pr.create.base': 'Base branch',
+  'pr.create.prTitle': 'Title',
+  'pr.create.body': 'Description',
+  'pr.create.draft': 'Create as draft',
+  'pr.create.willPush': 'This branch is not on the remote. It will be pushed.',
+  'pr.create.commits': '{count} commits will be in this pull request',
+  'pr.create.dirty': '{count} uncommitted changes will not be in the pull request',
+  'pr.create.behind': 'This branch is {count} commits behind the base',
+  'pr.create.submit': 'Create pull request',
+  'pr.create.submitWithPush': 'Push & create pull request',
+  'pr.create.submitting': 'Creating…',
+  'pr.create.pushFailed': 'The push failed. Nothing was changed.',
+  'pr.create.createFailed': 'Could not create the pull request.',
+  'pr.create.createFailedPushed': 'The branch is on the remote; only the pull request failed. Retrying will skip the push.',
+  'pr.create.exists': 'A pull request for this branch already exists.',
+  'pr.create.openExisting': 'Open it',
   'common.minimize': 'Minimize',
   'common.maximize': 'Maximize',
   'common.restore': 'Restore',
