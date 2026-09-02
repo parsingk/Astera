@@ -13,12 +13,26 @@ Releases, and installed apps then update themselves through `electron-updater`.
    - `minor` (1.0.0 → 1.1.0): backwards-compatible additions
    - `major` (1.0.0 → 2.0.0): breaking changes
 
-2. **Commit** the version change.
+2. **Write the release up.** Have an agent do it, in a session with this repository open:
+
+   > Read every commit since the previous tag. Group them into the pieces of work someone using
+   > Astera would recognise, and write `docs/release-notes/v1.0.1.md` containing only the
+   > `## New features` and `## Fixes` sections. One bullet per piece of work, bold lead, a sentence
+   > or two of what is different now. Leave out anything nobody outside the repository would notice.
+
+   That file holds those two sections and nothing else — the commit list, the install caveats and the
+   changelog link are wrapped around it at publish time. Review it before committing: it is the
+   release page, and it is the last chance to read it before it is public.
+
+   **Skipping this step is allowed.** With no file the notes generate themselves from the branches
+   (see below) — correct, but named after branches rather than written.
+
+3. **Commit** the version change and the write-up together.
    ```bash
    git commit -am "chore: v1.0.1"
    ```
 
-3. **Tag and push.** The tag must be `v` plus the `package.json` version, **exactly**.
+4. **Tag and push.** The tag must be `v` plus the `package.json` version, **exactly**.
    ```bash
    git tag v1.0.1
    git push origin main --tags
@@ -26,7 +40,7 @@ Releases, and installed apps then update themselves through `electron-updater`.
    > If the tag and `package.json` disagree the workflow fails immediately, before building — this is
    > what keeps the update feed from advertising the wrong version.
 
-4. **Check** the `Release / validate`, `Release / windows`, `Release / macos`, `Release / linux`
+5. **Check** the `Release / validate`, `Release / windows`, `Release / macos`, `Release / linux`
    (which expands into `build` and `verify`) and `Release / publish` runs under **Actions**, then confirm the release page has all twelve assets
    attached — three from Windows (`astera-<version>-setup.exe`, its `.blockmap`, `latest.yml`), five
    from macOS (`astera-<version>-universal.dmg` and `Astera-<version>-universal-mac.zip`, a
@@ -42,22 +56,51 @@ The release is created as a **draft**, and only becomes visible once every asset
 ordering is deliberate: `latest.yml` *is* the update feed, so a half-finished release would advertise
 a version whose installer is not there yet.
 
-The notes are written by `scripts/build-release-notes.cjs` from the commits since the previous tag,
-grouped by conventional-commit type: `feat:` and `fix:` get a section each, everything else goes into
-a collapsed one so nothing is silently dropped. **Commit subjects are therefore user-facing** — they
-are the release page. gh's own `--generate-notes` is not used because it builds its list out of pull
-requests, and this repository commits straight to the branch; that is why every release through
-v1.0.3 shipped with nothing but a Full Changelog link.
+The whole body is assembled by `scripts/build-release-notes.cjs`, in this order:
 
-Until macOS builds are notarized, a further step prepends the Gatekeeper caveat (the `xattr -cr`
-line) to those notes. It drops out on its own once the Apple secrets are configured. A second step
-prepends the Linux install note (`chmod +x` for the AppImage, `apt install ./…deb` for the deb); that
-one is unconditional, because it describes how those artifacts are installed rather than a state the
-project is passing through.
+| | Where it comes from |
+|---|---|
+| `## New features`, `## Fixes` | `docs/release-notes/<tag>.md` if it exists, else generated — below |
+| `▸ Every change (N)` | every commit in the release, grouped by the branch it arrived on |
+| `## Installing` | the three install caveats |
+| `**Full Changelog**` | the compare link |
 
-Both of those steps look for their own marker in the body before writing, so they are safe to run
-again. That matters because re-running any build job re-runs `publish` with it — without the check,
-each attempt would stack another copy of the same notice on the release.
+gh's own `--generate-notes` is not used: it builds its list out of pull requests, and this repository
+commits straight to the branch, which is why every release through v1.0.3 shipped with nothing but a
+Full Changelog link.
+
+### The unit is the branch, not the commit
+
+A line per commit is what made v1.3.12 — one feature — read as twenty separate things, and v1.3.10
+scroll for a hundred lines. Work already arrives as a branch merged into `develop`, and that branch is
+what a reader means by "a feature", so **each branch is one line** and its commits go in the collapsed
+section underneath. The `feat/` or `fix/` prefix picks the heading; a branch with no recognised prefix
+is placed by what its commits say.
+
+- **A commit pushed straight to `develop` has no branch** and keeps a line of its own. A release made
+  entirely that way reads exactly as it used to — the grouping has nothing to work with.
+- **`chore: vX.Y.Z` is dropped.** It *is* the release; the tag already says so.
+- Among loose commits only, a `fix(scope)` is moved out of *Fixes* when the same release also has a
+  `feat(scope)`: that bug existed only in code this release introduces, so nobody on the previous
+  version met it. An **unscoped** `fix:` is never moved — there is nothing to match it on, and leaving
+  a real fix visible is the safer error.
+- A **hand-written merge subject wins over the branch name** as the line's title. Merging with
+  `git merge --no-ff -m "..."` is worth it when the branch name would not say much.
+
+### Why the write-up still beats it
+
+Branch names cannot say what changed, and one branch can carry two things a user would call separate
+— v1.3.12's `/goal` work and its record titles rode the same one. That is what
+`docs/release-notes/<tag>.md` is for (step 2 of the procedure). When it exists it **replaces** both
+generated sections rather than sitting next to them, so the same work is never described twice.
+
+### The install caveats
+
+The macOS Gatekeeper note (`xattr -cr`), the Linux `chmod +x` / `apt install ./…deb` note and the
+hand-install note for Windows 1.1.0 and earlier live at the **end** of the body, under `## Installing`.
+GitHub renders the asset list below the body, so there they sit on the way to the download instead of
+in front of the changes. The macOS one drops out on its own once the Apple secrets are configured:
+`publish` passes `MAC_SIGNED` to the script, which omits it.
 
 ## Update campaigns (policy.json)
 
