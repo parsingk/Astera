@@ -15,6 +15,10 @@ export interface PrCreateRequest {
   needsPush: boolean
 }
 
+/** Mirrors GhFailureKind, plus the two failures unique to this command's own stages: 'rejected'
+ *  for a refused push, 'exists' for a race with another client creating the same PR first. A
+ *  superset rather than a copy — 'other' must keep meaning "we could not classify this", not
+ *  "we classified it and threw the answer away". */
 export type PrCreateFailureKind =
   | 'rejected'
   | 'exists'
@@ -22,6 +26,8 @@ export type PrCreateFailureKind =
   | 'auth'
   | 'network'
   | 'not-found'
+  | 'no-remote'
+  | 'truncated'
   | 'other'
 
 export type PrCreateResult =
@@ -67,14 +73,9 @@ export async function createPullRequest(
 
   // gh says "already exists" on stderr with the URL; that is a different next step (open it)
   // from every other failure, so it gets its own kind rather than hiding in 'other'.
-  // classifyGhFailure's range also covers 'no-remote' and 'truncated' (relevant to `gh pr
-  // list`, not `pr create`); neither has a distinct next step here, so both fold into 'other'.
-  const classified = classifyGhFailure(created.stderr)
   const kind: PrCreateFailureKind = /already exists/i.test(created.stderr)
     ? 'exists'
-    : classified === 'no-remote' || classified === 'truncated'
-      ? 'other'
-      : classified
+    : classifyGhFailure(created.stderr)
   return { ok: false, stage: 'create', kind, detail: created.stderr, pushed: req.needsPush }
 }
 

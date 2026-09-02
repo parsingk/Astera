@@ -94,6 +94,17 @@ describe('createPullRequest', () => {
     expect(r).toMatchObject({ ok: false, stage: 'create', kind: 'exists' })
   })
 
+  // The union mirrors GhFailureKind; a bucket the classifier knows must not be flattened into
+  // 'other', or a later reader cannot tell an unclassified failure from a discarded answer.
+  it('passes a classifier bucket through rather than folding it into other', async () => {
+    const r = await createPullRequest(req(), {
+      runGit: async () => okGit,
+      runGh: async () => ({ ok: false, stdout: '', stderr: 'no git remotes found' }),
+      normalizeBase: async (_r, b) => b
+    })
+    expect(r).toMatchObject({ ok: false, stage: 'create', kind: 'no-remote' })
+  })
+
   it('passes the normalised base, and --draft only when asked', async () => {
     let args: string[] = []
     await createPullRequest(req({ base: 'origin/develop', draft: true }), {
