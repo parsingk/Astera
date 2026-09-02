@@ -35,7 +35,9 @@ export function WorktreePanel({
   const [prs, setPrs] = useState<Record<string, RepoPrSnapshot>>({})
   // PR link menu — one at a time, held here rather than per row (the FileExplorer/HistoryBrowser shape)
   const [prMenu, setPrMenu] = useState<{ x: number; y: number; url: string } | null>(null)
-  const [pushState, setPushState] = useState<Record<string, Record<string, BranchPushState>>>({})
+  const [pushState, setPushState] = useState<
+    Record<string, Record<string, Record<string, BranchPushState>>>
+  >({})
   // The row whose create dialog is open, if any
   const [creating, setCreating] = useState<WorktreeListItem | null>(null)
   // The row menu — one at a time, held here rather than per row (the HistoryBrowser shape)
@@ -74,7 +76,7 @@ export function WorktreePanel({
       // timer: mount, expand, manual refresh, and the worktree-created event.
       const byRepo = new Map<string, Set<string>>()
       for (const w of list) byRepo.set(w.repoPath, (byRepo.get(w.repoPath) ?? new Set()).add(w.baseRef))
-      const next: Record<string, Record<string, BranchPushState>> = {}
+      const next: Record<string, Record<string, Record<string, BranchPushState>>> = {}
       for (const [repo, bases] of byRepo)
         next[repo] = await window.api.worktrees.pushState(repo, [...bases])
       setPushState(next)
@@ -228,7 +230,7 @@ export function WorktreePanel({
                   </span>
                   {(() => {
                     const snap = prs[w.repoPath]
-                    const slot = rowSlot(snap?.byBranch[w.branch], pushState[w.repoPath]?.[w.branch])
+                    const slot = rowSlot(snap?.byBranch[w.branch], pushState[w.repoPath]?.[w.baseRef]?.[w.branch])
                     if (slot === null) return null
                     if (slot.kind === 'pr')
                       return (
@@ -318,7 +320,7 @@ export function WorktreePanel({
         (() => {
           const w = rowMenu.w
           const pr = prs[w.repoPath]?.byBranch[w.branch]
-          const ahead = pushState[w.repoPath]?.[w.branch]?.ahead
+          const ahead = pushState[w.repoPath]?.[w.baseRef]?.[w.branch]?.ahead
           const items: MenuItem[] = pr
             ? [
                 {
@@ -348,8 +350,8 @@ export function WorktreePanel({
         <CreatePrDialog
           worktree={creating}
           base={creating.baseRef}
-          needsPush={!pushState[creating.repoPath]?.[creating.branch]?.hasUpstream}
-          behind={pushState[creating.repoPath]?.[creating.branch]?.behind ?? null}
+          needsPush={!pushState[creating.repoPath]?.[creating.baseRef]?.[creating.branch]?.hasUpstream}
+          behind={pushState[creating.repoPath]?.[creating.baseRef]?.[creating.branch]?.behind ?? null}
           onCancel={() => setCreating(null)}
           onDone={() => {
             setCreating(null)

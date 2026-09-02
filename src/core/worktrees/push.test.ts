@@ -88,19 +88,39 @@ describe('normalizeBaseForGh', () => {
 })
 
 describe('readPushState', () => {
-  it('asks git once per base and merges the results', async () => {
+  // for-each-ref answers for all of refs/heads/ whatever base it was asked about, so the same
+  // branch comes back under every base with different numbers. Flattening them into one map made
+  // every branch carry whichever base ran last.
+  it('asks git once per base and keeps each base its own numbers', async () => {
     const calls: string[][] = []
     const got = await readPushState('/r', ['develop', 'main'], {
       run: async (args) => {
         calls.push(args)
-        return { ok: true, stdout: `b${calls.length}|1 0||`, stderr: '' }
+        return { ok: true, stdout: `feat/x|${calls.length} 0||`, stderr: '' }
       },
       versionOk: async () => true
     })
     expect(calls).toHaveLength(2)
     expect(calls[0].join(' ')).toContain('develop')
     expect(calls[1].join(' ')).toContain('main')
-    expect(Object.keys(got).sort()).toEqual(['b1', 'b2'])
+    expect(Object.keys(got).sort()).toEqual(['develop', 'main'])
+    expect(got['develop']['feat/x'].ahead).toBe(1)
+    expect(got['main']['feat/x'].ahead).toBe(2)
+  })
+
+  it('a base whose call fails leaves the bases beside it intact', async () => {
+    let n = 0
+    const got = await readPushState('/r', ['develop', 'main'], {
+      run: async () => {
+        n += 1
+        return n === 1
+          ? { ok: false, stdout: '', stderr: 'boom' }
+          : { ok: true, stdout: 'feat/x|4 0||', stderr: '' }
+      },
+      versionOk: async () => true
+    })
+    expect(Object.keys(got)).toEqual(['main'])
+    expect(got['main']['feat/x'].ahead).toBe(4)
   })
 
   it('de-duplicates repeated bases', async () => {
@@ -149,5 +169,18 @@ describe('readPushState', () => {
     })
     expect(fmt).toContain('%(ahead-behind:develop)')
     expect(fmt).not.toContain('<base>')
+  })
+
+  // `$` is legal in a refname, and String.replace reads `$&` in the replacement as "the match".
+  it('takes a base containing $ literally', async () => {
+    let fmt = ''
+    await readPushState('/r', ['rel$&x'], {
+      run: async (args) => {
+        fmt = args.find((a) => a.startsWith('--format=')) ?? ''
+        return { ok: true, stdout: '', stderr: '' }
+      },
+      versionOk: async () => true
+    })
+    expect(fmt).toContain('%(ahead-behind:rel$&x)')
   })
 })

@@ -631,9 +631,14 @@ export interface CoreApi {
     isGitRepo(dir: string): Promise<string | null> // returns the repo root, or null
     getRoot(): Promise<string>
     setRoot(root: string | null): Promise<void>
-    /** Branch push state for one repository, one git call per distinct base. Empty when git is
-     *  older than 2.41 — the count is unknown, which is not a reason to withhold Create PR. */
-    pushState(repoPath: string, bases: string[]): Promise<Record<string, BranchPushState>>
+    /** Branch push state for one repository, one git call per distinct base, keyed base then
+     *  branch — a count only means anything paired with the base it was measured against. Empty
+     *  when git is older than 2.41 — the count is unknown, which is not a reason to withhold
+     *  Create PR. */
+    pushState(
+      repoPath: string,
+      bases: string[]
+    ): Promise<Record<string, Record<string, BranchPushState>>>
   }
   pr: {
     /** Everything the create dialog needs to open: the seeded title and body, and whether the

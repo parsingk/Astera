@@ -42,26 +42,31 @@ export interface PushStateDeps {
 const AHEAD_BEHIND_GIT = { major: 2, minor: 41 }
 
 /** Push state for every branch of one repository, one `for-each-ref` per distinct base.
- *  Worktrees of a repository may carry different bases; in practice there is one.
+ *  Keyed by base, then by branch: `for-each-ref` answers for all of `refs/heads/` whatever base was
+ *  asked about, so every branch appears under every base and the counts only mean anything paired
+ *  with the base they were measured against. Worktrees of a repository may carry different bases;
+ *  in practice there is one.
  *  Returns an empty map rather than throwing when git is too old or a call fails — not knowing
  *  the count is no reason to withhold the action that depends on it. */
 export async function readPushState(
   repoPath: string,
   bases: string[],
   deps: PushStateDeps = {}
-): Promise<Record<string, BranchPushState>> {
+): Promise<Record<string, Record<string, BranchPushState>>> {
   const run = deps.run ?? ((args: string[], cwd: string) => git(args, { cwd }))
   const versionOk =
     deps.versionOk ?? (() => gitVersionAtLeast(AHEAD_BEHIND_GIT.major, AHEAD_BEHIND_GIT.minor))
   if (!(await versionOk())) return {}
-  const out: Record<string, BranchPushState> = {}
+  const out: Record<string, Record<string, BranchPushState>> = {}
   for (const base of [...new Set(bases)]) {
     const r = await run(
-      ['for-each-ref', `--format=${PUSH_STATE_FORMAT.replace('<base>', base)}`, 'refs/heads/'],
+      // The function form takes `base` literally — `$` is legal in a refname and the string form
+      // would read `$&` and friends inside it as replacement patterns.
+      ['for-each-ref', `--format=${PUSH_STATE_FORMAT.replace('<base>', () => base)}`, 'refs/heads/'],
       repoPath
     )
     if (!r.ok) continue // one unreadable base must not sink the others
-    Object.assign(out, parsePushState(r.stdout))
+    out[base] = parsePushState(r.stdout)
   }
   return out
 }
