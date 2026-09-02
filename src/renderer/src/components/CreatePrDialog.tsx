@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { BranchRef, WorktreeListItem } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { Select } from './Select'
@@ -32,17 +32,30 @@ export function CreatePrDialog({
   const [branches, setBranches] = useState<BranchRef[]>([])
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<Failure | null>(null)
+  // Set once the person edits title or body. Same idiom as NewSessionDialog's touched: it stops a
+  // base change from reseeding over their edits, since correcting the base is the reason this
+  // dialog exists and must not cost them the text they just wrote.
+  const touched = useRef(false)
 
   // Seeding is local git only — commits and a status count. Nothing here touches the network,
-  // so the dialog opens without waiting on gh.
+  // so the dialog opens without waiting on gh. `cancelled` guards against two base changes in
+  // quick succession resolving out of order and letting a stale response overwrite state for a
+  // base the person has already moved off.
   useEffect(() => {
+    let cancelled = false
     void window.api.pr
       .draftFor({ worktreePath: worktree.path, branch: worktree.branch, base })
       .then((d) => {
-        setTitle(d.title)
-        setBody(d.body)
+        if (cancelled) return
+        if (!touched.current) {
+          setTitle(d.title)
+          setBody(d.body)
+        }
         setDirtyCount(d.dirtyCount)
       })
+    return () => {
+      cancelled = true
+    }
   }, [worktree.path, worktree.branch, base])
 
   useEffect(() => {
@@ -75,6 +88,12 @@ export function CreatePrDialog({
   return (
     <div className="modal-backdrop" onClick={() => !busy && onCancel()}>
       <div className="modal create-pr" onClick={(e) => e.stopPropagation()}>
+        {busy && (
+          <div className="loading-overlay">
+            <span className="loading-spinner" aria-hidden="true" />
+            {t('pr.create.submitting')}
+          </div>
+        )}
         <h2>{t('pr.create.title')}</h2>
         {/* The branch and its target sit above every field: a create action must never hide
             which branch it is acting on, and this app's own base mistake is why. */}
@@ -90,11 +109,25 @@ export function CreatePrDialog({
         </div>
         <label className="settings-row">
           <span>{t('pr.create.prTitle')}</span>
-          <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} />
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => {
+              touched.current = true
+              setTitle(e.target.value)
+            }}
+          />
         </label>
         <label className="settings-row">
           <span>{t('pr.create.body')}</span>
-          <textarea rows={6} value={body} onChange={(e) => setBody(e.target.value)} />
+          <textarea
+            rows={6}
+            value={body}
+            onChange={(e) => {
+              touched.current = true
+              setBody(e.target.value)
+            }}
+          />
         </label>
         <label className="settings-row">
           <span>{t('pr.create.draft')}</span>
