@@ -1,8 +1,17 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { AccountUsage } from '../../../core/types'
-import { AccountUsageMeter, usageLevel } from './AccountUsageMeter'
+import { AccountUsageMeter, AccountUsageDetail, usageLevel } from './AccountUsageMeter'
+
+vi.mock('../i18n/I18nProvider', () => ({
+  useI18n: () => ({
+    lang: 'en',
+    t: (key: string, params?: Record<string, string | number>) =>
+      params ? `${key}(${Object.values(params).join(',')})` : key,
+    tm: (m: unknown) => String(m)
+  })
+}))
 
 const usage = (over: Partial<AccountUsage> = {}): AccountUsage => ({
   session: { usedPercent: 12, resetsAt: null },
@@ -75,5 +84,78 @@ describe('AccountUsageMeter', () => {
     )
     expect(html).toContain('width:100%')
     expect(html).toContain('width:0%')
+  })
+})
+
+describe('AccountUsageDetail', () => {
+  const NOW = Date.parse('2026-09-02T12:00:00.000Z')
+  const HOUR = 3_600_000
+
+  const detail = (u: AccountUsage | undefined): string =>
+    renderToStaticMarkup(React.createElement(AccountUsageDetail, { usage: u }))
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(NOW)
+  })
+  afterEach(() => vi.useRealTimers())
+
+  const both = (): AccountUsage => ({
+    session: { usedPercent: 78, resetsAt: new Date(NOW + 47 * 60_000).toISOString() },
+    weekly: { usedPercent: 36, resetsAt: new Date(NOW + 4 * 24 * HOUR).toISOString() },
+    readAt: new Date(NOW - 3 * HOUR).toISOString(),
+    remembered: false
+  })
+
+  it('is one line per window, the 5-hour window first', () => {
+    const html = detail(both())
+    expect(html.indexOf('account.usage.fiveHour')).toBeGreaterThan(-1)
+    expect(html.indexOf('account.usage.fiveHour')).toBeLessThan(html.indexOf('account.usage.weekly'))
+    expect(html).toContain('78%')
+    expect(html).toContain('36%')
+  })
+
+  it('each line carries its own bar at its own threshold colour', () => {
+    const html = detail(both())
+    expect(html).toContain('class="warn"') // 78
+    expect(html).toContain('class="ok"') // 36
+  })
+
+  it('names when each window rolls, in that window\'s own units', () => {
+    const html = detail(both())
+    expect(html).toContain('account.usage.resetsIn(47m)')
+    expect(html).toContain('account.usage.resetsIn(4d)')
+  })
+
+  // The overlay's "updated N ago" is where a person learns the figure is not live — the one thing
+  // that lets them notice an account used outside Astera (§3.1).
+  it('a remembered reading adds a third line saying how old it is', () => {
+    const html = detail({ ...both(), remembered: true })
+    expect(html).toContain('acct-detail-stale')
+    expect(html).toContain('account.usage.refreshedAgo(3h)')
+  })
+
+  it('a live reading has no third line', () => {
+    expect(detail(both())).not.toContain('acct-detail-stale')
+  })
+
+  it('a window with no reset time shows its figure and no time', () => {
+    const html = detail({ ...both(), session: { usedPercent: 78, resetsAt: null } })
+    expect(html).toContain('78%')
+    expect(html).not.toContain('account.usage.resetsIn(47m)')
+  })
+
+  it('a reset time already in the past shows no time rather than a negative one', () => {
+    const html = detail({
+      ...both(),
+      session: { usedPercent: 78, resetsAt: new Date(NOW - HOUR).toISOString() }
+    })
+    expect(html).not.toContain('account.usage.resetsIn(1h)')
+    expect(html).toContain('78%')
+  })
+
+  it('renders nothing when the meter renders nothing', () => {
+    expect(detail(undefined)).toBe('')
+    expect(detail({ ...both(), session: null, weekly: null })).toBe('')
   })
 })

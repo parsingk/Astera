@@ -1,4 +1,6 @@
 import type { AccountUsage, RateLimitWindow } from '../../../core/types'
+import { coarseDuration } from '../../../core/usage/relativeTime'
+import { useI18n } from '../i18n/I18nProvider'
 
 /** The existing usage thresholds: green under 70, yellow 70–84, red at 85 and over. The status bar's
  *  UsageChip (App.tsx) uses these exact figures — two places showing usage on two scales would be a
@@ -40,6 +42,59 @@ export function AccountUsageMeter({
     <span className={usage.remembered ? 'acct-meter stale' : 'acct-meter'} aria-hidden="true">
       {track(usage.session)}
       {track(usage.weekly)}
+    </span>
+  )
+}
+
+/**
+ * The hover detail (design doc §5.1).
+ *
+ * It overlays the rows beneath it rather than pushing them down, so the list's height never changes
+ * and a row is never displaced while the pointer is travelling toward it — the failure that made a
+ * second permanent line and a naive expand-in-place both unacceptable. The overlaying is CSS
+ * (`position: absolute` inside the row); this component only decides what is in it.
+ *
+ * Two lines, one per window, plus a third when the reading is remembered. There is no animation:
+ * there is nothing here that a transition clarifies.
+ */
+export function AccountUsageDetail({
+  usage
+}: {
+  usage: AccountUsage | undefined
+}): React.JSX.Element | null {
+  const { t, lang } = useI18n()
+  if (!usage || (!usage.session && !usage.weekly)) return null
+
+  const line = (label: string, w: RateLimitWindow): React.JSX.Element => {
+    // A window whose reset has already passed, or that never carried one, shows its figure and no
+    // time — a negative countdown is worse than a blank column.
+    const untilMs = w.resetsAt ? Date.parse(w.resetsAt) - Date.now() : NaN
+    const resets =
+      Number.isFinite(untilMs) && untilMs > 0
+        ? t('account.usage.resetsIn', { d: coarseDuration(untilMs, lang) })
+        : ''
+    return (
+      <span className="dline" key={label}>
+        <span className="k">{label}</span>
+        <span className="v">{`${Math.round(w.usedPercent)}%`}</span>
+        <span className="t">
+          <i className={usageLevel(w.usedPercent)} style={{ width: `${clampPercent(w.usedPercent)}%` }} />
+        </span>
+        <span className="r">{resets}</span>
+      </span>
+    )
+  }
+
+  const agoMs = Date.now() - Date.parse(usage.readAt)
+  const ago = Number.isFinite(agoMs)
+    ? t('account.usage.refreshedAgo', { d: coarseDuration(agoMs, lang) })
+    : null
+
+  return (
+    <span className="acct-detail">
+      {usage.session && line(t('account.usage.fiveHour'), usage.session)}
+      {usage.weekly && line(t('account.usage.weekly'), usage.weekly)}
+      {usage.remembered && ago && <span className="acct-detail-stale">{ago}</span>}
     </span>
   )
 }

@@ -1,5 +1,5 @@
 import type { Account, AccountUsage } from '../../../core/types'
-import { AccountUsageMeter } from './AccountUsageMeter'
+import { AccountUsageMeter, AccountUsageDetail } from './AccountUsageMeter'
 import { ProviderBadge } from './ProviderBadge'
 import { useI18n } from '../i18n/I18nProvider'
 
@@ -13,6 +13,7 @@ export function AccountRow({
   email,
   isDefault,
   usage,
+  detailUp,
   children
 }: {
   account: Account
@@ -23,12 +24,15 @@ export function AccountRow({
   isDefault?: boolean
   /** This account's usage, keyed by configDir upstream. undefined draws nothing (design doc §5). */
   usage?: AccountUsage
+  /** True for a row near the bottom of the list, where the hover detail would otherwise spill past
+   *  the panel — flips the overlay to open upward instead. */
+  detailUp?: boolean
   children?: React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
   return (
     <li
-      className="account-row"
+      className={detailUp ? 'account-row detail-up' : 'account-row'}
       title={email ? `${account.label} · ${email}` : account.configDir}
     >
       <span className="color-dot" style={{ background: account.color }} />
@@ -46,6 +50,10 @@ export function AccountRow({
         title={loggedIn ? t('account.status.loggedIn') : t('account.status.notLoggedIn')}
       />
       {children}
+      {/* Last child so it paints over the rows below rather than under a later sibling. Rendered
+          only when the meter is (same gate) — an overlay with nothing in it would still catch the
+          hover and flash an empty box. */}
+      {loggedIn && <AccountUsageDetail usage={usage} />}
     </li>
   )
 }

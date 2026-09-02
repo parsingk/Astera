@@ -183,6 +183,11 @@ export const ko = {
   'session.usage.fiveHourLabel': '5시간 사용량',
   'session.usage.fiveHourTitle': '5시간 세션 사용량',
   'session.usage.weekly': '주간 사용량',
+  // A duration as one coarse unit. Its own keys rather than a suffix appended to a number, because
+  // the two are not separable in every language this app ships.
+  'duration.minutes': '{n}분',
+  'duration.hours': '{n}시간',
+  'duration.days': '{n}일',
   'session.statusbar.count': '세션 {count}',
   'session.statusbar.none': '세션 없음',
   'session.statusbar.accountCount': '계정 {count}',
@@ -499,6 +504,12 @@ export const ko = {
   'account.detect.failed': '자동 감지 실패: {detail}',
   'account.status.loggedIn': '로그인됨',
   'account.status.notLoggedIn': '미로그인',
+  'account.usage.fiveHour': '5시간',
+  'account.usage.weekly': '주간',
+  'account.usage.resetsIn': '{d} 뒤',
+  // One key, not a sentence assembled from fragments — word order differs between the languages,
+  // which is exactly what concatenation gets wrong.
+  'account.usage.refreshedAgo': '{d} 전 갱신',
   // AccountPanel.tsx — unregister. When logout comes with it, it says the credentials are removed (destructive).
   'account.remove.title': '계정 등록 해제',
   'account.remove.button': '등록 해제',
