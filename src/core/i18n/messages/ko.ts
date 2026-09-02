@@ -20,6 +20,7 @@ export const ko = {
   'settings.orchestration.hint':
     '켜면 앱이 띄운 에이전트 세션이 다른 벤더의 워커 세션을 띄울 수 있습니다. ' +
     '에이전트가 앱의 어느 계정으로든 세션을 만들 수 있게 되므로 필요할 때만 켜세요. ' +
+    'git 저장소인 프로젝트에서만 작동합니다. ' +
     '이미 열려 있는 세션에는 적용되지 않습니다 — 새 세션부터 동작합니다. ' +
     '오케스트레이터로 쓸 세션에서 astera help 를 실행하게 하면 전체 사용법을 얻습니다.',
   'settings.orchestration.saveFailed': '오케스트레이션 설정을 저장하지 못했습니다: {detail}',
@@ -27,7 +28,8 @@ export const ko = {
   'settings.workUnit.label': '작업 단위 추적 (실험)',
   'settings.workUnit.hint':
     '/astera-task 로 하려는 일을 적으면 그때부터 한 줄이 시작되고, 끝날 때까지 몇 번을 주고받든 같은 ' +
-    '줄로 남습니다. 이미 열려 있는 세션에는 적용되지 않습니다 — 새 세션부터 동작합니다. 켠 뒤의 ' +
+    '줄로 남습니다. git 저장소인 프로젝트에서만 작동합니다. 이미 열려 있는 세션에는 적용되지 ' +
+    '않습니다 — 새 세션부터 동작합니다. 켠 뒤의 ' +
     '대화만 봅니다 — 이전 기록은 읽지 않습니다.',
   'settings.workUnit.saveFailed': '작업 단위 추적 설정을 저장하지 못했습니다: {detail}',
   // 설명 생성 (How It Works)

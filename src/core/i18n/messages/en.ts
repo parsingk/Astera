@@ -16,6 +16,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.orchestration.hint':
     'When on, agent sessions started by the app can start worker sessions on another vendor. ' +
     'An agent can then create sessions under any of your accounts, so turn this on only when you need it. ' +
+    'It only works in a project that is a git repository. ' +
     'It does not apply to sessions that are already open — only new sessions get it. ' +
     'Ask the session you want to orchestrate with to run astera help for the full usage guide.',
   'settings.orchestration.saveFailed': 'Could not save the orchestration setting: {detail}',
@@ -23,7 +24,8 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.workUnit.label': 'Work unit tracking (experimental)',
   'settings.workUnit.hint':
     'Lets you declare a piece of work by typing /astera-task with what you want done — one row from ' +
-    'there until it ends, however many messages it takes. It does not apply to sessions that are ' +
+    'there until it ends, however many messages it takes. It only works in a project that is a ' +
+    'git repository. It does not apply to sessions that are ' +
     'already open — only new sessions get it. Only conversations after you turn it on are read — ' +
     'existing history is never read.',
   'settings.workUnit.saveFailed': "Couldn't save the work unit tracking setting: {detail}",
