@@ -97,6 +97,27 @@ describe('DesktopNotifier — the four events', () => {
     expect(h.shown).toHaveLength(0)
   })
 
+  // agent_completed reports that a worker finished, not a screen waiting for an answer — the same
+  // classification slack.ts applies via isNonPromptNotification. Without it, a fan-out of subagents
+  // pops one false "waiting for your input" toast per worker as each one completes.
+  it('a non-prompt notification_type (agent_completed) shows nothing; no type or a prompt type still fires', () => {
+    const h = harness()
+    h.notifier.onHookEvent('s1', {
+      hook_event_name: 'Notification',
+      notification_type: 'agent_completed'
+    })
+    expect(h.shown).toHaveLength(0)
+
+    h.notifier.onHookEvent('s1', { hook_event_name: 'Notification' })
+    expect(h.shown.map((s) => s.event)).toEqual(['inputNeeded'])
+
+    h.notifier.onHookEvent('s1', {
+      hook_event_name: 'Notification',
+      notification_type: 'idle_prompt'
+    })
+    expect(h.shown.map((s) => s.event)).toEqual(['inputNeeded', 'inputNeeded'])
+  })
+
   // reattach is the re-publish that reattaches the banner to the new sessionId after a respawn — the
   // same switch must not be announced twice. slack.ts's onRollState makes the identical exclusion.
   it('a reattach republish of switching does not fire a second time', () => {
@@ -164,9 +185,12 @@ describe('DesktopNotifier — what the notification carries', () => {
     expect(h.shown[0].title).toBe('Astera')
   })
 
-  it('a switching event with no account label still fires, with an empty label', () => {
+  // Matches the identical guard in SlackNotifier's own onRollState: with no label there is nothing
+  // to name, and firing anyway produces an empty-label sentence (a doubled space and a dangling
+  // particle in Korean).
+  it('a switching event with no account label fires nothing', () => {
     const h = harness({ accountSwitched: true })
     h.notifier.onRollState(roll({ state: 'switching' }))
-    expect(h.shown).toHaveLength(1)
+    expect(h.shown).toHaveLength(0)
   })
 })

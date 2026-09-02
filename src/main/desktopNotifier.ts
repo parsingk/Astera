@@ -2,6 +2,7 @@ import { t } from '../core/i18n'
 import type { Lang, MessageKey } from '../core/i18n'
 import type { RollStateEvent, SessionInfo } from '../core/types'
 import type { DesktopNotifySettings } from '../core/notify/settings'
+import { isNonPromptNotification, type NotificationPayload } from '../core/hooks/notification'
 
 /** The four events (design doc §6). The names are the AppSettingsStore flag names, so the flag lookup
  *  is the event name and there is no second table mapping one to the other. */
@@ -69,8 +70,15 @@ export class DesktopNotifier {
   onHookEvent(sessionId: string, payload: unknown): void {
     if (typeof payload !== 'object' || payload === null) return
     const name = (payload as { hook_event_name?: unknown }).hook_event_name
-    if (name === 'Notification') this.fire('inputNeeded', sessionId)
-    else if (name === 'Stop') this.fire('turnDone', sessionId)
+    if (name === 'Notification') {
+      // A report of something already finished (a worker finished, login succeeded, an elicitation
+      // closed) is not a waiting screen, so it must not be framed as "input needed" — this is the
+      // same classification slack.ts applies at its own Notification branch (isNonPromptNotification).
+      // Without it, a fan-out of subagents pops one false "waiting for your input" toast per worker as
+      // each one completes, and every login pops one too.
+      if (isNonPromptNotification(payload as NotificationPayload)) return
+      this.fire('inputNeeded', sessionId)
+    } else if (name === 'Stop') this.fire('turnDone', sessionId)
   }
 
   /** The rolling state tap. waiting → the work has stopped on a limit; switching → it is proceeding
@@ -82,8 +90,11 @@ export class DesktopNotifier {
   onRollState(ev: RollStateEvent): void {
     if (ev.state === 'waiting') this.fire('limitWaiting', ev.sessionId)
     // reattach is the re-publish that reattaches the banner to the new sessionId after a respawn — it
-    // is not a new switch, and slack.ts excludes it at this same point for this same reason.
-    else if (ev.state === 'switching' && !ev.reattach)
+    // is not a new switch, and slack.ts excludes it at this same point for this same reason. A missing
+    // accountLabel is excluded too, matching the identical guard in SlackNotifier's own onRollState:
+    // with no label there is nothing to name, and firing anyway produces an empty-label sentence in
+    // every language.
+    else if (ev.state === 'switching' && ev.accountLabel && !ev.reattach)
       this.fire('accountSwitched', ev.sessionId, ev.accountLabel)
   }
 
