@@ -93,6 +93,12 @@ const resumeTextDep = (
 let tray: Tray | null = null
 let quitting = false
 let mainWindow: BrowserWindow | null = null // focus target for the single-instance second-instance event
+// Notifications currently on screen. Electron does not retain a `new Notification()` for you —
+// an unreferenced one can be garbage-collected before it is clicked, and a collected notification
+// never fires 'click'. That failure mode hits hardest exactly the toast this feature exists for:
+// the one that sits unclicked for minutes or hours until someone walks back to the desk, not the
+// one clicked within the same tick it was shown.
+const liveNotifications = new Set<Notification>()
 let updateCampaign: UpdateCampaignInfo | null = null // update campaign verdict. null means no campaign
 
 /**
@@ -349,13 +355,26 @@ app.whenReady().then(async () => {
       if (!Notification.isSupported()) return
       try {
         const n = new Notification({ title: req.title, body: req.body })
+        // Held in liveNotifications from before show() until a terminal event removes it — see that
+        // set's own comment for why. Windows does not guarantee 'close' fires, so a notification the
+        // person neither clicks nor dismisses may outlive this and stay in the set for the app's
+        // life — a handful of small objects, and the deliberate price of not losing the click.
+        liveNotifications.add(n)
         n.on('click', () => {
-          focusMainWindow()
-          // The renderer does the activating, through the path the tab bar already uses — panes and
-          // tabs are its structure (§7).
-          if (!win.isDestroyed())
-            win.webContents.send('notify:activate', { sessionId: req.sessionId })
+          liveNotifications.delete(n)
+          // An exception here must not escape into an Electron event handler, the same isolation the
+          // taps elsewhere in this file give each other.
+          try {
+            focusMainWindow()
+            // The renderer does the activating, through the path the tab bar already uses — panes and
+            // tabs are its structure (§7).
+            if (!win.isDestroyed())
+              win.webContents.send('notify:activate', { sessionId: req.sessionId })
+          } catch {
+            /* raising the window must not crash the notification's click handler */
+          }
         })
+        n.on('close', () => liveNotifications.delete(n))
         n.show()
       } catch {
         /* the OS refused it — see above */
