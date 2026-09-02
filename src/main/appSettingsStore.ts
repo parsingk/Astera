@@ -167,15 +167,12 @@ export class AppSettingsStore {
   }
 
   /** The four are written together — the settings tab reads the record, flips one flag and sends the
-   *  whole thing back, the same convention setGenerator follows. Each field is narrowed here as well
-   *  as on read: this arrives from the renderer. */
+   *  whole thing back, the same convention setGenerator follows. Reuses readDesktopNotify because
+   *  this value arrives from the renderer: one narrowing function means the setter and the file
+   *  reader can never disagree about what a malformed flag means (exactly what setGenerator does
+   *  with readGeneratorSettings). */
   async setDesktopNotify(next: DesktopNotifySettings): Promise<void> {
-    this.desktopNotify = {
-      inputNeeded: next.inputNeeded === true,
-      limitWaiting: next.limitWaiting === true,
-      accountSwitched: next.accountSwitched === true,
-      turnDone: next.turnDone === true
-    }
+    this.desktopNotify = readDesktopNotify(next)
     await this.persist()
   }
 

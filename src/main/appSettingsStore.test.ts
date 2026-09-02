@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { AppSettingsStore } from './appSettingsStore'
+import type { DesktopNotifySettings } from '../core/notify/settings'
 
 let dir: string
 beforeEach(async () => {
@@ -391,6 +392,28 @@ describe('AppSettingsStore desktop notifications', () => {
     )
     const s = new AppSettingsStore(f)
     await s.load()
+    expect(s.getDesktopNotify()).toEqual({
+      inputNeeded: true, // not an explicit false
+      limitWaiting: true, // not an explicit false
+      accountSwitched: false, // not an explicit true
+      turnDone: false // not an explicit true
+    })
+  })
+
+  // This is the boundary the renderer writes through. Before the fix, setDesktopNotify narrowed
+  // every field with a uniform `=== true`, so a malformed value on a default-on flag (not an
+  // explicit false) was written as false — silently disabling an "input needed" or
+  // "limit waiting" notification, the one direction this feature must never fail in.
+  it("setDesktopNotify narrows malformed input against each flag's own default, not to false", async () => {
+    const f = file()
+    const s = new AppSettingsStore(f)
+    await s.load()
+    await s.setDesktopNotify({
+      inputNeeded: 'no',
+      limitWaiting: 0,
+      accountSwitched: 'yes',
+      turnDone: 1
+    } as unknown as DesktopNotifySettings)
     expect(s.getDesktopNotify()).toEqual({
       inputNeeded: true, // not an explicit false
       limitWaiting: true, // not an explicit false
