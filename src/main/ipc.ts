@@ -9,6 +9,8 @@ import type { CodexRollingCoordinator } from './codexRolling'
 import type { SchedulerCoordinator } from './scheduler'
 import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
 import type { CodexRolloutWatcher } from './codexRolloutWatcher'
+import type { DesktopNotifier } from './desktopNotifier'
+import type { DesktopNotifySettings } from '../core/notify/settings'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
 import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, SessionInfo } from '../core/types'
@@ -305,7 +307,11 @@ export function registerIpc(
    *  `onSessionForked`'s own doc for why. */
   onWorkUnitForkReady?: (
     notify: (newSessionId: string, transcriptPath?: string, oldSessionId?: string) => void
-  ) => void
+  ) => void,
+  /** The desktop notification sink. It is built in index.ts (it needs the BrowserWindow for both
+   *  focus and the click), but the renderer's "this session is on screen" push arrives as IPC, which
+   *  lives here — so the instance travels in rather than the state travelling out. */
+  desktop?: DesktopNotifier
 ): void {
   const send = (channel: string, payload: unknown): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
@@ -2956,6 +2962,22 @@ export function registerIpc(
   ipcMain.handle('settings.setGithubPolling', async (_e, enabled: boolean) => {
     if (typeof enabled !== 'boolean') throw new Error(`INVALID_GITHUB_POLLING: ${String(enabled)}`)
     await core.appSettings.setGithubPolling(enabled)
+  })
+
+  // The renderer pushes the session on screen; main cannot work it out (§7). Narrowed on arrival, and
+  // narrowed again inside setActiveSession.
+  ipcMain.on('notify.activeSession', (_e, p: { sessionId?: unknown } | null) => {
+    const id = typeof p?.sessionId === 'string' ? p.sessionId : null
+    desktop?.setActiveSession(id)
+  })
+  ipcMain.handle('settings.getDesktopNotify', () => core.appSettings.getDesktopNotify())
+  ipcMain.handle('settings.setDesktopNotify', async (_e, next: unknown) => {
+    if (next === null || typeof next !== 'object' || Array.isArray(next))
+      throw new Error(`INVALID_DESKTOP_NOTIFY: ${String(next)}`)
+    const o = next as Record<string, unknown>
+    for (const k of ['inputNeeded', 'limitWaiting', 'accountSwitched', 'turnDone'])
+      if (typeof o[k] !== 'boolean') throw new Error(`INVALID_DESKTOP_NOTIFY: ${k}=${String(o[k])}`)
+    await core.appSettings.setDesktopNotify(next as DesktopNotifySettings)
   })
 
   // usage — an active session's context, 5-hour and weekly %. The two CLIs keep those figures in

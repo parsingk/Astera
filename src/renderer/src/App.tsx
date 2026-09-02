@@ -651,6 +651,13 @@ export default function App(): React.JSX.Element {
     })
     const offAccounts = window.api.on('accounts:changed', (p) => setAccounts(p.accounts))
     const offGhosts = window.api.on('accounts:ghostsChanged', (p) => setGhostAccounts(p.accounts))
+    // Clicking a desktop notification raises the window in main and lands here to activate that
+    // session's tab, through the same path a click on the tab bar takes. A session with no tab (one
+    // that was closed while the notification sat in the tray) finds no group and is a silent no-op —
+    // the window is raised either way, which is the useful half.
+    const offNotifyActivate = window.api.on('notify:activate', ({ sessionId }) => {
+      selectWorkbenchTabRef.current?.(sessionTab(sessionId))
+    })
     const offExit = window.api.on('session:exit', ({ sessionId, exitCode }) => {
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, status: 'exited', exitCode } : s))
@@ -722,6 +729,7 @@ export default function App(): React.JSX.Element {
     return () => {
       offAccounts()
       offGhosts()
+      offNotifyActivate()
       offExit()
       offCreated()
       offUpdate()
@@ -2704,6 +2712,13 @@ export default function App(): React.JSX.Element {
       clearInterval(timer)
       window.removeEventListener('focus', onFocus)
     }
+  }, [usageSessionId])
+
+  // Main needs the session on screen to suppress a notification for it, and the renderer is the only
+  // place that can answer — panes and tabs are its structure (design doc §7). null covers a file tab
+  // being focused, no pane having a session, and the panes being empty.
+  useEffect(() => {
+    window.api.notify.activeSession({ sessionId: usageSessionId ?? null })
   }, [usageSessionId])
 
   // Only when neither CLI is present is there nothing to launch. With one of the two installed the app

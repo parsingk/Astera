@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
@@ -17,6 +17,7 @@ import { BlockRegistry } from '../core/rolling/blockRegistry'
 import { SlackNotifier, SlackConfigStore } from './slack'
 import { SlackInboxController, createSocketClient } from './slackInbox'
 import { HookEventWatcher } from './hookEvents'
+import { DesktopNotifier } from './desktopNotifier'
 import { CodexRolloutWatcher } from './codexRolloutWatcher'
 import { t } from '../core/i18n'
 import { loadPolicy, nextCheckDelayMs, parsePolicyUrl, shouldApplyCampaign } from './updatePolicy'
@@ -265,21 +266,25 @@ function refreshTrayMenu(win: BrowserWindow): void {
 // (core === null) means it kills no sessions either.
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) app.quit()
-app.on('second-instance', () => {
+
+// Brings the main window to the front: restores it if minimized, shows and focuses it. Shared by the
+// second-instance handler, the macOS activate handler, and a desktop notification click.
+function focusMainWindow(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
+}
+
+app.on('second-instance', () => {
+  focusMainWindow()
 })
 
 // macOS: closing the window leaves the app alive (win.on('close') redirects to hide) and the Dock
 // icon stays. Clicking that icon fires activate, but the default behavior alone won't bring the
 // hidden window back.
 app.on('activate', () => {
-  if (!mainWindow || mainWindow.isDestroyed()) return
-  if (mainWindow.isMinimized()) mainWindow.restore()
-  mainWindow.show()
-  mainWindow.focus()
+  focusMainWindow()
 })
 
 app.whenReady().then(async () => {
@@ -328,6 +333,34 @@ app.whenReady().then(async () => {
     readStatusPayload: (id) => core!.statusLinePayload(id),
     lang: () => core!.lang,
     log: slackLog
+  })
+  // The second outlet on the same pipe (design doc §6). Electron's Notification was unused in this
+  // app until now — only Tray was.
+  const desktop = new DesktopNotifier({
+    settings: core!.appSettings,
+    isFocused: () => !win.isDestroyed() && win.isFocused(),
+    getSession: (id) => core!.sessions.list().find((s) => s.id === id) ?? null,
+    lang: () => core!.lang,
+    show: (req) => {
+      // If the OS refuses to show it — permission denied, notifications disabled at the system level
+      // — it is dropped silently (§9). A notification saying that notifications do not work cannot be
+      // delivered by the thing that is broken, and a toast for it would fire in the window the person
+      // is not looking at, which is the entire situation this feature exists for.
+      if (!Notification.isSupported()) return
+      try {
+        const n = new Notification({ title: req.title, body: req.body })
+        n.on('click', () => {
+          focusMainWindow()
+          // The renderer does the activating, through the path the tab bar already uses — panes and
+          // tabs are its structure (§7).
+          if (!win.isDestroyed())
+            win.webContents.send('notify:activate', { sessionId: req.sessionId })
+        })
+        n.show()
+      } catch {
+        /* the OS refused it — see above */
+      }
+    }
   })
   // Slack thread reply intake. Connects only when an app token is present and bot mode is on — on
   // the webhook path there are no threads, so there is nothing to reply into. SlackInboxController
@@ -398,6 +431,13 @@ app.whenReady().then(async () => {
         rollingRef?.onHookEvent(sid, payload)
       } catch {
         /* a rolling tap failure must not block the Slack notification */
+      }
+      // The desktop sink taps the same events. Its own try, for the same reason as the two above —
+      // an exception on one side must not swallow the others.
+      try {
+        desktop.onHookEvent(sid, payload)
+      } catch {
+        /* a desktop notification failure must not block the others */
       }
     },
     slackLog
@@ -560,6 +600,13 @@ app.whenReady().then(async () => {
       } catch {
         /* a Slack tap failure must not block rolling */
       }
+      // The desktop sink taps rolling events too, mirroring the Slack tap above. Isolated so an
+      // exception here does not block rolling.
+      try {
+        if (channel === 'session:rollState') desktop.onRollState(payload as RollStateEvent)
+      } catch {
+        /* a desktop notification failure must not block rolling */
+      }
     },
     log: (m) => {
       try {
@@ -687,6 +734,13 @@ app.whenReady().then(async () => {
       } catch {
         /* a Slack tap failure must not block rolling */
       }
+      // The desktop sink taps rolling events too, mirroring the Slack tap above. Isolated so an
+      // exception here does not block rolling.
+      try {
+        if (channel === 'session:rollState') desktop.onRollState(payload as RollStateEvent)
+      } catch {
+        /* a desktop notification failure must not block rolling */
+      }
     },
     log: (m) => {
       try {
@@ -749,7 +803,8 @@ app.whenReady().then(async () => {
     // 탭은 그보다 훨씬 뒤인 첫 롤에서야 돌므로 순서 문제는 없다(orchRef 와 같은 모양).
     (notify) => {
       workUnitForkRef = notify
-    }
+    },
+    desktop
   )
   // No tray on Linux. With close quitting for real there is nothing to hide, so the menu's
   // Open/Quit would only repeat what the window and its close button already do — while tying the

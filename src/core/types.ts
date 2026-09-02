@@ -24,6 +24,7 @@ import type { ProjectUnderstanding } from './understanding/types'
 import type { Provider } from './providers/meta'
 import type { TerminalFont } from './terminal/font'
 import type { GeneratorSettings } from './understanding/generatorSettings'
+import type { DesktopNotifySettings } from './notify/settings'
 import type { ModelListResult } from './models/types'
 import type { ThemeId } from './theme/themes'
 // The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
@@ -547,6 +548,9 @@ export interface CoreEvents {
   /** Every claude account's last-known usage, re-sent whole on each tick (design doc §4). The
    *  renderer replaces the map, never merges — an account that dropped out has no reading to show. */
   'usage:accounts-updated': Record<string, AccountUsage>
+  /** A desktop notification was clicked. Main has already raised the window; the renderer activates
+   *  that session's tab, through the path the tab bar already uses (design doc §7). */
+  'notify:activate': { sessionId: string }
   'run:data': { projectPath: string; data: string } // run output
   'run:status': RunStatus // run state change (running/exited)
   'terminal:data': { id: string; data: string } // project terminal output
@@ -728,6 +732,12 @@ export interface CoreApi {
     subscribe(): void
     unsubscribe(): void
   }
+  notify: {
+    // The session on screen, pushed on every change so main can suppress a notification for it
+    // (design doc §7). null covers a file tab being focused, no pane having a session, and the panes
+    // being empty — main cannot work any of that out on its own.
+    activeSession(req: { sessionId: string | null }): void
+  }
   localHistory: {
     // Browsing and restoring the snapshot taken just before a deletion. projectPath uses the same
     // allowed roots as files.*.
@@ -778,6 +788,10 @@ export interface CoreApi {
     // refresh only happens on an explicit github.refresh call.
     getGithubPolling(): Promise<boolean>
     setGithubPolling(enabled: boolean): Promise<void>
+    // The four desktop-notification switches (design doc §6/§8). Read by the settings screen and by
+    // DesktopNotifier itself (main), which is why the type lives in core/notify/settings rather than here.
+    getDesktopNotify(): Promise<DesktopNotifySettings>
+    setDesktopNotify(next: DesktopNotifySettings): Promise<void>
     // Which account (and model) writes the How It Works explanations. Empty means no account has been
     // chosen, and nothing is generated — the screen says so rather than staying silently blank.
     getGenerator(): Promise<GeneratorSettings>

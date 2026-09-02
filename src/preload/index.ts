@@ -39,7 +39,8 @@ const EVENT_CHANNELS = [
   'sessionTasks:goalIgnored',
   'github:prs-updated',
   'github:status',
-  'usage:accounts-updated'
+  'usage:accounts-updated',
+  'notify:activate'
 ]
 
 const api = {
@@ -107,6 +108,9 @@ const api = {
     subscribe: fire('usage.subscribe'),
     unsubscribe: fire('usage.unsubscribe')
   },
+  notify: {
+    activeSession: fire('notify.activeSession')
+  },
   localHistory: {
     list: invoke('localHistory.list'),
     restore: invoke('localHistory.restore')
@@ -127,6 +131,8 @@ const api = {
     setWorkUnitTrackingEnabled: invoke('settings.setWorkUnitTrackingEnabled'),
     getGithubPolling: invoke('settings.getGithubPolling'),
     setGithubPolling: invoke('settings.setGithubPolling'),
+    getDesktopNotify: invoke('settings.getDesktopNotify'),
+    setDesktopNotify: invoke('settings.setDesktopNotify'),
     getGenerator: invoke('settings.getGenerator'),
     setGenerator: invoke('settings.setGenerator'),
     listModels: invoke('settings.listModels'),
