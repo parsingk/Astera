@@ -142,7 +142,6 @@ export const en: Record<keyof typeof ko, string> = {
   'pr.create.createFailedPushed': 'The branch is on the remote; only the pull request failed. Retrying will skip the push.',
   'pr.create.exists': 'A pull request for this branch already exists.',
   'pr.create.openExisting': 'Open it',
-  'pr.create.retry': 'Retry',
   'common.minimize': 'Minimize',
   'common.maximize': 'Maximize',
   'common.restore': 'Restore',

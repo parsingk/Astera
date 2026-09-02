@@ -152,7 +152,6 @@ export const ko = {
   'pr.create.createFailedPushed': '브랜치는 올라갔고 PR만 실패했습니다. 다시 시도하면 푸시는 건너뜁니다.',
   'pr.create.exists': '이 브랜치의 PR이 이미 있습니다.',
   'pr.create.openExisting': '그 PR 열기',
-  'pr.create.retry': '다시 시도',
   // App.tsx — shared window controls, resizer, separator
   'common.minimize': '최소화',
   'common.maximize': '최대화',

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createPullRequest, type PrCreateRequest } from './prCreate'
+import { createPullRequest, readCommits, type PrCreateRequest } from './prCreate'
 
 const req = (over: Partial<PrCreateRequest> = {}): PrCreateRequest => ({
   worktreePath: 'C:/wt/opal',
@@ -160,5 +160,36 @@ describe('createPullRequest', () => {
       normalizeBase: async (_r, b) => b
     })
     expect(cwd).toBe('C:/wt/opal')
+  })
+})
+
+describe('readCommits', () => {
+  // The subject/body separator is %x00 and the commit separator %x01, so a trailing separator
+  // leaves an empty last chunk that must not become a commit with no subject.
+  it('reads the commits the branch adds over its base, newest first', async () => {
+    let args: string[] = []
+    const got = await readCommits('C:/wt/opal', 'develop', async (a) => {
+      args = a
+      return {
+        ok: true,
+        stdout: 'feat: two\u0000the second body\u0001feat: one\u0000the first body\u0001',
+        stderr: ''
+      }
+    })
+    expect(got).toEqual([
+      { subject: 'feat: two', body: 'the second body' },
+      { subject: 'feat: one', body: 'the first body' }
+    ])
+    // base..HEAD, not HEAD..base — the other way round lists what the branch is missing.
+    expect(args).toContain('develop..HEAD')
+  })
+
+  it('a subject with no body reads as an empty body, not as a missing commit', async () => {
+    const got = await readCommits('C:/wt/opal', 'develop', async () => ({
+      ok: true,
+      stdout: 'chore: bump\u0000\u0001',
+      stderr: ''
+    }))
+    expect(got).toEqual([{ subject: 'chore: bump', body: '' }])
   })
 })

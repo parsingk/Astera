@@ -42,4 +42,21 @@ describe('rowSlot', () => {
   it('no PR and no push state at all renders nothing', () => {
     expect(rowSlot(undefined, undefined)).toBeNull()
   })
+
+  // The PR wins whatever the push state says, including the two values that would otherwise
+  // decide the slot on their own.
+  it('a PR wins over nothing to push', () => {
+    expect(rowSlot(pr, push({ ahead: 0 }))).toEqual({ kind: 'pr', pr })
+  })
+
+  it('a PR wins over an unknown ahead', () => {
+    expect(rowSlot(pr, push({ ahead: null }))).toEqual({ kind: 'pr', pr })
+  })
+
+  // The slot does not branch on state: a merged PR is still the further-along fact and worth
+  // showing. Offering Create again for a closed or merged PR is the row menu's job, not this one's.
+  it('a merged PR still takes the slot', () => {
+    const merged: PrInfo = { ...pr, state: 'merged' }
+    expect(rowSlot(merged, push())).toEqual({ kind: 'pr', pr: merged })
+  })
 })

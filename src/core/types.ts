@@ -651,6 +651,9 @@ export interface CoreApi {
       /** null is unknown — the base did not resolve — and must not be drawn as 0. */
       behindCount: number | null
     }>
+    /** Mirrors PrCreateRequest (src/main/prCreate.ts) field-for-field, for the same reason as the
+     *  kind union below, and with the same obligation: nothing type-checks the two declarations
+     *  against each other, since preload's invoke returns Promise<any>. */
     create(req: {
       worktreePath: string
       repoPath: string
