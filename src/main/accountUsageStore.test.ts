@@ -126,6 +126,22 @@ describe('AccountUsageStore', () => {
     expect(s.get('/cfg/main')).toBeNull()
   })
 
+  // A write failure (a locked file, a full disk, an antivirus scanner holding the handle open) must
+  // not reach the caller — every caller of remember() fires it unawaited (design doc §9, "usage
+  // failures are silent"), and an unhandled rejection there would print to stderr at best and
+  // terminate the process at worst (Node 15+). The public surface only: filePath is pointed at a path
+  // nested under an existing *file*, so persist()'s fs.mkdir of the parent genuinely fails (ENOTDIR)
+  // rather than reaching into a private method.
+  it('a persist failure is swallowed and the reading stays readable', async () => {
+    const blocker = path.join(dir, 'blocker')
+    await fs.writeFile(blocker, 'not a directory', 'utf8')
+    const s = new AccountUsageStore(path.join(blocker, 'account-usage.json'), () => NOW)
+    await s.load()
+
+    await expect(s.remember('/cfg/main', ok())).resolves.toBeUndefined()
+    expect(s.get('/cfg/main')?.session?.usedPercent).toBe(78)
+  })
+
   it('a malformed entry is skipped while its well-formed neighbour survives', async () => {
     await fs.writeFile(
       file,

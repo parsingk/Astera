@@ -116,7 +116,15 @@ export class AccountUsageStore {
       peak,
       readAt: new Date(this.now()).toISOString()
     })
-    await this.persist()
+    // A write failure (a locked file, a full disk, an antivirus scanner holding the handle open —
+    // an ordinary event, especially on Windows) must not reach the caller: every caller of remember()
+    // fires it from an unawaited tick() (design doc §9, "usage failures are silent"), and an unhandled
+    // rejection there would at best print to stderr and at worst terminate the process (Node 15+).
+    // The entry above is already in memory, so the reading stays usable for this run regardless of
+    // whether this write lands — only durability is lost, and the next successful tick rewrites the
+    // file. Same reasoning as load()'s catch-all above: this is a cache of figures the API will hand
+    // back again, so nothing is lost that a recovery notice would need to tell anyone about.
+    await this.persist().catch(() => {})
   }
 
   /** Entries `get` would already refuse are not written back — a rolled window has no reader left,
