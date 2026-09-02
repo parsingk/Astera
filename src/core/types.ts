@@ -260,6 +260,24 @@ export interface RateLimitUsage {
   status: 'ok' | 'unavailable' | 'error'
 }
 
+/** One account's usage as the account panel reads it (design doc §3.3/§4).
+ *
+ *  `readAt` is what the overlay's "updated N ago" is measured from. `remembered` says the most recent
+ *  fetch for this account did not reach the API and this figure came out of AccountUsageStore — the
+ *  row dims it at opacity .45, the same convention a stale PR badge uses.
+ *
+ *  RateLimitUsage's `peak` is deliberately absent: its only job is the discard arithmetic inside the
+ *  store (§3.2), and nothing on the renderer side reads it. `maxPercent` is absent for the same
+ *  reason — the meter draws the two named windows, not the fullest bucket.
+ *  There is no `status`: an account with nothing to show is simply absent from the map, which is what
+ *  the row reads as "draw nothing" (§5). */
+export interface AccountUsage {
+  session: RateLimitWindow | null // the 5-hour window
+  weekly: RateLimitWindow | null // the weekly (7-day) window
+  readAt: string // ISO 8601
+  remembered: boolean
+}
+
 /** A usage snapshot for an active session, taken from the Claude Code statusLine payload
  *  (context_window, rate_limits). The values are Claude's own, so no context-window-size (200k/1M)
  *  heuristics and no credentials are needed. */
