@@ -12,14 +12,12 @@ export function CreatePrDialog({
   worktree,
   base: initialBase,
   needsPush,
-  behind,
   onDone,
   onCancel
 }: {
   worktree: WorktreeListItem
   base: string
   needsPush: boolean
-  behind: number | null
   onDone: () => void
   onCancel: () => void
 }): React.JSX.Element {
@@ -29,6 +27,11 @@ export function CreatePrDialog({
   const [body, setBody] = useState('')
   const [draft, setDraft] = useState(false)
   const [dirtyCount, setDirtyCount] = useState(0)
+  const [commitCount, setCommitCount] = useState(0)
+  // Both counts are measured against the base, so they are held here rather than passed in: the
+  // base can be changed after the dialog opens, and a hint describing the base it no longer
+  // targets is worse than none.
+  const [behindCount, setBehindCount] = useState<number | null>(null)
   const [branches, setBranches] = useState<BranchRef[]>([])
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<Failure | null>(null)
@@ -52,6 +55,8 @@ export function CreatePrDialog({
           setBody(d.body)
         }
         setDirtyCount(d.dirtyCount)
+        setCommitCount(d.commitCount)
+        setBehindCount(d.behindCount)
       })
     return () => {
       cancelled = true
@@ -61,6 +66,11 @@ export function CreatePrDialog({
   useEffect(() => {
     void window.api.worktrees.listBranches(worktree.repoPath).then((r) => setBranches(r.branches))
   }, [worktree.repoPath])
+
+  // createFailedPushed tells the person the retry skips the push, so it has to. needsPush is fixed
+  // at open time; once the push has succeeded, repeating it can fail on someone else's meanwhile
+  // push and cost them the create retry they were promised.
+  const willPush = needsPush && failure?.pushed !== true
 
   const submit = async (): Promise<void> => {
     setBusy(true)
@@ -74,7 +84,7 @@ export function CreatePrDialog({
         title,
         body,
         draft,
-        needsPush
+        needsPush: willPush
       })
       if (r.ok) onDone()
       else setFailure({ kind: r.kind, detail: r.detail, pushed: r.pushed, stage: r.stage })
@@ -84,6 +94,12 @@ export function CreatePrDialog({
   }
 
   const existingUrl = failure?.kind === 'exists' ? extractUrl(failure.detail) : null
+  // Select falls back to its placeholder when value is not among items, and branches is empty
+  // while listBranches loads and stays empty when it fails. The base would then read as
+  // "(Not selected)" while it is in fact set — exactly the hiding of the target this row exists
+  // to prevent.
+  const baseItems = branches.map((b) => ({ value: b.name, label: b.name }))
+  if (!baseItems.some((i) => i.value === base)) baseItems.unshift({ value: base, label: base })
 
   return (
     <div className="modal-backdrop" onClick={() => !busy && onCancel()}>
@@ -101,7 +117,7 @@ export function CreatePrDialog({
           <span className="mono">{worktree.branch}</span>
           <span aria-hidden="true">→</span>
           <Select
-            items={branches.map((b) => ({ value: b.name, label: b.name }))}
+            items={baseItems}
             value={base}
             onChange={setBase}
             ariaLabel={t('pr.create.base')}
@@ -133,12 +149,15 @@ export function CreatePrDialog({
           <span>{t('pr.create.draft')}</span>
           <input type="checkbox" checked={draft} onChange={(e) => setDraft(e.target.checked)} />
         </label>
-        {needsPush && <span className="settings-hint">{t('pr.create.willPush')}</span>}
+        {willPush && <span className="settings-hint">{t('pr.create.willPush')}</span>}
         {dirtyCount > 0 && (
           <span className="settings-hint">{t('pr.create.dirty', { count: dirtyCount })}</span>
         )}
-        {behind !== null && behind > 0 && (
-          <span className="settings-hint">{t('pr.create.behind', { count: behind })}</span>
+        {commitCount > 0 && (
+          <span className="settings-hint">{t('worktree.push.ahead', { count: commitCount })}</span>
+        )}
+        {behindCount !== null && behindCount > 0 && (
+          <span className="settings-hint">{t('pr.create.behind', { count: behindCount })}</span>
         )}
         {failure && (
           <div className="pr-create-failure">
@@ -161,12 +180,12 @@ export function CreatePrDialog({
         )}
         <div className="row right">
           <button onClick={onCancel} disabled={busy}>
-            {t('common.close')}
+            {t('common.cancel')}
           </button>
           <button className="primary" onClick={() => void submit()} disabled={busy || title === ''}>
             {busy
               ? t('pr.create.submitting')
-              : needsPush
+              : willPush
                 ? t('pr.create.submitWithPush')
                 : t('pr.create.submit')}
           </button>

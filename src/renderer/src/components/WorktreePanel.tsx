@@ -370,7 +370,6 @@ export function WorktreePanel({
           worktree={creating}
           base={creating.baseRef}
           needsPush={!pushState[creating.repoPath]?.[creating.baseRef]?.[creating.branch]?.hasUpstream}
-          behind={pushState[creating.repoPath]?.[creating.baseRef]?.[creating.branch]?.behind ?? null}
           onCancel={() => setCreating(null)}
           onDone={() => {
             setCreating(null)

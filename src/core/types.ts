@@ -648,6 +648,8 @@ export interface CoreApi {
       body: string
       commitCount: number
       dirtyCount: number
+      /** null is unknown — the base did not resolve — and must not be drawn as 0. */
+      behindCount: number | null
     }>
     create(req: {
       worktreePath: string

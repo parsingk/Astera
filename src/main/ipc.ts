@@ -2908,7 +2908,14 @@ export function registerIpc(
       } catch {
         dirtyCount = 0 // a status failure must not stop the dialog opening
       }
-      return { title, body, commitCount: commits.length, dirtyCount }
+      // Behind is read here rather than carried in from the row's push state, because the dialog's
+      // base can be changed after it opens and the count has to follow it. null is "unknown" — an
+      // unresolvable base — and the dialog must not draw that as 0.
+      const rev = await git(['rev-list', '--count', `HEAD..${opts.base}`], {
+        cwd: opts.worktreePath
+      })
+      const behindCount = rev.ok && /^\d+$/.test(rev.stdout) ? Number(rev.stdout) : null
+      return { title, body, commitCount: commits.length, dirtyCount, behindCount }
     }
   )
   ipcMain.handle('pr.create', (_e, req: Parameters<typeof createPullRequest>[0]) =>
