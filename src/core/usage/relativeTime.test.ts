@@ -15,7 +15,10 @@ describe('coarseDuration', () => {
   // window roll" the leading unit is the whole answer.
   it('drops the remainder rather than showing two units', () => {
     expect(coarseDuration(25 * 3_600_000, 'en')).toBe('1d')
-    expect(coarseDuration(59 * 60_000 + 59_000, 'en')).toBe('60m')
+    // The leading unit is chosen from a single rounded-up minute count, not re-derived from the raw
+    // milliseconds — so 59m59s, having already rounded up to 60 minutes, reads as the hour it has
+    // effectively reached rather than as '60m'.
+    expect(coarseDuration(59 * 60_000 + 59_000, 'en')).toBe('1h')
   })
 
   it('rounds a sub-minute duration up, never to zero', () => {
