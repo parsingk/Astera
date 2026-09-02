@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { WorktreeListItem } from '../../../core/types'
 import type { MessageKey } from '../../../core/i18n'
+import type { RepoPrSnapshot } from '../../../core/github/types'
 import { confirmModal } from '../lib/confirm'
 import { toast } from '../lib/toast'
 import { dirtyCount, isOrphanUnverifiable, worktreeErrorMessage } from '../lib/worktreeErrors'
 import { subscribeCreated } from '../lib/worktreeBus'
 import { useI18n } from '../i18n/I18nProvider'
 import { PlayIcon, TrashIcon } from './JobIcons'
+import { ContextMenu } from './ContextMenu'
+import { PrBadge } from './PrBadge'
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react'
 
 /** 상태 라벨. **'폴더 없음' 은 없다** — 폴더가 사라진 항목은 listWithStatus 가 목록을 만들면서
@@ -26,12 +29,38 @@ export function WorktreePanel({
   const { t } = useI18n()
   const [items, setItems] = useState<WorktreeListItem[]>([])
   const [open, setOpen] = useState(true)
+  const [prs, setPrs] = useState<Record<string, RepoPrSnapshot>>({})
+  // PR link menu — one at a time, held here rather than per row (the FileExplorer/HistoryBrowser shape)
+  const [prMenu, setPrMenu] = useState<{ x: number; y: number; url: string } | null>(null)
   const [removingId, setRemovingId] = useState<string | null>(null) // the worktree whose removal is in progress
   const busy = removingId !== null
+
+  // PR snapshots: pull once, then ride the push events. Subscribed only while this panel is
+  // mounted AND expanded — the zero-subscriber signal is what lets main stop polling (§4).
+  useEffect(() => {
+    if (!open) return
+    window.api.github.subscribe()
+    void window.api.github.prs().then(setPrs)
+    const offPrs = window.api.on('github:prs-updated', (p) =>
+      setPrs((prev) => ({ ...prev, [p.repoRoot]: p.snapshot }))
+    )
+    const offStatus = window.api.on('github:status', (probe) => {
+      // Badges disappear quietly on disconnect; the settings card explains why (§7)
+      if (probe.kind !== 'connected') setPrs({})
+    })
+    return () => {
+      offPrs()
+      offStatus()
+      window.api.github.unsubscribe()
+    }
+  }, [open])
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
       setItems(await window.api.worktrees.list())
+      // The same triggers that re-query worktrees re-query their PRs: mount, expand, manual ⟳,
+      // and the created event. This is the whole manual path when polling is off.
+      void window.api.github.refresh({ force: true })
     } catch (err) {
       // Swallowing the failure quietly makes the stale list on screen look current — a refresh failure is reported
       const m = worktreeErrorMessage(err instanceof Error ? err.message : String(err))
@@ -172,6 +201,17 @@ export function WorktreePanel({
                       )
                     )}
                   </span>
+                  {(() => {
+                    const snap = prs[w.repoPath]
+                    const pr = snap?.byBranch[w.branch]
+                    return pr ? (
+                      <PrBadge
+                        pr={pr}
+                        stale={snap.stale}
+                        onOpenMenu={(e) => setPrMenu({ x: e.clientX, y: e.clientY, url: pr.url })}
+                      />
+                    ) : null
+                  })()}
                   {/* Drawn icons rather than text glyphs, the same as the history session rows this list
                       is laid out to match: both hold 12px marks in a .ghost button, so the two lists'
                       rows come out the same height. .icon-btn (28×28, 16px glyph) is for the panel
@@ -218,6 +258,26 @@ export function WorktreePanel({
             </div>
           </div>
         ))}
+      {prMenu && (
+        <ContextMenu
+          x={prMenu.x}
+          y={prMenu.y}
+          onClose={() => setPrMenu(null)}
+          items={[
+            {
+              label: t('github.badge.openInBrowser'),
+              onSelect: () => void window.api.system.openExternal(prMenu.url)
+            },
+            {
+              label: t('github.badge.copyLink'),
+              onSelect: () => {
+                window.api.clipboard.writeText(prMenu.url)
+                toast.success(t('github.badge.linkCopied'))
+              }
+            }
+          ]}
+        />
+      )}
     </section>
   )
 }

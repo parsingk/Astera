@@ -166,6 +166,17 @@
   --md-text: #d0d0d6;
   --md-code-bg: #23232a;
   --md-line: #000000;
+  /* Pull request state. **Deliberately outside the theme pipeline** — apply.ts must never
+     override these. Two reasons. (1) This is GitHub's vocabulary, not this app's palette: a
+     person reads these four colours the same way on github.com, and re-tinting them per theme
+     would break a recognition they already have. (2) Merged used --accent before, which is this
+     app's active/focus colour — a merged PR read as *selected*, and in Sirius --accent is very
+     nearly white. Purple has no other use here, so merged cannot collide with anything.
+     Colour is never the only carrier: PrBadge draws a distinct glyph per state as well. */
+  --pr-open: #3fb950;
+  --pr-merged: #a371f7;
+  --pr-closed: #f85149;
+  --pr-draft: #8b949e;
   --ok: #79c98f; /* logged in */
   --ok-bg: #14301f;
   --status-bg: #0e6478; /* bottom status bar */
@@ -522,6 +533,13 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 
 /* ---------- worktree panel ---------- */
 .worktree-panel { border-top: 1px solid var(--line); }
+/* The shared .panel-header stacks its title and its actions, which is right for history and the
+   explorer — their actions carry a full-width account filter and a path row. This panel's only
+   action is one 28x28 icon button, so the column spent a whole row on it and the refresh control
+   read as having dropped below the heading. Put it on the title's row instead, scoped here so the
+   other three panels keep the stack. */
+.worktree-panel .panel-header { flex-direction: row; align-items: center; }
+.worktree-panel .panel-actions { margin-left: auto; }
 /* Reuses the look of .panel-header h2 as a collapse/expand button */
 /* 캐럿이 아이콘이 된 뒤로 정렬이 필요하다 — 인라인 svg 는 baseline 에 앉아 대문자 글자보다 내려간다. */
 .panel-toggle { background: none; border: none; padding: 0; font-size: 10.5px; letter-spacing: .11em; text-transform: uppercase; color: var(--text-dim); font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }
@@ -556,6 +574,26 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    This replaces a min-height of calc(1.333em + 4px): that pinned the button to the line box the old ✕
    *text* glyph made (≈21px), which the drawn icons no longer produce — left in place it jumped the row 5px. */
 .worktree-actions .ghost.removing .loading-spinner { width: 12px; height: 12px; }
+
+/* PR badge on a worktree row — read-only GitHub state (design doc §6). Colors reuse existing
+   tokens on purpose, no new palette: open=--ok, merged=--accent, closed=--danger,
+   draft=--text-faint. Passing checks draw nothing — only pending/failing earn a dot. */
+.pr-badge { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; background: none; border: none; padding: 0 2px; font-family: var(--mono); font-size: 10px; cursor: pointer; }
+.pr-badge.open { color: var(--pr-open); }
+.pr-badge.merged { color: var(--pr-merged); }
+.pr-badge.closed { color: var(--pr-closed); }
+.pr-badge.draft { color: var(--pr-draft); }
+/* The state glyph carries the meaning on its own — green and red are the one pair a
+   red-green colour blindness cannot separate, and open/closed were exactly that pair. */
+.pr-badge .pr-glyph { flex: none; }
+/* Dimmed, not hidden — the rate-limit breaker keeps the last known state on screen (§4) */
+.pr-badge.stale { opacity: 0.45; }
+/* Checks. **Shape, not only colour**: pending is a hollow ring and failing is filled, so the
+   amber/red pair does not have to be told apart by hue either. Passing still draws nothing —
+   quiet by default is the design; the words are in the title. */
+.pr-badge .pr-checks { width: 6px; height: 6px; border-radius: 50%; box-sizing: border-box; }
+.pr-badge .pr-checks.pending { border: 1.5px solid var(--warn); }
+.pr-badge .pr-checks.failing { background: var(--danger); }
 
 /* ---------- tabs ---------- */
 .tabs { display: flex; align-items: center; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; }

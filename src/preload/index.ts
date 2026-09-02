@@ -36,7 +36,9 @@ const EVENT_CHANNELS = [
   'orch:state',
   'understanding:changed',
   'sessionTasks:changed',
-  'sessionTasks:goalIgnored'
+  'sessionTasks:goalIgnored',
+  'github:prs-updated',
+  'github:status'
 ]
 
 const api = {
@@ -82,6 +84,14 @@ const api = {
     getRoot: invoke('worktrees.getRoot'),
     setRoot: invoke('worktrees.setRoot')
   },
+  github: {
+    status: invoke('github.status'),
+    recheck: invoke('github.recheck'),
+    prs: invoke('github.prs'),
+    refresh: invoke('github.refresh'),
+    subscribe: fire('github.subscribe'),
+    unsubscribe: fire('github.unsubscribe')
+  },
   usage: {
     session: invoke('usage.session')
   },
@@ -103,6 +113,8 @@ const api = {
     setOrchestrationEnabled: invoke('settings.setOrchestrationEnabled'),
     getWorkUnitTrackingEnabled: invoke('settings.getWorkUnitTrackingEnabled'),
     setWorkUnitTrackingEnabled: invoke('settings.setWorkUnitTrackingEnabled'),
+    getGithubPolling: invoke('settings.getGithubPolling'),
+    setGithubPolling: invoke('settings.setGithubPolling'),
     getGenerator: invoke('settings.getGenerator'),
     setGenerator: invoke('settings.setGenerator'),
     listModels: invoke('settings.listModels'),

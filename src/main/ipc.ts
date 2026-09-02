@@ -104,6 +104,7 @@ import { listPythonInterpreters } from './pythonScanner'
 import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
 import { loadRunConfigs, prepareRun } from './run/prepare'
+import { createGithubPrs } from './githubPrs'
 
 /** startOrchestration 이 배선에게 돌려주는 손잡이. index.ts 가 이것을 들고 있는다.
  *  **stop 은 동기다** — will-quit 에서 불리므로 비동기 정리는 프로세스가 끝나기 전에 완료될 보장이
@@ -2881,6 +2882,28 @@ export function registerIpc(
   ipcMain.handle('worktrees.isGitRepo', (_e, dir: string) => repoRoot(dir))
   ipcMain.handle('worktrees.getRoot', () => core.worktrees.getRoot())
   ipcMain.handle('worktrees.setRoot', (_e, root: string | null) => core.worktrees.setRoot(root))
+
+  // PR snapshots for the worktree panel (design doc §4). Created here because it needs `send`;
+  // start() probes gh once and announces the result — it fetches nothing until subscribed.
+  const githubPrs = createGithubPrs({
+    registry: core.worktrees,
+    settings: core.appSettings,
+    send
+  })
+  void githubPrs.start()
+  ipcMain.handle('github.status', () => githubPrs.status())
+  ipcMain.handle('github.recheck', () => githubPrs.recheck())
+  ipcMain.handle('github.prs', () => githubPrs.prs())
+  ipcMain.handle('github.refresh', (_e, opts?: { force?: boolean }) =>
+    githubPrs.refresh(opts?.force === true ? { force: true } : undefined)
+  )
+  ipcMain.on('github.subscribe', () => githubPrs.subscribe())
+  ipcMain.on('github.unsubscribe', () => githubPrs.unsubscribe())
+  ipcMain.handle('settings.getGithubPolling', () => core.appSettings.getGithubPolling())
+  ipcMain.handle('settings.setGithubPolling', async (_e, enabled: boolean) => {
+    if (typeof enabled !== 'boolean') throw new Error(`INVALID_GITHUB_POLLING: ${String(enabled)}`)
+    await core.appSettings.setGithubPolling(enabled)
+  })
 
   // usage — an active session's context, 5-hour and weekly %. The two CLIs keep those figures in
   // different places, so the source is picked per session: claude writes them into the statusLine
