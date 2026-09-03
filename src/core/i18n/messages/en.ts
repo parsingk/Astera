@@ -718,6 +718,8 @@ export const en: Record<keyof typeof ko, string> = {
   'run.find.prev': 'Previous match',
   'run.find.next': 'Next match',
   'run.find.close': 'Close find',
+  'run.rail.scrollToEnd': 'Scroll to end',
+  'run.rail.find': 'Find',
   'terminal.rail.open': 'Terminal',
   'terminal.tab.label': 'Terminal {n}',
   'terminal.tab.new': 'New terminal',

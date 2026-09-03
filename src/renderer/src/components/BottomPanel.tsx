@@ -1,19 +1,20 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { RunStatus, TerminalBuffer } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
-import { RunInstanceList } from './RunInstanceList'
 import { RunPanel } from './RunPanel'
+import { RunTabStrip } from './RunTabStrip'
+import { RunToolRail } from './RunToolRail'
 import { TerminalBody } from './TerminalBody'
-import { ChevronDown, Delete, Plus, Square, X } from 'lucide-react'
+import { ChevronDown, Delete, Plus, X } from 'lucide-react'
 
 /**
  * Bottom panel. The Run tab and the project terminals share this one panel through tabs.
- * The tab strip, collapse, clear and stop chrome are owned only here; the bodies (RunPanel,
+ * The tab strip, collapse and clear chrome are owned only here; the bodies (RunPanel,
  * TerminalBody) draw nothing but xterm.
- * The Run tab's body is two panes: the project's runs on the left (RunInstanceList), the selected run's
- * console on the right. Every run has its own RunPanel, and the ones not selected stay mounted under
+ * The Run tab's body is a tool rail on the left and, to its right, a strip of run tabs over the selected
+ * run's console. Every run has its own RunPanel, and the ones not selected stay mounted under
  * display:none — the same approach as the session tabs (TerminalView) and the terminal tabs below — so
- * their scrollback survives switching rows and no buffer is replayed on every switch.
+ * their scrollback and their find state survive switching tabs.
  */
 export function BottomPanel({
   runAvailable = true,
@@ -23,6 +24,7 @@ export function BottomPanel({
   onStopRun,
   onRerun,
   onDismissRun,
+  onOpenFile,
   terminals,
   activeTab,
   onSelectTab,
@@ -39,10 +41,12 @@ export function BottomPanel({
   selectedRunId: string | null
   onSelectRun: (runId: string) => void
   onStopRun: (runId: string) => void
-  /** Start that configuration again — the list's ↻ on a finished row */
+  /** Start that configuration again — the rail's ↻ */
   onRerun: (configId: string) => void
-  /** Drop a finished run — the list's ✕. Only ever offered on a finished row, so a live run cannot be lost here. */
+  /** Drop a finished run — the tab's ✕. Only ever offered on a finished run, so a live run cannot be lost here. */
   onDismissRun: (runId: string) => void
+  /** A path link in a console was activated — App opens the file at that line */
+  onOpenFile: (path: string, at: { line?: number; col?: number }) => void
   terminals: TerminalBuffer[]
   activeTab: string
   onSelectTab: (tab: string) => void
@@ -51,13 +55,26 @@ export function BottomPanel({
   onCollapse: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
-  // Clear means emptying the active body's xterm — bump a per-body counter (a runId or a terminal id)
-  // and let the body clear itself
+  // Clear means emptying a body's xterm — bump a per-body counter (a runId or a terminal id) and let the
+  // body clear itself. Scroll-to-end works the same way for runs.
   const [clearNonces, setClearNonces] = useState<Record<string, number>>({})
-  const bump = (key: string): void =>
-    setClearNonces((prev) => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }))
+  const [scrollNonces, setScrollNonces] = useState<Record<string, number>>({})
+  const bump = (set: typeof setClearNonces, key: string): void =>
+    set((prev) => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }))
+  // The find bar is per run, so switching tabs shows that run's search
+  const [findOpen, setFindOpen] = useState<Record<string, boolean>>({})
 
+  // One clock for the whole panel, ticking only while something is running. Finished runs are computed
+  // from their own exitedAt, so the tick never changes their text.
   const anyRunning = runs.some((r) => r.status === 'running')
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!anyRunning) return
+    setNow(Date.now())
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [anyRunning])
+
   const selectedRun = runs.find((r) => r.runId === selectedRunId) ?? null
   // The tab's own Enter/Space. A tab that holds a ✕ cannot be a <button> (no button inside a button),
   // so it is a span and keyboard access is wired by hand. A key that bubbled up from the nested ✕ has
@@ -123,21 +140,13 @@ export function BottomPanel({
           </button>
         </span>
         <span className="run-panel-actions">
-          {/* The actions follow the active tab — stop only appears on the Run tab, for the selected run */}
-          {activeTab === 'run' && selectedRun?.status === 'running' && (
-            <button className="run-panel-btn stop" title={t('run.action.stop')} onClick={() => onStopRun(selectedRun.runId)}>
-              <Square size={12} fill="currentColor" strokeWidth={0} />
+          {/* On the Run tab, stop and clear live in the rail beside the console; the header keeps them
+              for terminal tabs, which have no rail. */}
+          {activeTab !== 'run' && (
+            <button className="run-panel-btn" title={t('run.panel.clear')} onClick={() => bump(setClearNonces, activeTab)}>
+              <Delete size={12} />
             </button>
           )}
-          <button
-            className="run-panel-btn"
-            title={t('run.panel.clear')}
-            // On the Run tab the body being cleared is the selected run's console
-            disabled={activeTab === 'run' && !selectedRunId}
-            onClick={() => bump(activeTab === 'run' ? (selectedRunId ?? 'run') : activeTab)}
-          >
-            <Delete size={12} />
-          </button>
           <button className="run-panel-btn" title={t('run.panel.collapse')} onClick={onCollapse}>
             <ChevronDown size={12} />
           </button>
@@ -149,24 +158,35 @@ export function BottomPanel({
             project there is no run to ask about. */}
         {runAvailable && (
           <div className="bottom-body run-body" style={{ display: activeTab === 'run' ? 'flex' : 'none' }}>
-            <RunInstanceList
-              runs={runs}
-              selectedId={selectedRunId}
-              onSelect={onSelectRun}
-              onStop={onStopRun}
+            <RunToolRail
+              run={selectedRun}
+              findOpen={!!(selectedRunId && findOpen[selectedRunId])}
               onRerun={onRerun}
-              onDismiss={onDismissRun}
+              onStop={onStopRun}
+              onScrollToEnd={() => selectedRunId && bump(setScrollNonces, selectedRunId)}
+              onClear={() => selectedRunId && bump(setClearNonces, selectedRunId)}
+              onToggleFind={() => selectedRunId && setFindOpen((prev) => ({ ...prev, [selectedRunId]: !prev[selectedRunId] }))}
             />
-            <div className="run-consoles">
-              {runs.map((r) => (
-                <div
-                  key={r.runId}
-                  className="run-console"
-                  style={{ display: r.runId === selectedRunId ? 'flex' : 'none' }}
-                >
-                  <RunPanel runId={r.runId} clearNonce={clearNonces[r.runId] ?? 0} />
-                </div>
-              ))}
+            <div className="run-main">
+              <RunTabStrip runs={runs} selectedId={selectedRunId} now={now} onSelect={onSelectRun} onDismiss={onDismissRun} />
+              <div className="run-consoles">
+                {runs.map((r) => (
+                  <div
+                    key={r.runId}
+                    className="run-console"
+                    style={{ display: r.runId === selectedRunId ? 'flex' : 'none' }}
+                  >
+                    <RunPanel
+                      runId={r.runId}
+                      clearNonce={clearNonces[r.runId] ?? 0}
+                      scrollToEndNonce={scrollNonces[r.runId] ?? 0}
+                      findOpen={!!findOpen[r.runId]}
+                      onFindOpenChange={(open) => setFindOpen((prev) => ({ ...prev, [r.runId]: open }))}
+                      onOpenFile={onOpenFile}
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -174,7 +194,7 @@ export function BottomPanel({
             terminal tab is first mounted while inactive, TerminalBody's initial fit.fit() runs against a
             0×0 host and xterm stays at the default 80×24 (the PTY is 120×30). Output that arrives while
             hidden wraps at that width, but opening the tab makes the ResizeObserver refit and corrects it
-            — cosmetic and self-correcting. The same applies to a RunPanel mounted for a row that is not
+            — cosmetic and self-correcting. The same applies to a RunPanel mounted for a tab that is not
             selected. */}
         {terminals.map((term) => (
           <div

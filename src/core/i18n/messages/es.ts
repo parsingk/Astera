@@ -743,6 +743,8 @@ export const es: Catalog = {
   'run.find.prev': 'Coincidencia anterior',
   'run.find.next': 'Siguiente coincidencia',
   'run.find.close': 'Cerrar búsqueda',
+  'run.rail.scrollToEnd': 'Ir al final',
+  'run.rail.find': 'Buscar',
   // BottomPanel, the rail terminal button
   'terminal.rail.open': 'Terminal',
   'terminal.tab.label': 'Terminal {n}',
