@@ -41,6 +41,8 @@ const roll = (over: Partial<RollStateEvent> = {}): RollStateEvent => ({
 describe('DesktopNotifier — the four events', () => {
   it('input needed fires on a Notification hook, and is on by default', () => {
     const h = harness()
+    // A payload with no notification_type at all and no idle wording is an unknown kind — it errs
+    // toward notifying, the same direction core/hooks/notification takes.
     h.notifier.onHookEvent('s1', { hook_event_name: 'Notification' })
     expect(h.shown.map((s) => s.event)).toEqual(['inputNeeded'])
   })
@@ -49,16 +51,6 @@ describe('DesktopNotifier — the four events', () => {
     const h = harness()
     h.notifier.onRollState(roll())
     expect(h.shown.map((s) => s.event)).toEqual(['limitWaiting'])
-  })
-
-  it('turn finished is off by default and fires once enabled', () => {
-    const off = harness()
-    off.notifier.onHookEvent('s1', { hook_event_name: 'Stop' })
-    expect(off.shown).toHaveLength(0)
-
-    const on = harness({ turnDone: true })
-    on.notifier.onHookEvent('s1', { hook_event_name: 'Stop' })
-    expect(on.shown.map((s) => s.event)).toEqual(['turnDone'])
   })
 
   it('account switched is off by default and fires once enabled', () => {
@@ -76,18 +68,18 @@ describe('DesktopNotifier — the four events', () => {
     const h = harness({
       inputNeeded: false,
       limitWaiting: false,
-      accountSwitched: false,
-      turnDone: false
+      accountSwitched: false
     })
     h.notifier.onHookEvent('s1', { hook_event_name: 'Notification' })
-    h.notifier.onHookEvent('s1', { hook_event_name: 'Stop' })
     h.notifier.onRollState(roll())
     h.notifier.onRollState(roll({ state: 'switching', accountLabel: 'spare' }))
     expect(h.shown).toHaveLength(0)
   })
 
   it('other hook events and other roll states are ignored', () => {
-    const h = harness({ accountSwitched: true, turnDone: true })
+    const h = harness({ accountSwitched: true })
+    // Stop is Slack's turn notice, not a desktop event — the desktop sink ignores it entirely.
+    h.notifier.onHookEvent('s1', { hook_event_name: 'Stop' })
     h.notifier.onHookEvent('s1', { hook_event_name: 'PreToolUse' })
     h.notifier.onHookEvent('s1', { hook_event_name: 'PostToolUse' })
     h.notifier.onHookEvent('s1', null)
@@ -108,14 +100,43 @@ describe('DesktopNotifier — the four events', () => {
     })
     expect(h.shown).toHaveLength(0)
 
+    // A payload with no notification_type at all and no idle wording is an unknown kind — it errs
+    // toward notifying, the same direction core/hooks/notification takes.
     h.notifier.onHookEvent('s1', { hook_event_name: 'Notification' })
     expect(h.shown.map((s) => s.event)).toEqual(['inputNeeded'])
 
+  })
+
+  // "Claude is waiting for your input" after N idle seconds is not a screen waiting for an answer —
+  // nothing is blocked and nothing has to be decided. The desktop notification is for a choice or a
+  // permission approval, and those arrive under their own types, so dropping idle costs none of them.
+  it('an idle_prompt shows nothing, while a choice or an approval still fires', () => {
+    const h = harness()
     h.notifier.onHookEvent('s1', {
       hook_event_name: 'Notification',
       notification_type: 'idle_prompt'
     })
-    expect(h.shown.map((s) => s.event)).toEqual(['inputNeeded', 'inputNeeded'])
+    // The pre-type fallback, for a Claude Code old enough to carry no notification_type at all
+    h.notifier.onHookEvent('s1', {
+      hook_event_name: 'Notification',
+      message: 'Claude is waiting for your input'
+    })
+    expect(h.shown).toHaveLength(0)
+
+    for (const notification_type of [
+      'permission_prompt',
+      'worker_permission_prompt',
+      'agent_needs_input',
+      'elicitation_dialog'
+    ]) {
+      h.notifier.onHookEvent('s1', { hook_event_name: 'Notification', notification_type })
+    }
+    expect(h.shown.map((s) => s.event)).toEqual([
+      'inputNeeded',
+      'inputNeeded',
+      'inputNeeded',
+      'inputNeeded'
+    ])
   })
 
   // reattach is the re-publish that reattaches the banner to the new sessionId after a respawn — the

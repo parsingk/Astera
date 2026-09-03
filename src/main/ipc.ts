@@ -2975,7 +2975,7 @@ export function registerIpc(
     if (next === null || typeof next !== 'object' || Array.isArray(next))
       throw new Error(`INVALID_DESKTOP_NOTIFY: ${String(next)}`)
     const o = next as Record<string, unknown>
-    for (const k of ['inputNeeded', 'limitWaiting', 'accountSwitched', 'turnDone'])
+    for (const k of ['inputNeeded', 'limitWaiting', 'accountSwitched'])
       if (typeof o[k] !== 'boolean') throw new Error(`INVALID_DESKTOP_NOTIFY: ${k}=${String(o[k])}`)
     await core.appSettings.setDesktopNotify(next as DesktopNotifySettings)
   })

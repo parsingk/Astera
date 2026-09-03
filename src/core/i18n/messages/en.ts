@@ -127,13 +127,12 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.notifications.hint':
     'Desktop notifications. Nothing is sent while the window is focused on that very session. If Slack is on, both fire — the person who has left and the person at the same machine in another window are different people.',
   'settings.notifications.inputNeeded': 'Input needed',
-  'settings.notifications.inputNeededHint': 'The session has stopped for a question or an approval.',
+  'settings.notifications.inputNeededHint':
+    'The session is held up by a choice or a permission approval. Merely going quiet does not notify.',
   'settings.notifications.limitWaiting': 'Waiting on a limit',
   'settings.notifications.limitWaitingHint': 'Waiting until the reset it is scheduled to resume at.',
   'settings.notifications.accountSwitched': 'Account switched',
   'settings.notifications.accountSwitchedHint': 'The work is proceeding. Frequent with several sessions running.',
-  'settings.notifications.turnDone': 'Turn finished',
-  'settings.notifications.turnDoneHint': 'One per turn. Frequent with several sessions running.',
   'settings.notifications.saveFailed': 'Could not save the notification settings: {detail}',
   'worktree.push.aheadUnknown': 'This branch has unpushed commits',
   'worktree.push.createPr': 'Create pull request',
@@ -742,7 +741,6 @@ export const en: Record<keyof typeof ko, string> = {
   'notify.inputNeeded': 'Waiting for your input',
   'notify.limitWaiting': 'Stopped on a limit, waiting to resume',
   'notify.accountSwitched': 'Switched to {label}',
-  'notify.turnDone': 'Finished',
   'notify.fallbackTitle': 'Astera',
   // JobsView.tsx, App.tsx — the read-only Jobs sidebar (the orchestration Run/Task list)
   'jobs.rail.open': 'Jobs',

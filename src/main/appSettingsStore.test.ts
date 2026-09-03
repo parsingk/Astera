@@ -352,8 +352,7 @@ describe('AppSettingsStore desktop notifications', () => {
     expect(s.getDesktopNotify()).toEqual({
       inputNeeded: true,
       limitWaiting: true,
-      accountSwitched: false,
-      turnDone: false
+      accountSwitched: false
     })
   })
 
@@ -364,8 +363,7 @@ describe('AppSettingsStore desktop notifications', () => {
     await a.setDesktopNotify({
       inputNeeded: false,
       limitWaiting: true,
-      accountSwitched: true,
-      turnDone: false
+      accountSwitched: true
     })
 
     const b = new AppSettingsStore(f)
@@ -373,8 +371,7 @@ describe('AppSettingsStore desktop notifications', () => {
     expect(b.getDesktopNotify()).toEqual({
       inputNeeded: false,
       limitWaiting: true,
-      accountSwitched: true,
-      turnDone: false
+      accountSwitched: true
     })
   })
 
@@ -386,7 +383,7 @@ describe('AppSettingsStore desktop notifications', () => {
     await fs.writeFile(
       f,
       JSON.stringify({
-        desktopNotify: { inputNeeded: 'no', limitWaiting: 0, accountSwitched: 'yes', turnDone: 1 }
+        desktopNotify: { inputNeeded: 'no', limitWaiting: 0, accountSwitched: 'yes' }
       }),
       'utf8'
     )
@@ -395,8 +392,7 @@ describe('AppSettingsStore desktop notifications', () => {
     expect(s.getDesktopNotify()).toEqual({
       inputNeeded: true, // not an explicit false
       limitWaiting: true, // not an explicit false
-      accountSwitched: false, // not an explicit true
-      turnDone: false // not an explicit true
+      accountSwitched: false // not an explicit true
     })
   })
 
@@ -411,14 +407,12 @@ describe('AppSettingsStore desktop notifications', () => {
     await s.setDesktopNotify({
       inputNeeded: 'no',
       limitWaiting: 0,
-      accountSwitched: 'yes',
-      turnDone: 1
+      accountSwitched: 'yes'
     } as unknown as DesktopNotifySettings)
     expect(s.getDesktopNotify()).toEqual({
       inputNeeded: true, // not an explicit false
       limitWaiting: true, // not an explicit false
-      accountSwitched: false, // not an explicit true
-      turnDone: false // not an explicit true
+      accountSwitched: false // not an explicit true
     })
   })
 
@@ -431,8 +425,7 @@ describe('AppSettingsStore desktop notifications', () => {
       expect(s.getDesktopNotify()).toEqual({
         inputNeeded: true,
         limitWaiting: true,
-        accountSwitched: false,
-        turnDone: false
+        accountSwitched: false
       })
     }
   })
@@ -446,8 +439,7 @@ describe('AppSettingsStore desktop notifications', () => {
     await s.setDesktopNotify({
       inputNeeded: false,
       limitWaiting: false,
-      accountSwitched: true,
-      turnDone: true
+      accountSwitched: true
     })
     await fs.writeFile(f, '{ not json', 'utf8')
     const r = await s.load()
@@ -455,8 +447,7 @@ describe('AppSettingsStore desktop notifications', () => {
     expect(s.getDesktopNotify()).toEqual({
       inputNeeded: true,
       limitWaiting: true,
-      accountSwitched: false,
-      turnDone: false
+      accountSwitched: false
     })
   })
 
@@ -467,8 +458,7 @@ describe('AppSettingsStore desktop notifications', () => {
     await s.setDesktopNotify({
       inputNeeded: true,
       limitWaiting: true,
-      accountSwitched: false,
-      turnDone: false
+      accountSwitched: false
     })
     const parsed = JSON.parse(await fs.readFile(f, 'utf8')) as Record<string, unknown>
     expect(parsed.desktopNotify).toBeUndefined()

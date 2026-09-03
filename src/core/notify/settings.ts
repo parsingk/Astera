@@ -1,12 +1,15 @@
-// The four desktop-notification switches (design doc §6/§8).
+// The desktop-notification switches (design doc §6/§8).
 //
-// The first two mean *the work has stopped* and default on. The last two mean *the work is
-// proceeding*, and with four sessions running they are noise — which is a reason to ship them off,
-// not a reason to omit them: the person running eight worktrees may well want the turn-finished
-// signal, and enabling it is one click.
+// The first two mean *the work has stopped* and default on. accountSwitched means it is proceeding,
+// and with several sessions running that is noise — a reason to ship it off, not to omit it.
+//
+// A fourth switch, turnDone, was dropped: it fired on every Stop hook, so it announced the end of
+// each individual response rather than the end of anything, and the sentence it produced ("the work
+// has finished") said something that was not true. Slack still posts its own turn notice; that is a
+// thread you are reading, not a toast interrupting you.
 //
 // They move together as one stored object, so there is one place that knows what a missing file
-// means and the four cannot drift apart on disk.
+// means and they cannot drift apart on disk.
 //
 // node: no imports — the settings screen (renderer) and the notifier (main) both read this.
 
@@ -14,14 +17,12 @@ export interface DesktopNotifySettings {
   inputNeeded: boolean
   limitWaiting: boolean
   accountSwitched: boolean
-  turnDone: boolean
 }
 
 export const DESKTOP_NOTIFY_DEFAULTS: DesktopNotifySettings = {
   inputNeeded: true,
   limitWaiting: true,
-  accountSwitched: false,
-  turnDone: false
+  accountSwitched: false
 }
 
 /** Read from a file a user can edit by hand, so the narrowing is per default — the convention
@@ -34,8 +35,7 @@ export function readDesktopNotify(v: unknown): DesktopNotifySettings {
   return {
     inputNeeded: o.inputNeeded !== false,
     limitWaiting: o.limitWaiting !== false,
-    accountSwitched: o.accountSwitched === true,
-    turnDone: o.turnDone === true
+    accountSwitched: o.accountSwitched === true
   }
 }
 

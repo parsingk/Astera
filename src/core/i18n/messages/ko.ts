@@ -136,13 +136,12 @@ export const ko = {
   'settings.notifications.hint':
     '데스크톱 알림입니다. 창이 떠 있고 그 세션을 보고 있으면 보내지 않습니다. Slack 을 켜 뒀어도 둘 다 갑니다 — 자리를 떠난 사람과 같은 화면의 다른 창을 보는 사람은 다른 사람입니다.',
   'settings.notifications.inputNeeded': '입력이 필요할 때',
-  'settings.notifications.inputNeededHint': '세션이 질문이나 승인을 기다리며 멈춘 상태입니다.',
+  'settings.notifications.inputNeededHint':
+    '선택지나 권한 승인을 기다리며 멈춘 상태입니다. 그냥 조용한 것만으로는 오지 않습니다.',
   'settings.notifications.limitWaiting': '한도에 걸려 멈출 때',
   'settings.notifications.limitWaitingHint': '재개 예정 시각까지 기다립니다.',
   'settings.notifications.accountSwitched': '계정을 전환할 때',
   'settings.notifications.accountSwitchedHint': '작업은 계속 진행됩니다. 세션이 여럿이면 잦습니다.',
-  'settings.notifications.turnDone': '작업이 끝날 때',
-  'settings.notifications.turnDoneHint': '턴마다 옵니다. 세션이 여럿이면 잦습니다.',
   'settings.notifications.saveFailed': '알림 설정을 저장하지 못했습니다: {detail}',
   'worktree.push.aheadUnknown': '푸시하지 않은 커밋이 있습니다',
   'worktree.push.createPr': 'PR 만들기',
@@ -862,7 +861,6 @@ export const ko = {
   'notify.inputNeeded': '입력을 기다립니다',
   'notify.limitWaiting': '한도에 걸려 재개를 기다립니다',
   'notify.accountSwitched': '계정을 {label} 로 전환했습니다',
-  'notify.turnDone': '작업이 끝났습니다',
   'notify.fallbackTitle': 'Astera',
   // JobsView.tsx, App.tsx — the read-only Jobs sidebar (오케스트레이션 Run/Task 목록)
   // 'Jobs'는 번역하지 않는다 — '작업'은 이미 Task를 가리키는 말이라, 뷰 이름까지 '작업'이라 하면

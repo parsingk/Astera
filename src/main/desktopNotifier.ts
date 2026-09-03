@@ -2,17 +2,20 @@ import { t } from '../core/i18n'
 import type { Lang, MessageKey } from '../core/i18n'
 import type { RollStateEvent, SessionInfo } from '../core/types'
 import type { DesktopNotifySettings } from '../core/notify/settings'
-import { isNonPromptNotification, type NotificationPayload } from '../core/hooks/notification'
+import {
+  isIdleNotification,
+  isNonPromptNotification,
+  type NotificationPayload
+} from '../core/hooks/notification'
 
-/** The four events (design doc §6). The names are the AppSettingsStore flag names, so the flag lookup
- *  is the event name and there is no second table mapping one to the other. */
+/** The events (design doc §6). The names are the AppSettingsStore flag names, so the flag lookup is
+ *  the event name and there is no second table mapping one to the other. */
 export type DesktopNotifyEvent = keyof DesktopNotifySettings
 
 const BODY_KEY: Record<DesktopNotifyEvent, MessageKey> = {
   inputNeeded: 'notify.inputNeeded',
   limitWaiting: 'notify.limitWaiting',
-  accountSwitched: 'notify.accountSwitched',
-  turnDone: 'notify.turnDone'
+  accountSwitched: 'notify.accountSwitched'
 }
 
 /** What the OS sink is asked to show. `sessionId` travels with it because clicking the notification
@@ -77,8 +80,19 @@ export class DesktopNotifier {
       // Without it, a fan-out of subagents pops one false "waiting for your input" toast per worker as
       // each one completes, and every login pops one too.
       if (isNonPromptNotification(payload as NotificationPayload)) return
+      // Nor is the idle notice. "Claude is waiting for your input", fired after N quiet seconds, is
+      // not a blocked screen: nothing has to be decided and nothing is held up. What this
+      // notification is for is a choice or a permission approval, and those arrive under their own
+      // types (permission_prompt, worker_permission_prompt, agent_needs_input, elicitation_dialog),
+      // so dropping idle costs none of them. slack.ts makes the same exclusion, with an extra
+      // exception it can afford because its sessions also carry the tool-call capture; this sink has
+      // no such capture and needs none, since the real prompts are typed.
+      if (isIdleNotification(payload as NotificationPayload)) return
       this.fire('inputNeeded', sessionId)
-    } else if (name === 'Stop') this.fire('turnDone', sessionId)
+    }
+    // Stop is deliberately not handled. It fires at the end of every response, so a notification on
+    // it announced each turn rather than anything finishing — Slack's thread is the right place for
+    // that, a toast is not.
   }
 
   /** The rolling state tap. waiting → the work has stopped on a limit; switching → it is proceeding

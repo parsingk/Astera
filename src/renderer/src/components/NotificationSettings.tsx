@@ -5,8 +5,8 @@ import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 
 /** The four events, in the order §6's table lists them: the two that mean *the work has stopped*
- *  first, then the two that mean *it is proceeding*. That order is the explanation — a person
- *  scanning the list should meet the two they almost certainly want before the two they may not. */
+ *  first, then the one that means *it is proceeding*. That order is the explanation — a person
+ *  scanning the list should meet the two they almost certainly want before the one they may not. */
 const EVENTS = [
   {
     key: 'inputNeeded',
@@ -22,17 +22,12 @@ const EVENTS = [
     key: 'accountSwitched',
     label: 'settings.notifications.accountSwitched',
     hint: 'settings.notifications.accountSwitchedHint'
-  },
-  {
-    key: 'turnDone',
-    label: 'settings.notifications.turnDone',
-    hint: 'settings.notifications.turnDoneHint'
   }
 ] as const satisfies readonly { key: keyof DesktopNotifySettings; label: MessageKey; hint: MessageKey }[]
 
 /** The Notifications pane of the settings modal (design doc §8). Its own tab rather than a corner of
  *  General: General already carries the resume strategy and two experimental toggles, and Slack,
- *  GitHub and Worktree each earned a tab at less weight than four checkboxes and an explanation of
+ *  GitHub and Worktree each earned a tab at less weight than these checkboxes and an explanation of
  *  what each event means. */
 export function NotificationSettings(): React.JSX.Element {
   const { t } = useI18n()
