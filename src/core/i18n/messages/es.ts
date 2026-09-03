@@ -699,6 +699,7 @@ export const es: Catalog = {
   'run.field.args': 'Argumentos',
   'run.field.cwd': 'Carpeta de trabajo',
   'run.field.env': 'Variables de entorno',
+  'run.field.allowMultipleInstances': 'Permitir varias instancias',
   'run.field.command': 'Comando',
   'run.field.script': 'Script',
   'run.field.file': 'Archivo',

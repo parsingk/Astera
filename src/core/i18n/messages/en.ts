@@ -674,6 +674,7 @@ export const en: Record<keyof typeof ko, string> = {
   'run.field.args': 'Arguments',
   'run.field.cwd': 'Working directory',
   'run.field.env': 'Environment variables',
+  'run.field.allowMultipleInstances': 'Allow multiple instances',
   'run.field.command': 'Command',
   'run.field.script': 'Script',
   'run.field.file': 'File',

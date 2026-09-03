@@ -689,6 +689,7 @@ export const ja: Catalog = {
   'run.field.args': '引数',
   'run.field.cwd': '作業フォルダ',
   'run.field.env': '環境変数',
+  'run.field.allowMultipleInstances': '複数インスタンスを許可',
   'run.field.command': 'コマンド',
   'run.field.script': 'スクリプト',
   'run.field.file': 'ファイル',
