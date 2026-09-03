@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { Account } from '../../../core/types'
 import { providerOf } from '../../../core/providers/meta'
 import { useAccountStatus } from '../hooks/useAccountStatus'
+import { useAccountUsage } from '../hooks/useAccountUsage'
 import { AccountRow } from './AccountRow'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
@@ -11,6 +12,9 @@ import { toast } from '../lib/toast'
 export function AccountSettings({ accounts }: { accounts: Account[] }): React.JSX.Element {
   const { t, tm } = useI18n()
   const { loginMap, emailMap, defaultIdByProvider } = useAccountStatus(accounts)
+  const usage = useAccountUsage()
+  // Which row has its usage detail open — the same one-at-a-time rule as the sidebar panel.
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   const [removeTarget, setRemoveTarget] = useState<Account | null>(null)
   const [logoutToo, setLogoutToo] = useState(false)
   const [removing, setRemoving] = useState(false)
@@ -74,6 +78,9 @@ export function AccountSettings({ accounts }: { accounts: Account[] }): React.JS
             loggedIn={loginMap[a.id]}
             email={emailMap[a.id]}
             isDefault={defaultId === a.id}
+            usage={usage[a.configDir]}
+            expanded={expandedId === a.id}
+            onToggle={() => setExpandedId((cur) => (cur === a.id ? null : a.id))}
           >
             {/* ⤓ needs a source, and that source is this provider's default account. Hidden on the default
                 itself (it would be copying onto itself) and when the provider has no default yet, which

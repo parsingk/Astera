@@ -63,6 +63,27 @@ function setup(over: Partial<SlackDeps> = {}): {
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
 describe('SlackNotifier 훅 이벤트', () => {
+  // 탭 이름을 바꾸면 그 뒤 Slack 메시지의 접두사도 새 이름이어야 한다. register 는 spawn 이 돌려준
+  // SessionInfo 의 **복사본**을 들기 때문에(SessionManager.spawn 은 { ...info } 를 낸다) 세션 쪽만
+  // 고쳐서는 여기까지 오지 않는다 — 그래서 이름 변경이 이 기록에도 밀려 들어온다.
+  it('이름을 바꾸면 이후 메시지의 접두사가 새 이름이 된다', async () => {
+    const h = setup()
+    h.notifier.register(info())
+    h.notifier.rename('s-1', '결제 리팩터링')
+    h.notifier.onHookEvent('s-1', { hook_event_name: 'Notification', message: '권한 승인이 필요합니다' })
+    await flush()
+    expect(h.sent).toEqual(['[결제 리팩터링 · work1] 🙋 입력 필요 — 권한 승인이 필요합니다'])
+  })
+
+  it('모르는 세션 id 로 이름을 바꿔도 조용하다', async () => {
+    const h = setup()
+    h.notifier.register(info())
+    h.notifier.rename('없는-세션', '결제')
+    h.notifier.onHookEvent('s-1', { hook_event_name: 'Notification', message: '권한 승인이 필요합니다' })
+    await flush()
+    expect(h.sent).toEqual(['[myproj · work1] 🙋 입력 필요 — 권한 승인이 필요합니다'])
+  })
+
   it('Notification 훅 → 프리픽스 붙은 입력 필요 알림', async () => {
     const h = setup()
     h.notifier.register(info())

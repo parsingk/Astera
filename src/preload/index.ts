@@ -38,7 +38,9 @@ const EVENT_CHANNELS = [
   'sessionTasks:changed',
   'sessionTasks:goalIgnored',
   'github:prs-updated',
-  'github:status'
+  'github:status',
+  'usage:accounts-updated',
+  'notify:activate'
 ]
 
 const api = {
@@ -62,6 +64,7 @@ const api = {
     ack: fire('sessions.ack'),
     kill: invoke('sessions.kill'),
     list: invoke('sessions.list'),
+    rename: invoke('sessions.rename'),
     resumeDefaults: invoke('sessions.resumeDefaults')
   },
   history: {
@@ -98,7 +101,16 @@ const api = {
     unsubscribe: fire('github.unsubscribe')
   },
   usage: {
-    session: invoke('usage.session')
+    session: invoke('usage.session'),
+    // Beside usage.session rather than replacing it — the status bar's question ("how is the session
+    // I am looking at") and this one ("which account should the next run go on") are different, and
+    // the status-bar path needs no credentials at all (design doc §2/§4).
+    accounts: invoke('usage.accounts'),
+    subscribe: fire('usage.subscribe'),
+    unsubscribe: fire('usage.unsubscribe')
+  },
+  notify: {
+    activeSession: fire('notify.activeSession')
   },
   localHistory: {
     list: invoke('localHistory.list'),
@@ -120,6 +132,8 @@ const api = {
     setWorkUnitTrackingEnabled: invoke('settings.setWorkUnitTrackingEnabled'),
     getGithubPolling: invoke('settings.getGithubPolling'),
     setGithubPolling: invoke('settings.setGithubPolling'),
+    getDesktopNotify: invoke('settings.getDesktopNotify'),
+    setDesktopNotify: invoke('settings.setDesktopNotify'),
     getGenerator: invoke('settings.getGenerator'),
     setGenerator: invoke('settings.setGenerator'),
     listModels: invoke('settings.listModels'),

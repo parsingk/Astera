@@ -4,6 +4,7 @@ import { PROVIDERS, PROVIDER_META, providerOf } from '../../../core/providers/me
 import { toast } from '../lib/toast'
 import { useI18n } from '../i18n/I18nProvider'
 import { useAccountStatus } from '../hooks/useAccountStatus'
+import { useAccountUsage } from '../hooks/useAccountUsage'
 import { ProviderBadge } from './ProviderBadge'
 import { FolderGlyph } from './FolderGlyph'
 import { AccountRow } from './AccountRow'
@@ -45,6 +46,10 @@ function ProviderPicker({
 export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.Element {
   const { t, tm } = useI18n()
   const { loginMap, emailMap, defaultIdByProvider } = useAccountStatus(accounts)
+  const usage = useAccountUsage()
+  // Which row has its usage detail open. One at a time, so the answer belongs to the list
+  // rather than to each row. Keyed by account id — configDir can be shared by two accounts.
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
   const [addLabel, setAddLabel] = useState('')
   const [addCopySettings, setAddCopySettings] = useState(true)
@@ -213,6 +218,9 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
             loggedIn={loginMap[a.id]}
             email={emailMap[a.id]}
             isDefault={defaultIdByProvider[providerOf(a)] === a.id}
+            usage={usage[a.configDir]}
+            expanded={expandedId === a.id}
+            onToggle={() => setExpandedId((cur) => (cur === a.id ? null : a.id))}
           />
         ))}
         {accounts.length === 0 && <li className="empty">{t('account.panel.empty')}</li>}

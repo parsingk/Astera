@@ -56,6 +56,35 @@ function setup(highWater = 100, lowWater = 20, homeDir?: string) {
 }
 
 describe('SessionManager', () => {
+  // 탭 라벨은 SessionInfo.title 하나를 읽고, Slack 접두사와 데스크톱 알림 제목도 같은 값을 읽는다.
+  // 그래서 이름 변경은 여기 한 곳만 갱신하면 세 자리가 함께 따라온다.
+  describe('rename', () => {
+    it('제목을 바꾸고 바뀐 값을 돌려준다', () => {
+      const { manager } = setup()
+      const info = manager.spawn({ account, cwd: process.cwd() })
+      expect(manager.rename(info.id, '  결제  리팩터링 ')).toBe('결제 리팩터링')
+      expect(manager.list().find((s) => s.id === info.id)?.title).toBe('결제 리팩터링')
+    })
+
+    // 입력칸을 비우는 것이 기본 이름을 되찾는 유일한 방법이다
+    it('빈 이름은 프로젝트 폴더 이름으로 되돌린다', () => {
+      const { manager } = setup()
+      const info = manager.spawn({ account, cwd: process.cwd() })
+      const dflt = info.title
+      manager.rename(info.id, '결제')
+      expect(manager.rename(info.id, '   ')).toBe(dflt)
+      expect(manager.list().find((s) => s.id === info.id)?.title).toBe(dflt)
+    })
+
+    // 이미 죽은 세션의 탭도 목록에 남아 있으므로(list 는 exited 도 낸다) 부를 수 있는 자리다.
+    // 없는 id 는 조용히 아무것도 하지 않는다 — 탭이 사라지는 것과 이름 변경이 겹칠 수 있다.
+    it('모르는 세션 id 는 조용히 무시한다', () => {
+      const { manager } = setup()
+      expect(manager.rename('nope', '결제')).toBeNull()
+      expect(manager.list()).toHaveLength(0)
+    })
+  })
+
   it('spawn은 CLAUDE_CONFIG_DIR를 주입하고 running 세션을 만든다', () => {
     const { manager, spawned } = setup()
     const info = manager.spawn({ account, cwd: process.cwd() })
@@ -339,37 +368,46 @@ describe('SessionManager', () => {
       spawned.push({ opts })
       return new FakePty()
     }
-    const hookCalls: ({ hooks?: boolean } | undefined)[] = []
+    const hookCalls: ({ toolHooks?: boolean } | undefined)[] = []
     const manager = new SessionManager(factory, makeDescriptors('win32'), 100, 20, undefined, (id, _acc, o) => {
       hookCalls.push(o)
       return {
         settingsFile: 's.json',
         outPath: 'o.json',
         originalCommand: null,
-        hookOutPath: o?.hooks ? `D:/tmp/hook-events/${id}.jsonl` : undefined
+        hookOutPath: `D:/tmp/hook-events/${id}.jsonl` // 실제 spawnConfig 와 같이 항상 준다
       }
     })
     const info = manager.spawn({ account, cwd: process.cwd(), slackNotify: true })
-    expect(hookCalls[0]?.hooks).toBe(true)
+    expect(hookCalls[0]?.toolHooks).toBe(true)
     expect(spawned[0].opts.env.ASTERA_HOOK_OUT).toContain(info.id)
     expect(info.slackNotify).toBe(true)
     expect(manager.list()[0].slackNotify).toBe(true)
   })
 
-  it('slackNotify 미지정이면 hooks=false·ASTERA_HOOK_OUT 미주입', () => {
+  // slackNotify 도 롤링도 없는 평범한 세션이다. 도구 캡처(toolHooks)는 안 들어가지만
+  // ASTERA_HOOK_OUT 은 들어가야 한다 — Stop·Notification 훅은 모든 세션에 심기고, 그 훅이 쓸
+  // 경로가 없으면 캡처 스크립트가 아무 일도 하지 않아 심으나 마나가 된다. 데스크톱 알림이 보통
+  // 세션에서 한 번도 오지 않았던 원인이 정확히 이것이다.
+  it('평범한 세션도 ASTERA_HOOK_OUT 을 받는다 (toolHooks 는 false)', () => {
     const spawned: { opts: PtySpawnOptions }[] = []
+    const hookCalls: ({ toolHooks?: boolean } | undefined)[] = []
     const factory: PtyFactory = (_f, _a, opts) => {
       spawned.push({ opts })
       return new FakePty()
     }
-    const manager = new SessionManager(factory, makeDescriptors('win32'), 100, 20, undefined, (id, _acc, o) => ({
-      settingsFile: 's.json',
-      outPath: 'o.json',
-      originalCommand: null,
-      hookOutPath: o?.hooks ? `D:/tmp/hook-events/${id}.jsonl` : undefined
-    }))
+    const manager = new SessionManager(factory, makeDescriptors('win32'), 100, 20, undefined, (id, _acc, o) => {
+      hookCalls.push(o)
+      return {
+        settingsFile: 's.json',
+        outPath: 'o.json',
+        originalCommand: null,
+        hookOutPath: `D:/tmp/hook-events/${id}.jsonl` // 실제 spawnConfig 와 같이 항상 준다
+      }
+    })
     const info = manager.spawn({ account, cwd: process.cwd() })
-    expect('ASTERA_HOOK_OUT' in spawned[0].opts.env).toBe(false)
+    expect(hookCalls[0]?.toolHooks).toBe(false)
+    expect(spawned[0].opts.env.ASTERA_HOOK_OUT).toContain('hook-events/')
     expect(info.slackNotify).toBeUndefined()
   })
 
@@ -398,54 +436,54 @@ describe('SessionManager', () => {
 
   // idle nudge가 Notification 훅을 신호로 쓰므로 롤링 세션에도 훅이 필요하다.
   // 종전에는 slackNotify 세션에만 주입돼 슬랙을 끈 롤링 세션은 신호를 받을 수 없었다.
-  it('롤링 세션은 slackNotify가 꺼져 있어도 hooks=true로 주입한다', () => {
+  it('롤링 세션은 slackNotify가 꺼져 있어도 toolHooks=true로 주입한다', () => {
     const factory: PtyFactory = () => new FakePty()
-    const hookCalls: ({ hooks?: boolean } | undefined)[] = []
+    const hookCalls: ({ toolHooks?: boolean } | undefined)[] = []
     const manager = new SessionManager(factory, makeDescriptors('win32'), 100, 20, undefined, (id, _acc, o) => {
       hookCalls.push(o)
       return {
         settingsFile: 's.json',
         outPath: 'o.json',
         originalCommand: null,
-        hookOutPath: o?.hooks ? `D:/tmp/hook-events/${id}.jsonl` : undefined
+        hookOutPath: `D:/tmp/hook-events/${id}.jsonl` // 실제 spawnConfig 와 같이 항상 준다
       }
     })
     manager.spawn({ account, cwd: process.cwd(), rollAccountIds: ['a1', 'a2'] })
-    expect(hookCalls[0]?.hooks).toBe(true)
+    expect(hookCalls[0]?.toolHooks).toBe(true)
   })
 
   // opts.rollAccountIds?.length ?? 0) >= 1을 "배열이 truthy면 롤링"으로 잘못
   // 단순화하면 빈 배열([])도 통과해 모든 세션에 훅이 주입된다 — 이 회귀를 잡아 둔다.
-  it('rollAccountIds가 빈 배열이면 롤링으로 치지 않는다 (hooks=false)', () => {
+  it('rollAccountIds가 빈 배열이면 롤링으로 치지 않는다 (toolHooks=false)', () => {
     const factory: PtyFactory = () => new FakePty()
-    const hookCalls: ({ hooks?: boolean } | undefined)[] = []
+    const hookCalls: ({ toolHooks?: boolean } | undefined)[] = []
     const manager = new SessionManager(factory, makeDescriptors('win32'), 100, 20, undefined, (id, _acc, o) => {
       hookCalls.push(o)
       return {
         settingsFile: 's.json',
         outPath: 'o.json',
         originalCommand: null,
-        hookOutPath: o?.hooks ? `D:/tmp/hook-events/${id}.jsonl` : undefined
+        hookOutPath: `D:/tmp/hook-events/${id}.jsonl` // 실제 spawnConfig 와 같이 항상 준다
       }
     })
     manager.spawn({ account, cwd: process.cwd(), rollAccountIds: [] })
-    expect(hookCalls[0]?.hooks).toBe(false)
+    expect(hookCalls[0]?.toolHooks).toBe(false)
   })
 
-  it('롤링도 slackNotify도 없으면 hooks=false', () => {
+  it('롤링도 slackNotify도 없으면 toolHooks=false', () => {
     const factory: PtyFactory = () => new FakePty()
-    const hookCalls: ({ hooks?: boolean } | undefined)[] = []
+    const hookCalls: ({ toolHooks?: boolean } | undefined)[] = []
     const manager = new SessionManager(factory, makeDescriptors('win32'), 100, 20, undefined, (id, _acc, o) => {
       hookCalls.push(o)
       return {
         settingsFile: 's.json',
         outPath: 'o.json',
         originalCommand: null,
-        hookOutPath: o?.hooks ? `D:/tmp/hook-events/${id}.jsonl` : undefined
+        hookOutPath: `D:/tmp/hook-events/${id}.jsonl` // 실제 spawnConfig 와 같이 항상 준다
       }
     })
     manager.spawn({ account, cwd: process.cwd() })
-    expect(hookCalls[0]?.hooks).toBe(false)
+    expect(hookCalls[0]?.toolHooks).toBe(false)
   })
 
   it('spawn이 initialPrompt를 커맨드의 마지막 위치 인자로 전달한다', () => {

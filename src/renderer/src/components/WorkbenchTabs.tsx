@@ -89,7 +89,10 @@ export function WorkbenchTabs({
   onContextMenu,
   onDragTabChange,
   draggingTabId,
-  onDropTabInBar
+  onDropTabInBar,
+  renamingTabId,
+  onRenameStart,
+  onRenameEnd
 }: {
   tabs: WorkbenchTab[]
   activeTabId: string | null
@@ -108,6 +111,12 @@ export function WorkbenchTabs({
   draggingTabId: string | null
   /** 이 탭 줄에 떨어뜨렸다. insertBefore는 이 페인 tabIds 기준 0..length (core/reorder 규약) */
   onDropTabInBar: (tabId: string, insertBefore: number) => void
+  /** 지금 이름을 고치고 있는 탭 (없으면 null). App이 갖는다 — 우클릭 메뉴에서도 시작되므로 */
+  renamingTabId: string | null
+  /** 이름 고치기를 시작한다. 세션 탭에만 붙는다 — 파일 탭의 라벨은 파일 이름이다 */
+  onRenameStart: (tabId: string) => void
+  /** 끝났다. title이 null이면 취소, 아니면 그 값으로 확정한다 */
+  onRenameEnd: (tabId: string, title: string | null) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   // 드래그 중인 탭과 드롭 표시 위치(insertBefore ∈ [0, n]) — 드래그하는 동안만 쓰는 상태
@@ -173,8 +182,13 @@ export function WorkbenchTabs({
               : undefined
           }
           title={tab.kind === 'file' ? tab.path : tab.title}
-          draggable
+          // 이름을 고치는 동안은 끌 수 없다 — 입력칸 안에서 글자를 끄는 것이 탭 이동이 되어 버린다
+          draggable={renamingTabId !== tab.tabId}
           onClick={() => onSelect(tab.tabId)}
+          // 세션 탭에만. 파일 탭의 라벨은 파일 이름이라 여기서 바꿀 것이 아니다
+          onDoubleClick={
+            tab.kind === 'session' ? () => onRenameStart(tab.tabId) : undefined
+          }
           onContextMenu={(e) => {
             e.preventDefault()
             onContextMenu(tab.tabId, e.clientX, e.clientY)
@@ -220,7 +234,27 @@ export function WorkbenchTabs({
           ) : (
             <span className="tab-dot" style={{ background: tab.color }} />
           )}
-          <span className="tab-title">{tab.title}</span>
+          {renamingTabId === tab.tabId ? (
+            <input
+              className="tab-title-edit"
+              autoFocus
+              defaultValue={tab.title}
+              // 탭의 onClick(선택)과 드래그로 새어 올라가지 않게 막는다
+              onClick={(ev) => ev.stopPropagation()}
+              onMouseDown={(ev) => ev.stopPropagation()}
+              onDoubleClick={(ev) => ev.stopPropagation()}
+              onFocus={(ev) => ev.currentTarget.select()}
+              onKeyDown={(ev) => {
+                // 전역 단축키와 탭 순환에서 격리한다 — 파일 탐색기의 이름 고치기와 같은 규칙
+                ev.stopPropagation()
+                if (ev.key === 'Enter') onRenameEnd(tab.tabId, ev.currentTarget.value)
+                else if (ev.key === 'Escape') onRenameEnd(tab.tabId, null)
+              }}
+              onBlur={(ev) => onRenameEnd(tab.tabId, ev.currentTarget.value)}
+            />
+          ) : (
+            <span className="tab-title">{tab.title}</span>
+          )}
           {tab.kind === 'file' && tab.hint && <span className="tab-hint">{tab.hint}</span>}
           {tab.kind === 'file' && tab.dirty && (
             <span className="tab-dirty" title={t('explorer.tab.unsaved')} />

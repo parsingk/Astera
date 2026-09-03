@@ -67,6 +67,9 @@ export interface CodexRollingDeps {
     rollAccountIds?: string[]
     slackNotify?: boolean
     bypassPermissions?: boolean
+    /** 탭 이름. 롤은 같은 작업이 계정만 바꿔 이어지는 것이라 사람이 붙인 이름을 넘겨준다 —
+     *  넘기지 않으면 spawn 이 폴더 이름으로 되돌린다 */
+    title?: string
     /** astera CLI 환경. 배선이 넘긴다 — 없으면 세션은 CLI 없이 뜬다 */
     orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
   }): SessionInfo
@@ -229,6 +232,16 @@ export class CodexRollingCoordinator {
    *  accounts. It gates one thing, the recovery read below; everything else here is account-independent.
    *  The default is the conservative answer, so a caller that cannot tell gets the behaviour this
    *  coordinator had before the recovery existed. */
+  /** The tab was renamed. Updates the chain's copy so the next roll respawns under the new name.
+   *
+   *  `liveInfo` is a snapshot from spawn, and the respawn passes `liveInfo.title` — without this the
+   *  name a person gave the tab would quietly become the folder name again the moment a usage limit
+   *  moved the work to another account. */
+  rename(sessionId: string, title: string): void {
+    const chain = this.chains.get(sessionId)
+    if (chain) chain.liveInfo = { ...chain.liveInfo, title }
+  }
+
   register(info: SessionInfo, rolloutPath?: string, sameAccount = false): void {
     const ids = info.rollAccountIds ?? []
     if (ids.length < 1) return
@@ -1114,6 +1127,9 @@ export class CodexRollingCoordinator {
         rollAccountIds: chain.accountIds,
         slackNotify: chain.liveInfo.slackNotify, // the Slack notification is kept per chain (mirrors rolling.ts)
         bypassPermissions: chain.liveInfo.bypassPermissions,
+        // Kept per chain, like the two above: a roll is the same work on another account, so a
+        // name the person gave the tab survives it.
+        title: chain.liveInfo.title,
         orchEnv: this.deps.orchEnv?.()
       })
       this.chains.delete(oldId)

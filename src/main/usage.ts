@@ -17,7 +17,10 @@ const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
 const BETA_HEADER = 'oauth-2025-04-20'
 const USER_AGENT = 'claude-code/2.1'
 const TIMEOUT_MS = 10_000
-const TTL_OK_MS = 5 * 60_000 // success cache — fresh enough for one user while staying clear of 429
+// Exported because the account-usage service ticks at exactly this interval: every tick is then the
+// first ask this cache will not serve, so nothing is spent re-fetching what is already held and
+// nothing sits staler than the cache would have permitted anyway (design doc §4).
+export const TTL_OK_MS = 5 * 60_000 // success cache — fresh enough for one user while staying clear of 429
 const TTL_ERR_MS = 60_000 // an ordinary failure is retried after a minute
 const TTL_RATE_LIMITED_MS = 15 * 60_000 // the default backoff for a 429 that carries no Retry-After
 const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000 // ceiling for a hostile or corrupt Retry-After

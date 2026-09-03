@@ -24,6 +24,7 @@ import type { ProjectUnderstanding } from './understanding/types'
 import type { Provider } from './providers/meta'
 import type { TerminalFont } from './terminal/font'
 import type { GeneratorSettings } from './understanding/generatorSettings'
+import type { DesktopNotifySettings } from './notify/settings'
 import type { ModelListResult } from './models/types'
 import type { ThemeId } from './theme/themes'
 // The Jobs sidebar shows a Task's status, so the orchestration domain's own enum comes in here. Only
@@ -258,6 +259,24 @@ export interface RateLimitUsage {
   /** The bucket maxPercent came from, with its reset time. null when no bucket was readable. */
   peak: RateLimitPeak | null
   status: 'ok' | 'unavailable' | 'error'
+}
+
+/** One account's usage as the account panel reads it (design doc §3.3/§4).
+ *
+ *  `readAt` is what the overlay's "updated N ago" is measured from. `remembered` says the most recent
+ *  fetch for this account did not reach the API and this figure came out of AccountUsageStore — the
+ *  row dims it at opacity .45, the same convention a stale PR badge uses.
+ *
+ *  RateLimitUsage's `peak` is deliberately absent: its only job is the discard arithmetic inside the
+ *  store (§3.2), and nothing on the renderer side reads it. `maxPercent` is absent for the same
+ *  reason — the meter draws the two named windows, not the fullest bucket.
+ *  There is no `status`: an account with nothing to show is simply absent from the map, which is what
+ *  the row reads as "draw nothing" (§5). */
+export interface AccountUsage {
+  session: RateLimitWindow | null // the 5-hour window
+  weekly: RateLimitWindow | null // the weekly (7-day) window
+  readAt: string // ISO 8601
+  remembered: boolean
 }
 
 /** A usage snapshot for an active session, taken from the Claude Code statusLine payload
@@ -526,6 +545,12 @@ export interface CoreEvents {
   'github:prs-updated': { repoRoot: string; snapshot: RepoPrSnapshot }
   /** The gh connection probe changed (app start, re-check, or an auth failure mid-flight). */
   'github:status': GhProbe
+  /** Every claude account's last-known usage, re-sent whole on each tick (design doc §4). The
+   *  renderer replaces the map, never merges — an account that dropped out has no reading to show. */
+  'usage:accounts-updated': Record<string, AccountUsage>
+  /** A desktop notification was clicked. Main has already raised the window; the renderer activates
+   *  that session's tab, through the path the tab bar already uses (design doc §7). */
+  'notify:activate': { sessionId: string }
   'run:data': { projectPath: string; data: string } // run output
   'run:status': RunStatus // run state change (running/exited)
   'terminal:data': { id: string; data: string } // project terminal output
@@ -600,6 +625,10 @@ export interface CoreApi {
     ack(id: string, bytes: number): void // backpressure driven by the xterm write callback
     kill(id: string): Promise<void>
     list(): Promise<SessionInfo[]>
+    /** Renames a session's tab. Resolves with the stored title — normalised, so an empty name comes
+     *  back as the project folder name — or null when the session is already gone. The same title is
+     *  Slack's message prefix and the desktop notification's title, so all three follow. */
+    rename(id: string, title: string): Promise<string | null>
     /** Reads the stored rolling and schedule settings — prefills the resume modal */
     resumeDefaults(sessionId: string): Promise<ResumeDefaults>
   }
@@ -703,6 +732,15 @@ export interface CoreApi {
   }
   usage: {
     session(sessionId: string): Promise<SessionUsage | null> // context, 5-hour, and weekly % for an active session (claude: statusLine capture, codex: rollout tail)
+    accounts(): Promise<Record<string, AccountUsage>> // last-known usage per account, for the account rows (design doc §4)
+    subscribe(): void
+    unsubscribe(): void
+  }
+  notify: {
+    // The session on screen, pushed on every change so main can suppress a notification for it
+    // (design doc §7). null covers a file tab being focused, no pane having a session, and the panes
+    // being empty — main cannot work any of that out on its own.
+    activeSession(req: { sessionId: string | null }): void
   }
   localHistory: {
     // Browsing and restoring the snapshot taken just before a deletion. projectPath uses the same
@@ -754,6 +792,10 @@ export interface CoreApi {
     // refresh only happens on an explicit github.refresh call.
     getGithubPolling(): Promise<boolean>
     setGithubPolling(enabled: boolean): Promise<void>
+    // The four desktop-notification switches (design doc §6/§8). Read by the settings screen and by
+    // DesktopNotifier itself (main), which is why the type lives in core/notify/settings rather than here.
+    getDesktopNotify(): Promise<DesktopNotifySettings>
+    setDesktopNotify(next: DesktopNotifySettings): Promise<void>
     // Which account (and model) writes the How It Works explanations. Empty means no account has been
     // chosen, and nothing is generated — the screen says so rather than staying silently blank.
     getGenerator(): Promise<GeneratorSettings>

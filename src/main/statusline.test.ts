@@ -41,21 +41,43 @@ describe('StatusLineManager 훅 주입', () => {
     expect(settings.hooks.PostToolUse[0].hooks[0].command).toContain('astera-hook-capture.cjs')
   })
 
-  it('spawnConfig: hooks=true면 hooks 설정 파일 + 세션별 hookOutPath', () => {
-    const c = mgr.spawnConfig('sess-1', account, { hooks: true })
+  it('spawnConfig: toolHooks=true면 도구 캡처까지 든 설정 파일', () => {
+    const c = mgr.spawnConfig('sess-1', account, { toolHooks: true })
     expect(c.settingsFile).toContain('astera-hooks-settings.json')
     expect(c.hookOutPath?.replace(/\\/g, '/')).toContain('hook-events/sess-1.jsonl')
   })
 
-  it('spawnConfig: hooks 미지정이면 기존 설정 파일, hookOutPath 없음', () => {
+  // 데스크톱 알림은 어떤 세션에서든 온다 — 그 세션에 Slack 을 켜 뒀는지, 롤링을 걸어 뒀는지와
+  // 무관하다. 그러려면 Stop·Notification 훅이 모든 세션에 들어가야 하고, 그 훅이 쓸
+  // ASTERA_HOOK_OUT 경로도 함께 있어야 한다. 이 경로가 없던 동안 훅은 심어져도 쓸 곳이 없었고,
+  // 알림 기능 전체가 보통 세션에서 한 번도 동작하지 않았다.
+  it('spawnConfig: 도구 캡처가 없어도 세션별 hookOutPath 는 항상 준다', () => {
     const c = mgr.spawnConfig('sess-1', account)
     expect(c.settingsFile).toContain('astera-statusline-settings.json')
-    expect(c.hookOutPath).toBeUndefined()
+    expect(c.hookOutPath?.replace(/\\/g, '/')).toContain('hook-events/sess-1.jsonl')
   })
 
-  it('기존 statusLine 설정 파일은 hooks 없이 그대로 만든다 (회귀 가드)', async () => {
+  it('기본 설정 파일은 Notification 훅을 갖는다', async () => {
     const settings = JSON.parse(await fs.readFile(path.join(dir, 'astera-statusline-settings.json'), 'utf8'))
     expect(settings.statusLine.command).toContain('astera-statusline-capture.cjs')
-    expect(settings.hooks).toBeUndefined()
+    expect(settings.hooks.Notification[0].hooks[0].command).toContain('astera-hook-capture.cjs')
+  })
+
+  // 원래 회귀 가드가 지키려던 것은 "훅이 없다"가 아니라 "읽는 사람이 없는 훅에 프로세스를 쓰지
+  // 않는다"였다. Notification 은 데스크톱 알림이 어느 세션에서든 읽으므로 값을 한다. 나머지
+  // 셋은 slack.ts 만 읽고, Slack 세션은 도구 훅 파일을 따로 받으므로 여기 있을 이유가 없다 —
+  // Stop 은 턴이 끝날 때마다, 도구 짝은 도구 호출마다 프로세스를 하나씩 띄운다.
+  it('기본 설정 파일은 Slack 만 읽는 훅을 갖지 않는다 (회귀 가드)', async () => {
+    const settings = JSON.parse(await fs.readFile(path.join(dir, 'astera-statusline-settings.json'), 'utf8'))
+    expect(settings.hooks.Stop).toBeUndefined()
+    expect(settings.hooks.PreToolUse).toBeUndefined()
+    expect(settings.hooks.PostToolUse).toBeUndefined()
+  })
+
+  // 반대쪽 절반 — Slack 세션은 Stop 을 받아야 한다. 턴 요약이 그 훅에서 온다.
+  it('도구 훅 설정 파일은 Stop 도 갖는다', async () => {
+    const settings = JSON.parse(await fs.readFile(path.join(dir, 'astera-hooks-settings.json'), 'utf8'))
+    expect(settings.hooks.Stop[0].hooks[0].command).toContain('astera-hook-capture.cjs')
+    expect(settings.hooks.Notification[0].hooks[0].command).toContain('astera-hook-capture.cjs')
   })
 })

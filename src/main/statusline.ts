@@ -8,7 +8,7 @@ export interface StatusLineSpawn {
   settingsFile: string // --settings <file> (session-scoped statusLine; the global settings.json is not modified)
   outPath: string // The file the capture script writes the payload to (one per session)
   originalCommand: string | null // That account's pre-existing global statusLine command — when present it is chained so the HUD stays
-  hookOutPath?: string // Slack notification sessions: the file the hook capture appends events to (one per session)
+  hookOutPath?: string // the file the hook capture appends events to (one per session) — always set
 }
 
 // Capture script (node): Claude runs it as the statusLine → it writes the stdin payload to ASTERA_STATUSLINE_OUT, and
@@ -42,8 +42,9 @@ process.stdin.on('end', finish)
 process.stdin.on('error', finish)
 `
 
-// Hook capture script (node): Claude runs it as the Stop and Notification hooks → it appends the stdin payload (JSON)
-// as one line to ASTERA_HOOK_OUT (a per-session jsonl). With that env unset it does nothing.
+// Hook capture script (node): Claude runs it as the Notification hook — and, for a Slack session, as
+// Stop and the tool pair too — and it appends the stdin payload (JSON) as one line to
+// ASTERA_HOOK_OUT (a per-session jsonl). With that env unset it does nothing.
 const HOOK_CAPTURE_SCRIPT = `const fs = require('fs')
 const out = process.env.ASTERA_HOOK_OUT
 const chunks = []
@@ -117,24 +118,41 @@ export class StatusLineManager {
   async init(): Promise<void> {
     await fs.mkdir(this.userDataDir, { recursive: true })
     await fs.writeFile(this.capturePath, CAPTURE_SCRIPT, 'utf8')
+    await fs.writeFile(this.hookCapturePath, HOOK_CAPTURE_SCRIPT, 'utf8')
+    const hookCmd = `"${this.nodePath.replace(/\\/g, '/')}" "${this.hookCapturePath.replace(/\\/g, '/')}"`
+    // Hooks from --settings merge with the account's global settings.json hooks and both run
+    // (measured). The global settings stay untouched.
+    //
+    // Notification goes into EVERY session, not just Slack-notifying or rolling ones. It is how the
+    // app learns a session has stopped for a choice or an approval, and the desktop notification for
+    // that is offered for any session and ships on. Gating it the way the hooks below are gated is
+    // what made the notification feature inert for an ordinary session: the flag was on, the sink had
+    // no per-session gate, and the event simply never arrived.
+    //
+    // The cost is one node process when a prompt appears. The hooks below are kept out of here
+    // because nothing but slack.ts reads them, and a Slack session takes the other file anyway —
+    // Stop would spend a process at the end of every turn for an event with no reader.
+    const notificationHook = {
+      Notification: [{ hooks: [{ type: 'command', command: hookCmd }] }]
+    }
     const settings = {
       // It is a JSON string, so no shell escaping. Paths are normalised to forward slashes (fine on Windows too).
       statusLine: {
         type: 'command',
         command: `"${this.nodePath.replace(/\\/g, '/')}" "${this.capturePath.replace(/\\/g, '/')}"`,
         padding: 0
-      }
+      },
+      hooks: notificationHook
     }
     await fs.writeFile(this.settingsFile, JSON.stringify(settings, null, 2), 'utf8')
-    // For Slack notification sessions: statusLine plus the Stop, Notification and PreToolUse hooks. Hooks from
-    // --settings merge with the account's global settings.json hooks and both run (measured). The global settings stay untouched.
-    await fs.writeFile(this.hookCapturePath, HOOK_CAPTURE_SCRIPT, 'utf8')
-    const hookCmd = `"${this.nodePath.replace(/\\/g, '/')}" "${this.hookCapturePath.replace(/\\/g, '/')}"`
+    // What only slack.ts reads, on top: the turn summary's Stop, and the pending-question pair, which
+    // fires per tool call and is therefore matcher-limited. Only a Slack-notifying or rolling session
+    // pays for these.
     const hooksSettings = {
       ...settings,
       hooks: {
+        ...notificationHook,
         Stop: [{ hooks: [{ type: 'command', command: hookCmd }] }],
-        Notification: [{ hooks: [{ type: 'command', command: hookCmd }] }],
         // Captures what the waiting screen shows (the question and its options, the tool awaiting approval and its
         // arguments) **before** the tool runs. The transcript cannot supply it — Claude Code does not flush assistant
         // messages while it waits for user interaction, so while a question or approval prompt is on screen that
@@ -171,16 +189,23 @@ export class StatusLineManager {
     await fs.mkdir(this.outDir, { recursive: true })
   }
 
-  /** Injection info for a session spawn. originalCommand is the existing statusLine from the account's settings.json
-   *  (the chain target). With opts.hooks=true (a Slack notification session), the hook-bearing settings file plus a per-session hookOutPath. */
-  spawnConfig(sessionId: string, account: Account, opts?: { hooks?: boolean }): StatusLineSpawn {
-    const hooks = opts?.hooks === true
+  /** Injection info for a session spawn. originalCommand is the existing statusLine from the account's
+   *  settings.json (the chain target).
+   *
+   *  Every session gets the Notification hook and its own hookOutPath — that is what the desktop
+   *  notification for a choice or an approval is built on, and it is offered for any session.
+   *  `opts.toolHooks` adds what only slack.ts reads: the turn summary's Stop and the per-tool-call
+   *  capture pair. */
+  spawnConfig(sessionId: string, account: Account, opts?: { toolHooks?: boolean }): StatusLineSpawn {
+    const toolHooks = opts?.toolHooks === true
     return {
       // Normalised to forward slashes — this is the --settings argument path passed to the shell/cmd (a verified format). node fs handles it as-is too.
-      settingsFile: (hooks ? this.hooksSettingsFile : this.settingsFile).replace(/\\/g, '/'),
+      settingsFile: (toolHooks ? this.hooksSettingsFile : this.settingsFile).replace(/\\/g, '/'),
       outPath: path.join(this.outDir, `${sessionId}.json`),
       originalCommand: this.readOriginalStatusLine(account.configDir),
-      hookOutPath: hooks ? path.join(this.hookEventsDir, `${sessionId}.jsonl`) : undefined
+      // Always set: with ASTERA_HOOK_OUT unset the capture script does nothing, so a hook that is
+      // installed but has nowhere to write is the same as no hook at all.
+      hookOutPath: path.join(this.hookEventsDir, `${sessionId}.jsonl`)
     }
   }
 

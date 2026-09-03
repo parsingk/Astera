@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
@@ -17,8 +17,8 @@ import { BlockRegistry } from '../core/rolling/blockRegistry'
 import { SlackNotifier, SlackConfigStore } from './slack'
 import { SlackInboxController, createSocketClient } from './slackInbox'
 import { HookEventWatcher } from './hookEvents'
+import { DesktopNotifier } from './desktopNotifier'
 import { CodexRolloutWatcher } from './codexRolloutWatcher'
-import { RateLimitFetcher } from './usage'
 import { t } from '../core/i18n'
 import { loadPolicy, nextCheckDelayMs, parsePolicyUrl, shouldApplyCampaign } from './updatePolicy'
 import type { SessionInfo, RollStateEvent, UpdateCampaignInfo } from '../core/types'
@@ -93,6 +93,12 @@ const resumeTextDep = (
 let tray: Tray | null = null
 let quitting = false
 let mainWindow: BrowserWindow | null = null // focus target for the single-instance second-instance event
+// Notifications currently on screen. Electron does not retain a `new Notification()` for you —
+// an unreferenced one can be garbage-collected before it is clicked, and a collected notification
+// never fires 'click'. That failure mode hits hardest exactly the toast this feature exists for:
+// the one that sits unclicked for minutes or hours until someone walks back to the desk, not the
+// one clicked within the same tick it was shown.
+const liveNotifications = new Set<Notification>()
 let updateCampaign: UpdateCampaignInfo | null = null // update campaign verdict. null means no campaign
 
 /**
@@ -266,25 +272,34 @@ function refreshTrayMenu(win: BrowserWindow): void {
 // (core === null) means it kills no sessions either.
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) app.quit()
-app.on('second-instance', () => {
+
+// Brings the main window to the front: restores it if minimized, shows and focuses it. Shared by the
+// second-instance handler, the macOS activate handler, and a desktop notification click.
+function focusMainWindow(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.show()
   mainWindow.focus()
+}
+
+app.on('second-instance', () => {
+  focusMainWindow()
 })
 
 // macOS: closing the window leaves the app alive (win.on('close') redirects to hide) and the Dock
 // icon stays. Clicking that icon fires activate, but the default behavior alone won't bring the
 // hidden window back.
 app.on('activate', () => {
-  if (!mainWindow || mainWindow.isDestroyed()) return
-  if (mainWindow.isMinimized()) mainWindow.restore()
-  mainWindow.show()
-  mainWindow.focus()
+  focusMainWindow()
 })
 
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return // second instance — waits for quit without initializing
+  // Windows delivers a toast against the process's AppUserModelID and silently drops it when that
+  // does not match a shortcut's — indistinguishable from the OS-refusal case DesktopNotifierDeps's
+  // `show` already expects to swallow (design doc §9). Called unconditionally rather than guarded to
+  // win32: Electron makes it a no-op on macOS/Linux. The id matches electron-builder.yml's appId.
+  app.setAppUserModelId('io.github.parsingk.astera')
   // win32 doesn't use a menu bar (the custom titlebar takes that spot). macOS is different — edit
   // commands like Cmd+C/V/X/A/Z are provided by Electron's menu roles, so removing the menu would
   // kill those keys in every input field in the renderer. Hence a minimal, role-only menu on mac.
@@ -329,6 +344,47 @@ app.whenReady().then(async () => {
     readStatusPayload: (id) => core!.statusLinePayload(id),
     lang: () => core!.lang,
     log: slackLog
+  })
+  // The second outlet on the same pipe (design doc §6). Electron's Notification was unused in this
+  // app until now — only Tray was.
+  const desktop = new DesktopNotifier({
+    settings: core!.appSettings,
+    isFocused: () => !win.isDestroyed() && win.isFocused(),
+    getSession: (id) => core!.sessions.list().find((s) => s.id === id) ?? null,
+    lang: () => core!.lang,
+    show: (req) => {
+      // If the OS refuses to show it — permission denied, notifications disabled at the system level
+      // — it is dropped silently (§9). A notification saying that notifications do not work cannot be
+      // delivered by the thing that is broken, and a toast for it would fire in the window the person
+      // is not looking at, which is the entire situation this feature exists for.
+      if (!Notification.isSupported()) return
+      try {
+        const n = new Notification({ title: req.title, body: req.body })
+        // Held in liveNotifications from before show() until a terminal event removes it — see that
+        // set's own comment for why. Windows does not guarantee 'close' fires, so a notification the
+        // person neither clicks nor dismisses may outlive this and stay in the set for the app's
+        // life — a handful of small objects, and the deliberate price of not losing the click.
+        liveNotifications.add(n)
+        n.on('click', () => {
+          liveNotifications.delete(n)
+          // An exception here must not escape into an Electron event handler, the same isolation the
+          // taps elsewhere in this file give each other.
+          try {
+            focusMainWindow()
+            // The renderer does the activating, through the path the tab bar already uses — panes and
+            // tabs are its structure (§7).
+            if (!win.isDestroyed())
+              win.webContents.send('notify:activate', { sessionId: req.sessionId })
+          } catch {
+            /* raising the window must not crash the notification's click handler */
+          }
+        })
+        n.on('close', () => liveNotifications.delete(n))
+        n.show()
+      } catch {
+        /* the OS refused it — see above */
+      }
+    }
   })
   // Slack thread reply intake. Connects only when an app token is present and bot mode is on — on
   // the webhook path there are no threads, so there is nothing to reply into. SlackInboxController
@@ -400,6 +456,13 @@ app.whenReady().then(async () => {
       } catch {
         /* a rolling tap failure must not block the Slack notification */
       }
+      // The desktop sink taps the same events. Its own try, for the same reason as the two above —
+      // an exception on one side must not swallow the others.
+      try {
+        desktop.onHookEvent(sid, payload)
+      } catch {
+        /* a desktop notification failure must not block the others */
+      }
     },
     slackLog
   )
@@ -459,7 +522,9 @@ app.whenReady().then(async () => {
   // Direct account-usage lookups. It carries its own call coalescing, backoff and 10-second timeout, so
   // a limit phrase re-matching on every chunk still produces very few real requests. The token never
   // leaves this process.
-  const usageFetcher = new RateLimitFetcher()
+  // Owned by core so the account panel's service and the limit verdict share one cache — see
+  // Core.usageFetcher for why that sharing is load-bearing.
+  const usageFetcher = core.usageFetcher
   // One registry for both coordinators — the sharing is the feature (SPEC §11.2/6). Two instances
   // would compile and pass every test while sharing nothing.
   const blocks = new BlockRegistry()
@@ -558,6 +623,13 @@ app.whenReady().then(async () => {
         }
       } catch {
         /* a Slack tap failure must not block rolling */
+      }
+      // The desktop sink taps rolling events too, mirroring the Slack tap above. Isolated so an
+      // exception here does not block rolling.
+      try {
+        if (channel === 'session:rollState') desktop.onRollState(payload as RollStateEvent)
+      } catch {
+        /* a desktop notification failure must not block rolling */
       }
     },
     log: (m) => {
@@ -686,6 +758,13 @@ app.whenReady().then(async () => {
       } catch {
         /* a Slack tap failure must not block rolling */
       }
+      // The desktop sink taps rolling events too, mirroring the Slack tap above. Isolated so an
+      // exception here does not block rolling.
+      try {
+        if (channel === 'session:rollState') desktop.onRollState(payload as RollStateEvent)
+      } catch {
+        /* a desktop notification failure must not block rolling */
+      }
     },
     log: (m) => {
       try {
@@ -748,7 +827,8 @@ app.whenReady().then(async () => {
     // 탭은 그보다 훨씬 뒤인 첫 롤에서야 돌므로 순서 문제는 없다(orchRef 와 같은 모양).
     (notify) => {
       workUnitForkRef = notify
-    }
+    },
+    desktop
   )
   // No tray on Linux. With close quitting for real there is nothing to hide, so the menu's
   // Open/Quit would only repeat what the window and its close button already do — while tying the
@@ -768,6 +848,17 @@ app.whenReady().then(async () => {
     .refreshGhostAccounts()
     .then(() => core!.history.refresh())
     .then(() => core!.history.startBackground())
+
+  // Registered outside the isPackaged block below, unlike the rest of the update channels, because
+  // the renderer asks this on every mount and a dev build has a real answer for it: `updateCampaign`
+  // starts as null, and null is "no campaign". Left inside, the handler simply did not exist in dev,
+  // and Electron logged "No handler registered for 'update:campaignState'" from the main process on
+  // every boot — twice, since StrictMode mounts the effect twice. The renderer's own `.catch()`
+  // cannot suppress that: Electron writes it before the rejection is handed back.
+  //
+  // Its sibling `update:dismissCampaign` stays inside on purpose. Dismissing needs a campaign to
+  // have been shown, which cannot happen without the updater, so nothing ever calls it in dev.
+  ipcMain.handle('update:campaignState', () => updateCampaign)
 
   // Auto-update: pulled from public GitHub Releases with no credentials. Progress is surfaced both
   // to a file log (userData/updater.log) and to the renderer (shown in the title bar).
@@ -888,8 +979,8 @@ app.whenReady().then(async () => {
         // Update campaign. The policy is fetched from the same address with the same token as the
         // feed. Any lookup or parse failure means no campaign — a policy or network problem must not
         // block or nag the user. The verdict can land either before or after the renderer mounts, so
-        // both a push and a query are provided.
-        ipcMain.handle('update:campaignState', () => updateCampaign)
+        // both a push and a query are provided — and the query is registered above this block, since
+        // it has an answer even where the updater does not run.
         ipcMain.handle('update:dismissCampaign', async (_e, id: unknown) => {
           if (typeof id !== 'string' || !id.trim()) return
           if (updateCampaign?.id === id) updateCampaign = null

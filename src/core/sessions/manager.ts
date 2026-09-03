@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { Account, Provider, SessionInfo, ScheduleConfig } from '../types'
+import { defaultSessionTitle, normalizeSessionTitle } from './title'
 import {
   descriptorOf,
   isAmbientDir,
@@ -17,12 +18,12 @@ export interface StatusLineSpawnInfo {
   settingsFile: string
   outPath: string
   originalCommand: string | null
-  hookOutPath?: string // hook event file for a Slack-notifying session — injected as ASTERA_HOOK_OUT
+  hookOutPath?: string // per-session hook event file — injected as ASTERA_HOOK_OUT
 }
 export type StatusLineProvider = (
   sessionId: string,
   account: Account,
-  opts?: { hooks?: boolean }
+  opts?: { toolHooks?: boolean }
 ) => StatusLineSpawnInfo | null
 
 /** Wait time for the safety net that keeps a pause from ever being permanent. The principle is "a
@@ -151,12 +152,16 @@ export class SessionManager {
     // statusLine injection: --settings installs a session-scoped statusLine, and the capture script
     // records context_window and rate_limits into outPath. When ASTERA_STATUSLINE_ORIGINAL is set the
     // existing HUD is chained. statusLine is only injected for providers that use that mechanism.
-    // Hooks go into rolling sessions on top of Slack-notifying ones — rolling's idle nudge uses the
-    // Notification hook ("Claude is waiting for your input") as its stop signal.
+    // The Notification hook now goes into every session (see StatusLineManager.spawnConfig) — the
+    // desktop notification for a choice or an approval is offered for any session, and gating it here
+    // is what left that feature inert. What is still gated is what only slack.ts reads: the turn
+    // summary's Stop, and the per-tool-call capture pair.
+    // Rolling is kept in the condition even though its idle nudge only needs the Notification hook:
+    // its own tap reads the same pending-tool captures when deciding what a stalled screen shows.
     // SlackNotifier.register gates separately on info.slackNotify, so Slack traffic does not grow.
-    const wantHooks = opts.slackNotify === true || (opts.rollAccountIds?.length ?? 0) >= 1
+    const wantToolHooks = opts.slackNotify === true || (opts.rollAccountIds?.length ?? 0) >= 1
     const sl = d.usesStatusLine
-      ? (this.statusLineProvider?.(id, opts.account, { hooks: wantHooks }) ?? null)
+      ? (this.statusLineProvider?.(id, opts.account, { toolHooks: wantToolHooks }) ?? null)
       : null
     const { file, args } = d.buildCommand({
       resumeSessionId: opts.resumeSessionId,
@@ -214,9 +219,10 @@ export class SessionManager {
       accountId: opts.account.id,
       cwd: opts.cwd,
       status: 'running',
-      // ?? and not ||: with || an empty-string title would silently turn into cwd, blurring "no title
-      // was given" together with "an empty title was given"
-      title: opts.title ?? (path.basename(opts.cwd) || opts.cwd),
+      // ?? and not ||: with || an empty-string title would silently turn into the folder name,
+      // blurring "no title was given" together with "an empty title was given". The default itself
+      // lives in ./title so spawn and rename cannot disagree about what a nameless session is called.
+      title: opts.title ?? defaultSessionTitle(opts.cwd),
       resumeSessionId: opts.resumeSessionId,
       rollAccountIds: opts.rollAccountIds,
       rollPrompt: opts.rollPrompt,
@@ -331,6 +337,22 @@ export class SessionManager {
 
   kill(id: string): void {
     this.sessions.get(id)?.pty.kill()
+  }
+
+  /** Renames a session, returning the stored title — normalised, so an empty name comes back as the
+   *  project folder name rather than an empty tab.
+   *
+   *  One assignment is the whole feature: the tab label, Slack's message prefix and the desktop
+   *  notification's title all read `SessionInfo.title`, so they follow from here without any of them
+   *  learning about renaming.
+   *
+   *  An unknown id answers null instead of throwing. `list()` includes exited sessions, so a tab can
+   *  outlive its process and a rename can race a tab closing; neither is worth an exception. */
+  rename(id: string, title: string): string | null {
+    const live = this.sessions.get(id)
+    if (!live) return null
+    live.info.title = normalizeSessionTitle(title, live.info.cwd)
+    return live.info.title
   }
 
   list(): SessionInfo[] {

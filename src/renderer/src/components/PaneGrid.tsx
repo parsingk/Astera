@@ -61,6 +61,9 @@ export function PaneGrid({
   onTabContextMenu,
   onDragTabChange,
   onDropTabInBar,
+  renamingTabId,
+  onRenameStart,
+  onRenameEnd,
   renderEditor,
   renderRecord
 }: {
@@ -100,6 +103,10 @@ export function PaneGrid({
   onDragTabChange: (tabId: string | null) => void
   /** Dropped onto a group's tab bar. insertBefore is 0..length in terms of the original indexing */
   onDropTabInBar: (paneId: string, tabId: string, insertBefore: number) => void
+  /** 이름을 고치는 중인 탭 — 그대로 탭 줄로 흘려보낸다 */
+  renamingTabId: string | null
+  onRenameStart: (tabId: string) => void
+  onRenameEnd: (tabId: string, title: string | null) => void
   /** The editor body for a pane. App owns it (and the state cache), the grid only places it */
   /** focused = 이 페인이 활성이고 그 활성 탭이 이 파일일 때. 에디터가 커서를 가져갈 시점을 정한다 —
    *  TerminalView 가 active 프롭으로 같은 일을 한다 */
@@ -395,6 +402,9 @@ export function PaneGrid({
               onDragTabChange={onDragTabChange}
               draggingTabId={draggingTabId}
               onDropTabInBar={(tabId, insertBefore) => onDropTabInBar(l.id, tabId, insertBefore)}
+              renamingTabId={renamingTabId}
+              onRenameStart={onRenameStart}
+              onRenameEnd={onRenameEnd}
             />
           </div>
         )

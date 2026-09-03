@@ -10,6 +10,7 @@ export const ko = {
   'settings.tab.info': '정보',
   'settings.tab.shortcuts': '단축키',
   'settings.tab.history': '히스토리',
+  'settings.tab.notifications': '알림',
   'settings.general.language': '언어',
   // {lang} is the language the OS locale resolves to, shown so the effect of picking System is
   // visible before picking it
@@ -131,6 +132,17 @@ export const ko = {
   'github.state.open': '열림',
   'github.state.merged': '머지됨',
   'github.state.closed': '닫힘',
+  // ---- notifications ----
+  'settings.notifications.hint':
+    '데스크톱 알림입니다. 다른 세션을 보고 있거나 다른 화면을 보고 있을 때 알림을 보냅니다.',
+  'settings.notifications.inputNeeded': '입력이 필요할 때',
+  'settings.notifications.inputNeededHint':
+    '선택지나 권한 승인을 기다리며 멈춘 상태에 알림을 보냅니다.',
+  'settings.notifications.limitWaiting': '한도에 걸려 멈출 때',
+  'settings.notifications.limitWaitingHint': '한도에 걸렸을 때 알림을 보냅니다.',
+  'settings.notifications.accountSwitched': '계정을 전환할 때',
+  'settings.notifications.accountSwitchedHint': '계정을 전환할 때 알림을 보냅니다.',
+  'settings.notifications.saveFailed': '알림 설정을 저장하지 못했습니다: {detail}',
   'worktree.push.aheadUnknown': '푸시하지 않은 커밋이 있습니다',
   'worktree.push.createPr': 'PR 만들기',
   'worktree.push.createPrHint': 'PR 만들기 — 커밋 {count}개를 {base}(으)로',
@@ -183,6 +195,11 @@ export const ko = {
   'session.usage.fiveHourLabel': '5시간 사용량',
   'session.usage.fiveHourTitle': '5시간 세션 사용량',
   'session.usage.weekly': '주간 사용량',
+  // A duration as one coarse unit. Its own keys rather than a suffix appended to a number, because
+  // the two are not separable in every language this app ships.
+  'duration.minutes': '{n}분',
+  'duration.hours': '{n}시간',
+  'duration.days': '{n}일',
   'session.statusbar.count': '세션 {count}',
   'session.statusbar.none': '세션 없음',
   'session.statusbar.accountCount': '계정 {count}',
@@ -499,6 +516,12 @@ export const ko = {
   'account.detect.failed': '자동 감지 실패: {detail}',
   'account.status.loggedIn': '로그인됨',
   'account.status.notLoggedIn': '미로그인',
+  'account.usage.fiveHour': '5시간',
+  'account.usage.weekly': '주간',
+  'account.usage.resetsIn': '{d} 뒤',
+  // One key, not a sentence assembled from fragments — word order differs between the languages,
+  // which is exactly what concatenation gets wrong.
+  'account.usage.refreshedAgo': '{d} 전 갱신',
   // AccountPanel.tsx — unregister. When logout comes with it, it says the credentials are removed (destructive).
   'account.remove.title': '계정 등록 해제',
   'account.remove.button': '등록 해제',
@@ -596,6 +619,7 @@ export const ko = {
   // WorkbenchTabs.tsx
   'session.tab.rollTooltip': '롤링: {chain}',
   // PaneGrid / pane context menu
+  'session.tab.rename': '이름 변경',
   'session.pane.splitRight': '우측 분할',
   'session.pane.splitDown': '하단 분할',
   'session.pane.unsplit': '분할 해제',
@@ -833,6 +857,12 @@ export const ko = {
   'slack.inbox.injectFailed': '⚠️ 입력을 전달하지 못했습니다',
   'slack.limitNoResume': '⛔ 한도 도달 — 자동 재개 없음',
   'slack.limitNoResumeAt': '⛔ 한도 도달 — 자동 재개 없음 (리셋 {at})',
+  // Desktop notification bodies. They follow the app language, the same way Slack's already do. The
+  // title is the session's own title, so the body says only what happened.
+  'notify.inputNeeded': '사용자 확인이 필요합니다',
+  'notify.limitWaiting': '한도에 걸려 재개를 기다립니다',
+  'notify.accountSwitched': '계정을 {label} 로 전환했습니다',
+  'notify.fallbackTitle': 'Astera',
   // JobsView.tsx, App.tsx — the read-only Jobs sidebar (오케스트레이션 Run/Task 목록)
   // 'Jobs'는 번역하지 않는다 — '작업'은 이미 Task를 가리키는 말이라, 뷰 이름까지 '작업'이라 하면
   // 그 안의 Task 행들과 이름이 겹친다. catalog.test.ts의 LITERALS가 네 카탈로그 모두에서 그대로

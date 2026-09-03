@@ -12,6 +12,8 @@ import { HistoryIndex } from '../core/history/index'
 import { SessionCwdCache } from '../core/history/sessionCwdCache'
 import { ProjectSettings } from '../core/projects/settings'
 import { StatusLineManager, resolveNodePath } from './statusline'
+import { RateLimitFetcher } from './usage'
+import { AccountUsageStore } from './accountUsageStore'
 import { parseStatusLinePayload } from '../core/usage/statusline'
 import { defaultAccountIdOf } from '../core/accounts/defaultAccount'
 import { RollConfigStore } from '../core/rolling/config'
@@ -54,6 +56,12 @@ export interface Core {
   // pure and node-free), so nothing has to be decorated onto each account at serialisation time.
   accountSyncSettings: (id: string) => Promise<{ ok: boolean; message?: Message }> // Import the provider's default account settings
   usageSession: (sessionId: string) => Promise<SessionUsage | null>
+  /** The one account-usage fetcher. Shared rather than per-caller, and that sharing is the point: the
+   *  5-minute success cache, the 429 back-off and the in-flight coalescing are all per configDir on
+   *  this instance, so the limit verdict and the account panel asking about the same account cost one
+   *  request between them. Two instances would compile and pass every test while sharing nothing. */
+  usageFetcher: RateLimitFetcher
+  accountUsage: AccountUsageStore // last-known usage per account (design doc §3)
   statusLinePayload: (sessionId: string) => Promise<unknown | null> // Raw payload, for rolling
   hookEventsDir: string // Hook event file directory — watched by index.ts's HookEventWatcher
   // Rolling config persistence. index.ts does the persisting (the rolling.ts persistConfig wiring);
@@ -185,6 +193,11 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   await localHistory.load()
   const appSettings = new AppSettingsStore(path.join(userDataDir, 'app-settings.json'))
   await appSettings.load()
+  const usageFetcher = new RateLimitFetcher()
+  const accountUsage = new AccountUsageStore(path.join(userDataDir, 'account-usage.json'))
+  // A cache, so a failed load is an empty cache and nothing more — there is no recovered flag to
+  // report and nothing for the caller to decide.
+  await accountUsage.load()
   const keybindings = new KeybindingsStore(path.join(userDataDir, 'keybindings.json'))
   await keybindings.load()
   const run = new RunManager(nodePtyFactory)
@@ -310,6 +323,8 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     worktrees,
     localHistory,
     appSettings,
+    usageFetcher,
+    accountUsage,
     keybindings,
     lang: appSettings.getLang() ?? pickInitialLang(osLocale)
   }

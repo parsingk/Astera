@@ -34,6 +34,7 @@ import { ThemeSettings } from './components/ThemeSettings'
 import { GeneratorSettings } from './components/GeneratorSettings'
 import { ResumeStrategySettings } from './components/ResumeStrategySettings'
 import { GithubSettings } from './components/GithubSettings'
+import { NotificationSettings } from './components/NotificationSettings'
 import { ConfirmHost } from './components/ConfirmHost'
 import type {
   OpenSessionTask,
@@ -50,6 +51,7 @@ import type {
 import type { ProjectUnderstanding, RecordStatus } from '../../core/understanding/types'
 import { slackMode } from '../../core/slack/ready'
 import { findRun } from '../../core/orchestration/snapshot'
+import { pickRunSelection } from '../../core/run/selection'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
 import {
@@ -350,6 +352,22 @@ export default function App(): React.JSX.Element {
   const [dragTabId, setDragTabId] = useState<string | null>(null)
   // Position of the tab context menu
   const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null)
+  /** 이름을 고치고 있는 세션 탭. 더블클릭과 우클릭 메뉴가 같은 자리를 연다 */
+  const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
+  /** 이름 고치기가 끝났다. title 이 null 이면 취소다.
+   *
+   *  main 이 정규화한 값을 돌려주므로(공백만 남기면 폴더 이름) 화면은 그 값을 받아 적는다. 이름은
+   *  탭 라벨이자 Slack 메시지 접두사이자 알림 제목이라, 무엇이 저장됐는지는 main 이 정한다. */
+  const endTabRename = (tabId: string, title: string | null): void => {
+    setRenamingTabId(null)
+    if (title === null) return
+    const ref = parseTab(tabId)
+    if (ref?.kind !== 'session') return
+    void window.api.sessions.rename(ref.id, title).then((next) => {
+      if (next === null) return // 그사이 세션이 사라졌다
+      setSessions((prev) => prev.map((s) => (s.id === ref.id ? { ...s, title: next } : s)))
+    })
+  }
   // 지금 보고 있는 탭은 트리가 정한다 — 활성 페인의 활성 탭. 세 종류가 한 트리에 있으므로 별도의
   // activeTabId 상태를 두면 트리와 어긋난다(다른 페인의 탭을 클릭하거나 페인 포커스를 옮기는 순간
   // 갈라진다). 파일 탭 id는 전부터 `file:<path>` 형식이었으므로 파일 관련 코드는 그대로 쓴다
@@ -409,6 +427,7 @@ export default function App(): React.JSX.Element {
     | 'info'
     | 'shortcuts'
     | 'slack'
+    | 'notifications'
     | 'github'
     | 'worktree'
     | 'history'
@@ -651,6 +670,13 @@ export default function App(): React.JSX.Element {
     })
     const offAccounts = window.api.on('accounts:changed', (p) => setAccounts(p.accounts))
     const offGhosts = window.api.on('accounts:ghostsChanged', (p) => setGhostAccounts(p.accounts))
+    // Clicking a desktop notification raises the window in main and lands here to activate that
+    // session's tab, through the same path a click on the tab bar takes. A session with no tab (one
+    // that was closed while the notification sat in the tray) finds no group and is a silent no-op —
+    // the window is raised either way, which is the useful half.
+    const offNotifyActivate = window.api.on('notify:activate', ({ sessionId }) => {
+      selectWorkbenchTabRef.current?.(sessionTab(sessionId))
+    })
     const offExit = window.api.on('session:exit', ({ sessionId, exitCode }) => {
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, status: 'exited', exitCode } : s))
@@ -722,6 +748,7 @@ export default function App(): React.JSX.Element {
     return () => {
       offAccounts()
       offGhosts()
+      offNotifyActivate()
       offExit()
       offCreated()
       offUpdate()
@@ -1697,6 +1724,24 @@ export default function App(): React.JSX.Element {
   // Project Run/Stop: run configurations, the active run, the list of all active runs, and whether the panel is open
   const [runConfigs, setRunConfigs] = useState<RunConfig[]>([])
   const [runSelectedId, setRunSelectedId] = useState<string | null>(null)
+  /** 프로젝트 경로 → 그 프로젝트에서 고른 실행 구성. 선택은 프로젝트마다 따로 기억해야 한다.
+   *
+   *  씨앗 구성의 id 는 스크립트 이름에서 만들어져(`seed:npm:dev`) 프로젝트를 담지 않는다. 그래서
+   *  "이전 선택이 새 목록에도 있으면 유지" 로는 프로젝트가 바뀐 것을 아예 감지하지 못한다 — A 에서
+   *  고른 `seed:npm:dev` 는 dev 스크립트가 있는 B 에서도 멀쩡히 유효해서, B 가 조용히 A 의 선택을
+   *  물려받는다. npm 프로젝트끼리 dev·build·start·test 가 겹치는 것은 예외가 아니라 보통이다.
+   *
+   *  state 가 아니라 ref 인 이유: 이 값이 바뀐다고 다시 그릴 것이 없다. 화면에 나가는 것은
+   *  runSelectedId 이고, 이건 그 값을 프로젝트별로 되찾기 위한 기억일 뿐이다. state 로 두면 아래
+   *  프로젝트 전환 효과의 의존성에 들어가 선택할 때마다 목록을 다시 불러오게 된다. */
+  const runSelectedByProject = useRef<Record<string, string>>({})
+  /** 선택을 화면과 기억에 함께 적는다. 한쪽만 적으면 다음에 그 프로젝트로 돌아왔을 때 어긋난다. */
+  const applyRunSelection = (projectPath: string | null, id: string | null): void => {
+    setRunSelectedId(id)
+    if (!projectPath) return
+    if (id) runSelectedByProject.current[projectPath] = id
+    else delete runSelectedByProject.current[projectPath]
+  }
   const [runActive, setRunActive] = useState<RunStatus | null>(null)
   /** Run 탭을 ✕ 로 닫은 프로젝트. Run 탭은 실행이 없을 때도 '실행' 라벨로 남아 있으므로, main 에서
    *  끝난 실행을 지우는 것(run.dismiss)만으로는 탭이 사라지지 않는다 — 닫았다는 사실은 여기 있다.
@@ -2261,13 +2306,19 @@ export default function App(): React.JSX.Element {
       setRunIsPythonProject(r.isPythonProject)
       setRunHasDockerfile(r.hasDockerfile)
       setRunContext(r.context)
-      setRunSelectedId((prev) => (r.configs.some((c) => c.id === prev) ? prev : r.active?.configId ?? r.configs[0]?.id ?? null))
+      // 프로젝트가 바뀌는 유일한 자리다. 직전 선택이 아니라 **이 프로젝트에 기억된** 선택을
+      // 물어본다 — 씨앗 id 는 프로젝트를 담지 않아서, 직전 선택을 들고 오면 이름이 같은
+      // 스크립트가 있는 프로젝트마다 그 선택이 따라다닌다(runSelectedByProject 주석).
+      applyRunSelection(
+        currentProject,
+        pickRunSelection(r.configs, runSelectedByProject.current[currentProject], r.active?.configId)
+      )
       if (r.active?.status === 'running') setRunPanelOpen(true)
     }, () => {
       if (cancelled) return
       setRunConfigs([])
       setRunActive(null)
-      setRunSelectedId(null)
+      applyRunSelection(currentProject, null)
       setRunContext(null)
     })
     return () => { cancelled = true }
@@ -2488,7 +2539,12 @@ export default function App(): React.JSX.Element {
         setRunIsPythonProject(r.isPythonProject)
         setRunHasDockerfile(r.hasDockerfile)
         setRunContext(r.context)
-        setRunSelectedId((prev) => (r.configs.some((cc) => cc.id === prev) ? prev : r.active?.configId ?? r.configs[0]?.id ?? null))
+        // 이 효과는 의존성이 [] 라 클로저의 currentProject 가 낡는다 — 위에서 ref 로 읽어 둔
+        // root 가 지금 열린 프로젝트다. 기억을 그 키로 읽고 써야 다른 프로젝트 것을 건드리지 않는다.
+        applyRunSelection(
+          root,
+          pickRunSelection(r.configs, runSelectedByProject.current[root], r.active?.configId)
+        )
       })
     })
     return off
@@ -2538,7 +2594,10 @@ export default function App(): React.JSX.Element {
       void window.api.run.list(currentProject).then((r) => {
         setRunConfigs(r.configs)
         setRunContext(r.context)
-        setRunSelectedId((prev) => (r.configs.some((c) => c.id === prev) ? prev : r.configs[0]?.id ?? null))
+        applyRunSelection(
+          currentProject,
+          pickRunSelection(r.configs, runSelectedByProject.current[currentProject])
+        )
       })
     })
   }
@@ -2561,7 +2620,10 @@ export default function App(): React.JSX.Element {
           // stored config shares its seedKeyOf — so without this the toolbar keeps a seed id that no
           // longer resolves, ▶ stays enabled (disabled={!selectedId}, and a stale string is truthy)
           // and pressing it fails with NO_CONFIG.
-          setRunSelectedId((prev) => (r.configs.some((c) => c.id === prev) ? prev : r.configs[0]?.id ?? null))
+          applyRunSelection(
+            currentProject,
+            pickRunSelection(r.configs, runSelectedByProject.current[currentProject])
+          )
         })
         return true
       },
@@ -2706,6 +2768,13 @@ export default function App(): React.JSX.Element {
     }
   }, [usageSessionId])
 
+  // Main needs the session on screen to suppress a notification for it, and the renderer is the only
+  // place that can answer — panes and tabs are its structure (design doc §7). null covers a file tab
+  // being focused, no pane having a session, and the panes being empty.
+  useEffect(() => {
+    window.api.notify.activeSession({ sessionId: usageSessionId ?? null })
+  }, [usageSessionId])
+
   // Only when neither CLI is present is there nothing to launch. With one of the two installed the app
   // opens as usual, and the new-session dialog blocks the accounts whose CLI is missing.
   //
@@ -2752,7 +2821,7 @@ export default function App(): React.JSX.Element {
               <RunToolbar
                 configs={runConfigs}
                 selectedId={runSelectedId}
-                onSelect={setRunSelectedId}
+                onSelect={(id) => applyRunSelection(currentProject, id)}
                 active={runActive}
                 onRun={runStart}
                 onStop={runStop}
@@ -3155,6 +3224,9 @@ export default function App(): React.JSX.Element {
                 에디터는 이 안의 페인 슬롯에 있다 */}
             <div className="session-view">
               <PaneGrid
+                renamingTabId={renamingTabId}
+                onRenameStart={setRenamingTabId}
+                onRenameEnd={endTabRename}
                 layout={layout}
                 activePaneId={activePaneId}
                 sessions={sessions}
@@ -3362,6 +3434,7 @@ export default function App(): React.JSX.Element {
                     ['info', t('settings.tab.info')],
                     ['shortcuts', t('settings.tab.shortcuts')],
                     ['slack', 'Slack'],
+                    ['notifications', t('settings.tab.notifications')],
                     ['github', 'GitHub'],
                     ['worktree', 'Worktree'],
                     ['history', t('settings.tab.history')]
@@ -3709,6 +3782,7 @@ export default function App(): React.JSX.Element {
                     <span className="settings-hint">{t('settings.slack.setupGuide')}</span>
                   </div>
                 )}
+                {settingsTab === 'notifications' && <NotificationSettings />}
                 {settingsTab === 'github' && <GithubSettings />}
                 {settingsTab === 'worktree' && (
                   <div className="settings-worktree">
@@ -3764,7 +3838,19 @@ export default function App(): React.JSX.Element {
               setLayout(res.root)
               setActivePaneId(res.paneId)
             }
+            const isSession = parseTab(tid)?.kind === 'session'
             return [
+              // 세션 탭에만. 파일 탭의 라벨은 파일 이름이라 여기서 바꿀 것이 아니고, 기록 탭의
+              // 라벨은 그 기록의 요청문이다. 더블클릭과 같은 자리를 연다.
+              ...(isSession
+                ? ([
+                    {
+                      label: t('session.tab.rename'),
+                      onSelect: () => setRenamingTabId(tid)
+                    },
+                    'separator'
+                  ] as MenuItem[])
+                : []),
               {
                 label: t('session.pane.splitRight'),
                 disabled: cantSplit,

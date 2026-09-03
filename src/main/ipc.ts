@@ -9,6 +9,8 @@ import type { CodexRollingCoordinator } from './codexRolling'
 import type { SchedulerCoordinator } from './scheduler'
 import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
 import type { CodexRolloutWatcher } from './codexRolloutWatcher'
+import type { DesktopNotifier } from './desktopNotifier'
+import type { DesktopNotifySettings } from '../core/notify/settings'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
 import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, SessionInfo } from '../core/types'
@@ -113,6 +115,7 @@ import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
 import { loadRunConfigs, prepareRun } from './run/prepare'
 import { createGithubPrs } from './githubPrs'
+import { createAccountUsage } from './accountUsage'
 import { createPullRequest, readCommits } from './prCreate'
 import { fillFromCommits } from '../core/github/fill'
 
@@ -304,7 +307,11 @@ export function registerIpc(
    *  `onSessionForked`'s own doc for why. */
   onWorkUnitForkReady?: (
     notify: (newSessionId: string, transcriptPath?: string, oldSessionId?: string) => void
-  ) => void
+  ) => void,
+  /** The desktop notification sink. It is built in index.ts (it needs the BrowserWindow for both
+   *  focus and the click), but the renderer's "this session is on screen" push arrives as IPC, which
+   *  lives here — so the instance travels in rather than the state travelling out. */
+  desktop?: DesktopNotifier
 ): void {
   const send = (channel: string, payload: unknown): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
@@ -2796,6 +2803,24 @@ export function registerIpc(
     return core.sessions.kill(id)
   })
   ipcMain.handle('sessions.list', () => core.sessions.list())
+  // Renaming a tab. The renderer holds the sessions list it draws from, so it applies the returned
+  // title itself — no broadcast, because the rename starts there and this app has one window.
+  //
+  // **This is the list of everything that must hear about a rename.** `SessionManager.spawn` returns
+  // `{ ...info }`, so every component that was handed a SessionInfo holds a snapshot taken when the
+  // session started; renaming the session alone reaches none of them. The desktop notifier is absent
+  // on purpose — it looks the session up fresh on every notification, so it needs no telling. Anything
+  // added later that keeps a SessionInfo belongs here too.
+  ipcMain.handle('sessions.rename', (_e, id: string, title: string) => {
+    if (typeof id !== 'string' || typeof title !== 'string')
+      throw new Error(`INVALID_RENAME: ${String(id)}`)
+    const next = core.sessions.rename(id, title)
+    if (next === null) return null
+    slack?.notifier.rename(id, next) // the prefix on every later message in the thread
+    rolling?.rename(id, next) // so a roll respawns under the new name
+    codexRolling?.rename(id, next)
+    return next
+  })
   // The resume modal reads the stored rolling and schedule settings to seed its checkboxes.
   // This is read-only — nothing is restored here. What gets enabled is settled by the modal and passed
   // down as spawn opts.
@@ -2938,10 +2963,39 @@ export function registerIpc(
   )
   ipcMain.on('github.subscribe', () => githubPrs.subscribe())
   ipcMain.on('github.unsubscribe', () => githubPrs.unsubscribe())
+
+  // Per-account usage for the account rows (design doc §4). Created here for the same reason
+  // githubPrs is — it needs `send`. It fetches nothing until a panel subscribes.
+  const accountUsage = createAccountUsage({
+    accounts: core.accounts,
+    fetcher: core.usageFetcher,
+    store: core.accountUsage,
+    send
+  })
+  ipcMain.handle('usage.accounts', () => accountUsage.usage())
+  ipcMain.on('usage.subscribe', () => accountUsage.subscribe())
+  ipcMain.on('usage.unsubscribe', () => accountUsage.unsubscribe())
+
   ipcMain.handle('settings.getGithubPolling', () => core.appSettings.getGithubPolling())
   ipcMain.handle('settings.setGithubPolling', async (_e, enabled: boolean) => {
     if (typeof enabled !== 'boolean') throw new Error(`INVALID_GITHUB_POLLING: ${String(enabled)}`)
     await core.appSettings.setGithubPolling(enabled)
+  })
+
+  // The renderer pushes the session on screen; main cannot work it out (§7). Narrowed on arrival, and
+  // narrowed again inside setActiveSession.
+  ipcMain.on('notify.activeSession', (_e, p: { sessionId?: unknown } | null) => {
+    const id = typeof p?.sessionId === 'string' ? p.sessionId : null
+    desktop?.setActiveSession(id)
+  })
+  ipcMain.handle('settings.getDesktopNotify', () => core.appSettings.getDesktopNotify())
+  ipcMain.handle('settings.setDesktopNotify', async (_e, next: unknown) => {
+    if (next === null || typeof next !== 'object' || Array.isArray(next))
+      throw new Error(`INVALID_DESKTOP_NOTIFY: ${String(next)}`)
+    const o = next as Record<string, unknown>
+    for (const k of ['inputNeeded', 'limitWaiting', 'accountSwitched'])
+      if (typeof o[k] !== 'boolean') throw new Error(`INVALID_DESKTOP_NOTIFY: ${k}=${String(o[k])}`)
+    await core.appSettings.setDesktopNotify(next as DesktopNotifySettings)
   })
 
   // usage — an active session's context, 5-hour and weekly %. The two CLIs keep those figures in

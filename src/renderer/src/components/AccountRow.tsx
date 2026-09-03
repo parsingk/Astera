@@ -1,4 +1,5 @@
-import type { Account } from '../../../core/types'
+import type { Account, AccountUsage } from '../../../core/types'
+import { AccountUsageMeter, AccountUsageDetail, hasUsage } from './AccountUsageMeter'
 import { ProviderBadge } from './ProviderBadge'
 import { useI18n } from '../i18n/I18nProvider'
 
@@ -11,6 +12,9 @@ export function AccountRow({
   loggedIn,
   email,
   isDefault,
+  usage,
+  expanded,
+  onToggle,
   children
 }: {
   account: Account
@@ -19,13 +23,42 @@ export function AccountRow({
   /** That provider's default account — the ⤓ source. One row per provider can carry it, so with both
    *  claude and codex registered two rows show the badge. */
   isDefault?: boolean
+  /** This account's usage, keyed by configDir upstream. undefined draws nothing (design doc §5). */
+  usage?: AccountUsage
+  /** Is this row's usage detail open. The list owns which one is — only one is open at a time, so
+   *  the answer cannot live in the row. */
+  expanded?: boolean
+  /** Toggle this row's detail. Called on a click or on Enter/Space; the list decides what that
+   *  means for the other rows. */
+  onToggle?: () => void
   children?: React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
+  // The detail opens on a click, not on hover, so the row is only a control when there is something
+  // to open: a Codex account, a logged-out one and one never read all draw nothing, and a row that
+  // cannot open must not look or behave as if it could.
+  const openable = Boolean(loggedIn) && hasUsage(usage)
+  const toggle = openable && onToggle ? onToggle : undefined
+
   return (
     <li
-      className="account-row"
+      className={expanded && openable ? 'account-row expanded' : 'account-row'}
       title={email ? `${account.label} · ${email}` : account.configDir}
+      onClick={toggle}
+      // A click needs a keyboard equivalent or the figures are reachable by mouse alone. No
+      // role="button": the row already contains real buttons in the settings tab, and nesting
+      // buttons inside a button is a worse lie than an unnamed focusable row.
+      tabIndex={toggle ? 0 : undefined}
+      aria-expanded={toggle ? Boolean(expanded) : undefined}
+      onKeyDown={
+        toggle
+          ? (e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return
+              e.preventDefault() // Space would otherwise scroll the panel
+              toggle()
+            }
+          : undefined
+      }
     >
       <span className="color-dot" style={{ background: account.color }} />
       <ProviderBadge provider={account.provider} />
@@ -33,11 +66,25 @@ export function AccountRow({
       {/* Not translated, matching ProviderBadge's 'Claude'/'Codex' — these are short identifiers rather
           than prose, and the row is narrow */}
       {isDefault && <span className="badge">default</span>}
+      {/* Gated on loggedIn as well as on having a reading: §5 draws nothing for an account that is
+          not logged in, and `undefined` (the state before useAccountStatus has answered) draws
+          nothing either, so no meter flashes in and out on mount. */}
+      {loggedIn && <AccountUsageMeter usage={usage} />}
       <span
         className={loggedIn ? 'login-dot on' : 'login-dot'}
         title={loggedIn ? t('account.status.loggedIn') : t('account.status.notLoggedIn')}
       />
-      {children}
+      {/* The actions sit inside the row, so their clicks would bubble into the row's toggle —
+          pressing "remove account" would also open the usage detail. Stopped here rather than on
+          each button so a caller cannot forget. */}
+      {children && (
+        <span className="account-row-actions" onClick={(e) => e.stopPropagation()}>
+          {children}
+        </span>
+      )}
+      {/* In flow, after the row's own content, so opening it grows the row downward instead of
+          covering the rows beneath (design doc §5.1). */}
+      {expanded && openable && <AccountUsageDetail usage={usage} />}
     </li>
   )
 }

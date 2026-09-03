@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { AppSettingsStore } from './appSettingsStore'
+import type { DesktopNotifySettings } from '../core/notify/settings'
 
 let dir: string
 beforeEach(async () => {
@@ -341,5 +342,125 @@ describe('theme', () => {
     await again.load()
     expect(again.getTerminalFont()).toEqual({ latin: 'Consolas', hangul: null })
     expect(again.getTheme()).toBe('quasar')
+  })
+})
+
+describe('AppSettingsStore desktop notifications', () => {
+  it('defaults: the two stopped-work events on, the two progress events off', async () => {
+    const s = new AppSettingsStore(file())
+    await s.load()
+    expect(s.getDesktopNotify()).toEqual({
+      inputNeeded: true,
+      limitWaiting: true,
+      accountSwitched: false
+    })
+  })
+
+  it('stores and reloads all four', async () => {
+    const f = file()
+    const a = new AppSettingsStore(f)
+    await a.load()
+    await a.setDesktopNotify({
+      inputNeeded: false,
+      limitWaiting: true,
+      accountSwitched: true
+    })
+
+    const b = new AppSettingsStore(f)
+    await b.load()
+    expect(b.getDesktopNotify()).toEqual({
+      inputNeeded: false,
+      limitWaiting: true,
+      accountSwitched: true
+    })
+  })
+
+  // The file is user-editable, so the narrowing is per default: a default-on flag reads as off only
+  // on an explicit false (as githubPolling does), a default-off flag reads as on only on an explicit
+  // true. 'yes' and 1 must not turn anything on or off.
+  it('narrows each flag against its own default', async () => {
+    const f = file()
+    await fs.writeFile(
+      f,
+      JSON.stringify({
+        desktopNotify: { inputNeeded: 'no', limitWaiting: 0, accountSwitched: 'yes' }
+      }),
+      'utf8'
+    )
+    const s = new AppSettingsStore(f)
+    await s.load()
+    expect(s.getDesktopNotify()).toEqual({
+      inputNeeded: true, // not an explicit false
+      limitWaiting: true, // not an explicit false
+      accountSwitched: false // not an explicit true
+    })
+  })
+
+  // This is the boundary the renderer writes through. Before the fix, setDesktopNotify narrowed
+  // every field with a uniform `=== true`, so a malformed value on a default-on flag (not an
+  // explicit false) was written as false — silently disabling an "input needed" or
+  // "limit waiting" notification, the one direction this feature must never fail in.
+  it("setDesktopNotify narrows malformed input against each flag's own default, not to false", async () => {
+    const f = file()
+    const s = new AppSettingsStore(f)
+    await s.load()
+    await s.setDesktopNotify({
+      inputNeeded: 'no',
+      limitWaiting: 0,
+      accountSwitched: 'yes'
+    } as unknown as DesktopNotifySettings)
+    expect(s.getDesktopNotify()).toEqual({
+      inputNeeded: true, // not an explicit false
+      limitWaiting: true, // not an explicit false
+      accountSwitched: false // not an explicit true
+    })
+  })
+
+  it('a non-object desktopNotify is the defaults', async () => {
+    for (const raw of ['[]', '"on"', 'null', '3']) {
+      const f = file()
+      await fs.writeFile(f, `{"desktopNotify": ${raw}}`, 'utf8')
+      const s = new AppSettingsStore(f)
+      await s.load()
+      expect(s.getDesktopNotify()).toEqual({
+        inputNeeded: true,
+        limitWaiting: true,
+        accountSwitched: false
+      })
+    }
+  })
+
+  // The corrupt-file recovery must reset these too — otherwise, on a reload through the same
+  // instance, a previous value survives and leaves a setting the file does not contain.
+  it('a corrupt file recovers to the defaults, not to the previous values', async () => {
+    const f = file()
+    const s = new AppSettingsStore(f)
+    await s.load()
+    await s.setDesktopNotify({
+      inputNeeded: false,
+      limitWaiting: false,
+      accountSwitched: true
+    })
+    await fs.writeFile(f, '{ not json', 'utf8')
+    const r = await s.load()
+    expect(r.recovered).toBe(true)
+    expect(s.getDesktopNotify()).toEqual({
+      inputNeeded: true,
+      limitWaiting: true,
+      accountSwitched: false
+    })
+  })
+
+  it('the key is omitted from the file while every flag is at its default', async () => {
+    const f = file()
+    const s = new AppSettingsStore(f)
+    await s.load()
+    await s.setDesktopNotify({
+      inputNeeded: true,
+      limitWaiting: true,
+      accountSwitched: false
+    })
+    const parsed = JSON.parse(await fs.readFile(f, 'utf8')) as Record<string, unknown>
+    expect(parsed.desktopNotify).toBeUndefined()
   })
 })

@@ -509,7 +509,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    account row */
 .settings-accounts { display: flex; flex-direction: column; gap: 10px; }
 /* --row-pad-y 보다 일부러 1px 더 넉넉하다 — 밀도 토큰에 넣지 않았다. "고쳐" 5px→4px 로 맞추면 2px 만큼 눈에 보이게 좁아진다 */
-.account-row { display: flex; align-items: center; gap: 8px; padding: 5px 12px; border-left: 2px solid transparent; cursor: default; transition: background var(--ease), border-color var(--ease); }
+.account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 5px 12px; border-left: 2px solid transparent; cursor: default; transition: background var(--ease), border-color var(--ease); }
+/* Only a row with a reading opens, and only that row is given tabindex — so the pointer follows
+   the same rule rather than promising a click that does nothing */
+.account-row[tabindex] { cursor: pointer; }
+.account-row.expanded { background: var(--elevated); border-left-color: var(--accent); }
+.account-row-actions { display: inline-flex; align-items: center; gap: 8px; }
 .account-row:hover { background: var(--elevated); border-left-color: var(--accent); }
 .account-label { flex: 1; min-width: 0; font-size: 12px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .color-dot { width: 8px; height: 8px; border-radius: var(--radius-sm); flex-shrink: 0; }
@@ -518,6 +523,36 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .badge.ok { color: var(--ok); background: var(--ok-bg); }
 .login-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-faint); flex-shrink: 0; } /* grey, not logged in */
 .login-dot.on { background: var(--ok); } /* green, logged in */
+/* The account row's usage meter (design doc §5) — 44px wide, two 3px tracks 2px apart. 8px overall,
+   so it fits inside the 12px label's line box and the row height does not change. 44px is the same
+   width as the status bar's .usage-bar, and the fill colours are the same three thresholds. */
+.acct-meter { width: 44px; flex: none; display: flex; flex-direction: column; gap: 2px; }
+.acct-meter > span { display: block; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, .2); overflow: hidden; }
+.acct-meter i { display: block; height: 100%; border-radius: 2px; background: var(--ok); }
+.acct-meter i.warn { background: var(--warn); } /* 70~84% */
+.acct-meter i.crit { background: var(--danger); } /* >=85% */
+/* A remembered reading — the same convention .pr-badge.stale uses for a stale snapshot */
+.acct-meter.stale { opacity: .45; }
+/* The click detail (design doc §5.1). `flex-basis: 100%` puts it on its own line inside the row's
+   own flex box, so the row grows downward and the rows beneath simply move — no overlay, no
+   z-index, and nothing to flip near the bottom of the panel. Hover never opens it: a row that
+   expanded under a travelling pointer would push the row you were aiming at out from under it,
+   which is why the pointer opens nothing and a click opens exactly one. */
+.acct-detail {
+  flex: 0 0 100%;
+  display: flex; flex-direction: column; gap: 4px;
+  margin-top: 5px; padding-top: 6px;
+  border-top: 1px solid var(--line-soft);
+}
+.acct-detail .dline { display: flex; align-items: center; gap: 7px; font-size: 9.5px; font-variant-numeric: tabular-nums; }
+.acct-detail .k { color: var(--text-faint); width: 4.6ch; flex: none; }
+.acct-detail .v { color: var(--text); width: 4ch; flex: none; text-align: right; font-weight: 600; }
+.acct-detail .t { flex: 1; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, .2); overflow: hidden; }
+.acct-detail .t i { display: block; height: 100%; border-radius: 2px; background: var(--ok); }
+.acct-detail .t i.warn { background: var(--warn); }
+.acct-detail .t i.crit { background: var(--danger); }
+.acct-detail .r { color: var(--text-faint); width: 6.4ch; flex: none; text-align: right; }
+.acct-detail-stale { margin-top: 1px; padding-top: 5px; border-top: 1px solid var(--line-soft); font-size: 9px; color: var(--text-faint); }
 /* provider badge — shared by account rows, the detection list, and history entries */
 .provider-badge { flex: none; display: inline-flex; align-items: center; line-height: 1; opacity: 0.85; }
 .provider-badge.claude { color: var(--brand-claude); font-size: 11px; }
@@ -1617,6 +1652,15 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    cut short */
 .pane-tabbar .tab { padding: 0 12px; flex: 0 1 auto; min-width: 84px; align-self: stretch; }
 .pane-tabbar .tab .tab-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* 이름 고치기. 라벨 자리를 그대로 차지해 탭 너비가 흔들리지 않게 한다 — 폭이 바뀌면 옆 탭들이
+   밀려서, 고치는 동안 탭 줄 전체가 움직인다 */
+.pane-tabbar .tab .tab-title-edit {
+  min-width: 0; flex: 1 1 auto; width: 100%;
+  font: inherit; color: var(--text);
+  background: var(--elevated); border: 1px solid var(--accent); border-radius: var(--radius-sm);
+  padding: 0 3px; margin: -1px 0;
+  outline: none;
+}
 /* Hides the horizontal scrollbar (10px globally) so it does not eat the vertical space of the tab row —
    the same convention as the terminal's xterm-viewport. Wheel and trackpad scrolling still work */
 .pane-tabbar .tabs::-webkit-scrollbar { height: 0; }
