@@ -64,9 +64,9 @@ export function BottomPanel({
   // The find bar is per run, so switching tabs shows that run's search
   const [findOpen, setFindOpen] = useState<Record<string, boolean>>({})
 
-  // One clock for the whole panel, ticking only while something is running. Finished runs are computed
-  // from their own exitedAt, so the tick never changes their text.
-  const anyRunning = runs.some((r) => r.status === 'running')
+  // One clock for the whole panel, ticking only while something is still alive. Finished runs are
+  // computed from their own exitedAt, so the tick never changes their text.
+  const anyRunning = runs.some((r) => r.status !== 'exited')
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!anyRunning) return

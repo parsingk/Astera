@@ -1220,10 +1220,15 @@ export default function App(): React.JSX.Element {
       selectWorkbenchTabRef.current(id)
       if (at) {
         requestReveal(id, at)
-        // A line number is a source line; the preview has no such line. The raw setter, not
-        // setMdMode — that one also writes MD_MODE_KEY, and following a link is navigation, not a
-        // preference the user expressed for every future markdown file.
-        if (isMarkdownPath(path)) setMdModes((prev) => ({ ...prev, [id]: 'editor' }))
+        // A line number is a source line; the preview has no such line, so a tab showing only the
+        // preview switches to the editor. A split already shows the source — leave it, or the link
+        // would collapse a view the user set up on purpose. The raw setter, not setMdMode — that one
+        // also writes MD_MODE_KEY, and following a link is navigation, not a preference the user
+        // expressed for every future markdown file.
+        if (isMarkdownPath(path)) {
+          const cur = mdModesRef.current[id] ?? defaultMdMode()
+          if (cur === 'preview') setMdModes((prev) => ({ ...prev, [id]: 'editor' }))
+        }
       }
       return
     }
@@ -1243,7 +1248,11 @@ export default function App(): React.JSX.Element {
     // 대신 쓴다 — 그러면 다른 탭에서 모드를 바꾸는 순간 이 탭도 함께 바뀐 것처럼 보인다(탭별이어야
     // 할 모드가 사실상 전역이 된다). 여기서 한 번 못박아 두면 `??` 는 이 탭이 실제로 아직 없을 때만
     // 쓰이는 안전망으로 되돌아간다.
-    if (isMarkdownPath(path)) setMdModes((prev) => ({ ...prev, [id]: at ? 'editor' : defaultMdMode() }))
+    if (isMarkdownPath(path))
+      setMdModes((prev) => ({
+        ...prev,
+        [id]: at ? (defaultMdMode() === 'preview' ? 'editor' : defaultMdMode()) : defaultMdMode()
+      }))
     if (at) requestReveal(id, at)
     window.api.files.read(path).then(
       (d) => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { content: toLf(d.content), savedContent: toLf(d.content), eol: detectEol(d.content), readOnly: d.truncated || d.binary, loading: false, error: d.binary ? t('files.editor.binaryUnsupported') : null, conflict: false } } : prev)),
@@ -1416,6 +1425,13 @@ export default function App(): React.JSX.Element {
       for (const [k, v] of Object.entries(prev)) next[remap.get(k) ?? k] = v
       return next
     })
+    // A reveal in flight for this tab (a link click's read window) must move with it too — otherwise
+    // it is keyed to an id nothing will ever hold again and just sits there unfired.
+    setPendingReveal((prev) => {
+      const next: typeof prev = {}
+      for (const [k, v] of Object.entries(prev)) next[remap.get(k) ?? k] = v
+      return next
+    })
     // 트리에도 같은 id가 들어 있으므로 함께 갈아끼운다 — 위치·순서·활성 여부가 그대로 유지된다
     // (계정 롤링이 세션 id를 바꿀 때 쓰는 것과 같은 함수). 세션 탭은 remap에 없으므로 건드려지지 않는다
     setLayout((cur) => {
@@ -1513,6 +1529,7 @@ export default function App(): React.JSX.Element {
     setFileTabs([])
     setFileBuffers({})
     setMdModes({})
+    setPendingReveal({})
     explorerTreesRef.current.clear()
     explorerClipboardRef.current = null
     // This is the point where the explorer is abandoned entirely, so the undo journal and the per-file
@@ -2084,8 +2101,9 @@ export default function App(): React.JSX.Element {
           const target = fileTabsRef.current.find((t) => t.path === fromPath)
           if (target) saveFile(target.id)
         }}
-        // Only once the buffer has loaded — a request for a file still being read waits here
-        reveal={buf.loading ? undefined : pendingReveal[f.id]}
+        // Only once the buffer has loaded successfully — a request for a file still being read waits
+        // here, and one whose read failed has no content to reveal into
+        reveal={buf.loading || buf.error ? undefined : pendingReveal[f.id]}
         onRevealed={() => dropReveal(f.id)}
         onInteract={() => dropReveal(f.id)}
       />

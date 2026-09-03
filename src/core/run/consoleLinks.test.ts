@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { findConsoleLinks, joinWrappedLine, bufferRangeAt } from './consoleLinks'
+import { findConsoleLinks, joinWrappedLine, bufferRangeAt, cellsOfJoinedLine } from './consoleLinks'
 
 const only = (line: string) => {
   const links = findConsoleLinks(line)
@@ -137,5 +137,53 @@ describe('bufferRangeAt', () => {
 
   it('an empty table is the first cell', () => {
     expect(bufferRangeAt([], 0, 3)).toEqual({ start: { x: 1, y: 1 }, end: { x: 1, y: 1 } })
+  })
+})
+
+describe('cellsOfJoinedLine', () => {
+  // A cell's `chars` is what it contributes to the joined text: one unit for ASCII, two for an
+  // astral glyph, none for the trailing half of a wide one, and one space for a blank.
+  const cell = (chars: string, width = 1) => ({ chars, width })
+  const rows = [
+    { cells: [cell('a'), cell('가', 2), cell('', 0), cell('🚀'), cell(' ')], isWrapped: false },
+    { cells: [cell('b'), cell('c')], isWrapped: true },
+    { cells: [cell('z')], isWrapped: false }
+  ]
+  const getRow = (y: number) => rows[y]
+
+  it('gives one entry per code unit, at the cell that holds it', () => {
+    // 'a'(1) + '가'(1) + trailing half(0) + '🚀'(2, one cell) + ' '(1) = 5 entries on row 0
+    expect(cellsOfJoinedLine(getRow, 0)).toEqual([
+      { x: 1, y: 1 }, // a
+      { x: 2, y: 1 }, // 가 — two columns, one code unit
+      { x: 4, y: 1 }, // 🚀 high surrogate (column 4: the wide glyph's second column was skipped)
+      { x: 4, y: 1 }, // 🚀 low surrogate — the same cell
+      { x: 5, y: 1 }, // the blank
+      { x: 1, y: 2 }, // b, on the continuation row
+      { x: 2, y: 2 } // c
+    ])
+  })
+
+  // The invariant bufferRangeAt's offsets rely on. Asserted here rather than only stated in prose,
+  // because this is the seam that has been wrong twice.
+  it('has exactly one entry per character of the text joinWrappedLine produces', () => {
+    const { text } = joinWrappedLine(
+      (y) => {
+        const row = rows[y]
+        return row
+          ? { text: row.cells.map((c) => (c.width === 0 ? '' : c.chars || ' ')).join(''), isWrapped: row.isWrapped }
+          : undefined
+      },
+      0
+    )
+    expect(cellsOfJoinedLine(getRow, 0)).toHaveLength(text.length)
+  })
+
+  it('an unwrapped row stands alone', () => {
+    expect(cellsOfJoinedLine(getRow, 2)).toEqual([{ x: 1, y: 3 }])
+  })
+
+  it("the buffer's edge ends the walk", () => {
+    expect(cellsOfJoinedLine(() => undefined, 5)).toEqual([])
   })
 })

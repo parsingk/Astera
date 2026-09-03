@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon, type ISearchOptions } from '@xterm/addon-search'
 import '@xterm/xterm/css/xterm.css'
 import { xtermThemeOf } from '../../../core/theme/apply'
-import { bufferRangeAt, findConsoleLinks, joinWrappedLine, type CharCell } from '../../../core/run/consoleLinks'
+import { bufferRangeAt, cellsOfJoinedLine, findConsoleLinks, joinWrappedLine } from '../../../core/run/consoleLinks'
 import { pinCursorBlinkOff } from '../lib/cursorBlink'
 import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
@@ -94,8 +94,10 @@ export function RunPanel({
       }
       return true
     })
-    // Links. Called for every visible row on every repaint, so path resolution is cached per target —
-    // a path does not change its mind about being a file.
+    // Resolutions are cached per target: xterm asks about the row under the pointer, so the same line
+    // is re-asked on every mouse move across it. The cache's cost is that a path printed *before* the
+    // file is written (a build artifact, a generated snapshot) caches null and never becomes a link for
+    // this run's life.
     const resolved = new Map<string, Promise<string | null>>()
     const resolve = (target: string): Promise<string | null> => {
       let p = resolved.get(target)
@@ -122,25 +124,21 @@ export function RunPanel({
           callback(undefined)
           return
         }
-        // Where each character of `text` sits. Walked from the cells rather than computed from `cols`:
-        // translateToString emits one entry per glyph and a wide glyph occupies two columns, so a CJK
-        // row's string is shorter than the row and arithmetic would place the range left of the text.
-        // The walk mirrors translateToString's own: a cell whose width is 0 is the second half of a
-        // wide glyph and contributes no character.
-        const cells: CharCell[] = []
-        for (let row = startY; ; row += 1) {
+        // One entry per code unit of `text`, from the real cells — see cellsOfJoinedLine for why a cell
+        // is not a character in either direction. getNullCell gives the loop one object to reuse, which
+        // is what IBufferLine.getCell's second parameter is for: this runs on every hover over the row.
+        const cellBuf = buf.getNullCell()
+        const cells = cellsOfJoinedLine((row) => {
           const line = buf.getLine(row)
-          if (!line) break
+          if (!line) return undefined
+          const out: { width: number; chars: string }[] = []
           for (let x = 0; x < line.length; x += 1) {
-            const cell = line.getCell(x)
-            if (!cell) break
-            const width = cell.getWidth()
-            if (width === 0) continue // the trailing half of a wide glyph
-            cells.push({ x: x + 1, y: row + 1 })
+            const c = line.getCell(x, cellBuf)
+            if (!c) break
+            out.push({ width: c.getWidth(), chars: c.getChars() })
           }
-          const next = buf.getLine(row + 1)
-          if (!next || !next.isWrapped) break
-        }
+          return { cells: out, isWrapped: line.isWrapped }
+        }, startY)
         void Promise.all(
           found.map(async (l): Promise<ILink | null> => {
             const range = bufferRangeAt(cells, l.start, l.end)
@@ -158,7 +156,7 @@ export function RunPanel({
         ).then((links) => {
           const real = links.filter((l): l is ILink => l !== null)
           callback(real.length > 0 ? real : undefined)
-        })
+        }).catch(() => callback(undefined))
       }
     })
     // Reconnect: replay the buffered output first (the cancelled guard prevents a write after a switch or unmount)
@@ -219,7 +217,12 @@ export function RunPanel({
   }, [theme])
 
   useEffect(() => {
-    if (clearNonce > 0) termRef.current?.clear()
+    if (clearNonce > 0) {
+      termRef.current?.clear()
+      // The matches went with the scrollback — a count with nothing behind it is worse than none
+      searchRef.current?.clearDecorations()
+      setResults(null)
+    }
   }, [clearNonce])
 
   useEffect(() => {

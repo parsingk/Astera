@@ -116,6 +116,38 @@ export interface CharCell {
   y: number
 }
 
+/** Where each character of a joined line sits, one entry per **UTF-16 code unit** of the text
+ *  `joinWrappedLine` produced — `cells.length === text.length`, which is what bufferRangeAt's offsets
+ *  index into. A cell is not a character in either direction: a wide glyph is two columns and one
+ *  character, while an emoji or a combining sequence is one cell and two or more code units. xterm's
+ *  own translateToString keeps the same books (it pushes one column per code unit into its optional
+ *  out-parameter, which the public typings do not expose), so mirroring it here is what keeps the
+ *  table and the text in step.
+ *
+ *  `getRow` reports a row's cells in column order: `width` 0 marks the trailing half of a wide glyph,
+ *  which holds no characters, and `chars` is what that cell contributes ('' for a blank cell, which
+ *  translateToString renders as one space — so an empty string counts as one character here). The walk
+ *  stops where joinWrappedLine's does, on the row whose successor is not a continuation. */
+export function cellsOfJoinedLine(
+  getRow: (y: number) => { cells: readonly { width: number; chars: string }[]; isWrapped: boolean } | undefined,
+  startY: number
+): CharCell[] {
+  const out: CharCell[] = []
+  for (let row = startY; ; row += 1) {
+    const line = getRow(row)
+    if (!line) break
+    for (let x = 0; x < line.cells.length; x += 1) {
+      const cell = line.cells[x]
+      if (cell.width === 0) continue // the trailing half of a wide glyph — no characters of its own
+      const n = Math.max(cell.chars.length, 1) // a blank cell contributes one space
+      for (let k = 0; k < n; k += 1) out.push({ x: x + 1, y: row + 1 })
+    }
+    const next = getRow(row + 1)
+    if (!next || !next.isWrapped) break
+  }
+  return out
+}
+
 /** The buffer range covering `[start, end)` of the joined text, as an xterm IBufferRange (1-based,
  *  `end` inclusive). `cells` is one entry per character of that same text. A range whose start is
  *  past the table's end — the text and the table disagreeing, which should not happen — collapses to
