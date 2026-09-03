@@ -431,7 +431,7 @@ export default function App(): React.JSX.Element {
     | 'github'
     | 'worktree'
     | 'history'
-  >('info') // the settings sidebar, with general and accounts added
+  >('general') // the settings sidebar, with general and accounts added
   const [slackUrl, setSlackUrl] = useState('') // the Slack Webhook URL in the settings modal
   const [slackSaved, setSlackSaved] = useState(false)
   // Bot configuration. appToken is for Socket Mode receiving only, so for now it is merely stored
@@ -3431,13 +3431,13 @@ export default function App(): React.JSX.Element {
                     ['general', t('settings.tab.general')],
                     ['appearance', t('settings.tab.appearance')],
                     ['accounts', t('settings.tab.accounts')],
-                    ['info', t('settings.tab.info')],
                     ['shortcuts', t('settings.tab.shortcuts')],
                     ['slack', 'Slack'],
                     ['notifications', t('settings.tab.notifications')],
                     ['github', 'GitHub'],
                     ['worktree', 'Worktree'],
-                    ['history', t('settings.tab.history')]
+                    ['history', t('settings.tab.history')],
+                    ['info', t('settings.tab.info')]
                   ] as const
                 ).map(([key, label]) => (
                   <button
