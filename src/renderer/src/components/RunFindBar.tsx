@@ -14,8 +14,9 @@ export function RunFindBar({
   onClose
 }: {
   query: string
-  /** null until a search has run; total 0 means nothing matched */
-  results: { index: number; total: number } | null
+  /** null until a search has run; total 0 means nothing matched; a null index means the addon stopped
+   *  tracking which match is active (past its highlight limit) — the total is still right */
+  results: { index: number | null; total: number } | null
   onQueryChange: (q: string) => void
   onNext: () => void
   onPrev: () => void
@@ -55,7 +56,9 @@ export function RunFindBar({
           ? ''
           : results.total === 0
             ? t('run.find.noResults')
-            : t('run.find.count', { n: results.index, total: results.total })}
+            : results.index === null
+              ? t('run.find.countMany', { total: results.total })
+              : t('run.find.count', { n: results.index, total: results.total })}
       </span>
       <button
         type="button"

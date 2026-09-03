@@ -814,6 +814,7 @@ export const ko = {
   'run.panel.collapse': '접기',
   'run.find.placeholder': '출력에서 찾기',
   'run.find.count': '{n} / {total}',
+  'run.find.countMany': '{total}개',
   'run.find.noResults': '결과 없음',
   'run.find.prev': '이전 일치',
   'run.find.next': '다음 일치',

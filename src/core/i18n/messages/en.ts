@@ -713,6 +713,7 @@ export const en: Record<keyof typeof ko, string> = {
   'run.panel.collapse': 'Collapse',
   'run.find.placeholder': 'Find in output',
   'run.find.count': '{n} / {total}',
+  'run.find.countMany': '{total} matches',
   'run.find.noResults': 'No results',
   'run.find.prev': 'Previous match',
   'run.find.next': 'Next match',

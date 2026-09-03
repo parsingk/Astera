@@ -51,7 +51,7 @@ export function RunPanel({
   const fitRef = useRef<FitAddon | null>(null)
   const searchRef = useRef<SearchAddon | null>(null)
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState<{ index: number; total: number } | null>(null)
+  const [results, setResults] = useState<{ index: number | null; total: number } | null>(null)
   // The construction effect runs once per run and must not capture a stale callback
   const onFindOpenChangeRef = useRef(onFindOpenChange)
   onFindOpenChangeRef.current = onFindOpenChange
@@ -78,9 +78,12 @@ export function RunPanel({
     termRef.current = term
     fitRef.current = fit
     searchRef.current = search
-    // The addon reports the active match and the total only while decorations are on (they are, below)
+    // The addon reports the active match and the total only while decorations are on (they are, below).
+    // It reports resultIndex -1 when it stops tracking the active match (its highlightLimit, 1000 by
+    // default) — the total is still right, the position is not known. A separate state from "no search
+    // has run", so the bar can show the total alone instead of inventing a 0th match.
     const onResults = search.onDidChangeResults((e) =>
-      setResults(e.resultCount < 0 ? null : { index: e.resultIndex + 1, total: e.resultCount })
+      setResults({ index: e.resultIndex < 0 ? null : e.resultIndex + 1, total: e.resultCount })
     )
     // Ctrl/Cmd+F opens this run's find bar instead of sending ^F to the process. Bound on the terminal,
     // not the window, so the editor's own find is untouched.
@@ -227,11 +230,17 @@ export function RunPanel({
       setResults(null)
     }
   }
+  // Closing the bar hands focus back to the terminal. Not on mount: the effect body also runs on the
+  // first commit (findOpen starts false), and a run starting must not take focus from wherever the
+  // user is typing — this file never moved focus before the find bar existed.
+  const findWasOpen = useRef(findOpen)
   useEffect(() => {
+    const wasOpen = findWasOpen.current
+    findWasOpen.current = findOpen
     if (findOpen) return
     searchRef.current?.clearDecorations()
     setResults(null)
-    termRef.current?.focus()
+    if (wasOpen) termRef.current?.focus()
   }, [findOpen])
 
   return (

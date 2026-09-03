@@ -728,6 +728,7 @@ export const ja: Catalog = {
   'run.panel.collapse': '折りたたむ',
   'run.find.placeholder': '出力を検索',
   'run.find.count': '{n} / {total}',
+  'run.find.countMany': '{total} 件',
   'run.find.noResults': '該当なし',
   'run.find.prev': '前の一致',
   'run.find.next': '次の一致',

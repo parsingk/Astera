@@ -738,6 +738,7 @@ export const es: Catalog = {
   'run.panel.collapse': 'Contraer',
   'run.find.placeholder': 'Buscar en la salida',
   'run.find.count': '{n} / {total}',
+  'run.find.countMany': '{total} coincidencias',
   'run.find.noResults': 'Sin resultados',
   'run.find.prev': 'Coincidencia anterior',
   'run.find.next': 'Siguiente coincidencia',
