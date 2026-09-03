@@ -2892,7 +2892,9 @@ export function registerIpc(
   const isPathInUse = (p: string): string | null => {
     const s = core.sessions.list().find((x) => x.status === 'running' && isPathWithin(p, x.cwd))
     if (s) return `SESSION:${s.title}`
-    const r = core.run.listActive().find((x) => x.status === 'running' && isPathWithin(p, x.projectPath))
+    // listActive already excludes finished runs. A stopping run still holds the path — its process tree
+    // is being torn down — so it is not filtered out here.
+    const r = core.run.listActive().find((x) => isPathWithin(p, x.projectPath))
     if (r) return `RUN:${r.configName}`
     return null
   }

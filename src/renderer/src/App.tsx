@@ -51,7 +51,7 @@ import type {
 import type { ProjectUnderstanding, RecordStatus } from '../../core/understanding/types'
 import { slackMode } from '../../core/slack/ready'
 import { findRun } from '../../core/orchestration/snapshot'
-import { pickRunSelection } from '../../core/run/selection'
+import { pickRunSelection, pickRunToShow } from '../../core/run/selection'
 import { upsertRun } from '../../core/run/instances'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
@@ -2304,7 +2304,7 @@ export default function App(): React.JSX.Element {
       setRunConfigs(r.configs)
       setRuns(r.runs)
       // Follow a live run if there is one, else the first row, else nothing
-      setSelectedRunId(r.runs.find((x) => x.status !== 'exited')?.runId ?? r.runs[0]?.runId ?? null)
+      setSelectedRunId(pickRunToShow(r.runs))
       setRunIsSpringBoot(r.isSpringBoot)
       setRunIsPythonProject(r.isPythonProject)
       setRunHasDockerfile(r.hasDockerfile)
@@ -2524,8 +2524,9 @@ export default function App(): React.JSX.Element {
   // orchestration validation run (ipc.ts, validation: true) reuses the earliest finished row's seat of
   // its configuration, and upsertRun then evicts the run that held it.
   useEffect(() => {
-    if (!selectedRunId || runs.some((r) => r.runId === selectedRunId)) return
-    setSelectedRunId(runs.find((r) => r.status !== 'exited')?.runId ?? runs[0]?.runId ?? null)
+    if (runs.some((r) => r.runId === selectedRunId)) return
+    const next = pickRunToShow(runs)
+    if (next !== selectedRunId) setSelectedRunId(next)
   }, [runs, selectedRunId])
 
   // Re-detects run configurations when a seed source at the project root changes.
@@ -2612,7 +2613,7 @@ export default function App(): React.JSX.Element {
     void window.api.run.dismiss(runId)
     const remaining = runs.filter((r) => r.runId !== runId)
     setRuns(remaining)
-    if (selectedRunId === runId) setSelectedRunId(remaining.find((r) => r.status !== 'exited')?.runId ?? remaining[0]?.runId ?? null)
+    if (selectedRunId === runId) setSelectedRunId(pickRunToShow(remaining))
     if (remaining.length === 0 && terminals.length === 0) setRunPanelOpen(false)
   }
   const runDeleteConfig = (id: string): void => {

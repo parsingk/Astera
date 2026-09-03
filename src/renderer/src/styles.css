@@ -440,6 +440,7 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .run-global-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--radius); transition: background var(--ease); }
 .run-global-row:hover { background: var(--elevated); }
 .run-global-live { width: 7px; height: 7px; border-radius: 50%; background: var(--run); flex: none; box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
+.run-global-live.stopping { background: var(--warn); box-shadow: none; }
 /* 검증 실행 라벨. 실행 툴바와 전역 목록 두 곳이 같은 배지를 쓴다 — 사용자가 시작하지 않은 실행이
    자기 실행처럼 보이면 정지시켜 오케스트레이션 Task 를 실패시킨다(RunStatus.validation) */
 /* 이 태그는 장식이 아니라 설명이다 — 사용자가 아무것도 시작하지 않았는데 ▶ 가 ⏹ 로 바뀐 이유를

@@ -124,20 +124,32 @@ export class RunManager {
    *  asynchronously (taskkill on win32) and starting on top of a dying process races it. `opts` is the
    *  freshly assembled configuration and command, not the stopped run's: the user may have edited the
    *  arguments while it ran. There is no timeout; a tree that will not die leaves the row 'stopping'
-   *  rather than the app losing track of a live process. */
+   *  rather than the app losing track of a live process. If the replacement fails to spawn, the stopped
+   *  run's record stays in its seat and the rejection reaches the caller. */
   restart(runId: string, opts: StartOpts): Promise<RunStatus> {
     const live = this.runs.get(runId)
     if (!live) return Promise.reject(new Error(`NO_RUN: ${runId}`))
     if (live.restarting) return live.restarting
-    live.restarting = (async () => {
+    const attempt = (async () => {
       if (live.status.status !== 'exited') {
         this.stop(runId)
         await live.exited
       }
+      // Start before dropping the old record: if the spawn throws (node-pty on a cwd that no longer
+      // exists) the seat stays occupied by the finished run, so main and the renderer's list still agree
+      // and the next ▶ takes the seat over instead of appending. Nothing observes the one-tick overlap —
+      // start's onStatus goes out over IPC and the renderer's upsertRun evicts by seat.
+      const next = this.start({ ...opts, seq: live.status.seq })
       this.runs.delete(runId)
-      return this.start({ ...opts, seq: live.status.seq })
+      return next
     })()
-    return live.restarting
+    live.restarting = attempt
+    // A failed attempt frees the slot so the next ▶ can try again; a settled success is dropped from
+    // the map anyway (the old record is deleted above), so only the failure needs this.
+    attempt.catch(() => {
+      if (live.restarting === attempt) live.restarting = undefined
+    })
+    return attempt
   }
 
   /** The list's ✕. Removes a finished run — so get/recentOutput go empty and a run.list re-read after

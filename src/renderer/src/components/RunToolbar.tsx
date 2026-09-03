@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { RunConfig, RunStatus } from '../../../core/types'
-import { toolbarState } from '../../../core/run/instances'
+import { decideStart, toolbarState } from '../../../core/run/instances'
 import { useI18n } from '../i18n/I18nProvider'
 import { Select } from './Select'
 import { EllipsisVertical, Play, Square } from 'lucide-react'
@@ -43,11 +43,12 @@ export function RunToolbar({
   const [showRuns, setShowRuns] = useState(false)
   const [showMore, setShowMore] = useState(false)
   const state = toolbarState(runs, selectedId)
-  const stopping = state.stopTarget ? runs.find((r) => r.runId === state.stopTarget) : undefined
-  // With the switch off, ▶ on a running configuration restarts it — the title says so, so the button is
-  // not a surprise. With it on, ▶ starts another instance and stays "Run".
+  const stopTargetRun = state.stopTarget ? runs.find((r) => r.runId === state.stopTarget) : undefined
   const selectedConfig = configs.find((c) => c.id === selectedId)
-  const restarts = !!state.stopTarget && !selectedConfig?.allowMultipleInstances
+  // The title is the one thing that says ▶ is about to kill the user's server, so it comes from the same
+  // rule main applies (decideStart) — not from toolbarState, which differs from it on validation and
+  // stopping runs by design (toolbarState decides ⏹, whose target must be a running run).
+  const restarts = !!selectedConfig && decideStart(runs, selectedConfig).action === 'restart'
 
   return (
     <div className="run-toolbar">
@@ -63,7 +64,7 @@ export function RunToolbar({
       />
       {/* A validation run is not the user's. The stop button stays (a runaway validation must be
           stoppable); the label is what says why ⏹ is here for a run they did not start. */}
-      {stopping?.validation === true && (
+      {stopTargetRun?.validation === true && (
         <span className="run-tag" title={t('run.validation.tag')}>
           {t('run.validation.tag')}
         </span>
@@ -119,7 +120,7 @@ export function RunToolbar({
               {/* Keyed by runId — a project now holds several runs, so its path is no longer unique here */}
               {activeRuns.map((r) => (
                 <div className="run-global-row" key={r.runId}>
-                  <span className="run-global-live" />
+                  <span className={`run-global-live${r.status === 'stopping' ? ' stopping' : ''}`} />
                   {r.validation === true && (
                     <span className="run-tag" title={t('run.validation.tag')}>
                       {t('run.validation.tag')}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { pickRunSelection } from './selection'
+import { pickRunSelection, pickRunToShow } from './selection'
 
 const cfgs = (...ids: string[]): { id: string }[] => ids.map((id) => ({ id }))
 
@@ -51,5 +51,18 @@ describe('pickRunSelection', () => {
   // the way through" in a way that differs from passing null.
   it('an omitted active id behaves exactly like a null one', () => {
     expect(pickRunSelection(cfgs('a', 'b'), 'gone')).toBe(pickRunSelection(cfgs('a', 'b'), 'gone', null))
+  })
+})
+
+describe('pickRunToShow', () => {
+  const r = (runId: string, status: string) => ({ runId, status })
+  it('prefers a live run over an earlier finished one', () => {
+    expect(pickRunToShow([r('a', 'exited'), r('b', 'stopping'), r('c', 'running')])).toBe('b')
+  })
+  it('falls back to the first row when nothing is live', () => {
+    expect(pickRunToShow([r('a', 'exited'), r('b', 'exited')])).toBe('a')
+  })
+  it('is null with no runs', () => {
+    expect(pickRunToShow([])).toBeNull()
   })
 })

@@ -41,14 +41,19 @@ const pathOf = (env: Record<string, string | undefined>): string | undefined =>
 
 function setup(platform: NodeJS.Platform = 'linux') {
   const spawned: { file: string; args: string[] | string; opts: PtySpawnOptions; pty: FakePty }[] = []
+  const fail = { next: false }
   const factory: PtyFactory = (file, args, opts) => {
+    if (fail.next) {
+      fail.next = false
+      throw new Error('spawn failed')
+    }
     const pty = new FakePty()
     spawned.push({ file, args, opts, pty })
     return pty
   }
   const killed: { file: string; args: string[] }[] = []
   const mgr = new RunManager(factory, platform, (cmd) => killed.push(cmd))
-  return { mgr, spawned, killed }
+  return { mgr, spawned, killed, fail }
 }
 
 const startOpts = (over: Partial<Parameters<RunManager['start']>[0]> = {}) => ({
@@ -260,6 +265,41 @@ describe('RunManager', () => {
     it('rejects for an unknown run', async () => {
       const { mgr } = setup()
       await expect(mgr.restart('nope', startOpts())).rejects.toThrow(/NO_RUN/)
+    })
+
+    // The replacement can fail to spawn — node-pty throws on a cwd that no longer exists, reachable by
+    // editing cwd while the run is up. The seat must not be freed for a run that never came: the old
+    // record stays so main and the renderer agree, the next ▶ takes the seat over, and a later restart
+    // is not stuck behind the failed attempt's promise.
+    it('keeps the old record when the replacement fails to spawn, and can be retried', async () => {
+      const { mgr, spawned, fail } = setup('win32')
+      const st = mgr.start(startOpts())
+      const pending = mgr.restart(st.runId, startOpts())
+      fail.next = true
+      spawned[0].pty.exit(1)
+      await expect(pending).rejects.toThrow('spawn failed')
+      expect(mgr.get(st.runId)?.status).toBe('exited')
+      expect(mgr.listByProject('D:/p')).toHaveLength(1)
+      // A retry goes through — it is not handed the failed attempt's rejection again
+      const next = await mgr.restart(st.runId, startOpts())
+      expect(next.seq).toBe(st.seq)
+      expect(mgr.get(st.runId)).toBeNull()
+      expect(spawned).toHaveLength(2)
+    })
+
+    // The invariant three call sites depend on: no two runs of one project share a seat — including
+    // while a restart lands beside a live sibling of the same configuration
+    it('a restart beside a live sibling keeps every seat distinct', async () => {
+      const { mgr, spawned } = setup('win32')
+      const a = mgr.start(startOpts())
+      const b = mgr.start(startOpts())
+      const pending = mgr.restart(a.runId, startOpts())
+      spawned[0].pty.exit(1)
+      const next = await pending
+      const seqs = mgr.listByProject('D:/p').map((s) => s.seq)
+      expect(new Set(seqs).size).toBe(seqs.length)
+      expect(next.seq).toBe(a.seq)
+      expect(mgr.get(b.runId)?.seq).toBe(b.seq)
     })
   })
 
