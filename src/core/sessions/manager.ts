@@ -17,12 +17,12 @@ export interface StatusLineSpawnInfo {
   settingsFile: string
   outPath: string
   originalCommand: string | null
-  hookOutPath?: string // hook event file for a Slack-notifying session — injected as ASTERA_HOOK_OUT
+  hookOutPath?: string // per-session hook event file — injected as ASTERA_HOOK_OUT
 }
 export type StatusLineProvider = (
   sessionId: string,
   account: Account,
-  opts?: { hooks?: boolean }
+  opts?: { toolHooks?: boolean }
 ) => StatusLineSpawnInfo | null
 
 /** Wait time for the safety net that keeps a pause from ever being permanent. The principle is "a
@@ -151,12 +151,16 @@ export class SessionManager {
     // statusLine injection: --settings installs a session-scoped statusLine, and the capture script
     // records context_window and rate_limits into outPath. When ASTERA_STATUSLINE_ORIGINAL is set the
     // existing HUD is chained. statusLine is only injected for providers that use that mechanism.
-    // Hooks go into rolling sessions on top of Slack-notifying ones — rolling's idle nudge uses the
-    // Notification hook ("Claude is waiting for your input") as its stop signal.
+    // The Stop and Notification hooks now go into every session (see StatusLineManager.spawnConfig) —
+    // desktop notifications are offered for any session, and gating them here is what left that
+    // feature inert. What is still gated is the per-tool-call capture pair, which only Slack's
+    // pending-question reporting reads and which fires often enough to be worth limiting.
+    // Rolling is kept in the condition even though its idle nudge only needs the Notification hook:
+    // its own tap reads the same pending-tool captures when deciding what a stalled screen shows.
     // SlackNotifier.register gates separately on info.slackNotify, so Slack traffic does not grow.
-    const wantHooks = opts.slackNotify === true || (opts.rollAccountIds?.length ?? 0) >= 1
+    const wantToolHooks = opts.slackNotify === true || (opts.rollAccountIds?.length ?? 0) >= 1
     const sl = d.usesStatusLine
-      ? (this.statusLineProvider?.(id, opts.account, { hooks: wantHooks }) ?? null)
+      ? (this.statusLineProvider?.(id, opts.account, { toolHooks: wantToolHooks }) ?? null)
       : null
     const { file, args } = d.buildCommand({
       resumeSessionId: opts.resumeSessionId,

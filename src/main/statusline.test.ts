@@ -41,21 +41,35 @@ describe('StatusLineManager 훅 주입', () => {
     expect(settings.hooks.PostToolUse[0].hooks[0].command).toContain('astera-hook-capture.cjs')
   })
 
-  it('spawnConfig: hooks=true면 hooks 설정 파일 + 세션별 hookOutPath', () => {
-    const c = mgr.spawnConfig('sess-1', account, { hooks: true })
+  it('spawnConfig: toolHooks=true면 도구 캡처까지 든 설정 파일', () => {
+    const c = mgr.spawnConfig('sess-1', account, { toolHooks: true })
     expect(c.settingsFile).toContain('astera-hooks-settings.json')
     expect(c.hookOutPath?.replace(/\\/g, '/')).toContain('hook-events/sess-1.jsonl')
   })
 
-  it('spawnConfig: hooks 미지정이면 기존 설정 파일, hookOutPath 없음', () => {
+  // 데스크톱 알림은 어떤 세션에서든 온다 — 그 세션에 Slack 을 켜 뒀는지, 롤링을 걸어 뒀는지와
+  // 무관하다. 그러려면 Stop·Notification 훅이 모든 세션에 들어가야 하고, 그 훅이 쓸
+  // ASTERA_HOOK_OUT 경로도 함께 있어야 한다. 이 경로가 없던 동안 훅은 심어져도 쓸 곳이 없었고,
+  // 알림 기능 전체가 보통 세션에서 한 번도 동작하지 않았다.
+  it('spawnConfig: 도구 캡처가 없어도 세션별 hookOutPath 는 항상 준다', () => {
     const c = mgr.spawnConfig('sess-1', account)
     expect(c.settingsFile).toContain('astera-statusline-settings.json')
-    expect(c.hookOutPath).toBeUndefined()
+    expect(c.hookOutPath?.replace(/\\/g, '/')).toContain('hook-events/sess-1.jsonl')
   })
 
-  it('기존 statusLine 설정 파일은 hooks 없이 그대로 만든다 (회귀 가드)', async () => {
+  it('기본 설정 파일도 Stop·Notification 훅을 갖는다', async () => {
     const settings = JSON.parse(await fs.readFile(path.join(dir, 'astera-statusline-settings.json'), 'utf8'))
     expect(settings.statusLine.command).toContain('astera-statusline-capture.cjs')
-    expect(settings.hooks).toBeUndefined()
+    expect(settings.hooks.Stop[0].hooks[0].command).toContain('astera-hook-capture.cjs')
+    expect(settings.hooks.Notification[0].hooks[0].command).toContain('astera-hook-capture.cjs')
+  })
+
+  // 원래 회귀 가드가 지키려던 것은 "훅이 없다"가 아니라 "도구 호출마다 프로세스가 뜨지 않는다"
+  // 였다. Stop 은 턴당 한 번, Notification 은 프롬프트가 뜰 때뿐이라 값이 싸다. 비싼 쪽은 도구
+  // 짝이고, 그건 여전히 Slack·롤링 세션에만 들어간다.
+  it('기본 설정 파일은 도구 훅을 갖지 않는다 (회귀 가드)', async () => {
+    const settings = JSON.parse(await fs.readFile(path.join(dir, 'astera-statusline-settings.json'), 'utf8'))
+    expect(settings.hooks.PreToolUse).toBeUndefined()
+    expect(settings.hooks.PostToolUse).toBeUndefined()
   })
 })
