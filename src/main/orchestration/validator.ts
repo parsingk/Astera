@@ -30,10 +30,9 @@ interface Pending {
   /** The run this entry started, once it has. Exits are matched against it — an exit naming no head is
    *  somebody else's run and is ignored. */
   runId: string | null
-  /** Whether this entry's exit is already being settled. The same head's exit can arrive twice; the
-   *  second settle would be refused by applyValidationResult, but it would still call runner.output for
-   *  nothing and leave a rejection in the log. advance's identity check is what prevents loss; this
-   *  flag prevents the wasted work. */
+  /** Whether this entry's exit is already being settled. The same head's exit can arrive twice —
+   *  settling is an await, and a second exit landing inside it still finds the head at the front. This
+   *  flag is what makes that second exit a no-op; advance's identity check below is the layer beneath. */
   settling: boolean
   /** The user stopped this validation run (markStopped). Its exit is then not a result but "could not
    *  prove it", and goes to onCannotRun rather than onSettled. */
@@ -151,11 +150,11 @@ export class TaskValidator {
 
   /** Moves past the head to the next entry.
    *
-   *  **`entry` is the identity check.** The same head's exit can arrive twice (the window `settling`
-   *  narrows above), and an unconditional shift would then remove the *next* entry — one that never
-   *  started, so no exit will ever come for it: its Task stays validating for ever, recomputeReady only
-   *  promotes completed, and its whole dependent subtree stalls in pending with no recovery short of a
-   *  restart. That is exactly the failure this class exists to prevent. */
+   *  **`entry` is the identity check.** `settling` already keeps a second exit of the same head from
+   *  reaching here; this is the layer beneath it, so that no caller can ever shift the *next* entry by
+   *  mistake — one that never started, so no exit will ever come for it: its Task stays validating for
+   *  ever, recomputeReady only promotes completed, and its whole dependent subtree stalls in pending
+   *  with no recovery short of a restart. That is exactly the failure this class exists to prevent. */
   private advance(cwd: string, entry: Pending): void {
     const q = this.queues.get(cwd)
     if (!q || q[0] !== entry) return

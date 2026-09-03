@@ -2276,7 +2276,6 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* ---------- Run panel ---------- */
 .run-panel { flex: none; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--term-bg); height: var(--run-panel-h, 220px); min-height: 120px; }
 .run-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--run); flex: none; box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
-.run-exit { color: var(--text-faint); }
 .run-panel-actions { display: flex; gap: 2px; }
 .run-panel-btn { width: 22px; height: 22px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); font-size: 12px; padding: 0; cursor: pointer; }
 .run-panel-btn:hover { background: var(--elevated); color: var(--text); }

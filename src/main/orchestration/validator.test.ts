@@ -272,7 +272,7 @@ describe('TaskValidator — markStopped', () => {
     expect(calls[0].taskId).toBe('tsk_2')
   })
 
-  // 큐가 비어 있는 cwd 의 정지는 검증이 아닌 실행의 정지다
+  // A runId that is no queue head belongs to a run that is not a validation — there is nothing to mark
   it('큐가 비어 있으면 아무 일도 하지 않는다', () => {
     const runner = fakeRunner()
     const { onSettled } = settledCalls()

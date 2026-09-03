@@ -168,7 +168,9 @@ export class RunManager {
   // when called on a dead pty, and behind an IPC handler nothing catches that: main dies. 'stopping' is
   // refused too — nothing should be typed into a run being killed.
   // **This check alone is not enough.** status flips on pty.onExit, node-pty is dead before that, and a
-  // resize in that window passes here and then throws — withExitedPtyGuard covers that side.
+  // resize in that window passes here and then throws — withExitedPtyGuard covers that side. stop had
+  // this check from the start; write and resize were the two that lacked it, and a resize the panel sent
+  // after a validation had finished was what used to kill main.
   write(runId: string, data: string): void {
     const live = this.runs.get(runId)
     if (live?.status.status !== 'running') return

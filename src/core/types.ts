@@ -861,7 +861,7 @@ export interface CoreApi {
     unwatch(): Promise<void>
   }
   run: {
-    // Running and stopping a project. start and list go through assertAllowedPath, which permits only
+    // Running a project's configurations and stopping its runs. start and list go through assertAllowedPath, which permits only
     // registered project paths.
     // isSpringBoot tells the configuration form whether to offer the Spring profile field
     // (optionalFieldsFor in core/run/types.ts, reached through RunConfigManager's isSpringBoot prop).

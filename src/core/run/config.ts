@@ -1,4 +1,4 @@
-﻿// Run configurations, everything except the model itself: the seeds derived from a project's files,
+// Run configurations, everything except the model itself: the seeds derived from a project's files,
 // the identity rule that decides when a stored configuration hides a seed, and the small conversions
 // the form needs (environment text, project-relative paths). The RunConfig union and its per-kind
 // interfaces live in ./types and are only re-exported here, so a renderer module that needs both
