@@ -41,123 +41,287 @@ const pathOf = (env: Record<string, string | undefined>): string | undefined =>
 
 function setup(platform: NodeJS.Platform = 'linux') {
   const spawned: { file: string; args: string[] | string; opts: PtySpawnOptions; pty: FakePty }[] = []
+  const fail = { next: false }
   const factory: PtyFactory = (file, args, opts) => {
+    if (fail.next) {
+      fail.next = false
+      throw new Error('spawn failed')
+    }
     const pty = new FakePty()
     spawned.push({ file, args, opts, pty })
     return pty
   }
   const killed: { file: string; args: string[] }[] = []
   const mgr = new RunManager(factory, platform, (cmd) => killed.push(cmd))
-  return { mgr, spawned, killed }
+  return { mgr, spawned, killed, fail }
 }
 
+const startOpts = (over: Partial<Parameters<RunManager['start']>[0]> = {}) => ({
+  projectPath: 'D:/p',
+  projectName: 'p',
+  config: cfg,
+  command: 'npm run dev',
+  ...over
+})
+
 describe('RunManager', () => {
-  it('start는 PTY를 스폰하고 running 상태·onData 전파를 만든다', () => {
+  it('start spawns a PTY and reports running, with data flowing out under the runId', () => {
     const { mgr, spawned } = setup()
-    const datas: string[] = []
-    mgr.onData = (e) => datas.push(e.data)
-    const st = mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
+    const datas: { runId: string; data: string }[] = []
+    mgr.onData = (e) => datas.push(e)
+    const st = mgr.start(startOpts())
     expect(st.status).toBe('running')
+    expect(st.runId).toMatch(/[0-9a-f-]{36}/)
+    expect(st.startedAt).toBeGreaterThan(0)
     expect(spawned).toHaveLength(1)
     spawned[0].pty.dataCb('hello')
-    expect(datas).toEqual(['hello'])
-    expect(mgr.recentOutput('D:/p')).toContain('hello')
+    expect(datas).toEqual([{ runId: st.runId, data: 'hello' }])
+    expect(mgr.recentOutput(st.runId)).toContain('hello')
   })
 
-  // 검증 실행 표시. 렌더러가 그 실행을 라벨하고, run.stop 이 그것으로 markStopped 를 가른다 —
-  // 표시가 상태·get·listActive 세 통로에 모두 실려야 그 판정이 성립한다
-  it('validation 을 주면 상태와 get·listActive 에 표시가 실린다', () => {
+  // The validation tag rides on the status through all three read paths — the renderer labels the
+  // run by it and run.stop routes markStopped by it
+  it('validation is carried on the status, get and listActive', () => {
     const { mgr } = setup()
-    const st = mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev', validation: true })
+    const st = mgr.start(startOpts({ validation: true }))
     expect(st.validation).toBe(true)
-    expect(mgr.get('D:/p')?.validation).toBe(true)
+    expect(mgr.get(st.runId)?.validation).toBe(true)
     expect(mgr.listActive()[0].validation).toBe(true)
   })
 
-  // 검증이 아닌 실행에는 키가 아예 없다 — 사용자 실행이 검증으로 라벨되면 안 된다
-  it('validation 을 주지 않으면 표시가 없다', () => {
+  it('without validation the key is absent, not false', () => {
     const { mgr } = setup()
-    const st = mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
+    const st = mgr.start(startOpts())
     expect('validation' in st).toBe(false)
-    expect(mgr.get('D:/p')?.validation).toBeUndefined()
+    expect(mgr.get(st.runId)?.validation).toBeUndefined()
   })
 
-  it('같은 프로젝트 동시 실행은 거부한다', () => {
-    const { mgr } = setup()
-    mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
-    expect(() => mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })).toThrow(/ALREADY_RUNNING/)
+  // The constraint this feature removes. Two runs of one project — even of one configuration — live
+  // side by side, and each is addressed by its own id.
+  it('two runs of the same project run side by side', () => {
+    const { mgr, spawned } = setup()
+    const a = mgr.start(startOpts())
+    const b = mgr.start(startOpts({ config: { ...cfg, id: 'c2', name: 'test' } }))
+    expect(a.runId).not.toBe(b.runId)
+    expect(spawned).toHaveLength(2)
+    expect(mgr.listActive().map((s) => s.runId).sort()).toEqual([a.runId, b.runId].sort())
+    expect(mgr.listByProject('D:/p').map((s) => s.configName)).toEqual(['dev', 'test'])
   })
 
-  it('다른 프로젝트는 동시 실행되고 listActive에 함께 나온다', () => {
+  it('runs in different projects are listed under their own project only', () => {
     const { mgr } = setup()
-    mgr.start({ projectPath: 'D:/a', projectName: 'a', config: cfg, command: 'npm run dev' })
-    mgr.start({ projectPath: 'D:/b', projectName: 'b', config: cfg, command: 'npm run dev' })
+    mgr.start(startOpts({ projectPath: 'D:/a', projectName: 'a' }))
+    mgr.start(startOpts({ projectPath: 'D:/b', projectName: 'b' }))
     expect(mgr.listActive().map((s) => s.projectPath).sort()).toEqual(['D:/a', 'D:/b'])
+    expect(mgr.listByProject('D:/a').map((s) => s.projectPath)).toEqual(['D:/a'])
   })
 
-  it('win32 stop은 taskkill 트리 kill 명령을 호출한다', () => {
-    const { mgr, killed } = setup('win32')
-    mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
-    mgr.stop('D:/p')
-    expect(killed).toEqual([{ file: 'taskkill', args: ['/pid', '999', '/T', '/F'] }])
+  describe('seats', () => {
+    it('new runs take increasing seats and listByProject is in seat order', () => {
+      const { mgr } = setup()
+      const a = mgr.start(startOpts())
+      const b = mgr.start(startOpts({ config: { ...cfg, id: 'c2', name: 'test' } }))
+      expect([a.seq, b.seq]).toEqual([1, 2])
+      expect(mgr.listByProject('D:/p').map((s) => s.seq)).toEqual([1, 2])
+    })
+
+    // The rule that keeps ten test runs at one row: a rerun takes its configuration's finished seat
+    // and the finished record goes with it
+    it('a rerun of a finished configuration takes over its seat and drops the old record', () => {
+      const { mgr, spawned } = setup()
+      const first = mgr.start(startOpts())
+      mgr.start(startOpts({ config: { ...cfg, id: 'c2', name: 'test' } }))
+      spawned[0].pty.exit(0)
+      const again = mgr.start(startOpts())
+      expect(again.seq).toBe(first.seq)
+      expect(mgr.get(first.runId)).toBeNull()
+      const ids = mgr.listByProject('D:/p').map((s) => s.runId)
+      expect(ids[0]).toBe(again.runId) // in the first seat, not appended
+      expect(ids).toHaveLength(2)
+    })
+
+    it('a second instance while the first is live gets a new seat', () => {
+      const { mgr } = setup()
+      const a = mgr.start(startOpts())
+      const b = mgr.start(startOpts())
+      expect(b.seq).toBe(a.seq + 1)
+      expect(mgr.get(a.runId)?.status).toBe('running')
+    })
+
+    it('seats are per project', () => {
+      const { mgr } = setup()
+      const a = mgr.start(startOpts({ projectPath: 'D:/a', projectName: 'a' }))
+      const b = mgr.start(startOpts({ projectPath: 'D:/b', projectName: 'b' }))
+      expect([a.seq, b.seq]).toEqual([1, 1])
+    })
   })
 
-  it('posix stop은 pty.kill로 종료한다', () => {
-    const { mgr, spawned, killed } = setup('linux')
-    mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
-    mgr.stop('D:/p')
-    expect(killed).toEqual([])
-    expect(spawned[0].pty.killed).toBe(true)
+  describe('stop', () => {
+    it('win32 stop dispatches a taskkill tree kill', () => {
+      const { mgr, killed } = setup('win32')
+      const st = mgr.start(startOpts())
+      mgr.stop(st.runId)
+      expect(killed).toEqual([{ file: 'taskkill', args: ['/pid', '999', '/T', '/F'] }])
+    })
+
+    it('posix stop kills the pty', () => {
+      const { mgr, spawned, killed } = setup('linux')
+      const st = mgr.start(startOpts())
+      mgr.stop(st.runId)
+      expect(killed).toEqual([])
+      expect(spawned[0].pty.killed).toBe(true)
+    })
+
+    // The kill is asynchronous on win32 (taskkill runs as its own process) — until the exit arrives
+    // the run is neither running nor exited, and the renderer has to be told so
+    it('marks the run stopping and emits it before the exit arrives', () => {
+      const { mgr, spawned } = setup('win32')
+      const statuses: string[] = []
+      mgr.onStatus = (s) => statuses.push(s.status)
+      const st = mgr.start(startOpts())
+      mgr.stop(st.runId)
+      expect(mgr.get(st.runId)?.status).toBe('stopping')
+      expect(statuses).toEqual(['running', 'stopping'])
+      expect(mgr.listActive().map((s) => s.runId)).toEqual([st.runId]) // still alive
+      spawned[0].pty.exit(1)
+      expect(mgr.get(st.runId)?.status).toBe('exited')
+      expect(statuses).toEqual(['running', 'stopping', 'exited'])
+    })
+
+    it('stop on a stopping or exited run does nothing', () => {
+      const { mgr, killed, spawned } = setup('win32')
+      const st = mgr.start(startOpts())
+      mgr.stop(st.runId)
+      mgr.stop(st.runId)
+      expect(killed).toHaveLength(1)
+      spawned[0].pty.exit(1)
+      mgr.stop(st.runId)
+      expect(killed).toHaveLength(1)
+    })
+
+    it('stopAll reaches every running run', () => {
+      const { mgr, spawned } = setup('linux')
+      mgr.start(startOpts())
+      mgr.start(startOpts({ projectPath: 'D:/b', projectName: 'b' }))
+      mgr.stopAll()
+      expect(spawned.every((s) => s.pty.killed)).toBe(true)
+    })
   })
 
-  it('exit 시 상태가 exited로 바뀌고 onStatus가 불린다', () => {
+  it('exit flips the status to exited with the code and a timestamp, and emits it', () => {
     const { mgr, spawned } = setup()
     const statuses: string[] = []
     mgr.onStatus = (s) => statuses.push(s.status)
-    mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
+    const st = mgr.start(startOpts())
     spawned[0].pty.exitCb({ exitCode: 3 })
-    expect(mgr.get('D:/p')?.status).toBe('exited')
-    expect(mgr.get('D:/p')?.exitCode).toBe(3)
-    expect(statuses).toContain('exited')
+    const after = mgr.get(st.runId)
+    expect(after?.status).toBe('exited')
+    expect(after?.exitCode).toBe(3)
+    expect(after?.exitedAt).toBeGreaterThan(0)
+    expect(statuses).toEqual(['running', 'exited'])
   })
 
-  it('start 시 running 상태를 onStatus로 emit한다', () => {
-    const { mgr } = setup()
-    const statuses: string[] = []
-    mgr.onStatus = (s) => statuses.push(s.status)
-    mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
-    expect(statuses).toContain('running')
+  describe('restart', () => {
+    // What ▶ on a running configuration does. The new run must not start until the old process tree
+    // is actually gone — on win32 the kill is a separate process and the exit comes later
+    it('waits for the stopped run to exit, then starts the replacement in the same seat', async () => {
+      const { mgr, spawned, killed } = setup('win32')
+      const st = mgr.start(startOpts())
+      const pending = mgr.restart(st.runId, startOpts({ command: 'npm run dev -- --port 4000' }))
+      expect(killed).toHaveLength(1)
+      expect(spawned).toHaveLength(1) // not yet
+      expect(mgr.get(st.runId)?.status).toBe('stopping')
+      spawned[0].pty.exit(1)
+      const next = await pending
+      expect(spawned).toHaveLength(2)
+      expect(spawned[1].args).toEqual('/s /c "npm run dev -- --port 4000"') // the fresh command, not the old one
+      expect(next.runId).not.toBe(st.runId)
+      expect(next.seq).toBe(st.seq)
+      expect(mgr.get(st.runId)).toBeNull()
+      expect(mgr.listByProject('D:/p').map((s) => s.runId)).toEqual([next.runId])
+    })
+
+    it('a second restart during the stopping window joins the first instead of starting twice', async () => {
+      const { mgr, spawned } = setup('win32')
+      const st = mgr.start(startOpts())
+      const p1 = mgr.restart(st.runId, startOpts())
+      const p2 = mgr.restart(st.runId, startOpts())
+      spawned[0].pty.exit(1)
+      const [a, b] = await Promise.all([p1, p2])
+      expect(a.runId).toBe(b.runId)
+      expect(spawned).toHaveLength(2)
+    })
+
+    it('restarting an already finished run skips the stop', async () => {
+      const { mgr, spawned, killed } = setup('win32')
+      const st = mgr.start(startOpts())
+      spawned[0].pty.exit(0)
+      const next = await mgr.restart(st.runId, startOpts())
+      expect(killed).toHaveLength(0)
+      expect(next.seq).toBe(st.seq)
+      expect(mgr.get(st.runId)).toBeNull()
+    })
+
+    it('rejects for an unknown run', async () => {
+      const { mgr } = setup()
+      await expect(mgr.restart('nope', startOpts())).rejects.toThrow(/NO_RUN/)
+    })
+
+    // The replacement can fail to spawn — node-pty throws on a cwd that no longer exists, reachable by
+    // editing cwd while the run is up. The seat must not be freed for a run that never came: the old
+    // record stays so main and the renderer agree, the next ▶ takes the seat over, and a later restart
+    // is not stuck behind the failed attempt's promise.
+    it('keeps the old record when the replacement fails to spawn, and can be retried', async () => {
+      const { mgr, spawned, fail } = setup('win32')
+      const st = mgr.start(startOpts())
+      const pending = mgr.restart(st.runId, startOpts())
+      fail.next = true
+      spawned[0].pty.exit(1)
+      await expect(pending).rejects.toThrow('spawn failed')
+      expect(mgr.get(st.runId)?.status).toBe('exited')
+      expect(mgr.listByProject('D:/p')).toHaveLength(1)
+      // A retry goes through — it is not handed the failed attempt's rejection again
+      const next = await mgr.restart(st.runId, startOpts())
+      expect(next.seq).toBe(st.seq)
+      expect(mgr.get(st.runId)).toBeNull()
+      expect(spawned).toHaveLength(2)
+    })
+
+    // The invariant three call sites depend on: no two runs of one project share a seat — including
+    // while a restart lands beside a live sibling of the same configuration
+    it('a restart beside a live sibling keeps every seat distinct', async () => {
+      const { mgr, spawned } = setup('win32')
+      const a = mgr.start(startOpts())
+      const b = mgr.start(startOpts())
+      const pending = mgr.restart(a.runId, startOpts())
+      spawned[0].pty.exit(1)
+      const next = await pending
+      const seqs = mgr.listByProject('D:/p').map((s) => s.seq)
+      expect(new Set(seqs).size).toBe(seqs.length)
+      expect(next.seq).toBe(a.seq)
+      expect(mgr.get(b.runId)?.seq).toBe(b.seq)
+    })
   })
 
-  describe('env 머지', () => {
-    it('env 없는 구성은 process.env를 그대로 전달한다', () => {
+  describe('env merge', () => {
+    it('a configuration without env passes process.env through', () => {
       const { mgr, spawned } = setup()
-      mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
+      mgr.start(startOpts())
       expect(spawned[0].opts.env).toEqual(process.env)
     })
 
-    it('구성 env의 새 키가 process.env 위에 추가된다', () => {
+    it('new keys from the configuration env are added over process.env', () => {
       const { mgr, spawned } = setup()
-      mgr.start({
-        projectPath: 'D:/p',
-        projectName: 'p',
-        config: { ...cfg, env: { SPRING_PROFILES_ACTIVE: 'local' } },
-        command: 'npm run dev'
-      })
+      mgr.start(startOpts({ config: { ...cfg, env: { SPRING_PROFILES_ACTIVE: 'local' } } }))
       expect(spawned[0].opts.env).toEqual({ ...process.env, SPRING_PROFILES_ACTIVE: 'local' })
     })
 
-    it('구성 env가 process.env의 같은 키를 이긴다', () => {
+    it('the configuration env wins over the same key in process.env', () => {
       const original = process.env.JAVA_HOME
       process.env.JAVA_HOME = '/usr/lib/jvm/default'
       try {
         const { mgr, spawned } = setup()
-        mgr.start({
-          projectPath: 'D:/p',
-          projectName: 'p',
-          config: { ...cfg, env: { JAVA_HOME: '/opt/jdk-21' } },
-          command: 'npm run dev'
-        })
+        mgr.start(startOpts({ config: { ...cfg, env: { JAVA_HOME: '/opt/jdk-21' } } }))
         expect(spawned[0].opts.env.JAVA_HOME).toBe('/opt/jdk-21')
       } finally {
         if (original === undefined) delete process.env.JAVA_HOME
@@ -166,47 +330,31 @@ describe('RunManager', () => {
     })
   })
 
-  describe('JAVA_HOME을 PATH에 반영', () => {
-    // setup()의 platform 기본값은 'linux'다 — 구분자 기대값은 주입한 platform을 따라야 한다
-    it('구성이 JAVA_HOME을 지정하면 그 bin이 PATH 맨 앞에 붙는다 (posix)', () => {
+  describe('JAVA_HOME onto PATH', () => {
+    it('a configured JAVA_HOME puts its bin first on PATH (posix)', () => {
       const { mgr, spawned } = setup('linux')
-      mgr.start({
-        projectPath: 'D:/p',
-        projectName: 'p',
-        config: { ...cfg, env: { JAVA_HOME: '/opt/jdk-21' } },
-        command: 'npm run dev'
-      })
+      mgr.start(startOpts({ config: { ...cfg, env: { JAVA_HOME: '/opt/jdk-21' } } }))
       expect(pathOf(spawned[0].opts.env)).toBe(`/opt/jdk-21/bin:${pathOf(process.env)}`)
     })
 
-    it('win32는 백슬래시·세미콜론을 쓴다', () => {
+    it('win32 uses backslash and semicolon', () => {
       const { mgr, spawned } = setup('win32')
-      mgr.start({
-        projectPath: 'D:/p',
-        projectName: 'p',
-        config: { ...cfg, env: { JAVA_HOME: 'C:\\jdk-21' } },
-        command: 'npm run dev'
-      })
+      mgr.start(startOpts({ config: { ...cfg, env: { JAVA_HOME: 'C:\\jdk-21' } } }))
       expect(pathOf(spawned[0].opts.env)).toBe(`C:\\jdk-21\\bin;${pathOf(process.env)}`)
     })
 
-    it('구성이 JAVA_HOME을 지정하지 않으면 PATH를 건드리지 않는다', () => {
+    it('no configured JAVA_HOME leaves PATH alone', () => {
       const { mgr, spawned } = setup()
-      mgr.start({
-        projectPath: 'D:/p',
-        projectName: 'p',
-        config: { ...cfg, env: { SPRING_PROFILES_ACTIVE: 'local' } },
-        command: 'npm run dev'
-      })
+      mgr.start(startOpts({ config: { ...cfg, env: { SPRING_PROFILES_ACTIVE: 'local' } } }))
       expect(pathOf(spawned[0].opts.env)).toBe(pathOf(process.env))
     })
 
-    it('앱이 물려받은 JAVA_HOME만 있으면 PATH를 건드리지 않는다 — 구성이 지정했을 때만 반응한다', () => {
+    it('an inherited JAVA_HOME alone leaves PATH alone — only the configuration triggers it', () => {
       const original = process.env.JAVA_HOME
       process.env.JAVA_HOME = '/usr/lib/jvm/default'
       try {
         const { mgr, spawned } = setup()
-        mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
+        mgr.start(startOpts())
         expect(pathOf(spawned[0].opts.env)).toBe(pathOf(process.env))
       } finally {
         if (original === undefined) delete process.env.JAVA_HOME
@@ -215,121 +363,104 @@ describe('RunManager', () => {
     })
   })
 
-  // Task 5: 명령은 이제 호출자(ipc.ts)가 조립해 넘긴다 — RunManager는 종류를 보지 않는다
-  describe('조립된 명령을 그대로 전달', () => {
-    it('구성의 종류를 보지 않고 조립된 명령을 셸에 넘긴다', () => {
+  describe('the assembled command is passed through', () => {
+    it('hands the command to the shell without looking at the kind', () => {
       const { mgr, spawned } = setup('win32')
-      mgr.start({
-        projectPath: 'D:/p',
-        projectName: 'p',
-        config: { id: 'x', name: 'dev', type: 'npm', script: 'dev' },
-        command: 'pnpm run dev'
-      })
-      // win32는 문자열로 넘어간다 — 배열이면 node-pty가 인용을 \" 로 바꿔 값이 쪼개진다
-      // (core/run/shell.ts의 shellSpawn, 실제 프로세스 검증은 shellSpawn.test.ts)
+      mgr.start(startOpts({ config: { id: 'x', name: 'dev', type: 'npm', script: 'dev' }, command: 'pnpm run dev' }))
       expect(spawned[0].args).toEqual('/s /c "pnpm run dev"')
     })
 
-    it('javaHome과 springProfiles를 env로 되돌린다', () => {
+    it('turns javaHome and springProfiles back into env', () => {
       const { mgr, spawned } = setup('win32')
-      mgr.start({
-        projectPath: 'D:/p',
-        projectName: 'p',
-        config: {
-          id: 'x',
-          name: 'boot',
-          type: 'gradle',
-          tasks: 'bootRun',
-          javaHome: 'C:\\jdk21',
-          springProfiles: 'local,dev'
-        },
-        command: 'gradlew.bat bootRun'
-      })
+      mgr.start(
+        startOpts({
+          config: { id: 'x', name: 'boot', type: 'gradle', tasks: 'bootRun', javaHome: 'C:\\jdk21', springProfiles: 'local,dev' },
+          command: 'gradlew.bat bootRun'
+        })
+      )
       const env = spawned[0].opts.env
       expect(env.JAVA_HOME).toBe('C:\\jdk21')
       expect(env.SPRING_PROFILES_ACTIVE).toBe('local,dev')
-      // JAVA_HOME의 bin이 PATH 앞에 붙는 기존 계약이 유지되어야 한다 — PATH의 실제 키 대소문자는
-      // OS가 정하므로(win32는 보통 Path) pathOf로 찾는다
       expect(pathOf(env)?.startsWith('C:\\jdk21\\bin')).toBe(true)
     })
 
-    it('값이 빈 springProfiles는 env에 넣지 않는다', () => {
+    it('an empty springProfiles is not put into env', () => {
       const { mgr, spawned } = setup()
-      mgr.start({
-        projectPath: 'D:/p',
-        projectName: 'p',
-        config: { id: 'x', name: 'boot', type: 'gradle', tasks: 'build', springProfiles: '' },
-        command: 'gradlew.bat build'
-      })
+      mgr.start(startOpts({ config: { id: 'x', name: 'boot', type: 'gradle', tasks: 'build', springProfiles: '' }, command: 'gradlew.bat build' }))
       expect('SPRING_PROFILES_ACTIVE' in spawned[0].opts.env).toBe(false)
     })
   })
 
-  // 종료된 실행은 맵에서 지워지지 않는다 — 재접속 때 recentOutput 과 마지막 exitCode 를 돌려줘야
-  // 하기 때문이다(get/recentOutput 이 그것에 의존한다). 그래서 끝난 항목에 write/resize 가 도착하는
-  // 것이 정상 흐름이고, 그것을 그대로 pty 에 넘기면 node-pty 가 던져 main 프로세스가 죽는다.
-  // stop 은 처음부터 status 를 검사했는데 write/resize 는 하지 않았다.
-  describe('종료된 실행에 대한 write/resize', () => {
-    const exited = (): ReturnType<typeof setup> & { pty: FakePty } => {
+  // Finished runs stay in the map so a reconnecting panel can read the last exitCode and the recent
+  // output — so write/resize arriving for one is a normal flow, and passing it to node-pty would throw
+  // and kill main. The same guard now covers 'stopping': there is no reason to type into a run being killed.
+  describe('write/resize on a run that is not running', () => {
+    const exited = (): ReturnType<typeof setup> & { pty: FakePty; runId: string } => {
       const s = setup()
-      s.mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
+      const st = s.mgr.start(startOpts())
       const pty = s.spawned[0].pty
       pty.exit(0)
-      return { ...s, pty }
+      return { ...s, pty, runId: st.runId }
     }
 
-    // 실행 패널을 열면 렌더러가 resize 를 보낸다. 검증이 끝난 뒤 그 패널을 열면 이 경로를 타고
-    // "Cannot resize a pty that has already exited" 로 앱이 죽었다.
-    it('resize 를 종료된 pty 로 넘기지 않는다', () => {
-      const { mgr, pty } = exited()
-      expect(() => mgr.resize('D:/p', 120, 30)).not.toThrow()
+    it('does not pass resize to an exited pty', () => {
+      const { mgr, pty, runId } = exited()
+      expect(() => mgr.resize(runId, 120, 30)).not.toThrow()
       expect(pty.resizes).toBe(0)
     })
 
-    it('write 를 종료된 pty 로 넘기지 않는다', () => {
-      const { mgr, pty } = exited()
-      expect(() => mgr.write('D:/p', 'x')).not.toThrow()
+    it('does not pass write to an exited pty', () => {
+      const { mgr, pty, runId } = exited()
+      expect(() => mgr.write(runId, 'x')).not.toThrow()
       expect(pty.writes).toBe(0)
     })
 
-    // 살아 있는 실행에는 그대로 전달되어야 한다 — 가드가 정상 경로를 막으면 터미널 입력과 크기
-    // 조정이 조용히 죽는다
-    it('도는 실행에는 그대로 전달한다', () => {
+    it('does not pass write or resize to a stopping pty', () => {
+      const { mgr, spawned } = setup('win32')
+      const st = mgr.start(startOpts())
+      mgr.stop(st.runId)
+      mgr.write(st.runId, 'x')
+      mgr.resize(st.runId, 80, 24)
+      expect(spawned[0].pty.writes).toBe(0)
+      expect(spawned[0].pty.resizes).toBe(0)
+    })
+
+    it('passes both through to a running run', () => {
       const { mgr, spawned } = setup()
-      mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
-      mgr.resize('D:/p', 120, 30)
-      mgr.write('D:/p', 'x')
+      const st = mgr.start(startOpts())
+      mgr.resize(st.runId, 120, 30)
+      mgr.write(st.runId, 'x')
       expect(spawned[0].pty.resizes).toBe(1)
       expect(spawned[0].pty.writes).toBe(1)
     })
   })
 
-  // 실행 탭의 ✕ 가 부르는 경로. 종료된 실행이 맵에 남아 있는 한(바로 위 describe 의 이유)
-  // get 은 계속 exited 를 돌려주므로, 렌더러에서 탭만 감춰도 run.list 를 다시 읽는 순간
-  // 되살아난다 — 닫기는 여기서 항목을 지워야 성립한다.
   describe('dismiss', () => {
-    it('종료된 실행을 맵에서 지운다 — 상태도 최근 출력도 남지 않는다', () => {
+    it('removes a finished run — neither status nor output remain', () => {
       const { mgr, spawned } = setup()
-      mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
+      const st = mgr.start(startOpts())
       spawned[0].pty.dataCb('build ok')
       spawned[0].pty.exit(0)
-      mgr.dismiss('D:/p')
-      expect(mgr.get('D:/p')).toBeNull()
-      expect(mgr.recentOutput('D:/p')).toBe('')
+      mgr.dismiss(st.runId)
+      expect(mgr.get(st.runId)).toBeNull()
+      expect(mgr.recentOutput(st.runId)).toBe('')
+      expect(mgr.listByProject('D:/p')).toEqual([])
     })
 
-    // 도는 실행을 놓아 버리면 stop 이 찾을 pty 가 사라져 자식 프로세스를 멈출 수단이 없어진다.
-    // 그래서 ✕ 는 종료된 실행에만 붙지만, 경로 자체도 막는다.
-    it('도는 실행은 지우지 않는다', () => {
-      const { mgr } = setup()
-      mgr.start({ projectPath: 'D:/p', projectName: 'p', config: cfg, command: 'npm run dev' })
-      mgr.dismiss('D:/p')
-      expect(mgr.get('D:/p')?.status).toBe('running')
+    // Letting go of a live run loses the pty stop() needs to reach its children
+    it('does not remove a running or stopping run', () => {
+      const { mgr } = setup('win32')
+      const st = mgr.start(startOpts())
+      mgr.dismiss(st.runId)
+      expect(mgr.get(st.runId)?.status).toBe('running')
+      mgr.stop(st.runId)
+      mgr.dismiss(st.runId)
+      expect(mgr.get(st.runId)?.status).toBe('stopping')
     })
 
-    it('실행이 없는 프로젝트에 불러도 던지지 않는다', () => {
+    it('does not throw for an unknown run', () => {
       const { mgr } = setup()
-      expect(() => mgr.dismiss('D:/none')).not.toThrow()
+      expect(() => mgr.dismiss('nope')).not.toThrow()
     })
   })
 })

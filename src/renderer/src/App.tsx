@@ -51,7 +51,8 @@ import type {
 import type { ProjectUnderstanding, RecordStatus } from '../../core/understanding/types'
 import { slackMode } from '../../core/slack/ready'
 import { findRun } from '../../core/orchestration/snapshot'
-import { pickRunSelection } from '../../core/run/selection'
+import { pickRunSelection, pickRunToShow } from '../../core/run/selection'
+import { upsertRun } from '../../core/run/instances'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
 import {
@@ -1742,11 +1743,12 @@ export default function App(): React.JSX.Element {
     if (id) runSelectedByProject.current[projectPath] = id
     else delete runSelectedByProject.current[projectPath]
   }
-  const [runActive, setRunActive] = useState<RunStatus | null>(null)
-  /** Run 탭을 ✕ 로 닫은 프로젝트. Run 탭은 실행이 없을 때도 '실행' 라벨로 남아 있으므로, main 에서
-   *  끝난 실행을 지우는 것(run.dismiss)만으로는 탭이 사라지지 않는다 — 닫았다는 사실은 여기 있다.
-   *  프로젝트별로 두는 이유: 다른 프로젝트로 옮기면 그쪽 Run 탭은 다시 보여야 한다. */
-  const [runTabClosedFor, setRunTabClosedFor] = useState<string | null>(null)
+  /** The current project's runs, finished ones included, in seat order — the Run tab's list. Kept in step
+   *  by run:status events through upsertRun (core/run/instances.ts), and reloaded whole from run.list on
+   *  a project switch. */
+  const [runs, setRuns] = useState<RunStatus[]>([])
+  /** The run whose console the Run tab shows. Starting a run selects it. */
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [activeRuns, setActiveRuns] = useState<RunStatus[]>([])
   const [runPanelOpen, setRunPanelOpen] = useState(false)
   // Project terminals. They share the bottom panel with the Run tab.
@@ -2278,10 +2280,9 @@ export default function App(): React.JSX.Element {
    *  실행 구성으로 제안하게 된다. main 의 경로 가드도 터미널에만 홈을 열어 준다(assertTerminalPath). */
   const bottomRoot = currentProject ?? homeDir
   bottomRootRef.current = bottomRoot
-  // 실행이 있으면 Run 탭은 언제나 보인다 — 닫은 기억은 실행이 없을 때만 탭을 감춘다. 그래서 닫은
-  // 뒤 ▶ 로 다시 돌리면(runActive 가 채워진다) 따로 되돌리는 코드 없이 탭이 돌아온다.
-  const runAvailable =
-    currentProject !== null && (runActive !== null || runTabClosedFor !== currentProject)
+  // The Run tab is there for as long as a project is. Rows are closed one by one in the list; with none
+  // left the tab shows where to start one rather than disappearing.
+  const runAvailable = currentProject !== null
   /** 아래쪽 패널에 실제로 넘길 탭. Run 탭이 없는데 bottomTab 이 'run' 에 남아 있으면 본문이 비므로,
    *  그때는 터미널로 떨어뜨린다. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
    *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. */
@@ -2301,7 +2302,9 @@ export default function App(): React.JSX.Element {
     void window.api.run.list(currentProject).then((r) => {
       if (cancelled) return
       setRunConfigs(r.configs)
-      setRunActive(r.active)
+      setRuns(r.runs)
+      // Follow a live run if there is one, else the first row, else nothing
+      setSelectedRunId(pickRunToShow(r.runs))
       setRunIsSpringBoot(r.isSpringBoot)
       setRunIsPythonProject(r.isPythonProject)
       setRunHasDockerfile(r.hasDockerfile)
@@ -2311,13 +2314,18 @@ export default function App(): React.JSX.Element {
       // 스크립트가 있는 프로젝트마다 그 선택이 따라다닌다(runSelectedByProject 주석).
       applyRunSelection(
         currentProject,
-        pickRunSelection(r.configs, runSelectedByProject.current[currentProject], r.active?.configId)
+        pickRunSelection(
+          r.configs,
+          runSelectedByProject.current[currentProject],
+          r.runs.find((x) => x.status !== 'exited')?.configId
+        )
       )
-      if (r.active?.status === 'running') setRunPanelOpen(true)
+      if (r.runs.some((x) => x.status === 'running')) setRunPanelOpen(true)
     }, () => {
       if (cancelled) return
       setRunConfigs([])
-      setRunActive(null)
+      setRuns([])
+      setSelectedRunId(null)
       applyRunSelection(currentProject, null)
       setRunContext(null)
     })
@@ -2503,11 +2511,23 @@ export default function App(): React.JSX.Element {
     void window.api.run.listActive().then(setActiveRuns)
     const off = window.api.on('run:status', (s) => {
       void window.api.run.listActive().then(setActiveRuns)
-      // If the run belongs to the current workbench project, the local state is updated too
-      if (currentProjectRef.current && s.projectPath === currentProjectRef.current) setRunActive(s)
+      // If the run belongs to the current workbench project, the local list is updated too — by runId,
+      // and evicting whatever else holds that seat (a restart's replacement arrives on the old seat)
+      if (currentProjectRef.current && s.projectPath === currentProjectRef.current) setRuns((prev) => upsertRun(prev, s))
     })
     return off
   }, [])
+
+  // The selection must never name a run the list no longer holds — with nothing to draw, the Run tab
+  // shows an empty console and no row highlighted. runStart and runDismiss keep it right for what the
+  // user does here, but a seat can also be taken over by a run this renderer did not ask for: an
+  // orchestration validation run (ipc.ts, validation: true) reuses the earliest finished row's seat of
+  // its configuration, and upsertRun then evicts the run that held it.
+  useEffect(() => {
+    if (runs.some((r) => r.runId === selectedRunId)) return
+    const next = pickRunToShow(runs)
+    if (next !== selectedRunId) setSelectedRunId(next)
+  }, [runs, selectedRunId])
 
   // Re-detects run configurations when a seed source at the project root changes.
   // On the JVM side the build file **body** feeds the verdict too — adding the Spring Boot plugin to
@@ -2543,27 +2563,35 @@ export default function App(): React.JSX.Element {
         // root 가 지금 열린 프로젝트다. 기억을 그 키로 읽고 써야 다른 프로젝트 것을 건드리지 않는다.
         applyRunSelection(
           root,
-          pickRunSelection(r.configs, runSelectedByProject.current[root], r.active?.configId)
+          pickRunSelection(r.configs, runSelectedByProject.current[root], r.runs.find((x) => x.status !== 'exited')?.configId)
         )
       })
     })
     return off
   }, [])
 
-  const runStart = (): void => {
-    if (!currentProject || !runSelectedId) return
+  /** ▶, and the list's ↻. `configId` defaults to the toolbar's selection; the list passes its row's. Main
+   *  decides whether this starts a new run or restarts a live one (decideStart) and returns the run either
+   *  way — that run is merged into the list and selected, so the console follows what was just started. */
+  const runStart = (configId: string | null = runSelectedId): void => {
+    if (!currentProject || !configId) return
     const root = currentProject
-    void window.api.run.start(root, runSelectedId).then(
+    void window.api.run.start(root, configId).then(
       async (st) => {
-        setRunActive(st)
+        // The project may have changed while the IPC was in flight. Merging first would inject another
+        // project's run into this list — and nothing would ever evict it: upsertRun evicts only on a seat
+        // match within the same project, and the run:status subscription filters foreign events. The row
+        // would sit there frozen at 'running', with its ⏹ and ✕ acting on another project's process.
+        if (currentProjectRef.current !== root) return
+        setRuns((prev) => upsertRun(prev, st))
+        setSelectedRunId(st.runId)
         // Starting a Run may be what opens the panel for the first time — and that also mounts this
         // project's existing terminal tabs (in a hidden state). TerminalBody replays initialBuffer only
         // once, at mount, and ignores later updates, so the latest buffer has to be read *before* the
         // setRunPanelOpen(true) that causes the mount — the same reason as in openTerminal.
         if (terminals.length > 0) {
           const list = await window.api.terminal.list(root).catch(() => terminals)
-          // If the project changes while this is in flight, the result is discarded — currentProjectRef is
-          // the same idiom the other async callbacks in this file use against stale closures. Without
+          // The same check again after the await — the project can change during this call too. Without
           // discarding, the screen shows the new project while the panel holds the previous project's
           // terminal tabs, and input goes to that shell.
           if (currentProjectRef.current !== root) return
@@ -2574,19 +2602,19 @@ export default function App(): React.JSX.Element {
       (err) => toast.error(t('run.start.failed', { detail: err instanceof Error ? err.message : String(err) }))
     )
   }
-  const runStop = (): void => {
-    if (currentProject) void window.api.run.stop(currentProject)
+  const runStop = (runId: string): void => {
+    void window.api.run.stop(runId)
   }
-  /** Run 탭의 ✕. main 에서 끝난 실행을 버려 마지막 exitCode 와 최근 출력을 함께 지우고(그러지 않으면
-   *  run.list 를 다시 읽는 순간 되살아난다) 다음 실행까지 탭을 감춘다. 활성 탭 폴백은 bottomTabShown
-   *  이 이미 맡으므로 bottomTab 은 'run' 그대로 둔다 — 다시 실행하면 그 탭으로 돌아오는 편이 낫다.
-   *  터미널이 하나도 없으면 패널을 접는다: ＋ 만 남은 빈 패널은 접힌 것보다 나쁘다. */
-  const runDismiss = (): void => {
-    if (!currentProject) return
-    void window.api.run.dismiss(currentProject)
-    setRunActive(null)
-    setRunTabClosedFor(currentProject)
-    if (terminals.length === 0) setRunPanelOpen(false)
+  /** The list's ✕ on a finished run. main drops it (its exitCode and output with it — otherwise a run.list
+   *  re-read brings the row back) and the local list follows without waiting. Selection moves to the
+   *  nearest remaining row. With no runs and no terminals left the panel collapses: a panel with nothing
+   *  but ＋ in it is worse than a collapsed one. */
+  const runDismiss = (runId: string): void => {
+    void window.api.run.dismiss(runId)
+    const remaining = runs.filter((r) => r.runId !== runId)
+    setRuns(remaining)
+    if (selectedRunId === runId) setSelectedRunId(pickRunToShow(remaining))
+    if (remaining.length === 0 && terminals.length === 0) setRunPanelOpen(false)
   }
   const runDeleteConfig = (id: string): void => {
     if (!currentProject) return
@@ -2675,7 +2703,6 @@ export default function App(): React.JSX.Element {
       () => toast.error(t('run.jump.notAllowed'))
     )
   }
-  const runStopProject = (projectPath: string): void => { void window.api.run.stop(projectPath) }
 
   // openTerminal calls newTerminal below, so it is declared first to match reading order — an arrow
   // function is not hoisted, but this is only definition order rather than execution, so no order can
@@ -2822,13 +2849,13 @@ export default function App(): React.JSX.Element {
                 configs={runConfigs}
                 selectedId={runSelectedId}
                 onSelect={(id) => applyRunSelection(currentProject, id)}
-                active={runActive}
-                onRun={runStart}
+                runs={runs}
+                onRun={() => runStart()}
                 onStop={runStop}
                 onOpenManager={() => setRunManagerOpen(true)}
                 activeRuns={activeRuns}
                 onJump={runJump}
-                onStopProject={runStopProject}
+                onStopRun={runStop}
               />
             </div>
           ) : null
@@ -3327,16 +3354,18 @@ export default function App(): React.JSX.Element {
                 )}
                 {runPanelOpen && (
                   <BottomPanel
-                    projectPath={bottomRoot}
                     runAvailable={runAvailable}
-                    runStatus={runActive}
+                    runs={runs}
+                    selectedRunId={selectedRunId}
+                    onSelectRun={setSelectedRunId}
+                    onStopRun={runStop}
+                    onRerun={(configId) => runStart(configId)}
+                    onDismissRun={runDismiss}
                     terminals={terminals}
                     activeTab={bottomTabShown}
                     onSelectTab={setBottomTab}
                     onNewTerminal={() => void newTerminal()}
                     onCloseTerminal={closeTerminal}
-                    onCloseRun={runDismiss}
-                    onStopRun={runStop}
                     onCollapse={() => setRunPanelOpen(false)}
                   />
                 )}

@@ -29,3 +29,10 @@ export function pickRunSelection(
   if (has(activeConfigId)) return activeConfigId as string
   return configs[0]?.id ?? null
 }
+
+/** Which run the Run tab's console follows when the selection is gone or was never made: a live run
+ *  first (what the user is most likely waiting on), else the first row, else nothing. Used on a project
+ *  switch, after a dismiss, and by the effect that runs when a status event evicts the selected row. */
+export function pickRunToShow(runs: readonly { runId: string; status: string }[]): string | null {
+  return runs.find((r) => r.status !== 'exited')?.runId ?? runs[0]?.runId ?? null
+}

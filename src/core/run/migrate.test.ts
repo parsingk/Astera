@@ -128,6 +128,22 @@ describe('migrateRunConfigs', () => {
       { id: 'x', name: 'x', type: 'dockerfile', imageTag: 'astera:dev' }
     ])
   })
+
+  // The switch is stored on the configuration and the file is hand-editable, so it gets the same
+  // type check cwd and env already get — a truthy string would otherwise read as "on".
+  describe('allowMultipleInstances', () => {
+    it('a boolean passes through untouched', () => {
+      const cfg = { ...COMPLETE.npm, allowMultipleInstances: true }
+      expect(migrateRunConfigs([cfg])).toEqual([cfg])
+      const off = { ...COMPLETE.npm, allowMultipleInstances: false }
+      expect(migrateRunConfigs([off])).toEqual([off])
+    })
+
+    it('a non-boolean drops that item', () => {
+      expect(migrateRunConfigs([{ ...COMPLETE.npm, allowMultipleInstances: 'yes' }])).toEqual([])
+      expect(migrateRunConfigs([{ ...COMPLETE.npm, allowMultipleInstances: 1 }])).toEqual([])
+    })
+  })
 })
 
 // 다섯 종류(shell·node·maven·cargo·go)의 필수 필드는 한 번도 확인된 적이 없었다 — 그 다섯을 []

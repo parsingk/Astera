@@ -21,6 +21,11 @@ interface RunConfigBase {
   name: string
   cwd?: string
   env?: Record<string, string>
+  /** What a second ▶ does while a run of this configuration is live: unset/false restarts it (the
+   *  default — a second press must not put a second server on the same port), true starts another run
+   *  beside it. Read by decideStart in ./instances, never by RunManager. Not part of seedKeyOf:
+   *  flipping it must not change which seed a stored configuration hides. */
+  allowMultipleInstances?: boolean
 }
 
 /** A free-form command. This is where every pre-type config migrates to, and it is the only way
@@ -155,7 +160,7 @@ export type RunConfig =
  *  so a Java version selector was drawn even in a Node project — there was no kind in the model to
  *  condition on. */
 export function optionalFieldsFor(type: RunConfigType, opts: { springBoot: boolean }): string[] {
-  const common = ['cwd', 'env']
+  const common = ['cwd', 'env', 'allowMultipleInstances']
   switch (type) {
     case 'shell':
       return common // args go straight into the command

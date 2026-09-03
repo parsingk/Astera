@@ -602,6 +602,16 @@ export function RunConfigForm({
           />
         </div>
       )}
+      {visible('allowMultipleInstances') && (
+        <label className="row check-small">
+          <input
+            type="checkbox"
+            checked={!!draft.allowMultipleInstances}
+            onChange={(e) => changeNow({ ...draft, allowMultipleInstances: e.target.checked })}
+          />
+          {t('run.field.allowMultipleInstances')}
+        </label>
+      )}
       {visible('cwd') && (
         <div className="field">
           <label>{t('run.field.cwd')}</label>

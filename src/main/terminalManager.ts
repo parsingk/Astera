@@ -1,6 +1,6 @@
 // Project terminal management. Spawns an interactive shell with the project path as cwd and mirrors its output.
-// Why RunManager is not reused: it is keyed by projectPath alone (ALREADY_RUNNING), so opening a terminal would
-// occupy that project's Run slot. This is keyed by terminalId, so a project can have several.
+// Kept apart from RunManager even though both are now keyed by an id and hold several per project: a terminal
+// spawns the user's shell and lives until closed, a run spawns one assembled command and reports its exit.
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import path from 'node:path'

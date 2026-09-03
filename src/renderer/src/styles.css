@@ -440,6 +440,7 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .run-global-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--radius); transition: background var(--ease); }
 .run-global-row:hover { background: var(--elevated); }
 .run-global-live { width: 7px; height: 7px; border-radius: 50%; background: var(--run); flex: none; box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
+.run-global-live.stopping { background: var(--warn); box-shadow: none; }
 /* 검증 실행 라벨. 실행 툴바와 전역 목록 두 곳이 같은 배지를 쓴다 — 사용자가 시작하지 않은 실행이
    자기 실행처럼 보이면 정지시켜 오케스트레이션 Task 를 실패시킨다(RunStatus.validation) */
 /* 이 태그는 장식이 아니라 설명이다 — 사용자가 아무것도 시작하지 않았는데 ▶ 가 ⏹ 로 바뀐 이유를
@@ -2276,7 +2277,6 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* ---------- Run panel ---------- */
 .run-panel { flex: none; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--term-bg); height: var(--run-panel-h, 220px); min-height: 120px; }
 .run-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--run); flex: none; box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
-.run-exit { color: var(--text-faint); }
 .run-panel-actions { display: flex; gap: 2px; }
 .run-panel-btn { width: 22px; height: 22px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); font-size: 12px; padding: 0; cursor: pointer; }
 .run-panel-btn:hover { background: var(--elevated); color: var(--text); }
@@ -2306,6 +2306,35 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .bottom-bodies { flex: 1; min-height: 0; display: flex; }
 .bottom-body { flex: 1; min-width: 0; min-height: 0; }
 .bottom-body > .run-panel-host { height: 100%; }
+
+/* The Run tab's body: the project's runs on the left, one console per run on the right (BottomPanel).
+   The list mirrors .rcm-tree/.rcm-item — same row height, same left accent for the selected row — so the
+   two run-configuration surfaces read as one. */
+.run-body { display: flex; }
+.run-list { flex: none; width: 200px; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding: 4px; background: var(--panel); border-right: 1px solid var(--line-soft); }
+.run-list-empty { justify-content: center; color: var(--text-faint); font-size: 12px; padding: 12px; text-align: center; line-height: 1.5; }
+.run-row { flex: none; display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--radius); border-left: 2px solid transparent; color: var(--text); font-size: 12px; cursor: pointer; }
+.run-row:hover { background: var(--surface-hover); }
+.run-row.on { background: var(--elevated); border-left-color: var(--accent); }
+.run-row:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+/* State dot: green and haloed while running (the same treatment as .run-live-dot on the tab), amber
+   while the kill is in flight, faint once finished. */
+.run-row-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--text-faint); }
+.run-row-dot.running { background: var(--run); box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
+.run-row-dot.stopping { background: var(--warn); }
+.run-row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-row-exit { flex: none; color: var(--text-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.run-row-exit.fail { color: var(--danger); }
+/* Row actions show on hover and on the selected row — three icons on every row is noise in a list
+   that is mostly read, not acted on. */
+.run-row-actions { flex: none; display: flex; gap: 1px; opacity: 0; }
+.run-row:hover .run-row-actions, .run-row.on .run-row-actions, .run-row:focus-within .run-row-actions { opacity: 1; }
+.run-row-btn { width: 18px; height: 18px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); padding: 0; cursor: pointer; }
+.run-row-btn:hover { background: var(--bg); color: var(--text); }
+.run-row-btn.stop:hover { color: var(--danger); }
+.run-consoles { flex: 1; min-width: 0; min-height: 0; display: flex; }
+.run-console { flex: 1; min-width: 0; min-height: 0; }
+.run-console > .run-panel-host { height: 100%; }
 
 /* ---------- toast notifications ---------- */
 /* Above the status bar (32px plus 10px margin-top) and in front of modals (z 100), so a failure notice raised inside a modal is not hidden either */

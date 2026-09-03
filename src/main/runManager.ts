@@ -1,24 +1,45 @@
 import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import type { PtyFactory, PtyLike } from '../core/sessions/pty'
 import { treeKillCommand } from '../core/run/kill'
 import { shellSpawn } from '../core/run/shell'
 import { withJavaHomeOnPath } from '../core/run/jdk'
+import { placeNewRun } from '../core/run/instances'
 import type { RunConfig, RunStatus } from '../core/run/config'
 
-const OUTPUT_LIMIT = 200_000 // Cap on the recent-output buffer kept for reconnects
+const OUTPUT_LIMIT = 200_000 // Cap on the recent-output buffer kept for reconnects, per run
 
 interface LiveRun {
   status: RunStatus
   pty: PtyLike
   buffer: string
+  /** Settles when pty.onExit fires — what restart() waits on before starting the replacement */
+  exited: Promise<void>
+  /** The restart in flight for this run, if any. A second ▶ during the stopping window joins it
+   *  rather than starting a second replacement (decideStart counts a stopping run as live). */
+  restarting?: Promise<RunStatus>
 }
 
 type KillRunner = (cmd: { file: string; args: string[] }) => void
 
-/** Project run management. One per project, concurrent across projects. Unrelated to claude sessions. */
+export interface StartOpts {
+  projectPath: string
+  projectName: string
+  config: RunConfig
+  /** The assembled command. Assembly is the caller's job (ipc.ts) — this class does not know kinds */
+  command: string
+  cols?: number
+  rows?: number
+  /** Marks an orchestration Task's validation run. Carried on the status as-is to the renderer;
+   *  RunManager makes no decision from it (see RunStatus.validation) */
+  validation?: boolean
+}
+
+/** Project run management. Keyed by runId, so a project holds any number of runs — the same shape
+ *  TerminalManager has for terminals. Unrelated to claude sessions. */
 export class RunManager {
   private runs = new Map<string, LiveRun>()
-  onData?: (e: { projectPath: string; data: string }) => void
+  onData?: (e: { runId: string; data: string }) => void
   onStatus?: (e: RunStatus) => void
 
   constructor(
@@ -27,20 +48,17 @@ export class RunManager {
     private killRunner: KillRunner = (cmd) => execFile(cmd.file, cmd.args, () => {})
   ) {}
 
-  start(opts: {
-    projectPath: string
-    projectName: string
-    config: RunConfig
-    /** The assembled command. Assembly is the caller's job (ipc.ts) — this class does not know kinds */
-    command: string
-    cols?: number
-    rows?: number
-    /** 오케스트레이션 Task 의 검증 실행이라는 표시. 상태에 그대로 실려 렌더러까지 간다 —
-     *  RunManager 는 이 값으로 아무 판단도 하지 않는다(RunStatus.validation 참고) */
-    validation?: boolean
-  }): RunStatus {
-    const existing = this.runs.get(opts.projectPath)
-    if (existing && existing.status.status === 'running') throw new Error(`ALREADY_RUNNING: ${opts.projectPath}`)
+  /** Starts a run. Its seat in the project's list comes from placeNewRun: the earliest finished run of
+   *  the same configuration is dropped and its seat reused, so a rerun does not grow the list. `seq` is
+   *  passed only by restart(), which is reusing the seat of the run it just stopped. Never throws for
+   *  "already running" — several runs of one project, even of one configuration, are the point. */
+  start(opts: StartOpts & { seq?: number }): RunStatus {
+    let seq = opts.seq
+    if (seq === undefined) {
+      const placed = placeNewRun(this.listByProject(opts.projectPath), opts.config.id)
+      if (placed.replaces) this.dismiss(placed.replaces)
+      seq = placed.seq
+    }
     const cwd = opts.config.cwd || opts.projectPath
     // The assembled command needs shell interpretation. Which shell, and the win32 string/posix array
     // asymmetry that keeps quoted values intact, are decided (and explained) in shellSpawn
@@ -68,82 +86,138 @@ export class RunManager {
       env
     })
     const status: RunStatus = {
+      runId: randomUUID(),
       projectPath: opts.projectPath,
       projectName: opts.projectName,
       configId: opts.config.id,
       configName: opts.config.name,
       command: opts.command,
+      seq,
       status: 'running',
-      // 켜져 있을 때만 필드를 만든다 — 검증이 아닌 실행의 상태에는 이 키가 없다
+      startedAt: Date.now(),
+      // Only ever present when on — a non-validation run's status has no such key
       ...(opts.validation ? { validation: true as const } : {})
     }
-    const live: LiveRun = { status, pty, buffer: '' }
-    this.runs.set(opts.projectPath, live)
-    this.onStatus?.({ ...status }) // Report the start as a status event too, so the global badge/dropdown refresh
+    let settle!: () => void
+    const exited = new Promise<void>((resolve) => {
+      settle = resolve
+    })
+    const live: LiveRun = { status, pty, buffer: '', exited }
+    this.runs.set(status.runId, live)
+    this.onStatus?.({ ...status }) // Report the start as a status event too, so the list and the badge refresh
     pty.onData((data) => {
       live.buffer = (live.buffer + data).slice(-OUTPUT_LIMIT)
-      this.onData?.({ projectPath: opts.projectPath, data })
+      this.onData?.({ runId: status.runId, data })
     })
     pty.onExit(({ exitCode }) => {
       live.status.status = 'exited'
       live.status.exitCode = exitCode
+      live.status.exitedAt = Date.now()
       this.onStatus?.({ ...live.status })
+      settle()
     })
     return { ...status }
   }
 
-  /** 실행 탭의 ✕. 종료된 실행을 맵에서 지운다 — 그래야 get/recentOutput 이 비고, 렌더러가 탭을
-   *  닫은 뒤 run.list 를 다시 읽어도 그 실행이 되살아나지 않는다(끝난 실행을 일부러 남겨 두는
-   *  이유는 write/resize 위의 주석을 보라 — 여기는 그 보관을 사용자가 끝내는 유일한 통로다).
-   *  도는 실행은 건드리지 않는다: pty 를 놓아 버리면 stop 이 찾을 것이 없어져 자식 프로세스를
-   *  멈출 수단이 사라진다. */
-  dismiss(projectPath: string): void {
-    const live = this.runs.get(projectPath)
-    if (!live || live.status.status === 'running') return
-    this.runs.delete(projectPath)
+  /** ▶ on a configuration that is already live: stop that run, wait for its process tree to actually
+   *  exit, then start `opts` in the seat it held. The wait is the point — the kill is dispatched
+   *  asynchronously (taskkill on win32) and starting on top of a dying process races it. `opts` is the
+   *  freshly assembled configuration and command, not the stopped run's: the user may have edited the
+   *  arguments while it ran. There is no timeout; a tree that will not die leaves the row 'stopping'
+   *  rather than the app losing track of a live process. If the replacement fails to spawn, the stopped
+   *  run's record stays in its seat and the rejection reaches the caller. */
+  restart(runId: string, opts: StartOpts): Promise<RunStatus> {
+    const live = this.runs.get(runId)
+    if (!live) return Promise.reject(new Error(`NO_RUN: ${runId}`))
+    if (live.restarting) return live.restarting
+    const attempt = (async () => {
+      if (live.status.status !== 'exited') {
+        this.stop(runId)
+        await live.exited
+      }
+      // Start before dropping the old record: if the spawn throws (node-pty on a cwd that no longer
+      // exists) the seat stays occupied by the finished run, so main and the renderer's list still agree
+      // and the next ▶ takes the seat over instead of appending. Nothing observes the one-tick overlap —
+      // start's onStatus goes out over IPC and the renderer's upsertRun evicts by seat.
+      const next = this.start({ ...opts, seq: live.status.seq })
+      this.runs.delete(runId)
+      return next
+    })()
+    live.restarting = attempt
+    // A failed attempt frees the slot so the next ▶ can try again; a settled success is dropped from
+    // the map anyway (the old record is deleted above), so only the failure needs this.
+    attempt.catch(() => {
+      if (live.restarting === attempt) live.restarting = undefined
+    })
+    return attempt
   }
 
-  stop(projectPath: string): void {
-    const live = this.runs.get(projectPath)
+  /** The list's ✕. Removes a finished run — so get/recentOutput go empty and a run.list re-read after
+   *  the renderer dropped the row does not resurrect it (finished runs are kept on purpose, see
+   *  write/resize below; this is the one path a user ends that keeping through). A live run is left
+   *  alone: letting go of its pty would leave stop() nothing to reach the child processes with. */
+  dismiss(runId: string): void {
+    const live = this.runs.get(runId)
+    if (!live || live.status.status !== 'exited') return
+    this.runs.delete(runId)
+  }
+
+  /** Marks the run stopping and dispatches the kill. The exit itself arrives through pty.onExit —
+   *  'stopping' is what the renderer shows in between, and what restart() waits through. */
+  stop(runId: string): void {
+    const live = this.runs.get(runId)
     if (!live || live.status.status !== 'running') return
+    live.status.status = 'stopping'
+    this.onStatus?.({ ...live.status })
     const cmd = treeKillCommand(this.platform, live.pty.pid)
     if (cmd) this.killRunner(cmd)
     else live.pty.kill()
   }
 
-  // write/resize 는 **도는 실행에만** 넘긴다. 종료된 항목은 맵에 남는다 — get/recentOutput 이
-  // 재접속 때 마지막 exitCode 와 최근 출력을 돌려줘야 하기 때문이다 — 그래서 끝난 실행에 이 둘이
-  // 도착하는 것은 정상 흐름이다(실행 패널을 열면 렌더러가 resize 를 보낸다). node-pty 는 죽은 pty 에
-  // 그것을 부르면 던지고, 여기는 IPC 핸들러 뒤라 잡는 사람이 없어 main 프로세스가 죽는다.
-  // stop 이 처음부터 같은 검사를 하고 있었다 — 이 둘만 빠져 있었다.
-  // **이 검사만으로는 부족하다.** status 는 pty.onExit 으로 서는데 node-pty 는 그보다 먼저 죽어
-  // 있고, 그 구간의 resize 는 여기를 통과한 뒤 던진다 — 그쪽은 withExitedPtyGuard 가 막는다.
-  write(projectPath: string, data: string): void {
-    const live = this.runs.get(projectPath)
+  // write/resize reach the pty **only while running**. Finished runs stay in the map so get/recentOutput
+  // can answer a reconnecting panel with the last exitCode and the recent output — so both of these
+  // arriving for a finished run is a normal flow (opening the run panel sends a resize). node-pty throws
+  // when called on a dead pty, and behind an IPC handler nothing catches that: main dies. 'stopping' is
+  // refused too — nothing should be typed into a run being killed.
+  // **This check alone is not enough.** status flips on pty.onExit, node-pty is dead before that, and a
+  // resize in that window passes here and then throws — withExitedPtyGuard covers that side. stop had
+  // this check from the start; write and resize were the two that lacked it, and a resize the panel sent
+  // after a validation had finished was what used to kill main.
+  write(runId: string, data: string): void {
+    const live = this.runs.get(runId)
     if (live?.status.status !== 'running') return
     live.pty.write(data)
   }
 
-  resize(projectPath: string, cols: number, rows: number): void {
-    const live = this.runs.get(projectPath)
+  resize(runId: string, cols: number, rows: number): void {
+    const live = this.runs.get(runId)
     if (live?.status.status !== 'running') return
     live.pty.resize(cols, rows)
   }
 
-  get(projectPath: string): RunStatus | null {
-    const live = this.runs.get(projectPath)
+  get(runId: string): RunStatus | null {
+    const live = this.runs.get(runId)
     return live ? { ...live.status } : null
   }
 
-  listActive(): RunStatus[] {
-    return [...this.runs.values()].filter((r) => r.status.status === 'running').map((r) => ({ ...r.status }))
+  /** One project's runs, finished ones included, in seat order — the run list's source */
+  listByProject(projectPath: string): RunStatus[] {
+    return [...this.runs.values()]
+      .filter((r) => r.status.projectPath === projectPath)
+      .sort((a, b) => a.status.seq - b.status.seq)
+      .map((r) => ({ ...r.status }))
   }
 
-  recentOutput(projectPath: string): string {
-    return this.runs.get(projectPath)?.buffer ?? ''
+  /** Every run that is still alive, across projects — the global badge. A stopping run is alive. */
+  listActive(): RunStatus[] {
+    return [...this.runs.values()].filter((r) => r.status.status !== 'exited').map((r) => ({ ...r.status }))
+  }
+
+  recentOutput(runId: string): string {
+    return this.runs.get(runId)?.buffer ?? ''
   }
 
   stopAll(): void {
-    for (const projectPath of this.runs.keys()) this.stop(projectPath)
+    for (const runId of this.runs.keys()) this.stop(runId)
   }
 }

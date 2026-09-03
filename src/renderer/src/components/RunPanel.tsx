@@ -7,13 +7,13 @@ import { pinCursorBlinkOff } from '../lib/cursorBlink'
 import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
 
-/** Run output body. The header and the actions are owned by BottomPanel.
- *  clearNonce: a counter BottomPanel's clear button increments. */
+/** One run's console. The list, the header and the actions are owned by BottomPanel; this draws
+ *  nothing but xterm. clearNonce: a counter BottomPanel's clear button increments for this run. */
 export function RunPanel({
-  projectPath,
+  runId,
   clearNonce
 }: {
-  projectPath: string
+  runId: string
   clearNonce: number
 }): React.JSX.Element {
   const { family } = useTerminalFont()
@@ -22,7 +22,7 @@ export function RunPanel({
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
 
-  // One xterm per project — a new one is created when projectPath changes
+  // One xterm per run — a new one is created when runId changes
   useEffect(() => {
     const host = hostRef.current!
     const term = new Terminal({
@@ -39,22 +39,22 @@ export function RunPanel({
     fit.fit()
     termRef.current = term
     fitRef.current = fit
-    // Reconnect: fill in the recent output buffer first (the cancelled guard prevents a write after a switch or unmount)
+    // Reconnect: replay the buffered output first (the cancelled guard prevents a write after a switch or unmount)
     let cancelled = false
-    void window.api.run.list(projectPath).then((r) => {
-      if (!cancelled && r.recent) term.write(r.recent)
+    void window.api.run.output(runId).then((recent) => {
+      if (!cancelled && recent) term.write(recent)
     })
     const off = window.api.on('run:data', (e) => {
-      if (e.projectPath === projectPath) term.write(e.data)
+      if (e.runId === runId) term.write(e.data)
     })
-    const input = term.onData((d) => window.api.run.write(projectPath, d))
+    const input = term.onData((d) => window.api.run.write(runId, d))
     let resizeTimer: ReturnType<typeof setTimeout> | undefined
     const observer = new ResizeObserver(() => {
       clearTimeout(resizeTimer)
       resizeTimer = setTimeout(() => {
         if (host.clientWidth === 0 || host.clientHeight === 0) return
         fit.fit()
-        window.api.run.resize(projectPath, term.cols, term.rows)
+        window.api.run.resize(runId, term.cols, term.rows)
       }, 60)
     })
     observer.observe(host)
@@ -69,7 +69,7 @@ export function RunPanel({
       fitRef.current = null
       term.dispose()
     }
-  }, [projectPath])
+  }, [runId])
 
   // Same rationale as TerminalView's font effect: mutate options rather than widen the construction
   // effect's deps, then refit. This file has no onResize wiring — the ResizeObserver above sends the
@@ -84,8 +84,8 @@ export function RunPanel({
     // PTY on every font change and every mount.
     if (host.clientWidth === 0 || host.clientHeight === 0) return
     fitRef.current?.fit()
-    window.api.run.resize(projectPath, term.cols, term.rows)
-  }, [family, projectPath])
+    window.api.run.resize(runId, term.cols, term.rows)
+  }, [family, runId])
 
   // Recolour only when the theme changes. Recreating would wipe the scrollback — this file's convention.
   useEffect(() => {

@@ -702,6 +702,8 @@ export const ko = {
   'run.config.more': '추가 동작',
   'run.action.run': '실행',
   'run.action.stop': '중지',
+  'run.action.rerun': '다시 실행',
+  'run.action.restart': '재시작',
   'run.global.listTitle': '실행 중 목록',
   'run.global.jump': '이동',
   // 오케스트레이션이 Task 를 판정하려고 띄운 실행이라는 라벨. 사용자가 시작한 실행과 구별되지
@@ -767,6 +769,7 @@ export const ko = {
   'run.field.args': '인자',
   'run.field.cwd': '작업 폴더',
   'run.field.env': '환경변수',
+  'run.field.allowMultipleInstances': '여러 인스턴스 허용',
   // 종류별 필수 필드. shell 의 command 도 여기 있어야 run.start 의 "빈 필수 항목" 메시지가
   // run.field.<이름> 으로 라벨을 찾을 수 있다 (migrate.ts 의 REQUIRED 에 있는 이름은 모두 여기 있다)
   'run.field.command': '명령',
@@ -802,14 +805,11 @@ export const ko = {
   'run.picker.detected': '이 프로젝트에서 감지됨',
   'run.picker.other': '기타',
   'run.form.addOption': '선택 항목 추가',
-  // BottomPanel.tsx — the Run tab label in the tab strip (the default for the configName slot when no run is active),
-  // clear and collapse buttons. The header RunPanel.tsx used to own moved into BottomPanel; RunPanel.tsx itself remains as the body.
-  // noActiveRun was originally that header status text, and BottomPanel's Run tab label has the same value, so it is reused
-  // (a separately added terminal.tab.run was an exact duplicate of the value and was cleaned up).
-  'run.panel.noActiveRun': '실행',
-  'run.panel.exited': ' · 종료(코드 {code})',
-  // 종료된 실행에만 붙는 ✕ — 실행 중에는 그리지 않는다(⏹ 로 먼저 정지시킨다)
-  'run.panel.close': '실행 탭 닫기',
+  'run.panel.tab': '실행',
+  'run.panel.empty': '아직 실행이 없습니다 — 툴바의 ▶ 로 시작하세요',
+  'run.panel.exitCode': '종료 {code}',
+  'run.panel.stopping': '정지 중…',
+  'run.panel.close': '실행 닫기',
   'run.panel.clear': '지우기',
   'run.panel.collapse': '접기',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.

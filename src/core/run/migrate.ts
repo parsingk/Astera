@@ -72,6 +72,7 @@ export function migrateRunConfigs(value: unknown, opts?: { allowIncomplete?: boo
     if (typeof o.name !== 'string' || o.name.trim() === '') continue
     if (!isStringMap(o.env)) continue
     if (o.cwd !== undefined && typeof o.cwd !== 'string') continue
+    if (o.allowMultipleInstances !== undefined && typeof o.allowMultipleInstances !== 'boolean') continue
 
     if (o.type === undefined) {
       if (typeof o.command !== 'string') continue

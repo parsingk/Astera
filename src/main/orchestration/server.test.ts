@@ -2578,15 +2578,19 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
   const wire = async (): Promise<{
     deps: OrchServerDeps
     validator: TaskValidator
-    started: { cwd: string; taskId: string }[]
+    started: { cwd: string; taskId: string; runId: string }[]
     taskId: string
     cwd: string
   }> => {
     const deps = makeDeps()
-    const started: { cwd: string; taskId: string }[] = []
+    const started: { cwd: string; taskId: string; runId: string }[] = []
     const validator = new TaskValidator({
       runner: {
-        start: async (a) => void started.push(a),
+        start: async (a) => {
+          const runId = `run_${started.length + 1}`
+          started.push({ ...a, runId })
+          return { runId }
+        },
         output: () => '빌드 로그 꼬리'
       },
       onSettled: async ({ taskId, exitCode, output }) => {
@@ -2621,12 +2625,12 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
   it('worker_done 성공은 Task 를 validating 으로 보내고 그 cwd 에서 검증을 시작한다', async () => {
     const { deps, started, taskId, cwd } = await wire()
     expect(deps.getState().tasks[0].status).toBe('validating')
-    expect(started).toEqual([{ taskId, cwd }])
+    expect(started).toEqual([{ taskId, cwd, runId: 'run_1' }])
   })
 
   it('검증 실패는 Task 를 failed 로 보내고 status 메시지를 코디네이터에게 배달한다', async () => {
-    const { deps, validator, taskId, cwd } = await wire()
-    validator.onRunExit({ cwd, exitCode: 2 })
+    const { deps, validator, started, taskId } = await wire()
+    validator.onRunExit({ runId: started[0].runId, exitCode: 2 })
     await vi.waitFor(() => expect(deps.getState().tasks[0].status).toBe('failed'))
     const r = await call(deps, 'check', {})
     const body = r.body as { count: number; messages: { type: string; subject: string; body: string; taskId?: string }[] }
@@ -2640,8 +2644,8 @@ describe('worker_done → 검증 실행 → 결과 (배선 통합)', () => {
 
   // 통과도 배달돼야 한다 — 의존 Task 가 풀린 것을 모르면 코디네이터는 다음 Task 를 띄우지 않는다
   it('검증 통과는 Task 를 completed 로 보내고 그것도 배달된다', async () => {
-    const { deps, validator, cwd } = await wire()
-    validator.onRunExit({ cwd, exitCode: 0 })
+    const { deps, validator, started } = await wire()
+    validator.onRunExit({ runId: started[0].runId, exitCode: 0 })
     await vi.waitFor(() => expect(deps.getState().tasks[0].status).toBe('completed'))
     const r = await call(deps, 'check', {})
     const body = r.body as { messages: { subject: string }[] }
