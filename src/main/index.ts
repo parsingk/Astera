@@ -849,6 +849,17 @@ app.whenReady().then(async () => {
     .then(() => core!.history.refresh())
     .then(() => core!.history.startBackground())
 
+  // Registered outside the isPackaged block below, unlike the rest of the update channels, because
+  // the renderer asks this on every mount and a dev build has a real answer for it: `updateCampaign`
+  // starts as null, and null is "no campaign". Left inside, the handler simply did not exist in dev,
+  // and Electron logged "No handler registered for 'update:campaignState'" from the main process on
+  // every boot — twice, since StrictMode mounts the effect twice. The renderer's own `.catch()`
+  // cannot suppress that: Electron writes it before the rejection is handed back.
+  //
+  // Its sibling `update:dismissCampaign` stays inside on purpose. Dismissing needs a campaign to
+  // have been shown, which cannot happen without the updater, so nothing ever calls it in dev.
+  ipcMain.handle('update:campaignState', () => updateCampaign)
+
   // Auto-update: pulled from public GitHub Releases with no credentials. Progress is surfaced both
   // to a file log (userData/updater.log) and to the renderer (shown in the title bar).
   if (app.isPackaged) {
@@ -968,8 +979,8 @@ app.whenReady().then(async () => {
         // Update campaign. The policy is fetched from the same address with the same token as the
         // feed. Any lookup or parse failure means no campaign — a policy or network problem must not
         // block or nag the user. The verdict can land either before or after the renderer mounts, so
-        // both a push and a query are provided.
-        ipcMain.handle('update:campaignState', () => updateCampaign)
+        // both a push and a query are provided — and the query is registered above this block, since
+        // it has an answer even where the updater does not run.
         ipcMain.handle('update:dismissCampaign', async (_e, id: unknown) => {
           if (typeof id !== 'string' || !id.trim()) return
           if (updateCampaign?.id === id) updateCampaign = null
