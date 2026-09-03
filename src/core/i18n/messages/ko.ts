@@ -139,7 +139,7 @@ export const ko = {
   'settings.notifications.inputNeededHint':
     '선택지나 권한 승인을 기다리며 멈춘 상태에 알림을 보냅니다.',
   'settings.notifications.limitWaiting': '한도에 걸려 멈출 때',
-  'settings.notifications.limitWaitingHint': '재개 예정 시각까지 기다립니다.',
+  'settings.notifications.limitWaitingHint': '한도에 걸렸을 때 알림을 보냅니다.',
   'settings.notifications.accountSwitched': '계정을 전환할 때',
   'settings.notifications.accountSwitchedHint': '작업은 계속 진행됩니다. 세션이 여럿이면 잦습니다.',
   'settings.notifications.saveFailed': '알림 설정을 저장하지 못했습니다: {detail}',

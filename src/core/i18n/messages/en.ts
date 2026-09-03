@@ -130,7 +130,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.notifications.inputNeededHint':
     'Sent when the session is held up by a choice or a permission approval.',
   'settings.notifications.limitWaiting': 'Waiting on a limit',
-  'settings.notifications.limitWaitingHint': 'Waiting until the reset it is scheduled to resume at.',
+  'settings.notifications.limitWaitingHint': 'Sent when the session stops on a usage limit.',
   'settings.notifications.accountSwitched': 'Account switched',
   'settings.notifications.accountSwitchedHint': 'The work is proceeding. Frequent with several sessions running.',
   'settings.notifications.saveFailed': 'Could not save the notification settings: {detail}',
