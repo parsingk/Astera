@@ -16,7 +16,6 @@ import { ChevronDown, Delete, Plus, Square, X } from 'lucide-react'
  * their scrollback survives switching rows and no buffer is replayed on every switch.
  */
 export function BottomPanel({
-  projectPath,
   runAvailable = true,
   runs,
   selectedRunId,
@@ -31,7 +30,6 @@ export function BottomPanel({
   onCloseTerminal,
   onCollapse
 }: {
-  projectPath: string
   /** Whether to draw the Run tab. false when no project is set (the panel opened from home) — run
    *  configurations are per project, there is nothing to run at home, and an empty Run tab looks broken.
    *  Defaults to true so existing callers with a project are unchanged. */
