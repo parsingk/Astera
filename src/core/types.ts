@@ -551,8 +551,8 @@ export interface CoreEvents {
   /** A desktop notification was clicked. Main has already raised the window; the renderer activates
    *  that session's tab, through the path the tab bar already uses (design doc §7). */
   'notify:activate': { sessionId: string }
-  'run:data': { projectPath: string; data: string } // run output
-  'run:status': RunStatus // run state change (running/exited)
+  'run:data': { runId: string; data: string } // run output, per run
+  'run:status': RunStatus // run state change (running/stopping/exited)
   'terminal:data': { id: string; data: string } // project terminal output
   'terminal:exit': { id: string; exitCode: number } // shell exited — the renderer removes that tab
   // The Jobs sidebar's whole snapshot, re-sent on every orchestration state change. Small enough to
@@ -869,8 +869,9 @@ export interface CoreApi {
     // calls buildCommand(config, context) so it shows exactly what run.start will actually run.
     list(projectPath: string): Promise<{
       configs: RunConfig[]
-      active: RunStatus | null
-      recent: string
+      // Every run of the project, finished ones included, in seat order (RunManager.listByProject).
+      // Output is fetched per run with run.output — not shipped here.
+      runs: RunStatus[]
       isSpringBoot: boolean
       // Whether RunTypePicker should show 'python'/'pytest' as detected (pyproject.toml, requirements.txt,
       // or a *.py file at the project root) — there is no seed config for either kind to key that off of.
@@ -883,12 +884,16 @@ export interface CoreApi {
     }>
     listActive(): Promise<RunStatus[]> // all active runs — for the count badge and the dropdown
     start(projectPath: string, configId: string): Promise<RunStatus>
-    stop(projectPath: string): Promise<void>
-    // 종료된 실행을 버린다 — 실행 탭의 ✕. 마지막 exitCode 와 최근 출력까지 함께 사라지므로 탭을
-    // 다시 열어도 지난 실행이 돌아오지 않는다. 도는 실행에는 아무 일도 하지 않는다(RunManager.dismiss).
-    dismiss(projectPath: string): Promise<void>
-    write(projectPath: string, data: string): void
-    resize(projectPath: string, cols: number, rows: number): void
+    // Everything below addresses a run by its id (RunStatus.runId), never by project — a project holds
+    // any number of runs.
+    stop(runId: string): Promise<void>
+    // Drops a finished run — the run list's ✕. Its exitCode and output go with it, so a re-read of
+    // run.list does not bring the row back. Does nothing to a live run (RunManager.dismiss).
+    dismiss(runId: string): Promise<void>
+    // The run's buffered output (last 200 KB) — what RunPanel replays when it mounts after the start
+    output(runId: string): Promise<string>
+    write(runId: string, data: string): void
+    resize(runId: string, cols: number, rows: number): void
     // Both return the **stored** list only — never passed through mergeConfigs, so the auto-detected
     // seeds are not in it. A caller that needs the display list has to refetch with run.list (which is
     // what App.tsx does; it discards these return values).

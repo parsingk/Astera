@@ -170,6 +170,7 @@ const api = {
     start: invoke('run.start'),
     stop: invoke('run.stop'),
     dismiss: invoke('run.dismiss'),
+    output: invoke('run.output'),
     write: fire('run.write'),
     resize: fire('run.resize'),
     saveConfig: invoke('run.saveConfig'),

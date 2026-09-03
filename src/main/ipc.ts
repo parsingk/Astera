@@ -40,7 +40,7 @@ import {
   type OrchServerDeps
 } from './orchestration/server'
 import { OrchRollTap } from './orchestration/rollTap'
-import { TaskValidator, ValidatorBusyError } from './orchestration/validator'
+import { TaskValidator } from './orchestration/validator'
 import {
   applyValidationResult,
   blockForValidation,
@@ -114,6 +114,7 @@ import { listPythonInterpreters } from './pythonScanner'
 import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
 import { loadRunConfigs, prepareRun } from './run/prepare'
+import { decideStart } from '../core/run/instances'
 import { createGithubPrs } from './githubPrs'
 import { createAccountUsage } from './accountUsage'
 import { createPullRequest, readCommits } from './prCreate'
@@ -572,9 +573,9 @@ export function registerIpc(
   core.run.onData = (e) => send('run:data', e)
   core.run.onStatus = (e) => {
     send('run:status', e)
-    // 검증 실행의 종료도 이 한 통로로 온다 — RunManager 의 onStatus 는 하나뿐이다.
-    // 검증이 아닌 실행의 종료도 흘러 들어가지만, TaskValidator 가 큐에 없는 cwd 는 무시한다.
-    if (e.status === 'exited') orchValidator?.onRunExit({ cwd: e.projectPath, exitCode: e.exitCode ?? 1 })
+    // A validation run's exit comes through this one channel too — RunManager has one onStatus.
+    // Every other run's exit flows in as well; TaskValidator ignores a runId that is not a queue head.
+    if (e.status === 'exited') orchValidator?.onRunExit({ runId: e.runId, exitCode: e.exitCode ?? 1 })
   }
   // project terminal output and exit to the renderer
   core.terminal.onData = (e) => send('terminal:data', e)
@@ -1210,15 +1211,14 @@ export function registerIpc(
             assertAllowedPath,
             t: (key, params) => t(core.lang, key as MessageKey, params)
           })
-          // RunManager 는 projectPath(=cwd) 하나에 하나만 돌린다. 사용자가 그 사이 Run 버튼으로
-          // 직접 채웠을 수 있다 — 그 충돌은 지나가는 것이므로, ALREADY_RUNNING 문자열을 잡아내는
-          // 대신 시작 전에 미리 살펴 ValidatorBusyError 로 구분한다(큐가 기다리게 한다).
-          if (core.run.get(cwd)?.status === 'running') throw new ValidatorBusyError(cwd)
-          // validation: 이 실행이 사용자의 것이 아니라는 표시. 실행 툴바와 전역 목록이 이것으로
-          // 라벨하고, run.stop 이 이것으로 markStopped 를 부른다(RunStatus.validation 참고).
-          core.run.start({ projectPath: cwd, projectName, config, command, validation: true })
+          // validation: marks this run as not the user's. The run list and the global badge label it,
+          // and run.stop routes markStopped by it (RunStatus.validation). Nothing waits for the user's
+          // own runs any more — a validation starts beside them; same-tree validations are serialised
+          // by TaskValidator's own queue.
+          const started = core.run.start({ projectPath: cwd, projectName, config, command, validation: true })
+          return { runId: started.runId }
         },
-        output: (cwd) => core.run.recentOutput(cwd).slice(-4000)
+        output: (runId) => core.run.recentOutput(runId).slice(-4000)
       },
       onSettled: async ({ taskId, exitCode, output }) => {
         const r = applyValidationResult(
@@ -3132,7 +3132,7 @@ export function registerIpc(
     }
   })
 
-  // run.list: stored configs unioned with the auto-seeded ones, plus the active status and recent output for reattaching
+  // run.list: stored configs unioned with the auto-seeded ones, plus the project's runs for reattaching
   ipcMain.handle('run.list', async (_e, projectPath: string) => {
     await assertAllowedPath(projectPath)
     const { configs, files, texts } = await loadRunConfigs({
@@ -3145,8 +3145,9 @@ export function registerIpc(
     const { hasPythonProject } = await import('../core/run/python')
     return {
       configs,
-      active: core.run.get(projectPath),
-      recent: core.run.recentOutput(projectPath),
+      // Every run of this project, finished ones included, in seat order. Output is not shipped here —
+      // three runs would be 600 KB on every list read — the panel asks per run through run.output.
+      runs: core.run.listByProject(projectPath),
       // whether the configuration form offers the Spring profile field (optionalFieldsFor)
       isSpringBoot: isSpringBootProject(texts),
       // Whether RunTypePicker promotes 'python'/'pytest' into its "detected" group — there is no seed
@@ -3633,22 +3634,29 @@ export function registerIpc(
       assertAllowedPath,
       t: (key, params) => t(core.lang, key as MessageKey, params)
     })
-    return core.run.start({ projectPath, projectName, config, command })
+    // What ▶ means for this configuration right now — restart its live run, or start another
+    // (core/run/instances.ts). Both branches get the freshly assembled command, so a restart picks up an
+    // edit made while the run was up.
+    const decision = decideStart(core.run.listByProject(projectPath), config)
+    const opts = { projectPath, projectName, config, command }
+    return decision.action === 'restart' ? core.run.restart(decision.runId, opts) : core.run.start(opts)
   })
 
-  ipcMain.handle('run.stop', async (_e, projectPath: string) => {
-    // 검증 실행을 사용자가 정지시킨 것은 "작업이 틀렸다"가 아니라 "증명하지 못했다"다 — 표시를
-    // 남겨 이어질 종료가 실패 정산이 아니라 Gate 로 가게 한다(TaskValidator.markStopped).
-    if (core.run.get(projectPath)?.validation) orchValidator?.markStopped(projectPath)
-    return core.run.stop(projectPath)
+  ipcMain.handle('run.stop', async (_e, runId: string) => {
+    // A user stopping a validation run is "could not prove it", not "the work is wrong" — leave the mark
+    // so the exit that follows goes to the Gate rather than being settled as a failure
+    // (TaskValidator.markStopped).
+    if (core.run.get(runId)?.validation) orchValidator?.markStopped(runId)
+    return core.run.stop(runId)
   })
-  // 실행 탭을 ✕ 로 닫았을 때. run.stop 과 같이 이미 있는 실행에 거는 조작이라 경로 가드를 두지
-  // 않는다 — 임의의 경로를 넘겨도 그 키의 실행이 없으면 아무 일도 일어나지 않는다.
-  ipcMain.handle('run.dismiss', async (_e, projectPath: string) => core.run.dismiss(projectPath))
-  ipcMain.on('run.write', (_e, projectPath: string, data: string) => core.run.write(projectPath, data))
-  ipcMain.on('run.resize', (_e, projectPath: string, cols: number, rows: number) =>
-    core.run.resize(projectPath, cols, rows)
-  )
+  // The run list's ✕. Like run.stop this acts on a run that already exists, so there is no path guard —
+  // an unknown id does nothing.
+  ipcMain.handle('run.dismiss', async (_e, runId: string) => core.run.dismiss(runId))
+  // A run's buffered output, for a panel that mounts after the run started. Same "existing run, no
+  // guard" reasoning as run.dismiss.
+  ipcMain.handle('run.output', async (_e, runId: string) => core.run.recentOutput(runId))
+  ipcMain.on('run.write', (_e, runId: string, data: string) => core.run.write(runId, data))
+  ipcMain.on('run.resize', (_e, runId: string, cols: number, rows: number) => core.run.resize(runId, cols, rows))
   // 저장 시점의 cwd 검사 — 규칙과 그 근거는 main/run/prepare.ts 의 resolveRunCwd 를 보라. 그 함수는
   // prepareRun 이 id 로 구성을 찾는 일까지 하므로 저장 경로에서는 쓸 수 없어, 같은 규칙을 여기 따로 둔다.
   const assertConfigCwd = async (projectPath: string, cwd: unknown): Promise<void> => {
