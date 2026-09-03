@@ -114,6 +114,7 @@ import { listPythonInterpreters } from './pythonScanner'
 import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
 import { loadRunConfigs, prepareRun } from './run/prepare'
+import { resolveConsolePath } from './run/resolveLink'
 import { decideStart } from '../core/run/instances'
 import { createGithubPrs } from './githubPrs'
 import { createAccountUsage } from './accountUsage'
@@ -3657,6 +3658,15 @@ export function registerIpc(
   // A run's buffered output, for a panel that mounts after the run started. Same "existing run, no
   // guard" reasoning as run.dismiss.
   ipcMain.handle('run.output', async (_e, runId: string) => core.run.recentOutput(runId))
+  // A console link's path, resolved against the run's own working directory and checked before the
+  // renderer is told it exists (main/run/resolveLink.ts). No path guard on the arguments themselves:
+  // the guard is applied to the resolved path inside, and an unknown run answers null.
+  ipcMain.handle('run.resolveLink', async (_e, runId: string, target: string) => {
+    const cwd = core.run.cwdOf(runId)
+    if (!cwd) return null
+    const p = await resolveConsolePath({ cwd, target, stat: (f) => fs.stat(f), assertAllowedPath })
+    return p ? { path: p } : null
+  })
   ipcMain.on('run.write', (_e, runId: string, data: string) => core.run.write(runId, data))
   ipcMain.on('run.resize', (_e, runId: string, cols: number, rows: number) => core.run.resize(runId, cols, rows))
   // 저장 시점의 cwd 검사 — 규칙과 그 근거는 main/run/prepare.ts 의 resolveRunCwd 를 보라. 그 함수는

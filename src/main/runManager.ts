@@ -13,6 +13,8 @@ interface LiveRun {
   status: RunStatus
   pty: PtyLike
   buffer: string
+  /** Where the PTY was started — what a relative path in the output is relative to (run.resolveLink) */
+  cwd: string
   /** Settles when pty.onExit fires — what restart() waits on before starting the replacement */
   exited: Promise<void>
   /** The restart in flight for this run, if any. A second ▶ during the stopping window joins it
@@ -102,7 +104,7 @@ export class RunManager {
     const exited = new Promise<void>((resolve) => {
       settle = resolve
     })
-    const live: LiveRun = { status, pty, buffer: '', exited }
+    const live: LiveRun = { status, pty, buffer: '', cwd, exited }
     this.runs.set(status.runId, live)
     this.onStatus?.({ ...status }) // Report the start as a status event too, so the list and the badge refresh
     pty.onData((data) => {
@@ -215,6 +217,12 @@ export class RunManager {
 
   recentOutput(runId: string): string {
     return this.runs.get(runId)?.buffer ?? ''
+  }
+
+  /** The directory the run's process started in, for resolving a relative path in its output.
+   *  Kept for finished runs like the output is; null for a run this manager does not hold. */
+  cwdOf(runId: string): string | null {
+    return this.runs.get(runId)?.cwd ?? null
   }
 
   stopAll(): void {

@@ -463,4 +463,23 @@ describe('RunManager', () => {
       expect(() => mgr.dismiss('nope')).not.toThrow()
     })
   })
+
+  // The console's link provider resolves a relative path against where the process actually ran
+  describe('cwdOf', () => {
+    it('is the configuration cwd when set, the project path otherwise', () => {
+      const { mgr } = setup()
+      const a = mgr.start(startOpts())
+      const b = mgr.start(startOpts({ config: { ...cfg, id: 'c2', cwd: 'D:/p/packages/api' } }))
+      expect(mgr.cwdOf(a.runId)).toBe('D:/p')
+      expect(mgr.cwdOf(b.runId)).toBe('D:/p/packages/api')
+    })
+
+    it('survives the exit and is null for an unknown run', () => {
+      const { mgr, spawned } = setup()
+      const st = mgr.start(startOpts())
+      spawned[0].pty.exit(0)
+      expect(mgr.cwdOf(st.runId)).toBe('D:/p')
+      expect(mgr.cwdOf('nope')).toBeNull()
+    })
+  })
 })
