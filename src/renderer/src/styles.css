@@ -1652,6 +1652,15 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    cut short */
 .pane-tabbar .tab { padding: 0 12px; flex: 0 1 auto; min-width: 84px; align-self: stretch; }
 .pane-tabbar .tab .tab-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* 이름 고치기. 라벨 자리를 그대로 차지해 탭 너비가 흔들리지 않게 한다 — 폭이 바뀌면 옆 탭들이
+   밀려서, 고치는 동안 탭 줄 전체가 움직인다 */
+.pane-tabbar .tab .tab-title-edit {
+  min-width: 0; flex: 1 1 auto; width: 100%;
+  font: inherit; color: var(--text);
+  background: var(--elevated); border: 1px solid var(--accent); border-radius: var(--radius-sm);
+  padding: 0 3px; margin: -1px 0;
+  outline: none;
+}
 /* Hides the horizontal scrollbar (10px globally) so it does not eat the vertical space of the tab row —
    the same convention as the terminal's xterm-viewport. Wheel and trackpad scrolling still work */
 .pane-tabbar .tabs::-webkit-scrollbar { height: 0; }

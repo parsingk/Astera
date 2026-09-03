@@ -625,6 +625,10 @@ export interface CoreApi {
     ack(id: string, bytes: number): void // backpressure driven by the xterm write callback
     kill(id: string): Promise<void>
     list(): Promise<SessionInfo[]>
+    /** Renames a session's tab. Resolves with the stored title — normalised, so an empty name comes
+     *  back as the project folder name — or null when the session is already gone. The same title is
+     *  Slack's message prefix and the desktop notification's title, so all three follow. */
+    rename(id: string, title: string): Promise<string | null>
     /** Reads the stored rolling and schedule settings — prefills the resume modal */
     resumeDefaults(sessionId: string): Promise<ResumeDefaults>
   }

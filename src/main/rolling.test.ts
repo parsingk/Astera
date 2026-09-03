@@ -61,7 +61,7 @@ function harness(overrides: Partial<RollingDeps> = {}): {
         accountId: opts.account.id,
         cwd: opts.cwd,
         status: 'running',
-        title: 'p',
+        title: opts.title ?? 'p', // 실제 spawn 과 같은 규칙 — 준 이름이 있으면 그것을 쓴다
         resumeSessionId: opts.resumeSessionId,
         rollAccountIds: opts.rollAccountIds,
         slackNotify: opts.slackNotify,
@@ -141,6 +141,28 @@ describe('RollingCoordinator', () => {
     expect(h.copied[0].dest).toBe(path.join('D:\\cfg', 'a2', 'projects', 'D--work-p', 'claude-sess.jsonl'))
     expect(h.spawned[0].resumeSessionId).toBe('claude-sess')
     expect(h.sent.some((s) => s.channel === 'session:rolled')).toBe(true)
+  })
+
+  // 사람이 탭 이름을 바꿔 둔 채로 한도에 걸리면, 계정을 갈아탄 뒤에도 그 이름이어야 한다.
+  // chain.liveInfo 는 spawn 이 낸 복사본이라 세션 쪽만 고쳐서는 여기까지 오지 않는다 — 그래서
+  // 이름 변경이 이 체인에도 밀려 들어오고, 그 값이 respawn 의 title 로 나간다.
+  it('이름을 바꾼 뒤 롤해도 새 이름으로 다시 뜬다', async () => {
+    const h = harness()
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.rename('s1', '결제 리팩터링')
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned[0].title).toBe('결제 리팩터링')
+  })
+
+  it('이름을 바꾸지 않았으면 원래 제목 그대로 롤한다', async () => {
+    const h = harness()
+    h.payloads.set('s1', payload(97))
+    h.coord.register(h.info1)
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.spawned[0].title).toBe(h.info1.title)
   })
 
   it('롤로 띄운 세션에 orchEnv를 실어 보낸다', async () => {

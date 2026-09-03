@@ -619,6 +619,7 @@ export const ko = {
   // WorkbenchTabs.tsx
   'session.tab.rollTooltip': '롤링: {chain}',
   // PaneGrid / pane context menu
+  'session.tab.rename': '이름 변경',
   'session.pane.splitRight': '우측 분할',
   'session.pane.splitDown': '하단 분할',
   'session.pane.unsplit': '분할 해제',

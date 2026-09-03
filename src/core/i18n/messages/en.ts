@@ -556,6 +556,7 @@ export const en: Record<keyof typeof ko, string> = {
   'session.sched.weekday.fri': 'Fri',
   'session.sched.weekday.sat': 'Sat',
   'session.tab.rollTooltip': 'Rolling: {chain}',
+  'session.tab.rename': 'Rename',
   'session.pane.splitRight': 'Split right',
   'session.pane.splitDown': 'Split down',
   'session.pane.unsplit': 'Unsplit',

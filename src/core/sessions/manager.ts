@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { Account, Provider, SessionInfo, ScheduleConfig } from '../types'
+import { defaultSessionTitle, normalizeSessionTitle } from './title'
 import {
   descriptorOf,
   isAmbientDir,
@@ -218,9 +219,10 @@ export class SessionManager {
       accountId: opts.account.id,
       cwd: opts.cwd,
       status: 'running',
-      // ?? and not ||: with || an empty-string title would silently turn into cwd, blurring "no title
-      // was given" together with "an empty title was given"
-      title: opts.title ?? (path.basename(opts.cwd) || opts.cwd),
+      // ?? and not ||: with || an empty-string title would silently turn into the folder name,
+      // blurring "no title was given" together with "an empty title was given". The default itself
+      // lives in ./title so spawn and rename cannot disagree about what a nameless session is called.
+      title: opts.title ?? defaultSessionTitle(opts.cwd),
       resumeSessionId: opts.resumeSessionId,
       rollAccountIds: opts.rollAccountIds,
       rollPrompt: opts.rollPrompt,
@@ -335,6 +337,22 @@ export class SessionManager {
 
   kill(id: string): void {
     this.sessions.get(id)?.pty.kill()
+  }
+
+  /** Renames a session, returning the stored title — normalised, so an empty name comes back as the
+   *  project folder name rather than an empty tab.
+   *
+   *  One assignment is the whole feature: the tab label, Slack's message prefix and the desktop
+   *  notification's title all read `SessionInfo.title`, so they follow from here without any of them
+   *  learning about renaming.
+   *
+   *  An unknown id answers null instead of throwing. `list()` includes exited sessions, so a tab can
+   *  outlive its process and a rename can race a tab closing; neither is worth an exception. */
+  rename(id: string, title: string): string | null {
+    const live = this.sessions.get(id)
+    if (!live) return null
+    live.info.title = normalizeSessionTitle(title, live.info.cwd)
+    return live.info.title
   }
 
   list(): SessionInfo[] {

@@ -86,6 +86,9 @@ export interface RollingDeps {
     rollAccountIds?: string[]
     slackNotify?: boolean
     bypassPermissions?: boolean
+    /** 탭 이름. 롤은 같은 작업이 계정만 바꿔 이어지는 것이라 사람이 붙인 이름을 넘겨준다 —
+     *  넘기지 않으면 spawn 이 폴더 이름으로 되돌린다 */
+    title?: string
     /** astera CLI 환경. 배선이 넘긴다 — 없으면 세션은 CLI 없이 뜬다 */
     orchEnv?: { cliPath: string; infoPath: string; skillsPath: string }
   }): SessionInfo
@@ -357,6 +360,16 @@ export class RollingCoordinator {
    *  frozen snapshot. Nothing intervenes immediately — only the time is recorded, because a notice raised
    *  after 60 idle seconds may catch the user just as they start typing. The actual verdict is made by
    *  idleNudgeCheck on the tick. */
+  /** The tab was renamed. Updates the chain's copy so the next roll respawns under the new name.
+   *
+   *  `liveInfo` is a snapshot from spawn, and the respawn passes `liveInfo.title` — without this the
+   *  name a person gave the tab would quietly become the folder name again the moment a usage limit
+   *  moved the work to another account. */
+  rename(sessionId: string, title: string): void {
+    const chain = this.chains.get(sessionId)
+    if (chain) chain.liveInfo = { ...chain.liveInfo, title }
+  }
+
   onHookEvent(sessionId: string, payload: unknown): void {
     const chain = this.chains.get(sessionId)
     if (!chain || chain.disposed) return
@@ -1186,6 +1199,10 @@ export class RollingCoordinator {
         rollAccountIds: chain.accountIds,
         slackNotify: chain.liveInfo.slackNotify, // Slack notifications are kept per chain
         bypassPermissions: chain.liveInfo.bypassPermissions, // bypass is kept per chain
+        // The tab's name is kept per chain too. A roll is the same piece of work continuing on
+        // another account, so a name a person gave it must not be traded back for the folder name
+        // halfway through — spawn's default would do exactly that if this were omitted.
+        title: chain.liveInfo.title,
         orchEnv: this.deps.orchEnv?.()
       })
       this.chains.delete(oldId)

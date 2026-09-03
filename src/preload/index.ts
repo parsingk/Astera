@@ -64,6 +64,7 @@ const api = {
     ack: fire('sessions.ack'),
     kill: invoke('sessions.kill'),
     list: invoke('sessions.list'),
+    rename: invoke('sessions.rename'),
     resumeDefaults: invoke('sessions.resumeDefaults')
   },
   history: {

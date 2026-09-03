@@ -2803,6 +2803,24 @@ export function registerIpc(
     return core.sessions.kill(id)
   })
   ipcMain.handle('sessions.list', () => core.sessions.list())
+  // Renaming a tab. The renderer holds the sessions list it draws from, so it applies the returned
+  // title itself — no broadcast, because the rename starts there and this app has one window.
+  //
+  // **This is the list of everything that must hear about a rename.** `SessionManager.spawn` returns
+  // `{ ...info }`, so every component that was handed a SessionInfo holds a snapshot taken when the
+  // session started; renaming the session alone reaches none of them. The desktop notifier is absent
+  // on purpose — it looks the session up fresh on every notification, so it needs no telling. Anything
+  // added later that keeps a SessionInfo belongs here too.
+  ipcMain.handle('sessions.rename', (_e, id: string, title: string) => {
+    if (typeof id !== 'string' || typeof title !== 'string')
+      throw new Error(`INVALID_RENAME: ${String(id)}`)
+    const next = core.sessions.rename(id, title)
+    if (next === null) return null
+    slack?.notifier.rename(id, next) // the prefix on every later message in the thread
+    rolling?.rename(id, next) // so a roll respawns under the new name
+    codexRolling?.rename(id, next)
+    return next
+  })
   // The resume modal reads the stored rolling and schedule settings to seed its checkboxes.
   // This is read-only — nothing is restored here. What gets enabled is settled by the modal and passed
   // down as spawn opts.

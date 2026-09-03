@@ -319,6 +319,20 @@ export class SlackNotifier {
   }
 
   /** Called by ipc right after a slackNotify session spawns — starts tracking */
+  /** The tab was renamed. Updates this record's copy so later messages carry the new prefix.
+   *
+   *  A copy is what makes this necessary: `SessionManager.spawn` returns `{ ...info }`, so the record
+   *  below is a snapshot taken when the session started and renaming the session alone never reaches
+   *  it. The thread's root message keeps the name it was posted under — it is a record of what the
+   *  session was called when it began, and editing it is not something a webhook transport can do.
+   *
+   *  Unknown ids are ignored: a session with Slack off has no record, and every rename is offered to
+   *  every sink. */
+  rename(sessionId: string, title: string): void {
+    const record = this.records.get(sessionId)
+    if (record) record.info = { ...record.info, title }
+  }
+
   register(info: SessionInfo): void {
     if (!info.slackNotify) return
     const provider = this.providerFor(info.accountId)

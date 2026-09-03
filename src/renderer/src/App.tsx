@@ -352,6 +352,22 @@ export default function App(): React.JSX.Element {
   const [dragTabId, setDragTabId] = useState<string | null>(null)
   // Position of the tab context menu
   const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null)
+  /** 이름을 고치고 있는 세션 탭. 더블클릭과 우클릭 메뉴가 같은 자리를 연다 */
+  const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
+  /** 이름 고치기가 끝났다. title 이 null 이면 취소다.
+   *
+   *  main 이 정규화한 값을 돌려주므로(공백만 남기면 폴더 이름) 화면은 그 값을 받아 적는다. 이름은
+   *  탭 라벨이자 Slack 메시지 접두사이자 알림 제목이라, 무엇이 저장됐는지는 main 이 정한다. */
+  const endTabRename = (tabId: string, title: string | null): void => {
+    setRenamingTabId(null)
+    if (title === null) return
+    const ref = parseTab(tabId)
+    if (ref?.kind !== 'session') return
+    void window.api.sessions.rename(ref.id, title).then((next) => {
+      if (next === null) return // 그사이 세션이 사라졌다
+      setSessions((prev) => prev.map((s) => (s.id === ref.id ? { ...s, title: next } : s)))
+    })
+  }
   // 지금 보고 있는 탭은 트리가 정한다 — 활성 페인의 활성 탭. 세 종류가 한 트리에 있으므로 별도의
   // activeTabId 상태를 두면 트리와 어긋난다(다른 페인의 탭을 클릭하거나 페인 포커스를 옮기는 순간
   // 갈라진다). 파일 탭 id는 전부터 `file:<path>` 형식이었으므로 파일 관련 코드는 그대로 쓴다
@@ -3208,6 +3224,9 @@ export default function App(): React.JSX.Element {
                 에디터는 이 안의 페인 슬롯에 있다 */}
             <div className="session-view">
               <PaneGrid
+                renamingTabId={renamingTabId}
+                onRenameStart={setRenamingTabId}
+                onRenameEnd={endTabRename}
                 layout={layout}
                 activePaneId={activePaneId}
                 sessions={sessions}
@@ -3819,7 +3838,19 @@ export default function App(): React.JSX.Element {
               setLayout(res.root)
               setActivePaneId(res.paneId)
             }
+            const isSession = parseTab(tid)?.kind === 'session'
             return [
+              // 세션 탭에만. 파일 탭의 라벨은 파일 이름이라 여기서 바꿀 것이 아니고, 기록 탭의
+              // 라벨은 그 기록의 요청문이다. 더블클릭과 같은 자리를 연다.
+              ...(isSession
+                ? ([
+                    {
+                      label: t('session.tab.rename'),
+                      onSelect: () => setRenamingTabId(tid)
+                    },
+                    'separator'
+                  ] as MenuItem[])
+                : []),
               {
                 label: t('session.pane.splitRight'),
                 disabled: cantSplit,

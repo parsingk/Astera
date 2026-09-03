@@ -56,6 +56,35 @@ function setup(highWater = 100, lowWater = 20, homeDir?: string) {
 }
 
 describe('SessionManager', () => {
+  // 탭 라벨은 SessionInfo.title 하나를 읽고, Slack 접두사와 데스크톱 알림 제목도 같은 값을 읽는다.
+  // 그래서 이름 변경은 여기 한 곳만 갱신하면 세 자리가 함께 따라온다.
+  describe('rename', () => {
+    it('제목을 바꾸고 바뀐 값을 돌려준다', () => {
+      const { manager } = setup()
+      const info = manager.spawn({ account, cwd: process.cwd() })
+      expect(manager.rename(info.id, '  결제  리팩터링 ')).toBe('결제 리팩터링')
+      expect(manager.list().find((s) => s.id === info.id)?.title).toBe('결제 리팩터링')
+    })
+
+    // 입력칸을 비우는 것이 기본 이름을 되찾는 유일한 방법이다
+    it('빈 이름은 프로젝트 폴더 이름으로 되돌린다', () => {
+      const { manager } = setup()
+      const info = manager.spawn({ account, cwd: process.cwd() })
+      const dflt = info.title
+      manager.rename(info.id, '결제')
+      expect(manager.rename(info.id, '   ')).toBe(dflt)
+      expect(manager.list().find((s) => s.id === info.id)?.title).toBe(dflt)
+    })
+
+    // 이미 죽은 세션의 탭도 목록에 남아 있으므로(list 는 exited 도 낸다) 부를 수 있는 자리다.
+    // 없는 id 는 조용히 아무것도 하지 않는다 — 탭이 사라지는 것과 이름 변경이 겹칠 수 있다.
+    it('모르는 세션 id 는 조용히 무시한다', () => {
+      const { manager } = setup()
+      expect(manager.rename('nope', '결제')).toBeNull()
+      expect(manager.list()).toHaveLength(0)
+    })
+  })
+
   it('spawn은 CLAUDE_CONFIG_DIR를 주입하고 running 세션을 만든다', () => {
     const { manager, spawned } = setup()
     const info = manager.spawn({ account, cwd: process.cwd() })
