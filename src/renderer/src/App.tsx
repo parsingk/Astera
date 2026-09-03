@@ -1220,8 +1220,10 @@ export default function App(): React.JSX.Element {
       selectWorkbenchTabRef.current(id)
       if (at) {
         requestReveal(id, at)
-        // A line number is a source line; the preview has no such line
-        if (isMarkdownPath(path)) setMdMode(id, 'editor')
+        // A line number is a source line; the preview has no such line. The raw setter, not
+        // setMdMode — that one also writes MD_MODE_KEY, and following a link is navigation, not a
+        // preference the user expressed for every future markdown file.
+        if (isMarkdownPath(path)) setMdModes((prev) => ({ ...prev, [id]: 'editor' }))
       }
       return
     }
