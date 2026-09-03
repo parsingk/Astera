@@ -3391,6 +3391,7 @@ export default function App(): React.JSX.Element {
                     onStopRun={runStop}
                     onRerun={(configId) => runStart(configId)}
                     onDismissRun={runDismiss}
+                    onOpenFile={(path, at) => openFile(path, at.line === undefined ? undefined : { line: at.line, col: at.col })}
                     terminals={terminals}
                     activeTab={bottomTabShown}
                     onSelectTab={setBottomTab}
