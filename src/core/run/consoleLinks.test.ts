@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { findConsoleLinks, joinWrappedLine, bufferRangeOf } from './consoleLinks'
+import { findConsoleLinks, joinWrappedLine, bufferRangeAt } from './consoleLinks'
 
 const only = (line: string) => {
   const links = findConsoleLinks(line)
@@ -107,12 +107,35 @@ describe('joinWrappedLine', () => {
   })
 })
 
-describe('bufferRangeOf', () => {
-  // Offsets are into the joined text; rows are `cols` wide; xterm cells are 1-based and end is inclusive
-  it('a range inside the first row', () => {
-    expect(bufferRangeOf(10, 8, 2, 5)).toEqual({ start: { x: 3, y: 11 }, end: { x: 5, y: 11 } })
+describe('bufferRangeAt', () => {
+  // One entry per character of the joined text — the provider builds it from the real cells, so a
+  // wide glyph occupies one entry and two columns
+  const cells = [
+    { x: 1, y: 11 },
+    { x: 2, y: 11 },
+    { x: 4, y: 11 }, // the character at index 1 was two columns wide
+    { x: 1, y: 12 }, // the line wrapped here
+    { x: 2, y: 12 }
+  ]
+
+  it('maps a range inside one row', () => {
+    expect(bufferRangeAt(cells, 0, 2)).toEqual({ start: { x: 1, y: 11 }, end: { x: 2, y: 11 } })
   })
-  it('a range that wraps onto the next row', () => {
-    expect(bufferRangeOf(10, 8, 6, 11)).toEqual({ start: { x: 7, y: 11 }, end: { x: 3, y: 12 } })
+
+  it('maps a range that wraps onto the next row', () => {
+    expect(bufferRangeAt(cells, 2, 5)).toEqual({ start: { x: 4, y: 11 }, end: { x: 2, y: 12 } })
+  })
+
+  it('a single character is one cell', () => {
+    expect(bufferRangeAt(cells, 2, 3)).toEqual({ start: { x: 4, y: 11 }, end: { x: 4, y: 11 } })
+  })
+
+  // Defensive: the text and the table should never disagree, but a dead provider would be worse
+  it('an out-of-range offset clamps to the last cell', () => {
+    expect(bufferRangeAt(cells, 9, 12)).toEqual({ start: { x: 2, y: 12 }, end: { x: 2, y: 12 } })
+  })
+
+  it('an empty table is the first cell', () => {
+    expect(bufferRangeAt([], 0, 3)).toEqual({ start: { x: 1, y: 1 }, end: { x: 1, y: 1 } })
   })
 })

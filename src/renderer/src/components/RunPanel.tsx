@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon, type ISearchOptions } from '@xterm/addon-search'
 import '@xterm/xterm/css/xterm.css'
 import { xtermThemeOf } from '../../../core/theme/apply'
-import { bufferRangeOf, findConsoleLinks, joinWrappedLine } from '../../../core/run/consoleLinks'
+import { bufferRangeAt, findConsoleLinks, joinWrappedLine, type CharCell } from '../../../core/run/consoleLinks'
 import { pinCursorBlinkOff } from '../lib/cursorBlink'
 import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
@@ -111,7 +111,7 @@ export function RunPanel({
     const provider = term.registerLinkProvider({
       provideLinks: (y, callback) => {
         const buf = term.buffer.active
-        // Full-width rows, so an offset in the joined text maps back to a cell by `cols`
+        // Untrimmed rows, so `text`'s length matches the cell table built below (which also doesn't trim)
         const getLine = (row: number): { text: string; isWrapped: boolean } | undefined => {
           const l = buf.getLine(row)
           return l ? { text: l.translateToString(false), isWrapped: l.isWrapped } : undefined
@@ -122,10 +122,28 @@ export function RunPanel({
           callback(undefined)
           return
         }
-        const cols = term.cols
+        // Where each character of `text` sits. Walked from the cells rather than computed from `cols`:
+        // translateToString emits one entry per glyph and a wide glyph occupies two columns, so a CJK
+        // row's string is shorter than the row and arithmetic would place the range left of the text.
+        // The walk mirrors translateToString's own: a cell whose width is 0 is the second half of a
+        // wide glyph and contributes no character.
+        const cells: CharCell[] = []
+        for (let row = startY; ; row += 1) {
+          const line = buf.getLine(row)
+          if (!line) break
+          for (let x = 0; x < line.length; x += 1) {
+            const cell = line.getCell(x)
+            if (!cell) break
+            const width = cell.getWidth()
+            if (width === 0) continue // the trailing half of a wide glyph
+            cells.push({ x: x + 1, y: row + 1 })
+          }
+          const next = buf.getLine(row + 1)
+          if (!next || !next.isWrapped) break
+        }
         void Promise.all(
           found.map(async (l): Promise<ILink | null> => {
-            const range = bufferRangeOf(startY, cols, l.start, l.end)
+            const range = bufferRangeAt(cells, l.start, l.end)
             if (l.kind === 'url') {
               return { range, text: l.url, activate: () => void window.api.system.openExternal(l.url) }
             }

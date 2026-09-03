@@ -83,9 +83,8 @@ export function findConsoleLinks(line: string): ConsoleLink[] {
 
 /** The logical line a buffer row belongs to. xterm marks a row that continues the previous one
  *  `isWrapped`; this walks up to the row where the line began and down to where it ends. `text` is
- *  the rows joined as given (the provider passes full-width rows, so offsets map back to cells by
- *  `cols`); `startY` is the first row, for bufferRangeOf. A getter, not an array, so only the rows
- *  touched are read. */
+ *  the rows joined as given; `startY` is the first row, for building the cell table (see
+ *  bufferRangeAt). A getter, not an array, so only the rows touched are read. */
 export function joinWrappedLine(
   getLine: (y: number) => { text: string; isWrapped: boolean } | undefined,
   y: number
@@ -107,17 +106,26 @@ export function joinWrappedLine(
   return { text, startY }
 }
 
-/** Maps a [start, end) offset range in a joined line back to xterm cells. Rows are `cols` wide (the
- *  provider joins full-width rows); xterm's cells are 1-based and the range end is inclusive. */
-export function bufferRangeOf(
-  startY: number,
-  cols: number,
+/** Where each character of a joined line sits on screen — 1-based cells, as xterm's IBufferRange
+ *  wants them. The provider builds this by walking the real cells (see RunPanel), because a
+ *  character is not a column: xterm's translateToString emits one entry per glyph while the column
+ *  cursor advances by the glyph's width, so an 80-column row of CJK yields a 40-character string and
+ *  no arithmetic over `cols` can place it. */
+export interface CharCell {
+  x: number
+  y: number
+}
+
+/** The buffer range covering `[start, end)` of the joined text, as an xterm IBufferRange (1-based,
+ *  `end` inclusive). `cells` is one entry per character of that same text. A range whose start is
+ *  past the table's end — the text and the table disagreeing, which should not happen — collapses to
+ *  the last cell rather than throwing: a misplaced underline is better than a dead provider. */
+export function bufferRangeAt(
+  cells: readonly CharCell[],
   start: number,
   end: number
-): { start: { x: number; y: number }; end: { x: number; y: number } } {
-  const last = Math.max(start, end - 1)
-  return {
-    start: { x: (start % cols) + 1, y: startY + Math.floor(start / cols) + 1 },
-    end: { x: (last % cols) + 1, y: startY + Math.floor(last / cols) + 1 }
-  }
+): { start: CharCell; end: CharCell } {
+  if (cells.length === 0) return { start: { x: 1, y: 1 }, end: { x: 1, y: 1 } }
+  const at = (i: number): CharCell => cells[Math.min(Math.max(i, 0), cells.length - 1)]
+  return { start: at(start), end: at(Math.max(start, end - 1)) }
 }
