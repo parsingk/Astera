@@ -57,19 +57,27 @@ describe('StatusLineManager 훅 주입', () => {
     expect(c.hookOutPath?.replace(/\\/g, '/')).toContain('hook-events/sess-1.jsonl')
   })
 
-  it('기본 설정 파일도 Stop·Notification 훅을 갖는다', async () => {
+  it('기본 설정 파일은 Notification 훅을 갖는다', async () => {
     const settings = JSON.parse(await fs.readFile(path.join(dir, 'astera-statusline-settings.json'), 'utf8'))
     expect(settings.statusLine.command).toContain('astera-statusline-capture.cjs')
-    expect(settings.hooks.Stop[0].hooks[0].command).toContain('astera-hook-capture.cjs')
     expect(settings.hooks.Notification[0].hooks[0].command).toContain('astera-hook-capture.cjs')
   })
 
-  // 원래 회귀 가드가 지키려던 것은 "훅이 없다"가 아니라 "도구 호출마다 프로세스가 뜨지 않는다"
-  // 였다. Stop 은 턴당 한 번, Notification 은 프롬프트가 뜰 때뿐이라 값이 싸다. 비싼 쪽은 도구
-  // 짝이고, 그건 여전히 Slack·롤링 세션에만 들어간다.
-  it('기본 설정 파일은 도구 훅을 갖지 않는다 (회귀 가드)', async () => {
+  // 원래 회귀 가드가 지키려던 것은 "훅이 없다"가 아니라 "읽는 사람이 없는 훅에 프로세스를 쓰지
+  // 않는다"였다. Notification 은 데스크톱 알림이 어느 세션에서든 읽으므로 값을 한다. 나머지
+  // 셋은 slack.ts 만 읽고, Slack 세션은 도구 훅 파일을 따로 받으므로 여기 있을 이유가 없다 —
+  // Stop 은 턴이 끝날 때마다, 도구 짝은 도구 호출마다 프로세스를 하나씩 띄운다.
+  it('기본 설정 파일은 Slack 만 읽는 훅을 갖지 않는다 (회귀 가드)', async () => {
     const settings = JSON.parse(await fs.readFile(path.join(dir, 'astera-statusline-settings.json'), 'utf8'))
+    expect(settings.hooks.Stop).toBeUndefined()
     expect(settings.hooks.PreToolUse).toBeUndefined()
     expect(settings.hooks.PostToolUse).toBeUndefined()
+  })
+
+  // 반대쪽 절반 — Slack 세션은 Stop 을 받아야 한다. 턴 요약이 그 훅에서 온다.
+  it('도구 훅 설정 파일은 Stop 도 갖는다', async () => {
+    const settings = JSON.parse(await fs.readFile(path.join(dir, 'astera-hooks-settings.json'), 'utf8'))
+    expect(settings.hooks.Stop[0].hooks[0].command).toContain('astera-hook-capture.cjs')
+    expect(settings.hooks.Notification[0].hooks[0].command).toContain('astera-hook-capture.cjs')
   })
 })

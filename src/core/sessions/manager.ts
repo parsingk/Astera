@@ -151,10 +151,10 @@ export class SessionManager {
     // statusLine injection: --settings installs a session-scoped statusLine, and the capture script
     // records context_window and rate_limits into outPath. When ASTERA_STATUSLINE_ORIGINAL is set the
     // existing HUD is chained. statusLine is only injected for providers that use that mechanism.
-    // The Stop and Notification hooks now go into every session (see StatusLineManager.spawnConfig) —
-    // desktop notifications are offered for any session, and gating them here is what left that
-    // feature inert. What is still gated is the per-tool-call capture pair, which only Slack's
-    // pending-question reporting reads and which fires often enough to be worth limiting.
+    // The Notification hook now goes into every session (see StatusLineManager.spawnConfig) — the
+    // desktop notification for a choice or an approval is offered for any session, and gating it here
+    // is what left that feature inert. What is still gated is what only slack.ts reads: the turn
+    // summary's Stop, and the per-tool-call capture pair.
     // Rolling is kept in the condition even though its idle nudge only needs the Notification hook:
     // its own tap reads the same pending-tool captures when deciding what a stalled screen shows.
     // SlackNotifier.register gates separately on info.slackNotify, so Slack traffic does not grow.

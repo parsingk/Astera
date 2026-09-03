@@ -42,8 +42,9 @@ process.stdin.on('end', finish)
 process.stdin.on('error', finish)
 `
 
-// Hook capture script (node): Claude runs it as the Stop and Notification hooks → it appends the stdin payload (JSON)
-// as one line to ASTERA_HOOK_OUT (a per-session jsonl). With that env unset it does nothing.
+// Hook capture script (node): Claude runs it as the Notification hook — and, for a Slack session, as
+// Stop and the tool pair too — and it appends the stdin payload (JSON) as one line to
+// ASTERA_HOOK_OUT (a per-session jsonl). With that env unset it does nothing.
 const HOOK_CAPTURE_SCRIPT = `const fs = require('fs')
 const out = process.env.ASTERA_HOOK_OUT
 const chunks = []
@@ -122,16 +123,16 @@ export class StatusLineManager {
     // Hooks from --settings merge with the account's global settings.json hooks and both run
     // (measured). The global settings stay untouched.
     //
-    // Stop and Notification go into EVERY session, not just Slack-notifying or rolling ones. They are
-    // how the app learns that a session finished a turn or stopped for input, and desktop
-    // notifications are offered for any session — two of the four events ship on. Gating them the way
-    // the tool hooks are gated is what made the notification feature inert for an ordinary session:
-    // the flag was on, the sink had no per-session gate, and the event simply never arrived.
+    // Notification goes into EVERY session, not just Slack-notifying or rolling ones. It is how the
+    // app learns a session has stopped for a choice or an approval, and the desktop notification for
+    // that is offered for any session and ships on. Gating it the way the hooks below are gated is
+    // what made the notification feature inert for an ordinary session: the flag was on, the sink had
+    // no per-session gate, and the event simply never arrived.
     //
-    // The cost is one node process when a turn ends and one when a prompt appears. That is not the
-    // cost the tool hooks below were carefully limited for — those fire per tool call.
-    const sessionHooks = {
-      Stop: [{ hooks: [{ type: 'command', command: hookCmd }] }],
+    // The cost is one node process when a prompt appears. The hooks below are kept out of here
+    // because nothing but slack.ts reads them, and a Slack session takes the other file anyway —
+    // Stop would spend a process at the end of every turn for an event with no reader.
+    const notificationHook = {
       Notification: [{ hooks: [{ type: 'command', command: hookCmd }] }]
     }
     const settings = {
@@ -141,15 +142,17 @@ export class StatusLineManager {
         command: `"${this.nodePath.replace(/\\/g, '/')}" "${this.capturePath.replace(/\\/g, '/')}"`,
         padding: 0
       },
-      hooks: sessionHooks
+      hooks: notificationHook
     }
     await fs.writeFile(this.settingsFile, JSON.stringify(settings, null, 2), 'utf8')
-    // Slack's pending-question bookkeeping on top: the tool-call pair, which fires per tool call and
-    // is therefore matcher-limited. Only a Slack-notifying or rolling session pays for it.
+    // What only slack.ts reads, on top: the turn summary's Stop, and the pending-question pair, which
+    // fires per tool call and is therefore matcher-limited. Only a Slack-notifying or rolling session
+    // pays for these.
     const hooksSettings = {
       ...settings,
       hooks: {
-        ...sessionHooks,
+        ...notificationHook,
+        Stop: [{ hooks: [{ type: 'command', command: hookCmd }] }],
         // Captures what the waiting screen shows (the question and its options, the tool awaiting approval and its
         // arguments) **before** the tool runs. The transcript cannot supply it — Claude Code does not flush assistant
         // messages while it waits for user interaction, so while a question or approval prompt is on screen that
@@ -189,9 +192,10 @@ export class StatusLineManager {
   /** Injection info for a session spawn. originalCommand is the existing statusLine from the account's
    *  settings.json (the chain target).
    *
-   *  Every session gets the Stop and Notification hooks and its own hookOutPath — that is what desktop
-   *  notifications are built on, and they are offered for any session. `opts.toolHooks` adds the
-   *  per-tool-call capture pair on top, which only Slack's pending-question reporting needs. */
+   *  Every session gets the Notification hook and its own hookOutPath — that is what the desktop
+   *  notification for a choice or an approval is built on, and it is offered for any session.
+   *  `opts.toolHooks` adds what only slack.ts reads: the turn summary's Stop and the per-tool-call
+   *  capture pair. */
   spawnConfig(sessionId: string, account: Account, opts?: { toolHooks?: boolean }): StatusLineSpawn {
     const toolHooks = opts?.toolHooks === true
     return {
