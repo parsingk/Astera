@@ -132,7 +132,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.notifications.limitWaiting': 'Waiting on a limit',
   'settings.notifications.limitWaitingHint': 'Sent when the session stops on a usage limit.',
   'settings.notifications.accountSwitched': 'Account switched',
-  'settings.notifications.accountSwitchedHint': 'The work is proceeding. Frequent with several sessions running.',
+  'settings.notifications.accountSwitchedHint': 'Sent when rolling moves the session to another account.',
   'settings.notifications.saveFailed': 'Could not save the notification settings: {detail}',
   'worktree.push.aheadUnknown': 'This branch has unpushed commits',
   'worktree.push.createPr': 'Create pull request',

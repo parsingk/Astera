@@ -141,7 +141,7 @@ export const ko = {
   'settings.notifications.limitWaiting': '한도에 걸려 멈출 때',
   'settings.notifications.limitWaitingHint': '한도에 걸렸을 때 알림을 보냅니다.',
   'settings.notifications.accountSwitched': '계정을 전환할 때',
-  'settings.notifications.accountSwitchedHint': '작업은 계속 진행됩니다. 세션이 여럿이면 잦습니다.',
+  'settings.notifications.accountSwitchedHint': '계정을 전환할 때 알림을 보냅니다.',
   'settings.notifications.saveFailed': '알림 설정을 저장하지 못했습니다: {detail}',
   'worktree.push.aheadUnknown': '푸시하지 않은 커밋이 있습니다',
   'worktree.push.createPr': 'PR 만들기',
