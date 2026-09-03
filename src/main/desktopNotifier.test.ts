@@ -38,7 +38,7 @@ const roll = (over: Partial<RollStateEvent> = {}): RollStateEvent => ({
   ...over
 })
 
-describe('DesktopNotifier — the four events', () => {
+describe('DesktopNotifier — the three events', () => {
   it('input needed fires on a Notification hook, and is on by default', () => {
     const h = harness()
     // A payload with no notification_type at all and no idle wording is an unknown kind — it errs
@@ -64,7 +64,7 @@ describe('DesktopNotifier — the four events', () => {
     expect(on.shown[0].body).toContain('spare')
   })
 
-  it('each of the four is silent with its own flag off', () => {
+  it('each of the three is silent with its own flag off', () => {
     const h = harness({
       inputNeeded: false,
       limitWaiting: false,

@@ -11,8 +11,6 @@ export const usageLevel = (percent: number): 'ok' | 'warn' | 'crit' =>
 /** A percentage is a CSS width here, and the API's figure is not this module's to trust. */
 export const clampPercent = (n: number): number => Math.max(0, Math.min(100, n))
 
-/** Both components below need this same check before they draw anything — kept in one place so the
- *  two copies cannot drift apart (a hover target with nothing in it, or an overlay with no meter). */
 /** Is there anything to draw? Shared so the meter, the detail and the row that decides whether it
  *  is clickable at all cannot drift apart about what "empty" means. */
 export const hasUsage = (u: AccountUsage | undefined): u is AccountUsage =>
@@ -32,7 +30,7 @@ const track = (w: RateLimitWindow | null): React.JSX.Element => (
  * meter already uses, so the label loses nothing.
  *
  * The top track is always the 5-hour window and the bottom always weekly. The order never varies: the
- * overlay names them, so it has to be learned exactly once.
+ * detail names them, so it has to be learned exactly once.
  *
  * Nothing at all is drawn when there is no reading — a Codex account, an account that is not logged
  * in, and a reading discarded past its reset all arrive here as `undefined`. A dash was considered
@@ -54,12 +52,13 @@ export function AccountUsageMeter({
 }
 
 /**
- * The hover detail (design doc §5.1).
+ * The detail a row opens (design doc §5.1).
  *
- * It overlays the rows beneath it rather than pushing them down, so the list's height never changes
- * and a row is never displaced while the pointer is travelling toward it — the failure that made a
- * second permanent line and a naive expand-in-place both unacceptable. The overlaying is CSS
- * (`position: absolute` inside the row); this component only decides what is in it.
+ * It sits in flow on its own line inside the row, one row open at a time. It was an absolute overlay
+ * first, so that a row could not grow under a travelling pointer and push the row someone was aiming
+ * at out from under them — the failure that made a second permanent line and a naive
+ * expand-in-place both unacceptable. Opening on a click rather than on hover removes that failure
+ * instead of working around it: the pointer is already still, and already on the row it chose.
  *
  * Two lines, one per window, plus a third when the reading is remembered. There is no animation:
  * there is nothing here that a transition clarifies.

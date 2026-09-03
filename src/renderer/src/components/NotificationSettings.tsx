@@ -4,7 +4,7 @@ import type { MessageKey } from '../../../core/i18n'
 import { useI18n } from '../i18n/I18nProvider'
 import { toast } from '../lib/toast'
 
-/** The four events, in the order §6's table lists them: the two that mean *the work has stopped*
+/** The three events, in the order §6's table lists them: the two that mean *the work has stopped*
  *  first, then the one that means *it is proceeding*. That order is the explanation — a person
  *  scanning the list should meet the two they almost certainly want before the one they may not. */
 const EVENTS = [

@@ -42,7 +42,7 @@ export interface DesktopNotifierDeps {
 }
 
 /**
- * The desktop sink for the four notification events (design doc §6).
+ * The desktop sink for the three notification events (design doc §6).
  *
  * **Nothing new is detected here.** It branches at the same two points SlackNotifier does — the
  * HookEventWatcher callback and the rolling state publisher — on the same inputs. That is most of why
@@ -96,7 +96,7 @@ export class DesktopNotifier {
   }
 
   /** The rolling state tap. waiting → the work has stopped on a limit; switching → it is proceeding
-   *  on another account. trust, nudged, stalled and none are not this feature's four events.
+   *  on another account. trust, nudged, stalled and none are not this feature's three events.
    *
    *  The retry time is deliberately not in the body: the notification's job is "the work has
    *  stopped", and the app itself — one click away, since clicking activates that tab — is where the
