@@ -128,7 +128,7 @@ export const en: Record<keyof typeof ko, string> = {
     'Desktop notifications. Sent when you are looking at another session, or at another window.',
   'settings.notifications.inputNeeded': 'Input needed',
   'settings.notifications.inputNeededHint':
-    'The session is held up by a choice or a permission approval. Merely going quiet does not notify.',
+    'Sent when the session is held up by a choice or a permission approval.',
   'settings.notifications.limitWaiting': 'Waiting on a limit',
   'settings.notifications.limitWaitingHint': 'Waiting until the reset it is scheduled to resume at.',
   'settings.notifications.accountSwitched': 'Account switched',

@@ -137,7 +137,7 @@ export const ko = {
     '데스크톱 알림입니다. 다른 세션을 보고 있거나 다른 화면을 보고 있을 때 알림을 보냅니다.',
   'settings.notifications.inputNeeded': '입력이 필요할 때',
   'settings.notifications.inputNeededHint':
-    '선택지나 권한 승인을 기다리며 멈춘 상태입니다. 그냥 조용한 것만으로는 오지 않습니다.',
+    '선택지나 권한 승인을 기다리며 멈춘 상태에 알림을 보냅니다.',
   'settings.notifications.limitWaiting': '한도에 걸려 멈출 때',
   'settings.notifications.limitWaitingHint': '재개 예정 시각까지 기다립니다.',
   'settings.notifications.accountSwitched': '계정을 전환할 때',
