@@ -858,7 +858,7 @@ export const ko = {
   'slack.limitNoResumeAt': '⛔ 한도 도달 — 자동 재개 없음 (리셋 {at})',
   // Desktop notification bodies. They follow the app language, the same way Slack's already do. The
   // title is the session's own title, so the body says only what happened.
-  'notify.inputNeeded': '입력을 기다립니다',
+  'notify.inputNeeded': '사용자 확인이 필요합니다',
   'notify.limitWaiting': '한도에 걸려 재개를 기다립니다',
   'notify.accountSwitched': '계정을 {label} 로 전환했습니다',
   'notify.fallbackTitle': 'Astera',

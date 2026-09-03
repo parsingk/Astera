@@ -738,7 +738,7 @@ export const en: Record<keyof typeof ko, string> = {
   'slack.inbox.injectFailed': '⚠️ The input could not be delivered',
   'slack.limitNoResume': '⛔ Limit reached — no auto-resume',
   'slack.limitNoResumeAt': '⛔ Limit reached — no auto-resume (resets {at})',
-  'notify.inputNeeded': 'Waiting for your input',
+  'notify.inputNeeded': 'Needs your confirmation',
   'notify.limitWaiting': 'Stopped on a limit, waiting to resume',
   'notify.accountSwitched': 'Switched to {label}',
   'notify.fallbackTitle': 'Astera',
