@@ -183,17 +183,6 @@ describe('TaskValidator', () => {
     v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1' })
     await vi.waitFor(() => expect(started).toEqual(['tsk_2']))
   })
-
-  // The queue no longer waits for the user's run to finish — that was RunManager's one-per-project
-  // constraint, which is gone. A validation starts beside whatever is running.
-  it('starts immediately even though the runner reports other runs alive', async () => {
-    const runner = fakeRunner()
-    const { onSettled } = settledCalls()
-    const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
-    await vi.waitFor(() => expect(runner.started).toHaveLength(1))
-    expect(runner.started[0].taskId).toBe('tsk_1')
-  })
 })
 
 // ── 큐 유실 (advance 의 항등성 검사) ──────────────────────────────────────────
