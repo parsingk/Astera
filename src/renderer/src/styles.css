@@ -509,7 +509,12 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
    account row */
 .settings-accounts { display: flex; flex-direction: column; gap: 10px; }
 /* --row-pad-y 보다 일부러 1px 더 넉넉하다 — 밀도 토큰에 넣지 않았다. "고쳐" 5px→4px 로 맞추면 2px 만큼 눈에 보이게 좁아진다 */
-.account-row { position: relative; display: flex; align-items: center; gap: 8px; padding: 5px 12px; border-left: 2px solid transparent; cursor: default; transition: background var(--ease), border-color var(--ease); }
+.account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 5px 12px; border-left: 2px solid transparent; cursor: default; transition: background var(--ease), border-color var(--ease); }
+/* Only a row with a reading opens, and only that row is given tabindex — so the pointer follows
+   the same rule rather than promising a click that does nothing */
+.account-row[tabindex] { cursor: pointer; }
+.account-row.expanded { background: var(--elevated); border-left-color: var(--accent); }
+.account-row-actions { display: inline-flex; align-items: center; gap: 8px; }
 .account-row:hover { background: var(--elevated); border-left-color: var(--accent); }
 .account-label { flex: 1; min-width: 0; font-size: 12px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .color-dot { width: 8px; height: 8px; border-radius: var(--radius-sm); flex-shrink: 0; }
@@ -528,20 +533,17 @@ button.primary:disabled { background: var(--elevated); border-color: var(--line-
 .acct-meter i.crit { background: var(--danger); } /* >=85% */
 /* A remembered reading — the same convention .pr-badge.stale uses for a stale snapshot */
 .acct-meter.stale { opacity: .45; }
-/* The hover detail (design doc §5.1). It overlays the rows beneath rather than pushing them down —
-   the list's height never changes, so a row is never displaced while the pointer is travelling
-   toward it. z-index sits above the rows and below the modals. */
+/* The click detail (design doc §5.1). `flex-basis: 100%` puts it on its own line inside the row's
+   own flex box, so the row grows downward and the rows beneath simply move — no overlay, no
+   z-index, and nothing to flip near the bottom of the panel. Hover never opens it: a row that
+   expanded under a travelling pointer would push the row you were aiming at out from under it,
+   which is why the pointer opens nothing and a click opens exactly one. */
 .acct-detail {
-  position: absolute; left: 0; right: 0; top: calc(100% - 2px); z-index: 6;
-  display: none; flex-direction: column; gap: 4px;
-  padding: 7px 10px 8px;
-  background: var(--elevated); border: 1px solid var(--line-soft);
-  border-left: 2px solid var(--accent);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, .55);
+  flex: 0 0 100%;
+  display: flex; flex-direction: column; gap: 4px;
+  margin-top: 5px; padding-top: 6px;
+  border-top: 1px solid var(--line-soft);
 }
-.account-row:hover > .acct-detail { display: flex; }
-/* On the last rows the overlay would leave the panel, so it flips above its row there */
-.account-row.detail-up > .acct-detail { top: auto; bottom: calc(100% - 2px); }
 .acct-detail .dline { display: flex; align-items: center; gap: 7px; font-size: 9.5px; font-variant-numeric: tabular-nums; }
 .acct-detail .k { color: var(--text-faint); width: 4.6ch; flex: none; }
 .acct-detail .v { color: var(--text); width: 4ch; flex: none; text-align: right; font-weight: 600; }

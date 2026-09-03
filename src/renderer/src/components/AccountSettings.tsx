@@ -13,6 +13,8 @@ export function AccountSettings({ accounts }: { accounts: Account[] }): React.JS
   const { t, tm } = useI18n()
   const { loginMap, emailMap, defaultIdByProvider } = useAccountStatus(accounts)
   const usage = useAccountUsage()
+  // Which row has its usage detail open — the same one-at-a-time rule as the sidebar panel.
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   const [removeTarget, setRemoveTarget] = useState<Account | null>(null)
   const [logoutToo, setLogoutToo] = useState(false)
   const [removing, setRemoving] = useState(false)
@@ -67,7 +69,7 @@ export function AccountSettings({ accounts }: { accounts: Account[] }): React.JS
     <div className="settings-accounts">
       <span className="settings-hint">{t('settings.accounts.hint')}</span>
       <ul>
-        {accounts.map((a, i) => {
+        {accounts.map((a) => {
           const defaultId = defaultIdByProvider[providerOf(a)]
           return (
           <AccountRow
@@ -77,13 +79,8 @@ export function AccountSettings({ accounts }: { accounts: Account[] }): React.JS
             email={emailMap[a.id]}
             isDefault={defaultId === a.id}
             usage={usage[a.configDir]}
-            // Same last-two-rows heuristic as the sidebar panel (AccountPanel) — nothing to measure
-            // before the overlay is displayed, and a wrong guess here costs a flip, not a defect.
-            //
-            // `accounts.length > 2` guards against "the last two rows" meaning every row: at one
-            // account (0 >= -1) or two (0 >= 0 and 1 >= 0) the bare condition is true for every row,
-            // which flipped a fresh install's only row upward for no reason.
-            detailUp={accounts.length > 2 && i >= accounts.length - 2}
+            expanded={expandedId === a.id}
+            onToggle={() => setExpandedId((cur) => (cur === a.id ? null : a.id))}
           >
             {/* ⤓ needs a source, and that source is this provider's default account. Hidden on the default
                 itself (it would be copying onto itself) and when the provider has no default yet, which

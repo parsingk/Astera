@@ -13,7 +13,10 @@ export const clampPercent = (n: number): number => Math.max(0, Math.min(100, n))
 
 /** Both components below need this same check before they draw anything — kept in one place so the
  *  two copies cannot drift apart (a hover target with nothing in it, or an overlay with no meter). */
-const hasUsage = (u: AccountUsage | undefined): u is AccountUsage => !!u && !!(u.session || u.weekly)
+/** Is there anything to draw? Shared so the meter, the detail and the row that decides whether it
+ *  is clickable at all cannot drift apart about what "empty" means. */
+export const hasUsage = (u: AccountUsage | undefined): u is AccountUsage =>
+  !!u && !!(u.session || u.weekly)
 
 const track = (w: RateLimitWindow | null): React.JSX.Element => (
   <span>

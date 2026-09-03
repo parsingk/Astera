@@ -47,6 +47,9 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
   const { t, tm } = useI18n()
   const { loginMap, emailMap, defaultIdByProvider } = useAccountStatus(accounts)
   const usage = useAccountUsage()
+  // Which row has its usage detail open. One at a time, so the answer belongs to the list
+  // rather than to each row. Keyed by account id — configDir can be shared by two accounts.
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
   const [addLabel, setAddLabel] = useState('')
   const [addCopySettings, setAddCopySettings] = useState(true)
@@ -208,7 +211,7 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
         </div>
       </header>
       <ul>
-        {accounts.map((a, i) => (
+        {accounts.map((a) => (
           <AccountRow
             key={a.id}
             account={a}
@@ -216,15 +219,8 @@ export function AccountPanel({ accounts }: { accounts: Account[] }): React.JSX.E
             email={emailMap[a.id]}
             isDefault={defaultIdByProvider[providerOf(a)] === a.id}
             usage={usage[a.configDir]}
-            // The overlay is two or three lines — about two rows tall — so the last two rows are the
-            // ones where it would leave the panel. Decided by index rather than by measuring: there
-            // is nothing to measure before the overlay is displayed, and a wrong guess here costs a
-            // flip, not a defect.
-            //
-            // `accounts.length > 2` guards against "the last two rows" meaning every row: at one
-            // account (0 >= -1) or two (0 >= 0 and 1 >= 0) the bare condition is true for every row,
-            // which flipped a fresh install's only row upward over the panel header for no reason.
-            detailUp={accounts.length > 2 && i >= accounts.length - 2}
+            expanded={expandedId === a.id}
+            onToggle={() => setExpandedId((cur) => (cur === a.id ? null : a.id))}
           />
         ))}
         {accounts.length === 0 && <li className="empty">{t('account.panel.empty')}</li>}
