@@ -43,16 +43,13 @@ export function placeNewRun(runs: RunStatus[], configId: string): { seq: number;
  *  numbered from the second — "dev", "dev (2)". Grouped by configId, since a configuration can be
  *  renamed between two of its runs. */
 export function labelRuns(runs: RunStatus[]): { runId: string; label: string }[] {
-  const total = new Map<string, number>()
-  for (const r of runs) total.set(r.configId, (total.get(r.configId) ?? 0) + 1)
   const seen = new Map<string, number>()
   return [...runs]
     .sort((a, b) => a.seq - b.seq)
     .map((r) => {
       const nth = (seen.get(r.configId) ?? 0) + 1
       seen.set(r.configId, nth)
-      const repeated = (total.get(r.configId) ?? 0) > 1 && nth > 1
-      return { runId: r.runId, label: repeated ? `${r.configName} (${nth})` : r.configName }
+      return { runId: r.runId, label: nth > 1 ? `${r.configName} (${nth})` : r.configName }
     })
 }
 

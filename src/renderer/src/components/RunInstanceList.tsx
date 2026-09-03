@@ -27,7 +27,7 @@ export function RunInstanceList({
   onDismiss: (runId: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
-  if (runs.length === 0) return <div className="run-list run-list-empty">{t('run.panel.empty')}</div>
+  if (runs.length === 0) return <div className="run-list run-list-empty" role="note" aria-label={t('run.panel.tab')}>{t('run.panel.empty')}</div>
   const labels = new Map(labelRuns(runs).map((l) => [l.runId, l.label]))
   // A row holds buttons, so it is a div with role=option rather than a <button> — the same reason the
   // bottom tabs are spans (BottomPanel). Enter/Space select; a key that bubbled up from a button inside

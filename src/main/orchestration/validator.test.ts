@@ -126,7 +126,7 @@ describe('TaskValidator', () => {
 
   // The user's own runs end too, and now nothing about them is a signal — an exit that names no queue
   // head is ignored
-  it('an exit for a run that is not a head is ignored', async () => {
+  it('헤드가 아닌 실행의 종료는 무시한다', async () => {
     const runner = fakeRunner()
     const { onSettled, calls } = settledCalls()
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
@@ -185,10 +185,11 @@ describe('TaskValidator', () => {
   })
 })
 
-// ── 큐 유실 (advance 의 항등성 검사) ──────────────────────────────────────────
-// 결과가 이 브랜치가 막으려는 바로 그 실패다: 시작되지 않은 채 큐에서 사라진 항목의 Task 는
-// 종료가 오지 않아 영원히 validating 이고, recomputeReady 는 completed 만 승격시키므로 그 의존
-// 서브트리 전체가 pending 에 멈춘다. 회복 수단은 앱 재시작뿐이다.
+// ── A head's exit arriving twice — settling makes the second a no-op; advance's identity check is the layer beneath ──
+// The result is exactly the failure this test guards against: an item that vanished from the queue
+// without ever starting gets no exit, so its Task stays validating forever; recomputeReady promotes
+// only completed tasks, so the whole dependent subtree sticks at pending. The only recovery is
+// restarting the app.
 describe('TaskValidator — 큐 항목 유실 방지', () => {
   const CWD = absPath('w1')
 
@@ -339,8 +340,9 @@ describe('TaskValidator — 없어진 할 일', () => {
     v.enqueue({ taskId: 'tsk_2', cwd: CWD })
     v.enqueue({ taskId: 'tsk_3', cwd: CWD })
     await vi.waitFor(() => expect(attempts).toEqual(['tsk_1', 'tsk_2']))
-    // tsk_2 는 실제로 시작했으므로 그 종료는 자기 것이다 — 항등성 검사가 건너뛴 항목을 이미
-    // 지웠으니, 이 정산이 tsk_3 을 함께 밀어내지 않는지도 여기서 함께 고정된다
+    // tsk_2 actually started, so this exit is its own — the plain shift in advance already removed the
+    // skipped entry (the identity check only permitted it), so this settlement must not also push out
+    // tsk_3; that is pinned here too
     v.onRunExit({ runId: 'run_tsk_2', exitCode: 0 })
     await vi.waitFor(() => expect(calls).toHaveLength(1))
     expect(calls[0].taskId).toBe('tsk_2')
