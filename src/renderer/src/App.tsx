@@ -524,6 +524,21 @@ export default function App(): React.JSX.Element {
     conflict: boolean
   }
   const [fileBuffers, setFileBuffers] = useState<Record<string, FileBuffer>>({}) // file buffers — editing, saving, external changes
+  /** Per file tab, the line a console link asked to see (Task: run console). Consumed once by
+   *  FileEditor; dropped when the user clicks or edits in that tab first, or when the tab closes. */
+  const [pendingReveal, setPendingReveal] = useState<Record<string, { line: number; col?: number; nonce: number }>>({})
+  const revealNonceRef = useRef(0)
+  const requestReveal = (tabId: string, at: { line: number; col?: number }): void => {
+    revealNonceRef.current += 1
+    setPendingReveal((prev) => ({ ...prev, [tabId]: { ...at, nonce: revealNonceRef.current } }))
+  }
+  const dropReveal = (tabId: string): void =>
+    setPendingReveal((prev) => {
+      if (!(tabId in prev)) return prev
+      const next = { ...prev }
+      delete next[tabId]
+      return next
+    })
   /** 파일 탭별 마크다운 뷰 모드. fileTabs·fileBuffers 와 같은 자리에 두는 이유는 탭이 닫힐 때
    *  함께 지워져야 하기 때문이다. 마지막으로 고른 모드는 localStorage 에 남아 새로 여는 .md 탭의
    *  기본값이 된다 — cm.sidebarWidth 와 같은 관례다 */
@@ -1197,11 +1212,17 @@ export default function App(): React.JSX.Element {
   }
 
   // Opening a file tab: clicking the same path again focuses the existing tab (VS Code's behaviour).
-  // The buffer starts as loading and gets filled by files.read.
-  const openFile = (path: string): void => {
+  // The buffer starts as loading and gets filled by files.read. `at` is a console link's line — the
+  // editor moves there once the content is in (FileEditor's reveal effect).
+  const openFile = (path: string, at?: { line: number; col?: number }): void => {
     const id = fileTab(path)
     if (fileTabsRef.current.some((t) => t.id === id)) {
       selectWorkbenchTabRef.current(id)
+      if (at) {
+        requestReveal(id, at)
+        // A line number is a source line; the preview has no such line
+        if (isMarkdownPath(path)) setMdMode(id, 'editor')
+      }
       return
     }
     const root = currentProjectRef.current
@@ -1220,7 +1241,8 @@ export default function App(): React.JSX.Element {
     // 대신 쓴다 — 그러면 다른 탭에서 모드를 바꾸는 순간 이 탭도 함께 바뀐 것처럼 보인다(탭별이어야
     // 할 모드가 사실상 전역이 된다). 여기서 한 번 못박아 두면 `??` 는 이 탭이 실제로 아직 없을 때만
     // 쓰이는 안전망으로 되돌아간다.
-    if (isMarkdownPath(path)) setMdModes((prev) => ({ ...prev, [id]: defaultMdMode() }))
+    if (isMarkdownPath(path)) setMdModes((prev) => ({ ...prev, [id]: at ? 'editor' : defaultMdMode() }))
+    if (at) requestReveal(id, at)
     window.api.files.read(path).then(
       (d) => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { content: toLf(d.content), savedContent: toLf(d.content), eol: detectEol(d.content), readOnly: d.truncated || d.binary, loading: false, error: d.binary ? t('files.editor.binaryUnsupported') : null, conflict: false } } : prev)),
       (err) => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], loading: false, error: err instanceof Error ? err.message : String(err) } } : prev))
@@ -1301,6 +1323,7 @@ export default function App(): React.JSX.Element {
     const closedTab = fileTabsRef.current.find((t) => t.id === id)
     const next = fileTabsRef.current.filter((t) => t.id !== id)
     if (closedTab) editorCacheRef.current.drop(closedTab.path)
+    dropReveal(id)
     // Mirrored immediately, before the render — when clean tabs close in a chain (a folder deletion),
     // await only yields a microtask and the React commit (render) does not fit in between, so this
     // stops the ref being read stale on the next iteration
@@ -2052,12 +2075,17 @@ export default function App(): React.JSX.Element {
         onChange={(fromPath, next) => {
           const target = fileTabsRef.current.find((t) => t.path === fromPath)
           if (!target || target.id !== f.id) return
+          dropReveal(target.id)
           setBufferContent(target.id, next)
         }}
         onSave={(fromPath) => {
           const target = fileTabsRef.current.find((t) => t.path === fromPath)
           if (target) saveFile(target.id)
         }}
+        // Only once the buffer has loaded — a request for a file still being read waits here
+        reveal={buf.loading ? undefined : pendingReveal[f.id]}
+        onRevealed={() => dropReveal(f.id)}
+        onInteract={() => dropReveal(f.id)}
       />
     )
     return (
