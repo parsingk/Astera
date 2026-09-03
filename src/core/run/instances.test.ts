@@ -61,6 +61,16 @@ describe('decideStart', () => {
     const newer = run('dev', 'running', { startedAt: 20 })
     expect(decideStart([older, newer], cfg('dev'))).toEqual({ action: 'restart', runId: newer.runId })
   })
+
+  // A validation run is the orchestrator's, not the user's. ▶ on that configuration must not kill it
+  // and replace it with a run that no longer carries the tag — the user's run starts beside it.
+  it('ignores a live validation run of the same configuration', () => {
+    const validation = { ...run('dev', 'running'), validation: true as const }
+    expect(decideStart([validation], cfg('dev'))).toEqual({ action: 'start' })
+    // With a user run live as well, that one is still the restart target
+    const mine = run('dev', 'running')
+    expect(decideStart([validation, mine], cfg('dev'))).toEqual({ action: 'restart', runId: mine.runId })
+  })
 })
 
 describe('placeNewRun', () => {

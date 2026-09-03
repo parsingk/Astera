@@ -14,13 +14,15 @@ const latestOf = (runs: RunStatus[]): RunStatus =>
  *  switch is off; start otherwise. A stopping run counts as live — a second press during the stopping
  *  window must join that restart, not start a second replacement (RunManager.restart dedupes on the
  *  runId this names). With several live runs — the switch was on, two were started, it was turned off —
- *  the most recently started is the one restarted. */
+ *  the most recently started is the one restarted. A live validation run (RunStatus.validation) is not
+ *  a candidate — it is the orchestrator's, and ▶ starts the user's own run beside it. */
 export function decideStart(
   runs: RunStatus[],
   config: RunConfig
 ): { action: 'start' } | { action: 'restart'; runId: string } {
   if (config.allowMultipleInstances) return { action: 'start' }
-  const live = runs.filter((r) => r.configId === config.id && isLive(r))
+  // A validation run is the orchestrator's, not the user's — never the one ▶ restarts
+  const live = runs.filter((r) => r.configId === config.id && isLive(r) && r.validation !== true)
   if (live.length === 0) return { action: 'start' }
   return { action: 'restart', runId: latestOf(live).runId }
 }
