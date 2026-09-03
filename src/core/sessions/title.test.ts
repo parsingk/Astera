@@ -4,14 +4,23 @@ import { defaultSessionTitle, normalizeSessionTitle } from './title'
 describe('defaultSessionTitle', () => {
   it('is the project folder name', () => {
     expect(defaultSessionTitle('D:/work/astera')).toBe('astera')
-    expect(defaultSessionTitle('D:\\work\\astera')).toBe('astera')
+    expect(defaultSessionTitle('/work/astera')).toBe('astera')
   })
 
-  // A drive root has no basename. Falling through to the path itself keeps the tab from going blank,
-  // which is the same choice spawn has always made.
+  // A root has no basename. Falling through to the path itself keeps the tab from going blank, which
+  // is the same choice spawn has always made.
   it('falls back to the path when there is no basename', () => {
-    expect(defaultSessionTitle('D:/')).toBe('D:/')
+    expect(defaultSessionTitle('/')).toBe('/')
     expect(defaultSessionTitle('')).toBe('')
+  })
+
+  // Both of these are win32 notation, and the module reads a cwd with the platform's own `path`: on
+  // POSIX `\` is an ordinary character, so `D:\work\astera` is one long filename, and `D:/` has the
+  // basename `D:` rather than none. A cwd only ever arrives in the notation of the machine it came
+  // from, so this is asserted where it can hold rather than made platform-independent.
+  it.runIf(process.platform === 'win32')('reads a backslash path and a drive root', () => {
+    expect(defaultSessionTitle('D:\\work\\astera')).toBe('astera')
+    expect(defaultSessionTitle('D:/')).toBe('D:/')
   })
 })
 
