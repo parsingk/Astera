@@ -726,6 +726,12 @@ export const ja: Catalog = {
   'run.panel.close': '実行を閉じる',
   'run.panel.clear': '消去',
   'run.panel.collapse': '折りたたむ',
+  'run.find.placeholder': '出力を検索',
+  'run.find.count': '{n} / {total}',
+  'run.find.noResults': '該当なし',
+  'run.find.prev': '前の一致',
+  'run.find.next': '次の一致',
+  'run.find.close': '検索を閉じる',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
   'terminal.rail.open': 'ターミナル',
   'terminal.tab.label': 'ターミナル {n}',

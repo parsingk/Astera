@@ -736,6 +736,12 @@ export const es: Catalog = {
   'run.panel.close': 'Cerrar ejecución',
   'run.panel.clear': 'Limpiar',
   'run.panel.collapse': 'Contraer',
+  'run.find.placeholder': 'Buscar en la salida',
+  'run.find.count': '{n} / {total}',
+  'run.find.noResults': 'Sin resultados',
+  'run.find.prev': 'Coincidencia anterior',
+  'run.find.next': 'Siguiente coincidencia',
+  'run.find.close': 'Cerrar búsqueda',
   // BottomPanel, the rail terminal button
   'terminal.rail.open': 'Terminal',
   'terminal.tab.label': 'Terminal {n}',

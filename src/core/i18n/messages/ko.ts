@@ -812,6 +812,12 @@ export const ko = {
   'run.panel.close': '실행 닫기',
   'run.panel.clear': '지우기',
   'run.panel.collapse': '접기',
+  'run.find.placeholder': '출력에서 찾기',
+  'run.find.count': '{n} / {total}',
+  'run.find.noResults': '결과 없음',
+  'run.find.prev': '이전 일치',
+  'run.find.next': '다음 일치',
+  'run.find.close': '찾기 닫기',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
   'terminal.rail.open': '터미널',
   'terminal.tab.label': '터미널 {n}',

@@ -2334,7 +2334,20 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .run-row-btn.stop:hover { color: var(--danger); }
 .run-consoles { flex: 1; min-width: 0; min-height: 0; display: flex; }
 .run-console { flex: 1; min-width: 0; min-height: 0; }
-.run-console > .run-panel-host { height: 100%; }
+.run-console > .run-panel-body { height: 100%; }
+/* The console plus what floats over it (the find bar). The host is the xterm mount as before. */
+.run-panel-body { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; }
+.run-panel-body > .run-panel-host { flex: 1; min-width: 0; }
+/* The find bar — RunFindBar, top-right over the output, in the floating-panel treatment .run-more-menu
+   and .sel-menu use (panel background, soft border, large radius, the large shadow). */
+.run-find { position: absolute; top: 6px; right: 14px; z-index: 5; display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px 0 8px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); }
+.run-find-icon { color: var(--text-dim); flex: none; }
+.run-find-input { width: 180px; height: 22px; background: transparent; border: 0; color: var(--text); font-family: var(--mono); font-size: 12px; outline: none; }
+.run-find-input::placeholder { color: var(--text-faint); font-family: var(--sans); }
+.run-find-count { min-width: 44px; text-align: right; font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.run-find-count.none { color: var(--danger); }
+.run-find-btn { width: 22px; height: 22px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); padding: 0; cursor: pointer; }
+.run-find-btn:hover { background: var(--elevated); color: var(--text); }
 
 /* ---------- toast notifications ---------- */
 /* Above the status bar (32px plus 10px margin-top) and in front of modals (z 100), so a failure notice raised inside a modal is not hidden either */
