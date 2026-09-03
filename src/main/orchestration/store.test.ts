@@ -13,7 +13,11 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
 })
 
-const NOW = '2026-08-04T00:00:00.000Z'
+// "지금"이지 특정 날짜가 아니다. 리터럴로 박아 두면 시한폭탄이 된다 — load() 의 TTL 정리는
+// 실제 Date.now() 로 판정하므로, 고정 날짜는 작성 시점으로부터 RUN_TTL_MS(30일)가 지나는 순간
+// 조용히 만료되어 이 파일의 여러 테스트가 한꺼번에 깨진다(실제로 2026-09-03 에 그렇게 깨졌다).
+// 과거를 만드는 테스트들이 이미 쓰는 `Date.now() - RUN_TTL_MS` 와 같은 기준으로 맞춘다.
+const NOW = new Date().toISOString()
 const withOpenDispatch = (): OrchState => ({
   ...emptyState(),
   runs: [{ id: 'run_1', objective: 'o', cwd: 'D:/p', createdAt: NOW }],
