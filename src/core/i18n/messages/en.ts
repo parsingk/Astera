@@ -125,7 +125,7 @@ export const en: Record<keyof typeof ko, string> = {
   'github.state.closed': 'Closed',
   // ---- notifications ----
   'settings.notifications.hint':
-    'Desktop notifications. Nothing is sent while the window is focused on that very session. If Slack is on, both fire — the person who has left and the person at the same machine in another window are different people.',
+    'Desktop notifications. Sent when you are looking at another session, or at another window.',
   'settings.notifications.inputNeeded': 'Input needed',
   'settings.notifications.inputNeededHint':
     'The session is held up by a choice or a permission approval. Merely going quiet does not notify.',

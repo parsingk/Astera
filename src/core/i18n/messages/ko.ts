@@ -134,7 +134,7 @@ export const ko = {
   'github.state.closed': '닫힘',
   // ---- notifications ----
   'settings.notifications.hint':
-    '데스크톱 알림입니다. 창이 떠 있고 그 세션을 보고 있으면 보내지 않습니다. Slack 을 켜 뒀어도 둘 다 갑니다 — 자리를 떠난 사람과 같은 화면의 다른 창을 보는 사람은 다른 사람입니다.',
+    '데스크톱 알림입니다. 다른 세션을 보고 있거나 다른 화면을 보고 있을 때 알림을 보냅니다.',
   'settings.notifications.inputNeeded': '입력이 필요할 때',
   'settings.notifications.inputNeededHint':
     '선택지나 권한 승인을 기다리며 멈춘 상태입니다. 그냥 조용한 것만으로는 오지 않습니다.',
