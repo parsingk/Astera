@@ -127,7 +127,7 @@ describe('AccountUsageDetail', () => {
     expect(html).toContain('account.usage.resetsIn(4d)')
   })
 
-  // The overlay's "updated N ago" is where a person learns the figure is not live — the one thing
+  // The detail's "updated N ago" is where a person learns the figure is not live — the one thing
   // that lets them notice an account used outside Astera (§3.1).
   it('a remembered reading adds a third line saying how old it is', () => {
     const html = detail({ ...both(), remembered: true })
