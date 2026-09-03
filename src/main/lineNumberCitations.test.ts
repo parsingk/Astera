@@ -17,7 +17,7 @@ import path from 'node:path'
 //
 // 옵트아웃 메커니즘은 만들지 않는다. 스택 트레이스를 그대로 담은 테스트 fixture처럼 정당한 사례가
 // 나오면, 그때 이유를 밝히고 이 파일을 의도적으로 고쳐서 허용한다 — 미리 빠져나갈 구멍을 파 두지
-// 않는다.
+// 않는다. 실행 콘솔의 링크 문법이 그런 경우이며, 그 두 파일은 아래 CITATION_DATA_FILES 에 이름이 적혀 있다.
 //
 // "이게 주석인가"는 판별하지 않고 모든 줄을 그냥 스캔한다. 단순하고 튼튼한 편이 똑똑한 편보다
 // 낫다: 오탐이 실제로 나오면 그때 좁히는 것이 comment-detection을 제대로 하려는 것보다 작은 변경이다.
@@ -50,10 +50,22 @@ function isAllowed(citation: string): boolean {
   return citation.includes('node_modules/')
 }
 
+/** 콘솔 링크 문법을 다루는 두 파일. 여기서 `이름.ts:줄번호` 는 인용이 아니라 **데이터**다 — 실행 출력에서
+ *  경로를 찾아내는 것이 그 코드의 일이고, 테스트 fixture 는 그 출력을 그대로 담아야 한다. 이 파일
+ *  첫머리가 예고한 "스택 트레이스를 그대로 담은 테스트 fixture" 가 실제로 나온 자리이므로, 옵트아웃
+ *  구멍을 파는 대신 두 파일을 여기 이름으로 적어 허용한다. 파일 단위인 이유는 이 파일의 방침과 같다:
+ *  문자열 리터럴 안인지 주석 안인지 가려내는 것보다 단순한 편이 낫다 — 대가는 이 두 파일 안의 진짜
+ *  줄 번호 인용은 잡히지 않는다는 것이고, 둘 다 작아서 눈으로 읽힌다. */
+const CITATION_DATA_FILES = new Set([
+  'src/core/run/consoleLinks.ts',
+  'src/core/run/consoleLinks.test.ts'
+])
+
 function findViolations(): string[] {
   const violations: string[] = []
   for (const file of collect(SRC_ROOT, [])) {
     const rel = path.relative(path.dirname(SRC_ROOT), file).replace(/\\/g, '/')
+    if (CITATION_DATA_FILES.has(rel)) continue
     const lines = readFileSync(file, 'utf8').split('\n')
     lines.forEach((line, i) => {
       for (const citation of line.match(CITATION_RE) ?? []) {
