@@ -2577,6 +2577,11 @@ export default function App(): React.JSX.Element {
     const root = currentProject
     void window.api.run.start(root, configId).then(
       async (st) => {
+        // The project may have changed while the IPC was in flight. Merging first would inject another
+        // project's run into this list — and nothing would ever evict it: upsertRun evicts only on a seat
+        // match within the same project, and the run:status subscription filters foreign events. The row
+        // would sit there frozen at 'running', with its ⏹ and ✕ acting on another project's process.
+        if (currentProjectRef.current !== root) return
         setRuns((prev) => upsertRun(prev, st))
         setSelectedRunId(st.runId)
         // Starting a Run may be what opens the panel for the first time — and that also mounts this
@@ -2585,8 +2590,7 @@ export default function App(): React.JSX.Element {
         // setRunPanelOpen(true) that causes the mount — the same reason as in openTerminal.
         if (terminals.length > 0) {
           const list = await window.api.terminal.list(root).catch(() => terminals)
-          // If the project changes while this is in flight, the result is discarded — currentProjectRef is
-          // the same idiom the other async callbacks in this file use against stale closures. Without
+          // The same check again after the await — the project can change during this call too. Without
           // discarding, the screen shows the new project while the panel holds the previous project's
           // terminal tabs, and input goes to that shell.
           if (currentProjectRef.current !== root) return
