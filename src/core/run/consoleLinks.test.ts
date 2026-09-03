@@ -66,6 +66,17 @@ describe('findConsoleLinks — URLs', () => {
       { kind: 'url', start: 0, end: 26, url: 'https://example.com/a/b.ts' }
     ])
   })
+
+  // The length check rejects a bare scheme, so it has to be measured against the scheme that actually
+  // matched: a hardcoded 'https://'.length dropped this valid eight-character URL
+  it('a one-character host after http:// is a URL', () => {
+    expect(only('see http://a')).toEqual({ kind: 'url', start: 4, end: 12, url: 'http://a' })
+  })
+
+  it('a bare scheme is not a URL', () => {
+    expect(findConsoleLinks('http://')).toEqual([])
+    expect(findConsoleLinks('see https://.')).toEqual([])
+  })
 })
 
 describe('findConsoleLinks — not links', () => {
@@ -145,20 +156,21 @@ describe('cellsOfJoinedLine', () => {
   // astral glyph, none for the trailing half of a wide one, and one space for a blank.
   const cell = (chars: string, width = 1) => ({ chars, width })
   const rows = [
-    { cells: [cell('a'), cell('가', 2), cell('', 0), cell('🚀'), cell(' ')], isWrapped: false },
+    { cells: [cell('a'), cell('가', 2), cell('', 0), cell('🚀'), cell(' '), cell('')], isWrapped: false },
     { cells: [cell('b'), cell('c')], isWrapped: true },
     { cells: [cell('z')], isWrapped: false }
   ]
   const getRow = (y: number) => rows[y]
 
   it('gives one entry per code unit, at the cell that holds it', () => {
-    // 'a'(1) + '가'(1) + trailing half(0) + '🚀'(2, one cell) + ' '(1) = 5 entries on row 0
+    // 'a'(1) + '가'(1) + trailing half(0) + '🚀'(2, one cell) + ' '(1) + never-written(1) = 6 entries on row 0
     expect(cellsOfJoinedLine(getRow, 0)).toEqual([
       { x: 1, y: 1 }, // a
       { x: 2, y: 1 }, // 가 — two columns, one code unit
       { x: 4, y: 1 }, // 🚀 high surrogate (column 4: the wide glyph's second column was skipped)
       { x: 4, y: 1 }, // 🚀 low surrogate — the same cell
-      { x: 5, y: 1 }, // the blank
+      { x: 5, y: 1 }, // the blank (a literal space)
+      { x: 6, y: 1 }, // a never-written cell (chars: '') — translateToString renders it as one space too
       { x: 1, y: 2 }, // b, on the continuation row
       { x: 2, y: 2 } // c
     ])
@@ -185,5 +197,14 @@ describe('cellsOfJoinedLine', () => {
 
   it("the buffer's edge ends the walk", () => {
     expect(cellsOfJoinedLine(() => undefined, 5)).toEqual([])
+  })
+
+  // xterm's translateToString renders a never-written cell as one space while the cell API reports its
+  // chars as '' — so a blank cell contributes one character, not none. Without that compensation the
+  // table would run short of the text and every link after a blank cell would shift.
+  it('a never-written cell contributes one entry, like the space translateToString renders', () => {
+    expect(cellsOfJoinedLine((y) => (y === 0 ? { cells: [{ chars: '', width: 1 }], isWrapped: false } : undefined), 0)).toEqual([
+      { x: 1, y: 1 }
+    ])
   })
 })
