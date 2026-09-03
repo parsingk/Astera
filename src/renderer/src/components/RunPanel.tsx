@@ -85,10 +85,21 @@ export function RunPanel({
     const onResults = search.onDidChangeResults((e) =>
       setResults({ index: e.resultIndex < 0 ? null : e.resultIndex + 1, total: e.resultCount })
     )
-    // Ctrl/Cmd+F opens this run's find bar instead of sending ^F to the process. Bound on the terminal,
-    // not the window, so the editor's own find is untouched.
+    // Cmd+F on macOS, Ctrl+F elsewhere — the same platform split TerminalView uses for its own
+    // keybindings — opens this run's find bar instead of sending the key to the process. Bound on the
+    // terminal, not the window, so the editor's own find is untouched.
+    const isMac = window.api.platform === 'darwin'
+    const findMod = (e: KeyboardEvent): boolean => (isMac ? e.metaKey : e.ctrlKey)
+    const findOtherMod = (e: KeyboardEvent): boolean => (isMac ? e.ctrlKey : e.metaKey)
     term.attachCustomKeyEventHandler((e) => {
-      if (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'f') {
+      if (
+        e.type === 'keydown' &&
+        findMod(e) &&
+        !findOtherMod(e) &&
+        !e.altKey &&
+        !e.shiftKey &&
+        e.key.toLowerCase() === 'f'
+      ) {
         onFindOpenChangeRef.current(true)
         return false
       }

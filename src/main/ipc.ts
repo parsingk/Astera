@@ -3959,7 +3959,8 @@ export function registerIpc(
 
   /** 마크다운 프리뷰의 외부 링크. 허용 스킴 밖은 조용히 버린다 — 렌더러가 이미 걸렀으므로 여기에
    *  도달하는 것은 버그이거나 우회 시도다. 예외를 던지지 않는 이유는 링크 클릭이 실패해도 사용자가
-   *  할 수 있는 일이 없기 때문이다. */
+   *  할 수 있는 일이 없기 때문이다. 실행 콘솔의 URL 링크도 이 검사 하나에만 기대는 새 호출자다 —
+   *  링크 문법이 애초에 https?:// 만 내보내므로, 이는 맞는 선택이다. */
   ipcMain.handle('system.openExternal', async (_e, url: string) => {
     const parsed = parseAllowedExternalUrl(url)
     if (!parsed) return

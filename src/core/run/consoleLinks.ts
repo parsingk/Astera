@@ -6,7 +6,7 @@ export type ConsoleLink =
   | { kind: 'path'; start: number; end: number; target: string; line?: number; col?: number }
   | { kind: 'url'; start: number; end: number; url: string }
 
-const URL_RE = /https?:\/\/[^\s'"<>]+/g
+const URL_RE = /(https?):\/\/[^\s'"<>]+/g
 // Tokens are whitespace-separated; quotes and angle brackets also end one (they wrap paths in
 // messages). Parentheses stay inside the token so TypeScript's `a.ts(12,5)` survives; a stack frame's
 // wrapping parentheses are peeled below.
@@ -17,9 +17,12 @@ const TRAIL_PUNCT = /[.,;:]+$/
 // URL: whatever the regex took, minus closing punctuation a sentence or a parenthesis left on it
 const URL_TRAIL = /[)\].,;:]+$/
 const FILE_SCHEME = /^file:\/\/\//
-// `path:line[:col]`. The path is an optional drive/root followed by anything but a colon — the colon
-// is where the position starts. `D:\p\a.ts:12` therefore reads the drive as part of the path.
-const POSITION_RE = /^((?:[A-Za-z]:[\\/]|[\\/]|\.{1,2}[\\/]|~[\\/])?[^:]*?)(?::(\d+)(?::(\d+))?)?$/
+// `path:line[:col]`. The path is an optional drive letter followed by anything but a colon — the
+// colon is where the position starts. `D:\p\a.ts:12` therefore reads the drive as part of the path.
+// A leading `/`, `./` or `~/` needs no branch of its own: it contains no colon, so `[^:]*?` already
+// matches it — only the drive letter earns a branch, being the one prefix that contains the colon
+// the rest of the group excludes.
+const POSITION_RE = /^((?:[A-Za-z]:[\\/])?[^:]*?)(?::(\d+)(?::(\d+))?)?$/
 // TypeScript's `path(line,col)`
 const TS_POSITION_RE = /^((?:[A-Za-z]:[\\/])?[^:()]+)\((\d+),(\d+)\)$/
 const SEP = /[\\/]/
@@ -39,7 +42,10 @@ export function findConsoleLinks(line: string): ConsoleLink[] {
   // URLs first: a URL has slashes and would otherwise be read as a path by the token pass below
   for (const m of line.matchAll(URL_RE)) {
     const url = m[0].replace(URL_TRAIL, '')
-    if (url.length <= 'https://'.length) continue
+    // Nothing left after the scheme once trailing punctuation was stripped. Measured against the
+    // scheme this match actually took, not a fixed 'https://' — that fixed length rejected a valid
+    // `http://a` (8 characters) along with a truly empty `http://`.
+    if (url.length <= m[1].length + '://'.length) continue
     const start = m.index ?? 0
     out.push({ kind: 'url', start, end: start + url.length, url })
     taken.push([start, start + url.length])
