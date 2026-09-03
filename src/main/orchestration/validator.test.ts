@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { TaskValidator, ValidatorBusyError, type ValidatorRunner } from './validator'
+import { TaskValidator, type ValidatorRunner } from './validator'
 import { absPath } from '../../core/testPaths'
 
 const settledCalls = (): {
@@ -10,12 +10,16 @@ const settledCalls = (): {
   return { onSettled: async (a) => void calls.push(a), calls }
 }
 
-/** 시작 요청을 기록만 하는 러너. 종료는 테스트가 onRunExit 로 직접 만든다 */
-const fakeRunner = (): ValidatorRunner & { started: { cwd: string; taskId: string }[] } => {
-  const started: { cwd: string; taskId: string }[] = []
+/** Records start requests and hands each a runId. Exits are made by the test through onRunExit. */
+const fakeRunner = (): ValidatorRunner & { started: { cwd: string; taskId: string; runId: string }[] } => {
+  const started: { cwd: string; taskId: string; runId: string }[] = []
   return {
     started,
-    start: async (a) => void started.push(a),
+    start: async (a) => {
+      const runId = `run_${started.length + 1}`
+      started.push({ ...a, runId })
+      return { runId }
+    },
     output: () => '출력'
   }
 }
@@ -27,7 +31,7 @@ describe('TaskValidator', () => {
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
     v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
-    expect(runner.started[0]).toEqual({ cwd: 'D:/w1', taskId: 'tsk_1' })
+    expect(runner.started[0]).toEqual({ cwd: 'D:/w1', taskId: 'tsk_1', runId: 'run_1' })
   })
 
   it('종료 코드를 onSettled 로 넘긴다', async () => {
@@ -36,7 +40,7 @@ describe('TaskValidator', () => {
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
     v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
-    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 })
+    v.onRunExit({ runId: runner.started[0].runId, exitCode: 0 })
     await vi.waitFor(() => expect(calls).toHaveLength(1))
     expect(calls[0]).toEqual({ taskId: 'tsk_1', exitCode: 0, output: '출력' })
   })
@@ -45,19 +49,20 @@ describe('TaskValidator', () => {
   // 들어가고 코디네이터 LLM 이 그것을 읽어 재시도를 판단하므로, 화면이 아니라 여기서 지운다
   it('출력의 ANSI 이스케이프를 지운다', async () => {
     const runner: ValidatorRunner = {
-      start: async () => {},
+      start: async () => ({ runId: 'run_x' }),
       output: () => '\u001b[32mPASS\u001b[0m\r\n\u001b]0;title\u0007done\r\n'
     }
     const { onSettled, calls } = settledCalls()
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
     v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
     await vi.waitFor(() => expect(calls).toHaveLength(0))
-    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 })
+    v.onRunExit({ runId: 'run_x', exitCode: 0 })
     await vi.waitFor(() => expect(calls).toHaveLength(1))
     expect(calls[0].output).toBe('PASS\r\ndone\r\n')
   })
 
-  // 같은 cwd 의 두 검증은 직렬화된다 — RunManager 가 그 키로 하나만 돌리기 때문이다
+  // Same-cwd validations are serialised as a policy — two in one tree share a build directory and
+  // ports — not because a seat has to free up
   it('같은 cwd 의 두 번째 검증은 첫 번째가 끝난 뒤에 시작한다', async () => {
     const runner = fakeRunner()
     const { onSettled } = settledCalls()
@@ -65,7 +70,7 @@ describe('TaskValidator', () => {
     v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
     v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1' })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
-    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 })
+    v.onRunExit({ runId: runner.started[0].runId, exitCode: 0 })
     await vi.waitFor(() => expect(runner.started).toHaveLength(2))
     expect(runner.started[1].taskId).toBe('tsk_2')
   })
@@ -109,6 +114,7 @@ describe('TaskValidator', () => {
           throw new Error('NO_CONFIG')
         }
         started.push(a.taskId)
+        return { runId: 'run_2' }
       },
       output: () => ''
     }
@@ -118,12 +124,15 @@ describe('TaskValidator', () => {
     await vi.waitFor(() => expect(started).toEqual(['tsk_2']))
   })
 
-  // 검증이 아닌 실행(사용자가 누른 것)의 종료가 큐를 흔들면 안 된다
-  it('모르는 cwd 의 종료는 무시한다', async () => {
+  // The user's own runs end too, and now nothing about them is a signal — an exit that names no queue
+  // head is ignored
+  it('an exit for a run that is not a head is ignored', async () => {
     const runner = fakeRunner()
     const { onSettled, calls } = settledCalls()
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
-    v.onRunExit({ cwd: 'D:/other', exitCode: 0 })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(1))
+    v.onRunExit({ runId: 'somebody-elses', exitCode: 0 })
     await new Promise((r) => setTimeout(r, 10))
     expect(calls).toHaveLength(0)
   })
@@ -142,7 +151,7 @@ describe('TaskValidator', () => {
     v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
     v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1' })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
-    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 })
+    v.onRunExit({ runId: runner.started[0].runId, exitCode: 0 })
     await vi.waitFor(() => expect(runner.started).toHaveLength(2))
     expect(runner.started[1].taskId).toBe('tsk_2')
   })
@@ -159,6 +168,7 @@ describe('TaskValidator', () => {
           throw new Error('NO_CONFIG')
         }
         started.push(a.taskId)
+        return { runId: 'run_2' }
       },
       output: () => ''
     }
@@ -174,135 +184,15 @@ describe('TaskValidator', () => {
     await vi.waitFor(() => expect(started).toEqual(['tsk_2']))
   })
 
-  // 자리가 사용 중인 것(ValidatorBusyError)은 지나가는 문제다 — NO_CONFIG 같은 진짜 실패와 달리
-  // 사람에게 묻지 않고, 다음 항목으로 큐를 넘기지도 않는다.
-  it('자리가 사용 중이면 onCannotRun 을 부르지 않고 큐를 넘기지도 않는다', async () => {
-    const attempts: string[] = []
-    const cannotRun: string[] = []
-    const runner: ValidatorRunner = {
-      start: async (a) => {
-        attempts.push(a.taskId)
-        throw new ValidatorBusyError(a.cwd)
-      },
-      output: () => ''
-    }
-    const v = new TaskValidator({
-      runner,
-      onSettled: async () => {},
-      onCannotRun: async (a) => void cannotRun.push(a.taskId)
-    })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
-    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1' })
-    await vi.waitFor(() => expect(attempts).toHaveLength(1))
-    await new Promise((r) => setTimeout(r, 10))
-    expect(cannotRun).toHaveLength(0)
-    // tsk_2 는 아직 시도조차 되지 않았다 — tsk_1 이 큐 맨 앞에 그대로 남아 있다
-    expect(attempts).toEqual(['tsk_1'])
-  })
-
-  // 자리를 비운 실행(사용자가 손으로 시작한 Run)이 끝나면, 기다리던 헤드가 다시 시작을 시도하고
-  // 이번에는 성공한다(started 가 true 로 바뀐다). 그 다음에 오는 종료는 이제 헤드 자신의 것이므로
-  // 재시도가 아니라 정산으로 이어져야 한다 — 이 왕복 전체가 이번 교정이 기대는 메커니즘이다.
-  it('자리가 사용 중이라 기다리던 항목은, 그 자리를 비운 실행이 끝나면 시작하고, 그 다음 종료로 정산된다', async () => {
-    let busy = true
-    const attempts: string[] = []
-    const runner: ValidatorRunner = {
-      start: async (a) => {
-        attempts.push(a.taskId)
-        if (busy) {
-          busy = false
-          throw new ValidatorBusyError(a.cwd)
-        }
-      },
-      output: () => '출력'
-    }
-    const { onSettled, calls } = settledCalls()
+  // The queue no longer waits for the user's run to finish — that was RunManager's one-per-project
+  // constraint, which is gone. A validation starts beside whatever is running.
+  it('starts immediately even though the runner reports other runs alive', async () => {
+    const runner = fakeRunner()
+    const { onSettled } = settledCalls()
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
     v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
-    await vi.waitFor(() => expect(attempts).toEqual(['tsk_1']))
-    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 }) // 자리를 비운 실행의 종료 — tsk_1 이 낸 것이 아니다
-    await vi.waitFor(() => expect(attempts).toEqual(['tsk_1', 'tsk_1'])) // 다음 항목이 아니라 같은 헤드를 재시도한다
-    expect(calls).toHaveLength(0) // 재시도일 뿐이다 — 아직 정산되지 않았다
-    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 }) // 이번에는 tsk_1 자신의 종료다 — started 가 true 라서 정산된다
-    await vi.waitFor(() => expect(calls).toHaveLength(1))
-    expect(calls[0]).toEqual({ taskId: 'tsk_1', exitCode: 0, output: '출력' })
-  })
-
-  // startHead 는 onRunExit 의 재시도로 재진입할 수 있다 — 겹쳐 들어온 두 번째 종료가 runner.start 를
-  // 또 부르면, 첫 시도가 아직 진행 중인데도 같은 사용자 명령이 두 번 시작된다. 재진입은 조용히
-  // 아무 일도 하지 않아야 하고, 첫 시도가 끝난 뒤에는 다시 정상적으로 시작할 수 있어야 한다.
-  it('시작이 진행 중일 때 겹쳐 들어온 종료는 재진입해서 두 번째 시작을 만들지 않는다', async () => {
-    const attempts: string[] = []
-    let resolveFirst: (() => void) | undefined
-    const runner: ValidatorRunner = {
-      start: async (a) => {
-        attempts.push(a.taskId)
-        if (attempts.length === 1) {
-          await new Promise<void>((r) => (resolveFirst = r)) // 첫 시도를 제어 가능한 시점에 묶어 둔다
-          throw new ValidatorBusyError(a.cwd)
-        }
-      },
-      output: () => '출력'
-    }
-    const v = new TaskValidator({ runner, onSettled: async () => {}, onCannotRun: async () => {} })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
-    await vi.waitFor(() => expect(attempts).toHaveLength(1)) // 첫 시도가 걸려 있다
-
-    // 첫 시도가 끝나기 전에 종료가 겹쳐 들어온다 — 재진입을 시도하지만 아무 일도 해서는 안 된다
-    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 })
-    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 })
-    await new Promise((r) => setTimeout(r, 10))
-    expect(attempts).toHaveLength(1) // 겹친 재진입이 두 번째 시도를 만들지 않았다
-
-    resolveFirst?.() // 첫 시도가 (여전히 사용 중이라는) 실패로 끝난다
-    await new Promise((r) => setTimeout(r, 10))
-    expect(attempts).toHaveLength(1) // 시도가 끝났을 뿐, 저절로 다시 시도하지는 않는다
-
-    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 }) // 이 종료는 첫 시도가 끝난 뒤에 온다 — 재시도로 이어진다
-    await vi.waitFor(() => expect(attempts).toHaveLength(2))
-  })
-
-  // ValidatorBusyError 가 표준 경로지만, ipc.ts 의 사전 검사가 놓친 경우 RunManager 가 곧바로
-  // 'ALREADY_RUNNING: ...' 로 시작하는 평범한 Error 를 던질 수 있다 — 그 모양도 같은 지나가는
-  // 문제로 다뤄야 사전 검사와 실제 판정이 어긋나는 날에도 사람에게 잘못 묻지 않는다.
-  it('ValidatorBusyError 가 아니어도 ALREADY_RUNNING: 로 시작하는 메시지는 사용 중으로 다룬다', async () => {
-    const attempts: string[] = []
-    const cannotRun: string[] = []
-    const runner: ValidatorRunner = {
-      start: async (a) => {
-        attempts.push(a.taskId)
-        throw new Error(`ALREADY_RUNNING: ${a.cwd}`) // RunManager 가 직접 던지는 것과 같은 모양
-      },
-      output: () => ''
-    }
-    const v = new TaskValidator({
-      runner,
-      onSettled: async () => {},
-      onCannotRun: async (a) => void cannotRun.push(a.taskId)
-    })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
-    await vi.waitFor(() => expect(attempts).toHaveLength(1))
-    await new Promise((r) => setTimeout(r, 10))
-    expect(cannotRun).toHaveLength(0) // Gate 로 가지 않는다 — 지나가는 문제로 다뤄진다
-  })
-
-  // 헤드가 아직 시작하지 못한 채로 온 종료는 다른 실행의 것이다 — 그 코드로 Task 를 정산하면 안 된다
-  it('헤드가 시작하지 못한 채로 온 종료는 아무것도 정산하지 않는다', async () => {
-    const attempts: string[] = []
-    const runner: ValidatorRunner = {
-      start: async (a) => {
-        attempts.push(a.taskId)
-        throw new ValidatorBusyError(a.cwd)
-      },
-      output: () => ''
-    }
-    const { onSettled, calls } = settledCalls()
-    const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
-    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
-    await vi.waitFor(() => expect(attempts).toHaveLength(1))
-    v.onRunExit({ cwd: 'D:/w1', exitCode: 0 })
-    await vi.waitFor(() => expect(attempts).toHaveLength(2)) // 재시도는 일어났지만
-    expect(calls).toHaveLength(0) // 정산되지는 않았다
+    await vi.waitFor(() => expect(runner.started).toHaveLength(1))
+    expect(runner.started[0].taskId).toBe('tsk_1')
   })
 })
 
@@ -332,44 +222,13 @@ describe('TaskValidator — 큐 항목 유실 방지', () => {
     v.enqueue({ taskId: 'tsk_2', cwd: CWD })
     v.enqueue({ taskId: 'tsk_3', cwd: CWD })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
-    v.onRunExit({ cwd: CWD, exitCode: 0 })
+    v.onRunExit({ runId: runner.started[0].runId, exitCode: 0 })
     await vi.waitFor(() => expect(settled).toEqual(['tsk_1']))
-    v.onRunExit({ cwd: CWD, exitCode: 0 }) // 겹쳐 들어온 두 번째 종료
+    v.onRunExit({ runId: runner.started[0].runId, exitCode: 0 }) // 겹쳐 들어온 두 번째 종료
     release?.()
     await vi.waitFor(() => expect(runner.started).toHaveLength(2))
     expect(runner.started[1].taskId).toBe('tsk_2') // tsk_2 가 건너뛰어지지 않았다
     expect(settled).toEqual(['tsk_1']) // 두 번 정산하지도 않았다
-  })
-
-  // 고장난 head 의 이중 시작. startHead 에서 starting 은 finally 로 풀리는데 advance 는
-  // await onCannotRun 뒤에 온다 — 그 창에 도착한 종료가 head.started === false 를 보고
-  // startHead 를 다시 부르면 같은 고장난 head 로 runner.start 가 또 불리고, 두 번째
-  // onCannotRun 과 두 번째 advance 가 이어져 같은 항목이 유실된다.
-  it('고장난 head 가 두 번 시작돼도 다음 항목을 건너뛰지 않는다', async () => {
-    const started: string[] = []
-    let release: (() => void) | undefined
-    const runner: ValidatorRunner = {
-      start: async (a) => {
-        started.push(a.taskId)
-        if (a.taskId === 'tsk_1') throw new Error('NO_CONFIG')
-      },
-      output: () => ''
-    }
-    const v = new TaskValidator({
-      runner,
-      onSettled: async () => {},
-      // Gate 커밋을 붙잡아 두어 starting 이 풀린 뒤 advance 전인 창을 만든다
-      onCannotRun: async () => {
-        await new Promise<void>((r) => (release = r))
-      }
-    })
-    v.enqueue({ taskId: 'tsk_1', cwd: CWD })
-    v.enqueue({ taskId: 'tsk_2', cwd: CWD })
-    await vi.waitFor(() => expect(release).toBeTruthy()) // onCannotRun 안에 걸려 있다
-    v.onRunExit({ cwd: CWD, exitCode: 0 }) // 그 창에 도착한 종료 — 고장난 head 를 다시 시작한다
-    await vi.waitFor(() => expect(started).toEqual(['tsk_1', 'tsk_1']))
-    release?.()
-    await vi.waitFor(() => expect(started).toEqual(['tsk_1', 'tsk_1', 'tsk_2']))
   })
 })
 
@@ -387,8 +246,8 @@ describe('TaskValidator — markStopped', () => {
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async (a) => void reasons.push(a) })
     v.enqueue({ taskId: 'tsk_1', cwd: CWD })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
-    v.markStopped(CWD)
-    v.onRunExit({ cwd: CWD, exitCode: 1 })
+    v.markStopped(runner.started[0].runId)
+    v.onRunExit({ runId: runner.started[0].runId, exitCode: 1 })
     await vi.waitFor(() => expect(reasons).toHaveLength(1))
     expect(reasons[0].taskId).toBe('tsk_1')
     expect(reasons[0].reason).toContain('정지')
@@ -402,8 +261,8 @@ describe('TaskValidator — markStopped', () => {
     v.enqueue({ taskId: 'tsk_1', cwd: CWD })
     v.enqueue({ taskId: 'tsk_2', cwd: CWD })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
-    v.markStopped(CWD)
-    v.onRunExit({ cwd: CWD, exitCode: 1 })
+    v.markStopped(runner.started[0].runId)
+    v.onRunExit({ runId: runner.started[0].runId, exitCode: 1 })
     await vi.waitFor(() => expect(runner.started).toHaveLength(2))
     expect(runner.started[1].taskId).toBe('tsk_2')
   })
@@ -416,36 +275,12 @@ describe('TaskValidator — markStopped', () => {
     v.enqueue({ taskId: 'tsk_1', cwd: CWD })
     v.enqueue({ taskId: 'tsk_2', cwd: CWD })
     await vi.waitFor(() => expect(runner.started).toHaveLength(1))
-    v.markStopped(CWD)
-    v.onRunExit({ cwd: CWD, exitCode: 1 })
+    v.markStopped(runner.started[0].runId)
+    v.onRunExit({ runId: runner.started[0].runId, exitCode: 1 })
     await vi.waitFor(() => expect(runner.started).toHaveLength(2))
-    v.onRunExit({ cwd: CWD, exitCode: 0 })
+    v.onRunExit({ runId: runner.started[1].runId, exitCode: 0 })
     await vi.waitFor(() => expect(calls).toHaveLength(1))
     expect(calls[0].taskId).toBe('tsk_2')
-  })
-
-  // 아직 시작하지 못한 head 에는 표시하지 않는다 — 그 cwd 에서 도는 것은 검증이 아니라 그 자리를
-  // 차지하고 있는 다른 실행이므로, 그 정지는 이 검증과 아무 상관이 없다
-  it('시작하지 못한 head 에는 표시하지 않는다', async () => {
-    const attempts: string[] = []
-    const runner: ValidatorRunner = {
-      start: async (a) => {
-        attempts.push(a.taskId)
-        if (attempts.length === 1) throw new ValidatorBusyError(a.cwd)
-      },
-      output: () => '출력'
-    }
-    const { onSettled, calls } = settledCalls()
-    const reasons: string[] = []
-    const v = new TaskValidator({ runner, onSettled, onCannotRun: async (a) => void reasons.push(a.reason) })
-    v.enqueue({ taskId: 'tsk_1', cwd: CWD })
-    await vi.waitFor(() => expect(attempts).toHaveLength(1))
-    v.markStopped(CWD) // 자리를 차지하고 있던 사용자 실행의 정지다
-    v.onRunExit({ cwd: CWD, exitCode: 1 }) // 그 실행의 종료 — head 를 다시 시작한다
-    await vi.waitFor(() => expect(attempts).toHaveLength(2))
-    v.onRunExit({ cwd: CWD, exitCode: 0 }) // 이번에는 검증 자신의 종료다
-    await vi.waitFor(() => expect(calls).toHaveLength(1))
-    expect(reasons).toHaveLength(0) // Gate 로 가지 않았다
   })
 
   // 큐가 비어 있는 cwd 의 정지는 검증이 아닌 실행의 정지다
@@ -453,7 +288,7 @@ describe('TaskValidator — markStopped', () => {
     const runner = fakeRunner()
     const { onSettled } = settledCalls()
     const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
-    expect(() => v.markStopped(absPath('other'))).not.toThrow()
+    expect(() => v.markStopped('run_none')).not.toThrow()
   })
 })
 
@@ -485,8 +320,9 @@ describe('TaskValidator — 없어진 할 일', () => {
     await new Promise((r) => setTimeout(r, 10))
     expect(reasons).toHaveLength(0) // Gate 가 열리지 않았다 — 사람의 결정을 되돌리지 않는다
     expect(calls).toHaveLength(0) // 실패로 정산되지도 않았다
-    // 항목이 큐에서 빠졌다: 뒤늦게 온 종료가 그 항목을 되살려 정산하지 않는다
-    v.onRunExit({ cwd: CWD, exitCode: 1 })
+    // 항목이 큐에서 빠졌다: 뒤늦게 온 종료가 그 항목을 되살려 정산하지 않는다 — 'skip' 은 runId 를
+    // 남기지 않으므로 이 id 는 어떤 head 도 가리키지 않는다
+    v.onRunExit({ runId: 'run_1', exitCode: 1 })
     await new Promise((r) => setTimeout(r, 10))
     expect(calls).toHaveLength(0)
     expect(attempts).toEqual(['tsk_1'])
@@ -499,6 +335,7 @@ describe('TaskValidator — 없어진 할 일', () => {
       start: async (a) => {
         attempts.push(a.taskId)
         if (a.taskId === 'tsk_1') return 'skip'
+        return { runId: `run_${a.taskId}` }
       },
       output: () => '출력'
     }
@@ -515,7 +352,7 @@ describe('TaskValidator — 없어진 할 일', () => {
     await vi.waitFor(() => expect(attempts).toEqual(['tsk_1', 'tsk_2']))
     // tsk_2 는 실제로 시작했으므로 그 종료는 자기 것이다 — 항등성 검사가 건너뛴 항목을 이미
     // 지웠으니, 이 정산이 tsk_3 을 함께 밀어내지 않는지도 여기서 함께 고정된다
-    v.onRunExit({ cwd: CWD, exitCode: 0 })
+    v.onRunExit({ runId: 'run_tsk_2', exitCode: 0 })
     await vi.waitFor(() => expect(calls).toHaveLength(1))
     expect(calls[0].taskId).toBe('tsk_2')
     await vi.waitFor(() => expect(attempts).toEqual(['tsk_1', 'tsk_2', 'tsk_3']))
