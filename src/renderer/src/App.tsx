@@ -51,6 +51,7 @@ import type {
 import type { ProjectUnderstanding, RecordStatus } from '../../core/understanding/types'
 import { slackMode } from '../../core/slack/ready'
 import { findRun } from '../../core/orchestration/snapshot'
+import { pickRunSelection } from '../../core/run/selection'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
 import {
@@ -1707,6 +1708,24 @@ export default function App(): React.JSX.Element {
   // Project Run/Stop: run configurations, the active run, the list of all active runs, and whether the panel is open
   const [runConfigs, setRunConfigs] = useState<RunConfig[]>([])
   const [runSelectedId, setRunSelectedId] = useState<string | null>(null)
+  /** 프로젝트 경로 → 그 프로젝트에서 고른 실행 구성. 선택은 프로젝트마다 따로 기억해야 한다.
+   *
+   *  씨앗 구성의 id 는 스크립트 이름에서 만들어져(`seed:npm:dev`) 프로젝트를 담지 않는다. 그래서
+   *  "이전 선택이 새 목록에도 있으면 유지" 로는 프로젝트가 바뀐 것을 아예 감지하지 못한다 — A 에서
+   *  고른 `seed:npm:dev` 는 dev 스크립트가 있는 B 에서도 멀쩡히 유효해서, B 가 조용히 A 의 선택을
+   *  물려받는다. npm 프로젝트끼리 dev·build·start·test 가 겹치는 것은 예외가 아니라 보통이다.
+   *
+   *  state 가 아니라 ref 인 이유: 이 값이 바뀐다고 다시 그릴 것이 없다. 화면에 나가는 것은
+   *  runSelectedId 이고, 이건 그 값을 프로젝트별로 되찾기 위한 기억일 뿐이다. state 로 두면 아래
+   *  프로젝트 전환 효과의 의존성에 들어가 선택할 때마다 목록을 다시 불러오게 된다. */
+  const runSelectedByProject = useRef<Record<string, string>>({})
+  /** 선택을 화면과 기억에 함께 적는다. 한쪽만 적으면 다음에 그 프로젝트로 돌아왔을 때 어긋난다. */
+  const applyRunSelection = (projectPath: string | null, id: string | null): void => {
+    setRunSelectedId(id)
+    if (!projectPath) return
+    if (id) runSelectedByProject.current[projectPath] = id
+    else delete runSelectedByProject.current[projectPath]
+  }
   const [runActive, setRunActive] = useState<RunStatus | null>(null)
   /** Run 탭을 ✕ 로 닫은 프로젝트. Run 탭은 실행이 없을 때도 '실행' 라벨로 남아 있으므로, main 에서
    *  끝난 실행을 지우는 것(run.dismiss)만으로는 탭이 사라지지 않는다 — 닫았다는 사실은 여기 있다.
@@ -2271,13 +2290,19 @@ export default function App(): React.JSX.Element {
       setRunIsPythonProject(r.isPythonProject)
       setRunHasDockerfile(r.hasDockerfile)
       setRunContext(r.context)
-      setRunSelectedId((prev) => (r.configs.some((c) => c.id === prev) ? prev : r.active?.configId ?? r.configs[0]?.id ?? null))
+      // 프로젝트가 바뀌는 유일한 자리다. 직전 선택이 아니라 **이 프로젝트에 기억된** 선택을
+      // 물어본다 — 씨앗 id 는 프로젝트를 담지 않아서, 직전 선택을 들고 오면 이름이 같은
+      // 스크립트가 있는 프로젝트마다 그 선택이 따라다닌다(runSelectedByProject 주석).
+      applyRunSelection(
+        currentProject,
+        pickRunSelection(r.configs, runSelectedByProject.current[currentProject], r.active?.configId)
+      )
       if (r.active?.status === 'running') setRunPanelOpen(true)
     }, () => {
       if (cancelled) return
       setRunConfigs([])
       setRunActive(null)
-      setRunSelectedId(null)
+      applyRunSelection(currentProject, null)
       setRunContext(null)
     })
     return () => { cancelled = true }
@@ -2498,7 +2523,12 @@ export default function App(): React.JSX.Element {
         setRunIsPythonProject(r.isPythonProject)
         setRunHasDockerfile(r.hasDockerfile)
         setRunContext(r.context)
-        setRunSelectedId((prev) => (r.configs.some((cc) => cc.id === prev) ? prev : r.active?.configId ?? r.configs[0]?.id ?? null))
+        // 이 효과는 의존성이 [] 라 클로저의 currentProject 가 낡는다 — 위에서 ref 로 읽어 둔
+        // root 가 지금 열린 프로젝트다. 기억을 그 키로 읽고 써야 다른 프로젝트 것을 건드리지 않는다.
+        applyRunSelection(
+          root,
+          pickRunSelection(r.configs, runSelectedByProject.current[root], r.active?.configId)
+        )
       })
     })
     return off
@@ -2548,7 +2578,10 @@ export default function App(): React.JSX.Element {
       void window.api.run.list(currentProject).then((r) => {
         setRunConfigs(r.configs)
         setRunContext(r.context)
-        setRunSelectedId((prev) => (r.configs.some((c) => c.id === prev) ? prev : r.configs[0]?.id ?? null))
+        applyRunSelection(
+          currentProject,
+          pickRunSelection(r.configs, runSelectedByProject.current[currentProject])
+        )
       })
     })
   }
@@ -2571,7 +2604,10 @@ export default function App(): React.JSX.Element {
           // stored config shares its seedKeyOf — so without this the toolbar keeps a seed id that no
           // longer resolves, ▶ stays enabled (disabled={!selectedId}, and a stale string is truthy)
           // and pressing it fails with NO_CONFIG.
-          setRunSelectedId((prev) => (r.configs.some((c) => c.id === prev) ? prev : r.configs[0]?.id ?? null))
+          applyRunSelection(
+            currentProject,
+            pickRunSelection(r.configs, runSelectedByProject.current[currentProject])
+          )
         })
         return true
       },
@@ -2769,7 +2805,7 @@ export default function App(): React.JSX.Element {
               <RunToolbar
                 configs={runConfigs}
                 selectedId={runSelectedId}
-                onSelect={setRunSelectedId}
+                onSelect={(id) => applyRunSelection(currentProject, id)}
                 active={runActive}
                 onRun={runStart}
                 onStop={runStop}
