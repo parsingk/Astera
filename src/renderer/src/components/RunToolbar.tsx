@@ -32,7 +32,7 @@ export function RunToolbar({
   onStopRun,
   menuOpen,
   onMenuOpenChange,
-  manageHint
+  shortcut
 }: {
   configs: RunConfig[]
   selectedId: string | null
@@ -55,9 +55,9 @@ export function RunToolbar({
   /** Controlled: Task 9's run.selectConfig shortcut opens the configuration menu from outside. */
   menuOpen: boolean
   onMenuOpenChange: (open: boolean) => void
-  /** The configuration menu footer's "Manage run configs…" hint, already formatted; empty when there
-   *  is no shortcut bound to show. */
-  manageHint: string
+  /** run.selectConfig's binding, already formatted — shown in the pill's title, since that shortcut
+   *  opens the pill. Undefined when the user cleared every binding for it. */
+  shortcut?: string
 }): React.JSX.Element {
   const { t } = useI18n()
   const [showRuns, setShowRuns] = useState(false)
@@ -91,7 +91,7 @@ export function RunToolbar({
         onRun={onRunConfig}
         onEdit={onEditConfig}
         onManage={onOpenManager}
-        manageHint={manageHint}
+        shortcut={shortcut}
       />
       {/* A validation run is not the user's. The stop button stays (a runaway validation must be
           stoppable); the label is what says why ⏹ is here for a run they did not start. */}

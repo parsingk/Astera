@@ -444,7 +444,6 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .rcmenu-sep { flex: none; height: 1px; background: var(--line-soft); margin: 4px 0; }
 .rcmenu-foot { flex: none; display: flex; align-items: center; gap: 12px; width: 100%; box-sizing: border-box; background: transparent; border: 0; border-radius: var(--radius); padding: 4px 8px; font-size: 12px; color: var(--text); text-align: left; cursor: pointer; }
 .rcmenu-foot:hover { background: var(--elevated); }
-.rcmenu-hint { margin-left: auto; font-size: 11px; color: var(--text-faint); white-space: nowrap; }
 .run-btn { width: 28px; height: 28px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); font-size: 15px; padding: 0; cursor: pointer; }
 .run-btn:hover { background: var(--elevated); color: var(--text); }
 /* Same ring as .sel-trigger below — no border to brighten on a ghost button, so only the ring shows. */

@@ -35,7 +35,7 @@ export function RunConfigMenu({
   onRun,
   onEdit,
   onManage,
-  manageHint
+  shortcut
 }: {
   configs: RunConfig[]
   /** The current project's runs, finished ones included — Recent and every row's status read this. */
@@ -49,8 +49,10 @@ export function RunConfigMenu({
   onRun: (id: string) => void
   onEdit: (id: string) => void
   onManage: () => void
-  /** The manage row's shortcut, already formatted. */
-  manageHint: string
+  /** run.selectConfig's binding, already formatted — this is what opens the pill, so the pill's title
+   *  is where the shortcut belongs, not the "Manage run configurations…" footer row below (that opens
+   *  the manager, a different action). Undefined when the user cleared every binding for it. */
+  shortcut?: string
 }): React.JSX.Element {
   const { t } = useI18n()
   const rootRef = useRef<HTMLDivElement>(null)
@@ -197,6 +199,7 @@ export function RunConfigMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={t('run.config.selectLabel')}
+        title={shortcut ? `${t('run.config.selectLabel')} (${shortcut})` : t('run.config.selectLabel')}
         onClick={() => onOpenChange(!open)}
       >
         {selected ? (
@@ -253,7 +256,6 @@ export function RunConfigMenu({
             }}
           >
             {t('run.manager.open')}
-            <span className="rcmenu-hint">{manageHint}</span>
           </button>
         </div>
       )}

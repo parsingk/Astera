@@ -53,7 +53,7 @@ import type { ProjectUnderstanding, RecordStatus } from '../../core/understandin
 import { slackMode } from '../../core/slack/ready'
 import { findRun } from '../../core/orchestration/snapshot'
 import { pickRunSelection, pickRunToShow } from '../../core/run/selection'
-import { upsertRun } from '../../core/run/instances'
+import { toolbarState, upsertRun } from '../../core/run/instances'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
 import {
@@ -415,6 +415,12 @@ export default function App(): React.JSX.Element {
   const explorerShortcutLabel = explorerChord
     ? `${t('explorer.rail.toggle')} (${formatChord(explorerChord)})`
     : t('explorer.rail.toggle')
+  /** The run configuration pill's shortcut, for its title — run.selectConfig opens the pill's menu, so
+   *  the hint belongs there, not on the "Manage run configurations…" footer row (that opens the
+   *  manager instead). Same derivation as explorerChord: read the resolved binding, not the default,
+   *  so a rebind shows up here too. Undefined when the user cleared every binding for it. */
+  const runSelectConfigChord = bindingsRef.current['run.selectConfig']?.[0]
+  const runSelectConfigShortcut = runSelectConfigChord ? formatChord(runSelectConfigChord) : undefined
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [explorerOpen, setExplorerOpen] = useState(false)
   // 키 핸들러는 []로 한 번만 등록되어 첫 렌더의 클로저를 붙잡는다. toggleExplorer 가 렌더 값을 읽으면
@@ -617,6 +623,12 @@ export default function App(): React.JSX.Element {
    *  render-time values (via closeFileTab), so a key listener registered once that called a captured
    *  stale closure would act on outdated tabs — same place, same reason as selectWorkbenchTabRef. */
   const closeWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
+  // The run shortcuts (Task 9). Same reason as the two refs above: the keydown effect is registered
+  // once with no dependencies, so it would otherwise close over the first render's runStart/runStop/
+  // selectedRunId. Assigned once those exist, further down.
+  const runStartRef = useRef<() => void>(() => {})
+  const runStopSelectionRef = useRef<() => void>(() => {})
+  const runRerunSelectedRef = useRef<() => void>(() => {})
   const fileBuffersRef = useRef(fileBuffers) // keeps the external-change handler from going stale
   fileBuffersRef.current = fileBuffers
   // 파일별 에디터 상태 캐시. FileEditor보다 오래 살아야 하므로 여기서 소유한다 (editorStateCache.ts의 주석)
@@ -930,6 +942,19 @@ export default function App(): React.JSX.Element {
         if (e.repeat) return
         const cur = mdModesRef.current[id] ?? defaultMdMode()
         setMdMode(id, cycleViewMode(cur))
+        return
+      }
+      // The run shortcuts. Unlike most branches here there is no `editable` guard: these are F-key
+      // combinations that no text field claims, and running the project from inside the terminal is
+      // the case they exist for.
+      if (action === 'run.run' || action === 'run.stop' || action === 'run.rerun' || action === 'run.selectConfig') {
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return
+        if (action === 'run.selectConfig') setRunMenuOpen(true)
+        else if (action === 'run.run') runStartRef.current()
+        else if (action === 'run.stop') runStopSelectionRef.current()
+        else runRerunSelectedRef.current()
         return
       }
       // Pane splitting — by default Ctrl+\ to the right, Ctrl+Shift+\ below. The same place VS Code
@@ -2713,6 +2738,16 @@ export default function App(): React.JSX.Element {
   const runStop = (runId: string): void => {
     void window.api.run.stop(runId)
   }
+  // The run shortcuts' refs (see their declaration above): kept fresh on every render so the keydown
+  // effect's stale closure still calls today's runStart/runStop against today's runs and selection.
+  runStartRef.current = () => runStart()
+  // The same expansion the toolbar's ⏹ makes (toolbarState.stopTargets), so a compound stops every live member.
+  runStopSelectionRef.current = () => toolbarState(runs, runSelectedId, runConfigs).stopTargets.forEach(runStop)
+  // What the run list's ↻ does: restart the selected run's own configuration. Silently does nothing
+  // with the panel closed or no run selected, like the other run shortcuts' no-ops.
+  runRerunSelectedRef.current = () => {
+    if (selectedRunId) runStart(runs.find((r) => r.runId === selectedRunId)?.configId ?? null)
+  }
   /** The list's ✕ on a finished run. main drops it (its exitCode and output with it — otherwise a run.list
    *  re-read brings the row back) and the local list follows without waiting. Selection moves to the
    *  nearest remaining row. With no runs and no terminals left the panel collapses: a panel with nothing
@@ -2970,10 +3005,7 @@ export default function App(): React.JSX.Element {
                 onStopRun={runStop}
                 menuOpen={runMenuOpen}
                 onMenuOpenChange={setRunMenuOpen}
-                // No shortcut.run.selectConfig binding to read yet — that action does not exist until
-                // the run.selectConfig ActionId is registered. Empty renders no hint, the same as a
-                // configuration with no shortcut bound to it anywhere else in this app.
-                manageHint=""
+                shortcut={runSelectConfigShortcut}
               />
             </div>
           ) : null
