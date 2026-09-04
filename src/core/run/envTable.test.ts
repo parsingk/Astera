@@ -55,6 +55,15 @@ describe('applyEnvPaste', () => {
     expect(applyEnvPaste(out!, out!.length, 'A=9\nD=4')).toEqual(out)
   })
 
+  it('leaves the row pasted into when the paste only overwrote keys the table already holds', () => {
+    const start = [{ key: 'X', value: '9' }, { key: '', value: '' }, { key: 'Y', value: '8' }]
+    expect(applyEnvPaste(start, 1, 'X=99')).toEqual([
+      { key: 'X', value: '99' },
+      { key: '', value: '' },
+      { key: 'Y', value: '8' }
+    ])
+  })
+
   it('keeps a non-empty target row and inserts before it', () => {
     expect(applyEnvPaste([{ key: 'Z', value: '0' }], 0, 'B=2')).toEqual([{ key: 'B', value: '2' }, { key: 'Z', value: '0' }])
   })

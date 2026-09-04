@@ -60,8 +60,12 @@ export function applyEnvPaste(rows: readonly EnvRow[], at: number, text: string)
     if (i >= 0) next[i] = { key, value }
     else fresh.push({ key, value })
   }
+  // The blank row pasted into is consumed only when a fresh key is taking its place. A paste that
+  // only overwrote keys the table already holds leaves it alone: that row is where the caret is, and
+  // dropping it slides a different variable's row under the caret, since the table renders rows by
+  // index.
   const target = next[at]
-  const replace = target && target.key === '' && target.value === '' ? 1 : 0
+  const replace = fresh.length > 0 && target && target.key === '' && target.value === '' ? 1 : 0
   next.splice(Math.min(at, next.length), replace, ...fresh)
   return next
 }
