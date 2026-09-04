@@ -719,6 +719,10 @@ export const ko = {
   'run.config.cwdOutsideProject': '실행 구성의 작업 폴더는 프로젝트 안이어야 합니다',
   // ipc.ts run.start — 필수 항목이 빈 구성은 저장은 되지만 실행은 거부한다. {fields} 는 아래 run.field.* 라벨이다
   'run.start.incomplete': '실행 구성의 필수 항목이 비어 있습니다: {fields}',
+  'run.start.cycle': '실행 구성이 서로를 기다립니다: {path}',
+  'run.start.missingTask': '{name} 이(가) 가리키는 실행 구성이 없습니다',
+  'run.start.compoundNotRunnable': '묶음 구성은 여기서 실행할 수 없습니다 — 명령이 하나여야 합니다',
+  'run.start.stepFailed': '{name} 을(를) 시작하지 못했습니다: {detail}',
   // RunConfigForm.tsx — name field and the JDK/file pickers shared by every per-kind form.
   // 종류별 필드 라벨은 shell 의 명령까지 모두 아래 run.field.* 에 모여 있다
   'run.form.nameLabel': '이름',
@@ -765,6 +769,7 @@ export const ko = {
   // The tree's markers, as tooltips
   'run.manager.markDirty': '적용되지 않은 변경',
   'run.manager.markIncomplete': '필수 항목이 비어 있어 실행할 수 없습니다',
+  'run.manager.markBrokenRef': '가리키는 구성이 없어 실행할 수 없습니다',
   'run.manager.newFolder': '새 폴더로',
   'run.manager.moveUp': '위로',
   'run.manager.moveDown': '아래로',
@@ -787,12 +792,14 @@ export const ko = {
   'run.type.compose': 'Docker Compose',
   'run.type.dockerfile': 'Dockerfile',
   'run.type.dotnet': '.NET',
+  'run.type.compound': '묶음',
   // RunConfigForm.tsx / RunTypePicker.tsx (Task 7) — per-kind field labels and the ＋ kind-picker popup.
   'run.field.javaHome': 'JDK',
   'run.field.springProfiles': 'Spring 프로파일',
   'run.field.args': '인자',
   'run.field.cwd': '작업 폴더',
   'run.field.env': '환경변수',
+  'run.field.members': '멤버',
   // EnvTable.tsx — the Key/Value table that edits a configuration's environment variables
   'run.env.key': '키',
   'run.env.value': '값',
@@ -832,6 +839,12 @@ export const ko = {
   // 않도록 '프로젝트 파일'로 적는다. subcommand 는 비면 run 이다
   'run.field.project': '프로젝트 파일',
   'run.field.configuration': '빌드 구성',
+  'run.section.configuration': '구성',
+  'run.section.environment': '환경',
+  'run.section.beforeLaunch': '실행 전 작업',
+  'run.ref.add': '추가',
+  'run.ref.remove': '목록에서 빼기',
+  'run.ref.none': '추가할 수 있는 구성이 없습니다',
   'run.picker.search': '검색…',
   'run.picker.detected': '이 프로젝트에서 감지됨',
   'run.picker.other': '기타',

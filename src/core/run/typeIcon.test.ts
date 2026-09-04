@@ -4,7 +4,7 @@ import type { FileIconSpec } from '../files/icons'
 import type { RunConfigType } from './types'
 
 /** 종류마다 그려야 하는 모양 전체. Record 라 종류가 늘면 여기서 컴파일이 깨진다 — 손으로 적은
- *  배열은 열세 번째 종류를 조용히 건너뛴다. 아래 ALL 도 이 표에서 나온다.
+ *  배열은 열네 번째 종류를 조용히 건너뛴다. 아래 ALL 도 이 표에서 나온다.
  *  왜 이 모양이어야 하는지(파일 트리와 같아야 한다는 것)는 아래 종류별 테스트가 따로 말한다. */
 const ICONS: Record<RunConfigType, FileIconSpec> = {
   shell: { id: 'terminal', tone: 'gray' },
@@ -18,7 +18,8 @@ const ICONS: Record<RunConfigType, FileIconSpec> = {
   pytest: { id: 'label', tone: 'green', label: 'PY', badge: 'test' },
   compose: { id: 'container', tone: 'blue' },
   dockerfile: { id: 'container', tone: 'blue' },
-  dotnet: { id: 'label', tone: 'purple', label: 'C#' }
+  dotnet: { id: 'label', tone: 'purple', label: 'C#' },
+  compound: { id: 'archive', tone: 'purple' }
 }
 const ALL = Object.keys(ICONS) as RunConfigType[]
 

@@ -18,7 +18,8 @@ const OPTIONAL: Record<RunConfigType, string[]> = {
   pytest: ['target', 'interpreter', 'args', 'cwd', 'env', 'allowMultipleInstances'],
   compose: ['composeFile', 'services', 'action', 'args', 'cwd', 'env', 'allowMultipleInstances'],
   dockerfile: ['dockerfilePath', 'buildArgs', 'runArgs', 'cwd', 'env', 'allowMultipleInstances'],
-  dotnet: ['subcommand', 'configuration', 'args', 'cwd', 'env', 'allowMultipleInstances']
+  dotnet: ['subcommand', 'configuration', 'args', 'cwd', 'env', 'allowMultipleInstances'],
+  compound: []
 }
 
 describe('optionalFieldsFor', () => {
@@ -28,7 +29,7 @@ describe('optionalFieldsFor', () => {
     }
   })
 
-  // springBoot 는 JVM 두 종류에만 한 항목을 끼워 넣는다 — 나머지 열 종류는 이 값에 흔들리지 않는다
+  // springBoot 는 JVM 두 종류에만 한 항목을 끼워 넣는다 — 나머지 열한 종류는 이 값에 흔들리지 않는다
   it('springBoot 는 gradle·maven 에만 springProfiles 를 끼워 넣는다', () => {
     expect(optionalFieldsFor('gradle', { springBoot: true })).toEqual([
       'javaHome', 'springProfiles', 'args', 'cwd', 'env', 'allowMultipleInstances'
@@ -44,6 +45,9 @@ describe('optionalFieldsFor', () => {
 
   it('모든 종류에 cwd 와 env 가 있다', () => {
     for (const t of Object.keys(OPTIONAL) as RunConfigType[]) {
+      // compound starts no process, so cwd and env mean nothing to it — the 'compound' describe
+      // block below pins its actual (empty) list.
+      if (t === 'compound') continue
       expect(optionalFieldsFor(t, { springBoot: false })).toContain('cwd')
       expect(optionalFieldsFor(t, { springBoot: false })).toContain('env')
     }
@@ -149,5 +153,11 @@ describe('availableOptionalFields', () => {
     expect(
       availableOptionalFields({ ...base, type: 'gradle', tasks: 'bootRun' }, { springBoot: true }, new Set())
     ).toEqual(['javaHome', 'springProfiles', 'args', 'cwd', 'env', 'allowMultipleInstances'])
+  })
+})
+
+describe('compound', () => {
+  it('offers no optional fields — none of them mean anything without a process', () => {
+    expect(optionalFieldsFor('compound', { springBoot: false })).toEqual([])
   })
 })

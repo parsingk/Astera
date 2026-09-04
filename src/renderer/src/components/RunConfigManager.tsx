@@ -4,6 +4,7 @@ import type { RunContext } from '../../../core/run/build'
 import type { RunConfigType } from '../../../core/run/types'
 import type { MessageKey } from '../../../core/i18n'
 import { runTypeIcon } from '../../../core/run/typeIcon'
+import { referencedIds } from '../../../core/run/launch'
 import { defaultConfigFor } from '../../../core/run/config'
 import { missingRequiredFields } from '../../../core/run/migrate'
 import { groupConfigs } from '../../../core/run/grouping'
@@ -444,6 +445,13 @@ export function RunConfigManager({
                     </div>
                   )}
                   {g.items.map((c) => {
+                    // Two reasons a row cannot run. A required field left empty, and a reference —
+                    // a before-launch task or a compound member — that nothing in the list resolves,
+                    // which is what a deleted package.json script looks like: the seed is gone and the
+                    // chip points at nothing. Without the second, the tree looks fine and ▶ reports a
+                    // configuration the user cannot see. referencedIds is core/run/launch.ts's own
+                    // reference model (the same one planLaunch's expand() reads), not re-derived here.
+                    const broken = referencedIds(c).some((id) => !draft.items.some((x) => x.id === id))
                     const incomplete = !isSeedId(c.id) && missingRequiredFields(c).length > 0
                     return (
                       <button
@@ -453,8 +461,11 @@ export function RunConfigManager({
                       >
                         {dirtyIds.has(c.id) && <span className="rcm-mark dirty" title={t('run.manager.markDirty')} />}
                         <span className="rcm-item-name">{c.name}</span>
-                        {incomplete && (
-                          <span className="rcm-mark warn" title={t('run.manager.markIncomplete')}>
+                        {(incomplete || broken) && (
+                          <span
+                            className="rcm-mark warn"
+                            title={t(broken ? 'run.manager.markBrokenRef' : 'run.manager.markIncomplete')}
+                          >
                             <AlertTriangle size={11} />
                           </span>
                         )}
@@ -476,6 +487,7 @@ export function RunConfigManager({
                 composeServices={composeServices}
                 dotnetProjects={dotnetProjects}
                 npmScripts={npmScripts}
+                all={draft.items}
                 projectPath={projectPath}
                 onChange={handleFormChange}
                 folders={folderNamesOf(draft)}

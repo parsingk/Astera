@@ -225,7 +225,11 @@ export function RunDetail({
     // 만드는 것도 유효한 선택이다) 빈 목록으로 접는다 — "검증 없음" 하나만 남는다.
     void window.api.run.list(projectPath).then(
       (r) => {
-        if (!cancelled) setRunConfigs(r.configs.map((c) => ({ id: c.id, name: c.name })))
+        // A compound has no command and no exit code of its own — validation's contract is one
+        // command, one exit code (see prepareRun's compoundNotRunnable refusal), so it is excluded
+        // here rather than offered and then failed every time it runs.
+        if (!cancelled)
+          setRunConfigs(r.configs.filter((c) => c.type !== 'compound').map((c) => ({ id: c.id, name: c.name })))
       },
       () => {
         if (!cancelled) setRunConfigs([])

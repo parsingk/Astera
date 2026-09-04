@@ -3,7 +3,7 @@ import { migrateRunConfigs, missingRequiredFields, REQUIRED } from './migrate'
 import type { RunConfig, RunConfigType } from './types'
 import { ko } from '../i18n/messages/ko'
 
-/** A valid configuration of every kind. A Record, so a thirteenth kind cannot be added without
+/** A valid configuration of every kind. A Record, so a fourteenth kind cannot be added without
  *  landing here — the hand-written arrays elsewhere in the suite skip a new kind silently. */
 const COMPLETE: Record<RunConfigType, RunConfig> = {
   shell: { id: 'x', name: 'x', type: 'shell', command: 'ls' },
@@ -17,7 +17,8 @@ const COMPLETE: Record<RunConfigType, RunConfig> = {
   pytest: { id: 'x', name: 'x', type: 'pytest' },
   compose: { id: 'x', name: 'x', type: 'compose' },
   dockerfile: { id: 'x', name: 'x', type: 'dockerfile', imageTag: 'astera:dev' },
-  dotnet: { id: 'x', name: 'x', type: 'dotnet', project: 'src/App/App.csproj' }
+  dotnet: { id: 'x', name: 'x', type: 'dotnet', project: 'src/App/App.csproj' },
+  compound: { id: 'x', name: 'x', type: 'compound', members: ['a'] }
 }
 
 describe('migrateRunConfigs', () => {
@@ -153,7 +154,7 @@ describe('migrateRunConfigs', () => {
 // 다섯 종류(shell·node·maven·cargo·go)의 필수 필드는 한 번도 확인된 적이 없었다 — 그 다섯을 []
 // 로 바꿔도 테스트가 모두 초록이었다. 그래서 표를 먼저 못박고, 동작은 그 표를 돌면서 본다:
 // 표 없이 REQUIRED 를 돌기만 하면 []로 비운 종류에서 반복문이 그냥 비어 버려 또 초록이 된다
-describe('REQUIRED — 열두 종류 전부', () => {
+describe('REQUIRED — 열세 종류 전부', () => {
   it('종류마다 어떤 필드가 필수인지 못박는다', () => {
     expect(REQUIRED).toEqual({
       shell: ['command'],
@@ -167,11 +168,12 @@ describe('REQUIRED — 열두 종류 전부', () => {
       pytest: [],
       compose: [],
       dockerfile: ['imageTag'],
-      dotnet: ['project']
+      dotnet: ['project'],
+      compound: []
     })
   })
 
-  it('완전한 구성은 열두 종류 모두 통과한다', () => {
+  it('완전한 구성은 열세 종류 모두 통과한다', () => {
     for (const [type, config] of Object.entries(COMPLETE)) {
       expect(migrateRunConfigs([config]).map((c) => c.type), type).toEqual([type])
     }
@@ -244,5 +246,43 @@ describe('missingRequiredFields', () => {
     ])
     expect(missingRequiredFields({ id: 'x', name: 'x', type: 'shell', command: '' })).toEqual(['command'])
     expect(missingRequiredFields({ id: 'x', name: 'x', type: 'dotnet', project: '' })).toEqual(['project'])
+  })
+})
+
+describe('compound and beforeLaunch', () => {
+  const base = { id: 'a', name: 'A' }
+
+  it('keeps a compound with members', () => {
+    const out = migrateRunConfigs([{ ...base, type: 'compound', members: ['x', 'y'] }])
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ type: 'compound', members: ['x', 'y'] })
+  })
+
+  it('drops a compound whose members are missing or not an array of strings', () => {
+    expect(migrateRunConfigs([{ ...base, type: 'compound' }])).toEqual([])
+    expect(migrateRunConfigs([{ ...base, type: 'compound', members: 'x' }])).toEqual([])
+    expect(migrateRunConfigs([{ ...base, type: 'compound', members: [1] }])).toEqual([])
+  })
+
+  // An empty member list is the shape ＋ creates. It is storable and marked, never dropped —
+  // the same treatment an empty required string field gets.
+  it('keeps a compound with no members under allowIncomplete, and reports it', () => {
+    const cfg = { ...base, type: 'compound', members: [] }
+    expect(migrateRunConfigs([cfg], { allowIncomplete: true })).toHaveLength(1)
+    expect(missingRequiredFields(migrateRunConfigs([cfg], { allowIncomplete: true })[0])).toEqual(['members'])
+  })
+
+  it('reports nothing for a compound that has members', () => {
+    expect(missingRequiredFields({ ...base, type: 'compound', members: ['x'] })).toEqual([])
+  })
+
+  it('drops any item whose beforeLaunch is not an array of strings', () => {
+    expect(migrateRunConfigs([{ ...base, type: 'shell', command: 'ls', beforeLaunch: 'x' }])).toEqual([])
+    expect(migrateRunConfigs([{ ...base, type: 'shell', command: 'ls', beforeLaunch: [2] }])).toEqual([])
+  })
+
+  it('keeps an item with a valid beforeLaunch', () => {
+    const out = migrateRunConfigs([{ ...base, type: 'shell', command: 'ls', beforeLaunch: ['b'] }])
+    expect(out[0]).toMatchObject({ beforeLaunch: ['b'] })
   })
 })

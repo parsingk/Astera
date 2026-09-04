@@ -7,6 +7,8 @@ import { detectSeedConfigs, mergeConfigs, type RunConfig } from '../../core/run/
 import { buildCommand, buildRunContext } from '../../core/run/build'
 import { missingRequiredFields } from '../../core/run/migrate'
 import { isPathWithin } from '../../core/files/tree'
+import { planLaunch, type LaunchPlan } from '../../core/run/launch'
+import type { RunnableConfig } from '../../core/run/types'
 
 export interface SeedTexts {
   packageJson: string | null
@@ -88,6 +90,9 @@ export async function prepareRun(
   const missing = missingRequiredFields(config)
   if (missing.length > 0)
     throw new Error(a.t('run.start.incomplete', { fields: missing.map((k) => a.t(`run.field.${k}`)).join(', ') }))
+  // A compound has no command to assemble. Validation's contract is a single command and a single
+  // exit code; chaining is run.start's job, through prepareLaunch.
+  if (config.type === 'compound') throw new Error(a.t('run.start.compoundNotRunnable'))
   const cwd = a.ignoreConfigCwd ? undefined : await resolveRunCwd(a, config.cwd)
   return {
     config: { ...config, cwd },
@@ -105,6 +110,88 @@ export async function prepareRun(
   }
 }
 
+export interface PreparedStep {
+  config: RunnableConfig
+  command: string
+}
+
+/** Everything run.start needs before it starts anything: the plan, and every configuration in it
+ *  assembled.
+ *
+ *  **loadRunConfigs runs once.** A readdir and three build-file reads per step would be paid for
+ *  nothing — every step shares one project and therefore one RunContext.
+ *
+ *  **Nothing is started here, and every failure is thrown before anything could be.** A required field
+ *  left empty three steps down fails the whole ▶, rather than after two runs have already gone. */
+export async function prepareLaunch(a: {
+  projectPath: string
+  rootId: string
+  stored: RunConfig[]
+  assertAllowedPath: (p: string) => Promise<string>
+  t: (key: string, params?: Record<string, string | number>) => string
+}): Promise<{
+  plan: Extract<LaunchPlan, { ok: true }>
+  prepared: Map<string, PreparedStep>
+  projectName: string
+}> {
+  const { configs, files } = await loadRunConfigs({
+    projectPath: a.projectPath,
+    stored: a.stored,
+    assertAllowedPath: a.assertAllowedPath
+  })
+  const plan = planLaunch(configs, a.rootId)
+  if (!plan.ok) throw planError(plan, configs, a.t)
+
+  const incomplete = (c: RunConfig): Error | null => {
+    const missing = missingRequiredFields(c)
+    return missing.length === 0
+      ? null
+      : new Error(a.t('run.start.incomplete', { fields: missing.map((k) => a.t(`run.field.${k}`)).join(', ') }))
+  }
+
+  // **The root is checked even though it may not be a step.** A compound expands into its members and
+  // contributes no step of its own, so a compound with an empty member list would otherwise plan to
+  // nothing at all and reach the executor as a launch with no runs in it. planLaunch already proved
+  // the root resolves.
+  const rootBad = incomplete(configs.find((c) => c.id === a.rootId) as RunConfig)
+  if (rootBad) throw rootBad
+  // The same hole one level down: every member being an empty compound leaves no steps either. Rare
+  // enough not to name each offender, but it must not reach the executor.
+  if (plan.steps.length === 0)
+    throw new Error(a.t('run.start.incomplete', { fields: a.t('run.field.members') }))
+
+  const ctx = buildRunContext(files, process.platform)
+  const prepared = new Map<string, PreparedStep>()
+  for (const step of plan.steps) {
+    // planLaunch already proved every step resolves, so this lookup cannot miss.
+    const config = configs.find((c) => c.id === step.configId) as RunConfig
+    const bad = incomplete(config)
+    if (bad) throw bad
+    // A compound is never a step — planLaunch expands it away — so this narrowing always holds; it is
+    // stated rather than cast so a future change to the planner fails here instead of silently.
+    if (config.type === 'compound') throw new Error(a.t('run.start.compoundNotRunnable'))
+    const cwd = await resolveRunCwd(a, config.cwd)
+    const withCwd = { ...config, cwd }
+    prepared.set(step.configId, { config: withCwd, command: buildCommand(withCwd, ctx) })
+  }
+  return { plan, prepared, projectName: path.basename(a.projectPath) || a.projectPath }
+}
+
+/** A plan failure as a thrown, translated error, so run.start's existing rejection path carries it to
+ *  the renderer's existing toast. Ids are mapped to names here — an id is not something a message can
+ *  show a user. */
+function planError(
+  plan: Extract<LaunchPlan, { ok: false }>,
+  configs: RunConfig[],
+  t: (key: string, params?: Record<string, string | number>) => string
+): Error {
+  const nameOf = (id: string): string => configs.find((c) => c.id === id)?.name ?? id
+  if (plan.reason === 'CYCLE') return new Error(t('run.start.cycle', { path: plan.path.map(nameOf).join(' → ') }))
+  // A missing root is what prepareRun has always reported as NO_CONFIG; only a broken reference is new.
+  if (plan.heldBy === null) return new Error(`NO_CONFIG: ${plan.id}`)
+  return new Error(t('run.start.missingTask', { name: nameOf(plan.heldBy) }))
+}
+
 /** Validates a run configuration's cwd and returns the absolute path that will **actually be used**.
  *  cwd comes from two places outside the trust boundary — the stored file (hand-editable on disk) and
  *  the run.saveConfigs IPC (the renderer, checked again there since a hand-edited file bypasses that
@@ -115,7 +202,10 @@ export async function prepareRun(
  *  **The return value is what must be handed to execution** — validating and then passing the original
  *  cwd puts this in the "validated one value, used another" category, and a defect of that shape has
  *  recurred six times in this feature area. */
-async function resolveRunCwd(a: PrepareRunArgs, cwd: unknown): Promise<string | undefined> {
+async function resolveRunCwd(
+  a: { projectPath: string; assertAllowedPath: (p: string) => Promise<string>; t: PrepareRunArgs['t'] },
+  cwd: unknown
+): Promise<string | undefined> {
   if (cwd === undefined || cwd === null || cwd === '') return undefined
   if (typeof cwd !== 'string') throw new Error(a.t('run.config.cwdNotString'))
   const resolved = path.resolve(a.projectPath, cwd)

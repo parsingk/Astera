@@ -14,6 +14,7 @@ export type RunConfigType =
   | 'compose'
   | 'dockerfile'
   | 'dotnet'
+  | 'compound'
 
 /** What every kind shares. cwd is relative to the project root — empty means the root */
 interface RunConfigBase {
@@ -32,6 +33,11 @@ interface RunConfigBase {
    *  beside it. Read by decideStart in ./instances, never by RunManager. Not part of seedKeyOf:
    *  flipping it must not change which seed a stored configuration hides. */
   allowMultipleInstances?: boolean
+  /** Configurations to run to completion before this one starts, in order, by id. A non-zero exit
+   *  stops the chain: nothing after it starts. Referenced by id, not by name, so renaming a task
+   *  keeps the link. Like folder and allowMultipleInstances it is deliberately not part of seedKeyOf:
+   *  giving a detected configuration a before-launch task does not make it a different one. */
+  beforeLaunch?: string[]
 }
 
 /** A free-form command. This is where every pre-type config migrates to, and it is the only way
@@ -145,6 +151,15 @@ export interface DotnetConfig extends RunConfigBase {
   args?: string
 }
 
+/** A configuration with no command of its own: ▶ on a compound presses ▶ on each member. Members
+ *  start together, with no ordering between them — sequencing is what beforeLaunch is for. This is
+ *  the one kind buildCommand cannot assemble, which is why RunnableConfig excludes it: the compiler,
+ *  not a comment, is what makes every caller branch. */
+export interface CompoundConfig extends RunConfigBase {
+  type: 'compound'
+  members: string[]
+}
+
 export type RunConfig =
   | ShellConfig
   | NpmConfig
@@ -158,6 +173,10 @@ export type RunConfig =
   | ComposeConfig
   | DockerfileConfig
   | DotnetConfig
+  | CompoundConfig
+
+/** Every kind buildCommand can assemble — the union minus the one that has no command. */
+export type RunnableConfig = Exclude<RunConfig, CompoundConfig>
 
 /** Why run.saveConfigs refused an item. INVALID_CONFIG: not a configuration migrateRunConfigs accepts,
  *  a seed id (seeds are detected, never stored), or an id that appears twice in the batch.
@@ -203,6 +222,12 @@ export function optionalFieldsFor(type: RunConfigType, opts: { springBoot: boole
       return ['dockerfilePath', 'buildArgs', 'runArgs', ...common]
     case 'dotnet':
       return ['subcommand', 'configuration', 'args', ...common]
+    // None of the three common options mean anything here: a compound starts no process, so it has
+    // no working directory and no environment, and allowMultipleInstances is read by decideStart,
+    // which a compound never reaches — planLaunch expands it away and every step names a runnable
+    // configuration. Offering a field that changes nothing is worse than offering none.
+    case 'compound':
+      return []
   }
 }
 

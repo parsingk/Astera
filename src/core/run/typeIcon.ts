@@ -56,5 +56,11 @@ export function runTypeIcon(type: RunConfigType): FileIconSpec {
     // and Node.js share none: the kind is one tool, not one language.
     case 'dotnet':
       return { id: 'label', tone: 'purple', label: 'C#' }
+    // A box holding several things. Deliberately not `folder`: the manager's tree draws folder rows
+    // with that shape, and a folder organises where a compound runs — the two must not read as the
+    // same thing. Maven also uses `archive`, in orange; the tone is what separates them, the same
+    // shape-plus-tone rule the rest of this table lives by.
+    case 'compound':
+      return { id: 'archive', tone: 'purple' }
   }
 }

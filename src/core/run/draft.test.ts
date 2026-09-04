@@ -238,3 +238,113 @@ describe('dirtyOf — the folder operations', () => {
     expect(dirtyOf(moveItem(draftOf(baseline), 'user:2', -1), baseline)).toMatchObject({ dirty: true, ids: new Set(), deleted: [] })
   })
 })
+
+describe('reference upkeep', () => {
+  const sh = (id: string, extra: Partial<RunConfig> = {}): RunConfig =>
+    ({ id, name: id, type: 'shell', command: 'x', ...extra }) as RunConfig
+
+  // The field is deleted, not left as [] — RunConfigForm deletes it the same way when the last chip
+  // is removed by hand, and the two have to agree or dirtyOf reports a row as changed when it is back
+  // to baseline.
+  it('removing a configuration takes it out of everyone else’s before-launch list', () => {
+    const d = draftOf([sh('build'), sh('dev', { beforeLaunch: ['build'] })])
+    const after = removeItem(d, 'build')
+    expect(after.items).toHaveLength(1)
+    expect(after.items[0].beforeLaunch).toBeUndefined()
+  })
+
+  it('removing a configuration takes it out of every compound’s members', () => {
+    const all = { id: 'all', name: 'All', type: 'compound', members: ['api', 'web'] } as RunConfig
+    const d = draftOf([sh('api'), sh('web'), all])
+    const after = removeItem(d, 'web')
+    expect((after.items.find((c) => c.id === 'all') as { members: string[] }).members).toEqual(['api'])
+  })
+
+  // Editing a detected configuration promotes it to a user copy with a new id. Without the rewrite,
+  // changing one character of its name silently breaks every task pointing at it.
+  it('editing a seed moves every reference to the promoted copy', () => {
+    const d = draftOf([
+      { id: 'seed:npm:build', name: 'build', type: 'npm', script: 'build' } as RunConfig,
+      sh('dev', { beforeLaunch: ['seed:npm:build'] })
+    ])
+    const r = editItem(d, 'seed:npm:build', { id: 'seed:npm:build', name: 'build!', type: 'npm', script: 'build' } as RunConfig, () => 'user:1')
+    expect(r.id).toBe('user:1')
+    expect(r.draft.items.find((c) => c.id === 'dev')?.beforeLaunch).toEqual(['user:1'])
+  })
+
+  it('filing a seed into a folder moves every reference to the promoted copy', () => {
+    const d = draftOf([
+      { id: 'seed:npm:build', name: 'build', type: 'npm', script: 'build' } as RunConfig,
+      sh('dev', { beforeLaunch: ['seed:npm:build'] })
+    ])
+    const r = setFolder(d, 'seed:npm:build', 'Backend', () => 'user:2')
+    expect(r.draft.items.find((c) => c.id === 'dev')?.beforeLaunch).toEqual(['user:2'])
+  })
+
+  // A duplicate of a stored configuration is a new configuration; the original survives, so
+  // references to it belong to the original.
+  it('duplicating a stored configuration leaves references on the original', () => {
+    const d = draftOf([sh('build'), sh('dev', { beforeLaunch: ['build'] })])
+    const after = duplicateItem(d, 'build', 'user:3')
+    expect(after.items.find((c) => c.id === 'dev')?.beforeLaunch).toEqual(['build'])
+  })
+
+  // Duplicating a seed does not leave the original behind: the seed itself is never stored, so only
+  // the copy — under the seed's own seedKeyOf — reaches disk, and the next load hides the raw seed
+  // behind it. References have to move to the copy or they resolve to nothing after that load.
+  it('duplicating a seed moves references to the copy', () => {
+    const d = draftOf([
+      { id: 'seed:npm:build', name: 'build', type: 'npm', script: 'build' } as RunConfig,
+      sh('dev', { beforeLaunch: ['seed:npm:build'] })
+    ])
+    const after = duplicateItem(d, 'seed:npm:build', 'user:3')
+    expect(after.items.find((c) => c.id === 'dev')?.beforeLaunch).toEqual(['user:3'])
+  })
+
+  it('promoting a seed through editItem moves a compound’s member reference too', () => {
+    const d = draftOf([
+      { id: 'seed:npm:build', name: 'build', type: 'npm', script: 'build' } as RunConfig,
+      { id: 'all', name: 'All', type: 'compound', members: ['seed:npm:build'] } as RunConfig
+    ])
+    const r = editItem(d, 'seed:npm:build', { id: 'seed:npm:build', name: 'build!', type: 'npm', script: 'build' } as RunConfig, () => 'user:1')
+    expect((r.draft.items.find((c) => c.id === 'all') as { members: string[] }).members).toEqual(['user:1'])
+  })
+
+  it('promoting a seed through setFolder moves a compound’s member reference too', () => {
+    const d = draftOf([
+      { id: 'seed:npm:build', name: 'build', type: 'npm', script: 'build' } as RunConfig,
+      { id: 'all', name: 'All', type: 'compound', members: ['seed:npm:build'] } as RunConfig
+    ])
+    const r = setFolder(d, 'seed:npm:build', 'Backend', () => 'user:2')
+    expect((r.draft.items.find((c) => c.id === 'all') as { members: string[] }).members).toEqual(['user:2'])
+  })
+
+  // retarget's early return has to hand back the very same object for an item with no reference to
+  // rewrite, not merely an equal one — a rebuild-everything refactor would still pass a toEqual check.
+  it('leaves an item holding no reference as the very same object', () => {
+    const other = sh('other')
+    const d = draftOf([sh('build'), sh('dev', { beforeLaunch: ['build'] }), other])
+    const after = removeItem(d, 'build')
+    expect(after.items.find((c) => c.id === 'other')).toBe(other)
+  })
+
+  // holdsBefore and holdsMember are independent checks on the same item; both must fire together.
+  // members stays [] (required on a compound, and what the ⚠ marker reads); beforeLaunch is deleted.
+  it('rewrites both beforeLaunch and members on one item when removing', () => {
+    const both = { id: 'both', name: 'Both', type: 'compound', members: ['build'], beforeLaunch: ['build'] } as RunConfig
+    const d = draftOf([sh('build'), both])
+    const after = removeItem(d, 'build')
+    const item = after.items.find((c) => c.id === 'both') as { members: string[]; beforeLaunch?: string[] }
+    expect(item.members).toEqual([])
+    expect(item.beforeLaunch).toBeUndefined()
+  })
+
+  it('rewrites both beforeLaunch and members on one item when promoting a seed', () => {
+    const both = { id: 'both', name: 'Both', type: 'compound', members: ['seed:npm:build'], beforeLaunch: ['seed:npm:build'] } as RunConfig
+    const d = draftOf([{ id: 'seed:npm:build', name: 'build', type: 'npm', script: 'build' } as RunConfig, both])
+    const r = editItem(d, 'seed:npm:build', { id: 'seed:npm:build', name: 'build!', type: 'npm', script: 'build' } as RunConfig, () => 'user:1')
+    const item = r.draft.items.find((c) => c.id === 'both') as { members: string[]; beforeLaunch: string[] }
+    expect(item.members).toEqual(['user:1'])
+    expect(item.beforeLaunch).toEqual(['user:1'])
+  })
+})

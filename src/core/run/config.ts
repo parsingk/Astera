@@ -171,6 +171,10 @@ export function seedKeyOf(c: RunConfig): string {
       return `dockerfile:${c.imageTag}`
     case 'dotnet':
       return `dotnet:${c.project}:${c.subcommand ?? 'run'}`
+    // No derived identity: a compound has no parameter that makes it what it is, and no seed can ever
+    // be one, so nothing here can hide or be hidden. Its identity is itself.
+    case 'compound':
+      return `compound:${c.id}`
   }
 }
 
@@ -260,6 +264,8 @@ export function defaultConfigFor(
       return { id, name, type, imageTag: '' }
     case 'dotnet':
       return { id, name, type, project: defaultDotnetProject(dotnetProjects) }
+    case 'compound':
+      return { id, name, type, members: [] }
   }
 }
 

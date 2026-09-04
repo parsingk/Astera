@@ -31,6 +31,8 @@ const EVENT_CHANNELS = [
   'git:changed',
   'run:data',
   'run:status',
+  'run:focus',
+  'run:launchFailed',
   'terminal:data',
   'terminal:exit',
   'orch:state',

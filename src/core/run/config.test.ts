@@ -253,7 +253,7 @@ describe('defaultConfigFor', () => {
     expect(mergeConfigs([], [...stored, created]).map((c) => c.id)).toEqual(['user:1', 'user:2'])
   })
 
-  it('시드가 없는 프로젝트의 시작값을 열두 종류 모두 못박는다', () => {
+  it('시드가 없는 프로젝트의 시작값을 열세 종류 모두 못박는다', () => {
     const START: Record<RunConfigType, RunConfig> = {
       shell: { id: 'x', name: 'n', type: 'shell', command: '' },
       npm: { id: 'x', name: 'n', type: 'npm', script: 'dev' },
@@ -266,7 +266,8 @@ describe('defaultConfigFor', () => {
       pytest: { id: 'x', name: 'n', type: 'pytest' },
       compose: { id: 'x', name: 'n', type: 'compose' },
       dockerfile: { id: 'x', name: 'n', type: 'dockerfile', imageTag: '' },
-      dotnet: { id: 'x', name: 'n', type: 'dotnet', project: 'src/App/App.csproj' }
+      dotnet: { id: 'x', name: 'n', type: 'dotnet', project: 'src/App/App.csproj' },
+      compound: { id: 'x', name: 'n', type: 'compound', members: [] }
     }
     for (const [type, expected] of Object.entries(START)) {
       expect(
@@ -299,9 +300,9 @@ describe('defaultDotnetProject', () => {
 })
 
 describe('seedKeyOf', () => {
-  // node·maven·cargo·go 는 한 번도 확인된 적이 없었다. Record 로 열두 종류를 한 표에 못박아 둔다 —
+  // node·maven·cargo·go 는 한 번도 확인된 적이 없었다. Record 로 열세 종류를 한 표에 못박아 둔다 —
   // 종류가 늘면 여기서 컴파일이 깨지므로 새 종류가 조용히 빠질 수 없다
-  it('열두 종류의 정체 문자열을 못박는다', () => {
+  it('열세 종류의 정체 문자열을 못박는다', () => {
     const base = { id: 'x', name: 'x' }
     const cases: Record<RunConfigType, [RunConfig, string]> = {
       shell: [{ ...base, type: 'shell', command: 'ls -al' }, 'shell:ls -al'],
@@ -318,7 +319,8 @@ describe('seedKeyOf', () => {
         'compose:compose.yaml:web'
       ],
       dockerfile: [{ ...base, type: 'dockerfile', imageTag: 'astera:dev' }, 'dockerfile:astera:dev'],
-      dotnet: [{ ...base, type: 'dotnet', project: 'src/App/App.csproj' }, 'dotnet:src/App/App.csproj:run']
+      dotnet: [{ ...base, type: 'dotnet', project: 'src/App/App.csproj' }, 'dotnet:src/App/App.csproj:run'],
+      compound: [{ ...base, type: 'compound', members: [] }, 'compound:x']
     }
     for (const [type, [config, key]] of Object.entries(cases)) expect(seedKeyOf(config), type).toBe(key)
   })
@@ -442,5 +444,25 @@ describe('toRelativeCwd', () => {
   })
   it('형제 프리픽스를 하위 경로로 오인하지 않는다 (D:\\proj vs D:\\proj2)', () => {
     expect(toRelativeCwd('D:\\proj2\\backend', 'D:\\proj')).toBe('D:\\proj2\\backend')
+  })
+})
+
+describe('compound identity', () => {
+  // Every other kind derives its identity from the parameter that makes it what it is, so a stored
+  // configuration can hide the seed it duplicates. A compound has no such parameter and no seed can
+  // ever be one, so it is its own identity — two identical compounds both stay on screen.
+  it('two compounds with the same members have different identities', () => {
+    const a: RunConfig = { id: 'a', name: 'All', type: 'compound', members: ['x', 'y'] }
+    const b: RunConfig = { id: 'b', name: 'All too', type: 'compound', members: ['x', 'y'] }
+    expect(seedKeyOf(a)).not.toBe(seedKeyOf(b))
+  })
+
+  it('a new compound starts with no members', () => {
+    expect(defaultConfigFor('compound', 'id1', 'Compound', [], [], [])).toEqual({
+      id: 'id1',
+      name: 'Compound',
+      type: 'compound',
+      members: []
+    })
   })
 })

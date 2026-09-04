@@ -20,6 +20,33 @@ export function draftOf(merged: RunConfig[]): ConfigDraft {
   return { items: [...merged] }
 }
 
+/** Rewrites every reference to `from` in the draft's beforeLaunch and members lists: to `to`, or
+ *  removed entirely when `to` is null. Only the items that actually hold the reference are rebuilt,
+ *  so a draft with no references is returned untouched item by item.
+ *
+ *  When a rewrite leaves `beforeLaunch` empty, the field is deleted rather than stored as `[]` —
+ *  RunConfigForm already deletes it the same way when the last chip is removed by hand ("absent and
+ *  empty mean the same thing, and one of them has to be canonical"), and retarget has to agree or
+ *  dirtyOf reports a row as changed when it is really back to baseline. `members` is left as `[]`: it
+ *  is required on a compound, and an empty one is what the tree's ⚠ marker reads. */
+function retarget(items: readonly RunConfig[], from: string, to: string | null): RunConfig[] {
+  const rewrite = (ids: string[]): string[] =>
+    to === null ? ids.filter((x) => x !== from) : ids.map((x) => (x === from ? to : x))
+  return items.map((c) => {
+    const holdsBefore = (c.beforeLaunch ?? []).includes(from)
+    const holdsMember = c.type === 'compound' && c.members.includes(from)
+    if (!holdsBefore && !holdsMember) return c
+    const next = { ...c } as RunConfig & { beforeLaunch?: string[]; members?: string[] }
+    if (holdsBefore) {
+      const rewritten = rewrite(c.beforeLaunch ?? [])
+      if (rewritten.length === 0) delete next.beforeLaunch
+      else next.beforeLaunch = rewritten
+    }
+    if (holdsMember && next.members) next.members = rewrite(next.members)
+    return next as RunConfig
+  })
+}
+
 /** Replaces an item's fields. The id stays: the form hands back whatever object it assembled, and the
  *  tree's identity is the draft's, not the form's. A seed is promoted first — the promoted copy takes
  *  the seed's place, so the tree shows the copy where the seed was and the next keystroke edits the
@@ -33,7 +60,10 @@ export function editItem(
   const i = d.items.findIndex((c) => c.id === id)
   if (i < 0) return { draft: d, id }
   const replacement = isSeedId(id) ? promoteSeed(next, newId()) : { ...next, id }
-  return { draft: { items: d.items.map((c, k) => (k === i ? replacement : c)) }, id: replacement.id }
+  const items = d.items.map((c, k) => (k === i ? replacement : c))
+  // A promoted seed gets a new id; every task pointing at the seed has to follow it.
+  const result = replacement.id === id ? items : retarget(items, id, replacement.id)
+  return { draft: { items: result }, id: replacement.id }
 }
 
 /** ＋: a draft-only configuration, appended. Nothing is stored until Apply — a ＋ followed by Cancel
@@ -46,18 +76,28 @@ export function addItem(d: ConfigDraft, config: RunConfig): ConfigDraft {
  *  a no-op for it. */
 export function removeItem(d: ConfigDraft, id: string): ConfigDraft {
   if (isSeedId(id)) return d
-  return { items: d.items.filter((c) => c.id !== id) }
+  // Deleting a configuration takes it out of everyone's chips in the same gesture. Apply commits the
+  // whole list atomically, so a reference to a row that is gone is never what gets stored.
+  return { items: retarget(d.items.filter((c) => c.id !== id), id, null) }
 }
 
 /** ⧉: the same configuration under a new user id and a name the tree can tell apart, inserted right
  *  after the original. promoteSeed is already "the same configuration under a new id", so a seed
- *  duplicates into an ordinary user configuration through the rule an edit would have promoted it with. */
+ *  duplicates into an ordinary user configuration through the rule an edit would have promoted it with.
+ *
+ *  **A seed's references must follow the copy, not stay on the original.** Duplicating a stored
+ *  configuration leaves the original in place, so references to it are still correct. Duplicating a
+ *  seed does not: the seed itself is never stored (commitList strips it), so only the copy — under
+ *  the seed's own seedKeyOf — reaches run-configs.json, and mergeConfigs then hides the raw seed
+ *  behind that copy on the next load. The seed's id resolves to nothing after that; the copy is what
+ *  carries its identity from now on, so that is where a reference has to point. */
 export function duplicateItem(d: ConfigDraft, id: string, newId: string): ConfigDraft {
   const i = d.items.findIndex((c) => c.id === id)
   if (i < 0) return d
   const src = d.items[i]
   const copy = { ...promoteSeed(src, newId), name: uniqueName(d.items.map((c) => c.name), src.name) }
-  return { items: [...d.items.slice(0, i + 1), copy, ...d.items.slice(i + 1)] }
+  const items = [...d.items.slice(0, i + 1), copy, ...d.items.slice(i + 1)]
+  return { items: isSeedId(id) ? retarget(items, id, newId) : items }
 }
 
 /** The group a configuration belongs to, for ordering purposes: its folder, or its kind. Deliberately
@@ -123,7 +163,9 @@ export function setFolder(
     return next
   }
   const replacement = isSeedId(id) ? withFolder(promoteSeed(d.items[i], newId())) : withFolder(d.items[i])
-  return { draft: { items: d.items.map((c, k) => (k === i ? replacement : c)) }, id: replacement.id }
+  const items = d.items.map((c, k) => (k === i ? replacement : c))
+  const result = replacement.id === id ? items : retarget(items, id, replacement.id)
+  return { draft: { items: result }, id: replacement.id }
 }
 
 /** Renames a folder across every member at once. `to` empty takes them all out of it; `to` naming

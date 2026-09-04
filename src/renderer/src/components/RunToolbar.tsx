@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { RunConfig, RunStatus } from '../../../core/types'
-import { decideStart, toolbarState } from '../../../core/run/instances'
+import { actedConfigIds, decideStart, toolbarState } from '../../../core/run/instances'
 import { useI18n } from '../i18n/I18nProvider'
 import type { MessageKey } from '../../../core/i18n'
 import { groupConfigs } from '../../../core/run/grouping'
@@ -12,11 +12,13 @@ import { EllipsisVertical, Play, Square } from 'lucide-react'
  *  cleared by .tb-run, which owns the spacing there.
  *
  *  ▶ and ⏹ sit side by side rather than replacing each other. ▶ is enabled whenever a configuration is
- *  selected; what it does — restart the live run, or start another when the configuration allows
- *  several — is decided in main (decideStart). ⏹ appears when the selection has a running run
- *  (toolbarState names the most recent one). The configuration menu groups by folder and then by kind,
- *  through the same function the manager's tree uses, so the two cannot disagree about where a
- *  configuration lives. */
+ *  selected; what it does — restart a live run, start another when the configuration allows several,
+ *  or press ▶ on every member of a compound — is decided in main, by the launch planner, not by
+ *  decideStart alone (decideStart answers for one runnable configuration; a compound has no run of its
+ *  own for it to answer about). ⏹ appears when the selection has a running run, and for a compound it
+ *  stops every live member, not just the most recent one. The configuration menu groups by folder and
+ *  then by kind, through the same function the manager's tree uses, so the two cannot disagree about
+ *  where a configuration lives. */
 export function RunToolbar({
   configs,
   selectedId,
@@ -46,13 +48,22 @@ export function RunToolbar({
   const { t } = useI18n()
   const [showRuns, setShowRuns] = useState(false)
   const [showMore, setShowMore] = useState(false)
-  const state = toolbarState(runs, selectedId)
-  const stopTargetRun = state.stopTarget ? runs.find((r) => r.runId === state.stopTarget) : undefined
-  const selectedConfig = configs.find((c) => c.id === selectedId)
+  const state = toolbarState(runs, selectedId, configs)
+  // The Validation tag explains why ⏹ is offered for a run the user did not start. ⏹ now stops every
+  // live member of a compound, so the question is whether *any* target is a validation run — a
+  // validation run can be any member, not the first one live.
+  const stopTargetRun = state.stopTargets
+    .map((id) => runs.find((r) => r.runId === id))
+    .find((r) => r?.validation === true)
   // The title is the one thing that says ▶ is about to kill the user's server, so it comes from the same
   // rule main applies (decideStart) — not from toolbarState, which differs from it on validation and
-  // stopping runs by design (toolbarState decides ⏹, whose target must be a running run).
-  const restarts = !!selectedConfig && decideStart(runs, selectedConfig).action === 'restart'
+  // stopping runs by design (toolbarState decides ⏹, whose target must be a running run). A compound
+  // never owns a run of its own, so decideStart on the selection itself always answers 'start' — the
+  // selection is expanded through actedConfigIds to what ▶ actually presses, the same expansion ⏹
+  // already uses, and the title says restart if any of those would be.
+  const restarts = (selectedId ? actedConfigIds(configs, selectedId) : [])
+    .map((id) => configs.find((c) => c.id === id))
+    .some((c) => !!c && decideStart(runs, c).action === 'restart')
 
   return (
     <div className="run-toolbar">
@@ -90,8 +101,12 @@ export function RunToolbar({
       >
         <Play size={14} fill="currentColor" strokeWidth={0} />
       </button>
-      {state.stopTarget && (
-        <button className="run-btn stop" title={t('run.action.stop')} onClick={() => onStop(state.stopTarget!)}>
+      {state.stopTargets.length > 0 && (
+        <button
+          className="run-btn stop"
+          title={t('run.action.stop')}
+          onClick={() => state.stopTargets.forEach((id) => onStop(id))}
+        >
           <Square size={14} fill="currentColor" strokeWidth={0} />
         </button>
       )}

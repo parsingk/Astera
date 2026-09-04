@@ -1429,6 +1429,26 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    takes focus — the kind is chosen when the configuration is created and does not change after. */
 .rcm-badge { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-dim); padding: 0 2px; white-space: nowrap; }
 
+/* The form's section headings — Configuration · Environment · Before launch. Same treatment as the
+   tree's group headings (.rcm-group) so the two panes read as one screen; a rule of its own only
+   because it sits in a flex column with different spacing above it. */
+.rcm-section { display: flex; align-items: center; font-size: 10.5px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .05em; margin-top: 4px; }
+.rcm-section:first-child { margin-top: 0; }
+
+/* ConfigRefList — chips naming other run configurations, plus the add control. The picker inside
+   reuses .rtp-menu/.rtp-item, since it is the same list of configurations the ＋ button shows. */
+.ref-list { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ref-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; background: var(--elevated); border: 1px solid var(--line-soft); border-radius: 999px; padding: 2px 4px 2px 8px; font-size: 11.5px; color: var(--text); }
+.ref-chip .fi { flex: none; }
+.ref-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A chip whose configuration is not in the list — the tree marks that row ⚠ too */
+.ref-chip.broken .ref-chip-name { color: var(--danger); font-family: var(--mono); }
+.ref-chip-x { display: grid; place-items: center; width: 16px; height: 16px; padding: 0; background: transparent; border: 0; border-radius: 50%; color: var(--text-faint); cursor: pointer; }
+.ref-chip-x:hover { background: var(--surface-hover); color: var(--text); }
+.ref-add { position: relative; display: inline-flex; }
+.ref-chip.add { cursor: pointer; padding: 2px 8px; color: var(--text-dim); border-style: dashed; background: transparent; }
+.ref-chip.add:hover { color: var(--text); background: var(--elevated); }
+
 /* EnvTable — Key · Value · issue · remove, as a grid so the columns line up across rows */
 .env-table { display: flex; flex-direction: column; gap: 4px; }
 .env-head, .env-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) 16px 22px; gap: 6px; align-items: center; }
