@@ -6,6 +6,13 @@ import { net } from 'electron'
 import type { RateLimitUsage } from '../core/types'
 import { mapUsageResponse } from '../core/usage/rateLimit'
 import {
+  ERROR_USAGE,
+  parseRetryAfterMs,
+  TTL_RATE_LIMITED_MS,
+  UsageCache,
+  type UsageAttempt
+} from './usageCache'
+import {
   claudeKeychainServicesFor,
   keychainAccount,
   makeSecurityKeychainRead,
@@ -17,49 +24,6 @@ const USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
 const BETA_HEADER = 'oauth-2025-04-20'
 const USER_AGENT = 'claude-code/2.1'
 const TIMEOUT_MS = 10_000
-// Exported because the account-usage service ticks at exactly this interval: every tick is then the
-// first ask this cache will not serve, so nothing is spent re-fetching what is already held and
-// nothing sits staler than the cache would have permitted anyway (design doc §4).
-export const TTL_OK_MS = 5 * 60_000 // success cache — fresh enough for one user while staying clear of 429
-const TTL_ERR_MS = 60_000 // an ordinary failure is retried after a minute
-const TTL_RATE_LIMITED_MS = 15 * 60_000 // the default backoff for a 429 that carries no Retry-After
-const MAX_RETRY_AFTER_MS = 24 * 60 * 60 * 1000 // ceiling for a hostile or corrupt Retry-After
-// The absolute ceiling on a failure cache. This query is now the evidence the limit verdict runs on, and
-// with that evidence gone the coordinator falls back to "usage unavailable" and accepts the screen
-// phrase as-is — exactly the false-positive behaviour the gate exists to remove. A Retry-After naming a
-// whole day cannot be allowed to switch the gate off for a day, so it is cut here. The cost is one extra
-// question every 15 minutes to an endpoint that keeps answering 429.
-const MAX_ERROR_TTL_MS = 15 * 60_000
-
-interface CacheEntry {
-  result: RateLimitUsage
-  retryAtMs: number // before this time the cache is returned and no request is made
-  storedAt: number // when this value was actually fetched — the basis for the caller's maxAgeMs test
-}
-
-/** When the entry was fetched — a missing entry counts as -Infinity so it always reads as stale */
-const cachedStoredAt = (e: CacheEntry | undefined): number => (e ? e.storedAt : -Infinity)
-
-/** Retry-After (seconds or an HTTP-date) in ms. Negative or unparseable is null; clamped to the ceiling. */
-function parseRetryAfterMs(raw: string | null, nowMs: number): number | null {
-  if (!raw) return null
-  const secs = Number(raw)
-  if (Number.isFinite(secs)) return secs > 0 ? Math.min(secs * 1000, MAX_RETRY_AFTER_MS) : null
-  const dateMs = Date.parse(raw)
-  if (Number.isFinite(dateMs)) {
-    const delta = dateMs - nowMs
-    return delta > 0 ? Math.min(delta, MAX_RETRY_AFTER_MS) : null
-  }
-  return null
-}
-
-const ERROR_USAGE = (status: RateLimitUsage['status']): RateLimitUsage => ({
-  session: null,
-  weekly: null,
-  maxPercent: null,
-  peak: null,
-  status
-})
 
 /** Runs `security(1)` and hands back stdout, or null on any failure (missing binary, non-zero exit,
  *  timeout). The counterpart to descriptor.ts's runSecurity, which discards stdout and returns only
@@ -144,8 +108,7 @@ export async function readAccessToken(
  *  - the token travels only as the Authorization header of the OAuth endpoint
  */
 export class RateLimitFetcher {
-  private cache = new Map<string, CacheEntry>() // key = configDir
-  private inflight = new Map<string, Promise<RateLimitUsage>>()
+  private cache: UsageCache
 
   constructor(
     private now: () => number = () => Date.now(),
@@ -153,46 +116,16 @@ export class RateLimitFetcher {
     private homeDir: string = os.homedir(),
     private account: string = keychainAccount({ USER: process.env.USER }, os.userInfo().username),
     private keychainRead: KeychainRead = makeSecurityKeychainRead(runSecurityRead)
-  ) {}
-
-  /** maxAgeMs: a cache entry older than this is not used. Omitted, only the TTL applies, as before.
-   *  It exists for a caller that needs the value *now*, such as the limit verdict — the 5-minute TTL is
-   *  fine for a status bar but fatal for a verdict, where a reading taken just below the threshold
-   *  (96%, say) would reject a genuine limit 90 seconds later. The failure cache (retryAtMs) is
-   *  deliberately not pierced by this argument: that one exists to back off, and piercing it would take
-   *  a fresh 429 on every chunk. */
-  async get(configDir: string, maxAgeMs?: number): Promise<RateLimitUsage> {
-    const cached = this.cache.get(configDir)
-    const fresh = maxAgeMs === undefined || this.now() - cachedStoredAt(cached) <= maxAgeMs
-    if (cached && this.now() < cached.retryAtMs && (cached.result.status !== 'ok' || fresh))
-      return cached.result
-    const existing = this.inflight.get(configDir)
-    if (existing) return existing // coalesce concurrent calls — no duplicate API hits
-    const p = this.fetchAndCache(configDir).finally(() => this.inflight.delete(configDir))
-    this.inflight.set(configDir, p)
-    return p
+  ) {
+    this.cache = new UsageCache(now)
   }
 
-  private async fetchAndCache(configDir: string): Promise<RateLimitUsage> {
-    const { result, retryAfterMs } = await this.fetch(configDir)
-    const now = this.now()
-    const ttl =
-      retryAfterMs ??
-      (result.status === 'ok'
-        ? TTL_OK_MS
-        : result.status === 'unavailable'
-          ? TTL_OK_MS // missing credentials rarely change — no reason to retry quickly
-          : TTL_ERR_MS)
-    // The failure cache is cut at MAX_ERROR_TTL_MS — a Retry-After naming a day cannot switch the gate
-    // off for a day.
-    const capped = result.status === 'ok' ? ttl : Math.min(ttl, MAX_ERROR_TTL_MS)
-    this.cache.set(configDir, { result, retryAtMs: now + capped, storedAt: now })
-    return result
+  /** maxAgeMs: a cache entry older than this is not used — see UsageCache.get, which owns the rule. */
+  get(configDir: string, maxAgeMs?: number): Promise<RateLimitUsage> {
+    return this.cache.get(configDir, maxAgeMs, (dir) => this.fetch(dir))
   }
 
-  private async fetch(
-    configDir: string
-  ): Promise<{ result: RateLimitUsage; retryAfterMs?: number }> {
+  private async fetch(configDir: string): Promise<UsageAttempt> {
     const token = await readAccessToken(
       configDir,
       this.platform,

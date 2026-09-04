@@ -2973,6 +2973,7 @@ export function registerIpc(
   const accountUsage = createAccountUsage({
     accounts: core.accounts,
     fetcher: core.usageFetcher,
+    codexFetcher: core.codexUsageFetcher,
     store: core.accountUsage,
     send
   })

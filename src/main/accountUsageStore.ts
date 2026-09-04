@@ -49,19 +49,20 @@ function readEntry(v: unknown): RememberedUsage | null {
 /**
  * The last successful usage reading per account (design doc §3).
  *
- * Why this exists: RateLimitFetcher reads an account's OAuth accessToken read-only and never refreshes
- * it, so only the account with a running session can be queried at all. Without a remembered reading
- * the panel would show a figure for the one account you are already using and blanks for the others —
- * the exact inverse of the point. An idle account's usage does not rise, so a stored percentage is
- * either still correct or it overstates usage because the window has partly rolled; it errs toward
- * less headroom than you have, never toward more.
+ * Why this exists: both fetchers (RateLimitFetcher for claude, CodexUsageFetcher for codex) read an
+ * account's OAuth accessToken read-only and never refresh it, so only the account with a running
+ * session can be queried at all. Without a remembered reading the panel would show a figure for the
+ * one account you are already using and blanks for the others — the exact inverse of the point. An
+ * idle account's usage does not rise, so a stored percentage is either still correct or it overstates
+ * usage because the window has partly rolled; it errs toward less headroom than you have, never
+ * toward more.
  *
  * The percentages are not secrets, but the token that produced them is — and it never enters this
- * store. Only the mapped result does, exactly as the guardrail comment on RateLimitFetcher.fetch
- * requires.
+ * store. Only the mapped result does, exactly as the guardrail comment on each fetcher requires.
  *
- * Keyed by configDir, matching RateLimitFetcher's own cache key so the two never disagree about what
- * an account is.
+ * Keyed by configDir, matching both fetchers' own cache key (UsageCache) so they never disagree about
+ * what an account is. One provider per directory — the two CLIs keep their own homes — so an entry is
+ * never contested.
  *
  * Unlike AppSettingsStore there is no `.bak` copy and no `recovered` flag on a corrupt file: this is a
  * cache of figures the API will hand back again, so nothing a user typed is at stake and there is
