@@ -1425,6 +1425,10 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .rcm-footer-msg { flex: 1; min-width: 0; font-size: 12px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rcm-footer-msg.error { color: var(--danger); }
 
+/* The kind badge beside the name. Reads as a label, not a control: no border, muted, and it never
+   takes focus — the kind is chosen when the configuration is created and does not change after. */
+.rcm-badge { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-dim); padding: 0 2px; white-space: nowrap; }
+
 /* EnvTable — Key · Value · issue · remove, as a grid so the columns line up across rows */
 .env-table { display: flex; flex-direction: column; gap: 4px; }
 .env-head, .env-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) 16px 22px; gap: 6px; align-items: center; }

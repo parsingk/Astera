@@ -652,6 +652,8 @@ export const ja: Catalog = {
   'run.start.incomplete': '実行構成の必須項目が空です: {fields}',
   // RunConfigForm.tsx — name field and the JDK/file pickers shared by every per-kind form
   'run.form.nameLabel': '名前',
+  'run.form.folder': 'フォルダー',
+  'run.form.folderNone': '(フォルダーなし)',
   'run.form.jdkLoading': 'JDK を検索中…',
   'run.form.jdkNone': '使用しない (アプリの環境のまま)',
   'run.form.jdkCustom': '{path} (手動指定)',

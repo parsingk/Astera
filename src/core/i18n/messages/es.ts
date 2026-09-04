@@ -661,6 +661,8 @@ export const es: Catalog = {
   'run.start.incomplete': 'Esta configuración de ejecución tiene un campo obligatorio vacío: {fields}',
   // RunConfigForm.tsx — name field and the JDK/file pickers shared by every per-kind form
   'run.form.nameLabel': 'Nombre',
+  'run.form.folder': 'Carpeta',
+  'run.form.folderNone': '(sin carpeta)',
   'run.form.jdkLoading': 'Buscando JDK…',
   'run.form.jdkNone': 'No usar (entorno de la aplicación tal cual)',
   'run.form.jdkCustom': '{path} (personalizado)',

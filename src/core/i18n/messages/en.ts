@@ -638,6 +638,8 @@ export const en: Record<keyof typeof ko, string> = {
   'run.config.cwdOutsideProject': 'The working directory for this run configuration must be inside the project',
   'run.start.incomplete': 'This run configuration has a required field left empty: {fields}',
   'run.form.nameLabel': 'Name',
+  'run.form.folder': 'Folder',
+  'run.form.folderNone': '(no folder)',
   'run.form.jdkLoading': 'Scanning for JDKs…',
   'run.form.jdkNone': 'None (use app environment)',
   'run.form.jdkCustom': '{path} (custom)',

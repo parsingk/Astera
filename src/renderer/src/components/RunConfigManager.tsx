@@ -471,6 +471,14 @@ export function RunConfigManager({
                 npmScripts={npmScripts}
                 projectPath={projectPath}
                 onChange={handleFormChange}
+                folders={folderNamesOf(draft)}
+                onFolderChange={(folder) => {
+                  if (!selectedId) return
+                  // Filing a seed promotes it, so the selection follows the id setFolder returns.
+                  const r = setFolder(draft, selectedId, folder, newId)
+                  setDraft(r.draft)
+                  if (r.id !== selectedId) setSelectedId(r.id)
+                }}
               />
             )}
           </div>

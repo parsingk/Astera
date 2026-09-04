@@ -722,6 +722,8 @@ export const ko = {
   // RunConfigForm.tsx — name field and the JDK/file pickers shared by every per-kind form.
   // 종류별 필드 라벨은 shell 의 명령까지 모두 아래 run.field.* 에 모여 있다
   'run.form.nameLabel': '이름',
+  'run.form.folder': '폴더',
+  'run.form.folderNone': '(폴더 없음)',
   'run.form.jdkLoading': 'JDK 조회 중…',
   'run.form.jdkNone': '사용 안 함 (앱 환경 그대로)',
   'run.form.jdkCustom': '{path} (직접 지정)',

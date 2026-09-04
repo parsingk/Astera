@@ -6,7 +6,9 @@ import { availableOptionalFields } from '../../../core/run/types'
 import type { PackageManager } from '../../../core/run/config'
 import { toRelativeCwd } from '../../../core/run/config'
 import type { MessageKey } from '../../../core/i18n'
+import { runTypeIcon } from '../../../core/run/typeIcon'
 import { useI18n } from '../i18n/I18nProvider'
+import { FileIcon } from './FileIcon'
 import { Select, type SelectOption } from './Select'
 import { EnvTable } from './EnvTable'
 import { ChevronDown } from 'lucide-react'
@@ -39,7 +41,9 @@ export function RunConfigForm({
   dotnetProjects,
   npmScripts,
   projectPath,
-  onChange
+  onChange,
+  folders,
+  onFolderChange
 }: {
   /** The selected item as the dialog's draft holds it — the local copy is reseeded from it whenever
    *  the selection changes. */
@@ -71,6 +75,10 @@ export function RunConfigForm({
    *  conversion */
   projectPath: string
   onChange: (config: RunConfig) => void
+  /** The folders already in use, for the picker. Creating one is the tree's ＋folder button — this
+   *  field only files a configuration into a folder that exists, or takes it out. */
+  folders: string[]
+  onFolderChange: (folder: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
 
@@ -218,11 +226,32 @@ export function RunConfigForm({
     <>
       <div className="field">
         <label>{t('run.form.nameLabel')}</label>
-        <input
-          type="text"
-          value={draft.name}
-          onChange={(e) => update({ ...draft, name: e.target.value })}
-          onBlur={normalizeOnBlur}
+        <div className="row">
+          <input
+            type="text"
+            value={draft.name}
+            onChange={(e) => update({ ...draft, name: e.target.value })}
+            onBlur={normalizeOnBlur}
+          />
+          {/* Inside a folder the tree groups by folder, so it no longer says what kind a configuration
+              is. This is where that goes. */}
+          <span className="rcm-badge" title={t(`run.type.${draft.type}` as MessageKey)}>
+            <FileIcon {...runTypeIcon(draft.type)} />
+            {t(`run.type.${draft.type}` as MessageKey)}
+          </span>
+        </div>
+      </div>
+
+      <div className="field">
+        <label>{t('run.form.folder')}</label>
+        <Select
+          items={[
+            { value: '', label: t('run.form.folderNone') },
+            ...folders.map((f) => ({ value: f, label: f }))
+          ]}
+          value={draft.folder ?? ''}
+          onChange={onFolderChange}
+          ariaLabel={t('run.form.folder')}
         />
       </div>
 
