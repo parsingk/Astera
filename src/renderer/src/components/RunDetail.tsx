@@ -12,6 +12,7 @@ import type {
 import type { MessageKey } from '../../../core/i18n'
 import { accountToDispatchOn } from '../../../core/accounts/dispatchAccount'
 import { providerOf } from '../../../core/providers/meta'
+import { chainOf } from '../../../core/orchestration/graph'
 import type { GraphBox } from '../../../core/orchestration/graphLayout'
 import { edgePath, layoutRows, NODE_H, NODE_W } from '../../../core/orchestration/graphLayout'
 import { DEFAULT_CONCURRENCY, type Dispatch } from '../../../core/orchestration/types'
@@ -70,6 +71,23 @@ const borderOf = (status: TaskStatus): string =>
   status === 'pending' || status === 'ready' || status === 'completed'
     ? 'var(--line-soft)'
     : STATUS_COLOR[status]
+
+/** 범례의 선 견본. **그래프에 그려지는 것과 같은 모양이어야 한다** — 화살촉을 빼면 방향이라는
+ *  신호가 범례에만 없고, 굵기를 맞추지 않으면 두 선의 차이가 색 하나로만 남는다. 색은 CSS 가
+ *  준다(그래프의 선과 같은 클래스다). */
+function LegendLine({ kind }: { kind: 'wait' | 'done' }): React.JSX.Element {
+  return (
+    <svg className="detail-line" width="22" height="7" viewBox="0 0 22 7" aria-hidden="true">
+      <path
+        className={`detail-edge-${kind}`}
+        d="M0 3.5h13"
+        fill="none"
+        strokeWidth={kind === 'done' ? 1.4 : 1.8}
+      />
+      <polygon className={`detail-arrow-${kind}`} points="13 0, 22 3.5, 13 7" />
+    </svg>
+  )
+}
 
 /** 시각의 표시 형태 — 날짜는 버리고 시:분:초만 남긴다. 한 Run 이 여러 날에 걸치는 경우가 드물고,
  *  좁은 칸에서 날짜는 전부 같은 값이라 자리만 먹는다.
@@ -1046,6 +1064,9 @@ function Graph({
   const posOf = new Map<string, GraphBox>(
     rows.flatMap((row, i) => row.map((task, j) => [task.id, layout.rows[i][j]] as const))
   )
+  // 고른 Task 의 의존 사슬. 고른 것이 없으면 undefined 이고, 그때는 아무것도 물러나지 않는다 —
+  // "전부 사슬 밖"과 "고른 것이 없다"는 다른 상태다(빈 Set 으로 두면 그래프 전체가 흐려진다).
+  const chain = selected === undefined ? undefined : chainOf(deps, selected)
 
   const node = (task: JobTask, pos?: GraphBox): React.JSX.Element => {
     const sessionId = task.sessionId && canOpenSession(task.sessionId) ? task.sessionId : undefined
@@ -1066,21 +1087,42 @@ function Graph({
     // (blocked 로 가는 길이 createGate 뿐이다) 판정이 그 사실에 기대지 않는다 — 기대면 그
     // 불변식이 깨지는 날 답할 것 없는 버튼이 뜬다
     const showAnswer = task.status === 'blocked' && task.gate !== undefined
+    // 제목 아래 한 줄. **없으면 줄을 그리지 않는다** — 스냅숏이 이 값을 주지 않는 Task 가 더
+    // 많고(끝난 것, 아직 안 뜬 것), 빈 줄을 두면 그 카드들의 제목이 가운데에서 위로 밀려 한
+    // 그래프 안에서 제목의 높이가 두 가지가 된다. 열린 Gate 가 있으면 그 질문이 provider 보다
+    // 먼저다: 사람이 읽어야 하는 것이 그쪽이다.
+    const meta = task.gate?.question ?? task.provider
+    // 고른 Task 와 의존으로 닿지 않는 것. 이 Task 를 멈춰도 저것은 멈추지 않는다는 뜻이다
+    const away = chain !== undefined && !chain.has(task.id)
+    const cls = ['detail-node', `detail-node--${task.status}`, away ? 'away' : '']
+      .filter(Boolean)
+      .join(' ')
     return (
       <div
         key={task.id}
-        className={`detail-node detail-node--${task.status}${selected === task.id ? ' on' : ''}`}
+        className={cls}
         style={{
           width: NODE_W,
           height: NODE_H,
           borderColor: borderOf(task.status),
+          // 고른 표시. **borderOf 가 아니라 STATUS_COLOR 다** — 시작 전 둘과 끝난 것은 테두리를
+          // 세우지 않으므로(borderOf 가 --line-soft 를 준다) 그 색으로 링을 그리면 그 셋은 골라도
+          // 아무 일도 일어나지 않는다. 자기 상태색이라 어느 노드에서도 색이 겹쳐 싸우지 않는다.
+          ...(selected === task.id
+            ? { boxShadow: `inset 0 0 0 2px ${STATUS_COLOR[task.status]}` }
+            : {}),
           ...(pos ? { left: pos.x, top: pos.y } : {})
         }}
         onClick={() => onSelect(task.id)}
         title={task.title}
       >
-        <TaskGlyph task={task} />
+        {/* 글리프는 왼쪽 칸에서 두 줄에 걸쳐 선다 — 제목 줄에만 붙이면 부제가 있는 카드에서
+            글리프가 위로 딸려 올라가 카드마다 다른 높이에 놓인다(styles.css 의 grid-row: 1 / -1) */}
+        <span className="detail-node-sig">
+          <TaskGlyph task={task} />
+        </span>
         <span className="detail-node-title">{task.title}</span>
+        {meta !== undefined && <span className="detail-node-meta">{meta}</span>}
         {/* 세션 열기·띄우기·멈추기·물어보기·다시 띄우기 — 노드 안의 버튼들. formOpen 인 동안은
             전부 숨긴다: Task 짓기·질문 쓰기 폼이 열려 있거나 다른 명령이 도는 동안 이 버튼 중
             하나를 누르면 그 폼이나 그 명령의 결과를 조용히 버리게 된다(RunDetail.formOpen 의
@@ -1090,7 +1132,7 @@ function Graph({
             각 버튼은 onClick 에서 stopPropagation 을 부른다 — 노드 자신의 onClick(필터)으로
             새지 않게 한다. */}
         {!formOpen && (
-          <>
+          <span className="detail-node-acts">
             {sessionId && (
               <button
                 className="detail-node-jump"
@@ -1171,7 +1213,7 @@ function Graph({
                 <Play size={12} fill="currentColor" strokeWidth={0} />
               </button>
             )}
-          </>
+          </span>
         )}
       </div>
     )
@@ -1185,24 +1227,83 @@ function Graph({
       <div className="detail-scroll">
         <div className="detail-canvas" style={{ width: layout.width, height: layout.height }}>
           <svg className="detail-edges" width={layout.width} height={layout.height} aria-hidden="true">
-            {rows.flat().map((task) =>
-              (deps[task.id] ?? []).map((depId) => {
+            <defs>
+              {/* 화살촉은 marker 라 참조한 path 의 stroke 를 물려받지 못한다 — 색마다 하나씩 둔다.
+                  refX 를 markerWidth 와 같게 두면 촉의 끝이 path 의 끝점, 곧 상자의 위 가장자리에
+                  정확히 선다. markerUnits 를 userSpaceOnUse 로 두는 것은 굵기가 다른 두 선의
+                  화살촉 크기가 같아야 하기 때문이다(기본값은 stroke-width 를 곱한다). */}
+              <marker
+                id="detail-arrow-wait"
+                markerWidth="9"
+                markerHeight="7"
+                refX="9"
+                refY="3.5"
+                orient="auto"
+                markerUnits="userSpaceOnUse"
+              >
+                <polygon className="detail-arrow-wait" points="0 0, 9 3.5, 0 7" />
+              </marker>
+              <marker
+                id="detail-arrow-done"
+                markerWidth="9"
+                markerHeight="7"
+                refX="9"
+                refY="3.5"
+                orient="auto"
+                markerUnits="userSpaceOnUse"
+              >
+                <polygon className="detail-arrow-done" points="0 0, 9 3.5, 0 7" />
+              </marker>
+            </defs>
+
+            {/* 층의 띠. 무엇이 같은 층인지는 이것이 없으면 y 좌표로만 짐작해야 하고, 한 층에
+                하나뿐인 층이 섞이면 그 짐작이 틀린다. 띠는 가장 넓은 층보다 좌우로 더 나가므로
+                그림이 어디까지인지도 이것이 말한다. 자리는 graphLayout 이 준다 */}
+            {layout.lanes.map((lane, i) => (
+              <g key={`lane:${i}`}>
+                <rect
+                  className="detail-lane"
+                  x={lane.x}
+                  y={lane.y}
+                  width={lane.width}
+                  height={lane.height}
+                  rx="10"
+                  strokeWidth="1"
+                  strokeDasharray="6 6"
+                />
+                <text className="detail-lane-label" x={lane.x + 20} y={lane.labelY}>
+                  {t('jobs.detail.layer', { n: String(i + 1).padStart(2, '0') })}
+                </text>
+              </g>
+            ))}
+
+            {rows.flat().map((task) => {
+              const to = posOf.get(task.id)
+              if (to === undefined) return null
+              // **그려지는 의존만 센다.** 순환에 든 Task 를 가리키는 의존은 끝점이 없어 빠지는데
+              // (그 묶음에는 자리가 없다), 그것까지 세면 남은 화살표들이 상자 가운데를 비켜서서
+              // 하나뿐인 의존조차 중앙에 꽂히지 않는다.
+              const arrivals = (deps[task.id] ?? []).flatMap((depId) => {
                 const from = posOf.get(depId)
-                const to = posOf.get(task.id)
-                if (!from || !to) return null
+                return from === undefined ? [] : [{ depId, from }]
+              })
+              return arrivals.map(({ depId, from }, index) => {
+                const done = byId.get(depId)?.status === 'completed'
+                // 선은 **양 끝이 다 사슬 안일 때만** 남는다 — 한쪽만 걸친 선을 남기면 물러난
+                // 노드로 들어가는 밝은 선이 생겨, 흐려진 것이 정말 무관한지 다시 눈으로 따져야 한다
+                const away = chain !== undefined && !(chain.has(depId) && chain.has(task.id))
                 return (
                   <path
                     key={`${depId}:${task.id}`}
-                    d={edgePath(from, to)}
+                    className={`detail-edge-${done ? 'done' : 'wait'}${away ? ' away' : ''}`}
+                    d={edgePath(from, to, { index, count: arrivals.length })}
                     fill="none"
-                    strokeWidth="1.5"
-                    stroke={
-                      byId.get(depId)?.status === 'completed' ? 'var(--line-soft)' : 'var(--accent)'
-                    }
+                    strokeWidth={done ? 1.4 : 1.8}
+                    markerEnd={`url(#detail-arrow-${done ? 'done' : 'wait'})`}
                   />
                 )
               })
-            )}
+            })}
           </svg>
           {rows.map((row, i) => row.map((task, j) => node(task, layout.rows[i][j])))}
         </div>
@@ -1221,11 +1322,11 @@ function Graph({
       {rows.flat().some((task) => (deps[task.id] ?? []).some((d) => posOf.has(d))) && (
         <div className="detail-legend">
           <span>
-            <i className="detail-line" style={{ borderTopColor: 'var(--accent)' }} />
+            <LegendLine kind="wait" />
             {t('jobs.detail.edgeWaiting')}
           </span>
           <span>
-            <i className="detail-line" style={{ borderTopColor: 'var(--line-soft)' }} />
+            <LegendLine kind="done" />
             {t('jobs.detail.edgeResolved')}
           </span>
         </div>

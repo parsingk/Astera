@@ -854,6 +854,7 @@ export const en: Record<keyof typeof ko, string> = {
   // What an edge colour means. Unlike an icon, a line has nowhere to hang a tooltip
   'jobs.detail.edgeWaiting': 'waiting on this dependency',
   'jobs.detail.edgeResolved': 'dependency already met',
+  'jobs.detail.layer': 'layer {n}',
   // NewRunModal.tsx — the form the sidebar's "+ New job" button opens. jobs.new.concurrency is a
   // per-Run ceiling, not a project-wide one — how many workers this particular Run keeps open at
   // once, a different setting from any other concurrency knob in the app.

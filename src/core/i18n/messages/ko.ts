@@ -988,6 +988,7 @@ export const ko = {
   // 선 색의 뜻. 아이콘과 달리 선에는 툴팁을 달 곳이 없어 그래프 아래에 두 줄로 적는다
   'jobs.detail.edgeWaiting': '기다리는 중인 의존',
   'jobs.detail.edgeResolved': '이미 풀린 의존',
+  'jobs.detail.layer': '{n} 층',
   // NewRunModal.tsx — 사이드바의 '+ 새 작업'이 여는 Run 생성 폼의 문구. jobs.new.concurrency 는
   // 프로젝트 전체가 아니라 이 Run 하나가 동시에 열어 둘 워커 수의 상한이다 — 다른 동시 실행
   // 설정과 자리가 다르므로 섞어 쓰면 안 된다.

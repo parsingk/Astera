@@ -868,6 +868,7 @@ export const ja: Catalog = {
   'jobs.detail.clearFilter': 'フィルターを解除',
   'jobs.detail.edgeWaiting': '待っている依存',
   'jobs.detail.edgeResolved': 'すでに解けた依存',
+  'jobs.detail.layer': '{n} 層',
   // NewRunModal.tsx — サイドバーの「+ 新しい作業」が開く Run 作成フォームの文言。
   // jobs.new.concurrency はプロジェクト全体ではなく、この Run 単体が同時に開くワーカー数の上限だ。
   'jobs.new.open': '新しい作業',

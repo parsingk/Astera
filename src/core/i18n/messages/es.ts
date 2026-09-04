@@ -882,6 +882,7 @@ export const es: Catalog = {
   'jobs.detail.clearFilter': 'Quitar filtro',
   'jobs.detail.edgeWaiting': 'dependencia pendiente',
   'jobs.detail.edgeResolved': 'dependencia ya resuelta',
+  'jobs.detail.layer': 'capa {n}',
   // NewRunModal.tsx — el formulario que abre el botón "+ Nuevo trabajo" de la barra lateral.
   // jobs.new.concurrency es un límite por Run, no del proyecto entero: cuántos workers mantiene
   // abiertos a la vez este Run en concreto, distinto de cualquier otro ajuste de concurrencia.
