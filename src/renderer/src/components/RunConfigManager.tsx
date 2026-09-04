@@ -43,7 +43,10 @@ type ApplyError = Extract<SaveConfigsResult, { ok: false }>['errors'][number]
  *  does not refresh it from later `configs` props while open — an edit in progress must never be
  *  clobbered; the baseline for "is anything dirty" is the stored list at open time, then the list Apply
  *  returned. Seeds show in italics and are editable: the first edit promotes one into a user copy that
- *  takes its place in the tree (promoteSeed, via editItem). */
+ *  takes its place in the tree (promoteSeed, via editItem). The tree groups by folder first and by kind
+ *  for whatever is not in one, through `groupConfigs`, which the toolbar's configuration menu shares so
+ *  the two cannot disagree; a folder is only a field on a configuration, so there is no way to make an
+ *  empty one and nothing to clean up when the last member leaves. */
 export function RunConfigManager({
   configs,
   context,
