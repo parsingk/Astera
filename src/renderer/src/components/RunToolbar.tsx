@@ -2,6 +2,8 @@ import { useState } from 'react'
 import type { RunConfig, RunStatus } from '../../../core/types'
 import { decideStart, toolbarState } from '../../../core/run/instances'
 import { useI18n } from '../i18n/I18nProvider'
+import type { MessageKey } from '../../../core/i18n'
+import { groupConfigs } from '../../../core/run/grouping'
 import { Select } from './Select'
 import { EllipsisVertical, Play, Square } from 'lucide-react'
 
@@ -12,7 +14,9 @@ import { EllipsisVertical, Play, Square } from 'lucide-react'
  *  ▶ and ⏹ sit side by side rather than replacing each other. ▶ is enabled whenever a configuration is
  *  selected; what it does — restart the live run, or start another when the configuration allows
  *  several — is decided in main (decideStart). ⏹ appears when the selection has a running run
- *  (toolbarState names the most recent one). */
+ *  (toolbarState names the most recent one). The configuration menu groups by folder and then by kind,
+ *  through the same function the manager's tree uses, so the two cannot disagree about where a
+ *  configuration lives. */
 export function RunToolbar({
   configs,
   selectedId,
@@ -56,7 +60,16 @@ export function RunToolbar({
         className="run-config-select"
         items={[
           ...(configs.length === 0 ? [{ value: '', label: t('run.config.none') }] : []),
-          ...configs.map((c) => ({ value: c.id, label: c.name }))
+          // The same grouping the manager's tree draws (core/run/grouping.ts), flattened into the
+          // Select's items. groupConfigs has already made each group contiguous, so groupRowsOf --
+          // which starts a fresh heading whenever the group changes -- emits each heading once.
+          ...groupConfigs(configs).flatMap((g) =>
+            g.items.map((c) => ({
+              value: c.id,
+              label: c.name,
+              group: g.kind === 'folder' ? g.key : t(`run.type.${g.key}` as MessageKey)
+            }))
+          )
         ]}
         value={selectedId ?? ''}
         onChange={onSelect}
