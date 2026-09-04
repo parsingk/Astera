@@ -68,4 +68,30 @@ describe('planFileRun', () => {
     const r = planFileRun({ merged: [existing], stored: [existing], relPath: 'scripts/seed.py', newId })
     expect(r?.configs?.[1]).toMatchObject({ name: 'scripts/seed.py' })
   })
+
+  // The case every other one above leaves untested: merged holding something stored does not, while a
+  // configuration is also created. Building `configs` from `merged` instead of `stored` would pass
+  // every case above (each is either a reuse with merged !== stored, or a create with the two equal)
+  // and still copy the detected configuration into the store, where it would hide behind its own copy
+  // on the next load.
+  it('builds configs from stored, not merged, when merged also holds an unrelated detected configuration', () => {
+    const storedTmp = tmp('t1', 'a.py')
+    const detected = py('seed:python:other.py', 'other.py')
+    const stored = [storedTmp]
+    const merged = [storedTmp, detected]
+    const r = planFileRun({ merged, stored, relPath: 'f.py', newId })
+    expect(r?.configs).toEqual([storedTmp, { id: 'new:1', name: 'f.py', type: 'python', file: 'f.py', temporary: true }])
+  })
+
+  // The other half of the same rule: the name-collision check must read `merged`, not `stored` — a
+  // detected configuration's name has to be able to force the relative-path fallback even though it
+  // is not in `stored`.
+  it('checks the name collision against merged, not stored', () => {
+    const storedTmp = tmp('t1', 'a.py')
+    const detected = py('seed:python:other/f.py', 'other/f.py', { name: 'f.py' })
+    const stored = [storedTmp]
+    const merged = [storedTmp, detected]
+    const r = planFileRun({ merged, stored, relPath: 'scripts/f.py', newId })
+    expect(r?.configs?.[1]).toMatchObject({ name: 'scripts/f.py' })
+  })
 })
