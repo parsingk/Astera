@@ -11,11 +11,20 @@ import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
 import { RunFindBar } from './RunFindBar'
 
-/** The search addon's highlight colours, from the theme at search time. --warn is the app's amber;
- *  the other matches get it at 35 % when it is a 6-digit hex (every shipped theme's is), else as is. */
+/** The app's amber, which both the find highlights and the console's selection colour are built from.
+ *  Read from the theme rather than hardcoded; the fallback is the value every shipped theme defines. */
+function findHighlightColor(): string {
+  return getComputedStyle(document.documentElement).getPropertyValue('--warn').trim() || '#d9a441'
+}
+
+/** The search addon's highlight colours. Both tints are amber; the active match is not actually painted
+ *  by activeMatchBackground here — it sits inside xterm's selection, and the selection (set to the same
+ *  amber at 55 %, in consoleTerminalOptions) wins over a decoration's background. activeMatchBackground
+ *  only shows if a match is ever active while outside the selection. The non-active matches get the
+ *  amber at 25 % (a 6-digit hex, which every shipped theme's is) so they read lighter than the selection. */
 function searchDecorations(): ISearchOptions['decorations'] {
-  const warn = getComputedStyle(document.documentElement).getPropertyValue('--warn').trim() || '#d9a441'
-  const faint = /^#[0-9a-f]{6}$/i.test(warn) ? `${warn}59` : warn
+  const warn = findHighlightColor()
+  const faint = /^#[0-9a-f]{6}$/i.test(warn) ? `${warn}40` : warn
   return {
     matchBackground: faint,
     activeMatchBackground: warn,
@@ -62,7 +71,9 @@ export function RunPanel({
   // One xterm per run — a new one is created when runId changes
   useEffect(() => {
     const host = hostRef.current!
-    const term = new Terminal(consoleTerminalOptions({ fontFamily: family, theme: xtermThemeOf(theme) }))
+    const term = new Terminal(
+      consoleTerminalOptions({ fontFamily: family, theme: xtermThemeOf(theme), findHighlight: findHighlightColor() })
+    )
     // If the Run command (or one of its child processes) changes the cursor style and does not restore it, the cursor blinks
     const blinkGuard = pinCursorBlinkOff(term)
     const fit = new FitAddon()
@@ -218,9 +229,17 @@ export function RunPanel({
   }, [family, runId])
 
   // Recolour only when the theme changes. Recreating would wipe the scrollback — this file's convention.
+  // Built through consoleTerminalOptions rather than xtermThemeOf directly, so the selection colour
+  // (which xtermThemeOf does not carry) isn't dropped on a theme change.
   useEffect(() => {
     const term = termRef.current
-    if (term) term.options.theme = xtermThemeOf(theme)
+    if (term) {
+      term.options.theme = consoleTerminalOptions({
+        fontFamily: family,
+        theme: xtermThemeOf(theme),
+        findHighlight: findHighlightColor()
+      }).theme
+    }
   }, [theme])
 
   useEffect(() => {
