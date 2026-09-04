@@ -47,10 +47,12 @@ export function RunToolbar({
   const [showRuns, setShowRuns] = useState(false)
   const [showMore, setShowMore] = useState(false)
   const state = toolbarState(runs, selectedId, configs)
-  // The Validation tag reads off whichever target the toolbar is about to stop; with a compound there
-  // may be several, and only an orchestration run ever carries the mark, so the first one that does
-  // is what the tag is for.
-  const stopTargetRun = state.stopTargets.map((id) => runs.find((r) => r.runId === id)).find((r) => !!r)
+  // The Validation tag explains why ⏹ is offered for a run the user did not start. ⏹ now stops every
+  // live member of a compound, so the question is whether *any* target is a validation run — a
+  // validation run can be any member, not the first one live.
+  const stopTargetRun = state.stopTargets
+    .map((id) => runs.find((r) => r.runId === id))
+    .find((r) => r?.validation === true)
   const selectedConfig = configs.find((c) => c.id === selectedId)
   // The title is the one thing that says ▶ is about to kill the user's server, so it comes from the same
   // rule main applies (decideStart) — not from toolbarState, which differs from it on validation and
