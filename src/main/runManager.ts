@@ -219,11 +219,17 @@ export class RunManager {
     return this.runs.get(runId)?.buffer ?? ''
   }
 
-  /** Settles when the run finishes, with its exit code — null when it ended without one (killed), and
-   *  null for a runId this manager does not hold, so a caller gating on it sees a failure rather than
-   *  a promise that never settles. An already-finished run settles immediately, because `exited` is
-   *  already resolved. This is what the launch executor gates a before-launch chain on: a user
-   *  pressing ⏹ on a task is a failed task. */
+  /** Settles when the run finishes, with its exit code. `null` for a runId this manager does not
+   *  hold, so a caller gating a chain on it sees a failure rather than a promise that never settles.
+   *  An already-finished run settles immediately — `exited` is already resolved, and finished runs are
+   *  kept in the map on purpose. The `?? null` satisfies RunStatus.exitCode's optionality; a run this
+   *  manager holds always has a number by the time `exited` resolves, because pty.onExit assigns it
+   *  before settling. A user pressing ⏹ on a before-launch task therefore stops the chain through a
+   *  non-zero code, not through null.
+   *
+   *  A run stuck in 'stopping' — a process tree that will not die — never settles this, the same way
+   *  restart() waits on it without a timeout. That is deliberate: the app must not lose track of a
+   *  live process. */
   whenExited(runId: string): Promise<number | null> {
     const live = this.runs.get(runId)
     if (!live) return Promise.resolve(null)
