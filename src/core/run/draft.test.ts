@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { RunConfig } from './types'
-import { draftOf, editItem, addItem, removeItem, duplicateItem, commitList, dirtyOf, sameConfig, isSeedId } from './draft'
+import type { ConfigDraft } from './draft'
+import { draftOf, editItem, addItem, removeItem, duplicateItem, commitList, dirtyOf, sameConfig, isSeedId, moveItem, canMoveItem, setFolder, renameFolder, folderNamesOf } from './draft'
 
 const dev: RunConfig = { id: 'user:1', name: 'dev', type: 'npm', script: 'dev' }
 const build: RunConfig = { id: 'user:2', name: 'build', type: 'npm', script: 'build' }
@@ -109,5 +110,98 @@ describe('dirtyOf', () => {
     expect(stored).toEqual([dev, build])
     expect(dirtyOf(draftOf(merged), stored).dirty).toBe(false)
     expect(dirtyOf(d, stored).dirty).toBe(true)
+  })
+})
+
+const fdev: RunConfig = { id: 'user:1', name: 'dev', type: 'npm', script: 'dev', folder: 'F' }
+const fbuild: RunConfig = { id: 'user:2', name: 'build', type: 'npm', script: 'build', folder: 'F' }
+const loose: RunConfig = { id: 'user:3', name: 'lint', type: 'npm', script: 'lint' }
+const seedT: RunConfig = { id: 'seed:npm:test', name: 'test', type: 'npm', script: 'test' }
+
+describe('moveItem / canMoveItem', () => {
+  // The two items swap; anything between them, belonging to another group, stays put
+  it('swaps with the neighbour in the same group, across an intervening group', () => {
+    const d = draftOf([fdev, loose, fbuild])
+    expect(moveItem(d, 'user:2', -1).items.map((c) => c.id)).toEqual(['user:2', 'user:3', 'user:1'])
+    expect(canMoveItem(d, 'user:2', -1)).toBe(true)
+  })
+
+  it('is a no-op at a group edge', () => {
+    const d = draftOf([fdev, fbuild, loose])
+    expect(moveItem(d, 'user:1', -1)).toBe(d)
+    expect(canMoveItem(d, 'user:1', -1)).toBe(false)
+    expect(moveItem(d, 'user:2', 1)).toBe(d)
+    expect(canMoveItem(d, 'user:2', 1)).toBe(false)
+  })
+
+  // A seed's position is never stored, so moving one would be an edit Apply cannot keep
+  it('refuses to move a seed', () => {
+    const d = draftOf([seedT, loose])
+    expect(moveItem(d, 'seed:npm:test', 1)).toBe(d)
+    expect(canMoveItem(d, 'seed:npm:test', 1)).toBe(false)
+  })
+
+  it('is a no-op for an unknown id', () => {
+    const d = draftOf([fdev])
+    expect(moveItem(d, 'user:nope', 1)).toBe(d)
+  })
+})
+
+describe('setFolder', () => {
+  it('files a configuration and keeps its id', () => {
+    const { draft, id } = setFolder(draftOf([loose]), 'user:3', 'F', () => 'unused')
+    expect(id).toBe('user:3')
+    expect(draft.items[0]).toEqual({ ...loose, folder: 'F' })
+  })
+
+  it('an empty name takes it out of the folder, leaving no empty string behind', () => {
+    const { draft } = setFolder(draftOf([fdev]), 'user:1', '', () => 'unused')
+    expect(draft.items[0]).toEqual({ id: 'user:1', name: 'dev', type: 'npm', script: 'dev' })
+    expect('folder' in draft.items[0]).toBe(false)
+  })
+
+  // Filing a seed is an edit, and an edit to a seed promotes it — 3a's rule
+  it('promotes a seed and returns the new id', () => {
+    const { draft, id } = setFolder(draftOf([seedT]), 'seed:npm:test', 'F', () => 'user:promoted')
+    expect(id).toBe('user:promoted')
+    expect(draft.items[0]).toEqual({ ...seedT, id: 'user:promoted', folder: 'F' })
+  })
+})
+
+describe('renameFolder', () => {
+  it('rewrites every member and leaves other groups alone', () => {
+    const d = renameFolder(draftOf([fdev, loose, fbuild]), 'F', 'Frontend')
+    expect(d.items.map((c) => c.folder)).toEqual(['Frontend', undefined, 'Frontend'])
+  })
+
+  it('an empty target takes them all out of the folder', () => {
+    const d = renameFolder(draftOf([fdev, fbuild]), 'F', '')
+    expect(d.items.every((c) => !('folder' in c))).toBe(true)
+  })
+
+  // The folder IS the value, so renaming onto another name is a merge — the honest result
+  it('renaming onto an existing folder merges them', () => {
+    const other: RunConfig = { id: 'user:4', name: 'x', type: 'npm', script: 'x', folder: 'G' }
+    const d = renameFolder(draftOf([fdev, other]), 'F', 'G')
+    expect(d.items.map((c) => c.folder)).toEqual(['G', 'G'])
+  })
+
+  it('is a no-op when no configuration is in that folder', () => {
+    const d = draftOf([loose])
+    expect(renameFolder(d, 'F', 'G')).toBe(d)
+  })
+})
+
+describe('folderNamesOf', () => {
+  it('lists each folder once, in the order it first appears', () => {
+    const g: RunConfig = { id: 'user:5', name: 'y', type: 'npm', script: 'y', folder: 'G' }
+    expect(folderNamesOf(draftOf([fdev, g, fbuild, loose]))).toEqual(['F', 'G'])
+  })
+})
+
+describe('commitList — the folder field', () => {
+  it('drops an empty folder rather than storing one', () => {
+    const d: ConfigDraft = { items: [{ ...loose, folder: '' }] }
+    expect('folder' in commitList(d)[0]).toBe(false)
   })
 })
