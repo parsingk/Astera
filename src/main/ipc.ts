@@ -2,7 +2,7 @@ import { ipcMain, dialog, app, shell, type BrowserWindow } from 'electron'
 import { promises as fs, existsSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import type { Core } from './core'
 import type { RollingCoordinator } from './rolling'
 import type { CodexRollingCoordinator } from './codexRolling'
@@ -13,7 +13,7 @@ import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
-import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, SessionInfo } from '../core/types'
+import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
@@ -117,6 +117,7 @@ import { loadRunConfigs, prepareRun, prepareLaunch } from './run/prepare'
 import { executeLaunch } from './run/launch'
 import { resolveConsolePath } from './run/resolveLink'
 import { saveConfigsBatch } from './run/saveConfigs'
+import { planFileRun } from './run/runFile'
 import { decideStart } from '../core/run/instances'
 import { createGithubPrs } from './githubPrs'
 import { createAccountUsage } from './accountUsage'
@@ -3631,8 +3632,10 @@ export function registerIpc(
     return listDotnetProjects(projectPath)
   })
 
-  ipcMain.handle('run.start', async (_e, projectPath: string, configId: string) => {
-    await assertAllowedPath(projectPath)
+  /** Plan a launch and run it. Both ▶ (run.start) and running a file from the tree (run.runFile) go
+   *  through here, so a file's configuration honours a before-launch chain exactly as any other does.
+   *  Resolves with the run the panel should open on — the chain's first step. */
+  const startChain = async (projectPath: string, configId: string): Promise<RunStatus> => {
     const tr = (key: string, params?: Record<string, string | number>): string =>
       t(core.lang, key as MessageKey, params)
     // The plan and every step's command, before anything starts: a chain with a broken step must not
@@ -3662,6 +3665,51 @@ export function registerIpc(
           projectPath
         })
     })
+  }
+
+  ipcMain.handle('run.start', async (_e, projectPath: string, configId: string) => {
+    await assertAllowedPath(projectPath)
+    return startChain(projectPath, configId)
+  })
+
+  // Running a file straight from the tree. One call rather than a renderer-composed list: the file
+  // explorer does not hold the configuration list, and run.saveConfigs replaces it wholesale, so
+  // composing it there would put the reuse and eviction rules in the one place that cannot test them.
+  ipcMain.handle('run.runFile', async (_e, projectPath: string, filePath: string) => {
+    await assertAllowedPath(projectPath)
+    const resolved = path.resolve(filePath)
+    await assertAllowedPath(resolved)
+    // The same rule resolveRunCwd applies to a configuration's working directory.
+    if (!isPathWithin(projectPath, resolved)) throw new Error(t(core.lang, 'run.config.cwdOutsideProject'))
+    const relPath = path.relative(projectPath, resolved).split(path.sep).join('/')
+    const base = relPath.split('/').pop() ?? relPath
+
+    const stored = core.runConfig.get(projectPath)
+    const { configs: merged } = await loadRunConfigs({ projectPath, stored, assertAllowedPath })
+    const plan = planFileRun({ merged, stored, relPath, newId: () => `user:${randomUUID()}` })
+    if (!plan) throw new Error(t(core.lang, 'run.runFile.notRunnable', { name: base }))
+
+    if (plan.configs) {
+      // saveConfigsBatch, not a direct write: it is what refuses a value holding a character cmd.exe
+      // interprets, which a path like `C:\my & files\seed.py` really is.
+      const saved = await saveConfigsBatch({
+        projectPath,
+        configs: plan.configs,
+        platform: process.platform,
+        assertConfigCwd,
+        store: core.runConfig
+      })
+      if (!saved.ok) {
+        const first = saved.errors[0]
+        throw new Error(
+          t(core.lang, 'run.runFile.refused', {
+            name: base,
+            detail: t(core.lang, `run.manager.reason.${first.reason}` as MessageKey, { name: base })
+          })
+        )
+      }
+    }
+    return startChain(projectPath, plan.configId)
   })
 
   ipcMain.handle('run.stop', async (_e, runId: string) => {
