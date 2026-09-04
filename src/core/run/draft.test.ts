@@ -145,6 +145,20 @@ describe('moveItem / canMoveItem', () => {
     const d = draftOf([fdev])
     expect(moveItem(d, 'user:nope', 1)).toBe(d)
   })
+
+  // A seed's seat is not a seat: swapping into it is a move Apply would discard, so the arrow is off
+  it('refuses a move whose only neighbour is a seed', () => {
+    const d = draftOf([loose, seedT])
+    expect(canMoveItem(d, 'user:3', 1)).toBe(false)
+    expect(moveItem(d, 'user:3', 1)).toBe(d)
+  })
+
+  it('moves across an intervening seed to reach a real neighbour', () => {
+    const other: RunConfig = { id: 'user:9', name: 'z', type: 'npm', script: 'z' }
+    const d = draftOf([loose, seedT, other])
+    expect(canMoveItem(d, 'user:3', 1)).toBe(true)
+    expect(moveItem(d, 'user:3', 1).items.map((c) => c.id)).toEqual(['user:9', 'seed:npm:test', 'user:3'])
+  })
 })
 
 describe('setFolder', () => {
@@ -203,5 +217,24 @@ describe('commitList — the folder field', () => {
   it('drops an empty folder rather than storing one', () => {
     const d: ConfigDraft = { items: [{ ...loose, folder: '' }] }
     expect('folder' in commitList(d)[0]).toBe(false)
+  })
+})
+
+describe('dirtyOf — the folder operations', () => {
+  it('a rename marks every member of the folder', () => {
+    const baseline = [fdev, fbuild, loose]
+    const d = renameFolder(draftOf(baseline), 'F', 'Frontend')
+    expect(dirtyOf(d, baseline)).toEqual({ dirty: true, ids: new Set(['user:1', 'user:2']), deleted: [] })
+  })
+
+  it('filing one configuration marks only it', () => {
+    const baseline = [fdev, loose]
+    const { draft } = setFolder(draftOf(baseline), 'user:3', 'F', () => 'unused')
+    expect(dirtyOf(draft, baseline)).toEqual({ dirty: true, ids: new Set(['user:3']), deleted: [] })
+  })
+
+  it('a reorder inside a folder is dirty even though no field changed', () => {
+    const baseline = [fdev, fbuild]
+    expect(dirtyOf(moveItem(draftOf(baseline), 'user:2', -1), baseline)).toMatchObject({ dirty: true, ids: new Set(), deleted: [] })
   })
 })

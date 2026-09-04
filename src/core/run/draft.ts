@@ -74,6 +74,10 @@ function groupKeyOf(c: RunConfig): string {
 function neighbourIndex(items: readonly RunConfig[], i: number, dir: -1 | 1): number {
   const key = groupKeyOf(items[i])
   for (let k = i + dir; k >= 0 && k < items.length; k += dir) {
+    // A seat a seed holds is not a seat: its order is never stored, so swapping into one is a move
+    // Apply cannot keep. Skipped rather than treated as a wall, so a stored configuration separated
+    // from its neighbour by a seed still moves.
+    if (isSeedId(items[k].id)) continue
     if (groupKeyOf(items[k]) === key) return k
   }
   return -1
@@ -125,6 +129,9 @@ export function setFolder(
 /** Renames a folder across every member at once. `to` empty takes them all out of it; `to` naming
  *  another folder merges the two, which is what a field whose value *is* the folder must do. */
 export function renameFolder(d: ConfigDraft, from: string, to: string): ConfigDraft {
+  // '' is not a folder — it is how "no folder" is stored. Renaming *from* it would file every
+  // configuration that has none, which no caller means and none can currently ask for.
+  if (from === '') return d
   if (!d.items.some((c) => (c.folder ?? '') === from)) return d
   return {
     items: d.items.map((c) => {
