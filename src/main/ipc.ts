@@ -3701,10 +3701,15 @@ export function registerIpc(
       })
       if (!saved.ok) {
         const first = saved.errors[0]
+        // The batch validates every stored configuration, not just the new one, and `kept` comes
+        // first — so the offender may be a configuration the user did not touch (a stored cwd is
+        // hand-editable on disk and is only re-checked at the next save). The outer sentence names
+        // the file they clicked; the detail names whatever actually failed.
+        const offender = plan.configs.find((c) => c.id === first.id)?.name ?? base
         throw new Error(
           t(core.lang, 'run.runFile.refused', {
             name: base,
-            detail: t(core.lang, `run.manager.reason.${first.reason}` as MessageKey, { name: base })
+            detail: t(core.lang, `run.manager.reason.${first.reason}` as MessageKey, { name: offender })
           })
         )
       }
