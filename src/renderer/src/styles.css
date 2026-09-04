@@ -1415,6 +1415,12 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .rcm-mark.dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .rcm-mark.warn { color: var(--warn); }
 .rcm-item.rejected .rcm-item-name { color: var(--danger); }
+
+/* The tree's folder heading, and the inline input that renames it. The heading reuses .rcm-group's
+   type and spacing so a folder and a kind line up; only the icon and the rename affordance differ. */
+.rcm-tools-sep { width: 1px; align-self: stretch; margin: 2px 2px; background: var(--line-soft); }
+.rcm-group[title] { cursor: default; }
+.rcm-folder-name { width: 100%; box-sizing: border-box; margin: 6px 0 2px; background: var(--bg); color: var(--text); border: 1px solid var(--accent); border-radius: var(--radius); padding: 3px 6px; font-size: 11px; }
 .rcm-footer { display: flex; align-items: center; gap: 8px; }
 .rcm-footer-msg { flex: 1; min-width: 0; font-size: 12px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rcm-footer-msg.error { color: var(--danger); }

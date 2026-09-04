@@ -763,6 +763,12 @@ export const ko = {
   // The tree's markers, as tooltips
   'run.manager.markDirty': '적용되지 않은 변경',
   'run.manager.markIncomplete': '필수 항목이 비어 있어 실행할 수 없습니다',
+  'run.manager.newFolder': '폴더에 넣기',
+  'run.manager.moveUp': '위로',
+  'run.manager.moveDown': '아래로',
+  // The name a new folder starts with; the tree appends a number when it is taken
+  'run.manager.folderNameDefault': '새 폴더',
+  'run.manager.renameFolder': '폴더 이름 바꾸기',
   // Why Apply refused, by reason code (core/run/types.ts SaveReason); shown left of the buttons
   'run.manager.reason.INVALID_CONFIG': '{name}: 저장할 수 없는 구성입니다',
   'run.manager.reason.UNSAFE_VALUE': '{name}: 명령에 들어가는 값에 Windows 셸이 해석하는 문자(& | ^ % ! < >)가 있습니다',

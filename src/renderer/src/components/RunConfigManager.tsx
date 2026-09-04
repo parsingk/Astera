@@ -6,15 +6,21 @@ import type { MessageKey } from '../../../core/i18n'
 import { runTypeIcon } from '../../../core/run/typeIcon'
 import { defaultConfigFor } from '../../../core/run/config'
 import { missingRequiredFields } from '../../../core/run/migrate'
+import { groupConfigs } from '../../../core/run/grouping'
 import {
   addItem,
+  canMoveItem,
   commitList,
   dirtyOf,
   draftOf,
   duplicateItem,
   editItem,
+  folderNamesOf,
   isSeedId,
+  moveItem,
   removeItem,
+  renameFolder,
+  setFolder,
   type ConfigDraft
 } from '../../../core/run/draft'
 import { useI18n } from '../i18n/I18nProvider'
@@ -22,7 +28,7 @@ import { confirmModal } from '../lib/confirm'
 import { FileIcon } from './FileIcon'
 import { RunConfigForm } from './RunConfigForm'
 import { RunTypePicker } from './RunTypePicker'
-import { AlertTriangle, Copy, Minus, Plus, Search } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronUp, Copy, FolderPlus, Minus, Plus, Search } from 'lucide-react'
 
 /** The error element of a refused Apply — SaveConfigsResult's own shape, not restated, so a reason
  *  added to SaveReason without a `run.manager.reason.*` catalogue entry fails typecheck here instead
@@ -77,6 +83,9 @@ export function RunConfigManager({
   const [query, setQuery] = useState('')
   const [applyErrors, setApplyErrors] = useState<ApplyError[]>([])
   const [applying, setApplying] = useState(false)
+  /** The folder whose heading is being renamed inline, if any. Renaming rewrites every member
+   *  (renameFolder), so each of them is then marked ● — they did all change. */
+  const [renamingFolder, setRenamingFolder] = useState<string | null>(null)
 
   const selected = draft.items.find((c) => c.id === selectedId) ?? null
   const isSeed = !!selected && isSeedId(selected.id)
@@ -138,6 +147,13 @@ export function RunConfigManager({
     void apply().then((applied) => {
       if (applied) onClose()
     })
+  }
+
+  const commitFolderName = (from: string, raw: string): void => {
+    setRenamingFolder(null)
+    const to = raw.trim()
+    if (to === from) return
+    setDraft(renameFolder(draft, from, to))
   }
 
   // Esc closes through the same gate as Cancel. Bound while mounted; the modal-open suppression in App
@@ -268,16 +284,12 @@ export function RunConfigManager({
   )
   const [pickerOpen, setPickerOpen] = useState(false)
 
-  // Grouped by kind, after the search filter. A group with no match disappears; the selection is not
-  // touched by filtering — the form keeps showing the selected item even when its row is filtered out.
+  // Grouped by folder, then by kind for whatever is not in one — one rule, shared with the toolbar's
+  // menu (core/run/grouping.ts). Filtering happens first, so a group nobody matched is simply absent;
+  // the selection is not touched by filtering, and the form keeps showing the selected item even when
+  // its row is filtered out.
   const q = query.trim().toLowerCase()
-  const groups = new Map<RunConfigType, RunConfig[]>()
-  for (const c of draft.items) {
-    if (q && !c.name.toLowerCase().includes(q)) continue
-    const list = groups.get(c.type) ?? []
-    list.push(c)
-    groups.set(c.type, list)
-  }
+  const groups = groupConfigs(q ? draft.items.filter((c) => c.name.toLowerCase().includes(q)) : draft.items)
 
   const reasonText = (e: ApplyError): string => {
     const name = draft.items.find((c) => c.id === e.id)?.name ?? e.id
@@ -350,17 +362,81 @@ export function RunConfigManager({
               >
                 <Copy size={13} />
               </button>
+              <span className="rcm-tools-sep" />
+              <button
+                type="button"
+                title={t('run.manager.newFolder')}
+                disabled={!selected}
+                onClick={() => {
+                  if (!selected) return
+                  // A folder is created by putting something in it — there is no way to make an empty
+                  // one, which is what keeps the store free of folders nothing names.
+                  const base = t('run.manager.folderNameDefault')
+                  const taken = new Set(folderNamesOf(draft))
+                  let name = base
+                  for (let n = 2; taken.has(name); n += 1) name = `${base} ${n}`
+                  const r = setFolder(draft, selected.id, name, newId)
+                  setDraft(r.draft)
+                  setSelectedId(r.id)
+                  setRenamingFolder(name)
+                }}
+              >
+                <FolderPlus size={13} />
+              </button>
+              <button
+                type="button"
+                title={t('run.manager.moveUp')}
+                disabled={!selected || !canMoveItem(draft, selected.id, -1)}
+                onClick={() => selected && setDraft(moveItem(draft, selected.id, -1))}
+              >
+                <ChevronUp size={13} />
+              </button>
+              <button
+                type="button"
+                title={t('run.manager.moveDown')}
+                disabled={!selected || !canMoveItem(draft, selected.id, 1)}
+                onClick={() => selected && setDraft(moveItem(draft, selected.id, 1))}
+              >
+                <ChevronDown size={13} />
+              </button>
             </div>
             <div className="rcm-tree">
-              {[...groups].map(([type, list]) => (
+              {groups.map((g) => (
                 // 그룹도 세로 flex 다. 평범한 블록이면 그 안의 button 이 inline-block 이라
                 // 가로로 흘러 버린다 — 항목이 둘 이상인 종류에서 바로 드러난다
-                <div className="rcm-group-block" key={type}>
-                  <div className="rcm-group">
-                    <FileIcon {...runTypeIcon(type)} />
-                    {t(`run.type.${type}` as MessageKey)}
-                  </div>
-                  {list.map((c) => {
+                <div className="rcm-group-block" key={`${g.kind}:${g.key}`}>
+                  {g.kind === 'folder' ? (
+                    renamingFolder === g.key ? (
+                      <input
+                        className="rcm-folder-name"
+                        autoFocus
+                        defaultValue={g.key}
+                        onBlur={(e) => commitFolderName(g.key, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') commitFolderName(g.key, e.currentTarget.value)
+                          else if (e.key === 'Escape') {
+                            e.preventDefault()
+                            setRenamingFolder(null)
+                          }
+                        }}
+                      />
+                    ) : (
+                      <div
+                        className="rcm-group"
+                        title={t('run.manager.renameFolder')}
+                        onDoubleClick={() => setRenamingFolder(g.key)}
+                      >
+                        <FileIcon id="folder" tone="mute" />
+                        {g.key}
+                      </div>
+                    )
+                  ) : (
+                    <div className="rcm-group">
+                      <FileIcon {...runTypeIcon(g.key as RunConfigType)} />
+                      {t(`run.type.${g.key}` as MessageKey)}
+                    </div>
+                  )}
+                  {g.items.map((c) => {
                     const incomplete = !isSeedId(c.id) && missingRequiredFields(c).length > 0
                     return (
                       <button
