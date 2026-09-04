@@ -709,9 +709,9 @@ export const ko = {
   // 오케스트레이션이 Task 를 판정하려고 띄운 실행이라는 라벨. 사용자가 시작한 실행과 구별되지
   // 않으면 정지시켜 그 Task 를 실패시킨다(core/run/config.ts 의 RunStatus.validation)
   'run.validation.tag': '검증',
-  // App.tsx runManagerSave — the text shown when the run.saveConfig IPC fails
+  // App.tsx runManagerApply — the text shown when the run.saveConfigs IPC throws
   'run.config.saveFailed': '저장 실패: {detail}',
-  // main/run/prepare.ts resolveRunCwd (run.start) and ipc.ts assertConfigCwd (run.saveConfig) — a
+  // main/run/prepare.ts resolveRunCwd (run.start) and ipc.ts assertConfigCwd (run.saveConfigs) — a
   // sentence main throws also shows up verbatim in a renderer toast, so it is translated here first (the layering rule)
   'run.config.cwdNotString': '실행 구성의 작업 폴더가 올바르지 않습니다',
   'run.config.cwdOutsideProject': '실행 구성의 작업 폴더는 프로젝트 안이어야 합니다',

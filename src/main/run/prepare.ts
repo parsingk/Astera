@@ -107,7 +107,7 @@ export async function prepareRun(
 
 /** Validates a run configuration's cwd and returns the absolute path that will **actually be used**.
  *  cwd comes from two places outside the trust boundary — the stored file (hand-editable on disk) and
- *  the run.saveConfig IPC (the renderer, checked again there since a hand-edited file bypasses that
+ *  the run.saveConfigs IPC (the renderer, checked again there since a hand-edited file bypasses that
  *  check) — and runManager passes it straight through as the PTY's cwd, so without validation a
  *  process starts outside the allowed roots.
  *  A relative path is resolved against the project root; resolving against this process's own cwd
