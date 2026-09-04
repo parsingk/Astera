@@ -286,3 +286,21 @@ describe('compound and beforeLaunch', () => {
     expect(out[0]).toMatchObject({ beforeLaunch: ['b'] })
   })
 })
+
+describe('temporary', () => {
+  const base = { id: 'a', name: 'A', type: 'shell', command: 'ls' }
+
+  it('keeps a configuration marked temporary', () => {
+    expect(migrateRunConfigs([{ ...base, temporary: true }])[0]).toMatchObject({ temporary: true })
+  })
+
+  // A plain boolean, not a true-only marker: a hand-edited false means what it says.
+  it('keeps a configuration marked not temporary', () => {
+    expect(migrateRunConfigs([{ ...base, temporary: false }])[0]).toMatchObject({ temporary: false })
+  })
+
+  it('drops an item whose temporary is not a boolean', () => {
+    expect(migrateRunConfigs([{ ...base, temporary: 'yes' }])).toEqual([])
+    expect(migrateRunConfigs([{ ...base, temporary: 1 }])).toEqual([])
+  })
+})

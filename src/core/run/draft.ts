@@ -47,6 +47,16 @@ function retarget(items: readonly RunConfig[], from: string, to: string | null):
   })
 }
 
+/** An edit to a provisional configuration makes it permanent. A seed is promoted by promoteSeed (a new
+ *  id, because a seed is not stored); a temporary configuration only loses its flag, because it is
+ *  already stored under the id everything else refers to. */
+function madePermanent(c: RunConfig): RunConfig {
+  if (c.temporary === undefined) return c
+  const next = { ...c } as RunConfig & { temporary?: boolean }
+  delete next.temporary
+  return next
+}
+
 /** Replaces an item's fields. The id stays: the form hands back whatever object it assembled, and the
  *  tree's identity is the draft's, not the form's. A seed is promoted first — the promoted copy takes
  *  the seed's place, so the tree shows the copy where the seed was and the next keystroke edits the
@@ -59,7 +69,7 @@ export function editItem(
 ): { draft: ConfigDraft; id: string } {
   const i = d.items.findIndex((c) => c.id === id)
   if (i < 0) return { draft: d, id }
-  const replacement = isSeedId(id) ? promoteSeed(next, newId()) : { ...next, id }
+  const replacement = madePermanent(isSeedId(id) ? promoteSeed(next, newId()) : { ...next, id })
   const items = d.items.map((c, k) => (k === i ? replacement : c))
   // A promoted seed gets a new id; every task pointing at the seed has to follow it.
   const result = replacement.id === id ? items : retarget(items, id, replacement.id)
@@ -84,6 +94,8 @@ export function removeItem(d: ConfigDraft, id: string): ConfigDraft {
 /** ⧉: the same configuration under a new user id and a name the tree can tell apart, inserted right
  *  after the original. promoteSeed is already "the same configuration under a new id", so a seed
  *  duplicates into an ordinary user configuration through the rule an edit would have promoted it with.
+ *  madePermanent applies here too: ⧉ is a deliberate act of keeping something, so a copy of a temporary
+ *  configuration is never itself temporary.
  *
  *  **A seed's references must follow the copy, not stay on the original.** Duplicating a stored
  *  configuration leaves the original in place, so references to it are still correct. Duplicating a
@@ -95,7 +107,10 @@ export function duplicateItem(d: ConfigDraft, id: string, newId: string): Config
   const i = d.items.findIndex((c) => c.id === id)
   if (i < 0) return d
   const src = d.items[i]
-  const copy = { ...promoteSeed(src, newId), name: uniqueName(d.items.map((c) => c.name), src.name) }
+  const copy = madePermanent({
+    ...promoteSeed(src, newId),
+    name: uniqueName(d.items.map((c) => c.name), src.name)
+  })
   const items = [...d.items.slice(0, i + 1), copy, ...d.items.slice(i + 1)]
   return { items: isSeedId(id) ? retarget(items, id, newId) : items }
 }
@@ -162,7 +177,9 @@ export function setFolder(
     else next.folder = folder
     return next
   }
-  const replacement = isSeedId(id) ? withFolder(promoteSeed(d.items[i], newId())) : withFolder(d.items[i])
+  const replacement = madePermanent(
+    isSeedId(id) ? withFolder(promoteSeed(d.items[i], newId())) : withFolder(d.items[i])
+  )
   const items = d.items.map((c, k) => (k === i ? replacement : c))
   const result = replacement.id === id ? items : retarget(items, id, replacement.id)
   return { draft: { items: result }, id: replacement.id }

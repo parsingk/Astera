@@ -38,6 +38,16 @@ interface RunConfigBase {
    *  keeps the link. Like folder and allowMultipleInstances it is deliberately not part of seedKeyOf:
    *  giving a detected configuration a before-launch task does not make it a different one. */
   beforeLaunch?: string[]
+  /** A configuration created by running a file from the tree, kept only until the cap pushes it out
+   *  (MAX_TEMPORARY in ./runFile). Any edit drops the flag and makes it permanent — the same rule a
+   *  detected configuration follows through promoteSeed, because "editing a provisional configuration
+   *  makes it yours" is a rule this app already has and a second one would be worse. Unlike a seed
+   *  this *is* stored: nothing can re-derive it, and the run list's ↻ needs a configuration to
+   *  resolve. A plain boolean rather than a `true`-only marker like RunStatus.validation, so a
+   *  hand-edited `false` means what it says. Not part of seedKeyOf, for the same reason as folder,
+   *  allowMultipleInstances and beforeLaunch: how a configuration was created does not make it a
+   *  different configuration. */
+  temporary?: boolean
 }
 
 /** A free-form command. This is where every pre-type config migrates to, and it is the only way

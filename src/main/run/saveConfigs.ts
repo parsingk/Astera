@@ -5,13 +5,13 @@ import { isSeedId } from '../../core/run/draft'
 
 // cmd.exe interprets & | ^ % ! < > even inside double quotes — assembly cannot guard against that, so
 // it is rejected at save time. **Only values that land in the command string are checked.** id/name
-// are metadata, cwd is handed to the PTY as its working directory rather than interpolated, folder is
-// tree metadata and never reaches a command string, javaHome/springProfiles become environment
-// variables, and beforeLaunch/members hold configuration ids the launch planner reads — no id is ever
-// interpolated into a command. Why an exclude list: the failure direction is the safe one — a new
-// field defaults to being checked.
+// are metadata, cwd is handed to the PTY as its working directory rather than interpolated, folder and
+// temporary are tree metadata and never reach a command string, javaHome/springProfiles become
+// environment variables, and beforeLaunch/members hold configuration ids the launch planner reads — no
+// id is ever interpolated into a command. Why an exclude list: the failure direction is the safe one —
+// a new field defaults to being checked.
 const NOT_IN_COMMAND = new Set([
-  'id', 'name', 'cwd', 'env', 'folder', 'javaHome', 'springProfiles', 'beforeLaunch', 'members'
+  'id', 'name', 'cwd', 'env', 'folder', 'javaHome', 'springProfiles', 'beforeLaunch', 'members', 'temporary'
 ])
 
 /** The Run Configurations dialog's Apply: the project's stored list becomes `configs`, wholesale — an
