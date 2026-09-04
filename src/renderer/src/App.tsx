@@ -2733,9 +2733,9 @@ export default function App(): React.JSX.Element {
     if (!currentProject) return
     const root = currentProject
     void window.api.run.runFile(root, filePath).then(
-      async (st) => {
+      async ({ run, configId }) => {
         if (currentProjectRef.current !== root) return
-        await showStartedRun(root, st)
+        await showStartedRun(root, run)
         // Main may have created a configuration for this file, or evicted the oldest temporary one to
         // make room. Neither reaches the renderer any other way — run.list is refetched on load, on a
         // root seed-file change and on the manager's Apply, and none of those fires here. Without this
@@ -2744,8 +2744,11 @@ export default function App(): React.JSX.Element {
         const r = await window.api.run.list(root)
         if (currentProjectRef.current !== root) return
         setRunConfigs(r.configs)
-        // The same rule the menu's inline ▶ follows: the pill must name what is running.
-        applyRunSelection(root, st.configId)
+        // The same rule the menu's inline ▶ follows: the pill must name what is running. `configId`
+        // rather than the started run's, because a configuration with a before-launch task starts its
+        // task first — the pill would otherwise name the prerequisite and stay there, and the next ▶
+        // would restart that instead of the file.
+        applyRunSelection(root, configId)
       },
       (err) => toast.error(t('run.start.failed', { detail: err instanceof Error ? err.message : String(err) }))
     )

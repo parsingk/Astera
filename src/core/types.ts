@@ -896,10 +896,17 @@ export interface CoreApi {
     listActive(): Promise<RunStatus[]> // all active runs — for the count badge and the dropdown
     start(projectPath: string, configId: string): Promise<RunStatus>
     /** Runs a file from the explorer's context menu. Creates a temporary configuration for it, reusing
-     *  an existing configuration of the same identity rather than making a second one, and returns the
-     *  run the panel should open on — the same contract as start. Rejects when the file implies no
-     *  runnable kind, when it is outside the project, or when the configuration cannot be stored. */
-    runFile(projectPath: string, filePath: string): Promise<RunStatus>
+     *  an existing configuration of the same identity rather than making a second one.
+     *
+     *  Returns **both** facts, unlike start, which needs only one: `run` is what the panel opens on —
+     *  the chain's first step — while `configId` is the configuration that was chosen. They differ
+     *  whenever the chosen configuration has a before-launch task, and the caller needs the second to
+     *  put the toolbar's pill on what the user actually asked to run. Only this side knows it: the
+     *  renderer cannot tell whether a file's run reused something or created it.
+     *
+     *  Rejects when the file implies no runnable kind, when it is outside the project, or when the
+     *  configuration cannot be stored. */
+    runFile(projectPath: string, filePath: string): Promise<{ run: RunStatus; configId: string }>
     // Everything below addresses a run by its id (RunStatus.runId), never by project — a project holds
     // any number of runs.
     stop(runId: string): Promise<void>

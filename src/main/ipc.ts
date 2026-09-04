@@ -3714,7 +3714,11 @@ export function registerIpc(
         )
       }
     }
-    return startChain(projectPath, plan.configId)
+    // Both facts, because the caller needs both and only this side knows the second. startChain
+    // resolves with the chain's *first* step, which is the run the panel opens on — but that is the
+    // configuration's before-launch task when it has one, not the configuration itself. The toolbar's
+    // pill has to name what the user asked to run.
+    return { run: await startChain(projectPath, plan.configId), configId: plan.configId }
   })
 
   ipcMain.handle('run.stop', async (_e, runId: string) => {
