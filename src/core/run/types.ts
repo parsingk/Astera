@@ -21,6 +21,12 @@ interface RunConfigBase {
   name: string
   cwd?: string
   env?: Record<string, string>
+  /** The folder this configuration is filed under, in the tree and in the toolbar's menu. Absent or
+   *  empty means it is not in a folder and groups by its kind instead. A folder exists exactly as long
+   *  as something names it — there is no folder record, so there is nothing to leave dangling. Not
+   *  nested: a '/' here is a character, not a separator. Like allowMultipleInstances it is deliberately
+   *  not part of seedKeyOf: filing a detected configuration does not make it a different one. */
+  folder?: string
   /** What a second ▶ does while a run of this configuration is live: unset/false restarts it (the
    *  default — a second press must not put a second server on the same port), true starts another run
    *  beside it. Read by decideStart in ./instances, never by RunManager. Not part of seedKeyOf:

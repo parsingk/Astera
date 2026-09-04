@@ -144,6 +144,10 @@ describe('migrateRunConfigs', () => {
       expect(migrateRunConfigs([{ ...COMPLETE.npm, allowMultipleInstances: 1 }])).toEqual([])
     })
   })
+
+  it('rejects a configuration whose folder is not a string', () => {
+    expect(migrateRunConfigs([{ id: 'a', name: 'x', type: 'npm', script: 'dev', folder: 3 }])).toEqual([])
+  })
 })
 
 // 다섯 종류(shell·node·maven·cargo·go)의 필수 필드는 한 번도 확인된 적이 없었다 — 그 다섯을 []
