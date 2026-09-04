@@ -53,7 +53,7 @@ import type { ProjectUnderstanding, RecordStatus } from '../../core/understandin
 import { slackMode } from '../../core/slack/ready'
 import { findRun } from '../../core/orchestration/snapshot'
 import { pickRunSelection, pickRunToShow } from '../../core/run/selection'
-import { upsertRun } from '../../core/run/instances'
+import { toolbarState, upsertRun } from '../../core/run/instances'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
 import {
@@ -415,6 +415,12 @@ export default function App(): React.JSX.Element {
   const explorerShortcutLabel = explorerChord
     ? `${t('explorer.rail.toggle')} (${formatChord(explorerChord)})`
     : t('explorer.rail.toggle')
+  /** The run configuration pill's shortcut, for its title — run.selectConfig opens the pill's menu, so
+   *  the hint belongs there, not on the "Manage run configurations…" footer row (that opens the
+   *  manager instead). Same derivation as explorerChord: read the resolved binding, not the default,
+   *  so a rebind shows up here too. Undefined when the user cleared every binding for it. */
+  const runSelectConfigChord = bindingsRef.current['run.selectConfig']?.[0]
+  const runSelectConfigShortcut = runSelectConfigChord ? formatChord(runSelectConfigChord) : undefined
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [explorerOpen, setExplorerOpen] = useState(false)
   // 키 핸들러는 []로 한 번만 등록되어 첫 렌더의 클로저를 붙잡는다. toggleExplorer 가 렌더 값을 읽으면
@@ -617,6 +623,12 @@ export default function App(): React.JSX.Element {
    *  render-time values (via closeFileTab), so a key listener registered once that called a captured
    *  stale closure would act on outdated tabs — same place, same reason as selectWorkbenchTabRef. */
   const closeWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
+  // The run shortcuts (Task 9). Same reason as the two refs above: the keydown effect is registered
+  // once with no dependencies, so it would otherwise close over the first render's runStart/runStop/
+  // selectedRunId. Assigned once those exist, further down.
+  const runStartRef = useRef<() => void>(() => {})
+  const runStopSelectionRef = useRef<() => void>(() => {})
+  const runRerunSelectedRef = useRef<() => void>(() => {})
   const fileBuffersRef = useRef(fileBuffers) // keeps the external-change handler from going stale
   fileBuffersRef.current = fileBuffers
   // 파일별 에디터 상태 캐시. FileEditor보다 오래 살아야 하므로 여기서 소유한다 (editorStateCache.ts의 주석)
@@ -930,6 +942,24 @@ export default function App(): React.JSX.Element {
         if (e.repeat) return
         const cur = mdModesRef.current[id] ?? defaultMdMode()
         setMdMode(id, cycleViewMode(cur))
+        return
+      }
+      // The run shortcuts. Unlike most branches here there is no `editable` guard: these are F-key
+      // combinations that no text field claims, and running the project from inside the terminal is
+      // the case they exist for.
+      if (action === 'run.run' || action === 'run.stop' || action === 'run.rerun' || action === 'run.selectConfig') {
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return
+        if (action === 'run.selectConfig') {
+          // The toolbar (and its menu) is only rendered for an open project. Forcing the menu open
+          // with none open would arm it to spring open by itself the next time a project is opened,
+          // since RunConfigMenu is controlled and mounts already open.
+          if (!currentProjectRef.current) return
+          setRunMenuOpen((v) => !v)
+        } else if (action === 'run.run') runStartRef.current()
+        else if (action === 'run.stop') runStopSelectionRef.current()
+        else runRerunSelectedRef.current()
         return
       }
       // Pane splitting — by default Ctrl+\ to the right, Ctrl+Shift+\ below. The same place VS Code
@@ -1827,6 +1857,12 @@ export default function App(): React.JSX.Element {
     isPythonProject: boolean
     hasDockerfile: boolean
   } | null>(null)
+  /** Which configuration the manager should open on — the toolbar menu's "Edit '<name>'…" sets this
+   *  right before opening; absent, the manager falls back to its own default (the first configuration). */
+  const [managerInitialSelectedId, setManagerInitialSelectedId] = useState<string | undefined>(undefined)
+  /** Whether the toolbar's configuration menu (RunConfigMenu) is open. Lifted here, not local to
+   *  RunToolbar, because Task 9's run.selectConfig shortcut opens it from outside the component tree. */
+  const [runMenuOpen, setRunMenuOpen] = useState(false)
   // The Jobs sidebar snapshot for the open project — orch.list's initial payload, then every
   // 'orch:state' push after it (see the subscription effect below). null until orch.list first resolves.
   const [orchSnapshot, setOrchSnapshot] = useState<OrchSnapshot | null>(null)
@@ -2652,6 +2688,31 @@ export default function App(): React.JSX.Element {
     return off
   }, [])
 
+  /** What a freshly started run does to the screen: merged into the list, selected, its project's
+   *  terminal tabs refreshed, and the panel opened. Shared by ▶ (runStart) and the explorer's "Run
+   *  'x'" (runFile) — from the moment main hands back a RunStatus, the two paths are identical. Callers
+   *  check currentProjectRef against `root` before calling this (the project may have changed while
+   *  the IPC was in flight); merging first would inject another project's run into this list — and
+   *  nothing would ever evict it: upsertRun evicts only on a seat match within the same project, and
+   *  the run:status subscription filters foreign events. The row would sit there frozen at 'running',
+   *  with its ⏹ and ✕ acting on another project's process. */
+  const showStartedRun = async (root: string, st: RunStatus): Promise<void> => {
+    setRuns((prev) => upsertRun(prev, st))
+    setSelectedRunId(st.runId)
+    // Starting a Run may be what opens the panel for the first time — and that also mounts this
+    // project's existing terminal tabs (in a hidden state). TerminalBody replays initialBuffer only
+    // once, at mount, and ignores later updates, so the latest buffer has to be read *before* the
+    // setRunPanelOpen(true) that causes the mount — the same reason as in openTerminal.
+    if (terminals.length > 0) {
+      const list = await window.api.terminal.list(root).catch(() => terminals)
+      // The same check again after the await — the project can change during this call too. Without
+      // discarding, the screen shows the new project while the panel holds the previous project's
+      // terminal tabs, and input goes to that shell.
+      if (currentProjectRef.current !== root) return
+      setTerminals(list)
+    }
+    setRunPanelOpen(true)
+  }
   /** ▶, and the list's ↻. `configId` defaults to the toolbar's selection; the list passes its row's. Main
    *  decides whether this starts a new run or restarts a live one (decideStart) and returns the run either
    *  way — that run is merged into the list and selected, so the console follows what was just started. */
@@ -2660,32 +2721,53 @@ export default function App(): React.JSX.Element {
     const root = currentProject
     void window.api.run.start(root, configId).then(
       async (st) => {
-        // The project may have changed while the IPC was in flight. Merging first would inject another
-        // project's run into this list — and nothing would ever evict it: upsertRun evicts only on a seat
-        // match within the same project, and the run:status subscription filters foreign events. The row
-        // would sit there frozen at 'running', with its ⏹ and ✕ acting on another project's process.
         if (currentProjectRef.current !== root) return
-        setRuns((prev) => upsertRun(prev, st))
-        setSelectedRunId(st.runId)
-        // Starting a Run may be what opens the panel for the first time — and that also mounts this
-        // project's existing terminal tabs (in a hidden state). TerminalBody replays initialBuffer only
-        // once, at mount, and ignores later updates, so the latest buffer has to be read *before* the
-        // setRunPanelOpen(true) that causes the mount — the same reason as in openTerminal.
-        if (terminals.length > 0) {
-          const list = await window.api.terminal.list(root).catch(() => terminals)
-          // The same check again after the await — the project can change during this call too. Without
-          // discarding, the screen shows the new project while the panel holds the previous project's
-          // terminal tabs, and input goes to that shell.
-          if (currentProjectRef.current !== root) return
-          setTerminals(list)
-        }
-        setRunPanelOpen(true)
+        await showStartedRun(root, st)
+      },
+      (err) => toast.error(t('run.start.failed', { detail: err instanceof Error ? err.message : String(err) }))
+    )
+  }
+  /** The explorer's "Run 'x'" item. Main creates or reuses the configuration and starts it; from here
+   *  on it is a started run like any other, so it goes through the same path ▶ does. */
+  const runFile = (filePath: string): void => {
+    if (!currentProject) return
+    const root = currentProject
+    void window.api.run.runFile(root, filePath).then(
+      async (st) => {
+        if (currentProjectRef.current !== root) return
+        await showStartedRun(root, st)
+        // Main may have created a configuration for this file, or evicted the oldest temporary one to
+        // make room. Neither reaches the renderer any other way — run.list is refetched on load, on a
+        // root seed-file change and on the manager's Apply, and none of those fires here. Without this
+        // the new configuration is missing from the pill's menu and the console's ↻ reports it as
+        // deleted.
+        const r = await window.api.run.list(root)
+        if (currentProjectRef.current !== root) return
+        setRunConfigs(r.configs)
+        // The same rule the menu's inline ▶ follows: the pill must name what is running.
+        applyRunSelection(root, st.configId)
       },
       (err) => toast.error(t('run.start.failed', { detail: err instanceof Error ? err.message : String(err) }))
     )
   }
   const runStop = (runId: string): void => {
     void window.api.run.stop(runId)
+  }
+  // The run shortcuts' refs (see their declaration above): kept fresh on every render so the keydown
+  // effect's stale closure still calls today's runStart/runStop against today's runs and selection.
+  runStartRef.current = () => runStart()
+  // The same expansion the toolbar's ⏹ makes (toolbarState.stopTargets), so a compound stops every live member.
+  runStopSelectionRef.current = () => toolbarState(runs, runSelectedId, runConfigs).stopTargets.forEach(runStop)
+  // What the run list's ↻ does: restart the selected run's own configuration. Silently does nothing
+  // with the panel closed or no run selected, like the other run shortcuts' no-ops.
+  runRerunSelectedRef.current = (): void => {
+    if (!selectedRunId) return
+    const configId = runs.find((r) => r.runId === selectedRunId)?.configId
+    // The rail's ↻ is disabled when the configuration is gone (rerunGone); a run outlives its
+    // configuration when the manager deletes it or the temporary cap evicts it. The shortcut has to
+    // carry the same guard, or it sends a dead id and the user reads a raw NO_CONFIG.
+    if (!configId || !runConfigs.some((c) => c.id === configId)) return
+    runStart(configId)
   }
   /** The list's ✕ on a finished run. main drops it (its exitCode and output with it — otherwise a run.list
    *  re-read brings the row back) and the local list follows without waiting. Selection moves to the
@@ -2697,6 +2779,21 @@ export default function App(): React.JSX.Element {
     setRuns(remaining)
     if (selectedRunId === runId) setSelectedRunId(pickRunToShow(remaining))
     if (remaining.length === 0 && terminals.length === 0) setRunPanelOpen(false)
+  }
+  /** Opens the two-pane manager, snapshotting the current project the way managerFor's own comment
+   *  explains. Shared by the toolbar's ⋮ item and the configuration menu's "Edit '<name>'…" row — the
+   *  only difference between them is which configuration the dialog opens on. */
+  const openRunManager = (initialSelectedId?: string): void => {
+    if (!currentProject || !runContext) return
+    setManagerFor({
+      projectPath: currentProject,
+      configs: runConfigs,
+      context: runContext,
+      isSpringBoot: runIsSpringBoot,
+      isPythonProject: runIsPythonProject,
+      hasDockerfile: runHasDockerfile
+    })
+    setManagerInitialSelectedId(initialSelectedId)
   }
   /** RunConfigManager's Apply. On success the toolbar's list is refetched the same way the old
    *  per-item save did — promoting a seed *removes* an id (mergeConfigs stops emitting seed:npm:dev the
@@ -2917,21 +3014,19 @@ export default function App(): React.JSX.Element {
                 onSelect={(id) => applyRunSelection(currentProject, id)}
                 runs={runs}
                 onRun={() => runStart()}
-                onStop={runStop}
-                onOpenManager={() => {
-                  if (!currentProject || !runContext) return
-                  setManagerFor({
-                    projectPath: currentProject,
-                    configs: runConfigs,
-                    context: runContext,
-                    isSpringBoot: runIsSpringBoot,
-                    isPythonProject: runIsPythonProject,
-                    hasDockerfile: runHasDockerfile
-                  })
+                onRunConfig={(id) => {
+                  applyRunSelection(currentProject, id)
+                  runStart(id)
                 }}
+                onStop={runStop}
+                onOpenManager={() => openRunManager()}
+                onEditConfig={(id) => openRunManager(id)}
                 activeRuns={activeRuns}
                 onJump={runJump}
                 onStopRun={runStop}
+                menuOpen={runMenuOpen}
+                onMenuOpenChange={setRunMenuOpen}
+                shortcut={runSelectConfigShortcut}
               />
             </div>
           ) : null
@@ -3096,6 +3191,7 @@ export default function App(): React.JSX.Element {
                 undoRef={explorerUndoRef}
                 onPathRenamed={handlePathRenamed}
                 onPathDeleted={handlePathDeleted}
+                onRunFile={runFile}
               />
             ) : sidebarPane === 'jobs' ? (
               <JobsView
@@ -3989,8 +4085,12 @@ export default function App(): React.JSX.Element {
           isPythonProject={managerFor.isPythonProject}
           hasDockerfile={managerFor.hasDockerfile}
           projectPath={managerFor.projectPath}
+          initialSelectedId={managerInitialSelectedId}
           onApply={(configs) => runManagerApply(managerFor.projectPath, configs)}
-          onClose={() => setManagerFor(null)}
+          onClose={() => {
+            setManagerFor(null)
+            setManagerInitialSelectedId(undefined)
+          }}
         />
       )}
       {openRun && (

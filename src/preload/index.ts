@@ -170,6 +170,7 @@ const api = {
     list: invoke('run.list'),
     listActive: invoke('run.listActive'),
     start: invoke('run.start'),
+    runFile: invoke('run.runFile'),
     stop: invoke('run.stop'),
     dismiss: invoke('run.dismiss'),
     output: invoke('run.output'),

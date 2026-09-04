@@ -348,3 +348,37 @@ describe('reference upkeep', () => {
     expect(item.beforeLaunch).toEqual(['user:1'])
   })
 })
+
+describe('temporary promotion', () => {
+  const tmp = (id: string): RunConfig =>
+    ({ id, name: id, type: 'shell', command: 'x', temporary: true }) as RunConfig
+
+  // The same rule a detected configuration follows: editing a provisional configuration makes it
+  // yours. Unlike a seed the id does not change, so nothing references it that needs retargeting.
+  it('editing a temporary configuration makes it permanent and keeps its id', () => {
+    const d = draftOf([tmp('t1')])
+    const r = editItem(d, 't1', { ...tmp('t1'), name: 'renamed' }, () => 'user:1')
+    expect(r.id).toBe('t1')
+    expect(r.draft.items[0]).not.toHaveProperty('temporary')
+  })
+
+  it('filing a temporary configuration into a folder makes it permanent', () => {
+    const d = draftOf([tmp('t1')])
+    const r = setFolder(d, 't1', 'Backend', () => 'user:2')
+    expect(r.id).toBe('t1')
+    expect(r.draft.items[0]).not.toHaveProperty('temporary')
+    expect(r.draft.items[0].folder).toBe('Backend')
+  })
+
+  it('leaves a permanent configuration alone', () => {
+    const perm: RunConfig = { id: 'p1', name: 'p1', type: 'shell', command: 'x' }
+    const r = editItem(draftOf([perm]), 'p1', { ...perm, name: 'renamed' }, () => 'user:3')
+    expect(r.draft.items[0]).not.toHaveProperty('temporary')
+  })
+
+  // ⧉ is a deliberate act of keeping something, so the copy is permanent.
+  it('duplicating a temporary configuration produces a permanent copy', () => {
+    const after = duplicateItem(draftOf([tmp('t1')]), 't1', 'user:4')
+    expect(after.items[1]).not.toHaveProperty('temporary')
+  })
+})

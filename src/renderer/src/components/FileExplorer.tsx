@@ -13,6 +13,7 @@ import { useGitStatus } from '../hooks/useGitStatus'
 import { useI18n } from '../i18n/I18nProvider'
 import type { UndoEntry } from '../../../core/files/undo'
 import type { GitState } from '../../../core/git/status'
+import { runnableKindForFile } from '../../../core/run/runFile'
 import { ChevronDown, ChevronRight, RefreshCw, X } from 'lucide-react'
 
 /** Tree snapshot the App holds on to, so that even when the explorer toggle unmounts FileExplorer the tree can be handed back on remount */
@@ -35,7 +36,8 @@ export function FileExplorer({
   clipboardRef,
   undoRef,
   onPathRenamed,
-  onPathDeleted
+  onPathDeleted,
+  onRunFile
 }: {
   root: string | null
   onOpenFile: (path: string) => void
@@ -56,6 +58,9 @@ export function FileExplorer({
    *  confirmModal returns false immediately when a modal is already open. The App takes the array and
    *  processes it sequentially. */
   onPathDeleted: (paths: string[]) => void
+  /** Runs a file from the context menu. The explorer does not own the run panel, so what a started run
+   *  does to the screen stays in one place — the App's own run-start path. */
+  onRunFile: (path: string) => void
 }): React.JSX.Element {
   const { t, tm } = useI18n()
   const [menu, setMenu] = useState<{ x: number; y: number; entry: Entry | null } | null>(null)
@@ -295,6 +300,14 @@ export function FileExplorer({
       onSelect: () => void paste(dirForCreate), // same interpretation of "here" as New File/New Folder
       disabled: sel.clipboard === null
     })
+    // Only for a file whose name implies a runnable kind. A file it does not — a Dockerfile, a .ts —
+    // gets no item at all, rather than one that would refuse when pressed.
+    if (entry && !entry.isDir && runnableKindForFile(entry.name)) {
+      items.push('separator', {
+        label: t('run.explorer.runFile', { name: entry.name }),
+        onSelect: () => onRunFile(entry.path)
+      })
+    }
     // The history is per-project, so this is always shown regardless of entry — it sits outside the
     // if (entry) block above and therefore also appears in the root empty-space menu (entry===null).
     // 'Local History' is a feature name (a proper noun) and is left untranslated in every locale.

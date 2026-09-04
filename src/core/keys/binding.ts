@@ -29,6 +29,10 @@ export type ActionId =
   | 'pane.focusRight'
   | 'pane.focusUp'
   | 'pane.focusDown'
+  | 'run.run'
+  | 'run.stop'
+  | 'run.rerun'
+  | 'run.selectConfig'
 
 export type ActionSpec = {
   id: ActionId
@@ -159,6 +163,40 @@ export function makeActions(platform: string): readonly ActionSpec[] {
       id: 'pane.focusDown',
       defaults: [`${M}+Shift+↓`],
       descKey: 'shortcut.pane.focusDown',
+      yieldsToTerminal: false
+    },
+    // The run shortcuts are F-key combinations, and the same on every platform. The Cmd/Ctrl split
+    // above exists because Ctrl combos must reach the shell through xterm; F-keys have no such
+    // problem anywhere, so there is nothing here to vary. IntelliJ's macOS default for Run — Ctrl+R —
+    // is deliberately not used: it is the terminal's reverse-history search. On macOS these need Fn
+    // unless "Use F1, F2, etc. as standard function keys" is on; the settings screen is the answer to
+    // that, not a mac-only default that collides with the shell.
+    //
+    // None of the four yields to the terminal. "Run my project" has to work while the terminal has
+    // focus — in an app whose main screen is a terminal, a run shortcut that needs you to click out
+    // of it first is not a shortcut.
+    {
+      id: 'run.run',
+      defaults: ['Shift+F10'],
+      descKey: 'shortcut.run.run',
+      yieldsToTerminal: false
+    },
+    {
+      id: 'run.stop',
+      defaults: ['Ctrl+F2'],
+      descKey: 'shortcut.run.stop',
+      yieldsToTerminal: false
+    },
+    {
+      id: 'run.rerun',
+      defaults: ['Ctrl+F5'],
+      descKey: 'shortcut.run.rerun',
+      yieldsToTerminal: false
+    },
+    {
+      id: 'run.selectConfig',
+      defaults: ['Alt+Shift+F10'],
+      descKey: 'shortcut.run.selectConfig',
       yieldsToTerminal: false
     }
   ]

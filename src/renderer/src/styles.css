@@ -413,10 +413,38 @@ body.resizing-row { cursor: row-resize; user-select: none; }
    a column flex box just as that host is */
 .workbench-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .run-toolbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-left: 1px solid var(--line); background: var(--panel); position: relative; }
-/* The run-config picker in the toolbar. Only sizing lives here now — the surface comes from .sel.
-   It may shrink so the run buttons keep their room, but not past 140px, or the name is unreadable while
-   the buttons sit on empty space. The open menu is not bound by this — .sel-menu sizes to its content. */
-.run-config-select { flex: 0 1 200px; min-width: 140px; }
+/* The toolbar's configuration pill and its menu. The menu's group headings and rows deliberately
+   match .rtp-group / .rtp-item — the kind picker, the reference picker and this are the same kind of
+   list seen in three places, and they should not each drift to their own size. */
+.rcmenu { position: relative; flex: 0 1 220px; min-width: 150px; }
+.rcmenu-pill { display: flex; align-items: center; gap: 6px; width: 100%; box-sizing: border-box; background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius); color: var(--text); font-size: 12px; padding: 4px 6px; cursor: pointer; }
+.rcmenu-pill:hover { background: var(--elevated); }
+.rcmenu-pill .fi { flex: none; }
+.rcmenu-pill-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.rcmenu-live { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.rcmenu-count { flex: none; font-size: 11px; color: var(--text-dim); }
+.rcmenu-menu { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; min-width: 260px; width: max-content; max-width: 380px; max-height: 60vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 6px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 1px; }
+.rcmenu-group { flex: none; font-size: 10.5px; color: var(--text-faint); padding: 6px 6px 2px; text-transform: uppercase; letter-spacing: .05em; }
+.rcmenu-row { flex: none; display: flex; align-items: center; gap: 2px; border-radius: var(--radius); }
+.rcmenu-row:hover { background: var(--elevated); }
+.rcmenu-row.on { background: var(--elevated); }
+/* The keyboard cursor is not the selection — one says "you are pointing at this", the other "this is
+   what the pill shows" — so it gets a mark of its own rather than reusing .on's fill. */
+.rcmenu-row.cursor { box-shadow: inset 2px 0 0 var(--accent); }
+.rcmenu-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; background: transparent; border: 0; border-radius: var(--radius); padding: 4px 8px; font-size: 12px; color: var(--text); text-align: left; cursor: pointer; }
+.rcmenu-pick .fi { flex: none; }
+.rcmenu-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rcmenu-tag { flex: none; font-size: 10px; color: var(--text-faint); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 0 4px; white-space: nowrap; }
+.rcmenu-status { flex: none; margin-left: auto; padding-left: 8px; font-size: 11px; color: var(--text-faint); white-space: nowrap; }
+.rcmenu-status.live { color: var(--ok); }
+/* Same colour .run-tab-exit.fail uses — the same fact (a non-zero exit) must not read differently in
+   the tab strip and the menu. */
+.rcmenu-status.fail { color: var(--danger); }
+.rcmenu-run { flex: none; width: 22px; height: 22px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-faint); padding: 0; cursor: pointer; }
+.rcmenu-run:hover { background: var(--surface-hover); color: var(--text); }
+.rcmenu-sep { flex: none; height: 1px; background: var(--line-soft); margin: 4px 0; }
+.rcmenu-foot { flex: none; display: flex; align-items: center; gap: 12px; width: 100%; box-sizing: border-box; background: transparent; border: 0; border-radius: var(--radius); padding: 4px 8px; font-size: 12px; color: var(--text); text-align: left; cursor: pointer; }
+.rcmenu-foot:hover { background: var(--elevated); }
 .run-btn { width: 28px; height: 28px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); font-size: 15px; padding: 0; cursor: pointer; }
 .run-btn:hover { background: var(--elevated); color: var(--text); }
 /* Same ring as .sel-trigger below — no border to brighten on a ghost button, so only the ring shows. */
@@ -1415,6 +1443,7 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .rcm-mark { flex: none; display: inline-grid; place-items: center; }
 .rcm-mark.dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .rcm-mark.warn { color: var(--warn); }
+.rcm-mark.temp { flex: none; font-size: 10px; color: var(--text-faint); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 0 4px; }
 .rcm-item.rejected .rcm-item-name { color: var(--danger); }
 
 /* The tree's folder heading, and the inline input that renames it. The heading reuses .rcm-group's
