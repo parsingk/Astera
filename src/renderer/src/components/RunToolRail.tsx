@@ -1,6 +1,6 @@
 import type { RunStatus } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
-import { ArrowDownToLine, Delete, RotateCw, Search, Square } from 'lucide-react'
+import { ChevronsDown, Eraser, RotateCw, Search, Square } from 'lucide-react'
 
 /** The vertical tool rail on the console's left, acting on the selected run: rerun · stop, then
  *  scroll-to-end · clear, then find. Rerun starts the run's configuration again (main decides whether
@@ -35,10 +35,10 @@ export function RunToolRail({
       </button>
       <span className="run-rail-sep" />
       <button type="button" className="run-rail-btn" title={t('run.rail.scrollToEnd')} aria-label={t('run.rail.scrollToEnd')} disabled={none} onClick={onScrollToEnd}>
-        <ArrowDownToLine size={14} />
+        <ChevronsDown size={14} />
       </button>
       <button type="button" className="run-rail-btn" title={t('run.panel.clear')} aria-label={t('run.panel.clear')} disabled={none} onClick={onClear}>
-        <Delete size={14} />
+        <Eraser size={14} />
       </button>
       <span className="run-rail-sep" />
       <button type="button" className={`run-rail-btn${findOpen ? ' on' : ''}`} title={t('run.rail.find')} aria-label={t('run.rail.find')} aria-pressed={findOpen} disabled={none} onClick={onToggleFind}>
