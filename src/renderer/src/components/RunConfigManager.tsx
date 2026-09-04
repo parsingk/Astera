@@ -24,6 +24,11 @@ import { RunConfigForm } from './RunConfigForm'
 import { RunTypePicker } from './RunTypePicker'
 import { AlertTriangle, Copy, Minus, Plus, Search } from 'lucide-react'
 
+/** The error element of a refused Apply — SaveConfigsResult's own shape, not restated, so a reason
+ *  added to SaveReason without a `run.manager.reason.*` catalogue entry fails typecheck here instead
+ *  of throwing in the footer at runtime (t() throws on a missing key). */
+type ApplyError = Extract<SaveConfigsResult, { ok: false }>['errors'][number]
+
 /** Run configuration management — a tree on the left, the selected configuration's form on the right,
  *  IntelliJ's Run/Debug Configurations layout. Edits go to a **draft** (core/run/draft.ts) and reach
  *  the store only through Apply / OK, which commit the whole list in one call (run.saveConfigs);
@@ -70,7 +75,7 @@ export function RunConfigManager({
   const [baseline, setBaseline] = useState<RunConfig[]>(() => configs.filter((c) => !isSeedId(c.id)))
   const [selectedId, setSelectedId] = useState<string | null>(configs[0]?.id ?? null)
   const [query, setQuery] = useState('')
-  const [applyErrors, setApplyErrors] = useState<{ id: string; reason: string }[]>([])
+  const [applyErrors, setApplyErrors] = useState<ApplyError[]>([])
   const [applying, setApplying] = useState(false)
 
   const selected = draft.items.find((c) => c.id === selectedId) ?? null
@@ -274,9 +279,9 @@ export function RunConfigManager({
     groups.set(c.type, list)
   }
 
-  const reasonText = (e: { id: string; reason: string }): string => {
+  const reasonText = (e: ApplyError): string => {
     const name = draft.items.find((c) => c.id === e.id)?.name ?? e.id
-    return t(`run.manager.reason.${e.reason}` as MessageKey, { name })
+    return t(`run.manager.reason.${e.reason}`, { name })
   }
 
   return (

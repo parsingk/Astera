@@ -279,7 +279,9 @@ export function parseEnvLines(text: string): Record<string, string> {
   return out
 }
 
-/** Map → editable text (the inverse of parseEnvLines) */
+/** Map → editable text (the inverse of parseEnvLines). No caller outside this file's own test as of
+ *  the table-based env editor (EnvTable) — kept anyway as the documented inverse parseEnvLines'
+ *  round-trip depends on, since envTable.ts uses parseEnvLines directly. */
 export function formatEnvLines(env: Record<string, string> | undefined): string {
   if (!env) return ''
   return Object.entries(env)

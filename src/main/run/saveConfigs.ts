@@ -1,6 +1,7 @@
 import type { RunConfig, SaveConfigsResult, SaveReason } from '../../core/run/types'
 import { migrateRunConfigs } from '../../core/run/migrate'
 import { hasUnsafeWin32Chars } from '../../core/run/build'
+import { isSeedId } from '../../core/run/draft'
 
 // cmd.exe interprets & | ^ % ! < > even inside double quotes — assembly cannot guard against that, so
 // it is rejected at save time. **Only values that land in the command string are checked.** id/name
@@ -34,7 +35,7 @@ export async function saveConfigsBatch(a: {
     // and the store disagree about which row a click means. Both are INVALID_CONFIG, like a shape
     // migrateRunConfigs will not accept — an incomplete configuration is accepted (allowIncomplete),
     // as ＋ creates one with its required field still empty; run.start is what refuses to run it.
-    if (id === '' || id.startsWith('seed:') || (count.get(id) ?? 0) > 1 || migrateRunConfigs([c], { allowIncomplete: true }).length === 0) {
+    if (id === '' || isSeedId(id) || (count.get(id) ?? 0) > 1 || migrateRunConfigs([c], { allowIncomplete: true }).length === 0) {
       errors.push({ id, reason: 'INVALID_CONFIG' })
       continue
     }

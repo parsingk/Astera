@@ -88,7 +88,15 @@ export function EnvTable({
             <span className="env-issue" title={issue ? t(`run.env.issue.${issue}`) : undefined}>
               {issue && <AlertTriangle size={11} />}
             </span>
-            <button type="button" className="env-remove" title={t('run.env.removeRow')} onClick={() => commit(rows.filter((_, k) => k !== i))}>
+            {/* Out of the Tab sequence: Key -> Value -> next row's Key. Still reachable by mouse and by
+                screen readers, which enumerate controls independently of tab order. */}
+            <button
+              type="button"
+              className="env-remove"
+              tabIndex={-1}
+              title={t('run.env.removeRow')}
+              onClick={() => commit(rows.filter((_, k) => k !== i))}
+            >
               <X size={11} />
             </button>
           </div>
