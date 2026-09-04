@@ -13,6 +13,7 @@ import { SessionCwdCache } from '../core/history/sessionCwdCache'
 import { ProjectSettings } from '../core/projects/settings'
 import { StatusLineManager, resolveNodePath } from './statusline'
 import { RateLimitFetcher } from './usage'
+import { CodexUsageFetcher } from './codexUsage'
 import { AccountUsageStore } from './accountUsageStore'
 import { parseStatusLinePayload } from '../core/usage/statusline'
 import { defaultAccountIdOf } from '../core/accounts/defaultAccount'
@@ -61,6 +62,9 @@ export interface Core {
    *  this instance, so the limit verdict and the account panel asking about the same account cost one
    *  request between them. Two instances would compile and pass every test while sharing nothing. */
   usageFetcher: RateLimitFetcher
+  /** The codex half of the same arrangement, and shared for the same reason. Separate from
+   *  usageFetcher because the credentials and the endpoint differ, not the policy. */
+  codexUsageFetcher: CodexUsageFetcher
   accountUsage: AccountUsageStore // last-known usage per account (design doc §3)
   statusLinePayload: (sessionId: string) => Promise<unknown | null> // Raw payload, for rolling
   hookEventsDir: string // Hook event file directory — watched by index.ts's HookEventWatcher
@@ -194,6 +198,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   const appSettings = new AppSettingsStore(path.join(userDataDir, 'app-settings.json'))
   await appSettings.load()
   const usageFetcher = new RateLimitFetcher()
+  const codexUsageFetcher = new CodexUsageFetcher()
   const accountUsage = new AccountUsageStore(path.join(userDataDir, 'account-usage.json'))
   // A cache, so a failed load is an empty cache and nothing more — there is no recovered flag to
   // report and nothing for the caller to decide.
@@ -324,6 +329,7 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
     localHistory,
     appSettings,
     usageFetcher,
+    codexUsageFetcher,
     accountUsage,
     keybindings,
     lang: appSettings.getLang() ?? pickInitialLang(osLocale)
