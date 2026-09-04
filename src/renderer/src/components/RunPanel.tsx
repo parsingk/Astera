@@ -5,6 +5,7 @@ import { SearchAddon, type ISearchOptions } from '@xterm/addon-search'
 import '@xterm/xterm/css/xterm.css'
 import { xtermThemeOf } from '../../../core/theme/apply'
 import { bufferRangeAt, cellsOfJoinedLine, findConsoleLinks, joinWrappedLine } from '../../../core/run/consoleLinks'
+import { consoleTerminalOptions } from '../../../core/run/consoleTerminal'
 import { pinCursorBlinkOff } from '../lib/cursorBlink'
 import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
@@ -61,12 +62,7 @@ export function RunPanel({
   // One xterm per run — a new one is created when runId changes
   useEffect(() => {
     const host = hostRef.current!
-    const term = new Terminal({
-      fontSize: 13,
-      fontFamily: family,
-      scrollback: 5000,
-      theme: xtermThemeOf(theme)
-    })
+    const term = new Terminal(consoleTerminalOptions({ fontFamily: family, theme: xtermThemeOf(theme) }))
     // If the Run command (or one of its child processes) changes the cursor style and does not restore it, the cursor blinks
     const blinkGuard = pinCursorBlinkOff(term)
     const fit = new FitAddon()
