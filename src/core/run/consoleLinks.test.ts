@@ -95,6 +95,55 @@ describe('findConsoleLinks — several in one line', () => {
   })
 })
 
+describe('findConsoleLinks — JVM stack frames', () => {
+  // The file inside the parentheses carries no directory; the package in front of the class does.
+  // The link covers only `File.java:140`, as IntelliJ underlines it, and the target is the
+  // classpath-relative path main can try under the source roots.
+  it('a plain frame', () => {
+    const line = '\tat org.apache.catalina.core.ApplicationFilterChain.doFilter(ApplicationFilterChain.java:140)'
+    const start = line.indexOf('ApplicationFilterChain.java:140')
+    expect(findConsoleLinks(line)).toEqual([
+      { kind: 'path', start, end: start + 'ApplicationFilterChain.java:140'.length, target: 'org/apache/catalina/core/ApplicationFilterChain.java', line: 140 }
+    ])
+  })
+
+  it.each([
+    ['an inner class uses the outer file', '\tat org.apache.coyote.AbstractProtocol$ConnectionHandler.process(AbstractProtocol.java:905)', 'org/apache/coyote/AbstractProtocol.java', 905],
+    ['a lambda', '\tat com.anipen.demo.HelloController.lambda$hello$0(HelloController.java:23)', 'com/anipen/demo/HelloController.java', 23],
+    ['a constructor', '\tat com.anipen.demo.App.<init>(App.java:7)', 'com/anipen/demo/App.java', 7],
+    ['Kotlin', '\tat com.anipen.demo.MainKt.main(Main.kt:12)', 'com/anipen/demo/Main.kt', 12],
+    ['the default package', '\tat Main.main(Main.java:5)', 'Main.java', 5],
+    ['a Java 9+ module prefix', '\tat java.base/java.lang.Thread.run(Thread.java:1583)', 'java/lang/Thread.java', 1583],
+    ['a classloader prefix', '\tat app//com.anipen.demo.App.run(App.java:9)', 'com/anipen/demo/App.java', 9]
+  ])('%s', (_name, line, target, lineNo) => {
+    const links = findConsoleLinks(line)
+    expect(links).toHaveLength(1)
+    expect(links[0]).toMatchObject({ kind: 'path', target, line: lineNo })
+  })
+
+  it.each(['\tat com.x.Foo.bar(Unknown Source)', '\tat com.x.Foo.bar(Native Method)', '\tat com.x.Foo.bar(Foo.java)'])('%s is not a link', (line) => {
+    expect(findConsoleLinks(line)).toEqual([])
+  })
+
+  // A Node frame has a space before its parenthesis and a real path inside; the JVM rule must not
+  // claim it, and the existing token pass must still read it as before
+  it('leaves a Node frame to the token pass', () => {
+    const line = '    at Object.<anonymous> (/home/u/app/a.js:1:2)'
+    expect(findConsoleLinks(line)).toEqual([{ kind: 'path', start: 27, end: 47, target: '/home/u/app/a.js', line: 1, col: 2 }])
+  })
+})
+
+describe('findConsoleLinks — Python frames', () => {
+  it.each([
+    ['an absolute path', '  File "/home/u/app/main.py", line 12, in <module>', '/home/u/app/main.py', 12],
+    ['a relative path', '  File "main.py", line 3', 'main.py', 3],
+    ['a Windows path', '  File "C:\\proj\\app.py", line 9, in run', 'C:\\proj\\app.py', 9]
+  ])('%s carries its line', (_name, line, target, lineNo) => {
+    const start = line.indexOf(target)
+    expect(findConsoleLinks(line)).toEqual([{ kind: 'path', start, end: start + target.length, target, line: lineNo }])
+  })
+})
+
 describe('joinWrappedLine', () => {
   // Row 1 and 2 are continuations of row 0; row 3 starts a new logical line
   const rows = [

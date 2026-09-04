@@ -27,6 +27,18 @@ const POSITION_RE = /^((?:[A-Za-z]:[\\/])?[^:]*?)(?::(\d+)(?::(\d+))?)?$/
 const TS_POSITION_RE = /^((?:[A-Za-z]:[\\/])?[^:()]+)\((\d+),(\d+)\)$/
 const SEP = /[\\/]/
 const EXT = /\.[A-Za-z0-9]{1,10}$/
+// A JVM stack frame: `at [module/]pkg.Class.method(File.ext:line)`. The file inside the parentheses
+// carries no directory — the package in front of the class is the directory, so the target is the
+// classpath-relative path (`com/anipen/demo/HelloController.java`) and main tries the source roots.
+// The optional prefix swallows Java 9+'s module (`java.base/`) and a classloader (`app//`). The
+// method may be a constructor (`<init>`), a lambda (`lambda$run$0`) or hold `$`; the class may be an
+// inner class (`Outer$Inner`), whose file is the outer class's — which is what the parentheses say.
+// The link is the `File.ext:line` inside the parentheses, as IntelliJ underlines it.
+const JVM_FRAME_RE = /\bat\s+(?:[\w.]+\/\/?)?((?:[\w$]+\.)*)[\w$]+\.[\w$<>]+\((([\w$]+\.(?:java|kt|kts|scala|groovy)):(\d+))\)/g
+// Python's `File "path", line N`, an optional `, in name` tail. The path is quoted, so it carries
+// its own separators and spaces; the token pass already finds it (quotes end a token) but loses the
+// line, so this rule claims the range to keep the line attached.
+const PY_FRAME_RE = /File "([^"]+)", line (\d+)/g
 
 /** A path candidate is a link when it contains a separator, or has an extension and a line — a bare
  *  word is not a file, and `12:30` is a clock. */
@@ -49,6 +61,27 @@ export function findConsoleLinks(line: string): ConsoleLink[] {
     const start = m.index ?? 0
     out.push({ kind: 'url', start, end: start + url.length, url })
     taken.push([start, start + url.length])
+  }
+  // JVM frames next: the token pass splits on whitespace and does not treat `(` as a boundary, so
+  // without this it would read the whole `pkg.Class.method(File.java` as one nonsense token.
+  for (const m of line.matchAll(JVM_FRAME_RE)) {
+    const pkg = m[1].slice(0, -1) // drop the trailing dot the group captured, if any
+    const fileExt = m[3]
+    const target = (pkg === '' ? fileExt : pkg.replace(/\./g, '/') + '/' + fileExt)
+    const linkText = m[2]
+    const start = (m.index ?? 0) + m[0].indexOf(linkText)
+    const end = start + linkText.length
+    out.push({ kind: 'path', start, end, target, line: Number(m[4]) })
+    taken.push([start, end])
+  }
+  // Python frames: the token pass already finds the quoted path (quotes end a token) but loses the
+  // line that follows it, so this rule claims the range to keep the two together.
+  for (const m of line.matchAll(PY_FRAME_RE)) {
+    const target = m[1]
+    const start = (m.index ?? 0) + 'File "'.length
+    const end = start + target.length
+    out.push({ kind: 'path', start, end, target, line: Number(m[2]) })
+    taken.push([start, end])
   }
   for (const m of line.matchAll(TOKEN_RE)) {
     let start = m.index ?? 0

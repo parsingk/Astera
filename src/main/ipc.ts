@@ -3659,8 +3659,9 @@ export function registerIpc(
   // guard" reasoning as run.dismiss.
   ipcMain.handle('run.output', async (_e, runId: string) => core.run.recentOutput(runId))
   // A console link's path, resolved against the run's own working directory and checked before the
-  // renderer is told it exists (main/run/resolveLink.ts). No path guard on the arguments themselves:
-  // the guard is applied to the resolved path inside, and an unknown run answers null.
+  // renderer is told it exists (main/run/resolveLink.ts). A relative target that is not at the cwd is
+  // also tried under the usual source roots. No path guard on the arguments themselves: the guard is
+  // applied to the resolved path inside, and an unknown run answers null.
   ipcMain.handle('run.resolveLink', async (_e, runId: string, target: string) => {
     const cwd = core.run.cwdOf(runId)
     if (!cwd) return null
