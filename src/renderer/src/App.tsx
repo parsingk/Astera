@@ -44,6 +44,7 @@ import type {
   // 컴포넌트 이름과 겹친다 — 이 창이 그리는 값의 타입이고, 그리는 것은 위의 RunDetail 이다
   RunDetail as RunDetailData,
   RunStatus,
+  SaveConfigsResult,
   TerminalBuffer
 } from '../../core/types'
 // core/types.ts imports this for UnderstandingApi but does not re-export it (unlike the block above),
@@ -2709,6 +2710,21 @@ export default function App(): React.JSX.Element {
       }
     )
   }
+  /** RunConfigManager's Apply. On success the toolbar's list is refetched the same way the old
+   *  per-item save did — promoting a seed *removes* an id (mergeConfigs stops emitting seed:npm:dev the
+   *  moment a stored config shares its seedKeyOf), so the selection has to be reconciled or ▶ keeps a
+   *  seed id that no longer resolves. On refusal nothing was stored; the dialog shows the reasons. */
+  const runManagerApply = async (configs: RunConfig[]): Promise<SaveConfigsResult> => {
+    if (!currentProject) return { ok: false, errors: [] }
+    const result = await window.api.run.saveConfigs(currentProject, configs)
+    if (result.ok) {
+      const r = await window.api.run.list(currentProject)
+      setRunConfigs(r.configs)
+      setRunContext(r.context)
+      applyRunSelection(currentProject, pickRunSelection(r.configs, runSelectedByProject.current[currentProject]))
+    }
+    return result
+  }
   /** 실행 중 목록에서 다른 프로젝트로 점프. 트리 루트는 활성 탭이 정하므로, 그 프로젝트에 속한 탭을
    *  활성으로 만드는 것이 곧 '그리로 간다'는 뜻이다. 세션을 먼저 찾고 없으면 그 프로젝트의 파일 탭을
    *  쓴다.
@@ -3960,8 +3976,7 @@ export default function App(): React.JSX.Element {
           isPythonProject={runIsPythonProject}
           hasDockerfile={runHasDockerfile}
           projectPath={currentProject}
-          onSave={runManagerSave}
-          onDelete={runDeleteConfig}
+          onApply={runManagerApply}
           onClose={() => setRunManagerOpen(false)}
         />
       )}

@@ -1404,6 +1404,21 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .rcm-seed-hint { font-size: 12px; color: var(--text-faint); }
 .rcm-resolved { font-family: var(--mono); font-size: 12px; color: var(--ok); word-break: break-all; }
 
+/* Run Configurations — the search field above the tree, the markers on a row, the footer. The
+   footer replaces the old single Close button: Cancel · Apply · OK with the message slot on the left
+   (the seed note, or the first reason Apply refused). */
+.rcm-search { display: flex; align-items: center; gap: 6px; padding: 0 6px; margin-bottom: 6px; background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius); color: var(--text-faint); }
+.rcm-search > input { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--text); font-size: 12px; padding: 5px 0; outline: none; }
+.rcm-item { display: flex; align-items: center; gap: 6px; }
+.rcm-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rcm-mark { flex: none; display: inline-grid; place-items: center; }
+.rcm-mark.dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.rcm-mark.warn { color: var(--warn); }
+.rcm-item.rejected .rcm-item-name { color: var(--danger); }
+.rcm-footer { display: flex; align-items: center; gap: 8px; }
+.rcm-footer-msg { flex: 1; min-width: 0; font-size: 12px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rcm-footer-msg.error { color: var(--danger); }
+
 /* RunDetail — 한 Run 의 상세 창. 왼쪽이 의존 그래프, 오른쪽이 이벤트이고 **노드가 오른쪽의 필터다**.
    Jobs 사이드바의 › 로 연다. */
 /* **높이를 정해 둔다(max-height 가 아니다).** 내용에 맡기면 노드를 눌러 필터 줄이 생기고 맨 아래

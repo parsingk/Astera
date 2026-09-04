@@ -751,6 +751,20 @@ export const ko = {
   'run.manager.duplicate': '복제',
   // 시드를 고치면 그 순간 사용자 구성 사본으로 승격된다(promoteSeed) — 더 이상 읽기 전용이 아니다
   'run.manager.seedHint': '자동 감지된 구성을 수정하면 사용자 구성 사본으로 저장됩니다.',
+  'run.manager.search': '구성 검색',
+  'run.manager.apply': '적용',
+  'run.manager.ok': '확인',
+  'run.manager.discardTitle': '변경 사항을 버릴까요?',
+  'run.manager.discardBody': '적용하지 않은 편집이 있습니다. 버리면 되돌릴 수 없습니다.',
+  'run.manager.discard': '버리기',
+  'run.manager.keepEditing': '계속 편집',
+  // The tree's markers, as tooltips
+  'run.manager.markDirty': '적용되지 않은 변경',
+  'run.manager.markIncomplete': '필수 항목이 비어 있어 실행할 수 없습니다',
+  // Why Apply refused, by reason code (core/run/types.ts SaveReason); shown left of the buttons
+  'run.manager.reason.INVALID_CONFIG': '{name}: 저장할 수 없는 구성입니다',
+  'run.manager.reason.UNSAFE_VALUE': '{name}: 명령에 들어가는 값에 Windows 셸이 해석하는 문자(& | ^ % ! < >)가 있습니다',
+  'run.manager.reason.INVALID_CWD': '{name}: 작업 폴더는 프로젝트 안이어야 합니다',
   'run.type.shell': 'Shell',
   'run.type.npm': 'npm',
   'run.type.node': 'Node.js',
