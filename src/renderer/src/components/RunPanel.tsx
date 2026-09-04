@@ -4,8 +4,9 @@ import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon, type ISearchOptions } from '@xterm/addon-search'
 import '@xterm/xterm/css/xterm.css'
 import { xtermThemeOf } from '../../../core/theme/apply'
+import type { Theme } from '../../../core/theme/themes'
 import { bufferRangeAt, cellsOfJoinedLine, findConsoleLinks, joinWrappedLine } from '../../../core/run/consoleLinks'
-import { consoleTerminalOptions } from '../../../core/run/consoleTerminal'
+import { consoleTerminalOptions, findHighlightPaint } from '../../../core/run/consoleTerminal'
 import { pinCursorBlinkOff } from '../lib/cursorBlink'
 import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
@@ -17,19 +18,25 @@ function findHighlightColor(): string {
   return getComputedStyle(document.documentElement).getPropertyValue('--warn').trim() || '#d9a441'
 }
 
-/** The search addon's highlight colours. Both tints are amber; the active match is not actually painted
- *  by activeMatchBackground here — it sits inside xterm's selection, and the selection (set to the same
- *  amber at 55 %, in consoleTerminalOptions) wins over a decoration's background. activeMatchBackground
- *  only shows if a match is ever active while outside the selection. The non-active matches get the
- *  amber at 25 % (a 6-digit hex, which every shipped theme's is) so they read lighter than the selection. */
-function searchDecorations(): ISearchOptions['decorations'] {
-  const warn = findHighlightColor()
-  const faint = /^#[0-9a-f]{6}$/i.test(warn) ? `${warn}40` : warn
+/** The search addon's highlight colours. Every match is now one colour, not two: a decoration's
+ *  background and xterm's selection background (which the active match sits inside, since the addon
+ *  selects it) follow different paint rules, so left to their own devices the same input colour came
+ *  out as two different pixels — see findHighlightPaint for the detail. The active match is told apart
+ *  by its outline instead. A function of the paint, not a copy of it, so this and consoleTerminalOptions
+ *  (which sets the selection side) cannot drift apart. */
+function searchDecorations(theme: Theme): ISearchOptions['decorations'] {
+  const xtermTheme = xtermThemeOf(theme)
+  const paint = findHighlightPaint({
+    highlight: findHighlightColor(),
+    background: xtermTheme.background,
+    outline: xtermTheme.foreground
+  })
   return {
-    matchBackground: faint,
-    activeMatchBackground: warn,
-    matchOverviewRuler: faint,
-    activeMatchColorOverviewRuler: warn
+    matchBackground: paint.decorationBackground,
+    activeMatchBackground: paint.decorationBackground,
+    activeMatchBorder: paint.activeBorder,
+    matchOverviewRuler: paint.ruler,
+    activeMatchColorOverviewRuler: paint.ruler
   }
 }
 
@@ -245,8 +252,13 @@ export function RunPanel({
   useEffect(() => {
     if (clearNonce > 0) {
       termRef.current?.clear()
-      // The matches went with the scrollback — a count with nothing behind it is worse than none
+      // The matches went with the scrollback — a count with nothing behind it is worse than none.
+      // clearSelection() alongside it: SearchAddon.clearDecorations() does not clear the selection
+      // despite its typing saying "Clears the decorations and selection" — read the shipped
+      // implementation. Left alone, the active match's selection survives and, now that it is amber
+      // rather than xterm's grey, stays plainly visible.
       searchRef.current?.clearDecorations()
+      termRef.current?.clearSelection()
       setResults(null)
     }
   }, [clearNonce])
@@ -261,7 +273,7 @@ export function RunPanel({
     caseSensitive: false,
     regex: false,
     incremental,
-    decorations: searchDecorations()
+    decorations: searchDecorations(theme)
   })
   const findNext = (): void => {
     if (query) searchRef.current?.findNext(query, options(false))
@@ -274,6 +286,7 @@ export function RunPanel({
     if (q) searchRef.current?.findNext(q, options(true))
     else {
       searchRef.current?.clearDecorations()
+      termRef.current?.clearSelection()
       setResults(null)
     }
   }
@@ -286,6 +299,7 @@ export function RunPanel({
     findWasOpen.current = findOpen
     if (findOpen) return
     searchRef.current?.clearDecorations()
+    termRef.current?.clearSelection()
     setResults(null)
     if (wasOpen) termRef.current?.focus()
   }, [findOpen])
