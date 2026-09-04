@@ -722,6 +722,8 @@ export const ko = {
   // RunConfigForm.tsx — name field and the JDK/file pickers shared by every per-kind form.
   // 종류별 필드 라벨은 shell 의 명령까지 모두 아래 run.field.* 에 모여 있다
   'run.form.nameLabel': '이름',
+  'run.form.folder': '폴더',
+  'run.form.folderNone': '(폴더 없음)',
   'run.form.jdkLoading': 'JDK 조회 중…',
   'run.form.jdkNone': '사용 안 함 (앱 환경 그대로)',
   'run.form.jdkCustom': '{path} (직접 지정)',
@@ -763,6 +765,12 @@ export const ko = {
   // The tree's markers, as tooltips
   'run.manager.markDirty': '적용되지 않은 변경',
   'run.manager.markIncomplete': '필수 항목이 비어 있어 실행할 수 없습니다',
+  'run.manager.newFolder': '새 폴더로',
+  'run.manager.moveUp': '위로',
+  'run.manager.moveDown': '아래로',
+  // The name a new folder starts with; the tree appends a number when it is taken
+  'run.manager.folderNameDefault': '새 폴더',
+  'run.manager.renameFolder': '폴더 이름 바꾸기',
   // Why Apply refused, by reason code (core/run/types.ts SaveReason); shown left of the buttons
   'run.manager.reason.INVALID_CONFIG': '{name}: 저장할 수 없는 구성입니다',
   'run.manager.reason.UNSAFE_VALUE': '{name}: 명령에 들어가는 값에 Windows 셸이 해석하는 문자(& | ^ % ! < >)가 있습니다',

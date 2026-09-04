@@ -1364,6 +1364,7 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .rcm-tools > button, .rcm-tools > .rtp-anchor > button { width: 26px; height: 26px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); font-size: 14px; padding: 0; cursor: pointer; }
 .rcm-tools > button:hover:not(:disabled), .rcm-tools > .rtp-anchor > button:hover:not(:disabled) { background: var(--elevated); color: var(--text); }
 .rcm-tools > button:disabled, .rcm-tools > .rtp-anchor > button:disabled { color: var(--text-faint); cursor: default; }
+.rcm-tools-sep { width: 1px; align-self: stretch; margin: 2px 2px; background: var(--line-soft); }
 .rcm-tree { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
 /* flex: none, for the same reason as .rtp-*: the tree is a flex column with a bounded height, so
    without it the groups and rows shrink once the list is taller than the pane. A shrunk row draws its
@@ -1415,9 +1416,18 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .rcm-mark.dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 .rcm-mark.warn { color: var(--warn); }
 .rcm-item.rejected .rcm-item-name { color: var(--danger); }
+
+/* The tree's folder heading, and the inline input that renames it. The heading reuses .rcm-group's
+   type and spacing so a folder and a kind line up; only the icon and the rename affordance differ. */
+.rcm-group[title] { cursor: default; }
+.rcm-folder-name { width: 100%; box-sizing: border-box; margin: 6px 0 2px; background: var(--bg); color: var(--text); border: 1px solid var(--accent); border-radius: var(--radius); padding: 3px 6px; font-size: 11px; }
 .rcm-footer { display: flex; align-items: center; gap: 8px; }
 .rcm-footer-msg { flex: 1; min-width: 0; font-size: 12px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rcm-footer-msg.error { color: var(--danger); }
+
+/* The kind badge beside the name. Reads as a label, not a control: no border, muted, and it never
+   takes focus — the kind is chosen when the configuration is created and does not change after. */
+.rcm-badge { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-dim); padding: 0 2px; white-space: nowrap; }
 
 /* EnvTable — Key · Value · issue · remove, as a grid so the columns line up across rows */
 .env-table { display: flex; flex-direction: column; gap: 4px; }
