@@ -482,4 +482,28 @@ describe('RunManager', () => {
       expect(mgr.cwdOf('nope')).toBeNull()
     })
   })
+
+  describe('whenExited', () => {
+    it('settles with the exit code when the run finishes', async () => {
+      const { mgr, spawned } = setup()
+      const st = mgr.start({ projectPath: '/p', projectName: 'p', config: cfg, command: 'npm run dev' })
+      const waiting = mgr.whenExited(st.runId)
+      spawned[0].pty.exit(3)
+      await expect(waiting).resolves.toBe(3)
+    })
+
+    it('settles immediately for a run that already finished', async () => {
+      const { mgr, spawned } = setup()
+      const st = mgr.start({ projectPath: '/p', projectName: 'p', config: cfg, command: 'npm run dev' })
+      spawned[0].pty.exit(0)
+      await expect(mgr.whenExited(st.runId)).resolves.toBe(0)
+    })
+
+    // A run this manager does not hold cannot be waited on — a caller gating on it must see a failure,
+    // not a promise that never settles.
+    it('settles null for an unknown run', async () => {
+      const { mgr } = setup()
+      await expect(mgr.whenExited('nope')).resolves.toBeNull()
+    })
+  })
 })

@@ -219,6 +219,17 @@ export class RunManager {
     return this.runs.get(runId)?.buffer ?? ''
   }
 
+  /** Settles when the run finishes, with its exit code — null when it ended without one (killed), and
+   *  null for a runId this manager does not hold, so a caller gating on it sees a failure rather than
+   *  a promise that never settles. An already-finished run settles immediately, because `exited` is
+   *  already resolved. This is what the launch executor gates a before-launch chain on: a user
+   *  pressing ⏹ on a task is a failed task. */
+  whenExited(runId: string): Promise<number | null> {
+    const live = this.runs.get(runId)
+    if (!live) return Promise.resolve(null)
+    return live.exited.then(() => live.status.exitCode ?? null)
+  }
+
   /** The directory the run's process started in, for resolving a relative path in its output.
    *  Kept for finished runs like the output is; null for a run this manager does not hold. */
   cwdOf(runId: string): string | null {
