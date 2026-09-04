@@ -622,7 +622,15 @@ export function RunConfigForm({
       {visible('env') && (
         <div className="field">
           <label>{t('run.field.env')}</label>
-          <EnvTable env={draft.env} onChange={(env) => update({ ...draft, env })} />
+          {/* Once the table is on screen it stays: clearing the last key makes the record undefined, and
+              without this the section would unmount with the caret still in it. */}
+          <EnvTable
+            env={draft.env}
+            onChange={(env) => {
+              setShown((s) => (s.has('env') ? s : new Set(s).add('env')))
+              update({ ...draft, env })
+            }}
+          />
         </div>
       )}
 

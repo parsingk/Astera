@@ -139,6 +139,9 @@ export function RunConfigManager({
   // keeps the workbench's own shortcuts away meanwhile.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      // A control that already handled Escape (Select's dropdown, the kind picker) marks the event
+      // handled; the dialog must not close on the same keystroke.
+      if (e.defaultPrevented) return
       if (e.key === 'Escape') {
         e.preventDefault()
         requestClose()
@@ -376,21 +379,18 @@ export function RunConfigManager({
           </div>
           <div className="rcm-form">
             {selected && (
-              <>
-                {isSeed && <div className="rcm-seed-hint">{t('run.manager.seedHint')}</div>}
-                <RunConfigForm
-                  config={selected}
-                  context={context}
-                  isSpringBoot={isSpringBoot}
-                  jdks={jdks}
-                  pythonInterpreters={pythonInterpreters}
-                  composeServices={composeServices}
-                  dotnetProjects={dotnetProjects}
-                  npmScripts={npmScripts}
-                  projectPath={projectPath}
-                  onChange={handleFormChange}
-                />
-              </>
+              <RunConfigForm
+                config={selected}
+                context={context}
+                isSpringBoot={isSpringBoot}
+                jdks={jdks}
+                pythonInterpreters={pythonInterpreters}
+                composeServices={composeServices}
+                dotnetProjects={dotnetProjects}
+                npmScripts={npmScripts}
+                projectPath={projectPath}
+                onChange={handleFormChange}
+              />
             )}
           </div>
         </div>
