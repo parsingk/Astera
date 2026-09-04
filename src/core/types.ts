@@ -892,6 +892,10 @@ export interface CoreApi {
     dismiss(runId: string): Promise<void>
     // The run's buffered output (last 200 KB) — what RunPanel replays when it mounts after the start
     output(runId: string): Promise<string>
+    // Whether `target`, as printed in this run's output, names a file this app may open — resolved
+    // against the run's working directory, guarded, stat-ed (main/run/resolveLink.ts). null is the
+    // ordinary answer; the console's link provider underlines only what comes back non-null.
+    resolveLink(runId: string, target: string): Promise<{ path: string } | null>
     write(runId: string, data: string): void
     resize(runId: string, cols: number, rows: number): void
     // Both return the **stored** list only — never passed through mergeConfigs, so the auto-detected

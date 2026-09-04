@@ -114,6 +114,7 @@ import { listPythonInterpreters } from './pythonScanner'
 import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
 import { loadRunConfigs, prepareRun } from './run/prepare'
+import { resolveConsolePath } from './run/resolveLink'
 import { decideStart } from '../core/run/instances'
 import { createGithubPrs } from './githubPrs'
 import { createAccountUsage } from './accountUsage'
@@ -3657,6 +3658,16 @@ export function registerIpc(
   // A run's buffered output, for a panel that mounts after the run started. Same "existing run, no
   // guard" reasoning as run.dismiss.
   ipcMain.handle('run.output', async (_e, runId: string) => core.run.recentOutput(runId))
+  // A console link's path, resolved against the run's own working directory and checked before the
+  // renderer is told it exists (main/run/resolveLink.ts). A relative target that is not at the cwd is
+  // also tried under the usual source roots. No path guard on the arguments themselves: the guard is
+  // applied to the resolved path inside, and an unknown run answers null.
+  ipcMain.handle('run.resolveLink', async (_e, runId: string, target: string) => {
+    const cwd = core.run.cwdOf(runId)
+    if (!cwd) return null
+    const p = await resolveConsolePath({ cwd, target, stat: (f) => fs.stat(f), assertAllowedPath })
+    return p ? { path: p } : null
+  })
   ipcMain.on('run.write', (_e, runId: string, data: string) => core.run.write(runId, data))
   ipcMain.on('run.resize', (_e, runId: string, cols: number, rows: number) => core.run.resize(runId, cols, rows))
   // 저장 시점의 cwd 검사 — 규칙과 그 근거는 main/run/prepare.ts 의 resolveRunCwd 를 보라. 그 함수는
@@ -3949,7 +3960,8 @@ export function registerIpc(
 
   /** 마크다운 프리뷰의 외부 링크. 허용 스킴 밖은 조용히 버린다 — 렌더러가 이미 걸렀으므로 여기에
    *  도달하는 것은 버그이거나 우회 시도다. 예외를 던지지 않는 이유는 링크 클릭이 실패해도 사용자가
-   *  할 수 있는 일이 없기 때문이다. */
+   *  할 수 있는 일이 없기 때문이다. 실행 콘솔의 URL 링크도 이 검사 하나에만 기대는 새 호출자다 —
+   *  링크 문법이 애초에 https?:// 만 내보내므로, 이는 맞는 선택이다. */
   ipcMain.handle('system.openExternal', async (_e, url: string) => {
     const parsed = parseAllowedExternalUrl(url)
     if (!parsed) return

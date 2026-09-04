@@ -2356,36 +2356,58 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* The bodies are stacked and only the active one is visible — the inactive ones stay mounted so xterm state is preserved */
 .bottom-bodies { flex: 1; min-height: 0; display: flex; }
 .bottom-body { flex: 1; min-width: 0; min-height: 0; }
-.bottom-body > .run-panel-host { height: 100%; }
 
-/* The Run tab's body: the project's runs on the left, one console per run on the right (BottomPanel).
-   The list mirrors .rcm-tree/.rcm-item — same row height, same left accent for the selected row — so the
-   two run-configuration surfaces read as one. */
+/* The Run tab's body: a tool rail on the left, then a strip of run tabs over one console per run
+   (BottomPanel). The rail follows .rcm-tools' button rule (grid-centred icon, faint when disabled); the
+   tabs follow .bottom-tab so the two tab rows read as one family. */
 .run-body { display: flex; }
-.run-list { flex: none; width: 200px; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding: 4px; background: var(--panel); border-right: 1px solid var(--line-soft); }
-.run-list-empty { justify-content: center; color: var(--text-faint); font-size: 12px; padding: 12px; text-align: center; line-height: 1.5; }
-.run-row { flex: none; display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--radius); border-left: 2px solid transparent; color: var(--text); font-size: 12px; cursor: pointer; }
-.run-row:hover { background: var(--surface-hover); }
-.run-row.on { background: var(--elevated); border-left-color: var(--accent); }
-.run-row:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
-/* State dot: green and haloed while running (the same treatment as .run-live-dot on the tab), amber
-   while the kill is in flight, faint once finished. */
-.run-row-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--text-faint); }
-.run-row-dot.running { background: var(--run); box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
-.run-row-dot.stopping { background: var(--warn); }
-.run-row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.run-row-exit { flex: none; color: var(--text-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
-.run-row-exit.fail { color: var(--danger); }
-/* Row actions show on hover and on the selected row — three icons on every row is noise in a list
-   that is mostly read, not acted on. */
-.run-row-actions { flex: none; display: flex; gap: 1px; opacity: 0; }
-.run-row:hover .run-row-actions, .run-row.on .run-row-actions, .run-row:focus-within .run-row-actions { opacity: 1; }
-.run-row-btn { width: 18px; height: 18px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); padding: 0; cursor: pointer; }
-.run-row-btn:hover { background: var(--bg); color: var(--text); }
-.run-row-btn.stop:hover { color: var(--danger); }
+.run-rail { flex: none; width: 30px; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 0; background: var(--panel); border-right: 1px solid var(--line-soft); }
+.run-rail-btn { width: 24px; height: 24px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); padding: 0; cursor: pointer; }
+.run-rail-btn:hover:not(:disabled) { background: var(--elevated); color: var(--text); }
+.run-rail-btn:disabled { color: var(--text-faint); cursor: default; }
+.run-rail-btn.on { background: var(--elevated); color: var(--text); }
+.run-rail-btn.rerun:not(:disabled) { color: var(--run); }
+.run-rail-btn.stop:not(:disabled) { color: var(--danger); }
+.run-rail-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.run-rail-sep { width: 16px; height: 1px; background: var(--line-soft); margin: 3px 0; }
+.run-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.run-tabstrip { flex: none; height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 8px; background: var(--bg); border-bottom: 1px solid var(--line-soft); }
+.run-tabstrip-empty { color: var(--text-faint); font-size: 12px; }
+.run-tabs { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.run-tabs::-webkit-scrollbar { display: none; }
+.run-tab { flex: none; display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: var(--radius); color: var(--text-dim); font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+.run-tab:hover { background: var(--surface-hover); }
+.run-tab.on { background: var(--elevated); color: var(--text); }
+.run-tab:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+/* State dot: green and haloed while running (as .run-live-dot on the tab), amber while the kill is in
+   flight, faint once finished. */
+.run-tab-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--text-faint); }
+.run-tab-dot.running { background: var(--run); box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
+.run-tab-dot.stopping { background: var(--warn); }
+.run-tab-label { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.run-tab-exit { font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.run-tab-exit.fail { color: var(--danger); }
+.run-tab-close { display: grid; place-items: center; width: 16px; height: 16px; background: transparent; border: 0; border-radius: var(--radius-sm); color: var(--text-faint); padding: 0; cursor: pointer; }
+.run-tab-close:hover { background: var(--bg); color: var(--text); }
+.run-tabstrip-meta { flex: none; display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.run-tabstrip-cmd { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-tabstrip-time { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .run-consoles { flex: 1; min-width: 0; min-height: 0; display: flex; }
 .run-console { flex: 1; min-width: 0; min-height: 0; }
-.run-console > .run-panel-host { height: 100%; }
+.run-console > .run-panel-body { height: 100%; }
+/* The console plus what floats over it (the find bar). The host is the xterm mount as before. */
+.run-panel-body { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; }
+.run-panel-body > .run-panel-host { flex: 1; min-width: 0; }
+/* The find bar — RunFindBar, top-right over the output, in the floating-panel treatment .run-more-menu
+   and .sel-menu use (panel background, soft border, large radius, the large shadow). */
+.run-find { position: absolute; top: 6px; right: 14px; z-index: 5; display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px 0 8px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); }
+.run-find-icon { color: var(--text-dim); flex: none; }
+.run-find-input { width: 180px; height: 22px; background: transparent; border: 0; color: var(--text); font-family: var(--mono); font-size: 12px; outline: none; }
+.run-find-input::placeholder { color: var(--text-faint); font-family: var(--sans); }
+.run-find-count { min-width: 44px; text-align: right; font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.run-find-count.none { color: var(--danger); }
+.run-find-btn { width: 22px; height: 22px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); padding: 0; cursor: pointer; }
+.run-find-btn:hover { background: var(--elevated); color: var(--text); }
 
 /* ---------- toast notifications ---------- */
 /* Above the status bar (32px plus 10px margin-top) and in front of modals (z 100), so a failure notice raised inside a modal is not hidden either */

@@ -171,6 +171,7 @@ const api = {
     stop: invoke('run.stop'),
     dismiss: invoke('run.dismiss'),
     output: invoke('run.output'),
+    resolveLink: invoke('run.resolveLink'),
     write: fire('run.write'),
     resize: fire('run.resize'),
     saveConfig: invoke('run.saveConfig'),
