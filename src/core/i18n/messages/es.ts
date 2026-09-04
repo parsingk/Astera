@@ -165,6 +165,8 @@ export const es: Catalog = {
   // MarkdownPreview.tsx — fallo al cargar imagen, aviso de imagen remota
   'files.markdown.image.failed': 'No se pudo cargar la imagen',
   'files.markdown.renderError': 'No se pudo mostrar este documento',
+  'files.markdown.copyCode': 'Copiar código',
+  'files.markdown.codeCopied': 'Código copiado',
   // MarkdownSplit.tsx — los tres botones de modo de la barra de herramientas, el divisor izquierda/derecha
   'files.markdown.mode.editor': 'Solo editor',
   'files.markdown.mode.split': 'Editor y vista previa',

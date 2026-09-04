@@ -2300,10 +2300,23 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .md-preview code { font-family: var(--mono); font-size: .9em;
   background: var(--md-code-bg); border-radius: var(--radius-sm); padding: .2em .4em; }
 /* The fence carries the size and IntelliJ resets the inner <code> to 100% — leaving the .9em above
-   in place would compound with this .85em. */
-.md-preview pre { background: var(--md-code-bg); border-radius: var(--radius-sm); padding: 16px;
-  font-size: .85em; line-height: 1.45; overflow-x: auto; }
+   in place would compound with this .85em. The top padding is the one departure from IntelliJ's
+   uniform 16px: the copy button (.md-copy below, for which position: relative is the containing
+   block) sits in that band, so it never covers the first line of code — which a top-left overlay
+   inside a 16px pad would do, on the very characters a reader looks at first. */
+.md-preview pre { position: relative; background: var(--md-code-bg); border-radius: var(--radius-sm);
+  padding: 30px 16px 16px; font-size: .85em; line-height: 1.45; overflow-x: auto; }
 .md-preview pre code { background: none; padding: 0; font-size: 100%; }
+/* Copies the whole fence. Always visible but dimmed, so it reads as part of the block rather than
+   a control competing with the code; hover and keyboard focus bring it to full strength. In a block
+   wide enough to scroll it moves with the content (an absolute child of an overflow container is
+   part of its scrollable overflow) — acceptable, the left edge is where reading starts anyway. The
+   global `button` rule brings a border, background and sans font that all have to go. */
+.md-preview .md-copy { position: absolute; top: 6px; left: 6px; width: 20px; height: 20px;
+  display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--md-text); opacity: .45; cursor: pointer; }
+.md-preview .md-copy:hover { opacity: 1; }
+.md-preview .md-copy:focus-visible { opacity: 1; outline: none; box-shadow: 0 0 0 2px var(--ring); }
 /* Tables scroll horizontally within themselves only — the page must not shift */
 .md-table-wrap { overflow-x: auto; margin: 16px 0; }
 .md-preview table { border-collapse: collapse; }

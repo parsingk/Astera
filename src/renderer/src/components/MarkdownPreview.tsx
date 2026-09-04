@@ -15,6 +15,7 @@ import { StandardSQL } from '@codemirror/lang-sql'
 import { xmlLanguage } from '@codemirror/lang-xml'
 import { yamlLanguage } from '@codemirror/lang-yaml'
 import { goLanguage } from '@codemirror/lang-go'
+import { Copy } from 'lucide-react'
 import {
   parseMarkdown, classifyHref,
   type MdBlock, type MdInline, type MdAttrs, type MdHref
@@ -22,6 +23,7 @@ import {
 import type { LangKey } from '../../../core/files/edit'
 import { resolveRelative, decodeUriPath } from '../../../core/files/paths'
 import { useI18n } from '../i18n/I18nProvider'
+import { toast } from '../lib/toast'
 
 /** LangKey → the Lezer language to parse with, standalone (outside a CodeMirror instance).
  *
@@ -125,7 +127,8 @@ function cachedHighlight(code: string, lang: LangKey | null): React.ReactNode {
  *  every render and defeat the comparison. useMemo is a second, cheaper line of defence for the rare
  *  case this instance does re-render (e.g. only `lang` changed) — it still saves the Map lookup itself.
  *  Neither of these survives the key-driven remount described above, which is what the module-level
- *  cachedHighlight() cache is for. */
+ *  cachedHighlight() cache is for. useI18n() does not weaken the memo: a language change re-renders
+ *  through context, which bypasses the prop comparison by design. */
 const CodeBlock = memo(function CodeBlock({
   text, lang, line
 }: {
@@ -133,9 +136,29 @@ const CodeBlock = memo(function CodeBlock({
   lang: LangKey | null
   line: number
 }): React.JSX.Element {
+  const { t } = useI18n()
   const nodes = useMemo(() => cachedHighlight(text, lang), [text, lang])
+  const copyLabel = t('files.markdown.copyCode')
   return (
     <pre data-md-line={line}>
+      {/* The button is the <pre>'s first child and is positioned absolutely against it (.md-copy) —
+          inside so it scrolls with a wide block, first so it never introduces a text node after the
+          <code> inside a white-space: pre parent. It carries no text of its own, so a mouse selection
+          across the block still copies only the code. */}
+      <button
+        type="button"
+        className="md-copy"
+        title={copyLabel}
+        aria-label={copyLabel}
+        onClick={() => {
+          // `text` is the fence body exactly as parseMarkdown read it — info string and closing fence
+          // already stripped, no trailing newline — so what lands on the clipboard is what is shown.
+          window.api.clipboard.writeText(text)
+          toast.success(t('files.markdown.codeCopied'))
+        }}
+      >
+        <Copy size={13} />
+      </button>
       <code>{nodes}</code>
     </pre>
   )

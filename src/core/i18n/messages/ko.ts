@@ -217,9 +217,11 @@ export const ko = {
   'files.editor.keepMine': '내 편집 유지',
   'files.editor.loading': '불러오는 중…',
   'files.editor.selectPrompt': '트리에서 파일을 선택하세요',
-  // MarkdownPreview.tsx — 이미지 로드 실패·원격 이미지 안내
+  // MarkdownPreview.tsx — 이미지 로드 실패·원격 이미지 안내·코드 블록 복사 버튼
   'files.markdown.image.failed': '이미지를 열 수 없습니다',
   'files.markdown.renderError': '이 문서를 표시할 수 없습니다',
+  'files.markdown.copyCode': '코드 복사',
+  'files.markdown.codeCopied': '코드를 복사했습니다',
   // MarkdownSplit.tsx — 모드 툴바 버튼 세 개, 좌우 분할 리사이저
   'files.markdown.mode.editor': '편집기만',
   'files.markdown.mode.split': '편집기와 프리뷰',
