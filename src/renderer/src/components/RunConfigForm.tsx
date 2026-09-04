@@ -99,6 +99,15 @@ export function RunConfigForm({
     setShown(new Set())
     setAddOpen(false)
     setLastGoodName(config.name)
+  } else if (config.folder !== draft.folder) {
+    // `folder` is the one field this form does not own: the tree's folder button, the picker and a
+    // folder rename all set it from outside, and none of them changes the id, so the reseed above
+    // never fires for them. Without this the local copy keeps the old value and the next keystroke
+    // spreads it back over the change.
+    const next = { ...draft } as RunConfig & { folder?: string }
+    if (config.folder === undefined) delete next.folder
+    else next.folder = config.folder
+    setDraft(next)
   }
 
   // Every change goes up at once: the dialog owns the draft (RunConfigManager, core/run/draft.ts) and
