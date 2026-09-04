@@ -80,12 +80,18 @@ export function RunConfigForm({
   // typed (then visible() below picks it up from the value itself) or the selection changes.
   const [shown, setShown] = useState<Set<string>>(new Set())
   const [addOpen, setAddOpen] = useState(false)
+  // The name to restore when the field is blurred empty. It cannot come from `config` any more: with
+  // update() reporting every keystroke, config.name is already '' by the time blur runs. Seeded when
+  // the selection changes and refreshed on every blur that leaves a real name, so a rename that
+  // succeeded is what a later clearing falls back to.
+  const [lastGoodName, setLastGoodName] = useState(config.name)
   if (draftForId !== config.id) {
     setDraftForId(config.id)
     setDraft(config)
     setEnvText(formatEnvLines(config.env))
     setShown(new Set())
     setAddOpen(false)
+    setLastGoodName(config.name)
   }
 
   // Every change goes up at once: the dialog owns the draft (RunConfigManager, core/run/draft.ts) and
@@ -102,15 +108,17 @@ export function RunConfigForm({
     'cwd', 'args', 'springProfiles', 'features', 'packagePath', 'nodePath', 'target', 'composeFile', 'services',
     'dockerfilePath', 'buildArgs', 'runArgs', 'configuration'
   ] as const
-  // On blur: blanks become absent, and an emptied name falls back to the one the row had — the name is
-  // the only thing naming this configuration in the tree and in the toolbar, so an empty one leaves a
-  // row nobody can read or point at. A kind's *required* field is deliberately not gated: an empty one
-  // stays empty, the tree marks it ⚠, and run.start is what refuses to run it.
+  // On blur: blanks become absent, and an emptied name falls back to the last name the field held that
+  // was not itself blank — the name is the only thing naming this configuration in the tree and in the
+  // toolbar, so an empty one leaves a row nobody can read or point at. A kind's *required* field is
+  // deliberately not gated: an empty one stays empty, the tree marks it ⚠, and run.start is what
+  // refuses to run it.
   const normalizeOnBlur = (): void => {
     const next = { ...draft } as unknown as Record<string, unknown>
     for (const k of BLANKABLE) if (next[k] === '') delete next[k]
     const name = typeof next.name === 'string' ? next.name.trim() : ''
-    next.name = name === '' ? config.name : name
+    if (name !== '') setLastGoodName(name)
+    next.name = name === '' ? lastGoodName : name
     const cleaned = next as unknown as RunConfig
     if (JSON.stringify(cleaned) !== JSON.stringify(draft)) update(cleaned)
   }
