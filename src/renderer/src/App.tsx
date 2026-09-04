@@ -1827,6 +1827,12 @@ export default function App(): React.JSX.Element {
     isPythonProject: boolean
     hasDockerfile: boolean
   } | null>(null)
+  /** Which configuration the manager should open on — the toolbar menu's "Edit '<name>'…" sets this
+   *  right before opening; absent, the manager falls back to its own default (the first configuration). */
+  const [managerInitialSelectedId, setManagerInitialSelectedId] = useState<string | undefined>(undefined)
+  /** Whether the toolbar's configuration menu (RunConfigMenu) is open. Lifted here, not local to
+   *  RunToolbar, because Task 9's run.selectConfig shortcut opens it from outside the component tree. */
+  const [runMenuOpen, setRunMenuOpen] = useState(false)
   // The Jobs sidebar snapshot for the open project — orch.list's initial payload, then every
   // 'orch:state' push after it (see the subscription effect below). null until orch.list first resolves.
   const [orchSnapshot, setOrchSnapshot] = useState<OrchSnapshot | null>(null)
@@ -2718,6 +2724,21 @@ export default function App(): React.JSX.Element {
     if (selectedRunId === runId) setSelectedRunId(pickRunToShow(remaining))
     if (remaining.length === 0 && terminals.length === 0) setRunPanelOpen(false)
   }
+  /** Opens the two-pane manager, snapshotting the current project the way managerFor's own comment
+   *  explains. Shared by the toolbar's ⋮ item and the configuration menu's "Edit '<name>'…" row — the
+   *  only difference between them is which configuration the dialog opens on. */
+  const openRunManager = (initialSelectedId?: string): void => {
+    if (!currentProject || !runContext) return
+    setManagerFor({
+      projectPath: currentProject,
+      configs: runConfigs,
+      context: runContext,
+      isSpringBoot: runIsSpringBoot,
+      isPythonProject: runIsPythonProject,
+      hasDockerfile: runHasDockerfile
+    })
+    setManagerInitialSelectedId(initialSelectedId)
+  }
   /** RunConfigManager's Apply. On success the toolbar's list is refetched the same way the old
    *  per-item save did — promoting a seed *removes* an id (mergeConfigs stops emitting seed:npm:dev the
    *  moment a stored config shares its seedKeyOf), so the selection has to be reconciled or ▶ keeps a
@@ -2937,21 +2958,22 @@ export default function App(): React.JSX.Element {
                 onSelect={(id) => applyRunSelection(currentProject, id)}
                 runs={runs}
                 onRun={() => runStart()}
-                onStop={runStop}
-                onOpenManager={() => {
-                  if (!currentProject || !runContext) return
-                  setManagerFor({
-                    projectPath: currentProject,
-                    configs: runConfigs,
-                    context: runContext,
-                    isSpringBoot: runIsSpringBoot,
-                    isPythonProject: runIsPythonProject,
-                    hasDockerfile: runHasDockerfile
-                  })
+                onRunConfig={(id) => {
+                  applyRunSelection(currentProject, id)
+                  runStart(id)
                 }}
+                onStop={runStop}
+                onOpenManager={() => openRunManager()}
+                onEditConfig={(id) => openRunManager(id)}
                 activeRuns={activeRuns}
                 onJump={runJump}
                 onStopRun={runStop}
+                menuOpen={runMenuOpen}
+                onMenuOpenChange={setRunMenuOpen}
+                // No shortcut.run.selectConfig binding to read yet — that action does not exist until
+                // the run.selectConfig ActionId is registered. Empty renders no hint, the same as a
+                // configuration with no shortcut bound to it anywhere else in this app.
+                manageHint=""
               />
             </div>
           ) : null
@@ -4010,8 +4032,12 @@ export default function App(): React.JSX.Element {
           isPythonProject={managerFor.isPythonProject}
           hasDockerfile={managerFor.hasDockerfile}
           projectPath={managerFor.projectPath}
+          initialSelectedId={managerInitialSelectedId}
           onApply={(configs) => runManagerApply(managerFor.projectPath, configs)}
-          onClose={() => setManagerFor(null)}
+          onClose={() => {
+            setManagerFor(null)
+            setManagerInitialSelectedId(undefined)
+          }}
         />
       )}
       {openRun && (

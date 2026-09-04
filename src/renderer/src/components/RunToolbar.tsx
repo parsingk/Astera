@@ -2,9 +2,7 @@ import { useState } from 'react'
 import type { RunConfig, RunStatus } from '../../../core/types'
 import { actedConfigIds, decideStart, toolbarState } from '../../../core/run/instances'
 import { useI18n } from '../i18n/I18nProvider'
-import type { MessageKey } from '../../../core/i18n'
-import { groupConfigs } from '../../../core/run/grouping'
-import { Select } from './Select'
+import { RunConfigMenu } from './RunConfigMenu'
 import { EllipsisVertical, Play, Square } from 'lucide-react'
 
 /** Run toolbar. It sits in the title bar, next to the app name, and is drawn whenever a project is
@@ -25,11 +23,16 @@ export function RunToolbar({
   onSelect,
   runs,
   onRun,
+  onRunConfig,
   onStop,
   onOpenManager,
+  onEditConfig,
   activeRuns,
   onJump,
-  onStopRun
+  onStopRun,
+  menuOpen,
+  onMenuOpenChange,
+  manageHint
 }: {
   configs: RunConfig[]
   selectedId: string | null
@@ -37,13 +40,24 @@ export function RunToolbar({
   /** The current project's runs, finished ones included */
   runs: RunStatus[]
   onRun: () => void
+  /** The configuration menu's row ▶. Selects that row's configuration as well as running it — the
+   *  no-argument onRun above always reads the current selection, which the row must not depend on. */
+  onRunConfig: (id: string) => void
   onStop: (runId: string) => void
-  /** Opens the two-pane RunConfigManager — the ⋮ menu's only item. */
+  /** Opens the two-pane RunConfigManager — the ⋮ menu's item, and the configuration menu's footer. */
   onOpenManager: () => void
+  /** The configuration menu's "Edit '<name>'…" row. Opens the manager pinned to that configuration. */
+  onEditConfig: (id: string) => void
   /** Every live run across projects — the badge and its dropdown */
   activeRuns: RunStatus[]
   onJump: (projectPath: string) => void
   onStopRun: (runId: string) => void
+  /** Controlled: Task 9's run.selectConfig shortcut opens the configuration menu from outside. */
+  menuOpen: boolean
+  onMenuOpenChange: (open: boolean) => void
+  /** The configuration menu footer's "Manage run configs…" hint, already formatted; empty when there
+   *  is no shortcut bound to show. */
+  manageHint: string
 }): React.JSX.Element {
   const { t } = useI18n()
   const [showRuns, setShowRuns] = useState(false)
@@ -67,24 +81,17 @@ export function RunToolbar({
 
   return (
     <div className="run-toolbar">
-      <Select
-        className="run-config-select"
-        items={[
-          ...(configs.length === 0 ? [{ value: '', label: t('run.config.none') }] : []),
-          // The same grouping the manager's tree draws (core/run/grouping.ts), flattened into the
-          // Select's items. groupConfigs has already made each group contiguous, so groupRowsOf —
-          // which starts a fresh heading whenever the group changes — emits each heading once.
-          ...groupConfigs(configs).flatMap((g) =>
-            g.items.map((c) => ({
-              value: c.id,
-              label: c.name,
-              group: g.kind === 'folder' ? g.key : t(`run.type.${g.key}` as MessageKey)
-            }))
-          )
-        ]}
-        value={selectedId ?? ''}
-        onChange={onSelect}
-        ariaLabel={t('run.config.selectLabel')}
+      <RunConfigMenu
+        configs={configs}
+        runs={runs}
+        selectedId={selectedId}
+        open={menuOpen}
+        onOpenChange={onMenuOpenChange}
+        onSelect={onSelect}
+        onRun={onRunConfig}
+        onEdit={onEditConfig}
+        onManage={onOpenManager}
+        manageHint={manageHint}
       />
       {/* A validation run is not the user's. The stop button stays (a runaway validation must be
           stoppable); the label is what says why ⏹ is here for a run they did not start. */}

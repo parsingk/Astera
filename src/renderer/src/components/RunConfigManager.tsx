@@ -55,6 +55,7 @@ export function RunConfigManager({
   isPythonProject,
   hasDockerfile,
   projectPath,
+  initialSelectedId,
   onApply,
   onClose
 }: {
@@ -71,6 +72,9 @@ export function RunConfigManager({
   hasDockerfile: boolean
   /** Base for the form's working-folder and JDK/interpreter "Choose…" pickers */
   projectPath: string
+  /** Which configuration the dialog opens on. The toolbar menu's "Edit '<name>'…" supplies it; absent,
+   *  the first configuration is selected as before. */
+  initialSelectedId?: string
   /** Apply: the stored list becomes this list, or nothing changes and the refused items are named. The
    *  caller refetches run.list on success so the toolbar follows. */
   onApply: (configs: RunConfig[]) => Promise<SaveConfigsResult>
@@ -83,7 +87,9 @@ export function RunConfigManager({
   // The snapshot: taken once, on mount. `configs` is deliberately not a dependency of anything below.
   const [draft, setDraft] = useState<ConfigDraft>(() => draftOf(configs))
   const [baseline, setBaseline] = useState<RunConfig[]>(() => configs.filter((c) => !isSeedId(c.id)))
-  const [selectedId, setSelectedId] = useState<string | null>(configs[0]?.id ?? null)
+  const [selectedId, setSelectedId] = useState<string | null>(
+    (initialSelectedId && configs.some((c) => c.id === initialSelectedId) ? initialSelectedId : configs[0]?.id) ?? null
+  )
   const [query, setQuery] = useState('')
   const [applyErrors, setApplyErrors] = useState<ApplyError[]>([])
   const [applying, setApplying] = useState(false)
@@ -467,6 +473,11 @@ export function RunConfigManager({
                             title={t(broken ? 'run.manager.markBrokenRef' : 'run.manager.markIncomplete')}
                           >
                             <AlertTriangle size={11} />
+                          </span>
+                        )}
+                        {c.temporary && (
+                          <span className="rcm-mark temp" title={t('run.manager.markTemporary')}>
+                            {t('run.menu.temporary')}
                           </span>
                         )}
                       </button>
