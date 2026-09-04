@@ -20,6 +20,23 @@ export function draftOf(merged: RunConfig[]): ConfigDraft {
   return { items: [...merged] }
 }
 
+/** Rewrites every reference to `from` in the draft's beforeLaunch and members lists: to `to`, or
+ *  removed entirely when `to` is null. Only the items that actually hold the reference are rebuilt,
+ *  so a draft with no references is returned untouched item by item. */
+function retarget(items: readonly RunConfig[], from: string, to: string | null): RunConfig[] {
+  const rewrite = (ids: string[]): string[] =>
+    to === null ? ids.filter((x) => x !== from) : ids.map((x) => (x === from ? to : x))
+  return items.map((c) => {
+    const holdsBefore = (c.beforeLaunch ?? []).includes(from)
+    const holdsMember = c.type === 'compound' && c.members.includes(from)
+    if (!holdsBefore && !holdsMember) return c
+    const next = { ...c } as RunConfig & { beforeLaunch?: string[]; members?: string[] }
+    if (holdsBefore) next.beforeLaunch = rewrite(c.beforeLaunch ?? [])
+    if (holdsMember && next.members) next.members = rewrite(next.members)
+    return next as RunConfig
+  })
+}
+
 /** Replaces an item's fields. The id stays: the form hands back whatever object it assembled, and the
  *  tree's identity is the draft's, not the form's. A seed is promoted first — the promoted copy takes
  *  the seed's place, so the tree shows the copy where the seed was and the next keystroke edits the
@@ -33,7 +50,10 @@ export function editItem(
   const i = d.items.findIndex((c) => c.id === id)
   if (i < 0) return { draft: d, id }
   const replacement = isSeedId(id) ? promoteSeed(next, newId()) : { ...next, id }
-  return { draft: { items: d.items.map((c, k) => (k === i ? replacement : c)) }, id: replacement.id }
+  const items = d.items.map((c, k) => (k === i ? replacement : c))
+  // A promoted seed gets a new id; every task pointing at the seed has to follow it.
+  const result = replacement.id === id ? items : retarget(items, id, replacement.id)
+  return { draft: { items: result }, id: replacement.id }
 }
 
 /** ＋: a draft-only configuration, appended. Nothing is stored until Apply — a ＋ followed by Cancel
@@ -46,7 +66,9 @@ export function addItem(d: ConfigDraft, config: RunConfig): ConfigDraft {
  *  a no-op for it. */
 export function removeItem(d: ConfigDraft, id: string): ConfigDraft {
   if (isSeedId(id)) return d
-  return { items: d.items.filter((c) => c.id !== id) }
+  // Deleting a configuration takes it out of everyone's chips in the same gesture. Apply commits the
+  // whole list atomically, so a reference to a row that is gone is never what gets stored.
+  return { items: retarget(d.items.filter((c) => c.id !== id), id, null) }
 }
 
 /** ⧉: the same configuration under a new user id and a name the tree can tell apart, inserted right
@@ -123,7 +145,9 @@ export function setFolder(
     return next
   }
   const replacement = isSeedId(id) ? withFolder(promoteSeed(d.items[i], newId())) : withFolder(d.items[i])
-  return { draft: { items: d.items.map((c, k) => (k === i ? replacement : c)) }, id: replacement.id }
+  const items = d.items.map((c, k) => (k === i ? replacement : c))
+  const result = replacement.id === id ? items : retarget(items, id, replacement.id)
+  return { draft: { items: result }, id: replacement.id }
 }
 
 /** Renames a folder across every member at once. `to` empty takes them all out of it; `to` naming
