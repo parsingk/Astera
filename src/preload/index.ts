@@ -174,8 +174,6 @@ const api = {
     resolveLink: invoke('run.resolveLink'),
     write: fire('run.write'),
     resize: fire('run.resize'),
-    saveConfig: invoke('run.saveConfig'),
-    deleteConfig: invoke('run.deleteConfig'),
     saveConfigs: invoke('run.saveConfigs'),
     listJdks: invoke('run.listJdks'),
     listPythonInterpreters: invoke('run.listPythonInterpreters'),

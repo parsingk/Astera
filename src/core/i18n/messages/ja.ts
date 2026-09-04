@@ -753,6 +753,7 @@ export const ja: Catalog = {
   'run.find.close': '検索を閉じる',
   'run.rail.scrollToEnd': '末尾へ',
   'run.rail.find': '検索',
+  'run.rail.rerunGone': '構成が削除されました',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
   'terminal.rail.open': 'ターミナル',
   'terminal.tab.label': 'ターミナル {n}',

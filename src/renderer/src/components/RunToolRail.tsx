@@ -8,6 +8,7 @@ import { ChevronsDown, Eraser, RotateCw, Search, Square } from 'lucide-react'
  *  only while the run is running. Everything is disabled with no run selected. */
 export function RunToolRail({
   run,
+  rerunGone,
   findOpen,
   onRerun,
   onStop,
@@ -16,6 +17,10 @@ export function RunToolRail({
   onToggleFind
 }: {
   run: RunStatus | null
+  /** The run's configuration was deleted since it started: ↻ has nowhere to go, so it is disabled with
+   *  the reason as its tooltip. Before this, run.start failed with NO_CONFIG behind a button that
+   *  appeared to do nothing. */
+  rerunGone: boolean
   findOpen: boolean
   onRerun: (configId: string) => void
   onStop: (runId: string) => void
@@ -27,7 +32,14 @@ export function RunToolRail({
   const none = run === null
   return (
     <div className="run-rail" role="toolbar" aria-orientation="vertical" aria-label={t('run.panel.tab')}>
-      <button type="button" className="run-rail-btn rerun" title={t('run.action.rerun')} aria-label={t('run.action.rerun')} disabled={none} onClick={() => run && onRerun(run.configId)}>
+      <button
+        type="button"
+        className="run-rail-btn rerun"
+        title={rerunGone ? t('run.rail.rerunGone') : t('run.action.rerun')}
+        aria-label={t('run.action.rerun')}
+        disabled={none || rerunGone}
+        onClick={() => run && onRerun(run.configId)}
+      >
         <RotateCw size={14} />
       </button>
       <button type="button" className="run-rail-btn stop" title={t('run.action.stop')} aria-label={t('run.action.stop')} disabled={run?.status !== 'running'} onClick={() => run && onStop(run.runId)}>

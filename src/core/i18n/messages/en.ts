@@ -738,6 +738,7 @@ export const en: Record<keyof typeof ko, string> = {
   'run.find.close': 'Close find',
   'run.rail.scrollToEnd': 'Scroll to end',
   'run.rail.find': 'Find',
+  'run.rail.rerunGone': 'The configuration was deleted',
   'terminal.rail.open': 'Terminal',
   'terminal.tab.label': 'Terminal {n}',
   'terminal.tab.new': 'New terminal',

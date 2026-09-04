@@ -2665,51 +2665,6 @@ export default function App(): React.JSX.Element {
     if (selectedRunId === runId) setSelectedRunId(pickRunToShow(remaining))
     if (remaining.length === 0 && terminals.length === 0) setRunPanelOpen(false)
   }
-  const runDeleteConfig = (id: string): void => {
-    if (!currentProject) return
-    void window.api.run.deleteConfig(currentProject, id).then(() => {
-      void window.api.run.list(currentProject).then((r) => {
-        setRunConfigs(r.configs)
-        setRunContext(r.context)
-        applyRunSelection(
-          currentProject,
-          pickRunSelection(r.configs, runSelectedByProject.current[currentProject])
-        )
-      })
-    })
-  }
-  /** RunConfigManager's onSave. It always hands over an assembled RunConfig of whatever kind — there
-   *  is no per-field signature to match, so this one handler covers add, edit, and the promotion of a
-   *  seed into a user configuration copy (RunConfigManager.tsx's handleFormChange).
-   *
-   *  Answers whether the configuration reached the store: run.saveConfig refuses a value the command
-   *  gate rejects, and the dialog has to take a refused new configuration back out of its tree rather
-   *  than leave a row nothing is behind. */
-  const runManagerSave = (config: RunConfig): Promise<boolean> => {
-    if (!currentProject) return Promise.resolve(false)
-    return window.api.run.saveConfig(currentProject, config).then(
-      () => {
-        void window.api.run.list(currentProject).then((r) => {
-          setRunConfigs(r.configs)
-          setRunContext(r.context)
-          // The same reconciliation as the three siblings above. It is not optional here either:
-          // promoting a seed *removes* an id — mergeConfigs stops emitting seed:npm:dev the moment a
-          // stored config shares its seedKeyOf — so without this the toolbar keeps a seed id that no
-          // longer resolves, ▶ stays enabled (disabled={!selectedId}, and a stale string is truthy)
-          // and pressing it fails with NO_CONFIG.
-          applyRunSelection(
-            currentProject,
-            pickRunSelection(r.configs, runSelectedByProject.current[currentProject])
-          )
-        })
-        return true
-      },
-      (err) => {
-        toast.error(t('run.config.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
-        return false
-      }
-    )
-  }
   /** RunConfigManager's Apply. On success the toolbar's list is refetched the same way the old
    *  per-item save did — promoting a seed *removes* an id (mergeConfigs stops emitting seed:npm:dev the
    *  moment a stored config shares its seedKeyOf), so the selection has to be reconciled or ▶ keeps a
@@ -3429,6 +3384,7 @@ export default function App(): React.JSX.Element {
                   <BottomPanel
                     runAvailable={runAvailable}
                     runs={runs}
+                    configIds={runConfigs.map((c) => c.id)}
                     selectedRunId={selectedRunId}
                     onSelectRun={setSelectedRunId}
                     onStopRun={runStop}

@@ -19,6 +19,7 @@ import { ChevronDown, Delete, Plus, X } from 'lucide-react'
 export function BottomPanel({
   runAvailable = true,
   runs,
+  configIds,
   selectedRunId,
   onSelectRun,
   onStopRun,
@@ -38,6 +39,9 @@ export function BottomPanel({
   runAvailable?: boolean
   /** This project's runs, finished ones included, in seat order */
   runs: RunStatus[]
+  /** ids of the project's configurations as the toolbar knows them — the rail disables ↻ for a run whose
+   *  id is not among them */
+  configIds: readonly string[]
   selectedRunId: string | null
   onSelectRun: (runId: string) => void
   onStopRun: (runId: string) => void
@@ -160,6 +164,7 @@ export function BottomPanel({
           <div className="bottom-body run-body" style={{ display: activeTab === 'run' ? 'flex' : 'none' }}>
             <RunToolRail
               run={selectedRun}
+              rerunGone={!!selectedRun && !configIds.includes(selectedRun.configId)}
               findOpen={!!(selectedRunId && findOpen[selectedRunId])}
               onRerun={onRerun}
               onStop={onStopRun}

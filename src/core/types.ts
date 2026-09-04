@@ -898,11 +898,6 @@ export interface CoreApi {
     resolveLink(runId: string, target: string): Promise<{ path: string } | null>
     write(runId: string, data: string): void
     resize(runId: string, cols: number, rows: number): void
-    // Both return the **stored** list only — never passed through mergeConfigs, so the auto-detected
-    // seeds are not in it. A caller that needs the display list has to refetch with run.list (which is
-    // what App.tsx does; it discards these return values).
-    saveConfig(projectPath: string, config: RunConfig): Promise<RunConfig[]>
-    deleteConfig(projectPath: string, configId: string): Promise<RunConfig[]>
     /** The manager's Apply: the stored list becomes `configs` wholesale, or nothing changes and every
      *  refused item is named (core/run/types.ts SaveConfigsResult). */
     saveConfigs(projectPath: string, configs: RunConfig[]): Promise<SaveConfigsResult>
@@ -935,7 +930,7 @@ export interface CoreApi {
 /** Extras on the Electron side (not core — main handles these directly) */
 export interface SystemApi {
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is
-  // already validated by run.start and run.saveConfig. Omitting it behaves exactly as the existing
+  // already validated by run.start and run.saveConfigs. Omitting it behaves exactly as the existing
   // caller (NewSessionDialog) does.
   pickFolder(defaultPath?: string): Promise<string | null>
   // Same contract as pickFolder, for a single file — the run configuration file-path fields (node's

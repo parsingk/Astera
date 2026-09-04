@@ -763,6 +763,7 @@ export const es: Catalog = {
   'run.find.close': 'Cerrar búsqueda',
   'run.rail.scrollToEnd': 'Ir al final',
   'run.rail.find': 'Buscar',
+  'run.rail.rerunGone': 'La configuración fue eliminada',
   // BottomPanel, the rail terminal button
   'terminal.rail.open': 'Terminal',
   'terminal.tab.label': 'Terminal {n}',

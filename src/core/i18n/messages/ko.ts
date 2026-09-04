@@ -842,6 +842,7 @@ export const ko = {
   'run.find.close': '찾기 닫기',
   'run.rail.scrollToEnd': '끝으로',
   'run.rail.find': '찾기',
+  'run.rail.rerunGone': '구성이 삭제되었습니다',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
   'terminal.rail.open': '터미널',
   'terminal.tab.label': '터미널 {n}',
