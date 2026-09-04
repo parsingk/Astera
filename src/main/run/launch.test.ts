@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { RunStatus } from '../../core/run/config'
 import type { LaunchPlan } from '../../core/run/launch'
 import { executeLaunch, type LaunchDeps } from './launch'
@@ -92,6 +92,18 @@ describe('executeLaunch', () => {
     expect(started).toEqual(['a'])
   })
 
+  it('runs every step of a three-deep chain, each only after the one before it exits 0', async () => {
+    const { d, started, focused, finish } = deps()
+    await executeLaunch(plan([['a', []], ['b', ['a']], ['c', ['b']]], 'c'), d)
+    expect(started).toEqual(['a'])
+    await finish('a', 0)
+    expect(started).toEqual(['a', 'b'])
+    expect(focused).toEqual([])
+    await finish('b', 0)
+    expect(started).toEqual(['a', 'b', 'c'])
+    expect(focused).toEqual(['run:c'])
+  })
+
   it('starts independent steps together', async () => {
     const { d, started, settle } = deps()
     await executeLaunch(plan([['api', []], ['web', []]], 'api'), d)
@@ -127,19 +139,52 @@ describe('executeLaunch', () => {
     expect(started).toEqual(['build'])
   })
 
-  // The first step is different: run.start has not resolved yet, so its rejection IS the answer the
-  // renderer gets, and the existing toast reports it. Reporting an event as well would say it twice —
-  // and swallowing it would leave the caller with nothing to open the panel on.
-  it('rejects rather than reporting an event when the very first step refuses to start', async () => {
-    const { d, failures } = deps({ reject: ['a'] })
-    await expect(executeLaunch(plan([['a', []]]), d)).rejects.toThrow('spawn refused: a')
-    expect(failures).toEqual([])
-  })
+  describe('first step refuses to start', () => {
+    // A rejected first step must not leave a later gate's Promise.all with an unhandled rejection —
+    // deleting the .catch(() => null) on the `done` entry regresses this silently: no assertion below
+    // would fail, only a process-level unhandledRejection that may or may not be blamed on this file.
+    let rejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown): void => {
+      rejections.push(reason)
+    }
 
-  it('a later step still runs when an unrelated first step fails to start', async () => {
-    const { d, started, settle } = deps({ reject: ['api'] })
-    await expect(executeLaunch(plan([['api', []], ['web', []]], 'api'), d)).rejects.toThrow()
-    await settle()
-    expect(started).toEqual(['web'])
+    beforeEach(() => {
+      rejections = []
+      process.on('unhandledRejection', onUnhandledRejection)
+    })
+
+    afterEach(async () => {
+      // unhandledRejection fires on a later turn of the event loop than a drained microtask queue, so
+      // give Node one before asserting — otherwise a real regression could go unnoticed here.
+      await new Promise((resolve) => setImmediate(resolve))
+      process.off('unhandledRejection', onUnhandledRejection)
+      expect(rejections).toEqual([])
+    })
+
+    // The first step is different: run.start has not resolved yet, so its rejection IS the answer the
+    // renderer gets, and the existing toast reports it. Reporting an event as well would say it twice —
+    // and swallowing it would leave the caller with nothing to open the panel on.
+    it('rejects rather than reporting an event when the very first step refuses to start', async () => {
+      const { d, failures } = deps({ reject: ['a'] })
+      await expect(executeLaunch(plan([['a', []]]), d)).rejects.toThrow('spawn refused: a')
+      expect(failures).toEqual([])
+    })
+
+    it('a later step still runs when an unrelated first step fails to start', async () => {
+      const { d, started, settle } = deps({ reject: ['api'] })
+      await expect(executeLaunch(plan([['api', []], ['web', []]], 'api'), d)).rejects.toThrow()
+      await settle()
+      expect(started).toEqual(['web'])
+    })
+
+    // The two cases above never exercise a real dependent: the solo plan has no second step, and
+    // 'web' above is independent of 'api' (its `after` is empty). This is the case the brief's
+    // constraint is actually about — a dependent step's gate reading the rejection as "did not run".
+    it('does not start a dependent step when the first step it waits on refuses to start', async () => {
+      const { d, started, failures } = deps({ reject: ['a'] })
+      await expect(executeLaunch(plan([['a', []], ['b', ['a']]], 'a'), d)).rejects.toThrow('spawn refused: a')
+      expect(started).toEqual([])
+      expect(failures).toEqual([])
+    })
   })
 })
