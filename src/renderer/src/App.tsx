@@ -2652,6 +2652,31 @@ export default function App(): React.JSX.Element {
     return off
   }, [])
 
+  /** What a freshly started run does to the screen: merged into the list, selected, its project's
+   *  terminal tabs refreshed, and the panel opened. Shared by ▶ (runStart) and the explorer's "Run
+   *  'x'" (runFile) — from the moment main hands back a RunStatus, the two paths are identical. Callers
+   *  check currentProjectRef against `root` before calling this (the project may have changed while
+   *  the IPC was in flight); merging first would inject another project's run into this list — and
+   *  nothing would ever evict it: upsertRun evicts only on a seat match within the same project, and
+   *  the run:status subscription filters foreign events. The row would sit there frozen at 'running',
+   *  with its ⏹ and ✕ acting on another project's process. */
+  const showStartedRun = async (root: string, st: RunStatus): Promise<void> => {
+    setRuns((prev) => upsertRun(prev, st))
+    setSelectedRunId(st.runId)
+    // Starting a Run may be what opens the panel for the first time — and that also mounts this
+    // project's existing terminal tabs (in a hidden state). TerminalBody replays initialBuffer only
+    // once, at mount, and ignores later updates, so the latest buffer has to be read *before* the
+    // setRunPanelOpen(true) that causes the mount — the same reason as in openTerminal.
+    if (terminals.length > 0) {
+      const list = await window.api.terminal.list(root).catch(() => terminals)
+      // The same check again after the await — the project can change during this call too. Without
+      // discarding, the screen shows the new project while the panel holds the previous project's
+      // terminal tabs, and input goes to that shell.
+      if (currentProjectRef.current !== root) return
+      setTerminals(list)
+    }
+    setRunPanelOpen(true)
+  }
   /** ▶, and the list's ↻. `configId` defaults to the toolbar's selection; the list passes its row's. Main
    *  decides whether this starts a new run or restarts a live one (decideStart) and returns the run either
    *  way — that run is merged into the list and selected, so the console follows what was just started. */
@@ -2660,26 +2685,21 @@ export default function App(): React.JSX.Element {
     const root = currentProject
     void window.api.run.start(root, configId).then(
       async (st) => {
-        // The project may have changed while the IPC was in flight. Merging first would inject another
-        // project's run into this list — and nothing would ever evict it: upsertRun evicts only on a seat
-        // match within the same project, and the run:status subscription filters foreign events. The row
-        // would sit there frozen at 'running', with its ⏹ and ✕ acting on another project's process.
         if (currentProjectRef.current !== root) return
-        setRuns((prev) => upsertRun(prev, st))
-        setSelectedRunId(st.runId)
-        // Starting a Run may be what opens the panel for the first time — and that also mounts this
-        // project's existing terminal tabs (in a hidden state). TerminalBody replays initialBuffer only
-        // once, at mount, and ignores later updates, so the latest buffer has to be read *before* the
-        // setRunPanelOpen(true) that causes the mount — the same reason as in openTerminal.
-        if (terminals.length > 0) {
-          const list = await window.api.terminal.list(root).catch(() => terminals)
-          // The same check again after the await — the project can change during this call too. Without
-          // discarding, the screen shows the new project while the panel holds the previous project's
-          // terminal tabs, and input goes to that shell.
-          if (currentProjectRef.current !== root) return
-          setTerminals(list)
-        }
-        setRunPanelOpen(true)
+        await showStartedRun(root, st)
+      },
+      (err) => toast.error(t('run.start.failed', { detail: err instanceof Error ? err.message : String(err) }))
+    )
+  }
+  /** The explorer's "Run 'x'" item. Main creates or reuses the configuration and starts it; from here
+   *  on it is a started run like any other, so it goes through the same path ▶ does. */
+  const runFile = (filePath: string): void => {
+    if (!currentProject) return
+    const root = currentProject
+    void window.api.run.runFile(root, filePath).then(
+      async (st) => {
+        if (currentProjectRef.current !== root) return
+        await showStartedRun(root, st)
       },
       (err) => toast.error(t('run.start.failed', { detail: err instanceof Error ? err.message : String(err) }))
     )
@@ -3096,6 +3116,7 @@ export default function App(): React.JSX.Element {
                 undoRef={explorerUndoRef}
                 onPathRenamed={handlePathRenamed}
                 onPathDeleted={handlePathDeleted}
+                onRunFile={runFile}
               />
             ) : sidebarPane === 'jobs' ? (
               <JobsView
