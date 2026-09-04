@@ -99,23 +99,43 @@ export function RunPanel({
     const onResults = search.onDidChangeResults((e) =>
       setResults({ index: e.resultIndex < 0 ? null : e.resultIndex + 1, total: e.resultCount })
     )
-    // Cmd+F on macOS, Ctrl+F elsewhere — the same platform split TerminalView uses for its own
-    // keybindings — opens this run's find bar instead of sending the key to the process. Bound on the
-    // terminal, not the window, so the editor's own find is untouched.
+    // Cmd on macOS, Ctrl elsewhere — the same platform split TerminalView uses for its own keybindings
+    // — for the two keys this console claims. F opens this run's find bar instead of sending the key
+    // to the process; bound on the terminal, not the window, so the editor's own find is untouched.
     const isMac = window.api.platform === 'darwin'
-    const findMod = (e: KeyboardEvent): boolean => (isMac ? e.metaKey : e.ctrlKey)
-    const findOtherMod = (e: KeyboardEvent): boolean => (isMac ? e.ctrlKey : e.metaKey)
+    const keyMod = (e: KeyboardEvent): boolean => (isMac ? e.metaKey : e.ctrlKey)
+    const otherMod = (e: KeyboardEvent): boolean => (isMac ? e.ctrlKey : e.metaKey)
     term.attachCustomKeyEventHandler((e) => {
       if (
         e.type === 'keydown' &&
-        findMod(e) &&
-        !findOtherMod(e) &&
+        keyMod(e) &&
+        !otherMod(e) &&
         !e.altKey &&
         !e.shiftKey &&
         e.key.toLowerCase() === 'f'
       ) {
         onFindOpenChangeRef.current(true)
         return false
+      }
+      // Copy, as the session terminal does it: with a selection, C copies it and clears the selection
+      // instead of reaching the process — a user copying a stack trace must not interrupt the server
+      // that printed it. With nothing selected the key flows through as before (an interrupt on
+      // Windows and Linux; nothing at all on macOS, where Ctrl+C is the interrupt and Cmd+C is not).
+      if (
+        e.type === 'keydown' &&
+        (e.key === 'c' || e.key === 'C') &&
+        keyMod(e) &&
+        !otherMod(e) &&
+        !e.altKey &&
+        !e.shiftKey
+      ) {
+        const sel = term.getSelection()
+        if (sel) {
+          window.api.clipboard.writeText(sel)
+          term.clearSelection()
+          return false
+        }
+        return true
       }
       return true
     })
