@@ -1812,8 +1812,21 @@ export default function App(): React.JSX.Element {
   // The two-pane run configuration manager (Task 6). context is the assembly context run.list also
   // sends down — the manager's preview calls buildCommand(config, context) so it shows exactly what
   // run.start would run, and it starts null until the first run.list response arrives.
-  const [runManagerOpen, setRunManagerOpen] = useState(false)
   const [runContext, setRunContext] = useState<RunContext | null>(null)
+  /** What the Run Configurations dialog was opened against, captured once. The dialog must not follow
+   *  currentProject: the active tab can change under an open modal (a desktop notification click
+   *  activates that session's tab), and Apply replaces a project's whole stored list — so a dialog that
+   *  read the live project could write one project's draft over another's configurations. Capturing the
+   *  context too keeps a run.list failure from unmounting the dialog and discarding the draft without
+   *  the confirmation the user is owed. */
+  const [managerFor, setManagerFor] = useState<{
+    projectPath: string
+    configs: RunConfig[]
+    context: RunContext
+    isSpringBoot: boolean
+    isPythonProject: boolean
+    hasDockerfile: boolean
+  } | null>(null)
   // The Jobs sidebar snapshot for the open project — orch.list's initial payload, then every
   // 'orch:state' push after it (see the subscription effect below). null until orch.list first resolves.
   const [orchSnapshot, setOrchSnapshot] = useState<OrchSnapshot | null>(null)
@@ -2038,10 +2051,10 @@ export default function App(): React.JSX.Element {
   }, [openRun, currentProject, orchSnapshot])
 
   // Whether RunConfigManager is actually on screen — gates both its render below and the shortcut
-  // suppression right after it. Computed from the same three things that gate the render (open flag,
-  // project, context) so switching projects or losing the context drops the suppression in the same
-  // render as the unmount, not only when the dialog's own onClose fires.
-  const runManagerVisible = runManagerOpen && !!currentProject && !!runContext
+  // suppression right after it. The dialog is pinned to the project (and context) it was opened
+  // with, not the live currentProject, so this is just "was it opened" — managerFor going null on
+  // close drops the suppression in the same render as the unmount.
+  const runManagerVisible = managerFor !== null
   // OR-ed onto the value the other modals already set above — runManagerVisible depends on
   // currentProject, which is not computed yet at that point in the component. The history modal joins
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
@@ -2669,16 +2682,21 @@ export default function App(): React.JSX.Element {
    *  per-item save did — promoting a seed *removes* an id (mergeConfigs stops emitting seed:npm:dev the
    *  moment a stored config shares its seedKeyOf), so the selection has to be reconciled or ▶ keeps a
    *  seed id that no longer resolves. On refusal nothing was stored; the dialog shows the reasons. A
-   *  throw (the save itself failing, not a refused item) becomes a toast and an empty-error refusal. */
-  const runManagerApply = async (configs: RunConfig[]): Promise<SaveConfigsResult> => {
-    if (!currentProject) return { ok: false, errors: [] }
+   *  throw (the save itself failing, not a refused item) becomes a toast and an empty-error refusal.
+   *
+   *  Takes the project explicitly instead of reading currentProject — the dialog is pinned to the
+   *  project it opened with (see managerFor), and that can differ from whatever the toolbar shows by
+   *  the time Apply fires. */
+  const runManagerApply = async (projectPath: string, configs: RunConfig[]): Promise<SaveConfigsResult> => {
     try {
-      const result = await window.api.run.saveConfigs(currentProject, configs)
-      if (result.ok) {
-        const r = await window.api.run.list(currentProject)
+      const result = await window.api.run.saveConfigs(projectPath, configs)
+      // The toolbar only follows when it is still showing the project that was applied — the dialog is
+      // pinned to the project it opened with, so those two can differ.
+      if (result.ok && currentProjectRef.current === projectPath) {
+        const r = await window.api.run.list(projectPath)
         setRunConfigs(r.configs)
         setRunContext(r.context)
-        applyRunSelection(currentProject, pickRunSelection(r.configs, runSelectedByProject.current[currentProject]))
+        applyRunSelection(projectPath, pickRunSelection(r.configs, runSelectedByProject.current[projectPath]))
       }
       return result
     } catch (err) {
@@ -2880,7 +2898,17 @@ export default function App(): React.JSX.Element {
                 runs={runs}
                 onRun={() => runStart()}
                 onStop={runStop}
-                onOpenManager={() => setRunManagerOpen(true)}
+                onOpenManager={() => {
+                  if (!currentProject || !runContext) return
+                  setManagerFor({
+                    projectPath: currentProject,
+                    configs: runConfigs,
+                    context: runContext,
+                    isSpringBoot: runIsSpringBoot,
+                    isPythonProject: runIsPythonProject,
+                    hasDockerfile: runHasDockerfile
+                  })
+                }}
                 activeRuns={activeRuns}
                 onJump={runJump}
                 onStopRun={runStop}
@@ -3931,18 +3959,18 @@ export default function App(): React.JSX.Element {
           })()}
         />
       )}
-      {/* Re-checks currentProject/runContext directly (rather than just runManagerVisible) so TypeScript
-          narrows them to non-null here, instead of an assertion */}
-      {runManagerOpen && currentProject && runContext && (
+      {/* Renders from the snapshot the dialog was opened with (managerFor), not the live
+          currentProject/runContext — see managerFor's comment for why. */}
+      {managerFor && (
         <RunConfigManager
-          configs={runConfigs}
-          context={runContext}
-          isSpringBoot={runIsSpringBoot}
-          isPythonProject={runIsPythonProject}
-          hasDockerfile={runHasDockerfile}
-          projectPath={currentProject}
-          onApply={runManagerApply}
-          onClose={() => setRunManagerOpen(false)}
+          configs={managerFor.configs}
+          context={managerFor.context}
+          isSpringBoot={managerFor.isSpringBoot}
+          isPythonProject={managerFor.isPythonProject}
+          hasDockerfile={managerFor.hasDockerfile}
+          projectPath={managerFor.projectPath}
+          onApply={(configs) => runManagerApply(managerFor.projectPath, configs)}
+          onClose={() => setManagerFor(null)}
         />
       )}
       {openRun && (
