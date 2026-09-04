@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RunConfig } from '../../../core/run/types'
-import { addableTargets } from '../../../core/run/launch'
+import { addableTargets, type RefField } from '../../../core/run/launch'
 import { runTypeIcon } from '../../../core/run/typeIcon'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
@@ -20,12 +20,16 @@ export function ConfigRefList({
   ids,
   all,
   hostId,
+  field,
   onChange
 }: {
   ids: readonly string[]
   /** The dialog's whole draft list — a configuration added with ＋ a moment ago is a valid target */
   all: readonly RunConfig[]
   hostId: string
+  /** Which of the host's own reference fields `ids` is — a compound has both, so addableTargets has to
+   *  be told which one it is probing rather than guessing it from the host's kind. */
+  field: RefField
   onChange: (ids: string[]) => void
 }): React.JSX.Element {
   const { t } = useI18n()
@@ -51,7 +55,7 @@ export function ConfigRefList({
     }
   }, [open])
 
-  const targets = addableTargets(all, hostId, ids)
+  const targets = addableTargets(all, hostId, field, ids)
 
   return (
     <div className="ref-list" ref={rootRef}>

@@ -110,15 +110,22 @@ function topoSort(steps: ReadonlyMap<string, string[]>): TopoResult {
   return { ok: true, order: out }
 }
 
-/** The configurations that may be added to `hostId`'s before-launch list, or to a compound's members:
- *  every other configuration, minus the ones already listed and the ones that would create a cycle.
- *  Called with the dialog's draft list, not the stored one — a configuration added with ＋ a moment
- *  ago is a valid target.
+/** Which list of references a picker is extending. `beforeLaunch` exists on every kind; `members`
+ *  only on a compound — and a compound has both (its own before-launch tasks, gating every member,
+ *  plus its member list), so which one a candidate is being probed against cannot be inferred from
+ *  the host's type alone. */
+export type RefField = 'beforeLaunch' | 'members'
+
+/** The configurations that may be added to `hostId`'s `field` list — its before-launch tasks, or a
+ *  compound's members: every other configuration, minus the ones already listed and the ones that
+ *  would create a cycle. Called with the dialog's draft list, not the stored one — a configuration
+ *  added with ＋ a moment ago is a valid target.
  *
  *  Candidate counts are in the tens, so planning once per candidate is not worth optimising away. */
 export function addableTargets(
   configs: readonly RunConfig[],
   hostId: string,
+  field: RefField,
   current: readonly string[]
 ): RunConfig[] {
   const host = configs.find((c) => c.id === hostId)
@@ -126,17 +133,31 @@ export function addableTargets(
   const taken = new Set(current)
   return configs.filter((c) => {
     if (c.id === hostId || taken.has(c.id)) return false
-    const probe = configs.map((x) => (x.id === hostId ? withRef(host, current, c.id) : x))
+    const probe = configs.map((x) => (x.id === hostId ? withRef(host, field, current, c.id) : x))
     return planLaunch(probe, hostId).ok
   })
 }
 
-/** `host` with its draft list `current` plus one more reference — a member for a compound, a
- *  before-launch task for anything else. Built from `current`, not from `host`'s own stored field:
- *  the draft can hold a reference not yet applied, and dropping it here would let a candidate that
- *  only closes a cycle together with that reference through. Only ever handed to planLaunch, never
- *  stored. */
-function withRef(host: RunConfig, current: readonly string[], id: string): RunConfig {
-  if (host.type === 'compound') return { ...host, members: [...current, id] }
-  return { ...host, beforeLaunch: [...current, id] }
+/** `host` with one more reference added to `field`. Built from `current`, not from `host`'s own
+ *  stored `field` — the draft can hold a reference not yet applied, and dropping it here would let a
+ *  candidate that only closes a cycle together with that reference through. `host`'s other reference
+ *  field is left untouched (a compound probed for `beforeLaunch` keeps its real `members`, and vice
+ *  versa) — only ever handed to planLaunch, never stored, so a stray `members` on a non-compound is
+ *  inert there: planLaunch reads it only for a compound. */
+function withRef(host: RunConfig, field: RefField, current: readonly string[], id: string): RunConfig {
+  const probe = { ...host } as RunConfig & { beforeLaunch?: string[]; members?: string[] }
+  probe[field] = [...current, id]
+  return probe as RunConfig
+}
+
+/** Every configuration id `c` names as a reference: its before-launch tasks, and — for a compound —
+ *  its members. The one place this list is defined, so the tree's ⚠ marker (RunConfigManager.tsx)
+ *  reads the same shape `expand` above does, rather than re-deriving it. Deliberately not used inside
+ *  `expand` itself: `expand` treats the two fields very differently (beforeLaunch gates sequentially
+ *  through the growing `after` list; members run in parallel and never feed back into it), so folding
+ *  them into one loop there would blur that distinction for no benefit. The `referencedIds` test below
+ *  pins this function's answer against what `planLaunch` actually treats as a reference, so the two
+ *  cannot quietly drift apart. */
+export function referencedIds(c: RunConfig): string[] {
+  return [...(c.beforeLaunch ?? []), ...(c.type === 'compound' ? c.members : [])]
 }

@@ -4,6 +4,7 @@ import type { RunContext } from '../../../core/run/build'
 import type { RunConfigType } from '../../../core/run/types'
 import type { MessageKey } from '../../../core/i18n'
 import { runTypeIcon } from '../../../core/run/typeIcon'
+import { referencedIds } from '../../../core/run/launch'
 import { defaultConfigFor } from '../../../core/run/config'
 import { missingRequiredFields } from '../../../core/run/migrate'
 import { groupConfigs } from '../../../core/run/grouping'
@@ -448,9 +449,9 @@ export function RunConfigManager({
                     // a before-launch task or a compound member — that nothing in the list resolves,
                     // which is what a deleted package.json script looks like: the seed is gone and the
                     // chip points at nothing. Without the second, the tree looks fine and ▶ reports a
-                    // configuration the user cannot see.
-                    const refs = [...(c.beforeLaunch ?? []), ...(c.type === 'compound' ? c.members : [])]
-                    const broken = refs.some((id) => !draft.items.some((x) => x.id === id))
+                    // configuration the user cannot see. referencedIds is core/run/launch.ts's own
+                    // reference model (the same one planLaunch's expand() reads), not re-derived here.
+                    const broken = referencedIds(c).some((id) => !draft.items.some((x) => x.id === id))
                     const incomplete = !isSeedId(c.id) && missingRequiredFields(c).length > 0
                     return (
                       <button

@@ -281,6 +281,7 @@ export function RunConfigForm({
             ids={draft.members}
             all={all}
             hostId={draft.id}
+            field="members"
             onChange={(members) => update({ ...draft, members })}
           />
         </div>
@@ -728,6 +729,7 @@ export function RunConfigForm({
           ids={draft.beforeLaunch ?? []}
           all={all}
           hostId={draft.id}
+          field="beforeLaunch"
           onChange={(beforeLaunch) => {
             // An empty list is stored as an absent field: absent and empty mean the same thing, and
             // one of them has to be canonical — the same rule cwd and folder follow.

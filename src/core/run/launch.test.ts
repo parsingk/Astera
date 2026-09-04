@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { RunConfig } from './types'
-import { planLaunch, addableTargets } from './launch'
+import { planLaunch, addableTargets, referencedIds } from './launch'
 
 const sh = (id: string, extra: Partial<RunConfig> = {}): RunConfig =>
   ({ id, name: id, type: 'shell', command: `echo ${id}`, ...extra }) as RunConfig
@@ -159,20 +159,20 @@ describe('addableTargets', () => {
   const list = [sh('a'), sh('b'), sh('c')]
 
   it('offers the others', () => {
-    expect(addableTargets(list, 'a', []).map((c) => c.id)).toEqual(['b', 'c'])
+    expect(addableTargets(list, 'a', 'beforeLaunch', []).map((c) => c.id)).toEqual(['b', 'c'])
   })
 
   it('never offers the host itself', () => {
-    expect(addableTargets(list, 'a', []).map((c) => c.id)).not.toContain('a')
+    expect(addableTargets(list, 'a', 'beforeLaunch', []).map((c) => c.id)).not.toContain('a')
   })
 
   it('never offers one already in the list', () => {
-    expect(addableTargets(list, 'a', ['b']).map((c) => c.id)).toEqual(['c'])
+    expect(addableTargets(list, 'a', 'beforeLaunch', ['b']).map((c) => c.id)).toEqual(['c'])
   })
 
   it('never offers one that would close a cycle', () => {
     const cyclic = [sh('a'), sh('b', { beforeLaunch: ['a'] })]
-    expect(addableTargets(cyclic, 'a', []).map((c) => c.id)).toEqual([])
+    expect(addableTargets(cyclic, 'a', 'beforeLaunch', []).map((c) => c.id)).toEqual([])
   })
 
   // host's own stored members is empty -- 'c1' exists only in the draft list passed as `current`.
@@ -186,6 +186,65 @@ describe('addableTargets', () => {
       comp('c2', ['y'], { beforeLaunch: ['x'] }),
       comp('host', [])
     ]
-    expect(addableTargets(configs, 'host', ['c1']).map((c) => c.id)).not.toContain('c2')
+    expect(addableTargets(configs, 'host', 'members', ['c1']).map((c) => c.id)).not.toContain('c2')
+  })
+
+  // withRef used to guess which field to probe from the host's type, so a compound host always got
+  // its candidate written into `members` — even when the caller (the Before launch picker) meant
+  // `beforeLaunch`. That silently threw away the compound's real members for the probe, so a cycle
+  // that only exists once those real members are considered went undetected.
+  it("refuses a beforeLaunch candidate that closes a cycle only once the compound's real members are considered", () => {
+    const worker = sh('worker')
+    const candidate = sh('candidate', { beforeLaunch: ['worker'] })
+    const host = comp('host', ['worker'])
+    const configs = [worker, candidate, host]
+    expect(addableTargets(configs, 'host', 'beforeLaunch', []).map((c) => c.id)).not.toContain('candidate')
+  })
+
+  // The mirror bug: writing into the wrong field can also manufacture a cycle that isn't really
+  // there, withholding a candidate that is perfectly safe once probed against the field actually
+  // being edited.
+  it('offers a beforeLaunch candidate the old field-guessing code would have wrongly refused', () => {
+    const taskA = sh('taskA')
+    const real1 = sh('real1')
+    const candidate = sh('candidate')
+    const host = comp('host', ['real1'], { beforeLaunch: ['taskA'] })
+    const configs = [taskA, real1, candidate, host]
+    expect(addableTargets(configs, 'host', 'beforeLaunch', ['taskA']).map((c) => c.id)).toContain('candidate')
+  })
+})
+
+describe('referencedIds', () => {
+  it('a plain configuration with no references names none', () => {
+    expect(referencedIds(sh('a'))).toEqual([])
+  })
+
+  it('a configuration with before-launch tasks names them', () => {
+    expect(referencedIds(sh('a', { beforeLaunch: ['b', 'c'] }))).toEqual(['b', 'c'])
+  })
+
+  it("a compound's members are references", () => {
+    expect(referencedIds(comp('all', ['api', 'web']))).toEqual(['api', 'web'])
+  })
+
+  it('a compound with both before-launch tasks and members names both, before-launch first', () => {
+    expect(referencedIds(comp('all', ['api', 'web'], { beforeLaunch: ['install'] }))).toEqual([
+      'install',
+      'api',
+      'web'
+    ])
+  })
+
+  // Pins this function's answer against planLaunch's own reference model (expand, above), so the two
+  // definitions cannot quietly drift apart: every id referencedIds reports for a host must actually
+  // show up as a step planLaunch produces for it.
+  it('every id referencedIds reports for a host is a step planLaunch actually produces', () => {
+    const install = sh('install')
+    const api = sh('api')
+    const web = sh('web')
+    const host = comp('all', ['api', 'web'], { beforeLaunch: ['install'] })
+    const p = planLaunch([install, api, web, host], 'all')
+    const stepIds = p.ok ? p.steps.map((s) => s.configId) : []
+    for (const id of referencedIds(host)) expect(stepIds).toContain(id)
   })
 })
