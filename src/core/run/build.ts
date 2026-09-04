@@ -1,5 +1,5 @@
 import { detectPackageManager, type PackageManager } from './config'
-import type { RunConfig } from './types'
+import type { RunnableConfig } from './types'
 import { COMPOSE_FILE_NAMES } from './compose'
 
 /** The context command assembly needs. Derived from the file list and platform, never stored */
@@ -39,7 +39,7 @@ const join = (...parts: (string | null | undefined | false)[]): string =>
 
 /** Builds the command to run from a configuration's kind and parameters.
  *  **The form's preview calls this too** — keeping the rule in one place is the point. */
-export function buildCommand(config: RunConfig, ctx: RunContext): string {
+export function buildCommand(config: RunnableConfig, ctx: RunContext): string {
   const q = (v: string): string => quoteArg(v, ctx.platform)
   switch (config.type) {
     case 'shell':

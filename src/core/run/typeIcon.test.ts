@@ -18,7 +18,8 @@ const ICONS: Record<RunConfigType, FileIconSpec> = {
   pytest: { id: 'label', tone: 'green', label: 'PY', badge: 'test' },
   compose: { id: 'container', tone: 'blue' },
   dockerfile: { id: 'container', tone: 'blue' },
-  dotnet: { id: 'label', tone: 'purple', label: 'C#' }
+  dotnet: { id: 'label', tone: 'purple', label: 'C#' },
+  compound: { id: 'archive', tone: 'purple' }
 }
 const ALL = Object.keys(ICONS) as RunConfigType[]
 

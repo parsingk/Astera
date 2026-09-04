@@ -266,7 +266,8 @@ describe('defaultConfigFor', () => {
       pytest: { id: 'x', name: 'n', type: 'pytest' },
       compose: { id: 'x', name: 'n', type: 'compose' },
       dockerfile: { id: 'x', name: 'n', type: 'dockerfile', imageTag: '' },
-      dotnet: { id: 'x', name: 'n', type: 'dotnet', project: 'src/App/App.csproj' }
+      dotnet: { id: 'x', name: 'n', type: 'dotnet', project: 'src/App/App.csproj' },
+      compound: { id: 'x', name: 'n', type: 'compound', members: [] }
     }
     for (const [type, expected] of Object.entries(START)) {
       expect(
@@ -318,7 +319,8 @@ describe('seedKeyOf', () => {
         'compose:compose.yaml:web'
       ],
       dockerfile: [{ ...base, type: 'dockerfile', imageTag: 'astera:dev' }, 'dockerfile:astera:dev'],
-      dotnet: [{ ...base, type: 'dotnet', project: 'src/App/App.csproj' }, 'dotnet:src/App/App.csproj:run']
+      dotnet: [{ ...base, type: 'dotnet', project: 'src/App/App.csproj' }, 'dotnet:src/App/App.csproj:run'],
+      compound: [{ ...base, type: 'compound', members: [] }, 'compound:x']
     }
     for (const [type, [config, key]] of Object.entries(cases)) expect(seedKeyOf(config), type).toBe(key)
   })
@@ -442,5 +444,25 @@ describe('toRelativeCwd', () => {
   })
   it('형제 프리픽스를 하위 경로로 오인하지 않는다 (D:\\proj vs D:\\proj2)', () => {
     expect(toRelativeCwd('D:\\proj2\\backend', 'D:\\proj')).toBe('D:\\proj2\\backend')
+  })
+})
+
+describe('compound identity', () => {
+  // Every other kind derives its identity from the parameter that makes it what it is, so a stored
+  // configuration can hide the seed it duplicates. A compound has no such parameter and no seed can
+  // ever be one, so it is its own identity — two identical compounds both stay on screen.
+  it('two compounds with the same members have different identities', () => {
+    const a: RunConfig = { id: 'a', name: 'All', type: 'compound', members: ['x', 'y'] }
+    const b: RunConfig = { id: 'b', name: 'All too', type: 'compound', members: ['x', 'y'] }
+    expect(seedKeyOf(a)).not.toBe(seedKeyOf(b))
+  })
+
+  it('a new compound starts with no members', () => {
+    expect(defaultConfigFor('compound', 'id1', 'Compound', [], [], [])).toEqual({
+      id: 'id1',
+      name: 'Compound',
+      type: 'compound',
+      members: []
+    })
   })
 })

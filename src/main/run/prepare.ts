@@ -88,6 +88,9 @@ export async function prepareRun(
   const missing = missingRequiredFields(config)
   if (missing.length > 0)
     throw new Error(a.t('run.start.incomplete', { fields: missing.map((k) => a.t(`run.field.${k}`)).join(', ') }))
+  // A compound has no command to assemble. Validation's contract is a single command and a single
+  // exit code; chaining is run.start's job, through prepareLaunch.
+  if (config.type === 'compound') throw new Error(a.t('run.start.compoundNotRunnable'))
   const cwd = a.ignoreConfigCwd ? undefined : await resolveRunCwd(a, config.cwd)
   return {
     config: { ...config, cwd },

@@ -17,7 +17,8 @@ const COMPLETE: Record<RunConfigType, RunConfig> = {
   pytest: { id: 'x', name: 'x', type: 'pytest' },
   compose: { id: 'x', name: 'x', type: 'compose' },
   dockerfile: { id: 'x', name: 'x', type: 'dockerfile', imageTag: 'astera:dev' },
-  dotnet: { id: 'x', name: 'x', type: 'dotnet', project: 'src/App/App.csproj' }
+  dotnet: { id: 'x', name: 'x', type: 'dotnet', project: 'src/App/App.csproj' },
+  compound: { id: 'x', name: 'x', type: 'compound', members: ['a'] }
 }
 
 describe('migrateRunConfigs', () => {
@@ -167,7 +168,8 @@ describe('REQUIRED — 열두 종류 전부', () => {
       pytest: [],
       compose: [],
       dockerfile: ['imageTag'],
-      dotnet: ['project']
+      dotnet: ['project'],
+      compound: []
     })
   })
 
@@ -244,5 +246,43 @@ describe('missingRequiredFields', () => {
     ])
     expect(missingRequiredFields({ id: 'x', name: 'x', type: 'shell', command: '' })).toEqual(['command'])
     expect(missingRequiredFields({ id: 'x', name: 'x', type: 'dotnet', project: '' })).toEqual(['project'])
+  })
+})
+
+describe('compound and beforeLaunch', () => {
+  const base = { id: 'a', name: 'A' }
+
+  it('keeps a compound with members', () => {
+    const out = migrateRunConfigs([{ ...base, type: 'compound', members: ['x', 'y'] }])
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ type: 'compound', members: ['x', 'y'] })
+  })
+
+  it('drops a compound whose members are missing or not an array of strings', () => {
+    expect(migrateRunConfigs([{ ...base, type: 'compound' }])).toEqual([])
+    expect(migrateRunConfigs([{ ...base, type: 'compound', members: 'x' }])).toEqual([])
+    expect(migrateRunConfigs([{ ...base, type: 'compound', members: [1] }])).toEqual([])
+  })
+
+  // An empty member list is the shape ＋ creates. It is storable and marked, never dropped —
+  // the same treatment an empty required string field gets.
+  it('keeps a compound with no members under allowIncomplete, and reports it', () => {
+    const cfg = { ...base, type: 'compound', members: [] }
+    expect(migrateRunConfigs([cfg], { allowIncomplete: true })).toHaveLength(1)
+    expect(missingRequiredFields(migrateRunConfigs([cfg], { allowIncomplete: true })[0])).toEqual(['members'])
+  })
+
+  it('reports nothing for a compound that has members', () => {
+    expect(missingRequiredFields({ ...base, type: 'compound', members: ['x'] })).toEqual([])
+  })
+
+  it('drops any item whose beforeLaunch is not an array of strings', () => {
+    expect(migrateRunConfigs([{ ...base, type: 'shell', command: 'ls', beforeLaunch: 'x' }])).toEqual([])
+    expect(migrateRunConfigs([{ ...base, type: 'shell', command: 'ls', beforeLaunch: [2] }])).toEqual([])
+  })
+
+  it('keeps an item with a valid beforeLaunch', () => {
+    const out = migrateRunConfigs([{ ...base, type: 'shell', command: 'ls', beforeLaunch: ['b'] }])
+    expect(out[0]).toMatchObject({ beforeLaunch: ['b'] })
   })
 })

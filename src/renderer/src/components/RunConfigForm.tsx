@@ -618,8 +618,9 @@ export function RunConfigForm({
         </div>
       )}
       {/* dockerfile has no generic args field — buildArgs/runArgs above cover it, so it is excluded here
-          the same way shell is (shell's args go straight into the command instead) */}
-      {draft.type !== 'shell' && draft.type !== 'dockerfile' && visible('args') && (
+          the same way shell is (shell's args go straight into the command instead). compound has no
+          args either — it starts no process. */}
+      {draft.type !== 'shell' && draft.type !== 'dockerfile' && draft.type !== 'compound' && visible('args') && (
         <div className="field">
           <label>{t('run.field.args')}</label>
           <input
@@ -697,9 +698,9 @@ export function RunConfigForm({
       </div>
 
       {/* The assembled command. Built from the draft, not `config` — while the user is mid-edit the
-          preview has to track what they are typing, not what was last saved (a lag here was Task 6's
-          review finding: the old version read `selected`, so the preview only caught up on blur). */}
-      <div className="rcm-resolved">{buildCommand(draft, context)}</div>
+          preview has to track what they are typing, not what was last saved. A compound has no
+          command to assemble, and its member list already says what will run, so it gets no preview. */}
+      {draft.type !== 'compound' && <div className="rcm-resolved">{buildCommand(draft, context)}</div>}
     </>
   )
 }
