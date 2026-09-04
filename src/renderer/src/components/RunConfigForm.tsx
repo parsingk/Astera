@@ -4,10 +4,11 @@ import type { RunContext } from '../../../core/run/build'
 import { buildCommand } from '../../../core/run/build'
 import { availableOptionalFields } from '../../../core/run/types'
 import type { PackageManager } from '../../../core/run/config'
-import { parseEnvLines, formatEnvLines, toRelativeCwd } from '../../../core/run/config'
+import { toRelativeCwd } from '../../../core/run/config'
 import type { MessageKey } from '../../../core/i18n'
 import { useI18n } from '../i18n/I18nProvider'
 import { Select, type SelectOption } from './Select'
+import { EnvTable } from './EnvTable'
 import { ChevronDown } from 'lucide-react'
 
 /** Label for the JDK select — the version, vendor and path all have to be visible.
@@ -25,11 +26,9 @@ function pythonInterpreterLabel(p: PythonInterpreter): string {
  *  "add optional field" menu, and the assembled command as a read-only preview.
  *
  *  Owns its own draft: reseeded from `config` whenever the selection changes (by id, not by content —
- *  the same convention RunConfigManager used before this moved here), and flushed up through `onChange`
- *  only on blur (text fields) or immediately for discrete controls (Select, checkbox, folder pickers)
- *  that have no blur of their own. Keystrokes never reach `onChange` directly — a write must not go out
- *  on every character typed, and the preview below has to track what is actually being typed, not what
- *  was last saved, so it reads the draft rather than `config`. */
+ *  the same convention RunConfigManager used before this moved here). Changes go up through onChange as
+ *  they happen; the dialog owns the draft and Apply stores it (core/run/draft.ts). The preview below
+ *  reads the local draft rather than `config` so it tracks what is actually being typed. */
 export function RunConfigForm({
   config,
   context,
@@ -42,8 +41,8 @@ export function RunConfigForm({
   projectPath,
   onChange
 }: {
-  /** The last-persisted value for the current selection — the baseline draft is reseeded from and
-   *  diffed against. */
+  /** The selected item as the dialog's draft holds it — the local copy is reseeded from it whenever
+   *  the selection changes. */
   config: RunConfig
   context: RunContext
   isSpringBoot: boolean
@@ -77,59 +76,50 @@ export function RunConfigForm({
 
   const [draft, setDraft] = useState<RunConfig>(config)
   const [draftForId, setDraftForId] = useState(config.id)
-  const [envText, setEnvText] = useState(() => formatEnvLines(config.env))
   // Optional fields added during this editing session but still empty — shown until the value is
   // typed (then visible() below picks it up from the value itself) or the selection changes.
   const [shown, setShown] = useState<Set<string>>(new Set())
   const [addOpen, setAddOpen] = useState(false)
+  // The name to restore when the field is blurred empty. It cannot come from `config` any more: with
+  // update() reporting every keystroke, config.name is already '' by the time blur runs. Seeded when
+  // the selection changes and refreshed on every blur that leaves a real name, so a rename that
+  // succeeded is what a later clearing falls back to.
+  const [lastGoodName, setLastGoodName] = useState(config.name)
   if (draftForId !== config.id) {
     setDraftForId(config.id)
     setDraft(config)
-    setEnvText(formatEnvLines(config.env))
     setShown(new Set())
     setAddOpen(false)
+    setLastGoodName(config.name)
   }
 
-  // Keystroke-y fields: update the local draft only. onBlur (flush) is what actually saves.
-  const change = (next: RunConfig): void => setDraft(next)
-  // Discrete controls (Select, checkbox, folder pickers) have no blur of their own, so they save
-  // immediately — same as clicking an item in any other picker in the app.
-  const changeNow = (next: RunConfig): void => {
+  // Every change goes up at once: the dialog owns the draft (RunConfigManager, core/run/draft.ts) and
+  // nothing is stored until Apply, so there is no longer a reason to hold typed text back until blur.
+  // The local copy exists only so an input's value never lags the keystroke.
+  const update = (next: RunConfig): void => {
     setDraft(next)
-    if (JSON.stringify(next) !== JSON.stringify(config)) onChange(next)
+    onChange(next)
   }
-  // Keys that reach the draft through change()/flush() (typed text) and are optional in the model —
-  // a value left blank means "not set", the same convention RunConfigDialog used for cwd
-  // (`cwd.trim() || undefined`). javaHome goes through changeNow with its own `|| undefined` instead,
-  // since it is never typed freehand here (Select or the folder picker only).
+  // Keys that are optional in the model and reach the draft as typed text — a value left blank means
+  // "not set", the same convention RunConfigDialog used for cwd (`cwd.trim() || undefined`). javaHome
+  // is never typed freehand here (Select or the folder picker only) and clears itself.
   const BLANKABLE = [
     'cwd', 'args', 'springProfiles', 'features', 'packagePath', 'nodePath', 'target', 'composeFile', 'services',
     'dockerfilePath', 'buildArgs', 'runArgs', 'configuration'
   ] as const
-  // A kind's *required* field is deliberately not gated here: an empty one saves as empty, so what is
-  // on screen is always what is stored (run.saveConfig passes migrateRunConfigs' allowIncomplete for
-  // exactly this). Refusing the save instead would put the form and the store out of step with only a
-  // toast to say so — and would make a configuration that is still being filled in unsaveable, which
-  // is what lost a newly added configuration to the next ＋.
-  const flush = (): void => {
+  // On blur: blanks become absent, and an emptied name falls back to the last name the field held that
+  // was not itself blank — the name is the only thing naming this configuration in the tree and in the
+  // toolbar, so an empty one leaves a row nobody can read or point at. A kind's *required* field is
+  // deliberately not gated: an empty one stays empty, the tree marks it ⚠, and run.start is what
+  // refuses to run it.
+  const normalizeOnBlur = (): void => {
     const next = { ...draft } as unknown as Record<string, unknown>
     for (const k of BLANKABLE) if (next[k] === '') delete next[k]
-    // The name is not blankable. It is the only thing naming this configuration in the tree and in
-    // the run widget's selector, so an empty one leaves a row nobody can read or point at. Leaving
-    // the field means keeping the stored name, not clearing it — the save gate rejects a blank name
-    // anyway, so without this the field would sit showing a value that was never stored.
     const name = typeof next.name === 'string' ? next.name.trim() : ''
-    next.name = name === '' ? config.name : name
+    if (name !== '') setLastGoodName(name)
+    next.name = name === '' ? lastGoodName : name
     const cleaned = next as unknown as RunConfig
-    setDraft(cleaned)
-    if (JSON.stringify(cleaned) !== JSON.stringify(config)) onChange(cleaned)
-  }
-  const commitEnv = (): void => {
-    const parsed = parseEnvLines(envText)
-    const env = Object.keys(parsed).length > 0 ? parsed : undefined
-    const next = { ...draft, env }
-    setDraft(next)
-    if (JSON.stringify(next) !== JSON.stringify(config)) onChange(next)
+    if (JSON.stringify(cleaned) !== JSON.stringify(draft)) update(cleaned)
   }
 
   /** Which optional field keys are on screen: added this session, or already carrying a value —
@@ -143,47 +133,47 @@ export function RunConfigForm({
 
   const pickCwd = async (): Promise<void> => {
     const dir = await window.api.system.pickFolder(projectPath)
-    if (dir) changeNow({ ...draft, cwd: toRelativeCwd(dir, projectPath) || undefined })
+    if (dir) update({ ...draft, cwd: toRelativeCwd(dir, projectPath) || undefined })
   }
   const pickFile = async (): Promise<void> => {
     if (draft.type !== 'node' && draft.type !== 'python') return
     const file = await window.api.system.pickFile(projectPath)
     // Stored project-relative, same as cwd — an absolute path breaks the moment the project moves.
     // Unlike cwd, file has no "empty means root" meaning, so the '' fallback there does not apply.
-    if (file) changeNow({ ...draft, file: toRelativeCwd(file, projectPath) })
+    if (file) update({ ...draft, file: toRelativeCwd(file, projectPath) })
   }
   const pickJdk = async (): Promise<void> => {
     if (draft.type !== 'gradle' && draft.type !== 'maven') return
     const dir = await window.api.system.pickFolder(draft.javaHome || undefined)
-    if (dir) changeNow({ ...draft, javaHome: dir })
+    if (dir) update({ ...draft, javaHome: dir })
   }
   const pickInterpreter = async (): Promise<void> => {
     if (draft.type !== 'python' && draft.type !== 'pytest') return
     // Unlike cwd/file, the interpreter is not stored project-relative — a venv interpreter belongs to
     // one machine's virtual environment, so an absolute path is the only value that means anything.
     const file = await window.api.system.pickFile(draft.interpreter || projectPath)
-    if (file) changeNow({ ...draft, interpreter: file })
+    if (file) update({ ...draft, interpreter: file })
   }
   const pickComposeFile = async (): Promise<void> => {
     if (draft.type !== 'compose') return
     const file = await window.api.system.pickFile(projectPath)
     // Project-relative, same as cwd — an empty value means "use what the project context found",
     // the same "empty means default" meaning as cwd's own '' fallback, so the same `|| undefined` applies.
-    if (file) changeNow({ ...draft, composeFile: toRelativeCwd(file, projectPath) || undefined })
+    if (file) update({ ...draft, composeFile: toRelativeCwd(file, projectPath) || undefined })
   }
   const pickProject = async (): Promise<void> => {
     if (draft.type !== 'dotnet') return
     const file = await window.api.system.pickFile(projectPath)
     // Project-relative, same as node's file — the project file lives inside the project, so an absolute
     // path breaks the moment the project moves. Not blankable: it is dotnet's one required field.
-    if (file) changeNow({ ...draft, project: toRelativeCwd(file, projectPath) })
+    if (file) update({ ...draft, project: toRelativeCwd(file, projectPath) })
   }
   const pickDockerfilePath = async (): Promise<void> => {
     if (draft.type !== 'dockerfile') return
     const file = await window.api.system.pickFile(projectPath)
     // Same "empty means default" meaning as composeFile's own '' fallback — an empty value means
     // "docker build's own default of ./Dockerfile", not "no Dockerfile".
-    if (file) changeNow({ ...draft, dockerfilePath: toRelativeCwd(file, projectPath) || undefined })
+    if (file) update({ ...draft, dockerfilePath: toRelativeCwd(file, projectPath) || undefined })
   }
 
   const knownJdkPaths = new Set((jdks ?? []).map((j) => j.path))
@@ -231,8 +221,8 @@ export function RunConfigForm({
         <input
           type="text"
           value={draft.name}
-          onChange={(e) => change({ ...draft, name: e.target.value })}
-          onBlur={flush}
+          onChange={(e) => update({ ...draft, name: e.target.value })}
+          onBlur={normalizeOnBlur}
         />
       </div>
 
@@ -243,8 +233,8 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.command}
-            onChange={(e) => change({ ...draft, command: e.target.value })}
-            onBlur={flush}
+            onChange={(e) => update({ ...draft, command: e.target.value })}
+            onBlur={normalizeOnBlur}
           />
         </div>
       )}
@@ -254,7 +244,7 @@ export function RunConfigForm({
           <Select
             items={scriptItems}
             value={draft.script}
-            onChange={(v) => changeNow({ ...draft, script: v })}
+            onChange={(v) => update({ ...draft, script: v })}
             ariaLabel={t('run.field.script')}
           />
         </div>
@@ -266,8 +256,8 @@ export function RunConfigForm({
             <input
               type="text"
               value={draft.file}
-              onChange={(e) => change({ ...draft, file: e.target.value })}
-              onBlur={flush}
+              onChange={(e) => update({ ...draft, file: e.target.value })}
+              onBlur={normalizeOnBlur}
             />
             <button type="button" onClick={() => void pickFile()}>
               {t('run.form.fileBrowse')}
@@ -281,8 +271,8 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.tasks}
-            onChange={(e) => change({ ...draft, tasks: e.target.value })}
-            onBlur={flush}
+            onChange={(e) => update({ ...draft, tasks: e.target.value })}
+            onBlur={normalizeOnBlur}
           />
         </div>
       )}
@@ -292,8 +282,8 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.goals}
-            onChange={(e) => change({ ...draft, goals: e.target.value })}
-            onBlur={flush}
+            onChange={(e) => update({ ...draft, goals: e.target.value })}
+            onBlur={normalizeOnBlur}
           />
         </div>
       )}
@@ -307,7 +297,7 @@ export function RunConfigForm({
               { value: 'build', label: 'build' }
             ]}
             value={draft.subcommand}
-            onChange={(v) => changeNow({ ...draft, subcommand: v as 'run' | 'test' | 'build' })}
+            onChange={(v) => update({ ...draft, subcommand: v as 'run' | 'test' | 'build' })}
             ariaLabel={t('run.field.subcommand')}
           />
         </div>
@@ -326,7 +316,7 @@ export function RunConfigForm({
                 className="path-select"
                 items={projectItems}
                 value={draft.project}
-                onChange={(v) => changeNow({ ...draft, project: v })}
+                onChange={(v) => update({ ...draft, project: v })}
                 ariaLabel={t('run.field.project')}
               />
               <button type="button" onClick={() => void pickProject()}>
@@ -342,8 +332,8 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.imageTag}
-            onChange={(e) => change({ ...draft, imageTag: e.target.value })}
-            onBlur={flush}
+            onChange={(e) => update({ ...draft, imageTag: e.target.value })}
+            onBlur={normalizeOnBlur}
           />
         </div>
       )}
@@ -360,7 +350,7 @@ export function RunConfigForm({
                 className="path-select"
                 items={jdkItems(draft.javaHome ?? '')}
                 value={draft.javaHome ?? ''}
-                onChange={(v) => changeNow({ ...draft, javaHome: v || undefined })}
+                onChange={(v) => update({ ...draft, javaHome: v || undefined })}
                 ariaLabel={t('run.field.javaHome')}
               />
               <button type="button" onClick={() => void pickJdk()}>
@@ -376,8 +366,8 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.springProfiles ?? ''}
-            onChange={(e) => change({ ...draft, springProfiles: e.target.value })}
-            onBlur={flush}
+            onChange={(e) => update({ ...draft, springProfiles: e.target.value })}
+            onBlur={normalizeOnBlur}
           />
         </div>
       )}
@@ -393,7 +383,7 @@ export function RunConfigForm({
               { value: 'bun', label: 'bun' }
             ]}
             value={draft.packageManager ?? 'auto'}
-            onChange={(v) => changeNow({ ...draft, packageManager: v as PackageManager | 'auto' })}
+            onChange={(v) => update({ ...draft, packageManager: v as PackageManager | 'auto' })}
             ariaLabel={t('run.field.packageManager')}
           />
         </div>
@@ -404,8 +394,8 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.nodePath ?? ''}
-            onChange={(e) => change({ ...draft, nodePath: e.target.value })}
-            onBlur={flush}
+            onChange={(e) => update({ ...draft, nodePath: e.target.value })}
+            onBlur={normalizeOnBlur}
           />
         </div>
       )}
@@ -414,7 +404,7 @@ export function RunConfigForm({
           <input
             type="checkbox"
             checked={!!draft.release}
-            onChange={(e) => changeNow({ ...draft, release: e.target.checked })}
+            onChange={(e) => update({ ...draft, release: e.target.checked })}
           />
           {t('run.field.release')}
         </label>
@@ -425,8 +415,8 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.features ?? ''}
-            onChange={(e) => change({ ...draft, features: e.target.value })}
-            onBlur={flush}
+            onChange={(e) => update({ ...draft, features: e.target.value })}
+            onBlur={normalizeOnBlur}
           />
         </div>
       )}
@@ -436,8 +426,8 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.packagePath ?? ''}
-            onChange={(e) => change({ ...draft, packagePath: e.target.value })}
-            onBlur={flush}
+            onChange={(e) => update({ ...draft, packagePath: e.target.value })}
+            onBlur={normalizeOnBlur}
           />
         </div>
       )}
@@ -447,8 +437,8 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.target ?? ''}
-            onChange={(e) => change({ ...draft, target: e.target.value })}
-            onBlur={flush}
+            onChange={(e) => update({ ...draft, target: e.target.value })}
+            onBlur={normalizeOnBlur}
           />
         </div>
       )}
@@ -463,7 +453,7 @@ export function RunConfigForm({
                 className="path-select"
                 items={interpreterItems(draft.interpreter ?? '')}
                 value={draft.interpreter ?? ''}
-                onChange={(v) => changeNow({ ...draft, interpreter: v || undefined })}
+                onChange={(v) => update({ ...draft, interpreter: v || undefined })}
                 ariaLabel={t('run.field.interpreter')}
               />
               <button type="button" onClick={() => void pickInterpreter()}>
@@ -480,8 +470,8 @@ export function RunConfigForm({
             <input
               type="text"
               value={draft.composeFile ?? ''}
-              onChange={(e) => change({ ...draft, composeFile: e.target.value })}
-              onBlur={flush}
+              onChange={(e) => update({ ...draft, composeFile: e.target.value })}
+              onBlur={normalizeOnBlur}
             />
             <button type="button" onClick={() => void pickComposeFile()}>
               {t('run.form.composeFileBrowse')}
@@ -495,8 +485,8 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.services ?? ''}
-            onChange={(e) => change({ ...draft, services: e.target.value })}
-            onBlur={flush}
+            onChange={(e) => update({ ...draft, services: e.target.value })}
+            onBlur={normalizeOnBlur}
           />
           {composeServices === null ? (
             <span className="check-note">{t('run.form.composeServicesLoading')}</span>
@@ -518,7 +508,7 @@ export function RunConfigForm({
               { value: 'build', label: 'build' }
             ]}
             value={draft.action ?? 'up'}
-            onChange={(v) => changeNow({ ...draft, action: v as 'up' | 'build' })}
+            onChange={(v) => update({ ...draft, action: v as 'up' | 'build' })}
             ariaLabel={t('run.field.action')}
           />
         </div>
@@ -530,8 +520,8 @@ export function RunConfigForm({
             <input
               type="text"
               value={draft.dockerfilePath ?? ''}
-              onChange={(e) => change({ ...draft, dockerfilePath: e.target.value })}
-              onBlur={flush}
+              onChange={(e) => update({ ...draft, dockerfilePath: e.target.value })}
+              onBlur={normalizeOnBlur}
             />
             <button type="button" onClick={() => void pickDockerfilePath()}>
               {t('run.form.dockerfilePathBrowse')}
@@ -545,8 +535,8 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.buildArgs ?? ''}
-            onChange={(e) => change({ ...draft, buildArgs: e.target.value })}
-            onBlur={flush}
+            onChange={(e) => update({ ...draft, buildArgs: e.target.value })}
+            onBlur={normalizeOnBlur}
           />
         </div>
       )}
@@ -556,8 +546,8 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.runArgs ?? ''}
-            onChange={(e) => change({ ...draft, runArgs: e.target.value })}
-            onBlur={flush}
+            onChange={(e) => update({ ...draft, runArgs: e.target.value })}
+            onBlur={normalizeOnBlur}
           />
         </div>
       )}
@@ -573,7 +563,7 @@ export function RunConfigForm({
               { value: 'build', label: 'build' }
             ]}
             value={draft.subcommand ?? 'run'}
-            onChange={(v) => changeNow({ ...draft, subcommand: v as 'run' | 'test' | 'build' })}
+            onChange={(v) => update({ ...draft, subcommand: v as 'run' | 'test' | 'build' })}
             ariaLabel={t('run.field.subcommand')}
           />
         </div>
@@ -584,8 +574,8 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.configuration ?? ''}
-            onChange={(e) => change({ ...draft, configuration: e.target.value })}
-            onBlur={flush}
+            onChange={(e) => update({ ...draft, configuration: e.target.value })}
+            onBlur={normalizeOnBlur}
           />
         </div>
       )}
@@ -597,8 +587,8 @@ export function RunConfigForm({
           <input
             type="text"
             value={draft.args ?? ''}
-            onChange={(e) => change({ ...draft, args: e.target.value })}
-            onBlur={flush}
+            onChange={(e) => update({ ...draft, args: e.target.value })}
+            onBlur={normalizeOnBlur}
           />
         </div>
       )}
@@ -607,7 +597,7 @@ export function RunConfigForm({
           <input
             type="checkbox"
             checked={!!draft.allowMultipleInstances}
-            onChange={(e) => changeNow({ ...draft, allowMultipleInstances: e.target.checked })}
+            onChange={(e) => update({ ...draft, allowMultipleInstances: e.target.checked })}
           />
           {t('run.field.allowMultipleInstances')}
         </label>
@@ -620,8 +610,8 @@ export function RunConfigForm({
               type="text"
               className="run-config-cwd"
               value={draft.cwd ?? ''}
-              onChange={(e) => change({ ...draft, cwd: e.target.value })}
-              onBlur={flush}
+              onChange={(e) => update({ ...draft, cwd: e.target.value })}
+              onBlur={normalizeOnBlur}
             />
             <button type="button" onClick={() => void pickCwd()}>
               {t('run.form.cwdBrowse')}
@@ -632,7 +622,15 @@ export function RunConfigForm({
       {visible('env') && (
         <div className="field">
           <label>{t('run.field.env')}</label>
-          <textarea rows={4} value={envText} onChange={(e) => setEnvText(e.target.value)} onBlur={commitEnv} />
+          {/* Once the table is on screen it stays: clearing the last key makes the record undefined, and
+              without this the section would unmount with the caret still in it. */}
+          <EnvTable
+            env={draft.env}
+            onChange={(env) => {
+              setShown((s) => (s.has('env') ? s : new Set(s).add('env')))
+              update({ ...draft, env })
+            }}
+          />
         </div>
       )}
 

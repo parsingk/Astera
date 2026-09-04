@@ -711,9 +711,9 @@ export const ko = {
   // 오케스트레이션이 Task 를 판정하려고 띄운 실행이라는 라벨. 사용자가 시작한 실행과 구별되지
   // 않으면 정지시켜 그 Task 를 실패시킨다(core/run/config.ts 의 RunStatus.validation)
   'run.validation.tag': '검증',
-  // App.tsx runManagerSave — the text shown when the run.saveConfig IPC fails
+  // App.tsx runManagerApply — the text shown when the run.saveConfigs IPC throws
   'run.config.saveFailed': '저장 실패: {detail}',
-  // main/run/prepare.ts resolveRunCwd (run.start) and ipc.ts assertConfigCwd (run.saveConfig) — a
+  // main/run/prepare.ts resolveRunCwd (run.start) and ipc.ts assertConfigCwd (run.saveConfigs) — a
   // sentence main throws also shows up verbatim in a renderer toast, so it is translated here first (the layering rule)
   'run.config.cwdNotString': '실행 구성의 작업 폴더가 올바르지 않습니다',
   'run.config.cwdOutsideProject': '실행 구성의 작업 폴더는 프로젝트 안이어야 합니다',
@@ -753,6 +753,20 @@ export const ko = {
   'run.manager.duplicate': '복제',
   // 시드를 고치면 그 순간 사용자 구성 사본으로 승격된다(promoteSeed) — 더 이상 읽기 전용이 아니다
   'run.manager.seedHint': '자동 감지된 구성을 수정하면 사용자 구성 사본으로 저장됩니다.',
+  'run.manager.search': '구성 검색',
+  'run.manager.apply': '적용',
+  'run.manager.ok': '확인',
+  'run.manager.discardTitle': '변경 사항을 버릴까요?',
+  'run.manager.discardBody': '적용하지 않은 편집이 있습니다. 버리면 되돌릴 수 없습니다.',
+  'run.manager.discard': '버리기',
+  'run.manager.keepEditing': '계속 편집',
+  // The tree's markers, as tooltips
+  'run.manager.markDirty': '적용되지 않은 변경',
+  'run.manager.markIncomplete': '필수 항목이 비어 있어 실행할 수 없습니다',
+  // Why Apply refused, by reason code (core/run/types.ts SaveReason); shown left of the buttons
+  'run.manager.reason.INVALID_CONFIG': '{name}: 저장할 수 없는 구성입니다',
+  'run.manager.reason.UNSAFE_VALUE': '{name}: 명령에 들어가는 값에 Windows 셸이 해석하는 문자(& | ^ % ! < >)가 있습니다',
+  'run.manager.reason.INVALID_CWD': '{name}: 작업 폴더는 프로젝트 안이어야 합니다',
   'run.type.shell': 'Shell',
   'run.type.npm': 'npm',
   'run.type.node': 'Node.js',
@@ -771,6 +785,13 @@ export const ko = {
   'run.field.args': '인자',
   'run.field.cwd': '작업 폴더',
   'run.field.env': '환경변수',
+  // EnvTable.tsx — the Key/Value table that edits a configuration's environment variables
+  'run.env.key': '키',
+  'run.env.value': '값',
+  'run.env.addRow': '행 추가',
+  'run.env.removeRow': '행 삭제',
+  'run.env.issue.emptyKey': '키가 비어 있어 저장되지 않습니다',
+  'run.env.issue.shadowed': '아래의 같은 키가 이 값을 덮어씁니다',
   'run.field.allowMultipleInstances': '여러 인스턴스 허용',
   // 종류별 필수 필드. shell 의 command 도 여기 있어야 run.start 의 "빈 필수 항목" 메시지가
   // run.field.<이름> 으로 라벨을 찾을 수 있다 (migrate.ts 의 REQUIRED 에 있는 이름은 모두 여기 있다)
@@ -823,6 +844,7 @@ export const ko = {
   'run.find.close': '찾기 닫기',
   'run.rail.scrollToEnd': '끝으로',
   'run.rail.find': '찾기',
+  'run.rail.rerunGone': '구성이 삭제되었습니다',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
   'terminal.rail.open': '터미널',
   'terminal.tab.label': '터미널 {n}',

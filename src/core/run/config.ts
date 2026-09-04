@@ -3,7 +3,7 @@
 // the form needs (environment text, project-relative paths). The RunConfig union and its per-kind
 // interfaces live in ./types and are only re-exported here, so a renderer module that needs both
 // still has one import.
-export type { RunConfig, RunConfigType } from './types'
+export type { RunConfig, RunConfigType, SaveReason, SaveConfigsResult } from './types'
 import type { RunConfig, RunConfigType } from './types'
 
 // Live run state — one per run, addressed everywhere by runId. Used by the renderer's run list,
@@ -194,7 +194,7 @@ export function promoteSeed(config: RunConfig, newId: string): RunConfig {
 /** A new configuration's starting values for a kind, right after it is picked in RunTypePicker.
  *
  *  No kind may be born holding a *seed's* identity. mergeConfigs hides a seed the moment a stored
- *  configuration shares its seedKeyOf, and ＋ stores the new configuration immediately (run.saveConfig,
+ *  configuration shares its seedKeyOf, and ＋ stores the new configuration immediately (run.saveConfigs,
  *  see migrateRunConfigs' allowIncomplete), so a starting value that matches a detected configuration
  *  takes that row out of the list as soon as the kind is picked — before anything has been typed, and
  *  with no way to cancel. Three kinds could: npm started on the project's first script, and cargo and
@@ -279,7 +279,9 @@ export function parseEnvLines(text: string): Record<string, string> {
   return out
 }
 
-/** Map → editable text (the inverse of parseEnvLines) */
+/** Map → editable text (the inverse of parseEnvLines). No caller outside this file's own test as of
+ *  the table-based env editor (EnvTable) — kept anyway as the documented inverse parseEnvLines'
+ *  round-trip depends on, since envTable.ts uses parseEnvLines directly. */
 export function formatEnvLines(env: Record<string, string> | undefined): string {
   if (!env) return ''
   return Object.entries(env)
@@ -305,7 +307,7 @@ export function formatEnvLines(env: Record<string, string> | undefined): string 
  *  the explorer tree, the input here is whatever the OS folder picker returned, and on win32 the drive letter and path
  *  casing it returns can differ from the project root string (same reasoning as isPathWithin in core/files/tree.ts).
  *  The slice is taken from the original (non-lowercased) string, so the casing of the returned relative path is preserved.
- *  A path outside the project is returned as-is, still absolute — run.saveConfig rejects it at save time. */
+ *  A path outside the project is returned as-is, still absolute — run.saveConfigs rejects it at save time. */
 export function toRelativeCwd(picked: string, projectPath: string): string {
   const p = picked.toLowerCase()
   const root = projectPath.toLowerCase()

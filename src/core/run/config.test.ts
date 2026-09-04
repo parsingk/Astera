@@ -198,7 +198,7 @@ describe('promoteSeed', () => {
 })
 
 describe('defaultConfigFor', () => {
-  // ＋ 는 종류를 고르는 순간 저장한다(run.saveConfig 의 allowIncomplete). 그래서 새 구성이 시드와 같은
+  // ＋ 는 종류를 고르는 순간 저장한다(run.saveConfigs 의 allowIncomplete). 그래서 새 구성이 시드와 같은
   // 정체로 태어나면 mergeConfigs 가 그 시드를 그 자리에서 목록에서 빼 버린다 — 아직 아무것도 입력하지
   // 않았고 되돌릴 방법도 없다. 아래는 "누르기 전 목록"과 "누른 뒤 목록"을 실제로 만들어 비교한다.
   const npmSeeds = detectSeedConfigs(['package.json'], {

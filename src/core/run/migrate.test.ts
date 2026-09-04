@@ -63,7 +63,7 @@ describe('migrateRunConfigs', () => {
     expect(out.map((c) => c.id)).toEqual(['ok'])
   })
 
-  // 이 함수는 run.saveConfig 의 관문이기도 하다. 이름은 트리와 실행 위젯 선택기에서 그 구성을
+  // 이 함수는 run.saveConfigs 의 관문이기도 하다. 이름은 트리와 실행 위젯 선택기에서 그 구성을
   // 가리키는 유일한 표시라, 빈 이름은 아무도 못 보고 못 누르는 행이 된다
   it('이름이 비었거나 공백뿐이면 버린다', () => {
     expect(migrateRunConfigs([{ id: 'x', name: '', command: 'ls' }])).toEqual([])
@@ -193,7 +193,7 @@ describe('REQUIRED — 열두 종류 전부', () => {
   })
 })
 
-// run.saveConfig 의 경로. 새 구성은 필수 필드가 빈 채로 태어나므로, 이걸 거부하면 그 구성은
+// run.saveConfigs 의 경로. 새 구성은 필수 필드가 빈 채로 태어나므로, 이걸 거부하면 그 구성은
 // 렌더러의 pending 한 칸에만 살고 다음 ＋ 가 덮어써 사라진다 (실제로 그렇게 사라졌다)
 describe('migrateRunConfigs — allowIncomplete', () => {
   it('빈 필수 필드를 통과시킨다', () => {

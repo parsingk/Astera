@@ -29,7 +29,7 @@ describe('buildCommand', () => {
   })
 
   // script 도 node 의 file·go 의 packagePath 와 같은 단일 값이다. 여기서 특히 중요한 이유가 하나 더
-  // 있다: 시드의 스크립트 이름은 package.json 에서 그대로 오고, 시드는 run.saveConfig 의 win32 문자
+  // 있다: 시드의 스크립트 이름은 package.json 에서 그대로 오고, 시드는 run.saveConfigs 의 win32 문자
   // 관문을 거치지 않는다 — 명령줄에 닿는 유일한 프로젝트 파일 유래 값이다.
   // 인용이 없으면 "build all" 이 `npm run build all` 이 되어 build 스크립트가 all 인자로 돌아간다
   it('npm 의 스크립트 이름에 공백이 있으면 인용한다', () => {

@@ -115,6 +115,7 @@ import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
 import { loadRunConfigs, prepareRun } from './run/prepare'
 import { resolveConsolePath } from './run/resolveLink'
+import { saveConfigsBatch } from './run/saveConfigs'
 import { decideStart } from '../core/run/instances'
 import { createGithubPrs } from './githubPrs'
 import { createAccountUsage } from './accountUsage'
@@ -3682,51 +3683,11 @@ export function registerIpc(
       throw new Error(t(core.lang, 'run.config.cwdOutsideProject'))
   }
 
-  ipcMain.handle('run.saveConfig', async (_e, projectPath: string, config: RunConfig) => {
-    // Unlike the other run handlers this was missing its path guard — a configuration could be saved
-    // under an arbitrary key. cwd is filtered here too, so an invalid configuration never gets stored in
-    // the first place. run.start looks again right before executing because the stored file can be
-    // hand-edited on disk and thus bypass this path.
+  // The Run Configurations dialog's Apply. One batch, one verdict — see main/run/saveConfigs.ts. The
+  // project guard is here, as for every other run handler; the per-item checks are inside.
+  ipcMain.handle('run.saveConfigs', async (_e, projectPath: string, configs: RunConfig[]) => {
     await assertAllowedPath(projectPath)
-    await assertConfigCwd(projectPath, config?.cwd)
-    // Trusting only the renderer's form validation would let a hand-edited JSON file through.
-    // allowIncomplete: a configuration is saved the moment ＋ creates it, and at that point its one
-    // required field is still empty — refusing it here would leave the new configuration in the
-    // renderer only, where the next ＋ overwrites it. Running an incomplete one is what run.start
-    // refuses instead, by name. Everything else migrateRunConfigs checks still applies here.
-    const { migrateRunConfigs } = await import('../core/run/migrate')
-    if (migrateRunConfigs([config], { allowIncomplete: true }).length === 0)
-      throw new Error('INVALID_CONFIG')
-    // cmd.exe interprets & | ^ % ! < > even inside double quotes — assembly cannot guard against
-    // that, so reject at save time.
-    //
-    // **Only values that actually land in the command string are checked.** id/name are metadata,
-    // cwd is handed to the PTY as its working directory rather than interpolated into the command
-    // text, and javaHome/springProfiles become environment variables. Checking every field would
-    // reject a configuration merely because it's named "build & test".
-    //
-    // Why an exclude list: the failure direction is the safe one. A new field defaults to being
-    // checked — possibly over-restrictive, but never a silent gap. An include list fails the other way.
-    const NOT_IN_COMMAND = new Set(['id', 'name', 'cwd', 'env', 'javaHome', 'springProfiles'])
-    if (process.platform === 'win32' && config.type !== 'shell') {
-      const { hasUnsafeWin32Chars } = await import('../core/run/build')
-      for (const [k, v] of Object.entries(config as unknown as Record<string, unknown>)) {
-        if (NOT_IN_COMMAND.has(k)) continue
-        if (typeof v === 'string' && hasUnsafeWin32Chars(v)) throw new Error('UNSAFE_VALUE')
-      }
-    }
-    const list = core.runConfig.get(projectPath)
-    const next = list.some((c) => c.id === config.id)
-      ? list.map((c) => (c.id === config.id ? config : c))
-      : [...list, config]
-    await core.runConfig.save(projectPath, next)
-    return next
-  })
-  ipcMain.handle('run.deleteConfig', async (_e, projectPath: string, configId: string) => {
-    await assertAllowedPath(projectPath) // was missing here for the same reason as in saveConfig
-    const next = core.runConfig.get(projectPath).filter((c) => c.id !== configId)
-    await core.runConfig.save(projectPath, next)
-    return next
+    return saveConfigsBatch({ projectPath, configs, platform: process.platform, assertConfigCwd, store: core.runConfig })
   })
 
   // Project terminals. open and list take a path and so must pass assertAllowedPath — that stops a shell
@@ -4168,7 +4129,7 @@ export function registerIpc(
 
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is
-  // already validated by run.start and run.saveConfig. Omitting it (undefined) behaves exactly as the
+  // already validated by run.start and run.saveConfigs. Omitting it (undefined) behaves exactly as the
   // existing caller (NewSessionDialog) does — dialog.showOpenDialog uses the OS default location when
   // there is no defaultPath.
   ipcMain.handle('system.pickFolder', async (_e, defaultPath?: string) => {

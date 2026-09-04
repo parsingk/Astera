@@ -44,6 +44,7 @@ import type {
   // 컴포넌트 이름과 겹친다 — 이 창이 그리는 값의 타입이고, 그리는 것은 위의 RunDetail 이다
   RunDetail as RunDetailData,
   RunStatus,
+  SaveConfigsResult,
   TerminalBuffer
 } from '../../core/types'
 // core/types.ts imports this for UnderstandingApi but does not re-export it (unlike the block above),
@@ -1811,8 +1812,21 @@ export default function App(): React.JSX.Element {
   // The two-pane run configuration manager (Task 6). context is the assembly context run.list also
   // sends down — the manager's preview calls buildCommand(config, context) so it shows exactly what
   // run.start would run, and it starts null until the first run.list response arrives.
-  const [runManagerOpen, setRunManagerOpen] = useState(false)
   const [runContext, setRunContext] = useState<RunContext | null>(null)
+  /** What the Run Configurations dialog was opened against, captured once. The dialog must not follow
+   *  currentProject: the active tab can change under an open modal (a desktop notification click
+   *  activates that session's tab), and Apply replaces a project's whole stored list — so a dialog that
+   *  read the live project could write one project's draft over another's configurations. Capturing the
+   *  context too keeps a run.list failure from unmounting the dialog and discarding the draft without
+   *  the confirmation the user is owed. */
+  const [managerFor, setManagerFor] = useState<{
+    projectPath: string
+    configs: RunConfig[]
+    context: RunContext
+    isSpringBoot: boolean
+    isPythonProject: boolean
+    hasDockerfile: boolean
+  } | null>(null)
   // The Jobs sidebar snapshot for the open project — orch.list's initial payload, then every
   // 'orch:state' push after it (see the subscription effect below). null until orch.list first resolves.
   const [orchSnapshot, setOrchSnapshot] = useState<OrchSnapshot | null>(null)
@@ -2037,10 +2051,10 @@ export default function App(): React.JSX.Element {
   }, [openRun, currentProject, orchSnapshot])
 
   // Whether RunConfigManager is actually on screen — gates both its render below and the shortcut
-  // suppression right after it. Computed from the same three things that gate the render (open flag,
-  // project, context) so switching projects or losing the context drops the suppression in the same
-  // render as the unmount, not only when the dialog's own onClose fires.
-  const runManagerVisible = runManagerOpen && !!currentProject && !!runContext
+  // suppression right after it. The dialog is pinned to the project (and context) it was opened
+  // with, not the live currentProject, so this is just "was it opened" — managerFor going null on
+  // close drops the suppression in the same render as the unmount.
+  const runManagerVisible = managerFor !== null
   // OR-ed onto the value the other modals already set above — runManagerVisible depends on
   // currentProject, which is not computed yet at that point in the component. The history modal joins
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
@@ -2664,50 +2678,34 @@ export default function App(): React.JSX.Element {
     if (selectedRunId === runId) setSelectedRunId(pickRunToShow(remaining))
     if (remaining.length === 0 && terminals.length === 0) setRunPanelOpen(false)
   }
-  const runDeleteConfig = (id: string): void => {
-    if (!currentProject) return
-    void window.api.run.deleteConfig(currentProject, id).then(() => {
-      void window.api.run.list(currentProject).then((r) => {
+  /** RunConfigManager's Apply. On success the toolbar's list is refetched the same way the old
+   *  per-item save did — promoting a seed *removes* an id (mergeConfigs stops emitting seed:npm:dev the
+   *  moment a stored config shares its seedKeyOf), so the selection has to be reconciled or ▶ keeps a
+   *  seed id that no longer resolves. On refusal nothing was stored; the dialog shows the reasons. A
+   *  throw (the save itself failing, not a refused item) becomes a toast and an empty-error refusal.
+   *
+   *  Takes the project explicitly instead of reading currentProject — the dialog is pinned to the
+   *  project it opened with (see managerFor), and that can differ from whatever the toolbar shows by
+   *  the time Apply fires. */
+  const runManagerApply = async (projectPath: string, configs: RunConfig[]): Promise<SaveConfigsResult> => {
+    try {
+      const result = await window.api.run.saveConfigs(projectPath, configs)
+      // The toolbar only follows when it is still showing the project that was applied — the dialog is
+      // pinned to the project it opened with, so those two can differ.
+      if (result.ok && currentProjectRef.current === projectPath) {
+        const r = await window.api.run.list(projectPath)
         setRunConfigs(r.configs)
         setRunContext(r.context)
-        applyRunSelection(
-          currentProject,
-          pickRunSelection(r.configs, runSelectedByProject.current[currentProject])
-        )
-      })
-    })
-  }
-  /** RunConfigManager's onSave. It always hands over an assembled RunConfig of whatever kind — there
-   *  is no per-field signature to match, so this one handler covers add, edit, and the promotion of a
-   *  seed into a user configuration copy (RunConfigManager.tsx's handleFormChange).
-   *
-   *  Answers whether the configuration reached the store: run.saveConfig refuses a value the command
-   *  gate rejects, and the dialog has to take a refused new configuration back out of its tree rather
-   *  than leave a row nothing is behind. */
-  const runManagerSave = (config: RunConfig): Promise<boolean> => {
-    if (!currentProject) return Promise.resolve(false)
-    return window.api.run.saveConfig(currentProject, config).then(
-      () => {
-        void window.api.run.list(currentProject).then((r) => {
-          setRunConfigs(r.configs)
-          setRunContext(r.context)
-          // The same reconciliation as the three siblings above. It is not optional here either:
-          // promoting a seed *removes* an id — mergeConfigs stops emitting seed:npm:dev the moment a
-          // stored config shares its seedKeyOf — so without this the toolbar keeps a seed id that no
-          // longer resolves, ▶ stays enabled (disabled={!selectedId}, and a stale string is truthy)
-          // and pressing it fails with NO_CONFIG.
-          applyRunSelection(
-            currentProject,
-            pickRunSelection(r.configs, runSelectedByProject.current[currentProject])
-          )
-        })
-        return true
-      },
-      (err) => {
-        toast.error(t('run.config.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
-        return false
+        applyRunSelection(projectPath, pickRunSelection(r.configs, runSelectedByProject.current[projectPath]))
       }
-    )
+      return result
+    } catch (err) {
+      // A refused *item* comes back as ok:false with reasons the dialog paints; a throw is the save
+      // itself failing (the disk, a permission) and has no item to name — so it takes the toast the
+      // single-item save used to, and the dialog keeps the draft with nothing marked.
+      toast.error(t('run.config.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
+      return { ok: false, errors: [] }
+    }
   }
   /** 실행 중 목록에서 다른 프로젝트로 점프. 트리 루트는 활성 탭이 정하므로, 그 프로젝트에 속한 탭을
    *  활성으로 만드는 것이 곧 '그리로 간다'는 뜻이다. 세션을 먼저 찾고 없으면 그 프로젝트의 파일 탭을
@@ -2900,7 +2898,17 @@ export default function App(): React.JSX.Element {
                 runs={runs}
                 onRun={() => runStart()}
                 onStop={runStop}
-                onOpenManager={() => setRunManagerOpen(true)}
+                onOpenManager={() => {
+                  if (!currentProject || !runContext) return
+                  setManagerFor({
+                    projectPath: currentProject,
+                    configs: runConfigs,
+                    context: runContext,
+                    isSpringBoot: runIsSpringBoot,
+                    isPythonProject: runIsPythonProject,
+                    hasDockerfile: runHasDockerfile
+                  })
+                }}
                 activeRuns={activeRuns}
                 onJump={runJump}
                 onStopRun={runStop}
@@ -3404,6 +3412,7 @@ export default function App(): React.JSX.Element {
                   <BottomPanel
                     runAvailable={runAvailable}
                     runs={runs}
+                    configIds={runConfigs.map((c) => c.id)}
                     selectedRunId={selectedRunId}
                     onSelectRun={setSelectedRunId}
                     onStopRun={runStop}
@@ -3950,19 +3959,18 @@ export default function App(): React.JSX.Element {
           })()}
         />
       )}
-      {/* Re-checks currentProject/runContext directly (rather than just runManagerVisible) so TypeScript
-          narrows them to non-null here, instead of an assertion */}
-      {runManagerOpen && currentProject && runContext && (
+      {/* Renders from the snapshot the dialog was opened with (managerFor), not the live
+          currentProject/runContext — see managerFor's comment for why. */}
+      {managerFor && (
         <RunConfigManager
-          configs={runConfigs}
-          context={runContext}
-          isSpringBoot={runIsSpringBoot}
-          isPythonProject={runIsPythonProject}
-          hasDockerfile={runHasDockerfile}
-          projectPath={currentProject}
-          onSave={runManagerSave}
-          onDelete={runDeleteConfig}
-          onClose={() => setRunManagerOpen(false)}
+          configs={managerFor.configs}
+          context={managerFor.context}
+          isSpringBoot={managerFor.isSpringBoot}
+          isPythonProject={managerFor.isPythonProject}
+          hasDockerfile={managerFor.hasDockerfile}
+          projectPath={managerFor.projectPath}
+          onApply={(configs) => runManagerApply(managerFor.projectPath, configs)}
+          onClose={() => setManagerFor(null)}
         />
       )}
       {openRun && (

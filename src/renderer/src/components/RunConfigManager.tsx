@@ -1,30 +1,43 @@
-import { useEffect, useState } from 'react'
-import type { Jdk, PythonInterpreter, RunConfig } from '../../../core/types'
+import { useEffect, useMemo, useState } from 'react'
+import type { Jdk, PythonInterpreter, RunConfig, SaveConfigsResult } from '../../../core/types'
 import type { RunContext } from '../../../core/run/build'
 import type { RunConfigType } from '../../../core/run/types'
 import type { MessageKey } from '../../../core/i18n'
 import { runTypeIcon } from '../../../core/run/typeIcon'
-import { promoteSeed, defaultConfigFor } from '../../../core/run/config'
-import { uniqueName } from '../../../core/files/ops'
+import { defaultConfigFor } from '../../../core/run/config'
+import { missingRequiredFields } from '../../../core/run/migrate'
+import {
+  addItem,
+  commitList,
+  dirtyOf,
+  draftOf,
+  duplicateItem,
+  editItem,
+  isSeedId,
+  removeItem,
+  type ConfigDraft
+} from '../../../core/run/draft'
 import { useI18n } from '../i18n/I18nProvider'
+import { confirmModal } from '../lib/confirm'
 import { FileIcon } from './FileIcon'
 import { RunConfigForm } from './RunConfigForm'
 import { RunTypePicker } from './RunTypePicker'
-import { Copy, Minus, Plus } from 'lucide-react'
+import { AlertTriangle, Copy, Minus, Plus, Search } from 'lucide-react'
 
-/** Run configuration management — a tree on the left, the selected configuration's form on the
- *  right. The same layout as IntelliJ's Run/Debug Configurations. It used to be a small modal reached
- *  from the titlebar's ⋮ menu, with add/edit/delete as three separate items that only ever applied to
- *  the currently selected configuration. With the tree visible, those become one toolbar in the same
- *  place.
- *
- *  Task 6 wired up shell configurations inline. Task 7 delegated the field rendering to RunConfigForm
- *  — the per-kind fields, the optional-field dropdown and the draft/blur-save logic all live there now
- *  — and wired the ＋ button to RunTypePicker. Auto-detected (seed) configurations show up in the tree
- *  too, in italics: they are editable like any other configuration, but the moment a field actually
- *  changes, handleFormChange below promotes the edited value into a user configuration copy (the same
- *  rule IntelliJ uses for a temporary configuration created by running from the gutter) — see
- *  promoteSeed in core/run/config.ts. */
+/** The error element of a refused Apply — SaveConfigsResult's own shape, not restated, so a reason
+ *  added to SaveReason without a `run.manager.reason.*` catalogue entry fails typecheck here instead
+ *  of throwing in the footer at runtime (t() throws on a missing key). */
+type ApplyError = Extract<SaveConfigsResult, { ok: false }>['errors'][number]
+
+/** Run configuration management — a tree on the left, the selected configuration's form on the right,
+ *  IntelliJ's Run/Debug Configurations layout. Edits go to a **draft** (core/run/draft.ts) and reach
+ *  the store only through Apply / OK, which commit the whole list in one call (run.saveConfigs);
+ *  Cancel, Esc and the backdrop discard the draft, asking first when there is something to lose. The
+ *  dialog snapshots the merged list it was opened with (stored configurations plus detected seeds) and
+ *  does not refresh it from later `configs` props while open — an edit in progress must never be
+ *  clobbered; the baseline for "is anything dirty" is the stored list at open time, then the list Apply
+ *  returned. Seeds show in italics and are editable: the first edit promotes one into a user copy that
+ *  takes its place in the tree (promoteSeed, via editItem). */
 export function RunConfigManager({
   configs,
   context,
@@ -32,8 +45,7 @@ export function RunConfigManager({
   isPythonProject,
   hasDockerfile,
   projectPath,
-  onSave,
-  onDelete,
+  onApply,
   onClose
 }: {
   configs: RunConfig[]
@@ -45,70 +57,106 @@ export function RunConfigManager({
    *  project root's file list (hasPythonProject), since neither kind has a seed config to key off of */
   isPythonProject: boolean
   /** Whether RunTypePicker should show 'dockerfile' as detected — run.list decides this from the
-   *  project root's file list (hasDockerfile in core/run/config.ts), the same "no seed to key off of"
-   *  situation as isPythonProject above. Not folded into `context` the way compose's composeFile is:
-   *  buildCommand's 'dockerfile' case never reads context, so there is no assembly-time reason for this
-   *  fact to live there too — it is only ever a detection flag. */
+   *  project root's file list (hasDockerfile in core/run/config.ts). */
   hasDockerfile: boolean
   /** Base for the form's working-folder and JDK/interpreter "Choose…" pickers */
   projectPath: string
-  /** Resolves false when the configuration did not reach the store — run.saveConfig still refuses a
-   *  value the command gate rejects (an unsafe character in a scanned .NET project path, say), and a
-   *  configuration that was never stored must not be left sitting in the tree. */
-  onSave: (config: RunConfig) => Promise<boolean>
-  onDelete: (id: string) => void
+  /** Apply: the stored list becomes this list, or nothing changes and the refused items are named. The
+   *  caller refetches run.list on success so the toolbar follows. */
+  onApply: (configs: RunConfig[]) => Promise<SaveConfigsResult>
+  /** The actual close. Every close request inside the dialog goes through requestClose() below, which
+   *  asks about unsaved edits first. */
   onClose: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
+
+  // The snapshot: taken once, on mount. `configs` is deliberately not a dependency of anything below.
+  const [draft, setDraft] = useState<ConfigDraft>(() => draftOf(configs))
+  const [baseline, setBaseline] = useState<RunConfig[]>(() => configs.filter((c) => !isSeedId(c.id)))
   const [selectedId, setSelectedId] = useState<string | null>(configs[0]?.id ?? null)
+  const [query, setQuery] = useState('')
+  const [applyErrors, setApplyErrors] = useState<ApplyError[]>([])
+  const [applying, setApplying] = useState(false)
 
-  // A freshly created configuration whose save has not round-tripped back through `configs` yet —
-  // appended to the tree so the pane does not go blank for the width of one IPC call. It is a bridge
-  // for that round trip only, never a place a configuration lives: ＋, ⧉ and the seed promotion below
-  // all go through saveNew, which saves in the same breath as it sets this and drops it again if the
-  // save is refused. (It used to be the only home of a new configuration until the first blur saved it
-  // — and being a single slot, a second ＋ threw the first one away. run.saveConfig now accepts an
-  // incomplete configuration precisely so it does not have to wait here.) Read during render (the same
-  // "derive, don't duplicate" convention as draftForId in RunConfigForm): once its id shows up in
-  // `configs` it is dropped rather than tracked further, so a later delete of the real record cannot
-  // resurrect this stale local copy.
-  const [pending, setPending] = useState<RunConfig | null>(null)
-  if (pending && configs.some((c) => c.id === pending.id)) setPending(null)
-  const displayConfigs = pending && !configs.some((c) => c.id === pending.id) ? [...configs, pending] : configs
-  const selected = displayConfigs.find((c) => c.id === selectedId) ?? null
-  const isSeed = !!selected && selected.id.startsWith('seed:')
-  const isPending = !!pending && selected?.id === pending.id
+  const selected = draft.items.find((c) => c.id === selectedId) ?? null
+  const isSeed = !!selected && isSeedId(selected.id)
+  const { dirty, ids: dirtyIds } = useMemo(() => dirtyOf(draft, baseline), [draft, baseline])
+  const rejected = new Set(applyErrors.map((e) => e.id))
 
-  /** Shows a configuration that is not in the store yet and saves it — ＋, ⧉ and the seed promotion
-   *  below all go through here. If the save is refused the bridge is taken back down again: run.saveConfig
-   *  still rejects a value the command gate refuses, and until this a refused configuration stayed in
-   *  the tree as a row backed by nothing, in the single slot the next ＋ overwrites — the same loss ＋
-   *  saving immediately was meant to end. The selection then falls back to the first configuration
-   *  left, the same rule the delete path uses. */
-  const saveNew = (config: RunConfig): void => {
-    setPending(config)
-    setSelectedId(config.id)
-    void onSave(config).then((stored) => {
-      if (stored) return
-      setPending((p) => (p?.id === config.id ? null : p))
-      setSelectedId((cur) => (cur === config.id ? (configs[0]?.id ?? null) : cur))
+  const newId = (): string => `user:${crypto.randomUUID()}`
+
+  // RunConfigForm's onChange, for every configuration. A seed edit promotes (editItem), and the
+  // selection follows the promoted copy so the next keystroke edits it rather than promoting again.
+  const handleFormChange = (next: RunConfig): void => {
+    if (!selectedId) return
+    const r = editItem(draft, selectedId, next, newId)
+    setDraft(r.draft)
+    if (r.id !== selectedId) setSelectedId(r.id)
+    if (applyErrors.length) setApplyErrors((errs) => errs.filter((e) => e.id !== selectedId && e.id !== r.id))
+  }
+
+  const apply = async (): Promise<boolean> => {
+    if (!dirty || applying) return !dirty
+    setApplying(true)
+    try {
+      const result = await onApply(commitList(draft))
+      if (result.ok) {
+        setBaseline(result.configs)
+        setApplyErrors([])
+        return true
+      }
+      setApplyErrors(result.errors)
+      return false
+    } catch {
+      // onApply reports its own failures; catching here only guarantees `void apply()` cannot leave an
+      // unhandled rejection, and that the buttons come back.
+      return false
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  /** Cancel, Esc, the backdrop: discard — asking first when there is something to lose (decision 2 of
+   *  the spec). confirmModal returns false at once if another confirm is already open, which reads as
+   *  "keep editing" here, the safe direction. */
+  const requestClose = (): void => {
+    if (!dirty) {
+      onClose()
+      return
+    }
+    void confirmModal({
+      title: t('run.manager.discardTitle'),
+      body: t('run.manager.discardBody'),
+      confirmLabel: t('run.manager.discard'),
+      cancelLabel: t('run.manager.keepEditing')
+    }).then((discard) => {
+      if (discard) onClose()
     })
   }
 
-  // RunConfigForm's onChange, for every configuration — not just seeds. A seed edit promotes: the
-  // edited value itself (not the pre-edit selected) becomes the user copy, so the change that
-  // triggered the promotion is not lost. Reusing `pending` (the same bridge ＋ uses for a config that
-  // has not round-tripped through onSave yet) shows the copy immediately instead of the pane going
-  // blank until the save round-trips — and it moves the selection to the new id so the next keystroke
-  // edits the copy rather than promoting again. mergeConfigs already hides the original seed once a
-  // stored config shares its seedKeyOf, so no separate suppression is needed here.
-  const handleFormChange = (next: RunConfig): void => {
-    if (!next.id.startsWith('seed:')) {
-      void onSave(next)
-      return
-    }
-    saveNew(promoteSeed(next, `user:${crypto.randomUUID()}`))
+  const ok = (): void => {
+    void apply().then((applied) => {
+      if (applied) onClose()
+    })
   }
+
+  // Esc closes through the same gate as Cancel. Bound while mounted; the modal-open suppression in App
+  // keeps the workbench's own shortcuts away meanwhile.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      // A control that already handled Escape (Select's dropdown, the kind picker) marks the event
+      // handled; the dialog must not close on the same keystroke.
+      if (e.defaultPrevented) return
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        requestClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // requestClose closes over the current draft; re-binding on every dirty change keeps it current
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dirty])
 
   // The JDK list does not depend on which configuration is selected, so it is fetched once here
   // rather than inside the form.
@@ -190,7 +238,7 @@ export function RunConfigManager({
   // list (seeds from package.json, plus any user npm configurations), deduplicated.
   const npmScripts = Array.from(
     new Set(
-      configs
+      draft.items
         .filter((c): c is Extract<RunConfig, { type: 'npm' }> => c.type === 'npm')
         .map((c) => c.script)
     )
@@ -211,7 +259,7 @@ export function RunConfigManager({
   // more than the single root-directory read run.list does for the others.
   const detectedTypes = Array.from(
     new Set([
-      ...configs.filter((c) => c.id.startsWith('seed:')).map((c) => c.type),
+      ...draft.items.filter((c) => isSeedId(c.id)).map((c) => c.type),
       ...(isPythonProject ? (['python', 'pytest'] as const) : []),
       ...(context.composeFile ? (['compose'] as const) : []),
       ...(hasDockerfile ? (['dockerfile'] as const) : []),
@@ -220,20 +268,38 @@ export function RunConfigManager({
   )
   const [pickerOpen, setPickerOpen] = useState(false)
 
-  // Grouped by kind for the tree. Order follows the list's own order — user configurations come first
+  // Grouped by kind, after the search filter. A group with no match disappears; the selection is not
+  // touched by filtering — the form keeps showing the selected item even when its row is filtered out.
+  const q = query.trim().toLowerCase()
   const groups = new Map<RunConfigType, RunConfig[]>()
-  for (const c of displayConfigs) {
+  for (const c of draft.items) {
+    if (q && !c.name.toLowerCase().includes(q)) continue
     const list = groups.get(c.type) ?? []
     list.push(c)
     groups.set(c.type, list)
   }
 
+  const reasonText = (e: ApplyError): string => {
+    const name = draft.items.find((c) => c.id === e.id)?.name ?? e.id
+    return t(`run.manager.reason.${e.reason}`, { name })
+  }
+
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop" onClick={requestClose}>
       <div className="modal rcm" onClick={(e) => e.stopPropagation()}>
         <h2>{t('run.manager.title')}</h2>
         <div className="rcm-panes">
           <div className="rcm-list">
+            <label className="rcm-search">
+              <Search size={13} />
+              <input
+                type="text"
+                value={query}
+                placeholder={t('run.manager.search')}
+                aria-label={t('run.manager.search')}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </label>
             <div className="rcm-tools">
               <div className="rtp-anchor">
                 <button title={t('run.manager.add')} onClick={() => setPickerOpen((v) => !v)}>
@@ -243,16 +309,14 @@ export function RunConfigManager({
                   <RunTypePicker
                     detected={detectedTypes}
                     onPick={(type) => {
-                      const id = `user:${crypto.randomUUID()}`
+                      const id = newId()
                       const name = t(`run.type.${type}` as MessageKey)
                       setPickerOpen(false)
-                      // Stored immediately, not on the first blur. Most kinds start with their required
-                      // field empty, so waiting for the form to make it valid left the configuration in
-                      // `pending` — a single slot the next ＋ overwrote. run.saveConfig accepts it
-                      // (migrateRunConfigs' allowIncomplete); run.start is what refuses to run it.
-                      // The starting values are picked so the new configuration cannot take a detected
-                      // configuration's identity and hide its row — see defaultConfigFor.
-                      saveNew(defaultConfigFor(type, id, name, displayConfigs, npmScripts, dotnetProjects ?? []))
+                      // Draft only — nothing is stored until Apply, so a ＋ followed by Cancel leaves no
+                      // trace. The starting values are picked so the new configuration cannot take a
+                      // detected configuration's identity and hide its row — see defaultConfigFor.
+                      setDraft(addItem(draft, defaultConfigFor(type, id, name, draft.items, npmScripts, dotnetProjects ?? [])))
+                      setSelectedId(id)
                     }}
                     onClose={() => setPickerOpen(false)}
                   />
@@ -264,15 +328,11 @@ export function RunConfigManager({
                 disabled={!selected || isSeed}
                 onClick={() => {
                   if (!selected) return
-                  // Every configuration in this tree is stored now, including one created moments ago,
-                  // so the delete always goes to the store. Dropping the local bridge as well keeps the
-                  // row from lingering until the delete round-trips.
-                  if (isPending) setPending(null)
                   // The selection has to move off the row that is leaving, or the form pane goes blank
-                  // with configurations still in the tree (＋ then − was the shortest way to see it).
-                  // The first one left is what App's own delete reconciliation falls back to.
-                  setSelectedId(displayConfigs.find((c) => c.id !== selected.id)?.id ?? null)
-                  onDelete(selected.id)
+                  // with configurations still in the tree.
+                  setSelectedId(draft.items.find((c) => c.id !== selected.id)?.id ?? null)
+                  setDraft(removeItem(draft, selected.id))
+                  setApplyErrors((errs) => errs.filter((e) => e.id !== selected.id))
                 }}
               >
                 <Minus size={13} />
@@ -283,15 +343,9 @@ export function RunConfigManager({
                 disabled={!selected}
                 onClick={() => {
                   if (!selected) return
-                  // promoteSeed is already "the same configuration under a new user id", so a seed
-                  // duplicates into an ordinary user configuration through the very rule an edit would
-                  // have promoted it with — no second conversion to keep in step. uniqueName is the
-                  // app's existing copy-naming rule (the file explorer's own duplicate uses it), so the
-                  // copy is something the user can tell apart in the tree.
-                  saveNew({
-                    ...promoteSeed(selected, `user:${crypto.randomUUID()}`),
-                    name: uniqueName(displayConfigs.map((c) => c.name), selected.name)
-                  })
+                  const id = newId()
+                  setDraft(duplicateItem(draft, selected.id, id))
+                  setSelectedId(id)
                 }}
               >
                 <Copy size={13} />
@@ -306,44 +360,57 @@ export function RunConfigManager({
                     <FileIcon {...runTypeIcon(type)} />
                     {t(`run.type.${type}` as MessageKey)}
                   </div>
-                  {list.map((c) => (
-                    <button
-                      key={c.id}
-                      className={`rcm-item${c.id === selectedId ? ' on' : ''}${c.id.startsWith('seed:') ? ' seed' : ''}`}
-                      onClick={() => setSelectedId(c.id)}
-                    >
-                      {c.name}
-                    </button>
-                  ))}
+                  {list.map((c) => {
+                    const incomplete = !isSeedId(c.id) && missingRequiredFields(c).length > 0
+                    return (
+                      <button
+                        key={c.id}
+                        className={`rcm-item${c.id === selectedId ? ' on' : ''}${isSeedId(c.id) ? ' seed' : ''}${rejected.has(c.id) ? ' rejected' : ''}`}
+                        onClick={() => setSelectedId(c.id)}
+                      >
+                        {dirtyIds.has(c.id) && <span className="rcm-mark dirty" title={t('run.manager.markDirty')} />}
+                        <span className="rcm-item-name">{c.name}</span>
+                        {incomplete && (
+                          <span className="rcm-mark warn" title={t('run.manager.markIncomplete')}>
+                            <AlertTriangle size={11} />
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
                 </div>
               ))}
             </div>
           </div>
           <div className="rcm-form">
             {selected && (
-              <>
-                {/* Auto-detected configurations are fully editable — the hint just explains that
-                    touching one saves a promoted copy rather than editing the seed in place. */}
-                {isSeed && <div className="rcm-seed-hint">{t('run.manager.seedHint')}</div>}
-                <RunConfigForm
-                  config={selected}
-                  context={context}
-                  isSpringBoot={isSpringBoot}
-                  jdks={jdks}
-                  pythonInterpreters={pythonInterpreters}
-                  composeServices={composeServices}
-                  dotnetProjects={dotnetProjects}
-                  npmScripts={npmScripts}
-                  projectPath={projectPath}
-                  onChange={handleFormChange}
-                />
-              </>
+              <RunConfigForm
+                config={selected}
+                context={context}
+                isSpringBoot={isSpringBoot}
+                jdks={jdks}
+                pythonInterpreters={pythonInterpreters}
+                composeServices={composeServices}
+                dotnetProjects={dotnetProjects}
+                npmScripts={npmScripts}
+                projectPath={projectPath}
+                onChange={handleFormChange}
+              />
             )}
           </div>
         </div>
-        <div className="row right">
-          <button type="button" onClick={onClose}>
-            {t('common.close')}
+        <div className="rcm-footer">
+          <span className={`rcm-footer-msg${applyErrors.length > 0 ? ' error' : ''}`}>
+            {applyErrors.length > 0 ? reasonText(applyErrors[0]) : t('run.manager.seedHint')}
+          </span>
+          <button type="button" onClick={requestClose}>
+            {t('common.cancel')}
+          </button>
+          <button type="button" disabled={!dirty || applying} onClick={() => void apply()}>
+            {t('run.manager.apply')}
+          </button>
+          <button type="button" className="primary" disabled={applying} onClick={ok}>
+            {t('run.manager.ok')}
           </button>
         </div>
       </div>

@@ -153,6 +153,18 @@ export type RunConfig =
   | DockerfileConfig
   | DotnetConfig
 
+/** Why run.saveConfigs refused an item. INVALID_CONFIG: not a configuration migrateRunConfigs accepts,
+ *  a seed id (seeds are detected, never stored), or an id that appears twice in the batch.
+ *  UNSAFE_VALUE: a field that reaches the command string holds a character cmd.exe interprets.
+ *  INVALID_CWD: the working directory is not inside the project. */
+export type SaveReason = 'INVALID_CONFIG' | 'UNSAFE_VALUE' | 'INVALID_CWD'
+
+/** run.saveConfigs' answer. One batch, one verdict: on `ok: false` nothing was stored and every
+ *  offending item is named, not just the first. */
+export type SaveConfigsResult =
+  | { ok: true; configs: RunConfig[] }
+  | { ok: false; errors: { id: string; reason: SaveReason }[] }
+
 /** The optional field keys a kind knows about. The form's "add optional field" dropdown is built
  *  from this.
  *
