@@ -104,6 +104,55 @@ describe('planLaunch', () => {
     const p = planLaunch([sh('a')], 'nope')
     expect(p).toEqual({ ok: false, reason: 'MISSING', id: 'nope', heldBy: null })
   })
+
+  it('names the holder of a missing reference inside a compound member list', () => {
+    const p = planLaunch([sh('api'), comp('all', ['api', 'gone'])], 'all')
+    expect(p).toEqual({ ok: false, reason: 'MISSING', id: 'gone', heldBy: 'all' })
+  })
+
+  it('refuses a compound that names itself as its own member', () => {
+    const p = planLaunch([comp('a', ['a'])], 'a')
+    expect(p).toMatchObject({ ok: false, reason: 'CYCLE' })
+  })
+
+  it('focusId reaches through two levels of nested compounds to the first real run', () => {
+    const p = planLaunch([sh('api'), sh('web'), comp('back', ['api']), comp('all', ['back', 'web'])], 'all')
+    expect(p.ok && p.focusId).toBe('api')
+  })
+
+  it('an empty compound as the root has no steps and its own id as the focus', () => {
+    const p = planLaunch([comp('empty', [])], 'empty')
+    expect(shape(p)).toEqual([])
+    expect(p.ok && p.focusId).toBe('empty')
+  })
+
+  // A duplicate id in a hand-edited beforeLaunch list is not reachable through the ＋ dialog
+  // (addableTargets filters it out), but migrateRunConfigs accepts one, and this is the last
+  // check before the executor. Without dedupe, the second 'x' inherits the first's own id back
+  // as its dependency and topoSort reports a self-loop that the configuration graph doesn't have.
+  it('a duplicate id in one beforeLaunch list plans two steps, not a cycle', () => {
+    const p = planLaunch([sh('x'), sh('m', { beforeLaunch: ['x', 'x'] })], 'm')
+    expect(shape(p)).toEqual([['x', []], ['m', ['x']]])
+  })
+
+  // The merge-only cycle from above, plus an unrelated before-launch task on the same root. 'w'
+  // never depends on anything and nothing depends on it, so it resolves in the first topoSort
+  // round and must not be swept into the reported path once x and y deadlock in the next one.
+  it('names only the steps that loop, not an unrelated before-launch task caught in the same plan', () => {
+    const p = planLaunch(
+      [
+        sh('x'),
+        sh('y'),
+        comp('c1', ['x'], { beforeLaunch: ['y'] }),
+        comp('c2', ['y'], { beforeLaunch: ['x'] }),
+        sh('w'),
+        comp('root', ['c1', 'c2'], { beforeLaunch: ['w'] })
+      ],
+      'root'
+    )
+    expect(p).toMatchObject({ ok: false, reason: 'CYCLE' })
+    expect(p.ok === false && p.reason === 'CYCLE' && p.path).not.toContain('w')
+  })
 })
 
 describe('addableTargets', () => {
@@ -124,5 +173,19 @@ describe('addableTargets', () => {
   it('never offers one that would close a cycle', () => {
     const cyclic = [sh('a'), sh('b', { beforeLaunch: ['a'] })]
     expect(addableTargets(cyclic, 'a', []).map((c) => c.id)).toEqual([])
+  })
+
+  // host's own stored members is empty -- 'c1' exists only in the draft list passed as `current`.
+  // A probe built from the stored field instead would miss that c1 is already there and wrongly
+  // offer c2, even though the two together (exactly the merge-only-cycle fixture) close a cycle.
+  it('probes the draft list, not the stored one, so a reference only in the draft can still close a cycle', () => {
+    const configs = [
+      sh('x'),
+      sh('y'),
+      comp('c1', ['x'], { beforeLaunch: ['y'] }),
+      comp('c2', ['y'], { beforeLaunch: ['x'] }),
+      comp('host', [])
+    ]
+    expect(addableTargets(configs, 'host', ['c1']).map((c) => c.id)).not.toContain('c2')
   })
 })
