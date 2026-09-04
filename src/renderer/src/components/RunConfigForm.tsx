@@ -11,6 +11,7 @@ import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
 import { Select, type SelectOption } from './Select'
 import { EnvTable } from './EnvTable'
+import { ConfigRefList } from './ConfigRefList'
 import { ChevronDown } from 'lucide-react'
 
 /** Label for the JDK select — the version, vendor and path all have to be visible.
@@ -33,6 +34,7 @@ function pythonInterpreterLabel(p: PythonInterpreter): string {
  *  reads the local draft rather than `config` so it tracks what is actually being typed. */
 export function RunConfigForm({
   config,
+  all,
   context,
   isSpringBoot,
   jdks,
@@ -48,6 +50,10 @@ export function RunConfigForm({
   /** The selected item as the dialog's draft holds it — the local copy is reseeded from it whenever
    *  the selection changes. */
   config: RunConfig
+  /** The dialog's whole draft list — what the before-launch and member pickers may offer, and how a
+   *  chip finds the name to show. Not `configs`: a configuration added with ＋ a moment ago is a
+   *  valid target and is only in the draft. */
+  all: RunConfig[]
   context: RunContext
   isSpringBoot: boolean
   /** null while still loading (RunConfigManager owns the fetch — it does not depend on the selection) */
@@ -233,6 +239,7 @@ export function RunConfigForm({
 
   return (
     <>
+      <div className="rcm-section">{t('run.section.configuration')}</div>
       <div className="field">
         <label>{t('run.form.nameLabel')}</label>
         <div className="row">
@@ -265,6 +272,19 @@ export function RunConfigForm({
       </div>
 
       {/* ---- required fields, one per kind ---- */}
+      {draft.type === 'compound' && (
+        <div className="field">
+          <label>{t('run.field.members')}</label>
+          {/* Members start together; the order here is display only. Sequencing is what the
+              Before launch section below is for. */}
+          <ConfigRefList
+            ids={draft.members}
+            all={all}
+            hostId={draft.id}
+            onChange={(members) => update({ ...draft, members })}
+          />
+        </div>
+      )}
       {draft.type === 'shell' && (
         <div className="field">
           <label>{t('run.field.command')}</label>
@@ -659,18 +679,21 @@ export function RunConfigForm({
         </div>
       )}
       {visible('env') && (
-        <div className="field">
-          <label>{t('run.field.env')}</label>
-          {/* Once the table is on screen it stays: clearing the last key makes the record undefined, and
-              without this the section would unmount with the caret still in it. */}
-          <EnvTable
-            env={draft.env}
-            onChange={(env) => {
-              setShown((s) => (s.has('env') ? s : new Set(s).add('env')))
-              update({ ...draft, env })
-            }}
-          />
-        </div>
+        <>
+          <div className="rcm-section">{t('run.section.environment')}</div>
+          <div className="field">
+            <label>{t('run.field.env')}</label>
+            {/* Once the table is on screen it stays: clearing the last key makes the record undefined, and
+                without this the section would unmount with the caret still in it. */}
+            <EnvTable
+              env={draft.env}
+              onChange={(env) => {
+                setShown((s) => (s.has('env') ? s : new Set(s).add('env')))
+                update({ ...draft, env })
+              }}
+            />
+          </div>
+        </>
       )}
 
       <div className="rcm-add-option">
@@ -695,6 +718,25 @@ export function RunConfigForm({
             ))}
           </div>
         )}
+      </div>
+
+      <div className="rcm-section">{t('run.section.beforeLaunch')}</div>
+      <div className="field">
+        {/* Run to completion, in this order, before this configuration starts. A non-zero exit stops
+            the chain (core/run/launch.ts). The order is the order they were added. */}
+        <ConfigRefList
+          ids={draft.beforeLaunch ?? []}
+          all={all}
+          hostId={draft.id}
+          onChange={(beforeLaunch) => {
+            // An empty list is stored as an absent field: absent and empty mean the same thing, and
+            // one of them has to be canonical — the same rule cwd and folder follow.
+            const next = { ...draft } as RunConfig & { beforeLaunch?: string[] }
+            if (beforeLaunch.length === 0) delete next.beforeLaunch
+            else next.beforeLaunch = beforeLaunch
+            update(next)
+          }}
+        />
       </div>
 
       {/* The assembled command. Built from the draft, not `config` — while the user is mid-edit the
