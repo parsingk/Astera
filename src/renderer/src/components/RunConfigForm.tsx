@@ -4,10 +4,11 @@ import type { RunContext } from '../../../core/run/build'
 import { buildCommand } from '../../../core/run/build'
 import { availableOptionalFields } from '../../../core/run/types'
 import type { PackageManager } from '../../../core/run/config'
-import { parseEnvLines, formatEnvLines, toRelativeCwd } from '../../../core/run/config'
+import { toRelativeCwd } from '../../../core/run/config'
 import type { MessageKey } from '../../../core/i18n'
 import { useI18n } from '../i18n/I18nProvider'
 import { Select, type SelectOption } from './Select'
+import { EnvTable } from './EnvTable'
 import { ChevronDown } from 'lucide-react'
 
 /** Label for the JDK select — the version, vendor and path all have to be visible.
@@ -75,7 +76,6 @@ export function RunConfigForm({
 
   const [draft, setDraft] = useState<RunConfig>(config)
   const [draftForId, setDraftForId] = useState(config.id)
-  const [envText, setEnvText] = useState(() => formatEnvLines(config.env))
   // Optional fields added during this editing session but still empty — shown until the value is
   // typed (then visible() below picks it up from the value itself) or the selection changes.
   const [shown, setShown] = useState<Set<string>>(new Set())
@@ -88,7 +88,6 @@ export function RunConfigForm({
   if (draftForId !== config.id) {
     setDraftForId(config.id)
     setDraft(config)
-    setEnvText(formatEnvLines(config.env))
     setShown(new Set())
     setAddOpen(false)
     setLastGoodName(config.name)
@@ -121,10 +120,6 @@ export function RunConfigForm({
     next.name = name === '' ? lastGoodName : name
     const cleaned = next as unknown as RunConfig
     if (JSON.stringify(cleaned) !== JSON.stringify(draft)) update(cleaned)
-  }
-  const commitEnv = (): void => {
-    const parsed = parseEnvLines(envText)
-    update({ ...draft, env: Object.keys(parsed).length > 0 ? parsed : undefined })
   }
 
   /** Which optional field keys are on screen: added this session, or already carrying a value —
@@ -627,7 +622,7 @@ export function RunConfigForm({
       {visible('env') && (
         <div className="field">
           <label>{t('run.field.env')}</label>
-          <textarea rows={4} value={envText} onChange={(e) => setEnvText(e.target.value)} onBlur={commitEnv} />
+          <EnvTable env={draft.env} onChange={(env) => update({ ...draft, env })} />
         </div>
       )}
 

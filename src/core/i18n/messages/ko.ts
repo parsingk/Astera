@@ -783,6 +783,13 @@ export const ko = {
   'run.field.args': '인자',
   'run.field.cwd': '작업 폴더',
   'run.field.env': '환경변수',
+  // EnvTable.tsx — the Key/Value table that edits a configuration's environment variables
+  'run.env.key': '키',
+  'run.env.value': '값',
+  'run.env.addRow': '행 추가',
+  'run.env.removeRow': '행 삭제',
+  'run.env.issue.emptyKey': '키가 비어 있어 저장되지 않습니다',
+  'run.env.issue.shadowed': '아래의 같은 키가 이 값을 덮어씁니다',
   'run.field.allowMultipleInstances': '여러 인스턴스 허용',
   // 종류별 필수 필드. shell 의 command 도 여기 있어야 run.start 의 "빈 필수 항목" 메시지가
   // run.field.<이름> 으로 라벨을 찾을 수 있다 (migrate.ts 의 REQUIRED 에 있는 이름은 모두 여기 있다)
