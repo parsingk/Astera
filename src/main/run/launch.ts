@@ -50,8 +50,17 @@ export async function executeLaunch(
       }
     })
     // The first step waits on nothing, so its gate cannot skip it — it either produces a run or
-    // throws. That is what makes this narrowing sound, and it is what the caller relies on.
-    if (isFirst) first = started as Promise<RunStatus>
+    // throws. That is claimed, not merely hoped: topoSort filters `after` to recorded step ids while
+    // the steps it returns carry the unfiltered list, so the two could diverge in a future change and
+    // let this gate skip after all. The throw below is what enforces the invariant where it is
+    // claimed — without it a skipped first step would resolve null and the caller would read .runId
+    // off it.
+    if (isFirst) {
+      first = started.then((st): RunStatus => {
+        if (st === null) throw new Error('LAUNCH_FIRST_STEP_SKIPPED')
+        return st
+      })
+    }
     // .catch keeps a rejected first step from leaving later gates with an unhandled rejection; they
     // read it as "did not run", the same as a skip.
     done.set(

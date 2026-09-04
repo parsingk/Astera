@@ -29,7 +29,7 @@ describe('optionalFieldsFor', () => {
     }
   })
 
-  // springBoot 는 JVM 두 종류에만 한 항목을 끼워 넣는다 — 나머지 열 종류는 이 값에 흔들리지 않는다
+  // springBoot 는 JVM 두 종류에만 한 항목을 끼워 넣는다 — 나머지 열한 종류는 이 값에 흔들리지 않는다
   it('springBoot 는 gradle·maven 에만 springProfiles 를 끼워 넣는다', () => {
     expect(optionalFieldsFor('gradle', { springBoot: true })).toEqual([
       'javaHome', 'springProfiles', 'args', 'cwd', 'env', 'allowMultipleInstances'

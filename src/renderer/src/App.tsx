@@ -2584,12 +2584,16 @@ export default function App(): React.JSX.Element {
   // opens the panel on), and this arrives when the configuration the user actually pressed ▶ on
   // starts. The project check is the same one the run:status subscription makes, and for the same
   // reason — a run from a project the user has since switched away from must not take the selection.
+  // run:launchFailed carries the same guard, for the same reason: a chain that fails in a project the
+  // user is no longer looking at must not toast over whatever project they switched to.
   // The effect has no dependencies, so the open project is read through the ref, not the closure.
   useEffect(() => {
     const offFocus = window.api.on('run:focus', ({ runId, projectPath }) => {
       if (currentProjectRef.current === projectPath) setSelectedRunId(runId)
     })
-    const offFailed = window.api.on('run:launchFailed', ({ message }) => toast.error(message))
+    const offFailed = window.api.on('run:launchFailed', ({ message, projectPath }) => {
+      if (currentProjectRef.current === projectPath) toast.error(message)
+    })
     return () => {
       offFocus()
       offFailed()

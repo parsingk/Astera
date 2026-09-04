@@ -139,6 +139,16 @@ describe('executeLaunch', () => {
     expect(started).toEqual(['build'])
   })
 
+  // topoSort guarantees the first step's `after` is empty, but executeLaunch takes any LaunchPlan
+  // handed to it, not only ones topoSort produced — this plan is hand-built with a first step that
+  // waits on a step that does not exist, so its gate skips it. The invariant the executor's comment
+  // claims must be enforced here, not merely asserted: without the throw, first would resolve null and
+  // the caller (run.start) would read .runId off it.
+  it('throws rather than resolving null if the first step is ever skipped', async () => {
+    const { d } = deps()
+    await expect(executeLaunch(plan([['a', ['ghost']]]), d)).rejects.toThrow('LAUNCH_FIRST_STEP_SKIPPED')
+  })
+
   describe('first step refuses to start', () => {
     // A rejected first step must not leave a later gate's Promise.all with an unhandled rejection —
     // deleting the .catch(() => null) on the `done` entry regresses this silently: no assertion below

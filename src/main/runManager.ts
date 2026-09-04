@@ -20,6 +20,11 @@ interface LiveRun {
   /** The restart in flight for this run, if any. A second ▶ during the stopping window joins it
    *  rather than starting a second replacement (decideStart counts a stopping run as live). */
   restarting?: Promise<RunStatus>
+  /** Set by stop(). An exit code cannot answer "did the user stop this?": treeKillCommand returns
+   *  null off win32, so stop() falls back to pty.kill() (a signal), and node-pty reports a signalled
+   *  child's exit code as 0 on posix — indistinguishable from a real success. This flag is the fact
+   *  the manager records instead of inferring it from a code that cannot carry it. */
+  killed?: true
 }
 
 type KillRunner = (cmd: { file: string; args: string[] }) => void
@@ -170,6 +175,7 @@ export class RunManager {
     const live = this.runs.get(runId)
     if (!live || live.status.status !== 'running') return
     live.status.status = 'stopping'
+    live.killed = true
     this.onStatus?.({ ...live.status })
     const cmd = treeKillCommand(this.platform, live.pty.pid)
     if (cmd) this.killRunner(cmd)
@@ -222,10 +228,12 @@ export class RunManager {
   /** Settles when the run finishes, with its exit code. `null` for a runId this manager does not
    *  hold, so a caller gating a chain on it sees a failure rather than a promise that never settles.
    *  An already-finished run settles immediately — `exited` is already resolved, and finished runs are
-   *  kept in the map on purpose. The `?? null` satisfies RunStatus.exitCode's optionality; a run this
-   *  manager holds always has a number by the time `exited` resolves, because pty.onExit assigns it
-   *  before settling. A user pressing ⏹ on a before-launch task therefore stops the chain through a
-   *  non-zero code, not through null.
+   *  kept in the map on purpose.
+   *
+   *  A chain stops for two distinct reasons, and each goes through its own mechanism: a task that
+   *  fails stops it through its non-zero exit code; a task the user stops stops it through `killed`,
+   *  resolved here as `null` regardless of what the process actually reported — its code cannot be
+   *  trusted to say so on POSIX (see `killed`'s comment on `LiveRun`).
    *
    *  A run stuck in 'stopping' — a process tree that will not die — never settles this, the same way
    *  restart() waits on it without a timeout. That is deliberate: the app must not lose track of a
@@ -233,7 +241,7 @@ export class RunManager {
   whenExited(runId: string): Promise<number | null> {
     const live = this.runs.get(runId)
     if (!live) return Promise.resolve(null)
-    return live.exited.then(() => live.status.exitCode ?? null)
+    return live.exited.then(() => (live.killed ? null : (live.status.exitCode ?? null)))
   }
 
   /** The directory the run's process started in, for resolving a relative path in its output.

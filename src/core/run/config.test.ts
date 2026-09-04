@@ -253,7 +253,7 @@ describe('defaultConfigFor', () => {
     expect(mergeConfigs([], [...stored, created]).map((c) => c.id)).toEqual(['user:1', 'user:2'])
   })
 
-  it('시드가 없는 프로젝트의 시작값을 열두 종류 모두 못박는다', () => {
+  it('시드가 없는 프로젝트의 시작값을 열세 종류 모두 못박는다', () => {
     const START: Record<RunConfigType, RunConfig> = {
       shell: { id: 'x', name: 'n', type: 'shell', command: '' },
       npm: { id: 'x', name: 'n', type: 'npm', script: 'dev' },
@@ -300,9 +300,9 @@ describe('defaultDotnetProject', () => {
 })
 
 describe('seedKeyOf', () => {
-  // node·maven·cargo·go 는 한 번도 확인된 적이 없었다. Record 로 열두 종류를 한 표에 못박아 둔다 —
+  // node·maven·cargo·go 는 한 번도 확인된 적이 없었다. Record 로 열세 종류를 한 표에 못박아 둔다 —
   // 종류가 늘면 여기서 컴파일이 깨지므로 새 종류가 조용히 빠질 수 없다
-  it('열두 종류의 정체 문자열을 못박는다', () => {
+  it('열세 종류의 정체 문자열을 못박는다', () => {
     const base = { id: 'x', name: 'x' }
     const cases: Record<RunConfigType, [RunConfig, string]> = {
       shell: [{ ...base, type: 'shell', command: 'ls -al' }, 'shell:ls -al'],

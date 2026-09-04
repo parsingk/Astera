@@ -3658,7 +3658,8 @@ export function registerIpc(
       onFocus: (status) => send('run:focus', { runId: status.runId, projectPath: status.projectPath }),
       onFailed: (stepId, detail) =>
         send('run:launchFailed', {
-          message: tr('run.start.stepFailed', { name: prepared.get(stepId)?.config.name ?? stepId, detail })
+          message: tr('run.start.stepFailed', { name: prepared.get(stepId)?.config.name ?? stepId, detail }),
+          projectPath
         })
     })
   })

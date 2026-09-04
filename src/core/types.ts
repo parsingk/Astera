@@ -560,8 +560,10 @@ export interface CoreEvents {
    *  taking the selection leaves the panel pointing at a console it will never draw. */
   'run:focus': { runId: string; projectPath: string }
   /** A step of a chain refused to start. Rare, because prepareLaunch assembles every step first;
-   *  without it the failure is a tab that silently never appears. Already translated in main. */
-  'run:launchFailed': { message: string }
+   *  without it the failure is a tab that silently never appears. Already translated in main.
+   *  `projectPath` rides along for the same reason `run:focus`'s does: the renderer applies the guard
+   *  only for the project it is showing, so a chain failing in project A does not toast over project B. */
+  'run:launchFailed': { message: string; projectPath: string }
   'terminal:data': { id: string; data: string } // project terminal output
   'terminal:exit': { id: string; exitCode: number } // shell exited — the renderer removes that tab
   // The Jobs sidebar's whole snapshot, re-sent on every orchestration state change. Small enough to

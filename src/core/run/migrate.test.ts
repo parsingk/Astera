@@ -3,7 +3,7 @@ import { migrateRunConfigs, missingRequiredFields, REQUIRED } from './migrate'
 import type { RunConfig, RunConfigType } from './types'
 import { ko } from '../i18n/messages/ko'
 
-/** A valid configuration of every kind. A Record, so a thirteenth kind cannot be added without
+/** A valid configuration of every kind. A Record, so a fourteenth kind cannot be added without
  *  landing here — the hand-written arrays elsewhere in the suite skip a new kind silently. */
 const COMPLETE: Record<RunConfigType, RunConfig> = {
   shell: { id: 'x', name: 'x', type: 'shell', command: 'ls' },
@@ -154,7 +154,7 @@ describe('migrateRunConfigs', () => {
 // 다섯 종류(shell·node·maven·cargo·go)의 필수 필드는 한 번도 확인된 적이 없었다 — 그 다섯을 []
 // 로 바꿔도 테스트가 모두 초록이었다. 그래서 표를 먼저 못박고, 동작은 그 표를 돌면서 본다:
 // 표 없이 REQUIRED 를 돌기만 하면 []로 비운 종류에서 반복문이 그냥 비어 버려 또 초록이 된다
-describe('REQUIRED — 열두 종류 전부', () => {
+describe('REQUIRED — 열세 종류 전부', () => {
   it('종류마다 어떤 필드가 필수인지 못박는다', () => {
     expect(REQUIRED).toEqual({
       shell: ['command'],
@@ -173,7 +173,7 @@ describe('REQUIRED — 열두 종류 전부', () => {
     })
   })
 
-  it('완전한 구성은 열두 종류 모두 통과한다', () => {
+  it('완전한 구성은 열세 종류 모두 통과한다', () => {
     for (const [type, config] of Object.entries(COMPLETE)) {
       expect(migrateRunConfigs([config]).map((c) => c.type), type).toEqual([type])
     }

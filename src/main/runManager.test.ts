@@ -505,5 +505,39 @@ describe('RunManager', () => {
       const { mgr } = setup()
       await expect(mgr.whenExited('nope')).resolves.toBeNull()
     })
+
+    // The bug this guards against: off win32, stop() falls back to pty.kill(), a signal — and FakePty's
+    // kill() calls exit(0) because that is exactly what node-pty reports for a signalled child on posix.
+    // Without the killed flag, whenExited would read that 0 as success and let a chain's next step start
+    // against a task the user just stopped.
+    it('settles null for a run that was stopped, even though the pty reports exit code 0', async () => {
+      const { mgr, spawned } = setup('linux')
+      const st = mgr.start(startOpts())
+      const waiting = mgr.whenExited(st.runId)
+      mgr.stop(st.runId) // posix path: falls through to pty.kill(), which FakePty resolves with code 0
+      expect(spawned[0].pty.killed).toBe(true)
+      await expect(waiting).resolves.toBeNull()
+    })
+
+    // A run that exits on its own, unrelated to stop(), still reports its real code.
+    it('still settles the real code for a run that exits on its own', async () => {
+      const { mgr, spawned } = setup('linux')
+      const st = mgr.start(startOpts())
+      const waiting = mgr.whenExited(st.runId)
+      spawned[0].pty.exit(0)
+      await expect(waiting).resolves.toBe(0)
+    })
+
+    // On win32, stop() dispatches taskkill and does not touch the pty itself — the real exit arrives
+    // later through pty.onExit, and it need not be 0. killed must win regardless of what that code is,
+    // asserting the actual behavior (resolves null) rather than merely "not 0".
+    it('a stopped run that exits non-zero still resolves a failure', async () => {
+      const { mgr, spawned } = setup('win32')
+      const st = mgr.start(startOpts())
+      const waiting = mgr.whenExited(st.runId)
+      mgr.stop(st.runId)
+      spawned[0].pty.exitCb({ exitCode: 1 }) // the tree kill's real exit, arriving after the fact
+      await expect(waiting).resolves.toBeNull()
+    })
   })
 })
