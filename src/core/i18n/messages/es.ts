@@ -652,9 +652,9 @@ export const es: Catalog = {
   'run.global.listTitle': 'Ejecuciones activas',
   'run.global.jump': 'Ir',
   'run.validation.tag': 'Validación',
-  // App.tsx runManagerSave — shown when the run.saveConfig IPC fails
+  // App.tsx runManagerApply — shown when the run.saveConfigs IPC throws
   'run.config.saveFailed': 'Error al guardar: {detail}',
-  // main/run/prepare.ts resolveRunCwd (run.start) and ipc.ts assertConfigCwd (run.saveConfig) — translated in main before throwing (the layering rule)
+  // main/run/prepare.ts resolveRunCwd (run.start) and ipc.ts assertConfigCwd (run.saveConfigs) — translated in main before throwing (the layering rule)
   'run.config.cwdNotString': 'La carpeta de trabajo de la configuración de ejecución no es válida',
   'run.config.cwdOutsideProject':
     'La carpeta de trabajo de la configuración de ejecución debe estar dentro del proyecto',
@@ -686,6 +686,18 @@ export const es: Catalog = {
   'run.manager.duplicate': 'Duplicar',
   'run.manager.seedHint':
     'Editar una configuración detectada automáticamente la guarda como una copia de configuración de usuario.',
+  'run.manager.search': 'Buscar configuraciones',
+  'run.manager.apply': 'Aplicar',
+  'run.manager.ok': 'Aceptar',
+  'run.manager.discardTitle': '¿Descartar los cambios?',
+  'run.manager.discardBody': 'Hay ediciones sin aplicar. Descartarlas no se puede deshacer.',
+  'run.manager.discard': 'Descartar',
+  'run.manager.keepEditing': 'Seguir editando',
+  'run.manager.markDirty': 'Aún no aplicado',
+  'run.manager.markIncomplete': 'Falta un campo obligatorio; esta configuración no puede ejecutarse',
+  'run.manager.reason.INVALID_CONFIG': '{name}: esta configuración no se puede guardar',
+  'run.manager.reason.UNSAFE_VALUE': '{name}: un valor que llega al comando contiene un carácter que interpreta el shell de Windows (& | ^ % ! < >)',
+  'run.manager.reason.INVALID_CWD': '{name}: la carpeta de trabajo debe estar dentro del proyecto',
   'run.type.shell': 'Shell',
   'run.type.npm': 'npm',
   'run.type.node': 'Node.js',
@@ -703,6 +715,12 @@ export const es: Catalog = {
   'run.field.args': 'Argumentos',
   'run.field.cwd': 'Carpeta de trabajo',
   'run.field.env': 'Variables de entorno',
+  'run.env.key': 'Clave',
+  'run.env.value': 'Valor',
+  'run.env.addRow': 'Añadir fila',
+  'run.env.removeRow': 'Eliminar fila',
+  'run.env.issue.emptyKey': 'La clave está vacía, así que esta fila no se guarda',
+  'run.env.issue.shadowed': 'Una fila posterior con la misma clave sobrescribe este valor',
   'run.field.allowMultipleInstances': 'Permitir varias instancias',
   'run.field.command': 'Comando',
   'run.field.script': 'Script',
@@ -747,6 +765,7 @@ export const es: Catalog = {
   'run.find.close': 'Cerrar búsqueda',
   'run.rail.scrollToEnd': 'Ir al final',
   'run.rail.find': 'Buscar',
+  'run.rail.rerunGone': 'La configuración fue eliminada',
   // BottomPanel, the rail terminal button
   'terminal.rail.open': 'Terminal',
   'terminal.tab.label': 'Terminal {n}',

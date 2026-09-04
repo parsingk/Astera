@@ -51,7 +51,7 @@ export function missingRequiredFields(config: RunConfig): string[] {
  *  and get it thrown away).
  *
  *  `allowIncomplete` keeps everything above but stops rejecting a required field that is present and
- *  empty. run.saveConfig passes it, because a configuration created by ＋ starts with exactly that
+ *  empty. run.saveConfigs passes it, because a configuration created by ＋ starts with exactly that
  *  shape: without it the new configuration never reaches the store, lives only in the renderer's
  *  single `pending` slot, and the next ＋ silently loses it. **RunConfigStore.load passes it too, and
  *  must:** the two have to agree, or the app writes a file it then refuses to read back and the
@@ -66,7 +66,7 @@ export function migrateRunConfigs(value: unknown, opts?: { allowIncomplete?: boo
     const o = raw as Record<string, unknown>
     // Blank is rejected, not just the wrong type. The name is the only thing identifying a
     // configuration in the tree and in the run widget's selector, so a blank one is a row nobody can
-    // see or point at — and this function is also run.saveConfig's gate, so a renderer that let a
+    // see or point at — and this function is also run.saveConfigs' gate, so a renderer that let a
     // blank through (it did) must not be able to store one.
     if (typeof o.id !== 'string' || o.id.trim() === '') continue
     if (typeof o.name !== 'string' || o.name.trim() === '') continue
