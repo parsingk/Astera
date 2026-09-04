@@ -382,10 +382,14 @@ export function RunConfigManager({
                   setDraft(r.draft)
                   setSelectedId(r.id)
                   setRenamingFolder(name)
+                  // Filing puts the configuration somewhere the user must be able to see, so the
+                  // filter that might have been hiding it is cleared.
+                  setQuery('')
                 }}
               >
                 <FolderPlus size={13} />
               </button>
+              <span className="rcm-tools-sep" />
               <button
                 type="button"
                 title={t('run.manager.moveUp')}

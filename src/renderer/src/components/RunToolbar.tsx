@@ -61,8 +61,8 @@ export function RunToolbar({
         items={[
           ...(configs.length === 0 ? [{ value: '', label: t('run.config.none') }] : []),
           // The same grouping the manager's tree draws (core/run/grouping.ts), flattened into the
-          // Select's items. groupConfigs has already made each group contiguous, so groupRowsOf --
-          // which starts a fresh heading whenever the group changes -- emits each heading once.
+          // Select's items. groupConfigs has already made each group contiguous, so groupRowsOf —
+          // which starts a fresh heading whenever the group changes — emits each heading once.
           ...groupConfigs(configs).flatMap((g) =>
             g.items.map((c) => ({
               value: c.id,

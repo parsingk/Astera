@@ -765,7 +765,7 @@ export const ko = {
   // The tree's markers, as tooltips
   'run.manager.markDirty': '적용되지 않은 변경',
   'run.manager.markIncomplete': '필수 항목이 비어 있어 실행할 수 없습니다',
-  'run.manager.newFolder': '폴더에 넣기',
+  'run.manager.newFolder': '새 폴더로',
   'run.manager.moveUp': '위로',
   'run.manager.moveDown': '아래로',
   // The name a new folder starts with; the tree appends a number when it is taken

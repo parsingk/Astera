@@ -244,7 +244,7 @@ export function RunConfigForm({
           />
           {/* Inside a folder the tree groups by folder, so it no longer says what kind a configuration
               is. This is where that goes. */}
-          <span className="rcm-badge" title={t(`run.type.${draft.type}` as MessageKey)}>
+          <span className="rcm-badge">
             <FileIcon {...runTypeIcon(draft.type)} />
             {t(`run.type.${draft.type}` as MessageKey)}
           </span>

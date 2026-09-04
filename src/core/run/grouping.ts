@@ -8,7 +8,7 @@
 // changes — because it renders a list someone else already ordered, while this function *is* the
 // ordering. Where they meet, in the toolbar, this one runs first and hands the other a list whose
 // groups are already contiguous.)
-import type { RunConfig, RunConfigType } from './types'
+import type { RunConfig } from './types'
 
 export interface ConfigGroup {
   /** 'folder' when the configurations named a folder, 'type' for the by-kind fallback */
@@ -25,7 +25,7 @@ export function groupConfigs(configs: readonly RunConfig[]): ConfigGroup[] {
   for (const c of configs) {
     const folder = c.folder ?? ''
     const kind: ConfigGroup['kind'] = folder === '' ? 'type' : 'folder'
-    const key = folder === '' ? (c.type as RunConfigType) : folder
+    const key = folder === '' ? c.type : folder
     const mapKey = `${kind}:${key}`
     const found = byKey.get(mapKey)
     if (found) {
