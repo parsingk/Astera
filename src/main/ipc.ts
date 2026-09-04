@@ -115,6 +115,7 @@ import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
 import { loadRunConfigs, prepareRun } from './run/prepare'
 import { resolveConsolePath } from './run/resolveLink'
+import { saveConfigsBatch } from './run/saveConfigs'
 import { decideStart } from '../core/run/instances'
 import { createGithubPrs } from './githubPrs'
 import { createAccountUsage } from './accountUsage'
@@ -3726,6 +3727,12 @@ export function registerIpc(
     const next = core.runConfig.get(projectPath).filter((c) => c.id !== configId)
     await core.runConfig.save(projectPath, next)
     return next
+  })
+  // The Run Configurations dialog's Apply. One batch, one verdict — see main/run/saveConfigs.ts. The
+  // project guard is here, as for every other run handler; the per-item checks are inside.
+  ipcMain.handle('run.saveConfigs', async (_e, projectPath: string, configs: RunConfig[]) => {
+    await assertAllowedPath(projectPath)
+    return saveConfigsBatch({ projectPath, configs, platform: process.platform, assertConfigCwd, store: core.runConfig })
   })
 
   // Project terminals. open and list take a path and so must pass assertAllowedPath — that stops a shell

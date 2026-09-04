@@ -3,7 +3,7 @@
 // the form needs (environment text, project-relative paths). The RunConfig union and its per-kind
 // interfaces live in ./types and are only re-exported here, so a renderer module that needs both
 // still has one import.
-export type { RunConfig, RunConfigType } from './types'
+export type { RunConfig, RunConfigType, SaveReason, SaveConfigsResult } from './types'
 import type { RunConfig, RunConfigType } from './types'
 
 // Live run state — one per run, addressed everywhere by runId. Used by the renderer's run list,

@@ -1,5 +1,5 @@
-import type { RunConfig, RunStatus } from './run/config'
-export type { RunConfig, RunStatus } from './run/config'
+import type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
+export type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
 import type { RunContext } from './run/build'
 export type { RunContext } from './run/build'
 import type { Jdk } from './run/jdk'
@@ -903,6 +903,9 @@ export interface CoreApi {
     // what App.tsx does; it discards these return values).
     saveConfig(projectPath: string, config: RunConfig): Promise<RunConfig[]>
     deleteConfig(projectPath: string, configId: string): Promise<RunConfig[]>
+    /** The manager's Apply: the stored list becomes `configs` wholesale, or nothing changes and every
+     *  refused item is named (core/run/types.ts SaveConfigsResult). */
+    saveConfigs(projectPath: string, configs: RunConfig[]): Promise<SaveConfigsResult>
     listJdks(): Promise<Jdk[]> // the detected JDKs — no path argument, so not subject to assertAllowedPath
     // The detected Python interpreters for this project (its venv plus whatever is on PATH). Takes a
     // path — unlike listJdks — because venv candidates live inside the project, so it is subject to
