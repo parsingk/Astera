@@ -53,18 +53,48 @@ export function labelRuns(runs: RunStatus[]): { runId: string; label: string }[]
     })
 }
 
+/** The configuration ids ▶ and ⏹ act on for a selection: the configuration itself, or a compound's
+ *  members (following nested compounds). A cycle cannot loop here — planLaunch refuses one before
+ *  anything runs — but the walk carries a visited set anyway, because this runs against a list that
+ *  can be hand-edited on disk. */
+export function actedConfigIds(configs: readonly RunConfig[], selectedId: string): string[] {
+  const byId = new Map(configs.map((c) => [c.id, c]))
+  const seen = new Set<string>()
+  const out: string[] = []
+  const walk = (id: string): void => {
+    if (seen.has(id)) return
+    seen.add(id)
+    const c = byId.get(id)
+    if (!c) return
+    if (c.type === 'compound') {
+      for (const m of c.members) walk(m)
+      return
+    }
+    out.push(c.id)
+  }
+  walk(selectedId)
+  return out
+}
+
 /** The toolbar's two buttons for the selected configuration. ▶ is enabled whenever something is
- *  selected (what it does is decideStart's call). ⏹ targets the most recently started *running* run of
- *  the selection — a stopping one cannot be stopped again, and with the switch on there may be several,
- *  of which the toolbar takes one; the rest have their own ⏹ in the list. */
+ *  selected (what it does is decideStart's call, per acted configuration). ⏹ targets the most recently
+ *  started *running* run of each acted configuration — a stopping one cannot be stopped again, and
+ *  with the switch on there may be several of one configuration, of which the toolbar takes one; the
+ *  rest have their own ⏹ in the list. `configs` is only needed to expand a compound: without it the
+ *  selection stands for itself, which is what every caller before compounds existed meant. */
 export function toolbarState(
   runs: RunStatus[],
-  selectedConfigId: string | null
-): { canRun: boolean; stopTarget?: string } {
-  if (!selectedConfigId) return { canRun: false }
-  const running = runs.filter((r) => r.configId === selectedConfigId && r.status === 'running')
-  if (running.length === 0) return { canRun: true }
-  return { canRun: true, stopTarget: latestOf(running).runId }
+  selectedConfigId: string | null,
+  configs?: readonly RunConfig[]
+): { canRun: boolean; stopTargets: string[] } {
+  if (!selectedConfigId) return { canRun: false, stopTargets: [] }
+  const acted = configs ? actedConfigIds(configs, selectedConfigId) : [selectedConfigId]
+  const stopTargets: string[] = []
+  for (const id of acted) {
+    const running = runs.filter((r) => r.configId === id && r.status === 'running')
+    if (running.length > 0) stopTargets.push(latestOf(running).runId)
+  }
+  return { canRun: true, stopTargets }
 }
 
 /** The renderer's merge of a run:status event into its list. By runId — and a run arriving on a seat

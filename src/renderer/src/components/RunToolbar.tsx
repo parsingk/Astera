@@ -46,8 +46,11 @@ export function RunToolbar({
   const { t } = useI18n()
   const [showRuns, setShowRuns] = useState(false)
   const [showMore, setShowMore] = useState(false)
-  const state = toolbarState(runs, selectedId)
-  const stopTargetRun = state.stopTarget ? runs.find((r) => r.runId === state.stopTarget) : undefined
+  const state = toolbarState(runs, selectedId, configs)
+  // The Validation tag reads off whichever target the toolbar is about to stop; with a compound there
+  // may be several, and only an orchestration run ever carries the mark, so the first one that does
+  // is what the tag is for.
+  const stopTargetRun = state.stopTargets.map((id) => runs.find((r) => r.runId === id)).find((r) => !!r)
   const selectedConfig = configs.find((c) => c.id === selectedId)
   // The title is the one thing that says ▶ is about to kill the user's server, so it comes from the same
   // rule main applies (decideStart) — not from toolbarState, which differs from it on validation and
@@ -90,8 +93,12 @@ export function RunToolbar({
       >
         <Play size={14} fill="currentColor" strokeWidth={0} />
       </button>
-      {state.stopTarget && (
-        <button className="run-btn stop" title={t('run.action.stop')} onClick={() => onStop(state.stopTarget!)}>
+      {state.stopTargets.length > 0 && (
+        <button
+          className="run-btn stop"
+          title={t('run.action.stop')}
+          onClick={() => state.stopTargets.forEach((id) => onStop(id))}
+        >
           <Square size={14} fill="currentColor" strokeWidth={0} />
         </button>
       )}
