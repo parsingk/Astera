@@ -2580,6 +2580,22 @@ export default function App(): React.JSX.Element {
     return off
   }, [])
 
+  // The console follows a chain: run.start returns the chain's first run (which runStart selects and
+  // opens the panel on), and this arrives when the configuration the user actually pressed ▶ on
+  // starts. The project check is the same one the run:status subscription makes, and for the same
+  // reason — a run from a project the user has since switched away from must not take the selection.
+  // The effect has no dependencies, so the open project is read through the ref, not the closure.
+  useEffect(() => {
+    const offFocus = window.api.on('run:focus', ({ runId, projectPath }) => {
+      if (currentProjectRef.current === projectPath) setSelectedRunId(runId)
+    })
+    const offFailed = window.api.on('run:launchFailed', ({ message }) => toast.error(message))
+    return () => {
+      offFocus()
+      offFailed()
+    }
+  }, [])
+
   // The selection must never name a run the list no longer holds — with nothing to draw, the Run tab
   // shows an empty console and no row highlighted. runStart and runDismiss keep it right for what the
   // user does here, but a seat can also be taken over by a run this renderer did not ask for: an

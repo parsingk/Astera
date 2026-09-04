@@ -113,7 +113,8 @@ import { listJdks } from './jdkScanner'
 import { listPythonInterpreters } from './pythonScanner'
 import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
-import { loadRunConfigs, prepareRun } from './run/prepare'
+import { loadRunConfigs, prepareRun, prepareLaunch } from './run/prepare'
+import { executeLaunch } from './run/launch'
 import { resolveConsolePath } from './run/resolveLink'
 import { saveConfigsBatch } from './run/saveConfigs'
 import { decideStart } from '../core/run/instances'
@@ -3632,19 +3633,34 @@ export function registerIpc(
 
   ipcMain.handle('run.start', async (_e, projectPath: string, configId: string) => {
     await assertAllowedPath(projectPath)
-    const { config, command, projectName } = await prepareRun({
+    const tr = (key: string, params?: Record<string, string | number>): string =>
+      t(core.lang, key as MessageKey, params)
+    // The plan and every step's command, before anything starts: a chain with a broken step must not
+    // leave the steps before it already running (main/run/prepare.ts).
+    const { plan, prepared, projectName } = await prepareLaunch({
       projectPath,
-      configId,
+      rootId: configId,
       stored: core.runConfig.get(projectPath),
       assertAllowedPath,
-      t: (key, params) => t(core.lang, key as MessageKey, params)
+      t: tr
     })
-    // What ▶ means for this configuration right now — restart its live run, or start another
-    // (core/run/instances.ts). Both branches get the freshly assembled command, so a restart picks up an
-    // edit made while the run was up.
-    const decision = decideStart(core.run.listByProject(projectPath), config)
-    const opts = { projectPath, projectName, config, command }
-    return decision.action === 'restart' ? core.run.restart(decision.runId, opts) : core.run.start(opts)
+    return executeLaunch(plan, {
+      // What ▶ means for this configuration right now — restart its live run, or start another
+      // (core/run/instances.ts). Evaluated when the step runs, not when the plan was made.
+      startOne: async (stepId) => {
+        const step = prepared.get(stepId)
+        if (!step) throw new Error(`NO_CONFIG: ${stepId}`)
+        const opts = { projectPath, projectName, config: step.config, command: step.command }
+        const decision = decideStart(core.run.listByProject(projectPath), step.config)
+        return decision.action === 'restart' ? core.run.restart(decision.runId, opts) : core.run.start(opts)
+      },
+      whenExited: (runId) => core.run.whenExited(runId),
+      onFocus: (status) => send('run:focus', { runId: status.runId, projectPath: status.projectPath }),
+      onFailed: (stepId, detail) =>
+        send('run:launchFailed', {
+          message: tr('run.start.stepFailed', { name: prepared.get(stepId)?.config.name ?? stepId, detail })
+        })
+    })
   })
 
   ipcMain.handle('run.stop', async (_e, runId: string) => {

@@ -553,6 +553,15 @@ export interface CoreEvents {
   'notify:activate': { sessionId: string }
   'run:data': { runId: string; data: string } // run output, per run
   'run:status': RunStatus // run state change (running/stopping/exited)
+  /** The run the console should move to. A chain's first run is what run.start returns and what the
+   *  panel opens on; this arrives later, when the configuration the user actually pressed ▶ on starts.
+   *  `projectPath` rides along because the renderer applies it only for the project it is showing —
+   *  the same guard run.start's own result needs, and for the same reason: a foreign project's run
+   *  taking the selection leaves the panel pointing at a console it will never draw. */
+  'run:focus': { runId: string; projectPath: string }
+  /** A step of a chain refused to start. Rare, because prepareLaunch assembles every step first;
+   *  without it the failure is a tab that silently never appears. Already translated in main. */
+  'run:launchFailed': { message: string }
   'terminal:data': { id: string; data: string } // project terminal output
   'terminal:exit': { id: string; exitCode: number } // shell exited — the renderer removes that tab
   // The Jobs sidebar's whole snapshot, re-sent on every orchestration state change. Small enough to
