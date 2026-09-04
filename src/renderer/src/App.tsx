@@ -2713,17 +2713,26 @@ export default function App(): React.JSX.Element {
   /** RunConfigManager's Apply. On success the toolbar's list is refetched the same way the old
    *  per-item save did — promoting a seed *removes* an id (mergeConfigs stops emitting seed:npm:dev the
    *  moment a stored config shares its seedKeyOf), so the selection has to be reconciled or ▶ keeps a
-   *  seed id that no longer resolves. On refusal nothing was stored; the dialog shows the reasons. */
+   *  seed id that no longer resolves. On refusal nothing was stored; the dialog shows the reasons. A
+   *  throw (the save itself failing, not a refused item) becomes a toast and an empty-error refusal. */
   const runManagerApply = async (configs: RunConfig[]): Promise<SaveConfigsResult> => {
     if (!currentProject) return { ok: false, errors: [] }
-    const result = await window.api.run.saveConfigs(currentProject, configs)
-    if (result.ok) {
-      const r = await window.api.run.list(currentProject)
-      setRunConfigs(r.configs)
-      setRunContext(r.context)
-      applyRunSelection(currentProject, pickRunSelection(r.configs, runSelectedByProject.current[currentProject]))
+    try {
+      const result = await window.api.run.saveConfigs(currentProject, configs)
+      if (result.ok) {
+        const r = await window.api.run.list(currentProject)
+        setRunConfigs(r.configs)
+        setRunContext(r.context)
+        applyRunSelection(currentProject, pickRunSelection(r.configs, runSelectedByProject.current[currentProject]))
+      }
+      return result
+    } catch (err) {
+      // A refused *item* comes back as ok:false with reasons the dialog paints; a throw is the save
+      // itself failing (the disk, a permission) and has no item to name — so it takes the toast the
+      // single-item save used to, and the dialog keeps the draft with nothing marked.
+      toast.error(t('run.config.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
+      return { ok: false, errors: [] }
     }
-    return result
   }
   /** 실행 중 목록에서 다른 프로젝트로 점프. 트리 루트는 활성 탭이 정하므로, 그 프로젝트에 속한 탭을
    *  활성으로 만드는 것이 곧 '그리로 간다'는 뜻이다. 세션을 먼저 찾고 없으면 그 프로젝트의 파일 탭을

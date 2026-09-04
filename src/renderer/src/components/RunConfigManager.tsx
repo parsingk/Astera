@@ -102,6 +102,10 @@ export function RunConfigManager({
       }
       setApplyErrors(result.errors)
       return false
+    } catch {
+      // onApply reports its own failures; catching here only guarantees `void apply()` cannot leave an
+      // unhandled rejection, and that the buttons come back.
+      return false
     } finally {
       setApplying(false)
     }
@@ -320,6 +324,7 @@ export function RunConfigManager({
                   // with configurations still in the tree.
                   setSelectedId(draft.items.find((c) => c.id !== selected.id)?.id ?? null)
                   setDraft(removeItem(draft, selected.id))
+                  setApplyErrors((errs) => errs.filter((e) => e.id !== selected.id))
                 }}
               >
                 <Minus size={13} />
