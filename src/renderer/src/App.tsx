@@ -951,8 +951,13 @@ export default function App(): React.JSX.Element {
         e.preventDefault()
         e.stopPropagation()
         if (e.repeat) return
-        if (action === 'run.selectConfig') setRunMenuOpen(true)
-        else if (action === 'run.run') runStartRef.current()
+        if (action === 'run.selectConfig') {
+          // The toolbar (and its menu) is only rendered for an open project. Forcing the menu open
+          // with none open would arm it to spring open by itself the next time a project is opened,
+          // since RunConfigMenu is controlled and mounts already open.
+          if (!currentProjectRef.current) return
+          setRunMenuOpen((v) => !v)
+        } else if (action === 'run.run') runStartRef.current()
         else if (action === 'run.stop') runStopSelectionRef.current()
         else runRerunSelectedRef.current()
         return
@@ -2731,6 +2736,16 @@ export default function App(): React.JSX.Element {
       async (st) => {
         if (currentProjectRef.current !== root) return
         await showStartedRun(root, st)
+        // Main may have created a configuration for this file, or evicted the oldest temporary one to
+        // make room. Neither reaches the renderer any other way — run.list is refetched on load, on a
+        // root seed-file change and on the manager's Apply, and none of those fires here. Without this
+        // the new configuration is missing from the pill's menu and the console's ↻ reports it as
+        // deleted.
+        const r = await window.api.run.list(root)
+        if (currentProjectRef.current !== root) return
+        setRunConfigs(r.configs)
+        // The same rule the menu's inline ▶ follows: the pill must name what is running.
+        applyRunSelection(root, st.configId)
       },
       (err) => toast.error(t('run.start.failed', { detail: err instanceof Error ? err.message : String(err) }))
     )
@@ -2745,8 +2760,14 @@ export default function App(): React.JSX.Element {
   runStopSelectionRef.current = () => toolbarState(runs, runSelectedId, runConfigs).stopTargets.forEach(runStop)
   // What the run list's ↻ does: restart the selected run's own configuration. Silently does nothing
   // with the panel closed or no run selected, like the other run shortcuts' no-ops.
-  runRerunSelectedRef.current = () => {
-    if (selectedRunId) runStart(runs.find((r) => r.runId === selectedRunId)?.configId ?? null)
+  runRerunSelectedRef.current = (): void => {
+    if (!selectedRunId) return
+    const configId = runs.find((r) => r.runId === selectedRunId)?.configId
+    // The rail's ↻ is disabled when the configuration is gone (rerunGone); a run outlives its
+    // configuration when the manager deletes it or the temporary cap evicts it. The shortcut has to
+    // carry the same guard, or it sends a dead id and the user reads a raw NO_CONFIG.
+    if (!configId || !runConfigs.some((c) => c.id === configId)) return
+    runStart(configId)
   }
   /** The list's ✕ on a finished run. main drops it (its exitCode and output with it — otherwise a run.list
    *  re-read brings the row back) and the local list follows without waiting. Selection moves to the

@@ -66,6 +66,17 @@ describe('configForFile', () => {
     })
   })
 
+  // dotnet run refuses a solution file (it wants a single project, named with --project); dotnet build
+  // accepts one directly. .csproj/.fsproj identify a single project already, so they keep the default run.
+  it('gives a .sln subcommand build, and leaves a .csproj on the default run', () => {
+    expect(configForFile('Api.sln', 'i', 'Api.sln')).toEqual({
+      id: 'i', name: 'Api.sln', type: 'dotnet', project: 'Api.sln', subcommand: 'build'
+    })
+    expect(configForFile('Api.csproj', 'i', 'Api.csproj')).toEqual({
+      id: 'i', name: 'Api.csproj', type: 'dotnet', project: 'Api.csproj'
+    })
+  })
+
   // The inference reads the basename; the stored path is the whole relative path it was given.
   it('keeps the path it was given, not the basename', () => {
     expect(configForFile('a/b/c/seed.py', 'i', 'seed.py')).toMatchObject({ file: 'a/b/c/seed.py' })

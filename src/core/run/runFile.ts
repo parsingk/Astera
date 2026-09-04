@@ -49,7 +49,16 @@ export function configForFile(path: string, id: string, name: string): RunConfig
     case 'compose':
       return { id, name, type: 'compose', composeFile: path }
     case 'dotnet':
-      return { id, name, type: 'dotnet', project: path }
+      return {
+        id,
+        name,
+        type: 'dotnet',
+        project: path,
+        // dotnet run refuses a solution file — it wants a single project and tells you to name one
+        // with --project, which this already does, so a .sln still fails. dotnet build accepts a
+        // solution directly, so that is what a .sln gets; .csproj/.fsproj keep the default run.
+        ...(basename.toLowerCase().endsWith('.sln') ? { subcommand: 'build' as const } : {})
+      }
     default:
       return null
   }

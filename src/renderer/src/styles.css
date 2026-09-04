@@ -434,11 +434,12 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .rcmenu-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; background: transparent; border: 0; border-radius: var(--radius); padding: 4px 8px; font-size: 12px; color: var(--text); text-align: left; cursor: pointer; }
 .rcmenu-pick .fi { flex: none; }
 .rcmenu-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Detected configurations are italic here for the same reason they are in the manager's tree. */
-.rcmenu-name.seed { font-style: italic; color: var(--text-dim); }
 .rcmenu-tag { flex: none; font-size: 10px; color: var(--text-faint); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 0 4px; white-space: nowrap; }
 .rcmenu-status { flex: none; margin-left: auto; padding-left: 8px; font-size: 11px; color: var(--text-faint); white-space: nowrap; }
 .rcmenu-status.live { color: var(--ok); }
+/* Same colour .run-tab-exit.fail uses — the same fact (a non-zero exit) must not read differently in
+   the tab strip and the menu. */
+.rcmenu-status.fail { color: var(--danger); }
 .rcmenu-run { flex: none; width: 22px; height: 22px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-faint); padding: 0; cursor: pointer; }
 .rcmenu-run:hover { background: var(--surface-hover); color: var(--text); }
 .rcmenu-sep { flex: none; height: 1px; background: var(--line-soft); margin: 4px 0; }

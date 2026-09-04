@@ -56,6 +56,7 @@ export function RunConfigMenu({
 }): React.JSX.Element {
   const { t } = useI18n()
   const rootRef = useRef<HTMLDivElement>(null)
+  const cursorRowRef = useRef<HTMLDivElement>(null)
   const [cursor, setCursor] = useState(-1)
   const onOpenChangeRef = useRef(onOpenChange)
   onOpenChangeRef.current = onOpenChange
@@ -149,17 +150,32 @@ export function RunConfigMenu({
     if (open) setCursor(-1)
   }, [open])
 
+  // ↑↓ moves the cursor index but the menu itself only scrolls the mouse into view for free — past
+  // roughly twenty configurations (max-height: 60vh; overflow-y: auto) the cursor would move out of
+  // sight. 'nearest' is what keeps an already-visible row from being yanked to an edge.
+  useEffect(() => {
+    cursorRowRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [cursor])
+
   const row = (c: RunConfig, key: string, index: number): React.JSX.Element => {
     const s = configRowStatus(runs, c.id)
     const text = statusText(s)
+    // A live run reads with the same accent the pill's dot uses; a failed one reads with the same
+    // colour the tab strip's own exit tag does (.run-tab-exit.fail) — the same fact must not read
+    // differently in two places.
+    const statusClass = s?.kind === 'running' ? ' live' : s?.kind === 'exited' && s.run.exitCode !== 0 ? ' fail' : ''
+    const isCursor = index === cursor
     return (
       <div
-        className={`rcmenu-row${c.id === selectedId ? ' on' : ''}${index === cursor ? ' cursor' : ''}`}
+        className={`rcmenu-row${c.id === selectedId ? ' on' : ''}${isCursor ? ' cursor' : ''}`}
         key={key}
+        ref={isCursor ? cursorRowRef : undefined}
         onMouseEnter={() => setCursor(index)}
       >
         <button
           type="button"
+          role="menuitem"
+          aria-current={c.id === selectedId ? 'true' : undefined}
           className="rcmenu-pick"
           onClick={() => {
             onSelect(c.id)
@@ -167,14 +183,14 @@ export function RunConfigMenu({
           }}
         >
           <FileIcon {...runTypeIcon(c.type)} />
-          <span className={`rcmenu-name${isSeedId(c.id) ? ' seed' : ''}`}>{c.name}</span>
+          <span className="rcmenu-name">{c.name}</span>
           {isSeedId(c.id) && <span className="rcmenu-tag">{t('run.menu.detected')}</span>}
           {c.temporary && (
             <span className="rcmenu-tag" title={t('run.manager.markTemporary')}>
               {t('run.menu.temporary')}
             </span>
           )}
-          {text && <span className={`rcmenu-status${s?.kind === 'running' ? ' live' : ''}`}>{text}</span>}
+          {text && <span className={`rcmenu-status${statusClass}`}>{text}</span>}
         </button>
         <button
           type="button"
@@ -222,13 +238,13 @@ export function RunConfigMenu({
         <div className="rcmenu-menu" role="menu">
           {recent.length > 0 && (
             <>
-              <div className="rcmenu-group">{t('run.menu.recent')}</div>
+              <div className="rcmenu-group" role="presentation">{t('run.menu.recent')}</div>
               {recent.map((c, i) => row(c, `recent:${c.id}`, i))}
             </>
           )}
           {groups.map((g, gi) => (
             <div key={`${g.kind}:${g.key}`}>
-              <div className="rcmenu-group">
+              <div className="rcmenu-group" role="presentation">
                 {g.kind === 'folder' ? g.key : t(`run.type.${g.key}` as MessageKey)}
               </div>
               {g.items.map((c, i) => row(c, c.id, offsets[gi] + i))}
@@ -238,6 +254,7 @@ export function RunConfigMenu({
           {selected && (
             <button
               type="button"
+              role="menuitem"
               className="rcmenu-foot"
               onClick={() => {
                 onOpenChange(false)
@@ -249,6 +266,7 @@ export function RunConfigMenu({
           )}
           <button
             type="button"
+            role="menuitem"
             className="rcmenu-foot"
             onClick={() => {
               onOpenChange(false)
