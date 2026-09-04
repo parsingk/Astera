@@ -201,9 +201,11 @@ export const en: Record<keyof typeof ko, string> = {
   'files.editor.keepMine': 'Keep my edits',
   'files.editor.loading': 'Loading…',
   'files.editor.selectPrompt': 'Select a file from the tree',
-  // MarkdownPreview.tsx — image load failure, remote image notice
+  // MarkdownPreview.tsx — image load failure, remote image notice, code block copy button
   'files.markdown.image.failed': 'Could not load the image',
   'files.markdown.renderError': 'This document could not be rendered',
+  'files.markdown.copyCode': 'Copy code',
+  'files.markdown.codeCopied': 'Code copied',
   // MarkdownSplit.tsx — the three mode toolbar buttons, the left/right split resizer
   'files.markdown.mode.editor': 'Editor only',
   'files.markdown.mode.split': 'Editor and preview',

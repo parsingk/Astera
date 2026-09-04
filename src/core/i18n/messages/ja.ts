@@ -163,6 +163,8 @@ export const ja: Catalog = {
   // MarkdownPreview.tsx — 画像の読み込み失敗・リモート画像の案内
   'files.markdown.image.failed': '画像を読み込めません',
   'files.markdown.renderError': 'このドキュメントは表示できません',
+  'files.markdown.copyCode': 'コードをコピー',
+  'files.markdown.codeCopied': 'コードをコピーしました',
   // MarkdownSplit.tsx — モードツールバーの3つのボタン、左右分割のリサイザー
   'files.markdown.mode.editor': '編集のみ',
   'files.markdown.mode.split': '編集とプレビュー',
