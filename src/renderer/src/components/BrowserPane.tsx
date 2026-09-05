@@ -450,7 +450,13 @@ export function BrowserPane({
         try {
           raw = await view.executeJavaScript(armScript())
         } catch {
-          break // cancelled, re-armed, or the page navigated — the effect's cleanup owns the state
+          // Three things reject this: our own cleanup, the page's Escape (the injected picker handles
+          // that key itself, because a guest's key events never reach the host), and the page going
+          // away. Only the first has already turned the mode off. Without this line, Escape inside the
+          // page killed the picker and left the toolbar button lit over a mode that could no longer
+          // pick anything until it was toggled twice.
+          if (!cancelled) setDesignMode(false)
+          break
         }
         if (cancelled) break
         const payload = clampPayload(raw)
@@ -494,7 +500,12 @@ export function BrowserPane({
   useEffect(() => {
     if (!designMode) return
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') { e.stopPropagation(); setDesignMode(false) }
+      if (e.key !== 'Escape') return
+      // Every browser tab's pane stays mounted and is only hidden, so more than one can hold this
+      // listener at once and one Escape would disarm them all. A hidden element has no offsetParent.
+      if (viewRef.current && viewRef.current.offsetParent === null) return
+      e.stopPropagation()
+      setDesignMode(false)
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
@@ -502,12 +513,28 @@ export function BrowserPane({
 
   // Badges live in the page, so a reload wipes them; this runs both when the list changes and when a
   // load finishes (see onFinish above).
-  const currentPath = ((): string => { try { return new URL(tab.url).pathname } catch { return '' } })()
+  const pathOf = (url: string): string => {
+    try {
+      return new URL(url).pathname
+    } catch {
+      return ''
+    }
+  }
+  const currentPath = pathOf(tab.url)
   const sendBadges = (): void => {
     const view = viewRef.current
     if (!view) return
+    // Asked of the guest rather than taken from `tab.url`: the load finishes before the navigation this
+    // component reports has come back through state, so the prop can still name the previous page and
+    // the old page's badges would be painted onto the new one for a frame.
+    let path = currentPath
+    try {
+      path = pathOf(view.getURL())
+    } catch {
+      /* not attached yet — the prop is the best guess */
+    }
     const markers: BadgeMarker[] = annotationsRef.current
-      .filter((a) => a.pagePath === currentPath)
+      .filter((a) => a.pagePath === path)
       .map((a) => ({ seq: a.seq, rectPage: a.payload.rectPage, rectViewport: a.payload.rectViewport, isFixed: a.payload.isFixed }))
     try { void view.executeJavaScript(badgesScript(markers)).catch(() => {}) } catch { /* not attached yet */ }
   }
