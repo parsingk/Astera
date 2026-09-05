@@ -1815,6 +1815,9 @@ export default function App(): React.JSX.Element {
 
   // Project Run/Stop: run configurations, the active run, the list of all active runs, and whether the panel is open
   const [runConfigs, setRunConfigs] = useState<RunConfig[]>([])
+  // Read by the run:status subscription, which is registered once — same reason as runStartRef
+  const runConfigsRef = useRef(runConfigs)
+  runConfigsRef.current = runConfigs
   const [runSelectedId, setRunSelectedId] = useState<string | null>(null)
   /** 프로젝트 경로 → 그 프로젝트에서 고른 실행 구성. 선택은 프로젝트마다 따로 기억해야 한다.
    *
@@ -2720,6 +2723,14 @@ export default function App(): React.JSX.Element {
       // If the run belongs to the current workbench project, the local list is updated too — by runId,
       // and evicting whatever else holds that seat (a restart's replacement arrives on the old seat)
       if (currentProjectRef.current && s.projectPath === currentProjectRef.current) setRuns((prev) => upsertRun(prev, s))
+      // Auto-open (the frontend preview design, §4). RunManager reports a start as one 'running' status
+      // event, so this is a start, not a later change. Only the project on screen — a preview must not
+      // pop over another project — and never a validation run, which nobody pressed ▶ on.
+      if (s.status === 'running' && !s.validation && s.projectPath === currentProjectRef.current) {
+        const cfg = runConfigsRef.current.find((c) => c.id === s.configId)
+        if (cfg && cfg.type !== 'compound' && cfg.previewUrl)
+          openBrowserTabRef.current(previewTargetOf(cfg.previewUrl), { awaitRunId: s.runId })
+      }
     })
     return off
   }, [])
