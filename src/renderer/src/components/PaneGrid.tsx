@@ -16,11 +16,13 @@ import {
 import { parseTab, sessionTab } from '../../../core/panes/tabId'
 import { tabLabels } from '../../../core/files/tabLabel'
 import type { RecordStatus } from '../../../core/understanding/types'
+import { displayHostOf } from '../../../core/preview/url'
 import { useI18n } from '../i18n/I18nProvider'
 import { TerminalView } from './TerminalView'
 import { RECORD_GLYPH, RECORD_GLYPH_COLOR } from './UnderstandingIcons'
 import {
   WorkbenchTabs,
+  type BrowserTab,
   type RecordTab,
   type FileTab,
   type WorkbenchTab
@@ -46,6 +48,8 @@ export function PaneGrid({
   dirtyFileIds,
   recordTabs,
   recordStatuses,
+  browserTabs,
+  browserLoading,
   rollStates,
   schedStates,
   busy,
@@ -65,7 +69,8 @@ export function PaneGrid({
   onRenameStart,
   onRenameEnd,
   renderEditor,
-  renderRecord
+  renderRecord,
+  renderBrowser
 }: {
   layout: PaneNode | null
   activePaneId: string | null
@@ -82,6 +87,10 @@ export function PaneGrid({
    *  that check (the tab's projectRoot against currentProject) is App's job. Same split as
    *  dirtyFileIds: the grid only looks it up. */
   recordStatuses: Record<string, RecordStatus>
+  /** Every open browser (preview) tab, whichever pane holds it — same place, same reason as fileTabs. */
+  browserTabs: BrowserTab[]
+  /** Browser tab id → the page is loading. Chip state, kept beside the tabs rather than in them. */
+  browserLoading: Record<string, boolean>
   rollStates: Record<string, RollStateEvent>
   schedStates: Record<string, SchedStateEvent>
   busy: Record<string, boolean>
@@ -117,6 +126,10 @@ export function PaneGrid({
    *  editor, there is no instance to keep alive per pane — there is no document state to preserve, so
    *  it is only drawn while active (see the comment on the record slot below). */
   renderRecord: (recordTabId: string) => React.ReactNode
+  /** A browser tab's body. App builds it, the grid only places it. Unlike renderRecord it is drawn
+   *  for every browser tab, active or not — the page inside has state to keep, so the slot follows
+   *  the session-slot rule (mounted for life, hidden with display:none). */
+  renderBrowser: (browserTabId: string) => React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement>(null)
@@ -133,16 +146,20 @@ export function PaneGrid({
   // Session → the group holding that session (absent means it is off screen). The tree holds tab ids,
   // so each one is read back through parseTab and only the session tabs are kept
   const paneOfSession = new Map<string, PaneLeaf>()
+  const paneOfBrowser = new Map<string, PaneLeaf>()
   for (const l of paneLeaves)
     for (const tabId of l.tabIds) {
       const ref = parseTab(tabId)
       if (ref?.kind === 'session') paneOfSession.set(ref.id, l)
+      else if (ref?.kind === 'browser') paneOfBrowser.set(tabId, l)
     }
   // Session id → session info, file tab id → file tab. Used when a group's tab ids are turned into tabs
   const sessionOf = new Map(sessions.map((s) => [s.id, s]))
   const fileTabOf = new Map(fileTabs.map((f) => [f.id, f]))
   // Record tab id → that tab's record. Same shape as fileTabOf
   const recordTabOf = new Map(recordTabs.map((r) => [r.id, r]))
+  // Browser tab id → that tab. Same shape as fileTabOf
+  const browserTabOf = new Map(browserTabs.map((b) => [b.id, b]))
   // The name hint is computed **over every open file tab at once**, not per pane — two files with the
   // same name in different panes still have to be told apart
   const labels = tabLabels(fileTabs.map((f) => f.path))
@@ -215,6 +232,33 @@ export function PaneGrid({
               schedState={schedStates[s.id] ?? null}
               active={visible && pane != null && pane.id === activePaneId}
             />
+          </div>
+        )
+      })}
+      {/* Browser slots — the session-slot rule: one per tab for the tab's whole life, display:none unless
+          active. The page inside keeps its scroll and its state across a tab switch that way */}
+      {browserTabs.map((b) => {
+        const pane = paneOfBrowser.get(b.id)
+        const visible = pane != null && pane.activeTabId === b.id
+        const rect = pane ? rects.get(pane.id) : undefined
+        return (
+          <div
+            key={b.id}
+            className="terminal-slot"
+            style={
+              visible && rect
+                ? {
+                    display: 'flex',
+                    left: `${rect.x}%`,
+                    width: `${rect.w}%`,
+                    top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
+                    height: `calc(${rect.h}% - var(--pane-tabbar-h))`
+                  }
+                : { display: 'none' }
+            }
+            onMouseDown={() => pane && onFocusPane(pane.id)}
+          >
+            {renderBrowser(b.id)}
           </div>
         )
       })}
@@ -369,6 +413,17 @@ export function PaneGrid({
                 // would leave `failed`, which is not in that set, drawn green
                 // (UnderstandingIcons' RECORD_GLYPH_COLOR)
                 glyphColor: status ? RECORD_GLYPH_COLOR[status] : null
+              }
+            }
+            if (ref?.kind === 'browser') {
+              const b = browserTabOf.get(tabId)
+              if (!b) return null
+              return {
+                tabId,
+                kind: 'browser',
+                url: b.url,
+                title: b.title || displayHostOf(b.url) || t('preview.tab.untitled'),
+                loading: browserLoading[tabId] === true
               }
             }
             const f = ref?.kind === 'file' ? fileTabOf.get(tabId) : undefined
