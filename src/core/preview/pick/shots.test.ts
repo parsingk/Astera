@@ -18,6 +18,13 @@ describe('evictionPlan', () => {
     const plan = evictionPlan(files, now)
     expect(plan).toEqual([`s/${SHOT_LIMITS.maxFiles + 2}.png`, `s/${SHOT_LIMITS.maxFiles + 1}.png`, `s/${SHOT_LIMITS.maxFiles}.png`])
   })
+  // The rule is strictly older-than, so a file sitting exactly on the limit survives. Left unasserted
+  // this was only implicit, and either direction reads as reasonable to a later editor.
+  it('a file exactly at the age limit is kept, one a millisecond past it is not', () => {
+    expect(evictionPlan([file(1, SHOT_LIMITS.maxAgeMs)], now)).toEqual([])
+    expect(evictionPlan([file(1, SHOT_LIMITS.maxAgeMs + 1)], now)).toEqual(['s/1.png'])
+  })
+
   it('age and count together, without duplicates', () => {
     const files = [...Array.from({ length: SHOT_LIMITS.maxFiles + 1 }, (_, i) => file(i, i * 1000)), file(999, 10 * DAY)]
     const plan = evictionPlan(files, now)
