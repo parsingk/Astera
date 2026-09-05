@@ -51,6 +51,19 @@ acceptable for a preview pane. If Electron removes it, the migration is to `WebC
 overlay bookkeeping described above; the work is contained in `BrowserPane` and `PaneGrid`, not spread
 through the app.
 
+One consequence is worth knowing before it surprises someone. **DevTools offers no device toolbar for
+a guest**: opened on a `<webview>`, the responsive-design button is absent and Ctrl+Shift+M does
+nothing. In Chrome that toolbar is where viewport emulation lives, so its absence is why this app
+carries its own viewport picker rather than pointing at DevTools. Electron's
+`webContents.enableDeviceEmulation` does drive a guest correctly — measured: 390×844 at a device pixel
+ratio of 3, with the narrow-screen media query matching — and it is what the picker uses. It is also
+the reason the picker does not go through the debugger, as some other Electron browsers do: a guest has
+one debugger, and spending it on emulation would take DevTools away.
+
+A second measured fact belongs with it: **emulation does not survive a navigation or a reload.** It has
+to be re-applied every time a load lands, or the page quietly returns to the pane's own size the first
+time anything reloads it.
+
 Turning the tag on means the main process, not the renderer, decides what a guest may do:
 `installPreviewGuards` strips any preload and forces sandbox, context isolation and web security on
 every attach, confines guests to one partition, denies every window they try to open, and limits
