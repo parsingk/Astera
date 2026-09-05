@@ -172,6 +172,18 @@ export function TerminalView({
     // Design Mode's "send to session" pastes here — the same path as Ctrl+V, so the prompt arrives
     // bracketed and unsubmitted (sessionBus.registerPaste explains why not sessions.write)
     const unregisterPaste = sessionBus.registerPaste(session.id, (text) => term.paste(text))
+    // The visible screen, so a send can tell an agent at its prompt from one holding a dialog open.
+    // The viewport rather than the whole scrollback: a dialog answered ten minutes ago is not what is
+    // waiting now, and `translateToString(true)` trims the padding a TUI draws to the right edge.
+    const unregisterScreen = sessionBus.registerScreen(session.id, () => {
+      const buffer = term.buffer.active
+      const rows: string[] = []
+      for (let i = 0; i < term.rows; i += 1) {
+        const line = buffer.getLine(buffer.viewportY + i)
+        if (line) rows.push(line.translateToString(true))
+      }
+      return rows.join('\n')
+    })
     const input = term.onData((d) => window.api.sessions.write(session.id, d))
     let resizeTimer: ReturnType<typeof setTimeout> | undefined
     const observer = new ResizeObserver(() => {
@@ -195,6 +207,7 @@ export function TerminalView({
       termRef.current = null
       sendResizeRef.current = null
       unregisterPaste()
+      unregisterScreen()
       term.dispose()
     }
   }, [session.id])

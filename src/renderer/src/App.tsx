@@ -103,6 +103,7 @@ import {
 import { browserTab, fileTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
 import { placeTab } from '../../core/panes/place'
 import { linkDestination, normalizeUrl, previewTargetOf } from '../../core/preview/url'
+import { isWaitingOnDialog, POST_PASTE_SUBMIT_DELAY_MS } from '../../core/preview/pick/send'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
 import { PanelLeft, Settings, X } from 'lucide-react'
@@ -2466,10 +2467,17 @@ export default function App(): React.JSX.Element {
           .filter((s) => s.cwd === b.projectRoot && s.status !== 'exited')
           .map((s) => ({ id: s.id, title: s.title, busy: busy[s.id] === true }))}
         onSendToSession={(sessionId, text) => {
+          // A session showing a dialog swallows the paste and answers the dialog with the Enter that
+          // follows it, leaving no sign the batch was ever sent. Checked before anything is written.
+          const screen = sessionBus.screenOf(sessionId)
+          if (screen !== null && isWaitingOnDialog(screen)) return 'waiting'
           // Through the terminal's own paste, never sessions.write — see sessionBus.registerPaste
-          if (!sessionBus.pasteInto(sessionId, text)) return false
+          if (!sessionBus.pasteInto(sessionId, text)) return 'no-terminal'
+          // The paste has to be through the terminal and into the agent's input box before the Enter
+          // lands, or the Enter submits an empty prompt.
+          window.setTimeout(() => sessionBus.submitInto(sessionId), POST_PASTE_SUBMIT_DELAY_MS)
           selectWorkbenchTab(sessionTab(sessionId))
-          return true
+          return 'sent'
         }}
       />
     )

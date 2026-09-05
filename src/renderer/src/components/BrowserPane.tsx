@@ -118,7 +118,8 @@ export function BrowserPane({
   /** The project's live sessions, for Send. Empty disables it. */
   sessions: SessionChoice[]
   /** Pastes into that session's terminal and brings its tab forward. false when the terminal is gone. */
-  onSendToSession: (sessionId: string, text: string) => boolean
+  /** 'waiting' when the session is holding a dialog open — nothing was written. */
+  onSendToSession: (sessionId: string, text: string) => 'sent' | 'waiting' | 'no-terminal'
 }): React.JSX.Element {
   const { t } = useI18n()
   const viewRef = useRef<WebviewTag | null>(null)
@@ -628,13 +629,17 @@ export function BrowserPane({
     const text = promptText()
     if (!text) return
     const s = sessions.find((x) => x.id === sessionId)
-    if (!onSendToSession(sessionId, text)) { toast.error(t('preview.design.sendFailed')); return }
+    const name = s?.title ?? sessionId
+    const result = onSendToSession(sessionId, text)
+    // Nothing was written in either failing case, so the batch stays in the tray to be sent again
+    if (result === 'waiting') { toast.info(t('preview.design.sendWaiting', { name })); return }
+    if (result === 'no-terminal') { toast.error(t('preview.design.sendFailed')); return }
     setAnnotations([])
     // The batch is gone, so the next one starts at 1 again. Left running, the next prompt opened at
     // `### 4.` with no 1 to 3 in it, which reads to an agent like sections that were left out.
     nextSeq.current = 1
     setDesignMode(false)
-    toast.info(t('preview.design.sent', { name: s?.title ?? sessionId }))
+    toast.info(t('preview.design.sent', { name }))
   }
   const onSendClick = (anchor: DOMRect): void => {
     if (sessions.length === 0) return
