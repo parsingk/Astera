@@ -58,7 +58,12 @@ function isAllowed(citation: string): boolean {
  *  줄 번호 인용은 잡히지 않는다는 것이고, 둘 다 작아서 눈으로 읽힌다. */
 const CITATION_DATA_FILES = new Set([
   'src/core/run/consoleLinks.ts',
-  'src/core/run/consoleLinks.test.ts'
+  'src/core/run/consoleLinks.test.ts',
+  // Design Mode's `sourceFile` carries a React `_debugSource` location, which is literally
+  // `path.tsx:line:column`. These two handle and format that value, so their fixtures have to hold the
+  // real shape — the same reason the two console-link files above are here.
+  'src/core/preview/pick/payload.test.ts',
+  'src/core/preview/pick/prompt.test.ts'
 ])
 
 function findViolations(): string[] {

@@ -13,6 +13,7 @@ import { isOwnDocument } from './navigationGuard'
 import { installPreviewGuards } from './preview/guest'
 import { registerPreviewDevTools } from './preview/devtools'
 import { registerPreviewEmulation } from './preview/emulation'
+import { registerPreviewCapture } from './preview/capture'
 import { RollingCoordinator } from './rolling'
 import { SchedulerCoordinator } from './scheduler'
 import { CodexRollingCoordinator } from './codexRolling'
@@ -230,6 +231,9 @@ function createWindow(): BrowserWindow {
   // goes through this instead — and it uses Electron's own API rather than the debugger, which keeps
   // the debugger free for DevTools.
   registerPreviewEmulation()
+  // Element screenshots for Design Mode, saved under userData/preview/shots — the path is what the
+  // prompt carries.
+  registerPreviewCapture(app.getPath('userData'))
 
   // Closing the window (X) minimizes to the tray on Windows and macOS — whether or not sessions
   // exist. There the only real quit path is the tray 'Quit' menu (app.quit): app.quit sets

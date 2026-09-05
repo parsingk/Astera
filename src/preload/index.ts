@@ -202,7 +202,8 @@ const api = {
   },
   preview: {
     toggleDevTools: invoke('preview.toggleDevTools'),
-    emulate: invoke('preview.emulate')
+    emulate: invoke('preview.emulate'),
+    captureElement: invoke('preview.captureElement')
   },
   clipboard: {
     readText: () => clipboard.readText(),
