@@ -145,6 +145,10 @@ export function BrowserPane({
   const [designMode, setDesignMode] = useState(false)
   const [annotations, setAnnotations] = useState<Annotation[]>([])
   const [focusAnnotationId, setFocusAnnotationId] = useState<string | null>(null)
+  // The Copy button says "copied" for a moment instead of raising a toast
+  const [copied, setCopied] = useState(false)
+  const copiedTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(copiedTimer.current), [])
   const [sendMenu, setSendMenu] = useState<{ x: number; y: number } | null>(null)
   // Read by the Escape handler, which is registered once and must not close over a stale value
   const sendMenuRef = useRef(sendMenu)
@@ -623,7 +627,10 @@ export function BrowserPane({
     const text = promptText()
     if (!text) return
     window.api.clipboard.writeText(text)
-    toast.info(t('preview.design.copied'))
+    // The button itself says "copied" for a moment. A toast as well was two notices for one click.
+    window.clearTimeout(copiedTimer.current)
+    setCopied(true)
+    copiedTimer.current = window.setTimeout(() => setCopied(false), 1400)
   }
   const sendTo = (sessionId: string): void => {
     const text = promptText()
@@ -775,20 +782,21 @@ export function BrowserPane({
             )}
           </div>
         )}
+        {annotations.length > 0 && (
+          <AnnotationTray
+            annotations={annotations}
+            canSend={sessions.length > 0}
+            onChange={updateAnnotation}
+            onDelete={deleteAnnotation}
+            onClear={clearAnnotations}
+            onCopy={copyAnnotations}
+            copied={copied}
+            onSend={onSendClick}
+            onFocusAnnotation={focusAnnotation}
+            focusId={focusAnnotationId}
+          />
+        )}
       </div>
-      {annotations.length > 0 && (
-        <AnnotationTray
-          annotations={annotations}
-          canSend={sessions.length > 0}
-          onChange={updateAnnotation}
-          onDelete={deleteAnnotation}
-          onClear={clearAnnotations}
-          onCopy={copyAnnotations}
-          onSend={onSendClick}
-          onFocusAnnotation={focusAnnotation}
-          focusId={focusAnnotationId}
-        />
-      )}
       {sendMenu && <ContextMenu x={sendMenu.x} y={sendMenu.y} items={sendItems} onClose={() => setSendMenu(null)} />}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
     </div>

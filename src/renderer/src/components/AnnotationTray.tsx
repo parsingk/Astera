@@ -2,10 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import { INTENTS, PICK_BUDGET, type Annotation, type Intent } from '../../../core/preview/pick/types'
 import { annotationLabel } from '../../../core/preview/pick/prompt'
 import { useI18n } from '../i18n/I18nProvider'
-import { Select } from './Select'
 
-/** The collected annotations under a preview page — one card each, the Send/Copy/Clear head. Owns
- *  nothing but its collapsed flag; the list and every edit belong to BrowserPane. */
+/** The collected annotations, as a card floating over the page rather than a strip beneath it.
+ *
+ *  It sits inside the stage on purpose. The strip took a row of its own, so the guest reflowed the
+ *  moment the first annotation arrived and every badge already on screen moved with it. A floating
+ *  card covers a corner instead and the page never changes size.
+ *
+ *  A row shows what was picked and what was said about it; the comment opens for editing only when
+ *  asked. Owns the collapsed flag and which row is being edited — the list itself belongs to
+ *  BrowserPane. */
 export function AnnotationTray({
   annotations,
   canSend,
@@ -13,6 +19,7 @@ export function AnnotationTray({
   onDelete,
   onClear,
   onCopy,
+  copied,
   onSend,
   onFocusAnnotation,
   focusId
@@ -23,67 +30,137 @@ export function AnnotationTray({
   onDelete: (id: string) => void
   onClear: () => void
   onCopy: () => void
+  copied: boolean
   onSend: (anchor: DOMRect) => void
   onFocusAnnotation: (id: string) => void
   focusId: string | null
 }): React.JSX.Element {
   const { t } = useI18n()
   const [collapsed, setCollapsed] = useState(false)
-  const commentRefs = useRef(new Map<string, HTMLTextAreaElement>())
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [draft, setDraft] = useState('')
+  const [draftIntent, setDraftIntent] = useState<Intent>('fix')
+  const rowRefs = useRef(new Map<string, HTMLDivElement>())
+  const editRef = useRef<HTMLTextAreaElement | null>(null)
 
-  // A new annotation's comment takes the caret — the user has just clicked, and typing is the next thing
+  // A delete or a clear while a row is open must not leave the editor pointing at nothing
+  useEffect(() => {
+    if (editingId && !annotations.some((a) => a.id === editingId)) setEditingId(null)
+  }, [annotations, editingId])
+
+  // The newest row scrolls itself into view. The card is short, and without this the annotation just
+  // made is the one you cannot see.
   useEffect(() => {
     if (!focusId) return
-    const el = commentRefs.current.get(focusId)
-    if (el) el.focus()
+    rowRefs.current.get(focusId)?.scrollIntoView({ block: 'nearest' })
   }, [focusId])
 
-  const intentItems = INTENTS.map((i) => ({ value: i, label: t(`preview.design.intent.${i}`) }))
+  useEffect(() => {
+    if (editingId) editRef.current?.focus()
+  }, [editingId])
+
+  const startEdit = (a: Annotation): void => {
+    setEditingId(a.id)
+    setDraft(a.comment)
+    setDraftIntent(a.intent)
+  }
+
+  const saveEdit = (): void => {
+    if (!editingId) return
+    onChange(editingId, { comment: draft.trim(), intent: draftIntent })
+    setEditingId(null)
+  }
 
   return (
     <div className={`dm-tray${collapsed ? ' collapsed' : ''}`}>
       <div className="dm-head">
         <span className="dm-title">{t('preview.design.tray.title', { count: annotations.length })}</span>
-        <button type="button" className="primary" disabled={!canSend} title={canSend ? undefined : t('preview.design.noSession')} onClick={(e) => onSend(e.currentTarget.getBoundingClientRect())}>
+        <button
+          type="button"
+          className="primary"
+          disabled={!canSend}
+          title={canSend ? undefined : t('preview.design.noSession')}
+          onClick={(e) => onSend(e.currentTarget.getBoundingClientRect())}
+        >
           {t('preview.design.send')}
         </button>
-        <button type="button" onClick={onCopy}>{t('preview.design.copy')}</button>
-        <button type="button" onClick={onClear}>{t('preview.design.clear')}</button>
-        <button type="button" aria-expanded={!collapsed} onClick={() => setCollapsed((c) => !c)}>{collapsed ? '▴' : '▾'}</button>
+        <button type="button" onClick={onCopy}>
+          {copied ? t('preview.design.copied') : t('preview.design.copy')}
+        </button>
+        <button type="button" className="ghost" aria-label={t('preview.design.clear')} title={t('preview.design.clear')} onClick={onClear}>
+          🗑
+        </button>
+        <button type="button" className="ghost" aria-expanded={!collapsed} aria-label={t('preview.design.collapse')} onClick={() => setCollapsed((c) => !c)}>
+          {collapsed ? '▴' : '▾'}
+        </button>
       </div>
       {!collapsed && (
-        <div className="dm-cards">
+        <div className="dm-rows">
           {annotations.map((a) => (
-            <div key={a.id} className="dm-card" onClick={() => onFocusAnnotation(a.id)}>
+            <div
+              key={a.id}
+              className="dm-row"
+              ref={(el) => {
+                if (el) rowRefs.current.set(a.id, el)
+                else rowRefs.current.delete(a.id)
+              }}
+              onClick={() => onFocusAnnotation(a.id)}
+            >
               <span className="dm-seq" aria-hidden="true">{a.seq}</span>
-              {a.shotThumb ? (
-                // The data URL, not the saved file. Chromium refuses a `file:` URL from an `http:`
-                // document, and this renderer is served over http in development — pointing the card at
-                // the path gave a broken image for the whole working session and only came right in a
-                // packaged build. The path still goes to the agent, which reads files.
-                <img className="dm-shot" src={a.shotThumb} alt="" />
+              {a.id === editingId ? (
+                <div
+                  className="dm-edit"
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    // The picker's own Escape listener is on the window; without this, cancelling an
+                    // edit would turn Design Mode off with it
+                    e.stopPropagation()
+                    if (e.key === 'Escape') { e.preventDefault(); setEditingId(null) }
+                  }}
+                >
+                  <textarea
+                    ref={editRef}
+                    rows={2}
+                    maxLength={PICK_BUDGET.comment}
+                    placeholder={t('preview.design.comment')}
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                  />
+                  <div className="dm-intents" role="group" aria-label={t('preview.design.intent.label')}>
+                    {INTENTS.map((i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        className={i === draftIntent ? 'on' : undefined}
+                        aria-pressed={i === draftIntent}
+                        onClick={() => setDraftIntent(i)}
+                      >
+                        {t(`preview.design.intent.${i}`)}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="dm-edit-actions">
+                    <button type="button" onClick={() => setEditingId(null)}>{t('preview.design.cancel')}</button>
+                    <button type="button" className="primary" onClick={saveEdit}>{t('preview.design.save')}</button>
+                  </div>
+                </div>
               ) : (
-                <span className="dm-shot empty">—</span>
+                <>
+                  <div className="dm-body">
+                    <div className="dm-label" title={annotationLabel(a.payload)}>{annotationLabel(a.payload)}</div>
+                    {a.comment && <div className="dm-comment">{a.comment}</div>}
+                    <div className="dm-intent">{t(`preview.design.intent.${a.intent}`)}</div>
+                  </div>
+                  <div className="dm-actions" onClick={(e) => e.stopPropagation()}>
+                    <button type="button" className="ghost" aria-label={t('preview.design.edit', { seq: a.seq })} title={t('preview.design.edit', { seq: a.seq })} onClick={() => startEdit(a)}>
+                      ✎
+                    </button>
+                    <button type="button" className="ghost danger" aria-label={t('preview.design.delete')} title={t('preview.design.delete')} onClick={() => onDelete(a.id)}>
+                      🗑
+                    </button>
+                  </div>
+                </>
               )}
-              <span className="dm-label" title={annotationLabel(a.payload)}>{annotationLabel(a.payload)}</span>
-              <textarea
-                className="dm-comment"
-                ref={(el) => {
-                  if (el) commentRefs.current.set(a.id, el)
-                  else commentRefs.current.delete(a.id)
-                }}
-                rows={1}
-                maxLength={PICK_BUDGET.comment}
-                placeholder={t('preview.design.comment')}
-                value={a.comment}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => onChange(a.id, { comment: e.target.value })}
-                onKeyDown={(e) => e.stopPropagation()}
-              />
-              <div className="dm-side" onClick={(e) => e.stopPropagation()}>
-                <Select items={intentItems} value={a.intent} onChange={(v) => onChange(a.id, { intent: v as Intent })} ariaLabel={t('preview.design.intent.label')} noCheck />
-                <button type="button" className="ghost danger" aria-label={t('preview.design.delete')} title={t('preview.design.delete')} onClick={() => onDelete(a.id)}>×</button>
-              </div>
             </div>
           ))}
         </div>
