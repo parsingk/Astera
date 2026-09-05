@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { clampPayload, isSecretName, isSecretValue, sanitizeUrl } from './payload'
+import { clampPayload, containsSecret, isSecretName, isSecretValue, sanitizeUrl } from './payload'
 import { PICK_BUDGET, STYLE_KEYS } from './types'
 
 const styles = Object.fromEntries(STYLE_KEYS.map((k) => [k, 'x']))
@@ -136,4 +136,47 @@ describe('the three ways a secret nearly got through', () => {
     for (const v of ['1.2.3', 'foo.bar.com', 'a.b.c', 'module.exports.default'])
       expect(isSecretValue(v), v).toBe(false)
   })
+})
+
+describe('the two ways a secret still got out of the HTML', () => {
+  // Both found by review, both reachable from a page that tampers with the picker.
+  it('an unquoted attribute value is redacted like a quoted one', () => {
+    const out = clampPayload({ ...raw, htmlSnippet: '<div data-token=AKIAIOSFODNN7EXAMPLE1 class=card></div>' })!.htmlSnippet
+    expect(out).not.toContain('AKIAIOSFODNN7EXAMPLE1')
+    expect(out).toContain('data-token="[redacted]"')
+    expect(out).toContain('class=card')
+  })
+
+  it('an unquoted hidden input loses its value', () => {
+    const out = clampPayload({ ...raw, htmlSnippet: '<input type=hidden name=csrf value=8a3f9b2c>' })!.htmlSnippet
+    expect(out).not.toContain('8a3f9b2c')
+    expect(out).toContain('value="[redacted]"')
+  })
+
+  it('a key buried inside a larger value goes too', () => {
+    const html = '<div data-config=\'{"apiKey":"AIzaSyDEADBEEF1234567890","other":"fine"}\'></div>'
+    const out = clampPayload({ ...raw, htmlSnippet: html })!.htmlSnippet
+    expect(out).not.toContain('AIzaSyDEADBEEF1234567890')
+    expect(out).toContain('data-config="[redacted]"')
+  })
+
+  it('and out of a query parameter, wherever in the value it sits', () => {
+    expect(sanitizeUrl('https://a.b/c?config={"k":"AIzaSyDEADBEEF1234567890"}&page=2')).toBe('https://a.b/c?page=2')
+  })
+})
+
+describe('containsSecret does not swallow ordinary text', () => {
+  it.each([
+    'some-really-long-descriptive-class-name',
+    'a sentence that happens to be quite long indeed',
+    'btn btn-primary btn-large is-active',
+    '1.2.3',
+    'https://example.com/docs/getting-started'
+  ])('%s is left alone', (v) => expect(containsSecret(v)).toBe(false))
+
+  it.each([
+    'AIzaSyDEADBEEF1234567890',
+    'ab'.repeat(20),
+    'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk'
+  ])('%s is a secret', (v) => expect(containsSecret(v)).toBe(true))
 })

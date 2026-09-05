@@ -6,23 +6,43 @@ import { isFiniteRect } from './rect'
 import { PICK_BUDGET, STYLE_KEYS, type ComputedStyles, type PickPayload, type Rect } from './types'
 
 const SECRET_NAME = /token|secret|passw|api[-_]?key|auth|cookie|session|csrf|jwt|bearer|credential|private[-_]?key/i
-/** One long unbroken run of base64 or hex — the shape of a key, not of a word. */
-const SECRET_RUN = /^(?:[A-Za-z0-9+/=_-]{32,}|[0-9a-fA-F]{32,})$/
+/** Characters a key is made of, and enough of them to be one. Length alone is not evidence: a
+ *  descriptive class name is long and made of exactly these characters. */
+const KEY_CHARS = /^[A-Za-z0-9+/=_-]{32,}$/
 /** Three base64url segments joined by dots: a JWT, and anything else built the same way. The dots are
- *  why SECRET_RUN misses these — it wants one unbroken run — and a name like `data-jwt` on its own
- *  told us nothing before `jwt` joined SECRET_NAME. Ten characters a segment keeps version strings
+ *  why the run test misses these — it wants one unbroken stretch — and a name like `data-jwt` on its
+ *  own told us nothing before `jwt` joined SECRET_NAME. Ten characters a segment keeps version strings
  *  and dotted host names out of it. */
 const SECRET_SEGMENTS = /^[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}$/
+/** A run of key characters found inside something larger. Shorter than the whole-value threshold
+ *  because it has already been picked out of its surroundings. */
+const SECRET_INSIDE = /[A-Za-z0-9+/=_-]{24,}/g
+
+/** Does this run read like a key rather than like words? A long stretch of hex, or a mixture of both
+ *  cases and digits — which a hand-written identifier is not, and a phrase cannot be, since a space
+ *  ends the run. */
+function looksLikeKey(run: string): boolean {
+  if (/^[0-9a-fA-F]{32,}$/.test(run)) return true
+  return /[a-z]/.test(run) && /[A-Z]/.test(run) && /\d/.test(run)
+}
+
+/** Is the whole value a secret? Deliberately biased towards redacting: a content hash and a dash-free
+ *  UUID are caught too, and losing one of those from a prompt costs nothing next to leaking a key. */
+export function isSecretValue(value: string): boolean {
+  return (KEY_CHARS.test(value) && looksLikeKey(value)) || SECRET_SEGMENTS.test(value)
+}
+
+/** Does this value carry a secret anywhere in it? The whole-value test misses a key embedded in
+ *  something larger — `data-config='{"apiKey":"AIza…"}'` is a real shape on a real page, and checking
+ *  only the whole value let it through untouched. */
+export function containsSecret(value: string): boolean {
+  if (isSecretValue(value)) return true
+  for (const run of value.match(SECRET_INSIDE) ?? []) if (looksLikeKey(run)) return true
+  return false
+}
 
 export function isSecretName(name: string): boolean {
   return SECRET_NAME.test(name)
-}
-
-/** Does this value look like a secret whatever it is called? Deliberately biased towards redacting:
- *  a content hash or a dash-free UUID is caught too, and losing one of those from a prompt costs
- *  nothing next to leaking a key. */
-export function isSecretValue(value: string): boolean {
-  return SECRET_RUN.test(value) || SECRET_SEGMENTS.test(value)
 }
 
 /** http(s) only, with credentials and sensitive query parameters removed. Anything else becomes ''.
@@ -45,7 +65,7 @@ export function sanitizeUrl(u: string): string {
   parsed.username = ''
   parsed.password = ''
   for (const [key, value] of [...parsed.searchParams.entries()])
-    if (isSecretName(key) || isSecretValue(value)) parsed.searchParams.delete(key)
+    if (isSecretName(key) || containsSecret(value)) parsed.searchParams.delete(key)
   return parsed.href.slice(0, PICK_BUDGET.url)
 }
 
@@ -62,14 +82,17 @@ function styles(v: unknown): ComputedStyles | null {
   return out
 }
 
-/** An attribute inside a serialised element: `name="value"` or `name='value'`. */
-const HTML_ATTRIBUTE = /([A-Za-z_:][-\w:.]*)\s*=\s*("([^"]*)"|'([^']*)')/g
-/** An `<input>` whose type is hidden or password. Its `value` is state the page is carrying, never
- *  anything a remark about the look of a screen is about — a CSRF token, a form nonce, a typed
- *  password. The attribute rules cannot reach it: the name is `value`, and the secret is the value. */
-const HTML_SECRET_INPUT = /<input\b[^>]*\btype\s*=\s*["'](?:hidden|password)["'][^>]*>/gi
+/** An attribute inside a serialised element. The value may be double-quoted, single-quoted or bare:
+ *  HTML allows `data-token=abc`, and matching only quoted values let exactly that through. */
+const HTML_ATTRIBUTE = /([A-Za-z_:][-\w:.]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'`=<>]+))/g
 /** A script or style element and everything between its tags. */
 const HTML_INLINE_BLOCK = /<(script|style)\b([^>]*)>[\s\S]*?<\/\1\s*>/gi
+/** An `<input>` whose type is hidden or password — quoted or not. Its `value` is state the page is
+ *  carrying, never anything a remark about the look of a screen is about: a CSRF token, a form nonce,
+ *  a typed password. The attribute rules cannot reach it, because the name is `value` and the secret
+ *  is the value. */
+const HTML_SECRET_INPUT = /<input\b[^>]*\btype\s*=\s*["']?(?:hidden|password)\b["']?[^>]*>/gi
+const HTML_VALUE_ATTRIBUTE = /\bvalue\s*=\s*("[^"]*"|'[^']*'|[^\s"'`=<>]+)/i
 
 /** The element's own markup, with what should not travel taken out of it.
  *
@@ -87,12 +110,12 @@ const HTML_INLINE_BLOCK = /<(script|style)\b([^>]*)>[\s\S]*?<\/\1\s*>/gi
 export function redactHtml(html: string): string {
   return html
     .replace(HTML_SECRET_INPUT, (tag: string) =>
-      tag.replace(/\bvalue\s*=\s*("[^"]*"|'[^']*')/i, 'value="[redacted]"')
+      tag.replace(HTML_VALUE_ATTRIBUTE, 'value="[redacted]"')
     )
     .replace(HTML_INLINE_BLOCK, (_m, tag: string, attrs: string) => `<${tag}${attrs}>[redacted]</${tag}>`)
-    .replace(HTML_ATTRIBUTE, (whole: string, name: string, _q: string, dq?: string, sq?: string) => {
-      const value = dq ?? sq ?? ''
-      return isSecretName(name) || isSecretValue(value) ? `${name}="[redacted]"` : whole
+    .replace(HTML_ATTRIBUTE, (whole: string, name: string, _q: string, dq?: string, sq?: string, uq?: string) => {
+      const value = dq ?? sq ?? uq ?? ''
+      return isSecretName(name) || containsSecret(value) ? `${name}="[redacted]"` : whole
     })
 }
 
