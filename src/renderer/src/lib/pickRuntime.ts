@@ -101,8 +101,15 @@ export function pickerRuntime(): Promise<unknown> {
   function nearbyText(el: Element): string[] {
     const out: string[] = []
     const seen: Record<string, boolean> = {}
+    // What is not content: our own overlay and badges, and the elements whose text the page never
+    // shows. `innerText` is empty for all of those, so the `textContent` fallback below used to reach
+    // the stylesheet inside <head> and the bootstrap JSON inside a <script> — and a page's bootstrap
+    // JSON is where its keys are. Seen on a real dev page: a `__NEXT_DATA__` body listed as nearby
+    // text under all three annotations of one batch.
+    const skip = { HEAD: 1, SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEMPLATE: 1, LINK: 1, META: 1 } as Record<string, number>
     const push = function (n: Element | null) {
       if (!n || n === el || out.length >= 10) return
+      if (skip[n.tagName] || n.hasAttribute('data-astera-pick')) return
       const t = ((n as HTMLElement).innerText || n.textContent || '').replace(/\s+/g, ' ').trim()
       if (t && !seen[t]) { seen[t] = true; out.push(t.slice(0, 200)) }
     }
@@ -324,6 +331,16 @@ export function badgesRuntime(markers: { seq: number; rectPage: { x: number; y: 
     window.addEventListener('resize', state.onUpdate, true)
   }
   if (state.onUpdate) state.onUpdate()
+}
+
+/** Hides or restores everything the picker injected. A capture is taken through the page the picker
+ *  is standing on: without this the shot carried the highlight box's blue border and its 12% blue
+ *  wash over the element, plus the numbered badges of every earlier annotation. The agent reading one
+ *  described the border as part of the design. `visibility` rather than `display`, so nothing the
+ *  page laid out around a badge moves between the two calls. */
+export function chromeRuntime(hidden: boolean): void {
+  const nodes = document.querySelectorAll('[data-astera-pick]')
+  for (let i = 0; i < nodes.length; i += 1) (nodes[i] as HTMLElement).style.visibility = hidden ? 'hidden' : ''
 }
 
 /** Flashes one rect for about a second. */

@@ -165,6 +165,30 @@ describe('the two ways a secret still got out of the HTML', () => {
   })
 })
 
+describe('the way a secret got past the HTML rules entirely', () => {
+  // Found in the dev app, not by review: every attribute of the demo page was redacted, and the same
+  // key arrived anyway as prose. `innerText` is empty for a <script>, so the guest's collector fell
+  // through to `textContent` and read the bootstrap JSON — under all three annotations of one batch.
+  const NEXT_DATA = '{"props":{"secretKey":"AIzaSyTOPSECRET0987654321"}}'
+
+  it('drops a nearby-text entry carrying a key, and keeps the ones beside it', () => {
+    const out = clampPayload({ ...raw, nearbyText: ['Pricing', NEXT_DATA, 'Save changes'] })!
+    expect(out.nearbyText).toEqual(['Pricing', 'Save changes'])
+  })
+
+  it('drops before capping the count, so a leak does not cost a slot', () => {
+    const many = [NEXT_DATA, ...Array.from({ length: PICK_BUDGET.nearbyTextEntries }, (_, i) => `t${i}`)]
+    const out = clampPayload({ ...raw, nearbyText: many })!
+    expect(out.nearbyText).toHaveLength(PICK_BUDGET.nearbyTextEntries)
+    expect(out.nearbyText.join(' ')).not.toContain('AIzaSy')
+  })
+
+  it('redacts the element’s own text when that is where the key is', () => {
+    expect(clampPayload({ ...raw, textSnippet: NEXT_DATA })!.textSnippet).toBe('[redacted]')
+    expect(clampPayload({ ...raw, textSnippet: 'Save changes to your plan' })!.textSnippet).toBe('Save changes to your plan')
+  })
+})
+
 describe('containsSecret does not swallow ordinary text', () => {
   it.each([
     'some-really-long-descriptive-class-name',

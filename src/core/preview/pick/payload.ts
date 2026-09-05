@@ -119,10 +119,21 @@ export function redactHtml(html: string): string {
     })
 }
 
+/** Prose that reaches the prompt. A page's visible text is not usually where a key lives, but the
+ *  guest reads it with `innerText || textContent`, and `innerText` is empty for a `<script>` — so a
+ *  framework's bootstrap JSON arrives here as "the element's text", carrying exactly the secrets the
+ *  HTML rules take out of the markup. Measured on a real dev page: a `__NEXT_DATA__` body reached the
+ *  session in all three of a batch's annotations while every attribute beside it was redacted. */
+const safeText = (t: string): string => (containsSecret(t) ? '[redacted]' : t)
+
+/** Text of the elements around the pick, secret-bearing entries dropped rather than redacted: an
+ *  entry is free-form prose whose value is the context it gives, and a redacted one gives none.
+ *  Dropped before the count is capped, so a leak does not spend one of the ten slots. */
 function nearbyText(v: unknown): string[] {
   if (!Array.isArray(v)) return []
   return v
     .filter((t): t is string => typeof t === 'string' && t.trim() !== '')
+    .filter((t) => !containsSecret(t))
     .slice(0, PICK_BUDGET.nearbyTextEntries)
     .map((t) => t.slice(0, PICK_BUDGET.nearbyTextEntry))
 }
@@ -154,7 +165,7 @@ export function clampPayload(raw: unknown): PickPayload | null {
     selector: str(o.selector, PICK_BUDGET.selector),
     elementPath: str(o.elementPath, PICK_BUDGET.elementPath),
     cssClasses: str(o.cssClasses, PICK_BUDGET.cssClasses),
-    textSnippet: str(o.textSnippet, PICK_BUDGET.textSnippet),
+    textSnippet: safeText(str(o.textSnippet, PICK_BUDGET.textSnippet)),
     htmlSnippet: redactHtml(str(o.htmlSnippet, PICK_BUDGET.htmlSnippet)),
     accessibility: { role: strOrNull(a.role, PICK_BUDGET.role), accessibleName: strOrNull(a.accessibleName, PICK_BUDGET.accessibleName) },
     rectViewport,
