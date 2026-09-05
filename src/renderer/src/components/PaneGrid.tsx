@@ -59,6 +59,7 @@ export function PaneGrid({
   onSetRatio,
   onDropTabIntoPane,
   onRestart,
+  onOpenUrl,
   onSelectTab,
   onCloseTab,
   onNewInGroup,
@@ -103,6 +104,8 @@ export function PaneGrid({
   /** Dropped on a pane's body — an edge zone splits, the centre moves into that pane */
   onDropTabIntoPane: (paneId: string, zone: DropZone, tabId: string) => void
   onRestart: (s: SessionInfo) => void
+  /** A URL link in a session terminal was activated — App's link rule routes it. */
+  onOpenUrl: (url: string, ev: MouseEvent) => void
   /** A tab was clicked — of any kind. App activates it in the tree, which also moves the focus there */
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
@@ -231,6 +234,7 @@ export function PaneGrid({
               rollState={rollStates[s.id] ?? null}
               schedState={schedStates[s.id] ?? null}
               active={visible && pane != null && pane.id === activePaneId}
+              onOpenUrl={onOpenUrl}
             />
           </div>
         )

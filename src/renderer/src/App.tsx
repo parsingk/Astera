@@ -102,7 +102,7 @@ import {
 } from '../../core/panes/tree'
 import { browserTab, fileTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
 import { placeTab } from '../../core/panes/place'
-import { normalizeUrl } from '../../core/preview/url'
+import { linkDestination, normalizeUrl, previewTargetOf } from '../../core/preview/url'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
 import { PanelLeft, Settings, X } from 'lucide-react'
@@ -2284,6 +2284,17 @@ export default function App(): React.JSX.Element {
   const openBrowserTabRef = useRef(openBrowserTab)
   openBrowserTabRef.current = openBrowserTab
 
+  /** The one link rule (core/preview/url.ts): a loopback address opens in a preview tab, anything else
+   *  in the system browser, and Ctrl (Cmd on macOS) inverts. Every xterm's URL link and the guest's
+   *  popups land here. */
+  const openUrl = (url: string, ev?: { ctrlKey: boolean; metaKey: boolean }): void => {
+    const modifier = !!ev && (ev.ctrlKey || ev.metaKey)
+    if (linkDestination(url, { modifier }) === 'preview') openBrowserTab(previewTargetOf(url))
+    else void window.api.system.openExternal(url)
+  }
+  const openUrlRef = useRef(openUrl)
+  openUrlRef.current = openUrl
+
   /** What BrowserPane reports. Split across the two states so a page title update does not touch the
    *  loading map and vice versa. */
   const onBrowserState = (tabId: string, patch: BrowserStatePatch): void => {
@@ -2732,6 +2743,9 @@ export default function App(): React.JSX.Element {
       offFailed()
     }
   }, [])
+
+  // A preview page asked for a window. Main denied it and sent the address; the link rule routes it.
+  useEffect(() => window.api.on('preview:popup', ({ url }) => openUrlRef.current(url)), [])
 
   // The selection must never name a run the list no longer holds — with nothing to draw, the Run tab
   // shows an empty console and no row highlighted. runStart and runDismiss keep it right for what the
@@ -3561,6 +3575,7 @@ export default function App(): React.JSX.Element {
                 onTabContextMenu={(tabId, x, y) => setTabMenu({ tabId, x, y })}
                 onDragTabChange={setDragTabId}
                 onDropTabInBar={dropTabInGroup}
+                onOpenUrl={openUrl}
               />
               {/* When the layout is empty (not one group in the tree) there is no group tab bar, so there
                   is no '+' anywhere on screen — this placeholder becomes the sole entry point in its
@@ -3643,6 +3658,7 @@ export default function App(): React.JSX.Element {
                     onRerun={(configId) => runStart(configId)}
                     onDismissRun={runDismiss}
                     onOpenFile={(path, at) => openFile(path, at.line === undefined ? undefined : { line: at.line, col: at.col })}
+                    onOpenUrl={openUrl}
                     terminals={terminals}
                     activeTab={bottomTabShown}
                     onSelectTab={setBottomTab}

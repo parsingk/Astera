@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { Terminal, type ILink } from '@xterm/xterm'
+import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon, type ISearchOptions } from '@xterm/addon-search'
 import '@xterm/xterm/css/xterm.css'
 import { xtermThemeOf } from '../../../core/theme/apply'
 import type { Theme } from '../../../core/theme/themes'
-import { bufferRangeAt, cellsOfJoinedLine, findConsoleLinks, joinWrappedLine } from '../../../core/run/consoleLinks'
 import { consoleTerminalOptions, findHighlightPaint } from '../../../core/run/consoleTerminal'
 import { pinCursorBlinkOff } from '../lib/cursorBlink'
 import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
+import { attachConsoleLinks } from '../terminalLinks'
 import { RunFindBar } from './RunFindBar'
 
 /** The app's amber, which both the find highlights and the console's selection colour are built from.
@@ -41,8 +41,9 @@ function searchDecorations(theme: Theme): ISearchOptions['decorations'] {
 }
 
 /** One run's console. The tab strip, the tool rail and the header are owned by BottomPanel; this draws
- *  xterm, plus the two things that live on the terminal itself: the link provider (a file path in the
- *  output opens the file at that line, a URL opens the browser) and the search addon with its find bar.
+ *  xterm, plus the two things that live on the terminal itself: the link provider (shared —
+ *  terminalLinks.ts; a file path in the output opens the file at that line, a URL opens the preview or
+ *  the browser) and the search addon with its find bar.
  *  clearNonce / scrollToEndNonce: counters BottomPanel bumps for this run. */
 export function RunPanel({
   runId,
@@ -50,7 +51,8 @@ export function RunPanel({
   scrollToEndNonce,
   findOpen,
   onFindOpenChange,
-  onOpenFile
+  onOpenFile,
+  onOpenUrl
 }: {
   runId: string
   clearNonce: number
@@ -60,6 +62,8 @@ export function RunPanel({
   onFindOpenChange: (open: boolean) => void
   /** A path link was activated — resolved by main already, so `path` is absolute and exists */
   onOpenFile: (path: string, at: { line?: number; col?: number }) => void
+  /** A URL link was activated. App's link rule decides preview or outside; the event carries Ctrl/Cmd. */
+  onOpenUrl: (url: string, ev: MouseEvent) => void
 }): React.JSX.Element {
   const { family } = useTerminalFont()
   const { theme } = useTheme()
@@ -74,6 +78,8 @@ export function RunPanel({
   onFindOpenChangeRef.current = onFindOpenChange
   const onOpenFileRef = useRef(onOpenFile)
   onOpenFileRef.current = onOpenFile
+  const onOpenUrlRef = useRef(onOpenUrl)
+  onOpenUrlRef.current = onOpenUrl
 
   // One xterm per run — a new one is created when runId changes
   useEffect(() => {
@@ -139,70 +145,10 @@ export function RunPanel({
       }
       return true
     })
-    // Resolutions are cached per target: xterm asks about the row under the pointer, so the same line
-    // is re-asked on every mouse move across it. The cache's cost is that a path printed *before* the
-    // file is written (a build artifact, a generated snapshot) caches null and never becomes a link for
-    // this run's life.
-    const resolved = new Map<string, Promise<string | null>>()
-    const resolve = (target: string): Promise<string | null> => {
-      let p = resolved.get(target)
-      if (!p) {
-        p = window.api.run.resolveLink(runId, target).then(
-          (r) => r?.path ?? null,
-          () => null
-        )
-        resolved.set(target, p)
-      }
-      return p
-    }
-    const provider = term.registerLinkProvider({
-      provideLinks: (y, callback) => {
-        const buf = term.buffer.active
-        // Untrimmed rows, so `text`'s length matches the cell table built below (which also doesn't trim)
-        const getLine = (row: number): { text: string; isWrapped: boolean } | undefined => {
-          const l = buf.getLine(row)
-          return l ? { text: l.translateToString(false), isWrapped: l.isWrapped } : undefined
-        }
-        const { text, startY } = joinWrappedLine(getLine, y - 1) // y is 1-based, getLine 0-based
-        const found = findConsoleLinks(text)
-        if (found.length === 0) {
-          callback(undefined)
-          return
-        }
-        // One entry per code unit of `text`, from the real cells — see cellsOfJoinedLine for why a cell
-        // is not a character in either direction. getNullCell gives the loop one object to reuse, which
-        // is what IBufferLine.getCell's second parameter is for: this runs on every hover over the row.
-        const cellBuf = buf.getNullCell()
-        const cells = cellsOfJoinedLine((row) => {
-          const line = buf.getLine(row)
-          if (!line) return undefined
-          const out: { width: number; chars: string }[] = []
-          for (let x = 0; x < line.length; x += 1) {
-            const c = line.getCell(x, cellBuf)
-            if (!c) break
-            out.push({ width: c.getWidth(), chars: c.getChars() })
-          }
-          return { cells: out, isWrapped: line.isWrapped }
-        }, startY)
-        void Promise.all(
-          found.map(async (l): Promise<ILink | null> => {
-            const range = bufferRangeAt(cells, l.start, l.end)
-            if (l.kind === 'url') {
-              return { range, text: l.url, activate: () => void window.api.system.openExternal(l.url) }
-            }
-            const path = await resolve(l.target)
-            if (!path) return null
-            return {
-              range,
-              text: l.target,
-              activate: () => onOpenFileRef.current(path, { line: l.line, col: l.col })
-            }
-          })
-        ).then((links) => {
-          const real = links.filter((l): l is ILink => l !== null)
-          callback(real.length > 0 ? real : undefined)
-        }).catch(() => callback(undefined))
-      }
+    const disposeLinks = attachConsoleLinks(term, {
+      onUrl: (url, ev) => onOpenUrlRef.current(url, ev),
+      resolvePath: (target) => window.api.run.resolveLink(runId, target).then((r) => r?.path ?? null, () => null),
+      onOpenFile: (path, at) => onOpenFileRef.current(path, at)
     })
     // Reconnect: replay the buffered output first (the cancelled guard prevents a write after a switch or unmount)
     let cancelled = false
@@ -226,7 +172,7 @@ export function RunPanel({
     return () => {
       cancelled = true
       off()
-      provider.dispose()
+      disposeLinks()
       onResults.dispose()
       blinkGuard.dispose()
       input.dispose()
