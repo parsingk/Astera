@@ -29,6 +29,21 @@ export interface RecordTab {
   projectRoot: string
 }
 
+/** Preview tab. Renderer-only, like FileTab; `id` is `browser:<uuid>` (core/panes/tabId's browserTab). */
+export interface BrowserTab {
+  id: string
+  /** The current address — updated from the page's own navigation events, so the address bar and the
+   *  reuse rule in App's openBrowserTab see where the tab actually is, not where it started. */
+  url: string
+  /** Page title. The chip and the toolbar fall back to `host:port` while it is empty. */
+  title: string
+  /** The project this tab belongs to. Same role, same reason as FileTab.projectRoot. */
+  projectRoot: string
+  /** Set by auto-open: the run whose server this tab is waiting for. While that run is live a
+   *  connection-refused load means "not up yet" and is retried; cleared on the first finished load. */
+  awaitRunId?: string
+}
+
 /** The tabs shown on one pane's tab bar. Draws file tabs, session tabs and record tabs in one row.
  *
  *  Each kind marks itself differently — a session tab carries the account color, a busy spinner and a
