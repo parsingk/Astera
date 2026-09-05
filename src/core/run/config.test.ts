@@ -361,6 +361,11 @@ describe('seedKeyOf', () => {
       'dockerfile:astera:dev'
     )
   })
+
+  it('previewUrl is decoration, not identity', () => {
+    const base = { id: 'x', name: 'x', type: 'npm', script: 'dev' } as const
+    expect(seedKeyOf({ ...base, previewUrl: 'http://localhost:5173' })).toBe(seedKeyOf(base))
+  })
 })
 
 describe('parseEnvLines', () => {

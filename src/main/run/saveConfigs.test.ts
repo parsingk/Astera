@@ -87,4 +87,38 @@ describe('saveConfigsBatch', () => {
       expect(out.ok).toBe(true)
     })
   })
+
+  it('refuses a previewUrl that is not an http(s) address', async () => {
+    const s = store()
+    const out = await saveConfigsBatch({
+      projectPath: '/p',
+      configs: [
+        { ...dev, previewUrl: 'ftp://x' },
+        { ...build, previewUrl: 'localhost:5173' },
+        { ...dev, id: 'user:9', previewUrl: ' ' }
+      ],
+      platform: 'linux',
+      assertConfigCwd: cwdOk,
+      store: s
+    })
+    expect(out).toEqual({
+      ok: false,
+      errors: [
+        { id: 'user:1', reason: 'INVALID_PREVIEW_URL' },
+        { id: 'user:2', reason: 'INVALID_PREVIEW_URL' },
+        { id: 'user:9', reason: 'INVALID_PREVIEW_URL' }
+      ]
+    })
+    expect(s.save).not.toHaveBeenCalled()
+  })
+
+  it('accepts http and https previewUrls, and on win32 does not read a URL as a command value', async () => {
+    const s = store()
+    const configs = [
+      { ...dev, previewUrl: 'http://localhost:5173' },
+      { ...build, previewUrl: 'https://app.localhost/?a=1&b=2' } // & would be UNSAFE_VALUE if it were checked
+    ]
+    const out = await saveConfigsBatch({ projectPath: '/p', configs, platform: 'win32', assertConfigCwd: cwdOk, store: s })
+    expect(out).toEqual({ ok: true, configs })
+  })
 })

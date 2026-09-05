@@ -48,6 +48,11 @@ interface RunConfigBase {
    *  allowMultipleInstances and beforeLaunch: how a configuration was created does not make it a
    *  different configuration. */
   temporary?: boolean
+  /** The address the preview tab opens when this configuration starts (the frontend preview design,
+   *  §4). http/https only — run.saveConfigs refuses anything else. Like folder, allowMultipleInstances
+   *  and beforeLaunch it is deliberately not part of seedKeyOf: telling a detected configuration where
+   *  its page is does not make it a different configuration. */
+  previewUrl?: string
 }
 
 /** A free-form command. This is where every pre-type config migrates to, and it is the only way
@@ -191,8 +196,9 @@ export type RunnableConfig = Exclude<RunConfig, CompoundConfig>
 /** Why run.saveConfigs refused an item. INVALID_CONFIG: not a configuration migrateRunConfigs accepts,
  *  a seed id (seeds are detected, never stored), or an id that appears twice in the batch.
  *  UNSAFE_VALUE: a field that reaches the command string holds a character cmd.exe interprets.
- *  INVALID_CWD: the working directory is not inside the project. */
-export type SaveReason = 'INVALID_CONFIG' | 'UNSAFE_VALUE' | 'INVALID_CWD'
+ *  INVALID_CWD: the working directory is not inside the project.
+ *  INVALID_PREVIEW_URL: previewUrl is present and is not an http(s) URL. */
+export type SaveReason = 'INVALID_CONFIG' | 'UNSAFE_VALUE' | 'INVALID_CWD' | 'INVALID_PREVIEW_URL'
 
 /** run.saveConfigs' answer. One batch, one verdict: on `ok: false` nothing was stored and every
  *  offending item is named, not just the first. */
@@ -207,7 +213,7 @@ export type SaveConfigsResult =
  *  so a Java version selector was drawn even in a Node project — there was no kind in the model to
  *  condition on. */
 export function optionalFieldsFor(type: RunConfigType, opts: { springBoot: boolean }): string[] {
-  const common = ['cwd', 'env', 'allowMultipleInstances']
+  const common = ['cwd', 'env', 'allowMultipleInstances', 'previewUrl']
   switch (type) {
     case 'shell':
       return common // args go straight into the command
@@ -232,10 +238,11 @@ export function optionalFieldsFor(type: RunConfigType, opts: { springBoot: boole
       return ['dockerfilePath', 'buildArgs', 'runArgs', ...common]
     case 'dotnet':
       return ['subcommand', 'configuration', 'args', ...common]
-    // None of the three common options mean anything here: a compound starts no process, so it has
+    // None of the four common options mean anything here: a compound starts no process, so it has
     // no working directory and no environment, and allowMultipleInstances is read by decideStart,
     // which a compound never reaches — planLaunch expands it away and every step names a runnable
-    // configuration. Offering a field that changes nothing is worse than offering none.
+    // configuration. Offering a field that changes nothing is worse than offering none, and previewUrl
+    // belongs to whichever member actually serves the page.
     case 'compound':
       return []
   }

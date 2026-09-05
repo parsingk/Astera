@@ -2,16 +2,18 @@ import type { RunConfig, SaveConfigsResult, SaveReason } from '../../core/run/ty
 import { migrateRunConfigs } from '../../core/run/migrate'
 import { hasUnsafeWin32Chars } from '../../core/run/build'
 import { isSeedId } from '../../core/run/draft'
+import { isHttpUrl } from '../../core/preview/url'
 
 // cmd.exe interprets & | ^ % ! < > even inside double quotes — assembly cannot guard against that, so
 // it is rejected at save time. **Only values that land in the command string are checked.** id/name
 // are metadata, cwd is handed to the PTY as its working directory rather than interpolated, folder and
 // temporary are tree metadata and never reach a command string, javaHome/springProfiles become
 // environment variables, and beforeLaunch/members hold configuration ids the launch planner reads — no
-// id is ever interpolated into a command. Why an exclude list: the failure direction is the safe one —
-// a new field defaults to being checked.
+// id is ever interpolated into a command. previewUrl is an address the renderer opens, never
+// interpolated — and a query string legitimately holds `&`. Why an exclude list: the failure direction
+// is the safe one — a new field defaults to being checked.
 const NOT_IN_COMMAND = new Set([
-  'id', 'name', 'cwd', 'env', 'folder', 'javaHome', 'springProfiles', 'beforeLaunch', 'members', 'temporary'
+  'id', 'name', 'cwd', 'env', 'folder', 'javaHome', 'springProfiles', 'beforeLaunch', 'members', 'temporary', 'previewUrl'
 ])
 
 /** The Run Configurations dialog's Apply: the project's stored list becomes `configs`, wholesale — an
@@ -47,6 +49,12 @@ export async function saveConfigsBatch(a: {
       await a.assertConfigCwd(a.projectPath, c.cwd)
     } catch {
       errors.push({ id, reason: 'INVALID_CWD' })
+      continue
+    }
+    // An address the preview opens on start. Checked here rather than in the form so a hand-edited
+    // store cannot hold a value the renderer would then try to load.
+    if (c.previewUrl !== undefined && !isHttpUrl(c.previewUrl)) {
+      errors.push({ id, reason: 'INVALID_PREVIEW_URL' })
       continue
     }
     if (a.platform === 'win32' && c.type !== 'shell') {

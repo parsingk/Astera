@@ -83,6 +83,7 @@ export function migrateRunConfigs(value: unknown, opts?: { allowIncomplete?: boo
     if (o.allowMultipleInstances !== undefined && typeof o.allowMultipleInstances !== 'boolean') continue
     if (o.temporary !== undefined && typeof o.temporary !== 'boolean') continue
     if (!isStringArray(o.beforeLaunch)) continue
+    if (o.previewUrl !== undefined && typeof o.previewUrl !== 'string') continue
 
     if (o.type === undefined) {
       if (typeof o.command !== 'string') continue

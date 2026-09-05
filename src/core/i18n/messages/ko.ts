@@ -788,6 +788,7 @@ export const ko = {
   'run.manager.reason.INVALID_CONFIG': '{name}: 저장할 수 없는 구성입니다',
   'run.manager.reason.UNSAFE_VALUE': '{name}: 명령에 들어가는 값에 Windows 셸이 해석하는 문자(& | ^ % ! < >)가 있습니다',
   'run.manager.reason.INVALID_CWD': '{name}: 작업 폴더는 프로젝트 안이어야 합니다',
+  'run.manager.reason.INVALID_PREVIEW_URL': '{name}: 미리보기 URL 은 http:// 또는 https:// 로 시작하는 주소여야 합니다',
   'run.type.shell': 'Shell',
   'run.type.npm': 'npm',
   'run.type.node': 'Node.js',
@@ -816,6 +817,7 @@ export const ko = {
   'run.env.issue.emptyKey': '키가 비어 있어 저장되지 않습니다',
   'run.env.issue.shadowed': '아래의 같은 키가 이 값을 덮어씁니다',
   'run.field.allowMultipleInstances': '여러 인스턴스 허용',
+  'run.field.previewUrl': '미리보기 URL',
   // 종류별 필수 필드. shell 의 command 도 여기 있어야 run.start 의 "빈 필수 항목" 메시지가
   // run.field.<이름> 으로 라벨을 찾을 수 있다 (migrate.ts 의 REQUIRED 에 있는 이름은 모두 여기 있다)
   'run.field.command': '명령',
