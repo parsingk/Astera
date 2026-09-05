@@ -730,7 +730,7 @@ export const es: Catalog = {
   'run.type.compose': 'Docker Compose',
   'run.type.dockerfile': 'Dockerfile',
   'run.type.dotnet': '.NET',
-  'run.type.compound': 'Compuesta',
+  'run.type.compound': 'Compound',
   'run.field.javaHome': 'JDK',
   'run.field.springProfiles': 'Perfiles de Spring',
   'run.field.args': 'Argumentos',

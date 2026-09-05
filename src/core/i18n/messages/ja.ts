@@ -720,7 +720,7 @@ export const ja: Catalog = {
   'run.type.compose': 'Docker Compose',
   'run.type.dockerfile': 'Dockerfile',
   'run.type.dotnet': '.NET',
-  'run.type.compound': '複合',
+  'run.type.compound': 'Compound',
   'run.field.javaHome': 'JDK',
   'run.field.springProfiles': 'Spring プロファイル',
   'run.field.args': '引数',

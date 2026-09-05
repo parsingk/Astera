@@ -800,7 +800,7 @@ export const ko = {
   'run.type.compose': 'Docker Compose',
   'run.type.dockerfile': 'Dockerfile',
   'run.type.dotnet': '.NET',
-  'run.type.compound': '묶음',
+  'run.type.compound': 'Compound',
   // RunConfigForm.tsx / RunTypePicker.tsx (Task 7) — per-kind field labels and the ＋ kind-picker popup.
   'run.field.javaHome': 'JDK',
   'run.field.springProfiles': 'Spring 프로파일',
