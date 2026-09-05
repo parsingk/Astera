@@ -2347,7 +2347,12 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .bp-viewport { flex: none; }
 /* The stage holds the <webview> and, over it, the overlays. `overflow: hidden` clips a fixed-width
    viewport that is wider than the pane */
-.bp-stage { position: relative; flex: 1; min-height: 0; display: flex; justify-content: center; overflow: hidden; }
+/* user-select:none, because a fixed viewport width leaves bare stage either side of the page. A press
+   there starts a selection, and a <webview> is a replaced element that selects whole, like an image —
+   so the page was covered by a translucent blue rectangle. Changing the width was enough to trigger it:
+   the picker's press and release land in different places, which is itself a selection. The guest is a
+   separate document and selects its own text as it always did. */
+.bp-stage { position: relative; flex: 1; min-height: 0; display: flex; justify-content: center; overflow: hidden; user-select: none; }
 .bp-stage.fixed { background: var(--elevated); }
 /* Electron's webview is display:flex internally; sizing it through the flex item keeps that intact */
 .bp-view { flex: 1; min-width: 0; height: 100%; }
