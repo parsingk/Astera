@@ -9,8 +9,12 @@ import { isSaneRect } from '../../core/preview/pick/rect'
 import { evictionPlan } from '../../core/preview/pick/shots'
 import type { CaptureResult } from '../../core/preview/pick/types'
 
-/** Twice the card's 56 CSS pixels, so it stays sharp on a retina display and no larger. */
-const THUMBNAIL_WIDTH = 112
+/** The card draws the thumbnail at 56×40 CSS pixels, so twice that is sharp on a retina display and
+ *  no bigger. Both axes are bounded, not just the width: a wide thin crop — a divider, a progress bar —
+ *  scaled by width alone rounds its height to zero and Electron returns a 0×0 image, which is a data
+ *  URL that draws nothing, while a narrow tall one — a nav rail, a list column — is not scaled at all
+ *  and pays a second full-size PNG encode for no benefit. */
+const THUMBNAIL_BOX = { width: 112, height: 80 }
 
 function guestFor(id: unknown): Electron.WebContents | null {
   if (typeof id !== 'number' || !Number.isInteger(id)) return null
@@ -51,9 +55,16 @@ export function registerPreviewCapture(userData: string): void {
       const file = path.join(dir, `${randomUUID()}.png`)
       await writeFile(file, image.toPNG())
       void evict(dir)
-      // Resized first: a full-width element's crop is a large PNG, and this one only ever fills a
-      // 56-pixel card. `resize` keeps the aspect ratio when only a width is given.
-      const thumb = size.width > THUMBNAIL_WIDTH ? image.resize({ width: THUMBNAIL_WIDTH }) : image
+      // Fit inside the box, never enlarge, never round a side to zero. Both dimensions are given so
+      // Electron does not compute one of them itself and land on 0.
+      const fit = Math.min(1, THUMBNAIL_BOX.width / size.width, THUMBNAIL_BOX.height / size.height)
+      const thumb =
+        fit < 1
+          ? image.resize({
+              width: Math.max(1, Math.round(size.width * fit)),
+              height: Math.max(1, Math.round(size.height * fit))
+            })
+          : image
       return { path: file, width: size.width, height: size.height, thumbnail: thumb.toDataURL() }
     } catch {
       return null
