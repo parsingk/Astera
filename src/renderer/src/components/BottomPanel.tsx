@@ -26,6 +26,7 @@ export function BottomPanel({
   onRerun,
   onDismissRun,
   onOpenFile,
+  onOpenUrl,
   terminals,
   activeTab,
   onSelectTab,
@@ -51,6 +52,8 @@ export function BottomPanel({
   onDismissRun: (runId: string) => void
   /** A path link in a console was activated — App opens the file at that line */
   onOpenFile: (path: string, at: { line?: number; col?: number }) => void
+  /** A URL link in a console or a terminal was activated — App's link rule routes it. */
+  onOpenUrl: (url: string, ev: MouseEvent) => void
   terminals: TerminalBuffer[]
   activeTab: string
   onSelectTab: (tab: string) => void
@@ -188,6 +191,7 @@ export function BottomPanel({
                       findOpen={!!findOpen[r.runId]}
                       onFindOpenChange={(open) => setFindOpen((prev) => ({ ...prev, [r.runId]: open }))}
                       onOpenFile={onOpenFile}
+                      onOpenUrl={onOpenUrl}
                     />
                   </div>
                 ))}
@@ -212,6 +216,7 @@ export function BottomPanel({
               initialBuffer={term.buffer}
               clearNonce={clearNonces[term.id] ?? 0}
               active={activeTab === term.id}
+              onOpenUrl={onOpenUrl}
             />
           </div>
         ))}

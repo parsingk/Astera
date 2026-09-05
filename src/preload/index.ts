@@ -33,6 +33,7 @@ const EVENT_CHANNELS = [
   'run:status',
   'run:focus',
   'run:launchFailed',
+  'preview:popup',
   'terminal:data',
   'terminal:exit',
   'orch:state',

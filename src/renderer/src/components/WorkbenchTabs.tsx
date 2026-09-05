@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { resolveFileIcon } from '../../../core/files/icons'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
-import { Repeat } from 'lucide-react'
+import { Globe, Repeat } from 'lucide-react'
 
 /** File viewer tab. Renderer-only — unlike sessions, main is not involved. id = `file:${path}`.
  *  (FileTabs.tsx가 이 탭 줄로 대체되면서 타입만 여기로 옮겨 왔다) */
@@ -27,6 +27,21 @@ export interface RecordTab {
   title: string
   /** 이 탭이 열릴 때의 프로젝트 루트. 활성 탭이 이 탭일 때 앱이 이 프로젝트를 보여준다 */
   projectRoot: string
+}
+
+/** Preview tab. Renderer-only, like FileTab; `id` is `browser:<uuid>` (core/panes/tabId's browserTab). */
+export interface BrowserTab {
+  id: string
+  /** The current address — updated from the page's own navigation events, so the address bar and the
+   *  reuse rule in App's openBrowserTab see where the tab actually is, not where it started. */
+  url: string
+  /** Page title. The chip and the toolbar fall back to `host:port` while it is empty. */
+  title: string
+  /** The project this tab belongs to. Same role, same reason as FileTab.projectRoot. */
+  projectRoot: string
+  /** Set by auto-open: the run whose server this tab is waiting for. While that run is live a
+   *  connection-refused load means "not up yet" and is retried; cleared on the first finished load. */
+  awaitRunId?: string
 }
 
 /** The tabs shown on one pane's tab bar. Draws file tabs, session tabs and record tabs in one row.
@@ -56,6 +71,14 @@ export type WorkbenchTab =
       /** 계정 롤링 체인의 툴팁. 롤링이 걸려 있지 않으면 null — 계정 목록은 PaneGrid가 갖고 있으므로
        *  문구를 거기서 만들어 넘긴다 */
       rollTooltip: string | null
+    }
+  | {
+      tabId: string
+      kind: 'browser'
+      url: string
+      title: string
+      /** The page is loading — the chip spins, the way a busy session's does. */
+      loading: boolean
     }
   | {
       tabId: string
@@ -181,7 +204,7 @@ export function WorkbenchTabs({
                 }
               : undefined
           }
-          title={tab.kind === 'file' ? tab.path : tab.title}
+          title={tab.kind === 'file' ? tab.path : tab.kind === 'browser' ? tab.url : tab.title}
           // 이름을 고치는 동안은 끌 수 없다 — 입력칸 안에서 글자를 끄는 것이 탭 이동이 되어 버린다
           draggable={renamingTabId !== tab.tabId}
           onClick={() => onSelect(tab.tabId)}
@@ -207,6 +230,14 @@ export function WorkbenchTabs({
         >
           {tab.kind === 'file' ? (
             <FileIcon {...resolveFileIcon(tab.title)} />
+          ) : tab.kind === 'browser' ? (
+            tab.loading ? (
+              <span className="tab-dot busy bp-tab-busy" />
+            ) : (
+              <span className="tab-glyph" aria-hidden="true">
+                <Globe size={11} />
+              </span>
+            )
           ) : tab.kind === 'record' ? (
             // Same glyph as the sidebar row's .hiw-g — the same record must not wear two different
             // labels in two places. When the status is unknown, no span is left either — an empty

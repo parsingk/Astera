@@ -7,18 +7,18 @@ import type { RunConfigType } from './types'
  *  (packageManager·nodePath·release·features·packagePath·dockerfilePath·buildArgs·runArgs) 가
  *  한 번도 확인되지 않아, 다섯 종류의 반환을 [...common] 으로 바꿔도 테스트가 모두 초록이었다. */
 const OPTIONAL: Record<RunConfigType, string[]> = {
-  shell: ['cwd', 'env', 'allowMultipleInstances'],
-  npm: ['packageManager', 'args', 'cwd', 'env', 'allowMultipleInstances'],
-  node: ['nodePath', 'args', 'cwd', 'env', 'allowMultipleInstances'],
-  gradle: ['javaHome', 'args', 'cwd', 'env', 'allowMultipleInstances'],
-  maven: ['javaHome', 'args', 'cwd', 'env', 'allowMultipleInstances'],
-  cargo: ['release', 'features', 'args', 'cwd', 'env', 'allowMultipleInstances'],
-  go: ['packagePath', 'args', 'cwd', 'env', 'allowMultipleInstances'],
-  python: ['interpreter', 'args', 'cwd', 'env', 'allowMultipleInstances'],
-  pytest: ['target', 'interpreter', 'args', 'cwd', 'env', 'allowMultipleInstances'],
-  compose: ['composeFile', 'services', 'action', 'args', 'cwd', 'env', 'allowMultipleInstances'],
-  dockerfile: ['dockerfilePath', 'buildArgs', 'runArgs', 'cwd', 'env', 'allowMultipleInstances'],
-  dotnet: ['subcommand', 'configuration', 'args', 'cwd', 'env', 'allowMultipleInstances'],
+  shell: ['cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
+  npm: ['packageManager', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
+  node: ['nodePath', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
+  gradle: ['javaHome', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
+  maven: ['javaHome', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
+  cargo: ['release', 'features', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
+  go: ['packagePath', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
+  python: ['interpreter', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
+  pytest: ['target', 'interpreter', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
+  compose: ['composeFile', 'services', 'action', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
+  dockerfile: ['dockerfilePath', 'buildArgs', 'runArgs', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
+  dotnet: ['subcommand', 'configuration', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'],
   compound: []
 }
 
@@ -32,10 +32,10 @@ describe('optionalFieldsFor', () => {
   // springBoot 는 JVM 두 종류에만 한 항목을 끼워 넣는다 — 나머지 열한 종류는 이 값에 흔들리지 않는다
   it('springBoot 는 gradle·maven 에만 springProfiles 를 끼워 넣는다', () => {
     expect(optionalFieldsFor('gradle', { springBoot: true })).toEqual([
-      'javaHome', 'springProfiles', 'args', 'cwd', 'env', 'allowMultipleInstances'
+      'javaHome', 'springProfiles', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'
     ])
     expect(optionalFieldsFor('maven', { springBoot: true })).toEqual([
-      'javaHome', 'springProfiles', 'args', 'cwd', 'env', 'allowMultipleInstances'
+      'javaHome', 'springProfiles', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'
     ])
     for (const type of Object.keys(OPTIONAL) as RunConfigType[]) {
       if (type === 'gradle' || type === 'maven') continue
@@ -114,7 +114,7 @@ describe('availableOptionalFields', () => {
     )
     expect(menu).not.toContain('javaHome')
     expect(menu).not.toContain('springProfiles')
-    expect(menu).toEqual(['nodePath', 'args', 'cwd', 'env', 'allowMultipleInstances'])
+    expect(menu).toEqual(['nodePath', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'])
   })
 
   it('이미 값이 있는 항목은 빠진다 — 값 자체가 "화면에 있다" 는 기록이다', () => {
@@ -124,7 +124,7 @@ describe('availableOptionalFields', () => {
         { springBoot: false },
         new Set()
       )
-    ).toEqual(['args', 'cwd', 'env', 'allowMultipleInstances'])
+    ).toEqual(['args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'])
   })
 
   it('이번 편집에서 추가한 항목도 빠진다 — 아직 값이 없어도', () => {
@@ -134,7 +134,7 @@ describe('availableOptionalFields', () => {
         { springBoot: false },
         new Set(['packagePath', 'env'])
       )
-    ).toEqual(['args', 'cwd', 'allowMultipleInstances'])
+    ).toEqual(['args', 'cwd', 'allowMultipleInstances', 'previewUrl'])
   })
 
   // 빈 문자열도, false 도 undefined 가 아니므로 값으로 친다 — 지우거나 체크를 푼 칸이 메뉴로
@@ -146,18 +146,27 @@ describe('availableOptionalFields', () => {
         { springBoot: false },
         new Set()
       )
-    ).toEqual(['args', 'cwd', 'env', 'allowMultipleInstances'])
+    ).toEqual(['args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'])
   })
 
   it('Boot 프로젝트의 gradle 구성에는 springProfiles 가 오른다', () => {
     expect(
       availableOptionalFields({ ...base, type: 'gradle', tasks: 'bootRun' }, { springBoot: true }, new Set())
-    ).toEqual(['javaHome', 'springProfiles', 'args', 'cwd', 'env', 'allowMultipleInstances'])
+    ).toEqual(['javaHome', 'springProfiles', 'args', 'cwd', 'env', 'allowMultipleInstances', 'previewUrl'])
   })
 })
 
 describe('compound', () => {
   it('offers no optional fields — none of them mean anything without a process', () => {
     expect(optionalFieldsFor('compound', { springBoot: false })).toEqual([])
+  })
+})
+
+describe('previewUrl', () => {
+  it('previewUrl is offered to every kind that starts a process, and not to compound', () => {
+    for (const t of Object.keys(OPTIONAL) as RunConfigType[]) {
+      const has = optionalFieldsFor(t, { springBoot: false }).includes('previewUrl')
+      expect(has, t).toBe(t !== 'compound')
+    }
   })
 })

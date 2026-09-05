@@ -128,7 +128,7 @@ export function RunConfigForm({
   // is never typed freehand here (Select or the folder picker only) and clears itself.
   const BLANKABLE = [
     'cwd', 'args', 'springProfiles', 'features', 'packagePath', 'nodePath', 'target', 'composeFile', 'services',
-    'dockerfilePath', 'buildArgs', 'runArgs', 'configuration'
+    'dockerfilePath', 'buildArgs', 'runArgs', 'configuration', 'previewUrl'
   ] as const
   // On blur: blanks become absent, and an emptied name falls back to the last name the field held that
   // was not itself blank — the name is the only thing naming this configuration in the tree and in the
@@ -661,6 +661,18 @@ export function RunConfigForm({
           />
           {t('run.field.allowMultipleInstances')}
         </label>
+      )}
+      {draft.type !== 'compound' && visible('previewUrl') && (
+        <div className="field">
+          <label>{t('run.field.previewUrl')}</label>
+          <input
+            type="text"
+            placeholder="http://localhost:5173"
+            value={draft.previewUrl ?? ''}
+            onChange={(e) => update({ ...draft, previewUrl: e.target.value })}
+            onBlur={normalizeOnBlur}
+          />
+        </div>
       )}
       {visible('cwd') && (
         <div className="field">

@@ -8,7 +8,8 @@ import { AccountSettings } from './components/AccountSettings'
 import { HistorySettings } from './components/HistorySettings'
 import { HistoryBrowser } from './components/HistoryBrowser'
 import { Select } from './components/Select'
-import { type FileTab, type RecordTab } from './components/WorkbenchTabs'
+import { type BrowserTab, type FileTab, type RecordTab } from './components/WorkbenchTabs'
+import { BrowserPane, type BrowserStatePatch } from './components/BrowserPane'
 import { FileEditor } from './components/FileEditor'
 import { MarkdownSplit } from './components/MarkdownSplit'
 import { invalidateImageCache } from './components/MarkdownPreview'
@@ -99,8 +100,9 @@ import {
   type PaneDir,
   type PaneNode
 } from '../../core/panes/tree'
-import { fileTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
+import { browserTab, fileTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
 import { placeTab } from '../../core/panes/place'
+import { linkDestination, normalizeUrl, previewTargetOf } from '../../core/preview/url'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
 import { PanelLeft, Settings, X } from 'lucide-react'
@@ -510,6 +512,14 @@ export default function App(): React.JSX.Element {
   // and this tab's project could not be answered, from the tree string alone (see RecordTab's comment
   // in WorkbenchTabs.tsx).
   const [recordTabs, setRecordTabs] = useState<RecordTab[]>([])
+  /** Preview (browser) tabs. Renderer-only, like fileTabs; the page state lives in the mounted webview */
+  const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>([])
+  const browserTabsRef = useRef(browserTabs)
+  browserTabsRef.current = browserTabs
+  /** Browser tab id → loading. Chip state, not tab identity */
+  const [browserLoading, setBrowserLoading] = useState<Record<string, boolean>>({})
+  /** Browser tab id → how many times openBrowserTab reused it. BrowserPane reloads when it changes */
+  const [browserNonce, setBrowserNonce] = useState<Record<string, number>>({})
   // The flow step picked on a record tab. Keyed by scopeKey — project and record together, because a
   // tab id (`record:<recordId>`) has no project in it, and keying on that alone would let two
   // projects sharing a record id leak each other's scoping. The tab record already has both, so this
@@ -613,12 +623,12 @@ export default function App(): React.JSX.Element {
   const selectWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
   /** The id of the tab Ctrl+W may close. **Sessions are excluded** — that key must not kill a
    *  process. Files and records are both lightweight, read-only tabs that open and close freely, so
-   *  both belong here. */
+   *  both belong here. Browser tabs too — closing one closes a page, not a process. */
   const closableTabIdRef = useRef<string | null>(null)
   // 탭 트리에서 파생시킨다 — activeFileId 와 같은 이유다: 따로 상태를 두면 다른 페인의 탭을
   // 누르는 순간 트리와 갈라진다
   closableTabIdRef.current =
-    activeTab?.kind === 'file' || activeTab?.kind === 'record' ? activeTabId : null
+    activeTab?.kind === 'file' || activeTab?.kind === 'record' || activeTab?.kind === 'browser' ? activeTabId : null
   /** The close function itself. `closeWorkbenchTab` is recreated every render and its body reads
    *  render-time values (via closeFileTab), so a key listener registered once that called a captured
    *  stale closure would act on outdated tabs — same place, same reason as selectWorkbenchTabRef. */
@@ -1401,7 +1411,7 @@ export default function App(): React.JSX.Element {
   /** A file tab closes through its existing path (a confirmation modal when dirty); a session tab
    *  closes through session mode's tab-close path. A record tab is nothing more than dropping it from
    *  the tree — skip that branch here and its id would be read as a session id and flow into
-   *  sessions.kill. */
+   *  sessions.kill. A browser tab is dropped the same way as a record tab. */
   const closeWorkbenchTab = (tabId: string): void => {
     const ref = parseTab(tabId)
     if (!ref) return
@@ -1420,6 +1430,14 @@ export default function App(): React.JSX.Element {
           return rest
         })
       setRecordTabs((prev) => prev.filter((x) => x.id !== tabId))
+      dropTabFromTree(tabId)
+      return
+    }
+    if (ref.kind === 'browser') {
+      // A page, not a process: dropping the tab is the whole close. The webview unmounts with its slot.
+      setBrowserTabs((prev) => prev.filter((x) => x.id !== tabId))
+      setBrowserLoading(({ [tabId]: _l, ...rest }) => rest)
+      setBrowserNonce(({ [tabId]: _n, ...rest }) => rest)
       dropTabFromTree(tabId)
       return
     }
@@ -1797,6 +1815,9 @@ export default function App(): React.JSX.Element {
 
   // Project Run/Stop: run configurations, the active run, the list of all active runs, and whether the panel is open
   const [runConfigs, setRunConfigs] = useState<RunConfig[]>([])
+  // Read by the run:status subscription, which is registered once — same reason as runStartRef
+  const runConfigsRef = useRef(runConfigs)
+  runConfigsRef.current = runConfigs
   const [runSelectedId, setRunSelectedId] = useState<string | null>(null)
   /** 프로젝트 경로 → 그 프로젝트에서 고른 실행 구성. 선택은 프로젝트마다 따로 기억해야 한다.
    *
@@ -1974,7 +1995,10 @@ export default function App(): React.JSX.Element {
           // silently fall back to stickyRoot — so viewing A's record tab and then clicking B's session
           // tab would drop this tab from the list, with no way left to close it.
           recordTabs.find((t) => t.id === activeTabId)?.projectRoot
-        : sessions.find((s) => s.id === activeTab?.id)?.cwd) ?? null
+        : activeTab?.kind === 'browser'
+          ? // A browser tab names its project the same way a file tab does
+            browserTabs.find((t) => t.id === activeTabId)?.projectRoot
+          : sessions.find((s) => s.id === activeTab?.id)?.cwd) ?? null
 
   /** 탭이 하나도 없을 때의 현재 프로젝트. 마운트에서 한 번 복원하고, 그 뒤로는 활성 탭이 갱신한다.
    *  영속 규칙은 lib/stickyProject.ts 에 있다(렌더러에 테스트가 없어 App.tsx 안에서는 확인할 수 없다). */
@@ -2231,6 +2255,70 @@ export default function App(): React.JSX.Element {
     if (placed.paneId) setActivePaneId(placed.paneId)
   }
 
+  /** Opens a preview tab on `url` in the current project, or reuses the one already showing it.
+   *
+   *  Reuse navigates: a second click on the console link after a dev server restart should show a
+   *  fresh page, not a second tab and not a dead one. The address is compared normalised (the
+   *  preview design, decision 8). `awaitRunId` marks the run whose server the page waits for (§4);
+   *  a reuse without one clears it — a manual click must not keep waiting on an old run. */
+  const openBrowserTab = (url: string, opts?: { awaitRunId?: string }): void => {
+    const root = currentProjectRef.current
+    if (!root) return
+    const target = normalizeUrl(url)
+    if (!target) return
+    const existing = browserTabsRef.current.find(
+      (b) => b.projectRoot === root && normalizeUrl(b.url) === target
+    )
+    if (existing) {
+      setBrowserTabs((prev) =>
+        prev.map((b) => (b.id === existing.id ? { ...b, url: target, awaitRunId: opts?.awaitRunId } : b))
+      )
+      setBrowserNonce((prev) => ({ ...prev, [existing.id]: (prev[existing.id] ?? 0) + 1 }))
+      selectWorkbenchTab(existing.id)
+      return
+    }
+    const id = browserTab(crypto.randomUUID())
+    setBrowserTabs((prev) => [...prev, { id, url: target, title: '', projectRoot: root, awaitRunId: opts?.awaitRunId }])
+    const placed = placeTab(layoutRef.current, id, { activePaneId: activePaneIdRef.current })
+    setLayout(placed.root)
+    if (placed.paneId) setActivePaneId(placed.paneId)
+  }
+  // The run:status subscription (registered once) opens previews through this — same reason as runStartRef
+  const openBrowserTabRef = useRef(openBrowserTab)
+  openBrowserTabRef.current = openBrowserTab
+
+  /** The one link rule (core/preview/url.ts): a loopback address opens in a preview tab, anything else
+   *  in the system browser, and Ctrl (Cmd on macOS) inverts. Every xterm's URL link and the guest's
+   *  popups land here. */
+  const openUrl = (url: string, ev?: { ctrlKey: boolean; metaKey: boolean }): void => {
+    const modifier = !!ev && (ev.ctrlKey || ev.metaKey)
+    if (linkDestination(url, { modifier }) === 'preview') openBrowserTab(previewTargetOf(url))
+    else void window.api.system.openExternal(url)
+  }
+  const openUrlRef = useRef(openUrl)
+  openUrlRef.current = openUrl
+
+  /** What BrowserPane reports. Split across the two states so a page title update does not touch the
+   *  loading map and vice versa. */
+  const onBrowserState = (tabId: string, patch: BrowserStatePatch): void => {
+    if (patch.loading !== undefined) {
+      const loading = patch.loading
+      setBrowserLoading((prev) => (prev[tabId] === loading ? prev : { ...prev, [tabId]: loading }))
+    }
+    if (patch.url !== undefined || patch.title !== undefined || patch.clearAwait) {
+      setBrowserTabs((prev) =>
+        prev.map((b) => {
+          if (b.id !== tabId) return b
+          const next: BrowserTab = { ...b }
+          if (patch.url !== undefined) next.url = patch.url
+          if (patch.title !== undefined) next.title = patch.title
+          if (patch.clearAwait) delete next.awaitRunId
+          return next
+        })
+      )
+    }
+  }
+
   /** Asks for one record's explanation to be written again — the sidebar row's and the pane head's
    *  [Write it up again].
    *
@@ -2351,6 +2439,29 @@ export default function App(): React.JSX.Element {
         onPickStep={(id) => setScopedNode((m) => ({ ...m, [key]: id }))}
         onOpenPath={openRecordPath}
         onRegenerate={() => regenerateRecord(rec.projectRoot, rec.recordId)}
+      />
+    )
+  }
+
+  /** A browser tab's body. `serverPending` is derived from this project's runs — the tab's run is
+   *  still alive — so the pane knows whether a refused connection means "not up yet" or "gone". */
+  const renderBrowser = (browserTabId: string): React.ReactNode => {
+    const b = browserTabs.find((x) => x.id === browserTabId)
+    if (!b) return null
+    const serverPending =
+      b.awaitRunId !== undefined && runs.some((r) => r.runId === b.awaitRunId && r.status !== 'exited')
+    return (
+      <BrowserPane
+        tab={b}
+        serverPending={serverPending}
+        navigateNonce={browserNonce[b.id] ?? 0}
+        onState={(patch) => onBrowserState(b.id, patch)}
+        onFocusPane={() => {
+          const cur = layoutRef.current
+          const pane = cur ? groupOfTab(cur, b.id) : null
+          if (pane) setActivePaneId(pane.id)
+        }}
+        onOpenExternal={(url) => void window.api.system.openExternal(url)}
       />
     )
   }
@@ -2612,6 +2723,14 @@ export default function App(): React.JSX.Element {
       // If the run belongs to the current workbench project, the local list is updated too — by runId,
       // and evicting whatever else holds that seat (a restart's replacement arrives on the old seat)
       if (currentProjectRef.current && s.projectPath === currentProjectRef.current) setRuns((prev) => upsertRun(prev, s))
+      // Auto-open (the frontend preview design, §4). RunManager reports a start as one 'running' status
+      // event, so this is a start, not a later change. Only the project on screen — a preview must not
+      // pop over another project — and never a validation run, which nobody pressed ▶ on.
+      if (s.status === 'running' && !s.validation && s.projectPath === currentProjectRef.current) {
+        const cfg = runConfigsRef.current.find((c) => c.id === s.configId)
+        if (cfg && cfg.type !== 'compound' && cfg.previewUrl)
+          openBrowserTabRef.current(previewTargetOf(cfg.previewUrl), { awaitRunId: s.runId })
+      }
     })
     return off
   }, [])
@@ -2635,6 +2754,9 @@ export default function App(): React.JSX.Element {
       offFailed()
     }
   }, [])
+
+  // A preview page asked for a window. Main denied it and sent the address; the link rule routes it.
+  useEffect(() => window.api.on('preview:popup', ({ url }) => openUrlRef.current(url)), [])
 
   // The selection must never name a run the list no longer holds — with nothing to draw, the Run tab
   // shows an empty console and no row highlighted. runStart and runDismiss keep it right for what the
@@ -3442,8 +3564,11 @@ export default function App(): React.JSX.Element {
                 dirtyFileIds={dirtyIds}
                 recordTabs={recordTabs}
                 recordStatuses={recordStatuses}
+                browserTabs={browserTabs}
+                browserLoading={browserLoading}
                 renderEditor={renderEditor}
                 renderRecord={renderRecord}
+                renderBrowser={renderBrowser}
                 rollStates={rollStates}
                 schedStates={schedStates}
                 busy={busy}
@@ -3461,6 +3586,7 @@ export default function App(): React.JSX.Element {
                 onTabContextMenu={(tabId, x, y) => setTabMenu({ tabId, x, y })}
                 onDragTabChange={setDragTabId}
                 onDropTabInBar={dropTabInGroup}
+                onOpenUrl={openUrl}
               />
               {/* When the layout is empty (not one group in the tree) there is no group tab bar, so there
                   is no '+' anywhere on screen — this placeholder becomes the sole entry point in its
@@ -3543,6 +3669,7 @@ export default function App(): React.JSX.Element {
                     onRerun={(configId) => runStart(configId)}
                     onDismissRun={runDismiss}
                     onOpenFile={(path, at) => openFile(path, at.line === undefined ? undefined : { line: at.line, col: at.col })}
+                    onOpenUrl={openUrl}
                     terminals={terminals}
                     activeTab={bottomTabShown}
                     onSelectTab={setBottomTab}

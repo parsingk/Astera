@@ -2330,6 +2330,36 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
   color: inherit; opacity: .55; cursor: pointer; padding: 1px 7px; font-size: 13px; line-height: 1.4; }
 .md-toolbar button:hover { opacity: .85; }
 .md-toolbar button.active { opacity: 1; border-color: var(--line-soft); background: rgba(255, 255, 255, .07); }
+
+/* ---- Browser (preview) pane — components/BrowserPane.tsx ---- */
+/* Fills the pane slot (.terminal-slot is display:flex) as a column: toolbar, then the stage */
+.bp-host { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+.bp-toolbar { flex: none; height: 30px; display: flex; align-items: center; gap: 4px; padding: 0 6px;
+  border-bottom: 1px solid var(--line-soft); background: var(--panel); }
+.bp-toolbar button { background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
+  color: inherit; opacity: .7; cursor: pointer; padding: 1px 7px; font-size: 13px; line-height: 1.4; white-space: nowrap; }
+.bp-toolbar button:hover:not(:disabled) { opacity: 1; }
+.bp-toolbar button:disabled { opacity: .3; cursor: default; }
+.bp-toolbar button.active { opacity: 1; border-color: var(--line-soft); background: rgba(255, 255, 255, .07); }
+.bp-address { flex: 1; min-width: 0; height: 22px; font: 12px var(--mono); color: var(--text);
+  background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 0 8px; }
+.bp-address:focus { outline: none; border-color: var(--accent); }
+.bp-viewport { flex: none; }
+/* The stage holds the <webview> and, over it, the overlays. `overflow: hidden` clips a fixed-width
+   viewport that is wider than the pane */
+.bp-stage { position: relative; flex: 1; min-height: 0; display: flex; justify-content: center; overflow: hidden; }
+.bp-stage.fixed { background: var(--elevated); }
+/* Electron's webview is display:flex internally; sizing it through the flex item keeps that intact */
+.bp-view { flex: 1; min-width: 0; height: 100%; }
+.bp-stage.fixed .bp-view { flex: none; }
+.bp-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 12px; padding: 20px; background: var(--bg); color: var(--text-dim);
+  font-size: 13px; text-align: center; }
+.bp-spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line);
+  border-top-color: var(--accent); animation: cm-spin .6s linear infinite; }
+/* The browser tab's busy ring on the tab bar — the session ring's shape, in the accent colour */
+.tab-dot.busy.bp-tab-busy { border-color: var(--line); border-top-color: var(--accent); border-right-color: var(--accent); }
+
 .md-split { flex: 1; min-height: 0; display: flex; }
 /* hidden 속성이 display:flex 에 덮이지 않게 못 박는다 — 이것이 에디터를 언마운트하지 않고 숨기는 방법이다 */
 .md-pane[hidden] { display: none; }

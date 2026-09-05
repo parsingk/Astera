@@ -146,6 +146,17 @@ describe('migrateRunConfigs', () => {
     })
   })
 
+  describe('previewUrl', () => {
+    it('a string survives; the key is absent when it was absent', () => {
+      const cfg = { ...COMPLETE.npm, previewUrl: 'http://localhost:5173' }
+      expect(migrateRunConfigs([cfg])).toEqual([cfg])
+      expect(migrateRunConfigs([COMPLETE.npm])[0]).not.toHaveProperty('previewUrl')
+    })
+    it('a non-string drops the item', () => {
+      expect(migrateRunConfigs([{ ...COMPLETE.npm, previewUrl: 5173 }])).toEqual([])
+    })
+  })
+
   it('rejects a configuration whose folder is not a string', () => {
     expect(migrateRunConfigs([{ id: 'a', name: 'x', type: 'npm', script: 'dev', folder: 3 }])).toEqual([])
   })

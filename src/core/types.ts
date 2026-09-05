@@ -564,6 +564,10 @@ export interface CoreEvents {
    *  `projectPath` rides along for the same reason `run:focus`'s does: the renderer applies the guard
    *  only for the project it is showing, so a chain failing in project A does not toast over project B. */
   'run:launchFailed': { message: string; projectPath: string }
+  /** A preview page tried to open a window (`target=_blank`, `window.open`). The guest is never
+   *  allowed a window of its own (main/preview/guest.ts); the address comes here so the renderer's
+   *  link rule can decide — a loopback URL becomes another preview tab, anything else opens outside. */
+  'preview:popup': { url: string }
   'terminal:data': { id: string; data: string } // project terminal output
   'terminal:exit': { id: string; exitCode: number } // shell exited — the renderer removes that tab
   // The Jobs sidebar's whole snapshot, re-sent on every orchestration state change. Small enough to
