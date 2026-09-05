@@ -13,20 +13,46 @@ import type { BrowserTab } from './WorkbenchTabs'
  *  `clearAwait` says the first load finished, so the tab stops waiting for its run's server. */
 export type BrowserStatePatch = { url?: string; title?: string; loading?: boolean; clearAwait?: boolean }
 
-type LoadError = { kind: 'unreachable' | 'other'; description: string } | { kind: 'crashed' }
+/** `url` is the address that failed, which is not `tab.url`: a tab's address only moves on a
+ *  successful navigation, so after a failed one `tab.url` still names the page before it. The
+ *  message and the Retry button both have to mean the address the user actually asked for. */
+type LoadError =
+  | { kind: 'unreachable' | 'other'; description: string; url: string }
+  | { kind: 'crashed' }
 
 const RETRY_MS = 1000
 const RETRY_CAP_MS = 60_000
+
+/** `allowpopups` on the `<webview>`, spread rather than written as a JSX attribute.
+ *
+ *  Electron enables it by the attribute's **presence**, so the value has to be a string. React's own
+ *  typings declare it `boolean`, and React's runtime does not know it — given boolean `true` it drops
+ *  the attribute instead of rendering it. So the natural `allowpopups` shorthand compiles, typechecks,
+ *  and silently produces no attribute at all; measured in the running app, the element carried only
+ *  class, src and partition. Spreading a value typed as the declaration expects is what gets the
+ *  string past the type while keeping the element's other attributes checked. */
+const ALLOW_POPUPS = { allowpopups: '' } as unknown as { allowpopups?: boolean }
 
 /** One preview tab's body: a toolbar over an Electron <webview> (partition persist:preview — see
  *  main/preview/guest.ts for what the guest may do), with DOM overlays for the three ways a page can
  *  fail to appear. Mounted for the tab's whole life and hidden by the pane grid with display:none, so
  *  the page keeps its state across tab switches — the same rule as a session's xterm.
  *
- *  **`src` is set once.** React would re-apply a `src={tab.url}` attribute on every re-render, and
- *  Electron reloads a webview whose src is assigned its own value — so the page's own navigations,
- *  reported back through tab.url, would reload it in a loop. The initial address is captured in a ref
- *  and every later navigation goes through loadURL. */
+ *  **There is no `src` attribute.** Every navigation, the first one included, goes through `loadURL`
+ *  from the effect that registers the listeners. Two separate reasons, and both matter:
+ *
+ *  A `src={tab.url}` binding would loop — React re-applies a changed attribute on every render and
+ *  Electron reloads a webview whose src is assigned, so the page's own navigations, reported back
+ *  through `tab.url`, would reload it forever. That is why the initial address is captured in a ref.
+ *
+ *  A `src={initialUrl.current}` binding, which does not loop, still loads too early: the attribute
+ *  starts the load as the element enters the document, before this component's effect has run, so a
+ *  failure has no listener to reach. Loading after the listeners are attached is what makes the
+ *  retry and the error screens work on the very first load.
+ *
+ *  The attribute is `about:blank` rather than absent because Electron creates the guest only for a
+ *  webview that has a `src` — with none, nothing attaches, `dom-ready` never fires and the pane stays
+ *  empty. Loading a blank page cannot fail, so it starts nothing this component needs to hear about. */
 export function BrowserPane({
   tab,
   serverPending,
@@ -81,6 +107,9 @@ export function BrowserPane({
   gaveUpRef.current = gaveUp
   // The retry loop for "server not up yet": one pending timer and when the first failure happened
   const retry = useRef<{ timer: ReturnType<typeof setTimeout> | null; since: number | null }>({ timer: null, since: null })
+  /** Did the navigation now in flight fail? Set by did-fail-load, cleared when the next load starts —
+   *  read by did-finish-load, which fires for Chromium's error document too. */
+  const failedThisLoad = useRef(false)
 
   // The address bar shows where the tab is, unless the user is typing in it
   useEffect(() => {
@@ -133,6 +162,7 @@ export function BrowserPane({
       }, RETRY_MS)
     }
     const onStart = (): void => {
+      failedThisLoad.current = false
       setLoading(true)
       onStateRef.current({ loading: true })
     }
@@ -142,22 +172,37 @@ export function BrowserPane({
       setCanForward(view.canGoForward())
       onStateRef.current({ loading: false })
     }
+    // A failed navigation still finishes: Chromium loads its own error document in place of the page,
+    // and that emits did-finish-load right after did-fail-load. Clearing the error here unconditionally
+    // therefore wiped every error the instant it was set, so no overlay ever appeared and the retry
+    // loop was cancelled before it could run — measured in the running app against a dead port.
     const onFinish = (): void => {
+      if (failedThisLoad.current) return
+      // The blank page the guest attaches with finishes loading too, and it must not read as "the page
+      // is up": clearing the wait here let the tab stop waiting for its server before the real address
+      // had been tried once, so nothing retried and a slow dev server never appeared.
+      if (view.getURL() === 'about:blank') return
       clearRetry()
       setError(null)
       setGaveUp(false)
       onStateRef.current({ clearAwait: true })
     }
-    const onNavigate = (e: Electron.DidNavigateEvent): void => onStateRef.current({ url: e.url })
+    // `about:blank` is how the guest is brought into existence (see the note on the element), not
+    // somewhere the user went. Reporting it would make it the tab's address: the bar would read
+    // about:blank and the chip would fall back to "Preview" while the real page loads behind it.
+    const onNavigate = (e: Electron.DidNavigateEvent): void => {
+      if (e.url !== 'about:blank') onStateRef.current({ url: e.url })
+    }
     const onNavigateInPage = (e: Electron.DidNavigateInPageEvent): void => {
-      if (e.isMainFrame) onStateRef.current({ url: e.url })
+      if (e.isMainFrame && e.url !== 'about:blank') onStateRef.current({ url: e.url })
     }
     const onTitle = (e: Electron.PageTitleUpdatedEvent): void => onStateRef.current({ title: e.title })
     const onFail = (e: Electron.DidFailLoadEvent): void => {
       if (!e.isMainFrame) return
       const kind = loadErrorKind(e.errorCode)
       if (kind === 'ignored') return
-      setError({ kind, description: e.errorDescription })
+      failedThisLoad.current = true
+      setError({ kind, description: e.errorDescription, url: e.validatedURL || urlRef.current })
       if (kind === 'unreachable' && serverPendingRef.current) scheduleRetry(e.validatedURL || urlRef.current)
     }
     const onGone = (): void => {
@@ -185,7 +230,23 @@ export function BrowserPane({
     view.addEventListener('context-menu', onMenu)
     view.addEventListener('devtools-opened', onDevtoolsOpened)
     view.addEventListener('devtools-closed', onDevtoolsClosed)
+    // The first load waits for the guest, and does not come from a `src` attribute.
+    //
+    // An attribute begins loading the moment the element enters the document — before this effect has
+    // run, so a failure has no listener to reach. A server that is not up yet then fails into nobody:
+    // no error state, so no overlay and no retry, and the pane sits on a blank page forever even after
+    // the server answers. That is precisely what auto-open produces, and it is what the running app did.
+    //
+    // Calling loadURL here instead is not enough either: at this point the guest does not exist yet, so
+    // it throws, and the fallback that writes `src` puts the same race straight back. `dom-ready` is the
+    // event that says the guest is there, and by then every listener above is registered.
+    const onDomReady = (): void => {
+      view.removeEventListener('dom-ready', onDomReady)
+      load(initialUrl.current)
+    }
+    view.addEventListener('dom-ready', onDomReady)
     return () => {
+      view.removeEventListener('dom-ready', onDomReady)
       clearRetry()
       view.removeEventListener('did-start-loading', onStart)
       view.removeEventListener('did-stop-loading', onStop)
@@ -230,8 +291,11 @@ export function BrowserPane({
   const navigateTo = (typed: string): void => {
     const raw = typed.trim()
     if (raw === '') return
-    // A bare host gets http:// — nobody types the scheme into an address bar
-    const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `http://${raw}`
+    // A bare host gets http:// — nobody types the scheme into an address bar.
+    // The `//` is what tells a scheme from a port. Matching a bare `scheme:` instead read the colon in
+    // `localhost:4321` as one, left the text alone, and then refused it as a non-http scheme — so the
+    // single most likely thing to type here did nothing at all. Checked in the running app.
+    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`
     const target = normalizeUrl(withScheme)
     if (!target) return
     // The scheme is checked here because main cannot do it for this path: will-navigate does not fire
@@ -327,10 +391,10 @@ export function BrowserPane({
             learns the address and hands it to the link rule, which is what routes an ordinary
             "open the docs" link to the system browser or to another preview tab. */}
         <webview
+          {...ALLOW_POPUPS}
           ref={viewRef}
           className="bp-view"
-          allowpopups
-          src={initialUrl.current}
+          src="about:blank"
           partition={PREVIEW_PARTITION}
           style={width !== null ? { width } : undefined}
         />
@@ -345,12 +409,12 @@ export function BrowserPane({
               <>
                 <div>
                   {error.kind === 'unreachable'
-                    ? t('preview.error.unreachable', { host: displayHostOf(tab.url) })
+                    ? t('preview.error.unreachable', { host: displayHostOf(error.url) })
                     : error.kind === 'crashed'
                       ? t('preview.error.crashed')
                       : t('preview.error.failed', { detail: error.description })}
                 </div>
-                <button type="button" onClick={() => load(tab.url)}>
+                <button type="button" onClick={() => load(error.kind === 'crashed' ? tab.url : error.url)}>
                   {t('preview.error.retry')}
                 </button>
               </>
