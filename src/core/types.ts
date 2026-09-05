@@ -1,5 +1,6 @@
 import type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
 import type { EmulationMetrics } from './preview/viewports'
+import type { CaptureResult, Rect } from './preview/pick/types'
 export type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
 import type { RunContext } from './run/build'
 export type { RunContext } from './run/build'
@@ -968,6 +969,10 @@ export interface PreviewApi {
    *  (it wedges on a non-finite or non-positive number). Re-send it after every load: emulation does
    *  not survive a navigation, measured. */
   emulate(webContentsId: number, metrics: EmulationMetrics | null): Promise<boolean>
+  /** Crops a screenshot of `rect` (in the *scaled view's* coordinates — multiply by the emulation scale
+   *  first) out of that guest and saves it as a PNG. Resolves to the file, or null when the guest is
+   *  gone, the rect is not one Chromium can take, or the capture failed. */
+  captureElement(webContentsId: number, rect: Rect): Promise<CaptureResult | null>
 }
 
 export interface SystemApi {
