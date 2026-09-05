@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { WebviewTag } from 'electron'
 import { loadErrorKind } from '../../../core/preview/errors'
 import { PREVIEW_PARTITION, guestNavigationAllowed } from '../../../core/preview/guards'
-import { MAX_ANNOTATIONS, type Annotation, type Intent } from '../../../core/preview/pick/types'
+import { MAX_ANNOTATIONS, type Annotation, type CaptureResult, type Intent } from '../../../core/preview/pick/types'
 import { clampPayload } from '../../../core/preview/pick/payload'
 import { formatAnnotations } from '../../../core/preview/pick/prompt'
 import { clampToView, scaleRect } from '../../../core/preview/pick/rect'
@@ -16,7 +16,7 @@ import {
   type ViewportKey
 } from '../../../core/preview/viewports'
 import { useI18n } from '../i18n/I18nProvider'
-import { armScript, badgesScript, cancelScript, highlightScript, type BadgeMarker } from '../lib/pickScripts'
+import { armScript, badgesScript, cancelScript, chromeScript, highlightScript, type BadgeMarker } from '../lib/pickScripts'
 import { toast } from '../lib/toast'
 import { AnnotationTray } from './AnnotationTray'
 import { ContextMenu, type MenuItem } from './ContextMenu'
@@ -480,9 +480,20 @@ export function BrowserPane({
             width: payload.page.viewportWidth,
             height: payload.page.viewportHeight
           })
-          const shot = onScreen
-            ? await window.api.preview.captureElement(view.getWebContentsId(), scaleRect(onScreen, scaleRef.current))
-            : null
+          // The picker is still standing on the page: its highlight box outlines the element and
+          // washes it in 12% blue, and every earlier annotation's badge is painted over it. All of
+          // that lands in the crop, and an agent reading one described the border as part of the
+          // design. Hide our own nodes for the length of the capture, and put them back whatever
+          // happens — the finally below runs on a failed capture too.
+          let shot: CaptureResult | null = null
+          try {
+            await view.executeJavaScript(chromeScript(true))
+            shot = onScreen
+              ? await window.api.preview.captureElement(view.getWebContentsId(), scaleRect(onScreen, scaleRef.current))
+              : null
+          } finally {
+            void view.executeJavaScript(chromeScript(false)).catch(() => {})
+          }
           shotPath = shot?.path ?? null
           // The card shows this, not the file — Chromium will not load a file: URL from the http:
           // document the renderer is served from in development

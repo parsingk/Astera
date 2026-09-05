@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { armScript, badgesScript, cancelScript, embedJson, highlightScript, type BadgeMarker } from './pickScripts'
+import { armScript, badgesScript, cancelScript, chromeScript, embedJson, highlightScript, type BadgeMarker } from './pickScripts'
 
 const marker: BadgeMarker = { seq: 7, rectPage: { x: 1, y: 2, width: 3, height: 4 }, rectViewport: { x: 5, y: 6, width: 3, height: 4 }, isFixed: false }
 const parses = (src: string): void => {
@@ -10,10 +10,18 @@ describe('pick scripts', () => {
   it('every script is syntactically valid JavaScript', () => {
     parses(armScript())
     parses(cancelScript())
+    parses(chromeScript(true))
+    parses(chromeScript(false))
     parses(badgesScript([]))
     parses(badgesScript([marker]))
     parses(highlightScript(marker))
     parses(highlightScript({ ...marker, isFixed: true }))
+  })
+
+  it('the chrome toggle addresses every node the picker injected, in both directions', () => {
+    expect(chromeScript(true)).toContain('data-astera-pick')
+    expect(chromeScript(true)).toContain('(true)')
+    expect(chromeScript(false)).toContain('(false)')
   })
 
   it('names its globals so a second injection finds the first', () => {

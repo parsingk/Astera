@@ -1,7 +1,7 @@
 // Turns the runtime functions into strings the guest can run. `Function.prototype.toString` gives
 // the compiled body; wrapping it in an IIFE with JSON-embedded arguments is the whole trick.
 import type { Rect } from '../../../core/preview/pick/types'
-import { badgesRuntime, cancelRuntime, highlightRuntime, pickerRuntime } from './pickRuntime'
+import { badgesRuntime, cancelRuntime, chromeRuntime, highlightRuntime, pickerRuntime } from './pickRuntime'
 
 export interface BadgeMarker {
   seq: number
@@ -31,6 +31,12 @@ export function armScript(): string {
 
 export function cancelScript(): string {
   return iife(cancelRuntime)
+}
+
+/** Hides the picker's own overlay and badges, or puts them back. Wrapped around a capture so the
+ *  shot is of the page rather than of our highlight. */
+export function chromeScript(hidden: boolean): string {
+  return iife(chromeRuntime, hidden)
 }
 
 export function badgesScript(markers: readonly BadgeMarker[]): string {
