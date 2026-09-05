@@ -2367,6 +2367,28 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* The browser tab's busy ring on the tab bar — the session ring's shape, in the accent colour */
 .tab-dot.busy.bp-tab-busy { border-color: var(--line); border-top-color: var(--accent); border-right-color: var(--accent); }
 
+/* ---- Design Mode tray — components/AnnotationTray.tsx ---- */
+.dm-tray { flex: none; max-height: 40%; display: flex; flex-direction: column; border-top: 1px solid var(--line-soft); background: var(--panel); }
+.dm-tray.collapsed { max-height: none; }
+.dm-head { flex: none; height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 8px; font-size: 12px; color: var(--text-dim); }
+.dm-head .dm-title { flex: 1; min-width: 0; font-weight: 600; color: var(--text); }
+.dm-head button { background: none; border: 1px solid transparent; border-radius: var(--radius-sm); color: inherit; opacity: .8; cursor: pointer; padding: 1px 7px; font-size: 12px; }
+.dm-head button:hover:not(:disabled) { opacity: 1; border-color: var(--line-soft); }
+.dm-head button:disabled { opacity: .3; cursor: default; }
+.dm-head button.primary { background: var(--accent); color: var(--accent-ink, #fff); opacity: 1; }
+.dm-cards { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 8px; }
+.dm-card { display: grid; grid-template-columns: 24px 56px 1fr auto; grid-template-rows: auto auto; gap: 4px 8px; align-items: start; padding: 6px 8px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--bg); cursor: default; }
+.dm-card:hover { border-color: var(--line); }
+.dm-seq { grid-row: 1 / span 2; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: var(--accent-ink, #fff); font: 700 12px/20px var(--mono); text-align: center; }
+.dm-shot { grid-row: 1 / span 2; width: 56px; height: 40px; object-fit: contain; background: var(--elevated); border-radius: 2px; }
+.dm-shot.empty { display: flex; align-items: center; justify-content: center; color: var(--text-faint); font-size: 11px; }
+.dm-label { grid-column: 3; font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dm-comment { grid-column: 3; font: 12px var(--mono); color: var(--text); background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 3px 6px; resize: none; min-height: 24px; }
+.dm-comment:focus { outline: none; border-color: var(--accent); }
+.dm-side { grid-column: 4; grid-row: 1 / span 2; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.dm-side .ghost { opacity: .6; }
+.dm-side .ghost:hover { opacity: 1; }
+
 .md-split { flex: 1; min-height: 0; display: flex; }
 /* hidden 속성이 display:flex 에 덮이지 않게 못 박는다 — 이것이 에디터를 언마운트하지 않고 숨기는 방법이다 */
 .md-pane[hidden] { display: none; }
