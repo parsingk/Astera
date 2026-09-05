@@ -800,6 +800,7 @@ export const ja: Catalog = {
   'preview.toolbar.address': 'アドレス',
   'preview.toolbar.devtools': 'DevTools',
   'preview.toolbar.openExternal': 'ブラウザで開く',
+  'preview.viewport.label': '画面幅',
   'preview.viewport.desktop': 'デスクトップ',
   'preview.viewport.tablet': 'タブレット (768)',
   'preview.viewport.mobile': 'モバイル (390)',

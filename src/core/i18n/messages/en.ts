@@ -785,6 +785,7 @@ export const en: Record<keyof typeof ko, string> = {
   'preview.toolbar.address': 'Address',
   'preview.toolbar.devtools': 'DevTools',
   'preview.toolbar.openExternal': 'Open in browser',
+  'preview.viewport.label': 'Viewport width',
   'preview.viewport.desktop': 'Desktop',
   'preview.viewport.tablet': 'Tablet (768)',
   'preview.viewport.mobile': 'Mobile (390)',

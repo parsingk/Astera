@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { WebviewTag } from 'electron'
 import { loadErrorKind } from '../../../core/preview/errors'
-import { PREVIEW_PARTITION } from '../../../core/preview/guards'
+import { PREVIEW_PARTITION, guestNavigationAllowed } from '../../../core/preview/guards'
 import { displayHostOf, normalizeUrl } from '../../../core/preview/url'
 import { VIEWPORTS, type ViewportKey } from '../../../core/preview/viewports'
 import { useI18n } from '../i18n/I18nProvider'
@@ -73,6 +73,12 @@ export function BrowserPane({
   serverPendingRef.current = serverPending
   const urlRef = useRef(tab.url)
   urlRef.current = tab.url
+  // Read by the serverPending effect below, which is keyed on that prop alone — putting the error
+  // state in its dependency array instead would re-run it on every failed load
+  const errorRef = useRef(error)
+  errorRef.current = error
+  const gaveUpRef = useRef(gaveUp)
+  gaveUpRef.current = gaveUp
   // The retry loop for "server not up yet": one pending timer and when the first failure happened
   const retry = useRef<{ timer: ReturnType<typeof setTimeout> | null; since: number | null }>({ timer: null, since: null })
 
@@ -196,9 +202,24 @@ export function BrowserPane({
     }
   }, [])
 
-  // The run died (or was never there): stop retrying, and the waiting screen becomes "not responding"
+  // The run this tab waits for came or went.
+  //
+  // Gone: stop retrying, and the waiting screen becomes "not responding".
+  //
+  // Back: start the wait again. `serverPending` is derived from the open project's run list, which is
+  // replaced wholesale when the user switches projects — so a tab waiting for a slow server sees this
+  // go false and true again just from a trip to another project. Only a failed load schedules the next
+  // retry, and once the timer was cancelled no load is in flight to fail, so without this the pane
+  // comes back to a spinner that never resolves and offers no button (the waiting overlay has no
+  // Retry — it is not supposed to need one). Loading again restarts the 60-second budget too, which
+  // is right: the wait was interrupted, not spent.
   useEffect(() => {
-    if (!serverPending) clearRetry()
+    if (!serverPending) {
+      clearRetry()
+      return
+    }
+    if (errorRef.current?.kind === 'unreachable' && !gaveUpRef.current && retry.current.timer === null)
+      load(urlRef.current)
   }, [serverPending])
 
   // App reused this tab for the same address: load it again. Skipped at mount (nonce 0).
@@ -213,6 +234,11 @@ export function BrowserPane({
     const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `http://${raw}`
     const target = normalizeUrl(withScheme)
     if (!target) return
+    // The scheme is checked here because main cannot do it for this path: will-navigate does not fire
+    // for a programmatic loadURL, so the guard main installs on the guest never sees an address typed
+    // into this bar. Without this line `file:///…` in the address bar loads a local file into the
+    // guest — the very thing the attach check refuses an initial src for.
+    if (!guestNavigationAllowed(target)) return
     load(target)
   }
 
@@ -284,7 +310,7 @@ export function BrowserPane({
           items={VIEWPORTS.map((v) => ({ value: v.key, label: t(`preview.viewport.${v.key}`) }))}
           value={viewport}
           onChange={(v) => setViewport(v as ViewportKey)}
-          ariaLabel={t('preview.viewport.desktop')}
+          ariaLabel={t('preview.viewport.label')}
         />
         <button type="button" className={devtools ? 'active' : ''} title={t('preview.toolbar.devtools')} onClick={toggleDevtools}>
           {t('preview.toolbar.devtools')}
@@ -294,9 +320,16 @@ export function BrowserPane({
         </button>
       </div>
       <div className={`bp-stage${width !== null ? ' fixed' : ''}`}>
+        {/* allowpopups looks like the opposite of what this pane wants, and it is not. Without it the
+            guest's own renderer swallows window.open and target=_blank before the browser process is
+            consulted, so main's setWindowOpenHandler never runs and such a link does nothing at all.
+            With it, the handler runs and still returns deny — no window is ever created — but it now
+            learns the address and hands it to the link rule, which is what routes an ordinary
+            "open the docs" link to the system browser or to another preview tab. */}
         <webview
           ref={viewRef}
           className="bp-view"
+          allowpopups
           src={initialUrl.current}
           partition={PREVIEW_PARTITION}
           style={width !== null ? { width } : undefined}

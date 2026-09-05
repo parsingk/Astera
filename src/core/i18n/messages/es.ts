@@ -810,6 +810,7 @@ export const es: Catalog = {
   'preview.toolbar.address': 'Dirección',
   'preview.toolbar.devtools': 'DevTools',
   'preview.toolbar.openExternal': 'Abrir en el navegador',
+  'preview.viewport.label': 'Ancho de la vista',
   'preview.viewport.desktop': 'Escritorio',
   'preview.viewport.tablet': 'Tableta (768)',
   'preview.viewport.mobile': 'Móvil (390)',

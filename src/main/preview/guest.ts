@@ -33,9 +33,18 @@ export function installPreviewGuards(win: BrowserWindow): void {
     })
   })
   // Camera, microphone, notifications and the rest: a page from this machine may ask; others are refused.
-  session.fromPartition(PREVIEW_PARTITION).setPermissionRequestHandler((_wc, _permission, callback, details) => {
+  // Both handlers, because Electron splits the question in two. A prompting request (getUserMedia,
+  // Notification.requestPermission) goes to the request handler; a synchronous check
+  // (navigator.permissions.query, enumerateDevices) goes to the check handler, and an unset check
+  // handler falls back to Electron's default rather than to this rule — so installing only the first
+  // would enforce "this machine only" on one of the two paths.
+  const previewSession = session.fromPartition(PREVIEW_PARTITION)
+  previewSession.setPermissionRequestHandler((_wc, _permission, callback, details) => {
     callback(permissionAllowed(details.requestingUrl))
   })
+  previewSession.setPermissionCheckHandler((_wc, _permission, requestingOrigin) =>
+    permissionAllowed(requestingOrigin)
+  )
   // Dev HTTPS (mkcert) on localhost is waved through; the app's own window and any other host are not.
   app.on('certificate-error', (e, wc, url, _error, _certificate, callback) => {
     const ok = certificateAllowed(url, wc.getType())

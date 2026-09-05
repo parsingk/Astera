@@ -890,6 +890,7 @@ export const ko = {
   'preview.toolbar.address': '주소',
   'preview.toolbar.devtools': 'DevTools',
   'preview.toolbar.openExternal': '외부 브라우저로 열기',
+  'preview.viewport.label': '화면 폭',
   'preview.viewport.desktop': '데스크톱',
   'preview.viewport.tablet': '태블릿 (768)',
   'preview.viewport.mobile': '모바일 (390)',
