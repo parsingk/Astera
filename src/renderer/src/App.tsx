@@ -2462,6 +2462,15 @@ export default function App(): React.JSX.Element {
           if (pane) setActivePaneId(pane.id)
         }}
         onOpenExternal={(url) => void window.api.system.openExternal(url)}
+        sessions={sessions
+          .filter((s) => s.cwd === b.projectRoot && s.status !== 'exited')
+          .map((s) => ({ id: s.id, title: s.title, color: accounts.find((a) => a.id === s.accountId)?.color ?? '#888', busy: busy[s.id] === true }))}
+        onSendToSession={(sessionId, text) => {
+          // Through the terminal's own paste, never sessions.write — see sessionBus.registerPaste
+          if (!sessionBus.pasteInto(sessionId, text)) return false
+          selectWorkbenchTab(sessionTab(sessionId))
+          return true
+        }}
       />
     )
   }

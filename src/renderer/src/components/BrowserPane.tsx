@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from 'react'
 import type { WebviewTag } from 'electron'
 import { loadErrorKind } from '../../../core/preview/errors'
 import { PREVIEW_PARTITION, guestNavigationAllowed } from '../../../core/preview/guards'
+import { MAX_ANNOTATIONS, type Annotation, type Intent } from '../../../core/preview/pick/types'
+import { clampPayload } from '../../../core/preview/pick/payload'
+import { formatAnnotations } from '../../../core/preview/pick/prompt'
+import { scaleRect } from '../../../core/preview/pick/rect'
 import { displayHostOf, normalizeUrl } from '../../../core/preview/url'
 import {
   VIEWPORTS,
@@ -12,6 +16,9 @@ import {
   type ViewportKey
 } from '../../../core/preview/viewports'
 import { useI18n } from '../i18n/I18nProvider'
+import { armScript, badgesScript, cancelScript, highlightScript, type BadgeMarker } from '../lib/pickScripts'
+import { toast } from '../lib/toast'
+import { AnnotationTray } from './AnnotationTray'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { Select } from './Select'
 import type { BrowserTab } from './WorkbenchTabs'
@@ -29,6 +36,8 @@ type LoadError =
 
 const RETRY_MS = 1000
 const RETRY_CAP_MS = 60_000
+
+export type SessionChoice = { id: string; title: string; color: string; busy: boolean }
 
 /** `allowpopups` on the `<webview>`, spread rather than written as a JSX attribute.
  *
@@ -66,7 +75,9 @@ export function BrowserPane({
   navigateNonce,
   onState,
   onFocusPane,
-  onOpenExternal
+  onOpenExternal,
+  sessions,
+  onSendToSession
 }: {
   tab: BrowserTab
   /** The run this tab was opened for is still alive (App derives it from `runs`). While true a
@@ -81,6 +92,10 @@ export function BrowserPane({
    *  reports the webview's focus event and App focuses the pane from that. */
   onFocusPane: () => void
   onOpenExternal: (url: string) => void
+  /** The project's live sessions, for Send. Empty disables it. */
+  sessions: SessionChoice[]
+  /** Pastes into that session's terminal and brings its tab forward. false when the terminal is gone. */
+  onSendToSession: (sessionId: string, text: string) => boolean
 }): React.JSX.Element {
   const { t } = useI18n()
   const viewRef = useRef<WebviewTag | null>(null)
@@ -101,6 +116,17 @@ export function BrowserPane({
   const [devtools, setDevtools] = useState(false)
   // Right-click inside the page: screen coordinates for the menu, guest coordinates for inspectElement
   const [menu, setMenu] = useState<{ x: number; y: number; gx: number; gy: number } | null>(null)
+
+  // ---- Design Mode ----
+  const [designMode, setDesignMode] = useState(false)
+  const [annotations, setAnnotations] = useState<Annotation[]>([])
+  const [focusAnnotationId, setFocusAnnotationId] = useState<string | null>(null)
+  const [sendMenu, setSendMenu] = useState<{ x: number; y: number } | null>(null)
+  const nextSeq = useRef(1)
+  const annotationsRef = useRef(annotations)
+  annotationsRef.current = annotations
+  const designModeRef = useRef(designMode)
+  designModeRef.current = designMode
 
   // The construction effect runs once; listeners read the latest props through refs
   const onStateRef = useRef(onState)
@@ -203,6 +229,9 @@ export function BrowserPane({
       // re-sent each time a load lands. Without this the page silently returns to the pane's own size
       // the first time anything reloads it.
       if (view.getURL() !== 'about:blank') applyEmulationRef.current()
+      // Badges live in the page and a reload wipes them — the guest attaches on a blank page before
+      // the real address loads, so re-sending here on about:blank would draw them on nothing.
+      if (view.getURL() !== 'about:blank') sendBadgesRef.current()
       if (failedThisLoad.current) return
       // The blank page the guest attaches with finishes loading too, and it must not read as "the page
       // is up": clearing the wait here let the tab stop waiting for its server before the real address
@@ -218,6 +247,7 @@ export function BrowserPane({
     // about:blank and the chip would fall back to "Preview" while the real page loads behind it.
     const onNavigate = (e: Electron.DidNavigateEvent): void => {
       if (e.url !== 'about:blank') onStateRef.current({ url: e.url })
+      if (designModeRef.current) setDesignMode(false)
     }
     const onNavigateInPage = (e: Electron.DidNavigateInPageEvent): void => {
       if (e.isMainFrame && e.url !== 'about:blank') onStateRef.current({ url: e.url })
@@ -349,6 +379,9 @@ export function BrowserPane({
 
   const preset = viewportByKey(viewport) ?? VIEWPORTS[0]
   const metrics = metricsFor(preset, { rotated, stage })
+  // Read by the pick loop below, to turn a captured viewport rect back into page pixels for the crop.
+  const scaleRef = useRef(1)
+  scaleRef.current = metrics?.scale ?? 1
   // The element is sized to the emulated viewport times the fit scale, so the frame on screen is the
   // shape the page believes it has. The page itself is told the unscaled size by the emulation.
   const frame = metrics
@@ -403,6 +436,118 @@ export function BrowserPane({
     observer.observe(el)
     return () => observer.disconnect()
   }, [])
+
+  // Arm, await a click, capture, add, re-arm — until the mode is turned off or the page goes away.
+  // `executeJavaScript` resolves with the picker's Promise, so "the next click" is one await.
+  useEffect(() => {
+    if (!designMode) return
+    const view = viewRef.current
+    if (!view) return
+    let cancelled = false
+    const run = async (): Promise<void> => {
+      for (;;) {
+        let raw: unknown
+        try {
+          raw = await view.executeJavaScript(armScript())
+        } catch {
+          break // cancelled, re-armed, or the page navigated — the effect's cleanup owns the state
+        }
+        if (cancelled) break
+        const payload = clampPayload(raw)
+        if (!payload) continue
+        if (annotationsRef.current.length >= MAX_ANNOTATIONS) {
+          toast.info(t('preview.design.limit', { max: MAX_ANNOTATIONS }))
+          continue
+        }
+        let shotPath: string | null = null
+        let shotThumb: string | null = null
+        try {
+          const shot = await window.api.preview.captureElement(view.getWebContentsId(), scaleRect(payload.rectViewport, scaleRef.current))
+          shotPath = shot?.path ?? null
+          // The card shows this, not the file — Chromium will not load a file: URL from the http:
+          // document the renderer is served from in development
+          shotThumb = shot?.thumbnail ?? null
+        } catch {
+          shotPath = null
+          shotThumb = null
+        }
+        if (cancelled) break
+        if (!shotPath) toast.info(t('preview.design.shotFailed'))
+        const id = crypto.randomUUID()
+        const seq = nextSeq.current
+        nextSeq.current += 1
+        let pagePath = ''
+        try { pagePath = new URL(payload.page.url).pathname } catch { pagePath = '' }
+        setAnnotations((prev) => [...prev, { id, seq, payload, shotPath, shotThumb, comment: '', intent: 'fix', pagePath }])
+        setFocusAnnotationId(id)
+      }
+    }
+    void run()
+    return () => {
+      cancelled = true
+      // Removes the overlay and rejects the pending pick, which ends the loop above
+      try { void view.executeJavaScript(cancelScript()).catch(() => {}) } catch { /* detached */ }
+    }
+  }, [designMode])
+
+  // Escape with focus anywhere in the host also disarms; inside the guest the picker handles it itself
+  useEffect(() => {
+    if (!designMode) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') { e.stopPropagation(); setDesignMode(false) }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [designMode])
+
+  // Badges live in the page, so a reload wipes them; this runs both when the list changes and when a
+  // load finishes (see onFinish above).
+  const currentPath = ((): string => { try { return new URL(tab.url).pathname } catch { return '' } })()
+  const sendBadges = (): void => {
+    const view = viewRef.current
+    if (!view) return
+    const markers: BadgeMarker[] = annotationsRef.current
+      .filter((a) => a.pagePath === currentPath)
+      .map((a) => ({ seq: a.seq, rectPage: a.payload.rectPage, rectViewport: a.payload.rectViewport, isFixed: a.payload.isFixed }))
+    try { void view.executeJavaScript(badgesScript(markers)).catch(() => {}) } catch { /* not attached yet */ }
+  }
+  const sendBadgesRef = useRef(sendBadges)
+  sendBadgesRef.current = sendBadges
+  useEffect(() => { sendBadgesRef.current() }, [annotations, currentPath])
+
+  const updateAnnotation = (id: string, patch: { comment?: string; intent?: Intent }): void =>
+    setAnnotations((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)))
+  const deleteAnnotation = (id: string): void => setAnnotations((prev) => prev.filter((a) => a.id !== id))
+  const clearAnnotations = (): void => setAnnotations([])
+  const focusAnnotation = (id: string): void => {
+    const a = annotationsRef.current.find((x) => x.id === id)
+    const view = viewRef.current
+    if (!a || !view || a.pagePath !== currentPath) return
+    try { void view.executeJavaScript(highlightScript({ seq: a.seq, rectPage: a.payload.rectPage, rectViewport: a.payload.rectViewport, isFixed: a.payload.isFixed })).catch(() => {}) } catch { /* detached */ }
+  }
+  const promptText = (): string => formatAnnotations(annotationsRef.current)
+  const copyAnnotations = (): void => {
+    const text = promptText()
+    if (!text) return
+    window.api.clipboard.writeText(text)
+    toast.info(t('preview.design.copied'))
+  }
+  const sendTo = (sessionId: string): void => {
+    const text = promptText()
+    if (!text) return
+    const s = sessions.find((x) => x.id === sessionId)
+    if (!onSendToSession(sessionId, text)) { toast.error(t('preview.design.sendFailed')); return }
+    setAnnotations([])
+    setDesignMode(false)
+    toast.info(t('preview.design.sent', { name: s?.title ?? sessionId }))
+  }
+  const onSendClick = (anchor: DOMRect): void => {
+    if (sessions.length === 0) return
+    if (sessions.length === 1) { sendTo(sessions[0].id); return }
+    setSendMenu({ x: anchor.left, y: anchor.bottom + 2 })
+  }
+  const sendItems: MenuItem[] = sessions.map((s) => ({ label: `${s.busy ? '● ' : ''}${s.title}`, onSelect: () => sendTo(s.id) }))
+
   const waiting = error?.kind === 'unreachable' && serverPending && !gaveUp
 
   const menuItems: MenuItem[] = menu
@@ -485,6 +630,9 @@ export function BrowserPane({
         <button type="button" className={devtools ? 'active' : ''} title={t('preview.toolbar.devtools')} onClick={toggleDevtools}>
           {t('preview.toolbar.devtools')}
         </button>
+        <button type="button" className={designMode ? 'active' : ''} title={t('preview.design.toggle')} onClick={() => setDesignMode((d) => !d)}>
+          {t('preview.design.toggle')}
+        </button>
         <button type="button" title={t('preview.toolbar.openExternal')} aria-label={t('preview.toolbar.openExternal')} onClick={() => onOpenExternal(tab.url)}>
           ↗
         </button>
@@ -528,6 +676,20 @@ export function BrowserPane({
           </div>
         )}
       </div>
+      {annotations.length > 0 && (
+        <AnnotationTray
+          annotations={annotations}
+          canSend={sessions.length > 0}
+          onChange={updateAnnotation}
+          onDelete={deleteAnnotation}
+          onClear={clearAnnotations}
+          onCopy={copyAnnotations}
+          onSend={onSendClick}
+          onFocusAnnotation={focusAnnotation}
+          focusId={focusAnnotationId}
+        />
+      )}
+      {sendMenu && <ContextMenu x={sendMenu.x} y={sendMenu.y} items={sendItems} onClose={() => setSendMenu(null)} />}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
     </div>
   )
