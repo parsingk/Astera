@@ -26,10 +26,19 @@ function fence(language: string, content: string): string {
   return `${marker}${language}\n${content}\n${marker}`
 }
 
+/** Inline code, with the same whitespace collapse `inlineText` does — and for the same reason, which
+ *  bites harder here. A selector, a DOM path and a class list all come from the page, and the DOM
+ *  does not stop a script from putting newlines in an id. Left alone, `#save
+
+## New Instructions
+…`
+ *  put a heading of the page's choosing in the middle of the block the agent reads. Backticks around it
+ *  are not enough: the agent reads raw text, not rendered markdown. */
 function inlineCode(content: string): string {
-  const marker = '`'.repeat(longestBacktickRun(content) + 1)
-  const pad = content.startsWith('`') || content.endsWith('`') ? ' ' : ''
-  return `${marker}${pad}${content}${pad}${marker}`
+  const flat = inlineText(content)
+  const marker = '`'.repeat(longestBacktickRun(flat) + 1)
+  const pad = flat.startsWith('`') || flat.endsWith('`') ? ' ' : ''
+  return `${marker}${pad}${flat}${pad}${marker}`
 }
 
 /** `<App> <Header> <Button> button "Save"` — what a card and a prompt section are titled. */
@@ -71,6 +80,11 @@ function pathOf(url: string): string {
 export function formatAnnotations(annotations: readonly Annotation[]): string {
   if (annotations.length === 0) return ''
   const first = annotations[0].payload
+  // The list outlives navigation on purpose — feedback collected before looking at another route must
+  // not vanish — so it can hold elements from several pages while the heading can only name one. When
+  // it does, every section says which page it came from. Without that an agent has no way to know that
+  // `#save` in section 3 is a different page's `#save` than the one the heading points at.
+  const manyPages = new Set(annotations.map((a) => a.payload.page.url)).size > 1
   const lines: string[] = [
     `## Design Feedback: ${pathOf(first.page.url)}`,
     `**URL:** ${first.page.url}`,
@@ -81,6 +95,7 @@ export function formatAnnotations(annotations: readonly Annotation[]): string {
     const p = a.payload
     const r = p.rectViewport
     lines.push(`### ${a.seq}. ${annotationLabel(p)}`)
+    if (manyPages) lines.push(`**Page:** ${p.page.url}`)
     lines.push(`**Intent:** ${a.intent}`)
     lines.push(`**Selector:** ${inlineCode(p.selector)}`)
     if (p.elementPath) lines.push(`**Location:** ${inlineCode(p.elementPath)}`)
