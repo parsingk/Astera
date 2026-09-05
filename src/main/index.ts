@@ -10,6 +10,7 @@ import { applyLoginPath } from './loginPath'
 import { shouldForceWaylandOzone } from './ozone'
 import { registerIpc, parseAllowedExternalUrl, type OrchHandle } from './ipc'
 import { isOwnDocument } from './navigationGuard'
+import { installPreviewGuards } from './preview/guest'
 import { RollingCoordinator } from './rolling'
 import { SchedulerCoordinator } from './scheduler'
 import { CodexRollingCoordinator } from './codexRolling'
@@ -178,7 +179,9 @@ function createWindow(): BrowserWindow {
     // on Linux. Hiding the controls without first moving that confirmation into the main process —
     // into win.on('close'), where the WM's close path actually lands — silently kills every running
     // session, which is exactly the regression a217ac1 was written to prevent.
-    webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false }
+    // webviewTag: the browser tab's <webview> (renderer/components/BrowserPane.tsx). Off by default
+    // in Electron; installPreviewGuards below is what makes turning it on safe.
+    webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false, webviewTag: true }
   })
   if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   else win.loadFile(path.join(__dirname, '../renderer/index.html'))
@@ -217,6 +220,7 @@ function createWindow(): BrowserWindow {
     const parsed = parseAllowedExternalUrl(url)
     if (parsed) void shell.openExternal(parsed.toString())
   })
+  installPreviewGuards(win)
 
   // Closing the window (X) minimizes to the tray on Windows and macOS — whether or not sessions
   // exist. There the only real quit path is the tray 'Quit' menu (app.quit): app.quit sets
