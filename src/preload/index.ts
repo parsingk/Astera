@@ -201,7 +201,8 @@ const api = {
     openExternal: invoke('system.openExternal')
   },
   preview: {
-    toggleDevTools: invoke('preview.toggleDevTools')
+    toggleDevTools: invoke('preview.toggleDevTools'),
+    emulate: invoke('preview.emulate')
   },
   clipboard: {
     readText: () => clipboard.readText(),

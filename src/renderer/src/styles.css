@@ -2353,7 +2353,9 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    the picker's press and release land in different places, which is itself a selection. The guest is a
    separate document and selects its own text as it always did. */
 .bp-stage { position: relative; flex: 1; min-height: 0; display: flex; justify-content: center; overflow: hidden; user-select: none; }
-.bp-stage.fixed { background: var(--elevated); }
+/* A preset gives the frame both a width and a height, so it centres on both axes. The frame is the
+   emulated viewport times the fit scale, so it never exceeds the stage and nothing is clipped. */
+.bp-stage.fixed { background: var(--elevated); align-items: center; }
 /* Electron's webview is display:flex internally; sizing it through the flex item keeps that intact */
 .bp-view { flex: 1; min-width: 0; height: 100%; }
 .bp-stage.fixed .bp-view { flex: none; }

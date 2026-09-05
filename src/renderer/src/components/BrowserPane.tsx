@@ -3,7 +3,14 @@ import type { WebviewTag } from 'electron'
 import { loadErrorKind } from '../../../core/preview/errors'
 import { PREVIEW_PARTITION, guestNavigationAllowed } from '../../../core/preview/guards'
 import { displayHostOf, normalizeUrl } from '../../../core/preview/url'
-import { VIEWPORTS, type ViewportKey } from '../../../core/preview/viewports'
+import {
+  VIEWPORTS,
+  metricsFor,
+  rotate,
+  viewportByKey,
+  type EmulationMetrics,
+  type ViewportKey
+} from '../../../core/preview/viewports'
 import { useI18n } from '../i18n/I18nProvider'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { Select } from './Select'
@@ -77,13 +84,18 @@ export function BrowserPane({
 }): React.JSX.Element {
   const { t } = useI18n()
   const viewRef = useRef<WebviewTag | null>(null)
+  const stageRef = useRef<HTMLDivElement | null>(null)
   const initialUrl = useRef(tab.url)
   const [address, setAddress] = useState(tab.url)
   const [editing, setEditing] = useState(false)
   const [loading, setLoading] = useState(false)
   const [canBack, setCanBack] = useState(false)
   const [canForward, setCanForward] = useState(false)
-  const [viewport, setViewport] = useState<ViewportKey>('desktop')
+  const [viewport, setViewport] = useState<ViewportKey>('fill')
+  /** Landscape. Only meaningful for a tier with a size; `fill` ignores it. */
+  const [rotated, setRotated] = useState(false)
+  /** The stage's pixel size, measured — the fit-to-stage scale is computed from it. */
+  const [stage, setStage] = useState({ width: 0, height: 0 })
   const [error, setError] = useState<LoadError | null>(null)
   const [gaveUp, setGaveUp] = useState(false)
   const [devtools, setDevtools] = useState(false)
@@ -187,6 +199,10 @@ export function BrowserPane({
     // therefore wiped every error the instant it was set, so no overlay ever appeared and the retry
     // loop was cancelled before it could run — measured in the running app against a dead port.
     const onFinish = (): void => {
+      // Emulation is dropped by every navigation and every reload — measured — so a preset has to be
+      // re-sent each time a load lands. Without this the page silently returns to the pane's own size
+      // the first time anything reloads it.
+      if (view.getURL() !== 'about:blank') applyEmulationRef.current()
       if (failedThisLoad.current) return
       // The blank page the guest attaches with finishes loading too, and it must not read as "the page
       // is up": clearing the wait here let the tab stop waiting for its server before the real address
@@ -331,7 +347,62 @@ export function BrowserPane({
     void window.api.preview.toggleDevTools(id, displayHostOf(tab.url))
   }
 
-  const width = VIEWPORTS.find((v) => v.key === viewport)?.width ?? null
+  const preset = viewportByKey(viewport) ?? VIEWPORTS[0]
+  const metrics = metricsFor(preset, { rotated, stage })
+  // The element is sized to the emulated viewport times the fit scale, so the frame on screen is the
+  // shape the page believes it has. The page itself is told the unscaled size by the emulation.
+  const frame = metrics
+    ? { width: Math.round(metrics.width * metrics.scale), height: Math.round(metrics.height * metrics.scale) }
+    : null
+  const presetSize = preset.size ? (rotated ? rotate(preset.size) : preset.size) : null
+
+  /** The metrics as a plain string, so the effect below runs when they change rather than on every
+   *  render — `metricsFor` builds a fresh object each time. */
+  const metricsKey = metrics
+    ? `${metrics.width}x${metrics.height}@${metrics.deviceScaleFactor}:${metrics.mobile}:${metrics.scale}`
+    : 'off'
+  const metricsRef = useRef<EmulationMetrics | null>(metrics)
+  metricsRef.current = metrics
+
+  /** Sends the current metrics to main, which owns `enableDeviceEmulation` (it is a WebContents call,
+   *  not something the element exposes). Safe to call at any time: before the guest attaches there is
+   *  no id to send and it does nothing. */
+  const applyEmulation = (): void => {
+    const view = viewRef.current
+    if (!view) return
+    let id: number
+    try {
+      id = view.getWebContentsId()
+    } catch {
+      return // not attached yet; the dom-ready load will bring us back here
+    }
+    void window.api.preview.emulate(id, metricsRef.current)
+  }
+  const applyEmulationRef = useRef(applyEmulation)
+  applyEmulationRef.current = applyEmulation
+
+  useEffect(() => {
+    applyEmulationRef.current()
+  }, [metricsKey])
+
+  // The fit-to-stage scale needs the stage's pixel size, and the stage changes with every pane resize,
+  // split and drag.
+  useEffect(() => {
+    const el = stageRef.current
+    if (!el) return
+    const measure = (): void => {
+      const r = el.getBoundingClientRect()
+      setStage((prev) =>
+        Math.round(prev.width) === Math.round(r.width) && Math.round(prev.height) === Math.round(r.height)
+          ? prev
+          : { width: r.width, height: r.height }
+      )
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
   const waiting = error?.kind === 'unreachable' && serverPending && !gaveUp
 
   const menuItems: MenuItem[] = menu
@@ -389,11 +460,28 @@ export function BrowserPane({
         />
         <Select
           className="bp-viewport"
-          items={VIEWPORTS.map((v) => ({ value: v.key, label: t(`preview.viewport.${v.key}`) }))}
+          items={VIEWPORTS.map((v) => ({
+            value: v.key,
+            // The dimensions are part of the label on purpose: what a developer is choosing is a width,
+            // and reading it here saves knowing which tier is which.
+            label: v.size
+              ? `${t(`preview.viewport.${v.key}`)} — ${v.size.width} × ${v.size.height}`
+              : t(`preview.viewport.${v.key}`)
+          }))}
           value={viewport}
           onChange={(v) => setViewport(v as ViewportKey)}
           ariaLabel={t('preview.viewport.label')}
         />
+        {presetSize && (
+          <button
+            type="button"
+            title={`${t('preview.viewport.rotate')} (${presetSize.width} × ${presetSize.height})`}
+            aria-label={t('preview.viewport.rotate')}
+            onClick={() => setRotated((r) => !r)}
+          >
+            ⟳
+          </button>
+        )}
         <button type="button" className={devtools ? 'active' : ''} title={t('preview.toolbar.devtools')} onClick={toggleDevtools}>
           {t('preview.toolbar.devtools')}
         </button>
@@ -401,7 +489,7 @@ export function BrowserPane({
           ↗
         </button>
       </div>
-      <div className={`bp-stage${width !== null ? ' fixed' : ''}`}>
+      <div className={`bp-stage${frame ? ' fixed' : ''}`} ref={stageRef}>
         {/* allowpopups looks like the opposite of what this pane wants, and it is not. Without it the
             guest's own renderer swallows window.open and target=_blank before the browser process is
             consulted, so main's setWindowOpenHandler never runs and such a link does nothing at all.
@@ -414,7 +502,7 @@ export function BrowserPane({
           className="bp-view"
           src="about:blank"
           partition={PREVIEW_PARTITION}
-          style={width !== null ? { width } : undefined}
+          style={frame ? { width: frame.width, height: frame.height } : undefined}
         />
         {error && (
           <div className="bp-overlay">

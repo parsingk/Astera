@@ -12,6 +12,7 @@ import { registerIpc, parseAllowedExternalUrl, type OrchHandle } from './ipc'
 import { isOwnDocument } from './navigationGuard'
 import { installPreviewGuards } from './preview/guest'
 import { registerPreviewDevTools } from './preview/devtools'
+import { registerPreviewEmulation } from './preview/emulation'
 import { RollingCoordinator } from './rolling'
 import { SchedulerCoordinator } from './scheduler'
 import { CodexRollingCoordinator } from './codexRolling'
@@ -225,6 +226,10 @@ function createWindow(): BrowserWindow {
   // Hosts the preview's DevTools in a window this app creates, so it carries the app icon and a
   // title naming the page — Electron's own DevTools window carries neither.
   registerPreviewDevTools(APP_ICON)
+  // Viewport presets. DevTools does not offer its device toolbar for a <webview>, so the pane's picker
+  // goes through this instead — and it uses Electron's own API rather than the debugger, which keeps
+  // the debugger free for DevTools.
+  registerPreviewEmulation()
 
   // Closing the window (X) minimizes to the tray on Windows and macOS — whether or not sessions
   // exist. There the only real quit path is the tray 'Quit' menu (app.quit): app.quit sets

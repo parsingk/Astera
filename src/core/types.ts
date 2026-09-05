@@ -1,4 +1,5 @@
 import type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
+import type { EmulationMetrics } from './preview/viewports'
 export type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
 import type { RunContext } from './run/build'
 export type { RunContext } from './run/build'
@@ -962,6 +963,11 @@ export interface PreviewApi {
   /** Opens DevTools for that guest in an app-owned window, or closes it if already open. `title` names
    *  the page being inspected. Resolves to whether DevTools is open afterwards. */
   toggleDevTools(webContentsId: number, title: string): Promise<boolean>
+  /** Applies a viewport preset to that guest, or turns emulation off with `null`. Resolves to whether
+   *  it was applied — false means the guest was gone, or the metrics were not ones Chromium can take
+   *  (it wedges on a non-finite or non-positive number). Re-send it after every load: emulation does
+   *  not survive a navigation, measured. */
+  emulate(webContentsId: number, metrics: EmulationMetrics | null): Promise<boolean>
 }
 
 export interface SystemApi {
