@@ -192,9 +192,9 @@ export function pickerRuntime(): Promise<unknown> {
   const state: PickState = S
 
   function teardown(): void {
-    if (state.onMove) document.removeEventListener('mousemove', state.onMove, true)
-    if (state.onClick) document.removeEventListener('click', state.onClick, true)
-    if (state.onKey) document.removeEventListener('keydown', state.onKey, true)
+    if (state.onMove) window.removeEventListener('mousemove', state.onMove, true)
+    if (state.onClick) window.removeEventListener('click', state.onClick, true)
+    if (state.onKey) window.removeEventListener('keydown', state.onKey, true)
     state.onMove = null; state.onClick = null; state.onKey = null
     for (const n of [state.overlay, state.box, state.label]) if (n && n.parentNode) n.parentNode.removeChild(n)
     state.overlay = null; state.box = null; state.label = null; state.hovered = null
@@ -255,9 +255,16 @@ export function pickerRuntime(): Promise<unknown> {
     state.onKey = function (e: KeyboardEvent) {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); state.cancel() }
     }
-    document.addEventListener('mousemove', state.onMove, true)
-    document.addEventListener('click', state.onClick, true)
-    document.addEventListener('keydown', state.onKey, true)
+    // On `window`, not `document`: capture starts at the window, so this runs before any listener the
+    // page put on the document or below. It is not absolute — a page that registered its own
+    // window-capture click listener first and calls stopImmediatePropagation() still wins, and then a
+    // pick simply never resolves. Nothing can beat that from inside the page's own world, which is
+    // where this has to run (an isolated world needs the debugger, and the pane's DevTools button owns
+    // it). The escape hatch is that cancel() changes state directly instead of going through an event,
+    // so the toolbar toggle and Escape keep working even then.
+    window.addEventListener('mousemove', state.onMove, true)
+    window.addEventListener('click', state.onClick, true)
+    window.addEventListener('keydown', state.onKey, true)
   }
 
   return new Promise(function (resolve, reject) { state.pending = { resolve: resolve, reject: reject } })
@@ -281,6 +288,9 @@ export function badgesRuntime(markers: { seq: number; rectPage: { x: number; y: 
   state.markers = markers
 
   if (markers.length === 0) {
+    // The pending frame goes too. Leaving the handle set made the next paint skip itself: the new
+    // onUpdate's dedup guard reads a non-zero handle from the cleared run and returns without scheduling.
+    if (state.raf) { window.cancelAnimationFrame(state.raf); state.raf = 0 }
     if (state.onUpdate) { window.removeEventListener('scroll', state.onUpdate, true); window.removeEventListener('resize', state.onUpdate, true) }
     if (state.root && state.root.parentNode) state.root.parentNode.removeChild(state.root)
     state.root = null; state.onUpdate = null
