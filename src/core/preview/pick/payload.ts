@@ -5,15 +5,35 @@
 import { isSaneRect } from './rect'
 import { PICK_BUDGET, STYLE_KEYS, type ComputedStyles, type PickPayload, type Rect } from './types'
 
-const SECRET_NAME = /token|secret|passw|api[-_]?key|auth|cookie|session|csrf/i
-/** 32+ characters of base64 or hex with nothing else — the shape of a key, not of a word. */
-const SECRET_VALUE = /^(?:[A-Za-z0-9+/=_-]{32,}|[0-9a-fA-F]{32,})$/
+const SECRET_NAME = /token|secret|passw|api[-_]?key|auth|cookie|session|csrf|jwt|bearer|credential|private[-_]?key/i
+/** One long unbroken run of base64 or hex — the shape of a key, not of a word. */
+const SECRET_RUN = /^(?:[A-Za-z0-9+/=_-]{32,}|[0-9a-fA-F]{32,})$/
+/** Three base64url segments joined by dots: a JWT, and anything else built the same way. The dots are
+ *  why SECRET_RUN misses these — it wants one unbroken run — and a name like `data-jwt` on its own
+ *  told us nothing before `jwt` joined SECRET_NAME. Ten characters a segment keeps version strings
+ *  and dotted host names out of it. */
+const SECRET_SEGMENTS = /^[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}$/
 
 export function isSecretName(name: string): boolean {
   return SECRET_NAME.test(name)
 }
 
-/** http(s) only, with sensitive query parameters removed. Anything else becomes ''. */
+/** Does this value look like a secret whatever it is called? Deliberately biased towards redacting:
+ *  a content hash or a dash-free UUID is caught too, and losing one of those from a prompt costs
+ *  nothing next to leaking a key. */
+export function isSecretValue(value: string): boolean {
+  return SECRET_RUN.test(value) || SECRET_SEGMENTS.test(value)
+}
+
+/** http(s) only, with credentials and sensitive query parameters removed. Anything else becomes ''.
+ *
+ *  Credentials go unconditionally. `new URL().href` keeps `user:pass@host` verbatim, and this URL is a
+ *  required field that reaches the prompt on every single pick — so a staging address written the
+ *  Basic-auth way would leak without the page doing anything at all.
+ *
+ *  A parameter goes when its **name** looks secret or its **value** does. Checking only the name left
+ *  the same string redacted as an attribute and untouched as `?ref=<40 hex chars>`, which is the same
+ *  boundary treating the same secret two ways. */
 export function sanitizeUrl(u: string): string {
   let parsed: URL
   try {
@@ -22,7 +42,10 @@ export function sanitizeUrl(u: string): string {
     return ''
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return ''
-  for (const key of [...parsed.searchParams.keys()]) if (isSecretName(key)) parsed.searchParams.delete(key)
+  parsed.username = ''
+  parsed.password = ''
+  for (const [key, value] of [...parsed.searchParams.entries()])
+    if (isSecretName(key) || isSecretValue(value)) parsed.searchParams.delete(key)
   return parsed.href.slice(0, PICK_BUDGET.url)
 }
 
@@ -35,7 +58,7 @@ function styles(v: unknown): ComputedStyles | null {
   if (v === null || typeof v !== 'object') return null
   const o = v as Record<string, unknown>
   const out = {} as ComputedStyles
-  for (const k of STYLE_KEYS) out[k] = str(o[k], 200)
+  for (const k of STYLE_KEYS) out[k] = str(o[k], PICK_BUDGET.styleValue)
   return out
 }
 
@@ -46,8 +69,8 @@ function attributes(v: unknown): Record<string, string> {
   for (const [name, value] of Object.entries(v as Record<string, unknown>)) {
     if (n >= PICK_BUDGET.attributes) break
     if (typeof value !== 'string') continue
-    const key = name.slice(0, 100)
-    out[key] = isSecretName(key) || SECRET_VALUE.test(value) ? '[redacted]' : value.slice(0, PICK_BUDGET.attributeValue)
+    const key = name.slice(0, PICK_BUDGET.attributeName)
+    out[key] = isSecretName(key) || isSecretValue(value) ? '[redacted]' : value.slice(0, PICK_BUDGET.attributeValue)
     n += 1
   }
   return out
@@ -81,14 +104,14 @@ export function clampPayload(raw: unknown): PickPayload | null {
       viewportHeight: num(p.viewportHeight),
       devicePixelRatio: num(p.devicePixelRatio) || 1
     },
-    tagName: o.tagName.toLowerCase().slice(0, 50),
+    tagName: o.tagName.toLowerCase().slice(0, PICK_BUDGET.tagName),
     selector: str(o.selector, PICK_BUDGET.selector),
     elementPath: str(o.elementPath, PICK_BUDGET.elementPath),
     cssClasses: str(o.cssClasses, PICK_BUDGET.cssClasses),
     textSnippet: str(o.textSnippet, PICK_BUDGET.textSnippet),
     htmlSnippet: str(o.htmlSnippet, PICK_BUDGET.htmlSnippet),
     attributes: attributes(o.attributes),
-    accessibility: { role: strOrNull(a.role, 50), accessibleName: strOrNull(a.accessibleName, PICK_BUDGET.accessibleName) },
+    accessibility: { role: strOrNull(a.role, PICK_BUDGET.role), accessibleName: strOrNull(a.accessibleName, PICK_BUDGET.accessibleName) },
     rectViewport,
     rectPage,
     isFixed: o.isFixed === true,

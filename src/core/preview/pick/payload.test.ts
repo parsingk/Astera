@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { clampPayload, isSecretName, sanitizeUrl } from './payload'
+import { clampPayload, isSecretName, isSecretValue, sanitizeUrl } from './payload'
 import { PICK_BUDGET, STYLE_KEYS } from './types'
 
 const styles = Object.fromEntries(STYLE_KEYS.map((k) => [k, 'x']))
@@ -99,5 +99,29 @@ describe('sanitizeUrl', () => {
   it('empty for non-web schemes and garbage', () => {
     expect(sanitizeUrl('ftp://a')).toBe('')
     expect(sanitizeUrl('nope')).toBe('')
+  })
+})
+
+describe('the three ways a secret nearly got through', () => {
+  // Found by review, all in the same trust boundary. Each of these passed before the fix.
+  it('strips credentials written into the URL', () => {
+    expect(sanitizeUrl('https://admin:hunter2@internal.corp/dashboard')).toBe('https://internal.corp/dashboard')
+    expect(clampPayload({ ...raw, page: { ...raw.page, url: 'http://u:p@localhost:5173/a' } })!.page.url).toBe('http://localhost:5173/a')
+  })
+
+  it('drops a query parameter whose value looks like a secret, whatever it is called', () => {
+    expect(sanitizeUrl('https://a.b/c?ref=' + 'ab'.repeat(20) + '&page=2')).toBe('https://a.b/c?page=2')
+  })
+
+  it('redacts a dotted secret — a JWT is three base64url segments, which no single run matches', () => {
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk'
+    expect(isSecretValue(jwt)).toBe(true)
+    expect(clampPayload({ ...raw, attributes: { 'data-jwt': jwt } })!.attributes['data-jwt']).toBe('[redacted]')
+    expect(clampPayload({ ...raw, attributes: { 'data-bearer': 'x' } })!.attributes['data-bearer']).toBe('[redacted]')
+  })
+
+  it('leaves ordinary dotted values alone', () => {
+    for (const v of ['1.2.3', 'foo.bar.com', 'a.b.c', 'module.exports.default'])
+      expect(isSecretValue(v), v).toBe(false)
   })
 })
