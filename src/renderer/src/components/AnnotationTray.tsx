@@ -39,7 +39,7 @@ export function AnnotationTray({
   const [collapsed, setCollapsed] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
-  const [draftIntent, setDraftIntent] = useState<Intent>('fix')
+  const [draftIntent, setDraftIntent] = useState<Intent>('change')
   const rowRefs = useRef(new Map<string, HTMLDivElement>())
   const editRef = useRef<HTMLTextAreaElement | null>(null)
 

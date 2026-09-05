@@ -15,7 +15,7 @@ const payload: PickPayload = {
   computedStyles: styles, nearbyText: ['Pricing', 'Save changes'], reactComponents: '<App> <Header> <Button>', sourceFile: 'src/Header.tsx:42:7'
 }
 const note = (over: Partial<Annotation> = {}): Annotation => ({
-  id: 'a', seq: 1, payload, shotPath: 'C:\\shots\\a.png', shotThumb: null, comment: 'left padding is too tight', intent: 'fix', pagePath: '/pricing', ...over
+  id: 'a', seq: 1, payload, shotPath: 'C:\\shots\\a.png', shotThumb: null, comment: 'left padding is too tight', intent: 'change', pagePath: '/pricing', ...over
 })
 
 describe('formatAnnotations', () => {
@@ -26,7 +26,7 @@ describe('formatAnnotations', () => {
   it('writes the page heading once and one section per annotation, in order', () => {
     const out = formatAnnotations([note(), note({ seq: 3, comment: 'and this', intent: 'question' })])
     expect(out.startsWith('## Design Feedback: /pricing\n**Title:** Pricing\n**URL:** http://localhost:5173/pricing\n**Viewport:** 1280x720 @2x\n')).toBe(true)
-    expect(out).toContain('\n### 1. <App> <Header> <Button> button "Save"\n**Intent:** fix\n')
+    expect(out).toContain('\n### 1. <App> <Header> <Button> button "Save"\n**Intent:** change\n')
     expect(out).toContain('\n### 3. <App> <Header> <Button> button "Save"\n**Intent:** question\n')
     expect(out.indexOf('### 1.')).toBeLessThan(out.indexOf('### 3.'))
   })

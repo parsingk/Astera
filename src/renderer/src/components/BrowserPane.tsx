@@ -542,7 +542,7 @@ export function BrowserPane({
         nextSeq.current += 1
         let pagePath = ''
         try { pagePath = new URL(payload.page.url).pathname } catch { pagePath = '' }
-        setAnnotations((prev) => [...prev, { id, seq, payload, shotPath, shotThumb, comment: '', intent: 'fix', pagePath }])
+        setAnnotations((prev) => [...prev, { id, seq, payload, shotPath, shotThumb, comment: '', intent: 'change', pagePath }])
         setFocusAnnotationId(id)
       }
     }

@@ -80,8 +80,11 @@ export const PICK_BUDGET = {
 
 export const MAX_ANNOTATIONS = 20
 
-export type Intent = 'fix' | 'change' | 'question' | 'approve'
-export const INTENTS: readonly Intent[] = ['fix', 'change', 'question', 'approve']
+/** What the remark is: an ask, or a question. Orca's pair, and for its reason -- four of these put a
+ *  label on every row that says the same thing, and "fix" against "change" was a distinction the
+ *  agent never acted on differently. The value travels to the prompt verbatim, so it stays English. */
+export type Intent = 'change' | 'question'
+export const INTENTS: readonly Intent[] = ['change', 'question']
 
 export interface Annotation {
   id: string
