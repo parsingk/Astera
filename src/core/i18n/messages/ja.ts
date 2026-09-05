@@ -824,6 +824,7 @@ export const ja: Catalog = {
   'preview.design.edit': 'メモ {seq} を編集',
   'preview.design.save': '保存',
   'preview.design.cancel': 'キャンセル',
+  'preview.design.close': 'メモ入力を閉じる',
   'preview.design.collapse': 'メモを折りたたむ',
   'preview.design.clear': 'すべて消す',
   'preview.design.delete': 'このメモを削除',

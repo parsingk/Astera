@@ -809,6 +809,7 @@ export const en: Record<keyof typeof ko, string> = {
   'preview.design.edit': 'Edit annotation {seq}',
   'preview.design.save': 'Save',
   'preview.design.cancel': 'Cancel',
+  'preview.design.close': 'Close the comment box',
   'preview.design.collapse': 'Collapse annotations',
   'preview.design.clear': 'Clear all',
   'preview.design.delete': 'Delete note',

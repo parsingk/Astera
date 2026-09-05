@@ -163,7 +163,7 @@ export function pickerRuntime(): Promise<unknown> {
     }
   }
 
-  function extract(el: Element): unknown {
+  function extract(el: Element, clickX: number, clickY: number): unknown {
     const r = el.getBoundingClientRect()
     const cs = getComputedStyle(el)
     const styles: Record<string, string> = {}
@@ -181,6 +181,9 @@ export function pickerRuntime(): Promise<unknown> {
       htmlSnippet: el.outerHTML.slice(0, 4096),
       attributes: attrs,
       accessibility: { role: el.getAttribute('role'), accessibleName: accessibleName(el) },
+      // Where the pointer actually was, not where the element is: the comment box opens beside the
+      // click, and on a wide element those are far apart.
+      clickViewport: { x: clickX, y: clickY },
       rectViewport: { x: r.left, y: r.top, width: r.width, height: r.height },
       rectPage: { x: r.left + window.scrollX, y: r.top + window.scrollY, width: r.width, height: r.height },
       isFixed: isFixed(el),
@@ -256,7 +259,7 @@ export function pickerRuntime(): Promise<unknown> {
       if (!target || !p) return
       state.pending = null
       let payload: unknown = null
-      try { payload = extract(target) } catch (err) { p.reject(err instanceof Error ? err : new Error(String(err))); return }
+      try { payload = extract(target, e.clientX, e.clientY) } catch (err) { p.reject(err instanceof Error ? err : new Error(String(err))); return }
       p.resolve(payload)
     }
     state.onKey = function (e: KeyboardEvent) {

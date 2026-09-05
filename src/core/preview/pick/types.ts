@@ -46,6 +46,9 @@ export interface PickPayload {
   textSnippet: string
   htmlSnippet: string
   accessibility: { role: string | null; accessibleName: string | null }
+  /** Where the pointer was when the element was picked, in the page's own pixels. The comment box
+   *  opens beside it. Not part of the prompt — a click position says nothing to an agent. */
+  clickViewport: { x: number; y: number }
   rectViewport: Rect
   rectPage: Rect
   isFixed: boolean

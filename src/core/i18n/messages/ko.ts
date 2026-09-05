@@ -914,6 +914,7 @@ export const ko = {
   'preview.design.edit': '{seq}번 메모 고치기',
   'preview.design.save': '저장',
   'preview.design.cancel': '취소',
+  'preview.design.close': '메모 입력 닫기',
   'preview.design.collapse': '메모 접기',
   'preview.design.clear': '모두 지우기',
   'preview.design.delete': '이 메모 삭제',

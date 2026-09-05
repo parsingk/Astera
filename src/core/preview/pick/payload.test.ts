@@ -12,6 +12,7 @@ const raw = {
   textSnippet: 'Save',
   htmlSnippet: '<button id="save" class="cta primary">Save</button>',
   accessibility: { role: null, accessibleName: 'Save' },
+  clickViewport: { x: 840, y: 41 },
   rectViewport: { x: 812, y: 24, width: 96, height: 36 },
   rectPage: { x: 812, y: 24, width: 96, height: 36 },
   isFixed: false,
@@ -94,6 +95,20 @@ describe('clampPayload', () => {
     expect(out.sourceFile).toBeNull()
     expect(out.nearbyText).toEqual([])
     expect(out.accessibility).toEqual({ role: null, accessibleName: null })
+  })
+})
+
+describe('clickViewport', () => {
+  it('comes through as given', () => {
+    expect(clampPayload(raw)!.clickViewport).toEqual({ x: 840, y: 41 })
+  })
+
+  it('falls back to the element’s corner when the guest sends nothing usable', () => {
+    const corner = { x: raw.rectViewport.x, y: raw.rectViewport.y }
+    const { clickViewport: _c, ...without } = raw
+    expect(clampPayload(without)!.clickViewport).toEqual(corner)
+    expect(clampPayload({ ...raw, clickViewport: { x: Number.NaN, y: 0 } })!.clickViewport).toEqual(corner)
+    expect(clampPayload({ ...raw, clickViewport: 'nope' })!.clickViewport).toEqual(corner)
   })
 })
 

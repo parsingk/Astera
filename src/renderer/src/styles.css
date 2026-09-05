@@ -2413,6 +2413,22 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .dm-intents button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink, #fff); }
 .dm-edit-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 6px; }
 
+/* The comment box that opens beside the pointer on a pick — components/AnnotationPopover.tsx.
+   Placed by popoverSpot in stage pixels; the width here and POPOVER.width there have to agree, or
+   the box is kept on screen by the wrong number. */
+.dm-pop { position: absolute; z-index: 31; width: 264px; box-sizing: border-box; padding: 8px;
+  border: 1px solid var(--line); border-radius: var(--radius-md, 8px); background: var(--panel);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .22); user-select: text; }
+.dm-pop-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.dm-pop-label { flex: 1; min-width: 0; font-size: 12px; font-weight: 500; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dm-pop-head button { background: none; border: 0; color: var(--text-dim); cursor: pointer; padding: 0 3px; font-size: 13px; }
+.dm-pop-head button:hover { color: var(--text); }
+.dm-pop textarea { width: 100%; box-sizing: border-box; font: 12px var(--mono); color: var(--text);
+  background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 4px 6px; resize: vertical; }
+.dm-pop textarea:focus { outline: none; border-color: var(--accent); }
+.dm-pop .dm-intents { margin-top: 6px; }
+
 .md-split { flex: 1; min-height: 0; display: flex; }
 /* hidden 속성이 display:flex 에 덮이지 않게 못 박는다 — 이것이 에디터를 언마운트하지 않고 숨기는 방법이다 */
 .md-pane[hidden] { display: none; }

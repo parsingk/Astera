@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { WebviewTag } from 'electron'
 import { loadErrorKind } from '../../../core/preview/errors'
 import { PREVIEW_PARTITION, guestNavigationAllowed } from '../../../core/preview/guards'
-import { MAX_ANNOTATIONS, type Annotation, type CaptureResult, type Intent } from '../../../core/preview/pick/types'
+import { MAX_ANNOTATIONS, type Annotation, type CaptureResult, type Intent, type PickPayload } from '../../../core/preview/pick/types'
 import { clampPayload } from '../../../core/preview/pick/payload'
 import { formatAnnotations } from '../../../core/preview/pick/prompt'
 import { clampToView, scaleRect } from '../../../core/preview/pick/rect'
@@ -18,6 +18,7 @@ import {
 import { useI18n } from '../i18n/I18nProvider'
 import { armScript, badgesScript, cancelScript, chromeScript, highlightScript, type BadgeMarker } from '../lib/pickScripts'
 import { toast } from '../lib/toast'
+import { AnnotationPopover } from './AnnotationPopover'
 import { AnnotationTray } from './AnnotationTray'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { Select } from './Select'
@@ -48,6 +49,33 @@ export type SessionChoice = { id: string; title: string; busy: boolean }
  *  class, src and partition. Spreading a value typed as the declaration expects is what gets the
  *  string past the type while keeping the element's other attributes checked. */
 const ALLOW_POPUPS = { allowpopups: '' } as unknown as { allowpopups?: boolean }
+
+/** Room the comment box needs, measured from the rendered box. Used to centre it on the pointer and
+ *  to keep it inside the stage; the box itself is sized by the stylesheet. */
+const POPOVER = { width: 264, height: 112, gap: 14, margin: 8 }
+
+/** Where the comment box opens, in the stage's own pixels.
+ *
+ *  Beside the pointer, which is why the guest sends the click position at all: on a wide element the
+ *  element's corner can be half a screen away from where the user was looking. The page's pixels are
+ *  not the stage's under a device preset, so the same measured scale the capture uses converts them.
+ *  Near the right edge it opens to the left of the pointer instead of being pushed off it. */
+function popoverSpot(payload: PickPayload, view: WebviewTag, stage: HTMLDivElement | null): { x: number; y: number } {
+  const v = view.getBoundingClientRect()
+  const s = stage?.getBoundingClientRect() ?? v
+  const scale = payload.page.viewportWidth > 0 ? v.width / payload.page.viewportWidth : 1
+  const pointerX = v.left - s.left + payload.clickViewport.x * scale
+  const pointerY = v.top - s.top + payload.clickViewport.y * scale
+  const right = pointerX + POPOVER.gap
+  const x = right + POPOVER.width + POPOVER.margin <= s.width ? right : pointerX - POPOVER.gap - POPOVER.width
+  const y = pointerY - POPOVER.height / 2
+  const maxX = Math.max(POPOVER.margin, s.width - POPOVER.width - POPOVER.margin)
+  const maxY = Math.max(POPOVER.margin, s.height - POPOVER.height - POPOVER.margin)
+  return {
+    x: Math.min(Math.max(x, POPOVER.margin), maxX),
+    y: Math.min(Math.max(y, POPOVER.margin), maxY)
+  }
+}
 
 /** How long a screenshot may take before the pick gives up on it. */
 const CAPTURE_TIMEOUT_MS = 5000
@@ -145,6 +173,8 @@ export function BrowserPane({
   const [designMode, setDesignMode] = useState(false)
   const [annotations, setAnnotations] = useState<Annotation[]>([])
   const [focusAnnotationId, setFocusAnnotationId] = useState<string | null>(null)
+  /** The annotation whose comment box is open, and where it sits in the stage's own pixels. */
+  const [popover, setPopover] = useState<{ id: string; x: number; y: number } | null>(null)
   // The Copy button says "copied" for a moment instead of raising a toast
   const [copied, setCopied] = useState(false)
   const copiedTimer = useRef<number | undefined>(undefined)
@@ -544,6 +574,7 @@ export function BrowserPane({
         try { pagePath = new URL(payload.page.url).pathname } catch { pagePath = '' }
         setAnnotations((prev) => [...prev, { id, seq, payload, shotPath, shotThumb, comment: '', intent: 'change', pagePath }])
         setFocusAnnotationId(id)
+        setPopover({ id, ...popoverSpot(payload, view, stageRef.current) })
       }
     }
     void run()
@@ -608,6 +639,11 @@ export function BrowserPane({
     .map((a) => `${a.seq}:${a.pagePath}:${Math.round(a.payload.rectPage.x)},${Math.round(a.payload.rectPage.y)}`)
     .join('|')
   useEffect(() => { sendBadgesRef.current() }, [badgeKey, currentPath])
+
+  // A delete, a clear or a send takes the open comment box with it
+  useEffect(() => {
+    if (popover && !annotations.some((a) => a.id === popover.id)) setPopover(null)
+  }, [annotations, popover])
 
   const updateAnnotation = (id: string, patch: { comment?: string; intent?: Intent }): void =>
     setAnnotations((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)))
@@ -782,6 +818,12 @@ export function BrowserPane({
             )}
           </div>
         )}
+        {popover && (() => {
+          const a = annotations.find((x) => x.id === popover.id)
+          return a ? (
+            <AnnotationPopover annotation={a} at={popover} onChange={updateAnnotation} onClose={() => setPopover(null)} />
+          ) : null
+        })()}
         {annotations.length > 0 && (
           <AnnotationTray
             annotations={annotations}

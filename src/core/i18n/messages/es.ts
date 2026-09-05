@@ -834,6 +834,7 @@ export const es: Catalog = {
   'preview.design.edit': 'Editar la nota {seq}',
   'preview.design.save': 'Guardar',
   'preview.design.cancel': 'Cancelar',
+  'preview.design.close': 'Cerrar el cuadro de comentario',
   'preview.design.collapse': 'Contraer las notas',
   'preview.design.clear': 'Borrar todo',
   'preview.design.delete': 'Eliminar nota',

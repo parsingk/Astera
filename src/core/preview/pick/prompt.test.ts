@@ -11,6 +11,7 @@ const payload: PickPayload = {
   tagName: 'button', selector: '#save', elementPath: 'main > header > button.cta', cssClasses: 'cta primary',
   textSnippet: 'Save', htmlSnippet: '<button id="save" class="cta primary">Save</button>',
   accessibility: { role: null, accessibleName: 'Save' },
+  clickViewport: { x: 830, y: 40 },
   rectViewport: { x: 812.4, y: 24, width: 96, height: 36 }, rectPage: { x: 812.4, y: 24, width: 96, height: 36 }, isFixed: false,
   computedStyles: styles, nearbyText: ['Pricing', 'Save changes'], reactComponents: '<App> <Header> <Button>', sourceFile: 'src/Header.tsx:42:7'
 }
