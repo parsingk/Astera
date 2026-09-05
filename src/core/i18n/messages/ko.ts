@@ -921,7 +921,6 @@ export const ko = {
   'preview.design.intent.label': '의도',
   'preview.design.limit': '메모는 탭마다 {max}개까지입니다',
   'preview.design.noSession': '이 프로젝트에 열린 세션이 없습니다',
-  'preview.design.pickSession': '어느 세션에 보낼까요?',
   'preview.design.sent': '{name} 세션에 붙여 넣었습니다. Enter 로 보내세요',
   'preview.design.sendFailed': '그 세션의 터미널이 없습니다',
   'preview.design.copied': '복사했습니다',

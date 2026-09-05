@@ -10,7 +10,7 @@ const payload: PickPayload = {
   page: { url: 'http://localhost:5173/pricing', title: 'Pricing', viewportWidth: 1280, viewportHeight: 720, devicePixelRatio: 2 },
   tagName: 'button', selector: '#save', elementPath: 'main > header > button.cta', cssClasses: 'cta primary',
   textSnippet: 'Save', htmlSnippet: '<button id="save" class="cta primary">Save</button>',
-  attributes: { id: 'save' }, accessibility: { role: null, accessibleName: 'Save' },
+  accessibility: { role: null, accessibleName: 'Save' },
   rectViewport: { x: 812.4, y: 24, width: 96, height: 36 }, rectPage: { x: 812.4, y: 24, width: 96, height: 36 }, isFixed: false,
   computedStyles: styles, nearbyText: ['Pricing', 'Save changes'], reactComponents: '<App> <Header> <Button>', sourceFile: 'src/Header.tsx:42:7'
 }
@@ -25,7 +25,7 @@ describe('formatAnnotations', () => {
 
   it('writes the page heading once and one section per annotation, in order', () => {
     const out = formatAnnotations([note(), note({ seq: 3, comment: 'and this', intent: 'question' })])
-    expect(out.startsWith('## Design Feedback: /pricing\n**URL:** http://localhost:5173/pricing\n**Viewport:** 1280x720\n')).toBe(true)
+    expect(out.startsWith('## Design Feedback: /pricing\n**Title:** Pricing\n**URL:** http://localhost:5173/pricing\n**Viewport:** 1280x720 @2x\n')).toBe(true)
     expect(out).toContain('\n### 1. <App> <Header> <Button> button "Save"\n**Intent:** fix\n')
     expect(out).toContain('\n### 3. <App> <Header> <Button> button "Save"\n**Intent:** question\n')
     expect(out.indexOf('### 1.')).toBeLessThan(out.indexOf('### 3.'))

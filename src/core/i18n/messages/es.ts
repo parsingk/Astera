@@ -841,7 +841,6 @@ export const es: Catalog = {
   'preview.design.intent.label': 'Intención',
   'preview.design.limit': 'Hasta {max} notas por pestaña',
   'preview.design.noSession': 'No hay sesión abierta en este proyecto',
-  'preview.design.pickSession': '¿A qué sesión enviar?',
   'preview.design.sent': 'Pegado en {name}. Pulsa Enter para enviar',
   'preview.design.sendFailed': 'Esa sesión no tiene terminal',
   'preview.design.copied': 'Copiado',

@@ -87,8 +87,11 @@ export function formatAnnotations(annotations: readonly Annotation[]): string {
   const manyPages = new Set(annotations.map((a) => a.payload.page.url)).size > 1
   const lines: string[] = [
     `## Design Feedback: ${pathOf(first.page.url)}`,
+    ...(first.page.title ? [`**Title:** ${inlineText(first.page.title)}`] : []),
     `**URL:** ${first.page.url}`,
-    `**Viewport:** ${first.page.viewportWidth}x${first.page.viewportHeight}`,
+    // The ratio belongs next to the size: it is what decides which asset a `srcset` picks, and it is a
+    // common thing to be asking about when a screenshot looks soft.
+    `**Viewport:** ${first.page.viewportWidth}x${first.page.viewportHeight}${first.page.devicePixelRatio !== 1 ? ` @${first.page.devicePixelRatio}x` : ''}`,
     ''
   ]
   for (const a of annotations) {
@@ -102,6 +105,7 @@ export function formatAnnotations(annotations: readonly Annotation[]): string {
     if (p.sourceFile) lines.push(`**Source:** ${inlineText(p.sourceFile)}`)
     if (p.reactComponents) lines.push(`**React:** ${inlineText(p.reactComponents)}`)
     lines.push(`**Bounds:** x=${Math.round(r.x)}, y=${Math.round(r.y)}, ${Math.round(r.width)}x${Math.round(r.height)}`)
+    if (p.accessibility.role) lines.push(`**Role:** ${inlineText(p.accessibility.role)}`)
     if (p.cssClasses) lines.push(`**Classes:** ${inlineCode(p.cssClasses)}`)
     if (p.textSnippet) lines.push(`**Text:** "${inlineText(p.textSnippet)}"`)
     if (p.nearbyText.length > 0) {

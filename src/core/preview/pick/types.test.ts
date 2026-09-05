@@ -24,6 +24,5 @@ describe('the values later tasks assert against', () => {
     expect(PICK_BUDGET.htmlSnippet).toBe(4096)
     expect(PICK_BUDGET.textSnippet).toBe(200)
     expect(PICK_BUDGET.nearbyTextEntries).toBe(10)
-    expect(PICK_BUDGET.attributes).toBe(40)
   })
 })

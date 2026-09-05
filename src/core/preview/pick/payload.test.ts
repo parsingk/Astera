@@ -11,7 +11,6 @@ const raw = {
   cssClasses: 'cta primary',
   textSnippet: 'Save',
   htmlSnippet: '<button id="save" class="cta primary">Save</button>',
-  attributes: { id: 'save', class: 'cta primary' },
   accessibility: { role: null, accessibleName: 'Save' },
   rectViewport: { x: 812, y: 24, width: 96, height: 36 },
   rectPage: { x: 812, y: 24, width: 96, height: 36 },
@@ -41,23 +40,36 @@ describe('clampPayload', () => {
 
   it('caps nearbyText entries and their length, and attributes at forty', () => {
     const many = Array.from({ length: 30 }, (_, i) => `t${i}` + 'y'.repeat(500))
-    const attrs = Object.fromEntries(Array.from({ length: 60 }, (_, i) => [`data-a${i}`, 'v']))
-    const out = clampPayload({ ...raw, nearbyText: many, attributes: attrs })!
+    const out = clampPayload({ ...raw, nearbyText: many })!
     expect(out.nearbyText).toHaveLength(PICK_BUDGET.nearbyTextEntries)
     expect(out.nearbyText[0]).toHaveLength(PICK_BUDGET.nearbyTextEntry)
-    expect(Object.keys(out.attributes)).toHaveLength(PICK_BUDGET.attributes)
   })
 
-  it('redacts secret-looking attributes by name and by value', () => {
-    const out = clampPayload({
-      ...raw,
-      attributes: { 'data-token': 'abc', Authorization: 'Bearer x', 'x-api-key': 'k', title: 'fine', 'data-hash': 'a'.repeat(40) }
-    })!
-    expect(out.attributes['data-token']).toBe('[redacted]')
-    expect(out.attributes.Authorization).toBe('[redacted]')
-    expect(out.attributes['x-api-key']).toBe('[redacted]')
-    expect(out.attributes.title).toBe('fine')
-    expect(out.attributes['data-hash']).toBe('[redacted]')
+  it('redacts secret-looking attributes inside the HTML, keeping the name so the agent sees it exists', () => {
+    const html = '<div data-token="abc" Authorization="Bearer x" title="fine" data-hash="' + 'a'.repeat(40) + '"></div>'
+    const out = clampPayload({ ...raw, htmlSnippet: html })!.htmlSnippet
+    expect(out).toContain('data-token="[redacted]"')
+    expect(out).toContain('Authorization="[redacted]"')
+    expect(out).toContain('data-hash="[redacted]"')
+    expect(out).toContain('title="fine"')
+  })
+
+  // outerHTML carries every descendant too, which is where a page keeps the things worth stealing
+  it('redacts a descendant’s hidden field and empties a script body', () => {
+    const html = '<div><input type="hidden" name="csrf" value="8a3f"><script id="__NEXT_DATA__">{"apiKey":"AIzaSyDEADBEEF"}</script></div>'
+    const out = clampPayload({ ...raw, htmlSnippet: html })!.htmlSnippet
+    expect(out).not.toContain('AIzaSyDEADBEEF')
+    expect(out).toContain('<script id="__NEXT_DATA__">[redacted]</script>')
+    expect(out).not.toContain('8a3f')
+    expect(out).toContain('value="[redacted]"')
+    // the name stays: it tells the agent what the field is, and it is not the secret
+    expect(out).toContain('name="csrf"')
+  })
+
+  it('a tag name keeps only what a tag name can hold', () => {
+    expect(clampPayload({ ...raw, tagName: 'DIV' })!.tagName).toBe('div')
+    expect(clampPayload({ ...raw, tagName: 'div\n\n## heading' })!.tagName).toBe('divheading')
+    expect(clampPayload({ ...raw, tagName: 'my-widget' })!.tagName).toBe('my-widget')
   })
 
   it('keeps http(s) URLs minus sensitive query parameters, and drops other schemes', () => {
@@ -116,8 +128,8 @@ describe('the three ways a secret nearly got through', () => {
   it('redacts a dotted secret — a JWT is three base64url segments, which no single run matches', () => {
     const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk'
     expect(isSecretValue(jwt)).toBe(true)
-    expect(clampPayload({ ...raw, attributes: { 'data-jwt': jwt } })!.attributes['data-jwt']).toBe('[redacted]')
-    expect(clampPayload({ ...raw, attributes: { 'data-bearer': 'x' } })!.attributes['data-bearer']).toBe('[redacted]')
+    expect(clampPayload({ ...raw, htmlSnippet: `<a data-jwt="${jwt}"></a>` })!.htmlSnippet).toContain('data-jwt="[redacted]"')
+    expect(clampPayload({ ...raw, htmlSnippet: '<a data-bearer="x"></a>' })!.htmlSnippet).toContain('data-bearer="[redacted]"')
   })
 
   it('leaves ordinary dotted values alone', () => {

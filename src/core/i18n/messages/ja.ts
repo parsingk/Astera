@@ -831,7 +831,6 @@ export const ja: Catalog = {
   'preview.design.intent.label': '意図',
   'preview.design.limit': 'メモはタブごとに {max} 件までです',
   'preview.design.noSession': 'このプロジェクトに開いているセッションがありません',
-  'preview.design.pickSession': 'どのセッションに送りますか？',
   'preview.design.sent': '{name} に貼り付けました。Enter で送信',
   'preview.design.sendFailed': 'そのセッションの端末がありません',
   'preview.design.copied': 'コピーしました',

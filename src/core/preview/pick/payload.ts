@@ -2,7 +2,7 @@
 // a payload-shaped object with a ten-megabyte outerHTML, a token in a data attribute, a URL that is
 // not a page. Nothing from the guest reaches an annotation without passing through here.
 // node: no imports — the renderer imports this file.
-import { isSaneRect } from './rect'
+import { isFiniteRect } from './rect'
 import { PICK_BUDGET, STYLE_KEYS, type ComputedStyles, type PickPayload, type Rect } from './types'
 
 const SECRET_NAME = /token|secret|passw|api[-_]?key|auth|cookie|session|csrf|jwt|bearer|credential|private[-_]?key/i
@@ -52,7 +52,7 @@ export function sanitizeUrl(u: string): string {
 const str = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '')
 const strOrNull = (v: unknown, max: number): string | null => (typeof v === 'string' && v !== '' ? v.slice(0, max) : null)
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
-const rect = (v: unknown): Rect | null => (isSaneRect(v) ? { x: v.x, y: v.y, width: v.width, height: v.height } : null)
+const rect = (v: unknown): Rect | null => (isFiniteRect(v) ? { x: v.x, y: v.y, width: v.width, height: v.height } : null)
 
 function styles(v: unknown): ComputedStyles | null {
   if (v === null || typeof v !== 'object') return null
@@ -62,18 +62,38 @@ function styles(v: unknown): ComputedStyles | null {
   return out
 }
 
-function attributes(v: unknown): Record<string, string> {
-  if (v === null || typeof v !== 'object') return {}
-  const out: Record<string, string> = {}
-  let n = 0
-  for (const [name, value] of Object.entries(v as Record<string, unknown>)) {
-    if (n >= PICK_BUDGET.attributes) break
-    if (typeof value !== 'string') continue
-    const key = name.slice(0, PICK_BUDGET.attributeName)
-    out[key] = isSecretName(key) || isSecretValue(value) ? '[redacted]' : value.slice(0, PICK_BUDGET.attributeValue)
-    n += 1
-  }
-  return out
+/** An attribute inside a serialised element: `name="value"` or `name='value'`. */
+const HTML_ATTRIBUTE = /([A-Za-z_:][-\w:.]*)\s*=\s*("([^"]*)"|'([^']*)')/g
+/** An `<input>` whose type is hidden or password. Its `value` is state the page is carrying, never
+ *  anything a remark about the look of a screen is about — a CSRF token, a form nonce, a typed
+ *  password. The attribute rules cannot reach it: the name is `value`, and the secret is the value. */
+const HTML_SECRET_INPUT = /<input\b[^>]*\btype\s*=\s*["'](?:hidden|password)["'][^>]*>/gi
+/** A script or style element and everything between its tags. */
+const HTML_INLINE_BLOCK = /<(script|style)\b([^>]*)>[\s\S]*?<\/\1\s*>/gi
+
+/** The element's own markup, with what should not travel taken out of it.
+ *
+ *  This is the field that actually reaches the agent — the separate `attributes` map was redacted and
+ *  then read by nobody, so the guarding was happening on the path that went nowhere. `outerHTML`
+ *  carries every attribute of the element **and of all its descendants**: a hidden CSRF input, a
+ *  `data-*` configuration blob, a framework's bootstrap script. Clicking an ordinary wrapper on an
+ *  ordinary dev page was enough to paste those into a session.
+ *
+ *  Three rules. An attribute whose name or value looks secret keeps its name and loses its value, so
+ *  the agent still sees that the attribute is there. A hidden or password input loses its `value`,
+ *  which the attribute rules cannot reach because the name is `value` and the secret is the value. And
+ *  a `<script>` or `<style>` body is replaced wholesale: it is never what a remark about the look of
+ *  something is about, and it is where a page keeps its configuration. */
+export function redactHtml(html: string): string {
+  return html
+    .replace(HTML_SECRET_INPUT, (tag: string) =>
+      tag.replace(/\bvalue\s*=\s*("[^"]*"|'[^']*')/i, 'value="[redacted]"')
+    )
+    .replace(HTML_INLINE_BLOCK, (_m, tag: string, attrs: string) => `<${tag}${attrs}>[redacted]</${tag}>`)
+    .replace(HTML_ATTRIBUTE, (whole: string, name: string, _q: string, dq?: string, sq?: string) => {
+      const value = dq ?? sq ?? ''
+      return isSecretName(name) || isSecretValue(value) ? `${name}="[redacted]"` : whole
+    })
 }
 
 function nearbyText(v: unknown): string[] {
@@ -104,13 +124,15 @@ export function clampPayload(raw: unknown): PickPayload | null {
       viewportHeight: num(p.viewportHeight),
       devicePixelRatio: num(p.devicePixelRatio) || 1
     },
-    tagName: o.tagName.toLowerCase().slice(0, PICK_BUDGET.tagName),
+    // A tag name is letters, digits and dashes. Everything else is dropped rather than clamped: this
+    // string is interpolated into the section heading, and it was the one page-controlled field left
+    // that could carry a newline into it.
+    tagName: o.tagName.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, PICK_BUDGET.tagName),
     selector: str(o.selector, PICK_BUDGET.selector),
     elementPath: str(o.elementPath, PICK_BUDGET.elementPath),
     cssClasses: str(o.cssClasses, PICK_BUDGET.cssClasses),
     textSnippet: str(o.textSnippet, PICK_BUDGET.textSnippet),
-    htmlSnippet: str(o.htmlSnippet, PICK_BUDGET.htmlSnippet),
-    attributes: attributes(o.attributes),
+    htmlSnippet: redactHtml(str(o.htmlSnippet, PICK_BUDGET.htmlSnippet)),
     accessibility: { role: strOrNull(a.role, PICK_BUDGET.role), accessibleName: strOrNull(a.accessibleName, PICK_BUDGET.accessibleName) },
     rectViewport,
     rectPage,

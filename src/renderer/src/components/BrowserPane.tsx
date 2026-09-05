@@ -5,7 +5,7 @@ import { PREVIEW_PARTITION, guestNavigationAllowed } from '../../../core/preview
 import { MAX_ANNOTATIONS, type Annotation, type Intent } from '../../../core/preview/pick/types'
 import { clampPayload } from '../../../core/preview/pick/payload'
 import { formatAnnotations } from '../../../core/preview/pick/prompt'
-import { scaleRect } from '../../../core/preview/pick/rect'
+import { clampToView, scaleRect } from '../../../core/preview/pick/rect'
 import { displayHostOf, normalizeUrl } from '../../../core/preview/url'
 import {
   VIEWPORTS,
@@ -37,7 +37,7 @@ type LoadError =
 const RETRY_MS = 1000
 const RETRY_CAP_MS = 60_000
 
-export type SessionChoice = { id: string; title: string; color: string; busy: boolean }
+export type SessionChoice = { id: string; title: string; busy: boolean }
 
 /** `allowpopups` on the `<webview>`, spread rather than written as a JSX attribute.
  *
@@ -122,6 +122,11 @@ export function BrowserPane({
   const [annotations, setAnnotations] = useState<Annotation[]>([])
   const [focusAnnotationId, setFocusAnnotationId] = useState<string | null>(null)
   const [sendMenu, setSendMenu] = useState<{ x: number; y: number } | null>(null)
+  // Read by the Escape handler, which is registered once and must not close over a stale value
+  const sendMenuRef = useRef(sendMenu)
+  sendMenuRef.current = sendMenu
+  const menuRef = useRef(menu)
+  menuRef.current = menu
   const nextSeq = useRef(1)
   const annotationsRef = useRef(annotations)
   annotationsRef.current = annotations
@@ -468,7 +473,16 @@ export function BrowserPane({
         let shotPath: string | null = null
         let shotThumb: string | null = null
         try {
-          const shot = await window.api.preview.captureElement(view.getWebContentsId(), scaleRect(payload.rectViewport, scaleRef.current))
+          // Only the part on screen. An element taller than the window is ordinary, and asking to
+          // capture the piece hanging off the edge gets nothing useful back. Clamped in the page's own
+          // pixels first, then scaled, so the emulation scale is applied exactly once.
+          const onScreen = clampToView(payload.rectViewport, {
+            width: payload.page.viewportWidth,
+            height: payload.page.viewportHeight
+          })
+          const shot = onScreen
+            ? await window.api.preview.captureElement(view.getWebContentsId(), scaleRect(onScreen, scaleRef.current))
+            : null
           shotPath = shot?.path ?? null
           // The card shows this, not the file — Chromium will not load a file: URL from the http:
           // document the renderer is served from in development
@@ -504,7 +518,11 @@ export function BrowserPane({
       // Every browser tab's pane stays mounted and is only hidden, so more than one can hold this
       // listener at once and one Escape would disarm them all. A hidden element has no offsetParent.
       if (viewRef.current && viewRef.current.offsetParent === null) return
-      e.stopPropagation()
+      // A menu this pane opened owns the key while it is up — closing that is what the user meant.
+      if (menuRef.current || sendMenuRef.current) return
+      // Deliberately not stopped: this listens on the window in the capture phase, which is ahead of
+      // every menu, dialog and shortcut in the app, and swallowing Escape there left the send popover
+      // on screen with no way to dismiss it but a click elsewhere.
       setDesignMode(false)
     }
     window.addEventListener('keydown', onKey, true)
@@ -540,12 +558,20 @@ export function BrowserPane({
   }
   const sendBadgesRef = useRef(sendBadges)
   sendBadgesRef.current = sendBadges
-  useEffect(() => { sendBadgesRef.current() }, [annotations, currentPath])
+  // Keyed on what a badge is actually made of. `annotations` is a new array on every comment keystroke,
+  // and each one tore down and rebuilt every badge node in the page.
+  const badgeKey = annotations
+    .map((a) => `${a.seq}:${a.pagePath}:${Math.round(a.payload.rectPage.x)},${Math.round(a.payload.rectPage.y)}`)
+    .join('|')
+  useEffect(() => { sendBadgesRef.current() }, [badgeKey, currentPath])
 
   const updateAnnotation = (id: string, patch: { comment?: string; intent?: Intent }): void =>
     setAnnotations((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)))
   const deleteAnnotation = (id: string): void => setAnnotations((prev) => prev.filter((a) => a.id !== id))
-  const clearAnnotations = (): void => setAnnotations([])
+  const clearAnnotations = (): void => {
+    setAnnotations([])
+    nextSeq.current = 1
+  }
   const focusAnnotation = (id: string): void => {
     const a = annotationsRef.current.find((x) => x.id === id)
     const view = viewRef.current
@@ -565,6 +591,9 @@ export function BrowserPane({
     const s = sessions.find((x) => x.id === sessionId)
     if (!onSendToSession(sessionId, text)) { toast.error(t('preview.design.sendFailed')); return }
     setAnnotations([])
+    // The batch is gone, so the next one starts at 1 again. Left running, the next prompt opened at
+    // `### 4.` with no 1 to 3 in it, which reads to an agent like sections that were left out.
+    nextSeq.current = 1
     setDesignMode(false)
     toast.info(t('preview.design.sent', { name: s?.title ?? sessionId }))
   }

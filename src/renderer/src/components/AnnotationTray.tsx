@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { INTENTS, type Annotation, type Intent } from '../../../core/preview/pick/types'
+import { INTENTS, PICK_BUDGET, type Annotation, type Intent } from '../../../core/preview/pick/types'
 import { annotationLabel } from '../../../core/preview/pick/prompt'
 import { useI18n } from '../i18n/I18nProvider'
 import { Select } from './Select'
@@ -73,6 +73,7 @@ export function AnnotationTray({
                   else commentRefs.current.delete(a.id)
                 }}
                 rows={1}
+                maxLength={PICK_BUDGET.comment}
                 placeholder={t('preview.design.comment')}
                 value={a.comment}
                 onClick={(e) => e.stopPropagation()}

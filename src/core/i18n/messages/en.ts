@@ -816,7 +816,6 @@ export const en: Record<keyof typeof ko, string> = {
   'preview.design.intent.label': 'Intent',
   'preview.design.limit': 'Up to {max} notes per tab',
   'preview.design.noSession': 'No open session in this project',
-  'preview.design.pickSession': 'Send to which session?',
   'preview.design.sent': 'Pasted into {name}. Press Enter to send',
   'preview.design.sendFailed': 'That session has no terminal',
   'preview.design.copied': 'Copied',

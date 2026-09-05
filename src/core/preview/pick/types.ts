@@ -45,7 +45,6 @@ export interface PickPayload {
   cssClasses: string
   textSnippet: string
   htmlSnippet: string
-  attributes: Record<string, string>
   accessibility: { role: string | null; accessibleName: string | null }
   rectViewport: Rect
   rectPage: Rect
@@ -70,9 +69,6 @@ export const PICK_BUDGET = {
   nearbyTextEntry: 200,
   reactComponents: 500,
   sourceFile: 500,
-  attributeValue: 500,
-  attributeName: 100,
-  attributes: 40,
   tagName: 50,
   role: 50,
   styleValue: 200,
