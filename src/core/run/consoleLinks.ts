@@ -6,11 +6,13 @@ export type ConsoleLink =
   | { kind: 'path'; start: number; end: number; target: string; line?: number; col?: number }
   | { kind: 'url'; start: number; end: number; url: string }
 
-const URL_RE = /(https?):\/\/[^\s'"<>]+/g
+// Box Drawing (U+2500–U+257F) ends a URL and a token too: Claude Code's TUI frames its output with
+// `│` and `─`, and a URL printed against the right edge would otherwise carry the edge with it.
+const URL_RE = /(https?):\/\/[^\s'"<>\u2500-\u257F]+/g
 // Tokens are whitespace-separated; quotes and angle brackets also end one (they wrap paths in
 // messages). Parentheses stay inside the token so TypeScript's `a.ts(12,5)` survives; a stack frame's
 // wrapping parentheses are peeled below.
-const TOKEN_RE = /[^\s'"<>]+/g
+const TOKEN_RE = /[^\s'"<>\u2500-\u257F]+/g
 const LEAD_OPEN = /^[([]+/
 const TRAIL_CLOSE = /[)\]]+$/
 const TRAIL_PUNCT = /[.,;:]+$/

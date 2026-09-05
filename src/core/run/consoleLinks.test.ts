@@ -144,6 +144,24 @@ describe('findConsoleLinks — Python frames', () => {
   })
 })
 
+describe('findConsoleLinks — URLs against a TUI box', () => {
+  // Claude Code draws its frames with Box Drawing characters. A URL printed against the right edge
+  // used to swallow the `│` as part of the address.
+  it('a box edge ends the URL, with and without a space', () => {
+    expect(only('│ http://localhost:5173/│')).toEqual({
+      kind: 'url', start: 2, end: 24, url: 'http://localhost:5173/'
+    })
+    expect(only('│http://localhost:5173/│')).toEqual({
+      kind: 'url', start: 1, end: 23, url: 'http://localhost:5173/'
+    })
+  })
+  it('a horizontal rule after a URL is not part of it', () => {
+    expect(only('Local: http://localhost:5173/ ──────')).toEqual({
+      kind: 'url', start: 7, end: 29, url: 'http://localhost:5173/'
+    })
+  })
+})
+
 describe('joinWrappedLine', () => {
   // Row 1 and 2 are continuations of row 0; row 3 starts a new logical line
   const rows = [
