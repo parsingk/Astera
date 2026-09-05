@@ -169,6 +169,9 @@ export function TerminalView({
       // the write callback = an ack that the renderer consumed it → backpressure
       term.write(data, () => window.api.sessions.ack(session.id, data.length))
     })
+    // Design Mode's "send to session" pastes here — the same path as Ctrl+V, so the prompt arrives
+    // bracketed and unsubmitted (sessionBus.registerPaste explains why not sessions.write)
+    const unregisterPaste = sessionBus.registerPaste(session.id, (text) => term.paste(text))
     const input = term.onData((d) => window.api.sessions.write(session.id, d))
     let resizeTimer: ReturnType<typeof setTimeout> | undefined
     const observer = new ResizeObserver(() => {
@@ -191,6 +194,7 @@ export function TerminalView({
       clearTimeout(loadingSafety)
       termRef.current = null
       sendResizeRef.current = null
+      unregisterPaste()
       term.dispose()
     }
   }, [session.id])

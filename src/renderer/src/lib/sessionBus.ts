@@ -57,3 +57,29 @@ export function discard(sessionId: string): void {
   listeners.delete(sessionId)
   buffers.delete(sessionId)
 }
+
+// ---- input direction: paste into a session's terminal ----
+//
+// Everything above carries PTY output *to* a terminal. This carries text *into* one, through the
+// terminal's own paste — the Ctrl+V path. That matters: a raw `sessions.write` turns the first newline
+// into Enter and submits a half-built prompt, while xterm's paste wraps the text in bracketed paste,
+// which Claude Code receives as one paste and leaves for the user to send.
+
+const pasters = new Map<string, (text: string) => void>()
+
+/** TerminalView registers its xterm's paste when it mounts. Returns the unregister. */
+export function registerPaste(sessionId: string, paste: (text: string) => void): () => void {
+  pasters.set(sessionId, paste)
+  return () => {
+    if (pasters.get(sessionId) === paste) pasters.delete(sessionId)
+  }
+}
+
+/** Pastes into that session's terminal. false when no terminal is registered for the id — the tab is
+ *  gone, or has not mounted yet. Session slots stay mounted off screen, so a live session always has one. */
+export function pasteInto(sessionId: string, text: string): boolean {
+  const paste = pasters.get(sessionId)
+  if (!paste) return false
+  paste(text)
+  return true
+}
