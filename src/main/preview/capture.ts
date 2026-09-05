@@ -9,6 +9,9 @@ import { isSaneRect } from '../../core/preview/pick/rect'
 import { evictionPlan } from '../../core/preview/pick/shots'
 import type { CaptureResult } from '../../core/preview/pick/types'
 
+/** Twice the card's 56 CSS pixels, so it stays sharp on a retina display and no larger. */
+const THUMBNAIL_WIDTH = 112
+
 function guestFor(id: unknown): Electron.WebContents | null {
   if (typeof id !== 'number' || !Number.isInteger(id)) return null
   const guest = webContents.fromId(id)
@@ -48,7 +51,10 @@ export function registerPreviewCapture(userData: string): void {
       const file = path.join(dir, `${randomUUID()}.png`)
       await writeFile(file, image.toPNG())
       void evict(dir)
-      return { path: file, width: size.width, height: size.height }
+      // Resized first: a full-width element's crop is a large PNG, and this one only ever fills a
+      // 56-pixel card. `resize` keeps the aspect ratio when only a width is given.
+      const thumb = size.width > THUMBNAIL_WIDTH ? image.resize({ width: THUMBNAIL_WIDTH }) : image
+      return { path: file, width: size.width, height: size.height, thumbnail: thumb.toDataURL() }
     } catch {
       return null
     }

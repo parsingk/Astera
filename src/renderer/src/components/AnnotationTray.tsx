@@ -56,9 +56,12 @@ export function AnnotationTray({
           {annotations.map((a) => (
             <div key={a.id} className="dm-card" onClick={() => onFocusAnnotation(a.id)}>
               <span className="dm-seq" aria-hidden="true">{a.seq}</span>
-              {a.shotPath ? (
-                // A file path is not a URL; the file: scheme is what lets an <img> read it here.
-                <img className="dm-shot" src={`file:///${a.shotPath.replace(/\\/g, '/')}`} alt="" />
+              {a.shotThumb ? (
+                // The data URL, not the saved file. Chromium refuses a `file:` URL from an `http:`
+                // document, and this renderer is served over http in development — pointing the card at
+                // the path gave a broken image for the whole working session and only came right in a
+                // packaged build. The path still goes to the agent, which reads files.
+                <img className="dm-shot" src={a.shotThumb} alt="" />
               ) : (
                 <span className="dm-shot empty">—</span>
               )}
