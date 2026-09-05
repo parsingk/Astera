@@ -200,6 +200,9 @@ const api = {
     homeDir: invoke('system.homeDir'),
     openExternal: invoke('system.openExternal')
   },
+  preview: {
+    toggleDevTools: invoke('preview.toggleDevTools')
+  },
   clipboard: {
     readText: () => clipboard.readText(),
     writeText: (text: string) => clipboard.writeText(text)

@@ -316,11 +316,19 @@ export function BrowserPane({
     load(target)
   }
 
+  /** Main opens and closes it, so the window carries the app's icon and a title naming this page —
+   *  `webview.openDevTools()` leaves Electron to make a window that has neither. The button's lit
+   *  state still comes from the guest's own devtools-opened / devtools-closed events. */
   const toggleDevtools = (): void => {
     const view = viewRef.current
     if (!view) return
-    if (view.isDevToolsOpened()) view.closeDevTools()
-    else view.openDevTools()
+    let id: number
+    try {
+      id = view.getWebContentsId()
+    } catch {
+      return // the guest is not attached yet; there is nothing to inspect
+    }
+    void window.api.preview.toggleDevTools(id, displayHostOf(tab.url))
   }
 
   const width = VIEWPORTS.find((v) => v.key === viewport)?.width ?? null

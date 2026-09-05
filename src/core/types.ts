@@ -955,6 +955,15 @@ export interface CoreApi {
 }
 
 /** Extras on the Electron side (not core — main handles these directly) */
+/** The preview pane's one main-process call. Everything else the pane does (navigation, the address
+ *  bar, the context menu) is on the <webview> element itself; DevTools is here because hosting it in a
+ *  window this app owns needs `setDevToolsWebContents`, which only WebContents has. */
+export interface PreviewApi {
+  /** Opens DevTools for that guest in an app-owned window, or closes it if already open. `title` names
+   *  the page being inspected. Resolves to whether DevTools is open afterwards. */
+  toggleDevTools(webContentsId: number, title: string): Promise<boolean>
+}
+
 export interface SystemApi {
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is
   // already validated by run.start and run.saveConfigs. Omitting it behaves exactly as the existing
@@ -1136,6 +1145,7 @@ export interface SessionTaskApi {
 
 export type RendererApi = CoreApi & {
   system: SystemApi
+  preview: PreviewApi
   clipboard: ClipboardApi
   update: UpdateApi
   rolling: RollingApi

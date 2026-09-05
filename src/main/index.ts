@@ -11,6 +11,7 @@ import { shouldForceWaylandOzone } from './ozone'
 import { registerIpc, parseAllowedExternalUrl, type OrchHandle } from './ipc'
 import { isOwnDocument } from './navigationGuard'
 import { installPreviewGuards } from './preview/guest'
+import { registerPreviewDevTools } from './preview/devtools'
 import { RollingCoordinator } from './rolling'
 import { SchedulerCoordinator } from './scheduler'
 import { CodexRollingCoordinator } from './codexRolling'
@@ -221,6 +222,9 @@ function createWindow(): BrowserWindow {
     if (parsed) void shell.openExternal(parsed.toString())
   })
   installPreviewGuards(win)
+  // Hosts the preview's DevTools in a window this app creates, so it carries the app icon and a
+  // title naming the page — Electron's own DevTools window carries neither.
+  registerPreviewDevTools(APP_ICON)
 
   // Closing the window (X) minimizes to the tray on Windows and macOS — whether or not sessions
   // exist. There the only real quit path is the tray 'Quit' menu (app.quit): app.quit sets
