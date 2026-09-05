@@ -38,7 +38,7 @@ describe('clampPayload', () => {
     expect(out.sourceFile).toHaveLength(PICK_BUDGET.sourceFile)
   })
 
-  it('caps nearbyText entries and their length, and attributes at forty', () => {
+  it('caps nearbyText entries and their length', () => {
     const many = Array.from({ length: 30 }, (_, i) => `t${i}` + 'y'.repeat(500))
     const out = clampPayload({ ...raw, nearbyText: many })!
     expect(out.nearbyText).toHaveLength(PICK_BUDGET.nearbyTextEntries)
