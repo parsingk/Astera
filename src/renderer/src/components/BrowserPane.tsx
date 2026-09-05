@@ -121,8 +121,17 @@ export function BrowserPane({
     retry.current = { timer: null, since: null }
   }
 
-  /** Navigate. loadURL throws before the webview is attached to the DOM; setting src then is the
-   *  one case where the attribute is the right tool (a different value, so no self-reload). */
+  /** Navigate.
+   *
+   *  The rejection is swallowed on purpose, not ignored: loadURL rejects on any failed load, and this
+   *  component learns about failures from `did-fail-load`, which carries the code and the address the
+   *  handler needs. Leaving it unhandled made the main process log
+   *  `Error occurred in handler for 'GUEST_VIEW_MANAGER_CALL'` on every retry — once a second while a
+   *  dev server was starting.
+   *
+   *  loadURL also *throws*, synchronously, before the webview is attached to the DOM. That path is not
+   *  reached any more (the first load waits for `dom-ready`), but the fallback stays: it is the one
+   *  case where writing the attribute is right, and it is cheap insurance. */
   const load = (url: string): void => {
     const view = viewRef.current
     if (!view) return
@@ -134,7 +143,7 @@ export function BrowserPane({
     setError(null)
     setGaveUp(false)
     try {
-      void view.loadURL(url)
+      void view.loadURL(url).catch(() => {})
     } catch {
       view.setAttribute('src', url)
     }
@@ -155,7 +164,8 @@ export function BrowserPane({
       retry.current.timer = setTimeout(() => {
         retry.current.timer = null
         try {
-          void view.loadURL(url)
+          // Same as in `load`: the rejection is reported through did-fail-load, so swallow it here
+          void view.loadURL(url).catch(() => {})
         } catch {
           /* detached mid-retry — the cleanup below already cleared the timer */
         }
