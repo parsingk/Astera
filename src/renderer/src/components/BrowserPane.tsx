@@ -49,6 +49,29 @@ export type SessionChoice = { id: string; title: string; busy: boolean }
  *  string past the type while keeping the element's other attributes checked. */
 const ALLOW_POPUPS = { allowpopups: '' } as unknown as { allowpopups?: boolean }
 
+/** How long a screenshot may take before the pick gives up on it. */
+const CAPTURE_TIMEOUT_MS = 5000
+
+/** The crop, or null when the capture does not answer.
+ *
+ *  `capturePage` never settles while the guest has stopped painting, and moving to another tab in the
+ *  moment between the click and the shot is enough to stop it. Measured with the preview tab behind a
+ *  session: still pending after eight seconds, where the same rect came back in well under a second
+ *  with the tab in front. Unbounded, the pick loop parks there for good -- no annotation, no message,
+ *  the mode still lit and the picker's own overlay left hidden for a capture that never happens.
+ *  Giving up costs the thumbnail; the note is still collected and the pane says the shot failed. */
+async function captureWithin(capture: Promise<CaptureResult | null>): Promise<CaptureResult | null> {
+  let timer!: ReturnType<typeof setTimeout>
+  const timedOut = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), CAPTURE_TIMEOUT_MS)
+  })
+  try {
+    return await Promise.race([capture, timedOut])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 /** One preview tab's body: a toolbar over an Electron <webview> (partition persist:preview — see
  *  main/preview/guest.ts for what the guest may do), with DOM overlays for the three ways a page can
  *  fail to appear. Mounted for the tab's whole life and hidden by the pane grid with display:none, so
@@ -489,7 +512,7 @@ export function BrowserPane({
           try {
             await view.executeJavaScript(chromeScript(true))
             shot = onScreen
-              ? await window.api.preview.captureElement(view.getWebContentsId(), scaleRect(onScreen, scaleRef.current))
+              ? await captureWithin(window.api.preview.captureElement(view.getWebContentsId(), scaleRect(onScreen, scaleRef.current)))
               : null
           } finally {
             void view.executeJavaScript(chromeScript(false)).catch(() => {})
