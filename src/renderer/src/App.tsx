@@ -3010,7 +3010,12 @@ export default function App(): React.JSX.Element {
         runningCount={runningCount}
         runSlot={
           currentProject ? (
-            <div className="tb-run">
+            // The title bar toggles maximize on a double-click, and that is a React handler, so it
+            // reaches anything inside it. `-webkit-app-region: no-drag` on .tb-run does not help —
+            // that only stops the window being dragged by this widget, which is a different gesture.
+            // Double-clicking a configuration name or ▶ has to leave the window where it is, so the
+            // event stops here, the same way .tb-controls stops it for the window buttons.
+            <div className="tb-run" onDoubleClick={(e) => e.stopPropagation()}>
               <RunToolbar
                 configs={runConfigs}
                 selectedId={runSelectedId}
