@@ -407,9 +407,6 @@ export function BrowserPane({
 
   const preset = viewportByKey(viewport) ?? VIEWPORTS[0]
   const metrics = metricsFor(preset, { rotated, stage })
-  // Read by the pick loop below, to turn a captured viewport rect back into page pixels for the crop.
-  const scaleRef = useRef(1)
-  scaleRef.current = metrics?.scale ?? 1
   // The element is sized to the emulated viewport times the fit scale, so the frame on screen is the
   // shape the page believes it has. The page itself is told the unscaled size by the emulation.
   const frame = metrics
@@ -511,8 +508,16 @@ export function BrowserPane({
           let shot: CaptureResult | null = null
           try {
             await view.executeJavaScript(chromeScript(true))
+            // capturePage is addressed in the view's own pixels, so the page rect has to be scaled by
+            // however much of the view one page pixel covers. Measured, not assumed: the fit scale
+            // alone is wrong whenever the page lays out wider than the device it is emulating. A page
+            // with no viewport meta lays out at Chromium's 980px default and is then shrunk again to
+            // the device width, and under the tablet preset that second shrink put the crop seventy
+            // page-pixels below the element — a picked button came back as the text field under it.
+            const viewWidth = view.getBoundingClientRect().width
+            const captureScale = payload.page.viewportWidth > 0 ? viewWidth / payload.page.viewportWidth : 1
             shot = onScreen
-              ? await captureWithin(window.api.preview.captureElement(view.getWebContentsId(), scaleRect(onScreen, scaleRef.current)))
+              ? await captureWithin(window.api.preview.captureElement(view.getWebContentsId(), scaleRect(onScreen, captureScale)))
               : null
           } finally {
             void view.executeJavaScript(chromeScript(false)).catch(() => {})
