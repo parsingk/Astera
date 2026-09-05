@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { WebviewTag } from 'electron'
 import { loadErrorKind } from '../../../core/preview/errors'
+import { PREVIEW_PARTITION } from '../../../core/preview/guards'
 import { displayHostOf, normalizeUrl } from '../../../core/preview/url'
 import { VIEWPORTS, type ViewportKey } from '../../../core/preview/viewports'
 import { useI18n } from '../i18n/I18nProvider'
@@ -90,6 +91,11 @@ export function BrowserPane({
   const load = (url: string): void => {
     const view = viewRef.current
     if (!view) return
+    // Drops a pending retry first. Without this, typing a new address while a retry is in flight for
+    // the old one lets that timer fire a second later and navigate straight back to where the user
+    // just left — and the 60-second budget for the new address would be measured from the old
+    // address's first failure.
+    clearRetry()
     setError(null)
     setGaveUp(false)
     try {
@@ -292,7 +298,7 @@ export function BrowserPane({
           ref={viewRef}
           className="bp-view"
           src={initialUrl.current}
-          partition="persist:preview"
+          partition={PREVIEW_PARTITION}
           style={width !== null ? { width } : undefined}
         />
         {error && (
