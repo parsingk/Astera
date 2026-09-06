@@ -6,6 +6,10 @@ export type CommandBuilder = (opts: {
   resumeSessionId?: string
   settingsFile?: string
   bypassPermissions?: boolean
+  /** Extra directories a session may read without a prompt (Claude's --add-dir). Design Mode writes
+   *  its screenshots outside every project, so a session handed one of those paths would otherwise
+   *  hit "read outside the working directories". Claude only — Codex reads them without asking. */
+  addDirs?: string[]
   resumePrompt?: string // codex only — the carry-on-working phrase appended after resume
   /** The initial prompt for an interactive session. Carried as the last positional argument.
    *  sanitizeResumePrompt is not applied — the caller (the coordinator) checks for forbidden characters and
@@ -14,10 +18,13 @@ export type CommandBuilder = (opts: {
 }) => SpawnCommand
 
 export function buildClaudeCommand(platform: NodeJS.Platform): CommandBuilder {
-  return ({ resumeSessionId, settingsFile, bypassPermissions, initialPrompt }) => {
+  return ({ resumeSessionId, settingsFile, bypassPermissions, addDirs, initialPrompt }) => {
     const args: string[] = []
     // Injects a session-scoped statusLine via --settings (the global settings.json is left alone) — goes before resume
     if (settingsFile) args.push('--settings', settingsFile)
+    // Read access to the app's screenshot folder, so the paths Design Mode puts in a prompt open
+    // without the "read outside the working directories" question. --add-dir is variadic.
+    if (addDirs && addDirs.length > 0) args.push('--add-dir', ...addDirs)
     if (resumeSessionId) args.push('--resume', resumeSessionId)
     // Starts without permission prompts
     if (bypassPermissions) args.push('--dangerously-skip-permissions')

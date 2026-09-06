@@ -33,8 +33,14 @@ async function evict(dir: string): Promise<void> {
   }
 }
 
+/** Where element screenshots are written. Kept here so the session spawn, which grants a Claude
+ *  session read access to exactly this folder (--add-dir), names the same path this writes to. */
+export function previewShotsDir(userData: string): string {
+  return path.join(userData, 'preview', 'shots')
+}
+
 export function registerPreviewCapture(userData: string): void {
-  const dir = path.join(userData, 'preview', 'shots')
+  const dir = previewShotsDir(userData)
   void evict(dir)
   ipcMain.handle('preview.captureElement', async (_e, guestId: unknown, rect: unknown): Promise<CaptureResult | null> => {
     const guest = guestFor(guestId)

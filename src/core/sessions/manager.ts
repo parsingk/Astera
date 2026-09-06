@@ -105,7 +105,9 @@ export class SessionManager {
     private highWater = 100_000,
     private lowWater = 20_000,
     private homeDir: string = os.homedir(),
-    private statusLineProvider?: StatusLineProvider
+    private statusLineProvider?: StatusLineProvider,
+    /** Directories every Claude session may read without a prompt — the app's screenshot folder. */
+    private sessionReadDirs: string[] = []
   ) {}
 
   spawn(opts: {
@@ -167,6 +169,7 @@ export class SessionManager {
       resumeSessionId: opts.resumeSessionId,
       settingsFile: sl?.settingsFile,
       bypassPermissions: opts.bypassPermissions,
+      addDirs: this.sessionReadDirs,
       resumePrompt: opts.resumePrompt,
       initialPrompt: opts.initialPrompt
     })
