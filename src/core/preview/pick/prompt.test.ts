@@ -32,6 +32,13 @@ describe('formatAnnotations', () => {
     expect(out.indexOf('### 1.')).toBeLessThan(out.indexOf('### 3.'))
   })
 
+  it('tells the agent each section is one element and to scope the change to it', () => {
+    const out = formatAnnotations([note()])
+    expect(out).toContain('Make each change to that element unless the feedback clearly refers to something wider.')
+    // once, in the header — not repeated per section
+    expect(out.split('Make each change to that element').length - 1).toBe(1)
+  })
+
   it('carries selector, location, source, react, bounds, classes, text, nearby text, styles, html, screenshot, feedback', () => {
     const out = formatAnnotations([note()])
     for (const line of [
