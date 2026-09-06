@@ -68,6 +68,20 @@ describe('attachBuffers', () => {
     expect(b.console.sinceMark().map((e) => e.message)).toEqual(['new'])
   })
 
+  // Electron 41's own shape: the details object is the first argument and the positional ones beside
+  // it are deprecated. Read only positionally, a main-frame load would stop marking the rings the day
+  // they go, and consoleErrors() would answer with the whole life of the tab.
+  it('reads isMainFrame from the details object too', () => {
+    const g = fakeGuest()
+    const b = attachBuffers(g)
+    g.emit('console-message', {}, msg(3, 'old', 1, 'a.js'))
+    g.emit('did-start-navigation', { url: 'http://localhost:5173/', isSameDocument: false, isMainFrame: false })
+    expect(b.console.sinceMark()).toHaveLength(1)
+    g.emit('did-start-navigation', { url: 'http://localhost:5173/', isSameDocument: false, isMainFrame: true })
+    g.emit('console-message', {}, msg(3, 'new', 2, 'a.js'))
+    expect(b.console.sinceMark().map((e) => e.message)).toEqual(['new'])
+  })
+
   it('detach removes the guest listeners', () => {
     const g = fakeGuest()
     const b = attachBuffers(g)

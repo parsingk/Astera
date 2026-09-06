@@ -155,7 +155,7 @@ export interface OrchServerDeps {
    *  not injected, `browser-js` answers "agent browser is off". */
   browserRun?(sessionId: string, script: string): Promise<
     | { ok: true; result: { log: string[]; error?: { message: string; at: string } } }
-    | { ok: false; status: 404 | 409 | 504; error: string }
+    | { ok: false; status: 404 | 409; error: string }
   >
   /** The handle the three session-task-* commands call through, shaped so `ipc.ts` can pass
    *  `WorkUnitCollector.startTask/completeTask/cancelTask` straight in. Optional for the same reason

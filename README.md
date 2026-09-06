@@ -102,6 +102,24 @@ vendors, checks the result, and waits when a human decision is needed.
   sessions get it
 - Only work done after you turned the feature on in settings is recorded
 
+**Agent browser (experimental)**
+- The session's agent gets a preview tab of its own and drives it: open a page on this project's dev
+  server, reload it after a change, read its address and title, and read back what the console and the
+  network reported since that load
+- It drives the tab by sending a small JavaScript script — `astera browser js --file check.js` — whose
+  only vocabulary is those helpers. "Does the page still render, and is the console clean" becomes
+  something the agent answers by looking, instead of something it asks you to check
+- The tab is a real tab in your window, marked as the agent's and shown busy while a script runs. You
+  can watch it, and clicking into it is fine — the next script sees the page as you left it
+- **This machine only.** `open()` takes `localhost`, `127.x`, `[::1]`, `*.localhost` and the two
+  wildcard addresses; anything else is refused, and so is a link on the page — or a redirect from the
+  dev server — that would leave
+- One script at a time per session, 60 seconds per script. The tab closes with its session
+- Reading, for now: no clicking, typing or screenshots. Those arrive in later stages
+- Off by default. Turn on **Agent browser** in settings and it installs the `astera-browser` skill
+  into your accounts, the way the other two features install theirs. It does not apply to sessions
+  that are already open — only new sessions get it
+
 **Editor and shortcuts**
 - One key shows and hides the explorer — `Ctrl`/`Cmd`+`Shift`+`E` for the file tree, the run toolbar
   and the run console, leaving the panes where they are
@@ -183,7 +201,8 @@ astera help
 ```
 
 If `astera` is not on `PATH`, use the path in `$ASTERA_CLI`. An empty value means the session was not
-started by Astera, or Agent orchestration is off.
+started by Astera, or that Agent orchestration, Work unit tracking and Agent browser are all off — the
+CLI is planted when any one of the three is on.
 
 ## Install
 

@@ -7,7 +7,6 @@ import {
   agentNavigationAllowed,
   certificateAllowed,
   guestAttachAllowed,
-  guestNavigationAllowed,
   permissionAllowed
 } from '../../core/preview/guards'
 
@@ -33,8 +32,14 @@ export function installPreviewGuards(win: BrowserWindow, isAgentGuest: (webConte
     // page asks for; `will-redirect` is where a server sends it partway through — a 302. Guarding only
     // the first leaves the whole rule to the other end: a dev server answering with a redirect walks
     // an agent's tab straight off this machine, and the agent never asked for anywhere but localhost.
-    const holdToRule = (e: Electron.Event, url: string): void => {
-      if (!agentNavigationAllowed(url, isAgentGuest(guest.id))) e.preventDefault()
+    // Electron 41 hands the listener a details object carrying the address, and still passes the
+    // older positional `url` beside it as `@deprecated`. The details object is read first, and the
+    // positional one is only the fallback — the same order buffers.ts's onNav reads its arguments in,
+    // and for the same reason: when the deprecated arguments go, `url` here is `undefined`. This path
+    // fails closed rather than open (an empty address is not this machine, so the navigation is
+    // refused), but a preview tab that refuses every link is still broken.
+    const holdToRule = (e: Electron.Event<{ url?: string }>, url?: string): void => {
+      if (!agentNavigationAllowed(e.url ?? url ?? '', isAgentGuest(guest.id))) e.preventDefault()
     }
     guest.on('will-navigate', (e, url) => holdToRule(e, url))
     guest.on('will-redirect', (e, url) => holdToRule(e, url))

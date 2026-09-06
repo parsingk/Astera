@@ -73,11 +73,24 @@ describe('runScript', () => {
     expect(r).toEqual({ log: [] })
   })
 
-  it('hands the script no host object to climb out through', async () => {
+  // Not a statement that the sandbox holds: it does not. The helpers are host functions, so
+  // `help.constructor('return process')()` does hand a script the host `process` — scriptRunner.ts's
+  // header says so and says why that is accepted. What this pins is the narrower thing that is true:
+  // `Error` inside the context is the context's own realm, so the `Function` reached through it
+  // compiles its body in the sandbox, where `process` is not defined.
+  it("Error inside the context belongs to the context's own realm", async () => {
     const r = await run(`const F = Error.constructor; const proc = F("return process")()`)
-    // Even though Error.constructor exists, it cannot create code that escapes the sandbox
     expect(r.error?.at).toBe('script')
     expect(r.error?.message).toMatch(/process is not defined/)
+  })
+
+  it('returns a copy of the log, not the sink an abandoned script keeps writing to', async () => {
+    const log = createLog()
+    const r = await runScript(`log('a')`, {}, log, { at: 'script' })
+    expect(r.log).toEqual(['a'])
+    expect(r.log).not.toBe(log.lines)
+    log.log('written after the run returned')
+    expect(r.log).toEqual(['a'])
   })
 
   it('still reports a script-thrown error by its message, across the realm boundary', async () => {

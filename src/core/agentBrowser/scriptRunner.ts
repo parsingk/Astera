@@ -5,6 +5,14 @@
 // agent, against the user's own dev server, inside the user's own app — what `vm` does give is a
 // clean global scope (no `require`, no `process`, no `fetch`), so a script that reaches for one of
 // them gets `undefined` and a clear error rather than the app's Node environment.
+//
+// Be specific about where the way out is, because it is not exotic: **the helpers are host
+// functions**. Every one of them is placed in the contextified global as-is, so
+// `help.constructor('return process')()` returns the live host `process` — `help.constructor` is the
+// host realm's `Function`, and the body it compiles runs with the host's globals in scope. Nothing
+// below closes that, and nothing below tries to: marshalling every helper across the boundary would
+// buy nothing from an author who already has a shell on this machine. It is written down so the
+// tests in scriptRunner.test.ts are not read as a guarantee they do not make.
 import vm from 'node:vm'
 import { Interrupted, SCRIPT_TIMEOUT_MS, shapeError, type LogSink, type RunResult } from './script'
 
@@ -61,11 +69,18 @@ export async function runScript(
     // Compiled first so a syntax error is reported like any other failure; run as an async body so
     // the script may `await` and `return`.
     const wrapped = new vm.Script(`(async () => {\n${script}\n})()`, { filename: 'agent-script.js' })
-    const running = Promise.resolve(wrapped.runInContext(context)) as Promise<unknown>
+    // `timeout` bounds only the synchronous prologue — the wrapped body is async, so it returns at
+    // the script's first `await` and everything after that is the race below. That one case is worth
+    // bounding here all the same: a `while (true) {}` with no `await` in it never yields, so no
+    // timer and no abort can ever reach it and it would hang the whole main process.
+    const running = Promise.resolve(wrapped.runInContext(context, { timeout: timeoutMs })) as Promise<unknown>
     await Promise.race([running, interrupted])
-    return { log: log.lines }
+    // A copy, not the sink. Losing the race does not stop the script body: it keeps running and keeps
+    // calling `log`, and handing back the live array would let it grow what the caller was already
+    // given — including between this return and the server serialising it.
+    return { log: [...log.lines] }
   } catch (err) {
-    return { log: log.lines, error: shapeError(normalizeError(err), ctx.at) }
+    return { log: [...log.lines], error: shapeError(normalizeError(err), ctx.at) }
   } finally {
     if (timer) clearTimeout(timer)
     if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort)

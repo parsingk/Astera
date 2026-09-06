@@ -76,7 +76,15 @@ export function attachBuffers(guest: GuestEvents): AgentBuffers {
     const entry = consoleEntry(args)
     if (entry) consoleRing.push(entry)
   }
-  const onNav: Listener = (_e, _url, _isInPlace, isMainFrame) => {
+  // Electron 41 emits `did-start-navigation` as a single details object — `{ url, isSameDocument,
+  // isMainFrame, ... }` — and still passes the older `(event, url, isInPlace, isMainFrame, ...)`
+  // arguments beside it, marked `@deprecated`. Both are read for the same reason consoleEntry above
+  // reads both: when the positional ones go, `isMainFrame` reads `undefined`, this returns on every
+  // navigation, the rings are never marked, and `consoleErrors()` quietly answers with everything
+  // since the tab opened instead of everything since the last load.
+  const onNav: Listener = (...args) => {
+    const first = typeof args[0] === 'object' && args[0] !== null ? (args[0] as Record<string, unknown>) : null
+    const isMainFrame = typeof first?.isMainFrame === 'boolean' ? first.isMainFrame : args[3]
     if (isMainFrame !== true) return
     consoleRing.mark()
     networkRing.mark()

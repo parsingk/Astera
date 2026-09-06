@@ -552,6 +552,11 @@ export function registerIpc(
   }
   core.sessions.onExit = (e) => {
     batcher.flush()
+    // Before the renderer hears about it, because that is what closes the tab. A run outlives its
+    // session by up to the whole script deadline, and its next open() would find no guest, ask for a
+    // tab, and be handed a fresh one built for a session that has already exited — tagged "agent",
+    // and with no second session:exit ever coming to close it again.
+    agentRuns.stop(e.sessionId)
     send('session:exit', e)
     rolling?.handleExit(e)
     codexRolling?.handleExit(e)
@@ -904,7 +909,17 @@ export function registerIpc(
     buffersOf: (sid) => agentBuffers.bySession(sid),
     cwdOf: (sid) => core.sessions.list().find((s) => s.id === sid)?.cwd ?? null,
     requestTab: (sessionId, cwd, url) => send('preview:agentTab', { sessionId, cwd, url }),
-    closeTab: (sessionId) => send('preview:agentTabClose', { sessionId }),
+    closeTab: (sessionId) => {
+      // The registration goes as the event goes out, not when the renderer answers. The renderer only
+      // calls preview.unregisterAgentGuest once its pane has unmounted, and until then the registry
+      // still hands out the doomed guest — so a close() followed by an open() in the same script
+      // would loadURL into a tab on its way out and then wait the whole wait deadline for a
+      // did-finish-load that never comes. Dropped here, ensureGuest sees no guest and asks for a new
+      // tab. The renderer's unregister still arrives afterwards and is a no-op: both calls are.
+      agentGuests.unregister(sessionId)
+      agentBuffers.forget(sessionId)
+      send('preview:agentTabClose', { sessionId })
+    },
     setBusy: (sessionId, busy) => send('preview:agentBusy', { sessionId, busy }),
     get guide() {
       return browserGuide()
