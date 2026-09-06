@@ -700,6 +700,10 @@ export function BrowserPane({
     // Nothing was written in either failing case, so the batch stays in the tray to be sent again
     if (result === 'waiting') { toast.info(t('preview.design.sendWaiting', { name })); return }
     if (result === 'no-terminal') { toast.error(t('preview.design.sendFailed')); return }
+    // A sent batch is emptied. This is the one place the tray deliberately departs from Orca, which
+    // keeps its annotations after a send: theirs stops at the paste and leaves the Enter to the user,
+    // so a second Send is a considered act. Ours submits, and a tray that kept its rows would send
+    // the same batch again on the next click without anyone deciding to.
     setAnnotations([])
     // The batch is gone, so the next one starts at 1 again. Left running, the next prompt opened at
     // `### 4.` with no 1 to 3 in it, which reads to an agent like sections that were left out.
