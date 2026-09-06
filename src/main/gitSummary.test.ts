@@ -143,11 +143,21 @@ describe('readGitSummary', () => {
     await fs.writeFile(path.join(dir, name), 'x\n', 'utf8')
     run(dir, ['add', name])
 
-    const summary = await readGitSummary(dir)
+    // Every git call is recorded and carried in the assertion message. This test fails about one full
+    // suite run in ten, under load only, and a bare `null` said nothing about why — whether git failed
+    // (and what it wrote to stderr) or succeeded with empty output is the whole question.
+    const calls: { args: string[]; result: GitResult }[] = []
+    const recording: typeof git = async (args, opts) => {
+      const result = await git(args, opts)
+      calls.push({ args, result })
+      return result
+    }
+    const summary = await readGitSummary(dir, { git: recording })
+    const why = (): string => JSON.stringify(calls, null, 1)
 
-    expect(summary?.changed).toEqual([name])
-    expect(summary?.diffstat).toContain(name)
-    expect(summary?.diffstat ?? '').not.toContain('\\355')
+    expect(summary?.changed, why()).toEqual([name])
+    expect(summary?.diffstat, why()).toContain(name)
+    expect(summary?.diffstat ?? '', why()).not.toContain('\\355')
   })
 
   // fix round 2: `git diff` 는 인덱스를 무시한다. 워커가 `git add -A` 와 `git commit` 사이 —
