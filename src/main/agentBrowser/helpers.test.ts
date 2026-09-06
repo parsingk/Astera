@@ -171,9 +171,10 @@ describe('stage1Helpers', () => {
     const p = h.open('http://localhost:5173/')
     let settled = false
     void p.then(() => { settled = true })
-    await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+    await new Promise((r) => setTimeout(r, 0))
     g.fire('did-finish-load')
-    await Promise.resolve(); await Promise.resolve()
+    // Same reason as the ABORTED test above: a full turn, so a premature resolve has reached the flag.
+    await new Promise((r) => setTimeout(r, 0))
     expect(settled).toBe(false)
     g.getURL = () => 'http://localhost:5173/'
     g.fire('did-finish-load')
@@ -189,7 +190,10 @@ describe('stage1Helpers', () => {
     void p.then(() => { settled = true })
     await Promise.resolve()
     g.fire('did-fail-load', {}, -3, 'ERR_ABORTED', 'http://localhost:5173/', true)
-    await Promise.resolve(); await Promise.resolve()
+    // A whole event-loop turn, not a microtask or two: a premature resolve needs several ticks to
+    // reach `settled` through race → finally → await, and an assertion made before it arrives cannot
+    // fail. Verified against the pre-fix code — with two microtask ticks this test passed there.
+    await new Promise((r) => setTimeout(r, 0))
     expect(settled).toBe(false)
     g.fire('did-finish-load')
     await expect(p).resolves.toBeUndefined()
