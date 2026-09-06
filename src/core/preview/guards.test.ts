@@ -58,4 +58,25 @@ describe('agentNavigationAllowed', () => {
     expect(agentNavigationAllowed('https://example.com/', false)).toBe(true)
     expect(agentNavigationAllowed('file:///C:/x', false)).toBe(false)
   })
+  // This is the promise the whole agent browser rests on: a script an agent writes can only ever point
+  // its tab at this machine. The hosts below are the ones that read as loopback and are not.
+  it('is not fooled by a host that only looks like this machine', () => {
+    for (const u of [
+      'http://localhost.example.com/',
+      'http://127.0.0.1.attacker.com/',
+      'http://localhost@evil.com/',
+      'https://notlocalhost/',
+      'file:///C:/x',
+      'data:text/html,x',
+      'javascript:alert(1)',
+      'about:blank'
+    ]) {
+      expect(agentNavigationAllowed(u, true), u).toBe(false)
+    }
+  })
+  it('accepts the other spellings of this machine', () => {
+    for (const u of ['http://127.0.0.1:3000/', 'http://[::1]:5173/', 'HTTP://LOCALHOST:5173/', 'http://app.localhost/']) {
+      expect(agentNavigationAllowed(u, true), u).toBe(true)
+    }
+  })
 })

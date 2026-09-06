@@ -29,9 +29,15 @@ export function installPreviewGuards(win: BrowserWindow, isAgentGuest: (webConte
       if (!win.isDestroyed()) win.webContents.send('preview:popup', { url })
       return { action: 'deny' }
     })
-    guest.on('will-navigate', (e, url) => {
+    // Both events, because Electron splits one navigation in two. `will-navigate` is the address the
+    // page asks for; `will-redirect` is where a server sends it partway through — a 302. Guarding only
+    // the first leaves the whole rule to the other end: a dev server answering with a redirect walks
+    // an agent's tab straight off this machine, and the agent never asked for anywhere but localhost.
+    const holdToRule = (e: Electron.Event, url: string): void => {
       if (!agentNavigationAllowed(url, isAgentGuest(guest.id))) e.preventDefault()
-    })
+    }
+    guest.on('will-navigate', (e, url) => holdToRule(e, url))
+    guest.on('will-redirect', (e, url) => holdToRule(e, url))
   })
   // Camera, microphone, notifications and the rest: a page from this machine may ask; others are refused.
   // Both handlers, because Electron splits the question in two. A prompting request (getUserMedia,
