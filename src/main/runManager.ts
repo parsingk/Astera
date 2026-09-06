@@ -6,8 +6,13 @@ import { shellSpawn } from '../core/run/shell'
 import { withJavaHomeOnPath } from '../core/run/jdk'
 import { placeNewRun } from '../core/run/instances'
 import type { RunConfig, RunStatus } from '../core/run/config'
+import { firstLoopbackUrl } from '../core/run/consoleLinks'
 
 const OUTPUT_LIMIT = 200_000 // Cap on the recent-output buffer kept for reconnects, per run
+/** How much of a run's tail is searched for its address. A dev server prints it in the first
+ *  screenful; this is generous enough for a noisy build to precede it and small enough to scan on
+ *  every write. */
+const URL_SCAN_TAIL = 4096
 
 interface LiveRun {
   status: RunStatus
@@ -115,6 +120,17 @@ export class RunManager {
     pty.onData((data) => {
       live.buffer = (live.buffer + data).slice(-OUTPUT_LIMIT)
       this.onData?.({ runId: status.runId, data })
+      // The first loopback address the run prints is what its tab offers to preview. Read from the
+      // buffer's tail rather than this chunk, because a dev server's banner is written in pieces and a
+      // URL can be split across two writes; and only until one is found, so a server that logs every
+      // request does not re-scan its own output for the rest of its life.
+      if (!live.status.detectedUrl) {
+        const found = firstLoopbackUrl(live.buffer.slice(-URL_SCAN_TAIL))
+        if (found) {
+          live.status.detectedUrl = found
+          this.onStatus?.({ ...live.status })
+        }
+      }
     })
     pty.onExit(({ exitCode }) => {
       live.status.status = 'exited'

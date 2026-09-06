@@ -2,7 +2,7 @@ import type { RunStatus } from '../../../core/types'
 import { labelRuns } from '../../../core/run/instances'
 import { formatRunDuration } from '../../../core/run/duration'
 import { useI18n } from '../i18n/I18nProvider'
-import { X } from 'lucide-react'
+import { Globe, X } from 'lucide-react'
 
 /** The tab strip above the console: one tab per run of the current project, in seat order — state dot,
  *  label (repeats of a configuration are numbered by labelRuns), exit code once finished, the Validation
@@ -14,13 +14,16 @@ export function RunTabStrip({
   selectedId,
   now,
   onSelect,
-  onDismiss
+  onDismiss,
+  onOpenPreview
 }: {
   runs: RunStatus[]
   selectedId: string | null
   now: number
   onSelect: (runId: string) => void
   onDismiss: (runId: string) => void
+  /** Open a running server's page in a preview tab. Offered only on runs that printed an address. */
+  onOpenPreview: (url: string) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   if (runs.length === 0) return <div className="run-tabstrip run-tabstrip-empty" role="note" aria-label={t('run.panel.tab')}>{t('run.panel.empty')}</div>
@@ -55,6 +58,22 @@ export function RunTabStrip({
               <span className="run-tag" title={t('run.validation.tag')}>
                 {t('run.validation.tag')}
               </span>
+            )}
+            {r.status === 'running' && r.detectedUrl !== undefined && (
+              // The one place the preview is offered without knowing it exists: the address the run
+              // printed, one click from the tab the user is already looking at after pressing ▶.
+              <button
+                type="button"
+                className="run-tab-preview"
+                title={t('run.panel.openPreview', { url: r.detectedUrl })}
+                aria-label={t('run.panel.openPreview', { url: r.detectedUrl })}
+                onClick={(e) => {
+                  e.stopPropagation() // opening the preview must not also change the selected run
+                  onOpenPreview(r.detectedUrl as string)
+                }}
+              >
+                <Globe size={11} />
+              </button>
             )}
             {r.status === 'exited' && (
               <span className={`run-tab-exit${r.exitCode === 0 ? '' : ' fail'}`}>

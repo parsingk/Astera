@@ -102,7 +102,7 @@ import {
 } from '../../core/panes/tree'
 import { browserTab, fileTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
 import { placeTab } from '../../core/panes/place'
-import { linkDestination, normalizeUrl, previewTargetOf } from '../../core/preview/url'
+import { displayHostOf, linkDestination, normalizeUrl, previewTargetOf } from '../../core/preview/url'
 import { isWaitingOnDialog, POST_PASTE_SUBMIT_DELAY_MS } from '../../core/preview/pick/send'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
@@ -1817,6 +1817,9 @@ export default function App(): React.JSX.Element {
   // Project Run/Stop: run configurations, the active run, the list of all active runs, and whether the panel is open
   const [runConfigs, setRunConfigs] = useState<RunConfig[]>([])
   // Read by the run:status subscription, which is registered once — same reason as runStartRef
+  // Runs whose address has already been offered — the toast is a one-time hint, not a repeat on
+  // every status change the run goes through.
+  const previewOfferedRef = useRef(new Set<string>())
   const runConfigsRef = useRef(runConfigs)
   runConfigsRef.current = runConfigs
   const [runSelectedId, setRunSelectedId] = useState<string | null>(null)
@@ -2747,6 +2750,24 @@ export default function App(): React.JSX.Element {
         const cfg = runConfigsRef.current.find((c) => c.id === s.configId)
         if (cfg && cfg.type !== 'compound' && cfg.previewUrl)
           openBrowserTabRef.current(previewTargetOf(cfg.previewUrl), { awaitRunId: s.runId })
+      }
+      // The address a run printed, offered once. The run's tab keeps a button for it afterwards, so
+      // this is only here to say the preview exists at all — the thing nobody finds on their own.
+      // Not for a configured previewUrl, which has already opened itself, and not for a validation run.
+      if (
+        s.detectedUrl !== undefined &&
+        s.status === 'running' &&
+        !s.validation &&
+        s.projectPath === currentProjectRef.current &&
+        !previewOfferedRef.current.has(s.runId)
+      ) {
+        previewOfferedRef.current.add(s.runId)
+        const cfg = runConfigsRef.current.find((c) => c.id === s.configId)
+        const url = s.detectedUrl
+        if (!(cfg && cfg.type !== 'compound' && cfg.previewUrl))
+          toast.info(t('run.panel.previewFound', { url: displayHostOf(url) }), {
+            action: { label: t('run.panel.previewOpen'), onClick: () => openBrowserTabRef.current(previewTargetOf(url)) }
+          })
       }
     })
     return off
@@ -3687,6 +3708,7 @@ export default function App(): React.JSX.Element {
                     onDismissRun={runDismiss}
                     onOpenFile={(path, at) => openFile(path, at.line === undefined ? undefined : { line: at.line, col: at.col })}
                     onOpenUrl={openUrl}
+                    onOpenPreview={(url) => openBrowserTab(previewTargetOf(url))}
                     terminals={terminals}
                     activeTab={bottomTabShown}
                     onSelectTab={setBottomTab}
