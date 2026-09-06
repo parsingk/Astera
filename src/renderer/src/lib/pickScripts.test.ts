@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { armScript, badgesScript, cancelScript, chromeScript, embedJson, highlightScript, type BadgeMarker } from './pickScripts'
 
-const marker: BadgeMarker = { seq: 7, rectPage: { x: 1, y: 2, width: 3, height: 4 }, rectViewport: { x: 5, y: 6, width: 3, height: 4 }, isFixed: false }
+const marker: BadgeMarker = { seq: 7, rectPage: { x: 1, y: 2, width: 3, height: 4 }, rectViewport: { x: 5, y: 6, width: 3, height: 4 }, isFixed: false, hasComment: true }
 const parses = (src: string): void => {
   expect(() => new Function(src)).not.toThrow()
 }
@@ -59,5 +59,27 @@ describe('embedJson', () => {
     expect(out).not.toContain('\u2028')
     expect(out).not.toContain('\u2029')
     expect(new Function(`return ${out}`)()).toEqual(hostile)
+  })
+})
+
+describe('the badge marker', () => {
+  it('carries whether a note has been written, which is what the bubble colours', () => {
+    expect(badgesScript([marker])).toContain('"hasComment":true')
+    expect(badgesScript([{ ...marker, hasComment: false }])).toContain('"hasComment":false')
+  })
+
+  it('is a bubble with a tail, not a dot', () => {
+    const src = badgesScript([marker])
+    expect(src).toContain('border-radius:')
+    expect(src).toContain('solid transparent')
+  })
+})
+
+describe('what the armed picker stops the page from doing', () => {
+  it('presses are swallowed, so aiming with a small drag does not select the page', () => {
+    const src = armScript()
+    // The compiled function is what ships, and the transform picks its own quote style
+    expect(src).toMatch(/addEventListener\(["']mousedown["']/)
+    expect(src).toContain('user-select:none')
   })
 })

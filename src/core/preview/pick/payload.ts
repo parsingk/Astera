@@ -74,6 +74,16 @@ const strOrNull = (v: unknown, max: number): string | null => (typeof v === 'str
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 const rect = (v: unknown): Rect | null => (isFiniteRect(v) ? { x: v.x, y: v.y, width: v.width, height: v.height } : null)
 
+/** A finite point, or null. The guest hands this one over as the place to open the comment box, so a
+ *  NaN here would put the box nowhere rather than corrupt anything — checked all the same. */
+function point(v: unknown): { x: number; y: number } | null {
+  if (v === null || typeof v !== 'object') return null
+  const p = v as Record<string, unknown>
+  if (typeof p.x !== 'number' || typeof p.y !== 'number') return null
+  if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return null
+  return { x: p.x, y: p.y }
+}
+
 function styles(v: unknown): ComputedStyles | null {
   if (v === null || typeof v !== 'object') return null
   const o = v as Record<string, unknown>
@@ -168,6 +178,9 @@ export function clampPayload(raw: unknown): PickPayload | null {
     textSnippet: safeText(str(o.textSnippet, PICK_BUDGET.textSnippet)),
     htmlSnippet: redactHtml(str(o.htmlSnippet, PICK_BUDGET.htmlSnippet)),
     accessibility: { role: strOrNull(a.role, PICK_BUDGET.role), accessibleName: strOrNull(a.accessibleName, PICK_BUDGET.accessibleName) },
+    // Optional, and falls back to the element's own corner: an older guest script, or a pick that came
+    // from somewhere other than a click, still places its comment box somewhere sensible.
+    clickViewport: point(o.clickViewport) ?? { x: rectViewport.x, y: rectViewport.y },
     rectViewport,
     rectPage,
     isFixed: o.isFixed === true,

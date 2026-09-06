@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { WebviewTag } from 'electron'
 import { loadErrorKind } from '../../../core/preview/errors'
 import { PREVIEW_PARTITION, guestNavigationAllowed } from '../../../core/preview/guards'
-import { MAX_ANNOTATIONS, type Annotation, type CaptureResult, type Intent } from '../../../core/preview/pick/types'
+import { MAX_ANNOTATIONS, type Annotation, type CaptureResult, type Intent, type PickPayload } from '../../../core/preview/pick/types'
 import { clampPayload } from '../../../core/preview/pick/payload'
 import { formatAnnotations } from '../../../core/preview/pick/prompt'
 import { clampToView, scaleRect } from '../../../core/preview/pick/rect'
@@ -18,6 +18,7 @@ import {
 import { useI18n } from '../i18n/I18nProvider'
 import { armScript, badgesScript, cancelScript, chromeScript, highlightScript, type BadgeMarker } from '../lib/pickScripts'
 import { toast } from '../lib/toast'
+import { AnnotationPopover } from './AnnotationPopover'
 import { AnnotationTray } from './AnnotationTray'
 import { ContextMenu, type MenuItem } from './ContextMenu'
 import { Select } from './Select'
@@ -49,6 +50,33 @@ export type SessionChoice = { id: string; title: string; busy: boolean }
  *  string past the type while keeping the element's other attributes checked. */
 const ALLOW_POPUPS = { allowpopups: '' } as unknown as { allowpopups?: boolean }
 
+/** Room the comment box needs, measured from the rendered box. Used to centre it on the pointer and
+ *  to keep it inside the stage; the box itself is sized by the stylesheet. */
+const POPOVER = { width: 264, height: 112, gap: 14, margin: 8 }
+
+/** Where the comment box opens, in the stage's own pixels.
+ *
+ *  Beside the pointer, which is why the guest sends the click position at all: on a wide element the
+ *  element's corner can be half a screen away from where the user was looking. The page's pixels are
+ *  not the stage's under a device preset, so the same measured scale the capture uses converts them.
+ *  Near the right edge it opens to the left of the pointer instead of being pushed off it. */
+function popoverSpot(payload: PickPayload, view: WebviewTag, stage: HTMLDivElement | null): { x: number; y: number } {
+  const v = view.getBoundingClientRect()
+  const s = stage?.getBoundingClientRect() ?? v
+  const scale = payload.page.viewportWidth > 0 ? v.width / payload.page.viewportWidth : 1
+  const pointerX = v.left - s.left + payload.clickViewport.x * scale
+  const pointerY = v.top - s.top + payload.clickViewport.y * scale
+  const right = pointerX + POPOVER.gap
+  const x = right + POPOVER.width + POPOVER.margin <= s.width ? right : pointerX - POPOVER.gap - POPOVER.width
+  const y = pointerY - POPOVER.height / 2
+  const maxX = Math.max(POPOVER.margin, s.width - POPOVER.width - POPOVER.margin)
+  const maxY = Math.max(POPOVER.margin, s.height - POPOVER.height - POPOVER.margin)
+  return {
+    x: Math.min(Math.max(x, POPOVER.margin), maxX),
+    y: Math.min(Math.max(y, POPOVER.margin), maxY)
+  }
+}
+
 /** How long a screenshot may take before the pick gives up on it. */
 const CAPTURE_TIMEOUT_MS = 5000
 
@@ -59,7 +87,7 @@ const CAPTURE_TIMEOUT_MS = 5000
  *  session: still pending after eight seconds, where the same rect came back in well under a second
  *  with the tab in front. Unbounded, the pick loop parks there for good -- no annotation, no message,
  *  the mode still lit and the picker's own overlay left hidden for a capture that never happens.
- *  Giving up costs the thumbnail; the note is still collected and the pane says the shot failed. */
+ *  Giving up costs the screenshot; the note is still collected and the pane says the shot failed. */
 async function captureWithin(capture: Promise<CaptureResult | null>): Promise<CaptureResult | null> {
   let timer!: ReturnType<typeof setTimeout>
   const timedOut = new Promise<null>((resolve) => {
@@ -118,7 +146,8 @@ export function BrowserPane({
   /** The project's live sessions, for Send. Empty disables it. */
   sessions: SessionChoice[]
   /** Pastes into that session's terminal and brings its tab forward. false when the terminal is gone. */
-  onSendToSession: (sessionId: string, text: string) => boolean
+  /** 'waiting' when the session is holding a dialog open — nothing was written. */
+  onSendToSession: (sessionId: string, text: string) => 'sent' | 'waiting' | 'no-terminal'
 }): React.JSX.Element {
   const { t } = useI18n()
   const viewRef = useRef<WebviewTag | null>(null)
@@ -144,6 +173,12 @@ export function BrowserPane({
   const [designMode, setDesignMode] = useState(false)
   const [annotations, setAnnotations] = useState<Annotation[]>([])
   const [focusAnnotationId, setFocusAnnotationId] = useState<string | null>(null)
+  /** The annotation whose comment box is open, and where it sits in the stage's own pixels. */
+  const [popover, setPopover] = useState<{ id: string; x: number; y: number } | null>(null)
+  // The Copy button says "copied" for a moment instead of raising a toast
+  const [copied, setCopied] = useState(false)
+  const copiedTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(copiedTimer.current), [])
   const [sendMenu, setSendMenu] = useState<{ x: number; y: number } | null>(null)
   // Read by the Escape handler, which is registered once and must not close over a stale value
   const sendMenuRef = useRef(sendMenu)
@@ -486,12 +521,25 @@ export function BrowserPane({
         if (cancelled) break
         const payload = clampPayload(raw)
         if (!payload) continue
+        let pagePath = ''
+        try { pagePath = new URL(payload.page.url).pathname } catch { pagePath = '' }
+        // Clicking an element that already carries a note is a way back to that note, not a second one
+        // about the same thing. Three clicks on one button used to make three rows and stack three
+        // bubbles on the same pixel. Ahead of both the limit and the capture: getting back to a note
+        // must work at twenty of them, and it should not cost a screenshot.
+        const existing = payload.selector
+          ? annotationsRef.current.find((a) => a.pagePath === pagePath && a.payload.selector === payload.selector)
+          : undefined
+        if (existing) {
+          setFocusAnnotationId(existing.id)
+          setPopover({ id: existing.id, ...popoverSpot(payload, view, stageRef.current) })
+          continue
+        }
         if (annotationsRef.current.length >= MAX_ANNOTATIONS) {
           toast.info(t('preview.design.limit', { max: MAX_ANNOTATIONS }))
           continue
         }
         let shotPath: string | null = null
-        let shotThumb: string | null = null
         try {
           // Only the part on screen. An element taller than the window is ordinary, and asking to
           // capture the piece hanging off the edge gets nothing useful back. Clamped in the page's own
@@ -523,22 +571,17 @@ export function BrowserPane({
             void view.executeJavaScript(chromeScript(false)).catch(() => {})
           }
           shotPath = shot?.path ?? null
-          // The card shows this, not the file — Chromium will not load a file: URL from the http:
-          // document the renderer is served from in development
-          shotThumb = shot?.thumbnail ?? null
         } catch {
           shotPath = null
-          shotThumb = null
         }
         if (cancelled) break
         if (!shotPath) toast.info(t('preview.design.shotFailed'))
         const id = crypto.randomUUID()
         const seq = nextSeq.current
         nextSeq.current += 1
-        let pagePath = ''
-        try { pagePath = new URL(payload.page.url).pathname } catch { pagePath = '' }
-        setAnnotations((prev) => [...prev, { id, seq, payload, shotPath, shotThumb, comment: '', intent: 'fix', pagePath }])
+        setAnnotations((prev) => [...prev, { id, seq, payload, shotPath, comment: '', intent: 'change', pagePath }])
         setFocusAnnotationId(id)
+        setPopover({ id, ...popoverSpot(payload, view, stageRef.current) })
       }
     }
     void run()
@@ -592,7 +635,7 @@ export function BrowserPane({
     }
     const markers: BadgeMarker[] = annotationsRef.current
       .filter((a) => a.pagePath === path)
-      .map((a) => ({ seq: a.seq, rectPage: a.payload.rectPage, rectViewport: a.payload.rectViewport, isFixed: a.payload.isFixed }))
+      .map((a) => ({ seq: a.seq, rectPage: a.payload.rectPage, rectViewport: a.payload.rectViewport, isFixed: a.payload.isFixed, hasComment: a.comment.trim() !== '' }))
     try { void view.executeJavaScript(badgesScript(markers)).catch(() => {}) } catch { /* not attached yet */ }
   }
   const sendBadgesRef = useRef(sendBadges)
@@ -600,9 +643,30 @@ export function BrowserPane({
   // Keyed on what a badge is actually made of. `annotations` is a new array on every comment keystroke,
   // and each one tore down and rebuilt every badge node in the page.
   const badgeKey = annotations
-    .map((a) => `${a.seq}:${a.pagePath}:${Math.round(a.payload.rectPage.x)},${Math.round(a.payload.rectPage.y)}`)
+    .map((a) => `${a.seq}:${a.pagePath}:${Math.round(a.payload.rectPage.x)},${Math.round(a.payload.rectPage.y)}:${a.comment.trim() !== ''}`)
     .join('|')
   useEffect(() => { sendBadgesRef.current() }, [badgeKey, currentPath])
+
+  // A delete, a clear or a send takes the open comment box with it
+  useEffect(() => {
+    if (popover && !annotations.some((a) => a.id === popover.id)) setPopover(null)
+  }, [annotations, popover])
+
+  // So does turning the mode off, and leaving the page it was opened on: the box is placed against a
+  // point on one page, and a comment box floating over a different one belongs to nothing.
+  useEffect(() => { if (!designMode) setPopover(null) }, [designMode])
+  useEffect(() => { setPopover(null) }, [currentPath])
+
+  // A click anywhere else closes it. Only host clicks reach this — a click inside the page is a pick,
+  // and that opens the box again on whatever was picked.
+  useEffect(() => {
+    if (!popover) return
+    const onDown = (e: PointerEvent): void => {
+      if (!(e.target instanceof Node) || !(e.target as Element).closest?.('.dm-pop')) setPopover(null)
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+  }, [popover])
 
   const updateAnnotation = (id: string, patch: { comment?: string; intent?: Intent }): void =>
     setAnnotations((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)))
@@ -615,26 +679,33 @@ export function BrowserPane({
     const a = annotationsRef.current.find((x) => x.id === id)
     const view = viewRef.current
     if (!a || !view || a.pagePath !== currentPath) return
-    try { void view.executeJavaScript(highlightScript({ seq: a.seq, rectPage: a.payload.rectPage, rectViewport: a.payload.rectViewport, isFixed: a.payload.isFixed })).catch(() => {}) } catch { /* detached */ }
+    try { void view.executeJavaScript(highlightScript({ seq: a.seq, rectPage: a.payload.rectPage, rectViewport: a.payload.rectViewport, isFixed: a.payload.isFixed, hasComment: a.comment.trim() !== '' })).catch(() => {}) } catch { /* detached */ }
   }
   const promptText = (): string => formatAnnotations(annotationsRef.current)
   const copyAnnotations = (): void => {
     const text = promptText()
     if (!text) return
     window.api.clipboard.writeText(text)
-    toast.info(t('preview.design.copied'))
+    // The button itself says "copied" for a moment. A toast as well was two notices for one click.
+    window.clearTimeout(copiedTimer.current)
+    setCopied(true)
+    copiedTimer.current = window.setTimeout(() => setCopied(false), 1400)
   }
   const sendTo = (sessionId: string): void => {
     const text = promptText()
     if (!text) return
     const s = sessions.find((x) => x.id === sessionId)
-    if (!onSendToSession(sessionId, text)) { toast.error(t('preview.design.sendFailed')); return }
+    const name = s?.title ?? sessionId
+    const result = onSendToSession(sessionId, text)
+    // Nothing was written in either failing case, so the batch stays in the tray to be sent again
+    if (result === 'waiting') { toast.info(t('preview.design.sendWaiting', { name })); return }
+    if (result === 'no-terminal') { toast.error(t('preview.design.sendFailed')); return }
     setAnnotations([])
     // The batch is gone, so the next one starts at 1 again. Left running, the next prompt opened at
     // `### 4.` with no 1 to 3 in it, which reads to an agent like sections that were left out.
     nextSeq.current = 1
     setDesignMode(false)
-    toast.info(t('preview.design.sent', { name: s?.title ?? sessionId }))
+    toast.info(t('preview.design.sent', { name }))
   }
   const onSendClick = (anchor: DOMRect): void => {
     if (sessions.length === 0) return
@@ -770,20 +841,27 @@ export function BrowserPane({
             )}
           </div>
         )}
+        {popover && (() => {
+          const a = annotations.find((x) => x.id === popover.id)
+          return a ? (
+            <AnnotationPopover annotation={a} at={popover} onChange={updateAnnotation} onClose={() => setPopover(null)} />
+          ) : null
+        })()}
+        {annotations.length > 0 && (
+          <AnnotationTray
+            annotations={annotations}
+            canSend={sessions.length > 0}
+            onChange={updateAnnotation}
+            onDelete={deleteAnnotation}
+            onClear={clearAnnotations}
+            onCopy={copyAnnotations}
+            copied={copied}
+            onSend={onSendClick}
+            onFocusAnnotation={focusAnnotation}
+            focusId={focusAnnotationId}
+          />
+        )}
       </div>
-      {annotations.length > 0 && (
-        <AnnotationTray
-          annotations={annotations}
-          canSend={sessions.length > 0}
-          onChange={updateAnnotation}
-          onDelete={deleteAnnotation}
-          onClear={clearAnnotations}
-          onCopy={copyAnnotations}
-          onSend={onSendClick}
-          onFocusAnnotation={focusAnnotation}
-          focusId={focusAnnotationId}
-        />
-      )}
       {sendMenu && <ContextMenu x={sendMenu.x} y={sendMenu.y} items={sendItems} onClose={() => setSendMenu(null)} />}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
     </div>

@@ -15,6 +15,7 @@ interface PickState {
   hovered: Element | null
   pending: { resolve: (v: unknown) => void; reject: (e: Error) => void } | null
   onMove: ((e: MouseEvent) => void) | null
+  onDown: ((e: MouseEvent) => void) | null
   onClick: ((e: MouseEvent) => void) | null
   onKey: ((e: KeyboardEvent) => void) | null
   cancel: () => void
@@ -163,7 +164,7 @@ export function pickerRuntime(): Promise<unknown> {
     }
   }
 
-  function extract(el: Element): unknown {
+  function extract(el: Element, clickX: number, clickY: number): unknown {
     const r = el.getBoundingClientRect()
     const cs = getComputedStyle(el)
     const styles: Record<string, string> = {}
@@ -181,6 +182,9 @@ export function pickerRuntime(): Promise<unknown> {
       htmlSnippet: el.outerHTML.slice(0, 4096),
       attributes: attrs,
       accessibility: { role: el.getAttribute('role'), accessibleName: accessibleName(el) },
+      // Where the pointer actually was, not where the element is: the comment box opens beside the
+      // click, and on a wide element those are far apart.
+      clickViewport: { x: clickX, y: clickY },
       rectViewport: { x: r.left, y: r.top, width: r.width, height: r.height },
       rectPage: { x: r.left + window.scrollX, y: r.top + window.scrollY, width: r.width, height: r.height },
       isFixed: isFixed(el),
@@ -193,16 +197,17 @@ export function pickerRuntime(): Promise<unknown> {
 
   let S = w[KEY] as PickState | undefined
   if (!S) {
-    S = { overlay: null, box: null, label: null, hovered: null, pending: null, onMove: null, onClick: null, onKey: null, cancel: function () {} }
+    S = { overlay: null, box: null, label: null, hovered: null, pending: null, onMove: null, onDown: null, onClick: null, onKey: null, cancel: function () {} }
     w[KEY] = S
   }
   const state: PickState = S
 
   function teardown(): void {
     if (state.onMove) window.removeEventListener('mousemove', state.onMove, true)
+    if (state.onDown) window.removeEventListener('mousedown', state.onDown, true)
     if (state.onClick) window.removeEventListener('click', state.onClick, true)
     if (state.onKey) window.removeEventListener('keydown', state.onKey, true)
-    state.onMove = null; state.onClick = null; state.onKey = null
+    state.onMove = null; state.onDown = null; state.onClick = null; state.onKey = null
     for (const n of [state.overlay, state.box, state.label]) if (n && n.parentNode) n.parentNode.removeChild(n)
     state.overlay = null; state.box = null; state.label = null; state.hovered = null
   }
@@ -220,7 +225,7 @@ export function pickerRuntime(): Promise<unknown> {
   if (!state.overlay) {
     const overlay = document.createElement('div')
     overlay.setAttribute('data-astera-pick', '')
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:' + Z + ';cursor:crosshair;background:transparent;'
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:' + Z + ';cursor:crosshair;background:transparent;user-select:none;-webkit-user-select:none;'
     const box = document.createElement('div')
     box.setAttribute('data-astera-pick', '')
     box.style.cssText = 'position:fixed;pointer-events:none;z-index:' + Z + ';border:2px solid #4c7ef3;background:rgba(76,126,243,.12);border-radius:2px;display:none;box-sizing:border-box;'
@@ -248,6 +253,13 @@ export function pickerRuntime(): Promise<unknown> {
       state.label.style.left = Math.max(0, r.left) + 'px'
       state.label.style.top = (above >= 0 ? above : r.bottom + 2) + 'px'
     }
+    // A press that is not stopped starts a text selection in the page, and dragging from it paints a
+    // blue band across whatever the pointer crosses. Aiming at an element is a press and a small
+    // movement, so this happened to anyone who did not click perfectly still.
+    state.onDown = function (e: MouseEvent) {
+      if (e.button !== 0) return
+      e.preventDefault()
+    }
     state.onClick = function (e: MouseEvent) {
       if (e.button !== 0) return
       e.preventDefault(); e.stopPropagation()
@@ -256,7 +268,7 @@ export function pickerRuntime(): Promise<unknown> {
       if (!target || !p) return
       state.pending = null
       let payload: unknown = null
-      try { payload = extract(target) } catch (err) { p.reject(err instanceof Error ? err : new Error(String(err))); return }
+      try { payload = extract(target, e.clientX, e.clientY) } catch (err) { p.reject(err instanceof Error ? err : new Error(String(err))); return }
       p.resolve(payload)
     }
     state.onKey = function (e: KeyboardEvent) {
@@ -270,6 +282,7 @@ export function pickerRuntime(): Promise<unknown> {
     // it). The escape hatch is that cancel() changes state directly instead of going through an event,
     // so the toolbar toggle and Escape keep working even then.
     window.addEventListener('mousemove', state.onMove, true)
+    window.addEventListener('mousedown', state.onDown, true)
     window.addEventListener('click', state.onClick, true)
     window.addEventListener('keydown', state.onKey, true)
   }
@@ -285,8 +298,12 @@ export function cancelRuntime(): void {
 }
 
 /** Numbered badges at the given rects, following scroll and resize. An empty list removes them. */
-export function badgesRuntime(markers: { seq: number; rectPage: { x: number; y: number; width: number; height: number }; rectViewport: { x: number; y: number; width: number; height: number }; isFixed: boolean }[]): void {
+export function badgesRuntime(markers: { seq: number; rectPage: { x: number; y: number; width: number; height: number }; rectViewport: { x: number; y: number; width: number; height: number }; isFixed: boolean; hasComment: boolean }[]): void {
   const KEY = '__asteraBadges'
+  // Declared here rather than shared: each of these functions is stringified on its own and runs in
+  // the guest with nothing around it, so a constant from a neighbour would be undefined.
+  const BADGE_H = 18
+  const TAIL_H = 6
   const w = window as unknown as Record<string, unknown>
   interface BadgeState { root: HTMLDivElement | null; markers: typeof markers; onUpdate: (() => void) | null; raf: number }
   let S = w[KEY] as BadgeState | undefined
@@ -317,9 +334,26 @@ export function badgesRuntime(markers: { seq: number; rectPage: { x: number; y: 
         const m = state.markers[i]
         const x = m.isFixed ? m.rectViewport.x : m.rectPage.x - window.scrollX
         const y = m.isFixed ? m.rectViewport.y : m.rectPage.y - window.scrollY
+        // A speech bubble rather than a plain dot: the marker's job is to say a remark was left here,
+        // and a numbered circle reads as an ordering. Blue once something has been written about it,
+        // grey while the comment is still empty.
+        const colour = m.hasComment ? '#4c7ef3' : '#6b7280'
+        const above = y - (BADGE_H + TAIL_H) >= 0
         const d = document.createElement('div')
-        d.textContent = String(m.seq)
-        d.style.cssText = 'position:absolute;left:' + (x - 10) + 'px;top:' + (y - 10) + 'px;width:20px;height:20px;border-radius:50%;background:#4c7ef3;color:#fff;font:700 12px/20px system-ui,sans-serif;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.4);'
+        d.style.cssText = 'position:absolute;left:' + (x - 4) + 'px;top:' + (above ? y - BADGE_H - TAIL_H : y + TAIL_H) + 'px;'
+        const body = document.createElement('div')
+        body.textContent = String(m.seq)
+        body.style.cssText = 'min-width:' + BADGE_H + 'px;height:' + BADGE_H + 'px;padding:0 5px;box-sizing:border-box;' +
+          'border-radius:' + (BADGE_H / 2) + 'px;background:' + colour + ';color:#fff;' +
+          'font:700 11px/' + BADGE_H + 'px system-ui,sans-serif;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.4);'
+        // The tail points at the corner the element starts from, so the bubble reads as belonging to it
+        const tail = document.createElement('div')
+        tail.style.cssText = 'position:absolute;left:5px;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;' +
+          (above
+            ? 'top:' + (BADGE_H - 1) + 'px;border-top:' + TAIL_H + 'px solid ' + colour + ';'
+            : 'top:' + (1 - TAIL_H) + 'px;border-bottom:' + TAIL_H + 'px solid ' + colour + ';')
+        d.appendChild(body)
+        d.appendChild(tail)
         r.appendChild(d)
       }
     }

@@ -8,6 +8,8 @@ export interface BadgeMarker {
   rectPage: Rect
   rectViewport: Rect
   isFixed: boolean
+  /** Whether anything has been written about it yet — the marker is drawn differently either way. */
+  hasComment: boolean
 }
 
 /** JSON that is safe inside a script string: `<`, `>`, `&` and the two line separators are escaped,

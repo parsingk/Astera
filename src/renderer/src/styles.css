@@ -2367,27 +2367,67 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* The browser tab's busy ring on the tab bar — the session ring's shape, in the accent colour */
 .tab-dot.busy.bp-tab-busy { border-color: var(--line); border-top-color: var(--accent); border-right-color: var(--accent); }
 
-/* ---- Design Mode tray — components/AnnotationTray.tsx ---- */
-.dm-tray { flex: none; max-height: 40%; display: flex; flex-direction: column; border-top: 1px solid var(--line-soft); background: var(--panel); }
+/* ---- Design Mode tray — components/AnnotationTray.tsx ----
+   A card floating in the stage's bottom-right corner, not a row beneath it: a strip of its own
+   resized the guest the moment the first annotation arrived, and every badge on screen moved with
+   it. Bounded on both axes so a long list scrolls inside the card instead of covering the page. */
+.dm-tray { position: absolute; right: 12px; bottom: 12px; z-index: 30; display: flex; flex-direction: column;
+  width: min(20rem, calc(100% - 24px)); max-height: 45%; overflow: hidden;
+  border: 1px solid var(--line); border-radius: var(--radius-md, 8px); background: var(--panel);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, .18); user-select: text; }
 .dm-tray.collapsed { max-height: none; }
-.dm-head { flex: none; height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 8px; font-size: 12px; color: var(--text-dim); }
+.dm-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+  border-bottom: 1px solid var(--line-soft); font-size: 12px; color: var(--text-dim); }
 .dm-head .dm-title { flex: 1; min-width: 0; font-weight: 600; color: var(--text); }
-.dm-head button { background: none; border: 1px solid transparent; border-radius: var(--radius-sm); color: inherit; opacity: .8; cursor: pointer; padding: 1px 7px; font-size: 12px; }
-.dm-head button:hover:not(:disabled) { opacity: 1; border-color: var(--line-soft); }
-.dm-head button:disabled { opacity: .3; cursor: default; }
-.dm-head button.primary { background: var(--accent); color: var(--accent-ink, #fff); opacity: 1; }
-.dm-cards { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 8px; }
-.dm-card { display: grid; grid-template-columns: 24px 56px 1fr auto; grid-template-rows: auto auto; gap: 4px 8px; align-items: start; padding: 6px 8px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--bg); cursor: default; }
-.dm-card:hover { border-color: var(--line); }
-.dm-seq { grid-row: 1 / span 2; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: var(--accent-ink, #fff); font: 700 12px/20px var(--mono); text-align: center; }
-.dm-shot { grid-row: 1 / span 2; width: 56px; height: 40px; object-fit: contain; background: var(--elevated); border-radius: 2px; }
-.dm-shot.empty { display: flex; align-items: center; justify-content: center; color: var(--text-faint); font-size: 11px; }
-.dm-label { grid-column: 3; font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.dm-comment { grid-column: 3; font: 12px var(--mono); color: var(--text); background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 3px 6px; resize: none; min-height: 24px; }
-.dm-comment:focus { outline: none; border-color: var(--accent); }
-.dm-side { grid-column: 4; grid-row: 1 / span 2; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
-.dm-side .ghost { opacity: .6; }
-.dm-side .ghost:hover { opacity: 1; }
+.dm-head button, .dm-edit-actions button { background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
+  color: inherit; opacity: .8; cursor: pointer; padding: 1px 7px; font-size: 12px; }
+.dm-head button:hover:not(:disabled), .dm-edit-actions button:hover:not(:disabled) { opacity: 1; border-color: var(--line-soft); }
+.dm-head button:disabled, .dm-edit-actions button:disabled { opacity: .3; cursor: default; }
+.dm-head button.primary, .dm-edit-actions button.primary { background: var(--accent); color: var(--accent-ink, #fff); opacity: 1; }
+.dm-head button.ghost { padding: 1px 4px; }
+
+.dm-rows { flex: 1; min-height: 0; overflow: auto; padding: 4px; }
+.dm-row { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border-radius: var(--radius-sm); cursor: default; }
+.dm-row:hover, .dm-row:focus-within { background: var(--elevated); }
+.dm-seq { flex: none; width: 20px; height: 20px; margin-top: 1px; border-radius: 50%;
+  background: var(--accent); color: var(--accent-ink, #fff); font: 700 11px/20px var(--mono); text-align: center; }
+.dm-body { flex: 1; min-width: 0; font-size: 12px; }
+.dm-label { color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Two lines of the comment, then an ellipsis — the rest is one click away in the editor */
+.dm-comment { margin-top: 2px; color: var(--text-dim); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dm-intent { margin-top: 3px; font-size: 11px; color: var(--text-faint); }
+/* The row's own actions appear on hover, so a list of ten reads as ten labels and not as twenty buttons */
+.dm-actions { flex: none; display: flex; gap: 2px; opacity: 0; transition: opacity .12s; }
+.dm-row:hover .dm-actions, .dm-row:focus-within .dm-actions { opacity: 1; }
+.dm-actions button { background: none; border: 0; border-radius: var(--radius-sm); color: var(--text-dim); cursor: pointer; padding: 1px 4px; font-size: 12px; }
+.dm-actions button:hover { color: var(--text); background: var(--panel); }
+.dm-actions button.danger:hover { color: var(--danger, #e5484d); }
+
+.dm-edit { flex: 1; min-width: 0; }
+.dm-edit textarea { width: 100%; box-sizing: border-box; font: 12px var(--mono); color: var(--text);
+  background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 4px 6px; resize: vertical; }
+.dm-edit textarea:focus { outline: none; border-color: var(--accent); }
+.dm-intents { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+.dm-intents button { background: none; border: 1px solid var(--line-soft); border-radius: var(--radius-sm);
+  color: var(--text-dim); cursor: pointer; padding: 1px 6px; font-size: 11px; }
+.dm-intents button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink, #fff); }
+.dm-edit-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 6px; }
+
+/* The comment box that opens beside the pointer on a pick — components/AnnotationPopover.tsx.
+   Placed by popoverSpot in stage pixels; the width here and POPOVER.width there have to agree, or
+   the box is kept on screen by the wrong number. */
+.dm-pop { position: absolute; z-index: 31; width: 264px; box-sizing: border-box; padding: 8px;
+  border: 1px solid var(--line); border-radius: var(--radius-md, 8px); background: var(--panel);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .22); user-select: text; }
+.dm-pop-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.dm-pop-label { flex: 1; min-width: 0; font-size: 12px; font-weight: 500; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dm-pop-head button { background: none; border: 0; color: var(--text-dim); cursor: pointer; padding: 0 3px; font-size: 13px; }
+.dm-pop-head button:hover { color: var(--text); }
+.dm-pop textarea { width: 100%; box-sizing: border-box; font: 12px var(--mono); color: var(--text);
+  background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 4px 6px; resize: vertical; }
+.dm-pop textarea:focus { outline: none; border-color: var(--accent); }
+.dm-pop .dm-intents { margin-top: 6px; }
 
 .md-split { flex: 1; min-height: 0; display: flex; }
 /* hidden 속성이 display:flex 에 덮이지 않게 못 박는다 — 이것이 에디터를 언마운트하지 않고 숨기는 방법이다 */

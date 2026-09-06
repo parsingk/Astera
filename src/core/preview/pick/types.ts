@@ -46,6 +46,9 @@ export interface PickPayload {
   textSnippet: string
   htmlSnippet: string
   accessibility: { role: string | null; accessibleName: string | null }
+  /** Where the pointer was when the element was picked, in the page's own pixels. The comment box
+   *  opens beside it. Not part of the prompt — a click position says nothing to an agent. */
+  clickViewport: { x: number; y: number }
   rectViewport: Rect
   rectPage: Rect
   isFixed: boolean
@@ -80,8 +83,11 @@ export const PICK_BUDGET = {
 
 export const MAX_ANNOTATIONS = 20
 
-export type Intent = 'fix' | 'change' | 'question' | 'approve'
-export const INTENTS: readonly Intent[] = ['fix', 'change', 'question', 'approve']
+/** What the remark is: an ask, or a question. Orca's pair, and for its reason -- four of these put a
+ *  label on every row that says the same thing, and "fix" against "change" was a distinction the
+ *  agent never acted on differently. The value travels to the prompt verbatim, so it stays English. */
+export type Intent = 'change' | 'question'
+export const INTENTS: readonly Intent[] = ['change', 'question']
 
 export interface Annotation {
   id: string
@@ -90,8 +96,6 @@ export interface Annotation {
   payload: PickPayload
   /** Absolute path of the cropped PNG, or null when the capture failed. */
   shotPath: string | null
-  /** The same crop as a small data URL, for the card. null when the capture failed. See CaptureResult. */
-  shotThumb: string | null
   comment: string
   intent: Intent
   /** `new URL(payload.page.url).pathname`. Badges are drawn only while the tab is on this path. */
@@ -103,12 +107,4 @@ export interface CaptureResult {
   path: string
   width: number
   height: number
-  /** A small PNG data URL of the same crop, for the tray's card.
-   *
-   *  The card cannot show the file. Chromium refuses to load a `file:` URL from an `http:` document,
-   *  and in development this app's renderer is served over `http://localhost` — so an `<img>` pointed at
-   *  `path` is a broken image for the whole time anyone is working on the feature. It would come back in
-   *  a packaged build, where the renderer's own document is `file:`, which is a poor place to find out.
-   *  The path still goes in the prompt: that is read by an agent with file access, not by a web page. */
-  thumbnail: string
 }
