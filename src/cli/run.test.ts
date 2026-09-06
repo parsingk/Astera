@@ -214,3 +214,20 @@ describe('readInfo', () => {
     expect(readInfo(broken).ok).toBe(false)
   })
 })
+
+describe('browser commands', () => {
+  it('resolveGuidePath picks the browser guide when asked', () => {
+    const r = resolveGuidePath({ args: {}, env: { ASTERA_SKILLS: 'D:/skills' }, guide: 'browser' })
+    expect(r).toEqual({ ok: true, path: path.join('D:/skills', 'browser-guide.md') })
+  })
+  it('resolveGuidePath still defaults to the orchestration guide', () => {
+    const r = resolveGuidePath({ args: {}, env: { ASTERA_SKILLS: 'D:/skills' } })
+    expect(r).toEqual({ ok: true, path: path.join('D:/skills', 'orchestration-guide.md') })
+  })
+  it('browser-js waits for the whole script plus headroom', () => {
+    expect(clientTimeoutMs({ cmd: 'browser-js', args: {} })).toBe(60_000 + 30_000)
+  })
+  it('an explicit --timeout-ms still wins for browser-js', () => {
+    expect(clientTimeoutMs({ cmd: 'browser-js', args: { timeoutMs: 5000 } })).toBe(5000 + 30_000)
+  })
+})

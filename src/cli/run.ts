@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { parseArgs } from '../core/orchestration/cliArgs'
 import { DEFAULT_ASK_TIMEOUT_MS, DEFAULT_CHECK_TIMEOUT_MS } from '../core/orchestration/types'
+import { SCRIPT_TIMEOUT_MS } from '../core/agentBrowser/script'
 
 export function errorOutput(msg: string): string {
   return JSON.stringify({ error: msg })
@@ -50,7 +51,7 @@ const TIMEOUT_HEADROOM_MS = 30_000
  *  --timeout-ms was given, that value is used as is. */
 export function clientTimeoutMs(a: { cmd: string; args: Record<string, unknown> }): number {
   const defaultForCmd =
-    a.cmd === 'ask' ? DEFAULT_ASK_TIMEOUT_MS : DEFAULT_CHECK_TIMEOUT_MS
+    a.cmd === 'ask' ? DEFAULT_ASK_TIMEOUT_MS : a.cmd === 'browser-js' ? SCRIPT_TIMEOUT_MS : DEFAULT_CHECK_TIMEOUT_MS
   const base = typeof a.args.timeoutMs === 'number' ? a.args.timeoutMs : defaultForCmd
   return base + TIMEOUT_HEADROOM_MS
 }
@@ -94,6 +95,8 @@ export function buildRequest(a: {
 export function resolveGuidePath(a: {
   args: Record<string, unknown>
   env: NodeJS.ProcessEnv
+  /** Which guide. `astera help` is the orchestration guide; `astera browser help` the browser's. */
+  guide?: 'orchestration' | 'browser'
 }): { ok: true; path: string } | { ok: false; error: string } {
   const dir =
     typeof a.args.skillsDir === 'string' && a.args.skillsDir.length > 0
@@ -105,7 +108,8 @@ export function resolveGuidePath(a: {
       error:
         'ASTERA_SKILLS is not set (and no --skills-dir given) — is this session started by the app?'
     }
-  return { ok: true, path: path.join(dir, 'orchestration-guide.md') }
+  const file = a.guide === 'browser' ? 'browser-guide.md' : 'orchestration-guide.md'
+  return { ok: true, path: path.join(dir, file) }
 }
 
 export function readGuide(
@@ -170,6 +174,22 @@ export async function main(): Promise<void> {
     process.exit(0)
   }
 
+  // The browser guide works without a server too — same shape as help above.
+  if (parsed.cmd === 'browser-help') {
+    const resolved = resolveGuidePath({ args: parsed.args, env: process.env, guide: 'browser' })
+    if (!resolved.ok) {
+      out(errorOutput(resolved.error))
+      process.exit(1)
+    }
+    const guide = readGuide(resolved.path)
+    if (!guide.ok) {
+      out(errorOutput(guide.error))
+      process.exit(1)
+    }
+    out(guide.content)
+    process.exit(0)
+  }
+
   const infoPath = process.env.ASTERA_INFO
   const sessionId = process.env.ASTERA_SESSION ?? ''
   if (!infoPath) {
@@ -186,6 +206,16 @@ export async function main(): Promise<void> {
   if (parsed.wantsStdin.length > 0) {
     const text = await readStdin()
     args = applyStdin({ args, keys: parsed.wantsStdin, text })
+  }
+
+  // `astera browser js --file check.js` — the script from a file instead of stdin
+  if (parsed.cmd === 'browser-js' && typeof args.file === 'string') {
+    try {
+      args = { ...args, script: readFileSync(args.file, 'utf8') }
+    } catch (e) {
+      out(errorOutput(`cannot read ${args.file}: ${String(e)}`))
+      process.exit(1)
+    }
   }
 
   const ctl = new AbortController()
