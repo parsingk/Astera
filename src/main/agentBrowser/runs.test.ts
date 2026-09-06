@@ -37,8 +37,9 @@ const harness = (opts: { hasSession?: boolean; tabAppears?: boolean } = {}) => {
 
 describe('AgentBrowserRuns', () => {
   it('404 for a session main does not know', async () => {
-    const { runs } = harness({ hasSession: false })
+    const { runs, calls } = harness({ hasSession: false })
     expect(await runs.run('ghost', 'log(1)')).toEqual({ ok: false, status: 404, error: 'no such session' })
+    expect(calls.busy).toEqual([])
   })
 
   it('creates the tab on the first open, then runs, with busy around it', async () => {
@@ -50,18 +51,20 @@ describe('AgentBrowserRuns', () => {
   })
 
   it('504 when the tab never appears', async () => {
-    const { runs } = harness({ tabAppears: false })
+    const { runs, calls } = harness({ tabAppears: false })
     const r = await runs.run('s1', `await open('http://localhost:5173/')`)
     expect(r).toEqual({ ok: true, result: { log: [], error: { message: 'open: the browser tab did not appear', at: 'open' } } })
+    expect(calls.busy).toEqual([true, false])
   })
 
   it('stop aborts the running script at its helper', async () => {
-    const { runs } = harness()
+    const { runs, calls } = harness()
     const p = runs.run('s1', `await open('http://localhost:5173/'); await new Promise(() => {})`)
     await new Promise((r) => setTimeout(r, 20))
     expect(runs.stop('s1')).toBe(true)
     const r = await p
     expect(r.ok && r.result.error).toEqual({ message: 'stopped', at: 'script' })
+    expect(calls.busy).toEqual([true, false])
     expect(runs.stop('s1')).toBe(false)
   })
 
@@ -71,13 +74,20 @@ describe('AgentBrowserRuns', () => {
     expect(calls.closed).toBe(1)
   })
 
+  it('help() stays synchronous through the run, so a script may use it without await', async () => {
+    const { runs } = harness()
+    const r = await runs.run('s1', `log(typeof help()); log(help())`)
+    expect(r).toEqual({ ok: true, result: { log: ['string', '# g'] } })
+  })
+
   it('409 for a second run while one is in flight; the first still completes', async () => {
-    const { runs, registry } = harness({ tabAppears: false })      // the tab never appears → the first run waits tabWaitMs
+    const { runs, registry, calls } = harness({ tabAppears: false })      // the tab never appears → the first run waits tabWaitMs
     const first = runs.run('s1', `await open('http://localhost:5173/')`)
     const second = await runs.run('s1', `log(2)`)
     expect(second).toEqual({ ok: false, status: 409, error: 'a script is already running' })
     const r = await first
     expect(r.ok && r.result.error?.at).toBe('open')
     expect(registry.has('s1')).toBe(false)
+    expect(calls.busy).toEqual([true, false])
   })
 })
