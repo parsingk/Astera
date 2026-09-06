@@ -74,3 +74,12 @@ describe('the badge marker', () => {
     expect(src).toContain('solid transparent')
   })
 })
+
+describe('what the armed picker stops the page from doing', () => {
+  it('presses are swallowed, so aiming with a small drag does not select the page', () => {
+    const src = armScript()
+    // The compiled function is what ships, and the transform picks its own quote style
+    expect(src).toMatch(/addEventListener\(["']mousedown["']/)
+    expect(src).toContain('user-select:none')
+  })
+})

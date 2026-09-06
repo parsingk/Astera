@@ -521,6 +521,20 @@ export function BrowserPane({
         if (cancelled) break
         const payload = clampPayload(raw)
         if (!payload) continue
+        let pagePath = ''
+        try { pagePath = new URL(payload.page.url).pathname } catch { pagePath = '' }
+        // Clicking an element that already carries a note is a way back to that note, not a second one
+        // about the same thing. Three clicks on one button used to make three rows and stack three
+        // bubbles on the same pixel. Ahead of both the limit and the capture: getting back to a note
+        // must work at twenty of them, and it should not cost a screenshot.
+        const existing = payload.selector
+          ? annotationsRef.current.find((a) => a.pagePath === pagePath && a.payload.selector === payload.selector)
+          : undefined
+        if (existing) {
+          setFocusAnnotationId(existing.id)
+          setPopover({ id: existing.id, ...popoverSpot(payload, view, stageRef.current) })
+          continue
+        }
         if (annotationsRef.current.length >= MAX_ANNOTATIONS) {
           toast.info(t('preview.design.limit', { max: MAX_ANNOTATIONS }))
           continue
@@ -565,8 +579,6 @@ export function BrowserPane({
         const id = crypto.randomUUID()
         const seq = nextSeq.current
         nextSeq.current += 1
-        let pagePath = ''
-        try { pagePath = new URL(payload.page.url).pathname } catch { pagePath = '' }
         setAnnotations((prev) => [...prev, { id, seq, payload, shotPath, comment: '', intent: 'change', pagePath }])
         setFocusAnnotationId(id)
         setPopover({ id, ...popoverSpot(payload, view, stageRef.current) })

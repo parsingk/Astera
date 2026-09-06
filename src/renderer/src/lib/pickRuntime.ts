@@ -15,6 +15,7 @@ interface PickState {
   hovered: Element | null
   pending: { resolve: (v: unknown) => void; reject: (e: Error) => void } | null
   onMove: ((e: MouseEvent) => void) | null
+  onDown: ((e: MouseEvent) => void) | null
   onClick: ((e: MouseEvent) => void) | null
   onKey: ((e: KeyboardEvent) => void) | null
   cancel: () => void
@@ -196,16 +197,17 @@ export function pickerRuntime(): Promise<unknown> {
 
   let S = w[KEY] as PickState | undefined
   if (!S) {
-    S = { overlay: null, box: null, label: null, hovered: null, pending: null, onMove: null, onClick: null, onKey: null, cancel: function () {} }
+    S = { overlay: null, box: null, label: null, hovered: null, pending: null, onMove: null, onDown: null, onClick: null, onKey: null, cancel: function () {} }
     w[KEY] = S
   }
   const state: PickState = S
 
   function teardown(): void {
     if (state.onMove) window.removeEventListener('mousemove', state.onMove, true)
+    if (state.onDown) window.removeEventListener('mousedown', state.onDown, true)
     if (state.onClick) window.removeEventListener('click', state.onClick, true)
     if (state.onKey) window.removeEventListener('keydown', state.onKey, true)
-    state.onMove = null; state.onClick = null; state.onKey = null
+    state.onMove = null; state.onDown = null; state.onClick = null; state.onKey = null
     for (const n of [state.overlay, state.box, state.label]) if (n && n.parentNode) n.parentNode.removeChild(n)
     state.overlay = null; state.box = null; state.label = null; state.hovered = null
   }
@@ -223,7 +225,7 @@ export function pickerRuntime(): Promise<unknown> {
   if (!state.overlay) {
     const overlay = document.createElement('div')
     overlay.setAttribute('data-astera-pick', '')
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:' + Z + ';cursor:crosshair;background:transparent;'
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:' + Z + ';cursor:crosshair;background:transparent;user-select:none;-webkit-user-select:none;'
     const box = document.createElement('div')
     box.setAttribute('data-astera-pick', '')
     box.style.cssText = 'position:fixed;pointer-events:none;z-index:' + Z + ';border:2px solid #4c7ef3;background:rgba(76,126,243,.12);border-radius:2px;display:none;box-sizing:border-box;'
@@ -251,6 +253,13 @@ export function pickerRuntime(): Promise<unknown> {
       state.label.style.left = Math.max(0, r.left) + 'px'
       state.label.style.top = (above >= 0 ? above : r.bottom + 2) + 'px'
     }
+    // A press that is not stopped starts a text selection in the page, and dragging from it paints a
+    // blue band across whatever the pointer crosses. Aiming at an element is a press and a small
+    // movement, so this happened to anyone who did not click perfectly still.
+    state.onDown = function (e: MouseEvent) {
+      if (e.button !== 0) return
+      e.preventDefault()
+    }
     state.onClick = function (e: MouseEvent) {
       if (e.button !== 0) return
       e.preventDefault(); e.stopPropagation()
@@ -273,6 +282,7 @@ export function pickerRuntime(): Promise<unknown> {
     // it). The escape hatch is that cancel() changes state directly instead of going through an event,
     // so the toolbar toggle and Escape keep working even then.
     window.addEventListener('mousemove', state.onMove, true)
+    window.addEventListener('mousedown', state.onDown, true)
     window.addEventListener('click', state.onClick, true)
     window.addEventListener('keydown', state.onKey, true)
   }
