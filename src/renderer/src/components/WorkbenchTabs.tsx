@@ -42,6 +42,9 @@ export interface BrowserTab {
   /** Set by auto-open: the run whose server this tab is waiting for. While that run is live a
    *  connection-refused load means "not up yet" and is retried; cleared on the first finished load. */
   awaitRunId?: string
+  /** Set when this tab is a session's agent browser. Absent on every tab the user opened. The tab is
+   *  found by this, never by URL: an agent's second `open` moves this tab rather than making one. */
+  agentSessionId?: string
 }
 
 /** The tabs shown on one pane's tab bar. Draws file tabs, session tabs and record tabs in one row.
@@ -79,6 +82,8 @@ export type WorkbenchTab =
       title: string
       /** The page is loading — the chip spins, the way a busy session's does. */
       loading: boolean
+      /** Set when this tab is a session's agent browser — draws the "agent" tag. */
+      agentSessionId?: string
     }
   | {
       tabId: string
@@ -285,6 +290,9 @@ export function WorkbenchTabs({
             />
           ) : (
             <span className="tab-title">{tab.title}</span>
+          )}
+          {tab.kind === 'browser' && tab.agentSessionId !== undefined && (
+            <span className="run-tag" title={t('preview.agent.tab')}>{t('preview.agent.tab')}</span>
           )}
           {tab.kind === 'file' && tab.hint && <span className="tab-hint">{tab.hint}</span>}
           {tab.kind === 'file' && tab.dirty && (

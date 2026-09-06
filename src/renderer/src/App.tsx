@@ -464,6 +464,7 @@ export default function App(): React.JSX.Element {
   const orchEnabledRef = useRef(orchEnabled)
   orchEnabledRef.current = orchEnabled
   const [workUnitTrackingEnabled, setWorkUnitTrackingEnabled] = useState(false) // the work unit tracking toggle
+  const [agentBrowserEnabled, setAgentBrowserEnabled] = useState(false) // the agent browser toggle
   // Whether the Jobs sidebar view is showing — same convention as explorerOpen (toggleJobs mirrors
   // toggleExplorer below), just for the read-only orchestration view instead of the file tree.
   const [jobsOpen, setJobsOpen] = useState(false)
@@ -519,6 +520,8 @@ export default function App(): React.JSX.Element {
   browserTabsRef.current = browserTabs
   /** Browser tab id → loading. Chip state, not tab identity */
   const [browserLoading, setBrowserLoading] = useState<Record<string, boolean>>({})
+  /** Sessions whose agent tab has a script running — the chip's ring. Keyed by session id. */
+  const [agentBusy, setAgentBusy] = useState<Record<string, boolean>>({})
   /** Browser tab id → how many times openBrowserTab reused it. BrowserPane reloads when it changes */
   const [browserNonce, setBrowserNonce] = useState<Record<string, number>>({})
   // The flow step picked on a record tab. Keyed by scopeKey — project and record together, because a
@@ -693,6 +696,7 @@ export default function App(): React.JSX.Element {
     // only when the settings modal opens (the showSettings effect below) meant the button was missing
     // from a cold start until someone opened settings once — not late, absent.
     void window.api.settings.getOrchestrationEnabled().then(setOrchEnabled)
+    void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
     // Re-adopts sessions that are still running after a renderer reload as tabs (scrollback is lost, by design)
     void window.api.sessions.list().then((list) => {
       setSessions(list)
@@ -721,6 +725,7 @@ export default function App(): React.JSX.Element {
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, status: 'exited', exitCode } : s))
       )
+      closeAgentTabRef.current(sessionId) // the owner is gone; the tab has nothing to report to
     })
     // Receives sessions main created on its own (orchestration workers) as tabs. The user path builds a
     // tab from the return value of sessions.spawn, but the coordinator path creates the session inside
@@ -860,6 +865,7 @@ export default function App(): React.JSX.Element {
     // Same re-sync for work unit tracking. Unlike orchestration, nothing outside this modal reads it yet,
     // so there is no mount-time fetch to keep honest — this is the only read.
     void window.api.settings.getWorkUnitTrackingEnabled().then(setWorkUnitTrackingEnabled)
+    void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
   }, [showSettings])
 
   // Keyboard session tab switching: a global capture listener, so it works regardless of where focus
@@ -2291,6 +2297,25 @@ export default function App(): React.JSX.Element {
   const openBrowserTabRef = useRef(openBrowserTab)
   openBrowserTabRef.current = openBrowserTab
 
+  /** Main asks for a session's agent tab on its first open(). One per session, found by session; a
+   *  request for a session that already has one is a no-op. Placed in the background: the agent
+   *  appearing must not take the tab or the focus the user is on. */
+  const openAgentTab = (sessionId: string, cwd: string, url: string): void => {
+    if (browserTabsRef.current.some((b) => b.agentSessionId === sessionId)) return
+    const id = browserTab(crypto.randomUUID())
+    setBrowserTabs((prev) => [...prev, { id, url, title: '', projectRoot: cwd, agentSessionId: sessionId }])
+    const placed = placeTab(layoutRef.current, id, { activePaneId: activePaneIdRef.current, background: true })
+    setLayout(placed.root)
+  }
+  const openAgentTabRef = useRef(openAgentTab)
+  openAgentTabRef.current = openAgentTab
+  const closeAgentTab = (sessionId: string): void => {
+    const b = browserTabsRef.current.find((x) => x.agentSessionId === sessionId)
+    if (b) closeWorkbenchTab(b.id)
+  }
+  const closeAgentTabRef = useRef(closeAgentTab)
+  closeAgentTabRef.current = closeAgentTab
+
   /** The one link rule (core/preview/url.ts): a loopback address opens in a preview tab, anything else
    *  in the system browser, and Ctrl (Cmd on macOS) inverts. Every xterm's URL link and the guest's
    *  popups land here. */
@@ -2795,6 +2820,12 @@ export default function App(): React.JSX.Element {
 
   // A preview page asked for a window. Main denied it and sent the address; the link rule routes it.
   useEffect(() => window.api.on('preview:popup', ({ url }) => openUrlRef.current(url)), [])
+
+  // The agent browser: main asks for a session's tab, asks it closed, and reports whether a script is
+  // running in it — see CoreEvents' preview:agentTab / preview:agentTabClose / preview:agentBusy.
+  useEffect(() => window.api.on('preview:agentTab', ({ sessionId, cwd, url }) => openAgentTabRef.current(sessionId, cwd, url)), [])
+  useEffect(() => window.api.on('preview:agentTabClose', ({ sessionId }) => closeAgentTabRef.current(sessionId)), [])
+  useEffect(() => window.api.on('preview:agentBusy', ({ sessionId, busy }) => setAgentBusy((prev) => (busy ? { ...prev, [sessionId]: true } : (({ [sessionId]: _b, ...rest }) => rest)(prev)))), [])
 
   // The selection must never name a run the list no longer holds — with nothing to draw, the Run tab
   // shows an empty console and no row highlighted. runStart and runDismiss keep it right for what the
@@ -3604,6 +3635,7 @@ export default function App(): React.JSX.Element {
                 recordStatuses={recordStatuses}
                 browserTabs={browserTabs}
                 browserLoading={browserLoading}
+                agentBusy={agentBusy}
                 renderEditor={renderEditor}
                 renderRecord={renderRecord}
                 renderBrowser={renderBrowser}
@@ -3899,6 +3931,29 @@ export default function App(): React.JSX.Element {
                       />
                     </label>
                     <span className="settings-hint">{t('settings.workUnit.hint')}</span>
+                    {/* Agent browser — same settings-row/settings-hint/label shape and the same
+                        optimistic-update-then-revert as the two above. Off by default: it installs a
+                        skill into every account and starts the local server. */}
+                    <label className="settings-row">
+                      <span>{t('settings.agentBrowser.label')}</span>
+                      <input
+                        type="checkbox"
+                        checked={agentBrowserEnabled}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                          setAgentBrowserEnabled(next)
+                          void window.api.settings.setAgentBrowserEnabled(next).catch((err) => {
+                            setAgentBrowserEnabled(!next)
+                            toast.error(
+                              t('settings.agentBrowser.saveFailed', {
+                                detail: err instanceof Error ? err.message : String(err)
+                              })
+                            )
+                          })
+                        }}
+                      />
+                    </label>
+                    <span className="settings-hint">{t('settings.agentBrowser.hint')}</span>
                     {/* 재개 전략 — 한도에 걸린 세션을 어떻게 이어갈지. Appearance 가 아니라 여기 있는
                         이유: 이것은 보이는 방식이 아니라 동작이고, 바로 위 오케스트레이션 토글과 같은
                         갈래(롤링·워커)를 건드린다. */}

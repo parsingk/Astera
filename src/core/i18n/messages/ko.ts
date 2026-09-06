@@ -32,6 +32,13 @@ export const ko = {
     '줄로 남습니다. git 저장소인 프로젝트에서만 작동합니다. 이미 열려 있는 세션에는 적용되지 ' +
     '않습니다. 새 세션부터 동작합니다. 켠 뒤의 대화만 봅니다. 이전 기록은 읽지 않습니다.',
   'settings.workUnit.saveFailed': '작업 단위 추적 설정을 저장하지 못했습니다: {detail}',
+  // 에이전트 브라우저
+  'settings.agentBrowser.label': '에이전트 브라우저 (실험)',
+  'settings.agentBrowser.hint':
+    '켜면 세션마다 자기 미리보기 탭을 갖고, 이 프로젝트의 개발 서버를 열고 새로고침하고 콘솔 오류를 읽을 수 있습니다. ' +
+    '모든 계정에 astera-browser 스킬을 설치합니다. localhost 만 열 수 있습니다. ' +
+    '이미 열려 있는 세션에는 적용되지 않습니다. 새 세션부터 동작합니다.',
+  'settings.agentBrowser.saveFailed': '에이전트 브라우저 설정을 저장하지 못했습니다: {detail}',
   // 설명 생성 (How It Works)
   'settings.gen.label': '설명 생성 계정',
   'settings.gen.hint': '선택한 계정으로 기능 설명을 만듭니다.',
@@ -932,6 +939,7 @@ export const ko = {
   'preview.design.sendFailed': '그 세션의 터미널이 없습니다',
   'preview.design.copied': '복사했습니다',
   'preview.design.shotFailed': '스크린샷을 찍지 못했습니다',
+  'preview.agent.tab': '에이전트',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
   'terminal.rail.open': '터미널',
   'terminal.tab.label': '터미널 {n}',

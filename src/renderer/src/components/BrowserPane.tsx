@@ -361,10 +361,14 @@ export function BrowserPane({
     // event that says the guest is there, and by then every listener above is registered.
     const onDomReady = (): void => {
       view.removeEventListener('dom-ready', onDomReady)
+      // An agent's tab tells main which guest it is. Main cannot learn this from did-attach-webview,
+      // which carries no tab or session; only this component knows both.
+      if (tab.agentSessionId) void window.api.preview.registerAgentGuest(tab.agentSessionId, view.getWebContentsId())
       load(initialUrl.current)
     }
     view.addEventListener('dom-ready', onDomReady)
     return () => {
+      if (tab.agentSessionId) void window.api.preview.unregisterAgentGuest(tab.agentSessionId)
       view.removeEventListener('dom-ready', onDomReady)
       clearRetry()
       view.removeEventListener('did-start-loading', onStart)

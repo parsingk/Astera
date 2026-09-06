@@ -33,6 +33,13 @@ export const es: Catalog = {
     'sesiones que ya están abiertas: funciona a partir de las sesiones nuevas. Solo se leen las ' +
     'conversaciones posteriores a activarlo — el historial existente nunca se lee.',
   'settings.workUnit.saveFailed': 'No se pudo guardar la configuración de seguimiento: {detail}',
+  // Navegador del agente
+  'settings.agentBrowser.label': 'Navegador del agente (experimental)',
+  'settings.agentBrowser.hint':
+    'Activado, cada sesión tiene su propia pestaña de vista previa para abrir, recargar y leer los errores de consola del servidor de desarrollo de este proyecto. ' +
+    'Instala la habilidad astera-browser en todas las cuentas. Solo se puede abrir localhost. ' +
+    'No afecta a las sesiones ya abiertas; sí a las nuevas.',
+  'settings.agentBrowser.saveFailed': 'No se pudo guardar el ajuste del navegador del agente: {detail}',
   // Generación de explicaciones (How It Works)
   'settings.gen.label': 'Cuenta para explicaciones',
   'settings.gen.hint': 'Cuando termina un trabajo, esta cuenta escribe la explicación de la función. No se genera nada hasta que elijas una.',
@@ -852,6 +859,7 @@ export const es: Catalog = {
   'preview.design.sendFailed': 'Esa sesión no tiene terminal',
   'preview.design.copied': 'Copiado',
   'preview.design.shotFailed': 'No se pudo capturar la imagen',
+  'preview.agent.tab': 'agente',
   // BottomPanel, the rail terminal button
   'terminal.rail.open': 'Terminal',
   'terminal.tab.label': 'Terminal {n}',

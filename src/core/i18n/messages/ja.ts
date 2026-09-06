@@ -31,6 +31,13 @@ export const ja: Catalog = {
     'すでに開いているセッションには適用されません — 新しいセッションから有効になります。' +
     'オンにした後の会話だけを見ます — 既存の履歴は読みません。',
   'settings.workUnit.saveFailed': '作業単位の追跡設定を保存できませんでした: {detail}',
+  // エージェントブラウザ
+  'settings.agentBrowser.label': 'エージェントブラウザ（実験的）',
+  'settings.agentBrowser.hint':
+    'オンにすると、各セッションが自分のプレビュータブを持ち、このプロジェクトの開発サーバーを開いて再読み込みし、コンソールエラーを読めます。' +
+    'すべてのアカウントに astera-browser スキルをインストールします。localhost のみ開けます。' +
+    '既に開いているセッションには適用されません。新しいセッションから有効です。',
+  'settings.agentBrowser.saveFailed': 'エージェントブラウザ設定を保存できませんでした: {detail}',
   // 説明生成 (How It Works)
   'settings.gen.label': '説明生成アカウント',
   'settings.gen.hint': '作業が終わると、このアカウントが機能の説明を書きます。選ぶまでは生成しません。',
@@ -842,6 +849,7 @@ export const ja: Catalog = {
   'preview.design.sendFailed': 'そのセッションの端末がありません',
   'preview.design.copied': 'コピーしました',
   'preview.design.shotFailed': 'スクリーンショットを撮れませんでした',
+  'preview.agent.tab': 'エージェント',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
   'terminal.rail.open': 'ターミナル',
   'terminal.tab.label': 'ターミナル {n}',

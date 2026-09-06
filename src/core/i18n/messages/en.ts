@@ -30,6 +30,13 @@ export const en: Record<keyof typeof ko, string> = {
     'already open — only new sessions get it. Only conversations after you turn it on are read — ' +
     'existing history is never read.',
   'settings.workUnit.saveFailed': "Couldn't save the work unit tracking setting: {detail}",
+  // Agent browser
+  'settings.agentBrowser.label': 'Agent browser (experimental)',
+  'settings.agentBrowser.hint':
+    'On, each session gets a preview tab of its own to open, reload and read console errors from this project’s dev server. ' +
+    'Installs the astera-browser skill for every account. Only localhost can be opened. ' +
+    'Sessions already open are not affected; new sessions are.',
+  'settings.agentBrowser.saveFailed': 'Could not save the agent browser setting: {detail}',
   // Explanation generation (How It Works)
   'settings.gen.label': 'Explanation account',
   'settings.gen.hint': 'When a piece of work finishes, this account writes the feature explanation. Nothing is generated until you pick one.',
@@ -827,6 +834,7 @@ export const en: Record<keyof typeof ko, string> = {
   'preview.design.sendFailed': 'That session has no terminal',
   'preview.design.copied': 'Copied',
   'preview.design.shotFailed': 'Could not take the screenshot',
+  'preview.agent.tab': 'agent',
   'terminal.rail.open': 'Terminal',
   'terminal.tab.label': 'Terminal {n}',
   'terminal.tab.new': 'New terminal',

@@ -50,6 +50,7 @@ export function PaneGrid({
   recordStatuses,
   browserTabs,
   browserLoading,
+  agentBusy,
   rollStates,
   schedStates,
   busy,
@@ -92,6 +93,8 @@ export function PaneGrid({
   browserTabs: BrowserTab[]
   /** Browser tab id → the page is loading. Chip state, kept beside the tabs rather than in them. */
   browserLoading: Record<string, boolean>
+  /** Session id → a script is running in its agent tab. Same shape and reason as browserLoading. */
+  agentBusy: Record<string, boolean>
   rollStates: Record<string, RollStateEvent>
   schedStates: Record<string, SchedStateEvent>
   busy: Record<string, boolean>
@@ -427,7 +430,8 @@ export function PaneGrid({
                 kind: 'browser',
                 url: b.url,
                 title: b.title || displayHostOf(b.url) || t('preview.tab.untitled'),
-                loading: browserLoading[tabId] === true
+                loading: browserLoading[tabId] === true || (b.agentSessionId !== undefined && agentBusy[b.agentSessionId] === true),
+                agentSessionId: b.agentSessionId
               }
             }
             const f = ref?.kind === 'file' ? fileTabOf.get(tabId) : undefined
