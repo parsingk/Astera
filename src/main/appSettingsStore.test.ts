@@ -70,6 +70,17 @@ describe('AppSettingsStore', () => {
     // orchestrationEnabled:false를 파일에 남기지 않아도 결과가 같다
     expect(JSON.parse(await fs.readFile(nested, 'utf8'))).toEqual({ lang: 'en' })
   })
+
+  it('agent browser is off until turned on, and survives a reload', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getAgentBrowserEnabled()).toBe(false)
+    await store.setAgentBrowserEnabled(true)
+    expect(store.getAgentBrowserEnabled()).toBe(true)
+    const again = new AppSettingsStore(file())
+    await again.load()
+    expect(again.getAgentBrowserEnabled()).toBe(true)
+  })
 })
 
 describe('lang — System은 null이다', () => {
