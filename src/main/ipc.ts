@@ -80,8 +80,9 @@ import { writeInfo, writeShuttle } from './orchestration/shuttle'
 import { WorkerTails } from './orchestration/tail'
 import { releaseArgsFor } from './orchestration/release'
 import { installStub } from './orchestration/stub'
-import { AgentGuestRegistry } from './agentBrowser/registry'
-import { attachBuffers, installNetworkCapture, type AgentBuffers } from './agentBrowser/buffers'
+import { AgentGuestRegistry, type GuestLike } from './agentBrowser/registry'
+import { AgentBufferStore, attachBuffers, installNetworkCapture } from './agentBrowser/buffers'
+import type { GuestDriver } from './agentBrowser/helpers'
 import { AgentBrowserRuns } from './agentBrowser/runs'
 import { PREVIEW_PARTITION } from '../core/preview/guards'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from './orchestration/resumePacket'
@@ -844,37 +845,48 @@ export function registerIpc(
   // ---- agent browser (spec: docs/superpowers/specs/2026-09-06-agent-browser-design.md) ----
   // It sits here, above the orchestration startup, because `agentRuns` is read from the server deps
   // that bootOrch builds — a `const` declared after that call would be in its temporal dead zone.
-  const agentBuffers = new Map<string, AgentBuffers>()
-  /** webContentsId → that tab's buffers, for the one session-wide network capture. */
-  const buffersByWebContents = new Map<number, AgentBuffers>()
+  const agentBuffers = new AgentBufferStore()
   // Installed once, for every agent tab: Electron's webRequest keeps one listener per event, so a
   // per-tab registration would let the newest tab steal every other tab's network events.
-  installNetworkCapture(session.fromPartition(PREVIEW_PARTITION).webRequest, (id) => buffersByWebContents.get(id) ?? null)
-  const forgetBuffers = (sessionId: string): void => {
-    const previous = agentBuffers.get(sessionId)
-    if (!previous) return
-    previous.detach()
-    for (const [id, b] of buffersByWebContents) if (b === previous) buffersByWebContents.delete(id)
-    agentBuffers.delete(sessionId)
-  }
+  installNetworkCapture(session.fromPartition(PREVIEW_PARTITION).webRequest, (id) => agentBuffers.byWebContents(id))
   ipcMain.handle('preview.registerAgentGuest', (_e, sessionId: unknown, webContentsId: unknown) => {
     if (typeof sessionId !== 'string' || typeof webContentsId !== 'number') return
     const info = core.sessions.list().find((s) => s.id === sessionId)
     if (!info) return
-    forgetBuffers(sessionId) // a re-register (the pane remounted) replaces the old guest's buffers
     agentGuests.register(sessionId, webContentsId, info.cwd)
     const guest = agentGuests.guestOf(sessionId)
-    if (!guest) return
+    if (!guest) {
+      // All or nothing. A registration with no guest behind it answers consoleErrors() with an empty
+      // array for the rest of the session — a page that is on fire reported as clean.
+      agentGuests.unregister(sessionId)
+      return
+    }
+    // `set` forgets whatever this session had before, so a remounted pane cannot leave the guest it
+    // registered last time holding its listeners.
     const buffers = attachBuffers(guest)
-    agentBuffers.set(sessionId, buffers)
-    buffersByWebContents.set(webContentsId, buffers)
+    agentBuffers.set(sessionId, webContentsId, buffers)
+    // The one teardown path no cleanup covers. A renderer reload or crash takes the <webview> down
+    // without running React's effect cleanup, so preview.unregisterAgentGuest never arrives and the
+    // session would keep a registration and two listeners on a dead WebContents for the life of the
+    // app — one leaked set per agent tab per reload, and nothing ever collects them.
+    guest.once('destroyed', () => {
+      // Stale handler: if the pane remounted, this session was re-registered to another guest and
+      // `set` already replaced these buffers with that guest's. Comparing identity rather than the
+      // webContentsId answers the same question — buffers are made once per registration — and it
+      // answers it without needing the newer guest to still be alive.
+      if (agentBuffers.bySession(sessionId) !== buffers) return
+      agentGuests.unregister(sessionId)
+      agentBuffers.forget(sessionId)
+    })
   })
   ipcMain.handle('preview.unregisterAgentGuest', (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string') return
     agentGuests.unregister(sessionId)
-    forgetBuffers(sessionId)
+    agentBuffers.forget(sessionId)
   })
-  // The guide is read once: it is what help() returns inside a script.
+  /** What `help()` returns inside a script. Read per run, not once: this wiring runs before
+   *  `startOrch` finishes, so `orch` — and with it skillsPath — is still null here. A string captured
+   *  now would be `''` for the life of the app, which is why `RunsDeps.guide` is a getter. */
   const browserGuide = (): string => {
     try {
       return orch ? readFileSync(path.join(orch.skillsPath, 'browser-guide.md'), 'utf8') : ''
@@ -886,9 +898,10 @@ export function registerIpc(
     // Electron's WebContents does satisfy `GuestDriver & GuestLike` (checked), but the registry's
     // type parameter is **invariant** — its private waiter set holds `(g: G | null) => void` — so
     // `AgentGuestRegistry<WebContents>` still does not convert to the one runs.ts asks for. The one
-    // cast lives here rather than widening either declaration for the wiring's sake.
-    registry: agentGuests as never,
-    buffersOf: (sid) => agentBuffers.get(sid) ?? null,
+    // cast lives here rather than widening either declaration for the wiring's sake, and it names
+    // the target type so a later change to `RunsDeps.registry` fails here instead of compiling.
+    registry: agentGuests as unknown as AgentGuestRegistry<GuestDriver & GuestLike>,
+    buffersOf: (sid) => agentBuffers.bySession(sid),
     cwdOf: (sid) => core.sessions.list().find((s) => s.id === sid)?.cwd ?? null,
     requestTab: (sessionId, cwd, url) => send('preview:agentTab', { sessionId, cwd, url }),
     closeTab: (sessionId) => send('preview:agentTabClose', { sessionId }),
@@ -2843,9 +2856,10 @@ export function registerIpc(
       // 부족하고(reattach 를 봐야 한다), 리셋 시각도 이 이벤트에만 있다. 판단과 세션별 기억은
       // OrchRollTap 이 갖는다(rollTap.ts 의 onRollState).
       onRollState: (e) => orchRollTap?.onRollState(e),
-      // Read by the rolling wiring. `undefined` only when **both** orchestration and work-unit
-      // tracking are off (see orchEnvOf's own doc) — then the rolled session comes up without a CLI
-      // as before, and there is no way for a worker to exist in that state anyway.
+      // Read by the rolling wiring. `undefined` only when **all three** of orchestration, work-unit
+      // tracking and the agent browser are off (see orchEnvOf's own doc) — then the rolled session
+      // comes up without a CLI as before, and there is no way for a worker to exist in that state
+      // anyway.
       orchEnv: () => orchEnvOf(),
       // 두 롤링 코디네이터의 resumeText dep 구현.
       //
@@ -4187,8 +4201,8 @@ export function registerIpc(
     // Turning it on starts it immediately (a no-op if already up). Why turning it off does not close it is in the startOrch comment.
     if (enabled && orchWiring) await startOrch()
     // Not gated on whether startOrch() just booted anything — the case this covers is exactly the one
-    // where it did not: the server was already up (started by the other toggle), so bootOrch's own
-    // install never ran for this one. installStubsForCurrentToggles re-reads both toggles itself and
+    // where it did not: the server was already up (started by another toggle), so bootOrch's own
+    // install never ran for this one. installStubsForCurrentToggles re-reads every toggle itself and
     // no-ops when the server still is not up.
     if (enabled) installStubsForCurrentToggles()
   })

@@ -14,8 +14,12 @@ into it; that is fine — your next script sees the page as it is.
   and `[::]` (the last two become `localhost`). Anything else is refused, and so is a link on the
   page that would leave.
 - **`log(value)` is the only output.** Strings print as they are, anything else as JSON, in order.
-  `console.log` prints nowhere. A thrown error ends the script; what was logged before it is kept and
-  the error names the helper that was running (`error.at`).
+  There is no `console` in the script's world, so `console.log(x)` does not print nothing — it throws
+  `Cannot read properties of undefined (reading 'log')` and ends the run. A thrown error ends the
+  script; what was logged before it is kept and the error names the helper that was running
+  (`error.at`).
+- **`open()` before anything else.** Six of the helpers below need a page; called before the first
+  `open(url)` they throw `no page open — call open(url) first`.
 - **60 seconds per script, 30 per wait.** A script cut off reports `at: "timeout"`.
 - **Read after you load.** `consoleErrors()` and `networkErrors()` return what happened since the
   last `open`/`reload` — call them after the load you care about.
@@ -34,8 +38,9 @@ log(await networkErrors())
 
 ## open(url)
 Opens `url` in this session's tab (creating the tab on the first call) and resolves when the page has
-loaded. Throws if `url` is not this machine, or if the page fails to load (connection refused, DNS,
-HTTP error page), with the reason.
+loaded. Throws if `url` is not this machine, or if the load itself fails (connection refused, DNS),
+with the reason. **A 404 or a 500 that returns a page is not a load failure** — the browser renders
+it and `open()` resolves; that one reaches you through `networkErrors()`.
 
 ## reload()
 Reloads the current page and resolves when it has loaded. Use after editing source with a dev server

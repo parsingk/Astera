@@ -86,6 +86,48 @@ export function attachBuffers(guest: GuestEvents): AgentBuffers {
   }
 }
 
+/** The agent tabs' buffers and the `webContentsId` index the one network capture routes through,
+ *  kept together because they are one fact recorded twice: losing an entry from either side is a
+ *  buffer set that keeps its listeners on a dead guest, or a tab whose network events land nowhere.
+ *
+ *  It is a class outside `registerIpc` rather than two Maps and a closure inside it for the reason
+ *  stub.ts, tail.ts and release.ts give in their own headers: inside that closure it could not be
+ *  tested without Electron, and the bookkeeping is exactly where a leak lives. */
+export class AgentBufferStore {
+  private readonly sessions = new Map<string, AgentBuffers>()
+  private readonly webContents = new Map<number, AgentBuffers>()
+
+  /** Records this session's tab. Any registration the session already had is forgotten first — a
+   *  remounted pane re-registers, and the guest it registered before must not keep its listeners. */
+  set(sessionId: string, webContentsId: number, buffers: AgentBuffers): void {
+    this.forget(sessionId)
+    this.sessions.set(sessionId, buffers)
+    this.webContents.set(webContentsId, buffers)
+  }
+
+  bySession(sessionId: string): AgentBuffers | null {
+    return this.sessions.get(sessionId) ?? null
+  }
+
+  /** What `installNetworkCapture`'s lookup asks. Null for every guest that is not an agent's tab —
+   *  the user's own preview tabs share this partition and their requests are not recorded. */
+  byWebContents(webContentsId: number): AgentBuffers | null {
+    return this.webContents.get(webContentsId) ?? null
+  }
+
+  /** Detaches the session's buffers and drops **every** index entry pointing at them. A no-op for a
+   *  session that has none. The id side is swept by identity rather than by a remembered id: the
+   *  entry that matters is whichever one still points at these buffers, and sweeping is what makes a
+   *  double `set` under two different ids unable to leave one behind. */
+  forget(sessionId: string): void {
+    const buffers = this.sessions.get(sessionId)
+    if (!buffers) return
+    buffers.detach()
+    for (const [id, b] of this.webContents) if (b === buffers) this.webContents.delete(id)
+    this.sessions.delete(sessionId)
+  }
+}
+
 /** The session-wide network capture, installed **once**.
  *
  *  Electron's webRequest takes one listener per event — `onCompleted(filter, listener)` replaces

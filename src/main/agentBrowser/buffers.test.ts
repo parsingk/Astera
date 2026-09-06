@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { attachBuffers, installNetworkCapture } from './buffers'
+import { AgentBufferStore, attachBuffers, installNetworkCapture } from './buffers'
 
 type Cb = (...a: unknown[]) => void
 const fakeGuest = () => {
@@ -90,5 +90,58 @@ describe('installNetworkCapture', () => {
     wr.fireCompleted({ webContentsId: 7, url: 'u', method: 'GET', statusCode: 500 })
     wr.fireCompleted({ url: 'u', method: 'GET', statusCode: 500 })
     expect(a.network.sinceMark()).toEqual([])
+  })
+})
+
+// The bookkeeping ipc.ts's register/unregister handlers drive. A leak here is invisible in the app —
+// nothing looks wrong, the process just holds one dead guest's listeners more after every remount —
+// so the two indexes going away together is what these pin down.
+describe('AgentBufferStore', () => {
+  it('forget detaches the buffers and clears both indexes', () => {
+    const store = new AgentBufferStore()
+    const g = fakeGuest()
+    const b = attachBuffers(g)
+    store.set('s1', 42, b)
+    expect(store.bySession('s1')).toBe(b)
+    expect(store.byWebContents(42)).toBe(b)
+    store.forget('s1')
+    expect(g.count('console-message')).toBe(0)
+    expect(g.count('did-start-navigation')).toBe(0)
+    expect(store.bySession('s1')).toBeNull()
+    expect(store.byWebContents(42)).toBeNull()
+  })
+
+  // The remount path: BrowserPane comes back with a new <webview>, so the same session registers a
+  // second guest. The first one's listeners have to go, and its id must not keep answering lookups —
+  // otherwise the old guest's buffers stay reachable from the network capture forever.
+  it('re-registering a session under a new webContentsId detaches the old buffers and leaves no entry under the old id', () => {
+    const store = new AgentBufferStore()
+    const first = fakeGuest()
+    const oldBuffers = attachBuffers(first)
+    store.set('s1', 42, oldBuffers)
+    const second = fakeGuest()
+    const newBuffers = attachBuffers(second)
+    store.set('s1', 77, newBuffers)
+    expect(first.count('console-message')).toBe(0) // the old guest was detached
+    expect(second.count('console-message')).toBe(1) // the new one is still listening
+    expect(store.byWebContents(42)).toBeNull()
+    expect(store.byWebContents(77)).toBe(newBuffers)
+    expect(store.bySession('s1')).toBe(newBuffers)
+  })
+
+  it('an unknown webContentsId looks up nothing', () => {
+    const store = new AgentBufferStore()
+    store.set('s1', 42, attachBuffers(fakeGuest()))
+    expect(store.byWebContents(43)).toBeNull()
+    expect(store.bySession('s2')).toBeNull()
+  })
+
+  it('forgetting a session it never had is a no-op', () => {
+    const store = new AgentBufferStore()
+    const g = fakeGuest()
+    store.set('s1', 42, attachBuffers(g))
+    store.forget('s2')
+    expect(store.bySession('s1')).not.toBeNull()
+    expect(g.count('console-message')).toBe(1) // s1's guest was not touched
   })
 })

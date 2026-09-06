@@ -26,7 +26,10 @@ export interface HelperDeps {
   ensureGuest(url: string): Promise<GuestDriver>
   buffers(): AgentBuffers | null
   closeTab(): void
-  /** The text `help()` returns — browser-guide.md, read once at wiring time. */
+  /** The text `help()` returns — browser-guide.md. `RunsDeps.guide` is a getter and the wiring reads
+   *  the file through it on every run: the skills directory is only known once the orchestration
+   *  server has booted, which is after the wiring runs, so a value captured there would be `''`
+   *  forever. */
   guide: string
 }
 
