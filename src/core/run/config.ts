@@ -27,6 +27,11 @@ export interface RunStatus {
   exitCode?: number
   startedAt: number
   exitedAt?: number
+  /** The first loopback address this run printed — the dev server's own URL, seen in its output
+   *  rather than configured. The run's tab offers to open it in a preview; absent until one appears,
+   *  and absent for runs that never print one. Distinct from RunConfig.previewUrl, which is a setting
+   *  the user typed and which opens automatically at start. */
+  detectedUrl?: string
   /** An orchestration Task's validation run. Not started by the user, but it passes through
    *  RunManager like any run, so it appears in the run list and the global badge. The tag is what
    *  tells the user it is not theirs — and it is what turns the stop button's meaning around: stopping

@@ -27,6 +27,7 @@ export function BottomPanel({
   onDismissRun,
   onOpenFile,
   onOpenUrl,
+  onOpenPreview,
   terminals,
   activeTab,
   onSelectTab,
@@ -54,6 +55,8 @@ export function BottomPanel({
   onOpenFile: (path: string, at: { line?: number; col?: number }) => void
   /** A URL link in a console or a terminal was activated — App's link rule routes it. */
   onOpenUrl: (url: string, ev: MouseEvent) => void
+  /** Open a running server's address in a preview tab — the run tab's globe button. */
+  onOpenPreview: (url: string) => void
   terminals: TerminalBuffer[]
   activeTab: string
   onSelectTab: (tab: string) => void
@@ -176,7 +179,7 @@ export function BottomPanel({
               onToggleFind={() => selectedRunId && setFindOpen((prev) => ({ ...prev, [selectedRunId]: !prev[selectedRunId] }))}
             />
             <div className="run-main">
-              <RunTabStrip runs={runs} selectedId={selectedRunId} now={now} onSelect={onSelectRun} onDismiss={onDismissRun} />
+              <RunTabStrip runs={runs} selectedId={selectedRunId} now={now} onSelect={onSelectRun} onDismiss={onDismissRun} onOpenPreview={onOpenPreview} />
               <div className="run-consoles">
                 {runs.map((r) => (
                   <div

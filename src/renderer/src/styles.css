@@ -2586,6 +2586,9 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .run-tab-exit.fail { color: var(--danger); }
 .run-tab-close { display: grid; place-items: center; width: 16px; height: 16px; background: transparent; border: 0; border-radius: var(--radius-sm); color: var(--text-faint); padding: 0; cursor: pointer; }
 .run-tab-close:hover { background: var(--bg); color: var(--text); }
+/* The globe on a running tab that printed an address — the accent marks it as an offer, not a close */
+.run-tab-preview { display: grid; place-items: center; width: 16px; height: 16px; background: transparent; border: 0; border-radius: var(--radius-sm); color: var(--accent); padding: 0; cursor: pointer; }
+.run-tab-preview:hover { background: var(--bg); }
 .run-tabstrip-meta { flex: none; display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
 .run-tabstrip-cmd { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-tabstrip-time { color: var(--text-dim); font-variant-numeric: tabular-nums; }

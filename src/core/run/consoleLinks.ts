@@ -1,6 +1,23 @@
+import { isLoopbackUrl, previewTargetOf } from '../preview/url'
+
 // What in a line of run output is a link, and how xterm's rows relate to that line. All pure — the
 // renderer's link provider (RunPanel) calls these with buffer rows and turns the answers into xterm
 // ILinks; whether a path really exists is main's call (main/run/resolveLink.ts), not this file's.
+
+/** The first loopback address in a chunk of run output, ready for the preview to open: `0.0.0.0` and
+ *  `[::]` become `localhost`, and trailing sentence punctuation is peeled the way a console link is.
+ *  null when the output holds none.
+ *
+ *  This is what lets a dev server be previewed with nothing configured — the run prints its address,
+ *  and the run's tab grows a button that opens it. */
+export function firstLoopbackUrl(text: string): string | null {
+  URL_RE.lastIndex = 0
+  for (let m = URL_RE.exec(text); m; m = URL_RE.exec(text)) {
+    const url = m[0].replace(URL_TRAIL, '')
+    if (isLoopbackUrl(url)) return previewTargetOf(url)
+  }
+  return null
+}
 
 export type ConsoleLink =
   | { kind: 'path'; start: number; end: number; target: string; line?: number; col?: number }
