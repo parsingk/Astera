@@ -69,6 +69,10 @@ export class AgentGuestRegistry<G extends GuestLike = GuestLike> {
       this.waiters.set(sessionId, set)
       const timer = setTimeout(() => {
         set.delete(done)
+        // The set itself goes too once it empties. `register` is the only other place that clears it,
+        // and a tab that never appears never registers — without this the map keeps one dead entry
+        // per session that ever timed out.
+        if (set.size === 0) this.waiters.delete(sessionId)
         resolve(null)
       }, ms)
       const done = (g: G | null): void => {

@@ -43,6 +43,24 @@ describe('AgentGuestRegistry', () => {
     expect(await reg.waitFor('never', 20)).toBeNull()
   })
 
+  it('a registration arriving after waitFor timed out resolves nothing late, and the next wait works', async () => {
+    const g = guest(6)
+    const reg = new AgentGuestRegistry(() => g)
+    expect(await reg.waitFor('slow', 10)).toBeNull()
+    reg.register('slow', 6, 'D:/p')
+    expect(await reg.waitFor('slow', 10)).toBe(g)
+  })
+
+  it('one waiter timing out leaves a second waiter on the same session still waiting', async () => {
+    const g = guest(6)
+    const reg = new AgentGuestRegistry(() => g)
+    const short = reg.waitFor('two', 10)
+    const long = reg.waitFor('two', 500)
+    expect(await short).toBeNull()
+    reg.register('two', 6, 'D:/p')
+    expect(await long).toBe(g)
+  })
+
   it('waitFor on an already-registered session resolves at once', async () => {
     const g = guest(4)
     const reg = new AgentGuestRegistry(() => g)
