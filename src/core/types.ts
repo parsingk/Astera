@@ -570,6 +570,13 @@ export interface CoreEvents {
    *  allowed a window of its own (main/preview/guest.ts); the address comes here so the renderer's
    *  link rule can decide — a loopback URL becomes another preview tab, anything else opens outside. */
   'preview:popup': { url: string }
+  /** Main asks the renderer to give a session its agent browser tab — sent on the session's first
+   *  `open(url)`, with that URL as the tab's first address. A no-op when the tab already exists. */
+  'preview:agentTab': { sessionId: string; cwd: string; url: string }
+  /** The agent's script called `close()`. */
+  'preview:agentTabClose': { sessionId: string }
+  /** A script is running (true) or has finished (false) in this session's tab — the chip's ring. */
+  'preview:agentBusy': { sessionId: string; busy: boolean }
   'terminal:data': { id: string; data: string } // project terminal output
   'terminal:exit': { id: string; exitCode: number } // shell exited — the renderer removes that tab
   // The Jobs sidebar's whole snapshot, re-sent on every orchestration state change. Small enough to
@@ -805,6 +812,11 @@ export interface CoreApi {
     // nothing from before the moment it is turned on.
     getWorkUnitTrackingEnabled(): Promise<boolean>
     setWorkUnitTrackingEnabled(enabled: boolean): Promise<void>
+    // The agent browser (spec: docs/superpowers/specs/2026-09-06-agent-browser-design.md). Off by
+    // default; on, the astera-browser skill is installed for every account and new sessions may run
+    // `astera browser js`. Sessions already open do not see it until restarted.
+    getAgentBrowserEnabled(): Promise<boolean>
+    setAgentBrowserEnabled(enabled: boolean): Promise<void>
     // Whether the worktree PR badges poll GitHub in the background. Off leaves the cache as-is —
     // refresh only happens on an explicit github.refresh call.
     getGithubPolling(): Promise<boolean>
@@ -973,6 +985,10 @@ export interface PreviewApi {
    *  first) out of that guest and saves it as a PNG. Resolves to the file, or null when the guest is
    *  gone, the rect is not one Chromium can take, or the capture failed. */
   captureElement(webContentsId: number, rect: Rect): Promise<CaptureResult | null>
+  /** BrowserPane tells main which guest is a session's agent tab. Main cannot learn this on its
+   *  own — did-attach-webview hands it a guest with no tab or session on it. */
+  registerAgentGuest(sessionId: string, webContentsId: number): Promise<void>
+  unregisterAgentGuest(sessionId: string): Promise<void>
 }
 
 export interface SystemApi {

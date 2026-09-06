@@ -34,6 +34,9 @@ const EVENT_CHANNELS = [
   'run:focus',
   'run:launchFailed',
   'preview:popup',
+  'preview:agentTab',
+  'preview:agentTabClose',
+  'preview:agentBusy',
   'terminal:data',
   'terminal:exit',
   'orch:state',
@@ -133,6 +136,8 @@ const api = {
     setOrchestrationEnabled: invoke('settings.setOrchestrationEnabled'),
     getWorkUnitTrackingEnabled: invoke('settings.getWorkUnitTrackingEnabled'),
     setWorkUnitTrackingEnabled: invoke('settings.setWorkUnitTrackingEnabled'),
+    getAgentBrowserEnabled: invoke('settings.getAgentBrowserEnabled'),
+    setAgentBrowserEnabled: invoke('settings.setAgentBrowserEnabled'),
     getGithubPolling: invoke('settings.getGithubPolling'),
     setGithubPolling: invoke('settings.setGithubPolling'),
     getDesktopNotify: invoke('settings.getDesktopNotify'),
@@ -203,7 +208,9 @@ const api = {
   preview: {
     toggleDevTools: invoke('preview.toggleDevTools'),
     emulate: invoke('preview.emulate'),
-    captureElement: invoke('preview.captureElement')
+    captureElement: invoke('preview.captureElement'),
+    registerAgentGuest: invoke('preview.registerAgentGuest'),
+    unregisterAgentGuest: invoke('preview.unregisterAgentGuest')
   },
   clipboard: {
     readText: () => clipboard.readText(),
