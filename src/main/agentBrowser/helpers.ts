@@ -19,6 +19,17 @@ export interface GuestDriver {
   removeListener(event: string, cb: Listener): unknown
 }
 
+/** A dev server the project has running, as far as Astera can tell: a Run that printed a loopback
+ *  address. `name` is the run configuration's name — what the user sees in the Run list. */
+export interface DevServer {
+  name: string
+  url: string
+  /** The user marked this Run's page as the one to preview (the Run configuration's preview address).
+   *  That is the user saying "this is the page" — it settles which server `open()` means when the
+   *  project runs several. */
+  preview: boolean
+}
+
 export interface HelperDeps {
   /** The session's guest, or null before its tab exists. */
   guest(): GuestDriver | null
@@ -26,6 +37,11 @@ export interface HelperDeps {
   ensureGuest(url: string): Promise<GuestDriver>
   buffers(): AgentBuffers | null
   closeTab(): void
+  /** The project's running dev servers, from Astera's Run — what `open()` with no address opens. Astera
+   *  cannot tell which localhost port is this project's any other way: the only ports it knows are the
+   *  ones its own Run started and saw printed. A server the agent started in its own terminal is not
+   *  here, and does not need to be — the agent saw that address itself. */
+  devServers(): DevServer[]
   /** The text `help()` returns — browser-guide.md. `RunsDeps.guide` is a getter and the wiring reads
    *  the file through it on every run: the skills directory is only known once the orchestration
    *  server has booted, which is after the wiring runs, so a value captured there would be `''`
@@ -91,6 +107,50 @@ function loadEnds(g: GuestDriver, at: string, url: string, fresh = false): Promi
   return withTimeout(ended, WAIT_TIMEOUT_MS, at).finally(cleanup)
 }
 
+/** Which address `open()` means with no argument. The question it answers is "which localhost port is
+ *  mine?" — with several projects open, each running a dev server, an agent that guessed could read
+ *  another project's page as its own and diagnose it. So with exactly one candidate that is the
+ *  answer; with none, or several, it refuses and says so, listing the several by their Run's name
+ *  so the agent can pass one. Refusing is deliberate: opening "one of them" quietly is the failure
+ *  this exists to prevent. */
+function projectDevServer(servers: DevServer[]): string {
+  // A Run the user marked for preview is the page, whatever else is running — that is the user's own
+  // answer to the question, made once for the preview button and inherited here. Only when nothing
+  // is marked does what happened to print an address decide.
+  const marked = servers.filter((s) => s.preview)
+  const pool = marked.length > 0 ? marked : servers
+  if (pool.length === 0) {
+    throw new Error(
+      "open: no dev server has been started from Astera's Run for this project — pass the address, e.g. open('http://localhost:5173/')"
+    )
+  }
+  if (pool.length > 1) {
+    const list = pool.map((s) => `${s.name} ${s.url}`).join(', ')
+    throw new Error(
+      marked.length > 1
+        ? `open: several of this project's Runs mark a preview page — pass one of them: ${list}`
+        : `open: this project has several dev servers running — pass one of them, or set the preview address on the Run that is the page: ${list}`
+    )
+  }
+  // Already a loopback address (that is how it got here), normalised the same way an explicit one is
+  return agentOpenTarget(pool[0].url) ?? pool[0].url
+}
+
+/** The first thing `help()` says, when there is something to say: the project's dev server(s), so the
+ *  agent knows before it reads anything else. Empty when Astera knows of none — a session in a project
+ *  that does not use Run should not read a line about Run. */
+function devServerHeader(servers: DevServer[]): string {
+  const marked = servers.filter((s) => s.preview)
+  const pool = marked.length > 0 ? marked : servers
+  if (pool.length === 0) return ''
+  if (pool.length === 1) {
+    const how = pool[0].preview ? 'the page its Run marks for preview' : 'as started from Astera\'s Run'
+    return `This project's dev server, ${how}: ${pool[0].url} — open() with no address opens it.\n\n`
+  }
+  const list = pool.map((s) => `${s.name} ${s.url}`).join(', ')
+  return `This project has several dev servers running from Astera's Run: ${list} — pass one to open().\n\n`
+}
+
 /** `help('reload')` → the `## reload()` section of the guide, by the name before the parenthesis. */
 function section(guide: string, name: string): string | null {
   const lines = guide.split('\n')
@@ -108,9 +168,9 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
     return g
   }
   return {
-    async open(url: unknown): Promise<void> {
+    async open(url?: unknown): Promise<void> {
       ctx.at = 'open'
-      const target = agentOpenTarget(String(url))
+      const target = url === undefined ? projectDevServer(deps.devServers()) : agentOpenTarget(String(url))
       if (!target) throw new Error(`open: only this machine may be opened (got ${String(url)})`)
       const had = deps.guest() !== null
       const g = await deps.ensureGuest(target)
@@ -157,7 +217,7 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
     },
     help(name?: unknown): string {
       ctx.at = 'help'
-      if (name === undefined) return deps.guide
+      if (name === undefined) return devServerHeader(deps.devServers()) + deps.guide
       return section(deps.guide, String(name)) ?? `no helper named ${String(name)} — run help() for the list`
     }
   }

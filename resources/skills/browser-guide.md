@@ -36,9 +36,14 @@ else log(errors)
 log(await networkErrors())
 ```
 
-## open(url)
+## open(url?)
 Opens `url` in this session's tab (creating the tab on the first call) and resolves when the page has
-loaded. Throws if `url` is not this machine, or if the load itself fails (connection refused, DNS),
+loaded. **With no `url`, opens this project's dev server** — the Run the user marked for preview (the
+preview address on its configuration), or else the one Run of this project that printed an address.
+That is how you know which localhost port is yours when several projects are open. If no such Run is
+running, or several qualify and none is marked, `open()` refuses and says so (the candidates are
+listed by their Run's name — pass one). A server you started yourself in your terminal is not known
+to Astera; pass its address. Throws if `url` is not this machine, or if the load itself fails (connection refused, DNS),
 with the reason. **A 404 or a 500 that returns a page is not a load failure** — the browser renders
 it and `open()` resolves; that one reaches you through `networkErrors()`.
 
@@ -71,7 +76,8 @@ Closes this session's tab. The next `open` makes a new one.
 Appends to the script's output. The only way anything reaches you.
 
 ## help(name?)
-This guide, or one helper's section: `help('open')`.
+This guide, or one helper's section: `help('open')`. With no name, and when Astera's Run has a dev
+server running for this project, the first line names it.
 
 ## What you cannot do yet
 Snapshots, screenshots, clicking and typing arrive in later stages. Until then, read the DOM through

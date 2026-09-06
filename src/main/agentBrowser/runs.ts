@@ -4,7 +4,11 @@
 import { createLog, Interrupted, WAIT_TIMEOUT_MS, type RunResult } from '../../core/agentBrowser/script'
 import { runScript, type RunContext } from '../../core/agentBrowser/scriptRunner'
 import type { AgentBuffers } from './buffers'
-import { stage1Helpers, SYNCHRONOUS_HELPERS, type GuestDriver, type HelperDeps } from './helpers'
+import path from 'node:path'
+import { agentOpenTarget } from '../../core/agentBrowser/urls'
+import type { RunStatus } from '../../core/run/config'
+import type { RunConfig } from '../../core/run/types'
+import { stage1Helpers, SYNCHRONOUS_HELPERS, type DevServer, type GuestDriver, type HelperDeps } from './helpers'
 import type { AgentGuestRegistry, GuestLike } from './registry'
 
 export type RunOutcome =
@@ -20,6 +24,8 @@ export interface RunsDeps {
   requestTab(sessionId: string, cwd: string, url: string): void
   closeTab(sessionId: string): void
   setBusy(sessionId: string, busy: boolean): void
+  /** The dev servers Astera's Run has running for the project at `cwd` — see devServersFor. */
+  devServersOf(cwd: string): DevServer[]
   guide: string
   /** How long `open` waits for a requested tab's guest to register. */
   tabWaitMs?: number
@@ -90,6 +96,36 @@ function withAtReset(raw: Record<string, unknown>, ctx: RunContext, signal: Abor
   return wrapped
 }
 
+/** The running Runs that belong to the project at `cwd`, as `DevServer`s. A Run counts when the user
+ *  gave its configuration a preview address (then that address, marked `preview`), or else when it
+ *  printed a loopback address. The Run's `projectPath` and the session's cwd are both project roots;
+ *  they are compared through path.resolve, which is the only normalisation path comparisons in this
+ *  codebase use. A preview address that is not this machine is ignored — the agent could not open it
+ *  anyway — and the Run falls back to what it printed. A Run that neither is marked nor has printed
+ *  an address is not a dev server as far as anyone can tell, and two Runs at the same address (a
+ *  restart still winding down beside its replacement) are one server. */
+export function devServersFor(
+  active: Pick<RunStatus, 'projectPath' | 'configId' | 'configName' | 'detectedUrl'>[],
+  cwd: string,
+  configs: Pick<RunConfig, 'id' | 'previewUrl'>[] = []
+): DevServer[] {
+  const root = path.resolve(cwd)
+  const previewOf = new Map<string, string>()
+  for (const c of configs) if (typeof c.previewUrl === 'string') previewOf.set(c.id, c.previewUrl)
+  const seen = new Set<string>()
+  const out: DevServer[] = []
+  for (const r of active) {
+    if (path.resolve(r.projectPath) !== root) continue
+    const marked = previewOf.get(r.configId)
+    const markedUrl = marked === undefined ? null : agentOpenTarget(marked)
+    const url = markedUrl ?? r.detectedUrl
+    if (!url || seen.has(url)) continue
+    seen.add(url)
+    out.push({ name: r.configName, url, preview: markedUrl !== null })
+  }
+  return out
+}
+
 export class AgentBrowserRuns {
   private readonly inFlight = new Map<string, AbortController>()
 
@@ -116,6 +152,7 @@ export class AgentBrowserRuns {
       },
       buffers: () => this.deps.buffersOf(sessionId),
       closeTab: () => this.deps.closeTab(sessionId),
+      devServers: () => this.deps.devServersOf(cwd),
       guide: this.deps.guide
     }
     this.deps.setBusy(sessionId, true)

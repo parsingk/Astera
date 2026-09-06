@@ -24,12 +24,14 @@ cannot drift from the installed version.
    ```
    where `check.js` is, for example:
    ```js
-   await open('http://localhost:5173/')
+   await open()
    log(await consoleErrors())
    log(await networkErrors())
    ```
-   `--file` is used rather than a heredoc because it works in every shell — the guide covers reading
-   the script from stdin where your shell supports it.
+   `open()` with no address opens this project's dev server as started from Astera's Run — that is
+   how you know which localhost port is yours. If none is running there, it says so; pass the address
+   then (`open('http://localhost:5173/')`). `--file` is used rather than a heredoc because it works in
+   every shell — the guide covers reading the script from stdin where your shell supports it.
 
    If this answers `{"error":"agent browser is off"}`, the setting is off. Tell the person where it
    is — Settings, **Agent browser** — and stop rather than looking for another way to open the page.

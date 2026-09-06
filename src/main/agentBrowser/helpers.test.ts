@@ -30,13 +30,15 @@ const fakeGuest = (): GuestDriver & {
 }
 const deps = (g: ReturnType<typeof fakeGuest> | null) => {
   const buffers = { console: new Ring<{ level: 'error'; message: string; source: string; line: number }>(), network: new Ring<{ url: string; method: string; status?: number }>(), detach() {} }
-  const d: HelperDeps & { closed: number; ensured: string[] } = {
+  const d: HelperDeps & { closed: number; ensured: string[]; servers: { name: string; url: string; preview: boolean }[] } = {
     closed: 0,
     ensured: [],
+    servers: [],
     guest: () => g,
     async ensureGuest(url) { d.ensured.push(url); if (!g) throw new Error('no tab'); return g },
     buffers: () => (g ? buffers : null),
     closeTab() { d.closed += 1 },
+    devServers: () => d.servers,
     guide: '# guide\n## open(url)\nopens\n## reload()\nreloads'
   }
   return { d, buffers }
@@ -268,5 +270,92 @@ describe('stage1Helpers', () => {
       })
       .map(([name]) => name)
     expect(new Set(sync)).toEqual(SYNCHRONOUS_HELPERS)
+  })
+
+  // "Which localhost port is mine?" — with several projects open, an agent that guessed could read
+  // another project's page as its own. So with no address, open() takes the one dev server Astera's
+  // Run has running for this project, and refuses — saying why — when there is none or several.
+  describe('open() with no address', () => {
+    it('opens the one dev server the project has running', async () => {
+      const g = fakeGuest(); const { d } = deps(g)
+      d.servers = [{ name: 'dev', url: 'http://localhost:4321/', preview: false }]
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { open(u?: string): Promise<void> }
+      const p = h.open()
+      await new Promise((r) => setTimeout(r, 0))
+      g.fire('did-finish-load')
+      await p
+      expect(g.loaded).toEqual(['http://localhost:4321/'])
+    })
+
+    it('refuses when no Run has a dev server for this project, and says what to do', async () => {
+      const g = fakeGuest(); const { d } = deps(g)
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { open(u?: string): Promise<void> }
+      await expect(h.open()).rejects.toThrow("open: no dev server has been started from Astera's Run for this project — pass the address")
+      expect(g.loaded).toEqual([])
+    })
+
+    it('refuses when several are running, listing them by their Run name', async () => {
+      const g = fakeGuest(); const { d } = deps(g)
+      d.servers = [{ name: 'web', url: 'http://localhost:5173/', preview: false }, { name: 'api', url: 'http://localhost:3000/', preview: false }]
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { open(u?: string): Promise<void> }
+      await expect(h.open()).rejects.toThrow('open: this project has several dev servers running — pass one of them, or set the preview address on the Run that is the page: web http://localhost:5173/, api http://localhost:3000/')
+      expect(g.loaded).toEqual([])
+    })
+
+    // The user's own answer, made once for the preview button: a Run marked for preview is the page.
+    it('a Run marked for preview wins, whatever else is running', async () => {
+      const g = fakeGuest(); const { d } = deps(g)
+      d.servers = [{ name: 'api', url: 'http://localhost:3000/', preview: false }, { name: 'web', url: 'http://localhost:5173/', preview: true }]
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { open(u?: string): Promise<void> }
+      const p = h.open()
+      await new Promise((r) => setTimeout(r, 0))
+      g.fire('did-finish-load')
+      await p
+      expect(g.loaded).toEqual(['http://localhost:5173/'])
+    })
+
+    it('two Runs marked for preview is a question back, listing only the marked ones', async () => {
+      const g = fakeGuest(); const { d } = deps(g)
+      d.servers = [{ name: 'api', url: 'http://localhost:3000/', preview: false }, { name: 'web', url: 'http://localhost:5173/', preview: true }, { name: 'docs', url: 'http://localhost:6006/', preview: true }]
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { open(u?: string): Promise<void> }
+      await expect(h.open()).rejects.toThrow("open: several of this project's Runs mark a preview page — pass one of them: web http://localhost:5173/, docs http://localhost:6006/")
+      expect(g.loaded).toEqual([])
+    })
+
+    it('an explicit address is unaffected by what Run is running', async () => {
+      const g = fakeGuest(); const { d } = deps(g)
+      d.servers = [{ name: 'web', url: 'http://localhost:5173/', preview: false }, { name: 'api', url: 'http://localhost:3000/', preview: false }]
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { open(u?: string): Promise<void> }
+      const p = h.open('http://127.0.0.1:8080/x')
+      await new Promise((r) => setTimeout(r, 0))
+      g.fire('did-finish-load')
+      await p
+      expect(g.loaded).toEqual(['http://127.0.0.1:8080/x'])
+    })
+  })
+
+  describe('help() names the dev server first', () => {
+    it('one server: a first line naming it, then the guide', () => {
+      const { d } = deps(fakeGuest())
+      d.servers = [{ name: 'dev', url: 'http://localhost:4321/', preview: false }]
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { help(n?: string): string }
+      expect(h.help()).toBe("This project's dev server, as started from Astera's Run: http://localhost:4321/ — open() with no address opens it.\n\n" + d.guide)
+    })
+
+    it('a marked Run is named as the page, and the others are not listed', () => {
+      const { d } = deps(fakeGuest())
+      d.servers = [{ name: 'api', url: 'http://localhost:3000/', preview: false }, { name: 'web', url: 'http://localhost:5173/', preview: true }]
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { help(n?: string): string }
+      expect(h.help()).toBe("This project's dev server, the page its Run marks for preview: http://localhost:5173/ — open() with no address opens it.\n\n" + d.guide)
+    })
+
+    it('no server: the guide alone, and help(name) is never prefixed', () => {
+      const { d } = deps(fakeGuest())
+      d.servers = [{ name: 'dev', url: 'http://localhost:4321/', preview: false }]
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { help(n?: string): string }
+      expect(h.help('reload')).toBe('## reload()\nreloads')
+      d.servers = []
+      expect(h.help()).toBe(d.guide)
+    })
   })
 })

@@ -83,7 +83,7 @@ import { installStub } from './orchestration/stub'
 import { AgentGuestRegistry, type GuestLike } from './agentBrowser/registry'
 import { AgentBufferStore, attachBuffers, installNetworkCapture } from './agentBrowser/buffers'
 import type { GuestDriver } from './agentBrowser/helpers'
-import { AgentBrowserRuns } from './agentBrowser/runs'
+import { AgentBrowserRuns, devServersFor } from './agentBrowser/runs'
 import { PREVIEW_PARTITION } from '../core/preview/guards'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from './orchestration/resumePacket'
 import { extractStatusLineSession } from '../core/usage/statusline'
@@ -927,6 +927,10 @@ export function registerIpc(
       send('preview:agentTabClose', { sessionId })
     },
     setBusy: (sessionId, busy) => send('preview:agentBusy', { sessionId, busy }),
+    // Which localhost port is this project's: the only ports main knows are the ones its own Run
+    // started — the address the user gave the Run to preview, or failing that the one it printed. Read
+    // per call: a Run can start or stop, and a preview address be set, between two scripts.
+    devServersOf: (cwd) => devServersFor(core.run.listActive(), cwd, core.runConfig.get(cwd)),
     get guide() {
       return browserGuide()
     }

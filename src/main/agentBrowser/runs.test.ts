@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { AgentBrowserRuns, type RunsDeps } from './runs'
+import { AgentBrowserRuns, devServersFor, type RunsDeps } from './runs'
 import { AgentGuestRegistry } from './registry'
 import { Ring } from '../../core/agentBrowser/ring'
 
@@ -30,7 +30,7 @@ const fakeGuest = (id: number) => {
   }
 }
 
-const harness = (opts: { hasSession?: boolean; tabAppears?: boolean; scriptTimeoutMs?: number } = {}) => {
+const harness = (opts: { devServers?: { name: string; url: string; preview: boolean }[]; hasSession?: boolean; tabAppears?: boolean; scriptTimeoutMs?: number } = {}) => {
   const g = fakeGuest(7)
   const registry = new AgentGuestRegistry<typeof g>(() => g)
   const calls = { requestTab: [] as string[], busy: [] as boolean[], closed: 0 }
@@ -44,6 +44,7 @@ const harness = (opts: { hasSession?: boolean; tabAppears?: boolean; scriptTimeo
     },
     closeTab: () => { calls.closed += 1 },
     setBusy: (_s, b) => calls.busy.push(b),
+    devServersOf: () => opts.devServers ?? [],
     guide: '# g',
     tabWaitMs: 100,
     scriptTimeoutMs: opts.scriptTimeoutMs
@@ -171,5 +172,53 @@ describe('AgentBrowserRuns', () => {
     expect(r.ok && r.result.error?.at).toBe('open')
     expect(registry.has('s1')).toBe(false)
     expect(calls.busy).toEqual([true, false])
+  })
+
+  it("open() with no address asks for the tab at the project's dev server", async () => {
+    const { runs, calls } = harness({ devServers: [{ name: 'dev', url: 'http://localhost:4321/', preview: false }] })
+    const r = await runs.run('s1', `await open(); log(await url())`)
+    expect(calls.requestTab).toEqual(['http://localhost:4321/'])
+    expect(r.ok && r.result.log).toEqual(['http://localhost:5173/'])
+  })
+})
+
+describe('devServersFor', () => {
+  const run = (projectPath: string, configName: string, detectedUrl?: string, configId = configName) => ({ projectPath, configId, configName, detectedUrl })
+
+  it("keeps this project's runs that printed an address, in order, once per address", () => {
+    const active = [
+      run('D:/p', 'web', 'http://localhost:5173/'),
+      run('D:/other', 'web', 'http://localhost:5174/'),
+      run('D:/p', 'api'),
+      run('D:/p', 'web (restart)', 'http://localhost:5173/', 'web2'),
+      run('D:/p', 'api', 'http://localhost:3000/')
+    ]
+    expect(devServersFor(active, 'D:/p')).toEqual([
+      { name: 'web', url: 'http://localhost:5173/', preview: false },
+      { name: 'api', url: 'http://localhost:3000/', preview: false }
+    ])
+  })
+
+  it('compares project roots as paths, not as strings', () => {
+    expect(devServersFor([run('D:/p/sub/..', 'web', 'http://localhost:5173/')], 'D:\\p')).toEqual([
+      { name: 'web', url: 'http://localhost:5173/', preview: false }
+    ])
+    expect(devServersFor([run('D:/p', 'web', 'http://localhost:5173/')], 'D:/q')).toEqual([])
+  })
+
+  // The preview address on a Run's configuration is the user saying "this is the page".
+  it('a preview address marks the Run and is the address used, even before it printed one', () => {
+    const active = [run('D:/p', 'api', 'http://localhost:3000/'), run('D:/p', 'web')]
+    const configs = [{ id: 'web', previewUrl: 'http://localhost:5173/app' }]
+    expect(devServersFor(active, 'D:/p', configs)).toEqual([
+      { name: 'api', url: 'http://localhost:3000/', preview: false },
+      { name: 'web', url: 'http://localhost:5173/app', preview: true }
+    ])
+  })
+
+  it('a preview address that is not this machine is ignored, and the Run falls back to what it printed', () => {
+    const active = [run('D:/p', 'web', 'http://localhost:5173/')]
+    const configs = [{ id: 'web', previewUrl: 'https://staging.example.com/' }]
+    expect(devServersFor(active, 'D:/p', configs)).toEqual([{ name: 'web', url: 'http://localhost:5173/', preview: false }])
   })
 })
