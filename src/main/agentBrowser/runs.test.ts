@@ -19,7 +19,11 @@ const fakeGuest = (id: number) => {
     // The load event is an IPC event from the guest in the app, so it lands on a later turn of the
     // event loop and a script looping on reload() yields between iterations. A synchronous fake
     // would starve the timers the deadline is made of and the loop could never be cut off at all.
-    reload() { counts.reload += 1; setTimeout(() => fire('did-finish-load'), 0); hooks.afterReload?.(counts.reload) },
+    // 1 ms, not 0. Under fake timers a zero-delay timer created during a tick is scheduled at
+    // `now + 1` by the clock library anyway, so a loop of these advances virtual time either way —
+    // but relying on that would put the deadline test's termination on undocumented internals, and
+    // the way it would fail is by hanging the worker rather than going red.
+    reload() { counts.reload += 1; setTimeout(() => fire('did-finish-load'), 1); hooks.afterReload?.(counts.reload) },
     getURL: () => 'http://localhost:5173/', getTitle: () => 'T', isLoading: () => false,
     once(ev: string, cb: Cb) { (once.get(ev) ?? once.set(ev, new Set()).get(ev)!).add(cb); return this },
     removeListener(ev: string, cb: Cb) { once.get(ev)?.delete(cb); return this }
@@ -53,7 +57,7 @@ const FOREVER = `await open('http://localhost:5173/'); while (true) { await relo
 const FOREVER_CATCHING = `await open('http://localhost:5173/'); while (true) { try { await reload() } catch {} }`
 const settle = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 /** Ten turns of the macrotask queue. One iteration of a loop on reload() costs exactly one
- *  setTimeout(0) in the fake, so this is ten chances for a still-live loop to bump the count —
+ *  one short timer in the fake, so this is ten chances for a still-live loop to bump the count —
  *  a budget that, unlike a millisecond one, does not shrink on a slow machine. */
 const tenTurns = async (): Promise<void> => { for (let i = 0; i < 10; i++) await settle(0) }
 

@@ -33,15 +33,8 @@ export interface RunnerOptions {
  *  We detect foreign-realm errors using Object.prototype.toString and rebuild them as genuine host
  *  Errors, copying only the message string across the boundary. Interrupted objects (created
  *  host-side) pass through unchanged. */
-function normalizeError(err: unknown, timeoutMs: number): unknown {
+function normalizeError(err: unknown): unknown {
   if (err instanceof Interrupted) return err
-  // `runInContext`'s own `timeout` — the deadline for a body that never awaits — throws a plain host
-  // Error, which shapeError would report at `ctx.at` ('script') with Node's own wording. It is the
-  // same whole-script deadline the race below enforces, so the agent is told the same thing: `at:
-  // 'timeout'`, with the reason this one could not be reported any other way.
-  if ((err as { code?: unknown } | null | undefined)?.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') {
-    return new Interrupted('timeout', `script did not finish within ${timeoutMs} ms (it never awaited)`)
-  }
   if (Object.prototype.toString.call(err) === '[object Error]') {
     const message = typeof (err as any).message === 'string' ? (err as any).message : String(err)
     return new Error(message)
@@ -89,14 +82,31 @@ export async function runScript(
     // the script's first `await` and everything after that is the race below. That one case is worth
     // bounding here all the same: a `while (true) {}` with no `await` in it never yields, so no
     // timer and no abort can ever reach it and it would hang the whole main process.
-    const running = Promise.resolve(wrapped.runInContext(context, { timeout: timeoutMs })) as Promise<unknown>
+    // The mapping sits around this one call rather than in normalizeError, because this call is the
+    // only thing that can raise that code. Left in normalizeError it also read every error the script
+    // itself threw, and a script that threw an object carrying that code would have been reported as
+    // a deadline it never hit.
+    let started: unknown
+    try {
+      started = wrapped.runInContext(context, { timeout: timeoutMs })
+    } catch (err) {
+      // `runInContext`'s own `timeout` — the deadline for a body that never awaits — throws a plain
+      // host Error, which shapeError would report at `ctx.at` ('script') with Node's own wording. It
+      // is the same whole-script deadline the race below enforces, so the agent is told the same
+      // thing: `at: 'timeout'`, with the reason this one could not be reported any other way.
+      if ((err as { code?: unknown } | null | undefined)?.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') {
+        throw new Interrupted('timeout', `script did not finish within ${timeoutMs} ms (it never awaited)`)
+      }
+      throw err
+    }
+    const running = Promise.resolve(started) as Promise<unknown>
     await Promise.race([running, interrupted])
     // A copy, not the sink. Losing the race does not stop the script body: it keeps running and keeps
     // calling `log`, and handing back the live array would let it grow what the caller was already
     // given — including between this return and the server serialising it.
     return { log: [...log.lines] }
   } catch (err) {
-    return { log: [...log.lines], error: shapeError(normalizeError(err, timeoutMs), ctx.at) }
+    return { log: [...log.lines], error: shapeError(normalizeError(err), ctx.at) }
   } finally {
     if (timer) clearTimeout(timer)
     if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort)

@@ -1,6 +1,6 @@
 // src/main/agentBrowser/helpers.test.ts
 import { describe, it, expect, vi } from 'vitest'
-import { stage1Helpers, type GuestDriver, type HelperDeps } from './helpers'
+import { stage1Helpers, SYNCHRONOUS_HELPERS, type GuestDriver, type HelperDeps } from './helpers'
 import { createLog, Interrupted, WAIT_TIMEOUT_MS } from '../../core/agentBrowser/script'
 import { Ring } from '../../core/agentBrowser/ring'
 
@@ -202,5 +202,25 @@ describe('stage1Helpers', () => {
     ctx.at = 'script'
     ;(h.help as (n?: string) => string)()
     expect(ctx.at).toBe('help')
+  })
+
+  // runs.ts parks every asynchronous helper when a run is cut off and throws from the synchronous
+  // ones, so a name missing from this list would park a caller that is not awaiting anything — the
+  // abandoned script would spin instead of stopping. The list is only right if it matches the
+  // helpers, so check it against them rather than against itself.
+  it('SYNCHRONOUS_HELPERS names exactly the helpers that do not return a promise', () => {
+    const g = fakeGuest(); const { d } = deps(g)
+    const h = stage1Helpers(d, { at: 'script' }, createLog())
+    const sync = Object.entries(h)
+      .filter(([, v]) => typeof v === 'function')
+      .filter(([, v]) => {
+        const r = (v as (...a: unknown[]) => unknown)()
+        // Called with no argument, so the asynchronous ones reject; swallow that — the question here
+        // is only what shape they return.
+        if (r instanceof Promise) { void r.catch(() => {}); return false }
+        return true
+      })
+      .map(([name]) => name)
+    expect(new Set(sync)).toEqual(SYNCHRONOUS_HELPERS)
   })
 })

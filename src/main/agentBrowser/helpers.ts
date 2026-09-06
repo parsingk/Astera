@@ -35,6 +35,13 @@ export interface HelperDeps {
 
 const NO_PAGE = 'no page open — call open(url) first'
 
+/** Which helpers return a value rather than a promise. `runs.ts` needs this and cannot work it out
+ *  for itself: a run that has been cut off parks its helpers on a promise that never settles, which
+ *  is what stops an abandoned script without spinning the main thread — and a synchronous helper
+ *  cannot park, because its caller is not awaiting anything. So those throw instead. The list lives
+ *  here, beside the helpers it describes, so adding a synchronous one cannot silently leave it stale. */
+export const SYNCHRONOUS_HELPERS = new Set(['help'])
+
 /** Resolves when the guest's current load ends; rejects with the failure when it fails. Bounded.
  *  Whichever way this settles — success, failure, or the WAIT_TIMEOUT_MS deadline — both listeners
  *  are removed before it returns, so a wait that times out does not leave a listener on the guest

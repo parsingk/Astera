@@ -4,7 +4,7 @@
 import { createLog, Interrupted, WAIT_TIMEOUT_MS, type RunResult } from '../../core/agentBrowser/script'
 import { runScript, type RunContext } from '../../core/agentBrowser/scriptRunner'
 import type { AgentBuffers } from './buffers'
-import { stage1Helpers, type GuestDriver, type HelperDeps } from './helpers'
+import { stage1Helpers, SYNCHRONOUS_HELPERS, type GuestDriver, type HelperDeps } from './helpers'
 import type { AgentGuestRegistry, GuestLike } from './registry'
 
 export type RunOutcome =
@@ -70,9 +70,10 @@ function withAtReset(raw: Record<string, unknown>, ctx: RunContext, signal: Abor
     }
     wrapped[name] = (...args: unknown[]) => {
       if (signal.aborted) {
-        // `help` is the one helper a script may call without `await`, so it is the one that throws;
-        // every other helper parks (see this function's doc comment for why failing them is worse).
-        if (name === 'help') throw new Interrupted(ctx.at, 'stopped')
+        // A helper a script may call without `await` cannot park — nothing would be suspended — so it
+        // throws; every other helper parks (see this function's doc comment for why failing them is
+        // worse). helpers.ts owns the list, beside the helpers themselves.
+        if (SYNCHRONOUS_HELPERS.has(name)) throw new Interrupted(ctx.at, 'stopped')
         return new Promise<never>(() => {})
       }
       const result = (value as (...a: unknown[]) => unknown)(...args)
