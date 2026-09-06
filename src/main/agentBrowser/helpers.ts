@@ -32,24 +32,37 @@ export interface HelperDeps {
 
 const NO_PAGE = 'no page open — call open(url) first'
 
-/** Resolves when the guest's current load ends; rejects with the failure when it fails. Bounded. */
+/** Resolves when the guest's current load ends; rejects with the failure when it fails. Bounded.
+ *  Whichever way this settles — success, failure, or the WAIT_TIMEOUT_MS deadline — both listeners
+ *  are removed before it returns, so a wait that times out does not leave a listener on the guest
+ *  for the rest of the session. */
 function loadEnds(g: GuestDriver, at: string, url: string): Promise<void> {
-  return withTimeout(
-    new Promise<void>((resolve, reject) => {
-      const onDone = (): void => { g.removeListener('did-fail-load', onFail); resolve() }
-      const onFail: Listener = (_e, code, description, failedUrl, isMainFrame) => {
-        if (isMainFrame === false) return
-        g.removeListener('did-finish-load', onDone)
-        // -3 is ABORTED — a navigation replaced by another, not a failure of the page
-        if (code === -3) { resolve(); return }
-        reject(new Error(`${at}: ${failedUrl ?? url} failed to load (${description})`))
+  let onDone!: Listener
+  let onFail!: Listener
+  const cleanup = (): void => {
+    // Removing a listener that already fired (or was never armed) is a no-op, so this is safe to
+    // call unconditionally on every exit path.
+    g.removeListener('did-finish-load', onDone)
+    g.removeListener('did-fail-load', onFail)
+  }
+  const ended = new Promise<void>((resolve, reject) => {
+    onDone = (): void => resolve()
+    onFail = (_e, code, description, failedUrl, isMainFrame) => {
+      if (isMainFrame === false) {
+        // A sub-frame's failure says nothing about the page load this wait is for. `once` already
+        // unregistered this listener before calling it, so re-arm or a real main-frame failure
+        // arriving afterwards would go unseen and fall through to the timeout instead.
+        g.once('did-fail-load', onFail)
+        return
       }
-      g.once('did-finish-load', onDone)
-      g.once('did-fail-load', onFail)
-    }),
-    WAIT_TIMEOUT_MS,
-    at
-  )
+      // -3 is ABORTED — a navigation replaced by another, not a failure of the page
+      if (code === -3) { resolve(); return }
+      reject(new Error(`${at}: ${failedUrl ?? url} failed to load (${description})`))
+    }
+    g.once('did-finish-load', onDone)
+    g.once('did-fail-load', onFail)
+  })
+  return withTimeout(ended, WAIT_TIMEOUT_MS, at).finally(cleanup)
 }
 
 /** `help('reload')` → the `## reload()` section of the guide, by the name before the parenthesis. */

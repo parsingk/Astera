@@ -1,11 +1,16 @@
 // src/main/agentBrowser/helpers.test.ts
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { stage1Helpers, type GuestDriver, type HelperDeps } from './helpers'
-import { createLog } from '../../core/agentBrowser/script'
+import { createLog, Interrupted, WAIT_TIMEOUT_MS } from '../../core/agentBrowser/script'
 import { Ring } from '../../core/agentBrowser/ring'
 
 type Cb = (...a: unknown[]) => void
-const fakeGuest = (): GuestDriver & { fire(ev: string, ...a: unknown[]): void; loaded: string[]; reloads: number } => {
+const fakeGuest = (): GuestDriver & {
+  fire(ev: string, ...a: unknown[]): void
+  loaded: string[]
+  reloads: number
+  listenerCount(ev: string): number
+} => {
   const once = new Map<string, Set<Cb>>()
   let url = 'about:blank'
   const g = {
@@ -18,7 +23,8 @@ const fakeGuest = (): GuestDriver & { fire(ev: string, ...a: unknown[]): void; l
     isLoading: () => false,
     once(ev: string, cb: Cb) { (once.get(ev) ?? once.set(ev, new Set()).get(ev)!).add(cb); return g },
     removeListener(ev: string, cb: Cb) { once.get(ev)?.delete(cb); return g },
-    fire(ev: string, ...a: unknown[]) { const s = once.get(ev); once.delete(ev); s?.forEach((cb) => cb(...a)) }
+    fire(ev: string, ...a: unknown[]) { const s = once.get(ev); once.delete(ev); s?.forEach((cb) => cb(...a)) },
+    listenerCount(ev: string) { return once.get(ev)?.size ?? 0 }
   }
   return g
 }
@@ -104,5 +110,97 @@ describe('stage1Helpers', () => {
     expect(h.help()).toContain('## open(url)')
     expect(h.help('reload')).toBe('## reload()\nreloads')
     expect(h.help('nope')).toBe('no helper named nope — run help() for the list')
+  })
+
+  it('waitForLoad resolves at once when not loading, and registers no listeners', async () => {
+    const g = fakeGuest(); const { d } = deps(g)
+    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitForLoad(): Promise<void> }
+    await h.waitForLoad()
+    expect(g.listenerCount('did-finish-load')).toBe(0)
+    expect(g.listenerCount('did-fail-load')).toBe(0)
+  })
+
+  it('waitForLoad waits for an in-flight load to finish', async () => {
+    const g = fakeGuest(); g.isLoading = () => true
+    const { d } = deps(g)
+    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitForLoad(): Promise<void> }
+    const p = h.waitForLoad()
+    await Promise.resolve()
+    expect(g.listenerCount('did-finish-load')).toBe(1)
+    g.fire('did-finish-load')
+    await p
+  })
+
+  it('waitForLoad rejects with the load error on a main-frame failure, at waitForLoad', async () => {
+    const g = fakeGuest(); g.isLoading = () => true
+    const { d } = deps(g)
+    const ctx = { at: 'script' }
+    const h = stage1Helpers(d, ctx, createLog()) as { waitForLoad(): Promise<void> }
+    const p = h.waitForLoad()
+    await Promise.resolve()
+    g.fire('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', 'http://localhost:5173/', true)
+    await expect(p).rejects.toThrow('waitForLoad: http://localhost:5173/ failed to load (ERR_CONNECTION_REFUSED)')
+    expect(ctx.at).toBe('waitForLoad')
+  })
+
+  it('a sub-frame failure does not end the wait; a later main-frame failure still does', async () => {
+    const g = fakeGuest(); g.isLoading = () => true
+    const { d } = deps(g)
+    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitForLoad(): Promise<void> }
+    const p = h.waitForLoad()
+    await Promise.resolve()
+    g.fire('did-fail-load', {}, -102, 'ERR_FAILED', 'http://localhost:5173/iframe', false)
+    await Promise.resolve()
+    g.fire('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', 'http://localhost:5173/', true)
+    await expect(p).rejects.toThrow('waitForLoad: http://localhost:5173/ failed to load (ERR_CONNECTION_REFUSED)')
+  }, 2000)
+
+  it('an ABORTED (-3) failure resolves the wait rather than rejecting', async () => {
+    const g = fakeGuest(); g.isLoading = () => true
+    const { d } = deps(g)
+    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitForLoad(): Promise<void> }
+    const p = h.waitForLoad()
+    await Promise.resolve()
+    g.fire('did-fail-load', {}, -3, 'ERR_ABORTED', 'http://localhost:5173/', true)
+    await expect(p).resolves.toBeUndefined()
+  })
+
+  it('waitForLoad times out and leaves no listener behind', async () => {
+    vi.useFakeTimers()
+    try {
+      const g = fakeGuest(); g.isLoading = () => true
+      const { d } = deps(g)
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitForLoad(): Promise<void> }
+      const p = h.waitForLoad()
+      await Promise.resolve()
+      const rejection = expect(p).rejects.toBeInstanceOf(Interrupted)
+      await vi.advanceTimersByTimeAsync(WAIT_TIMEOUT_MS)
+      await rejection
+      expect(g.listenerCount('did-finish-load')).toBe(0)
+      expect(g.listenerCount('did-fail-load')).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('every helper without a page-open assertion sets ctx.at to its own name first', async () => {
+    const { d } = deps(null)
+    const ctx = { at: 'script' }
+    const h = stage1Helpers(d, ctx, createLog()) as Record<string, (...a: unknown[]) => unknown>
+
+    for (const name of ['reload', 'url', 'title', 'waitForLoad', 'consoleErrors', 'networkErrors']) {
+      ctx.at = 'script'
+      const p = h[name]()
+      expect(ctx.at).toBe(name)
+      await expect(p).rejects.toThrow('no page open — call open(url) first')
+    }
+
+    ctx.at = 'script'
+    await (h.close as () => Promise<void>)()
+    expect(ctx.at).toBe('close')
+
+    ctx.at = 'script'
+    ;(h.help as (n?: string) => string)()
+    expect(ctx.at).toBe('help')
   })
 })
