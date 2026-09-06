@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification } from 'electron'
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, webContents, Notification } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
@@ -11,6 +11,7 @@ import { shouldForceWaylandOzone } from './ozone'
 import { registerIpc, parseAllowedExternalUrl, type OrchHandle } from './ipc'
 import { isOwnDocument } from './navigationGuard'
 import { installPreviewGuards } from './preview/guest'
+import { AgentGuestRegistry } from './agentBrowser/registry'
 import { registerPreviewDevTools } from './preview/devtools'
 import { registerPreviewEmulation } from './preview/emulation'
 import { registerPreviewCapture } from './preview/capture'
@@ -152,6 +153,13 @@ function buildMacMenu(): Menu {
   ])
 }
 
+/** Which guest is which session's agent browser. Built here rather than inside registerIpc because
+ *  two places need the **same** instance and they run at different times: createWindow installs the
+ *  navigation guard, which asks on every will-navigate, and registerIpc owns the register/unregister
+ *  IPC that fills it. Two instances would mean the guard and the run manager disagree about which
+ *  guest belongs to an agent — the guard would let an agent's tab walk off this machine. */
+const agentGuests = new AgentGuestRegistry((id) => webContents.fromId(id))
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1280,
@@ -223,7 +231,10 @@ function createWindow(): BrowserWindow {
     const parsed = parseAllowedExternalUrl(url)
     if (parsed) void shell.openExternal(parsed.toString())
   })
-  installPreviewGuards(win, () => false) // replaced by the agent registry in the ipc wiring
+  // The guest id the guard is handed is the webContents id of the <webview>, which is the same number
+  // BrowserPane reports through preview.registerAgentGuest — so the agent's tab, and only it, is held
+  // to the loopback rule.
+  installPreviewGuards(win, (id) => agentGuests.isAgentGuest(id))
   // Hosts the preview's DevTools in a window this app creates, so it carries the app icon and a
   // title naming the page — Electron's own DevTools window carries neither.
   registerPreviewDevTools(APP_ICON)
@@ -845,7 +856,8 @@ app.whenReady().then(async () => {
     (notify) => {
       workUnitForkRef = notify
     },
-    desktop
+    desktop,
+    agentGuests
   )
   // No tray on Linux. With close quitting for real there is nothing to hide, so the menu's
   // Open/Quit would only repeat what the window and its close button already do — while tying the

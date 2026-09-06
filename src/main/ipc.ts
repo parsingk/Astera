@@ -1,5 +1,5 @@
-import { ipcMain, dialog, app, shell, type BrowserWindow } from 'electron'
-import { promises as fs, existsSync, unlinkSync } from 'node:fs'
+import { ipcMain, dialog, app, shell, session, webContents, type BrowserWindow, type WebContents } from 'electron'
+import { promises as fs, existsSync, readFileSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -80,6 +80,10 @@ import { writeInfo, writeShuttle } from './orchestration/shuttle'
 import { WorkerTails } from './orchestration/tail'
 import { releaseArgsFor } from './orchestration/release'
 import { installStub } from './orchestration/stub'
+import { AgentGuestRegistry } from './agentBrowser/registry'
+import { attachBuffers, installNetworkCapture, type AgentBuffers } from './agentBrowser/buffers'
+import { AgentBrowserRuns } from './agentBrowser/runs'
+import { PREVIEW_PARTITION } from '../core/preview/guards'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from './orchestration/resumePacket'
 import { extractStatusLineSession } from '../core/usage/statusline'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
@@ -316,8 +320,13 @@ export function registerIpc(
   /** The desktop notification sink. It is built in index.ts (it needs the BrowserWindow for both
    *  focus and the click), but the renderer's "this session is on screen" push arrives as IPC, which
    *  lives here — so the instance travels in rather than the state travelling out. */
-  desktop?: DesktopNotifier
+  desktop?: DesktopNotifier,
+  /** Which guest is which session's agent browser. Built in index.ts because installPreviewGuards
+   *  (called there, before this) asks it on every will-navigate; the register/unregister IPC that
+   *  fills it lives here. Optional so the existing harnesses keep compiling; a missing one is built. */
+  agentGuestsIn?: AgentGuestRegistry<WebContents>
 ): void {
+  const agentGuests = agentGuestsIn ?? new AgentGuestRegistry<WebContents>((id) => webContents.fromId(id))
   const send = (channel: string, payload: unknown): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
   }
@@ -421,9 +430,15 @@ export function registerIpc(
    *  mean "newly created sessions do not know about the CLI". Looking only at whether the server is
    *  alive (orch !== null) would let a session created after turning it off discover the CLI and then
    *  get a 409 on every call. **Work-unit tracking counts too**: /astera-task needs the same CLI and
-   *  the same ASTERA_SESSION, and the command gate in the server decides what may be called. */
+   *  the same ASTERA_SESSION, and the command gate in the server decides what may be called. **So
+   *  does the agent browser**: `astera browser help` and `astera browser js` are that same CLI, and
+   *  skillsPath is where `browser help` reads the guide from — without this the astera-browser skill
+   *  is planted into a session that cannot reach the program it tells the agent to run. */
   const orchEnvOf = (): { cliPath: string; infoPath: string; skillsPath: string } | undefined =>
-    orch && (core.appSettings.getOrchestrationEnabled() || core.appSettings.getWorkUnitTrackingEnabled())
+    orch &&
+    (core.appSettings.getOrchestrationEnabled() ||
+      core.appSettings.getWorkUnitTrackingEnabled() ||
+      core.appSettings.getAgentBrowserEnabled())
       ? { cliPath: orch.cliPath, infoPath: orch.infoPath, skillsPath: orch.skillsPath }
       : undefined
   /** The project the Jobs sidebar is folded for. main is not otherwise told what the renderer has
@@ -826,6 +841,63 @@ export function registerIpc(
   }
   ipcMain.handle('sessions.spawn', async (_e, opts) => spawnSession(opts))
 
+  // ---- agent browser (spec: docs/superpowers/specs/2026-09-06-agent-browser-design.md) ----
+  // It sits here, above the orchestration startup, because `agentRuns` is read from the server deps
+  // that bootOrch builds — a `const` declared after that call would be in its temporal dead zone.
+  const agentBuffers = new Map<string, AgentBuffers>()
+  /** webContentsId → that tab's buffers, for the one session-wide network capture. */
+  const buffersByWebContents = new Map<number, AgentBuffers>()
+  // Installed once, for every agent tab: Electron's webRequest keeps one listener per event, so a
+  // per-tab registration would let the newest tab steal every other tab's network events.
+  installNetworkCapture(session.fromPartition(PREVIEW_PARTITION).webRequest, (id) => buffersByWebContents.get(id) ?? null)
+  const forgetBuffers = (sessionId: string): void => {
+    const previous = agentBuffers.get(sessionId)
+    if (!previous) return
+    previous.detach()
+    for (const [id, b] of buffersByWebContents) if (b === previous) buffersByWebContents.delete(id)
+    agentBuffers.delete(sessionId)
+  }
+  ipcMain.handle('preview.registerAgentGuest', (_e, sessionId: unknown, webContentsId: unknown) => {
+    if (typeof sessionId !== 'string' || typeof webContentsId !== 'number') return
+    const info = core.sessions.list().find((s) => s.id === sessionId)
+    if (!info) return
+    forgetBuffers(sessionId) // a re-register (the pane remounted) replaces the old guest's buffers
+    agentGuests.register(sessionId, webContentsId, info.cwd)
+    const guest = agentGuests.guestOf(sessionId)
+    if (!guest) return
+    const buffers = attachBuffers(guest)
+    agentBuffers.set(sessionId, buffers)
+    buffersByWebContents.set(webContentsId, buffers)
+  })
+  ipcMain.handle('preview.unregisterAgentGuest', (_e, sessionId: unknown) => {
+    if (typeof sessionId !== 'string') return
+    agentGuests.unregister(sessionId)
+    forgetBuffers(sessionId)
+  })
+  // The guide is read once: it is what help() returns inside a script.
+  const browserGuide = (): string => {
+    try {
+      return orch ? readFileSync(path.join(orch.skillsPath, 'browser-guide.md'), 'utf8') : ''
+    } catch {
+      return ''
+    }
+  }
+  const agentRuns = new AgentBrowserRuns({
+    // Electron's WebContents does satisfy `GuestDriver & GuestLike` (checked), but the registry's
+    // type parameter is **invariant** — its private waiter set holds `(g: G | null) => void` — so
+    // `AgentGuestRegistry<WebContents>` still does not convert to the one runs.ts asks for. The one
+    // cast lives here rather than widening either declaration for the wiring's sake.
+    registry: agentGuests as never,
+    buffersOf: (sid) => agentBuffers.get(sid) ?? null,
+    cwdOf: (sid) => core.sessions.list().find((s) => s.id === sid)?.cwd ?? null,
+    requestTab: (sessionId, cwd, url) => send('preview:agentTab', { sessionId, cwd, url }),
+    closeTab: (sessionId) => send('preview:agentTabClose', { sessionId }),
+    setBusy: (sessionId, busy) => send('preview:agentBusy', { sessionId, busy }),
+    get guide() {
+      return browserGuide()
+    }
+  })
+
   // ── Starting orchestration ─────────────────────────────────────────
   // It sits directly after spawnSession above because that function is the session creation the
   // coordinator needs, and the busy verdict reads this file's busyState too. Once the server is
@@ -898,15 +970,15 @@ export function registerIpc(
   orchWiring?.onTabResumeReady(tabResumeTextFor)
 
   /**
-   * Installs whichever discovery stub(s) match the two toggles' current state, against every known
+   * Installs whichever discovery stub(s) match the toggles' current state, against every known
    * account. Pulled out of bootOrch (which used to build and install this list inline, once) into a
-   * standalone function that both settings.setOrchestrationEnabled and
-   * settings.setWorkUnitTrackingEnabled also call directly — **not just bootOrch**.
+   * standalone function that settings.setOrchestrationEnabled, settings.setWorkUnitTrackingEnabled
+   * and settings.setAgentBrowserEnabled also call directly — **not just bootOrch**.
    *
    * **Why bootOrch alone is not enough**: bootOrch only runs on the transition that actually starts
    * the server (see startOrch's `if (orch || orchStarting) return`). Before this task the server could
    * only be up when orchestration was on, so setOrchestrationEnabled(true) always reached it. Now
-   * either toggle can start the server, so the second toggle to turn on reaches a server that is
+   * any of the toggles can start the server, so the second toggle to turn on reaches a server that is
    * already up — bootOrch, and this install, never run for it. Concretely: tracking on first plants
    * the task stub (server boots); orchestration on second calls startOrch(), which no-ops because
    * `orch` is already set — without this function being called independently, the orchestration stub
@@ -914,8 +986,8 @@ export function registerIpc(
    * the only discovery path for it matters most (see the header comment in stub.ts).
    *
    * No-ops when the server has never come up (`orch` is null — nothing has a skillsPath yet to install
-   * from) or when both toggles are off (`stubs` comes out empty). Safe to call redundantly — that is
-   * the point of calling it from three places: installStub already skips a write once content matches
+   * from) or when every toggle is off (`stubs` comes out empty). Safe to call redundantly — that is
+   * the point of calling it from four places: installStub already skips a write once content matches
    * (see stub.ts), so the worst repeated cost is a per-account file read, not a per-account write.
    */
   const installStubsForCurrentToggles = (): void => {
@@ -931,6 +1003,9 @@ export function registerIpc(
         : []),
       ...(core.appSettings.getWorkUnitTrackingEnabled()
         ? [{ stubPath: path.join(orch.skillsPath, 'task-stub.md'), skillName: 'astera-task' }]
+        : []),
+      ...(core.appSettings.getAgentBrowserEnabled()
+        ? [{ stubPath: path.join(orch.skillsPath, 'browser-stub.md'), skillName: 'astera-browser' }]
         : [])
     ]
     if (stubs.length === 0) return
@@ -950,14 +1025,15 @@ export function registerIpc(
   }
 
   let orchStarting = false
-  /** Starts the orchestration server. Called when **either** toggle is on — agent orchestration or
-   *  work-unit tracking, since `/astera-task` needs the same CLI and the same `ASTERA_SESSION` the
-   *  orchestration server already hands out (see `orchEnvOf`'s doc). With both off, this is never
-   *  called and no port is opened. Turning either one on at runtime comes back through here and
+  /** Starts the orchestration server. Called when **any of the three** toggles is on — agent
+   *  orchestration, work-unit tracking, or the agent browser, since `/astera-task` and
+   *  `astera browser js` need the same CLI and the same `ASTERA_SESSION` the
+   *  orchestration server already hands out (see `orchEnvOf`'s doc). With all off, this is never
+   *  called and no port is opened. Turning any one of them on at runtime comes back through here and
    *  starts immediately (sessions created after that get the CLI — environment variables are fixed
    *  at spawn time, so sessions already running cannot). If it is already up, this does nothing.
-   *  Turning a toggle off does not close the server — `enabled()`/`trackingEnabled()` are read on
-   *  every request, so CLI calls after that are rejected with a 409. */
+   *  Turning a toggle off does not close the server — `enabled()`/`trackingEnabled()`/
+   *  `browserEnabled()` are read on every request, so CLI calls after that are rejected with a 409. */
   const startOrch = async (): Promise<void> => {
     // orch is assigned last (after the port and files are ready), so re-entering in that window would
     // start two servers — the first loses its reference and keeps holding the port, and the info file
@@ -2545,6 +2621,10 @@ export function registerIpc(
       // declared further down (around the `WorkUnitCollector` construction) — referencing it here is
       // fine because these arrows only run once a call comes in, well after that declaration has run.
       trackingEnabled: () => core.appSettings.getWorkUnitTrackingEnabled(),
+      // Same reasoning again, for browser-js — and `agentRuns` is built above this function so the
+      // deps can name it here.
+      browserEnabled: () => core.appSettings.getAgentBrowserEnabled(),
+      browserRun: (sessionId, script) => agentRuns.run(sessionId, script),
       sessionTasks: {
         start: (sessionId, objective) => workUnitCollector.startTask(sessionId, objective),
         complete: (sessionId, input) => workUnitCollector.completeTask(sessionId, input),
@@ -2796,7 +2876,9 @@ export function registerIpc(
   }
   if (
     orchWiring &&
-    (core.appSettings.getOrchestrationEnabled() || core.appSettings.getWorkUnitTrackingEnabled())
+    (core.appSettings.getOrchestrationEnabled() ||
+      core.appSettings.getWorkUnitTrackingEnabled() ||
+      core.appSettings.getAgentBrowserEnabled())
   )
     void startOrch().catch((err) => orchLog(`startup failed: ${String(err)}`))
   ipcMain.on('sessions.write', (_e, id, data) => core.sessions.write(id, data))
@@ -4130,6 +4212,17 @@ export function registerIpc(
     // and the planted CLI. Turning it off does not close the server — see the startOrch comment.
     if (enabled && orchWiring) await startOrch()
     // Same reasoning as the orchestration setter above — see installStubsForCurrentToggles's comment.
+    if (enabled) installStubsForCurrentToggles()
+  })
+
+  // The agent browser toggle. Same trust-boundary check and same registration rule as the two above.
+  ipcMain.handle('settings.getAgentBrowserEnabled', () => core.appSettings.getAgentBrowserEnabled())
+  ipcMain.handle('settings.setAgentBrowserEnabled', async (_e, enabled: boolean) => {
+    if (typeof enabled !== 'boolean') throw new Error(`INVALID_AGENT_BROWSER_ENABLED: ${String(enabled)}`)
+    await core.appSettings.setAgentBrowserEnabled(enabled)
+    // Same line the other two setters use, for the same reason: browser-js needs the server and the
+    // planted CLI. Turning it off does not close the server — browserEnabled() is read per request.
+    if (enabled && orchWiring) await startOrch()
     if (enabled) installStubsForCurrentToggles()
   })
 
