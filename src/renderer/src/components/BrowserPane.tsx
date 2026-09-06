@@ -87,7 +87,7 @@ const CAPTURE_TIMEOUT_MS = 5000
  *  session: still pending after eight seconds, where the same rect came back in well under a second
  *  with the tab in front. Unbounded, the pick loop parks there for good -- no annotation, no message,
  *  the mode still lit and the picker's own overlay left hidden for a capture that never happens.
- *  Giving up costs the thumbnail; the note is still collected and the pane says the shot failed. */
+ *  Giving up costs the screenshot; the note is still collected and the pane says the shot failed. */
 async function captureWithin(capture: Promise<CaptureResult | null>): Promise<CaptureResult | null> {
   let timer!: ReturnType<typeof setTimeout>
   const timedOut = new Promise<null>((resolve) => {
@@ -526,7 +526,6 @@ export function BrowserPane({
           continue
         }
         let shotPath: string | null = null
-        let shotThumb: string | null = null
         try {
           // Only the part on screen. An element taller than the window is ordinary, and asking to
           // capture the piece hanging off the edge gets nothing useful back. Clamped in the page's own
@@ -558,12 +557,8 @@ export function BrowserPane({
             void view.executeJavaScript(chromeScript(false)).catch(() => {})
           }
           shotPath = shot?.path ?? null
-          // The card shows this, not the file — Chromium will not load a file: URL from the http:
-          // document the renderer is served from in development
-          shotThumb = shot?.thumbnail ?? null
         } catch {
           shotPath = null
-          shotThumb = null
         }
         if (cancelled) break
         if (!shotPath) toast.info(t('preview.design.shotFailed'))
@@ -572,7 +567,7 @@ export function BrowserPane({
         nextSeq.current += 1
         let pagePath = ''
         try { pagePath = new URL(payload.page.url).pathname } catch { pagePath = '' }
-        setAnnotations((prev) => [...prev, { id, seq, payload, shotPath, shotThumb, comment: '', intent: 'change', pagePath }])
+        setAnnotations((prev) => [...prev, { id, seq, payload, shotPath, comment: '', intent: 'change', pagePath }])
         setFocusAnnotationId(id)
         setPopover({ id, ...popoverSpot(payload, view, stageRef.current) })
       }

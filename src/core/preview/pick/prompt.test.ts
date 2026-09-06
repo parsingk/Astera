@@ -16,7 +16,7 @@ const payload: PickPayload = {
   computedStyles: styles, nearbyText: ['Pricing', 'Save changes'], reactComponents: '<App> <Header> <Button>', sourceFile: 'src/Header.tsx:42:7'
 }
 const note = (over: Partial<Annotation> = {}): Annotation => ({
-  id: 'a', seq: 1, payload, shotPath: 'C:\\shots\\a.png', shotThumb: null, comment: 'left padding is too tight', intent: 'change', pagePath: '/pricing', ...over
+  id: 'a', seq: 1, payload, shotPath: 'C:\\shots\\a.png', comment: 'left padding is too tight', intent: 'change', pagePath: '/pricing', ...over
 })
 
 describe('formatAnnotations', () => {

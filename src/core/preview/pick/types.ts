@@ -96,8 +96,6 @@ export interface Annotation {
   payload: PickPayload
   /** Absolute path of the cropped PNG, or null when the capture failed. */
   shotPath: string | null
-  /** The same crop as a small data URL, for the card. null when the capture failed. See CaptureResult. */
-  shotThumb: string | null
   comment: string
   intent: Intent
   /** `new URL(payload.page.url).pathname`. Badges are drawn only while the tab is on this path. */
@@ -109,12 +107,4 @@ export interface CaptureResult {
   path: string
   width: number
   height: number
-  /** A small PNG data URL of the same crop, for the tray's card.
-   *
-   *  The card cannot show the file. Chromium refuses to load a `file:` URL from an `http:` document,
-   *  and in development this app's renderer is served over `http://localhost` — so an `<img>` pointed at
-   *  `path` is a broken image for the whole time anyone is working on the feature. It would come back in
-   *  a packaged build, where the renderer's own document is `file:`, which is a poor place to find out.
-   *  The path still goes in the prompt: that is read by an agent with file access, not by a web page. */
-  thumbnail: string
 }
