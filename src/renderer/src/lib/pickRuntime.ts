@@ -16,8 +16,12 @@ interface PickState {
   /** The element under the pointer when the button went down. Set until the click that follows, or
    *  until the button is seen up again without one. */
   pressed: Element | null
+  /** Where the pointer was last seen, so a scroll can ask what is under it now without a mousemove. */
+  lastX: number | null
+  lastY: number | null
   pending: { resolve: (v: unknown) => void; reject: (e: Error) => void } | null
   onMove: ((e: MouseEvent) => void) | null
+  onScroll: (() => void) | null
   onDown: ((e: MouseEvent) => void) | null
   onClick: ((e: MouseEvent) => void) | null
   onKey: ((e: KeyboardEvent) => void) | null
@@ -200,19 +204,20 @@ export function pickerRuntime(): Promise<unknown> {
 
   let S = w[KEY] as PickState | undefined
   if (!S) {
-    S = { overlay: null, box: null, label: null, hovered: null, pressed: null, pending: null, onMove: null, onDown: null, onClick: null, onKey: null, cancel: function () {} }
+    S = { overlay: null, box: null, label: null, hovered: null, pressed: null, lastX: null, lastY: null, pending: null, onMove: null, onScroll: null, onDown: null, onClick: null, onKey: null, cancel: function () {} }
     w[KEY] = S
   }
   const state: PickState = S
 
   function teardown(): void {
     if (state.onMove) window.removeEventListener('mousemove', state.onMove, true)
+    if (state.onScroll) { window.removeEventListener('scroll', state.onScroll, true); window.removeEventListener('resize', state.onScroll, true) }
     if (state.onDown) window.removeEventListener('mousedown', state.onDown, true)
     if (state.onClick) window.removeEventListener('click', state.onClick, true)
     if (state.onKey) window.removeEventListener('keydown', state.onKey, true)
-    state.onMove = null; state.onDown = null; state.onClick = null; state.onKey = null
+    state.onMove = null; state.onScroll = null; state.onDown = null; state.onClick = null; state.onKey = null
     for (const n of [state.overlay, state.box, state.label]) if (n && n.parentNode) n.parentNode.removeChild(n)
-    state.overlay = null; state.box = null; state.label = null; state.hovered = null; state.pressed = null
+    state.overlay = null; state.box = null; state.label = null; state.hovered = null; state.pressed = null; state.lastX = null; state.lastY = null
   }
 
   state.cancel = function () {
@@ -245,18 +250,12 @@ export function pickerRuntime(): Promise<unknown> {
       for (let i = 0; i < stack.length; i += 1) if (!ownNode(stack[i], state) && stack[i] !== document.documentElement) return stack[i]
       return null
     }
-    state.onMove = function (e: MouseEvent) {
-      // While the button is down the pick is already decided — it is whatever was under the pointer
-      // when it went down — so the box stays there rather than trailing the drag. A press on the
-      // button that ended over the block below used to highlight everything in between and annotate
-      // the block.
-      if (state.pressed) {
-        if (e.buttons & 1) return
-        state.pressed = null // the button came back up somewhere no click followed from
-      }
-      const target = targetAt(e.clientX, e.clientY)
-      state.hovered = target
-      if (!target || !state.box || !state.label) return
+    const hide = function (): void {
+      if (state.box) state.box.style.display = 'none'
+      if (state.label) state.label.style.display = 'none'
+    }
+    const place = function (target: Element): void {
+      if (!state.box || !state.label) return
       const r = target.getBoundingClientRect()
       state.box.style.display = 'block'
       state.box.style.left = r.left + 'px'; state.box.style.top = r.top + 'px'
@@ -266,6 +265,35 @@ export function pickerRuntime(): Promise<unknown> {
       const above = r.top - 22
       state.label.style.left = Math.max(0, r.left) + 'px'
       state.label.style.top = (above >= 0 ? above : r.bottom + 2) + 'px'
+    }
+    state.onMove = function (e: MouseEvent) {
+      // While the button is down the pick is already decided — it is whatever was under the pointer
+      // when it went down — so the box stays there rather than trailing the drag. A press on the
+      // button that ended over the block below used to highlight everything in between and annotate
+      // the block.
+      if (state.pressed) {
+        if (e.buttons & 1) return
+        state.pressed = null // the button came back up somewhere no click followed from
+      }
+      state.lastX = e.clientX; state.lastY = e.clientY
+      const target = targetAt(e.clientX, e.clientY)
+      state.hovered = target
+      // Over the scrollbar, or over nothing: no element to outline, so no outline. Leaving the last
+      // one up is how a box ended up floating where an element used to be.
+      if (!target) { hide(); return }
+      place(target)
+    }
+    // The box is fixed to the viewport and the page moves under it. Without this it stayed where it
+    // was drawn while the element scrolled away — the border "moved with the screen". A held press
+    // keeps its element; otherwise the question is what is under the pointer now, which a scroll
+    // changes without the pointer moving.
+    state.onScroll = function () {
+      if (state.pressed) { place(state.pressed); return }
+      if (state.lastX === null || state.lastY === null) return
+      const target = targetAt(state.lastX, state.lastY)
+      state.hovered = target
+      if (!target) { hide(); return }
+      place(target)
     }
     // A press that is not stopped starts a text selection in the page, and dragging from it paints a
     // blue band across whatever the pointer crosses. Aiming at an element is a press and a small
@@ -300,6 +328,8 @@ export function pickerRuntime(): Promise<unknown> {
     // it). The escape hatch is that cancel() changes state directly instead of going through an event,
     // so the toolbar toggle and Escape keep working even then.
     window.addEventListener('mousemove', state.onMove, true)
+    window.addEventListener('scroll', state.onScroll, true)
+    window.addEventListener('resize', state.onScroll, true)
     window.addEventListener('mousedown', state.onDown, true)
     window.addEventListener('click', state.onClick, true)
     window.addEventListener('keydown', state.onKey, true)
