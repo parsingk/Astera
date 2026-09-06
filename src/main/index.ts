@@ -223,7 +223,7 @@ function createWindow(): BrowserWindow {
     const parsed = parseAllowedExternalUrl(url)
     if (parsed) void shell.openExternal(parsed.toString())
   })
-  installPreviewGuards(win)
+  installPreviewGuards(win, () => false) // replaced by the agent registry in the ipc wiring
   // Hosts the preview's DevTools in a window this app creates, so it carries the app icon and a
   // title naming the page — Electron's own DevTools window carries neither.
   registerPreviewDevTools(APP_ICON)

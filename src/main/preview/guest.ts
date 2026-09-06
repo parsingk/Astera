@@ -4,13 +4,14 @@
 import { app, session, type BrowserWindow } from 'electron'
 import {
   PREVIEW_PARTITION,
+  agentNavigationAllowed,
   certificateAllowed,
   guestAttachAllowed,
   guestNavigationAllowed,
   permissionAllowed
 } from '../../core/preview/guards'
 
-export function installPreviewGuards(win: BrowserWindow): void {
+export function installPreviewGuards(win: BrowserWindow, isAgentGuest: (webContentsId: number) => boolean): void {
   // The renderer's <webview> tag can carry any attribute; whatever it says, the guest gets these
   // preferences and no preload. A src outside http(s)/blank, or a foreign partition, never attaches.
   win.webContents.on('will-attach-webview', (e, prefs, params) => {
@@ -29,7 +30,7 @@ export function installPreviewGuards(win: BrowserWindow): void {
       return { action: 'deny' }
     })
     guest.on('will-navigate', (e, url) => {
-      if (!guestNavigationAllowed(url)) e.preventDefault()
+      if (!agentNavigationAllowed(url, isAgentGuest(guest.id))) e.preventDefault()
     })
   })
   // Camera, microphone, notifications and the rest: a page from this machine may ask; others are refused.

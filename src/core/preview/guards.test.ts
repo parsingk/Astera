@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   PREVIEW_PARTITION,
+  agentNavigationAllowed,
   certificateAllowed,
   guestAttachAllowed,
   guestNavigationAllowed,
@@ -45,5 +46,16 @@ describe('certificateAllowed', () => {
     expect(certificateAllowed('https://localhost:8443/', 'webview')).toBe(true)
     expect(certificateAllowed('https://localhost:8443/', 'window')).toBe(false)
     expect(certificateAllowed('https://example.com/', 'webview')).toBe(false)
+  })
+})
+
+describe('agentNavigationAllowed', () => {
+  it('holds an agent guest to this machine', () => {
+    expect(agentNavigationAllowed('http://localhost:5173/x', true)).toBe(true)
+    expect(agentNavigationAllowed('https://example.com/', true)).toBe(false)
+  })
+  it('leaves every other guest on the wider http(s) rule', () => {
+    expect(agentNavigationAllowed('https://example.com/', false)).toBe(true)
+    expect(agentNavigationAllowed('file:///C:/x', false)).toBe(false)
   })
 })

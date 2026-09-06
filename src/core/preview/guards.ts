@@ -28,6 +28,13 @@ export function guestNavigationAllowed(url: string): boolean {
   }
 }
 
+/** The agent's tab is held to this machine; the user's preview keeps the wider rule. A `click()` on
+ *  an external link in the agent's tab is refused here, so the "dev server only" line holds for
+ *  navigations the page starts, not only for `open()`. */
+export function agentNavigationAllowed(url: string, isAgentGuest: boolean): boolean {
+  return isAgentGuest ? isLoopbackUrl(url) : guestNavigationAllowed(url)
+}
+
 /** May a page ask for a permission (camera, microphone, notifications, ...)? Only a page served from
  *  this machine — testing a webcam feature on the dev server is the use; granting it to arbitrary
  *  sites is not. */
