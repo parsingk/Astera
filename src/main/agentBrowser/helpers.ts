@@ -65,8 +65,13 @@ function loadEnds(g: GuestDriver, at: string, url: string): Promise<void> {
         g.once('did-fail-load', onFail)
         return
       }
-      // -3 is ABORTED — a navigation replaced by another, not a failure of the page
-      if (code === -3) { resolve(); return }
+      // -3 is ABORTED — another navigation replaced this one. Resolving here said the load had
+      // finished when the replacement had not even landed: a tab is created pointing at the address,
+      // `open` then loads it again, the first load aborts, and `open` returned with the guest still
+      // on about:blank. Everything the script read next described the wrong page. So keep waiting for
+      // the load that does land — whichever of the two it is, both are going to the same address, and
+      // the deadline around this promise still bounds the wait.
+      if (code === -3) { g.once('did-fail-load', onFail); return }
       reject(new Error(`${at}: ${failedUrl ?? url} failed to load (${description})`))
     }
     g.once('did-finish-load', onDone)

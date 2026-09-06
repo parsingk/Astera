@@ -155,15 +155,35 @@ describe('stage1Helpers', () => {
     await expect(p).rejects.toThrow('waitForLoad: http://localhost:5173/ failed to load (ERR_CONNECTION_REFUSED)')
   }, 2000)
 
-  it('an ABORTED (-3) failure resolves the wait rather than rejecting', async () => {
+  // The real sequence this comes from: a tab is created pointing at the address, `open` loads it
+  // again, and the first load aborts. Resolving on the abort returned from `open` with the guest
+  // still on about:blank, so everything the script read next described the wrong page.
+  it('an ABORTED (-3) failure keeps waiting for the load that replaced it', async () => {
+    const g = fakeGuest(); g.isLoading = () => true
+    const { d } = deps(g)
+    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitForLoad(): Promise<void> }
+    const p = h.waitForLoad()
+    let settled = false
+    void p.then(() => { settled = true })
+    await Promise.resolve()
+    g.fire('did-fail-load', {}, -3, 'ERR_ABORTED', 'http://localhost:5173/', true)
+    await Promise.resolve(); await Promise.resolve()
+    expect(settled).toBe(false)
+    g.fire('did-finish-load')
+    await expect(p).resolves.toBeUndefined()
+  })
+
+  it('an ABORTED (-3) failure still leaves a real failure reportable afterwards', async () => {
     const g = fakeGuest(); g.isLoading = () => true
     const { d } = deps(g)
     const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitForLoad(): Promise<void> }
     const p = h.waitForLoad()
     await Promise.resolve()
     g.fire('did-fail-load', {}, -3, 'ERR_ABORTED', 'http://localhost:5173/', true)
-    await expect(p).resolves.toBeUndefined()
-  })
+    await Promise.resolve()
+    g.fire('did-fail-load', {}, -105, 'ERR_NAME_NOT_RESOLVED', 'http://localhost:5173/', true)
+    await expect(p).rejects.toThrow('failed to load (ERR_NAME_NOT_RESOLVED)')
+  }, 2000)
 
   it('waitForLoad times out and leaves no listener behind', async () => {
     vi.useFakeTimers()
