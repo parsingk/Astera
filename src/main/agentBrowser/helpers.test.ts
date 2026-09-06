@@ -158,6 +158,28 @@ describe('stage1Helpers', () => {
   // The real sequence this comes from: a tab is created pointing at the address, `open` loads it
   // again, and the first load aborts. Resolving on the abort returned from `open` with the guest
   // still on about:blank, so everything the script read next described the wrong page.
+  // A tab that was just built starts on about:blank and finishes loading it, and that event arrives
+  // after dom-ready — which is when the guest registers and so when the wait is armed. Taking it as
+  // the answer returned from open() with the guest still blank.
+  it('a tab built for this open ignores the blank page finishing and waits for the real load', async () => {
+    const g = fakeGuest()
+    g.getURL = () => 'about:blank'
+    const { d } = deps(null)
+    d.guest = () => null
+    d.ensureGuest = async () => g
+    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { open(u: string): Promise<void> }
+    const p = h.open('http://localhost:5173/')
+    let settled = false
+    void p.then(() => { settled = true })
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+    g.fire('did-finish-load')
+    await Promise.resolve(); await Promise.resolve()
+    expect(settled).toBe(false)
+    g.getURL = () => 'http://localhost:5173/'
+    g.fire('did-finish-load')
+    await expect(p).resolves.toBeUndefined()
+  }, 2000)
+
   it('an ABORTED (-3) failure keeps waiting for the load that replaced it', async () => {
     const g = fakeGuest(); g.isLoading = () => true
     const { d } = deps(g)

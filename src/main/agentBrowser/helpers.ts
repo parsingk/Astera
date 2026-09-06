@@ -45,8 +45,14 @@ export const SYNCHRONOUS_HELPERS = new Set(['help'])
 /** Resolves when the guest's current load ends; rejects with the failure when it fails. Bounded.
  *  Whichever way this settles — success, failure, or the WAIT_TIMEOUT_MS deadline — both listeners
  *  are removed before it returns, so a wait that times out does not leave a listener on the guest
- *  for the rest of the session. */
-function loadEnds(g: GuestDriver, at: string, url: string): Promise<void> {
+ *  for the rest of the session.
+ *
+ *  `fresh` is set by the one caller that has just had the tab built for it. A new tab starts on
+ *  about:blank and finishes loading it, and that `did-finish-load` lands after `dom-ready` — which is
+ *  when the renderer registers the guest and so when this wait is armed. Taking it as the answer made
+ *  `open` return with the guest still blank, and everything the script read next described a page
+ *  that had not loaded. Caught in the dev app on the tab-creating open, half the time. */
+function loadEnds(g: GuestDriver, at: string, url: string, fresh = false): Promise<void> {
   let onDone!: Listener
   let onFail!: Listener
   const cleanup = (): void => {
@@ -56,7 +62,12 @@ function loadEnds(g: GuestDriver, at: string, url: string): Promise<void> {
     g.removeListener('did-fail-load', onFail)
   }
   const ended = new Promise<void>((resolve, reject) => {
-    onDone = (): void => resolve()
+    onDone = (): void => {
+      // Only ever true for a tab that was just built: about:blank is where it starts, never where a
+      // script asked to go, so the load that matters has not finished yet.
+      if (fresh && g.getURL() === 'about:blank') { g.once('did-finish-load', onDone); return }
+      resolve()
+    }
     onFail = (_e, code, description, failedUrl, isMainFrame) => {
       if (isMainFrame === false) {
         // A sub-frame's failure says nothing about the page load this wait is for. `once` already
@@ -101,8 +112,9 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
       ctx.at = 'open'
       const target = agentOpenTarget(String(url))
       if (!target) throw new Error(`open: only this machine may be opened (got ${String(url)})`)
+      const had = deps.guest() !== null
       const g = await deps.ensureGuest(target)
-      const ended = loadEnds(g, 'open', target)
+      const ended = loadEnds(g, 'open', target, !had)
       await g.loadURL(target).catch(() => {
         /* the failure arrives on did-fail-load, which ended() reports */
       })
