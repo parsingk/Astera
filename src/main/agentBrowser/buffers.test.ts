@@ -90,6 +90,15 @@ describe('attachBuffers', () => {
     expect(g.count('console-message')).toBe(0)
     expect(g.count('did-start-navigation')).toBe(0)
   })
+
+  it('detaching twice is safe — the second call does not throw and the listener count stays at zero', () => {
+    const g = fakeGuest()
+    const b = attachBuffers(g)
+    b.detach()
+    expect(() => b.detach()).not.toThrow()
+    expect(g.count('console-message')).toBe(0)
+    expect(g.count('did-start-navigation')).toBe(0)
+  })
 })
 
 describe('installNetworkCapture', () => {

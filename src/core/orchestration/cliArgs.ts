@@ -87,9 +87,13 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
     }
     args[key] = next
   }
-  // `astera browser js <<'EOF' … EOF` — the script is the whole of stdin, with no flag to say so.
-  // Only when neither --script nor --file was given; `--script -` already asked.
-  if (cmd === 'browser-js' && args.script === undefined && args.file === undefined && !wantsStdin.includes('script'))
-    wantsStdin.push('script')
+  if (cmd === 'browser-js') {
+    const hasFile = args.file !== undefined || wantsStdin.includes('file')
+    const hasScript = args.script !== undefined || wantsStdin.includes('script')
+    if (hasFile && hasScript) return { error: 'browser js takes one script: --file or --script, not both' }
+    // `astera browser js <<'EOF' … EOF` — the script is the whole of stdin, with no flag to say so.
+    // Only when neither --script nor --file was given; `--script -` already asked.
+    if (!hasScript && !hasFile) wantsStdin.push('script')
+  }
   return { cmd, args, wantsStdin, json }
 }

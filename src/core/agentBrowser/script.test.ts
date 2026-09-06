@@ -15,7 +15,7 @@ describe('the log', () => {
   it('stringifies a value that JSON cannot, rather than throwing', () => {
     const cyc: Record<string, unknown> = {}
     cyc.self = cyc
-    expect(stringifyLog(cyc)).toContain('object')
+    expect(stringifyLog(cyc)).toBe('[object Object]')
   })
 })
 
@@ -43,9 +43,10 @@ describe('withTimeout', () => {
     expect((err as Error).message).toBe('reload did not finish within 10 ms')
   })
   it('clears its timer on success so nothing lingers', async () => {
-    const before = process.getActiveResourcesInfo?.().filter((r) => r === 'Timeout').length ?? 0
+    expect(typeof process.getActiveResourcesInfo).toBe('function')
+    const before = process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length
     await withTimeout(Promise.resolve(1), 10_000, 'x')
-    const after = process.getActiveResourcesInfo?.().filter((r) => r === 'Timeout').length ?? 0
+    const after = process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length
     expect(after).toBeLessThanOrEqual(before)
   })
 })

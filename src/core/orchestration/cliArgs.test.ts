@@ -107,6 +107,11 @@ describe('반복되는 플래그', () => {
     expect(r.args.file).toBe('check.js')
     expect(r.wantsStdin).toEqual([])
   })
+  it('browser js --file and --script together is an error', () => {
+    expect(parseArgs(['browser', 'js', '--file', 'check.js', '--script', '-'])).toEqual({
+      error: 'browser js takes one script: --file or --script, not both'
+    })
+  })
   it('browser help is browser-help', () => {
     expect(parseArgs(['browser', 'help'])).toMatchObject({ cmd: 'browser-help', wantsStdin: [] })
   })

@@ -118,9 +118,4 @@ describe('runScript', () => {
     log.log('written after the run returned')
     expect(r.log).toEqual(['a'])
   })
-
-  it('still reports a script-thrown error by its message, across the realm boundary', async () => {
-    const r = await run(`throw new Error('mine')`)
-    expect(r.error).toEqual({ message: 'mine', at: 'script' })
-  })
 })

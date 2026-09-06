@@ -26,6 +26,14 @@ describe('AgentGuestRegistry', () => {
     expect(reg.guestOf('never')).toBeNull()
   })
 
+  it('re-registering a session replaces its old guest id, not adds to it', () => {
+    const reg = new AgentGuestRegistry(() => guest(9))
+    reg.register('s', 7, 'D:/p')
+    reg.register('s', 9, 'D:/p')
+    expect(reg.isAgentGuest(7)).toBe(false)
+    expect(reg.isAgentGuest(9)).toBe(true)
+  })
+
   it('unregister forgets the session and the guest id', () => {
     const reg = new AgentGuestRegistry(() => guest(5))
     reg.register('s', 5, 'D:/p')
