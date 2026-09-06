@@ -21,16 +21,29 @@ const JSON_ARRAY = new Set(['deps'])
  *  last value, which is what every existing caller expects. */
 const REPEATABLE = new Set(['check'])
 
+const BROWSER_SUBCOMMANDS = new Set(['js', 'help'])
+
 export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   if (argv.length === 0) return { error: 'a command is required (try: help)' }
-  const cmd = argv[0]
+  let cmd = argv[0]
   if (cmd.startsWith('-')) return { error: `expected a command, got flag: ${cmd}` }
+  // The browser is the one two-word command: `astera browser js`, `astera browser help`. Joined here
+  // into `browser-js` / `browser-help` so the server and the tests see one token, like every other
+  // command. The rest of the line parses as flags from the third word on.
+  let first = 1
+  if (cmd === 'browser') {
+    const sub = argv[1]
+    if (sub === undefined || sub.startsWith('-')) return { error: 'browser needs a subcommand: js or help' }
+    if (!BROWSER_SUBCOMMANDS.has(sub)) return { error: `unknown browser subcommand: ${sub} (expected js or help)` }
+    cmd = `browser-${sub}`
+    first = 2
+  }
 
   const args: Record<string, unknown> = {}
   const wantsStdin: string[] = []
   let json = false
 
-  for (let i = 1; i < argv.length; i++) {
+  for (let i = first; i < argv.length; i++) {
     const tok = argv[i]
     if (!tok.startsWith('--')) return { error: `unexpected argument: ${tok}` }
     const key = camel(tok.slice(2))
@@ -74,5 +87,9 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
     }
     args[key] = next
   }
+  // `astera browser js <<'EOF' … EOF` — the script is the whole of stdin, with no flag to say so.
+  // Only when neither --script nor --file was given; `--script -` already asked.
+  if (cmd === 'browser-js' && args.script === undefined && args.file === undefined && !wantsStdin.includes('script'))
+    wantsStdin.push('script')
   return { cmd, args, wantsStdin, json }
 }

@@ -93,4 +93,27 @@ describe('반복되는 플래그', () => {
     const r = parseArgs(['send', '--text', 'a', '--text', 'b'])
     expect(r).toMatchObject({ args: { text: 'b' } })
   })
+  it('browser js is one command, browser-js, and reads its script from stdin by default', () => {
+    const r = parseArgs(['browser', 'js'])
+    expect(r).toMatchObject({ cmd: 'browser-js', wantsStdin: ['script'] })
+  })
+  it('browser js --script - asks for stdin once, not twice', () => {
+    const r = parseArgs(['browser', 'js', '--script', '-'])
+    expect(r).toMatchObject({ cmd: 'browser-js', wantsStdin: ['script'] })
+  })
+  it('browser js --file reads no stdin', () => {
+    const r = parseArgs(['browser', 'js', '--file', 'check.js']) as { cmd: string; args: Record<string, unknown>; wantsStdin: string[] }
+    expect(r.cmd).toBe('browser-js')
+    expect(r.args.file).toBe('check.js')
+    expect(r.wantsStdin).toEqual([])
+  })
+  it('browser help is browser-help', () => {
+    expect(parseArgs(['browser', 'help'])).toMatchObject({ cmd: 'browser-help', wantsStdin: [] })
+  })
+  it('browser alone names its subcommands', () => {
+    expect(parseArgs(['browser'])).toEqual({ error: 'browser needs a subcommand: js or help' })
+  })
+  it('browser with an unknown subcommand is refused', () => {
+    expect(parseArgs(['browser', 'fly'])).toEqual({ error: 'unknown browser subcommand: fly (expected js or help)' })
+  })
 })
