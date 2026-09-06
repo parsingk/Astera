@@ -42,6 +42,12 @@ export interface WebRequestLike {
  *  what an agent asked for when it asked what went wrong. */
 const LEVEL: Record<number, ConsoleEntry['level'] | undefined> = { 2: 'warning', 3: 'error' }
 
+/** Electron talks to its own renderers through the console — the "Insecure Content-Security-Policy"
+ *  notice is the one every dev server triggers. It is not the page, and an agent that reads it goes
+ *  looking for a CSP problem in an app that does not have one. Watched a session do exactly that and
+ *  have to reason its way back out. Their source is a `node:` URL, which a page cannot produce. */
+const SHELL_SOURCE = 'node:'
+
 /** Electron 41 emits `console-message` as `(event, MessageDetails)` — `{ level, message, lineNumber,
  *  sourceUrl }`. Older majors emitted `(event, level, message, line, sourceId)`. Both are read here so
  *  a version bump in either direction cannot silently empty the console buffer. */
@@ -50,10 +56,12 @@ function consoleEntry(args: unknown[]): ConsoleEntry | null {
   const details = typeof a === 'object' && a !== null ? (a as Record<string, unknown>) : null
   const lv = LEVEL[Number(details ? details.level : a)]
   if (!lv) return null
+  const source = String((details ? details.sourceUrl : d) ?? '')
+  if (source.startsWith(SHELL_SOURCE)) return null
   return {
     level: lv,
     message: String((details ? details.message : b) ?? ''),
-    source: String((details ? details.sourceUrl : d) ?? ''),
+    source,
     line: Number((details ? details.lineNumber : c) ?? 0)
   }
 }
@@ -134,6 +142,13 @@ export class AgentBufferStore {
  *  whatever was there rather than adding to it. Registering inside attachBuffers would mean the
  *  newest agent tab silently stole every other tab's network events. One pair of handlers, routed by
  *  webContentsId, is the only shape that works for more than one tab. */
+/** A request the browser gave up on because another navigation replaced it. `loadEnds` in helpers.ts
+ *  already treats the same condition as "not a failure of the page" — the ring agrees with it. The
+ *  first `open()` of a tab produces one every time: the tab is created pointing at the url, and the
+ *  helper's own loadURL supersedes that first load. Reporting it made an agent's first ever look at
+ *  networkErrors() open on a phantom failure of the page it had just asked for. */
+const ABORTED = 'net::ERR_ABORTED'
+
 export function installNetworkCapture(
   webRequest: WebRequestLike,
   lookup: (webContentsId: number) => AgentBuffers | null
@@ -156,7 +171,7 @@ export function installNetworkCapture(
   }
   webRequest.onErrorOccurred({ urls: ['<all_urls>'] }, (d) => {
     const t = target(d)
-    if (!t) return
+    if (!t || t.error === ABORTED) return
     t.buffers.network.push({ url: t.url, method: t.method, error: t.error })
   })
   webRequest.onCompleted({ urls: ['<all_urls>'] }, (d) => {

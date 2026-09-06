@@ -11,21 +11,25 @@ description: Open and check the web app this project is developing, in a browser
 The full reference comes from the CLI — the single source of truth lives beside the executable so it
 cannot drift from the installed version.
 
-1. Check the tooling. An empty value means this session was not started by Astera, or the agent
-   browser is off in its settings — say so and stop; do not reach for another browser.
-   ```bash
-   echo "$ASTERA_CLI"
+1. Make sure the terminal is at its prompt — not at a trust or permission dialog — then read the
+   guide. This is also the tool check: if the command is not found, this session was not started by
+   Astera. Say so and stop; do not reach for another browser.
    ```
-2. Make sure the terminal is at its prompt — not at a trust or permission dialog — then read the guide:
-   ```bash
    astera browser help
    ```
-   If `astera` comes back as command not found, call it as `"$ASTERA_CLI"` — the same program.
-3. Write one script per round. Everything you want to see comes back through `log()`:
-   ```bash
-   astera browser js <<'EOF'
+2. Write one script per round, in a file, and run it. Everything you want to see comes back through
+   `log()`:
+   ```
+   astera browser js --file check.js
+   ```
+   where `check.js` is, for example:
+   ```js
    await open('http://localhost:5173/')
    log(await consoleErrors())
    log(await networkErrors())
-   EOF
    ```
+   `--file` is used rather than a heredoc because it works in every shell — the guide covers reading
+   the script from stdin where your shell supports it.
+
+   If this answers `{"error":"agent browser is off"}`, the setting is off. Tell the person where it
+   is — Settings, **Agent browser** — and stop rather than looking for another way to open the page.

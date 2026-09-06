@@ -38,6 +38,18 @@ describe('attachBuffers', () => {
     ])
   })
 
+  it('drops what the browser shell says about itself, keeping what the page says', () => {
+    const g = fakeGuest()
+    const b = attachBuffers(g)
+    // The real one, watched reaching a session: Electron's own CSP notice, which every dev server
+    // triggers and which is not about the page at all.
+    g.emit('console-message', {}, msg(2, '%cElectron Security Warning (Insecure Content-Security-Policy)', 2, 'node:electron/js2c/sandbox_bundle'))
+    g.emit('console-message', {}, msg(3, 'real', 7, 'http://localhost:4321/'))
+    expect(b.console.sinceMark()).toEqual([
+      { level: 'error', message: 'real', source: 'http://localhost:4321/', line: 7 }
+    ])
+  })
+
   it('reads the older positional signature too', () => {
     const g = fakeGuest()
     const b = attachBuffers(g)
@@ -81,6 +93,19 @@ describe('installNetworkCapture', () => {
       { url: 'http://localhost:5173/x', method: 'POST', status: 500 }
     ])
     expect(other.network.sinceMark()).toEqual([{ url: 'http://localhost:5173/other', method: 'GET', error: 'x' }])
+  })
+
+  it('drops a request the browser abandoned because another navigation replaced it', () => {
+    const wr = fakeWebRequest()
+    const a = attachBuffers(fakeGuest())
+    installNetworkCapture(wr, (id) => (id === 42 ? a : null))
+    // Every first open() produces one of these: the tab is created pointing at the url and the
+    // helper's own loadURL supersedes that first load. It is not a failure of the page.
+    wr.fireError({ webContentsId: 42, url: 'http://localhost:4321/', method: 'GET', error: 'net::ERR_ABORTED' })
+    wr.fireError({ webContentsId: 42, url: 'http://localhost:4321/api', method: 'GET', error: 'net::ERR_CONNECTION_REFUSED' })
+    expect(a.network.sinceMark()).toEqual([
+      { url: 'http://localhost:4321/api', method: 'GET', error: 'net::ERR_CONNECTION_REFUSED' }
+    ])
   })
 
   it('drops a request whose guest is not an agent tab, and one with no webContentsId', () => {
