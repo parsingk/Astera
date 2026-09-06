@@ -31,3 +31,23 @@ describe('initialPrompt', () => {
     expect(buildClaudeCommand('linux')({}).args).toEqual([])
   })
 })
+
+describe('claude --add-dir', () => {
+  it('grants read access to the given directories, variadically, before the prompt', () => {
+    const { args } = buildClaudeCommand('linux')({ addDirs: ['/data/shots'], initialPrompt: 'fix it' })
+    expect(args.slice(0, 2)).toEqual(['--add-dir', '/data/shots'])
+    expect(args.indexOf('--add-dir')).toBeLessThan(args.indexOf('fix it'))
+  })
+  it('emits nothing when there are no directories', () => {
+    expect(buildClaudeCommand('linux')({}).args).toEqual([])
+    expect(buildClaudeCommand('linux')({ addDirs: [] }).args).toEqual([])
+  })
+  it('carries a win32 path through the cmd.exe wrapper', () => {
+    const { file, args } = buildClaudeCommand('win32')({ addDirs: ['C:\Users\me\AppData\Roaming\astera-dev\preview\shots'] })
+    expect(file).toBe('cmd.exe')
+    expect(args).toContain('C:\Users\me\AppData\Roaming\astera-dev\preview\shots')
+  })
+  it('codex ignores addDirs — it reads those paths without a prompt', () => {
+    expect(buildCodexCommand('linux')({ addDirs: ['/data/shots'] }).args).not.toContain('--add-dir')
+  })
+})

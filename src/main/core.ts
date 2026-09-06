@@ -29,6 +29,7 @@ import { suggestableCandidates } from '../core/accounts/suggest'
 import { AppSettingsStore } from './appSettingsStore'
 import { KeybindingsStore } from './keybindingsStore'
 import { pickInitialLang } from '../core/i18n/locale'
+import { previewShotsDir } from './preview/capture'
 import { setPseudoLocalization } from '../core/i18n/pseudo'
 import type { Lang, Message } from '../core/i18n'
 import type { Account, DetectCandidate, Provider, SessionUsage } from '../core/types'
@@ -133,6 +134,7 @@ export function runAccountLogout(
   })
 }
 
+
 export async function createCore(userDataDir: string, osLocale: string): Promise<Core> {
   // Same switch on the main side, so banners and error sentences are padded too
   // Dev-only layout check: VITE_PSEUDO_LOCALE=1 ASTERA_PSEUDO_LOCALE=1 npm run dev
@@ -163,8 +165,16 @@ export async function createCore(userDataDir: string, osLocale: string): Promise
   await statusLine.init()
   // descriptors is injected explicitly — left unspecified, each of them calls makeDescriptors(process.platform)
   // again, so every instance gets its own table (plus two command builders SessionManager never uses).
-  const sessions = new SessionManager(nodePtyFactory, descriptors, undefined, undefined, undefined, (id, account, opts) =>
-    statusLine.spawnConfig(id, account, opts)
+  const sessions = new SessionManager(
+    nodePtyFactory,
+    descriptors,
+    undefined,
+    undefined,
+    undefined,
+    (id, account, opts) => statusLine.spawnConfig(id, account, opts),
+    // A Claude session may read the app's screenshot folder without a prompt — that is where Design
+    // Mode writes the crops whose paths it sends. previewShotsDir is the same path capture.ts writes.
+    [previewShotsDir(userDataDir)]
   )
   // Lazy history: nothing is scanned at startup. The project list comes from a directory listing; sessions are
   // parsed when expanded. index.ts starts the file watcher with startBackground() after the window is up, so window creation never blocks on a scan.
