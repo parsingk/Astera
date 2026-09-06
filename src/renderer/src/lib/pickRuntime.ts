@@ -233,7 +233,7 @@ export function pickerRuntime(): Promise<unknown> {
   if (!state.overlay) {
     const overlay = document.createElement('div')
     overlay.setAttribute('data-astera-pick', '')
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:' + Z + ';cursor:crosshair;background:transparent;user-select:none;-webkit-user-select:none;'
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:' + Z + ';cursor:default;background:transparent;user-select:none;-webkit-user-select:none;'
     const box = document.createElement('div')
     box.setAttribute('data-astera-pick', '')
     box.style.cssText = 'position:fixed;pointer-events:none;z-index:' + Z + ';border:2px solid #4c7ef3;background:rgba(76,126,243,.12);border-radius:2px;display:none;box-sizing:border-box;'

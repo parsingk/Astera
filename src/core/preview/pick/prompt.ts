@@ -92,6 +92,12 @@ export function formatAnnotations(annotations: readonly Annotation[]): string {
     // The ratio belongs next to the size: it is what decides which asset a `srcset` picks, and it is a
     // common thing to be asking about when a screenshot looks soft.
     `**Viewport:** ${first.page.viewportWidth}x${first.page.viewportHeight}${first.page.devicePixelRatio !== 1 ? ` @${first.page.devicePixelRatio}x` : ''}`,
+    '',
+    // Without this line the agent had only the element's data and the remark, and nothing joining the
+    // two: a note reading "make the background grey" left on one card turned the whole page grey,
+    // because "background" on its own means the page. Each section identifies exactly one element;
+    // this says the remark is about that element and the change belongs on it.
+    'Each item below is feedback about one specific element, identified by its selector and HTML. Make each change to that element unless the feedback clearly refers to something wider.',
     ''
   ]
   for (const a of annotations) {
