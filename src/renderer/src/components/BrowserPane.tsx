@@ -628,7 +628,7 @@ export function BrowserPane({
     }
     const markers: BadgeMarker[] = annotationsRef.current
       .filter((a) => a.pagePath === path)
-      .map((a) => ({ seq: a.seq, rectPage: a.payload.rectPage, rectViewport: a.payload.rectViewport, isFixed: a.payload.isFixed }))
+      .map((a) => ({ seq: a.seq, rectPage: a.payload.rectPage, rectViewport: a.payload.rectViewport, isFixed: a.payload.isFixed, hasComment: a.comment.trim() !== '' }))
     try { void view.executeJavaScript(badgesScript(markers)).catch(() => {}) } catch { /* not attached yet */ }
   }
   const sendBadgesRef = useRef(sendBadges)
@@ -636,7 +636,7 @@ export function BrowserPane({
   // Keyed on what a badge is actually made of. `annotations` is a new array on every comment keystroke,
   // and each one tore down and rebuilt every badge node in the page.
   const badgeKey = annotations
-    .map((a) => `${a.seq}:${a.pagePath}:${Math.round(a.payload.rectPage.x)},${Math.round(a.payload.rectPage.y)}`)
+    .map((a) => `${a.seq}:${a.pagePath}:${Math.round(a.payload.rectPage.x)},${Math.round(a.payload.rectPage.y)}:${a.comment.trim() !== ''}`)
     .join('|')
   useEffect(() => { sendBadgesRef.current() }, [badgeKey, currentPath])
 
@@ -644,6 +644,22 @@ export function BrowserPane({
   useEffect(() => {
     if (popover && !annotations.some((a) => a.id === popover.id)) setPopover(null)
   }, [annotations, popover])
+
+  // So does turning the mode off, and leaving the page it was opened on: the box is placed against a
+  // point on one page, and a comment box floating over a different one belongs to nothing.
+  useEffect(() => { if (!designMode) setPopover(null) }, [designMode])
+  useEffect(() => { setPopover(null) }, [currentPath])
+
+  // A click anywhere else closes it. Only host clicks reach this — a click inside the page is a pick,
+  // and that opens the box again on whatever was picked.
+  useEffect(() => {
+    if (!popover) return
+    const onDown = (e: PointerEvent): void => {
+      if (!(e.target instanceof Node) || !(e.target as Element).closest?.('.dm-pop')) setPopover(null)
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+  }, [popover])
 
   const updateAnnotation = (id: string, patch: { comment?: string; intent?: Intent }): void =>
     setAnnotations((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)))
@@ -656,7 +672,7 @@ export function BrowserPane({
     const a = annotationsRef.current.find((x) => x.id === id)
     const view = viewRef.current
     if (!a || !view || a.pagePath !== currentPath) return
-    try { void view.executeJavaScript(highlightScript({ seq: a.seq, rectPage: a.payload.rectPage, rectViewport: a.payload.rectViewport, isFixed: a.payload.isFixed })).catch(() => {}) } catch { /* detached */ }
+    try { void view.executeJavaScript(highlightScript({ seq: a.seq, rectPage: a.payload.rectPage, rectViewport: a.payload.rectViewport, isFixed: a.payload.isFixed, hasComment: a.comment.trim() !== '' })).catch(() => {}) } catch { /* detached */ }
   }
   const promptText = (): string => formatAnnotations(annotationsRef.current)
   const copyAnnotations = (): void => {

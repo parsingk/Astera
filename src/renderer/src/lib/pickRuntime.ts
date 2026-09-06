@@ -288,8 +288,12 @@ export function cancelRuntime(): void {
 }
 
 /** Numbered badges at the given rects, following scroll and resize. An empty list removes them. */
-export function badgesRuntime(markers: { seq: number; rectPage: { x: number; y: number; width: number; height: number }; rectViewport: { x: number; y: number; width: number; height: number }; isFixed: boolean }[]): void {
+export function badgesRuntime(markers: { seq: number; rectPage: { x: number; y: number; width: number; height: number }; rectViewport: { x: number; y: number; width: number; height: number }; isFixed: boolean; hasComment: boolean }[]): void {
   const KEY = '__asteraBadges'
+  // Declared here rather than shared: each of these functions is stringified on its own and runs in
+  // the guest with nothing around it, so a constant from a neighbour would be undefined.
+  const BADGE_H = 18
+  const TAIL_H = 6
   const w = window as unknown as Record<string, unknown>
   interface BadgeState { root: HTMLDivElement | null; markers: typeof markers; onUpdate: (() => void) | null; raf: number }
   let S = w[KEY] as BadgeState | undefined
@@ -320,9 +324,26 @@ export function badgesRuntime(markers: { seq: number; rectPage: { x: number; y: 
         const m = state.markers[i]
         const x = m.isFixed ? m.rectViewport.x : m.rectPage.x - window.scrollX
         const y = m.isFixed ? m.rectViewport.y : m.rectPage.y - window.scrollY
+        // A speech bubble rather than a plain dot: the marker's job is to say a remark was left here,
+        // and a numbered circle reads as an ordering. Blue once something has been written about it,
+        // grey while the comment is still empty.
+        const colour = m.hasComment ? '#4c7ef3' : '#6b7280'
+        const above = y - (BADGE_H + TAIL_H) >= 0
         const d = document.createElement('div')
-        d.textContent = String(m.seq)
-        d.style.cssText = 'position:absolute;left:' + (x - 10) + 'px;top:' + (y - 10) + 'px;width:20px;height:20px;border-radius:50%;background:#4c7ef3;color:#fff;font:700 12px/20px system-ui,sans-serif;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.4);'
+        d.style.cssText = 'position:absolute;left:' + (x - 4) + 'px;top:' + (above ? y - BADGE_H - TAIL_H : y + TAIL_H) + 'px;'
+        const body = document.createElement('div')
+        body.textContent = String(m.seq)
+        body.style.cssText = 'min-width:' + BADGE_H + 'px;height:' + BADGE_H + 'px;padding:0 5px;box-sizing:border-box;' +
+          'border-radius:' + (BADGE_H / 2) + 'px;background:' + colour + ';color:#fff;' +
+          'font:700 11px/' + BADGE_H + 'px system-ui,sans-serif;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.4);'
+        // The tail points at the corner the element starts from, so the bubble reads as belonging to it
+        const tail = document.createElement('div')
+        tail.style.cssText = 'position:absolute;left:5px;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;' +
+          (above
+            ? 'top:' + (BADGE_H - 1) + 'px;border-top:' + TAIL_H + 'px solid ' + colour + ';'
+            : 'top:' + (1 - TAIL_H) + 'px;border-bottom:' + TAIL_H + 'px solid ' + colour + ';')
+        d.appendChild(body)
+        d.appendChild(tail)
         r.appendChild(d)
       }
     }
