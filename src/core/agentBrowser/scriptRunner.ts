@@ -33,8 +33,15 @@ export interface RunnerOptions {
  *  We detect foreign-realm errors using Object.prototype.toString and rebuild them as genuine host
  *  Errors, copying only the message string across the boundary. Interrupted objects (created
  *  host-side) pass through unchanged. */
-function normalizeError(err: unknown): unknown {
+function normalizeError(err: unknown, timeoutMs: number): unknown {
   if (err instanceof Interrupted) return err
+  // `runInContext`'s own `timeout` — the deadline for a body that never awaits — throws a plain host
+  // Error, which shapeError would report at `ctx.at` ('script') with Node's own wording. It is the
+  // same whole-script deadline the race below enforces, so the agent is told the same thing: `at:
+  // 'timeout'`, with the reason this one could not be reported any other way.
+  if ((err as { code?: unknown } | null | undefined)?.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') {
+    return new Interrupted('timeout', `script did not finish within ${timeoutMs} ms (it never awaited)`)
+  }
   if (Object.prototype.toString.call(err) === '[object Error]') {
     const message = typeof (err as any).message === 'string' ? (err as any).message : String(err)
     return new Error(message)
@@ -50,8 +57,17 @@ export async function runScript(
   opts: RunnerOptions = {}
 ): Promise<RunResult> {
   const timeoutMs = opts.timeoutMs ?? SCRIPT_TIMEOUT_MS
-  // A fresh object, so the script's own globals do not leak into the helpers object the caller keeps
-  const sandbox: Record<string, unknown> = { ...helpers, log: (v: unknown) => log.log(v), console: undefined }
+  // A fresh object, so the script's own globals do not leak into the helpers object the caller keeps.
+  // `log` is injected here rather than passed in, which puts it outside whatever gate the caller wraps
+  // its helpers in — so it is gated here: an abandoned body that keeps logging would otherwise grow
+  // the sink for the life of the app, invisibly (the result below is a copy) and without a bound.
+  const sandbox: Record<string, unknown> = {
+    ...helpers,
+    log: (v: unknown) => {
+      if (!opts.signal?.aborted) log.log(v)
+    },
+    console: undefined
+  }
   const context = vm.createContext(sandbox, { name: 'agent-browser' })
 
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -80,7 +96,7 @@ export async function runScript(
     // given — including between this return and the server serialising it.
     return { log: [...log.lines] }
   } catch (err) {
-    return { log: [...log.lines], error: shapeError(normalizeError(err), ctx.at) }
+    return { log: [...log.lines], error: shapeError(normalizeError(err, timeoutMs), ctx.at) }
   } finally {
     if (timer) clearTimeout(timer)
     if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort)

@@ -52,6 +52,32 @@ describe('runScript', () => {
     expect(r.error).toEqual({ message: 'script did not finish within 30 ms', at: 'timeout' })
   })
 
+  // The other half of that deadline: a body with no `await` in it never returns to the event loop, so
+  // neither the timer nor the abort above can ever reach it — only `runInContext`'s own `timeout` can.
+  // It is the same whole-script deadline, so it is reported the same way rather than as a host error
+  // at 'script'.
+  it('a body that never awaits is cut off by the same deadline, and reported at: timeout', async () => {
+    const r = await run(`log('started'); while (true) {}`, {}, { timeoutMs: 30 })
+    expect(r.log).toEqual(['started'])
+    expect(r.error).toEqual({ message: 'script did not finish within 30 ms (it never awaited)', at: 'timeout' })
+  })
+
+  it('the injected log stops recording once the run is over', async () => {
+    const ac = new AbortController()
+    const ctx = { at: 'script' }
+    const log = createLog()
+    let resume!: () => void
+    const helpers = { wait: () => new Promise<void>((r) => (resume = r)) }
+    const p = runScript(`log('before'); await wait(); log('after')`, helpers, log, ctx, { signal: ac.signal })
+    ac.abort()
+    const r = await p
+    expect(r.log).toEqual(['before'])
+    // The abandoned body runs on — it resumes and logs — but the sink the caller still holds is done.
+    resume()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(log.lines).toEqual(['before'])
+  })
+
   it('an aborted signal ends it at the running helper with "stopped"', async () => {
     const ac = new AbortController()
     const ctx = { at: 'script' }

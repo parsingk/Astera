@@ -988,7 +988,9 @@ export interface PreviewApi {
   /** BrowserPane tells main which guest is a session's agent tab. Main cannot learn this on its
    *  own — did-attach-webview hands it a guest with no tab or session on it. */
   registerAgentGuest(sessionId: string, webContentsId: number): Promise<void>
-  unregisterAgentGuest(sessionId: string): Promise<void>
+  /** Takes the guest id as well as the session: a pane unmounting around a newer pane's registration
+   *  must not drop the registration that replaced its own. */
+  unregisterAgentGuest(sessionId: string, webContentsId: number): Promise<void>
 }
 
 export interface SystemApi {

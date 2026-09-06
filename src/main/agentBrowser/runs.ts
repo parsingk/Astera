@@ -41,8 +41,26 @@ export interface RunsDeps {
  *  vm goes on running and goes on calling helpers, so `while (true) { await reload() }` reported a
  *  clean timeout at 60 s and then reloaded the user's dev server for as long as the app lived. `run`
  *  aborts its own controller in its `finally`, so success, error, deadline and Stop all arrive here
- *  the same way, and a helper entered after that throws `Interrupted` instead of touching the tab.
- *  Every route out of the run therefore ends with the script unable to do anything further. */
+ *  the same way, and a helper entered after that never touches the tab.
+ *
+ *  An entered helper **parks** — it returns a promise that never settles — rather than failing, and
+ *  the difference is the whole point. Failing it does not work, either way round: a synchronous
+ *  `throw` means the `await` in front of the call is never evaluated, and a rejected promise resumes
+ *  the body on a microtask. Neither hands the thread back, so `while (true) { try { await reload() }
+ *  catch {} }` — "retry, ignoring errors", a very plausible thing for an agent to write — would spin
+ *  the main process flat: no IPC, no UI, no other session, no recovery short of killing the app. The
+ *  sandbox has no `setTimeout`, so a helper is the only thing such a loop can ever yield on. Parking
+ *  suspends the abandoned body for good instead, and it stops doing anything at all. The cost is
+ *  real and it is the cheaper one: a parked body keeps its vm context until the app exits, which is
+ *  the same retention the abandoned body was already causing. `help` is the only synchronous helper,
+ *  and a synchronous function cannot park, so it keeps the throw — a loop that catches `help()` does
+ *  still freeze, as any synchronous infinite loop inside a script does, and nothing at this layer can
+ *  reach that.
+ *
+ *  What this does **not** do is cancel a helper that is already inside its body when the abort lands:
+ *  only entry is gated. An `open()` parked in `ensureGuest`'s `waitFor`, for instance, can resume
+ *  after the run has returned and call `loadURL` once. That single action is the bound — it cannot
+ *  start another, because the next helper call parks. */
 function withAtReset(raw: Record<string, unknown>, ctx: RunContext, signal: AbortSignal): Record<string, unknown> {
   const wrapped: Record<string, unknown> = {}
   for (const [name, value] of Object.entries(raw)) {
@@ -51,8 +69,12 @@ function withAtReset(raw: Record<string, unknown>, ctx: RunContext, signal: Abor
       continue
     }
     wrapped[name] = (...args: unknown[]) => {
-      // Thrown, not returned as a rejection, so a synchronous helper stays synchronous here too.
-      if (signal.aborted) throw new Interrupted(ctx.at, 'stopped')
+      if (signal.aborted) {
+        // `help` is the one helper a script may call without `await`, so it is the one that throws;
+        // every other helper parks (see this function's doc comment for why failing them is worse).
+        if (name === 'help') throw new Interrupted(ctx.at, 'stopped')
+        return new Promise<never>(() => {})
+      }
       const result = (value as (...a: unknown[]) => unknown)(...args)
       if (result instanceof Promise) {
         return result.then((v) => {

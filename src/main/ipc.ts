@@ -884,8 +884,14 @@ export function registerIpc(
       agentBuffers.forget(sessionId)
     })
   })
-  ipcMain.handle('preview.unregisterAgentGuest', (_e, sessionId: unknown) => {
-    if (typeof sessionId !== 'string') return
+  ipcMain.handle('preview.unregisterAgentGuest', (_e, sessionId: unknown, webContentsId: unknown) => {
+    if (typeof sessionId !== 'string' || typeof webContentsId !== 'number') return
+    // The same staleness check the `destroyed` handler above makes, for the same reason. After a
+    // `close(); open()` in one script the old pane unmounts around the new tab's registration; an
+    // unregister that knew only the session id would drop the newer guest, and the script's next
+    // helper would report "no page open". Nothing orders those two messages, so this compares
+    // identity instead — by the id the renderer now sends, since the old guest may already be gone.
+    if (agentGuests.webContentsIdOf(sessionId) !== webContentsId) return
     agentGuests.unregister(sessionId)
     agentBuffers.forget(sessionId)
   })

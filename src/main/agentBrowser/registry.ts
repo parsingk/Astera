@@ -43,6 +43,13 @@ export class AgentGuestRegistry<G extends GuestLike = GuestLike> {
     return this.bySession.get(sessionId)?.cwd ?? null
   }
 
+  /** Which guest this session is registered to, live or not — the question `guestOf` cannot answer,
+   *  because it returns null for a guest that has since been destroyed. An unregister that names a
+   *  guest asks this to tell its own registration from one that has already replaced it. */
+  webContentsIdOf(sessionId: string): number | null {
+    return this.bySession.get(sessionId)?.webContentsId ?? null
+  }
+
   /** The live webview guest, or null — unregistered, destroyed since, or not a webview at all. The
    *  same three checks capture.ts's guestFor makes, for the same reason. */
   guestOf(sessionId: string): G | null {

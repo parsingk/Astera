@@ -359,16 +359,24 @@ export function BrowserPane({
     // Calling loadURL here instead is not enough either: at this point the guest does not exist yet, so
     // it throws, and the fallback that writes `src` puts the same race straight back. `dom-ready` is the
     // event that says the guest is there, and by then every listener above is registered.
+
+    // Which guest this pane registered, remembered so the cleanup can name it. Read again at cleanup
+    // it would be the wrong question: the guest may be gone by then, and main has to be told which
+    // registration is being withdrawn, not which one exists now.
+    let registeredGuestId: number | null = null
     const onDomReady = (): void => {
       view.removeEventListener('dom-ready', onDomReady)
       // An agent's tab tells main which guest it is. Main cannot learn this from did-attach-webview,
       // which carries no tab or session; only this component knows both.
-      if (tab.agentSessionId) void window.api.preview.registerAgentGuest(tab.agentSessionId, view.getWebContentsId())
+      if (tab.agentSessionId) {
+        registeredGuestId = view.getWebContentsId()
+        void window.api.preview.registerAgentGuest(tab.agentSessionId, registeredGuestId)
+      }
       load(initialUrl.current)
     }
     view.addEventListener('dom-ready', onDomReady)
     return () => {
-      if (tab.agentSessionId) void window.api.preview.unregisterAgentGuest(tab.agentSessionId)
+      if (tab.agentSessionId && registeredGuestId !== null) void window.api.preview.unregisterAgentGuest(tab.agentSessionId, registeredGuestId)
       view.removeEventListener('dom-ready', onDomReady)
       clearRetry()
       view.removeEventListener('did-start-loading', onStart)
