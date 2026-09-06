@@ -20,6 +20,20 @@ export interface RunnerOptions {
   signal?: AbortSignal
 }
 
+/** A value thrown from inside a vm context is an instance of a different Error class than the
+ *  host's, so `instanceof Error` fails and shapeError would call String(err) instead of err.message.
+ *  We detect foreign-realm errors using Object.prototype.toString and rebuild them as genuine host
+ *  Errors, copying only the message string across the boundary. Interrupted objects (created
+ *  host-side) pass through unchanged. */
+function normalizeError(err: unknown): unknown {
+  if (err instanceof Interrupted) return err
+  if (Object.prototype.toString.call(err) === '[object Error]') {
+    const message = typeof (err as any).message === 'string' ? (err as any).message : String(err)
+    return new Error(message)
+  }
+  return err
+}
+
 export async function runScript(
   script: string,
   helpers: Record<string, unknown>,
@@ -29,7 +43,7 @@ export async function runScript(
 ): Promise<RunResult> {
   const timeoutMs = opts.timeoutMs ?? SCRIPT_TIMEOUT_MS
   // A fresh object, so the script's own globals do not leak into the helpers object the caller keeps
-  const sandbox: Record<string, unknown> = { Error, ...helpers, log: (v: unknown) => log.log(v), console: undefined }
+  const sandbox: Record<string, unknown> = { ...helpers, log: (v: unknown) => log.log(v), console: undefined }
   const context = vm.createContext(sandbox, { name: 'agent-browser' })
 
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -51,7 +65,7 @@ export async function runScript(
     await Promise.race([running, interrupted])
     return { log: log.lines }
   } catch (err) {
-    return { log: log.lines, error: shapeError(err, ctx.at) }
+    return { log: log.lines, error: shapeError(normalizeError(err), ctx.at) }
   } finally {
     if (timer) clearTimeout(timer)
     if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort)

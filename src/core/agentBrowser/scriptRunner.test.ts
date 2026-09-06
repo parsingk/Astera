@@ -72,4 +72,16 @@ describe('runScript', () => {
     const r = await run(`return 5`)
     expect(r).toEqual({ log: [] })
   })
+
+  it('hands the script no host object to climb out through', async () => {
+    const r = await run(`const F = Error.constructor; const proc = F("return process")()`)
+    // Even though Error.constructor exists, it cannot create code that escapes the sandbox
+    expect(r.error?.at).toBe('script')
+    expect(r.error?.message).toMatch(/process is not defined/)
+  })
+
+  it('still reports a script-thrown error by its message, across the realm boundary', async () => {
+    const r = await run(`throw new Error('mine')`)
+    expect(r.error).toEqual({ message: 'mine', at: 'script' })
+  })
 })
