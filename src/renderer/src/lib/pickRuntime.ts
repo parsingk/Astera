@@ -13,6 +13,9 @@ interface PickState {
   box: HTMLDivElement | null
   label: HTMLDivElement | null
   hovered: Element | null
+  /** The element under the pointer when the button went down. Set until the click that follows, or
+   *  until the button is seen up again without one. */
+  pressed: Element | null
   pending: { resolve: (v: unknown) => void; reject: (e: Error) => void } | null
   onMove: ((e: MouseEvent) => void) | null
   onDown: ((e: MouseEvent) => void) | null
@@ -197,7 +200,7 @@ export function pickerRuntime(): Promise<unknown> {
 
   let S = w[KEY] as PickState | undefined
   if (!S) {
-    S = { overlay: null, box: null, label: null, hovered: null, pending: null, onMove: null, onDown: null, onClick: null, onKey: null, cancel: function () {} }
+    S = { overlay: null, box: null, label: null, hovered: null, pressed: null, pending: null, onMove: null, onDown: null, onClick: null, onKey: null, cancel: function () {} }
     w[KEY] = S
   }
   const state: PickState = S
@@ -209,7 +212,7 @@ export function pickerRuntime(): Promise<unknown> {
     if (state.onKey) window.removeEventListener('keydown', state.onKey, true)
     state.onMove = null; state.onDown = null; state.onClick = null; state.onKey = null
     for (const n of [state.overlay, state.box, state.label]) if (n && n.parentNode) n.parentNode.removeChild(n)
-    state.overlay = null; state.box = null; state.label = null; state.hovered = null
+    state.overlay = null; state.box = null; state.label = null; state.hovered = null; state.pressed = null
   }
 
   state.cancel = function () {
@@ -237,10 +240,21 @@ export function pickerRuntime(): Promise<unknown> {
     document.documentElement.appendChild(label)
     state.overlay = overlay; state.box = box; state.label = label
 
+    const targetAt = function (x: number, y: number): Element | null {
+      const stack = document.elementsFromPoint(x, y)
+      for (let i = 0; i < stack.length; i += 1) if (!ownNode(stack[i], state) && stack[i] !== document.documentElement) return stack[i]
+      return null
+    }
     state.onMove = function (e: MouseEvent) {
-      const stack = document.elementsFromPoint(e.clientX, e.clientY)
-      let target: Element | null = null
-      for (let i = 0; i < stack.length; i += 1) if (!ownNode(stack[i], state) && stack[i] !== document.documentElement) { target = stack[i]; break }
+      // While the button is down the pick is already decided — it is whatever was under the pointer
+      // when it went down — so the box stays there rather than trailing the drag. A press on the
+      // button that ended over the block below used to highlight everything in between and annotate
+      // the block.
+      if (state.pressed) {
+        if (e.buttons & 1) return
+        state.pressed = null // the button came back up somewhere no click followed from
+      }
+      const target = targetAt(e.clientX, e.clientY)
       state.hovered = target
       if (!target || !state.box || !state.label) return
       const r = target.getBoundingClientRect()
@@ -259,11 +273,15 @@ export function pickerRuntime(): Promise<unknown> {
     state.onDown = function (e: MouseEvent) {
       if (e.button !== 0) return
       e.preventDefault()
+      state.pressed = targetAt(e.clientX, e.clientY)
     }
     state.onClick = function (e: MouseEvent) {
       if (e.button !== 0) return
       e.preventDefault(); e.stopPropagation()
-      const target = state.hovered
+      // The element that was pressed, not the one released over. The two differ exactly when the
+      // pointer moved in between, and the press is where the user was aiming.
+      const target = state.pressed || state.hovered
+      state.pressed = null
       const p = state.pending
       if (!target || !p) return
       state.pending = null
