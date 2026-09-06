@@ -190,7 +190,8 @@ git worktree에서 실행할 수 있고, 완료 결과는 상세 화면에서 **
 astera help
 ```
 
-`astera`가 `PATH`에 없다면 `$ASTERA_CLI`의 경로를 사용하세요. 값이 비어 있다면 그 세션은 Astera가
+`astera`가 `PATH`에 없다면 환경변수 `ASTERA_CLI`의 경로를 사용하세요(bash·zsh 에서는 `"$ASTERA_CLI"`,
+PowerShell 에서는 `$env:ASTERA_CLI`). 값이 비어 있다면 그 세션은 Astera가
 시작한 것이 아니거나, 에이전트 오케스트레이션·작업 단위 추적·에이전트 브라우저가 모두 꺼져 있는
 것입니다 — 셋 중 하나만 켜져 있어도 CLI는 심어집니다.
 

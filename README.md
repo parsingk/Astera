@@ -200,7 +200,8 @@ To read the coordinator CLI reference:
 astera help
 ```
 
-If `astera` is not on `PATH`, use the path in `$ASTERA_CLI`. An empty value means the session was not
+If `astera` is not on `PATH`, use the path in the `ASTERA_CLI` environment variable (`"$ASTERA_CLI"` in
+bash or zsh, `$env:ASTERA_CLI` in PowerShell). An empty value means the session was not
 started by Astera, or that Agent orchestration, Work unit tracking and Agent browser are all off — the
 CLI is planted when any one of the three is on.
 
