@@ -3939,3 +3939,37 @@ describe('handleCommand — CLI 인자 경로', () => {
     expect(r.status).toBeGreaterThanOrEqual(400)
   })
 })
+
+describe('browser-js', () => {
+  it('409 when the agent browser is off', async () => {
+    const deps = { ...makeDeps(), browserEnabled: () => false }
+    expect(await call(deps, 'browser-js', { script: 'log(1)' }, 's1')).toEqual({ status: 409, body: { error: 'agent browser is off' } })
+  })
+  it('409 when nothing is wired to run it', async () => {
+    const deps = { ...makeDeps(), browserEnabled: () => true }
+    expect(await call(deps, 'browser-js', { script: 'log(1)' }, 's1')).toEqual({ status: 409, body: { error: 'agent browser is off' } })
+  })
+  it('400 without a script', async () => {
+    const deps = { ...makeDeps(), browserEnabled: () => true, browserRun: async () => ({ ok: true as const, result: { log: [] } }) }
+    expect(await call(deps, 'browser-js', {}, 's1')).toEqual({ status: 400, body: { error: 'script is required' } })
+    expect(await call(deps, 'browser-js', { script: '   ' }, 's1')).toEqual({ status: 400, body: { error: 'script is required' } })
+  })
+  it('200 with the run result, for the calling session', async () => {
+    const seen: string[] = []
+    const deps = {
+      ...makeDeps(),
+      browserEnabled: () => true,
+      browserRun: async (sessionId: string, script: string) => { seen.push(sessionId, script); return { ok: true as const, result: { log: ['hi'] } } }
+    }
+    expect(await call(deps, 'browser-js', { script: "log('hi')" }, 'sess-9')).toEqual({ status: 200, body: { log: ['hi'] } })
+    expect(seen).toEqual(['sess-9', "log('hi')"])
+  })
+  it('passes a failed outcome through with its status', async () => {
+    const deps = { ...makeDeps(), browserEnabled: () => true, browserRun: async () => ({ ok: false as const, status: 409 as const, error: 'a script is already running' }) }
+    expect(await call(deps, 'browser-js', { script: 'log(1)' }, 's1')).toEqual({ status: 409, body: { error: 'a script is already running' } })
+  })
+  it('does not need orchestration to be enabled', async () => {
+    const deps = { ...makeDeps(), enabled: () => false, browserEnabled: () => true, browserRun: async () => ({ ok: true as const, result: { log: [] } }) }
+    expect((await call(deps, 'browser-js', { script: 'log(1)' }, 's1')).status).toBe(200)
+  })
+})
