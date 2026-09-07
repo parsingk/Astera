@@ -112,6 +112,33 @@ describe('guest scripts', () => {
     }
   })
 
+  // fillRuntime's two reason strings cross the stringified-function boundary as data: main matches
+  // one of them by equality and passes the other through into the message the agent — and the browser
+  // guide — reads. A shared constant cannot pin that, because fillRuntime must reference nothing
+  // outside its own body, so the source text of every end that spells the wording is the pin. Reword
+  // any one of the three and this goes red, which is the point: a reword in the guest would otherwise
+  // silently rewrite the agent-facing message, and would drop the equality check into the branch that
+  // produces "fill: #sel is no option has that value".
+  it("fillRuntime's reason strings are spelled the same at every end that depends on them", () => {
+    const runtimeSrc = readFileSync(path.join(HERE, 'guestRuntime.ts'), 'utf8')
+    const helpersSrc = readFileSync(path.join(HERE, '../../main/agentBrowser/helpers.ts'), 'utf8')
+    // The fixture the helpers test feeds in place of the guest's answer. Pinned here too, so that
+    // test is provably asserting the message the real guest would produce.
+    const helpersTestSrc = readFileSync(path.join(HERE, '../../main/agentBrowser/helpers.test.ts'), 'utf8')
+    const NOT_FILLABLE = 'not an input, textarea, select or editable element'
+    const NO_OPTION = 'no option has that value'
+
+    // Matched as the code that carries them, not as bare text: all three files also *discuss* these
+    // strings in comments, and a presence check was satisfied by the prose while the comparison
+    // underneath had been reworded. The variable names are left out so a rename does not go red.
+    expect(runtimeSrc).toContain(`error: '${NOT_FILLABLE}'`)
+    expect(runtimeSrc).toContain(`error: '${NO_OPTION}'`)
+    // helpers.ts matches this one by equality; the other it interpolates untouched.
+    expect(helpersSrc).toContain(`=== '${NO_OPTION}'`)
+    expect(helpersTestSrc).toContain(`error: '${NOT_FILLABLE}'`)
+    expect(helpersTestSrc).toContain(`error: '${NO_OPTION}'`)
+  })
+
   it('selectorOf stays identical to its copy in pickRuntime.ts', () => {
     // Both files carry a "change one copy, change the other" comment; nothing else enforces it.
     const runtimeSrc = readFileSync(path.join(HERE, 'guestRuntime.ts'), 'utf8')

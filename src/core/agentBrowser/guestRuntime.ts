@@ -14,6 +14,13 @@
 //
 // These functions return plain data. Main clamps and redacts it (snapshot.ts) before the script
 // sees it, and main — not the page — decides whether a link may be followed (helpers.ts).
+//
+// One rule for anything added below: a runtime may throw **before** it acts, never after. Main
+// re-sends a script whose reply was lost to a navigation (helpers.ts, `inGuest`) and cannot tell that
+// case from a page throw, so it admits the re-send whenever the guest is navigating — which a meta
+// refresh or a timer redirect can make true for a reason that has nothing to do with this script.
+// None of the five functions here throws after its side effect, so the worst a re-send can do is
+// repeat a read. One that acted and then threw would have its action applied twice.
 
 export interface SnapshotBudgets {
   interactive: number
@@ -131,6 +138,11 @@ export function clickRuntime(sel: string, followLink: boolean): unknown {
   const el = document.querySelector(sel) as HTMLElement | null
   if (!el) return { found: false }
   const a = el.closest('a[href]') as HTMLAnchorElement | null
+  // `a.href` — the resolved DOM property — and not getAttribute('href'), which is security-relevant
+  // rather than incidental: main refuses an href only when it reads as an off-machine http(s)
+  // address, and clicks anything else plainly. A protocol-relative attribute such as `//example.com/x`
+  // is not an http(s) address as written, so reporting the attribute would send that off-machine
+  // navigation past the check; resolved against the document it is one, and is refused.
   if (a && !followLink) return { found: true, href: a.href }
   el.scrollIntoView({ block: 'center', inline: 'center' })
   el.focus()

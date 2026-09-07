@@ -311,6 +311,13 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
           // the ordinary way to spell a button as an anchor — is not a navigation this rule governs:
           // refusing it named no address and gave a reason that was untrue. So only an http(s) href
           // is refused; the rest fall through and are clicked plainly.
+          //
+          // Two things this decision leans on, neither of them visible from here. It needs a
+          // **resolved absolute** address from the guest — clickRuntime sends `a.href`, not the
+          // attribute, and the comment there says why: a protocol-relative `//example.com/x` is not
+          // an http(s) address as written, so the attribute would fall through to the plain click
+          // below. And it reads sanitizeUrl's '' as "not an http(s) address", which is what that
+          // function answers for every other scheme and for anything that does not parse.
           const address = sanitizeUrl(first.href)
           if (address !== '') throw new Error(`click: the link leaves this machine (${address})`)
         }

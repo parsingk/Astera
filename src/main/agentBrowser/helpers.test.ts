@@ -455,6 +455,27 @@ describe('stage1Helpers', () => {
       await expect(h.snapshot()).rejects.toThrow(`snapshot: the page refused the call (${LOST_REPLY})`)
       expect(g.scripts).toHaveLength(1)
     })
+
+    // Two refusals across a navigation: the second is the page's answer and the first is the reply
+    // that was lost, so the second is what the agent must be told. The two messages differ here for
+    // exactly that reason — reporting the first would read as "the page refused" while naming an
+    // error that says nothing about the page's current state.
+    it('reports the second rejection, not the first, when the re-sent script is refused too', async () => {
+      const g = fakeGuest(); const { d } = deps(g)
+      g.answers.push(new Error(LOST_REPLY), new Error('Cannot access contents of the frame'))
+      const send = g.executeJavaScript.bind(g)
+      g.executeJavaScript = async (code: string) => {
+        try {
+          return await send(code)
+        } catch (err) {
+          g.getURL = () => 'http://localhost:5173/next'
+          throw err
+        }
+      }
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { snapshot(): Promise<unknown> }
+      await expect(h.snapshot()).rejects.toThrow('snapshot: the page refused the call (Cannot access contents of the frame)')
+      expect(g.scripts).toHaveLength(2)
+    })
   })
 
   describe('screenshot()', () => {
