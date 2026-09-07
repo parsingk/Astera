@@ -183,11 +183,12 @@ export function BrowserPane({
     ro.observe(stage)
     return () => ro.disconnect()
   }, [])
-  const [pointerFaded, setPointerFaded] = useState(false)
+  /** The `seq` whose arrow has faded. Keyed on the pointer rather than a boolean so an arrow can
+   *  never inherit the fade of the one before it. */
+  const [fadedSeq, setFadedSeq] = useState<number | null>(null)
   useEffect(() => {
     if (!pointer) return
-    setPointerFaded(false)
-    const fade = setTimeout(() => setPointerFaded(true), 1500)
+    const fade = setTimeout(() => setFadedSeq(pointer.seq), 1500)
     return () => clearTimeout(fade)
   }, [pointer?.seq])
   const initialUrl = useRef(tab.url)
@@ -900,7 +901,11 @@ export function BrowserPane({
               aria-hidden="true"
               style={{ left: viewBox.left, top: viewBox.top, width: viewBox.width, height: viewBox.height }}
             />
-            <div className="bp-agent-banner" aria-hidden="true">
+            <div
+              className="bp-agent-banner"
+              aria-hidden="true"
+              style={{ left: viewBox.left + viewBox.width / 2, top: viewBox.top + 8 }}
+            >
               {t('preview.agent.inUse')}
             </div>
           </>
@@ -909,7 +914,7 @@ export function BrowserPane({
           const at = pointerToView(pointer, viewBox)
           return (
             <div
-              className={`bp-agent-cursor${pointerFaded ? ' faded' : ''}`}
+              className={`bp-agent-cursor${pointer.seq === fadedSeq ? ' faded' : ''}`}
               aria-hidden="true"
               style={{ transform: `translate(${at.left}px, ${at.top}px)` }}
             >

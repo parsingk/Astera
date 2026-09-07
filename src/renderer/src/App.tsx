@@ -524,8 +524,9 @@ export default function App(): React.JSX.Element {
   /** Sessions whose agent tab has a script running — the chip's ring. Keyed by session id. */
   const [agentBusy, setAgentBusy] = useState<Record<string, boolean>>({})
   /** The agent's last acted point per session, for BrowserPane's pointer. `seq` increments per event
-   *  so a repeat at the same point still animates. Cleared with the tab (a session with no agent tab
-   *  never reads it). */
+   *  so a repeat at the same point still animates. Cleared when the session's next run starts: the
+   *  point kept from the last run belongs to a page that may be gone, and a helper that outlived a
+   *  Stop can add one after the run ended. */
   const [agentPointer, setAgentPointer] = useState<Record<string, AgentPointerState>>({})
   /** Browser tab id → how many times openBrowserTab reused it. BrowserPane reloads when it changes */
   const [browserNonce, setBrowserNonce] = useState<Record<string, number>>({})
@@ -2837,7 +2838,12 @@ export default function App(): React.JSX.Element {
   // running in it — see CoreEvents' preview:agentTab / preview:agentTabClose / preview:agentBusy.
   useEffect(() => window.api.on('preview:agentTab', ({ sessionId, cwd, url }) => openAgentTabRef.current(sessionId, cwd, url)), [])
   useEffect(() => window.api.on('preview:agentTabClose', ({ sessionId }) => closeAgentTabRef.current(sessionId)), [])
-  useEffect(() => window.api.on('preview:agentBusy', ({ sessionId, busy }) => setAgentBusy((prev) => (busy ? { ...prev, [sessionId]: true } : (({ [sessionId]: _b, ...rest }) => rest)(prev)))), [])
+  useEffect(() => window.api.on('preview:agentBusy', ({ sessionId, busy }) => {
+    setAgentBusy((prev) => (busy ? { ...prev, [sessionId]: true } : (({ [sessionId]: _b, ...rest }) => rest)(prev)))
+    // A run starts with no arrow: see agentPointer's comment. setBusy(true) is sent before the script
+    // runs, over the same ordered channel, so this cannot race the new run's first point.
+    if (busy) setAgentPointer((prev) => (({ [sessionId]: _p, ...rest }) => rest)(prev))
+  }), [])
   useEffect(() => window.api.on('preview:agentPointer', ({ sessionId, x, y, w, h, kind }) => setAgentPointer((prev) => ({ ...prev, [sessionId]: { x, y, w, h, kind, seq: (prev[sessionId]?.seq ?? 0) + 1 } }))), [])
 
   // The selection must never name a run the list no longer holds — with nothing to draw, the Run tab

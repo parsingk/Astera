@@ -101,8 +101,8 @@ The page as text, for reading rather than looking: `title`, `url`, `headings` (w
 button, input, select, textarea, element with a role, and any other element carrying a tabindex other
 than -1 — with its `tag`, a `selector` you can pass to `click()`/`fill()`, its accessible `name`, its
 visible `text`, `disabled`, `href` for links, `value` for an input, textarea or select (the
-current value; a password field has none) and `checked` for a checkbox or radio — then `text`, the
-visible text of the page. Budgets:
+current value; a password field, a checkbox and a radio have none) and `checked` for a checkbox or
+radio — then `text`, the visible text of the page. Budgets:
 200 interactive elements, 150 headings and 80 landmarks — `moreInteractive`, `moreHeadings` and
 `moreLandmarks` say how many more the page has, counted on the page itself rather than in what was
 sent — 8,000 characters of text (ending in `… (N more characters)` when cut), 32,000 characters in

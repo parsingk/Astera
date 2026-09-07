@@ -761,10 +761,11 @@ describe('browserHelpers', () => {
 
     it('a link click reports the second phase, once', async () => {
       const g = fakeGuest(); const { d } = deps(g)
-      g.answers.push({ found: true, href: 'http://localhost:5173/x' })
+      g.answers.push({ found: true, href: 'http://localhost:5173/x', ...point })
       g.answers.push({ found: true, clicked: true, ...point })
       const h = browserHelpers(d, { at: 'script' }) as { click(s: string): Promise<void> }
       await h.click('a')
+      expect(d.points).toHaveLength(1)
       expect(d.points).toEqual([{ x: 10, y: 20, w: 800, h: 600, kind: 'click' }])
     })
 
