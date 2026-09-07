@@ -863,6 +863,7 @@ export const es: Catalog = {
   'preview.agent.running': 'El agente está manejando esta página',
   'preview.agent.stop': 'Detener el script del agente',
   'preview.agent.stopped': 'Script del agente detenido',
+  'preview.agent.inUse': 'El agente está usando tu computadora  ·  Esc para cancelar',
   // BottomPanel, the rail terminal button
   'terminal.rail.open': 'Terminal',
   'terminal.tab.label': 'Terminal {n}',

@@ -18,6 +18,7 @@ import {
 import { useI18n } from '../i18n/I18nProvider'
 import { armScript, badgesScript, cancelScript, chromeScript, highlightScript, type BadgeMarker } from '../lib/pickScripts'
 import { toast } from '../lib/toast'
+import { escStopsAgent, pointerToView, type AgentPointerState } from './agentOverlay'
 import { AnnotationPopover } from './AnnotationPopover'
 import { AnnotationTray } from './AnnotationTray'
 import { ContextMenu, type MenuItem } from './ContextMenu'
@@ -124,6 +125,9 @@ export function BrowserPane({
   tab,
   serverPending,
   navigateNonce,
+  agentRunning,
+  agentTabFocused,
+  pointer,
   onState,
   onFocusPane,
   onOpenExternal,
@@ -138,6 +142,13 @@ export function BrowserPane({
   /** Bumped by App's openBrowserTab when an existing tab is reused: the pane loads `tab.url` again
    *  (a reload when it is already there). 0 at mount, and mount does not navigate on it. */
   navigateNonce: number
+  /** A script is running in this tab's session right now. Draws the in-use frame and banner, and
+   *  arms Esc to stop it. App derives it from agentBusy, the same signal browserSlotDraw keys on. */
+  agentRunning: boolean
+  /** This tab is the shown tab of the focused pane. With `agentRunning`, Esc stops the script. */
+  agentTabFocused: boolean
+  /** Where the agent last acted, if it has. Drawn as the arrow while `agentRunning`. */
+  pointer?: AgentPointerState
   onState: (patch: BrowserStatePatch) => void
   /** A click inside the page never reaches the host DOM (the guest is another process), so the pane
    *  reports the webview's focus event and App focuses the pane from that. */
@@ -152,6 +163,26 @@ export function BrowserPane({
   const { t } = useI18n()
   const viewRef = useRef<WebviewTag | null>(null)
   const stageRef = useRef<HTMLDivElement | null>(null)
+  /** The <webview>'s box relative to the stage. The frame is drawn on it rather than on the stage so
+   *  that a fixed viewport preset, which sizes and centres (and can scale) the view inside the stage,
+   *  gets a frame around the emulated device and not around the empty stage. Re-measured whenever
+   *  either box changes size. */
+  const [viewBox, setViewBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
+  useEffect(() => {
+    const view = viewRef.current
+    const stage = stageRef.current
+    if (!view || !stage) return
+    const measure = (): void => {
+      const v = view.getBoundingClientRect()
+      const s = stage.getBoundingClientRect()
+      setViewBox({ left: v.left - s.left, top: v.top - s.top, width: v.width, height: v.height })
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(view)
+    ro.observe(stage)
+    return () => ro.disconnect()
+  }, [])
   const initialUrl = useRef(tab.url)
   const [address, setAddress] = useState(tab.url)
   const [editing, setEditing] = useState(false)
@@ -623,6 +654,39 @@ export function BrowserPane({
     return () => window.removeEventListener('keydown', onKey, true)
   }, [designMode])
 
+  // Esc cancels the agent, as the banner says. Same listener shape as Design Mode's Escape above:
+  // window, capture phase, and the event is not stopped, so a menu or dialog above still sees it.
+  useEffect(() => {
+    if (!agentRunning || tab.agentSessionId === undefined) return
+    const sid = tab.agentSessionId
+    const escape = { key: 'Escape', altKey: false, ctrlKey: false, metaKey: false, shiftKey: false }
+    const stopIf = (e: { key: string; altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, editable: boolean): void => {
+      // The same rule App's global shortcuts follow: a modal, a menu or a text field owns Escape
+      // first. The address bar of this very pane reverts on Escape and says it is isolated from the
+      // app's shortcuts; without this, that Escape also stopped the script.
+      const keyOwnedElsewhere = Boolean(menuRef.current || sendMenuRef.current) || editable || document.querySelector('.modal-backdrop') !== null
+      if (!escStopsAgent(e, agentRunning, agentTabFocused, keyOwnedElsewhere)) return
+      void window.api.preview.agentStop(sid).then((stopped) => {
+        if (stopped) toast.info(t('preview.agent.stopped'))
+      })
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      const el = e.target as HTMLElement | null
+      const editable = el !== null && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
+      stopIf(e, editable)
+    }
+    // Escape typed inside the page arrives from main (agentBrowser/buffers.ts): the key never reaches
+    // the host DOM. Focus is inside the guest then, so nothing of the host's is the editable target.
+    const offGuest = window.api.on('preview:agentEscape', ({ sessionId }) => {
+      if (sessionId === sid) stopIf(escape, false)
+    })
+    window.addEventListener('keydown', onKey, true)
+    return () => {
+      offGuest()
+      window.removeEventListener('keydown', onKey, true)
+    }
+  }, [agentRunning, agentTabFocused, tab.agentSessionId])
+
   // Badges live in the page, so a reload wipes them; this runs both when the list changes and when a
   // load finishes (see onFinish above).
   const pathOf = (url: string): string => {
@@ -834,6 +898,38 @@ export function BrowserPane({
           partition={PREVIEW_PARTITION}
           style={frame ? { width: frame.width, height: frame.height } : undefined}
         />
+        {agentRunning && viewBox && (
+          <>
+            <div
+              className="bp-agent-frame"
+              aria-hidden="true"
+              style={{ left: viewBox.left, top: viewBox.top, width: viewBox.width, height: viewBox.height }}
+            />
+            <div
+              className="bp-agent-banner"
+              aria-hidden="true"
+              style={{ left: viewBox.left + viewBox.width / 2, top: viewBox.top + 8 }}
+            >
+              {t('preview.agent.inUse')}
+            </div>
+          </>
+        )}
+        {agentRunning && viewBox && (() => {
+          // Before the first click, fill or key press there is no point yet; the arrow waits at the
+          // centre of the page, the way the reference's pointer is simply there while the tool works.
+          const at = pointer
+            ? pointerToView(pointer, viewBox)
+            : { left: viewBox.left + viewBox.width / 2, top: viewBox.top + viewBox.height / 2 }
+          return (
+            <div className="bp-agent-cursor" aria-hidden="true" style={{ transform: `translate(${at.left}px, ${at.top}px)` }}>
+              {pointer && pointer.kind === 'click' && <span key={pointer.seq} className="bp-agent-ripple" />}
+              {/* The tip of the arrow is the point: the path starts at (1,1), scaled 1.5x by the viewBox. */}
+              <svg width="24" height="33" viewBox="0 0 16 22">
+                <path d="M1 1 L1 17 L5.5 12.5 L9 20 L11.5 19 L8 11.5 L14 11.5 Z" fill="#000" stroke="#fff" strokeWidth="1.5" strokeLinejoin="round" />
+              </svg>
+            </div>
+          )
+        })()}
         {error && (
           <div className="bp-overlay">
             {waiting ? (

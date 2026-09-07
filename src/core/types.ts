@@ -577,6 +577,15 @@ export interface CoreEvents {
   'preview:agentTabClose': { sessionId: string }
   /** A script is running (true) or has finished (false) in this session's tab — the chip's ring. */
   'preview:agentBusy': { sessionId: string; busy: boolean }
+  /** The agent acted on a point of its page: a click, a fill or a key press, with the acted element's
+   *  centre in the guest's viewport CSS px and the viewport size at that moment. The renderer draws
+   *  the pointer there (BrowserPane). Fire-and-forget: one for a session with no tab, or after its run
+   *  ended, is dropped. */
+  'preview:agentPointer': { sessionId: string; x: number; y: number; w: number; h: number; kind: 'click' | 'fill' | 'press' }
+  /** Escape was typed inside this session's agent page. The key never reaches the host DOM (the guest
+   *  is another renderer), so main catches it before the page does (agentBrowser/buffers.ts) and the
+   *  renderer applies the same rule it applies to Escape on the host (BrowserPane). */
+  'preview:agentEscape': { sessionId: string }
   'terminal:data': { id: string; data: string } // project terminal output
   'terminal:exit': { id: string; exitCode: number } // shell exited — the renderer removes that tab
   // The Jobs sidebar's whole snapshot, re-sent on every orchestration state change. Small enough to

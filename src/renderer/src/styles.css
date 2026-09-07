@@ -146,6 +146,10 @@
   --accent: #37b0c4; /* active marker and focus (separate from the account colour) */
   /* 액센트 위에 올라가는 글자색. button.primary 가 #0d2b30 으로 박아 쓰던 값이다 */
   --accent-ink: #0d2b30;
+  /* The agent's in-use frame, banner and click ripple (BrowserPane). A violet, deliberately not
+     --accent: "the agent is driving this page" must not read as focus. Named for its role so a
+     change of shade does not leave the name lying. */
+  --agent-accent: #8B5CF6;
   --btn-bg: var(--accent);
   --btn-ink: var(--accent-ink);
   --btn-border: transparent;
@@ -2362,6 +2366,22 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .bp-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 12px; padding: 20px; background: var(--bg); color: var(--text-dim);
   font-size: 13px; text-align: center; }
+/* The agent's in-use UI, the computer-use look scaled to one tab: a frame around the page area, a
+   pill at the top naming the key that cancels. Both are decoration: pointer-events none, so the page
+   underneath keeps every click, and aria-hidden, so a reader never announces them.
+   A solid 3 px edge with a glow fading inward, because the reference is a band of light along the
+   screen's edges, not a line. */
+.bp-agent-frame { position: absolute; pointer-events: none; z-index: 2; border: 0; box-shadow: inset 0 0 0 3px var(--agent-accent), inset 0 0 60px 14px rgba(139, 92, 246, 0.75); }
+.bp-agent-banner { position: absolute; transform: translateX(-50%); pointer-events: none; z-index: 2; background: var(--agent-accent); color: #fff; padding: 4px 12px; border-radius: 999px; font-size: 12px; line-height: 1.4; white-space: nowrap; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); }
+/* The agent's pointer: the reference's arrow, black with a white edge, a violet glow that follows the arrow's own outline (drop-shadow keeps the shape; a circle behind the tip did not), and
+   a ripple on a click. Drawn for the whole run (it unmounts with the frame) because a fade after each
+   action left nothing to see between actions that land milliseconds apart. The transform is the
+   position so the slide is one composited transition. The ripple keyframe is new on purpose: cm-spin
+   is a rotation, this is a scale and fade. */
+.bp-agent-cursor { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 3; transition: transform 160ms ease-out; will-change: transform; }
+.bp-agent-cursor svg { position: relative; display: block; filter: drop-shadow(0 0 3px rgba(139, 92, 246, 0.95)) drop-shadow(0 0 8px rgba(139, 92, 246, 0.8)) drop-shadow(0 0 16px rgba(139, 92, 246, 0.55)); }
+.bp-agent-ripple { position: absolute; left: -18px; top: -18px; width: 36px; height: 36px; border: 2px solid var(--agent-accent); border-radius: 50%; animation: bp-agent-ripple 400ms ease-out forwards; }
+@keyframes bp-agent-ripple { from { transform: scale(0.4); opacity: 0.9; } to { transform: scale(1); opacity: 0; } }
 .bp-spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line);
   border-top-color: var(--accent); animation: cm-spin .6s linear infinite; }
 /* The browser tab's busy ring on the tab bar — the session ring's shape, in the accent colour */

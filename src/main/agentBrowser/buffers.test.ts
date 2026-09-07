@@ -141,6 +141,35 @@ describe('installNetworkCapture', () => {
   })
 })
 
+describe('attachBuffers: Escape typed inside the page', () => {
+  const esc = { type: 'keyDown', key: 'Escape', alt: false, control: false, meta: false, shift: false }
+
+  it('reports Escape alone, once per press, and nothing else', () => {
+    const g = fakeGuest()
+    let n = 0
+    attachBuffers(g, { onEscape: () => { n += 1 } })
+    g.emit('before-input-event', {}, esc)
+    g.emit('before-input-event', {}, { ...esc, type: 'keyUp' })
+    g.emit('before-input-event', {}, { ...esc, key: 'Enter' })
+    g.emit('before-input-event', {}, { ...esc, shift: true })
+    g.emit('before-input-event', {}, { ...esc, control: true })
+    g.emit('before-input-event', {}, { ...esc, alt: true })
+    g.emit('before-input-event', {}, { ...esc, meta: true })
+    expect(n).toBe(1)
+  })
+
+  it('listens only when asked, and lets go on detach', () => {
+    const plain = fakeGuest()
+    attachBuffers(plain)
+    expect(plain.count('before-input-event')).toBe(0)
+    const g = fakeGuest()
+    const b = attachBuffers(g, { onEscape: () => {} })
+    expect(g.count('before-input-event')).toBe(1)
+    b.detach()
+    expect(g.count('before-input-event')).toBe(0)
+  })
+})
+
 // The bookkeeping ipc.ts's register/unregister handlers drive. A leak here is invisible in the app —
 // nothing looks wrong, the process just holds one dead guest's listeners more after every remount —
 // so the two indexes going away together is what these pin down.

@@ -8,7 +8,7 @@ import path from 'node:path'
 import { agentOpenTarget } from '../../core/agentBrowser/urls'
 import type { RunStatus } from '../../core/run/config'
 import type { RunConfig } from '../../core/run/types'
-import { browserHelpers, SYNCHRONOUS_HELPERS, type DevServer, type GuestDriver, type HelperDeps } from './helpers'
+import { browserHelpers, SYNCHRONOUS_HELPERS, type AgentPoint, type DevServer, type GuestDriver, type HelperDeps } from './helpers'
 import type { AgentGuestRegistry, GuestLike } from './registry'
 
 export type RunOutcome =
@@ -24,6 +24,8 @@ export interface RunsDeps {
   requestTab(sessionId: string, cwd: string, url: string): void
   closeTab(sessionId: string): void
   setBusy(sessionId: string, busy: boolean): void
+  /** Forwards a helper's `pointer` call to the renderer with the session it belongs to. */
+  pointer(sessionId: string, p: AgentPoint): void
   /** The dev servers Astera's Run has running for the project at `cwd` — see devServersFor. */
   devServersOf(cwd: string): DevServer[]
   guide: string
@@ -154,6 +156,7 @@ export class AgentBrowserRuns {
       },
       buffers: () => this.deps.buffersOf(sessionId),
       closeTab: () => this.deps.closeTab(sessionId),
+      pointer: (p) => this.deps.pointer(sessionId, p),
       devServers: () => this.deps.devServersOf(cwd),
       guide: this.deps.guide,
       shotsDir: this.deps.shotsDir

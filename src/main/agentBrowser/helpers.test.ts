@@ -1,6 +1,6 @@
 // src/main/agentBrowser/helpers.test.ts
 import { describe, it, expect, vi, afterAll } from 'vitest'
-import { SHOT_TIMEOUT_MS, browserHelpers, SYNCHRONOUS_HELPERS, type GuestDriver, type HelperDeps } from './helpers'
+import { SHOT_TIMEOUT_MS, browserHelpers, SYNCHRONOUS_HELPERS, type AgentPoint, type GuestDriver, type HelperDeps } from './helpers'
 import { Interrupted, WAIT_TIMEOUT_MS } from '../../core/agentBrowser/script'
 import { Ring } from '../../core/agentBrowser/ring'
 import { promises as fs } from 'node:fs'
@@ -67,14 +67,16 @@ const fakeGuest = (): GuestDriver & {
 }
 const deps = (g: ReturnType<typeof fakeGuest> | null) => {
   const buffers = { console: new Ring<{ level: 'error'; message: string; source: string; line: number }>(), network: new Ring<{ url: string; method: string; status?: number }>(), detach() {} }
-  const d: HelperDeps & { closed: number; ensured: string[]; servers: { name: string; url: string; preview: boolean }[] } = {
+  const d: HelperDeps & { closed: number; ensured: string[]; servers: { name: string; url: string; preview: boolean }[]; points: AgentPoint[] } = {
     closed: 0,
     ensured: [],
     servers: [],
+    points: [] as AgentPoint[],
     guest: () => g,
     async ensureGuest(url) { d.ensured.push(url); if (!g) throw new Error('no tab'); return g },
     buffers: () => (g ? buffers : null),
     closeTab() { d.closed += 1 },
+    pointer(p) { d.points.push(p) },
     devServers: () => d.servers,
     guide: '# guide\n## open(url)\nopens\n## reload()\nreloads',
     shotsDir: SHOTS_DIR
@@ -743,6 +745,60 @@ describe('browserHelpers', () => {
       expect(g.scripts[0]).toContain('"Enter")')
       await expect(h.press('')).rejects.toThrow('press: key must be a non-empty string')
       expect(g.scripts).toHaveLength(1)
+    })
+  })
+
+  describe('the pointer', () => {
+    const point = { point: { x: 10, y: 20 }, viewport: { w: 800, h: 600 } }
+
+    it('click reports where it clicked', async () => {
+      const g = fakeGuest(); const { d } = deps(g)
+      g.answers.push({ found: true, clicked: true, ...point })
+      const h = browserHelpers(d, { at: 'script' }) as { click(s: string): Promise<void> }
+      await h.click('#a')
+      expect(d.points).toEqual([{ x: 10, y: 20, w: 800, h: 600, kind: 'click' }])
+    })
+
+    it('a link click reports the second phase, once', async () => {
+      const g = fakeGuest(); const { d } = deps(g)
+      g.answers.push({ found: true, href: 'http://localhost:5173/x', ...point })
+      g.answers.push({ found: true, clicked: true, ...point })
+      const h = browserHelpers(d, { at: 'script' }) as { click(s: string): Promise<void> }
+      await h.click('a')
+      expect(d.points).toHaveLength(1)
+      expect(d.points).toEqual([{ x: 10, y: 20, w: 800, h: 600, kind: 'click' }])
+    })
+
+    it('nothing is reported for a miss, a disabled control or a refused link', async () => {
+      const g = fakeGuest(); const { d } = deps(g)
+      g.answers.push({ found: false })
+      g.answers.push({ found: true, disabled: true })
+      g.answers.push({ found: true, href: 'https://example.com/' })
+      const h = browserHelpers(d, { at: 'script' }) as { click(s: string): Promise<void> }
+      await expect(h.click('#a')).rejects.toThrow('nothing matches')
+      await expect(h.click('#b')).rejects.toThrow('is disabled')
+      await expect(h.click('#c')).rejects.toThrow('leaves this machine')
+      expect(d.points).toEqual([])
+    })
+
+    it('fill and press report their kinds, and a fill error reports nothing', async () => {
+      const g = fakeGuest(); const { d } = deps(g)
+      g.answers.push({ found: true, filled: true, ...point })
+      g.answers.push({ pressed: true, target: 'input#q', ...point })
+      g.answers.push({ found: true, error: 'no option has that value' })
+      const h = browserHelpers(d, { at: 'script' }) as { fill(s: string, t: string): Promise<void>; press(k: string): Promise<void> }
+      await h.fill('#q', 'x')
+      await h.press('Enter')
+      await expect(h.fill('#sel', 'zzz')).rejects.toThrow('no option')
+      expect(d.points.map((p) => p.kind)).toEqual(['fill', 'press'])
+    })
+
+    it('an answer with no point is fine: nothing is reported and nothing throws', async () => {
+      const g = fakeGuest(); const { d } = deps(g)
+      g.answers.push({ found: true, clicked: true })
+      const h = browserHelpers(d, { at: 'script' }) as { click(s: string): Promise<void> }
+      await h.click('#a')
+      expect(d.points).toEqual([])
     })
   })
 

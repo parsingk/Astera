@@ -148,9 +148,28 @@ describe('guest scripts', () => {
   // the one rule in snapshotRuntime that no other end can check. Main's redaction is no help: a
   // password a person chose looks like ordinary text to it, and the design lets the user type in the
   // agent's tab. So the code that carries the rule is the pin, matched as code and not as prose.
-  it('snapshotRuntime reads no value from a password field', () => {
+  it('snapshotRuntime reads a value only on the value branch, and never a password\'s', () => {
     const runtimeSrc = readFileSync(path.join(HERE, 'guestRuntime.ts'), 'utf8')
-    expect(runtimeSrc).toContain("el.type === 'password' ? ''")
+    // The text path must not read values at all any more; the value branch excludes a password.
+    expect(runtimeSrc).not.toContain(": el.value) : el.textContent")
+    expect(runtimeSrc).toContain("else if (el.type !== 'password') entry.value = el.value")
+  })
+
+  // Same reason as the pin above: no DOM here, and this is the field the agent uses to check its
+  // own fill(). Matched as code, not prose.
+  it('snapshotRuntime reports a control\'s value and a checkbox\'s state, never a password\'s value', () => {
+    const runtimeSrc = readFileSync(path.join(HERE, 'guestRuntime.ts'), 'utf8')
+    expect(runtimeSrc).toContain("if (el.type === 'checkbox' || el.type === 'radio') entry.checked = el.checked")
+    expect(runtimeSrc).toContain("else if (el.type !== 'password') entry.value = el.value")
+  })
+
+  // The renderer draws the agent's pointer where these say. Three runtimes, three identical
+  // measurements: each is inlined because a shared helper would be a module-scope reference the
+  // injected function cannot carry.
+  it('click, fill and press each report the acted element\'s centre and the viewport size', () => {
+    const runtimeSrc = readFileSync(path.join(HERE, 'guestRuntime.ts'), 'utf8')
+    const measure = "point: { x: r.left + r.width / 2, y: r.top + r.height / 2 }, viewport: { w: window.innerWidth, h: window.innerHeight }"
+    expect(runtimeSrc.split(measure).length - 1).toBe(3)
   })
 
   // Same reason as the password pin above: no DOM here, and the distinction is invisible from any
