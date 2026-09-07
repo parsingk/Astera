@@ -17,19 +17,10 @@
 
 </div>
 
-Astera is a desktop workbench for long-running Claude Code and Codex work. Keep several sessions
-moving without staying at the desk: schedule them, switch accounts when a usage limit lands, and
-resume the same work. Concurrent sessions stay isolated in their own git worktrees, and Slack keeps
-the loop open from your phone. When the work has dependencies, a Job coordinates tasks across both
-vendors, checks the result, and waits when a human decision is needed.
-
-> **Status:** Windows, macOS and Linux. It drives the `claude` and `codex` CLIs, so it is only as
-> capable as whichever of those you have installed.
-
 ## What it does
 
 **Project workspaces**
-- Many `claude` / `codex` sessions in one window, as tabs and as split panes
+- Multiple `claude` / `codex` sessions, worked on across split panes
 - A terminal per project
 
 **Accounts**

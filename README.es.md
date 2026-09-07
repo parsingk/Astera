@@ -17,21 +17,10 @@
 
 </div>
 
-Astera ejecuta tus sesiones de agente cuando no estás en el escritorio. Programa una para que empiece
-a las 3 de la mañana y arrancará sin ti. Cuando cualquier sesión alcanza un límite de uso —programada
-o no—, Astera lee la hora de reinicio en la transcripción, cambia a tu siguiente cuenta y retoma el
-*mismo* trabajo. Slack te avisa cuando termina un turno o se alcanza un límite. Las sesiones conviven
-en una sola ventana, cada una aislada en su propio worktree de git. Y un trabajo de una docena de
-pasos puede organizarse como un Job y ejecutarse desde la barra lateral de Jobs, o dejarse en manos
-de una coordinadora mediante la skill `/astera-orchestration`.
-
-> **Estado:** Windows, macOS y Linux. Ejecuta las CLI de `claude` y `codex`, así que solo llega tan lejos
-> como la que tengas instalada.
-
 ## Qué hace
 
 **Sesiones**
-- Muchas sesiones de `claude` / `codex` en una ventana, como pestañas y como paneles divididos
+- Varias sesiones `claude` / `codex`, trabajadas en paneles divididos
 - Una terminal por proyecto
 
 **Cuentas**
@@ -104,6 +93,25 @@ de una coordinadora mediante la skill `/astera-orchestration`.
   la **cuenta para explicaciones** que las escribirá. No se aplica a las sesiones que ya están
   abiertas: funciona a partir de las sesiones nuevas
 - Solo se registra el trabajo hecho después de activar la función en los ajustes
+
+**Navegador del agente (experimental)**
+- La agente de la sesión tiene una pestaña de vista previa propia y la maneja ella misma: abre una
+  página del servidor de desarrollo de este proyecto, la recarga tras un cambio, lee su dirección y su
+  título, y vuelve a leer lo que la consola y la red registraron desde esa carga
+- La maneja enviando un pequeño script de JavaScript — `astera browser js --file check.js` — cuyo único
+  vocabulario son esos helpers. "¿Sigue pintándose la página y está limpia la consola?" pasa a ser algo
+  que la agente responde mirando, en vez de algo que te pide comprobar
+- La pestaña es una pestaña real de tu ventana, marcada como de la agente y mostrada como ocupada
+  mientras corre un script. Puedes mirarla, y hacer clic dentro no molesta: el siguiente script ve la
+  página tal como la dejaste
+- **Solo esta máquina.** `open()` acepta `localhost`, `127.x`, `[::1]`, `*.localhost` y las dos
+  direcciones comodín; cualquier otra se rechaza, igual que un enlace de la página —o una redirección
+  del servidor de desarrollo— que quiera salir
+- Un script a la vez por sesión, 60 segundos por script. La pestaña se cierra con su sesión
+- Por ahora solo lee: sin clics, escritura ni capturas. Eso llega en etapas posteriores
+- Desactivado por defecto. Activa **Navegador del agente** en la configuración e instalará la skill
+  `astera-browser` en tus cuentas, como hacen las otras dos funciones con las suyas. No se aplica a las
+  sesiones ya abiertas: solo las nuevas la reciben
 
 **Editor y atajos**
 - Una tecla muestra y oculta el explorador: `Ctrl`/`Cmd`+`Shift`+`E` para el árbol de archivos, la
@@ -193,9 +201,11 @@ Para leer la referencia de la CLI de coordinación:
 astera help
 ```
 
-Si `astera` responde `command not found`, la ruta absoluta está en `$ASTERA_CLI`: son el mismo
-programa. Un `$ASTERA_CLI` vacío significa que la sesión no la inició Astera, o que la Orquestación
-de agentes está desactivada.
+Si `astera` responde `command not found`, usa la ruta de la variable de entorno `ASTERA_CLI`
+(`"$ASTERA_CLI"` en bash o zsh, `$env:ASTERA_CLI` en PowerShell): son el mismo programa. Un valor vacío
+significa que la sesión no la inició Astera, o que la Orquestación de agentes, el Seguimiento de
+unidades de trabajo y el Navegador del agente están todos desactivados — la CLI se instala cuando
+cualquiera de los tres está activo.
 
 ## Instalación
 
