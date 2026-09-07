@@ -10,7 +10,12 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 /** The names this module's two source files declare or import at module scope: a function body that
  *  mentions any of them (other than its own name) is reaching outside itself, and would be
  *  `undefined` in the guest. Parsed from the source text rather than hand-maintained, so it stays
- *  right when either file changes. */
+ *  right when either file changes.
+ *
+ *  Two things it cannot see: `import x from` and `import * as x` (only the braces form is matched),
+ *  and minifier output, because these tests read the sources unbundled. Neither is reachable today —
+ *  both files import names only — so this is a warning for whoever adds the first default or
+ *  namespace import to either of them. */
 function moduleScopeNames(src: string): Set<string> {
   const names = new Set<string>()
   for (const line of src.split('\n')) {

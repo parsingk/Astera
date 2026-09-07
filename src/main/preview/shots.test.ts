@@ -38,9 +38,15 @@ describe('shots', () => {
     const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000)
     await fs.utimes(old, eightDaysAgo, eightDaysAgo)
     await savePng(image(10, 10), dir)
-    // eviction is fire-and-forget; give it a turn
-    await new Promise((r) => setTimeout(r, 50))
-    const left = await fs.readdir(dir)
+    // Eviction is fire-and-forget, so it lands some time after savePng resolves. Polled for rather
+    // than slept on: a fixed 50 ms is a bet on the machine not being busy, and losing that bet fails
+    // a test about eviction for a reason that has nothing to do with eviction.
+    const deadline = Date.now() + 5_000
+    let left = await fs.readdir(dir)
+    while (left.includes('old.png') && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10))
+      left = await fs.readdir(dir)
+    }
     expect(left).not.toContain('old.png')
     expect(left.filter((n) => n.endsWith('.png'))).toHaveLength(1)
   })
