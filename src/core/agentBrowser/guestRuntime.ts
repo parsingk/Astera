@@ -128,26 +128,25 @@ export function snapshotRuntime(budgets: SnapshotBudgets): unknown {
     if (!visible(el)) return
     interactiveCount += 1
     if (interactive.length >= budgets.interactive) return
-    // A password field is listed like any other — the agent has to know it is there — but its value
-    // is never read. The redaction main applies cannot help here: a password a person chose looks
-    // like ordinary text to it, and the design lets the user type in the agent's tab, so this would
-    // be their own password on its way into the agent's context and its provider's logs. Design Mode
-    // has no such exposure (pickRuntime.ts reads attributes, where a typed value never appears).
-    const value = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ? (el.type === 'password' ? '' : el.value) : el.textContent || ''
+    // An input or textarea has no text of its own: its content is its value, reported as `value`
+    // below. Reporting it here as well made a form-heavy page pay twice for its largest strings, and
+    // the total budget then shed page text and headings sooner.
+    const text = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ? '' : el.textContent || ''
     const entry: Record<string, unknown> = {
       tag: el.tagName,
       selector: selectorOf(el).slice(0, budgets.selector),
       name: nameOf(el).slice(0, budgets.name),
-      text: value.replace(/\s+/g, ' ').trim().slice(0, budgets.name),
+      text: text.replace(/\s+/g, ' ').trim().slice(0, budgets.name),
       disabled: (el as HTMLButtonElement).disabled === true || el.getAttribute('aria-disabled') === 'true'
     }
     const role = el.getAttribute('role')
     if (role) entry.role = role
     if (el instanceof HTMLAnchorElement) entry.href = el.href
-    // The current state of a form control, so the agent can check a fill() it just made without a
-    // screenshot. A password's value is never read (the comment above says why); its checkbox and
-    // radio siblings report `checked` rather than a value. `text` keeps its meaning, so a select
-    // still lists its option texts and `value` says which one is chosen.
+    // A password field is listed like any other — the agent has to know it is there — but its value
+    // is never read. The redaction main applies cannot help here: a password a person chose looks
+    // like ordinary text to it, and the design lets the user type in the agent's tab, so this would
+    // be their own password on its way into the agent's context and its provider's logs. Design Mode
+    // has no such exposure (pickRuntime.ts reads attributes, where a typed value never appears).
     if (el instanceof HTMLInputElement) {
       if (el.type === 'checkbox' || el.type === 'radio') entry.checked = el.checked
       else if (el.type !== 'password') entry.value = el.value

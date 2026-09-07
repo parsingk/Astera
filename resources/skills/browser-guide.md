@@ -100,7 +100,7 @@ The page as text, for reading rather than looking: `title`, `url`, `headings` (w
 (nav, main, header, footer, aside, form, each with a one-line summary), `interactive` — every link,
 button, input, select, textarea, element with a role, and any other element carrying a tabindex other
 than -1 — with its `tag`, a `selector` you can pass to `click()`/`fill()`, its accessible `name`, its
-visible `text`, `disabled`, `href` for links, `value` for an input, textarea or select (the
+visible `text` (an input or textarea has none; read its `value`), `disabled`, `href` for links, `value` for an input, textarea or select (the
 current value; a password field, a checkbox and a radio have none) and `checked` for a checkbox or
 radio — then `text`, the visible text of the page. Budgets:
 200 interactive elements, 150 headings and 80 landmarks — `moreInteractive`, `moreHeadings` and
