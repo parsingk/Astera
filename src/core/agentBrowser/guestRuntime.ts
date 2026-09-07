@@ -167,6 +167,11 @@ export function snapshotRuntime(budgets: SnapshotBudgets): unknown {
 export function clickRuntime(sel: string, followLink: boolean): unknown {
   const el = document.querySelector(sel) as HTMLElement | null
   if (!el) return { found: false }
+  // el.click() on a disabled control dispatches nothing at all, so answering `clicked` for one would
+  // be a false success — the agent spends a round wondering why the page did not change. Checked
+  // before the link below because a disabled control does not reach an enclosing link either: a
+  // browser dispatches no click event for it, so there is nothing to follow.
+  if ((el as HTMLButtonElement).disabled === true) return { found: true, disabled: true }
   const a = el.closest('a[href]') as HTMLAnchorElement | null
   // `a.href` — the resolved DOM property — and not getAttribute('href'), which is security-relevant
   // rather than incidental: main refuses an href only when it reads as an off-machine http(s)
@@ -174,9 +179,6 @@ export function clickRuntime(sel: string, followLink: boolean): unknown {
   // is not an http(s) address as written, so reporting the attribute would send that off-machine
   // navigation past the check; resolved against the document it is one, and is refused.
   if (a && !followLink) return { found: true, href: a.href }
-  // el.click() on a disabled control dispatches nothing at all, so answering `clicked` for one would
-  // be a false success — the agent spends a round wondering why the page did not change.
-  if ((el as HTMLButtonElement).disabled === true) return { found: true, disabled: true }
   el.scrollIntoView({ block: 'center', inline: 'center' })
   el.focus()
   el.click()
