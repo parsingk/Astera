@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, type CSSProperties } from 'react'
 import type { Account, RollStateEvent, SchedStateEvent, SessionInfo } from '../../../core/types'
 import {
   MAX_PANES,
@@ -17,6 +17,7 @@ import { parseTab, sessionTab } from '../../../core/panes/tabId'
 import { tabLabels } from '../../../core/files/tabLabel'
 import type { RecordStatus } from '../../../core/understanding/types'
 import { displayHostOf } from '../../../core/preview/url'
+import { browserSlotDraw } from './browserSlot'
 import { useI18n } from '../i18n/I18nProvider'
 import { TerminalView } from './TerminalView'
 import { RECORD_GLYPH, RECORD_GLYPH_COLOR } from './UnderstandingIcons'
@@ -243,25 +244,36 @@ export function PaneGrid({
         )
       })}
       {/* Browser slots — the session-slot rule: one per tab for the tab's whole life, display:none unless
-          active. The page inside keeps its scroll and its state across a tab switch that way */}
+          active. The page inside keeps its scroll and its state across a tab switch that way.
+          The exception is the agent's tab while its script runs: it is placed and drawn like the shown
+          one but made invisible, because a page Chromium is not drawing cannot be screenshotted — see
+          browserSlot.ts for the whole reason */}
       {browserTabs.map((b) => {
         const pane = paneOfBrowser.get(b.id)
         const visible = pane != null && pane.activeTabId === b.id
         const rect = pane ? rects.get(pane.id) : undefined
+        const draw = browserSlotDraw(b, visible, agentBusy)
+        const place: CSSProperties | undefined = rect
+          ? {
+              display: 'flex',
+              left: `${rect.x}%`,
+              width: `${rect.w}%`,
+              top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
+              height: `calc(${rect.h}% - var(--pane-tabbar-h))`
+            }
+          : undefined
         return (
           <div
             key={b.id}
             className="terminal-slot"
             style={
-              visible && rect
-                ? {
-                    display: 'flex',
-                    left: `${rect.x}%`,
-                    width: `${rect.w}%`,
-                    top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
-                    height: `calc(${rect.h}% - var(--pane-tabbar-h))`
-                  }
-                : { display: 'none' }
+              place && draw === 'shown'
+                ? place
+                : place && draw === 'drawn'
+                  ? // Invisible and click-through: the tab the user is looking at is underneath and
+                    // keeps every event, so nothing about their pane changes while the agent works.
+                    { ...place, opacity: 0, pointerEvents: 'none' }
+                  : { display: 'none' }
             }
             onMouseDown={() => pane && onFocusPane(pane.id)}
           >

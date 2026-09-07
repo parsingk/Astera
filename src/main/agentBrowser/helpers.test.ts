@@ -512,7 +512,7 @@ describe('stage1Helpers', () => {
         g.capturePage = () => new Promise(() => {})
         const h = stage1Helpers(d, { at: 'script' }, createLog()) as { screenshot(): Promise<unknown> }
         const p = h.screenshot()
-        const settled = expect(p).rejects.toThrow('screenshot: the page did not paint within 5 s — is the window visible?')
+        const settled = expect(p).rejects.toThrow('screenshot: the page did not paint within 5 s — the window may be minimised')
         await vi.advanceTimersByTimeAsync(SHOT_TIMEOUT_MS + 1)
         await settled
       } finally {
@@ -535,11 +535,38 @@ describe('stage1Helpers', () => {
       expect(g.shots).toBe(1)
     })
 
-    it('an empty capture is an error, not a zero-byte file', async () => {
+    // A background tab's page is not drawn at all, and capturePage cannot photograph what is not
+    // being drawn: it answers a zero-size image, or a viz error, or nothing. The renderer draws the
+    // tab invisibly while a script runs, and a guest that has just started producing frames answers
+    // with both of those for a frame or two — so both mean "not yet" here.
+    it('retries an empty frame and a viz error until the first real frame lands', async () => {
       const g = fakeGuest(); const { d } = deps(g)
-      g.capturePage = async () => ({ getSize: () => ({ width: 0, height: 0 }), toPNG: () => Buffer.alloc(0) })
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { screenshot(): Promise<unknown> }
-      await expect(h.screenshot()).rejects.toThrow('screenshot: the capture came back empty')
+      let calls = 0
+      g.capturePage = async () => {
+        calls += 1
+        if (calls === 1) return { getSize: () => ({ width: 0, height: 0 }), toPNG: () => Buffer.alloc(0) }
+        if (calls === 2) throw new Error('UnknownVizError')
+        return { getSize: () => ({ width: 800, height: 600 }), toPNG: () => Buffer.from('png') }
+      }
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { screenshot(): Promise<{ width: number }> }
+      const r = await h.screenshot()
+      expect(calls).toBe(3)
+      expect(r.width).toBe(800)
+    })
+
+    it('fails at the deadline when no frame ever has pixels', async () => {
+      vi.useFakeTimers()
+      try {
+        const g = fakeGuest(); const { d } = deps(g)
+        g.capturePage = async () => ({ getSize: () => ({ width: 0, height: 0 }), toPNG: () => Buffer.alloc(0) })
+        const h = stage1Helpers(d, { at: 'script' }, createLog()) as { screenshot(): Promise<unknown> }
+        const p = h.screenshot()
+        const settled = expect(p).rejects.toThrow('screenshot: the page did not paint within 5 s — the window may be minimised')
+        await vi.advanceTimersByTimeAsync(SHOT_TIMEOUT_MS + 1)
+        await settled
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 

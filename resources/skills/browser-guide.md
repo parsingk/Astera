@@ -13,6 +13,12 @@ into it; that is fine — your next script sees the page as it is.
 - **This machine only.** `open()` accepts `localhost`, `127.x`, `[::1]`, `*.localhost`, `0.0.0.0`
   and `[::]` (the last two become `localhost`). Anything else is refused, and so is a link on the
   page that would leave.
+- **This tab is your screen.** It is yours: it opens in the background, it is drawn while your
+  script runs, and the person using Astera keeps the tab and the window they were on. So read the
+  page with `snapshot()` and photograph it with `screenshot()`, and do not reach for anything that
+  drives the computer instead — a desktop or window screenshot, a mouse or keyboard tool, a second
+  browser. Those capture the person's screen, not your page, and everything else that is on it. If a
+  helper here fails, report what it said and stop; that failure is the answer.
 - **`log(value)` is the only output.** Strings print as they are, anything else as JSON, in order.
   There is no `console` in the script's world, so `console.log(x)` does not print nothing — it throws
   `Cannot read properties of undefined (reading 'log')` and ends the run. A thrown error ends the
@@ -104,11 +110,15 @@ becomes `[redacted]` and the element stays; a secret-looking word in the free te
 Throws `snapshot: the page returned nothing readable` when the page gave back nothing usable.
 
 ## screenshot()
-The visible page as a PNG: `{ path, width, height }`. The file is under Astera's own data folder and
-your session may read it without asking — open the path to look at it. Throws
-`screenshot: the page did not paint within 5 s — is the window visible?` when the browser is not
-painting the tab (the window minimised, or fully covered), and `screenshot: the capture came back empty`
-for a tab with no pixels.
+The page as a PNG: `{ path, width, height }`. The file is under Astera's own data folder and your
+session may read it without asking — open the path to look at it. Only your page is in it, never
+Astera's window and never the rest of the screen.
+
+Your tab is drawn while your script runs, so a capture normally answers in well under a second; a
+first one right after `open()` may take a moment longer while the page starts producing frames. It
+throws `screenshot: the page did not paint within 5 s — the window may be minimised` when no frame
+arrives, which on a minimised window is what happens. That is a real answer: say so rather than
+looking for another way to take a picture.
 
 ## click(sel)
 Clicks the first element matching the CSS selector, scrolling it into view first. Throws

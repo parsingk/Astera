@@ -28,8 +28,9 @@ export interface GuestDriver {
   /** Runs an expression in the page and resolves with its value. Rejects while the frame is
    *  navigating, and when the page throws. */
   executeJavaScript(code: string): Promise<unknown>
-  /** The visible page as an image. Never settles while the guest is not painting (window minimised
-   *  or fully covered) — callers race it. */
+  /** The visible page as an image. Only a page that is being **drawn** can be photographed, and a
+   *  guest whose tab is in the background is not drawn at all: the answer is then a zero-size image,
+   *  a viz error, or nothing at all — so callers make the tab paintable, retry, and race it. */
   capturePage(): Promise<CapturedImage>
 }
 
@@ -68,10 +69,15 @@ export interface HelperDeps {
 
 const NO_PAGE = 'no page open — call open(url) first'
 
-/** How long a screenshot may take before it is called off. capturePage does not settle at all while
- *  the guest is not painting — the window minimised, or fully covered by another — measured at 7.8 s
- *  pending in Design Mode; the script deadline would end the run eventually, but this names the cause. */
+/** How long a screenshot may take before it is called off. Measured in Electron 41.7.1 on Windows:
+ *  a guest made paintable answers on the first or second try, 17-166 ms — but one made paintable
+ *  while the window is **minimised** held a single capturePage pending for 100 s before answering.
+ *  The script deadline would end such a run eventually; this names the cause instead. */
 export const SHOT_TIMEOUT_MS = 5_000
+
+/** How long to wait before asking for another frame. A guest that has just been made paintable
+ *  answers UnknownVizError, or an image with no pixels, for a frame or two first. */
+const SHOT_RETRY_MS = 50
 
 const refused = (at: string, err: unknown): Error =>
   new Error(`${at}: the page refused the call (${err instanceof Error ? err.message : String(err)})`)
@@ -107,6 +113,38 @@ function loadSettles(g: GuestDriver, at: string): Promise<void> {
   // re-arming itself against the guest for the rest of the session — the same reason loadEnds
   // removes its listeners on every exit path.
   return withTimeout(settled, WAIT_TIMEOUT_MS, at).finally(() => clearTimeout(timer))
+}
+
+/** Asks the guest for frames until one has pixels, or the deadline passes.
+ *
+ *  Only a page that is being **drawn** can be photographed, and the agent's tab is a background tab
+ *  by design — the agent must never take the tab or the window the user is on. The renderer answers
+ *  that by drawing the tab, invisibly, for as long as a script is running (PaneGrid's browser slots),
+ *  so by the time a script calls screenshot() the page is usually already producing frames. It is not
+ *  always: a guest that has just become paintable answers UnknownVizError, or an image with no
+ *  pixels, for a frame or two first — measured in Electron 41.7.1 on Windows, where a guest inside a
+ *  display:none slot answers 0x0 for as long as it stays there (stayHidden makes no difference and a
+ *  frame subscription delivers no frames at all), and one just made paintable answered on the first
+ *  or second try, 17-166 ms. So a viz error and an empty frame are both "not yet", not failures.
+ *
+ *  Every capturePage is raced separately against what is left of the deadline: a single call can hang
+ *  far past it — 100 s, measured, for a guest made paintable while the window was minimised — and a
+ *  loop that only checked the clock between calls would sit inside that one call. */
+async function firstFrame(g: GuestDriver, at: string): Promise<CapturedImage> {
+  const deadline = Date.now() + SHOT_TIMEOUT_MS
+  for (;;) {
+    const left = deadline - Date.now()
+    if (left <= 0) throw new Interrupted(at, `${at} did not finish within ${SHOT_TIMEOUT_MS} ms`)
+    try {
+      const image = await withTimeout(g.capturePage(), left, at)
+      const { width, height } = image.getSize()
+      if (width > 0 && height > 0) return image
+    } catch (err) {
+      // The deadline is the one rejection that ends this; anything else the guest says is "not yet".
+      if (err instanceof Interrupted) throw err
+    }
+    await new Promise((r) => setTimeout(r, SHOT_RETRY_MS))
+  }
 }
 
 /** Runs one guest-side script for a helper. Waits for a load in progress first — executeJavaScript
@@ -317,15 +355,16 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
       if (g.isLoading()) await loadSettles(g, 'screenshot')
       let image: CapturedImage
       try {
-        image = await withTimeout(g.capturePage(), SHOT_TIMEOUT_MS, 'screenshot')
+        image = await firstFrame(g, 'screenshot')
       } catch (err) {
-        // Interrupted here is this helper's own deadline, not a Stop: a guest that is not painting
-        // never answers at all, so the message names that cause rather than saying "timed out". The
-        // deadline is interpolated so changing SHOT_TIMEOUT_MS cannot leave the message lying.
-        if (err instanceof Interrupted) throw new Error(`screenshot: the page did not paint within ${SHOT_TIMEOUT_MS / 1000} s — is the window visible?`)
+        // Interrupted here is this helper's own deadline, not a Stop. The deadline is interpolated so
+        // changing SHOT_TIMEOUT_MS cannot leave the message lying.
+        if (err instanceof Interrupted) throw new Error(`screenshot: the page did not paint within ${SHOT_TIMEOUT_MS / 1000} s — the window may be minimised`)
         throw err
       }
       const saved = await savePng(image, deps.shotsDir)
+      // savePng answers null for an image with no pixels, which is the one thing firstFrame does not
+      // return — so this is the type narrowing rather than a state a capture can reach.
       if (!saved) throw new Error('screenshot: the capture came back empty')
       return saved
     },
