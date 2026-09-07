@@ -146,6 +146,10 @@
   --accent: #37b0c4; /* active marker and focus (separate from the account colour) */
   /* 액센트 위에 올라가는 글자색. button.primary 가 #0d2b30 으로 박아 쓰던 값이다 */
   --accent-ink: #0d2b30;
+  /* The agent's in-use frame, banner and click ripple (BrowserPane). A violet, deliberately not
+     --accent: "the agent is driving this page" must not read as focus. Named for its role so a
+     change of shade does not leave the name lying. */
+  --agent-accent: #8B5CF6;
   --btn-bg: var(--accent);
   --btn-ink: var(--accent-ink);
   --btn-border: transparent;
@@ -2362,6 +2366,11 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .bp-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 12px; padding: 20px; background: var(--bg); color: var(--text-dim);
   font-size: 13px; text-align: center; }
+/* The agent's in-use UI, the computer-use look scaled to one tab: a frame around the page area, a
+   pill at the top naming the key that cancels. Both are decoration: pointer-events none, so the page
+   underneath keeps every click, and aria-hidden, so a reader never announces them. */
+.bp-agent-frame { position: absolute; pointer-events: none; z-index: 2; border: 3px solid var(--agent-accent); border-radius: inherit; box-shadow: inset 0 0 0 1px rgba(139, 92, 246, 0.35); }
+.bp-agent-banner { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); pointer-events: none; z-index: 2; background: var(--agent-accent); color: #fff; padding: 4px 12px; border-radius: 999px; font-size: 12px; line-height: 1.4; white-space: nowrap; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); }
 .bp-spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line);
   border-top-color: var(--accent); animation: cm-spin .6s linear infinite; }
 /* The browser tab's busy ring on the tab bar — the session ring's shape, in the accent colour */

@@ -124,6 +124,7 @@ export function BrowserPane({
   tab,
   serverPending,
   navigateNonce,
+  agentRunning,
   onState,
   onFocusPane,
   onOpenExternal,
@@ -138,6 +139,9 @@ export function BrowserPane({
   /** Bumped by App's openBrowserTab when an existing tab is reused: the pane loads `tab.url` again
    *  (a reload when it is already there). 0 at mount, and mount does not navigate on it. */
   navigateNonce: number
+  /** A script is running in this tab's session right now. Draws the in-use frame and banner, and
+   *  arms Esc to stop it. App derives it from agentBusy, the same signal browserSlotDraw keys on. */
+  agentRunning: boolean
   onState: (patch: BrowserStatePatch) => void
   /** A click inside the page never reaches the host DOM (the guest is another process), so the pane
    *  reports the webview's focus event and App focuses the pane from that. */
@@ -152,6 +156,26 @@ export function BrowserPane({
   const { t } = useI18n()
   const viewRef = useRef<WebviewTag | null>(null)
   const stageRef = useRef<HTMLDivElement | null>(null)
+  /** The <webview>'s box relative to the stage. The frame is drawn on it rather than on the stage so
+   *  that a fixed viewport preset, which sizes and centres (and can scale) the view inside the stage,
+   *  gets a frame around the emulated device and not around the empty stage. Re-measured whenever
+   *  either box changes size. */
+  const [viewBox, setViewBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
+  useEffect(() => {
+    const view = viewRef.current
+    const stage = stageRef.current
+    if (!view || !stage) return
+    const measure = (): void => {
+      const v = view.getBoundingClientRect()
+      const s = stage.getBoundingClientRect()
+      setViewBox({ left: v.left - s.left, top: v.top - s.top, width: v.width, height: v.height })
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(view)
+    ro.observe(stage)
+    return () => ro.disconnect()
+  }, [])
   const initialUrl = useRef(tab.url)
   const [address, setAddress] = useState(tab.url)
   const [editing, setEditing] = useState(false)
@@ -834,6 +858,18 @@ export function BrowserPane({
           partition={PREVIEW_PARTITION}
           style={frame ? { width: frame.width, height: frame.height } : undefined}
         />
+        {agentRunning && viewBox && (
+          <>
+            <div
+              className="bp-agent-frame"
+              aria-hidden="true"
+              style={{ left: viewBox.left, top: viewBox.top, width: viewBox.width, height: viewBox.height }}
+            />
+            <div className="bp-agent-banner" aria-hidden="true">
+              {t('preview.agent.inUse')}
+            </div>
+          </>
+        )}
         {error && (
           <div className="bp-overlay">
             {waiting ? (

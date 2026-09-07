@@ -2484,6 +2484,7 @@ export default function App(): React.JSX.Element {
         tab={b}
         serverPending={serverPending}
         navigateNonce={browserNonce[b.id] ?? 0}
+        agentRunning={b.agentSessionId !== undefined && agentBusy[b.agentSessionId] === true}
         onState={(patch) => onBrowserState(b.id, patch)}
         onFocusPane={() => {
           const cur = layoutRef.current

@@ -943,6 +943,7 @@ export const ko = {
   'preview.agent.running': '에이전트가 이 페이지를 조작하고 있습니다',
   'preview.agent.stop': '에이전트 스크립트 중단',
   'preview.agent.stopped': '에이전트 스크립트를 중단했습니다',
+  'preview.agent.inUse': 'Astera가 컴퓨터를 사용 중입니다  ·  Esc로 취소',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
   'terminal.rail.open': '터미널',
   'terminal.tab.label': '터미널 {n}',
