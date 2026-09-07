@@ -850,6 +850,9 @@ export const ja: Catalog = {
   'preview.design.copied': 'コピーしました',
   'preview.design.shotFailed': 'スクリーンショットを撮れませんでした',
   'preview.agent.tab': 'エージェント',
+  'preview.agent.running': 'エージェントがこのページを操作しています',
+  'preview.agent.stop': 'エージェントのスクリプトを中断',
+  'preview.agent.stopped': 'エージェントのスクリプトを中断しました',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
   'terminal.rail.open': 'ターミナル',
   'terminal.tab.label': 'ターミナル {n}',

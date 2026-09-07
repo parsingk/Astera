@@ -896,6 +896,13 @@ export function registerIpc(
     agentGuests.unregister(sessionId)
     agentBuffers.forget(sessionId)
   })
+  // Stop from the agent tab's context menu. The run's controller aborts; the script body that outlived
+  // the race parks on its next helper (runs.ts), the busy state clears through run()'s finally, and the
+  // CLI gets { error: { message: 'stopped', at: <helper> } }. False when nothing was running.
+  ipcMain.handle('preview.agentStop', (_e, sessionId: unknown) => {
+    if (typeof sessionId !== 'string') return false
+    return agentRuns.stop(sessionId)
+  })
   /** What `help()` returns inside a script. Read per run, not once: this wiring runs before
    *  `startOrch` finishes, so `orch` — and with it skillsPath — is still null here. A string captured
    *  now would be `''` for the life of the app, which is why `RunsDeps.guide` is a getter. */

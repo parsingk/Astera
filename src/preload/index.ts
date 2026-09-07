@@ -210,7 +210,8 @@ const api = {
     emulate: invoke('preview.emulate'),
     captureElement: invoke('preview.captureElement'),
     registerAgentGuest: invoke('preview.registerAgentGuest'),
-    unregisterAgentGuest: invoke('preview.unregisterAgentGuest')
+    unregisterAgentGuest: invoke('preview.unregisterAgentGuest'),
+    agentStop: invoke('preview.agentStop')
   },
   clipboard: {
     readText: () => clipboard.readText(),

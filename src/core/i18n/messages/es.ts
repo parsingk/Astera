@@ -860,6 +860,9 @@ export const es: Catalog = {
   'preview.design.copied': 'Copiado',
   'preview.design.shotFailed': 'No se pudo capturar la imagen',
   'preview.agent.tab': 'agente',
+  'preview.agent.running': 'La agente está manejando esta página',
+  'preview.agent.stop': 'Detener el script de la agente',
+  'preview.agent.stopped': 'Script de la agente detenido',
   // BottomPanel, the rail terminal button
   'terminal.rail.open': 'Terminal',
   'terminal.tab.label': 'Terminal {n}',

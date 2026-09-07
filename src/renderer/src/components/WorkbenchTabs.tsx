@@ -237,7 +237,7 @@ export function WorkbenchTabs({
             <FileIcon {...resolveFileIcon(tab.title)} />
           ) : tab.kind === 'browser' ? (
             tab.loading ? (
-              <span className="tab-dot busy bp-tab-busy" />
+              <span className="tab-dot busy bp-tab-busy" title={tab.agentSessionId !== undefined ? t('preview.agent.running') : undefined} />
             ) : (
               <span className="tab-glyph" aria-hidden="true">
                 <Globe size={11} />

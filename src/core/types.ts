@@ -991,6 +991,8 @@ export interface PreviewApi {
   /** Takes the guest id as well as the session: a pane unmounting around a newer pane's registration
    *  must not drop the registration that replaced its own. */
   unregisterAgentGuest(sessionId: string, webContentsId: number): Promise<void>
+  /** Stops the script running in this session's agent tab. False when none was running. */
+  agentStop(sessionId: string): Promise<boolean>
 }
 
 export interface SystemApi {

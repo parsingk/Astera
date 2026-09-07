@@ -4271,6 +4271,11 @@ export default function App(): React.JSX.Element {
               setActivePaneId(res.paneId)
             }
             const isSession = parseTab(tid)?.kind === 'session'
+            // An agent's tab while its script runs: the one way to end it from the UI. Main aborts the
+            // run and tells the CLI; nothing here waits for it.
+            const agentTab = parseTab(tid)?.kind === 'browser' ? browserTabsRef.current.find((b) => b.id === tid && b.agentSessionId !== undefined) : undefined
+            const agentSid = agentTab?.agentSessionId
+            const agentRunning = agentSid !== undefined && agentBusy[agentSid] === true
             return [
               // 세션 탭에만. 파일 탭의 라벨은 파일 이름이라 여기서 바꿀 것이 아니고, 기록 탭의
               // 라벨은 그 기록의 요청문이다. 더블클릭과 같은 자리를 연다.
@@ -4279,6 +4284,20 @@ export default function App(): React.JSX.Element {
                     {
                       label: t('session.tab.rename'),
                       onSelect: () => setRenamingTabId(tid)
+                    },
+                    'separator'
+                  ] as MenuItem[])
+                : []),
+              ...(agentSid !== undefined
+                ? ([
+                    {
+                      label: t('preview.agent.stop'),
+                      disabled: !agentRunning,
+                      onSelect: () => {
+                        void window.api.preview.agentStop(agentSid).then((stopped) => {
+                          if (stopped) toast.info(t('preview.agent.stopped'))
+                        })
+                      }
                     },
                     'separator'
                   ] as MenuItem[])
