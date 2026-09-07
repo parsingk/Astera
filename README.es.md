@@ -101,17 +101,17 @@
 - Hasta veinte notas por pestaña, y los números nunca se reasignan.
 - **Enviar a la sesión** pega todas las notas como un solo bloque de markdown en la sesión que elijas.
 - Cada nota lleva el selector, la posición, los estilos y el HTML del elemento, el texto cercano con
-  los secretos ocultados, y la ruta de una captura recortada a ese elemento. La agente mira el
+  los secretos ocultados, y la ruta de una captura recortada a ese elemento. El agente mira el
   elemento en vez de leer una descripción
 - Design Mode se apaga solo cuando la página navega a otro sitio.
 
 **Navegador del agente (experimental)**
-- La agente de la sesión tiene una pestaña de página web solo para ella y la maneja ella misma. Abre
+- El agente de la sesión tiene una pestaña de página web solo para él y la maneja él mismo. Abre
   una página del servidor de desarrollo, la recarga tras un cambio, lee su dirección y su título, y
   vuelve a leer lo que la consola y la red registraron desde esa carga.
-- "¿Sigue pintándose la página y está limpia la consola?" pasa a ser algo que la agente puede
+- "¿Sigue pintándose la página y está limpia la consola?" pasa a ser algo que el agente puede
   responder mirando, en vez de algo que te pide comprobar.
-- La pestaña de página web de la agente acepta `localhost`, `127.x`, `[::1]`, `*.localhost` y las dos
+- La pestaña de página web del agente acepta `localhost`, `127.x`, `[::1]`, `*.localhost` y las dos
   direcciones comodín; cualquier otra se rechaza, igual que un enlace de la página, o una redirección
   del servidor de desarrollo, que quiera salir
 - La pestaña se cierra con su sesión
