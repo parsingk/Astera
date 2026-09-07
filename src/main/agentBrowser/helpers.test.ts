@@ -1,7 +1,7 @@
 // src/main/agentBrowser/helpers.test.ts
 import { describe, it, expect, vi, afterAll } from 'vitest'
-import { SHOT_TIMEOUT_MS, stage1Helpers, SYNCHRONOUS_HELPERS, type GuestDriver, type HelperDeps } from './helpers'
-import { createLog, Interrupted, WAIT_TIMEOUT_MS } from '../../core/agentBrowser/script'
+import { SHOT_TIMEOUT_MS, browserHelpers, SYNCHRONOUS_HELPERS, type GuestDriver, type HelperDeps } from './helpers'
+import { Interrupted, WAIT_TIMEOUT_MS } from '../../core/agentBrowser/script'
 import { Ring } from '../../core/agentBrowser/ring'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
@@ -87,10 +87,10 @@ const deps = (g: ReturnType<typeof fakeGuest> | null) => {
  *  why it is the fixture for both cases: nothing in the message tells them apart. */
 const LOST_REPLY = 'Script failed to execute, this normally means an error was thrown. Check the renderer console for the error.'
 
-describe('stage1Helpers', () => {
+describe('browserHelpers', () => {
   it('open refuses a non-loopback address before touching the guest', async () => {
     const g = fakeGuest(); const { d } = deps(g)
-    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { open(u: string): Promise<void> }
+    const h = browserHelpers(d, { at: 'script' }) as { open(u: string): Promise<void> }
     await expect(h.open('https://example.com/')).rejects.toThrow('open: only this machine may be opened (got https://example.com/)')
     expect(d.ensured).toEqual([])
   })
@@ -98,7 +98,7 @@ describe('stage1Helpers', () => {
   it('open ensures the tab, loads the normalised URL and resolves on did-finish-load', async () => {
     const g = fakeGuest(); const { d } = deps(g)
     const ctx = { at: 'script' }
-    const h = stage1Helpers(d, ctx, createLog()) as { open(u: string): Promise<void> }
+    const h = browserHelpers(d, ctx) as { open(u: string): Promise<void> }
     const p = h.open('http://0.0.0.0:5173/')
     expect(ctx.at).toBe('open')
     await Promise.resolve()
@@ -110,7 +110,7 @@ describe('stage1Helpers', () => {
 
   it('open rejects with the load error when the page fails', async () => {
     const g = fakeGuest(); const { d } = deps(g)
-    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { open(u: string): Promise<void> }
+    const h = browserHelpers(d, { at: 'script' }) as { open(u: string): Promise<void> }
     const p = h.open('http://localhost:5173/')
     await Promise.resolve()
     g.fire('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', 'http://localhost:5173/', true)
@@ -119,14 +119,14 @@ describe('stage1Helpers', () => {
 
   it('page helpers without a tab say so', async () => {
     const { d } = deps(null)
-    const h = stage1Helpers(d, { at: 'script' }, createLog()) as Record<string, () => Promise<unknown>>
+    const h = browserHelpers(d, { at: 'script' }) as Record<string, () => Promise<unknown>>
     for (const name of ['reload', 'url', 'title', 'waitForLoad', 'consoleErrors', 'networkErrors'])
       await expect(h[name]()).rejects.toThrow('no page open — call open(url) first')
   })
 
   it('reload reloads and waits; url and title read the guest', async () => {
     const g = fakeGuest(); const { d } = deps(g)
-    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { reload(): Promise<void>; url(): Promise<string>; title(): Promise<string> }
+    const h = browserHelpers(d, { at: 'script' }) as { reload(): Promise<void>; url(): Promise<string>; title(): Promise<string> }
     const p = h.reload()
     await Promise.resolve()
     g.fire('did-finish-load')
@@ -142,14 +142,14 @@ describe('stage1Helpers', () => {
     buffers.console.mark()
     buffers.console.push({ level: 'error', message: 'new', source: 'a.js', line: 2 })
     buffers.network.push({ url: 'http://localhost/x', method: 'GET', status: 500 })
-    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { consoleErrors(): Promise<unknown[]>; networkErrors(): Promise<unknown[]> }
+    const h = browserHelpers(d, { at: 'script' }) as { consoleErrors(): Promise<unknown[]>; networkErrors(): Promise<unknown[]> }
     expect(await h.consoleErrors()).toEqual([{ level: 'error', message: 'new', source: 'a.js', line: 2 }])
     expect(await h.networkErrors()).toEqual([{ url: 'http://localhost/x', method: 'GET', status: 500 }])
   })
 
   it('close closes the tab, and help returns the guide or one section', async () => {
     const g = fakeGuest(); const { d } = deps(g)
-    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { close(): Promise<void>; help(n?: string): string }
+    const h = browserHelpers(d, { at: 'script' }) as { close(): Promise<void>; help(n?: string): string }
     await h.close()
     expect(d.closed).toBe(1)
     expect(h.help()).toContain('## open(url)')
@@ -159,7 +159,7 @@ describe('stage1Helpers', () => {
 
   it('waitForLoad resolves at once when not loading, and registers no listeners', async () => {
     const g = fakeGuest(); const { d } = deps(g)
-    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitForLoad(): Promise<void> }
+    const h = browserHelpers(d, { at: 'script' }) as { waitForLoad(): Promise<void> }
     await h.waitForLoad()
     expect(g.listenerCount('did-finish-load')).toBe(0)
     expect(g.listenerCount('did-fail-load')).toBe(0)
@@ -168,7 +168,7 @@ describe('stage1Helpers', () => {
   it('waitForLoad waits for an in-flight load to finish', async () => {
     const g = fakeGuest(); g.isLoading = () => true
     const { d } = deps(g)
-    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitForLoad(): Promise<void> }
+    const h = browserHelpers(d, { at: 'script' }) as { waitForLoad(): Promise<void> }
     const p = h.waitForLoad()
     await Promise.resolve()
     expect(g.listenerCount('did-finish-load')).toBe(1)
@@ -180,7 +180,7 @@ describe('stage1Helpers', () => {
     const g = fakeGuest(); g.isLoading = () => true
     const { d } = deps(g)
     const ctx = { at: 'script' }
-    const h = stage1Helpers(d, ctx, createLog()) as { waitForLoad(): Promise<void> }
+    const h = browserHelpers(d, ctx) as { waitForLoad(): Promise<void> }
     const p = h.waitForLoad()
     await Promise.resolve()
     g.fire('did-fail-load', {}, -102, 'ERR_CONNECTION_REFUSED', 'http://localhost:5173/', true)
@@ -191,7 +191,7 @@ describe('stage1Helpers', () => {
   it('a sub-frame failure does not end the wait; a later main-frame failure still does', async () => {
     const g = fakeGuest(); g.isLoading = () => true
     const { d } = deps(g)
-    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitForLoad(): Promise<void> }
+    const h = browserHelpers(d, { at: 'script' }) as { waitForLoad(): Promise<void> }
     const p = h.waitForLoad()
     await Promise.resolve()
     g.fire('did-fail-load', {}, -102, 'ERR_FAILED', 'http://localhost:5173/iframe', false)
@@ -212,7 +212,7 @@ describe('stage1Helpers', () => {
     const { d } = deps(null)
     d.guest = () => null
     d.ensureGuest = async () => g
-    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { open(u: string): Promise<void> }
+    const h = browserHelpers(d, { at: 'script' }) as { open(u: string): Promise<void> }
     const p = h.open('http://localhost:5173/')
     let settled = false
     void p.then(() => { settled = true })
@@ -229,7 +229,7 @@ describe('stage1Helpers', () => {
   it('an ABORTED (-3) failure keeps waiting for the load that replaced it', async () => {
     const g = fakeGuest(); g.isLoading = () => true
     const { d } = deps(g)
-    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitForLoad(): Promise<void> }
+    const h = browserHelpers(d, { at: 'script' }) as { waitForLoad(): Promise<void> }
     const p = h.waitForLoad()
     let settled = false
     void p.then(() => { settled = true })
@@ -247,7 +247,7 @@ describe('stage1Helpers', () => {
   it('an ABORTED (-3) failure still leaves a real failure reportable afterwards', async () => {
     const g = fakeGuest(); g.isLoading = () => true
     const { d } = deps(g)
-    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitForLoad(): Promise<void> }
+    const h = browserHelpers(d, { at: 'script' }) as { waitForLoad(): Promise<void> }
     const p = h.waitForLoad()
     await Promise.resolve()
     g.fire('did-fail-load', {}, -3, 'ERR_ABORTED', 'http://localhost:5173/', true)
@@ -261,7 +261,7 @@ describe('stage1Helpers', () => {
     try {
       const g = fakeGuest(); g.isLoading = () => true
       const { d } = deps(g)
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitForLoad(): Promise<void> }
+      const h = browserHelpers(d, { at: 'script' }) as { waitForLoad(): Promise<void> }
       const p = h.waitForLoad()
       await Promise.resolve()
       const rejection = expect(p).rejects.toBeInstanceOf(Interrupted)
@@ -277,7 +277,7 @@ describe('stage1Helpers', () => {
   it('every helper without a page-open assertion sets ctx.at to its own name first', async () => {
     const { d } = deps(null)
     const ctx = { at: 'script' }
-    const h = stage1Helpers(d, ctx, createLog()) as Record<string, (...a: unknown[]) => unknown>
+    const h = browserHelpers(d, ctx) as Record<string, (...a: unknown[]) => unknown>
 
     for (const name of ['reload', 'url', 'title', 'waitForLoad', 'consoleErrors', 'networkErrors']) {
       ctx.at = 'script'
@@ -301,7 +301,7 @@ describe('stage1Helpers', () => {
   // helpers, so check it against them rather than against itself.
   it('SYNCHRONOUS_HELPERS names exactly the helpers that do not return a promise', () => {
     const g = fakeGuest(); const { d } = deps(g)
-    const h = stage1Helpers(d, { at: 'script' }, createLog())
+    const h = browserHelpers(d, { at: 'script' })
     const sync = Object.entries(h)
       .filter(([, v]) => typeof v === 'function')
       .filter(([, v]) => {
@@ -322,7 +322,7 @@ describe('stage1Helpers', () => {
     it('opens the one dev server the project has running', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       d.servers = [{ name: 'dev', url: 'http://localhost:4321/', preview: false }]
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { open(u?: string): Promise<void> }
+      const h = browserHelpers(d, { at: 'script' }) as { open(u?: string): Promise<void> }
       const p = h.open()
       await new Promise((r) => setTimeout(r, 0))
       g.fire('did-finish-load')
@@ -332,7 +332,7 @@ describe('stage1Helpers', () => {
 
     it('refuses when no Run has a dev server for this project, and says what to do', async () => {
       const g = fakeGuest(); const { d } = deps(g)
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { open(u?: string): Promise<void> }
+      const h = browserHelpers(d, { at: 'script' }) as { open(u?: string): Promise<void> }
       await expect(h.open()).rejects.toThrow("open: no dev server has been started from Astera's Run for this project — pass the address")
       expect(g.loaded).toEqual([])
     })
@@ -340,7 +340,7 @@ describe('stage1Helpers', () => {
     it('refuses when several are running, listing them by their Run name', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       d.servers = [{ name: 'web', url: 'http://localhost:5173/', preview: false }, { name: 'api', url: 'http://localhost:3000/', preview: false }]
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { open(u?: string): Promise<void> }
+      const h = browserHelpers(d, { at: 'script' }) as { open(u?: string): Promise<void> }
       await expect(h.open()).rejects.toThrow('open: this project has several dev servers running — pass one of them, or set the preview address on the Run that is the page: web http://localhost:5173/, api http://localhost:3000/')
       expect(g.loaded).toEqual([])
     })
@@ -349,7 +349,7 @@ describe('stage1Helpers', () => {
     it('a Run marked for preview wins, whatever else is running', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       d.servers = [{ name: 'api', url: 'http://localhost:3000/', preview: false }, { name: 'web', url: 'http://localhost:5173/', preview: true }]
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { open(u?: string): Promise<void> }
+      const h = browserHelpers(d, { at: 'script' }) as { open(u?: string): Promise<void> }
       const p = h.open()
       await new Promise((r) => setTimeout(r, 0))
       g.fire('did-finish-load')
@@ -360,7 +360,7 @@ describe('stage1Helpers', () => {
     it('two Runs marked for preview is a question back, listing only the marked ones', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       d.servers = [{ name: 'api', url: 'http://localhost:3000/', preview: false }, { name: 'web', url: 'http://localhost:5173/', preview: true }, { name: 'docs', url: 'http://localhost:6006/', preview: true }]
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { open(u?: string): Promise<void> }
+      const h = browserHelpers(d, { at: 'script' }) as { open(u?: string): Promise<void> }
       await expect(h.open()).rejects.toThrow("open: several of this project's Runs mark a preview page — pass one of them: web http://localhost:5173/, docs http://localhost:6006/")
       expect(g.loaded).toEqual([])
     })
@@ -368,7 +368,7 @@ describe('stage1Helpers', () => {
     it('an explicit address is unaffected by what Run is running', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       d.servers = [{ name: 'web', url: 'http://localhost:5173/', preview: false }, { name: 'api', url: 'http://localhost:3000/', preview: false }]
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { open(u?: string): Promise<void> }
+      const h = browserHelpers(d, { at: 'script' }) as { open(u?: string): Promise<void> }
       const p = h.open('http://127.0.0.1:8080/x')
       await new Promise((r) => setTimeout(r, 0))
       g.fire('did-finish-load')
@@ -381,21 +381,21 @@ describe('stage1Helpers', () => {
     it('one server: a first line naming it, then the guide', () => {
       const { d } = deps(fakeGuest())
       d.servers = [{ name: 'dev', url: 'http://localhost:4321/', preview: false }]
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { help(n?: string): string }
+      const h = browserHelpers(d, { at: 'script' }) as { help(n?: string): string }
       expect(h.help()).toBe("This project's dev server, as started from Astera's Run: http://localhost:4321/ — open() with no address opens it.\n\n" + d.guide)
     })
 
     it('a marked Run is named as the page, and the others are not listed', () => {
       const { d } = deps(fakeGuest())
       d.servers = [{ name: 'api', url: 'http://localhost:3000/', preview: false }, { name: 'web', url: 'http://localhost:5173/', preview: true }]
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { help(n?: string): string }
+      const h = browserHelpers(d, { at: 'script' }) as { help(n?: string): string }
       expect(h.help()).toBe("This project's dev server, the page its Run marks for preview: http://localhost:5173/ — open() with no address opens it.\n\n" + d.guide)
     })
 
     it('no server: the guide alone, and help(name) is never prefixed', () => {
       const { d } = deps(fakeGuest())
       d.servers = [{ name: 'dev', url: 'http://localhost:4321/', preview: false }]
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { help(n?: string): string }
+      const h = browserHelpers(d, { at: 'script' }) as { help(n?: string): string }
       expect(h.help('reload')).toBe('## reload()\nreloads')
       d.servers = []
       expect(h.help()).toBe(d.guide)
@@ -406,7 +406,7 @@ describe('stage1Helpers', () => {
     it('runs the snapshot script in the page and returns the clamped result', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       g.answers.push({ title: 'Demo', url: 'http://localhost:5173/', headings: [{ level: 1, text: 'Hi' }], interactive: [], text: 'a  b' })
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { snapshot(): Promise<unknown> }
+      const h = browserHelpers(d, { at: 'script' }) as { snapshot(): Promise<unknown> }
       const s = await h.snapshot()
       expect(g.scripts[0]).toContain('function snapshotRuntime')
       expect(s).toMatchObject({ title: 'Demo', headings: [{ level: 1, text: 'Hi' }], text: 'a b' })
@@ -415,7 +415,7 @@ describe('stage1Helpers', () => {
     it('throws when the page returns nothing readable', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       g.answers.push('not a snapshot')
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { snapshot(): Promise<unknown> }
+      const h = browserHelpers(d, { at: 'script' }) as { snapshot(): Promise<unknown> }
       await expect(h.snapshot()).rejects.toThrow('snapshot: the page returned nothing readable')
     })
 
@@ -423,7 +423,7 @@ describe('stage1Helpers', () => {
       const g = fakeGuest(); g.isLoading = () => true
       const { d } = deps(g)
       g.answers.push({ title: 't', url: 'http://localhost/', text: '' })
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { snapshot(): Promise<unknown> }
+      const h = browserHelpers(d, { at: 'script' }) as { snapshot(): Promise<unknown> }
       const p = h.snapshot()
       await new Promise((r) => setTimeout(r, 0))
       expect(g.scripts).toHaveLength(0)
@@ -455,7 +455,7 @@ describe('stage1Helpers', () => {
             throw err
           }
         }
-        const h = stage1Helpers(d, { at: 'script' }, createLog()) as { snapshot(): Promise<{ text: string }> }
+        const h = browserHelpers(d, { at: 'script' }) as { snapshot(): Promise<{ text: string }> }
         const p = h.snapshot()
         // A whole turn, so the wait on the load — armed only by the isLoading case — is registered
         // before it is ended. A no-op for the changed-address case, which retries at once.
@@ -470,7 +470,7 @@ describe('stage1Helpers', () => {
     it('reports the refusal at once when the guest is not navigating, and sends nothing again', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       g.answers.push(new Error(LOST_REPLY))
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { snapshot(): Promise<unknown> }
+      const h = browserHelpers(d, { at: 'script' }) as { snapshot(): Promise<unknown> }
       await expect(h.snapshot()).rejects.toThrow(`snapshot: the page refused the call (${LOST_REPLY})`)
       expect(g.scripts).toHaveLength(1)
     })
@@ -491,7 +491,7 @@ describe('stage1Helpers', () => {
           throw err
         }
       }
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { snapshot(): Promise<unknown> }
+      const h = browserHelpers(d, { at: 'script' }) as { snapshot(): Promise<unknown> }
       await expect(h.snapshot()).rejects.toThrow('snapshot: the page refused the call (Cannot access contents of the frame)')
       expect(g.scripts).toHaveLength(2)
     })
@@ -522,7 +522,7 @@ describe('stage1Helpers', () => {
             throw err
           }
         }
-        const h = stage1Helpers(d, { at: 'script' }, createLog()) as Record<string, (...a: unknown[]) => Promise<void>>
+        const h = browserHelpers(d, { at: 'script' }) as Record<string, (...a: unknown[]) => Promise<void>>
         await expect(h[name](...args)).rejects.toThrow(`${name}: the page refused the call (${LOST_REPLY})`)
         expect(g.scripts).toHaveLength(1)
       }
@@ -532,7 +532,7 @@ describe('stage1Helpers', () => {
   describe('screenshot()', () => {
     it('captures the page, writes the PNG under the shots folder and returns path and size', async () => {
       const g = fakeGuest(); const { d } = deps(g)
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { screenshot(): Promise<{ path: string; width: number; height: number }> }
+      const h = browserHelpers(d, { at: 'script' }) as { screenshot(): Promise<{ path: string; width: number; height: number }> }
       const r = await h.screenshot()
       expect(g.shots).toBe(1)
       expect(r.width).toBe(800)
@@ -546,7 +546,7 @@ describe('stage1Helpers', () => {
       try {
         const g = fakeGuest(); const { d } = deps(g)
         g.capturePage = () => new Promise(() => {})
-        const h = stage1Helpers(d, { at: 'script' }, createLog()) as { screenshot(): Promise<unknown> }
+        const h = browserHelpers(d, { at: 'script' }) as { screenshot(): Promise<unknown> }
         const p = h.screenshot()
         const settled = expect(p).rejects.toThrow('screenshot: the page did not paint within 5 s — the window may be minimised')
         await vi.advanceTimersByTimeAsync(SHOT_TIMEOUT_MS + 1)
@@ -561,7 +561,7 @@ describe('stage1Helpers', () => {
     it('waits for a load in progress before capturing', async () => {
       const g = fakeGuest(); g.isLoading = () => true
       const { d } = deps(g)
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { screenshot(): Promise<unknown> }
+      const h = browserHelpers(d, { at: 'script' }) as { screenshot(): Promise<unknown> }
       const p = h.screenshot()
       await new Promise((r) => setTimeout(r, 0))
       expect(g.shots).toBe(0)
@@ -584,7 +584,7 @@ describe('stage1Helpers', () => {
         if (calls === 2) throw new Error('UnknownVizError')
         return { getSize: () => ({ width: 800, height: 600 }), toPNG: () => Buffer.from('png') }
       }
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { screenshot(): Promise<{ width: number }> }
+      const h = browserHelpers(d, { at: 'script' }) as { screenshot(): Promise<{ width: number }> }
       const r = await h.screenshot()
       expect(calls).toBe(3)
       expect(r.width).toBe(800)
@@ -595,7 +595,7 @@ describe('stage1Helpers', () => {
       try {
         const g = fakeGuest(); const { d } = deps(g)
         g.capturePage = async () => ({ getSize: () => ({ width: 0, height: 0 }), toPNG: () => Buffer.alloc(0) })
-        const h = stage1Helpers(d, { at: 'script' }, createLog()) as { screenshot(): Promise<unknown> }
+        const h = browserHelpers(d, { at: 'script' }) as { screenshot(): Promise<unknown> }
         const p = h.screenshot()
         const settled = expect(p).rejects.toThrow('screenshot: the page did not paint within 5 s — the window may be minimised')
         await vi.advanceTimersByTimeAsync(SHOT_TIMEOUT_MS + 1)
@@ -610,7 +610,7 @@ describe('stage1Helpers', () => {
     it('clicks a matching element', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       g.answers.push({ found: true, clicked: true })
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { click(s: string): Promise<void> }
+      const h = browserHelpers(d, { at: 'script' }) as { click(s: string): Promise<void> }
       await h.click('#save')
       expect(g.scripts).toHaveLength(1)
       expect(g.scripts[0]).toContain('"#save", false)')
@@ -619,14 +619,14 @@ describe('stage1Helpers', () => {
     it('throws when nothing matches', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       g.answers.push({ found: false })
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { click(s: string): Promise<void> }
+      const h = browserHelpers(d, { at: 'script' }) as { click(s: string): Promise<void> }
       await expect(h.click('#nope')).rejects.toThrow('click: nothing matches #nope')
     })
 
     it('follows a link that stays on this machine, in a second call', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       g.answers.push({ found: true, href: 'http://localhost:5173/next' }, { found: true, clicked: true })
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { click(s: string): Promise<void> }
+      const h = browserHelpers(d, { at: 'script' }) as { click(s: string): Promise<void> }
       await h.click('a.next')
       expect(g.scripts).toHaveLength(2)
       expect(g.scripts[1]).toContain('"a.next", true)')
@@ -637,7 +637,7 @@ describe('stage1Helpers', () => {
     it('refuses a link that would leave this machine, without clicking it, naming the sanitised address', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       g.answers.push({ found: true, href: 'https://example.com/docs?token=abcdefghijklmnop' })
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { click(s: string): Promise<void> }
+      const h = browserHelpers(d, { at: 'script' }) as { click(s: string): Promise<void> }
       await expect(h.click('a.ext')).rejects.toThrow('click: the link leaves this machine (https://example.com/docs)')
       expect(g.scripts).toHaveLength(1)
     })
@@ -648,7 +648,7 @@ describe('stage1Helpers', () => {
     it('clicks a link whose href is not a page address at all', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       g.answers.push({ found: true, href: 'javascript:void(0)' }, { found: true, clicked: true })
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { click(s: string): Promise<void> }
+      const h = browserHelpers(d, { at: 'script' }) as { click(s: string): Promise<void> }
       await h.click('a.fake-button')
       expect(g.scripts).toHaveLength(2)
       expect(g.scripts[1]).toContain('"a.fake-button", true)')
@@ -664,7 +664,7 @@ describe('stage1Helpers', () => {
         { found: true, error: 'no option has that value' },
         { found: true, error: 'not an input, textarea, select or editable element' }
       )
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { fill(s: string, t: string): Promise<void> }
+      const h = browserHelpers(d, { at: 'script' }) as { fill(s: string, t: string): Promise<void> }
       await h.fill('#email', 'dev@test')
       expect(g.scripts[0]).toContain('"#email", "dev@test")')
       await expect(h.fill('#x', 'v')).rejects.toThrow('fill: nothing matches #x')
@@ -677,7 +677,7 @@ describe('stage1Helpers', () => {
     it('press sends the key and rejects an empty one before asking the page', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       g.answers.push({ pressed: true, target: 'input#q' })
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { press(k: string): Promise<void> }
+      const h = browserHelpers(d, { at: 'script' }) as { press(k: string): Promise<void> }
       await h.press('Enter')
       expect(g.scripts[0]).toContain('"Enter")')
       await expect(h.press('')).rejects.toThrow('press: key must be a non-empty string')
@@ -689,7 +689,7 @@ describe('stage1Helpers', () => {
     it('with a selector, resolves when the page reports a match and throws when it does not in time', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       g.answers.push({ found: true }, { found: false })
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitFor(x: unknown): Promise<void> }
+      const h = browserHelpers(d, { at: 'script' }) as { waitFor(x: unknown): Promise<void> }
       await h.waitFor('.dashboard')
       expect(g.scripts[0]).toContain(`".dashboard", ${WAIT_TIMEOUT_MS})`)
       await expect(h.waitFor('.never')).rejects.toThrow(`waitFor: nothing matched .never within ${WAIT_TIMEOUT_MS} ms`)
@@ -699,7 +699,7 @@ describe('stage1Helpers', () => {
       vi.useFakeTimers()
       try {
         const g = fakeGuest(); const { d } = deps(g)
-        const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitFor(x: unknown): Promise<void> }
+        const h = browserHelpers(d, { at: 'script' }) as { waitFor(x: unknown): Promise<void> }
         let done = false
         void h.waitFor(250).then(() => { done = true })
         await vi.advanceTimersByTimeAsync(200)
@@ -716,7 +716,7 @@ describe('stage1Helpers', () => {
       vi.useFakeTimers()
       try {
         const g = fakeGuest(); const { d } = deps(g)
-        const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitFor(x: unknown): Promise<void> }
+        const h = browserHelpers(d, { at: 'script' }) as { waitFor(x: unknown): Promise<void> }
         let done = false
         void h.waitFor(10 * 60_000).then(() => { done = true })
         await vi.advanceTimersByTimeAsync(WAIT_TIMEOUT_MS + 1)
@@ -739,7 +739,7 @@ describe('stage1Helpers', () => {
       const g = fakeGuest(); const { d } = deps(g)
       g.staleLoading(2)
       g.answers.push({ title: 't', url: 'http://localhost/', text: 'ok' })
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { snapshot(): Promise<{ text: string }> }
+      const h = browserHelpers(d, { at: 'script' }) as { snapshot(): Promise<{ text: string }> }
       const p = h.snapshot()
       // Raced against 500 ms rather than awaited: an event-driven pre-wait never answers here at all,
       // and the only other way to find that out is to sit through WAIT_TIMEOUT_MS.
@@ -759,7 +759,7 @@ describe('stage1Helpers', () => {
       try {
         const g = fakeGuest(); g.isLoading = () => true   // and no load event is ever fired
         const { d } = deps(g)
-        const h = stage1Helpers(d, { at: 'script' }, createLog()) as { snapshot(): Promise<unknown> }
+        const h = browserHelpers(d, { at: 'script' }) as { snapshot(): Promise<unknown> }
         const p = h.snapshot()
         const rejection = expect(p).rejects.toThrow(`snapshot did not finish within ${WAIT_TIMEOUT_MS} ms`)
         await vi.advanceTimersByTimeAsync(100)
@@ -777,7 +777,7 @@ describe('stage1Helpers', () => {
     it('screenshot captures a guest whose loading flag is stale, without waiting for an event', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       g.staleLoading(2)
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { screenshot(): Promise<{ path: string }> }
+      const h = browserHelpers(d, { at: 'script' }) as { screenshot(): Promise<{ path: string }> }
       const p = h.screenshot()
       const raced = await Promise.race([
         p.then(() => 'captured', () => 'rejected'),
@@ -793,7 +793,7 @@ describe('stage1Helpers', () => {
       try {
         const g = fakeGuest(); g.isLoading = () => true
         const { d } = deps(g)
-        const h = stage1Helpers(d, { at: 'script' }, createLog()) as { screenshot(): Promise<unknown> }
+        const h = browserHelpers(d, { at: 'script' }) as { screenshot(): Promise<unknown> }
         const p = h.screenshot()
         const rejection = expect(p).rejects.toThrow(`screenshot did not finish within ${WAIT_TIMEOUT_MS} ms`)
         await vi.advanceTimersByTimeAsync(100)
@@ -810,7 +810,7 @@ describe('stage1Helpers', () => {
   it('every new helper sets ctx.at to its own name first, including on the no-guest throw', async () => {
     const { d } = deps(null)
     const ctx = { at: 'script' }
-    const h = stage1Helpers(d, ctx, createLog()) as Record<string, (...a: unknown[]) => Promise<unknown>>
+    const h = browserHelpers(d, ctx) as Record<string, (...a: unknown[]) => Promise<unknown>>
     for (const [name, args] of [['snapshot', []], ['screenshot', []], ['click', ['#a']], ['fill', ['#a', 'x']], ['press', ['Enter']], ['waitFor', ['.a']]] as const) {
       ctx.at = 'script'
       await expect(h[name](...args)).rejects.toThrow('no page open — call open(url) first')

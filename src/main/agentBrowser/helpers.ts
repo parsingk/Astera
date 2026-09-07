@@ -6,7 +6,7 @@
 // node environment, where `electron` cannot load. That is why `savePng` lives in an Electron-free
 // module and why `GuestDriver` describes what a WebContents must offer structurally.
 import { agentOpenTarget } from '../../core/agentBrowser/urls'
-import { Interrupted, WAIT_TIMEOUT_MS, withTimeout, type LogSink } from '../../core/agentBrowser/script'
+import { Interrupted, WAIT_TIMEOUT_MS, withTimeout } from '../../core/agentBrowser/script'
 import type { RunContext } from '../../core/agentBrowser/scriptRunner'
 import { clampSnapshot, type Snapshot } from '../../core/agentBrowser/snapshot'
 import { clickScript, fillScript, pressScript, snapshotScript, waitForScript } from '../../core/agentBrowser/guestScripts'
@@ -294,7 +294,7 @@ function section(guide: string, name: string): string | null {
   return lines.slice(start, end).join('\n').trimEnd()
 }
 
-export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink): Record<string, unknown> {
+export function browserHelpers(deps: HelperDeps, ctx: RunContext): Record<string, unknown> {
   const need = (): GuestDriver => {
     const g = deps.guest()
     if (!g) throw new Error(NO_PAGE)
@@ -351,17 +351,17 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
     async snapshot(): Promise<Snapshot> {
       ctx.at = 'snapshot'
       const g = need()
-      const snap = clampSnapshot(await inGuest(g, 'snapshot', snapshotScript(), true))
+      const snap = clampSnapshot(await inGuest(g, ctx.at, snapshotScript(), true))
       if (!snap) throw new Error('snapshot: the page returned nothing readable')
       return snap
     },
     async screenshot(): Promise<{ path: string; width: number; height: number }> {
       ctx.at = 'screenshot'
       const g = need()
-      if (g.isLoading()) await loadSettles(g, 'screenshot')
+      if (g.isLoading()) await loadSettles(g, ctx.at)
       let image: CapturedImage
       try {
-        image = await firstFrame(g, 'screenshot')
+        image = await firstFrame(g, ctx.at)
       } catch (err) {
         // Interrupted here is this helper's own deadline, not a Stop. The deadline is interpolated so
         // changing SHOT_TIMEOUT_MS cannot leave the message lying.
@@ -378,7 +378,7 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
       ctx.at = 'click'
       const g = need()
       const s = String(sel)
-      const first = await inGuest(g, 'click', clickScript(s, false), false)
+      const first = await inGuest(g, ctx.at, clickScript(s, false), false)
       if (!isRecord(first) || first.found !== true) throw new Error(`click: nothing matches ${s}`)
       if (typeof first.href === 'string') {
         // The page reports a link and does not follow it; whether it may be followed is decided here,
@@ -399,14 +399,14 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
           const address = sanitizeUrl(first.href)
           if (address !== '') throw new Error(`click: the link leaves this machine (${address})`)
         }
-        await inGuest(g, 'click', clickScript(s, true), false)
+        await inGuest(g, ctx.at, clickScript(s, true), false)
       }
     },
     async fill(sel: unknown, text: unknown): Promise<void> {
       ctx.at = 'fill'
       const g = need()
       const s = String(sel)
-      const r = await inGuest(g, 'fill', fillScript(s, String(text)), false)
+      const r = await inGuest(g, ctx.at, fillScript(s, String(text)), false)
       if (!isRecord(r) || r.found !== true) throw new Error(`fill: nothing matches ${s}`)
       // fillRuntime reports 'no option has that value' or 'not an input, textarea, select or editable
       // element'; these two branches turn them into the messages the guide documents.
@@ -418,7 +418,7 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
       ctx.at = 'press'
       const g = need()
       if (typeof key !== 'string' || key === '') throw new Error('press: key must be a non-empty string')
-      await inGuest(g, 'press', pressScript(key), false)
+      await inGuest(g, ctx.at, pressScript(key), false)
     },
     async waitFor(selOrMs: unknown): Promise<void> {
       ctx.at = 'waitFor'
@@ -428,7 +428,7 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
         return
       }
       if (typeof selOrMs !== 'string' || selOrMs === '') throw new Error('waitFor: expects a selector or a number of milliseconds')
-      const r = await inGuest(g, 'waitFor', waitForScript(selOrMs, WAIT_TIMEOUT_MS), true)
+      const r = await inGuest(g, ctx.at, waitForScript(selOrMs, WAIT_TIMEOUT_MS), true)
       if (!isRecord(r) || r.found !== true) throw new Error(`waitFor: nothing matched ${selOrMs} within ${WAIT_TIMEOUT_MS} ms`)
     },
     help(name?: unknown): string {
