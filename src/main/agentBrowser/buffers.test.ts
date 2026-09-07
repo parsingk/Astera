@@ -153,6 +153,8 @@ describe('attachBuffers: Escape typed inside the page', () => {
     g.emit('before-input-event', {}, { ...esc, key: 'Enter' })
     g.emit('before-input-event', {}, { ...esc, shift: true })
     g.emit('before-input-event', {}, { ...esc, control: true })
+    g.emit('before-input-event', {}, { ...esc, alt: true })
+    g.emit('before-input-event', {}, { ...esc, meta: true })
     expect(n).toBe(1)
   })
 
