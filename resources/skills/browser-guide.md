@@ -18,11 +18,19 @@ into it; that is fine — your next script sees the page as it is.
   `Cannot read properties of undefined (reading 'log')` and ends the run. A thrown error ends the
   script; what was logged before it is kept and the error names the helper that was running
   (`error.at`).
-- **`open()` before anything else.** Six of the helpers below need a page; called before the first
-  `open(url)` they throw `no page open — call open(url) first`.
+- **`open()` before anything else.** Every helper below except `log` and `help` needs a page; called
+  before the first `open(url)` they throw `no page open — call open(url) first`.
 - **60 seconds per script, 30 per wait.** A script cut off reports `at: "timeout"`.
 - **Read after you load.** `consoleErrors()` and `networkErrors()` return what happened since the
   last `open`/`reload` — call them after the load you care about.
+- **The page is your own dev server.** `click()` on a link that leaves this machine is refused before
+  the click, with the address; the page stays. Fill and press act on the page the way a person's
+  input would, through the events frameworks listen for, but they are synthetic: the browser's own
+  default actions do not fire, except Enter submitting the form of a focused input.
+- **A refusal may still mean it happened.** `press` and `click` can navigate the page; when that
+  navigation tears the frame down before the reply arrives, the helper reports `the page refused the
+  call` even though the click or the submit went through. Check with `url()` or `snapshot()` before
+  repeating such an action — do not retry blind.
 - **One script at a time** per session. A second `astera browser js` while one runs is refused.
 - Every helper is `async` except `log` and `help`; `await` them.
 
@@ -34,6 +42,16 @@ const errors = await consoleErrors()
 if (errors.length === 0) log('console clean')
 else log(errors)
 log(await networkErrors())
+```
+
+```js
+await open()
+await click('#login')
+await fill('#email', 'dev@test')
+await press('Enter')
+await waitFor('.dashboard')
+log((await snapshot()).headings)
+log(await consoleErrors())
 ```
 
 ## open(url?)
@@ -69,6 +87,46 @@ exceptions, since the last load. Empty array when there are none.
 `[{ url, method, status?, error? }]` — requests that failed (`error`, e.g. `net::ERR_CONNECTION_REFUSED`)
 or completed with status ≥ 400, since the last load.
 
+## snapshot()
+The page as text, for reading rather than looking: `title`, `url`, `headings` (with levels), `landmarks`
+(nav, main, header, footer, aside, form, each with a one-line summary), `interactive` — every link,
+button, input, select, textarea and element with a role, with its `tag`, a `selector` you can pass to
+`click()`/`fill()`, its accessible `name`, its visible `text`, `disabled`, and `href` for links — then
+`text`, the visible text of the page. Budgets: 200 interactive elements (`moreInteractive` says how
+many were left out), 8,000 characters of text (ending in `… (N more characters)` when cut), 32,000
+characters in all. Hidden inputs, script and style bodies, and anything that looks like a secret are
+left out. Throws `snapshot: the page returned nothing readable` when the page gave back nothing usable.
+
+## screenshot()
+The visible page as a PNG: `{ path, width, height }`. The file is under Astera's own data folder and
+your session may read it without asking — open the path to look at it. Throws
+`screenshot: the page did not paint within 5 s — is the window visible?` when the browser is not
+painting the tab (the window minimised, or fully covered), and `screenshot: the capture came back empty`
+for a tab with no pixels.
+
+## click(sel)
+Clicks the first element matching the CSS selector, scrolling it into view first. Throws
+`click: nothing matches <sel>`. A link whose address leaves this machine is refused before the click:
+`click: the link leaves this machine (<address>)`. After a click that navigates, the next helper waits
+for the load — you do not need `waitForLoad()` between.
+
+## fill(sel, text)
+Sets the value of an input, textarea or select — or the text of an editable element — the way typing
+would, so the page's framework sees the change. Throws `fill: nothing matches <sel>`,
+`fill: <sel> is not an input, textarea, select or editable element`, or, for a select,
+`fill: <sel> has no option with that value`.
+
+## press(key)
+A key on the focused element: `'Enter'`, `'Escape'`, `'Tab'`, an arrow, or a single character. Enter on
+an input inside a form submits the form, as it would for a person; other default actions are not
+performed. Throws `press: key must be a non-empty string`.
+
+## waitFor(sel | ms)
+With a selector, resolves as soon as it matches, polling; throws
+`waitFor: nothing matched <sel> within 30000 ms` otherwise. With a number, waits that many
+milliseconds (capped at 30000). Anything else throws
+`waitFor: expects a selector or a number of milliseconds`.
+
 ## close()
 Closes this session's tab. The next `open` makes a new one.
 
@@ -78,7 +136,3 @@ Appends to the script's output. The only way anything reaches you.
 ## help(name?)
 This guide, or one helper's section: `help('open')`. With no name, and when Astera's Run has a dev
 server running for this project, the first line names it.
-
-## What you cannot do yet
-Snapshots, screenshots, clicking and typing arrive in later stages. Until then, read the DOM through
-what the page prints and what the console reports.

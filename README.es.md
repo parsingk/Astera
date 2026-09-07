@@ -115,7 +115,7 @@
   direcciones comodín; cualquier otra se rechaza, igual que un enlace de la página, o una redirección
   del servidor de desarrollo, que quiera salir
 - La pestaña se cierra con su sesión
-- Por ahora solo lee: sin clics, escritura ni capturas. Eso llega en etapas posteriores
+- Lee la página como texto (una instantánea) y la mira como imagen (una captura), pulsa elementos, rellena valores, pulsa teclas y espera
 - Desactivado por defecto. Activa **Navegador del agente** en la configuración e instalará la skill
   `astera-browser` en tus cuentas, como hacen las otras dos funciones con las suyas. No se aplica a las
   sesiones ya abiertas. Solo las nuevas la reciben
