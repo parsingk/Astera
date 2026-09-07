@@ -53,7 +53,12 @@ const fakeGuest = (id: number) => {
 const harness = (opts: { devServers?: { name: string; url: string; preview: boolean }[]; hasSession?: boolean; tabAppears?: boolean; scriptTimeoutMs?: number } = {}) => {
   const g = fakeGuest(7)
   const registry = new AgentGuestRegistry<typeof g>(() => g)
-  const calls = { requestTab: [] as string[], busy: [] as boolean[], closed: 0 }
+  const calls = {
+    requestTab: [] as string[],
+    busy: [] as boolean[],
+    closed: 0,
+    points: [] as { sid: string; x: number; y: number; w: number; h: number; kind: string }[]
+  }
   const deps: RunsDeps = {
     registry: registry as never,
     buffersOf: () => ({ console: new Ring(), network: new Ring(), detach() {} }),
@@ -64,6 +69,7 @@ const harness = (opts: { devServers?: { name: string; url: string; preview: bool
     },
     closeTab: () => { calls.closed += 1 },
     setBusy: (_s, b) => calls.busy.push(b),
+    pointer: (sid, p) => calls.points.push({ sid, ...p }),
     devServersOf: () => opts.devServers ?? [],
     guide: '# g',
     shotsDir: SHOTS_DIR,
@@ -230,6 +236,14 @@ describe('AgentBrowserRuns', () => {
     // screenshot() is absent on purpose — it captures the page rather than running anything in it.
     const ran = guest.scripts.map((s) => (s.match(/function\s+(\w+)/) ?? [])[1])
     expect(ran).toEqual(['snapshotRuntime', 'clickRuntime', 'fillRuntime', 'pressRuntime', 'waitForRuntime'])
+  })
+
+  it('a helper\'s pointer call reaches the renderer with the session it came from', async () => {
+    const { runs, calls, guest } = harness()
+    guest.answers = [{ found: true, clicked: true, point: { x: 1, y: 2 }, viewport: { w: 3, h: 4 } }]
+    const r = await runs.run('s1', `await open('http://localhost:5173/'); await click('#a')`)
+    expect(r.ok).toBe(true)
+    expect(calls.points).toEqual([{ sid: 's1', x: 1, y: 2, w: 3, h: 4, kind: 'click' }])
   })
 })
 

@@ -45,6 +45,16 @@ export interface DevServer {
   preview: boolean
 }
 
+/** Where the agent just acted, for the renderer's pointer. The same fields as the
+ *  'preview:agentPointer' event minus the session, which runs.ts adds. */
+export interface AgentPoint {
+  x: number
+  y: number
+  w: number
+  h: number
+  kind: 'click' | 'fill' | 'press'
+}
+
 export interface HelperDeps {
   /** The session's guest, or null before its tab exists. */
   guest(): GuestDriver | null
@@ -52,6 +62,8 @@ export interface HelperDeps {
   ensureGuest(url: string): Promise<GuestDriver>
   buffers(): AgentBuffers | null
   closeTab(): void
+  /** The agent acted at a point of its page: the renderer slides the pointer there. Fire-and-forget. */
+  pointer(p: AgentPoint): void
   /** The project's running dev servers, from Astera's Run — what `open()` with no address opens. Astera
    *  cannot tell which localhost port is this project's any other way: the only ports it knows are the
    *  ones its own Run started and saw printed. A server the agent started in its own terminal is not
@@ -81,6 +93,17 @@ const SHOT_RETRY_MS = 50
 
 const refused = (at: string, err: unknown): Error =>
   new Error(`${at}: the page refused the call (${err instanceof Error ? err.message : String(err)})`)
+
+/** The point a guest answer carries, or null when it carries none: an older answer shape, a miss, or
+ *  the link report that precedes a real click. Read leniently on purpose: the pointer is a courtesy
+ *  to the person watching, and a page that broke the shape must not break the helper. */
+function pointOf(r: unknown, kind: AgentPoint['kind']): AgentPoint | null {
+  if (!isRecord(r) || !isRecord(r.point) || !isRecord(r.viewport)) return null
+  const { x, y } = r.point
+  const { w, h } = r.viewport
+  if (typeof x !== 'number' || typeof y !== 'number' || typeof w !== 'number' || typeof h !== 'number') return null
+  return { x, y, w, h, kind }
+}
 
 /** How often a pre-wait asks the guest whether it is still loading. */
 const LOADING_POLL_MS = 25
@@ -439,8 +462,13 @@ export function browserHelpers(deps: HelperDeps, ctx: RunContext): Record<string
           if (address !== '') throw new Error(`click: the link leaves this machine (${address})`)
         }
         // The literal for the same reason as screenshot()'s: this is past an await.
-        await inGuest(g, 'click', clickScript(s, true), false)
+        const second = await inGuest(g, 'click', clickScript(s, true), false)
+        const p = pointOf(second, 'click')
+        if (p) deps.pointer(p)
+        return
       }
+      const p = pointOf(first, 'click')
+      if (p) deps.pointer(p)
     },
     async fill(sel: unknown, text: unknown): Promise<void> {
       ctx.at = 'fill'
@@ -453,12 +481,16 @@ export function browserHelpers(deps: HelperDeps, ctx: RunContext): Record<string
       if (typeof r.error === 'string') {
         throw new Error(r.error === 'no option has that value' ? `fill: ${s} has no option with that value` : `fill: ${s} is ${r.error}`)
       }
+      const p = pointOf(r, 'fill')
+      if (p) deps.pointer(p)
     },
     async press(key: unknown): Promise<void> {
       ctx.at = 'press'
       const g = need()
       if (typeof key !== 'string' || key === '') throw new Error('press: key must be a non-empty string')
-      await inGuest(g, ctx.at, pressScript(key), false)
+      const r = await inGuest(g, ctx.at, pressScript(key), false)
+      const p = pointOf(r, 'press')
+      if (p) deps.pointer(p)
     },
     async waitFor(selOrMs: unknown): Promise<void> {
       ctx.at = 'waitFor'

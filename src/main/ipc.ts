@@ -935,6 +935,7 @@ export function registerIpc(
       send('preview:agentTabClose', { sessionId })
     },
     setBusy: (sessionId, busy) => send('preview:agentBusy', { sessionId, busy }),
+    pointer: (sessionId, p) => send('preview:agentPointer', { sessionId, ...p }),
     // Which localhost port is this project's: the only ports main knows are the ones its own Run
     // started — the address the user gave the Run to preview, or failing that the one it printed. Read
     // per call: a Run can start or stop, and a preview address be set, between two scripts.
