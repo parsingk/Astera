@@ -13,7 +13,7 @@ import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
-import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, SessionInfo } from '../core/types'
+import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
@@ -935,7 +935,12 @@ export function registerIpc(
       send('preview:agentTabClose', { sessionId })
     },
     setBusy: (sessionId, busy) => send('preview:agentBusy', { sessionId, busy }),
-    pointer: (sessionId, p) => send('preview:agentPointer', { sessionId, ...p }),
+    // `satisfies` because this shape is declared twice on purpose: helpers.ts owns `AgentPoint` rather
+    // than reading the event type, so that nothing under agentBrowser/ can reach anything Electron
+    // touches. This call is the only place the two declarations meet, and `send`'s payload is
+    // `unknown`, so without the annotation a renamed field or a widened `kind` would compile clean
+    // everywhere and break only here — at the boundary, at runtime.
+    pointer: (sessionId, p) => send('preview:agentPointer', { sessionId, ...p } satisfies CoreEvents['preview:agentPointer']),
     // Which localhost port is this project's: the only ports main knows are the ones its own Run
     // started — the address the user gave the Run to preview, or failing that the one it printed. Read
     // per call: a Run can start or stop, and a preview address be set, between two scripts.
