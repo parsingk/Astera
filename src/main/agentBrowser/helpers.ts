@@ -73,23 +73,34 @@ const NO_PAGE = 'no page open — call open(url) first'
  *  pending in Design Mode; the script deadline would end the run eventually, but this names the cause. */
 export const SHOT_TIMEOUT_MS = 5_000
 
-/** Runs one guest-side script for a helper: waits for a load in progress first, and if the page still
- *  refuses the call — executeJavaScript rejects while the frame is navigating, which is exactly the
- *  state a click() that navigates leaves for the next helper — waits for that load and tries once
- *  more. A second refusal is the page's answer. */
+const refused = (at: string, err: unknown): Error =>
+  new Error(`${at}: the page refused the call (${err instanceof Error ? err.message : String(err)})`)
+
+/** Runs one guest-side script for a helper. Waits for a load in progress first — executeJavaScript
+ *  rejects while the frame is navigating, which is exactly the state a click() that navigates leaves
+ *  for the next helper.
+ *
+ *  A rejection is then one of two things Electron does not distinguish: the page threw, or the script
+ *  already ran and its own side effect navigated, tearing the frame down before the reply could be
+ *  serialised. Re-sending is right for the second and wrong for the first — a resent pressScript is a
+ *  second requestSubmit(), a resent clickScript can click a nav link that the destination page has
+ *  too. The message cannot tell them apart (Electron says "Script failed to execute…" for both), so
+ *  the guest's own state does: it is retried only when the guest is navigating by the time the
+ *  rejection lands. isLoading() is the signal; the address is checked as well because a fast
+ *  localhost navigation can already have committed by then. */
 async function inGuest(g: GuestDriver, at: string, script: string): Promise<unknown> {
   if (g.isLoading()) await loadEnds(g, at, g.getURL())
+  const before = g.getURL()
   try {
     return await g.executeJavaScript(script)
-  } catch {
-    // The first refusal is the one the retry exists to absorb, so it is not bound: only the second
-    // is reported, because only the second is the page's answer rather than the navigation's.
+  } catch (first) {
+    if (!g.isLoading() && g.getURL() === before) throw refused(at, first)
     if (g.isLoading()) await loadEnds(g, at, g.getURL())
     try {
       return await g.executeJavaScript(script)
     } catch (second) {
-      const message = second instanceof Error ? second.message : String(second)
-      throw new Error(`${at}: the page refused the call (${message})`)
+      // Two refusals across a navigation: the page has answered.
+      throw refused(at, second)
     }
   }
 }
@@ -276,8 +287,9 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
         image = await withTimeout(g.capturePage(), SHOT_TIMEOUT_MS, 'screenshot')
       } catch (err) {
         // Interrupted here is this helper's own deadline, not a Stop: a guest that is not painting
-        // never answers at all, so the message names that cause rather than saying "timed out".
-        if (err instanceof Interrupted) throw new Error('screenshot: the page did not paint within 5 s — is the window visible?')
+        // never answers at all, so the message names that cause rather than saying "timed out". The
+        // deadline is interpolated so changing SHOT_TIMEOUT_MS cannot leave the message lying.
+        if (err instanceof Interrupted) throw new Error(`screenshot: the page did not paint within ${SHOT_TIMEOUT_MS / 1000} s — is the window visible?`)
         throw err
       }
       const saved = await savePng(image, deps.shotsDir)
@@ -292,8 +304,16 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
       if (!isRecord(first) || first.found !== true) throw new Error(`click: nothing matches ${s}`)
       if (typeof first.href === 'string') {
         // The page reports a link and does not follow it; whether it may be followed is decided here,
-        // by the one loopback rule, and the will-navigate guard stays the backstop.
-        if (!agentOpenTarget(first.href)) throw new Error(`click: the link leaves this machine (${sanitizeUrl(first.href)})`)
+        // by the one loopback rule, and the will-navigate guard in preview/guest.ts stays the backstop.
+        if (!agentOpenTarget(first.href)) {
+          // An href this machine may not open is only a link that *leaves* this machine when it is a
+          // page address at all. sanitizeUrl answers '' for anything but http(s), and `javascript:` —
+          // the ordinary way to spell a button as an anchor — is not a navigation this rule governs:
+          // refusing it named no address and gave a reason that was untrue. So only an http(s) href
+          // is refused; the rest fall through and are clicked plainly.
+          const address = sanitizeUrl(first.href)
+          if (address !== '') throw new Error(`click: the link leaves this machine (${address})`)
+        }
         await inGuest(g, 'click', clickScript(s, true))
       }
     },

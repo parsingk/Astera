@@ -1,8 +1,15 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterAll } from 'vitest'
 import { AgentBrowserRuns, devServersFor, type RunsDeps } from './runs'
 import { AgentGuestRegistry } from './registry'
 import { Ring } from '../../core/agentBrowser/ring'
+import { promises as fsp } from 'node:fs'
 import os from 'node:os'
+import path from 'node:path'
+
+/** Where the run that takes a screenshot lets savePng write. Per-process, so two vitest workers
+ *  running this file cannot delete each other's folder. */
+const SHOTS_DIR = path.join(os.tmpdir(), 'astera-runs-shots-' + process.pid)
+afterAll(async () => { await fsp.rm(SHOTS_DIR, { recursive: true, force: true }) })
 
 type Cb = (...a: unknown[]) => void
 const fakeGuest = (id: number) => {
@@ -59,7 +66,7 @@ const harness = (opts: { devServers?: { name: string; url: string; preview: bool
     setBusy: (_s, b) => calls.busy.push(b),
     devServersOf: () => opts.devServers ?? [],
     guide: '# g',
-    shotsDir: os.tmpdir(),
+    shotsDir: SHOTS_DIR,
     tabWaitMs: 100,
     scriptTimeoutMs: opts.scriptTimeoutMs
   }
@@ -208,11 +215,19 @@ describe('AgentBrowserRuns', () => {
       await open('http://localhost:5173/')
       log((await snapshot()).text)
       await click('#go'); await fill('#q', 'x'); await press('Enter'); await waitFor('.done')
+      const shot = await screenshot()
       log('done')
+      log(shot.path)
     `)
-    expect(r.ok && r.result.log).toEqual(['hello', 'done'])
+    const logged = r.ok ? r.result.log : []
+    expect(logged.slice(0, 2)).toEqual(['hello', 'done'])
+    // `RunsDeps.shotsDir` and `RunsDeps.guide` are both plain strings, so threading the wrong one
+    // into the helpers would typecheck. The folder the PNG actually landed in is what says otherwise.
+    expect(path.dirname(logged[2])).toBe(SHOTS_DIR)
+    expect(logged[2].endsWith('.png')).toBe(true)
     // Every script is `(function <name>(…) {…})(…)`, so the name is what says which helper ran.
     // Matched rather than sliced: the string starts with the paren the slice would look for.
+    // screenshot() is absent on purpose — it captures the page rather than running anything in it.
     const ran = guest.scripts.map((s) => (s.match(/function\s+(\w+)/) ?? [])[1])
     expect(ran).toEqual(['snapshotRuntime', 'clickRuntime', 'fillRuntime', 'pressRuntime', 'waitForRuntime'])
   })

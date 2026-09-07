@@ -413,15 +413,47 @@ describe('stage1Helpers', () => {
       expect(g.scripts).toHaveLength(1)
     })
 
-    it('retries once when the page refused the call mid-navigation, then reports the refusal', async () => {
+    // Electron rejects executeJavaScript both when the page threw and when the script already ran
+    // and its own side effect navigated, losing the reply with the frame — and says the same thing
+    // either way, which is why the string below is the fixture for the navigating case too. Only the
+    // second may be re-sent, so the guest's state at the moment of the rejection is what decides.
+    // The two ways it can say "I am navigating" are covered here; the message never is.
+    const LOST_REPLY = 'Script failed to execute, this normally means an error was thrown. Check the renderer console for the error.'
+    for (const [how, navigating] of [
+      ['the frame reports itself loading', (g: ReturnType<typeof fakeGuest>) => { g.isLoading = () => true }],
+      ['the address has already changed', (g: ReturnType<typeof fakeGuest>) => { g.getURL = () => 'http://localhost:5173/next' }]
+    ] as const) {
+      it(`re-sends the script once when the rejection lands while ${how}`, async () => {
+        const g = fakeGuest(); const { d } = deps(g)
+        g.answers.push(new Error(LOST_REPLY))
+        g.answers.push({ title: 't', url: 'http://localhost/', text: 'after' })
+        const send = g.executeJavaScript.bind(g)
+        g.executeJavaScript = async (code: string) => {
+          try {
+            return await send(code)
+          } catch (err) {
+            navigating(g)
+            throw err
+          }
+        }
+        const h = stage1Helpers(d, { at: 'script' }, createLog()) as { snapshot(): Promise<{ text: string }> }
+        const p = h.snapshot()
+        // A whole turn, so the wait on the load — armed only by the isLoading case — is registered
+        // before it is ended. A no-op for the changed-address case, which retries at once.
+        await new Promise((r) => setTimeout(r, 0))
+        g.isLoading = () => false
+        g.fire('did-finish-load')
+        expect((await p).text).toBe('after')
+        expect(g.scripts).toHaveLength(2)
+      })
+    }
+
+    it('reports the refusal at once when the guest is not navigating, and sends nothing again', async () => {
       const g = fakeGuest(); const { d } = deps(g)
-      g.answers.push(new Error('Script failed to execute, this normally means an error was thrown. Check the renderer console for the error.'))
-      g.answers.push({ title: 't', url: 'http://localhost/', text: 'after' })
-      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { snapshot(): Promise<{ text: string }> }
-      expect((await h.snapshot()).text).toBe('after')
-      expect(g.scripts).toHaveLength(2)
-      g.answers.push(new Error('boom'), new Error('boom again'))
-      await expect(h.snapshot()).rejects.toThrow('snapshot: the page refused the call (boom again)')
+      g.answers.push(new Error(LOST_REPLY))
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { snapshot(): Promise<unknown> }
+      await expect(h.snapshot()).rejects.toThrow(`snapshot: the page refused the call (${LOST_REPLY})`)
+      expect(g.scripts).toHaveLength(1)
     })
   })
 
@@ -450,6 +482,21 @@ describe('stage1Helpers', () => {
       } finally {
         vi.useRealTimers()
       }
+    })
+
+    // screenshot() does not go through inGuest — it races capturePage instead — so its pre-wait is
+    // its own copy of the rule and needs its own test.
+    it('waits for a load in progress before capturing', async () => {
+      const g = fakeGuest(); g.isLoading = () => true
+      const { d } = deps(g)
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { screenshot(): Promise<unknown> }
+      const p = h.screenshot()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(g.shots).toBe(0)
+      g.isLoading = () => false
+      g.fire('did-finish-load')
+      await p
+      expect(g.shots).toBe(1)
     })
 
     it('an empty capture is an error, not a zero-byte file', async () => {
@@ -486,24 +533,46 @@ describe('stage1Helpers', () => {
       expect(g.scripts[1]).toContain('"a.next", true)')
     })
 
-    it('refuses a link that would leave this machine, without clicking it', async () => {
+    // The whole message, not a prefix: the sanitising is the security-relevant half of it, and a
+    // substring that stops before the query string would pass with the token still in there.
+    it('refuses a link that would leave this machine, without clicking it, naming the sanitised address', async () => {
       const g = fakeGuest(); const { d } = deps(g)
       g.answers.push({ found: true, href: 'https://example.com/docs?token=abcdefghijklmnop' })
       const h = stage1Helpers(d, { at: 'script' }, createLog()) as { click(s: string): Promise<void> }
-      await expect(h.click('a.ext')).rejects.toThrow('click: the link leaves this machine (https://example.com/docs')
+      await expect(h.click('a.ext')).rejects.toThrow('click: the link leaves this machine (https://example.com/docs)')
       expect(g.scripts).toHaveLength(1)
+    })
+
+    // `<a href="javascript:void(0)" onclick=…>` is an ordinary way to spell a button. It is not a
+    // page address, so the loopback rule has nothing to say about it — refusing it named no address
+    // and claimed a cause that was untrue.
+    it('clicks a link whose href is not a page address at all', async () => {
+      const g = fakeGuest(); const { d } = deps(g)
+      g.answers.push({ found: true, href: 'javascript:void(0)' }, { found: true, clicked: true })
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { click(s: string): Promise<void> }
+      await h.click('a.fake-button')
+      expect(g.scripts).toHaveLength(2)
+      expect(g.scripts[1]).toContain('"a.fake-button", true)')
     })
   })
 
   describe('fill() and press()', () => {
     it('fill sets the value and reports the page\'s own refusal', async () => {
       const g = fakeGuest(); const { d } = deps(g)
-      g.answers.push({ found: true, filled: true }, { found: false }, { found: true, error: 'no option has that value' })
+      g.answers.push(
+        { found: true, filled: true },
+        { found: false },
+        { found: true, error: 'no option has that value' },
+        { found: true, error: 'not an input, textarea, select or editable element' }
+      )
       const h = stage1Helpers(d, { at: 'script' }, createLog()) as { fill(s: string, t: string): Promise<void> }
       await h.fill('#email', 'dev@test')
       expect(g.scripts[0]).toContain('"#email", "dev@test")')
       await expect(h.fill('#x', 'v')).rejects.toThrow('fill: nothing matches #x')
       await expect(h.fill('#sel', 'v')).rejects.toThrow('fill: #sel has no option with that value')
+      // The one guide-quoted message assembled from the guest's own reason string rather than
+      // written out here, so this is what stops fillRuntime's wording drifting away from the guide.
+      await expect(h.fill('#card', 'v')).rejects.toThrow('fill: #card is not an input, textarea, select or editable element')
     })
 
     it('press sends the key and rejects an empty one before asking the page', async () => {
