@@ -82,6 +82,10 @@ export type WorkbenchTab =
       title: string
       /** The page is loading — the chip spins, the way a busy session's does. */
       loading: boolean
+      /** A script is running in this tab's session. Separate from `loading`, which is also true for
+       *  an ordinary page load of an agent tab: keyed off the tab alone, the spinner's tooltip said
+       *  the agent was driving a page the user had just reloaded themselves. */
+      agentRunning: boolean
       /** Set when this tab is a session's agent browser — draws the "agent" tag. */
       agentSessionId?: string
     }
@@ -237,7 +241,7 @@ export function WorkbenchTabs({
             <FileIcon {...resolveFileIcon(tab.title)} />
           ) : tab.kind === 'browser' ? (
             tab.loading ? (
-              <span className="tab-dot busy bp-tab-busy" title={tab.agentSessionId !== undefined ? t('preview.agent.running') : undefined} />
+              <span className="tab-dot busy bp-tab-busy" title={tab.agentRunning ? t('preview.agent.running') : undefined} />
             ) : (
               <span className="tab-glyph" aria-hidden="true">
                 <Globe size={11} />

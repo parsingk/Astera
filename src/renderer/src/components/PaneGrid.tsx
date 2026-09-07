@@ -270,11 +270,20 @@ export function PaneGrid({
               place && draw === 'shown'
                 ? place
                 : place && draw === 'drawn'
-                  ? // Invisible and click-through: the tab the user is looking at is underneath and
-                    // keeps every event, so nothing about their pane changes while the agent works.
+                  ? // Placed and drawn, but invisible and click-through: the tab the user is looking
+                    // at is underneath and keeps every event, so nothing about their pane changes
+                    // while the agent works.
                     { ...place, opacity: 0, pointerEvents: 'none' }
                   : { display: 'none' }
             }
+            // pointer-events covers the mouse and nothing else. An opacity:0 <webview> is still in
+            // the sequential focus order with a focusable document inside it, and BrowserPane turns a
+            // focus event on the view into a pane switch — so a Tab that walked into the invisible
+            // guest moved the user's pane and routed their typing into a page they cannot see. inert
+            // removes hit testing, focus and the accessibility tree together, and does not affect
+            // painting, so the capture still gets its frames. pointer-events stays beside it because
+            // Chromium's hit testing for an out-of-process frame is not the part to rely on alone.
+            inert={draw === 'drawn'}
             onMouseDown={() => pane && onFocusPane(pane.id)}
           >
             {renderBrowser(b.id)}
@@ -437,12 +446,16 @@ export function PaneGrid({
             if (ref?.kind === 'browser') {
               const b = browserTabOf.get(tabId)
               if (!b) return null
+              // Passed on its own as well as folded into `loading`: an agent tab loading a page
+              // ordinarily is also `loading`, and the spinner's tooltip says the agent is driving.
+              const agentRunning = b.agentSessionId !== undefined && agentBusy[b.agentSessionId] === true
               return {
                 tabId,
                 kind: 'browser',
                 url: b.url,
                 title: b.title || displayHostOf(b.url) || t('preview.tab.untitled'),
-                loading: browserLoading[tabId] === true || (b.agentSessionId !== undefined && agentBusy[b.agentSessionId] === true),
+                loading: browserLoading[tabId] === true || agentRunning,
+                agentRunning,
                 agentSessionId: b.agentSessionId
               }
             }
