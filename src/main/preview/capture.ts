@@ -7,8 +7,6 @@ import { isSaneRect } from '../../core/preview/pick/rect'
 import type { CaptureResult } from '../../core/preview/pick/types'
 import { evictShots, previewShotsDir, savePng } from './shots'
 
-export { previewShotsDir } from './shots'
-
 function guestFor(id: unknown): Electron.WebContents | null {
   if (typeof id !== 'number' || !Number.isInteger(id)) return null
   const guest = webContents.fromId(id)
