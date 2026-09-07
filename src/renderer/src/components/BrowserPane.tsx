@@ -18,6 +18,7 @@ import {
 import { useI18n } from '../i18n/I18nProvider'
 import { armScript, badgesScript, cancelScript, chromeScript, highlightScript, type BadgeMarker } from '../lib/pickScripts'
 import { toast } from '../lib/toast'
+import { pointerToView, type AgentPointerState } from './agentOverlay'
 import { AnnotationPopover } from './AnnotationPopover'
 import { AnnotationTray } from './AnnotationTray'
 import { ContextMenu, type MenuItem } from './ContextMenu'
@@ -125,6 +126,7 @@ export function BrowserPane({
   serverPending,
   navigateNonce,
   agentRunning,
+  pointer,
   onState,
   onFocusPane,
   onOpenExternal,
@@ -142,6 +144,8 @@ export function BrowserPane({
   /** A script is running in this tab's session right now. Draws the in-use frame and banner, and
    *  arms Esc to stop it. App derives it from agentBusy, the same signal browserSlotDraw keys on. */
   agentRunning: boolean
+  /** Where the agent last acted, if it has. Drawn as the arrow while `agentRunning`. */
+  pointer?: AgentPointerState
   onState: (patch: BrowserStatePatch) => void
   /** A click inside the page never reaches the host DOM (the guest is another process), so the pane
    *  reports the webview's focus event and App focuses the pane from that. */
@@ -176,6 +180,13 @@ export function BrowserPane({
     ro.observe(stage)
     return () => ro.disconnect()
   }, [])
+  const [pointerFaded, setPointerFaded] = useState(false)
+  useEffect(() => {
+    if (!pointer) return
+    setPointerFaded(false)
+    const t = setTimeout(() => setPointerFaded(true), 1500)
+    return () => clearTimeout(t)
+  }, [pointer?.seq])
   const initialUrl = useRef(tab.url)
   const [address, setAddress] = useState(tab.url)
   const [editing, setEditing] = useState(false)
@@ -870,6 +881,22 @@ export function BrowserPane({
             </div>
           </>
         )}
+        {agentRunning && pointer && viewBox && (() => {
+          const at = pointerToView(pointer, viewBox)
+          return (
+            <div
+              className={`bp-agent-cursor${pointerFaded ? ' faded' : ''}`}
+              aria-hidden="true"
+              style={{ transform: `translate(${at.left}px, ${at.top}px)` }}
+            >
+              {pointer.kind === 'click' && <span key={pointer.seq} className="bp-agent-ripple" />}
+              {/* The tip of the arrow is the element's point: the path starts at (1,1). */}
+              <svg width="16" height="22" viewBox="0 0 16 22">
+                <path d="M1 1 L1 17 L5.5 12.5 L9 20 L11.5 19 L8 11.5 L14 11.5 Z" fill="#000" stroke="#fff" strokeWidth="1.5" strokeLinejoin="round" />
+              </svg>
+            </div>
+          )
+        })()}
         {error && (
           <div className="bp-overlay">
             {waiting ? (

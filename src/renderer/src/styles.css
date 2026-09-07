@@ -2371,6 +2371,15 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
    underneath keeps every click, and aria-hidden, so a reader never announces them. */
 .bp-agent-frame { position: absolute; pointer-events: none; z-index: 2; border: 3px solid var(--agent-accent); border-radius: inherit; box-shadow: inset 0 0 0 1px rgba(139, 92, 246, 0.35); }
 .bp-agent-banner { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); pointer-events: none; z-index: 2; background: var(--agent-accent); color: #fff; padding: 4px 12px; border-radius: 999px; font-size: 12px; line-height: 1.4; white-space: nowrap; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); }
+/* The agent's pointer: a black arrow with a white edge so it reads on a dark page, sliding to each
+   acted point, and a ripple on a click. The transform is the position so the slide is one
+   composited transition. The keyframe is new on purpose: cm-spin is a rotation, this is a scale
+   and fade, and reusing a rotation for that would say the wrong thing. */
+.bp-agent-cursor { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 3; transition: transform 160ms ease-out, opacity 300ms ease; will-change: transform; }
+.bp-agent-cursor.faded { opacity: 0; }
+.bp-agent-cursor svg { display: block; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4)); }
+.bp-agent-ripple { position: absolute; left: -14px; top: -14px; width: 28px; height: 28px; border: 2px solid var(--agent-accent); border-radius: 50%; animation: bp-agent-ripple 400ms ease-out forwards; }
+@keyframes bp-agent-ripple { from { transform: scale(0.4); opacity: 0.8; } to { transform: scale(1); opacity: 0; } }
 .bp-spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line);
   border-top-color: var(--accent); animation: cm-spin .6s linear infinite; }
 /* The browser tab's busy ring on the tab bar — the session ring's shape, in the accent colour */
