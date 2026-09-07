@@ -183,14 +183,6 @@ export function BrowserPane({
     ro.observe(stage)
     return () => ro.disconnect()
   }, [])
-  /** The `seq` whose arrow has faded. Keyed on the pointer rather than a boolean so an arrow can
-   *  never inherit the fade of the one before it. */
-  const [fadedSeq, setFadedSeq] = useState<number | null>(null)
-  useEffect(() => {
-    if (!pointer) return
-    const fade = setTimeout(() => setFadedSeq(pointer.seq), 1500)
-    return () => clearTimeout(fade)
-  }, [pointer?.seq])
   const initialUrl = useRef(tab.url)
   const [address, setAddress] = useState(tab.url)
   const [editing, setEditing] = useState(false)
@@ -922,17 +914,18 @@ export function BrowserPane({
             </div>
           </>
         )}
-        {agentRunning && pointer && viewBox && (() => {
-          const at = pointerToView(pointer, viewBox)
+        {agentRunning && viewBox && (() => {
+          // Before the first click, fill or key press there is no point yet; the arrow waits at the
+          // centre of the page, the way the reference's pointer is simply there while the tool works.
+          const at = pointer
+            ? pointerToView(pointer, viewBox)
+            : { left: viewBox.left + viewBox.width / 2, top: viewBox.top + viewBox.height / 2 }
           return (
-            <div
-              className={`bp-agent-cursor${pointer.seq === fadedSeq ? ' faded' : ''}`}
-              aria-hidden="true"
-              style={{ transform: `translate(${at.left}px, ${at.top}px)` }}
-            >
-              {pointer.kind === 'click' && <span key={pointer.seq} className="bp-agent-ripple" />}
-              {/* The tip of the arrow is the element's point: the path starts at (1,1). */}
-              <svg width="16" height="22" viewBox="0 0 16 22">
+            <div className="bp-agent-cursor" aria-hidden="true" style={{ transform: `translate(${at.left}px, ${at.top}px)` }}>
+              {pointer && pointer.kind === 'click' && <span key={pointer.seq} className="bp-agent-ripple" />}
+              <span className="bp-agent-halo" />
+              {/* The tip of the arrow is the point: the path starts at (1,1), scaled 1.5x by the viewBox. */}
+              <svg width="24" height="33" viewBox="0 0 16 22">
                 <path d="M1 1 L1 17 L5.5 12.5 L9 20 L11.5 19 L8 11.5 L14 11.5 Z" fill="#000" stroke="#fff" strokeWidth="1.5" strokeLinejoin="round" />
               </svg>
             </div>
