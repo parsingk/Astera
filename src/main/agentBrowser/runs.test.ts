@@ -251,10 +251,22 @@ describe('devServersFor', () => {
   })
 
   it('compares project roots as paths, not as strings', () => {
-    expect(devServersFor([run('D:/p/sub/..', 'web', 'http://localhost:5173/')], 'D:\\p')).toEqual([
+    // `..` is resolved by every platform's `path`, so this holds on all of them.
+    expect(devServersFor([run('D:/p/sub/..', 'web', 'http://localhost:5173/')], 'D:/p')).toEqual([
       { name: 'web', url: 'http://localhost:5173/', preview: false }
     ])
     expect(devServersFor([run('D:/p', 'web', 'http://localhost:5173/')], 'D:/q')).toEqual([])
+  })
+
+  // The backslash spelling is win32 notation, and the module compares with the platform's own `path`:
+  // on POSIX `\` is an ordinary character, so `D:\p` is one long filename that no forward-slash
+  // spelling resolves to. A project root only ever arrives in the notation of the machine it came from,
+  // so this is asserted where it can hold rather than made platform-independent. It failed the macOS
+  // and Linux CI legs of v1.3.15 exactly this way.
+  it.runIf(process.platform === 'win32')('equates the two win32 spellings of one root', () => {
+    expect(devServersFor([run('D:/p/sub/..', 'web', 'http://localhost:5173/')], 'D:\\p')).toEqual([
+      { name: 'web', url: 'http://localhost:5173/', preview: false }
+    ])
   })
 
   // The preview address on a Run's configuration is the user saying "this is the page".
