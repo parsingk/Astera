@@ -144,6 +144,16 @@ export function snapshotRuntime(budgets: SnapshotBudgets): unknown {
     const role = el.getAttribute('role')
     if (role) entry.role = role
     if (el instanceof HTMLAnchorElement) entry.href = el.href
+    // The current state of a form control, so the agent can check a fill() it just made without a
+    // screenshot. A password's value is never read (the comment above says why); its checkbox and
+    // radio siblings report `checked` rather than a value. `text` keeps its meaning, so a select
+    // still lists its option texts and `value` says which one is chosen.
+    if (el instanceof HTMLInputElement) {
+      if (el.type === 'checkbox' || el.type === 'radio') entry.checked = el.checked
+      else if (el.type !== 'password') entry.value = el.value
+    } else if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+      entry.value = el.value
+    }
     interactive.push(entry)
   })
   const visibleText = textOf(document.body, budgets.text)

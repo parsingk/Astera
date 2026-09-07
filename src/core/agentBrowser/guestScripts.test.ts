@@ -153,6 +153,14 @@ describe('guest scripts', () => {
     expect(runtimeSrc).toContain("el.type === 'password' ? ''")
   })
 
+  // Same reason as the pin above: no DOM here, and this is the field the agent uses to check its
+  // own fill(). Matched as code, not prose.
+  it('snapshotRuntime reports a control\'s value and a checkbox\'s state, never a password\'s value', () => {
+    const runtimeSrc = readFileSync(path.join(HERE, 'guestRuntime.ts'), 'utf8')
+    expect(runtimeSrc).toContain("if (el.type === 'checkbox' || el.type === 'radio') entry.checked = el.checked")
+    expect(runtimeSrc).toContain("else if (el.type !== 'password') entry.value = el.value")
+  })
+
   // Same reason as the password pin above: no DOM here, and the distinction is invisible from any
   // other end. The `disabled` IDL property reflects only the element's own attribute, so a control
   // inside a <fieldset disabled> reads false there while click() still dispatches nothing for it.

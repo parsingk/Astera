@@ -26,6 +26,11 @@ export interface SnapshotElement {
   disabled: boolean
   role?: string
   href?: string
+  /** The control's current value: an input other than password, checkbox or radio, a textarea, or a
+   *  select (its selected option's value). Cut and redacted like `name`. Absent for anything else. */
+  value?: string
+  /** A checkbox or radio input's state. Absent for every other control. */
+  checked?: boolean
 }
 
 export interface Snapshot {
@@ -99,6 +104,10 @@ function element(v: unknown): SnapshotElement | null {
   const role = ident(v.role, SNAPSHOT_BUDGET.tag)
   if (role !== '') out.role = role
   if (typeof v.href === 'string' && v.href !== '') out.href = sanitizeUrl(v.href)
+  // An empty string is kept: "the field is empty" is exactly what an agent that just filled it
+  // wants to know. `safe` redacts a secret-shaped value the same way it redacts a name.
+  if (typeof v.value === 'string') out.value = safe(v.value, SNAPSHOT_BUDGET.name)
+  if (typeof v.checked === 'boolean') out.checked = v.checked
   return out
 }
 

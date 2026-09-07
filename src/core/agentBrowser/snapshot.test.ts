@@ -239,4 +239,39 @@ describe('clampSnapshot', () => {
     const ordinary = clampSnapshot(base())
     expect(ordinary!.title).toBe('Demo')
   })
+
+  describe('form values', () => {
+    // The agent can change a select or an input and, until now, could not read back what it did:
+    // a select read `text: "AB"` before and after fill('#sel', 'b'). `value` is the check.
+    it('carries a control value, cut and redacted the way a name is', () => {
+      const s = clampSnapshot({
+        ...base(),
+        interactive: [
+          el(1, { tag: 'input', value: 'hello' }),
+          el(2, { tag: 'input', value: '0123456789abcdef0123456789abcdef' }),
+          el(3, { tag: 'textarea', value: 'x'.repeat(SNAPSHOT_BUDGET.name + 50) })
+        ]
+      })
+      expect(s!.interactive[0].value).toBe('hello')
+      expect(s!.interactive[1].value).toBe('[redacted]')
+      expect(s!.interactive[2].value).toHaveLength(SNAPSHOT_BUDGET.name)
+    })
+
+    it('keeps an empty value: an empty field is a fact the agent needs', () => {
+      const s = clampSnapshot({ ...base(), interactive: [el(1, { tag: 'input', value: '' })] })
+      expect(s!.interactive[0].value).toBe('')
+    })
+
+    it('keeps checked only when it is a boolean', () => {
+      const s = clampSnapshot({ ...base(), interactive: [el(1, { tag: 'input', checked: true }), el(2, { tag: 'input', checked: 'true' })] })
+      expect(s!.interactive[0].checked).toBe(true)
+      expect(s!.interactive[1].checked).toBeUndefined()
+    })
+
+    it('has neither field when the guest sent neither', () => {
+      const s = clampSnapshot({ ...base(), interactive: [el(1)] })
+      expect(s!.interactive[0]).not.toHaveProperty('value')
+      expect(s!.interactive[0]).not.toHaveProperty('checked')
+    })
+  })
 })
