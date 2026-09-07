@@ -161,6 +161,15 @@ describe('guest scripts', () => {
     expect(runtimeSrc).toContain("else if (el.type !== 'password') entry.value = el.value")
   })
 
+  // The renderer draws the agent's pointer where these say. Three runtimes, three identical
+  // measurements: each is inlined because a shared helper would be a module-scope reference the
+  // injected function cannot carry.
+  it('click, fill and press each report the acted element\'s centre and the viewport size', () => {
+    const runtimeSrc = readFileSync(path.join(HERE, 'guestRuntime.ts'), 'utf8')
+    const measure = "point: { x: r.left + r.width / 2, y: r.top + r.height / 2 }, viewport: { w: window.innerWidth, h: window.innerHeight }"
+    expect(runtimeSrc.split(measure).length - 1).toBe(3)
+  })
+
   // Same reason as the password pin above: no DOM here, and the distinction is invisible from any
   // other end. The `disabled` IDL property reflects only the element's own attribute, so a control
   // inside a <fieldset disabled> reads false there while click() still dispatches nothing for it.
