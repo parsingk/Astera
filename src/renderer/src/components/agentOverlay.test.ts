@@ -50,13 +50,15 @@ describe('escStopsAgent', () => {
     expect(escStopsAgent(esc, true, false, false)).toBe(false)
   })
 
-  it('leaves the key to a menu this pane has open', () => {
+  it('leaves the key to whatever owns it', () => {
     expect(escStopsAgent(esc, true, true, true)).toBe(false)
   })
 
   it('is Escape alone, not a chord and not another key', () => {
     expect(escStopsAgent({ ...esc, shiftKey: true }, true, true, false)).toBe(false)
     expect(escStopsAgent({ ...esc, ctrlKey: true }, true, true, false)).toBe(false)
+    expect(escStopsAgent({ ...esc, altKey: true }, true, true, false)).toBe(false)
+    expect(escStopsAgent({ ...esc, metaKey: true }, true, true, false)).toBe(false)
     expect(escStopsAgent({ ...esc, key: 'Enter' }, true, true, false)).toBe(false)
   })
 })

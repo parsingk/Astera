@@ -33,14 +33,15 @@ export function pointerToView(p: { x: number; y: number; w: number; h: number },
 /** Whether a keydown is the user cancelling the agent, the way the banner says (`Esc to cancel`).
  *  Only while a script runs, only when the agent's tab is the shown tab of the focused pane (it is
  *  drawn invisibly behind other tabs while a script runs, and Esc there belongs to whatever the user
- *  is looking at), and never while a menu this pane opened is up, which owns the key. Escape alone:
- *  a chord is some other shortcut. */
+ *  is looking at), and never while the key is already owned elsewhere: a menu this pane opened, a
+ *  modal anywhere in the app, or a text field or editable element the key was typed into. Escape
+ *  alone: a chord is some other shortcut. */
 export function escStopsAgent(
   e: { key: string; altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean },
   agentRunning: boolean,
   agentTabFocused: boolean,
-  menuOpen: boolean
+  keyOwnedElsewhere: boolean
 ): boolean {
-  if (!agentRunning || !agentTabFocused || menuOpen) return false
+  if (!agentRunning || !agentTabFocused || keyOwnedElsewhere) return false
   return e.key === 'Escape' && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey
 }
