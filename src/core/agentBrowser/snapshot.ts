@@ -33,6 +33,10 @@ export interface Snapshot {
   interactive: SnapshotElement[]
   /** Visible text, whitespace-collapsed. Ends with " … (N more characters)" when cut. */
   text: string
+  /** Set when the landmark list was cut: how many were dropped. */
+  moreLandmarks?: number
+  /** Set when the heading list was cut: how many were dropped. */
+  moreHeadings?: number
   /** Set when the interactive list was cut: how many were dropped. */
   moreInteractive?: number
 }
@@ -51,8 +55,10 @@ function headings(v: unknown): Snapshot['headings'] {
   for (const h of v) {
     if (!isRecord(h)) continue
     const text = cut(collapse(h.text), SNAPSHOT_BUDGET.heading)
-    const level = Number(h.level)
-    if (text === '' || !Number.isInteger(level) || level < 1 || level > 6 || containsSecret(text)) continue
+    const level = h.level
+    // A numeric string is not a level: the guest sends a number, and coercing '2' into one would
+    // accept malformed input the type was supposed to rule out.
+    if (text === '' || typeof level !== 'number' || !Number.isInteger(level) || level < 1 || level > 6 || containsSecret(text)) continue
     out.push({ level, text })
   }
   return out
@@ -103,25 +109,38 @@ function text(v: unknown, max: number): string {
 
 export function clampSnapshot(raw: unknown): Snapshot | null {
   if (!isRecord(raw) || typeof raw.title !== 'string' || typeof raw.url !== 'string') return null
+  const allHeadings = headings(raw.headings)
+  const allLandmarks = landmarks(raw.landmarks)
   const all = Array.isArray(raw.interactive) ? raw.interactive.map(element).filter((e): e is SnapshotElement => e !== null) : []
   const interactive = all.slice(0, SNAPSHOT_BUDGET.interactive)
+  const title = cut(collapse(raw.title), SNAPSHOT_BUDGET.heading)
   const snap: Snapshot = {
-    title: cut(collapse(raw.title), SNAPSHOT_BUDGET.heading),
+    title: containsSecret(title) ? REDACTED : title,
     url: sanitizeUrl(raw.url),
-    headings: headings(raw.headings),
-    landmarks: landmarks(raw.landmarks),
+    headings: allHeadings,
+    landmarks: allLandmarks,
     interactive,
     text: text(raw.text, SNAPSHOT_BUDGET.text)
   }
   if (all.length > interactive.length) snap.moreInteractive = all.length - interactive.length
-  // The total budget is what the agent's context pays for. Text gives way first, in halves — it is
-  // the one part that shrinks gracefully. A page with hundreds of long-named controls can still be
-  // over the cap with no text at all, so after that the interactive list is cut from the end, which
-  // moreInteractive already reports.
+  // The total budget is what the agent's context pays for, and an honest page — a long documentation
+  // page, a listing with an <h3> per item — can push any one of these sections past it on its own, not
+  // just interactive. The cascade gives way in order of how useful each part is to the agent: text
+  // shrinks first, in halves, because it is the one part that degrades gracefully rather than
+  // disappearing item by item; landmarks and headings are navigation aids, dropped from the end next;
+  // interactive elements are what the agent acts on, so they are the last thing to give up.
   let budget: number = SNAPSHOT_BUDGET.text
   while (JSON.stringify(snap).length > SNAPSHOT_BUDGET.total && budget > 0) {
     budget = Math.floor(budget / 2)
     snap.text = text(raw.text, budget)
+  }
+  while (JSON.stringify(snap).length > SNAPSHOT_BUDGET.total && snap.landmarks.length > 0) {
+    snap.landmarks = snap.landmarks.slice(0, -1)
+    snap.moreLandmarks = allLandmarks.length - snap.landmarks.length
+  }
+  while (JSON.stringify(snap).length > SNAPSHOT_BUDGET.total && snap.headings.length > 0) {
+    snap.headings = snap.headings.slice(0, -1)
+    snap.moreHeadings = allHeadings.length - snap.headings.length
   }
   while (JSON.stringify(snap).length > SNAPSHOT_BUDGET.total && snap.interactive.length > 0) {
     snap.interactive = snap.interactive.slice(0, -1)

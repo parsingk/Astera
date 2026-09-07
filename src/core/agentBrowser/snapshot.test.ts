@@ -97,4 +97,57 @@ describe('clampSnapshot', () => {
     expect(s!.interactive.length).toBeGreaterThan(0)
     expect(s!.moreInteractive).toBe(SNAPSHOT_BUDGET.interactive - s!.interactive.length)
   })
+
+  it('keeps the total under budget when headings alone are enormous, dropping the extra and leaving interactive untouched', () => {
+    // An honest page can carry hundreds of headings (a long documentation page, an <h3> per listing
+    // item) with no interactive elements or page text to blame — 200 headings at the per-heading cap
+    // is 40,000 characters of heading text alone, well past the 32,000 total before anything else is
+    // even added.
+    const manyHeadings = Array.from({ length: 200 }, () => ({ level: 2, text: 'H'.repeat(SNAPSHOT_BUDGET.heading) }))
+    const s = clampSnapshot({ ...base(), headings: manyHeadings })
+    expect(JSON.stringify(s).length).toBeLessThanOrEqual(SNAPSHOT_BUDGET.total)
+    expect(s!.moreHeadings).toBeGreaterThan(0)
+    expect(s!.interactive).toHaveLength(2)
+  })
+
+  it('drops landmarks before headings, leaving interactive untouched, when landmarks alone push past budget', () => {
+    // 142 headings at the per-heading cap already sit just under the total (headings alone should
+    // never need to shrink here); 10 landmarks at the per-landmark cap tip it over, and every one of
+    // them has to go before the total fits again — none is spared partway through.
+    const headingsMany = Array.from({ length: 142 }, () => ({ level: 2, text: 'H'.repeat(SNAPSHOT_BUDGET.heading) }))
+    const landmarksMany = Array.from({ length: 10 }, () => ({ tag: 'nav', summary: 'S'.repeat(SNAPSHOT_BUDGET.summary) }))
+    const s = clampSnapshot({ ...base(), headings: headingsMany, landmarks: landmarksMany })
+    expect(JSON.stringify(s).length).toBeLessThanOrEqual(SNAPSHOT_BUDGET.total)
+    expect(s!.landmarks).toEqual([])
+    expect(s!.moreLandmarks).toBe(10)
+    expect(s!.headings).toHaveLength(142)
+    expect(s!.moreHeadings).toBeUndefined()
+    expect(s!.interactive).toHaveLength(2)
+  })
+
+  it('drops headings whose level is not a valid heading level (1-6), without throwing', () => {
+    const s = clampSnapshot({
+      ...base(),
+      headings: [
+        { level: 1.5, text: 'non-integer' },
+        { level: '2', text: 'numeric string' },
+        { level: 0, text: 'zero' },
+        { level: 7, text: 'seven' },
+        { level: 3, text: 'valid' }
+      ]
+    })
+    expect(s!.headings).toEqual([{ level: 3, text: 'valid' }])
+  })
+
+  it('tolerates malformed landmark entries, keeping the well-formed ones', () => {
+    const s = clampSnapshot({ ...base(), landmarks: [null, 3, { tag: 'nav', summary: 'ok' }] })
+    expect(s!.landmarks).toEqual([{ tag: 'nav', summary: 'ok' }])
+  })
+
+  it('redacts a title carrying a secret, and leaves an ordinary title untouched', () => {
+    const withSecret = clampSnapshot({ ...base(), title: 'API token 0123456789abcdef0123456789abcdef' })
+    expect(withSecret!.title).toBe('[redacted]')
+    const ordinary = clampSnapshot(base())
+    expect(ordinary!.title).toBe('Demo')
+  })
 })
