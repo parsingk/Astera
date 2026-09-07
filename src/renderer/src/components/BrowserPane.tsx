@@ -18,7 +18,7 @@ import {
 import { useI18n } from '../i18n/I18nProvider'
 import { armScript, badgesScript, cancelScript, chromeScript, highlightScript, type BadgeMarker } from '../lib/pickScripts'
 import { toast } from '../lib/toast'
-import { pointerToView, type AgentPointerState } from './agentOverlay'
+import { escStopsAgent, pointerToView, type AgentPointerState } from './agentOverlay'
 import { AnnotationPopover } from './AnnotationPopover'
 import { AnnotationTray } from './AnnotationTray'
 import { ContextMenu, type MenuItem } from './ContextMenu'
@@ -126,6 +126,7 @@ export function BrowserPane({
   serverPending,
   navigateNonce,
   agentRunning,
+  agentTabFocused,
   pointer,
   onState,
   onFocusPane,
@@ -144,6 +145,8 @@ export function BrowserPane({
   /** A script is running in this tab's session right now. Draws the in-use frame and banner, and
    *  arms Esc to stop it. App derives it from agentBusy, the same signal browserSlotDraw keys on. */
   agentRunning: boolean
+  /** This tab is the shown tab of the focused pane. With `agentRunning`, Esc stops the script. */
+  agentTabFocused: boolean
   /** Where the agent last acted, if it has. Drawn as the arrow while `agentRunning`. */
   pointer?: AgentPointerState
   onState: (patch: BrowserStatePatch) => void
@@ -184,8 +187,8 @@ export function BrowserPane({
   useEffect(() => {
     if (!pointer) return
     setPointerFaded(false)
-    const t = setTimeout(() => setPointerFaded(true), 1500)
-    return () => clearTimeout(t)
+    const fade = setTimeout(() => setPointerFaded(true), 1500)
+    return () => clearTimeout(fade)
   }, [pointer?.seq])
   const initialUrl = useRef(tab.url)
   const [address, setAddress] = useState(tab.url)
@@ -657,6 +660,22 @@ export function BrowserPane({
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [designMode])
+
+  // Esc cancels the agent, as the banner says. Same listener shape as Design Mode's Escape above:
+  // window, capture phase, and the event is not stopped, so a menu or dialog above still sees it.
+  useEffect(() => {
+    if (!agentRunning || tab.agentSessionId === undefined) return
+    const sid = tab.agentSessionId
+    const onKey = (e: KeyboardEvent): void => {
+      const menuOpen = Boolean(menuRef.current || sendMenuRef.current)
+      if (!escStopsAgent(e, true, agentTabFocused, menuOpen)) return
+      void window.api.preview.agentStop(sid).then((stopped) => {
+        if (stopped) toast.info(t('preview.agent.stopped'))
+      })
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [agentRunning, agentTabFocused, tab.agentSessionId])
 
   // Badges live in the page, so a reload wipes them; this runs both when the list changes and when a
   // load finishes (see onFinish above).

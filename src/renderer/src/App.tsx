@@ -2484,12 +2484,17 @@ export default function App(): React.JSX.Element {
     if (!b) return null
     const serverPending =
       b.awaitRunId !== undefined && runs.some((r) => r.runId === b.awaitRunId && r.status !== 'exited')
+    // Esc cancels the agent only on the tab the user is looking at: the agent's tab is drawn behind
+    // other tabs while a script runs, and a key pressed there is theirs.
+    const group = layout ? groupOfTab(layout, b.id) : null
+    const agentTabFocused = group !== null && group.activeTabId === b.id && group.id === activePaneId
     return (
       <BrowserPane
         tab={b}
         serverPending={serverPending}
         navigateNonce={browserNonce[b.id] ?? 0}
         agentRunning={b.agentSessionId !== undefined && agentBusy[b.agentSessionId] === true}
+        agentTabFocused={agentTabFocused}
         pointer={b.agentSessionId !== undefined ? agentPointer[b.agentSessionId] : undefined}
         onState={(patch) => onBrowserState(b.id, patch)}
         onFocusPane={() => {

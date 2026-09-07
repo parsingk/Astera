@@ -29,3 +29,18 @@ export function pointerToView(p: { x: number; y: number; w: number; h: number },
   const sy = p.h > 0 ? view.height / p.h : 0
   return { left: view.left + p.x * sx, top: view.top + p.y * sy }
 }
+
+/** Whether a keydown is the user cancelling the agent, the way the banner says (`Esc to cancel`).
+ *  Only while a script runs, only when the agent's tab is the shown tab of the focused pane (it is
+ *  drawn invisibly behind other tabs while a script runs, and Esc there belongs to whatever the user
+ *  is looking at), and never while a menu this pane opened is up, which owns the key. Escape alone:
+ *  a chord is some other shortcut. */
+export function escStopsAgent(
+  e: { key: string; altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean },
+  agentRunning: boolean,
+  agentTabFocused: boolean,
+  menuOpen: boolean
+): boolean {
+  if (!agentRunning || !agentTabFocused || menuOpen) return false
+  return e.key === 'Escape' && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey
+}
