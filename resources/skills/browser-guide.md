@@ -115,9 +115,10 @@ Clicks the first element matching the CSS selector, scrolling it into view first
 `click: nothing matches <sel>`. A link whose address leaves this machine is refused before the click:
 `click: the link leaves this machine (<address>)`. After a click that navigates, `snapshot()`,
 `screenshot()`, `fill()`, `press()`, another `click()` and `waitFor()` with a selector wait for the
-load first — you do not need `waitForLoad()` between. `url()`, `title()`, `consoleErrors()`,
-`networkErrors()` and `close()` do not wait; call `waitForLoad()` first if you need one of those to
-see the new page.
+load first — you do not need `waitForLoad()` between. `url()`, `title()`, `consoleErrors()` and
+`networkErrors()` do not wait either — call `waitForLoad()` first if you need one of them to see the
+new page. Neither does `close()`, but for a different reason: it closes whichever tab exists, loading
+or not, so a pending load has nothing to do with it.
 
 ## fill(sel, text)
 Sets the value of an input, textarea or select — or the text of an editable element — the way typing
