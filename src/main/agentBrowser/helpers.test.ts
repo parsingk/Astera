@@ -133,6 +133,24 @@ describe('stage1Helpers', () => {
     await p
   })
 
+  // Measured in the dev app on macOS: `await open(...)` then `await waitForLoad()` — the pattern the
+  // guide gives for "something else started a load" — spent the whole 30 s deadline and threw. `open`
+  // resolves on `did-finish-load`, and `isLoading()` stays true until `did-stop-loading` lands after
+  // it, so a wait armed in that gap has no `did-finish-load` left to hear. `did-stop-loading` is the
+  // one signal still coming, and the load it ends is the one the caller asked about.
+  it('waitForLoad ends on did-stop-loading, the only signal left when did-finish-load has passed', async () => {
+    const g = fakeGuest(); g.isLoading = () => true
+    const { d } = deps(g)
+    const h = stage1Helpers(d, { at: 'script' }, createLog()) as { waitForLoad(): Promise<void> }
+    const p = h.waitForLoad()
+    await Promise.resolve()
+    g.fire('did-stop-loading')
+    await p
+    expect(g.listenerCount('did-finish-load')).toBe(0)
+    expect(g.listenerCount('did-fail-load')).toBe(0)
+    expect(g.listenerCount('did-stop-loading')).toBe(0)
+  }, 2000)
+
   it('waitForLoad rejects with the load error on a main-frame failure, at waitForLoad', async () => {
     const g = fakeGuest(); g.isLoading = () => true
     const { d } = deps(g)

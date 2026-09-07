@@ -59,23 +59,34 @@ const NO_PAGE = 'no page open — call open(url) first'
 export const SYNCHRONOUS_HELPERS = new Set(['help'])
 
 /** Resolves when the guest's current load ends; rejects with the failure when it fails. Bounded.
- *  Whichever way this settles — success, failure, or the WAIT_TIMEOUT_MS deadline — both listeners
- *  are removed before it returns, so a wait that times out does not leave a listener on the guest
- *  for the rest of the session.
+ *  Whichever way this settles — success, failure, or the WAIT_TIMEOUT_MS deadline — every listener
+ *  is removed before it returns, so a wait that times out does not leave one on the guest for the
+ *  rest of the session.
  *
  *  `fresh` is set by the one caller that has just had the tab built for it. A new tab starts on
  *  about:blank and finishes loading it, and that `did-finish-load` lands after `dom-ready` — which is
  *  when the renderer registers the guest and so when this wait is armed. Taking it as the answer made
  *  `open` return with the guest still blank, and everything the script read next described a page
- *  that had not loaded. Caught in the dev app on the tab-creating open, half the time. */
-function loadEnds(g: GuestDriver, at: string, url: string, fresh = false): Promise<void> {
+ *  that had not loaded. Caught in the dev app on the tab-creating open, half the time.
+ *
+ *  `alsoOnStop` is set by the one caller that arms this **after** the load began — `waitForLoad`,
+ *  which is reached only when `isLoading()` says a load is in flight. `isLoading()` stays true until
+ *  `did-stop-loading`, and that lands *after* `did-finish-load`: a wait armed in the gap between the
+ *  two has no `did-finish-load` left to hear, so it ran to the 30 s deadline and threw. Measured in
+ *  the dev app on macOS with the guide's own pattern — `await open(url)` then `await waitForLoad()`.
+ *  `open` and `reload` do not take it: they arm before they navigate, so their own `did-finish-load`
+ *  is still ahead of them, and a `did-stop-loading` from the load they replaced would answer for the
+ *  wrong navigation (the same trap the -3 branch below is about). */
+function loadEnds(g: GuestDriver, at: string, url: string, fresh = false, alsoOnStop = false): Promise<void> {
   let onDone!: Listener
   let onFail!: Listener
+  let onStop!: Listener
   const cleanup = (): void => {
     // Removing a listener that already fired (or was never armed) is a no-op, so this is safe to
     // call unconditionally on every exit path.
     g.removeListener('did-finish-load', onDone)
     g.removeListener('did-fail-load', onFail)
+    g.removeListener('did-stop-loading', onStop)
   }
   const ended = new Promise<void>((resolve, reject) => {
     onDone = (): void => {
@@ -101,8 +112,12 @@ function loadEnds(g: GuestDriver, at: string, url: string, fresh = false): Promi
       if (code === -3) { g.once('did-fail-load', onFail); return }
       reject(new Error(`${at}: ${failedUrl ?? url} failed to load (${description})`))
     }
+    // A failure lands on did-fail-load first and did-stop-loading after it, so the reject above wins
+    // and this only ever ends a load that had nothing else left to say.
+    onStop = (): void => resolve()
     g.once('did-finish-load', onDone)
     g.once('did-fail-load', onFail)
+    if (alsoOnStop) g.once('did-stop-loading', onStop)
   })
   return withTimeout(ended, WAIT_TIMEOUT_MS, at).finally(cleanup)
 }
@@ -199,7 +214,7 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
       ctx.at = 'waitForLoad'
       const g = need()
       if (!g.isLoading()) return
-      await loadEnds(g, 'waitForLoad', g.getURL())
+      await loadEnds(g, 'waitForLoad', g.getURL(), false, true)
     },
     async consoleErrors(): Promise<unknown[]> {
       ctx.at = 'consoleErrors'
