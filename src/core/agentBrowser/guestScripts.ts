@@ -27,8 +27,8 @@ const iife = (fn: (...args: never[]) => unknown, ...args: unknown[]): string =>
   `(${fn.toString()})(${args.map(embedJson).join(', ')})`
 
 export function snapshotScript(): string {
-  const { interactive, text, name, selector, heading, summary } = SNAPSHOT_BUDGET
-  return iife(snapshotRuntime, { interactive, text, name, selector, heading, summary })
+  const { interactive, headings, landmarks, text, name, selector, heading, summary } = SNAPSHOT_BUDGET
+  return iife(snapshotRuntime, { interactive, headings, landmarks, text, name, selector, heading, summary })
 }
 
 export function clickScript(sel: string, followLink: boolean): string {

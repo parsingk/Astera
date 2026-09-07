@@ -111,18 +111,72 @@ describe('clampSnapshot', () => {
   })
 
   it('drops landmarks before headings, leaving interactive untouched, when landmarks alone push past budget', () => {
-    // 142 headings at the per-heading cap already sit just under the total (headings alone should
-    // never need to shrink here); 10 landmarks at the per-landmark cap tip it over, and every one of
-    // them has to go before the total fits again — none is spared partway through.
-    const headingsMany = Array.from({ length: 142 }, () => ({ level: 2, text: 'H'.repeat(SNAPSHOT_BUDGET.heading) }))
-    const landmarksMany = Array.from({ length: 10 }, () => ({ tag: 'nav', summary: 'S'.repeat(SNAPSHOT_BUDGET.summary) }))
+    // 100 headings at the per-heading cap sit ~10,000 characters under the total, so headings alone
+    // never need to shrink here; 60 landmarks at the per-landmark cap tip it well over. What is
+    // asserted is which section gave way and that the count is the true remainder — not how many
+    // landmarks survived, which any change to the Snapshot shape would move.
+    const headingsMany = Array.from({ length: 100 }, () => ({ level: 2, text: 'H'.repeat(SNAPSHOT_BUDGET.heading) }))
+    const landmarksMany = Array.from({ length: 60 }, () => ({ tag: 'nav', summary: 'S'.repeat(SNAPSHOT_BUDGET.summary) }))
     const s = clampSnapshot({ ...base(), headings: headingsMany, landmarks: landmarksMany })
     expect(JSON.stringify(s).length).toBeLessThanOrEqual(SNAPSHOT_BUDGET.total)
-    expect(s!.landmarks).toEqual([])
-    expect(s!.moreLandmarks).toBe(10)
-    expect(s!.headings).toHaveLength(142)
+    expect(s!.landmarks.length).toBeLessThan(60)
+    expect(s!.moreLandmarks).toBe(60 - s!.landmarks.length)
+    expect(s!.headings).toHaveLength(100)
     expect(s!.moreHeadings).toBeUndefined()
     expect(s!.interactive).toHaveLength(2)
+  })
+
+  // The guest counts every match on the page and sends only the cap, so these numbers are the page's
+  // own totals rather than a measure of what arrived. The old shape could not express them: main
+  // subtracted what it received from what it kept, and the guest sent the cap plus 50, so
+  // `moreInteractive` was 50 on a page with 5,000 controls — a number an agent decides on.
+  it("reports the guest's counts, so an overflow can be far larger than the list that arrived", () => {
+    const s = clampSnapshot({
+      ...base(),
+      headings: [{ level: 1, text: 'One' }],
+      headingCount: 900,
+      landmarks: [{ tag: 'nav', summary: 'x' }],
+      landmarkCount: 120,
+      interactive: Array.from({ length: SNAPSHOT_BUDGET.interactive }, (_, i) => el(i)),
+      interactiveCount: 5_000
+    })
+    expect(s!.moreInteractive).toBe(4_800)
+    expect(s!.moreHeadings).toBe(899)
+    expect(s!.moreLandmarks).toBe(119)
+  })
+
+  it("says how much text is missing from the guest's count of the page, not from what it sent", () => {
+    const s = clampSnapshot({ ...base(), text: 'x'.repeat(SNAPSHOT_BUDGET.text), textLength: 50_000 })
+    expect(s!.text.endsWith(` … (${50_000 - SNAPSHOT_BUDGET.text} more characters)`)).toBe(true)
+  })
+
+  it('marks nothing as missing when the whole visible text arrived, though collapsing shortened it', () => {
+    // The guest counts what it appends, including the space it puts after each text node, and main
+    // collapses and trims — so its count is a character or two longer than the text it sent even for
+    // a page it never truncated. Only a count larger than what arrived means anything was cut.
+    const s = clampSnapshot({ ...base(), text: 'Some visible text ', textLength: 18 })
+    expect(s!.text).toBe('Some visible text')
+  })
+
+  // The cascade used to re-serialise the whole snapshot once per dropped item, so a page with a few
+  // thousand of them blocked the main process for seconds — 4,000 headings and 4,000 landmarks at the
+  // per-item cap took 14.3 s, measured, and 6,000 of each took 30.6 s. That is main: no IPC, no UI and
+  // no output for any other session for as long as it lasts. The assertion is the shape, never the
+  // clock; a timing assertion would go red on a loaded machine for reasons that are not the code's.
+  it('clamps a page carrying thousands of headings and landmarks', () => {
+    const s = clampSnapshot({
+      ...base(),
+      headings: Array.from({ length: 4_000 }, () => ({ level: 2, text: 'H'.repeat(SNAPSHOT_BUDGET.heading) })),
+      landmarks: Array.from({ length: 4_000 }, () => ({ tag: 'nav', summary: 'S'.repeat(SNAPSHOT_BUDGET.summary) })),
+      interactive: Array.from({ length: SNAPSHOT_BUDGET.interactive }, (_, i) => el(i))
+    })
+    expect(JSON.stringify(s).length).toBeLessThanOrEqual(SNAPSHOT_BUDGET.total)
+    expect(s!.interactive).toHaveLength(SNAPSHOT_BUDGET.interactive)
+    expect(s!.headings.length).toBeGreaterThan(0)
+    expect(s!.moreHeadings).toBe(4_000 - s!.headings.length)
+    // Landmarks are the first list the cascade gives up, and 4,000 of them at the cap is 800,000
+    // characters: all of them go, which the count has to say.
+    expect(s!.moreLandmarks).toBe(4_000)
   })
 
   it('drops headings whose level is not a valid heading level (1-6), without throwing', () => {
@@ -142,6 +196,13 @@ describe('clampSnapshot', () => {
   it('tolerates malformed landmark entries, keeping the well-formed ones', () => {
     const s = clampSnapshot({ ...base(), landmarks: [null, 3, { tag: 'nav', summary: 'ok' }] })
     expect(s!.landmarks).toEqual([{ tag: 'nav', summary: 'ok' }])
+  })
+
+  // sanitizeUrl answers '' for anything that is not http(s), and the guide promises a url. The only
+  // other address this tab can be at is about:blank, which is where the guest is created.
+  it('reports about:blank as itself, and any other non-http(s) address as nothing', () => {
+    expect(clampSnapshot({ ...base(), url: 'about:blank' })!.url).toBe('about:blank')
+    expect(clampSnapshot({ ...base(), url: 'file:///C:/x.html' })!.url).toBe('')
   })
 
   it('redacts a title carrying a secret, and leaves an ordinary title untouched', () => {

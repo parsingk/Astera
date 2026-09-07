@@ -100,10 +100,11 @@ The page as text, for reading rather than looking: `title`, `url`, `headings` (w
 button, input, select, textarea, element with a role, and any other element carrying a tabindex other
 than -1 — with its `tag`, a `selector` you can pass to `click()`/`fill()`, its accessible `name`, its
 visible `text`, `disabled`, and `href` for links — then `text`, the visible text of the page. Budgets:
-200 interactive elements (`moreInteractive` says how many were left out), 8,000 characters of text
-(ending in `… (N more characters)` when cut), 32,000 characters in all — when the total is still over
-after that, text shrinks further first, then landmarks give way (`moreLandmarks`), then headings
-(`moreHeadings`), then interactive elements give way further (`moreInteractive`). Hidden inputs, script
+200 interactive elements, 150 headings and 80 landmarks — `moreInteractive`, `moreHeadings` and
+`moreLandmarks` say how many more the page has, counted on the page itself rather than in what was
+sent — 8,000 characters of text (ending in `… (N more characters)` when cut), 32,000 characters in
+all — when the total is still over after that, text shrinks further first, then landmarks give way,
+then headings, then interactive elements give way further. Hidden inputs, script
 and style bodies are left out, and so are secrets, in different ways: a heading or landmark whose text
 looks like one is dropped from its list; an interactive element's `name` or `text` that looks like one
 becomes `[redacted]` and the element stays; a secret-looking word in the free text is stripped from it.

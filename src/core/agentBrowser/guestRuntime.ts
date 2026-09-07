@@ -24,6 +24,8 @@
 
 export interface SnapshotBudgets {
   interactive: number
+  headings: number
+  landmarks: number
   text: number
   name: number
   selector: number
@@ -79,7 +81,10 @@ export function snapshotRuntime(budgets: SnapshotBudgets): unknown {
     return el.getAttribute('title') || ''
   }
   const skipText = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG'])
-  function textOf(root: Node, max: number): string {
+  /** The visible text cut to `max`, and how long all of it is. The walk cannot stop at the cut: the
+   *  length is what tells the agent how much of the page it is not reading, and a walk that stopped
+   *  just past the cut could never report more than that — whatever the page's real length. */
+  function textOf(root: Node, max: number): { text: string; length: number } {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode: function (n) {
         const p = n.parentElement
@@ -88,27 +93,41 @@ export function snapshotRuntime(budgets: SnapshotBudgets): unknown {
       }
     })
     let out = ''
-    for (let n = walker.nextNode(); n && out.length < max + 1000; n = walker.nextNode()) {
+    let length = 0
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
       const t = (n.textContent || '').replace(/\s+/g, ' ')
-      if (t.trim()) out += t + ' '
+      if (!t.trim()) continue
+      length += t.length + 1
+      if (out.length < max) out += t + ' '
     }
-    return out
+    return { text: out, length: length }
   }
+  // Each list is counted whole and sent capped, in the one pass that decides what to keep. The count
+  // is what the agent makes a decision on — "is there another button below?" — and main can only count
+  // what arrived, which is how a page with 5,000 controls came back as "200 shown, 50 more". The caps
+  // are also what bounds this: an uncapped list of a few thousand items cost main seconds of clamping
+  // and over a megabyte of IPC per snapshot.
   const headings: { level: number; text: string }[] = []
+  let headingCount = 0
   document.querySelectorAll('h1,h2,h3,h4,h5,h6').forEach(function (h) {
     if (!visible(h)) return
-    headings.push({ level: Number(h.tagName.charAt(1)), text: (h.textContent || '').slice(0, budgets.heading) })
+    headingCount += 1
+    if (headings.length < budgets.headings) headings.push({ level: Number(h.tagName.charAt(1)), text: (h.textContent || '').slice(0, budgets.heading) })
   })
   const landmarks: { tag: string; summary: string }[] = []
+  let landmarkCount = 0
   document.querySelectorAll('nav,main,header,footer,aside,form').forEach(function (l) {
     if (!visible(l)) return
-    landmarks.push({ tag: l.tagName, summary: (l.textContent || '').replace(/\s+/g, ' ').trim().slice(0, budgets.summary) })
+    landmarkCount += 1
+    if (landmarks.length < budgets.landmarks) landmarks.push({ tag: l.tagName, summary: (l.textContent || '').replace(/\s+/g, ' ').trim().slice(0, budgets.summary) })
   })
   const interactive: unknown[] = []
+  let interactiveCount = 0
   const sel = 'a[href],button,input:not([type=hidden]),select,textarea,[role],[tabindex]:not([tabindex="-1"])'
   document.querySelectorAll(sel).forEach(function (el) {
-    if (interactive.length >= budgets.interactive + 50) return // main counts the overflow; a little slack is enough
     if (!visible(el)) return
+    interactiveCount += 1
+    if (interactive.length >= budgets.interactive) return
     const entry: Record<string, unknown> = {
       tag: el.tagName,
       selector: selectorOf(el).slice(0, budgets.selector),
@@ -121,13 +140,18 @@ export function snapshotRuntime(budgets: SnapshotBudgets): unknown {
     if (el instanceof HTMLAnchorElement) entry.href = el.href
     interactive.push(entry)
   })
+  const visibleText = textOf(document.body, budgets.text)
   return {
     title: document.title,
     url: location.href,
     headings: headings,
+    headingCount: headingCount,
     landmarks: landmarks,
+    landmarkCount: landmarkCount,
     interactive: interactive,
-    text: textOf(document.body, budgets.text)
+    interactiveCount: interactiveCount,
+    text: visibleText.text,
+    textLength: visibleText.length
   }
 }
 
