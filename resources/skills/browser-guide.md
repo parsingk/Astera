@@ -108,6 +108,8 @@ then headings, then interactive elements give way further. Hidden inputs, script
 and style bodies are left out, and so are secrets, in different ways: a heading or landmark whose text
 looks like one is dropped from its list; an interactive element's `name` or `text` that looks like one
 becomes `[redacted]` and the element stays; a secret-looking word in the free text is stripped from it.
+A password input is listed like any other field, so you know it is there, but its `text` is always
+empty: its value is never read.
 Throws `snapshot: the page returned nothing readable` when the page gave back nothing usable.
 
 ## screenshot()

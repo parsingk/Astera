@@ -139,6 +139,15 @@ describe('guest scripts', () => {
     expect(helpersTestSrc).toContain(`error: '${NO_OPTION}'`)
   })
 
+  // There is no DOM in these tests, so what the guest answers cannot be exercised here — and this is
+  // the one rule in snapshotRuntime that no other end can check. Main's redaction is no help: a
+  // password a person chose looks like ordinary text to it, and the design lets the user type in the
+  // agent's tab. So the code that carries the rule is the pin, matched as code and not as prose.
+  it('snapshotRuntime reads no value from a password field', () => {
+    const runtimeSrc = readFileSync(path.join(HERE, 'guestRuntime.ts'), 'utf8')
+    expect(runtimeSrc).toContain("el.type === 'password' ? ''")
+  })
+
   it('selectorOf stays identical to its copy in pickRuntime.ts', () => {
     // Both files carry a "change one copy, change the other" comment; nothing else enforces it.
     const runtimeSrc = readFileSync(path.join(HERE, 'guestRuntime.ts'), 'utf8')
