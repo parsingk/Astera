@@ -615,7 +615,7 @@ describe('browserHelpers', () => {
         g.capturePage = async () => { throw new Error('Object has been destroyed') }
         const h = browserHelpers(d, { at: 'script' }) as { screenshot(): Promise<unknown> }
         const p = h.screenshot()
-        const settled = expect(p).rejects.toThrow('screenshot: the page did not paint within 5 s — the last capture failed: Object has been destroyed')
+        const settled = expect(p).rejects.toThrow('screenshot: the page did not paint within 5 s — the window may be minimised (the last capture failed: Object has been destroyed)')
         await vi.advanceTimersByTimeAsync(SHOT_TIMEOUT_MS + 1)
         await settled
       } finally {

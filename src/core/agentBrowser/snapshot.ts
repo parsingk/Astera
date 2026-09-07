@@ -117,8 +117,13 @@ function text(v: unknown, max: number, total: number): string {
 
 /** How many of a section the page really has. The guest counts every match and sends only the cap,
  *  so its count is the number the agent decides on — "is there another button below?" — and main can
- *  only count what arrived. A snapshot that does not say is measured by what arrived. */
-const counted = (v: unknown, arrived: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : arrived)
+ *  only count what arrived. A snapshot that does not say is measured by what arrived.
+ *
+ *  A whole number, and never fewer than arrived: this is the clamp, and a count of 0 beside 200
+ *  headings that did arrive published `moreHeadings: -143`, while 3.5 published `moreHeadings: 2.5`.
+ *  The same file already refuses a non-integer heading level for this reason. */
+const counted = (v: unknown, arrived: number): number =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 0 ? Math.max(v, arrived) : arrived
 
 /** Drops items from the end until at least `overflow` bytes of JSON are gone. Each item is measured
  *  once — the snapshot is not re-serialised per item, which is what made a page with a few thousand

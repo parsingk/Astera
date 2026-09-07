@@ -153,6 +153,14 @@ describe('guest scripts', () => {
     expect(runtimeSrc).toContain("el.type === 'password' ? ''")
   })
 
+  // Same reason as the password pin above: no DOM here, and the distinction is invisible from any
+  // other end. The `disabled` IDL property reflects only the element's own attribute, so a control
+  // inside a <fieldset disabled> reads false there while click() still dispatches nothing for it.
+  it('clickRuntime asks whether the control is actually disabled, not whether it says so', () => {
+    const runtimeSrc = readFileSync(path.join(HERE, 'guestRuntime.ts'), 'utf8')
+    expect(runtimeSrc).toContain("el.matches(':disabled')")
+  })
+
   it('selectorOf stays identical to its copy in pickRuntime.ts', () => {
     // Both files carry a "change one copy, change the other" comment; nothing else enforces it.
     const runtimeSrc = readFileSync(path.join(HERE, 'guestRuntime.ts'), 'utf8')

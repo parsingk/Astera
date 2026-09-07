@@ -22,8 +22,9 @@ into it; that is fine — your next script sees the page as it is.
 - **`log(value)` is the only output.** Strings print as they are, anything else as JSON, in order.
   There is no `console` in the script's world, so `console.log(x)` does not print nothing — it throws
   `Cannot read properties of undefined (reading 'log')` and ends the run. A thrown error ends the
-  script; what was logged before it is kept and the error names the helper that was running
-  (`error.at`).
+  script; what was logged before it is kept and the error reported to you names the helper that was
+  running (`error.at` on that report — an error you catch yourself inside the script is an ordinary
+  `Error`, with the helper's name in its message rather than in a field).
 - **`open()` before anything else.** Every helper below except `log`, `help` and `close` needs a page;
   called before the first `open(url)` they throw `no page open — call open(url) first`.
 - **60 seconds per script, 30 per wait.** A script cut off reports `at: "timeout"`.
@@ -104,8 +105,8 @@ visible `text`, `disabled`, and `href` for links — then `text`, the visible te
 `moreLandmarks` say how many more the page has, counted on the page itself rather than in what was
 sent — 8,000 characters of text (ending in `… (N more characters)` when cut), 32,000 characters in
 all — when the total is still over after that, text shrinks further first, then landmarks give way,
-then headings, then interactive elements give way further. Hidden inputs, script
-and style bodies are left out, and so are secrets, in different ways: a heading or landmark whose text
+then headings, then interactive elements give way further. Hidden inputs, script and style bodies are
+left out, and so are secrets, in different ways: a heading or landmark whose text
 looks like one is dropped from its list; an interactive element's `name` or `text` that looks like one
 becomes `[redacted]` and the element stays; a secret-looking word in the free text is stripped from it.
 A password input is listed like any other field, so you know it is there, but its `text` is always
@@ -129,8 +130,10 @@ looking for another way to take a picture. A file that could not be written is
 
 ## click(sel)
 Clicks the first element matching the CSS selector, scrolling it into view first. Throws
-`click: nothing matches <sel>`, and `click: <sel> is disabled` when the control is disabled: a click
-on one dispatches nothing at all, so that is reported rather than answered as a click. A link whose
+`click: nothing matches <sel>`, and `click: <sel> is disabled` when the control is disabled — its own
+attribute or an enclosing `<fieldset disabled>` — because a click on one dispatches nothing at all, so
+that is reported rather than answered as a click. An element merely marked `aria-disabled` is clicked:
+it does receive the click, whatever `snapshot()` says about it. A link whose
 address leaves this machine is refused before the click:
 `click: the link leaves this machine (<address>)`. After a click that navigates, `snapshot()`,
 `screenshot()`, `fill()`, `press()`, another `click()` and `waitFor()` with a selector wait for the

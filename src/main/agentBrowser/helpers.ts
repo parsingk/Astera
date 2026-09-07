@@ -115,15 +115,17 @@ function loadSettles(g: GuestDriver, at: string): Promise<void> {
   return withTimeout(settled, WAIT_TIMEOUT_MS, at).finally(() => clearTimeout(timer))
 }
 
-/** Why no frame arrived, in the agent's own terms. A capture that never answers at all is the
- *  minimised window — that is what was measured — but a guest destroyed mid-run, because the user
- *  closed the tab, rejects every call instead, and blaming minimisation for that sent the agent
- *  looking at the wrong thing. So the guest's own last word is reported whenever it said one. The
- *  deadline is interpolated so changing SHOT_TIMEOUT_MS cannot leave the message lying. */
+/** Why no frame arrived, in the agent's own terms. The cause worth naming is the minimised window —
+ *  that is what was measured — and a guest destroyed mid-run, because the user closed the tab, rejects
+ *  every call instead, so its own last word is worth carrying too. Both, not one: naming only the
+ *  window sent the agent looking at the wrong thing for a closed tab, and reporting only the guest's
+ *  word left it holding `UnknownVizError`, a bare Chromium string that says nothing about what to do —
+ *  which is what the minimised window actually produced in the app. The deadline is interpolated so
+ *  changing SHOT_TIMEOUT_MS cannot leave the message lying. */
 const noPaint = (at: string, last: unknown): Error =>
   new Error(
-    `${at}: the page did not paint within ${SHOT_TIMEOUT_MS / 1000} s — ` +
-      (last === undefined ? 'the window may be minimised' : `the last capture failed: ${last instanceof Error ? last.message : String(last)}`)
+    `${at}: the page did not paint within ${SHOT_TIMEOUT_MS / 1000} s — the window may be minimised` +
+      (last === undefined ? '' : ` (the last capture failed: ${last instanceof Error ? last.message : String(last)})`)
   )
 
 /** Asks the guest for frames until one has pixels, or the deadline passes — and then throws the
@@ -152,6 +154,10 @@ async function firstFrame(g: GuestDriver, at: string): Promise<CapturedImage> {
       const image = await withTimeout(g.capturePage(), left, at)
       const { width, height } = image.getSize()
       if (width > 0 && height > 0) return image
+      // An empty frame is an answer: the guest is alive and simply not drawing yet, so an error kept
+      // from an earlier try no longer describes anything. Left standing, the viz error a guest answers
+      // on its first frame or two would go on to explain a deadline it had nothing to do with.
+      last = undefined
     } catch (err) {
       // The deadline is the one rejection that ends this; anything else the guest says is "not yet",
       // and kept in case the deadline arrives with nothing better to report.
@@ -374,7 +380,11 @@ export function browserHelpers(deps: HelperDeps, ctx: RunContext): Record<string
       ctx.at = 'screenshot'
       const g = need()
       if (g.isLoading()) await loadSettles(g, ctx.at)
-      const image = await firstFrame(g, ctx.at)
+      // The literal, not ctx.at: this line runs after an await, and withAtReset sets ctx.at back to
+      // 'script' when any helper resolves — so a script awaiting two helpers at once could attribute
+      // this failure to whichever finished first. The sites that read ctx.at do it before their first
+      // await, where it cannot have moved.
+      const image = await firstFrame(g, 'screenshot')
       // A write that fails — ENOSPC, EACCES, a folder that is a file — is this helper's failure to
       // report, not a raw Node error arriving under `at: 'screenshot'` with nobody's name on it.
       const saved = await savePng(image, deps.shotsDir).catch((err: unknown) => {
@@ -413,7 +423,8 @@ export function browserHelpers(deps: HelperDeps, ctx: RunContext): Record<string
           const address = sanitizeUrl(first.href)
           if (address !== '') throw new Error(`click: the link leaves this machine (${address})`)
         }
-        await inGuest(g, ctx.at, clickScript(s, true), false)
+        // The literal for the same reason as screenshot()'s: this is past an await.
+        await inGuest(g, 'click', clickScript(s, true), false)
       }
     },
     async fill(sel: unknown, text: unknown): Promise<void> {

@@ -171,7 +171,13 @@ export function clickRuntime(sel: string, followLink: boolean): unknown {
   // be a false success — the agent spends a round wondering why the page did not change. Checked
   // before the link below because a disabled control does not reach an enclosing link either: a
   // browser dispatches no click event for it, so there is nothing to follow.
-  if ((el as HTMLButtonElement).disabled === true) return { found: true, disabled: true }
+  //
+  // ':disabled' rather than the `disabled` property, which reflects only the element's own attribute:
+  // a control inside a <fieldset disabled> reads false there while click() still returns early for it.
+  // aria-disabled is deliberately not included, though snapshot() reports it as disabled — an
+  // aria-disabled element really does receive the click, and refusing it would refuse a click the page
+  // itself handles.
+  if (el.matches(':disabled')) return { found: true, disabled: true }
   const a = el.closest('a[href]') as HTMLAnchorElement | null
   // `a.href` — the resolved DOM property — and not getAttribute('href'), which is security-relevant
   // rather than incidental: main refuses an href only when it reads as an off-machine http(s)

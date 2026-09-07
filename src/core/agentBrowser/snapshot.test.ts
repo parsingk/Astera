@@ -150,12 +150,40 @@ describe('clampSnapshot', () => {
     expect(s!.text.endsWith(` … (${50_000 - SNAPSHOT_BUDGET.text} more characters)`)).toBe(true)
   })
 
-  it('marks nothing as missing when the whole visible text arrived, though collapsing shortened it', () => {
-    // The guest counts what it appends, including the space it puts after each text node, and main
-    // collapses and trims — so its count is a character or two longer than the text it sent even for
-    // a page it never truncated. Only a count larger than what arrived means anything was cut.
-    const s = clampSnapshot({ ...base(), text: 'Some visible text ', textLength: 18 })
-    expect(s!.text).toBe('Some visible text')
+  it('refuses a count that is not a count, rather than publishing arithmetic on it', () => {
+    // The guest is the developer's own page and is trusted to be honest, not to be well-formed — and
+    // clamping what it sends is this module's whole job. A count of 0 beside 200 headings that did
+    // arrive published moreHeadings: -143, and 3.5 published moreHeadings: 2.5, both to a field the
+    // guide tells the agent to make a decision on.
+    const many = Array.from({ length: 200 }, (_, i) => ({ level: 2, text: 'h'.repeat(SNAPSHOT_BUDGET.heading) + i }))
+    const low = clampSnapshot({ ...base(), headings: many, headingCount: 0 })
+    expect(low!.moreHeadings === undefined || low!.moreHeadings > 0).toBe(true)
+    const fractional = clampSnapshot({ ...base(), headings: many, headingCount: 3.5 })
+    expect(fractional!.moreHeadings === undefined || Number.isInteger(fractional!.moreHeadings)).toBe(true)
+    const negative = clampSnapshot({ ...base(), headings: many, headingCount: -5 })
+    expect(negative!.moreHeadings === undefined || negative!.moreHeadings > 0).toBe(true)
+  })
+
+  it('does not invent missing text when whitespace made the page longer than it reads', () => {
+    // The guest counts the raw text it walked, spaces and all, and main collapses it — so its count
+    // exceeds what the page reads as without anything having been cut. Only a count larger than the
+    // text that *arrived* means the guest truncated.
+    //
+    // The whitespace is what makes this discriminating rather than decorative: 10,000 raw characters
+    // are over the 8,000 budget while the 1,999 they collapse to are well under it, so trusting the
+    // guest's count here appends a marker claiming thousands of characters are missing from a page
+    // that arrived whole. A short string takes the same path either way and pins nothing.
+    const raw = ('a' + ' '.repeat(9)).repeat(1000)
+    expect(raw.length).toBeGreaterThan(SNAPSHOT_BUDGET.text)
+    const s = clampSnapshot({ ...base(), text: raw, textLength: raw.length })
+    expect(s!.text).not.toContain('more characters')
+    expect(s!.text.length).toBeLessThan(2100)
+  })
+
+  it('says how much is missing when the guest really did truncate', () => {
+    const sent = 'y'.repeat(SNAPSHOT_BUDGET.text)
+    const s = clampSnapshot({ ...base(), text: sent, textLength: SNAPSHOT_BUDGET.text + 500 })
+    expect(s!.text).toContain('more characters')
   })
 
   // The cascade used to re-serialise the whole snapshot once per dropped item, so a page with a few
