@@ -18,8 +18,8 @@ into it; that is fine — your next script sees the page as it is.
   `Cannot read properties of undefined (reading 'log')` and ends the run. A thrown error ends the
   script; what was logged before it is kept and the error names the helper that was running
   (`error.at`).
-- **`open()` before anything else.** Every helper below except `log` and `help` needs a page; called
-  before the first `open(url)` they throw `no page open — call open(url) first`.
+- **`open()` before anything else.** Every helper below except `log`, `help` and `close` needs a page;
+  called before the first `open(url)` they throw `no page open — call open(url) first`.
 - **60 seconds per script, 30 per wait.** A script cut off reports `at: "timeout"`.
 - **Read after you load.** `consoleErrors()` and `networkErrors()` return what happened since the
   last `open`/`reload` — call them after the load you care about.
@@ -29,8 +29,9 @@ into it; that is fine — your next script sees the page as it is.
   default actions do not fire, except Enter submitting the form of a focused input.
 - **A refusal may still mean it happened.** `press` and `click` can navigate the page; when that
   navigation tears the frame down before the reply arrives, the helper reports `the page refused the
-  call` even though the click or the submit went through. Check with `url()` or `snapshot()` before
-  repeating such an action — do not retry blind.
+  call` even though the click or the submit went through. Check with `snapshot()` before repeating
+  such an action — it waits for the navigation to land. `url()` waits for nothing, so trust it only
+  after `waitForLoad()`. Do not retry blind.
 - **One script at a time** per session. A second `astera browser js` while one runs is refused.
 - Every helper is `async` except `log` and `help`; `await` them.
 
@@ -90,12 +91,17 @@ or completed with status ≥ 400, since the last load.
 ## snapshot()
 The page as text, for reading rather than looking: `title`, `url`, `headings` (with levels), `landmarks`
 (nav, main, header, footer, aside, form, each with a one-line summary), `interactive` — every link,
-button, input, select, textarea and element with a role, with its `tag`, a `selector` you can pass to
-`click()`/`fill()`, its accessible `name`, its visible `text`, `disabled`, and `href` for links — then
-`text`, the visible text of the page. Budgets: 200 interactive elements (`moreInteractive` says how
-many were left out), 8,000 characters of text (ending in `… (N more characters)` when cut), 32,000
-characters in all. Hidden inputs, script and style bodies, and anything that looks like a secret are
-left out. Throws `snapshot: the page returned nothing readable` when the page gave back nothing usable.
+button, input, select, textarea, element with a role, and any other element carrying a tabindex other
+than -1 — with its `tag`, a `selector` you can pass to `click()`/`fill()`, its accessible `name`, its
+visible `text`, `disabled`, and `href` for links — then `text`, the visible text of the page. Budgets:
+200 interactive elements (`moreInteractive` says how many were left out), 8,000 characters of text
+(ending in `… (N more characters)` when cut), 32,000 characters in all — when the total is still over
+after that, text shrinks further first, then landmarks give way (`moreLandmarks`), then headings
+(`moreHeadings`), then interactive elements give way further (`moreInteractive`). Hidden inputs, script
+and style bodies are left out, and so are secrets, in different ways: a heading or landmark whose text
+looks like one is dropped from its list; an interactive element's `name` or `text` that looks like one
+becomes `[redacted]` and the element stays; a secret-looking word in the free text is stripped from it.
+Throws `snapshot: the page returned nothing readable` when the page gave back nothing usable.
 
 ## screenshot()
 The visible page as a PNG: `{ path, width, height }`. The file is under Astera's own data folder and
@@ -107,8 +113,11 @@ for a tab with no pixels.
 ## click(sel)
 Clicks the first element matching the CSS selector, scrolling it into view first. Throws
 `click: nothing matches <sel>`. A link whose address leaves this machine is refused before the click:
-`click: the link leaves this machine (<address>)`. After a click that navigates, the next helper waits
-for the load — you do not need `waitForLoad()` between.
+`click: the link leaves this machine (<address>)`. After a click that navigates, `snapshot()`,
+`screenshot()`, `fill()`, `press()`, another `click()` and `waitFor()` with a selector wait for the
+load first — you do not need `waitForLoad()` between. `url()`, `title()`, `consoleErrors()`,
+`networkErrors()` and `close()` do not wait; call `waitForLoad()` first if you need one of those to
+see the new page.
 
 ## fill(sel, text)
 Sets the value of an input, textarea or select — or the text of an editable element — the way typing
