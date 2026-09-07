@@ -84,6 +84,7 @@ import { AgentGuestRegistry, type GuestLike } from './agentBrowser/registry'
 import { AgentBufferStore, attachBuffers, installNetworkCapture } from './agentBrowser/buffers'
 import type { GuestDriver } from './agentBrowser/helpers'
 import { AgentBrowserRuns, devServersFor } from './agentBrowser/runs'
+import { previewShotsDir } from './preview/shots'
 import { PREVIEW_PARTITION } from '../core/preview/guards'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from './orchestration/resumePacket'
 import { extractStatusLineSession } from '../core/usage/statusline'
@@ -931,6 +932,9 @@ export function registerIpc(
     // started — the address the user gave the Run to preview, or failing that the one it printed. Read
     // per call: a Run can start or stop, and a preview address be set, between two scripts.
     devServersOf: (cwd) => devServersFor(core.run.listActive(), cwd, core.runConfig.get(cwd)),
+    // The same folder Design Mode's captures go to, and the one a Claude session is spawned with
+    // read access to — so the path screenshot() hands back opens without a permission prompt.
+    shotsDir: previewShotsDir(app.getPath('userData')),
     get guide() {
       return browserGuide()
     }

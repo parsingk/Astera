@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { AgentBrowserRuns, devServersFor, type RunsDeps } from './runs'
 import { AgentGuestRegistry } from './registry'
 import { Ring } from '../../core/agentBrowser/ring'
+import os from 'node:os'
 
 type Cb = (...a: unknown[]) => void
 const fakeGuest = (id: number) => {
@@ -13,8 +14,19 @@ const fakeGuest = (id: number) => {
   // a stop posted from one lands on a turn where the helper it interrupts has already returned.
   const hooks: { afterLoad?: () => void; afterReload?: (n: number) => void } = {}
   const fire = (ev: string): void => { const s = once.get(ev); once.delete(ev); s?.forEach((cb) => cb()) }
-  return {
+  const g = {
     id, counts, hooks, isDestroyed: () => false, getType: () => 'webview',
+    // What the page answers, in order, and what was asked of it. The tests replace `answers`
+    // wholesale, so both are read through `g` rather than captured.
+    answers: [] as unknown[],
+    scripts: [] as string[],
+    async executeJavaScript(code: string): Promise<unknown> {
+      g.scripts.push(code)
+      const next = g.answers.shift()
+      if (next instanceof Error) throw next
+      return next
+    },
+    async capturePage() { return { getSize: () => ({ width: 800, height: 600 }), toPNG: () => Buffer.from('png') } },
     async loadURL() { queueMicrotask(() => fire('did-finish-load')); hooks.afterLoad?.() },
     // The load event is an IPC event from the guest in the app, so it lands on a later turn of the
     // event loop and a script looping on reload() yields between iterations. A synchronous fake
@@ -28,6 +40,7 @@ const fakeGuest = (id: number) => {
     once(ev: string, cb: Cb) { (once.get(ev) ?? once.set(ev, new Set()).get(ev)!).add(cb); return this },
     removeListener(ev: string, cb: Cb) { once.get(ev)?.delete(cb); return this }
   }
+  return g
 }
 
 const harness = (opts: { devServers?: { name: string; url: string; preview: boolean }[]; hasSession?: boolean; tabAppears?: boolean; scriptTimeoutMs?: number } = {}) => {
@@ -46,6 +59,7 @@ const harness = (opts: { devServers?: { name: string; url: string; preview: bool
     setBusy: (_s, b) => calls.busy.push(b),
     devServersOf: () => opts.devServers ?? [],
     guide: '# g',
+    shotsDir: os.tmpdir(),
     tabWaitMs: 100,
     scriptTimeoutMs: opts.scriptTimeoutMs
   }
@@ -179,6 +193,28 @@ describe('AgentBrowserRuns', () => {
     const r = await runs.run('s1', `await open(); log(await url())`)
     expect(calls.requestTab).toEqual(['http://localhost:4321/'])
     expect(r.ok && r.result.log).toEqual(['http://localhost:5173/'])
+  })
+
+  it('a script can see and act: snapshot, click, fill, press and waitFor go to the page in order', async () => {
+    const { runs, guest } = harness()
+    guest.answers = [
+      { title: 'Demo', url: 'http://localhost:5173/', interactive: [], text: 'hello' },  // snapshot
+      { found: true, clicked: true },                                                    // click
+      { found: true, filled: true },                                                     // fill
+      { pressed: true, target: 'input#q' },                                              // press
+      { found: true }                                                                    // waitFor
+    ]
+    const r = await runs.run('s1', `
+      await open('http://localhost:5173/')
+      log((await snapshot()).text)
+      await click('#go'); await fill('#q', 'x'); await press('Enter'); await waitFor('.done')
+      log('done')
+    `)
+    expect(r.ok && r.result.log).toEqual(['hello', 'done'])
+    // Every script is `(function <name>(…) {…})(…)`, so the name is what says which helper ran.
+    // Matched rather than sliced: the string starts with the paren the slice would look for.
+    const ran = guest.scripts.map((s) => (s.match(/function\s+(\w+)/) ?? [])[1])
+    expect(ran).toEqual(['snapshotRuntime', 'clickRuntime', 'fillRuntime', 'pressRuntime', 'waitForRuntime'])
   })
 })
 

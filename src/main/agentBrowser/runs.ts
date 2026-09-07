@@ -27,6 +27,8 @@ export interface RunsDeps {
   /** The dev servers Astera's Run has running for the project at `cwd` — see devServersFor. */
   devServersOf(cwd: string): DevServer[]
   guide: string
+  /** Where screenshot() writes — see HelperDeps.shotsDir. */
+  shotsDir: string
   /** How long `open` waits for a requested tab's guest to register. */
   tabWaitMs?: number
   /** The whole-script deadline, defaulting to SCRIPT_TIMEOUT_MS. A seam for the tests, which cannot
@@ -153,7 +155,8 @@ export class AgentBrowserRuns {
       buffers: () => this.deps.buffersOf(sessionId),
       closeTab: () => this.deps.closeTab(sessionId),
       devServers: () => this.deps.devServersOf(cwd),
-      guide: this.deps.guide
+      guide: this.deps.guide,
+      shotsDir: this.deps.shotsDir
     }
     this.deps.setBusy(sessionId, true)
     try {

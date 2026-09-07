@@ -1,9 +1,17 @@
-// The stage-1 helper set an agent's script sees. Each is bound to one session's guest through `deps`;
-// each sets ctx.at first so a failure names it. Stage 2 adds snapshot/screenshot, stage 3 the acting
-// helpers, in this same shape.
+// The helper set an agent's script sees. Each is bound to one session's guest through `deps`; each
+// sets ctx.at first so a failure names it. Reading the page (snapshot/screenshot) and acting on it
+// (click/fill/press/waitFor) are here too, in the same shape.
+//
+// Nothing here may import `electron`, directly or transitively: this file's tests run under vitest's
+// node environment, where `electron` cannot load. That is why `savePng` lives in an Electron-free
+// module and why `GuestDriver` describes what a WebContents must offer structurally.
 import { agentOpenTarget } from '../../core/agentBrowser/urls'
-import { WAIT_TIMEOUT_MS, withTimeout, type LogSink } from '../../core/agentBrowser/script'
+import { Interrupted, WAIT_TIMEOUT_MS, withTimeout, type LogSink } from '../../core/agentBrowser/script'
 import type { RunContext } from '../../core/agentBrowser/scriptRunner'
+import { clampSnapshot, type Snapshot } from '../../core/agentBrowser/snapshot'
+import { clickScript, fillScript, pressScript, snapshotScript, waitForScript } from '../../core/agentBrowser/guestScripts'
+import { sanitizeUrl } from '../../core/preview/pick/payload'
+import { savePng, type CapturedImage } from '../preview/shots'
 import type { AgentBuffers } from './buffers'
 
 type Listener = (...a: unknown[]) => void
@@ -17,6 +25,12 @@ export interface GuestDriver {
   isLoading(): boolean
   once(event: 'did-finish-load' | 'did-fail-load' | 'did-stop-loading', cb: Listener): unknown
   removeListener(event: string, cb: Listener): unknown
+  /** Runs an expression in the page and resolves with its value. Rejects while the frame is
+   *  navigating, and when the page throws. */
+  executeJavaScript(code: string): Promise<unknown>
+  /** The visible page as an image. Never settles while the guest is not painting (window minimised
+   *  or fully covered) — callers race it. */
+  capturePage(): Promise<CapturedImage>
 }
 
 /** A dev server the project has running, as far as Astera can tell: a Run that printed a loopback
@@ -47,9 +61,40 @@ export interface HelperDeps {
    *  server has booted, which is after the wiring runs, so a value captured there would be `''`
    *  forever. */
   guide: string
+  /** Where screenshot() writes — the same folder the Claude session was spawned with --add-dir for,
+   *  so the path it returns opens without a permission prompt. */
+  shotsDir: string
 }
 
 const NO_PAGE = 'no page open — call open(url) first'
+
+/** How long a screenshot may take before it is called off. capturePage does not settle at all while
+ *  the guest is not painting — the window minimised, or fully covered by another — measured at 7.8 s
+ *  pending in Design Mode; the script deadline would end the run eventually, but this names the cause. */
+export const SHOT_TIMEOUT_MS = 5_000
+
+/** Runs one guest-side script for a helper: waits for a load in progress first, and if the page still
+ *  refuses the call — executeJavaScript rejects while the frame is navigating, which is exactly the
+ *  state a click() that navigates leaves for the next helper — waits for that load and tries once
+ *  more. A second refusal is the page's answer. */
+async function inGuest(g: GuestDriver, at: string, script: string): Promise<unknown> {
+  if (g.isLoading()) await loadEnds(g, at, g.getURL())
+  try {
+    return await g.executeJavaScript(script)
+  } catch {
+    // The first refusal is the one the retry exists to absorb, so it is not bound: only the second
+    // is reported, because only the second is the page's answer rather than the navigation's.
+    if (g.isLoading()) await loadEnds(g, at, g.getURL())
+    try {
+      return await g.executeJavaScript(script)
+    } catch (second) {
+      const message = second instanceof Error ? second.message : String(second)
+      throw new Error(`${at}: the page refused the call (${message})`)
+    }
+  }
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null
 
 /** Which helpers return a value rather than a promise. `runs.ts` needs this and cannot work it out
  *  for itself: a run that has been cut off parks its helpers on a promise that never settles, which
@@ -214,6 +259,72 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
     async close(): Promise<void> {
       ctx.at = 'close'
       deps.closeTab()
+    },
+    async snapshot(): Promise<Snapshot> {
+      ctx.at = 'snapshot'
+      const g = need()
+      const snap = clampSnapshot(await inGuest(g, 'snapshot', snapshotScript()))
+      if (!snap) throw new Error('snapshot: the page returned nothing readable')
+      return snap
+    },
+    async screenshot(): Promise<{ path: string; width: number; height: number }> {
+      ctx.at = 'screenshot'
+      const g = need()
+      if (g.isLoading()) await loadEnds(g, 'screenshot', g.getURL())
+      let image: CapturedImage
+      try {
+        image = await withTimeout(g.capturePage(), SHOT_TIMEOUT_MS, 'screenshot')
+      } catch (err) {
+        // Interrupted here is this helper's own deadline, not a Stop: a guest that is not painting
+        // never answers at all, so the message names that cause rather than saying "timed out".
+        if (err instanceof Interrupted) throw new Error('screenshot: the page did not paint within 5 s — is the window visible?')
+        throw err
+      }
+      const saved = await savePng(image, deps.shotsDir)
+      if (!saved) throw new Error('screenshot: the capture came back empty')
+      return saved
+    },
+    async click(sel: unknown): Promise<void> {
+      ctx.at = 'click'
+      const g = need()
+      const s = String(sel)
+      const first = await inGuest(g, 'click', clickScript(s, false))
+      if (!isRecord(first) || first.found !== true) throw new Error(`click: nothing matches ${s}`)
+      if (typeof first.href === 'string') {
+        // The page reports a link and does not follow it; whether it may be followed is decided here,
+        // by the one loopback rule, and the will-navigate guard stays the backstop.
+        if (!agentOpenTarget(first.href)) throw new Error(`click: the link leaves this machine (${sanitizeUrl(first.href)})`)
+        await inGuest(g, 'click', clickScript(s, true))
+      }
+    },
+    async fill(sel: unknown, text: unknown): Promise<void> {
+      ctx.at = 'fill'
+      const g = need()
+      const s = String(sel)
+      const r = await inGuest(g, 'fill', fillScript(s, String(text)))
+      if (!isRecord(r) || r.found !== true) throw new Error(`fill: nothing matches ${s}`)
+      // fillRuntime reports 'no option has that value' or 'not an input, textarea, select or editable
+      // element'; these two branches turn them into the messages the guide documents.
+      if (typeof r.error === 'string') {
+        throw new Error(r.error === 'no option has that value' ? `fill: ${s} has no option with that value` : `fill: ${s} is ${r.error}`)
+      }
+    },
+    async press(key: unknown): Promise<void> {
+      ctx.at = 'press'
+      const g = need()
+      if (typeof key !== 'string' || key === '') throw new Error('press: key must be a non-empty string')
+      await inGuest(g, 'press', pressScript(key))
+    },
+    async waitFor(selOrMs: unknown): Promise<void> {
+      ctx.at = 'waitFor'
+      const g = need()
+      if (typeof selOrMs === 'number' && Number.isFinite(selOrMs)) {
+        await new Promise((r) => setTimeout(r, Math.max(0, Math.min(selOrMs, WAIT_TIMEOUT_MS))))
+        return
+      }
+      if (typeof selOrMs !== 'string' || selOrMs === '') throw new Error('waitFor: expects a selector or a number of milliseconds')
+      const r = await inGuest(g, 'waitFor', waitForScript(selOrMs, WAIT_TIMEOUT_MS))
+      if (!isRecord(r) || r.found !== true) throw new Error(`waitFor: nothing matched ${selOrMs} within ${WAIT_TIMEOUT_MS} ms`)
     },
     help(name?: unknown): string {
       ctx.at = 'help'
