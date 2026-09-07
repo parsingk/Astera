@@ -1,57 +1,95 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { RunStatus, TerminalBuffer } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { RunPanel } from './RunPanel'
+import { RunTabStrip } from './RunTabStrip'
+import { RunToolRail } from './RunToolRail'
 import { TerminalBody } from './TerminalBody'
-import { ChevronDown, Delete, Plus, Square, X } from 'lucide-react'
+import { ChevronDown, Delete, Plus, X } from 'lucide-react'
 
 /**
- * Bottom panel. The Run console and the project terminals share this one panel through tabs.
- * The tab strip, collapse, clear and stop chrome are owned only here, and the bodies (RunPanel,
+ * Bottom panel. The Run tab and the project terminals share this one panel through tabs.
+ * The tab strip, collapse and clear chrome are owned only here; the bodies (RunPanel,
  * TerminalBody) draw nothing but xterm.
- * Inactive tabs are not unmounted, they are hidden with display:none — the same approach as the session
- * tabs (TerminalView), so the scrollback and xterm state are preserved and the buffer is not replayed on
- * every tab switch.
+ * The Run tab's body is a tool rail on the left and, to its right, a strip of run tabs over the selected
+ * run's console. Every run has its own RunPanel, and the ones not selected stay mounted under
+ * display:none — the same approach as the session tabs (TerminalView) and the terminal tabs below — so
+ * their scrollback and their find state survive switching tabs.
  */
 export function BottomPanel({
-  projectPath,
-  runStatus,
   runAvailable = true,
+  runs,
+  configIds,
+  selectedRunId,
+  onSelectRun,
+  onStopRun,
+  onRerun,
+  onDismissRun,
+  onOpenFile,
+  onOpenUrl,
+  onOpenPreview,
   terminals,
   activeTab,
   onSelectTab,
   onNewTerminal,
   onCloseTerminal,
-  onCloseRun,
-  onStopRun,
   onCollapse
 }: {
-  projectPath: string
-  runStatus: RunStatus | null
-  /** Run 탭을 그릴지. 프로젝트가 지정되지 않았을 때(홈에서 연 패널) false — 실행 구성은 프로젝트
-   *  단위라 홈에서는 돌릴 것이 없고, 빈 Run 탭은 고장처럼 보인다. 기본값 true 는 프로젝트가 있는
-   *  기존 호출자를 그대로 두기 위한 것이다. */
+  /** Whether to draw the Run tab. false when no project is set (the panel opened from home) — run
+   *  configurations are per project, there is nothing to run at home, and an empty Run tab looks broken.
+   *  Defaults to true so existing callers with a project are unchanged. */
   runAvailable?: boolean
+  /** This project's runs, finished ones included, in seat order */
+  runs: RunStatus[]
+  /** ids of the project's configurations as the toolbar knows them — the rail disables ↻ for a run whose
+   *  id is not among them */
+  configIds: readonly string[]
+  selectedRunId: string | null
+  onSelectRun: (runId: string) => void
+  onStopRun: (runId: string) => void
+  /** Start that configuration again — the rail's ↻ */
+  onRerun: (configId: string) => void
+  /** Drop a finished run — the tab's ✕. Only ever offered on a finished run, so a live run cannot be lost here. */
+  onDismissRun: (runId: string) => void
+  /** A path link in a console was activated — App opens the file at that line */
+  onOpenFile: (path: string, at: { line?: number; col?: number }) => void
+  /** A URL link in a console or a terminal was activated — App's link rule routes it. */
+  onOpenUrl: (url: string, ev: MouseEvent) => void
+  /** Open a running server's address in a preview tab — the run tab's globe button. */
+  onOpenPreview: (url: string) => void
   terminals: TerminalBuffer[]
   activeTab: string
   onSelectTab: (tab: string) => void
   onNewTerminal: () => void
   onCloseTerminal: (id: string) => void
-  /** Run 탭의 ✕. 종료된 실행에만 그려지므로 도는 실행을 여기서 잃을 일은 없다 — 정지는 ⏹ 이다. */
-  onCloseRun: () => void
-  onStopRun: () => void
   onCollapse: () => void
 }): React.JSX.Element {
   const { t } = useI18n()
-  // Clear means emptying the active body's xterm — bump a per-tab counter and let the body clear itself
+  // Clear means emptying a body's xterm — bump a per-body counter (a runId or a terminal id) and let the
+  // body clear itself. Scroll-to-end works the same way for runs.
   const [clearNonces, setClearNonces] = useState<Record<string, number>>({})
-  const bump = (tab: string): void =>
-    setClearNonces((prev) => ({ ...prev, [tab]: (prev[tab] ?? 0) + 1 }))
+  const [scrollNonces, setScrollNonces] = useState<Record<string, number>>({})
+  const bump = (set: typeof setClearNonces, key: string): void =>
+    set((prev) => ({ ...prev, [key]: (prev[key] ?? 0) + 1 }))
+  // The find bar is per run, so switching tabs shows that run's search
+  const [findOpen, setFindOpen] = useState<Record<string, boolean>>({})
 
-  const running = runStatus?.status === 'running'
-  // 탭 자체의 Enter/Space. ✕ 를 품는 탭은 <button> 안에 <button> 을 넣을 수 없어 span 이어야 하고,
-  // 그 대가로 키보드 접근성을 손으로 잇는다. 중첩된 ✕ 에서 올라온 키는 그 버튼이 이미 처리했으므로
-  // 걸러낸다 — 거르지 않으면 ✕ 에 포커스를 둔 채 Space 를 누를 때 선택과 닫기가 함께 발화한다.
+  // One clock for the whole panel, ticking only while something is still alive. Finished runs are
+  // computed from their own exitedAt, so the tick never changes their text.
+  const anyRunning = runs.some((r) => r.status !== 'exited')
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!anyRunning) return
+    setNow(Date.now())
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [anyRunning])
+
+  const selectedRun = runs.find((r) => r.runId === selectedRunId) ?? null
+  // The tab's own Enter/Space. A tab that holds a ✕ cannot be a <button> (no button inside a button),
+  // so it is a span and keyboard access is wired by hand. A key that bubbled up from the nested ✕ has
+  // already been handled by that button and is left alone — otherwise Space on a focused ✕ would both
+  // select and close.
   const tabKeyDown =
     (tab: string) =>
     (e: React.KeyboardEvent): void => {
@@ -73,28 +111,8 @@ export function BottomPanel({
               onClick={() => onSelectTab('run')}
               onKeyDown={tabKeyDown('run')}
             >
-              {running && <span className="run-live-dot" />}
-              {runStatus ? runStatus.configName : t('run.panel.noActiveRun')}
-              {/* 끝난 실행에만 종료 배지와 ✕ 가 함께 붙는다. 도는 실행에 ✕ 를 두면 자식 프로세스를
-                  남긴 채 탭만 사라진다 — 그쪽은 오른쪽의 ⏹ 이 맡는다. */}
-              {runStatus?.status === 'exited' && (
-                <>
-                  <span className="run-exit">
-                    {t('run.panel.exited', { code: runStatus.exitCode ?? '?' })}
-                  </span>
-                  <button
-                    className="bottom-tab-close"
-                    aria-label={t('run.panel.close')}
-                    title={t('run.panel.close')}
-                    onClick={(e) => {
-                      e.stopPropagation() // keeps close from misfiring the tab selection
-                      onCloseRun()
-                    }}
-                  >
-                    <X size={11} />
-                  </button>
-                </>
-              )}
+              {anyRunning && <span className="run-live-dot" />}
+              {t('run.panel.tab')}
             </span>
           )}
           {terminals.map((term, i) => (
@@ -132,39 +150,64 @@ export function BottomPanel({
           </button>
         </span>
         <span className="run-panel-actions">
-          {/* The actions match the active tab — stop only appears on the Run tab */}
-          {activeTab === 'run' && running && (
-            <button className="run-panel-btn stop" title={t('run.action.stop')} onClick={onStopRun}>
-              <Square size={12} fill="currentColor" strokeWidth={0} />
+          {/* On the Run tab, stop and clear live in the rail beside the console; the header keeps them
+              for terminal tabs, which have no rail. */}
+          {activeTab !== 'run' && (
+            <button className="run-panel-btn" title={t('run.panel.clear')} onClick={() => bump(setClearNonces, activeTab)}>
+              <Delete size={12} />
             </button>
           )}
-          <button
-            className="run-panel-btn"
-            title={t('run.panel.clear')}
-            onClick={() => bump(activeTab)}
-          >
-            <Delete size={12} />
-          </button>
           <button className="run-panel-btn" title={t('run.panel.collapse')} onClick={onCollapse}>
             <ChevronDown size={12} />
           </button>
         </span>
       </div>
       <div className="bottom-bodies">
-        {/* runAvailable 로 **마운트 자체를** 막는다. 비활성 탭은 display:none 으로 살려 두는 것이 이
-            패널의 관례지만(아래 주석), RunPanel 은 마운트되면 projectPath 로 run.list 를 부른다 —
-            프로젝트가 없을 때 그 값은 홈이고, 실행 구성 조회는 홈을 허용하지 않으므로 탭이 보이지도
-            않는데 거부된 요청이 매번 나간다. */}
+        {/* runAvailable gates the **mount itself**. Hidden tabs are kept alive with display:none elsewhere
+            in this panel (below), but every RunPanel calls run.output for its run on mount, and with no
+            project there is no run to ask about. */}
         {runAvailable && (
-          <div className="bottom-body" style={{ display: activeTab === 'run' ? 'flex' : 'none' }}>
-            <RunPanel projectPath={projectPath} clearNonce={clearNonces['run'] ?? 0} />
+          <div className="bottom-body run-body" style={{ display: activeTab === 'run' ? 'flex' : 'none' }}>
+            <RunToolRail
+              run={selectedRun}
+              rerunGone={!!selectedRun && !configIds.includes(selectedRun.configId)}
+              findOpen={!!(selectedRunId && findOpen[selectedRunId])}
+              onRerun={onRerun}
+              onStop={onStopRun}
+              onScrollToEnd={() => selectedRunId && bump(setScrollNonces, selectedRunId)}
+              onClear={() => selectedRunId && bump(setClearNonces, selectedRunId)}
+              onToggleFind={() => selectedRunId && setFindOpen((prev) => ({ ...prev, [selectedRunId]: !prev[selectedRunId] }))}
+            />
+            <div className="run-main">
+              <RunTabStrip runs={runs} selectedId={selectedRunId} now={now} onSelect={onSelectRun} onDismiss={onDismissRun} onOpenPreview={onOpenPreview} />
+              <div className="run-consoles">
+                {runs.map((r) => (
+                  <div
+                    key={r.runId}
+                    className="run-console"
+                    style={{ display: r.runId === selectedRunId ? 'flex' : 'none' }}
+                  >
+                    <RunPanel
+                      runId={r.runId}
+                      clearNonce={clearNonces[r.runId] ?? 0}
+                      scrollToEndNonce={scrollNonces[r.runId] ?? 0}
+                      findOpen={!!findOpen[r.runId]}
+                      onFindOpenChange={(open) => setFindOpen((prev) => ({ ...prev, [r.runId]: open }))}
+                      onOpenFile={onOpenFile}
+                      onOpenUrl={onOpenUrl}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         )}
         {/* Inactive tabs stay mounted with display:none (see the comment above) — as a result, when a
             terminal tab is first mounted while inactive, TerminalBody's initial fit.fit() runs against a
             0×0 host and xterm stays at the default 80×24 (the PTY is 120×30). Output that arrives while
             hidden wraps at that width, but opening the tab makes the ResizeObserver refit and corrects it
-            — cosmetic and self-correcting. */}
+            — cosmetic and self-correcting. The same applies to a RunPanel mounted for a tab that is not
+            selected. */}
         {terminals.map((term) => (
           <div
             key={term.id}
@@ -176,6 +219,7 @@ export function BottomPanel({
               initialBuffer={term.buffer}
               clearNonce={clearNonces[term.id] ?? 0}
               active={activeTab === term.id}
+              onOpenUrl={onOpenUrl}
             />
           </div>
         ))}

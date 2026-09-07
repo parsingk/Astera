@@ -54,6 +54,9 @@ function langExt(key: LangKey | null): Extension {
 interface EditorOwner {
   change: (text: string) => void
   save: () => void
+  /** The user clicked inside the view — a pending "reveal this line" request must not move a cursor
+   *  they have since placed */
+  interact: () => void
 }
 const owners = new WeakMap<EditorView, EditorOwner>()
 
@@ -75,6 +78,12 @@ const sharedBase: Extension[] = [
   EditorView.updateListener.of((u) => {
     // Propagate user edits only: setState (a programmatic replacement) has an empty transactions array, so it is excluded
     if (u.docChanged && u.transactions.length > 0) owners.get(u.view)?.change(u.state.doc.toString())
+  }),
+  EditorView.domEventHandlers({
+    mousedown: (_event, view) => {
+      owners.get(view)?.interact()
+      return false // not handled — CodeMirror places the cursor as usual
+    }
   })
 ]
 
@@ -131,7 +140,10 @@ export function FileEditor({
   onRetire,
   onChange,
   onSave,
-  onViewChange
+  onViewChange,
+  reveal,
+  onRevealed,
+  onInteract
 }: {
   path: string
   content: string
@@ -155,6 +167,14 @@ export function FileEditor({
    *  위치와 줄 배치를 읽어야 해서 열어 둔 통로다. 마운트에서 뷰를, 언마운트에서 null 을 넘긴다.
    *  이 컴포넌트의 다른 규약은 아무것도 바뀌지 않는다 — 넘겨받은 쪽은 읽기만 한다. */
   onViewChange?: (view: EditorView | null) => void
+  /** A one-shot request to put the cursor on a line (a console link). App hands it over only once the
+   *  buffer has loaded, so a request made while the file was still being read arrives with the content.
+   *  `nonce` makes a repeated request for the same line a new one. */
+  reveal?: { line: number; col?: number; nonce: number }
+  /** The request above was carried out — App drops it */
+  onRevealed?: () => void
+  /** The user clicked in this editor — App drops any request still pending for this tab */
+  onInteract?: () => void
 }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -168,6 +188,10 @@ export function FileEditor({
   onRetireRef.current = onRetire
   const onViewChangeRef = useRef(onViewChange)
   onViewChangeRef.current = onViewChange
+  const onRevealedRef = useRef(onRevealed)
+  onRevealedRef.current = onRevealed
+  const onInteractRef = useRef(onInteract)
+  onInteractRef.current = onInteract
   // 스크롤이 멈출 때마다 떠 두는 최신 스냅샷. 언마운트 정리 함수에서 읽으면 늦다 — 그 시점의 뷰는
   // 화면에서 떨어지는 중이라 위치가 0으로 읽힐 수 있고, 그러면 맨 위가 저장된다
   const lastScrollRef = useRef<StateEffect<unknown> | null>(null)
@@ -183,7 +207,8 @@ export function FileEditor({
     // 이 뷰의 편집이 향할 곳. 경로는 호출 시점에 읽으므로 파일을 갈아타도 따라온다
     owners.set(view, {
       change: (text) => onChangeRef.current(curPathRef.current, text),
-      save: () => onSaveRef.current(curPathRef.current)
+      save: () => onSaveRef.current(curPathRef.current),
+      interact: () => onInteractRef.current?.()
     })
     onViewChangeRef.current?.(view)
     if (restored.scroll) view.dispatch({ effects: restored.scroll })
@@ -246,6 +271,21 @@ export function FileEditor({
       view.setState(makeState(sharedBase, content, path, readOnly))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, content, readOnly])
+
+  // Jump to a requested line. Declared after the path/content effect so that, in the commit where a
+  // freshly read file arrives, the view already holds that document when this runs. The line and
+  // column are clamped: the output that named them may be older than the file.
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view || !reveal) return
+    const doc = view.state.doc
+    const line = doc.line(Math.min(Math.max(reveal.line, 1), doc.lines))
+    const pos = Math.min(line.from + Math.max((reveal.col ?? 1) - 1, 0), line.to)
+    view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: 'center' }) })
+    view.focus()
+    onRevealedRef.current?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal?.nonce, path])
 
   return <div className="file-editor" ref={hostRef} />
 }

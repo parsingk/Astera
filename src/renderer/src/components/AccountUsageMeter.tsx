@@ -32,10 +32,13 @@ const track = (w: RateLimitWindow | null): React.JSX.Element => (
  * The top track is always the 5-hour window and the bottom always weekly. The order never varies: the
  * detail names them, so it has to be learned exactly once.
  *
- * Nothing at all is drawn when there is no reading — a Codex account, an account that is not logged
- * in, and a reading discarded past its reset all arrive here as `undefined`. A dash was considered
- * and rejected: it reads as 0%, not as "no value". The login dot is the row's fixed right edge, so
- * the column does not ravel.
+ * Nothing at all is drawn when there is no reading — an account that is not logged in, one whose
+ * provider endpoint has never answered for it, and a reading discarded past its reset all arrive here
+ * as `undefined`. A dash was considered and rejected: it reads as 0%, not as "no value". The login dot
+ * is the row's fixed right edge, so the column does not ravel.
+ *
+ * Both providers reach here the same way. Claude and Codex each report a 5-hour and a weekly window,
+ * so the two tracks mean the same thing on either row and nothing branches on provider.
  */
 export function AccountUsageMeter({
   usage

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { recordTab, fileTab, parseTab, sessionTab } from './tabId'
+import { browserTab, recordTab, fileTab, parseTab, sessionTab } from './tabId'
 
 describe('tabId', () => {
   it('세션 탭 id를 만들고 되읽는다', () => {
@@ -30,6 +30,15 @@ describe('tabId', () => {
   it('종류만 있고 id가 빈 문자열이면 null', () => {
     expect(parseTab('session:')).toBeNull()
     expect(parseTab('record:')).toBeNull()
+  })
+
+  it('미리보기 탭을 만들고 되읽는다', () => {
+    expect(browserTab('8d0f')).toBe('browser:8d0f')
+    expect(parseTab('browser:8d0f')).toEqual({ kind: 'browser', id: '8d0f' })
+  })
+
+  it('미리보기 탭도 id 가 빈 문자열이면 null', () => {
+    expect(parseTab('browser:')).toBeNull()
   })
 
   // 콜론으로 시작하는 문자열은 종류가 빈 문자열이므로 탭 id가 아니다

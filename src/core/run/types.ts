@@ -14,6 +14,7 @@ export type RunConfigType =
   | 'compose'
   | 'dockerfile'
   | 'dotnet'
+  | 'compound'
 
 /** What every kind shares. cwd is relative to the project root — empty means the root */
 interface RunConfigBase {
@@ -21,6 +22,37 @@ interface RunConfigBase {
   name: string
   cwd?: string
   env?: Record<string, string>
+  /** The folder this configuration is filed under, in the tree and in the toolbar's menu. Absent or
+   *  empty means it is not in a folder and groups by its kind instead. A folder exists exactly as long
+   *  as something names it — there is no folder record, so there is nothing to leave dangling. Not
+   *  nested: a '/' here is a character, not a separator. Like allowMultipleInstances it is deliberately
+   *  not part of seedKeyOf: filing a detected configuration does not make it a different one. */
+  folder?: string
+  /** What a second ▶ does while a run of this configuration is live: unset/false restarts it (the
+   *  default — a second press must not put a second server on the same port), true starts another run
+   *  beside it. Read by decideStart in ./instances, never by RunManager. Not part of seedKeyOf:
+   *  flipping it must not change which seed a stored configuration hides. */
+  allowMultipleInstances?: boolean
+  /** Configurations to run to completion before this one starts, in order, by id. A non-zero exit
+   *  stops the chain: nothing after it starts. Referenced by id, not by name, so renaming a task
+   *  keeps the link. Like folder and allowMultipleInstances it is deliberately not part of seedKeyOf:
+   *  giving a detected configuration a before-launch task does not make it a different one. */
+  beforeLaunch?: string[]
+  /** A configuration created by running a file from the tree, kept only until the cap pushes it out
+   *  (MAX_TEMPORARY in ./runFile). Any edit drops the flag and makes it permanent — the same rule a
+   *  detected configuration follows through promoteSeed, because "editing a provisional configuration
+   *  makes it yours" is a rule this app already has and a second one would be worse. Unlike a seed
+   *  this *is* stored: nothing can re-derive it, and the run list's ↻ needs a configuration to
+   *  resolve. A plain boolean rather than a `true`-only marker like RunStatus.validation, so a
+   *  hand-edited `false` means what it says. Not part of seedKeyOf, for the same reason as folder,
+   *  allowMultipleInstances and beforeLaunch: how a configuration was created does not make it a
+   *  different configuration. */
+  temporary?: boolean
+  /** The address the preview tab opens when this configuration starts (the frontend preview design,
+   *  §4). http/https only — run.saveConfigs refuses anything else. Like folder, allowMultipleInstances
+   *  and beforeLaunch it is deliberately not part of seedKeyOf: telling a detected configuration where
+   *  its page is does not make it a different configuration. */
+  previewUrl?: string
 }
 
 /** A free-form command. This is where every pre-type config migrates to, and it is the only way
@@ -134,6 +166,15 @@ export interface DotnetConfig extends RunConfigBase {
   args?: string
 }
 
+/** A configuration with no command of its own: ▶ on a compound presses ▶ on each member. Members
+ *  start together, with no ordering between them — sequencing is what beforeLaunch is for. This is
+ *  the one kind buildCommand cannot assemble, which is why RunnableConfig excludes it: the compiler,
+ *  not a comment, is what makes every caller branch. */
+export interface CompoundConfig extends RunConfigBase {
+  type: 'compound'
+  members: string[]
+}
+
 export type RunConfig =
   | ShellConfig
   | NpmConfig
@@ -147,6 +188,23 @@ export type RunConfig =
   | ComposeConfig
   | DockerfileConfig
   | DotnetConfig
+  | CompoundConfig
+
+/** Every kind buildCommand can assemble — the union minus the one that has no command. */
+export type RunnableConfig = Exclude<RunConfig, CompoundConfig>
+
+/** Why run.saveConfigs refused an item. INVALID_CONFIG: not a configuration migrateRunConfigs accepts,
+ *  a seed id (seeds are detected, never stored), or an id that appears twice in the batch.
+ *  UNSAFE_VALUE: a field that reaches the command string holds a character cmd.exe interprets.
+ *  INVALID_CWD: the working directory is not inside the project.
+ *  INVALID_PREVIEW_URL: previewUrl is present and is not an http(s) URL. */
+export type SaveReason = 'INVALID_CONFIG' | 'UNSAFE_VALUE' | 'INVALID_CWD' | 'INVALID_PREVIEW_URL'
+
+/** run.saveConfigs' answer. One batch, one verdict: on `ok: false` nothing was stored and every
+ *  offending item is named, not just the first. */
+export type SaveConfigsResult =
+  | { ok: true; configs: RunConfig[] }
+  | { ok: false; errors: { id: string; reason: SaveReason }[] }
 
 /** The optional field keys a kind knows about. The form's "add optional field" dropdown is built
  *  from this.
@@ -155,7 +213,7 @@ export type RunConfig =
  *  so a Java version selector was drawn even in a Node project — there was no kind in the model to
  *  condition on. */
 export function optionalFieldsFor(type: RunConfigType, opts: { springBoot: boolean }): string[] {
-  const common = ['cwd', 'env']
+  const common = ['cwd', 'env', 'allowMultipleInstances', 'previewUrl']
   switch (type) {
     case 'shell':
       return common // args go straight into the command
@@ -180,6 +238,13 @@ export function optionalFieldsFor(type: RunConfigType, opts: { springBoot: boole
       return ['dockerfilePath', 'buildArgs', 'runArgs', ...common]
     case 'dotnet':
       return ['subcommand', 'configuration', 'args', ...common]
+    // None of the four common options mean anything here: a compound starts no process, so it has
+    // no working directory and no environment, and allowMultipleInstances is read by decideStart,
+    // which a compound never reaches — planLaunch expands it away and every step names a runnable
+    // configuration. Offering a field that changes nothing is worse than offering none, and previewUrl
+    // belongs to whichever member actually serves the page.
+    case 'compound':
+      return []
   }
 }
 

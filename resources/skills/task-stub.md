@@ -11,11 +11,10 @@ description: Record a piece of work in Astera's How It Works. Use when the perso
 The person invoked this skill with an objective. Astera records what changed between the start of
 that work and its end, and writes it up for someone who does not read code. **You mark both ends.**
 
-1. Check the tooling. An empty value means this tab was opened before work-unit tracking was
-   turned on — say so, and that a new tab is the fix:
-   ```bash
-   echo "$ASTERA_CLI"
-   ```
+1. Declare the start. This is also the tool check: if `astera` is not found, this tab was opened
+   before work-unit tracking was turned on — say so, and that a new tab is the fix. Do not read
+   `$ASTERA_CLI` as the check — in PowerShell that spelling is an unrelated, empty variable; the
+   environment variable there is `$env:ASTERA_CLI`.
 2. Declare the start, with the objective the person gave you, verbatim. **If they gave none** —
    a bare `/astera-task` with nothing after it — ask them what it is. Never invent one; a made-up
    objective is worse than asking.
@@ -49,4 +48,5 @@ It does not change your work. It records what your work changed.
 
 Do not use it inside a Jobs Run — a Run records itself, and the commands are refused there.
 
-If `astera` comes back as command not found, call it as `"$ASTERA_CLI"`.
+If `astera` is not found but the environment variable is set, call the same program by its absolute
+path: `"$ASTERA_CLI"` in bash or zsh, `& $env:ASTERA_CLI` in PowerShell.

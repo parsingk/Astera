@@ -70,6 +70,17 @@ describe('AppSettingsStore', () => {
     // orchestrationEnabled:false를 파일에 남기지 않아도 결과가 같다
     expect(JSON.parse(await fs.readFile(nested, 'utf8'))).toEqual({ lang: 'en' })
   })
+
+  it('agent browser is off until turned on, and survives a reload', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getAgentBrowserEnabled()).toBe(false)
+    await store.setAgentBrowserEnabled(true)
+    expect(store.getAgentBrowserEnabled()).toBe(true)
+    const again = new AppSettingsStore(file())
+    await again.load()
+    expect(again.getAgentBrowserEnabled()).toBe(true)
+  })
 })
 
 describe('lang — System은 null이다', () => {
@@ -149,6 +160,44 @@ describe('orchestrationEnabled', () => {
     await fs.rm(file())
     await a.load()
     expect(a.getOrchestrationEnabled()).toBe(false)
+  })
+})
+
+describe('agentBrowserEnabled', () => {
+  it('lang과 함께 저장돼도 서로를 지우지 않는다', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    await store.setLang('en')
+    await store.setAgentBrowserEnabled(true)
+    const b = new AppSettingsStore(file())
+    await b.load()
+    expect(b.getLang()).toBe('en')
+    expect(b.getAgentBrowserEnabled()).toBe(true)
+  })
+
+  it('불리언이 아닌 값은 false로 떨어진다', async () => {
+    await fs.writeFile(file(), JSON.stringify({ agentBrowserEnabled: 'yes' }), 'utf8')
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getAgentBrowserEnabled()).toBe(false)
+  })
+
+  it('손상 파일 복구 뒤에는 false로 기동한다 — 이전 인스턴스 값이 남지 않는다', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    await a.setAgentBrowserEnabled(true)
+    await fs.writeFile(file(), '{ not json', 'utf8')
+    await a.load()
+    expect(a.getAgentBrowserEnabled()).toBe(false)
+  })
+
+  it('파일이 없으면(ENOENT) false로 기동한다', async () => {
+    const a = new AppSettingsStore(file())
+    await a.load()
+    await a.setAgentBrowserEnabled(true)
+    await fs.rm(file())
+    await a.load()
+    expect(a.getAgentBrowserEnabled()).toBe(false)
   })
 })
 

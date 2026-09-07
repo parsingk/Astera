@@ -142,3 +142,25 @@ describe('MarkdownPreview — raw-HTML <table>', () => {
     expect(html).toContain('class="md-table-wrap"')
   })
 })
+
+describe('MarkdownPreview — 코드 블록 복사 버튼', () => {
+  // 버튼은 <pre> 의 첫 자식이다 — CSS 가 pre 를 기준으로 왼쪽 위에 절대 배치하므로 pre 밖에 두면 자리를
+  // 잃고, <code> 뒤에 두면 white-space: pre 인 부모 안에서 개행을 만들 여지가 생긴다. t() 모킹은 키를
+  // 그대로 돌려주므로 aria-label 은 i18n 키 그 자체다.
+  it('펜스 코드 블록의 <pre> 안 첫 자식으로 복사 버튼이 있다', () => {
+    const html = renderPreview('```ts\nconst a = 1\n```\n')
+    expect(html).toMatch(/<pre[^>]*><button[^>]*class="md-copy"[^>]*aria-label="files\.markdown\.copyCode"/)
+  })
+  it('들여쓰기 코드 블록에도 있다', () => {
+    const html = renderPreview('    indented\n')
+    expect(html).toMatch(/<pre[^>]*><button[^>]*class="md-copy"/)
+  })
+  it('코드 블록마다 하나씩이다', () => {
+    const html = renderPreview('```\na\n```\n\ntext\n\n```\nb\n```\n')
+    expect(html.match(/class="md-copy"/g)).toHaveLength(2)
+  })
+  it('인라인 코드에는 없다', () => {
+    const html = renderPreview('call `foo()` now\n')
+    expect(html).not.toContain('md-copy')
+  })
+})

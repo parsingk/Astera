@@ -11,20 +11,16 @@ description: Cross-vendor agent orchestration — dispatch tasks to worker agent
 The full reference comes from the CLI — the single source of truth lives in the executable so it
 cannot drift from the installed version.
 
-1. Check the tooling (an empty value means this session was not started by the app, or
-   orchestration is off — a clearer diagnosis than `command not found` from `astera`):
-   ```bash
-   echo "$ASTERA_CLI"
+1. Get the full reference (`astera` is on this session's PATH). This is also the tool check: if the
+   command is not found, this session was not started by the app, or orchestration is off — say so
+   and stop.
    ```
-2. Get the full reference (`astera` is on this session's PATH):
-   ```bash
    astera help
    ```
-   On `command not found`, retry with the absolute path to the same program (this works regardless
-   of the shell):
-   ```bash
-   "$ASTERA_CLI" help
-   ```
+   If `astera` is not found but the variable below is set, call the same program by its absolute
+   path. The variable is an environment variable, so read it the way your shell reads those —
+   `"$ASTERA_CLI"` in bash or zsh, `$env:ASTERA_CLI` in PowerShell (there `$ASTERA_CLI` alone is an
+   unrelated, empty PowerShell variable).
 
 ## When not to use this
 

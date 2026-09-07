@@ -413,10 +413,38 @@ body.resizing-row { cursor: row-resize; user-select: none; }
    a column flex box just as that host is */
 .workbench-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .run-toolbar { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-left: 1px solid var(--line); background: var(--panel); position: relative; }
-/* The run-config picker in the toolbar. Only sizing lives here now — the surface comes from .sel.
-   It may shrink so the run buttons keep their room, but not past 140px, or the name is unreadable while
-   the buttons sit on empty space. The open menu is not bound by this — .sel-menu sizes to its content. */
-.run-config-select { flex: 0 1 200px; min-width: 140px; }
+/* The toolbar's configuration pill and its menu. The menu's group headings and rows deliberately
+   match .rtp-group / .rtp-item — the kind picker, the reference picker and this are the same kind of
+   list seen in three places, and they should not each drift to their own size. */
+.rcmenu { position: relative; flex: 0 1 220px; min-width: 150px; }
+.rcmenu-pill { display: flex; align-items: center; gap: 6px; width: 100%; box-sizing: border-box; background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius); color: var(--text); font-size: 12px; padding: 4px 6px; cursor: pointer; }
+.rcmenu-pill:hover { background: var(--elevated); }
+.rcmenu-pill .fi { flex: none; }
+.rcmenu-pill-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.rcmenu-live { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.rcmenu-count { flex: none; font-size: 11px; color: var(--text-dim); }
+.rcmenu-menu { position: absolute; top: calc(100% + 5px); left: 0; z-index: 20; min-width: 260px; width: max-content; max-width: 380px; max-height: 60vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); padding: 6px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 1px; }
+.rcmenu-group { flex: none; font-size: 10.5px; color: var(--text-faint); padding: 6px 6px 2px; text-transform: uppercase; letter-spacing: .05em; }
+.rcmenu-row { flex: none; display: flex; align-items: center; gap: 2px; border-radius: var(--radius); }
+.rcmenu-row:hover { background: var(--elevated); }
+.rcmenu-row.on { background: var(--elevated); }
+/* The keyboard cursor is not the selection — one says "you are pointing at this", the other "this is
+   what the pill shows" — so it gets a mark of its own rather than reusing .on's fill. */
+.rcmenu-row.cursor { box-shadow: inset 2px 0 0 var(--accent); }
+.rcmenu-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; background: transparent; border: 0; border-radius: var(--radius); padding: 4px 8px; font-size: 12px; color: var(--text); text-align: left; cursor: pointer; }
+.rcmenu-pick .fi { flex: none; }
+.rcmenu-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rcmenu-tag { flex: none; font-size: 10px; color: var(--text-faint); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 0 4px; white-space: nowrap; }
+.rcmenu-status { flex: none; margin-left: auto; padding-left: 8px; font-size: 11px; color: var(--text-faint); white-space: nowrap; }
+.rcmenu-status.live { color: var(--ok); }
+/* Same colour .run-tab-exit.fail uses — the same fact (a non-zero exit) must not read differently in
+   the tab strip and the menu. */
+.rcmenu-status.fail { color: var(--danger); }
+.rcmenu-run { flex: none; width: 22px; height: 22px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-faint); padding: 0; cursor: pointer; }
+.rcmenu-run:hover { background: var(--surface-hover); color: var(--text); }
+.rcmenu-sep { flex: none; height: 1px; background: var(--line-soft); margin: 4px 0; }
+.rcmenu-foot { flex: none; display: flex; align-items: center; gap: 12px; width: 100%; box-sizing: border-box; background: transparent; border: 0; border-radius: var(--radius); padding: 4px 8px; font-size: 12px; color: var(--text); text-align: left; cursor: pointer; }
+.rcmenu-foot:hover { background: var(--elevated); }
 .run-btn { width: 28px; height: 28px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); font-size: 15px; padding: 0; cursor: pointer; }
 .run-btn:hover { background: var(--elevated); color: var(--text); }
 /* Same ring as .sel-trigger below — no border to brighten on a ghost button, so only the ring shows. */
@@ -440,6 +468,7 @@ body.resizing-row { cursor: row-resize; user-select: none; }
 .run-global-row { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--radius); transition: background var(--ease); }
 .run-global-row:hover { background: var(--elevated); }
 .run-global-live { width: 7px; height: 7px; border-radius: 50%; background: var(--run); flex: none; box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
+.run-global-live.stopping { background: var(--warn); box-shadow: none; }
 /* 검증 실행 라벨. 실행 툴바와 전역 목록 두 곳이 같은 배지를 쓴다 — 사용자가 시작하지 않은 실행이
    자기 실행처럼 보이면 정지시켜 오케스트레이션 Task 를 실패시킨다(RunStatus.validation) */
 /* 이 태그는 장식이 아니라 설명이다 — 사용자가 아무것도 시작하지 않았는데 ▶ 가 ⏹ 로 바뀐 이유를
@@ -1363,6 +1392,7 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .rcm-tools > button, .rcm-tools > .rtp-anchor > button { width: 26px; height: 26px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); font-size: 14px; padding: 0; cursor: pointer; }
 .rcm-tools > button:hover:not(:disabled), .rcm-tools > .rtp-anchor > button:hover:not(:disabled) { background: var(--elevated); color: var(--text); }
 .rcm-tools > button:disabled, .rcm-tools > .rtp-anchor > button:disabled { color: var(--text-faint); cursor: default; }
+.rcm-tools-sep { width: 1px; align-self: stretch; margin: 2px 2px; background: var(--line-soft); }
 .rcm-tree { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
 /* flex: none, for the same reason as .rtp-*: the tree is a flex column with a bounded height, so
    without it the groups and rows shrink once the list is taller than the pane. A shrunk row draws its
@@ -1403,13 +1433,72 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .rcm-seed-hint { font-size: 12px; color: var(--text-faint); }
 .rcm-resolved { font-family: var(--mono); font-size: 12px; color: var(--ok); word-break: break-all; }
 
+/* Run Configurations — the search field above the tree, the markers on a row, the footer. The
+   footer replaces the old single Close button: Cancel · Apply · OK with the message slot on the left
+   (the seed note, or the first reason Apply refused). */
+.rcm-search { display: flex; align-items: center; gap: 6px; padding: 0 6px; margin-bottom: 6px; background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius); color: var(--text-faint); }
+.rcm-search > input { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--text); font-size: 12px; padding: 5px 0; outline: none; }
+.rcm-item { display: flex; align-items: center; gap: 6px; }
+.rcm-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rcm-mark { flex: none; display: inline-grid; place-items: center; }
+.rcm-mark.dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.rcm-mark.warn { color: var(--warn); }
+.rcm-mark.temp { flex: none; font-size: 10px; color: var(--text-faint); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 0 4px; }
+.rcm-item.rejected .rcm-item-name { color: var(--danger); }
+
+/* The tree's folder heading, and the inline input that renames it. The heading reuses .rcm-group's
+   type and spacing so a folder and a kind line up; only the icon and the rename affordance differ. */
+.rcm-group[title] { cursor: default; }
+.rcm-folder-name { width: 100%; box-sizing: border-box; margin: 6px 0 2px; background: var(--bg); color: var(--text); border: 1px solid var(--accent); border-radius: var(--radius); padding: 3px 6px; font-size: 11px; }
+.rcm-footer { display: flex; align-items: center; gap: 8px; }
+.rcm-footer-msg { flex: 1; min-width: 0; font-size: 12px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rcm-footer-msg.error { color: var(--danger); }
+
+/* The kind badge beside the name. Reads as a label, not a control: no border, muted, and it never
+   takes focus — the kind is chosen when the configuration is created and does not change after. */
+.rcm-badge { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-dim); padding: 0 2px; white-space: nowrap; }
+
+/* The form's section headings — Configuration · Environment · Before launch. Same treatment as the
+   tree's group headings (.rcm-group) so the two panes read as one screen; a rule of its own only
+   because it sits in a flex column with different spacing above it. */
+.rcm-section { display: flex; align-items: center; font-size: 10.5px; color: var(--text-faint); text-transform: uppercase; letter-spacing: .05em; margin-top: 4px; }
+.rcm-section:first-child { margin-top: 0; }
+
+/* ConfigRefList — chips naming other run configurations, plus the add control. The picker inside
+   reuses .rtp-menu/.rtp-item, since it is the same list of configurations the ＋ button shows. */
+.ref-list { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ref-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; background: var(--elevated); border: 1px solid var(--line-soft); border-radius: 999px; padding: 2px 4px 2px 8px; font-size: 11.5px; color: var(--text); }
+.ref-chip .fi { flex: none; }
+.ref-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A chip whose configuration is not in the list — the tree marks that row ⚠ too */
+.ref-chip.broken .ref-chip-name { color: var(--danger); font-family: var(--mono); }
+.ref-chip-x { display: grid; place-items: center; width: 16px; height: 16px; padding: 0; background: transparent; border: 0; border-radius: 50%; color: var(--text-faint); cursor: pointer; }
+.ref-chip-x:hover { background: var(--surface-hover); color: var(--text); }
+.ref-add { position: relative; display: inline-flex; }
+.ref-chip.add { cursor: pointer; padding: 2px 8px; color: var(--text-dim); border-style: dashed; background: transparent; }
+.ref-chip.add:hover { color: var(--text); background: var(--elevated); }
+
+/* EnvTable — Key · Value · issue · remove, as a grid so the columns line up across rows */
+.env-table { display: flex; flex-direction: column; gap: 4px; }
+.env-head, .env-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) 16px 22px; gap: 6px; align-items: center; }
+.env-head { font-size: 11px; color: var(--text-faint); padding: 0 6px; }
+.env-row input { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--text); border: 1px solid var(--line-soft); padding: 5px 6px; border-radius: var(--radius); font-family: var(--mono); font-size: 12px; }
+.env-row.issue input.env-key { border-color: var(--warn); }
+.env-issue { display: inline-grid; place-items: center; color: var(--warn); }
+.env-remove { width: 22px; height: 22px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-faint); cursor: pointer; padding: 0; }
+.env-remove:hover { background: var(--elevated); color: var(--text); }
+.env-add { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; }
+
 /* RunDetail — 한 Run 의 상세 창. 왼쪽이 의존 그래프, 오른쪽이 이벤트이고 **노드가 오른쪽의 필터다**.
    Jobs 사이드바의 › 로 연다. */
 /* **높이를 정해 둔다(max-height 가 아니다).** 내용에 맡기면 노드를 눌러 필터 줄이 생기고 맨 아래
    가려진 개수 줄이 붙을 때마다 창이 커졌다 작아졌다 한다 — 누를 때마다 창이 움직이면 다음에 무엇을
    누를지 눈으로 좇을 수가 없다. min() 인 이유는 짧은 화면이다: clamp 의 최솟값은 뷰포트보다 큰 창을
    만들 수 있고, 그러면 닫기 버튼이 화면 밖으로 나간다. */
-.modal.run-detail { width: clamp(720px, 76vw, 1180px); height: min(86vh, 980px); }
+/* 카드가 148×32 에서 176×52 로 커지고 층마다 띠가 붙었으므로 창도 함께 키운다. **폭 상한이 더
+   중요하다** — 그래프는 한 층의 Task 가 늘 때 가로로 자라고, 1180px 에서는 한 층에 다섯 개까지만
+   서던 것이 1440px 에서 일곱 개가 된다(옛 상자로 세던 수와 같다). 넘치면 그래프 칸이 스크롤된다 */
+.modal.run-detail { width: clamp(760px, 86vw, 1440px); height: min(90vh, 1160px); }
 /* 머리말 없이 목표가 제목이고, 그 옆이 묶음 개수다. .jobs-count 를 사이드바에서 그대로 빌린다 —
    같은 아이콘과 같은 숫자가 화면마다 다르게 생기면 "아이콘으로 읽는다"는 규칙이 무너진다 */
 .detail-head { flex: none; display: flex; align-items: center; gap: 9px; }
@@ -1457,30 +1546,78 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .detail-canvas .detail-node { position: absolute; }
 /* 노드. **크기는 여기 적지 않는다** — RunDetail.tsx 가 graphLayout.ts 의 상수를 그대로 style 로 주고,
    선의 끝점도 같은 상수에서 나온다. 한 번 더 적으면 한쪽만 고쳐졌을 때 선이 상자에서 어긋난다 */
-.detail-node { box-sizing: border-box; display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--elevated); font-size: 12px; cursor: pointer; }
+/* 카드는 두 줄이다: 제목과 그 아래 부제. 글리프는 왼쪽에서 두 줄에 걸쳐 서고, 부제가 없는 Task 는
+   한 줄이 된다(align-content 가 그때도 가운데에 둔다).
+   **제목을 가운데 정렬하지 않는다.** archify 의 카드는 가운데 정렬이지만 그 카드에는 버튼이 없다.
+   176px 안에 글리프·제목·부제·버튼 셋을 넣으면서 제목을 가운데에 두면 제목에 남는 폭이 여덟 자
+   남짓이고, 게다가 버튼이 없는 카드(세션이 없는 completed 등)만 중심이 달라져 한 층에서 제목이
+   두 자리에 선다. 왼쪽 정렬이면 제목이 카드 폭을 다 쓰고 어느 카드에서도 같은 자리다 */
+.detail-node { box-sizing: border-box; position: relative; display: grid; grid-template-columns: auto 1fr; align-content: center; gap: 1px 7px; padding: 0 8px; border: 1.5px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--elevated); font-size: 11.5px; cursor: pointer; }
 .detail-node:hover { box-shadow: inset 0 0 0 1px var(--ring); }
-/* 고른 노드 = 지금 오른쪽을 거르고 있는 것. 표시는 2px 청록 링뿐이다 — 배경도 함께 바꾸면
-   --surface-hover(#1f1f25)가 노드의 기본 배경 --elevated(#23232a)보다 어두워서, dispatched·
-   validating·reviewing·failed·blocked 노드는 고르면 오히려 한 단 어두워진다. 링 하나로 충분하다 */
-.detail-node.on { box-shadow: inset 0 0 0 2px var(--accent); }
+/* 고른 노드 = 지금 오른쪽을 거르고 있는 것. **표시에 청록을 쓰지 않는다** — 한때 2px 청록 링이었는데
+   빨간(failed) 노드를 고르면 빨강 테두리 위에 파란 링이 겹쳐 두 색이 싸웠다. 지금은 그 노드 자신의
+   상태색으로 안쪽에 링을 하나 더 세운다(RunDetail 이 inline 으로 준다: 색이 STATUS_COLOR 에 있고
+   CSS 는 그 값을 읽을 수 없다). 배경을 함께 바꾸지 않는 이유는 그대로다 — --surface-hover 가 노드의
+   기본 배경 --elevated 보다 어두워서, 도는 것과 손이 필요한 것은 고르면 오히려 한 단 어두워진다 */
+/* 고른 Task 의 의존 사슬 밖. **지우지 않고 물러나게만 한다** — 그래프의 모양(몇 층이고 어디가
+   넓은지)은 무엇을 고르든 그대로 읽혀야 하고, 사라지게 하면 고른 것을 풀 때까지 그 Task 가 있었다는
+   사실 자체가 화면에서 없어진다. 선은 양 끝이 다 사슬 안일 때만 남는다(RunDetail 의 away) */
+.detail-node.away, .detail-edge-wait.away, .detail-edge-done.away { opacity: .24; }
 /* 아직 아무 일도 없었던 둘과 끝난 것은 물러난다. 점선이 pending 에만 붙는 것은 글리프와 같은
    규칙이다 — 자기 힘으로 시작할 수 없는 쪽(의존이 막고 있다)이다 */
 .detail-node--pending { background: var(--bg); border-style: dashed; color: var(--text-faint); }
 .detail-node--ready { background: var(--bg); }
 .detail-node--completed { background: var(--bg); color: var(--text-faint); }
-.detail-node-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Task 짓기 중 고른 의존 표시. 필터의 .detail-node.on(청록 링)과 다른 채널이라 위치도 다르다 —
-   테두리가 아니라 제목 옆에 글리프를 하나 더 세운다. color 를 accent(청록)로 주는 것은 상태
-   팔레트(--ok 등)를 피하기 위해서다 — completed 상태의 글리프와 같은 색이면 텍스트 글리프(✓)를
+/* 도는 셋과 손이 필요한 둘은 상태색을 옅게 깐다 — archify 가 kind 마다 하는 것을 여기서는 상태마다
+   한다. **바닥이 --panel 인 것은 뒤에 격자가 있기 때문이다**: 투명하게 두면 점선이 상자를 뚫고
+   제목 위로 지나간다(그래서 archify 도 색 사각형 아래에 불투명 사각형을 한 장 더 깐다). 테두리색은
+   RunDetail 의 borderOf 가 inline 으로 주므로 여기 적지 않는다 — 두 곳에 적으면 갈라진다 */
+.detail-node--dispatched { background: color-mix(in srgb, var(--accent) 12%, var(--panel)); }
+.detail-node--validating { background: color-mix(in srgb, var(--git-modified) 12%, var(--panel)); }
+.detail-node--reviewing { background: color-mix(in srgb, var(--fi-purple) 12%, var(--panel)); }
+.detail-node--failed { background: color-mix(in srgb, var(--git-deleted) 12%, var(--panel)); }
+.detail-node--blocked { background: color-mix(in srgb, var(--git-conflict) 12%, var(--panel)); }
+/* 글리프. 1 / -1 은 줄이 하나일 때도 둘일 때도 맞는 유일한 값이다 — 한 줄이면 그 줄, 두 줄이면
+   두 줄에 걸쳐 가운데 */
+.detail-node-sig { grid-row: 1 / -1; display: flex; align-self: center; opacity: .76; }
+.detail-node-title { grid-column: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; line-height: 1.25; }
+/* 부제 — 열린 Gate 의 질문이나 provider. 긴 질문은 잘린다: 무엇인지(제목)가 먼저이므로 잘릴 쪽은
+   이 줄이다. 값이 없는 Task 는 이 요소 자체가 없다(RunDetail) */
+.detail-node-meta { grid-column: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 9px; line-height: 1.3; color: var(--text-faint); }
+/* Task 짓기 중 고른 의존 표시. 필터의 고른 표시(노드 자신의 상태색 링)와 다른 채널이라 위치도
+   다르다 — 테두리가 아니라 제목 옆에 글리프를 하나 더 세운다. color 를 accent(청록)로 주는 것은
+   상태 팔레트(--ok 등)를 피하기 위해서다 — completed 상태의 글리프와 같은 색이면 텍스트 글리프(✓)를
    쓴 것과 별개로 또 한 번 헷갈릴 자리를 만든다 */
 /* .detail-node-btn 은 띄우기·멈추기·물어보기·다시 띄우기 네 버튼이 쓴다 — ↗(세션 열기)와 같은
    자리, 같은 존재감이어야 하므로 규칙을 나누지 않고 셀렉터에 더한다 */
 .detail-node-jump, .detail-node-btn { flex: none; background: none; border: 0; padding: 0 2px; color: var(--text-faint); font-size: 12px; cursor: pointer; }
 .detail-node-jump:hover, .detail-node-btn:hover { color: var(--accent); }
+/* 버튼들. 오른쪽 가장자리에 세로로 가운데 정렬한다 — 아래쪽에 두면 부제와 겹친다(부제는 가운데
+   정렬이라 폭이 글자 수에 따라 변해서, 어느 폭에서도 안 겹치는 자리가 없다) */
+.detail-node-acts { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); display: flex; gap: 1px; }
+/* 버튼이 선 카드는 글자가 그만큼 좁아진다 — 없으면 긴 제목이 버튼 밑으로 들어가 잘리지도 않는다.
+   54px 은 한 카드에 서는 버튼이 최대 셋이기 때문이다(↗ + 잠그기 + 잠금 풀기 / 멈추기 / 다시 띄우기).
+   :has() 는 Chrome 105+ 이고 이 앱은 146 이다(label.check-small:has 와 같은 근거) */
+.detail-node:has(.detail-node-acts) { padding-right: 54px; }
+/* 층의 띠. --text 에서 섞어 쓰는 것은 테마마다 배경이 달라도 같은 세기로 보이게 하려는 것이다 —
+   고정 리터럴이면 테마를 바꿀 때 한쪽에서 사라지거나 튄다.
+   **archify 의 점 격자는 가져오지 않았다** — 40px 마다 1px 씩 찍히는 그림이라 이 크기의 캔버스에서는
+   격자로 읽히지 않고, 캔버스의 경계라는 역할은 띠가 이미 한다(띠가 가장 넓은 층보다 넓다) */
+.detail-lane { fill: color-mix(in srgb, var(--text) 2%, transparent); stroke: color-mix(in srgb, var(--text) 9%, transparent); }
+.detail-lane-label { fill: var(--text-faint); font-family: var(--mono); font-size: 10px; font-weight: 600; }
+/* 선의 색이 곧 뜻이다. **화살촉은 규칙이 따로 있다** — marker 는 자기를 참조한 path 의 stroke 를
+   물려받지 못하므로 색마다 marker 를 하나씩 두고 fill 을 여기서 준다 */
+.detail-edge-wait { stroke: var(--accent); }
+.detail-arrow-wait { fill: var(--accent); }
+/* 이미 풀린 의존. --line-soft 를 쓰지 않는 이유는 그것이 칸을 나누는 색이라 화살촉으로는 아예
+   읽히지 않기 때문이다(Umbra 에서 흰색 7%). 물러나 있으라는 뜻은 지키면서 보이기는 해야 한다 */
+.detail-edge-done { stroke: color-mix(in srgb, var(--text-faint) 45%, transparent); }
+.detail-arrow-done { fill: color-mix(in srgb, var(--text-faint) 45%, transparent); }
 /* 선 색의 뜻. 그래프에서 유일하게 글자로 적는 자리다 — 아이콘에는 툴팁을 달 수 있지만 선에는 달 곳이 없다 */
 .detail-legend { flex: none; display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 14px; color: var(--text-faint); font-size: 10.5px; }
 .detail-legend span { display: inline-flex; align-items: center; gap: 6px; }
-.detail-line { width: 16px; border-top: 1.5px solid; }
+/* 견본은 이제 svg 다(선 + 화살촉) — border-top 으로는 방향을 그릴 수 없다 */
+.detail-line { flex: none; display: block; }
 /* 순환 묶음. Gate 와 같은 취급이다(경고 톤에 왼쪽 띠) — 사람이 손대야 풀리는 것이고, 순환은 명령으로는
    만들 수 없다(createTask 는 존재하지 않는 dep 을 거절하고, 이미 만들어진 Task 의 deps 를 바꾸는
    명령이 없다). 저장 파일(orchestration.json)이 프로세스 밖에서 손으로 고쳐졌을 때만 생기므로, 지금
@@ -2193,6 +2330,105 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
   color: inherit; opacity: .55; cursor: pointer; padding: 1px 7px; font-size: 13px; line-height: 1.4; }
 .md-toolbar button:hover { opacity: .85; }
 .md-toolbar button.active { opacity: 1; border-color: var(--line-soft); background: rgba(255, 255, 255, .07); }
+
+/* ---- Browser (preview) pane — components/BrowserPane.tsx ---- */
+/* Fills the pane slot (.terminal-slot is display:flex) as a column: toolbar, then the stage */
+.bp-host { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+.bp-toolbar { flex: none; height: 30px; display: flex; align-items: center; gap: 4px; padding: 0 6px;
+  border-bottom: 1px solid var(--line-soft); background: var(--panel); }
+.bp-toolbar button { background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
+  color: inherit; opacity: .7; cursor: pointer; padding: 1px 7px; font-size: 13px; line-height: 1.4; white-space: nowrap; }
+.bp-toolbar button:hover:not(:disabled) { opacity: 1; }
+.bp-toolbar button:disabled { opacity: .3; cursor: default; }
+.bp-toolbar button.active { opacity: 1; border-color: var(--line-soft); background: rgba(255, 255, 255, .07); }
+.bp-address { flex: 1; min-width: 0; height: 22px; font: 12px var(--mono); color: var(--text);
+  background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 0 8px; }
+.bp-address:focus { outline: none; border-color: var(--accent); }
+.bp-viewport { flex: none; }
+/* The stage holds the <webview> and, over it, the overlays. `overflow: hidden` clips a fixed-width
+   viewport that is wider than the pane */
+/* user-select:none, because a fixed viewport width leaves bare stage either side of the page. A press
+   there starts a selection, and a <webview> is a replaced element that selects whole, like an image —
+   so the page was covered by a translucent blue rectangle. Changing the width was enough to trigger it:
+   the picker's press and release land in different places, which is itself a selection. The guest is a
+   separate document and selects its own text as it always did. */
+.bp-stage { position: relative; flex: 1; min-height: 0; display: flex; justify-content: center; overflow: hidden; user-select: none; }
+/* A preset gives the frame both a width and a height, so it centres on both axes. The frame is the
+   emulated viewport times the fit scale, so it never exceeds the stage and nothing is clipped. */
+.bp-stage.fixed { background: var(--elevated); align-items: center; }
+/* Electron's webview is display:flex internally; sizing it through the flex item keeps that intact */
+.bp-view { flex: 1; min-width: 0; height: 100%; }
+.bp-stage.fixed .bp-view { flex: none; }
+.bp-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 12px; padding: 20px; background: var(--bg); color: var(--text-dim);
+  font-size: 13px; text-align: center; }
+.bp-spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line);
+  border-top-color: var(--accent); animation: cm-spin .6s linear infinite; }
+/* The browser tab's busy ring on the tab bar — the session ring's shape, in the accent colour */
+.tab-dot.busy.bp-tab-busy { border-color: var(--line); border-top-color: var(--accent); border-right-color: var(--accent); }
+
+/* ---- Design Mode tray — components/AnnotationTray.tsx ----
+   A card floating in the stage's bottom-right corner, not a row beneath it: a strip of its own
+   resized the guest the moment the first annotation arrived, and every badge on screen moved with
+   it. Bounded on both axes so a long list scrolls inside the card instead of covering the page. */
+.dm-tray { position: absolute; right: 12px; bottom: 12px; z-index: 30; display: flex; flex-direction: column;
+  width: min(20rem, calc(100% - 24px)); max-height: 45%; overflow: hidden;
+  border: 1px solid var(--line); border-radius: var(--radius-md, 8px); background: var(--panel);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, .18); user-select: text; }
+.dm-tray.collapsed { max-height: none; }
+.dm-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 8px;
+  border-bottom: 1px solid var(--line-soft); font-size: 12px; color: var(--text-dim); }
+.dm-head .dm-title { flex: 1; min-width: 0; font-weight: 600; color: var(--text); }
+.dm-head button, .dm-edit-actions button { background: none; border: 1px solid transparent; border-radius: var(--radius-sm);
+  color: inherit; opacity: .8; cursor: pointer; padding: 1px 7px; font-size: 12px; }
+.dm-head button:hover:not(:disabled), .dm-edit-actions button:hover:not(:disabled) { opacity: 1; border-color: var(--line-soft); }
+.dm-head button:disabled, .dm-edit-actions button:disabled { opacity: .3; cursor: default; }
+.dm-head button.primary, .dm-edit-actions button.primary { background: var(--accent); color: var(--accent-ink, #fff); opacity: 1; }
+.dm-head button.ghost { padding: 1px 4px; }
+
+.dm-rows { flex: 1; min-height: 0; overflow: auto; padding: 4px; }
+.dm-row { display: flex; gap: 8px; align-items: flex-start; padding: 6px 8px; border-radius: var(--radius-sm); cursor: default; }
+.dm-row:hover, .dm-row:focus-within { background: var(--elevated); }
+.dm-seq { flex: none; width: 20px; height: 20px; margin-top: 1px; border-radius: 50%;
+  background: var(--accent); color: var(--accent-ink, #fff); font: 700 11px/20px var(--mono); text-align: center; }
+.dm-body { flex: 1; min-width: 0; font-size: 12px; }
+.dm-label { color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Two lines of the comment, then an ellipsis — the rest is one click away in the editor */
+.dm-comment { margin-top: 2px; color: var(--text-dim); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dm-intent { margin-top: 3px; font-size: 11px; color: var(--text-faint); }
+/* The row's own actions appear on hover, so a list of ten reads as ten labels and not as twenty buttons */
+.dm-actions { flex: none; display: flex; gap: 2px; opacity: 0; transition: opacity .12s; }
+.dm-row:hover .dm-actions, .dm-row:focus-within .dm-actions { opacity: 1; }
+.dm-actions button { background: none; border: 0; border-radius: var(--radius-sm); color: var(--text-dim); cursor: pointer; padding: 1px 4px; font-size: 12px; }
+.dm-actions button:hover { color: var(--text); background: var(--panel); }
+.dm-actions button.danger:hover { color: var(--danger, #e5484d); }
+
+.dm-edit { flex: 1; min-width: 0; }
+.dm-edit textarea { width: 100%; box-sizing: border-box; font: 12px var(--mono); color: var(--text);
+  background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 4px 6px; resize: vertical; }
+.dm-edit textarea:focus { outline: none; border-color: var(--accent); }
+.dm-intents { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+.dm-intents button { background: none; border: 1px solid var(--line-soft); border-radius: var(--radius-sm);
+  color: var(--text-dim); cursor: pointer; padding: 1px 6px; font-size: 11px; }
+.dm-intents button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink, #fff); }
+.dm-edit-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 6px; }
+
+/* The comment box that opens beside the pointer on a pick — components/AnnotationPopover.tsx.
+   Placed by popoverSpot in stage pixels; the width here and POPOVER.width there have to agree, or
+   the box is kept on screen by the wrong number. */
+.dm-pop { position: absolute; z-index: 31; width: 264px; box-sizing: border-box; padding: 8px;
+  border: 1px solid var(--line); border-radius: var(--radius-md, 8px); background: var(--panel);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .22); user-select: text; }
+.dm-pop-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.dm-pop-label { flex: 1; min-width: 0; font-size: 12px; font-weight: 500; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dm-pop-head button { background: none; border: 0; color: var(--text-dim); cursor: pointer; padding: 0 3px; font-size: 13px; }
+.dm-pop-head button:hover { color: var(--text); }
+.dm-pop textarea { width: 100%; box-sizing: border-box; font: 12px var(--mono); color: var(--text);
+  background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 4px 6px; resize: vertical; }
+.dm-pop textarea:focus { outline: none; border-color: var(--accent); }
+.dm-pop .dm-intents { margin-top: 6px; }
+
 .md-split { flex: 1; min-height: 0; display: flex; }
 /* hidden 속성이 display:flex 에 덮이지 않게 못 박는다 — 이것이 에디터를 언마운트하지 않고 숨기는 방법이다 */
 .md-pane[hidden] { display: none; }
@@ -2248,10 +2484,23 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .md-preview code { font-family: var(--mono); font-size: .9em;
   background: var(--md-code-bg); border-radius: var(--radius-sm); padding: .2em .4em; }
 /* The fence carries the size and IntelliJ resets the inner <code> to 100% — leaving the .9em above
-   in place would compound with this .85em. */
-.md-preview pre { background: var(--md-code-bg); border-radius: var(--radius-sm); padding: 16px;
-  font-size: .85em; line-height: 1.45; overflow-x: auto; }
+   in place would compound with this .85em. The top padding is the one departure from IntelliJ's
+   uniform 16px: the copy button (.md-copy below, for which position: relative is the containing
+   block) sits in that band, so it never covers the first line of code — which a top-left overlay
+   inside a 16px pad would do, on the very characters a reader looks at first. */
+.md-preview pre { position: relative; background: var(--md-code-bg); border-radius: var(--radius-sm);
+  padding: 30px 16px 16px; font-size: .85em; line-height: 1.45; overflow-x: auto; }
 .md-preview pre code { background: none; padding: 0; font-size: 100%; }
+/* Copies the whole fence. Always visible but dimmed, so it reads as part of the block rather than
+   a control competing with the code; hover and keyboard focus bring it to full strength. In a block
+   wide enough to scroll it moves with the content (an absolute child of an overflow container is
+   part of its scrollable overflow) — acceptable, the left edge is where reading starts anyway. The
+   global `button` rule brings a border, background and sans font that all have to go. */
+.md-preview .md-copy { position: absolute; top: 6px; left: 6px; width: 20px; height: 20px;
+  display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--md-text); opacity: .45; cursor: pointer; }
+.md-preview .md-copy:hover { opacity: 1; }
+.md-preview .md-copy:focus-visible { opacity: 1; outline: none; box-shadow: 0 0 0 2px var(--ring); }
 /* Tables scroll horizontally within themselves only — the page must not shift */
 .md-table-wrap { overflow-x: auto; margin: 16px 0; }
 .md-preview table { border-collapse: collapse; }
@@ -2276,7 +2525,6 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* ---------- Run panel ---------- */
 .run-panel { flex: none; display: flex; flex-direction: column; border-top: 1px solid var(--line); background: var(--term-bg); height: var(--run-panel-h, 220px); min-height: 120px; }
 .run-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--run); flex: none; box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
-.run-exit { color: var(--text-faint); }
 .run-panel-actions { display: flex; gap: 2px; }
 .run-panel-btn { width: 22px; height: 22px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); font-size: 12px; padding: 0; cursor: pointer; }
 .run-panel-btn:hover { background: var(--elevated); color: var(--text); }
@@ -2305,7 +2553,61 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 /* The bodies are stacked and only the active one is visible — the inactive ones stay mounted so xterm state is preserved */
 .bottom-bodies { flex: 1; min-height: 0; display: flex; }
 .bottom-body { flex: 1; min-width: 0; min-height: 0; }
-.bottom-body > .run-panel-host { height: 100%; }
+
+/* The Run tab's body: a tool rail on the left, then a strip of run tabs over one console per run
+   (BottomPanel). The rail follows .rcm-tools' button rule (grid-centred icon, faint when disabled); the
+   tabs follow .bottom-tab so the two tab rows read as one family. */
+.run-body { display: flex; }
+.run-rail { flex: none; width: 30px; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 0; background: var(--panel); border-right: 1px solid var(--line-soft); }
+.run-rail-btn { width: 24px; height: 24px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); padding: 0; cursor: pointer; }
+.run-rail-btn:hover:not(:disabled) { background: var(--elevated); color: var(--text); }
+.run-rail-btn:disabled { color: var(--text-faint); cursor: default; }
+.run-rail-btn.on { background: var(--elevated); color: var(--text); }
+.run-rail-btn.rerun:not(:disabled) { color: var(--run); }
+.run-rail-btn.stop:not(:disabled) { color: var(--danger); }
+.run-rail-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.run-rail-sep { width: 16px; height: 1px; background: var(--line-soft); margin: 3px 0; }
+.run-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.run-tabstrip { flex: none; height: 30px; display: flex; align-items: center; gap: 8px; padding: 0 8px; background: var(--bg); border-bottom: 1px solid var(--line-soft); }
+.run-tabstrip-empty { color: var(--text-faint); font-size: 12px; }
+.run-tabs { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.run-tabs::-webkit-scrollbar { display: none; }
+.run-tab { flex: none; display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: var(--radius); color: var(--text-dim); font-size: 11.5px; cursor: pointer; white-space: nowrap; }
+.run-tab:hover { background: var(--surface-hover); }
+.run-tab.on { background: var(--elevated); color: var(--text); }
+.run-tab:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+/* State dot: green and haloed while running (as .run-live-dot on the tab), amber while the kill is in
+   flight, faint once finished. */
+.run-tab-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--text-faint); }
+.run-tab-dot.running { background: var(--run); box-shadow: 0 0 0 2px rgba(63, 185, 80, .18); }
+.run-tab-dot.stopping { background: var(--warn); }
+.run-tab-label { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.run-tab-exit { font-size: 10.5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.run-tab-exit.fail { color: var(--danger); }
+.run-tab-close { display: grid; place-items: center; width: 16px; height: 16px; background: transparent; border: 0; border-radius: var(--radius-sm); color: var(--text-faint); padding: 0; cursor: pointer; }
+.run-tab-close:hover { background: var(--bg); color: var(--text); }
+/* The globe on a running tab that printed an address — the accent marks it as an offer, not a close */
+.run-tab-preview { display: grid; place-items: center; width: 16px; height: 16px; background: transparent; border: 0; border-radius: var(--radius-sm); color: var(--accent); padding: 0; cursor: pointer; }
+.run-tab-preview:hover { background: var(--bg); }
+.run-tabstrip-meta { flex: none; display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.run-tabstrip-cmd { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-tabstrip-time { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.run-consoles { flex: 1; min-width: 0; min-height: 0; display: flex; }
+.run-console { flex: 1; min-width: 0; min-height: 0; }
+.run-console > .run-panel-body { height: 100%; }
+/* The console plus what floats over it (the find bar). The host is the xterm mount as before. */
+.run-panel-body { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; }
+.run-panel-body > .run-panel-host { flex: 1; min-width: 0; }
+/* The find bar — RunFindBar, top-right over the output, in the floating-panel treatment .run-more-menu
+   and .sel-menu use (panel background, soft border, large radius, the large shadow). */
+.run-find { position: absolute; top: 6px; right: 14px; z-index: 5; display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px 0 8px; background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); }
+.run-find-icon { color: var(--text-dim); flex: none; }
+.run-find-input { width: 180px; height: 22px; background: transparent; border: 0; color: var(--text); font-family: var(--mono); font-size: 12px; outline: none; }
+.run-find-input::placeholder { color: var(--text-faint); font-family: var(--sans); }
+.run-find-count { min-width: 44px; text-align: right; font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.run-find-count.none { color: var(--danger); }
+.run-find-btn { width: 22px; height: 22px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); padding: 0; cursor: pointer; }
+.run-find-btn:hover { background: var(--elevated); color: var(--text); }
 
 /* ---------- toast notifications ---------- */
 /* Above the status bar (32px plus 10px margin-top) and in front of modals (z 100), so a failure notice raised inside a modal is not hidden either */

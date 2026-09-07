@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { readGitSummary } from './gitSummary'
 import { git, type GitResult } from '../core/worktrees/git'
+import { gitSync } from '../core/worktrees/testRepo'
 
 // git.test.ts(src/core/worktrees)의 makeRepo와 같은 문제를 겪는다 — 전역 user.email/user.name에
 // 기대면 CI/새 머신에서 커밋이 실패한다. 그래서 매 저장소마다 로컬 config를 직접 심는다.
@@ -13,18 +14,9 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true })
 })
 
-/** git의 stderr를 에러 메시지에 실어, 실패 시 원인을 남긴다(git.test.ts의 run() 관례와 동일). */
-function run(cwd: string, args: string[]): void {
-  try {
-    execFileSync('git', args, { cwd, windowsHide: true, stdio: 'pipe' })
-  } catch (err) {
-    const e = err as { stderr?: Buffer | string; status?: number }
-    throw new Error(
-      `git ${args.join(' ')} failed (exit ${e.status ?? '?'}) in ${cwd}\nstderr: ${
-        e.stderr ? String(e.stderr).trim() : '(empty)'
-      }`
-    )
-  }
+/** The shared fixture helper: git's stderr in the error, and one retry when the spawn was refused. */
+const run = (cwd: string, args: string[]): void => {
+  gitSync(cwd, args)
 }
 
 /** 커밋 1개짜리 임시 repo. 전역 git 설정에 기대지 않도록 로컬 identity를 심는다. */
@@ -143,11 +135,21 @@ describe('readGitSummary', () => {
     await fs.writeFile(path.join(dir, name), 'x\n', 'utf8')
     run(dir, ['add', name])
 
-    const summary = await readGitSummary(dir)
+    // Every git call is recorded and carried in the assertion message. This test fails about one full
+    // suite run in ten, under load only, and a bare `null` said nothing about why — whether git failed
+    // (and what it wrote to stderr) or succeeded with empty output is the whole question.
+    const calls: { args: string[]; result: GitResult }[] = []
+    const recording: typeof git = async (args, opts) => {
+      const result = await git(args, opts)
+      calls.push({ args, result })
+      return result
+    }
+    const summary = await readGitSummary(dir, { git: recording })
+    const why = (): string => JSON.stringify(calls, null, 1)
 
-    expect(summary?.changed).toEqual([name])
-    expect(summary?.diffstat).toContain(name)
-    expect(summary?.diffstat ?? '').not.toContain('\\355')
+    expect(summary?.changed, why()).toEqual([name])
+    expect(summary?.diffstat, why()).toContain(name)
+    expect(summary?.diffstat ?? '', why()).not.toContain('\\355')
   })
 
   // fix round 2: `git diff` 는 인덱스를 무시한다. 워커가 `git add -A` 와 `git commit` 사이 —

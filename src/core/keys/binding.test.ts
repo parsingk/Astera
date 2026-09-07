@@ -250,3 +250,33 @@ describe('sidebar view actions', () => {
     expect(findConflicts(resolveBindings({}, mac), mac)).toEqual([])
   })
 })
+
+describe('run shortcuts', () => {
+  const RUN_IDS = ['run.run', 'run.stop', 'run.rerun', 'run.selectConfig'] as const
+
+  it.each(['win32', 'darwin', 'linux'])('exist with defaults on %s', (platform) => {
+    const actions = makeActions(platform)
+    for (const id of RUN_IDS) {
+      const a = actions.find((x) => x.id === id)
+      expect(a, id).toBeDefined()
+      expect(a!.defaults.length, id).toBeGreaterThan(0)
+    }
+  })
+
+  // F-key combinations, not Ctrl+letter: this app's main screen is a terminal, and a run shortcut has
+  // to work while it has focus. IntelliJ's macOS default for Run — Ctrl+R — is the terminal's
+  // reverse-history search, so it is deliberately not used.
+  it('binds the same keys on every platform', () => {
+    const win = makeActions('win32')
+    const mac = makeActions('darwin')
+    for (const id of RUN_IDS) {
+      expect(mac.find((a) => a.id === id)!.defaults, id).toEqual(win.find((a) => a.id === id)!.defaults)
+    }
+  })
+
+  it('never yields to the terminal', () => {
+    for (const a of makeActions('win32').filter((x) => RUN_IDS.includes(x.id as typeof RUN_IDS[number]))) {
+      expect(a.yieldsToTerminal, a.id).toBe(false)
+    }
+  })
+})

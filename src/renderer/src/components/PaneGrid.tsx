@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, type CSSProperties } from 'react'
 import type { Account, RollStateEvent, SchedStateEvent, SessionInfo } from '../../../core/types'
 import {
   MAX_PANES,
@@ -16,11 +16,14 @@ import {
 import { parseTab, sessionTab } from '../../../core/panes/tabId'
 import { tabLabels } from '../../../core/files/tabLabel'
 import type { RecordStatus } from '../../../core/understanding/types'
+import { displayHostOf } from '../../../core/preview/url'
+import { browserSlotDraw } from './browserSlot'
 import { useI18n } from '../i18n/I18nProvider'
 import { TerminalView } from './TerminalView'
 import { RECORD_GLYPH, RECORD_GLYPH_COLOR } from './UnderstandingIcons'
 import {
   WorkbenchTabs,
+  type BrowserTab,
   type RecordTab,
   type FileTab,
   type WorkbenchTab
@@ -46,6 +49,9 @@ export function PaneGrid({
   dirtyFileIds,
   recordTabs,
   recordStatuses,
+  browserTabs,
+  browserLoading,
+  agentBusy,
   rollStates,
   schedStates,
   busy,
@@ -55,6 +61,7 @@ export function PaneGrid({
   onSetRatio,
   onDropTabIntoPane,
   onRestart,
+  onOpenUrl,
   onSelectTab,
   onCloseTab,
   onNewInGroup,
@@ -65,7 +72,8 @@ export function PaneGrid({
   onRenameStart,
   onRenameEnd,
   renderEditor,
-  renderRecord
+  renderRecord,
+  renderBrowser
 }: {
   layout: PaneNode | null
   activePaneId: string | null
@@ -82,6 +90,12 @@ export function PaneGrid({
    *  that check (the tab's projectRoot against currentProject) is App's job. Same split as
    *  dirtyFileIds: the grid only looks it up. */
   recordStatuses: Record<string, RecordStatus>
+  /** Every open browser (preview) tab, whichever pane holds it — same place, same reason as fileTabs. */
+  browserTabs: BrowserTab[]
+  /** Browser tab id → the page is loading. Chip state, kept beside the tabs rather than in them. */
+  browserLoading: Record<string, boolean>
+  /** Session id → a script is running in its agent tab. Same shape and reason as browserLoading. */
+  agentBusy: Record<string, boolean>
   rollStates: Record<string, RollStateEvent>
   schedStates: Record<string, SchedStateEvent>
   busy: Record<string, boolean>
@@ -94,6 +108,8 @@ export function PaneGrid({
   /** Dropped on a pane's body — an edge zone splits, the centre moves into that pane */
   onDropTabIntoPane: (paneId: string, zone: DropZone, tabId: string) => void
   onRestart: (s: SessionInfo) => void
+  /** A URL link in a session terminal was activated — App's link rule routes it. */
+  onOpenUrl: (url: string, ev: MouseEvent) => void
   /** A tab was clicked — of any kind. App activates it in the tree, which also moves the focus there */
   onSelectTab: (tabId: string) => void
   onCloseTab: (tabId: string) => void
@@ -117,6 +133,10 @@ export function PaneGrid({
    *  editor, there is no instance to keep alive per pane — there is no document state to preserve, so
    *  it is only drawn while active (see the comment on the record slot below). */
   renderRecord: (recordTabId: string) => React.ReactNode
+  /** A browser tab's body. App builds it, the grid only places it. Unlike renderRecord it is drawn
+   *  for every browser tab, active or not — the page inside has state to keep, so the slot follows
+   *  the session-slot rule (mounted for life, hidden with display:none). */
+  renderBrowser: (browserTabId: string) => React.ReactNode
 }): React.JSX.Element {
   const { t } = useI18n()
   const hostRef = useRef<HTMLDivElement>(null)
@@ -133,16 +153,20 @@ export function PaneGrid({
   // Session → the group holding that session (absent means it is off screen). The tree holds tab ids,
   // so each one is read back through parseTab and only the session tabs are kept
   const paneOfSession = new Map<string, PaneLeaf>()
+  const paneOfBrowser = new Map<string, PaneLeaf>()
   for (const l of paneLeaves)
     for (const tabId of l.tabIds) {
       const ref = parseTab(tabId)
       if (ref?.kind === 'session') paneOfSession.set(ref.id, l)
+      else if (ref?.kind === 'browser') paneOfBrowser.set(tabId, l)
     }
   // Session id → session info, file tab id → file tab. Used when a group's tab ids are turned into tabs
   const sessionOf = new Map(sessions.map((s) => [s.id, s]))
   const fileTabOf = new Map(fileTabs.map((f) => [f.id, f]))
   // Record tab id → that tab's record. Same shape as fileTabOf
   const recordTabOf = new Map(recordTabs.map((r) => [r.id, r]))
+  // Browser tab id → that tab. Same shape as fileTabOf
+  const browserTabOf = new Map(browserTabs.map((b) => [b.id, b]))
   // The name hint is computed **over every open file tab at once**, not per pane — two files with the
   // same name in different panes still have to be told apart
   const labels = tabLabels(fileTabs.map((f) => f.path))
@@ -214,7 +238,55 @@ export function PaneGrid({
               rollState={rollStates[s.id] ?? null}
               schedState={schedStates[s.id] ?? null}
               active={visible && pane != null && pane.id === activePaneId}
+              onOpenUrl={onOpenUrl}
             />
+          </div>
+        )
+      })}
+      {/* Browser slots — the session-slot rule: one per tab for the tab's whole life, display:none unless
+          active. The page inside keeps its scroll and its state across a tab switch that way.
+          The exception is the agent's tab while its script runs: it is placed and drawn like the shown
+          one but made invisible, because a page Chromium is not drawing cannot be screenshotted — see
+          browserSlot.ts for the whole reason */}
+      {browserTabs.map((b) => {
+        const pane = paneOfBrowser.get(b.id)
+        const visible = pane != null && pane.activeTabId === b.id
+        const rect = pane ? rects.get(pane.id) : undefined
+        const draw = browserSlotDraw(b, visible, agentBusy)
+        const place: CSSProperties | undefined = rect
+          ? {
+              display: 'flex',
+              left: `${rect.x}%`,
+              width: `${rect.w}%`,
+              top: `calc(${rect.y}% + var(--pane-tabbar-h))`,
+              height: `calc(${rect.h}% - var(--pane-tabbar-h))`
+            }
+          : undefined
+        return (
+          <div
+            key={b.id}
+            className="terminal-slot"
+            style={
+              place && draw === 'shown'
+                ? place
+                : place && draw === 'drawn'
+                  ? // Placed and drawn, but invisible and click-through: the tab the user is looking
+                    // at is underneath and keeps every event, so nothing about their pane changes
+                    // while the agent works.
+                    { ...place, opacity: 0, pointerEvents: 'none' }
+                  : { display: 'none' }
+            }
+            // pointer-events covers the mouse and nothing else. An opacity:0 <webview> is still in
+            // the sequential focus order with a focusable document inside it, and BrowserPane turns a
+            // focus event on the view into a pane switch — so a Tab that walked into the invisible
+            // guest moved the user's pane and routed their typing into a page they cannot see. inert
+            // removes hit testing, focus and the accessibility tree together, and does not affect
+            // painting, so the capture still gets its frames. pointer-events stays beside it because
+            // Chromium's hit testing for an out-of-process frame is not the part to rely on alone.
+            inert={draw === 'drawn'}
+            onMouseDown={() => pane && onFocusPane(pane.id)}
+          >
+            {renderBrowser(b.id)}
           </div>
         )
       })}
@@ -369,6 +441,22 @@ export function PaneGrid({
                 // would leave `failed`, which is not in that set, drawn green
                 // (UnderstandingIcons' RECORD_GLYPH_COLOR)
                 glyphColor: status ? RECORD_GLYPH_COLOR[status] : null
+              }
+            }
+            if (ref?.kind === 'browser') {
+              const b = browserTabOf.get(tabId)
+              if (!b) return null
+              // Passed on its own as well as folded into `loading`: an agent tab loading a page
+              // ordinarily is also `loading`, and the spinner's tooltip says the agent is driving.
+              const agentRunning = b.agentSessionId !== undefined && agentBusy[b.agentSessionId] === true
+              return {
+                tabId,
+                kind: 'browser',
+                url: b.url,
+                title: b.title || displayHostOf(b.url) || t('preview.tab.untitled'),
+                loading: browserLoading[tabId] === true || agentRunning,
+                agentRunning,
+                agentSessionId: b.agentSessionId
               }
             }
             const f = ref?.kind === 'file' ? fileTabOf.get(tabId) : undefined

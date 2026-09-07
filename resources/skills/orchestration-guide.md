@@ -6,11 +6,13 @@ is a runnable command line — use it as written rather than guessing.
 `astera` is a **command** on the PATH of any session the app started. Its absolute path is in
 `$ASTERA_CLI` (section 10).
 
-**If `astera` comes back as `command not found`, do not give up — retry the same command as
-`"$ASTERA_CLI"` first.** It is the same program and works regardless of the shell. Read every example
-below with `astera` replaced by `"$ASTERA_CLI"` if you need to. **Only** when `echo "$ASTERA_CLI"` is
-empty does it mean this session was not started by the app, or that orchestration is off — in which
-case it has to be enabled in settings and a new session started.
+**If `astera` comes back as `command not found`, do not give up — retry the same command through
+the environment variable first.** It is the same program. The variable is read the way your shell
+reads environment variables: `"$ASTERA_CLI"` in bash or zsh, `& $env:ASTERA_CLI` in PowerShell — in
+PowerShell `$ASTERA_CLI` alone is an unrelated, empty variable, so do not take it as the check. Read
+every example below with `astera` replaced that way if you need to. **Only** when the environment
+variable itself is empty does it mean this session was not started by the app, or that orchestration
+is off — in which case it has to be enabled in settings and a new session started.
 
 ## 1. Six concepts
 
@@ -646,7 +648,8 @@ the app did not start has no `astera`, and even if it did, it owns no Dispatch a
 worker. On win32 the shuttle is two files (`astera.cmd` for cmd and PowerShell, the extension-less
 `astera` for bash — MSYS bash does not consult PATHEXT). On macOS and other posix platforms it is a
 single extension-less `astera` file. Calling `astera` works from any shell, and when it does not,
-`"$ASTERA_CLI"` always does.
+the path in the `ASTERA_CLI` environment variable always does — `"$ASTERA_CLI"` in bash or zsh,
+`& $env:ASTERA_CLI` in PowerShell.
 
 An empty `ASTERA_CLI` means this session was not started by the app, or orchestration is off — enable
 it in settings and start a new session. Use this value too whenever a script needs the absolute path.

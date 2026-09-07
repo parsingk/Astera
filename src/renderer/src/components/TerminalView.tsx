@@ -11,6 +11,7 @@ import * as sessionBus from '../lib/sessionBus'
 import { useI18n } from '../i18n/I18nProvider'
 import { useTerminalFont } from '../lib/terminalFont'
 import { useTheme } from '../lib/theme'
+import { attachConsoleLinks } from '../terminalLinks'
 
 const fmtTime = (iso?: string): string =>
   iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
@@ -30,19 +31,23 @@ export function TerminalView({
   onRestart,
   rollState = null,
   schedState = null,
-  active = false
+  active = false,
+  onOpenUrl
 }: {
   session: SessionInfo
   onRestart: (old: SessionInfo) => void
   rollState?: RollStateEvent | null
   schedState?: SchedStateEvent | null
   active?: boolean
+  onOpenUrl: (url: string, ev: MouseEvent) => void
 }): React.JSX.Element {
   const { t } = useI18n()
   const { family } = useTerminalFont()
   const { theme } = useTheme()
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
+  const onOpenUrlRef = useRef(onOpenUrl)
+  onOpenUrlRef.current = onOpenUrl
   // Set by the construction effect so the font effect can reuse its lastSent-guarded sendResize
   // instead of calling window.api.sessions.resize directly (which would bypass the guard and leave
   // its lastSent stale for the next ResizeObserver-driven call)
@@ -67,6 +72,8 @@ export function TerminalView({
     // If a program run inside the session changes the cursor style and does not restore it, only that tab's cursor blinks
     const blinkGuard = pinCursorBlinkOff(term)
     term.open(host)
+    // URLs in the output are links (paths are not — this terminal does not know its cwd, see terminalLinks.ts)
+    const disposeLinks = attachConsoleLinks(term, { onUrl: (url, ev) => onOpenUrlRef.current(url, ev) })
     // Fit to the cell grid directly instead of using FitAddon — FitAddon always subtracts 15px for a scrollbar, which left the right side empty
     fitTerminalToHost(term, host)
     termRef.current = term
@@ -162,6 +169,21 @@ export function TerminalView({
       // the write callback = an ack that the renderer consumed it → backpressure
       term.write(data, () => window.api.sessions.ack(session.id, data.length))
     })
+    // Design Mode's "send to session" pastes here — the same path as Ctrl+V, so the prompt arrives
+    // bracketed and unsubmitted (sessionBus.registerPaste explains why not sessions.write)
+    const unregisterPaste = sessionBus.registerPaste(session.id, (text) => term.paste(text))
+    // The visible screen, so a send can tell an agent at its prompt from one holding a dialog open.
+    // The viewport rather than the whole scrollback: a dialog answered ten minutes ago is not what is
+    // waiting now, and `translateToString(true)` trims the padding a TUI draws to the right edge.
+    const unregisterScreen = sessionBus.registerScreen(session.id, () => {
+      const buffer = term.buffer.active
+      const rows: string[] = []
+      for (let i = 0; i < term.rows; i += 1) {
+        const line = buffer.getLine(buffer.viewportY + i)
+        if (line) rows.push(line.translateToString(true))
+      }
+      return rows.join('\n')
+    })
     const input = term.onData((d) => window.api.sessions.write(session.id, d))
     let resizeTimer: ReturnType<typeof setTimeout> | undefined
     const observer = new ResizeObserver(() => {
@@ -175,6 +197,7 @@ export function TerminalView({
     observer.observe(host)
 
     return () => {
+      disposeLinks()
       detach()
       blinkGuard.dispose()
       input.dispose()
@@ -183,6 +206,8 @@ export function TerminalView({
       clearTimeout(loadingSafety)
       termRef.current = null
       sendResizeRef.current = null
+      unregisterPaste()
+      unregisterScreen()
       term.dispose()
     }
   }, [session.id])

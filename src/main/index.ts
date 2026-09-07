@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, Notification } from 'electron'
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, shell, webContents, Notification } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
@@ -10,6 +10,11 @@ import { applyLoginPath } from './loginPath'
 import { shouldForceWaylandOzone } from './ozone'
 import { registerIpc, parseAllowedExternalUrl, type OrchHandle } from './ipc'
 import { isOwnDocument } from './navigationGuard'
+import { installPreviewGuards } from './preview/guest'
+import { AgentGuestRegistry } from './agentBrowser/registry'
+import { registerPreviewDevTools } from './preview/devtools'
+import { registerPreviewEmulation } from './preview/emulation'
+import { registerPreviewCapture } from './preview/capture'
 import { RollingCoordinator } from './rolling'
 import { SchedulerCoordinator } from './scheduler'
 import { CodexRollingCoordinator } from './codexRolling'
@@ -148,6 +153,13 @@ function buildMacMenu(): Menu {
   ])
 }
 
+/** Which guest is which session's agent browser. Built here rather than inside registerIpc because
+ *  two places need the **same** instance and they run at different times: createWindow installs the
+ *  navigation guard, which asks on every will-navigate, and registerIpc owns the register/unregister
+ *  IPC that fills it. Two instances would mean the guard and the run manager disagree about which
+ *  guest belongs to an agent — the guard would let an agent's tab walk off this machine. */
+const agentGuests = new AgentGuestRegistry((id) => webContents.fromId(id))
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1280,
@@ -178,7 +190,9 @@ function createWindow(): BrowserWindow {
     // on Linux. Hiding the controls without first moving that confirmation into the main process —
     // into win.on('close'), where the WM's close path actually lands — silently kills every running
     // session, which is exactly the regression a217ac1 was written to prevent.
-    webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false }
+    // webviewTag: the browser tab's <webview> (renderer/components/BrowserPane.tsx). Off by default
+    // in Electron; installPreviewGuards below is what makes turning it on safe.
+    webPreferences: { preload: path.join(__dirname, '../preload/index.js'), sandbox: false, webviewTag: true }
   })
   if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   else win.loadFile(path.join(__dirname, '../renderer/index.html'))
@@ -217,6 +231,20 @@ function createWindow(): BrowserWindow {
     const parsed = parseAllowedExternalUrl(url)
     if (parsed) void shell.openExternal(parsed.toString())
   })
+  // The guest id the guard is handed is the webContents id of the <webview>, which is the same number
+  // BrowserPane reports through preview.registerAgentGuest — so the agent's tab, and only it, is held
+  // to the loopback rule.
+  installPreviewGuards(win, (id) => agentGuests.isAgentGuest(id))
+  // Hosts the preview's DevTools in a window this app creates, so it carries the app icon and a
+  // title naming the page — Electron's own DevTools window carries neither.
+  registerPreviewDevTools(APP_ICON)
+  // Viewport presets. DevTools does not offer its device toolbar for a <webview>, so the pane's picker
+  // goes through this instead — and it uses Electron's own API rather than the debugger, which keeps
+  // the debugger free for DevTools.
+  registerPreviewEmulation()
+  // Element screenshots for Design Mode, saved under userData/preview/shots — the path is what the
+  // prompt carries.
+  registerPreviewCapture(app.getPath('userData'))
 
   // Closing the window (X) minimizes to the tray on Windows and macOS — whether or not sessions
   // exist. There the only real quit path is the tray 'Quit' menu (app.quit): app.quit sets
@@ -828,7 +856,8 @@ app.whenReady().then(async () => {
     (notify) => {
       workUnitForkRef = notify
     },
-    desktop
+    desktop,
+    agentGuests
   )
   // No tray on Linux. With close quitting for real there is nothing to hide, so the menu's
   // Open/Quit would only repeat what the window and its close button already do — while tying the

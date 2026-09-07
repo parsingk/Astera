@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { layersOf } from './graph'
+import { chainOf, layersOf } from './graph'
 import { emptyState } from './state'
 import type { OrchState } from './state'
 import type { Run, Task } from './types'
@@ -148,5 +148,36 @@ describe('layersOf', () => {
   it('Task 가 없는 Run 은 빈 층과 빈 cyclic 이다', () => {
     const s = state({ runs: [run('r1')] })
     expect(layersOf(s, 'r1')).toEqual({ layers: [], deps: {}, cyclic: [] })
+  })
+})
+
+describe('chainOf', () => {
+  // Sorted, because a Set's order is insertion order and says nothing about the answer.
+  const chain = (deps: Record<string, string[]>, id: string): string[] =>
+    [...chainOf(deps, id)].sort()
+
+  it('always holds the Task that was picked', () => {
+    expect(chain({ a: [] }, 'a')).toEqual(['a'])
+  })
+
+  it('reaches everything the Task waits on, however far back', () => {
+    expect(chain({ a: [], b: ['a'], c: ['b'] }, 'c')).toEqual(['a', 'b', 'c'])
+  })
+
+  it('reaches everything that waits on the Task, however far forward', () => {
+    expect(chain({ a: [], b: ['a'], c: ['b'] }, 'a')).toEqual(['a', 'b', 'c'])
+  })
+
+  // The whole point of the dimming: a Task that merely shares a dependency is not on this chain,
+  // so stopping the picked Task does not stop it.
+  it('leaves out a sibling that shares a dep but waits on nothing of ours', () => {
+    const deps = { a: [], b: ['a'], c: ['a'], d: ['b'] }
+    expect(chain(deps, 'b')).toEqual(['a', 'b', 'd'])
+  })
+
+  // deps 에 순환이 있는 상태는 명령으로는 만들어지지 않지만 orchestration.json 이 손으로 고쳐지면
+  // 생긴다(layersOf 의 cyclic 과 같은 근거). 그때 이 함수가 멈추지 않으면 상세 창이 얼어붙는다
+  it('terminates when deps point at each other', () => {
+    expect(chain({ a: ['b'], b: ['a'], c: [] }, 'a')).toEqual(['a', 'b'])
   })
 })

@@ -1,5 +1,7 @@
-import type { RunConfig, RunStatus } from './run/config'
-export type { RunConfig, RunStatus } from './run/config'
+import type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
+import type { EmulationMetrics } from './preview/viewports'
+import type { CaptureResult, Rect } from './preview/pick/types'
+export type { RunConfig, RunStatus, SaveConfigsResult } from './run/config'
 import type { RunContext } from './run/build'
 export type { RunContext } from './run/build'
 import type { Jdk } from './run/jdk'
@@ -551,8 +553,30 @@ export interface CoreEvents {
   /** A desktop notification was clicked. Main has already raised the window; the renderer activates
    *  that session's tab, through the path the tab bar already uses (design doc §7). */
   'notify:activate': { sessionId: string }
-  'run:data': { projectPath: string; data: string } // run output
-  'run:status': RunStatus // run state change (running/exited)
+  'run:data': { runId: string; data: string } // run output, per run
+  'run:status': RunStatus // run state change (running/stopping/exited)
+  /** The run the console should move to. A chain's first run is what run.start returns and what the
+   *  panel opens on; this arrives later, when the configuration the user actually pressed ▶ on starts.
+   *  `projectPath` rides along because the renderer applies it only for the project it is showing —
+   *  the same guard run.start's own result needs, and for the same reason: a foreign project's run
+   *  taking the selection leaves the panel pointing at a console it will never draw. */
+  'run:focus': { runId: string; projectPath: string }
+  /** A step of a chain refused to start. Rare, because prepareLaunch assembles every step first;
+   *  without it the failure is a tab that silently never appears. Already translated in main.
+   *  `projectPath` rides along for the same reason `run:focus`'s does: the renderer applies the guard
+   *  only for the project it is showing, so a chain failing in project A does not toast over project B. */
+  'run:launchFailed': { message: string; projectPath: string }
+  /** A preview page tried to open a window (`target=_blank`, `window.open`). The guest is never
+   *  allowed a window of its own (main/preview/guest.ts); the address comes here so the renderer's
+   *  link rule can decide — a loopback URL becomes another preview tab, anything else opens outside. */
+  'preview:popup': { url: string }
+  /** Main asks the renderer to give a session its agent browser tab — sent on the session's first
+   *  `open(url)`, with that URL as the tab's first address. A no-op when the tab already exists. */
+  'preview:agentTab': { sessionId: string; cwd: string; url: string }
+  /** The agent's script called `close()`. */
+  'preview:agentTabClose': { sessionId: string }
+  /** A script is running (true) or has finished (false) in this session's tab — the chip's ring. */
+  'preview:agentBusy': { sessionId: string; busy: boolean }
   'terminal:data': { id: string; data: string } // project terminal output
   'terminal:exit': { id: string; exitCode: number } // shell exited — the renderer removes that tab
   // The Jobs sidebar's whole snapshot, re-sent on every orchestration state change. Small enough to
@@ -788,6 +812,11 @@ export interface CoreApi {
     // nothing from before the moment it is turned on.
     getWorkUnitTrackingEnabled(): Promise<boolean>
     setWorkUnitTrackingEnabled(enabled: boolean): Promise<void>
+    // The agent browser (spec: docs/superpowers/specs/2026-09-06-agent-browser-design.md). Off by
+    // default; on, the astera-browser skill is installed for every account and new sessions may run
+    // `astera browser js`. Sessions already open do not see it until restarted.
+    getAgentBrowserEnabled(): Promise<boolean>
+    setAgentBrowserEnabled(enabled: boolean): Promise<void>
     // Whether the worktree PR badges poll GitHub in the background. Off leaves the cache as-is —
     // refresh only happens on an explicit github.refresh call.
     getGithubPolling(): Promise<boolean>
@@ -861,7 +890,7 @@ export interface CoreApi {
     unwatch(): Promise<void>
   }
   run: {
-    // Running and stopping a project. start and list go through assertAllowedPath, which permits only
+    // Running a project's configurations and stopping its runs. start and list go through assertAllowedPath, which permits only
     // registered project paths.
     // isSpringBoot tells the configuration form whether to offer the Spring profile field
     // (optionalFieldsFor in core/run/types.ts, reached through RunConfigManager's isSpringBoot prop).
@@ -869,8 +898,9 @@ export interface CoreApi {
     // calls buildCommand(config, context) so it shows exactly what run.start will actually run.
     list(projectPath: string): Promise<{
       configs: RunConfig[]
-      active: RunStatus | null
-      recent: string
+      // Every run of the project, finished ones included, in seat order (RunManager.listByProject).
+      // Output is fetched per run with run.output — not shipped here.
+      runs: RunStatus[]
       isSpringBoot: boolean
       // Whether RunTypePicker should show 'python'/'pytest' as detected (pyproject.toml, requirements.txt,
       // or a *.py file at the project root) — there is no seed config for either kind to key that off of.
@@ -883,17 +913,35 @@ export interface CoreApi {
     }>
     listActive(): Promise<RunStatus[]> // all active runs — for the count badge and the dropdown
     start(projectPath: string, configId: string): Promise<RunStatus>
-    stop(projectPath: string): Promise<void>
-    // 종료된 실행을 버린다 — 실행 탭의 ✕. 마지막 exitCode 와 최근 출력까지 함께 사라지므로 탭을
-    // 다시 열어도 지난 실행이 돌아오지 않는다. 도는 실행에는 아무 일도 하지 않는다(RunManager.dismiss).
-    dismiss(projectPath: string): Promise<void>
-    write(projectPath: string, data: string): void
-    resize(projectPath: string, cols: number, rows: number): void
-    // Both return the **stored** list only — never passed through mergeConfigs, so the auto-detected
-    // seeds are not in it. A caller that needs the display list has to refetch with run.list (which is
-    // what App.tsx does; it discards these return values).
-    saveConfig(projectPath: string, config: RunConfig): Promise<RunConfig[]>
-    deleteConfig(projectPath: string, configId: string): Promise<RunConfig[]>
+    /** Runs a file from the explorer's context menu. Creates a temporary configuration for it, reusing
+     *  an existing configuration of the same identity rather than making a second one.
+     *
+     *  Returns **both** facts, unlike start, which needs only one: `run` is what the panel opens on —
+     *  the chain's first step — while `configId` is the configuration that was chosen. They differ
+     *  whenever the chosen configuration has a before-launch task, and the caller needs the second to
+     *  put the toolbar's pill on what the user actually asked to run. Only this side knows it: the
+     *  renderer cannot tell whether a file's run reused something or created it.
+     *
+     *  Rejects when the file implies no runnable kind, when it is outside the project, or when the
+     *  configuration cannot be stored. */
+    runFile(projectPath: string, filePath: string): Promise<{ run: RunStatus; configId: string }>
+    // Everything below addresses a run by its id (RunStatus.runId), never by project — a project holds
+    // any number of runs.
+    stop(runId: string): Promise<void>
+    // Drops a finished run — the run list's ✕. Its exitCode and output go with it, so a re-read of
+    // run.list does not bring the row back. Does nothing to a live run (RunManager.dismiss).
+    dismiss(runId: string): Promise<void>
+    // The run's buffered output (last 200 KB) — what RunPanel replays when it mounts after the start
+    output(runId: string): Promise<string>
+    // Whether `target`, as printed in this run's output, names a file this app may open — resolved
+    // against the run's working directory, guarded, stat-ed (main/run/resolveLink.ts). null is the
+    // ordinary answer; the console's link provider underlines only what comes back non-null.
+    resolveLink(runId: string, target: string): Promise<{ path: string } | null>
+    write(runId: string, data: string): void
+    resize(runId: string, cols: number, rows: number): void
+    /** The manager's Apply: the stored list becomes `configs` wholesale, or nothing changes and every
+     *  refused item is named (core/run/types.ts SaveConfigsResult). */
+    saveConfigs(projectPath: string, configs: RunConfig[]): Promise<SaveConfigsResult>
     listJdks(): Promise<Jdk[]> // the detected JDKs — no path argument, so not subject to assertAllowedPath
     // The detected Python interpreters for this project (its venv plus whatever is on PATH). Takes a
     // path — unlike listJdks — because venv candidates live inside the project, so it is subject to
@@ -921,9 +969,35 @@ export interface CoreApi {
 }
 
 /** Extras on the Electron side (not core — main handles these directly) */
+/** The preview pane's one main-process call. Everything else the pane does (navigation, the address
+ *  bar, the context menu) is on the <webview> element itself; DevTools is here because hosting it in a
+ *  window this app owns needs `setDevToolsWebContents`, which only WebContents has. */
+export interface PreviewApi {
+  /** Opens DevTools for that guest in an app-owned window, or closes it if already open. `title` names
+   *  the page being inspected. Resolves to whether DevTools is open afterwards. */
+  toggleDevTools(webContentsId: number, title: string): Promise<boolean>
+  /** Applies a viewport preset to that guest, or turns emulation off with `null`. Resolves to whether
+   *  it was applied — false means the guest was gone, or the metrics were not ones Chromium can take
+   *  (it wedges on a non-finite or non-positive number). Re-send it after every load: emulation does
+   *  not survive a navigation, measured. */
+  emulate(webContentsId: number, metrics: EmulationMetrics | null): Promise<boolean>
+  /** Crops a screenshot of `rect` (in the *scaled view's* coordinates — multiply by the emulation scale
+   *  first) out of that guest and saves it as a PNG. Resolves to the file, or null when the guest is
+   *  gone, the rect is not one Chromium can take, or the capture failed. */
+  captureElement(webContentsId: number, rect: Rect): Promise<CaptureResult | null>
+  /** BrowserPane tells main which guest is a session's agent tab. Main cannot learn this on its
+   *  own — did-attach-webview hands it a guest with no tab or session on it. */
+  registerAgentGuest(sessionId: string, webContentsId: number): Promise<void>
+  /** Takes the guest id as well as the session: a pane unmounting around a newer pane's registration
+   *  must not drop the registration that replaced its own. */
+  unregisterAgentGuest(sessionId: string, webContentsId: number): Promise<void>
+  /** Stops the script running in this session's agent tab. False when none was running. */
+  agentStop(sessionId: string): Promise<boolean>
+}
+
 export interface SystemApi {
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is
-  // already validated by run.start and run.saveConfig. Omitting it behaves exactly as the existing
+  // already validated by run.start and run.saveConfigs. Omitting it behaves exactly as the existing
   // caller (NewSessionDialog) does.
   pickFolder(defaultPath?: string): Promise<string | null>
   // Same contract as pickFolder, for a single file — the run configuration file-path fields (node's
@@ -1102,6 +1176,7 @@ export interface SessionTaskApi {
 
 export type RendererApi = CoreApi & {
   system: SystemApi
+  preview: PreviewApi
   clipboard: ClipboardApi
   update: UpdateApi
   rolling: RollingApi

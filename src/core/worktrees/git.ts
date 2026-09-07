@@ -10,24 +10,49 @@ export interface GitResult {
 
 const DEFAULT_TIMEOUT_MS = 30_000
 
-/** git execution adapter. No shell (avoids quoting problems); a failure does not throw, it returns ok=false.
+/** A failure of the spawn itself, before git ever ran. On Windows, under heavy parallel spawning,
+ *  CreateProcess is refused now and then with EPERM (or EBUSY) and works a moment later — the whole
+ *  test suite hit it about one run in ten, in whichever test happened to spawn git at that moment.
+ *  Nothing was started, so trying once more is safe for every command, writes included. Anything git
+ *  itself reports (a non-zero exit) has an exit code and is never retried. */
+const SPAWN_TRANSIENT = new Set(['EPERM', 'EBUSY'])
+const RETRY_DELAY_MS = 50
+
+function isTransientSpawnFailure(err: unknown): boolean {
+  const e = err as { code?: unknown; killed?: unknown } | null
+  return !!e && typeof e.code === 'string' && SPAWN_TRANSIENT.has(e.code) && e.killed !== true
+}
+
+/** git execution adapter. No shell (avoids quoting problems); a failure does not throw, it returns ok=false —
+ *  including when node's execFile throws synchronously instead of calling back, which it does for some
+ *  spawn failures on Windows. A transient spawn failure is retried once (see SPAWN_TRANSIENT).
  *  trim defaults to true — pass false for output where leading whitespace is meaningful, such as porcelain. */
 export function git(
   args: string[],
   opts?: { cwd?: string; timeoutMs?: number; trim?: boolean }
 ): Promise<GitResult> {
-  return new Promise((resolve) => {
-    execFile(
-      'git',
-      args,
-      { cwd: opts?.cwd, timeout: opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS, windowsHide: true },
-      (err, stdout, stderr) =>
-        resolve({
-          ok: !err,
-          stdout: opts?.trim === false ? (stdout ?? '') : (stdout ?? '').trim(),
-          stderr: (stderr ?? '').trim()
-        })
-    )
+  const once = (): Promise<{ err: unknown; stdout: string; stderr: string }> =>
+    new Promise((resolve) => {
+      try {
+        execFile(
+          'git',
+          args,
+          { cwd: opts?.cwd, timeout: opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS, windowsHide: true },
+          (err, stdout, stderr) => resolve({ err, stdout: stdout ?? '', stderr: stderr ?? '' })
+        )
+      } catch (err) {
+        resolve({ err, stdout: '', stderr: err instanceof Error ? err.message : String(err) })
+      }
+    })
+  const shape = (r: { err: unknown; stdout: string; stderr: string }): GitResult => ({
+    ok: !r.err,
+    stdout: opts?.trim === false ? r.stdout : r.stdout.trim(),
+    stderr: r.stderr.trim()
+  })
+  return once().then(async (first) => {
+    if (!isTransientSpawnFailure(first.err)) return shape(first)
+    await new Promise((r) => setTimeout(r, RETRY_DELAY_MS))
+    return shape(await once())
   })
 }
 

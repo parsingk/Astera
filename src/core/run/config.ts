@@ -3,24 +3,40 @@
 // the form needs (environment text, project-relative paths). The RunConfig union and its per-kind
 // interfaces live in ./types and are only re-exported here, so a renderer module that needs both
 // still has one import.
-export type { RunConfig, RunConfigType } from './types'
+export type { RunConfig, RunConfigType, SaveReason, SaveConfigsResult } from './types'
 import type { RunConfig, RunConfigType } from './types'
 
-// Live run state — used by the renderer count/dropdown and by the Run panel header
+// Live run state — one per run, addressed everywhere by runId. Used by the renderer's run list,
+// the toolbar and the global badge.
 export interface RunStatus {
+  /** The run's identity. Every IPC handler and event names a run by this, never by project. */
+  runId: string
   projectPath: string
   projectName: string
   configId: string
   configName: string
   command: string
-  status: 'running' | 'exited'
+  /** Position in the project's list. A rerun takes over the seat of its configuration's earliest
+   *  finished run (placeNewRun in ./instances), so the seat has to be a value on the run — a Map's
+   *  insertion order would move a re-inserted key to the end. Unique within a project. */
+  seq: number
+  /** 'stopping' is the window between stop() and the process tree's actual exit. The kill is
+   *  dispatched asynchronously and the exit arrives through pty.onExit, so a restart waits here
+   *  rather than racing the dying process — and the list can show that ▶ did something. */
+  status: 'running' | 'stopping' | 'exited'
   exitCode?: number
-  /** 오케스트레이션 Task 의 검증 실행이다. 이 실행은 사용자가 시작한 것이 아니지만 RunManager 의
-   *  한 통로를 그대로 지나가므로 실행 툴바와 전역 목록에 똑같이 나타난다 — 그것을 구별하는 표시가
-   *  없으면 사용자는 자기 실행을 시작할 수 없는 이유도 모르고, 남의 빌드로 보이는 것을 정지시켜
-   *  Task 를 실패시킨다. 정지 버튼은 남긴다(폭주하는 검증을 멈출 수단은 있어야 한다) — 대신 그
-   *  정지는 실패가 아니라 Gate 가 된다(TaskValidator.markStopped). 검증이 아닌 실행에는 이 필드가
-   *  아예 없다. */
+  startedAt: number
+  exitedAt?: number
+  /** The first loopback address this run printed — the dev server's own URL, seen in its output
+   *  rather than configured. The run's tab offers to open it in a preview; absent until one appears,
+   *  and absent for runs that never print one. Distinct from RunConfig.previewUrl, which is a setting
+   *  the user typed and which opens automatically at start. */
+  detectedUrl?: string
+  /** An orchestration Task's validation run. Not started by the user, but it passes through
+   *  RunManager like any run, so it appears in the run list and the global badge. The tag is what
+   *  tells the user it is not theirs — and it is what turns the stop button's meaning around: stopping
+   *  a validation is not a failure but a gate (TaskValidator.markStopped). The stop button stays; a
+   *  runaway validation must be stoppable. Absent, not false, on every other run. */
   validation?: true
 }
 
@@ -160,6 +176,10 @@ export function seedKeyOf(c: RunConfig): string {
       return `dockerfile:${c.imageTag}`
     case 'dotnet':
       return `dotnet:${c.project}:${c.subcommand ?? 'run'}`
+    // No derived identity: a compound has no parameter that makes it what it is, and no seed can ever
+    // be one, so nothing here can hide or be hidden. Its identity is itself.
+    case 'compound':
+      return `compound:${c.id}`
   }
 }
 
@@ -183,7 +203,7 @@ export function promoteSeed(config: RunConfig, newId: string): RunConfig {
 /** A new configuration's starting values for a kind, right after it is picked in RunTypePicker.
  *
  *  No kind may be born holding a *seed's* identity. mergeConfigs hides a seed the moment a stored
- *  configuration shares its seedKeyOf, and ＋ stores the new configuration immediately (run.saveConfig,
+ *  configuration shares its seedKeyOf, and ＋ stores the new configuration immediately (run.saveConfigs,
  *  see migrateRunConfigs' allowIncomplete), so a starting value that matches a detected configuration
  *  takes that row out of the list as soon as the kind is picked — before anything has been typed, and
  *  with no way to cancel. Three kinds could: npm started on the project's first script, and cargo and
@@ -249,6 +269,8 @@ export function defaultConfigFor(
       return { id, name, type, imageTag: '' }
     case 'dotnet':
       return { id, name, type, project: defaultDotnetProject(dotnetProjects) }
+    case 'compound':
+      return { id, name, type, members: [] }
   }
 }
 
@@ -268,7 +290,9 @@ export function parseEnvLines(text: string): Record<string, string> {
   return out
 }
 
-/** Map → editable text (the inverse of parseEnvLines) */
+/** Map → editable text (the inverse of parseEnvLines). No caller outside this file's own test as of
+ *  the table-based env editor (EnvTable) — kept anyway as the documented inverse parseEnvLines'
+ *  round-trip depends on, since envTable.ts uses parseEnvLines directly. */
 export function formatEnvLines(env: Record<string, string> | undefined): string {
   if (!env) return ''
   return Object.entries(env)
@@ -294,7 +318,7 @@ export function formatEnvLines(env: Record<string, string> | undefined): string 
  *  the explorer tree, the input here is whatever the OS folder picker returned, and on win32 the drive letter and path
  *  casing it returns can differ from the project root string (same reasoning as isPathWithin in core/files/tree.ts).
  *  The slice is taken from the original (non-lowercased) string, so the casing of the returned relative path is preserved.
- *  A path outside the project is returned as-is, still absolute — run.saveConfig rejects it at save time. */
+ *  A path outside the project is returned as-is, still absolute — run.saveConfigs rejects it at save time. */
 export function toRelativeCwd(picked: string, projectPath: string): string {
   const p = picked.toLowerCase()
   const root = projectPath.toLowerCase()

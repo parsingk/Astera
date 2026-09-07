@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { readSeedTexts, loadRunConfigs, prepareRun } from './prepare'
+import { readSeedTexts, loadRunConfigs, prepareRun, prepareLaunch } from './prepare'
+import type { RunConfig } from '../../core/run/config'
 
 let dir: string
 beforeEach(async () => {
@@ -135,5 +136,129 @@ describe('prepareRun', () => {
     await expect(
       prepareRun({ projectPath: dir, configId: 'c1', stored: [outside], assertAllowedPath: allowAll, t: rawT })
     ).rejects.toThrow('run.config.cwdOutsideProject')
+  })
+})
+
+describe('prepareLaunch', () => {
+  const stored = (extra: RunConfig[] = []): RunConfig[] => [
+    { id: 'build', name: 'build', type: 'shell', command: 'echo build' },
+    { id: 'dev', name: 'dev', type: 'shell', command: 'echo dev', beforeLaunch: ['build'] },
+    ...extra
+  ]
+
+  it('assembles every step of the plan', async () => {
+    const r = await prepareLaunch({ projectPath: dir, rootId: 'dev', stored: stored(), assertAllowedPath: allowAll, t: rawT })
+    expect(r.plan.steps.map((s) => s.configId)).toEqual(['build', 'dev'])
+    expect(r.prepared.get('build')?.command).toBe('echo build')
+    expect(r.prepared.get('dev')?.command).toBe('echo dev')
+  })
+
+  // The whole point of preparing first: a broken step three deep must not leave two runs already going.
+  it('refuses the whole launch when any step is incomplete, naming the empty field', async () => {
+    const list = stored([{ id: 'x', name: 'x', type: 'node', file: '' } as RunConfig])
+    list[1] = { ...list[1], beforeLaunch: ['build', 'x'] } as RunConfig
+    await expect(
+      prepareLaunch({ projectPath: dir, rootId: 'dev', stored: list, assertAllowedPath: allowAll, t: rawT })
+    ).rejects.toThrow('run.start.incomplete')
+  })
+
+  it('refuses a chain that loops', async () => {
+    const list: RunConfig[] = [
+      { id: 'a', name: 'a', type: 'shell', command: 'x', beforeLaunch: ['b'] } as RunConfig,
+      { id: 'b', name: 'b', type: 'shell', command: 'x', beforeLaunch: ['a'] } as RunConfig
+    ]
+    await expect(
+      prepareLaunch({ projectPath: dir, rootId: 'a', stored: list, assertAllowedPath: allowAll, t: rawT })
+    ).rejects.toThrow('run.start.cycle')
+  })
+
+  it('refuses a chip that points at nothing, naming the configuration holding it', async () => {
+    const list: RunConfig[] = [{ id: 'dev', name: 'dev', type: 'shell', command: 'x', beforeLaunch: ['gone'] } as RunConfig]
+    await expect(
+      prepareLaunch({ projectPath: dir, rootId: 'dev', stored: list, assertAllowedPath: allowAll, t: rawT })
+    ).rejects.toThrow('run.start.missingTask')
+  })
+
+  it('reports an unknown root the way prepareRun always has', async () => {
+    await expect(
+      prepareLaunch({ projectPath: dir, rootId: 'nope', stored: stored(), assertAllowedPath: allowAll, t: rawT })
+    ).rejects.toThrow('NO_CONFIG: nope')
+  })
+
+  it('expands a compound into its members', async () => {
+    const list = stored([{ id: 'all', name: 'all', type: 'compound', members: ['build', 'dev'] } as RunConfig])
+    const r = await prepareLaunch({ projectPath: dir, rootId: 'all', stored: list, assertAllowedPath: allowAll, t: rawT })
+    expect([...r.prepared.keys()].sort()).toEqual(['build', 'dev'])
+    expect(r.plan.focusId).toBe('build')
+  })
+
+  // resolveRunCwd is only exercised through prepareRun elsewhere in this file; prepareLaunch has its
+  // own loop that calls it per step, for a step that need not be the root.
+  it("resolves a non-root step's cwd to an absolute path", async () => {
+    const sub = path.join(dir, 'sub')
+    await fs.mkdir(sub)
+    const list = stored()
+    list[0] = { ...list[0], cwd: 'sub' } as RunConfig // 'build' is a step, not the root ('dev' is)
+    const r = await prepareLaunch({ projectPath: dir, rootId: 'dev', stored: list, assertAllowedPath: allowAll, t: rawT })
+    expect(r.prepared.get('build')?.config.cwd).toBe(sub)
+  })
+
+  // Fail-before-start applies to a step's own cwd too, not just the root's.
+  it("refuses the whole launch when a non-root step's cwd points outside the project", async () => {
+    const list = stored()
+    list[0] = { ...list[0], cwd: '..' } as RunConfig
+    await expect(
+      prepareLaunch({ projectPath: dir, rootId: 'dev', stored: list, assertAllowedPath: allowAll, t: rawT })
+    ).rejects.toThrow('run.config.cwdOutsideProject')
+  })
+
+  // loadRunConfigs calls assertAllowedPath with the project path itself; resolveRunCwd calls the same
+  // function again, but with a resolved step cwd — a bare call count cannot tell a second load apart
+  // from a step's own working directory being checked, so only calls carrying the project path itself
+  // count as a load. 'build' (a step, not the root) is given a cwd here specifically so this stays
+  // true under the edit that would have broken a plain call-count assertion.
+  it('reads the project once however many steps there are, even when a step has a cwd', async () => {
+    const sub = path.join(dir, 'sub')
+    await fs.mkdir(sub)
+    const list = stored()
+    list[0] = { ...list[0], cwd: 'sub' } as RunConfig
+    let projectPathReads = 0
+    const counting = async (p: string): Promise<string> => {
+      if (p === dir) projectPathReads += 1
+      return p
+    }
+    await prepareLaunch({ projectPath: dir, rootId: 'dev', stored: list, assertAllowedPath: counting, t: rawT })
+    expect(projectPathReads).toBe(1)
+  })
+
+  // A compound expands into its members and contributes no step of its own, so an empty one plans to
+  // nothing. It must be refused here, not reach the executor as a launch with no runs in it.
+  it('refuses a compound with no members', async () => {
+    const list = stored([{ id: 'all', name: 'all', type: 'compound', members: [] } as RunConfig])
+    await expect(
+      prepareLaunch({ projectPath: dir, rootId: 'all', stored: list, assertAllowedPath: allowAll, t: rawT })
+    ).rejects.toThrow('run.start.incomplete')
+  })
+
+  // The same hole one level down: the root itself has members, so rootBad does not fire, but every
+  // member is an empty compound, so the plan still comes back with zero steps.
+  it('refuses a compound whose members are themselves empty compounds', async () => {
+    const list = stored([
+      { id: 'inner1', name: 'inner1', type: 'compound', members: [] } as RunConfig,
+      { id: 'inner2', name: 'inner2', type: 'compound', members: [] } as RunConfig,
+      { id: 'all', name: 'all', type: 'compound', members: ['inner1', 'inner2'] } as RunConfig
+    ])
+    await expect(
+      prepareLaunch({ projectPath: dir, rootId: 'all', stored: list, assertAllowedPath: allowAll, t: rawT })
+    ).rejects.toThrow('run.start.incomplete')
+  })
+})
+
+describe('prepareRun and compounds', () => {
+  it('refuses a compound — validation is one command and one exit code', async () => {
+    const list: RunConfig[] = [{ id: 'all', name: 'all', type: 'compound', members: [] } as RunConfig]
+    await expect(
+      prepareRun({ projectPath: dir, configId: 'all', stored: list, assertAllowedPath: allowAll, t: rawT })
+    ).rejects.toThrow(/run.start.(compoundNotRunnable|incomplete)/)
   })
 })

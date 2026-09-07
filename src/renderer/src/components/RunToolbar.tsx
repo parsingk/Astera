@@ -1,75 +1,124 @@
 import { useState } from 'react'
 import type { RunConfig, RunStatus } from '../../../core/types'
+import { actedConfigIds, decideStart, toolbarState } from '../../../core/run/instances'
 import { useI18n } from '../i18n/I18nProvider'
-import { Select } from './Select'
+import { RunConfigMenu } from './RunConfigMenu'
 import { EllipsisVertical, Play, Square } from 'lucide-react'
 
 /** Run toolbar. It sits in the title bar, next to the app name, and is drawn whenever a project is
  *  known — the explorer toggle does not reach it. Its own chrome (border, background, padding) is
- *  cleared by .tb-run, which owns the spacing there. */
+ *  cleared by .tb-run, which owns the spacing there.
+ *
+ *  ▶ and ⏹ sit side by side rather than replacing each other. ▶ is enabled whenever a configuration is
+ *  selected; what it does — restart a live run, start another when the configuration allows several,
+ *  or press ▶ on every member of a compound — is decided in main, by the launch planner, not by
+ *  decideStart alone (decideStart answers for one runnable configuration; a compound has no run of its
+ *  own for it to answer about). ⏹ appears when the selection has a running run, and for a compound it
+ *  stops every live member, not just the most recent one. The configuration menu groups by folder and
+ *  then by kind, through the same function the manager's tree uses, so the two cannot disagree about
+ *  where a configuration lives. */
 export function RunToolbar({
   configs,
   selectedId,
   onSelect,
-  active,
+  runs,
   onRun,
+  onRunConfig,
   onStop,
   onOpenManager,
+  onEditConfig,
   activeRuns,
   onJump,
-  onStopProject
+  onStopRun,
+  menuOpen,
+  onMenuOpenChange,
+  shortcut
 }: {
   configs: RunConfig[]
   selectedId: string | null
   onSelect: (id: string) => void
-  active: RunStatus | null
+  /** The current project's runs, finished ones included */
+  runs: RunStatus[]
   onRun: () => void
-  onStop: () => void
-  /** Opens the two-pane RunConfigManager — the ⋮ menu's only item. Add/edit/delete used to be three
-   *  separate items here, opening a single-config modal (RunConfigDialog); the manager replaced all of
-   *  that (Task 8), including suppressing global shortcuts while it is open — App computes that
-   *  directly from whether the manager is on screen, so this toolbar no longer reports its own modal
-   *  state up. */
+  /** The configuration menu's row ▶. Selects that row's configuration as well as running it — the
+   *  no-argument onRun above always reads the current selection, which the row must not depend on. */
+  onRunConfig: (id: string) => void
+  onStop: (runId: string) => void
+  /** Opens the two-pane RunConfigManager — the ⋮ menu's item, and the configuration menu's footer. */
   onOpenManager: () => void
+  /** The configuration menu's "Edit '<name>'…" row. Opens the manager pinned to that configuration. */
+  onEditConfig: (id: string) => void
+  /** Every live run across projects — the badge and its dropdown */
   activeRuns: RunStatus[]
   onJump: (projectPath: string) => void
-  onStopProject: (projectPath: string) => void
+  onStopRun: (runId: string) => void
+  /** Controlled: Task 9's run.selectConfig shortcut opens the configuration menu from outside. */
+  menuOpen: boolean
+  onMenuOpenChange: (open: boolean) => void
+  /** run.selectConfig's binding, already formatted — shown in the pill's title, since that shortcut
+   *  opens the pill. Undefined when the user cleared every binding for it. */
+  shortcut?: string
 }): React.JSX.Element {
   const { t } = useI18n()
   const [showRuns, setShowRuns] = useState(false)
   const [showMore, setShowMore] = useState(false)
-  const running = active?.status === 'running'
+  const state = toolbarState(runs, selectedId, configs)
+  // The Validation tag explains why ⏹ is offered for a run the user did not start. ⏹ now stops every
+  // live member of a compound, so the question is whether *any* target is a validation run — a
+  // validation run can be any member, not the first one live.
+  const stopTargetRun = state.stopTargets
+    .map((id) => runs.find((r) => r.runId === id))
+    .find((r) => r?.validation === true)
+  // The title is the one thing that says ▶ is about to kill the user's server, so it comes from the same
+  // rule main applies (decideStart) — not from toolbarState, which differs from it on validation and
+  // stopping runs by design (toolbarState decides ⏹, whose target must be a running run). A compound
+  // never owns a run of its own, so decideStart on the selection itself always answers 'start' — the
+  // selection is expanded through actedConfigIds to what ▶ actually presses, the same expansion ⏹
+  // already uses, and the title says restart if any of those would be.
+  const restarts = (selectedId ? actedConfigIds(configs, selectedId) : [])
+    .map((id) => configs.find((c) => c.id === id))
+    .some((c) => !!c && decideStart(runs, c).action === 'restart')
 
   return (
     <div className="run-toolbar">
-      <Select
-        className="run-config-select"
-        items={[
-          ...(configs.length === 0 ? [{ value: '', label: t('run.config.none') }] : []),
-          ...configs.map((c) => ({ value: c.id, label: c.name }))
-        ]}
-        value={selectedId ?? ''}
-        onChange={onSelect}
-        ariaLabel={t('run.config.selectLabel')}
+      <RunConfigMenu
+        configs={configs}
+        runs={runs}
+        selectedId={selectedId}
+        open={menuOpen}
+        onOpenChange={onMenuOpenChange}
+        onSelect={onSelect}
+        onRun={onRunConfig}
+        onEdit={onEditConfig}
+        onManage={onOpenManager}
+        shortcut={shortcut}
       />
-      {/* 검증 실행은 사용자가 시작한 것이 아니다. 정지 버튼은 그대로 남기고(폭주하는 검증을 멈출
-          수단은 있어야 한다) 라벨만 붙인다 — 표시가 없으면 ▶ 가 ⏹ 로 바뀐 이유를 알 수 없다. */}
-      {running && active?.validation === true && (
+      {/* A validation run is not the user's. The stop button stays (a runaway validation must be
+          stoppable); the label is what says why ⏹ is here for a run they did not start. */}
+      {stopTargetRun?.validation === true && (
         <span className="run-tag" title={t('run.validation.tag')}>
           {t('run.validation.tag')}
         </span>
       )}
-      {running ? (
-        <button className="run-btn stop" title={t('run.action.stop')} onClick={onStop}>
+      <button
+        className="run-btn play"
+        title={t(restarts ? 'run.action.restart' : 'run.action.run')}
+        disabled={!state.canRun}
+        onClick={onRun}
+      >
+        <Play size={14} fill="currentColor" strokeWidth={0} />
+      </button>
+      {state.stopTargets.length > 0 && (
+        <button
+          className="run-btn stop"
+          title={t('run.action.stop')}
+          onClick={() => state.stopTargets.forEach((id) => onStop(id))}
+        >
           <Square size={14} fill="currentColor" strokeWidth={0} />
         </button>
-      ) : (
-        <button className="run-btn play" title={t('run.action.run')} disabled={!selectedId} onClick={onRun}>
-          <Play size={14} fill="currentColor" strokeWidth={0} />
-        </button>
       )}
-      {/* 구성 관리는 ⋮ 안으로 접는다. 이 툴바는 이제 타이틀바에 상시로 놓이므로, 자주 쓰지 않는
-          관리 화면까지 늘어놓으면 창 폭을 계속 먹는다. */}
+      {/* Configuration management folds into ⋮. This toolbar now sits permanently in the title bar, so
+          laying out a rarely used management screen too would keep eating window width. */}
       <div className="run-more">
         <button
           className="run-btn"
@@ -103,9 +152,10 @@ export function RunToolbar({
           </button>
           {showRuns && (
             <div className="run-global-menu" onMouseLeave={() => setShowRuns(false)}>
+              {/* Keyed by runId — a project now holds several runs, so its path is no longer unique here */}
               {activeRuns.map((r) => (
-                <div className="run-global-row" key={r.projectPath}>
-                  <span className="run-global-live" />
+                <div className="run-global-row" key={r.runId}>
+                  <span className={`run-global-live${r.status === 'stopping' ? ' stopping' : ''}`} />
                   {r.validation === true && (
                     <span className="run-tag" title={t('run.validation.tag')}>
                       {t('run.validation.tag')}
@@ -114,9 +164,11 @@ export function RunToolbar({
                   <button className="run-global-jump" title={t('run.global.jump')} onClick={() => { onJump(r.projectPath); setShowRuns(false) }}>
                     {r.projectName} — {r.configName}
                   </button>
-                  <button className="run-global-stop" title={t('run.action.stop')} onClick={() => onStopProject(r.projectPath)}>
-                    <Square size={11} fill="currentColor" strokeWidth={0} />
-                  </button>
+                  {r.status === 'running' && (
+                    <button className="run-global-stop" title={t('run.action.stop')} onClick={() => onStopRun(r.runId)}>
+                      <Square size={11} fill="currentColor" strokeWidth={0} />
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

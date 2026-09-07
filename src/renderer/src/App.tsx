@@ -8,7 +8,8 @@ import { AccountSettings } from './components/AccountSettings'
 import { HistorySettings } from './components/HistorySettings'
 import { HistoryBrowser } from './components/HistoryBrowser'
 import { Select } from './components/Select'
-import { type FileTab, type RecordTab } from './components/WorkbenchTabs'
+import { type BrowserTab, type FileTab, type RecordTab } from './components/WorkbenchTabs'
+import { BrowserPane, type BrowserStatePatch } from './components/BrowserPane'
 import { FileEditor } from './components/FileEditor'
 import { MarkdownSplit } from './components/MarkdownSplit'
 import { invalidateImageCache } from './components/MarkdownPreview'
@@ -44,6 +45,7 @@ import type {
   // 컴포넌트 이름과 겹친다 — 이 창이 그리는 값의 타입이고, 그리는 것은 위의 RunDetail 이다
   RunDetail as RunDetailData,
   RunStatus,
+  SaveConfigsResult,
   TerminalBuffer
 } from '../../core/types'
 // core/types.ts imports this for UnderstandingApi but does not re-export it (unlike the block above),
@@ -51,7 +53,8 @@ import type {
 import type { ProjectUnderstanding, RecordStatus } from '../../core/understanding/types'
 import { slackMode } from '../../core/slack/ready'
 import { findRun } from '../../core/orchestration/snapshot'
-import { pickRunSelection } from '../../core/run/selection'
+import { pickRunSelection, pickRunToShow } from '../../core/run/selection'
+import { toolbarState, upsertRun } from '../../core/run/instances'
 import { findActionForEvent, formatChord, resolveBindings, type Bindings } from '../../core/keys/binding'
 import { ACTIONS } from './lib/actions'
 import {
@@ -97,8 +100,10 @@ import {
   type PaneDir,
   type PaneNode
 } from '../../core/panes/tree'
-import { fileTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
+import { browserTab, fileTab, parseTab, recordTab, sessionTab } from '../../core/panes/tabId'
 import { placeTab } from '../../core/panes/place'
+import { displayHostOf, linkDestination, normalizeUrl, previewTargetOf } from '../../core/preview/url'
+import { isWaitingOnDialog, POST_PASTE_SUBMIT_DELAY_MS } from '../../core/preview/pick/send'
 import { PaneGrid } from './components/PaneGrid'
 import { ContextMenu, type MenuItem } from './components/ContextMenu'
 import { PanelLeft, Settings, X } from 'lucide-react'
@@ -413,6 +418,12 @@ export default function App(): React.JSX.Element {
   const explorerShortcutLabel = explorerChord
     ? `${t('explorer.rail.toggle')} (${formatChord(explorerChord)})`
     : t('explorer.rail.toggle')
+  /** The run configuration pill's shortcut, for its title — run.selectConfig opens the pill's menu, so
+   *  the hint belongs there, not on the "Manage run configurations…" footer row (that opens the
+   *  manager instead). Same derivation as explorerChord: read the resolved binding, not the default,
+   *  so a rebind shows up here too. Undefined when the user cleared every binding for it. */
+  const runSelectConfigChord = bindingsRef.current['run.selectConfig']?.[0]
+  const runSelectConfigShortcut = runSelectConfigChord ? formatChord(runSelectConfigChord) : undefined
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [explorerOpen, setExplorerOpen] = useState(false)
   // 키 핸들러는 []로 한 번만 등록되어 첫 렌더의 클로저를 붙잡는다. toggleExplorer 가 렌더 값을 읽으면
@@ -453,6 +464,7 @@ export default function App(): React.JSX.Element {
   const orchEnabledRef = useRef(orchEnabled)
   orchEnabledRef.current = orchEnabled
   const [workUnitTrackingEnabled, setWorkUnitTrackingEnabled] = useState(false) // the work unit tracking toggle
+  const [agentBrowserEnabled, setAgentBrowserEnabled] = useState(false) // the agent browser toggle
   // Whether the Jobs sidebar view is showing — same convention as explorerOpen (toggleJobs mirrors
   // toggleExplorer below), just for the read-only orchestration view instead of the file tree.
   const [jobsOpen, setJobsOpen] = useState(false)
@@ -502,6 +514,16 @@ export default function App(): React.JSX.Element {
   // and this tab's project could not be answered, from the tree string alone (see RecordTab's comment
   // in WorkbenchTabs.tsx).
   const [recordTabs, setRecordTabs] = useState<RecordTab[]>([])
+  /** Preview (browser) tabs. Renderer-only, like fileTabs; the page state lives in the mounted webview */
+  const [browserTabs, setBrowserTabs] = useState<BrowserTab[]>([])
+  const browserTabsRef = useRef(browserTabs)
+  browserTabsRef.current = browserTabs
+  /** Browser tab id → loading. Chip state, not tab identity */
+  const [browserLoading, setBrowserLoading] = useState<Record<string, boolean>>({})
+  /** Sessions whose agent tab has a script running — the chip's ring. Keyed by session id. */
+  const [agentBusy, setAgentBusy] = useState<Record<string, boolean>>({})
+  /** Browser tab id → how many times openBrowserTab reused it. BrowserPane reloads when it changes */
+  const [browserNonce, setBrowserNonce] = useState<Record<string, number>>({})
   // The flow step picked on a record tab. Keyed by scopeKey — project and record together, because a
   // tab id (`record:<recordId>`) has no project in it, and keying on that alone would let two
   // projects sharing a record id leak each other's scoping. The tab record already has both, so this
@@ -523,6 +545,21 @@ export default function App(): React.JSX.Element {
     conflict: boolean
   }
   const [fileBuffers, setFileBuffers] = useState<Record<string, FileBuffer>>({}) // file buffers — editing, saving, external changes
+  /** Per file tab, the line a console link asked to see (Task: run console). Consumed once by
+   *  FileEditor; dropped when the user clicks or edits in that tab first, or when the tab closes. */
+  const [pendingReveal, setPendingReveal] = useState<Record<string, { line: number; col?: number; nonce: number }>>({})
+  const revealNonceRef = useRef(0)
+  const requestReveal = (tabId: string, at: { line: number; col?: number }): void => {
+    revealNonceRef.current += 1
+    setPendingReveal((prev) => ({ ...prev, [tabId]: { ...at, nonce: revealNonceRef.current } }))
+  }
+  const dropReveal = (tabId: string): void =>
+    setPendingReveal((prev) => {
+      if (!(tabId in prev)) return prev
+      const next = { ...prev }
+      delete next[tabId]
+      return next
+    })
   /** 파일 탭별 마크다운 뷰 모드. fileTabs·fileBuffers 와 같은 자리에 두는 이유는 탭이 닫힐 때
    *  함께 지워져야 하기 때문이다. 마지막으로 고른 모드는 localStorage 에 남아 새로 여는 .md 탭의
    *  기본값이 된다 — cm.sidebarWidth 와 같은 관례다 */
@@ -590,16 +627,22 @@ export default function App(): React.JSX.Element {
   const selectWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
   /** The id of the tab Ctrl+W may close. **Sessions are excluded** — that key must not kill a
    *  process. Files and records are both lightweight, read-only tabs that open and close freely, so
-   *  both belong here. */
+   *  both belong here. Browser tabs too — closing one closes a page, not a process. */
   const closableTabIdRef = useRef<string | null>(null)
   // 탭 트리에서 파생시킨다 — activeFileId 와 같은 이유다: 따로 상태를 두면 다른 페인의 탭을
   // 누르는 순간 트리와 갈라진다
   closableTabIdRef.current =
-    activeTab?.kind === 'file' || activeTab?.kind === 'record' ? activeTabId : null
+    activeTab?.kind === 'file' || activeTab?.kind === 'record' || activeTab?.kind === 'browser' ? activeTabId : null
   /** The close function itself. `closeWorkbenchTab` is recreated every render and its body reads
    *  render-time values (via closeFileTab), so a key listener registered once that called a captured
    *  stale closure would act on outdated tabs — same place, same reason as selectWorkbenchTabRef. */
   const closeWorkbenchTabRef = useRef<(tabId: string) => void>(() => {})
+  // The run shortcuts (Task 9). Same reason as the two refs above: the keydown effect is registered
+  // once with no dependencies, so it would otherwise close over the first render's runStart/runStop/
+  // selectedRunId. Assigned once those exist, further down.
+  const runStartRef = useRef<() => void>(() => {})
+  const runStopSelectionRef = useRef<() => void>(() => {})
+  const runRerunSelectedRef = useRef<() => void>(() => {})
   const fileBuffersRef = useRef(fileBuffers) // keeps the external-change handler from going stale
   fileBuffersRef.current = fileBuffers
   // 파일별 에디터 상태 캐시. FileEditor보다 오래 살아야 하므로 여기서 소유한다 (editorStateCache.ts의 주석)
@@ -653,6 +696,7 @@ export default function App(): React.JSX.Element {
     // only when the settings modal opens (the showSettings effect below) meant the button was missing
     // from a cold start until someone opened settings once — not late, absent.
     void window.api.settings.getOrchestrationEnabled().then(setOrchEnabled)
+    void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
     // Re-adopts sessions that are still running after a renderer reload as tabs (scrollback is lost, by design)
     void window.api.sessions.list().then((list) => {
       setSessions(list)
@@ -681,6 +725,7 @@ export default function App(): React.JSX.Element {
       setSessions((prev) =>
         prev.map((s) => (s.id === sessionId ? { ...s, status: 'exited', exitCode } : s))
       )
+      closeAgentTabRef.current(sessionId) // the owner is gone; the tab has nothing to report to
     })
     // Receives sessions main created on its own (orchestration workers) as tabs. The user path builds a
     // tab from the return value of sessions.spawn, but the coordinator path creates the session inside
@@ -820,6 +865,7 @@ export default function App(): React.JSX.Element {
     // Same re-sync for work unit tracking. Unlike orchestration, nothing outside this modal reads it yet,
     // so there is no mount-time fetch to keep honest — this is the only read.
     void window.api.settings.getWorkUnitTrackingEnabled().then(setWorkUnitTrackingEnabled)
+    void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
   }, [showSettings])
 
   // Keyboard session tab switching: a global capture listener, so it works regardless of where focus
@@ -913,6 +959,24 @@ export default function App(): React.JSX.Element {
         if (e.repeat) return
         const cur = mdModesRef.current[id] ?? defaultMdMode()
         setMdMode(id, cycleViewMode(cur))
+        return
+      }
+      // The run shortcuts. Unlike most branches here there is no `editable` guard: these are F-key
+      // combinations that no text field claims, and running the project from inside the terminal is
+      // the case they exist for.
+      if (action === 'run.run' || action === 'run.stop' || action === 'run.rerun' || action === 'run.selectConfig') {
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return
+        if (action === 'run.selectConfig') {
+          // The toolbar (and its menu) is only rendered for an open project. Forcing the menu open
+          // with none open would arm it to spring open by itself the next time a project is opened,
+          // since RunConfigMenu is controlled and mounts already open.
+          if (!currentProjectRef.current) return
+          setRunMenuOpen((v) => !v)
+        } else if (action === 'run.run') runStartRef.current()
+        else if (action === 'run.stop') runStopSelectionRef.current()
+        else runRerunSelectedRef.current()
         return
       }
       // Pane splitting — by default Ctrl+\ to the right, Ctrl+Shift+\ below. The same place VS Code
@@ -1196,11 +1260,24 @@ export default function App(): React.JSX.Element {
   }
 
   // Opening a file tab: clicking the same path again focuses the existing tab (VS Code's behaviour).
-  // The buffer starts as loading and gets filled by files.read.
-  const openFile = (path: string): void => {
+  // The buffer starts as loading and gets filled by files.read. `at` is a console link's line — the
+  // editor moves there once the content is in (FileEditor's reveal effect).
+  const openFile = (path: string, at?: { line: number; col?: number }): void => {
     const id = fileTab(path)
     if (fileTabsRef.current.some((t) => t.id === id)) {
       selectWorkbenchTabRef.current(id)
+      if (at) {
+        requestReveal(id, at)
+        // A line number is a source line; the preview has no such line, so a tab showing only the
+        // preview switches to the editor. A split already shows the source — leave it, or the link
+        // would collapse a view the user set up on purpose. The raw setter, not setMdMode — that one
+        // also writes MD_MODE_KEY, and following a link is navigation, not a preference the user
+        // expressed for every future markdown file.
+        if (isMarkdownPath(path)) {
+          const cur = mdModesRef.current[id] ?? defaultMdMode()
+          if (cur === 'preview') setMdModes((prev) => ({ ...prev, [id]: 'editor' }))
+        }
+      }
       return
     }
     const root = currentProjectRef.current
@@ -1219,7 +1296,12 @@ export default function App(): React.JSX.Element {
     // 대신 쓴다 — 그러면 다른 탭에서 모드를 바꾸는 순간 이 탭도 함께 바뀐 것처럼 보인다(탭별이어야
     // 할 모드가 사실상 전역이 된다). 여기서 한 번 못박아 두면 `??` 는 이 탭이 실제로 아직 없을 때만
     // 쓰이는 안전망으로 되돌아간다.
-    if (isMarkdownPath(path)) setMdModes((prev) => ({ ...prev, [id]: defaultMdMode() }))
+    if (isMarkdownPath(path))
+      setMdModes((prev) => ({
+        ...prev,
+        [id]: at ? (defaultMdMode() === 'preview' ? 'editor' : defaultMdMode()) : defaultMdMode()
+      }))
+    if (at) requestReveal(id, at)
     window.api.files.read(path).then(
       (d) => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { content: toLf(d.content), savedContent: toLf(d.content), eol: detectEol(d.content), readOnly: d.truncated || d.binary, loading: false, error: d.binary ? t('files.editor.binaryUnsupported') : null, conflict: false } } : prev)),
       (err) => setFileBuffers((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], loading: false, error: err instanceof Error ? err.message : String(err) } } : prev))
@@ -1300,6 +1382,7 @@ export default function App(): React.JSX.Element {
     const closedTab = fileTabsRef.current.find((t) => t.id === id)
     const next = fileTabsRef.current.filter((t) => t.id !== id)
     if (closedTab) editorCacheRef.current.drop(closedTab.path)
+    dropReveal(id)
     // Mirrored immediately, before the render — when clean tabs close in a chain (a folder deletion),
     // await only yields a microtask and the React commit (render) does not fit in between, so this
     // stops the ref being read stale on the next iteration
@@ -1335,7 +1418,7 @@ export default function App(): React.JSX.Element {
   /** A file tab closes through its existing path (a confirmation modal when dirty); a session tab
    *  closes through session mode's tab-close path. A record tab is nothing more than dropping it from
    *  the tree — skip that branch here and its id would be read as a session id and flow into
-   *  sessions.kill. */
+   *  sessions.kill. A browser tab is dropped the same way as a record tab. */
   const closeWorkbenchTab = (tabId: string): void => {
     const ref = parseTab(tabId)
     if (!ref) return
@@ -1354,6 +1437,14 @@ export default function App(): React.JSX.Element {
           return rest
         })
       setRecordTabs((prev) => prev.filter((x) => x.id !== tabId))
+      dropTabFromTree(tabId)
+      return
+    }
+    if (ref.kind === 'browser') {
+      // A page, not a process: dropping the tab is the whole close. The webview unmounts with its slot.
+      setBrowserTabs((prev) => prev.filter((x) => x.id !== tabId))
+      setBrowserLoading(({ [tabId]: _l, ...rest }) => rest)
+      setBrowserNonce(({ [tabId]: _n, ...rest }) => rest)
       dropTabFromTree(tabId)
       return
     }
@@ -1386,6 +1477,13 @@ export default function App(): React.JSX.Element {
     // 마크다운 탭은 mdModes 항목을 가진다"는 불변식이 깨짐) 다음 렌더가 `?? defaultMdMode()`로
     // 떨어지고, 방금까지 split/editor였던 탭이 이름만 바뀌었을 뿐인데 모드가 리셋된 것처럼 보인다
     setMdModes((prev) => {
+      const next: typeof prev = {}
+      for (const [k, v] of Object.entries(prev)) next[remap.get(k) ?? k] = v
+      return next
+    })
+    // A reveal in flight for this tab (a link click's read window) must move with it too — otherwise
+    // it is keyed to an id nothing will ever hold again and just sits there unfired.
+    setPendingReveal((prev) => {
       const next: typeof prev = {}
       for (const [k, v] of Object.entries(prev)) next[remap.get(k) ?? k] = v
       return next
@@ -1487,6 +1585,7 @@ export default function App(): React.JSX.Element {
     setFileTabs([])
     setFileBuffers({})
     setMdModes({})
+    setPendingReveal({})
     explorerTreesRef.current.clear()
     explorerClipboardRef.current = null
     // This is the point where the explorer is abandoned entirely, so the undo journal and the per-file
@@ -1723,6 +1822,12 @@ export default function App(): React.JSX.Element {
 
   // Project Run/Stop: run configurations, the active run, the list of all active runs, and whether the panel is open
   const [runConfigs, setRunConfigs] = useState<RunConfig[]>([])
+  // Read by the run:status subscription, which is registered once — same reason as runStartRef
+  // Runs whose address has already been offered — the toast is a one-time hint, not a repeat on
+  // every status change the run goes through.
+  const previewOfferedRef = useRef(new Set<string>())
+  const runConfigsRef = useRef(runConfigs)
+  runConfigsRef.current = runConfigs
   const [runSelectedId, setRunSelectedId] = useState<string | null>(null)
   /** 프로젝트 경로 → 그 프로젝트에서 고른 실행 구성. 선택은 프로젝트마다 따로 기억해야 한다.
    *
@@ -1742,11 +1847,12 @@ export default function App(): React.JSX.Element {
     if (id) runSelectedByProject.current[projectPath] = id
     else delete runSelectedByProject.current[projectPath]
   }
-  const [runActive, setRunActive] = useState<RunStatus | null>(null)
-  /** Run 탭을 ✕ 로 닫은 프로젝트. Run 탭은 실행이 없을 때도 '실행' 라벨로 남아 있으므로, main 에서
-   *  끝난 실행을 지우는 것(run.dismiss)만으로는 탭이 사라지지 않는다 — 닫았다는 사실은 여기 있다.
-   *  프로젝트별로 두는 이유: 다른 프로젝트로 옮기면 그쪽 Run 탭은 다시 보여야 한다. */
-  const [runTabClosedFor, setRunTabClosedFor] = useState<string | null>(null)
+  /** The current project's runs, finished ones included, in seat order — the Run tab's list. Kept in step
+   *  by run:status events through upsertRun (core/run/instances.ts), and reloaded whole from run.list on
+   *  a project switch. */
+  const [runs, setRuns] = useState<RunStatus[]>([])
+  /** The run whose console the Run tab shows. Starting a run selects it. */
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [activeRuns, setActiveRuns] = useState<RunStatus[]>([])
   const [runPanelOpen, setRunPanelOpen] = useState(false)
   // Project terminals. They share the bottom panel with the Run tab.
@@ -1767,8 +1873,27 @@ export default function App(): React.JSX.Element {
   // The two-pane run configuration manager (Task 6). context is the assembly context run.list also
   // sends down — the manager's preview calls buildCommand(config, context) so it shows exactly what
   // run.start would run, and it starts null until the first run.list response arrives.
-  const [runManagerOpen, setRunManagerOpen] = useState(false)
   const [runContext, setRunContext] = useState<RunContext | null>(null)
+  /** What the Run Configurations dialog was opened against, captured once. The dialog must not follow
+   *  currentProject: the active tab can change under an open modal (a desktop notification click
+   *  activates that session's tab), and Apply replaces a project's whole stored list — so a dialog that
+   *  read the live project could write one project's draft over another's configurations. Capturing the
+   *  context too keeps a run.list failure from unmounting the dialog and discarding the draft without
+   *  the confirmation the user is owed. */
+  const [managerFor, setManagerFor] = useState<{
+    projectPath: string
+    configs: RunConfig[]
+    context: RunContext
+    isSpringBoot: boolean
+    isPythonProject: boolean
+    hasDockerfile: boolean
+  } | null>(null)
+  /** Which configuration the manager should open on — the toolbar menu's "Edit '<name>'…" sets this
+   *  right before opening; absent, the manager falls back to its own default (the first configuration). */
+  const [managerInitialSelectedId, setManagerInitialSelectedId] = useState<string | undefined>(undefined)
+  /** Whether the toolbar's configuration menu (RunConfigMenu) is open. Lifted here, not local to
+   *  RunToolbar, because Task 9's run.selectConfig shortcut opens it from outside the component tree. */
+  const [runMenuOpen, setRunMenuOpen] = useState(false)
   // The Jobs sidebar snapshot for the open project — orch.list's initial payload, then every
   // 'orch:state' push after it (see the subscription effect below). null until orch.list first resolves.
   const [orchSnapshot, setOrchSnapshot] = useState<OrchSnapshot | null>(null)
@@ -1880,7 +2005,10 @@ export default function App(): React.JSX.Element {
           // silently fall back to stickyRoot — so viewing A's record tab and then clicking B's session
           // tab would drop this tab from the list, with no way left to close it.
           recordTabs.find((t) => t.id === activeTabId)?.projectRoot
-        : sessions.find((s) => s.id === activeTab?.id)?.cwd) ?? null
+        : activeTab?.kind === 'browser'
+          ? // A browser tab names its project the same way a file tab does
+            browserTabs.find((t) => t.id === activeTabId)?.projectRoot
+          : sessions.find((s) => s.id === activeTab?.id)?.cwd) ?? null
 
   /** 탭이 하나도 없을 때의 현재 프로젝트. 마운트에서 한 번 복원하고, 그 뒤로는 활성 탭이 갱신한다.
    *  영속 규칙은 lib/stickyProject.ts 에 있다(렌더러에 테스트가 없어 App.tsx 안에서는 확인할 수 없다). */
@@ -1993,10 +2121,10 @@ export default function App(): React.JSX.Element {
   }, [openRun, currentProject, orchSnapshot])
 
   // Whether RunConfigManager is actually on screen — gates both its render below and the shortcut
-  // suppression right after it. Computed from the same three things that gate the render (open flag,
-  // project, context) so switching projects or losing the context drops the suppression in the same
-  // render as the unmount, not only when the dialog's own onClose fires.
-  const runManagerVisible = runManagerOpen && !!currentProject && !!runContext
+  // suppression right after it. The dialog is pinned to the project (and context) it was opened
+  // with, not the live currentProject, so this is just "was it opened" — managerFor going null on
+  // close drops the suppression in the same render as the unmount.
+  const runManagerVisible = managerFor !== null
   // OR-ed onto the value the other modals already set above — runManagerVisible depends on
   // currentProject, which is not computed yet at that point in the component. The history modal joins
   // the same chain: while it is open the shortcuts must not reach the workbench behind it.
@@ -2050,12 +2178,18 @@ export default function App(): React.JSX.Element {
         onChange={(fromPath, next) => {
           const target = fileTabsRef.current.find((t) => t.path === fromPath)
           if (!target || target.id !== f.id) return
+          dropReveal(target.id)
           setBufferContent(target.id, next)
         }}
         onSave={(fromPath) => {
           const target = fileTabsRef.current.find((t) => t.path === fromPath)
           if (target) saveFile(target.id)
         }}
+        // Only once the buffer has loaded successfully — a request for a file still being read waits
+        // here, and one whose read failed has no content to reveal into
+        reveal={buf.loading || buf.error ? undefined : pendingReveal[f.id]}
+        onRevealed={() => dropReveal(f.id)}
+        onInteract={() => dropReveal(f.id)}
       />
     )
     return (
@@ -2129,6 +2263,89 @@ export default function App(): React.JSX.Element {
     const placed = placeTab(layoutRef.current, id, { activePaneId: activePaneIdRef.current })
     setLayout(placed.root)
     if (placed.paneId) setActivePaneId(placed.paneId)
+  }
+
+  /** Opens a preview tab on `url` in the current project, or reuses the one already showing it.
+   *
+   *  Reuse navigates: a second click on the console link after a dev server restart should show a
+   *  fresh page, not a second tab and not a dead one. The address is compared normalised (the
+   *  preview design, decision 8). `awaitRunId` marks the run whose server the page waits for (§4);
+   *  a reuse without one clears it — a manual click must not keep waiting on an old run. */
+  const openBrowserTab = (url: string, opts?: { awaitRunId?: string }): void => {
+    const root = currentProjectRef.current
+    if (!root) return
+    const target = normalizeUrl(url)
+    if (!target) return
+    const existing = browserTabsRef.current.find(
+      (b) => b.projectRoot === root && normalizeUrl(b.url) === target
+    )
+    if (existing) {
+      setBrowserTabs((prev) =>
+        prev.map((b) => (b.id === existing.id ? { ...b, url: target, awaitRunId: opts?.awaitRunId } : b))
+      )
+      setBrowserNonce((prev) => ({ ...prev, [existing.id]: (prev[existing.id] ?? 0) + 1 }))
+      selectWorkbenchTab(existing.id)
+      return
+    }
+    const id = browserTab(crypto.randomUUID())
+    setBrowserTabs((prev) => [...prev, { id, url: target, title: '', projectRoot: root, awaitRunId: opts?.awaitRunId }])
+    const placed = placeTab(layoutRef.current, id, { activePaneId: activePaneIdRef.current })
+    setLayout(placed.root)
+    if (placed.paneId) setActivePaneId(placed.paneId)
+  }
+  // The run:status subscription (registered once) opens previews through this — same reason as runStartRef
+  const openBrowserTabRef = useRef(openBrowserTab)
+  openBrowserTabRef.current = openBrowserTab
+
+  /** Main asks for a session's agent tab on its first open(). One per session, found by session; a
+   *  request for a session that already has one is a no-op. Placed in the background: the agent
+   *  appearing must not take the tab or the focus the user is on. */
+  const openAgentTab = (sessionId: string, cwd: string, url: string): void => {
+    if (browserTabsRef.current.some((b) => b.agentSessionId === sessionId)) return
+    const id = browserTab(crypto.randomUUID())
+    setBrowserTabs((prev) => [...prev, { id, url, title: '', projectRoot: cwd, agentSessionId: sessionId }])
+    const placed = placeTab(layoutRef.current, id, { activePaneId: activePaneIdRef.current, background: true })
+    setLayout(placed.root)
+  }
+  const openAgentTabRef = useRef(openAgentTab)
+  openAgentTabRef.current = openAgentTab
+  const closeAgentTab = (sessionId: string): void => {
+    const b = browserTabsRef.current.find((x) => x.agentSessionId === sessionId)
+    if (b) closeWorkbenchTab(b.id)
+  }
+  const closeAgentTabRef = useRef(closeAgentTab)
+  closeAgentTabRef.current = closeAgentTab
+
+  /** The one link rule (core/preview/url.ts): a loopback address opens in a preview tab, anything else
+   *  in the system browser, and Ctrl (Cmd on macOS) inverts. Every xterm's URL link and the guest's
+   *  popups land here. */
+  const openUrl = (url: string, ev?: { ctrlKey: boolean; metaKey: boolean }): void => {
+    const modifier = !!ev && (ev.ctrlKey || ev.metaKey)
+    if (linkDestination(url, { modifier }) === 'preview') openBrowserTab(previewTargetOf(url))
+    else void window.api.system.openExternal(url)
+  }
+  const openUrlRef = useRef(openUrl)
+  openUrlRef.current = openUrl
+
+  /** What BrowserPane reports. Split across the two states so a page title update does not touch the
+   *  loading map and vice versa. */
+  const onBrowserState = (tabId: string, patch: BrowserStatePatch): void => {
+    if (patch.loading !== undefined) {
+      const loading = patch.loading
+      setBrowserLoading((prev) => (prev[tabId] === loading ? prev : { ...prev, [tabId]: loading }))
+    }
+    if (patch.url !== undefined || patch.title !== undefined || patch.clearAwait) {
+      setBrowserTabs((prev) =>
+        prev.map((b) => {
+          if (b.id !== tabId) return b
+          const next: BrowserTab = { ...b }
+          if (patch.url !== undefined) next.url = patch.url
+          if (patch.title !== undefined) next.title = patch.title
+          if (patch.clearAwait) delete next.awaitRunId
+          return next
+        })
+      )
+    }
   }
 
   /** Asks for one record's explanation to be written again — the sidebar row's and the pane head's
@@ -2255,6 +2472,45 @@ export default function App(): React.JSX.Element {
     )
   }
 
+  /** A browser tab's body. `serverPending` is derived from this project's runs — the tab's run is
+   *  still alive — so the pane knows whether a refused connection means "not up yet" or "gone". */
+  const renderBrowser = (browserTabId: string): React.ReactNode => {
+    const b = browserTabs.find((x) => x.id === browserTabId)
+    if (!b) return null
+    const serverPending =
+      b.awaitRunId !== undefined && runs.some((r) => r.runId === b.awaitRunId && r.status !== 'exited')
+    return (
+      <BrowserPane
+        tab={b}
+        serverPending={serverPending}
+        navigateNonce={browserNonce[b.id] ?? 0}
+        onState={(patch) => onBrowserState(b.id, patch)}
+        onFocusPane={() => {
+          const cur = layoutRef.current
+          const pane = cur ? groupOfTab(cur, b.id) : null
+          if (pane) setActivePaneId(pane.id)
+        }}
+        onOpenExternal={(url) => void window.api.system.openExternal(url)}
+        sessions={sessions
+          .filter((s) => s.cwd === b.projectRoot && s.status !== 'exited')
+          .map((s) => ({ id: s.id, title: s.title, busy: busy[s.id] === true }))}
+        onSendToSession={(sessionId, text) => {
+          // A session showing a dialog swallows the paste and answers the dialog with the Enter that
+          // follows it, leaving no sign the batch was ever sent. Checked before anything is written.
+          const screen = sessionBus.screenOf(sessionId)
+          if (screen !== null && isWaitingOnDialog(screen)) return 'waiting'
+          // Through the terminal's own paste, never sessions.write — see sessionBus.registerPaste
+          if (!sessionBus.pasteInto(sessionId, text)) return 'no-terminal'
+          // The paste has to be through the terminal and into the agent's input box before the Enter
+          // lands, or the Enter submits an empty prompt.
+          window.setTimeout(() => sessionBus.submitInto(sessionId), POST_PASTE_SUBMIT_DELAY_MS)
+          selectWorkbenchTab(sessionTab(sessionId))
+          return 'sent'
+        }}
+      />
+    )
+  }
+
   // 사이드바에 그릴 뷰 하나 — 네 갈래 삼항보다 이 값 하나가 어느 뷰가 열려 있는지를 더 분명히 읽힌다.
   // 탐색기·Jobs·How It Works는 서로 배타적이다(toggleExplorer/toggleJobs/toggleHiw가 나머지를 끈다).
   // orchEnabled가 꺼지면 jobsOpen이 내부적으로 true로 남아 있어도 Jobs를 그리지 않고 세션 목록으로
@@ -2278,10 +2534,9 @@ export default function App(): React.JSX.Element {
    *  실행 구성으로 제안하게 된다. main 의 경로 가드도 터미널에만 홈을 열어 준다(assertTerminalPath). */
   const bottomRoot = currentProject ?? homeDir
   bottomRootRef.current = bottomRoot
-  // 실행이 있으면 Run 탭은 언제나 보인다 — 닫은 기억은 실행이 없을 때만 탭을 감춘다. 그래서 닫은
-  // 뒤 ▶ 로 다시 돌리면(runActive 가 채워진다) 따로 되돌리는 코드 없이 탭이 돌아온다.
-  const runAvailable =
-    currentProject !== null && (runActive !== null || runTabClosedFor !== currentProject)
+  // The Run tab is there for as long as a project is. Rows are closed one by one in the list; with none
+  // left the tab shows where to start one rather than disappearing.
+  const runAvailable = currentProject !== null
   /** 아래쪽 패널에 실제로 넘길 탭. Run 탭이 없는데 bottomTab 이 'run' 에 남아 있으면 본문이 비므로,
    *  그때는 터미널로 떨어뜨린다. 여러 자리(closeTerminal, 터미널 목록 효과, 초기값)가 'run' 을
    *  기본 폴백으로 쓰고 있어 그 하나하나를 고치는 대신 내려보내는 값에서 한 번에 바로잡는다. */
@@ -2301,7 +2556,9 @@ export default function App(): React.JSX.Element {
     void window.api.run.list(currentProject).then((r) => {
       if (cancelled) return
       setRunConfigs(r.configs)
-      setRunActive(r.active)
+      setRuns(r.runs)
+      // Follow a live run if there is one, else the first row, else nothing
+      setSelectedRunId(pickRunToShow(r.runs))
       setRunIsSpringBoot(r.isSpringBoot)
       setRunIsPythonProject(r.isPythonProject)
       setRunHasDockerfile(r.hasDockerfile)
@@ -2311,13 +2568,18 @@ export default function App(): React.JSX.Element {
       // 스크립트가 있는 프로젝트마다 그 선택이 따라다닌다(runSelectedByProject 주석).
       applyRunSelection(
         currentProject,
-        pickRunSelection(r.configs, runSelectedByProject.current[currentProject], r.active?.configId)
+        pickRunSelection(
+          r.configs,
+          runSelectedByProject.current[currentProject],
+          r.runs.find((x) => x.status !== 'exited')?.configId
+        )
       )
-      if (r.active?.status === 'running') setRunPanelOpen(true)
+      if (r.runs.some((x) => x.status === 'running')) setRunPanelOpen(true)
     }, () => {
       if (cancelled) return
       setRunConfigs([])
-      setRunActive(null)
+      setRuns([])
+      setSelectedRunId(null)
       applyRunSelection(currentProject, null)
       setRunContext(null)
     })
@@ -2503,11 +2765,78 @@ export default function App(): React.JSX.Element {
     void window.api.run.listActive().then(setActiveRuns)
     const off = window.api.on('run:status', (s) => {
       void window.api.run.listActive().then(setActiveRuns)
-      // If the run belongs to the current workbench project, the local state is updated too
-      if (currentProjectRef.current && s.projectPath === currentProjectRef.current) setRunActive(s)
+      // If the run belongs to the current workbench project, the local list is updated too — by runId,
+      // and evicting whatever else holds that seat (a restart's replacement arrives on the old seat)
+      if (currentProjectRef.current && s.projectPath === currentProjectRef.current) setRuns((prev) => upsertRun(prev, s))
+      // Auto-open (the frontend preview design, §4). RunManager reports a start as one 'running' status
+      // event, so this is a start, not a later change. Only the project on screen — a preview must not
+      // pop over another project — and never a validation run, which nobody pressed ▶ on.
+      if (s.status === 'running' && !s.validation && s.projectPath === currentProjectRef.current) {
+        const cfg = runConfigsRef.current.find((c) => c.id === s.configId)
+        if (cfg && cfg.type !== 'compound' && cfg.previewUrl)
+          openBrowserTabRef.current(previewTargetOf(cfg.previewUrl), { awaitRunId: s.runId })
+      }
+      // The address a run printed, offered once. The run's tab keeps a button for it afterwards, so
+      // this is only here to say the preview exists at all — the thing nobody finds on their own.
+      // Not for a configured previewUrl, which has already opened itself, and not for a validation run.
+      if (
+        s.detectedUrl !== undefined &&
+        s.status === 'running' &&
+        !s.validation &&
+        s.projectPath === currentProjectRef.current &&
+        !previewOfferedRef.current.has(s.runId)
+      ) {
+        previewOfferedRef.current.add(s.runId)
+        const cfg = runConfigsRef.current.find((c) => c.id === s.configId)
+        const url = s.detectedUrl
+        if (!(cfg && cfg.type !== 'compound' && cfg.previewUrl))
+          toast.info(t('run.panel.previewFound', { url: displayHostOf(url) }), {
+            action: { label: t('run.panel.previewOpen'), onClick: () => openBrowserTabRef.current(previewTargetOf(url)) }
+          })
+      }
     })
     return off
   }, [])
+
+  // The console follows a chain: run.start returns the chain's first run (which runStart selects and
+  // opens the panel on), and this arrives when the configuration the user actually pressed ▶ on
+  // starts. The project check is the same one the run:status subscription makes, and for the same
+  // reason — a run from a project the user has since switched away from must not take the selection.
+  // run:launchFailed carries the same guard, for the same reason: a chain that fails in a project the
+  // user is no longer looking at must not toast over whatever project they switched to.
+  // The effect has no dependencies, so the open project is read through the ref, not the closure.
+  useEffect(() => {
+    const offFocus = window.api.on('run:focus', ({ runId, projectPath }) => {
+      if (currentProjectRef.current === projectPath) setSelectedRunId(runId)
+    })
+    const offFailed = window.api.on('run:launchFailed', ({ message, projectPath }) => {
+      if (currentProjectRef.current === projectPath) toast.error(message)
+    })
+    return () => {
+      offFocus()
+      offFailed()
+    }
+  }, [])
+
+  // A preview page asked for a window. Main denied it and sent the address; the link rule routes it.
+  useEffect(() => window.api.on('preview:popup', ({ url }) => openUrlRef.current(url)), [])
+
+  // The agent browser: main asks for a session's tab, asks it closed, and reports whether a script is
+  // running in it — see CoreEvents' preview:agentTab / preview:agentTabClose / preview:agentBusy.
+  useEffect(() => window.api.on('preview:agentTab', ({ sessionId, cwd, url }) => openAgentTabRef.current(sessionId, cwd, url)), [])
+  useEffect(() => window.api.on('preview:agentTabClose', ({ sessionId }) => closeAgentTabRef.current(sessionId)), [])
+  useEffect(() => window.api.on('preview:agentBusy', ({ sessionId, busy }) => setAgentBusy((prev) => (busy ? { ...prev, [sessionId]: true } : (({ [sessionId]: _b, ...rest }) => rest)(prev)))), [])
+
+  // The selection must never name a run the list no longer holds — with nothing to draw, the Run tab
+  // shows an empty console and no row highlighted. runStart and runDismiss keep it right for what the
+  // user does here, but a seat can also be taken over by a run this renderer did not ask for: an
+  // orchestration validation run (ipc.ts, validation: true) reuses the earliest finished row's seat of
+  // its configuration, and upsertRun then evicts the run that held it.
+  useEffect(() => {
+    if (runs.some((r) => r.runId === selectedRunId)) return
+    const next = pickRunToShow(runs)
+    if (next !== selectedRunId) setSelectedRunId(next)
+  }, [runs, selectedRunId])
 
   // Re-detects run configurations when a seed source at the project root changes.
   // On the JVM side the build file **body** feeds the verdict too — adding the Spring Boot plugin to
@@ -2543,95 +2872,151 @@ export default function App(): React.JSX.Element {
         // root 가 지금 열린 프로젝트다. 기억을 그 키로 읽고 써야 다른 프로젝트 것을 건드리지 않는다.
         applyRunSelection(
           root,
-          pickRunSelection(r.configs, runSelectedByProject.current[root], r.active?.configId)
+          pickRunSelection(r.configs, runSelectedByProject.current[root], r.runs.find((x) => x.status !== 'exited')?.configId)
         )
       })
     })
     return off
   }, [])
 
-  const runStart = (): void => {
-    if (!currentProject || !runSelectedId) return
+  /** What a freshly started run does to the screen: merged into the list, selected, its project's
+   *  terminal tabs refreshed, and the panel opened. Shared by ▶ (runStart) and the explorer's "Run
+   *  'x'" (runFile) — from the moment main hands back a RunStatus, the two paths are identical. Callers
+   *  check currentProjectRef against `root` before calling this (the project may have changed while
+   *  the IPC was in flight); merging first would inject another project's run into this list — and
+   *  nothing would ever evict it: upsertRun evicts only on a seat match within the same project, and
+   *  the run:status subscription filters foreign events. The row would sit there frozen at 'running',
+   *  with its ⏹ and ✕ acting on another project's process. */
+  const showStartedRun = async (root: string, st: RunStatus): Promise<void> => {
+    setRuns((prev) => upsertRun(prev, st))
+    setSelectedRunId(st.runId)
+    // Starting a Run may be what opens the panel for the first time — and that also mounts this
+    // project's existing terminal tabs (in a hidden state). TerminalBody replays initialBuffer only
+    // once, at mount, and ignores later updates, so the latest buffer has to be read *before* the
+    // setRunPanelOpen(true) that causes the mount — the same reason as in openTerminal.
+    if (terminals.length > 0) {
+      const list = await window.api.terminal.list(root).catch(() => terminals)
+      // The same check again after the await — the project can change during this call too. Without
+      // discarding, the screen shows the new project while the panel holds the previous project's
+      // terminal tabs, and input goes to that shell.
+      if (currentProjectRef.current !== root) return
+      setTerminals(list)
+    }
+    setRunPanelOpen(true)
+  }
+  /** ▶, and the list's ↻. `configId` defaults to the toolbar's selection; the list passes its row's. Main
+   *  decides whether this starts a new run or restarts a live one (decideStart) and returns the run either
+   *  way — that run is merged into the list and selected, so the console follows what was just started. */
+  const runStart = (configId: string | null = runSelectedId): void => {
+    if (!currentProject || !configId) return
     const root = currentProject
-    void window.api.run.start(root, runSelectedId).then(
+    void window.api.run.start(root, configId).then(
       async (st) => {
-        setRunActive(st)
-        // Starting a Run may be what opens the panel for the first time — and that also mounts this
-        // project's existing terminal tabs (in a hidden state). TerminalBody replays initialBuffer only
-        // once, at mount, and ignores later updates, so the latest buffer has to be read *before* the
-        // setRunPanelOpen(true) that causes the mount — the same reason as in openTerminal.
-        if (terminals.length > 0) {
-          const list = await window.api.terminal.list(root).catch(() => terminals)
-          // If the project changes while this is in flight, the result is discarded — currentProjectRef is
-          // the same idiom the other async callbacks in this file use against stale closures. Without
-          // discarding, the screen shows the new project while the panel holds the previous project's
-          // terminal tabs, and input goes to that shell.
-          if (currentProjectRef.current !== root) return
-          setTerminals(list)
-        }
-        setRunPanelOpen(true)
+        if (currentProjectRef.current !== root) return
+        await showStartedRun(root, st)
       },
       (err) => toast.error(t('run.start.failed', { detail: err instanceof Error ? err.message : String(err) }))
     )
   }
-  const runStop = (): void => {
-    if (currentProject) void window.api.run.stop(currentProject)
-  }
-  /** Run 탭의 ✕. main 에서 끝난 실행을 버려 마지막 exitCode 와 최근 출력을 함께 지우고(그러지 않으면
-   *  run.list 를 다시 읽는 순간 되살아난다) 다음 실행까지 탭을 감춘다. 활성 탭 폴백은 bottomTabShown
-   *  이 이미 맡으므로 bottomTab 은 'run' 그대로 둔다 — 다시 실행하면 그 탭으로 돌아오는 편이 낫다.
-   *  터미널이 하나도 없으면 패널을 접는다: ＋ 만 남은 빈 패널은 접힌 것보다 나쁘다. */
-  const runDismiss = (): void => {
+  /** The explorer's "Run 'x'" item. Main creates or reuses the configuration and starts it; from here
+   *  on it is a started run like any other, so it goes through the same path ▶ does. */
+  const runFile = (filePath: string): void => {
     if (!currentProject) return
-    void window.api.run.dismiss(currentProject)
-    setRunActive(null)
-    setRunTabClosedFor(currentProject)
-    if (terminals.length === 0) setRunPanelOpen(false)
+    const root = currentProject
+    void window.api.run.runFile(root, filePath).then(
+      async ({ run, configId }) => {
+        if (currentProjectRef.current !== root) return
+        await showStartedRun(root, run)
+        // Main may have created a configuration for this file, or evicted the oldest temporary one to
+        // make room. Neither reaches the renderer any other way — run.list is refetched on load, on a
+        // root seed-file change and on the manager's Apply, and none of those fires here. Without this
+        // the new configuration is missing from the pill's menu and the console's ↻ reports it as
+        // deleted.
+        const r = await window.api.run.list(root)
+        if (currentProjectRef.current !== root) return
+        setRunConfigs(r.configs)
+        // The same rule the menu's inline ▶ follows: the pill must name what is running. `configId`
+        // rather than the started run's, because a configuration with a before-launch task starts its
+        // task first — the pill would otherwise name the prerequisite and stay there, and the next ▶
+        // would restart that instead of the file.
+        applyRunSelection(root, configId)
+      },
+      (err) => toast.error(t('run.start.failed', { detail: err instanceof Error ? err.message : String(err) }))
+    )
   }
-  const runDeleteConfig = (id: string): void => {
-    if (!currentProject) return
-    void window.api.run.deleteConfig(currentProject, id).then(() => {
-      void window.api.run.list(currentProject).then((r) => {
+  const runStop = (runId: string): void => {
+    void window.api.run.stop(runId)
+  }
+  // The run shortcuts' refs (see their declaration above): kept fresh on every render so the keydown
+  // effect's stale closure still calls today's runStart/runStop against today's runs and selection.
+  runStartRef.current = () => runStart()
+  // The same expansion the toolbar's ⏹ makes (toolbarState.stopTargets), so a compound stops every live member.
+  runStopSelectionRef.current = () => toolbarState(runs, runSelectedId, runConfigs).stopTargets.forEach(runStop)
+  // What the run list's ↻ does: restart the selected run's own configuration. Silently does nothing
+  // with the panel closed or no run selected, like the other run shortcuts' no-ops.
+  runRerunSelectedRef.current = (): void => {
+    if (!selectedRunId) return
+    const configId = runs.find((r) => r.runId === selectedRunId)?.configId
+    // The rail's ↻ is disabled when the configuration is gone (rerunGone); a run outlives its
+    // configuration when the manager deletes it or the temporary cap evicts it. The shortcut has to
+    // carry the same guard, or it sends a dead id and the user reads a raw NO_CONFIG.
+    if (!configId || !runConfigs.some((c) => c.id === configId)) return
+    runStart(configId)
+  }
+  /** The list's ✕ on a finished run. main drops it (its exitCode and output with it — otherwise a run.list
+   *  re-read brings the row back) and the local list follows without waiting. Selection moves to the
+   *  nearest remaining row. With no runs and no terminals left the panel collapses: a panel with nothing
+   *  but ＋ in it is worse than a collapsed one. */
+  const runDismiss = (runId: string): void => {
+    void window.api.run.dismiss(runId)
+    const remaining = runs.filter((r) => r.runId !== runId)
+    setRuns(remaining)
+    if (selectedRunId === runId) setSelectedRunId(pickRunToShow(remaining))
+    if (remaining.length === 0 && terminals.length === 0) setRunPanelOpen(false)
+  }
+  /** Opens the two-pane manager, snapshotting the current project the way managerFor's own comment
+   *  explains. Shared by the toolbar's ⋮ item and the configuration menu's "Edit '<name>'…" row — the
+   *  only difference between them is which configuration the dialog opens on. */
+  const openRunManager = (initialSelectedId?: string): void => {
+    if (!currentProject || !runContext) return
+    setManagerFor({
+      projectPath: currentProject,
+      configs: runConfigs,
+      context: runContext,
+      isSpringBoot: runIsSpringBoot,
+      isPythonProject: runIsPythonProject,
+      hasDockerfile: runHasDockerfile
+    })
+    setManagerInitialSelectedId(initialSelectedId)
+  }
+  /** RunConfigManager's Apply. On success the toolbar's list is refetched the same way the old
+   *  per-item save did — promoting a seed *removes* an id (mergeConfigs stops emitting seed:npm:dev the
+   *  moment a stored config shares its seedKeyOf), so the selection has to be reconciled or ▶ keeps a
+   *  seed id that no longer resolves. On refusal nothing was stored; the dialog shows the reasons. A
+   *  throw (the save itself failing, not a refused item) becomes a toast and an empty-error refusal.
+   *
+   *  Takes the project explicitly instead of reading currentProject — the dialog is pinned to the
+   *  project it opened with (see managerFor), and that can differ from whatever the toolbar shows by
+   *  the time Apply fires. */
+  const runManagerApply = async (projectPath: string, configs: RunConfig[]): Promise<SaveConfigsResult> => {
+    try {
+      const result = await window.api.run.saveConfigs(projectPath, configs)
+      // The toolbar only follows when it is still showing the project that was applied — the dialog is
+      // pinned to the project it opened with, so those two can differ.
+      if (result.ok && currentProjectRef.current === projectPath) {
+        const r = await window.api.run.list(projectPath)
         setRunConfigs(r.configs)
         setRunContext(r.context)
-        applyRunSelection(
-          currentProject,
-          pickRunSelection(r.configs, runSelectedByProject.current[currentProject])
-        )
-      })
-    })
-  }
-  /** RunConfigManager's onSave. It always hands over an assembled RunConfig of whatever kind — there
-   *  is no per-field signature to match, so this one handler covers add, edit, and the promotion of a
-   *  seed into a user configuration copy (RunConfigManager.tsx's handleFormChange).
-   *
-   *  Answers whether the configuration reached the store: run.saveConfig refuses a value the command
-   *  gate rejects, and the dialog has to take a refused new configuration back out of its tree rather
-   *  than leave a row nothing is behind. */
-  const runManagerSave = (config: RunConfig): Promise<boolean> => {
-    if (!currentProject) return Promise.resolve(false)
-    return window.api.run.saveConfig(currentProject, config).then(
-      () => {
-        void window.api.run.list(currentProject).then((r) => {
-          setRunConfigs(r.configs)
-          setRunContext(r.context)
-          // The same reconciliation as the three siblings above. It is not optional here either:
-          // promoting a seed *removes* an id — mergeConfigs stops emitting seed:npm:dev the moment a
-          // stored config shares its seedKeyOf — so without this the toolbar keeps a seed id that no
-          // longer resolves, ▶ stays enabled (disabled={!selectedId}, and a stale string is truthy)
-          // and pressing it fails with NO_CONFIG.
-          applyRunSelection(
-            currentProject,
-            pickRunSelection(r.configs, runSelectedByProject.current[currentProject])
-          )
-        })
-        return true
-      },
-      (err) => {
-        toast.error(t('run.config.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
-        return false
+        applyRunSelection(projectPath, pickRunSelection(r.configs, runSelectedByProject.current[projectPath]))
       }
-    )
+      return result
+    } catch (err) {
+      // A refused *item* comes back as ok:false with reasons the dialog paints; a throw is the save
+      // itself failing (the disk, a permission) and has no item to name — so it takes the toast the
+      // single-item save used to, and the dialog keeps the draft with nothing marked.
+      toast.error(t('run.config.saveFailed', { detail: err instanceof Error ? err.message : String(err) }))
+      return { ok: false, errors: [] }
+    }
   }
   /** 실행 중 목록에서 다른 프로젝트로 점프. 트리 루트는 활성 탭이 정하므로, 그 프로젝트에 속한 탭을
    *  활성으로 만드는 것이 곧 '그리로 간다'는 뜻이다. 세션을 먼저 찾고 없으면 그 프로젝트의 파일 탭을
@@ -2675,7 +3060,6 @@ export default function App(): React.JSX.Element {
       () => toast.error(t('run.jump.notAllowed'))
     )
   }
-  const runStopProject = (projectPath: string): void => { void window.api.run.stop(projectPath) }
 
   // openTerminal calls newTerminal below, so it is declared first to match reading order — an arrow
   // function is not hoisted, but this is only definition order rather than execution, so no order can
@@ -2817,18 +3201,31 @@ export default function App(): React.JSX.Element {
         runningCount={runningCount}
         runSlot={
           currentProject ? (
-            <div className="tb-run">
+            // The title bar toggles maximize on a double-click, and that is a React handler, so it
+            // reaches anything inside it. `-webkit-app-region: no-drag` on .tb-run does not help —
+            // that only stops the window being dragged by this widget, which is a different gesture.
+            // Double-clicking a configuration name or ▶ has to leave the window where it is, so the
+            // event stops here, the same way .tb-controls stops it for the window buttons.
+            <div className="tb-run" onDoubleClick={(e) => e.stopPropagation()}>
               <RunToolbar
                 configs={runConfigs}
                 selectedId={runSelectedId}
                 onSelect={(id) => applyRunSelection(currentProject, id)}
-                active={runActive}
-                onRun={runStart}
+                runs={runs}
+                onRun={() => runStart()}
+                onRunConfig={(id) => {
+                  applyRunSelection(currentProject, id)
+                  runStart(id)
+                }}
                 onStop={runStop}
-                onOpenManager={() => setRunManagerOpen(true)}
+                onOpenManager={() => openRunManager()}
+                onEditConfig={(id) => openRunManager(id)}
                 activeRuns={activeRuns}
                 onJump={runJump}
-                onStopProject={runStopProject}
+                onStopRun={runStop}
+                menuOpen={runMenuOpen}
+                onMenuOpenChange={setRunMenuOpen}
+                shortcut={runSelectConfigShortcut}
               />
             </div>
           ) : null
@@ -2993,6 +3390,7 @@ export default function App(): React.JSX.Element {
                 undoRef={explorerUndoRef}
                 onPathRenamed={handlePathRenamed}
                 onPathDeleted={handlePathDeleted}
+                onRunFile={runFile}
               />
             ) : sidebarPane === 'jobs' ? (
               <JobsView
@@ -3235,8 +3633,12 @@ export default function App(): React.JSX.Element {
                 dirtyFileIds={dirtyIds}
                 recordTabs={recordTabs}
                 recordStatuses={recordStatuses}
+                browserTabs={browserTabs}
+                browserLoading={browserLoading}
+                agentBusy={agentBusy}
                 renderEditor={renderEditor}
                 renderRecord={renderRecord}
+                renderBrowser={renderBrowser}
                 rollStates={rollStates}
                 schedStates={schedStates}
                 busy={busy}
@@ -3254,6 +3656,7 @@ export default function App(): React.JSX.Element {
                 onTabContextMenu={(tabId, x, y) => setTabMenu({ tabId, x, y })}
                 onDragTabChange={setDragTabId}
                 onDropTabInBar={dropTabInGroup}
+                onOpenUrl={openUrl}
               />
               {/* When the layout is empty (not one group in the tree) there is no group tab bar, so there
                   is no '+' anywhere on screen — this placeholder becomes the sole entry point in its
@@ -3327,16 +3730,22 @@ export default function App(): React.JSX.Element {
                 )}
                 {runPanelOpen && (
                   <BottomPanel
-                    projectPath={bottomRoot}
                     runAvailable={runAvailable}
-                    runStatus={runActive}
+                    runs={runs}
+                    configIds={runConfigs.map((c) => c.id)}
+                    selectedRunId={selectedRunId}
+                    onSelectRun={setSelectedRunId}
+                    onStopRun={runStop}
+                    onRerun={(configId) => runStart(configId)}
+                    onDismissRun={runDismiss}
+                    onOpenFile={(path, at) => openFile(path, at.line === undefined ? undefined : { line: at.line, col: at.col })}
+                    onOpenUrl={openUrl}
+                    onOpenPreview={(url) => openBrowserTab(previewTargetOf(url))}
                     terminals={terminals}
                     activeTab={bottomTabShown}
                     onSelectTab={setBottomTab}
                     onNewTerminal={() => void newTerminal()}
                     onCloseTerminal={closeTerminal}
-                    onCloseRun={runDismiss}
-                    onStopRun={runStop}
                     onCollapse={() => setRunPanelOpen(false)}
                   />
                 )}
@@ -3522,6 +3931,29 @@ export default function App(): React.JSX.Element {
                       />
                     </label>
                     <span className="settings-hint">{t('settings.workUnit.hint')}</span>
+                    {/* Agent browser — same settings-row/settings-hint/label shape and the same
+                        optimistic-update-then-revert as the two above. Off by default: it installs a
+                        skill into every account and starts the local server. */}
+                    <label className="settings-row">
+                      <span>{t('settings.agentBrowser.label')}</span>
+                      <input
+                        type="checkbox"
+                        checked={agentBrowserEnabled}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                          setAgentBrowserEnabled(next)
+                          void window.api.settings.setAgentBrowserEnabled(next).catch((err) => {
+                            setAgentBrowserEnabled(!next)
+                            toast.error(
+                              t('settings.agentBrowser.saveFailed', {
+                                detail: err instanceof Error ? err.message : String(err)
+                              })
+                            )
+                          })
+                        }}
+                      />
+                    </label>
+                    <span className="settings-hint">{t('settings.agentBrowser.hint')}</span>
                     {/* 재개 전략 — 한도에 걸린 세션을 어떻게 이어갈지. Appearance 가 아니라 여기 있는
                         이유: 이것은 보이는 방식이 아니라 동작이고, 바로 위 오케스트레이션 토글과 같은
                         갈래(롤링·워커)를 건드린다. */}
@@ -3839,6 +4271,11 @@ export default function App(): React.JSX.Element {
               setActivePaneId(res.paneId)
             }
             const isSession = parseTab(tid)?.kind === 'session'
+            // An agent's tab while its script runs: the one way to end it from the UI. Main aborts the
+            // run and tells the CLI; nothing here waits for it.
+            const agentTab = parseTab(tid)?.kind === 'browser' ? browserTabsRef.current.find((b) => b.id === tid && b.agentSessionId !== undefined) : undefined
+            const agentSid = agentTab?.agentSessionId
+            const agentRunning = agentSid !== undefined && agentBusy[agentSid] === true
             return [
               // 세션 탭에만. 파일 탭의 라벨은 파일 이름이라 여기서 바꿀 것이 아니고, 기록 탭의
               // 라벨은 그 기록의 요청문이다. 더블클릭과 같은 자리를 연다.
@@ -3847,6 +4284,20 @@ export default function App(): React.JSX.Element {
                     {
                       label: t('session.tab.rename'),
                       onSelect: () => setRenamingTabId(tid)
+                    },
+                    'separator'
+                  ] as MenuItem[])
+                : []),
+              ...(agentSid !== undefined
+                ? ([
+                    {
+                      label: t('preview.agent.stop'),
+                      disabled: !agentRunning,
+                      onSelect: () => {
+                        void window.api.preview.agentStop(agentSid).then((stopped) => {
+                          if (stopped) toast.info(t('preview.agent.stopped'))
+                        })
+                      }
                     },
                     'separator'
                   ] as MenuItem[])
@@ -3872,19 +4323,22 @@ export default function App(): React.JSX.Element {
           })()}
         />
       )}
-      {/* Re-checks currentProject/runContext directly (rather than just runManagerVisible) so TypeScript
-          narrows them to non-null here, instead of an assertion */}
-      {runManagerOpen && currentProject && runContext && (
+      {/* Renders from the snapshot the dialog was opened with (managerFor), not the live
+          currentProject/runContext — see managerFor's comment for why. */}
+      {managerFor && (
         <RunConfigManager
-          configs={runConfigs}
-          context={runContext}
-          isSpringBoot={runIsSpringBoot}
-          isPythonProject={runIsPythonProject}
-          hasDockerfile={runHasDockerfile}
-          projectPath={currentProject}
-          onSave={runManagerSave}
-          onDelete={runDeleteConfig}
-          onClose={() => setRunManagerOpen(false)}
+          configs={managerFor.configs}
+          context={managerFor.context}
+          isSpringBoot={managerFor.isSpringBoot}
+          isPythonProject={managerFor.isPythonProject}
+          hasDockerfile={managerFor.hasDockerfile}
+          projectPath={managerFor.projectPath}
+          initialSelectedId={managerInitialSelectedId}
+          onApply={(configs) => runManagerApply(managerFor.projectPath, configs)}
+          onClose={() => {
+            setManagerFor(null)
+            setManagerInitialSelectedId(undefined)
+          }}
         />
       )}
       {openRun && (

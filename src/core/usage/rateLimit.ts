@@ -104,12 +104,23 @@ function peakOf(
       })
     }
   // The older response shape with no limits[] — the two windows are all there is.
-  if (!found.length) {
-    if (session) found.push({ percent: session.usedPercent, resetsAt: session.resetsAt, weekly: false })
-    if (weekly) found.push({ percent: weekly.usedPercent, resetsAt: weekly.resetsAt, weekly: true })
-  }
-  if (!found.length) return null
+  if (!found.length) return peakOfWindows(session, weekly)
   // Ties go to the first: with two buckets equally full either reset is as good an answer, and
   // reduce's `>` already keeps the earlier one.
+  return found.reduce((a, b) => (b.percent > a.percent ? b : a))
+}
+
+/** The fuller of the two named windows. Used when the two windows are the whole story: the older
+ *  Anthropic response shape that carries no `limits[]`, and the codex response, which has no
+ *  per-bucket array at all (core/usage/codexAccount.ts). Shared so "which window is the peak" is one
+ *  rule — session wins a tie, because reduce's `>` keeps the earlier entry. */
+export function peakOfWindows(
+  session: RateLimitWindow | null,
+  weekly: RateLimitWindow | null
+): RateLimitPeak | null {
+  const found: RateLimitPeak[] = []
+  if (session) found.push({ percent: session.usedPercent, resetsAt: session.resetsAt, weekly: false })
+  if (weekly) found.push({ percent: weekly.usedPercent, resetsAt: weekly.resetsAt, weekly: true })
+  if (!found.length) return null
   return found.reduce((a, b) => (b.percent > a.percent ? b : a))
 }

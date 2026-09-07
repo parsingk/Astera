@@ -5,10 +5,11 @@ import { runTypeIcon } from '../../../core/run/typeIcon'
 import { useI18n } from '../i18n/I18nProvider'
 import { FileIcon } from './FileIcon'
 
-/** Every kind modeled, in the order they are offered. */
+/** Every kind modeled, in the order they are offered. `compound` is last and is never detected —
+ *  nothing in a project's files implies one — so it always sits in the lower group. */
 const ALL_TYPES: RunConfigType[] = [
   'shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest', 'compose', 'dockerfile',
-  'dotnet'
+  'dotnet', 'compound'
 ]
 
 /** The ＋ button's popup for picking a new configuration's kind. A search box narrows the list; kinds

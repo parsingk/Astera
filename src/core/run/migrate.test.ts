@@ -3,7 +3,7 @@ import { migrateRunConfigs, missingRequiredFields, REQUIRED } from './migrate'
 import type { RunConfig, RunConfigType } from './types'
 import { ko } from '../i18n/messages/ko'
 
-/** A valid configuration of every kind. A Record, so a thirteenth kind cannot be added without
+/** A valid configuration of every kind. A Record, so a fourteenth kind cannot be added without
  *  landing here — the hand-written arrays elsewhere in the suite skip a new kind silently. */
 const COMPLETE: Record<RunConfigType, RunConfig> = {
   shell: { id: 'x', name: 'x', type: 'shell', command: 'ls' },
@@ -17,7 +17,8 @@ const COMPLETE: Record<RunConfigType, RunConfig> = {
   pytest: { id: 'x', name: 'x', type: 'pytest' },
   compose: { id: 'x', name: 'x', type: 'compose' },
   dockerfile: { id: 'x', name: 'x', type: 'dockerfile', imageTag: 'astera:dev' },
-  dotnet: { id: 'x', name: 'x', type: 'dotnet', project: 'src/App/App.csproj' }
+  dotnet: { id: 'x', name: 'x', type: 'dotnet', project: 'src/App/App.csproj' },
+  compound: { id: 'x', name: 'x', type: 'compound', members: ['a'] }
 }
 
 describe('migrateRunConfigs', () => {
@@ -63,7 +64,7 @@ describe('migrateRunConfigs', () => {
     expect(out.map((c) => c.id)).toEqual(['ok'])
   })
 
-  // 이 함수는 run.saveConfig 의 관문이기도 하다. 이름은 트리와 실행 위젯 선택기에서 그 구성을
+  // 이 함수는 run.saveConfigs 의 관문이기도 하다. 이름은 트리와 실행 위젯 선택기에서 그 구성을
   // 가리키는 유일한 표시라, 빈 이름은 아무도 못 보고 못 누르는 행이 된다
   it('이름이 비었거나 공백뿐이면 버린다', () => {
     expect(migrateRunConfigs([{ id: 'x', name: '', command: 'ls' }])).toEqual([])
@@ -128,12 +129,43 @@ describe('migrateRunConfigs', () => {
       { id: 'x', name: 'x', type: 'dockerfile', imageTag: 'astera:dev' }
     ])
   })
+
+  // The switch is stored on the configuration and the file is hand-editable, so it gets the same
+  // type check cwd and env already get — a truthy string would otherwise read as "on".
+  describe('allowMultipleInstances', () => {
+    it('a boolean passes through untouched', () => {
+      const cfg = { ...COMPLETE.npm, allowMultipleInstances: true }
+      expect(migrateRunConfigs([cfg])).toEqual([cfg])
+      const off = { ...COMPLETE.npm, allowMultipleInstances: false }
+      expect(migrateRunConfigs([off])).toEqual([off])
+    })
+
+    it('a non-boolean drops that item', () => {
+      expect(migrateRunConfigs([{ ...COMPLETE.npm, allowMultipleInstances: 'yes' }])).toEqual([])
+      expect(migrateRunConfigs([{ ...COMPLETE.npm, allowMultipleInstances: 1 }])).toEqual([])
+    })
+  })
+
+  describe('previewUrl', () => {
+    it('a string survives; the key is absent when it was absent', () => {
+      const cfg = { ...COMPLETE.npm, previewUrl: 'http://localhost:5173' }
+      expect(migrateRunConfigs([cfg])).toEqual([cfg])
+      expect(migrateRunConfigs([COMPLETE.npm])[0]).not.toHaveProperty('previewUrl')
+    })
+    it('a non-string drops the item', () => {
+      expect(migrateRunConfigs([{ ...COMPLETE.npm, previewUrl: 5173 }])).toEqual([])
+    })
+  })
+
+  it('rejects a configuration whose folder is not a string', () => {
+    expect(migrateRunConfigs([{ id: 'a', name: 'x', type: 'npm', script: 'dev', folder: 3 }])).toEqual([])
+  })
 })
 
 // 다섯 종류(shell·node·maven·cargo·go)의 필수 필드는 한 번도 확인된 적이 없었다 — 그 다섯을 []
 // 로 바꿔도 테스트가 모두 초록이었다. 그래서 표를 먼저 못박고, 동작은 그 표를 돌면서 본다:
 // 표 없이 REQUIRED 를 돌기만 하면 []로 비운 종류에서 반복문이 그냥 비어 버려 또 초록이 된다
-describe('REQUIRED — 열두 종류 전부', () => {
+describe('REQUIRED — 열세 종류 전부', () => {
   it('종류마다 어떤 필드가 필수인지 못박는다', () => {
     expect(REQUIRED).toEqual({
       shell: ['command'],
@@ -147,11 +179,12 @@ describe('REQUIRED — 열두 종류 전부', () => {
       pytest: [],
       compose: [],
       dockerfile: ['imageTag'],
-      dotnet: ['project']
+      dotnet: ['project'],
+      compound: []
     })
   })
 
-  it('완전한 구성은 열두 종류 모두 통과한다', () => {
+  it('완전한 구성은 열세 종류 모두 통과한다', () => {
     for (const [type, config] of Object.entries(COMPLETE)) {
       expect(migrateRunConfigs([config]).map((c) => c.type), type).toEqual([type])
     }
@@ -177,7 +210,7 @@ describe('REQUIRED — 열두 종류 전부', () => {
   })
 })
 
-// run.saveConfig 의 경로. 새 구성은 필수 필드가 빈 채로 태어나므로, 이걸 거부하면 그 구성은
+// run.saveConfigs 의 경로. 새 구성은 필수 필드가 빈 채로 태어나므로, 이걸 거부하면 그 구성은
 // 렌더러의 pending 한 칸에만 살고 다음 ＋ 가 덮어써 사라진다 (실제로 그렇게 사라졌다)
 describe('migrateRunConfigs — allowIncomplete', () => {
   it('빈 필수 필드를 통과시킨다', () => {
@@ -224,5 +257,61 @@ describe('missingRequiredFields', () => {
     ])
     expect(missingRequiredFields({ id: 'x', name: 'x', type: 'shell', command: '' })).toEqual(['command'])
     expect(missingRequiredFields({ id: 'x', name: 'x', type: 'dotnet', project: '' })).toEqual(['project'])
+  })
+})
+
+describe('compound and beforeLaunch', () => {
+  const base = { id: 'a', name: 'A' }
+
+  it('keeps a compound with members', () => {
+    const out = migrateRunConfigs([{ ...base, type: 'compound', members: ['x', 'y'] }])
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ type: 'compound', members: ['x', 'y'] })
+  })
+
+  it('drops a compound whose members are missing or not an array of strings', () => {
+    expect(migrateRunConfigs([{ ...base, type: 'compound' }])).toEqual([])
+    expect(migrateRunConfigs([{ ...base, type: 'compound', members: 'x' }])).toEqual([])
+    expect(migrateRunConfigs([{ ...base, type: 'compound', members: [1] }])).toEqual([])
+  })
+
+  // An empty member list is the shape ＋ creates. It is storable and marked, never dropped —
+  // the same treatment an empty required string field gets.
+  it('keeps a compound with no members under allowIncomplete, and reports it', () => {
+    const cfg = { ...base, type: 'compound', members: [] }
+    expect(migrateRunConfigs([cfg], { allowIncomplete: true })).toHaveLength(1)
+    expect(missingRequiredFields(migrateRunConfigs([cfg], { allowIncomplete: true })[0])).toEqual(['members'])
+  })
+
+  it('reports nothing for a compound that has members', () => {
+    expect(missingRequiredFields({ ...base, type: 'compound', members: ['x'] })).toEqual([])
+  })
+
+  it('drops any item whose beforeLaunch is not an array of strings', () => {
+    expect(migrateRunConfigs([{ ...base, type: 'shell', command: 'ls', beforeLaunch: 'x' }])).toEqual([])
+    expect(migrateRunConfigs([{ ...base, type: 'shell', command: 'ls', beforeLaunch: [2] }])).toEqual([])
+  })
+
+  it('keeps an item with a valid beforeLaunch', () => {
+    const out = migrateRunConfigs([{ ...base, type: 'shell', command: 'ls', beforeLaunch: ['b'] }])
+    expect(out[0]).toMatchObject({ beforeLaunch: ['b'] })
+  })
+})
+
+describe('temporary', () => {
+  const base = { id: 'a', name: 'A', type: 'shell', command: 'ls' }
+
+  it('keeps a configuration marked temporary', () => {
+    expect(migrateRunConfigs([{ ...base, temporary: true }])[0]).toMatchObject({ temporary: true })
+  })
+
+  // A plain boolean, not a true-only marker: a hand-edited false means what it says.
+  it('keeps a configuration marked not temporary', () => {
+    expect(migrateRunConfigs([{ ...base, temporary: false }])[0]).toMatchObject({ temporary: false })
+  })
+
+  it('drops an item whose temporary is not a boolean', () => {
+    expect(migrateRunConfigs([{ ...base, temporary: 'yes' }])).toEqual([])
+    expect(migrateRunConfigs([{ ...base, temporary: 1 }])).toEqual([])
   })
 })

@@ -148,6 +148,15 @@ export interface OrchServerDeps {
    *  wiring that predates work-unit tracking) keep compiling; the session-task-* commands treat a
    *  missing implementation the same as `false`. */
   trackingEnabled?(): boolean
+  /** The agent browser toggle — what `browser-js` answers to, instead of `enabled()`. Optional for
+   *  the same reason as trackingEnabled. */
+  browserEnabled?(): boolean
+  /** Runs one script in the calling session's agent browser (main/agentBrowser/runs.ts). Optional:
+   *  not injected, `browser-js` answers "agent browser is off". */
+  browserRun?(sessionId: string, script: string): Promise<
+    | { ok: true; result: { log: string[]; error?: { message: string; at: string } } }
+    | { ok: false; status: 404 | 409; error: string }
+  >
   /** The handle the three session-task-* commands call through, shaped so `ipc.ts` can pass
    *  `WorkUnitCollector.startTask/completeTask/cancelTask` straight in. Optional for the same reason
    *  as `trackingEnabled` — when it is not injected, the commands answer `work unit tracking is
@@ -344,6 +353,14 @@ export async function handleCommand(
   cmd: string,
   args: Record<string, unknown>
 ): Promise<Reply> {
+  if (cmd === 'browser-js') {
+    // The browser has its own toggle and needs none of the orchestration state below.
+    if (!deps.browserEnabled?.() || !deps.browserRun) return conflict('agent browser is off')
+    const script = args.script
+    if (typeof script !== 'string' || script.trim() === '') return bad('script is required')
+    const outcome = await deps.browserRun(caller.sessionId, script)
+    return outcome.ok ? okBody(outcome.result) : { status: outcome.status, body: { error: outcome.error } }
+  }
   if (SESSION_TASK_CMDS.has(cmd)) {
     if (!deps.trackingEnabled?.()) return conflict('work unit tracking is off')
   } else if (!deps.enabled()) {

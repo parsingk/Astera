@@ -20,7 +20,7 @@ export class RunConfigStore {
       }
       const map: Record<string, RunConfig[]> = {}
       for (const [projectPath, list] of Object.entries(parsed)) {
-        // allowIncomplete, deliberately the same call run.saveConfig makes — the read and the write
+        // allowIncomplete, deliberately the same call run.saveConfigs makes — the read and the write
         // have to agree. A configuration whose required field is empty is one this app legitimately
         // stores: ＋ saves a new configuration the moment the kind is picked, before its one required
         // field has been filled in (see migrateRunConfigs' own comment for why waiting lost it).

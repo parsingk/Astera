@@ -35,8 +35,9 @@ export function AccountRow({
 }): React.JSX.Element {
   const { t } = useI18n()
   // The detail opens on a click, not on hover, so the row is only a control when there is something
-  // to open: a Codex account, a logged-out one and one never read all draw nothing, and a row that
-  // cannot open must not look or behave as if it could.
+  // to open: a logged-out account and one never read both draw nothing, and a row that cannot open
+  // must not look or behave as if it could. Provider plays no part — claude and codex rows both carry
+  // a reading when their account has one.
   const openable = Boolean(loggedIn) && hasUsage(usage)
   const toggle = openable && onToggle ? onToggle : undefined
 

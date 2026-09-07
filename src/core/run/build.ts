@@ -1,5 +1,5 @@
 import { detectPackageManager, type PackageManager } from './config'
-import type { RunConfig } from './types'
+import type { RunnableConfig } from './types'
 import { COMPOSE_FILE_NAMES } from './compose'
 
 /** The context command assembly needs. Derived from the file list and platform, never stored */
@@ -39,7 +39,7 @@ const join = (...parts: (string | null | undefined | false)[]): string =>
 
 /** Builds the command to run from a configuration's kind and parameters.
  *  **The form's preview calls this too** — keeping the rule in one place is the point. */
-export function buildCommand(config: RunConfig, ctx: RunContext): string {
+export function buildCommand(config: RunnableConfig, ctx: RunContext): string {
   const q = (v: string): string => quoteArg(v, ctx.platform)
   switch (config.type) {
     case 'shell':
@@ -51,7 +51,7 @@ export function buildCommand(config: RunConfig, ctx: RunContext): string {
           : config.packageManager
       // script is a single value, so it is quoted like every other single value here. It matters more
       // than most: a seed's script name is read straight out of package.json and never passes through
-      // run.saveConfig's win32 character gate, so this is the only project-file-derived value that
+      // run.saveConfigs' win32 character gate, so this is the only project-file-derived value that
       // reaches the command line. Unquoted, `"build all"` runs the script `build` with the argument
       // `all`. quoteArg leaves ordinary names untouched, so no existing command shape moves.
       return join(pm, 'run', q(config.script), config.args)

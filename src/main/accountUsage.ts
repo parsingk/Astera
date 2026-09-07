@@ -1,6 +1,6 @@
 import type { Account, AccountUsage, RateLimitUsage } from '../core/types'
 import { providerOf } from '../core/providers/meta'
-import { TTL_OK_MS } from './usage'
+import { TTL_OK_MS } from './usageCache'
 import type { AccountUsageStore } from './accountUsageStore'
 
 /** The tick is exactly the fetcher's own success TTL, so every tick is the first ask its cache will
@@ -9,11 +9,21 @@ import type { AccountUsageStore } from './accountUsageStore'
  *  slice earned one because PR checks move by the second, and this figure does not. */
 const TICK_MS = TTL_OK_MS
 
+/** What both providers' fetchers look like from here. The two differ in where the token comes from and
+ *  which endpoint is asked, and in nothing this module can see. */
+export interface UsageFetcher {
+  get(configDir: string, maxAgeMs?: number): Promise<RateLimitUsage>
+}
+
 export interface AccountUsageDeps {
   accounts: { list(): Account[] }
   /** RateLimitFetcher, reused unchanged. It already carries the 5-minute success cache, the capped
    *  15-minute 429 back-off, and in-flight coalescing per configDir. */
-  fetcher: { get(configDir: string, maxAgeMs?: number): Promise<RateLimitUsage> }
+  fetcher: UsageFetcher
+  /** CodexUsageFetcher — the same policy against codex's own endpoint (main/codexUsage.ts). Separate
+   *  rather than one fetcher that branches, because the branch is about credentials and endpoints and
+   *  belongs on the provider's side of the line, not here. */
+  codexFetcher: UsageFetcher
   /** Structural, not the concrete class: the service only ever calls `get` and `remember` (below).
    *  Kept narrow for the same reason readAccessToken in usage.ts is a plain function rather than a
    *  private class method — a test can hand in an in-memory double instead of a real file, because
@@ -36,9 +46,14 @@ export interface AccountUsageService {
  * remembers what succeeded, and pushes the map; the rows draw it.
  *
  * An idle account fails its request every time (§3), which looks like waste and is actually the
- * recovery path: the moment a session starts on that account, `claude` refreshes its token and the
+ * recovery path: the moment a session starts on that account, the CLI refreshes its token and the
  * next tick picks up a live figure. Without the repeat, an account would stay on its remembered
- * reading until the panel was remounted.
+ * reading until the panel was remounted. That holds for both providers — `claude` and `codex` each
+ * refresh the token of the account they are running on, and neither fetcher writes one.
+ *
+ * Both providers are asked. Codex was out of scope when this was written (§1) because the only
+ * endpoint on hand was Anthropic's; codex has one of its own, answering the same two windows
+ * (main/codexUsage.ts), so a codex row now draws the same meter as a claude row.
  */
 export function createAccountUsage(deps: AccountUsageDeps): AccountUsageService {
   // The configDirs whose most recent attempt actually reached the API and produced a reading the
@@ -50,21 +65,25 @@ export function createAccountUsage(deps: AccountUsageDeps): AccountUsageService 
   let timer: NodeJS.Timeout | null = null
   let inFlight = false
 
-  /** Codex accounts are skipped outright: this endpoint is Anthropic's, codex usage is out of scope
-   *  (§1), and a codex configDir must not be sent to it at all. Deduplicated because two registered
-   *  accounts can share a configDir and one directory has one usage figure. */
-  const claudeDirs = (): string[] => [
-    ...new Set(
-      deps.accounts
-        .list()
-        .filter((a) => providerOf(a) === 'claude')
-        .map((a) => a.configDir)
-    )
-  ]
+  /** Every registered account's configDir with the fetcher that can answer for it. The pairing is the
+   *  point: the two endpoints take different credentials from different files, so a codex configDir
+   *  must never reach the Anthropic fetcher or the other way round.
+   *
+   *  Deduplicated by configDir, because two registered accounts can share one and a directory has one
+   *  usage figure. A directory shared across providers cannot happen — the two CLIs keep their own
+   *  homes — so the first account's fetcher wins and there is nothing to reconcile. */
+  const targets = (): Map<string, UsageFetcher> => {
+    const out = new Map<string, UsageFetcher>()
+    for (const a of deps.accounts.list()) {
+      if (out.has(a.configDir)) continue
+      out.set(a.configDir, providerOf(a) === 'codex' ? deps.codexFetcher : deps.fetcher)
+    }
+    return out
+  }
 
   const usage = (): Record<string, AccountUsage> => {
     const out: Record<string, AccountUsage> = {}
-    for (const configDir of claudeDirs()) {
+    for (const configDir of targets().keys()) {
       // The store is the memory — a live reading was written to it on the tick that fetched it, so
       // there is no second in-memory map to keep in step with it. An account with nothing to show is
       // simply absent, which is what the row reads as "draw nothing" (§5).
@@ -84,14 +103,13 @@ export function createAccountUsage(deps: AccountUsageDeps): AccountUsageService 
     if (inFlight) return
     inFlight = true
     try {
-      const dirs = claudeDirs()
       // Concurrent, one request per directory. Four accounts is at most four requests per five
       // minutes, only while a panel is on screen, and the limit is counted per account token — so
       // from any one account's side the load is identical to the existing one-per-five-minutes.
       const results = await Promise.all(
-        dirs.map(
-          async (configDir) =>
-            [configDir, await deps.fetcher.get(configDir).catch(() => null)] as const
+        [...targets()].map(
+          async ([configDir, fetcher]) =>
+            [configDir, await fetcher.get(configDir).catch(() => null)] as const
         )
       )
       const nextLive = new Set<string>()

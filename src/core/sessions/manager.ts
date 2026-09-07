@@ -105,7 +105,9 @@ export class SessionManager {
     private highWater = 100_000,
     private lowWater = 20_000,
     private homeDir: string = os.homedir(),
-    private statusLineProvider?: StatusLineProvider
+    private statusLineProvider?: StatusLineProvider,
+    /** Directories every Claude session may read without a prompt — the app's screenshot folder. */
+    private sessionReadDirs: string[] = []
   ) {}
 
   spawn(opts: {
@@ -167,6 +169,7 @@ export class SessionManager {
       resumeSessionId: opts.resumeSessionId,
       settingsFile: sl?.settingsFile,
       bypassPermissions: opts.bypassPermissions,
+      addDirs: this.sessionReadDirs,
       resumePrompt: opts.resumePrompt,
       initialPrompt: opts.initialPrompt
     })
@@ -182,9 +185,9 @@ export class SessionManager {
     // ones to plant. **Not setting one is not the same as clearing it**: this env starts as a copy of
     // the app process's, and launching Astera from the shell of an Astera session — which is what
     // `npm run dev` from a session terminal is — means the app itself inherits another instance's
-    // ASTERA_*. Passed on, a session spawned with both the orchestration and work-unit-tracking
-    // toggles off hands its agent a live CLI path and token aimed at that other instance, an
-    // inherited ASTERA_SESSION makes it report under another session's identity, and inherited
+    // ASTERA_*. Passed on, a session spawned with the orchestration, work-unit-tracking and
+    // agent-browser toggles all off hands its agent a live CLI path and token aimed at that other
+    // instance, an inherited ASTERA_SESSION makes it report under another session's identity, and inherited
     // capture paths mix this session's statusLine and hook output into another instance's files.
     // Same rule as configDirEnv on the line above, and as runAccountLogout in main/core.ts.
     for (const k of MANAGED_ENV_KEYS) delete env[k]
@@ -196,10 +199,11 @@ export class SessionManager {
     if (opts.orchEnv) {
       // ASTERA_CLI is kept as-is — some places need the absolute path (scripts, debugging), and the
       // stub's "tool check" uses whether this value is empty to decide "this is not an app-spawned
-      // session, or both orchestration and work-unit tracking are off" (a clearer diagnosis than the
-      // command not found you get when `astera` is missing). This is set once, at spawn time — it is
-      // not re-evaluated later, so a tab opened before work-unit tracking was turned on has no CLI
-      // even after the toggle flips; a new tab is the fix (see resources/skills/task-stub.md).
+      // session, or orchestration, work-unit tracking and the agent browser are all off" (a clearer
+      // diagnosis than the command not found you get when `astera` is missing). This is set once, at
+      // spawn time — it is not re-evaluated later, so a tab opened before work-unit tracking was
+      // turned on has no CLI even after the toggle flips; a new tab is the fix (see
+      // resources/skills/task-stub.md, and resources/skills/browser-stub.md's step 1).
       env.ASTERA_CLI = opts.orchEnv.cliPath
       env.ASTERA_INFO = opts.orchEnv.infoPath
       env.ASTERA_SKILLS = opts.orchEnv.skillsPath

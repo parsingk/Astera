@@ -500,4 +500,11 @@ describe('여러 스킬 설치', () => {
     expect(await fs.readFile(orchTarget, 'utf8')).toContain('# orchestration')
     expect(await fs.readFile(taskTarget, 'utf8')).toContain('# task')
   })
+
+  it('installs the browser stub under skills/astera-browser like the other two', async () => {
+    const stubPath = await writeSource()
+    const configDir = path.join(dir, '.claude-accounts', 'c')
+    const r = await installStub({ stubs: [{ stubPath, skillName: 'astera-browser' }], configDirs: [configDir] })
+    expect(r.written).toEqual([path.join(configDir, 'skills', 'astera-browser', 'SKILL.md')])
+  })
 })

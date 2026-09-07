@@ -1,8 +1,8 @@
-import { ipcMain, dialog, app, shell, type BrowserWindow } from 'electron'
-import { promises as fs, existsSync, unlinkSync } from 'node:fs'
+import { ipcMain, dialog, app, shell, session, webContents, type BrowserWindow, type WebContents } from 'electron'
+import { promises as fs, existsSync, readFileSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import type { Core } from './core'
 import type { RollingCoordinator } from './rolling'
 import type { CodexRollingCoordinator } from './codexRolling'
@@ -13,7 +13,7 @@ import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
-import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, SessionInfo } from '../core/types'
+import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
@@ -40,7 +40,7 @@ import {
   type OrchServerDeps
 } from './orchestration/server'
 import { OrchRollTap } from './orchestration/rollTap'
-import { TaskValidator, ValidatorBusyError } from './orchestration/validator'
+import { TaskValidator } from './orchestration/validator'
 import {
   applyValidationResult,
   blockForValidation,
@@ -80,6 +80,12 @@ import { writeInfo, writeShuttle } from './orchestration/shuttle'
 import { WorkerTails } from './orchestration/tail'
 import { releaseArgsFor } from './orchestration/release'
 import { installStub } from './orchestration/stub'
+import { AgentGuestRegistry, type GuestLike } from './agentBrowser/registry'
+import { AgentBufferStore, attachBuffers, installNetworkCapture } from './agentBrowser/buffers'
+import type { GuestDriver } from './agentBrowser/helpers'
+import { AgentBrowserRuns, devServersFor } from './agentBrowser/runs'
+import { previewShotsDir } from './preview/shots'
+import { PREVIEW_PARTITION } from '../core/preview/guards'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from './orchestration/resumePacket'
 import { extractStatusLineSession } from '../core/usage/statusline'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
@@ -113,7 +119,12 @@ import { listJdks } from './jdkScanner'
 import { listPythonInterpreters } from './pythonScanner'
 import { listComposeServices } from './composeScanner'
 import { listDotnetProjects } from './dotnetScanner'
-import { loadRunConfigs, prepareRun } from './run/prepare'
+import { loadRunConfigs, prepareRun, prepareLaunch } from './run/prepare'
+import { executeLaunch } from './run/launch'
+import { resolveConsolePath } from './run/resolveLink'
+import { saveConfigsBatch } from './run/saveConfigs'
+import { planFileRun } from './run/runFile'
+import { decideStart } from '../core/run/instances'
 import { createGithubPrs } from './githubPrs'
 import { createAccountUsage } from './accountUsage'
 import { createPullRequest, readCommits } from './prCreate'
@@ -311,8 +322,13 @@ export function registerIpc(
   /** The desktop notification sink. It is built in index.ts (it needs the BrowserWindow for both
    *  focus and the click), but the renderer's "this session is on screen" push arrives as IPC, which
    *  lives here — so the instance travels in rather than the state travelling out. */
-  desktop?: DesktopNotifier
+  desktop?: DesktopNotifier,
+  /** Which guest is which session's agent browser. Built in index.ts because installPreviewGuards
+   *  (called there, before this) asks it on every will-navigate; the register/unregister IPC that
+   *  fills it lives here. Optional so the existing harnesses keep compiling; a missing one is built. */
+  agentGuestsIn?: AgentGuestRegistry<WebContents>
 ): void {
+  const agentGuests = agentGuestsIn ?? new AgentGuestRegistry<WebContents>((id) => webContents.fromId(id))
   const send = (channel: string, payload: unknown): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload)
   }
@@ -416,9 +432,15 @@ export function registerIpc(
    *  mean "newly created sessions do not know about the CLI". Looking only at whether the server is
    *  alive (orch !== null) would let a session created after turning it off discover the CLI and then
    *  get a 409 on every call. **Work-unit tracking counts too**: /astera-task needs the same CLI and
-   *  the same ASTERA_SESSION, and the command gate in the server decides what may be called. */
+   *  the same ASTERA_SESSION, and the command gate in the server decides what may be called. **So
+   *  does the agent browser**: `astera browser help` and `astera browser js` are that same CLI, and
+   *  skillsPath is where `browser help` reads the guide from — without this the astera-browser skill
+   *  is planted into a session that cannot reach the program it tells the agent to run. */
   const orchEnvOf = (): { cliPath: string; infoPath: string; skillsPath: string } | undefined =>
-    orch && (core.appSettings.getOrchestrationEnabled() || core.appSettings.getWorkUnitTrackingEnabled())
+    orch &&
+    (core.appSettings.getOrchestrationEnabled() ||
+      core.appSettings.getWorkUnitTrackingEnabled() ||
+      core.appSettings.getAgentBrowserEnabled())
       ? { cliPath: orch.cliPath, infoPath: orch.infoPath, skillsPath: orch.skillsPath }
       : undefined
   /** The project the Jobs sidebar is folded for. main is not otherwise told what the renderer has
@@ -531,6 +553,11 @@ export function registerIpc(
   }
   core.sessions.onExit = (e) => {
     batcher.flush()
+    // Before the renderer hears about it, because that is what closes the tab. A run outlives its
+    // session by up to the whole script deadline, and its next open() would find no guest, ask for a
+    // tab, and be handed a fresh one built for a session that has already exited — tagged "agent",
+    // and with no second session:exit ever coming to close it again.
+    agentRuns.stop(e.sessionId)
     send('session:exit', e)
     rolling?.handleExit(e)
     codexRolling?.handleExit(e)
@@ -572,9 +599,9 @@ export function registerIpc(
   core.run.onData = (e) => send('run:data', e)
   core.run.onStatus = (e) => {
     send('run:status', e)
-    // 검증 실행의 종료도 이 한 통로로 온다 — RunManager 의 onStatus 는 하나뿐이다.
-    // 검증이 아닌 실행의 종료도 흘러 들어가지만, TaskValidator 가 큐에 없는 cwd 는 무시한다.
-    if (e.status === 'exited') orchValidator?.onRunExit({ cwd: e.projectPath, exitCode: e.exitCode ?? 1 })
+    // A validation run's exit comes through this one channel too — RunManager has one onStatus.
+    // Every other run's exit flows in as well; TaskValidator ignores a runId that is not a queue head.
+    if (e.status === 'exited') orchValidator?.onRunExit({ runId: e.runId, exitCode: e.exitCode ?? 1 })
   }
   // project terminal output and exit to the renderer
   core.terminal.onData = (e) => send('terminal:data', e)
@@ -821,6 +848,105 @@ export function registerIpc(
   }
   ipcMain.handle('sessions.spawn', async (_e, opts) => spawnSession(opts))
 
+  // ---- agent browser (spec: docs/superpowers/specs/2026-09-06-agent-browser-design.md) ----
+  // It sits here, above the orchestration startup, because `agentRuns` is read from the server deps
+  // that bootOrch builds — a `const` declared after that call would be in its temporal dead zone.
+  const agentBuffers = new AgentBufferStore()
+  // Installed once, for every agent tab: Electron's webRequest keeps one listener per event, so a
+  // per-tab registration would let the newest tab steal every other tab's network events.
+  installNetworkCapture(session.fromPartition(PREVIEW_PARTITION).webRequest, (id) => agentBuffers.byWebContents(id))
+  ipcMain.handle('preview.registerAgentGuest', (_e, sessionId: unknown, webContentsId: unknown) => {
+    if (typeof sessionId !== 'string' || typeof webContentsId !== 'number') return
+    const info = core.sessions.list().find((s) => s.id === sessionId)
+    if (!info) return
+    agentGuests.register(sessionId, webContentsId, info.cwd)
+    const guest = agentGuests.guestOf(sessionId)
+    if (!guest) {
+      // All or nothing. A registration with no guest behind it answers consoleErrors() with an empty
+      // array for the rest of the session — a page that is on fire reported as clean.
+      agentGuests.unregister(sessionId)
+      return
+    }
+    // `set` forgets whatever this session had before, so a remounted pane cannot leave the guest it
+    // registered last time holding its listeners.
+    const buffers = attachBuffers(guest)
+    agentBuffers.set(sessionId, webContentsId, buffers)
+    // The one teardown path no cleanup covers. A renderer reload or crash takes the <webview> down
+    // without running React's effect cleanup, so preview.unregisterAgentGuest never arrives and the
+    // session would keep a registration and two listeners on a dead WebContents for the life of the
+    // app — one leaked set per agent tab per reload, and nothing ever collects them.
+    guest.once('destroyed', () => {
+      // Stale handler: if the pane remounted, this session was re-registered to another guest and
+      // `set` already replaced these buffers with that guest's. Comparing identity rather than the
+      // webContentsId answers the same question — buffers are made once per registration — and it
+      // answers it without needing the newer guest to still be alive.
+      if (agentBuffers.bySession(sessionId) !== buffers) return
+      agentGuests.unregister(sessionId)
+      agentBuffers.forget(sessionId)
+    })
+  })
+  ipcMain.handle('preview.unregisterAgentGuest', (_e, sessionId: unknown, webContentsId: unknown) => {
+    if (typeof sessionId !== 'string' || typeof webContentsId !== 'number') return
+    // The same staleness check the `destroyed` handler above makes, for the same reason. After a
+    // `close(); open()` in one script the old pane unmounts around the new tab's registration; an
+    // unregister that knew only the session id would drop the newer guest, and the script's next
+    // helper would report "no page open". Nothing orders those two messages, so this compares
+    // identity instead — by the id the renderer now sends, since the old guest may already be gone.
+    if (agentGuests.webContentsIdOf(sessionId) !== webContentsId) return
+    agentGuests.unregister(sessionId)
+    agentBuffers.forget(sessionId)
+  })
+  // Stop from the agent tab's context menu. The run's controller aborts; the script body that outlived
+  // the race parks on its next helper (runs.ts), the busy state clears through run()'s finally, and the
+  // CLI gets { error: { message: 'stopped', at: <helper> } }. False when nothing was running.
+  ipcMain.handle('preview.agentStop', (_e, sessionId: unknown) => {
+    if (typeof sessionId !== 'string') return false
+    return agentRuns.stop(sessionId)
+  })
+  /** What `help()` returns inside a script. Read per run, not once: this wiring runs before
+   *  `startOrch` finishes, so `orch` — and with it skillsPath — is still null here. A string captured
+   *  now would be `''` for the life of the app, which is why `RunsDeps.guide` is a getter. */
+  const browserGuide = (): string => {
+    try {
+      return orch ? readFileSync(path.join(orch.skillsPath, 'browser-guide.md'), 'utf8') : ''
+    } catch {
+      return ''
+    }
+  }
+  const agentRuns = new AgentBrowserRuns({
+    // Electron's WebContents does satisfy `GuestDriver & GuestLike` (checked), but the registry's
+    // type parameter is **invariant** — its private waiter set holds `(g: G | null) => void` — so
+    // `AgentGuestRegistry<WebContents>` still does not convert to the one runs.ts asks for. The one
+    // cast lives here rather than widening either declaration for the wiring's sake, and it names
+    // the target type so a later change to `RunsDeps.registry` fails here instead of compiling.
+    registry: agentGuests as unknown as AgentGuestRegistry<GuestDriver & GuestLike>,
+    buffersOf: (sid) => agentBuffers.bySession(sid),
+    cwdOf: (sid) => core.sessions.list().find((s) => s.id === sid)?.cwd ?? null,
+    requestTab: (sessionId, cwd, url) => send('preview:agentTab', { sessionId, cwd, url }),
+    closeTab: (sessionId) => {
+      // The registration goes as the event goes out, not when the renderer answers. The renderer only
+      // calls preview.unregisterAgentGuest once its pane has unmounted, and until then the registry
+      // still hands out the doomed guest — so a close() followed by an open() in the same script
+      // would loadURL into a tab on its way out and then wait the whole wait deadline for a
+      // did-finish-load that never comes. Dropped here, ensureGuest sees no guest and asks for a new
+      // tab. The renderer's unregister still arrives afterwards and is a no-op: both calls are.
+      agentGuests.unregister(sessionId)
+      agentBuffers.forget(sessionId)
+      send('preview:agentTabClose', { sessionId })
+    },
+    setBusy: (sessionId, busy) => send('preview:agentBusy', { sessionId, busy }),
+    // Which localhost port is this project's: the only ports main knows are the ones its own Run
+    // started — the address the user gave the Run to preview, or failing that the one it printed. Read
+    // per call: a Run can start or stop, and a preview address be set, between two scripts.
+    devServersOf: (cwd) => devServersFor(core.run.listActive(), cwd, core.runConfig.get(cwd)),
+    // The same folder Design Mode's captures go to, and the one a Claude session is spawned with
+    // read access to — so the path screenshot() hands back opens without a permission prompt.
+    shotsDir: previewShotsDir(app.getPath('userData')),
+    get guide() {
+      return browserGuide()
+    }
+  })
+
   // ── Starting orchestration ─────────────────────────────────────────
   // It sits directly after spawnSession above because that function is the session creation the
   // coordinator needs, and the busy verdict reads this file's busyState too. Once the server is
@@ -893,15 +1019,15 @@ export function registerIpc(
   orchWiring?.onTabResumeReady(tabResumeTextFor)
 
   /**
-   * Installs whichever discovery stub(s) match the two toggles' current state, against every known
+   * Installs whichever discovery stub(s) match the toggles' current state, against every known
    * account. Pulled out of bootOrch (which used to build and install this list inline, once) into a
-   * standalone function that both settings.setOrchestrationEnabled and
-   * settings.setWorkUnitTrackingEnabled also call directly — **not just bootOrch**.
+   * standalone function that settings.setOrchestrationEnabled, settings.setWorkUnitTrackingEnabled
+   * and settings.setAgentBrowserEnabled also call directly — **not just bootOrch**.
    *
    * **Why bootOrch alone is not enough**: bootOrch only runs on the transition that actually starts
    * the server (see startOrch's `if (orch || orchStarting) return`). Before this task the server could
    * only be up when orchestration was on, so setOrchestrationEnabled(true) always reached it. Now
-   * either toggle can start the server, so the second toggle to turn on reaches a server that is
+   * any of the toggles can start the server, so the second toggle to turn on reaches a server that is
    * already up — bootOrch, and this install, never run for it. Concretely: tracking on first plants
    * the task stub (server boots); orchestration on second calls startOrch(), which no-ops because
    * `orch` is already set — without this function being called independently, the orchestration stub
@@ -909,8 +1035,8 @@ export function registerIpc(
    * the only discovery path for it matters most (see the header comment in stub.ts).
    *
    * No-ops when the server has never come up (`orch` is null — nothing has a skillsPath yet to install
-   * from) or when both toggles are off (`stubs` comes out empty). Safe to call redundantly — that is
-   * the point of calling it from three places: installStub already skips a write once content matches
+   * from) or when every toggle is off (`stubs` comes out empty). Safe to call redundantly — that is
+   * the point of calling it from four places: installStub already skips a write once content matches
    * (see stub.ts), so the worst repeated cost is a per-account file read, not a per-account write.
    */
   const installStubsForCurrentToggles = (): void => {
@@ -926,6 +1052,9 @@ export function registerIpc(
         : []),
       ...(core.appSettings.getWorkUnitTrackingEnabled()
         ? [{ stubPath: path.join(orch.skillsPath, 'task-stub.md'), skillName: 'astera-task' }]
+        : []),
+      ...(core.appSettings.getAgentBrowserEnabled()
+        ? [{ stubPath: path.join(orch.skillsPath, 'browser-stub.md'), skillName: 'astera-browser' }]
         : [])
     ]
     if (stubs.length === 0) return
@@ -945,14 +1074,15 @@ export function registerIpc(
   }
 
   let orchStarting = false
-  /** Starts the orchestration server. Called when **either** toggle is on — agent orchestration or
-   *  work-unit tracking, since `/astera-task` needs the same CLI and the same `ASTERA_SESSION` the
-   *  orchestration server already hands out (see `orchEnvOf`'s doc). With both off, this is never
-   *  called and no port is opened. Turning either one on at runtime comes back through here and
+  /** Starts the orchestration server. Called when **any of the three** toggles is on — agent
+   *  orchestration, work-unit tracking, or the agent browser, since `/astera-task` and
+   *  `astera browser js` need the same CLI and the same `ASTERA_SESSION` the
+   *  orchestration server already hands out (see `orchEnvOf`'s doc). With all off, this is never
+   *  called and no port is opened. Turning any one of them on at runtime comes back through here and
    *  starts immediately (sessions created after that get the CLI — environment variables are fixed
    *  at spawn time, so sessions already running cannot). If it is already up, this does nothing.
-   *  Turning a toggle off does not close the server — `enabled()`/`trackingEnabled()` are read on
-   *  every request, so CLI calls after that are rejected with a 409. */
+   *  Turning a toggle off does not close the server — `enabled()`/`trackingEnabled()`/
+   *  `browserEnabled()` are read on every request, so CLI calls after that are rejected with a 409. */
   const startOrch = async (): Promise<void> => {
     // orch is assigned last (after the port and files are ready), so re-entering in that window would
     // start two servers — the first loses its reference and keeps holding the port, and the info file
@@ -1190,7 +1320,7 @@ export function registerIpc(
           const task = st.tasks.find((t) => t.id === taskId)
           if (!task?.validateConfigId) throw new Error(`no validateConfigId on task ${taskId}`)
           // 큐에서 기다리는 동안 Task 가 validating 을 떠났을 수 있다(task-update). 그대로 두면
-          // 빌드 전체가 돌고 실행 슬롯과 실행 패널을 차지한 뒤에야 applyValidationResult 가
+          // 빌드 전체가 돌고 실행 패널을 차지한 뒤에야 applyValidationResult 가
           // 결과를 거절한다. 던지지 않고 'skip' 을 돌려주는 이유는 ValidatorRunner.start 의 주석에
           // 있다 — 이것은 실패가 아니라 없어진 할 일이다.
           if (task.status !== 'validating') return 'skip'
@@ -1210,15 +1340,14 @@ export function registerIpc(
             assertAllowedPath,
             t: (key, params) => t(core.lang, key as MessageKey, params)
           })
-          // RunManager 는 projectPath(=cwd) 하나에 하나만 돌린다. 사용자가 그 사이 Run 버튼으로
-          // 직접 채웠을 수 있다 — 그 충돌은 지나가는 것이므로, ALREADY_RUNNING 문자열을 잡아내는
-          // 대신 시작 전에 미리 살펴 ValidatorBusyError 로 구분한다(큐가 기다리게 한다).
-          if (core.run.get(cwd)?.status === 'running') throw new ValidatorBusyError(cwd)
-          // validation: 이 실행이 사용자의 것이 아니라는 표시. 실행 툴바와 전역 목록이 이것으로
-          // 라벨하고, run.stop 이 이것으로 markStopped 를 부른다(RunStatus.validation 참고).
-          core.run.start({ projectPath: cwd, projectName, config, command, validation: true })
+          // validation: marks this run as not the user's. The run list and the global badge label it,
+          // and run.stop routes markStopped by it (RunStatus.validation). Nothing waits for the user's
+          // own runs any more — a validation starts beside them; same-tree validations are serialised
+          // by TaskValidator's own queue.
+          const started = core.run.start({ projectPath: cwd, projectName, config, command, validation: true })
+          return { runId: started.runId }
         },
-        output: (cwd) => core.run.recentOutput(cwd).slice(-4000)
+        output: (runId) => core.run.recentOutput(runId).slice(-4000)
       },
       onSettled: async ({ taskId, exitCode, output }) => {
         const r = applyValidationResult(
@@ -2541,6 +2670,10 @@ export function registerIpc(
       // declared further down (around the `WorkUnitCollector` construction) — referencing it here is
       // fine because these arrows only run once a call comes in, well after that declaration has run.
       trackingEnabled: () => core.appSettings.getWorkUnitTrackingEnabled(),
+      // Same reasoning again, for browser-js — and `agentRuns` is built above this function so the
+      // deps can name it here.
+      browserEnabled: () => core.appSettings.getAgentBrowserEnabled(),
+      browserRun: (sessionId, script) => agentRuns.run(sessionId, script),
       sessionTasks: {
         start: (sessionId, objective) => workUnitCollector.startTask(sessionId, objective),
         complete: (sessionId, input) => workUnitCollector.completeTask(sessionId, input),
@@ -2759,9 +2892,10 @@ export function registerIpc(
       // 부족하고(reattach 를 봐야 한다), 리셋 시각도 이 이벤트에만 있다. 판단과 세션별 기억은
       // OrchRollTap 이 갖는다(rollTap.ts 의 onRollState).
       onRollState: (e) => orchRollTap?.onRollState(e),
-      // Read by the rolling wiring. `undefined` only when **both** orchestration and work-unit
-      // tracking are off (see orchEnvOf's own doc) — then the rolled session comes up without a CLI
-      // as before, and there is no way for a worker to exist in that state anyway.
+      // Read by the rolling wiring. `undefined` only when **all three** of orchestration, work-unit
+      // tracking and the agent browser are off (see orchEnvOf's own doc) — then the rolled session
+      // comes up without a CLI as before, and there is no way for a worker to exist in that state
+      // anyway.
       orchEnv: () => orchEnvOf(),
       // 두 롤링 코디네이터의 resumeText dep 구현.
       //
@@ -2792,7 +2926,9 @@ export function registerIpc(
   }
   if (
     orchWiring &&
-    (core.appSettings.getOrchestrationEnabled() || core.appSettings.getWorkUnitTrackingEnabled())
+    (core.appSettings.getOrchestrationEnabled() ||
+      core.appSettings.getWorkUnitTrackingEnabled() ||
+      core.appSettings.getAgentBrowserEnabled())
   )
     void startOrch().catch((err) => orchLog(`startup failed: ${String(err)}`))
   ipcMain.on('sessions.write', (_e, id, data) => core.sessions.write(id, data))
@@ -2892,7 +3028,9 @@ export function registerIpc(
   const isPathInUse = (p: string): string | null => {
     const s = core.sessions.list().find((x) => x.status === 'running' && isPathWithin(p, x.cwd))
     if (s) return `SESSION:${s.title}`
-    const r = core.run.listActive().find((x) => x.status === 'running' && isPathWithin(p, x.projectPath))
+    // listActive already excludes finished runs. A stopping run still holds the path — its process tree
+    // is being torn down — so it is not filtered out here.
+    const r = core.run.listActive().find((x) => isPathWithin(p, x.projectPath))
     if (r) return `RUN:${r.configName}`
     return null
   }
@@ -2969,6 +3107,7 @@ export function registerIpc(
   const accountUsage = createAccountUsage({
     accounts: core.accounts,
     fetcher: core.usageFetcher,
+    codexFetcher: core.codexUsageFetcher,
     store: core.accountUsage,
     send
   })
@@ -3132,7 +3271,7 @@ export function registerIpc(
     }
   })
 
-  // run.list: stored configs unioned with the auto-seeded ones, plus the active status and recent output for reattaching
+  // run.list: stored configs unioned with the auto-seeded ones, plus the project's runs for reattaching
   ipcMain.handle('run.list', async (_e, projectPath: string) => {
     await assertAllowedPath(projectPath)
     const { configs, files, texts } = await loadRunConfigs({
@@ -3145,8 +3284,9 @@ export function registerIpc(
     const { hasPythonProject } = await import('../core/run/python')
     return {
       configs,
-      active: core.run.get(projectPath),
-      recent: core.run.recentOutput(projectPath),
+      // Every run of this project, finished ones included, in seat order. Output is not shipped here —
+      // three runs would be 600 KB on every list read — the panel asks per run through run.output.
+      runs: core.run.listByProject(projectPath),
       // whether the configuration form offers the Spring profile field (optionalFieldsFor)
       isSpringBoot: isSpringBootProject(texts),
       // Whether RunTypePicker promotes 'python'/'pytest' into its "detected" group — there is no seed
@@ -3624,31 +3764,120 @@ export function registerIpc(
     return listDotnetProjects(projectPath)
   })
 
-  ipcMain.handle('run.start', async (_e, projectPath: string, configId: string) => {
-    await assertAllowedPath(projectPath)
-    const { config, command, projectName } = await prepareRun({
+  /** Plan a launch and run it. Both ▶ (run.start) and running a file from the tree (run.runFile) go
+   *  through here, so a file's configuration honours a before-launch chain exactly as any other does.
+   *  Resolves with the run the panel should open on — the chain's first step. */
+  const startChain = async (projectPath: string, configId: string): Promise<RunStatus> => {
+    const tr = (key: string, params?: Record<string, string | number>): string =>
+      t(core.lang, key as MessageKey, params)
+    // The plan and every step's command, before anything starts: a chain with a broken step must not
+    // leave the steps before it already running (main/run/prepare.ts).
+    const { plan, prepared, projectName } = await prepareLaunch({
       projectPath,
-      configId,
+      rootId: configId,
       stored: core.runConfig.get(projectPath),
       assertAllowedPath,
-      t: (key, params) => t(core.lang, key as MessageKey, params)
+      t: tr
     })
-    return core.run.start({ projectPath, projectName, config, command })
+    return executeLaunch(plan, {
+      // What ▶ means for this configuration right now — restart its live run, or start another
+      // (core/run/instances.ts). Evaluated when the step runs, not when the plan was made.
+      startOne: async (stepId) => {
+        const step = prepared.get(stepId)
+        if (!step) throw new Error(`NO_CONFIG: ${stepId}`)
+        const opts = { projectPath, projectName, config: step.config, command: step.command }
+        const decision = decideStart(core.run.listByProject(projectPath), step.config)
+        return decision.action === 'restart' ? core.run.restart(decision.runId, opts) : core.run.start(opts)
+      },
+      whenExited: (runId) => core.run.whenExited(runId),
+      onFocus: (status) => send('run:focus', { runId: status.runId, projectPath: status.projectPath }),
+      onFailed: (stepId, detail) =>
+        send('run:launchFailed', {
+          message: tr('run.start.stepFailed', { name: prepared.get(stepId)?.config.name ?? stepId, detail }),
+          projectPath
+        })
+    })
+  }
+
+  ipcMain.handle('run.start', async (_e, projectPath: string, configId: string) => {
+    await assertAllowedPath(projectPath)
+    return startChain(projectPath, configId)
   })
 
-  ipcMain.handle('run.stop', async (_e, projectPath: string) => {
-    // 검증 실행을 사용자가 정지시킨 것은 "작업이 틀렸다"가 아니라 "증명하지 못했다"다 — 표시를
-    // 남겨 이어질 종료가 실패 정산이 아니라 Gate 로 가게 한다(TaskValidator.markStopped).
-    if (core.run.get(projectPath)?.validation) orchValidator?.markStopped(projectPath)
-    return core.run.stop(projectPath)
+  // Running a file straight from the tree. One call rather than a renderer-composed list: the file
+  // explorer does not hold the configuration list, and run.saveConfigs replaces it wholesale, so
+  // composing it there would put the reuse and eviction rules in the one place that cannot test them.
+  ipcMain.handle('run.runFile', async (_e, projectPath: string, filePath: string) => {
+    await assertAllowedPath(projectPath)
+    const resolved = path.resolve(filePath)
+    await assertAllowedPath(resolved)
+    // The same rule resolveRunCwd applies to a configuration's working directory.
+    if (!isPathWithin(projectPath, resolved)) throw new Error(t(core.lang, 'run.config.cwdOutsideProject'))
+    const relPath = path.relative(projectPath, resolved).split(path.sep).join('/')
+    const base = relPath.split('/').pop() ?? relPath
+
+    const stored = core.runConfig.get(projectPath)
+    const { configs: merged } = await loadRunConfigs({ projectPath, stored, assertAllowedPath })
+    const plan = planFileRun({ merged, stored, relPath, newId: () => `user:${randomUUID()}` })
+    if (!plan) throw new Error(t(core.lang, 'run.runFile.notRunnable', { name: base }))
+
+    if (plan.configs) {
+      // saveConfigsBatch, not a direct write: it is what refuses a value holding a character cmd.exe
+      // interprets, which a path like `C:\my & files\seed.py` really is.
+      const saved = await saveConfigsBatch({
+        projectPath,
+        configs: plan.configs,
+        platform: process.platform,
+        assertConfigCwd,
+        store: core.runConfig
+      })
+      if (!saved.ok) {
+        const first = saved.errors[0]
+        // The batch validates every stored configuration, not just the new one, and `kept` comes
+        // first — so the offender may be a configuration the user did not touch (a stored cwd is
+        // hand-editable on disk and is only re-checked at the next save). The outer sentence names
+        // the file they clicked; the detail names whatever actually failed.
+        const offender = plan.configs.find((c) => c.id === first.id)?.name ?? base
+        throw new Error(
+          t(core.lang, 'run.runFile.refused', {
+            name: base,
+            detail: t(core.lang, `run.manager.reason.${first.reason}` as MessageKey, { name: offender })
+          })
+        )
+      }
+    }
+    // Both facts, because the caller needs both and only this side knows the second. startChain
+    // resolves with the chain's *first* step, which is the run the panel opens on — but that is the
+    // configuration's before-launch task when it has one, not the configuration itself. The toolbar's
+    // pill has to name what the user asked to run.
+    return { run: await startChain(projectPath, plan.configId), configId: plan.configId }
   })
-  // 실행 탭을 ✕ 로 닫았을 때. run.stop 과 같이 이미 있는 실행에 거는 조작이라 경로 가드를 두지
-  // 않는다 — 임의의 경로를 넘겨도 그 키의 실행이 없으면 아무 일도 일어나지 않는다.
-  ipcMain.handle('run.dismiss', async (_e, projectPath: string) => core.run.dismiss(projectPath))
-  ipcMain.on('run.write', (_e, projectPath: string, data: string) => core.run.write(projectPath, data))
-  ipcMain.on('run.resize', (_e, projectPath: string, cols: number, rows: number) =>
-    core.run.resize(projectPath, cols, rows)
-  )
+
+  ipcMain.handle('run.stop', async (_e, runId: string) => {
+    // A user stopping a validation run is "could not prove it", not "the work is wrong" — leave the mark
+    // so the exit that follows goes to the Gate rather than being settled as a failure
+    // (TaskValidator.markStopped).
+    if (core.run.get(runId)?.validation) orchValidator?.markStopped(runId)
+    return core.run.stop(runId)
+  })
+  // The run list's ✕. Like run.stop this acts on a run that already exists, so there is no path guard —
+  // an unknown id does nothing.
+  ipcMain.handle('run.dismiss', async (_e, runId: string) => core.run.dismiss(runId))
+  // A run's buffered output, for a panel that mounts after the run started. Same "existing run, no
+  // guard" reasoning as run.dismiss.
+  ipcMain.handle('run.output', async (_e, runId: string) => core.run.recentOutput(runId))
+  // A console link's path, resolved against the run's own working directory and checked before the
+  // renderer is told it exists (main/run/resolveLink.ts). A relative target that is not at the cwd is
+  // also tried under the usual source roots. No path guard on the arguments themselves: the guard is
+  // applied to the resolved path inside, and an unknown run answers null.
+  ipcMain.handle('run.resolveLink', async (_e, runId: string, target: string) => {
+    const cwd = core.run.cwdOf(runId)
+    if (!cwd) return null
+    const p = await resolveConsolePath({ cwd, target, stat: (f) => fs.stat(f), assertAllowedPath })
+    return p ? { path: p } : null
+  })
+  ipcMain.on('run.write', (_e, runId: string, data: string) => core.run.write(runId, data))
+  ipcMain.on('run.resize', (_e, runId: string, cols: number, rows: number) => core.run.resize(runId, cols, rows))
   // 저장 시점의 cwd 검사 — 규칙과 그 근거는 main/run/prepare.ts 의 resolveRunCwd 를 보라. 그 함수는
   // prepareRun 이 id 로 구성을 찾는 일까지 하므로 저장 경로에서는 쓸 수 없어, 같은 규칙을 여기 따로 둔다.
   const assertConfigCwd = async (projectPath: string, cwd: unknown): Promise<void> => {
@@ -3660,51 +3889,11 @@ export function registerIpc(
       throw new Error(t(core.lang, 'run.config.cwdOutsideProject'))
   }
 
-  ipcMain.handle('run.saveConfig', async (_e, projectPath: string, config: RunConfig) => {
-    // Unlike the other run handlers this was missing its path guard — a configuration could be saved
-    // under an arbitrary key. cwd is filtered here too, so an invalid configuration never gets stored in
-    // the first place. run.start looks again right before executing because the stored file can be
-    // hand-edited on disk and thus bypass this path.
+  // The Run Configurations dialog's Apply. One batch, one verdict — see main/run/saveConfigs.ts. The
+  // project guard is here, as for every other run handler; the per-item checks are inside.
+  ipcMain.handle('run.saveConfigs', async (_e, projectPath: string, configs: RunConfig[]) => {
     await assertAllowedPath(projectPath)
-    await assertConfigCwd(projectPath, config?.cwd)
-    // Trusting only the renderer's form validation would let a hand-edited JSON file through.
-    // allowIncomplete: a configuration is saved the moment ＋ creates it, and at that point its one
-    // required field is still empty — refusing it here would leave the new configuration in the
-    // renderer only, where the next ＋ overwrites it. Running an incomplete one is what run.start
-    // refuses instead, by name. Everything else migrateRunConfigs checks still applies here.
-    const { migrateRunConfigs } = await import('../core/run/migrate')
-    if (migrateRunConfigs([config], { allowIncomplete: true }).length === 0)
-      throw new Error('INVALID_CONFIG')
-    // cmd.exe interprets & | ^ % ! < > even inside double quotes — assembly cannot guard against
-    // that, so reject at save time.
-    //
-    // **Only values that actually land in the command string are checked.** id/name are metadata,
-    // cwd is handed to the PTY as its working directory rather than interpolated into the command
-    // text, and javaHome/springProfiles become environment variables. Checking every field would
-    // reject a configuration merely because it's named "build & test".
-    //
-    // Why an exclude list: the failure direction is the safe one. A new field defaults to being
-    // checked — possibly over-restrictive, but never a silent gap. An include list fails the other way.
-    const NOT_IN_COMMAND = new Set(['id', 'name', 'cwd', 'env', 'javaHome', 'springProfiles'])
-    if (process.platform === 'win32' && config.type !== 'shell') {
-      const { hasUnsafeWin32Chars } = await import('../core/run/build')
-      for (const [k, v] of Object.entries(config as unknown as Record<string, unknown>)) {
-        if (NOT_IN_COMMAND.has(k)) continue
-        if (typeof v === 'string' && hasUnsafeWin32Chars(v)) throw new Error('UNSAFE_VALUE')
-      }
-    }
-    const list = core.runConfig.get(projectPath)
-    const next = list.some((c) => c.id === config.id)
-      ? list.map((c) => (c.id === config.id ? config : c))
-      : [...list, config]
-    await core.runConfig.save(projectPath, next)
-    return next
-  })
-  ipcMain.handle('run.deleteConfig', async (_e, projectPath: string, configId: string) => {
-    await assertAllowedPath(projectPath) // was missing here for the same reason as in saveConfig
-    const next = core.runConfig.get(projectPath).filter((c) => c.id !== configId)
-    await core.runConfig.save(projectPath, next)
-    return next
+    return saveConfigsBatch({ projectPath, configs, platform: process.platform, assertConfigCwd, store: core.runConfig })
   })
 
   // Project terminals. open and list take a path and so must pass assertAllowedPath — that stops a shell
@@ -3939,7 +4128,8 @@ export function registerIpc(
 
   /** 마크다운 프리뷰의 외부 링크. 허용 스킴 밖은 조용히 버린다 — 렌더러가 이미 걸렀으므로 여기에
    *  도달하는 것은 버그이거나 우회 시도다. 예외를 던지지 않는 이유는 링크 클릭이 실패해도 사용자가
-   *  할 수 있는 일이 없기 때문이다. */
+   *  할 수 있는 일이 없기 때문이다. 실행 콘솔의 URL 링크도 이 검사 하나에만 기대는 새 호출자다 —
+   *  링크 문법이 애초에 https?:// 만 내보내므로, 이는 맞는 선택이다. */
   ipcMain.handle('system.openExternal', async (_e, url: string) => {
     const parsed = parseAllowedExternalUrl(url)
     if (!parsed) return
@@ -4047,8 +4237,8 @@ export function registerIpc(
     // Turning it on starts it immediately (a no-op if already up). Why turning it off does not close it is in the startOrch comment.
     if (enabled && orchWiring) await startOrch()
     // Not gated on whether startOrch() just booted anything — the case this covers is exactly the one
-    // where it did not: the server was already up (started by the other toggle), so bootOrch's own
-    // install never ran for this one. installStubsForCurrentToggles re-reads both toggles itself and
+    // where it did not: the server was already up (started by another toggle), so bootOrch's own
+    // install never ran for this one. installStubsForCurrentToggles re-reads every toggle itself and
     // no-ops when the server still is not up.
     if (enabled) installStubsForCurrentToggles()
   })
@@ -4072,6 +4262,17 @@ export function registerIpc(
     // and the planted CLI. Turning it off does not close the server — see the startOrch comment.
     if (enabled && orchWiring) await startOrch()
     // Same reasoning as the orchestration setter above — see installStubsForCurrentToggles's comment.
+    if (enabled) installStubsForCurrentToggles()
+  })
+
+  // The agent browser toggle. Same trust-boundary check and same registration rule as the two above.
+  ipcMain.handle('settings.getAgentBrowserEnabled', () => core.appSettings.getAgentBrowserEnabled())
+  ipcMain.handle('settings.setAgentBrowserEnabled', async (_e, enabled: boolean) => {
+    if (typeof enabled !== 'boolean') throw new Error(`INVALID_AGENT_BROWSER_ENABLED: ${String(enabled)}`)
+    await core.appSettings.setAgentBrowserEnabled(enabled)
+    // Same line the other two setters use, for the same reason: browser-js needs the server and the
+    // planted CLI. Turning it off does not close the server — browserEnabled() is read per request.
+    if (enabled && orchWiring) await startOrch()
     if (enabled) installStubsForCurrentToggles()
   })
 
@@ -4145,7 +4346,7 @@ export function registerIpc(
 
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is
-  // already validated by run.start and run.saveConfig. Omitting it (undefined) behaves exactly as the
+  // already validated by run.start and run.saveConfigs. Omitting it (undefined) behaves exactly as the
   // existing caller (NewSessionDialog) does — dialog.showOpenDialog uses the OS default location when
   // there is no defaultPath.
   ipcMain.handle('system.pickFolder', async (_e, defaultPath?: string) => {

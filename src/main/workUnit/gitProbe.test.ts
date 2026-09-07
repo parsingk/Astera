@@ -2,12 +2,12 @@ import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { makeRepo, tempDir } from '../../core/worktrees/testRepo'
+import { makeRepo, tempDir, gitSync } from '../../core/worktrees/testRepo'
 import { classifyTransition } from '../../core/git/transition'
 import { readGitRef, isAncestorOf, readRange } from './gitProbe'
 
 const run = (repo: string, args: string[]): void => {
-  execFileSync('git', args, { cwd: repo, windowsHide: true, stdio: 'pipe' })
+  gitSync(repo, args)
 }
 
 const headHash = (repo: string): string =>

@@ -57,3 +57,61 @@ export function discard(sessionId: string): void {
   listeners.delete(sessionId)
   buffers.delete(sessionId)
 }
+
+// ---- input direction: paste into a session's terminal ----
+//
+// Everything above carries PTY output *to* a terminal. This carries text *into* one, through the
+// terminal's own paste — the Ctrl+V path. That matters: a raw `sessions.write` turns the first newline
+// into Enter and submits a half-built prompt, while xterm's paste wraps the text in bracketed paste,
+// which Claude Code receives as one paste and leaves for the user to send.
+
+const pasters = new Map<string, (text: string) => void>()
+const screens = new Map<string, () => string>()
+
+/** TerminalView registers its xterm's paste when it mounts. Returns the unregister. */
+export function registerPaste(sessionId: string, paste: (text: string) => void): () => void {
+  pasters.set(sessionId, paste)
+  return () => {
+    if (pasters.get(sessionId) === paste) pasters.delete(sessionId)
+  }
+}
+
+/** Pastes into that session's terminal. false when no terminal is registered for the id — the tab is
+ *  gone, or has not mounted yet. Session slots stay mounted off screen, so a live session always has one. */
+export function pasteInto(sessionId: string, text: string): boolean {
+  const paste = pasters.get(sessionId)
+  if (!paste) return false
+  paste(text)
+  return true
+}
+
+/** TerminalView registers a reader for its xterm's visible screen when it mounts. Returns the
+ *  unregister. What is on screen is the only thing that says whether the agent is at its prompt or
+ *  holding a dialog open, and the terminal is the one place that knows it. */
+export function registerScreen(sessionId: string, read: () => string): () => void {
+  screens.set(sessionId, read)
+  return () => {
+    if (screens.get(sessionId) === read) screens.delete(sessionId)
+  }
+}
+
+/** What that session's terminal is showing, or null when no terminal is registered for the id. Null
+ *  is "cannot tell", not "nothing there" — a caller guarding a send should treat it as such. */
+export function screenOf(sessionId: string): string | null {
+  const read = screens.get(sessionId)
+  if (!read) return null
+  try {
+    return read()
+  } catch {
+    return null
+  }
+}
+
+/** Presses Enter in that session's terminal, submitting whatever is in its input box. false when no
+ *  terminal is registered. Deliberately a raw write rather than a paste: this is one keypress, and
+ *  the bracketing that makes `pasteInto` safe is exactly what would stop it being one. */
+export function submitInto(sessionId: string): boolean {
+  if (!pasters.has(sessionId)) return false
+  window.api.sessions.write(sessionId, '\r')
+  return true
+}

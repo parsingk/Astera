@@ -2,7 +2,7 @@ import type { RunConfig, RunConfigType } from './types'
 
 const KNOWN: RunConfigType[] = [
   'shell', 'npm', 'node', 'gradle', 'maven', 'cargo', 'go', 'python', 'pytest', 'compose', 'dockerfile',
-  'dotnet'
+  'dotnet', 'compound'
 ]
 
 /** The string fields a kind must have. Missing one means buildCommand would splice `undefined` into
@@ -25,7 +25,10 @@ export const REQUIRED: Record<RunConfigType, readonly string[]> = {
   // docker compose's own search), and an empty services list means "every service"
   compose: [],
   dockerfile: ['imageTag'],
-  dotnet: ['project']
+  dotnet: ['project'],
+  // members is an array, so this string-field table cannot express it. missingRequiredFields below
+  // is where an empty member list is reported.
+  compound: []
 }
 
 const isStringMap = (v: unknown): boolean =>
@@ -35,10 +38,14 @@ const isStringMap = (v: unknown): boolean =>
     !Array.isArray(v) &&
     Object.values(v as Record<string, unknown>).every((x) => typeof x === 'string'))
 
+const isStringArray = (v: unknown): boolean =>
+  v === undefined || (Array.isArray(v) && v.every((x) => typeof x === 'string'))
+
 /** Which of a kind's required fields are still empty. A configuration in this state is storable but
  *  not runnable — run.start refuses it by name rather than assembling a command with a hole in it.
  *  The same rule migrateRunConfigs applies below, but to a value that is already typed. */
 export function missingRequiredFields(config: RunConfig): string[] {
+  if (config.type === 'compound') return config.members.length === 0 ? ['members'] : []
   const o = config as unknown as Record<string, unknown>
   return REQUIRED[config.type].filter((k) => typeof o[k] !== 'string' || o[k] === '')
 }
@@ -51,7 +58,7 @@ export function missingRequiredFields(config: RunConfig): string[] {
  *  and get it thrown away).
  *
  *  `allowIncomplete` keeps everything above but stops rejecting a required field that is present and
- *  empty. run.saveConfig passes it, because a configuration created by ＋ starts with exactly that
+ *  empty. run.saveConfigs passes it, because a configuration created by ＋ starts with exactly that
  *  shape: without it the new configuration never reaches the store, lives only in the renderer's
  *  single `pending` slot, and the next ＋ silently loses it. **RunConfigStore.load passes it too, and
  *  must:** the two have to agree, or the app writes a file it then refuses to read back and the
@@ -66,12 +73,17 @@ export function migrateRunConfigs(value: unknown, opts?: { allowIncomplete?: boo
     const o = raw as Record<string, unknown>
     // Blank is rejected, not just the wrong type. The name is the only thing identifying a
     // configuration in the tree and in the run widget's selector, so a blank one is a row nobody can
-    // see or point at — and this function is also run.saveConfig's gate, so a renderer that let a
+    // see or point at — and this function is also run.saveConfigs' gate, so a renderer that let a
     // blank through (it did) must not be able to store one.
     if (typeof o.id !== 'string' || o.id.trim() === '') continue
     if (typeof o.name !== 'string' || o.name.trim() === '') continue
     if (!isStringMap(o.env)) continue
     if (o.cwd !== undefined && typeof o.cwd !== 'string') continue
+    if (o.folder !== undefined && typeof o.folder !== 'string') continue
+    if (o.allowMultipleInstances !== undefined && typeof o.allowMultipleInstances !== 'boolean') continue
+    if (o.temporary !== undefined && typeof o.temporary !== 'boolean') continue
+    if (!isStringArray(o.beforeLaunch)) continue
+    if (o.previewUrl !== undefined && typeof o.previewUrl !== 'string') continue
 
     if (o.type === undefined) {
       if (typeof o.command !== 'string') continue
@@ -79,6 +91,14 @@ export function migrateRunConfigs(value: unknown, opts?: { allowIncomplete?: boo
       continue
     }
     if (typeof o.type !== 'string' || !KNOWN.includes(o.type as RunConfigType)) continue
+    // The one kind whose required content is not a string field. An absent or wrongly typed member
+    // list is a corrupt item and is dropped; an empty one is a value this app stores (＋ creates
+    // exactly that) and missingRequiredFields is what refuses to run it.
+    if (o.type === 'compound') {
+      if (!Array.isArray(o.members) || !o.members.every((x) => typeof x === 'string')) continue
+      out.push(o as unknown as RunConfig)
+      continue
+    }
     // The type check always applies — a missing or non-string required field is what would splice
     // `undefined` into the command. Only the emptiness half is relaxed by allowIncomplete.
     const required = REQUIRED[o.type as RunConfigType]

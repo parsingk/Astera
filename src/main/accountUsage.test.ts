@@ -5,7 +5,7 @@ import path from 'node:path'
 import type { Account, AccountUsage, RateLimitUsage } from '../core/types'
 import { AccountUsageStore, type RememberedUsage } from './accountUsageStore'
 import { createAccountUsage } from './accountUsage'
-import { TTL_OK_MS } from './usage'
+import { TTL_OK_MS } from './usageCache'
 
 const HOUR = 3_600_000
 const NOW = Date.parse('2026-09-02T12:00:00.000Z')
@@ -80,8 +80,13 @@ function fakeStore(): Pick<AccountUsageStore, 'get' | 'remember'> {
   }
 }
 
-/** A service over a fetcher whose answer per configDir is scripted. `storeOverride` lets the three
- *  fake-timer tests below supply the in-memory double instead of the shared, disk-backed `store`. */
+/** A service over two fetchers whose answer per configDir is scripted. `storeOverride` lets the three
+ *  fake-timer tests below supply the in-memory double instead of the shared, disk-backed `store`.
+ *
+ *  The two fetchers answer from the one `answers` map — configDirs are distinct per provider, so what
+ *  a test needs to see is not *what* came back but *which* fetcher was asked. `calls` and `codexCalls`
+ *  are that: a configDir appearing in the wrong one is a token read from the wrong file and sent to
+ *  the wrong endpoint. */
 function harness(
   accounts: Account[],
   answers: Record<string, RateLimitUsage>,
@@ -89,18 +94,21 @@ function harness(
 ) {
   const sent: Record<string, AccountUsage>[] = []
   const calls: string[] = []
+  const codexCalls: string[] = []
+  const fetcherLogging = (log: string[]) => ({
+    get: async (configDir: string): Promise<RateLimitUsage> => {
+      log.push(configDir)
+      return answers[configDir] ?? failed
+    }
+  })
   const svc = createAccountUsage({
     accounts: { list: () => accounts },
-    fetcher: {
-      get: async (configDir) => {
-        calls.push(configDir)
-        return answers[configDir] ?? failed
-      }
-    },
+    fetcher: fetcherLogging(calls),
+    codexFetcher: fetcherLogging(codexCalls),
     store: storeOverride ?? store,
     send: (_channel, payload) => sent.push(payload)
   })
-  return { svc, sent, calls }
+  return { svc, sent, calls, codexCalls }
 }
 
 describe('createAccountUsage', () => {
@@ -137,16 +145,35 @@ describe('createAccountUsage', () => {
     expect(svc.usage()['/cfg/spare']).toBeUndefined()
   })
 
-  // Codex usage is out of scope (§1). A skipped account is absent, which the row reads as "draw
-  // nothing" — and, just as importantly, its configDir is never sent to Anthropic's endpoint.
-  it('a codex account is neither fetched nor listed', async () => {
-    const { svc, calls } = harness(
+  // A codex account draws the same meter as a claude one, from codex's own endpoint. The routing is
+  // what this asserts: a codex configDir must never be sent to Anthropic's endpoint (its token comes
+  // out of a different file and would be a stranger's credential there), nor a claude one to codex's.
+  it('a codex account is fetched through the codex fetcher and listed', async () => {
+    const { svc, calls, codexCalls } = harness(
       [account('main', '/cfg/main'), account('cdx', '/cfg/cdx', 'codex')],
       { '/cfg/main': ok(12), '/cfg/cdx': ok(50) }
     )
     await svc.tick()
     expect(calls).toEqual(['/cfg/main'])
-    expect(svc.usage()['/cfg/cdx']).toBeUndefined()
+    expect(codexCalls).toEqual(['/cfg/cdx'])
+    expect(svc.usage()['/cfg/cdx']).toMatchObject({
+      session: { usedPercent: 50 },
+      remembered: false
+    })
+  })
+
+  // The codex counterpart of the fallback test above: an idle codex account answers 401 (auth.json is
+  // read-only here — only codex itself refreshes that token), and the row keeps its dimmed figure.
+  it('a failed codex fetch falls back to the stored reading, dimmed', async () => {
+    const accounts = [account('cdx', '/cfg/cdx', 'codex')]
+    await harness(accounts, { '/cfg/cdx': ok(41) }).svc.tick()
+
+    const second = harness(accounts, {}) // every answer is now 'unavailable'
+    await second.svc.tick()
+    expect(second.svc.usage()['/cfg/cdx']).toMatchObject({
+      session: { usedPercent: 41 },
+      remembered: true
+    })
   })
 
   it('an account with no provider field counts as claude', async () => {
@@ -181,6 +208,9 @@ describe('createAccountUsage', () => {
     const svc = createAccountUsage({
       accounts: { list: () => accounts },
       fetcher: {
+        get: () => Promise.reject(new Error('boom'))
+      },
+      codexFetcher: {
         get: () => Promise.reject(new Error('boom'))
       },
       store,

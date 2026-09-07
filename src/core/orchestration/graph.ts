@@ -67,3 +67,38 @@ export function layersOf(
   }
   return { layers, deps: Object.fromEntries(deps), cyclic: rest }
 }
+
+/** Every Task on the dependency chain that runs through `taskId`: what it waits on, what waits on
+ *  it, both all the way out, and the Task itself.
+ *
+ *  This is what the detail window dims by. A Run's graph answers "why is that not running", and
+ *  once there are a dozen Tasks the answer is buried in boxes that have nothing to do with each
+ *  other. Picking one and fading the rest turns the picture into "stop this, and these stop too".
+ *
+ *  **A sibling is not on the chain.** Two Tasks that merely wait on the same thing, or that the
+ *  same thing waits on, do not affect each other — so the set is ancestors and descendants, not
+ *  the connected component. That distinction is the whole reason this is worth drawing.
+ *
+ *  Cycles cannot be made by command (see layersOf), but orchestration.json outlives the process
+ *  and can be edited by hand. A Task already in the set is never expanded again, so a cycle ends
+ *  the walk instead of hanging the window. */
+export function chainOf(deps: Record<string, string[]>, taskId: string): Set<string> {
+  // deps only says what a Task waits on. Going the other way needs that read backwards, once.
+  const waiters = new Map<string, string[]>()
+  for (const [id, ds] of Object.entries(deps))
+    for (const d of ds) waiters.set(d, [...(waiters.get(d) ?? []), id])
+
+  const chain = new Set([taskId])
+  const walk = (next: (id: string) => string[]): void => {
+    const stack = [taskId]
+    for (let id = stack.pop(); id !== undefined; id = stack.pop())
+      for (const n of next(id))
+        if (!chain.has(n)) {
+          chain.add(n)
+          stack.push(n)
+        }
+  }
+  walk((id) => deps[id] ?? [])
+  walk((id) => waiters.get(id) ?? [])
+  return chain
+}

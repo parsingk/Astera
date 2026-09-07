@@ -32,6 +32,13 @@ export const ko = {
     '줄로 남습니다. git 저장소인 프로젝트에서만 작동합니다. 이미 열려 있는 세션에는 적용되지 ' +
     '않습니다. 새 세션부터 동작합니다. 켠 뒤의 대화만 봅니다. 이전 기록은 읽지 않습니다.',
   'settings.workUnit.saveFailed': '작업 단위 추적 설정을 저장하지 못했습니다: {detail}',
+  // 에이전트 브라우저
+  'settings.agentBrowser.label': '에이전트 브라우저 (실험)',
+  'settings.agentBrowser.hint':
+    '켜면 세션마다 자기 미리보기 탭을 갖고, 이 프로젝트의 개발 서버를 열고 새로고침하고 콘솔 오류를 읽을 수 있습니다. ' +
+    '모든 계정에 astera-browser 스킬을 설치합니다. localhost 만 열 수 있습니다. ' +
+    '이미 열려 있는 세션에는 적용되지 않습니다. 새 세션부터 동작합니다.',
+  'settings.agentBrowser.saveFailed': '에이전트 브라우저 설정을 저장하지 못했습니다: {detail}',
   // 설명 생성 (How It Works)
   'settings.gen.label': '설명 생성 계정',
   'settings.gen.hint': '선택한 계정으로 기능 설명을 만듭니다.',
@@ -217,9 +224,11 @@ export const ko = {
   'files.editor.keepMine': '내 편집 유지',
   'files.editor.loading': '불러오는 중…',
   'files.editor.selectPrompt': '트리에서 파일을 선택하세요',
-  // MarkdownPreview.tsx — 이미지 로드 실패·원격 이미지 안내
+  // MarkdownPreview.tsx — 이미지 로드 실패·원격 이미지 안내·코드 블록 복사 버튼
   'files.markdown.image.failed': '이미지를 열 수 없습니다',
   'files.markdown.renderError': '이 문서를 표시할 수 없습니다',
+  'files.markdown.copyCode': '코드 복사',
+  'files.markdown.codeCopied': '코드를 복사했습니다',
   // MarkdownSplit.tsx — 모드 툴바 버튼 세 개, 좌우 분할 리사이저
   'files.markdown.mode.editor': '편집기만',
   'files.markdown.mode.split': '편집기와 프리뷰',
@@ -388,6 +397,10 @@ export const ko = {
   'shortcut.gesture.itemDrag': '항목 드래그',
   'shortcut.explorer.move': '이동 · Ctrl 누르면 복사',
   'shortcut.explorer.undo': '되돌리기',
+  'shortcut.run.run': '실행',
+  'shortcut.run.stop': '실행 중지',
+  'shortcut.run.rerun': '선택한 실행 다시 실행',
+  'shortcut.run.selectConfig': '실행 구성 고르기',
   // useFileOps.ts, FileExplorer.tsx — file-operation action names (shared by the runBatch label and the menu labels)
   'files.action.delete': '삭제',
   'files.action.duplicate': '복제',
@@ -702,22 +715,33 @@ export const ko = {
   'run.config.more': '추가 동작',
   'run.action.run': '실행',
   'run.action.stop': '중지',
+  'run.action.rerun': '다시 실행',
+  'run.action.restart': '재시작',
   'run.global.listTitle': '실행 중 목록',
   'run.global.jump': '이동',
   // 오케스트레이션이 Task 를 판정하려고 띄운 실행이라는 라벨. 사용자가 시작한 실행과 구별되지
   // 않으면 정지시켜 그 Task 를 실패시킨다(core/run/config.ts 의 RunStatus.validation)
   'run.validation.tag': '검증',
-  // App.tsx runManagerSave — the text shown when the run.saveConfig IPC fails
+  // App.tsx runManagerApply — the text shown when the run.saveConfigs IPC throws
   'run.config.saveFailed': '저장 실패: {detail}',
-  // main/run/prepare.ts resolveRunCwd (run.start) and ipc.ts assertConfigCwd (run.saveConfig) — a
+  // main/run/prepare.ts resolveRunCwd (run.start) and ipc.ts assertConfigCwd (run.saveConfigs) — a
   // sentence main throws also shows up verbatim in a renderer toast, so it is translated here first (the layering rule)
   'run.config.cwdNotString': '실행 구성의 작업 폴더가 올바르지 않습니다',
   'run.config.cwdOutsideProject': '실행 구성의 작업 폴더는 프로젝트 안이어야 합니다',
   // ipc.ts run.start — 필수 항목이 빈 구성은 저장은 되지만 실행은 거부한다. {fields} 는 아래 run.field.* 라벨이다
   'run.start.incomplete': '실행 구성의 필수 항목이 비어 있습니다: {fields}',
+  'run.start.cycle': '실행 구성이 서로를 기다립니다: {path}',
+  'run.start.missingTask': '{name} 이(가) 가리키는 실행 구성이 없습니다',
+  'run.start.compoundNotRunnable': '묶음 구성은 여기서 실행할 수 없습니다 — 명령이 하나여야 합니다',
+  'run.start.stepFailed': '{name} 을(를) 시작하지 못했습니다: {detail}',
+  'run.explorer.runFile': '{name} 실행',
+  'run.runFile.notRunnable': '{name} 은(는) 실행할 수 있는 파일이 아닙니다',
+  'run.runFile.refused': '{name} 을(를) 실행 구성으로 저장할 수 없습니다: {detail}',
   // RunConfigForm.tsx — name field and the JDK/file pickers shared by every per-kind form.
   // 종류별 필드 라벨은 shell 의 명령까지 모두 아래 run.field.* 에 모여 있다
   'run.form.nameLabel': '이름',
+  'run.form.folder': '폴더',
+  'run.form.folderNone': '(폴더 없음)',
   'run.form.jdkLoading': 'JDK 조회 중…',
   'run.form.jdkNone': '사용 안 함 (앱 환경 그대로)',
   'run.form.jdkCustom': '{path} (직접 지정)',
@@ -749,6 +773,29 @@ export const ko = {
   'run.manager.duplicate': '복제',
   // 시드를 고치면 그 순간 사용자 구성 사본으로 승격된다(promoteSeed) — 더 이상 읽기 전용이 아니다
   'run.manager.seedHint': '자동 감지된 구성을 수정하면 사용자 구성 사본으로 저장됩니다.',
+  'run.manager.search': '구성 검색',
+  'run.manager.apply': '적용',
+  'run.manager.ok': '확인',
+  'run.manager.discardTitle': '변경 사항을 버릴까요?',
+  'run.manager.discardBody': '적용하지 않은 편집이 있습니다. 버리면 되돌릴 수 없습니다.',
+  'run.manager.discard': '버리기',
+  'run.manager.keepEditing': '계속 편집',
+  // The tree's markers, as tooltips
+  'run.manager.markDirty': '적용되지 않은 변경',
+  'run.manager.markIncomplete': '필수 항목이 비어 있어 실행할 수 없습니다',
+  'run.manager.markBrokenRef': '가리키는 구성이 없어 실행할 수 없습니다',
+  'run.manager.markTemporary': '임시 구성입니다 — 고치면 남습니다',
+  'run.manager.newFolder': '새 폴더로',
+  'run.manager.moveUp': '위로',
+  'run.manager.moveDown': '아래로',
+  // The name a new folder starts with; the tree appends a number when it is taken
+  'run.manager.folderNameDefault': '새 폴더',
+  'run.manager.renameFolder': '폴더 이름 바꾸기',
+  // Why Apply refused, by reason code (core/run/types.ts SaveReason); shown left of the buttons
+  'run.manager.reason.INVALID_CONFIG': '{name}: 저장할 수 없는 구성입니다',
+  'run.manager.reason.UNSAFE_VALUE': '{name}: 명령에 들어가는 값에 Windows 셸이 해석하는 문자(& | ^ % ! < >)가 있습니다',
+  'run.manager.reason.INVALID_CWD': '{name}: 작업 폴더는 프로젝트 안이어야 합니다',
+  'run.manager.reason.INVALID_PREVIEW_URL': '{name}: 미리보기 URL 은 http:// 또는 https:// 로 시작하는 주소여야 합니다',
   'run.type.shell': 'Shell',
   'run.type.npm': 'npm',
   'run.type.node': 'Node.js',
@@ -761,12 +808,23 @@ export const ko = {
   'run.type.compose': 'Docker Compose',
   'run.type.dockerfile': 'Dockerfile',
   'run.type.dotnet': '.NET',
+  'run.type.compound': 'Compound',
   // RunConfigForm.tsx / RunTypePicker.tsx (Task 7) — per-kind field labels and the ＋ kind-picker popup.
   'run.field.javaHome': 'JDK',
   'run.field.springProfiles': 'Spring 프로파일',
   'run.field.args': '인자',
   'run.field.cwd': '작업 폴더',
   'run.field.env': '환경변수',
+  'run.field.members': '멤버',
+  // EnvTable.tsx — the Key/Value table that edits a configuration's environment variables
+  'run.env.key': '키',
+  'run.env.value': '값',
+  'run.env.addRow': '행 추가',
+  'run.env.removeRow': '행 삭제',
+  'run.env.issue.emptyKey': '키가 비어 있어 저장되지 않습니다',
+  'run.env.issue.shadowed': '아래의 같은 키가 이 값을 덮어씁니다',
+  'run.field.allowMultipleInstances': '여러 인스턴스 허용',
+  'run.field.previewUrl': '미리보기 URL',
   // 종류별 필수 필드. shell 의 command 도 여기 있어야 run.start 의 "빈 필수 항목" 메시지가
   // run.field.<이름> 으로 라벨을 찾을 수 있다 (migrate.ts 의 REQUIRED 에 있는 이름은 모두 여기 있다)
   'run.field.command': '명령',
@@ -798,20 +856,93 @@ export const ko = {
   // 않도록 '프로젝트 파일'로 적는다. subcommand 는 비면 run 이다
   'run.field.project': '프로젝트 파일',
   'run.field.configuration': '빌드 구성',
+  'run.section.configuration': '구성',
+  'run.section.environment': '환경',
+  'run.section.beforeLaunch': '실행 전 작업',
+  'run.ref.add': '추가',
+  'run.ref.remove': '목록에서 빼기',
+  'run.ref.none': '추가할 수 있는 구성이 없습니다',
+  'run.menu.recent': '최근',
+  'run.menu.detected': '감지됨',
+  'run.menu.temporary': '임시',
+  'run.menu.running': '{count}개 실행 중',
+  'run.menu.edit': '{name} 편집…',
   'run.picker.search': '검색…',
   'run.picker.detected': '이 프로젝트에서 감지됨',
   'run.picker.other': '기타',
   'run.form.addOption': '선택 항목 추가',
-  // BottomPanel.tsx — the Run tab label in the tab strip (the default for the configName slot when no run is active),
-  // clear and collapse buttons. The header RunPanel.tsx used to own moved into BottomPanel; RunPanel.tsx itself remains as the body.
-  // noActiveRun was originally that header status text, and BottomPanel's Run tab label has the same value, so it is reused
-  // (a separately added terminal.tab.run was an exact duplicate of the value and was cleaned up).
-  'run.panel.noActiveRun': '실행',
-  'run.panel.exited': ' · 종료(코드 {code})',
-  // 종료된 실행에만 붙는 ✕ — 실행 중에는 그리지 않는다(⏹ 로 먼저 정지시킨다)
-  'run.panel.close': '실행 탭 닫기',
+  'run.panel.tab': '실행',
+  'run.panel.empty': '아직 실행이 없습니다 — 툴바의 ▶ 로 시작하세요',
+  'run.panel.exitCode': '종료 {code}',
+  'run.panel.stopping': '정지 중…',
+  'run.panel.close': '실행 닫기',
+  'run.panel.openPreview': '{url} 미리보기로 열기',
+  'run.panel.previewFound': '{url} 이(가) 떴습니다',
+  'run.panel.previewOpen': '미리보기로 열기',
   'run.panel.clear': '지우기',
   'run.panel.collapse': '접기',
+  'run.find.placeholder': '출력에서 찾기',
+  'run.find.count': '{n} / {total}',
+  'run.find.countMany': '{total}개',
+  'run.find.noResults': '결과 없음',
+  'run.find.prev': '이전 일치',
+  'run.find.next': '다음 일치',
+  'run.find.close': '찾기 닫기',
+  'run.rail.scrollToEnd': '끝으로',
+  'run.rail.find': '찾기',
+  'run.rail.rerunGone': '구성이 삭제되었습니다',
+  // ---- preview ----
+  'preview.tab.untitled': '미리보기',
+  'preview.toolbar.back': '뒤로',
+  'preview.toolbar.forward': '앞으로',
+  'preview.toolbar.reload': '새로고침',
+  'preview.toolbar.stop': '중지',
+  'preview.toolbar.address': '주소',
+  'preview.toolbar.devtools': 'DevTools',
+  'preview.toolbar.openExternal': '외부 브라우저로 열기',
+  'preview.viewport.label': '화면 폭',
+  'preview.viewport.fill': '패널 크기',
+  'preview.viewport.mobileS': '모바일 S',
+  'preview.viewport.mobileM': '모바일 M',
+  'preview.viewport.mobileL': '모바일 L',
+  'preview.viewport.tablet': '태블릿',
+  'preview.viewport.laptop': '노트북',
+  'preview.viewport.laptopL': '노트북 L',
+  'preview.viewport.desktop': '데스크톱',
+  'preview.viewport.rotate': '가로세로 전환',
+  'preview.menu.copyAddress': '주소 복사',
+  'preview.menu.inspect': '요소 검사',
+  'preview.waiting': '서버를 기다리는 중…',
+  'preview.error.unreachable': '{host} 이(가) 응답하지 않습니다',
+  'preview.error.failed': '페이지를 열 수 없습니다: {detail}',
+  'preview.error.crashed': '페이지가 멈췄습니다',
+  'preview.error.retry': '다시 시도',
+  'preview.design.toggle': 'Design Mode',
+  'preview.design.tray.title': '메모 {count}',
+  'preview.design.send': '세션에 보내기',
+  'preview.design.copy': '복사',
+  'preview.design.edit': '{seq}번 메모 고치기',
+  'preview.design.save': '저장',
+  'preview.design.cancel': '취소',
+  'preview.design.close': '메모 입력 닫기',
+  'preview.design.collapse': '메모 접기',
+  'preview.design.clear': '모두 지우기',
+  'preview.design.delete': '이 메모 삭제',
+  'preview.design.comment': '무엇을 바꿀까요?',
+  'preview.design.intent.change': 'Change',
+  'preview.design.intent.question': 'Question',
+  'preview.design.intent.label': '의도',
+  'preview.design.limit': '메모는 탭마다 {max}개까지입니다',
+  'preview.design.noSession': '이 프로젝트에 열린 세션이 없습니다',
+  'preview.design.sent': '{name} 세션으로 보냈습니다',
+  'preview.design.sendWaiting': '{name} 세션이 무언가를 묻고 있어 보내지 않았습니다. 답한 뒤 다시 보내세요',
+  'preview.design.sendFailed': '그 세션의 터미널이 없습니다',
+  'preview.design.copied': '복사했습니다',
+  'preview.design.shotFailed': '스크린샷을 찍지 못했습니다',
+  'preview.agent.tab': '에이전트',
+  'preview.agent.running': '에이전트가 이 페이지를 조작하고 있습니다',
+  'preview.agent.stop': '에이전트 스크립트 중단',
+  'preview.agent.stopped': '에이전트 스크립트를 중단했습니다',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
   'terminal.rail.open': '터미널',
   'terminal.tab.label': '터미널 {n}',
@@ -988,6 +1119,7 @@ export const ko = {
   // 선 색의 뜻. 아이콘과 달리 선에는 툴팁을 달 곳이 없어 그래프 아래에 두 줄로 적는다
   'jobs.detail.edgeWaiting': '기다리는 중인 의존',
   'jobs.detail.edgeResolved': '이미 풀린 의존',
+  'jobs.detail.layer': '{n} 층',
   // NewRunModal.tsx — 사이드바의 '+ 새 작업'이 여는 Run 생성 폼의 문구. jobs.new.concurrency 는
   // 프로젝트 전체가 아니라 이 Run 하나가 동시에 열어 둘 워커 수의 상한이다 — 다른 동시 실행
   // 설정과 자리가 다르므로 섞어 쓰면 안 된다.
