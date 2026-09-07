@@ -923,7 +923,6 @@ export function BrowserPane({
           return (
             <div className="bp-agent-cursor" aria-hidden="true" style={{ transform: `translate(${at.left}px, ${at.top}px)` }}>
               {pointer && pointer.kind === 'click' && <span key={pointer.seq} className="bp-agent-ripple" />}
-              <span className="bp-agent-halo" />
               {/* The tip of the arrow is the point: the path starts at (1,1), scaled 1.5x by the viewBox. */}
               <svg width="24" height="33" viewBox="0 0 16 22">
                 <path d="M1 1 L1 17 L5.5 12.5 L9 20 L11.5 19 L8 11.5 L14 11.5 Z" fill="#000" stroke="#fff" strokeWidth="1.5" strokeLinejoin="round" />
