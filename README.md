@@ -94,36 +94,30 @@
 - Only work done after you turned the feature on in settings is recorded
 
 **Design Mode**
-- Turn on **Design Mode** in the preview toolbar and pick elements on the page. Hovering highlights one;
-  clicking pins a numbered badge to it and opens a note beside it — answer "What should change?" and
+- Turn on **Design Mode** on the web page tab and pick elements on the page. Hovering highlights one;
+  clicking pins a numbered badge to it and opens a note beside it. Answer "What should change?" and
   mark the intent **Change** or **Question**
-- Up to twenty notes per tab, and numbers are never reassigned — a note that says "like 3" has to stay
-  true. Going to another route and back keeps the list, and the badges reappear on that page
-- **Send to session** pastes every note as one markdown block into the session you choose (straight
-  away with one session, a pick with several). If that session is waiting on a question, it is not
-  sent and you are told. **Copy** puts the same block on the clipboard
+- Up to twenty notes per tab, and numbers are never reassigned.
+- **Send to session** pastes every note as one markdown block into the session you choose.
 - Each note carries the element's selector, position, styles and HTML, its nearby text with secrets
-  redacted, and the path of a screenshot cropped to that element — the agent looks at the element
+  redacted, and the path of a screenshot cropped to that element. The agent looks at the element
   instead of reading a description of it
-- Design Mode turns itself off when the page navigates away. `Esc` turns it off too
+- Design Mode turns itself off when the page navigates away.
 
 **Agent browser (experimental)**
-- The session's agent gets a preview tab of its own and drives it: open a page on this project's dev
-  server, reload it after a change, read its address and title, and read back what the console and the
-  network reported since that load
-- It drives the tab by sending a small JavaScript script — `astera browser js --file check.js` — whose
-  only vocabulary is those helpers. "Does the page still render, and is the console clean" becomes
-  something the agent answers by looking, instead of something it asks you to check
-- The tab is a real tab in your window, marked as the agent's and shown busy while a script runs. You
-  can watch it, and clicking into it is fine — the next script sees the page as you left it
-- **This machine only.** `open()` takes `localhost`, `127.x`, `[::1]`, `*.localhost` and the two
-  wildcard addresses; anything else is refused, and so is a link on the page — or a redirect from the
-  dev server — that would leave
-- One script at a time per session, 60 seconds per script. The tab closes with its session
+- The session's agent gets a web page tab of its own and drives it itself. It opens a page on the dev
+  server, reloads it after a change, reads its address and title, and reads back what the console and
+  the network reported since that load.
+- "Does the page still render, and is the console clean" becomes something the agent can answer by
+  looking, instead of something it asks you to check.
+- The agent's web page tab takes `localhost`, `127.x`, `[::1]`, `*.localhost` and the two wildcard
+  addresses; anything else is refused, and so is a link on the page, or a redirect from the dev server,
+  that would leave
+- The tab closes with its session
 - Reading, for now: no clicking, typing or screenshots. Those arrive in later stages
 - Off by default. Turn on **Agent browser** in settings and it installs the `astera-browser` skill
   into your accounts, the way the other two features install theirs. It does not apply to sessions
-  that are already open — only new sessions get it
+  that are already open. Only new sessions get it
 
 **Editor and shortcuts**
 - One key shows and hides the explorer — `Ctrl`/`Cmd`+`Shift`+`E` for the file tree, the run toolbar

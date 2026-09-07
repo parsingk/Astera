@@ -95,38 +95,30 @@
 - Solo se registra el trabajo hecho después de activar la función en los ajustes
 
 **Design Mode**
-- Activa **Design Mode** en la barra de la vista previa y elige elementos en la página. Al pasar por
-  encima se resalta uno; al pulsarlo se le fija una insignia numerada y se abre una nota al lado:
-  responde a "¿Qué debería cambiar?" y marca la intención como **Change** o **Question**
-- Hasta veinte notas por pestaña, y los números nunca se reasignan: una nota que dice "como la 3"
-  tiene que seguir siendo cierta. Ir a otra ruta y volver conserva la lista, y las insignias
-  reaparecen en esa página
-- **Enviar a la sesión** pega todas las notas como un solo bloque de markdown en la sesión que elijas
-  (directamente si hay una, eligiendo si hay varias). Si esa sesión está esperando una respuesta, no
-  se envía y se te avisa. **Copiar** deja el mismo bloque en el portapapeles
+- Activa **Design Mode** en la pestaña de página web y elige elementos en la página. Al pasar por
+  encima se resalta uno; al pulsarlo se le fija una insignia numerada y se abre una nota al lado.
+  Responde a "¿Qué debería cambiar?" y marca la intención como **Change** o **Question**
+- Hasta veinte notas por pestaña, y los números nunca se reasignan.
+- **Enviar a la sesión** pega todas las notas como un solo bloque de markdown en la sesión que elijas.
 - Cada nota lleva el selector, la posición, los estilos y el HTML del elemento, el texto cercano con
-  los secretos ocultados, y la ruta de una captura recortada a ese elemento: la agente mira el
+  los secretos ocultados, y la ruta de una captura recortada a ese elemento. La agente mira el
   elemento en vez de leer una descripción
-- Design Mode se apaga solo cuando la página navega a otro sitio. `Esc` también lo apaga
+- Design Mode se apaga solo cuando la página navega a otro sitio.
 
 **Navegador del agente (experimental)**
-- La agente de la sesión tiene una pestaña de vista previa propia y la maneja ella misma: abre una
-  página del servidor de desarrollo de este proyecto, la recarga tras un cambio, lee su dirección y su
-  título, y vuelve a leer lo que la consola y la red registraron desde esa carga
-- La maneja enviando un pequeño script de JavaScript — `astera browser js --file check.js` — cuyo único
-  vocabulario son esos helpers. "¿Sigue pintándose la página y está limpia la consola?" pasa a ser algo
-  que la agente responde mirando, en vez de algo que te pide comprobar
-- La pestaña es una pestaña real de tu ventana, marcada como de la agente y mostrada como ocupada
-  mientras corre un script. Puedes mirarla, y hacer clic dentro no molesta: el siguiente script ve la
-  página tal como la dejaste
-- **Solo esta máquina.** `open()` acepta `localhost`, `127.x`, `[::1]`, `*.localhost` y las dos
-  direcciones comodín; cualquier otra se rechaza, igual que un enlace de la página —o una redirección
-  del servidor de desarrollo— que quiera salir
-- Un script a la vez por sesión, 60 segundos por script. La pestaña se cierra con su sesión
+- La agente de la sesión tiene una pestaña de página web solo para ella y la maneja ella misma. Abre
+  una página del servidor de desarrollo, la recarga tras un cambio, lee su dirección y su título, y
+  vuelve a leer lo que la consola y la red registraron desde esa carga.
+- "¿Sigue pintándose la página y está limpia la consola?" pasa a ser algo que la agente puede
+  responder mirando, en vez de algo que te pide comprobar.
+- La pestaña de página web de la agente acepta `localhost`, `127.x`, `[::1]`, `*.localhost` y las dos
+  direcciones comodín; cualquier otra se rechaza, igual que un enlace de la página, o una redirección
+  del servidor de desarrollo, que quiera salir
+- La pestaña se cierra con su sesión
 - Por ahora solo lee: sin clics, escritura ni capturas. Eso llega en etapas posteriores
 - Desactivado por defecto. Activa **Navegador del agente** en la configuración e instalará la skill
   `astera-browser` en tus cuentas, como hacen las otras dos funciones con las suyas. No se aplica a las
-  sesiones ya abiertas: solo las nuevas la reciben
+  sesiones ya abiertas. Solo las nuevas la reciben
 
 **Editor y atajos**
 - Una tecla muestra y oculta el explorador: `Ctrl`/`Cmd`+`Shift`+`E` para el árbol de archivos, la
