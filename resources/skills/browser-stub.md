@@ -1,6 +1,6 @@
 ---
 name: astera-browser
-description: Open and check the web app this project is developing, in a browser the agent controls. Use when the person asks to open the page, see whether it renders, check the console for errors, reload after a change, or (later) click through a flow — on this project's own dev server (localhost). Not for the open web.
+description: Open and check the web app this project is developing, in a browser the agent controls. Use when the person asks to open the page, see whether it renders, check the console for errors, reload after a change, or click through a flow — on this project's own dev server (localhost). Not for the open web.
 ---
 
 <!-- managed by Astera — the app owns this file. Local edits are overwritten on the next launch.
@@ -25,8 +25,9 @@ cannot drift from the installed version.
    where `check.js` is, for example:
    ```js
    await open()
+   await click('#login')
+   await waitFor('.dashboard')
    log(await consoleErrors())
-   log(await networkErrors())
    ```
    `open()` with no address opens this project's dev server as started from Astera's Run — that is
    how you know which localhost port is yours. If none is running there, it says so; pass the address

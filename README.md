@@ -114,7 +114,7 @@
   addresses; anything else is refused, and so is a link on the page, or a redirect from the dev server,
   that would leave
 - The tab closes with its session
-- Reading, for now: no clicking, typing or screenshots. Those arrive in later stages
+- It reads the page as text (a snapshot) and looks at it as an image (a screenshot), clicks elements, fills values, presses keys and waits
 - Off by default. Turn on **Agent browser** in settings and it installs the `astera-browser` skill
   into your accounts, the way the other two features install theirs. It does not apply to sessions
   that are already open. Only new sessions get it

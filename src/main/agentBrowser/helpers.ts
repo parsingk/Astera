@@ -1,9 +1,17 @@
-// The stage-1 helper set an agent's script sees. Each is bound to one session's guest through `deps`;
-// each sets ctx.at first so a failure names it. Stage 2 adds snapshot/screenshot, stage 3 the acting
-// helpers, in this same shape.
+// The helper set an agent's script sees. Each is bound to one session's guest through `deps`; each
+// sets ctx.at first so a failure names it. Reading the page (snapshot/screenshot) and acting on it
+// (click/fill/press/waitFor) are here too, in the same shape.
+//
+// Nothing here may import `electron`, directly or transitively: this file's tests run under vitest's
+// node environment, where `electron` cannot load. That is why `savePng` lives in an Electron-free
+// module and why `GuestDriver` describes what a WebContents must offer structurally.
 import { agentOpenTarget } from '../../core/agentBrowser/urls'
-import { WAIT_TIMEOUT_MS, withTimeout, type LogSink } from '../../core/agentBrowser/script'
+import { Interrupted, WAIT_TIMEOUT_MS, withTimeout } from '../../core/agentBrowser/script'
 import type { RunContext } from '../../core/agentBrowser/scriptRunner'
+import { clampSnapshot, type Snapshot } from '../../core/agentBrowser/snapshot'
+import { clickScript, fillScript, pressScript, snapshotScript, waitForScript } from '../../core/agentBrowser/guestScripts'
+import { sanitizeUrl } from '../../core/preview/pick/payload'
+import { savePng, type CapturedImage } from '../preview/shots'
 import type { AgentBuffers } from './buffers'
 
 type Listener = (...a: unknown[]) => void
@@ -17,6 +25,13 @@ export interface GuestDriver {
   isLoading(): boolean
   once(event: 'did-finish-load' | 'did-fail-load' | 'did-stop-loading', cb: Listener): unknown
   removeListener(event: string, cb: Listener): unknown
+  /** Runs an expression in the page and resolves with its value. Rejects while the frame is
+   *  navigating, and when the page throws. */
+  executeJavaScript(code: string): Promise<unknown>
+  /** The visible page as an image. Only a page that is being **drawn** can be photographed, and a
+   *  guest whose tab is in the background is not drawn at all: the answer is then a zero-size image,
+   *  a viz error, or nothing at all — so callers make the tab paintable, retry, and race it. */
+  capturePage(): Promise<CapturedImage>
 }
 
 /** A dev server the project has running, as far as Astera can tell: a Run that printed a loopback
@@ -47,9 +62,148 @@ export interface HelperDeps {
    *  server has booted, which is after the wiring runs, so a value captured there would be `''`
    *  forever. */
   guide: string
+  /** Where screenshot() writes — the same folder the Claude session was spawned with --add-dir for,
+   *  so the path it returns opens without a permission prompt. */
+  shotsDir: string
 }
 
 const NO_PAGE = 'no page open — call open(url) first'
+
+/** How long a screenshot may take before it is called off. Measured in Electron 41.7.1 on Windows:
+ *  a guest made paintable answers on the first or second try, 17-166 ms — but one made paintable
+ *  while the window is **minimised** held a single capturePage pending for 100 s before answering.
+ *  The script deadline would end such a run eventually; this names the cause instead. */
+export const SHOT_TIMEOUT_MS = 5_000
+
+/** How long to wait before asking for another frame. A guest that has just been made paintable
+ *  answers UnknownVizError, or an image with no pixels, for a frame or two first. */
+const SHOT_RETRY_MS = 50
+
+const refused = (at: string, err: unknown): Error =>
+  new Error(`${at}: the page refused the call (${err instanceof Error ? err.message : String(err)})`)
+
+/** How often a pre-wait asks the guest whether it is still loading. */
+const LOADING_POLL_MS = 25
+
+/** Waits until the guest stops reporting itself as loading, by **asking** rather than by waiting for
+ *  a load event. Bounded by WAIT_TIMEOUT_MS and reporting the same `Interrupted` as every other wait
+ *  here, so the deadline's wording and `at` do not change.
+ *
+ *  The distinction from `loadEnds` is the whole point, and getting it wrong broke the first sequence
+ *  in the guide. `loadEnds` belongs where this code *starts* a navigation — open, reload, waitForLoad
+ *  — because there an event is genuinely still to come. A pre-wait starts nothing: it only wants to
+ *  know whether the guest is busy right now. And `isLoading()` keeps reading true for a moment after
+ *  `did-finish-load` has already fired, so a pre-wait built on the event armed a listener for a load
+ *  that was already in the past and then sat out the full deadline — `await open(); await snapshot()`
+ *  failed after 30 s against a page that was complete and answering. Asking cannot miss an event,
+ *  because it does not depend on one. */
+function loadSettles(g: GuestDriver, at: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const settled = new Promise<void>((resolve) => {
+    const tick = (): void => {
+      if (!g.isLoading()) {
+        resolve()
+        return
+      }
+      timer = setTimeout(tick, LOADING_POLL_MS)
+    }
+    tick()
+  })
+  // Whichever way this settles, the poll stops. A deadline that fired would otherwise leave a timer
+  // re-arming itself against the guest for the rest of the session — the same reason loadEnds
+  // removes its listeners on every exit path.
+  return withTimeout(settled, WAIT_TIMEOUT_MS, at).finally(() => clearTimeout(timer))
+}
+
+/** Why no frame arrived, in the agent's own terms. The cause worth naming is the minimised window —
+ *  that is what was measured — and a guest destroyed mid-run, because the user closed the tab, rejects
+ *  every call instead, so its own last word is worth carrying too. Both, not one: naming only the
+ *  window sent the agent looking at the wrong thing for a closed tab, and reporting only the guest's
+ *  word left it holding `UnknownVizError`, a bare Chromium string that says nothing about what to do —
+ *  which is what the minimised window actually produced in the app. The deadline is interpolated so
+ *  changing SHOT_TIMEOUT_MS cannot leave the message lying. */
+const noPaint = (at: string, last: unknown): Error =>
+  new Error(
+    `${at}: the page did not paint within ${SHOT_TIMEOUT_MS / 1000} s — the window may be minimised` +
+      (last === undefined ? '' : ` (the last capture failed: ${last instanceof Error ? last.message : String(last)})`)
+  )
+
+/** Asks the guest for frames until one has pixels, or the deadline passes — and then throws the
+ *  message the agent reads (`noPaint`), rather than a deadline the caller has to translate.
+ *
+ *  Only a page that is being **drawn** can be photographed, and the agent's tab is a background tab
+ *  by design — the agent must never take the tab or the window the user is on. The renderer answers
+ *  that by drawing the tab, invisibly, for as long as a script is running (PaneGrid's browser slots),
+ *  so by the time a script calls screenshot() the page is usually already producing frames. It is not
+ *  always: a guest that has just become paintable answers UnknownVizError, or an image with no
+ *  pixels, for a frame or two first — measured in Electron 41.7.1 on Windows, where a guest inside a
+ *  display:none slot answers 0x0 for as long as it stays there (stayHidden makes no difference and a
+ *  frame subscription delivers no frames at all), and one just made paintable answered on the first
+ *  or second try, 17-166 ms. So a viz error and an empty frame are both "not yet", not failures.
+ *
+ *  Every capturePage is raced separately against what is left of the deadline: a single call can hang
+ *  far past it — 100 s, measured, for a guest made paintable while the window was minimised — and a
+ *  loop that only checked the clock between calls would sit inside that one call. */
+async function firstFrame(g: GuestDriver, at: string): Promise<CapturedImage> {
+  const deadline = Date.now() + SHOT_TIMEOUT_MS
+  let last: unknown
+  for (;;) {
+    const left = deadline - Date.now()
+    if (left <= 0) throw noPaint(at, last)
+    try {
+      const image = await withTimeout(g.capturePage(), left, at)
+      const { width, height } = image.getSize()
+      if (width > 0 && height > 0) return image
+      // An empty frame is an answer: the guest is alive and simply not drawing yet, so an error kept
+      // from an earlier try no longer describes anything. Left standing, the viz error a guest answers
+      // on its first frame or two would go on to explain a deadline it had nothing to do with.
+      last = undefined
+    } catch (err) {
+      // The deadline is the one rejection that ends this; anything else the guest says is "not yet",
+      // and kept in case the deadline arrives with nothing better to report.
+      if (err instanceof Interrupted) throw noPaint(at, last)
+      last = err
+    }
+    await new Promise((r) => setTimeout(r, SHOT_RETRY_MS))
+  }
+}
+
+/** Runs one guest-side script for a helper. Waits for a load in progress first — executeJavaScript
+ *  rejects while the frame is navigating, which is exactly the state a click() that navigates leaves
+ *  for the next helper.
+ *
+ *  A rejection is then one of three things Electron does not distinguish: the script never ran, or it
+ *  ran and its own side effect navigated — tearing the frame down before the reply could be
+ *  serialised — or the page threw. The message is the same for all three ("Script failed to
+ *  execute…"), so what the script *is* has to decide, and `mayResend` carries that answer.
+ *
+ *  A pure read (snapshot, waitFor) is re-sent when the guest turns out to be navigating: the worst a
+ *  second read can do is describe the newer page. isLoading() is the signal, and the address is
+ *  checked as well because a fast localhost navigation can already have committed by then. A script
+ *  that changes the page is sent once and never again — that same state is the *successful* path for
+ *  a click that navigates, so re-sending clicked a second time wherever the destination page matched
+ *  the selector too (a shared header does), and reported `click: nothing matches` where it did not: a
+ *  click that worked, described as a selector that does not exist. `refused` is the wording the guide
+ *  has taught the agent to check with snapshot() before repeating, so that is the answer instead. */
+async function inGuest(g: GuestDriver, at: string, script: string, mayResend: boolean): Promise<unknown> {
+  if (g.isLoading()) await loadSettles(g, at)
+  const before = g.getURL()
+  try {
+    return await g.executeJavaScript(script)
+  } catch (first) {
+    if (!mayResend) throw refused(at, first)
+    if (!g.isLoading() && g.getURL() === before) throw refused(at, first)
+    if (g.isLoading()) await loadSettles(g, at)
+    try {
+      return await g.executeJavaScript(script)
+    } catch (second) {
+      // Two refusals across a navigation: the page has answered.
+      throw refused(at, second)
+    }
+  }
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null
 
 /** Which helpers return a value rather than a promise. `runs.ts` needs this and cannot work it out
  *  for itself: a run that has been cut off parks its helpers on a promise that never settles, which
@@ -176,7 +330,7 @@ function section(guide: string, name: string): string | null {
   return lines.slice(start, end).join('\n').trimEnd()
 }
 
-export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink): Record<string, unknown> {
+export function browserHelpers(deps: HelperDeps, ctx: RunContext): Record<string, unknown> {
   const need = (): GuestDriver => {
     const g = deps.guest()
     if (!g) throw new Error(NO_PAGE)
@@ -229,6 +383,93 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
     async close(): Promise<void> {
       ctx.at = 'close'
       deps.closeTab()
+    },
+    async snapshot(): Promise<Snapshot> {
+      ctx.at = 'snapshot'
+      const g = need()
+      const snap = clampSnapshot(await inGuest(g, ctx.at, snapshotScript(), true))
+      if (!snap) throw new Error('snapshot: the page returned nothing readable')
+      return snap
+    },
+    async screenshot(): Promise<{ path: string; width: number; height: number }> {
+      ctx.at = 'screenshot'
+      const g = need()
+      if (g.isLoading()) await loadSettles(g, ctx.at)
+      // The literal, not ctx.at: this line runs after an await, and withAtReset sets ctx.at back to
+      // 'script' when any helper resolves — so a script awaiting two helpers at once could attribute
+      // this failure to whichever finished first. The sites that read ctx.at do it before their first
+      // await, where it cannot have moved.
+      const image = await firstFrame(g, 'screenshot')
+      // A write that fails — ENOSPC, EACCES, a folder that is a file — is this helper's failure to
+      // report, not a raw Node error arriving under `at: 'screenshot'` with nobody's name on it.
+      const saved = await savePng(image, deps.shotsDir).catch((err: unknown) => {
+        throw new Error(`screenshot: the capture could not be saved (${err instanceof Error ? err.message : String(err)})`)
+      })
+      // savePng answers null for an image with no pixels, which is the one thing firstFrame does not
+      // return — so this is the type narrowing rather than a state a capture can reach.
+      if (!saved) throw new Error('screenshot: the capture came back empty')
+      return saved
+    },
+    async click(sel: unknown): Promise<void> {
+      ctx.at = 'click'
+      const g = need()
+      const s = String(sel)
+      const first = await inGuest(g, ctx.at, clickScript(s, false), false)
+      if (!isRecord(first) || first.found !== true) throw new Error(`click: nothing matches ${s}`)
+      // The page reports a control that cannot be clicked rather than letting el.click() dispatch
+      // nothing and answering as though it had.
+      if (first.disabled === true) throw new Error(`click: ${s} is disabled`)
+      if (typeof first.href === 'string') {
+        // The page reports a link and does not follow it; whether it may be followed is decided here,
+        // by the one loopback rule, and the will-navigate guard in preview/guest.ts stays the backstop.
+        if (!agentOpenTarget(first.href)) {
+          // An href this machine may not open is only a link that *leaves* this machine when it is a
+          // page address at all. sanitizeUrl answers '' for anything but http(s), and `javascript:` —
+          // the ordinary way to spell a button as an anchor — is not a navigation this rule governs:
+          // refusing it named no address and gave a reason that was untrue. So only an http(s) href
+          // is refused; the rest fall through and are clicked plainly.
+          //
+          // Two things this decision leans on, neither of them visible from here. It needs a
+          // **resolved absolute** address from the guest — clickRuntime sends `a.href`, not the
+          // attribute, and the comment there says why: a protocol-relative `//example.com/x` is not
+          // an http(s) address as written, so the attribute would fall through to the plain click
+          // below. And it reads sanitizeUrl's '' as "not an http(s) address", which is what that
+          // function answers for every other scheme and for anything that does not parse.
+          const address = sanitizeUrl(first.href)
+          if (address !== '') throw new Error(`click: the link leaves this machine (${address})`)
+        }
+        // The literal for the same reason as screenshot()'s: this is past an await.
+        await inGuest(g, 'click', clickScript(s, true), false)
+      }
+    },
+    async fill(sel: unknown, text: unknown): Promise<void> {
+      ctx.at = 'fill'
+      const g = need()
+      const s = String(sel)
+      const r = await inGuest(g, ctx.at, fillScript(s, String(text)), false)
+      if (!isRecord(r) || r.found !== true) throw new Error(`fill: nothing matches ${s}`)
+      // fillRuntime reports 'no option has that value' or 'not an input, textarea, select or editable
+      // element'; these two branches turn them into the messages the guide documents.
+      if (typeof r.error === 'string') {
+        throw new Error(r.error === 'no option has that value' ? `fill: ${s} has no option with that value` : `fill: ${s} is ${r.error}`)
+      }
+    },
+    async press(key: unknown): Promise<void> {
+      ctx.at = 'press'
+      const g = need()
+      if (typeof key !== 'string' || key === '') throw new Error('press: key must be a non-empty string')
+      await inGuest(g, ctx.at, pressScript(key), false)
+    },
+    async waitFor(selOrMs: unknown): Promise<void> {
+      ctx.at = 'waitFor'
+      const g = need()
+      if (typeof selOrMs === 'number' && Number.isFinite(selOrMs)) {
+        await new Promise((r) => setTimeout(r, Math.max(0, Math.min(selOrMs, WAIT_TIMEOUT_MS))))
+        return
+      }
+      if (typeof selOrMs !== 'string' || selOrMs === '') throw new Error('waitFor: expects a selector or a number of milliseconds')
+      const r = await inGuest(g, ctx.at, waitForScript(selOrMs, WAIT_TIMEOUT_MS), true)
+      if (!isRecord(r) || r.found !== true) throw new Error(`waitFor: nothing matched ${selOrMs} within ${WAIT_TIMEOUT_MS} ms`)
     },
     help(name?: unknown): string {
       ctx.at = 'help'

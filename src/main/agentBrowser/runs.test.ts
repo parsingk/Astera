@@ -1,7 +1,15 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterAll } from 'vitest'
 import { AgentBrowserRuns, devServersFor, type RunsDeps } from './runs'
 import { AgentGuestRegistry } from './registry'
 import { Ring } from '../../core/agentBrowser/ring'
+import { promises as fsp } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+/** Where the run that takes a screenshot lets savePng write. Per-process, so two vitest workers
+ *  running this file cannot delete each other's folder. */
+const SHOTS_DIR = path.join(os.tmpdir(), 'astera-runs-shots-' + process.pid)
+afterAll(async () => { await fsp.rm(SHOTS_DIR, { recursive: true, force: true }) })
 
 type Cb = (...a: unknown[]) => void
 const fakeGuest = (id: number) => {
@@ -13,8 +21,19 @@ const fakeGuest = (id: number) => {
   // a stop posted from one lands on a turn where the helper it interrupts has already returned.
   const hooks: { afterLoad?: () => void; afterReload?: (n: number) => void } = {}
   const fire = (ev: string): void => { const s = once.get(ev); once.delete(ev); s?.forEach((cb) => cb()) }
-  return {
+  const g = {
     id, counts, hooks, isDestroyed: () => false, getType: () => 'webview',
+    // What the page answers, in order, and what was asked of it. The tests replace `answers`
+    // wholesale, so both are read through `g` rather than captured.
+    answers: [] as unknown[],
+    scripts: [] as string[],
+    async executeJavaScript(code: string): Promise<unknown> {
+      g.scripts.push(code)
+      const next = g.answers.shift()
+      if (next instanceof Error) throw next
+      return next
+    },
+    async capturePage() { return { getSize: () => ({ width: 800, height: 600 }), toPNG: () => Buffer.from('png') } },
     async loadURL() { queueMicrotask(() => fire('did-finish-load')); hooks.afterLoad?.() },
     // The load event is an IPC event from the guest in the app, so it lands on a later turn of the
     // event loop and a script looping on reload() yields between iterations. A synchronous fake
@@ -28,6 +47,7 @@ const fakeGuest = (id: number) => {
     once(ev: string, cb: Cb) { (once.get(ev) ?? once.set(ev, new Set()).get(ev)!).add(cb); return this },
     removeListener(ev: string, cb: Cb) { once.get(ev)?.delete(cb); return this }
   }
+  return g
 }
 
 const harness = (opts: { devServers?: { name: string; url: string; preview: boolean }[]; hasSession?: boolean; tabAppears?: boolean; scriptTimeoutMs?: number } = {}) => {
@@ -46,6 +66,7 @@ const harness = (opts: { devServers?: { name: string; url: string; preview: bool
     setBusy: (_s, b) => calls.busy.push(b),
     devServersOf: () => opts.devServers ?? [],
     guide: '# g',
+    shotsDir: SHOTS_DIR,
     tabWaitMs: 100,
     scriptTimeoutMs: opts.scriptTimeoutMs
   }
@@ -179,6 +200,36 @@ describe('AgentBrowserRuns', () => {
     const r = await runs.run('s1', `await open(); log(await url())`)
     expect(calls.requestTab).toEqual(['http://localhost:4321/'])
     expect(r.ok && r.result.log).toEqual(['http://localhost:5173/'])
+  })
+
+  it('a script can see and act: snapshot, click, fill, press and waitFor go to the page in order', async () => {
+    const { runs, guest } = harness()
+    guest.answers = [
+      { title: 'Demo', url: 'http://localhost:5173/', interactive: [], text: 'hello' },  // snapshot
+      { found: true, clicked: true },                                                    // click
+      { found: true, filled: true },                                                     // fill
+      { pressed: true, target: 'input#q' },                                              // press
+      { found: true }                                                                    // waitFor
+    ]
+    const r = await runs.run('s1', `
+      await open('http://localhost:5173/')
+      log((await snapshot()).text)
+      await click('#go'); await fill('#q', 'x'); await press('Enter'); await waitFor('.done')
+      const shot = await screenshot()
+      log('done')
+      log(shot.path)
+    `)
+    const logged = r.ok ? r.result.log : []
+    expect(logged.slice(0, 2)).toEqual(['hello', 'done'])
+    // `RunsDeps.shotsDir` and `RunsDeps.guide` are both plain strings, so threading the wrong one
+    // into the helpers would typecheck. The folder the PNG actually landed in is what says otherwise.
+    expect(path.dirname(logged[2])).toBe(SHOTS_DIR)
+    expect(logged[2].endsWith('.png')).toBe(true)
+    // Every script is `(function <name>(…) {…})(…)`, so the name is what says which helper ran.
+    // Matched rather than sliced: the string starts with the paren the slice would look for.
+    // screenshot() is absent on purpose — it captures the page rather than running anything in it.
+    const ran = guest.scripts.map((s) => (s.match(/function\s+(\w+)/) ?? [])[1])
+    expect(ran).toEqual(['snapshotRuntime', 'clickRuntime', 'fillRuntime', 'pressRuntime', 'waitForRuntime'])
   })
 })
 

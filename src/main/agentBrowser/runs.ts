@@ -8,7 +8,7 @@ import path from 'node:path'
 import { agentOpenTarget } from '../../core/agentBrowser/urls'
 import type { RunStatus } from '../../core/run/config'
 import type { RunConfig } from '../../core/run/types'
-import { stage1Helpers, SYNCHRONOUS_HELPERS, type DevServer, type GuestDriver, type HelperDeps } from './helpers'
+import { browserHelpers, SYNCHRONOUS_HELPERS, type DevServer, type GuestDriver, type HelperDeps } from './helpers'
 import type { AgentGuestRegistry, GuestLike } from './registry'
 
 export type RunOutcome =
@@ -27,6 +27,8 @@ export interface RunsDeps {
   /** The dev servers Astera's Run has running for the project at `cwd` — see devServersFor. */
   devServersOf(cwd: string): DevServer[]
   guide: string
+  /** Where screenshot() writes — see HelperDeps.shotsDir. */
+  shotsDir: string
   /** How long `open` waits for a requested tab's guest to register. */
   tabWaitMs?: number
   /** The whole-script deadline, defaulting to SCRIPT_TIMEOUT_MS. A seam for the tests, which cannot
@@ -34,9 +36,9 @@ export interface RunsDeps {
   scriptTimeoutMs?: number
 }
 
-/** Each stage1Helpers function sets `ctx.at` to its own name before its first await, but never sets
+/** Each browserHelpers function sets `ctx.at` to its own name before its first await, but never sets
  *  it back — from its own point of view it either finishes or throws, and either way it is done with
- *  `ctx.at` (helpers.ts, `stage1Helpers`'s doc comment). A helper that finishes cleanly is no longer
+ *  `ctx.at` (helpers.ts, `browserHelpers`). A helper that finishes cleanly is no longer
  *  "running", though, so once one returns, `ctx.at` is reset to 'script': a Stop that lands afterward
  *  — the script sitting between two helper calls, or on its own await — is reported at 'script'
  *  rather than still naming the helper that already returned. A helper that throws or rejects is left
@@ -153,11 +155,12 @@ export class AgentBrowserRuns {
       buffers: () => this.deps.buffersOf(sessionId),
       closeTab: () => this.deps.closeTab(sessionId),
       devServers: () => this.deps.devServersOf(cwd),
-      guide: this.deps.guide
+      guide: this.deps.guide,
+      shotsDir: this.deps.shotsDir
     }
     this.deps.setBusy(sessionId, true)
     try {
-      const helpers = withAtReset(stage1Helpers(helperDeps, ctx, log), ctx, ac.signal)
+      const helpers = withAtReset(browserHelpers(helperDeps, ctx), ctx, ac.signal)
       const result = await runScript(script, helpers, log, ctx, {
         signal: ac.signal,
         timeoutMs: this.deps.scriptTimeoutMs

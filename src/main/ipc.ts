@@ -84,6 +84,7 @@ import { AgentGuestRegistry, type GuestLike } from './agentBrowser/registry'
 import { AgentBufferStore, attachBuffers, installNetworkCapture } from './agentBrowser/buffers'
 import type { GuestDriver } from './agentBrowser/helpers'
 import { AgentBrowserRuns, devServersFor } from './agentBrowser/runs'
+import { previewShotsDir } from './preview/shots'
 import { PREVIEW_PARTITION } from '../core/preview/guards'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from './orchestration/resumePacket'
 import { extractStatusLineSession } from '../core/usage/statusline'
@@ -895,6 +896,13 @@ export function registerIpc(
     agentGuests.unregister(sessionId)
     agentBuffers.forget(sessionId)
   })
+  // Stop from the agent tab's context menu. The run's controller aborts; the script body that outlived
+  // the race parks on its next helper (runs.ts), the busy state clears through run()'s finally, and the
+  // CLI gets { error: { message: 'stopped', at: <helper> } }. False when nothing was running.
+  ipcMain.handle('preview.agentStop', (_e, sessionId: unknown) => {
+    if (typeof sessionId !== 'string') return false
+    return agentRuns.stop(sessionId)
+  })
   /** What `help()` returns inside a script. Read per run, not once: this wiring runs before
    *  `startOrch` finishes, so `orch` — and with it skillsPath — is still null here. A string captured
    *  now would be `''` for the life of the app, which is why `RunsDeps.guide` is a getter. */
@@ -931,6 +939,9 @@ export function registerIpc(
     // started — the address the user gave the Run to preview, or failing that the one it printed. Read
     // per call: a Run can start or stop, and a preview address be set, between two scripts.
     devServersOf: (cwd) => devServersFor(core.run.listActive(), cwd, core.runConfig.get(cwd)),
+    // The same folder Design Mode's captures go to, and the one a Claude session is spawned with
+    // read access to — so the path screenshot() hands back opens without a permission prompt.
+    shotsDir: previewShotsDir(app.getPath('userData')),
     get guide() {
       return browserGuide()
     }
