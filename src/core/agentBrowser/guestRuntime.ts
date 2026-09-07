@@ -5,8 +5,12 @@
 // That is why `selectorOf` below is a copy of the one in src/renderer/src/lib/pickRuntime.ts rather
 // than an import, and why the budgets arrive as an argument. Change one copy, change the other.
 //
-// Core is compiled under tsconfig.node.json without the DOM lib; the reference above brings the DOM
-// types in for this file only. Verified to compile on 2026-09-07 before this file was written.
+// This file needs the DOM types; the reference above declares that need explicitly. Right now
+// tsconfig.node.json names no `lib` of its own, so TypeScript's default inference already supplies
+// DOM for the whole program and the line is redundant in practice — but that is an accident of the
+// current config, not something this file should rely on. A later change that adds an explicit `lib`
+// there (to narrow it for some other reason) would silently drop DOM from this file too if the line
+// above were not here to supply it directly.
 //
 // These functions return plain data. Main clamps and redacts it (snapshot.ts) before the script
 // sees it, and main — not the page — decides whether a link may be followed (helpers.ts).
@@ -166,7 +170,10 @@ export function fillRuntime(sel: string, text: string): unknown {
 export function pressRuntime(key: string): unknown {
   const target = (document.activeElement as HTMLElement | null) || document.body
   const codes: Record<string, string> = { Enter: 'Enter', Escape: 'Escape', Tab: 'Tab', Backspace: 'Backspace', ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight', ' ': 'Space' }
-  const code = codes[key] || (key.length === 1 ? 'Key' + key.toUpperCase() : key)
+  // A single letter or digit maps to the real `code` a keyboard would send; anything else is a name
+  // this function cannot verify, so it says so with '' rather than guessing wrong — 'Key,' for a
+  // comma is a lie an event.code listener would act on, where '' is honestly "unknown".
+  const code = codes[key] || (/^[a-zA-Z]$/.test(key) ? 'Key' + key.toUpperCase() : /^[0-9]$/.test(key) ? 'Digit' + key : '')
   const init: KeyboardEventInit = { key: key, code: code, bubbles: true, cancelable: true }
   const down = target.dispatchEvent(new KeyboardEvent('keydown', init))
   target.dispatchEvent(new KeyboardEvent('keyup', init))
