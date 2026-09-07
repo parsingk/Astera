@@ -82,6 +82,11 @@ const deps = (g: ReturnType<typeof fakeGuest> | null) => {
   return { d, buffers }
 }
 
+/** What Electron says when executeJavaScript rejects — the same sentence whether the page threw or
+ *  the script already ran and its own side effect navigated, losing the reply with the frame. That is
+ *  why it is the fixture for both cases: nothing in the message tells them apart. */
+const LOST_REPLY = 'Script failed to execute, this normally means an error was thrown. Check the renderer console for the error.'
+
 describe('stage1Helpers', () => {
   it('open refuses a non-loopback address before touching the guest', async () => {
     const g = fakeGuest(); const { d } = deps(g)
@@ -428,12 +433,11 @@ describe('stage1Helpers', () => {
       expect(g.scripts).toHaveLength(1)
     })
 
-    // Electron rejects executeJavaScript both when the page threw and when the script already ran
-    // and its own side effect navigated, losing the reply with the frame — and says the same thing
-    // either way, which is why the string below is the fixture for the navigating case too. Only the
-    // second may be re-sent, so the guest's state at the moment of the rejection is what decides.
-    // The two ways it can say "I am navigating" are covered here; the message never is.
-    const LOST_REPLY = 'Script failed to execute, this normally means an error was thrown. Check the renderer console for the error.'
+    // snapshot is a pure read, so a rejection that lands while the guest is navigating is re-sent:
+    // the worst a second read can do is read the newer page. The guest's state at the moment of the
+    // rejection is what decides, and the two ways it can say "I am navigating" are covered here; the
+    // message never is. The other half of the rule — a call that changes the page is not re-sent —
+    // is the describe below.
     for (const [how, navigating] of [
       ['the frame reports itself loading', (g: ReturnType<typeof fakeGuest>) => { g.isLoading = () => true }],
       ['the address has already changed', (g: ReturnType<typeof fakeGuest>) => { g.getURL = () => 'http://localhost:5173/next' }]
@@ -490,6 +494,38 @@ describe('stage1Helpers', () => {
       const h = stage1Helpers(d, { at: 'script' }, createLog()) as { snapshot(): Promise<unknown> }
       await expect(h.snapshot()).rejects.toThrow('snapshot: the page refused the call (Cannot access contents of the frame)')
       expect(g.scripts).toHaveLength(2)
+    })
+  })
+
+  // The re-send is for the reads only, and this is the case that ruled it out for the rest: a
+  // rejection landing while the guest navigates is the *successful* path for a click that navigates —
+  // the runtime clicked, the handler navigated, the reply went with the frame. Re-sending it clicked
+  // a second time wherever the destination page matched the selector too (a shared header does), and
+  // reported `click: nothing matches` where it did not — a click that worked, described to the agent
+  // as a selector that does not exist. `the page refused the call` is the one wording the guide has
+  // taught the agent to check with snapshot() before repeating, so that is what these get.
+  describe('a call that changes the page', () => {
+    it('is never re-sent, and reports the refusal', async () => {
+      for (const [name, args] of [['click', ['#next']], ['fill', ['#q', 'x']], ['press', ['Enter']]] as const) {
+        const g = fakeGuest(); const { d } = deps(g)
+        // A second answer is queued on purpose: a re-send would find it and succeed quietly.
+        g.answers.push(new Error(LOST_REPLY), { found: true, clicked: true, filled: true, pressed: true })
+        const send = g.executeJavaScript.bind(g)
+        g.executeJavaScript = async (code: string) => {
+          try {
+            return await send(code)
+          } catch (err) {
+            // Navigating as the rejection lands, and settled a moment later — the state a click that
+            // navigated really leaves. A guest that stayed loading would fail this on the pre-wait's
+            // deadline instead, which is not the same answer.
+            g.staleLoading(3)
+            throw err
+          }
+        }
+        const h = stage1Helpers(d, { at: 'script' }, createLog()) as Record<string, (...a: unknown[]) => Promise<void>>
+        await expect(h[name](...args)).rejects.toThrow(`${name}: the page refused the call (${LOST_REPLY})`)
+        expect(g.scripts).toHaveLength(1)
+      }
     })
   })
 

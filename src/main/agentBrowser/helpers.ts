@@ -151,20 +151,26 @@ async function firstFrame(g: GuestDriver, at: string): Promise<CapturedImage> {
  *  rejects while the frame is navigating, which is exactly the state a click() that navigates leaves
  *  for the next helper.
  *
- *  A rejection is then one of two things Electron does not distinguish: the page threw, or the script
- *  already ran and its own side effect navigated, tearing the frame down before the reply could be
- *  serialised. Re-sending is right for the second and wrong for the first — a resent pressScript is a
- *  second requestSubmit(), a resent clickScript can click a nav link that the destination page has
- *  too. The message cannot tell them apart (Electron says "Script failed to execute…" for both), so
- *  the guest's own state does: it is retried only when the guest is navigating by the time the
- *  rejection lands. isLoading() is the signal; the address is checked as well because a fast
- *  localhost navigation can already have committed by then. */
-async function inGuest(g: GuestDriver, at: string, script: string): Promise<unknown> {
+ *  A rejection is then one of three things Electron does not distinguish: the script never ran, or it
+ *  ran and its own side effect navigated — tearing the frame down before the reply could be
+ *  serialised — or the page threw. The message is the same for all three ("Script failed to
+ *  execute…"), so what the script *is* has to decide, and `mayResend` carries that answer.
+ *
+ *  A pure read (snapshot, waitFor) is re-sent when the guest turns out to be navigating: the worst a
+ *  second read can do is describe the newer page. isLoading() is the signal, and the address is
+ *  checked as well because a fast localhost navigation can already have committed by then. A script
+ *  that changes the page is sent once and never again — that same state is the *successful* path for
+ *  a click that navigates, so re-sending clicked a second time wherever the destination page matched
+ *  the selector too (a shared header does), and reported `click: nothing matches` where it did not: a
+ *  click that worked, described as a selector that does not exist. `refused` is the wording the guide
+ *  has taught the agent to check with snapshot() before repeating, so that is the answer instead. */
+async function inGuest(g: GuestDriver, at: string, script: string, mayResend: boolean): Promise<unknown> {
   if (g.isLoading()) await loadSettles(g, at)
   const before = g.getURL()
   try {
     return await g.executeJavaScript(script)
   } catch (first) {
+    if (!mayResend) throw refused(at, first)
     if (!g.isLoading() && g.getURL() === before) throw refused(at, first)
     if (g.isLoading()) await loadSettles(g, at)
     try {
@@ -345,7 +351,7 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
     async snapshot(): Promise<Snapshot> {
       ctx.at = 'snapshot'
       const g = need()
-      const snap = clampSnapshot(await inGuest(g, 'snapshot', snapshotScript()))
+      const snap = clampSnapshot(await inGuest(g, 'snapshot', snapshotScript(), true))
       if (!snap) throw new Error('snapshot: the page returned nothing readable')
       return snap
     },
@@ -372,7 +378,7 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
       ctx.at = 'click'
       const g = need()
       const s = String(sel)
-      const first = await inGuest(g, 'click', clickScript(s, false))
+      const first = await inGuest(g, 'click', clickScript(s, false), false)
       if (!isRecord(first) || first.found !== true) throw new Error(`click: nothing matches ${s}`)
       if (typeof first.href === 'string') {
         // The page reports a link and does not follow it; whether it may be followed is decided here,
@@ -393,14 +399,14 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
           const address = sanitizeUrl(first.href)
           if (address !== '') throw new Error(`click: the link leaves this machine (${address})`)
         }
-        await inGuest(g, 'click', clickScript(s, true))
+        await inGuest(g, 'click', clickScript(s, true), false)
       }
     },
     async fill(sel: unknown, text: unknown): Promise<void> {
       ctx.at = 'fill'
       const g = need()
       const s = String(sel)
-      const r = await inGuest(g, 'fill', fillScript(s, String(text)))
+      const r = await inGuest(g, 'fill', fillScript(s, String(text)), false)
       if (!isRecord(r) || r.found !== true) throw new Error(`fill: nothing matches ${s}`)
       // fillRuntime reports 'no option has that value' or 'not an input, textarea, select or editable
       // element'; these two branches turn them into the messages the guide documents.
@@ -412,7 +418,7 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
       ctx.at = 'press'
       const g = need()
       if (typeof key !== 'string' || key === '') throw new Error('press: key must be a non-empty string')
-      await inGuest(g, 'press', pressScript(key))
+      await inGuest(g, 'press', pressScript(key), false)
     },
     async waitFor(selOrMs: unknown): Promise<void> {
       ctx.at = 'waitFor'
@@ -422,7 +428,7 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
         return
       }
       if (typeof selOrMs !== 'string' || selOrMs === '') throw new Error('waitFor: expects a selector or a number of milliseconds')
-      const r = await inGuest(g, 'waitFor', waitForScript(selOrMs, WAIT_TIMEOUT_MS))
+      const r = await inGuest(g, 'waitFor', waitForScript(selOrMs, WAIT_TIMEOUT_MS), true)
       if (!isRecord(r) || r.found !== true) throw new Error(`waitFor: nothing matched ${selOrMs} within ${WAIT_TIMEOUT_MS} ms`)
     },
     help(name?: unknown): string {

@@ -17,10 +17,10 @@
 //
 // One rule for anything added below: a runtime may throw **before** it acts, never after. Main
 // re-sends a script whose reply was lost to a navigation (helpers.ts, `inGuest`) and cannot tell that
-// case from a page throw, so it admits the re-send whenever the guest is navigating — which a meta
-// refresh or a timer redirect can make true for a reason that has nothing to do with this script.
-// None of the five functions here throws after its side effect, so the worst a re-send can do is
-// repeat a read. One that acted and then threw would have its action applied twice.
+// case from a page throw, so only the pure reads are re-sent at all — snapshotRuntime and
+// waitForRuntime, which act on nothing, so the worst a re-send can do is read the newer page. A
+// runtime that changes the page is sent once. A read that acted first and then threw would have that
+// action applied twice.
 
 export interface SnapshotBudgets {
   interactive: number
