@@ -667,9 +667,8 @@ export function BrowserPane({
   useEffect(() => {
     if (!agentRunning || tab.agentSessionId === undefined) return
     const sid = tab.agentSessionId
-    const onKey = (e: KeyboardEvent): void => {
-      const el = e.target as HTMLElement | null
-      const editable = el !== null && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
+    const escape = { key: 'Escape', altKey: false, ctrlKey: false, metaKey: false, shiftKey: false }
+    const stopIf = (e: { key: string; altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, editable: boolean): void => {
       // The same rule App's global shortcuts follow: a modal, a menu or a text field owns Escape
       // first. The address bar of this very pane reverts on Escape and says it is isolated from the
       // app's shortcuts; without this, that Escape also stopped the script.
@@ -679,8 +678,21 @@ export function BrowserPane({
         if (stopped) toast.info(t('preview.agent.stopped'))
       })
     }
+    const onKey = (e: KeyboardEvent): void => {
+      const el = e.target as HTMLElement | null
+      const editable = el !== null && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)
+      stopIf(e, editable)
+    }
+    // Escape typed inside the page arrives from main (agentBrowser/buffers.ts): the key never reaches
+    // the host DOM. Focus is inside the guest then, so nothing of the host's is the editable target.
+    const offGuest = window.api.on('preview:agentEscape', ({ sessionId }) => {
+      if (sessionId === sid) stopIf(escape, false)
+    })
     window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
+    return () => {
+      offGuest()
+      window.removeEventListener('keydown', onKey, true)
+    }
   }, [agentRunning, agentTabFocused, tab.agentSessionId])
 
   // Badges live in the page, so a reload wipes them; this runs both when the list changes and when a

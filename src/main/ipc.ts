@@ -869,7 +869,7 @@ export function registerIpc(
     }
     // `set` forgets whatever this session had before, so a remounted pane cannot leave the guest it
     // registered last time holding its listeners.
-    const buffers = attachBuffers(guest)
+    const buffers = attachBuffers(guest, { onEscape: () => send('preview:agentEscape', { sessionId }) })
     agentBuffers.set(sessionId, webContentsId, buffers)
     // The one teardown path no cleanup covers. A renderer reload or crash takes the <webview> down
     // without running React's effect cleanup, so preview.unregisterAgentGuest never arrives and the

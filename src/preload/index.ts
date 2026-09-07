@@ -38,6 +38,7 @@ const EVENT_CHANNELS = [
   'preview:agentTabClose',
   'preview:agentBusy',
   'preview:agentPointer',
+  'preview:agentEscape',
   'terminal:data',
   'terminal:exit',
   'orch:state',
