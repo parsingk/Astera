@@ -21,6 +21,7 @@ const fakeGuest = (): GuestDriver & {
   answers: unknown[]
   scripts: string[]
   shots: number
+  staleLoading(ticks: number): void
 } => {
   const once = new Map<string, Set<Cb>>()
   let url = 'about:blank'
@@ -46,7 +47,21 @@ const fakeGuest = (): GuestDriver & {
       return next
     },
     shots: 0,
-    async capturePage() { g.shots += 1; return { getSize: () => ({ width: 800, height: 600 }), toPNG: () => Buffer.from('png') } }
+    async capturePage() { g.shots += 1; return { getSize: () => ({ width: 800, height: 600 }), toPNG: () => Buffer.from('png') } },
+    /** Answers `isLoading()` true for the next `ticks` questions and false afterwards, and fires no
+     *  load event ever. That is the state a real guest is in for a moment after `did-finish-load` has
+     *  already gone out, and no fake here could express it before: every one of them either reports
+     *  false from the start or reports true and then has the event fired for it. A pre-wait that
+     *  waited for the event instead of asking sat out the whole deadline for a load already in the
+     *  past, which is what `await open(); await snapshot()` did in the app. */
+    staleLoading(ticks: number) {
+      let left = ticks
+      g.isLoading = () => {
+        if (left <= 0) return false
+        left -= 1
+        return true
+      }
+    }
   }
   return g
 }
@@ -644,6 +659,85 @@ describe('stage1Helpers', () => {
         await vi.advanceTimersByTimeAsync(WAIT_TIMEOUT_MS + 1)
         expect(done).toBe(true)
         await expect(h.waitFor({})).rejects.toThrow('waitFor: expects a selector or a number of milliseconds')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
+  // Every guest-side helper waits for a load in progress before it touches the page. The state it
+  // has to survive is the one a fake could not express until `staleLoading`: isLoading() true with
+  // the load event already in the past. Waiting for that event meant `await open(); await snapshot()`
+  // — the first sequence in the guide — failing after 30 s against a page that was complete and
+  // answering. So the pre-wait asks the guest instead, and these say so: it must not depend on an
+  // event, and it must still respect the deadline when the guest really never settles.
+  describe('the pre-wait asks the guest rather than waiting for a load event', () => {
+    it('a guest still reporting itself loading after the event has passed is asked anyway, at once', async () => {
+      const g = fakeGuest(); const { d } = deps(g)
+      g.staleLoading(2)
+      g.answers.push({ title: 't', url: 'http://localhost/', text: 'ok' })
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { snapshot(): Promise<{ text: string }> }
+      const p = h.snapshot()
+      // Raced against 500 ms rather than awaited: an event-driven pre-wait never answers here at all,
+      // and the only other way to find that out is to sit through WAIT_TIMEOUT_MS.
+      const raced = await Promise.race([
+        p.then(() => 'answered', () => 'rejected'),
+        new Promise<string>((r) => setTimeout(() => r('still waiting for a load event'), 500))
+      ])
+      expect(raced).toBe('answered')
+      expect((await p).text).toBe('ok')
+      expect(g.scripts).toHaveLength(1)
+      // Nothing was armed: the pre-wait did not subscribe to a load it never started.
+      expect(g.listenerCount('did-finish-load')).toBe(0)
+    })
+
+    it('a guest that never stops loading still fails at the wait deadline, without arming a listener', async () => {
+      vi.useFakeTimers()
+      try {
+        const g = fakeGuest(); g.isLoading = () => true   // and no load event is ever fired
+        const { d } = deps(g)
+        const h = stage1Helpers(d, { at: 'script' }, createLog()) as { snapshot(): Promise<unknown> }
+        const p = h.snapshot()
+        const rejection = expect(p).rejects.toThrow(`snapshot did not finish within ${WAIT_TIMEOUT_MS} ms`)
+        await vi.advanceTimersByTimeAsync(100)
+        expect(g.listenerCount('did-finish-load')).toBe(0)
+        await vi.advanceTimersByTimeAsync(WAIT_TIMEOUT_MS)
+        await rejection
+        await expect(p).rejects.toBeInstanceOf(Interrupted)
+        expect(g.scripts).toHaveLength(0)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    // screenshot() does not go through inGuest, so its pre-wait is a second copy of the rule.
+    it('screenshot captures a guest whose loading flag is stale, without waiting for an event', async () => {
+      const g = fakeGuest(); const { d } = deps(g)
+      g.staleLoading(2)
+      const h = stage1Helpers(d, { at: 'script' }, createLog()) as { screenshot(): Promise<{ path: string }> }
+      const p = h.screenshot()
+      const raced = await Promise.race([
+        p.then(() => 'captured', () => 'rejected'),
+        new Promise<string>((r) => setTimeout(() => r('still waiting for a load event'), 500))
+      ])
+      expect(raced).toBe('captured')
+      expect(g.shots).toBe(1)
+      expect(g.listenerCount('did-finish-load')).toBe(0)
+    })
+
+    it('screenshot fails at the wait deadline when the guest never stops loading, and captures nothing', async () => {
+      vi.useFakeTimers()
+      try {
+        const g = fakeGuest(); g.isLoading = () => true
+        const { d } = deps(g)
+        const h = stage1Helpers(d, { at: 'script' }, createLog()) as { screenshot(): Promise<unknown> }
+        const p = h.screenshot()
+        const rejection = expect(p).rejects.toThrow(`screenshot did not finish within ${WAIT_TIMEOUT_MS} ms`)
+        await vi.advanceTimersByTimeAsync(100)
+        expect(g.listenerCount('did-finish-load')).toBe(0)
+        await vi.advanceTimersByTimeAsync(WAIT_TIMEOUT_MS)
+        await rejection
+        expect(g.shots).toBe(0)
       } finally {
         vi.useRealTimers()
       }

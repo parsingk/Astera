@@ -76,6 +76,39 @@ export const SHOT_TIMEOUT_MS = 5_000
 const refused = (at: string, err: unknown): Error =>
   new Error(`${at}: the page refused the call (${err instanceof Error ? err.message : String(err)})`)
 
+/** How often a pre-wait asks the guest whether it is still loading. */
+const LOADING_POLL_MS = 25
+
+/** Waits until the guest stops reporting itself as loading, by **asking** rather than by waiting for
+ *  a load event. Bounded by WAIT_TIMEOUT_MS and reporting the same `Interrupted` as every other wait
+ *  here, so the deadline's wording and `at` do not change.
+ *
+ *  The distinction from `loadEnds` is the whole point, and getting it wrong broke the first sequence
+ *  in the guide. `loadEnds` belongs where this code *starts* a navigation — open, reload, waitForLoad
+ *  — because there an event is genuinely still to come. A pre-wait starts nothing: it only wants to
+ *  know whether the guest is busy right now. And `isLoading()` keeps reading true for a moment after
+ *  `did-finish-load` has already fired, so a pre-wait built on the event armed a listener for a load
+ *  that was already in the past and then sat out the full deadline — `await open(); await snapshot()`
+ *  failed after 30 s against a page that was complete and answering. Asking cannot miss an event,
+ *  because it does not depend on one. */
+function loadSettles(g: GuestDriver, at: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const settled = new Promise<void>((resolve) => {
+    const tick = (): void => {
+      if (!g.isLoading()) {
+        resolve()
+        return
+      }
+      timer = setTimeout(tick, LOADING_POLL_MS)
+    }
+    tick()
+  })
+  // Whichever way this settles, the poll stops. A deadline that fired would otherwise leave a timer
+  // re-arming itself against the guest for the rest of the session — the same reason loadEnds
+  // removes its listeners on every exit path.
+  return withTimeout(settled, WAIT_TIMEOUT_MS, at).finally(() => clearTimeout(timer))
+}
+
 /** Runs one guest-side script for a helper. Waits for a load in progress first — executeJavaScript
  *  rejects while the frame is navigating, which is exactly the state a click() that navigates leaves
  *  for the next helper.
@@ -89,13 +122,13 @@ const refused = (at: string, err: unknown): Error =>
  *  rejection lands. isLoading() is the signal; the address is checked as well because a fast
  *  localhost navigation can already have committed by then. */
 async function inGuest(g: GuestDriver, at: string, script: string): Promise<unknown> {
-  if (g.isLoading()) await loadEnds(g, at, g.getURL())
+  if (g.isLoading()) await loadSettles(g, at)
   const before = g.getURL()
   try {
     return await g.executeJavaScript(script)
   } catch (first) {
     if (!g.isLoading() && g.getURL() === before) throw refused(at, first)
-    if (g.isLoading()) await loadEnds(g, at, g.getURL())
+    if (g.isLoading()) await loadSettles(g, at)
     try {
       return await g.executeJavaScript(script)
     } catch (second) {
@@ -281,7 +314,7 @@ export function stage1Helpers(deps: HelperDeps, ctx: RunContext, _log: LogSink):
     async screenshot(): Promise<{ path: string; width: number; height: number }> {
       ctx.at = 'screenshot'
       const g = need()
-      if (g.isLoading()) await loadEnds(g, 'screenshot', g.getURL())
+      if (g.isLoading()) await loadSettles(g, 'screenshot')
       let image: CapturedImage
       try {
         image = await withTimeout(g.capturePage(), SHOT_TIMEOUT_MS, 'screenshot')
