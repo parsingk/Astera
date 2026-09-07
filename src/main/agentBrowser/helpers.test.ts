@@ -604,6 +604,39 @@ describe('browserHelpers', () => {
         vi.useRealTimers()
       }
     })
+
+    // A guest destroyed mid-run — the user closed the tab — rejects every capturePage, and a
+    // minimised window has nothing to do with it. Blaming one told the agent to look at the wrong
+    // thing, so the guest's own last word is reported when it had one.
+    it("names the guest's last error instead of blaming the window", async () => {
+      vi.useFakeTimers()
+      try {
+        const g = fakeGuest(); const { d } = deps(g)
+        g.capturePage = async () => { throw new Error('Object has been destroyed') }
+        const h = browserHelpers(d, { at: 'script' }) as { screenshot(): Promise<unknown> }
+        const p = h.screenshot()
+        const settled = expect(p).rejects.toThrow('screenshot: the page did not paint within 5 s — the last capture failed: Object has been destroyed')
+        await vi.advanceTimersByTimeAsync(SHOT_TIMEOUT_MS + 1)
+        await settled
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    // ENOSPC or EACCES on the write reached the agent as a raw Node message with nobody's name on
+    // it. The folder here is a file, so the mkdir savePng starts with cannot make it.
+    it('reports a write that fails as a screenshot failure', async () => {
+      const notADir = path.join(os.tmpdir(), 'astera-shots-not-a-dir-' + process.pid)
+      await fs.writeFile(notADir, 'x')
+      try {
+        const g = fakeGuest(); const { d } = deps(g)
+        d.shotsDir = notADir
+        const h = browserHelpers(d, { at: 'script' }) as { screenshot(): Promise<unknown> }
+        await expect(h.screenshot()).rejects.toThrow('screenshot: the capture could not be saved (')
+      } finally {
+        await fs.rm(notADir, { force: true })
+      }
+    })
   })
 
   describe('click()', () => {
@@ -621,6 +654,16 @@ describe('browserHelpers', () => {
       g.answers.push({ found: false })
       const h = browserHelpers(d, { at: 'script' }) as { click(s: string): Promise<void> }
       await expect(h.click('#nope')).rejects.toThrow('click: nothing matches #nope')
+    })
+
+    // el.click() on a disabled control dispatches nothing at all, so answering "clicked" cost the
+    // agent a round wondering why the page had not changed.
+    it('reports a disabled control rather than a click that dispatched nothing', async () => {
+      const g = fakeGuest(); const { d } = deps(g)
+      g.answers.push({ found: true, disabled: true })
+      const h = browserHelpers(d, { at: 'script' }) as { click(s: string): Promise<void> }
+      await expect(h.click('#save')).rejects.toThrow('click: #save is disabled')
+      expect(g.scripts).toHaveLength(1)
     })
 
     it('follows a link that stays on this machine, in a second call', async () => {

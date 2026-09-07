@@ -174,6 +174,9 @@ export function clickRuntime(sel: string, followLink: boolean): unknown {
   // is not an http(s) address as written, so reporting the attribute would send that off-machine
   // navigation past the check; resolved against the document it is one, and is refused.
   if (a && !followLink) return { found: true, href: a.href }
+  // el.click() on a disabled control dispatches nothing at all, so answering `clicked` for one would
+  // be a false success — the agent spends a round wondering why the page did not change.
+  if ((el as HTMLButtonElement).disabled === true) return { found: true, disabled: true }
   el.scrollIntoView({ block: 'center', inline: 'center' })
   el.focus()
   el.click()

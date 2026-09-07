@@ -120,12 +120,16 @@ Astera's window and never the rest of the screen.
 Your tab is drawn while your script runs, so a capture normally answers in well under a second; a
 first one right after `open()` may take a moment longer while the page starts producing frames. It
 throws `screenshot: the page did not paint within 5 s — the window may be minimised` when no frame
-arrives, which on a minimised window is what happens. That is a real answer: say so rather than
-looking for another way to take a picture.
+arrives, which on a minimised window is what happens; when the page said why instead — the tab was
+closed under you, say — the message ends with that reason. That is a real answer: say so rather than
+looking for another way to take a picture. A file that could not be written is
+`screenshot: the capture could not be saved (<reason>)`.
 
 ## click(sel)
 Clicks the first element matching the CSS selector, scrolling it into view first. Throws
-`click: nothing matches <sel>`. A link whose address leaves this machine is refused before the click:
+`click: nothing matches <sel>`, and `click: <sel> is disabled` for a control that is — a click on a
+disabled control dispatches nothing, so this is reported rather than answered as a click. A link whose
+address leaves this machine is refused before the click:
 `click: the link leaves this machine (<address>)`. After a click that navigates, `snapshot()`,
 `screenshot()`, `fill()`, `press()`, another `click()` and `waitFor()` with a selector wait for the
 load first — you do not need `waitForLoad()` between. `url()`, `title()`, `consoleErrors()` and

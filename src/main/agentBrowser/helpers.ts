@@ -115,7 +115,19 @@ function loadSettles(g: GuestDriver, at: string): Promise<void> {
   return withTimeout(settled, WAIT_TIMEOUT_MS, at).finally(() => clearTimeout(timer))
 }
 
-/** Asks the guest for frames until one has pixels, or the deadline passes.
+/** Why no frame arrived, in the agent's own terms. A capture that never answers at all is the
+ *  minimised window — that is what was measured — but a guest destroyed mid-run, because the user
+ *  closed the tab, rejects every call instead, and blaming minimisation for that sent the agent
+ *  looking at the wrong thing. So the guest's own last word is reported whenever it said one. The
+ *  deadline is interpolated so changing SHOT_TIMEOUT_MS cannot leave the message lying. */
+const noPaint = (at: string, last: unknown): Error =>
+  new Error(
+    `${at}: the page did not paint within ${SHOT_TIMEOUT_MS / 1000} s — ` +
+      (last === undefined ? 'the window may be minimised' : `the last capture failed: ${last instanceof Error ? last.message : String(last)}`)
+  )
+
+/** Asks the guest for frames until one has pixels, or the deadline passes — and then throws the
+ *  message the agent reads (`noPaint`), rather than a deadline the caller has to translate.
  *
  *  Only a page that is being **drawn** can be photographed, and the agent's tab is a background tab
  *  by design — the agent must never take the tab or the window the user is on. The renderer answers
@@ -132,16 +144,19 @@ function loadSettles(g: GuestDriver, at: string): Promise<void> {
  *  loop that only checked the clock between calls would sit inside that one call. */
 async function firstFrame(g: GuestDriver, at: string): Promise<CapturedImage> {
   const deadline = Date.now() + SHOT_TIMEOUT_MS
+  let last: unknown
   for (;;) {
     const left = deadline - Date.now()
-    if (left <= 0) throw new Interrupted(at, `${at} did not finish within ${SHOT_TIMEOUT_MS} ms`)
+    if (left <= 0) throw noPaint(at, last)
     try {
       const image = await withTimeout(g.capturePage(), left, at)
       const { width, height } = image.getSize()
       if (width > 0 && height > 0) return image
     } catch (err) {
-      // The deadline is the one rejection that ends this; anything else the guest says is "not yet".
-      if (err instanceof Interrupted) throw err
+      // The deadline is the one rejection that ends this; anything else the guest says is "not yet",
+      // and kept in case the deadline arrives with nothing better to report.
+      if (err instanceof Interrupted) throw noPaint(at, last)
+      last = err
     }
     await new Promise((r) => setTimeout(r, SHOT_RETRY_MS))
   }
@@ -359,16 +374,12 @@ export function browserHelpers(deps: HelperDeps, ctx: RunContext): Record<string
       ctx.at = 'screenshot'
       const g = need()
       if (g.isLoading()) await loadSettles(g, ctx.at)
-      let image: CapturedImage
-      try {
-        image = await firstFrame(g, ctx.at)
-      } catch (err) {
-        // Interrupted here is this helper's own deadline, not a Stop. The deadline is interpolated so
-        // changing SHOT_TIMEOUT_MS cannot leave the message lying.
-        if (err instanceof Interrupted) throw new Error(`screenshot: the page did not paint within ${SHOT_TIMEOUT_MS / 1000} s — the window may be minimised`)
-        throw err
-      }
-      const saved = await savePng(image, deps.shotsDir)
+      const image = await firstFrame(g, ctx.at)
+      // A write that fails — ENOSPC, EACCES, a folder that is a file — is this helper's failure to
+      // report, not a raw Node error arriving under `at: 'screenshot'` with nobody's name on it.
+      const saved = await savePng(image, deps.shotsDir).catch((err: unknown) => {
+        throw new Error(`screenshot: the capture could not be saved (${err instanceof Error ? err.message : String(err)})`)
+      })
       // savePng answers null for an image with no pixels, which is the one thing firstFrame does not
       // return — so this is the type narrowing rather than a state a capture can reach.
       if (!saved) throw new Error('screenshot: the capture came back empty')
@@ -380,6 +391,9 @@ export function browserHelpers(deps: HelperDeps, ctx: RunContext): Record<string
       const s = String(sel)
       const first = await inGuest(g, ctx.at, clickScript(s, false), false)
       if (!isRecord(first) || first.found !== true) throw new Error(`click: nothing matches ${s}`)
+      // The page reports a control that cannot be clicked rather than letting el.click() dispatch
+      // nothing and answering as though it had.
+      if (first.disabled === true) throw new Error(`click: ${s} is disabled`)
       if (typeof first.href === 'string') {
         // The page reports a link and does not follow it; whether it may be followed is decided here,
         // by the one loopback rule, and the will-navigate guard in preview/guest.ts stays the backstop.
