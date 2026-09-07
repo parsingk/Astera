@@ -853,7 +853,7 @@ export const ja: Catalog = {
   'preview.agent.running': 'エージェントがこのページを操作しています',
   'preview.agent.stop': 'エージェントのスクリプトを中断',
   'preview.agent.stopped': 'エージェントのスクリプトを中断しました',
-  'preview.agent.inUse': 'Astera がコンピューターを使用中です  ·  Esc でキャンセル',
+  'preview.agent.inUse': 'エージェントがコンピューターを使用中です  ·  Esc でキャンセル',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
   'terminal.rail.open': 'ターミナル',
   'terminal.tab.label': 'ターミナル {n}',

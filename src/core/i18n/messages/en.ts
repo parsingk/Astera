@@ -838,7 +838,7 @@ export const en: Record<keyof typeof ko, string> = {
   'preview.agent.running': 'The agent is driving this page',
   'preview.agent.stop': 'Stop the agent\'s script',
   'preview.agent.stopped': 'Stopped the agent\'s script',
-  'preview.agent.inUse': 'Astera is using your computer  ·  Esc to cancel',
+  'preview.agent.inUse': 'The agent is using your computer  ·  Esc to cancel',
   'terminal.rail.open': 'Terminal',
   'terminal.tab.label': 'Terminal {n}',
   'terminal.tab.new': 'New terminal',
