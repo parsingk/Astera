@@ -109,7 +109,9 @@ and style bodies are left out, and so are secrets, in different ways: a heading 
 looks like one is dropped from its list; an interactive element's `name` or `text` that looks like one
 becomes `[redacted]` and the element stays; a secret-looking word in the free text is stripped from it.
 A password input is listed like any other field, so you know it is there, but its `text` is always
-empty: its value is never read.
+empty: its value is never read. Content inside a shadow root or a `<template>` is not visible to
+`snapshot()`, and the selector helpers cannot reach into one either — so a page built from web
+components reads as almost empty, and that is the reason rather than a broken page.
 Throws `snapshot: the page returned nothing readable` when the page gave back nothing usable.
 
 ## screenshot()
@@ -127,12 +129,15 @@ looking for another way to take a picture. A file that could not be written is
 
 ## click(sel)
 Clicks the first element matching the CSS selector, scrolling it into view first. Throws
-`click: nothing matches <sel>`, and `click: <sel> is disabled` for a control that is — a click on a
-disabled control dispatches nothing, so this is reported rather than answered as a click. A link whose
+`click: nothing matches <sel>`, and `click: <sel> is disabled` when the control is disabled: a click
+on one dispatches nothing at all, so that is reported rather than answered as a click. A link whose
 address leaves this machine is refused before the click:
 `click: the link leaves this machine (<address>)`. After a click that navigates, `snapshot()`,
 `screenshot()`, `fill()`, `press()`, another `click()` and `waitFor()` with a selector wait for the
-load first — you do not need `waitForLoad()` between. `url()`, `title()`, `consoleErrors()` and
+load first — you do not need `waitForLoad()` between, as long as that load has started by the time
+the next helper looks. It normally has; when it has not, the next read describes the old page and
+nothing says so, so after a click you meant to navigate, `waitForLoad()` is what makes it certain.
+`url()`, `title()`, `consoleErrors()` and
 `networkErrors()` do not wait either — call `waitForLoad()` first if you need one of them to see the
 new page. Neither does `close()`, but for a different reason: it closes whichever tab exists, loading
 or not, so a pending load has nothing to do with it.
