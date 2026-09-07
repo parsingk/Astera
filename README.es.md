@@ -94,21 +94,6 @@
   abiertas: funciona a partir de las sesiones nuevas
 - Solo se registra el trabajo hecho después de activar la función en los ajustes
 
-**Vista previa**
-- Mira la página del servidor de desarrollo dentro de Astera, junto a la sesión que la está editando:
-  una pestaña de navegador es una pestaña de panel como una sesión o un archivo, así que se coloca al
-  lado, se divide y se arrastra igual
-- Una sola regla para los enlaces: una dirección `localhost` pulsada en cualquier terminal abre una
-  pestaña de vista previa; cualquier otra se abre en tu navegador. `Ctrl`/`Cmd` + clic la invierte
-- Dale a una configuración de ejecución una dirección de vista previa y la pestaña se abre, o se
-  recarga, cada vez que esa configuración arranca, esperando a que el servidor esté listo. Sin ella, la
-  pestaña de la ejecución detecta la primera dirección `localhost` que imprime y ofrece abrirla
-- La barra tiene atrás, adelante y recargar, una barra de direcciones, anchos de pantalla predefinidos
-  de móvil a escritorio con giro, DevTools y abrir en el navegador; el clic derecho inspecciona un
-  elemento
-- Los certificados autofirmados y las peticiones de permisos —cámara, notificaciones— solo se permiten
-  para `localhost`
-
 **Design Mode**
 - Activa **Design Mode** en la barra de la vista previa y elige elementos en la página. Al pasar por
   encima se resalta uno; al pulsarlo se le fija una insignia numerada y se abre una nota al lado:
