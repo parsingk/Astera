@@ -93,6 +93,33 @@
   sessions get it
 - Only work done after you turned the feature on in settings is recorded
 
+**Preview**
+- See the dev server's page inside Astera, beside the session that is editing it — a browser tab is a
+  pane tab like a session or a file, so it sits side by side, splits and drags like one
+- One link rule everywhere: a `localhost` address clicked in any terminal opens a preview tab, anything
+  else opens in your browser. `Ctrl`/`Cmd`-click inverts it
+- Give a run configuration a preview address and the tab opens, or refreshes, whenever that
+  configuration starts, waiting for the server to come up. Without one, the run's tab notices the first
+  `localhost` address the run prints and offers to open it
+- The toolbar has back, forward and reload, an address bar, viewport presets from mobile to desktop
+  with rotate, DevTools and open-in-browser; right-click inspects an element
+- Self-signed certificates and permission prompts — camera, notifications — are allowed for
+  `localhost` only
+
+**Design Mode**
+- Turn on **Design Mode** in the preview toolbar and pick elements on the page. Hovering highlights one;
+  clicking pins a numbered badge to it and opens a note beside it — answer "What should change?" and
+  mark the intent **Change** or **Question**
+- Up to twenty notes per tab, and numbers are never reassigned — a note that says "like 3" has to stay
+  true. Going to another route and back keeps the list, and the badges reappear on that page
+- **Send to session** pastes every note as one markdown block into the session you choose (straight
+  away with one session, a pick with several). If that session is waiting on a question, it is not
+  sent and you are told. **Copy** puts the same block on the clipboard
+- Each note carries the element's selector, position, styles and HTML, its nearby text with secrets
+  redacted, and the path of a screenshot cropped to that element — the agent looks at the element
+  instead of reading a description of it
+- Design Mode turns itself off when the page navigates away. `Esc` turns it off too
+
 **Agent browser (experimental)**
 - The session's agent gets a preview tab of its own and drives it: open a page on this project's dev
   server, reload it after a change, read its address and title, and read back what the console and the
