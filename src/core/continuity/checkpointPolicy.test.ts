@@ -49,10 +49,17 @@ describe('checkpointsFor', () => {
     expect(checkpointsFor([e('TASK_BECAME_READY', { taskId: 'tsk_9' })], stateWithOpen())).toEqual([])
   })
 
-  it('one per dispatch per write, the earliest kind in the order winning', () => {
+  it('one per dispatch per write, the earliest kind in the order winning regardless of arrival order', () => {
     const ids = { taskId: 'tsk_1', dispatchId: 'dsp_1' }
     expect(checkpointsFor([e('TASK_STARTED', { taskId: 'tsk_1' }), e('ATTEMPT_STARTED', ids)], stateWithOpen())).toEqual([
       { dispatchId: 'dsp_1', kind: 'attempt-started' }
+    ])
+    // the higher-priority kind arriving first must not be overwritten by a later, lower one
+    expect(checkpointsFor([e('ATTEMPT_STARTED', ids), e('TASK_STARTED', { taskId: 'tsk_1' })], stateWithOpen())).toEqual([
+      { dispatchId: 'dsp_1', kind: 'attempt-started' }
+    ])
+    expect(checkpointsFor([e('ATTEMPT_RESUMED', ids), e('USAGE_LIMIT_DETECTED', ids)], stateWithOpen())).toEqual([
+      { dispatchId: 'dsp_1', kind: 'limit-stop' }
     ])
   })
 })
