@@ -300,6 +300,17 @@ export const ko = {
   'settings.resumeStrategy.original.label': '원래 세션 재개',
   'settings.resumeStrategy.original.hint': '기존 Resume 방식으로 대화를 이어갑니다.',
   'settings.resumeStrategy.saveFailed': '재개 방식을 저장하지 못했습니다: {detail}',
+  'settings.jobContinuity.label': '작업 이어가기 (실험)',
+  'settings.jobContinuity.hint':
+    '앱이 죽거나 다시 시작해도 작업을 복구할 수 있게 유지합니다. ' +
+    '작업 상태를 디스크에 남기고, 에이전트의 원래 세션을 되살리며, 필요할 때 스마트 재개를 씁니다.',
+  'settings.jobContinuity.smartResumeTurnedOn':
+    '작업 이어가기를 켰습니다. 완전한 자동 복구를 위해 스마트 재개도 함께 켰습니다.',
+  'settings.jobContinuity.turnOffSmartResume.title': '스마트 재개를 끌까요?',
+  'settings.jobContinuity.turnOffSmartResume.body':
+    '작업 이어가기는 켜진 채로 남지만, 원래의 Claude Code 나 Codex 세션을 되살릴 수 없으면 작업이 멈출 수 있습니다.',
+  'settings.jobContinuity.turnOffSmartResume.confirm': '끄기',
+  'settings.jobContinuity.saveFailed': '작업 이어가기 설정을 저장하지 못했습니다: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': '터미널 영문 폰트',
   'settings.font.hangul': '터미널 한글 폰트',
