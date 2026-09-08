@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from './resumePacket'
 import type { TranscriptResumeMaterial } from '../../core/history/parser'
+import type { Handoff } from '../../core/handoff/types'
 import { LAUNCH_FORBIDDEN } from './coordinator'
 import * as checkpointModule from '../../core/orchestration/checkpoint'
 import { emptyState, createRun, createTask, openDispatch } from '../../core/orchestration/state'
@@ -629,5 +630,108 @@ describe('buildTabResumeText', () => {
 
     expect(line).not.toBeNull()
     expect(await fs.readFile(tabFile('sess1'), 'utf8')).toContain('codex 쪽 최근 요청입니다')
+  })
+
+  describe('handoff memo', () => {
+    const memo: Handoff = {
+      version: 1,
+      sessionId: 'sess1',
+      projectPath: CWD,
+      provider: 'claude',
+      createdAt: '2026-09-08T09:09:41.000Z',
+      git: { branch: 'main', head: 'abc123' },
+      completed: [],
+      currentProblems: [],
+      nextActions: ['finish invalidation'],
+      constraints: ['no Redis'],
+      decisions: [],
+      verification: [],
+      relevantFiles: []
+    }
+
+    it('handover consults the reader once for this session and the memo lands in the file', async () => {
+      const readHandoff = vi.fn().mockReturnValue({ state: 'found', memo })
+      const line = await buildTabResumeText('sess1', 'handover', {
+        cwd: CWD,
+        provider: 'claude',
+        transcriptPath: '/fake/transcript.jsonl',
+        git: fakeGit(),
+        readTranscript: vi.fn().mockResolvedValue(material),
+        readHandoff,
+        dir: specDir
+      })
+      expect(line).not.toBeNull()
+      expect(readHandoff).toHaveBeenCalledTimes(1)
+      expect(readHandoff).toHaveBeenCalledWith('sess1')
+      const content = await fs.readFile(tabFile('sess1'), 'utf8')
+      expect(content).toContain('HANDOFF MEMO')
+      expect(content).toContain('- no Redis')
+    })
+
+    it('none is stated in the file', async () => {
+      await buildTabResumeText('sess1', 'handover', {
+        cwd: CWD,
+        provider: 'claude',
+        transcriptPath: '/fake/transcript.jsonl',
+        git: fakeGit(),
+        readTranscript: vi.fn().mockResolvedValue(material),
+        readHandoff: () => ({ state: 'none' }),
+        dir: specDir
+      })
+      const content = await fs.readFile(tabFile('sess1'), 'utf8')
+      expect(content).toContain('None was left for this session.')
+    })
+
+    it('update never consults the reader', async () => {
+      const readHandoff = vi.fn().mockReturnValue({ state: 'found', memo })
+      const text = await buildTabResumeText('sess1', 'update', {
+        cwd: CWD,
+        provider: 'claude',
+        transcriptPath: null,
+        git: fakeGit(),
+        readHandoff,
+        dir: specDir
+      })
+      expect(text).not.toBeNull()
+      expect(readHandoff).not.toHaveBeenCalled()
+      expect(text).not.toContain('HANDOFF')
+    })
+
+    it('a throwing reader is one log line and an unknown — the briefing is still written', async () => {
+      const log = vi.fn()
+      const line = await buildTabResumeText('sess1', 'handover', {
+        cwd: CWD,
+        provider: 'claude',
+        transcriptPath: '/fake/transcript.jsonl',
+        git: fakeGit(),
+        readTranscript: vi.fn().mockResolvedValue(material),
+        readHandoff: () => {
+          throw new Error('store exploded')
+        },
+        log,
+        dir: specDir
+      })
+      expect(line).not.toBeNull()
+      expect(log).toHaveBeenCalledTimes(1)
+      expect(String(log.mock.calls[0][0])).toContain('handoff')
+      const content = await fs.readFile(tabFile('sess1'), 'utf8')
+      expect(content).not.toContain('HANDOFF MEMO')
+    })
+
+    it('no reader injected: unknown, and not a log line', async () => {
+      const log = vi.fn()
+      await buildTabResumeText('sess1', 'handover', {
+        cwd: CWD,
+        provider: 'claude',
+        transcriptPath: '/fake/transcript.jsonl',
+        git: fakeGit(),
+        readTranscript: vi.fn().mockResolvedValue(material),
+        log,
+        dir: specDir
+      })
+      expect(log).not.toHaveBeenCalled()
+      const content = await fs.readFile(tabFile('sess1'), 'utf8')
+      expect(content).not.toContain('HANDOFF MEMO')
+    })
   })
 })
