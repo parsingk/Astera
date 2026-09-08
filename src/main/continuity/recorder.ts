@@ -5,7 +5,7 @@
 import type { JobEvent } from '../../core/types'
 import type { OrchState } from '../../core/orchestration/state'
 import { buildCheckpoint } from '../../core/orchestration/checkpoint'
-import { deriveEvents, type ContinuityEvent } from '../../core/continuity/events'
+import { deriveEvents, type ContinuityEvent, type ContinuityEventType } from '../../core/continuity/events'
 import { checkpointsFor, type CheckpointKind } from '../../core/continuity/checkpointPolicy'
 import type { HandoffLookup } from '../../core/handoff/types'
 import { readGitSummary, type GitSummaryDeps } from '../gitSummary'
@@ -112,19 +112,27 @@ export class ContinuityRecorder {
     for (const d of open) await this.writeCheckpoint(state, d.id, 'baseline')
   }
 
-  /** The journal rows the Timeline shows (design §9): each ATTEMPT_LOST as a 'runtime-lost' line. */
-  lostEventsFor(runId: string, state: OrchState): JobEvent[] {
+  /** One journal event type read back as one kind of Timeline line (design §9). The two public
+   *  readers below differ only in the type they keep, the kind they emit and how they word the
+   *  summary, so the fold, the task titles and the swallow-and-log live here once. */
+  private timelineRows(
+    runId: string,
+    state: OrchState,
+    type: ContinuityEventType,
+    kind: JobEvent['kind'],
+    summary: (e: JournalEventRow) => string
+  ): JobEvent[] {
     try {
       const titleOf = new Map(state.tasks.map((t) => [t.id, t.title]))
       return this.deps.journal
         .eventsFor(runId)
-        .filter((e) => e.type === 'ATTEMPT_LOST')
+        .filter((e) => e.type === type)
         .map((e) => ({
           at: e.at,
-          kind: 'runtime-lost',
+          kind,
           sourceId: e.eventId,
           ...(e.taskId ? { taskId: e.taskId, taskTitle: titleOf.get(e.taskId) } : {}),
-          summary: ''
+          summary: summary(e)
         }))
     } catch (err) {
       this.deps.log(`continuity: eventsFor ${runId} failed: ${String(err)}`)
@@ -132,24 +140,17 @@ export class ContinuityRecorder {
     }
   }
 
-  /** The journal rows the Timeline shows: each RECOVERY_STRATEGY_SELECTED as a 'recovery' line. */
+  /** The journal rows the Timeline shows (design §9): each ATTEMPT_LOST as a 'runtime-lost' line. */
+  lostEventsFor(runId: string, state: OrchState): JobEvent[] {
+    return this.timelineRows(runId, state, 'ATTEMPT_LOST', 'runtime-lost', () => '')
+  }
+
+  /** The journal rows the Timeline shows: each RECOVERY_STRATEGY_SELECTED as a 'recovery' line. The
+   *  summary is the strategy as journaled; the renderer words it (RunDetail's RECOVERY_LABEL). */
   recoveryEventsFor(runId: string, state: OrchState): JobEvent[] {
-    try {
-      const titleOf = new Map(state.tasks.map((t) => [t.id, t.title]))
-      return this.deps.journal
-        .eventsFor(runId)
-        .filter((e) => e.type === 'RECOVERY_STRATEGY_SELECTED')
-        .map((e) => ({
-          at: e.at,
-          kind: 'recovery',
-          sourceId: e.eventId,
-          ...(e.taskId ? { taskId: e.taskId, taskTitle: titleOf.get(e.taskId) } : {}),
-          summary: String(e.payload?.strategy ?? '')
-        }))
-    } catch (err) {
-      this.deps.log(`continuity: eventsFor ${runId} failed: ${String(err)}`)
-      return []
-    }
+    return this.timelineRows(runId, state, 'RECOVERY_STRATEGY_SELECTED', 'recovery', (e) =>
+      String(e.payload?.strategy ?? '')
+    )
   }
 
   /** P0 detects, P1 acts: a crash between the journal append and the JSON rename leaves the journal
