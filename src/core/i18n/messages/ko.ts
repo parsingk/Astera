@@ -296,7 +296,7 @@ export const ko = {
   // ResumeStrategySettings.tsx — the two-way resume strategy picker
   'settings.resumeStrategy.label': '세션 재개 방식',
   'settings.resumeStrategy.smart.label': '스마트 재개 (실험)',
-  'settings.resumeStrategy.smart.hint': '간결한 체크포인트만으로 대화를 이어갑니다.',
+  'settings.resumeStrategy.smart.hint': '간결한 체크포인트만으로 대화를 이어갑니다. 에이전트가 작업 중 남긴 인계 메모가 있으면 함께 전달합니다.',
   'settings.resumeStrategy.original.label': '원래 세션 재개',
   'settings.resumeStrategy.original.hint': '기존 Resume 방식으로 대화를 이어갑니다.',
   'settings.resumeStrategy.saveFailed': '재개 방식을 저장하지 못했습니다: {detail}',
