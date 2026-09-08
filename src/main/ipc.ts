@@ -4445,6 +4445,10 @@ export function registerIpc(
     if (typeof enabled !== 'boolean') throw new Error(`INVALID_JOB_CONTINUITY: ${String(enabled)}`)
     const r = await core.appSettings.setJobContinuityEnabled(enabled)
     if (enabled && orchWiring) await startOrch()
+    // Same reason the setResumeStrategy handler calls it: the store may have just turned Smart Resume
+    // on, and the astera-handoff stub has to reach every account even when startOrch() was a no-op
+    // because another toggle already had the server up.
+    if (enabled) installStubsForCurrentToggles()
     return r
   })
 
