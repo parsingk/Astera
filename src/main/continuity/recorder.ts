@@ -121,8 +121,7 @@ export class ContinuityRecorder {
         .filter((e) => e.type === 'ATTEMPT_LOST')
         .map((e) => ({
           at: e.at,
-          // Task 12 of the P0 plan adds 'runtime-lost' to JobEventKind and drops this cast
-          kind: 'runtime-lost' as unknown as JobEvent['kind'],
+          kind: 'runtime-lost',
           sourceId: e.eventId,
           ...(e.taskId ? { taskId: e.taskId, taskTitle: titleOf.get(e.taskId) } : {}),
           summary: String(e.payload.workerState ?? '')

@@ -387,6 +387,8 @@ export type JobEventKind =
   | 'gate-resolved'
   | 'limit-hit'
   | 'resumed'
+  /** Job Continuity: the app restarted and this worker's process was gone (journal ATTEMPT_LOST). */
+  | 'runtime-lost'
 
 /** 타임라인 한 줄. 저장된 레코드가 아니라 core/orchestration/timeline.ts 가 파생한 값이다.
  *  Jobs 사이드바의 JobTask 와 같은 자리에 있는 이유도 같다 — 렌더러가 그리는 투영이다. */

@@ -1129,6 +1129,7 @@ export const ko = {
   'jobs.event.gateResolved': '결정 완료',
   'jobs.event.limitHit': '한도 정지',
   'jobs.event.resumed': '워커 재개',
+  'jobs.event.runtimeLost': '실행 환경 잃음',
   'jobs.event.status': '소식',
   'jobs.event.workerDone': '워커 보고',
   'jobs.event.question': '질문',
