@@ -60,8 +60,8 @@
 </div>
 
 **Ejecución**
-- Una configuración de ejecución tiene un tipo — Shell, npm, Node.js, Gradle, Maven, cargo, go,
-  Python, pytest, Docker Compose, Dockerfile o .NET — y guarda solo los campos que ese tipo tiene
+- Una configuración de ejecución tiene un tipo — Shell, npm, Node.js, Gradle, Maven, cargo, go, Python,
+  pytest, Docker Compose, Dockerfile, .NET o Compound — y guarda solo los campos que ese tipo tiene
 - El comando se arma al ejecutarlo, así que el wrapper de Gradle, el gestor de paquetes que implica
   tu lockfile y las comillas que pide tu shell se resuelven entonces, no se escriben en una casilla
 - Se leen los archivos de compilación del proyecto, así que sus scripts de npm ya están ahí como

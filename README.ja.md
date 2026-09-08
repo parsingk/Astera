@@ -59,7 +59,7 @@
 
 **実行構成**
 - 実行構成には種類があります — Shell・npm・Node.js・Gradle・Maven・cargo・go・Python・pytest・
-  Docker Compose・Dockerfile・.NET — そして、その種類が実際に持つ項目だけを保持します
+  Docker Compose・Dockerfile・.NET・Compound — そして、その種類が実際に持つ項目だけを保持します
 - コマンドは実行するときに組み立てられます。Gradle のラッパー、ロックファイルが示すパッケージ
   マネージャー、シェルに合わせたクォートは、欄に書き込むものではなく、そのときに決まります
 - プロジェクトのビルドファイルを読むので、npm スクリプトはそのまま構成として並び、Gradle・Maven の
