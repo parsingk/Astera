@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { formatTabResume, type TabResumeInput } from './tabResume'
 import type { GitSummary } from './checkpoint'
+import type { Handoff } from '../handoff/types'
 
 const git: GitSummary = {
   branch: 'main',
@@ -20,7 +21,8 @@ const base: TabResumeInput = {
     { role: 'user', text: 'Preserve the public AuthService API.' },
     { role: 'assistant', text: "I'll keep the public interface unchanged." }
   ],
-  lastCommand: null
+  lastCommand: null,
+  handoff: { state: 'none' }
 }
 
 describe('formatTabResume — handover', () => {
@@ -367,5 +369,83 @@ describe('formatTabResume — LAST COMMAND (§7 의 LAST VALIDATION)', () => {
     // 결과 발췌는 가려진다
     expect(out).toContain('token=[REDACTED] rejected')
     expect(out).not.toContain(`${secret} rejected`)
+  })
+})
+
+describe('formatTabResume — handoff memo', () => {
+  const memo: Handoff = {
+    version: 1,
+    sessionId: 's-1',
+    projectPath: 'C:/projects/my-api',
+    provider: 'claude',
+    createdAt: '2026-09-08T09:09:41.000Z',
+    git: { branch: 'main', head: 'abc123' },
+    completed: ['migrated the login endpoint'],
+    currentProblems: [],
+    nextActions: ['finish session invalidation'],
+    constraints: ['keep the public API', 'no Redis'],
+    decisions: [],
+    verification: [],
+    relevantFiles: []
+  }
+
+  it('none: the absence is stated, under CURRENT STATE and before LAST COMMAND', () => {
+    const out = formatTabResume(
+      { ...base, handoff: { state: 'none' }, lastCommand: { command: 'npm test', failed: false, excerpt: '' } },
+      'handover'
+    )!
+    const state = out.indexOf('CURRENT STATE')
+    const memoAt = out.indexOf('HANDOFF MEMO')
+    const last = out.indexOf('LAST COMMAND')
+    expect(state).toBeGreaterThan(-1)
+    expect(memoAt).toBeGreaterThan(state)
+    expect(last).toBeGreaterThan(memoAt)
+    expect(out).toContain('None was left for this session.')
+  })
+
+  it('found: the constraints reach the briefing', () => {
+    const out = formatTabResume({ ...base, handoff: { state: 'found', memo } }, 'handover')!
+    expect(out).toContain("HANDOFF MEMO (the previous agent's own account")
+    expect(out).toContain('- keep the public API')
+    expect(out).toContain('- no Redis')
+    // git.head in `base` is 'abc123', the memo's too: no moved-tree sentence
+    expect(out).not.toContain('The tree has moved since')
+  })
+
+  it('found with a moved tree: the sentence names both heads', () => {
+    const out = formatTabResume(
+      { ...base, git: { ...git, head: 'def4567' }, handoff: { state: 'found', memo } },
+      'handover'
+    )!
+    expect(out).toContain('The tree has moved since: HEAD was abc123, it is now def4567.')
+  })
+
+  it('unknown: no HANDOFF MEMO text anywhere', () => {
+    const out = formatTabResume({ ...base, handoff: { state: 'unknown' } }, 'handover')!
+    expect(out).not.toContain('HANDOFF MEMO')
+  })
+
+  it("update: the memo is never in the live session's one-liner", () => {
+    const out = formatTabResume({ ...base, handoff: { state: 'found', memo } }, 'update')!
+    expect(out).not.toContain('HANDOFF')
+    expect(out).not.toContain('\n')
+  })
+
+  it('an over-budget briefing cuts the tail, not the memo or the instructions', () => {
+    // Every list the formatter keeps is capped (5 requests and 6 tail messages at 500 characters
+    // each), so the only way past MEMO_CHARS_MAX is to fill several of them at once.
+    const hugeRequests = Array.from({ length: 5 }, (_, i) => `${i} ${'r'.repeat(2000)}`)
+    const hugeTail = Array.from({ length: 6 }, (_, i) => ({
+      role: 'assistant' as const,
+      text: `${i} ${'z'.repeat(2000)}`
+    }))
+    const wordy = { ...memo, constraints: ['no Redis', ...Array.from({ length: 5 }, () => 'c'.repeat(300))] }
+    const out = formatTabResume(
+      { ...base, requests: hugeRequests, tail: hugeTail, handoff: { state: 'found', memo: wordy } },
+      'handover'
+    )!
+    expect(out).toContain('truncated to fit its size budget')
+    expect(out).toContain('- no Redis')
+    expect(out.toLowerCase()).toContain('inspect git status')
   })
 })

@@ -7,9 +7,11 @@
 import { sanitize } from './checkpoint'
 import type { GitSummary } from './checkpoint'
 import type { LastCommand, TranscriptMessage } from '../types'
+import { handoffSection } from '../handoff/section'
+import type { HandoffLookup } from '../handoff/types'
 
-/** formatTabResume 의 입력. 필드 일곱 개가 메모의 여섯 절에 대응한다 — 1:1 이 아니다: cwd 와 git
- *  이 함께 CURRENT STATE 한 절을 이루고, 나머지 다섯(title·requests·editedFiles·lastCommand·tail)은
+/** formatTabResume 의 입력. 필드 여덟 개가 메모의 일곱 절에 대응한다 — 1:1 이 아니다: cwd 와 git
+ *  이 함께 CURRENT STATE 한 절을 이루고, 나머지 여섯(title·requests·editedFiles·handoff·lastCommand·tail)은
  *  절 하나씩이다. 지시문(BEFORE EDITING 등)은 입력이 아니라 이 파일이 붙이는 고정 문장이다 — 탭
  *  세션마다 달라질 것이 없기 때문이다. */
 export interface TabResumeInput {
@@ -45,6 +47,11 @@ export interface TabResumeInput {
   /** 대화 중 마지막으로 완료된 Bash 호출(parseTranscriptForResume 이 뽑는다). codex 는 이 재료가
    *  없어 항상 null 이다(parseCodexForResume 의 JSDoc) — 그때는 이 절 자체가 빠진다. */
   lastCommand: LastCommand | null
+  /** The last handoff memo the previous agent left, or why there is none. `found` renders the memo
+   *  under CURRENT STATE; `none` says so in one line; `unknown` (the store could not be read, or
+   *  this caller has none) renders nothing — an unknown is never dressed up as "none was left".
+   *  Read by main (resumePacket.ts) and handed in here like everything else. */
+  handoff: HandoffLookup
 }
 
 /** 꼬리에 실을 최근 메시지 수 상한. §9.3(Packet 은 작아야 한다 — diff 본문·소스 내용을 담지 않는
@@ -239,6 +246,8 @@ function formatHandover(input: TabResumeInput): string | null {
       titleSection(input),
       requestsSection(input),
       stateSection(input),
+      // Facts above, the previous agent's account below — spec §3's trust order in one line of code.
+      handoffSection(input.handoff, input.git?.head ?? null),
       lastCommandSection(input),
       filesSection(input),
       tailSection(input)
