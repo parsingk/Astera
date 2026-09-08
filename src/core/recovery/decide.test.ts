@@ -1,0 +1,95 @@
+import { describe, it, expect } from 'vitest'
+import { decideRecovery } from './decide'
+import type { GitFacts, LostAttempt } from './types'
+
+const attempt = (over: Partial<LostAttempt> = {}): LostAttempt => ({
+  runId: 'run_1',
+  taskId: 'tsk_1',
+  dispatchId: 'dsp_1',
+  provider: 'claude',
+  accountId: 'acc_1',
+  cwd: 'D:/wt',
+  promptConfirmed: true,
+  baseHead: 'aaa',
+  hasValidateConfig: false,
+  appDriven: true,
+  ...over
+})
+const git = (over: Partial<GitFacts> = {}): GitFacts => ({
+  exists: true,
+  head: 'aaa',
+  dirty: false,
+  inProgress: null,
+  conflicts: false,
+  branch: 'feature/x',
+  ...over
+})
+const strategyOf = (a: Partial<LostAttempt>, g: Partial<GitFacts> = {}, smartResume = false): string =>
+  decideRecovery({ attempt: attempt(a), git: git(g), smartResume }).strategy
+
+describe('decideRecovery', () => {
+  it('never touches an unsafe tree, whatever else is true', () => {
+    for (const g of [
+      { exists: false },
+      { inProgress: 'merge' as const },
+      { inProgress: 'rebase' as const },
+      { inProgress: 'cherry-pick' as const },
+      { inProgress: 'revert' as const },
+      { conflicts: true }
+    ]) {
+      const d = decideRecovery({
+        attempt: attempt({ nativeSessionId: 'uuid-a' }),
+        git: git(g),
+        smartResume: true
+      })
+      expect(d.strategy).toBe('review')
+      expect(d.class).toBe('unsafe')
+    }
+  })
+
+  it('resumes the provider session when there is one', () => {
+    expect(strategyOf({ nativeSessionId: 'uuid-a' })).toBe('resume-native')
+    // even with a dirty tree and Smart Resume on: native resume comes first (spec 13)
+    expect(strategyOf({ nativeSessionId: 'uuid-a' }, { dirty: true }, true)).toBe('resume-native')
+  })
+
+  it('sends a moved HEAD to the check, or to a person when there is no check', () => {
+    expect(strategyOf({ hasValidateConfig: true }, { head: 'bbb' })).toBe('recheck')
+    expect(strategyOf({ hasValidateConfig: false }, { head: 'bbb' })).toBe('review')
+  })
+
+  it('an unknown base HEAD is not treated as a moved one', () => {
+    expect(strategyOf({ baseHead: null }, { head: 'bbb' })).toBe('redispatch')
+  })
+
+  it('re-dispatches when the prompt never went out', () => {
+    expect(strategyOf({ promptConfirmed: false }, { dirty: true })).toBe('redispatch')
+  })
+
+  it('re-dispatches when the prompt went out but the tree is untouched', () => {
+    expect(strategyOf({ promptConfirmed: true }, { dirty: false })).toBe('redispatch')
+  })
+
+  it('hands over when the tree is dirty and Smart Resume is on, and asks when it is off', () => {
+    expect(strategyOf({}, { dirty: true }, true)).toBe('smart-resume')
+    const off = decideRecovery({ attempt: attempt(), git: git({ dirty: true }), smartResume: false })
+    expect(off.strategy).toBe('review')
+    expect(off.class).toBe('review')
+  })
+
+  it('a Run the app does not drive only resumes; it never starts work on its own', () => {
+    expect(strategyOf({ appDriven: false, nativeSessionId: 'uuid-a' })).toBe('resume-native')
+    expect(strategyOf({ appDriven: false, hasValidateConfig: true }, { head: 'bbb' })).toBe('recheck')
+    expect(strategyOf({ appDriven: false, promptConfirmed: false })).toBe('review')
+    expect(strategyOf({ appDriven: false }, { dirty: true }, true)).toBe('review')
+  })
+
+  it('every decision carries a reason', () => {
+    for (const d of [
+      decideRecovery({ attempt: attempt(), git: git({ conflicts: true }), smartResume: false }),
+      decideRecovery({ attempt: attempt({ nativeSessionId: 'x' }), git: git(), smartResume: false }),
+      decideRecovery({ attempt: attempt(), git: git(), smartResume: false })
+    ])
+      expect(d.reason.length).toBeGreaterThan(0)
+  })
+})
