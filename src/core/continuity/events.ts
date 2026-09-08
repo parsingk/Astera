@@ -53,7 +53,6 @@ export type ContinuityEventType =
   | 'RECOVERY_REQUIRES_REVIEW'
   | 'RECOVERY_COMPLETED'
   | 'RECOVERY_FAILED'
-  | 'ATTEMPT_RESUME_REQUESTED'
 
 export interface ContinuityEvent {
   runId: string
