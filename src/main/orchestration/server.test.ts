@@ -3973,3 +3973,95 @@ describe('browser-js', () => {
     expect((await call(deps, 'browser-js', { script: 'log(1)' }, 's1')).status).toBe(200)
   })
 })
+
+describe('handoff', () => {
+  // Typed the same way session-task's SessionTasks is above — vi.fn() with no type argument widens
+  // to a generic Mock that a union-returning method signature (handoffs.save) rejects on assignment.
+  type Handoffs = NonNullable<OrchServerDeps['handoffs']>
+  const doc = JSON.stringify({
+    nextActions: ['finish invalidation'],
+    constraints: ['no Redis'],
+    verification: [{ type: 'test', status: 'failed', summary: '2 failing' }]
+  })
+  const saved = () => ({
+    save: vi.fn<Handoffs['save']>().mockResolvedValue({ ok: true, savedAt: NOW })
+  })
+
+  it('smart resume off, or no store wired: 409 and nothing saved', async () => {
+    const a = await call({ ...makeDeps(), handoffEnabled: () => false, handoffs: saved() }, 'handoff', { memo: doc }, 'tab-1')
+    expect(a.status).toBe(409)
+    expect(JSON.stringify(a.body)).toContain('smart resume is off')
+    const b = await call({ ...makeDeps(), handoffEnabled: () => true }, 'handoff', { memo: doc }, 'tab-1')
+    expect(b.status).toBe(409)
+    const c = await call(makeDeps(), 'handoff', { memo: doc }, 'tab-1')
+    expect(c.status).toBe(409)
+  })
+
+  it('does not need orchestration to be on', async () => {
+    const store = saved()
+    const deps = { ...makeDeps(), enabled: () => false, handoffEnabled: () => true, handoffs: store }
+    const r = await call(deps, 'handoff', { memo: doc }, 'tab-1')
+    expect(r.status).toBe(200)
+    expect(r.body).toEqual({ savedAt: NOW })
+    expect(store.save).toHaveBeenCalledTimes(1)
+    const [sessionId, body] = store.save.mock.calls[0]
+    expect(sessionId).toBe('tab-1')
+    expect(body.constraints).toEqual(['no Redis'])
+    expect(body.verification).toEqual([{ type: 'test', status: 'failed', summary: '2 failing' }])
+  })
+
+  it('a missing or malformed document is 400 and nothing is saved', async () => {
+    const store = saved()
+    const deps = { ...makeDeps(), handoffEnabled: () => true, handoffs: store }
+    const none = await call(deps, 'handoff', {}, 'tab-1')
+    expect(none.status).toBe(400)
+    expect(JSON.stringify(none.body)).toContain('--memo')
+    const bad = await call(deps, 'handoff', { memo: '{ nope' }, 'tab-1')
+    expect(bad.status).toBe(400)
+    expect(JSON.stringify(bad.body)).toContain('not valid JSON')
+    const empty = await call(deps, 'handoff', { memo: '{}' }, 'tab-1')
+    expect(empty.status).toBe(400)
+    expect(store.save).not.toHaveBeenCalled()
+  })
+
+  it('the store answer is passed through: unknown session and write failure', async () => {
+    const unknown = {
+      ...makeDeps(),
+      handoffEnabled: () => true,
+      handoffs: { save: vi.fn<Handoffs['save']>().mockResolvedValue({ ok: false, status: 409, error: 'unknown session: tab-9' }) }
+    }
+    const a = await call(unknown, 'handoff', { memo: doc }, 'tab-9')
+    expect(a.status).toBe(409)
+    expect(JSON.stringify(a.body)).toContain('unknown session')
+    const failing = {
+      ...makeDeps(),
+      handoffEnabled: () => true,
+      handoffs: { save: vi.fn<Handoffs['save']>().mockResolvedValue({ ok: false, status: 500, error: 'the memo could not be written' }) }
+    }
+    const b = await call(failing, 'handoff', { memo: doc }, 'tab-1')
+    expect(b.status).toBe(500)
+  })
+
+  it('a worker session may leave a memo too', async () => {
+    // Seed one worker the way the role-authorization tests in this file do: a Run, a Task, a
+    // worker-start — makeDeps().startWorker answers with sessionId 'sess1'.
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    await call(deps, 'worker-start', { taskId, agent: 'codex', account: 'acc1', worktree: 'current' })
+    const store = saved()
+    const r = await call({ ...deps, handoffEnabled: () => true, handoffs: store }, 'handoff', { memo: doc }, 'sess1')
+    expect(r.status).toBe(200)
+    expect(store.save.mock.calls[0][0]).toBe('sess1')
+  })
+
+  it('the CLI parser hands --memo - to stdin filling', () => {
+    const parsed = parseArgs(['handoff', '--memo', '-'])
+    expect('error' in parsed).toBe(false)
+    if ('error' in parsed) return
+    expect(parsed.cmd).toBe('handoff')
+    expect(parsed.wantsStdin).toEqual(['memo'])
+  })
+})

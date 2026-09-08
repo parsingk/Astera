@@ -50,6 +50,8 @@ import { isValidRule, type ScheduleRule } from '../../core/scheduler/rule'
 import { parseCheckFlag } from '../../core/workUnit/verification'
 import { outcomeOf } from '../../core/orchestration/view'
 import type { SessionCheck } from '../../core/workUnit/types'
+import { parseHandoffBody } from '../../core/handoff/parse'
+import type { HandoffBody } from '../../core/handoff/types'
 
 export interface OrchServerDeps {
   getState(): OrchState
@@ -157,6 +159,20 @@ export interface OrchServerDeps {
     | { ok: true; result: { log: string[]; error?: { message: string; at: string } } }
     | { ok: false; status: 404 | 409; error: string }
   >
+  /** The Smart Resume setting — what the `handoff` command answers to. The memo only ever feeds a
+   *  Smart Resume briefing, so there is no separate switch (spec §11). Optional for the same reason
+   *  as trackingEnabled; absent reads as off. */
+  handoffEnabled?(): boolean
+  /** Stores a validated memo for the calling session. The server hands over only what it checked
+   *  (the body); ipc.ts fills in the facts only the app can vouch for — cwd, provider, git, the
+   *  clock — before writing. 409 is "unknown session" (the app has not caught up to a tab that just
+   *  opened); 500 is a write that failed. */
+  handoffs?: {
+    save(
+      sessionId: string,
+      body: HandoffBody
+    ): Promise<{ ok: true; savedAt: string } | { ok: false; status: 409 | 500; error: string }>
+  }
   /** The handle the three session-task-* commands call through, shaped so `ipc.ts` can pass
    *  `WorkUnitCollector.startTask/completeTask/cancelTask` straight in. Optional for the same reason
    *  as `trackingEnabled` — when it is not injected, the commands answer `work unit tracking is
@@ -360,6 +376,19 @@ export async function handleCommand(
     if (typeof script !== 'string' || script.trim() === '') return bad('script is required')
     const outcome = await deps.browserRun(caller.sessionId, script)
     return outcome.ok ? okBody(outcome.result) : { status: outcome.status, body: { error: outcome.error } }
+  }
+  if (cmd === 'handoff') {
+    // Its own toggle and none of the orchestration state below — the same footing as browser-js
+    // and the session-task-* commands: a plain tab session with orchestration off must be able to
+    // leave a memo, because that is the session Smart Resume is for.
+    if (!deps.handoffEnabled?.() || !deps.handoffs) return conflict('smart resume is off')
+    const memo = args.memo
+    if (typeof memo !== 'string' || memo.trim() === '')
+      return bad('--memo is required: the JSON document, or - to read it from stdin')
+    const parsed = parseHandoffBody(memo)
+    if (!parsed.ok) return bad(parsed.error)
+    const r = await deps.handoffs.save(caller.sessionId, parsed.value)
+    return r.ok ? okBody({ savedAt: r.savedAt }) : { status: r.status, body: { error: r.error } }
   }
   if (SESSION_TASK_CMDS.has(cmd)) {
     if (!deps.trackingEnabled?.()) return conflict('work unit tracking is off')
