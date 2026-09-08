@@ -31,16 +31,20 @@ a memo per milestone is a handoff.
 
 Only what the work supports. Do not summarise the conversation; do not claim something is done that
 you have not seen done; no secrets; no code blocks. The person's constraints go in **their words**.
+Strings are cut at 300 characters and the briefing shows at most 10 items per list (20 for files),
+so put the important items first.
 
 ## How
 
-Write the document to a file (heredocs behave differently across shells), then:
+Write the document to a file in the shell's temp directory — never inside the project — run the
+command below, then delete the file so nothing is ever committed (heredocs behave differently
+across shells, which is why a file is more reliable than one):
 
 ```bash
 astera handoff --memo - < handoff.json
 ```
 
-where `handoff.json` is, for example:
+where `handoff.json` (in the temp directory) is, for example:
 
 ```json
 {
@@ -61,8 +65,8 @@ Every field is optional except that the memo must say something. Lists are plain
 current state, not a diff.
 
 If the command answers `{"error":"smart resume is off"}`, the setting is off — tell the person where
-it is (Settings, **Session resume**) and carry on without a memo. `unknown session: …` right after a
-tab opened means the app has not caught up to this session yet; try once more.
+it is (Settings, **Session resume strategy**) and carry on without a memo. `unknown session: …`
+right after a tab opened means the app has not caught up to this session yet; try once more.
 
 If `astera` is not found but the environment variable is set, call the same program by its absolute
 path: `"$ASTERA_CLI"` in bash or zsh, `& $env:ASTERA_CLI` in PowerShell (there `$ASTERA_CLI` alone is
