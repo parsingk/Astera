@@ -60,7 +60,7 @@
 
 **실행 구성**
 - 실행 구성은 Shell·npm·Node.js·Gradle·Maven·cargo·go·Python·pytest·Docker Compose·Dockerfile·
-  .NET 유형을 지원하며, 유형별로 필요한 항목만 입력합니다
+  .NET·Compound 유형을 지원하며, 유형별로 필요한 항목만 입력합니다
 - 명령은 실행할 때 조합됩니다. Gradle Wrapper, 락파일이 가리키는 패키지 매니저, 셸에 맞는 인용은
   입력란에 직접 적는 대신 실행 시점에 결정됩니다
 - 프로젝트의 빌드 파일을 읽어 npm 스크립트를 실행 구성으로 가져오고, Gradle·Maven 프로젝트에는 표준
