@@ -127,14 +127,24 @@ function open(filePath: string): OpenResult {
     db.exec('PRAGMA journal_mode = WAL')
     db.exec('PRAGMA synchronous = FULL')
     db.exec('PRAGMA foreign_keys = ON')
+    // **The version is read before the schema is applied.** `CREATE TABLE IF NOT EXISTS` is not a
+    // no-op against a file from a future build that renamed or dropped one of these tables: it
+    // silently creates an empty one of ours beside it, and "a file at a newer version is left
+    // untouched" would already be false by the time the version was read. sqlite_master answers on
+    // any database, including a fresh one that has no tables at all.
+    const hasMeta = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta'")
+      .get() as { name: string } | undefined
+    const meta = hasMeta
+      ? (db.prepare('SELECT version FROM schema_meta LIMIT 1').get() as { version: number } | undefined)
+      : undefined
+    if (meta && meta.version > SCHEMA_VERSION) return { db, version: meta.version }
     db.exec(SCHEMA)
-    const meta = db.prepare('SELECT version FROM schema_meta LIMIT 1').get() as { version: number } | undefined
     if (!meta) db.prepare('INSERT INTO schema_meta (version) VALUES (?)').run(SCHEMA_VERSION)
     else if (meta.version < SCHEMA_VERSION)
       // The CREATE TABLE IF NOT EXISTS above already added what version 2 adds, so the migration is
       // the stamp. A future version that changes an existing table gets its own step here.
       db.prepare('UPDATE schema_meta SET version = ?').run(SCHEMA_VERSION)
-    else if (meta.version > SCHEMA_VERSION) return { db, version: meta.version }
     return { db, version: SCHEMA_VERSION }
   } catch (err) {
     try {

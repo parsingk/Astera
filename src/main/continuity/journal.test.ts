@@ -161,6 +161,32 @@ describe('ContinuityJournal schema 2', () => {
     j2.close()
   })
 
+  // `CREATE TABLE IF NOT EXISTS` is not a no-op against a file whose future build renamed or dropped
+  // one of these tables: it silently creates an empty one of ours beside it. So the version has to be
+  // read before the schema is applied, not after.
+  it('leaves a newer-version file its own tables, creating none of ours', async () => {
+    const { DatabaseSync } = await import('node:sqlite')
+    const raw = new DatabaseSync(file())
+    raw.exec('CREATE TABLE schema_meta (version INTEGER NOT NULL)')
+    raw.prepare('INSERT INTO schema_meta (version) VALUES (?)').run(99)
+    raw.exec('CREATE TABLE journal_entries (entry_id TEXT PRIMARY KEY)') // what version 99 renamed it to
+    raw.close()
+
+    const j = new ContinuityJournal(file())
+    expect(j.usable).toBe(false)
+    expect(j.schemaVersion()).toBe(99)
+    j.close()
+
+    const after = new DatabaseSync(file())
+    const tables = (after.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[])
+      .map((r) => r.name)
+    after.close()
+    expect(tables).toContain('journal_entries')
+    expect(tables).not.toContain('journal_events')
+    expect(tables).not.toContain('checkpoints')
+    expect(tables).not.toContain('recovery_actions')
+  })
+
   it('records a recovery action and closes it', () => {
     const j = new ContinuityJournal(file())
     const row = j.startRecoveryAction({
