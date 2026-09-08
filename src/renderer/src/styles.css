@@ -2320,11 +2320,65 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .fi--mute { color: var(--fi-mute); }
 
 /* ---------- file editor ---------- */
-.file-editor { flex: 1; min-height: 0; overflow: hidden; }
+/* position: relative — the find bar sits over the editor and measures from here */
+.file-editor { flex: 1; min-height: 0; overflow: hidden; position: relative; }
+/* CodeMirror's own host. height: 100% passes .file-editor's definite height (it is a flex child of
+   .md-pane) down to .cm-editor, which is what its own height: 100% resolves against. */
+.file-editor-host { height: 100%; }
 .file-editor .cm-editor { height: 100%; }
 /* oneDark 의 색은 유지하고 배경만 테마를 따라간다 — 확장을 재구성하면 되돌리기 이력이 사라진다 */
 .file-editor .cm-editor, .file-editor .cm-gutters { background: var(--md-code-bg); }
 .file-editor .cm-scroller { font-family: Consolas, 'Courier New', monospace; font-size: 13px; }
+/* The search panel is open but never drawn — FileFindBar is what the user sees. It has to stay open
+   because @codemirror/search only highlights matches while it is (see FileFindBar's own note). */
+.file-editor .cm-panels { display: none; }
+/* The match you are on must read as stronger than the rest. oneDark has it the other way round: it
+   paints .cm-searchMatch at #72a1ff59 and then the selected one at #6199ff2f, which is fainter. The
+   hue stays oneDark's; only the weight changes, and the ring carries most of it so the code
+   underneath is still readable. */
+.file-editor .cm-editor .cm-searchMatch.cm-searchMatch-selected {
+  background-color: #72a1ff80;
+  outline-color: #8ab4ff;
+}
+
+/* ---- 파일 에디터의 찾기·바꾸기 바 — components/FileFindBar.tsx ---- */
+/* 콘솔의 .run-find 와 같은 부품이다: 같은 22px 행, 같은 아이콘 버튼, 같은 세는 자리. 값을 새로 정하지
+   않고 그쪽에서 가져왔다 — 두 찾기 바가 같아 보이지 않으면 둘 중 하나는 남의 것처럼 읽힌다.
+   늘어난 것은 바꾸기 행과 입력칸 안의 토글 세 개뿐이다.
+   자리는 오른쪽 위다. 코드를 조금 가리는 대신, 열고 닫을 때 문서가 위아래로 움직이지 않는다 —
+   CodeMirror 기본 패널은 에디터를 통째로 밀어내서 읽던 줄이 뛰었다. */
+.fe-find {
+  position: absolute; top: 6px; right: 14px; z-index: 5;
+  display: flex; gap: 4px; padding: 3px;
+  background: var(--panel); border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+}
+.fe-find-expand { flex: none; width: 20px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius-sm); color: var(--text-faint); padding: 0; cursor: pointer; }
+.fe-find-expand:hover { background: var(--elevated); color: var(--text); }
+.fe-find-expand:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.fe-find-rows { display: flex; flex-direction: column; gap: 4px; }
+.fe-find-row { display: flex; align-items: center; gap: 4px; height: 22px; }
+/* 두 줄의 입력칸 너비를 같은 값으로 못 박는다. 오른쪽에 붙는 버튼 묶음의 길이가 서로 달라서, 늘어나게
+   두면 찾기 칸과 바꾸기 칸의 오른쪽 끝이 어긋난다 */
+.fe-find-field { width: 240px; height: 22px; display: flex; align-items: center; gap: 4px; background: var(--bg); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: 0 3px 0 7px; }
+.fe-find-field:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--ring); }
+.fe-find-field-icon { flex: none; color: var(--text-faint); }
+.fe-find-field > input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; padding: 0; color: var(--text); font-family: var(--mono); font-size: 12px; }
+.fe-find-field > input::placeholder { color: var(--text-faint); font-family: var(--sans); }
+.fe-find-toggles { flex: none; display: flex; gap: 2px; }
+.fe-find-toggle { width: 18px; height: 18px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius-sm); color: var(--text-faint); padding: 0; cursor: pointer; }
+.fe-find-toggle:hover { background: var(--elevated); color: var(--text); }
+/* 켜짐은 앱의 체크박스와 같은 말을 쓴다 — accent 로 채우고 표시는 accent-ink */
+.fe-find-toggle.on { background: var(--accent); color: var(--accent-ink); }
+.fe-find-toggle:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+/* .run-find-count 와 같다. 스페인어의 '{total} coincidencias' 처럼 긴 문구에서는 자리가 늘어난다 —
+   바가 오른쪽에 붙어 있어서 왼쪽으로 늘어난다 */
+.fe-find-count { flex: none; min-width: 56px; text-align: right; font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fe-find-count.bad { color: var(--danger); }
+.fe-find-sep { flex: none; width: 1px; height: 16px; background: var(--line-soft); margin: 0 1px; }
+.fe-find-btn { width: 22px; height: 22px; display: grid; place-items: center; background: transparent; border: 0; border-radius: var(--radius); color: var(--text-dim); padding: 0; cursor: pointer; }
+.fe-find-btn:hover { background: var(--elevated); color: var(--text); }
+.fe-find-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
 
 /* ---------- markdown split (toolbar + editor/preview split) ---------- */
 .md-split-host { flex: 1; min-height: 0; display: flex; flex-direction: column; }
