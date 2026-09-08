@@ -28,9 +28,10 @@ import {
   attachCoordinator,
   detachCoordinator,
   bindNativeSession,
+  beginValidation,
   type OrchState
 } from './state'
-import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task } from './types'
+import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task, type Gate } from './types'
 
 const NOW = '2026-08-04T00:00:00.000Z'
 const LATER = '2026-08-04T01:00:00.000Z'
@@ -2437,5 +2438,78 @@ describe('bindNativeSession', () => {
     ).state
     const r = bindNativeSession(closed, { dispatchId: s.dispatches[0].id, nativeSessionId: 'x' })
     expect(r.ok).toBe(false)
+  })
+})
+
+describe('beginValidation', () => {
+  const taskDispatchedFixture = (): OrchState => {
+    const r0 = unwrap<{ id: string }>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW))
+    const r1 = unwrap<Task>(
+      createTask(r0.state, { runId: r0.value.id, title: 't', spec: 'do it', deps: [] }, NOW)
+    )
+    const r2 = unwrap<{ id: string }>(
+      openDispatch(
+        r1.state,
+        {
+          taskId: r1.value.id,
+          provider: 'codex',
+          accountId: 'acc1',
+          sessionId: 'sess-1',
+          cwd: 'D:/p',
+          specPath: 'D:/p/orch/specs/x.md'
+        },
+        NOW
+      )
+    )
+    return r2.state
+  }
+
+  it('moves a dispatched Task into validating so its check can run', () => {
+    const s = taskDispatchedFixture()
+    const before = s.tasks[0]
+    const r = unwrap<Task>(beginValidation(s, { taskId: before.id }, LATER))
+    expect(r.value.status).toBe('validating')
+    expect(r.value.updatedAt).toBe(LATER)
+  })
+
+  it('refuses a Task that is not dispatched, and an unknown one', () => {
+    const s = taskDispatchedFixture()
+    const validating = unwrap<Task>(beginValidation(s, { taskId: s.tasks[0].id }, LATER)).state
+    expect(beginValidation(validating, { taskId: s.tasks[0].id }, LATEST).ok).toBe(true) // already there: no-op
+    expect(beginValidation(s, { taskId: 'nope' }, LATER)).toEqual({ ok: false, error: 'unknown task: nope' })
+  })
+})
+
+describe('a recovery Gate on a dispatched Task', () => {
+  const taskDispatchedFixture = (): OrchState => {
+    const r0 = unwrap<{ id: string }>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW))
+    const r1 = unwrap<Task>(
+      createTask(r0.state, { runId: r0.value.id, title: 't', spec: 'do it', deps: [] }, NOW)
+    )
+    const r2 = unwrap<{ id: string }>(
+      openDispatch(
+        r1.state,
+        {
+          taskId: r1.value.id,
+          provider: 'codex',
+          accountId: 'acc1',
+          sessionId: 'sess-1',
+          cwd: 'D:/p',
+          specPath: 'D:/p/orch/specs/x.md'
+        },
+        NOW
+      )
+    )
+    return r2.state
+  }
+
+  it('is allowed once the dispatch is closed, and still refused while it is open', () => {
+    const s = taskDispatchedFixture()
+    const open = createGate(s, { taskId: s.tasks[0].id, question: 'q' }, LATER)
+    expect(open.ok).toBe(false) // an open dispatch still wins
+
+    const closed = unwrap<unknown>(closeDispatch(s, { sessionId: 'sess-1', exitCode: 1 }, LATER)).state
+    const gated = unwrap<Gate>(createGate(closed, { taskId: s.tasks[0].id, question: 'q' }, LATEST))
+    expect(gated.state.tasks[0].status).toBe('blocked')
   })
 })

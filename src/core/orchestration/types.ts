@@ -308,13 +308,14 @@ export const DEFAULT_CHECK_TIMEOUT_MS = 300_000
 const ALLOWED: Record<TaskStatus, TaskStatus[]> = {
   pending: ['ready', 'dispatched', 'blocked'],
   ready: ['dispatched', 'blocked'],
-  // There is no dispatched -> blocked: a Task with an open dispatch is not blocked by a Gate. A
-  // Gate is for deciding the task DAG the coordinator manages; it is not a device for halting a
-  // worker that is already running — that is worker-stop.
+  // Recovery adds `blocked`: when a worker is lost and the app cannot prove it is safe to continue,
+  // the question goes to a person, and `blocked` + a Gate is how this app asks one. The rule the
+  // comment above states still holds — createGate refuses while a Dispatch is open, so a Task with a
+  // live worker can still never be gated.
   // dispatched -> validating: 워커가 성공을 보고했지만 그 Task 에 검증이 걸려 있는 경우.
   // 검증이 없으면 지금처럼 곧바로 completed 로 간다.
   // dispatched -> reviewing: 검증이 걸리지 않고 검토만 걸린 Task 의 성공 보고.
-  dispatched: ['completed', 'failed', 'validating', 'reviewing'],
+  dispatched: ['completed', 'failed', 'validating', 'reviewing', 'blocked'],
   // validating -> blocked 는 검증을 아예 돌릴 수 없을 때다(구성이 없다, cwd 가 사라졌다). 그 판단은
   // 사람의 것이므로 Gate 를 연다. validating -> dispatched 는 없다 — 검증 결과가 도착할 자리가
   // 사라지기 때문이다.
