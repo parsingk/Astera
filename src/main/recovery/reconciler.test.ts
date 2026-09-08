@@ -54,6 +54,12 @@ describe('candidates', () => {
     const older = dispatch({ id: 'dsp_0', sessionId: 'sess-0', startedAt: '2026-09-09T08:00:00.000Z' })
     expect(candidates(state({ dispatches: [older, dispatch()] })).map((c) => c.dispatch.id)).toEqual(['dsp_1'])
   })
+
+  it('skips a Task whose latest attempt a person stopped, even when an older one was lost', () => {
+    const older = dispatch({ id: 'dsp_0', sessionId: 'sess-0', startedAt: '2026-09-09T08:00:00.000Z' })
+    const stopped = dispatch({ id: 'dsp_2', sessionId: 'sess-2', startedAt: '2026-09-09T09:30:00.000Z', closedBy: 'stop', retryOf: 'dsp_0' })
+    expect(candidates(state({ dispatches: [older, stopped] }))).toEqual([])
+  })
 })
 
 /** A reconciler whose journal, git and executor are all recorded fakes. */

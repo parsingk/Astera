@@ -35,9 +35,16 @@ export interface ReconcilerDeps {
 const isLost = (d: Dispatch): boolean =>
   d.endedAt !== undefined && d.outcome === undefined && d.closedBy === undefined
 
-/** Every dispatched Task whose Run is live (not paused, not a schedule template) and whose last
- *  attempt was lost — one seed per Task, the most recent lost Dispatch when it has had several, and
- *  none at all when the Task already has an open Dispatch (a fresh attempt is already running). */
+/** Every dispatched Task whose Run is live (not paused, not a schedule template) and whose most
+ *  recent Dispatch was lost — one seed per Task, and none at all when the Task already has an open
+ *  Dispatch (a fresh attempt is already running).
+ *
+ *  **The most recent Dispatch, then the lost test — not the most recent lost one.** Filtering the
+ *  person-closed attempts out first would reach past a stop to an older crash: a worker crashes, the
+ *  boot sweep restarts it, the person stops the restart they did not want, and the next boot
+ *  recovers the original attempt anyway. That is exactly what `Dispatch.closedBy` exists to prevent,
+ *  and through `worker-abandon` it would put a second agent in a worktree whose resources may still
+ *  be live. */
 export function candidates(state: OrchState): LostAttemptSeed[] {
   const runs = new Map(state.runs.map((r) => [r.id, r]))
   const out: LostAttemptSeed[] = []
@@ -46,10 +53,13 @@ export function candidates(state: OrchState): LostAttemptSeed[] {
     const run = runs.get(task.runId)
     if (!run || run.paused === true || run.schedule !== undefined) continue
     const own = state.dispatches.filter((d) => d.taskId === task.id)
+    // A `dispatched` Task always has one — openDispatch writes the Dispatch and the status together.
+    // The guard is here because orchestration.json outlives the process and is hand-edited, the same
+    // reason schedule.ts refuses to infer a Task's account from the command that made it.
+    if (own.length === 0) continue
     if (own.some((d) => d.endedAt === undefined)) continue
-    const lost = own.filter(isLost)
-    if (lost.length === 0) continue
-    const latest = lost.reduce((a, b) => (b.startedAt > a.startedAt ? b : a))
+    const latest = own.reduce((a, b) => (b.startedAt > a.startedAt ? b : a))
+    if (!isLost(latest)) continue
     out.push({ runId: task.runId, taskId: task.id, dispatch: latest })
   }
   return out
