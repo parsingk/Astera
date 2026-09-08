@@ -135,14 +135,12 @@ export class ContinuityJournal {
     this.recovered = recovered
   }
 
-  /** Appends in one transaction. A row whose idempotency key is already present is skipped
-   *  (INSERT OR IGNORE) — the same diff derived twice lands once. Returns how many rows landed. */
+  /** Appends in one transaction. A row whose idempotency key is already present is skipped — the
+   *  same diff derived twice lands once. The conflict target is the key alone (not `INSERT OR
+   *  IGNORE`, which would also swallow a NOT NULL violation and drop a bad event silently instead of
+   *  failing the batch). Returns how many rows landed. */
   append(events: ContinuityEvent[]): number {
     if (events.length === 0) return 0
-    // ON CONFLICT(idempotency_key), not OR IGNORE: OR IGNORE swallows every constraint violation on
-    // the row (a NOT NULL failure included), which would turn a bad event into a silent no-op instead
-    // of the thrown, whole-batch-rolled-back error a caller needs to notice. Scoping the conflict
-    // target to idempotency_key keeps only the intended case — the same diff derived twice — silent.
     const insert = this.db.prepare(
       `INSERT INTO journal_events
          (event_id, schema_version, run_id, task_id, dispatch_id, event_type, created_at, idempotency_key, payload_json)
@@ -168,7 +166,11 @@ export class ContinuityJournal {
       }
       this.db.exec('COMMIT')
     } catch (err) {
-      this.db.exec('ROLLBACK')
+      try {
+        this.db.exec('ROLLBACK')
+      } catch {
+        /* the original error is the one worth reporting */
+      }
       throw err
     }
     return inserted
@@ -206,7 +208,11 @@ export class ContinuityJournal {
       this.db.prepare('DELETE FROM checkpoints WHERE run_id = ?').run(runId)
       this.db.exec('COMMIT')
     } catch (err) {
-      this.db.exec('ROLLBACK')
+      try {
+        this.db.exec('ROLLBACK')
+      } catch {
+        /* the original error is the one worth reporting */
+      }
       throw err
     }
   }
