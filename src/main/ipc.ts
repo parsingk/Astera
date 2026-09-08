@@ -25,6 +25,9 @@ import { sanitizeResumePrompt } from '../core/sessions/commands'
 import { OrchestrationStore } from './orchestration/store'
 import { UnderstandingStore } from './understanding/store'
 import { WorkUnitStore } from './workUnit/store'
+import { HandoffStore } from './handoff/store'
+import { readGitSummary } from './gitSummary'
+import type { Handoff } from '../core/handoff/types'
 import { WorkUnitCollector, type CollectorSession } from './workUnit/collector'
 import { readGitRef, isAncestorOf, readChangedFiles, readRange } from './workUnit/gitProbe'
 import {
@@ -400,6 +403,19 @@ export function registerIpc(
     orchLog(
       `warning — the tab-resume directory path contains characters forbidden in a launch prompt (" & | < > ^ %): ${tabResumeDir} — codex Smart Resume will be refused for every tab session in this state`
     )
+  // The handoff memos agents leave while they work (core/handoff/types.ts). Persistent, unlike
+  // tab-resume above: a memo has to survive an app restart to serve a history resume. Declared this
+  // early because both blank-start sites below and the CLI server deps close over it.
+  const handoffs = new HandoffStore(path.join(app.getPath('userData'), 'handoff.json'))
+  void handoffs
+    .load()
+    .then((r) => {
+      if (r.recovered)
+        orchLog(
+          'failed to read or parse handoff.json — kept the .bak; memo lookups answer unknown until the next memo is saved'
+        )
+    })
+    .catch((e) => orchLog(`handoff.json load failed: ${String(e)}`))
   let orch: {
     server: OrchServer
     deps: OrchServerDeps
@@ -435,12 +451,15 @@ export function registerIpc(
    *  the same ASTERA_SESSION, and the command gate in the server decides what may be called. **So
    *  does the agent browser**: `astera browser help` and `astera browser js` are that same CLI, and
    *  skillsPath is where `browser help` reads the guide from — without this the astera-browser skill
-   *  is planted into a session that cannot reach the program it tells the agent to run. */
+   *  is planted into a session that cannot reach the program it tells the agent to run. **And Smart
+   *  Resume**: `astera handoff` is that same CLI, and the memo it stores is what the Smart Resume
+   *  briefing reads back. */
   const orchEnvOf = (): { cliPath: string; infoPath: string; skillsPath: string } | undefined =>
     orch &&
     (core.appSettings.getOrchestrationEnabled() ||
       core.appSettings.getWorkUnitTrackingEnabled() ||
-      core.appSettings.getAgentBrowserEnabled())
+      core.appSettings.getAgentBrowserEnabled() ||
+      core.appSettings.getResumeStrategy() === 'smart')
       ? { cliPath: orch.cliPath, infoPath: orch.infoPath, skillsPath: orch.skillsPath }
       : undefined
   /** The project the Jobs sidebar is folded for. main is not otherwise told what the renderer has
@@ -740,7 +759,8 @@ export function registerIpc(
               // 만들어지지 않고, 아래는 기존 경로를 그대로 지난다.
               transcriptPath: opts.resumeTranscriptPath ?? null,
               log: orchLog,
-              dir: tabResumeDir
+              dir: tabResumeDir,
+              readHandoff: (id) => handoffs.lookup(id)
             })
           : null
       const plan = historyResumePlan({ strategy, provider, briefing })
@@ -1016,7 +1036,8 @@ export function registerIpc(
       provider,
       transcriptPath,
       log: orchLog,
-      dir: tabResumeDir
+      dir: tabResumeDir,
+      readHandoff: (id) => handoffs.lookup(id)
     })
   }
   // fix wave 최종, F1: handed over here, unconditionally — not inside bootOrch below, which only runs
@@ -1027,8 +1048,9 @@ export function registerIpc(
   /**
    * Installs whichever discovery stub(s) match the toggles' current state, against every known
    * account. Pulled out of bootOrch (which used to build and install this list inline, once) into a
-   * standalone function that settings.setOrchestrationEnabled, settings.setWorkUnitTrackingEnabled
-   * and settings.setAgentBrowserEnabled also call directly — **not just bootOrch**.
+   * standalone function that settings.setOrchestrationEnabled, settings.setWorkUnitTrackingEnabled,
+   * settings.setAgentBrowserEnabled and settings.setResumeStrategy also call directly — **not just
+   * bootOrch**.
    *
    * **Why bootOrch alone is not enough**: bootOrch only runs on the transition that actually starts
    * the server (see startOrch's `if (orch || orchStarting) return`). Before this task the server could
@@ -1061,6 +1083,9 @@ export function registerIpc(
         : []),
       ...(core.appSettings.getAgentBrowserEnabled()
         ? [{ stubPath: path.join(orch.skillsPath, 'browser-stub.md'), skillName: 'astera-browser' }]
+        : []),
+      ...(core.appSettings.getResumeStrategy() === 'smart'
+        ? [{ stubPath: path.join(orch.skillsPath, 'handoff-stub.md'), skillName: 'astera-handoff' }]
         : [])
     ]
     if (stubs.length === 0) return
@@ -1080,9 +1105,9 @@ export function registerIpc(
   }
 
   let orchStarting = false
-  /** Starts the orchestration server. Called when **any of the three** toggles is on — agent
-   *  orchestration, work-unit tracking, or the agent browser, since `/astera-task` and
-   *  `astera browser js` need the same CLI and the same `ASTERA_SESSION` the
+  /** Starts the orchestration server. Called when **any of the four** toggles is on — agent
+   *  orchestration, work-unit tracking, the agent browser, or Smart Resume, since `/astera-task`,
+   *  `astera browser js` and `astera handoff` need the same CLI and the same `ASTERA_SESSION` the
    *  orchestration server already hands out (see `orchEnvOf`'s doc). With all off, this is never
    *  called and no port is opened. Turning any one of them on at runtime comes back through here and
    *  starts immediately (sessions created after that get the CLI — environment variables are fixed
@@ -2680,6 +2705,37 @@ export function registerIpc(
       // deps can name it here.
       browserEnabled: () => core.appSettings.getAgentBrowserEnabled(),
       browserRun: (sessionId, script) => agentRuns.run(sessionId, script),
+      // Same reasoning again, for `handoff` — read on every request so switching Smart Resume off
+      // rejects the command from then on.
+      handoffEnabled: () => core.appSettings.getResumeStrategy() === 'smart',
+      handoffs: {
+        save: async (sessionId, body) => {
+          const sessions = core.sessions.list()
+          const info = sessions.find((s) => s.id === sessionId)
+          const provider = providerOfSession(sessionId, sessions, (id) => core.accounts.get(id))
+          if (!info || !provider)
+            return { ok: false, status: 409, error: `unknown session: ${sessionId}` }
+          // git is read here, at save time, so the briefing can later say whether the tree moved.
+          // A folder that is not a repository stores null and the briefing makes no HEAD claim.
+          const git = await readGitSummary(info.cwd).catch(() => null)
+          const memo: Handoff = {
+            ...body,
+            version: 1,
+            sessionId,
+            projectPath: info.cwd,
+            provider,
+            createdAt: new Date().toISOString(),
+            git: git ? { branch: git.branch, head: git.head } : null
+          }
+          try {
+            await handoffs.save(memo)
+          } catch (err) {
+            orchLog(`handoff save failed session=${sessionId}: ${String(err)}`)
+            return { ok: false, status: 500, error: 'the memo could not be written' }
+          }
+          return { ok: true, savedAt: memo.createdAt }
+        }
+      },
       sessionTasks: {
         start: (sessionId, objective) => workUnitCollector.startTask(sessionId, objective),
         complete: (sessionId, input) => workUnitCollector.completeTask(sessionId, input),
@@ -2934,7 +2990,8 @@ export function registerIpc(
     orchWiring &&
     (core.appSettings.getOrchestrationEnabled() ||
       core.appSettings.getWorkUnitTrackingEnabled() ||
-      core.appSettings.getAgentBrowserEnabled())
+      core.appSettings.getAgentBrowserEnabled() ||
+      core.appSettings.getResumeStrategy() === 'smart')
   )
     void startOrch().catch((err) => orchLog(`startup failed: ${String(err)}`))
   ipcMain.on('sessions.write', (_e, id, data) => core.sessions.write(id, data))
@@ -4327,6 +4384,11 @@ export function registerIpc(
     if (strategy !== 'smart' && strategy !== 'original')
       throw new Error(`INVALID_RESUME_STRATEGY: ${String(strategy)}`)
     await core.appSettings.setResumeStrategy(strategy)
+    // Same two lines the other three toggles' setters use, for the same reason: `astera handoff`
+    // needs the server and the planted CLI, and the astera-handoff stub has to reach every account.
+    // Turning it off does not close the server — handoffEnabled() is read per request.
+    if (strategy === 'smart' && orchWiring) await startOrch()
+    if (strategy === 'smart') installStubsForCurrentToggles()
   })
 
   // The terminal font pair. The same trust-boundary check as setLang: the shape is validated here, and
