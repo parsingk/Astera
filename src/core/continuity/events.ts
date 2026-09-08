@@ -3,7 +3,7 @@
 // the same reason core/orchestration/timeline.ts derives the Timeline. Pure: no fs, no clock; `now`
 // is an argument. Main-side (view.ts pulls node:path in): not for tsconfig.web.json.
 import type { OrchState } from '../orchestration/state'
-import type { Gate, Run, TaskStatus } from '../orchestration/types'
+import type { Dispatch, Gate, Run, TaskStatus } from '../orchestration/types'
 import { outcomeOf } from '../orchestration/view'
 
 export type ContinuityEventType =
@@ -156,9 +156,98 @@ function taskEvents(prev: OrchState, next: OrchState, now: string): ContinuityEv
   return out
 }
 
-/** Added by Task 5 of the P0 plan. */
-function dispatchEvents(_prev: OrchState, _next: OrchState, _now: string): ContinuityEvent[] {
-  return []
+/** worker-start commits the Dispatch with this placeholder before the coordinator spawns anything
+ *  (server.ts): its presence is the spec's ATTEMPT_START_REQUESTED, its replacement ATTEMPT_STARTED. */
+const isPlaceholder = (sessionId: string): boolean => sessionId.startsWith('pending:')
+
+function endingOf(d: Dispatch): ContinuityEventType {
+  if (d.outcome === 'succeeded') return 'ATTEMPT_COMPLETED'
+  if (d.outcome === 'failed') return 'ATTEMPT_FAILED'
+  if (d.workerState === 'outcome_unknown') return 'ATTEMPT_LOST'
+  return 'ATTEMPT_EXITED'
+}
+
+function dispatchEvents(prev: OrchState, next: OrchState, now: string): ContinuityEvent[] {
+  const before = new Map(prev.dispatches.map((d) => [d.id, d]))
+  const runOf = (taskId: string): string | undefined =>
+    (next.tasks.find((t) => t.id === taskId) ?? prev.tasks.find((t) => t.id === taskId))?.runId
+  const out: ContinuityEvent[] = []
+  for (const d of next.dispatches) {
+    const runId = runOf(d.taskId)
+    if (!runId) continue // a hand-edited file can hold a Dispatch without its Task (state.ts:827)
+    const ids = { runId, taskId: d.taskId, dispatchId: d.id }
+    const was = before.get(d.id)
+    const started = (): ContinuityEvent =>
+      ev(ids, 'ATTEMPT_STARTED', now, `ATTEMPT_STARTED:${d.id}`, {
+        sessionId: d.sessionId,
+        cwd: d.cwd,
+        specPath: d.specPath
+      })
+
+    if (!was) {
+      out.push(
+        ev(ids, 'ATTEMPT_START_REQUESTED', d.startedAt, `ATTEMPT_START_REQUESTED:${d.id}`, {
+          provider: d.provider,
+          accountId: d.accountId,
+          retryOf: d.retryOf ?? null,
+          review: d.review === true
+        })
+      )
+      if (!isPlaceholder(d.sessionId)) out.push(started())
+    } else if (isPlaceholder(was.sessionId) && !isPlaceholder(d.sessionId)) {
+      out.push(started())
+    } else if (was.sessionId !== d.sessionId || was.accountId !== d.accountId) {
+      // rekeyDispatch after a roll: same attempt, new process and possibly new account
+      out.push(
+        ev(ids, 'ACCOUNT_ROLL_COMPLETED', now, `ACCOUNT_ROLL_COMPLETED:${d.id}:${now}`, {
+          fromSessionId: was.sessionId,
+          toSessionId: d.sessionId,
+          fromAccountId: was.accountId,
+          toAccountId: d.accountId
+        })
+      )
+    }
+
+    if (!was?.endedAt && d.endedAt) {
+      const type = endingOf(d)
+      out.push(ev(ids, type, d.endedAt, `${type}:${d.id}`, { workerState: d.workerState, outcome: d.outcome ?? null }))
+    }
+
+    const prevResumes = was?.resumes ?? []
+    const resumes = d.resumes ?? []
+    for (let i = prevResumes.length; i < resumes.length; i++) {
+      const entry = resumes[i]
+      out.push(
+        ev(ids, 'USAGE_LIMIT_DETECTED', entry.stoppedAt, `USAGE_LIMIT_DETECTED:${d.id}:${i}`, {
+          reason: entry.reason,
+          resetsAt: entry.resetsAt ?? null,
+          accountId: entry.fromAccountId
+        })
+      )
+      const type = entry.reason === 'switching' ? 'ACCOUNT_ROLL_REQUESTED' : 'ATTEMPT_WAITING'
+      out.push(ev(ids, type, entry.stoppedAt, `${type}:${d.id}:${i}`, { resetsAt: entry.resetsAt ?? null }))
+    }
+    for (let i = 0; i < resumes.length; i++) {
+      const entry = resumes[i]
+      if (entry.resumedAt !== undefined && prevResumes[i]?.resumedAt === undefined)
+        out.push(
+          ev(ids, 'ATTEMPT_RESUMED', entry.resumedAt, `ATTEMPT_RESUMED:${d.id}:${i}`, {
+            toAccountId: entry.toAccountId ?? null
+          })
+        )
+    }
+
+    if (d.nativeSessionId !== undefined && d.nativeSessionId !== was?.nativeSessionId) {
+      const type = was?.nativeSessionId === undefined ? 'AGENT_NATIVE_SESSION_BOUND' : 'AGENT_NATIVE_SESSION_CHANGED'
+      out.push(
+        ev(ids, type, now, `${type}:${d.id}:${d.nativeSessionId}`, {
+          nativeSessionId: d.nativeSessionId,
+          provider: d.provider
+        })
+      )
+    }
+  }
+  return out
 }
 
 /** Everything the write prev → next did, in journal order: runs that started, then task transitions,
