@@ -52,7 +52,7 @@ describe('executeRecovery', () => {
     expect(open.retryOf).toBe('dsp_1')
     expect(open.sessionId).toBe('sess-2')
     expect(h.started).toHaveLength(1)
-    expect(h.started[0]).toMatchObject({ taskId: 'tsk_1', worktree: 'D:/wt', rollAccountIds: ['acc_1'] })
+    expect(h.started[0]).toMatchObject({ taskId: 'tsk_1', worktree: 'D:/wt' })
     expect((h.started[0] as { resume?: unknown }).resume).toBeUndefined()
   })
 

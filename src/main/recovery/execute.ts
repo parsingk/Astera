@@ -22,7 +22,6 @@ export interface ExecuteDeps {
     spec: string
     provider: Provider
     accountId: string
-    rollAccountIds: string[]
     runCwd: string
     worktree: string
     /** Present for resume-native and smart-resume only; absent for a plain redispatch. */
@@ -118,7 +117,6 @@ async function startAttempt(a: ExecuteInput, deps: ExecuteDeps): Promise<Execute
       spec: task.spec,
       provider: attempt.provider,
       accountId: attempt.accountId,
-      rollAccountIds: task.accountIds ?? [attempt.accountId],
       runCwd: run.cwd,
       worktree: attempt.cwd,
       ...(resume ? { resume } : {})
