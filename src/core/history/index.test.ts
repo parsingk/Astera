@@ -336,6 +336,26 @@ describe('HistoryIndex (lazy)', () => {
       expect(await projectNames()).toEqual(['proj-a'])
     })
 
+    /** The one case where the watcher has nothing but the directory to go on. Measured with
+     *  fs.watch(root, { recursive: true }) on win32: renaming a folder reports `rename proj-a` and
+     *  `rename renamed` and no child at all, where removing a single transcript reports the file.
+     *  So this is the shape that an entry filter keyed on `.jsonl` throws away, and the folder's
+     *  sessions then sit behind a stale cache until something else happens to touch them. */
+    it('폴더 이름만 바뀌어 자식 이벤트가 없어도 그 폴더를 다시 읽는다', async () => {
+      const a = account('acc-a')
+      await writeTranscript(a, 'proj-a', 's1.jsonl', 's1')
+      index = new HistoryIndex(() => [a])
+      expect(await projectNames()).toEqual(['proj-a'])
+      await index.startBackground()
+      const updated = vi.fn()
+      index.onUpdated = updated
+      const projects = path.join(a.configDir, 'projects')
+      await fs.rename(path.join(projects, 'proj-a'), path.join(projects, 'renamed'))
+      await vi.waitFor(() => expect(updated).toHaveBeenCalled(), { timeout: 5000 })
+      // 폴더 이름이 아니라 기록 안의 cwd 가 프로젝트를 정한다 — 이름을 바꿔도 같은 한 줄이어야 한다
+      expect(await projectNames()).toEqual(['proj-a'])
+    })
+
     it('폴더가 대표하는 cwd가 바뀌면 옛 행이 남지 않는다', async () => {
       const a = account('acc-a')
       await writeLines(a, 'moving', 'old.jsonl', [
