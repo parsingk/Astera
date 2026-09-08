@@ -16,6 +16,16 @@ describe('sortEntries', () => {
     expect(sorted.map((x) => x.name)).toEqual(['alpha', 'Zeta', 'index.ts', 'README.md'])
   })
 
+  // Plain lexicographic order reads episode_11 as smaller than episode_2, which scrambles
+  // any numbered series — the shape a chapter or episode folder almost always has.
+  it('compares digit runs as numbers, so episode_2 comes before episode_11', () => {
+    const names = ['episode_11.md', 'episode_2.md', 'episode_1.md', 'episode_200.md', 'episode_20.md']
+    const sorted = sortEntries(names.map((n) => e(n, false)))
+    expect(sorted.map((x) => x.name)).toEqual([
+      'episode_1.md', 'episode_2.md', 'episode_11.md', 'episode_20.md', 'episode_200.md'
+    ])
+  })
+
   it('원본 배열을 변경하지 않는다', () => {
     const input = [e('b', false), e('a', true)]
     sortEntries(input)

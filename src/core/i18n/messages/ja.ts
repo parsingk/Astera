@@ -378,6 +378,7 @@ export const ja: Catalog = {
   // useFileOps.ts — cut/copy and paste
   'files.clipboard.cutDone': '{count} 件の項目を切り取りました',
   'files.clipboard.copyDone': '{count} 件の項目をコピーしました',
+  'files.clipboard.filesFailed': 'ファイルをクリップボードに置けなかったため、パスのみコピーしました',
   'files.paste.blocked': '貼り付けできません: {reason}',
   'files.paste.invalidTarget': '対象が正しくありません',
   'files.paste.empty': '貼り付ける項目がありません',

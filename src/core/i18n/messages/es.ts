@@ -383,6 +383,7 @@ export const es: Catalog = {
   // useFileOps.ts — cut/copy and paste
   'files.clipboard.cutDone': 'Se cortaron {count} elementos',
   'files.clipboard.copyDone': 'Se copiaron {count} elementos',
+  'files.clipboard.filesFailed': 'No se pudieron poner los archivos en el portapapeles, solo se copiaron sus rutas',
   'files.paste.blocked': 'No se puede pegar: {reason}',
   'files.paste.invalidTarget': 'El destino no es válido',
   'files.paste.empty': 'No hay nada que pegar',

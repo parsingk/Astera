@@ -428,6 +428,7 @@ export const ko = {
   // useFileOps.ts — cut/copy and paste
   'files.clipboard.cutDone': '{count}개 항목을 잘라냈습니다',
   'files.clipboard.copyDone': '{count}개 항목을 복사했습니다',
+  'files.clipboard.filesFailed': '파일을 클립보드에 올리지 못해 경로만 복사됐습니다',
   'files.paste.blocked': '붙여넣기 불가: {reason}',
   'files.paste.invalidTarget': '대상이 올바르지 않습니다',
   'files.paste.empty': '붙여넣을 항목이 없습니다',

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, clipboard } from 'electron'
+import { contextBridge, ipcRenderer, clipboard, webUtils } from 'electron'
 import type {
   RendererApi,
   CoreEventChannel,
@@ -166,6 +166,8 @@ const api = {
     move: invoke('files.move'),
     remove: invoke('files.remove'),
     copy: invoke('files.copy'),
+    importExternal: invoke('files.importExternal'),
+    pathForFile: (file: File) => webUtils.getPathForFile(file),
     reveal: invoke('files.reveal'),
     countEntries: invoke('files.countEntries')
   },
@@ -217,7 +219,12 @@ const api = {
   },
   clipboard: {
     readText: () => clipboard.readText(),
-    writeText: (text: string) => clipboard.writeText(text)
+    writeText: (text: string) => clipboard.writeText(text),
+    // Chromium maps a Windows CF_HDROP (and the mac/linux equivalent) onto this format name. It is
+    // the presence that is usable, not the content: reading the format back gives an empty buffer.
+    hasFiles: () => clipboard.availableFormats().includes('text/uri-list'),
+    requestFilePaste: invoke('clipboard.requestFilePaste'),
+    writeFiles: invoke('clipboard.writeFiles')
   },
   update: {
     onStatus: (cb: (s: UpdateStatus) => void) => {

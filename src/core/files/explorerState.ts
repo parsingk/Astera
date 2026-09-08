@@ -102,6 +102,35 @@ export function reduce(state: ExplorerState, action: ExplorerAction): ExplorerSt
   }
 }
 
+/** Which clipboard a paste should read from.
+ *
+ *  There are two, and they are not the same thing. The app-internal one (ExplorerState.clipboard)
+ *  carries cut/copy inside the tree; the OS one carries what was copied in Explorer or Finder.
+ *  osPaths is what the OS clipboard held at the moment of the paste, which only a real paste event
+ *  can tell us (nothing in the main process can read the file list back out).
+ *
+ *  The OS one wins when it holds files, because it is necessarily the more recent action: every
+ *  in-app cut/copy writes its paths onto the OS clipboard as text (cutOrCopy in useFileOps), which
+ *  replaces whatever file list was there. So a file list on the OS clipboard means the last copy the
+ *  user made was outside this app.
+ *
+ *  Blank entries are dropped: a paste can carry a File with no file on disk (an image copied from a
+ *  web page), and for those webUtils.getPathForFile gives back an empty string. */
+export type PasteSource =
+  | { kind: 'external'; paths: string[] }
+  | { kind: 'internal'; mode: 'cut' | 'copy'; paths: string[] }
+  | { kind: 'empty' }
+
+export function pasteSource(
+  osPaths: string[],
+  clipboard: ExplorerState['clipboard']
+): PasteSource {
+  const onDisk = osPaths.filter((p) => p !== '')
+  if (onDisk.length > 0) return { kind: 'external', paths: onDisk }
+  if (clipboard) return { kind: 'internal', mode: clipboard.mode, paths: clipboard.paths }
+  return { kind: 'empty' }
+}
+
 /** The paths an operation may act on. It does two things:
  *  1. Filters out paths outside the current root — if the root changed while a selection lingered,
  *     it would be possible to delete files of another project that are not even on screen. The root
