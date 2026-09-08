@@ -1115,6 +1115,18 @@ describe('handleCommand — retained dispatch', () => {
     expect(released).toEqual([dispatchId])
   })
 
+  // Recovery reads this to tell a deliberate close from a crash (Dispatch.closedBy)
+  it('worker-stop and worker-abandon record who closed the dispatch', async () => {
+    const stop = await seedRetained(false)
+    const stopped = await call(stop.deps, 'worker-stop', { dispatch: stop.dispatchId })
+    expect(stopped.status).toBe(200)
+    expect(stop.deps.getState().dispatches.find((d) => d.id === stop.dispatchId)?.closedBy).toBe('stop')
+
+    const abandon = await seedRetained(false)
+    await call(abandon.deps, 'worker-abandon', { dispatch: abandon.dispatchId })
+    expect(abandon.deps.getState().dispatches.find((d) => d.id === abandon.dispatchId)?.closedBy).toBe('abandon')
+  })
+
   it('retained에 worker-release는 200이지만 skipped를 싣는다 — 조용히 건너뛰지 않는다', async () => {
     const { deps, dispatchId } = await seedRetained(true)
     const r = await call(deps, 'worker-release', { dispatch: dispatchId })

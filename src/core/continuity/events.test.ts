@@ -242,4 +242,20 @@ describe('deriveEvents — dispatches', () => {
     const orphan: OrchState = { ...emptyState(), runs: [run()], dispatches: [dispatch({ sessionId: 'sess-1' })] }
     expect(deriveEvents(emptyState(), orphan, NOW).filter((e) => e.dispatchId)).toEqual([])
   })
+
+  it('a dispatch the person abandoned is not a lost attempt', () => {
+    const live = withDispatch(dispatch({ sessionId: 'sess-1' }))
+    const abandoned = withDispatch(
+      dispatch({ sessionId: 'sess-1', endedAt: NOW, workerState: 'outcome_unknown', closedBy: 'abandon' })
+    )
+    expect(types(live, abandoned)).toEqual(['ATTEMPT_ABANDONED'])
+  })
+
+  it('a stop and a pause stay ordinary exits', () => {
+    const live = withDispatch(dispatch({ sessionId: 'sess-1' }))
+    for (const closedBy of ['stop', 'pause'] as const)
+      expect(
+        types(live, withDispatch(dispatch({ sessionId: 'sess-1', endedAt: NOW, workerState: 'stopped', closedBy })))
+      ).toEqual(['ATTEMPT_EXITED'])
+  })
 })

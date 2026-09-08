@@ -26,6 +26,7 @@ export type ContinuityEventType =
   | 'ATTEMPT_WAITING'
   | 'ATTEMPT_EXITED'
   | 'ATTEMPT_LOST'
+  | 'ATTEMPT_ABANDONED'
   | 'ATTEMPT_RESUMED'
   | 'ATTEMPT_COMPLETED'
   | 'ATTEMPT_FAILED'
@@ -163,6 +164,8 @@ const isPlaceholder = (sessionId: string): boolean => sessionId.startsWith('pend
 function endingOf(d: Dispatch): ContinuityEventType {
   if (d.outcome === 'succeeded') return 'ATTEMPT_COMPLETED'
   if (d.outcome === 'failed') return 'ATTEMPT_FAILED'
+  // A person gave up tracking this one; it is not a runtime that was lost, and recovery skips it.
+  if (d.closedBy === 'abandon') return 'ATTEMPT_ABANDONED'
   if (d.workerState === 'outcome_unknown') return 'ATTEMPT_LOST'
   return 'ATTEMPT_EXITED'
 }

@@ -201,6 +201,16 @@ export interface Dispatch {
   workerState: WorkerState
   outcome?: Outcome
   endedAt?: string
+  /** Who closed this Dispatch, when a person did. Absent means the worker ended on its own — it
+   *  exited, it crashed, or the app went down under it.
+   *
+   *  **Recovery reads exactly this.** `workerState` cannot tell the two apart: a clean exit and a
+   *  `worker-stop` both land on `stopped`. Without the distinction the boot sweep would restart work
+   *  a person deliberately stopped — and for `abandon`, whose whole promise is that the resources may
+   *  still be live, it would put a second worker in the same worktree. `pause` is here for the same
+   *  reason: a paused schedule fire is documented not to continue (docs/jobs.md), so resuming the
+   *  schedule must not resurrect its Tasks. */
+  closedBy?: 'stop' | 'abandon' | 'pause'
   /**
    * The reset time (epoch ms) for when this Dispatch was judged to have ended at a usage limit.
    * The app derives it from transcript/rollout signals and fills it in — the orchestrator does not

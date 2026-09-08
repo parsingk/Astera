@@ -22,6 +22,7 @@ import {
   resolveGate,
   deleteRuns,
   spawnScheduledRun,
+  pauseSchedule,
   latestOrdinaryRun,
   setRunWorktree,
   attachCoordinator,
@@ -1792,6 +1793,30 @@ describe('spawnScheduledRun', () => {
     )
     const copyB = state.tasks.find((t) => t.runId === child.id && t.title === 'B')!
     expect('parentId' in copyB).toBe(false)
+  })
+})
+
+describe('pauseSchedule', () => {
+  it('pausing a schedule records that the person closed the dispatches', () => {
+    const { s, templateId } = template()
+    const fired = unwrap<{ id: string }>(spawnScheduledRun(s, templateId, FIRE) as never)
+    const readyTask = fired.state.tasks.find((t) => t.runId === fired.value.id && t.status === 'ready')!
+    const opened = unwrap<{ id: string }>(
+      openDispatch(
+        fired.state,
+        {
+          taskId: readyTask.id,
+          provider: 'codex',
+          accountId: 'acc1',
+          sessionId: 'sess1',
+          cwd: 'D:/p',
+          specPath: 'D:/p/orch/specs/x.md'
+        },
+        FIRE
+      ) as never
+    )
+    const r = unwrap<unknown>(pauseSchedule(opened.state, templateId, NOW))
+    for (const d of r.state.dispatches.filter((x) => x.endedAt === NOW)) expect(d.closedBy).toBe('pause')
   })
 })
 

@@ -1242,7 +1242,9 @@ export async function handleCommand(
         dispatches: deps
           .getState()
           .dispatches.map((x) =>
-            x.id === d.id ? { ...x, workerState: 'stopped' as const, endedAt: now } : x
+            x.id === d.id
+              ? { ...x, workerState: 'stopped' as const, endedAt: now, closedBy: 'stop' as const }
+              : x
           )
       })
       return okBody({ stopped: d.id })
@@ -1256,7 +1258,9 @@ export async function handleCommand(
       await deps.setState({
         ...s,
         dispatches: s.dispatches.map((x) =>
-          x.id === d.id ? { ...x, workerState: 'outcome_unknown' as const, endedAt: now } : x
+          x.id === d.id
+            ? { ...x, workerState: 'outcome_unknown' as const, endedAt: now, closedBy: 'abandon' as const }
+            : x
         )
       })
       // 이 명령은 아무 프로세스도 건드리지 않으므로 그 세션은 살아 있을 수 있다 — Dispatch 는 닫혔고

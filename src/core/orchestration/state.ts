@@ -251,7 +251,7 @@ export function pauseSchedule(s: OrchState, templateId: string, now: string): Re
       // 그래프가 거짓말을 한다(재시작 정리가 그런 Dispatch 를 outcome_unknown 으로 읽는다).
       dispatches: s.dispatches.map((d) =>
         taskIds.has(d.taskId) && !d.outcome && !d.endedAt
-          ? { ...d, workerState: 'stopped' as const, endedAt: now }
+          ? { ...d, workerState: 'stopped' as const, endedAt: now, closedBy: 'pause' as const }
           : d
       )
     },
