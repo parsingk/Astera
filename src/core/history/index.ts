@@ -534,11 +534,23 @@ export class HistoryIndex {
     })
   }
 
-  /** A file event under a scan root. Non-.jsonl entries (and the directory names a native watcher also
-   *  reports) drop out here. */
+  /** An event under a scan root, naming either a transcript or the directory holding it.
+   *
+   *  **A native watcher does not always name the file.** Measured on Windows: removing one transcript
+   *  reports `proj-b\s2.jsonl`, but removing its folder reports `change proj-c`, `rename
+   *  proj-c\s3.jsonl` and `rename proj-c` — two of the three name the directory. Dropping those was
+   *  safe here only because the file event came with them, and that is not a guarantee any platform
+   *  makes: the macOS runner is where a single `rm` of one transcript went unreported for five
+   *  seconds while every other platform saw it, which is the shape of a delivery that named the
+   *  directory instead.
+   *
+   *  So an entry that is not a `.jsonl` file is taken to BE the directory. The roots are
+   *  `<configDir>/projects` and `<configDir>/sessions`, which hold nothing but slug folders and
+   *  transcripts, so the cost of being wrong about one is a single directory reread that finds
+   *  nothing changed — projectSummaryForDir reads it through jsonlByMtimeDesc, which answers an empty
+   *  list for anything it cannot read. */
   private onFileEvent(filePath: string): void {
-    if (!filePath.endsWith('.jsonl')) return
-    const dir = path.dirname(filePath)
+    const dir = filePath.endsWith('.jsonl') ? path.dirname(filePath) : filePath
     const account = this.ownerOf(filePath)
     // The session cache is per directory and keyed on the file mtimes, so dropping the one directory
     // is all it needs
