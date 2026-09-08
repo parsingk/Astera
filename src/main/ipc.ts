@@ -2928,8 +2928,8 @@ export function registerIpc(
       // stranded. Always injected — the wiring always sets this property — but a no-op whenever
       // `recovery` is null (the toggle is off, or the reconciler has not been built yet on this very
       // first call) or orchestration itself is off (same guard, same reason as the boot sweep below:
-      // a worker recovery spawns while orchestration is off can never report — every call it makes
-      // gets a 409).
+      // a worker that recovery spawns while orchestration is off can never report — every call it
+      // makes gets a 409).
       onDispatchLost: (a) =>
         void (
           recovery &&

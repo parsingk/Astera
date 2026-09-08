@@ -238,7 +238,8 @@ export interface OrchServerDeps {
    *  now?. */
   log?(message: string): void
   /** Job Continuity: a worker Dispatch just closed without an outcome, so its Task is stranded.
-   *  Not injected means no recovery (the toggle is off, or an older wiring). */
+   *  The app's wiring always injects it and decides inside whether there is anything to do — the
+   *  Job Continuity toggle is read there, not here. Optional so tests can leave it out. */
   onDispatchLost?(a: { dispatchId: string }): void
 }
 
