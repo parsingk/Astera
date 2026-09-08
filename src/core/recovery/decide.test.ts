@@ -85,12 +85,30 @@ describe('decideRecovery', () => {
     expect(strategyOf({ baseHead: null }, { head: 'bbb' })).toBe('redispatch')
   })
 
-  it('re-dispatches when the prompt never went out', () => {
-    expect(strategyOf({ promptConfirmed: false }, { dirty: true })).toBe('redispatch')
+  // Source spec 13.3: the Safe re-dispatch row is "no prompt was dispatched AND no worktree changes
+  // occurred". One row, two reasons — whichever of the two facts is the one worth telling.
+  it('re-dispatches only on a clean tree, and names which of the two reasons it is', () => {
+    const never = decideRecovery({
+      attempt: attempt({ promptConfirmed: false }),
+      git: git({ dirty: false }),
+      smartResume: false
+    })
+    expect(never.strategy).toBe('redispatch')
+    expect(never.class).toBe('safe')
+    expect(never.reason).toBe('the prompt never left the app, so nothing was started')
+    const nothing = decideRecovery({
+      attempt: attempt({ promptConfirmed: true }),
+      git: git({ dirty: false }),
+      smartResume: false
+    })
+    expect(nothing.strategy).toBe('redispatch')
+    expect(nothing.class).toBe('safe')
+    expect(nothing.reason).toBe('the worker produced nothing, so restarting it duplicates no work')
   })
 
-  it('re-dispatches when the prompt went out but the tree is untouched', () => {
-    expect(strategyOf({ promptConfirmed: true }, { dirty: false })).toBe('redispatch')
+  it('a prompt that never left over a dirty tree is unfinished work, not a free restart', () => {
+    expect(strategyOf({ promptConfirmed: false }, { dirty: true }, false)).toBe('review')
+    expect(strategyOf({ promptConfirmed: false }, { dirty: true }, true)).toBe('smart-resume')
   })
 
   it('hands over when the tree is dirty and Smart Resume is on, and asks when it is off', () => {

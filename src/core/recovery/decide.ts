@@ -46,10 +46,20 @@ export function decideRecovery(a: {
       return attempt.hasValidateConfig
         ? decide('recheck', 'safe', 'the worker committed before it was lost, so its check decides the outcome')
         : decide('review', 'review', 'the worker committed before it was lost and the Task has no check to prove the result')
-    if (!attempt.promptConfirmed)
-      return decide('redispatch', 'safe', 'the prompt never left the app, so nothing was started')
+    // One row, not two: spec §13.3's Safe re-dispatch is "no prompt was dispatched AND no worktree
+    // changes occurred", and §21 SAFE says "re-dispatch before any prompt/mutation happened". A
+    // second row on `!promptConfirmed` alone would add exactly one case — the prompt never left and
+    // the tree is dirty — which is the one case that must not restart on its own. It falls through
+    // to the Smart Resume row below instead, like any other unfinished work. The reason names
+    // whichever of the two facts is the one worth telling.
     if (!git.dirty)
-      return decide('redispatch', 'safe', 'the worker produced nothing, so restarting it duplicates no work')
+      return decide(
+        'redispatch',
+        'safe',
+        attempt.promptConfirmed
+          ? 'the worker produced nothing, so restarting it duplicates no work'
+          : 'the prompt never left the app, so nothing was started'
+      )
     if (smartResume)
       return decide('smart-resume', 'safe', 'the worktree holds unfinished work, so a new worker starts from a briefing')
     return decide('review', 'review', 'the worktree holds unfinished work and Smart Resume is off')
