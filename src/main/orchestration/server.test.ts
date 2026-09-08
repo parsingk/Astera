@@ -2579,6 +2579,87 @@ describe('검토 Dispatch 가 스스로 끝나지 못했을 때 — handleExit �
   })
 })
 
+// Job Continuity P1: a worker Dispatch that closes on its own, with no reported outcome, is a
+// stranded Task. handleExit is the only place that observes that moment, so it is also the only
+// place that can hand the dispatch id to recovery.
+describe('handleExit — onDispatchLost hands a stranded implementer to recovery', () => {
+  /** run + task + open implementer dispatch (sessionId='sess1') — same shape as the probeLimit
+   *  block's seedOpenDispatch, plus the dispatchId onDispatchLost is expected to report. */
+  const seedOpenDispatch = async (): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    dispatchId: string
+  }> => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    await call(deps, 'worker-start', { taskId, agent: 'codex', account: 'acc1', worktree: 'current' })
+    const dispatchId = deps.getState().dispatches[0].id
+    return { deps, dispatchId }
+  }
+
+  /** Task in `reviewing` with an open review Dispatch (sessionId='sess_review') — same injection
+   *  shape as the 'task-create --review 와 검토 라우팅' and '검토 Dispatch 가 스스로 끝나지 못했을 때'
+   *  blocks build: the review Dispatch is appended straight onto state (the wiring that opens it is
+   *  not the server's job), not routed through worker-start. */
+  const seedReviewing = async (): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    reviewDispatchId: string
+  }> => {
+    const deps = makeDeps()
+    deps.startReview = () => {}
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업', review: true })
+    const taskId = deps.getState().tasks[0].id
+    await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
+    const impl = deps.getState().dispatches[0]
+    await call(
+      deps,
+      'send',
+      { type: 'worker_done', taskId, dispatchId: impl.id, outcome: 'succeeded', subject: 's', body: 'b' },
+      impl.sessionId
+    )
+    const reviewDispatchId = 'dsp_review'
+    await deps.setState({
+      ...deps.getState(),
+      dispatches: [
+        ...deps.getState().dispatches,
+        {
+          id: reviewDispatchId,
+          taskId,
+          provider: 'codex' as const,
+          accountId: 'acc1',
+          sessionId: 'sess_review',
+          cwd: 'D:/p',
+          specPath: 'D:/p/orch/specs/review.md',
+          review: true,
+          startedAt: NOW,
+          workerState: 'ready' as const,
+          retained: false
+        }
+      ]
+    })
+    return { deps, reviewDispatchId }
+  }
+
+  it('an implementer dispatch that ends without reporting reaches onDispatchLost with its own dispatch id', async () => {
+    const lost: string[] = []
+    const { deps, dispatchId } = await seedOpenDispatch()
+    deps.onDispatchLost = (a) => lost.push(a.dispatchId)
+    await handleExit(deps, { sessionId: 'sess1', exitCode: 1 })
+    expect(lost).toEqual([dispatchId])
+  })
+
+  it("a reviewer's exit does not reach onDispatchLost — its Gate is the recovery path", async () => {
+    const lost: string[] = []
+    const { deps } = await seedReviewing()
+    deps.onDispatchLost = (a) => lost.push(a.dispatchId)
+    await handleExit(deps, { sessionId: 'sess_review', exitCode: 1 })
+    expect(lost).toEqual([])
+  })
+})
+
 // ── 이음매를 통과하는 통합 테스트 ──────────────────────────────────────────────
 // 층마다 테스트가 있었는데 리뷰가 낸 Critical 은 그 사이에 살아 있었다: 검증 결과가 Message 를
 // 만들지 않아 코디네이터가 영원히 알지 못한다는 것. handleCommand('send', worker_done) 에서

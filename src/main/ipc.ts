@@ -29,6 +29,9 @@ import { HandoffStore } from './handoff/store'
 import { ContinuityJournal } from './continuity/journal'
 import { ContinuityRecorder } from './continuity/recorder'
 import { readGitSummary } from './gitSummary'
+import { RecoveryReconciler } from './recovery/reconciler'
+import { executeRecovery } from './recovery/execute'
+import { readGitFacts } from './recovery/git'
 import type { Handoff } from '../core/handoff/types'
 import { WorkUnitCollector, type CollectorSession } from './workUnit/collector'
 import { readGitRef, isAncestorOf, readChangedFiles, readRange } from './workUnit/gitProbe'
@@ -437,7 +440,18 @@ export function registerIpc(
    *  nothing is written (spec §0.4). Created before store.load in bootOrch so the restart's losses are
    *  journaled, and by the toggle handler when turned on at runtime. */
   let continuity: ContinuityRecorder | null = null
+  /** The journal `continuity` wraps. Needed on its own beside the recorder: Job Continuity P1's
+   *  reconciler and `sweepOrphans` both act on the journal directly, not through the recorder's
+   *  read-only projections. Set in openContinuity, nulled in closeContinuity — same lifecycle as
+   *  `continuity` (closeContinuity's `continuity?.close()` already closes this journal, so this
+   *  variable is only ever nulled here, never closed a second time). */
+  let continuityJournal: ContinuityJournal | null = null
   const continuityFile = path.join(app.getPath('userData'), 'orch', 'continuity.sqlite')
+  /** Job Continuity P1's reconciler, and the closure that builds it. **The builder is assigned inside
+   *  bootOrch** — it needs the store and the server deps, which live there — while the callers are
+   *  outside it (openContinuity, and the settings toggle). Same convention as releaseCoordinator. */
+  let recovery: RecoveryReconciler | null = null
+  let buildRecovery: (() => void) | null = null
   /** Opens the journal, or leaves `continuity` null if it can't. ContinuityJournal's constructor
    *  already moves a corrupt file aside and reopens once, but rethrows if that second open also fails
    *  (a locked file, a read-only or full disk, an antivirus hold) — caught here because a journal that
@@ -453,6 +467,10 @@ export function registerIpc(
         smartResume: () => core.appSettings.getResumeStrategy() === 'smart',
         handoffLookup: (sessionId) => handoffs.lookup(sessionId)
       })
+      continuityJournal = journal
+      // Not yet assigned on the very first call (bootOrch opens the journal before it builds the
+      // server deps the reconciler needs) — a no-op then, built explicitly further down in bootOrch.
+      buildRecovery?.()
     } catch (err) {
       orchLog(`continuity: journal could not be opened — journaling stays off until the next start: ${String(err)}`)
       continuity = null
@@ -461,6 +479,8 @@ export function registerIpc(
   const closeContinuity = (): void => {
     continuity?.close()
     continuity = null
+    continuityJournal = null
+    recovery = null
   }
   /** 검증기. startOrchestration 이 만들 때까지, 그리고 오케스트레이션이 꺼져 있으면 null 이다 */
   let orchValidator: TaskValidator | null = null
@@ -1231,6 +1251,17 @@ export function registerIpc(
     if (continuity && loaded.before) {
       continuity.record(loaded.before, store.get())
       continuity.reportSkew(store.get())
+    }
+    // Job Continuity P1: rows the journal kept for a Run that no longer exists (deleted, or pruned by
+    // the TTL above) are dead weight — nothing will ever read them again. A failure here must not
+    // stop the boot, the same discipline as the recorder's own journal writes.
+    if (continuityJournal) {
+      try {
+        const swept = continuityJournal.sweepOrphans(new Set(store.get().runs.map((r) => r.id)))
+        if (swept > 0) orchLog(`continuity: swept ${swept} orphaned run(s) from the journal`)
+      } catch (e) {
+        orchLog(`continuity: sweepOrphans failed: ${String(e)}`)
+      }
     }
     if (loaded.recovered) orchLog('failed to read or parse orchestration.json — kept the .bak and started from an empty state')
     if (
@@ -2887,8 +2918,45 @@ export function registerIpc(
           orchLog(`startReview failed task=${taskId}: ${String(e)}`)
         )
       },
-      log: orchLog
+      log: orchLog,
+      // Job Continuity P1: a worker Dispatch just closed without an outcome. `recovery` is not built
+      // yet on the very first call this closure can see (see buildRecovery below) — nothing to hand
+      // the dispatch to until then, which is exactly "recovery is off".
+      onDispatchLost: (a) =>
+        void recovery?.reconcileOne(a.dispatchId).catch((e) => orchLog(`recovery: reconcileOne failed: ${String(e)}`))
     }
+
+    // Job Continuity P1's reconciler needs the store and the deps above, both local to this closure —
+    // openContinuity (outside bootOrch) cannot build it, so it only calls this builder. Assigned here,
+    // after `deps` is complete, and invoked once below if continuity is already on; a later runtime
+    // toggle-on calls it through openContinuity's own `buildRecovery?.()`.
+    buildRecovery = () => {
+      if (!continuityJournal) return
+      const journal = continuityJournal
+      recovery = new RecoveryReconciler({
+        getState: deps.getState,
+        setState: deps.setState,
+        journal,
+        readGitFacts: (cwd) => readGitFacts(cwd),
+        smartResume: () => core.appSettings.getResumeStrategy() === 'smart',
+        execute: (a) =>
+          executeRecovery(a, {
+            getState: deps.getState,
+            setState: deps.setState,
+            startWorker: deps.startWorker,
+            startValidation: deps.startValidation,
+            readGitSummary,
+            log: orchLog
+          }),
+        log: orchLog,
+        now: () => new Date().toISOString()
+      })
+    }
+    if (continuity) buildRecovery()
+    // Job Continuity P1: decide what to do about every worker the restart lost. It reads the state,
+    // the journal and the worktrees, and acts; a failure inside is logged per attempt and never
+    // stops the boot.
+    if (recovery) void recovery.reconcileAll().catch((e) => orchLog(`recovery: boot sweep failed: ${String(e)}`))
 
     const server = await startOrchServer(deps)
     // A failure after listen must close the server and only then throw. Throwing here would leave orch
@@ -3514,7 +3582,8 @@ export function registerIpc(
     // leaves nothing in the projection to read it back from — only the journal remembers it happened.
     const events = [
       ...timelineFor(state, runId, (id) => known.has(id)),
-      ...(continuity?.lostEventsFor(runId, state) ?? [])
+      ...(continuity?.lostEventsFor(runId, state) ?? []),
+      ...(continuity?.recoveryEventsFor(runId, state) ?? [])
     ].sort((a, b) => a.at.localeCompare(b.at))
     return { events, layers, deps, cyclic }
   })

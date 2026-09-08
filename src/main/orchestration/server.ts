@@ -80,6 +80,10 @@ export interface OrchServerDeps {
     terminalCwd?: string
     terminalProvider?: Provider
     terminalAccountId?: string
+    /** Set only by recovery (main/recovery/execute.ts) — this wrapper forwards it straight through
+     *  to OrchCoordinator.startWorker, where the reason it exists is documented. Nothing else in this
+     *  file reads it. */
+    resume?: { nativeSessionId?: string; briefing?: string }
   }): Promise<{ sessionId: string; cwd: string; specPath: string }>
   releaseWorker(a: { dispatchId: string }): Promise<void>
   /** 그 세션의 롤링 체인을 버린다 — **세션은 죽이지 않는다**(releaseWorker 와 그 점이 다르다).
@@ -233,6 +237,9 @@ export interface OrchServerDeps {
    *  injected (existing tests and the like) logging is skipped — optional for the same reason as
    *  now?. */
   log?(message: string): void
+  /** Job Continuity: a worker Dispatch just closed without an outcome, so its Task is stranded.
+   *  Not injected means no recovery (the toggle is off, or an older wiring). */
+  onDispatchLost?(a: { dispatchId: string }): void
 }
 
 export interface OrchServer {
@@ -1731,6 +1738,7 @@ export async function handleExit(
   // 이미 약속하고 있다.
   if (!closed.review || task?.status !== 'reviewing') {
     await deps.setState(r.state)
+    if (!closed.closedBy) deps.onDispatchLost?.({ dispatchId: closed.id })
     return
   }
   const gated = blockForReview(
