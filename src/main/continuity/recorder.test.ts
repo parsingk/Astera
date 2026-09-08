@@ -135,6 +135,25 @@ describe('ContinuityRecorder.checkpoint', () => {
     await r.checkpoint(r.record(live, lost), lost)
     expect(journal.latestCheckpointFor('dsp_1')).toBeNull()
   })
+
+  it('a throwing handoff lookup is logged, not thrown, and writes no row', async () => {
+    const journal = new ContinuityJournal(path.join(dir, 'throwing-handoff.sqlite'))
+    openJournals.push(journal)
+    const logs: string[] = []
+    const r = new ContinuityRecorder({
+      journal,
+      log: (m) => logs.push(m),
+      now: () => NOW,
+      smartResume: () => true,
+      handoffLookup: () => {
+        throw new Error('memo store exploded')
+      }
+    })
+    const next = state(dispatch())
+    await expect(r.checkpoint(r.record(state(dispatch({ sessionId: 'pending:ab' })), next), next)).resolves.toBeUndefined()
+    expect(journal.latestCheckpointFor('dsp_1')).toBeNull()
+    expect(logs.some((l) => l.includes('memo store exploded'))).toBe(true)
+  })
 })
 
 describe('ContinuityRecorder.enable', () => {

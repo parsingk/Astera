@@ -151,8 +151,8 @@ export class ContinuityRecorder {
   close(): void {
     try {
       this.deps.journal.close()
-    } catch {
-      /* closing a broken journal is not news */
+    } catch (err) {
+      this.deps.log(`continuity: journal close failed: ${String(err)}`)
     }
   }
 
@@ -160,16 +160,19 @@ export class ContinuityRecorder {
     const dispatch = state.dispatches.find((d) => d.id === dispatchId)
     const task = dispatch && state.tasks.find((t) => t.id === dispatch.taskId)
     if (!dispatch || !task) return
-    // null when the folder is gone or not a repository — the checkpoint is still worth its other columns
-    const git = await readGitSummary(dispatch.cwd, this.deps.git ? { git: this.deps.git } : {})
-    const now = this.now()
-    const checkpoint = buildCheckpoint(state, { dispatchId, git, now })
-    if (!checkpoint) return
-    const handoffRef =
-      this.deps.smartResume() && this.deps.handoffLookup?.(dispatch.sessionId).state === 'found'
-        ? dispatch.sessionId
-        : null
+    // Everything past this point can fail — git, the consumer-supplied Smart Resume/handoff
+    // callbacks, or the journal itself — and checkpoint() is fired and forgotten by the wiring, so
+    // all of it has to land in the log rather than reject the returned promise (design §6).
     try {
+      // null when the folder is gone or not a repository — the checkpoint is still worth its other columns
+      const git = await readGitSummary(dispatch.cwd, this.deps.git ? { git: this.deps.git } : {})
+      const now = this.now()
+      const checkpoint = buildCheckpoint(state, { dispatchId, git, now })
+      if (!checkpoint) return
+      const handoffRef =
+        this.deps.smartResume() && this.deps.handoffLookup?.(dispatch.sessionId).state === 'found'
+          ? dispatch.sessionId
+          : null
       const row = this.deps.journal.saveCheckpoint({
         runId: task.runId,
         taskId: task.id,
