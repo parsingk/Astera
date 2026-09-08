@@ -3,7 +3,7 @@
 // strategy — those live in core/recovery/decide.ts and main/recovery/execute.ts, the same split the
 // orchestration guide draws between "what happened", "what to do" and "doing it".
 import type { OrchState } from '../../core/orchestration/state'
-import type { Dispatch } from '../../core/orchestration/types'
+import { DEFAULT_CONCURRENCY, type Dispatch } from '../../core/orchestration/types'
 import type { GitFacts, LostAttempt, RecoveryDecision } from '../../core/recovery/types'
 import { decideRecovery } from '../../core/recovery/decide'
 import type { ContinuityEvent, ContinuityEventType } from '../../core/continuity/events'
@@ -53,6 +53,19 @@ export function candidates(state: OrchState): LostAttemptSeed[] {
     out.push({ runId: task.runId, taskId: task.id, dispatch: latest })
   }
   return out
+}
+
+/** Recovery is a second door into starting workers, so it obeys the scheduler's concurrency rule too
+ *  (the `room` calculation in core/orchestration/schedule.ts's slotsToFill). Several lost Tasks in one
+ *  Run would otherwise all restart at once, and in a Run whose Tasks dispatch into the Run root they
+ *  would land in the same folder. A candidate with no room is left for the next trigger. */
+const hasRoom = (state: OrchState, runId: string): boolean => {
+  const run = state.runs.find((r) => r.id === runId)
+  if (!run) return false
+  const openHere = state.dispatches.filter(
+    (d) => !d.outcome && !d.endedAt && state.tasks.find((t) => t.id === d.taskId)?.runId === runId
+  ).length
+  return openHere < (run.concurrency ?? DEFAULT_CONCURRENCY)
 }
 
 export class RecoveryReconciler {
@@ -214,6 +227,9 @@ export class RecoveryReconciler {
     for (const seed of candidates(this.deps.getState())) {
       const fresh = candidates(this.deps.getState()).find((c) => c.dispatch.id === seed.dispatch.id)
       if (!fresh) continue
+      // The concurrency limit binds recovery too (hasRoom above) — a candidate with no room is left
+      // for the next trigger, not counted as acted on.
+      if (!hasRoom(this.deps.getState(), fresh.runId)) continue
       try {
         await this.recoverOne(fresh)
         count++
@@ -230,6 +246,9 @@ export class RecoveryReconciler {
   async reconcileOne(dispatchId: string): Promise<void> {
     const seed = candidates(this.deps.getState()).find((c) => c.dispatch.id === dispatchId)
     if (!seed) return
+    // Same concurrency gate as reconcileAll — a single lost worker found live is still a second
+    // door into starting one, and the Run it belongs to may already be at its limit.
+    if (!hasRoom(this.deps.getState(), seed.runId)) return
     await this.recoverOne(seed)
   }
 }

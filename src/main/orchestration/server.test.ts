@@ -2657,6 +2657,11 @@ describe('handleExit — onDispatchLost hands a stranded implementer to recovery
     deps.onDispatchLost = (a) => lost.push(a.dispatchId)
     await handleExit(deps, { sessionId: 'sess_review', exitCode: 1 })
     expect(lost).toEqual([])
+    // Proof the reviewer branch was actually taken, not that the fixture failed to open a review
+    // dispatch: the Gate is the recovery path for a reviewer that ends without reporting.
+    const st = deps.getState()
+    expect(st.tasks[0].status).toBe('blocked')
+    expect(st.gates).toHaveLength(1)
   })
 })
 

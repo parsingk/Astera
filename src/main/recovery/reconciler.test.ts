@@ -176,6 +176,38 @@ describe('RecoveryReconciler', () => {
     expect(await r.reconcileAll()).toBe(1)
     expect(executed).toEqual(['dsp_1'])
   })
+
+  it('leaves a lost attempt alone while its Run is at the concurrency limit', async () => {
+    const busy = dispatch({ id: 'dsp_open', taskId: 'tsk_2', sessionId: 'sess-2', endedAt: undefined, workerState: 'ready' })
+    const current = state({
+      runs: [run({ concurrency: 1 })],
+      tasks: [task(), task({ id: 'tsk_2' })],
+      dispatches: [dispatch(), busy]
+    })
+    const executed: string[] = []
+    const journal = {
+      append: () => 0,
+      eventsFor: () => [] as never,
+      firstCheckpointFor: () => null,
+      startRecoveryAction: () => ({ recoveryActionId: 'rec_1' }) as never,
+      finishRecoveryAction: () => {}
+    }
+    const r = new RecoveryReconciler({
+      getState: () => current,
+      setState: async () => {},
+      journal: journal as never,
+      readGitFacts: async () => ({ exists: true, head: 'aaa', dirty: false, inProgress: null, conflicts: false, branch: 'main' }),
+      smartResume: () => false,
+      execute: async (a: { attempt: { dispatchId: string } }) => {
+        executed.push(a.attempt.dispatchId)
+        return { ok: true as const }
+      },
+      log: () => {},
+      now: () => NOW
+    } as never)
+    expect(await r.reconcileAll()).toBe(0)
+    expect(executed).toEqual([])
+  })
 })
 
 describe('the seam with the real store', () => {

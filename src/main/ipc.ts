@@ -468,13 +468,18 @@ export function registerIpc(
         handoffLookup: (sessionId) => handoffs.lookup(sessionId)
       })
       continuityJournal = journal
-      // Not yet assigned on the very first call (bootOrch opens the journal before it builds the
-      // server deps the reconciler needs) — a no-op then, built explicitly further down in bootOrch.
-      buildRecovery?.()
     } catch (err) {
       orchLog(`continuity: journal could not be opened — journaling stays off until the next start: ${String(err)}`)
       continuity = null
     }
+    // Outside the try: a throw from buildRecovery is not a journal failure, and logging it as "the
+    // journal could not be opened" would be false. Guarded on `continuity` rather than on the catch
+    // having been skipped — the same condition, read from the state it left behind — so a failed open
+    // (continuity left null) does not call it at all.
+    if (continuity)
+      // Not yet assigned on the very first call (bootOrch opens the journal before it builds the
+      // server deps the reconciler needs) — a no-op then, built explicitly further down in bootOrch.
+      buildRecovery?.()
   }
   const closeContinuity = (): void => {
     continuity?.close()
@@ -2919,11 +2924,18 @@ export function registerIpc(
         )
       },
       log: orchLog,
-      // Job Continuity P1: a worker Dispatch just closed without an outcome. `recovery` is not built
-      // yet on the very first call this closure can see (see buildRecovery below) — nothing to hand
-      // the dispatch to until then, which is exactly "recovery is off".
+      // Job Continuity P1: a worker Dispatch just closed without an outcome, so its Task is
+      // stranded. Always injected — the wiring always sets this property — but a no-op whenever
+      // `recovery` is null (the toggle is off, or the reconciler has not been built yet on this very
+      // first call) or orchestration itself is off (same guard, same reason as the boot sweep below:
+      // a worker recovery spawns while orchestration is off can never report — every call it makes
+      // gets a 409).
       onDispatchLost: (a) =>
-        void recovery?.reconcileOne(a.dispatchId).catch((e) => orchLog(`recovery: reconcileOne failed: ${String(e)}`))
+        void (
+          recovery &&
+          deps.enabled() &&
+          recovery.reconcileOne(a.dispatchId).catch((e) => orchLog(`recovery: reconcileOne failed: ${String(e)}`))
+        )
     }
 
     // Job Continuity P1's reconciler needs the store and the deps above, both local to this closure —
@@ -2933,30 +2945,42 @@ export function registerIpc(
     buildRecovery = () => {
       if (!continuityJournal) return
       const journal = continuityJournal
-      recovery = new RecoveryReconciler({
+      // Nulling `recovery` (closeContinuity, on toggle-off or will-quit) cannot cancel a sweep that
+      // is already running — reconcileAll/reconcileOne hold this reconciler through their own
+      // closure, so a running one would otherwise go on to call deps.startWorker seconds after the
+      // person turned Job Continuity off. `mine` lets the last gate before anything is spawned ask
+      // whether this reconciler is still the live one.
+      let mine: RecoveryReconciler | null = null
+      mine = new RecoveryReconciler({
         getState: deps.getState,
         setState: deps.setState,
         journal,
         readGitFacts: (cwd) => readGitFacts(cwd),
         smartResume: () => core.appSettings.getResumeStrategy() === 'smart',
-        execute: (a) =>
-          executeRecovery(a, {
+        // The last gate before a worker is spawned. Turning the toggle off, or quitting, must not
+        // put a worker on the disk a moment later — so this checks both `recovery === mine` (still
+        // the live reconciler, not one closeContinuity already retired) and orchestration itself
+        // (same reason the boot sweep and onDispatchLost guard on deps.enabled() above). The
+        // reconciler journals this as RECOVERY_FAILED through its own swallow-and-log helper, which
+        // is the honest record of what happened.
+        execute: async (a) => {
+          if (recovery !== mine || !deps.enabled())
+            return { ok: false, error: 'recovery was turned off while this attempt was being decided' }
+          return executeRecovery(a, {
             getState: deps.getState,
             setState: deps.setState,
             startWorker: deps.startWorker,
             startValidation: deps.startValidation,
             readGitSummary,
             log: orchLog
-          }),
+          })
+        },
         log: orchLog,
         now: () => new Date().toISOString()
       })
+      recovery = mine
     }
     if (continuity) buildRecovery()
-    // Job Continuity P1: decide what to do about every worker the restart lost. It reads the state,
-    // the journal and the worktrees, and acts; a failure inside is logged per attempt and never
-    // stops the boot.
-    if (recovery) void recovery.reconcileAll().catch((e) => orchLog(`recovery: boot sweep failed: ${String(e)}`))
 
     const server = await startOrchServer(deps)
     // A failure after listen must close the server and only then throw. Throwing here would leave orch
@@ -2985,6 +3009,22 @@ export function registerIpc(
     // 아무 일도 일어나지 않고, 그 이유는 화면 어디에도 없다.
     // **orch 대입 뒤에 있어야 한다** — 앞에 두면 orch 가 아직 null 이라 아무 일도 하지 않는다.
     void runScheduler().catch((e) => orchLog(`scheduler failed at startup: ${String(e)}`))
+    // Job Continuity P1: decide what to do about every worker the restart lost. It reads the state,
+    // the journal and the worktrees, and acts; a failure inside is logged per attempt and never
+    // stops the boot.
+    //
+    // **Must be after `orch = {...}` above, for the same reason runScheduler is** — deps.startWorker
+    // reaches spawnSession, which reads orchEnvOf(), which answers undefined while `orch` is still
+    // null. A worker recovered in that window would come up with no astera CLI and no
+    // ASTERA_SESSION: stranded with a spec file telling it to run commands it does not have — the
+    // exact failure this feature exists to prevent.
+    //
+    // **`deps.enabled()` guards it too** — Job Continuity's checkbox does not imply orchestration is
+    // on (it lives in the Smart Resume section and is its own reason to run startOrch), and with
+    // orchestration off the server rejects every call a spawned worker makes with a 409, so it can
+    // never report. Same guard, same reasoning as runScheduler's `if (!orch.deps.enabled()) return`.
+    if (recovery && deps.enabled())
+      void recovery.reconcileAll().catch((e) => orchLog(`recovery: boot sweep failed: ${String(e)}`))
     // 예약 템플릿의 발화. **첫 바퀴는 무장만 한다**(firesDue) — 앱을 켤 때마다 한 회차가 도는
     // 것을 막는 장치가 그것이고, 그래서 여기서 즉시 한 번 부르지 않는다.
     /** 코디네이터 세션이 사라졌을 때 그 Run 의 관리자 칸을 비운다. **다시 띄우지는 않는다.**
