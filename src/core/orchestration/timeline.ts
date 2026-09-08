@@ -24,7 +24,7 @@ const KIND_RANK: Record<JobEventKind, number> = {
   'limit-hit': 6,
   resumed: 7,
   'runtime-lost': 8,
-  'recovery': 9
+  recovery: 9
 }
 
 /** 타임라인에서 빼는 메시지 종류.
