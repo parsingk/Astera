@@ -35,9 +35,10 @@ describe('candidates', () => {
     expect(candidates(state({ dispatches: [dispatch(), reopened] }))).toEqual([])
   })
 
-  it('skips a paused Run and a schedule template', () => {
+  it('skips a paused Run, a schedule template and a Run nobody has started yet', () => {
     expect(candidates(state({ runs: [run({ paused: true })] }))).toEqual([])
     expect(candidates(state({ runs: [run({ schedule: { kind: 'daily', at: '09:00' } as never })] }))).toEqual([])
+    expect(candidates(state({ runs: [run({ pendingStart: true })] }))).toEqual([])
   })
 
   it('skips a Task that is not dispatched', () => {

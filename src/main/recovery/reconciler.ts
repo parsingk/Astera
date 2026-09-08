@@ -51,7 +51,12 @@ export function candidates(state: OrchState): LostAttemptSeed[] {
   for (const task of state.tasks) {
     if (task.status !== 'dispatched') continue
     const run = runs.get(task.runId)
-    if (!run || run.paused === true || run.schedule !== undefined) continue
+    // The scheduler's own three Run gates, copied whole. `pendingStart` is the one that looks
+    // redundant — it is a one-way gate `startRun` clears, so a Run holding it cannot have dispatched
+    // anything to lose. schedule.ts refuses that inference for its own gates all the same, because
+    // orchestration.json outlives the process and is hand-edited, and recovery is a second door into
+    // starting workers: it holds to the same standard.
+    if (!run || run.paused === true || run.schedule !== undefined || run.pendingStart === true) continue
     const own = state.dispatches.filter((d) => d.taskId === task.id)
     // A `dispatched` Task always has one — openDispatch writes the Dispatch and the status together.
     // The guard is here because orchestration.json outlives the process and is hand-edited, the same
