@@ -1348,7 +1348,12 @@ export function registerIpc(
           // (Task.accountIds 에서 온다; 아래 startWorker 래퍼가 rollChainFor 로 만든다). 지정이 없는
           // Task 에서는 그대로 한 원소다. **넘기는 것 자체가 이 세션을 롤링에 등록시킨다.**
           rollAccountIds: o.rollAccountIds,
-          rollPrompt: o.rollPrompt // 워커용 재개 문구 — 없으면 롤링이 UI 언어 기본값을 쓴다
+          rollPrompt: o.rollPrompt, // 워커용 재개 문구 — 없으면 롤링이 UI 언어 기본값을 쓴다
+          // Recovery's provider-native resume (OrchCoordinator.startWorker's `resume` option) — both
+          // already exist on the app's spawnSession/core.sessions.spawn, this closure just has to
+          // forward them instead of dropping them on the floor.
+          resumeSessionId: o.resumeSessionId,
+          resumePrompt: o.resumePrompt
         } satisfies typeof o)
         try {
           send('session:created', info)
