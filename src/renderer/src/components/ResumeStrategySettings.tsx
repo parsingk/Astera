@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ResumeStrategy } from '../../../core/types'
 import { useI18n } from '../i18n/I18nProvider'
 import { confirmModal } from '../lib/confirm'
@@ -13,6 +13,11 @@ export function ResumeStrategySettings(): React.JSX.Element {
   const { t } = useI18n()
   const [strategy, setStrategy] = useState<ResumeStrategy>('original')
   const [continuity, setContinuity] = useState(false)
+  /** Mirrors `strategy` for code that runs after an await: `pick` suspends on the confirm dialog while
+   *  the checkbox's own IPC may flip the picker to `smart`, and the closure's `strategy` is then stale.
+   *  Reading the ref gives the value that is actually on screen. */
+  const strategyRef = useRef(strategy)
+  strategyRef.current = strategy
 
   useEffect(() => {
     void window.api.settings.getResumeStrategy().then(setStrategy)
@@ -30,8 +35,13 @@ export function ResumeStrategySettings(): React.JSX.Element {
       })
       if (!ok) return
     }
-    const prev = strategy
-    setStrategy(next) // optimistic — shows at once
+    // Re-read after the await — the checkbox's own IPC may have flipped `strategy` (to `smart`)
+    // while the confirm dialog was open, and the `strategy` this closure captured at click time is
+    // then stale. If the user's earlier pick already applied while we were suspended, there is
+    // nothing left to do.
+    const prev = strategyRef.current
+    if (next === prev) return
+    setStrategy(next) // 낙관적 — 즉시 보인다
     void window.api.settings.setResumeStrategy(next).catch((err) => {
       setStrategy(prev)
       toast.error(
