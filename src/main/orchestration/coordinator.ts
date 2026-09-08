@@ -21,6 +21,18 @@ import { isSamePath } from '../../core/files/tree'
 import type { Provider } from '../../core/providers/meta'
 import { KNOWLEDGE_DIRS, knowledgeFilesFrom, type KnowledgeFiles } from '../../core/knowledge/detect'
 
+/** Job Continuity's two prompt events (P0 design §5): 'requested' right before the prompt leaves
+ *  the app, 'confirmed' once it has — the spawned process holds it as argv, or the typed prompt's
+ *  Enter was written. Never the prompt text: its length and where the spec file is. */
+export interface PromptWriteEvent {
+  dispatchId: string
+  taskId: string
+  phase: 'requested' | 'confirmed'
+  via: 'argv' | 'typed'
+  promptLength: number
+  specPath: string
+}
+
 export interface CoordinatorDeps {
   spawnSession(o: {
     accountId: string
@@ -75,6 +87,8 @@ export interface CoordinatorDeps {
   specsDir: string
   /** Diagnostic log for things such as exceeding the idle wait limit. The wiring decides where it goes (console, file, ...) */
   log(message: string): void
+  /** Optional: without Job Continuity nothing listens. */
+  onPromptWrite?(e: PromptWriteEvent): void
   /** Limit on waiting for the busy -> idle transition (ms). Defaults to 30s
    *  (DEFAULT_IDLE_WAIT_TIMEOUT_MS) — tests inject a short value so they do not depend on timing. */
   idleWaitTimeoutMs?: number
@@ -537,6 +551,9 @@ export class OrchCoordinator {
           `quoting on ["&|<>^%]`
       )
 
+    const promptWrite = (phase: PromptWriteEvent['phase'], via: PromptWriteEvent['via']): void =>
+      this.deps.onPromptWrite?.({ dispatchId: a.dispatchId, taskId: a.taskId, phase, via, promptLength: prompt.length, specPath })
+
     let cwd: string
     if (a.terminal) {
       // For a reuse the session's own cwd is used as is — a session cannot be moved
@@ -620,14 +637,17 @@ export class OrchCoordinator {
       // cycle it is, what a restart may resume), which needs its own review. The orchestration guide
       // says the same thing where it describes --terminal, so a coordinator is told not to mix the two.
       await this.waitUntilIdle(a.terminal)
+      promptWrite('requested', 'typed')
       this.deps.writeToSession(a.terminal, prompt)
       await sleep(ENTER_DELAY_MS)
       this.deps.writeToSession(a.terminal, '\r')
+      promptWrite('confirmed', 'typed')
     } else {
       // bypassPermissions is not passed — the choice is between a worker stalling on a permission
       // prompt and skipping the permission check on the orchestrator's word alone, and that was
       // never decided. The default (not passing it, so the worker stalls if a permission prompt
       // appears) is the safer side of unauthorized execution, so it is left alone.
+      promptWrite('requested', 'argv')
       const spawned = await this.deps.spawnSession({
         accountId: a.accountId,
         cwd,
@@ -654,6 +674,7 @@ export class OrchCoordinator {
           `--dispatch-id ${a.dispatchId}.`
       })
       finalSessionId = spawned.id
+      promptWrite('confirmed', 'argv')
     }
 
     return { sessionId: finalSessionId, cwd, specPath }
