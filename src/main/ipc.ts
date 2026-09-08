@@ -438,16 +438,25 @@ export function registerIpc(
    *  journaled, and by the toggle handler when turned on at runtime. */
   let continuity: ContinuityRecorder | null = null
   const continuityFile = path.join(app.getPath('userData'), 'orch', 'continuity.sqlite')
+  /** Opens the journal, or leaves `continuity` null if it can't. ContinuityJournal's constructor
+   *  already moves a corrupt file aside and reopens once, but rethrows if that second open also fails
+   *  (a locked file, a read-only or full disk, an antivirus hold) — caught here because a journal that
+   *  cannot open must not stop orchestration or fail an already-persisted settings toggle. */
   const openContinuity = (): void => {
     if (continuity) return
-    const journal = new ContinuityJournal(continuityFile, { log: orchLog })
-    if (journal.recovered) orchLog('continuity journal was unreadable — moved aside, started a new one')
-    continuity = new ContinuityRecorder({
-      journal,
-      log: orchLog,
-      smartResume: () => core.appSettings.getResumeStrategy() === 'smart',
-      handoffLookup: (sessionId) => handoffs.lookup(sessionId)
-    })
+    try {
+      const journal = new ContinuityJournal(continuityFile, { log: orchLog })
+      if (journal.recovered) orchLog('continuity journal was unreadable — moved aside, started a new one')
+      continuity = new ContinuityRecorder({
+        journal,
+        log: orchLog,
+        smartResume: () => core.appSettings.getResumeStrategy() === 'smart',
+        handoffLookup: (sessionId) => handoffs.lookup(sessionId)
+      })
+    } catch (err) {
+      orchLog(`continuity: journal could not be opened — journaling stays off until the next start: ${String(err)}`)
+      continuity = null
+    }
   }
   const closeContinuity = (): void => {
     continuity?.close()
@@ -2490,7 +2499,8 @@ export function registerIpc(
         const prev = store.get()
         const events = continuity?.record(prev, next) ?? []
         await store.save(next)
-        if (continuity && events.length > 0) void continuity.checkpoint(events, next)
+        if (continuity && events.length > 0)
+          void continuity.checkpoint(events, next).catch((e) => orchLog(`continuity: checkpoint failed: ${String(e)}`))
         pushOrchState(next)
         // A finished Run becomes a record. `prevOrchState ?? next` on the first write after boot
         // treats "before" as "after" — justFinished(next, next) is always empty — so a Run that was
@@ -3051,9 +3061,9 @@ export function registerIpc(
         const st = store.get()
         const open = st.dispatches.find((d) => d.sessionId === sessionId && !d.endedAt)
         if (!open) return
-        // The caller (the rolling coordinator's transcript reader) is synchronous, so the write is
-        // fired and forgotten — with the .catch every other fire-and-forget here has, because an
-        // unhandled rejection in main is fatal and a failed save must not be worth the app.
+        // The callers (the rolling coordinators' statusLine reader and rollout attach) are synchronous,
+        // so the write is fired and forgotten — with the .catch every other fire-and-forget here has,
+        // because an unhandled rejection in main is fatal and a failed save must not cost the app.
         const r = bindNativeSession(st, { dispatchId: open.id, nativeSessionId })
         if (r.ok && r.state !== st)
           void deps.setState(r.state).catch((e) => orchLog(`native session bind failed session=${sessionId}: ${String(e)}`))
@@ -4532,7 +4542,7 @@ export function registerIpc(
     if (enabled && !was && orch) {
       // Turned on while Runs may be active: a baseline for every open worker, no invented history (spec §3.6)
       openContinuity()
-      void continuity?.enable(orch.deps.getState())
+      void continuity?.enable(orch.deps.getState()).catch((e) => orchLog(`continuity: enable failed: ${String(e)}`))
     }
     if (!enabled) closeContinuity() // the file stays; nothing is deleted (spec §3.4)
     return r

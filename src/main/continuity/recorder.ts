@@ -124,7 +124,7 @@ export class ContinuityRecorder {
           kind: 'runtime-lost',
           sourceId: e.eventId,
           ...(e.taskId ? { taskId: e.taskId, taskTitle: titleOf.get(e.taskId) } : {}),
-          summary: String(e.payload.workerState ?? '')
+          summary: ''
         }))
     } catch (err) {
       this.deps.log(`continuity: eventsFor ${runId} failed: ${String(err)}`)

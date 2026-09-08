@@ -187,7 +187,7 @@ describe('ContinuityRecorder reads', () => {
     const lost = state(dispatch({ endedAt: NOW, workerState: 'outcome_unknown' }))
     r.record(live, lost)
     expect(r.lostEventsFor('run_1', lost)).toEqual([
-      expect.objectContaining({ at: NOW, kind: 'runtime-lost', taskId: 'tsk_1', taskTitle: 'Auth refactor', summary: 'outcome_unknown' })
+      expect.objectContaining({ at: NOW, kind: 'runtime-lost', taskId: 'tsk_1', taskTitle: 'Auth refactor', summary: '' })
     ])
     expect(r.lostEventsFor('run_9', lost)).toEqual([])
   })
