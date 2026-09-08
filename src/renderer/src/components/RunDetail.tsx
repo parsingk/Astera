@@ -53,7 +53,19 @@ const KIND_LABEL: Record<Exclude<JobEvent['kind'], 'message'>, MessageKey> = {
   'limit-hit': 'jobs.event.limitHit',
   resumed: 'jobs.event.resumed',
   'runtime-lost': 'jobs.event.runtimeLost',
-  'recovery': 'jobs.event.recovery'
+  recovery: 'jobs.event.recovery'
+}
+
+/** A recovery line's summary is the strategy as the journal stored it (main/continuity/recorder.ts
+ *  carries the row through verbatim) — the journal is the source of truth, so the data stays raw and
+ *  the wording happens here. A strategy this map does not know falls back to the raw string: a new
+ *  strategy showing as `resume-native` reads better than showing as nothing. */
+const RECOVERY_LABEL: Record<string, MessageKey> = {
+  'resume-native': 'jobs.recovery.resumeNative',
+  redispatch: 'jobs.recovery.redispatch',
+  recheck: 'jobs.recovery.recheck',
+  'smart-resume': 'jobs.recovery.smartResume',
+  review: 'jobs.recovery.review'
 }
 
 /** 사람을 부르는 메시지. 이 셋만 이벤트 표식으로 blocked 글리프(사람을 기다린다)를 빌린다 —
@@ -914,12 +926,16 @@ export function RunDetail({
                     // limit-hit·resumed 의 요약은 원시 계정 id 다(timeline.ts — core 는 계정 라벨을
                     // 모르므로 id 만 실었다). 지워진 계정이면 accounts 에 없고, 그때 id 를 그대로
                     // 그리면 uuid 가 보인다 — 라벨을 못 찾으면 아무것도 그리지 않는다(uuid 보다 낫다).
+                    // A recovery summary is a strategy name; RECOVERY_LABEL above turns it into words.
+                    const recoveryKey = e.kind === 'recovery' ? RECOVERY_LABEL[e.summary] : undefined
                     const summary =
                       e.kind === 'dispatch-started'
                         ? ''
                         : e.kind === 'limit-hit' || e.kind === 'resumed'
                           ? (accounts?.find((a) => a.id === e.summary)?.label ?? '')
-                          : e.summary
+                          : recoveryKey
+                            ? t(recoveryKey)
+                            : e.summary
                     return (
                       <div key={key} className="detail-event">
                         <div
