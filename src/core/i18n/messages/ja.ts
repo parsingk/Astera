@@ -244,6 +244,17 @@ export const ja: Catalog = {
   'settings.resumeStrategy.original.label': '元のセッションを再開',
   'settings.resumeStrategy.original.hint': '従来の Resume で会話を続けます。',
   'settings.resumeStrategy.saveFailed': '再開方法を保存できませんでした: {detail}',
+  'settings.jobContinuity.label': 'ジョブの継続 (実験的)',
+  'settings.jobContinuity.hint':
+    'クラッシュや再起動をまたいでジョブを復旧できる状態に保ちます。' +
+    'ジョブの状態をディスクに残し、エージェントの元のセッションを復元し、必要なときはスマート再開を使います。',
+  'settings.jobContinuity.smartResumeTurnedOn':
+    'ジョブの継続を有効にしました。完全な自動復旧のため、スマート再開も有効にしました。',
+  'settings.jobContinuity.turnOffSmartResume.title': 'スマート再開を無効にしますか？',
+  'settings.jobContinuity.turnOffSmartResume.body':
+    'ジョブの継続は有効のままですが、元の Claude Code や Codex のセッションを復元できない場合、ジョブが停止することがあります。',
+  'settings.jobContinuity.turnOffSmartResume.confirm': '無効にする',
+  'settings.jobContinuity.saveFailed': 'ジョブの継続の設定を保存できませんでした: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': 'ターミナルの欧文フォント',
   'settings.font.hangul': 'ターミナルのハングルフォント',
@@ -996,6 +1007,7 @@ export const ja: Catalog = {
   'jobs.event.gateResolved': '判断済み',
   'jobs.event.limitHit': '上限停止',
   'jobs.event.resumed': 'ワーカー再開',
+  'jobs.event.runtimeLost': '実行環境を喪失',
   'jobs.event.status': '状況',
   'jobs.event.workerDone': 'ワーカー報告',
   'jobs.event.question': '質問',

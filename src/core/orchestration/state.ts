@@ -833,6 +833,22 @@ export function rekeyDispatch(
   )
 }
 
+/** Records the provider's own session id on an open Dispatch (Job Continuity P0 design §8). The same
+ *  value again is a no-op that returns the input state; a different value replaces it — a roll
+ *  respawns the process and the new one has a new id. A closed Dispatch is refused: nothing will
+ *  resume it, and binding would make the record claim a session that is not this attempt's. */
+export function bindNativeSession(
+  s: OrchState,
+  a: { dispatchId: string; nativeSessionId: string }
+): Res<Dispatch> {
+  const dispatch = s.dispatches.find((d) => d.id === a.dispatchId)
+  if (!dispatch) return err(`unknown dispatch: ${a.dispatchId}`)
+  if (dispatch.endedAt) return err(`dispatch is closed: ${a.dispatchId}`)
+  if (dispatch.nativeSessionId === a.nativeSessionId) return ok(s, dispatch)
+  const next: Dispatch = { ...dispatch, nativeSessionId: a.nativeSessionId }
+  return ok({ ...s, dispatches: replace(s.dispatches, next) }, next)
+}
+
 /** 정지 시점 스냅샷을 열린 Dispatch 에 남긴다. **Task 도 Dispatch 의 종료 상태도 건드리지 않는다** —
  *  이것은 관측 기록이고, 무엇이 일어났는지에 대한 주장이 아니다.
  *

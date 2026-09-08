@@ -81,6 +81,47 @@ describe('AppSettingsStore', () => {
     await again.load()
     expect(again.getAgentBrowserEnabled()).toBe(true)
   })
+
+  it('job continuity is off by default and round-trips', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getJobContinuityEnabled()).toBe(false)
+    await store.setJobContinuityEnabled(true)
+    expect(store.getJobContinuityEnabled()).toBe(true)
+    const again = new AppSettingsStore(file())
+    await again.load()
+    expect(again.getJobContinuityEnabled()).toBe(true)
+  })
+
+  it('turning job continuity on with Smart Resume off turns Smart Resume on, once, and persists both', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    expect(store.getResumeStrategy()).toBe('original')
+    expect(await store.setJobContinuityEnabled(true)).toEqual({ smartResumeTurnedOn: true })
+    expect(store.getResumeStrategy()).toBe('smart')
+    const again = new AppSettingsStore(file())
+    await again.load()
+    expect(again.getResumeStrategy()).toBe('smart')
+    expect(again.getJobContinuityEnabled()).toBe(true)
+  })
+
+  it('turning job continuity off leaves Smart Resume as it was', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    await store.setJobContinuityEnabled(true)
+    expect(await store.setJobContinuityEnabled(false)).toEqual({ smartResumeTurnedOn: false })
+    expect(store.getResumeStrategy()).toBe('smart')
+    expect(store.getJobContinuityEnabled()).toBe(false)
+  })
+
+  it('the key is absent from the file while job continuity is off', async () => {
+    const store = new AppSettingsStore(file())
+    await store.load()
+    await store.setLang('en') // forces a write
+    expect(JSON.parse(await fs.readFile(file(), 'utf8'))).not.toHaveProperty('jobContinuityEnabled')
+    await store.setJobContinuityEnabled(true)
+    expect(JSON.parse(await fs.readFile(file(), 'utf8')).jobContinuityEnabled).toBe(true)
+  })
 })
 
 describe('lang — System은 null이다', () => {

@@ -89,6 +89,9 @@ export interface CodexRollingDeps {
    *  reverting to per-chain isolation. The same reasoning made rollAccountIds required. */
   blocks: BlockRegistry
   persistConfig?: (codexSessionId: string, config: RollConfig) => void
+  /** Job Continuity: the provider's own session id, the moment it is first learned for a live session
+   *  and again when it changes (a respawn). Optional — without the feature nothing listens. */
+  onNativeSession?: (sessionId: string, nativeSessionId: string) => void
   copy?: (src: string, dest: string) => Promise<void> // for test injection — defaults to copyTranscript
   /** The rollout's byte size, `null` when it cannot be read. Injected the same way `copy` is, and for
    *  the same reason: the default is the real thing (rolloutSize). The in-place resume deadline is the
@@ -415,6 +418,7 @@ export class CodexRollingCoordinator {
    *  as this session's verdict. */
   private attachRollout(chain: Chain, codexSessionId: string, rolloutPath: string): void {
     chain.rolloutPath = rolloutPath
+    if (chain.codexSessionId !== codexSessionId) this.deps.onNativeSession?.(chain.liveId, codexSessionId)
     chain.codexSessionId = codexSessionId
     chain.tail = new CodexRolloutTail(rolloutPath, this.now, { startAtEnd: true })
     chain.unmappedWarned = false // it is mapped now — a future unmapped state gets to report itself again
@@ -503,6 +507,7 @@ export class CodexRollingCoordinator {
         }
       } else if (found) {
         chain.rolloutPath = found.path
+        if (chain.codexSessionId !== found.sessionId) this.deps.onNativeSession?.(chain.liveId, found.sessionId)
         chain.codexSessionId = found.sessionId
         chain.tail = new CodexRolloutTail(found.path, this.now)
         chain.unmappedWarned = false

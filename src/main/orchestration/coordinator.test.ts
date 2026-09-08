@@ -483,6 +483,53 @@ describe('OrchCoordinator.startWorker', () => {
     const written = await fs.readFile(r.specPath, 'utf8')
     expect(written).toContain('knowledge/a.md')
   })
+
+  it('reports the prompt hand-off around a spawn: requested, then confirmed, via argv', async () => {
+    const deps = makeDeps()
+    const seen: Array<{ phase: string; via: string; promptLength: number; dispatchId: string }> = []
+    const co = new OrchCoordinator({
+      ...deps,
+      onPromptWrite: (e) => seen.push({ phase: e.phase, via: e.via, promptLength: e.promptLength, dispatchId: e.dispatchId })
+    })
+    await co.startWorker({
+      dispatchId: 'dsp_1',
+      taskId: 'tsk_1',
+      title: 't',
+      spec: 's',
+      provider: 'codex',
+      accountId: 'acc',
+      rollAccountIds: ['acc'],
+      runCwd: dir,
+      worktree: 'current'
+    })
+    expect(seen.map((s) => s.phase)).toEqual(['requested', 'confirmed'])
+    expect(seen.every((s) => s.via === 'argv' && s.dispatchId === 'dsp_1' && s.promptLength > 0)).toBe(true)
+    expect(deps.spawned).toHaveLength(1)
+  })
+
+  it('reports the prompt hand-off around a typed prompt for a reused terminal', async () => {
+    const deps = makeDeps()
+    const seen: string[] = []
+    const co = new OrchCoordinator({ ...deps, onPromptWrite: (e) => seen.push(`${e.phase}:${e.via}`) })
+    await co.startWorker({
+      dispatchId: 'dsp_1',
+      taskId: 'tsk_1',
+      title: 't',
+      spec: 's',
+      provider: 'codex',
+      accountId: 'acc',
+      rollAccountIds: ['acc'],
+      runCwd: dir,
+      worktree: 'current',
+      terminal: 'sess-live',
+      terminalCwd: dir,
+      terminalProvider: 'codex',
+      terminalAccountId: 'acc'
+    })
+    expect(seen).toEqual(['requested:typed', 'confirmed:typed'])
+    expect(deps.written).toHaveLength(2)
+    expect(deps.written[1]).toBe('\r')
+  })
 })
 
 // committing은 a.worktree가 아니라 확정된 cwd에서 유도한다(coordinator.ts의 startWorker 안,

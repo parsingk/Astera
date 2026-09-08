@@ -249,6 +249,17 @@ export const es: Catalog = {
   'settings.resumeStrategy.original.label': 'Reanudar la sesión original',
   'settings.resumeStrategy.original.hint': 'Continúa la conversación con el resume propio del CLI.',
   'settings.resumeStrategy.saveFailed': 'No se pudo guardar la estrategia de reanudación: {detail}',
+  'settings.jobContinuity.label': 'Continuidad de trabajos (experimental)',
+  'settings.jobContinuity.hint':
+    'Mantiene los trabajos recuperables tras fallos y reinicios. ' +
+    'Usa el estado duradero del trabajo, la recuperación de la sesión nativa y la reanudación inteligente cuando hace falta.',
+  'settings.jobContinuity.smartResumeTurnedOn':
+    'Continuidad de trabajos activada. La reanudación inteligente también se activó para una recuperación automática completa.',
+  'settings.jobContinuity.turnOffSmartResume.title': '¿Desactivar la reanudación inteligente?',
+  'settings.jobContinuity.turnOffSmartResume.body':
+    'La continuidad de trabajos seguirá activada, pero un trabajo puede detenerse cuando no se pueda recuperar su sesión original de Claude Code o Codex.',
+  'settings.jobContinuity.turnOffSmartResume.confirm': 'Desactivar',
+  'settings.jobContinuity.saveFailed': 'No se pudo guardar el ajuste de continuidad de trabajos: {detail}',
   // TerminalFontSettings.tsx — the terminal font picker rows
   'settings.font.latin': 'Fuente latina del terminal',
   'settings.font.hangul': 'Fuente hangul del terminal',
@@ -1010,6 +1021,7 @@ export const es: Catalog = {
   'jobs.event.gateResolved': 'decidido',
   'jobs.event.limitHit': 'límite alcanzado',
   'jobs.event.resumed': 'worker reanudado',
+  'jobs.event.runtimeLost': 'entorno perdido',
   'jobs.event.status': 'estado',
   'jobs.event.workerDone': 'informe del worker',
   'jobs.event.question': 'pregunta',

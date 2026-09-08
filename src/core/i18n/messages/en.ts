@@ -281,6 +281,17 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.resumeStrategy.original.label': 'Resume original session',
   'settings.resumeStrategy.original.hint': "Continues the conversation with the CLI's own resume.",
   'settings.resumeStrategy.saveFailed': 'Could not save the resume strategy: {detail}',
+  'settings.jobContinuity.label': 'Job Continuity (experimental)',
+  'settings.jobContinuity.hint':
+    'Keep Jobs recoverable across crashes and restarts. ' +
+    'Uses durable job state, native session recovery, and Smart Resume when needed.',
+  'settings.jobContinuity.smartResumeTurnedOn':
+    'Job Continuity enabled. Smart Resume was also enabled for full automatic recovery.',
+  'settings.jobContinuity.turnOffSmartResume.title': 'Turn off Smart Resume?',
+  'settings.jobContinuity.turnOffSmartResume.body':
+    'Job Continuity will remain enabled, but a Job may pause when its original Claude Code or Codex session cannot be recovered.',
+  'settings.jobContinuity.turnOffSmartResume.confirm': 'Turn off',
+  'settings.jobContinuity.saveFailed': 'Could not save the Job Continuity setting: {detail}',
   'settings.font.latin': 'Terminal font (Latin)',
   'settings.font.hangul': 'Terminal font (Hangul)',
   'settings.font.system': 'System default',
@@ -979,6 +990,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.event.gateResolved': 'decided',
   'jobs.event.limitHit': 'usage limit hit',
   'jobs.event.resumed': 'worker resumed',
+  'jobs.event.runtimeLost': 'runtime lost',
   'jobs.event.status': 'status',
   'jobs.event.workerDone': 'worker report',
   'jobs.event.question': 'question',

@@ -1382,6 +1382,15 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
+  it('reports the native session id when a rollout is attached on register', async () => {
+    const seen: Array<[string, string]> = []
+    const h = harness({ onNativeSession: (sid, native) => seen.push([sid, native]) })
+    const file = path.join(tmp, 'rollout.jsonl')
+    await fs.writeFile(file, '', 'utf8')
+    h.coord.register({ ...h.info1, resumeSessionId: 'cx-resume' }, file)
+    expect(seen).toEqual([[h.info1.id, 'cx-resume']])
+  })
+
   // 실측 로그(dev): `codex rolled …` 바로 뒤에 `codex rollout not found within 60000ms — rolling
   // disabled`. 롤의 respawn 도 `codex resume` 이라 새 rollout 이 생기지 않으니 재-locate 는 실패할
   // 수밖에 없고, 그 순간부터 그 체인은 두 번째 한도를 영영 보지 못한다. 단일 계정 체인에서는

@@ -5,6 +5,7 @@ import { sanitizeFontFamily } from '../core/terminal/font'
 import type { TerminalFont } from '../core/terminal/font'
 import { DEFAULT_THEME_ID, isThemeId, type ThemeId } from '../core/theme/themes'
 import type { ResumeStrategy } from '../core/types'
+import { applyContinuityToggle } from '../core/continuity/settings'
 import {
   readGeneratorSettings,
   writableGeneratorSettings,
@@ -18,8 +19,8 @@ import {
 } from '../core/notify/settings'
 
 /** App-wide settings persistence. Holds the language, the id of the dismissed update campaign, the
- *  orchestration toggle, the work unit tracking toggle, the agent browser toggle, the resume strategy,
- *  the terminal font, the theme, and the desktop notification flags.
+ *  orchestration toggle, the work unit tracking toggle, the agent browser toggle, the Job Continuity
+ *  toggle, the resume strategy, the terminal font, the theme, and the desktop notification flags.
  *  A null lang means the user has never picked one explicitly — the caller derives it with
  *  pickInitialLang(app.getLocale()). The derived value is not stored. */
 export class AppSettingsStore {
@@ -29,6 +30,9 @@ export class AppSettingsStore {
   private orchestrationEnabled = false
   private workUnitTrackingEnabled = false
   private agentBrowserEnabled = false
+  /** Job Continuity (spec §3). Off by default; enabling it can also set resumeStrategy — see
+   *  setJobContinuityEnabled. */
+  private jobContinuityEnabled = false
   /** PR-status background polling (design doc §4, the fallback lever). Default on; the narrowing
    *  is inverted from the toggles above — the file is user-editable, so only an explicit false
    *  reads as off, and anything else (absent, corrupt) reads as on. */
@@ -64,6 +68,8 @@ export class AppSettingsStore {
         (parsed as { workUnitTrackingEnabled?: unknown }).workUnitTrackingEnabled === true
       this.agentBrowserEnabled =
         (parsed as { agentBrowserEnabled?: unknown }).agentBrowserEnabled === true
+      this.jobContinuityEnabled =
+        (parsed as { jobContinuityEnabled?: unknown }).jobContinuityEnabled === true
       this.githubPolling = (parsed as { githubPolling?: unknown }).githubPolling !== false
       // Narrowed on read, like generator and terminalFont and for the same reason: the file is
       // user-editable, and the narrowing is per flag's own default (see readDesktopNotify).
@@ -95,6 +101,7 @@ export class AppSettingsStore {
         this.orchestrationEnabled = false
         this.workUnitTrackingEnabled = false
         this.agentBrowserEnabled = false
+        this.jobContinuityEnabled = false
         this.githubPolling = true
         this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
         this.generator = {}
@@ -111,6 +118,7 @@ export class AppSettingsStore {
       this.orchestrationEnabled = false
       this.workUnitTrackingEnabled = false
       this.agentBrowserEnabled = false
+      this.jobContinuityEnabled = false
       this.githubPolling = true
       this.desktopNotify = { ...DESKTOP_NOTIFY_DEFAULTS }
       this.generator = {}
@@ -214,6 +222,23 @@ export class AppSettingsStore {
     await this.persist()
   }
 
+  getJobContinuityEnabled(): boolean {
+    return this.jobContinuityEnabled
+  }
+
+  /** One persist for both fields: the rule may change resumeStrategy as well (spec §3.2), and
+   *  writing them separately would leave a window where the file says on/original. */
+  async setJobContinuityEnabled(enabled: boolean): Promise<{ smartResumeTurnedOn: boolean }> {
+    const r = applyContinuityToggle(
+      { jobContinuity: this.jobContinuityEnabled, resumeStrategy: this.resumeStrategy },
+      enabled
+    )
+    this.jobContinuityEnabled = r.jobContinuity
+    this.resumeStrategy = r.resumeStrategy
+    await this.persist()
+    return { smartResumeTurnedOn: r.smartResumeTurnedOn }
+  }
+
   getTerminalFont(): TerminalFont {
     return this.terminalFont
   }
@@ -246,6 +271,7 @@ export class AppSettingsStore {
       orchestrationEnabled?: boolean
       workUnitTrackingEnabled?: boolean
       agentBrowserEnabled?: boolean
+      jobContinuityEnabled?: boolean
       githubPolling?: boolean
       desktopNotify?: DesktopNotifySettings
       generator?: GeneratorSettings
@@ -258,6 +284,7 @@ export class AppSettingsStore {
     if (this.orchestrationEnabled) data.orchestrationEnabled = true
     if (this.workUnitTrackingEnabled) data.workUnitTrackingEnabled = true
     if (this.agentBrowserEnabled) data.agentBrowserEnabled = true
+    if (this.jobContinuityEnabled) data.jobContinuityEnabled = true
     if (this.githubPolling === false) data.githubPolling = false
     // Every flag at its default leaves the key out of the file entirely; load reconstructs those
     // defaults from an absent key, so nothing is lost.

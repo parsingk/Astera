@@ -1252,6 +1252,20 @@ it('claudeSessionId 최초 학습 시 롤링 설정을 1회 persist하고 재학
   vi.useRealTimers()
 })
 
+it('reports the native session id once when first learned, and again only when it changes', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(0)
+  const seen: Array<[string, string]> = []
+  const h = harness({ onNativeSession: (sid, native) => seen.push([sid, native]) })
+  h.coord.register(h.info1)
+  h.payloads.set('s1', payload(50)) // session_id 'claude-sess'
+  await vi.advanceTimersByTimeAsync(15_000)
+  expect(seen).toEqual([['s1', 'claude-sess']])
+  await vi.advanceTimersByTimeAsync(15_000) // same id again — nothing
+  expect(seen).toHaveLength(1)
+  vi.useRealTimers()
+})
+
 describe('idle nudge', () => {
   const idleHook = { hook_event_name: 'Notification', message: 'Claude is waiting for your input' }
   const MIN = 60_000

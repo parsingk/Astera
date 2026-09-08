@@ -188,6 +188,12 @@ export interface Dispatch {
   accountId: string
   /** App session id. The key that ties this to a tab, and the basis for the caller's identity */
   sessionId: string
+  /** The provider's own id for this worker's conversation: Claude's statusLine `session_id`, Codex's
+   *  rollout `session_id`. Learned after the process is up (the rolling coordinators read it), so
+   *  absent until then, and replaced when a roll respawns the process. This is what a native resume
+   *  (`claude --resume`, `codex resume`) needs and what the app forgot at every restart before Job
+   *  Continuity (P0 design §8). */
+  nativeSessionId?: string
   cwd: string
   specPath: string
   retryOf?: string

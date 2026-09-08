@@ -26,6 +26,8 @@ import { OrchestrationStore } from './orchestration/store'
 import { UnderstandingStore } from './understanding/store'
 import { WorkUnitStore } from './workUnit/store'
 import { HandoffStore } from './handoff/store'
+import { ContinuityJournal } from './continuity/journal'
+import { ContinuityRecorder } from './continuity/recorder'
 import { readGitSummary } from './gitSummary'
 import type { Handoff } from '../core/handoff/types'
 import { WorkUnitCollector, type CollectorSession } from './workUnit/collector'
@@ -46,6 +48,7 @@ import { OrchRollTap } from './orchestration/rollTap'
 import { TaskValidator } from './orchestration/validator'
 import {
   applyValidationResult,
+  bindNativeSession,
   blockForValidation,
   blockForReview,
   openReviewDispatch
@@ -160,6 +163,8 @@ export interface OrchHandle {
   onRollState: (e: RollStateEvent) => void
   orchEnv: () => { cliPath: string; infoPath: string; skillsPath: string } | undefined
   resumeText: (sessionId: string, form: 'handover' | 'update', tabFallback: boolean) => Promise<string | null>
+  /** Job Continuity: binds the provider's session id to the open Dispatch of that app session. */
+  onNativeSession: (sessionId: string, nativeSessionId: string) => void
 }
 
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
@@ -428,6 +433,35 @@ export function registerIpc(
    *  따로 두는 이유는 onExit 이 orch 대입보다 훨씬 먼저 배선되기 때문이다 — 그 콜백은 호출 시점에
    *  이 변수를 읽는다. */
   let orchRollTap: OrchRollTap | null = null
+  /** Job Continuity's recorder. Non-null only while the toggle is on: off means no file is opened and
+   *  nothing is written (spec §0.4). Created before store.load in bootOrch so the restart's losses are
+   *  journaled, and by the toggle handler when turned on at runtime. */
+  let continuity: ContinuityRecorder | null = null
+  const continuityFile = path.join(app.getPath('userData'), 'orch', 'continuity.sqlite')
+  /** Opens the journal, or leaves `continuity` null if it can't. ContinuityJournal's constructor
+   *  already moves a corrupt file aside and reopens once, but rethrows if that second open also fails
+   *  (a locked file, a read-only or full disk, an antivirus hold) — caught here because a journal that
+   *  cannot open must not stop orchestration or fail an already-persisted settings toggle. */
+  const openContinuity = (): void => {
+    if (continuity) return
+    try {
+      const journal = new ContinuityJournal(continuityFile, { log: orchLog })
+      if (journal.recovered) orchLog('continuity journal was unreadable — moved aside, started a new one')
+      continuity = new ContinuityRecorder({
+        journal,
+        log: orchLog,
+        smartResume: () => core.appSettings.getResumeStrategy() === 'smart',
+        handoffLookup: (sessionId) => handoffs.lookup(sessionId)
+      })
+    } catch (err) {
+      orchLog(`continuity: journal could not be opened — journaling stays off until the next start: ${String(err)}`)
+      continuity = null
+    }
+  }
+  const closeContinuity = (): void => {
+    continuity?.close()
+    continuity = null
+  }
   /** 검증기. startOrchestration 이 만들 때까지, 그리고 오케스트레이션이 꺼져 있으면 null 이다 */
   let orchValidator: TaskValidator | null = null
   /** 사라진 코디네이터의 자리를 비우는 함수. **bootOrch 안에서 대입한다** — 정의가 그 안에
@@ -1190,7 +1224,14 @@ export function registerIpc(
       )
 
     const store = new OrchestrationStore(path.join(app.getPath('userData'), 'orchestration.json'))
+    if (core.appSettings.getJobContinuityEnabled()) openContinuity()
     const loaded = await store.load()
+    // The restart cleanup is a state transition like any other: every worker it closed as
+    // outcome_unknown lands as ATTEMPT_LOST, and Runs the TTL pruned lose their journal rows.
+    if (continuity && loaded.before) {
+      continuity.record(loaded.before, store.get())
+      continuity.reportSkew(store.get())
+    }
     if (loaded.recovered) orchLog('failed to read or parse orchestration.json — kept the .bak and started from an empty state')
     if (
       loaded.unknownOutcomes > 0 ||
@@ -1341,7 +1382,26 @@ export function registerIpc(
       // defining property of that class, so the wiring supplies the path (the same directory created
       // and cleaned above).
       specsDir,
-      log: orchLog
+      log: orchLog,
+      // Job Continuity's two prompt rows. Not a state transition, so it cannot come out of the
+      // setState diff: only the coordinator knows when the prompt left the app. The Run comes from
+      // the Task because the event carries no runId.
+      onPromptWrite: (e) => {
+        if (!continuity) return
+        const st = store.get()
+        const task = st.tasks.find((t) => t.id === e.taskId)
+        if (!task) return
+        const type = e.phase === 'requested' ? 'PROMPT_WRITE_REQUESTED' : 'PROMPT_WRITE_CONFIRMED'
+        continuity.note({
+          runId: task.runId,
+          taskId: task.id,
+          dispatchId: e.dispatchId,
+          type,
+          at: new Date().toISOString(),
+          idempotencyKey: `${type}:${e.dispatchId}`,
+          payload: { via: e.via, promptLength: e.promptLength, specPath: e.specPath }
+        })
+      }
     })
 
     // 검증 실행. runner 는 prepareRun + RunManager 이고, 결과는 서버의 setState 로 되돌아간다.
@@ -2433,7 +2493,14 @@ export function registerIpc(
       // re-read is needed. A command that writes twice (worker-start) pushes twice — the payload is
       // one project's Runs and the renderer replaces its copy wholesale, so a duplicate is a no-op.
       setState: async (next) => {
+        // Job Continuity: the journal row lands before the projection does (spec §8 — intent first);
+        // the spawn that follows a worker-start happens after both. A journal failure is logged
+        // inside record() and never reaches here.
+        const prev = store.get()
+        const events = continuity?.record(prev, next) ?? []
         await store.save(next)
+        if (continuity && events.length > 0)
+          void continuity.checkpoint(events, next).catch((e) => orchLog(`continuity: checkpoint failed: ${String(e)}`))
         pushOrchState(next)
         // A finished Run becomes a record. `prevOrchState ?? next` on the first write after boot
         // treats "before" as "after" — justFinished(next, next) is always empty — so a Run that was
@@ -2917,6 +2984,8 @@ export function registerIpc(
     installStubsForCurrentToggles()
     orchWiring?.onStarted({
       stop: () => {
+        // The journal's handle goes with the server it was opened for; reopened by the next boot.
+        closeContinuity()
         // 미뤄 둔 exit 를 버린다. 남겨 두면 서버가 내려간 뒤에 setState 가 돌 수 있다.
         orchRollTap?.dispose()
         orchRollTap = null
@@ -2985,7 +3054,20 @@ export function registerIpc(
         (form === 'update'
           ? buildResumeNote(sessionId, deps.getState(), { log: orchLog })
           : buildResumePacket(sessionId, deps.getState(), { log: orchLog })
-        ).then((text) => text ?? (tabFallback ? tabResumeTextFor(sessionId, form) : null))
+        ).then((text) => text ?? (tabFallback ? tabResumeTextFor(sessionId, form) : null)),
+      onNativeSession: (sessionId, nativeSessionId) => {
+        // Bound through setState so the event derives (AGENT_NATIVE_SESSION_BOUND / _CHANGED) and the
+        // checkpoint policy sees it. A session that is not a worker's has no open Dispatch: nothing.
+        const st = store.get()
+        const open = st.dispatches.find((d) => d.sessionId === sessionId && !d.endedAt)
+        if (!open) return
+        // The callers (the rolling coordinators' statusLine reader and rollout attach) are synchronous,
+        // so the write is fired and forgotten — with the .catch every other fire-and-forget here has,
+        // because an unhandled rejection in main is fatal and a failed save must not cost the app.
+        const r = bindNativeSession(st, { dispatchId: open.id, nativeSessionId })
+        if (r.ok && r.state !== st)
+          void deps.setState(r.state).catch((e) => orchLog(`native session bind failed session=${sessionId}: ${String(e)}`))
+      }
     })
   }
   if (
@@ -2993,7 +3075,8 @@ export function registerIpc(
     (core.appSettings.getOrchestrationEnabled() ||
       core.appSettings.getWorkUnitTrackingEnabled() ||
       core.appSettings.getAgentBrowserEnabled() ||
-      core.appSettings.getResumeStrategy() === 'smart')
+      core.appSettings.getResumeStrategy() === 'smart' ||
+      core.appSettings.getJobContinuityEnabled())
   )
     void startOrch().catch((err) => orchLog(`startup failed: ${String(err)}`))
   ipcMain.on('sessions.write', (_e, id, data) => core.sessions.write(id, data))
@@ -3422,7 +3505,13 @@ export function registerIpc(
     }
     const known = new Set(core.sessions.list().map((s) => s.id))
     const { layers, deps, cyclic } = layersOf(state, runId)
-    return { events: timelineFor(state, runId, (id) => known.has(id)), layers, deps, cyclic }
+    // The journal's losses are merged in rather than derived: an attempt the restart could not find
+    // leaves nothing in the projection to read it back from — only the journal remembers it happened.
+    const events = [
+      ...timelineFor(state, runId, (id) => known.has(id)),
+      ...(continuity?.lostEventsFor(runId, state) ?? [])
+    ].sort((a, b) => a.at.localeCompare(b.at))
+    return { events, layers, deps, cyclic }
   })
   // orch.command 의 args 에서 Run id·Task id·Dispatch id 를 읽는 키 — 명령마다 다르고, 짐작이 아니라
   // server.ts 의 switch 를 다시 열어 확인한 값만 적었다: task-create 는 args.runId, run-start·
@@ -4435,6 +4524,28 @@ export function registerIpc(
     // Turning it off does not close the server — handoffEnabled() is read per request.
     if (strategy === 'smart' && orchWiring) await startOrch()
     if (strategy === 'smart') installStubsForCurrentToggles()
+  })
+
+  // Job Continuity. The rule that may also turn Smart Resume on lives in the store (core/continuity/
+  // settings.ts); this handler validates the value and starts the orchestration wiring the journal
+  // hooks live in, the way the other toggles do, and opens or closes the recorder with the toggle.
+  ipcMain.handle('settings.getJobContinuityEnabled', () => core.appSettings.getJobContinuityEnabled())
+  ipcMain.handle('settings.setJobContinuityEnabled', async (_e, enabled: unknown) => {
+    if (typeof enabled !== 'boolean') throw new Error(`INVALID_JOB_CONTINUITY: ${String(enabled)}`)
+    const was = core.appSettings.getJobContinuityEnabled()
+    const r = await core.appSettings.setJobContinuityEnabled(enabled)
+    if (enabled && orchWiring) await startOrch()
+    // Same reason the setResumeStrategy handler calls it: the store may have just turned Smart Resume
+    // on, and the astera-handoff stub has to reach every account even when startOrch() was a no-op
+    // because another toggle already had the server up.
+    if (enabled) installStubsForCurrentToggles()
+    if (enabled && !was && orch) {
+      // Turned on while Runs may be active: a baseline for every open worker, no invented history (spec §3.6)
+      openContinuity()
+      void continuity?.enable(orch.deps.getState()).catch((e) => orchLog(`continuity: enable failed: ${String(e)}`))
+    }
+    if (!enabled) closeContinuity() // the file stays; nothing is deleted (spec §3.4)
+    return r
   })
 
   // The terminal font pair. The same trust-boundary check as setLang: the shape is validated here, and
