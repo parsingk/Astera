@@ -352,8 +352,10 @@ describe('HistoryIndex (lazy)', () => {
       const projects = path.join(a.configDir, 'projects')
       await fs.rename(path.join(projects, 'proj-a'), path.join(projects, 'renamed'))
       await vi.waitFor(() => expect(updated).toHaveBeenCalled(), { timeout: 5000 })
-      // 폴더 이름이 아니라 기록 안의 cwd 가 프로젝트를 정한다 — 이름을 바꿔도 같은 한 줄이어야 한다
-      expect(await projectNames()).toEqual(['proj-a'])
+      // 여기서 목록까지 단정하지 않는다. 이름 바꾸기는 이벤트가 둘(사라진 이름, 생긴 이름)이고 어느
+      // 쪽이 먼저 오는지는 플랫폼이 정한다 — 첫 통지가 사라진 쪽만 반영한 순간을 붙잡으면 빈 목록이
+      // 보인다(ubuntu 러너에서 실제로 그랬다). 이 테스트가 지키는 것은 자식 이벤트가 없는 알림이
+      // 워처에 들리느냐 하나이고, 이름이 바뀐 뒤 행이 어떻게 정리되는지는 바로 아래 테스트가 본다.
     })
 
     it('폴더가 대표하는 cwd가 바뀌면 옛 행이 남지 않는다', async () => {
