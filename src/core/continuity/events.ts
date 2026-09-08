@@ -105,11 +105,13 @@ function runEndEvents(prev: OrchState, next: OrchState, now: string): Continuity
 }
 
 /** Which events a Task transition is. A check's verdict (validating → a state other than blocked)
- *  comes first; blocked out of validating is a question about an interrupted check, not a verdict. */
+ *  comes first; blocked out of validating is a question about an interrupted check, not a verdict.
+ *  A passed check leaves validating for completed, or for reviewing when a reviewer is queued
+ *  (applyValidationResult) — both are TASK_CHECK_PASSED. */
 function taskTransitionEvents(from: TaskStatus, to: TaskStatus): ContinuityEventType[] {
   const check: ContinuityEventType[] =
     from === 'validating' && to !== 'blocked'
-      ? [to === 'completed' ? 'TASK_CHECK_PASSED' : 'TASK_CHECK_FAILED']
+      ? [to === 'completed' || to === 'reviewing' ? 'TASK_CHECK_PASSED' : 'TASK_CHECK_FAILED']
       : []
   const main: ContinuityEventType =
     to === 'ready' && from === 'pending'

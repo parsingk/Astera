@@ -88,6 +88,7 @@ describe('deriveEvents — tasks', () => {
     expect(move('ready', 'dispatched')).toEqual(['TASK_STARTED'])
     expect(move('dispatched', 'validating')).toEqual(['TASK_CHECK_STARTED'])
     expect(move('validating', 'completed')).toEqual(['TASK_CHECK_PASSED', 'TASK_COMPLETED'])
+    expect(move('validating', 'reviewing')).toEqual(['TASK_CHECK_PASSED'])
     expect(move('validating', 'failed')).toEqual(['TASK_CHECK_FAILED', 'TASK_FAILED'])
     expect(move('validating', 'ready')).toEqual(['TASK_CHECK_FAILED'])
     expect(move('dispatched', 'blocked')).toEqual(['TASK_WAITING_INPUT'])
