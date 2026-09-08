@@ -11,7 +11,8 @@ export const HANDOFF_LIST_MAX = 10
 export const HANDOFF_FILES_MAX = 20
 /** The whole section. tabResume.ts gives the memo MEMO_CHARS_MAX = 6000 for everything; the
  *  experiment's V1 briefing was 1,204 characters, so 2,500 for this section leaves the evidence
- *  its room. The lists are what gets cut, never the two closing sentences. */
+ *  its room. The lists are what gets cut, never the two closing sentences — except in the
+ *  impossible case where the fixed parts alone exceed the cap, where the whole string is clamped. */
 export const HANDOFF_SECTION_CHARS_MAX = 2_500
 
 export const HANDOFF_ABSENT_TEXT =
@@ -90,6 +91,10 @@ export function handoffSection(lookup: HandoffLookup, currentHead: string | null
   if (full.length <= HANDOFF_SECTION_CHARS_MAX) return full
   // Over budget: cut the lists, keep the heading and the closing sentences whole.
   const room = HANDOFF_SECTION_CHARS_MAX - head.length - tailText.length - CUT_NOTE.length - 2 // two '\n'
-  const cut = room > 0 ? middle.slice(0, room) : ''
-  return `${head}\n${cut}\n${CUT_NOTE}${tailText}`
+  if (room <= 0) {
+    // Even the fixed parts (heading, hint, cut note, closing sentences) do not fit. That cannot
+    // happen with app-written fields, but the cap is unconditional — clamp and keep the heading.
+    return `${head}\n${CUT_NOTE}${tailText}`.slice(0, HANDOFF_SECTION_CHARS_MAX)
+  }
+  return `${head}\n${middle.slice(0, room)}\n${CUT_NOTE}${tailText}`
 }

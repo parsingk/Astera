@@ -108,4 +108,11 @@ describe('handoffSection', () => {
     const b = handoffSection({ state: 'found', memo }, 'abc')
     expect(a).toBe(b)
   })
+
+  it('holds the cap even when the fixed parts alone would exceed it', () => {
+    const absurd = { ...memo, createdAt: 'T'.repeat(3000), verification: [{ type: 'test' as const, status: 'passed' as const }] }
+    const out = handoffSection({ state: 'found', memo: absurd }, 'ffffffff00000000000000000000000000000000')!
+    expect(out.length).toBeLessThanOrEqual(HANDOFF_SECTION_CHARS_MAX)
+    expect(out.startsWith('HANDOFF MEMO (')).toBe(true)
+  })
 })
