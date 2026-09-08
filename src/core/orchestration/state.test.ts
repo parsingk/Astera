@@ -26,6 +26,7 @@ import {
   setRunWorktree,
   attachCoordinator,
   detachCoordinator,
+  bindNativeSession,
   type OrchState
 } from './state'
 import { DELIVERY_MAX, FAILURE_LIMIT, canTransition, type Task } from './types'
@@ -2343,5 +2344,73 @@ describe('코디네이터 세션 붙이기·떼기', () => {
     expect(saved.coordinatorAccountId).toBe('acc1')
     expect(saved).not.toHaveProperty('coordinatorSessionId')
     expect(saved).not.toHaveProperty('coordinatorFailures')
+  })
+})
+
+describe('bindNativeSession', () => {
+  const opened = (): OrchState => {
+    const r0 = unwrap<{ id: string }>(createRun(emptyState(), { objective: 'o', cwd: 'D:/p' }, NOW))
+    const r1 = unwrap<Task>(
+      createTask(r0.state, { runId: r0.value.id, title: 't', spec: 's', deps: [] }, NOW)
+    )
+    const r2 = unwrap<{ id: string }>(
+      openDispatch(
+        r1.state,
+        {
+          taskId: r1.value.id,
+          provider: 'claude',
+          accountId: 'a1',
+          sessionId: 'sess-1',
+          cwd: 'D:/p',
+          specPath: 'D:/spec.md'
+        },
+        NOW
+      )
+    )
+    return r2.state
+  }
+
+  it('records the provider session id on an open dispatch', () => {
+    const s = opened()
+    const r = unwrap<{ nativeSessionId?: string }>(
+      bindNativeSession(s, { dispatchId: s.dispatches[0].id, nativeSessionId: 'claude-uuid' })
+    )
+    expect(r.value.nativeSessionId).toBe('claude-uuid')
+    expect(r.state.dispatches[0].nativeSessionId).toBe('claude-uuid')
+  })
+
+  it('the same value again returns the state untouched', () => {
+    const open1 = opened()
+    const dispatchId = open1.dispatches[0].id
+    const s = unwrap<unknown>(
+      bindNativeSession(open1, { dispatchId, nativeSessionId: 'x' })
+    ).state
+    const r = bindNativeSession(s, { dispatchId: s.dispatches[0].id, nativeSessionId: 'x' })
+    expect(r.ok && r.state).toBe(s)
+  })
+
+  it('a different value replaces (a roll respawned the process)', () => {
+    const open1 = opened()
+    const dispatchId = open1.dispatches[0].id
+    const s = unwrap<unknown>(
+      bindNativeSession(open1, { dispatchId, nativeSessionId: 'x' })
+    ).state
+    const r = unwrap<{ nativeSessionId?: string }>(
+      bindNativeSession(s, { dispatchId: s.dispatches[0].id, nativeSessionId: 'y' })
+    )
+    expect(r.value.nativeSessionId).toBe('y')
+  })
+
+  it('rejects an unknown dispatch and a closed one', () => {
+    const s = opened()
+    expect(bindNativeSession(s, { dispatchId: 'nope', nativeSessionId: 'x' })).toEqual({
+      ok: false,
+      error: 'unknown dispatch: nope'
+    })
+    const closed = unwrap<unknown>(
+      closeDispatch(s, { sessionId: 'sess-1', exitCode: 0 }, LATER)
+    ).state
+    const r = bindNativeSession(closed, { dispatchId: s.dispatches[0].id, nativeSessionId: 'x' })
+    expect(r.ok).toBe(false)
   })
 })
