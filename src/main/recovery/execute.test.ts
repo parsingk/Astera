@@ -21,7 +21,8 @@ const attempt = (over: Partial<LostAttempt> = {}): LostAttempt => ({
   cwd: 'D:/wt', promptConfirmed: true, baseHead: 'aaa', hasValidateConfig: false, appDriven: true, ...over
 })
 const decision = (over: Partial<RecoveryDecision> = {}): RecoveryDecision => ({
-  strategy: 'redispatch', class: 'safe', reason: 'nothing was produced', ...over
+  strategy: 'redispatch', class: 'safe', reason: 'nothing was produced',
+  reasonKey: 'jobs.recovery.reason.producedNothing', ...over
 })
 
 function deps(over: Partial<Parameters<typeof executeRecovery>[1]> = {}) {
@@ -37,6 +38,7 @@ function deps(over: Partial<Parameters<typeof executeRecovery>[1]> = {}) {
       setState: async (next: OrchState) => { state = next },
       startWorker: async (a: unknown) => { started.push(a); return { sessionId: 'sess-2', cwd: 'D:/wt', specPath: 'D:/spec2.md' } },
       startValidation: (a: unknown) => validated.push(a),
+      lang: () => 'en',
       log: (m: string) => logs.push(m),
       ...over
     }
@@ -84,7 +86,7 @@ describe('executeRecovery', () => {
   it('a review blocks the Task with the reason and offers the restart', async () => {
     const h = deps()
     await executeRecovery(
-      { attempt: attempt(), decision: decision({ strategy: 'review', class: 'review', reason: 'the worktree holds unfinished work and Smart Resume is off' }), state: h.state, now: NOW },
+      { attempt: attempt(), decision: decision({ strategy: 'review', class: 'review', reason: 'the worktree holds unfinished work and Smart Resume is off', reasonKey: 'jobs.recovery.reason.smartResumeOff' }), state: h.state, now: NOW },
       h.d as never
     )
     expect(h.state.tasks[0].status).toBe('blocked')
@@ -92,8 +94,46 @@ describe('executeRecovery', () => {
     expect(gate.question).toContain('Smart Resume is off')
     // exactly one option: resolving a Gate unblocks the Task, so a "leave it" button would restart
     // the very work it claims to leave alone (leaving it alone means not answering)
-    expect(gate.options).toEqual(['restart with a new worker'])
+    expect(gate.options).toEqual(['Restart with a new worker'])
     expect(h.started).toEqual([])
+  })
+
+  // The person reads the Gate, so the Gate is written in their language. The journal keeps the
+  // English sentence either way, which is why the decision carries both.
+  it('writes the question and the option in the app language', async () => {
+    const h = deps({ lang: () => 'ko' })
+    await executeRecovery(
+      {
+        attempt: attempt(),
+        decision: decision({
+          strategy: 'review',
+          class: 'unsafe',
+          reason: 'a rebase is in progress in the worktree and must not be resumed automatically',
+          reasonKey: 'jobs.recovery.reason.operationInProgress',
+          reasonParams: { operation: 'rebase' }
+        }),
+        state: h.state,
+        now: NOW
+      },
+      h.d as never
+    )
+    const gate = h.state.gates[0]
+    expect(gate.question).toContain('rebase')
+    expect(gate.question).toContain('진행 중')
+    expect(gate.question).toContain('워크트리는 아무것도 건드리지 않았습니다')
+    expect(gate.question).toContain('답하기 전에')
+    expect(gate.question).not.toContain('must not be resumed')
+    expect(gate.options).toEqual(['새 워커로 다시 시작'])
+  })
+
+  // openDispatch's refusal and startWorker's throw are operational failures, not rows of the
+  // decision table, so there is no key for them: the wrapper is translated, the detail is not.
+  it('keeps an operational failure verbatim inside the translated question', async () => {
+    const h = deps({ lang: () => 'ko', startWorker: async () => { throw new Error('spawn refused') } })
+    await executeRecovery({ attempt: attempt(), decision: decision(), state: h.state, now: NOW }, h.d as never)
+    const gate = h.state.gates[0]
+    expect(gate.question).toContain('spawn refused')
+    expect(gate.question).toContain('답하기 전에')
   })
 
   it('a failing startWorker rolls the new Dispatch back and reports the failure', async () => {

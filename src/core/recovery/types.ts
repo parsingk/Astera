@@ -1,5 +1,6 @@
 // What recovery knows about one lost worker, and what it decides. Pure data: the journal, the
 // worktree and the settings are read by main and arrive here as plain values (P1 design §4).
+import type { MessageKey, MessageParams } from '../i18n'
 import type { Provider } from '../providers/meta'
 
 export type RecoveryStrategy = 'resume-native' | 'redispatch' | 'recheck' | 'smart-resume' | 'review'
@@ -45,6 +46,12 @@ export interface GitFacts {
 export interface RecoveryDecision {
   strategy: RecoveryStrategy
   class: RecoveryClass
-  /** One English sentence, journaled as-is and shown to the person when the strategy is `review`. */
+  /** One English sentence, journaled as-is. The journal is a record and its records are English. */
   reason: string
+  /** The same sentence for the screen: the Gate's question and the Timeline row are written in the
+   *  app's language, while `reason` above stays English for the file. Kept as a key rather than a
+   *  translated string because this function is pure and holds no language. */
+  reasonKey: MessageKey
+  /** Values the sentence names, when it names any. Only the mid-operation row does. */
+  reasonParams?: MessageParams
 }

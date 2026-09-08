@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto'
 import { openDispatch, beginValidation, createGate, type OrchState } from '../../core/orchestration/state'
 import { buildCheckpoint, type GitSummary } from '../../core/orchestration/checkpoint'
 import { formatResumeSection } from '../../core/orchestration/resumeSection'
+import { t, type Lang } from '../../core/i18n'
 import type { LostAttempt, RecoveryDecision } from '../../core/recovery/types'
 import type { Provider } from '../../core/providers/meta'
 
@@ -31,6 +32,9 @@ export interface ExecuteDeps {
   startValidation?(a: { taskId: string; cwd: string }): void
   /** Not injected = the smart-resume briefing is built with `git: null` (buildCheckpoint accepts that). */
   readGitSummary?(cwd: string): Promise<GitSummary | null>
+  /** The app's language, read per Gate rather than captured, so a language change reaches the next
+   *  question. Required, not optional: a Gate nobody can read is worse than no Gate. */
+  lang(): Lang
   log(m: string): void
 }
 
@@ -51,7 +55,8 @@ export async function executeRecovery(a: ExecuteInput, deps: ExecuteDeps): Promi
     case 'recheck':
       return recheck(a, deps)
     case 'review':
-      return review(a, deps, decision.reason)
+      // The row of the table wrote its sentence twice; this is the side the person reads.
+      return review(a, deps, t(deps.lang(), decision.reasonKey, decision.reasonParams))
   }
 }
 
@@ -167,16 +172,20 @@ async function recheck(a: ExecuteInput, deps: ExecuteDeps): Promise<ExecuteResul
   return { ok: true }
 }
 
-const reviewQuestion = (decision: RecoveryDecision): string =>
-  `The worker for this Task was lost and could not be continued automatically: ${decision.reason}.` +
-  (decision.class === 'unsafe' ? ' Nothing in the worktree has been touched.' : '') +
-  ' Review the worktree before answering.'
+/** The Gate is the one thing here a person reads, so it is written in their language while the
+ *  journal keeps the English sentence (RecoveryDecision carries both). `reason` arrives already
+ *  resolved because its two sources differ: a row of the decision table has a key, an operational
+ *  failure is a raw error string with nothing to translate. */
+const reviewQuestion = (lang: Lang, cls: RecoveryDecision['class'], reason: string): string =>
+  t(lang, 'jobs.recovery.gate.question', { reason }) +
+  (cls === 'unsafe' ? ` ${t(lang, 'jobs.recovery.gate.unsafeNote')}` : '') +
+  ` ${t(lang, 'jobs.recovery.gate.reviewFirst')}`
 
 /** One option, not two. Resolving a Gate always unblocks the Task to `pending -> ready`, and for a
  *  Run the app drives that is exactly what starts a fresh worker — so a second button saying "leave
  *  it" would restart the work it promises to leave alone. Leaving it alone is not answering: the
  *  Gate stays open and the Task stays blocked until the person decides. */
-const REVIEW_OPTIONS = ['restart with a new worker']
+const reviewOptions = (lang: Lang): string[] => [t(lang, 'jobs.recovery.gate.restart')]
 
 /** Opens the Gate that asks a person to decide. `reason` is the text that goes in the question — for
  *  the `review` strategy itself that is `decision.reason`; for the fallback out of `startAttempt` it
@@ -194,10 +203,14 @@ async function review(
   failure?: string
 ): Promise<ExecuteResult> {
   const { attempt, decision, now } = a
-  const question = reviewQuestion({ ...decision, reason })
+  const lang = deps.lang()
   const res = createGate(
     deps.getState(),
-    { taskId: attempt.taskId, question, options: REVIEW_OPTIONS },
+    {
+      taskId: attempt.taskId,
+      question: reviewQuestion(lang, decision.class, reason),
+      options: reviewOptions(lang)
+    },
     now
   )
   if (!res.ok) {

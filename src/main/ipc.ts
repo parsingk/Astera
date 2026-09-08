@@ -2972,6 +2972,9 @@ export function registerIpc(
             startWorker: deps.startWorker,
             startValidation: deps.startValidation,
             readGitSummary,
+            // Read at the moment the Gate is written, not captured here: the settings handler
+            // reassigns core.lang, and a Gate opened after that should be in the new language.
+            lang: () => core.lang,
             log: orchLog
           })
         },
