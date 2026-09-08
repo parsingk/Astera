@@ -33,6 +33,16 @@ export interface GuestEvents {
   on(event: string, cb: Listener): unknown
   off(event: string, cb: Listener): unknown
 }
+
+/** The fields of Electron's before-input-event payload this reads. Structural, like GuestEvents. */
+export interface KeyInput {
+  type: string
+  key: string
+  alt: boolean
+  control: boolean
+  meta: boolean
+  shift: boolean
+}
 export interface WebRequestLike {
   onErrorOccurred(filter: { urls: string[] }, cb: (details: unknown) => void): void
   onCompleted(filter: { urls: string[] }, cb: (details: unknown) => void): void
@@ -68,7 +78,7 @@ function consoleEntry(args: unknown[]): ConsoleEntry | null {
 
 /** The two rings for one agent tab, fed by that guest's own events. Network requests do not arrive
  *  here — they are session-wide and routed by installNetworkCapture below. */
-export function attachBuffers(guest: GuestEvents): AgentBuffers {
+export function attachBuffers(guest: GuestEvents, hooks: { onEscape?: () => void } = {}): AgentBuffers {
   const consoleRing = new Ring<ConsoleEntry>()
   const networkRing = new Ring<NetworkEntry>()
 
@@ -92,12 +102,24 @@ export function attachBuffers(guest: GuestEvents): AgentBuffers {
   guest.on('console-message', onConsole)
   guest.on('did-start-navigation', onNav)
 
+  // Escape typed inside the page never reaches the host: the guest is another renderer and its key
+  // events stay there. The banner on the agent's tab promises Esc cancels, so the one key is caught
+  // here, before the page sees it (the same hook src/main/index.ts uses for the DevTools shortcut),
+  // and handed to whoever attached these buffers. Only Escape alone; every other key stays the page's.
+  const onInput: Listener = (_e, input) => {
+    const k = input as KeyInput
+    if (k.type !== 'keyDown' || k.key !== 'Escape' || k.alt || k.control || k.meta || k.shift) return
+    hooks.onEscape?.()
+  }
+  if (hooks.onEscape) guest.on('before-input-event', onInput)
+
   return {
     console: consoleRing,
     network: networkRing,
     detach() {
       guest.off('console-message', onConsole)
       guest.off('did-start-navigation', onNav)
+      if (hooks.onEscape) guest.off('before-input-event', onInput)
     }
   }
 }

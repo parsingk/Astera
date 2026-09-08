@@ -60,7 +60,7 @@
 
 **Run**
 - A run configuration has a kind — Shell, npm, Node.js, Gradle, Maven, cargo, go, Python, pytest,
-  Docker Compose, Dockerfile or .NET — and holds only the fields that kind actually has
+  Docker Compose, Dockerfile, .NET or Compound — and holds only the fields that kind actually has
 - The command is assembled when you run it, so the Gradle wrapper, the package manager your lockfile
   implies and the quoting your shell needs are worked out then, not typed into a box
 - Your build files are read, so a project's npm scripts are already there as configurations, and a

@@ -128,22 +128,31 @@ export function snapshotRuntime(budgets: SnapshotBudgets): unknown {
     if (!visible(el)) return
     interactiveCount += 1
     if (interactive.length >= budgets.interactive) return
-    // A password field is listed like any other — the agent has to know it is there — but its value
-    // is never read. The redaction main applies cannot help here: a password a person chose looks
-    // like ordinary text to it, and the design lets the user type in the agent's tab, so this would
-    // be their own password on its way into the agent's context and its provider's logs. Design Mode
-    // has no such exposure (pickRuntime.ts reads attributes, where a typed value never appears).
-    const value = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ? (el.type === 'password' ? '' : el.value) : el.textContent || ''
+    // An input or textarea has no text of its own: its content is its value, reported as `value`
+    // below. Reporting it here as well made a form-heavy page pay twice for its largest strings, and
+    // the total budget then shed page text and headings sooner.
+    const text = el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ? '' : el.textContent || ''
     const entry: Record<string, unknown> = {
       tag: el.tagName,
       selector: selectorOf(el).slice(0, budgets.selector),
       name: nameOf(el).slice(0, budgets.name),
-      text: value.replace(/\s+/g, ' ').trim().slice(0, budgets.name),
+      text: text.replace(/\s+/g, ' ').trim().slice(0, budgets.name),
       disabled: (el as HTMLButtonElement).disabled === true || el.getAttribute('aria-disabled') === 'true'
     }
     const role = el.getAttribute('role')
     if (role) entry.role = role
     if (el instanceof HTMLAnchorElement) entry.href = el.href
+    // A password field is listed like any other — the agent has to know it is there — but its value
+    // is never read. The redaction main applies cannot help here: a password a person chose looks
+    // like ordinary text to it, and the design lets the user type in the agent's tab, so this would
+    // be their own password on its way into the agent's context and its provider's logs. Design Mode
+    // has no such exposure (pickRuntime.ts reads attributes, where a typed value never appears).
+    if (el instanceof HTMLInputElement) {
+      if (el.type === 'checkbox' || el.type === 'radio') entry.checked = el.checked
+      else if (el.type !== 'password') entry.value = el.value
+    } else if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) {
+      entry.value = el.value
+    }
     interactive.push(entry)
   })
   const visibleText = textOf(document.body, budgets.text)
@@ -187,8 +196,11 @@ export function clickRuntime(sel: string, followLink: boolean): unknown {
   if (a && !followLink) return { found: true, href: a.href }
   el.scrollIntoView({ block: 'center', inline: 'center' })
   el.focus()
+  // Measured after the scroll and before the click: a click can navigate, and the rect of an element
+  // on the page that is going away is still the right answer for where the pointer should land.
+  const r = el.getBoundingClientRect()
   el.click()
-  return { found: true, clicked: true }
+  return { found: true, clicked: true, point: { x: r.left + r.width / 2, y: r.top + r.height / 2 }, viewport: { w: window.innerWidth, h: window.innerHeight } }
 }
 
 /** Sets a value the way typing would, so frameworks that listen for input events see it. The native
@@ -213,7 +225,8 @@ export function fillRuntime(sel: string, text: string): unknown {
   }
   el.dispatchEvent(new Event('input', { bubbles: true }))
   el.dispatchEvent(new Event('change', { bubbles: true }))
-  return { found: true, filled: true }
+  const r = el.getBoundingClientRect()
+  return { found: true, filled: true, point: { x: r.left + r.width / 2, y: r.top + r.height / 2 }, viewport: { w: window.innerWidth, h: window.innerHeight } }
 }
 
 /** A key on the focused element: keydown then keyup, with the codes a keyboard would send for the
@@ -234,7 +247,8 @@ export function pressRuntime(key: string): unknown {
     const form = (target as HTMLInputElement).form || target.closest('form')
     if (form && target instanceof HTMLInputElement) form.requestSubmit()
   }
-  return { pressed: true, target: target.tagName.toLowerCase() + (target.id ? '#' + target.id : '') }
+  const r = target.getBoundingClientRect()
+  return { pressed: true, target: target.tagName.toLowerCase() + (target.id ? '#' + target.id : ''), point: { x: r.left + r.width / 2, y: r.top + r.height / 2 }, viewport: { w: window.innerWidth, h: window.innerHeight } }
 }
 
 /** Resolves when the selector matches, polling; `{ found: false }` when `ms` pass first. */

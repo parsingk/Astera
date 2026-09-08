@@ -296,7 +296,7 @@ export const ko = {
   // ResumeStrategySettings.tsx — the two-way resume strategy picker
   'settings.resumeStrategy.label': '세션 재개 방식',
   'settings.resumeStrategy.smart.label': '스마트 재개 (실험)',
-  'settings.resumeStrategy.smart.hint': '간결한 체크포인트만으로 대화를 이어갑니다.',
+  'settings.resumeStrategy.smart.hint': '간결한 체크포인트만으로 대화를 이어갑니다. 에이전트가 작업 중 남긴 인계 메모가 있으면 함께 전달합니다.',
   'settings.resumeStrategy.original.label': '원래 세션 재개',
   'settings.resumeStrategy.original.hint': '기존 Resume 방식으로 대화를 이어갑니다.',
   'settings.resumeStrategy.saveFailed': '재개 방식을 저장하지 못했습니다: {detail}',
@@ -428,6 +428,7 @@ export const ko = {
   // useFileOps.ts — cut/copy and paste
   'files.clipboard.cutDone': '{count}개 항목을 잘라냈습니다',
   'files.clipboard.copyDone': '{count}개 항목을 복사했습니다',
+  'files.clipboard.filesFailed': '파일을 클립보드에 올리지 못해 경로만 복사됐습니다',
   'files.paste.blocked': '붙여넣기 불가: {reason}',
   'files.paste.invalidTarget': '대상이 올바르지 않습니다',
   'files.paste.empty': '붙여넣을 항목이 없습니다',
@@ -494,6 +495,25 @@ export const ko = {
   'explorer.rail.toggle': '파일 탐색기',
   // WorkbenchTabs.tsx — the dirty marker on a file tab
   'explorer.tab.unsaved': '저장 안 됨',
+  // FileFindBar.tsx — 파일 에디터의 Ctrl+F 찾기·바꾸기 바. 세는 문구는 콘솔 찾기 바(run.find)와
+  // 같은 모양을 쓴다 — 같은 부품으로 보여야 한다
+  'explorer.find.placeholder': '파일에서 찾기',
+  'explorer.find.replacePlaceholder': '바꿀 내용',
+  'explorer.find.count': '{n} / {total}',
+  'explorer.find.countMany': '{total}개',
+  'explorer.find.noResults': '결과 없음',
+  'explorer.find.badRegexp': '정규식 오류',
+  'explorer.find.prev': '이전 일치',
+  'explorer.find.next': '다음 일치',
+  'explorer.find.selectAll': '모두 선택',
+  'explorer.find.close': '찾기 닫기',
+  'explorer.find.caseSensitive': '대소문자 구분',
+  'explorer.find.wholeWord': '단어 단위',
+  'explorer.find.regexp': '정규식',
+  'explorer.find.replace': '바꾸기',
+  'explorer.find.replaceAll': '모두 바꾸기',
+  'explorer.find.showReplace': '바꾸기 펼치기',
+  'explorer.find.hideReplace': '바꾸기 접기',
   // LocalHistoryDialog.tsx — the Local History browse/restore modal
   // ('Local History' is treated as a proper noun and left untranslated — following the existing catalog precedent)
   'localHistory.loading': '불러오는 중…',
@@ -943,6 +963,7 @@ export const ko = {
   'preview.agent.running': '에이전트가 이 페이지를 조작하고 있습니다',
   'preview.agent.stop': '에이전트 스크립트 중단',
   'preview.agent.stopped': '에이전트 스크립트를 중단했습니다',
+  'preview.agent.inUse': '에이전트가 컴퓨터를 사용 중입니다  ·  Esc로 취소',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
   'terminal.rail.open': '터미널',
   'terminal.tab.label': '터미널 {n}',

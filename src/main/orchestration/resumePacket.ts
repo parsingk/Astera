@@ -18,6 +18,7 @@ import { formatResumeNote, formatResumeSection } from '../../core/orchestration/
 import { formatTabResume } from '../../core/orchestration/tabResume'
 import type { OrchState } from '../../core/orchestration/state'
 import type { LastCommand, Provider, TranscriptMessage } from '../../core/types'
+import type { HandoffLookup } from '../../core/handoff/types'
 import { readGitSummary, type GitSummaryDeps } from '../gitSummary'
 import { LAUNCH_FORBIDDEN } from './coordinator'
 import { parseTranscriptForResume, type TranscriptResumeMaterial } from '../../core/history/parser'
@@ -285,6 +286,12 @@ export interface TabResumeDeps {
    *  끊긴 쓰기를 결정론적으로 재현한다. 넘기지 않으면 실제 fs.writeFile 을 쓴다. 받는 경로는
    *  임시 파일 경로다(writeAtomic 이 rename 으로 갈아 끼운다). 'update' 폼에서는 쓰이지 않는다. */
   writeFile?(path: string, content: string): Promise<void>
+  /** The last handoff memo the session left, from main's HandoffStore. Consulted for 'handover'
+   *  only — an 'update' goes to a live session that still has its own conversation. Not injected
+   *  means this caller has no store: the briefing renders no memo section and says nothing about
+   *  it (nothing is wrong there). A reader that throws is logged and treated the same way; the
+   *  briefing is never withheld because of the memo (spec §13). */
+  readHandoff?(sessionId: string): HandoffLookup
 }
 
 /**
@@ -386,8 +393,25 @@ export async function buildTabResumeText(
       editedFilesSource = 'git'
     }
 
+    // The memo is a hint under the facts; it is read here so the pure formatter stays free of the
+    // store. `unknown` is the default for both "no reader" and "reader failed" — neither is a
+    // reason to claim that no memo was left.
+    let handoff: HandoffLookup = { state: 'unknown' }
+    if (form === 'handover' && deps.readHandoff) {
+      let failure: string | null = null
+      try {
+        handoff = deps.readHandoff(sessionId)
+      } catch (err) {
+        failure = String(err)
+      }
+      // One line either way: a store that could not be read is a skip worth a trace, and the
+      // briefing that follows will carry no memo section (unknown is never rendered as none).
+      if (handoff.state === 'unknown')
+        deps.log?.(`handoff store unreadable session=${sessionId}${failure ? `: ${failure}` : ''}`)
+    }
+
     const text = formatTabResume(
-      { cwd: deps.cwd, title, requests, editedFiles, editedFilesSource, git, tail, lastCommand },
+      { cwd: deps.cwd, title, requests, editedFiles, editedFilesSource, git, tail, lastCommand, handoff },
       form
     )
     if (text === null) {

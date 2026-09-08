@@ -245,7 +245,7 @@ export const es: Catalog = {
   // ResumeStrategySettings.tsx — the two-way resume strategy picker
   'settings.resumeStrategy.label': 'Estrategia de reanudación de sesión',
   'settings.resumeStrategy.smart.label': 'Reanudación inteligente (experimental)',
-  'settings.resumeStrategy.smart.hint': 'Continúa la conversación solo con un punto de control compacto.',
+  'settings.resumeStrategy.smart.hint': 'Continúa la conversación solo con un punto de control compacto. Si el agente dejó una nota de traspaso mientras trabajaba, también se entrega.',
   'settings.resumeStrategy.original.label': 'Reanudar la sesión original',
   'settings.resumeStrategy.original.hint': 'Continúa la conversación con el resume propio del CLI.',
   'settings.resumeStrategy.saveFailed': 'No se pudo guardar la estrategia de reanudación: {detail}',
@@ -383,6 +383,7 @@ export const es: Catalog = {
   // useFileOps.ts — cut/copy and paste
   'files.clipboard.cutDone': 'Se cortaron {count} elementos',
   'files.clipboard.copyDone': 'Se copiaron {count} elementos',
+  'files.clipboard.filesFailed': 'No se pudieron poner los archivos en el portapapeles, solo se copiaron sus rutas',
   'files.paste.blocked': 'No se puede pegar: {reason}',
   'files.paste.invalidTarget': 'El destino no es válido',
   'files.paste.empty': 'No hay nada que pegar',
@@ -449,6 +450,23 @@ export const es: Catalog = {
   'explorer.rail.toggle': 'Explorador de archivos',
   // WorkbenchTabs.tsx — the dirty marker on a file tab
   'explorer.tab.unsaved': 'Sin guardar',
+  'explorer.find.placeholder': 'Buscar en el archivo',
+  'explorer.find.replacePlaceholder': 'Reemplazar por',
+  'explorer.find.count': '{n} / {total}',
+  'explorer.find.countMany': '{total} coincidencias',
+  'explorer.find.noResults': 'Sin resultados',
+  'explorer.find.badRegexp': 'Patrón inválido',
+  'explorer.find.prev': 'Coincidencia anterior',
+  'explorer.find.next': 'Siguiente coincidencia',
+  'explorer.find.selectAll': 'Seleccionar todas',
+  'explorer.find.close': 'Cerrar búsqueda',
+  'explorer.find.caseSensitive': 'Distinguir mayúsculas',
+  'explorer.find.wholeWord': 'Palabra completa',
+  'explorer.find.regexp': 'Expresión regular',
+  'explorer.find.replace': 'Reemplazar',
+  'explorer.find.replaceAll': 'Reemplazar todo',
+  'explorer.find.showReplace': 'Mostrar reemplazo',
+  'explorer.find.hideReplace': 'Ocultar reemplazo',
   // LocalHistoryDialog.tsx — the Local History browse/restore modal
   // ('Local History' is treated as a proper noun and left untranslated)
   'localHistory.loading': 'Cargando…',
@@ -863,6 +881,7 @@ export const es: Catalog = {
   'preview.agent.running': 'El agente está manejando esta página',
   'preview.agent.stop': 'Detener el script del agente',
   'preview.agent.stopped': 'Script del agente detenido',
+  'preview.agent.inUse': 'El agente está usando tu computadora  ·  Esc para cancelar',
   // BottomPanel, the rail terminal button
   'terminal.rail.open': 'Terminal',
   'terminal.tab.label': 'Terminal {n}',

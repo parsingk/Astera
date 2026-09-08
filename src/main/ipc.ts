@@ -13,7 +13,7 @@ import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
-import type { Account, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, SessionInfo } from '../core/types'
+import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
@@ -25,6 +25,9 @@ import { sanitizeResumePrompt } from '../core/sessions/commands'
 import { OrchestrationStore } from './orchestration/store'
 import { UnderstandingStore } from './understanding/store'
 import { WorkUnitStore } from './workUnit/store'
+import { HandoffStore } from './handoff/store'
+import { readGitSummary } from './gitSummary'
+import type { Handoff } from '../core/handoff/types'
 import { WorkUnitCollector, type CollectorSession } from './workUnit/collector'
 import { readGitRef, isAncestorOf, readChangedFiles, readRange } from './workUnit/gitProbe'
 import {
@@ -89,6 +92,7 @@ import { PREVIEW_PARTITION } from '../core/preview/guards'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from './orchestration/resumePacket'
 import { extractStatusLineSession } from '../core/usage/statusline'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
+import { writeFilesToClipboard } from './clipboardFiles'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
 import { imageMime } from '../core/files/imageMime'
 import { parsePorcelainZ, type GitState } from '../core/git/status'
@@ -400,6 +404,19 @@ export function registerIpc(
     orchLog(
       `warning — the tab-resume directory path contains characters forbidden in a launch prompt (" & | < > ^ %): ${tabResumeDir} — codex Smart Resume will be refused for every tab session in this state`
     )
+  // The handoff memos agents leave while they work (core/handoff/types.ts). Persistent, unlike
+  // tab-resume above: a memo has to survive an app restart to serve a history resume. Declared this
+  // early because both blank-start sites below and the CLI server deps close over it.
+  const handoffs = new HandoffStore(path.join(app.getPath('userData'), 'handoff.json'))
+  void handoffs
+    .load()
+    .then((r) => {
+      if (r.recovered)
+        orchLog(
+          'failed to read or parse handoff.json — kept the .bak; memo lookups answer unknown until the next memo is saved'
+        )
+    })
+    .catch((e) => orchLog(`handoff.json load failed: ${String(e)}`))
   let orch: {
     server: OrchServer
     deps: OrchServerDeps
@@ -435,12 +452,15 @@ export function registerIpc(
    *  the same ASTERA_SESSION, and the command gate in the server decides what may be called. **So
    *  does the agent browser**: `astera browser help` and `astera browser js` are that same CLI, and
    *  skillsPath is where `browser help` reads the guide from — without this the astera-browser skill
-   *  is planted into a session that cannot reach the program it tells the agent to run. */
+   *  is planted into a session that cannot reach the program it tells the agent to run. **And Smart
+   *  Resume**: `astera handoff` is that same CLI, and the memo it stores is what the Smart Resume
+   *  briefing reads back. */
   const orchEnvOf = (): { cliPath: string; infoPath: string; skillsPath: string } | undefined =>
     orch &&
     (core.appSettings.getOrchestrationEnabled() ||
       core.appSettings.getWorkUnitTrackingEnabled() ||
-      core.appSettings.getAgentBrowserEnabled())
+      core.appSettings.getAgentBrowserEnabled() ||
+      core.appSettings.getResumeStrategy() === 'smart')
       ? { cliPath: orch.cliPath, infoPath: orch.infoPath, skillsPath: orch.skillsPath }
       : undefined
   /** The project the Jobs sidebar is folded for. main is not otherwise told what the renderer has
@@ -740,7 +760,8 @@ export function registerIpc(
               // 만들어지지 않고, 아래는 기존 경로를 그대로 지난다.
               transcriptPath: opts.resumeTranscriptPath ?? null,
               log: orchLog,
-              dir: tabResumeDir
+              dir: tabResumeDir,
+              readHandoff: (id) => handoffs.lookup(id)
             })
           : null
       const plan = historyResumePlan({ strategy, provider, briefing })
@@ -869,7 +890,7 @@ export function registerIpc(
     }
     // `set` forgets whatever this session had before, so a remounted pane cannot leave the guest it
     // registered last time holding its listeners.
-    const buffers = attachBuffers(guest)
+    const buffers = attachBuffers(guest, { onEscape: () => send('preview:agentEscape', { sessionId }) })
     agentBuffers.set(sessionId, webContentsId, buffers)
     // The one teardown path no cleanup covers. A renderer reload or crash takes the <webview> down
     // without running React's effect cleanup, so preview.unregisterAgentGuest never arrives and the
@@ -935,6 +956,12 @@ export function registerIpc(
       send('preview:agentTabClose', { sessionId })
     },
     setBusy: (sessionId, busy) => send('preview:agentBusy', { sessionId, busy }),
+    // `satisfies` because this shape is declared twice on purpose: helpers.ts owns `AgentPoint` rather
+    // than reading the event type, so that nothing under agentBrowser/ can reach anything Electron
+    // touches. This call is the only place the two declarations meet, and `send`'s payload is
+    // `unknown`, so without the annotation a renamed field or a widened `kind` would compile clean
+    // everywhere and break only here — at the boundary, at runtime.
+    pointer: (sessionId, p) => send('preview:agentPointer', { sessionId, ...p } satisfies CoreEvents['preview:agentPointer']),
     // Which localhost port is this project's: the only ports main knows are the ones its own Run
     // started — the address the user gave the Run to preview, or failing that the one it printed. Read
     // per call: a Run can start or stop, and a preview address be set, between two scripts.
@@ -1010,7 +1037,8 @@ export function registerIpc(
       provider,
       transcriptPath,
       log: orchLog,
-      dir: tabResumeDir
+      dir: tabResumeDir,
+      readHandoff: (id) => handoffs.lookup(id)
     })
   }
   // fix wave 최종, F1: handed over here, unconditionally — not inside bootOrch below, which only runs
@@ -1021,8 +1049,9 @@ export function registerIpc(
   /**
    * Installs whichever discovery stub(s) match the toggles' current state, against every known
    * account. Pulled out of bootOrch (which used to build and install this list inline, once) into a
-   * standalone function that settings.setOrchestrationEnabled, settings.setWorkUnitTrackingEnabled
-   * and settings.setAgentBrowserEnabled also call directly — **not just bootOrch**.
+   * standalone function that settings.setOrchestrationEnabled, settings.setWorkUnitTrackingEnabled,
+   * settings.setAgentBrowserEnabled and settings.setResumeStrategy also call directly — **not just
+   * bootOrch**.
    *
    * **Why bootOrch alone is not enough**: bootOrch only runs on the transition that actually starts
    * the server (see startOrch's `if (orch || orchStarting) return`). Before this task the server could
@@ -1036,7 +1065,7 @@ export function registerIpc(
    *
    * No-ops when the server has never come up (`orch` is null — nothing has a skillsPath yet to install
    * from) or when every toggle is off (`stubs` comes out empty). Safe to call redundantly — that is
-   * the point of calling it from four places: installStub already skips a write once content matches
+   * the point of calling it from five places: installStub already skips a write once content matches
    * (see stub.ts), so the worst repeated cost is a per-account file read, not a per-account write.
    */
   const installStubsForCurrentToggles = (): void => {
@@ -1055,6 +1084,9 @@ export function registerIpc(
         : []),
       ...(core.appSettings.getAgentBrowserEnabled()
         ? [{ stubPath: path.join(orch.skillsPath, 'browser-stub.md'), skillName: 'astera-browser' }]
+        : []),
+      ...(core.appSettings.getResumeStrategy() === 'smart'
+        ? [{ stubPath: path.join(orch.skillsPath, 'handoff-stub.md'), skillName: 'astera-handoff' }]
         : [])
     ]
     if (stubs.length === 0) return
@@ -1074,15 +1106,16 @@ export function registerIpc(
   }
 
   let orchStarting = false
-  /** Starts the orchestration server. Called when **any of the three** toggles is on — agent
-   *  orchestration, work-unit tracking, or the agent browser, since `/astera-task` and
-   *  `astera browser js` need the same CLI and the same `ASTERA_SESSION` the
+  /** Starts the orchestration server. Called when **any of the four** toggles is on — agent
+   *  orchestration, work-unit tracking, the agent browser, or Smart Resume, since `/astera-task`,
+   *  `astera browser js` and `astera handoff` need the same CLI and the same `ASTERA_SESSION` the
    *  orchestration server already hands out (see `orchEnvOf`'s doc). With all off, this is never
    *  called and no port is opened. Turning any one of them on at runtime comes back through here and
    *  starts immediately (sessions created after that get the CLI — environment variables are fixed
    *  at spawn time, so sessions already running cannot). If it is already up, this does nothing.
    *  Turning a toggle off does not close the server — `enabled()`/`trackingEnabled()`/
-   *  `browserEnabled()` are read on every request, so CLI calls after that are rejected with a 409. */
+   *  `browserEnabled()`/`handoffEnabled()` are read on every request, so CLI calls after that are
+   *  rejected with a 409. */
   const startOrch = async (): Promise<void> => {
     // orch is assigned last (after the port and files are ready), so re-entering in that window would
     // start two servers — the first loses its reference and keeps holding the port, and the info file
@@ -2674,6 +2707,37 @@ export function registerIpc(
       // deps can name it here.
       browserEnabled: () => core.appSettings.getAgentBrowserEnabled(),
       browserRun: (sessionId, script) => agentRuns.run(sessionId, script),
+      // Same reasoning again, for `handoff` — read on every request so switching Smart Resume off
+      // rejects the command from then on.
+      handoffEnabled: () => core.appSettings.getResumeStrategy() === 'smart',
+      handoffs: {
+        save: async (sessionId, body) => {
+          const sessions = core.sessions.list()
+          const info = sessions.find((s) => s.id === sessionId)
+          const provider = providerOfSession(sessionId, sessions, (id) => core.accounts.get(id))
+          if (!info || !provider)
+            return { ok: false, status: 409, error: `unknown session: ${sessionId}` }
+          // git is read here, at save time, so the briefing can later say whether the tree moved.
+          // A folder that is not a repository stores null and the briefing makes no HEAD claim.
+          const git = await readGitSummary(info.cwd).catch(() => null)
+          const memo: Handoff = {
+            ...body,
+            version: 1,
+            sessionId,
+            projectPath: info.cwd,
+            provider,
+            createdAt: new Date().toISOString(),
+            git: git ? { branch: git.branch, head: git.head } : null
+          }
+          try {
+            await handoffs.save(memo)
+          } catch (err) {
+            orchLog(`handoff save failed session=${sessionId}: ${String(err)}`)
+            return { ok: false, status: 500, error: 'the memo could not be written' }
+          }
+          return { ok: true, savedAt: memo.createdAt }
+        }
+      },
       sessionTasks: {
         start: (sessionId, objective) => workUnitCollector.startTask(sessionId, objective),
         complete: (sessionId, input) => workUnitCollector.completeTask(sessionId, input),
@@ -2928,7 +2992,8 @@ export function registerIpc(
     orchWiring &&
     (core.appSettings.getOrchestrationEnabled() ||
       core.appSettings.getWorkUnitTrackingEnabled() ||
-      core.appSettings.getAgentBrowserEnabled())
+      core.appSettings.getAgentBrowserEnabled() ||
+      core.appSettings.getResumeStrategy() === 'smart')
   )
     void startOrch().catch((err) => orchLog(`startup failed: ${String(err)}`))
   ipcMain.on('sessions.write', (_e, id, data) => core.sessions.write(id, data))
@@ -4121,6 +4186,50 @@ export function registerIpc(
     return to
   })
 
+  /** The paste of something copied outside the app. Identical to files.copy but for one check: `from`
+   *  is not required to be inside an allowed root, because the OS clipboard hands over paths that are
+   *  outside every root by definition (Downloads, another drive, a folder on the desktop) and
+   *  requiring one would refuse every external paste. The check that matters stays: destDir and the
+   *  joined `to` are both verified, so this reads from anywhere but writes only into a project the
+   *  app already has open.
+   *  canCopy is kept for the same reason files.copy keeps it — copying a folder into itself or into
+   *  its own descendant is reachable from outside too (a parent directory of the project), and it
+   *  should say so in the user's language rather than surface fs.cp's EINVAL. */
+  ipcMain.handle('files.importExternal', async (_e, from: string, destDir: string) => {
+    // A relative source would be resolved against main's own working directory, which is not a place
+    // this IPC has any business reading from. Everything the OS clipboard hands over is absolute, so
+    // this only closes the case where the renderer sends something else.
+    if (!path.isAbsolute(from)) throw new Error(t(core.lang, 'files.error.pathNotAllowed'))
+    await assertAllowedPath(destDir)
+    const copyReason = canCopy(from, destDir)
+    if (copyReason) throw new Error(t(core.lang, copyReason.key, copyReason.params))
+    const existing = await fs.readdir(destDir)
+    const name = uniqueName(existing, path.basename(from))
+    const to = path.join(destDir, name)
+    await assertAllowedPath(to)
+    await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false })
+    return to
+  })
+
+  /** Sends the calling window a paste. The explorer's Paste **menu item** is the only caller: what the
+   *  OS clipboard holds reaches the renderer through a paste event and no other way (see ClipboardApi.
+   *  hasFiles), and a menu click raises none of its own. Ctrl+V does not need this — the browser
+   *  raises the event for it. */
+  ipcMain.handle('clipboard.requestFilePaste', (e) => {
+    e.sender.paste()
+  })
+
+  /** The other half of the explorer's copy: the selection goes onto the OS clipboard as files, so
+   *  Explorer's paste produces the files and not their paths in text. The renderer has already put
+   *  the text there, which is why a failure comes back as a result instead of an exception — the
+   *  copy is not broken, it is only less useful.
+   *  Every path is checked. Without that the renderer could name any file on the machine and have it
+   *  put on the clipboard, ready to be pasted anywhere the user pastes next. */
+  ipcMain.handle('clipboard.writeFiles', async (_e, paths: string[]) => {
+    for (const p of paths) await assertAllowedPath(p)
+    return writeFilesToClipboard(paths)
+  })
+
   ipcMain.handle('files.reveal', async (_e, targetPath: string) => {
     await assertAllowedPath(targetPath)
     shell.showItemInFolder(targetPath)
@@ -4321,6 +4430,11 @@ export function registerIpc(
     if (strategy !== 'smart' && strategy !== 'original')
       throw new Error(`INVALID_RESUME_STRATEGY: ${String(strategy)}`)
     await core.appSettings.setResumeStrategy(strategy)
+    // Same two lines the other three toggles' setters use, for the same reason: `astera handoff`
+    // needs the server and the planted CLI, and the astera-handoff stub has to reach every account.
+    // Turning it off does not close the server — handoffEnabled() is read per request.
+    if (strategy === 'smart' && orchWiring) await startOrch()
+    if (strategy === 'smart') installStubsForCurrentToggles()
   })
 
   // The terminal font pair. The same trust-boundary check as setLang: the shape is validated here, and

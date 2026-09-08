@@ -100,7 +100,9 @@ The page as text, for reading rather than looking: `title`, `url`, `headings` (w
 (nav, main, header, footer, aside, form, each with a one-line summary), `interactive` — every link,
 button, input, select, textarea, element with a role, and any other element carrying a tabindex other
 than -1 — with its `tag`, a `selector` you can pass to `click()`/`fill()`, its accessible `name`, its
-visible `text`, `disabled`, and `href` for links — then `text`, the visible text of the page. Budgets:
+visible `text` (an input or textarea has none; read its `value`), `disabled`, `href` for links, `value` for an input, textarea or select (the
+current value; a password field, a checkbox and a radio have none) and `checked` for a checkbox or
+radio — then `text`, the visible text of the page. Budgets:
 200 interactive elements, 150 headings and 80 landmarks — `moreInteractive`, `moreHeadings` and
 `moreLandmarks` say how many more the page has, counted on the page itself rather than in what was
 sent — 8,000 characters of text (ending in `… (N more characters)` when cut), 32,000 characters in
@@ -150,6 +152,7 @@ Sets the value of an input, textarea or select — or the text of an editable el
 would, so the page's framework sees the change. Throws `fill: nothing matches <sel>`,
 `fill: <sel> is not an input, textarea, select or editable element`, or, for a select,
 `fill: <sel> has no option with that value`.
+`snapshot()` afterwards shows the control's `value`, which is how to check that the fill took.
 
 ## press(key)
 A key on the focused element: `'Enter'`, `'Escape'`, `'Tab'`, an arrow, or a single character. Enter on

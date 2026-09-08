@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { parentDir } from '../../../core/files/paths'
 import { validateName, canMove, canCopy, isSubPath } from '../../../core/files/ops'
+import { pasteSource } from '../../../core/files/explorerState'
 import {
   pushEntry,
   invert,
@@ -36,8 +37,16 @@ export type Editing =
  *  (useExplorerSelection) — both are injected. */
 export interface FileOps {
   runBatch: (label: string, paths: string[], op: (p: string) => Promise<void>) => Promise<number>
-  transferTo: (mode: 'cut' | 'copy', paths: string[], destDir: string) => Promise<number>
+  transferTo: (
+    mode: 'cut' | 'copy',
+    paths: string[],
+    destDir: string,
+    external?: boolean
+  ) => Promise<number>
   paste: (destDirArg?: string) => Promise<void>
+  /** A paste event that landed on the explorer. osPaths is what the OS clipboard handed over — the
+   *  only place that list can be read (see ClipboardApi.hasFiles). */
+  pasteFromEvent: (osPaths: string[]) => Promise<void>
   pasteDir: () => string
   cutOrCopy: (mode: 'cut' | 'copy') => void
   copyPath: (p: string, relative: boolean) => void
@@ -299,10 +308,25 @@ export function useFileOps(deps: {
     const paths = sel.selectionPaths()
     if (paths.length === 0) return
     sel.dispatch({ type: 'cutOrCopied', mode, paths })
-    // The path text also goes on the OS clipboard — so it can be pasted into the session terminal or an
-    // external app. The files themselves cannot be put there (no CF_HDROP support), so 'paste' outside
-    // the app does not work.
+    // The path text goes on the OS clipboard so it can be pasted into the session terminal or an
+    // external app. It is written first and unconditionally: the file references below replace the
+    // clipboard wholesale when they succeed (carrying the same text with them), and when they fail
+    // this is what is left, which is the behaviour this app has always had.
     window.api.clipboard.writeText(paths.join('\n'))
+    // Copy also puts the real files there, so Explorer's paste produces the files themselves. Cut
+    // does not, and deliberately: Explorer tells a move from a copy by a clipboard format this route
+    // cannot write, so a cut pasted outside would silently copy while the app still shows the items
+    // as cut. Inside the app a cut still moves — that path never touches the OS clipboard.
+    if (mode === 'copy') {
+      void window.api.clipboard
+        .writeFiles(paths)
+        .then((r) => {
+          // Nothing to say on a platform with no mechanism for it — the paths are on the clipboard,
+          // which is all that platform ever offered.
+          if (!r.ok && r.reason !== 'unsupported-platform') toast.error(t('files.clipboard.filesFailed'))
+        })
+        .catch((err: unknown) => toast.error(errText(err)))
+    }
     toast.info(
       mode === 'cut'
         ? t('files.clipboard.cutDone', { count: paths.length })
@@ -345,7 +369,11 @@ export function useFileOps(deps: {
   const transferTo = async (
     mode: 'cut' | 'copy',
     paths: string[],
-    destDir: string
+    destDir: string,
+    // The sources came from outside the app (the OS clipboard), so they are outside every allowed
+    // root and the copy IPC that checks the source would refuse all of them. Only 'copy' uses it:
+    // what an external app cut is its own business, and this app never moves a file it does not own.
+    external = false
   ): Promise<number> => {
     // Guard against rapid repeats (of itself), and do not run overlapped while an undo is in flight —
     // nothing worth telling the user, so it is ignored silently (see where undoBusyRef is declared)
@@ -386,7 +414,11 @@ export function useFileOps(deps: {
             landed.push(to)
             movedPairs.push({ from: p, to })
           } else {
-            landed.push(await window.api.files.copy(p, destDir))
+            landed.push(
+              external
+                ? await window.api.files.importExternal(p, destDir)
+                : await window.api.files.copy(p, destDir)
+            )
           }
         }
       )
@@ -426,22 +458,60 @@ export function useFileOps(deps: {
     }
   }
 
-  /** If destDirArg is given, paste there (the empty-space context menu — same interpretation of "here"
-   *  as dirForCreate). Without it (Ctrl+V) the target is decided as before by the anchor-based pasteDir(). */
-  const paste = async (destDirArg?: string): Promise<void> => {
-    const clip = sel.clipboard
-    if (!clip) {
-      // The menu's Paste item is disabled: clipboard === null, so it never reaches this path — only
-      // Ctrl+V does. That is why it has to report here: without a message the user cannot tell "the
-      // clipboard is empty" from "the paste failed" (a silent failure)
+  /** Where a paste that has to go around through main will land. The menu's Paste writes it just
+   *  before asking for the paste event and pasteFromEvent reads it when that event arrives. A ref and
+   *  not state: the two halves are one gesture, and waiting for a render in between would let the
+   *  event overtake the value. */
+  const osPasteDestRef = useRef<string | null>(null)
+
+  /** Runs a paste once both clipboards are known. osPaths is what the OS clipboard held (empty when
+   *  the paste did not come from a paste event) and sel.clipboard is what Ctrl+X/C put aside inside
+   *  the app; pasteSource decides between them. */
+  const runPaste = async (osPaths: string[], destDir: string): Promise<void> => {
+    const src = pasteSource(osPaths, sel.clipboard)
+    if (src.kind === 'empty') {
+      // Without a message the user cannot tell "the clipboard is empty" from "the paste failed" (a
+      // silent failure). The menu's Paste item is disabled in this state, so this is the Ctrl+V path.
       toast.info(t('files.paste.empty'))
       return
     }
-    const ok = await transferTo(clip.mode, clip.paths, destDirArg ?? pasteDir())
+    if (src.kind === 'external') {
+      await transferTo('copy', src.paths, destDir, true)
+      return
+    }
+    const ok = await transferTo(src.mode, src.paths, destDir)
     // A cut pastes only once (same as OS file managers). If everything failed, or the call was ignored
     // as a rapid repeat, the clipboard is kept so it can be retried — transferTo returns 0 for an
     // overlapping call, so this guard covers that case too.
-    if (clip.mode === 'cut' && ok > 0) sel.dispatch({ type: 'clipboardCleared' })
+    if (src.mode === 'cut' && ok > 0) sel.dispatch({ type: 'clipboardCleared' })
+  }
+
+  /** If destDirArg is given, paste there (the empty-space context menu — same interpretation of "here"
+   *  as dirForCreate). Without it (Ctrl+V) the target is decided as before by the anchor-based pasteDir().
+   *
+   *  This is the **menu's** entry point. Ctrl+V does not come through here when the OS clipboard holds
+   *  files: the browser raises a paste event for it, which lands on pasteFromEvent directly. A menu
+   *  click raises no such event, so main is asked to send one — and the tree is focused first, because
+   *  that paste goes to whatever has focus and the menu does not take it (right-clicking the explorer
+   *  while an editor has focus would otherwise paste the file names into the file being edited). */
+  const paste = async (destDirArg?: string): Promise<void> => {
+    const destDir = destDirArg ?? pasteDir()
+    if (window.api.clipboard.hasFiles()) {
+      osPasteDestRef.current = destDir
+      treeRef.current?.focus()
+      await window.api.clipboard.requestFilePaste()
+      return
+    }
+    await runPaste([], destDir)
+  }
+
+  /** A paste event that landed on the explorer, whether the browser raised it (Ctrl+V) or the menu
+   *  asked main for it. The menu leaves its target folder behind in osPasteDestRef; Ctrl+V leaves
+   *  nothing, so the target is worked out here the same way it always was. */
+  const pasteFromEvent = async (osPaths: string[]): Promise<void> => {
+    const destDir = osPasteDestRef.current ?? pasteDir()
+    osPasteDestRef.current = null
+    await runPaste(osPaths, destDir)
   }
 
   // Fallback basename used only by undo() — matches the convention of the same fallback in
@@ -676,6 +746,7 @@ export function useFileOps(deps: {
     runBatch,
     transferTo,
     paste,
+    pasteFromEvent,
     pasteDir,
     cutOrCopy,
     copyPath,

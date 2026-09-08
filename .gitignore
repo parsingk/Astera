@@ -12,6 +12,10 @@ docs/*
 !docs/releasing.md
 !docs/slack-bot-setup.md
 !docs/jobs.md
+# Published deliberately: a design brief that outlives the branch it was written on, because the work
+# it describes is picked up in another session and often another worktree, where an ignored file does
+# not exist. It says on its face that nothing in it is decided yet.
+!docs/agent-workspace-isolation.md
 # Published deliberately: the SignPath Foundation requires the code signing policy to be reachable at
 # a public URL, and the README links to it.
 !docs/code-signing.md

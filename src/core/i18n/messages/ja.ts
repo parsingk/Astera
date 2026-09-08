@@ -240,7 +240,7 @@ export const ja: Catalog = {
   // ResumeStrategySettings.tsx — the two-way resume strategy picker
   'settings.resumeStrategy.label': 'セッション再開方法',
   'settings.resumeStrategy.smart.label': 'スマート再開 (実験)',
-  'settings.resumeStrategy.smart.hint': '簡潔なチェックポイントだけで会話を続けます。',
+  'settings.resumeStrategy.smart.hint': '簡潔なチェックポイントだけで会話を続けます。エージェントが作業中に残した引き継ぎメモがあれば、それも渡します。',
   'settings.resumeStrategy.original.label': '元のセッションを再開',
   'settings.resumeStrategy.original.hint': '従来の Resume で会話を続けます。',
   'settings.resumeStrategy.saveFailed': '再開方法を保存できませんでした: {detail}',
@@ -378,6 +378,7 @@ export const ja: Catalog = {
   // useFileOps.ts — cut/copy and paste
   'files.clipboard.cutDone': '{count} 件の項目を切り取りました',
   'files.clipboard.copyDone': '{count} 件の項目をコピーしました',
+  'files.clipboard.filesFailed': 'ファイルをクリップボードに置けなかったため、パスのみコピーしました',
   'files.paste.blocked': '貼り付けできません: {reason}',
   'files.paste.invalidTarget': '対象が正しくありません',
   'files.paste.empty': '貼り付ける項目がありません',
@@ -444,6 +445,23 @@ export const ja: Catalog = {
   'explorer.rail.toggle': 'ファイルエクスプローラー',
   // WorkbenchTabs.tsx — the dirty marker on a file tab
   'explorer.tab.unsaved': '未保存',
+  'explorer.find.placeholder': 'ファイル内を検索',
+  'explorer.find.replacePlaceholder': '置換後の文字列',
+  'explorer.find.count': '{n} / {total}',
+  'explorer.find.countMany': '{total} 件',
+  'explorer.find.noResults': '該当なし',
+  'explorer.find.badRegexp': '正規表現エラー',
+  'explorer.find.prev': '前の一致',
+  'explorer.find.next': '次の一致',
+  'explorer.find.selectAll': 'すべて選択',
+  'explorer.find.close': '検索を閉じる',
+  'explorer.find.caseSensitive': '大文字と小文字を区別',
+  'explorer.find.wholeWord': '単語単位',
+  'explorer.find.regexp': '正規表現',
+  'explorer.find.replace': '置換',
+  'explorer.find.replaceAll': 'すべて置換',
+  'explorer.find.showReplace': '置換を表示',
+  'explorer.find.hideReplace': '置換を隠す',
   // LocalHistoryDialog.tsx — the Local History browse/restore modal
   'localHistory.loading': '読み込み中…',
   'localHistory.empty': '削除履歴がありません',
@@ -853,6 +871,7 @@ export const ja: Catalog = {
   'preview.agent.running': 'エージェントがこのページを操作しています',
   'preview.agent.stop': 'エージェントのスクリプトを中断',
   'preview.agent.stopped': 'エージェントのスクリプトを中断しました',
+  'preview.agent.inUse': 'エージェントがコンピューターを使用中です  ·  Esc でキャンセル',
   // BottomPanel, the rail terminal button. The Run tab and the terminal tabs share the bottom panel.
   'terminal.rail.open': 'ターミナル',
   'terminal.tab.label': 'ターミナル {n}',

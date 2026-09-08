@@ -577,6 +577,15 @@ export interface CoreEvents {
   'preview:agentTabClose': { sessionId: string }
   /** A script is running (true) or has finished (false) in this session's tab — the chip's ring. */
   'preview:agentBusy': { sessionId: string; busy: boolean }
+  /** The agent acted on a point of its page: a click, a fill or a key press, with the acted element's
+   *  centre in the guest's viewport CSS px and the viewport size at that moment. The renderer draws
+   *  the pointer there (BrowserPane). Fire-and-forget: one for a session with no tab, or after its run
+   *  ended, is dropped. */
+  'preview:agentPointer': { sessionId: string; x: number; y: number; w: number; h: number; kind: 'click' | 'fill' | 'press' }
+  /** Escape was typed inside this session's agent page. The key never reaches the host DOM (the guest
+   *  is another renderer), so main catches it before the page does (agentBrowser/buffers.ts) and the
+   *  renderer applies the same rule it applies to Escape on the host (BrowserPane). */
+  'preview:agentEscape': { sessionId: string }
   'terminal:data': { id: string; data: string } // project terminal output
   'terminal:exit': { id: string; exitCode: number } // shell exited — the renderer removes that tab
   // The Jobs sidebar's whole snapshot, re-sent on every orchestration state change. Small enough to
@@ -876,6 +885,14 @@ export interface CoreApi {
       projectRoot: string
     ): Promise<{ snapshotSkipped: 'too-large' | 'failed' | null; snapshotId: string | null }>
     copy(from: string, destDir: string): Promise<string> // duplicate — suffixes ' copy' on a collision
+    /** Copy in something that was copied outside the app (the OS clipboard, via a paste event).
+     *  Identical to copy but for the source check: these paths are outside every allowed root by
+     *  definition, so requiring one would reject the whole feature. The destination is checked as
+     *  always, so nothing lands outside a project. */
+    importExternal(from: string, destDir: string): Promise<string>
+    /** Where a File handed over by a paste lives on disk. Empty for a File that is not a file on disk
+     *  (an image copied from a web page). Synchronous — Electron's webUtils, not an IPC call. */
+    pathForFile(file: File): string
     reveal(path: string): Promise<void> // show in the OS file manager
     countEntries(path: string): Promise<number> // child count for the delete confirmation (stops at 9999)
   }
@@ -1018,6 +1035,21 @@ export interface SystemApi {
 export interface ClipboardApi {
   readText(): string
   writeText(text: string): void
+  /** Whether the OS clipboard is holding files, put there by Explorer or Finder. Only their presence
+   *  can be answered here: Chromium reports it as a 'text/uri-list' format but hands back nothing
+   *  when that format is read, and readBuffer('FileNameW') carries the first name only. The list
+   *  itself reaches the renderer through a paste event and nowhere else. */
+  hasFiles(): boolean
+  /** Asks main to send this window a paste, so the explorer's paste handler gets that list. The
+   *  context menu's Paste needs it because a menu click raises no paste event of its own; Ctrl+V
+   *  does not, its event comes from the browser. */
+  requestFilePaste(): Promise<void>
+  /** Puts real files on the OS clipboard, so pasting in Explorer produces the files themselves and
+   *  not their paths as text. Electron cannot write that clipboard format, so main does it through a
+   *  short-lived PowerShell (see main/clipboardFiles.ts) — win32 only, and 'unsupported-platform'
+   *  elsewhere. The paths stay on the clipboard as text either way, so a failure costs the file
+   *  references and nothing else. */
+  writeFiles(paths: string[]): Promise<{ ok: boolean; reason?: string }>
 }
 
 /** Auto-update progress (main to renderer, for the title bar) */

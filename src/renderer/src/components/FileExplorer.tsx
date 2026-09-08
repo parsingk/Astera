@@ -141,6 +141,7 @@ export function FileExplorer({
     cutOrCopy,
     copyPath,
     paste,
+    pasteFromEvent,
     resetEditingState
   } = ops
 
@@ -298,7 +299,9 @@ export function FileExplorer({
     items.push('separator', {
       label: t('explorer.menu.paste'),
       onSelect: () => void paste(dirForCreate), // same interpretation of "here" as New File/New Folder
-      disabled: sel.clipboard === null
+      // Enabled by either clipboard: the app's own, or the OS one holding files copied in Explorer or
+      // Finder. Read while the menu is being built, which is the moment it is shown.
+      disabled: sel.clipboard === null && !window.api.clipboard.hasFiles()
     })
     // Only for a file whose name implies a runnable kind. A file it does not — a Dockerfile, a .ts —
     // gets no item at all, rather than one that would refuse when pressed.
@@ -689,6 +692,22 @@ export function FileExplorer({
   return (
     <section
       className="file-explorer"
+      // Ctrl+V, and the paste the menu's Paste item asks main for. The file list the OS clipboard is
+      // holding exists only on this event — nothing in main can read it back out — so the paste is
+      // taken here rather than on the key, and pasteFromEvent decides between this list and the app's
+      // own clipboard. An in-app cut/copy carries no files, so its event arrives with an empty list
+      // and falls through to the internal paste, which is what used to happen on the key.
+      onPaste={(ev) => {
+        // The same guards as onKeyDown below, for the same reasons: nothing while a name is being
+        // edited or while a menu or modal sits over the tree, and a paste aimed at a text field is
+        // left alone.
+        if (editing || menu || historyOpen) return
+        const target = ev.target as HTMLElement
+        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+        ev.preventDefault()
+        const files = Array.from(ev.clipboardData.files)
+        void pasteFromEvent(files.map((f) => window.api.files.pathForFile(f)))
+      }}
       onKeyDown={(ev) => {
         // Only Ctrl+A/X/C/V/Z are widened to the whole panel — switching projects means clicking the
         // Run toolbar's "Go to" button, the history, a session tab and so on, and that click steals
@@ -712,12 +731,15 @@ export function FileExplorer({
         if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return // defensive — the inline-edit input already calls stopPropagation
         if ((ev.ctrlKey || ev.metaKey) && !ev.shiftKey && !ev.altKey) {
           const k = ev.key.toLowerCase()
-          if (k === 'a' || k === 'x' || k === 'c' || k === 'v' || k === 'z') {
+          // Ctrl+V is deliberately absent: it is handled in onPaste below, on the event the browser
+          // raises **because** the default was not suppressed here. That event is the only way the
+          // renderer can see what the OS clipboard holds, so taking the key here and calling paste()
+          // would make pasting a file copied in Explorer impossible.
+          if (k === 'a' || k === 'x' || k === 'c' || k === 'z') {
             ev.preventDefault() // suppress the browser default (select all / copy) and the global listeners
             if (k === 'a') sel.dispatch({ type: 'selectAll', paths: tree.flatVisible() })
             else if (k === 'x') cutOrCopy('cut')
             else if (k === 'c') cutOrCopy('copy')
-            else if (k === 'v') void paste()
             else void undo() // Ctrl+Shift+Z (redo) is caught by the !ev.shiftKey check above and never reaches this block — redo is out of scope
           }
         }

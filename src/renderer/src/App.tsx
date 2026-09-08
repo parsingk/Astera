@@ -10,6 +10,7 @@ import { HistoryBrowser } from './components/HistoryBrowser'
 import { Select } from './components/Select'
 import { type BrowserTab, type FileTab, type RecordTab } from './components/WorkbenchTabs'
 import { BrowserPane, type BrowserStatePatch } from './components/BrowserPane'
+import type { AgentPointerState } from './components/agentOverlay'
 import { FileEditor } from './components/FileEditor'
 import { MarkdownSplit } from './components/MarkdownSplit'
 import { invalidateImageCache } from './components/MarkdownPreview'
@@ -522,6 +523,11 @@ export default function App(): React.JSX.Element {
   const [browserLoading, setBrowserLoading] = useState<Record<string, boolean>>({})
   /** Sessions whose agent tab has a script running — the chip's ring. Keyed by session id. */
   const [agentBusy, setAgentBusy] = useState<Record<string, boolean>>({})
+  /** The agent's last acted point per session, for BrowserPane's pointer. `seq` increments per event
+   *  so a repeat at the same point still animates. Cleared when the session's next run starts: the
+   *  point kept from the last run belongs to a page that may be gone, and a helper that outlived a
+   *  Stop can add one after the run ended. */
+  const [agentPointer, setAgentPointer] = useState<Record<string, AgentPointerState>>({})
   /** Browser tab id → how many times openBrowserTab reused it. BrowserPane reloads when it changes */
   const [browserNonce, setBrowserNonce] = useState<Record<string, number>>({})
   // The flow step picked on a record tab. Keyed by scopeKey — project and record together, because a
@@ -2479,11 +2485,18 @@ export default function App(): React.JSX.Element {
     if (!b) return null
     const serverPending =
       b.awaitRunId !== undefined && runs.some((r) => r.runId === b.awaitRunId && r.status !== 'exited')
+    // Esc cancels the agent only on the tab the user is looking at: the agent's tab is drawn behind
+    // other tabs while a script runs, and a key pressed there is theirs.
+    const group = layout ? groupOfTab(layout, b.id) : null
+    const agentTabFocused = group !== null && group.activeTabId === b.id && group.id === activePaneId
     return (
       <BrowserPane
         tab={b}
         serverPending={serverPending}
         navigateNonce={browserNonce[b.id] ?? 0}
+        agentRunning={b.agentSessionId !== undefined && agentBusy[b.agentSessionId] === true}
+        agentTabFocused={agentTabFocused}
+        pointer={b.agentSessionId !== undefined ? agentPointer[b.agentSessionId] : undefined}
         onState={(patch) => onBrowserState(b.id, patch)}
         onFocusPane={() => {
           const cur = layoutRef.current
@@ -2825,7 +2838,13 @@ export default function App(): React.JSX.Element {
   // running in it — see CoreEvents' preview:agentTab / preview:agentTabClose / preview:agentBusy.
   useEffect(() => window.api.on('preview:agentTab', ({ sessionId, cwd, url }) => openAgentTabRef.current(sessionId, cwd, url)), [])
   useEffect(() => window.api.on('preview:agentTabClose', ({ sessionId }) => closeAgentTabRef.current(sessionId)), [])
-  useEffect(() => window.api.on('preview:agentBusy', ({ sessionId, busy }) => setAgentBusy((prev) => (busy ? { ...prev, [sessionId]: true } : (({ [sessionId]: _b, ...rest }) => rest)(prev)))), [])
+  useEffect(() => window.api.on('preview:agentBusy', ({ sessionId, busy }) => {
+    setAgentBusy((prev) => (busy ? { ...prev, [sessionId]: true } : (({ [sessionId]: _b, ...rest }) => rest)(prev)))
+    // A run starts with no arrow: see agentPointer's comment. setBusy(true) is sent before the script
+    // runs, over the same ordered channel, so this cannot race the new run's first point.
+    if (busy) setAgentPointer((prev) => (({ [sessionId]: _p, ...rest }) => rest)(prev))
+  }), [])
+  useEffect(() => window.api.on('preview:agentPointer', ({ sessionId, x, y, w, h, kind }) => setAgentPointer((prev) => ({ ...prev, [sessionId]: { x, y, w, h, kind, seq: (prev[sessionId]?.seq ?? 0) + 1 } }))), [])
 
   // The selection must never name a run the list no longer holds — with nothing to draw, the Run tab
   // shows an empty console and no row highlighted. runStart and runDismiss keep it right for what the
