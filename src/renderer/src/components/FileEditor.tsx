@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react'
-import { EditorState, type Extension, type StateEffect } from '@codemirror/state'
+import { useEffect, useRef, useState } from 'react'
+import { EditorState, Prec, type Extension, type StateEffect } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
+import { closeSearchPanel, search } from '@codemirror/search'
 import { basicSetup } from 'codemirror'
 import { oneDark } from '@codemirror/theme-one-dark'
 import { indentWithTab } from '@codemirror/commands'
@@ -20,6 +21,7 @@ import { yaml } from '@codemirror/lang-yaml'
 import { go } from '@codemirror/lang-go'
 import { languageForExt, sameDocument, type LangKey } from '../../../core/files/edit'
 import type { EditorStateCache } from '../lib/editorStateCache'
+import { FileFindBar } from './FileFindBar'
 
 function langExt(key: LangKey | null): Extension {
   switch (key) {
@@ -57,6 +59,13 @@ interface EditorOwner {
   /** The user clicked inside the view — a pending "reveal this line" request must not move a cursor
    *  they have since placed */
   interact: () => void
+  /** Ctrl+F or Ctrl+H — show the find bar, or refocus it when it is already up */
+  find: (withReplace: boolean) => void
+  /** Escape in the document. Returns whether the bar was open, so that the key falls through to
+   *  CodeMirror's own handlers when it was not. */
+  closeFind: () => boolean
+  /** The document or the selection moved, so the match count and the current position are stale */
+  sync: () => void
 }
 const owners = new WeakMap<EditorView, EditorOwner>()
 
@@ -64,6 +73,37 @@ const owners = new WeakMap<EditorView, EditorOwner>()
 const sharedBase: Extension[] = [
   basicSetup,
   oneDark,
+  /** Search state — the query, and the decorations that highlight it — lives in the EditorState, so it
+   *  is per file and travels with the cached state between panes, exactly like the undo history.
+   *
+   *  `createPanel` returns an empty div because the panel is never seen: FileFindBar draws the UI and
+   *  styles.css hides `.cm-panels`. The panel still has to be *opened*, because @codemirror/search
+   *  gates highlighting on it (searchHighlighter paints nothing while `panel` is null) — FileFindBar
+   *  opens and closes it alongside itself. */
+  search({ top: true, createPanel: () => ({ dom: document.createElement('div') }) }),
+  /** Ahead of basicSetup's searchKeymap, which binds Mod-f to CodeMirror's own panel. Escape hands
+   *  back when the bar is closed so that the other Escape handlers still get their turn. */
+  Prec.high(
+    keymap.of([
+      {
+        key: 'Mod-f',
+        preventDefault: true,
+        run: (view) => {
+          owners.get(view)?.find(false)
+          return true
+        }
+      },
+      {
+        key: 'Mod-h',
+        preventDefault: true,
+        run: (view) => {
+          owners.get(view)?.find(true)
+          return true
+        }
+      },
+      { key: 'Escape', run: (view) => owners.get(view)?.closeFind() ?? false }
+    ])
+  ),
   keymap.of([
     indentWithTab,
     {
@@ -78,6 +118,10 @@ const sharedBase: Extension[] = [
   EditorView.updateListener.of((u) => {
     // Propagate user edits only: setState (a programmatic replacement) has an empty transactions array, so it is excluded
     if (u.docChanged && u.transactions.length > 0) owners.get(u.view)?.change(u.state.doc.toString())
+  }),
+  // Keeps the find bar's count honest. Costs nothing while the bar is closed — the owner drops it.
+  EditorView.updateListener.of((u) => {
+    if (u.docChanged || u.selectionSet) owners.get(u.view)?.sync()
   }),
   EditorView.domEventHandlers({
     mousedown: (_event, view) => {
@@ -195,6 +239,23 @@ export function FileEditor({
   // 스크롤이 멈출 때마다 떠 두는 최신 스냅샷. 언마운트 정리 함수에서 읽으면 늦다 — 그 시점의 뷰는
   // 화면에서 떨어지는 중이라 위치가 0으로 읽힐 수 있고, 그러면 맨 위가 저장된다
   const lastScrollRef = useRef<StateEffect<unknown> | null>(null)
+  // The find bar. Null is closed; `nonce` rises on every Ctrl+F so a repeated press reseeds and
+  // refocuses it. Per pane, not per file — the query itself is per file, in the EditorState.
+  const [find, setFind] = useState<{ replace: boolean; nonce: number } | null>(null)
+  const [findTick, setFindTick] = useState(0)
+  /** Rises every time the view is handed a different EditorState.
+   *
+   *  The find bar reads the query out of the state, and it cannot read it from its own effect on
+   *  `path`: React runs a child's effects before its parent's, so that effect fires while the view is
+   *  still holding the file the user just left, and the bar shows the previous file's search. Bumping
+   *  a counter *after* the swap moves the bar's read into the next commit, where the state is the one
+   *  now on screen. */
+  const [stateEpoch, setStateEpoch] = useState(0)
+  const bumpStateEpoch = (): void => setStateEpoch((n) => n + 1)
+  // Read from the update listener, which runs on keystrokes and must not re-render anything while the
+  // bar is closed
+  const findOpenRef = useRef(false)
+  findOpenRef.current = find !== null
 
   // Create the EditorView once
   useEffect(() => {
@@ -208,7 +269,17 @@ export function FileEditor({
     owners.set(view, {
       change: (text) => onChangeRef.current(curPathRef.current, text),
       save: () => onSaveRef.current(curPathRef.current),
-      interact: () => onInteractRef.current?.()
+      interact: () => onInteractRef.current?.(),
+      // Ctrl+F never hides the replace row that Ctrl+H opened — the bar decides, from wantReplace
+      find: (withReplace) => setFind((cur) => ({ replace: withReplace, nonce: (cur?.nonce ?? 0) + 1 })),
+      closeFind: () => {
+        if (!findOpenRef.current) return false
+        setFind(null)
+        return true
+      },
+      sync: () => {
+        if (findOpenRef.current) setFindTick((n) => n + 1)
+      }
     })
     onViewChangeRef.current?.(view)
     if (restored.scroll) view.dispatch({ effects: restored.scroll })
@@ -227,6 +298,8 @@ export function FileEditor({
       view.scrollDOM.removeEventListener('scroll', onScroll)
       if (scrollFrame != null) cancelAnimationFrame(scrollFrame)
       owners.delete(view)
+      // As in the path switch below — a state must never be cached with the search panel still open
+      closeSearchPanel(view)
       onRetireRef.current(curPathRef.current, view.state, lastScrollRef.current)
       onViewChangeRef.current?.(null)
       view.destroy()
@@ -250,6 +323,9 @@ export function FileEditor({
     if (!view) return
     const prev = curPathRef.current
     if (prev !== path) {
+      // 나가는 상태의 찾기 패널을 닫고 나서 캐시에 넣는다. 열린 채로 캐시되면 나중에 그 파일로
+      // 돌아왔을 때 바는 없는데 강조만 남는다 — 강조는 패널이 열려 있는 동안만 그려지기 때문이다
+      closeSearchPanel(view)
       // 저장 경로를 언마운트와 하나로 맞춘다. cache.save를 직접 부르면 방금 닫은 파일의 상태가
       // 되살아난다 — closeFileTab은 drop을 한 뒤 남은 탭으로 path만 바꾸므로 여기로 들어온다
       onRetireRef.current(prev, view.state, lastScrollRef.current)
@@ -258,6 +334,7 @@ export function FileEditor({
       view.setState(restored.state)
       curPathRef.current = path
       if (restored.scroll) view.dispatch({ effects: restored.scroll })
+      bumpStateEpoch()
       return
     }
     // 같은 비교가 여기에도 걸린다. 문자열을 그대로 비교하면 CRLF 파일은 매 렌더 새 상태로 갈아치워져
@@ -267,8 +344,11 @@ export function FileEditor({
       // 엉뚱한 곳으로 스크롤한다
       lastScrollRef.current = null
       view.setState(makeState(sharedBase, content, path, readOnly))
-    } else if (view.state.readOnly !== readOnly)
+      bumpStateEpoch()
+    } else if (view.state.readOnly !== readOnly) {
       view.setState(makeState(sharedBase, content, path, readOnly))
+      bumpStateEpoch()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, content, readOnly])
 
@@ -287,5 +367,24 @@ export function FileEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reveal?.nonce, path])
 
-  return <div className="file-editor" ref={hostRef} />
+  // .file-editor is the find bar's positioning context, so CodeMirror gets a host of its own inside
+  // it rather than sharing a node with React's children — nothing good comes of two owners appending
+  // to the same element. The host carries height: 100% so the chain .cm-editor { height: 100% }
+  // depends on is unbroken.
+  return (
+    <div className="file-editor">
+      <div className="file-editor-host" ref={hostRef} />
+      {find && viewRef.current && (
+        <FileFindBar
+          view={viewRef.current}
+          stateEpoch={stateEpoch}
+          readOnly={readOnly}
+          nonce={find.nonce}
+          wantReplace={find.replace}
+          tick={findTick}
+          onClose={() => setFind(null)}
+        />
+      )}
+    </div>
+  )
 }

@@ -495,6 +495,25 @@ export const ko = {
   'explorer.rail.toggle': '파일 탐색기',
   // WorkbenchTabs.tsx — the dirty marker on a file tab
   'explorer.tab.unsaved': '저장 안 됨',
+  // FileFindBar.tsx — 파일 에디터의 Ctrl+F 찾기·바꾸기 바. 세는 문구는 콘솔 찾기 바(run.find)와
+  // 같은 모양을 쓴다 — 같은 부품으로 보여야 한다
+  'explorer.find.placeholder': '파일에서 찾기',
+  'explorer.find.replacePlaceholder': '바꿀 내용',
+  'explorer.find.count': '{n} / {total}',
+  'explorer.find.countMany': '{total}개',
+  'explorer.find.noResults': '결과 없음',
+  'explorer.find.badRegexp': '정규식 오류',
+  'explorer.find.prev': '이전 일치',
+  'explorer.find.next': '다음 일치',
+  'explorer.find.selectAll': '모두 선택',
+  'explorer.find.close': '찾기 닫기',
+  'explorer.find.caseSensitive': '대소문자 구분',
+  'explorer.find.wholeWord': '단어 단위',
+  'explorer.find.regexp': '정규식',
+  'explorer.find.replace': '바꾸기',
+  'explorer.find.replaceAll': '모두 바꾸기',
+  'explorer.find.showReplace': '바꾸기 펼치기',
+  'explorer.find.hideReplace': '바꾸기 접기',
   // LocalHistoryDialog.tsx — the Local History browse/restore modal
   // ('Local History' is treated as a proper noun and left untranslated — following the existing catalog precedent)
   'localHistory.loading': '불러오는 중…',

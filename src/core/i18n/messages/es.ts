@@ -450,6 +450,23 @@ export const es: Catalog = {
   'explorer.rail.toggle': 'Explorador de archivos',
   // WorkbenchTabs.tsx — the dirty marker on a file tab
   'explorer.tab.unsaved': 'Sin guardar',
+  'explorer.find.placeholder': 'Buscar en el archivo',
+  'explorer.find.replacePlaceholder': 'Reemplazar por',
+  'explorer.find.count': '{n} / {total}',
+  'explorer.find.countMany': '{total} coincidencias',
+  'explorer.find.noResults': 'Sin resultados',
+  'explorer.find.badRegexp': 'Patrón inválido',
+  'explorer.find.prev': 'Coincidencia anterior',
+  'explorer.find.next': 'Siguiente coincidencia',
+  'explorer.find.selectAll': 'Seleccionar todas',
+  'explorer.find.close': 'Cerrar búsqueda',
+  'explorer.find.caseSensitive': 'Distinguir mayúsculas',
+  'explorer.find.wholeWord': 'Palabra completa',
+  'explorer.find.regexp': 'Expresión regular',
+  'explorer.find.replace': 'Reemplazar',
+  'explorer.find.replaceAll': 'Reemplazar todo',
+  'explorer.find.showReplace': 'Mostrar reemplazo',
+  'explorer.find.hideReplace': 'Ocultar reemplazo',
   // LocalHistoryDialog.tsx — the Local History browse/restore modal
   // ('Local History' is treated as a proper noun and left untranslated)
   'localHistory.loading': 'Cargando…',
