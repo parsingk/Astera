@@ -532,4 +532,21 @@ describe('OrchestrationStore', () => {
     expect(store.get().runs).toHaveLength(1)
     expect(store.get().messages).toHaveLength(1)
   })
+
+  it('load returns the state as read, before the restart cleanup', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const loaded = await store.load()
+    expect(loaded.before?.dispatches[0].endedAt).toBeUndefined()
+    expect(loaded.before?.dispatches[0].workerState).toBe('ready')
+    expect(store.get().dispatches[0].workerState).toBe('outcome_unknown')
+  })
+
+  it('load returns before: null when there is no file or it is unreadable', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    expect((await new OrchestrationStore(file).load()).before).toBeNull()
+    await fs.writeFile(file, '{ not json', 'utf8')
+    expect((await new OrchestrationStore(file).load()).before).toBeNull()
+  })
 })

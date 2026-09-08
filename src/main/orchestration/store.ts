@@ -49,6 +49,10 @@ export class OrchestrationStore {
     /** 재시작에 끊긴 검토. staleValidations 와 따로 센다 — 배선이 이 숫자를 시작 로그에 적으므로
      *  한데 묶으면 검토가 끊긴 재시작이 "검증이 끊겼다"고 기록된다. */
     staleReviews: number
+    /** The file as read — after the field migrations, before the restart cleanup — or null when
+     *  there was nothing to read. Job Continuity diffs this against get() so every worker the
+     *  restart lost is journaled (P0 design §5). */
+    before: OrchState | null
   }> {
     let parsed: unknown
     try {
@@ -56,16 +60,16 @@ export class OrchestrationStore {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
         this.state = emptyState()
-        return { recovered: false, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0 }
+        return { recovered: false, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, before: null }
       }
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       this.state = emptyState()
-      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0 }
+      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, before: null }
     }
     if (!isValidState(parsed)) {
       await fs.copyFile(this.filePath, this.filePath + '.bak').catch(() => {})
       this.state = emptyState()
-      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0 }
+      return { recovered: true, unknownOutcomes: 0, pruned: 0, staleValidations: 0, staleReviews: 0, before: null }
     }
 
     // isValidState only checks that the arrays exist, so the elements of parsed's arrays are
@@ -112,6 +116,9 @@ export class OrchestrationStore {
     // 사람이 아끼려던 계정에 일을 보내는 쪽으로 틀릴 수 있다. 계정 없는 Task 는 자동 배치에서
     // 빠지고 디스패치 시점에 Gate 를 연다 — 조용히 멈추지 않으므로 사람이 계정을 넣으면 곧바로 돈다.
     for (const r of st.runs as unknown as Record<string, unknown>[]) delete r.provider
+
+    // Captured here: the migrations above are in place, the cleanup below builds new objects
+    const before: OrchState = st
 
     const now = new Date().toISOString()
     // Restart cleanup: for an open Dispatch, the session died along with the app. The outcome
@@ -197,7 +204,7 @@ export class OrchestrationStore {
       // Unguarded save — the same rewrite convention as RunConfigStore and SchedulerConfigStore
       await this.save(this.state).catch(() => {})
     }
-    return { recovered: false, unknownOutcomes, pruned: doomed.size, staleValidations, staleReviews }
+    return { recovered: false, unknownOutcomes, pruned: doomed.size, staleValidations, staleReviews, before }
   }
 
   get(): OrchState {
