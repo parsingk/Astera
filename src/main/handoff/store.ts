@@ -31,16 +31,28 @@ export interface HandoffStoreDeps {
 const isObj = (v: unknown): v is Record<string, unknown> =>
   v !== null && typeof v === 'object' && !Array.isArray(v)
 
-/** Per-memo shape is checked only as far as the two fields the store itself uses (the key and the
- *  pruning order); the rest is what the app wrote and is read back as it is — the same policy
- *  orchestration/store.ts and workUnit/store.ts explain. */
+/** Per-memo shape is checked exactly as far as what section.ts indexes unconditionally: the key,
+ *  the pruning order, and the seven list fields the renderer reads without a guard. Anything else
+ *  is what the app wrote and is read back as it is — the same policy orchestration/store.ts and
+ *  workUnit/store.ts explain. A memo missing one of the seven fails here rather than reaching the
+ *  renderer, which would throw on it. */
 function isValid(v: unknown): v is StoreShape {
   return (
     isObj(v) &&
     v.version === 1 &&
     isObj(v.memos) &&
     Object.entries(v.memos).every(
-      ([key, m]) => isObj(m) && m.sessionId === key && typeof m.createdAt === 'string'
+      ([key, m]) =>
+        isObj(m) &&
+        m.sessionId === key &&
+        typeof m.createdAt === 'string' &&
+        Array.isArray(m.completed) &&
+        Array.isArray(m.currentProblems) &&
+        Array.isArray(m.nextActions) &&
+        Array.isArray(m.constraints) &&
+        Array.isArray(m.decisions) &&
+        Array.isArray(m.verification) &&
+        Array.isArray(m.relevantFiles)
     )
   )
 }

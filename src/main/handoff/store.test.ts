@@ -91,6 +91,18 @@ describe('HandoffStore', () => {
     expect(s.lookup('s-1')).toEqual({ state: 'unknown' })
   })
 
+  it('a memo missing one of the list fields fails the guard', async () => {
+    const { completed: _completed, ...withoutCompleted } = memo('s-1')
+    await fs.writeFile(
+      file,
+      JSON.stringify({ version: 1, memos: { 's-1': withoutCompleted } }),
+      'utf8'
+    )
+    const s = new HandoffStore(file)
+    expect((await s.load()).recovered).toBe(true)
+    expect(s.lookup('s-1')).toEqual({ state: 'unknown' })
+  })
+
   it('a save after a failed load starts from empty and lookups answer again', async () => {
     await fs.writeFile(file, '{ not json', 'utf8')
     const s = new HandoffStore(file)
@@ -131,5 +143,19 @@ describe('HandoffStore', () => {
     fail = false
     await s.save(memo('s-2'))
     expect(s.lookup('s-2').state).toBe('found')
+  })
+
+  it('two saves in flight both land — the next state is computed inside the queued run', async () => {
+    const s = new HandoffStore(file)
+    await s.load()
+    const first = s.save(memo('s-1'))
+    const second = s.save(memo('s-2'))
+    await Promise.all([first, second])
+    expect(s.lookup('s-1').state).toBe('found')
+    expect(s.lookup('s-2').state).toBe('found')
+    const reread = new HandoffStore(file)
+    await reread.load()
+    expect(reread.lookup('s-1').state).toBe('found')
+    expect(reread.lookup('s-2').state).toBe('found')
   })
 })
