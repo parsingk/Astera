@@ -245,7 +245,7 @@ export const es: Catalog = {
   // ResumeStrategySettings.tsx — the two-way resume strategy picker
   'settings.resumeStrategy.label': 'Estrategia de reanudación de sesión',
   'settings.resumeStrategy.smart.label': 'Reanudación inteligente (experimental)',
-  'settings.resumeStrategy.smart.hint': 'Continúa la conversación solo con un punto de control compacto.',
+  'settings.resumeStrategy.smart.hint': 'Continúa la conversación solo con un punto de control compacto. Si el agente dejó una nota de traspaso mientras trabajaba, también se entrega.',
   'settings.resumeStrategy.original.label': 'Reanudar la sesión original',
   'settings.resumeStrategy.original.hint': 'Continúa la conversación con el resume propio del CLI.',
   'settings.resumeStrategy.saveFailed': 'No se pudo guardar la estrategia de reanudación: {detail}',

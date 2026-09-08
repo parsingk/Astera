@@ -277,7 +277,7 @@ export const en: Record<keyof typeof ko, string> = {
   // ResumeStrategySettings.tsx — the two-way resume strategy picker
   'settings.resumeStrategy.label': 'Session resume strategy',
   'settings.resumeStrategy.smart.label': 'Smart Resume (experimental)',
-  'settings.resumeStrategy.smart.hint': 'Continues the conversation from a compact checkpoint alone.',
+  'settings.resumeStrategy.smart.hint': 'Continues the conversation from a compact checkpoint alone. A handoff memo the agent left while working is passed along too.',
   'settings.resumeStrategy.original.label': 'Resume original session',
   'settings.resumeStrategy.original.hint': "Continues the conversation with the CLI's own resume.",
   'settings.resumeStrategy.saveFailed': 'Could not save the resume strategy: {detail}',

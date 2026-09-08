@@ -240,7 +240,7 @@ export const ja: Catalog = {
   // ResumeStrategySettings.tsx — the two-way resume strategy picker
   'settings.resumeStrategy.label': 'セッション再開方法',
   'settings.resumeStrategy.smart.label': 'スマート再開 (実験)',
-  'settings.resumeStrategy.smart.hint': '簡潔なチェックポイントだけで会話を続けます。',
+  'settings.resumeStrategy.smart.hint': '簡潔なチェックポイントだけで会話を続けます。エージェントが作業中に残した引き継ぎメモがあれば、それも渡します。',
   'settings.resumeStrategy.original.label': '元のセッションを再開',
   'settings.resumeStrategy.original.hint': '従来の Resume で会話を続けます。',
   'settings.resumeStrategy.saveFailed': '再開方法を保存できませんでした: {detail}',
