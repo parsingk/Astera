@@ -674,6 +674,8 @@ app.whenReady().then(async () => {
       void core!.rollConfig.set(sid, cfg).catch(() => {})
     },
     orchEnv: () => orchRef?.orchEnv(),
+    // Job Continuity: binds the native session id to the open Dispatch as soon as the coordinator learns it.
+    onNativeSession: (sid, native) => orchRef?.onNativeSession(sid, native),
     // Job 워커의 재개 packet(Task 4b/4c), 없으면(오케스트레이션이 꺼져 있거나 탭 세션이면) 탭
     // 브리핑으로 저하한다 — resumeTextDep 의 JSDoc(fix wave 최종, F1/F3).
     resumeText: resumeTextDep,
@@ -807,6 +809,8 @@ app.whenReady().then(async () => {
       void core!.rollConfig.set(sid, cfg).catch(() => {}) // fire-and-forget
     },
     orchEnv: () => orchRef?.orchEnv(),
+    // Job Continuity: binds the native session id to the open Dispatch as soon as the coordinator learns it.
+    onNativeSession: (sid, native) => orchRef?.onNativeSession(sid, native),
     // Job 워커의 재개 packet(Task 4b/4c) — rolling.ts 의 같은 필드, 같은 resumeTextDep 이다.
     resumeText: resumeTextDep,
     // 한도에 걸린 세션을 어떻게 이어갈지(Task 1 의 설정) — orchEnv 와 같은 이유로 getter 다: 값이

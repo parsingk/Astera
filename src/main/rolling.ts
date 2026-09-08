@@ -108,6 +108,9 @@ export interface RollingDeps {
    *  reverting to per-chain isolation. The same reasoning made rollAccountIds required. */
   blocks: BlockRegistry
   persistConfig?: (claudeSessionId: string, config: RollConfig) => void // saves the rolling config
+  /** Job Continuity: the provider's own session id, the moment it is first learned for a live session
+   *  and again when it changes (a respawn). Optional — without the feature nothing listens. */
+  onNativeSession?: (sessionId: string, nativeSessionId: string) => void
   copy?: (src: string, dest: string) => Promise<void> // for test injection — defaults to copyTranscript
   now?: () => number
   probeActivity?: (transcriptPath: string) => Promise<number | null> // for test injection — defaults to lastActivityAt
@@ -1650,6 +1653,7 @@ export class RollingCoordinator {
       // On first learning claudeSessionId (null→value), save the rolling config once — for restoring it after a disable-and-resume
       if (!chain.claudeSessionId)
         this.deps.persistConfig?.(meta.sessionId, { accountIds: chain.accountIds, prompt: chain.prompt })
+      if (chain.claudeSessionId !== meta.sessionId) this.deps.onNativeSession?.(chain.liveId, meta.sessionId)
       chain.claudeSessionId = meta.sessionId
     }
     if (meta.transcriptPath) {

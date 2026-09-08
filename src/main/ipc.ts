@@ -160,6 +160,8 @@ export interface OrchHandle {
   onRollState: (e: RollStateEvent) => void
   orchEnv: () => { cliPath: string; infoPath: string; skillsPath: string } | undefined
   resumeText: (sessionId: string, form: 'handover' | 'update', tabFallback: boolean) => Promise<string | null>
+  /** Job Continuity: binds the provider's session id to the open Dispatch of that app session. */
+  onNativeSession: (sessionId: string, nativeSessionId: string) => void
 }
 
 /** The index.ts side of wiring up agent orchestration. Starting the server and coordinator happens
@@ -2985,7 +2987,8 @@ export function registerIpc(
         (form === 'update'
           ? buildResumeNote(sessionId, deps.getState(), { log: orchLog })
           : buildResumePacket(sessionId, deps.getState(), { log: orchLog })
-        ).then((text) => text ?? (tabFallback ? tabResumeTextFor(sessionId, form) : null))
+        ).then((text) => text ?? (tabFallback ? tabResumeTextFor(sessionId, form) : null)),
+      onNativeSession: () => {} // Task 13 fills this in
     })
   }
   if (
