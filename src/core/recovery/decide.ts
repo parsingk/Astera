@@ -14,14 +14,13 @@ const decide = (
   strategy: RecoveryStrategy,
   cls: RecoveryDecision['class'],
   reason: string,
-  reasonKey: MessageKey,
-  reasonParams?: MessageParams
+  key: MessageKey,
+  params?: MessageParams
 ): RecoveryDecision => ({
   strategy,
   class: cls,
   reason,
-  reasonKey,
-  ...(reasonParams ? { reasonParams } : {})
+  reasonMessage: params ? { key, params } : { key }
 })
 
 /** Starting an agent on a Run the app does not drive would take the coordinator's dispatching

@@ -22,7 +22,7 @@ const attempt = (over: Partial<LostAttempt> = {}): LostAttempt => ({
 })
 const decision = (over: Partial<RecoveryDecision> = {}): RecoveryDecision => ({
   strategy: 'redispatch', class: 'safe', reason: 'nothing was produced',
-  reasonKey: 'jobs.recovery.reason.producedNothing', ...over
+  reasonMessage: { key: 'jobs.recovery.reason.producedNothing' }, ...over
 })
 
 function deps(over: Partial<Parameters<typeof executeRecovery>[1]> = {}) {
@@ -86,7 +86,7 @@ describe('executeRecovery', () => {
   it('a review blocks the Task with the reason and offers the restart', async () => {
     const h = deps()
     await executeRecovery(
-      { attempt: attempt(), decision: decision({ strategy: 'review', class: 'review', reason: 'the worktree holds unfinished work and Smart Resume is off', reasonKey: 'jobs.recovery.reason.smartResumeOff' }), state: h.state, now: NOW },
+      { attempt: attempt(), decision: decision({ strategy: 'review', class: 'review', reason: 'the worktree holds unfinished work and Smart Resume is off', reasonMessage: { key: 'jobs.recovery.reason.smartResumeOff' } }), state: h.state, now: NOW },
       h.d as never
     )
     expect(h.state.tasks[0].status).toBe('blocked')
@@ -109,8 +109,7 @@ describe('executeRecovery', () => {
           strategy: 'review',
           class: 'unsafe',
           reason: 'a rebase is in progress in the worktree and must not be resumed automatically',
-          reasonKey: 'jobs.recovery.reason.operationInProgress',
-          reasonParams: { operation: 'rebase' }
+          reasonMessage: { key: 'jobs.recovery.reason.operationInProgress', params: { operation: 'rebase' } }
         }),
         state: h.state,
         now: NOW

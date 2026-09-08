@@ -134,9 +134,9 @@ describe('decideRecovery', () => {
       expect(d.reason.length).toBeGreaterThan(0)
   })
 
-  // The English `reason` is what the journal keeps; `reasonKey` is the same sentence for the screen,
-  // so every row the table can reach has to name one. A row that forgot would show a person the
-  // English sentence, or nothing.
+  // The English `reason` is what the journal keeps; `reasonMessage` is the same sentence for the
+  // screen, so every row the table can reach has to carry one. A row that forgot would show a person
+  // the English sentence, or nothing.
   it('every row names the message key its sentence is written under', () => {
     const rows: Array<[string, ReturnType<typeof decideRecovery>]> = [
       ['worktreeGone', decideRecovery({ attempt: attempt(), git: git({ exists: false }), smartResume: false })],
@@ -153,10 +153,10 @@ describe('decideRecovery', () => {
       ['smartResumeOff', decideRecovery({ attempt: attempt(), git: git({ dirty: true }), smartResume: false })],
       ['coordinatorRun', decideRecovery({ attempt: attempt({ appDriven: false }), git: git(), smartResume: false })]
     ]
-    for (const [name, d] of rows) expect([name, d.reasonKey]).toEqual([name, `jobs.recovery.reason.${name}`])
+    for (const [name, d] of rows) expect([name, d.reasonMessage.key]).toEqual([name, `jobs.recovery.reason.${name}`])
     // The one row whose sentence names something: which operation git is in the middle of.
     expect(
-      decideRecovery({ attempt: attempt(), git: git({ inProgress: 'cherry-pick' }), smartResume: false }).reasonParams
-    ).toEqual({ operation: 'cherry-pick' })
+      decideRecovery({ attempt: attempt(), git: git({ inProgress: 'cherry-pick' }), smartResume: false }).reasonMessage
+    ).toEqual({ key: 'jobs.recovery.reason.operationInProgress', params: { operation: 'cherry-pick' } })
   })
 })

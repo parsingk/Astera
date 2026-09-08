@@ -6,6 +6,7 @@ import { ContinuityJournal } from './journal'
 import { ContinuityRecorder, type ContinuityJournalPort } from './recorder'
 import { emptyState, type OrchState } from '../../core/orchestration/state'
 import type { Dispatch, Run, Task } from '../../core/orchestration/types'
+import type { Lang } from '../../core/i18n'
 import type { HandoffLookup } from '../../core/handoff/types'
 import { makeRepo, gitSync } from '../../core/worktrees/testRepo'
 
@@ -46,7 +47,7 @@ const state = (d: Dispatch | null, t: Task = task()): OrchState => ({ ...emptySt
 let files = 0
 /** `journal` in the result is always the real one (for assertions); `over.journal` replaces what the
  *  recorder is handed, for the failure tests. Each recorder gets its own file. */
-function recorder(over: { journal?: ContinuityJournalPort; smart?: boolean; handoffFound?: boolean } = {}): {
+function recorder(over: { journal?: ContinuityJournalPort; smart?: boolean; handoffFound?: boolean; lang?: Lang } = {}): {
   r: ContinuityRecorder
   journal: ContinuityJournal
   logs: string[]
@@ -58,6 +59,7 @@ function recorder(over: { journal?: ContinuityJournalPort; smart?: boolean; hand
     journal: over.journal ?? journal,
     log: (m) => logs.push(m),
     now: () => NOW,
+    lang: () => over.lang ?? 'en',
     smartResume: () => over.smart ?? false,
     handoffLookup: (): HandoffLookup =>
       over.handoffFound ? { state: 'found', memo: {} as never } : { state: 'none' }
@@ -144,6 +146,7 @@ describe('ContinuityRecorder.checkpoint', () => {
       journal,
       log: (m) => logs.push(m),
       now: () => NOW,
+      lang: () => 'en',
       smartResume: () => true,
       handoffLookup: () => {
         throw new Error('memo store exploded')
@@ -203,6 +206,41 @@ describe('ContinuityRecorder reads', () => {
     expect(r.recoveryEventsFor('run_1', state(dispatch()))).toEqual([
       expect.objectContaining({ at: NOW, kind: 'recovery', taskId: 'tsk_1', taskTitle: 'Auth refactor', summary: 'resume-native' })
     ])
+  })
+
+  // The row says what recovery did; the body says why, in the reader's language. Without it the
+  // reasoning lives only in the file and the screen shows a verb with no argument.
+  it('carries the reason into the row body, written in the app language', () => {
+    const { r, journal } = recorder({ lang: 'ko' })
+    journal.append([
+      {
+        runId: 'run_1', taskId: 'tsk_1', dispatchId: 'dsp_1', type: 'RECOVERY_STRATEGY_SELECTED',
+        at: NOW, idempotencyKey: 'k1',
+        payload: {
+          strategy: 'review',
+          reason: 'a rebase is in progress in the worktree and must not be resumed automatically',
+          reasonKey: 'jobs.recovery.reason.operationInProgress',
+          reasonParams: { operation: 'rebase' }
+        }
+      }
+    ])
+    const [row] = r.recoveryEventsFor('run_1', state(dispatch()))
+    expect(row.body).toContain('rebase')
+    expect(row.body).toContain('진행 중')
+  })
+
+  // A row written by an older build, or by one whose key this build no longer has, still has its
+  // English sentence. Showing that beats showing a bare key or nothing at all.
+  it('falls back to the journaled English sentence when the key is not one this build knows', () => {
+    const { r, journal } = recorder({ lang: 'ko' })
+    journal.append([
+      {
+        runId: 'run_1', taskId: 'tsk_1', dispatchId: 'dsp_1', type: 'RECOVERY_STRATEGY_SELECTED',
+        at: NOW, idempotencyKey: 'k1',
+        payload: { strategy: 'review', reason: 'something this build cannot name', reasonKey: 'jobs.recovery.reason.fromTheFuture' }
+      }
+    ])
+    expect(r.recoveryEventsFor('run_1', state(dispatch()))[0].body).toBe('something this build cannot name')
   })
 
   it('reportSkew logs when the last journal event names a dispatch the projection lacks', () => {

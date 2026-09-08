@@ -2,6 +2,7 @@
 // state transition into journal rows, decides and writes checkpoints, handles the mid-run enable, and
 // reads the rows the Timeline shows. Every entry point swallows journal failures into the log —
 // a broken journal must never stop a Job (design §6).
+import { CATALOGS, t, type Lang, type MessageKey, type MessageParams } from '../../core/i18n'
 import type { JobEvent } from '../../core/types'
 import type { OrchState } from '../../core/orchestration/state'
 import { buildCheckpoint } from '../../core/orchestration/checkpoint'
@@ -28,6 +29,9 @@ export interface ContinuityRecorderDeps {
   now?(): string
   /** git adapter for readGitSummary — test injection, the wiring leaves it out. */
   git?: GitSummaryDeps['git']
+  /** The app's language, read per row rather than captured: the setting can change, and these rows
+   *  are rendered long after they were written. */
+  lang(): Lang
   /** Whether Smart Resume is on. Read per checkpoint, not captured: the setting can change. */
   smartResume(): boolean
   /** The handoff memo store's lookup, by app session id. Consulted only when smartResume() is true. */
@@ -120,7 +124,8 @@ export class ContinuityRecorder {
     state: OrchState,
     type: ContinuityEventType,
     kind: JobEvent['kind'],
-    summary: (e: JournalEventRow) => string
+    summary: (e: JournalEventRow) => string,
+    body?: (e: JournalEventRow) => string
   ): JobEvent[] {
     try {
       const titleOf = new Map(state.tasks.map((t) => [t.id, t.title]))
@@ -132,7 +137,8 @@ export class ContinuityRecorder {
           kind,
           sourceId: e.eventId,
           ...(e.taskId ? { taskId: e.taskId, taskTitle: titleOf.get(e.taskId) } : {}),
-          summary: summary(e)
+          summary: summary(e),
+          ...(body ? { body: body(e) } : {})
         }))
     } catch (err) {
       this.deps.log(`continuity: eventsFor ${runId} failed: ${String(err)}`)
@@ -146,10 +152,32 @@ export class ContinuityRecorder {
   }
 
   /** The journal rows the Timeline shows: each RECOVERY_STRATEGY_SELECTED as a 'recovery' line. The
-   *  summary is the strategy as journaled; the renderer words it (RunDetail's RECOVERY_LABEL). */
+   *  summary is the strategy as journaled and the renderer words it (RunDetail's RECOVERY_LABEL);
+   *  the body is why that strategy was chosen, which is the half a person cannot get anywhere else. */
   recoveryEventsFor(runId: string, state: OrchState): JobEvent[] {
-    return this.timelineRows(runId, state, 'RECOVERY_STRATEGY_SELECTED', 'recovery', (e) =>
-      String(e.payload?.strategy ?? '')
+    return this.timelineRows(
+      runId,
+      state,
+      'RECOVERY_STRATEGY_SELECTED',
+      'recovery',
+      (e) => String(e.payload?.strategy ?? ''),
+      (e) => this.reasonText(e)
+    )
+  }
+
+  /** The reason in the reader's language. The journal holds both halves the decision wrote: an
+   *  English sentence for the file and the key it was written under. A key this build does not have
+   *  (a row from another version, or one written before the keys existed) falls back to the English
+   *  sentence — worse to read, far better than a bare key. */
+  private reasonText(e: JournalEventRow): string {
+    const key = e.payload?.reasonKey
+    const english = String(e.payload?.reason ?? '')
+    if (typeof key !== 'string' || !(key in CATALOGS.ko.messages)) return english
+    const params = e.payload?.reasonParams
+    return t(
+      this.deps.lang(),
+      key as MessageKey,
+      params && typeof params === 'object' ? (params as MessageParams) : undefined
     )
   }
 

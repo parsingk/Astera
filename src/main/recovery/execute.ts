@@ -56,7 +56,7 @@ export async function executeRecovery(a: ExecuteInput, deps: ExecuteDeps): Promi
       return recheck(a, deps)
     case 'review':
       // The row of the table wrote its sentence twice; this is the side the person reads.
-      return review(a, deps, t(deps.lang(), decision.reasonKey, decision.reasonParams))
+      return review(a, deps, t(deps.lang(), decision.reasonMessage.key, decision.reasonMessage.params))
   }
 }
 
