@@ -192,6 +192,19 @@ describe('ContinuityRecorder reads', () => {
     expect(r.lostEventsFor('run_9', lost)).toEqual([])
   })
 
+  it('recoveryEventsFor turns a selected strategy into one Timeline row', () => {
+    const { r, journal } = recorder()
+    journal.append([
+      {
+        runId: 'run_1', taskId: 'tsk_1', dispatchId: 'dsp_1', type: 'RECOVERY_STRATEGY_SELECTED',
+        at: NOW, idempotencyKey: 'k1', payload: { strategy: 'resume-native', reason: 'the provider session can be resumed' }
+      }
+    ])
+    expect(r.recoveryEventsFor('run_1', state(dispatch()))).toEqual([
+      expect.objectContaining({ at: NOW, kind: 'recovery', taskId: 'tsk_1', taskTitle: 'Auth refactor', summary: 'resume-native' })
+    ])
+  })
+
   it('reportSkew logs when the last journal event names a dispatch the projection lacks', () => {
     const { r, logs } = recorder()
     r.record(state(null, task('ready')), state(dispatch({ sessionId: 'pending:ab' })))

@@ -1022,6 +1022,7 @@ export const es: Catalog = {
   'jobs.event.limitHit': 'límite alcanzado',
   'jobs.event.resumed': 'worker reanudado',
   'jobs.event.runtimeLost': 'entorno perdido',
+  'jobs.event.recovery': 'recuperación',
   'jobs.event.status': 'estado',
   'jobs.event.workerDone': 'informe del worker',
   'jobs.event.question': 'pregunta',

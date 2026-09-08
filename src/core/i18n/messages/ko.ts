@@ -1130,6 +1130,7 @@ export const ko = {
   'jobs.event.limitHit': '한도 정지',
   'jobs.event.resumed': '워커 재개',
   'jobs.event.runtimeLost': '실행 환경 잃음',
+  'jobs.event.recovery': '복구',
   'jobs.event.status': '소식',
   'jobs.event.workerDone': '워커 보고',
   'jobs.event.question': '질문',

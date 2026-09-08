@@ -1008,6 +1008,7 @@ export const ja: Catalog = {
   'jobs.event.limitHit': '上限停止',
   'jobs.event.resumed': 'ワーカー再開',
   'jobs.event.runtimeLost': '実行環境を喪失',
+  'jobs.event.recovery': '復旧',
   'jobs.event.status': '状況',
   'jobs.event.workerDone': 'ワーカー報告',
   'jobs.event.question': '質問',

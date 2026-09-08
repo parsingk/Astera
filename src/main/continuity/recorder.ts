@@ -132,6 +132,26 @@ export class ContinuityRecorder {
     }
   }
 
+  /** The journal rows the Timeline shows: each RECOVERY_STRATEGY_SELECTED as a 'recovery' line. */
+  recoveryEventsFor(runId: string, state: OrchState): JobEvent[] {
+    try {
+      const titleOf = new Map(state.tasks.map((t) => [t.id, t.title]))
+      return this.deps.journal
+        .eventsFor(runId)
+        .filter((e) => e.type === 'RECOVERY_STRATEGY_SELECTED')
+        .map((e) => ({
+          at: e.at,
+          kind: 'recovery',
+          sourceId: e.eventId,
+          ...(e.taskId ? { taskId: e.taskId, taskTitle: titleOf.get(e.taskId) } : {}),
+          summary: String(e.payload?.strategy ?? '')
+        }))
+    } catch (err) {
+      this.deps.log(`continuity: eventsFor ${runId} failed: ${String(err)}`)
+      return []
+    }
+  }
+
   /** P0 detects, P1 acts: a crash between the journal append and the JSON rename leaves the journal
    *  one transition ahead. Logged at boot so the gap is visible (design §5 "Ordering guarantee"). */
   reportSkew(state: OrchState): void {

@@ -52,7 +52,8 @@ const KIND_LABEL: Record<Exclude<JobEvent['kind'], 'message'>, MessageKey> = {
   'gate-resolved': 'jobs.event.gateResolved',
   'limit-hit': 'jobs.event.limitHit',
   resumed: 'jobs.event.resumed',
-  'runtime-lost': 'jobs.event.runtimeLost'
+  'runtime-lost': 'jobs.event.runtimeLost',
+  'recovery': 'jobs.event.recovery'
 }
 
 /** 사람을 부르는 메시지. 이 셋만 이벤트 표식으로 blocked 글리프(사람을 기다린다)를 빌린다 —

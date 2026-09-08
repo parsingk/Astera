@@ -991,6 +991,7 @@ export const en: Record<keyof typeof ko, string> = {
   'jobs.event.limitHit': 'usage limit hit',
   'jobs.event.resumed': 'worker resumed',
   'jobs.event.runtimeLost': 'runtime lost',
+  'jobs.event.recovery': 'recovery',
   'jobs.event.status': 'status',
   'jobs.event.workerDone': 'worker report',
   'jobs.event.question': 'question',
