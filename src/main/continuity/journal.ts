@@ -299,13 +299,15 @@ export class ContinuityJournal {
     ).map(rowToRecoveryAction)
   }
 
-  /** Both tables. Called when a Run is pruned (30-day TTL) or deleted, so the file stays bounded. */
+  /** Every table that names a Run. Called when a Run is pruned (30-day TTL) or deleted, so the file
+   *  stays bounded — the same three tables sweepOrphans clears, for the same reason. */
   deleteRun(runId: string): void {
     if (!this.usable) return
     this.db.exec('BEGIN')
     try {
       this.db.prepare('DELETE FROM journal_events WHERE run_id = ?').run(runId)
       this.db.prepare('DELETE FROM checkpoints WHERE run_id = ?').run(runId)
+      this.db.prepare('DELETE FROM recovery_actions WHERE run_id = ?').run(runId)
       this.db.exec('COMMIT')
     } catch (err) {
       try {
