@@ -392,6 +392,7 @@ export const en: Record<keyof typeof ko, string> = {
   'files.delete.skippedFailed': 'Failed to snapshot to Local History — the delete still completed',
   'files.clipboard.cutDone': 'Cut {count} items',
   'files.clipboard.copyDone': 'Copied {count} items',
+  'files.clipboard.filesFailed': 'Could not put the files on the clipboard, so only their paths were copied',
   'files.paste.blocked': 'Cannot paste: {reason}',
   'files.paste.invalidTarget': 'The destination is not valid',
   'files.paste.empty': 'Nothing to paste',

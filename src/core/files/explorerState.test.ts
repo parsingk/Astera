@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   initialExplorerState,
   operableSelection,
+  pasteSource,
   reduce,
   type ExplorerState
 } from './explorerState'
@@ -195,5 +196,35 @@ describe('operableSelection — C1 루트 필터 + topLevelOnly', () => {
 
   it('루트 자신은 조작 대상이 아니다', () => {
     expect(operableSelection(S(['D:\\p']), 'D:\\p')).toEqual([])
+  })
+})
+
+describe('pasteSource', () => {
+  const clip = { mode: 'copy' as const, paths: ['D:\\p\\a.ts'] }
+
+  it('prefers what the OS clipboard holds over the app-internal one', () => {
+    expect(pasteSource(['D:\\downloads\\x.zip'], clip)).toEqual({
+      kind: 'external',
+      paths: ['D:\\downloads\\x.zip']
+    })
+  })
+
+  it('drops entries with no filesystem path (an image copied from a web page)', () => {
+    expect(pasteSource(['', 'D:\\downloads\\x.zip'], null)).toEqual({
+      kind: 'external',
+      paths: ['D:\\downloads\\x.zip']
+    })
+  })
+
+  it('falls back to the internal clipboard when nothing on the OS clipboard has a path', () => {
+    expect(pasteSource([''], clip)).toEqual({ kind: 'internal', mode: 'copy', paths: clip.paths })
+  })
+
+  it('uses the internal clipboard when the OS clipboard holds no files at all', () => {
+    expect(pasteSource([], clip)).toEqual({ kind: 'internal', mode: 'copy', paths: clip.paths })
+  })
+
+  it('is empty when both are empty', () => {
+    expect(pasteSource([], null)).toEqual({ kind: 'empty' })
   })
 })

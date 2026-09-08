@@ -92,6 +92,7 @@ import { PREVIEW_PARTITION } from '../core/preview/guards'
 import { buildResumeNote, buildResumePacket, buildTabResumeText } from './orchestration/resumePacket'
 import { extractStatusLineSession } from '../core/usage/statusline'
 import { sortEntries, isPathWithin, isSamePath, projectRootOf } from '../core/files/tree'
+import { writeFilesToClipboard } from './clipboardFiles'
 import { validateName, uniqueName, canMove, canCopy } from '../core/files/ops'
 import { imageMime } from '../core/files/imageMime'
 import { parsePorcelainZ, type GitState } from '../core/git/status'
@@ -4183,6 +4184,50 @@ export function registerIpc(
     await assertAllowedPath(to)
     await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false })
     return to
+  })
+
+  /** The paste of something copied outside the app. Identical to files.copy but for one check: `from`
+   *  is not required to be inside an allowed root, because the OS clipboard hands over paths that are
+   *  outside every root by definition (Downloads, another drive, a folder on the desktop) and
+   *  requiring one would refuse every external paste. The check that matters stays: destDir and the
+   *  joined `to` are both verified, so this reads from anywhere but writes only into a project the
+   *  app already has open.
+   *  canCopy is kept for the same reason files.copy keeps it — copying a folder into itself or into
+   *  its own descendant is reachable from outside too (a parent directory of the project), and it
+   *  should say so in the user's language rather than surface fs.cp's EINVAL. */
+  ipcMain.handle('files.importExternal', async (_e, from: string, destDir: string) => {
+    // A relative source would be resolved against main's own working directory, which is not a place
+    // this IPC has any business reading from. Everything the OS clipboard hands over is absolute, so
+    // this only closes the case where the renderer sends something else.
+    if (!path.isAbsolute(from)) throw new Error(t(core.lang, 'files.error.pathNotAllowed'))
+    await assertAllowedPath(destDir)
+    const copyReason = canCopy(from, destDir)
+    if (copyReason) throw new Error(t(core.lang, copyReason.key, copyReason.params))
+    const existing = await fs.readdir(destDir)
+    const name = uniqueName(existing, path.basename(from))
+    const to = path.join(destDir, name)
+    await assertAllowedPath(to)
+    await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false })
+    return to
+  })
+
+  /** Sends the calling window a paste. The explorer's Paste **menu item** is the only caller: what the
+   *  OS clipboard holds reaches the renderer through a paste event and no other way (see ClipboardApi.
+   *  hasFiles), and a menu click raises none of its own. Ctrl+V does not need this — the browser
+   *  raises the event for it. */
+  ipcMain.handle('clipboard.requestFilePaste', (e) => {
+    e.sender.paste()
+  })
+
+  /** The other half of the explorer's copy: the selection goes onto the OS clipboard as files, so
+   *  Explorer's paste produces the files and not their paths in text. The renderer has already put
+   *  the text there, which is why a failure comes back as a result instead of an exception — the
+   *  copy is not broken, it is only less useful.
+   *  Every path is checked. Without that the renderer could name any file on the machine and have it
+   *  put on the clipboard, ready to be pasted anywhere the user pastes next. */
+  ipcMain.handle('clipboard.writeFiles', async (_e, paths: string[]) => {
+    for (const p of paths) await assertAllowedPath(p)
+    return writeFilesToClipboard(paths)
   })
 
   ipcMain.handle('files.reveal', async (_e, targetPath: string) => {
