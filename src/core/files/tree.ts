@@ -8,11 +8,15 @@ export interface DirEntry {
   isDir: boolean
 }
 
-/** Folders first, then by name (case-insensitive). Does not mutate the input. */
+/** Folders first, then by name (case-insensitive). Does not mutate the input.
+ *
+ *  numeric compares a run of digits as the number it spells, so episode_2 lands before episode_11
+ *  instead of after it. Codepoint order is wrong for the names people actually give files, which
+ *  are numbered far more often than not, and it is what Explorer and Finder already do. */
 export function sortEntries(entries: DirEntry[]): DirEntry[] {
   return [...entries].sort((a, b) => {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
-    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
   })
 }
 
