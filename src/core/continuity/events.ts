@@ -174,7 +174,7 @@ function dispatchEvents(prev: OrchState, next: OrchState, now: string): Continui
   const out: ContinuityEvent[] = []
   for (const d of next.dispatches) {
     const runId = runOf(d.taskId)
-    if (!runId) continue // a hand-edited file can hold a Dispatch without its Task (state.ts:827)
+    if (!runId) continue // only a hand-edited orchestration.json holds a Dispatch without its Task (deleteRuns drops them together)
     const ids = { runId, taskId: d.taskId, dispatchId: d.id }
     const was = before.get(d.id)
     const started = (): ContinuityEvent =>
