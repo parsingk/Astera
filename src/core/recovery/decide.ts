@@ -31,6 +31,11 @@ export function decideRecovery(a: {
     return decide('review', 'unsafe', 'the worktree holds conflicted files')
   if (git.dirty === null || git.conflicts === null)
     return decide('review', 'review', 'the worktree could not be read, so nothing about it can be relied on')
+  // `review`, not `unsafe`: the worktree is fine, it is our own record that is missing. Without this
+  // an unreadable journal would arrive as `promptConfirmed: false`, which the rows below read as
+  // positive evidence that nothing was started, and a locked or corrupt file would restart a worker.
+  if (attempt.promptConfirmed === null)
+    return decide('review', 'review', 'the journal could not be read, so nothing about this attempt can be relied on')
 
   const chosen = ((): RecoveryDecision => {
     if (attempt.nativeSessionId)

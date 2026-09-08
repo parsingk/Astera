@@ -18,8 +18,10 @@ export interface LostAttempt {
   cwd: string
   /** The provider's own conversation id, when the app learned it before the loss. */
   nativeSessionId?: string
-  /** A PROMPT_WRITE_CONFIRMED row exists for this Dispatch: the prompt really left the app. */
-  promptConfirmed: boolean
+  /** A PROMPT_WRITE_CONFIRMED row exists for this Dispatch: the prompt really left the app. null when
+   *  the journal could not be read; recovery must treat that as a reason to stop, because `false`
+   *  here is positive evidence that nothing was started. */
+  promptConfirmed: boolean | null
   /** HEAD when the attempt started (its first checkpoint), or null when no checkpoint recorded one. */
   baseHead: string | null
   /** The Task names a run configuration to prove itself with, so a check can judge committed work. */

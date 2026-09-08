@@ -97,10 +97,13 @@ export class RecoveryReconciler {
     const now = this.deps.now()
     const journal = this.deps.journal
 
-    const events = this.note('eventsFor', [] as JournalEventRow[], () => journal.eventsFor(runId))
-    const promptConfirmed = events.some(
-      (e) => e.type === 'PROMPT_WRITE_CONFIRMED' && e.dispatchId === dispatch.id
-    )
+    // null, not [] — a read that failed is not a read that found nothing. decide.ts reads a `false`
+    // here as positive evidence that the prompt never left the app; null is "we cannot say".
+    const events = this.note('eventsFor', null as JournalEventRow[] | null, () => journal.eventsFor(runId))
+    const promptConfirmed =
+      events === null
+        ? null
+        : events.some((e) => e.type === 'PROMPT_WRITE_CONFIRMED' && e.dispatchId === dispatch.id)
     const checkpoint = this.note('firstCheckpointFor', null as CheckpointRow | null, () =>
       journal.firstCheckpointFor(dispatch.id)
     )

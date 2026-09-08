@@ -57,6 +57,19 @@ describe('decideRecovery', () => {
     expect(d.class).toBe('review')
   })
 
+  it('an unreadable journal stops recovery, even with a native session', () => {
+    for (const over of [{}, { nativeSessionId: 'uuid-a' }]) {
+      const d = decideRecovery({
+        attempt: attempt({ promptConfirmed: null, ...over }),
+        git: git(),
+        smartResume: true
+      })
+      expect(d.strategy).toBe('review')
+      expect(d.class).toBe('review')
+      expect(d.reason).toContain('journal')
+    }
+  })
+
   it('resumes the provider session when there is one', () => {
     expect(strategyOf({ nativeSessionId: 'uuid-a' })).toBe('resume-native')
     // even with a dirty tree and Smart Resume on: native resume comes first (spec 13)

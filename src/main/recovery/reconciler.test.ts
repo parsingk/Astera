@@ -63,7 +63,9 @@ describe('candidates', () => {
 })
 
 /** A reconciler whose journal, git and executor are all recorded fakes. */
-function harness(over: { git?: Partial<GitFacts>; executeFails?: boolean; executeThrows?: boolean } = {}) {
+function harness(
+  over: { git?: Partial<GitFacts>; executeFails?: boolean; executeThrows?: boolean; eventsThrow?: boolean } = {}
+) {
   let current = state()
   const appended: string[] = []
   const actions: Array<{ id: string; strategy: string; status: string }> = []
@@ -71,7 +73,10 @@ function harness(over: { git?: Partial<GitFacts>; executeFails?: boolean; execut
   const logs: string[] = []
   const journal = {
     append: (events: Array<{ type: string }>) => { for (const e of events) appended.push(e.type); return events.length },
-    eventsFor: () => [{ type: 'PROMPT_WRITE_CONFIRMED', dispatchId: 'dsp_1' }] as never,
+    eventsFor: () => {
+      if (over.eventsThrow) throw new Error('journal locked')
+      return [{ type: 'PROMPT_WRITE_CONFIRMED', dispatchId: 'dsp_1' }] as never
+    },
     firstCheckpointFor: () => ({ gitHead: 'aaa' }) as never,
     startRecoveryAction: (r: { strategy: string }) => {
       const row = { recoveryActionId: 'rec_1', status: 'selected', ...r }
@@ -109,6 +114,12 @@ describe('RecoveryReconciler', () => {
     )
     expect(h.executed).toEqual([{ dispatchId: 'dsp_1', strategy: 'redispatch' }])
     expect(h.actions.at(-1)).toMatchObject({ status: 'completed' })
+  })
+
+  it('a journal it could not read asks a person instead of restarting the worker', async () => {
+    const h = harness({ eventsThrow: true })
+    expect(await h.r.reconcileAll()).toBe(1)
+    expect(h.executed).toEqual([{ dispatchId: 'dsp_1', strategy: 'review' }])
   })
 
   it('a failed execution is journaled as failed', async () => {
