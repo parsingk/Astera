@@ -845,6 +845,11 @@ export interface CoreApi {
     // How a session that hits its limit gets continued. See ResumeStrategy.
     getResumeStrategy(): Promise<ResumeStrategy>
     setResumeStrategy(strategy: ResumeStrategy): Promise<void>
+    // Job Continuity (docs/ASTERA_JOB_CONTINUITY_DURABLE_RECOVERY_SPEC.md §3). Off by default. Turning
+    // it on while Smart Resume is off turns Smart Resume on as well — the result says so and the
+    // settings screen shows the notice. Turning it off leaves Smart Resume alone.
+    getJobContinuityEnabled(): Promise<boolean>
+    setJobContinuityEnabled(enabled: boolean): Promise<{ smartResumeTurnedOn: boolean }>
     // The terminal font pair. Either side may be null, meaning "not chosen" — the renderer then uses
     // the app's default chain for that half.
     getTerminalFont(): Promise<TerminalFont>

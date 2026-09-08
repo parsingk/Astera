@@ -149,6 +149,8 @@ const api = {
     listModels: invoke('settings.listModels'),
     getResumeStrategy: invoke('settings.getResumeStrategy'),
     setResumeStrategy: invoke('settings.setResumeStrategy'),
+    getJobContinuityEnabled: invoke('settings.getJobContinuityEnabled'),
+    setJobContinuityEnabled: invoke('settings.setJobContinuityEnabled'),
     getTerminalFont: invoke('settings.getTerminalFont'),
     setTerminalFont: invoke('settings.setTerminalFont'),
     getTheme: invoke('settings.getTheme'),

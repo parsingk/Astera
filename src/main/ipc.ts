@@ -4437,6 +4437,17 @@ export function registerIpc(
     if (strategy === 'smart') installStubsForCurrentToggles()
   })
 
+  // Job Continuity. The rule that may also turn Smart Resume on lives in the store (core/continuity/
+  // settings.ts); this handler validates the value and starts the orchestration wiring the journal
+  // hooks live in, the way the other toggles do. Task 13 of the P0 plan adds the recorder calls here.
+  ipcMain.handle('settings.getJobContinuityEnabled', () => core.appSettings.getJobContinuityEnabled())
+  ipcMain.handle('settings.setJobContinuityEnabled', async (_e, enabled: unknown) => {
+    if (typeof enabled !== 'boolean') throw new Error(`INVALID_JOB_CONTINUITY: ${String(enabled)}`)
+    const r = await core.appSettings.setJobContinuityEnabled(enabled)
+    if (enabled && orchWiring) await startOrch()
+    return r
+  })
+
   // The terminal font pair. The same trust-boundary check as setLang: the shape is validated here, and
   // the names themselves are sanitised inside setTerminalFont before they reach disk.
   ipcMain.handle('settings.getTerminalFont', () => core.appSettings.getTerminalFont())
