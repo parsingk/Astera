@@ -73,4 +73,19 @@ describe('readGitFacts', () => {
     expect(facts.inProgress).toBeNull()
     expect(facts.exists).toBe(true)
   })
+
+  it('when status fails, dirty and conflicts are null to signal unreliability', async () => {
+    const d = await repo()
+    const { git } = await import('../../core/worktrees/git')
+    const failingGit = async (args: string[], opts?: { cwd?: string }) => {
+      if (args[0] === 'status') return { ok: false, stdout: '', stderr: 'boom' }
+      return git(args, opts)
+    }
+    const facts = await readGitFacts(d, { git: failingGit })
+    expect(facts.exists).toBe(true)
+    expect(facts.dirty).toBeNull()
+    expect(facts.conflicts).toBeNull()
+    expect(facts.head).toBeTruthy()
+    expect(facts.branch).toBe('main')
+  })
 })

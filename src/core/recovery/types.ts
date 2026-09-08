@@ -32,10 +32,11 @@ export interface GitFacts {
   /** The folder is there and is a git repository. */
   exists: boolean
   head: string | null
-  /** Anything uncommitted, tracked or not. */
-  dirty: boolean
+  /** Anything uncommitted, tracked or not. null when git could not be asked; recovery must treat that as a reason to stop. */
+  dirty: boolean | null
   inProgress: 'merge' | 'rebase' | 'cherry-pick' | 'revert' | null
-  conflicts: boolean
+  /** Whether any file is conflicted. null when git could not be asked; recovery must treat that as a reason to stop. */
+  conflicts: boolean | null
   branch: string | null
 }
 

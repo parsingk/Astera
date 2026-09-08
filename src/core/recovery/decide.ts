@@ -29,6 +29,8 @@ export function decideRecovery(a: {
     return decide('review', 'unsafe', `a ${git.inProgress} is in progress in the worktree and must not be resumed automatically`)
   if (git.conflicts)
     return decide('review', 'unsafe', 'the worktree holds conflicted files')
+  if (git.dirty === null || git.conflicts === null)
+    return decide('review', 'review', 'the worktree could not be read, so nothing about it can be relied on')
 
   const chosen = ((): RecoveryDecision => {
     if (attempt.nativeSessionId)

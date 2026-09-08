@@ -47,6 +47,16 @@ describe('decideRecovery', () => {
     }
   })
 
+  it('an unreadable tree stops recovery even with a native session', () => {
+    const d = decideRecovery({
+      attempt: attempt({ nativeSessionId: 'uuid-a' }),
+      git: git({ dirty: null, conflicts: null }),
+      smartResume: true
+    })
+    expect(d.strategy).toBe('review')
+    expect(d.class).toBe('review')
+  })
+
   it('resumes the provider session when there is one', () => {
     expect(strategyOf({ nativeSessionId: 'uuid-a' })).toBe('resume-native')
     // even with a dirty tree and Smart Resume on: native resume comes first (spec 13)
