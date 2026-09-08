@@ -1157,9 +1157,12 @@ export async function handleCommand(
         })
       } catch (e) {
         // Failure rollback — this is the server's transaction handling, not a pure-layer transition
-        // rule. Calling closeDispatch alone would pin the Task at dispatched forever: there is no
-        // blocked entry in ALLOWED.dispatched (core/orchestration/types.ts) so no Gate can catch it
-        // either, and dispatched Tasks do not show up in the --ready list — leaving no way to retry.
+        // rule. Calling closeDispatch alone would leave the Task at dispatched, and the --ready list
+        // does not show those, so nothing would pick it up on its own. A Gate can reach it now:
+        // recovery added the dispatched -> blocked edge to ALLOWED (core/orchestration/types.ts) and
+        // main/recovery/execute.ts opens exactly that Gate when startWorker fails on it. But that is
+        // for a lost worker with nobody waiting on an answer; here a caller is, so putting the Task
+        // back where it was needs no question of anyone.
         // So this removes the dispatch from the array entirely and restores the Task directly to its
         // pre-openDispatch status. It also leaves no bogus status message (recording "ended without
         // reporting" when the session never even existed) — the cause of the failure is carried in
@@ -1739,6 +1742,12 @@ export async function handleExit(
   // 이미 약속하고 있다.
   if (!closed.review || task?.status !== 'reviewing') {
     await deps.setState(r.state)
+    // `closedBy` is always absent here today: closeDispatch only matches a Dispatch with no
+    // `endedAt`, and all three writers that set `closedBy` (worker-stop, worker-abandon,
+    // run-pause) set `endedAt` in the same object — a person-closed Dispatch never reaches this
+    // line. The branch stays as defence in depth, because it is the last place that can refuse:
+    // a future writer that sets `closedBy` without `endedAt` would otherwise hand a deliberately
+    // closed worker to recovery, which is the one thing recovery must never restart.
     if (!closed.closedBy) deps.onDispatchLost?.({ dispatchId: closed.id })
     return
   }
