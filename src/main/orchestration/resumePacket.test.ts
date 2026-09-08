@@ -718,6 +718,25 @@ describe('buildTabResumeText', () => {
       expect(content).not.toContain('HANDOFF MEMO')
     })
 
+    it('a reader that answers unknown is one log line — the briefing is still written', async () => {
+      const log = vi.fn()
+      const line = await buildTabResumeText('sess1', 'handover', {
+        cwd: CWD,
+        provider: 'claude',
+        transcriptPath: '/fake/transcript.jsonl',
+        git: fakeGit(),
+        readTranscript: vi.fn().mockResolvedValue(material),
+        readHandoff: () => ({ state: 'unknown' }),
+        log,
+        dir: specDir
+      })
+      expect(line).not.toBeNull()
+      expect(log).toHaveBeenCalledTimes(1)
+      expect(String(log.mock.calls[0][0])).toContain('handoff store unreadable session=sess1')
+      const content = await fs.readFile(tabFile('sess1'), 'utf8')
+      expect(content).not.toContain('HANDOFF MEMO')
+    })
+
     it('no reader injected: unknown, and not a log line', async () => {
       const log = vi.fn()
       await buildTabResumeText('sess1', 'handover', {

@@ -398,11 +398,16 @@ export async function buildTabResumeText(
     // reason to claim that no memo was left.
     let handoff: HandoffLookup = { state: 'unknown' }
     if (form === 'handover' && deps.readHandoff) {
+      let failure: string | null = null
       try {
         handoff = deps.readHandoff(sessionId)
       } catch (err) {
-        deps.log?.(`handoff lookup failed session=${sessionId}: ${String(err)}`)
+        failure = String(err)
       }
+      // One line either way: a store that could not be read is a skip worth a trace, and the
+      // briefing that follows will carry no memo section (unknown is never rendered as none).
+      if (handoff.state === 'unknown')
+        deps.log?.(`handoff store unreadable session=${sessionId}${failure ? `: ${failure}` : ''}`)
     }
 
     const text = formatTabResume(
