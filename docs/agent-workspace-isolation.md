@@ -1,10 +1,11 @@
 # Agent workspace isolation — design brief
 
-Status: **not designed yet**. This is the brief a next session starts from: the problem, what was
-measured, the candidate shapes, and the decisions still open. Nothing here is decided except where
-it says "measured".
+Status: **scope decided, mechanism measured, design not written yet.** This is the brief a next
+session starts from: the problem, what was measured, the candidate shapes, and what is still open.
 
-Written 2026-09-08, after the explorer clipboard work (develop `5ac2116`) forced the question.
+Written 2026-09-08 after the explorer clipboard work (develop `5ac2116`) forced the question, and
+updated the same day with the scope decisions and a spike that measured an isolated desktop
+directly.
 
 ## The problem
 
@@ -80,27 +81,87 @@ clipboard.
 
 B and C compose: B for everyday UI verification, C only for the integrations that need real input.
 
-## Open questions
+## What the isolated-desktop spike measured (2026-09-08, Windows 11, Electron 41)
 
-1. **Scope.** Is this for agents verifying *astera itself*, or for any agent working in any project
-   through astera? The second is a product feature; the first is closer to tooling.
-2. **How much does the clipboard matter?** If clipboard verification must be isolated too, the
-   answer is a second logon session or a VM and the cost changes shape entirely. If "the agent may
-   overwrite the clipboard, but must not steal the screen or the pointer" is acceptable, C is enough.
-3. **Cross-platform.** C is Windows-only. macOS has no equivalent of a desktop object; the nearest
-   is a separate user session. Is a Windows-only capability acceptable, as `clipboardFiles.ts`
-   already is?
-4. **Who drives.** Does the agent get a scripted API (agent-browser style, safer, more work) or a
-   raw CDP endpoint the skill drives (cheap, no guardrails)?
-5. **Visibility.** The agent browser makes it obvious when the agent is acting. What is the
-   equivalent when the work happens on a desktop the person cannot see — a tab that mirrors
-   screenshots, a status pill, nothing?
+A throwaway spike created a desktop with `CreateDesktop`, launched apps on it through
+`STARTUPINFO.lpDesktop`, and drove them from outside. The desktop was never switched to, so the
+person kept their screen the whole time: their foreground window was unchanged after every probe,
+and no window from that desktop ever appeared on theirs.
+
+**Works on a desktop nobody is looking at**
+
+- **Launching anything there.** An Electron app and `explorer.exe` both started and drew normally.
+  Their windows enumerate on that desktop and are absent from `Default`.
+- **Driving a Chromium app over CDP.** The debugging port is a TCP socket and does not care about
+  desktops. `Runtime.evaluate`, `Input.insertText` and `Input.dispatchKeyEvent` all worked, and the
+  page reported `document.hasFocus() === true`.
+- **A genuine paste with no real input at all.** `Input.dispatchKeyEvent` with `commands: ['paste']`
+  produced a `paste` event with `isTrusted: true` carrying the real clipboard contents. The brief
+  listed this as untried; it removes one of the two cases that were thought to need the person's
+  screen.
+- **Screenshots two ways.** `Page.captureScreenshot` returns the web contents.
+  `PrintWindow` with `PW_RENDERFULLCONTENT`, called from a process attached to that desktop, returns
+  any window including its native frame. Explorer's window came back fully rendered.
+- **Keyboard input through posted messages.** `PostMessage` of `WM_KEYDOWN`/`WM_CHAR`/`WM_KEYUP` to
+  the Chromium child window arrived as `isTrusted: true` key events, with no foreground window
+  anywhere.
+
+**Does not work there**
+
+- **No foreground window and no pointer.** `GetForegroundWindow` returns 0, `SetForegroundWindow`
+  returns false, and `GetCursorPos`/`SetCursorPos` both fail. A desktop that has never been switched
+  to has no input state of its own.
+- **Therefore no `SendInput`/`keybd_event`.** Real key presses sent from a process on that desktop
+  reached nothing; the target app's event log was unchanged.
+- **No desktop-wide capture.** `BitBlt` from the desktop DC returns false and the bitmap is blank.
+  Per-window `PrintWindow` is the only picture available.
+- **Consequently no mouse-driven drag and drop.** OLE drag needs a real cursor and mouse capture and
+  neither exists there, so dropping files into Explorer stays unverifiable in this shape.
+- **The clipboard is shared**, as expected: the paste above picked up what the person had copied.
+
+`SwitchDesktop` would give that desktop real input, and is how Sysinternals Desktops works, but it
+takes the screen away from the person, which is the thing this feature exists to avoid. It was not
+tried for that reason.
+
+## What this does to the candidate shapes
+
+B is no longer merely "the direct analogue of the agent browser"; it is the shape the measurements
+support. C survives in a reduced form: the desktop is worth having as **a place to put windows so
+they never appear on the person's screen**, not as a place where real input happens. The two collapse
+into one design: an isolated desktop holding the agent's app instance, driven by CDP and posted
+messages, observed through `Page.captureScreenshot` and `PrintWindow`.
+
+The one case left uncovered is cross-app drag and drop. It needs the person's screen or a second
+logon session, and is out of scope for the shape above.
+
+## Decisions taken (2026-09-08)
+
+1. **Scope: a product feature.** Any agent working in any project through astera, not only agents
+   verifying astera itself.
+2. **The clipboard is not isolated.** "The agent may overwrite the clipboard, but must not take the
+   screen or the pointer" is the accepted line. A second logon session or a VM is out.
+3. **Windows first.** Other platforms get whatever needs no real input. The desktop object is
+   Windows-only, as `clipboardFiles.ts` already is.
+4. **The first round targets an Electron app plus the OS around it.** That means the project's own
+   app launched from a Run configuration, driven precisely, with the OS-integration cases that
+   survive the measurements above.
+
+## Still open
+
+- **Who drives.** A scripted API in the agent-browser style, or a CDP endpoint the skill drives
+  directly. The agent browser's own history argues for the scripted API, because its guardrails all
+  turned out to be load-bearing: a busy tab, a stop, a bounded script.
+- **Visibility.** The agent browser shows a violet frame and a pointer while it works. The
+  equivalent for a desktop the person cannot see is undecided: a tab that mirrors `PrintWindow`
+  captures, a status pill, or nothing.
+- **Lifecycle.** The desktop object dies when its last process exits (measured). Who creates it,
+  when, and what happens to a stranded instance is undesigned.
 
 ## Suggested next step
 
-Answer 1 and 2 first; they decide whether this is a weekend of work or a month. Then design the shape
-with the person, rather than building from this brief: it is deliberately a list of constraints and
-not a proposal.
+Design the surface with the person, starting from the two open questions above. The mechanism no
+longer needs proving; what needs deciding is what the agent is handed and how the person sees what
+it is doing.
 
 ## Pointers
 
@@ -110,3 +171,10 @@ not a proposal.
 - An agent picking this up in Astera's own working setup also has local notes on the method
   (`electron-file-clipboard-and-drag`, `astera-dev-run-cdp`, `orca-peer-reference`); those are agent
   memory, not part of this repository.
+- The spike was throwaway and is not in the repository. What it established is written above; the
+  calls it used were `CreateDesktop`, `CreateProcess` with `STARTUPINFO.lpDesktop`,
+  `EnumDesktopWindows`, `PrintWindow(PW_RENDERFULLCONTENT)`, `PostMessage`, and CDP over the app's
+  debugging port. Two traps cost the most time: PowerShell turns `$null` into an empty string for a
+  `[string]` P/Invoke argument (use `[NullString]::Value`, or `CreateProcess` fails with
+  ERROR_PATH_NOT_FOUND), and a process on an invisible desktop has no console, so an `Add-Type` that
+  fails to compile is silent and every later call returns `$null`.
