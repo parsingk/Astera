@@ -1115,6 +1115,18 @@ describe('handleCommand — retained dispatch', () => {
     expect(released).toEqual([dispatchId])
   })
 
+  // Recovery reads this to tell a deliberate close from a crash (Dispatch.closedBy)
+  it('worker-stop and worker-abandon record who closed the dispatch', async () => {
+    const stop = await seedRetained(false)
+    const stopped = await call(stop.deps, 'worker-stop', { dispatch: stop.dispatchId })
+    expect(stopped.status).toBe(200)
+    expect(stop.deps.getState().dispatches.find((d) => d.id === stop.dispatchId)?.closedBy).toBe('stop')
+
+    const abandon = await seedRetained(false)
+    await call(abandon.deps, 'worker-abandon', { dispatch: abandon.dispatchId })
+    expect(abandon.deps.getState().dispatches.find((d) => d.id === abandon.dispatchId)?.closedBy).toBe('abandon')
+  })
+
   it('retained에 worker-release는 200이지만 skipped를 싣는다 — 조용히 건너뛰지 않는다', async () => {
     const { deps, dispatchId } = await seedRetained(true)
     const r = await call(deps, 'worker-release', { dispatch: dispatchId })
@@ -2564,6 +2576,92 @@ describe('검토 Dispatch 가 스스로 끝나지 못했을 때 — handleExit �
     expect(calls).toBe(0)
     expect(deps.getState().tasks[0].status).toBe('completed')
     expect('limitResetsAt' in deps.getState().dispatches.find((d) => d.id === reviewId)!).toBe(false)
+  })
+})
+
+// Job Continuity P1: a worker Dispatch that closes on its own, with no reported outcome, is a
+// stranded Task. handleExit is the only place that observes that moment, so it is also the only
+// place that can hand the dispatch id to recovery.
+describe('handleExit — onDispatchLost hands a stranded implementer to recovery', () => {
+  /** run + task + open implementer dispatch (sessionId='sess1') — same shape as the probeLimit
+   *  block's seedOpenDispatch, plus the dispatchId onDispatchLost is expected to report. */
+  const seedOpenDispatch = async (): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    dispatchId: string
+  }> => {
+    const deps = makeDeps()
+    const run = await call(deps, 'run-create', { objective: 'o', cwd: 'D:/p' })
+    const runId = (run.body as { id: string }).id
+    const task = await call(deps, 'task-create', { account: 'acc1', runId, title: 't', spec: 's' })
+    const taskId = (task.body as { id: string }).id
+    await call(deps, 'worker-start', { taskId, agent: 'codex', account: 'acc1', worktree: 'current' })
+    const dispatchId = deps.getState().dispatches[0].id
+    return { deps, dispatchId }
+  }
+
+  /** Task in `reviewing` with an open review Dispatch (sessionId='sess_review') — same injection
+   *  shape as the 'task-create --review 와 검토 라우팅' and '검토 Dispatch 가 스스로 끝나지 못했을 때'
+   *  blocks build: the review Dispatch is appended straight onto state (the wiring that opens it is
+   *  not the server's job), not routed through worker-start. */
+  const seedReviewing = async (): Promise<{
+    deps: OrchServerDeps & { state: OrchState }
+    reviewDispatchId: string
+  }> => {
+    const deps = makeDeps()
+    deps.startReview = () => {}
+    await call(deps, 'run-create', { objective: '목표', cwd: 'D:/p' })
+    await call(deps, 'task-create', { account: 'acc1', spec: '작업', review: true })
+    const taskId = deps.getState().tasks[0].id
+    await call(deps, 'worker-start', { task: taskId, agent: 'claude', account: 'acc1' })
+    const impl = deps.getState().dispatches[0]
+    await call(
+      deps,
+      'send',
+      { type: 'worker_done', taskId, dispatchId: impl.id, outcome: 'succeeded', subject: 's', body: 'b' },
+      impl.sessionId
+    )
+    const reviewDispatchId = 'dsp_review'
+    await deps.setState({
+      ...deps.getState(),
+      dispatches: [
+        ...deps.getState().dispatches,
+        {
+          id: reviewDispatchId,
+          taskId,
+          provider: 'codex' as const,
+          accountId: 'acc1',
+          sessionId: 'sess_review',
+          cwd: 'D:/p',
+          specPath: 'D:/p/orch/specs/review.md',
+          review: true,
+          startedAt: NOW,
+          workerState: 'ready' as const,
+          retained: false
+        }
+      ]
+    })
+    return { deps, reviewDispatchId }
+  }
+
+  it('an implementer dispatch that ends without reporting reaches onDispatchLost with its own dispatch id', async () => {
+    const lost: string[] = []
+    const { deps, dispatchId } = await seedOpenDispatch()
+    deps.onDispatchLost = (a) => lost.push(a.dispatchId)
+    await handleExit(deps, { sessionId: 'sess1', exitCode: 1 })
+    expect(lost).toEqual([dispatchId])
+  })
+
+  it("a reviewer's exit does not reach onDispatchLost — its Gate is the recovery path", async () => {
+    const lost: string[] = []
+    const { deps } = await seedReviewing()
+    deps.onDispatchLost = (a) => lost.push(a.dispatchId)
+    await handleExit(deps, { sessionId: 'sess_review', exitCode: 1 })
+    expect(lost).toEqual([])
+    // Proof the reviewer branch was actually taken, not that the fixture failed to open a review
+    // dispatch: the Gate is the recovery path for a reviewer that ends without reporting.
+    const st = deps.getState()
+    expect(st.tasks[0].status).toBe('blocked')
+    expect(st.gates).toHaveLength(1)
   })
 })
 

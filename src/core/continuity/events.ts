@@ -26,6 +26,7 @@ export type ContinuityEventType =
   | 'ATTEMPT_WAITING'
   | 'ATTEMPT_EXITED'
   | 'ATTEMPT_LOST'
+  | 'ATTEMPT_ABANDONED'
   | 'ATTEMPT_RESUMED'
   | 'ATTEMPT_COMPLETED'
   | 'ATTEMPT_FAILED'
@@ -38,6 +39,20 @@ export type ContinuityEventType =
   | 'ACCOUNT_ROLL_REQUESTED'
   | 'ACCOUNT_ROLL_COMPLETED'
   | 'CONTINUITY_ENABLED'
+  // Written by the recovery reconciler (P1), never derived here — a lost worker is discovered on a
+  // sweep, not diffed out of a state transition, so these have no counterpart in deriveEvents.
+  | 'RECOVERY_DETECTED'
+  | 'RECOVERY_STRATEGY_SELECTED'
+  | 'RECOVERY_NATIVE_RESUME_REQUESTED'
+  | 'RECOVERY_NATIVE_RESUME_SUCCEEDED'
+  | 'RECOVERY_NATIVE_RESUME_FAILED'
+  | 'RECOVERY_SMART_RESUME_REQUESTED'
+  | 'RECOVERY_SMART_RESUME_SUCCEEDED'
+  | 'RECOVERY_SMART_RESUME_FAILED'
+  | 'RECOVERY_TASK_RESTARTED'
+  | 'RECOVERY_REQUIRES_REVIEW'
+  | 'RECOVERY_COMPLETED'
+  | 'RECOVERY_FAILED'
 
 export interface ContinuityEvent {
   runId: string
@@ -163,6 +178,8 @@ const isPlaceholder = (sessionId: string): boolean => sessionId.startsWith('pend
 function endingOf(d: Dispatch): ContinuityEventType {
   if (d.outcome === 'succeeded') return 'ATTEMPT_COMPLETED'
   if (d.outcome === 'failed') return 'ATTEMPT_FAILED'
+  // A person gave up tracking this one; it is not a runtime that was lost, and recovery skips it.
+  if (d.closedBy === 'abandon') return 'ATTEMPT_ABANDONED'
   if (d.workerState === 'outcome_unknown') return 'ATTEMPT_LOST'
   return 'ATTEMPT_EXITED'
 }

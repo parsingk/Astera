@@ -95,16 +95,20 @@ describe('ContinuityJournal', () => {
     j.close()
   })
 
-  it('deleteRun removes that run’s events and checkpoints only', () => {
+  it('deleteRun removes that run’s events, checkpoints and recovery actions only', () => {
     const j = new ContinuityJournal(file())
     j.append([ev('JOB_RUN_STARTED', 'a', 'run_1'), ev('JOB_RUN_STARTED', 'b', 'run_2')])
     j.saveCheckpoint({ runId: 'run_1', taskId: 't', dispatchId: 'd1', kind: 'baseline', at: 'x', state: {} as never, gitHead: null, worktreePath: null, nativeSessionId: null, handoffRef: null })
     j.saveCheckpoint({ runId: 'run_2', taskId: 't', dispatchId: 'd2', kind: 'baseline', at: 'x', state: {} as never, gitHead: null, worktreePath: null, nativeSessionId: null, handoffRef: null })
+    j.startRecoveryAction({ runId: 'run_1', taskId: 't', dispatchId: 'd1', strategy: 'redispatch', class: 'safe', reason: 'r', at: 'x' })
+    j.startRecoveryAction({ runId: 'run_2', taskId: 't', dispatchId: 'd2', strategy: 'redispatch', class: 'safe', reason: 'r', at: 'x' })
     j.deleteRun('run_1')
     expect(j.eventsFor('run_1')).toEqual([])
     expect(j.eventsFor('run_2')).toHaveLength(1)
     expect(j.latestCheckpointFor('d1')).toBeNull()
     expect(j.latestCheckpointFor('d2')).not.toBeNull()
+    expect(j.recoveryActionsFor('run_1')).toEqual([])
+    expect(j.recoveryActionsFor('run_2')).toHaveLength(1)
     j.close()
   })
 
@@ -119,6 +123,115 @@ describe('ContinuityJournal', () => {
     const names = await fs.readdir(dir)
     expect(names.some((n) => n.startsWith('continuity.sqlite.corrupt-'))).toBe(true)
     expect(logs.some((l) => l.includes('moved aside'))).toBe(true)
+    j.close()
+  })
+})
+
+describe('ContinuityJournal schema 2', () => {
+  it('creates at version 2 and reports itself usable', () => {
+    const j = new ContinuityJournal(file())
+    expect(j.usable).toBe(true)
+    expect(j.schemaVersion()).toBe(2)
+    j.close()
+  })
+
+  it('migrates a version 1 file in place, keeping its rows', () => {
+    const j1 = new ContinuityJournal(file())
+    j1.append([ev('JOB_RUN_STARTED', 'a')])
+    // pretend this file was written by the previous release
+    j1.setSchemaVersionForTest(1)
+    j1.close()
+    const j2 = new ContinuityJournal(file())
+    expect(j2.schemaVersion()).toBe(2)
+    expect(j2.eventsFor('run_1')).toHaveLength(1)
+    expect(j2.recoveryActionsFor('run_1')).toEqual([])
+    j2.close()
+  })
+
+  it('refuses a file from a newer build instead of touching it', () => {
+    const j1 = new ContinuityJournal(file())
+    j1.setSchemaVersionForTest(99)
+    j1.close()
+    const logs: string[] = []
+    const j2 = new ContinuityJournal(file(), { log: (m) => logs.push(m) })
+    expect(j2.usable).toBe(false)
+    expect(j2.recovered).toBe(false) // the file is intact, not moved aside
+    expect(j2.append([ev('JOB_RUN_STARTED', 'b')])).toBe(0)
+    expect(logs.some((l) => l.includes('newer'))).toBe(true)
+    j2.close()
+  })
+
+  // `CREATE TABLE IF NOT EXISTS` is not a no-op against a file whose future build renamed or dropped
+  // one of these tables: it silently creates an empty one of ours beside it. So the version has to be
+  // read before the schema is applied, not after.
+  it('leaves a newer-version file its own tables, creating none of ours', async () => {
+    const { DatabaseSync } = await import('node:sqlite')
+    const raw = new DatabaseSync(file())
+    raw.exec('CREATE TABLE schema_meta (version INTEGER NOT NULL)')
+    raw.prepare('INSERT INTO schema_meta (version) VALUES (?)').run(99)
+    raw.exec('CREATE TABLE journal_entries (entry_id TEXT PRIMARY KEY)') // what version 99 renamed it to
+    raw.close()
+
+    const j = new ContinuityJournal(file())
+    expect(j.usable).toBe(false)
+    expect(j.schemaVersion()).toBe(99)
+    j.close()
+
+    const after = new DatabaseSync(file())
+    const tables = (after.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[])
+      .map((r) => r.name)
+    after.close()
+    expect(tables).toContain('journal_entries')
+    expect(tables).not.toContain('journal_events')
+    expect(tables).not.toContain('checkpoints')
+    expect(tables).not.toContain('recovery_actions')
+  })
+
+  it('records a recovery action and closes it', () => {
+    const j = new ContinuityJournal(file())
+    const row = j.startRecoveryAction({
+      runId: 'run_1',
+      taskId: 'tsk_1',
+      dispatchId: 'dsp_1',
+      strategy: 'resume-native',
+      class: 'safe',
+      reason: 'the provider session can be resumed',
+      at: '2026-09-09T10:00:00.000Z'
+    })
+    expect(row.status).toBe('selected')
+    j.finishRecoveryAction(row.recoveryActionId, 'completed', '2026-09-09T10:00:01.000Z', { newDispatchId: 'dsp_2' })
+    const [stored] = j.recoveryActionsFor('run_1')
+    expect(stored).toMatchObject({ status: 'completed', strategy: 'resume-native', details: { newDispatchId: 'dsp_2' } })
+    expect(stored.completedAt).not.toBeNull()
+    j.close()
+  })
+
+  it('returns the first checkpoint of a dispatch, not the latest', () => {
+    const j = new ContinuityJournal(file())
+    const row = (at: string, gitHead: string) =>
+      j.saveCheckpoint({
+        runId: 'run_1', taskId: 'tsk_1', dispatchId: 'dsp_1', kind: 'attempt-started', at,
+        state: {} as never, gitHead, worktreePath: 'D:/wt', nativeSessionId: null, handoffRef: null
+      })
+    row('2026-09-09T10:00:00.000Z', 'aaa')
+    row('2026-09-09T10:05:00.000Z', 'bbb')
+    expect(j.firstCheckpointFor('dsp_1')?.gitHead).toBe('aaa')
+    expect(j.latestCheckpointFor('dsp_1')?.gitHead).toBe('bbb')
+    expect(j.firstCheckpointFor('dsp_9')).toBeNull()
+    j.close()
+  })
+
+  it('sweeps the rows of runs the projection no longer has', () => {
+    const j = new ContinuityJournal(file())
+    j.append([ev('JOB_RUN_STARTED', 'a', 'run_1'), ev('JOB_RUN_STARTED', 'b', 'run_2')])
+    j.startRecoveryAction({
+      runId: 'run_2', taskId: 't', dispatchId: 'd', strategy: 'review', class: 'review',
+      reason: 'r', at: '2026-09-09T10:00:00.000Z'
+    })
+    expect(j.sweepOrphans(new Set(['run_1']))).toBe(1)
+    expect(j.eventsFor('run_2')).toEqual([])
+    expect(j.recoveryActionsFor('run_2')).toEqual([])
+    expect(j.eventsFor('run_1')).toHaveLength(1)
     j.close()
   })
 })

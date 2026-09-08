@@ -80,6 +80,10 @@ export interface OrchServerDeps {
     terminalCwd?: string
     terminalProvider?: Provider
     terminalAccountId?: string
+    /** Set only by recovery (main/recovery/execute.ts) — this wrapper forwards it straight through
+     *  to OrchCoordinator.startWorker, where the reason it exists is documented. Nothing else in this
+     *  file reads it. */
+    resume?: { nativeSessionId?: string; briefing?: string }
   }): Promise<{ sessionId: string; cwd: string; specPath: string }>
   releaseWorker(a: { dispatchId: string }): Promise<void>
   /** 그 세션의 롤링 체인을 버린다 — **세션은 죽이지 않는다**(releaseWorker 와 그 점이 다르다).
@@ -233,6 +237,10 @@ export interface OrchServerDeps {
    *  injected (existing tests and the like) logging is skipped — optional for the same reason as
    *  now?. */
   log?(message: string): void
+  /** Job Continuity: a worker Dispatch just closed without an outcome, so its Task is stranded.
+   *  The app's wiring always injects it and decides inside whether there is anything to do — the
+   *  Job Continuity toggle is read there, not here. Optional so tests can leave it out. */
+  onDispatchLost?(a: { dispatchId: string }): void
 }
 
 export interface OrchServer {
@@ -1149,9 +1157,12 @@ export async function handleCommand(
         })
       } catch (e) {
         // Failure rollback — this is the server's transaction handling, not a pure-layer transition
-        // rule. Calling closeDispatch alone would pin the Task at dispatched forever: there is no
-        // blocked entry in ALLOWED.dispatched (core/orchestration/types.ts) so no Gate can catch it
-        // either, and dispatched Tasks do not show up in the --ready list — leaving no way to retry.
+        // rule. Calling closeDispatch alone would leave the Task at dispatched, and the --ready list
+        // does not show those, so nothing would pick it up on its own. A Gate can reach it now:
+        // recovery added the dispatched -> blocked edge to ALLOWED (core/orchestration/types.ts) and
+        // main/recovery/execute.ts opens exactly that Gate when startWorker fails on it. But that is
+        // for a lost worker with nobody waiting on an answer; here a caller is, so putting the Task
+        // back where it was needs no question of anyone.
         // So this removes the dispatch from the array entirely and restores the Task directly to its
         // pre-openDispatch status. It also leaves no bogus status message (recording "ended without
         // reporting" when the session never even existed) — the cause of the failure is carried in
@@ -1242,7 +1253,9 @@ export async function handleCommand(
         dispatches: deps
           .getState()
           .dispatches.map((x) =>
-            x.id === d.id ? { ...x, workerState: 'stopped' as const, endedAt: now } : x
+            x.id === d.id
+              ? { ...x, workerState: 'stopped' as const, endedAt: now, closedBy: 'stop' as const }
+              : x
           )
       })
       return okBody({ stopped: d.id })
@@ -1256,7 +1269,9 @@ export async function handleCommand(
       await deps.setState({
         ...s,
         dispatches: s.dispatches.map((x) =>
-          x.id === d.id ? { ...x, workerState: 'outcome_unknown' as const, endedAt: now } : x
+          x.id === d.id
+            ? { ...x, workerState: 'outcome_unknown' as const, endedAt: now, closedBy: 'abandon' as const }
+            : x
         )
       })
       // 이 명령은 아무 프로세스도 건드리지 않으므로 그 세션은 살아 있을 수 있다 — Dispatch 는 닫혔고
@@ -1727,6 +1742,13 @@ export async function handleExit(
   // 이미 약속하고 있다.
   if (!closed.review || task?.status !== 'reviewing') {
     await deps.setState(r.state)
+    // `closedBy` is always absent here today: closeDispatch only matches a Dispatch with no
+    // `endedAt`, and all three writers that set `closedBy` (worker-stop, worker-abandon,
+    // run-pause) set `endedAt` in the same object — a person-closed Dispatch never reaches this
+    // line. The branch stays as defence in depth, because it is the last place that can refuse:
+    // a future writer that sets `closedBy` without `endedAt` would otherwise hand a deliberately
+    // closed worker to recovery, which is the one thing recovery must never restart.
+    if (!closed.closedBy) deps.onDispatchLost?.({ dispatchId: closed.id })
     return
   }
   const gated = blockForReview(

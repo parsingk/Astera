@@ -38,7 +38,18 @@ export interface CoordinatorDeps {
     accountId: string
     cwd: string
     bypassPermissions?: boolean
-    initialPrompt: string
+    /** Optional because a codex resume (below) carries its phrase as resumePrompt instead — the two
+     *  are mutually exclusive per call, never both set (see the spawn call in startWorker). Every
+     *  other caller — an ordinary start, and a claude resume — still sets this. */
+    initialPrompt?: string
+    /** Set together with resumePrompt/resumeSessionId by a resumed startWorker call (see `resume`
+     *  below) — claude takes the resume phrase as this positional prompt after `--resume <id>`
+     *  (core/sessions/commands.ts); codex takes it as `resumePrompt` instead. Both already exist on
+     *  SessionManager.spawn. */
+    resumeSessionId?: string
+    /** codex's own field for the resume phrase — `codex resume <id> <resumePrompt>`
+     *  (core/sessions/commands.ts). Unset for claude, which takes the phrase as initialPrompt instead. */
+    resumePrompt?: string
     /** Title of the worker tab = task.title. Deliberately not optional — the coordinator always has
      *  a title (it is a required argument of startWorker), and if it were optional the wiring could
      *  omit it and still compile. */
@@ -119,6 +130,17 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 /** specPath is an absolute path normalized to forward slashes (see startWorker below) */
 export const launchPrompt = (specPath: string): string =>
   `Read ${specPath} and follow the instructions in it`
+
+/** What a resumed worker is told. The conversation is still there — `claude --resume` / `codex resume`
+ *  bring it back — so this does not repeat the task; it points at the spec file, which the recovery
+ *  path has just rewritten, and it restates the reporting command because the **dispatch id is new**:
+ *  the attempt the agent remembers is closed, and a report against it would be refused.
+ *
+ *  No character from LAUNCH_FORBIDDEN appears here: codex passes this as a CLI argument. */
+export const resumeWorkerPrompt = (specPath: string, taskId: string, dispatchId: string): string =>
+  `Continue this task. Your instructions are at ${specPath} — read it again, including the resume ` +
+  `briefing at the end if one is there. When the work is finished, report exactly once with ` +
+  `astera send --type worker_done --task-id ${taskId} --dispatch-id ${dispatchId}.`
 
 /** 워커가 일할 폴더에서 지식 파일을 모은다.
  *
@@ -506,6 +528,10 @@ export class OrchCoordinator {
     terminalCwd?: string
     terminalProvider?: Provider
     terminalAccountId?: string
+    /** Set by recovery (P1 design §6). `nativeSessionId` makes this a provider-native resume rather
+     *  than a fresh conversation; `briefing` is appended to the spec file before the agent is
+     *  launched, which is the Smart Resume path's whole difference from a plain re-dispatch. */
+    resume?: { nativeSessionId?: string; briefing?: string }
   }): Promise<{ sessionId: string; cwd: string; specPath: string }> {
     const actual = this.deps.accountProvider(a.accountId)
     if (actual === null) throw new Error(`unknown account: ${a.accountId}`)
@@ -542,7 +568,14 @@ export class OrchCoordinator {
     // and `\` is the shell's escape character (the lesson the sh shuttle taught — the same rule as
     // forSh in shuttle.ts). `C:/Users/...` works with both the Windows API and bash. specPath itself
     // (the path the file is written to) is left as is.
-    const prompt = launchPrompt(specPath.replace(/\\/g, '/'))
+    // A provider-native resume (a.resume.nativeSessionId) is told a different, shorter phrase
+    // (resumeWorkerPrompt) instead of the launch prompt — computed here, before the FORBIDDEN check
+    // below, so that check runs against whichever one is actually used. It carries the same specPath
+    // as the launch prompt, so the same win32 cmd.exe /c risk applies to it.
+    const resumeSessionId = a.resume?.nativeSessionId
+    const prompt = resumeSessionId
+      ? resumeWorkerPrompt(specPath.replace(/\\/g, '/'), a.taskId, a.dispatchId)
+      : launchPrompt(specPath.replace(/\\/g, '/'))
     const forbidden = prompt.match(LAUNCH_FORBIDDEN)
     if (forbidden)
       throw new Error(
@@ -617,6 +650,15 @@ export class OrchCoordinator {
         }),
       'utf8'
     )
+    // Recovery's briefing (a.resume.briefing) is appended after the spec file is written and before
+    // the agent is launched — this is the Smart Resume path's whole difference from a plain
+    // re-dispatch, and the resume prompt above tells the agent to read it there.
+    if (a.resume?.briefing)
+      await fs.appendFile(
+        specPath,
+        `\n---\n## Resume briefing (assembled by the app — do not delete)\n\n${a.resume.briefing}\n`,
+        'utf8'
+      )
 
     let finalSessionId = a.terminal ?? ''
     if (a.terminal) {
@@ -651,7 +693,6 @@ export class OrchCoordinator {
       const spawned = await this.deps.spawnSession({
         accountId: a.accountId,
         cwd,
-        initialPrompt: prompt,
         // The tab title is task.title (no UI change, only the title) — without it the worker tab
         // comes up under the worktree basename and the user cannot tell which task it is
         title: a.title,
@@ -671,7 +712,12 @@ export class OrchCoordinator {
         rollPrompt:
           `Continue the work. When it is finished, report exactly once as the reporting obligation ` +
           `in your spec file says, with astera send --type worker_done --task-id ${a.taskId} ` +
-          `--dispatch-id ${a.dispatchId}.`
+          `--dispatch-id ${a.dispatchId}.`,
+        ...(resumeSessionId ? { resumeSessionId } : {}),
+        // codex takes the resume phrase as its own argument after `resume <id>`; claude takes it as
+        // the positional prompt after `--resume <id>` (core/sessions/commands.ts) — so claude gets it
+        // as initialPrompt, same as an ordinary (non-resuming) start.
+        ...(resumeSessionId && a.provider === 'codex' ? { resumePrompt: prompt } : { initialPrompt: prompt })
       })
       finalSessionId = spawned.id
       promptWrite('confirmed', 'argv')

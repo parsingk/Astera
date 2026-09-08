@@ -251,7 +251,7 @@ export function pauseSchedule(s: OrchState, templateId: string, now: string): Re
       // 그래프가 거짓말을 한다(재시작 정리가 그런 Dispatch 를 outcome_unknown 으로 읽는다).
       dispatches: s.dispatches.map((d) =>
         taskIds.has(d.taskId) && !d.outcome && !d.endedAt
-          ? { ...d, workerState: 'stopped' as const, endedAt: now }
+          ? { ...d, workerState: 'stopped' as const, endedAt: now, closedBy: 'pause' as const }
           : d
       )
     },
@@ -565,6 +565,19 @@ export function applyValidationResult(
     now
   ).state
   return ok(state, next)
+}
+
+/** Sends a Task that already produced output into its check without a worker report (P1 design §6).
+ *
+ *  Recovery uses it for the one case where the work survived but the report did not: the worker
+ *  committed and was then lost, so the check is what can judge the result (spec §16 Example E).
+ *  Deliberately not `applyWorkerDone`: that records a report this app never received. */
+export function beginValidation(s: OrchState, a: { taskId: string }, now: string): Res<Task> {
+  const task = s.tasks.find((t) => t.id === a.taskId)
+  if (!task) return err(`unknown task: ${a.taskId}`)
+  const moved = moveTask(task, 'validating', now)
+  if (!moved) return err(`cannot begin validation from status: ${task.status}`)
+  return ok({ ...s, tasks: replace(s.tasks, moved) }, moved)
 }
 
 /** 검증을 아예 돌릴 수 없을 때. 조용히 통과시키면 "검증됨"과 "검증 못 함"이 화면에서 같아지고,

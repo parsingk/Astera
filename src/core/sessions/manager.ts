@@ -4,6 +4,7 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { Account, Provider, SessionInfo, ScheduleConfig } from '../types'
 import { defaultSessionTitle, normalizeSessionTitle } from './title'
+import { findGitBash } from './gitBash'
 import {
   descriptorOf,
   isAmbientDir,
@@ -191,6 +192,14 @@ export class SessionManager {
     // capture paths mix this session's statusLine and hook output into another instance's files.
     // Same rule as configDirEnv on the line above, and as runAccountLogout in main/core.ts.
     for (const k of MANAGED_ENV_KEYS) delete env[k]
+    // Windows only: CLAUDE_CODE_GIT_BASH_PATH exists for Git for Windows, and on other platforms the
+    // agent's bash is the system one. The agent's hooks and statusLine need a real Git Bash when
+    // available; without one the statusLine capture never runs and the app never learns this session's
+    // provider id or its usage (see findGitBash). The value the user set is never overwritten.
+    if (process.platform === 'win32') {
+      const gitBash = findGitBash(env, existsSync)
+      if (gitBash) env.CLAUDE_CODE_GIT_BASH_PATH = gitBash
+    }
     if (sl) {
       env.ASTERA_STATUSLINE_OUT = sl.outPath
       env.ASTERA_STATUSLINE_ORIGINAL = sl.originalCommand ?? ''
