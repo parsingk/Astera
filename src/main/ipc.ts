@@ -1064,7 +1064,7 @@ export function registerIpc(
    *
    * No-ops when the server has never come up (`orch` is null — nothing has a skillsPath yet to install
    * from) or when every toggle is off (`stubs` comes out empty). Safe to call redundantly — that is
-   * the point of calling it from four places: installStub already skips a write once content matches
+   * the point of calling it from five places: installStub already skips a write once content matches
    * (see stub.ts), so the worst repeated cost is a per-account file read, not a per-account write.
    */
   const installStubsForCurrentToggles = (): void => {
@@ -1113,7 +1113,8 @@ export function registerIpc(
    *  starts immediately (sessions created after that get the CLI — environment variables are fixed
    *  at spawn time, so sessions already running cannot). If it is already up, this does nothing.
    *  Turning a toggle off does not close the server — `enabled()`/`trackingEnabled()`/
-   *  `browserEnabled()` are read on every request, so CLI calls after that are rejected with a 409. */
+   *  `browserEnabled()`/`handoffEnabled()` are read on every request, so CLI calls after that are
+   *  rejected with a 409. */
   const startOrch = async (): Promise<void> => {
     // orch is assigned last (after the port and files are ready), so re-entering in that window would
     // start two servers — the first loses its reference and keeps holding the port, and the info file
