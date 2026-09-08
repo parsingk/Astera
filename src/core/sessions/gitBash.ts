@@ -7,7 +7,11 @@
 //
 // Pure: the filesystem arrives as `probe`, the environment as `env`. Windows-shaped, because that is
 // where the problem is; on other platforms the probe simply finds nothing and null is returned.
-import path from 'node:path'
+// win32 semantics on purpose, on every host: CLAUDE_CODE_GIT_BASH_PATH is a Windows-only concept, so
+// the separators and the delimiter this parses are Windows' ones wherever the tests happen to run.
+// The plain 'node:path' takes the host's semantics, which turned these tests red on the macOS and
+// Linux legs of the CI matrix while passing on a Windows developer machine.
+import { win32 as path } from 'node:path'
 
 /** Where a Git for Windows install keeps the bash that hooks need, relative to the install root. */
 const BIN_BASH = path.join('bin', 'bash.exe')
