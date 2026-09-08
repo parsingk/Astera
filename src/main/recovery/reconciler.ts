@@ -92,7 +92,9 @@ export class RecoveryReconciler {
     }
   }
 
-  private async recoverOne(seed: LostAttemptSeed): Promise<void> {
+  /** Carries one seed all the way through, or returns false having done nothing at all — the caller
+   *  counts only what it acted on. */
+  private async recoverOne(seed: LostAttemptSeed): Promise<boolean> {
     const { runId, taskId, dispatch } = seed
     const now = this.deps.now()
     const journal = this.deps.journal
@@ -104,6 +106,21 @@ export class RecoveryReconciler {
       events === null
         ? null
         : events.some((e) => e.type === 'PROMPT_WRITE_CONFIRMED' && e.dispatchId === dispatch.id)
+
+    // The journal witnesses every attempt it was on for (ATTEMPT_START_REQUESTED at the very least),
+    // so rows that name this dispatch are the evidence recovery reasons from. None of them, on a read
+    // that worked, means the attempt happened while the toggle was off or before this journal file
+    // existed — there is nothing to reason from, and guessing would restart work nobody recorded.
+    // This is what bounds the first sweep after the toggle is switched on: store.load()'s restart
+    // cleanup closes every open Dispatch as outcome_unknown, so without it every Task any past crash
+    // ever stranded inside the 30-day TTL would be decided from an empty record.
+    if (events !== null && !events.some((e) => e.dispatchId === dispatch.id)) {
+      this.deps.log(
+        `recovery: no journal rows for dispatch ${dispatch.id} — the attempt predates this journal, leaving it alone`
+      )
+      return false
+    }
+
     const checkpoint = this.note('firstCheckpointFor', null as CheckpointRow | null, () =>
       journal.firstCheckpointFor(dispatch.id)
     )
@@ -118,7 +135,7 @@ export class RecoveryReconciler {
       // returned rather than thrown, the same failure shape executeRecovery uses for an unknown
       // task or run, and reconcileOne has nothing here to catch a throw with.
       this.deps.log(`recovery: task ${taskId} or its run vanished before it could be recovered`)
-      return
+      return false
     }
 
     const attempt: LostAttempt = {
@@ -223,6 +240,7 @@ export class RecoveryReconciler {
         journal.finishRecoveryAction(action.recoveryActionId, result.ok ? 'completed' : 'failed', now, details)
       )
     }
+    return true
   }
 
   /** Sweeps every candidate once, one at a time — two recoveries spawning at once would fight over
@@ -234,7 +252,10 @@ export class RecoveryReconciler {
    *  stop or abandon a worker further down the agenda while an earlier one is still being recovered.
    *  Re-checking against a fresh `candidates(getState())` right before acting is what stops that
    *  Dispatch from being restarted behind their back; a seed no longer present there is skipped
-   *  without counting, and it is the fresh seed that is acted on, not the stale one. */
+   *  without counting, and it is the fresh seed that is acted on, not the stale one.
+   *
+   *  An attempt recoverOne itself declines (no journal rows name it) is not counted either — it
+   *  returns before anything is journaled or executed. */
   async reconcileAll(): Promise<number> {
     let count = 0
     for (const seed of candidates(this.deps.getState())) {
@@ -244,8 +265,7 @@ export class RecoveryReconciler {
       // for the next trigger, not counted as acted on.
       if (!hasRoom(this.deps.getState(), fresh.runId)) continue
       try {
-        await this.recoverOne(fresh)
-        count++
+        if (await this.recoverOne(fresh)) count++
       } catch (err) {
         this.deps.log(`recovery: reconcile failed for dispatch ${fresh.dispatch.id}: ${String(err)}`)
       }

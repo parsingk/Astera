@@ -64,7 +64,13 @@ describe('candidates', () => {
 
 /** A reconciler whose journal, git and executor are all recorded fakes. */
 function harness(
-  over: { git?: Partial<GitFacts>; executeFails?: boolean; executeThrows?: boolean; eventsThrow?: boolean } = {}
+  over: {
+    git?: Partial<GitFacts>
+    executeFails?: boolean
+    executeThrows?: boolean
+    eventsThrow?: boolean
+    events?: Array<{ type: string; dispatchId: string }>
+  } = {}
 ) {
   let current = state()
   const appended: string[] = []
@@ -75,7 +81,7 @@ function harness(
     append: (events: Array<{ type: string }>) => { for (const e of events) appended.push(e.type); return events.length },
     eventsFor: () => {
       if (over.eventsThrow) throw new Error('journal locked')
-      return [{ type: 'PROMPT_WRITE_CONFIRMED', dispatchId: 'dsp_1' }] as never
+      return (over.events ?? [{ type: 'PROMPT_WRITE_CONFIRMED', dispatchId: 'dsp_1' }]) as never
     },
     firstCheckpointFor: () => ({ gitHead: 'aaa' }) as never,
     startRecoveryAction: (r: { strategy: string }) => {
@@ -120,6 +126,16 @@ describe('RecoveryReconciler', () => {
     const h = harness({ eventsThrow: true })
     expect(await h.r.reconcileAll()).toBe(1)
     expect(h.executed).toEqual([{ dispatchId: 'dsp_1', strategy: 'review' }])
+  })
+
+  // The first boot after the toggle is switched on finds every Task a past crash ever stranded, all
+  // the way back through the 30-day TTL, and the journal holds nothing about any of them.
+  it('leaves alone an attempt the journal has no row for', async () => {
+    const h = harness({ events: [{ type: 'ATTEMPT_START_REQUESTED', dispatchId: 'dsp_elsewhere' }] })
+    expect(await h.r.reconcileAll()).toBe(0)
+    expect(h.executed).toEqual([])
+    expect(h.appended).toEqual([])
+    expect(h.actions).toEqual([])
   })
 
   it('a failed execution is journaled as failed', async () => {
@@ -167,7 +183,12 @@ describe('RecoveryReconciler', () => {
     const executed: string[] = []
     const journal = {
       append: () => 0,
-      eventsFor: () => [] as never,
+      // both attempts are ones the journal witnessed — otherwise recoverOne declines them outright
+      eventsFor: () =>
+        [
+          { type: 'ATTEMPT_START_REQUESTED', dispatchId: 'dsp_1' },
+          { type: 'ATTEMPT_START_REQUESTED', dispatchId: 'dsp_2' }
+        ] as never,
       firstCheckpointFor: () => null,
       startRecoveryAction: () => ({ recoveryActionId: 'rec_1' }) as never,
       finishRecoveryAction: () => {}
