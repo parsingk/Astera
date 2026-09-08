@@ -86,10 +86,14 @@ export class RecoveryReconciler {
     const state = this.deps.getState()
     const task = state.tasks.find((t) => t.id === taskId)
     const run = task && state.runs.find((r) => r.id === task.runId)
-    if (!task || !run)
+    if (!task || !run) {
       // candidates() built this seed from a Task whose runId resolved to a live Run; both should
-      // still be there a moment later. If not, there is nothing left to recover.
-      throw new Error(`recovery: task ${taskId} or its run vanished before it could be recovered`)
+      // still be there a moment later. If not, there is nothing left to recover — logged and
+      // returned rather than thrown, the same failure shape executeRecovery uses for an unknown
+      // task or run, and reconcileOne has nothing here to catch a throw with.
+      this.deps.log(`recovery: task ${taskId} or its run vanished before it could be recovered`)
+      return
+    }
 
     const attempt: LostAttempt = {
       runId,
@@ -197,15 +201,24 @@ export class RecoveryReconciler {
 
   /** Sweeps every candidate once, one at a time — two recoveries spawning at once would fight over
    *  the concurrency limit. Returns how many attempts it acted on, not how many it fixed: a failure
-   *  still counts, and is isolated so it cannot stop the rest of the sweep. */
+   *  still counts, and is isolated so it cannot stop the rest of the sweep.
+   *
+   *  The initial list is only the sweep's agenda, not a fact still true by the time it is reached —
+   *  each recovery awaits an executor that takes real time and changes the state, so a person can
+   *  stop or abandon a worker further down the agenda while an earlier one is still being recovered.
+   *  Re-checking against a fresh `candidates(getState())` right before acting is what stops that
+   *  Dispatch from being restarted behind their back; a seed no longer present there is skipped
+   *  without counting, and it is the fresh seed that is acted on, not the stale one. */
   async reconcileAll(): Promise<number> {
     let count = 0
     for (const seed of candidates(this.deps.getState())) {
+      const fresh = candidates(this.deps.getState()).find((c) => c.dispatch.id === seed.dispatch.id)
+      if (!fresh) continue
       try {
-        await this.recoverOne(seed)
+        await this.recoverOne(fresh)
         count++
       } catch (err) {
-        this.deps.log(`recovery: reconcile failed for dispatch ${seed.dispatch.id}: ${String(err)}`)
+        this.deps.log(`recovery: reconcile failed for dispatch ${fresh.dispatch.id}: ${String(err)}`)
       }
     }
     return count

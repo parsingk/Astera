@@ -143,6 +143,39 @@ describe('RecoveryReconciler', () => {
     expect(h.appended).toContain('RECOVERY_FAILED')
     expect(h.logs.some((l) => l.includes('executor exploded'))).toBe(true)
   })
+
+  it('re-checks a candidate before acting on it, so a worker stopped mid-sweep is left alone', async () => {
+    const second = dispatch({ id: 'dsp_2', taskId: 'tsk_2', sessionId: 'sess-2' })
+    let current = state({ tasks: [task(), task({ id: 'tsk_2' })], dispatches: [dispatch(), second] })
+    const executed: string[] = []
+    const journal = {
+      append: () => 0,
+      eventsFor: () => [] as never,
+      firstCheckpointFor: () => null,
+      startRecoveryAction: () => ({ recoveryActionId: 'rec_1' }) as never,
+      finishRecoveryAction: () => {}
+    }
+    const r = new RecoveryReconciler({
+      getState: () => current,
+      setState: async () => {},
+      journal: journal as never,
+      readGitFacts: async () => ({ exists: true, head: 'aaa', dirty: false, inProgress: null, conflicts: false, branch: 'main' }),
+      smartResume: () => false,
+      execute: async (a: { attempt: { dispatchId: string } }) => {
+        executed.push(a.attempt.dispatchId)
+        // while this recovery runs, a person stops the worker the sweep has not reached yet
+        current = {
+          ...current,
+          dispatches: current.dispatches.map((d) => (d.id === 'dsp_2' ? { ...d, closedBy: 'stop' as const } : d))
+        }
+        return { ok: true as const }
+      },
+      log: () => {},
+      now: () => NOW
+    } as never)
+    expect(await r.reconcileAll()).toBe(1)
+    expect(executed).toEqual(['dsp_1'])
+  })
 })
 
 describe('the seam with the real store', () => {
