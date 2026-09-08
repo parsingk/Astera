@@ -2477,6 +2477,10 @@ describe('beginValidation', () => {
     const validating = unwrap<Task>(beginValidation(s, { taskId: s.tasks[0].id }, LATER)).state
     expect(beginValidation(validating, { taskId: s.tasks[0].id }, LATEST).ok).toBe(true) // already there: no-op
     expect(beginValidation(s, { taskId: 'nope' }, LATER)).toEqual({ ok: false, error: 'unknown task: nope' })
+    // a Task that never reached dispatched cannot enter its check
+    const pending = { ...s, tasks: [{ ...s.tasks[0], status: 'pending' as const }] }
+    const refused = beginValidation(pending, { taskId: s.tasks[0].id }, LATER)
+    expect(refused.ok).toBe(false)
   })
 })
 
