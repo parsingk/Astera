@@ -151,7 +151,18 @@ export class PtyRegistry {
     return [...this.entries.values()].filter((e) => e.alive).length
   }
 
+  /** Ends every live session. One that refuses to die must not keep the others alive: on win32
+   *  node-pty's ConPTY kill runs a helper process to enumerate the console, and that helper fails
+   *  under ELECTRON_RUN_AS_NODE, so the throw is a real path rather than a defensive one. The Host
+   *  calls this on its way out, and an escaping throw left it running with its sessions still up. */
   killAll(): void {
-    for (const e of this.entries.values()) if (e.alive) e.pty.kill()
+    for (const e of this.entries.values()) {
+      if (!e.alive) continue
+      try {
+        e.pty.kill()
+      } catch (err) {
+        this.deps.log(`pty ${e.id} could not be killed: ${String(err)}`)
+      }
+    }
   }
 }

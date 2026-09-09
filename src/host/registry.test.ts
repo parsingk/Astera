@@ -146,6 +146,26 @@ describe('PtyRegistry', () => {
     expect(h.r.list()).toEqual([{ id: 'p1', pid: p.pid, meta: meta(), alive: false }])
   })
 
+  // Measured on win32: node-pty's ConPTY kill runs a helper process to enumerate the console's
+  // processes, and that helper fails with "AttachConsole failed" under ELECTRON_RUN_AS_NODE. The throw
+  // reaches here. Before this guard it ended the loop, so the Host kept the rest of its sessions alive
+  // and never reached the exit that follows killAll.
+  it('kills the rest when one session refuses to die', () => {
+    const bad = fakePty(1)
+    bad.kill = () => {
+      throw new Error('AttachConsole failed')
+    }
+    const good = fakePty(2)
+    const queue = [bad, good]
+    const logs: string[] = []
+    const r = new PtyRegistry({ spawn: () => queue.shift() as RegistryPty, log: (m) => logs.push(m) })
+    r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    r.open({ id: 'p2', file: 'cmd.exe', args: [], opts, meta: meta() })
+    expect(() => r.killAll()).not.toThrow()
+    expect(good.killed).toBe(true)
+    expect(logs.some((m) => m.includes('p1') && m.includes('AttachConsole'))).toBe(true)
+  })
+
   it('a scrollback of zero keeps almost nothing, rather than turning the cap off', () => {
     const p = fakePty()
     const h = registry({ pty: p, scrollback: 0 })
