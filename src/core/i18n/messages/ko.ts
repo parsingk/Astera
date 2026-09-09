@@ -1139,7 +1139,7 @@ export const ko = {
   // 복구가 왜 그렇게 정했는지. Gate 의 질문과 히스토리 줄이 같은 문장을 쓴다 —
   // core/recovery/decide.ts 의 표가 줄마다 이 키 하나를 고른다.
   'jobs.recovery.reason.worktreeGone': '워크트리가 사라져서 거기서는 아무것도 확인하거나 이어갈 수 없습니다',
-  'jobs.recovery.reason.operationInProgress': '워크트리에서 {operation} 이(가) 진행 중이라 자동으로 이어가면 안 됩니다',
+  'jobs.recovery.reason.operationInProgress': '워크트리에서 {operation} 작업이 진행 중이라 자동으로 이어가면 안 됩니다',
   'jobs.recovery.reason.conflicts': '워크트리에 충돌 난 파일이 있습니다',
   'jobs.recovery.reason.treeUnreadable': '워크트리를 읽지 못해서 그 상태를 하나도 믿을 수 없습니다',
   'jobs.recovery.reason.journalUnreadable': '기록을 읽지 못해서 이 시도에 대해 아무것도 믿을 수 없습니다',
