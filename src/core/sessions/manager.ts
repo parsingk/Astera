@@ -263,6 +263,13 @@ export class SessionManager {
       bypassPermissions: opts.bypassPermissions,
       schedule: opts.schedule
     }
+    return this.track(info, pty)
+  }
+
+  /** The bookkeeping half of a spawn: the live record, the two callbacks and the backpressure
+   *  accounting. `spawn` calls it for a pty it just created; `adopt` calls it for one the Host was
+   *  already running. Shared so the two can never drift apart. */
+  private track(info: SessionInfo, pty: PtyLike): SessionInfo {
     const live: LiveSession = {
       info,
       pty,
@@ -290,6 +297,46 @@ export class SessionManager {
       this.onExit?.({ sessionId: info.id, exitCode })
     })
     return { ...info }
+  }
+
+  /** Takes over a pty the Host is already running, rebuilding this session's record from the note the
+   *  app left with it (slice 2 design §7). Returns null for a note this build cannot read — a session
+   *  invented from a half-understood record would be worse than one the app admits it lost.
+   *
+   *  Deliberately does none of spawn's other work: the process exists, so there is no env to build, no
+   *  statusLine to configure and no hooks to install. The cwd is not checked either — spawn's
+   *  existsSync guard is about a directory it is about to start a process in, and refusing a session
+   *  whose folder was renamed since would orphan a process that is still running.
+   *
+   *  **The id is new, not the old one.** The app's session id is what the renderer, the orchestration
+   *  Dispatch and the transcript all key on, so reusing it would be better — but this slice does not
+   *  persist the app's own state, so nothing on this side remembers the old one. Dispatch matching
+   *  keys on the Host's pty id instead, which does survive. Not an oversight.
+   *
+   *  `schedule` is not rebuilt: it is not in the note, and it is only meaningful on the initial spawn
+   *  (its coordinator owns the timer afterwards, and that timer did not survive the restart either). */
+  adopt(a: { pty: PtyLike; restore: Record<string, unknown> }): SessionInfo | null {
+    const r = a.restore
+    const str = (k: string): string | undefined => (typeof r[k] === 'string' ? (r[k] as string) : undefined)
+    const accountId = str('accountId')
+    const cwd = str('cwd')
+    const title = str('title')
+    if (!accountId || !cwd || !title) return null
+    const info: SessionInfo = {
+      id: randomUUID(),
+      accountId,
+      cwd,
+      status: 'running',
+      title,
+      // Spread rather than assigned, because the note omits what was absent at spawn rather than
+      // carrying an undefined — so an absent key must stay absent here too.
+      ...(str('resumeSessionId') ? { resumeSessionId: str('resumeSessionId') } : {}),
+      ...(Array.isArray(r.rollAccountIds) ? { rollAccountIds: r.rollAccountIds as string[] } : {}),
+      ...(str('rollPrompt') ? { rollPrompt: str('rollPrompt') } : {}),
+      ...(typeof r.slackNotify === 'boolean' ? { slackNotify: r.slackNotify } : {}),
+      ...(typeof r.bypassPermissions === 'boolean' ? { bypassPermissions: r.bypassPermissions } : {})
+    }
+    return this.track(info, a.pty)
   }
 
   /** Arms the timer that auto-releases a pause. Re-arms if one is already set.

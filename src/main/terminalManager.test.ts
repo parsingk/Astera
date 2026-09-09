@@ -157,4 +157,36 @@ describe('TerminalManager', () => {
     const info = mgr.open('D:/p')
     expect(spawned[0].opts.meta).toEqual({ kind: 'terminal', id: info.id, restore: { projectPath: 'D:/p' } })
   })
+
+  describe('adopt', () => {
+    // After a restart the shell is already running; adopt rebuilds only the app's own record of it.
+    it('adopts a running pty and puts the terminal back', () => {
+      const { mgr } = setup()
+      const pty = new FakePty()
+      const info = mgr.adopt({ pty, restore: { projectPath: 'D:/p' } })
+      expect(info).toMatchObject({ projectPath: 'D:/p' })
+      expect(mgr.list('D:/p').map((t) => t.id)).toEqual([info!.id])
+      pty.dataCb('replayed output')
+      expect(mgr.list('D:/p')[0].buffer).toContain('replayed output')
+    })
+
+    it('an adopted terminal takes input and leaves the list when its shell dies', () => {
+      const { mgr } = setup()
+      const exited: { id: string; exitCode: number }[] = []
+      mgr.onExit = (e) => exited.push(e)
+      const pty = new FakePty()
+      const info = mgr.adopt({ pty, restore: { projectPath: 'D:/p' } })!
+      mgr.write(info.id, 'ls\r')
+      expect(pty.written).toEqual(['ls\r'])
+      pty.exitCb({ exitCode: 3 })
+      expect(exited).toEqual([{ id: info.id, exitCode: 3 }])
+      expect(mgr.list('D:/p')).toEqual([])
+    })
+
+    it('refuses a restore it cannot read', () => {
+      const { mgr } = setup()
+      expect(mgr.adopt({ pty: new FakePty(), restore: {} })).toBeNull()
+      expect(mgr.list('D:/p')).toEqual([])
+    })
+  })
 })

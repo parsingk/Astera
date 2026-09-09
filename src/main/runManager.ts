@@ -137,6 +137,16 @@ export class RunManager {
       // Only ever present when on — a non-validation run's status has no such key
       ...(opts.validation ? { validation: true as const } : {})
     }
+    return this.track(status, pty, cwd)
+  }
+
+  /** The bookkeeping half of a start: the live record, the exit promise, the opening status event and
+   *  the two callbacks. `start` calls it for a pty it just created; `adopt` calls it for one the Host
+   *  was already running. Shared so the two can never drift apart.
+   *
+   *  `cwd` is a parameter rather than a field of the status because it is not one — it is where the
+   *  process was started, which a relative path in the output resolves against (run.resolveLink). */
+  private track(status: RunStatus, pty: PtyLike, cwd: string): RunStatus {
     let settle!: () => void
     const exited = new Promise<void>((resolve) => {
       settle = resolve
@@ -167,6 +177,44 @@ export class RunManager {
       settle()
     })
     return { ...status }
+  }
+
+  /** Takes over a pty the Host is already running, rebuilding this run's record from the note the app
+   *  left with it (slice 2 design §7). Returns null for a note this build cannot read — a run invented
+   *  from a half-understood record would be worse than one the app admits it lost.
+   *
+   *  Deliberately does none of start's other work: the process exists, so there is no command to
+   *  assemble, no env to merge and no seat to claim — `seq` comes back from the note, which is the seat
+   *  this run already held. `startedAt` comes from the note for the same reason (see start's comment on
+   *  it), and the validation tag survives because decideStart's filter reads it.
+   *
+   *  **The runId is new, not the old one.** This slice does not persist the app's own state, so nothing
+   *  on this side remembers the old one; matching against the Host keys on its pty id, which survives. */
+  adopt(a: { pty: PtyLike; restore: Record<string, unknown> }): RunStatus | null {
+    const r = a.restore
+    const str = (k: string): string | undefined => (typeof r[k] === 'string' ? (r[k] as string) : undefined)
+    const projectPath = str('projectPath')
+    const projectName = str('projectName')
+    const configId = str('configId')
+    const configName = str('configName')
+    const command = str('command')
+    if (!projectPath || !projectName || !configId || !configName || !command) return null
+    const status: RunStatus = {
+      runId: randomUUID(),
+      projectPath,
+      projectName,
+      configId,
+      configName,
+      command,
+      seq: typeof r.seq === 'number' ? r.seq : 0,
+      status: 'running',
+      startedAt: typeof r.startedAt === 'number' ? r.startedAt : Date.now(),
+      ...(r.validation === true ? { validation: true as const } : {})
+    }
+    // The note carries no cwd of its own: start's is the configuration's override or the project path,
+    // and the configuration is not the manager's to read here. The project path is the fallback start
+    // itself uses, so a link in the output still resolves against the project.
+    return this.track(status, a.pty, projectPath)
   }
 
   /** ▶ on a configuration that is already live: stop that run, wait for its process tree to actually

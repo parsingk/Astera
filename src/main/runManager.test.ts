@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { PtyFactory, PtyLike, PtySpawnOptions } from '../core/sessions/pty'
 import { RunManager } from './runManager'
-import type { RunConfig } from '../core/run/config'
+import type { RunConfig, RunStatus } from '../core/run/config'
 
 // node-pty 를 흉내낸다 — **종료된 pty 에 write/resize 를 부르면 던진다.** 이 더블이 그것을 no-op
 // 으로 두고 있었던 탓에, RunManager 가 끝난 실행에 resize 를 흘려보내 main 프로세스를 죽이는 결함이
@@ -124,6 +124,91 @@ describe('RunManager', () => {
     const { mgr, spawned } = setup()
     mgr.start(startOpts())
     expect(spawned[0].opts.meta?.restore).not.toHaveProperty('validation')
+  })
+
+  describe('adopt', () => {
+    const restore = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+      projectPath: 'D:/p',
+      projectName: 'p',
+      configId: 'cfg',
+      configName: 'dev',
+      command: 'npm run dev',
+      seq: 0,
+      startedAt: 1_700_000_000_000,
+      ...over
+    })
+
+    // After a restart the process is already running; adopt rebuilds only the app's own record of it.
+    it('adopts a running pty and puts the run back in the list', () => {
+      const { mgr } = setup()
+      const status = mgr.adopt({ pty: new FakePty(), restore: restore() })
+      expect(status).toMatchObject({
+        projectPath: 'D:/p',
+        configId: 'cfg',
+        command: 'npm run dev',
+        status: 'running'
+      })
+      expect(mgr.listByProject('D:/p').map((r) => r.runId)).toEqual([status!.runId])
+      expect(mgr.listActive().map((r) => r.runId)).toEqual([status!.runId])
+    })
+
+    // startedAt is a spawn-time moment nothing else writes down, so it has to come back from the note:
+    // taken as "now", a dev server that has run for a day reads as having just started, and several
+    // runs rebuilt around one restart tie-break arbitrarily instead of by real age.
+    it('keeps the startedAt the note carries instead of restarting the clock', () => {
+      const { mgr } = setup()
+      const status = mgr.adopt({ pty: new FakePty(), restore: restore() })!
+      expect(status.startedAt).toBe(1_700_000_000_000)
+    })
+
+    // Without the tag a rebuilt validation run is an ordinary one to decideStart, which would let a
+    // same-config ▶ take it over instead of leaving it to the orchestrator.
+    it('keeps the validation tag, and leaves the key off an ordinary run', () => {
+      const { mgr } = setup()
+      const validation = mgr.adopt({ pty: new FakePty(), restore: restore({ validation: true }) })!
+      expect(validation.validation).toBe(true)
+      expect(mgr.adopt({ pty: new FakePty(), restore: restore() })).not.toHaveProperty('validation')
+    })
+
+    // The seat is the run's place in its project's list; a rebuilt run has to sit back down in its own.
+    it('keeps the seat the note carries', () => {
+      const { mgr } = setup()
+      const status = mgr.adopt({ pty: new FakePty(), restore: restore({ seq: 3 }) })!
+      expect(status.seq).toBe(3)
+    })
+
+    it('an adopted run streams, reports status and settles whenExited like a started one', async () => {
+      const { mgr } = setup()
+      const datas: { runId: string; data: string }[] = []
+      const statuses: RunStatus[] = []
+      mgr.onData = (e) => datas.push(e)
+      mgr.onStatus = (s) => statuses.push(s)
+      const pty = new FakePty()
+      const status = mgr.adopt({ pty, restore: restore() })!
+      expect(statuses.map((s) => s.status)).toEqual(['running']) // the list and the badge refresh
+      pty.dataCb('listening on http://localhost:5173/\n')
+      expect(datas).toEqual([{ runId: status.runId, data: 'listening on http://localhost:5173/\n' }])
+      expect(mgr.recentOutput(status.runId)).toContain('listening on')
+      expect(mgr.get(status.runId)?.detectedUrl).toBe('http://localhost:5173/')
+      const waiting = mgr.whenExited(status.runId)
+      pty.exit(2)
+      await expect(waiting).resolves.toBe(2)
+      expect(mgr.get(status.runId)?.status).toBe('exited')
+    })
+
+    // cwdOf is what a relative path in the output is resolved against; the note carries no cwd of its
+    // own, and the project path is what start uses whenever the configuration did not override it.
+    it('resolves output paths against the project path', () => {
+      const { mgr } = setup()
+      const status = mgr.adopt({ pty: new FakePty(), restore: restore() })!
+      expect(mgr.cwdOf(status.runId)).toBe('D:/p')
+    })
+
+    it('refuses a restore it cannot read', () => {
+      const { mgr } = setup()
+      expect(mgr.adopt({ pty: new FakePty(), restore: { projectPath: 'D:/p' } })).toBeNull()
+      expect(mgr.listByProject('D:/p')).toEqual([])
+    })
   })
 
   // The constraint this feature removes. Two runs of one project — even of one configuration — live

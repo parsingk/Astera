@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 import type { Account } from '../types'
 import type { PtyFactory, PtyLike, PtySpawnOptions } from './pty'
@@ -748,6 +749,71 @@ describe('SessionManager', () => {
         title: 'Auth refactor',
         rollAccountIds: ['acc_1', 'acc_2']
       }
+    })
+  })
+
+  describe('adopt', () => {
+    // After a restart the process is already running; adopt rebuilds only the app's own record of it.
+    it('adopts a running pty and puts the session back in the list', () => {
+      const { manager } = setup()
+      const pty = new FakePty()
+      const info = manager.adopt({
+        pty,
+        restore: { accountId: account.id, cwd: 'D:/p', title: 'Auth refactor', rollAccountIds: ['acc_1'] }
+      })
+      expect(info).toMatchObject({
+        accountId: account.id,
+        cwd: 'D:/p',
+        title: 'Auth refactor',
+        status: 'running',
+        rollAccountIds: ['acc_1']
+      })
+      expect(manager.list().map((s) => s.id)).toEqual([info!.id])
+    })
+
+    it('an adopted session streams and exits like a spawned one', () => {
+      const { manager } = setup()
+      const data: string[] = []
+      let exited: number | null = null
+      manager.onData = (e) => data.push(e.data)
+      manager.onExit = (e) => {
+        exited = e.exitCode
+      }
+      const pty = new FakePty()
+      const info = manager.adopt({ pty, restore: { accountId: account.id, cwd: 'D:/p', title: 't' } })!
+      pty.dataCb('output')
+      pty.exitCb({ exitCode: 0 })
+      expect(data).toEqual(['output'])
+      expect(exited).toBe(0)
+      expect(manager.list().find((s) => s.id === info.id)?.status).toBe('exited')
+    })
+
+    // The backpressure accounting is part of the record, not of the spawn — an adopted session with no
+    // tab is exactly the one that would otherwise wedge at highWater.
+    it('an adopted session pauses at highWater and resumes on an ack, like a spawned one', () => {
+      const { manager } = setup(100, 20)
+      const pty = new FakePty()
+      const info = manager.adopt({ pty, restore: { accountId: account.id, cwd: 'D:/p', title: 't' } })!
+      pty.dataCb('x'.repeat(150))
+      expect(pty.paused).toBe(true)
+      manager.ack(info.id, 150)
+      expect(pty.paused).toBe(false)
+    })
+
+    // The directory may have been renamed or unmounted since; the process is already running there, so
+    // refusing would orphan it. Only spawn checks the cwd, because only spawn is about to use it.
+    it('does not check the cwd — the process is already running in it', () => {
+      const { manager } = setup()
+      const missing = path.join(process.cwd(), 'no-such-directory-for-adopt')
+      expect(existsSync(missing)).toBe(false)
+      expect(manager.adopt({ pty: new FakePty(), restore: { accountId: account.id, cwd: missing, title: 't' } }))
+        .not.toBeNull()
+    })
+
+    it('refuses a restore it cannot read rather than inventing a session', () => {
+      const { manager } = setup()
+      expect(manager.adopt({ pty: new FakePty(), restore: { cwd: 'D:/p' } })).toBeNull()
+      expect(manager.list()).toEqual([])
     })
   })
 })
