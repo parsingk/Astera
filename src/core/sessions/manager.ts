@@ -460,13 +460,35 @@ export class SessionManager {
    *  notification's title all read `SessionInfo.title`, so they follow from here without any of them
    *  learning about renaming.
    *
+   *  The second line is that same title told to the pty, because `spawn` wrote the *old* one into the
+   *  note the Host keeps and `adopt` rebuilds this record from it — without this, a renamed session
+   *  comes back from an app restart under the name it was spawned with. The stored title and not the
+   *  text typed, so the note holds exactly what `adopt` would read.
+   *
    *  An unknown id answers null instead of throwing. `list()` includes exited sessions, so a tab can
    *  outlive its process and a rename can race a tab closing; neither is worth an exception. */
   rename(id: string, title: string): string | null {
     const live = this.sessions.get(id)
     if (!live) return null
     live.info.title = normalizeSessionTitle(title, live.info.cwd)
+    this.remember(id, { title: live.info.title })
     return live.info.title
+  }
+
+  /** Merges keys into the note the Host keeps for this session's pty, for whoever learns something
+   *  about a session that `spawn` could not write down at the time. The keys are `PtyMeta.restore`'s,
+   *  which is to say the ones `adopt` and the reattach adopter read back.
+   *
+   *  **Fire and forget, and lossy by design.** Nothing waits for the Host to confirm, and a patch sent
+   *  while the connection is down is dropped rather than queued — so the worst case is a note one step
+   *  behind, which costs exactly what this whole mechanism was added to fix and never more: adoption
+   *  falls back to the value the note already had. With no Host the pty has no `remember` at all and
+   *  this does nothing.
+   *
+   *  An unknown id is ignored, for the same reason `rename` answers null: a poll that learns something
+   *  can land after the tab that owned the session has gone. */
+  remember(id: string, patch: Record<string, unknown>): void {
+    this.sessions.get(id)?.pty.remember?.(patch)
   }
 
   list(): SessionInfo[] {
