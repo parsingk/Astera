@@ -105,7 +105,13 @@ export function withExitedPtyGuard(p: PtyLike): PtyLike {
     },
     kill: () => p.kill(),
     pause: () => p.pause(),
-    resume: () => p.resume()
+    resume: () => p.resume(),
+    // Forwarded rather than dropped. This wrapper only ever sees a node-pty handle today, where both
+    // are absent anyway — but a rebuilt object silently answers "the app made me" for a pty the Host
+    // owns, which at quit is a session the person was promised would survive being killed instead.
+    // A wrapper that loses a field is a hard defect to see, so it does not lose one.
+    outlivesApp: p.outlivesApp,
+    remember: p.remember ? (patch) => p.remember?.(patch) : undefined
   }
 }
 
