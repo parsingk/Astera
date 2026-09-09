@@ -30,11 +30,20 @@ export interface HostServerDeps {
   /** What to do when the last client has been gone for `idleMs`, or when a client says `retire`. */
   onIdle(): void
   log: HostLog
+  /** A handler for messages the server does not own. Returns true when it handled one; false lets
+   *  the server treat it as unknown. Slice 2's pty-* messages arrive here. */
+  onMessage?(m: ClientMessage, send: (h: HostMessage) => void): boolean
+  /** Whether something is keeping the Host alive beyond its clients — a live terminal, from slice 2.
+   *  The idle timer checks it rather than only the connection count. */
+  holdsWork?(): boolean
 }
 
 export interface HostServer {
   close(): Promise<void>
   clients(): number
+  /** Sends to every connected client. Slice 2's pty output takes this rather than a reply, because
+   *  the app that attaches after a restart is not the app that spawned. */
+  broadcast(m: HostMessage): void
 }
 
 /** How long a peer that has connected but said nothing gets before the Host hangs up on it. */
@@ -89,10 +98,14 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     if (closing) return
     if (idleTimer) clearTimeout(idleTimer)
     idleTimer = setTimeout(() => {
-      if (live === 0) {
+      if (live === 0 && !(deps.holdsWork?.() ?? false)) {
         deps.log.write(`idle for ${deps.idleMs}ms with no client — leaving`)
         deps.onIdle()
+        return
       }
+      // Still held. Look again after the same interval rather than never: the hold ends when the
+      // last terminal does, and nobody will call back to say so.
+      if (live === 0) armIdle()
     }, deps.idleMs)
     // The Host should not be kept alive by this timer alone; the server handle is what holds it.
     idleTimer.unref?.()
@@ -139,6 +152,7 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
           deps.onIdle()
           return
         }
+        if (deps.onMessage?.(m, send) === true) return
         deps.log.write(`unknown message: ${JSON.stringify(v).slice(0, 200)}`)
       },
       onBadLine: (raw) => deps.log.write(`line that is not JSON, ignored: ${raw.slice(0, 200)}`)
@@ -188,6 +202,10 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
 
   return {
     clients: () => live,
+    broadcast: (m) => {
+      const line = encodeLine(m)
+      for (const s of sockets) if (!s.destroyed) s.write(line)
+    },
     close: () =>
       new Promise<void>((resolve) => {
         // Idempotent: a deferred socket 'close' can call back in after this has already run once

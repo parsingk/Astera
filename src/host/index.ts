@@ -5,9 +5,12 @@
 // Everything it needs arrives in the environment, because it has no `app.getPath('userData')` to ask.
 import os from 'node:os'
 import path from 'node:path'
+import * as pty from 'node-pty'
 import { hostAddress } from './address'
 import { openHostLog } from './log'
 import { startHostServer, ADDRESS_TAKEN } from './server'
+import { PtyRegistry } from './registry'
+import { attachPtyHost } from './ptyHost'
 
 /** With no client for this long, there is nothing for the Host to be. Slice 2 adds "and no session is
  *  alive" to this, and slice 3 adds "and no Run is in progress" (design §8). */
@@ -22,6 +25,15 @@ async function main(): Promise<void> {
   const log = openHostLog({ path: process.env.ASTERA_HOST_LOG ?? path.join(profileDir, 'host', 'host.log') })
   const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir() })
 
+  // The Host is where node-pty lives now. `withExitedPtyGuard`'s job — swallowing a write or resize
+  // to a pty that has already gone — is the registry's `live` check here instead: it knows which
+  // sessions have exited, and the app across the socket does not.
+  const registry = new PtyRegistry({
+    spawn: (file, args, opts) => pty.spawn(file, args, { name: 'xterm-256color', ...opts }),
+    log: (m) => log.write(m)
+  })
+  let handlePty: ReturnType<typeof attachPtyHost> | null = null
+
   let server: Awaited<ReturnType<typeof startHostServer>>
   try {
     server = await startHostServer({
@@ -30,8 +42,10 @@ async function main(): Promise<void> {
       version: process.env.ASTERA_HOST_VERSION ?? '0.0.0',
       idleMs: IDLE_MS,
       onIdle: () => {
-        void server.close().then(() => process.exit(0))
+        void server.close().then(() => { registry.killAll(); process.exit(0) })
       },
+      onMessage: (m, send) => handlePty?.(m, send) ?? false,
+      holdsWork: () => registry.liveCount() > 0,
       log
     })
   } catch (err) {
@@ -42,10 +56,12 @@ async function main(): Promise<void> {
     process.exit(0)
   }
 
+  handlePty = attachPtyHost({ registry, broadcast: (m) => server.broadcast(m) })
+
   for (const signal of ['SIGINT', 'SIGTERM'] as const)
     process.on(signal, () => {
       log.write(`${signal} — leaving`)
-      void server.close().then(() => process.exit(0))
+      void server.close().then(() => { registry.killAll(); process.exit(0) })
     })
 }
 

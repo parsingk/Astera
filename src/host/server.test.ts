@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { hostAddress } from './address'
 import { encodeLine, createLineReader } from './framing'
-import { startHostServer, ADDRESS_TAKEN, UNSAFE_ADDRESS_DIR, type HostServer } from './server'
+import { startHostServer, ADDRESS_TAKEN, UNSAFE_ADDRESS_DIR, type HostServer, type HostServerDeps } from './server'
 import { HOST_PROTOCOL } from '../core/host/protocol'
 
 let dir: string
@@ -21,7 +21,7 @@ afterEach(async () => {
 
 /** A server at an address of this test's own, with everything injectable. */
 const server = async (
-  over: { idleMs?: number; helloMs?: number; onIdle?: () => void; profile?: string } = {}
+  over: { idleMs?: number; helloMs?: number; onIdle?: () => void; profile?: string; onMessage?: HostServerDeps['onMessage']; holdsWork?: HostServerDeps['holdsWork'] } = {}
 ): Promise<{
   s: HostServer
   address: string
@@ -40,6 +40,8 @@ const server = async (
     idleMs: over.idleMs ?? 60_000,
     helloMs: over.helloMs,
     onIdle: over.onIdle ?? ((): void => {}),
+    onMessage: over.onMessage,
+    holdsWork: over.holdsWork,
     log: { write: (m) => logs.push(m), close: () => {} }
   })
   open.push(s)
@@ -184,6 +186,37 @@ describe('startHostServer', () => {
     })
     expect(got).toHaveLength(1)
     expect(h.logs.some((l) => l.includes('not json'))).toBe(true)
+  })
+
+  // The server owns the handshake and nothing else; anything it does not recognise goes to the hook,
+  // which is where slice 2's pty messages live.
+  it('offers an unknown message to the extra handler before calling it unknown', async () => {
+    const seen: string[] = []
+    const h = await server({
+      onMessage: (m, send) => {
+        seen.push(m.t)
+        if (m.t !== 'pty-list') return false
+        send({ t: 'pty-listed', entries: [] })
+        return true
+      }
+    })
+    const [reply] = await talk(h.address, [{ t: 'pty-list' } as never])
+    expect(reply).toEqual({ t: 'pty-listed', entries: [] })
+    expect(seen).toContain('pty-list')
+  })
+
+  // A Host holding a terminal must not leave when the app closes: that terminal is the whole reason
+  // the Host exists (slice 2 design §2.2).
+  it('does not leave on the idle timer while something is holding it', async () => {
+    let idle = false
+    let holding = true
+    const h = await server({ idleMs: 50, onIdle: () => { idle = true }, holdsWork: () => holding })
+    await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
+    await new Promise((r) => setTimeout(r, 300))
+    expect(idle).toBe(false)
+    holding = false
+    await new Promise((r) => setTimeout(r, 300))
+    expect(idle).toBe(true)
   })
 })
 
