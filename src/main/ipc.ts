@@ -353,8 +353,8 @@ export function sessionsTakenBackOnFailure(sawPeer: boolean): SessionsTakenBack 
  *  `${pid}@${startedAt}`, which is what makes them comparable: a pid alone repeats when a Host dies
  *  and its successor is given the same one, and `startedAt` alone is only a timestamp.
  *
- *  - `'first'` — nothing was held, so this is the boot handshake and the startup chain is already
- *    waiting on it. Sweeping here as well would run the same sweep twice.
+ *  - `'first'` — nothing was held, so this is the app's first handshake and the startup chain is
+ *    waiting on it. Sweeping again on it would run the same sweep twice.
  *  - `'same-host'` — the process that holds this app's ptys is back. Their handles ended when the
  *    socket dropped, but the processes did not, so the app takes them back by id (design §11).
  *  - `'other-host'` — a different process answered, so the Host that held them really did die and
@@ -5238,8 +5238,12 @@ export function registerIpc(
       const previous = heldBy
       const means = hostHandshakeMeans(previous, answered)
       heldBy = answered
-      // The boot handshake belongs to the chain below, which is already waiting on `ready()` for
-      // exactly this moment. Sweeping here as well would be the same sweep twice.
+      // The first handshake belongs to the chain below, which is waiting on `ready()` for exactly this
+      // moment; sweeping here as well would be the same sweep twice. It also covers the one case where
+      // that chain has already given up before a peer ever said hello — a handshake that outlasts its
+      // deadline, fails, and succeeds on the retry. Nothing sweeps there, which is what happens today
+      // and is a gap of its own: the ptyRouter was never switched either, so the app is on node-pty
+      // beside a connected Host. Not made worse here, and not fixed here.
       if (means === 'first') return
       if (means === 'other-host') {
         // The Host this app's ptys lived in really did die, and its successor's registry is empty.
