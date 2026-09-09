@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { hostAddress } from '../../host/address'
 import { startHostServer, type HostServer } from '../../host/server'
-import { HOST_PROTOCOL } from '../../core/host/protocol'
+import { HOST_PROTOCOL, type HostMessage } from '../../core/host/protocol'
 import { HostClient } from './client'
 
 let dir: string
@@ -44,6 +44,16 @@ const settled = async (c: HostClient, want: (s: ReturnType<HostClient['status']>
     await new Promise((r) => setTimeout(r, 50))
   }
   throw new Error(`status never settled: ${JSON.stringify(c.status())}`)
+}
+
+/** Same shape as `settled`, for a condition that is not the client's status — here, whether a
+ *  message broadcast from the server has made it across the real socket to a subscriber yet. */
+const waitFor = async (want: () => boolean): Promise<void> => {
+  for (let i = 0; i < 60; i++) {
+    if (want()) return
+    await new Promise((r) => setTimeout(r, 50))
+  }
+  throw new Error('condition never became true')
 }
 
 describe('HostClient', () => {
@@ -171,5 +181,36 @@ describe('HostClient', () => {
     await c.stop()
     await new Promise((r) => setTimeout(r, 200))
     expect(asked).toBe(0)
+  })
+
+  // The pty-* messages this task adds all arrive this way, over a real connection, not through the
+  // fake transport ptyFactory.test.ts drives — this is the class actually doing the fan-out.
+  it('fans a message out to every subscriber, survives one that throws, and stops after unsubscribe', async () => {
+    const addr = addressFor('fan-out')
+    const server = await serveAt(addr)
+    const logs: string[] = []
+    const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: (m) => logs.push(m) })
+    c.start()
+    await settled(c, (s) => s.connected)
+
+    const received: HostMessage[] = []
+    c.onMessage(() => {
+      throw new Error('subscriber one blew up')
+    })
+    const unsubTwo = c.onMessage((m) => received.push(m))
+
+    server.broadcast({ t: 'pty-data', id: 'p1', data: 'hi' })
+    await waitFor(() => received.length > 0)
+    expect(received).toEqual([{ t: 'pty-data', id: 'p1', data: 'hi' }])
+    expect(logs.some((l) => l.includes('subscriber threw') && l.includes('subscriber one blew up'))).toBe(true)
+
+    unsubTwo()
+    server.broadcast({ t: 'pty-data', id: 'p1', data: 'after unsubscribe' })
+    // Nothing to wait for that would prove absence, so give the real socket a beat to have delivered
+    // it if it were going to.
+    await new Promise((r) => setTimeout(r, 150))
+    expect(received).toEqual([{ t: 'pty-data', id: 'p1', data: 'hi' }])
+
+    await c.stop()
   })
 })

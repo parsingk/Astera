@@ -89,6 +89,43 @@ describe('createHostPtyFactory', () => {
     ])
   })
 
+  // kill, pause and resume carry no payload the Host needs the pty to exist for, and the connection
+  // delivers in order, so the Host sees them after the pty-spawn they are ordered behind — unlike
+  // write and resize, which queue locally because their payload is real content (input, a size) that
+  // must not be sent to a pty that turns out never to have started at all.
+  it('sends kill, pause and resume immediately even while pending, right after the spawn they are ordered behind', () => {
+    const t = transport()
+    const { factory } = createHostPtyFactory(t)
+    const p = factory('cmd.exe', [], opts)
+    const id = spawned(t)
+    p.kill()
+    p.pause()
+    p.resume()
+    expect(t.sent.slice(1)).toEqual([
+      { t: 'pty-kill', id },
+      { t: 'pty-pause', id },
+      { t: 'pty-resume', id }
+    ])
+  })
+
+  it('a kill sent before the spawn is confirmed does not mark the handle dead early — it waits for the Host to say so', () => {
+    const t = transport()
+    const { factory } = createHostPtyFactory(t)
+    const p = factory('cmd.exe', [], opts)
+    const id = spawned(t)
+    let exit: number | null = null
+    p.onExit((e) => { exit = e.exitCode })
+    p.kill()
+    // The Host processes pty-spawn before the pty-kill that followed it on the same connection, so it
+    // still answers spawned — the app is not left thinking the handle is dead while the Host has a
+    // live pty, nor does the app's own kill() end the handle early and get out of step with the Host.
+    t.deliver({ t: 'pty-spawned', id, pid: 1 })
+    expect(p.pid).toBe(1)
+    expect(exit).toBeNull()
+    t.deliver({ t: 'pty-exit', id, exitCode: 0 })
+    expect(exit).toBe(0)
+  })
+
   it('sends straight through once the pty is live', () => {
     const t = transport()
     const { factory } = createHostPtyFactory(t)

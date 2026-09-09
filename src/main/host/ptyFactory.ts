@@ -53,8 +53,11 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
       return
     }
     // A refusal and an exit end the same way: this handle is a session that is over. Callers all have
-    // a path for that; none of them has a path for "the spawn was refused".
-    if (m.t === 'pty-failed' || m.t === 'pty-exit') end(m.t === 'pty-exit' ? m.exitCode : 1)
+    // a path for that; none of them has a path for "the spawn was refused". Guarded the same way
+    // `onHostGone` guards its own end() so this does not rely on `unsubscribe()` (below) having
+    // already taken the handle out of the transport's set — the two read alike, and neither depends
+    // on the other's cleanup for its correctness.
+    if ((m.t === 'pty-failed' || m.t === 'pty-exit') && state !== 'exited') end(m.t === 'pty-exit' ? m.exitCode : 1)
   })
 
   const forward = (q: Queued): void => {
@@ -78,6 +81,12 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
     },
     write: (data) => forward({ t: 'pty-write', data }),
     resize: (cols, rows) => forward({ t: 'pty-resize', cols, rows }),
+    // kill, pause and resume go out at once, even while pending, rather than queuing like write and
+    // resize do: they carry no payload the Host needs the pty to already exist for, and the
+    // connection delivers in order, so the Host always sees them after the pty-spawn they are
+    // ordered behind. write and resize queue instead because their payload is real content — input
+    // the user typed, a size the app needs applied — that must not be sent to a pty that turns out
+    // never to have started at all.
     kill: () => {
       if (state !== 'exited') t.send({ t: 'pty-kill', id })
     },
