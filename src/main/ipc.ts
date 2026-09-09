@@ -12,7 +12,7 @@ import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
 import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
-import { HostClient, CONNECT_PHASE_MS, HANDSHAKE_MS } from './host/client'
+import { HostClient, READY_TIMEOUT_MS } from './host/client'
 import { hostSpawnPlan, resolveHostEntry } from './host/spawn'
 import { hostAddress } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
@@ -1412,14 +1412,16 @@ export function registerIpc(
     // 쓴다(rolling.ts 의 onHookEvent) — 훅을 떼면 그 갈래가 워커에게만 사라진다.
     // **wantHooks 에 체인과 별개인 자기 입력을 주는 일은 나중으로 남긴다.**
     const coordinator = new OrchCoordinator({
-      // session:created is emitted here, in startCoordinator's own registration below, and in
-      // startHostClient's reattach adopter — every path whose caller sits inside main rather than the
-      // renderer's own 'sessions.spawn' handler, since only that handler's return value reaches
-      // App.tsx on its own. On the user path (the 'sessions.spawn' ipcMain.handle) the return value
-      // goes to the renderer and App.tsx builds the tab from it, but the coordinator calls this
-      // closure directly inside main, so its return value never reaches the renderer — which is why
-      // worker sessions had no tab (the visibility requirement went unmet, and with no acks the PTY
-      // stalled permanently at 100KB).
+      // session:created is emitted at three sites: here (this spawnSession closure), in
+      // startCoordinator's own registration below, and in startHostClient's reattach adopter. All
+      // three call spawnSession/adopt directly inside main rather than through the renderer's own
+      // 'sessions.spawn' handler — but sitting inside main is not by itself the reason: the roll
+      // respawn is main-side too and does not emit this, since it re-points an existing tab through
+      // session:rolled instead of building a new one. On the user path (the 'sessions.spawn'
+      // ipcMain.handle) the return value goes to the renderer and App.tsx builds the tab from it, but
+      // the coordinator calls this closure directly inside main, so its return value never reaches
+      // the renderer — which is why worker sessions had no tab (the visibility requirement went
+      // unmet, and with no acks the PTY stalled permanently at 100KB).
       // **It is not emitted inside the shared spawnSession closure**: that would emit on the user path
       // too, where the renderer has already built a tab from the return value, placing the same session
       // twice.
@@ -4788,19 +4790,22 @@ export function registerIpc(
       send: (m: ClientMessage): boolean => hostClient?.send(m) ?? false,
       onHostMessage: (cb: (m: HostMessage) => void) => hostClient?.onMessage(cb) ?? ((): void => {}),
       onHostGone: (cb: () => void) => hostClient?.onDisconnect(cb) ?? ((): void => {}),
-      log: (m: string) => orchLog(`host: ${m}`)
+      // hostLog, not orchLog: this is the Host failure log every other line in startHostClient uses,
+      // and the one path here (a caller's onExit throwing while ptyFactory.ts ends a refused spawn)
+      // must still be recorded when orchestration is off, which is exactly when orchLog is a no-op.
+      log: (m: string) => hostLog(`host: ${m}`)
     }
     const { factory, attach } = createHostPtyFactory(transport)
 
     // How long reattaching is willing to wait for the first handshake's outcome before deciding the
-    // Host is not there. `ready()` (armed from `client.start()`, above) can be waiting out either of
-    // two sequential phases when it fires: HostClient has not reached a peer yet (bounded by
-    // CONNECT_PHASE_MS, since this constructor overrides neither attempts nor retryMs), or it has and
-    // is waiting on that peer's hello (bounded by HANDSHAKE_MS, only armed once `attach(socket)` runs).
-    // A timeout smaller than their sum can expire mid-handshake — reading a merely slow Host the same
-    // as no Host at all, permanently, since nothing re-checks a hello that lands after this has
-    // already given up.
-    const HOST_READY_MS = CONNECT_PHASE_MS + HANDSHAKE_MS
+    // Host is not there. READY_TIMEOUT_MS is the sum of the two sequential phases `ready()` (armed
+    // from `client.start()`, above) can be waiting out — HostClient has not reached a peer yet, or it
+    // has and is waiting on that peer's hello — computed by client.ts itself so it cannot drift from
+    // the constructor above, which overrides neither of the two constants that sum depends on. A
+    // timeout smaller than that sum can expire mid-handshake — reading a merely slow Host the same as
+    // no Host at all, permanently, since nothing re-checks a hello that lands after this has already
+    // given up.
+    const HOST_READY_MS = READY_TIMEOUT_MS
 
     /** One round trip: ask for the list, resolve on the reply, give up after five seconds with an
      *  empty list so a silent Host cannot hold the startup open. */
@@ -4851,24 +4856,34 @@ export function registerIpc(
               // the renderer has already mounted.
               const coordinator = rollCoordinatorForSession(info.id, core.sessions.list(), (id) => core.accounts.get(id))
               if ((info.rollAccountIds?.length ?? 0) >= 1) {
-                if (coordinator === 'codexRolling') codexRolling?.register(info)
+                // The `false` is `locate` (CodexRollingCoordinator.register's 4th argument): an
+                // adopted session must not run the locate poll — see that parameter's own doc comment
+                // for why the discovery it would run is actively harmful here, not merely useless.
+                if (coordinator === 'codexRolling') codexRolling?.register(info, undefined, undefined, false)
                 else if (coordinator === 'rolling') rolling?.register(info)
               }
               // codexRollout is deliberately NOT registered here, unlike the unconditional block at
-              // spawn. It keys the session's rollout file by `findRollout({ since, cwd, ... })`, which
-              // for a freshly spawned session is safe because since = the spawn moment: at that
-              // instant nothing else can have a newer file in the same cwd/account, so "pick the
-              // newest candidate created after since" always resolves to this session's own file. An
-              // adopted session's real spawn was before the restart, so since would have to be that
-              // earlier moment — and between then and whenever the scan actually runs, another session
-              // can legitimately open in the same cwd/account and create a newer file, which
-              // "newest wins" would hand to the adopted entry instead, permanently locking the
-              // rightful session out of its own file via claimed()'s excludePaths. There is no
-              // narrower since that fixes this: the discovery rule itself assumes the caller's own
-              // file is definitionally the newest thing that exists the moment a match is found, which
-              // only holds right after a real spawn. The gap this leaves: an adopted codex session
-              // gets no usage chips and no turn-triggered Slack notification until it exits and a
-              // fresh one is spawned in its place.
+              // spawn, for the same discovery hazard `codexRolling`'s `locate: false` above avoids —
+              // this watcher has no such switch, so the only safe choice is skipping it entirely. It
+              // keys the session's rollout file by `findRollout({ since, cwd, ... })`, which for a
+              // freshly spawned session is safe because since = the spawn moment: at that instant
+              // nothing else can have a newer file in the same cwd/account, so "pick the newest
+              // candidate created after since" always resolves to this session's own file. An adopted
+              // session's real spawn was before the restart, so since would have to be that earlier
+              // moment — and between then and whenever the scan actually runs, another session can
+              // legitimately open in the same cwd/account and create a newer file, which "newest wins"
+              // would hand to the adopted entry instead, permanently locking the rightful session out
+              // of its own file via claimed()'s excludePaths. There is no narrower since that fixes
+              // this: the discovery rule itself assumes the caller's own file is definitionally the
+              // newest thing that exists the moment a match is found, which only holds right after a
+              // real spawn. Four things hang off this one discovery, and an adopted codex session gets
+              // none of them until it exits and a fresh one is spawned in its place: the usage chips
+              // (CodexRolloutWatcher.usage), turn-triggered Slack notifications (onTurnComplete),
+              // Work Unit detection (rolloutPathFor feeds the transcript path), and the scheduler's
+              // key (codexSessionIdFor). A store keyed by app session id, filled from the path the
+              // watcher already logs at map time and read back here, would answer this exactly instead
+              // of heuristically — but PtyMeta is write-once at spawn and the Host protocol has no
+              // meta-update message, so that store does not exist yet. Left as a named follow-up.
               if (info.slackNotify === true) {
                 try {
                   slack?.notifier.register(info)

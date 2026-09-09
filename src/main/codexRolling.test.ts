@@ -1391,6 +1391,29 @@ describe('CodexRollingCoordinator', () => {
     expect(seen).toEqual([[h.info1.id, 'cx-resume']])
   })
 
+  // The hazard an adopted session's locate would create: since = adopt time, necessarily in the
+  // past, so findRollout's "newest wins" rule can claim a different, newer session's file in the
+  // same cwd/account within the poll window instead of ever finding this one's own. Registering
+  // already unmapped (the 4th `locate` argument) avoids the scan and the hazard entirely, at the
+  // cost of rolling itself — but the model-switch prompt still gets answered, since handleData does
+  // not gate that on codexSessionId or rolloutPath.
+  it('an adopted codex session never reaches the locate — it stays unmapped from registration', async () => {
+    const h = harness()
+    // A real, matching file exists — if locate ran, it would find this.
+    await writeRollout({ accountId: 'c1', uuid: 'cx-adopted', cwd: h.info1.cwd })
+    h.coord.register(h.info1, undefined, undefined, false)
+    await advance(1_500) // past where the first locate poll would have landed, had one been armed
+    expect(h.coord.rolloutPathFor(h.info1.id)).toBeNull()
+    // The model-switch prompt still gets answered — it does not depend on ever having located a file.
+    h.coord.handleData({ sessionId: h.info1.id, data: MODEL_PROMPT })
+    await advance(300)
+    expect(h.written).toEqual([
+      [h.info1.id, '2'],
+      [h.info1.id, '\r']
+    ])
+    h.coord.stop()
+  })
+
   // 실측 로그(dev): `codex rolled …` 바로 뒤에 `codex rollout not found within 60000ms — rolling
   // disabled`. 롤의 respawn 도 `codex resume` 이라 새 rollout 이 생기지 않으니 재-locate 는 실패할
   // 수밖에 없고, 그 순간부터 그 체인은 두 번째 한도를 영영 보지 못한다. 단일 계정 체인에서는

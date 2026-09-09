@@ -245,7 +245,20 @@ export class CodexRollingCoordinator {
     if (chain) chain.liveInfo = { ...chain.liveInfo, title }
   }
 
-  register(info: SessionInfo, rolloutPath?: string, sameAccount = false): void {
+  /** `locate` is false for exactly one caller: adopting a session the Host was already running after
+   *  an app restart. `since` for the locate poll below would have to be that session's real spawn
+   *  time, long before this registration — and between then and whenever the poll actually finds a
+   *  match, another session opening in the same cwd/account is an ordinary occurrence, not a
+   *  coincidence, so findRollout's "newest wins" rule would as happily claim *that* session's file as
+   *  this one's own, via the same `since` lower bound that admits both. The result is not merely a
+   *  failure to map: `onNativeSession` binds the wrong native id to this chain, `persistConfig` writes
+   *  under it, and `claimed()`'s excludePaths then locks the rightful chain out of its own file for
+   *  good. `false` skips straight to the state a chain reaches on its own after LOCATE_TIMEOUT_MS
+   *  anyway — registered, unmapped, rolling permanently disabled (onLimit's own guard already no-ops
+   *  a chain with neither codexSessionId nor rolloutPath) — without the scan or the hazard. The
+   *  model-switch prompt still gets answered: handleData's modelChoice branch does not gate on either
+   *  field. */
+  register(info: SessionInfo, rolloutPath?: string, sameAccount = false, locate = true): void {
     const ids = info.rollAccountIds ?? []
     if (ids.length < 1) return
     const chain: Chain = {
@@ -301,8 +314,10 @@ export class CodexRollingCoordinator {
         prompt: chain.prompt
       })
       this.deps.log(`codex rollout attached on resume session=${info.id} id=${info.resumeSessionId}`)
-    } else {
+    } else if (locate) {
       this.startLocate(chain, this.deps.getAccount(ids[this.cycleIndexOf(chain)]))
+    } else {
+      this.deps.log(`codex chain registered unmapped — rolling disabled session=${info.id}`)
     }
     this.ensureTicker()
     this.deps.log(`codex chain registered session=${info.id} accounts=${ids.join(',')}`)
