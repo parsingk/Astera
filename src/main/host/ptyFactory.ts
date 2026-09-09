@@ -18,6 +18,12 @@ export interface HostPtyTransport {
   /** The connection to the Host went away. Every pty went with it, and no `pty-exit` will ever
    *  arrive to say so — without this a session stays "running" in the app forever (design §11). */
   onHostGone(cb: () => void): () => void
+  /** Where a failure this module cannot let escape gets recorded. `pty-exit` and `onHostGone` both
+   *  reach `end()` through HostClient's own per-subscriber try/catch (`onMessage`/`onDisconnect`'s
+   *  fan-out), so a caller's `onExit` throwing there is already contained and logged. The deferred
+   *  `end()` a failed `pty-spawn` schedules (see `startDead` below) runs outside that fan-out — this
+   *  is what gives it the same containment. */
+  log(m: string): void
 }
 
 type Queued = { t: 'pty-write'; data: string } | { t: 'pty-resize'; cols: number; rows: number }
@@ -71,7 +77,15 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
     // very handle, and the caller only registers `onExit` once that call returns — an end delivered
     // before then would have nowhere to land.
     queueMicrotask(() => {
-      if (state !== 'exited') end(1)
+      if (state === 'exited') return
+      try {
+        end(1)
+      } catch (err) {
+        // pty-exit and onHostGone both reach end() through HostClient's own per-subscriber
+        // try/catch, so a caller's onExit throwing there is already contained and logged. This
+        // microtask runs outside that fan-out — nothing may throw out of this module either.
+        t.log(`onExit threw ending a spawn that never reached the Host: ${String(err)}`)
+      }
     })
   }
 

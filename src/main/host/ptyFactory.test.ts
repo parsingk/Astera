@@ -4,12 +4,13 @@ import type { ClientMessage, HostMessage } from '../../core/host/protocol'
 
 /** A transport the test drives from both ends. `connected` starts true — set it false to make
  *  `send` behave the way `HostClient.send` does with no socket: refuse, and record nothing. */
-const transport = (): HostPtyTransport & { sent: ClientMessage[]; connected: boolean; deliver(m: HostMessage): void; hostGone(): void } => {
+const transport = (): HostPtyTransport & { sent: ClientMessage[]; connected: boolean; logs: string[]; deliver(m: HostMessage): void; hostGone(): void } => {
   const subs = new Set<(m: HostMessage) => void>()
   const gone = new Set<() => void>()
   return {
     sent: [],
     connected: true,
+    logs: [],
     send(m) {
       if (!this.connected) return false
       this.sent.push(m)
@@ -22,6 +23,9 @@ const transport = (): HostPtyTransport & { sent: ClientMessage[]; connected: boo
     onHostGone(cb) {
       gone.add(cb)
       return () => gone.delete(cb)
+    },
+    log(m) {
+      this.logs.push(m)
     },
     deliver: (m) => { for (const cb of [...subs]) cb(m) },
     hostGone: () => { for (const cb of [...gone]) cb() }
@@ -186,6 +190,21 @@ describe('createHostPtyFactory', () => {
     await new Promise((r) => setTimeout(r, 0))
     expect(exit).toBe(1)
     expect(t.sent).toEqual([])
+  })
+
+  // pty-exit and onHostGone both reach end() through HostClient's own per-subscriber try/catch, so a
+  // caller's onExit throwing there is already contained. This deferred end() runs outside that
+  // fan-out — nothing may throw out of this module into the app either.
+  it('contains a throw from onExit for a spawn that never reached the Host, and logs it', async () => {
+    const t = transport()
+    t.connected = false
+    const { factory } = createHostPtyFactory(t)
+    const p = factory('cmd.exe', [], opts)
+    p.onExit(() => {
+      throw new Error('onExit blew up')
+    })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(t.logs.some((l) => l.includes('onExit blew up'))).toBe(true)
   })
 
   it('drops what is written after the pty exited rather than sending it', () => {

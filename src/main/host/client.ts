@@ -27,10 +27,18 @@ export interface HostClientDeps {
 
 const DEFAULT_ATTEMPTS = 25
 const DEFAULT_RETRY_MS = 200
+/** The worst case before `cycle()` either reaches a peer or gives up trying to, when neither
+ *  `attempts` nor `retryMs` is overridden: the last of `DEFAULT_ATTEMPTS` tries can succeed only after
+ *  all the ones before it failed and waited out `DEFAULT_RETRY_MS` each. Exported so a caller waiting
+ *  on `ready()` can size its own timeout from the real number instead of guessing one — see
+ *  HANDSHAKE_MS just below, which is the phase that follows this one and has to be added to it, not
+ *  used instead of it. */
+export const CONNECT_PHASE_MS = DEFAULT_ATTEMPTS * DEFAULT_RETRY_MS
 /** How long a peer that accepted the connection gets to answer the `hello` before it is written off.
  *  Matches the Host's own deadline on the other side of the same handshake. Exported so a caller
- *  waiting on `ready()` can set its own timeout above this one — otherwise it can expire while the
- *  Host is still mid-handshake, which reads no differently from there being no Host at all. */
+ *  waiting on `ready()` can set its own timeout above CONNECT_PHASE_MS + this one — otherwise it can
+ *  expire while the Host is still mid-handshake, which reads no differently from there being no Host
+ *  at all. */
 export const HANDSHAKE_MS = 10_000
 /** After a connection that worked drops, wait before trying again: 1s, 2s, 4s, capped at 30s. */
 const BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]
