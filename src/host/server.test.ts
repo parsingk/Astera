@@ -53,7 +53,7 @@ const talk = (address: string, lines: unknown[], waitFor = 1): Promise<unknown[]
   new Promise((resolve, reject) => {
     const got: unknown[] = []
     const sock = net.connect(address)
-    const read = createLineReader({ onMessage: (v) => { got.push(v); if (got.length >= waitFor) { sock.end(); resolve(got) } }, onBadLine: () => {} })
+    const read = createLineReader({ onMessage: (v) => { got.push(v); if (got.length >= waitFor) { sock.end(); resolve(got) } }, onBadLine: () => {}, onHandlerError: () => {} })
     sock.setEncoding('utf8')
     sock.on('data', read)
     sock.on('error', reject)
@@ -175,7 +175,7 @@ describe('startHostServer', () => {
     const got = await new Promise<unknown[]>((resolve) => {
       const out: unknown[] = []
       const sock = net.connect(h.address)
-      const read = createLineReader({ onMessage: (v) => { out.push(v); sock.end(); resolve(out) }, onBadLine: () => {} })
+      const read = createLineReader({ onMessage: (v) => { out.push(v); sock.end(); resolve(out) }, onBadLine: () => {}, onHandlerError: () => {} })
       sock.setEncoding('utf8')
       sock.on('data', read)
       sock.on('connect', () => {

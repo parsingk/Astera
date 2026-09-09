@@ -155,7 +155,9 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
         if (deps.onMessage?.(m, send) === true) return
         deps.log.write(`unknown message: ${JSON.stringify(v).slice(0, 200)}`)
       },
-      onBadLine: (raw) => deps.log.write(`line that is not JSON, ignored: ${raw.slice(0, 200)}`)
+      onBadLine: (raw) => deps.log.write(`line that is not JSON, ignored: ${raw.slice(0, 200)}`),
+      onHandlerError: (v, err) =>
+        deps.log.write(`message failed: ${JSON.stringify(v).slice(0, 200)} — ${String(err)}`)
     })
     socket.on('data', read)
     const gone = (): void => {

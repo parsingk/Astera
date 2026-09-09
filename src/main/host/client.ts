@@ -136,7 +136,9 @@ export class HostClient {
     this.socket = socket
     const read = createLineReader({
       onMessage: (v) => this.onMessage(v as HostMessage),
-      onBadLine: (raw) => this.deps.log(`the Host sent a line that is not JSON: ${raw.slice(0, 200)}`)
+      onBadLine: (raw) => this.deps.log(`the Host sent a line that is not JSON: ${raw.slice(0, 200)}`),
+      onHandlerError: (v, err) =>
+        this.deps.log(`a message from the Host failed: ${JSON.stringify(v).slice(0, 200)} — ${String(err)}`)
     })
     socket.on('data', read)
     // A peer that accepts the connection and then says nothing is not a dropped connection: nothing
