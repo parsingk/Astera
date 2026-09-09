@@ -217,14 +217,18 @@ function Titlebar({
   // too would put the same functionality at both ends of the window. .titlebar--mac reserves the
   // left-hand margin the traffic lights sit in.
   const isMac = window.api.platform === 'darwin'
-  /** On Linux the X really quits the app (there is no tray to hide in — main/index.ts win.on('close')),
-   *  and will-quit kills every running session. That is the same outcome the update install asks about,
-   *  so it asks the same way. On win32/macOS the window only hides, so nothing is asked. */
+  /** On Linux the X really quits the app (there is no tray to hide in — main/index.ts win.on('close')).
+   *  What quitting costs is no longer one answer: with no Host, will-quit kills every running session,
+   *  the same outcome the update install asks about; with a Host the ptys are its children and quitting
+   *  leaves them running, so the question is worth asking but the old sentence would be a lie. The
+   *  answer is read here rather than held in state because it changes during a run — the Host connects
+   *  some milliseconds after launch. On win32/macOS the window only hides, so nothing is asked. */
   const closeWindow = async (): Promise<void> => {
     if (window.api.platform === 'linux' && runningCount > 0) {
+      const kept = await window.api.host.ptysOutliveApp().catch(() => false)
       const ok = await confirmModal({
         title: t('common.quitConfirm.title'),
-        body: t('common.quitConfirm.body', { count: runningCount }),
+        body: t(kept ? 'common.quitConfirm.bodyKept' : 'common.quitConfirm.body', { count: runningCount }),
         confirmLabel: t('common.close')
       })
       if (!ok) return
@@ -750,13 +754,22 @@ export default function App(): React.JSX.Element {
     // new tab of the active group (intoGroupBackground in core/panes/place.ts) without making it the
     // active tab.
     const offCreated = window.api.on('session:created', (info) => {
-      // A session we already know about does nothing — right after a reload, the sessions.list()
-      // re-adoption above can overlap with this event. **This is not the guard that prevents a
-      // duplicate tab**: intoGroupBackground in place.ts filters on its first line with groupOfTab
-      // and makes the second placement a no-op. What this guard buys is not triggering the setSessions
-      // and setLayout re-render that comes along with that no-op.
-      if (sessionsRef.current.some((s) => s.id === info.id)) return
-      setSessions((prev) => (prev.some((s) => s.id === info.id) ? prev : [...prev, info]))
+      // A session we already know about and still believe is running does nothing — right after a
+      // reload, the sessions.list() re-adoption above can overlap with this event. **This is not the
+      // guard that prevents a duplicate tab**: intoGroupBackground in place.ts filters on its first
+      // line with groupOfTab and makes the second placement a no-op. What this guard buys is not
+      // triggering the setSessions and setLayout re-render that comes along with that no-op.
+      //
+      // **A session we know about and marked exited is a different case, and it has to fall through.**
+      // When the channel to the Host drops, every pty handle in main ends and session:exit closes the
+      // tab here — but the Host is still running the process, so the reconnect takes the session back
+      // under the same id and re-emits this event. Returning early there would leave a live agent with
+      // no tab and an 'exited' row until the next reload.
+      const known = sessionsRef.current.find((s) => s.id === info.id)
+      if (known && known.status !== 'exited') return
+      setSessions((prev) =>
+        prev.some((s) => s.id === info.id) ? prev.map((s) => (s.id === info.id ? info : s)) : [...prev, info]
+      )
       // background=true: the tab appears but takes neither the active tab nor focus. If a worker
       // appeared while the user was typing into their own session, the keys after that would go into
       // the worker's PTY (a permission prompt in the worker's TUI would consume them as its answer).

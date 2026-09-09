@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { handleCommand, handleExit, type OrchServerDeps } from './server'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 import { OrchCoordinator, type CoordinatorDeps } from './coordinator'
 import { OrchestrationStore } from './store'
 import {
@@ -2649,6 +2650,35 @@ describe('handleExit — onDispatchLost hands a stranded implementer to recovery
     deps.onDispatchLost = (a) => lost.push(a.dispatchId)
     await handleExit(deps, { sessionId: 'sess1', exitCode: 1 })
     expect(lost).toEqual([dispatchId])
+  })
+
+  // The failure this whole slice exists to prevent, arriving through the one path nobody traced. The
+  // socket to the Host drops while the Host is alive and still running the ptys; every handle ends
+  // with PTY_LOST_SIGHT_EXIT_CODE, SessionManager records the session exited, and if that reached
+  // closeDispatch the reconciler would read the worker as lost and start a second agent in the same
+  // worktree as the one still running.
+  it('an exit that only says the app lost sight of the pty leaves the Dispatch open and writes nothing', async () => {
+    const { deps } = await seedOpenDispatch()
+    const before = deps.getState()
+    let writes = 0
+    const inner = deps.setState.bind(deps)
+    deps.setState = async (next): Promise<void> => {
+      writes++
+      await inner(next)
+    }
+    await handleExit(deps, { sessionId: 'sess1', exitCode: PTY_LOST_SIGHT_EXIT_CODE })
+    expect(writes).toBe(0)
+    expect(deps.getState()).toBe(before) // the same object — no new state was even built
+    expect(deps.getState().dispatches[0].endedAt).toBeUndefined()
+    expect(deps.getState().dispatches[0].workerState).toBe('ready')
+  })
+
+  it('a lost-sight exit is not reported to recovery either', async () => {
+    const lost: string[] = []
+    const { deps } = await seedOpenDispatch()
+    deps.onDispatchLost = (a) => lost.push(a.dispatchId)
+    await handleExit(deps, { sessionId: 'sess1', exitCode: PTY_LOST_SIGHT_EXIT_CODE })
+    expect(lost).toEqual([])
   })
 
   it("a reviewer's exit does not reach onDispatchLost — its Gate is the recovery path", async () => {

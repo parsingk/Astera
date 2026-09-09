@@ -50,6 +50,7 @@ import { isValidRule, type ScheduleRule } from '../../core/scheduler/rule'
 import { parseCheckFlag } from '../../core/workUnit/verification'
 import { outcomeOf } from '../../core/orchestration/view'
 import type { SessionCheck } from '../../core/workUnit/types'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 import { parseHandoffBody } from '../../core/handoff/parse'
 import type { HandoffBody } from '../../core/handoff/types'
 
@@ -1711,6 +1712,27 @@ export async function handleExit(
   deps: OrchServerDeps,
   e: { sessionId: string; exitCode: number }
 ): Promise<void> {
+  // **An exit is not always an ending.** A Host-backed pty handle fabricates this code when the socket
+  // to the Host goes away: no `pty-exit` can arrive for a pty whose channel is gone, so the handle ends
+  // itself rather than leave the record waiting forever. The process on the other side is very probably
+  // still running — the Host outlives the app, and a dropped connection is not the Host dying, so the
+  // app re-attaches by id on the next handshake (slice 2 design §11).
+  //
+  // Closing the Dispatch on it is the one thing that must not happen. `candidates()` selects Tasks whose
+  // latest Dispatch is closed, so a Dispatch closed here hands P1's reconciler a worker it reads as lost
+  // and it starts a second agent in the worktree the first is still working in — spec §29 Scenario 2, the
+  // failure this slice exists to prevent, reached through the app's own exit path rather than through the
+  // boot cleanup that was hardened against it.
+  //
+  // Leaving it open costs a stall: if the pty really is gone (the reconnect reached a *different* Host),
+  // nothing re-asks in this session and the Dispatch stays open until the next boot, whose cleanup reads
+  // the Host's answer and closes it. That is the same asymmetry the rest of this slice chose, and the
+  // same outcome `OrchRollTap.dispose` already accepts for an exit that arrives during a quit — a stalled
+  // Job is a person noticing nothing moved, a duplicate agent is two agents writing one worktree.
+  if (e.exitCode === PTY_LOST_SIGHT_EXIT_CODE) {
+    deps.log?.(`session=${e.sessionId} was lost sight of rather than ended — its dispatch stays open`)
+    return
+  }
   const now = deps.now?.() ?? new Date().toISOString()
   // The probe needs the provider and sessionId, and those are only on the Dispatch before it closes.
   const open = deps.getState().dispatches.find((d) => d.sessionId === e.sessionId && !d.endedAt)

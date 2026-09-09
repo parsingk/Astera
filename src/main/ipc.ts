@@ -2,6 +2,7 @@ import { ipcMain, dialog, app, shell, session, webContents, type BrowserWindow, 
 import { promises as fs, existsSync, readFileSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import net from 'node:net'
 import { execFile, spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { Core } from './core'
@@ -12,12 +13,15 @@ import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
 import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
-import { HostClient } from './host/client'
+import { HostClient, READY_TIMEOUT_MS } from './host/client'
 import { hostSpawnPlan, resolveHostEntry } from './host/spawn'
-import { hostAddress } from '../host/address'
+import { hostAddress, retireOlderHosts } from '../host/address'
+import { createHostPtyFactory } from './host/ptyFactory'
+import { reattachSessions, type ReattachResult } from './host/reattach'
+import { HOST_PROTOCOL, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
-import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, SessionInfo } from '../core/types'
+import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
@@ -69,6 +73,7 @@ import {
 } from '../core/orchestration/inbox'
 import { coordinatorLaunchPrompt } from '../core/orchestration/handover'
 import { detachCoordinator } from '../core/orchestration/state'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import { firesDue } from '../core/orchestration/fire'
 import { reapableChildRuns } from '../core/orchestration/reap'
 import {
@@ -288,6 +293,172 @@ export function providerOfSession(
 }
 
 /**
+ * Which rolling coordinator a session's account routes to, or `null` when the account is gone.
+ * `spawnSession`'s own registration forks on `providerOf(account) === 'codex'` because it always has
+ * the `Account` in hand; reattaching a session after a Host restart only has the id, so this wraps
+ * `providerOfSession`'s lookup — and, unlike a caller that folds a `null` provider into its `else`
+ * branch, keeps "the account is gone" as its own outcome rather than defaulting to `'rolling'`, which
+ * would register a resurrected codex session with the wrong coordinator.
+ *
+ * A pure function for the same reason `providerOfSession` is one: the decision is unreachable by a
+ * test where the reattach wiring itself sits (an electron-only closure inside `registerIpc`).
+ */
+export function rollCoordinatorForSession(
+  sessionId: string,
+  sessions: readonly Pick<SessionInfo, 'id' | 'accountId'>[],
+  getAccount: (id: string) => Account
+): 'rolling' | 'codexRolling' | null {
+  const provider = providerOfSession(sessionId, sessions, getAccount)
+  if (provider === null) return null
+  return provider === 'codex' ? 'codexRolling' : 'rolling'
+}
+
+/** What the Host could be got to say about the sessions that outlived the app. Three answers, and
+ *  the difference between the last two is the difference between a stalled Job and two agents in one
+ *  worktree — see `OrchestrationStore.load`'s own argument for the whole reasoning. */
+export type SessionsTakenBack = ReattachResult | 'unknown' | null
+
+/** The shape `OrchestrationStore.load` wants, from the shape `startHostClient` produces. Trivial, and
+ *  a named function with tests anyway: this is the exact place the three answers could quietly become
+ *  two, and that collapse is the duplicate-agent bug. */
+export function liveWorkersFor(taken: SessionsTakenBack): ReadonlySet<string> | 'unknown' | undefined {
+  if (taken === null) return undefined
+  if (taken === 'unknown') return 'unknown'
+  return new Set(taken.sessions)
+}
+
+/** What `startHostClient`'s outer catch settles `hostSessionsTakenBack` with when the whole chain
+ *  fails outright, rather than through the reattach path above that already produces all three
+ *  answers. Trivial, and a named function with tests anyway, for the same reason `liveWorkersFor` is:
+ *  this is the one place `null` and `'unknown'` could quietly swap, and swapping them either closes a
+ *  Dispatch whose worker is still running, or leaves one open forever.
+ *
+ *  `sawPeer` is `hostClient?.sawPeer()`: `false` when nothing in this attempt ever got as far as a
+ *  peer answering — a throw in `hostAddress` or `retireOlderHosts`, both of which run before
+ *  `HostClient` is even constructed — and that is the deterministic no-Host case a missing
+ *  `out/main/host.js` already settles `null` for. `true` once a peer was seen — a throw in
+ *  `createHostPtyFactory` or the trailing `onHostClientReady` wiring, both after `client.start()` — a
+ *  Host may already be holding sessions this app never took back, and `null` there would have the
+ *  restart cleanup write off a Dispatch whose worker is alive. */
+export function sessionsTakenBackOnFailure(sawPeer: boolean): SessionsTakenBack {
+  return sawPeer ? 'unknown' : null
+}
+
+/** What a completed handshake means for the ptys this app already had — the decision behind the
+ *  `onConnect` wiring in `startHostClient`, hoisted here for the same reason `liveWorkersFor` is:
+ *  the wiring itself is an electron-only closure no test can reach, and getting this wrong is the
+ *  duplicate-agent bug from the other direction.
+ *
+ *  `held` is the identity of the Host this app's ptys live in, from the previous `hello`, or null
+ *  before there has been one. `answered` is the identity in the `hello` that just arrived. Both are
+ *  `${pid}@${startedAt}`, which is what makes them comparable: a pid alone repeats when a Host dies
+ *  and its successor is given the same one, and `startedAt` alone is only a timestamp.
+ *
+ *  - `'first'` — nothing was held, so this is the app's first handshake and the startup chain is
+ *    waiting on it. Sweeping again on it would run the same sweep twice.
+ *  - `'same-host'` — the process that holds this app's ptys is back. Their handles ended when the
+ *    socket dropped, but the processes did not, so the app takes them back by id (design §11).
+ *  - `'other-host'` — a different process answered, so the Host that held them really did die and
+ *    took them with it. Its successor's registry is empty and there is nothing to adopt. */
+export function hostHandshakeMeans(held: string | null, answered: string): 'first' | 'same-host' | 'other-host' {
+  if (held === null) return 'first'
+  return held === answered ? 'same-host' : 'other-host'
+}
+
+/**
+ * The schedule a session taken back from the Host should be re-armed with, or null when there is
+ * none to find. `spawnSession` registers one right after `core.sessions.spawn`; nothing did it for an
+ * adopted session, so a scheduled session came back from a restart with no schedule, no warning, and
+ * no way to get it back short of ending the conversation that survived and reopening it from history.
+ *
+ * **Read from the scheduler's own store rather than carried in the Host's note.** `PtyMeta` is
+ * write-once at spawn and the protocol has no message that could update it, so a note would revive a
+ * schedule the person turned off afterwards. The store is the fresher truth — `scheduler.disable`
+ * deletes from it.
+ *
+ * **The store is keyed by the conversation's own session id, not by the app's** (SchedulerConfigStore:
+ * "Key = claude session id"). That key is still reachable after a restart for the same reason design
+ * §10 gives for keeping the app session id: either the session was started as a resume and carries the
+ * key as `resumeSessionId`, or the CLI wrote its statusLine payload to a file in the profile named
+ * after the app session id — which is exactly where `SchedulerCoordinator.learnKey` reads it from, so
+ * this is that lookup run once rather than a second way of doing it.
+ *
+ * codex has neither: it writes no statusLine, and the rollout watcher that knows its id is
+ * deliberately left unregistered for an adopted session (the codexRollout note in the reattach
+ * adopter). `statusLineSessionId` is null there, so the answer is null and the schedule stays lost —
+ * stated, not guessed at.
+ *
+ * A pure function for the same reason `rollCoordinatorForSession` is one: the wiring is an
+ * electron-only closure inside `registerIpc`, and this is the exact place the app session id could be
+ * used as the key by mistake, which would silently find nothing for every session.
+ */
+export function scheduleForAdoptedSession(
+  info: { id: string; resumeSessionId?: string },
+  statusLineSessionId: string | null,
+  stored: (key: string) => ScheduleConfig | null
+): ScheduleConfig | null {
+  const key = info.resumeSessionId ?? statusLineSessionId
+  if (!key) return null
+  return stored(key)
+}
+
+/** The coordinator's brief, named for the Run it manages. It lives in the same directory as the
+ *  workers' spec files, so the boot sweep has to be able to recognise one; `startCoordinator` writes
+ *  it. The name is here, in one place, so those two cannot drift. */
+export const coordinatorBriefName = (runId: string): string => `coordinator-${runId}.md`
+
+/**
+ * Which of the spec directory's files a boot clears out. `files` is the directory listing, the rest
+ * is the state the restart cleanup left behind, and the answer is the names to delete.
+ *
+ * The rule is short because the invariant behind it is: **a file in here is live exactly as long as
+ * the thing that was told to read it is.** Two kinds live here.
+ *
+ * - A worker's spec, kept while its Dispatch is open. The worker was launched with "read this path
+ *   and follow it", and `buildResumePacket` (orchestration/resumePacket.ts) writes the resume
+ *   briefing back into that same file, acting only on an open Dispatch.
+ *   **Open, not alive.** A Dispatch left open because its worker really is gone is one recovery may
+ *   resume, and resuming reads the original spec — so keeping it is right there too, not lenient.
+ * - A coordinator's brief, kept while the session managing that Run is one the Host handed back.
+ *   `Run.coordinatorSessionId` is that session, and an adopted session keeps its id, so the match is
+ *   direct. With no Host nothing was handed back and every brief goes, exactly as before the Host
+ *   existed; with `'unknown'` every Run that has a coordinator keeps its brief, for the same reason
+ *   the cleanup leaves Dispatches open on that answer.
+ *
+ * Matching is on the file name alone. `Dispatch.specPath` is an absolute path written by whichever
+ * platform produced it, and orchestration.json is hand-edited, so both separators turn up; the names
+ * themselves are unique. Taking a worker's name from the stored path rather than rebuilding it from
+ * ids keeps that naming rule in the one place that owns it, `OrchCoordinator.startWorker`; a Run
+ * stores no path for its brief, so that one name comes from `coordinatorBriefName`, which both this
+ * and `startCoordinator` call.
+ *
+ * A pure function for the same reason `rollCoordinatorForSession` is one: the boot that calls it is
+ * an electron-only closure inside `registerIpc`, and this decision deletes files.
+ */
+export function staleSpecFiles(a: {
+  /** The spec directory's listing, as plain names. */
+  files: readonly string[]
+  /** Every Dispatch in the state the restart cleanup produced — open ones keep their spec. */
+  dispatches: readonly { endedAt?: string; specPath: string }[]
+  /** Every Run in that same state. */
+  runs: readonly { id: string; coordinatorSessionId?: string }[]
+  /** What the Host said about the sessions it still runs, in `load`'s own three answers. */
+  live: ReadonlySet<string> | 'unknown' | undefined
+}): string[] {
+  const fileName = (p: string): string => p.split(/[\\/]/).pop() ?? ''
+  const keep = a.dispatches.filter((d) => !d.endedAt).map((d) => fileName(d.specPath))
+  for (const r of a.runs) {
+    if (r.coordinatorSessionId === undefined) continue
+    if (a.live === 'unknown' || a.live?.has(r.coordinatorSessionId)) keep.push(coordinatorBriefName(r.id))
+  }
+  // The empty ones are dropped, not kept: `openDispatch` writes `specPath: ''` and the coordinator
+  // fills it in once the worker is actually up, so a Dispatch caught in that window would otherwise
+  // hold an empty name that must not be allowed to match anything.
+  const live = new Set(keep.filter((n) => n !== ''))
+  return a.files.filter((f) => !live.has(f))
+}
+
+/**
  * 사이드바 히스토리 재개가 백지 재개로 갈지 정한다. `SPEC §11.5` 가 `--resume` 발원지로 꼽은 셋
  * 중 세 번째 자리이고, 앞의 둘(`rolling.ts`·`codexRolling.ts` 의 `roll()`)이 쓰는 규칙과 같다.
  *
@@ -461,6 +632,31 @@ export function registerIpc(
   /** Astera Host slice 1: the channel exists, and nothing depends on it yet. Built at startup so
    *  slices 2 and 3 inherit an open line rather than one they have to reach for (design §7). */
   let hostClient: HostClient | null = null
+  /** Settles `hostSessionsTakenBack`. `startHostClient` owns it and must call it on **every** path it
+   *  can leave by, including the one where there is no Host at all — a path that returns without
+   *  calling it leaves `bootOrch` waiting forever. The initialiser is never the function that runs:
+   *  a Promise executor is synchronous, so the line below has replaced it before anything can call
+   *  this. */
+  let settleSessionsTakenBack: (r: SessionsTakenBack) => void = () => {}
+  /** What reattaching took back from the Host — the result, `'unknown'` when there is a Host that
+   *  could not be got to say, or null when there was no Host at all. It never rejects, so awaiting it
+   *  cannot throw a Host failure into a caller.
+   *
+   *  It exists so `bootOrch` can ask which workers are still running before its restart cleanup
+   *  decides which ones were lost. Awaiting *this* rather than listing the Host's ptys again is the
+   *  point: an entry reattach refused and killed is alive in that list and dead in this result, and
+   *  calling it alive would leave its Dispatch open with nobody working it.
+   *
+   *  **Created here rather than assigned later by `startHostClient`.** That call is the last
+   *  statement of `registerIpc` and the boot's `void startOrch()` is roughly a thousand lines above
+   *  it, so a variable filled in there is only in place by the time `bootOrch` reads it because
+   *  `bootOrch` happens to await something else first. Handing out the promise from the start makes
+   *  that ordering irrelevant, and the thing it protects is worth not resting on an accident: a
+   *  `bootOrch` that read this too early would see "nothing alive" and close the Dispatch of a worker
+   *  the Host is still running, which is the duplicate-agent failure the cleanup exists to prevent. */
+  const hostSessionsTakenBack = new Promise<SessionsTakenBack>((resolve) => {
+    settleSessionsTakenBack = resolve
+  })
   /** Job Continuity's recorder. Non-null only while the toggle is on: off means no file is opened and
    *  nothing is written (spec §0.4). Created before store.load in bootOrch so the restart's losses are
    *  journaled, and by the toggle handler when turned on at runtime. */
@@ -520,7 +716,7 @@ export function registerIpc(
   /** 사라진 코디네이터의 자리를 비우는 함수. **bootOrch 안에서 대입한다** — 정의가 그 안에
    *  있어야 orch·deps 를 닫아 쓸 수 있고, 부르는 자리(core.sessions.onExit)는 그 밖이다.
    *  orch·orchValidator 와 같은 관례다. */
-  let releaseCoordinator: ((sessionId: string) => Promise<void>) | null = null
+  let releaseCoordinator: ((sessionId: string, exitCode: number) => Promise<void>) | null = null
   /** 예약 템플릿의 다음 발화 시각. **상태에 저장하지 않는다** — 재시작하면 비어 있고, 그때
    *  firesDue 가 nextFireAt(rule, now) 으로 다시 무장한다. 그것이 곧 "앱이 꺼져 있던 동안의
    *  발화는 버린다"는 규칙의 구현이다(main/scheduler.ts 가 같은 이유로 같은 선택을 했다). */
@@ -678,7 +874,9 @@ export function registerIpc(
     void workUnitCollector
       .onSessionExit(e.sessionId)
       .catch((err) => orchLog(`work unit exit failed: ${String(err)}`))
-    void releaseCoordinator?.(e.sessionId) // 이 세션이 어느 Run 의 관리자였다면 그 칸을 비운다
+    // The exit code goes with the id: an exit that only means the app lost sight of the session must
+    // not empty the slot. See `releaseCoordinator` itself for why refusing is the whole fix.
+    void releaseCoordinator?.(e.sessionId, e.exitCode) // 이 세션이 어느 Run 의 관리자였다면 그 칸을 비운다
     // Task 7's tab-resume briefing file is no longer deleted here — see tabResumeDir's own comment
     // above (fix wave 7, finding 1 (CRITICAL)) for why a per-exit delete keyed to this id was wrong:
     // it fired for the *old* session a smart resume had just written the briefing under, while the
@@ -1252,20 +1450,6 @@ export function registerIpc(
     // committed, and leak. Files this app owns live in userData without exception —
     // statusline/<sessionId>.json is the precedent of the same shape.
     const specsDir = path.join(app.getPath('userData'), 'orch', 'specs')
-    // Old specs are cleared at startup — the same convention statusline.ts follows. Dispatch.specPath
-    // is left pointing at a file that no longer exists, and **there is now code that reads and writes
-    // a file back from that value**: buildResumePacket (orchestration/resumePacket.ts) rewrites the
-    // spec file to append the resume briefing. The earlier version of this comment claimed nothing did,
-    // which stopped being true when that landed.
-    //
-    // What makes the deletion safe is a different invariant, so it is named here rather than left
-    // implied: **buildResumePacket only ever acts on an *open* Dispatch** (it looks up `!d.endedAt`),
-    // and store.load closes every open Dispatch as outcome_unknown on restart. So by the time this
-    // rm has run, no Dispatch that could reach these paths is still open. If either half of that
-    // changes — a resume path that accepts a closed Dispatch, or a restart policy that leaves
-    // Dispatches open — this rm starts destroying live workers' instructions.
-    // Both force: true and .catch() are here — a failed cleanup must not block startup.
-    await fs.rm(specsDir, { recursive: true, force: true }).catch(() => {})
     await fs.mkdir(specsDir, { recursive: true })
     // The launch prompt carries this path, so a forbidden character in it makes every worker-start fail
     // (a Windows username can contain `&` or `^`). **Startup is not blocked** — the rest of
@@ -1278,7 +1462,65 @@ export function registerIpc(
 
     const store = new OrchestrationStore(path.join(app.getPath('userData'), 'orchestration.json'))
     if (core.appSettings.getJobContinuityEnabled()) openContinuity()
-    const loaded = await store.load()
+    // Ask what the Host still had before deciding which workers were lost. Reattaching therefore
+    // runs before the cleanup, not after it: the sessions it took back are the ones whose Dispatch
+    // must stay open, and this is the only moment both facts are in hand.
+    //
+    // **The ids match with nothing in between.** An adopted session keeps the id it had before the
+    // restart (reattach.ts's `ReattachResult.sessions`), so a stored `Dispatch.sessionId` is
+    // literally one of these strings — there is no old-id/new-id map to keep, and a Dispatch that
+    // survives the cleanup is already pointing at the session that answers to it.
+    //
+    // **The wait is bounded, and it is the wiring's own wait rather than a second one.** Reattaching
+    // starts on `ready()`, which ends at the handshake, at the client giving up, or at its own
+    // timeout; the list it then asks for gives up after five seconds. A build with no
+    // `out/main/host.js` waits for none of it — `startHostClient` settles this on the way out — so
+    // that app boots exactly as fast, with exactly the same answer, as it did before the Host existed.
+    //
+    // **A Host that never speaks does not give the same answer as no Host.** An earlier version of
+    // this comment said it did, and that was the bug: closing every open Dispatch is only safe when
+    // the emptiness is evidence, and it is evidence only when there was no Host to ask. A peer that
+    // accepted the connection and then went quiet is positive evidence a Host exists and none at all
+    // about its sessions, so the answer is `'unknown'` and the cleanup leaves open Dispatches where
+    // they are. A Job that stalls is a person noticing nothing moved; the alternative was a second
+    // agent dispatched into a worktree whose first one is still running.
+    const aliveSessionIds = liveWorkersFor(await hostSessionsTakenBack)
+    const loaded = await store.load({ aliveSessionIds })
+    // The unknown case gets a line of its own, because from the state alone it is indistinguishable
+    // from a boot that had nothing to clean up — and a person looking for why a Job did not move
+    // needs to be able to find it. The reason it could not be asked was logged by the Host wiring.
+    if (aliveSessionIds === 'unknown')
+      orchLog(
+        `restart cleanup — the Host could not be asked what it is still running, so ${store.get().dispatches.filter((d) => !d.endedAt).length} open dispatch(es) were left open rather than written off`
+      )
+    else if (aliveSessionIds && aliveSessionIds.size > 0)
+      orchLog(
+        `restart cleanup — the Host still runs ${aliveSessionIds.size} session(s); any open Dispatch of theirs was left open`
+      )
+    if (loaded.stuckInterruptions > 0)
+      orchLog(
+        `restart cleanup — ${loaded.stuckInterruptions} interrupted Task(s) were left as they were: their Dispatch is still open, so there is nothing to gate`
+      )
+
+    // Old specs are cleared at startup — the same convention statusline.ts follows — except the ones
+    // something that is still running was told to read: a worker's spec while its Dispatch is open, a
+    // coordinator's brief while the session managing that Run is one the Host handed back.
+    // `staleSpecFiles` holds that rule, with the reasoning, and is tested. This runs *after* the
+    // cleanup rather than before it because only the cleanup knows which Dispatches are still open,
+    // now that a worker the Host kept running survives a restart with its Dispatch intact.
+    //
+    // A failed cleanup must never block startup, so every step here swallows its own failure: an
+    // unreadable directory yields nothing to delete, and one file that will not go does not cost the
+    // rest their turn. The worst outcome is a stale file nobody reads, which the next boot retries.
+    const swept = store.get()
+    for (const name of staleSpecFiles({
+      files: await fs.readdir(specsDir).catch(() => []),
+      dispatches: swept.dispatches,
+      runs: swept.runs,
+      live: aliveSessionIds
+    }))
+      await fs.rm(path.join(specsDir, name), { recursive: true, force: true }).catch(() => {})
+
     // The restart cleanup is a state transition like any other: every worker it closed as
     // outcome_unknown lands as ATTEMPT_LOST, and Runs the TTL pruned lose their journal rows.
     if (continuity && loaded.before) {
@@ -1388,11 +1630,16 @@ export function registerIpc(
     // 쓴다(rolling.ts 의 onHookEvent) — 훅을 떼면 그 갈래가 워커에게만 사라진다.
     // **wantHooks 에 체인과 별개인 자기 입력을 주는 일은 나중으로 남긴다.**
     const coordinator = new OrchCoordinator({
-      // This is the only place session:created is emitted. On the user path (the 'sessions.spawn'
+      // session:created is emitted at three sites: here (this spawnSession closure), in
+      // startCoordinator's own registration below, and in startHostClient's reattach adopter. All
+      // three call spawnSession/adopt directly inside main rather than through the renderer's own
+      // 'sessions.spawn' handler — but sitting inside main is not by itself the reason: the roll
+      // respawn is main-side too and does not emit this, since it re-points an existing tab through
+      // session:rolled instead of building a new one. On the user path (the 'sessions.spawn'
       // ipcMain.handle) the return value goes to the renderer and App.tsx builds the tab from it, but
-      // the coordinator calls this closure directly inside main, so its return value never reaches the
-      // renderer — which is why worker sessions had no tab (the visibility requirement went unmet, and
-      // with no acks the PTY stalled permanently at 100KB).
+      // the coordinator calls this closure directly inside main, so its return value never reaches
+      // the renderer — which is why worker sessions had no tab (the visibility requirement went
+      // unmet, and with no acks the PTY stalled permanently at 100KB).
       // **It is not emitted inside the shared spawnSession closure**: that would emit on the user path
       // too, where the renderer has already built a tab from the return value, placing the same session
       // twice.
@@ -2680,7 +2927,14 @@ export function registerIpc(
         // **specsDir 에 쓴다.** 그 경로에 argv 금지 문자가 있으면 앱 시작 시 경고가 남는 자리가
         // 이미 그것이고(아래 LAUNCH_FORBIDDEN 검사), 시작 시 비워지는 것도 무해하다: 앱을 다시
         // 켜면 코디네이터도 없으므로 사람이 실행을 다시 누른다.
-        const briefPath = path.join(specsDir, `coordinator-${a.runId}.md`)
+        //
+        // **The last clause stopped being true when the Host started keeping terminals alive**, and
+        // the boot no longer relies on it: a coordinator session the Host hands back is still running
+        // with this path in its launch prompt, so the boot sweep keeps this file while
+        // `Run.coordinatorSessionId` names a session that survived. That is `staleSpecFiles`, which
+        // recognises this file by `coordinatorBriefName` — the same function that names it here, so
+        // the two cannot drift.
+        const briefPath = path.join(specsDir, coordinatorBriefName(a.runId))
         await fs.writeFile(briefPath, a.brief, 'utf8')
         // **워커와 같은 래퍼를 쓴다**(위 spawnSession) — 그 래퍼가 계정 객체를 찾고, 롤링
         // 코디네이터에 등록하고, orchEnv 를 실어 준다. core.sessions.spawn 을 직접 부르면 그 셋을
@@ -3067,7 +3321,24 @@ export function registerIpc(
      *
      *  **앱 재시작은 이 경로가 아니다.** 그때는 세션이 프로세스와 함께 사라지고 exit 이 오지 않는다.
      *  같은 버튼이 그 경우도 받는다 — 자동 복구를 하지 않기로 한 결정과 같은 방향이다(SPEC §12.2). */
-    releaseCoordinator = async (sessionId: string): Promise<void> => {
+    releaseCoordinator = async (sessionId: string, exitCode: number): Promise<void> => {
+      // **An exit that only says the app lost sight of the session does not empty the slot.** The
+      // socket to the Host dropped; the coordinator is still running in the Host and the reconnect
+      // takes it back under the same id. Emptying the slot here would put "restart the coordinator" on
+      // that Run's line in the Jobs list, and one human click on it is a second coordinator in a
+      // worktree the first is still working in — the failure this branch exists to prevent, arriving by
+      // hand rather than automatically.
+      //
+      // **Nothing re-attaches the slot afterwards, and nothing can.** `detachCoordinator` deletes
+      // `Run.coordinatorSessionId`, which is the only thing that records *which* Run this session
+      // manages, so once it is gone an adoption has nothing to match the session against. Refusing to
+      // empty it is what keeps the slot correct, not a second write on the way back — the same one
+      // condition `handleExit` uses for the Dispatch.
+      //
+      // The cost, if the coordinator really did die with its Host: the slot stays attached to a session
+      // that is gone and the restart button never appears. That is already what a plain app restart
+      // leaves behind, since the slot is persisted and nothing at boot clears it.
+      if (exitCode === PTY_LOST_SIGHT_EXIT_CODE) return
       if (!orch || !orch.deps.enabled()) return
       const st = orch.deps.getState()
       const run = st.runs.find((r) => r.coordinatorSessionId === sessionId)
@@ -4714,10 +4985,12 @@ export function registerIpc(
     return core.appSettings.getTheme()
   })
 
-  // Astera Host slice 1. Unconditional — the Host is not an orchestration feature, so this must not
-  // go inside bootOrch, which only runs when that toggle is on. A missing out/main/host.js (a partial
-  // build, or a packaging mistake) leaves hostClient null and the app runs exactly as it does today.
-  const startHostClient = (): void => {
+  // Astera Host. Unconditional — the Host is not an orchestration feature, so this must not go inside
+  // bootOrch, which only runs when that toggle is on. A missing out/main/host.js (a partial build, or
+  // a packaging mistake) leaves hostClient null and the app runs exactly as it does today. Once the
+  // Host answers, this also routes core.ptyRouter to it and takes back whatever sessions, runs and
+  // terminals it still holds (slice 2 design §7).
+  const startHostClient = async (): Promise<void> => {
     const hostLog = hostWiring?.log ?? ((): void => {})
     const profileDir = app.getPath('userData')
     // The same two candidates as the CLI shuttle's, for the same reasons — why they are the same path
@@ -4729,9 +5002,54 @@ export function registerIpc(
     )
     if (!entry) {
       hostLog('out/main/host.js was not found — the app runs without a Host')
+      // Nothing was taken back and nothing ever will be. Said now, not left unsaid: `bootOrch` waits
+      // on this before its restart cleanup, and this is the build that must start exactly as fast as
+      // it did before the Host existed.
+      settleSessionsTakenBack(null)
       return
     }
-    const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir() })
+    // An update changes the protocol, and the Host from the previous version is still there holding
+    // terminals this app cannot speak to. Ask it to leave first. A restart does not come through
+    // here, because the protocol has not changed and the address is the same one.
+    //
+    // Killing whatever answers here unconditionally — no check for a still-running app using it — is
+    // safe only because no app can be running against this same profile right now. `src/main/index.ts`
+    // requests a single-instance lock and quits before `createCore` (and so before this ever runs) when
+    // it loses that race, and the lock is requested against the same profile (`userData`) this Host's
+    // address is derived from. So the only way a Host answers an older protocol here is that the app
+    // which started it has already quit — retiring it costs nobody their terminals. This reasoning
+    // breaks if that lock is ever dropped, or rekeyed to something other than the profile (e.g. per
+    // installation rather than per userData directory): then a second app instance could share this
+    // profile with the first, and retiring an older Host would kill a terminal a still-running instance
+    // is using.
+    await retireOlderHosts({
+      profileDir,
+      platform: process.platform,
+      tmpDir: os.tmpdir(),
+      protocol: HOST_PROTOCOL,
+      connect: (address, line) =>
+        new Promise<boolean>((resolve) => {
+          const sock = net.connect(address)
+          const done = (v: boolean): void => {
+            sock.destroy()
+            resolve(v)
+          }
+          sock.on('connect', () => {
+            // `end`, not `write` plus a guessed flush delay: it closes this side once the line is out,
+            // and the server's default (no `allowHalfOpen`) echoes that close back as soon as it sees
+            // it, so `'close'` below fires once the line has actually gone rather than after a fixed
+            // wait — usually sooner than the 100ms this replaced, and reliably rather than a guess.
+            sock.end(line)
+          })
+          sock.on('close', () => done(true))
+          sock.on('error', () => done(false))
+          setTimeout(() => done(false), 1_000).unref?.()
+        }),
+      // hostLog, not orchLog: this is a Host diagnostic, and it must still be recorded when
+      // orchestration is off, which is exactly when orchLog is a no-op.
+      log: (m) => hostLog(m)
+    })
+    const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
     const client = new HostClient({
       address: addr.address,
       appVersion: app.getVersion(),
@@ -4754,9 +5072,295 @@ export function registerIpc(
     })
     hostClient = client
     client.start()
+
+    const transport = {
+      send: (m: ClientMessage): boolean => hostClient?.send(m) ?? false,
+      onHostMessage: (cb: (m: HostMessage) => void) => hostClient?.onMessage(cb) ?? ((): void => {}),
+      onHostGone: (cb: () => void) => hostClient?.onDisconnect(cb) ?? ((): void => {}),
+      // hostLog, not orchLog: this is the Host failure log every other line in startHostClient uses,
+      // and the one path here (a caller's onExit throwing while ptyFactory.ts ends a refused spawn)
+      // must still be recorded when orchestration is off, which is exactly when orchLog is a no-op.
+      log: (m: string) => hostLog(`host: ${m}`)
+    }
+    const { factory, attach } = createHostPtyFactory(transport)
+
+    // How long reattaching is willing to wait for the first handshake's outcome before deciding the
+    // Host is not there. READY_TIMEOUT_MS is the sum of the two sequential phases `ready()` (armed
+    // from `client.start()`, above) can be waiting out — HostClient has not reached a peer yet, or it
+    // has and is waiting on that peer's hello — computed by client.ts itself so it cannot drift from
+    // the constructor above, which overrides neither of the two constants that sum depends on. A
+    // timeout smaller than that sum can expire mid-handshake — reading a merely slow Host the same as
+    // no Host at all, permanently, since nothing re-checks a hello that lands after this has already
+    // given up.
+    const HOST_READY_MS = READY_TIMEOUT_MS
+
+    /** One round trip: ask for the list and resolve on the reply, giving up after five seconds so a
+     *  silent Host cannot hold the startup open.
+     *
+     *  **Giving up resolves `null`, not `[]`.** They are opposite answers: `[]` is the Host telling us
+     *  it holds nothing, and `null` is the Host telling us nothing at all. Everything downstream is
+     *  deciding whether a worker died, and reading the second as the first closes the Dispatch of a
+     *  worker that is demonstrably still running — the pty is still there, and the late `pty-listed`
+     *  lands after `off()` and is dropped, so nothing adopts it and nothing kills it either. */
+    const listPtys = (t: typeof transport): Promise<PtyEntry[] | null> =>
+      new Promise((resolve) => {
+        const done = (entries: PtyEntry[] | null): void => {
+          clearTimeout(timer)
+          off()
+          resolve(entries)
+        }
+        const off = t.onHostMessage((m) => {
+          if (m.t === 'pty-listed') done(m.entries)
+        })
+        const timer = setTimeout(() => done(null), 5_000)
+        timer.unref?.()
+        // A send that does not go out is the connection having dropped between `ready()` and here.
+        // Answered now rather than after five seconds of waiting for a reply to a question nobody
+        // heard — and answered `null`, because a Host that was there a moment ago still has its ptys.
+        if (!t.send({ t: 'pty-list' })) done(null)
+      })
+
+    /** One sweep: ask the Host what it is holding, hand each entry to the manager its note names,
+     *  and report what that answer is worth to the restart cleanup. Run at startup, and again on a
+     *  reconnect to the **same** Host — the onConnect wiring below is where that identity is judged.
+     *
+     *  **Sweeps queue behind each other rather than run side by side.** A drop and a reconnect while
+     *  one is still waiting out its five seconds would otherwise put two `pty-list` round trips and
+     *  two `reattachSessions` walks over the same entries — each adopting, and each asking the Host
+     *  to replay the scrollback again. Queued rather than deduplicated: a sweep that came back with
+     *  nothing is not an answer the next one can reuse. */
+    let sweeps: Promise<unknown> = Promise.resolve()
+    const takeSessionsBack = (why: string): Promise<SessionsTakenBack> => {
+      const next = sweeps.then(() => sweep(why))
+      // The queue must not break on a sweep that threw — the caller keeps that rejection.
+      sweeps = next.catch(() => undefined)
+      return next
+    }
+    const sweep = async (why: string): Promise<SessionsTakenBack> => {
+      // Asked here rather than from inside reattach's `list` dep so the unanswered case can be its
+      // own answer: reattach has no way to say "I was told nothing", and an empty list would have
+      // it adopt nothing and report nothing adopted, which reads identically to a Host that really
+      // is holding nothing.
+      const entries = await listPtys(transport)
+      if (entries === null) {
+        hostLog(
+          'host: the Host did not answer the pty list — nothing was taken back, and what it is still running is unknown, so no worker is written off'
+        )
+        return 'unknown'
+      }
+      const res = await reattachSessions({
+        list: async () => entries,
+        attach,
+        sendAttach: (id) => transport.send({ t: 'pty-attach', id }),
+        kill: (id) => transport.send({ t: 'pty-kill', id }),
+        // Asked per kind, because the id in the note is the manager's own, not the pty's. Exited does
+        // not count as held: a reconnect's whole job is adopting the records the fabricated exit marked
+        // exited. A terminal has no exited state to ask about — its exit deletes the entry.
+        heldLive: (a) => {
+          if (a.kind === 'session') return core.sessions.list().some((s) => s.id === a.id && s.status === 'running')
+          if (a.kind === 'run') return core.run.get(a.id)?.status === 'running'
+          if (a.kind === 'terminal') return core.terminal.holds(a.id)
+          return false
+        },
+        adopters: {
+          session: (a) => {
+            const info = core.sessions.adopt(a)
+            if (!info) return false
+            // The pty came back; the things the app hung off it did not. Rolling and Slack are
+            // registered from the SessionInfo right after core.sessions.spawn() elsewhere in this
+            // file, so registering the rebuilt one puts a recovered worker back on the same footing
+            // (design §10) — including its tab: the renderer builds one from `session:created` the
+            // same way it does for a freshly spawned session, since reattaching can land well after
+            // the renderer has already mounted.
+            const coordinator = rollCoordinatorForSession(info.id, core.sessions.list(), (id) => core.accounts.get(id))
+            if ((info.rollAccountIds?.length ?? 0) >= 1) {
+              // The `false` is `locate` (CodexRollingCoordinator.register's 4th argument): an
+              // adopted session must not run the locate poll — see that parameter's own doc comment
+              // for why the discovery it would run is actively harmful here, not merely useless.
+              // What it costs, beyond rolling itself, is this coordinator's own two lookups, which
+              // stay null for the session's whole life: tabResumeTextFor, so handover and update
+              // text degrade to the git-only form; and findLiveByCodexSession, the guard that stops
+              // a conversation reopened from history being resumed while it is still live. Without
+              // that guard, reopening an adopted rolling codex conversation starts a second
+              // `codex resume` appending to a rollout the live pty is still writing. That is still
+              // better than the alternative this replaced, which guarded the *wrong* conversation,
+              // and it goes away with the same follow-up store the block below names.
+              if (coordinator === 'codexRolling') codexRolling?.register(info, undefined, undefined, false)
+              else if (coordinator === 'rolling') rolling?.register(info)
+            }
+            // codexRollout is deliberately NOT registered here, unlike the unconditional block at
+            // spawn, for the same discovery hazard `codexRolling`'s `locate: false` above avoids —
+            // this watcher has no such switch, so the only safe choice is skipping it entirely. It
+            // keys the session's rollout file by `findRollout({ since, cwd, ... })`, which for a
+            // freshly spawned session is safe because since = the spawn moment: at that instant
+            // nothing else can have a newer file in the same cwd/account, so "pick the newest
+            // candidate created after since" always resolves to this session's own file. An adopted
+            // session's real spawn was before the restart, so since would have to be that earlier
+            // moment — and between then and whenever the scan actually runs, another session can
+            // legitimately open in the same cwd/account and create a newer file, which "newest wins"
+            // would hand to the adopted entry instead, permanently locking the rightful session out
+            // of its own file via claimed()'s excludePaths. There is no narrower since that fixes
+            // this: the discovery rule itself assumes the caller's own file is definitionally the
+            // newest thing that exists the moment a match is found, which only holds right after a
+            // real spawn. Four things hang off this one discovery, and an adopted codex session gets
+            // none of them until it exits and a fresh one is spawned in its place: the usage chips
+            // (CodexRolloutWatcher.usage), turn-triggered Slack notifications (onTurnComplete),
+            // Work Unit detection (rolloutPathFor feeds the transcript path), and the scheduler's
+            // key (codexSessionIdFor). A store keyed by app session id, filled from the path the
+            // watcher already logs at map time and read back here, would answer this exactly instead
+            // of heuristically — but PtyMeta is write-once at spawn and the Host protocol has no
+            // meta-update message, so that store does not exist yet. Left as a named follow-up.
+            if (info.slackNotify === true) {
+              try {
+                slack?.notifier.register(info)
+              } catch {
+                /* A failed Slack registration does not block taking the session back */
+              }
+            }
+            // The schedule, on the same footing as rolling and Slack. It is not in the note — see
+            // `scheduleForAdoptedSession` for why the store is the truth and how its key is reached
+            // from an id that survived. Fire-and-forget: the lookup reads a file, this adopter is
+            // synchronous, and a session that comes back without its schedule is still a session that
+            // came back.
+            void (async () => {
+              const schedule = scheduleForAdoptedSession(
+                info,
+                extractStatusLineSession(await core.statusLinePayload(info.id)).sessionId,
+                (key) => core.schedulerConfig.get(key)
+              )
+              if (!schedule) return
+              // The same two arguments spawn's own registration passes; the provider gates the
+              // statusLine learning poll. `nextFireAt` runs from now, so a round that came due while
+              // the app was down is not fired late — the coordinator's standing "a missed round is
+              // ignored" policy.
+              scheduler?.register({ ...info, schedule }, providerOf(core.accounts.get(info.accountId)))
+              hostLog(`host: re-armed the schedule of session ${info.id}`)
+            })().catch((err) => hostLog(`host: could not re-arm the schedule of session ${info.id}: ${String(err)}`))
+            try {
+              send('session:created', info)
+            } catch (err) {
+              orchLog(`session:created emit failed session=${info.id}: ${String(err)}`)
+            }
+            return true
+          },
+          // Runs need no created-event of their own: RunManager.adopt's track() already fires
+          // onStatus for every adopt the same as it does for a fresh start, and core.run.onStatus is
+          // wired to send('run:status', ...) — the renderer's upsertRun adds a runId it has not seen
+          // the same way it applies any other update. Terminals have no such push at all — a project
+          // panel already open when one is adopted will not show it until terminal.list(projectPath)
+          // is queried again (reopening the panel, or reloading the project); nothing here invents
+          // one, since none of terminal.open's own callers get one either.
+          run: (a) => core.run.adopt(a) !== null,
+          terminal: (a) => core.terminal.adopt(a) !== null
+        },
+        log: (m) => hostLog(`host: ${m}`)
+      })
+      hostLog(`host: took back ${res.adopted} session(s), refused ${res.refused} (${why})`)
+      return res
+    }
+
+    /** Which Host this app's ptys belong to, as `${pid}@${startedAt}` from the last `hello`, or null
+     *  before the first one. The pair is what separates the two things a reconnect can mean. */
+    let heldBy: string | null = null
+    hostClient.onConnect((h) => {
+      const answered = `${h.pid}@${h.startedAt}`
+      const previous = heldBy
+      const means = hostHandshakeMeans(previous, answered)
+      heldBy = answered
+      // **Installed on every handshake, not only the one the boot chain acts on.** Here, and not at the
+      // top of this function, for the reason it always was: a pty spawned before the handshake
+      // completes has its pty-spawn silently dropped by HostClient.send and sits pending forever. What
+      // changed is the other end — installing it only from the boot chain left one corner where the
+      // router stayed on node-pty while the Host answered: a first handshake that lands after
+      // `ready()` has given up. A later reconnect would then sweep and adopt the Host's ptys into a
+      // router still pointing at node-pty, so `ptysOutliveApp()` answered false while the Host really
+      // owned them — and the quit path would kill the very sessions this branch exists to keep.
+      // Idempotent: `use` is one assignment of the same object, and it only changes which factory the
+      // *next* spawn reaches, never a handle already handed out (see ptyRouter's own tests).
+      core.ptyRouter.use(factory)
+      // The first handshake belongs to the chain below, which is waiting on `ready()` for exactly this
+      // moment; sweeping here as well would be the same sweep twice. It also covers the one case where
+      // that chain has already given up before a peer ever said hello — a handshake that outlasts its
+      // deadline, fails, and succeeds on the retry. Nothing sweeps there, which is what happens today
+      // and is a gap of its own: the ptyRouter was never switched either, so the app is on node-pty
+      // beside a connected Host. Not made worse here, and not fixed here.
+      if (means === 'first') return
+      if (means === 'other-host') {
+        // The Host this app's ptys lived in really did die, and its successor's registry is empty.
+        // Nothing to take back: the handles have already ended themselves through onHostGone and each
+        // manager has marked its record exited, which is the path design §11 names for this case.
+        hostLog(`host: a different Host answered (${answered}, was ${previous}) — the ptys the old one held are gone`)
+        return
+      }
+      // The same Host, still holding the ptys whose handles ended when the socket dropped. Take them
+      // back by id: `reattachSessions` rebuilds each manager's record over the exited one and the ring
+      // buffer covers the gap (design §11). The result is not reported to `hostSessionsTakenBack` —
+      // that promise answers the boot cleanup's one question and has long since settled.
+      void takeSessionsBack('after a reconnect').catch((e) =>
+        hostLog(`host: taking sessions back after a reconnect failed: ${String(e)}`)
+      )
+    })
+
+    // Reported, not merely done: `bootOrch`'s restart cleanup waits on the outcome of this to learn
+    // which workers are still running — see `hostSessionsTakenBack`'s own note. Every path out of the
+    // chain settles it, with one of the three answers `SessionsTakenBack` names, and which one each
+    // path gives is marked at the path.
+    void hostClient
+      .ready(HOST_READY_MS)
+      .then(async (): Promise<SessionsTakenBack> => {
+        if (!hostClient?.status().connected) {
+          // **Two different failures share this branch, and they are not the same answer.** Nothing
+          // ever accepted a connection: there is no Host, nothing could have survived, and `null`
+          // says so — the pre-Host truth. Something did accept and then never finished the handshake,
+          // or handshook and dropped: a Host is there, holding ptys we cannot enumerate, and `null`
+          // there would have the cleanup close a live worker's Dispatch. `sawPeer` is the difference.
+          if (!hostClient?.sawPeer()) {
+            hostLog('host: no Host, so terminals stay in the app exactly as before')
+            return null
+          }
+          hostLog(
+            'host: a Host answered the address but never finished the handshake — what it is still running is unknown, so no worker is written off'
+          )
+          return 'unknown'
+        }
+        // The router is already on the Host factory: `onConnect` above installs it the moment the
+        // handshake lands, which is what makes `status().connected` true here in the first place.
+        return takeSessionsBack('at startup')
+      })
+      // Settles rather than rejecting, so `bootOrch` can await this without a try and nothing from
+      // the Host throws into the app. `'unknown'`, not null: a reattach that blew up cannot say which
+      // sessions it managed to take back, and there is certainly a Host — it answered the list a line
+      // ago. Some of its ptys may be adopted, some orphaned, and none of that is evidence a worker
+      // died. `reattachSessions` contains a bad entry itself, as a refusal, so getting here at all
+      // means something systemic went wrong and guessing would be guessing badly.
+      .catch((e): SessionsTakenBack => {
+        hostLog(`host: taking sessions back failed: ${String(e)} — no worker is written off`)
+        return 'unknown'
+      })
+      .then(settleSessionsTakenBack)
+
     hostWiring?.onHostClientReady(() => client.stop())
   }
-  startHostClient()
+  // **A throw in here must not be allowed to leave `hostSessionsTakenBack` pending.** The settlement
+  // above covers every asynchronous path, but the body has work ahead of that chain — `retireOlderHosts`
+  // (awaited), then `hostAddress`, the client, `createHostPtyFactory` — and a failure there would leave
+  // the promise unsettled for the app's whole life: `bootOrch` waits on it forever, so `startOrch`'s
+  // `finally` never runs, `orchStarting` stays true, and every later toggle's `startOrch()` is a silent
+  // no-op — orchestration would simply never start again, with nothing to see but the missing log
+  // lines. `startHostClient` is async, so a failure anywhere in it — before or after its first `await`
+  // — surfaces as a rejection rather than a synchronous exception, which is what `.catch` is for here
+  // rather than `try`/`catch`.
+  void startHostClient().catch((err) => {
+    // Settle before logging: a throwing `hostWiring.log` must not leave this pending either — the same
+    // ordering hazard the old `try`/`catch` had to avoid, now on the `.catch` side of it.
+    //
+    // `sessionsTakenBackOnFailure(hostClient?.sawPeer() ?? false)`, not always `null`: a rejection here
+    // can land after `client.start()` already began connecting (a throw in `createHostPtyFactory`, or
+    // in the trailing `onHostClientReady` wiring), and by then a Host may already be holding sessions
+    // this app never took back. See `sessionsTakenBackOnFailure`'s own comment for the full reasoning.
+    settleSessionsTakenBack(sessionsTakenBackOnFailure(hostClient?.sawPeer() ?? false))
+    hostWiring?.log(`the Host wiring failed to start: ${String(err)} — the app runs without a Host`)
+  })
 
   ipcMain.handle(
     'host.status',
@@ -4770,6 +5374,10 @@ export function registerIpc(
         problem: 'out/main/host.js was not found'
       }
   )
+  // Not derived from `host.status()` by the caller: `connected` false covers both "there was never a
+  // Host" and "the connection dropped while the Host kept running the ptys", and those are opposite
+  // answers to this question. The router holds the one that matters — see its `ptysOutliveApp`.
+  ipcMain.handle('host.ptysOutliveApp', () => core.ptyRouter.ptysOutliveApp())
 
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is

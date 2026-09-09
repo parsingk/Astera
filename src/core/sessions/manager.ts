@@ -225,7 +225,27 @@ export class SessionManager {
       cwd: opts.cwd,
       cols: opts.cols ?? 120,
       rows: opts.rows ?? 30,
-      env
+      env,
+      meta: {
+        kind: 'session',
+        id,
+        // Only what spawn cannot work out again by itself. The descriptors come from the platform and
+        // the account's provider; env's CLAUDE_CONFIG_DIR/CODEX_HOME half comes from the account, and
+        // its ASTERA_* half from the app's own current state (orchEnvOf), not from anything here. The
+        // statusLine config comes from the account plus this session's own id (PtyMeta.id, not
+        // restore) — restore carries slackNotify and rollAccountIds only because they also decide
+        // whether toolHooks get installed.
+        restore: {
+          accountId: opts.account.id,
+          cwd: opts.cwd,
+          title: opts.title ?? defaultSessionTitle(opts.cwd),
+          ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
+          ...(opts.rollAccountIds ? { rollAccountIds: opts.rollAccountIds } : {}),
+          ...(opts.rollPrompt ? { rollPrompt: opts.rollPrompt } : {}),
+          ...(opts.slackNotify !== undefined ? { slackNotify: opts.slackNotify } : {}),
+          ...(opts.bypassPermissions !== undefined ? { bypassPermissions: opts.bypassPermissions } : {})
+        }
+      }
     })
     const info: SessionInfo = {
       id,
@@ -243,6 +263,13 @@ export class SessionManager {
       bypassPermissions: opts.bypassPermissions,
       schedule: opts.schedule
     }
+    return this.track(info, pty)
+  }
+
+  /** The bookkeeping half of a spawn: the live record, the two callbacks and the backpressure
+   *  accounting. `spawn` calls it for a pty it just created; `adopt` calls it for one the Host was
+   *  already running. Shared so the two can never drift apart. */
+  private track(info: SessionInfo, pty: PtyLike): SessionInfo {
     const live: LiveSession = {
       info,
       pty,
@@ -270,6 +297,80 @@ export class SessionManager {
       this.onExit?.({ sessionId: info.id, exitCode })
     })
     return { ...info }
+  }
+
+  /** Takes over a pty the Host is already running, rebuilding this session's record from the note the
+   *  app left with it (slice 2 design §7). Returns null for a note this build cannot read — a session
+   *  invented from a half-understood record would be worse than one the app admits it lost.
+   *
+   *  Deliberately does none of spawn's other work: the process exists, so there is no env to build, no
+   *  statusLine to configure and no hooks to install. The cwd is not checked either — spawn's
+   *  existsSync guard is about a directory it is about to start a process in, and refusing a session
+   *  whose folder was renamed since would orphan a process that is still running.
+   *
+   *  **Keeps the session's own id** — `PtyMeta.id`, which the Host hands back beside the note. The id is
+   *  what everything the app persists per session is filed under, and the agent process is still writing
+   *  under the old one: its statusLine and hook capture paths were baked into its env at spawn
+   *  (`ASTERA_STATUSLINE_OUT`, `ASTERA_HOOK_OUT`), and StatusLineManager reads those files back by
+   *  session id. Minting a new id would read a file nothing ever wrote — a pane that comes back blank
+   *  with nothing to point at (slice 2 design §10).
+   *
+   *  `schedule` is not rebuilt here: the note does not carry it, and the coordinator's own entry died
+   *  with the app. Keeping the id is what leaves it reachable, and the reattach adopter in ipc.ts is
+   *  what reaches it — `scheduleForAdoptedSession` reads the scheduler's own store and re-registers,
+   *  the same way that adopter re-registers rolling and Slack. Nothing in this manager re-arms one, so
+   *  a caller that adopts without doing that gets a session with no schedule.
+   *
+   *  **Adopting over this manager's own exited record replaces it.** A dropped connection ends every
+   *  Host-backed handle (PTY_LOST_SIGHT_EXIT_CODE) while the Host keeps running the real process, so a
+   *  reconnect adopts a session the app never forgot — it only marked it exited. `track` writes into a
+   *  map keyed by the id, and the id survives, so the new record takes the old one's place and there is
+   *  exactly one live record per pty. Replacing rather than reviving in place is deliberate: reviving
+   *  would leave the dead handle's `onData`/`onExit` closures pointing at a LiveSession that is running
+   *  again, and a late callback from that handle would then move a live session's byte count or mark it
+   *  exited. The dead handle keeps its own object, which nothing reads any more.
+   *
+   *  **The caller must hand over a pty it believes is still live.** This method cannot tell: an attach
+   *  handle for a process that already ended looks exactly like one for a running process and will never
+   *  deliver an exit, so a dead pty adopted here becomes a record stuck at 'running' for the life of the
+   *  app — and an orchestration worker that died would be reported alive, with its Job waiting forever
+   *  for a completion nobody will send. The Host's entry carries an `alive` flag; filtering on it is the
+   *  caller's job. */
+  adopt(a: { kind: string; id: string; pty: PtyLike; restore: Record<string, unknown> }): SessionInfo | null {
+    // Checked before any field, because the kinds' readable shapes overlap: a note of another kind can
+    // satisfy the fields below and would come back rebuilt as the wrong thing.
+    if (a.kind !== 'session') return null
+    const r = a.restore
+    const str = (k: string): string | undefined => (typeof r[k] === 'string' ? (r[k] as string) : undefined)
+    const accountId = str('accountId')
+    const cwd = str('cwd')
+    const title = str('title')
+    if (!accountId || !cwd || !title) return null
+    const info: SessionInfo = {
+      id: a.id,
+      accountId,
+      cwd,
+      status: 'running',
+      title,
+      // Spread rather than assigned, because the note omits what was absent at spawn rather than
+      // carrying an undefined — so an absent key must stay absent here too.
+      ...(str('resumeSessionId') ? { resumeSessionId: str('resumeSessionId') } : {}),
+      // Elements checked, not just the array: the roll coordinators index accounts by these, and one
+      // non-string in a list that crossed a process boundary would surface far from here.
+      ...(Array.isArray(r.rollAccountIds) && r.rollAccountIds.every((x) => typeof x === 'string')
+        ? { rollAccountIds: r.rollAccountIds as string[] }
+        : {}),
+      ...(str('rollPrompt') ? { rollPrompt: str('rollPrompt') } : {}),
+      ...(typeof r.slackNotify === 'boolean' ? { slackNotify: r.slackNotify } : {}),
+      ...(typeof r.bypassPermissions === 'boolean' ? { bypassPermissions: r.bypassPermissions } : {})
+    }
+    // An adopted pty is resumed rather than assumed to be flowing. pause() travels to the Host and
+    // nothing there releases it when the app goes away, so an app that died inside a backpressure pause
+    // left the child blocked on a full pipe — and the record built here says paused:false, which is what
+    // ack() gates its resume on, so nothing would ever release it. Unconditional because resuming a pty
+    // that was never paused is a no-op, for node-pty and across the wire alike.
+    a.pty.resume()
+    return this.track(info, a.pty)
   }
 
   /** Arms the timer that auto-releases a pause. Re-arms if one is already set.

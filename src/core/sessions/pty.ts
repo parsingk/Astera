@@ -1,3 +1,5 @@
+import type { PtyMeta } from '../host/protocol'
+
 export interface PtyLike {
   pid: number
   onData(cb: (data: string) => void): void
@@ -9,11 +11,31 @@ export interface PtyLike {
   resume(): void
 }
 
+/** The exit code a pty handle reports when the **app** lost sight of the process, rather than the
+ *  process reporting how it ended.
+ *
+ *  Only the Host-backed handle produces it, from `onHostGone`: the socket to the Host went away, so no
+ *  `pty-exit` can ever arrive for that pty and a record left 'running' would wait for one forever. The
+ *  process itself is very probably still alive — the Host outlives the app, and the connection
+ *  dropping is not the Host dying.
+ *
+ *  Not a code any real process can report, which is what makes it usable as a signal: node-pty gives
+ *  a status from `waitpid` on posix (0-255) or a Windows exit code, and neither is negative.
+ *
+ *  Read it wherever an exit would otherwise be taken as proof the work ended — orchestration's
+ *  `handleExit` is the one place today, because closing a Dispatch there is what makes P1's reconciler
+ *  start a second agent in a worktree the first is still working in. */
+export const PTY_LOST_SIGHT_EXIT_CODE = -1
+
 export interface PtySpawnOptions {
   cwd: string
   cols: number
   rows: number
   env: Record<string, string | undefined>
+  /** What the app needs to rebuild its own record for this pty after a restart. Only the Host-backed
+   *  factory uses it; nodePtyFactory ignores it, which is what keeps the two interchangeable
+   *  (slice 2 design §4). */
+  meta?: PtyMeta
 }
 
 /**
@@ -61,6 +83,22 @@ export function withExitedPtyGuard(p: PtyLike): PtyLike {
     pause: () => p.pause(),
     resume: () => p.resume()
   }
+}
+
+/** What `nodePtyFactory` hands `pty.spawn`. Written field by field rather than spread, so `meta` — a
+ *  note for the Host, meaningless to node-pty — cannot reach it: the same explicit shape
+ *  `createHostPtyFactory` builds for `pty-spawn`, and the same four fields this call had before `meta`
+ *  was added. Lives here, apart from the factory, because `nodePtyFactory` loads node-pty's native
+ *  binding and so cannot be imported by a vitest run — the reason `withExitedPtyGuard` is tested from
+ *  this file too. */
+export function nodePtySpawnOptions(opts: PtySpawnOptions): {
+  name: string
+  cwd: string
+  cols: number
+  rows: number
+  env: Record<string, string | undefined>
+} {
+  return { name: 'xterm-256color', cwd: opts.cwd, cols: opts.cols, rows: opts.rows, env: opts.env }
 }
 
 /** args as a string is node-pty's "command line verbatim" form (its own type is

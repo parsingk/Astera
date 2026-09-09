@@ -91,14 +91,46 @@ export class RunManager {
     // This happens **only when the config specified it**: reacting to a JAVA_HOME the app merely inherited
     // would mean reordering the user's shell PATH on their behalf.
     const env = withJavaHomeOnPath(merged, fromFields.JAVA_HOME ?? opts.config.env?.JAVA_HOME, this.platform)
+    // Generated here rather than inline on status below, so the pty factory's meta can carry the same
+    // id and startedAt — startedAt is a spawn-time moment nothing else writes down: the Host's PtyEntry
+    // has no timestamp, so without it here a run rebuilt after a restart would read as having just
+    // started (formatRunDuration), and several runs of one config rebuilt around the same restart
+    // moment would tie-break arbitrarily instead of by real age (latestOf, read by decideStart and
+    // toolbarState).
+    const runId = randomUUID()
+    const startedAt = Date.now()
     const pty = this.ptyFactory(spawn.file, spawn.args, {
       cwd,
       cols: opts.cols ?? 120,
       rows: opts.rows ?? 30,
-      env
+      env,
+      meta: {
+        kind: 'run',
+        id: runId,
+        restore: {
+          projectPath: opts.projectPath,
+          projectName: opts.projectName,
+          configId: opts.config.id,
+          configName: opts.config.name,
+          command: opts.command,
+          // Where the process actually started — a spawn-time value like startedAt, and for the same
+          // reason: the configuration on disk may be edited between the start and the restart, so its
+          // cwd cannot be read again to answer for a process that is already running. cwdOf is what a
+          // relative path in this run's output resolves against.
+          cwd,
+          seq,
+          startedAt,
+          // Carried beside status.validation (see its own comment): without this, a validation run
+          // rebuilt from the Host's list after a restart would be indistinguishable from an ordinary
+          // one — decideStart's `r.validation !== true` filter (core/run/instances.ts) would let a
+          // same-config ▶ target it for restart instead of leaving it to the orchestrator, and run.stop
+          // would not route through TaskValidator.markStopped.
+          ...(opts.validation ? { validation: true as const } : {})
+        }
+      }
     })
     const status: RunStatus = {
-      runId: randomUUID(),
+      runId,
       projectPath: opts.projectPath,
       projectName: opts.projectName,
       configId: opts.config.id,
@@ -106,10 +138,20 @@ export class RunManager {
       command: opts.command,
       seq,
       status: 'running',
-      startedAt: Date.now(),
+      startedAt,
       // Only ever present when on — a non-validation run's status has no such key
       ...(opts.validation ? { validation: true as const } : {})
     }
+    return this.track(status, pty, cwd)
+  }
+
+  /** The bookkeeping half of a start: the live record, the exit promise, the opening status event and
+   *  the two callbacks. `start` calls it for a pty it just created; `adopt` calls it for one the Host
+   *  was already running. Shared so the two can never drift apart.
+   *
+   *  `cwd` is a parameter rather than a field of the status because it is not one — it is where the
+   *  process was started, which a relative path in the output resolves against (run.resolveLink). */
+  private track(status: RunStatus, pty: PtyLike, cwd: string): RunStatus {
     let settle!: () => void
     const exited = new Promise<void>((resolve) => {
       settle = resolve
@@ -140,6 +182,56 @@ export class RunManager {
       settle()
     })
     return { ...status }
+  }
+
+  /** Takes over a pty the Host is already running, rebuilding this run's record from the note the app
+   *  left with it (slice 2 design §7). Returns null for a note this build cannot read — a run invented
+   *  from a half-understood record would be worse than one the app admits it lost.
+   *
+   *  Deliberately does none of start's other work: the process exists, so there is no command to
+   *  assemble, no env to merge and no seat to claim — `seq` comes back from the note, which is the seat
+   *  this run already held. `startedAt` and `cwd` come from the note for the same reason (see start's
+   *  comments on them), and the validation tag survives because decideStart's filter reads it.
+   *
+   *  **Keeps the run's own id** — `PtyMeta.id`, which the Host hands back beside the note. Every IPC
+   *  handler and event names a run by its runId, so an id of this method's own invention would be a run
+   *  nothing already holding the old one could address.
+   *
+   *  **The caller must hand over a pty it believes is still live.** This method cannot tell: an attach
+   *  handle for a process that already ended looks exactly like one for a running process and will never
+   *  deliver an exit, so a dead pty adopted here becomes a row stuck at 'running' — the stop button
+   *  reaches nothing, decideStart treats the configuration as live and refuses to start a replacement,
+   *  and whenExited never settles. The Host's entry carries an `alive` flag; filtering on it is the
+   *  caller's job. */
+  adopt(a: { kind: string; id: string; pty: PtyLike; restore: Record<string, unknown> }): RunStatus | null {
+    // Checked before any field, because the kinds' readable shapes overlap: a note of another kind can
+    // satisfy the fields below and would come back rebuilt as the wrong thing.
+    if (a.kind !== 'run') return null
+    const r = a.restore
+    const str = (k: string): string | undefined => (typeof r[k] === 'string' ? (r[k] as string) : undefined)
+    const projectPath = str('projectPath')
+    const projectName = str('projectName')
+    const configId = str('configId')
+    const configName = str('configName')
+    const command = str('command')
+    if (!projectPath || !projectName || !configId || !configName || !command) return null
+    const status: RunStatus = {
+      runId: a.id,
+      projectPath,
+      projectName,
+      configId,
+      configName,
+      command,
+      // Finite, not merely a number: a NaN seq sorts the run out of its own list, and a NaN startedAt
+      // prints as an unreadable age. Both crossed a process boundary to get here.
+      seq: Number.isFinite(r.seq) ? (r.seq as number) : 0,
+      status: 'running',
+      startedAt: Number.isFinite(r.startedAt) ? (r.startedAt as number) : Date.now(),
+      ...(r.validation === true ? { validation: true as const } : {})
+    }
+    // A note from a build that recorded no cwd falls back to the project path — which is what start
+    // itself uses whenever the configuration overrides none.
+    return this.track(status, a.pty, str('cwd') ?? projectPath)
   }
 
   /** ▶ on a configuration that is already live: stop that run, wait for its process tree to actually

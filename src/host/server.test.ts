@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { hostAddress } from './address'
 import { encodeLine, createLineReader } from './framing'
-import { startHostServer, ADDRESS_TAKEN, UNSAFE_ADDRESS_DIR, type HostServer } from './server'
+import { startHostServer, ADDRESS_TAKEN, UNSAFE_ADDRESS_DIR, type HostServer, type HostServerDeps } from './server'
 import { HOST_PROTOCOL } from '../core/host/protocol'
 
 let dir: string
@@ -21,7 +21,7 @@ afterEach(async () => {
 
 /** A server at an address of this test's own, with everything injectable. */
 const server = async (
-  over: { idleMs?: number; helloMs?: number; onIdle?: () => void; profile?: string } = {}
+  over: { idleMs?: number; helloMs?: number; onIdle?: () => void; profile?: string; onMessage?: HostServerDeps['onMessage']; holdsWork?: HostServerDeps['holdsWork'] } = {}
 ): Promise<{
   s: HostServer
   address: string
@@ -31,7 +31,8 @@ const server = async (
   const addr = hostAddress({
     profileDir: path.join(dir, over.profile ?? 'profile'),
     platform: process.platform,
-    tmpDir: dir
+    tmpDir: dir,
+    protocol: HOST_PROTOCOL
   })
   const s = await startHostServer({
     address: addr.address,
@@ -40,6 +41,8 @@ const server = async (
     idleMs: over.idleMs ?? 60_000,
     helloMs: over.helloMs,
     onIdle: over.onIdle ?? ((): void => {}),
+    onMessage: over.onMessage,
+    holdsWork: over.holdsWork,
     log: { write: (m) => logs.push(m), close: () => {} }
   })
   open.push(s)
@@ -51,7 +54,7 @@ const talk = (address: string, lines: unknown[], waitFor = 1): Promise<unknown[]
   new Promise((resolve, reject) => {
     const got: unknown[] = []
     const sock = net.connect(address)
-    const read = createLineReader({ onMessage: (v) => { got.push(v); if (got.length >= waitFor) { sock.end(); resolve(got) } }, onBadLine: () => {} })
+    const read = createLineReader({ onMessage: (v) => { got.push(v); if (got.length >= waitFor) { sock.end(); resolve(got) } }, onBadLine: () => {}, onHandlerError: () => {} })
     sock.setEncoding('utf8')
     sock.on('data', read)
     sock.on('error', reject)
@@ -173,7 +176,7 @@ describe('startHostServer', () => {
     const got = await new Promise<unknown[]>((resolve) => {
       const out: unknown[] = []
       const sock = net.connect(h.address)
-      const read = createLineReader({ onMessage: (v) => { out.push(v); sock.end(); resolve(out) }, onBadLine: () => {} })
+      const read = createLineReader({ onMessage: (v) => { out.push(v); sock.end(); resolve(out) }, onBadLine: () => {}, onHandlerError: () => {} })
       sock.setEncoding('utf8')
       sock.on('data', read)
       sock.on('connect', () => {
@@ -185,13 +188,44 @@ describe('startHostServer', () => {
     expect(got).toHaveLength(1)
     expect(h.logs.some((l) => l.includes('not json'))).toBe(true)
   })
+
+  // The server owns the handshake and nothing else; anything it does not recognise goes to the hook,
+  // which is where slice 2's pty messages live.
+  it('offers an unknown message to the extra handler before calling it unknown', async () => {
+    const seen: string[] = []
+    const h = await server({
+      onMessage: (m, send) => {
+        seen.push(m.t)
+        if (m.t !== 'pty-list') return false
+        send({ t: 'pty-listed', entries: [] })
+        return true
+      }
+    })
+    const [reply] = await talk(h.address, [{ t: 'pty-list' } as never])
+    expect(reply).toEqual({ t: 'pty-listed', entries: [] })
+    expect(seen).toContain('pty-list')
+  })
+
+  // A Host holding a terminal must not leave when the app closes: that terminal is the whole reason
+  // the Host exists (slice 2 design §2.2).
+  it('does not leave on the idle timer while something is holding it', async () => {
+    let idle = false
+    let holding = true
+    const h = await server({ idleMs: 50, onIdle: () => { idle = true }, holdsWork: () => holding })
+    await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
+    await new Promise((r) => setTimeout(r, 300))
+    expect(idle).toBe(false)
+    holding = false
+    await new Promise((r) => setTimeout(r, 300))
+    expect(idle).toBe(true)
+  })
 })
 
 // posix only: on win32 a pipe name disappears with the process that made it, so there is nothing
 // stale to find.
 describe.runIf(process.platform !== 'win32')('a socket file left behind', () => {
   it('is replaced when nobody is listening on it', async () => {
-    const addr = hostAddress({ profileDir: path.join(dir, 'stale'), platform: process.platform, tmpDir: dir })
+    const addr = hostAddress({ profileDir: path.join(dir, 'stale'), platform: process.platform, tmpDir: dir, protocol: HOST_PROTOCOL })
     await fs.mkdir(addr.dirToPrepare!, { recursive: true, mode: 0o700 })
     await fs.writeFile(addr.address, '')
     const s = await startHostServer({
@@ -220,7 +254,7 @@ describe.runIf(process.platform !== 'win32')('a socket file left behind', () => 
   // where anybody can reach it, so the Host refuses the address instead.
   it('refuses an address whose directory is open to everyone', async () => {
     const logs: string[] = []
-    const addr = hostAddress({ profileDir: path.join(dir, 'loose'), platform: process.platform, tmpDir: dir })
+    const addr = hostAddress({ profileDir: path.join(dir, 'loose'), platform: process.platform, tmpDir: dir, protocol: HOST_PROTOCOL })
     await fs.mkdir(addr.dirToPrepare!, { recursive: true })
     // chmod rather than mkdir's `mode`, which the umask trims.
     await fs.chmod(addr.dirToPrepare!, 0o777)

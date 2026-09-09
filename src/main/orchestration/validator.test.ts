@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { TaskValidator, type ValidatorRunner } from './validator'
 import { absPath } from '../../core/testPaths'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 
 const settledCalls = (): {
   onSettled: (a: { taskId: string; exitCode: number; output: string }) => Promise<void>
@@ -348,5 +349,40 @@ describe('TaskValidator — 없어진 할 일', () => {
     expect(calls[0].taskId).toBe('tsk_2')
     await vi.waitFor(() => expect(attempts).toEqual(['tsk_1', 'tsk_2', 'tsk_3']))
     expect(reasons).toHaveLength(0)
+  })
+})
+
+// A validation Run's pty lives in the Host like any other. When the socket drops, its handle ends
+// with PTY_LOST_SIGHT_EXIT_CODE while the build keeps running — the same condition the Dispatch and
+// the coordinator slot already refuse to act on. Read as a result it is a failed validation, and three
+// of those trip the Task's breaker.
+describe('TaskValidator — an exit that only means the app lost sight of the run', () => {
+  it('does not settle it, and does not hand the queue to the next entry', async () => {
+    const runner = fakeRunner()
+    const { onSettled, calls } = settledCalls()
+    const reasons: string[] = []
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async (a) => void reasons.push(a.reason) })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    v.enqueue({ taskId: 'tsk_2', cwd: 'D:/w1' })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(1))
+    v.onRunExit({ runId: 'run_1', exitCode: PTY_LOST_SIGHT_EXIT_CODE })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(calls).toEqual([])
+    expect(reasons).toEqual([])
+    expect(runner.started).toHaveLength(1) // tsk_2 has not been started in tsk_1's place
+  })
+
+  // The head is still the head, so the real exit — which arrives through the handle the reconnect
+  // re-adopted, under the same runId — settles it the ordinary way.
+  it('leaves the head able to settle when the real exit arrives', async () => {
+    const runner = fakeRunner()
+    const { onSettled, calls } = settledCalls()
+    const v = new TaskValidator({ runner, onSettled, onCannotRun: async () => {} })
+    v.enqueue({ taskId: 'tsk_1', cwd: 'D:/w1' })
+    await vi.waitFor(() => expect(runner.started).toHaveLength(1))
+    v.onRunExit({ runId: 'run_1', exitCode: PTY_LOST_SIGHT_EXIT_CODE })
+    v.onRunExit({ runId: 'run_1', exitCode: 0 })
+    await vi.waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0]).toEqual({ taskId: 'tsk_1', exitCode: 0, output: '출력' })
   })
 })

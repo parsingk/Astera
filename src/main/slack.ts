@@ -335,6 +335,14 @@ export class SlackNotifier {
 
   register(info: SessionInfo): void {
     if (!info.slackNotify) return
+    // **A pending exit notification for this id is cancelled, the way onRolled cancels the one it
+    // re-keys past.** Registering over a live id used to be impossible; the Host's reconnect makes it
+    // ordinary — the socket drops, every pty handle ends, `handleExit` schedules its three seconds,
+    // and the app takes the same session back under the same id well inside that window. Left armed,
+    // that timer deletes the record built just below and drops the session from the thread index, so
+    // the session loses Slack for the rest of its life after a "session ended" that never happened.
+    const replaced = this.records.get(info.id)
+    if (replaced?.exitTimer) clearTimeout(replaced.exitTimer)
     const provider = this.providerFor(info.accountId)
     const record: SlackRecord = {
       info,

@@ -1254,6 +1254,12 @@ export type RendererApi = CoreApi & {
    *  open, so the slice can be checked by a person rather than only by tests. */
   host: {
     status(): Promise<HostStatus>
+    /** Whether the sessions, Runs and terminals now running would keep running if the app quit —
+     *  true exactly when a Host owns their ptys. Asked at the moment the window-close confirmation is
+     *  about to tell the person what quitting costs them, because that answer changes during a run
+     *  (the Host connects some milliseconds after launch) and a stale one would be a false promise
+     *  either way. */
+    ptysOutliveApp(): Promise<boolean>
   }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

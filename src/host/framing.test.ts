@@ -4,7 +4,11 @@ import { encodeLine, createLineReader } from './framing'
 const collect = (): { seen: unknown[]; bad: string[]; feed: (c: string) => void } => {
   const seen: unknown[] = []
   const bad: string[] = []
-  const feed = createLineReader({ onMessage: (v) => seen.push(v), onBadLine: (raw) => bad.push(raw) })
+  const feed = createLineReader({
+    onMessage: (v) => seen.push(v),
+    onBadLine: (raw) => bad.push(raw),
+    onHandlerError: () => {}
+  })
   return { seen, bad, feed }
 }
 
@@ -34,6 +38,26 @@ describe('framing', () => {
     c.feed('this is not json\n' + encodeLine({ n: 3 }))
     expect(c.bad).toEqual(['this is not json'])
     expect(c.seen).toEqual([{ n: 3 }])
+  })
+
+  // A handler that threw is not a malformed line. The Host is a detached process whose log is the
+  // only window into it, so the two must not read the same there.
+  it('separates a handler that threw from a line that is not JSON', () => {
+    const seen: unknown[] = []
+    const bad: string[] = []
+    const threw: Array<[unknown, string]> = []
+    const feed = createLineReader({
+      onMessage: (v) => {
+        if ((v as { boom?: boolean }).boom === true) throw new Error('pty is gone')
+        seen.push(v)
+      },
+      onBadLine: (raw) => bad.push(raw),
+      onHandlerError: (v, err) => threw.push([v, String(err)])
+    })
+    feed(encodeLine({ boom: true }) + encodeLine({ n: 5 }))
+    expect(bad).toEqual([])
+    expect(threw).toEqual([[{ boom: true }, 'Error: pty is gone']])
+    expect(seen).toEqual([{ n: 5 }])
   })
 
   it('ignores an empty line', () => {

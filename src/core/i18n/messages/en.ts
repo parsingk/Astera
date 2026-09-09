@@ -171,6 +171,8 @@ export const en: Record<keyof typeof ko, string> = {
   'common.quitConfirm.title': 'Close and quit Astera',
   'common.quitConfirm.body':
     'Closing the window quits Astera, and {count} running session(s) will be terminated. Continue?',
+  'common.quitConfirm.bodyKept':
+    'Closing the window quits Astera. {count} running session(s) keep running and come back the next time you open Astera. Continue?',
   'common.trayOpen': 'Open',
   'common.trayQuit': 'Quit',
   'session.rail.toggleSidebar': 'Toggle sidebar',

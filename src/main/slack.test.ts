@@ -515,6 +515,30 @@ describe('SlackNotifier 롤링·한도·종료', () => {
       vi.useRealTimers()
     }
   })
+
+  // The Host's reconnect path arrives here as register() over an id handleExit was already scheduled
+  // for: the socket dropped, every pty handle ended, and the same session came back under the same id
+  // a second later. onRolled clears the timer it replaces because it re-keys; register did not,
+  // because until this slice nothing ever registered over a live id. Left uncleared, the stale timer
+  // deletes the record register just made and drops it from the thread index — the session loses Slack
+  // for the rest of its life, silently, after a false "session ended".
+  it('register over a session whose exit notification is pending cancels it and keeps the record', async () => {
+    vi.useFakeTimers()
+    try {
+      const h = setup()
+      h.notifier.register(info())
+      h.notifier.handleExit({ sessionId: 's-1', exitCode: 0 })
+      h.notifier.register(info()) // the reconnect takes the session back under the same id
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(h.sent).toEqual([])
+      // The record survived: a notification for this session still goes out afterwards.
+      h.notifier.onRollState({ sessionId: 's-1', state: 'stalled', scope: 'session' })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(h.sent).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('SlackNotifier 비롤링 한도 감지의 provider 분리', () => {

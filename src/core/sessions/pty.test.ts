@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { withExitedPtyGuard, type PtyLike } from './pty'
+import { nodePtySpawnOptions, withExitedPtyGuard, type PtyLike } from './pty'
 
 /** node-pty 의 **두 단계 종료 통지**를 그대로 흉내낸다.
  *
@@ -89,5 +89,24 @@ describe('withExitedPtyGuard', () => {
     expect(raw.killed).toBe(true)
     expect(raw.paused).toBe(1)
     expect(raw.resumed).toBe(1)
+  })
+})
+
+// nodePtyFactory itself cannot be imported here — it loads node-pty's native binding, which is why
+// withExitedPtyGuard is tested through this file rather than through the factory that uses it. The
+// options it builds can be, and they are the one part of the no-Host path this slice could have
+// changed: `meta` was added to PtySpawnOptions for the Host, and a spread would have carried it into
+// node-pty on a path that is supposed to be untouched.
+describe('nodePtySpawnOptions', () => {
+  it('hands node-pty the four fields it had before `meta` existed, and no more', () => {
+    expect(
+      nodePtySpawnOptions({
+        cwd: 'D:/p',
+        cols: 80,
+        rows: 24,
+        env: { PATH: '/bin' },
+        meta: { kind: 'session', id: 's1', restore: { accountId: 'a1' } }
+      })
+    ).toEqual({ name: 'xterm-256color', cwd: 'D:/p', cols: 80, rows: 24, env: { PATH: '/bin' } })
   })
 })
