@@ -839,8 +839,7 @@ app.whenReady().then(async () => {
   const hostLogFile = path.join(app.getPath('userData'), 'host-client.log')
   const hostLog = (m: string): void => {
     try {
-      appendFileSync(hostLogFile, `${new Date().toISOString()} ${m}
-`)
+      appendFileSync(hostLogFile, `${new Date().toISOString()} ${m}\n`)
     } catch {
       /* a logging failure must not take the Host client down */
     }
