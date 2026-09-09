@@ -9,7 +9,11 @@ import type { ClientMessage, HostMessage } from '../../core/host/protocol'
 import type { PtyFactory, PtyLike, PtySpawnOptions } from '../../core/sessions/pty'
 
 export interface HostPtyTransport {
-  send(m: ClientMessage): void
+  /** Whether the message actually reached the Host — false with no connection right now, the same
+   *  contract `HostClient.send` already has. The factory checks this for `pty-spawn`: a spawn that
+   *  never left the app will get no `pty-spawned` or `pty-failed` reply either, so nothing would ever
+   *  end a handle left waiting on one. */
+  send(m: ClientMessage): boolean
   onHostMessage(cb: (m: HostMessage) => void): () => void
   /** The connection to the Host went away. Every pty went with it, and no `pty-exit` will ever
    *  arrive to say so — without this a session stays "running" in the app forever (design §11). */
@@ -18,7 +22,7 @@ export interface HostPtyTransport {
 
 type Queued = { t: 'pty-write'; data: string } | { t: 'pty-resize'; cols: number; rows: number }
 
-function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: number): PtyLike {
+function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: number, startDead = false): PtyLike {
   let state: 'pending' | 'live' | 'exited' = startLive ? 'live' : 'pending'
   let pid = startPid
   const queue: Queued[] = []
@@ -59,6 +63,17 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
     // on the other's cleanup for its correctness.
     if ((m.t === 'pty-failed' || m.t === 'pty-exit') && state !== 'exited') end(m.t === 'pty-exit' ? m.exitCode : 1)
   })
+
+  if (startDead) {
+    // The spawn never reached the Host — `t.send` already returned false, so no `pty-spawned` or
+    // `pty-failed` will ever arrive to end this the ordinary way. Deferred to a microtask rather than
+    // ended right here: this runs inside the `factory` call that is about to hand the caller this
+    // very handle, and the caller only registers `onExit` once that call returns — an end delivered
+    // before then would have nowhere to land.
+    queueMicrotask(() => {
+      if (state !== 'exited') end(1)
+    })
+  }
 
   const forward = (q: Queued): void => {
     if (state === 'exited') return
@@ -107,8 +122,7 @@ export function createHostPtyFactory(t: HostPtyTransport): {
 } {
   const factory: PtyFactory = (file, args, opts: PtySpawnOptions) => {
     const id = randomUUID()
-    const h = handle(t, id, false, 0)
-    t.send({
+    const sent = t.send({
       t: 'pty-spawn',
       id,
       file,
@@ -116,7 +130,10 @@ export function createHostPtyFactory(t: HostPtyTransport): {
       opts: { cwd: opts.cwd, cols: opts.cols, rows: opts.rows, env: opts.env },
       ...(opts.meta ? { meta: opts.meta } : {})
     })
-    return h
+    // `sent` false means there is no connection right now — the same gap `ipc.ts` closes by only
+    // installing this factory once connected, kept here too as a second line of defence for a
+    // connection that drops again later.
+    return handle(t, id, false, 0, !sent)
   }
   return { factory, attach: (a) => handle(t, a.id, true, a.pid) }
 }

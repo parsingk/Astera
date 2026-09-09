@@ -2,13 +2,19 @@ import { describe, it, expect } from 'vitest'
 import { createHostPtyFactory, type HostPtyTransport } from './ptyFactory'
 import type { ClientMessage, HostMessage } from '../../core/host/protocol'
 
-/** A transport the test drives from both ends. */
-const transport = (): HostPtyTransport & { sent: ClientMessage[]; deliver(m: HostMessage): void; hostGone(): void } => {
+/** A transport the test drives from both ends. `connected` starts true — set it false to make
+ *  `send` behave the way `HostClient.send` does with no socket: refuse, and record nothing. */
+const transport = (): HostPtyTransport & { sent: ClientMessage[]; connected: boolean; deliver(m: HostMessage): void; hostGone(): void } => {
   const subs = new Set<(m: HostMessage) => void>()
   const gone = new Set<() => void>()
   return {
     sent: [],
-    send(m) { this.sent.push(m) },
+    connected: true,
+    send(m) {
+      if (!this.connected) return false
+      this.sent.push(m)
+      return true
+    },
     onHostMessage(cb) {
       subs.add(cb)
       return () => subs.delete(cb)
@@ -162,6 +168,24 @@ describe('createHostPtyFactory', () => {
     p.onExit((e) => { exit = e.exitCode })
     t.deliver({ t: 'pty-failed', id: spawned(t), error: 'conpty said no' })
     expect(exit).toBe(1)
+  })
+
+  // A second line of defence beside ipc.ts installing this factory only once connected: the
+  // connection can still drop again later, and a spawn attempted in that gap must not sit pending
+  // forever with no pty-spawned or pty-failed ever coming to end it.
+  it('ends a handle at once when the spawn never reaches the Host', async () => {
+    const t = transport()
+    t.connected = false
+    const { factory } = createHostPtyFactory(t)
+    const p = factory('cmd.exe', [], opts)
+    let exit: number | null = null
+    p.onExit((e) => { exit = e.exitCode })
+    // Deferred, not synchronous — the caller above has not registered onExit yet at the point the
+    // factory call itself returns.
+    expect(exit).toBeNull()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(exit).toBe(1)
+    expect(t.sent).toEqual([])
   })
 
   it('drops what is written after the pty exited rather than sending it', () => {

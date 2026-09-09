@@ -3,7 +3,8 @@ import {
   accountRemovalBlockers,
   historyResumePlan,
   parseAllowedExternalUrl,
-  providerOfSession
+  providerOfSession,
+  rollCoordinatorForSession
 } from './ipc'
 import { sanitizeResumePrompt } from '../core/sessions/commands'
 import type { Account, SessionInfo } from '../core/types'
@@ -49,6 +50,32 @@ describe('providerOfSession', () => {
         throw new Error('no such account')
       })
     ).toBeNull()
+  })
+})
+
+// Reused by the reattach adopter (registerIpc's startHostClient) so a session taken back from the
+// Host registers with the same coordinator spawnSession would have chosen.
+describe('rollCoordinatorForSession', () => {
+  it('routes a codex session to codexRolling', () => {
+    const list = [sess('s1', 'acc1')]
+    const get = (id: string): Account => account({ id, provider: 'codex' })
+    expect(rollCoordinatorForSession('s1', list, get)).toBe('codexRolling')
+  })
+
+  it('routes a claude session to rolling', () => {
+    const list = [sess('s1', 'acc1')]
+    const get = (id: string): Account => account({ id, provider: 'claude' })
+    expect(rollCoordinatorForSession('s1', list, get)).toBe('rolling')
+  })
+
+  // A caller that folded this into an if/else on the provider string alone would let a gone account
+  // fall into the else branch and register with rolling — the wrong coordinator for a codex session.
+  it('routes to neither when the account is gone', () => {
+    const list = [sess('s1', 'acc1')]
+    const get = (): Account => {
+      throw new Error('no such account')
+    }
+    expect(rollCoordinatorForSession('s1', list, get)).toBeNull()
   })
 })
 

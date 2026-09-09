@@ -12,7 +12,7 @@ import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
 import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
-import { HostClient } from './host/client'
+import { HostClient, HANDSHAKE_MS } from './host/client'
 import { hostSpawnPlan, resolveHostEntry } from './host/spawn'
 import { hostAddress } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
@@ -288,6 +288,27 @@ export function providerOfSession(
   } catch {
     return null // the account is gone — core.accounts.get throws, and the 3-second poll must not
   }
+}
+
+/**
+ * Which rolling coordinator a session's account routes to, or `null` when the account is gone.
+ * `spawnSession`'s own registration forks on `providerOf(account) === 'codex'` because it always has
+ * the `Account` in hand; reattaching a session after a Host restart only has the id, so this wraps
+ * `providerOfSession`'s lookup — and, unlike a caller that folds a `null` provider into its `else`
+ * branch, keeps "the account is gone" as its own outcome rather than defaulting to `'rolling'`, which
+ * would register a resurrected codex session with the wrong coordinator.
+ *
+ * A pure function for the same reason `providerOfSession` is one: the decision is unreachable by a
+ * test where the reattach wiring itself sits (an electron-only closure inside `registerIpc`).
+ */
+export function rollCoordinatorForSession(
+  sessionId: string,
+  sessions: readonly Pick<SessionInfo, 'id' | 'accountId'>[],
+  getAccount: (id: string) => Account
+): 'rolling' | 'codexRolling' | null {
+  const provider = providerOfSession(sessionId, sessions, getAccount)
+  if (provider === null) return null
+  return provider === 'codex' ? 'codexRolling' : 'rolling'
 }
 
 /**
@@ -4717,9 +4738,11 @@ export function registerIpc(
     return core.appSettings.getTheme()
   })
 
-  // Astera Host slice 1. Unconditional — the Host is not an orchestration feature, so this must not
-  // go inside bootOrch, which only runs when that toggle is on. A missing out/main/host.js (a partial
-  // build, or a packaging mistake) leaves hostClient null and the app runs exactly as it does today.
+  // Astera Host. Unconditional — the Host is not an orchestration feature, so this must not go inside
+  // bootOrch, which only runs when that toggle is on. A missing out/main/host.js (a partial build, or
+  // a packaging mistake) leaves hostClient null and the app runs exactly as it does today. Once the
+  // Host answers, this also routes core.ptyRouter to it and takes back whatever sessions, runs and
+  // terminals it still holds (slice 2 design §7).
   const startHostClient = (): void => {
     const hostLog = hostWiring?.log ?? ((): void => {})
     const profileDir = app.getPath('userData')
@@ -4758,49 +4781,54 @@ export function registerIpc(
     hostClient = client
     client.start()
 
-    // The Host is the app's pty layer from here on. Until this point the router falls back to
-    // node-pty, which is also where it stays if the Host never answers — with no Host, the app must
-    // behave exactly as it does today.
     const transport = {
-      send: (m: ClientMessage) => void hostClient?.send(m),
+      send: (m: ClientMessage): boolean => hostClient?.send(m) ?? false,
       onHostMessage: (cb: (m: HostMessage) => void) => hostClient?.onMessage(cb) ?? ((): void => {}),
       onHostGone: (cb: () => void) => hostClient?.onDisconnect(cb) ?? ((): void => {})
     }
     const { factory, attach } = createHostPtyFactory(transport)
-    core.ptyRouter.use(factory)
 
     // How long reattaching is willing to wait for the first handshake's outcome before deciding the
-    // Host is not there — matched to HostClient's own worst-case give-up (its default attempts x
-    // retryMs), so this rarely fires ahead of the client's own answer either way.
-    const HOST_READY_MS = 5_000
+    // Host is not there. Must not be able to expire before HANDSHAKE_MS, the deadline HostClient
+    // itself gives a peer that already accepted the connection to say hello — a shorter timeout here
+    // would read a merely slow Host the same as no Host at all, permanently: nothing re-checks a hello
+    // that lands after this has already given up.
+    const HOST_READY_MS = HANDSHAKE_MS + 2_000
 
     /** One round trip: ask for the list, resolve on the reply, give up after five seconds with an
      *  empty list so a silent Host cannot hold the startup open. */
-    const listPtys = (): Promise<PtyEntry[]> =>
+    const listPtys = (t: typeof transport): Promise<PtyEntry[]> =>
       new Promise((resolve) => {
         const done = (entries: PtyEntry[]): void => {
           clearTimeout(timer)
           off()
           resolve(entries)
         }
-        const off = transport.onHostMessage((m) => {
+        const off = t.onHostMessage((m) => {
           if (m.t === 'pty-listed') done(m.entries)
         })
         const timer = setTimeout(() => done([]), 5_000)
         timer.unref?.()
-        transport.send({ t: 'pty-list' })
+        t.send({ t: 'pty-list' })
       })
 
     void hostClient
       .ready(HOST_READY_MS)
       .then(async () => {
         if (!hostClient?.status().connected) {
-          core.ptyRouter.use(null)
           orchLog('host: no Host, so terminals stay in the app exactly as before')
           return
         }
+        // Installed only now, with a live connection in hand — not at the top of this function, where
+        // a pty spawned in the window before the handshake completes would have its pty-spawn silently
+        // dropped by HostClient.send (no connection yet) and sit pending forever, with no data, no exit,
+        // and its session/run/terminal record stuck at 'running' for the app's whole life. ptyFactory.ts's
+        // factory carries a second line of defence for the same failure if the connection drops again
+        // later: a pty-spawn that HostClient.send refuses ends the handle itself instead of waiting on a
+        // reply that will never come.
+        core.ptyRouter.use(factory)
         const res = await reattachSessions({
-          list: listPtys,
+          list: () => listPtys(transport),
           attach,
           sendAttach: (id) => transport.send({ t: 'pty-attach', id }),
           kill: (id) => transport.send({ t: 'pty-kill', id }),
@@ -4808,14 +4836,25 @@ export function registerIpc(
             session: (a) => {
               const info = core.sessions.adopt(a)
               if (!info) return false
-              // The pty came back; the things the app hung off it did not. Rolling and Slack are
-              // registered from the SessionInfo right after core.sessions.spawn() elsewhere in this
-              // file, so registering the rebuilt one puts a recovered worker back on the same footing
-              // (design §10).
+              // The pty came back; the things the app hung off it did not. Rolling, codex's rollout
+              // watcher and Slack are all registered from the SessionInfo right after
+              // core.sessions.spawn() elsewhere in this file, so registering the rebuilt one puts a
+              // recovered worker back on the same footing (design §10) — including its tab: the
+              // renderer builds one from `session:created` the same way it does for a freshly spawned
+              // session, since reattaching can land well after the renderer has already mounted.
+              const coordinator = rollCoordinatorForSession(info.id, core.sessions.list(), (id) => core.accounts.get(id))
               if ((info.rollAccountIds?.length ?? 0) >= 1) {
-                const provider = providerOfSession(info.id, core.sessions.list(), (id) => core.accounts.get(id))
-                if (provider === 'codex') codexRolling?.register(info)
-                else rolling?.register(info)
+                if (coordinator === 'codexRolling') codexRolling?.register(info)
+                else if (coordinator === 'rolling') rolling?.register(info)
+              }
+              // codexRollout drives usage chips and turn completion for every codex session, not only
+              // the rolling ones — see the matching unconditional block at spawn.
+              if (coordinator === 'codexRolling') {
+                try {
+                  codexRollout?.register(info)
+                } catch {
+                  /* A failed codex rollout-watcher registration does not block taking the session back */
+                }
               }
               if (info.slackNotify === true) {
                 try {
@@ -4824,8 +4863,20 @@ export function registerIpc(
                   /* A failed Slack registration does not block taking the session back */
                 }
               }
+              try {
+                send('session:created', info)
+              } catch (err) {
+                orchLog(`session:created emit failed session=${info.id}: ${String(err)}`)
+              }
               return true
             },
+            // Runs need no created-event of their own: RunManager.adopt's track() already fires
+            // onStatus for every adopt the same as it does for a fresh start, and core.run.onStatus is
+            // wired to send('run:status', ...) — the renderer's upsertRun adds a runId it has not seen
+            // the same way it applies any other update. Terminals have no such push at all — a project
+            // panel already open when one is adopted will not show it until terminal.list(projectPath)
+            // is queried again (reopening the panel, or reloading the project); nothing here invents
+            // one, since none of terminal.open's own callers get one either.
             run: (a) => core.run.adopt(a) !== null,
             terminal: (a) => core.terminal.adopt(a) !== null
           },

@@ -99,4 +99,50 @@ describe('reattachSessions', () => {
     expect((await reattachSessions(h.d as never)).refused).toBe(1)
     expect(h.killed).toEqual(['bad'])
   })
+
+  // The real adopters dereference `restore` unchecked — an entry whose note is present but malformed
+  // throws instead of returning false, and that must not abort every entry after it in the list.
+  it('contains a throw from one entry to a single refusal, and keeps adopting the rest', async () => {
+    const h = deps({
+      list: async () => [
+        entry({ id: 'a' }),
+        entry({ id: 'bad', meta: { kind: 'terminal', id: 'trm_bad', restore: {} } }),
+        entry({ id: 'c' })
+      ],
+      adopters: {
+        session: () => true,
+        run: () => true,
+        terminal: (a: { restore: Record<string, unknown> }) => {
+          if (typeof a.restore.projectPath !== 'string') throw new TypeError('restore.projectPath is not a string')
+          return true
+        }
+      }
+    })
+    const res = await reattachSessions(h.d as never)
+    expect(res).toEqual({ adopted: 2, refused: 1, sessions: [] })
+    expect(h.killed).toEqual(['bad'])
+  })
+
+  // The wire is JSON that crossed a process boundary; a kind this build's union does not name (an
+  // older or newer Host) must refuse the same as an unreadable note, not throw.
+  it('kills a pty whose note names a kind no adopter recognizes', async () => {
+    const h = deps({
+      list: async () => [entry({ meta: { kind: 'bogus' as never, id: 'x', restore: {} } })]
+    })
+    expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 1, sessions: [] })
+    expect(h.killed).toEqual(['p1'])
+  })
+
+  it('does not ask the Host to replay a refused entry, though it did attach a handle to try', async () => {
+    const h = deps({
+      list: async () => [entry()],
+      adopters: {
+        session: () => false,
+        run: () => false,
+        terminal: () => false
+      }
+    })
+    await reattachSessions(h.d as never)
+    expect(h.attached).toEqual(['p1'])
+  })
 })

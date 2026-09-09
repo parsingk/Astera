@@ -258,6 +258,42 @@ describe('HostClient', () => {
     expect(gone).toBe(0)
   })
 
+  // A dropped-and-reconnected Host is not the same event happening twice. The subscriber set must
+  // survive the first firing (no going quiet on the next drop) and each drop must still cost exactly
+  // one notification (no double-firing).
+  it('re-arms after a reconnect, rather than firing twice for one drop or going quiet for the next', async () => {
+    const addr = addressFor('disconnect-rearm')
+    let server = await serveAt(addr)
+    const c = new HostClient({
+      address: addr.address,
+      appVersion: '9.0.0',
+      spawnHost: () => {
+        void serveAt(addr).then((s) => {
+          server = s
+        })
+      },
+      log: () => {},
+      retryMs: 10
+    })
+    c.start()
+    await settled(c, (s) => s.connected)
+
+    let gone = 0
+    c.onDisconnect(() => {
+      gone += 1
+    })
+
+    await server.close()
+    await waitFor(() => gone === 1)
+    await settled(c, (s) => s.connected) // reconnected to the Host spawnHost brought back
+    expect(gone).toBe(1) // reconnecting on its own must not have fired a second notification
+
+    await server.close()
+    await waitFor(() => gone === 2)
+
+    await c.stop()
+  })
+
   // ready() is what lets startup decide the ptyRouter fallback without blocking on a Host that never
   // answers — see reattach.ts and its report for why HostClient grew this beyond what the brief named.
   it('ready() resolves once the handshake completes, well before its own timeout', async () => {
