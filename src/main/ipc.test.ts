@@ -257,8 +257,8 @@ describe('staleSpecFiles — which spec files a boot clears', () => {
     ])
   })
 
-  // 오래된 Dispatch 는 워커가 spec 을 쓰기 전에 열렸을 수 있다 — 지울 것이 없다는 뜻이지 이 판정이
-  // 흔들린다는 뜻이 아니다.
+  // An older Dispatch may have been opened before its worker ever wrote a spec. That means there is
+  // nothing here to delete, not that this decision is shaky.
   it('an open Dispatch whose spec file is already gone changes nothing', () => {
     expect(
       staleSpecFiles({
@@ -270,8 +270,8 @@ describe('staleSpecFiles — which spec files a boot clears', () => {
     ).toEqual(['orphan.md'])
   })
 
-  // openDispatch 는 specPath 를 빈 문자열로 열고 워커가 실제로 뜬 뒤에 채운다. 그 빈 값이 아무 파일도
-  // 지켜서는 안 된다.
+  // openDispatch opens with specPath as an empty string and fills it in once the worker has actually
+  // started. That empty value must not protect any file.
   it('a Dispatch whose specPath is still the empty placeholder protects nothing', () => {
     expect(
       staleSpecFiles({
@@ -283,7 +283,7 @@ describe('staleSpecFiles — which spec files a boot clears', () => {
     ).toEqual(['tsk_1-dsp_1.md'])
   })
 
-  // orchestration.json 은 손으로 고쳐지고, 이 저장소는 두 구분자를 다 본다.
+  // orchestration.json gets hand-edited, and this repository sees both separators.
   it('matches a specPath written with either separator', () => {
     expect(
       staleSpecFiles({
@@ -295,8 +295,8 @@ describe('staleSpecFiles — which spec files a boot clears', () => {
     ).toEqual([])
   })
 
-  // 코디네이터 브리핑도 같은 폴더에 있고 어떤 Dispatch 도 자기 것이라 하지 않는다. 세션이 살아남았으면
-  // 그 브리핑은 살아 있는 에이전트의 지시문이다.
+  // A coordinator brief lives in the same folder and no Dispatch claims it as its own. If its session
+  // survived, that brief is a live agent's instructions.
   it('keeps a coordinator brief whose session the Host handed back', () => {
     expect(
       staleSpecFiles({
@@ -347,8 +347,8 @@ describe('liveWorkersFor — the three answers the Host can give about its sessi
     expect(liveWorkersFor(null)).toBeUndefined()
   })
 
-  // 이 한 줄이 이 라운드의 Critical 이었다. 'unknown' 이 undefined 로 접히면 살아 있는 워커의 Dispatch
-  // 가 닫히고 같은 워크트리에 두 번째 에이전트가 뜬다.
+  // This one line was the round's Critical. If 'unknown' folds into undefined, the Dispatch of a live
+  // worker is closed and a second agent starts in the same worktree.
   it('an unanswered Host stays unknown and does not collapse into "nothing survived"', () => {
     expect(liveWorkersFor('unknown')).toBe('unknown')
   })
