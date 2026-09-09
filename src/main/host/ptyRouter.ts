@@ -1,9 +1,11 @@
 // One PtyFactory for the app's whole life, routing to whichever implementation is current.
 //
 // createCore builds SessionManager, RunManager and TerminalManager, and it runs before registerIpc —
-// so before there is a Host client to talk to. Handing all three this router means the decision can
-// be made later, and unmade: with no Host the fallback is node-pty and the app behaves exactly as it
-// always has, which is this slice's standing constraint.
+// so before there is a Host client to talk to. Handing all three this router means the decision can be
+// made later: with no Host the fallback is node-pty and the app behaves exactly as it always has,
+// which is this slice's standing constraint. In practice it is made once and never unmade — `use(null)`
+// has no caller outside this module's test, and `ptysOutliveApp` below says why a dropped connection
+// is not a reason to make one.
 import type { PtyFactory } from '../../core/sessions/pty'
 
 export function createPtyRouter(fallback: PtyFactory): {

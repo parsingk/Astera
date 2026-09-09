@@ -91,8 +91,11 @@ export interface Core {
   // The current language main uses when building user-visible sentences — settings.setLang updates it.
   // Pure core modules only produce a Message (a key); translation happens in this layer, which knows the language
   lang: Lang
-  // Switches the one PtyFactory that SessionManager, RunManager and TerminalManager were built with —
-  // registerIpc calls use() once the Host answers, and again with null if it goes away.
+  // Switches the one PtyFactory that SessionManager, RunManager and TerminalManager were built with.
+  // `registerIpc` calls `use()` exactly once, when the Host answers its first handshake, and nothing
+  // calls it again: a dropped connection is not the Host dying, and going back to node-pty there would
+  // spawn a session the Host's own ptys cannot be reconciled with. `use(null)` therefore has no caller
+  // outside the router's test, and is kept as the honest inverse of a switch that can be made.
   // `ptysOutliveApp` is the quit path's question: with a Host the ptys are its children and quitting
   // must leave them running, without one they are the app's own and ending them is still right.
   ptyRouter: { use(f: PtyFactory | null): void; ptysOutliveApp(): boolean }
