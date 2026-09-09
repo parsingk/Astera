@@ -728,4 +728,26 @@ describe('SessionManager', () => {
       expect(env.PATH).toBe('C:\\shuttle')
     })
   })
+
+  // The Host stores this and hands it back after a restart; it is the only thing that lets the app
+  // rebuild this session's record without having persisted anything itself.
+  it('tells the pty factory what this session is, so it can be rebuilt later', () => {
+    const { manager, spawned } = setup()
+    const info = manager.spawn({
+      account,
+      cwd: process.cwd(),
+      title: 'Auth refactor',
+      rollAccountIds: ['acc_1', 'acc_2']
+    })
+    expect(spawned[0].opts.meta).toEqual({
+      kind: 'session',
+      id: info.id,
+      restore: {
+        accountId: account.id,
+        cwd: process.cwd(),
+        title: 'Auth refactor',
+        rollAccountIds: ['acc_1', 'acc_2']
+      }
+    })
+  })
 })

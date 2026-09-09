@@ -225,7 +225,23 @@ export class SessionManager {
       cwd: opts.cwd,
       cols: opts.cols ?? 120,
       rows: opts.rows ?? 30,
-      env
+      env,
+      meta: {
+        kind: 'session',
+        id,
+        // Only what spawn cannot work out again by itself. The env, the descriptors and the
+        // statusLine config are rebuilt from the account and the cwd, so they do not belong here.
+        restore: {
+          accountId: opts.account.id,
+          cwd: opts.cwd,
+          title: opts.title ?? defaultSessionTitle(opts.cwd),
+          ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
+          ...(opts.rollAccountIds ? { rollAccountIds: opts.rollAccountIds } : {}),
+          ...(opts.rollPrompt ? { rollPrompt: opts.rollPrompt } : {}),
+          ...(opts.slackNotify !== undefined ? { slackNotify: opts.slackNotify } : {}),
+          ...(opts.bypassPermissions !== undefined ? { bypassPermissions: opts.bypassPermissions } : {})
+        }
+      }
     })
     const info: SessionInfo = {
       id,

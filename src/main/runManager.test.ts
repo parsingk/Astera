@@ -96,6 +96,34 @@ describe('RunManager', () => {
     expect(mgr.get(st.runId)?.validation).toBeUndefined()
   })
 
+  // The Host stores this and hands it back after a restart; it is the only thing that lets the app
+  // rebuild this run's record without having persisted anything itself.
+  it('tells the pty factory what this run is, so it can be rebuilt later', () => {
+    const { mgr, spawned } = setup()
+    const status = mgr.start(startOpts())
+    expect(spawned[0].opts.meta).toMatchObject({ kind: 'run', id: status.runId })
+    expect(spawned[0].opts.meta?.restore).toMatchObject({
+      projectPath: status.projectPath,
+      configId: status.configId,
+      command: status.command,
+      seq: status.seq
+    })
+  })
+
+  // A restored validation run must still carry the tag — otherwise placeNewRun would let a normal
+  // rerun of the same config evict it, and run.stop would not route through TaskValidator.markStopped.
+  it('a validation run says so in restore too, not just on status', () => {
+    const { mgr, spawned } = setup()
+    mgr.start(startOpts({ validation: true }))
+    expect(spawned[0].opts.meta?.restore).toMatchObject({ validation: true })
+  })
+
+  it('an ordinary run has no validation key in restore, not a false one', () => {
+    const { mgr, spawned } = setup()
+    mgr.start(startOpts())
+    expect(spawned[0].opts.meta?.restore).not.toHaveProperty('validation')
+  })
+
   // The constraint this feature removes. Two runs of one project — even of one configuration — live
   // side by side, and each is addressed by its own id.
   it('two runs of the same project run side by side', () => {

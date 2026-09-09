@@ -44,7 +44,8 @@ export class TerminalManager {
       cwd: projectPath,
       cols: cols ?? 120,
       rows: rows ?? 30,
-      env: { ...process.env }
+      env: { ...process.env },
+      meta: { kind: 'terminal', id, restore: { projectPath } }
     })
     const live: LiveTerminal = { id, projectPath, pty, buffer: '' }
     this.terminals.set(id, live)

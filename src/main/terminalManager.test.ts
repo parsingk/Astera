@@ -149,4 +149,12 @@ describe('TerminalManager', () => {
     mgr.open('/home/u/p')
     expect(spawned[0].file).toBe('/bin/zsh')
   })
+
+  // The Host stores this and hands it back after a restart; it is the only thing that lets the app
+  // rebuild this terminal's record without having persisted anything itself.
+  it('tells the pty factory what this terminal is, so it can be rebuilt later', () => {
+    const { mgr, spawned } = setup()
+    const info = mgr.open('D:/p')
+    expect(spawned[0].opts.meta).toEqual({ kind: 'terminal', id: info.id, restore: { projectPath: 'D:/p' } })
+  })
 })

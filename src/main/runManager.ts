@@ -91,14 +91,33 @@ export class RunManager {
     // This happens **only when the config specified it**: reacting to a JAVA_HOME the app merely inherited
     // would mean reordering the user's shell PATH on their behalf.
     const env = withJavaHomeOnPath(merged, fromFields.JAVA_HOME ?? opts.config.env?.JAVA_HOME, this.platform)
+    // Generated here rather than inline on status below, so the pty factory's meta can carry the same id.
+    const runId = randomUUID()
     const pty = this.ptyFactory(spawn.file, spawn.args, {
       cwd,
       cols: opts.cols ?? 120,
       rows: opts.rows ?? 30,
-      env
+      env,
+      meta: {
+        kind: 'run',
+        id: runId,
+        restore: {
+          projectPath: opts.projectPath,
+          projectName: opts.projectName,
+          configId: opts.config.id,
+          configName: opts.config.name,
+          command: opts.command,
+          seq,
+          // Carried beside status.validation (see its own comment): without this, a validation run
+          // rebuilt from the Host's list after a restart would be indistinguishable from a plain run —
+          // placeNewRun would let a same-config rerun evict it, and run.stop would not route through
+          // TaskValidator.markStopped.
+          ...(opts.validation ? { validation: true as const } : {})
+        }
+      }
     })
     const status: RunStatus = {
-      runId: randomUUID(),
+      runId,
       projectPath: opts.projectPath,
       projectName: opts.projectName,
       configId: opts.config.id,
