@@ -326,6 +326,23 @@ export function liveWorkersFor(taken: SessionsTakenBack): ReadonlySet<string> | 
   return new Set(taken.sessions)
 }
 
+/** What `startHostClient`'s outer catch settles `hostSessionsTakenBack` with when the whole chain
+ *  fails outright, rather than through the reattach path above that already produces all three
+ *  answers. Trivial, and a named function with tests anyway, for the same reason `liveWorkersFor` is:
+ *  this is the one place `null` and `'unknown'` could quietly swap, and swapping them either closes a
+ *  Dispatch whose worker is still running, or leaves one open forever.
+ *
+ *  `sawPeer` is `hostClient?.sawPeer()`: `false` when nothing in this attempt ever got as far as a
+ *  peer answering — a throw in `hostAddress` or `retireOlderHosts`, both of which run before
+ *  `HostClient` is even constructed — and that is the deterministic no-Host case a missing
+ *  `out/main/host.js` already settles `null` for. `true` once a peer was seen — a throw in
+ *  `createHostPtyFactory` or the trailing `onHostClientReady` wiring, both after `client.start()` — a
+ *  Host may already be holding sessions this app never took back, and `null` there would have the
+ *  restart cleanup write off a Dispatch whose worker is alive. */
+export function sessionsTakenBackOnFailure(sawPeer: boolean): SessionsTakenBack {
+  return sawPeer ? 'unknown' : null
+}
+
 /** The coordinator's brief, named for the Run it manages. It lives in the same directory as the
  *  workers' spec files, so the boot sweep has to be able to recognise one; `startCoordinator` writes
  *  it. The name is here, in one place, so those two cannot drift. */
@@ -4940,10 +4957,13 @@ export function registerIpc(
             resolve(v)
           }
           sock.on('connect', () => {
-            sock.write(line)
-            // Give the write a moment to leave before the socket is destroyed under it.
-            setTimeout(() => done(true), 100).unref?.()
+            // `end`, not `write` plus a guessed flush delay: it closes this side once the line is out,
+            // and the server's default (no `allowHalfOpen`) echoes that close back as soon as it sees
+            // it, so `'close'` below fires once the line has actually gone rather than after a fixed
+            // wait — usually sooner than the 100ms this replaced, and reliably rather than a guess.
+            sock.end(line)
           })
+          sock.on('close', () => done(true))
           sock.on('error', () => done(false))
           setTimeout(() => done(false), 1_000).unref?.()
         }),
@@ -5169,8 +5189,15 @@ export function registerIpc(
   // — surfaces as a rejection rather than a synchronous exception, which is what `.catch` is for here
   // rather than `try`/`catch`.
   void startHostClient().catch((err) => {
+    // Settle before logging: a throwing `hostWiring.log` must not leave this pending either — the same
+    // ordering hazard the old `try`/`catch` had to avoid, now on the `.catch` side of it.
+    //
+    // `sessionsTakenBackOnFailure(hostClient?.sawPeer() ?? false)`, not always `null`: a rejection here
+    // can land after `client.start()` already began connecting (a throw in `createHostPtyFactory`, or
+    // in the trailing `onHostClientReady` wiring), and by then a Host may already be holding sessions
+    // this app never took back. See `sessionsTakenBackOnFailure`'s own comment for the full reasoning.
+    settleSessionsTakenBack(sessionsTakenBackOnFailure(hostClient?.sawPeer() ?? false))
     hostWiring?.log(`the Host wiring failed to start: ${String(err)} — the app runs without a Host`)
-    settleSessionsTakenBack(null)
   })
 
   ipcMain.handle(

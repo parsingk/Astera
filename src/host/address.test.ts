@@ -6,13 +6,13 @@ const PROFILE = 'C:/Users/someone/AppData/Roaming/astera'
 describe('hostAddress', () => {
   it('is a named pipe on win32, with nothing to prepare', () => {
     const a = hostAddress({ profileDir: PROFILE, platform: 'win32', tmpDir: 'C:/Temp', protocol: 1 })
-    expect(a.address).toMatch(/^\\\\\.\\pipe\\astera-host-[0-9a-f]{12}-v1$/)
+    expect(a.address).toMatch(/^\\\\\.\\pipe\\astera-host-[0-9a-f]{12}$/)
     expect(a.dirToPrepare).toBeNull()
   })
 
   it('is a socket inside its own directory on posix, and the directory is what gets locked down', () => {
     const a = hostAddress({ profileDir: '/home/someone/.config/astera', platform: 'linux', tmpDir: '/tmp', protocol: 1 })
-    expect(a.dirToPrepare).toMatch(/^\/tmp\/astera-host-[0-9a-f]{12}-v1$/)
+    expect(a.dirToPrepare).toMatch(/^\/tmp\/astera-host-[0-9a-f]{12}$/)
     expect(a.address).toBe(`${a.dirToPrepare}/sock`)
   })
 
@@ -59,6 +59,10 @@ describe('hostAddress', () => {
 describe('retireOlderHosts', () => {
   it("tells every older protocol's Host to leave, and reports how many answered", async () => {
     const spoken: Array<[string, string]> = []
+    // v1 has no suffix of its own — see hostAddress's comment — so matching on the real address it
+    // produces is what makes this probe a stand-in for a genuine v1 Host, not a string that nothing
+    // has ever listened on.
+    const v1 = hostAddress({ profileDir: PROFILE, platform: 'win32', tmpDir: 'C:/Temp', protocol: 1 }).address
     const n = await retireOlderHosts({
       profileDir: PROFILE,
       platform: 'win32',
@@ -66,7 +70,7 @@ describe('retireOlderHosts', () => {
       protocol: 3,
       connect: async (address, line) => {
         // only v1 is there
-        if (!address.endsWith('-v1')) return false
+        if (address !== v1) return false
         spoken.push([address, line])
         return true
       },

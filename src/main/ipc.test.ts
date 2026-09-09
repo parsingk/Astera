@@ -6,6 +6,7 @@ import {
   providerOfSession,
   liveWorkersFor,
   rollCoordinatorForSession,
+  sessionsTakenBackOnFailure,
   staleSpecFiles
 } from './ipc'
 import { sanitizeResumePrompt } from '../core/sessions/commands'
@@ -356,5 +357,21 @@ describe('liveWorkersFor — the three answers the Host can give about its sessi
 
   it('an answer naming nothing is an empty set, not unknown — the Host really had nothing', () => {
     expect(liveWorkersFor({ adopted: 0, refused: 2, sessions: [] })).toEqual(new Set())
+  })
+})
+
+describe('sessionsTakenBackOnFailure — what startHostClient\'s outer catch settles with', () => {
+  // A throw before anything ever accepted a connection (hostAddress, retireOlderHosts) is the
+  // deterministic no-Host case — the same answer a missing out/main/host.js already settles.
+  it('no peer ever seen settles null, same as no Host at all', () => {
+    expect(sessionsTakenBackOnFailure(false)).toBeNull()
+  })
+
+  // A throw after a peer answered (createHostPtyFactory, the trailing onHostClientReady wiring) means
+  // a Host may already be holding sessions this app never took back. Settling null there would have
+  // the restart cleanup close a Dispatch whose worker is still running — the duplicate-agent failure
+  // liveWorkersFor's own 'unknown' case exists to prevent.
+  it('a peer was seen settles unknown, not null — its sessions are not evidence of nothing', () => {
+    expect(sessionsTakenBackOnFailure(true)).toBe('unknown')
   })
 })
