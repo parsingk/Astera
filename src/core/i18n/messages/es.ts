@@ -131,6 +131,8 @@ export const es: Catalog = {
   'common.quitConfirm.title': 'Cerrar y salir de Astera',
   'common.quitConfirm.body':
     'Al cerrar la ventana, Astera se cierra y se finalizarán {count} sesiones en curso. ¿Continuar?',
+  'common.quitConfirm.bodyKept':
+    'Al cerrar la ventana, Astera se cierra. Las {count} sesiones en curso siguen ejecutándose y volverán la próxima vez que abras Astera. ¿Continuar?',
   // index.ts — system tray context menu
   'common.trayOpen': 'Abrir',
   'common.trayQuit': 'Salir',

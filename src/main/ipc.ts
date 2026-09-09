@@ -5212,6 +5212,10 @@ export function registerIpc(
         problem: 'out/main/host.js was not found'
       }
   )
+  // Not derived from `host.status()` by the caller: `connected` false covers both "there was never a
+  // Host" and "the connection dropped while the Host kept running the ptys", and those are opposite
+  // answers to this question. The router holds the one that matters — see its `ptysOutliveApp`.
+  ipcMain.handle('host.ptysOutliveApp', () => core.ptyRouter.ptysOutliveApp())
 
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is

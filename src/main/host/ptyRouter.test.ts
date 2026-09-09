@@ -30,6 +30,19 @@ describe('createPtyRouter', () => {
     expect(calls).toEqual(['local:c'])
   })
 
+  // The quit path asks this before it decides whether to end every running session (main/index.ts's
+  // will-quit). With no Host the ptys are this process's own children and killing them is still
+  // right; with a Host they belong to a process that outlives this one, and killing them would undo
+  // the whole slice.
+  it('says the ptys do not outlive the app until a Host factory is installed', () => {
+    const r = createPtyRouter(stub('local', []))
+    expect(r.ptysOutliveApp()).toBe(false)
+    r.use(stub('host', []))
+    expect(r.ptysOutliveApp()).toBe(true)
+    r.use(null)
+    expect(r.ptysOutliveApp()).toBe(false)
+  })
+
   // use() changes which factory the *next* call to r.factory reaches — it does not touch a PtyLike
   // handle already handed back. A pty spawned through the fallback keeps behaving exactly as it did
   // before the switch: nothing about it is retargeted onto the Host.

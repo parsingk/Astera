@@ -180,8 +180,13 @@ export const ko = {
   'common.or': '또는',
   // App.tsx — Linux에서만 뜨는 창 닫기 확인. 거기서는 트레이로 숨는 대신 앱이 실제로 종료되고
   // will-quit이 실행 중 세션을 모두 죽인다. 업데이트 설치와 같은 결과이므로 같은 동의를 받는다
+  // Slice 2 of the Astera Host: the comment above still describes the no-Host case, which is now one
+  // of two. When a Host owns the ptys, will-quit leaves them running and `bodyKept` below is what the
+  // person is shown instead; App.tsx picks between the two by asking host.ptysOutliveApp().
   'common.quitConfirm.title': '닫고 Astera 종료',
   'common.quitConfirm.body': '창을 닫으면 Astera가 종료되고 진행 중인 세션 {count}개도 함께 종료됩니다. 계속할까요?',
+  'common.quitConfirm.bodyKept':
+    '창을 닫으면 Astera가 종료됩니다. 진행 중인 세션 {count}개는 계속 실행되고, 다음에 Astera를 열면 그대로 돌아옵니다. 계속할까요?',
   // index.ts — system tray context menu
   'common.trayOpen': '열기',
   'common.trayQuit': '종료',

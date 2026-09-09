@@ -217,14 +217,18 @@ function Titlebar({
   // too would put the same functionality at both ends of the window. .titlebar--mac reserves the
   // left-hand margin the traffic lights sit in.
   const isMac = window.api.platform === 'darwin'
-  /** On Linux the X really quits the app (there is no tray to hide in — main/index.ts win.on('close')),
-   *  and will-quit kills every running session. That is the same outcome the update install asks about,
-   *  so it asks the same way. On win32/macOS the window only hides, so nothing is asked. */
+  /** On Linux the X really quits the app (there is no tray to hide in — main/index.ts win.on('close')).
+   *  What quitting costs is no longer one answer: with no Host, will-quit kills every running session,
+   *  the same outcome the update install asks about; with a Host the ptys are its children and quitting
+   *  leaves them running, so the question is worth asking but the old sentence would be a lie. The
+   *  answer is read here rather than held in state because it changes during a run — the Host connects
+   *  some milliseconds after launch. On win32/macOS the window only hides, so nothing is asked. */
   const closeWindow = async (): Promise<void> => {
     if (window.api.platform === 'linux' && runningCount > 0) {
+      const kept = await window.api.host.ptysOutliveApp().catch(() => false)
       const ok = await confirmModal({
         title: t('common.quitConfirm.title'),
-        body: t('common.quitConfirm.body', { count: runningCount }),
+        body: t(kept ? 'common.quitConfirm.bodyKept' : 'common.quitConfirm.body', { count: runningCount }),
         confirmLabel: t('common.close')
       })
       if (!ok) return

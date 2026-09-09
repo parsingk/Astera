@@ -277,7 +277,8 @@ const api = {
     cancel: invoke('sessionTasks.cancel')
   },
   host: {
-    status: invoke('host.status')
+    status: invoke('host.status'),
+    ptysOutliveApp: invoke('host.ptysOutliveApp')
   },
   platform: process.platform,
   win: {

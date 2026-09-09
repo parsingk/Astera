@@ -129,6 +129,8 @@ export const ja: Catalog = {
   'common.quitConfirm.title': '閉じて Astera を終了',
   'common.quitConfirm.body':
     'ウィンドウを閉じると Astera が終了し、進行中のセッション {count} 件も終了します。続行しますか？',
+  'common.quitConfirm.bodyKept':
+    'ウィンドウを閉じると Astera が終了します。進行中のセッション {count} 件はそのまま実行され続け、次に Astera を開いたときに戻ります。続行しますか？',
   // index.ts — system tray context menu
   'common.trayOpen': '開く',
   'common.trayQuit': '終了',

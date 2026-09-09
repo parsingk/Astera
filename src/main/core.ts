@@ -93,7 +93,9 @@ export interface Core {
   lang: Lang
   // Switches the one PtyFactory that SessionManager, RunManager and TerminalManager were built with —
   // registerIpc calls use() once the Host answers, and again with null if it goes away.
-  ptyRouter: { use(f: PtyFactory | null): void }
+  // `ptysOutliveApp` is the quit path's question: with a Host the ptys are its children and quitting
+  // must leave them running, without one they are the app's own and ending them is still right.
+  ptyRouter: { use(f: PtyFactory | null): void; ptysOutliveApp(): boolean }
 }
 
 // An alias narrowed to just the shape accountLogout actually uses — node:child_process's execFile has so many
