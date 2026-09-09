@@ -40,6 +40,11 @@ export function attachPtyHost(a: {
       case 'pty-resume':
         a.registry.resume(m.id)
         return true
+      case 'pty-note':
+        // Nothing to answer: the app is telling us something about its own session, not asking. The
+        // registry decides what a patch for an id it does not have, or for one that has exited, means.
+        a.registry.note(m.id, m.patch)
+        return true
       case 'pty-list':
         send({ t: 'pty-listed', entries: a.registry.list() })
         return true

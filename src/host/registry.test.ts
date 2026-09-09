@@ -114,6 +114,56 @@ describe('PtyRegistry', () => {
     expect(h.r.list()).toHaveLength(1)
   })
 
+  // The note is written at spawn and the app learns things about a session afterwards — its new
+  // title, the rollout file a codex session turned out to write to. Merged, never replaced: each
+  // caller knows one key and must not erase the ones the others wrote.
+  it('merges a note into what it remembers, leaving the keys the patch does not name alone', () => {
+    const h = registry()
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta({ kind: 'session', id: 'sess_1', restore: { accountId: 'acc_1', title: 'old' } }) })
+    h.r.note('p1', { title: 'new' })
+    h.r.note('p1', { rolloutPath: 'D:/r/one.jsonl' })
+    expect(h.r.list()[0].meta).toEqual({
+      kind: 'session',
+      id: 'sess_1',
+      restore: { accountId: 'acc_1', title: 'new', rolloutPath: 'D:/r/one.jsonl' }
+    })
+  })
+
+  // The note the app already holds must not change under it: `list` hands out the meta object itself.
+  it('does not rewrite a note it has already handed out', () => {
+    const h = registry()
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta({ restore: { title: 'old' } }) })
+    const before = h.r.list()[0].meta
+    h.r.note('p1', { title: 'new' })
+    expect(before?.restore).toEqual({ title: 'old' })
+  })
+
+  it('ignores a note for an id it does not have', () => {
+    const h = registry()
+    expect(() => h.r.note('nope', { title: 'new' })).not.toThrow()
+    expect(h.r.list()).toEqual([])
+  })
+
+  // Same rule as every other message that names a pty. Nothing reads a dead entry's note either:
+  // reattachSessions skips an entry that is not alive before it ever looks at one.
+  it('ignores a note for a session it still lists but that has exited', () => {
+    const p = fakePty()
+    const h = registry({ pty: p })
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta({ restore: { title: 'old' } }) })
+    p.exit(0)
+    h.r.note('p1', { title: 'new' })
+    expect(h.r.list()[0].meta?.restore).toEqual({ title: 'old' })
+  })
+
+  // Only the three managers spawn, and all three pass a note — but a patch cannot invent the kind and
+  // the id a note needs, so with nothing to merge into there is nothing to do.
+  it('ignores a note for a pty opened without one', () => {
+    const h = registry()
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts })
+    h.r.note('p1', { title: 'new' })
+    expect(h.r.list()[0].meta).toBeNull()
+  })
+
   it('keeps the newest output and drops the oldest once the buffer is full', () => {
     const p = fakePty()
     const h = registry({ pty: p, scrollback: 10 })

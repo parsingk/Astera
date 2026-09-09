@@ -135,6 +135,26 @@ export class PtyRegistry {
     this.live(id)?.pty.resume()
   }
 
+  /** Merges keys into what the app asked us to remember about this pty. Still not read here — the
+   *  note stays what it has always been, the app's message to its future self.
+   *
+   *  **Merged, not replaced**, because the senders are several and each knows one key: the app's
+   *  session manager knows the title, its codex rollout watcher knows the rollout file, and a whole
+   *  note from either would drop the other's.
+   *
+   *  **Behind `live`, like every other message that names a pty.** An exited entry is kept so `list`
+   *  can report it as gone, but its note has no reader left: `reattachSessions` skips an entry that is
+   *  not alive before it looks at the note at all, so merging into one would be a write nobody can
+   *  ever read. A patch for a pty opened without a note is dropped for a different reason — a patch
+   *  cannot invent the `kind` and `id` a note needs, and there is nothing to merge into. */
+  note(id: string, patch: Record<string, unknown>): void {
+    const e = this.live(id)
+    if (!e?.meta) return
+    // A new object rather than a mutation: `list` hands the meta out by reference, and an entry
+    // already reported must not change under whoever is holding it.
+    e.meta = { ...e.meta, restore: { ...e.meta.restore, ...patch } }
+  }
+
   /** The scrollback, or empty for an id that was never here — and empty, too, for one that has ended,
    *  which drops its buffer as it goes. Nothing reads a dead session's output: an app that was attached
    *  already received it, and one that was not is forbidden to attach to a dead entry, because a handle
