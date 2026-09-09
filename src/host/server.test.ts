@@ -31,7 +31,8 @@ const server = async (
   const addr = hostAddress({
     profileDir: path.join(dir, over.profile ?? 'profile'),
     platform: process.platform,
-    tmpDir: dir
+    tmpDir: dir,
+    protocol: HOST_PROTOCOL
   })
   const s = await startHostServer({
     address: addr.address,
@@ -224,7 +225,7 @@ describe('startHostServer', () => {
 // stale to find.
 describe.runIf(process.platform !== 'win32')('a socket file left behind', () => {
   it('is replaced when nobody is listening on it', async () => {
-    const addr = hostAddress({ profileDir: path.join(dir, 'stale'), platform: process.platform, tmpDir: dir })
+    const addr = hostAddress({ profileDir: path.join(dir, 'stale'), platform: process.platform, tmpDir: dir, protocol: HOST_PROTOCOL })
     await fs.mkdir(addr.dirToPrepare!, { recursive: true, mode: 0o700 })
     await fs.writeFile(addr.address, '')
     const s = await startHostServer({
@@ -253,7 +254,7 @@ describe.runIf(process.platform !== 'win32')('a socket file left behind', () => 
   // where anybody can reach it, so the Host refuses the address instead.
   it('refuses an address whose directory is open to everyone', async () => {
     const logs: string[] = []
-    const addr = hostAddress({ profileDir: path.join(dir, 'loose'), platform: process.platform, tmpDir: dir })
+    const addr = hostAddress({ profileDir: path.join(dir, 'loose'), platform: process.platform, tmpDir: dir, protocol: HOST_PROTOCOL })
     await fs.mkdir(addr.dirToPrepare!, { recursive: true })
     // chmod rather than mkdir's `mode`, which the umask trims.
     await fs.chmod(addr.dirToPrepare!, 0o777)

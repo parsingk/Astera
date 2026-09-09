@@ -20,7 +20,7 @@ afterEach(async () => {
 })
 
 const addressFor = (name: string): ReturnType<typeof hostAddress> =>
-  hostAddress({ profileDir: path.join(dir, name), platform: process.platform, tmpDir: dir })
+  hostAddress({ profileDir: path.join(dir, name), platform: process.platform, tmpDir: dir, protocol: HOST_PROTOCOL })
 
 const serveAt = async (
   addr: ReturnType<typeof hostAddress>,

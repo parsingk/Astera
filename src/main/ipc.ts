@@ -2,6 +2,7 @@ import { ipcMain, dialog, app, shell, session, webContents, type BrowserWindow, 
 import { promises as fs, existsSync, readFileSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import net from 'node:net'
 import { execFile, spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { Core } from './core'
@@ -14,10 +15,10 @@ import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
 import { HostClient, READY_TIMEOUT_MS } from './host/client'
 import { hostSpawnPlan, resolveHostEntry } from './host/spawn'
-import { hostAddress } from '../host/address'
+import { hostAddress, retireOlderHosts } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
 import { reattachSessions, type ReattachResult } from './host/reattach'
-import type { ClientMessage, HostMessage, PtyEntry } from '../core/host/protocol'
+import { HOST_PROTOCOL, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
 import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, SessionInfo } from '../core/types'
@@ -4894,7 +4895,7 @@ export function registerIpc(
   // a packaging mistake) leaves hostClient null and the app runs exactly as it does today. Once the
   // Host answers, this also routes core.ptyRouter to it and takes back whatever sessions, runs and
   // terminals it still holds (slice 2 design §7).
-  const startHostClient = (): void => {
+  const startHostClient = async (): Promise<void> => {
     const hostLog = hostWiring?.log ?? ((): void => {})
     const profileDir = app.getPath('userData')
     // The same two candidates as the CLI shuttle's, for the same reasons — why they are the same path
@@ -4912,7 +4913,34 @@ export function registerIpc(
       settleSessionsTakenBack(null)
       return
     }
-    const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir() })
+    // An update changes the protocol, and the Host from the previous version is still there holding
+    // terminals this app cannot speak to. Ask it to leave first. A restart does not come through
+    // here, because the protocol has not changed and the address is the same one.
+    await retireOlderHosts({
+      profileDir,
+      platform: process.platform,
+      tmpDir: os.tmpdir(),
+      protocol: HOST_PROTOCOL,
+      connect: (address, line) =>
+        new Promise<boolean>((resolve) => {
+          const sock = net.connect(address)
+          const done = (v: boolean): void => {
+            sock.destroy()
+            resolve(v)
+          }
+          sock.on('connect', () => {
+            sock.write(line)
+            // Give the write a moment to leave before the socket is destroyed under it.
+            setTimeout(() => done(true), 100).unref?.()
+          })
+          sock.on('error', () => done(false))
+          setTimeout(() => done(false), 1_000).unref?.()
+        }),
+      // hostLog, not orchLog: this is a Host diagnostic, and it must still be recorded when
+      // orchestration is off, which is exactly when orchLog is a no-op.
+      log: (m) => hostLog(m)
+    })
+    const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
     const client = new HostClient({
       address: addr.address,
       appVersion: app.getVersion(),
@@ -5121,17 +5149,18 @@ export function registerIpc(
     hostWiring?.onHostClientReady(() => client.stop())
   }
   // **A throw in here must not be allowed to leave `hostSessionsTakenBack` pending.** The settlement
-  // above covers every asynchronous path, but the body has synchronous work ahead of that chain
-  // (`hostAddress`, the client, `createHostPtyFactory`), and a throw there would leave the promise
-  // unsettled for the app's whole life: `bootOrch` waits on it forever, so `startOrch`'s `finally`
-  // never runs, `orchStarting` stays true, and every later toggle's `startOrch()` is a silent no-op —
-  // orchestration would simply never start again, with nothing to see but the missing log lines.
-  try {
-    startHostClient()
-  } catch (err) {
+  // above covers every asynchronous path, but the body has work ahead of that chain — `retireOlderHosts`
+  // (awaited), then `hostAddress`, the client, `createHostPtyFactory` — and a failure there would leave
+  // the promise unsettled for the app's whole life: `bootOrch` waits on it forever, so `startOrch`'s
+  // `finally` never runs, `orchStarting` stays true, and every later toggle's `startOrch()` is a silent
+  // no-op — orchestration would simply never start again, with nothing to see but the missing log
+  // lines. `startHostClient` is async, so a failure anywhere in it — before or after its first `await`
+  // — surfaces as a rejection rather than a synchronous exception, which is what `.catch` is for here
+  // rather than `try`/`catch`.
+  void startHostClient().catch((err) => {
     hostWiring?.log(`the Host wiring failed to start: ${String(err)} — the app runs without a Host`)
     settleSessionsTakenBack(null)
-  }
+  })
 
   ipcMain.handle(
     'host.status',

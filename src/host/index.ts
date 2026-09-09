@@ -11,6 +11,7 @@ import { openHostLog } from './log'
 import { startHostServer, ADDRESS_TAKEN } from './server'
 import { PtyRegistry } from './registry'
 import { attachPtyHost } from './ptyHost'
+import { HOST_PROTOCOL } from '../core/host/protocol'
 
 /** With no client for this long, there is nothing for the Host to be. Slice 2 adds "and no session is
  *  alive" to this, and slice 3 adds "and no Run is in progress" (design §8). */
@@ -23,7 +24,7 @@ async function main(): Promise<void> {
     process.exit(2)
   }
   const log = openHostLog({ path: process.env.ASTERA_HOST_LOG ?? path.join(profileDir, 'host', 'host.log') })
-  const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir() })
+  const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir(), protocol: HOST_PROTOCOL })
 
   // The Host is where node-pty lives now. `withExitedPtyGuard`'s job — swallowing a write or resize
   // to a pty that has already gone — is the registry's `live` check here instead: it knows which
