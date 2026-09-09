@@ -197,6 +197,18 @@ export interface OrchWiring {
   onTabResumeReady: (fn: (sessionId: string, form: 'handover' | 'update') => Promise<string | null>) => void
 }
 
+/** The index.ts side of the Astera Host (design §4). Its own wiring rather than a member of
+ *  `OrchWiring`, because the Host is not an orchestration feature — the same reason `startHostClient`
+ *  below sits outside `bootOrch`. The client is built in this file (it needs the profile directory,
+ *  the app version and the spawn plan, all of which are here); index.ts takes the share it takes of
+ *  every other subsystem, the log file and the shutdown cleanup. */
+export interface HostWiring {
+  /** Hands over the shutdown handle once the client is built. Called from inside `registerIpc`, not
+   *  from a boot path — the same shape as `OrchWiring.onTabResumeReady` — and read from will-quit.
+   *  Not called at all when there is no Host bundle to talk to: there is then nothing to stop. */
+  onHostClientReady: (stop: () => Promise<void>) => void
+}
+
 /** 앱 자신이 명령을 부를 때의 호출자 id. **어떤 세션 id 와도 겹칠 수 없는 모양**이어야 한다 —
  *  handleCommand 는 caller.sessionId 가 Dispatch 를 가진 적이 있으면 워커로 보고 COORDINATOR_ONLY
  *  명령을 막는다. 겹치면 앱이 워커로 오인되어 Task 를 만들 수 없게 된다. 세션 id 는 randomUUID
@@ -342,7 +354,9 @@ export function registerIpc(
   /** Which guest is which session's agent browser. Built in index.ts because installPreviewGuards
    *  (called there, before this) asks it on every will-navigate; the register/unregister IPC that
    *  fills it lives here. Optional so the existing harnesses keep compiling; a missing one is built. */
-  agentGuestsIn?: AgentGuestRegistry<WebContents>
+  agentGuestsIn?: AgentGuestRegistry<WebContents>,
+  /** index.ts's share of the Astera Host — see HostWiring. */
+  hostWiring?: HostWiring
 ): void {
   const agentGuests = agentGuestsIn ?? new AgentGuestRegistry<WebContents>((id) => webContents.fromId(id))
   const send = (channel: string, payload: unknown): void => {
@@ -4710,7 +4724,7 @@ export function registerIpc(
       return
     }
     const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir() })
-    hostClient = new HostClient({
+    const client = new HostClient({
       address: addr.address,
       appVersion: app.getVersion(),
       log: (m) => orchLog(`host: ${m}`),
@@ -4730,7 +4744,9 @@ export function registerIpc(
         child.unref()
       }
     })
-    hostClient.start()
+    hostClient = client
+    client.start()
+    hostWiring?.onHostClientReady(() => client.stop())
   }
   startHostClient()
 
