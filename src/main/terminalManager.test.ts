@@ -163,7 +163,7 @@ describe('TerminalManager', () => {
     it('adopts a running pty and puts the terminal back', () => {
       const { mgr } = setup()
       const pty = new FakePty()
-      const info = mgr.adopt({ pty, restore: { projectPath: 'D:/p' } })
+      const info = mgr.adopt({ id: 'term-from-host', pty, restore: { projectPath: 'D:/p' } })
       expect(info).toMatchObject({ projectPath: 'D:/p' })
       expect(mgr.list('D:/p').map((t) => t.id)).toEqual([info!.id])
       pty.dataCb('replayed output')
@@ -175,7 +175,7 @@ describe('TerminalManager', () => {
       const exited: { id: string; exitCode: number }[] = []
       mgr.onExit = (e) => exited.push(e)
       const pty = new FakePty()
-      const info = mgr.adopt({ pty, restore: { projectPath: 'D:/p' } })!
+      const info = mgr.adopt({ id: 'term-from-host', pty, restore: { projectPath: 'D:/p' } })!
       mgr.write(info.id, 'ls\r')
       expect(pty.written).toEqual(['ls\r'])
       pty.exitCb({ exitCode: 3 })
@@ -183,9 +183,20 @@ describe('TerminalManager', () => {
       expect(mgr.list('D:/p')).toEqual([])
     })
 
+    // The terminal keeps the id it had before the restart, so the renderer's tab still addresses it.
+    it('keeps the id it is handed rather than minting one', () => {
+      const { mgr } = setup()
+      const pty = new FakePty()
+      const info = mgr.adopt({ id: 'term-from-host', pty, restore: { projectPath: 'D:/p' } })!
+      expect(info.id).toBe('term-from-host')
+      expect(mgr.list('D:/p').map((t) => t.id)).toEqual(['term-from-host'])
+      mgr.write('term-from-host', 'echo hi\r')
+      expect(pty.written).toEqual(['echo hi\r'])
+    })
+
     it('refuses a restore it cannot read', () => {
       const { mgr } = setup()
-      expect(mgr.adopt({ pty: new FakePty(), restore: {} })).toBeNull()
+      expect(mgr.adopt({ id: 'term-from-host', pty: new FakePty(), restore: {} })).toBeNull()
       expect(mgr.list('D:/p')).toEqual([])
     })
   })

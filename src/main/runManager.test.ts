@@ -106,9 +106,19 @@ describe('RunManager', () => {
       projectPath: status.projectPath,
       configId: status.configId,
       command: status.command,
+      cwd: status.projectPath, // this configuration overrides none, so the project path is where it ran
       seq: status.seq,
       startedAt: status.startedAt
     })
+  })
+
+  // Where the process actually started, which is a spawn-time value like startedAt: the configuration
+  // on disk may be edited before the restart, and cwdOf answers for the process that is running.
+  it('records the directory the run started in, a configuration override included', () => {
+    const { mgr, spawned } = setup()
+    mgr.start(startOpts({ config: { ...cfg, cwd: 'D:/p/api' } }))
+    expect(spawned[0].opts.cwd).toBe('D:/p/api')
+    expect(spawned[0].opts.meta?.restore).toMatchObject({ cwd: 'D:/p/api' })
   })
 
   // A restored validation run must still carry the tag — otherwise decideStart's `validation !== true`
@@ -133,6 +143,7 @@ describe('RunManager', () => {
       configId: 'cfg',
       configName: 'dev',
       command: 'npm run dev',
+      cwd: 'D:/p/api',
       seq: 0,
       startedAt: 1_700_000_000_000,
       ...over
@@ -141,7 +152,7 @@ describe('RunManager', () => {
     // After a restart the process is already running; adopt rebuilds only the app's own record of it.
     it('adopts a running pty and puts the run back in the list', () => {
       const { mgr } = setup()
-      const status = mgr.adopt({ pty: new FakePty(), restore: restore() })
+      const status = mgr.adopt({ id: 'run-from-host', pty: new FakePty(), restore: restore() })
       expect(status).toMatchObject({
         projectPath: 'D:/p',
         configId: 'cfg',
@@ -157,7 +168,7 @@ describe('RunManager', () => {
     // runs rebuilt around one restart tie-break arbitrarily instead of by real age.
     it('keeps the startedAt the note carries instead of restarting the clock', () => {
       const { mgr } = setup()
-      const status = mgr.adopt({ pty: new FakePty(), restore: restore() })!
+      const status = mgr.adopt({ id: 'run-from-host', pty: new FakePty(), restore: restore() })!
       expect(status.startedAt).toBe(1_700_000_000_000)
     })
 
@@ -165,15 +176,15 @@ describe('RunManager', () => {
     // same-config ▶ take it over instead of leaving it to the orchestrator.
     it('keeps the validation tag, and leaves the key off an ordinary run', () => {
       const { mgr } = setup()
-      const validation = mgr.adopt({ pty: new FakePty(), restore: restore({ validation: true }) })!
+      const validation = mgr.adopt({ id: 'run-validation', pty: new FakePty(), restore: restore({ validation: true }) })!
       expect(validation.validation).toBe(true)
-      expect(mgr.adopt({ pty: new FakePty(), restore: restore() })).not.toHaveProperty('validation')
+      expect(mgr.adopt({ id: 'run-ordinary', pty: new FakePty(), restore: restore() })).not.toHaveProperty('validation')
     })
 
     // The seat is the run's place in its project's list; a rebuilt run has to sit back down in its own.
     it('keeps the seat the note carries', () => {
       const { mgr } = setup()
-      const status = mgr.adopt({ pty: new FakePty(), restore: restore({ seq: 3 }) })!
+      const status = mgr.adopt({ id: 'run-from-host', pty: new FakePty(), restore: restore({ seq: 3 }) })!
       expect(status.seq).toBe(3)
     })
 
@@ -184,7 +195,7 @@ describe('RunManager', () => {
       mgr.onData = (e) => datas.push(e)
       mgr.onStatus = (s) => statuses.push(s)
       const pty = new FakePty()
-      const status = mgr.adopt({ pty, restore: restore() })!
+      const status = mgr.adopt({ id: 'run-from-host', pty, restore: restore() })!
       expect(statuses.map((s) => s.status)).toEqual(['running']) // the list and the badge refresh
       pty.dataCb('listening on http://localhost:5173/\n')
       expect(datas).toEqual([{ runId: status.runId, data: 'listening on http://localhost:5173/\n' }])
@@ -196,17 +207,37 @@ describe('RunManager', () => {
       expect(mgr.get(status.runId)?.status).toBe('exited')
     })
 
-    // cwdOf is what a relative path in the output is resolved against; the note carries no cwd of its
-    // own, and the project path is what start uses whenever the configuration did not override it.
-    it('resolves output paths against the project path', () => {
+    // cwdOf is what a relative path in the output is resolved against, and the truth is the directory
+    // the process actually started in — a spawn-time value like startedAt, since the configuration on
+    // disk may have been edited since.
+    it('resolves output paths against the cwd the note carries', () => {
       const { mgr } = setup()
-      const status = mgr.adopt({ pty: new FakePty(), restore: restore() })!
+      const status = mgr.adopt({ id: 'run-from-host', pty: new FakePty(), restore: restore() })!
+      expect(mgr.cwdOf(status.runId)).toBe('D:/p/api')
+    })
+
+    // A note written before runs recorded their cwd. The project path is what start itself falls back
+    // to when the configuration overrides none, so it is the right answer for a note that has none.
+    it('falls back to the project path when the note carries no cwd', () => {
+      const { mgr } = setup()
+      const note = restore()
+      delete note.cwd
+      const status = mgr.adopt({ id: 'run-from-host', pty: new FakePty(), restore: note })!
       expect(mgr.cwdOf(status.runId)).toBe('D:/p')
+    })
+
+    // The run keeps the id it had before the restart, so everything already addressing it still does.
+    it('keeps the runId it is handed rather than minting one', () => {
+      const { mgr } = setup()
+      const status = mgr.adopt({ id: 'run-from-host', pty: new FakePty(), restore: restore() })!
+      expect(status.runId).toBe('run-from-host')
+      expect(mgr.get('run-from-host')?.command).toBe('npm run dev')
+      expect(mgr.listByProject('D:/p').map((r) => r.runId)).toEqual(['run-from-host'])
     })
 
     it('refuses a restore it cannot read', () => {
       const { mgr } = setup()
-      expect(mgr.adopt({ pty: new FakePty(), restore: { projectPath: 'D:/p' } })).toBeNull()
+      expect(mgr.adopt({ id: 'run-from-host', pty: new FakePty(), restore: { projectPath: 'D:/p' } })).toBeNull()
       expect(mgr.listByProject('D:/p')).toEqual([])
     })
   })

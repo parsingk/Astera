@@ -113,6 +113,11 @@ export class RunManager {
           configId: opts.config.id,
           configName: opts.config.name,
           command: opts.command,
+          // Where the process actually started — a spawn-time value like startedAt, and for the same
+          // reason: the configuration on disk may be edited between the start and the restart, so its
+          // cwd cannot be read again to answer for a process that is already running. cwdOf is what a
+          // relative path in this run's output resolves against.
+          cwd,
           seq,
           startedAt,
           // Carried beside status.validation (see its own comment): without this, a validation run
@@ -185,12 +190,13 @@ export class RunManager {
    *
    *  Deliberately does none of start's other work: the process exists, so there is no command to
    *  assemble, no env to merge and no seat to claim — `seq` comes back from the note, which is the seat
-   *  this run already held. `startedAt` comes from the note for the same reason (see start's comment on
-   *  it), and the validation tag survives because decideStart's filter reads it.
+   *  this run already held. `startedAt` and `cwd` come from the note for the same reason (see start's
+   *  comments on them), and the validation tag survives because decideStart's filter reads it.
    *
-   *  **The runId is new, not the old one.** This slice does not persist the app's own state, so nothing
-   *  on this side remembers the old one; matching against the Host keys on its pty id, which survives. */
-  adopt(a: { pty: PtyLike; restore: Record<string, unknown> }): RunStatus | null {
+   *  **Keeps the run's own id** — `PtyMeta.id`, which the Host hands back beside the note. Every IPC
+   *  handler and event names a run by its runId, so an id of this method's own invention would be a run
+   *  nothing already holding the old one could address. */
+  adopt(a: { id: string; pty: PtyLike; restore: Record<string, unknown> }): RunStatus | null {
     const r = a.restore
     const str = (k: string): string | undefined => (typeof r[k] === 'string' ? (r[k] as string) : undefined)
     const projectPath = str('projectPath')
@@ -200,7 +206,7 @@ export class RunManager {
     const command = str('command')
     if (!projectPath || !projectName || !configId || !configName || !command) return null
     const status: RunStatus = {
-      runId: randomUUID(),
+      runId: a.id,
       projectPath,
       projectName,
       configId,
@@ -211,10 +217,9 @@ export class RunManager {
       startedAt: typeof r.startedAt === 'number' ? r.startedAt : Date.now(),
       ...(r.validation === true ? { validation: true as const } : {})
     }
-    // The note carries no cwd of its own: start's is the configuration's override or the project path,
-    // and the configuration is not the manager's to read here. The project path is the fallback start
-    // itself uses, so a link in the output still resolves against the project.
-    return this.track(status, a.pty, projectPath)
+    // A note from a build that recorded no cwd falls back to the project path — which is what start
+    // itself uses whenever the configuration overrides none.
+    return this.track(status, a.pty, str('cwd') ?? projectPath)
   }
 
   /** ▶ on a configuration that is already live: stop that run, wait for its process tree to actually

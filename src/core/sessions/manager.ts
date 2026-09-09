@@ -308,14 +308,17 @@ export class SessionManager {
    *  existsSync guard is about a directory it is about to start a process in, and refusing a session
    *  whose folder was renamed since would orphan a process that is still running.
    *
-   *  **The id is new, not the old one.** The app's session id is what the renderer, the orchestration
-   *  Dispatch and the transcript all key on, so reusing it would be better — but this slice does not
-   *  persist the app's own state, so nothing on this side remembers the old one. Dispatch matching
-   *  keys on the Host's pty id instead, which does survive. Not an oversight.
+   *  **Keeps the session's own id** — `PtyMeta.id`, which the Host hands back beside the note. The id is
+   *  what everything the app persists per session is filed under, and the agent process is still writing
+   *  under the old one: its statusLine and hook capture paths were baked into its env at spawn
+   *  (`ASTERA_STATUSLINE_OUT`, `ASTERA_HOOK_OUT`), and StatusLineManager reads those files back by
+   *  session id. Minting a new id would read a file nothing ever wrote — a pane that comes back blank
+   *  with nothing to point at (slice 2 design §10).
    *
-   *  `schedule` is not rebuilt: it is not in the note, and it is only meaningful on the initial spawn
-   *  (its coordinator owns the timer afterwards, and that timer did not survive the restart either). */
-  adopt(a: { pty: PtyLike; restore: Record<string, unknown> }): SessionInfo | null {
+   *  `schedule` is not rebuilt: the note does not carry it, and the coordinator's own entry died with
+   *  the app. Keeping the id is what leaves that reachable — a later task can re-register a schedule
+   *  against this same session — but nothing here re-arms one. */
+  adopt(a: { id: string; pty: PtyLike; restore: Record<string, unknown> }): SessionInfo | null {
     const r = a.restore
     const str = (k: string): string | undefined => (typeof r[k] === 'string' ? (r[k] as string) : undefined)
     const accountId = str('accountId')
@@ -323,7 +326,7 @@ export class SessionManager {
     const title = str('title')
     if (!accountId || !cwd || !title) return null
     const info: SessionInfo = {
-      id: randomUUID(),
+      id: a.id,
       accountId,
       cwd,
       status: 'running',

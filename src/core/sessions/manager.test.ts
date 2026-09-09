@@ -758,6 +758,7 @@ describe('SessionManager', () => {
       const { manager } = setup()
       const pty = new FakePty()
       const info = manager.adopt({
+        id: 'sess-from-host',
         pty,
         restore: { accountId: account.id, cwd: 'D:/p', title: 'Auth refactor', rollAccountIds: ['acc_1'] }
       })
@@ -780,7 +781,7 @@ describe('SessionManager', () => {
         exited = e.exitCode
       }
       const pty = new FakePty()
-      const info = manager.adopt({ pty, restore: { accountId: account.id, cwd: 'D:/p', title: 't' } })!
+      const info = manager.adopt({ id: 'sess-from-host', pty, restore: { accountId: account.id, cwd: 'D:/p', title: 't' } })!
       pty.dataCb('output')
       pty.exitCb({ exitCode: 0 })
       expect(data).toEqual(['output'])
@@ -793,7 +794,7 @@ describe('SessionManager', () => {
     it('an adopted session pauses at highWater and resumes on an ack, like a spawned one', () => {
       const { manager } = setup(100, 20)
       const pty = new FakePty()
-      const info = manager.adopt({ pty, restore: { accountId: account.id, cwd: 'D:/p', title: 't' } })!
+      const info = manager.adopt({ id: 'sess-from-host', pty, restore: { accountId: account.id, cwd: 'D:/p', title: 't' } })!
       pty.dataCb('x'.repeat(150))
       expect(pty.paused).toBe(true)
       manager.ack(info.id, 150)
@@ -806,13 +807,33 @@ describe('SessionManager', () => {
       const { manager } = setup()
       const missing = path.join(process.cwd(), 'no-such-directory-for-adopt')
       expect(existsSync(missing)).toBe(false)
-      expect(manager.adopt({ pty: new FakePty(), restore: { accountId: account.id, cwd: missing, title: 't' } }))
-        .not.toBeNull()
+      const adopted = manager.adopt({
+        id: 'sess-from-host',
+        pty: new FakePty(),
+        restore: { accountId: account.id, cwd: missing, title: 't' }
+      })
+      expect(adopted).not.toBeNull()
+    })
+
+    // The session keeps the id it had before the restart. The agent process is still writing its
+    // statusLine and hook capture into files named after that id, and the scheduler's entries key on it
+    // too — under an id of our own invention the app would read files nothing ever wrote.
+    it('keeps the id it is handed rather than minting one', () => {
+      const { manager } = setup()
+      const info = manager.adopt({
+        id: 'sess-from-host',
+        pty: new FakePty(),
+        restore: { accountId: account.id, cwd: 'D:/p', title: 't' }
+      })!
+      expect(info.id).toBe('sess-from-host')
+      expect(manager.list().map((s) => s.id)).toEqual(['sess-from-host'])
+      // and it is the id the manager answers to from here on
+      expect(manager.rename('sess-from-host', 'renamed')).toBe('renamed')
     })
 
     it('refuses a restore it cannot read rather than inventing a session', () => {
       const { manager } = setup()
-      expect(manager.adopt({ pty: new FakePty(), restore: { cwd: 'D:/p' } })).toBeNull()
+      expect(manager.adopt({ id: 'sess-from-host', pty: new FakePty(), restore: { cwd: 'D:/p' } })).toBeNull()
       expect(manager.list()).toEqual([])
     })
   })

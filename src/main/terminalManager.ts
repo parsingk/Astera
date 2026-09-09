@@ -75,12 +75,12 @@ export class TerminalManager {
    *  The replay buffer starts empty — it only ever held what this process printed while the app was
    *  watching, and it was not watching across the restart.
    *
-   *  **The id is new, not the old one.** This slice does not persist the app's own state, so nothing on
-   *  this side remembers the old one; matching against the Host keys on its pty id, which survives. */
-  adopt(a: { pty: PtyLike; restore: Record<string, unknown> }): TerminalInfo | null {
+   *  **Keeps the terminal's own id** — `PtyMeta.id`, which the Host hands back beside the note. Every
+   *  write, resize and close names a terminal by it, and so does the renderer's tab. */
+  adopt(a: { id: string; pty: PtyLike; restore: Record<string, unknown> }): TerminalInfo | null {
     const projectPath = a.restore.projectPath
     if (typeof projectPath !== 'string' || !projectPath) return null
-    return this.track({ id: randomUUID(), projectPath }, a.pty)
+    return this.track({ id: a.id, projectPath }, a.pty)
   }
 
   write(id: string, data: string): void {
