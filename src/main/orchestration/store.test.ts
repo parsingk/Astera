@@ -100,6 +100,33 @@ describe('OrchestrationStore', () => {
     expect(store.get().dispatches[0].endedAt).toBeTruthy()
   })
 
+  // Once the Host owns the terminals, a worker outlives the app. Closing its Dispatch as
+  // outcome_unknown would make P1's reconciler start a second agent on the same Task.
+  it('leaves a Dispatch open when its session is still alive in the Host', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ aliveSessionIds: new Set(['sess1']) })
+    expect(res.unknownOutcomes).toBe(0)
+    expect(store.get().dispatches[0].endedAt).toBeUndefined()
+  })
+
+  it('still closes a Dispatch whose session the Host does not have', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ aliveSessionIds: new Set(['someone-else']) })
+    expect(res.unknownOutcomes).toBe(1)
+    expect(store.get().dispatches[0].workerState).toBe('outcome_unknown')
+  })
+
+  it('closes every open Dispatch when it is told nothing, exactly as before', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    expect((await store.load()).unknownOutcomes).toBe(1)
+  })
+
   // provider 가 Run 에서 Task 로 내려간 뒤 남는 칸 — 두 칸을 함께 두면 어느 쪽이 정본인지
   // 코드마다 달라진다(위 accountId 이행과 같은 이유)
   it('옛 Run.provider 를 지운다', async () => {

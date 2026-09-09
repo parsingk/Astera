@@ -16,7 +16,7 @@ import { HostClient, READY_TIMEOUT_MS } from './host/client'
 import { hostSpawnPlan, resolveHostEntry } from './host/spawn'
 import { hostAddress } from '../host/address'
 import { createHostPtyFactory } from './host/ptyFactory'
-import { reattachSessions } from './host/reattach'
+import { reattachSessions, type ReattachResult } from './host/reattach'
 import type { ClientMessage, HostMessage, PtyEntry } from '../core/host/protocol'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
@@ -485,6 +485,30 @@ export function registerIpc(
   /** Astera Host slice 1: the channel exists, and nothing depends on it yet. Built at startup so
    *  slices 2 and 3 inherit an open line rather than one they have to reach for (design §7). */
   let hostClient: HostClient | null = null
+  /** Settles `hostSessionsTakenBack`. `startHostClient` owns it and must call it on **every** path it
+   *  can leave by, including the one where there is no Host at all — a path that returns without
+   *  calling it leaves `bootOrch` waiting forever. The initialiser is never the function that runs:
+   *  a Promise executor is synchronous, so the line below has replaced it before anything can call
+   *  this. */
+  let settleSessionsTakenBack: (r: ReattachResult | null) => void = () => {}
+  /** What reattaching took back from the Host, or null when there was no Host to take anything back
+   *  from. It never rejects, so awaiting it cannot throw a Host failure into a caller.
+   *
+   *  It exists so `bootOrch` can ask which workers are still running before its restart cleanup
+   *  decides which ones were lost. Awaiting *this* rather than listing the Host's ptys again is the
+   *  point: an entry reattach refused and killed is alive in that list and dead in this result, and
+   *  calling it alive would leave its Dispatch open with nobody working it.
+   *
+   *  **Created here rather than assigned later by `startHostClient`.** That call is the last
+   *  statement of `registerIpc` and the boot's `void startOrch()` is roughly a thousand lines above
+   *  it, so a variable filled in there is only in place by the time `bootOrch` reads it because
+   *  `bootOrch` happens to await something else first. Handing out the promise from the start makes
+   *  that ordering irrelevant, and the thing it protects is worth not resting on an accident: a
+   *  `bootOrch` that read this too early would see "nothing alive" and close the Dispatch of a worker
+   *  the Host is still running, which is the duplicate-agent failure the cleanup exists to prevent. */
+  const hostSessionsTakenBack = new Promise<ReattachResult | null>((resolve) => {
+    settleSessionsTakenBack = resolve
+  })
   /** Job Continuity's recorder. Non-null only while the toggle is on: off means no file is opened and
    *  nothing is written (spec §0.4). Created before store.load in bootOrch so the restart's losses are
    *  journaled, and by the toggle handler when turned on at runtime. */
@@ -1288,6 +1312,16 @@ export function registerIpc(
     // rm has run, no Dispatch that could reach these paths is still open. If either half of that
     // changes — a resume path that accepts a closed Dispatch, or a restart policy that leaves
     // Dispatches open — this rm starts destroying live workers' instructions.
+    //
+    // **The second half has now changed, and this paragraph is a warning rather than a proof.** The
+    // cleanup below leaves a Dispatch open when the Host still runs its session, so a worker adopted
+    // across a restart keeps an open Dispatch and this rm has already taken its spec file. Two things
+    // follow, and neither is fixed here: the agent itself was told to read that path and no longer
+    // can, and buildResumePacket reads the ENOENT as "no previous content" and writes a spec holding
+    // only the resume section. Both were already true for an adopted worker before the cleanup
+    // learned about live sessions — a closed Dispatch merely made the second one unreachable. What
+    // this needs is a retention rule (which spec files a still-open Dispatch keeps, and for how
+    // long), which is a policy decision, not a line of code, so it is named here and left.
     // Both force: true and .catch() are here — a failed cleanup must not block startup.
     await fs.rm(specsDir, { recursive: true, force: true }).catch(() => {})
     await fs.mkdir(specsDir, { recursive: true })
@@ -1302,7 +1336,32 @@ export function registerIpc(
 
     const store = new OrchestrationStore(path.join(app.getPath('userData'), 'orchestration.json'))
     if (core.appSettings.getJobContinuityEnabled()) openContinuity()
-    const loaded = await store.load()
+    // Ask what the Host still had before deciding which workers were lost. Reattaching therefore
+    // runs before the cleanup, not after it: the sessions it took back are the ones whose Dispatch
+    // must stay open, and this is the only moment both facts are in hand.
+    //
+    // **The ids match with nothing in between.** An adopted session keeps the id it had before the
+    // restart (reattach.ts's `ReattachResult.sessions`), so a stored `Dispatch.sessionId` is
+    // literally one of these strings — there is no old-id/new-id map to keep, and a Dispatch that
+    // survives the cleanup is already pointing at the session that answers to it.
+    //
+    // **The wait is bounded, and it is the wiring's own wait rather than a second one.** Reattaching
+    // starts on `ready()`, which ends at the handshake, at the client giving up, or at its own
+    // timeout; the list it then asks for gives up after five seconds with an empty answer. So a Host
+    // that never speaks costs this a bounded wait and yields the same empty answer as no Host at all.
+    // A build with no `out/main/host.js` waits for none of it — `startHostClient` settles this on the
+    // way out — so that app boots exactly as fast, with exactly the same answer, as it did before the
+    // Host existed.
+    const taken = await hostSessionsTakenBack
+    // Absent, not empty, when there is no Host — `load` reads absent as "nothing survived", which is
+    // the pre-Host truth, and reads an empty set the same way. Passing the distinction along anyway
+    // keeps the log below honest about which of the two happened.
+    const aliveSessionIds = taken ? new Set(taken.sessions) : undefined
+    const loaded = await store.load({ aliveSessionIds })
+    if (aliveSessionIds && aliveSessionIds.size > 0)
+      orchLog(
+        `restart cleanup — the Host still runs ${aliveSessionIds.size} session(s); any open Dispatch of theirs was left open`
+      )
     // The restart cleanup is a state transition like any other: every worker it closed as
     // outcome_unknown lands as ATTEMPT_LOST, and Runs the TTL pruned lose their journal rows.
     if (continuity && loaded.before) {
@@ -4760,6 +4819,10 @@ export function registerIpc(
     )
     if (!entry) {
       hostLog('out/main/host.js was not found — the app runs without a Host')
+      // Nothing was taken back and nothing ever will be. Said now, not left unsaid: `bootOrch` waits
+      // on this before its restart cleanup, and this is the build that must start exactly as fast as
+      // it did before the Host existed.
+      settleSessionsTakenBack(null)
       return
     }
     const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir() })
@@ -4824,12 +4887,15 @@ export function registerIpc(
         t.send({ t: 'pty-list' })
       })
 
+    // Reported, not merely done: `bootOrch`'s restart cleanup waits on the outcome of this to learn
+    // which workers are still running — see `hostSessionsTakenBack`'s own note. Every path out of the
+    // chain settles it, the failure ones with null.
     void hostClient
       .ready(HOST_READY_MS)
       .then(async () => {
         if (!hostClient?.status().connected) {
           hostLog('host: no Host, so terminals stay in the app exactly as before')
-          return
+          return null
         }
         // Installed only now, with a live connection in hand — not at the top of this function, where
         // a pty spawned in the window before the handshake completes would have its pty-spawn silently
@@ -4919,8 +4985,20 @@ export function registerIpc(
           log: (m) => hostLog(`host: ${m}`)
         })
         hostLog(`host: took back ${res.adopted} session(s), refused ${res.refused}`)
+        return res
       })
-      .catch((e) => hostLog(`host: taking sessions back failed: ${String(e)}`))
+      // Resolves with null rather than rejecting, so `bootOrch` can await this without a try and
+      // nothing from the Host throws into the app. Null is the only answer available here — a
+      // reattach that blew up cannot say which sessions it managed to take back — and it is the one
+      // answer that is not conservative: the cleanup will close a Dispatch whose worker may in fact
+      // be alive. What bounds it is that `reattachSessions` contains a bad entry itself, as a
+      // refusal, so reaching this at all means the sweep as a whole failed and adopted nothing worth
+      // naming.
+      .catch((e) => {
+        hostLog(`host: taking sessions back failed: ${String(e)}`)
+        return null
+      })
+      .then(settleSessionsTakenBack)
 
     hostWiring?.onHostClientReady(() => client.stop())
   }

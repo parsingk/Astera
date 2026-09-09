@@ -41,7 +41,14 @@ export class OrchestrationStore {
 
   constructor(private filePath: string) {}
 
-  async load(): Promise<{
+  async load(a?: {
+    /** The sessions the Host reports still running. A Dispatch whose session is among them did not
+     *  die with the app, so closing it as outcome_unknown would be a lie — and P1's reconciler reads
+     *  a closed Dispatch with no outcome as a lost worker and starts another agent for that Task
+     *  (slice 2 design §8). Absent means "nothing is alive", which is what was always true before
+     *  the Host owned the terminals. */
+    aliveSessionIds?: ReadonlySet<string>
+  }): Promise<{
     recovered: boolean
     unknownOutcomes: number
     pruned: number
@@ -124,9 +131,17 @@ export class OrchestrationStore {
     // Restart cleanup: for an open Dispatch, the session died along with the app. The outcome
     // cannot be proven, so leave it as outcome_unknown and do not touch the Task (section 7 of the
     // orchestration guide).
+    //
+    // That sentence is still true for every Dispatch the Host does not have — but the Host now keeps
+    // ptys running across an app restart, so it is no longer true for all of them. A session the
+    // caller names in `aliveSessionIds` was taken back by reattachSessions and is still working, so
+    // its Dispatch stays open: closing it would be read by the recovery reconciler as a lost worker
+    // (its `isLost`), and a second agent would start on the same Task in the same worktree while the
+    // first is still in it.
     let unknownOutcomes = 0
     const dispatches = st.dispatches.map((d) => {
       if (d.endedAt) return d
+      if (a?.aliveSessionIds?.has(d.sessionId)) return d
       unknownOutcomes++
       return { ...d, endedAt: now, workerState: 'outcome_unknown' as const }
     })
