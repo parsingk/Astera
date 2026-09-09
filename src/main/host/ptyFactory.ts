@@ -18,26 +18,6 @@ export interface HostPtyTransport {
 
 type Queued = { t: 'pty-write'; data: string } | { t: 'pty-resize'; cols: number; rows: number }
 
-/** A handle for a spawn this factory never even asked the Host for. Ends on the next tick rather than
- *  before returning, because every caller in this repository calls `onExit` right after the factory
- *  call and a synchronous exit here would fire before anyone was listening. */
-function failedSpawn(): PtyLike {
-  let onExit: (e: { exitCode: number }) => void = () => {}
-  queueMicrotask(() => onExit({ exitCode: 1 }))
-  return {
-    pid: 0,
-    onData: () => {},
-    onExit: (cb) => {
-      onExit = cb
-    },
-    write: () => {},
-    resize: () => {},
-    kill: () => {},
-    pause: () => {},
-    resume: () => {}
-  } as PtyLike
-}
-
 function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: number): PtyLike {
   let state: 'pending' | 'live' | 'exited' = startLive ? 'live' : 'pending'
   let pid = startPid
@@ -117,15 +97,6 @@ export function createHostPtyFactory(t: HostPtyTransport): {
   attach(a: { id: string; pid: number }): PtyLike
 } {
   const factory: PtyFactory = (file, args, opts: PtySpawnOptions) => {
-    if (!Array.isArray(args)) {
-      // node-pty's "verbatim command line" form (see PtyFactory's own doc comment; RunManager is the
-      // caller, on win32 — core/run/shell.ts's shellSpawn). The wire protocol's pty-spawn only carries
-      // an argv array (registry.ts's RegistrySpawn is typed the same way on the Host side), and
-      // forcing a command line into a one-element array would run it through the Host's own argv
-      // quoting and change the command that actually runs — worse than refusing it outright. This
-      // fails the same way a refusal from the Host does, just without a round trip to produce one.
-      return failedSpawn()
-    }
     const id = randomUUID()
     const h = handle(t, id, false, 0)
     t.send({

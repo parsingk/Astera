@@ -181,4 +181,20 @@ describe('PtyRegistry', () => {
   it('the default scrollback is the one the design fixed', () => {
     expect(SCROLLBACK_CHARS).toBe(256_000)
   })
+
+  // node-pty's two argument forms are not interchangeable on win32 (the string form is a verbatim
+  // command line that skips argv quoting; see core/run/shell.ts's shellSpawn) — so the registry must
+  // pass whichever one it was given straight to spawn rather than converting between them.
+  it('passes a string args — node-pty\'s verbatim command line form — to spawn unchanged', () => {
+    let received: string[] | string | undefined
+    const r = new PtyRegistry({
+      spawn: (file, args) => {
+        received = args
+        return fakePty()
+      },
+      log: () => {}
+    })
+    r.open({ id: 'p1', file: 'cmd.exe', args: '/s /c "npm run build"', opts, meta: meta() })
+    expect(received).toBe('/s /c "npm run build"')
+  })
 })

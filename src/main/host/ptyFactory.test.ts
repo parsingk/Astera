@@ -47,6 +47,22 @@ describe('createHostPtyFactory', () => {
     })
   })
 
+  // RunManager's shellSpawn hands node-pty's verbatim command line — a string, not an argv array —
+  // on win32 for every Run. The wire has to carry that shape unchanged, the same way it carries an
+  // array, rather than the handle refusing it: RunManager routed through the Host is the primary
+  // platform's every Run.
+  it('carries a string args (node-pty\'s verbatim command line) through, live and usable', () => {
+    const t = transport()
+    const { factory } = createHostPtyFactory(t)
+    const p = factory('cmd.exe', '/s /c "npm run build"', opts)
+    const msg = t.sent[0] as Extract<ClientMessage, { t: 'pty-spawn' }>
+    expect(msg.args).toBe('/s /c "npm run build"')
+    t.deliver({ t: 'pty-spawned', id: spawned(t), pid: 1 })
+    expect(p.pid).toBe(1)
+    p.write('after')
+    expect(t.sent.at(-1)).toEqual({ t: 'pty-write', id: spawned(t), data: 'after' })
+  })
+
   // pid is read in exactly one place in this repository, RunManager's tree-kill, long after the
   // spawn — which is what lets the factory stay synchronous (slice 2 design §3).
   it('fills the pid in when the Host answers', () => {

@@ -40,7 +40,11 @@ export type ClientMessage =
   /** Leave. Sent when the app finds a Host on another protocol; in slice 1 the Host holds nothing,
    *  so leaving costs nothing. This message's meaning is revisited in slice 2. */
   | { t: 'retire' }
-  | { t: 'pty-spawn'; id: string; file: string; args: string[]; opts: PtyOpenOptions; meta?: PtyMeta }
+  /** node-pty's two argument forms are not interchangeable on win32: a string is a verbatim command
+   *  line that skips argv quoting, while an array goes through it. The protocol carries whichever
+   *  one the caller had rather than converting between them (see PtyFactory in core/sessions/pty.ts,
+   *  and shellSpawn in core/run/shell.ts for the win32 case that produces a string). */
+  | { t: 'pty-spawn'; id: string; file: string; args: string[] | string; opts: PtyOpenOptions; meta?: PtyMeta }
   | { t: 'pty-write'; id: string; data: string }
   | { t: 'pty-resize'; id: string; cols: number; rows: number }
   | { t: 'pty-kill'; id: string }

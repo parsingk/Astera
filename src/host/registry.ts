@@ -21,7 +21,7 @@ export interface RegistryPty {
   resume(): void
 }
 
-export type RegistrySpawn = (file: string, args: string[], opts: PtyOpenOptions) => RegistryPty
+export type RegistrySpawn = (file: string, args: string[] | string, opts: PtyOpenOptions) => RegistryPty
 
 /** Characters of scrollback kept per session, counted in UTF-16 code units — the unit
  *  `main/orchestration/tail.ts` counts, and for the reason its comment gives: a Hangul character is
@@ -72,7 +72,7 @@ export class PtyRegistry {
   open(a: {
     id: string
     file: string
-    args: string[]
+    args: string[] | string
     opts: PtyOpenOptions
     meta?: PtyMeta
   }): { ok: true; pid: number } | { ok: false; error: string } {
