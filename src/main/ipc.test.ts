@@ -4,7 +4,8 @@ import {
   historyResumePlan,
   parseAllowedExternalUrl,
   providerOfSession,
-  rollCoordinatorForSession
+  rollCoordinatorForSession,
+  staleSpecFiles
 } from './ipc'
 import { sanitizeResumePrompt } from '../core/sessions/commands'
 import type { Account, SessionInfo } from '../core/types'
@@ -217,5 +218,53 @@ describe('historyResumePlan — 사이드바 재개의 백지 재개 판정', ()
     })
     expect(plan.blankSlate).toBe(true)
     expect(plan.mangled).toBe(false)
+  })
+})
+
+describe('staleSpecFiles — which spec files a boot clears', () => {
+  it('keeps the spec file of a Dispatch that is still open', () => {
+    expect(
+      staleSpecFiles({
+        files: ['tsk_1-dsp_1.md'],
+        keep: [String.raw`C:\Users\me\AppData\astera\orch\specs\tsk_1-dsp_1.md`]
+      })
+    ).toEqual([])
+  })
+
+  it('deletes the spec file of a Dispatch the restart closed', () => {
+    expect(
+      staleSpecFiles({
+        files: ['tsk_1-dsp_1.md', 'tsk_2-dsp_2.md'],
+        keep: [String.raw`C:\Users\me\AppData\astera\orch\specs\tsk_1-dsp_1.md`]
+      })
+    ).toEqual(['tsk_2-dsp_2.md'])
+  })
+
+  it('deletes a file no Dispatch claims', () => {
+    expect(staleSpecFiles({ files: ['orphan.md'], keep: [] })).toEqual(['orphan.md'])
+  })
+
+  // 오래된 Dispatch 는 워커가 spec 을 쓰기 전에 열렸을 수 있다 — 지울 것이 없다는 뜻이지 이 판정이
+  // 흔들린다는 뜻이 아니다.
+  it('an open Dispatch whose spec file is already gone changes nothing', () => {
+    expect(
+      staleSpecFiles({
+        files: ['orphan.md'],
+        keep: [String.raw`C:\specs\tsk_1-dsp_1.md`, String.raw`C:\specs\tsk_2-dsp_2.md`]
+      })
+    ).toEqual(['orphan.md'])
+  })
+
+  // openDispatch 는 specPath 를 빈 문자열로 열고 워커가 실제로 뜬 뒤에 채운다. 그 빈 값이 아무 파일도
+  // 지켜서는 안 된다.
+  it('a Dispatch whose specPath is still the empty placeholder protects nothing', () => {
+    expect(staleSpecFiles({ files: ['tsk_1-dsp_1.md'], keep: ['', ''] })).toEqual(['tsk_1-dsp_1.md'])
+  })
+
+  // orchestration.json 은 손으로 고쳐지고, 이 저장소는 두 구분자를 다 본다.
+  it('matches a specPath written with either separator', () => {
+    expect(
+      staleSpecFiles({ files: ['tsk_1-dsp_1.md'], keep: ['C:/Users/me/orch/specs/tsk_1-dsp_1.md'] })
+    ).toEqual([])
   })
 })

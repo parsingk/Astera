@@ -312,6 +312,37 @@ export function rollCoordinatorForSession(
 }
 
 /**
+ * Which of the spec directory's files a boot clears out. `files` is the directory listing, `keep` is
+ * the `specPath` of every Dispatch still open once the restart cleanup has run, and the answer is the
+ * names to delete.
+ *
+ * The rule is one line because the invariant behind it is: a spec file is live exactly as long as the
+ * Dispatch pointing at it is open. `buildResumePacket` (orchestration/resumePacket.ts) is the only
+ * thing that reads one back, and it only ever acts on an open Dispatch.
+ *
+ * **Open, not alive.** A Dispatch left open because its worker really is gone is one recovery may
+ * resume, and resuming reads the original spec — so keeping it is the right answer there too, not a
+ * lenient one.
+ *
+ * Matching is on the file name alone. `Dispatch.specPath` is an absolute path written by whichever
+ * platform produced it, and orchestration.json is hand-edited, so both separators turn up; the names
+ * themselves are unique (the coordinator builds one per Dispatch). Taking the name from the stored
+ * path rather than rebuilding it from ids also keeps the naming rule in the one place that owns it,
+ * `OrchCoordinator.startWorker`.
+ *
+ * A pure function for the same reason `rollCoordinatorForSession` is one: the boot that calls it is
+ * an electron-only closure inside `registerIpc`, and this decision deletes files.
+ */
+export function staleSpecFiles(a: { files: readonly string[]; keep: Iterable<string> }): string[] {
+  const fileName = (p: string): string => p.split(/[\\/]/).pop() ?? ''
+  // The empty ones are dropped, not kept: `openDispatch` writes `specPath: ''` and the coordinator
+  // fills it in once the worker is actually up, so a Dispatch caught in that window would otherwise
+  // hold an empty name that must not be allowed to match anything.
+  const live = new Set([...a.keep].map(fileName).filter((n) => n !== ''))
+  return a.files.filter((f) => !live.has(f))
+}
+
+/**
  * 사이드바 히스토리 재개가 백지 재개로 갈지 정한다. `SPEC §11.5` 가 `--resume` 발원지로 꼽은 셋
  * 중 세 번째 자리이고, 앞의 둘(`rolling.ts`·`codexRolling.ts` 의 `roll()`)이 쓰는 규칙과 같다.
  *
@@ -1300,30 +1331,6 @@ export function registerIpc(
     // committed, and leak. Files this app owns live in userData without exception —
     // statusline/<sessionId>.json is the precedent of the same shape.
     const specsDir = path.join(app.getPath('userData'), 'orch', 'specs')
-    // Old specs are cleared at startup — the same convention statusline.ts follows. Dispatch.specPath
-    // is left pointing at a file that no longer exists, and **there is now code that reads and writes
-    // a file back from that value**: buildResumePacket (orchestration/resumePacket.ts) rewrites the
-    // spec file to append the resume briefing. The earlier version of this comment claimed nothing did,
-    // which stopped being true when that landed.
-    //
-    // What makes the deletion safe is a different invariant, so it is named here rather than left
-    // implied: **buildResumePacket only ever acts on an *open* Dispatch** (it looks up `!d.endedAt`),
-    // and store.load closes every open Dispatch as outcome_unknown on restart. So by the time this
-    // rm has run, no Dispatch that could reach these paths is still open. If either half of that
-    // changes — a resume path that accepts a closed Dispatch, or a restart policy that leaves
-    // Dispatches open — this rm starts destroying live workers' instructions.
-    //
-    // **The second half has now changed, and this paragraph is a warning rather than a proof.** The
-    // cleanup below leaves a Dispatch open when the Host still runs its session, so a worker adopted
-    // across a restart keeps an open Dispatch and this rm has already taken its spec file. Two things
-    // follow, and neither is fixed here: the agent itself was told to read that path and no longer
-    // can, and buildResumePacket reads the ENOENT as "no previous content" and writes a spec holding
-    // only the resume section. Both were already true for an adopted worker before the cleanup
-    // learned about live sessions — a closed Dispatch merely made the second one unreachable. What
-    // this needs is a retention rule (which spec files a still-open Dispatch keeps, and for how
-    // long), which is a policy decision, not a line of code, so it is named here and left.
-    // Both force: true and .catch() are here — a failed cleanup must not block startup.
-    await fs.rm(specsDir, { recursive: true, force: true }).catch(() => {})
     await fs.mkdir(specsDir, { recursive: true })
     // The launch prompt carries this path, so a forbidden character in it makes every worker-start fail
     // (a Windows username can contain `&` or `^`). **Startup is not blocked** — the rest of
@@ -1362,6 +1369,28 @@ export function registerIpc(
       orchLog(
         `restart cleanup — the Host still runs ${aliveSessionIds.size} session(s); any open Dispatch of theirs was left open`
       )
+
+    // Old specs are cleared at startup — the same convention statusline.ts follows — except the ones
+    // a still-open Dispatch points at. A spec file is live exactly as long as its Dispatch is open:
+    // the worker was launched with "read this path and follow it", and buildResumePacket
+    // (orchestration/resumePacket.ts) writes the resume briefing back into that same file, acting
+    // only on an open Dispatch. That is why this runs *after* the cleanup rather than before it —
+    // only the cleanup knows which Dispatches are still open, now that a worker the Host kept running
+    // survives a restart with its Dispatch intact. `staleSpecFiles` holds the rule and is tested.
+    //
+    // A failed cleanup must never block startup, so every step here swallows its own failure: an
+    // unreadable directory yields nothing to delete, and one file that will not go does not cost the
+    // rest their turn. The worst outcome is a stale file nobody reads, which the next boot retries.
+    const openSpecPaths = store
+      .get()
+      .dispatches.filter((d) => !d.endedAt)
+      .map((d) => d.specPath)
+    for (const name of staleSpecFiles({
+      files: await fs.readdir(specsDir).catch(() => []),
+      keep: openSpecPaths
+    }))
+      await fs.rm(path.join(specsDir, name), { recursive: true, force: true }).catch(() => {})
+
     // The restart cleanup is a state transition like any other: every worker it closed as
     // outcome_unknown lands as ATTEMPT_LOST, and Runs the TTL pruned lose their journal rows.
     if (continuity && loaded.before) {
