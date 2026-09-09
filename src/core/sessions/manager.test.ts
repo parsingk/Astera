@@ -29,6 +29,10 @@ class FakePty implements PtyLike {
   pause() { this.paused = true; this.pauseCalls++ }
   resume() { this.paused = false; this.resumeCalls++ }
   remember(patch: Record<string, unknown>) { this.remembered.push(patch) }
+  /** What `createPtyRouter` stamps on a real handle — set by the tests that care which
+   *  factory made the pty. Absent is a pty this process owns, which is what the router
+   *  writes with no Host and what every other test here wants. */
+  outlivesApp?: boolean
 }
 
 const account: Account = {
@@ -966,6 +970,35 @@ describe('SessionManager', () => {
       expect(dropped.written).toEqual([])
       back.dataCb('from the reattach')
       expect(data).toEqual(['from the reattach'])
+    })
+  })
+
+  // Quitting used to be one decision for every pty at once, and the Host's startup is a window in
+  // which the app makes some of its own before the Host answers. Splitting the running sessions by
+  // who owns their pty is what lets the quit path end the app's own children — which die with the
+  // app anyway — while leaving the Host's alone.
+  describe('who a running session belongs to', () => {
+    it('splits the running sessions into the ones the app owns and the ones that outlive it', () => {
+      const { manager, spawned } = setup()
+      const mine = manager.spawn({ account, cwd: process.cwd() })
+      const hosts = manager.spawn({ account, cwd: process.cwd() })
+      spawned[1].pty.outlivesApp = true
+      expect(manager.runningAppOwned().map((s) => s.id)).toEqual([mine.id])
+      expect(manager.runningOutlivingApp().map((s) => s.id)).toEqual([hosts.id])
+    })
+
+    // list() keeps exited sessions so a tab can outlive its process. Neither list may report one:
+    // the quit path would kill a pty that is already gone, and the close confirmation would promise
+    // the person a session that is not running comes back.
+    it('counts neither an exited session, whoever owned it', () => {
+      const { manager, spawned } = setup()
+      manager.spawn({ account, cwd: process.cwd() })
+      manager.spawn({ account, cwd: process.cwd() })
+      spawned[1].pty.outlivesApp = true
+      spawned[0].pty.exitCb({ exitCode: 0 })
+      spawned[1].pty.exitCb({ exitCode: 0 })
+      expect(manager.runningAppOwned()).toEqual([])
+      expect(manager.runningOutlivingApp()).toEqual([])
     })
   })
 })

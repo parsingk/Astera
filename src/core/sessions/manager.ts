@@ -494,4 +494,30 @@ export class SessionManager {
   list(): SessionInfo[] {
     return [...this.sessions.values()].map((s) => ({ ...s.info }))
   }
+
+  /** The running sessions this app has to end when it quits: the ones whose pty is this process's own
+   *  child, which is every one of them with no Host and, with a Host, the ones spawned in the window
+   *  before it answered.
+   *
+   *  **Split from `runningOutlivingApp` rather than answered as one flag for all of them.** A Host
+   *  takes a moment to start, so the two kinds coexist; the quit path (main/index.ts's will-quit) has
+   *  to end the first and leave the second, and `PtyLike.outlivesApp` is where the router wrote down
+   *  which is which. Exited sessions are in neither — `list()` keeps them so a tab can outlive its
+   *  process, and killing a pty that has already gone is what the quit path used to risk. */
+  runningAppOwned(): SessionInfo[] {
+    return this.running(false)
+  }
+
+  /** The running sessions that keep running after this app quits, because the Host owns their ptys.
+   *  The window-close confirmation counts these to say what quitting actually costs the person
+   *  (App.tsx's closeWindow, through `host.sessionsOutlivingApp`). */
+  runningOutlivingApp(): SessionInfo[] {
+    return this.running(true)
+  }
+
+  private running(outlivesApp: boolean): SessionInfo[] {
+    return [...this.sessions.values()]
+      .filter((s) => s.info.status === 'running' && (s.pty.outlivesApp === true) === outlivesApp)
+      .map((s) => ({ ...s.info }))
+  }
 }

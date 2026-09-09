@@ -30,6 +30,9 @@ class FakePty implements PtyLike {
   resume() {}
   /** 실물의 종료를 흉내낸다 — 콜백을 부르기 전에 죽은 상태가 된다 */
   exit(exitCode: number) { this.exited = true; this.exitCb({ exitCode }) }
+  /** What `createPtyRouter` stamps on a real handle. Absent is the app's own child, which is what
+   *  the router writes with no Host and what every other test in this file wants. */
+  outlivesApp?: boolean
 }
 
 const cfg: RunConfig = { id: 'c1', name: 'dev', type: 'shell', command: 'npm run dev' }
@@ -367,12 +370,27 @@ describe('RunManager', () => {
       expect(killed).toHaveLength(1)
     })
 
-    it('stopAll reaches every running run', () => {
+    it('stopAppOwned reaches every running run the app made', () => {
       const { mgr, spawned } = setup('linux')
       mgr.start(startOpts())
       mgr.start(startOpts({ projectPath: 'D:/b', projectName: 'b' }))
-      mgr.stopAll()
+      mgr.stopAppOwned()
       expect(spawned.every((s) => s.pty.killed)).toBe(true)
+    })
+
+    // A run started in the window before the Host answered is this process's own child; one started
+    // after belongs to the Host and survives the quit that ends the app. The tree kill is why the
+    // difference matters more for a run than for anything else: `npm run dev`'s own children have
+    // nothing left to reap them once the app is gone, and only the tree kill reaches them.
+    it('stopAppOwned leaves a run whose pty outlives the app alone', () => {
+      const { mgr, spawned, killed } = setup('win32')
+      mgr.start(startOpts())
+      mgr.start(startOpts({ projectPath: 'D:/b', projectName: 'b' }))
+      spawned[1].pty.outlivesApp = true
+      mgr.stopAppOwned()
+      expect(killed).toHaveLength(1) // the tree kill went out for the app's own run only
+      expect(spawned.map((s) => s.pty.killed)).toEqual([false, false]) // win32 kills the tree, not the pty
+      expect(mgr.listActive().map((r) => r.status)).toEqual(['stopping', 'running'])
     })
   })
 

@@ -1089,22 +1089,24 @@ app.on('window-all-closed', () => {
 })
 app.on('will-quit', () => {
   if (!core) return
-  // **Whether quitting ends the ptys is now a question, not a given** (slice 2 design §1). While they
-  // were this process's own children, ending them here was the only honest thing to do: an orphaned
-  // agent keeps spending tokens with nobody able to reach it. Once a Host owns them they are its
-  // children, `sessions.kill` reaches across the socket and ends the real process, and running this
-  // cleanup would leave the terminals surviving a crash but not an ordinary quit — the exact inverse
-  // of what the slice promises. The router is the one place that knows which it is; see
-  // `ptysOutliveApp` for why one answer covers ptys created before the Host answered too.
-  const ptysStay = core.ptyRouter.ptysOutliveApp()
-  if (!ptysStay) {
-    const running = core.sessions.list().filter((s) => s.status === 'running')
-    for (const s of running) {
-      try {
-        core.sessions.kill(s.id)
-      } catch {
-        /* so one failed kill does not block cleanup of the remaining sessions */
-      }
+  // **Whether quitting ends a pty is now a question, and it is asked per pty** (slice 2 design §1).
+  // While they were all this process's own children, ending them here was the only honest thing to
+  // do: an orphaned agent keeps spending tokens with nobody able to reach it. One the Host owns is
+  // its child instead, `sessions.kill` reaches across the socket and ends the real process, and
+  // running this cleanup on it would leave the terminals surviving a crash but not an ordinary quit
+  // — the exact inverse of what the slice promises.
+  //
+  // Both kinds can be live at once: the Host takes a moment to start, and a session, Run or terminal
+  // made before it answered went to node-pty. Asking "is a Host installed" would sweep those into
+  // whichever branch the answer chose, so each manager is asked about its own ptys instead. The
+  // router wrote the answer onto each handle at the moment it chose the factory — see
+  // `PtyLike.outlivesApp`. With no Host every pty is the app's own and this runs exactly as it did
+  // before a Host existed: same teardown, same order.
+  for (const s of core.sessions.runningAppOwned()) {
+    try {
+      core.sessions.kill(s.id)
+    } catch {
+      /* so one failed kill does not block cleanup of the remaining sessions */
     }
   }
   try {
@@ -1122,19 +1124,19 @@ app.on('will-quit', () => {
   } catch {
     /* shutdown cleanup failures are ignored */
   }
-  // Both of these end ptys, so both are skipped for the same reason the session loop above is — a
-  // Run's dev server and a project terminal survive a quit exactly as an agent session does.
-  if (!ptysStay) {
-    try {
-      core.run.stopAll()
-    } catch {
-      /* a run cleanup failure must not block quit */
-    }
-    try {
-      core.terminal.closeAll() // project terminal cleanup
-    } catch {
-      /* shutdown cleanup failures are ignored */
-    }
+  // Both of these end ptys, so both skip the Host's for the same reason the session loop above does
+  // — a Run's dev server and a project terminal survive a quit exactly as an agent session does.
+  // A run the app owns still gets the tree kill it always got, which is the whole reason this is a
+  // per-pty question: only that reaches the build's own children (`RunManager.stopAppOwned`).
+  try {
+    core.run.stopAppOwned()
+  } catch {
+    /* a run cleanup failure must not block quit */
+  }
+  try {
+    core.terminal.closeAppOwned() // project terminal cleanup
+  } catch {
+    /* shutdown cleanup failures are ignored */
   }
   try {
     orchRef?.stop() // close the orchestration server + delete the token file
