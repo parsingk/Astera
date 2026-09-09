@@ -1394,11 +1394,17 @@ export function registerIpc(
     //
     // **The wait is bounded, and it is the wiring's own wait rather than a second one.** Reattaching
     // starts on `ready()`, which ends at the handshake, at the client giving up, or at its own
-    // timeout; the list it then asks for gives up after five seconds with an empty answer. So a Host
-    // that never speaks costs this a bounded wait and yields the same empty answer as no Host at all.
-    // A build with no `out/main/host.js` waits for none of it — `startHostClient` settles this on the
-    // way out — so that app boots exactly as fast, with exactly the same answer, as it did before the
-    // Host existed.
+    // timeout; the list it then asks for gives up after five seconds. A build with no
+    // `out/main/host.js` waits for none of it — `startHostClient` settles this on the way out — so
+    // that app boots exactly as fast, with exactly the same answer, as it did before the Host existed.
+    //
+    // **A Host that never speaks does not give the same answer as no Host.** An earlier version of
+    // this comment said it did, and that was the bug: closing every open Dispatch is only safe when
+    // the emptiness is evidence, and it is evidence only when there was no Host to ask. A peer that
+    // accepted the connection and then went quiet is positive evidence a Host exists and none at all
+    // about its sessions, so the answer is `'unknown'` and the cleanup leaves open Dispatches where
+    // they are. A Job that stalls is a person noticing nothing moved; the alternative was a second
+    // agent dispatched into a worktree whose first one is still running.
     const aliveSessionIds = liveWorkersFor(await hostSessionsTakenBack)
     const loaded = await store.load({ aliveSessionIds })
     // The unknown case gets a line of its own, because from the state alone it is indistinguishable
