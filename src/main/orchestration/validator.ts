@@ -1,4 +1,5 @@
 import { stripAnsi } from '../../core/rolling/detect'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../../core/sessions/pty'
 
 // Validation run sequencing. Knows neither RunManager nor OrchState — only a runner and two callbacks,
 // which is what lets tests reach it (inside ipc.ts they could not).
@@ -72,6 +73,20 @@ export class TaskValidator {
     const found = this.headFor(a.runId)
     if (!found) return
     const { cwd, head } = found
+    // **An exit that only says the app lost sight of the run is not a result.** The socket to the Host
+    // dropped; the build is still running there and the reconnect re-adopts it under the same runId, so
+    // the real exit reaches this same head afterwards and settles it. Read as a result it is a failed
+    // validation, and three of those trip that Task's breaker over a network hiccup — the same
+    // reasoning `markStopped` already applies to a stopped run, one step further: this is not even
+    // "could not prove it", it is "the app has not been told yet".
+    //
+    // Nothing is settled and nothing advances, so the head keeps the queue for its cwd. If the run
+    // really did die with its Host, no exit ever arrives and that cwd's queue waits until the app is
+    // restarted — the stall side of the same asymmetry the Dispatch and the coordinator slot take.
+    if (a.exitCode === PTY_LOST_SIGHT_EXIT_CODE) {
+      this.deps.log?.(`validation run=${a.runId} task=${head.taskId} was lost sight of, not settled`)
+      return
+    }
     // The same head's exit can arrive twice — settling is an await, and a second exit landing inside it
     // still finds the head at the front. Settle once.
     if (head.settling) return
