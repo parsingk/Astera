@@ -317,8 +317,18 @@ export class SessionManager {
    *
    *  `schedule` is not rebuilt: the note does not carry it, and the coordinator's own entry died with
    *  the app. Keeping the id is what leaves that reachable — a later task can re-register a schedule
-   *  against this same session — but nothing here re-arms one. */
-  adopt(a: { id: string; pty: PtyLike; restore: Record<string, unknown> }): SessionInfo | null {
+   *  against this same session — but nothing here re-arms one.
+   *
+   *  **The caller must hand over a pty it believes is still live.** This method cannot tell: an attach
+   *  handle for a process that already ended looks exactly like one for a running process and will never
+   *  deliver an exit, so a dead pty adopted here becomes a record stuck at 'running' for the life of the
+   *  app — and an orchestration worker that died would be reported alive, with its Job waiting forever
+   *  for a completion nobody will send. The Host's entry carries an `alive` flag; filtering on it is the
+   *  caller's job. */
+  adopt(a: { kind: string; id: string; pty: PtyLike; restore: Record<string, unknown> }): SessionInfo | null {
+    // Checked before any field, because the kinds' readable shapes overlap: a note of another kind can
+    // satisfy the fields below and would come back rebuilt as the wrong thing.
+    if (a.kind !== 'session') return null
     const r = a.restore
     const str = (k: string): string | undefined => (typeof r[k] === 'string' ? (r[k] as string) : undefined)
     const accountId = str('accountId')
@@ -334,11 +344,21 @@ export class SessionManager {
       // Spread rather than assigned, because the note omits what was absent at spawn rather than
       // carrying an undefined — so an absent key must stay absent here too.
       ...(str('resumeSessionId') ? { resumeSessionId: str('resumeSessionId') } : {}),
-      ...(Array.isArray(r.rollAccountIds) ? { rollAccountIds: r.rollAccountIds as string[] } : {}),
+      // Elements checked, not just the array: the roll coordinators index accounts by these, and one
+      // non-string in a list that crossed a process boundary would surface far from here.
+      ...(Array.isArray(r.rollAccountIds) && r.rollAccountIds.every((x) => typeof x === 'string')
+        ? { rollAccountIds: r.rollAccountIds as string[] }
+        : {}),
       ...(str('rollPrompt') ? { rollPrompt: str('rollPrompt') } : {}),
       ...(typeof r.slackNotify === 'boolean' ? { slackNotify: r.slackNotify } : {}),
       ...(typeof r.bypassPermissions === 'boolean' ? { bypassPermissions: r.bypassPermissions } : {})
     }
+    // An adopted pty is resumed rather than assumed to be flowing. pause() travels to the Host and
+    // nothing there releases it when the app goes away, so an app that died inside a backpressure pause
+    // left the child blocked on a full pipe — and the record built here says paused:false, which is what
+    // ack() gates its resume on, so nothing would ever release it. Unconditional because resuming a pty
+    // that was never paused is a no-op, for node-pty and across the wire alike.
+    a.pty.resume()
     return this.track(info, a.pty)
   }
 

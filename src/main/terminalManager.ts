@@ -76,8 +76,17 @@ export class TerminalManager {
    *  watching, and it was not watching across the restart.
    *
    *  **Keeps the terminal's own id** — `PtyMeta.id`, which the Host hands back beside the note. Every
-   *  write, resize and close names a terminal by it, and so does the renderer's tab. */
-  adopt(a: { id: string; pty: PtyLike; restore: Record<string, unknown> }): TerminalInfo | null {
+   *  write, resize and close names a terminal by it, and so does the renderer's tab.
+   *
+   *  **The caller must hand over a pty it believes is still live.** This method cannot tell: an attach
+   *  handle for a process that already ended looks exactly like one for a running process and will never
+   *  deliver an exit, so a dead pty adopted here leaves a tab that never closes itself and a shell the
+   *  user can type into with nothing on the other end. The Host's entry carries an `alive` flag;
+   *  filtering on it is the caller's job. */
+  adopt(a: { kind: string; id: string; pty: PtyLike; restore: Record<string, unknown> }): TerminalInfo | null {
+    // Checked before the field below, because `projectPath` alone is a strict subset of a run's note: a
+    // run adopted here would come back rebuilt as a terminal, and read as one from then on.
+    if (a.kind !== 'terminal') return null
     const projectPath = a.restore.projectPath
     if (typeof projectPath !== 'string' || !projectPath) return null
     return this.track({ id: a.id, projectPath }, a.pty)

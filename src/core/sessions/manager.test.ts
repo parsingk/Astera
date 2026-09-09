@@ -758,6 +758,7 @@ describe('SessionManager', () => {
       const { manager } = setup()
       const pty = new FakePty()
       const info = manager.adopt({
+        kind: 'session',
         id: 'sess-from-host',
         pty,
         restore: { accountId: account.id, cwd: 'D:/p', title: 'Auth refactor', rollAccountIds: ['acc_1'] }
@@ -781,7 +782,7 @@ describe('SessionManager', () => {
         exited = e.exitCode
       }
       const pty = new FakePty()
-      const info = manager.adopt({ id: 'sess-from-host', pty, restore: { accountId: account.id, cwd: 'D:/p', title: 't' } })!
+      const info = manager.adopt({ kind: 'session', id: 'sess-from-host', pty, restore: { accountId: account.id, cwd: 'D:/p', title: 't' } })!
       pty.dataCb('output')
       pty.exitCb({ exitCode: 0 })
       expect(data).toEqual(['output'])
@@ -794,7 +795,7 @@ describe('SessionManager', () => {
     it('an adopted session pauses at highWater and resumes on an ack, like a spawned one', () => {
       const { manager } = setup(100, 20)
       const pty = new FakePty()
-      const info = manager.adopt({ id: 'sess-from-host', pty, restore: { accountId: account.id, cwd: 'D:/p', title: 't' } })!
+      const info = manager.adopt({ kind: 'session', id: 'sess-from-host', pty, restore: { accountId: account.id, cwd: 'D:/p', title: 't' } })!
       pty.dataCb('x'.repeat(150))
       expect(pty.paused).toBe(true)
       manager.ack(info.id, 150)
@@ -808,6 +809,7 @@ describe('SessionManager', () => {
       const missing = path.join(process.cwd(), 'no-such-directory-for-adopt')
       expect(existsSync(missing)).toBe(false)
       const adopted = manager.adopt({
+        kind: 'session',
         id: 'sess-from-host',
         pty: new FakePty(),
         restore: { accountId: account.id, cwd: missing, title: 't' }
@@ -821,6 +823,7 @@ describe('SessionManager', () => {
     it('keeps the id it is handed rather than minting one', () => {
       const { manager } = setup()
       const info = manager.adopt({
+        kind: 'session',
         id: 'sess-from-host',
         pty: new FakePty(),
         restore: { accountId: account.id, cwd: 'D:/p', title: 't' }
@@ -831,9 +834,51 @@ describe('SessionManager', () => {
       expect(manager.rename('sess-from-host', 'renamed')).toBe('renamed')
     })
 
+    // The app may have died inside a backpressure pause — a window every tabless orchestration worker
+    // sits in constantly, because nothing acks its output. Nothing releases that pause while the app is
+    // gone, and a rebuilt record says paused:false, so ack() (which resumes only what it believes is
+    // paused) could never release it either: the session would be wedged shut while reporting 'running'.
+    it('resumes the pty it adopts, in case the app died inside a backpressure pause', () => {
+      const { manager } = setup()
+      const pty = new FakePty()
+      manager.adopt({
+        kind: 'session',
+        id: 'sess-from-host',
+        pty,
+        restore: { accountId: account.id, cwd: 'D:/p', title: 't' }
+      })
+      expect(pty.resumeCalls).toBe(1)
+    })
+
+    // null is "I cannot read this", and the shapes overlap enough that a note of another kind can be
+    // readable — so the kind is checked before anything else, not inferred from the fields present.
+    it('refuses a note of another kind', () => {
+      const { manager } = setup()
+      const asRun = manager.adopt({
+        kind: 'run',
+        id: 'run-from-host',
+        pty: new FakePty(),
+        restore: { accountId: account.id, cwd: 'D:/p', title: 't' }
+      })
+      expect(asRun).toBeNull()
+      expect(manager.list()).toEqual([])
+    })
+
+    // The note crossed a process boundary, so its contents are parsed rather than trusted.
+    it('drops a rollAccountIds that is not all strings', () => {
+      const { manager } = setup()
+      const info = manager.adopt({
+        kind: 'session',
+        id: 'sess-from-host',
+        pty: new FakePty(),
+        restore: { accountId: account.id, cwd: 'D:/p', title: 't', rollAccountIds: ['acc_1', 7] }
+      })!
+      expect(info).not.toHaveProperty('rollAccountIds')
+    })
+
     it('refuses a restore it cannot read rather than inventing a session', () => {
       const { manager } = setup()
-      expect(manager.adopt({ id: 'sess-from-host', pty: new FakePty(), restore: { cwd: 'D:/p' } })).toBeNull()
+      expect(manager.adopt({ kind: 'session', id: 'sess-from-host', pty: new FakePty(), restore: { cwd: 'D:/p' } })).toBeNull()
       expect(manager.list()).toEqual([])
     })
   })

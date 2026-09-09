@@ -195,8 +195,18 @@ export class RunManager {
    *
    *  **Keeps the run's own id** — `PtyMeta.id`, which the Host hands back beside the note. Every IPC
    *  handler and event names a run by its runId, so an id of this method's own invention would be a run
-   *  nothing already holding the old one could address. */
-  adopt(a: { id: string; pty: PtyLike; restore: Record<string, unknown> }): RunStatus | null {
+   *  nothing already holding the old one could address.
+   *
+   *  **The caller must hand over a pty it believes is still live.** This method cannot tell: an attach
+   *  handle for a process that already ended looks exactly like one for a running process and will never
+   *  deliver an exit, so a dead pty adopted here becomes a row stuck at 'running' — the stop button
+   *  reaches nothing, decideStart treats the configuration as live and refuses to start a replacement,
+   *  and whenExited never settles. The Host's entry carries an `alive` flag; filtering on it is the
+   *  caller's job. */
+  adopt(a: { kind: string; id: string; pty: PtyLike; restore: Record<string, unknown> }): RunStatus | null {
+    // Checked before any field, because the kinds' readable shapes overlap: a note of another kind can
+    // satisfy the fields below and would come back rebuilt as the wrong thing.
+    if (a.kind !== 'run') return null
     const r = a.restore
     const str = (k: string): string | undefined => (typeof r[k] === 'string' ? (r[k] as string) : undefined)
     const projectPath = str('projectPath')
@@ -212,9 +222,11 @@ export class RunManager {
       configId,
       configName,
       command,
-      seq: typeof r.seq === 'number' ? r.seq : 0,
+      // Finite, not merely a number: a NaN seq sorts the run out of its own list, and a NaN startedAt
+      // prints as an unreadable age. Both crossed a process boundary to get here.
+      seq: Number.isFinite(r.seq) ? (r.seq as number) : 0,
       status: 'running',
-      startedAt: typeof r.startedAt === 'number' ? r.startedAt : Date.now(),
+      startedAt: Number.isFinite(r.startedAt) ? (r.startedAt as number) : Date.now(),
       ...(r.validation === true ? { validation: true as const } : {})
     }
     // A note from a build that recorded no cwd falls back to the project path — which is what start

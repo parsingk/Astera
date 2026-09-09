@@ -152,7 +152,7 @@ describe('RunManager', () => {
     // After a restart the process is already running; adopt rebuilds only the app's own record of it.
     it('adopts a running pty and puts the run back in the list', () => {
       const { mgr } = setup()
-      const status = mgr.adopt({ id: 'run-from-host', pty: new FakePty(), restore: restore() })
+      const status = mgr.adopt({ kind: 'run', id: 'run-from-host', pty: new FakePty(), restore: restore() })
       expect(status).toMatchObject({
         projectPath: 'D:/p',
         configId: 'cfg',
@@ -168,7 +168,7 @@ describe('RunManager', () => {
     // runs rebuilt around one restart tie-break arbitrarily instead of by real age.
     it('keeps the startedAt the note carries instead of restarting the clock', () => {
       const { mgr } = setup()
-      const status = mgr.adopt({ id: 'run-from-host', pty: new FakePty(), restore: restore() })!
+      const status = mgr.adopt({ kind: 'run', id: 'run-from-host', pty: new FakePty(), restore: restore() })!
       expect(status.startedAt).toBe(1_700_000_000_000)
     })
 
@@ -176,15 +176,15 @@ describe('RunManager', () => {
     // same-config ▶ take it over instead of leaving it to the orchestrator.
     it('keeps the validation tag, and leaves the key off an ordinary run', () => {
       const { mgr } = setup()
-      const validation = mgr.adopt({ id: 'run-validation', pty: new FakePty(), restore: restore({ validation: true }) })!
+      const validation = mgr.adopt({ kind: 'run', id: 'run-validation', pty: new FakePty(), restore: restore({ validation: true }) })!
       expect(validation.validation).toBe(true)
-      expect(mgr.adopt({ id: 'run-ordinary', pty: new FakePty(), restore: restore() })).not.toHaveProperty('validation')
+      expect(mgr.adopt({ kind: 'run', id: 'run-ordinary', pty: new FakePty(), restore: restore() })).not.toHaveProperty('validation')
     })
 
     // The seat is the run's place in its project's list; a rebuilt run has to sit back down in its own.
     it('keeps the seat the note carries', () => {
       const { mgr } = setup()
-      const status = mgr.adopt({ id: 'run-from-host', pty: new FakePty(), restore: restore({ seq: 3 }) })!
+      const status = mgr.adopt({ kind: 'run', id: 'run-from-host', pty: new FakePty(), restore: restore({ seq: 3 }) })!
       expect(status.seq).toBe(3)
     })
 
@@ -195,7 +195,7 @@ describe('RunManager', () => {
       mgr.onData = (e) => datas.push(e)
       mgr.onStatus = (s) => statuses.push(s)
       const pty = new FakePty()
-      const status = mgr.adopt({ id: 'run-from-host', pty, restore: restore() })!
+      const status = mgr.adopt({ kind: 'run', id: 'run-from-host', pty, restore: restore() })!
       expect(statuses.map((s) => s.status)).toEqual(['running']) // the list and the badge refresh
       pty.dataCb('listening on http://localhost:5173/\n')
       expect(datas).toEqual([{ runId: status.runId, data: 'listening on http://localhost:5173/\n' }])
@@ -212,7 +212,7 @@ describe('RunManager', () => {
     // disk may have been edited since.
     it('resolves output paths against the cwd the note carries', () => {
       const { mgr } = setup()
-      const status = mgr.adopt({ id: 'run-from-host', pty: new FakePty(), restore: restore() })!
+      const status = mgr.adopt({ kind: 'run', id: 'run-from-host', pty: new FakePty(), restore: restore() })!
       expect(mgr.cwdOf(status.runId)).toBe('D:/p/api')
     })
 
@@ -222,22 +222,44 @@ describe('RunManager', () => {
       const { mgr } = setup()
       const note = restore()
       delete note.cwd
-      const status = mgr.adopt({ id: 'run-from-host', pty: new FakePty(), restore: note })!
+      const status = mgr.adopt({ kind: 'run', id: 'run-from-host', pty: new FakePty(), restore: note })!
       expect(mgr.cwdOf(status.runId)).toBe('D:/p')
     })
 
     // The run keeps the id it had before the restart, so everything already addressing it still does.
     it('keeps the runId it is handed rather than minting one', () => {
       const { mgr } = setup()
-      const status = mgr.adopt({ id: 'run-from-host', pty: new FakePty(), restore: restore() })!
+      const status = mgr.adopt({ kind: 'run', id: 'run-from-host', pty: new FakePty(), restore: restore() })!
       expect(status.runId).toBe('run-from-host')
       expect(mgr.get('run-from-host')?.command).toBe('npm run dev')
       expect(mgr.listByProject('D:/p').map((r) => r.runId)).toEqual(['run-from-host'])
     })
 
+    // A number that crossed a process boundary can be anything; a NaN seq would sort the run out of its
+    // list and a NaN startedAt would print as an unreadable age.
+    it('refuses a seq or a startedAt that is not a finite number', () => {
+      const { mgr } = setup()
+      const status = mgr.adopt({
+        kind: 'run',
+        id: 'run-from-host',
+        pty: new FakePty(),
+        restore: restore({ seq: Number.NaN, startedAt: Number.NaN })
+      })!
+      expect(status.seq).toBe(0)
+      expect(Number.isFinite(status.startedAt)).toBe(true)
+    })
+
+    // null is "I cannot read this", and the shapes overlap enough that a note of another kind can be
+    // readable — so the kind is checked before anything else, not inferred from the fields present.
+    it('refuses a note of another kind', () => {
+      const { mgr } = setup()
+      expect(mgr.adopt({ kind: 'terminal', id: 'term-from-host', pty: new FakePty(), restore: restore() })).toBeNull()
+      expect(mgr.listByProject('D:/p')).toEqual([])
+    })
+
     it('refuses a restore it cannot read', () => {
       const { mgr } = setup()
-      expect(mgr.adopt({ id: 'run-from-host', pty: new FakePty(), restore: { projectPath: 'D:/p' } })).toBeNull()
+      expect(mgr.adopt({ kind: 'run', id: 'run-from-host', pty: new FakePty(), restore: { projectPath: 'D:/p' } })).toBeNull()
       expect(mgr.listByProject('D:/p')).toEqual([])
     })
   })

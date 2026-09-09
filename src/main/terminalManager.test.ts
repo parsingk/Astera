@@ -163,7 +163,7 @@ describe('TerminalManager', () => {
     it('adopts a running pty and puts the terminal back', () => {
       const { mgr } = setup()
       const pty = new FakePty()
-      const info = mgr.adopt({ id: 'term-from-host', pty, restore: { projectPath: 'D:/p' } })
+      const info = mgr.adopt({ kind: 'terminal', id: 'term-from-host', pty, restore: { projectPath: 'D:/p' } })
       expect(info).toMatchObject({ projectPath: 'D:/p' })
       expect(mgr.list('D:/p').map((t) => t.id)).toEqual([info!.id])
       pty.dataCb('replayed output')
@@ -175,7 +175,7 @@ describe('TerminalManager', () => {
       const exited: { id: string; exitCode: number }[] = []
       mgr.onExit = (e) => exited.push(e)
       const pty = new FakePty()
-      const info = mgr.adopt({ id: 'term-from-host', pty, restore: { projectPath: 'D:/p' } })!
+      const info = mgr.adopt({ kind: 'terminal', id: 'term-from-host', pty, restore: { projectPath: 'D:/p' } })!
       mgr.write(info.id, 'ls\r')
       expect(pty.written).toEqual(['ls\r'])
       pty.exitCb({ exitCode: 3 })
@@ -187,16 +187,34 @@ describe('TerminalManager', () => {
     it('keeps the id it is handed rather than minting one', () => {
       const { mgr } = setup()
       const pty = new FakePty()
-      const info = mgr.adopt({ id: 'term-from-host', pty, restore: { projectPath: 'D:/p' } })!
+      const info = mgr.adopt({ kind: 'terminal', id: 'term-from-host', pty, restore: { projectPath: 'D:/p' } })!
       expect(info.id).toBe('term-from-host')
       expect(mgr.list('D:/p').map((t) => t.id)).toEqual(['term-from-host'])
       mgr.write('term-from-host', 'echo hi\r')
       expect(pty.written).toEqual(['echo hi\r'])
     })
 
+    // A run's note is readable as a terminal's — projectPath is a strict subset of it — so without the
+    // kind, try-each-manager routing would quietly rebuild a run as a terminal.
+    it("refuses a run's note, readable though it is", () => {
+      const { mgr } = setup()
+      const runNote = {
+        projectPath: 'D:/p',
+        projectName: 'p',
+        configId: 'cfg',
+        configName: 'dev',
+        command: 'npm run dev',
+        cwd: 'D:/p',
+        seq: 0,
+        startedAt: 1_700_000_000_000
+      }
+      expect(mgr.adopt({ kind: 'run', id: 'run-from-host', pty: new FakePty(), restore: runNote })).toBeNull()
+      expect(mgr.list('D:/p')).toEqual([])
+    })
+
     it('refuses a restore it cannot read', () => {
       const { mgr } = setup()
-      expect(mgr.adopt({ id: 'term-from-host', pty: new FakePty(), restore: {} })).toBeNull()
+      expect(mgr.adopt({ kind: 'terminal', id: 'term-from-host', pty: new FakePty(), restore: {} })).toBeNull()
       expect(mgr.list('D:/p')).toEqual([])
     })
   })
