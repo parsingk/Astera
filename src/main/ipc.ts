@@ -4916,6 +4916,17 @@ export function registerIpc(
     // An update changes the protocol, and the Host from the previous version is still there holding
     // terminals this app cannot speak to. Ask it to leave first. A restart does not come through
     // here, because the protocol has not changed and the address is the same one.
+    //
+    // Killing whatever answers here unconditionally — no check for a still-running app using it — is
+    // safe only because no app can be running against this same profile right now. `src/main/index.ts`
+    // requests a single-instance lock and quits before `createCore` (and so before this ever runs) when
+    // it loses that race, and the lock is requested against the same profile (`userData`) this Host's
+    // address is derived from. So the only way a Host answers an older protocol here is that the app
+    // which started it has already quit — retiring it costs nobody their terminals. This reasoning
+    // breaks if that lock is ever dropped, or rekeyed to something other than the profile (e.g. per
+    // installation rather than per userData directory): then a second app instance could share this
+    // profile with the first, and retiring an older Host would kill a terminal a still-running instance
+    // is using.
     await retireOlderHosts({
       profileDir,
       platform: process.platform,

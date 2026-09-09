@@ -295,8 +295,11 @@ export class HostClient {
     if (m?.t === 'protocol-mismatch') {
       // Answered, so the handshake deadline has done its job — what follows is a decision, not silence.
       this.clearHandshake()
-      // Slice 1 only: the Host holds nothing, so it can be told to leave and replaced. Once it owns
-      // live terminals this is no longer an answer, and slice 2 has to give a different one.
+      // Not two Astera versions meeting — from slice 2 the address already carries the protocol, so
+      // this client only ever connects to the one address that matches its own. What lands here
+      // instead is a boundary check: the address is a named pipe or a socket in a temp directory, and
+      // anything on the machine can connect to it. A peer that answers hello but claims a protocol
+      // other than ours is turned away, whatever it actually is.
       this.deps.log(`the Host speaks protocol ${m.protocol} — retiring it and starting one we can talk to`)
       this.send({ t: 'retire' })
       this.state = { ...this.state, connected: false, problem: `the Host speaks protocol ${m.protocol}` }
