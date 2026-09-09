@@ -83,6 +83,9 @@ export class HostClient {
   private readonly readyWaiters = new Set<() => void>()
   /** Runs from `attach` until the Host answers. See where it is armed for what it is for. */
   private handshake: ReturnType<typeof setTimeout> | null = null
+  /** Whether anything ever accepted a connection at the address. Set once, in `attach`, and never
+   *  cleared: see `sawPeer`. */
+  private peerSeen = false
   private state: HostStatus = {
     connected: false,
     protocol: null,
@@ -96,6 +99,20 @@ export class HostClient {
 
   status(): HostStatus {
     return { ...this.state }
+  }
+
+  /** Whether a Host was ever there — did anything accept a connection at the address, at any point in
+   *  this client's life. Not the same question as `status().connected`, and the difference is the one
+   *  a caller has to act on when the answer is "not connected": nothing ever answered the address
+   *  (there is no Host, and never was) reads completely differently from a peer that accepted and then
+   *  went quiet or dropped (a Host exists, and we know nothing about what it holds). `status().problem`
+   *  separates those too, but only as a sentence, and a sentence is the wrong thing for a caller to
+   *  branch on.
+   *
+   *  Never cleared once set. A Host that answered and then went away is still a Host that was there,
+   *  and its ptys outlive the connection — that is the whole point of the Host. */
+  sawPeer(): boolean {
+    return this.peerSeen
   }
 
   start(): void {
@@ -204,6 +221,10 @@ export class HostClient {
 
   private attach(socket: net.Socket): void {
     this.socket = socket
+    // The connection was accepted, so something is listening at the address. Recorded before the
+    // handshake, not after it: a peer that never says hello is exactly the case `sawPeer` exists to
+    // tell apart from an address nothing answers.
+    this.peerSeen = true
     const read = createLineReader({
       onMessage: (v) => this.handleHostMessage(v as HostMessage),
       onBadLine: (raw) => this.deps.log(`the Host sent a line that is not JSON: ${raw.slice(0, 200)}`),

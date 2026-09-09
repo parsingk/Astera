@@ -311,34 +311,73 @@ export function rollCoordinatorForSession(
   return provider === 'codex' ? 'codexRolling' : 'rolling'
 }
 
+/** What the Host could be got to say about the sessions that outlived the app. Three answers, and
+ *  the difference between the last two is the difference between a stalled Job and two agents in one
+ *  worktree — see `OrchestrationStore.load`'s own argument for the whole reasoning. */
+export type SessionsTakenBack = ReattachResult | 'unknown' | null
+
+/** The shape `OrchestrationStore.load` wants, from the shape `startHostClient` produces. Trivial, and
+ *  a named function with tests anyway: this is the exact place the three answers could quietly become
+ *  two, and that collapse is the duplicate-agent bug. */
+export function liveWorkersFor(taken: SessionsTakenBack): ReadonlySet<string> | 'unknown' | undefined {
+  if (taken === null) return undefined
+  if (taken === 'unknown') return 'unknown'
+  return new Set(taken.sessions)
+}
+
+/** The coordinator's brief, named for the Run it manages. It lives in the same directory as the
+ *  workers' spec files, so the boot sweep has to be able to recognise one; `startCoordinator` writes
+ *  it. The name is here, in one place, so those two cannot drift. */
+export const coordinatorBriefName = (runId: string): string => `coordinator-${runId}.md`
+
 /**
- * Which of the spec directory's files a boot clears out. `files` is the directory listing, `keep` is
- * the `specPath` of every Dispatch still open once the restart cleanup has run, and the answer is the
- * names to delete.
+ * Which of the spec directory's files a boot clears out. `files` is the directory listing, the rest
+ * is the state the restart cleanup left behind, and the answer is the names to delete.
  *
- * The rule is one line because the invariant behind it is: a spec file is live exactly as long as the
- * Dispatch pointing at it is open. `buildResumePacket` (orchestration/resumePacket.ts) is the only
- * thing that reads one back, and it only ever acts on an open Dispatch.
+ * The rule is short because the invariant behind it is: **a file in here is live exactly as long as
+ * the thing that was told to read it is.** Two kinds live here.
  *
- * **Open, not alive.** A Dispatch left open because its worker really is gone is one recovery may
- * resume, and resuming reads the original spec — so keeping it is the right answer there too, not a
- * lenient one.
+ * - A worker's spec, kept while its Dispatch is open. The worker was launched with "read this path
+ *   and follow it", and `buildResumePacket` (orchestration/resumePacket.ts) writes the resume
+ *   briefing back into that same file, acting only on an open Dispatch.
+ *   **Open, not alive.** A Dispatch left open because its worker really is gone is one recovery may
+ *   resume, and resuming reads the original spec — so keeping it is right there too, not lenient.
+ * - A coordinator's brief, kept while the session managing that Run is one the Host handed back.
+ *   `Run.coordinatorSessionId` is that session, and an adopted session keeps its id, so the match is
+ *   direct. With no Host nothing was handed back and every brief goes, exactly as before the Host
+ *   existed; with `'unknown'` every Run that has a coordinator keeps its brief, for the same reason
+ *   the cleanup leaves Dispatches open on that answer.
  *
  * Matching is on the file name alone. `Dispatch.specPath` is an absolute path written by whichever
  * platform produced it, and orchestration.json is hand-edited, so both separators turn up; the names
- * themselves are unique (the coordinator builds one per Dispatch). Taking the name from the stored
- * path rather than rebuilding it from ids also keeps the naming rule in the one place that owns it,
- * `OrchCoordinator.startWorker`.
+ * themselves are unique. Taking a worker's name from the stored path rather than rebuilding it from
+ * ids keeps that naming rule in the one place that owns it, `OrchCoordinator.startWorker`; a Run
+ * stores no path for its brief, so that one name comes from `coordinatorBriefName`, which both this
+ * and `startCoordinator` call.
  *
  * A pure function for the same reason `rollCoordinatorForSession` is one: the boot that calls it is
  * an electron-only closure inside `registerIpc`, and this decision deletes files.
  */
-export function staleSpecFiles(a: { files: readonly string[]; keep: Iterable<string> }): string[] {
+export function staleSpecFiles(a: {
+  /** The spec directory's listing, as plain names. */
+  files: readonly string[]
+  /** Every Dispatch in the state the restart cleanup produced — open ones keep their spec. */
+  dispatches: readonly { endedAt?: string; specPath: string }[]
+  /** Every Run in that same state. */
+  runs: readonly { id: string; coordinatorSessionId?: string }[]
+  /** What the Host said about the sessions it still runs, in `load`'s own three answers. */
+  live: ReadonlySet<string> | 'unknown' | undefined
+}): string[] {
   const fileName = (p: string): string => p.split(/[\\/]/).pop() ?? ''
+  const keep = a.dispatches.filter((d) => !d.endedAt).map((d) => fileName(d.specPath))
+  for (const r of a.runs) {
+    if (r.coordinatorSessionId === undefined) continue
+    if (a.live === 'unknown' || a.live?.has(r.coordinatorSessionId)) keep.push(coordinatorBriefName(r.id))
+  }
   // The empty ones are dropped, not kept: `openDispatch` writes `specPath: ''` and the coordinator
   // fills it in once the worker is actually up, so a Dispatch caught in that window would otherwise
   // hold an empty name that must not be allowed to match anything.
-  const live = new Set([...a.keep].map(fileName).filter((n) => n !== ''))
+  const live = new Set(keep.filter((n) => n !== ''))
   return a.files.filter((f) => !live.has(f))
 }
 
@@ -521,9 +560,10 @@ export function registerIpc(
    *  calling it leaves `bootOrch` waiting forever. The initialiser is never the function that runs:
    *  a Promise executor is synchronous, so the line below has replaced it before anything can call
    *  this. */
-  let settleSessionsTakenBack: (r: ReattachResult | null) => void = () => {}
-  /** What reattaching took back from the Host, or null when there was no Host to take anything back
-   *  from. It never rejects, so awaiting it cannot throw a Host failure into a caller.
+  let settleSessionsTakenBack: (r: SessionsTakenBack) => void = () => {}
+  /** What reattaching took back from the Host — the result, `'unknown'` when there is a Host that
+   *  could not be got to say, or null when there was no Host at all. It never rejects, so awaiting it
+   *  cannot throw a Host failure into a caller.
    *
    *  It exists so `bootOrch` can ask which workers are still running before its restart cleanup
    *  decides which ones were lost. Awaiting *this* rather than listing the Host's ptys again is the
@@ -537,7 +577,7 @@ export function registerIpc(
    *  that ordering irrelevant, and the thing it protects is worth not resting on an accident: a
    *  `bootOrch` that read this too early would see "nothing alive" and close the Dispatch of a worker
    *  the Host is still running, which is the duplicate-agent failure the cleanup exists to prevent. */
-  const hostSessionsTakenBack = new Promise<ReattachResult | null>((resolve) => {
+  const hostSessionsTakenBack = new Promise<SessionsTakenBack>((resolve) => {
     settleSessionsTakenBack = resolve
   })
   /** Job Continuity's recorder. Non-null only while the toggle is on: off means no file is opened and
@@ -1359,35 +1399,40 @@ export function registerIpc(
     // A build with no `out/main/host.js` waits for none of it — `startHostClient` settles this on the
     // way out — so that app boots exactly as fast, with exactly the same answer, as it did before the
     // Host existed.
-    const taken = await hostSessionsTakenBack
-    // Absent, not empty, when there is no Host — `load` reads absent as "nothing survived", which is
-    // the pre-Host truth, and reads an empty set the same way. Passing the distinction along anyway
-    // keeps the log below honest about which of the two happened.
-    const aliveSessionIds = taken ? new Set(taken.sessions) : undefined
+    const aliveSessionIds = liveWorkersFor(await hostSessionsTakenBack)
     const loaded = await store.load({ aliveSessionIds })
-    if (aliveSessionIds && aliveSessionIds.size > 0)
+    // The unknown case gets a line of its own, because from the state alone it is indistinguishable
+    // from a boot that had nothing to clean up — and a person looking for why a Job did not move
+    // needs to be able to find it. The reason it could not be asked was logged by the Host wiring.
+    if (aliveSessionIds === 'unknown')
+      orchLog(
+        `restart cleanup — the Host could not be asked what it is still running, so ${store.get().dispatches.filter((d) => !d.endedAt).length} open dispatch(es) were left open rather than written off`
+      )
+    else if (aliveSessionIds && aliveSessionIds.size > 0)
       orchLog(
         `restart cleanup — the Host still runs ${aliveSessionIds.size} session(s); any open Dispatch of theirs was left open`
       )
+    if (loaded.stuckInterruptions > 0)
+      orchLog(
+        `restart cleanup — ${loaded.stuckInterruptions} interrupted Task(s) were left as they were: their Dispatch is still open, so there is nothing to gate`
+      )
 
     // Old specs are cleared at startup — the same convention statusline.ts follows — except the ones
-    // a still-open Dispatch points at. A spec file is live exactly as long as its Dispatch is open:
-    // the worker was launched with "read this path and follow it", and buildResumePacket
-    // (orchestration/resumePacket.ts) writes the resume briefing back into that same file, acting
-    // only on an open Dispatch. That is why this runs *after* the cleanup rather than before it —
-    // only the cleanup knows which Dispatches are still open, now that a worker the Host kept running
-    // survives a restart with its Dispatch intact. `staleSpecFiles` holds the rule and is tested.
+    // something that is still running was told to read: a worker's spec while its Dispatch is open, a
+    // coordinator's brief while the session managing that Run is one the Host handed back.
+    // `staleSpecFiles` holds that rule, with the reasoning, and is tested. This runs *after* the
+    // cleanup rather than before it because only the cleanup knows which Dispatches are still open,
+    // now that a worker the Host kept running survives a restart with its Dispatch intact.
     //
     // A failed cleanup must never block startup, so every step here swallows its own failure: an
     // unreadable directory yields nothing to delete, and one file that will not go does not cost the
     // rest their turn. The worst outcome is a stale file nobody reads, which the next boot retries.
-    const openSpecPaths = store
-      .get()
-      .dispatches.filter((d) => !d.endedAt)
-      .map((d) => d.specPath)
+    const swept = store.get()
     for (const name of staleSpecFiles({
       files: await fs.readdir(specsDir).catch(() => []),
-      keep: openSpecPaths
+      dispatches: swept.dispatches,
+      runs: swept.runs,
+      live: aliveSessionIds
     }))
       await fs.rm(path.join(specsDir, name), { recursive: true, force: true }).catch(() => {})
 
@@ -2797,7 +2842,14 @@ export function registerIpc(
         // **specsDir 에 쓴다.** 그 경로에 argv 금지 문자가 있으면 앱 시작 시 경고가 남는 자리가
         // 이미 그것이고(아래 LAUNCH_FORBIDDEN 검사), 시작 시 비워지는 것도 무해하다: 앱을 다시
         // 켜면 코디네이터도 없으므로 사람이 실행을 다시 누른다.
-        const briefPath = path.join(specsDir, `coordinator-${a.runId}.md`)
+        //
+        // **The last clause stopped being true when the Host started keeping terminals alive**, and
+        // the boot no longer relies on it: a coordinator session the Host hands back is still running
+        // with this path in its launch prompt, so the boot sweep keeps this file while
+        // `Run.coordinatorSessionId` names a session that survived. That is `staleSpecFiles`, which
+        // recognises this file by `coordinatorBriefName` — the same function that names it here, so
+        // the two cannot drift.
+        const briefPath = path.join(specsDir, coordinatorBriefName(a.runId))
         await fs.writeFile(briefPath, a.brief, 'utf8')
         // **워커와 같은 래퍼를 쓴다**(위 spawnSession) — 그 래퍼가 계정 객체를 찾고, 롤링
         // 코디네이터에 등록하고, orchEnv 를 실어 준다. core.sessions.spawn 을 직접 부르면 그 셋을
@@ -4899,11 +4951,17 @@ export function registerIpc(
     // given up.
     const HOST_READY_MS = READY_TIMEOUT_MS
 
-    /** One round trip: ask for the list, resolve on the reply, give up after five seconds with an
-     *  empty list so a silent Host cannot hold the startup open. */
-    const listPtys = (t: typeof transport): Promise<PtyEntry[]> =>
+    /** One round trip: ask for the list and resolve on the reply, giving up after five seconds so a
+     *  silent Host cannot hold the startup open.
+     *
+     *  **Giving up resolves `null`, not `[]`.** They are opposite answers: `[]` is the Host telling us
+     *  it holds nothing, and `null` is the Host telling us nothing at all. Everything downstream is
+     *  deciding whether a worker died, and reading the second as the first closes the Dispatch of a
+     *  worker that is demonstrably still running — the pty is still there, and the late `pty-listed`
+     *  lands after `off()` and is dropped, so nothing adopts it and nothing kills it either. */
+    const listPtys = (t: typeof transport): Promise<PtyEntry[] | null> =>
       new Promise((resolve) => {
-        const done = (entries: PtyEntry[]): void => {
+        const done = (entries: PtyEntry[] | null): void => {
           clearTimeout(timer)
           off()
           resolve(entries)
@@ -4911,20 +4969,35 @@ export function registerIpc(
         const off = t.onHostMessage((m) => {
           if (m.t === 'pty-listed') done(m.entries)
         })
-        const timer = setTimeout(() => done([]), 5_000)
+        const timer = setTimeout(() => done(null), 5_000)
         timer.unref?.()
-        t.send({ t: 'pty-list' })
+        // A send that does not go out is the connection having dropped between `ready()` and here.
+        // Answered now rather than after five seconds of waiting for a reply to a question nobody
+        // heard — and answered `null`, because a Host that was there a moment ago still has its ptys.
+        if (!t.send({ t: 'pty-list' })) done(null)
       })
 
     // Reported, not merely done: `bootOrch`'s restart cleanup waits on the outcome of this to learn
     // which workers are still running — see `hostSessionsTakenBack`'s own note. Every path out of the
-    // chain settles it, the failure ones with null.
+    // chain settles it, with one of the three answers `SessionsTakenBack` names, and which one each
+    // path gives is marked at the path.
     void hostClient
       .ready(HOST_READY_MS)
-      .then(async () => {
+      .then(async (): Promise<SessionsTakenBack> => {
         if (!hostClient?.status().connected) {
-          hostLog('host: no Host, so terminals stay in the app exactly as before')
-          return null
+          // **Two different failures share this branch, and they are not the same answer.** Nothing
+          // ever accepted a connection: there is no Host, nothing could have survived, and `null`
+          // says so — the pre-Host truth. Something did accept and then never finished the handshake,
+          // or handshook and dropped: a Host is there, holding ptys we cannot enumerate, and `null`
+          // there would have the cleanup close a live worker's Dispatch. `sawPeer` is the difference.
+          if (!hostClient?.sawPeer()) {
+            hostLog('host: no Host, so terminals stay in the app exactly as before')
+            return null
+          }
+          hostLog(
+            'host: a Host answered the address but never finished the handshake — what it is still running is unknown, so no worker is written off'
+          )
+          return 'unknown'
         }
         // Installed only now, with a live connection in hand — not at the top of this function, where
         // a pty spawned in the window before the handshake completes would have its pty-spawn silently
@@ -4934,8 +5007,19 @@ export function registerIpc(
         // later: a pty-spawn that HostClient.send refuses ends the handle itself instead of waiting on a
         // reply that will never come.
         core.ptyRouter.use(factory)
+        // Asked here rather than from inside reattach's `list` dep so the unanswered case can be its
+        // own answer: reattach has no way to say "I was told nothing", and an empty list would have
+        // it adopt nothing and report nothing adopted, which reads identically to a Host that really
+        // is holding nothing.
+        const entries = await listPtys(transport)
+        if (entries === null) {
+          hostLog(
+            'host: the Host did not answer the pty list — nothing was taken back, and what it is still running is unknown, so no worker is written off'
+          )
+          return 'unknown'
+        }
         const res = await reattachSessions({
-          list: () => listPtys(transport),
+          list: async () => entries,
           attach,
           sendAttach: (id) => transport.send({ t: 'pty-attach', id }),
           kill: (id) => transport.send({ t: 'pty-kill', id }),
@@ -5016,22 +5100,32 @@ export function registerIpc(
         hostLog(`host: took back ${res.adopted} session(s), refused ${res.refused}`)
         return res
       })
-      // Resolves with null rather than rejecting, so `bootOrch` can await this without a try and
-      // nothing from the Host throws into the app. Null is the only answer available here — a
-      // reattach that blew up cannot say which sessions it managed to take back — and it is the one
-      // answer that is not conservative: the cleanup will close a Dispatch whose worker may in fact
-      // be alive. What bounds it is that `reattachSessions` contains a bad entry itself, as a
-      // refusal, so reaching this at all means the sweep as a whole failed and adopted nothing worth
-      // naming.
-      .catch((e) => {
-        hostLog(`host: taking sessions back failed: ${String(e)}`)
-        return null
+      // Settles rather than rejecting, so `bootOrch` can await this without a try and nothing from
+      // the Host throws into the app. `'unknown'`, not null: a reattach that blew up cannot say which
+      // sessions it managed to take back, and there is certainly a Host — it answered the list a line
+      // ago. Some of its ptys may be adopted, some orphaned, and none of that is evidence a worker
+      // died. `reattachSessions` contains a bad entry itself, as a refusal, so getting here at all
+      // means something systemic went wrong and guessing would be guessing badly.
+      .catch((e): SessionsTakenBack => {
+        hostLog(`host: taking sessions back failed: ${String(e)} — no worker is written off`)
+        return 'unknown'
       })
       .then(settleSessionsTakenBack)
 
     hostWiring?.onHostClientReady(() => client.stop())
   }
-  startHostClient()
+  // **A throw in here must not be allowed to leave `hostSessionsTakenBack` pending.** The settlement
+  // above covers every asynchronous path, but the body has synchronous work ahead of that chain
+  // (`hostAddress`, the client, `createHostPtyFactory`), and a throw there would leave the promise
+  // unsettled for the app's whole life: `bootOrch` waits on it forever, so `startOrch`'s `finally`
+  // never runs, `orchStarting` stays true, and every later toggle's `startOrch()` is a silent no-op —
+  // orchestration would simply never start again, with nothing to see but the missing log lines.
+  try {
+    startHostClient()
+  } catch (err) {
+    hostWiring?.log(`the Host wiring failed to start: ${String(err)} — the app runs without a Host`)
+    settleSessionsTakenBack(null)
+  }
 
   ipcMain.handle(
     'host.status',

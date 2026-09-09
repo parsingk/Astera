@@ -127,6 +127,45 @@ describe('OrchestrationStore', () => {
     expect((await store.load()).unknownOutcomes).toBe(1)
   })
 
+  // "we could not ask the Host" is not "the Host has nothing". Reading the first as the second closes
+  // a Dispatch whose worker is demonstrably still running, and the reconciler then starts a second
+  // agent in its worktree.
+  it('leaves every open Dispatch alone when it could not be told what is alive', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    await fs.writeFile(file, JSON.stringify(withOpenDispatch()), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ aliveSessionIds: 'unknown' })
+    expect(res.unknownOutcomes).toBe(0)
+    expect(store.get().dispatches[0].endedAt).toBeUndefined()
+    expect(store.get().dispatches[0].workerState).toBe('ready')
+  })
+
+  // createGate refuses to gate a Task whose Dispatch is open, and this is the one restart that can
+  // hand it one. The Task stays validating; the count is what keeps that from being silent.
+  it('counts a validating Task it could not interrupt because the Dispatch stayed open', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    s.tasks[0].status = 'validating'
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load({ aliveSessionIds: new Set(['sess1']) })
+    expect(res.staleValidations).toBe(0)
+    expect(res.stuckInterruptions).toBe(1)
+    expect(store.get().tasks[0].status).toBe('validating')
+    expect(store.get().gates).toHaveLength(0)
+  })
+
+  it('counts nothing stuck when the Dispatch closed and the gate could open', async () => {
+    const file = path.join(dir, 'orchestration.json')
+    const s = withOpenDispatch()
+    s.tasks[0].status = 'validating'
+    await fs.writeFile(file, JSON.stringify(s), 'utf8')
+    const store = new OrchestrationStore(file)
+    const res = await store.load()
+    expect(res.staleValidations).toBe(1)
+    expect(res.stuckInterruptions).toBe(0)
+  })
+
   // provider 가 Run 에서 Task 로 내려간 뒤 남는 칸 — 두 칸을 함께 두면 어느 쪽이 정본인지
   // 코드마다 달라진다(위 accountId 이행과 같은 이유)
   it('옛 Run.provider 를 지운다', async () => {

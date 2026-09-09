@@ -145,6 +145,53 @@ describe('HostClient', () => {
     }
   })
 
+  // "we could not reach a Host" and "the Host we reached told us nothing" are different answers, and
+  // only `problem` distinguishes them today — a sentence, which is the wrong thing to branch on. The
+  // boot has to branch on it: it decides whether an open Dispatch is written off as lost.
+  it('says it never saw a peer when nothing ever answered the address', async () => {
+    const addr = addressFor('saw-none')
+    const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {}, attempts: 2, retryMs: 10 })
+    c.start()
+    await c.ready(3_000)
+    expect(c.sawPeer()).toBe(false)
+    await c.stop()
+  })
+
+  it('remembers a peer that accepted the connection even though it never said hello', async () => {
+    const addr = addressFor('saw-silent')
+    if (addr.dirToPrepare) await fs.mkdir(addr.dirToPrepare, { recursive: true, mode: 0o700 })
+    const held: net.Socket[] = []
+    const silent = net.createServer((sock) => held.push(sock))
+    await new Promise<void>((r) => silent.listen(addr.address, r))
+    try {
+      const c = new HostClient({
+        address: addr.address,
+        appVersion: '9.0.0',
+        spawnHost: () => {},
+        log: () => {},
+        helloMs: 60
+      })
+      c.start()
+      await settled(c, (s) => s.problem !== null)
+      expect(c.status().connected).toBe(false)
+      expect(c.sawPeer()).toBe(true)
+      await c.stop()
+    } finally {
+      for (const sock of held) sock.destroy()
+      await new Promise<void>((r) => silent.close(() => r()))
+    }
+  })
+
+  it('remembers a peer it shook hands with', async () => {
+    const addr = addressFor('saw-connected')
+    await serveAt(addr)
+    const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
+    c.start()
+    await c.ready(3_000)
+    expect(c.sawPeer()).toBe(true)
+    await c.stop()
+  })
+
   it('keeps its status once it is stopped', async () => {
     const addr = addressFor('stopped')
     const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {}, attempts: 1, retryMs: 10 })

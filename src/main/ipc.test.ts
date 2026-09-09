@@ -4,6 +4,7 @@ import {
   historyResumePlan,
   parseAllowedExternalUrl,
   providerOfSession,
+  liveWorkersFor,
   rollCoordinatorForSession,
   staleSpecFiles
 } from './ipc'
@@ -222,12 +223,17 @@ describe('historyResumePlan — 사이드바 재개의 백지 재개 판정', ()
 })
 
 describe('staleSpecFiles — which spec files a boot clears', () => {
+  const SPECS = String.raw`C:\Users\me\AppData\astera\orch\specs`
+  const SEP = '\\'
+  const open = (name: string): { specPath: string } => ({ specPath: [SPECS, name].join(SEP) })
+  const closed = (name: string): { endedAt: string; specPath: string } => ({
+    endedAt: '2026-09-09T00:00:00.000Z',
+    specPath: [SPECS, name].join(SEP)
+  })
+
   it('keeps the spec file of a Dispatch that is still open', () => {
     expect(
-      staleSpecFiles({
-        files: ['tsk_1-dsp_1.md'],
-        keep: [String.raw`C:\Users\me\AppData\astera\orch\specs\tsk_1-dsp_1.md`]
-      })
+      staleSpecFiles({ files: ['tsk_1-dsp_1.md'], dispatches: [open('tsk_1-dsp_1.md')], runs: [], live: undefined })
     ).toEqual([])
   })
 
@@ -235,13 +241,17 @@ describe('staleSpecFiles — which spec files a boot clears', () => {
     expect(
       staleSpecFiles({
         files: ['tsk_1-dsp_1.md', 'tsk_2-dsp_2.md'],
-        keep: [String.raw`C:\Users\me\AppData\astera\orch\specs\tsk_1-dsp_1.md`]
+        dispatches: [open('tsk_1-dsp_1.md'), closed('tsk_2-dsp_2.md')],
+        runs: [],
+        live: undefined
       })
     ).toEqual(['tsk_2-dsp_2.md'])
   })
 
   it('deletes a file no Dispatch claims', () => {
-    expect(staleSpecFiles({ files: ['orphan.md'], keep: [] })).toEqual(['orphan.md'])
+    expect(staleSpecFiles({ files: ['orphan.md'], dispatches: [], runs: [], live: undefined })).toEqual([
+      'orphan.md'
+    ])
   })
 
   // 오래된 Dispatch 는 워커가 spec 을 쓰기 전에 열렸을 수 있다 — 지울 것이 없다는 뜻이지 이 판정이
@@ -250,7 +260,9 @@ describe('staleSpecFiles — which spec files a boot clears', () => {
     expect(
       staleSpecFiles({
         files: ['orphan.md'],
-        keep: [String.raw`C:\specs\tsk_1-dsp_1.md`, String.raw`C:\specs\tsk_2-dsp_2.md`]
+        dispatches: [open('tsk_1-dsp_1.md'), open('tsk_2-dsp_2.md')],
+        runs: [],
+        live: undefined
       })
     ).toEqual(['orphan.md'])
   })
@@ -258,13 +270,91 @@ describe('staleSpecFiles — which spec files a boot clears', () => {
   // openDispatch 는 specPath 를 빈 문자열로 열고 워커가 실제로 뜬 뒤에 채운다. 그 빈 값이 아무 파일도
   // 지켜서는 안 된다.
   it('a Dispatch whose specPath is still the empty placeholder protects nothing', () => {
-    expect(staleSpecFiles({ files: ['tsk_1-dsp_1.md'], keep: ['', ''] })).toEqual(['tsk_1-dsp_1.md'])
+    expect(
+      staleSpecFiles({
+        files: ['tsk_1-dsp_1.md'],
+        dispatches: [{ specPath: '' }, { specPath: '' }],
+        runs: [],
+        live: undefined
+      })
+    ).toEqual(['tsk_1-dsp_1.md'])
   })
 
   // orchestration.json 은 손으로 고쳐지고, 이 저장소는 두 구분자를 다 본다.
   it('matches a specPath written with either separator', () => {
     expect(
-      staleSpecFiles({ files: ['tsk_1-dsp_1.md'], keep: ['C:/Users/me/orch/specs/tsk_1-dsp_1.md'] })
+      staleSpecFiles({
+        files: ['tsk_1-dsp_1.md'],
+        dispatches: [{ specPath: 'C:/Users/me/orch/specs/tsk_1-dsp_1.md' }],
+        runs: [],
+        live: undefined
+      })
     ).toEqual([])
+  })
+
+  // 코디네이터 브리핑도 같은 폴더에 있고 어떤 Dispatch 도 자기 것이라 하지 않는다. 세션이 살아남았으면
+  // 그 브리핑은 살아 있는 에이전트의 지시문이다.
+  it('keeps a coordinator brief whose session the Host handed back', () => {
+    expect(
+      staleSpecFiles({
+        files: ['coordinator-run_1.md'],
+        dispatches: [],
+        runs: [{ id: 'run_1', coordinatorSessionId: 'sess_c' }],
+        live: new Set(['sess_c'])
+      })
+    ).toEqual([])
+  })
+
+  it('deletes a coordinator brief whose session did not survive', () => {
+    expect(
+      staleSpecFiles({
+        files: ['coordinator-run_1.md'],
+        dispatches: [],
+        runs: [{ id: 'run_1', coordinatorSessionId: 'sess_c' }],
+        live: new Set(['someone-else'])
+      })
+    ).toEqual(['coordinator-run_1.md'])
+  })
+
+  it('deletes every coordinator brief when there is no Host, exactly as before', () => {
+    expect(
+      staleSpecFiles({
+        files: ['coordinator-run_1.md'],
+        dispatches: [],
+        runs: [{ id: 'run_1', coordinatorSessionId: 'sess_c' }],
+        live: undefined
+      })
+    ).toEqual(['coordinator-run_1.md'])
+  })
+
+  it('keeps a coordinator brief when what the Host still runs is unknown', () => {
+    expect(
+      staleSpecFiles({
+        files: ['coordinator-run_1.md', 'coordinator-run_2.md'],
+        dispatches: [],
+        runs: [{ id: 'run_1', coordinatorSessionId: 'sess_c' }, { id: 'run_2' }],
+        live: 'unknown'
+      })
+    ).toEqual(['coordinator-run_2.md'])
+  })
+})
+
+describe('liveWorkersFor — the three answers the Host can give about its sessions', () => {
+  it('no Host at all is the pre-Host answer: nothing survived', () => {
+    expect(liveWorkersFor(null)).toBeUndefined()
+  })
+
+  // 이 한 줄이 이 라운드의 Critical 이었다. 'unknown' 이 undefined 로 접히면 살아 있는 워커의 Dispatch
+  // 가 닫히고 같은 워크트리에 두 번째 에이전트가 뜬다.
+  it('an unanswered Host stays unknown and does not collapse into "nothing survived"', () => {
+    expect(liveWorkersFor('unknown')).toBe('unknown')
+  })
+
+  it('an answer is the set of sessions it named', () => {
+    expect(liveWorkersFor({ adopted: 1, refused: 0, sessions: ['sess_a'] })).toEqual(new Set(['sess_a']))
+  })
+
+  it('an answer naming nothing is an empty set, not unknown — the Host really had nothing', () => {
+    expect(liveWorkersFor({ adopted: 0, refused: 2, sessions: [] })).toEqual(new Set())
   })
 })
