@@ -20,5 +20,10 @@ export const nodePtyFactory: PtyFactory = (file, args, opts) => {
     kill: () => p.kill(),
     pause: () => p.pause(),
     resume: () => p.resume()
+    // No `remember`, deliberately: this pty is the app's own child and dies with the app, so there is
+    // no later app to read a note back and nothing to remember it for. Callers reach it as
+    // `pty.remember?.(…)`, so its absence is the no-op — the same way `meta` is ignored on the way in
+    // (nodePtySpawnOptions), and the same reason: with no Host the app behaves exactly as it always
+    // has.
   })
 }

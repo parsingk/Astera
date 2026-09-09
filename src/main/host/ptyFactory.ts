@@ -131,6 +131,13 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
     },
     resume: () => {
       if (state !== 'exited') t.send({ t: 'pty-resume', id })
+    },
+    // Goes out at once even while pending, with kill, pause and resume rather than with write and
+    // resize: the Host sees it after the pty-spawn it is ordered behind, and a patch for a spawn that
+    // was refused reaches an id the registry does not have, which is a no-op there. Nothing waits for
+    // an answer — see `SessionManager.remember` for what a note that never arrives costs.
+    remember: (patch) => {
+      if (state !== 'exited') t.send({ t: 'pty-note', id, patch })
     }
   } as PtyLike
 }

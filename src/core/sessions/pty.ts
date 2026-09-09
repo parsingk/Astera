@@ -9,6 +9,15 @@ export interface PtyLike {
   kill(): void
   pause(): void
   resume(): void
+  /** Merges these keys into the note this pty was spawned with (`PtySpawnOptions.meta`'s `restore`),
+   *  so something the app learns or changes after the spawn is what it reads back when it adopts the
+   *  pty again after a restart.
+   *
+   *  **Optional because only a pty that outlives the app has anywhere to keep a note.** node-pty's
+   *  pty is this process's own child and dies with it, so there is no later app to read one and the
+   *  method is simply absent there. Every caller is `pty.remember?.(…)`, which is a no-op with no
+   *  Host — the standing rule that the app without one behaves exactly as it always has. */
+  remember?(patch: Record<string, unknown>): void
 }
 
 /** The exit code a pty handle reports when the **app** lost sight of the process, rather than the
