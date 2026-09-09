@@ -57,6 +57,7 @@ export class HostClient {
   private socket: net.Socket | null = null
   private stopped = false
   private drops = 0
+  private readonly subscribers = new Set<(m: HostMessage) => void>()
   /** Runs from `attach` until the Host answers. See where it is armed for what it is for. */
   private handshake: ReturnType<typeof setTimeout> | null = null
   private state: HostStatus = {
@@ -90,8 +91,18 @@ export class HostClient {
     this.handshake = null
   }
 
-  private send(m: ClientMessage): void {
-    if (this.socket && !this.socket.destroyed) this.socket.write(encodeLine(m))
+  /** Sends a message when there is a connection. Returns false when there is not — callers treat that
+   *  as "the Host is not there", which is a state slice 1 already made ordinary. */
+  send(m: ClientMessage): boolean {
+    if (!this.socket || this.socket.destroyed) return false
+    this.socket.write(encodeLine(m))
+    return true
+  }
+
+  /** Everything the Host says that is not the handshake. Returns an unsubscribe. */
+  onMessage(cb: (m: HostMessage) => void): () => void {
+    this.subscribers.add(cb)
+    return () => this.subscribers.delete(cb)
   }
 
   /** One attempt at having a working connection: reach the address, spawning a Host if nothing
@@ -135,7 +146,7 @@ export class HostClient {
   private attach(socket: net.Socket): void {
     this.socket = socket
     const read = createLineReader({
-      onMessage: (v) => this.onMessage(v as HostMessage),
+      onMessage: (v) => this.handleHostMessage(v as HostMessage),
       onBadLine: (raw) => this.deps.log(`the Host sent a line that is not JSON: ${raw.slice(0, 200)}`),
       onHandlerError: (v, err) =>
         this.deps.log(`a message from the Host failed: ${JSON.stringify(v).slice(0, 200)} — ${String(err)}`)
@@ -176,7 +187,7 @@ export class HostClient {
     this.send({ t: 'hello', protocol: this.deps.protocol ?? HOST_PROTOCOL, app: this.deps.appVersion })
   }
 
-  private onMessage(m: HostMessage): void {
+  private handleHostMessage(m: HostMessage): void {
     if (m?.t === 'hello') {
       this.clearHandshake()
       this.drops = 0
@@ -202,7 +213,15 @@ export class HostClient {
       this.socket?.end()
       return
     }
-    this.deps.log(`unknown message from the Host: ${JSON.stringify(m).slice(0, 200)}`)
+    for (const cb of [...this.subscribers]) {
+      try {
+        cb(m)
+      } catch (err) {
+        // A subscriber's failure is its own; it must not cost the other subscribers their message,
+        // and nothing may throw out of this class.
+        this.deps.log(`a host message subscriber threw: ${String(err)}`)
+      }
+    }
   }
 
   private fail(problem: string): void {

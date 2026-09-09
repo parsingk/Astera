@@ -1,3 +1,5 @@
+import type { PtyMeta } from '../host/protocol'
+
 export interface PtyLike {
   pid: number
   onData(cb: (data: string) => void): void
@@ -14,6 +16,10 @@ export interface PtySpawnOptions {
   cols: number
   rows: number
   env: Record<string, string | undefined>
+  /** What the app needs to rebuild its own record for this pty after a restart. Only the Host-backed
+   *  factory uses it; nodePtyFactory ignores it, which is what keeps the two interchangeable
+   *  (slice 2 design §4). */
+  meta?: PtyMeta
 }
 
 /**
