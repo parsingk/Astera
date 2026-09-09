@@ -10,7 +10,7 @@ const NOT_INHERITED = /^(ASTERA_SESSION|ASTERA_CLI|ASTERA_SKILLS|CLAUDE_CODE_|CL
 export interface HostSpawnPlan {
   command: string
   args: string[]
-  options: SpawnOptions & { env: NodeJS.ProcessEnv; detached: true; stdio: 'ignore' }
+  options: SpawnOptions & { env: NodeJS.ProcessEnv; cwd: string; detached: true; stdio: 'ignore' }
 }
 
 /** The first candidate that exists, or null when the bundle was never emitted (a partial build, or a
@@ -34,6 +34,11 @@ export function hostSpawnPlan(a: {
     args: [a.entryPath],
     options: {
       detached: true,
+      // The Host outlives the app — by a minute in slice 1, indefinitely from slice 3 — and an
+      // inherited working directory would pin whatever folder the app was launched from for that
+      // whole time: on win32 that blocks deleting the install directory, on posix it keeps a mount
+      // busy. The profile directory is somewhere the Host already has a stake in.
+      cwd: a.profileDir,
       // Nothing reads the Host's output, and a pipe nobody drains would eventually block it. Its log
       // file is where it speaks.
       stdio: 'ignore',

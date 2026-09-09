@@ -41,6 +41,13 @@ describe('hostSpawnPlan', () => {
     expect(plan.options.stdio).toBe('ignore')
   })
 
+  // The Host outlives the app by at least a minute, and from slice 3 indefinitely. Inheriting the
+  // app's working directory would pin whatever folder the app was launched from: on win32 that blocks
+  // deleting the install directory, on posix it keeps a mount busy.
+  it('runs from the profile directory rather than wherever the app was launched', () => {
+    expect(plan.options.cwd).toBe('C:/Users/someone/AppData/Roaming/astera')
+  })
+
   // The Host must not inherit the app's own agent-session variables: it is not a worker, and slice 2
   // will spawn workers from it.
   it('does not pass the app session variables through', () => {
