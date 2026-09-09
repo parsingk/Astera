@@ -96,9 +96,10 @@ export interface Core {
   // calls it again: a dropped connection is not the Host dying, and going back to node-pty there would
   // spawn a session the Host's own ptys cannot be reconciled with. `use(null)` therefore has no caller
   // outside the router's test, and is kept as the honest inverse of a switch that can be made.
-  // `ptysOutliveApp` is the quit path's question: with a Host the ptys are its children and quitting
-  // must leave them running, without one they are the app's own and ending them is still right.
-  ptyRouter: { use(f: PtyFactory | null): void; ptysOutliveApp(): boolean }
+  // The router no longer answers "do the ptys outlive the app" for the app as a whole: it writes that
+  // onto each handle instead (`PtyLike.outlivesApp`), because with a Host starting up both kinds are
+  // live at once and the quit path has to end one and leave the other.
+  ptyRouter: { use(f: PtyFactory | null): void }
 }
 
 // An alias narrowed to just the shape accountLogout actually uses — node:child_process's execFile has so many

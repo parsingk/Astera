@@ -30,19 +30,6 @@ describe('createPtyRouter', () => {
     expect(calls).toEqual(['local:c'])
   })
 
-  // The quit path asks this before it decides whether to end every running session (main/index.ts's
-  // will-quit). With no Host the ptys are this process's own children and killing them is still
-  // right; with a Host they belong to a process that outlives this one, and killing them would undo
-  // the whole slice.
-  it('says the ptys do not outlive the app until a Host factory is installed', () => {
-    const r = createPtyRouter(stub('local', []))
-    expect(r.ptysOutliveApp()).toBe(false)
-    r.use(stub('host', []))
-    expect(r.ptysOutliveApp()).toBe(true)
-    r.use(null)
-    expect(r.ptysOutliveApp()).toBe(false)
-  })
-
   // The Host client installs the factory on every completed handshake, not only the first, so that a
   // first handshake landing after startup gave up still switches the router. That makes a repeat
   // install ordinary rather than a mistake, and it has to stay a no-op for everything already running.
@@ -68,7 +55,6 @@ describe('createPtyRouter', () => {
     p.write('still mine')
     r.factory('b', [], opts)
     expect(calls).toEqual(['host:a', 'host:write:still mine', 'host:b'])
-    expect(r.ptysOutliveApp()).toBe(true)
   })
 
   // **Who made a pty is the one thing nobody can work out afterwards.** The quit path has to end the
@@ -80,6 +66,8 @@ describe('createPtyRouter', () => {
     expect(r.factory('a', [], opts).outlivesApp).toBe(false)
     r.use(stub('host', []))
     expect(r.factory('b', [], opts).outlivesApp).toBe(true)
+    r.use(null)
+    expect(r.factory('c', [], opts).outlivesApp).toBe(false)
   })
 
   // use() changes which factory the *next* call to r.factory reaches — it does not touch a PtyLike
