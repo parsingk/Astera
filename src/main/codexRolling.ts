@@ -303,18 +303,20 @@ export class CodexRollingCoordinator {
       stateSeq: 0
     }
     this.chains.set(info.id, chain)
-    // **Only the adopter can be registering a chain that is already part-way round.** Every other
-    // caller starts a chain on its first account, so the cycle's own 0 is right; a session taken back
-    // from the Host may have rolled onto a later account before the restart, and the account it is
-    // really running under is the one its note carries. Left at 0, the first limit would record the
-    // block against the account at index 0 — and broadcast it to every other chain through
-    // `blocks.record` — then roll to index 1, which is the exhausted account it is already sitting on.
-    // `-1` (an account no longer in the chain) leaves the cycle where it is: 0 is no more wrong than
-    // any other guess, and `advanceTo(-1)` would index nothing.
-    if (!locate) {
-      const at = ids.indexOf(info.accountId)
-      if (at > 0) chain.cycle.advanceTo(at)
-    }
+    // **Where in the chain this session already is** — the same rule, and the same reasoning, as
+    // `RollingCoordinator.register` on the claude side, which has the same cycle and had the same
+    // defect. The cycle starts at 0, which is right for every caller that spawns a session and then
+    // registers it, because all of them put the account they spawned on at the head of the chain.
+    // Adoption is the caller that does not: a session taken back from the Host may have rolled onto a
+    // later account before the restart. Left at 0, its first limit records the block against the
+    // account at index 0, broadcasts that to every other chain through `blocks.record`, and rolls to
+    // index 1 — the exhausted account it is already sitting on.
+    //
+    // Not gated on `locate`, because for every other caller this is the identity: their account is
+    // `ids[0]`, so it reads 0 and nothing moves. `indexOf` cannot answer -1 — see the claude side's
+    // comment for why the two fields cannot disagree.
+    const at = ids.indexOf(info.accountId)
+    if (at > 0) chain.cycle.advanceTo(at)
     // A resuming caller knows the conversation id as `info.resumeSessionId`; the adopter is handed it,
     // because the session it takes back need never have been a resume at all.
     const attachSessionId = codexSessionId ?? info.resumeSessionId
