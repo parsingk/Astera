@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   accountRemovalBlockers,
   historyResumePlan,
+  hostHandshakeMeans,
   parseAllowedExternalUrl,
   providerOfSession,
   liveWorkersFor,
@@ -373,5 +374,30 @@ describe('sessionsTakenBackOnFailure — what startHostClient\'s outer catch set
   // liveWorkersFor's own 'unknown' case exists to prevent.
   it('a peer was seen settles unknown, not null — its sessions are not evidence of nothing', () => {
     expect(sessionsTakenBackOnFailure(true)).toBe('unknown')
+  })
+})
+
+describe('hostHandshakeMeans — what a completed handshake means for the ptys the app already had', () => {
+  const a = '4242@2026-09-09T00:00:00.000Z'
+
+  it('the boot handshake is the startup chain\'s, not a reconnect', () => {
+    expect(hostHandshakeMeans(null, a)).toBe('first')
+  })
+
+  // The load-bearing one. A dropped socket ends every pty handle in the app while the Host keeps
+  // running the processes; if this read as a new Host, nothing would take them back and the app would
+  // sit beside a Host holding live agents it no longer knows about.
+  it('the same Host answering again is a reconnect, and its ptys are still there to take back', () => {
+    expect(hostHandshakeMeans(a, a)).toBe('same-host')
+  })
+
+  it('a different Host means the ptys the old one held are gone', () => {
+    expect(hostHandshakeMeans(a, '5150@2026-09-09T00:00:00.000Z')).toBe('other-host')
+  })
+
+  // A Host that died and whose successor was handed the same pid — ordinary on win32, and the whole
+  // reason `startedAt` is half of the identity rather than the pid being all of it.
+  it('the same pid at a different start time is a different Host', () => {
+    expect(hostHandshakeMeans(a, '4242@2026-09-09T00:00:05.000Z')).toBe('other-host')
   })
 })

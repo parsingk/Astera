@@ -319,6 +319,15 @@ export class SessionManager {
    *  the app. Keeping the id is what leaves that reachable — a later task can re-register a schedule
    *  against this same session — but nothing here re-arms one.
    *
+   *  **Adopting over this manager's own exited record replaces it.** A dropped connection ends every
+   *  Host-backed handle (PTY_LOST_SIGHT_EXIT_CODE) while the Host keeps running the real process, so a
+   *  reconnect adopts a session the app never forgot — it only marked it exited. `track` writes into a
+   *  map keyed by the id, and the id survives, so the new record takes the old one's place and there is
+   *  exactly one live record per pty. Replacing rather than reviving in place is deliberate: reviving
+   *  would leave the dead handle's `onData`/`onExit` closures pointing at a LiveSession that is running
+   *  again, and a late callback from that handle would then move a live session's byte count or mark it
+   *  exited. The dead handle keeps its own object, which nothing reads any more.
+   *
    *  **The caller must hand over a pty it believes is still live.** This method cannot tell: an attach
    *  handle for a process that already ended looks exactly like one for a running process and will never
    *  deliver an exit, so a dead pty adopted here becomes a record stuck at 'running' for the life of the

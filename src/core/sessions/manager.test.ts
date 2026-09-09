@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import type { Account } from '../types'
-import type { PtyFactory, PtyLike, PtySpawnOptions } from './pty'
+import { PTY_LOST_SIGHT_EXIT_CODE, type PtyFactory, type PtyLike, type PtySpawnOptions } from './pty'
 import { SessionManager, prependToPath } from './manager'
 import { buildClaudeCommand, buildCodexCommand } from './commands'
 import { makeDescriptors } from '../providers/descriptor'
@@ -880,6 +880,33 @@ describe('SessionManager', () => {
       const { manager } = setup()
       expect(manager.adopt({ kind: 'session', id: 'sess-from-host', pty: new FakePty(), restore: { cwd: 'D:/p' } })).toBeNull()
       expect(manager.list()).toEqual([])
+    })
+
+    // A dropped connection ends every handle with PTY_LOST_SIGHT_EXIT_CODE, so the manager marks the
+    // session exited while the Host keeps running the real process. When the socket comes back the same
+    // session is adopted again, under the id it never stopped having — so the record this manager holds
+    // has to be the new one, once, rather than a second entry beside the corpse.
+    it('takes a session back over its own exited record, leaving one live record under the same id', () => {
+      const { manager } = setup()
+      const data: string[] = []
+      manager.onData = (e) => data.push(e.data)
+      const dropped = new FakePty()
+      manager.adopt({ kind: 'session', id: 'sess-from-host', pty: dropped, restore: { accountId: account.id, cwd: 'D:/p', title: 't' } })
+      dropped.exitCb({ exitCode: PTY_LOST_SIGHT_EXIT_CODE })
+      expect(manager.list().find((s) => s.id === 'sess-from-host')?.status).toBe('exited')
+
+      const back = new FakePty()
+      const info = manager.adopt({ kind: 'session', id: 'sess-from-host', pty: back, restore: { accountId: account.id, cwd: 'D:/p', title: 't' } })!
+      expect(info.id).toBe('sess-from-host')
+      expect(manager.list().filter((s) => s.id === 'sess-from-host')).toHaveLength(1)
+      expect(manager.list().find((s) => s.id === 'sess-from-host')?.status).toBe('running')
+      // The live record is the new pty's, not the dead one's: input goes to the pty that can take it,
+      // and the old handle is no longer the one the manager answers for.
+      manager.write('sess-from-host', 'hello')
+      expect(back.written).toEqual(['hello'])
+      expect(dropped.written).toEqual([])
+      back.dataCb('from the reattach')
+      expect(data).toEqual(['from the reattach'])
     })
   })
 })

@@ -341,6 +341,44 @@ describe('HostClient', () => {
     await c.stop()
   })
 
+  // The other half of onDisconnect. A drop ends every pty handle in the app, but the Host may well
+  // still be running those ptys — so the reconnect has to be an event somebody can act on, and it has
+  // to say *which* Host answered: the same one still holds them, a fresh one holds nothing.
+  it('reports each completed handshake, with the Host identity that tells a reconnect from a new Host', async () => {
+    const addr = addressFor('connect-identity')
+    let server = await serveAt(addr)
+    const seen: Array<{ pid: number; startedAt: string }> = []
+    const logs: string[] = []
+    const c = new HostClient({
+      address: addr.address,
+      appVersion: '9.0.0',
+      spawnHost: () => {
+        void serveAt(addr).then((s) => {
+          server = s
+        })
+      },
+      log: (m) => logs.push(m),
+      retryMs: 10
+    })
+    c.onConnect((h) => seen.push(h))
+    c.onConnect(() => {
+      throw new Error('connect subscriber one blew up')
+    })
+    c.start()
+    await waitFor(() => seen.length === 1)
+    expect(seen[0].pid).toBe(process.pid)
+
+    await server.close()
+    await settled(c, (s) => s.connected)
+    await waitFor(() => seen.length === 2)
+    // Same process here, so `pid` alone cannot tell them apart — `startedAt` is what does, which is
+    // exactly the case a Host that died and was respawned presents.
+    expect(seen[1].startedAt).not.toBe(seen[0].startedAt)
+    expect(logs.some((l) => l.includes('connect subscriber threw') && l.includes('blew up'))).toBe(true)
+
+    await c.stop()
+  })
+
   // ready() is what lets startup decide the ptyRouter fallback without blocking on a Host that never
   // answers — see reattach.ts and its report for why HostClient grew this beyond what the brief named.
   it('ready() resolves once the handshake completes, well before its own timeout', async () => {

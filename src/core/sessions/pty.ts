@@ -11,6 +11,22 @@ export interface PtyLike {
   resume(): void
 }
 
+/** The exit code a pty handle reports when the **app** lost sight of the process, rather than the
+ *  process reporting how it ended.
+ *
+ *  Only the Host-backed handle produces it, from `onHostGone`: the socket to the Host went away, so no
+ *  `pty-exit` can ever arrive for that pty and a record left 'running' would wait for one forever. The
+ *  process itself is very probably still alive — the Host outlives the app, and the connection
+ *  dropping is not the Host dying.
+ *
+ *  Not a code any real process can report, which is what makes it usable as a signal: node-pty gives
+ *  a status from `waitpid` on posix (0-255) or a Windows exit code, and neither is negative.
+ *
+ *  Read it wherever an exit would otherwise be taken as proof the work ended — orchestration's
+ *  `handleExit` is the one place today, because closing a Dispatch there is what makes P1's reconciler
+ *  start a second agent in a worktree the first is still working in. */
+export const PTY_LOST_SIGHT_EXIT_CODE = -1
+
 export interface PtySpawnOptions {
   cwd: string
   cols: number

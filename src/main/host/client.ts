@@ -51,6 +51,13 @@ export const READY_TIMEOUT_MS = CONNECT_PHASE_MS + HANDSHAKE_MS
 /** After a connection that worked drops, wait before trying again: 1s, 2s, 4s, capped at 30s. */
 const BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]
 
+/** Which Host answered, as the `hello` reports it. Two `hello`s with the same pair came from the same
+ *  process, and one whose registry therefore still holds the ptys this app spawned before the drop. */
+export interface HostIdentity {
+  pid: number
+  startedAt: string
+}
+
 const sleep = (ms: number): Promise<void> =>
   new Promise((r) => {
     const timer = setTimeout(r, ms)
@@ -79,6 +86,8 @@ export class HostClient {
   /** The connection to the Host went away. Notified from the socket's own 'close' handler, before a
    *  reconnect is scheduled — see `onDisconnect`. */
   private readonly disconnectSubscribers = new Set<() => void>()
+  /** A handshake finished. Notified for every one, the first included — see `onConnect`. */
+  private readonly connectSubscribers = new Set<(h: HostIdentity) => void>()
   /** Callers waiting on `ready()` for the current connection attempt to have an outcome. */
   private readonly readyWaiters = new Set<() => void>()
   /** Runs from `attach` until the Host answers. See where it is armed for what it is for. */
@@ -152,6 +161,22 @@ export class HostClient {
   onDisconnect(cb: () => void): () => void {
     this.disconnectSubscribers.add(cb)
     return () => this.disconnectSubscribers.delete(cb)
+  }
+
+  /** A handshake finished — the counterpart to `onDisconnect`, and fired for the first connection as
+   *  well as every reconnect after one.
+   *
+   *  **Why the identity is part of the event.** A drop ends every Host-backed pty handle in the app
+   *  (`onDisconnect` above), but the ptys themselves are very probably still running: the Host outlives
+   *  the app and a dropped socket is not the Host dying. So the subscriber's job is to take those ptys
+   *  back — and whether there is anything to take back depends entirely on *which* Host just answered.
+   *  The same one still holds them; a fresh one, started because the old one really did die, holds an
+   *  empty registry and those ptys are genuinely gone. `pid` and `startedAt` come straight out of the
+   *  `hello`, and together they separate the two cases without guessing (design §11). Returns an
+   *  unsubscribe. */
+  onConnect(cb: (h: HostIdentity) => void): () => void {
+    this.connectSubscribers.add(cb)
+    return () => this.connectSubscribers.delete(cb)
   }
 
   /** Resolves once the current connection attempt has an outcome — connected, or failed for now — or
@@ -290,6 +315,17 @@ export class HostClient {
       }
       this.deps.log(`connected to Host ${m.host} (pid ${m.pid}, protocol ${m.protocol})`)
       this.settleReady()
+      // After settleReady, so a first-connection subscriber and a `ready()` caller see the same
+      // already-connected status rather than racing over it.
+      for (const cb of [...this.connectSubscribers]) {
+        try {
+          cb({ pid: m.pid, startedAt: m.startedAt })
+        } catch (err) {
+          // Same reason a disconnect subscriber's failure does not cost the others theirs: nothing
+          // may throw out of this class.
+          this.deps.log(`a connect subscriber threw: ${String(err)}`)
+        }
+      }
       return
     }
     if (m?.t === 'protocol-mismatch') {

@@ -6,7 +6,12 @@
 // time. Everything else only writes, resizes and listens.
 import { randomUUID } from 'node:crypto'
 import type { ClientMessage, HostMessage } from '../../core/host/protocol'
-import type { PtyFactory, PtyLike, PtySpawnOptions } from '../../core/sessions/pty'
+import {
+  PTY_LOST_SIGHT_EXIT_CODE,
+  type PtyFactory,
+  type PtyLike,
+  type PtySpawnOptions
+} from '../../core/sessions/pty'
 
 export interface HostPtyTransport {
   /** Whether the message actually reached the Host — false with no connection right now, the same
@@ -43,10 +48,12 @@ function handle(t: HostPtyTransport, id: string, startLive: boolean, startPid: n
     onExit({ exitCode })
   }
 
-  // -1 rather than an ordinary code: the process may well still be alive, and this is the app losing
-  // sight of it rather than the pty reporting how it ended.
+  // Not an ordinary code: the process may well still be alive, and this is the app losing sight of it
+  // rather than the pty reporting how it ended. Named rather than written as a literal because it is
+  // read downstream — orchestration's `handleExit` refuses to close a Dispatch on it, which is what
+  // keeps a dropped connection from starting a second agent in a worktree the first still holds.
   const unsubscribeGone = t.onHostGone(() => {
-    if (state !== 'exited') end(-1)
+    if (state !== 'exited') end(PTY_LOST_SIGHT_EXIT_CODE)
   })
 
   const unsubscribe = t.onHostMessage((m) => {

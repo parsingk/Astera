@@ -343,6 +343,27 @@ export function sessionsTakenBackOnFailure(sawPeer: boolean): SessionsTakenBack 
   return sawPeer ? 'unknown' : null
 }
 
+/** What a completed handshake means for the ptys this app already had — the decision behind the
+ *  `onConnect` wiring in `startHostClient`, hoisted here for the same reason `liveWorkersFor` is:
+ *  the wiring itself is an electron-only closure no test can reach, and getting this wrong is the
+ *  duplicate-agent bug from the other direction.
+ *
+ *  `held` is the identity of the Host this app's ptys live in, from the previous `hello`, or null
+ *  before there has been one. `answered` is the identity in the `hello` that just arrived. Both are
+ *  `${pid}@${startedAt}`, which is what makes them comparable: a pid alone repeats when a Host dies
+ *  and its successor is given the same one, and `startedAt` alone is only a timestamp.
+ *
+ *  - `'first'` — nothing was held, so this is the boot handshake and the startup chain is already
+ *    waiting on it. Sweeping here as well would run the same sweep twice.
+ *  - `'same-host'` — the process that holds this app's ptys is back. Their handles ended when the
+ *    socket dropped, but the processes did not, so the app takes them back by id (design §11).
+ *  - `'other-host'` — a different process answered, so the Host that held them really did die and
+ *    took them with it. Its successor's registry is empty and there is nothing to adopt. */
+export function hostHandshakeMeans(held: string | null, answered: string): 'first' | 'same-host' | 'other-host' {
+  if (held === null) return 'first'
+  return held === answered ? 'same-host' : 'other-host'
+}
+
 /** The coordinator's brief, named for the Run it manages. It lives in the same directory as the
  *  workers' spec files, so the boot sweep has to be able to recognise one; `startCoordinator` writes
  *  it. The name is here, in one place, so those two cannot drift. */
@@ -5042,6 +5063,144 @@ export function registerIpc(
         if (!t.send({ t: 'pty-list' })) done(null)
       })
 
+    /** One sweep: ask the Host what it is holding, hand each entry to the manager its note names,
+     *  and report what that answer is worth to the restart cleanup. Run at startup, and again on a
+     *  reconnect to the **same** Host — the onConnect wiring below is where that identity is judged.
+     *
+     *  **Sweeps queue behind each other rather than run side by side.** A drop and a reconnect while
+     *  one is still waiting out its five seconds would otherwise put two `pty-list` round trips and
+     *  two `reattachSessions` walks over the same entries — each adopting, and each asking the Host
+     *  to replay the scrollback again. Queued rather than deduplicated: a sweep that came back with
+     *  nothing is not an answer the next one can reuse. */
+    let sweeps: Promise<unknown> = Promise.resolve()
+    const takeSessionsBack = (why: string): Promise<SessionsTakenBack> => {
+      const next = sweeps.then(() => sweep(why))
+      // The queue must not break on a sweep that threw — the caller keeps that rejection.
+      sweeps = next.catch(() => undefined)
+      return next
+    }
+    const sweep = async (why: string): Promise<SessionsTakenBack> => {
+      // Asked here rather than from inside reattach's `list` dep so the unanswered case can be its
+      // own answer: reattach has no way to say "I was told nothing", and an empty list would have
+      // it adopt nothing and report nothing adopted, which reads identically to a Host that really
+      // is holding nothing.
+      const entries = await listPtys(transport)
+      if (entries === null) {
+        hostLog(
+          'host: the Host did not answer the pty list — nothing was taken back, and what it is still running is unknown, so no worker is written off'
+        )
+        return 'unknown'
+      }
+      const res = await reattachSessions({
+        list: async () => entries,
+        attach,
+        sendAttach: (id) => transport.send({ t: 'pty-attach', id }),
+        kill: (id) => transport.send({ t: 'pty-kill', id }),
+        adopters: {
+          session: (a) => {
+            const info = core.sessions.adopt(a)
+            if (!info) return false
+            // The pty came back; the things the app hung off it did not. Rolling and Slack are
+            // registered from the SessionInfo right after core.sessions.spawn() elsewhere in this
+            // file, so registering the rebuilt one puts a recovered worker back on the same footing
+            // (design §10) — including its tab: the renderer builds one from `session:created` the
+            // same way it does for a freshly spawned session, since reattaching can land well after
+            // the renderer has already mounted.
+            const coordinator = rollCoordinatorForSession(info.id, core.sessions.list(), (id) => core.accounts.get(id))
+            if ((info.rollAccountIds?.length ?? 0) >= 1) {
+              // The `false` is `locate` (CodexRollingCoordinator.register's 4th argument): an
+              // adopted session must not run the locate poll — see that parameter's own doc comment
+              // for why the discovery it would run is actively harmful here, not merely useless.
+              // What it costs, beyond rolling itself, is this coordinator's own two lookups, which
+              // stay null for the session's whole life: tabResumeTextFor, so handover and update
+              // text degrade to the git-only form; and findLiveByCodexSession, the guard that stops
+              // a conversation reopened from history being resumed while it is still live. Without
+              // that guard, reopening an adopted rolling codex conversation starts a second
+              // `codex resume` appending to a rollout the live pty is still writing. That is still
+              // better than the alternative this replaced, which guarded the *wrong* conversation,
+              // and it goes away with the same follow-up store the block below names.
+              if (coordinator === 'codexRolling') codexRolling?.register(info, undefined, undefined, false)
+              else if (coordinator === 'rolling') rolling?.register(info)
+            }
+            // codexRollout is deliberately NOT registered here, unlike the unconditional block at
+            // spawn, for the same discovery hazard `codexRolling`'s `locate: false` above avoids —
+            // this watcher has no such switch, so the only safe choice is skipping it entirely. It
+            // keys the session's rollout file by `findRollout({ since, cwd, ... })`, which for a
+            // freshly spawned session is safe because since = the spawn moment: at that instant
+            // nothing else can have a newer file in the same cwd/account, so "pick the newest
+            // candidate created after since" always resolves to this session's own file. An adopted
+            // session's real spawn was before the restart, so since would have to be that earlier
+            // moment — and between then and whenever the scan actually runs, another session can
+            // legitimately open in the same cwd/account and create a newer file, which "newest wins"
+            // would hand to the adopted entry instead, permanently locking the rightful session out
+            // of its own file via claimed()'s excludePaths. There is no narrower since that fixes
+            // this: the discovery rule itself assumes the caller's own file is definitionally the
+            // newest thing that exists the moment a match is found, which only holds right after a
+            // real spawn. Four things hang off this one discovery, and an adopted codex session gets
+            // none of them until it exits and a fresh one is spawned in its place: the usage chips
+            // (CodexRolloutWatcher.usage), turn-triggered Slack notifications (onTurnComplete),
+            // Work Unit detection (rolloutPathFor feeds the transcript path), and the scheduler's
+            // key (codexSessionIdFor). A store keyed by app session id, filled from the path the
+            // watcher already logs at map time and read back here, would answer this exactly instead
+            // of heuristically — but PtyMeta is write-once at spawn and the Host protocol has no
+            // meta-update message, so that store does not exist yet. Left as a named follow-up.
+            if (info.slackNotify === true) {
+              try {
+                slack?.notifier.register(info)
+              } catch {
+                /* A failed Slack registration does not block taking the session back */
+              }
+            }
+            try {
+              send('session:created', info)
+            } catch (err) {
+              orchLog(`session:created emit failed session=${info.id}: ${String(err)}`)
+            }
+            return true
+          },
+          // Runs need no created-event of their own: RunManager.adopt's track() already fires
+          // onStatus for every adopt the same as it does for a fresh start, and core.run.onStatus is
+          // wired to send('run:status', ...) — the renderer's upsertRun adds a runId it has not seen
+          // the same way it applies any other update. Terminals have no such push at all — a project
+          // panel already open when one is adopted will not show it until terminal.list(projectPath)
+          // is queried again (reopening the panel, or reloading the project); nothing here invents
+          // one, since none of terminal.open's own callers get one either.
+          run: (a) => core.run.adopt(a) !== null,
+          terminal: (a) => core.terminal.adopt(a) !== null
+        },
+        log: (m) => hostLog(`host: ${m}`)
+      })
+      hostLog(`host: took back ${res.adopted} session(s), refused ${res.refused} (${why})`)
+      return res
+    }
+
+    /** Which Host this app's ptys belong to, as `${pid}@${startedAt}` from the last `hello`, or null
+     *  before the first one. The pair is what separates the two things a reconnect can mean. */
+    let heldBy: string | null = null
+    hostClient.onConnect((h) => {
+      const answered = `${h.pid}@${h.startedAt}`
+      const previous = heldBy
+      const means = hostHandshakeMeans(previous, answered)
+      heldBy = answered
+      // The boot handshake belongs to the chain below, which is already waiting on `ready()` for
+      // exactly this moment. Sweeping here as well would be the same sweep twice.
+      if (means === 'first') return
+      if (means === 'other-host') {
+        // The Host this app's ptys lived in really did die, and its successor's registry is empty.
+        // Nothing to take back: the handles have already ended themselves through onHostGone and each
+        // manager has marked its record exited, which is the path design §11 names for this case.
+        hostLog(`host: a different Host answered (${answered}, was ${previous}) — the ptys the old one held are gone`)
+        return
+      }
+      // The same Host, still holding the ptys whose handles ended when the socket dropped. Take them
+      // back by id: `reattachSessions` rebuilds each manager's record over the exited one and the ring
+      // buffer covers the gap (design §11). The result is not reported to `hostSessionsTakenBack` —
+      // that promise answers the boot cleanup's one question and has long since settled.
+      void takeSessionsBack('after a reconnect').catch((e) =>
+        hostLog(`host: taking sessions back after a reconnect failed: ${String(e)}`)
+      )
+    })
+
     // Reported, not merely done: `bootOrch`'s restart cleanup waits on the outcome of this to learn
     // which workers are still running — see `hostSessionsTakenBack`'s own note. Every path out of the
     // chain settles it, with one of the three answers `SessionsTakenBack` names, and which one each
@@ -5072,98 +5231,7 @@ export function registerIpc(
         // later: a pty-spawn that HostClient.send refuses ends the handle itself instead of waiting on a
         // reply that will never come.
         core.ptyRouter.use(factory)
-        // Asked here rather than from inside reattach's `list` dep so the unanswered case can be its
-        // own answer: reattach has no way to say "I was told nothing", and an empty list would have
-        // it adopt nothing and report nothing adopted, which reads identically to a Host that really
-        // is holding nothing.
-        const entries = await listPtys(transport)
-        if (entries === null) {
-          hostLog(
-            'host: the Host did not answer the pty list — nothing was taken back, and what it is still running is unknown, so no worker is written off'
-          )
-          return 'unknown'
-        }
-        const res = await reattachSessions({
-          list: async () => entries,
-          attach,
-          sendAttach: (id) => transport.send({ t: 'pty-attach', id }),
-          kill: (id) => transport.send({ t: 'pty-kill', id }),
-          adopters: {
-            session: (a) => {
-              const info = core.sessions.adopt(a)
-              if (!info) return false
-              // The pty came back; the things the app hung off it did not. Rolling and Slack are
-              // registered from the SessionInfo right after core.sessions.spawn() elsewhere in this
-              // file, so registering the rebuilt one puts a recovered worker back on the same footing
-              // (design §10) — including its tab: the renderer builds one from `session:created` the
-              // same way it does for a freshly spawned session, since reattaching can land well after
-              // the renderer has already mounted.
-              const coordinator = rollCoordinatorForSession(info.id, core.sessions.list(), (id) => core.accounts.get(id))
-              if ((info.rollAccountIds?.length ?? 0) >= 1) {
-                // The `false` is `locate` (CodexRollingCoordinator.register's 4th argument): an
-                // adopted session must not run the locate poll — see that parameter's own doc comment
-                // for why the discovery it would run is actively harmful here, not merely useless.
-                // What it costs, beyond rolling itself, is this coordinator's own two lookups, which
-                // stay null for the session's whole life: tabResumeTextFor, so handover and update
-                // text degrade to the git-only form; and findLiveByCodexSession, the guard that stops
-                // a conversation reopened from history being resumed while it is still live. Without
-                // that guard, reopening an adopted rolling codex conversation starts a second
-                // `codex resume` appending to a rollout the live pty is still writing. That is still
-                // better than the alternative this replaced, which guarded the *wrong* conversation,
-                // and it goes away with the same follow-up store the block below names.
-                if (coordinator === 'codexRolling') codexRolling?.register(info, undefined, undefined, false)
-                else if (coordinator === 'rolling') rolling?.register(info)
-              }
-              // codexRollout is deliberately NOT registered here, unlike the unconditional block at
-              // spawn, for the same discovery hazard `codexRolling`'s `locate: false` above avoids —
-              // this watcher has no such switch, so the only safe choice is skipping it entirely. It
-              // keys the session's rollout file by `findRollout({ since, cwd, ... })`, which for a
-              // freshly spawned session is safe because since = the spawn moment: at that instant
-              // nothing else can have a newer file in the same cwd/account, so "pick the newest
-              // candidate created after since" always resolves to this session's own file. An adopted
-              // session's real spawn was before the restart, so since would have to be that earlier
-              // moment — and between then and whenever the scan actually runs, another session can
-              // legitimately open in the same cwd/account and create a newer file, which "newest wins"
-              // would hand to the adopted entry instead, permanently locking the rightful session out
-              // of its own file via claimed()'s excludePaths. There is no narrower since that fixes
-              // this: the discovery rule itself assumes the caller's own file is definitionally the
-              // newest thing that exists the moment a match is found, which only holds right after a
-              // real spawn. Four things hang off this one discovery, and an adopted codex session gets
-              // none of them until it exits and a fresh one is spawned in its place: the usage chips
-              // (CodexRolloutWatcher.usage), turn-triggered Slack notifications (onTurnComplete),
-              // Work Unit detection (rolloutPathFor feeds the transcript path), and the scheduler's
-              // key (codexSessionIdFor). A store keyed by app session id, filled from the path the
-              // watcher already logs at map time and read back here, would answer this exactly instead
-              // of heuristically — but PtyMeta is write-once at spawn and the Host protocol has no
-              // meta-update message, so that store does not exist yet. Left as a named follow-up.
-              if (info.slackNotify === true) {
-                try {
-                  slack?.notifier.register(info)
-                } catch {
-                  /* A failed Slack registration does not block taking the session back */
-                }
-              }
-              try {
-                send('session:created', info)
-              } catch (err) {
-                orchLog(`session:created emit failed session=${info.id}: ${String(err)}`)
-              }
-              return true
-            },
-            // Runs need no created-event of their own: RunManager.adopt's track() already fires
-            // onStatus for every adopt the same as it does for a fresh start, and core.run.onStatus is
-            // wired to send('run:status', ...) — the renderer's upsertRun adds a runId it has not seen
-            // the same way it applies any other update. Terminals have no such push at all — a project
-            // panel already open when one is adopted will not show it until terminal.list(projectPath)
-            // is queried again (reopening the panel, or reloading the project); nothing here invents
-            // one, since none of terminal.open's own callers get one either.
-            run: (a) => core.run.adopt(a) !== null,
-            terminal: (a) => core.terminal.adopt(a) !== null
-          },
-          log: (m) => hostLog(`host: ${m}`)
-        })
-        hostLog(`host: took back ${res.adopted} session(s), refused ${res.refused}`)
-        return res
+        return takeSessionsBack('at startup')
       })
       // Settles rather than rejecting, so `bootOrch` can await this without a try and nothing from
       // the Host throws into the app. `'unknown'`, not null: a reattach that blew up cannot say which
