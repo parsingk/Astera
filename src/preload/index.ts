@@ -278,7 +278,7 @@ const api = {
   },
   host: {
     status: invoke('host.status'),
-    ptysOutliveApp: invoke('host.ptysOutliveApp')
+    sessionsOutlivingApp: invoke('host.sessionsOutlivingApp')
   },
   platform: process.platform,
   win: {

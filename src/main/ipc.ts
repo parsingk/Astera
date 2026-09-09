@@ -5334,8 +5334,10 @@ export function registerIpc(
       // changed is the other end — installing it only from the boot chain left one corner where the
       // router stayed on node-pty while the Host answered: a first handshake that lands after
       // `ready()` has given up. A later reconnect would then sweep and adopt the Host's ptys into a
-      // router still pointing at node-pty, so `ptysOutliveApp()` answered false while the Host really
-      // owned them — and the quit path would kill the very sessions this branch exists to keep.
+      // router still pointing at node-pty, so every pty spawned after that would be marked as the
+      // app's own while the Host really owned them — and the quit path would kill the very sessions
+      // this branch exists to keep. (The ones adopted by that sweep are marked by `attach` and are
+      // safe either way.)
       // Idempotent: `use` is one assignment of the same object, and it only changes which factory the
       // *next* spawn reaches, never a handle already handed out (see ptyRouter's own tests).
       core.ptyRouter.use(factory)
@@ -5435,10 +5437,16 @@ export function registerIpc(
         problem: 'out/main/host.js was not found'
       }
   )
-  // Not derived from `host.status()` by the caller: `connected` false covers both "there was never a
-  // Host" and "the connection dropped while the Host kept running the ptys", and those are opposite
-  // answers to this question. The router holds the one that matters — see its `ptysOutliveApp`.
-  ipcMain.handle('host.ptysOutliveApp', () => core.ptyRouter.ptysOutliveApp())
+  // How many of the running sessions would still be running after this app quits — the window-close
+  // confirmation's question (App.tsx's closeWindow, then `quitConfirmBody`).
+  //
+  // A count, not a flag, and not derived from `host.status()` either. `connected` false covers both
+  // "there was never a Host" and "the connection dropped while the Host kept running the ptys", which
+  // are opposite answers here; and even `connected` true is the wrong question, because a session
+  // spawned in the window before the Host answered is this app's own child and really does end with
+  // it. `SessionManager` counts the ptys the router marked, which is the same fact `will-quit` acts
+  // on.
+  ipcMain.handle('host.sessionsOutlivingApp', () => core.sessions.runningOutlivingApp().length)
 
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is

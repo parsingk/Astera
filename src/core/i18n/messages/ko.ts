@@ -181,12 +181,18 @@ export const ko = {
   // App.tsx — Linux에서만 뜨는 창 닫기 확인. 거기서는 트레이로 숨는 대신 앱이 실제로 종료되고
   // will-quit이 실행 중 세션을 모두 죽인다. 업데이트 설치와 같은 결과이므로 같은 동의를 받는다
   // Slice 2 of the Astera Host: the comment above still describes the no-Host case, which is now one
-  // of two. When a Host owns the ptys, will-quit leaves them running and `bodyKept` below is what the
-  // person is shown instead; App.tsx picks between the two by asking host.ptysOutliveApp().
+  // of three. When the Host owns a session's pty, will-quit leaves it running; the Host takes a moment
+  // to start, so a session spawned at boot can be the app's own child while a later one is the Host's.
+  // App.tsx picks between the three by counting, through host.sessionsOutlivingApp() — see
+  // `quitConfirmBody`. `bodyKept` is every session surviving, `bodyMixed` is some of them.
   'common.quitConfirm.title': '닫고 Astera 종료',
   'common.quitConfirm.body': '창을 닫으면 Astera가 종료되고 진행 중인 세션 {count}개도 함께 종료됩니다. 계속할까요?',
   'common.quitConfirm.bodyKept':
     '창을 닫으면 Astera가 종료됩니다. 진행 중인 세션 {count}개는 계속 실행되고, 다시 열면 그대로 돌아옵니다. 계속할까요?',
+  // Provisional Korean, awaiting the maintainer's wording — the English in en.ts is the sentence
+  // this key is meant to say, and es/ja reach it through the en fallback (see `t`).
+  'common.quitConfirm.bodyMixed':
+    '창을 닫으면 Astera가 종료됩니다. 진행 중인 세션 중 {kept}개는 계속 실행되고 다시 열면 돌아오지만, {ended}개는 함께 종료됩니다. 계속할까요?',
   // index.ts — system tray context menu
   'common.trayOpen': '열기',
   'common.trayQuit': '종료',

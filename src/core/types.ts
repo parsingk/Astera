@@ -1254,12 +1254,14 @@ export type RendererApi = CoreApi & {
    *  open, so the slice can be checked by a person rather than only by tests. */
   host: {
     status(): Promise<HostStatus>
-    /** Whether the sessions, Runs and terminals now running would keep running if the app quit —
-     *  true exactly when a Host owns their ptys. Asked at the moment the window-close confirmation is
-     *  about to tell the person what quitting costs them, because that answer changes during a run
-     *  (the Host connects some milliseconds after launch) and a stale one would be a false promise
-     *  either way. */
-    ptysOutliveApp(): Promise<boolean>
+    /** How many of the running sessions would keep running if the app quit — the ones whose ptys the
+     *  Host owns. Asked at the moment the window-close confirmation is about to tell the person what
+     *  quitting costs them, because the answer changes during a run (the Host connects some
+     *  milliseconds after launch) and a stale one would be a false promise either way.
+     *
+     *  A count rather than a flag because the two kinds coexist: a session spawned before the Host
+     *  answered is this app's own child and ends with it, whatever the Host owns by now. */
+    sessionsOutlivingApp(): Promise<number>
   }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }
