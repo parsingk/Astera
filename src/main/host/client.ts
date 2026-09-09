@@ -29,8 +29,9 @@ const DEFAULT_ATTEMPTS = 25
 const DEFAULT_RETRY_MS = 200
 /** An upper bound on how long `cycle()` can spend trying to reach a peer at all, when neither
  *  `attempts` nor `retryMs` is overridden — `DEFAULT_ATTEMPTS` tries, `DEFAULT_RETRY_MS` apart, is
- *  this constant's own arithmetic. It rounds up rather than under: the true worst case is one
- *  `DEFAULT_RETRY_MS` shorter, since the last try itself needs no wait after it. Exported so a caller
+ *  this constant's own arithmetic, and it is the real figure rather than a rounded one: `cycle()`
+ *  sleeps after the last failed try as well, on its way to giving up, so a peer that never answers
+ *  costs all `DEFAULT_ATTEMPTS` waits and not one fewer. Exported so a caller
  *  waiting on `ready()` can size its own timeout from the real number instead of guessing one — see
  *  HANDSHAKE_MS just below, which is the phase that follows this one and has to be added to it, not
  *  used instead of it; READY_TIMEOUT_MS is that sum, already computed. */

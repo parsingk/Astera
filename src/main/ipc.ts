@@ -4828,7 +4828,7 @@ export function registerIpc(
       .ready(HOST_READY_MS)
       .then(async () => {
         if (!hostClient?.status().connected) {
-          orchLog('host: no Host, so terminals stay in the app exactly as before')
+          hostLog('host: no Host, so terminals stay in the app exactly as before')
           return
         }
         // Installed only now, with a live connection in hand — not at the top of this function, where
@@ -4859,6 +4859,14 @@ export function registerIpc(
                 // The `false` is `locate` (CodexRollingCoordinator.register's 4th argument): an
                 // adopted session must not run the locate poll — see that parameter's own doc comment
                 // for why the discovery it would run is actively harmful here, not merely useless.
+                // What it costs, beyond rolling itself, is this coordinator's own two lookups, which
+                // stay null for the session's whole life: tabResumeTextFor, so handover and update
+                // text degrade to the git-only form; and findLiveByCodexSession, the guard that stops
+                // a conversation reopened from history being resumed while it is still live. Without
+                // that guard, reopening an adopted rolling codex conversation starts a second
+                // `codex resume` appending to a rollout the live pty is still writing. That is still
+                // better than the alternative this replaced, which guarded the *wrong* conversation,
+                // and it goes away with the same follow-up store the block below names.
                 if (coordinator === 'codexRolling') codexRolling?.register(info, undefined, undefined, false)
                 else if (coordinator === 'rolling') rolling?.register(info)
               }
@@ -4908,11 +4916,11 @@ export function registerIpc(
             run: (a) => core.run.adopt(a) !== null,
             terminal: (a) => core.terminal.adopt(a) !== null
           },
-          log: (m) => orchLog(`host: ${m}`)
+          log: (m) => hostLog(`host: ${m}`)
         })
-        orchLog(`host: took back ${res.adopted} session(s), refused ${res.refused}`)
+        hostLog(`host: took back ${res.adopted} session(s), refused ${res.refused}`)
       })
-      .catch((e) => orchLog(`host: taking sessions back failed: ${String(e)}`))
+      .catch((e) => hostLog(`host: taking sessions back failed: ${String(e)}`))
 
     hostWiring?.onHostClientReady(() => client.stop())
   }
