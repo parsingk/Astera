@@ -276,6 +276,9 @@ const api = {
     complete: invoke('sessionTasks.complete'),
     cancel: invoke('sessionTasks.cancel')
   },
+  host: {
+    status: invoke('host.status')
+  },
   platform: process.platform,
   win: {
     minimize: () => ipcRenderer.send('win.minimize'),

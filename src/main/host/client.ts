@@ -4,16 +4,11 @@
 import net from 'node:net'
 import { HOST_PROTOCOL, type ClientMessage, type HostMessage } from '../../core/host/protocol'
 import { encodeLine, createLineReader } from '../../host/framing'
+import type { HostStatus } from '../../core/types'
 
-export interface HostStatus {
-  connected: boolean
-  protocol: number | null
-  hostVersion: string | null
-  startedAt: string | null
-  pid: number | null
-  /** One clause saying why there is no connection, or null when there is one. */
-  problem: string | null
-}
+// HostStatus is declared in core/types.ts, not here, so the renderer can name it without importing
+// from src/main. Re-exported so this file's own tests keep compiling against it.
+export type { HostStatus }
 
 export interface HostClientDeps {
   address: string

@@ -1,7 +1,8 @@
 import { ipcMain, dialog, app, shell, session, webContents, type BrowserWindow, type WebContents } from 'electron'
 import { promises as fs, existsSync, readFileSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
-import { execFile } from 'node:child_process'
+import os from 'node:os'
+import { execFile, spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { Core } from './core'
 import type { RollingCoordinator } from './rolling'
@@ -11,6 +12,9 @@ import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
 import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
+import { HostClient } from './host/client'
+import { hostSpawnPlan, resolveHostEntry } from './host/spawn'
+import { hostAddress } from '../host/address'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
 import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, SessionInfo } from '../core/types'
@@ -436,6 +440,9 @@ export function registerIpc(
    *  따로 두는 이유는 onExit 이 orch 대입보다 훨씬 먼저 배선되기 때문이다 — 그 콜백은 호출 시점에
    *  이 변수를 읽는다. */
   let orchRollTap: OrchRollTap | null = null
+  /** Astera Host slice 1: the channel exists, and nothing depends on it yet. Built at startup so
+   *  slices 2 and 3 inherit an open line rather than one they have to reach for (design §7). */
+  let hostClient: HostClient | null = null
   /** Job Continuity's recorder. Non-null only while the toggle is on: off means no file is opened and
    *  nothing is written (spec §0.4). Created before store.load in bootOrch so the restart's losses are
    *  journaled, and by the toggle handler when turned on at runtime. */
@@ -4688,6 +4695,52 @@ export function registerIpc(
     await core.appSettings.setTheme(id)
     return core.appSettings.getTheme()
   })
+
+  // Astera Host slice 1. Unconditional — the Host is not an orchestration feature, so this must not
+  // go inside bootOrch, which only runs when that toggle is on. A missing out/main/host.js (a partial
+  // build, or a packaging mistake) leaves hostClient null and the app runs exactly as it does today.
+  const startHostClient = (): void => {
+    const profileDir = app.getPath('userData')
+    const entry = resolveHostEntry(
+      [path.join(app.getAppPath(), 'out', 'main', 'host.js'), path.join(__dirname, 'host.js')],
+      existsSync
+    )
+    if (!entry) {
+      orchLog('host: out/main/host.js was not found — the app runs without a Host')
+      return
+    }
+    const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir() })
+    hostClient = new HostClient({
+      address: addr.address,
+      appVersion: app.getVersion(),
+      log: (m) => orchLog(`host: ${m}`),
+      spawnHost: () => {
+        const plan = hostSpawnPlan({
+          execPath: process.execPath,
+          entryPath: entry,
+          profileDir,
+          logPath: path.join(profileDir, 'host', 'host.log'),
+          version: app.getVersion()
+        })
+        spawn(plan.command, plan.args, plan.options).unref()
+      }
+    })
+    hostClient.start()
+  }
+  startHostClient()
+
+  ipcMain.handle(
+    'host.status',
+    () =>
+      hostClient?.status() ?? {
+        connected: false,
+        protocol: null,
+        hostVersion: null,
+        startedAt: null,
+        pid: null,
+        problem: 'the Host client was not built'
+      }
+  )
 
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is
