@@ -70,7 +70,7 @@ describe('startHostServer', () => {
     expect(reply).toEqual({ t: 'protocol-mismatch', protocol: HOST_PROTOCOL })
   })
 
-  it('serves a second client from the same server rather than a second one', async () => {
+  it('answers a second client with the same identity', async () => {
     const h = await server()
     const [first] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
     const [second] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
@@ -95,12 +95,35 @@ describe('startHostServer', () => {
     expect(reply).toMatchObject({ t: 'hello', host: '9.9.9' })
   })
 
-  it('retire makes it stop listening', async () => {
+  it('retire asks the caller to leave', async () => {
     let retired = false
     const h = await server({ onIdle: () => { retired = true } })
     await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }, { t: 'retire' }])
     await new Promise((r) => setTimeout(r, 200))
     expect(retired).toBe(true)
+  })
+
+  // `close()` destroys the sockets it still holds, and each one's 'close' event arrives after
+  // `close()` has returned. Without a guard that deferred event re-arms the idle timer and the Host
+  // is told to leave a second time, on a server that has already gone.
+  it('does not ask to leave again when it is closed with a client still connected', async () => {
+    let asked = 0
+    const h = await server({ idleMs: 50, onIdle: () => { asked += 1 } })
+    await new Promise<void>((resolve) => {
+      const sock = net.connect(h.address)
+      sock.setEncoding('utf8')
+      sock.on('connect', () => {
+        sock.write(encodeLine({ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }))
+        sock.write(encodeLine({ t: 'retire' }))
+        resolve()
+      })
+    })
+    await new Promise((r) => setTimeout(r, 100))
+    expect(asked).toBe(1)
+    await h.s.close()
+    await new Promise((r) => setTimeout(r, 300))
+    expect(asked).toBe(1)
+    await expect(h.s.close()).resolves.toBeUndefined()
   })
 
   // The idle timer is injected rather than waited out: a test that sleeps sixty seconds is a test

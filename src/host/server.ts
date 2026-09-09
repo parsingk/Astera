@@ -52,8 +52,13 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
   let live = 0
   let idleTimer: ReturnType<typeof setTimeout> | null = null
   const sockets = new Set<net.Socket>()
+  // Set at the top of close(), before any socket is destroyed. A destroyed socket's 'close' event
+  // arrives asynchronously, after close() has already returned — without this flag that deferred
+  // event would re-arm the idle timer on a server that is already gone, and onIdle() would fire again.
+  let closing = false
 
   const armIdle = (): void => {
+    if (closing) return
     if (idleTimer) clearTimeout(idleTimer)
     idleTimer = setTimeout(() => {
       if (live === 0) {
@@ -118,12 +123,19 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
         return reject(new Error(ADDRESS_TAKEN))
       }
       deps.log.write('a socket file was left behind by an earlier Host — replaced')
-      server.once('error', reject)
+      // A raw errno here would leave the caller unable to tell "somebody else has it" from a real
+      // fault, same as the first attempt above.
+      server.once('error', () => reject(new Error(ADDRESS_TAKEN)))
       server.listen(deps.address, resolve)
     }
     server.once('error', (e) => void onError(e as NodeJS.ErrnoException))
     server.listen(deps.address, resolve)
   })
+  // The listener above only ever needed to catch a bind-time error. Left attached, it would sit for
+  // the server's whole life and swallow a later runtime error as an unheard `reject` on a promise
+  // that settled long ago, instead of the error reaching the log.
+  server.removeAllListeners('error')
+  server.on('error', (err) => deps.log.write(`server error: ${String(err)}`))
 
   deps.log.write(`listening at ${deps.address}`)
   armIdle()
@@ -132,6 +144,10 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     clients: () => live,
     close: () =>
       new Promise<void>((resolve) => {
+        // Idempotent: a deferred socket 'close' can call back in after this has already run once
+        // (see `closing` above), and the caller has no obligation to call this at most once either.
+        if (closing) return resolve()
+        closing = true
         if (idleTimer) clearTimeout(idleTimer)
         // `server.close` stops accepting and waits for the open connections. The Host is leaving, so
         // it does not wait: a peer that has already ended its side may not have been reaped yet, and
