@@ -164,6 +164,18 @@ describe('CodexRolloutWatcher', () => {
     w.stop()
   })
 
+  // A session taken back from the Host is registered with the path its note carried, and that note
+  // carries the id beside it. Unlike a resume, an adopted session has no `info.resumeSessionId` to hold
+  // the id instead — left null here, nothing could ever answer the scheduler for it and its schedule
+  // could not be found in a store keyed by exactly this value.
+  it('answers the codex session id handed over beside the path', () => {
+    const cwd = path.join(dir, 'proj')
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, now: () => now })
+    w.register(session('live-1', cwd), path.join(dir, 'one.jsonl'), 'cx-1')
+    expect(w.codexSessionIdFor('live-1')).toBe('cx-1')
+    w.stop()
+  })
+
   it('등록되지 않은 세션의 codex 세션 id는 null이다', () => {
     const w = new CodexRolloutWatcher({
       getAccount: () => account(dir),

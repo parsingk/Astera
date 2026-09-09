@@ -371,22 +371,24 @@ export function hostHandshakeMeans(held: string | null, answered: string): 'firs
  * adopted session, so a scheduled session came back from a restart with no schedule, no warning, and
  * no way to get it back short of ending the conversation that survived and reopening it from history.
  *
- * **Read from the scheduler's own store rather than carried in the Host's note.** `PtyMeta` is
- * write-once at spawn and the protocol has no message that could update it, so a note would revive a
- * schedule the person turned off afterwards. The store is the fresher truth — `scheduler.disable`
- * deletes from it.
+ * **Read from the scheduler's own store rather than carried in the Host's note.** The note can be
+ * patched now (`pty-note`), but nothing would patch this one: `scheduler.disable` deletes from the
+ * store, and a note nobody thought to clear there would revive a schedule the person turned off. The
+ * store is the fresher truth, and the note is only ever asked for the *key* to read it under.
  *
  * **The store is keyed by the conversation's own session id, not by the app's** (SchedulerConfigStore:
  * "Key = claude session id"). That key is still reachable after a restart for the same reason design
  * §10 gives for keeping the app session id: either the session was started as a resume and carries the
- * key as `resumeSessionId`, or the CLI wrote its statusLine payload to a file in the profile named
- * after the app session id — which is exactly where `SchedulerCoordinator.learnKey` reads it from, so
- * this is that lookup run once rather than a second way of doing it.
+ * key as `resumeSessionId`, or it was learned while the session ran and written down somewhere named
+ * after the app session id, which adoption keeps. `learnedSessionId` is that second source, and which
+ * file it came out of is the caller's business: for claude the statusLine payload the CLI writes into
+ * the profile — the same place `SchedulerCoordinator.learnKey` reads, so this is that lookup run once
+ * rather than a second way of doing it — and for codex, which writes no statusLine at all, the id its
+ * rollout watcher mapped and left in the Host's note.
  *
- * codex has neither: it writes no statusLine, and the rollout watcher that knows its id is
- * deliberately left unregistered for an adopted session (the codexRollout note in the reattach
- * adopter). `statusLineSessionId` is null there, so the answer is null and the schedule stays lost —
- * stated, not guessed at.
+ * Null when neither source knows the conversation: a claude session whose capture file is gone, or a
+ * codex one whose rollout the scan had not mapped before the app went down. Then there is no schedule
+ * to re-arm, stated rather than guessed at.
  *
  * A pure function for the same reason `rollCoordinatorForSession` is one: the wiring is an
  * electron-only closure inside `registerIpc`, and this is the exact place the app session id could be
@@ -394,12 +396,36 @@ export function hostHandshakeMeans(held: string | null, answered: string): 'firs
  */
 export function scheduleForAdoptedSession(
   info: { id: string; resumeSessionId?: string },
-  statusLineSessionId: string | null,
+  learnedSessionId: string | null,
   stored: (key: string) => ScheduleConfig | null
 ): ScheduleConfig | null {
-  const key = info.resumeSessionId ?? statusLineSessionId
+  const key = info.resumeSessionId ?? learnedSessionId
   if (!key) return null
   return stored(key)
+}
+
+/**
+ * What the Host's note says about an adopted session's codex rollout, or null when it says nothing.
+ *
+ * The path is what `CodexRolloutWatcher.register` needs to attach without scanning, and null is a
+ * refusal to register at all — for an adopted session the scan is not merely useless but harmful, and
+ * the adopter's own note at the call site gives that argument in full. The codex session id rides
+ * along because the same mapping produced it and the scheduler's store is keyed by it.
+ *
+ * The two fields are narrowed separately: they come from a note that crossed a process boundary, and
+ * a build that wrote only the path should still get its session watched.
+ *
+ * A pure function for the same reason `scheduleForAdoptedSession` above is one — the adopter that
+ * calls it is an electron-only closure, and "register only when the path is really there" is the
+ * whole of the protection that closure is carrying.
+ */
+export function codexRolloutFromNote(
+  restore: Record<string, unknown>
+): { rolloutPath: string; codexSessionId: string | null } | null {
+  const rolloutPath = restore.rolloutPath
+  if (typeof rolloutPath !== 'string' || rolloutPath === '') return null
+  const codexSessionId = restore.codexSessionId
+  return { rolloutPath, codexSessionId: typeof codexSessionId === 'string' ? codexSessionId : null }
 }
 
 /** The coordinator's brief, named for the Run it manages. It lives in the same directory as the
@@ -5188,28 +5214,46 @@ export function registerIpc(
               if (coordinator === 'codexRolling') codexRolling?.register(info, undefined, undefined, false)
               else if (coordinator === 'rolling') rolling?.register(info)
             }
-            // codexRollout is deliberately NOT registered here, unlike the unconditional block at
-            // spawn, for the same discovery hazard `codexRolling`'s `locate: false` above avoids —
-            // this watcher has no such switch, so the only safe choice is skipping it entirely. It
-            // keys the session's rollout file by `findRollout({ since, cwd, ... })`, which for a
-            // freshly spawned session is safe because since = the spawn moment: at that instant
-            // nothing else can have a newer file in the same cwd/account, so "pick the newest
+            // codexRollout is registered **only from the note**, never left to find the file itself.
+            // The distinction is the whole of the safety here, so it is worth stating both halves.
+            //
+            // Why it must not scan. It keys a session's rollout by `findRollout({ since, cwd, ... })`,
+            // which for a freshly spawned session is safe because since = the spawn moment: at that
+            // instant nothing else can have a newer file in the same cwd/account, so "pick the newest
             // candidate created after since" always resolves to this session's own file. An adopted
             // session's real spawn was before the restart, so since would have to be that earlier
             // moment — and between then and whenever the scan actually runs, another session can
             // legitimately open in the same cwd/account and create a newer file, which "newest wins"
-            // would hand to the adopted entry instead, permanently locking the rightful session out
-            // of its own file via claimed()'s excludePaths. There is no narrower since that fixes
-            // this: the discovery rule itself assumes the caller's own file is definitionally the
-            // newest thing that exists the moment a match is found, which only holds right after a
-            // real spawn. Four things hang off this one discovery, and an adopted codex session gets
-            // none of them until it exits and a fresh one is spawned in its place: the usage chips
-            // (CodexRolloutWatcher.usage), turn-triggered Slack notifications (onTurnComplete),
-            // Work Unit detection (rolloutPathFor feeds the transcript path), and the scheduler's
-            // key (codexSessionIdFor). A store keyed by app session id, filled from the path the
-            // watcher already logs at map time and read back here, would answer this exactly instead
-            // of heuristically — but PtyMeta is write-once at spawn and the Host protocol has no
-            // meta-update message, so that store does not exist yet. Left as a named follow-up.
+            // would hand to the adopted entry instead, permanently locking the rightful session out of
+            // its own file via claimed()'s excludePaths. There is no narrower since that fixes it: the
+            // discovery rule assumes the caller's own file is definitionally the newest thing that
+            // exists the moment a match is found, and that only holds right after a real spawn. It is
+            // the same hazard `codexRolling`'s `locate: false` above avoids, and this watcher has no
+            // such switch — handing it a path is what turns the scan off, since register attaches to
+            // the file it is given and never looks for one.
+            //
+            // Why the note can be trusted with it. The path is not a guess: the watcher mapped it while
+            // the session ran, in the one moment the discovery rule does hold, and handed it to
+            // `SessionManager.remember` — so what comes back is that session's own file, established
+            // before the restart rather than inferred after it. A note with no path is a session the
+            // scan never mapped, and it is skipped, which is exactly the case the old refusal protected.
+            //
+            // What registering restores, and a skip still costs: the usage chips
+            // (CodexRolloutWatcher.usage), turn-triggered Slack notifications (onTurnComplete), Work
+            // Unit detection (rolloutPathFor feeds the transcript path) and the scheduler's key
+            // (codexSessionId, read below). The tail starts at the end of the file, so turns that
+            // completed while the app was closed are not reported now — the same rule a resume follows.
+            const codexNote = codexRolloutFromNote(a.restore)
+            if (codexNote) {
+              try {
+                // The id goes in too, so `codexSessionIdFor` answers for an adopted session the way it
+                // does for a scanned one — the scheduler learns its store key from it, and unlike a
+                // resume there is no `info.resumeSessionId` carrying the same value.
+                codexRollout?.register(info, codexNote.rolloutPath, codexNote.codexSessionId ?? undefined)
+              } catch {
+                /* A failed codex rollout-watcher registration does not block taking the session back */
+              }
+            }
             if (info.slackNotify === true) {
               try {
                 slack?.notifier.register(info)
@@ -5217,15 +5261,19 @@ export function registerIpc(
                 /* A failed Slack registration does not block taking the session back */
               }
             }
-            // The schedule, on the same footing as rolling and Slack. It is not in the note — see
-            // `scheduleForAdoptedSession` for why the store is the truth and how its key is reached
-            // from an id that survived. Fire-and-forget: the lookup reads a file, this adopter is
-            // synchronous, and a session that comes back without its schedule is still a session that
-            // came back.
+            // The schedule, on the same footing as rolling and Slack. The schedule itself is not in
+            // the note — see `scheduleForAdoptedSession` for why the store is the truth — but the key
+            // to read it under may be: claude's comes out of its statusLine capture file, and codex,
+            // which writes no statusLine, has only the id its rollout watcher mapped and left in the
+            // note. Before that id was written down, a scheduled codex session lost its schedule at
+            // every restart. Fire-and-forget: the lookup reads a file, this adopter is synchronous, and
+            // a session that comes back without its schedule is still a session that came back.
             void (async () => {
               const schedule = scheduleForAdoptedSession(
                 info,
-                extractStatusLineSession(await core.statusLinePayload(info.id)).sessionId,
+                extractStatusLineSession(await core.statusLinePayload(info.id)).sessionId ??
+                  codexNote?.codexSessionId ??
+                  null,
                 (key) => core.schedulerConfig.get(key)
               )
               if (!schedule) return

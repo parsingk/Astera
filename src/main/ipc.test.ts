@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   accountRemovalBlockers,
+  codexRolloutFromNote,
   historyResumePlan,
   hostHandshakeMeans,
   parseAllowedExternalUrl,
@@ -432,8 +433,9 @@ describe('scheduleForAdoptedSession — re-arming the schedule of a session take
     ).toBe(cfg)
   })
 
-  // codex writes no statusLine, and the rollout watcher that knows its id is deliberately left
-  // unregistered for an adopted session — so there is no key, and no schedule to re-arm.
+  // A session neither started as a resume nor found in the statusLine capture, and whose note carries
+  // no codex session id either — a claude session whose capture file is gone, or a codex one the scan
+  // had not mapped when the app went down. No key, so no schedule, and the store is not guessed at.
   it('gives up when neither source knows the conversation id, without asking the store', () => {
     let asked = 0
     expect(
@@ -447,5 +449,43 @@ describe('scheduleForAdoptedSession — re-arming the schedule of a session take
 
   it('a key with nothing stored under it is no schedule, not a made-up one', () => {
     expect(scheduleForAdoptedSession({ id: 'app-sess-1' }, 'conv-9', store({}))).toBeNull()
+  })
+
+  // codex has no statusLine, so the id its rollout watcher mapped — carried in the note since the
+  // watcher started writing it down — is the only thing that can answer for a codex session that was
+  // not started as a resume. Same second argument, a different source for it.
+  it('takes the codex session id the note carried, the only key a codex session has', () => {
+    expect(scheduleForAdoptedSession({ id: 'app-sess-1' }, 'cx-conv-1', store({ 'cx-conv-1': cfg }))).toBe(cfg)
+  })
+})
+
+describe('codexRolloutFromNote — what an adopted codex session can be registered with', () => {
+  // The whole point of remembering it: the watcher's own discovery cannot be run for an adopted
+  // session, so the note is the only way it can be watched at all.
+  it('reads back the rollout the watcher mapped before the restart', () => {
+    expect(codexRolloutFromNote({ title: 't', rolloutPath: 'D:/r/one.jsonl', codexSessionId: 'cx-1' })).toEqual({
+      rolloutPath: 'D:/r/one.jsonl',
+      codexSessionId: 'cx-1'
+    })
+  })
+
+  // The case the skip protects. A claude session's note, or a codex one whose scan had not answered
+  // before the app went down: registering it would set the watcher scanning, and for an adopted
+  // session that scan claims another session's file.
+  it('answers null for a note with no rollout in it', () => {
+    expect(codexRolloutFromNote({ title: 't', accountId: 'acc_1' })).toBeNull()
+  })
+
+  it('answers null rather than trusting a rollout path that is not a string', () => {
+    expect(codexRolloutFromNote({ rolloutPath: 42, codexSessionId: 'cx-1' })).toBeNull()
+  })
+
+  // The path is what registration needs; the id is what the scheduler needs. A note that has one and
+  // not the other still gets the watcher going.
+  it('keeps a path whose note carries no usable id', () => {
+    expect(codexRolloutFromNote({ rolloutPath: 'D:/r/one.jsonl' })).toEqual({
+      rolloutPath: 'D:/r/one.jsonl',
+      codexSessionId: null
+    })
   })
 })

@@ -35,9 +35,11 @@ interface Entry {
    *  counterpart to the claude `session_id` that arrives in the statusLine payload — the scheduler
    *  learns its scheduler.json key from it (SchedulerCoordinator.learnKey).
    *
-   *  **Left null when the path was handed over at registration.** In that case the caller is resuming,
-   *  so it already holds the id (`info.resumeSessionId`) and nothing here needs to answer it — filling
-   *  it from that field would only add a second source of truth for a value its own caller supplied. */
+   *  **Left null when a path was handed over at registration and no id with it.** That caller is
+   *  resuming, so it already holds the id (`info.resumeSessionId`) and nothing here needs to answer it
+   *  — filling it from that field would only add a second source of truth for a value its own caller
+   *  supplied. A caller that hands over both is adopting a session back from the Host: it read the
+   *  pair out of that session's note, and it has no `resumeSessionId` to carry the id instead. */
   codexSessionId: string | null
   tail: JsonlTail | null
   disposed: boolean
@@ -122,8 +124,12 @@ export class CodexRolloutWatcher {
    *  created after the spawn, can never find it and turn notifications simply stopped after any resume
    *  (the same defect as codexRolling's, see attachRollout there). The tail starts at the end of that
    *  file: it is full of turns that finished before this session existed, and reporting those is the
-   *  misfire the old excludePaths argument was there to prevent. */
-  register(info: SessionInfo, rolloutPath?: string): void {
+   *  misfire the old excludePaths argument was there to prevent.
+   *
+   *  codexSessionId: the conversation's own id, for the one caller that knows it without this watcher
+   *  having scanned — the reattach adopter, which reads it out of the Host's note beside the path. A
+   *  resuming caller leaves it out: it holds the same value as `info.resumeSessionId` already. */
+  register(info: SessionInfo, rolloutPath?: string, codexSessionId?: string): void {
     if (!this.deps.getAccount(info.accountId)) {
       this.deps.log(`codex rollout watch registration cancelled — no such account session=${info.id}`)
       return
@@ -134,7 +140,7 @@ export class CodexRolloutWatcher {
       cwd: info.cwd,
       since: this.now(),
       rolloutPath: rolloutPath ?? null,
-      codexSessionId: null,
+      codexSessionId: codexSessionId ?? null,
       tail: rolloutPath ? new JsonlTail(rolloutPath, { startAtEnd: true }) : null,
       disposed: false,
       notifyTurns: info.slackNotify === true,
