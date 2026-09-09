@@ -85,6 +85,22 @@ export function withExitedPtyGuard(p: PtyLike): PtyLike {
   }
 }
 
+/** What `nodePtyFactory` hands `pty.spawn`. Written field by field rather than spread, so `meta` — a
+ *  note for the Host, meaningless to node-pty — cannot reach it: the same explicit shape
+ *  `createHostPtyFactory` builds for `pty-spawn`, and the same four fields this call had before `meta`
+ *  was added. Lives here, apart from the factory, because `nodePtyFactory` loads node-pty's native
+ *  binding and so cannot be imported by a vitest run — the reason `withExitedPtyGuard` is tested from
+ *  this file too. */
+export function nodePtySpawnOptions(opts: PtySpawnOptions): {
+  name: string
+  cwd: string
+  cols: number
+  rows: number
+  env: Record<string, string | undefined>
+} {
+  return { name: 'xterm-256color', cwd: opts.cwd, cols: opts.cols, rows: opts.rows, env: opts.env }
+}
+
 /** args as a string is node-pty's "command line verbatim" form (its own type is
  *  `ArgvOrCommandLine = string[] | string`) — nothing is escaped, the line becomes `${file} ${args}`.
  *  RunManager needs it on win32; see shellSpawn in core/run/shell.ts. Everything else passes an array. */
