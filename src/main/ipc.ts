@@ -4720,6 +4720,9 @@ export function registerIpc(
   const startHostClient = (): void => {
     const hostLog = hostWiring?.log ?? ((): void => {})
     const profileDir = app.getPath('userData')
+    // The same two candidates as the CLI shuttle's, for the same reasons — why they are the same path
+    // in every configuration, why __dirname is the stronger guarantee, and why getAppPath() is kept in
+    // front anyway: see the entryPath note in `bootOrch` above.
     const entry = resolveHostEntry(
       [path.join(app.getAppPath(), 'out', 'main', 'host.js'), path.join(__dirname, 'host.js')],
       existsSync

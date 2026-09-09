@@ -622,8 +622,7 @@ export type CoreEventChannel = keyof CoreEvents
 export type ResumeStrategy = 'smart' | 'original'
 
 /** Astera Host slice 1: the app's view of the channel to the Host. Declared here rather than in
- *  src/main/host/client.ts (which re-exports it) so the renderer can name it without importing
- *  from src/main. */
+ *  src/main/host/client.ts so the renderer can name it without importing from src/main. */
 export interface HostStatus {
   connected: boolean
   protocol: number | null
