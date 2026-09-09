@@ -315,9 +315,11 @@ export class SessionManager {
    *  session id. Minting a new id would read a file nothing ever wrote — a pane that comes back blank
    *  with nothing to point at (slice 2 design §10).
    *
-   *  `schedule` is not rebuilt: the note does not carry it, and the coordinator's own entry died with
-   *  the app. Keeping the id is what leaves that reachable — a later task can re-register a schedule
-   *  against this same session — but nothing here re-arms one.
+   *  `schedule` is not rebuilt here: the note does not carry it, and the coordinator's own entry died
+   *  with the app. Keeping the id is what leaves it reachable, and the reattach adopter in ipc.ts is
+   *  what reaches it — `scheduleForAdoptedSession` reads the scheduler's own store and re-registers,
+   *  the same way that adopter re-registers rolling and Slack. Nothing in this manager re-arms one, so
+   *  a caller that adopts without doing that gets a session with no schedule.
    *
    *  **Adopting over this manager's own exited record replaces it.** A dropped connection ends every
    *  Host-backed handle (PTY_LOST_SIGHT_EXIT_CODE) while the Host keeps running the real process, so a

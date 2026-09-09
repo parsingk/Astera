@@ -21,7 +21,7 @@ import { reattachSessions, type ReattachResult } from './host/reattach'
 import { HOST_PROTOCOL, type ClientMessage, type HostMessage, type PtyEntry } from '../core/host/protocol'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
-import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, SessionInfo } from '../core/types'
+import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, ScheduleConfig, SessionInfo } from '../core/types'
 import { providerOf } from '../core/providers/meta'
 import { descriptorOf } from '../core/providers/descriptor'
 import { readGeneratorSettings } from '../core/understanding/generatorSettings'
@@ -362,6 +362,43 @@ export function sessionsTakenBackOnFailure(sawPeer: boolean): SessionsTakenBack 
 export function hostHandshakeMeans(held: string | null, answered: string): 'first' | 'same-host' | 'other-host' {
   if (held === null) return 'first'
   return held === answered ? 'same-host' : 'other-host'
+}
+
+/**
+ * The schedule a session taken back from the Host should be re-armed with, or null when there is
+ * none to find. `spawnSession` registers one right after `core.sessions.spawn`; nothing did it for an
+ * adopted session, so a scheduled session came back from a restart with no schedule, no warning, and
+ * no way to get it back short of ending the conversation that survived and reopening it from history.
+ *
+ * **Read from the scheduler's own store rather than carried in the Host's note.** `PtyMeta` is
+ * write-once at spawn and the protocol has no message that could update it, so a note would revive a
+ * schedule the person turned off afterwards. The store is the fresher truth — `scheduler.disable`
+ * deletes from it.
+ *
+ * **The store is keyed by the conversation's own session id, not by the app's** (SchedulerConfigStore:
+ * "Key = claude session id"). That key is still reachable after a restart for the same reason design
+ * §10 gives for keeping the app session id: either the session was started as a resume and carries the
+ * key as `resumeSessionId`, or the CLI wrote its statusLine payload to a file in the profile named
+ * after the app session id — which is exactly where `SchedulerCoordinator.learnKey` reads it from, so
+ * this is that lookup run once rather than a second way of doing it.
+ *
+ * codex has neither: it writes no statusLine, and the rollout watcher that knows its id is
+ * deliberately left unregistered for an adopted session (the codexRollout note in the reattach
+ * adopter). `statusLineSessionId` is null there, so the answer is null and the schedule stays lost —
+ * stated, not guessed at.
+ *
+ * A pure function for the same reason `rollCoordinatorForSession` is one: the wiring is an
+ * electron-only closure inside `registerIpc`, and this is the exact place the app session id could be
+ * used as the key by mistake, which would silently find nothing for every session.
+ */
+export function scheduleForAdoptedSession(
+  info: { id: string; resumeSessionId?: string },
+  statusLineSessionId: string | null,
+  stored: (key: string) => ScheduleConfig | null
+): ScheduleConfig | null {
+  const key = info.resumeSessionId ?? statusLineSessionId
+  if (!key) return null
+  return stored(key)
 }
 
 /** The coordinator's brief, named for the Run it manages. It lives in the same directory as the
@@ -5151,6 +5188,25 @@ export function registerIpc(
                 /* A failed Slack registration does not block taking the session back */
               }
             }
+            // The schedule, on the same footing as rolling and Slack. It is not in the note — see
+            // `scheduleForAdoptedSession` for why the store is the truth and how its key is reached
+            // from an id that survived. Fire-and-forget: the lookup reads a file, this adopter is
+            // synchronous, and a session that comes back without its schedule is still a session that
+            // came back.
+            void (async () => {
+              const schedule = scheduleForAdoptedSession(
+                info,
+                extractStatusLineSession(await core.statusLinePayload(info.id)).sessionId,
+                (key) => core.schedulerConfig.get(key)
+              )
+              if (!schedule) return
+              // The same two arguments spawn's own registration passes; the provider gates the
+              // statusLine learning poll. `nextFireAt` runs from now, so a round that came due while
+              // the app was down is not fired late — the coordinator's standing "a missed round is
+              // ignored" policy.
+              scheduler?.register({ ...info, schedule }, providerOf(core.accounts.get(info.accountId)))
+              hostLog(`host: re-armed the schedule of session ${info.id}`)
+            })().catch((err) => hostLog(`host: could not re-arm the schedule of session ${info.id}: ${String(err)}`))
             try {
               send('session:created', info)
             } catch (err) {

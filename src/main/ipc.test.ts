@@ -7,11 +7,12 @@ import {
   providerOfSession,
   liveWorkersFor,
   rollCoordinatorForSession,
+  scheduleForAdoptedSession,
   sessionsTakenBackOnFailure,
   staleSpecFiles
 } from './ipc'
 import { sanitizeResumePrompt } from '../core/sessions/commands'
-import type { Account, SessionInfo } from '../core/types'
+import type { Account, ScheduleConfig, SessionInfo } from '../core/types'
 
 const account = (over: Partial<Account>): Account =>
   ({
@@ -399,5 +400,52 @@ describe('hostHandshakeMeans — what a completed handshake means for the ptys t
   // reason `startedAt` is half of the identity rather than the pid being all of it.
   it('the same pid at a different start time is a different Host', () => {
     expect(hostHandshakeMeans(a, '4242@2026-09-09T00:00:05.000Z')).toBe('other-host')
+  })
+})
+
+describe('scheduleForAdoptedSession — re-arming the schedule of a session taken back from the Host', () => {
+  const rule = { kind: 'interval', everyMinutes: 30 } as const
+  const cfg = { command: '/status', rule } as unknown as ScheduleConfig
+  const store = (entries: Record<string, ScheduleConfig>) => (k: string): ScheduleConfig | null => entries[k] ?? null
+
+  // The mistake this function exists to make impossible: scheduler.json is keyed by the conversation's
+  // own session id, and looking it up by the app session id would silently find nothing for every
+  // session — the same "no schedule, no warning" the adopter had before.
+  it('never looks the schedule up under the app session id', () => {
+    const asked: string[] = []
+    scheduleForAdoptedSession({ id: 'app-sess-1', resumeSessionId: 'conv-9' }, 'conv-from-statusline', (k) => {
+      asked.push(k)
+      return null
+    })
+    expect(asked).not.toContain('app-sess-1')
+  })
+
+  it('uses resumeSessionId when the session was started as a resume — the key is known without a file', () => {
+    expect(scheduleForAdoptedSession({ id: 'app-sess-1', resumeSessionId: 'conv-9' }, null, store({ 'conv-9': cfg }))).toBe(cfg)
+  })
+
+  // The ordinary case: a session that was never resumed learned its key at runtime, and the statusLine
+  // capture file the CLI wrote is still in the profile under the app session id the adoption kept.
+  it('falls back to the id the statusLine payload carries', () => {
+    expect(
+      scheduleForAdoptedSession({ id: 'app-sess-1' }, 'conv-from-statusline', store({ 'conv-from-statusline': cfg }))
+    ).toBe(cfg)
+  })
+
+  // codex writes no statusLine, and the rollout watcher that knows its id is deliberately left
+  // unregistered for an adopted session — so there is no key, and no schedule to re-arm.
+  it('gives up when neither source knows the conversation id, without asking the store', () => {
+    let asked = 0
+    expect(
+      scheduleForAdoptedSession({ id: 'app-sess-1' }, null, () => {
+        asked += 1
+        return cfg
+      })
+    ).toBeNull()
+    expect(asked).toBe(0)
+  })
+
+  it('a key with nothing stored under it is no schedule, not a made-up one', () => {
+    expect(scheduleForAdoptedSession({ id: 'app-sess-1' }, 'conv-9', store({}))).toBeNull()
   })
 })
