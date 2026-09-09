@@ -43,6 +43,34 @@ describe('createPtyRouter', () => {
     expect(r.ptysOutliveApp()).toBe(false)
   })
 
+  // The Host client installs the factory on every completed handshake, not only the first, so that a
+  // first handshake landing after startup gave up still switches the router. That makes a repeat
+  // install ordinary rather than a mistake, and it has to stay a no-op for everything already running.
+  it('installing the same factory again changes nothing, for the next call or for a live handle', () => {
+    const calls: string[] = []
+    const host: PtyFactory = (file) => {
+      calls.push(`host:${file}`)
+      return {
+        pid: 1,
+        onData: () => {},
+        onExit: () => {},
+        write: (data) => calls.push(`host:write:${data}`),
+        resize: () => {},
+        kill: () => {},
+        pause: () => {},
+        resume: () => {}
+      } as PtyLike
+    }
+    const r = createPtyRouter(stub('local', calls))
+    r.use(host)
+    const p = r.factory('a', [], opts)
+    r.use(host)
+    p.write('still mine')
+    r.factory('b', [], opts)
+    expect(calls).toEqual(['host:a', 'host:write:still mine', 'host:b'])
+    expect(r.ptysOutliveApp()).toBe(true)
+  })
+
   // use() changes which factory the *next* call to r.factory reaches — it does not touch a PtyLike
   // handle already handed back. A pty spawned through the fallback keeps behaving exactly as it did
   // before the switch: nothing about it is retargeted onto the Host.

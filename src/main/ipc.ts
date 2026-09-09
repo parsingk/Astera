@@ -5258,6 +5258,17 @@ export function registerIpc(
       const previous = heldBy
       const means = hostHandshakeMeans(previous, answered)
       heldBy = answered
+      // **Installed on every handshake, not only the one the boot chain acts on.** Here, and not at the
+      // top of this function, for the reason it always was: a pty spawned before the handshake
+      // completes has its pty-spawn silently dropped by HostClient.send and sits pending forever. What
+      // changed is the other end — installing it only from the boot chain left one corner where the
+      // router stayed on node-pty while the Host answered: a first handshake that lands after
+      // `ready()` has given up. A later reconnect would then sweep and adopt the Host's ptys into a
+      // router still pointing at node-pty, so `ptysOutliveApp()` answered false while the Host really
+      // owned them — and the quit path would kill the very sessions this branch exists to keep.
+      // Idempotent: `use` is one assignment of the same object, and it only changes which factory the
+      // *next* spawn reaches, never a handle already handed out (see ptyRouter's own tests).
+      core.ptyRouter.use(factory)
       // The first handshake belongs to the chain below, which is waiting on `ready()` for exactly this
       // moment; sweeping here as well would be the same sweep twice. It also covers the one case where
       // that chain has already given up before a peer ever said hello — a handshake that outlasts its
@@ -5303,14 +5314,8 @@ export function registerIpc(
           )
           return 'unknown'
         }
-        // Installed only now, with a live connection in hand — not at the top of this function, where
-        // a pty spawned in the window before the handshake completes would have its pty-spawn silently
-        // dropped by HostClient.send (no connection yet) and sit pending forever, with no data, no exit,
-        // and its session/run/terminal record stuck at 'running' for the app's whole life. ptyFactory.ts's
-        // factory carries a second line of defence for the same failure if the connection drops again
-        // later: a pty-spawn that HostClient.send refuses ends the handle itself instead of waiting on a
-        // reply that will never come.
-        core.ptyRouter.use(factory)
+        // The router is already on the Host factory: `onConnect` above installs it the moment the
+        // handshake lands, which is what makes `status().connected` true here in the first place.
         return takeSessionsBack('at startup')
       })
       // Settles rather than rejecting, so `bootOrch` can await this without a try and nothing from
