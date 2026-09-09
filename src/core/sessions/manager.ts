@@ -460,16 +460,64 @@ export class SessionManager {
    *  notification's title all read `SessionInfo.title`, so they follow from here without any of them
    *  learning about renaming.
    *
+   *  The second line is that same title told to the pty, because `spawn` wrote the *old* one into the
+   *  note the Host keeps and `adopt` rebuilds this record from it — without this, a renamed session
+   *  comes back from an app restart under the name it was spawned with. The stored title and not the
+   *  text typed, so the note holds exactly what `adopt` would read.
+   *
    *  An unknown id answers null instead of throwing. `list()` includes exited sessions, so a tab can
    *  outlive its process and a rename can race a tab closing; neither is worth an exception. */
   rename(id: string, title: string): string | null {
     const live = this.sessions.get(id)
     if (!live) return null
     live.info.title = normalizeSessionTitle(title, live.info.cwd)
+    this.remember(id, { title: live.info.title })
     return live.info.title
+  }
+
+  /** Merges keys into the note the Host keeps for this session's pty, for whoever learns something
+   *  about a session that `spawn` could not write down at the time. The keys are `PtyMeta.restore`'s,
+   *  which is to say the ones `adopt` and the reattach adopter read back.
+   *
+   *  **Fire and forget, and lossy by design.** Nothing waits for the Host to confirm, and a patch sent
+   *  while the connection is down is dropped rather than queued — so the worst case is a note one step
+   *  behind, which costs exactly what this whole mechanism was added to fix and never more: adoption
+   *  falls back to the value the note already had. With no Host the pty has no `remember` at all and
+   *  this does nothing.
+   *
+   *  An unknown id is ignored, for the same reason `rename` answers null: a poll that learns something
+   *  can land after the tab that owned the session has gone. */
+  remember(id: string, patch: Record<string, unknown>): void {
+    this.sessions.get(id)?.pty.remember?.(patch)
   }
 
   list(): SessionInfo[] {
     return [...this.sessions.values()].map((s) => ({ ...s.info }))
+  }
+
+  /** The running sessions this app has to end when it quits: the ones whose pty is this process's own
+   *  child, which is every one of them with no Host and, with a Host, the ones spawned in the window
+   *  before it answered.
+   *
+   *  **Split from `runningOutlivingApp` rather than answered as one flag for all of them.** A Host
+   *  takes a moment to start, so the two kinds coexist; the quit path (main/index.ts's will-quit) has
+   *  to end the first and leave the second, and `PtyLike.outlivesApp` is where the router wrote down
+   *  which is which. Exited sessions are in neither — `list()` keeps them so a tab can outlive its
+   *  process, and killing a pty that has already gone is what the quit path used to risk. */
+  runningAppOwned(): SessionInfo[] {
+    return this.running(false)
+  }
+
+  /** The running sessions that keep running after this app quits, because the Host owns their ptys.
+   *  The window-close confirmation counts these to say what quitting actually costs the person
+   *  (App.tsx's closeWindow, through `host.sessionsOutlivingApp`). */
+  runningOutlivingApp(): SessionInfo[] {
+    return this.running(true)
+  }
+
+  private running(outlivesApp: boolean): SessionInfo[] {
+    return [...this.sessions.values()]
+      .filter((s) => s.info.status === 'running' && (s.pty.outlivesApp === true) === outlivesApp)
+      .map((s) => ({ ...s.info }))
   }
 }

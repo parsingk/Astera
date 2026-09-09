@@ -19,6 +19,8 @@ class FakePty implements PtyLike {
   // 호출 횟수 — failsafe 타이머가 "몇 번" resume했는지가 판정 대상이다
   pauseCalls = 0
   resumeCalls = 0
+  /** The note patches this pty was asked to keep — what a Host-backed pty sends as pty-note. */
+  remembered: Record<string, unknown>[] = []
   onData(cb: (d: string) => void) { this.dataCb = cb }
   onExit(cb: (e: { exitCode: number }) => void) { this.exitCb = cb }
   write(d: string) { this.written.push(d) }
@@ -26,6 +28,11 @@ class FakePty implements PtyLike {
   kill() { this.killed = true; this.exitCb({ exitCode: 0 }) }
   pause() { this.paused = true; this.pauseCalls++ }
   resume() { this.paused = false; this.resumeCalls++ }
+  remember(patch: Record<string, unknown>) { this.remembered.push(patch) }
+  /** What `createPtyRouter` stamps on a real handle — set by the tests that care which
+   *  factory made the pty. Absent is a pty this process owns, which is what the router
+   *  writes with no Host and what every other test here wants. */
+  outlivesApp?: boolean
 }
 
 const account: Account = {
@@ -83,6 +90,62 @@ describe('SessionManager', () => {
       const { manager } = setup()
       expect(manager.rename('nope', '결제')).toBeNull()
       expect(manager.list()).toHaveLength(0)
+    })
+
+    // The Host is holding a note that still says the title this session was spawned with, and adopt()
+    // rebuilds the record from it. Without this, a renamed session comes back from a restart under
+    // its old name.
+    it('tells the pty the new title, so a restart does not bring the old one back', () => {
+      const { manager, spawned } = setup()
+      const info = manager.spawn({ account, cwd: process.cwd() })
+      manager.rename(info.id, 'Auth refactor')
+      expect(spawned[0].pty.remembered).toEqual([{ title: 'Auth refactor' }])
+    })
+
+    // The stored title, not the text typed: an empty name is the project folder name, and that is what
+    // adopt() has to read back.
+    it('remembers the normalised title rather than what was typed', () => {
+      const { manager, spawned } = setup()
+      const info = manager.spawn({ account, cwd: process.cwd() })
+      manager.rename(info.id, '   ')
+      expect(spawned[0].pty.remembered).toEqual([{ title: info.title }])
+    })
+
+    // A node-pty pty has no remember at all — nothing about it survives the app, so there is nothing
+    // to remember it for. Renaming must still work exactly as it always has.
+    it('renames a pty that cannot remember anything', () => {
+      const pty: PtyLike = {
+        pid: 1,
+        onData: () => {},
+        onExit: () => {},
+        write: () => {},
+        resize: () => {},
+        kill: () => {},
+        pause: () => {},
+        resume: () => {}
+      }
+      const manager = new SessionManager(() => pty, makeDescriptors(process.platform))
+      const info = manager.spawn({ account, cwd: process.cwd() })
+      expect(manager.rename(info.id, 'Auth refactor')).toBe('Auth refactor')
+    })
+  })
+
+  // The other half of the note's write path: something outside this manager learns a fact about a
+  // session — the codex rollout watcher finding the file that session writes to — and the manager is
+  // what holds the pty the note lives on.
+  describe('remember', () => {
+    it('passes a patch to the session pty that holds the note', () => {
+      const { manager, spawned } = setup()
+      const info = manager.spawn({ account, cwd: process.cwd() })
+      manager.remember(info.id, { rolloutPath: 'D:/r/one.jsonl', codexSessionId: 'cx-1' })
+      expect(spawned[0].pty.remembered).toEqual([{ rolloutPath: 'D:/r/one.jsonl', codexSessionId: 'cx-1' }])
+    })
+
+    // The watcher's poll can land after the tab was closed and the session forgotten; the same reason
+    // rename answers null instead of throwing.
+    it('ignores a session it does not have', () => {
+      const { manager } = setup()
+      expect(() => manager.remember('nope', { rolloutPath: 'D:/r/one.jsonl' })).not.toThrow()
     })
   })
 
@@ -907,6 +970,35 @@ describe('SessionManager', () => {
       expect(dropped.written).toEqual([])
       back.dataCb('from the reattach')
       expect(data).toEqual(['from the reattach'])
+    })
+  })
+
+  // Quitting used to be one decision for every pty at once, and the Host's startup is a window in
+  // which the app makes some of its own before the Host answers. Splitting the running sessions by
+  // who owns their pty is what lets the quit path end the app's own children — which die with the
+  // app anyway — while leaving the Host's alone.
+  describe('who a running session belongs to', () => {
+    it('splits the running sessions into the ones the app owns and the ones that outlive it', () => {
+      const { manager, spawned } = setup()
+      const mine = manager.spawn({ account, cwd: process.cwd() })
+      const hosts = manager.spawn({ account, cwd: process.cwd() })
+      spawned[1].pty.outlivesApp = true
+      expect(manager.runningAppOwned().map((s) => s.id)).toEqual([mine.id])
+      expect(manager.runningOutlivingApp().map((s) => s.id)).toEqual([hosts.id])
+    })
+
+    // list() keeps exited sessions so a tab can outlive its process. Neither list may report one:
+    // the quit path would kill a pty that is already gone, and the close confirmation would promise
+    // the person a session that is not running comes back.
+    it('counts neither an exited session, whoever owned it', () => {
+      const { manager, spawned } = setup()
+      manager.spawn({ account, cwd: process.cwd() })
+      manager.spawn({ account, cwd: process.cwd() })
+      spawned[1].pty.outlivesApp = true
+      spawned[0].pty.exitCb({ exitCode: 0 })
+      spawned[1].pty.exitCb({ exitCode: 0 })
+      expect(manager.runningAppOwned()).toEqual([])
+      expect(manager.runningOutlivingApp()).toEqual([])
     })
   })
 })

@@ -253,12 +253,25 @@ export class CodexRollingCoordinator {
    *  this one's own, via the same `since` lower bound that admits both. The result is not merely a
    *  failure to map: `onNativeSession` binds the wrong native id to this chain, `persistConfig` writes
    *  under it, and `claimed()`'s excludePaths then locks the rightful chain out of its own file for
-   *  good. `false` skips straight to the state a chain reaches on its own after LOCATE_TIMEOUT_MS
-   *  anyway — registered, unmapped, rolling permanently disabled (onLimit's own guard already no-ops
-   *  a chain with neither codexSessionId nor rolloutPath) — without the scan or the hazard. The
-   *  model-switch prompt still gets answered: handleData's modelChoice branch does not gate on either
-   *  field. */
-  register(info: SessionInfo, rolloutPath?: string, sameAccount = false, locate = true): void {
+   *  good. `false` skips the scan and the hazard both. The model-switch prompt is answered either way:
+   *  handleData's modelChoice branch does not gate on either field.
+   *
+   *  **That caller now usually brings the mapping with it instead.** The Host's note carries the
+   *  rollout the codex rollout watcher established while the session ran — in the one moment the
+   *  discovery rule holds — so the adopter hands over the path and `codexSessionId` and the chain is
+   *  mapped from registration, with nothing to scan for and nothing to steal. A note without one
+   *  (the watcher never mapped it before the restart) still lands unmapped and rolling stays off for
+   *  that session, which is what onLimit's own guard reports.
+   *
+   *  `codexSessionId` is that adopter's argument. Everyone else leaves it out: a resuming caller holds
+   *  the same value in `info.resumeSessionId`, and an adopted session need never have been a resume. */
+  register(
+    info: SessionInfo,
+    rolloutPath?: string,
+    sameAccount = false,
+    locate = true,
+    codexSessionId?: string
+  ): void {
     const ids = info.rollAccountIds ?? []
     if (ids.length < 1) return
     const chain: Chain = {
@@ -290,8 +303,25 @@ export class CodexRollingCoordinator {
       stateSeq: 0
     }
     this.chains.set(info.id, chain)
-    if (info.resumeSessionId && rolloutPath) {
-      this.attachRollout(chain, info.resumeSessionId, rolloutPath)
+    // **Where in the chain this session already is** — the same rule, and the same reasoning, as
+    // `RollingCoordinator.register` on the claude side, which has the same cycle and had the same
+    // defect. The cycle starts at 0, which is right for every caller that spawns a session and then
+    // registers it, because all of them put the account they spawned on at the head of the chain.
+    // Adoption is the caller that does not: a session taken back from the Host may have rolled onto a
+    // later account before the restart. Left at 0, its first limit records the block against the
+    // account at index 0, broadcasts that to every other chain through `blocks.record`, and rolls to
+    // index 1 — the exhausted account it is already sitting on.
+    //
+    // Not gated on `locate`, because for every other caller this is the identity: their account is
+    // `ids[0]`, so it reads 0 and nothing moves. `indexOf` cannot answer -1 — see the claude side's
+    // comment for why the two fields cannot disagree.
+    const at = ids.indexOf(info.accountId)
+    if (at > 0) chain.cycle.advanceTo(at)
+    // A resuming caller knows the conversation id as `info.resumeSessionId`; the adopter is handed it,
+    // because the session it takes back need never have been a resume at all.
+    const attachSessionId = codexSessionId ?? info.resumeSessionId
+    if (attachSessionId && rolloutPath) {
+      this.attachRollout(chain, attachSessionId, rolloutPath)
       // **This is the one attach site that gets to recover the reset from the file — and only when the
       // account matches.** The user reopened a conversation, so whatever block it ended on is still the
       // block it is under, and the tail starts at the end — so the file's own record is the only
@@ -306,14 +336,34 @@ export class CodexRollingCoordinator {
       // can be a week away. A two-account chain also kills the fresh session and respawns on the
       // exhausted one. None of it needs a limit phrase, and none of it happened before the recovery
       // existed. So for a cross-account reopen nothing is asked and the verdict is never consulted.
+      //
+      // **An adoption does not ask either**, and it arrives here with `sameAccount` false for that
+      // reason rather than by omission. The file is usually this session's own and this account's, but
+      // one shape is not: a chain that rolled shortly before the restart is running on the copy the
+      // roll made, which holds the *previous* account's records — and nothing here can tell that copy
+      // from an ordinary file. So an adopted session that was already blocked while the app was away
+      // will not roll until codex writes a record of its own, which a blocked turn never does. That is
+      // the residue this stops short of, and it is the safe side of it.
       if (sameAccount) this.askPriorReset(chain)
       // The locate path persists the config on success; the resume path knows the id up front, so it
       // does the same here — otherwise resuming a chain would never refresh its stored roll config.
-      this.deps.persistConfig?.(info.resumeSessionId, {
+      // An adoption re-persists what the pre-restart locate already wrote under the same key, which
+      // costs one write and keeps the two attach paths one branch instead of two.
+      this.deps.persistConfig?.(attachSessionId, {
         accountIds: chain.accountIds,
         prompt: chain.prompt
       })
-      this.deps.log(`codex rollout attached on resume session=${info.id} id=${info.resumeSessionId}`)
+      this.deps.log(
+        `codex rollout attached ${locate ? 'on resume' : 'from the note'} session=${info.id} id=${attachSessionId}`
+      )
+      // Said out loud, because what this costs looks from outside like a session that quietly never
+      // resumes, and a decision that only exists in a comment is one nobody can find at 3am.
+      if (!locate)
+        this.deps.log(
+          `codex chain adopted without reading the block on record — if this session was already blocked ` +
+            `while the app was away it waits for its next rate_limits record instead of rolling now ` +
+            `session=${info.id}`
+        )
     } else if (locate) {
       this.startLocate(chain, this.deps.getAccount(ids[this.cycleIndexOf(chain)]))
     } else {
@@ -635,8 +685,13 @@ export class CodexRollingCoordinator {
       // onLimit re-reads this slot and broadcasts it, but only once its own guards have passed.
       //
       // **Known imprecision, and nothing tears it up.** register only asks the file when the reopen
-      // stays on the account that wrote it, so the slot (currentIndex, always 0 on a fresh register)
-      // is that account. The shape that still slips through is a rollout a *roll* copied into this
+      // stays on the account that wrote it, so the slot (currentIndex) is that account. That slot is 0
+      // here, and it is 0 for a reason worth writing down: the only caller that can register a chain
+      // part-way round is adoption, and **adoption deliberately never asks** (register's attach branch
+      // leaves `sameAccount` false for it, and says why). Anyone making adoption ask has to come back
+      // here first — the slot would then be the adopted account, and the reasoning below about which
+      // account wrote the records has to be redone for a file this chain did not open. The shape that
+      // still slips through is a rollout a *roll* copied into this
       // account's folder: the copy carries the previous account's records, yet reopening it here is a
       // same-account resume by every test we have — not because the two cases cannot be told apart,
       // but because nothing here currently tries. RollConfigStore is already keyed by the codex

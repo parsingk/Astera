@@ -75,6 +75,7 @@ import * as sticky from './lib/stickyProject'
 import { dismiss, toast } from './lib/toast'
 import { spawnNotice } from './lib/spawnNotice'
 import { confirmModal, confirmModalWithChoices, isConfirmOpen } from './lib/confirm'
+import { quitConfirmBody } from './lib/quitConfirm'
 import * as hiddenProjects from './lib/hiddenProjects'
 import { worktreeErrorMessage } from './lib/worktreeErrors'
 import { notifyCreated as notifyWorktreeCreated } from './lib/worktreeBus'
@@ -219,16 +220,19 @@ function Titlebar({
   const isMac = window.api.platform === 'darwin'
   /** On Linux the X really quits the app (there is no tray to hide in — main/index.ts win.on('close')).
    *  What quitting costs is no longer one answer: with no Host, will-quit kills every running session,
-   *  the same outcome the update install asks about; with a Host the ptys are its children and quitting
-   *  leaves them running, so the question is worth asking but the old sentence would be a lie. The
+   *  the same outcome the update install asks about; a session whose pty the Host owns keeps running
+   *  instead, and the Host takes a moment to start, so at boot some of them are one and some the
+   *  other. `quitConfirmBody` turns the two counts into the sentence that is true of both halves. The
    *  answer is read here rather than held in state because it changes during a run — the Host connects
-   *  some milliseconds after launch. On win32/macOS the window only hides, so nothing is asked. */
+   *  some milliseconds after launch. Nothing kept, on a failure, is the safe reading: it promises the
+   *  person nothing comes back. On win32/macOS the window only hides, so nothing is asked. */
   const closeWindow = async (): Promise<void> => {
     if (window.api.platform === 'linux' && runningCount > 0) {
-      const kept = await window.api.host.ptysOutliveApp().catch(() => false)
+      const kept = await window.api.host.sessionsOutlivingApp().catch(() => 0)
+      const body = quitConfirmBody(runningCount, kept)
       const ok = await confirmModal({
         title: t('common.quitConfirm.title'),
-        body: t(kept ? 'common.quitConfirm.bodyKept' : 'common.quitConfirm.body', { count: runningCount }),
+        body: t(body.key, body.params),
         confirmLabel: t('common.close')
       })
       if (!ok) return

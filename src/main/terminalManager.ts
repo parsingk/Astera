@@ -123,8 +123,11 @@ export class TerminalManager {
       .map((t) => ({ id: t.id, buffer: t.buffer }))
   }
 
-  /** App shutdown (will-quit) */
-  closeAll(): void {
-    for (const id of [...this.terminals.keys()]) this.close(id)
+  /** App shutdown (will-quit). Closes the terminals whose ptys are this process's own children and
+   *  leaves the Host's alone — those are the ones a restart takes back, and closing one here would
+   *  also drop the app's record of a pty that is still running. With no Host every pty is the app's
+   *  own, so this closes all of them exactly as it always did. */
+  closeAppOwned(): void {
+    for (const [id, live] of [...this.terminals]) if (!live.pty.outlivesApp) this.close(id)
   }
 }

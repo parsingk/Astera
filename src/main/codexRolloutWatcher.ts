@@ -35,9 +35,11 @@ interface Entry {
    *  counterpart to the claude `session_id` that arrives in the statusLine payload — the scheduler
    *  learns its scheduler.json key from it (SchedulerCoordinator.learnKey).
    *
-   *  **Left null when the path was handed over at registration.** In that case the caller is resuming,
-   *  so it already holds the id (`info.resumeSessionId`) and nothing here needs to answer it — filling
-   *  it from that field would only add a second source of truth for a value its own caller supplied. */
+   *  **Left null when a path was handed over at registration and no id with it.** That caller is
+   *  resuming, so it already holds the id (`info.resumeSessionId`) and nothing here needs to answer it
+   *  — filling it from that field would only add a second source of truth for a value its own caller
+   *  supplied. A caller that hands over both is adopting a session back from the Host: it read the
+   *  pair out of that session's note, and it has no `resumeSessionId` to carry the id instead. */
   codexSessionId: string | null
   tail: JsonlTail | null
   disposed: boolean
@@ -70,6 +72,24 @@ export interface CodexRolloutDeps {
   getAccount(id: string): Account | null
   onTurnComplete(sessionId: string, rolloutPath: string): void
   log(message: string): void
+  /** Writes the mapping down somewhere that outlives this app — the note the Host keeps for that
+   *  session's pty (`SessionManager.remember`).
+   *
+   *  What the scan answers is knowledge this watcher has and cannot re-derive after a restart: the
+   *  discovery rule works only in the moment right after a real spawn, so an **adopted** session can
+   *  never be scanned for (the reattach adopter's own note gives the whole argument). Handed over the
+   *  instant it is learned, the app reads it back at adoption and registers the session with the path
+   *  instead of scanning.
+   *
+   *  Optional, and it goes through a dep rather than a manager because this watcher holds no pty and
+   *  no session record — it holds the same shape everything else here does, a function the wiring
+   *  supplies. Absent, nothing is written down and an adopted session simply has no path, which is
+   *  what happened before this existed.
+   *
+   *  The id is absent when the mapping came from a caller that handed the path over: that caller is
+   *  resuming, and `info.resumeSessionId` holds the same value and is in the note already, put there
+   *  by spawn. */
+  remember?(sessionId: string, note: { rolloutPath: string; codexSessionId?: string }): void
   now?: () => number
 }
 
@@ -108,8 +128,15 @@ export class CodexRolloutWatcher {
    *  created after the spawn, can never find it and turn notifications simply stopped after any resume
    *  (the same defect as codexRolling's, see attachRollout there). The tail starts at the end of that
    *  file: it is full of turns that finished before this session existed, and reporting those is the
-   *  misfire the old excludePaths argument was there to prevent. */
-  register(info: SessionInfo, rolloutPath?: string): void {
+   *  misfire the old excludePaths argument was there to prevent. Both those callers have the file on
+   *  disk by the time they get here — each awaits the copy that made it before spawning — and both
+   *  paths are written down the same way a scanned one is, so a session resumed and then taken back
+   *  from the Host is registered from its note rather than skipped.
+   *
+   *  codexSessionId: the conversation's own id, for the one caller that knows it without this watcher
+   *  having scanned — the reattach adopter, which reads it out of the Host's note beside the path. A
+   *  resuming caller leaves it out: it holds the same value as `info.resumeSessionId` already. */
+  register(info: SessionInfo, rolloutPath?: string, codexSessionId?: string): void {
     if (!this.deps.getAccount(info.accountId)) {
       this.deps.log(`codex rollout watch registration cancelled — no such account session=${info.id}`)
       return
@@ -120,7 +147,7 @@ export class CodexRolloutWatcher {
       cwd: info.cwd,
       since: this.now(),
       rolloutPath: rolloutPath ?? null,
-      codexSessionId: null,
+      codexSessionId: codexSessionId ?? null,
       tail: rolloutPath ? new JsonlTail(rolloutPath, { startAtEnd: true }) : null,
       disposed: false,
       notifyTurns: info.slackNotify === true,
@@ -128,7 +155,17 @@ export class CodexRolloutWatcher {
       context: null,
       contextSeed: rolloutPath ? seedContext(rolloutPath) : null
     })
+    // A path handed over is a mapping like any other, and this is where every one of them passes —
+    // both resuming callers reach the same line as the scan does, rather than each having to remember
+    // to write its own down.
+    if (rolloutPath) this.rememberMapping(info.id, rolloutPath, codexSessionId)
     this.ensureTicker()
+  }
+
+  /** The one shape a remembered mapping has. Both the scan and a caller-supplied path go through it,
+   *  so the two cannot disagree about what the note is asked to hold. */
+  private rememberMapping(sessionId: string, rolloutPath: string, codexSessionId?: string): void {
+    this.deps.remember?.(sessionId, { rolloutPath, ...(codexSessionId ? { codexSessionId } : {}) })
   }
 
   /** The usage snapshot for the chips, or null when this session is unknown or nothing has been read
@@ -235,6 +272,9 @@ export class CodexRolloutWatcher {
       entry.rolloutPath = found.path
       entry.codexSessionId = found.sessionId
       entry.tail = new JsonlTail(found.path)
+      // Told once, here, because this is the one moment the scan makes a mapping and the only moment it
+      // can be told: after a restart the scan that produced it cannot be run again for this session.
+      this.rememberMapping(entry.sessionId, found.path, found.sessionId)
       this.deps.log(`codex rollout watch mapped session=${entry.sessionId} path=${found.path}`)
       return // End this step() having only mapped, without reading — the next tick's read() is still that JsonlTail's
       // first call, so it reads the whole file from offset 0. Deferring does not narrow the range read, so it does not

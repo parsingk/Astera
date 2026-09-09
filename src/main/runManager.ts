@@ -358,7 +358,16 @@ export class RunManager {
     return this.runs.get(runId)?.cwd ?? null
   }
 
-  stopAll(): void {
-    for (const runId of this.runs.keys()) this.stop(runId)
+  /** App shutdown (will-quit). Stops every run whose pty is this process's own child, and leaves the
+   *  ones the Host owns running — a dev server started under a Host survives a quit exactly as an
+   *  agent session does.
+   *
+   *  **Not "all", and the difference matters most here.** `stop` is a tree kill on win32, which is
+   *  strictly stronger than closing a pty master: it ends the build's own children. Skip it for a run
+   *  the app owns and `npm run dev`'s grandchildren outlive the app with nothing left to reap them —
+   *  which is what a single Host-or-not answer for every pty at once used to do to a run started in
+   *  the window before the Host answered. */
+  stopAppOwned(): void {
+    for (const [runId, live] of this.runs) if (!live.pty.outlivesApp) this.stop(runId)
   }
 }

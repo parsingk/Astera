@@ -143,6 +143,25 @@ describe('RollingCoordinator', () => {
     expect(h.sent.some((s) => s.channel === 'session:rolled')).toBe(true)
   })
 
+  // A chain the app takes back from the Host after a restart may already have rolled: the session is
+  // running on a later account while a freshly built RollCycle starts at 0. Left there, the first limit
+  // is wrong in all three directions — the block is recorded against the account at index 0, that
+  // record is broadcast to every other chain through the shared registry, and the roll targets index 1,
+  // the exhausted account the session is already sitting on. The account it is really running under is
+  // what positions the cycle.
+  it('a chain registered on the second account rolls to the third, not back onto itself', async () => {
+    const blocks = new BlockRegistry()
+    const h = harness({ blocks })
+    h.payloads.set('s1', payload(97))
+    h.coord.register({ ...h.info1, accountId: 'a2' })
+    h.coord.handleData({ sessionId: 's1', data: LIMIT_TEXT })
+    await flush()
+    expect(h.events).toEqual(['copy', 'kill:s1', 'spawn:s2:a3'])
+    // and the block belongs to the account that hit it, not to the healthy one at the head of the chain
+    expect(blocks.get('a1', Date.now())).toBeNull()
+    expect(blocks.get('a2', Date.now())).not.toBeNull()
+  })
+
   // 사람이 탭 이름을 바꿔 둔 채로 한도에 걸리면, 계정을 갈아탄 뒤에도 그 이름이어야 한다.
   // chain.liveInfo 는 spawn 이 낸 복사본이라 세션 쪽만 고쳐서는 여기까지 오지 않는다 — 그래서
   // 이름 변경이 이 체인에도 밀려 들어오고, 그 값이 respawn 의 title 로 나간다.

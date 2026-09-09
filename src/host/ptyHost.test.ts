@@ -100,6 +100,27 @@ describe('attachPtyHost', () => {
     expect(h.replies).toEqual([{ t: 'pty-data', id: 'p1', data: 'earlier output' }])
   })
 
+  // The note is the app's own record of what a pty is, and the app can learn more about it after the
+  // spawn. The Host merges the keys and answers nothing — like every other command, there is nothing
+  // to say back and nothing here reads what it merged.
+  it('merges a note into the entry and replies nothing', () => {
+    const h = harness()
+    h.send(spawnMsg)
+    h.replies.length = 0
+    expect(h.send({ t: 'pty-note', id: 'p1', patch: { title: 'renamed' } })).toBe(true)
+    expect(h.replies).toEqual([])
+    expect(h.registry.list()[0].meta).toEqual({ kind: 'terminal', id: 'trm_1', restore: { title: 'renamed' } })
+  })
+
+  it('a note for an unknown id is owned and ignored, like every other command', () => {
+    const h = harness()
+    h.send(spawnMsg)
+    h.replies.length = 0
+    expect(h.send({ t: 'pty-note', id: 'nope', patch: { title: 'renamed' } })).toBe(true)
+    expect(h.replies).toEqual([])
+    expect(h.registry.list()[0].meta).toEqual({ kind: 'terminal', id: 'trm_1', restore: {} })
+  })
+
   it('attaching to an empty or unknown session sends nothing', () => {
     const h = harness()
     h.send(spawnMsg)

@@ -6,12 +6,20 @@
 // renderer.
 
 /** Bumped whenever a message changes shape. A Host and an app that disagree do not talk (design §6).
- *  2 added the pty-* messages: the Host owns the terminals now. */
-export const HOST_PROTOCOL = 2
+ *  2 added the pty-* messages: the Host owns the terminals now. 3 added pty-note — an older Host
+ *  answers a message it does not know by logging it and carrying on, so an app that kept talking to
+ *  one would have every note update silently dropped and would adopt its sessions from stale notes,
+ *  which is exactly the wrong behaviour the version guard exists to make impossible. */
+export const HOST_PROTOCOL = 3
 
 /** What the app needs to rebuild its own record for a session after a restart. The Host stores it
  *  and hands it back untouched — only the manager that wrote it knows how to read it (slice 2
- *  design §4). */
+ *  design §4).
+ *
+ *  Written at spawn and **patched afterwards** through `pty-note`, key by key: some of what the app
+ *  would want back is not known yet at spawn (a codex session's rollout file) or changes later (a
+ *  session's title). The Host merges the keys it is given into `restore` without reading any of
+ *  them. */
 export interface PtyMeta {
   kind: 'session' | 'run' | 'terminal'
   /** The app's own id for this thing, not the Host's id for the pty. */
@@ -50,6 +58,10 @@ export type ClientMessage =
   | { t: 'pty-kill'; id: string }
   | { t: 'pty-pause'; id: string }
   | { t: 'pty-resume'; id: string }
+  /** Merge these keys into the note this pty was spawned with. A patch and not a whole note: the two
+   *  senders each know one field — the session's title, a codex session's rollout file — and either
+   *  one sending a whole `restore` would erase what the other wrote. */
+  | { t: 'pty-note'; id: string; patch: Record<string, unknown> }
   | { t: 'pty-list' }
   | { t: 'pty-attach'; id: string }
 

@@ -250,6 +250,35 @@ describe('createHostPtyFactory', () => {
     expect(t.sent).toHaveLength(before)
   })
 
+  // The app learns things about a session after it has spawned — its new title, the rollout file a
+  // codex session turned out to write to — and the note is where they have to land to survive a
+  // restart. Sent at once even while pending, for the same reason kill, pause and resume are: the
+  // Host sees it after the pty-spawn it is ordered behind, and a patch for a spawn that never
+  // happened is a no-op there.
+  it('remembers a patch against this pty, immediately even while the spawn is pending', () => {
+    const t = transport()
+    const { factory } = createHostPtyFactory(t)
+    const p = factory('cmd.exe', [], opts)
+    const id = spawned(t)
+    p.remember?.({ title: 'renamed' })
+    t.deliver({ t: 'pty-spawned', id, pid: 1 })
+    p.remember?.({ rolloutPath: 'D:/r/one.jsonl' })
+    expect(t.sent.slice(1)).toEqual([
+      { t: 'pty-note', id, patch: { title: 'renamed' } },
+      { t: 'pty-note', id, patch: { rolloutPath: 'D:/r/one.jsonl' } }
+    ])
+  })
+
+  it('sends no note for a pty that has already exited', () => {
+    const t = transport()
+    const { factory } = createHostPtyFactory(t)
+    const p = factory('cmd.exe', [], opts)
+    t.deliver({ t: 'pty-exit', id: spawned(t), exitCode: 0 })
+    const before = t.sent.length
+    p.remember?.({ title: 'renamed' })
+    expect(t.sent).toHaveLength(before)
+  })
+
   // Adoption after a restart: the pty is already there, so the handle starts live with its pid and
   // nothing queued.
   it('attach gives a live handle for a pty that already exists', () => {
@@ -259,5 +288,23 @@ describe('createHostPtyFactory', () => {
     expect(p.pid).toBe(555)
     p.write('hello')
     expect(t.sent).toEqual([{ t: 'pty-write', id: 'p9', data: 'hello' }])
+  })
+
+  // **Adoption is the one pty creation that never passes the router**, so the marker the router puts
+  // on everything it hands out has to be put here instead. It is unconditional: every handle this
+  // function makes is for a pty that lives in the Host, which is what adoption means.
+  it('attach marks the handle as a pty that outlives the app', () => {
+    const t = transport()
+    const { attach } = createHostPtyFactory(t)
+    expect(attach({ id: 'p9', pid: 555 }).outlivesApp).toBe(true)
+  })
+
+  // An adopted session is renamed like any other, and the note it was adopted from is the one that
+  // has to change — otherwise the next restart brings the old title back again.
+  it('an attached handle remembers too', () => {
+    const t = transport()
+    const { attach } = createHostPtyFactory(t)
+    attach({ id: 'p9', pid: 555 }).remember?.({ title: 'renamed again' })
+    expect(t.sent).toEqual([{ t: 'pty-note', id: 'p9', patch: { title: 'renamed again' } }])
   })
 })

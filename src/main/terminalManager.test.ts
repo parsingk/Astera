@@ -16,6 +16,9 @@ class FakePty implements PtyLike {
   kill() { this.killed = true; this.exitCb({ exitCode: 0 }) }
   pause() {}
   resume() {}
+  /** What `createPtyRouter` stamps on a real handle. Absent is the app's own child, which is what
+   *  the router writes with no Host and what every other test in this file wants. */
+  outlivesApp?: boolean
 }
 
 function setup(platform: NodeJS.Platform = 'win32') {
@@ -129,14 +132,28 @@ describe('TerminalManager', () => {
     expect(mgr.list('D:\\p')).toEqual([])
   })
 
-  it('closeAll은 모든 프로젝트의 터미널을 kill한다', () => {
+  it('closeAppOwned는 모든 프로젝트의 터미널을 kill한다', () => {
     const { mgr, spawned } = setup()
     mgr.open('D:\\one')
     mgr.open('D:\\two')
-    mgr.closeAll()
+    mgr.closeAppOwned()
     expect(spawned.every((s) => s.pty.killed)).toBe(true)
     expect(mgr.list('D:\\one')).toEqual([])
     expect(mgr.list('D:\\two')).toEqual([])
+  })
+
+  // A terminal opened before the Host answered is this process's own child and dies with the app; one
+  // opened after belongs to the Host and is exactly what a restart takes back. It stays in the map too —
+  // closing it here would drop the app's record of a pty that is still running.
+  it('closeAppOwned leaves a terminal whose pty outlives the app open', () => {
+    const { mgr, spawned } = setup()
+    mgr.open('D:\\one')
+    const kept = mgr.open('D:\\two')
+    spawned[1].pty.outlivesApp = true
+    mgr.closeAppOwned()
+    expect(spawned.map((s) => s.pty.killed)).toEqual([true, false])
+    expect(mgr.list('D:\\one')).toEqual([])
+    expect(mgr.list('D:\\two').map((t) => t.id)).toEqual([kept.id])
   })
 
   it('non-win32에서는 envShell을 쓴다', () => {
