@@ -45,13 +45,16 @@ const HANDSHAKE_MS = 10_000
 const answers = (address: string): Promise<boolean> =>
   new Promise((resolve) => {
     const probe = net.connect(address)
+    // A last resort for an address that neither accepts nor refuses. Cleared as soon as the probe
+    // settles, so it does not sit in the loop with an answer nobody is waiting for any more.
+    const fallback = setTimeout(() => done(false), 1000)
     const done = (v: boolean): void => {
+      clearTimeout(fallback)
       probe.destroy()
       resolve(v)
     }
     probe.on('connect', () => done(true))
     probe.on('error', () => done(false))
-    setTimeout(() => done(false), 1000)
   })
 
 export async function startHostServer(deps: HostServerDeps): Promise<HostServer> {
