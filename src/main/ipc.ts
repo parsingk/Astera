@@ -5153,6 +5153,15 @@ export function registerIpc(
         attach,
         sendAttach: (id) => transport.send({ t: 'pty-attach', id }),
         kill: (id) => transport.send({ t: 'pty-kill', id }),
+        // Asked per kind, because the id in the note is the manager's own, not the pty's. Exited does
+        // not count as held: a reconnect's whole job is adopting the records the fabricated exit marked
+        // exited. A terminal has no exited state to ask about — its exit deletes the entry.
+        heldLive: (a) => {
+          if (a.kind === 'session') return core.sessions.list().some((s) => s.id === a.id && s.status === 'running')
+          if (a.kind === 'run') return core.run.get(a.id)?.status === 'running'
+          if (a.kind === 'terminal') return core.terminal.holds(a.id)
+          return false
+        },
         adopters: {
           session: (a) => {
             const info = core.sessions.adopt(a)

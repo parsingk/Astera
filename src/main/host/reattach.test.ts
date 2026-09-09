@@ -30,6 +30,7 @@ const deps = (over: Partial<Parameters<typeof reattachSessions>[0]> = {}) => {
         run: (a: { restore: Record<string, unknown> }) => { adopted.push(['run', a.restore]); return true },
         terminal: (a: { restore: Record<string, unknown> }) => { adopted.push(['terminal', a.restore]); return true }
       },
+      heldLive: () => false,
       log: (m: string) => logs.push(m),
       ...over
     }
@@ -144,5 +145,29 @@ describe('reattachSessions', () => {
     })
     await reattachSessions(h.d as never)
     expect(h.attached).toEqual(['p1'])
+  })
+
+  // A pty the app spawned between the handshake and the `pty-list` reply is in that reply, and the app
+  // already has a live record and a working handle for it. Adopting it again would put a second handle
+  // on one pty: every byte delivered twice, and two records racing to write to it.
+  it('leaves alone a pty the app already holds live, without adopting or killing it', async () => {
+    const h = deps({
+      list: async () => [entry({ id: 'p2', meta: { kind: 'terminal', id: 'trm_new', restore: { projectPath: 'D:/p' } } })],
+      heldLive: (a: { kind: string; id: string }) => a.id === 'trm_new'
+    })
+    expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 0, sessions: [] })
+    expect(h.adopted).toEqual([])
+    expect(h.killed).toEqual([])
+    expect(h.attached).toEqual([]) // no second handle was even built
+  })
+
+  // Skipped is not lost. The boot cleanup reads this list to tell a live orchestration worker from one
+  // it should write off, and a session the app is already running is as live as one it just took back.
+  it('still reports a session it skipped as live', async () => {
+    const h = deps({
+      list: async () => [entry({ id: 'p3', meta: { kind: 'session', id: 'sess_mine', restore: { accountId: 'a', cwd: 'D:/p', title: 't' } } })],
+      heldLive: () => true
+    })
+    expect(await reattachSessions(h.d as never)).toEqual({ adopted: 0, refused: 0, sessions: ['sess_mine'] })
   })
 })

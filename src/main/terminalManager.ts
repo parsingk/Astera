@@ -108,6 +108,14 @@ export class TerminalManager {
     live.pty.kill()
   }
 
+  /** Whether this manager is holding that terminal right now. There is no exited state to ask about —
+   *  an exit deletes the entry — so holding it is the whole answer. The reattach sweep asks, so a
+   *  terminal opened between the Host handshake and the `pty-list` reply is not adopted a second time
+   *  on top of the handle it already has. */
+  holds(id: string): boolean {
+    return this.terminals.has(id)
+  }
+
   /** That project's terminals plus their replay buffers — on panel re-entry the renderer writes these into xterm first. */
   list(projectPath: string): TerminalBuffer[] {
     return [...this.terminals.values()]

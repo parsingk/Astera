@@ -27,6 +27,14 @@ export interface ReattachDeps {
   /** Asks the Host to replay this session's scrollback to us. */
   sendAttach(id: string): void
   kill(id: string): void
+  /** Whether the app already has a **live** record for the thing this note names — the manager the
+   *  kind names, holding that id and still running.
+   *
+   *  A pty spawned between the handshake and the `pty-list` reply is in that reply, and the app has a
+   *  working handle for it already; adopting it again puts a second handle on one pty, so every byte
+   *  arrives twice and two records write to it. Exited does not count: a reconnect's whole job is
+   *  adopting sessions the app marked exited when the socket dropped. */
+  heldLive(a: { kind: string; id: string }): boolean
   adopters: {
     session(a: AdoptArgs): boolean
     run(a: AdoptArgs): boolean
@@ -38,7 +46,8 @@ export interface ReattachDeps {
 export interface ReattachResult {
   adopted: number
   refused: number
-  /** The ids of the entries adopted as sessions — the app's own id from before the restart, which an
+  /** The session ids this sweep leaves the app running — the ones it adopted, plus the ones it found
+   *  the app was already running (`heldLive`). The app's own id from before the restart, which an
    *  adopted session keeps (design §10), so this is exactly the same id Task 8's Dispatch matching
    *  already has stored. Runs and terminals have no such consumer, so only sessions are listed. */
   sessions: string[]
@@ -56,6 +65,15 @@ export async function reattachSessions(deps: ReattachDeps): Promise<ReattachResu
       deps.log(`pty ${e.id} has no note saying what it is — killing it rather than leaving it ownerless`)
       deps.kill(e.id)
       refused += 1
+      continue
+    }
+    // Already ours and running — nothing to take back, and nothing wrong with it either, so it is
+    // neither adopted nor refused. It is still reported as a live session below: the boot cleanup reads
+    // that list to tell a live orchestration worker from one it should write off, and a worker the app
+    // is already running is as live as one it just took back.
+    if (deps.heldLive({ kind: e.meta.kind, id: e.meta.id })) {
+      deps.log(`pty ${e.id} is already ours and running — left as it is`)
+      if (e.meta.kind === 'session') sessions.push(e.meta.id)
       continue
     }
     try {
