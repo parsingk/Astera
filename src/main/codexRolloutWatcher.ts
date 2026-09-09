@@ -84,8 +84,12 @@ export interface CodexRolloutDeps {
    *  Optional, and it goes through a dep rather than a manager because this watcher holds no pty and
    *  no session record — it holds the same shape everything else here does, a function the wiring
    *  supplies. Absent, nothing is written down and an adopted session simply has no path, which is
-   *  what happened before this existed. */
-  remember?(sessionId: string, note: { rolloutPath: string; codexSessionId: string }): void
+   *  what happened before this existed.
+   *
+   *  The id is absent when the mapping came from a caller that handed the path over: that caller is
+   *  resuming, and `info.resumeSessionId` holds the same value and is in the note already, put there
+   *  by spawn. */
+  remember?(sessionId: string, note: { rolloutPath: string; codexSessionId?: string }): void
   now?: () => number
 }
 
@@ -124,7 +128,10 @@ export class CodexRolloutWatcher {
    *  created after the spawn, can never find it and turn notifications simply stopped after any resume
    *  (the same defect as codexRolling's, see attachRollout there). The tail starts at the end of that
    *  file: it is full of turns that finished before this session existed, and reporting those is the
-   *  misfire the old excludePaths argument was there to prevent.
+   *  misfire the old excludePaths argument was there to prevent. Both those callers have the file on
+   *  disk by the time they get here — each awaits the copy that made it before spawning — and both
+   *  paths are written down the same way a scanned one is, so a session resumed and then taken back
+   *  from the Host is registered from its note rather than skipped.
    *
    *  codexSessionId: the conversation's own id, for the one caller that knows it without this watcher
    *  having scanned — the reattach adopter, which reads it out of the Host's note beside the path. A
@@ -148,7 +155,17 @@ export class CodexRolloutWatcher {
       context: null,
       contextSeed: rolloutPath ? seedContext(rolloutPath) : null
     })
+    // A path handed over is a mapping like any other, and this is where every one of them passes —
+    // both resuming callers reach the same line as the scan does, rather than each having to remember
+    // to write its own down.
+    if (rolloutPath) this.rememberMapping(info.id, rolloutPath, codexSessionId)
     this.ensureTicker()
+  }
+
+  /** The one shape a remembered mapping has. Both the scan and a caller-supplied path go through it,
+   *  so the two cannot disagree about what the note is asked to hold. */
+  private rememberMapping(sessionId: string, rolloutPath: string, codexSessionId?: string): void {
+    this.deps.remember?.(sessionId, { rolloutPath, ...(codexSessionId ? { codexSessionId } : {}) })
   }
 
   /** The usage snapshot for the chips, or null when this session is unknown or nothing has been read
@@ -255,9 +272,9 @@ export class CodexRolloutWatcher {
       entry.rolloutPath = found.path
       entry.codexSessionId = found.sessionId
       entry.tail = new JsonlTail(found.path)
-      // Told once, here, because this is the one moment the mapping is made and the only moment it can
-      // be: after a restart the scan that produced it cannot be run again for this session.
-      this.deps.remember?.(entry.sessionId, { rolloutPath: found.path, codexSessionId: found.sessionId })
+      // Told once, here, because this is the one moment the scan makes a mapping and the only moment it
+      // can be told: after a restart the scan that produced it cannot be run again for this session.
+      this.rememberMapping(entry.sessionId, found.path, found.sessionId)
       this.deps.log(`codex rollout watch mapped session=${entry.sessionId} path=${found.path}`)
       return // End this step() having only mapped, without reading — the next tick's read() is still that JsonlTail's
       // first call, so it reads the whole file from offset 0. Deferring does not narrow the range read, so it does not

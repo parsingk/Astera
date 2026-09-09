@@ -152,6 +152,45 @@ describe('CodexRolloutWatcher', () => {
     w.stop()
   })
 
+  // A caller-supplied path is a mapping too. `codex resume` appends to the existing rollout instead of
+  // creating one, so the scan can never find it and both resuming callers — a history resume, and the
+  // respawn at the end of a roll — hand the file over instead. Left unwritten, adopting one of those
+  // sessions would skip registration for want of a path the app had all along.
+  it('writes down a path it was handed at registration, not only one it scanned for', () => {
+    const cwd = path.join(dir, 'proj')
+    const remember = vi.fn()
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: () => {},
+      now: () => now,
+      remember
+    })
+    w.register(session('live-1', cwd), path.join(dir, 'one.jsonl'))
+    expect(remember).toHaveBeenCalledWith('live-1', { rolloutPath: path.join(dir, 'one.jsonl') })
+    w.stop()
+  })
+
+  // The id is not invented for a resuming caller: it holds the same value in `info.resumeSessionId`,
+  // which is in the note already because spawn put it there.
+  it('writes the id down beside the path only when it was given one', () => {
+    const cwd = path.join(dir, 'proj')
+    const remember = vi.fn()
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: () => {},
+      now: () => now,
+      remember
+    })
+    w.register(session('live-1', cwd), path.join(dir, 'one.jsonl'), 'cx-1')
+    expect(remember).toHaveBeenCalledWith('live-1', {
+      rolloutPath: path.join(dir, 'one.jsonl'),
+      codexSessionId: 'cx-1'
+    })
+    w.stop()
+  })
+
   // Every other construction of this watcher in the app and in these tests leaves the dep out; a scan
   // that has nobody to tell must still map the session for itself.
   it('maps the rollout with nobody to hand it to', async () => {
