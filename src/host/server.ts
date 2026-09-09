@@ -13,6 +13,10 @@ import type { HostLog } from './log'
  *  turns it into a quiet exit: losing the race is the normal outcome of two apps starting at once. */
 export const ADDRESS_TAKEN = 'astera-host: the address is already served'
 
+/** Thrown by `startHostServer` when the directory the socket would go in is not one this user alone
+ *  can open. See the check in `startHostServer` for why an existing directory cannot be trusted. */
+export const UNSAFE_ADDRESS_DIR = 'astera-host: the address directory is not private to this user'
+
 export interface HostServerDeps {
   address: string
   /** posix: created with mode 0700 before binding. null on win32 (design §5). */
@@ -46,7 +50,23 @@ const answers = (address: string): Promise<boolean> =>
   })
 
 export async function startHostServer(deps: HostServerDeps): Promise<HostServer> {
-  if (deps.dirToPrepare) await fs.mkdir(deps.dirToPrepare, { recursive: true, mode: 0o700 })
+  if (deps.dirToPrepare) {
+    await fs.mkdir(deps.dirToPrepare, { recursive: true, mode: 0o700 })
+    // The mode above is a guarantee only for a directory this call created: `recursive: true` against
+    // one that is already there neither errors nor changes its mode. On linux the parent is /tmp at
+    // 1777 and the address key is a hash of a guessable profile path, so another local user can make
+    // the directory first and leave it open to everyone — or bind their own socket in it, which the
+    // EADDRINUSE path below would read as a live Host and step aside for. Design section 5 says
+    // access control is the operating system, and that only holds while the directory's own mode says
+    // so, so check it rather than assume it.
+    const st = await fs.lstat(deps.dirToPrepare)
+    if (!st.isDirectory() || process.getuid?.() !== st.uid || (st.mode & 0o077) !== 0) {
+      deps.log.write(
+        `${deps.dirToPrepare} is not a directory only this user can open (uid ${st.uid}, mode ${(st.mode & 0o777).toString(8)}) — not serving there`
+      )
+      throw new Error(UNSAFE_ADDRESS_DIR)
+    }
+  }
 
   const startedAt = new Date().toISOString()
   let live = 0

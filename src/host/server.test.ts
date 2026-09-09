@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { hostAddress } from './address'
 import { encodeLine, createLineReader } from './framing'
-import { startHostServer, ADDRESS_TAKEN, type HostServer } from './server'
+import { startHostServer, ADDRESS_TAKEN, UNSAFE_ADDRESS_DIR, type HostServer } from './server'
 import { HOST_PROTOCOL } from '../core/host/protocol'
 
 let dir: string
@@ -180,5 +180,31 @@ describe.runIf(process.platform !== 'win32')('a socket file left behind', () => 
     const h = await server({ profile: 'perms' })
     const st = await fs.stat(path.dirname(h.address))
     expect(st.mode & 0o777).toBe(0o700)
+  })
+
+  // The test above only covers the directory this Host made. `mkdir` with `recursive: true` neither
+  // errors nor changes the mode of a directory that is already there, so on linux — where the parent
+  // is /tmp at 1777 and the address key is a hash of a guessable profile path — another local user
+  // can create the name first and leave it open to everyone. Binding inside it would put the channel
+  // where anybody can reach it, so the Host refuses the address instead.
+  it('refuses an address whose directory is open to everyone', async () => {
+    const logs: string[] = []
+    const addr = hostAddress({ profileDir: path.join(dir, 'loose'), platform: process.platform, tmpDir: dir })
+    await fs.mkdir(addr.dirToPrepare!, { recursive: true })
+    // chmod rather than mkdir's `mode`, which the umask trims.
+    await fs.chmod(addr.dirToPrepare!, 0o777)
+    await expect(
+      startHostServer({
+        address: addr.address,
+        dirToPrepare: addr.dirToPrepare,
+        version: '9.9.9',
+        idleMs: 60_000,
+        onIdle: () => {},
+        log: { write: (m) => logs.push(m), close: () => {} }
+      })
+    ).rejects.toThrow(UNSAFE_ADDRESS_DIR)
+    expect(logs.some((l) => l.includes(addr.dirToPrepare!))).toBe(true)
+    // Nothing was bound: the refusal happens before listen.
+    await expect(fs.stat(addr.address)).rejects.toThrow()
   })
 })
