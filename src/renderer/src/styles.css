@@ -2330,8 +2330,14 @@ input[type="checkbox"]:not(.md-task input):focus-visible {
 .file-editor .cm-editor, .file-editor .cm-gutters { background: var(--md-code-bg); }
 .file-editor .cm-scroller { font-family: Consolas, 'Courier New', monospace; font-size: 13px; }
 /* The search panel is open but never drawn — FileFindBar is what the user sees. It has to stay open
-   because @codemirror/search only highlights matches while it is (see FileFindBar's own note). */
-.file-editor .cm-panels { display: none; }
+   because @codemirror/search only highlights matches while it is (see FileFindBar's own note).
+   Collapsed to zero height rather than `display: none`: an open panel contributes a scroll margin,
+   and CodeMirror measures it with getBoundingClientRect. A display:none element reports an all-zero
+   rect at the viewport origin, which that formula reads as a panel covering the whole editor — every
+   scrollIntoView then overshoots by an editor height. Kept in flow at zero height it measures 0.
+   `.cm-editor` is in the selector for the same reason as the match colours below — oneDark draws a
+   2px border on the panel, and without the extra class this rule only ties with it. */
+.file-editor .cm-editor .cm-panels { height: 0; overflow: hidden; border: 0; }
 /* The match you are on must read as stronger than the rest. oneDark has it the other way round: it
    paints .cm-searchMatch at #72a1ff59 and then the selected one at #6199ff2f, which is fainter. The
    hue stays oneDark's; only the weight changes, and the ring carries most of it so the code

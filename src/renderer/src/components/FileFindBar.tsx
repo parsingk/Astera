@@ -44,8 +44,10 @@ const COUNT_DELAY = 90
  *  **A hidden panel is deliberately left open.** Match highlighting is gated on the panel being open:
  *  @codemirror/search's `searchHighlighter` paints nothing while `searchState.panel` is null. So
  *  FileEditor configures `search()` with a `createPanel` that returns an empty div, this component
- *  opens and closes it alongside itself, and styles.css hides `.cm-panels` outright. Without that the
- *  bar would work and nothing in the document would light up. */
+ *  opens and closes it alongside itself, and styles.css collapses `.cm-panels` to zero height. Without
+ *  that the bar would work and nothing in the document would light up. (Zero height, not
+ *  `display: none` — FileEditor's note on `search()` explains what an unmeasurable panel did to
+ *  scrolling.) */
 export function FileFindBar({
   view,
   stateEpoch,
