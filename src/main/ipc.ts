@@ -5198,20 +5198,34 @@ export function registerIpc(
             // (design §10) — including its tab: the renderer builds one from `session:created` the
             // same way it does for a freshly spawned session, since reattaching can land well after
             // the renderer has already mounted.
+            // What the codex rollout watcher mapped for this session before the restart. Both blocks
+            // below want it: the rolling chain cannot find it again, and neither can the watcher.
+            const codexNote = codexRolloutFromNote(a.restore)
             const coordinator = rollCoordinatorForSession(info.id, core.sessions.list(), (id) => core.accounts.get(id))
             if ((info.rollAccountIds?.length ?? 0) >= 1) {
-              // The `false` is `locate` (CodexRollingCoordinator.register's 4th argument): an
-              // adopted session must not run the locate poll — see that parameter's own doc comment
-              // for why the discovery it would run is actively harmful here, not merely useless.
-              // What it costs, beyond rolling itself, is this coordinator's own two lookups, which
-              // stay null for the session's whole life: tabResumeTextFor, so handover and update
-              // text degrade to the git-only form; and findLiveByCodexSession, the guard that stops
-              // a conversation reopened from history being resumed while it is still live. Without
-              // that guard, reopening an adopted rolling codex conversation starts a second
-              // `codex resume` appending to a rollout the live pty is still writing. That is still
-              // better than the alternative this replaced, which guarded the *wrong* conversation,
-              // and it goes away with the same follow-up store the block below names.
-              if (coordinator === 'codexRolling') codexRolling?.register(info, undefined, undefined, false)
+              // The `false` is `locate` (CodexRollingCoordinator.register's 4th argument): an adopted
+              // session must not run the locate poll — see that parameter's own doc comment for why the
+              // discovery it would run is actively harmful here, not merely useless. What it is handed
+              // instead is the mapping itself, out of the same note the watcher wrote it into, so there
+              // is nothing to discover and nothing to steal: the chain is mapped from registration and
+              // rolls on its next limit like any other.
+              //
+              // A note with no mapping in it — the watcher never got to scan before the app went down —
+              // registers unmapped, exactly as every adopted chain did before. Rolling is off for that
+              // session, and with it this coordinator's two lookups: tabResumeTextFor, so handover and
+              // update text degrade to the git-only form, and findLiveByCodexSession, the guard that
+              // stops a conversation reopened from history being resumed while it is still live.
+              if (coordinator === 'codexRolling')
+                codexRolling?.register(
+                  info,
+                  codexNote?.rolloutPath,
+                  false,
+                  false,
+                  // Absent when the mapping was handed to the watcher rather than scanned for — a roll's
+                  // respawn is a `codex resume`, so the id is `info.resumeSessionId` and register reads
+                  // it from there.
+                  codexNote?.codexSessionId ?? undefined
+                )
               else if (coordinator === 'rolling') rolling?.register(info)
             }
             // codexRollout is registered **only from the note**, never left to find the file itself.
@@ -5243,7 +5257,6 @@ export function registerIpc(
             // Unit detection (rolloutPathFor feeds the transcript path) and the scheduler's key
             // (codexSessionId, read below). The tail starts at the end of the file, so turns that
             // completed while the app was closed are not reported now — the same rule a resume follows.
-            const codexNote = codexRolloutFromNote(a.restore)
             if (codexNote) {
               try {
                 // The id goes in too, so `codexSessionIdFor` answers for an adopted session the way it
