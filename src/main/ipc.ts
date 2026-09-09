@@ -4722,7 +4722,12 @@ export function registerIpc(
           logPath: path.join(profileDir, 'host', 'host.log'),
           version: app.getVersion()
         })
-        spawn(plan.command, plan.args, plan.options).unref()
+        const child = spawn(plan.command, plan.args, plan.options)
+        // A spawn that fails arrives as an async 'error' event, not a throw, and an unhandled one is
+        // an uncaught exception in the main process. The client's own retry loop reports the outcome
+        // to the person; this only has to keep the failure from being fatal.
+        child.on('error', (err) => orchLog(`host: the Host could not be started: ${String(err)}`))
+        child.unref()
       }
     })
     hostClient.start()
