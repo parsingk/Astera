@@ -230,6 +230,7 @@ export const en: Record<keyof typeof ko, string> = {
   'settings.info.host': 'Background host',
   'settings.info.hostConnected': 'Connected · protocol {protocol} · up {uptime}',
   'settings.info.hostNotConnected': 'Not connected',
+  'settings.info.hostNotConnectedWhy': 'Not connected · {detail}',
   'settings.slack.save': 'Save',
   'settings.slack.saved': 'Saved',
   'settings.slack.saveFailed': 'Could not save the Slack settings: {detail}',

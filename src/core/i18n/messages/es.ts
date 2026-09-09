@@ -194,6 +194,7 @@ export const es: Catalog = {
   'settings.info.host': 'Host en segundo plano',
   'settings.info.hostConnected': 'Conectado · protocolo {protocol} · desde hace {uptime}',
   'settings.info.hostNotConnected': 'Sin conexión',
+  'settings.info.hostNotConnectedWhy': 'Sin conexión · {detail}',
   'settings.slack.save': 'Guardar',
   'settings.slack.saved': 'Guardado',
   'settings.slack.saveFailed': 'No se pudo guardar la configuración de Slack: {detail}',

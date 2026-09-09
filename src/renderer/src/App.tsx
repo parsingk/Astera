@@ -4028,7 +4028,9 @@ export default function App(): React.JSX.Element {
                               protocol: hostStatus.protocol ?? 0,
                               uptime: hostUptime(hostStatus.startedAt)
                             })
-                          : t('settings.info.hostNotConnected')}
+                          : hostStatus?.problem
+                            ? t('settings.info.hostNotConnectedWhy', { detail: hostStatus.problem })
+                            : t('settings.info.hostNotConnected')}
                       </span>
                     </div>
                     <div className="settings-row">

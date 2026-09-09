@@ -4743,7 +4743,7 @@ export function registerIpc(
         hostVersion: null,
         startedAt: null,
         pid: null,
-        problem: 'the Host client was not built'
+        problem: 'out/main/host.js was not found'
       }
   )
 

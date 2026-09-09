@@ -249,6 +249,7 @@ export const ko = {
   'settings.info.host': '백그라운드 호스트',
   'settings.info.hostConnected': '연결됨 · 규약 {protocol} · {uptime} 전부터',
   'settings.info.hostNotConnected': '연결 안 됨',
+  'settings.info.hostNotConnectedWhy': '연결 안 됨 · {detail}',
   'settings.slack.save': '저장',
   'settings.slack.saved': '저장됨',
   'settings.slack.saveFailed': 'Slack 설정을 저장하지 못했습니다: {detail}',

@@ -193,6 +193,7 @@ export const ja: Catalog = {
   'settings.info.host': 'バックグラウンドホスト',
   'settings.info.hostConnected': '接続済み · プロトコル {protocol} · {uptime} 前から',
   'settings.info.hostNotConnected': '未接続',
+  'settings.info.hostNotConnectedWhy': '未接続 · {detail}',
   'settings.slack.save': '保存',
   'settings.slack.saved': '保存しました',
   'settings.slack.saveFailed': 'Slack 設定を保存できませんでした: {detail}',
