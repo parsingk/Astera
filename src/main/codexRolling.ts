@@ -356,6 +356,14 @@ export class CodexRollingCoordinator {
       this.deps.log(
         `codex rollout attached ${locate ? 'on resume' : 'from the note'} session=${info.id} id=${attachSessionId}`
       )
+      // Said out loud, because what this costs looks from outside like a session that quietly never
+      // resumes, and a decision that only exists in a comment is one nobody can find at 3am.
+      if (!locate)
+        this.deps.log(
+          `codex chain adopted without reading the block on record — if this session was already blocked ` +
+            `while the app was away it waits for its next rate_limits record instead of rolling now ` +
+            `session=${info.id}`
+        )
     } else if (locate) {
       this.startLocate(chain, this.deps.getAccount(ids[this.cycleIndexOf(chain)]))
     } else {
@@ -677,8 +685,12 @@ export class CodexRollingCoordinator {
       // onLimit re-reads this slot and broadcasts it, but only once its own guards have passed.
       //
       // **Known imprecision, and nothing tears it up.** register only asks the file when the reopen
-      // stays on the account that wrote it, so the slot (currentIndex, always 0 on a fresh register)
-      // is that account. The shape that still slips through is a rollout a *roll* copied into this
+      // stays on the account that wrote it, so the slot (currentIndex) is that account. That slot is 0
+      // here, and it is 0 for a reason worth writing down: the only caller that can register a chain
+      // part-way round is adoption, and **adoption deliberately never asks** (register's attach branch
+      // leaves `sameAccount` false for it, and says why). Anyone making adoption ask has to come back
+      // here first — the slot would then be the adopted account, and the reasoning below about which
+      // account wrote the records has to be redone for a file this chain did not open. The shape that still slips through is a rollout a *roll* copied into this
       // account's folder: the copy carries the previous account's records, yet reopening it here is a
       // same-account resume by every test we have — not because the two cases cannot be told apart,
       // but because nothing here currently tries. RollConfigStore is already keyed by the codex

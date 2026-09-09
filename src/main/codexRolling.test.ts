@@ -1432,6 +1432,29 @@ describe('CodexRollingCoordinator', () => {
     h.coord.stop()
   })
 
+  // The one thing an adoption deliberately does not do is ask the file what block the conversation
+  // already ended on — the copy a recent roll made holds the previous account's records and nothing
+  // here can tell it from an ordinary file. What a person sees when that costs something is a session
+  // that quietly never resumes, so the choice is stated in the log the coordinator already writes.
+  it('says in the log that an adopted chain does not read the block on record', async () => {
+    const logs: string[] = []
+    const h = harness({ log: (m) => logs.push(m) })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-adopted', cwd: h.info1.cwd })
+    h.coord.register(h.info1, file, false, false, 'cx-adopted')
+    expect(logs.some((l) => l.includes('adopted without reading the block on record'))).toBe(true)
+    h.coord.stop()
+  })
+
+  // A resume does ask (when the account matches), so it must not carry the adopted line.
+  it('does not say it for a resume, which does read the block on record', async () => {
+    const logs: string[] = []
+    const h = harness({ log: (m) => logs.push(m) })
+    const file = await writeRollout({ accountId: 'c1', uuid: 'cx-resume', cwd: h.info1.cwd })
+    h.coord.register({ ...h.info1, resumeSessionId: 'cx-resume' }, file, true)
+    expect(logs.some((l) => l.includes('adopted without reading the block on record'))).toBe(false)
+    h.coord.stop()
+  })
+
   // Unchanged for a note that carries no mapping: there is nothing to hand over, so the chain is
   // registered unmapped rather than sent scanning.
   it('an adopted codex session never reaches the locate — it stays unmapped from registration', async () => {
