@@ -25,6 +25,8 @@ export interface HostServerDeps {
   version: string
   /** How long with no client before `onIdle` fires. */
   idleMs: number
+  /** How long a connection has to say `hello` before it is dropped. Defaults to HANDSHAKE_MS. */
+  helloMs?: number
   /** What to do when the last client has been gone for `idleMs`, or when a client says `retire`. */
   onIdle(): void
   log: HostLog
@@ -34,6 +36,9 @@ export interface HostServer {
   close(): Promise<void>
   clients(): number
 }
+
+/** How long a peer that has connected but said nothing gets before the Host hangs up on it. */
+const HANDSHAKE_MS = 10_000
 
 /** Whether something is answering at this address right now. Used to tell a stale socket file from a
  *  live one — unlinking a path someone is listening on would take a working Host's address away. */
@@ -95,6 +100,19 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     sockets.add(socket)
     if (idleTimer) clearTimeout(idleTimer)
     socket.setEncoding('utf8')
+    // A peer that connects and never speaks holds `live` above zero for good, and the idle shutdown —
+    // slice 1's only lifecycle rule — never fires again. Give the handshake a deadline.
+    let helloTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      helloTimer = null
+      deps.log.write(`a connection did not say hello within ${deps.helloMs ?? HANDSHAKE_MS}ms — dropping it`)
+      socket.destroy()
+    }, deps.helloMs ?? HANDSHAKE_MS)
+    // Same reason as the idle timer's: the server handle is what keeps the Host alive, not this.
+    helloTimer.unref?.()
+    const greeted = (): void => {
+      if (helloTimer) clearTimeout(helloTimer)
+      helloTimer = null
+    }
     const send = (m: HostMessage): void => {
       if (!socket.destroyed) socket.write(encodeLine(m))
     }
@@ -102,6 +120,8 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
       onMessage: (v) => {
         const m = v as ClientMessage
         if (m?.t === 'hello') {
+          // Said hello, whatever protocol it turned out to speak — the deadline is about silence.
+          greeted()
           if (m.protocol !== HOST_PROTOCOL) {
             deps.log.write(`client speaks protocol ${String(m.protocol)}, this Host speaks ${HOST_PROTOCOL}`)
             send({ t: 'protocol-mismatch', protocol: HOST_PROTOCOL })
@@ -122,6 +142,9 @@ export async function startHostServer(deps: HostServerDeps): Promise<HostServer>
     })
     socket.on('data', read)
     const gone = (): void => {
+      // Otherwise a peer that hangs up before saying anything still gets a "did not say hello" line
+      // logged against it after it has already gone.
+      greeted()
       sockets.delete(socket)
       live = Math.max(0, live - 1)
       if (live === 0) armIdle()

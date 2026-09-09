@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { hostAddress } from '../../host/address'
@@ -104,6 +105,34 @@ describe('HostClient', () => {
     expect(c.status().connected).toBe(false)
     expect(c.status().problem).toContain('no Host')
     await c.stop()
+  })
+
+  // A peer that accepts and then says nothing is not a dropped connection: nothing closes, so the
+  // close-and-backoff path never runs. Without a deadline of its own the status would sit at
+  // "not connected, no reason" for the app's whole life, with no retry.
+  it('gives up on a peer that accepts and never says hello', async () => {
+    const addr = addressFor('silent')
+    if (addr.dirToPrepare) await fs.mkdir(addr.dirToPrepare, { recursive: true, mode: 0o700 })
+    const held: net.Socket[] = []
+    const silent = net.createServer((sock) => held.push(sock))
+    await new Promise<void>((r) => silent.listen(addr.address, r))
+    try {
+      const c = new HostClient({
+        address: addr.address,
+        appVersion: '9.0.0',
+        spawnHost: () => {},
+        log: () => {},
+        helloMs: 60
+      })
+      c.start()
+      await settled(c, (s) => s.problem !== null)
+      expect(c.status().connected).toBe(false)
+      expect(c.status().problem).toContain('did not answer')
+      await c.stop()
+    } finally {
+      for (const sock of held) sock.destroy()
+      await new Promise<void>((r) => silent.close(() => r()))
+    }
   })
 
   it('keeps its status once it is stopped', async () => {

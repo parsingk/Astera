@@ -20,7 +20,9 @@ afterEach(async () => {
 })
 
 /** A server at an address of this test's own, with everything injectable. */
-const server = async (over: { idleMs?: number; onIdle?: () => void; profile?: string } = {}): Promise<{
+const server = async (
+  over: { idleMs?: number; helloMs?: number; onIdle?: () => void; profile?: string } = {}
+): Promise<{
   s: HostServer
   address: string
   logs: string[]
@@ -36,6 +38,7 @@ const server = async (over: { idleMs?: number; onIdle?: () => void; profile?: st
     dirToPrepare: addr.dirToPrepare,
     version: '9.9.9',
     idleMs: over.idleMs ?? 60_000,
+    helloMs: over.helloMs,
     onIdle: over.onIdle ?? ((): void => {}),
     log: { write: (m) => logs.push(m), close: () => {} }
   })
@@ -135,6 +138,34 @@ describe('startHostServer', () => {
     await new Promise((r) => setTimeout(r, 300))
     expect(idle).toBe(true)
     expect(h.s.clients()).toBe(0)
+  })
+
+  // A peer that connects and never speaks holds the live count above zero for good, which defeats the
+  // idle shutdown — slice 1's only lifecycle rule. The deadline is injected for the same reason the
+  // idle time is.
+  it('drops a connection that never says hello', async () => {
+    const h = await server({ helloMs: 60 })
+    const closed = await new Promise<boolean>((resolve) => {
+      const sock = net.connect(h.address)
+      sock.on('close', () => resolve(true))
+      setTimeout(() => {
+        sock.destroy()
+        resolve(false)
+      }, 3000)
+    })
+    expect(closed).toBe(true)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(h.s.clients()).toBe(0)
+    expect(h.logs.some((l) => l.includes('did not say hello'))).toBe(true)
+  })
+
+  it('leaves a connection alone once it has said hello', async () => {
+    const h = await server({ helloMs: 60 })
+    const [reply] = await talk(h.address, [{ t: 'hello', protocol: HOST_PROTOCOL, app: '1.0.0' }])
+    expect(reply).toMatchObject({ t: 'hello' })
+    // Well past the deadline: the handshake happened, so nothing should have dropped it.
+    await new Promise((r) => setTimeout(r, 200))
+    expect(h.logs.some((l) => l.includes('did not say hello'))).toBe(false)
   })
 
   it('a line that is not JSON is logged and the connection survives it', async () => {

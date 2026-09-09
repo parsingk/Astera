@@ -21,10 +21,15 @@ export interface HostClientDeps {
   attempts?: number
   /** How long between those tries. */
   retryMs?: number
+  /** How long to wait for the Host's `hello` after the socket connects. Defaults to HANDSHAKE_MS. */
+  helloMs?: number
 }
 
 const DEFAULT_ATTEMPTS = 25
 const DEFAULT_RETRY_MS = 200
+/** How long a peer that accepted the connection gets to answer the `hello` before it is written off.
+ *  Matches the Host's own deadline on the other side of the same handshake. */
+const HANDSHAKE_MS = 10_000
 /** After a connection that worked drops, wait before trying again: 1s, 2s, 4s, capped at 30s. */
 const BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]
 
@@ -52,6 +57,8 @@ export class HostClient {
   private socket: net.Socket | null = null
   private stopped = false
   private drops = 0
+  /** Runs from `attach` until the Host answers. See where it is armed for what it is for. */
+  private handshake: ReturnType<typeof setTimeout> | null = null
   private state: HostStatus = {
     connected: false,
     protocol: null,
@@ -73,8 +80,14 @@ export class HostClient {
 
   async stop(): Promise<void> {
     this.stopped = true
+    this.clearHandshake()
     this.socket?.destroy()
     this.socket = null
+  }
+
+  private clearHandshake(): void {
+    if (this.handshake) clearTimeout(this.handshake)
+    this.handshake = null
   }
 
   private send(m: ClientMessage): void {
@@ -126,8 +139,23 @@ export class HostClient {
       onBadLine: (raw) => this.deps.log(`the Host sent a line that is not JSON: ${raw.slice(0, 200)}`)
     })
     socket.on('data', read)
+    // A peer that accepts the connection and then says nothing is not a dropped connection: nothing
+    // closes, so the 'close' handler below never runs and the status would sit at "not connected, no
+    // reason" for the app's whole life, with no retry. Ending the socket ourselves puts that case
+    // back on the path that already handles a connection going away.
+    this.handshake = setTimeout(() => {
+      this.handshake = null
+      // Only a socket that never answered can reach here: the hello and the mismatch both clear this.
+      if (this.socket !== socket) return
+      this.fail('the Host accepted the connection but did not answer')
+      socket.end()
+    }, this.deps.helloMs ?? HANDSHAKE_MS)
+    // Same reason as `sleep`'s timer: a client waiting on a handshake is not work the app has to
+    // finish before quitting.
+    this.handshake.unref?.()
     socket.on('close', () => {
       if (this.socket !== socket) return
+      this.clearHandshake()
       this.socket = null
       if (this.stopped) return
       this.state = {
@@ -148,6 +176,7 @@ export class HostClient {
 
   private onMessage(m: HostMessage): void {
     if (m?.t === 'hello') {
+      this.clearHandshake()
       this.drops = 0
       this.state = {
         connected: true,
@@ -161,6 +190,8 @@ export class HostClient {
       return
     }
     if (m?.t === 'protocol-mismatch') {
+      // Answered, so the handshake deadline has done its job — what follows is a decision, not silence.
+      this.clearHandshake()
       // Slice 1 only: the Host holds nothing, so it can be told to leave and replaced. Once it owns
       // live terminals this is no longer an answer, and slice 2 has to give a different one.
       this.deps.log(`the Host speaks protocol ${m.protocol} — retiring it and starting one we can talk to`)
