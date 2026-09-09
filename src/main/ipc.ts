@@ -1,7 +1,8 @@
 import { ipcMain, dialog, app, shell, session, webContents, type BrowserWindow, type WebContents } from 'electron'
 import { promises as fs, existsSync, readFileSync, unlinkSync } from 'node:fs'
 import path from 'node:path'
-import { execFile } from 'node:child_process'
+import os from 'node:os'
+import { execFile, spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { Core } from './core'
 import type { RollingCoordinator } from './rolling'
@@ -11,6 +12,9 @@ import type { SlackNotifier, SlackConfigStore, SlackConfig } from './slack'
 import type { CodexRolloutWatcher } from './codexRolloutWatcher'
 import type { DesktopNotifier } from './desktopNotifier'
 import type { DesktopNotifySettings } from '../core/notify/settings'
+import { HostClient } from './host/client'
+import { hostSpawnPlan, resolveHostEntry } from './host/spawn'
+import { hostAddress } from '../host/address'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
 import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, SessionInfo } from '../core/types'
@@ -193,6 +197,22 @@ export interface OrchWiring {
   onTabResumeReady: (fn: (sessionId: string, form: 'handover' | 'update') => Promise<string | null>) => void
 }
 
+/** The index.ts side of the Astera Host (design §4). Its own wiring rather than a member of
+ *  `OrchWiring`, because the Host is not an orchestration feature — the same reason `startHostClient`
+ *  below sits outside `bootOrch`. The client is built in this file (it needs the profile directory,
+ *  the app version and the spawn plan, all of which are here); index.ts takes the share it takes of
+ *  every other subsystem, the log file and the shutdown cleanup. */
+export interface HostWiring {
+  /** userData/host-client.log — one file per subsystem, the same arrangement as rolling.log,
+   *  slack.log and orchestration.log. The Host keeps host/host.log from its own end; this is the
+   *  app's end of the same conversation. */
+  log: (message: string) => void
+  /** Hands over the shutdown handle once the client is built. Called from inside `registerIpc`, not
+   *  from a boot path — the same shape as `OrchWiring.onTabResumeReady` — and read from will-quit.
+   *  Not called at all when there is no Host bundle to talk to: there is then nothing to stop. */
+  onHostClientReady: (stop: () => Promise<void>) => void
+}
+
 /** 앱 자신이 명령을 부를 때의 호출자 id. **어떤 세션 id 와도 겹칠 수 없는 모양**이어야 한다 —
  *  handleCommand 는 caller.sessionId 가 Dispatch 를 가진 적이 있으면 워커로 보고 COORDINATOR_ONLY
  *  명령을 막는다. 겹치면 앱이 워커로 오인되어 Task 를 만들 수 없게 된다. 세션 id 는 randomUUID
@@ -338,7 +358,9 @@ export function registerIpc(
   /** Which guest is which session's agent browser. Built in index.ts because installPreviewGuards
    *  (called there, before this) asks it on every will-navigate; the register/unregister IPC that
    *  fills it lives here. Optional so the existing harnesses keep compiling; a missing one is built. */
-  agentGuestsIn?: AgentGuestRegistry<WebContents>
+  agentGuestsIn?: AgentGuestRegistry<WebContents>,
+  /** index.ts's share of the Astera Host — see HostWiring. */
+  hostWiring?: HostWiring
 ): void {
   const agentGuests = agentGuestsIn ?? new AgentGuestRegistry<WebContents>((id) => webContents.fromId(id))
   const send = (channel: string, payload: unknown): void => {
@@ -436,6 +458,9 @@ export function registerIpc(
    *  따로 두는 이유는 onExit 이 orch 대입보다 훨씬 먼저 배선되기 때문이다 — 그 콜백은 호출 시점에
    *  이 변수를 읽는다. */
   let orchRollTap: OrchRollTap | null = null
+  /** Astera Host slice 1: the channel exists, and nothing depends on it yet. Built at startup so
+   *  slices 2 and 3 inherit an open line rather than one they have to reach for (design §7). */
+  let hostClient: HostClient | null = null
   /** Job Continuity's recorder. Non-null only while the toggle is on: off means no file is opened and
    *  nothing is written (spec §0.4). Created before store.load in bootOrch so the restart's losses are
    *  journaled, and by the toggle handler when turned on at runtime. */
@@ -4688,6 +4713,63 @@ export function registerIpc(
     await core.appSettings.setTheme(id)
     return core.appSettings.getTheme()
   })
+
+  // Astera Host slice 1. Unconditional — the Host is not an orchestration feature, so this must not
+  // go inside bootOrch, which only runs when that toggle is on. A missing out/main/host.js (a partial
+  // build, or a packaging mistake) leaves hostClient null and the app runs exactly as it does today.
+  const startHostClient = (): void => {
+    const hostLog = hostWiring?.log ?? ((): void => {})
+    const profileDir = app.getPath('userData')
+    // The same two candidates as the CLI shuttle's, for the same reasons — why they are the same path
+    // in every configuration, why __dirname is the stronger guarantee, and why getAppPath() is kept in
+    // front anyway: see the entryPath note in `bootOrch` above.
+    const entry = resolveHostEntry(
+      [path.join(app.getAppPath(), 'out', 'main', 'host.js'), path.join(__dirname, 'host.js')],
+      existsSync
+    )
+    if (!entry) {
+      hostLog('out/main/host.js was not found — the app runs without a Host')
+      return
+    }
+    const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir() })
+    const client = new HostClient({
+      address: addr.address,
+      appVersion: app.getVersion(),
+      log: hostLog,
+      spawnHost: () => {
+        const plan = hostSpawnPlan({
+          execPath: process.execPath,
+          entryPath: entry,
+          profileDir,
+          logPath: path.join(profileDir, 'host', 'host.log'),
+          version: app.getVersion()
+        })
+        const child = spawn(plan.command, plan.args, plan.options)
+        // A spawn that fails arrives as an async 'error' event, not a throw, and an unhandled one is
+        // an uncaught exception in the main process. The client's own retry loop reports the outcome
+        // to the person; this only has to keep the failure from being fatal.
+        child.on('error', (err) => hostLog(`the Host could not be started: ${String(err)}`))
+        child.unref()
+      }
+    })
+    hostClient = client
+    client.start()
+    hostWiring?.onHostClientReady(() => client.stop())
+  }
+  startHostClient()
+
+  ipcMain.handle(
+    'host.status',
+    () =>
+      hostClient?.status() ?? {
+        connected: false,
+        protocol: null,
+        hostVersion: null,
+        startedAt: null,
+        pid: null,
+        problem: 'out/main/host.js was not found'
+      }
+  )
 
   // system (Electron extras)
   // defaultPath is only where the dialog opens, so it changes nothing about security — the result is

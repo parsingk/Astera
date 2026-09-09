@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Account, CliStatus, HistoryEntry, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionUsage, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
+import type { Account, CliStatus, HistoryEntry, HostStatus, RollStateEvent, SchedStateEvent, ScheduleConfig, SessionInfo, SessionUsage, UpdateStatus, UpdateCampaignInfo } from '../../core/types'
 import type { Lang, MessageKey } from '../../core/i18n'
 import { CATALOGS, LANGS } from '../../core/i18n'
 import logoUrl from './assets/logo.png'
@@ -308,6 +308,15 @@ function formatResetHud(resetsAt: string | null | undefined): string | null {
   return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`
 }
 
+/** "7m", "2h" — a coarse uptime is all this row needs; it is a sign of life, not a metric, which is
+ *  also why the unit is not translated. */
+const hostUptime = (startedAt: string | null): string => {
+  if (!startedAt) return '—'
+  const ms = Date.now() - new Date(startedAt).getTime()
+  const minutes = Math.max(0, Math.round(ms / 60_000))
+  return minutes < 60 ? `${minutes}m` : `${Math.round(minutes / 60)}h`
+}
+
 /** The status bar usage chip — a mini progress bar plus n%. Colours: green below 70, yellow 70–84,
  *  red at 85 and above. With no value, an empty bar and '–'. Given resetsAt, a dim '(resets in N)'
  *  sits next to it. */
@@ -397,6 +406,7 @@ export default function App(): React.JSX.Element {
   const [newSessionCwd, setNewSessionCwd] = useState<string | null>(null) // prefill for WorktreePanel's 'start session'
   const [cli, setCli] = useState<{ claude: CliStatus; codex: CliStatus } | null>(null)
   const [appVersion, setAppVersion] = useState('')
+  const [hostStatus, setHostStatus] = useState<HostStatus | null>(null)
   // The moment the check finished has to be held alongside the state so the "checked at 17:43" line
   // can carry it. Events that are not results (checking, downloading) have no time.
   const [update, setUpdate] = useState<(UpdateStatus & { checkedAt: number | null }) | null>(null)
@@ -872,6 +882,9 @@ export default function App(): React.JSX.Element {
     // so there is no mount-time fetch to keep honest — this is the only read.
     void window.api.settings.getWorkUnitTrackingEnabled().then(setWorkUnitTrackingEnabled)
     void window.api.settings.getAgentBrowserEnabled().then(setAgentBrowserEnabled)
+    // Astera Host slice 1: this value goes stale, and the row is only ever on screen while this
+    // modal is open, so it is read here rather than at startup.
+    void window.api.host.status().then(setHostStatus)
   }, [showSettings])
 
   // Keyboard session tab switching: a global capture listener, so it works regardless of where focus
@@ -4006,6 +4019,19 @@ export default function App(): React.JSX.Element {
                     <div className="settings-row">
                       <span>Codex CLI</span>
                       <span>{cli?.codex.version ?? t('settings.info.cliNotDetected')}</span>
+                    </div>
+                    <div className="settings-row">
+                      <span>{t('settings.info.host')}</span>
+                      <span>
+                        {hostStatus?.connected
+                          ? t('settings.info.hostConnected', {
+                              protocol: hostStatus.protocol ?? 0,
+                              uptime: hostUptime(hostStatus.startedAt)
+                            })
+                          : hostStatus?.problem
+                            ? t('settings.info.hostNotConnectedWhy', { detail: hostStatus.problem })
+                            : t('settings.info.hostNotConnected')}
+                      </span>
                     </div>
                     <div className="settings-row">
                       <span>{t('settings.info.registeredAccounts')}</span>

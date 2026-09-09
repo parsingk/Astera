@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     include: [
       'src/core/**/*.test.ts',
+      'src/host/**/*.test.ts',
       'src/main/**/*.test.ts',
       'src/renderer/**/*.test.ts',
       'src/cli/**/*.test.ts'

@@ -621,6 +621,18 @@ export type CoreEventChannel = keyof CoreEvents
  *  `--resume` 으로 이어간다. */
 export type ResumeStrategy = 'smart' | 'original'
 
+/** Astera Host slice 1: the app's view of the channel to the Host. Declared here rather than in
+ *  src/main/host/client.ts so the renderer can name it without importing from src/main. */
+export interface HostStatus {
+  connected: boolean
+  protocol: number | null
+  hostVersion: string | null
+  startedAt: string | null
+  pid: number | null
+  /** One clause saying why there is no connection, or null when there is one. */
+  problem: string | null
+}
+
 /** The contract the renderer sees as window.api. The IPC adapter implements it. */
 export interface CoreApi {
   accounts: {
@@ -1238,5 +1250,10 @@ export type RendererApi = CoreApi & {
   orch: OrchApi
   understanding: UnderstandingApi
   sessionTasks: SessionTaskApi
+  /** Astera Host (slice 1). The Host owns nothing yet — this reports whether the channel to it is
+   *  open, so the slice can be checked by a person rather than only by tests. */
+  host: {
+    status(): Promise<HostStatus>
+  }
   on<C extends CoreEventChannel>(channel: C, cb: (payload: CoreEvents[C]) => void): () => void
 }

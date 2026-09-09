@@ -59,6 +59,7 @@ let codexRolloutRef: CodexRolloutWatcher | null = null
 let slackInboxControllerRef: SlackInboxController | null = null // Slack inbound socket rebuilder — cut on quit
 let rollingRef: RollingCoordinator | null = null // lets the hook callback reach a coordinator created later
 let orchRef: OrchHandle | null = null // orchestration shutdown cleanup + the rolling seam
+let hostClientStopRef: (() => Promise<void>) | null = null // Astera Host client — closes the socket on quit
 // fix wave 최종, F1: the tab-briefing function, handed over unconditionally (OrchWiring.onTabResumeReady)
 // — unlike orchRef above, this is set the moment registerIpc runs, whether or not orchestration ever
 // boots. Read by the two rolling coordinators' resumeText dep when orchRef is null (orchestration off),
@@ -831,6 +832,18 @@ app.whenReady().then(async () => {
       /* a logging failure must not block orchestration */
     }
   }
+  // The app's side of the Astera Host channel. Its own file, beside rolling.log, slack.log and
+  // orchestration.log — one per subsystem. The Host writes host/host.log from its end; this is the
+  // other end of the same conversation, and somebody asking why Settings says Not connected has to
+  // find it under a name that says Host rather than buried in an unrelated subsystem's log.
+  const hostLogFile = path.join(app.getPath('userData'), 'host-client.log')
+  const hostLog = (m: string): void => {
+    try {
+      appendFileSync(hostLogFile, `${new Date().toISOString()} ${m}\n`)
+    } catch {
+      /* a logging failure must not take the Host client down */
+    }
+  }
   registerIpc(
     core,
     win,
@@ -861,7 +874,15 @@ app.whenReady().then(async () => {
       workUnitForkRef = notify
     },
     desktop,
-    agentGuests
+    agentGuests,
+    {
+      log: hostLog,
+      // Handed over as soon as the client exists, whether or not a Host is ever reached — the same
+      // shape as onTabResumeReady above. Read from will-quit.
+      onHostClientReady: (stop) => {
+        hostClientStopRef = stop
+      }
+    }
   )
   // No tray on Linux. With close quitting for real there is nothing to hide, so the menu's
   // Open/Quit would only repeat what the window and its close button already do — while tying the
@@ -1094,6 +1115,15 @@ app.on('will-quit', () => {
   try {
     orchRef?.stop() // close the orchestration server + delete the token file
     orchRef = null
+  } catch {
+    /* shutdown cleanup failures are ignored */
+  }
+  try {
+    // The Host client's socket and its retry timers. Nothing is awaited: `stop()` has done its work
+    // by the time it returns, and asynchronous cleanup may not finish before the process ends
+    // (OrchWiring.onStarted's JSDoc, ipc.ts, on why these are all synchronous).
+    void hostClientStopRef?.()
+    hostClientStopRef = null
   } catch {
     /* shutdown cleanup failures are ignored */
   }
