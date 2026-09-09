@@ -132,6 +132,20 @@ describe('PtyRegistry', () => {
     expect(h.r.buffer('p1')).toBe('56789')
   })
 
+  // The Host outlives the app, and a Run finishing every minute would otherwise leave a quarter of a
+  // million characters behind each time. Nothing reads a dead session's scrollback: an app that was
+  // attached already has the output, and one that was not is forbidden to attach to a dead entry.
+  it('lets go of the scrollback when a session ends, but still lists it as gone', () => {
+    const p = fakePty()
+    const h = registry({ pty: p })
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    p.emit('a lot of output')
+    expect(h.r.buffer('p1')).not.toBe('')
+    p.exit(0)
+    expect(h.r.buffer('p1')).toBe('')
+    expect(h.r.list()).toEqual([{ id: 'p1', pid: p.pid, meta: meta(), alive: false }])
+  })
+
   it('a scrollback of zero keeps almost nothing, rather than turning the cap off', () => {
     const p = fakePty()
     const h = registry({ pty: p, scrollback: 0 })
@@ -154,8 +168,9 @@ describe('PtyRegistry', () => {
     expect(exits).toEqual([['p1', 3]])
   })
 
-  // The entry outlives the process so the app can still read the last output and see how it ended.
-  it('keeps an exited session listed, not alive, with its buffer', () => {
+  // The entry outlives the process, so the app can tell a session that ended while it was away from one
+  // that was never here. What it does not outlive is the scrollback — see the release test below.
+  it('keeps an exited session listed, not alive, and out of the live count', () => {
     const p = fakePty(77)
     const h = registry({ pty: p })
     h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta({ id: 'trm_9' }) })
@@ -163,7 +178,6 @@ describe('PtyRegistry', () => {
     p.exit(0)
     expect(h.r.liveCount()).toBe(0)
     expect(h.r.list()).toEqual([{ id: 'p1', pid: 77, meta: meta({ id: 'trm_9' }), alive: false }])
-    expect(h.r.buffer('p1')).toBe('goodbye')
   })
 
   it('killAll ends every live pty', () => {

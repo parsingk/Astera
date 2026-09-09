@@ -95,6 +95,12 @@ export class PtyRegistry {
     })
     pty.onExit(({ exitCode }) => {
       entry.alive = false
+      // The scrollback goes with the session. The Host outlives the app, so an entry kept for the rest
+      // of the Host's life is a quarter of a million characters kept for the rest of the Host's life,
+      // and a project that runs a build every minute would leave a great many of them. The entry
+      // itself stays: it is a few fields, and `list` reporting a session as gone is how the app tells
+      // "it ended while I was away" from "it was never here".
+      entry.buffer = ''
       this.deps.log(`pty ${a.id} exited ${exitCode}`)
       this.exitCb(a.id, exitCode)
     })
@@ -129,8 +135,10 @@ export class PtyRegistry {
     this.live(id)?.pty.resume()
   }
 
-  /** The scrollback, or empty for an id that was never here. An exited session keeps its buffer:
-   *  the app still wants to show how it ended. */
+  /** The scrollback, or empty for an id that was never here — and empty, too, for one that has ended,
+   *  which drops its buffer as it goes. Nothing reads a dead session's output: an app that was attached
+   *  already received it, and one that was not is forbidden to attach to a dead entry, because a handle
+   *  built on one would never deliver the exit that already happened. */
   buffer(id: string): string {
     return this.entries.get(id)?.buffer ?? ''
   }
