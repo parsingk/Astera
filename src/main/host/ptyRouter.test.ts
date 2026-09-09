@@ -71,6 +71,17 @@ describe('createPtyRouter', () => {
     expect(r.ptysOutliveApp()).toBe(true)
   })
 
+  // **Who made a pty is the one thing nobody can work out afterwards.** The quit path has to end the
+  // ptys that are this process's own children and leave the Host's alone, and by then both are the
+  // same PtyLike behind the same manager. The router is the only place that still knows, so it says
+  // so on the handle it hands back and the answer travels with the pty.
+  it('marks each handle with whether its pty outlives the app, from the factory it routed to', () => {
+    const r = createPtyRouter(stub('local', []))
+    expect(r.factory('a', [], opts).outlivesApp).toBe(false)
+    r.use(stub('host', []))
+    expect(r.factory('b', [], opts).outlivesApp).toBe(true)
+  })
+
   // use() changes which factory the *next* call to r.factory reaches — it does not touch a PtyLike
   // handle already handed back. A pty spawned through the fallback keeps behaving exactly as it did
   // before the switch: nothing about it is retargeted onto the Host.

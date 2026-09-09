@@ -32,7 +32,18 @@ export function createPtyRouter(fallback: PtyFactory): {
 } {
   let current: PtyFactory | null = null
   return {
-    factory: (file, args, opts) => (current ?? fallback)(file, args, opts),
+    factory: (file, args, opts) => {
+      // Stamped here because here is the only place that knows. Both factories hand back the same
+      // PtyLike, the managers store it without caring which they got, and the quit path — which has
+      // to end the app's own children and leave the Host's alone — arrives long after the choice was
+      // made. Writing the answer onto the handle keeps it with the pty rather than in a second map
+      // that would have to be kept in step with every spawn, exit and adoption. `attach` in
+      // `createHostPtyFactory` stamps its own, being the one creation path that never comes here.
+      const outlivesApp = current !== null
+      const p = (current ?? fallback)(file, args, opts)
+      p.outlivesApp = outlivesApp
+      return p
+    },
     use: (f) => {
       current = f
     },

@@ -18,6 +18,21 @@ export interface PtyLike {
    *  method is simply absent there. Every caller is `pty.remember?.(…)`, which is a no-op with no
    *  Host — the standing rule that the app without one behaves exactly as it always has. */
   remember?(patch: Record<string, unknown>): void
+  /** Whether the process behind this pty keeps running after the app quits — true for a pty the Host
+   *  owns, false for one that is this process's own child.
+   *
+   *  **Written by whoever made the pty, read by whoever has to tear it down.** `createPtyRouter` is
+   *  the one place that chooses between the two factories, so it stamps every handle it hands out
+   *  with the answer for that call; `createHostPtyFactory`'s `attach` stamps its own, because
+   *  adoption after a restart is the one pty creation that never goes through the router. A quit
+   *  arriving in between — the Host is starting, so an early session went to node-pty while a later
+   *  one went to the Host — then has a per-pty answer instead of one answer for all of them, and the
+   *  app's own children are ended exactly as they were before a Host existed.
+   *
+   *  Optional so that the stub ptys the managers' own tests build need not carry it; absent reads as
+   *  false, which is the safe direction — an unmarked pty is treated as the app's own and torn down,
+   *  never left behind as an orphan nothing can reach. */
+  outlivesApp?: boolean
 }
 
 /** The exit code a pty handle reports when the **app** lost sight of the process, rather than the

@@ -290,6 +290,15 @@ describe('createHostPtyFactory', () => {
     expect(t.sent).toEqual([{ t: 'pty-write', id: 'p9', data: 'hello' }])
   })
 
+  // **Adoption is the one pty creation that never passes the router**, so the marker the router puts
+  // on everything it hands out has to be put here instead. It is unconditional: every handle this
+  // function makes is for a pty that lives in the Host, which is what adoption means.
+  it('attach marks the handle as a pty that outlives the app', () => {
+    const t = transport()
+    const { attach } = createHostPtyFactory(t)
+    expect(attach({ id: 'p9', pid: 555 }).outlivesApp).toBe(true)
+  })
+
   // An adopted session is renamed like any other, and the note it was adopted from is the one that
   // has to change — otherwise the next restart brings the old title back again.
   it('an attached handle remembers too', () => {

@@ -163,5 +163,16 @@ export function createHostPtyFactory(t: HostPtyTransport): {
     // connection that drops again later.
     return handle(t, id, false, 0, !sent)
   }
-  return { factory, attach: (a) => handle(t, a.id, true, a.pid) }
+  return {
+    factory,
+    // `outlivesApp` is stamped by `createPtyRouter` on everything it routes, and adoption does not go
+    // through the router — a handle built here would otherwise reach the quit path unmarked and be
+    // read as the app's own child, which would kill the very ptys a restart just took back. True
+    // unconditionally: a pty this function attaches to is one the Host is already running.
+    attach: (a) => {
+      const p = handle(t, a.id, true, a.pid)
+      p.outlivesApp = true
+      return p
+    }
+  }
 }
