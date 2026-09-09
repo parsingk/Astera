@@ -464,6 +464,9 @@ export function registerIpc(
       continuity = new ContinuityRecorder({
         journal,
         log: orchLog,
+        // Read per row, not captured: these rows are rendered long after they were written, and the
+        // settings handler reassigns core.lang under them.
+        lang: () => core.lang,
         smartResume: () => core.appSettings.getResumeStrategy() === 'smart',
         handoffLookup: (sessionId) => handoffs.lookup(sessionId)
       })
@@ -2972,6 +2975,9 @@ export function registerIpc(
             startWorker: deps.startWorker,
             startValidation: deps.startValidation,
             readGitSummary,
+            // Read at the moment the Gate is written, not captured here: the settings handler
+            // reassigns core.lang, and a Gate opened after that should be in the new language.
+            lang: () => core.lang,
             log: orchLog
           })
         },

@@ -181,10 +181,15 @@ export class RecoveryReconciler {
           nativeSessionId: attempt.nativeSessionId ?? null,
           git
         }),
+        // Both halves of the sentence: the English one the file keeps, and the key the Timeline
+        // renders in the reader's language. A row read by a build that no longer has the key still
+        // has the English one to fall back on (ContinuityRecorder's reasonText).
         mk('RECOVERY_STRATEGY_SELECTED', {
           strategy: decision.strategy,
           class: decision.class,
-          reason: decision.reason
+          reason: decision.reason,
+          reasonKey: decision.reasonMessage.key,
+          ...(decision.reasonMessage.params ? { reasonParams: decision.reasonMessage.params } : {})
         })
       ])
     )
