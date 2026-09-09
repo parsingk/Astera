@@ -106,7 +106,7 @@ describe('HostClient', () => {
     await c.stop()
   })
 
-  it('stops trying once it is stopped', async () => {
+  it('keeps its status once it is stopped', async () => {
     const addr = addressFor('stopped')
     const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {}, attempts: 1, retryMs: 10 })
     c.start()
@@ -114,5 +114,33 @@ describe('HostClient', () => {
     const before = c.status()
     await new Promise((r) => setTimeout(r, 100))
     expect(c.status()).toEqual(before)
+  })
+
+  it('does not connect after it has been stopped', async () => {
+    const addr = addressFor('stop-races-connect')
+    await serveAt(addr)
+    const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
+    c.start()
+    await c.stop()
+    await new Promise((r) => setTimeout(r, 300))
+    expect(c.status().connected).toBe(false)
+  })
+
+  // A no-op spawn hides this in a test; in the app this call launches a real detached process.
+  it('does not start a Host after it has been stopped', async () => {
+    const addr = addressFor('stop-before-spawn')
+    let asked = 0
+    const c = new HostClient({
+      address: addr.address,
+      appVersion: '9.0.0',
+      spawnHost: () => { asked += 1 },
+      log: () => {},
+      attempts: 5,
+      retryMs: 10
+    })
+    c.start()
+    await c.stop()
+    await new Promise((r) => setTimeout(r, 200))
+    expect(asked).toBe(0)
   })
 })

@@ -35,7 +35,14 @@ const DEFAULT_RETRY_MS = 200
 /** After a connection that worked drops, wait before trying again: 1s, 2s, 4s, capped at 30s. */
 const BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000]
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+const sleep = (ms: number): Promise<void> =>
+  new Promise((r) => {
+    const timer = setTimeout(r, ms)
+    // Nothing here should keep the process alive. A client waiting to retry is not work the app has
+    // to finish before quitting, and `cycle` checks `stopped` when the wait is over anyway. The
+    // Host's own idle timer unrefs itself for the same reason.
+    timer.unref?.()
+  })
 
 const connectOnce = (address: string): Promise<net.Socket> =>
   new Promise((resolve, reject) => {
@@ -91,12 +98,19 @@ export class HostClient {
     for (let i = 0; i < attempts && !this.stopped; i++) {
       try {
         const socket = await connectOnce(this.deps.address)
+        // `stop()` may have landed while this connect was in flight. Attaching now would report a
+        // connection the caller has already given up on, and the socket's own 'close' handler returns
+        // early once stopped — so the status would never be corrected again.
+        if (this.stopped) {
+          socket.destroy()
+          return
+        }
         this.attach(socket)
         return
       } catch {
         // Nothing is listening. Ask for a Host once, then keep trying the address — the Host binds
         // some milliseconds after the process starts, and the address is the thing worth waiting on.
-        if (!asked) {
+        if (!asked && !this.stopped) {
           asked = true
           this.deps.log('no Host at the address — starting one')
           try {
@@ -123,7 +137,13 @@ export class HostClient {
       if (this.socket !== socket) return
       this.socket = null
       if (this.stopped) return
-      this.state = { ...this.state, connected: false, problem: 'the connection to the Host dropped' }
+      this.state = {
+        ...this.state,
+        connected: false,
+        // A reason already set (a protocol mismatch, say) is more use than this one, and the next
+        // successful handshake clears it either way.
+        problem: this.state.problem ?? 'the connection to the Host dropped'
+      }
       const wait = BACKOFF_MS[Math.min(this.drops, BACKOFF_MS.length - 1)]
       this.drops += 1
       this.deps.log(`connection to the Host dropped — retrying in ${wait}ms`)
