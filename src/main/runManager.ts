@@ -91,8 +91,14 @@ export class RunManager {
     // This happens **only when the config specified it**: reacting to a JAVA_HOME the app merely inherited
     // would mean reordering the user's shell PATH on their behalf.
     const env = withJavaHomeOnPath(merged, fromFields.JAVA_HOME ?? opts.config.env?.JAVA_HOME, this.platform)
-    // Generated here rather than inline on status below, so the pty factory's meta can carry the same id.
+    // Generated here rather than inline on status below, so the pty factory's meta can carry the same
+    // id and startedAt — startedAt is a spawn-time moment nothing else writes down: the Host's PtyEntry
+    // has no timestamp, so without it here a run rebuilt after a restart would read as having just
+    // started (formatRunDuration), and several runs of one config rebuilt around the same restart
+    // moment would tie-break arbitrarily instead of by real age (latestOf, read by decideStart and
+    // toolbarState).
     const runId = randomUUID()
+    const startedAt = Date.now()
     const pty = this.ptyFactory(spawn.file, spawn.args, {
       cwd,
       cols: opts.cols ?? 120,
@@ -108,10 +114,12 @@ export class RunManager {
           configName: opts.config.name,
           command: opts.command,
           seq,
+          startedAt,
           // Carried beside status.validation (see its own comment): without this, a validation run
-          // rebuilt from the Host's list after a restart would be indistinguishable from a plain run —
-          // placeNewRun would let a same-config rerun evict it, and run.stop would not route through
-          // TaskValidator.markStopped.
+          // rebuilt from the Host's list after a restart would be indistinguishable from an ordinary
+          // one — decideStart's `r.validation !== true` filter (core/run/instances.ts) would let a
+          // same-config ▶ target it for restart instead of leaving it to the orchestrator, and run.stop
+          // would not route through TaskValidator.markStopped.
           ...(opts.validation ? { validation: true as const } : {})
         }
       }
@@ -125,7 +133,7 @@ export class RunManager {
       command: opts.command,
       seq,
       status: 'running',
-      startedAt: Date.now(),
+      startedAt,
       // Only ever present when on — a non-validation run's status has no such key
       ...(opts.validation ? { validation: true as const } : {})
     }

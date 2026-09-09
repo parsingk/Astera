@@ -229,8 +229,12 @@ export class SessionManager {
       meta: {
         kind: 'session',
         id,
-        // Only what spawn cannot work out again by itself. The env, the descriptors and the
-        // statusLine config are rebuilt from the account and the cwd, so they do not belong here.
+        // Only what spawn cannot work out again by itself. The descriptors come from the platform and
+        // the account's provider; env's CLAUDE_CONFIG_DIR/CODEX_HOME half comes from the account, and
+        // its ASTERA_* half from the app's own current state (orchEnvOf), not from anything here. The
+        // statusLine config comes from the account plus this session's own id (PtyMeta.id, not
+        // restore) — restore carries slackNotify and rollAccountIds only because they also decide
+        // whether toolHooks get installed.
         restore: {
           accountId: opts.account.id,
           cwd: opts.cwd,

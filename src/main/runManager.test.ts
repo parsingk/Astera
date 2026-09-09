@@ -106,12 +106,14 @@ describe('RunManager', () => {
       projectPath: status.projectPath,
       configId: status.configId,
       command: status.command,
-      seq: status.seq
+      seq: status.seq,
+      startedAt: status.startedAt
     })
   })
 
-  // A restored validation run must still carry the tag — otherwise placeNewRun would let a normal
-  // rerun of the same config evict it, and run.stop would not route through TaskValidator.markStopped.
+  // A restored validation run must still carry the tag — otherwise decideStart's `validation !== true`
+  // filter would treat it as the user's own live run and target it for a same-config ▶, and run.stop
+  // would not route through TaskValidator.markStopped.
   it('a validation run says so in restore too, not just on status', () => {
     const { mgr, spawned } = setup()
     mgr.start(startOpts({ validation: true }))
