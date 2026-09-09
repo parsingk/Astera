@@ -96,6 +96,24 @@ describe('PtyRegistry', () => {
     expect(h.r.buffer('nope')).toBe('')
   })
 
+  // The brief's requirement is that an exited session stops accepting commands, which is a different
+  // branch from an id that was never here — and the one a careless simplification of `live` would
+  // quietly drop.
+  it('refuses commands for a session it still lists but that has exited', () => {
+    const p = fakePty()
+    const h = registry({ pty: p })
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    p.exit(0)
+    p.sent.length = 0
+    p.sizes.length = 0
+    h.r.write('p1', 'too late')
+    h.r.resize('p1', 10, 10)
+    h.r.pause('p1')
+    h.r.resume('p1')
+    expect([p.sent, p.sizes, p.paused]).toEqual([[], [], 0])
+    expect(h.r.list()).toHaveLength(1)
+  })
+
   it('keeps the newest output and drops the oldest once the buffer is full', () => {
     const p = fakePty()
     const h = registry({ pty: p, scrollback: 10 })
@@ -112,6 +130,14 @@ describe('PtyRegistry', () => {
     h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
     p.emit('0123456789')
     expect(h.r.buffer('p1')).toBe('56789')
+  })
+
+  it('a scrollback of zero keeps almost nothing, rather than turning the cap off', () => {
+    const p = fakePty()
+    const h = registry({ pty: p, scrollback: 0 })
+    h.r.open({ id: 'p1', file: 'cmd.exe', args: [], opts, meta: meta() })
+    p.emit('0123456789')
+    expect(h.r.buffer('p1').length).toBeLessThanOrEqual(1)
   })
 
   it('reports data and exit to its subscriber, with the id', () => {
