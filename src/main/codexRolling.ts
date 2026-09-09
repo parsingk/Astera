@@ -690,7 +690,8 @@ export class CodexRollingCoordinator {
       // part-way round is adoption, and **adoption deliberately never asks** (register's attach branch
       // leaves `sameAccount` false for it, and says why). Anyone making adoption ask has to come back
       // here first — the slot would then be the adopted account, and the reasoning below about which
-      // account wrote the records has to be redone for a file this chain did not open. The shape that still slips through is a rollout a *roll* copied into this
+      // account wrote the records has to be redone for a file this chain did not open. The shape that
+      // still slips through is a rollout a *roll* copied into this
       // account's folder: the copy carries the previous account's records, yet reopening it here is a
       // same-account resume by every test we have — not because the two cases cannot be told apart,
       // but because nothing here currently tries. RollConfigStore is already keyed by the codex

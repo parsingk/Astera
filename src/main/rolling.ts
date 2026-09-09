@@ -326,6 +326,11 @@ export class RollingCoordinator {
     // account it was given and the chain it was given — and adoption restores them from one note written
     // by that same call; a note whose `rollAccountIds` cannot be read leaves the field absent, and this
     // function has already returned above on the empty chain.
+    //
+    // `> 0` rather than `>= 0` reads oddly against that: 0 is already where the cycle starts, so the
+    // condition only ever guards the -1 the paragraph above says cannot arrive. Kept because the
+    // alternative is a branch whose only reachable case is the impossible one — and if a future note
+    // writer does break the argument, staying at 0 is what every caller did before this line existed.
     const cycle = new RollCycle(ids.length)
     const at = ids.indexOf(info.accountId)
     if (at > 0) cycle.advanceTo(at)
