@@ -15,6 +15,9 @@ import type { DesktopNotifySettings } from '../core/notify/settings'
 import { HostClient } from './host/client'
 import { hostSpawnPlan, resolveHostEntry } from './host/spawn'
 import { hostAddress } from '../host/address'
+import { createHostPtyFactory } from './host/ptyFactory'
+import { reattachSessions } from './host/reattach'
+import type { ClientMessage, HostMessage, PtyEntry } from '../core/host/protocol'
 import { DataBatcher } from '../core/sessions/batcher'
 import { BusyScanner } from '../core/terminal/busy'
 import type { Account, CoreEvents, HistoryPageRequest, HistoryProjectsPageRequest, OrchSnapshot, Provider, ResumeStrategy, RollStateEvent, RunConfig, RunStatus, SessionInfo } from '../core/types'
@@ -4754,6 +4757,84 @@ export function registerIpc(
     })
     hostClient = client
     client.start()
+
+    // The Host is the app's pty layer from here on. Until this point the router falls back to
+    // node-pty, which is also where it stays if the Host never answers — with no Host, the app must
+    // behave exactly as it does today.
+    const transport = {
+      send: (m: ClientMessage) => void hostClient?.send(m),
+      onHostMessage: (cb: (m: HostMessage) => void) => hostClient?.onMessage(cb) ?? ((): void => {}),
+      onHostGone: (cb: () => void) => hostClient?.onDisconnect(cb) ?? ((): void => {})
+    }
+    const { factory, attach } = createHostPtyFactory(transport)
+    core.ptyRouter.use(factory)
+
+    // How long reattaching is willing to wait for the first handshake's outcome before deciding the
+    // Host is not there — matched to HostClient's own worst-case give-up (its default attempts x
+    // retryMs), so this rarely fires ahead of the client's own answer either way.
+    const HOST_READY_MS = 5_000
+
+    /** One round trip: ask for the list, resolve on the reply, give up after five seconds with an
+     *  empty list so a silent Host cannot hold the startup open. */
+    const listPtys = (): Promise<PtyEntry[]> =>
+      new Promise((resolve) => {
+        const done = (entries: PtyEntry[]): void => {
+          clearTimeout(timer)
+          off()
+          resolve(entries)
+        }
+        const off = transport.onHostMessage((m) => {
+          if (m.t === 'pty-listed') done(m.entries)
+        })
+        const timer = setTimeout(() => done([]), 5_000)
+        timer.unref?.()
+        transport.send({ t: 'pty-list' })
+      })
+
+    void hostClient
+      .ready(HOST_READY_MS)
+      .then(async () => {
+        if (!hostClient?.status().connected) {
+          core.ptyRouter.use(null)
+          orchLog('host: no Host, so terminals stay in the app exactly as before')
+          return
+        }
+        const res = await reattachSessions({
+          list: listPtys,
+          attach,
+          sendAttach: (id) => transport.send({ t: 'pty-attach', id }),
+          kill: (id) => transport.send({ t: 'pty-kill', id }),
+          adopters: {
+            session: (a) => {
+              const info = core.sessions.adopt(a)
+              if (!info) return false
+              // The pty came back; the things the app hung off it did not. Rolling and Slack are
+              // registered from the SessionInfo right after core.sessions.spawn() elsewhere in this
+              // file, so registering the rebuilt one puts a recovered worker back on the same footing
+              // (design §10).
+              if ((info.rollAccountIds?.length ?? 0) >= 1) {
+                const provider = providerOfSession(info.id, core.sessions.list(), (id) => core.accounts.get(id))
+                if (provider === 'codex') codexRolling?.register(info)
+                else rolling?.register(info)
+              }
+              if (info.slackNotify === true) {
+                try {
+                  slack?.notifier.register(info)
+                } catch {
+                  /* A failed Slack registration does not block taking the session back */
+                }
+              }
+              return true
+            },
+            run: (a) => core.run.adopt(a) !== null,
+            terminal: (a) => core.terminal.adopt(a) !== null
+          },
+          log: (m) => orchLog(`host: ${m}`)
+        })
+        orchLog(`host: took back ${res.adopted} session(s), refused ${res.refused}`)
+      })
+      .catch((e) => orchLog(`host: taking sessions back failed: ${String(e)}`))
+
     hostWiring?.onHostClientReady(() => client.stop())
   }
   startHostClient()

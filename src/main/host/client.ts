@@ -58,6 +58,11 @@ export class HostClient {
   private stopped = false
   private drops = 0
   private readonly subscribers = new Set<(m: HostMessage) => void>()
+  /** The connection to the Host went away. Notified from the socket's own 'close' handler, before a
+   *  reconnect is scheduled — see `onDisconnect`. */
+  private readonly disconnectSubscribers = new Set<() => void>()
+  /** Callers waiting on `ready()` for the current connection attempt to have an outcome. */
+  private readonly readyWaiters = new Set<() => void>()
   /** Runs from `attach` until the Host answers. See where it is armed for what it is for. */
   private handshake: ReturnType<typeof setTimeout> | null = null
   private state: HostStatus = {
@@ -103,6 +108,42 @@ export class HostClient {
   onMessage(cb: (m: HostMessage) => void): () => void {
     this.subscribers.add(cb)
     return () => this.subscribers.delete(cb)
+  }
+
+  /** The connection to the Host went away. Every pty it held went with it, and no `pty-exit` will
+   *  ever arrive to say so for any of them — this is what tells a Host-backed pty handle to end
+   *  itself instead of waiting forever (ptyFactory.ts's `onHostGone`). Fired from the socket's own
+   *  'close' handler, before the reconnect is scheduled. Returns an unsubscribe. */
+  onDisconnect(cb: () => void): () => void {
+    this.disconnectSubscribers.add(cb)
+    return () => this.disconnectSubscribers.delete(cb)
+  }
+
+  /** Resolves once the current connection attempt has an outcome — connected, or failed for now — or
+   *  after `ms`, whichever comes first. A caller that waits past `ms` reads a Host that is merely
+   *  slow the same as one that will never answer, via `status()` afterward; that is deliberate, so
+   *  startup can decide whether to route new ptys through the Host without blocking on one that
+   *  never answers. Not part of the design this task's brief names — added here because the startup
+   *  wiring it exists for (deciding the ptyRouter fallback, then taking sessions back) has no other
+   *  way to know when the handshake is settled; see this task's report for the reasoning. */
+  ready(ms: number): Promise<void> {
+    if (this.state.connected || this.state.problem) return Promise.resolve()
+    return new Promise((resolve) => {
+      const done = (): void => {
+        clearTimeout(timer)
+        this.readyWaiters.delete(done)
+        resolve()
+      }
+      const timer = setTimeout(done, ms)
+      timer.unref?.()
+      this.readyWaiters.add(done)
+    })
+  }
+
+  /** Wakes every pending `ready()` caller. Called from the three places a connection attempt's
+   *  outcome becomes known: the handshake succeeding, a protocol mismatch, and giving up. */
+  private settleReady(): void {
+    for (const w of [...this.readyWaiters]) w()
   }
 
   /** One attempt at having a working connection: reach the address, spawning a Host if nothing
@@ -181,6 +222,15 @@ export class HostClient {
       const wait = BACKOFF_MS[Math.min(this.drops, BACKOFF_MS.length - 1)]
       this.drops += 1
       this.deps.log(`connection to the Host dropped — retrying in ${wait}ms`)
+      for (const cb of [...this.disconnectSubscribers]) {
+        try {
+          cb()
+        } catch (err) {
+          // Same reason a bad message subscriber does not cost the others theirs: nothing may throw
+          // out of this class.
+          this.deps.log(`a disconnect subscriber threw: ${String(err)}`)
+        }
+      }
       void sleep(wait).then(() => this.cycle())
     })
     socket.on('error', (err) => this.deps.log(`connection error: ${String(err)}`))
@@ -200,6 +250,7 @@ export class HostClient {
         problem: null
       }
       this.deps.log(`connected to Host ${m.host} (pid ${m.pid}, protocol ${m.protocol})`)
+      this.settleReady()
       return
     }
     if (m?.t === 'protocol-mismatch') {
@@ -211,6 +262,7 @@ export class HostClient {
       this.send({ t: 'retire' })
       this.state = { ...this.state, connected: false, problem: `the Host speaks protocol ${m.protocol}` }
       this.socket?.end()
+      this.settleReady()
       return
     }
     for (const cb of [...this.subscribers]) {
@@ -227,5 +279,6 @@ export class HostClient {
   private fail(problem: string): void {
     this.state = { connected: false, protocol: null, hostVersion: null, startedAt: null, pid: null, problem }
     this.deps.log(problem)
+    this.settleReady()
   }
 }

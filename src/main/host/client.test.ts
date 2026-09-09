@@ -213,4 +213,101 @@ describe('HostClient', () => {
 
     await c.stop()
   })
+
+  // Every pty the Host held went with it, and nothing else says so — ptyFactory.ts's onHostGone
+  // handle relies on this firing so a Host-backed pty does not read as "running" forever once the
+  // Host itself is gone.
+  it('tells its subscribers when the connection to the Host drops, and survives one that throws', async () => {
+    const addr = addressFor('disconnect')
+    const server = await serveAt(addr)
+    const logs: string[] = []
+    const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: (m) => logs.push(m) })
+    c.start()
+    await settled(c, (s) => s.connected)
+
+    let gone = 0
+    c.onDisconnect(() => {
+      throw new Error('disconnect subscriber one blew up')
+    })
+    c.onDisconnect(() => {
+      gone += 1
+    })
+    await server.close()
+    await waitFor(() => gone > 0)
+    expect(gone).toBe(1)
+    expect(logs.some((l) => l.includes('disconnect subscriber threw') && l.includes('blew up'))).toBe(true)
+
+    await c.stop()
+  })
+
+  // stop() destroys the socket too, but that is the app choosing to leave, not the Host going away —
+  // onHostGone must not treat the two alike, or every ordinary shutdown would read as a dead pty.
+  it('does not treat a deliberate stop as the Host disappearing', async () => {
+    const addr = addressFor('stop-is-quiet')
+    await serveAt(addr)
+    const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
+    c.start()
+    await settled(c, (s) => s.connected)
+
+    let gone = 0
+    c.onDisconnect(() => {
+      gone += 1
+    })
+    await c.stop()
+    await new Promise((r) => setTimeout(r, 150))
+    expect(gone).toBe(0)
+  })
+
+  // ready() is what lets startup decide the ptyRouter fallback without blocking on a Host that never
+  // answers — see reattach.ts and its report for why HostClient grew this beyond what the brief named.
+  it('ready() resolves once the handshake completes, well before its own timeout', async () => {
+    const addr = addressFor('ready-connects')
+    await serveAt(addr)
+    const c = new HostClient({ address: addr.address, appVersion: '9.0.0', spawnHost: () => {}, log: () => {} })
+    c.start()
+    const start = Date.now()
+    await c.ready(5_000)
+    expect(Date.now() - start).toBeLessThan(2_000)
+    expect(c.status().connected).toBe(true)
+    await c.stop()
+  })
+
+  it('ready() resolves once the client gives up, without waiting out the full timeout', async () => {
+    const addr = addressFor('ready-gives-up')
+    const c = new HostClient({
+      address: addr.address,
+      appVersion: '9.0.0',
+      spawnHost: () => {},
+      log: () => {},
+      attempts: 2,
+      retryMs: 10
+    })
+    c.start()
+    const start = Date.now()
+    await c.ready(5_000)
+    expect(Date.now() - start).toBeLessThan(2_000)
+    expect(c.status().connected).toBe(false)
+    expect(c.status().problem).not.toBeNull()
+    await c.stop()
+  })
+
+  it('ready() gives up waiting at its own timeout while the client is still trying', async () => {
+    const addr = addressFor('ready-times-out')
+    const c = new HostClient({
+      address: addr.address,
+      appVersion: '9.0.0',
+      spawnHost: () => {},
+      log: () => {},
+      attempts: 100,
+      retryMs: 50
+    })
+    c.start()
+    const start = Date.now()
+    await c.ready(120)
+    const elapsed = Date.now() - start
+    expect(elapsed).toBeGreaterThanOrEqual(100)
+    expect(elapsed).toBeLessThan(1_000)
+    expect(c.status().connected).toBe(false)
+    await c.stop()
+  })
 })
