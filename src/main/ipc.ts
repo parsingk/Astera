@@ -73,6 +73,7 @@ import {
 } from '../core/orchestration/inbox'
 import { coordinatorLaunchPrompt } from '../core/orchestration/handover'
 import { detachCoordinator } from '../core/orchestration/state'
+import { PTY_LOST_SIGHT_EXIT_CODE } from '../core/sessions/pty'
 import { firesDue } from '../core/orchestration/fire'
 import { reapableChildRuns } from '../core/orchestration/reap'
 import {
@@ -715,7 +716,7 @@ export function registerIpc(
   /** 사라진 코디네이터의 자리를 비우는 함수. **bootOrch 안에서 대입한다** — 정의가 그 안에
    *  있어야 orch·deps 를 닫아 쓸 수 있고, 부르는 자리(core.sessions.onExit)는 그 밖이다.
    *  orch·orchValidator 와 같은 관례다. */
-  let releaseCoordinator: ((sessionId: string) => Promise<void>) | null = null
+  let releaseCoordinator: ((sessionId: string, exitCode: number) => Promise<void>) | null = null
   /** 예약 템플릿의 다음 발화 시각. **상태에 저장하지 않는다** — 재시작하면 비어 있고, 그때
    *  firesDue 가 nextFireAt(rule, now) 으로 다시 무장한다. 그것이 곧 "앱이 꺼져 있던 동안의
    *  발화는 버린다"는 규칙의 구현이다(main/scheduler.ts 가 같은 이유로 같은 선택을 했다). */
@@ -873,7 +874,9 @@ export function registerIpc(
     void workUnitCollector
       .onSessionExit(e.sessionId)
       .catch((err) => orchLog(`work unit exit failed: ${String(err)}`))
-    void releaseCoordinator?.(e.sessionId) // 이 세션이 어느 Run 의 관리자였다면 그 칸을 비운다
+    // The exit code goes with the id: an exit that only means the app lost sight of the session must
+    // not empty the slot. See `releaseCoordinator` itself for why refusing is the whole fix.
+    void releaseCoordinator?.(e.sessionId, e.exitCode) // 이 세션이 어느 Run 의 관리자였다면 그 칸을 비운다
     // Task 7's tab-resume briefing file is no longer deleted here — see tabResumeDir's own comment
     // above (fix wave 7, finding 1 (CRITICAL)) for why a per-exit delete keyed to this id was wrong:
     // it fired for the *old* session a smart resume had just written the briefing under, while the
@@ -3318,7 +3321,24 @@ export function registerIpc(
      *
      *  **앱 재시작은 이 경로가 아니다.** 그때는 세션이 프로세스와 함께 사라지고 exit 이 오지 않는다.
      *  같은 버튼이 그 경우도 받는다 — 자동 복구를 하지 않기로 한 결정과 같은 방향이다(SPEC §12.2). */
-    releaseCoordinator = async (sessionId: string): Promise<void> => {
+    releaseCoordinator = async (sessionId: string, exitCode: number): Promise<void> => {
+      // **An exit that only says the app lost sight of the session does not empty the slot.** The
+      // socket to the Host dropped; the coordinator is still running in the Host and the reconnect
+      // takes it back under the same id. Emptying the slot here would put "restart the coordinator" on
+      // that Run's line in the Jobs list, and one human click on it is a second coordinator in a
+      // worktree the first is still working in — the failure this branch exists to prevent, arriving by
+      // hand rather than automatically.
+      //
+      // **Nothing re-attaches the slot afterwards, and nothing can.** `detachCoordinator` deletes
+      // `Run.coordinatorSessionId`, which is the only thing that records *which* Run this session
+      // manages, so once it is gone an adoption has nothing to match the session against. Refusing to
+      // empty it is what keeps the slot correct, not a second write on the way back — the same one
+      // condition `handleExit` uses for the Dispatch.
+      //
+      // The cost, if the coordinator really did die with its Host: the slot stays attached to a session
+      // that is gone and the restart button never appears. That is already what a plain app restart
+      // leaves behind, since the slot is persisted and nothing at boot clears it.
+      if (exitCode === PTY_LOST_SIGHT_EXIT_CODE) return
       if (!orch || !orch.deps.enabled()) return
       const st = orch.deps.getState()
       const run = st.runs.find((r) => r.coordinatorSessionId === sessionId)
