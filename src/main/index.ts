@@ -832,6 +832,19 @@ app.whenReady().then(async () => {
       /* a logging failure must not block orchestration */
     }
   }
+  // The app's side of the Astera Host channel. Its own file, beside rolling.log, slack.log and
+  // orchestration.log — one per subsystem. The Host writes host/host.log from its end; this is the
+  // other end of the same conversation, and somebody asking why Settings says Not connected has to
+  // find it under a name that says Host rather than buried in an unrelated subsystem's log.
+  const hostLogFile = path.join(app.getPath('userData'), 'host-client.log')
+  const hostLog = (m: string): void => {
+    try {
+      appendFileSync(hostLogFile, `${new Date().toISOString()} ${m}
+`)
+    } catch {
+      /* a logging failure must not take the Host client down */
+    }
+  }
   registerIpc(
     core,
     win,
@@ -864,6 +877,7 @@ app.whenReady().then(async () => {
     desktop,
     agentGuests,
     {
+      log: hostLog,
       // Handed over as soon as the client exists, whether or not a Host is ever reached — the same
       // shape as onTabResumeReady above. Read from will-quit.
       onHostClientReady: (stop) => {

@@ -203,6 +203,10 @@ export interface OrchWiring {
  *  the app version and the spawn plan, all of which are here); index.ts takes the share it takes of
  *  every other subsystem, the log file and the shutdown cleanup. */
 export interface HostWiring {
+  /** userData/host-client.log — one file per subsystem, the same arrangement as rolling.log,
+   *  slack.log and orchestration.log. The Host keeps host/host.log from its own end; this is the
+   *  app's end of the same conversation. */
+  log: (message: string) => void
   /** Hands over the shutdown handle once the client is built. Called from inside `registerIpc`, not
    *  from a boot path — the same shape as `OrchWiring.onTabResumeReady` — and read from will-quit.
    *  Not called at all when there is no Host bundle to talk to: there is then nothing to stop. */
@@ -4714,20 +4718,21 @@ export function registerIpc(
   // go inside bootOrch, which only runs when that toggle is on. A missing out/main/host.js (a partial
   // build, or a packaging mistake) leaves hostClient null and the app runs exactly as it does today.
   const startHostClient = (): void => {
+    const hostLog = hostWiring?.log ?? ((): void => {})
     const profileDir = app.getPath('userData')
     const entry = resolveHostEntry(
       [path.join(app.getAppPath(), 'out', 'main', 'host.js'), path.join(__dirname, 'host.js')],
       existsSync
     )
     if (!entry) {
-      orchLog('host: out/main/host.js was not found — the app runs without a Host')
+      hostLog('out/main/host.js was not found — the app runs without a Host')
       return
     }
     const addr = hostAddress({ profileDir, platform: process.platform, tmpDir: os.tmpdir() })
     const client = new HostClient({
       address: addr.address,
       appVersion: app.getVersion(),
-      log: (m) => orchLog(`host: ${m}`),
+      log: hostLog,
       spawnHost: () => {
         const plan = hostSpawnPlan({
           execPath: process.execPath,
@@ -4740,7 +4745,7 @@ export function registerIpc(
         // A spawn that fails arrives as an async 'error' event, not a throw, and an unhandled one is
         // an uncaught exception in the main process. The client's own retry loop reports the outcome
         // to the person; this only has to keep the failure from being fatal.
-        child.on('error', (err) => orchLog(`host: the Host could not be started: ${String(err)}`))
+        child.on('error', (err) => hostLog(`the Host could not be started: ${String(err)}`))
         child.unref()
       }
     })
