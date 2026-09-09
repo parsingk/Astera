@@ -189,10 +189,10 @@ export const ko = {
   'common.quitConfirm.body': '창을 닫으면 Astera가 종료되고 진행 중인 세션 {count}개도 함께 종료됩니다. 계속할까요?',
   'common.quitConfirm.bodyKept':
     '창을 닫으면 Astera가 종료됩니다. 진행 중인 세션 {count}개는 계속 실행되고, 다시 열면 그대로 돌아옵니다. 계속할까요?',
-  // Provisional Korean, awaiting the maintainer's wording — the English in en.ts is the sentence
-  // this key is meant to say, and es/ja reach it through the en fallback (see `t`).
+  // es/ja have no row of their own and reach this key's English through the fallback (see `t`); they
+  // still want real translations.
   'common.quitConfirm.bodyMixed':
-    '창을 닫으면 Astera가 종료됩니다. 진행 중인 세션 중 {kept}개는 계속 실행되고 다시 열면 돌아오지만, {ended}개는 함께 종료됩니다. 계속할까요?',
+    '창을 닫으면 Astera가 종료됩니다. 진행 중인 세션 중 {kept}개는 계속 실행되어 다시 열면 그대로 돌아오고, {ended}개는 함께 종료됩니다. 계속할까요?',
   // index.ts — system tray context menu
   'common.trayOpen': '열기',
   'common.trayQuit': '종료',
