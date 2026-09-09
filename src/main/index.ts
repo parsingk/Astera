@@ -470,6 +470,16 @@ app.whenReady().then(async () => {
       }
     },
     onTurnComplete: (sessionId, rolloutPath) => slack.onCodexTurnComplete(sessionId, rolloutPath),
+    // The mapping goes into the note the Host keeps for that session's pty, which is the only place it
+    // can be read back from after a restart — the scan that made it cannot be run again for a session
+    // whose spawn is in the past. With no Host the pty has no note and this does nothing.
+    remember: (sessionId, note) => {
+      try {
+        core!.sessions.remember(sessionId, note)
+      } catch {
+        /* writing the mapping down must not disturb the poll that produced it */
+      }
+    },
     log: slackLog
   })
   codexRolloutRef = codexRollout

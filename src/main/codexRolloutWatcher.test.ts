@@ -126,6 +126,44 @@ describe('CodexRolloutWatcher', () => {
     w.stop()
   })
 
+  // What the scan answers lives only in this watcher, and this watcher dies with the app. The Host
+  // outlives it and is holding a note about that very session, so the mapping is handed over the
+  // moment it is made: after a restart the adopter reads it back and registers the session with the
+  // path, which is the only way an adopted codex session can be watched at all — the scan itself
+  // cannot be run again for it (see the reattach adopter's own note).
+  it('hands the mapping over the moment the scan makes it', async () => {
+    const cwd = path.join(dir, 'proj')
+    const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    const remember = vi.fn()
+    const w = new CodexRolloutWatcher({
+      getAccount: () => account(dir),
+      onTurnComplete: vi.fn(),
+      log: () => {},
+      now: () => now,
+      remember
+    })
+    w.register(session('live-1', cwd))
+    expect(remember).not.toHaveBeenCalled() // nothing is known before the scan
+    await advance(TICK) // locate
+    expect(remember).toHaveBeenCalledWith('live-1', { rolloutPath: p, codexSessionId: 'sess-a' })
+    expect(remember).toHaveBeenCalledTimes(1) // and not again on every later tick
+    await advance(TICK)
+    expect(remember).toHaveBeenCalledTimes(1)
+    w.stop()
+  })
+
+  // Every other construction of this watcher in the app and in these tests leaves the dep out; a scan
+  // that has nobody to tell must still map the session for itself.
+  it('maps the rollout with nobody to hand it to', async () => {
+    const cwd = path.join(dir, 'proj')
+    const p = await makeRollout(dir, '019f3f12-9c11-7cc1-9198-aeeaa6463dd2', 'sess-a', cwd)
+    const w = new CodexRolloutWatcher({ getAccount: () => account(dir), onTurnComplete: vi.fn(), log: () => {}, now: () => now })
+    w.register(session('live-1', cwd))
+    await advance(TICK)
+    expect(w.rolloutPathFor('live-1')).toBe(p)
+    w.stop()
+  })
+
   it('등록되지 않은 세션의 codex 세션 id는 null이다', () => {
     const w = new CodexRolloutWatcher({
       getAccount: () => account(dir),

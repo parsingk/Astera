@@ -70,6 +70,20 @@ export interface CodexRolloutDeps {
   getAccount(id: string): Account | null
   onTurnComplete(sessionId: string, rolloutPath: string): void
   log(message: string): void
+  /** Writes the mapping down somewhere that outlives this app — the note the Host keeps for that
+   *  session's pty (`SessionManager.remember`).
+   *
+   *  What the scan answers is knowledge this watcher has and cannot re-derive after a restart: the
+   *  discovery rule works only in the moment right after a real spawn, so an **adopted** session can
+   *  never be scanned for (the reattach adopter's own note gives the whole argument). Handed over the
+   *  instant it is learned, the app reads it back at adoption and registers the session with the path
+   *  instead of scanning.
+   *
+   *  Optional, and it goes through a dep rather than a manager because this watcher holds no pty and
+   *  no session record — it holds the same shape everything else here does, a function the wiring
+   *  supplies. Absent, nothing is written down and an adopted session simply has no path, which is
+   *  what happened before this existed. */
+  remember?(sessionId: string, note: { rolloutPath: string; codexSessionId: string }): void
   now?: () => number
 }
 
@@ -235,6 +249,9 @@ export class CodexRolloutWatcher {
       entry.rolloutPath = found.path
       entry.codexSessionId = found.sessionId
       entry.tail = new JsonlTail(found.path)
+      // Told once, here, because this is the one moment the mapping is made and the only moment it can
+      // be: after a restart the scan that produced it cannot be run again for this session.
+      this.deps.remember?.(entry.sessionId, { rolloutPath: found.path, codexSessionId: found.sessionId })
       this.deps.log(`codex rollout watch mapped session=${entry.sessionId} path=${found.path}`)
       return // End this step() having only mapped, without reading — the next tick's read() is still that JsonlTail's
       // first call, so it reads the whole file from offset 0. Deferring does not narrow the range read, so it does not
