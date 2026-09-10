@@ -7,6 +7,7 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import {
+  isAbandonedWorkingFile,
   parsePendingReport,
   pendingReportTempName,
   serializePendingReport,
@@ -71,14 +72,32 @@ async function setAside(file: string, why: 'unreadable' | 'unapplied'): Promise<
  *  understand. Renaming it out of the way stops it being retried and complained about at every
  *  start for as long as the profile lives, while leaving the evidence where a person can find it.
  *  A missing folder is the ordinary case, not a failure: it exists only once there has been
- *  something to queue. */
+ *  something to queue.
+ *
+ *  **The working files of writes that never landed are swept on the way past.** A process killed
+ *  between the write and the rename leaves one behind, and nothing else in this design ever looks
+ *  at it again — the reader takes `.json` only. `isAbandonedWorkingFile` decides, and it keeps
+ *  anything it cannot be sure about; this adds only what needs a filesystem, which is the age and
+ *  the refusal to remove something that is not a plain file. It happens here because this is the
+ *  one moment in the app's life that already lists this folder, and every failure in it is
+ *  swallowed like the rest: a working file that will not go is retried at the next start. */
 export async function readPendingReports(a: {
   dir: string
   log(m: string): void
 }): Promise<QueuedReport[]> {
-  const names = (await fs.readdir(a.dir).catch(() => [] as string[]))
-    .filter((n) => n.endsWith('.json'))
-    .sort()
+  const all = (await fs.readdir(a.dir).catch(() => [] as string[])).sort()
+  const now = Date.now()
+  for (const name of all) {
+    const file = path.join(a.dir, name)
+    // A stat that failed, or anything that is not a plain file, is something this cannot judge —
+    // and a directory would need a recursive remove, which is not this function's business.
+    const stat = await fs.stat(file).catch(() => null)
+    if (!stat?.isFile()) continue
+    if (!isAbandonedWorkingFile({ name, modifiedAt: stat.mtimeMs, now })) continue
+    a.log(`pending reports: removing ${name} — a report whose write never landed`)
+    await fs.rm(file, { force: true }).catch(() => {})
+  }
+  const names = all.filter((n) => n.endsWith('.json'))
   const out: QueuedReport[] = []
   for (const name of names) {
     const file = path.join(a.dir, name)

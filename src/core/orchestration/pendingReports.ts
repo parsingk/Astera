@@ -112,6 +112,8 @@ export function pendingReportFileName(a: { queuedAt: string; nonce: string }): s
   return `${a.queuedAt.replace(/[:.]/g, '')}-${a.nonce}.json`
 }
 
+const WORKING_SUFFIX = '.tmp'
+
 /** The name a report is written under before it is renamed into place.
  *
  *  **The rename is what makes the queue safe to read at any moment.** The window this whole path
@@ -122,7 +124,47 @@ export function pendingReportFileName(a: { queuedAt: string; nonce: string }): s
  *
  *  It must not end in `.json`, which is the only thing `readPendingReports` picks up. */
 export function pendingReportTempName(fileName: string): string {
-  return `${fileName}.tmp`
+  return `${fileName}${WORKING_SUFFIX}`
+}
+
+/** How old a working file has to be before nothing could still be writing it.
+ *
+ *  **An hour, against a write that takes a millisecond.** The write itself is one synchronous
+ *  `writeFileSync` of a few hundred bytes followed by a same-directory rename — there is no
+ *  network in it, no lock to wait on, and nothing that blocks on the app being up. An hour is four
+ *  orders of magnitude of headroom for a machine paging badly or a filesystem stalling, and it is
+ *  still short enough that a person who has to look in this folder does not find years of debris.
+ *  It is a cutoff of the same kind as `RUN_TTL_MS`, which is how this codebase already decides that
+ *  something on disk is dead. */
+export const WORKING_FILE_TTL_MS = 60 * 60 * 1000
+
+/** Is this leftover working file certainly nobody's.
+ *
+ *  A process killed between the write and the rename leaves `<name>.json.tmp` behind for good: the
+ *  reader only picks up `.json`, so the file is never read, never applied, never counted and never
+ *  removed. Both writers can leave one — the CLI's `writePendingReport` and the drain's own
+ *  attempt-count rewrite.
+ *
+ *  **The rule is age, and the reason is that age cannot be wrong about a write in flight.** The
+ *  other rule that does not guess is to put the writing process's id in the name and sweep only
+ *  when that process is gone. It was not taken: a pid says nothing after a reboot, where the whole
+ *  table is reused and a stale pid reads as alive forever — so the very leak this is fixing would
+ *  become permanent for exactly the crash that causes it most often. It also asks the app to probe
+ *  another process's liveness on two platforms to answer a question a timestamp answers outright.
+ *
+ *  **Anything it cannot judge survives.** A name that is not a working file, an age that does not
+ *  make sense because the clock moved or the stat was odd — all false. Deleting a report in flight
+ *  is the one failure this whole mechanism exists to prevent, and a file left behind costs a few
+ *  hundred bytes until the next start looks again. */
+export function isAbandonedWorkingFile(a: {
+  name: string
+  /** Epoch ms, as `fs.Stats.mtimeMs` gives it. */
+  modifiedAt: number
+  now: number
+}): boolean {
+  if (!a.name.endsWith(WORKING_SUFFIX)) return false
+  if (!Number.isFinite(a.modifiedAt)) return false
+  return a.now - a.modifiedAt >= WORKING_FILE_TTL_MS
 }
 
 export function serializePendingReport(r: PendingReport): string {

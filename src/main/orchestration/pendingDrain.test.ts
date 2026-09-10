@@ -7,6 +7,7 @@ import {
   pendingReportFileName,
   pendingReportTempName,
   parsePendingReport,
+  WORKING_FILE_TTL_MS,
   serializePendingReport,
   type PendingReport
 } from '../../core/orchestration/pendingReports'
@@ -106,6 +107,33 @@ describe('readPendingReports', () => {
     expect(await readPendingReports({ dir, log: (m) => said.push(m) })).toHaveLength(1)
     expect(await files()).toContain(tmp)
     expect(said).toEqual([])
+  })
+
+  // The other half of the rename's safety. A process killed between the write and the rename leaves
+  // a working file the reader never picks up: never read, never applied, never counted, and until
+  // now never removed either.
+  it('removes a working file no write could still be in the middle of, and says so', async () => {
+    await queue({ at: '2026-09-10T01:00:00.000Z', nonce: 'aaaaaaaa', dispatchId: 'dsp_1' })
+    const tmp = pendingReportTempName(
+      pendingReportFileName({ queuedAt: '2026-09-10T02:00:00.000Z', nonce: 'bbbbbbbb' })
+    )
+    await fs.writeFile(path.join(dir, tmp), '{half writ', 'utf8')
+    const long_ago = new Date(Date.now() - WORKING_FILE_TTL_MS * 2)
+    await fs.utimes(path.join(dir, tmp), long_ago, long_ago)
+    const said: string[] = []
+    expect(await readPendingReports({ dir, log: (m) => said.push(m) })).toHaveLength(1)
+    expect(await files()).toEqual(['2026-09-10T010000000Z-aaaaaaaa.json'])
+    expect(said.join(' ')).toContain('bbbbbbbb')
+  })
+
+  // Nothing in this folder that is not a file is a report being written, and a rm that would have
+  // to recurse is a rm this has no business doing.
+  it('leaves an old directory under a working name alone', async () => {
+    await fs.mkdir(path.join(dir, 'stale.json.tmp'), { recursive: true })
+    const long_ago = new Date(Date.now() - WORKING_FILE_TTL_MS * 2)
+    await fs.utimes(path.join(dir, 'stale.json.tmp'), long_ago, long_ago)
+    expect(await readPendingReports({ dir, log: () => {} })).toEqual([])
+    expect(await files()).toEqual(['stale.json.tmp'])
   })
 
   it('ignores anything that is not a report file', async () => {
